@@ -51,6 +51,38 @@ the **proven release-safe mechanism**, not a k1_sum speedup. Honest negative on 
 - [ ] **arm64 parity** — push the same type facts into `arm64_darwin.hexa` `_STMT_BINOP`
       (`bl hexa_add_slow` → `add`/`madd`/`mul` on GPRs). x86 first (done), arm64 follow-on.
 
+## POST-WALL — RE-BASELINE component-attribution table (2026-06-27, aiden origin/main `faf2dd8d`)
+
+Re-disassembled the **real aprime native-emit asm** of all 5 probe kernels (Intel-syntax;
+the prior AT&T spill regex gave a false 0). Census = `call hexa_*` (boxing) + 16B `{tag,payload}`
+tag-slot store/reload (spill) + idiv/imul (strength-reduction). gcc -O2 reference is fully
+register-resident (store=reload=0 every kernel). Raw: `aiden:~/rebaseline_RESULT.txt` +
+`~/rebaseline_SPILL.txt`; full attribution in `codegen-quality-probe-verdict.md` § RE-BASELINE.
+
+| kernel | ratio | boxed `call hexa_*`/fn | tag-slot st/rl /fn | hexa idiv/imul | gcc call/store/imul | **dominant component** |
+|--------|------:|:---:|:---:|:---:|:---:|------------------------|
+| k1_sum     |  3.4× |  5 | 12/12 | 0/0 | 1/0/2 | **ⓐ boxing call** (incl. `%`→`hexa_mod` call) |
+| k2_collatz | 13.3× | 10 | 21/20 | 0/0 | 1/0/0 | **ⓐ boxing call** (`eq,truthy,div,mod` all boxed) |
+| k3_arrmap  | 26.9× | 17 | 32/36 | 0/0 | 2/0/4 | **ⓐ boxing call** (`index_get/set`) + ⓑ heaviest spill (75 rl) |
+| k4_branch  | 27.5× |  8 | 17/18 | 0/0 | 1/0/2 | **ⓐ boxing call** (`mod×2,eq,sub,add`) |
+| k5_fncall  |  4.6× |  6 | 14/14 | 0/0 | 1/0/2 | **ⓐ boxing call** + boxed HexaVal cross-fn ABI |
+
+**Verdict — ⓐ per-op boxing DOMINATES all 5.** The hot-loop disasm shows spill ⓑ is **not an
+independent reg-alloc problem**: every boxed call result is *spilled to a tag slot then reloaded
+as the next call's arg* (k3: `call hexa_index_get → mov %rax,-slot → mov -slot,%rdi → call
+hexa_mul → …`). Spill ⓑ is the boxed calling convention's own arg plumbing — it vanishes *with*
+the call when the op is unboxed. ⓒ strength-reduction is **unreachable**: there is no `idiv` to
+magic-reduce because `%`/`/` are *boxed calls* (`hexa_mod`/`hexa_div`), not `idiv`.
+
+**Reg-alloc priority ground (measured):** a standalone linear-scan reg-allocator (registers
+across ops *without* unboxing) closes only the coupled spill fraction and **leaves every `call
+hexa_*` in place** → not the dominant-component closer for **any** of the 5 kernels. Unboxing
+(R5, already PROVEN release-safe) closes ⓐ+ⓑ together. Ordered levers: (1) scalar BinOp unbox
+[R5, kills `add_slow/mul/cmp/sub/eq` calls+slots — dominant k1/k4/k5], (2) array-element unbox
+[r2, kills `index_get/set` + heaviest k3 spill chain — dominant k3 26.9×], (3) `%`/`/`→idiv→magic
+[r4, only here does ⓒ apply, after mod/div go native]. Dedicated linear-scan reg-alloc = distant
+4th (it only re-claims the spill fraction unboxing already removes for free).
+
 ## Gate discipline (every slice)
 Codegen is the highest-risk substrate (silent wrong-answer = flatten_globals class). Every slice:
 G1 OFF-byteeq (same-cwd .o sha == baseline + 3-target gen3≡gen4 CI) BLOCKING + G4 output-parity
