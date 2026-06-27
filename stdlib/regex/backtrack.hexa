@@ -1,0 +1,735 @@
+// HEXA Standard Library — regex/backtrack
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Pure-hexa BACKTRACKING regex VM — the extension engine that adds the
+// constructs a Thompson NFA provably CANNOT express: lookahead, lookbehind
+// and backreferences. It is the deliberate companion to the linear-time
+// stdlib/regex/thompson.hexa (R1): patterns WITHOUT lookaround/backref keep
+// using the fast non-backtracking NFA; only patterns that NEED backtracking
+// route here (see thompson.hexa `regex_compile` auto-dispatch).
+//
+// ── why a second engine (reference) ─────────────────────────────────────────
+// Lookaround and backreferences make matching non-regular / NP-hard, so a
+// Thompson NFA (which advances a whole STATE SET and never revisits a path)
+// cannot represent them. The canonical answer is a backtracking matcher:
+//   • Russ Cox, "Regular Expression Matching: the Virtual Machine Approach"
+//     (https://swtch.com/~rsc/regexp/regexp2.html) — the BACKTRACKING VM
+//     (`recursiveloop`/`backtrackingvm`) with `save` slots for captures and
+//     explicit alternative exploration. Backreferences/lookaround are exactly
+//     the features that force the backtracking VM there.
+//   • PCRE / Perl lookaround semantics: (?=…) (?!…) zero-width assertions;
+//     (?<=…) (?<!…) FIXED-WIDTH lookbehind (PCRE restricts lookbehind to a
+//     bounded/fixed length — replicated here, see _bt_width).
+//   • Rust `regex` / `regex-automata` ship a HYBRID: the linear automata for
+//     the regular core, a bounded `backtrack` engine for the rest, with a
+//     visited/step budget so worst-case work stays bounded. This module mirrors
+//     that split (thompson.hexa = automata, backtrack.hexa = bounded backtrack).
+//
+// ── catastrophic-backtracking defense ───────────────────────────────────────
+// A backtracking matcher is worst-case EXPONENTIAL (ReDoS, CWE-1333/CWE-400):
+// e.g. (a+)+\1 or (?=(a+)+b) against "aaaa…" with no terminator explores 2^n
+// alternatives. We bound TOTAL matcher steps with a per-call budget (default
+// 1e6, configurable via regex_compile_capped). On overflow the matcher aborts
+// and returns a documented SAFE error (no match + status flag) — never a hang
+// or an unbounded blow-up. This is the same "give up safely" contract Rust
+// regex / RE2's complexity limits provide.
+//
+// ── engine semantics (honest record) ────────────────────────────────────────
+//   • Matching is leftmost, greedy-FIRST (PCRE/Perl order) — NOT POSIX
+//     leftmost-longest. This is the correct/expected semantics for the
+//     lookaround/backref flavor this engine serves.
+//   • Lookbehind is FIXED-WIDTH only (PCRE classic restriction). A variable
+//     width inner (containing * + ? {n,} or an unset-width backref) FAILS the
+//     compile (regex_valid == false). (?<=ab) / (?<=.) / (?<=a|b same width) OK.
+//   • Backreference \1..\9 refers to the Nth capturing group by opening-paren
+//     order. A reference to an UNSET group matches the empty string (ECMAScript
+//     semantics).
+//   • Capture state is save/restored on backtrack (Cox `save` slots), so a
+//     backref reads the value captured along the live path.
+//
+// ── AST tape (index-addressed [int] records, 4 ints each) ───────────────────
+//   [kind, a, b, c]
+//   kind: 0=CHAR(a=byte) 1=ANY 2=CLASS(a=class_id) 3=STAR(a=child)
+//         4=PLUS(a=child) 5=OPT(a=child) 6=CONCAT(a=left,b=right)
+//         7=ALT(a=left,b=right) 8=EMPTY 9=BOL(^) 10=EOL($)
+//         11=REPEAT(a=child,b=min,c=max; max=-1 unbounded)
+//         12=GROUP(a=child,b=group_index)  13=BACKREF(a=group_index)
+//         14=LOOKAHEAD(a=child,b=neg)      15=LOOKBEHIND(a=child,b=neg)
+//   match-time synthesized markers (never produced by the parser):
+//         20=REPEAT-CONT(a=child,b=lo,c=hi) 21=STAR-GUARD(a=child,b=start_pos)
+//         22=GROUP-CLOSE(a=group_index,b=entry_pos)
+//   classes: parallel [[int]] — each entry [neg, lo0,hi0, lo1,hi1, …].
+//
+// NOTE on state threading: like thompson.hexa, parser cursor/flags live in
+// single-cell [int] boxes (pos/ok/ng), not scalar struct fields, so the engine
+// is equally correct under the tree-walking interpreter and the native backend.
+
+// ── compiled backtrack program ──────────────────────────────────────────────
+struct BtProg {
+    ok: bool
+    nodes: [[int]]
+    classes: [[int]]
+    root: int
+    ngroups: int
+    max_steps: int      // step budget (<=0 = unbounded)
+    st: [int]           // 1-cell status box: st[0]=1 ⇒ step-cap overflow on last op
+}
+
+// ── parser state (cells = interpreter/native-safe) ──────────────────────────
+struct BtParse {
+    pat: string
+    plen: int
+    pos: [int]          // pos[0] = cursor
+    ok: [int]           // ok[0] = 1 ok / 0 parse-fail
+    ng: [int]           // ng[0] = capturing-group count so far
+    nodes: [[int]]
+    classes: [[int]]
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  ENGINE-SELECTION PROBE  (used by thompson.hexa regex_compile auto-dispatch)
+//  True iff the pattern contains a construct a Thompson NFA cannot do:
+//  a backreference \1..\9 or a lookaround (?= (?! (?<= (?<!. Char classes and
+//  '\'-escapes are skipped so a literal '(' inside [...] or an escaped digit do
+//  not false-trigger.
+// ════════════════════════════════════════════════════════════════════════════
+@pure
+pub fn bt_needs_backtrack(pat: string) -> bool {
+    let n = byte_len(pat)
+    let mut i = 0
+    while i < n {
+        let c = pat.byte_at(i)
+        if c == 92 {                            // '\' escape
+            if i + 1 < n {
+                let d = pat.byte_at(i + 1)
+                if d >= 49 && d <= 57 { return true }   // \1..\9 backreference
+            }
+            i = i + 2
+            continue
+        }
+        if c == 91 {                            // '[' — skip whole char class
+            i = i + 1
+            if i < n && pat.byte_at(i) == 94 { i = i + 1 }   // leading '^'
+            if i < n && pat.byte_at(i) == 93 { i = i + 1 }   // leading ']' literal
+            while i < n && pat.byte_at(i) != 93 {
+                if pat.byte_at(i) == 92 { i = i + 2 } else { i = i + 1 }
+            }
+            if i < n { i = i + 1 }              // consume ']'
+            continue
+        }
+        if c == 40 && i + 1 < n && pat.byte_at(i + 1) == 63 {   // '(?'
+            if i + 2 < n {
+                let q = pat.byte_at(i + 2)
+                if q == 61 || q == 33 || q == 60 { return true }   // = ! <  → lookaround
+            }
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  PARSER  (recursive descent: alt → concat → repeat → atom)
+// ════════════════════════════════════════════════════════════════════════════
+
+@pure
+fn _bt_peek(p: BtParse) -> int {
+    if p.pos[0] >= p.plen { return -1 }
+    return p.pat.byte_at(p.pos[0])
+}
+
+fn _bt_adv(p: BtParse) {
+    p.pos[0] = p.pos[0] + 1
+}
+
+fn _bt_emit(p: BtParse, rec: [int]) -> int {
+    p.nodes.push(rec)
+    return len(p.nodes) - 1
+}
+
+// Class-shorthand ranges for \d \D \w \W \s \S — returns [neg, lo,hi, …] or [].
+@pure
+fn _bt_class_for_escape(e: int) -> [int] {
+    if e == 100 { return [0, 48, 57] }                          // \d
+    if e == 68  { return [1, 48, 57] }                          // \D
+    if e == 119 { return [0, 48, 57, 65, 90, 97, 122, 95, 95] } // \w
+    if e == 87  { return [1, 48, 57, 65, 90, 97, 122, 95, 95] } // \W
+    if e == 115 { return [0, 9, 13, 32, 32] }                   // \s
+    if e == 83  { return [1, 9, 13, 32, 32] }                   // \S
+    return []
+}
+
+// Control escapes \n \t \r \0 — returns the byte, or -1 if not a control escape.
+@pure
+fn _bt_lit_for_escape(e: int) -> int {
+    if e == 110 { return 10 }   // \n
+    if e == 116 { return 9 }    // \t
+    if e == 114 { return 13 }   // \r
+    if e == 48  { return 0 }    // \0
+    return -1
+}
+
+fn _bt_push_class(p: BtParse, ranges: [int], neg: int) -> int {
+    let mut tbl: [int] = [neg]
+    let mut i = 0
+    while i < len(ranges) { tbl.push(ranges[i]); i = i + 1 }
+    p.classes.push(tbl)
+    return _bt_emit(p, [2, len(p.classes) - 1, 0, 0])
+}
+
+// Parse a bracket class — p.pos is just past '['. Returns CLASS node index.
+fn _bt_parse_class(p: BtParse) -> int {
+    let mut ranges: [int] = []
+    let mut neg = 0
+    if _bt_peek(p) == 94 { neg = 1; _bt_adv(p) }      // '^' negation
+    let mut first = true
+    while p.pos[0] < p.plen {
+        let c = _bt_peek(p)
+        if c == 93 && !first { _bt_adv(p); return _bt_push_class(p, ranges, neg) }   // ']'
+        first = false
+        let mut lo = -1
+        let mut shorthand = false
+        if c == 92 {                              // '\' escape inside class
+            _bt_adv(p)
+            let e = _bt_peek(p)
+            _bt_adv(p)
+            let cls = _bt_class_for_escape(e)
+            if len(cls) > 0 {
+                let mut k = 1
+                while k + 1 < len(cls) { ranges.push(cls[k]); ranges.push(cls[k + 1]); k = k + 2 }
+                shorthand = true
+            } else {
+                let lit = _bt_lit_for_escape(e)
+                if lit >= 0 { lo = lit } else { lo = e }
+            }
+        } else {
+            _bt_adv(p)
+            lo = c
+        }
+        if !shorthand {
+            if _bt_peek(p) == 45 && (p.pos[0] + 1) < p.plen && p.pat.byte_at(p.pos[0] + 1) != 93 {
+                _bt_adv(p)                        // skip '-'
+                let mut hi = _bt_peek(p)
+                _bt_adv(p)
+                if hi == 92 {                     // escaped range high end
+                    let e2 = _bt_peek(p)
+                    _bt_adv(p)
+                    let lit2 = _bt_lit_for_escape(e2)
+                    if lit2 >= 0 { hi = lit2 } else { hi = e2 }
+                }
+                ranges.push(lo)
+                ranges.push(hi)
+            } else {
+                ranges.push(lo)
+                ranges.push(lo)
+            }
+        }
+    }
+    p.ok[0] = 0                                   // unterminated class
+    return -1
+}
+
+// alt := concat ('|' concat)*
+fn _bt_parse_alt(p: BtParse) -> int {
+    let mut left = _bt_parse_concat(p)
+    while _bt_peek(p) == 124 {                    // '|'
+        _bt_adv(p)
+        let right = _bt_parse_concat(p)
+        left = _bt_emit(p, [7, left, right, 0])
+    }
+    return left
+}
+
+// concat := repeat*
+fn _bt_parse_concat(p: BtParse) -> int {
+    let c = _bt_peek(p)
+    if c == -1 || c == 124 || c == 41 { return _bt_emit(p, [8, 0, 0, 0]) }   // EMPTY
+    let mut left = _bt_parse_repeat(p)
+    while true {
+        let nc = _bt_peek(p)
+        if nc == -1 || nc == 124 || nc == 41 { break }
+        let right = _bt_parse_repeat(p)
+        left = _bt_emit(p, [6, left, right, 0])
+    }
+    return left
+}
+
+// Bound on {n,m} counted repeat — see native.hexa rationale (RE2=1000,
+// Java/Python similar). Over-limit FAILS the parse (DoS / CWE-1333).
+@pure
+fn _BT_MAX_REPEAT() -> int { return 100000 }
+
+// repeat := atom ('*' | '+' | '?' | '{n,m}')*
+fn _bt_parse_repeat(p: BtParse) -> int {
+    let mut node = _bt_parse_atom(p)
+    while true {
+        let c = _bt_peek(p)
+        if c == 42 { _bt_adv(p); node = _bt_emit(p, [3, node, 0, 0]) }       // '*'
+        else if c == 43 { _bt_adv(p); node = _bt_emit(p, [4, node, 0, 0]) }  // '+'
+        else if c == 63 { _bt_adv(p); node = _bt_emit(p, [5, node, 0, 0]) }  // '?'
+        else if c == 123 {                                                   // '{'
+            _bt_adv(p)
+            let mut lo = 0
+            let mut have_lo = false
+            while _bt_peek(p) >= 48 && _bt_peek(p) <= 57 {
+                lo = lo * 10 + (_bt_peek(p) - 48); _bt_adv(p); have_lo = true
+                if lo > _BT_MAX_REPEAT() { p.ok[0] = 0; return -1 }
+            }
+            let mut hi = lo
+            if _bt_peek(p) == 44 {                                           // ','
+                _bt_adv(p)
+                if _bt_peek(p) == 125 { hi = -1 }                            // {n,} unbounded
+                else {
+                    hi = 0
+                    while _bt_peek(p) >= 48 && _bt_peek(p) <= 57 {
+                        hi = hi * 10 + (_bt_peek(p) - 48); _bt_adv(p)
+                        if hi > _BT_MAX_REPEAT() { p.ok[0] = 0; return -1 }
+                    }
+                }
+            }
+            if _bt_peek(p) == 125 { _bt_adv(p) }                             // consume '}'
+            if !have_lo { lo = 0 }
+            node = _bt_emit(p, [11, node, lo, hi])
+        }
+        else { break }
+    }
+    return node
+}
+
+// atom := '(' group/lookaround ')' | '[' class ']' | '.' | '^' | '$' | '\' esc | literal
+fn _bt_parse_atom(p: BtParse) -> int {
+    let c = _bt_peek(p)
+    if c == 40 {                                  // '('
+        _bt_adv(p)
+        if _bt_peek(p) == 63 {                    // '(?' …  — special group
+            _bt_adv(p)
+            let q = _bt_peek(p)
+            if q == 58 {                          // (?:…)  non-capturing
+                _bt_adv(p)
+                let inner = _bt_parse_alt(p)
+                if _bt_peek(p) == 41 { _bt_adv(p) } else { p.ok[0] = 0 }
+                return inner
+            }
+            if q == 61 {                          // (?=…)  positive lookahead
+                _bt_adv(p)
+                let inner = _bt_parse_alt(p)
+                if _bt_peek(p) == 41 { _bt_adv(p) } else { p.ok[0] = 0 }
+                return _bt_emit(p, [14, inner, 0, 0])
+            }
+            if q == 33 {                          // (?!…)  negative lookahead
+                _bt_adv(p)
+                let inner = _bt_parse_alt(p)
+                if _bt_peek(p) == 41 { _bt_adv(p) } else { p.ok[0] = 0 }
+                return _bt_emit(p, [14, inner, 1, 0])
+            }
+            if q == 60 {                          // (?<…
+                _bt_adv(p)
+                let q2 = _bt_peek(p)
+                if q2 == 61 || q2 == 33 {         // (?<=…) / (?<!…)  lookbehind
+                    let neg = if q2 == 33 { 1 } else { 0 }
+                    _bt_adv(p)
+                    let inner = _bt_parse_alt(p)
+                    if _bt_peek(p) == 41 { _bt_adv(p) } else { p.ok[0] = 0 }
+                    // PCRE: lookbehind must be FIXED-WIDTH.
+                    if _bt_width(p.nodes, inner) < 0 { p.ok[0] = 0; return -1 }
+                    return _bt_emit(p, [15, inner, neg, 0])
+                }
+                p.ok[0] = 0; return -1            // (?<name>…) named groups unsupported
+            }
+            p.ok[0] = 0; return -1                // unknown (?…)
+        }
+        // capturing group — assign index in opening-paren order, BEFORE inner.
+        p.ng[0] = p.ng[0] + 1
+        let g = p.ng[0]
+        let inner = _bt_parse_alt(p)
+        if _bt_peek(p) == 41 { _bt_adv(p) } else { p.ok[0] = 0 }
+        return _bt_emit(p, [12, inner, g, 0])
+    }
+    if c == 91 { _bt_adv(p); return _bt_parse_class(p) }              // '['
+    if c == 46 { _bt_adv(p); return _bt_emit(p, [1, 0, 0, 0]) }       // '.'  ANY
+    if c == 94 { _bt_adv(p); return _bt_emit(p, [9, 0, 0, 0]) }       // '^'  BOL
+    if c == 36 { _bt_adv(p); return _bt_emit(p, [10, 0, 0, 0]) }      // '$'  EOL
+    if c == 92 {                                  // '\' escape
+        _bt_adv(p)
+        let e = _bt_peek(p)
+        _bt_adv(p)
+        if e >= 49 && e <= 57 { return _bt_emit(p, [13, e - 48, 0, 0]) }   // \1..\9 backref
+        let cls = _bt_class_for_escape(e)
+        if len(cls) > 0 { p.classes.push(cls); return _bt_emit(p, [2, len(p.classes) - 1, 0, 0]) }
+        let lit = _bt_lit_for_escape(e)
+        if lit >= 0 { return _bt_emit(p, [0, lit, 0, 0]) }
+        return _bt_emit(p, [0, e, 0, 0])          // literal escaped metachar
+    }
+    _bt_adv(p)
+    return _bt_emit(p, [0, c, 0, 0])              // literal byte
+}
+
+// Fixed match width of AST node `ni`, or -1 if variable / undeterminable.
+// Used to validate + size FIXED-WIDTH lookbehind (PCRE restriction).
+@pure
+fn _bt_width(nodes: [[int]], ni: int) -> int {
+    if ni < 0 || ni >= len(nodes) { return -1 }
+    let rec = nodes[ni]
+    let k = rec[0]
+    if k == 0 || k == 1 || k == 2 { return 1 }                 // CHAR/ANY/CLASS
+    if k == 8 || k == 9 || k == 10 { return 0 }                // EMPTY/BOL/EOL
+    if k == 14 || k == 15 { return 0 }                         // nested lookaround = zero-width
+    if k == 12 { return _bt_width(nodes, rec[1]) }             // GROUP
+    if k == 6 {                                                // CONCAT
+        let w1 = _bt_width(nodes, rec[1])
+        let w2 = _bt_width(nodes, rec[2])
+        if w1 < 0 || w2 < 0 { return -1 }
+        return w1 + w2
+    }
+    if k == 7 {                                                // ALT (equal widths only)
+        let w1 = _bt_width(nodes, rec[1])
+        let w2 = _bt_width(nodes, rec[2])
+        if w1 < 0 || w2 < 0 || w1 != w2 { return -1 }
+        return w1
+    }
+    if k == 11 {                                               // REPEAT {n,n} only
+        if rec[3] >= 0 && rec[2] == rec[3] {
+            let cw = _bt_width(nodes, rec[1])
+            if cw < 0 { return -1 }
+            return cw * rec[2]
+        }
+        return -1
+    }
+    // STAR/PLUS/OPT/BACKREF → variable / unknown width
+    return -1
+}
+
+// ── compile ─────────────────────────────────────────────────────────────────
+@pure
+pub fn bt_empty() -> BtProg {
+    return BtProg { ok: false, nodes: [], classes: [], root: -1, ngroups: 0, max_steps: 0, st: [0] }
+}
+
+@pure
+pub fn bt_compile(pattern: string, max_steps: int) -> BtProg {
+    let p = BtParse {
+        pat: pattern,
+        plen: byte_len(pattern),
+        pos: [0],
+        ok: [1],
+        ng: [0],
+        nodes: [],
+        classes: [],
+    }
+    let root = _bt_parse_alt(p)
+    if p.ok[0] == 0 { return bt_empty() }
+    if p.pos[0] < p.plen { return bt_empty() }   // trailing junk (e.g. stray ')')
+    return BtProg {
+        ok: true,
+        nodes: p.nodes,
+        classes: p.classes,
+        root: root,
+        ngroups: p.ng[0],
+        max_steps: max_steps,
+        st: [0],
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  BACKTRACKING MATCHER  (continuation-stack VM, Russ Cox regexp2 style)
+//
+//  `conts` is a stack (encoded [int] of node indices) to match IN ORDER after
+//  the current focus — this threads greedy backtracking without first-class
+//  closures. Returns the end index on success, -1 on local failure, and the
+//  reserved sentinel -2 on STEP-CAP OVERFLOW (propagated up so the driver can
+//  report a safe error instead of hanging).
+// ════════════════════════════════════════════════════════════════════════════
+
+@pure
+fn _bt_class_match(classes: [[int]], cid: int, ch: int) -> bool {
+    let tbl = classes[cid]
+    let neg = tbl[0]
+    let mut i = 1
+    let mut hit = false
+    while i + 1 < len(tbl) {
+        if ch >= tbl[i] && ch <= tbl[i + 1] { hit = true }
+        i = i + 2
+    }
+    if neg == 1 { return !hit }
+    return hit
+}
+
+@pure
+fn _bt_fill(nn: int, v: int) -> [int] {
+    let mut o: [int] = []
+    let mut i = 0
+    while i < nn { o.push(v); i = i + 1 }
+    return o
+}
+
+@pure
+fn _bt_copy(a: [int]) -> [int] {
+    let mut o: [int] = []
+    let mut i = 0
+    while i < len(a) { o.push(a[i]); i = i + 1 }
+    return o
+}
+
+fn _bt_restore(a: [int], snap: [int]) {
+    let mut i = 0
+    while i < len(snap) { a[i] = snap[i]; i = i + 1 }
+}
+
+@pure
+fn _bt_cons(head: int, tail: [int]) -> [int] {
+    let mut out: [int] = [head]
+    let mut i = 0
+    while i < len(tail) { out.push(tail[i]); i = i + 1 }
+    return out
+}
+
+@pure
+fn _bt_tail(lst: [int]) -> [int] {
+    let mut out: [int] = []
+    let mut i = 1
+    while i < len(lst) { out.push(lst[i]); i = i + 1 }
+    return out
+}
+
+// Append a transient match-time marker node; return its index.
+fn _bt_marker(prog: BtProg, rec: [int]) -> int {
+    prog.nodes.push(rec)
+    return len(prog.nodes) - 1
+}
+
+// Materialize/reuse a STAR view ([3,child,…]) for PLUS continuation.
+fn _bt_star_view(prog: BtProg, child: int) -> int {
+    let mut i = 0
+    let total = len(prog.nodes)
+    while i < total {
+        let r = prog.nodes[i]
+        if r[0] == 3 && r[1] == child { return i }
+        i = i + 1
+    }
+    prog.nodes.push([3, child, 0, 0])
+    return len(prog.nodes) - 1
+}
+
+fn _bt_run(prog: BtProg, caps: [int], ctr: [int], conts: [int], s: string, si: int, n: int) -> int {
+    ctr[0] = ctr[0] + 1
+    if ctr[1] > 0 && ctr[0] > ctr[1] { ctr[2] = 1; return -2 }   // step-cap overflow
+    if len(conts) == 0 { return si }                            // accept
+
+    let ni = conts[0]
+    let rest = _bt_tail(conts)
+    let rec = prog.nodes[ni]
+    let kind = rec[0]
+
+    if kind == 8 { return _bt_run(prog, caps, ctr, rest, s, si, n) }          // EMPTY
+    if kind == 9 {                                                            // BOL ^
+        if si == 0 { return _bt_run(prog, caps, ctr, rest, s, si, n) }
+        return -1
+    }
+    if kind == 10 {                                                           // EOL $
+        if si == n { return _bt_run(prog, caps, ctr, rest, s, si, n) }
+        return -1
+    }
+    if kind == 0 {                                                           // CHAR
+        if si < n && s.byte_at(si) == rec[1] { return _bt_run(prog, caps, ctr, rest, s, si + 1, n) }
+        return -1
+    }
+    if kind == 1 {                                                          // ANY
+        if si < n { return _bt_run(prog, caps, ctr, rest, s, si + 1, n) }
+        return -1
+    }
+    if kind == 2 {                                                         // CLASS
+        if si < n && _bt_class_match(prog.classes, rec[1], s.byte_at(si)) {
+            return _bt_run(prog, caps, ctr, rest, s, si + 1, n)
+        }
+        return -1
+    }
+    if kind == 6 {                                                        // CONCAT a·b
+        return _bt_run(prog, caps, ctr, _bt_cons(rec[1], _bt_cons(rec[2], rest)), s, si, n)
+    }
+    if kind == 7 {                                                       // ALT a|b
+        let r1 = _bt_run(prog, caps, ctr, _bt_cons(rec[1], rest), s, si, n)
+        if r1 == -2 { return -2 }
+        if r1 >= 0 { return r1 }
+        return _bt_run(prog, caps, ctr, _bt_cons(rec[2], rest), s, si, n)
+    }
+    if kind == 5 {                                                      // OPT (greedy)
+        let r = _bt_run(prog, caps, ctr, _bt_cons(rec[1], rest), s, si, n)
+        if r == -2 { return -2 }
+        if r >= 0 { return r }
+        return _bt_run(prog, caps, ctr, rest, s, si, n)
+    }
+    if kind == 3 {                                                    // STAR (greedy)
+        // greedy: prefer "one more rep then loop", else accept `rest` here.
+        let guard = _bt_marker(prog, [21, rec[1], si])
+        let more = _bt_run(prog, caps, ctr, _bt_cons(rec[1], _bt_cons(guard, rest)), s, si, n)
+        if more == -2 { return -2 }
+        if more >= 0 { return more }
+        return _bt_run(prog, caps, ctr, rest, s, si, n)
+    }
+    if kind == 4 {                                                   // PLUS (≥1 greedy)
+        let sv = _bt_star_view(prog, rec[1])
+        return _bt_run(prog, caps, ctr, _bt_cons(rec[1], _bt_cons(sv, rest)), s, si, n)
+    }
+    if kind == 11 {                                                 // REPEAT {min,max}
+        return _bt_run_repeat(prog, caps, ctr, rec[1], rec[2], rec[3], rest, s, si, n)
+    }
+    if kind == 20 {                                                // REPEAT-CONT marker
+        return _bt_run_repeat(prog, caps, ctr, rec[1], rec[2], rec[3], rest, s, si, n)
+    }
+    if kind == 21 {                                               // STAR-GUARD [21,child,start]
+        if si == rec[2] { return _bt_run(prog, caps, ctr, rest, s, si, n) }  // zero-width → stop
+        // greedy continuation: prefer one more rep, else backtrack to accept `rest`.
+        let guard = _bt_marker(prog, [21, rec[1], si])
+        let more = _bt_run(prog, caps, ctr, _bt_cons(rec[1], _bt_cons(guard, rest)), s, si, n)
+        if more == -2 { return -2 }
+        if more >= 0 { return more }
+        return _bt_run(prog, caps, ctr, rest, s, si, n)
+    }
+    if kind == 12 {                                              // GROUP (capturing)
+        let close = _bt_marker(prog, [22, rec[2], si])
+        return _bt_run(prog, caps, ctr, _bt_cons(rec[1], _bt_cons(close, rest)), s, si, n)
+    }
+    if kind == 22 {                                             // GROUP-CLOSE [22,g,entry]
+        let g = rec[1]
+        let old_s = caps[2 * g]
+        let old_e = caps[2 * g + 1]
+        caps[2 * g] = rec[2]
+        caps[2 * g + 1] = si
+        let r = _bt_run(prog, caps, ctr, rest, s, si, n)
+        if r == -2 { return -2 }
+        if r >= 0 { return r }
+        caps[2 * g] = old_s                                     // restore on backtrack
+        caps[2 * g + 1] = old_e
+        return -1
+    }
+    if kind == 13 {                                            // BACKREF \g
+        let g = rec[1]
+        if 2 * g + 1 >= len(caps) { return -1 }                // ref to nonexistent group
+        let gs = caps[2 * g]
+        let ge = caps[2 * g + 1]
+        if gs < 0 || ge < 0 { return _bt_run(prog, caps, ctr, rest, s, si, n) }  // unset → empty
+        let blen = ge - gs
+        if si + blen > n { return -1 }
+        let mut k = 0
+        while k < blen {
+            if s.byte_at(si + k) != s.byte_at(gs + k) { return -1 }
+            k = k + 1
+        }
+        return _bt_run(prog, caps, ctr, rest, s, si + blen, n)
+    }
+    if kind == 14 {                                          // LOOKAHEAD (zero-width)
+        if rec[2] == 1 {                                     // negative — must NOT capture
+            let snap = _bt_copy(caps)
+            let sub = _bt_run(prog, caps, ctr, [rec[1]], s, si, n)
+            _bt_restore(caps, snap)
+            if sub == -2 { return -2 }
+            if sub < 0 { return _bt_run(prog, caps, ctr, rest, s, si, n) }
+            return -1
+        }
+        let sub = _bt_run(prog, caps, ctr, [rec[1]], s, si, n)   // positive — keep captures
+        if sub == -2 { return -2 }
+        if sub >= 0 { return _bt_run(prog, caps, ctr, rest, s, si, n) }
+        return -1
+    }
+    if kind == 15 {                                        // LOOKBEHIND (fixed-width)
+        let w = _bt_width(prog.nodes, rec[1])
+        let mut ok_lb = false
+        if w >= 0 {
+            let startpos = si - w
+            if startpos >= 0 {
+                let snap = _bt_copy(caps)
+                let r = _bt_run(prog, caps, ctr, [rec[1]], s, startpos, n)
+                if r == -2 { return -2 }
+                if r == si { ok_lb = true }
+                if rec[2] == 1 { _bt_restore(caps, snap) }              // negative: discard
+                else { if !ok_lb { _bt_restore(caps, snap) } }          // failed positive: discard
+            }
+        }
+        if rec[2] == 0 {
+            if ok_lb { return _bt_run(prog, caps, ctr, rest, s, si, n) }
+            return -1
+        }
+        if !ok_lb { return _bt_run(prog, caps, ctr, rest, s, si, n) }
+        return -1
+    }
+    return -1
+}
+
+// {min,max} counted repeat with continuation — lo/hi are REMAINING bounds.
+fn _bt_run_repeat(prog: BtProg, caps: [int], ctr: [int], child: int, lo: int, hi: int,
+                  rest: [int], s: string, si: int, n: int) -> int {
+    if lo > 0 {                                            // still mandatory
+        let marker = _bt_marker(prog, [20, child, lo - 1, if hi < 0 { -1 } else { hi - 1 }])
+        return _bt_run(prog, caps, ctr, _bt_cons(child, _bt_cons(marker, rest)), s, si, n)
+    }
+    if hi != 0 {                                           // optional more (greedy)
+        let nhi = if hi < 0 { -1 } else { hi - 1 }
+        let marker = _bt_marker(prog, [20, child, 0, nhi])
+        let more = _bt_run(prog, caps, ctr, _bt_cons(child, _bt_cons(marker, rest)), s, si, n)
+        if more == -2 { return -2 }
+        if more >= 0 && more > si { return more }
+    }
+    return _bt_run(prog, caps, ctr, rest, s, si, n)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  PUBLIC MATCH API  (consumed by thompson.hexa dispatch; sets prog.st[0])
+// ════════════════════════════════════════════════════════════════════════════
+
+// FULL match — pattern must consume the ENTIRE string (implicit ^…$).
+@pure
+pub fn bt_match_full(prog: BtProg, s: string) -> bool {
+    prog.st[0] = 0
+    if !prog.ok { return false }
+    let n = byte_len(s)
+    let eol = _bt_marker(prog, [10, 0, 0, 0])      // force exploration to string end
+    let caps = _bt_fill(2 * (prog.ngroups + 1), -1)
+    let ctr = [0, prog.max_steps, 0]
+    let r = _bt_run(prog, caps, ctr, [prog.root, eol], s, 0, n)
+    if ctr[2] == 1 { prog.st[0] = 1; return false }
+    return r == n
+}
+
+// Leftmost (greedy-first) search. Returns [] (none) or [start, end).
+// The step budget is GLOBAL across all start offsets (DoS bound for the call).
+@pure
+pub fn bt_search(prog: BtProg, s: string) -> [int] {
+    prog.st[0] = 0
+    if !prog.ok { return [] }
+    let n = byte_len(s)
+    let ctr = [0, prog.max_steps, 0]
+    let mut start = 0
+    while start <= n {
+        let caps = _bt_fill(2 * (prog.ngroups + 1), -1)
+        let r = _bt_run(prog, caps, ctr, [prog.root], s, start, n)
+        if ctr[2] == 1 { prog.st[0] = 1; return [] }
+        if r >= 0 { return [start, r] }
+        start = start + 1
+    }
+    return []
+}
+
+// All non-overlapping leftmost matches as [start, end) pairs.
+@pure
+pub fn bt_find_all(prog: BtProg, s: string) -> [[int]] {
+    let mut out: [[int]] = []
+    prog.st[0] = 0
+    if !prog.ok { return out }
+    let n = byte_len(s)
+    let ctr = [0, prog.max_steps, 0]
+    let mut pos = 0
+    while pos <= n {
+        let caps = _bt_fill(2 * (prog.ngroups + 1), -1)
+        let r = _bt_run(prog, caps, ctr, [prog.root], s, pos, n)
+        if ctr[2] == 1 { prog.st[0] = 1; return out }
+        if r >= 0 {
+            out.push([pos, r])
+            if r > pos { pos = r } else { pos = pos + 1 }
+        } else {
+            pos = pos + 1
+        }
+    }
+    return out
+}

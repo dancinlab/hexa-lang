@@ -72,6 +72,24 @@
 // NOTE on state threading: parser/builder state lives in heap arrays and
 // single-cell [int] boxes (pos/ok), not scalar struct fields, so the engine is
 // equally correct under the tree-walking interpreter and the native backend.
+//
+// ── R2: hybrid engine dispatch (lookaround / backreferences) ────────────────
+// `regex_compile` analyzes the pattern; if it contains a construct a Thompson
+// NFA CANNOT express — lookahead (?=…)(?!…), lookbehind (?<=…)(?<!…), or a
+// backreference \1..\9 — it routes to the BACKTRACKING VM in
+// stdlib/regex/backtrack.hexa (Russ Cox regexp2 style, bounded by a step cap).
+// Otherwise it stays on the fast linear Thompson NFA. The public API
+// (regex_match / regex_search / regex_find_all) is engine-agnostic — callers
+// never pick an engine. This mirrors Rust `regex`/`regex-automata`'s
+// automata-plus-bounded-backtrack hybrid.
+use "stdlib/regex/backtrack"
+
+// Default catastrophic-backtracking step budget for the backtrack engine.
+// Patterns exceeding this many matcher steps abort with a SAFE error
+// (regex_match → false; regex_last_error → 1). Override via regex_compile_capped.
+// Thompson-routed patterns are linear-time and ignore this cap entirely.
+@pure
+fn _REGEX_DEFAULT_STEP_CAP() -> int { return 1000000 }
 
 // ── compiled program ────────────────────────────────────────────────────────
 struct Regex {
@@ -83,6 +101,8 @@ struct Regex {
     nout: [int]
     nout1: [int]
     classes: [[int]]
+    engine: int         // 0 = Thompson NFA (default linear), 1 = backtracking VM
+    bt: BtProg          // backtrack program (valid when engine==1; bt_empty otherwise)
 }
 
 // ── parser state (arrays + [int] cells = interpreter/native-safe) ───────────
@@ -389,11 +409,30 @@ fn _re_compile_node(nb: NfaB, nodes: [[int]], ni: int) -> [int] {
 }
 
 fn _re_bad() -> Regex {
-    return Regex { ok: false, start: -1, nstates: 0, nkind: [], nc: [], nout: [], nout1: [], classes: [] }
+    return Regex { ok: false, start: -1, nstates: 0, nkind: [], nc: [], nout: [], nout1: [], classes: [], engine: 0, bt: bt_empty() }
+}
+
+// Build a Regex wrapping a compiled backtrack program (engine==1).
+fn _re_from_bt(prog: BtProg) -> Regex {
+    if !prog.ok { return _re_bad() }
+    return Regex { ok: true, start: -1, nstates: 0, nkind: [], nc: [], nout: [], nout1: [], classes: [], engine: 1, bt: prog }
 }
 
 @pure
 pub fn regex_compile(pattern: string) -> Regex {
+    return regex_compile_capped(pattern, _REGEX_DEFAULT_STEP_CAP())
+}
+
+// Same as regex_compile but with an explicit catastrophic-backtracking step
+// budget for the backtrack engine (lookaround/backref patterns). `max_steps<=0`
+// = unbounded (NOT recommended on untrusted input). Thompson-routed patterns
+// (no lookaround/backref) are linear and ignore the cap.
+@pure
+pub fn regex_compile_capped(pattern: string, max_steps: int) -> Regex {
+    if bt_needs_backtrack(pattern) {
+        return _re_from_bt(bt_compile(pattern, max_steps))
+    }
+
     let p = ReParse {
         pat: pattern,
         plen: byte_len(pattern),
@@ -420,6 +459,8 @@ pub fn regex_compile(pattern: string) -> Regex {
         nout: nb.nout,
         nout1: nb.nout1,
         classes: p.classes,
+        engine: 0,
+        bt: bt_empty(),
     }
 }
 
@@ -528,18 +569,30 @@ pub fn regex_valid(re: Regex) -> bool {
     return re.ok
 }
 
+// Last-operation error for the backtrack engine: 0 = ok, 1 = step-cap overflow
+// (catastrophic-backtracking guard tripped on the most recent match/search/
+// find_all call). Thompson-routed patterns are linear and never overflow → 0.
+@pure
+pub fn regex_last_error(re: Regex) -> int {
+    if re.engine == 1 { return re.bt.st[0] }
+    return 0
+}
+
 // FULL match — the pattern must consume the ENTIRE string (implicit ^…$).
 @pure
 pub fn regex_match(re: Regex, s: string) -> bool {
     if !re.ok { return false }
+    if re.engine == 1 { return bt_match_full(re.bt, s) }
     let n = byte_len(s)
     return _re_longest_from(re, s, 0, n) == n
 }
 
-// Leftmost-longest search. Returns [] (None) or [start, end) (Some).
+// Leftmost search. Returns [] (None) or [start, end) (Some). Thompson engine =
+// leftmost-LONGEST (POSIX); backtrack engine = leftmost greedy-first (PCRE).
 @pure
 pub fn regex_search(re: Regex, s: string) -> [int] {
     if !re.ok { return [] }
+    if re.engine == 1 { return bt_search(re.bt, s) }
     let n = byte_len(s)
     let mut start = 0
     while start <= n {
@@ -550,12 +603,13 @@ pub fn regex_search(re: Regex, s: string) -> [int] {
     return []
 }
 
-// All non-overlapping leftmost-longest matches as [start, end) pairs.
+// All non-overlapping leftmost matches as [start, end) pairs.
 // A zero-width match advances the cursor by 1 to guarantee termination.
 @pure
 pub fn regex_find_all(re: Regex, s: string) -> [[int]] {
     let mut out: [[int]] = []
     if !re.ok { return out }
+    if re.engine == 1 { return bt_find_all(re.bt, s) }
     let n = byte_len(s)
     let mut pos = 0
     while pos <= n {
