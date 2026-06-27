@@ -1242,6 +1242,31 @@ fn _bind_builtin_names() -> [string] {
         "__hx_payload_fadd", "__hx_payload_fsub", "__hx_payload_fmul", "__hx_payload_fdiv",
         "__hx_payload_flt", "__hx_payload_fgt", "__hx_payload_fle", "__hx_payload_fge",
         "__hx_str_byte", "__hx_to_double", "__hx_arr_len", "__hx_syscall0", "__hx_syscall6", "__hx_ptr_store64", "__hx_ptr_load64", "__hx_ptr_store32", "__hx_ptr_load32", "__hx_ptr_store8", "__hx_ptr_load8",
+        // RFC061 Route C 2nd-return-register (2026-06-27): `__hx_syscall6_out2(
+        // num, a0..a5, outptr)` issues ONE syscall and writes BOTH return
+        // registers + the carry/error flag into a caller-supplied scratch:
+        // outptr[0]=x0/rax (1st return), outptr[8]=x1/rdx (2nd return),
+        // outptr[16]=1 if the BSD carry-flag (darwin error) was set else 0. The
+        // single-result __hx_syscall6 exposes only x0, so it cannot serve the
+        // darwin 2nd-return-register syscalls pipe(2)/fork(2) (fds in x0/x1;
+        // child disambiguated by x1==1). The caller reads the slots back with the
+        // already-whitelisted __hx_ptr_load64. arm64 + x86_64 STMT_CALL
+        // special-case (mirror of __hx_syscall6 + dual-store). ADD-only leaf:
+        // the compiler never calls it.
+        "__hx_syscall6_out2",
+        // RFC061 Route C Wall 2-b — extern-data named-data reloc (2026-06-27):
+        // `__hx_environ_ptr()` is a 0-arg intrinsic that loads the ADDRESS of the
+        // libc `extern char **environ` global THROUGH THE GOT (x86_64 `mov rax,
+        // [rip+environ@GOTPCREL]` → R_X86_64_(REX_)GOTPCREL; arm64 `adrp/ldr
+        // …@GOTPAGE/@GOTPAGEOFF` → ARM64_RELOC_GOT_LOAD_*), boxed as a TAG_INT
+        // payload. It returns `&environ` (char***), so ONE __hx_ptr_load64 yields
+        // the char** array base — letting hxlcl_getenv walk the environment with a
+        // pure byte-compare instead of the libc-`environ`-global shim body. This is
+        // the FIRST named-data (vs named-text/call) GOT reloc a Route C body needs;
+        // it is frozen-SAFE (parses as an ordinary identifier-call, like the 24
+        // syscall intrinsics + __hx_syscall6_out2) and DCE-never-drops the STMT_CALL.
+        // arm64 + x86_64 STMT_CALL special-case. ADD-only: the compiler never calls it.
+        "__hx_environ_ptr",
         // RT-NATIVE M4 ARRAY-R2 (2026-06-17): `__hx_make_val(tag, payload)` — the
         // symmetric write-half of `__hx_tag`. Builds a {tag, payload} 16-byte HexaVal
         // from two raw int64 words WITHOUT boxing-tag-loss, so a payload word loaded

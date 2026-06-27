@@ -1611,6 +1611,40 @@ pub fn _is_cabi(fname: string) -> bool {
     // __hx_syscall6 exposes only x0) identical to darwin pipe — the real darwin fork
     // stays the floor raw-asm dual-reg shim. Reuses __errno_location (no new entry).
     if fname == "hxlcl_fork" { return true }
+    // Wall 2-b ENV — hxlcl_getenv: environment lookup via the new __hx_environ_ptr
+    // named-data GOT intrinsic + a pure byte-walk (no syscall, no errno, no inner
+    // bl). The ONLY extern reference is the libc `environ` data symbol the intrinsic
+    // resolves through the GOT; everything else is the proven copy/compare-family
+    // payload arithmetic. Cross-target-identical body (the per-target GOT form lives
+    // inside __hx_environ_ptr's STMT_CALL special-case).
+    if fname == "hxlcl_getenv" { return true }
+    // Wall 2-b ENV (sibling) — hxlcl_setenv: the FIRST environ WRITE-BACK body. It
+    // reuses __hx_environ_ptr (read &environ) + the already-whitelisted __hx_ptr_store64
+    // (the writable pointer-word store, proven by hxlcl_strtoll's endptr) + the inner
+    // C-ABI `bl hxlcl_malloc` (proven by strdup/calloc/realloc) — NO new intrinsic. The
+    // replace path stores the new "name=value" pointer into the matching slot in place
+    // (`*e = s`); the grow path mallocs a fresh (N+2)-slot char** array, copies, appends,
+    // and stores it back into `environ` via __hx_ptr_store64(&environ, 0, newarr).
+    // Reference-matched to musl src/env/setenv.c + putenv.c (fresh-array-on-grow floor
+    // simplification of musl's __env_map leak-tracking). Cross-target-identical body.
+    if fname == "hxlcl_setenv" { return true }
+    // Wall 3-a CORE FILE* family — fopen/fclose/fread/fwrite/ftell/fseek/fdopen.
+    // In the frozen 0-libc floor a FILE* is `(void*)(uintptr_t)(fd+1)` (NOT a libc
+    // stdio struct), so these are a PURE COMPOSITION over the already-whitelisted
+    // dissolved syscall leaves (open_sys/read/write/lseek/close) + raw-payload
+    // pointer arithmetic — NO new intrinsic. Each inner `bl hxlcl_<leaf>` lowers
+    // C-ABI because the call boundary keys on the whitelisted callee name (proven
+    // by atoi→atoll / strdup→malloc). The libc-global streams stderr/stdout/stdin
+    // (frozen _hxlcl_fp_fd `v>=0x1000` branch) are out of scope (shim-resident,
+    // follow-on); high pointers fail safe. Reference-matched to the frozen emitter
+    // bodies self/runtime_emit_full.hexa:1153-1242.
+    if fname == "hxlcl_fopen" { return true }
+    if fname == "hxlcl_fclose" { return true }
+    if fname == "hxlcl_fread" { return true }
+    if fname == "hxlcl_fwrite" { return true }
+    if fname == "hxlcl_ftell" { return true }
+    if fname == "hxlcl_fseek" { return true }
+    if fname == "hxlcl_fdopen" { return true }
     return false
 }
 
@@ -3092,6 +3126,67 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_reg("rax"),
                              "__hx_syscall6: r11 = result"))
             if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r11", 0) }
+            return
+        }
+        // RFC061 Route C 2nd-return-register: `__hx_syscall6_out2(num, a0..a5,
+        // outptr)` — the dual-return sibling of __hx_syscall6. The 2nd-return-
+        // register convention (rdx) belongs to the darwin/BSD syscall ABI, and
+        // darwin is arm64-only in this toolchain, so on x86_64 (which targets ONLY
+        // x86_64-linux) this op is reached ONLY through the runtime-false
+        // `target_is_darwin()` branch of hxlcl_pipe/hxlcl_fork — emitted for link
+        // completeness (DCE never drops a STMT_CALL), never executed. It mirrors
+        // __hx_syscall6's arg-fill/trap then writes rax→outptr[0], rdx→outptr[8],
+        // and 0→outptr[16] (Linux has no carry-flag errno, so the carry slot is a
+        // constant 0 here). Addresses are computed via `add` to reuse only the
+        // proven store64 forms.
+        if s.op == "__hx_syscall6_out2" && len(s.args) >= 8 {
+            let argregs = ["rdi", "rsi", "rdx", "r10", "r8", "r9"]
+            let mut ai = 1
+            while ai <= 6 {
+                _x86_hv_payload(s.args[ai], st, rm, argregs[ai - 1], opts)
+                ai = ai + 1
+            }
+            _x86_hv_payload(s.args[0], st, rm, "rax", opts)  // num → rax
+            _x86_buf.push(_x86_instr0("syscall", "__hx_syscall6_out2: Linux syscall"))
+            // rax = 1st return, rdx = 2nd return. Save both before reloading outptr.
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_reg("rax"),
+                             "__hx_syscall6_out2: r11 = ret1"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r8"), _x86_op_reg("rdx"),
+                             "__hx_syscall6_out2: r8 = ret2"))
+            _x86_hv_payload(s.args[7], st, rm, "r10", opts)  // r10 = outptr
+            _x86_buf.push(_x86_instr2("mov", _x86_op_label("qword ptr [r10]"),
+                             _x86_op_reg("r11"), "__hx_syscall6_out2: outptr[0] = ret1"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r9"), _x86_op_imm(8),
+                             "__hx_syscall6_out2: off 8"))
+            _x86_buf.push(_x86_instr2("add", _x86_op_reg("r10"), _x86_op_reg("r9"),
+                             "__hx_syscall6_out2: &outptr[8]"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_label("qword ptr [r10]"),
+                             _x86_op_reg("r8"), "__hx_syscall6_out2: outptr[8] = ret2"))
+            _x86_buf.push(_x86_instr2("add", _x86_op_reg("r10"), _x86_op_reg("r9"),
+                             "__hx_syscall6_out2: &outptr[16]"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), _x86_op_imm(0),
+                             "__hx_syscall6_out2: carry slot = 0 (no carry errno on Linux)"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_label("qword ptr [r10]"),
+                             _x86_op_reg("rsi"), "__hx_syscall6_out2: outptr[16] = 0"))
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r11", 0) }
+            return
+        }
+        // RFC061 Route C Wall 2-b: `__hx_environ_ptr()` (0-arg) → the ADDRESS of the
+        // libc `extern char **environ` global, loaded through the GOT and boxed as a
+        // TAG_INT payload. `mov rax, [rip+environ@GOTPCREL]` reads the GOT slot (which
+        // the linker fills with &environ), so rax = &environ (char***) — exactly one
+        // __hx_ptr_load64 away from the char** array base. This is the named-DATA
+        // sibling of the named-TEXT `call <sym>` reloc the call paths already emit
+        // (R_X86_64_GOTPCREL on the data symbol vs R_X86_64_PLT32 on a text symbol);
+        // the `--shared` global path already emits this exact `[rip+…@GOTPCREL]` form
+        // for module globals, here keyed to the named libc symbol `environ`. The asm-
+        // text → system-assembler Route C path materialises the reloc canonically
+        // (R_X86_64_REX_GOTPCRELX environ). No arg-fill (0 args); just the load + box.
+        if s.op == "__hx_environ_ptr" {
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rax"),
+                             _x86_op_label("[rip+environ@GOTPCREL]"),
+                             "__hx_environ_ptr: rax = &environ (GOT) [reloc=" + RELOC_X86_64_GOTPCREL + "]"))
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "rax", 0) }
             return
         }
         // UNLOCK-10: `__hx_ptr_store64(ptr, off, val)` — write 64-bit `val` to
