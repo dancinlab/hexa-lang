@@ -167,7 +167,11 @@ fn main() {
 
     _check("id$int instance emitted", _find_func(out, "id$int") >= 0)
     _check("id$str instance emitted", _find_func(out, "id$str") >= 0)
-    _check("template id$$g retained", _find_func(out, "id" + MONO_TEMPLATE_MARK) >= 0)
+    // R2 — the template is retained but RENAMED to its base name `id` (the
+    // erased fallback for any `dyn`/unresolved call); the `$$g` marker is
+    // stripped so it never reaches codegen.
+    _check("erased fallback id retained", _find_func(out, "id") >= 0)
+    _check("no $$g symbol leaks to output", _find_func(out, "id" + MONO_TEMPLATE_MARK) < 0)
 
     let ci = _find_func(out, "caller")
     _check("caller present", ci >= 0)

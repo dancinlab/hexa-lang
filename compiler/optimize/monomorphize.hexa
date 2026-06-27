@@ -31,10 +31,13 @@
 // The template's *base name* (callee symbol used at call sites) is the
 // name with the marker stripped. R2 wires HIR→MIR (`_lower_fn`) to set
 // this marker for an `@specialize`-annotated generic fn (gated by the
-// same env flag, so the default name is unchanged). Until R2 lands the
-// marker, this pass is exercised only by its unit test
-// (compiler/optimize/monomorphize_test.hexa), which hand-builds a marked
-// module — keeping the transform real and verified rather than dead.
+// same env flag, so the default name is unchanged) — see
+// compiler/lower/hir_to_mir.hexa::_lower_fn, mirroring the @gpu_* →
+// gpu_kind precedent. So end-to-end, an `@specialize fn id<T>` called at
+// int+str sites under HEXA_MONOMORPHIZE=1 now emits `id$int` + `id$str`
+// instances (plus the erased `id` fallback). The pass is additionally
+// exercised by its unit test (compiler/optimize/monomorphize_test.hexa,
+// hand-built marked module) and the surface/emit tests in self/.
 //
 // ── Algorithm ─────────────────────────────────────────────────
 //   1. Collect templates  : MFuncs whose name ends with "$$g".
@@ -46,8 +49,9 @@
 //      cloned MFunc named `base + "$" + tag` (deterministic order).
 //   4. Rewrite             : retarget each matching call's `op` to the
 //      mangled instance name. Calls whose tag is "dyn" are left alone.
-// The template itself is kept (unreferenced) so any indirect/unresolved
-// reference still links; DCE can drop it later.
+// The template is kept but RENAMED to its base name (marker stripped), so
+// it remains the type-erased fallback any `dyn`/unresolved call resolves
+// to — `$$g` never reaches codegen. DCE can drop it if fully specialized.
 
 import "../ir/mir.hexa"
 
@@ -207,8 +211,21 @@ fn _mono_rewrite_calls(mf: MFunc, bases: [string]) -> MFunc {
         new_blocks.push(Block { id: b.id, stmts: new_stmts, preds: b.preds, succs: b.succs })
         bi = bi + 1
     }
+    // R2 — strip the `$$g` template marker from the emitted name so the
+    // template survives in the module under its BASE name. It then serves
+    // as the type-ERASED fallback: any call whose arg type is not statically
+    // recoverable (`dyn`, left as `op == base`) resolves to this body rather
+    // than dangling at link time, and `$$g` never reaches codegen. This
+    // realises the original "template kept for unresolved references" intent
+    // (an unresolved ref targets the base symbol, not `base$$g`) and mirrors
+    // rustc/swift, where specialized instances coexist with a generic
+    // fallback. The per-(base,tag) instances are cloned separately from the
+    // ORIGINAL `$$g` template (see `_mono_find_template`), so their bodies
+    // are unaffected by this rename.
+    let mut out_name = mf.name
+    if _mono_is_template(out_name) { out_name = _mono_base_name(out_name) }
     return MFunc {
-        name: mf.name,
+        name: out_name,
         params: mf.params,
         return_local: mf.return_local,
         locals: mf.locals,
