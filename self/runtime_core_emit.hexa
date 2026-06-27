@@ -1233,7 +1233,22 @@ fn emit_runtime_core_to(out_path: str) {
     // it (HexaArrF64* contiguous double[] storage; double 8B == int64 8B stride so
     // the layout-match invariant with HexaArr/HexaArrI64 holds — only the carried
     // tag + the element reinterpret (bits↔double) differ from the i64 path).
-    buf = buf + "    TAG_ARRAY_F64\n"
+    buf = buf + "    TAG_ARRAY_F64,\n"
+    // ── LANE C (F32 mirror): escaping packed [f32] discriminator ──────────────
+    // TAG_ARRAY_F32 = the f32 analogue of TAG_ARRAY_I64/F64. Appended as the TRUE
+    // LAST value (after TAG_ARRAY_F64) so NO existing tag's integer value shifts
+    // (#4151 lesson: append-only, never mid-insert). Same INERT property: the
+    // DEFAULT build never mints it (HEXA_PACK_ESCAPING off) → no reader observes
+    // it → the default runtime.a is byte-identical. Only the flag-ON poly-readers
+    // branch on it. KEY DIFFERENCE from the f64 mirror: HexaArrF32 carries a
+    // contiguous float[] (4-byte stride). The element stride is INTERNAL to the
+    // data[] buffer — the DESCRIPTOR struct {float* data; int64_t len; int64_t cap}
+    // is STILL 24B, so the (ptr,len,cap) layout-match invariant with HexaArr/
+    // HexaArrI64/HexaArrF64 HOLDS (the 4B stride does NOT break it). At the poly
+    // boundary the element is widened to a boxed double (get) / narrowed from a
+    // boxed double (set/push), so no 4B element ever rides the call ABI — the
+    // anticipated 4B-stride layout WALL does not materialize.
+    buf = buf + "    TAG_ARRAY_F32\n"
     buf = buf + "} HexaTag;\n"
     buf = buf + "\n"
     buf = buf + "// ── Optimization #10: Hash-map backing store ─────────────\n"
@@ -1320,6 +1335,21 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    int64_t len;   // 64-bit, mirrors HexaArr.len/cap (layout-match invariant).\n"
     buf = buf + "    int64_t cap;\n"
     buf = buf + "} HexaArrF64;\n"
+    buf = buf + "\n"
+    // ── LANE C (F32 mirror): native unboxed-f32 escaping array storage ─────────
+    // The float[] analogue of HexaArrF64. data[] is a contiguous float[] (4-byte
+    // stride). CRITICALLY: len/cap stay int64_t and the data ptr is still a single
+    // word, so the descriptor is the SAME 24-byte (ptr@0, len@8, cap@16) shape as
+    // HexaArr/HexaArrI64/HexaArrF64 — the layout-match invariant holds DESPITE the
+    // 4-byte element stride (the stride only governs how data[idx] is addressed,
+    // not the descriptor layout). So `hexa_arr_poly_len` reads len@8 correctly for
+    // an f32 descriptor too, exactly like the i64/f64 case. Only escaping packed
+    // [f32] worker buffers carry it (TAG_ARRAY_F32, HEXA_PACK_ESCAPING only).
+    buf = buf + "typedef struct HexaArrF32 {\n"
+    buf = buf + "    float* data;\n"
+    buf = buf + "    int64_t len;   // 64-bit, mirrors HexaArr.len/cap (layout-match invariant).\n"
+    buf = buf + "    int64_t cap;\n"
+    buf = buf + "} HexaArrF32;\n"
     buf = buf + "\n"
     buf = buf + "typedef struct HexaMap {\n"
     buf = buf + "    HexaMapTable* tbl;\n"
@@ -2695,12 +2725,55 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    union { int64_t i; double d; } u; u.i = bits;\n"
     buf = buf + "    return hexa_arr_f64_push(v, u.d);\n"
     buf = buf + "}\n"
+    // ── LANE C (F32 mirror): escaping packed [f32] mint + grow ─────────────────
+    buf = buf + "// F32 mirror — mint an escaping packed [f32] array (TAG_ARRAY_F32). Storage is\n"
+    buf = buf + "// a contiguous float[] (4-byte stride) but the descriptor is the SAME 24B\n"
+    buf = buf + "// (ptr,len,cap) shape, so the layout-match invariant holds. This f32 storage\n"
+    buf = buf + "// is escaping-only (no gen2 use), so it lives entirely inside HEXA_PACK_ESCAPING.\n"
+    buf = buf + "HexaVal hexa_arr_f32_new_esc(int cap) {\n"
+    buf = buf + "    HexaArrF32* a = (HexaArrF32*)malloc(sizeof(HexaArrF32));\n"
+    buf = buf + "    if (!a) { fprintf(stderr, \"OOM in arr_f32_new_esc\\n\"); exit(1); }\n"
+    buf = buf + "    if (cap < 1) cap = 1;\n"
+    buf = buf + "    a->data = (float*)malloc(sizeof(float) * (size_t)cap);\n"
+    buf = buf + "    if (!a->data) { fprintf(stderr, \"OOM in arr_f32_new_esc data\\n\"); exit(1); }\n"
+    buf = buf + "    a->len = 0; a->cap = cap;\n"
+    buf = buf + "    HexaVal v = {.tag=TAG_ARRAY_F32};\n"
+    buf = buf + "    HX_SET_ARR_PTR(v, (HexaArr*)a);\n"
+    buf = buf + "    return v;\n"
+    buf = buf + "}\n"
+    buf = buf + "// F32 mirror — native float[] grow (4-byte stride). Takes a double `x` and\n"
+    buf = buf + "// narrows to float on store (the poly-push f32 branch + the bits push call it).\n"
+    buf = buf + "// Returns the SAME descriptor so handle aliases survive (mirrors arr_i64/f64_push).\n"
+    buf = buf + "HexaVal hexa_arr_f32_push(HexaVal v, double x) {\n"
+    buf = buf + "    HexaArrF32* a = (HexaArrF32*)v.arr_ptr;\n"
+    buf = buf + "    if (a->len >= a->cap) {\n"
+    buf = buf + "        a->cap *= 2;\n"
+    buf = buf + "        a->data = (float*)realloc(a->data, sizeof(float) * (size_t)a->cap);\n"
+    buf = buf + "        if (!a->data) { fprintf(stderr, \"OOM in arr_f32_push\\n\"); exit(1); }\n"
+    buf = buf + "    }\n"
+    buf = buf + "    a->data[a->len++] = (float)x;\n"
+    buf = buf + "    return v;\n"
+    buf = buf + "}\n"
+    buf = buf + "// F32 mirror — RAW mint-site push. KEY: the codegen mint site lands a\n"
+    buf = buf + "// const_float's *f64* IEEE-754 bits in a GPR (_x86_hv_payload uses\n"
+    buf = buf + "// float_to_bits = a 64-bit double bit pattern, NOT a narrowed f32). So the\n"
+    buf = buf + "// element ARRIVES as f64 bits in rdx — the EXACT same all-GPR ABI shape as\n"
+    buf = buf + "// hexa_arr_i64_push / hexa_arr_f64_push_bits (rdi:rsi=descriptor, rdx=bits),\n"
+    buf = buf + "// NO xmm at the literal site. We reinterpret bits→double, then narrow\n"
+    buf = buf + "// double→float INSIDE the helper (hexa_arr_f32_push casts (float)x). The 4-byte\n"
+    buf = buf + "// stride is thus fully internal to the runtime — the anticipated 4B-stride ABI\n"
+    buf = buf + "// wall never reaches the codegen call boundary.\n"
+    buf = buf + "HexaVal hexa_arr_f32_push_bits(HexaVal v, int64_t bits) {\n"
+    buf = buf + "    union { int64_t i; double d; } u; u.i = bits;\n"
+    buf = buf + "    return hexa_arr_f32_push(v, u.d);\n"
+    buf = buf + "}\n"
     buf = buf + "// Polymorphic length: branch on the discriminator. Layout-match invariant\n"
     buf = buf + "// (len@8 for both HexaArr and HexaArrI64) means HX_ARR_LEN is actually\n"
     buf = buf + "// correct for either, but we keep the explicit branch for clarity/symmetry.\n"
     buf = buf + "int64_t hexa_arr_poly_len(HexaVal v) {\n"
     buf = buf + "    if (HX_TAG(v) == TAG_ARRAY_I64) return ((HexaArrI64*)v.arr_ptr)->len;\n"
     buf = buf + "    if (HX_TAG(v) == TAG_ARRAY_F64) return ((HexaArrF64*)v.arr_ptr)->len;\n"
+    buf = buf + "    if (HX_TAG(v) == TAG_ARRAY_F32) return ((HexaArrF32*)v.arr_ptr)->len;\n"
     buf = buf + "    return hexa_len(v);\n"
     buf = buf + "}\n"
     buf = buf + "// Polymorphic index get: TAG_ARRAY_I64 → raw stride-8 i64 (boxed as TAG_INT);\n"
@@ -2716,6 +2789,11 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "        if (idx < 0 || idx >= a->len) { hexa_throw(hexa_str(\"index out of bounds\")); return hexa_void(); }\n"
     buf = buf + "        return hexa_float(a->data[idx]);\n"
     buf = buf + "    }\n"
+    buf = buf + "    if (HX_TAG(v) == TAG_ARRAY_F32) {\n"
+    buf = buf + "        HexaArrF32* a = (HexaArrF32*)v.arr_ptr;\n"
+    buf = buf + "        if (idx < 0 || idx >= a->len) { hexa_throw(hexa_str(\"index out of bounds\")); return hexa_void(); }\n"
+    buf = buf + "        return hexa_float((double)a->data[idx]);\n"
+    buf = buf + "    }\n"
     buf = buf + "    return hexa_array_get(v, idx);\n"
     buf = buf + "}\n"
     buf = buf + "// Polymorphic push: TAG_ARRAY_I64 → raw stride-8 grow (in-place, returns the\n"
@@ -2727,6 +2805,10 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    if (HX_TAG(v) == TAG_ARRAY_F64) {\n"
     buf = buf + "        double x = HX_IS_FLOAT(item) ? HX_FLOAT(item) : (HX_IS_INT(item) ? (double)HX_INT(item) : 0.0);\n"
     buf = buf + "        return hexa_arr_f64_push(v, x);\n"
+    buf = buf + "    }\n"
+    buf = buf + "    if (HX_TAG(v) == TAG_ARRAY_F32) {\n"
+    buf = buf + "        double x = HX_IS_FLOAT(item) ? HX_FLOAT(item) : (HX_IS_INT(item) ? (double)HX_INT(item) : 0.0);\n"
+    buf = buf + "        return hexa_arr_f32_push(v, x);\n"
     buf = buf + "    }\n"
     buf = buf + "    return hexa_array_push(v, item);\n"
     buf = buf + "}\n"
@@ -2748,6 +2830,12 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "        HexaArrF64* a = (HexaArrF64*)v.arr_ptr;\n"
     buf = buf + "        if (idx < 0 || idx >= a->len) { hexa_throw(hexa_str(\"index out of bounds\")); return v; }\n"
     buf = buf + "        a->data[idx] = HX_IS_FLOAT(item) ? HX_FLOAT(item) : (HX_IS_INT(item) ? (double)HX_INT(item) : 0.0);\n"
+    buf = buf + "        return v;\n"
+    buf = buf + "    }\n"
+    buf = buf + "    if (HX_TAG(v) == TAG_ARRAY_F32) {\n"
+    buf = buf + "        HexaArrF32* a = (HexaArrF32*)v.arr_ptr;\n"
+    buf = buf + "        if (idx < 0 || idx >= a->len) { hexa_throw(hexa_str(\"index out of bounds\")); return v; }\n"
+    buf = buf + "        a->data[idx] = (float)(HX_IS_FLOAT(item) ? HX_FLOAT(item) : (HX_IS_INT(item) ? (double)HX_INT(item) : 0.0));\n"
     buf = buf + "        return v;\n"
     buf = buf + "    }\n"
     buf = buf + "    return hexa_index_set(v, hexa_int(idx), item);\n"

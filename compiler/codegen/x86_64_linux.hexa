@@ -886,15 +886,19 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
 
     // ── FLEET lane A2 (HEXA_PACK_ESCAPING) — esc-mint storage lattice ────────
     // Mark every array_lit STORAGE T whose typed handle X (`let X = T`, X type
-    // 101/102/103) is a typed-prim i64/i32/f64 array, so the array_lit site can
-    // esc-mint instead of the boxed hexa_array_new:
+    // 101/102/103/104) is a typed-prim i64/i32/f64/f32 array, so the array_lit site
+    // can esc-mint instead of the boxed hexa_array_new:
     //   101/102 (i64/i32) → hexa_arr_i64_new_esc → TAG_ARRAY_I64
     //   103     (f64)     → hexa_arr_f64_new_esc → TAG_ARRAY_F64  (F64 mirror)
+    //   104     (f32)     → hexa_arr_f32_new_esc → TAG_ARRAY_F32  (LANE C, F32 mirror)
     // The lattice now stores the ELEMENT type_id (101/102 collapse to 101 = the
-    // i64-class mint; 103 = the f64-class mint) so the mint site can dispatch on
-    // it — the empty-literal storage T carries type_id 0, so the kind must be
-    // propagated here from the typed handle X. f32 (104) is OUT OF SCOPE (farr32
-    // area, 4B stride needs a distinct HexaArrF32 path — not a homomorphic mirror).
+    // i64-class mint; 103 = the f64-class mint; 104 = the f32-class mint) so the
+    // mint site can dispatch on it — the empty-literal storage T carries type_id 0,
+    // so the kind must be propagated here from the typed handle X. f32 uses a
+    // DISTINCT HexaArrF32 (float[], 4B stride) but the 4B stride is internal to the
+    // data[] buffer — the descriptor + the poly-reader pair-model ABI are unchanged
+    // (the element is widened/narrowed double↔float at the C boundary), so f32 IS a
+    // homomorphic mirror at the codegen/ABI layer.
     // A direct typed literal (`let xs = [1.0,2.0]` → X==T, T already 103) is also
     // caught. NO escape proof — uniform representation (every typed-prim array is
     // esc-tagged + poly-read) means there is no packed/boxed straddle.
@@ -920,18 +924,19 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
                         pe_is_alit[ped] = 1
                         // Direct typed literal storage is itself typed-prim → mint.
                         // Store the i64-class mint marker (101) for 101/102, the
-                        // f64 marker (103) for 103.
+                        // f64 marker (103) for 103, the f32 marker (104) for 104.
                         let petd = rm_local_type[ped]
                         if petd == 101 || petd == 102 { rm_packed_esc_ok[ped] = 101 }
                         if petd == 103 { rm_packed_esc_ok[ped] = 103 }
+                        if petd == 104 { rm_packed_esc_ok[ped] = 104 }
                     }
                 }
                 pes = pes + 1
             }
             peb = peb + 1
         }
-        // Pass 2: a typed (101/102/103) `let X = T` where T is an array_lit storage
-        // propagates the typed element-kind back to T → esc-mint T with the kind.
+        // Pass 2: a typed (101/102/103/104) `let X = T` where T is an array_lit
+        // storage propagates the typed element-kind back to T → esc-mint T with the kind.
         let mut peb2 = 0
         while peb2 < len(mf.blocks) {
             let peblk2 = mf.blocks[peb2]
@@ -950,6 +955,10 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
                     if pext == 103 && pesrc >= 0 && pesrc <= pe_maxid &&
                        pe_is_alit[pesrc] == 1 {
                         rm_packed_esc_ok[pesrc] = 103
+                    }
+                    if pext == 104 && pesrc >= 0 && pesrc <= pe_maxid &&
+                       pe_is_alit[pesrc] == 1 {
+                        rm_packed_esc_ok[pesrc] = 104
                     }
                 }
                 pes2 = pes2 + 1
@@ -1518,23 +1527,28 @@ fn _pack_escaping_enabled() -> bool {
 
 // Should op on operand `o` take the escaping-poly path? Gate ON + `o` is a
 // PROVABLY typed-prim array container (MIR type_id 101/102 → HexaArrI64, 103 →
-// HexaArrF64). The runtime poly readers (hexa_arr_poly_get/_set/_push/_len) now
-// branch on BOTH TAG_ARRAY_I64 and TAG_ARRAY_F64 at the SAME pair-model call ABI
-// (boxed HexaVal in/out — the f64 element rides the payload bits, no xmm at the
-// poly boundary), so a single consumer path covers i64/i32/f64. f32 (104) stays
-// OUT (farr32 4B-stride area). Globals are a separate id space → conservatively
-// NOT proven (boxed). Mirrors _x86_operand_is_packed's shape.
+// HexaArrF64, 104 → HexaArrF32). The runtime poly readers (hexa_arr_poly_get/
+// _set/_push/_len) now branch on TAG_ARRAY_I64, TAG_ARRAY_F64 AND TAG_ARRAY_F32
+// at the SAME pair-model call ABI (boxed HexaVal in/out — the f32 element is
+// widened to a boxed double on get / narrowed from a boxed double on set/push, so
+// NO 4-byte element ever rides the poly call boundary; the 4B stride is internal
+// to HexaArrF32's float[] data, and HexaArrF32's descriptor is the same 24B
+// (ptr,len,cap) shape, so the anticipated 4B-stride layout WALL does NOT break the
+// pair-model ABI). A single consumer path covers i64/i32/f64/f32. Globals are a
+// separate id space → conservatively NOT proven (boxed). Mirrors
+// _x86_operand_is_packed's shape.
 fn _x86_operand_pack_esc(o: Operand, rm: X86RegMap) -> bool {
     if !_pack_escaping_enabled() { return false }
     if o.kind != "local" { return false }
     let t = _x86_local_type(rm, o.local_id)
-    return t == 101 || t == 102 || t == 103
+    return t == 101 || t == 102 || t == 103 || t == 104
 }
 
 // id → which kind of esc-mint should this array_lit STORAGE take? O(1) probe of
 // the lattice the regmap builder fills (0 when the gate is OFF or not a mint):
 //   101 → i64-class mint (hexa_arr_i64_new_esc, TAG_ARRAY_I64; covers i64/i32)
 //   103 → f64 mint       (hexa_arr_f64_new_esc, TAG_ARRAY_F64)
+//   104 → f32 mint       (hexa_arr_f32_new_esc, TAG_ARRAY_F32)
 fn _x86_local_esc_mint_kind(rm: X86RegMap, id: i64) -> i64 {
     if !_pack_escaping_enabled() { return 0 }
     if id < 0 || id >= len(rm.local_packed_esc_ok) { return 0 }
@@ -2592,23 +2606,26 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             // hexa_arr_i64_new (cap→rdi, returns rax:rdx) — ONLY the carried tag
             // differs. Takes priority over the non-escaping packed mint when ON.
             if _pack_escaping_enabled() && _x86_local_esc_mint(rm, s.dst.id) {
-                // F64 mirror — dispatch the mint symbol on the element kind the
+                // F64/F32 mirror — dispatch the mint symbol on the element kind the
                 // lattice propagated (101 = i64-class → hexa_arr_i64_*; 103 = f64
-                // → hexa_arr_f64_*). The f64 push helper (hexa_arr_f64_push_bits)
-                // takes the element as int64 BITS — the EXACT same all-GPR ABI as
+                // → hexa_arr_f64_*; 104 = f32 → hexa_arr_f32_*). The f64/f32 push
+                // helpers (hexa_arr_f64_push_bits / hexa_arr_f32_push_bits) BOTH
+                // take the element as int64 BITS — the EXACT same all-GPR ABI as
                 // hexa_arr_i64_push (rdi:rsi=descriptor, rdx=payload word), and
-                // _x86_hv_payload already lands a const_float's IEEE-754 bits in
+                // _x86_hv_payload already lands a const_float's f64 IEEE-754 bits in
                 // rdx, so the mint loop body is byte-shape-identical to i64 — only
                 // the two call targets + the carried tag differ (no xmm at mint).
+                // For f32 the f64→f32 narrowing happens INSIDE hexa_arr_f32_push,
+                // so the 4-byte stride never touches the mint-site ABI.
                 let emk = _x86_local_esc_mint_kind(rm, s.dst.id)
-                let new_sym = if emk == 103 { "hexa_arr_f64_new_esc" } else { "hexa_arr_i64_new_esc" }
-                let push_sym = if emk == 103 { "hexa_arr_f64_push_bits" } else { "hexa_arr_i64_push" }
+                let new_sym = if emk == 104 { "hexa_arr_f32_new_esc" } else { if emk == 103 { "hexa_arr_f64_new_esc" } else { "hexa_arr_i64_new_esc" } }
+                let push_sym = if emk == 104 { "hexa_arr_f32_push_bits" } else { if emk == 103 { "hexa_arr_f64_push_bits" } else { "hexa_arr_i64_push" } }
                 let mut ecap = len(s.args)
                 if ecap < 1 { ecap = 1 }
                 _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rdi"), _x86_op_imm(ecap),
                                  "arresc new: cap"))
                 _x86_buf.push(_x86_instr1("call", _x86_op_label(new_sym),
-                                 "arresc new: escaping packed typed-prim storage (TAG_ARRAY_I64/F64)"))
+                                 "arresc new: escaping packed typed-prim storage (TAG_ARRAY_I64/F64/F32)"))
                 _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
                                  "arresc new: capture descriptor"))
                 _x86_store_tag_reg(rm, s.dst.id, "rax")
