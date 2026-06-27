@@ -265,7 +265,22 @@ pub struct RegMap {
     // pre-allocated at prologue bottom. _arm_spill_offset shifts every
     // SSA spill access above this region so per-call stack-spill stores
     // can use [sp, #(i-8)*8] without disturbing SSA offsets.
-    call_overflow_bytes: i64
+    call_overflow_bytes: i64,
+    // FLEET arm64 element-pack (HEXA_PACK_ESCAPING) — mirror of x86_64's
+    // X86RegMap.local_type + .local_packed_esc_ok. The arm64 backend never had a
+    // per-local type lattice (it routes everything through the boxed runtime), so
+    // escape-relax (the x86_64-only #4133 fix shipped #4140/#4143/#4151) was a
+    // no-op here: an escaping typed-prim [i64] stayed boxed. These two slots add
+    // the SAME esc-mint + poly-route lattice the x86_64 backend uses, gated on
+    // `_arm_pack_escaping_enabled()` so they stay EMPTY `[]` when the flag is OFF
+    // → never consulted → emit byte-identical to origin (arm64-linux + darwin-arm64
+    // OFF-byteeq). Built ONLY in `_arm64_assign_regs`.
+    //   local_type[id]          — id → MIR Local.type_id (101/102 = HexaArrI64
+    //                             i64/i32 typed-prim array). 0 = absent/unclassified.
+    //   local_packed_esc_ok[id] — id → 1 when this array_lit STORAGE T should
+    //                             esc-mint (hexa_arr_i64_new_esc → TAG_ARRAY_I64).
+    local_type: [i64],
+    local_packed_esc_ok: [i64]
 }
 
 pub struct ArmAllocResult {
@@ -318,6 +333,83 @@ fn _arm_index_of(ids: [i64], id: i64) -> i64 {
         i = i + 1
     }
     return -1
+}
+
+// ── FLEET arm64 element-pack (HEXA_PACK_ESCAPING) — gate + probes ─────────────
+// Direct mirror of x86_64_linux.hexa's _pack_escaping_enabled / _x86_local_type /
+// _x86_operand_pack_esc / _x86_local_esc_mint (#4143/#4151), prefixed `_arm_` so
+// the two backends share NO top-level symbol (flatten-collision-safe, #3899). The
+// SAME env flag HEXA_PACK_ESCAPING gates BOTH backends (shared opt-in). The runtime
+// half (TAG_ARRAY_I64 discriminator + hexa_arr_poly_* readers, #4140, compiled
+// -DHEXA_PACK_ESCAPING) is platform-agnostic C, so an esc-minted array is read
+// soundly on arm64 by the SAME poly readers. Default-OFF (env unset) → every
+// branch below returns false/empty → emit byte-identical to origin (OFF-byteeq).
+
+// Max local id across locals/params/stmts (sizing the esc lattices). Mirror of
+// _x86_max_local_id.
+fn _arm_max_local_id(mf: MFunc) -> i64 {
+    let mut m = -1
+    let mut li = 0
+    while li < len(mf.locals) {
+        if mf.locals[li].id > m { m = mf.locals[li].id }
+        li = li + 1
+    }
+    let mut pi = 0
+    while pi < len(mf.params) {
+        if mf.params[pi].id > m { m = mf.params[pi].id }
+        pi = pi + 1
+    }
+    let mut bi = 0
+    while bi < len(mf.blocks) {
+        let blk = mf.blocks[bi]
+        let mut si = 0
+        while si < len(blk.stmts) {
+            let s = blk.stmts[si]
+            if s.dst.id > m { m = s.dst.id }
+            let mut ai = 0
+            while ai < len(s.args) {
+                if s.args[ai].kind == "local" && s.args[ai].local_id > m {
+                    m = s.args[ai].local_id
+                }
+                ai = ai + 1
+            }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    return m
+}
+
+// escape-relax gate (HEXA_PACK_ESCAPING). Default-OFF (env unset) → every esc
+// branch in _arm64_assign_regs + _emit_arm64_stmt is skipped → byte-identical.
+fn _arm_pack_escaping_enabled() -> bool {
+    return env("HEXA_PACK_ESCAPING") == "1"
+}
+
+// O(1) id → MIR type_id probe (0 = absent/unclassified). Empty `[]` when OFF.
+fn _arm_local_type(rm: RegMap, id: i64) -> i64 {
+    if id < 0 || id >= len(rm.local_type) { return 0 }
+    return rm.local_type[id]
+}
+
+// Should op on operand `o` take the escaping-poly path? Gate ON + `o` is a
+// PROVABLY typed-prim array container (MIR type_id 101..102 → HexaArrI64). i64/i32
+// only for r1 (the runtime poly readers cover HexaArrI64). Globals are a separate
+// id space → conservatively boxed. Mirror of _x86_operand_pack_esc.
+fn _arm_operand_pack_esc(o: Operand, rm: RegMap) -> bool {
+    if !_arm_pack_escaping_enabled() { return false }
+    if o.kind != "local" { return false }
+    let t = _arm_local_type(rm, o.local_id)
+    return t == 101 || t == 102
+}
+
+// id → should this array_lit STORAGE esc-mint (TAG_ARRAY_I64)? O(1) probe of the
+// lattice the regmap builder fills (empty/false when OFF). Mirror of
+// _x86_local_esc_mint.
+fn _arm_local_esc_mint(rm: RegMap, id: i64) -> bool {
+    if !_arm_pack_escaping_enabled() { return false }
+    if id < 0 || id >= len(rm.local_packed_esc_ok) { return false }
+    return rm.local_packed_esc_ok[id] == 1
 }
 
 fn _arm_compute_live_ranges(mf: MFunc) -> ArmIntervals {
@@ -649,11 +741,87 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
     if rem2 != 0 { frame2 = frame2 + (16 - rem2) }
     frame = frame2
 
+    // ── FLEET arm64 element-pack (HEXA_PACK_ESCAPING) — type + esc-mint lattice ──
+    // Mirror of x86_64_linux.hexa's rm_local_type + rm_packed_esc_ok builders
+    // (#4143/#4151). The arm64 backend had NO per-local type tracking, so the
+    // hir_to_mir element-kind stamp (type_id 101/102, already PLATFORM-AGNOSTIC —
+    // gated on HEXA_PACK_ESCAPING since #4151) reached this backend unread. We now
+    // read it into `rm_local_type` (id → MIR Local.type_id) and derive the esc-mint
+    // storage lattice `rm_packed_esc_ok`. Built ONLY when `_arm_pack_escaping_enabled()`
+    // → OFF leaves BOTH `[]` (never consulted by the emit boundaries) → byte-identical.
+    let mut rm_local_type: [i64] = []
+    let mut rm_packed_esc_ok: [i64] = []
+    if _arm_pack_escaping_enabled() {
+        let at_maxid = _arm_max_local_id(mf)
+        let mut a0 = 0
+        while a0 <= at_maxid { rm_local_type.push(0); rm_packed_esc_ok.push(0); a0 = a0 + 1 }
+        // type-id from MIR locals + params (key: container 101/102 typed-prim).
+        let mut ali = 0
+        while ali < len(mf.locals) {
+            let lid = mf.locals[ali].id
+            if lid >= 0 && lid <= at_maxid { rm_local_type[lid] = mf.locals[ali].type_id }
+            ali = ali + 1
+        }
+        let mut api = 0
+        while api < len(mf.params) {
+            let pid = mf.params[api].id
+            if pid >= 0 && pid <= at_maxid { rm_local_type[pid] = mf.params[api].type_id }
+            api = api + 1
+        }
+        // Pass 1: collect array_lit dst ids (storage T candidates); a DIRECT typed
+        // literal storage (X==T, T already 101/102) esc-mints immediately.
+        let mut a_is_alit: [i64] = []
+        let mut az = 0
+        while az <= at_maxid { a_is_alit.push(0); az = az + 1 }
+        let mut ab = 0
+        while ab < len(mf.blocks) {
+            let ablk = mf.blocks[ab]
+            let mut asx = 0
+            while asx < len(ablk.stmts) {
+                let ast = ablk.stmts[asx]
+                if ast.kind == _STMT_ASSIGN && ast.op == "array_lit" {
+                    let ad = ast.dst.id
+                    if ad >= 0 && ad <= at_maxid {
+                        a_is_alit[ad] = 1
+                        let atd = rm_local_type[ad]
+                        if atd == 101 || atd == 102 { rm_packed_esc_ok[ad] = 1 }
+                    }
+                }
+                asx = asx + 1
+            }
+            ab = ab + 1
+        }
+        // Pass 2: a typed (101/102) `let X = T` where T is an array_lit storage
+        // propagates the typed element-kind back to T → esc-mint T.
+        let mut ab2 = 0
+        while ab2 < len(mf.blocks) {
+            let ablk2 = mf.blocks[ab2]
+            let mut as2 = 0
+            while as2 < len(ablk2.stmts) {
+                let ast2 = ablk2.stmts[as2]
+                if ast2.kind == _STMT_ASSIGN && ast2.op == "let" && len(ast2.args) >= 1 &&
+                   ast2.args[0].kind == "local" {
+                    let ax = ast2.dst.id
+                    let asrc = ast2.args[0].local_id
+                    let axt = if ax >= 0 && ax <= at_maxid { rm_local_type[ax] } else { 0 }
+                    if (axt == 101 || axt == 102) && asrc >= 0 && asrc <= at_maxid &&
+                       a_is_alit[asrc] == 1 {
+                        rm_packed_esc_ok[asrc] = 1
+                    }
+                }
+                as2 = as2 + 1
+            }
+            ab2 = ab2 + 1
+        }
+    }
+
     let map = RegMap {
         ids: map_ids,
         regs: map_regs,
         slots: map_slots,
-        call_overflow_bytes: 0   // filled in by _arm64_lower_func once max-overflow is known
+        call_overflow_bytes: 0,   // filled in by _arm64_lower_func once max-overflow is known
+        local_type: rm_local_type,
+        local_packed_esc_ok: rm_packed_esc_ok
     }
     return ArmAllocResult { map: map, frame_size: frame }
 }
@@ -1684,6 +1852,37 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // rebuild-verification DEFERRED (Track-A clang wall) — logic
         // parity with shipped concat emit.
         if s.op == "array_lit" {
+            // FLEET arm64 element-pack (HEXA_PACK_ESCAPING) — escaping-packed mint:
+            // build a RAW contiguous HexaArrI64 tagged TAG_ARRAY_I64 via
+            // hexa_arr_i64_new_esc so a worker that receives this array as a param
+            // of unknown packed-ness discriminates it at runtime via hexa_arr_poly_*.
+            // AAPCS64: hexa_arr_i64_new_esc(int cap) → cap in w0, returns HexaVal
+            // x0:x1; hexa_arr_i64_push(HexaVal v, int64_t x) → v in x0:x1, raw int x
+            // in x2, returns the (possibly realloc'd) descriptor x0:x1. The element
+            // is loaded as a HexaVal pair and its PAYLOAD (x_hi) is the raw int64 —
+            // mirror of x86_64's _x86_hv_payload(arg → rdx). Takes priority over the
+            // boxed hexa_array_new mint when ON (uniform representation).
+            if _arm_local_esc_mint(rm, s.dst.id) {
+                let mut ecap = len(s.args)
+                if ecap < 1 { ecap = 1 }
+                buf = _arm64_emit_imm_to_reg(buf, "x0", ecap)
+                buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_arr_i64_new_esc"),
+                                 "arresc new: escaping packed int64 storage (TAG_ARRAY_I64)"))
+                buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+                let mut ei = 0
+                while ei < len(s.args) {
+                    // raw element payload → x9:x10 (x10 = payload), descriptor → x0:x1.
+                    buf = _hv_load(buf, s.args[ei], st, rm, "x9", "x10")
+                    buf = _hv_ldslot(buf, rm, s.dst.id, "x0", "x1")
+                    buf.push(_arm64_instr2("mov", _arm64_op_reg("x2"),
+                                     _arm64_op_reg("x10"), "arresc push: raw elem payload → x2"))
+                    buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_arr_i64_push"),
+                                     "arresc push: raw elem " + to_string(ei)))
+                    buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+                    ei = ei + 1
+                }
+                return buf
+            }
             buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_array_new"),
                              "array_lit: new array"))
             buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
@@ -1770,6 +1969,80 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // fn pointer is the address of the lifted lambda symbol (adrp/add);
         // mirrors self/codegen_c2.hexa::gen2_lambda_expr's
         // `hexa_closure_new((void*)&__hexa_lambda_N, arity, env)`.
+        // fn-ref-as-value: hir_to_mir lowers a bare top-level-fn ident used in
+        // value position to STMT_ASSIGN op="fn_ref" with args = [name_str,
+        // arity_int]. Runtime ABI: hexa_fn_new(void* fn_ptr, int arity) →
+        // fn_ptr in x0, arity (C int) in w1; returns the TAG_FN HexaVal in
+        // x0:x1. fn_ptr = address of the user fn symbol (adrp/add @PAGE/@PAGEOFF,
+        // same symbol the direct `bl <target>` uses). TAG_FN (not TAG_CLOSURE)
+        // so the runtime call dispatch does NOT prepend an env — a plain fn
+        // `worker(start)` takes its arg directly. Mirrors the C-transpile
+        // hexa_fn_new auto-wrap.
+        if s.op == "fn_ref" && len(s.args) >= 2 {
+            let fn_sym = s.args[0].str_val
+            let fn_arity = s.args[1].int_val
+            // x0 = &<fn_sym> (PC-relative; symbol mangled by _fmt_label)
+            buf.push(_arm64_instr2("adrp", _arm64_op_reg("x0"),
+                             _arm64_op_label(fn_sym + "@PAGE"),
+                             "fn_ref: fn-ptr page"))
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x0"),
+                             _arm64_op_reg("x0"),
+                             _arm64_op_label(fn_sym + "@PAGEOFF"),
+                             "fn_ref: fn-ptr off"))
+            // w1 = arity (C int)
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
+                             _arm64_op_label("#" + to_string(fn_arity)),
+                             "fn_ref: arity"))
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_fn_new_native"),
+                             "fn_ref: build TAG_FN"))
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+            return buf
+        }
+        // carrier call: invoke a runtime TAG_FN/TAG_CLOSURE carrier DATA global
+        // (thread_spawn, …). hir_to_mir lowers `thread_spawn(worker, 1)` to
+        // STMT_ASSIGN op="carrier_call" args=[carrier_name_str, a1, …]. ABI:
+        // hexa_callN_native(HexaVal carrier, HexaVal a1, …) — carrier pair →
+        // x0:x1, a1 → x2:x3, a2 → x4:x5 (AAPCS64 16B HexaVal-by-value pairs).
+        // The carrier is loaded from its global: adrp/add → addr, ldp x0,x1,[addr]
+        // (lo=tag@0, hi=payload@8). Box the call args FIRST (they use x15 scratch
+        // + write x2:x3/x4:x5, never x0:x1), THEN load the carrier into x0:x1 so
+        // it survives. Returns the HexaVal in x0:x1.
+        if s.op == "carrier_call" && len(s.args) >= 1 {
+            let carrier = s.args[0].str_val
+            let ncall = len(s.args) - 1
+            // box call args into pairs 1.. (carrier is pair0=x0:x1; a1=x2:x3,
+            // a2=x4:x5, a3=x6:x7 — the carriers are all ≤2-arg so ≤x4:x5).
+            let mut ci = 1
+            while ci < len(s.args) {
+                let mut lo = "x2"
+                let mut hi = "x3"
+                if ci == 2 { lo = "x4"; hi = "x5" }
+                if ci == 3 { lo = "x6"; hi = "x7" }
+                if ci == 4 { lo = "x8"; hi = "x9" }
+                buf = _hv_load(buf, s.args[ci], st, rm, lo, hi)
+                ci = ci + 1
+            }
+            // carrier HexaVal → x0:x1 from the global symbol.
+            buf.push(_arm64_instr2("adrp", _arm64_op_reg("x9"),
+                             _arm64_op_label(carrier + "@PAGE"),
+                             "carrier_call: " + carrier + " page"))
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x9"),
+                             _arm64_op_reg("x9"),
+                             _arm64_op_label(carrier + "@PAGEOFF"),
+                             "carrier_call: " + carrier + " off"))
+            buf.push(_arm64_instr3("ldp", _arm64_op_reg("x0"), _arm64_op_reg("x1"),
+                             _arm64_op_mem("x9", 0),
+                             "carrier_call: load carrier HexaVal"))
+            let mut dispatch = "hexa_call0_native"
+            if ncall == 1 { dispatch = "hexa_call1_native" }
+            if ncall == 2 { dispatch = "hexa_call2_native" }
+            if ncall == 3 { dispatch = "hexa_call3_native" }
+            if ncall == 4 { dispatch = "hexa_call4_native" }
+            buf.push(_arm64_instr1("bl", _arm64_op_label(dispatch),
+                             "carrier_call: dispatch " + carrier))
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+            return buf
+        }
         if s.op == "closure_new" && len(s.args) >= 3 {
             let lam_sym = s.args[1].str_val
             let arity = s.args[2].int_val
@@ -1800,6 +2073,22 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // dispatches arrays via hexa_array_get and unwraps VALSTRUCT
         // before the array path.
         if s.op == "index" && len(s.args) >= 2 {
+            // FLEET arm64 element-pack (HEXA_PACK_ESCAPING) — escaping-poly index:
+            // a typed-prim array operand of unknown packed-ness routes through
+            // hexa_arr_poly_get, which branches on HX_TAG==TAG_ARRAY_I64 at RUNTIME
+            // (stride-8 raw) else delegates to the boxed hexa_array_get (stride-16).
+            // AAPCS64: v → x0:x1 pair, RAW idx → x2 (the idx HexaVal payload = x_hi);
+            // returns the element HexaVal x0:x1. Mirror of x86_64's hexa_arr_poly_get.
+            if _arm_operand_pack_esc(s.args[0], rm) {
+                buf = _hv_load(buf, s.args[1], st, rm, "x9", "x10")  // idx → x10 = payload
+                buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")   // descriptor pair
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x2"),
+                                 _arm64_op_reg("x10"), "index: raw idx payload → x2"))
+                buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_arr_poly_get"),
+                                 "index: hexa_arr_poly_get (runtime discriminate)"))
+                buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+                return buf
+            }
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // base → x0:x1
             buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // idx → x2:x3
             buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_index_get"),
@@ -1831,6 +2120,40 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // hexa_array_push: store the result back into the container
         // lvalue when it is a storable local/global Operand.
         if s.op == "index_set" && len(s.args) >= 3 {
+            // FLEET arm64 element-pack (HEXA_PACK_ESCAPING) — escaping-poly index_set:
+            // a typed-prim array operand of unknown packed-ness routes through
+            // hexa_arr_poly_set (TAG_ARRAY_I64 → raw stride-8 store; else boxed
+            // hexa_index_set). AAPCS64: v → x0:x1, RAW idx → x2 (idx HexaVal payload),
+            // item → x3:x4 pair; returns the descriptor x0:x1 → store-back so a copied
+            // handle stays coherent (the in-place store also mutates aliases). Mirror
+            // of x86_64's hexa_arr_poly_set.
+            if _arm_operand_pack_esc(s.args[0], rm) {
+                buf = _hv_load(buf, s.args[1], st, rm, "x9", "x10")  // idx → x10 = payload
+                buf = _hv_load(buf, s.args[2], st, rm, "x3", "x4")   // item pair
+                buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")   // descriptor pair
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x2"),
+                                 _arm64_op_reg("x10"), "index_set: raw idx payload → x2"))
+                buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_arr_poly_set"),
+                                 "index_set: hexa_arr_poly_set (runtime discriminate)"))
+                let econt = s.args[0]
+                if econt.kind == "local" {
+                    buf = _hv_store(buf, rm, econt.local_id, "x0", "x1")
+                } else if econt.kind == "global" {
+                    let egl = "g" + to_string(econt.global_id)
+                    buf.push(_arm64_instr2("adrp", _arm64_op_reg("x15"),
+                                     _arm64_op_label(egl + "@PAGE"),
+                                     "index_set: poly container global page (store-back)"))
+                    buf.push(_arm64_instr3("add", _arm64_op_reg("x15"),
+                                     _arm64_op_reg("x15"),
+                                     _arm64_op_label(egl + "@PAGEOFF"),
+                                     "index_set: poly container global off (store-back)"))
+                    buf.push(_arm64_instr3("stp", _arm64_op_reg("x0"),
+                                     _arm64_op_reg("x1"),
+                                     _arm64_op_label("[x15]"),
+                                     "index_set: poly store-back into global " + egl))
+                }
+                return buf
+            }
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // container
             buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // key
             buf = _hv_load(buf, s.args[2], st, rm, "x4", "x5")  // value
@@ -2744,7 +3067,20 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             }
             i = i + 1
         }
-        let target = _builtin_runtime_sym(s.op)
+        let mut target = _builtin_runtime_sym(s.op)
+        // FLEET arm64 element-pack (HEXA_PACK_ESCAPING) — escaping-poly push/len.
+        // The generic builtin emit already lands the args in the SAME registers the
+        // poly readers want (push: v → x0:x1, item → x2:x3 ≡ hexa_arr_poly_push;
+        // len: v → x0:x1 ≡ hexa_arr_poly_len, returning int64 in x0 — IDENTICAL
+        // ABI + ret-box to hexa_len), so ONLY the call target changes. The runtime
+        // discriminates on HX_TAG==TAG_ARRAY_I64 (stride-8 raw) else delegates to
+        // the boxed hexa_array_push / hexa_len. Mirror of x86_64's poly push/len.
+        if s.op == "push" && len(s.args) >= 2 && _arm_operand_pack_esc(s.args[0], rm) {
+            target = "hexa_arr_poly_push"
+        }
+        if s.op == "len" && len(s.args) >= 1 && _arm_operand_pack_esc(s.args[0], rm) {
+            target = "hexa_arr_poly_len"
+        }
         buf.push(_arm64_instr1("bl", _arm64_op_label(target), "call " + target))
         // Box int/bool-returning runtime builtins into a HexaVal (the
         // callee returns a C int in w0; A′ expects x0:x1 HexaVal).
@@ -3121,7 +3457,12 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
         ids: alloc.map.ids,
         regs: alloc.map.regs,
         slots: alloc.map.slots,
-        call_overflow_bytes: call_overflow_bytes
+        call_overflow_bytes: call_overflow_bytes,
+        // FLEET arm64 element-pack — forward the esc lattice built in
+        // _arm64_assign_regs (both `[]` when HEXA_PACK_ESCAPING is OFF → emit
+        // boundaries never consult them → byte-identical to origin).
+        local_type: alloc.map.local_type,
+        local_packed_esc_ok: alloc.map.local_packed_esc_ok
     }
     // Cycle h20 — reserve jmp_buf region above the spill area. Each try
     // gets one 192-byte slot (16-aligned by construction).
