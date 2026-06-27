@@ -1429,3 +1429,110 @@ pub fn hxlcl_poll(fds: HexaVal, nfds: HexaVal, timeout: HexaVal) -> int {
     }
     return r                                    // ready count (0 on timeout)
 }
+
+// ── batch I: clock_gettime + execve (clean syscall leaves) ─────────────────────
+//
+// Two more errno-bearing leaves continuing the close-mirror discipline (raw-payload
+// `__hx_payload_lt`/`_ne`/`_sub`, never bare `<`/`-`, + the target_is_linux()-gated
+// errno store via the already-whitelisted __errno_location). Both reuse the proven
+// patterns from earlier batches:
+//   clock_gettime → getrusage's OUT-PTR shape (the caller's timespec* the kernel
+//        fills). UNIFORM 2-arg on Linux (only the NR varies, x86_64=228/arm64=113),
+//        like read/lseek/getrusage. Darwin has NO clock_gettime trap (it is a
+//        commpage/vDSO routine with no stable BSD syscall number — confirmed by the
+//        floor self/runtime_emit_full.hexa:1977 which uses gettimeofday(116)), so
+//        the darwin leg synthesizes a timespec from gettimeofday(116) — the batch-H
+//        time/poll gettimeofday pattern, but writing the timespec DIRECTLY into the
+//        caller's out-ptr (leak-free, no heap scratch — clock_gettime is often hot-
+//        looped in timing loops, so the time/poll per-call heap leak is avoided).
+//   execve → plain 3-arg (path, argv, envp). Only the NR diverges on arm64
+//        (x86_64=59/arm64=221/darwin=59) — NO arg-shape change (no AT_FDCWD prepend,
+//        no flags-trailing), the read/lseek/getrusage uniform-NR class. execve only
+//        returns ON FAILURE (success replaces the process image), so the errno
+//        epilogue is the whole story: a bad path → -1 + ENOENT on the raw Linux
+//        syscall (the uniform -errno convention).
+//
+// NR ref-match (no black-box; in-repo tables + WebFetch-confirmed asm-generic):
+//   clock_gettime  x86_64 = 228  (arch/x86 syscall_64.tbl; self/rt/syscall.hexa:79
+//                                 SYS_LINUX_CLOCK_GETTIME)
+//                  arm64  = 113  (asm-generic unistd.h __NR_clock_gettime)
+//                  darwin =  —   (no trap → gettimeofday(116), self/runtime_emit_full
+//                                 .hexa:1943 HXLCL_SYS_GETTIMEOFDAY 116)
+//   execve         x86_64 =  59  (arch/x86 syscall_64.tbl; syscall.hexa:75
+//                                 SYS_LINUX_EXECVE)
+//                  arm64  = 221  (asm-generic unistd.h __NR_execve)
+//                  darwin =  59  (xnu bsd/kern/syscalls.master; runtime_emit_full
+//                                 .hexa:1375 HXLCL_SYS_EXECVE — bare BSD trap)
+//
+// DEFERRED to batch J (honest — measured darwin wall + smoke complexity, not done
+// here):
+//   fork → arm64 has NO plain fork; it uses clone(220, SIGCHLD=17, 0,0,0,0) — and
+//          because every clone arg past `flags` is 0, the CONFIG_CLONE_BACKWARDS
+//          arg-order divergence is MOOT (only flags is non-zero), so the LINUX legs
+//          dissolve cleanly (x86_64 fork=57 / arm64 clone=220). BUT darwin fork(2)
+//          is a 2nd-RETURN-REGISTER syscall: it returns the child pid in x0 for BOTH
+//          processes and disambiguates the child by x1==1 (confirmed by the floor
+//          self/runtime_emit_full.hexa:1795-1808 _cf-style dual-register capture).
+//          The single-result __hx_syscall6 exposes only x0, so the Route C darwin
+//          leg CANNOT tell parent from child — a genuine wall identical to darwin
+//          pipe (the real darwin fork stays the floor's raw-asm dual-reg shim). On
+//          top of that the SMOKE harness for fork must actually fork+_exit+waitpid a
+//          live process (vs the composition tests here), so batch J carries fork
+//          alone with its own careful process-fork harness.
+
+// clock_gettime: out-ptr timespec (getrusage shape). Linux = uniform 2-arg, kernel
+// writes *ts; only the NR varies per-arch. darwin = no trap → synthesize from
+// gettimeofday(116) directly into the caller's ts (leak-free).
+pub fn hxlcl_clock_gettime(clk: HexaVal, ts: HexaVal) -> int {
+    if target_is_linux() {
+        let mut nr = 113                       // Linux arm64 __NR_clock_gettime
+        if target_is_x86_64() { nr = 228 }     // Linux x86_64 __NR_clock_gettime
+        let r = __hx_syscall6(nr, clk, ts, 0, 0, 0, 0)
+        let neg = __hx_payload_lt(r, 0)
+        if __hx_payload_ne(neg, 0) {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+            return -1
+        }
+        return r                                // 0 on success (kernel wrote *ts)
+    }
+    // darwin: no clock_gettime trap → gettimeofday(116, ts, NULL) writes a timeval
+    // {tv_sec @0 (8B), tv_usec @8 (32-bit suseconds_t)} INTO the caller's timespec
+    // buffer; convert to timespec {tv_sec @0, tv_nsec @8 (64-bit) = usec*1000} in
+    // place. The store64 of nsec overwrites the 32-bit usec slot AND the trailing 4
+    // garbage bytes (timeval is 12B, timespec is 16B). NULL-gated: clock_gettime
+    // with a NULL ts is meaningless, and we cannot gettimeofday into NULL. The
+    // load32 reads exactly the 32-bit usec (zero-extended) — no zero-init needed.
+    let pts = __hx_payload_add(ts, 0)          // timespec* ts (raw, may be NULL)
+    if __hx_payload_ne(pts, 0) {
+        __hx_syscall6(116, pts, 0, 0, 0, 0, 0) // gettimeofday(ts, NULL)
+        let usec = __hx_ptr_load32(pts, 8)     // tv_usec (32-bit, zero-extended)
+        let nsec = __hx_payload_mul(usec, 1000)
+        __hx_ptr_store64(pts, 8, nsec)         // ts.tv_nsec = usec * 1000
+    }
+    return 0
+}
+
+// execve: plain 3-arg (path, argv, envp); only the NR diverges on arm64. Returns
+// ONLY on failure (success replaces the process), so the errno epilogue is the
+// whole body. Linux failure → -1 + errno; darwin returns the raw positive errno
+// (carry-flag not read — the documented deferred darwin errno path).
+pub fn hxlcl_execve(path: HexaVal, argv: HexaVal, envp: HexaVal) -> int {
+    let mut nr = 59                            // darwin SYS_execve / x86_64 default
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 59 }      // Linux x86_64 __NR_execve
+        else { nr = 221 }                      // Linux arm64 __NR_execve
+    }
+    let r = __hx_syscall6(nr, path, argv, envp, 0, 0, 0)
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // unreachable on success (image replaced)
+}
