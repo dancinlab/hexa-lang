@@ -644,3 +644,61 @@ jobs:
         run: |
           set -euo pipefail
           bash tool/routec_cabi_smoke.sh
+
+  # ── Route C ON-path errno smoke (LINUX) — the errno-store value-exact gate ───
+  # The darwin smoke above DCE's out hxlcl_close's errno-store leg (its
+  # target_is_linux() guard is a compile-time FALSE const on darwin), so the ②
+  # extern-data substrate (errno SET via __errno_location + __hx_ptr_store32) has
+  # NO ON-path coverage there. This LINUX sibling runs the errno-store LIVE and
+  # asserts close's errno contract VALUE-EXACT (errno == EBADF) — the substrate's
+  # core claim. Self-hosted x86_64 pool (aiden/summer) when online; fork PRs +
+  # offline pool fall back to GitHub-hosted via the dispatch job, same as the
+  # faithful-nobaseline linux-x86_64 leg. Advisory first (promote after green).
+  # CODE-NEUTRAL: adds ONLY this job + tool/routec_cabi_smoke_linux.sh;
+  # HEXA_CABI_HXLCL stays default-OFF (release_build never sets it).
+  routec-cabi-smoke-linux-x86_64:
+    name: Route C ON-path errno smoke (linux-x86_64, advisory)
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.linux_label) }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
+      # (1) Build ./hexa via the shared release path — restores the gitignored
+      #     hexat transpiler + self/runtime.c seeds that build_aprime needs.
+      - name: (1) Build ./hexa — shared release_build (restores hexat + seeds)
+        shell: bash
+        env:
+          TARGET: linux-x86_64
+          CC: gcc
+          LIBS: "-lm -ldl"
+          GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
+        run: |
+          set -euo pipefail
+          bash tool/release_build
+          ./hexa --version
+          echo "(1) ./hexa built + hexat/seeds restored OK (linux-x86_64)"
+
+      # (2) Build aprime_cc (the native x86_64-asm compiler) — the binary that
+      #     emits the Route C .s under HEXA_CABI_HXLCL=1 for the linux target.
+      - name: (2) Build aprime_cc
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tool/build_aprime.sh -o build/aprime_cc
+          [ -x build/aprime_cc ] && echo "(2) aprime_cc built OK"
+
+      # (3) Emit hxlcl_core.hexa (--target=x86_64-linux), link the Route C .o
+      #     against the errno harness, run + assert errno == EBADF value-exact.
+      - name: (3) Route C errno emit + link + value-exact run
+        shell: bash
+        env:
+          APRIME: build/aprime_cc
+          CC: gcc
+        run: |
+          set -euo pipefail
+          bash tool/routec_cabi_smoke_linux.sh

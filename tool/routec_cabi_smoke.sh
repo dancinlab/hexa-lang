@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -97,6 +97,7 @@ cat > "$TMP/harness.c" <<'CEOF'
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>   /* libc getpid() — the reference oracle for hxlcl_getpid */
+#include <fcntl.h>    /* open() / O_RDONLY — for the close() behavior test */
 
 /* Route-C-emitted symbols under test (raw C-ABI prototypes). */
 extern size_t hxlcl_strlen(const char *s);
@@ -124,6 +125,18 @@ extern int    hxlcl_getppid(void);
 extern int    hxlcl_geteuid(void);
 extern int    hxlcl_getegid(void);
 
+/* errno-bearing syscall leaf — close. Returns 0 / -1 (errno SET on the Linux
+ * leg). On THIS darwin smoke the errno-store is DCE'd out (target_is_linux()
+ * const-false), so only the return value (0 / -1) is asserted here; the errno
+ * value-exact (==EBADF) is asserted by the LINUX sibling smoke. */
+extern int    hxlcl_close(int fd);
+
+/* errno-bearing chain (close mirror) — read / lseek, uniform 3-arg. Same
+ * composition-only assertion on darwin (errno-store DCE'd); the errno value-exact
+ * is the LINUX sibling smoke's job. */
+extern long   hxlcl_read(int fd, void *buf, unsigned long n);
+extern long   hxlcl_lseek(int fd, long off, int whence);
+
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
  * atoi, malloc for strdup + calloc + realloc. (Each composite PR adds its callee.)
@@ -142,6 +155,18 @@ void     *hxlcl_malloc(size_t n) {
     *(size_t *)base = want;            /* size header at [base .. base+8) */
     return base + HXLCL_HDR;           /* user pointer (header is at p-16) */
 }
+
+/* hxlcl_close's errno-store leg references __errno_location, but it is inside a
+ * `if (target_is_linux())` branch that const-folds to FALSE on darwin — so the
+ * call is UNREACHABLE here, yet the codegen still emits the `bl ___errno_location`
+ * (DCE never drops a STMT_CALL, even an unreachable one). This stub satisfies the
+ * darwin linker for that dead reference; it is never executed (the branch is
+ * runtime-false). The LINUX sibling smoke links libc's real __errno_location and
+ * exercises the store for real (errno == EBADF value-exact). On glibc/musl errno
+ * is `(*__errno_location())`; macOS's analog is `__error()` — a darwin-native
+ * errno round is separate, so this stub stands in only as a link placeholder. */
+static int _smoke_errno_cell = 0;
+int *__errno_location(void) { return &_smoke_errno_cell; }
 
 static int fails = 0;
 #define CK(cond, msg) do { if (!(cond)) { printf("  FAIL: %s\n", msg); fails++; } } while (0)
@@ -222,6 +247,33 @@ int main(void) {
     CK(hxlcl_getppid() == (int)getppid(), "getppid == libc getppid (value-exact)");
     CK(hxlcl_geteuid() == (int)geteuid(), "geteuid == libc geteuid (value-exact)");
     CK(hxlcl_getegid() == (int)getegid(), "getegid == libc getegid (value-exact)");
+
+    /* errno-bearing close — COMPOSITION only on darwin: a valid fd closes → 0.
+     * The ERROR case (close(already-closed) == -1) is a LINUX-leg claim and is
+     * asserted by the Linux sibling smoke (errno == EBADF value-exact), NOT here:
+     * darwin's BSD close signals errors via the carry flag with a POSITIVE errno
+     * in x0 (e.g. +9), so `__hx_payload_lt(r, 0)` (which assumes the Linux -errno
+     * convention) does not see an error → the body returns +9, not -1. A native
+     * darwin errno path (carry-flag capture + `__error()`) is a separate round; the
+     * Linux-only errno-store leg here is `target_is_linux()`-gated and DCE-dead on
+     * darwin, so darwin's close error semantics are intentionally NOT exercised. */
+    int cfd = open("/dev/null", O_RDONLY);
+    CK(cfd >= 0, "open /dev/null for close test");
+    CK(hxlcl_close(cfd) == 0, "close(valid fd) == 0 (composition)");
+
+    /* read / lseek — COMPOSITION on darwin (success case; errno-store DCE'd).
+     * read of /dev/null returns 0 (EOF); lseek on a regular file moves the offset.
+     * The errno value-exact (bad-fd → EBADF) is the Linux sibling smoke's claim. */
+    char rb[8];
+    int rfd = open("/dev/null", O_RDONLY);
+    CK(rfd >= 0, "open /dev/null for read test");
+    CK(hxlcl_read(rfd, rb, sizeof rb) == 0, "read(/dev/null) == 0 (EOF, composition)");
+    hxlcl_close(rfd);
+
+    int lfd = open("/dev/zero", O_RDONLY);
+    CK(lfd >= 0, "open /dev/zero for lseek test");
+    CK(hxlcl_lseek(lfd, 0, SEEK_SET) == 0, "lseek(SEEK_SET, 0) == 0 (composition)");
+    hxlcl_close(lfd);
 
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }
     printf("[routec-smoke] %d assert(s) FAILED\n", fails);

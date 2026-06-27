@@ -1095,6 +1095,21 @@ pub fn _is_cabi(fname: string) -> bool {
     if fname == "hxlcl_getppid" { return true }
     if fname == "hxlcl_geteuid" { return true }
     if fname == "hxlcl_getegid" { return true }
+    // errno-bearing syscall + its errno accessor (② extern-data substrate via the
+    // canonical thread-local accessor — frozen-safe, no new builtin). hxlcl_close
+    // issues the close syscall; on Linux error it stores `-r` into *__errno_location()
+    // via __hx_ptr_store32. __errno_location is whitelisted so the inner C-ABI
+    // `bl __errno_location` lowers single-register (0 args; int* ← rax/x0), exactly
+    // like hxlcl_atoi's inner `bl hxlcl_atoll`. (__errno_location is a libc extern,
+    // not an hxlcl_ symbol — _is_cabi keys on the exact name, so this is fine.)
+    if fname == "hxlcl_close" { return true }
+    if fname == "__errno_location" { return true }
+    // errno-bearing chain (close mirror): uniform 3-arg syscalls. Same body shape
+    // as hxlcl_close (raw-payload intrinsics + target_is_linux()-gated errno store
+    // via the already-whitelisted __errno_location). No arm64 call-shape divergence
+    // (read/lseek are plain on every target).
+    if fname == "hxlcl_read" { return true }
+    if fname == "hxlcl_lseek" { return true }
     return false
 }
 
