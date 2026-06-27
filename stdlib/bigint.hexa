@@ -323,6 +323,34 @@ fn bi_div_small(a, d) -> array {
     qr[0]
 }
 
+// ── decimal right-shift: floor(|a| / 10^e) (sign preserved). Drops the lowest e decimal
+//    digits. e = 4q + r over base-10000 limbs: drop q whole limbs (little-endian low end),
+//    then divide the remainder by 10^r (small divisor). Exact floor. ──
+fn bi_shift10_down(a, e) -> array {
+    if a[0] == 0 { let z = []; z.push(0); return z }
+    let q = e / 4
+    let r = e % 4
+    let na = _nlimb(a)
+    if na <= q {
+        // all magnitude limbs dropped → remainder may still leave <10^r; result 0 unless r
+        // leaves a partial top limb. Conservative: if na <= q the value < 10^(4q) <= 10^e → 0.
+        if na < q { let z = []; z.push(0); return z }
+        // na == q: value < 10^(4q) ; dividing by 10^e=10^(4q+r) → 0
+        let z = []; z.push(0); return z
+    }
+    // drop lowest q limbs
+    let out = []
+    out.push(a[0])
+    let i = q + 1
+    while i <= na { out.push(a[i]); i = i + 1 }
+    let shifted = _norm(out)
+    if r == 0 { return shifted }
+    let dv = 1
+    let t = 0
+    while t < r { dv = dv * 10; t = t + 1 }
+    bi_div_small(shifted, dv)
+}
+
 // ── selftest ──
 fn _gate(label, got, want) -> int {
     if got == want {
