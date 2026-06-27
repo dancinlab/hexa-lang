@@ -1,0 +1,201 @@
+// ═══════════════════════════════════════════════════════════
+//  test_lifetimes_typecheck.hexa — opt-in lifetime checker golden
+//
+//  Standalone reference reimplementation of the production lifetime pass
+//  (compiler/check/types.hexa `_lt_*`, opt-in `HEXA_LIFETIME_CHECK=1`). It
+//  mirrors the proven self/test_generics_typecheck.hexa style: the algorithm
+//  is reimplemented here on plain string inputs so the golden runs without the
+//  heavy compiler import and pins the rule semantics.
+//
+//  Rules cloned from Rust lifetimes `'a` (file:line cites in the production
+//  catalog HX3011/HX3012 explain text):
+//    • Check-1 (HX3011) — lifetime elision / E0106 + E0515: a returned `&'b U`
+//      whose `'b` is not among the parameter lifetimes borrows the function
+//      arena (hexa arena = implicit per-fn region).
+//    • Check-2 (HX3012) — E0261 "use of undeclared lifetime": an outlives bound
+//      `'a: 'b` or a `&'x T` use may only name a declared lifetime.
+//    • outlives `'a: 'b` = region 'a lives at least as long as 'b.
+//
+//  Run:
+//    hexa run self/test_lifetimes_typecheck.hexa
+// ═══════════════════════════════════════════════════════════
+
+// ── string helpers (sibling of the production _cg_split_ch) ──
+fn lt_split(s: string, ch: char) -> [string] {
+    let chars = s.chars()
+    let n = len(chars)
+    let mut out: [string] = []
+    let mut cur = ""
+    let mut i = 0
+    while i < n {
+        if chars[i] == ch {
+            out.push(cur)
+            cur = ""
+        } else {
+            cur = cur + to_string(chars[i])
+        }
+        i = i + 1
+    }
+    if len(cur) > 0 { out.push(cur) }
+    return out
+}
+
+fn lt_contains(arr: [string], s: string) -> bool {
+    let mut i = 0
+    while i < len(arr) {
+        if arr[i] == s { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Decode a `Ref:'<lt>:<pointee>` reference tag into its lifetime name (or "").
+fn lt_ref_lifetime(tyname: string) -> string {
+    let parts = lt_split(tyname, ':')
+    if len(parts) < 2 { return "" }
+    if parts[0] != "Ref" { return "" }
+    let l = parts[1]
+    let cs = l.chars()
+    if len(cs) >= 1 && cs[0] == '\'' {
+        let mut r = ""
+        let mut i = 1
+        while i < len(cs) {
+            r = r + to_string(cs[i])
+            i = i + 1
+        }
+        return r
+    }
+    return ""
+}
+
+// Run the two advisory checks for one function described by:
+//   atoms       — `__lt` carriers ("L:a" declared, "O:a:b" outlives)
+//   param_tags  — parameter reference type tags ("Ref:'a:T")
+//   return_tag  — return reference type tag ("Ref:'b:U" or "")
+// Returns the emitted diagnostic codes ("HX3011" / "HX3012").
+fn lt_check(atoms: [string], param_tags: [string], return_tag: string) -> [string] {
+    let mut declared: [string] = []
+    let mut outlives: [string] = []   // "a:b"
+    let mut a = 0
+    while a < len(atoms) {
+        let parts = lt_split(atoms[a], ':')
+        if len(parts) >= 2 {
+            if parts[0] == "L" {
+                declared.push(parts[1])
+            } else if parts[0] == "O" && len(parts) >= 3 {
+                outlives.push(parts[1] + ":" + parts[2])
+            }
+        }
+        a = a + 1
+    }
+    let mut param_used: [string] = []
+    let mut p = 0
+    while p < len(param_tags) {
+        let lt = lt_ref_lifetime(param_tags[p])
+        if len(lt) > 0 { param_used.push(lt) }
+        p = p + 1
+    }
+    let mut return_used: [string] = []
+    let rlt = lt_ref_lifetime(return_tag)
+    if len(rlt) > 0 { return_used.push(rlt) }
+
+    let mut codes: [string] = []
+    // Check-1 (HX3011)
+    let mut r = 0
+    while r < len(return_used) {
+        if !lt_contains(param_used, return_used[r]) {
+            codes.push("HX3011")
+        }
+        r = r + 1
+    }
+    // Check-2 (HX3012) — outlives lifetimes
+    let mut o = 0
+    while o < len(outlives) {
+        let pr = lt_split(outlives[o], ':')
+        if len(pr) >= 2 {
+            if !lt_contains(declared, pr[0]) { codes.push("HX3012") }
+            if !lt_contains(declared, pr[1]) { codes.push("HX3012") }
+        }
+        o = o + 1
+    }
+    // Check-2 — param/return ref lifetimes used but not declared
+    let mut q = 0
+    while q < len(param_used) {
+        if !lt_contains(declared, param_used[q]) { codes.push("HX3012") }
+        q = q + 1
+    }
+    let mut s = 0
+    while s < len(return_used) {
+        if !lt_contains(declared, return_used[s]) { codes.push("HX3012") }
+        s = s + 1
+    }
+    return codes
+}
+
+fn count_code(codes: [string], code: string) -> i64 {
+    let mut n = 0
+    let mut i = 0
+    while i < len(codes) {
+        if codes[i] == code { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  HEXA — Lifetime Checker Golden (opt-in)")
+    println("══════════════════════════════════════════════")
+    let mut ok = true
+
+    // T1 — fn f<'a>(x: &'a T) -> &'b U : HX3011 (arena escape) + HX3012 (undeclared 'b)
+    let c1 = lt_check(["L:a"], ["Ref:'a:T"], "Ref:'b:U")
+    let t1_11 = count_code(c1, "HX3011")
+    let t1_12 = count_code(c1, "HX3012")
+    println("── T1 fn f<'a>(x:&'a T)->&'b U ──")
+    println("  HX3011=" + to_string(t1_11) + " HX3012=" + to_string(t1_12) + " (expect 1 / 1)")
+    if t1_11 != 1 || t1_12 != 1 { ok = false; println("  FAIL") } else { println("  ok") }
+
+    // T2 — fn g<'a>(x: &'a T) -> &'a U : clean
+    let c2 = lt_check(["L:a"], ["Ref:'a:T"], "Ref:'a:U")
+    println("── T2 fn g<'a>(x:&'a T)->&'a U ──")
+    println("  diagnostics=" + to_string(len(c2)) + " (expect 0)")
+    if len(c2) != 0 { ok = false; println("  FAIL") } else { println("  ok") }
+
+    // T3 — fn k<'a,'b:'c>(…) : HX3012 (undeclared 'c in outlives bound)
+    let c3 = lt_check(["L:a", "L:b", "O:b:c"], [], "")
+    let t3_12 = count_code(c3, "HX3012")
+    println("── T3 fn k<'a,'b:'c> outlives ──")
+    println("  HX3012=" + to_string(t3_12) + " (expect 1)")
+    if t3_12 != 1 { ok = false; println("  FAIL") } else { println("  ok") }
+
+    // T4 — fn h<'a,'b>(x: &'a T, y: &'b U) -> &'a T : clean (return tied to a param)
+    let c4 = lt_check(["L:a", "L:b"], ["Ref:'a:T", "Ref:'b:U"], "Ref:'a:T")
+    println("── T4 fn h<'a,'b>(&'a,&'b)->&'a ──")
+    println("  diagnostics=" + to_string(len(c4)) + " (expect 0)")
+    if len(c4) != 0 { ok = false; println("  FAIL") } else { println("  ok") }
+
+    // T5 — elided return `&U` (production encodes the empty lifetime as `Ref:':U`,
+    //      since parse_type always emits the leading `'`) : elision applies, no advisory
+    let c5 = lt_check(["L:a"], ["Ref:'a:T"], "Ref:':U")
+    println("── T5 elided return &U ──")
+    println("  diagnostics=" + to_string(len(c5)) + " (expect 0)")
+    if len(c5) != 0 { ok = false; println("  FAIL") } else { println("  ok") }
+
+    // T6 — undeclared lifetime use in a parameter: fn p(x: &'a T) with no <'a>
+    let c6 = lt_check([], ["Ref:'a:T"], "")
+    let t6_12 = count_code(c6, "HX3012")
+    println("── T6 fn p(x:&'a T) undeclared 'a ──")
+    println("  HX3012=" + to_string(t6_12) + " (expect 1)")
+    if t6_12 != 1 { ok = false; println("  FAIL") } else { println("  ok") }
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok {
+        println("PASS: all lifetime golden cases match contract.")
+    } else {
+        println("FAIL: lifetime golden contract not satisfied.")
+    }
+    println("══════════════════════════════════════════════")
+    if !ok { exit(1) }
+}

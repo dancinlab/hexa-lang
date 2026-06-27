@@ -580,5 +580,26 @@ pub let CATALOG: [DiagSpec] = [
         template: "the trait `{trait}` is not implemented for `{type}` (required by `{owner}`)",
         explain: "The strict-mode (`HEXA_STRICT_BOUNDS=1`) escalation of HX3008: a generic trait bound is provably unsatisfied at an instantiation site and the user has opted into fatal bound checking. See HX3008 for the bound-satisfaction model (rustc-faithful builtin impls; The Rust Reference §\"Where clauses\"). Emitted only under the opt-in const-generics pass; the default build is byte-identical.",
         fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3011",
+        title: "return reference lifetime not bound to a parameter",
+        // Warning by default (release integrity): a brand-new opt-in diagnostic
+        // ships non-fatal so it never breaks an existing build. Surfaces only
+        // under the opt-in lifetime pass.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "the lifetime `'{lifetime}` returned by `{owner}` is not bound to any parameter — the reference borrows the function-local arena",
+        explain: "A returned reference (`fn f<'a>(x: &'a T) -> &'b U`) whose lifetime `'b` does not appear among the parameter lifetimes is not tied to any input region (Rust lifetime elision / E0106 — an output reference's lifetime must be tied to an input lifetime; a fresh output lifetime is rejected). Because hexa's per-function ARENA is the implicit region (mir.hexa — \"arena lifetime is implicit per function\"), returning such a reference borrows the callee frame exactly like Rust's E0515 \"cannot return reference to local value\". The advisory decodes the synthetic `__lt` annotation that the opt-in lifetime parser capture (`HEXA_LIFETIME_CHECK=1`) attaches at the declaration site plus the `Ref:'<lt>:..` reference-type tag threaded through `TypeRef.name`. The runtime is unchanged (the arena still manages memory); this is a signature-level advisory only and the default build is byte-identical. Full borrow-dataflow (NLL region inference) is deferred.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3012",
+        title: "use of undeclared lifetime",
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "use of undeclared lifetime `'{lifetime}` in `{owner}`",
+        explain: "An outlives bound (`'a: 'b`) or a `&'x T` reference type names a lifetime that was not declared in the enclosing generic parameter list (Rust E0261 \"use of undeclared lifetime\"; an outlives bound `'a: 'b` may only name lifetimes declared in the param list, where `'a: 'b` means region `'a` lives at least as long as `'b`). Emitted only under the opt-in lifetime pass (`HEXA_LIFETIME_CHECK=1`), decoding the `__lt` declared-lifetime / outlives carriers and the `Ref:'..` reference tags. Non-fatal advisory; the default build is byte-identical.",
+        fix_it_kind: FixItKind::None
     }
 ]

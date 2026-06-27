@@ -165,6 +165,29 @@ fn case_type_alias() {
     println("  parse_diags=" + to_string(len(diags)) + " (expect 0)")
 }
 
+// case l: lifetime erase (byteeq sentinel). With HEXA_LIFETIME_CHECK unset the
+// `<'a>` declared lifetime is silently consumed by the verbatim generic-erase
+// loop — the produced fn has zero annotations and the parse is clean (no `&`
+// types are used here, so this exercises only the bracket-erase path that the
+// default build always takes). This locks in the default-build byte-identity:
+// the opt-in lifetime capture only diverges when the env flag is set.
+fn case_lifetime_erase() {
+    let src = "fn id<'a>(x: i64) -> i64 { return x }\nstruct Ref<'a> { p: i64 }"
+    println("── case l: lifetime erase (env-OFF byteeq sentinel) ──")
+    let toks = lex(src, "<inline>")
+    let m = parse(toks, "<inline>")
+    println("  items=" + to_string(len(m.items)) + " (expect 2)")
+    let mut i = 0
+    let mut ann_total = 0
+    while i < len(m.items) {
+        ann_total = ann_total + len(m.items[i].annotations)
+        i = i + 1
+    }
+    println("  annotation_total=" + to_string(ann_total) + " (expect 0 — lifetimes erased)")
+    let diags = parse_diags()
+    println("  parse_diags=" + to_string(len(diags)) + " (expect 0)")
+}
+
 println("══════════════════════════════════════════════")
 println("  HEXA Compiler — Parser Smoke Test (A1)")
 println("══════════════════════════════════════════════")
@@ -179,5 +202,6 @@ case_assignment()
 case_missing_open_brace()
 case_missing_close_brace()
 case_type_alias()
+case_lifetime_erase()
 println("══════════════════════════════════════════════")
 println("  done.")

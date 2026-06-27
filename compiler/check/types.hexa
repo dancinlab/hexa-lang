@@ -2742,6 +2742,208 @@ fn _cg_check_module(module: Module, out: array) {
     }
 }
 
+// ── Lifetime annotations + scope-outlives advisory (opt-in) ──────
+//
+// Opt-in (`HEXA_LIFETIME_CHECK=1`), check-only, byteeq-neutral pass — the
+// production analog of the const-generics pass above. It mirrors the same
+// shape exactly:
+//   * env-gated at the top of `_lt_check_module` → no-op on the default build
+//     (the `out` diagnostic stream is byte-identical when the flag is unset);
+//   * it only appends diagnostics, never touches MIR/HIR/codegen, so even ON it
+//     cannot change emitted bytes;
+//   * it decodes a synthetic `__lt` annotation (no new AST field, no new
+//     keyword) that the opt-in parser capture attaches at the declaration site
+//     ("L:" declared lifetimes + "O:" outlives bounds) and the `Ref:'<lt>:..`
+//     reference-type tag that the opt-in parse_type Amp arm threads through the
+//     existing `TypeRef.name` string channel.
+//
+// reference (faithful-match cites — Rust lifetimes `'a`):
+//   • lifetime elision / E0106 — an output reference's lifetime must be tied to
+//     an input lifetime; a fresh output lifetime is rejected. Mapped here as
+//     Check-1: a returned `&'b U` whose `'b` is not among the parameter
+//     lifetimes is flagged (HX3011).
+//   • E0515 "cannot return reference to local value" — a returned reference
+//     whose region is not an input region borrows the callee frame. In hexa the
+//     per-function ARENA is the implicit region (mir.hexa:"arena lifetime is
+//     implicit per function"), so the same condition = an arena-escaping borrow;
+//     HX3011 is the advisory.
+//   • E0261 "use of undeclared lifetime" — an outlives bound `'a: 'b` (and any
+//     `&'x T` use) may only name a lifetime declared in the param list. Mapped
+//     as Check-2 → HX3012.
+//   • outlives `'a: 'b` = region `'a` lives at least as long as `'b`.
+// Full borrow-dataflow (NLL region inference) is deferred; this first cut is a
+// signature-level advisory. Both diagnostics are non-fatal warnings (release
+// integrity: a brand-new opt-in diagnostic never breaks an existing build).
+
+struct LtReg {
+    declared: [string],
+    param_used: [string],
+    return_used: [string],
+    outlives: [string]
+}
+
+// Aggregate the args of every `__lt` annotation on an item (the fn path may
+// attach two — one for `<…>` decl-lifetimes, one for the `where` clause).
+fn _lt_get_lt_args(anns: [Annotation]) -> [Expr] {
+    let mut out: [Expr] = []
+    let mut i = 0
+    while i < len(anns) {
+        if anns[i].name == "__lt" {
+            let a = anns[i].args
+            let mut j = 0
+            while j < len(a) {
+                out.push(a[j])
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Decode a `Ref:'<lt>:<pointee>` TypeRef name into its lifetime name (stripping
+// the leading `'`), or "" if the type is not a lifetime-tagged reference. An
+// elided `&T` encodes as `Ref::<pointee>` → empty lifetime (elision applies, no
+// advisory).
+fn _lt_ref_lifetime(tyname: string) -> string {
+    let parts = _cg_split_ch(tyname, ':')
+    if len(parts) < 2 { return "" }
+    if parts[0] != "Ref" { return "" }
+    let l = parts[1]
+    let cs = l.chars()
+    if len(cs) >= 1 && cs[0] == '\'' {
+        let mut r = ""
+        let mut i = 1
+        while i < len(cs) {
+            r = r + to_string(cs[i])
+            i = i + 1
+        }
+        return r
+    }
+    return ""
+}
+
+fn _lt_contains(arr: [string], s: string) -> bool {
+    let mut i = 0
+    while i < len(arr) {
+        if arr[i] == s { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Build the per-item lifetime registry: declared lifetimes + outlives bounds
+// (from the `__lt` annotation) and the lifetimes used in parameter/field and
+// return reference types (from the `Ref:'..` TypeRef tags).
+fn _lt_build_registry(it: Item) -> LtReg {
+    let mut declared: [string] = []
+    let mut outlives: [string] = []
+    let args = _lt_get_lt_args(it.annotations)
+    let mut j = 0
+    while j < len(args) {
+        let parts = _cg_split_ch(args[j].text, ':')
+        if len(parts) >= 2 {
+            if parts[0] == "L" {
+                declared.push(parts[1])
+            } else if parts[0] == "O" && len(parts) >= 3 {
+                outlives.push(parts[1] + ":" + parts[2])
+            }
+        }
+        j = j + 1
+    }
+    let mut param_used: [string] = []
+    let mut p = 0
+    while p < len(it.params) {
+        let lt = _lt_ref_lifetime(it.params[p].typ.name)
+        if len(lt) > 0 { param_used.push(lt) }
+        p = p + 1
+    }
+    let mut return_used: [string] = []
+    let rlt = _lt_ref_lifetime(it.return_type.name)
+    if len(rlt) > 0 { return_used.push(rlt) }
+    return LtReg {
+        declared: declared,
+        param_used: param_used,
+        return_used: return_used,
+        outlives: outlives
+    }
+}
+
+fn _lt_emit_undeclared(it: Item, lt: string, out: array) {
+    let mut b = diag_new("HX3012")
+    b = diag_span(b, it.span)
+    b = diag_arg(b, "owner", it.name)
+    b = diag_arg(b, "lifetime", lt)
+    out.push(diag_emit(b))
+}
+
+// Run the two advisory checks against one fn/struct item. `pub` so the
+// in-tree unit test (compiler/check/types_test.hexa) can drive the ON-path
+// logic directly without mutating process env.
+pub fn _lt_check_item(it: Item, out: array) {
+    let reg = _lt_build_registry(it)
+    // Check-1 (HX3011): a return reference whose lifetime is not bound to any
+    // parameter lifetime escapes the function arena (E0106 / E0515). Only fires
+    // for an explicit non-empty lifetime — an elided `&T` is left to elision.
+    let mut r = 0
+    while r < len(reg.return_used) {
+        let rl = reg.return_used[r]
+        if !_lt_contains(reg.param_used, rl) {
+            let mut b = diag_new("HX3011")
+            b = diag_span(b, it.span)
+            b = diag_arg(b, "owner", it.name)
+            b = diag_arg(b, "lifetime", rl)
+            out.push(diag_emit(b))
+        }
+        r = r + 1
+    }
+    // Check-2 (HX3012): an outlives bound or a `&'x T` use that names a lifetime
+    // never declared in the param list (E0261).
+    let mut o = 0
+    while o < len(reg.outlives) {
+        let pr = _cg_split_ch(reg.outlives[o], ':')
+        if len(pr) >= 2 {
+            if !_lt_contains(reg.declared, pr[0]) {
+                _lt_emit_undeclared(it, pr[0], out)
+            }
+            if !_lt_contains(reg.declared, pr[1]) {
+                _lt_emit_undeclared(it, pr[1], out)
+            }
+        }
+        o = o + 1
+    }
+    let mut p = 0
+    while p < len(reg.param_used) {
+        if !_lt_contains(reg.declared, reg.param_used[p]) {
+            _lt_emit_undeclared(it, reg.param_used[p], out)
+        }
+        p = p + 1
+    }
+    let mut q = 0
+    while q < len(reg.return_used) {
+        if !_lt_contains(reg.declared, reg.return_used[q]) {
+            _lt_emit_undeclared(it, reg.return_used[q], out)
+        }
+        q = q + 1
+    }
+}
+
+fn _lt_check_module(module: Module, out: array) {
+    if env("HEXA_LIFETIME_CHECK") != "1" { return }
+    let mut i = 0
+    while i < len(module.items) {
+        let it = module.items[i]
+        if item_is_parse_only(it) {
+            i = i + 1
+            continue
+        }
+        if _types_is_fn_item(it.kind) || _types_is_struct_item(it.kind) {
+            _lt_check_item(it, out)
+        }
+        i = i + 1
+    }
+}
+
 // ── Pre-pass: collect Item types into TypeEnv ────────────────
 
 fn _types_signature_type(it: Item) -> Type {
@@ -3062,6 +3264,11 @@ pub fn type_check(module: Module) -> array {
     // Opt-in (HEXA_CONST_GENERICS=1); no-op on the default build. Identical
     // structural slot to the exhaustiveness pass above.
     _cg_check_module(module, out)
+
+    // Lifetime annotations + scope-outlives advisory (HX3011/HX3012).
+    // Opt-in (HEXA_LIFETIME_CHECK=1); no-op on the default build. Same
+    // structural slot / byteeq-neutral guarantee as the const-generics pass.
+    _lt_check_module(module, out)
 
     return out
 }

@@ -177,6 +177,39 @@ fn _fn_item(name: string, params: [Param], ret: TypeRef, body: Expr, file: strin
     }
 }
 
+// ── Lifetime-check helpers (HEXA_LIFETIME_CHECK opt-in pass) ──
+// Build a fn item carrying a synthetic `__lt` annotation (the carriers the
+// opt-in parser capture would attach) plus reference-typed params/return
+// (`Ref:'<lt>:<pointee>` tags the opt-in parse_type Amp arm threads through
+// TypeRef.name). These exercise the production `_lt_*` checker functions.
+fn _lt_ann(atoms: [string], file: string, line: i64) -> Annotation {
+    let mut args: [Expr] = []
+    let mut i = 0
+    while i < len(atoms) {
+        args.push(_string_expr(atoms[i], file, line, 1))
+        i = i + 1
+    }
+    return Annotation { name: "__lt", args: args, span: _span(file, line, 1, 3) }
+}
+
+fn _ref_param(name: string, ref_tag: string, file: string, line: i64, col: i64) -> Param {
+    let t = _named_type_ref(ref_tag)
+    return Param { name: name, typ: t, typs: [t], span: _span(file, line, col, len(name)) }
+}
+
+fn _fn_item_lt(name: string, anns: [Annotation], params: [Param], ret: TypeRef, file: string, line: i64) -> Item {
+    return Item {
+        kind: ItemKind::Fn,
+        name: name,
+        span: _span(file, line, 1, len(name)),
+        annotations: anns,
+        params: params,
+        return_type: ret,
+        body: _block([], file, line, 1),
+        is_pub: false
+    }
+}
+
 fn _param(name: string, typ_name: string, file: string, line: i64, col: i64) -> Param {
     let t = _named_type_ref(typ_name)
     return Param {
@@ -454,6 +487,56 @@ fn _build_case_g() -> Module {
 
 // ── Driver ───────────────────────────────────────────────────
 
+// ── Lifetime cases ───────────────────────────────────────────
+// (h) byteeq sentinel: a fn with a `__lt` annotation + `&'a`/`&'b` ref types,
+//     run through the FULL type_check with HEXA_LIFETIME_CHECK unset → the
+//     lifetime pass must be a no-op (0 HX3011 / 0 HX3012). This is the
+//     default-build byte-identity guard.
+fn _build_case_lt_off() -> Module {
+    let f = "case_lt_off.hexa"
+    let ann = _lt_ann(["L:a"], f, 1)
+    let mut params = []
+    params.push(_ref_param("x", "Ref:'a:T", f, 1, 10))
+    let ret = _named_type_ref("Ref:'b:U")
+    let item = _fn_item_lt("f", [ann], params, ret, f, 1)
+    let mut items = []
+    items.push(item)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (i) ON-logic: `fn f<'a>(x: &'a T) -> &'b U` — 'b is returned but not a
+//     parameter lifetime AND not declared → fires HX3011 (arena-escape) and
+//     HX3012 (undeclared 'b). Calls `_lt_check_item` directly to exercise the
+//     ON path without process-env mutation.
+fn _build_item_lt_bad() -> Item {
+    let f = "case_lt_bad.hexa"
+    let ann = _lt_ann(["L:a"], f, 1)
+    let mut params = []
+    params.push(_ref_param("x", "Ref:'a:T", f, 1, 10))
+    let ret = _named_type_ref("Ref:'b:U")
+    return _fn_item_lt("f", [ann], params, ret, f, 1)
+}
+
+// (j) ON-logic clean: `fn g<'a>(x: &'a T) -> &'a U` — return lifetime is a
+//     parameter lifetime and declared → 0 HX3011 / 0 HX3012.
+fn _build_item_lt_ok() -> Item {
+    let f = "case_lt_ok.hexa"
+    let ann = _lt_ann(["L:a"], f, 1)
+    let mut params = []
+    params.push(_ref_param("x", "Ref:'a:T", f, 1, 10))
+    let ret = _named_type_ref("Ref:'a:U")
+    return _fn_item_lt("g", [ann], params, ret, f, 1)
+}
+
+// (k) ON-logic outlives: `fn k<'a, 'b: 'c>(…)` — outlives bound names 'c which
+//     is never declared → fires HX3012.
+fn _build_item_lt_outlives() -> Item {
+    let f = "case_lt_outlives.hexa"
+    let ann = _lt_ann(["L:a", "L:b", "O:b:c"], f, 1)
+    let ret = _empty_type_ref()
+    return _fn_item_lt("k", [ann], [], ret, f, 1)
+}
+
 fn _run_case(label: string, m: Module) -> array {
     println("")
     println("── " + label + " ──")
@@ -562,6 +645,60 @@ fn main() {
         ok = false
     } else {
         println("  ok: 2 HX2005 emitted (per-slot positional)")
+    }
+
+    // ── Lifetime pass (opt-in HEXA_LIFETIME_CHECK) ───────────────
+    // (h) byteeq sentinel: env-OFF → 0 HX3011 / 0 HX3012 through full type_check.
+    let diags_h = _run_case("(h) byteeq sentinel — env-OFF lifetime pass is a no-op", _build_case_lt_off())
+    let nh = _count_code(diags_h, "HX3011") + _count_code(diags_h, "HX3012")
+    if nh != 0 {
+        println("  FAIL: case (h) expected 0 HX3011/HX3012 with env unset, got " + to_string(nh))
+        ok = false
+    } else {
+        println("  ok: 0 HX3011/HX3012 (default build byte-identical)")
+    }
+
+    // (i) ON-logic: fn f<'a>(x:&'a T)->&'b U fires HX3011 + HX3012.
+    let mut out_i = []
+    _lt_check_item(_build_item_lt_bad(), out_i)
+    let ni_11 = _count_code(out_i, "HX3011")
+    let ni_12 = _count_code(out_i, "HX3012")
+    println("")
+    println("── (i) ON-logic — fn f<'a>(x:&'a T)->&'b U ──")
+    println("  diagnostics: " + to_string(len(out_i)) + " (HX3011=" + to_string(ni_11) + " HX3012=" + to_string(ni_12) + ")")
+    if ni_11 != 1 || ni_12 != 1 {
+        println("  FAIL: case (i) expected 1 HX3011 + 1 HX3012")
+        ok = false
+    } else {
+        println("  ok: HX3011 (arena-escape) + HX3012 (undeclared 'b) emitted")
+    }
+
+    // (j) ON-logic clean: fn g<'a>(x:&'a T)->&'a U → 0 lifetime diagnostics.
+    let mut out_j = []
+    _lt_check_item(_build_item_lt_ok(), out_j)
+    let nj = _count_code(out_j, "HX3011") + _count_code(out_j, "HX3012")
+    println("")
+    println("── (j) ON-logic clean — fn g<'a>(x:&'a T)->&'a U ──")
+    println("  diagnostics: " + to_string(len(out_j)))
+    if nj != 0 {
+        println("  FAIL: case (j) expected 0 lifetime diagnostics, got " + to_string(nj))
+        ok = false
+    } else {
+        println("  ok: 0 HX3011/HX3012 (return lifetime bound to a parameter)")
+    }
+
+    // (k) ON-logic outlives: fn k<'a,'b:'c>(…) → HX3012 (undeclared 'c).
+    let mut out_k = []
+    _lt_check_item(_build_item_lt_outlives(), out_k)
+    let nk = _count_code(out_k, "HX3012")
+    println("")
+    println("── (k) ON-logic outlives — fn k<'a,'b:'c> ──")
+    println("  diagnostics: " + to_string(len(out_k)) + " (HX3012=" + to_string(nk) + ")")
+    if nk != 1 {
+        println("  FAIL: case (k) expected 1 HX3012 (undeclared 'c), got " + to_string(nk))
+        ok = false
+    } else {
+        println("  ok: HX3012 emitted for undeclared outlives lifetime 'c")
     }
 
     println("")
