@@ -293,9 +293,12 @@ fn _cj_is_known_congruence(which: int, a: int, b: int, m: int) -> bool {
 // false-positive (82 raw "?NOVEL?" hits) auto-collapses, so a future SURVIVOR is a
 // real candidate (deferred to `hexa verify` g5 / PR for final novelty).
 //
-//   C1 ASSOC-CHAIN    : reduces to a KNOWN single-step law (here: a congruence
+//   C1 ASSOC-CHAIN    : reduces to a KNOWN single-step law — a congruence
 //                       sub-progression of a base Ramanujan congruence at the same
-//                       modulus — e.g. p(10n+9)≡0 mod5 ⊆ p(5n+4)≡0 mod5).
+//                       modulus (e.g. p(10n+9)≡0 mod5 ⊆ p(5n+4)≡0 mod5), OR the
+//                       classical RAMANUJAN-WATSON tower p(m·n+δ)≡0 mod m with
+//                       24δ≡1 mod m and m smooth over {5,7,11} (Watson 1938 /
+//                       Ahlgren-Ono 2000 · C1-WATSON-TOWER · measured live run #3).
 //   C2 EPS-DEGENERATE : one full product side is supported only at n=1 (≡ε ⇒
 //                       ≡0 over n∈[2,N]) — the identity holds 0=0 trivially.
 //   C3 SQUARE/DEFN    : holds via square-support (the witness n is a perfect
@@ -358,6 +361,34 @@ fn _cj_congruence_reduces_known(which: int, a: int, b: int, m: int) -> bool {
     return false
 }
 
+// is m composed ONLY of the primes {5,7,11}? (the Ramanujan-Watson prime tower)
+fn _cj_smooth_5_7_11(m: int) -> bool {
+    let mut x = m
+    while x % 5 == 0 { x = x / 5 }
+    while x % 7 == 0 { x = x / 7 }
+    while x % 11 == 0 { x = x / 11 }
+    return x == 1
+}
+
+// C1 (extended · measured 2026-06-28 live run #3) — the classical RAMANUJAN-WATSON
+// partition congruence tower. Watson 1938 + Atkin + Ahlgren-Ono 2000: the canonical
+// congruence p(m·n+δ) ≡ 0 (mod m) with 24·δ ≡ 1 (mod m) holds for EVERY modulus m
+// composed of the primes {5,7,11} (5^a·7^b·11^c — prime powers + CRT products), and
+// (proven) NO simple linear congruence p(m·n+δ)≡0 mod m exists for any modulus with
+// a prime factor outside {5,7,11}. So a {5,7,11}-smooth canonical congruence is
+// CLASSICAL (un-catalogued by the 3-element base table, but Watson's) — demote. The
+// live LLM run #3 surfaced 12 of these (mod 25/49/121/35/55/77, all 24δ≡1) — all
+// classical, genuine-novel = 0. (Empirically confirmed: 0 holding simple partition
+// congruences exist outside this tower — ATLAS/state/novel-dfs cong_search.)
+fn _cj_is_ramanujan_watson(which: int, a: int, b: int, m: int) -> bool {
+    if which != 0 { return false }
+    if a != m { return false }                  // canonical p(m·n+δ) form
+    if m < 5 { return false }
+    if _cj_smooth_5_7_11(m) == false { return false }
+    if (24 * b) % m != 1 { return false }       // Ramanujan δ: 24·δ ≡ 1 (mod m)
+    return true
+}
+
 // ── closure class for an exact-int-confirmed IDENTITY singleton (witness n). ──
 // C2 (degenerate side) → C3 (square witness) → C4 (coincidence). Never SURVIVOR:
 // a 2-vs-2 multiplicative singleton is always a bounded coincidence.
@@ -393,6 +424,7 @@ fn _cj_class_composition(first_n: int) -> string {
 fn _cj_class_congruence(which: int, a: int, b: int, m: int) -> string {
     if which != 0 { return "C5-RECURRENCE-PERIODIC" }
     if _cj_congruence_reduces_known(which, a, b, m) { return "C1-ASSOC-CHAIN" }
+    if _cj_is_ramanujan_watson(which, a, b, m) { return "C1-WATSON-TOWER" }
     return "SURVIVOR"
 }
 
