@@ -36,5 +36,11 @@ ATLAS/
   별도 .md 만들지 말고 `README.md` 의 "DFS Exploration Status" (Ralph N 연대기)에 이어 기록**
   + verify atom 은 `../compiler/atlas/embedded.gen.hexa`. 정확 정수 유한 sweep = bounded-unique
   (🟩), 전칭 ⟺ 은 증명 전까지 미주장(c2). 참고 엔진: `state/novel-dfs/` (재현·교차검증용).
-  현재 2-term 산술항등식 벤은 고갈(README Ralph 369~371) — 다음 DFS 는 새 기저/도메인.
+  **12-fn 2-term 산술항등식 벤은 고갈**(README Ralph 369~371) — 검증기는 그 박스 밖으로
+  **업그레이드됨**(Ralph 375 · `compiler/atlas/identity_engine.hexa`): ① 확장 vocab 6종(μ·λ·μ²·
+  J₃·2^ω·core idx 12–17 · 부호 정확) ② arity-3(`verify_identity3` · `is_universal2/3` forall-n
+  프레임). 측정 결과 = 확장 vocab universal **2 generator 전부 고전**(J₂=φ·ψ · core·rad=n) ·
+  arity-3 bounded-unique 1431개 전부 2-term core 환원 → **novel=0**(정직 DRY). 생산적 벤은
+  여전히 **composed/iterated 함수 기저**(Ralph 372 σ∘σ superperfect/Mersenne — 함수 합성 ≠ 값 곱).
+  다음 DFS 는 새 기저/도메인(composed-fn · 새 vocab/도메인).
 - 상세 history 는 `../CHANGELOG.md` + git.
