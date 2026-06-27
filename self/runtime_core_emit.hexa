@@ -1199,17 +1199,6 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "typedef enum {\n"
     buf = buf + "    TAG_INT = 0, TAG_FLOAT, TAG_BOOL, TAG_STR, TAG_VOID,\n"
     buf = buf + "    TAG_ARRAY, TAG_MAP, TAG_FN, TAG_CHAR, TAG_CLOSURE,\n"
-    // ── FLEET lane A: array descriptor discriminator (opt-in HEXA_PACK_ESCAPING) ──
-    // TAG_ARRAY_I64 is the runtime packed-vs-boxed discriminator carried in the
-    // HexaVal.tag (the hexa analogue of V8's Map / Julia's element-type layout: a
-    // type carrier external to the heap header — refs: V8 elements-kind.h:149-202,
-    // Julia julia.h jl_datatype_layout_t arrayelem_isboxed). It is appended LAST so
-    // every prior tag value is byte-stable. In the DEFAULT build it is INERT: the
-    // escape-scan never packs an escaping array (HEXA_PACK_ESCAPING off) → no
-    // TAG_ARRAY_I64 value is ever minted → no default reader observes it → the
-    // default emit/runtime is byte-identical. Only the flag-ON poly-readers
-    // (#ifdef HEXA_PACK_ESCAPING below) discriminate on it.
-    buf = buf + "    TAG_ARRAY_I64,\n"
     buf = buf + "    // rt 32-G Phase 0: flat C struct replacement for interpreter `Val` map.\n"
     buf = buf + "    // Val is the interpreter's tagged value carrier — ~3.37M constructions\n"
     buf = buf + "    // per d64 200-step run. Each map-backed Val = 1 map_new + 12 map_set =\n"
@@ -1223,7 +1212,18 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    // produces TAG_ENUM yet (gen2_enum_decl still emits `hexa_int(N)`).\n"
     buf = buf + "    // Slot kept LAST so existing TAG_VALSTRUCT integer value is preserved\n"
     buf = buf + "    // (no ABI shift on any pre-built object).\n"
-    buf = buf + "    TAG_ENUM\n"
+    buf = buf + "    TAG_ENUM,\n"
+    // ── FLEET lane A: array descriptor discriminator (opt-in HEXA_PACK_ESCAPING) ──
+    // TAG_ARRAY_I64 = the runtime packed-vs-boxed discriminator carried in the
+    // HexaVal.tag (hexa analogue of V8's Map / Julia's element-type layout: a type
+    // carrier external to the heap header — refs V8 elements-kind.h:149-202, Julia
+    // julia.h jl_datatype_layout_t arrayelem_isboxed). Appended as the TRUE LAST
+    // value so NO existing tag's integer value shifts (TAG_VALSTRUCT/TAG_ENUM keep
+    // their values → ABI/byteeq-stable). DEFAULT build: INERT — the escape-scan
+    // never packs an escaping array (HEXA_PACK_ESCAPING off) so no TAG_ARRAY_I64
+    // value is ever minted, no default reader/switch observes it. Only the flag-ON
+    // poly-readers (#ifdef HEXA_PACK_ESCAPING below) discriminate on it.
+    buf = buf + "    TAG_ARRAY_I64\n"
     buf = buf + "} HexaTag;\n"
     buf = buf + "\n"
     buf = buf + "// ── Optimization #10: Hash-map backing store ─────────────\n"
