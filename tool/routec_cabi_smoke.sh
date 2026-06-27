@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll clock_gettime execve; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll clock_gettime execve fork; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -202,6 +202,13 @@ extern int  hxlcl_poll(void *fds, unsigned int nfds, int timeout);
  * path), composition-asserted (the Linux sibling carries the -1 + ENOENT claim). */
 extern int  hxlcl_clock_gettime(int clk, void *ts);
 extern int  hxlcl_execve(const char *path, char *const argv[], char *const envp[]);
+
+/* batch J — fork. On darwin the Route C leg is a documented -1 stub (BSD fork(2) is
+ * 2nd-return-register: child pid in x0 for BOTH processes, child disambiguated by
+ * x1==1; single-result __hx_syscall6 exposes only x0, identical to darwin pipe).
+ * The real darwin fork stays the floor raw-asm dual-reg shim; the Linux sibling
+ * carries the live fork+_exit+waitpid behavioral claim. */
+extern int  hxlcl_fork(void);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -547,6 +554,18 @@ int main(void) {
         char *eargv[] = { (char *)"x", NULL };
         char *eenvp[] = { NULL };
         CK(hxlcl_execve("/nonexistent_xyz_exec_zzz", eargv, eenvp) > 0, "execve(bad path) > 0 (darwin raw +errno, carry deferred; process intact)");
+    }
+
+    /* batch J — fork. DARWIN is the genuine 2nd-return-register wall. BSD fork(2)
+     * returns the child pid in x0 for BOTH parent and child and disambiguates the
+     * child by x1==1; the single-result __hx_syscall6 exposes only x0, so the Route C
+     * darwin leg CANNOT tell parent from child and returns -1 (documented incomplete
+     * — the real darwin fork stays the floor raw-asm dual-reg shim, identical to
+     * darwin pipe == -1). Asserting == -1 locks in that documented gap; a future
+     * dual-reg fix would flip it and force a smoke update. The Linux sibling carries
+     * the live fork+_exit+waitpid behavioral claim. */
+    {
+        CK(hxlcl_fork() == -1, "fork() == -1 on darwin (documented 2nd-return-reg wall)");
     }
 
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }

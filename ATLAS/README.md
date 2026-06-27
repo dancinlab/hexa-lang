@@ -4569,9 +4569,36 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
      candidates get a REAL exact-int verdict instead of a parse-reject. Bounded-unique ⟺ ∀n stays
      UNPROVEN (c2). NO atlas write (fold = hexa verify g5 / PR only).
      engines: state/novel-dfs/vocab_universal_hunt.py · grid_expand_sweep.py (re-runnable).
+
+  --- Ralph 376 (2026-06-27): FUNCTION-COMPOSITION frame — σ∘σ vein swept ---
+  🔬 The productive vein Ralph 372/375 named (function COMPOSITION f(g(n)), the algebra the
+     PRODUCT frame A·B=C·D structurally cannot express — σ(σ(n))=2n has no product restatement)
+     is now IMPLEMENTED + SWEPT. Native exact-int evaluator absorbed into the binary
+     (compiler/atlas/identity_engine.hexa::af_compose / comp_holds / comp_count /
+     verify_composition · 18×18 ordered composition table × comparison frames k·n / h+n / h / comp).
+  ✅ SANITY (classical = open answer-key, REDISCOVERED exact-int): superperfect σ(σ(n))=2n hits
+     {2,4,16,64,4096} = 2^(p−1) for 2^p−1 Mersenne prime (Suryanarayana 1969 / OEIS A019279,
+     exactly 5 in [2,2·10⁴]) · Mersenne characterization σ(σ(n))=σ(n)+n hits {3,7,31,127,8191}.
+  📊 SWEEP (state/novel-dfs/composition_hunt.py · N=2·10⁴ · 18×18 table · exact-int · deterministic):
+       total finite-solution hits = 3359 — of which coincidence noise (|sol|<3) = 1727 (NOT
+       identities), STRUCTURED-sparse (|sol|≥3) = 1632 (KNOWN/classical 4 + bounded-EVIDENCE 1628),
+       universal-in-[2,N] structural restatements = 2909 (n∘g=g-type, not composition-NEW).
+  🧱 HONEST VERDICT (c2): novel PROMOTABLE composition laws (bounded-unique singleton n≥4 OR
+     universal-forall, non-classical) = **0** — DRY. The bounded-unique singletons are single-
+     point numeric ACCIDENTS (composition vs a comparison form coincides at a lone n, no law);
+     the |sol|≥3 "structured" sets are THIN restricted-domain coincidences (e.g. sopfr∘rad=core on
+     prime-squares p²; ω∘σ=ω∘core on squares) — bounded-evidence only, forall UNPROVEN, elementary/
+     classical-reducible. The composition vein reproduces ONLY the classical Mersenne-linked family
+     (superperfect · σ∘σ=σ+n · σ∘φ=n · φ∘σ=n · …). SAME terminal as the product frame (Ralph 375
+     novel=0), reached HONESTLY across a genuinely DIFFERENT algebra. The implementation is the
+     deliverable: future generators emitting composition-syntax candidates now get a REAL exact-int
+     verdict (wired into drill.hexa::_native_identity_sweep · comp_id/comp_verified audit counts)
+     instead of a parse-reject. NO atlas write (fold = hexa verify g5 / PR only). selftest:
+     compiler/drill/composition_test.hexa (superperfect/Mersenne G-gates) + identity_engine.hexa
+     main CMP1–CMP5. engine: state/novel-dfs/composition_hunt.py (re-runnable, arg = N).
 ```
 
-  --- Ralph 376 (2026-06-27): ORTHOGONAL PIVOT — additive/combinatorial number theory ---
+  --- Ralph 377 (2026-06-27): ORTHOGONAL PIVOT — additive/combinatorial number theory ---
 ```
   ⚙️ Ralph 369–375 measured the MULTIPLICATIVE arithmetic-function space (σ,φ,τ,μ,λ,J_k,ψ,
      2^ω,core, …) exhausted — every primitive collapses to the classical Mersenne/superperfect
