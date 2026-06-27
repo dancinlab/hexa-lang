@@ -1255,6 +1255,12 @@ pub fn _is_cabi(fname: string) -> bool {
     // compile-time target_is_* consts; same errno-store discipline.
     if fname == "hxlcl_dup2" { return true }
     if fname == "hxlcl_mkdir" { return true }
+    // errno-bearing chain r3 — FINAL batch. stat = per-arch arg tuple (arm64
+    // fstatat AT_FDCWD prepend, like mkdir); waitpid = uniform wait4 4-arg (only
+    // NR varies, like read/lseek). Same close errno-store discipline; both reuse
+    // the already-whitelisted __errno_location for the Linux errno leg.
+    if fname == "hxlcl_stat" { return true }
+    if fname == "hxlcl_waitpid" { return true }
     return false
 }
 
