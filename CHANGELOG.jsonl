@@ -46,3 +46,4 @@
 {"ts":null,"title":"2026-05-21","body":"- **RFC 067 / 071 / 075** — TMA + GPU kernel rounds (wgmma + TMA + warp-spec probes)."}
 {"ts":null,"title":"2026-05-20","body":"- **RFC 065 / 067 / 070** — heaviest ship day (463 commits); RFC 055 continuation."}
 {"ts":null,"title":"2026-05-19","body":"- **RFC 049 / 050 / 055 / 060 / 062** — multi-RFC build-out."}
+{"ts": null, "title": "2026-06-27", "body": "- **runtime-gap r6 (HEXA_UNBOX_NATIVE const-prop)** — immutable single-assignment `let M = <int literal>` divisors are const-prop'd (SCCP-style, default-OFF, byte-neutral) so the r5b `%`/`/` magic-reciprocal gate fires for `% M` named-const (the r5b honest residual: k1_sum `% M` stayed `call hexa_mod`). compiler/codegen/x86_64_linux.hexa const lattice + operand helpers; reassigned `var`/`let mut` excluded for soundness."}
