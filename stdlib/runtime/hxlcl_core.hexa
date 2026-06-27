@@ -445,6 +445,147 @@ pub fn hxlcl_getenv(name: HexaVal) -> int {
     return 0                                       // not found → NULL
 }
 
+// ── ENV MUTATE (Route C Wall 2-b sibling · environ WRITE-BACK via __hx_ptr_store64) ──
+//
+// hxlcl_setenv: set environment variable `name` to `value`. If it already exists and
+// `overwrite` is non-zero replace its slot; if it exists and overwrite==0 leave it; if
+// it is absent GROW the environ array. POSIX setenv(3). This is the FIRST Route C body
+// to WRITE BACK to the `&environ` global — getenv (Wall 2-b) only READ it. The new
+// capability is the final `__hx_ptr_store64(envpp, 0, newarr)`: storing a freshly-built
+// char** array pointer into the slot __hx_environ_ptr() addresses (offset 0 of &environ
+// == the `environ` pointer word itself). NO NEW INTRINSIC — it composes the already-
+// whitelisted __hx_environ_ptr (returns &environ, #4098) + __hx_ptr_store64 (the writable
+// pointer-word store, proven by hxlcl_strtoll's endptr write) + __hx_ptr_load64 (the
+// getenv walk) + the inner C-ABI `bl hxlcl_malloc` (proven by strdup/calloc/realloc).
+//
+// REFERENCE-MATCH musl src/env/setenv.c + src/env/putenv.c (the canonical algorithm):
+//   s = malloc(l1+l2+2); memcpy(s,name,l1); s[l1]='='; memcpy(s+l1+1,value,l2);
+//   s[l1+l2+1]=0;                                  // build "name=value\0"
+//   for(e=environ; *e; e++) if(!strncmp(*e,s,l1) && (*e)[l1]=='='){       // key match
+//        if(!overwrite) return 0; *e=s; return 0; }                       // replace slot
+//   N=count(environ); new=malloc((N+2)*8); copy N ptrs; new[N]=s; new[N+1]=0;
+//   environ=new; return 0;                         // grow (fresh array on every grow)
+// The faithful 0-libc floor SIMPLIFIES musl's __env_map leak-tracking: it allocates a
+// FRESH array on every grow (fully correct — each grow re-reads the current environ and
+// copies all live slots; it merely leaks the old array under the arena's no-free model,
+// where the floor hxlcl_malloc is a bump allocator). POSIX EINVAL is honoured for
+// name==NULL and empty name (→ -1). The embedded-'=' EINVAL case is NOT special-cased
+// (frozen-floor callers pass '='-free names — documented deviation, deterministic either
+// way: l1 = strlen up to the NUL). Slot-replace writes `*e = s` directly into the live
+// environ array exactly like musl __putenv (the array word is writable — argv/envp on
+// the stack, or a prior fresh malloc'd array).
+//
+// IN-BODY OPERATOR DISCIPLINE (Route C #4042 rule): every arithmetic/comparison is a raw
+// __hx_payload_* intrinsic (never a bare op → PAIR-MODEL helper undefined in the raw-C-ABI
+// link); each intrinsic result lands in its own un-nested `let`. '=' == 61.
+pub fn hxlcl_setenv(name: HexaVal, value: HexaVal, overwrite: HexaVal) -> int {
+    let pname = __hx_payload_add(name, 0)         // char* name (payload word)
+    let pvalue = __hx_payload_add(value, 0)       // char* value (payload word)
+    if __hx_payload_eq(pname, 0) {
+        return __hx_payload_sub(0, 1)             // NULL name → EINVAL (-1)
+    }
+    // l1 = strlen(name)
+    let mut l1 = 0
+    let mut nc = __hx_ptr_load8(pname, 0)         // name[0]
+    while __hx_payload_ne(nc, 0) {
+        l1 = __hx_payload_add(l1, 1)
+        nc = __hx_ptr_load8(pname, l1)            // name[l1]
+    }
+    if __hx_payload_eq(l1, 0) {
+        return __hx_payload_sub(0, 1)             // empty name → EINVAL (-1)
+    }
+    // l2 = strlen(value)
+    let mut l2 = 0
+    let mut vc = __hx_ptr_load8(pvalue, 0)        // value[0]
+    while __hx_payload_ne(vc, 0) {
+        l2 = __hx_payload_add(l2, 1)
+        vc = __hx_ptr_load8(pvalue, l2)           // value[l2]
+    }
+    // s = malloc(l1 + l2 + 2); build "name=value\0"
+    let l12 = __hx_payload_add(l1, l2)            // l1 + l2
+    let scap = __hx_payload_add(l12, 2)           // l1 + l2 + 2
+    let s = hxlcl_malloc(scap)                    // C-ABI bl → raw ptr
+    let mut i = 0
+    while __hx_payload_lt(i, l1) {
+        let b = __hx_ptr_load8(pname, i)          // name[i]
+        __hx_ptr_store8(s, i, b)                  // s[i] = name[i]
+        i = __hx_payload_add(i, 1)
+    }
+    __hx_ptr_store8(s, l1, 61)                    // s[l1] = '='
+    let voff = __hx_payload_add(l1, 1)            // l1 + 1
+    let mut j = 0
+    while __hx_payload_lt(j, l2) {
+        let b2 = __hx_ptr_load8(pvalue, j)        // value[j]
+        let dst = __hx_payload_add(voff, j)       // l1 + 1 + j
+        __hx_ptr_store8(s, dst, b2)               // s[l1+1+j] = value[j]
+        j = __hx_payload_add(j, 1)
+    }
+    let term = __hx_payload_add(l12, 1)           // l1 + l2 + 1
+    __hx_ptr_store8(s, term, 0)                   // s[l1+l2+1] = '\0'
+    // walk environ: replace-on-match (return), else count N (for the grow path)
+    let envpp = __hx_environ_ptr()                // &environ (char***)
+    let arr = __hx_ptr_load64(envpp, 0)           // environ (char** base) or NULL
+    let mut n = 0
+    if __hx_payload_ne(arr, 0) {
+        let mut e = __hx_payload_add(arr, 0)      // moving char** slot ptr
+        let mut entry = __hx_ptr_load64(e, 0)     // *e (first char* entry)
+        while __hx_payload_ne(entry, 0) {         // while(*e)
+            // strncmp(entry, name, l1)==0 && entry[l1]=='='  (break-free key compare)
+            let mut k = 0
+            let mut cont = 1
+            while __hx_payload_ne(cont, 0) {
+                if __hx_payload_ge(k, l1) {
+                    cont = 0                       // matched l1 bytes
+                }
+                if __hx_payload_ne(cont, 0) {
+                    let ce = __hx_ptr_load8(entry, k)   // entry[k]
+                    if __hx_payload_eq(ce, 0) {
+                        cont = 0                   // entry shorter than name → no match
+                    }
+                    if __hx_payload_ne(cont, 0) {
+                        let ck = __hx_ptr_load8(pname, k)  // name[k]
+                        if __hx_payload_ne(ce, ck) {
+                            cont = 0               // byte mismatch → no match
+                        } else {
+                            k = __hx_payload_add(k, 1)
+                        }
+                    }
+                }
+            }
+            if __hx_payload_eq(k, l1) {           // full key prefix matched
+                let eqc = __hx_ptr_load8(entry, l1)  // entry[l1]
+                if __hx_payload_eq(eqc, 61) {     // '=' → same variable
+                    if __hx_payload_eq(overwrite, 0) {
+                        return 0                  // exists + no overwrite → success no-op
+                    }
+                    __hx_ptr_store64(e, 0, s)     // *e = s (replace slot in place)
+                    return 0
+                }
+            }
+            n = __hx_payload_add(n, 1)            // count this entry
+            e = __hx_payload_add(e, 8)            // e++ (next char* slot)
+            entry = __hx_ptr_load64(e, 0)         // *e
+        }
+    }
+    // not found → GROW: new=malloc((n+2)*8); copy n ptrs; new[n]=s; new[n+1]=0; environ=new
+    let n2 = __hx_payload_add(n, 2)               // n + 2
+    let bytes = __hx_payload_mul(n2, 8)           // (n+2) * 8
+    let newarr = hxlcl_malloc(bytes)              // C-ABI bl → raw ptr
+    let mut c = 0
+    while __hx_payload_lt(c, n) {
+        let off = __hx_payload_mul(c, 8)          // c * 8
+        let oldp = __hx_ptr_load64(arr, off)      // environ[c]
+        __hx_ptr_store64(newarr, off, oldp)       // newarr[c] = environ[c]
+        c = __hx_payload_add(c, 1)
+    }
+    let noff = __hx_payload_mul(n, 8)             // n * 8
+    __hx_ptr_store64(newarr, noff, s)             // newarr[n] = s
+    let noff1 = __hx_payload_add(noff, 8)         // (n+1) * 8
+    __hx_ptr_store64(newarr, noff1, 0)            // newarr[n+1] = NULL
+    __hx_ptr_store64(envpp, 0, newarr)            // environ = newarr (WRITE-BACK)
+    return 0
+}
+
 // ── PARSE FAMILY (Route C batch G · pure-compute leaf with an OUT-PARAM write) ──
 //
 // hxlcl_strtoll is the string family's last leaf: a from-scratch string→long long
@@ -1724,4 +1865,220 @@ pub fn hxlcl_fork() -> int {
     }
     let x0v = __hx_ptr_load64(scr, 0)           // x0 = child pid
     return x0v                                   // parent: child pid
+}
+
+// ── WALL 3-a — CORE FILE* FAMILY (fd-level fake-pointer stdio subset) ────────
+//
+// The FROZEN 0-libc floor (self/runtime_emit_full.hexa:1153-1242) encodes a FILE*
+// as `(void *)(uintptr_t)(fd + 1)` — NOT a libc stdio struct. So the whole
+// fopen/fread/fwrite/fseek/ftell/fclose/fdopen subset is a PURE COMPOSITION over
+// the already-dissolved Route C syscall leaves (open_sys / read / write / lseek /
+// close) + raw-payload pointer arithmetic — ZERO new intrinsic, ZERO libc-struct
+// coupling. The `(fd+1)` wrap/unwrap is literally `__hx_payload_add(fd,1)` /
+// `__hx_payload_sub(fp,1)`. Reference-matched body-for-body to the frozen emitter
+// bodies cited at each fn.
+//
+// IN-BODY OPERATOR DISCIPLINE (same as the syscall family above): every test uses
+// the raw-payload leaf intrinsics (__hx_payload_lt/le/ge/eq/ne/add/sub/mul/div),
+// NEVER bare `<`/`-`/`*` (which lower to the PAIR-MODEL HexaVal helpers undefined
+// in the raw C-ABI link), each writing exactly one un-nested `let`. Inner calls to
+// the sibling C-ABI leaves (hxlcl_open_sys/read/write/lseek/close) lower as
+// single-register `bl` (the call boundary keys on the whitelisted callee name).
+//
+// SCOPE (honest): the libc-global streams stderr/stdout/stdin (the frozen
+// _hxlcl_fp_fd `v >= 0x1000` branch) are OUT of this wall — a fake FILE* here is
+// always a freshly-fopen'd / fdopen'd fd+1 handle (the only kind the floor's file
+// helpers rt_read_file/rt_write_file ever pass). A high pointer (a libc stdio
+// global) is therefore failed-safe (fread/fwrite → 0 items, ftell/fseek → -1,
+// fclose → 0 no-op), the same fail-closed treatment the frozen `v >= 0x1000`
+// guard gives fclose; their real handling stays on the shim (addressed later via
+// @asm + fd constants, per the runtime_emit_full.hexa:1147-1152 note).
+
+// hxlcl_fopen: map the mode string to open(2) flags, issue the open_sys syscall,
+// and return the fd+1 fake FILE* (0/NULL on any error). BYTE-FAITHFUL to
+// self/runtime_emit_full.hexa:1153-1177. O_* flag VALUES differ per OS, so they
+// are compile-time consts selected by target_is_linux() (DCE drops the dead leg),
+// exactly like the per-target syscall NRs; the access/create/trunc/append bits are
+// DISJOINT, so `__hx_payload_add` composes them as bitwise-OR. mode 0644 == 420.
+pub fn hxlcl_fopen(path: HexaVal, mode: HexaVal) -> int {
+    let pnull = __hx_payload_eq(path, 0)
+    if __hx_payload_ne(pnull, 0) { return 0 }
+    let mnull = __hx_payload_eq(mode, 0)
+    if __hx_payload_ne(mnull, 0) { return 0 }
+    // per-target O_CREAT/O_TRUNC/O_APPEND (darwin defaults; Linux overrides).
+    let mut o_creat = 512                        // darwin O_CREAT (0x0200)
+    let mut o_trunc = 1024                       // darwin O_TRUNC (0x0400)
+    let mut o_append = 8                         // darwin O_APPEND (0x0008)
+    if target_is_linux() {
+        o_creat = 64                             // Linux O_CREAT (0100)
+        o_trunc = 512                            // Linux O_TRUNC (01000)
+        o_append = 1024                          // Linux O_APPEND (02000)
+    }
+    // detect the '+' update flag: mode[1]=='+' OR (mode[1]!=0 AND mode[2]=='+').
+    let c0 = __hx_ptr_load8(mode, 0)             // mode[0]
+    let c1 = __hx_ptr_load8(mode, 1)             // mode[1]
+    let mut plus = 0
+    let p1 = __hx_payload_eq(c1, 43)             // mode[1] == '+'
+    if __hx_payload_ne(p1, 0) {
+        plus = 1
+    } else {
+        let c1nz = __hx_payload_ne(c1, 0)        // mode[1] != 0
+        if __hx_payload_ne(c1nz, 0) {
+            let c2 = __hx_ptr_load8(mode, 2)     // mode[2]
+            let p2 = __hx_payload_eq(c2, 43)     // mode[2] == '+'
+            if __hx_payload_ne(p2, 0) { plus = 1 }
+        }
+    }
+    // access mode → flags. '+' upgrades the access bits to O_RDWR (2); the
+    // create/trunc/append extras are preserved (disjoint-bit ADD == OR).
+    let mut flags = 0
+    let mut ok = 0
+    let isr = __hx_payload_eq(c0, 114)           // 'r'
+    if __hx_payload_ne(isr, 0) {
+        flags = 0                                // O_RDONLY
+        if __hx_payload_ne(plus, 0) { flags = 2 }   // O_RDWR
+        ok = 1
+    }
+    let isw = __hx_payload_eq(c0, 119)           // 'w'
+    if __hx_payload_ne(isw, 0) {
+        let extras = __hx_payload_add(o_creat, o_trunc)
+        let mut acc = 1                          // O_WRONLY
+        if __hx_payload_ne(plus, 0) { acc = 2 }  // O_RDWR
+        flags = __hx_payload_add(acc, extras)
+        ok = 1
+    }
+    let isa = __hx_payload_eq(c0, 97)            // 'a'
+    if __hx_payload_ne(isa, 0) {
+        let extras = __hx_payload_add(o_creat, o_append)
+        let mut acc = 1                          // O_WRONLY
+        if __hx_payload_ne(plus, 0) { acc = 2 }  // O_RDWR
+        flags = __hx_payload_add(acc, extras)
+        ok = 1
+    }
+    let badmode = __hx_payload_eq(ok, 0)         // mode[0] not r/w/a
+    if __hx_payload_ne(badmode, 0) { return 0 }
+    let fd = hxlcl_open_sys(path, flags, __hx_payload_add(0, 420))    // 0644 (HexaVal-boxed mode)
+    let bad = __hx_payload_lt(fd, 0)
+    if __hx_payload_ne(bad, 0) { return 0 }      // open failed → NULL
+    // leak guard (frozen :1175): a fresh file fd can only be 0/1/2 if a
+    // syscall-wrapper regression returned errno-as-fd; fail closed, never alias
+    // stdin/stdout/stderr and leak user content.
+    let le2 = __hx_payload_le(fd, 2)
+    if __hx_payload_ne(le2, 0) { return 0 }
+    return __hx_payload_add(fd, 1)               // fake FILE* = (fd + 1)
+}
+
+// hxlcl_fclose: unwrap fd+1 and close(2). BYTE-FAITHFUL to
+// self/runtime_emit_full.hexa:1178-1187. A NULL fp → -1; a libc-global FILE*
+// (>= 0x1000) → 0 (never close it); 0/1/2 → 0 (never close the std streams).
+pub fn hxlcl_fclose(fp: HexaVal) -> int {
+    let fnull = __hx_payload_eq(fp, 0)
+    if __hx_payload_ne(fnull, 0) { return -1 }
+    let fhigh = __hx_payload_ge(fp, 4096)        // 0x1000 — libc FILE* sentinel
+    if __hx_payload_ne(fhigh, 0) { return 0 }    // libc stdio global — don't close
+    let fd = __hx_payload_sub(fp, 1)
+    let lo = __hx_payload_lt(fd, 3)
+    if __hx_payload_ne(lo, 0) { return 0 }       // never close 0/1/2
+    return hxlcl_close(fd)
+}
+
+// hxlcl_fread: unwrap fd+1, read `size`-byte items, loop over partial reads, and
+// return the ITEM count (got / size — the libc contract, NOT a byte count).
+// BYTE-FAITHFUL to self/runtime_emit_full.hexa:1199-1213 (the _hxlcl_fp_fd fd+1
+// branch; the libc-global branch is out of scope → high pointers yield 0 items).
+// Unbuffered fd wrapper — no stdio buffering (matches the floor).
+pub fn hxlcl_fread(buf: HexaVal, sz: HexaVal, n: HexaVal, fp: HexaVal) -> int {
+    let bnull = __hx_payload_eq(buf, 0)
+    if __hx_payload_ne(bnull, 0) { return 0 }
+    let szz = __hx_payload_eq(sz, 0)
+    if __hx_payload_ne(szz, 0) { return 0 }
+    let nz = __hx_payload_eq(n, 0)
+    if __hx_payload_ne(nz, 0) { return 0 }
+    let fnull = __hx_payload_eq(fp, 0)
+    if __hx_payload_ne(fnull, 0) { return 0 }
+    let fhigh = __hx_payload_ge(fp, 4096)
+    if __hx_payload_ne(fhigh, 0) { return 0 }    // libc FILE* unsupported here
+    let fd = __hx_payload_sub(fp, 1)
+    let total = __hx_payload_mul(sz, n)
+    let mut got = 0
+    let mut cont = __hx_payload_lt(got, total)
+    while __hx_payload_ne(cont, 0) {
+        let remain = __hx_payload_sub(total, got)
+        let dstp = __hx_payload_add(buf, got)
+        let r = hxlcl_read(fd, dstp, remain)
+        let stop = __hx_payload_le(r, 0)         // EOF or error → stop
+        if __hx_payload_ne(stop, 0) {
+            cont = 0
+        } else {
+            got = __hx_payload_add(got, r)
+            cont = __hx_payload_lt(got, total)
+        }
+    }
+    return __hx_payload_div(got, sz)             // item count
+}
+
+// hxlcl_fwrite: write-side mirror of fread (calls hxlcl_write). BYTE-FAITHFUL to
+// self/runtime_emit_full.hexa:1214-1227. Returns the item count (put / size).
+pub fn hxlcl_fwrite(buf: HexaVal, sz: HexaVal, n: HexaVal, fp: HexaVal) -> int {
+    let bnull = __hx_payload_eq(buf, 0)
+    if __hx_payload_ne(bnull, 0) { return 0 }
+    let szz = __hx_payload_eq(sz, 0)
+    if __hx_payload_ne(szz, 0) { return 0 }
+    let nz = __hx_payload_eq(n, 0)
+    if __hx_payload_ne(nz, 0) { return 0 }
+    let fnull = __hx_payload_eq(fp, 0)
+    if __hx_payload_ne(fnull, 0) { return 0 }
+    let fhigh = __hx_payload_ge(fp, 4096)
+    if __hx_payload_ne(fhigh, 0) { return 0 }    // libc FILE* unsupported here
+    let fd = __hx_payload_sub(fp, 1)
+    let total = __hx_payload_mul(sz, n)
+    let mut put = 0
+    let mut cont = __hx_payload_lt(put, total)
+    while __hx_payload_ne(cont, 0) {
+        let remain = __hx_payload_sub(total, put)
+        let srcp = __hx_payload_add(buf, put)
+        let r = hxlcl_write(fd, srcp, remain)
+        let stop = __hx_payload_le(r, 0)         // error or zero-progress → stop
+        if __hx_payload_ne(stop, 0) {
+            cont = 0
+        } else {
+            put = __hx_payload_add(put, r)
+            cont = __hx_payload_lt(put, total)
+        }
+    }
+    return __hx_payload_div(put, sz)             // item count
+}
+
+// hxlcl_ftell: current offset via lseek(fd, 0, SEEK_CUR=1). BYTE-FAITHFUL to
+// self/runtime_emit_full.hexa:1228-1232. NULL / libc-global fp → -1.
+pub fn hxlcl_ftell(fp: HexaVal) -> int {
+    let fnull = __hx_payload_eq(fp, 0)
+    if __hx_payload_ne(fnull, 0) { return -1 }
+    let fhigh = __hx_payload_ge(fp, 4096)
+    if __hx_payload_ne(fhigh, 0) { return -1 }   // libc FILE* unsupported here
+    let fd = __hx_payload_sub(fp, 1)
+    return hxlcl_lseek(fd, __hx_payload_add(0, 0), __hx_payload_add(0, 1))   // off=0, SEEK_CUR=1 (HexaVal-boxed)
+}
+
+// hxlcl_fseek: lseek(fd, offset, whence) → 0 on success, -1 on failure.
+// BYTE-FAITHFUL to self/runtime_emit_full.hexa:1233-1237. SEEK_* constants are
+// uniform across Linux/darwin so `whence` passes through unchanged.
+pub fn hxlcl_fseek(fp: HexaVal, offset: HexaVal, whence: HexaVal) -> int {
+    let fnull = __hx_payload_eq(fp, 0)
+    if __hx_payload_ne(fnull, 0) { return -1 }
+    let fhigh = __hx_payload_ge(fp, 4096)
+    if __hx_payload_ne(fhigh, 0) { return -1 }   // libc FILE* unsupported here
+    let fd = __hx_payload_sub(fp, 1)
+    let r = hxlcl_lseek(fd, offset, whence)
+    let bad = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(bad, 0) { return -1 }
+    return 0
+}
+
+// hxlcl_fdopen: wrap a raw fd as the fd+1 fake FILE* (mode ignored — these are
+// unbuffered fd wrappers). BYTE-FAITHFUL to self/runtime_emit_full.hexa:1238-1242.
+pub fn hxlcl_fdopen(fd: HexaVal, mode: HexaVal) -> int {
+    let bad = __hx_payload_lt(fd, 0)
+    if __hx_payload_ne(bad, 0) { return 0 }
+    return __hx_payload_add(fd, 1)              // (mode unused — unbuffered wrapper)
 }

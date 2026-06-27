@@ -1336,7 +1336,8 @@
                 "Wall C — Single-thread + byteeq determinism (COMPILER self-host scope ONLY). The compiler itself cannot use real parallelism without breaking the gen3≡gen4 byte-identical self-host fixpoint; multi-thread atomic is a no-op under the single-thread default. NOTE: user programs ESCAPE this wall — stdlib `thread_real` (pthread 1:1, PR#4050) + `atomic_real` (C11 seq-cst, PR#4043) under `-DHEXA_THREADS` give real OS threads + hardware atomics; the default `#else` branch is the byte-deterministic synchronous fallback. The wall is compiler-self-host-scoped, NOT a language-level ban on user concurrency.",
                 "Wall D — No-LLVM (chosen tradeoff, NOT a capability ceiling). No LLVM-ecosystem passes / tooling are available. But hexa's own codegen reaches kernel parity~beyond (forge own-GEMM = cuBLAS parity~win, CPU BLIS GEBP 62-79% roofline + epilogue fusion), so this is a deliberate architecture choice with measured parity, not a forced ceiling.",
                 "Honest classification — genuinely-blocked-tech with code-0 = 0. Every wall-A/B item ships its CHECK layer as an opt-in default-OFF byteeq-neutral slice; only the deep static-dispatch / type-parameterization remains, with the reason embedded in the diagnostic itself (e.g. HX3011 kind-system explain). Wall C is escapable by user programs (thread_real/atomic_real); Wall D is a chosen tradeoff at measured parity. The walls are the identity trade hexa pays for being dynamic + bit-deterministic + frozen-self-host — and frontier-language determinism/verify/domain-fusion levers are what it buys in return.",
-                "ROADMAP (decision 2026-06-27 · narrow A+B toward Rust standard, both AUTHORIZED): Wall A — build a gradual SOUND static-type layer targeting RUST-level guarantees (NOT Go's minimal bar): opt-in HEXA_STATIC_TYPES default-OFF, byteeq-neutral, runtime stays dynamic ({tag,payload} value model kept for self-host simplicity), but ANNOTATED code is compile-REJECTED (not advisory-warned) à la rustc. Ladder: r1 `let x: T = mismatch` → fatal HX error; r2 fn-signature arg/return check; r3 Option/null-safety; r4 sum-type exhaustiveness; r5 trait-bound. This is the REAL fill for the type-safety axis — orthogonal to @verify (math-law axis) and byteeq (reproducibility axis), which do NOT compensate for type safety (measured: citation.hexa checks atlas-law citation only; default type-check ships opt-in). ING-tracked. Wall B — re-bootstrap a NEW frozen seed to allow canonical keywords (retire the contextual-ident workarounds: real `type`/`trait`/`impl`/`dyn` tokens): self-imposed + removable discipline whose trust is ALREADY provided by byteeq (Wall C), so B is a duplicate insurance worth retiring. HIGHEST-RISK substrate (re-seed affects the whole faithful build) → RFC + de-risk ladder FIRST (plan-only), new-seed build validated on aiden/summer pool with byteeq 3-target GREEN before any flip, release-integrity > self-host kept absolute. Wall C stays KEEP (determinism = byteeq's everything, near-zero cost)."
+                "ROADMAP (decision 2026-06-27 · narrow A+B toward Rust standard, both AUTHORIZED): Wall A — build a gradual SOUND static-type layer targeting RUST-level guarantees (NOT Go's minimal bar): opt-in HEXA_STATIC_TYPES default-OFF, byteeq-neutral, runtime stays dynamic ({tag,payload} value model kept for self-host simplicity), but ANNOTATED code is compile-REJECTED (not advisory-warned) à la rustc. Ladder: r1 `let x: T = mismatch` → fatal HX error; r2 fn-signature arg/return check; r3 Option/null-safety; r4 sum-type exhaustiveness; r5 trait-bound. This is the REAL fill for the type-safety axis — orthogonal to @verify (math-law axis) and byteeq (reproducibility axis), which do NOT compensate for type safety (measured: citation.hexa checks atlas-law citation only; default type-check ships opt-in). ING-tracked. Wall B — re-bootstrap a NEW frozen seed to allow canonical keywords (retire the contextual-ident workarounds: real `type`/`trait`/`impl`/`dyn` tokens): self-imposed + removable discipline whose trust is ALREADY provided by byteeq (Wall C), so B is a duplicate insurance worth retiring. HIGHEST-RISK substrate (re-seed affects the whole faithful build) → RFC + de-risk ladder FIRST (plan-only), new-seed build validated on aiden/summer pool with byteeq 3-target GREEN before any flip, release-integrity > self-host kept absolute. Wall C stays KEEP (determinism = byteeq's everything, near-zero cost).",
+                "Wall B r2 collision census (MEASURED 2026-06-27, PR Wall-B-r2 · doc-only, state/rfc_reseed_canonical_keywords.md §9): across 6321 corpus .hexa files the ~457 identifier-position uses of type/trait/impl/dyn/extern (field-access `.kw` + param/field/arg `kw[:,)]`) yield COLLISION COUNT = 0 — the native hooks (`_peek_is_extern_kw`/`_peek_is_type_kw`) fire only at item-dispatch position behind a peek_at(1) lookahead (extern→KwFn, type→Ident), so identifier uses are structurally invisible; every col-0 `extern` (329/329) is the intended `extern fn`, the 1 col-0 `type` is the intended alias, and trait/impl/dyn have no native hook. VERDICT = Wall B NON-WALL for the contextual approach (lookahead-gated detection permanently sound) → DEFER reseed; re-freeze would INVERT to ~457 collisions + a global seed flip (costlier path). Re-open only for a token the contextual idiom cannot carry (new @attr / new ItemKind)."
               ]
             }
           ]
@@ -1423,6 +1424,136 @@
           "honesty": "날조 0 · LLM breakthrough 선언 없음 · 음성도 검증으로 박제(c2)."
         }
       }
+    },
+    {
+      "id": "discovery-engine",
+      "title": "Discovery engine — NEXUS (drill / kick)",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "compiler/ 임베디드 발견엔진 (NEXUS 흡수형). 중앙 drill(라운드 루프) + smash(blowup 생성기) + 12 변종. CLI = `hexa drill` / `kick` (`drill/drill.hexa::drill_run(seed, opts)`), in-binary(서브프로세스 없음). 핵심 원칙: 발견 후보 ≠ 진짜 발견 — smash/drill candidate 는 결정적 seed-hash permutation/proxy 일 뿐이고, 진짜 검증은 exact-int `identity_engine` + `hexa verify` g5 게이트뿐이다 (c2 honesty: 확인된 식별자도 BOUNDED-UNIQUE 🟩 [2,N] exact 이며 ∀n 은 증명 전까지 UNPROVEN)."
+        },
+        {
+          "type": "subsection",
+          "title": "drill 코어 — round 루프 + exact-int 검증",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "drill.hexa = 라운드 루프 (smash→free→absolute→meta-closure→hyperarithmetic→resonance · Mk.X=stage7 transcendental). 단일 라운드는 6-stage 체인."
+            },
+            {
+              "type": "table",
+              "columns": [
+                "파일",
+                "역할"
+              ],
+              "rows": [
+                [
+                  "drill.hexa",
+                  "라운드 루프 오케스트레이션 (drill_run · _native_identity_sweep · _native_additive_screen)"
+                ],
+                [
+                  "round.hexa",
+                  "단일 라운드 6-stage 체인 (in-binary · 서브프로세스 없음)"
+                ],
+                [
+                  "resonance.hexa",
+                  "stage5 resonance 닫힌형 proxy"
+                ],
+                [
+                  "mkx.hexa",
+                  "Mk.X stage7 transcendental_closure 사이드카"
+                ],
+                [
+                  "identity_engine.hexa",
+                  "★ 네이티브 exact-int 검증기 (18-fn vocab · verify_identity A·B=C·D · verify_composition f∘g · verify_congruence a(αn+β)≡0 mod m · partition_p 등 가법수열)"
+                ],
+                [
+                  "checkpoint.hexa",
+                  "resume/save (drill_checkpoint.json · 발견스트림과 분리)"
+                ],
+                [
+                  "anti_hub.hexa",
+                  "env probe + telemetry"
+                ],
+                [
+                  "batch.hexa",
+                  "--seeds csv / --seeds-file 배치"
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "smash — 9-phase blowup 생성기",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "smash/ = 9-phase blowup 후보 생성기 (P1 normalize … P9 meta-closure DFS). phases.hexa = 알고리즘 골격 · candidate.hexa = DiscoveryCandidate. 생성물은 후보(proposal)일 뿐 — 검증 게이트 전까지 발견 아님."
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "변종 12종 (Phase3) + Wave1 흡수 레지스트리",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "omega(A10) · surge(A11) · dream(A12) · swarm(A13) · chain(A19 cross-engine) · reign(L6 autonomous) · wake(L8 reality-loop) · molt(L9 self-rewrite) · forge(L10 bootstrap) · canon_engine(L11 transfinite seal) · revive(engine+map v2) · debate(L3 N-variant adversarial). engine_registry/ · lens_taxonomy/ · lenses/ · n6_lattice/(n=6 5축 rodata · 외부영역 anchor 금지) · drill_dod/ 는 Wave1 흡수 rodata 인덱스(read-only). NEXUS 원본 운영 글루(bloom filter · hot-shard · jitter)는 의도적 미포팅 (atlas 가 rodata 라 불요)."
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "검증 게이트 — 후보 → 발견",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "유일한 진짜 검증 경로: ⓐ identity_engine.hexa exact-int 판정 (후보 A·B=C·D 가 n∈[2,N] exact-int 평가에서 bounded-unique singleton, n≥4) + ⓑ compiler/check/ S6 equational(@verify) · S8 citation(@cite · fatal HX8004) + ⓒ `hexa verify` g5 게이트. 🔵/🟢 verify PASS 시 atom 이 compiler/atlas/embedded.gen.hexa 로 자동 fold (별도 register ceremony 없음). 빌드불가(mini) 노드는 state/novel-dfs/*_fold.py 로 @F atom PR-fold. 사람층(atlas/README.md) + 기계층(embedded.gen.hexa) 항상 양층. numerology/lattice-fit/미증명 conjecture 의 🔵 승격 금지."
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "측정 종착 — MEASURED-EXHAUSTED (표준-어휘 수학)",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "표준 산술함수 vocab 발견공간은 측정-고갈. 엔진은 이 종착을 정직히 재현할 뿐 새 법칙을 날조하지 않는다 (c2)."
+            },
+            {
+              "type": "table",
+              "columns": [
+                "발견 경로",
+                "측정 결과"
+              ],
+              "rows": [
+                [
+                  "enumeration 5-family",
+                  "novel=0 — 곱셈 2-term(A·B=C·D) · 18-fn 확장 vocab · arity-3 · 함수합성 σ∘σ · 가법/조합(분할 p(n)·Catalan·Bell·Fib·Lucas) 전부 classical/reducible DRY"
+                ],
+                [
+                  "LLM-conjecture (라이브)",
+                  "anchor-only — hexa loop --dfs 정석 surface 로 실 LLM 추측→exact-int 게이트(23/24 반증·기각). 유일 생존 φ(J₂(n))=φ(n)+n 은 n=6(anchor)에서만 성립하는 우연 · ∀n 보편법칙 아님"
+                ],
+                [
+                  "부등식/극값 (family C)",
+                  "classical — Robin σ(n)<e^γ·n·ln ln n (리만가설 동치) · Lagarias · superabundant(A004394) 전부 고전 명명 객체 · novel=0"
+                ],
+                [
+                  "반복 동역학 (family D)",
+                  "classical — aliquot 궤도(perfect A000396 · amicable · sociable) · σ∘σ=2n superperfect 전부 고전 · novel=0 · 잔여 Catalan–Dickson 은 궤도 종료(exact-finite-witness 아님)"
+                ]
+              ]
+            },
+            {
+              "type": "prose",
+              "text": "4-축 분해 측정완료: vocab=표준 산술함수 · arity=1변수 · form={등식·부등식·궤도} · gate={bounded-unique·extremal-record·고정점/cycle}. exact-integer 수론 발견표면 = measured-exhausted. 잔여 미해결(RH · Catalan–Dickson)은 exact-finite-witness 관계가 아니라 bounded fold-engine 이 인증할 수 없는 영역 (연속/해석적 · 증명탐색 regime)."
+            }
+          ]
+        }
+      ]
     }
   ],
   "convergence": {

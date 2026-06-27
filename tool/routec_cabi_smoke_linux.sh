@@ -62,7 +62,7 @@ HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
 echo "[routec-smoke-linux] (2) assert errno-bearing syscall symbols defined in routec.o …"
 syms="$(nm "$TMP/routec.o" 2>/dev/null || true)"
 miss=0
-for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe time poll clock_gettime execve fork getenv; do
+for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen; do
     if ! grep -qE " T hxlcl_${s}\$" <<<"$syms"; then
         echo "[routec-smoke-linux] NOT DEFINED (T): hxlcl_${s}" >&2; miss=$((miss+1))
     fi
@@ -134,6 +134,27 @@ extern int  hxlcl_fork(void);
  * Not errno-bearing; returns a raw char* into the live environ block (or NULL).
  * `environ` comes from libc/crt — the routec.o's GOT ref resolves at link, no stub. */
 extern char *hxlcl_getenv(const char *name);
+
+/* Wall 2-b ENV (sibling) — setenv: the FIRST environ WRITE-BACK. On x86_64 the grow
+ * path stores a fresh char** array back into `environ` via __hx_ptr_store64(&environ,
+ * 0, newarr); the named-DATA GOT reloc for `environ` must resolve to glibc's live
+ * global so libc getenv observes the new key (the writeback proof). Returns 0 / -1. */
+extern int hxlcl_setenv(const char *name, const char *value, int overwrite);
+
+/* Wall 3-a CORE FILE* family — fopen/fclose/fread/fwrite/ftell/fseek/fdopen. The
+ * FILE* is the frozen-floor fake pointer `(void*)(uintptr_t)(fd+1)` (NOT a libc
+ * stdio struct), composed purely over the Route C syscall leaves (open_sys/read/
+ * write/lseek/close). On Linux the O_* fopen-flag values (O_CREAT 0100, O_TRUNC
+ * 01000, O_APPEND 02000) differ from darwin's — this run is the linux-flag-value
+ * proof. fread/fwrite return the ITEM count (got/size), looping partial transfers;
+ * a full write→close→reopen→read roundtrip asserts byte-exact + position-exact. */
+extern void  *hxlcl_fopen(const char *path, const char *mode);
+extern int    hxlcl_fclose(void *fp);
+extern size_t hxlcl_fread(void *buf, size_t sz, size_t n, void *fp);
+extern size_t hxlcl_fwrite(const void *buf, size_t sz, size_t n, void *fp);
+extern long   hxlcl_ftell(void *fp);
+extern int    hxlcl_fseek(void *fp, long offset, int whence);
+extern void  *hxlcl_fdopen(int fd, const char *mode);
 
 /* The emit covers ALL whitelisted Route C symbols (the script emits the whole
  * hxlcl_core.hexa), so the routec.o carries the composites' undefined-external
@@ -447,6 +468,93 @@ int main(void) {
         CK(sv != NULL && strcmp(sv, "route-c-wall2b") == 0, "getenv(set var) == value (content-exact)");
         setenv("HX_SMOKE_LONGKEY", "L", 1);
         CK(hxlcl_getenv("HX_SMOKE_LONG") == NULL, "getenv(prefix of a real key) → NULL (early-stop, no over-read)");
+    }
+
+    /* Wall 2-b (sibling) — setenv WRITE-BACK, x86_64 named-DATA GOT store proof.
+     * POSIX setenv(3): GROW (fresh key reaches the live glibc global — both hxlcl_getenv
+     * AND libc getenv see it), in-place slot REPLACE (overwrite!=0), NO-OP preserve
+     * (overwrite==0), repeated GROW keeping the first key, EINVAL (-1) for NULL/empty.
+     * All libc setenv calls above ran FIRST, so glibc never re-manages our fresh array. */
+    {
+        CK(hxlcl_setenv("HX_RC_NEW", "v1", 1) == 0, "setenv(fresh key) → 0");
+        char *g1 = hxlcl_getenv("HX_RC_NEW");
+        CK(g1 != NULL && strcmp(g1, "v1") == 0, "setenv(fresh): hxlcl_getenv == \"v1\"");
+        char *l1 = getenv("HX_RC_NEW");
+        CK(l1 != NULL && strcmp(l1, "v1") == 0, "setenv(fresh): libc getenv == \"v1\" (writeback reached &environ)");
+        CK(hxlcl_setenv("HX_RC_NEW", "v2", 1) == 0, "setenv(overwrite=1) → 0");
+        char *g2 = hxlcl_getenv("HX_RC_NEW");
+        CK(g2 != NULL && strcmp(g2, "v2") == 0, "setenv(overwrite): value replaced → \"v2\"");
+        CK(hxlcl_setenv("HX_RC_NEW", "v3", 0) == 0, "setenv(overwrite=0, exists) → 0");
+        char *g3 = hxlcl_getenv("HX_RC_NEW");
+        CK(g3 != NULL && strcmp(g3, "v2") == 0, "setenv(overwrite=0): value preserved → \"v2\"");
+        CK(hxlcl_setenv("HX_RC_NEW2", "w1", 1) == 0, "setenv(second fresh key) → 0");
+        char *g4 = hxlcl_getenv("HX_RC_NEW2");
+        CK(g4 != NULL && strcmp(g4, "w1") == 0, "setenv(regrow): new key == \"w1\"");
+        char *g5 = hxlcl_getenv("HX_RC_NEW");
+        CK(g5 != NULL && strcmp(g5, "v2") == 0, "setenv(regrow): prior key survives == \"v2\"");
+        CK(hxlcl_setenv(NULL, "x", 1) == -1, "setenv(NULL name) → -1 (EINVAL)");
+        CK(hxlcl_setenv("", "x", 1) == -1, "setenv(empty name) → -1 (EINVAL)");
+    }
+
+    /* Wall 3-a — CORE FILE* family roundtrip (linux O_* flag values). fopen("w") →
+     * fwrite known bytes → fclose → fopen("r") → fread → byte-exact + ftell/fseek
+     * position-exact. The "w"/"r" mode strings map to the LINUX O_WRONLY|O_CREAT|
+     * O_TRUNC / O_RDONLY flag values inside hxlcl_fopen (the per-target const leg),
+     * so a wrong Linux flag value would fail to create/truncate here. */
+    {
+        char tmpl[] = "/tmp/routec_lfile_XXXXXX";
+        int tfd = mkstemp(tmpl);
+        CK(tfd >= 0, "mkstemp for FILE* roundtrip");
+        if (tfd >= 0) close(tfd);   /* close; reopen through hxlcl_fopen */
+
+        const char payload[] = "RouteC-FILE-roundtrip-0123456789";  /* 32 bytes */
+        size_t plen = sizeof(payload) - 1;
+
+        void *fw = hxlcl_fopen(tmpl, "w");
+        CK(fw != NULL, "fopen(w) != NULL (fd+1 fake FILE*, linux O_WRONLY|O_CREAT|O_TRUNC)");
+        CK(hxlcl_fwrite(payload, 1, plen, fw) == plen, "fwrite(size=1) item count == 32");
+        CK(hxlcl_fclose(fw) == 0, "fclose(w) == 0");
+
+        void *fr = hxlcl_fopen(tmpl, "r");
+        CK(fr != NULL, "fopen(r) != NULL (linux O_RDONLY)");
+        char rbuf[64]; memset(rbuf, 0, sizeof rbuf);
+        CK(hxlcl_fread(rbuf, 1, plen, fr) == plen, "fread(size=1) item count == 32");
+        CK(memcmp(rbuf, payload, plen) == 0, "fread bytes == fwrite bytes (value-exact)");
+        CK(hxlcl_ftell(fr) == (long)plen, "ftell after reading 32 == 32 (position-exact)");
+
+        CK(hxlcl_fseek(fr, 0, SEEK_SET) == 0, "fseek(SET, 0) == 0");
+        CK(hxlcl_ftell(fr) == 0, "ftell after rewind == 0");
+        char ib[8]; memset(ib, 0, sizeof ib);
+        CK(hxlcl_fread(ib, 4, 1, fr) == 1, "fread(size=4, n=1) → 1 item (item-count math)");
+        CK(memcmp(ib, payload, 4) == 0, "fread item content matches first 4 bytes");
+        CK(hxlcl_ftell(fr) == 4, "ftell after a 4-byte item == 4");
+        CK(hxlcl_fseek(fr, 10, SEEK_SET) == 0, "fseek(SET, 10) == 0");
+        CK(hxlcl_ftell(fr) == 10, "ftell after seek(10) == 10 (position-exact)");
+        CK(hxlcl_fclose(fr) == 0, "fclose(r) == 0");
+
+        /* "a" append mode: O_WRONLY|O_CREAT|O_APPEND (linux 02000). Appending must
+         * land at EOF, growing the file from 32 to 36 bytes. */
+        void *fa = hxlcl_fopen(tmpl, "a");
+        CK(fa != NULL, "fopen(a) != NULL (linux O_APPEND)");
+        CK(hxlcl_fwrite("TAIL", 1, 4, fa) == 4, "fwrite append 4 bytes");
+        CK(hxlcl_fclose(fa) == 0, "fclose(a) == 0");
+        void *fr2 = hxlcl_fopen(tmpl, "r");
+        CK(fr2 != NULL, "fopen(r) after append != NULL");
+        CK(hxlcl_fseek(fr2, 0, SEEK_END) == 0, "fseek(END,0) == 0");
+        CK(hxlcl_ftell(fr2) == (long)(plen + 4), "file grew to 36 bytes after append (O_APPEND at EOF)");
+        hxlcl_fclose(fr2);
+
+        /* fdopen: wrap a raw fd and read through the fake FILE*. */
+        int rawfd = open(tmpl, O_RDONLY);
+        CK(rawfd >= 0, "open raw fd for fdopen test");
+        void *fd_fp = hxlcl_fdopen(rawfd, "r");
+        CK(fd_fp != NULL, "fdopen(rawfd) != NULL (fd+1 wrap)");
+        char db[8]; memset(db, 0, sizeof db);
+        CK(hxlcl_fread(db, 1, 4, fd_fp) == 4, "fread via fdopen'd fd → 4");
+        CK(memcmp(db, payload, 4) == 0, "fdopen fread content matches");
+        CK(hxlcl_fclose(fd_fp) == 0, "fclose(fdopen) == 0");
+
+        unlink(tmpl);
     }
 
     if (fails == 0) { printf("[routec-smoke-linux] all Route C errno asserts PASS\n"); return 0; }
