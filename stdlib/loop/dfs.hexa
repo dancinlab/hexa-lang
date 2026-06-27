@@ -29,6 +29,7 @@ use "compiler/lenses/types"
 use "compiler/atlas/parser"
 use "compiler/atlas/embed_fold"   // Phase O — canonical absorption (@D g_atlas_absorb_direct)
 use "stdlib/loop/state"
+use "stdlib/loop/conjecture"      // Ralph 378 — exact-int verify-gate (cj_verdict)
 use "stdlib/io"
 
 // Blended USD per million tokens (rough estimate — pluggable cmd returns no
@@ -257,10 +258,26 @@ pub fn dfs_build_prompt(parent: Candidate, view: AtlasView, beam: int) -> string
           + "- family: <empty_space|paradigm_shift|cross_pollinate|counterexample_mine|invariant_stress|scale_extrapolate|constraint_flip|falsify_self|unfold>\n"
           + "- fire_needed: <true|false>\n"
           + "- cite: [<atlas-node-id>, ...]\n\n"
+          + "CONJECTURE: <one machine-checkable arithmetic relation, see GRAMMAR>\n\n"
           + "<one-paragraph English proposal, under 120 words>\n\n"
+          + "GRAMMAR (the CONJECTURE line MUST be exactly one of these forms; an\n"
+          + "exact-integer verifier evaluates it over n in [2,N] and DROPS the child\n"
+          + "if it is false — so only propose a relation you believe holds widely)\n"
+          + "  identity     : A*B = C*D            e.g.  phi*J2 = n*psi\n"
+          + "  composition  : f∘g = k*n            e.g.  sigma∘phi = 2*n   (∘ = the ring\n"
+          + "                 f∘g = h + n                 operator U+2218; use the ∘ glyph,\n"
+          + "                 f∘g = h                     NOT the letter o which collides)\n"
+          + "  congruence   : seq(a*n+b) = 0 mod m e.g.  partition(5*n+4) = 0 mod 5\n"
+          + "VOCAB (multiplicative fns of n):\n"
+          + "  sigma sigma2 sigma3 phi tau n sopfr rad J2 psi Omega omega\n"
+          + "  mu lam mu2 J3 tw_om core      (lam = Liouville, tw_om = 2^omega)\n"
+          + "  seq for congruence: partition bell fib lucas\n"
           + "RULES\n"
-          + "- English only. No Korean or CJK text.\n"
+          + "- English only. No Korean or CJK text. ASCII function names only.\n"
           + "- cite MUST include at least one real atlas node id from the cited set above.\n"
+          + "- The CONJECTURE must use ONLY the vocab above; aim for a NOVEL relation\n"
+          + "  (NOT a known classical one like Mersenne, superperfect, Ramanujan, or\n"
+          + "  phi*psi=J2) — but never fabricate: the verifier is the judge.\n"
           + "- Output nothing except the child blocks.\n"
     return p
 }
@@ -421,12 +438,26 @@ fn _dfs_has_cjk(s: string) -> bool {
 }
 
 // Returns "" if the child passes all gates, else a short drop reason.
+//
+// EXACT-INT VERIFY-GATE (Ralph 378 · 2026-06-27): the final gate is the real
+// thing — if the LLM child declares a machine-checkable arithmetic CONJECTURE
+// (identity A*B=C*D / composition f∘g=… / congruence seq(a*n+b)=0 mod m), it is
+// routed to the compiler's exact-int verifier (compiler/atlas/identity_engine
+// via stdlib/loop/conjecture::cj_verdict) and SURVIVES only if exact-int
+// evaluation confirms it (bounded-unique singleton n≥4, universal-in-[2,N], or a
+// holding congruence). A false guess is REFUTED here and dropped. Children with
+// no machine-checkable claim (prose hypotheses) fall through unchanged — this
+// gate only filters the arithmetic claims, it never fabricates (atlas write stays
+// the `hexa verify` g5 / PR path · honesty c2).
 pub fn dfs_verify_child(cand: Candidate, view: AtlasView) -> string {
     if len(cand.slug) == 0 { return "empty-slug" }
     if len(cand.cite) == 0 { return "no-cite" }                 // 10b
     if _dfs_cite_in_atlas(cand, view) == false { return "cite-not-in-atlas" } // 10c
     if len(cand.proposed) < 50 { return "trivial-body" }        // 10e
     if _dfs_has_cjk(cand.proposed) { return "non-english" }     // 10f
+    let cv = cj_verdict(cand.proposed)                          // exact-int gate
+    if cv == "unparseable" { return "conjecture-unparseable" }
+    if cv == "unverified" { return "conjecture-unverified" }
     return ""
 }
 
@@ -737,7 +768,7 @@ pub fn dfs_frontier_clear() {
 
 // ── Phase C: emit child to nested inbox path (axis 8b) ──────────────
 
-fn _dfs_emit_child(parent_slug: string, child: Candidate, depth: int) {
+fn _dfs_emit_child(parent_slug: string, child: Candidate, depth: int, verify_label: string) {
     let dir = "archive/atlas_candidates/dfs_" + _dfs_safe_slug(parent_slug)
     let _ = exec("mkdir -p " + _dfs_shq(dir))
     let mut cite_str = ""
@@ -748,6 +779,11 @@ fn _dfs_emit_child(parent_slug: string, child: Candidate, depth: int) {
         cite_str = cite_str + child.cite[k]
         k = k + 1
     }
+    // exact-int verify label (Ralph 378): "" = no machine-checkable claim (prose);
+    // verified-novel = 🟩 exact-int confirmed + un-catalogued; verified-known =
+    // confirmed classical. Honest provenance for the PR reviewer.
+    let mut vlabel = verify_label
+    if len(vlabel) == 0 { vlabel = "none (prose hypothesis — no exact-int claim)" }
     let path = dir + "/" + _dfs_safe_slug(child.slug) + ".md"
     let md = "# " + child.slug + "\n\n"
            + "- family: " + child.family + "\n"
@@ -755,6 +791,7 @@ fn _dfs_emit_child(parent_slug: string, child: Candidate, depth: int) {
            + "- cite: [" + cite_str + "]\n"
            + "- parent: " + parent_slug + "\n"
            + "- depth: " + to_string(depth) + "\n"
+           + "- exact_verify: " + vlabel + "\n"
            + "- source: hexa loop --dfs (RFC 080)\n\n"
            + "## proposal\n\n"
            + child.proposed + "\n"
@@ -785,6 +822,10 @@ pub fn dfs_run(seeds: array, view: AtlasView, cycle_no: int,
     let mut absorbed: array = []   // Phase L — verified children for the end-of-run absorption PR
     let mut budget_hit = false
     let mut bstart = -1   // index of first unprocessed parent when budget hit (Phase F resume)
+    // Ralph 378 — exact-int verify tally (children surviving dfs_verify_child).
+    let mut n_verified_novel = 0   // 🟩 exact-int confirmed AND un-catalogued
+    let mut n_verified_known = 0   // exact-int confirmed AND classical (G1-3 / Ramanujan / σ∘φ=2n / universal)
+    let mut n_prose = 0            // no machine-checkable claim (prose hypothesis)
 
     let frontier_max = beam * 4   // MVP breadth cap (true best-first = follow-up)
 
@@ -849,7 +890,14 @@ pub fn dfs_run(seeds: array, view: AtlasView, cycle_no: int,
                     _dfs_drop_log(parent.slug, child.slug, reason)
                     continue
                 }
-                _dfs_emit_child(parent.slug, child, depth + 1)
+                // exact-int verdict (re-evaluated for the audit label + tally;
+                // dfs_verify_child already rejected unverified/unparseable, so this
+                // is "" / verified-known / verified-novel).
+                let cv = cj_verdict(child.proposed)
+                if cv == "verified-novel" { n_verified_novel = n_verified_novel + 1 }
+                else if cv == "verified-known" { n_verified_known = n_verified_known + 1 }
+                else { n_prose = n_prose + 1 }
+                _dfs_emit_child(parent.slug, child, depth + 1, cv)
                 _dfs_chain_append(cycle_no, parent.slug, child.slug, child.family, depth + 1, call_cost)
                 absorbed.push(child)   // Phase L — batch for end-of-run absorption PR (replaces Phase K overlay write)
                 _g_dfs_session_absorbed.push(child)   // Phase M — also accumulate session-wide for --target-absorb batched PR
@@ -885,6 +933,13 @@ pub fn dfs_run(seeds: array, view: AtlasView, cycle_no: int,
     // defer_pr is true (Phase M --target-absorb batches across cycles).
     if defer_pr == false { _dfs_open_pr(absorbed, cycle_no) }
 
+    // Ralph 378 — exact-int verify-gate harvest. novel = un-catalogued bounded-
+    // unique / congruence survivors (the ONLY thing past enumeration that can be
+    // genuinely new); known = exact-int confirmed classical; prose = no claim.
+    println("  [dfs] exact-verify: novel=" + to_string(n_verified_novel)
+          + " known=" + to_string(n_verified_known)
+          + " prose=" + to_string(n_prose)
+          + "  (novel = 🟩 bounded-unique/congruence · UNPROVEN ∀n · c2)")
     println("  [dfs] done: depth_reached=" + to_string(depth)
           + " calls=" + to_string(calls)
           + " cost_usd_est=" + to_string(cost)

@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll clock_gettime execve fork; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll clock_gettime execve fork getenv setenv; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -102,6 +102,7 @@ cat > "$TMP/harness.c" <<'CEOF'
 #include <sys/resource.h> /* struct rusage / RUSAGE_SELF — for the getrusage composition test */
 #include <poll.h>     /* struct pollfd / POLLIN — for the poll composition test */
 #include <time.h>     /* libc time() — the reference oracle for hxlcl_time */
+#include <sys/wait.h> /* waitpid / WIFEXITED / WEXITSTATUS — for the fork roundtrip test */
 
 /* Route-C-emitted symbols under test (raw C-ABI prototypes). */
 extern size_t hxlcl_strlen(const char *s);
@@ -170,9 +171,10 @@ extern long   hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int
  * getrusage = plain uniform 2-arg (out-ptr usage*). */
 extern int    hxlcl_open_sys(const char *path, int flags, int mode);
 extern int    hxlcl_getrusage(int who, void *usage);
-/* batch E — pipe. On darwin the Route C leg is a documented -1 stub (BSD pipe is
- * 2nd-return-register, unreachable by single-result __hx_syscall6); the Linux
- * sibling (pipe2 out-ptr) carries the success/roundtrip claim. */
+/* batch E — pipe. On darwin BSD pipe is 2nd-return-register (fds in x0/x1); the
+ * Route C leg DISSOLVES via __hx_syscall6_out2 (dual-return capture) and runs the
+ * full success + write/read roundtrip here, the same claim the Linux pipe2 sibling
+ * carries. */
 extern int    hxlcl_pipe(int fds[2]);
 
 /* batch F search family — strchr / strstr. Pure byte-scan leaves (no syscall, no
@@ -203,12 +205,27 @@ extern int  hxlcl_poll(void *fds, unsigned int nfds, int timeout);
 extern int  hxlcl_clock_gettime(int clk, void *ts);
 extern int  hxlcl_execve(const char *path, char *const argv[], char *const envp[]);
 
-/* batch J — fork. On darwin the Route C leg is a documented -1 stub (BSD fork(2) is
- * 2nd-return-register: child pid in x0 for BOTH processes, child disambiguated by
- * x1==1; single-result __hx_syscall6 exposes only x0, identical to darwin pipe).
- * The real darwin fork stays the floor raw-asm dual-reg shim; the Linux sibling
- * carries the live fork+_exit+waitpid behavioral claim. */
+/* batch J — fork. On darwin BSD fork(2) is 2nd-return-register: child pid in x0 for
+ * BOTH processes, child disambiguated by x1==1. The Route C leg DISSOLVES via
+ * __hx_syscall6_out2 (dual-return capture) and runs the live fork+_exit+waitpid
+ * roundtrip here, the same claim the Linux sibling carries. */
 extern int  hxlcl_fork(void);
+
+/* Wall 2-b ENV — getenv. The FIRST Route C body to reference an extern DATA symbol:
+ * it resolves the libc `environ` global through the GOT (the new __hx_environ_ptr
+ * intrinsic) and byte-walks the NUL-terminated char** array. Pure compute after the
+ * GOT load (no syscall, no errno, no inner bl). Returns a raw char* INTO the live
+ * environ block (or NULL). `environ` itself comes from the C runtime (no harness
+ * definition needed — the routec.o's GOT ref to _environ resolves against libSystem). */
+extern char *hxlcl_getenv(const char *name);
+
+/* Wall 2-b ENV (sibling) — setenv. The FIRST Route C body to WRITE BACK to the
+ * `&environ` global: replace an existing slot in place (`*e = s`) or GROW a fresh
+ * (N+2)-slot char** array and store it into environ via __hx_ptr_store64. Returns 0
+ * on success, -1 (EINVAL) for NULL/empty name. The grow path mallocs via the same
+ * header-writing hxlcl_malloc below; the writeback to environ is proven by reading
+ * the new value back through BOTH hxlcl_getenv AND libc getenv (same live global). */
+extern int hxlcl_setenv(const char *name, const char *value, int overwrite);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -439,16 +456,23 @@ int main(void) {
         CK(hxlcl_getrusage(RUSAGE_SELF, &ru) == 0, "getrusage(RUSAGE_SELF) == 0 (composition, out-ptr)");
     }
 
-    /* batch E: pipe — DARWIN is the genuine 2nd-return-register wall. BSD pipe(42)
-     * returns the two fds in x0/x1; the single-result __hx_syscall6 exposes only
-     * x0, so the Route C darwin leg CANNOT write fds[1] and returns -1 (documented
-     * incomplete — the real darwin pipe stays the floor _hxlcl_pipe_cf asm shim).
-     * Asserting == -1 locks in that documented gap (a future dual-reg fix would
-     * flip this and force a smoke update). The Linux sibling carries the success +
-     * write/read roundtrip claim (pipe2 out-ptr). */
+    /* batch E: pipe — DARWIN 2nd-return-register DISSOLVE (via __hx_syscall6_out2).
+     * BSD pipe(42) returns the two fds in x0/x1; the dual-return intrinsic captures
+     * both regs into a heap scratch and the darwin leg copies them into the int[2].
+     * Full success + write→read roundtrip (the same claim the Linux pipe2 sibling
+     * carries) — proving both fds are valid and usable, i.e. fds[1] is no longer
+     * lost. */
     {
         int pfd[2] = { -1, -1 };
-        CK(hxlcl_pipe(pfd) == -1, "pipe() == -1 on darwin (documented 2nd-return-reg wall)");
+        CK(hxlcl_pipe(pfd) == 0, "pipe() == 0 on darwin (2nd-return-reg dual capture)");
+        CK(pfd[0] >= 0 && pfd[1] >= 0, "pipe() fills fds[0],fds[1] from x0/x1 (value-exact)");
+        if (pfd[0] >= 0 && pfd[1] >= 0) {
+            char wb = 'Z', rb = 0;
+            CK(write(pfd[1], &wb, 1) == 1, "darwin pipe write end usable");
+            CK(read(pfd[0], &rb, 1) == 1 && rb == 'Z', "darwin pipe read end roundtrip == 'Z'");
+            hxlcl_close(pfd[0]);
+            hxlcl_close(pfd[1]);
+        }
     }
 
     /* batch F: strchr / strstr — pure byte-scan leaves (cross-target-identical,
@@ -556,16 +580,79 @@ int main(void) {
         CK(hxlcl_execve("/nonexistent_xyz_exec_zzz", eargv, eenvp) > 0, "execve(bad path) > 0 (darwin raw +errno, carry deferred; process intact)");
     }
 
-    /* batch J — fork. DARWIN is the genuine 2nd-return-register wall. BSD fork(2)
-     * returns the child pid in x0 for BOTH parent and child and disambiguates the
-     * child by x1==1; the single-result __hx_syscall6 exposes only x0, so the Route C
-     * darwin leg CANNOT tell parent from child and returns -1 (documented incomplete
-     * — the real darwin fork stays the floor raw-asm dual-reg shim, identical to
-     * darwin pipe == -1). Asserting == -1 locks in that documented gap; a future
-     * dual-reg fix would flip it and force a smoke update. The Linux sibling carries
-     * the live fork+_exit+waitpid behavioral claim. */
+    /* batch J — fork. DARWIN 2nd-return-register DISSOLVE (via __hx_syscall6_out2).
+     * BSD fork(2) returns the child pid in x0 for BOTH parent and child and
+     * disambiguates the child by x1==1; the dual-return intrinsic captures x0/x1 so
+     * the darwin leg returns 0 in the child and the child pid in the parent (mirror
+     * of the floor raw-asm dual-reg shim). Live fork+_exit+waitpid roundtrip — the
+     * same behavioral claim the Linux sibling carries. */
     {
-        CK(hxlcl_fork() == -1, "fork() == -1 on darwin (documented 2nd-return-reg wall)");
+        int pid = hxlcl_fork();
+        if (pid == 0) { _exit(42); }   /* child: distinguish via the 2nd return reg */
+        CK(pid > 0, "fork() > 0 in parent (child pid via x0; child took x1==1 path)");
+        if (pid > 0) {
+            int st = 0;
+            int w = (int)waitpid(pid, &st, 0);
+            CK(w == pid && WIFEXITED(st) && WEXITSTATUS(st) == 42,
+               "darwin fork+_exit(42)+waitpid roundtrip (dual-return disambiguation)");
+        }
+    }
+
+    /* Wall 2-b — getenv via the __hx_environ_ptr named-data GOT intrinsic + byte-walk.
+     * FULLY exercised here (the GOT load + array walk is host-runnable on darwin).
+     * Value-exact vs libc getenv() AND content-exact for a set var; an absent key →
+     * NULL; a prefix of a real key → NULL (the break-free early-stop must not match a
+     * longer entry, nor over-read a shorter one). The returned pointer is INTO the same
+     * live environ block libc walks, so identity (== libc getenv) holds — a wrong GOT
+     * deref depth, a PAIR-MODEL ABI leak, or an over-read would crash/mis-return. */
+    {
+        CK(hxlcl_getenv("__HX_NONEXISTENT_KEY_ZZZ__") == NULL, "getenv(absent key) → NULL");
+        char *hp = hxlcl_getenv("PATH");
+        char *lp = getenv("PATH");
+        CK(hp != NULL, "getenv(\"PATH\") != NULL");
+        CK(hp != NULL && hp[0] != 0, "getenv(\"PATH\") non-empty");
+        CK(hp == lp, "getenv(\"PATH\") == libc getenv (same environ-block pointer, value-exact)");
+        setenv("HX_SMOKE_ENVVAR", "route-c-wall2b", 1);
+        char *sv = hxlcl_getenv("HX_SMOKE_ENVVAR");
+        CK(sv != NULL && strcmp(sv, "route-c-wall2b") == 0, "getenv(set var) == value (content-exact)");
+        setenv("HX_SMOKE_LONGKEY", "L", 1);
+        CK(hxlcl_getenv("HX_SMOKE_LONG") == NULL, "getenv(prefix of a real key) → NULL (early-stop, no over-read)");
+        /* A longer query than any matching entry must also miss (entry NUL before
+         * nlen → the `entry[i]==0` early-stop fires, no over-read past the entry). */
+        CK(hxlcl_getenv("HX_SMOKE_ENVVAR_EXTRA") == NULL, "getenv(query longer than a real key) → NULL (short-entry stop)");
+    }
+
+    /* Wall 2-b (sibling) — setenv: the environ WRITE-BACK. Reference-match POSIX
+     * setenv(3): GROW for a fresh key (writeback must reach the live global so BOTH
+     * hxlcl_getenv AND libc getenv see it), in-place slot REPLACE on overwrite!=0,
+     * NO-OP preserve on overwrite==0, repeated GROW (second fresh key) keeping the
+     * first, and EINVAL (-1) for NULL/empty name. Value-exact throughout. A writeback
+     * that landed in a COPY instead of &environ would make libc getenv miss the new
+     * key — the strongest proof the store reached the global. */
+    {
+        /* (1) GROW — fresh key; writeback reaches the live global (libc getenv sees it). */
+        CK(hxlcl_setenv("HX_RC_NEW", "v1", 1) == 0, "setenv(fresh key) → 0");
+        char *g1 = hxlcl_getenv("HX_RC_NEW");
+        CK(g1 != NULL && strcmp(g1, "v1") == 0, "setenv(fresh): hxlcl_getenv == \"v1\" (content-exact)");
+        char *l1 = getenv("HX_RC_NEW");
+        CK(l1 != NULL && strcmp(l1, "v1") == 0, "setenv(fresh): libc getenv == \"v1\" (writeback reached &environ)");
+        /* (2) REPLACE — overwrite!=0 swaps the slot in place. */
+        CK(hxlcl_setenv("HX_RC_NEW", "v2", 1) == 0, "setenv(overwrite=1) → 0");
+        char *g2 = hxlcl_getenv("HX_RC_NEW");
+        CK(g2 != NULL && strcmp(g2, "v2") == 0, "setenv(overwrite): value replaced → \"v2\"");
+        /* (3) NO-OP — overwrite==0 must preserve the existing value. */
+        CK(hxlcl_setenv("HX_RC_NEW", "v3", 0) == 0, "setenv(overwrite=0, exists) → 0");
+        char *g3 = hxlcl_getenv("HX_RC_NEW");
+        CK(g3 != NULL && strcmp(g3, "v2") == 0, "setenv(overwrite=0): value preserved → \"v2\"");
+        /* (4) repeated GROW — a second fresh key; the prior key must survive the regrow. */
+        CK(hxlcl_setenv("HX_RC_NEW2", "w1", 1) == 0, "setenv(second fresh key) → 0");
+        char *g4 = hxlcl_getenv("HX_RC_NEW2");
+        CK(g4 != NULL && strcmp(g4, "w1") == 0, "setenv(regrow): new key == \"w1\"");
+        char *g5 = hxlcl_getenv("HX_RC_NEW");
+        CK(g5 != NULL && strcmp(g5, "v2") == 0, "setenv(regrow): prior key HX_RC_NEW survives == \"v2\"");
+        /* (5) EINVAL — NULL and empty name → -1. */
+        CK(hxlcl_setenv(NULL, "x", 1) == -1, "setenv(NULL name) → -1 (EINVAL)");
+        CK(hxlcl_setenv("", "x", 1) == -1, "setenv(empty name) → -1 (EINVAL)");
     }
 
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }
