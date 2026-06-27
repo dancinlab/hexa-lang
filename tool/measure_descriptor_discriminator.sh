@@ -14,12 +14,36 @@ grep -q "hexa_arr_poly_get" self/runtime_core.c && echo "OK poly readers present
 grep -q "TAG_ARRAY_I64" self/runtime_core.c && echo "OK TAG_ARRAY_I64 present" || { echo "FATAL: tag missing"; exit 1; }
 
 echo "=== [2/4] compile self-contained harness TU (-DHEXA_PACK_ESCAPING) ==="
+# runtime_core.c references rt_*_native delegates (array/map/intern/valop/fs) + the
+# alloc seed (hexa_arena_*), supplied as native .o in the installed runtime.a. A few
+# HI-tier symbols (hexa_farr_*, hexa_str_parse_int, hexa_char_code, …) are referenced
+# from dead-for-this-test paths (rt_read_f32_*, hexa_to_int) — provide weak no-op
+# stubs so the link closes without pulling the whole HI tier. None are on the
+# 4P+4C measurement path (producer/consumer only call hexa_arr_poly_* + hexa_int).
+WORK=/tmp/descdisc_build; rm -rf "$WORK"; mkdir -p "$WORK"; cd "$WORK"
+ar x ~/.hx/bin/build/runtime.a array_core_native.o map_core_native.o intern_core_native.o valop_core_native.o fs_core_native.o alloc_syscall_native.o 2>/dev/null || true
+ls *.o 2>/dev/null | sed 's/^/  extracted: /'
+cat > $WORK/hi_stubs.c <<'STUB'
+#include <stdlib.h>
+/* These are only reached on paths the 4P+4C test never executes. Define them as
+ * weak symbols that abort if ever called — satisfies the linker, fails loud if hit. */
+#define STUB0(n) __attribute__((weak)) long n(void){ abort(); }
+#define STUB1(n) __attribute__((weak)) long n(long a){ (void)a; abort(); }
+#define STUB2(n) __attribute__((weak)) long n(long a,long b){ (void)a;(void)b; abort(); }
+STUB0(hexa_farr_zeros) STUB0(hexa_farr32_zeros)
+STUB2(hexa_farr_set) STUB2(hexa_farr32_set)
+STUB1(hexa_str_parse_int) STUB1(hexa_char_code) STUB1(hexa_range_field)
+__attribute__((weak)) void _hexa_init_fn_shims(void){}
+STUB
+cd "$ROOT"
 set -x
 gcc -O2 -g -DHEXA_PACK_ESCAPING -DHEXA_THREADS -DHEXA_RT_ALLOC_NATIVE=0 -pthread -I self \
     -o /tmp/descdisc \
-    test/native_build/descriptor_discriminator_4p4c.c -lm -ldl -lpthread 2>&1 | tail -45
+    test/native_build/descriptor_discriminator_4p4c.c $WORK/*.o $WORK/hi_stubs.c \
+    -lm -ldl -lpthread 2>&1 | grep -iE "undefined|collect2|error:|cannot" | head -30
 set +x
-[ -x /tmp/descdisc ] || { echo "BUILD FAILED — see errors above"; exit 1; }
+[ -x /tmp/descdisc ] || { echo "BUILD FAILED — see link errors above"; exit 1; }
+echo "BUILD OK: /tmp/descdisc"
 
 echo "=== [3/4] run 4P+4C 20x (descriptor-packed escaping buffer) ==="
 pass=0; crash=0
