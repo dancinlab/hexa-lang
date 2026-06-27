@@ -87,3 +87,96 @@ identical — only boxing/calling-convention differs). Expected biggest win on a
 modulo loops (k2/k3/k4).
 
 — raw self-harvest: `aiden:~/codegen_probe_RESULT.txt` (reboot-proof, includes full disasm).
+
+---
+
+## RE-BASELINE (2026-06-27) — component attribution from the REAL native asm
+
+**Why re-baseline:** the earlier `codegen-quality-probe-verdict` prose predicted boxed call-sites
+(`hexa_truthy`, `hexa_index_get`, …) but a separate per-op unboxing probe found some predicted
+calls **absent from the actual native asm** of a given kernel (e.g. `k4_branch` `hexa_truthy`=0).
+So we re-disassembled the **real shipped aprime native-emit asm** of all 5 probe kernels and did
+an *actual* call + spill/reload census, attributing each gap to its dominant component. Measure
+only, no code change. Host aiden (origin/main sha `faf2dd8d`, aprime_cc fresh build, CPU
+`runtime.a` 1.0MB), median-of-5 `taskset -c 3`, output-parity-gated. Raw:
+`aiden:~/rebaseline_RESULT.txt` + `~/rebaseline_SPILL.txt`.
+
+### Method note — aprime emits **Intel-syntax** (`mov [rbp-N], reg`)
+The native backend emits `.intel_syntax noprefix`. The first spill census (AT&T regex
+`-N(%rbp)`) returned **0 spills — a false negative**; corrected against the actual Intel form
+`mov [rbp - N], reg` (store) / `mov reg, [rbp - N]` (reload) the spill traffic is large. Every
+boxed `HexaVal` value carries an explicit **tag-slot** store/reload (`# store tag L4` /
+`# … from tag-slot`). gcc `-S` reference is AT&T (counted separately).
+
+### Re-measured ratios (consistent with the original probe)
+| kernel | hexa s | gcc s | ratio | parity |
+|--------|-------:|------:|------:|:------:|
+| k1_sum     | 1.51 | 0.45 |  **3.36×** | OK |
+| k2_collatz | 6.13 | 0.46 | **13.33×** | OK |
+| k3_arrmap  | 3.49 | 0.13 | **26.85×** | OK |
+| k4_branch  | 1.10 | 0.04 | **27.50×** | OK |
+| k5_fncall  | 1.02 | 0.22 |  **4.64×** | OK |
+
+(k4 is higher than the original 12.7× because this re-baseline k4 is a purer 3-way `i%3 / i%5`
+branch-modulo loop; the gap *direction* and dominant component are unchanged.)
+
+### Component census — actual native asm (per kernel)
+`call hexa_*` = boxing/tag-dispatch runtime calls; `tag-slot` = 16B `{tag,payload}` store+reload;
+`idiv/imul` = division-strength-reduction signal. gcc reference is fully register-resident
+(**stack-store = stack-reload = 0** on every kernel).
+
+| kernel | hexa boxed `call hexa_*` (whole-fn) | tag-slot store / reload (whole-fn) | hot-bb per-iter: calls / store / reload | hexa idiv / imul | gcc -O2: call / store / reload / imul |
+|--------|:---:|:---:|:---:|:---:|:---:|
+| **k1_sum**     | 5 (`cmp_lt,mul,add_slow×2,mod`)                       | 12 / 12 | 4 / 10 / 14 | 0 / 0 | 1 / 0 / 0 / 2 |
+| **k2_collatz** | 10 (`cmp_lt,eq×2,truthy,mul,add_slow×4,mod,div`)      | 21 / 20 | 2 / 2 / 3¹ | 0 / 0 | 1 / 0 / 0 / 0 |
+| **k3_arrmap**  | 17 (`index_get×2,index_set,mul,add_slow×6,mod×2,cmp_lt×4,array_new/push`) | 32 / 36 | 6 / 13 / 23 | 0 / 0 | 2 / 0 / 0 / 4 |
+| **k4_branch**  | 8 (`cmp_lt,eq×2,sub,add_slow×3,mod×2`)                | 17 / 18 | 2 / 3 / 3¹ | 0 / 0 | 1 / 0 / 0 / 2 |
+| **k5_fncall**  | 6 (`cmp_lt,mul,add_slow×3,mod`) + cross-fn call       | 14 / 14 | 3 / 9 / 11 | 0 / 0 | 1 / 0 / 0 / 2 |
+
+¹ k2/k4 hot-bb count undercounts per-iteration because their loop body is **split across several
+basic blocks** by the `if`/`while` branch (the densest single bb shows 2 calls; whole-fn totals
+above capture the real per-iteration load). k1/k3/k5 have a single straight-line body bb.
+
+### DOMINANT-COMPONENT verdict (per kernel, from the counts above)
+The hot-loop disasm shows boxing call and spill are **the same cost, not two levers**: every
+boxed call result is *immediately spilled to a 16B tag slot then reloaded as the next call's
+arg* — e.g. k3 inner loop literally is
+`call hexa_index_get → mov %rax,-0x148(%rbp) → mov -0x148(%rbp),%rdi → call hexa_mul →
+mov %rax,-0x150(%rbp) → mov -0x150(%rbp),%rdi → call hexa_add_slow → …`. The spill/reload IS the
+boxed calling convention's argument plumbing.
+
+| kernel | gap | **dominant component** | secondary | ⓒ strength-reduction? |
+|--------|----:|------------------------|-----------|------------------------|
+| **k1_sum**     |  3.4× | **ⓐ per-op boxing call** (5 calls/iter, all arith boxed) — incl. `% M` still `call hexa_mod` | ⓑ tag-slot spill (10st/14rl) coupled to the calls | only ⓒ residual: gcc magic-`imul ×2`, hexa idiv=0 but `mod` is a *call* not idiv → the boxed-call subsumes it |
+| **k2_collatz** | 13.3× | **ⓐ per-op boxing call** (10 boxed/iter incl. `eq, truthy, div, mod`) | ⓑ spill (21/20) coupled; branch-split | div/mod are boxed calls (`hexa_div`/`hexa_mod`), not idiv — ⓒ folded into ⓐ |
+| **k3_arrmap**  | 26.9× | **ⓐ per-op boxing call** — `hexa_index_get/set` (array access is a CALL w/ bounds-check+box) + 6×`add_slow`+`mul`+`mod` | ⓑ spill **heaviest** here (13st/23rl per iter, 75 reloads whole-fn) — value chained slot→slot between every call | gcc strength-reduces `%M` to magic-`imul ×4` + raw pointer-walk; hexa pays neither |
+| **k4_branch**  | 27.5× | **ⓐ per-op boxing call** (`eq, mod×2, add_slow×3, sub, cmp_lt`) | ⓑ spill (17/18) coupled + branch mispredict on boxed bool | `% 3`/`% 5` are `hexa_mod` calls; gcc uses magic-`imul ×2` |
+| **k5_fncall**  |  4.6× | **ⓐ per-op boxing call** + boxed cross-fn call (HexaVal arg/ret ABI) | ⓑ spill (9st/11rl) — args/ret marshalled through slots | `%M` boxed call; gcc inlines `f` + magic-`imul` |
+
+**Headline: ⓐ per-op boxing (`call hexa_*` with tag-dispatch) is the DOMINANT component of ALL
+5 kernels.** ⓑ spill/reload is real and large (k3 worst at 75 whole-fn reloads) but is **not an
+independent reg-alloc problem** — it is the boxed calling convention's own arg/result plumbing
+(spill-before-call, reload-after-call). ⓒ strength-reduction (magic-division) is **not even
+reachable** on the hexa side: there is **no `idiv` to strength-reduce** — `%`/`/` are *boxed
+calls* (`hexa_mod`/`hexa_div`), so magic-reciprocal only becomes relevant *after* unboxing
+lowers `%`/`/` to a native `idiv` in the first place.
+
+### What this grounds for the reg-alloc decision
+- A **standalone linear-scan reg-allocator** (keeping `{tag,payload}` in registers across ops
+  *without* unboxing) would remove the ⓑ spill traffic but **leave every `call hexa_*` in place**
+  — the calls still need their args in `rdi/rsi/rdx`, and the boxed dispatch still runs. Estimated
+  ceiling: it closes the *spill* fraction only, **not the call fraction**, which is dominant.
+  Spill and call are coupled, so reg-alloc-without-unboxing buys a fraction of one already-second
+  component.
+- **Unboxing (the R5 mechanism) closes ⓐ AND ⓑ together**: when `+ - * < ==` lower to inline
+  `add/imul/cmp` on GPRs (R5, already PROVEN release-safe), the value *stays in a register*, so
+  the spill-before-call / reload-after-call plumbing **disappears with the call**. The census
+  shows the two costs are one — so unboxing is strictly the higher-leverage lever, and a separate
+  reg-alloc pass is **not** the dominant-component closer for any of the 5 kernels.
+- **Priority order grounded by counts:** (1) **scalar BinOp unbox** (R5, done OFF-safe) — kills
+  the `add_slow/mul/cmp/sub/eq` calls + their slots, dominant in k1/k4/k5; (2) **array-element
+  unbox** (r2) — kills `hexa_index_get/set` + the heaviest spill chain, dominant in k3 (26.9×);
+  (3) **`%`/`/` unbox → idiv → magic-reciprocal** (r4) — *only here* does ⓒ become relevant, and
+  only after `mod`/`div` are native; needed for the still-`%`-bound k1/k2/k4 tails. A dedicated
+  linear-scan reg-alloc is a **distant 4th** — it addresses only the coupled spill fraction that
+  unboxing already removes for free.
