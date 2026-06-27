@@ -178,6 +178,19 @@ fn _x86_instr2(op: string, a: LOperand, b: LOperand, comment: string) -> LInstr 
     return LInstr { op: op, args: xs, comment: comment }
 }
 
+// 3-operand form — needed for the GAS `imul dst, src, imm32` encoding used by
+// the r5b magic-reciprocal remainder step (`q*d` with d an imm32). The asm
+// emitter (`_fmt_instr`) renders args verbatim → GNU `as` encodes the
+// 3-operand `imul`. NOTE: this LIR form is only produced when HEXA_UNBOX_NATIVE
+// is ON (the magic path is gate-guarded), so OFF-path emit is unperturbed.
+fn _x86_instr3(op: string, a: LOperand, b: LOperand, c: LOperand, comment: string) -> LInstr {
+    let mut xs = []
+    xs.push(a)
+    xs.push(b)
+    xs.push(c)
+    return LInstr { op: op, args: xs, comment: comment }
+}
+
 // ── Register assignment (naive) ──────────────────────────────
 
 fn _x86_64_reg_for_local(local_id: i64) -> string {
@@ -881,6 +894,7 @@ fn _x86_is_arith_add(op: string) -> bool { return op == "add" || op == "+" }
 fn _x86_is_arith_sub(op: string) -> bool { return op == "sub" || op == "-" }
 fn _x86_is_arith_mul(op: string) -> bool { return op == "mul" || op == "*" }
 fn _x86_is_arith_div(op: string) -> bool { return op == "div" || op == "/" }
+fn _x86_is_arith_mod(op: string) -> bool { return op == "mod" || op == "%" || op == "rem" }
 fn _x86_is_bit_and(op: string) -> bool   { return op == "and" || op == "&" }
 fn _x86_is_bit_or(op: string) -> bool    { return op == "or"  || op == "|" }
 fn _x86_is_bit_xor(op: string) -> bool   { return op == "xor" || op == "^" }
@@ -950,6 +964,132 @@ fn _x86_binop_unbox_ok(s: Stmt, rm: X86RegMap) -> bool {
     if !_x86_operand_provably_int(s.args[0], rm) { return false }
     if !_x86_operand_provably_int(s.args[1], rm) { return false }
     return true
+}
+
+// ── r5b HEXA_UNBOX_NATIVE — `%`/`/` by a COMPILE-TIME positive constant ───────
+//
+// R1 (above) kept `/` `%` BOXED because the runtime `hexa_div`/`hexa_mod` carry
+// the div-by-zero throw and INT64_MIN/-1 overflow guard. For a divisor that is a
+// COMPILE-TIME positive `const_int` in [2, 2^31-1] those hazards are STATICALLY
+// IMPOSSIBLE (d != 0 ⇒ no #DE; d != -1 ⇒ no INT_MIN/-1 overflow). So such a
+// binop can lower to gcc's signed magic-reciprocal (multiply + shift, zero divide
+// latency) — the strength-reduction the probe disasm showed gcc -O2 emits
+// (`imul $0x89705f31...` for `% 1000000007`). This is the slice that closes
+// k1_sum's still-`%`-bound tail (R1 ratio stuck at 1.000 because `% M` stayed a
+// `call hexa_mod`). VARIABLE divisors stay BOXED (can't prove nonzero → keep the
+// runtime throw, exactly the r4-lesson firewall).
+//
+// reference-match: the magic constant M + shift s are computed by `_x86_magic_*`
+// below, byte-for-byte equal to gcc/clang -O2's `movabs` constant for every
+// divisor measured (1000000007→0x89705f31…, 3, 5, 7, powers of two, …;
+// state/unbox-native-r5/magic_reference.py validates M,s + the emitted sequence
+// against C truncated-division semantics, 0 mismatch / 8000 random signed inputs).
+//
+// Bound 2 ≤ d ≤ 2^31-1: the remainder step emits `imul dst, q, d` whose `d` must
+// fit an imm32; d ≥ 2 keeps the magic well-defined; d == 1 (`/1`=id, `%1`=0) and
+// negative/zero constants are NOT taken here (fall through to the existing boxed
+// path — rare, correctness over micro-opt).
+fn _x86_binop_div_const_ok(s: Stmt, rm: X86RegMap) -> bool {
+    if !_unbox_native_enabled() { return false }
+    if len(s.args) < 2 { return false }
+    if !(_x86_is_arith_div(s.op) || _x86_is_arith_mod(s.op)) { return false }
+    // dst must be statically i64 (the result of int `/`/`%` is i64).
+    if _x86_local_type(rm, s.dst.id) != 1 { return false }
+    // LHS (dividend) must be provably raw-int (literal or typed-i64 local).
+    if !_x86_operand_provably_int(s.args[0], rm) { return false }
+    // RHS (divisor) MUST be a compile-time positive constant in [2, 2^31-1].
+    if s.args[1].kind != "const_int" { return false }
+    let d = s.args[1].int_val
+    if d < 2 || d > 2147483647 { return false }
+    return true
+}
+
+// UNSIGNED 64-bit `a < b` expressed with SIGNED i64 ops: flip both high bits
+// (`^ INT64_MIN`) then signed-compare. This is the standard u64-on-signed-ALU
+// idiom — REQUIRED because the magic iteration's q1/q2 doublings legitimately
+// exceed 2^63 (wrap to a negative i64 bit pattern), so a raw signed `<` would be
+// wrong. `INT64_MIN = 1 << 63` (the same idiom the float-pool sign-flip uses,
+// hir_to_mir.hexa:1249). All arithmetic below is two's-complement-wrapping i64
+// (native int ops wrap, no overflow trap), matching unsigned 64-bit semantics.
+fn _x86_u64_lt(a: i64, b: i64) -> bool {
+    let imin: i64 = 1 << 63
+    return (a ^ imin) < (b ^ imin)
+}
+
+// Hacker's Delight 2nd ed. Fig 10-1 magic helper: for 0 < x < 2^63 returns
+// floor(2^63 / x) (want_rem=false) or 2^63 mod x (want_rem=true), via one
+// doubling of the 2^62 (q,r) pair. `two62 / x` and `two62 - q*x` are SIGNED but
+// EXACT (two62 and x are both positive < 2^63, quotient < 2^62). The `r >= x`
+// reconciliation, however, MUST be UNSIGNED — x can be `anc` (≈ 2^63, whose i64
+// bit pattern is negative) and `2*r` can wrap past 2^63, so a signed `>=` would
+// be wrong (the bug that left M(anc)-seeds diverging). Use `_x86_u64_lt`.
+fn _x86_magic_div2p63(x: i64, want_rem: bool) -> i64 {
+    let two62 = 4611686018427387904   // 2^62 (fits i64 positive)
+    let q62 = two62 / x
+    let r62 = two62 - q62 * x
+    let mut q = 2 * q62
+    let mut r = 2 * r62
+    if !_x86_u64_lt(r, x) { q = q + 1; r = r - x }   // r >=u x
+    if want_rem { return r }
+    return q
+}
+
+// Signed magic multiplier M for divisor d (2 ≤ d ≤ 2^31-1), reference-matched to
+// gcc/clang -O2 (M byte-identical, validated state/unbox-native-r5/magic_reference.py).
+// Returns M as the i64 BIT PATTERN to `mov reg, <imm>` (movabs); the high bit may
+// be set (M then reads as a negative i64 — that is the signed multiplier gcc uses).
+// All q/r updates use unsigned-64 wraparound (`_x86_u64_lt` for every compare).
+fn _x86_magic_M(d: i64) -> i64 {
+    let two62 = 4611686018427387904   // 2^62
+    let mod63 = _x86_magic_div2p63(d, true)         // 2^63 mod d
+    // anc = 2^63 - 1 - mod63 (< 2^63, fits positive). 2^63-1 = (2^62-1) + 2^62.
+    let anc = (two62 - 1) + two62 - mod63
+    let mut q1 = _x86_magic_div2p63(anc, false)
+    let mut r1 = _x86_magic_div2p63(anc, true)
+    let mut q2 = _x86_magic_div2p63(d, false)
+    let mut r2 = _x86_magic_div2p63(d, true)
+    let mut done = false
+    while !done {
+        q1 = 2 * q1; r1 = 2 * r1
+        if !_x86_u64_lt(r1, anc) { q1 = q1 + 1; r1 = r1 - anc }  // r1 >=u anc
+        q2 = 2 * q2; r2 = 2 * r2
+        if !_x86_u64_lt(r2, d)   { q2 = q2 + 1; r2 = r2 - d }    // r2 >=u d
+        let delta = d - r2
+        // break when NOT (q1 <u delta or (q1 == delta and r1 == 0))
+        if !(_x86_u64_lt(q1, delta) || (q1 == delta && r1 == 0)) { done = true }
+    }
+    return q2 + 1   // wraps to the signed magic (high bit may be set)
+}
+
+// Shift amount s for divisor d (the `sar` count). Mirrors _x86_magic_M's loop
+// counting p from 63; s = p - 64. (Two probes — M and shift — keep each a pure
+// fn; recompute is negligible, compile-time only.)
+fn _x86_magic_shift(d: i64) -> i64 {
+    let two62 = 4611686018427387904
+    let mod63 = _x86_magic_div2p63(d, true)
+    let anc = (two62 - 1) + two62 - mod63
+    let mut q1 = _x86_magic_div2p63(anc, false)
+    let mut r1 = _x86_magic_div2p63(anc, true)
+    let mut q2 = _x86_magic_div2p63(d, false)
+    let mut r2 = _x86_magic_div2p63(d, true)
+    let mut p = 63
+    let mut done = false
+    while !done {
+        p = p + 1
+        q1 = 2 * q1; r1 = 2 * r1
+        if !_x86_u64_lt(r1, anc) { q1 = q1 + 1; r1 = r1 - anc }
+        q2 = 2 * q2; r2 = 2 * r2
+        if !_x86_u64_lt(r2, d)   { q2 = q2 + 1; r2 = r2 - d }
+        let delta = d - r2
+        if !(_x86_u64_lt(q1, delta) || (q1 == delta && r1 == 0)) { done = true }
+    }
+    return p - 64
+}
+
+// Does gcc insert the `add rdx, dividend` correction? Exactly when the signed
+// magic M is negative (high bit set) — HD's "if M<0 add the dividend back".
+fn _x86_magic_needs_add(d: i64) -> bool {
+    return _x86_magic_M(d) < 0
 }
 
 // Tag-aware arithmetic binop → runtime helper symbol. Mirrors arm64's
@@ -1115,6 +1255,20 @@ pub fn _is_cabi(fname: string) -> bool {
     // compile-time target_is_* consts; same errno-store discipline.
     if fname == "hxlcl_dup2" { return true }
     if fname == "hxlcl_mkdir" { return true }
+    // errno-bearing chain r3 — FINAL batch. stat = per-arch arg tuple (arm64
+    // fstatat AT_FDCWD prepend, like mkdir); waitpid = uniform wait4 4-arg (only
+    // NR varies, like read/lseek). Same close errno-store discipline; both reuse
+    // the already-whitelisted __errno_location for the Linux errno leg.
+    if fname == "hxlcl_stat" { return true }
+    if fname == "hxlcl_waitpid" { return true }
+    // errno-bearing chain batch C — write / fcntl / mmap. All UNIFORM across
+    // targets (plain syscall on arm64-linux too, only the NR varies — like
+    // read/lseek/waitpid; no dup3/mkdirat/fstatat call-shape divergence). Same
+    // close errno-store discipline; mmap's raw-syscall error is -errno (negative
+    // `__hx_payload_lt`), NOT the libc MAP_FAILED `== -1` sentinel.
+    if fname == "hxlcl_write" { return true }
+    if fname == "hxlcl_fcntl" { return true }
+    if fname == "hxlcl_mmap" { return true }
     return false
 }
 
@@ -1912,6 +2066,66 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                     _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"), "capture concat result payload"))
                 }
                 _x86_store_tag_reg(rm, s.dst.id, "rax")
+                _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+                return
+            }
+
+            // r5b HEXA_UNBOX_NATIVE — `%`/`/` by a COMPILE-TIME positive constant
+            // divisor d ∈ [2, 2^31-1] → gcc -O2 signed magic-reciprocal (multiply
+            // + shift, no boxed `call hexa_mod`/`hexa_div`, no idiv latency). This
+            // is the slice that closes k1_sum's `% M` tail (R1 left it boxed →
+            // ratio stuck at 1.000). Reference-matched: M + shift byte-identical to
+            // gcc/clang -O2 (state/unbox-native-r5/magic_reference.py). Gate-OFF →
+            // `_x86_binop_div_const_ok` is false → control falls to the boxed
+            // `_ar_sym` block below exactly as today (byte-identical OFF emit).
+            // VARIABLE divisor → NOT taken here (can't prove nonzero → stays boxed,
+            // the r4-lesson div-zero-throw firewall).
+            if _x86_binop_div_const_ok(s, rm) {
+                let d = s.args[1].int_val
+                let M = _x86_magic_M(d)
+                let sh = _x86_magic_shift(d)
+                let needs_add = _x86_magic_needs_add(d)
+                // r10 = dividend (stable copy; a may be reg or imm). All work uses
+                // rax/rdx (imul-implicit) + r10/r11 scratch; dst written last.
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r10"), a,
+                                 "magicdiv: r10 = dividend"))
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rax"), _x86_op_reg("r10"),
+                                 "magicdiv: rax = dividend"))
+                // 64-bit immediate `mov reg, <imm>` — GNU `as` encodes movabs
+                // (the codebase idiom for wide imms, e.g. float_to_bits load).
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_imm(M),
+                                 "magicdiv: r11 = signed magic M (movabs imm64)"))
+                _x86_buf.push(_x86_instr1("imul", _x86_op_reg("r11"),
+                                 "magicdiv: rdx:rax = dividend * M (hi → rdx)"))
+                if needs_add {
+                    _x86_buf.push(_x86_instr2("add", _x86_op_reg("rdx"), _x86_op_reg("r10"),
+                                     "magicdiv: M<0 correction (rdx += dividend)"))
+                }
+                // signbit BEFORE the arithmetic shift (gcc: shr <copy>, 63).
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rax"), _x86_op_reg("rdx"),
+                                 "magicdiv: rax = t0 (copy for signbit)"))
+                _x86_buf.push(_x86_instr2("shr", _x86_op_reg("rax"), _x86_op_imm(63),
+                                 "magicdiv: rax = signbit(t0)"))
+                if sh > 0 {
+                    _x86_buf.push(_x86_instr2("sar", _x86_op_reg("rdx"), _x86_op_imm(sh),
+                                     "magicdiv: rdx = t0 >> s (arithmetic)"))
+                }
+                _x86_buf.push(_x86_instr2("add", _x86_op_reg("rdx"), _x86_op_reg("rax"),
+                                 "magicdiv: rdx = quotient = (t0>>s) + signbit"))
+                if _x86_is_arith_div(s.op) {
+                    _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                                     "magicdiv: dst = quotient (/)"))
+                } else {
+                    // remainder = dividend - quotient*d. `imul rax, rdx, d` (d imm32).
+                    _x86_buf.push(_x86_instr3("imul", _x86_op_reg("rax"),
+                                     _x86_op_reg("rdx"), _x86_op_imm(d),
+                                     "magicdiv: rax = quotient * d"))
+                    _x86_buf.push(_x86_instr2("sub", _x86_op_reg("r10"), _x86_op_reg("rax"),
+                                     "magicdiv: r10 = dividend - quotient*d (remainder)"))
+                    _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("r10"),
+                                     "magicdiv: dst = remainder (%)"))
+                }
+                _x86_store_tag_imm(rm, s.dst.id, 0) // TAG_INT
                 _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
                 return
             }

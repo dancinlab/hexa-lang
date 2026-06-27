@@ -702,3 +702,177 @@ pub fn hxlcl_mkdir(path: HexaVal, mode: HexaVal) -> int {
     }
     return r                                    // 0 on success
 }
+
+// ── ERRNO-BEARING CHAIN r3 — FINAL batch: stat (struct-out buf) + waitpid ──
+//
+// The last two errno-bearing leaves. Both share the close errno epilogue
+// (raw-payload `__hx_payload_lt`/`_ne`/`_sub` + target_is_linux()-gated store via
+// __errno_location); they differ only in argument shape.
+//
+//   stat → arm64 has NO plain stat; it uses fstatat(AT_FDCWD=-100, path, buf,
+//          flags=0) — a 4-arg PREPEND divergence exactly like mkdir→mkdirat. So
+//          the syscall is issued in per-arch branches (per-arch arg tuple), then
+//          the shared epilogue runs on the result.
+//          NR ref-match (no black-box): x86_64 __NR_stat = 4 (2-arg path,buf) ·
+//          arm64 __NR_fstatat = 79 (4-arg AT_FDCWD,path,buf,flags) — plain stat
+//          dropped on asm-generic · darwin SYS_STAT = 338 (2-arg path,buf).
+//          (stdlib/posix/linux_syscalls.hexa:129/102 · self/codegen/
+//          runtime_arm64.hexa:4198-4199 darwin 338 · AT_FDCWD=-100 = the same
+//          literal mkdir uses above.)
+//
+//   waitpid → routed to wait4(pid, status, options, rusage=NULL) on every target
+//          — a UNIFORM 4-arg shape (no at-variant / no prepend), so only the NR
+//          differs, exactly like read/lseek. NR ref-match: x86_64 __NR_wait4 = 61
+//          · arm64 __NR_wait4 = 260 · darwin SYS_WAIT4 = 7 (rusage NULL ⇒ 0).
+//          (linux_syscalls.hexa:123/95 · self/codegen/runtime_arm64.hexa:5218
+//          darwin 7. The floor routes waitpid → wait4 with a NULL 4th arg:
+//          runtime.c hxlcl_waitpid(pid,status,opts){ wait4(pid,status,opts,0) }.)
+
+// stat: per-arch arg tuple (arm64 fstatat prepends AT_FDCWD, shifting path/buf
+// right by one — a genuine divergence, mirrors mkdir). The result flows into the
+// shared close-pattern errno epilogue.
+pub fn hxlcl_stat(path: HexaVal, statbuf: HexaVal) -> int {
+    let mut r = 0
+    if target_is_linux() {
+        if target_is_x86_64() {
+            r = __hx_syscall6(4, path, statbuf, 0, 0, 0, 0)          // x86_64 stat(path, buf)
+        } else {
+            r = __hx_syscall6(79, -100, path, statbuf, 0, 0, 0)      // arm64 fstatat(AT_FDCWD, path, buf, flags=0)
+        }
+    } else {
+        r = __hx_syscall6(338, path, statbuf, 0, 0, 0, 0)            // darwin SYS_STAT(path, buf)
+    }
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // 0 on success
+}
+
+// waitpid: uniform wait4(pid, status, options, rusage=NULL) — only the NR varies,
+// so a single trap with the same arg tuple is correct on every target (like
+// read/lseek). The 4th arg (rusage) is 0 = NULL.
+pub fn hxlcl_waitpid(pid: HexaVal, status: HexaVal, opts: HexaVal) -> int {
+    let mut nr = 7                             // Darwin SYS_WAIT4 (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 61 }      // Linux x86_64 __NR_wait4
+        else { nr = 260 }                      // Linux arm64 __NR_wait4
+    }
+    let r = __hx_syscall6(nr, pid, status, opts, 0, 0, 0)
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // reaped pid (> 0)
+}
+
+// ── ERRNO-BEARING CHAIN — batch C: write + fcntl + mmap (plain syscalls) ──
+//
+// Three more errno-bearing leaves, all uniform across targets (no arm64
+// dup3/mkdirat/fstatat call-shape divergence — each has a plain syscall on
+// arm64-linux, so only the NR varies, exactly like read/lseek/waitpid). All
+// three follow the close errno epilogue verbatim: a __hx_syscall6 trap, then
+// the Route C in-body discipline (raw-payload `__hx_payload_lt`/`_ne`/`_sub`,
+// never bare `<`/`-`) + the target_is_linux()-gated errno store via the already
+// whitelisted __errno_location.
+//
+//   write : x86_64 1 · arm64 64 · darwin 4   (syscall_64.tbl write=1 /
+//           asm-generic unistd.h __NR_write 64 / runtime.c HXLCL_SYS_WRITE 4,
+//           darwin BSD trap OR-bakes 0x2000000). The exact 3-arg mirror of read
+//           (floor: hxlcl_write = _hxlcl_syscall3_cf, errno-bearing like read).
+//   fcntl : x86_64 72 · arm64 25 · darwin 92  (syscall_64.tbl fcntl=72 /
+//           asm-generic __NR_fcntl 25 / runtime.c HXLCL_SYS_FCNTL 92). A plain
+//           3-arg (fd, cmd, arg). On Linux a failing fcntl returns -errno (the
+//           uniform raw-syscall convention), so the same errno-store leg is
+//           correct; the floor uses the NON-_cf path (no darwin errno), which
+//           matches our discipline ④ (darwin carry deferred → store DCE'd).
+//   mmap  : x86_64 9 · arm64 222 · darwin 197 (syscall_64.tbl mmap=9 /
+//           asm-generic __NR_mmap 222 / runtime.c HXLCL_SYS_MMAP 197). 6-arg
+//           (addr, len, prot, flags, fd, off).
+//
+// ⚠️ mmap ERROR-DETECTION root-cause (NOT the libc MAP_FAILED sentinel):
+// at the RAW Linux syscall level — which this Route C body issues directly —
+// mmap returns the mapped address on success (a positive user-space address,
+// well below 2^63 ⇒ signed-positive) or `-errno` in [-4095, -1] on error,
+// EXACTLY like every other syscall. The `MAP_FAILED == (void*)-1` sentinel is a
+// LIBC-WRAPPER artifact: glibc's mmap wrapper converts the raw `-errno` range to
+// MAP_FAILED via the `> -4096UL` threshold (musl src/internal/syscall_ret.c:
+// `if(r > -4096UL){ errno=-r; return -1; }`), and the darwin `_cf` floor
+// (runtime_arm64.hexa:5309 `mov x0,#-1` on carry) does the same. Our body is the
+// raw layer BELOW that wrapper, so the correct error check is the uniform
+// `__hx_payload_lt(r, 0)` (raw `-errno` is negative) — NOT a `payload_eq -1`
+// MAP_FAILED check, which would only fire on the already-converted libc value
+// and would mis-treat a valid high address or a different -errno. So mmap is a
+// uniform `-errno` mirror like read/write; the errno-store leg then writes -r
+// and returns -1 (which the C caller reads as MAP_FAILED on Linux, since
+// (void*)-1 == the -1 we return).
+
+pub fn hxlcl_write(fd: HexaVal, buf: HexaVal, n: HexaVal) -> int {
+    let mut nr = 4                             // Darwin SYS_WRITE (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 1 }       // Linux x86_64 __NR_write
+        else { nr = 64 }                       // Linux arm64 __NR_write
+    }
+    let r = __hx_syscall6(nr, fd, buf, n, 0, 0, 0)
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // bytes written (>= 0)
+}
+
+pub fn hxlcl_fcntl(fd: HexaVal, cmd: HexaVal, arg: HexaVal) -> int {
+    let mut nr = 92                            // Darwin SYS_FCNTL (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 72 }      // Linux x86_64 __NR_fcntl
+        else { nr = 25 }                       // Linux arm64 __NR_fcntl
+    }
+    let r = __hx_syscall6(nr, fd, cmd, arg, 0, 0, 0)
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // cmd-dependent result (>= 0)
+}
+
+// mmap: 6-arg uniform trap (see the error-detection root-cause above — the raw
+// syscall returns the address on success or -errno on failure, so the close
+// `__hx_payload_lt(r, 0)` check is correct, NOT a MAP_FAILED `== -1` check).
+pub fn hxlcl_mmap(addr: HexaVal, len: HexaVal, prot: HexaVal, flags: HexaVal, fd: HexaVal, off: HexaVal) -> int {
+    let mut nr = 197                           // Darwin SYS_MMAP (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 9 }       // Linux x86_64 __NR_mmap
+        else { nr = 222 }                      // Linux arm64 __NR_mmap
+    }
+    let r = __hx_syscall6(nr, addr, len, prot, flags, fd, off)
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // mapped address (raw pointer word)
+}
