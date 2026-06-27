@@ -1,0 +1,83 @@
+// stdlib/math/highprec.hexa — 임의정밀 수학 상수 (BigInt 기반·no float)
+//
+// @version 0.1.0
+//
+// atlas는 π·e·ζ(s)·γ 등 상수를 40+자리로 등재하지만 stdlib 특수함수는 float64(~15자리)뿐이었다
+// (state/atlas_stdlib_gap_census.md). 이 모듈은 BigInt(stdlib/bigint.hexa #4161)로 그 상수들을
+// 임의정밀 정수로 계산한다 — codegen-fragile float Taylor 없이, 정확 정수 산술만.
+//
+// 표현: 상수 C를 D자리로 = BigInt floor(C * 10^D) (고정소수점 정수). 호출자가 10^D로 자릿수 해석.
+
+import "stdlib/bigint.hexa"
+
+// 10^e 를 BigInt 로 ──
+fn _hp_pow10(e) -> array {
+    let ten = bi_from(10)
+    let r = bi_from(1)
+    let i = 0
+    while i < e { r = bi_mul(r, ten); i = i + 1 }
+    r
+}
+
+// arctan(1/x) 를 D자리 정수배(floor(arctan(1/x) * 10^D))로 — Gregory 급수
+//   arctan(1/x) = Σ_{k≥0} (-1)^k / ((2k+1) · x^(2k+1))
+// 항을 누적: running = 10^D / x^(2k+1) 를 매 항 x^2(작은 i64)로 나눠 전진, 부호 교대.
+// 모든 제수(x^2, 2k+1)가 작은 i64 → bi_divmod_small 로 정확. x는 i64(예: 5, 239). ──
+fn arctan_inv_scaled(x, dd) -> array {
+    let xx = x * x
+    let acc = bi_from(0)
+    // running = floor(10^D / x)  (k=0 분모 x^1)
+    let running = bi_div_small(_hp_pow10(dd), x)
+    let k = 0
+    let pos = 1
+    while running[0] != 0 {           // running != 0
+        let term = bi_div_small(running, 2 * k + 1)
+        if pos == 1 { acc = bi_add(acc, term) } else { acc = bi_sub(acc, term) }
+        running = bi_div_small(running, xx)
+        if pos == 1 { pos = 0 } else { pos = 1 }
+        k = k + 1
+    }
+    acc
+}
+
+// π 를 D자리 정수배(floor(π · 10^D))로 — Machin 공식 (atlas @cite PI-machin-formula)
+//   π = 16·arctan(1/5) − 4·arctan(1/239)
+// 마지막 1–2자리는 급수 절단 오차 가능 → 호출자는 guard 자리를 더 받고 잘라 쓴다. ──
+// @cite(L[PI-machin-formula])
+fn pi_scaled(dd) -> array {
+    let a5 = arctan_inv_scaled(5, dd)
+    let a239 = arctan_inv_scaled(239, dd)
+    bi_sub(bi_mul(bi_from(16), a5), bi_mul(bi_from(4), a239))
+}
+
+// ── selftest ──
+fn _gate(label, got, want) -> int {
+    if got == want {
+        println("  [PASS] " + label)
+        return 0
+    }
+    println("  [FAIL] " + label + "\n         got=" + got + "\n         want=" + want)
+    1
+}
+
+fn main() {
+    println("=== highprec SELFTEST (BigInt 임의정밀 상수·no float) ===")
+    let fails = 0
+
+    // π를 48자리로 계산(guard 8) → 앞 40자리 검증.
+    // π = 3.14159265358979323846264338327950288419716939937510...
+    let pis = bi_to_string(pi_scaled(48))   // floor(π·10^48) = "3141592653589793238462643383279502884197..."
+    // 앞 41자(정수부 3 + 소수 40자리) 추출: "3" + 40 digits
+    let pi40 = pis.substring(0, 41)
+    fails = fails + _gate("pi 40-digit (Machin)", pi40, "31415926535897932384626433832795028841971")
+
+    // arctan(1/1) = π/4 sanity: 4·arctan(1/1)·... (x=1) → π/4. 4·result ≈ π.
+    // (x=1 수렴 느리지만 D 작게 동작 확인) — 생략, Machin이 충분.
+
+    println("")
+    if fails == 0 {
+        println("=== ALL GATES PASS — BigInt π(Machin) validated (atlas PI-* 갭 메움) ===")
+    } else {
+        println("=== " + to_string(fails) + " GATE(S) FAILED ===")
+    }
+}

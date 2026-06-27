@@ -2812,6 +2812,74 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
         // — fn_ptr → rdi, arity (C int) → esi, env HexaVal pair → rdx:rcx;
         // returns the TAG_CLOSURE HexaVal in rax:rdx. fn_ptr = address of the
         // lifted lambda symbol via RIP-relative lea. Mirrors arm64_darwin.hexa.
+        // fn-ref-as-value: hir_to_mir lowers a bare top-level-fn ident used in
+        // value position to STMT_ASSIGN op="fn_ref" with args = [name_str,
+        // arity_int]. Runtime ABI: hexa_fn_new(void* fn_ptr, int arity) →
+        // fn_ptr in rdi, arity (C int) in esi; returns the TAG_FN HexaVal in
+        // rax:rdx. fn_ptr = address of the user fn symbol via RIP-relative lea.
+        // TAG_FN (not TAG_CLOSURE) so the runtime call dispatch does NOT prepend
+        // an env — a plain fn `worker(start)` takes its arg directly. Mirrors
+        // the C-transpile hexa_fn_new auto-wrap.
+        if s.op == "fn_ref" && len(s.args) >= 2 {
+            let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+            let fn_sym = s.args[0].str_val
+            let fn_arity = s.args[1].int_val
+            // rdi = &<fn_sym> (RIP-relative address-of).
+            _x86_buf.push(_x86_instr2("lea", _x86_op_reg("rdi"),
+                             _x86_op_label("[rip+" + fn_sym + "]"),
+                             "fn_ref: fn-ptr"))
+            // esi = arity (C int).
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("esi"),
+                             _x86_op_imm(fn_arity), "fn_ref: arity"))
+            _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_fn_new_native"),
+                             "fn_ref: build TAG_FN"))
+            _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                             "fn_ref: capture fn payload"))
+            _x86_store_tag_reg(rm, s.dst.id, "rax")
+            _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+            return
+        }
+        // carrier call: invoke a runtime TAG_FN/TAG_CLOSURE carrier DATA global
+        // (thread_spawn, …). hir_to_mir lowers `thread_spawn(worker, 1)` to
+        // STMT_ASSIGN op="carrier_call" args=[carrier_name_str, a1, …]. ABI:
+        // hexa_callN_native(HexaVal carrier, HexaVal a1, …) — carrier pair →
+        // rdi:rsi, a1 → rdx:rcx, a2 → r8:r9 (≤2 call args here — the thread/
+        // atomic carriers are all ≤2-arg). The carrier is loaded from its BSS
+        // global: tag = [rip+carrier+0], payload = [rip+carrier+8]. Box the call
+        // args FIRST (they clobber the arg regs), THEN load the carrier into
+        // pair0 so it survives. Returns the HexaVal in rax:rdx.
+        if s.op == "carrier_call" && len(s.args) >= 1 {
+            let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+            let carrier = s.args[0].str_val
+            let ncall = len(s.args) - 1     // number of real call args
+            // box call args into pairs 1.. (skip args[0] = carrier name)
+            let mut ci = 1
+            while ci < len(s.args) {
+                let lo = _x86_hv_pair_lo(ci)   // pair index == ci (carrier is pair0)
+                let hi = _x86_hv_pair_hi(ci)
+                _x86_hv_box_arg(s.args[ci], st, rm, lo, hi, opts)
+                ci = ci + 1
+            }
+            // carrier HexaVal → pair0 (rdi=tag, rsi=payload), from the global.
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rdi"),
+                             _x86_op_label("[rip+" + carrier + "]"),
+                             "carrier_call: tag = " + carrier + "[0]"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rsi"),
+                             _x86_op_label("[rip+" + carrier + "+8]"),
+                             "carrier_call: payload = " + carrier + "[8]"))
+            let mut dispatch = "hexa_call0_native"
+            if ncall == 1 { dispatch = "hexa_call1_native" }
+            if ncall == 2 { dispatch = "hexa_call2_native" }
+            if ncall == 3 { dispatch = "hexa_call3_native" }
+            if ncall == 4 { dispatch = "hexa_call4_native" }
+            _x86_buf.push(_x86_instr1("call", _x86_op_label(dispatch),
+                             "carrier_call: dispatch " + carrier))
+            _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                             "carrier_call: capture result payload"))
+            _x86_store_tag_reg(rm, s.dst.id, "rax")
+            _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+            return
+        }
         if s.op == "closure_new" && len(s.args) >= 3 {
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
             let lam_sym = s.args[1].str_val
