@@ -904,21 +904,45 @@ fn parse_primary() -> Expr {
             // the bind/typecheck wants the type args, the parse_type
             // path can be reused; for now consume and discard so the
             // struct-lit body parses.
-            advance()  // consume `<`
-            let mut depth = 1
-            while depth > 0 && !at_eof() {
-                let tk = peek().kind
-                if same_kind(tk, TokenKind::Lt) { depth = depth + 1 }
-                else if same_kind(tk, TokenKind::Gt) { depth = depth - 1 }
-                advance()
-                if depth == 0 { break }
+            // Opt-in `HEXA_CONST_GENERICS=1` CAPTURES the instantiation type/
+            // const args into a `__cg` annotation on the StructLit so the
+            // check-only `_cg_*` pass can validate const-slot + trait bounds.
+            // env-unset runs the verbatim erase → byte-identical AST.
+            if env("HEXA_CONST_GENERICS") == "1" {
+                let targ_exprs = _cg_capture_inst_args(t.span)
+                if check_kind(TokenKind::LBrace) {
+                    let lit = parse_struct_lit_after_name(t)
+                    let mut lit_anns = []
+                    if len(targ_exprs) > 0 {
+                        lit_anns.push(Annotation { name: "__cg", args: targ_exprs, span: t.span })
+                    }
+                    return Expr {
+                        kind: lit.kind,
+                        span: lit.span,
+                        text: lit.text,
+                        annotations: lit_anns,
+                        children: lit.children,
+                        atlas_ref: lit.atlas_ref
+                    }
+                }
+                // call-style `(` — fall through to the bare-Ident return.
+            } else {
+                advance()  // consume `<`
+                let mut depth = 1
+                while depth > 0 && !at_eof() {
+                    let tk = peek().kind
+                    if same_kind(tk, TokenKind::Lt) { depth = depth + 1 }
+                    else if same_kind(tk, TokenKind::Gt) { depth = depth - 1 }
+                    advance()
+                    if depth == 0 { break }
+                }
+                // Now either `{` (struct lit) or `(` (call) follows.
+                if check_kind(TokenKind::LBrace) {
+                    return parse_struct_lit_after_name(t)
+                }
+                // For `(` (call-style) — fall through to the bare-Ident
+                // return; the postfix-call rule handles the `(`.
             }
-            // Now either `{` (struct lit) or `(` (call) follows.
-            if check_kind(TokenKind::LBrace) {
-                return parse_struct_lit_after_name(t)
-            }
-            // For `(` (call-style) — fall through to the bare-Ident
-            // return; the postfix-call rule handles the `(`.
         }
         return Expr {
             kind: ExprKind::Ident,
@@ -1749,6 +1773,235 @@ fn parse_annotation() -> Annotation {
     return Annotation { name: name_tok.text, args: args, span: at.span }
 }
 
+// ── Const-generics capture (opt-in HEXA_CONST_GENERICS=1) ──────
+//
+// The native pipeline ERASES generics: `parse_fn_item` / `parse_struct_item`
+// consume+discard the `<…>` token run (every `T` shares one dynamic MIR shape)
+// and `where` is not a token. These helpers are the opt-in *capturing* variants
+// — they consume the EXACT same token run as the erase loops but serialize each
+// generic param / where-clause / instantiation argument into LiteralString
+// carriers, packed into a synthetic `__cg` annotation (no new AST field, no new
+// keyword — same no-ripple idiom as `__type_alias` and the `mut:` name prefix).
+// The check-only `_cg_*` pass in compiler/check/types.hexa decodes them. When
+// `HEXA_CONST_GENERICS` is unset the callers run the verbatim erase loop, so the
+// produced AST (and every emitted byte) is byte-identical → byteeq-neutral.
+//
+// Encoding (one LiteralString arg per atom):
+//   declaration param : "P:<name>:<bound>"  (bound "" | "const" | "Ord+Num")
+//   where-clause atom : "W:<param>:<trait>"
+//   instantiation arg : "T:<typename>" (a type) | "C:<value>" (a const value)
+
+fn _cg_str_expr(s: string, sp: Span) -> Expr {
+    return Expr {
+        kind: ExprKind::LiteralString,
+        span: sp,
+        text: s,
+        annotations: [],
+        children: [],
+        atlas_ref: empty_atlas()
+    }
+}
+
+// Cursor at `<`. Consume the balanced `<…>` exactly like the erase loop and
+// return the "P:…" carriers. A leading `const` ident marks a const-generic
+// param (bound sentinel "const"); a `: Bound (+ Bound)*` tail becomes the
+// '+'-joined bound. Token codes: 0=Ident 1=Colon 2=Comma(depth1) 3=Plus 4=other.
+fn _cg_capture_decl_params(sp: Span) -> [Expr] {
+    advance() // consume `<`
+    let mut depth = 1
+    let mut codes = []
+    let mut texts = []
+    while depth > 0 && !at_eof() {
+        let t = peek()
+        let tk = t.kind
+        if same_kind(tk, TokenKind::Lt) {
+            depth = depth + 1
+            codes.push(4)
+            texts.push(t.text)
+        } else if same_kind(tk, TokenKind::Gt) {
+            depth = depth - 1
+            if depth >= 1 {
+                codes.push(4)
+                texts.push(t.text)
+            }
+        } else {
+            if depth == 1 && same_kind(tk, TokenKind::Comma) {
+                codes.push(2)
+                texts.push("")
+            } else if depth == 1 && same_kind(tk, TokenKind::Colon) {
+                codes.push(1)
+                texts.push("")
+            } else if depth == 1 && same_kind(tk, TokenKind::Plus) {
+                codes.push(3)
+                texts.push("")
+            } else if depth == 1 && same_kind(tk, TokenKind::Ident) {
+                codes.push(0)
+                texts.push(t.text)
+            } else {
+                codes.push(4)
+                texts.push(t.text)
+            }
+        }
+        advance()
+        if depth == 0 { break }
+    }
+    // Post-process: group by top-level commas (code 2).
+    let mut out = []
+    let n = len(codes)
+    let mut g_idents = []
+    let mut g_colon = false
+    let mut i = 0
+    while i <= n {
+        let mut flush = false
+        if i == n {
+            flush = true
+        } else if codes[i] == 2 {
+            flush = true
+        }
+        if flush {
+            if len(g_idents) > 0 {
+                let first = g_idents[0]
+                if first == "const" {
+                    if len(g_idents) >= 2 {
+                        out.push(_cg_str_expr("P:" + g_idents[1] + ":const", sp))
+                    }
+                } else {
+                    let mut bound = ""
+                    if g_colon {
+                        let mut k = 1
+                        while k < len(g_idents) {
+                            if bound == "" {
+                                bound = g_idents[k]
+                            } else {
+                                bound = bound + "+" + g_idents[k]
+                            }
+                            k = k + 1
+                        }
+                    }
+                    out.push(_cg_str_expr("P:" + first + ":" + bound, sp))
+                }
+            }
+            g_idents = []
+            g_colon = false
+        } else {
+            if codes[i] == 0 {
+                g_idents.push(texts[i])
+            } else if codes[i] == 1 {
+                g_colon = true
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Cursor at the `where` ident (caller already verified). Consume the contextual
+// where-clause up to (not including) `{`, returning "W:…" carriers. `where` is
+// NOT a token — it is a bare Ident, so this is fully contextual (no new keyword).
+fn _cg_capture_where(sp: Span) -> [Expr] {
+    advance() // consume `where`
+    let mut out = []
+    while !check_kind(TokenKind::LBrace) && !at_eof() {
+        if !check_kind(TokenKind::Ident) {
+            advance()
+            continue
+        }
+        let param = peek().text
+        advance()
+        if check_kind(TokenKind::Colon) {
+            advance()
+            while check_kind(TokenKind::Ident) {
+                let tr = peek().text
+                advance()
+                out.push(_cg_str_expr("W:" + param + ":" + tr, sp))
+                if check_kind(TokenKind::Plus) {
+                    advance()
+                } else {
+                    break
+                }
+            }
+        }
+        if check_kind(TokenKind::Comma) { advance() }
+    }
+    return out
+}
+
+// Cursor at `<`. Consume the balanced `<…>` instantiation type-args exactly like
+// the struct-lit erase loop and return "T:…"/"C:…" carriers. The first
+// significant token of each top-level arg decides the kind: a Number leader is a
+// const value, an Ident leader is a type. Codes: 0=Ident 5=Number 2=Comma other=4.
+fn _cg_capture_inst_args(sp: Span) -> [Expr] {
+    advance() // consume `<`
+    let mut depth = 1
+    let mut codes = []
+    let mut texts = []
+    while depth > 0 && !at_eof() {
+        let t = peek()
+        let tk = t.kind
+        if same_kind(tk, TokenKind::Lt) {
+            depth = depth + 1
+            codes.push(4)
+            texts.push(t.text)
+        } else if same_kind(tk, TokenKind::Gt) {
+            depth = depth - 1
+            if depth >= 1 {
+                codes.push(4)
+                texts.push(t.text)
+            }
+        } else {
+            if depth == 1 && same_kind(tk, TokenKind::Comma) {
+                codes.push(2)
+                texts.push("")
+            } else if depth == 1 && same_kind(tk, TokenKind::Ident) {
+                codes.push(0)
+                texts.push(t.text)
+            } else if depth == 1 && same_kind(tk, TokenKind::Number) {
+                codes.push(5)
+                texts.push(t.text)
+            } else {
+                codes.push(4)
+                texts.push(t.text)
+            }
+        }
+        advance()
+        if depth == 0 { break }
+    }
+    let mut out = []
+    let n = len(codes)
+    let mut g_kind = 0    // 0 none, 1 type, 2 const
+    let mut g_text = ""
+    let mut i = 0
+    while i <= n {
+        let mut flush = false
+        if i == n {
+            flush = true
+        } else if codes[i] == 2 {
+            flush = true
+        }
+        if flush {
+            if g_kind == 2 {
+                out.push(_cg_str_expr("C:" + g_text, sp))
+            } else if g_kind == 1 {
+                out.push(_cg_str_expr("T:" + g_text, sp))
+            }
+            g_kind = 0
+            g_text = ""
+        } else {
+            if g_kind == 0 {
+                if codes[i] == 0 {
+                    g_kind = 1
+                    g_text = texts[i]
+                } else if codes[i] == 5 {
+                    g_kind = 2
+                    g_text = texts[i]
+                }
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
 // ── Top-level item parsers ────────────────────────────────────
 
 fn parse_param() -> Param {
@@ -1776,15 +2029,25 @@ fn parse_fn_item(is_pub: bool, anns: [Annotation]) -> Item {
     // parser before (it hung), so discarding is purely additive. Opt-in
     // monomorphization (state/rfc_static_generics_monomorphization.md)
     // consumes these params in a later round; today they stay erased.
+    // Opt-in `HEXA_CONST_GENERICS=1` instead CAPTURES the params into a `__cg`
+    // annotation (byteeq-neutral: env-unset runs the verbatim erase loop).
+    let mut cg_anns = []
     if check_kind(TokenKind::Lt) {
-        advance()
-        let mut depth = 1
-        while depth > 0 && !at_eof() {
-            let tk = peek().kind
-            if same_kind(tk, TokenKind::Lt) { depth = depth + 1 }
-            else if same_kind(tk, TokenKind::Gt) { depth = depth - 1 }
+        if env("HEXA_CONST_GENERICS") == "1" {
+            let pexprs = _cg_capture_decl_params(kw.span)
+            if len(pexprs) > 0 {
+                cg_anns.push(Annotation { name: "__cg", args: pexprs, span: kw.span })
+            }
+        } else {
             advance()
-            if depth == 0 { break }
+            let mut depth = 1
+            while depth > 0 && !at_eof() {
+                let tk = peek().kind
+                if same_kind(tk, TokenKind::Lt) { depth = depth + 1 }
+                else if same_kind(tk, TokenKind::Gt) { depth = depth - 1 }
+                advance()
+                if depth == 0 { break }
+            }
         }
     }
     eat(TokenKind::LParen)
@@ -1804,11 +2067,17 @@ fn parse_fn_item(is_pub: bool, anns: [Annotation]) -> Item {
         ret_ty = parse_type()
     }
     let body = parse_block_expr()
+    let mut final_anns = anns
+    let mut cgi = 0
+    while cgi < len(cg_anns) {
+        final_anns.push(cg_anns[cgi])
+        cgi = cgi + 1
+    }
     return Item {
         kind: ItemKind::Fn,
         name: name_tok.text,
         span: kw.span,
-        annotations: anns,
+        annotations: final_anns,
         params: params,
         return_type: ret_ty,
         body: body,
@@ -1865,15 +2134,35 @@ fn parse_struct_item(is_pub: bool, anns: [Annotation]) -> Item {
     // on mismatch and `expect(Ident)` doesn't advance either) —
     // observed as a ~6 min aprime_cc hang on every file containing
     // a generic struct definition.
+    // Opt-in `HEXA_CONST_GENERICS=1` CAPTURES the params (+ a contextual
+    // `where` clause) into a `__cg` annotation; env-unset runs the verbatim
+    // erase loop, so the default-build AST is byte-identical (byteeq-neutral).
+    let mut cg_anns = []
     if check_kind(TokenKind::Lt) {
-        advance()
-        let mut depth = 1
-        while depth > 0 && !at_eof() {
-            let tk = peek().kind
-            if same_kind(tk, TokenKind::Lt) { depth = depth + 1 }
-            else if same_kind(tk, TokenKind::Gt) { depth = depth - 1 }
+        if env("HEXA_CONST_GENERICS") == "1" {
+            let mut cg_args = _cg_capture_decl_params(kw.span)
+            // contextual `where T: Ord, …` — `where` is a bare Ident, not a kw.
+            if check_kind(TokenKind::Ident) && peek().text == "where" {
+                let wexprs = _cg_capture_where(kw.span)
+                let mut wi = 0
+                while wi < len(wexprs) {
+                    cg_args.push(wexprs[wi])
+                    wi = wi + 1
+                }
+            }
+            if len(cg_args) > 0 {
+                cg_anns.push(Annotation { name: "__cg", args: cg_args, span: kw.span })
+            }
+        } else {
             advance()
-            if depth == 0 { break }
+            let mut depth = 1
+            while depth > 0 && !at_eof() {
+                let tk = peek().kind
+                if same_kind(tk, TokenKind::Lt) { depth = depth + 1 }
+                else if same_kind(tk, TokenKind::Gt) { depth = depth - 1 }
+                advance()
+                if depth == 0 { break }
+            }
         }
     }
     eat(TokenKind::LBrace)
@@ -1890,11 +2179,17 @@ fn parse_struct_item(is_pub: bool, anns: [Annotation]) -> Item {
         if check_kind(TokenKind::Comma) { advance() }
     }
     eat(TokenKind::RBrace)
+    let mut final_anns = anns
+    let mut cgi = 0
+    while cgi < len(cg_anns) {
+        final_anns.push(cg_anns[cgi])
+        cgi = cgi + 1
+    }
     return Item {
         kind: ItemKind::Struct,
         name: name_tok.text,
         span: kw.span,
-        annotations: anns,
+        annotations: final_anns,
         params: fields,
         return_type: empty_type(),
         body: empty_expr(),
