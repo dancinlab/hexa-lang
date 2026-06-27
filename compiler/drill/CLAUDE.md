@@ -65,6 +65,19 @@ surge·dream·swarm·reign·molt·wake·forge·canon·revive)은 각자 `../<nam
   구조 재기술뿐. 곱-프레임과 **동일 종착(novel=0)을 다른 대수에서 정직히** 도달. selftest=
   `composition_test.hexa`(superperfect/Mersenne G-gate) + identity_engine main CMP1–5. atlas write
   없음(fold=hexa verify g5/PR). frozen blob 151c52c8 신규 builtin/method 0(기존 정수연산·중첩호출만).
+- **LLM-conjecture verify-gate(Ralph 378 · 2026-06-27)**: drill은 *생성기*(float-순열)라 식별자-문법
+  후보를 거의 안 내므로(`identity=0`), 진짜 추월 레버 = **LLM이 새 명제를 추측 → exact-int 검증**.
+  그 정석 surface(`hexa loop --dfs --llm-cmd` · RFC 080 · `stdlib/loop/cycle.hexa`+`dfs.hexa`)의
+  child 게이트가 cite/영어/non-trivial 휴리스틱만 보고 exact-int 미연결이던 갭을 **여기 검증엔진에
+  배선**: 신 모듈 `stdlib/loop/conjecture.hexa::cj_verdict`가 child 본문의 `CONJECTURE:` 줄을 추출해
+  `../atlas/identity_engine.hexa`로 라우팅(identity→`verify_identity`/`is_universal2` · composition→
+  `verify_composition` · congruence→`verify_congruence`) → `""`(prose)/unparseable/unverified/
+  verified-known/verified-novel. `dfs_verify_child`가 **unverified/unparseable child를 DROP**(거짓 추측
+  자동 기각), 생존 child는 `exact_verify:` 라벨 + `dfs_run`이 `[dfs] exact-verify: novel/known/prose`
+  카운트. 프롬프트(`dfs_build_prompt`)는 LLM에게 검증가능 문법(18-fn vocab)으로 **NOVEL** 추측을
+  요청(검증기가 심판). 파서는 drill `_parse_identity`/`_parse_composition` 이식. selftest=
+  `stdlib/loop/conjecture_test.hexa`. **byteeq-neutral**(loop=cmd_run 디스패치 · self/ 클로저 밖) ·
+  atlas write 없음(fold=hexa verify g5/PR) · frozen 151c52c8 신규 builtin 0.
 - **기본 검증은 ON(플래그 아님)**: 외부 verifier 미설치 시 `drill.hexa::_native_identity_sweep`가
   매 라운드 기본 실행된다 — `../atlas/identity_engine.hexa::verify_identity`(exact-int 12-fn
   A·B=C·D bounded-unique)를 직접 호출하고, 라운드 verdict를 `DRILL_VERIFIER` stderr 줄로

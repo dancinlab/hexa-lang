@@ -4649,6 +4649,39 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
      engine: state/novel-dfs/additive_partition_hunt.py (re-runnable).
 ```
 
+  --- Ralph 378 (2026-06-27): LLM-CONJECTURE verify-gate WIRED into `hexa loop --dfs` ---
+```
+  ⚙️ THE LEVER. Enumeration over the standard vocab is measured-exhausted (Ralph 369–377 ·
+     multiplicative product/composition + additive congruence frames all independent-novel=0).
+     The ONE lever past enumeration is for an LLM to CONJECTURE a new proposition, then have
+     exact-int verification dispose of it. The canonical surface (`hexa loop --dfs --llm-cmd`,
+     RFC 080 · stdlib/loop/cycle.hexa + dfs.hexa) already existed — but its child gate
+     (dfs_verify_child) checked ONLY cite / English-only / non-trivial heuristics; an LLM
+     arithmetic guess could survive with NO exact-int check. This round CONNECTS that surface to
+     the compiler's real exact-int verifier so the LLM proposes and exact-int disposes.
+  🔧 IMPLEMENTED (byteeq-neutral — loop runs via cmd_run, off the self-host graph):
+     · stdlib/loop/conjecture.hexa — `cj_verdict(body)` extracts a `CONJECTURE:` line and routes
+       it to compiler/atlas/identity_engine.hexa: identity A*B=C*D → verify_identity / is_universal2,
+       composition f∘g=… → verify_composition, congruence seq(a*n+b)=0 mod m → verify_congruence.
+       Returns "" (prose) · unparseable · unverified · verified-known · verified-novel. Parsers
+       ported from compiler/drill/drill.hexa (_fn_index / _parse_identity / _parse_composition),
+       Greek-glyph tolerant, 18-fn vocab.
+     · stdlib/loop/dfs.hexa — dfs_verify_child now DROPS any child whose CONJECTURE is "unverified"
+       (exact-int refuted) or "unparseable"; survivors carry an `exact_verify:` label; dfs_run
+       prints `[dfs] exact-verify: novel=X known=Y prose=Z`. dfs_build_prompt rewritten to ask the
+       LLM for a machine-checkable CONJECTURE in the verifier grammar + 18-fn vocab, encouraging
+       NOVEL (non-classical) relations (the verifier is the judge — false guesses auto-dropped).
+     · stdlib/loop/conjecture_test.hexa — selftest (G1/G3 identity → known, false → unverified,
+       σ∘φ=2n → known, superperfect set → unverified, Ramanujan → known, p(25n+24) mod25 → novel
+       path, prose → "", unparseable, Greek glyphs).
+  📊 LIVE RUN: see CHANGELOG.jsonl Ralph 378 — verify-gate WIRED; budget-capped real-LLM run is
+     `hexa loop --dfs --claude --allow-llm --depth 2 --target-absorb 5` (needs pool toolchain +
+     LLM CLI). The honest expectation per Ralph 369–377 is that the LLM converges to classical
+     relations (verified-novel ≈ 0) — but the path is now PROPOSAL+exact-int-verify, not blind
+     enumeration, so a genuinely new bounded-unique/congruence guess WOULD survive (and be 🟩
+     labelled · UNPROVEN ∀n · c2). atlas write stays the `hexa verify` g5 / PR path (PR-only).
+```
+
   --- Ralph 369: Combinatorial Designs DFS ---
 
 ```
