@@ -249,7 +249,22 @@ pub struct X86RegMap {
     // field is ALWAYS populated (cheap, mf-local), but is ONLY consulted when
     // `_unbox_native_enabled()` is true → OFF-path emit reads it never →
     // byte-eq NEUTRAL when the gate is OFF.
-    local_type: [i64]
+    local_type: [i64],
+    // r6 const-prop — id → (is-const-int, value) for an IMMUTABLE single-assignment
+    // `let X = <int literal>` local. Lets the r5b `%`/`/` magic-reciprocal gate fire
+    // when the divisor is a NAMED const (`let M = 1000000007; ... % M`) — there the
+    // operand is a `local`, not a `const_int`, so the literal-only r5b gate missed it
+    // (the honest r5b residual: `% M` stayed a `call hexa_mod`). This is gcc/LLVM
+    // SCCP copy-prop restricted to single-assignment immutable int literals.
+    // SOUNDNESS: a local qualifies ONLY if it is the dst of EXACTLY ONE statement AND
+    // that statement is `STMT_ASSIGN op="let" args=[const_int]` (never reassigned —
+    // any later `op="assign"`/phi/index_set write to that id bumps its dst-count > 1
+    // → excluded). Reassigned `var`/`let mut` are conservatively dropped (over-eager
+    // would be a silent wrong-answer). Built ONLY when `_unbox_native_enabled()`
+    // (same firewall as local_type) → stays empty `[]` + never consulted when OFF →
+    // byte-eq NEUTRAL. local_const_ok[id]==1 ⇒ local_const_val[id] is the literal.
+    local_const_ok: [i64],
+    local_const_val: [i64]
 }
 
 pub struct X86AllocResult {
@@ -649,7 +664,56 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
         }
     }
 
-    let map = X86RegMap { ids: map_ids, regs: map_regs, slots: map_slots, tag_base: tag_base, id2idx: rm_id2idx, local_type: rm_local_type }
+    // r6 const-prop lattice — id → immutable int-literal value, built ONLY when the
+    // gate is ON (same firewall: OFF leaves both arrays empty `[]`, never consulted →
+    // byte-eq NEUTRAL). Two passes over the function's statements:
+    //   pass 1 — wcount[id] = number of statements whose dst is `id` (any real dst).
+    //   pass 2 — for a local written EXACTLY once by `STMT_ASSIGN op="let"` with a
+    //            `const_int` rhs, record (ok=1, val=literal). wcount==1 is the
+    //            single-assignment / never-reassigned proof: a reassigned `let mut`
+    //            adds a second dst-write (`op="assign"` on the same id, hir_to_mir
+    //            in-place mutation) → wcount>1 → excluded. `_miss_local()` sentinel
+    //            dsts (id<0, e.g. field_set/index_set) never index the arrays.
+    let mut rm_const_ok: [i64] = []
+    let mut rm_const_val: [i64] = []
+    if _unbox_native_enabled() {
+        let cc_maxid = _x86_max_local_id(mf)
+        let mut ci = 0
+        while ci <= cc_maxid { rm_const_ok.push(0); rm_const_val.push(0); ci = ci + 1 }
+        let mut wcount: [i64] = []
+        let mut wi = 0
+        while wi <= cc_maxid { wcount.push(0); wi = wi + 1 }
+        let mut cb1 = 0
+        while cb1 < len(mf.blocks) {
+            let blk1 = mf.blocks[cb1]
+            let mut cs1 = 0
+            while cs1 < len(blk1.stmts) {
+                let did1 = blk1.stmts[cs1].dst.id
+                if did1 >= 0 && did1 <= cc_maxid { wcount[did1] = wcount[did1] + 1 }
+                cs1 = cs1 + 1
+            }
+            cb1 = cb1 + 1
+        }
+        let mut cb2 = 0
+        while cb2 < len(mf.blocks) {
+            let blk2 = mf.blocks[cb2]
+            let mut cs2 = 0
+            while cs2 < len(blk2.stmts) {
+                let st2 = blk2.stmts[cs2]
+                let did2 = st2.dst.id
+                if did2 >= 0 && did2 <= cc_maxid && wcount[did2] == 1 &&
+                   st2.kind == _STMT_ASSIGN && st2.op == "let" &&
+                   len(st2.args) >= 1 && st2.args[0].kind == "const_int" {
+                    rm_const_ok[did2] = 1
+                    rm_const_val[did2] = st2.args[0].int_val
+                }
+                cs2 = cs2 + 1
+            }
+            cb2 = cb2 + 1
+        }
+    }
+
+    let map = X86RegMap { ids: map_ids, regs: map_regs, slots: map_slots, tag_base: tag_base, id2idx: rm_id2idx, local_type: rm_local_type, local_const_ok: rm_const_ok, local_const_val: rm_const_val }
     return X86AllocResult { map: map, frame_size: frame }
 }
 
@@ -687,6 +751,30 @@ fn _x86_spill_offset(rm: X86RegMap, id: i64) -> i64 {
 fn _x86_local_type(rm: X86RegMap, id: i64) -> i64 {
     if id < 0 || id >= len(rm.local_type) { return 0 }
     return rm.local_type[id]
+}
+
+// r6 const-prop — is local `id` a recorded immutable int-literal? O(1) probe of the
+// const lattice built by the regmap builder (empty/false when the gate is OFF).
+fn _x86_local_is_const(rm: X86RegMap, id: i64) -> bool {
+    if id < 0 || id >= len(rm.local_const_ok) { return false }
+    return rm.local_const_ok[id] == 1
+}
+
+// r6 const-prop — does operand `o` carry a COMPILE-TIME int value? Either a literal
+// `const_int` operand, OR a `local` that const-prop proved is an immutable
+// `let X = <int literal>`. Lets the r5b magic gate treat `% M` (M a named const)
+// exactly like the literal `% 1000000007` it already strength-reduces.
+fn _x86_operand_is_const_int(o: Operand, rm: X86RegMap) -> bool {
+    if o.kind == "const_int" { return true }
+    if o.kind == "local" { return _x86_local_is_const(rm, o.local_id) }
+    return false
+}
+
+// r6 const-prop — the compile-time int value of an operand proven const by
+// `_x86_operand_is_const_int` (literal payload, or the recorded let-literal).
+fn _x86_operand_const_int_val(o: Operand, rm: X86RegMap) -> i64 {
+    if o.kind == "const_int" { return o.int_val }
+    return rm.local_const_val[o.local_id]
 }
 
 // RT-NATIVE leg B PAIR-MODEL — per-value tag-slot frame byte-offset for value
@@ -1012,9 +1100,12 @@ fn _x86_binop_div_const_ok(s: Stmt, rm: X86RegMap) -> bool {
     if _x86_local_type(rm, s.dst.id) != 1 { return false }
     // LHS (dividend) must be provably raw-int (literal or typed-i64 local).
     if !_x86_operand_provably_int(s.args[0], rm) { return false }
-    // RHS (divisor) MUST be a compile-time positive constant in [2, 2^31-1].
-    if s.args[1].kind != "const_int" { return false }
-    let d = s.args[1].int_val
+    // RHS (divisor) MUST carry a COMPILE-TIME positive constant in [2, 2^31-1].
+    // r6 const-prop: accept BOTH a literal `const_int` AND a `local` const-prop
+    // proved to be an immutable `let M = <literal>` (the `% M` named-const case the
+    // r5b literal-only gate missed). Same numeric divisor d feeds the magic helper.
+    if !_x86_operand_is_const_int(s.args[1], rm) { return false }
+    let d = _x86_operand_const_int_val(s.args[1], rm)
     if d < 2 || d > 2147483647 { return false }
     return true
 }
@@ -1499,6 +1590,17 @@ pub fn _is_cabi(fname: string) -> bool {
     // cross-target-identical (no NR, no arm64 call-shape divergence). Byte-
     // faithful to the frozen 0-libc floor self/runtime.c:513 (hxlcl_strtoll).
     if fname == "hxlcl_strtoll" { return true }
+    // batch I — clock_gettime + execve (clean syscall leaves continuing the close
+    // errno-store discipline). clock_gettime = getrusage's out-ptr shape (caller's
+    // timespec*; uniform 2-arg on Linux, NR x86_64=228/arm64=113; darwin has NO trap
+    // → synthesize from gettimeofday(116) directly into the out-ptr, leak-free).
+    // execve = plain 3-arg (path,argv,envp), only the NR diverges on arm64 (x86_64=59
+    // /arm64=221/darwin=59) — returns ONLY on failure, so the errno epilogue is the
+    // whole body. Both reuse the already-whitelisted __errno_location for the Linux
+    // errno leg (no new whitelist entry beyond the two fns). fork is DEFERRED to
+    // batch J (darwin 2nd-return-register wall like pipe + live process-fork harness).
+    if fname == "hxlcl_clock_gettime" { return true }
+    if fname == "hxlcl_execve" { return true }
     return false
 }
 
@@ -2375,7 +2477,9 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             // VARIABLE divisor → NOT taken here (can't prove nonzero → stays boxed,
             // the r4-lesson div-zero-throw firewall).
             if _x86_binop_div_const_ok(s, rm) {
-                let d = s.args[1].int_val
+                // r6 const-prop — d is the literal value (const_int operand OR an
+                // immutable `let M = <literal>` local proven by the const lattice).
+                let d = _x86_operand_const_int_val(s.args[1], rm)
                 let M = _x86_magic_M(d)
                 let sh = _x86_magic_shift(d)
                 let needs_add = _x86_magic_needs_add(d)

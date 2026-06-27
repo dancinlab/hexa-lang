@@ -62,7 +62,7 @@ HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
 echo "[routec-smoke-linux] (2) assert errno-bearing syscall symbols defined in routec.o …"
 syms="$(nm "$TMP/routec.o" 2>/dev/null || true)"
 miss=0
-for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe time poll; do
+for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe time poll clock_gettime execve; do
     if ! grep -qE " T hxlcl_${s}\$" <<<"$syms"; then
         echo "[routec-smoke-linux] NOT DEFINED (T): hxlcl_${s}" >&2; miss=$((miss+1))
     fi
@@ -115,6 +115,12 @@ extern long long hxlcl_strtoll(const char *nptr, char **endptr, int base);
  * poll(7) on x86_64 (errno-bearing). */
 extern int  hxlcl_time(int *t);
 extern int  hxlcl_poll(void *fds, unsigned int nfds, int timeout);
+/* batch I — clock_gettime / execve. clock_gettime: out-ptr timespec (getrusage
+ * shape), uniform 2-arg, NR x86_64=228 (arm64=113); errno-bearing (bad clk → EINVAL).
+ * execve: plain 3-arg, NR x86_64=59 (arm64=221); returns only on failure (bad path →
+ * -1 + ENOENT, errno-store value-exact). */
+extern int  hxlcl_clock_gettime(int clk, void *ts);
+extern int  hxlcl_execve(const char *path, char *const argv[], char *const envp[]);
 
 /* The emit covers ALL whitelisted Route C symbols (the script emits the whole
  * hxlcl_core.hexa), so the routec.o carries the composites' undefined-external
@@ -359,6 +365,30 @@ int main(void) {
             }
             close(ph[0]); close(ph[1]);
         }
+    }
+
+    /* batch I — clock_gettime / execve. ───────────────────────────────────────
+     * clock_gettime: uniform 2-arg out-ptr (timespec*); CLOCK_REALTIME → 0 + the
+     * kernel writes tv_sec/tv_nsec (assert post-2023 epoch + valid sub-second). A
+     * bogus clk_id → -1 + EINVAL (errno-store value-exact). execve: plain 3-arg; a
+     * NONEXISTENT path → -1 + ENOENT (the errno-store value-exact claim; success
+     * would replace the process so only the failure path is observable). */
+    {
+        struct timespec ts;
+        ts.tv_sec = 0; ts.tv_nsec = -1;
+        errno = 0;
+        CK(hxlcl_clock_gettime(CLOCK_REALTIME, &ts) == 0, "clock_gettime(CLOCK_REALTIME) == 0 (success, out-ptr)");
+        CK(ts.tv_sec > 1700000000, "clock_gettime tv_sec > 2023-11 epoch (out-ptr written)");
+        CK(ts.tv_nsec >= 0 && ts.tv_nsec < 1000000000, "clock_gettime tv_nsec in [0,1e9)");
+        errno = 0;
+        CK(hxlcl_clock_gettime(424242, &ts) == -1, "clock_gettime(invalid clk) == -1");
+        CK(errno == EINVAL, "clock_gettime(invalid clk) sets errno == EINVAL (value-exact)");
+
+        char *eargv[] = { (char *)"x", NULL };
+        char *eenvp[] = { NULL };
+        errno = 0;
+        CK(hxlcl_execve("/nonexistent_xyz_exec_zzz", eargv, eenvp) == -1, "execve(nonexistent) == -1");
+        CK(errno == ENOENT, "execve(nonexistent) sets errno == ENOENT (value-exact)");
     }
 
     if (fails == 0) { printf("[routec-smoke-linux] all Route C errno asserts PASS\n"); return 0; }

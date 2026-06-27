@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll clock_gettime execve; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -194,6 +194,14 @@ extern long long hxlcl_strtoll(const char *nptr, char **endptr, int base);
  * actually runs these legs). */
 extern int  hxlcl_time(int *t);
 extern int  hxlcl_poll(void *fds, unsigned int nfds, int timeout);
+
+/* batch I — clock_gettime / execve. clock_gettime: darwin has no trap → the body
+ * synthesizes a timespec from gettimeofday(116) written DIRECTLY into the caller's
+ * out-ptr (leak-free); fully exercised here. execve: plain 3-arg; a bad path returns
+ * the raw positive errno on darwin (carry-flag not read — the deferred darwin errno
+ * path), composition-asserted (the Linux sibling carries the -1 + ENOENT claim). */
+extern int  hxlcl_clock_gettime(int clk, void *ts);
+extern int  hxlcl_execve(const char *path, char *const argv[], char *const envp[]);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -516,6 +524,29 @@ int main(void) {
             }
             close(ph[0]); close(ph[1]);
         }
+    }
+
+    /* batch I — clock_gettime / execve. FULLY exercised on this darwin host.
+     * clock_gettime: darwin has no trap, so the body uses gettimeofday(116) written
+     * directly into the caller's timespec out-ptr and converts tv_usec→tv_nsec*1000
+     * in place — assert it returns 0, tv_sec is post-2023, and tv_nsec is a valid
+     * [0,1e9) sub-second (the usec*1000 conversion + the trailing-garbage overwrite).
+     * execve: a bad path can never succeed (success replaces the process); on darwin
+     * the carry flag is not read, so the body returns the raw POSITIVE errno (> 0) —
+     * composition-assert it returns a positive failure code and the process survives
+     * (the Linux sibling carries the -1 + ENOENT value-exact claim). Asserting > 0
+     * locks the documented darwin carry-flag-deferred gap (a future darwin errno fix
+     * would flip it to -1 and force a smoke update, same discipline as pipe == -1). */
+    {
+        struct timespec ts;
+        ts.tv_sec = 0; ts.tv_nsec = -1;
+        CK(hxlcl_clock_gettime(CLOCK_REALTIME, &ts) == 0, "clock_gettime(CLOCK_REALTIME) == 0 (darwin gettimeofday synth)");
+        CK(ts.tv_sec > 1700000000, "clock_gettime tv_sec > 2023-11 epoch (out-ptr written)");
+        CK(ts.tv_nsec >= 0 && ts.tv_nsec < 1000000000, "clock_gettime tv_nsec in [0,1e9) (usec*1000, garbage overwritten)");
+
+        char *eargv[] = { (char *)"x", NULL };
+        char *eenvp[] = { NULL };
+        CK(hxlcl_execve("/nonexistent_xyz_exec_zzz", eargv, eenvp) > 0, "execve(bad path) > 0 (darwin raw +errno, carry deferred; process intact)");
     }
 
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }
