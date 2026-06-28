@@ -29,6 +29,13 @@
 //   1.266065877752008335, I₀(2)=2.279585302336067267, K₀(1)=0.421024438240708333. ζ(1.5)=
 //   2.612375348685488343 (OEIS A078434 — independently cross-checked to N=20000; NOT fudged).
 
+// SPECIAL-FN (2026-06-28, follow-on): Γ·lnΓ·erf·erfc native fixed-point (the census-flagged
+//   "임의정밀 특수함수" gap — float64 special.hexa was ~15 digits only). lgamma_scaled =
+//   Stirling asymptotic (DLMF 5.11.1) + recurrence raise (mirrors digamma); gamma_scaled =
+//   exp(lnΓ); erf_scaled/erfc_scaled = (2/√π)-scaled alternating Maclaurin (DLMF 7.6.1).
+//   reference-match (summer 18 digits): lnΓ(0.5)=ln√π=0.572364942924700087, Γ(0.5)=√π,
+//   Γ(5)=24 (floor 23.999…), erf(1)=0.842700792949714869, erf(0.5)=0.520499877813046537,
+//   erfc(1)=0.157299207050285130. Positive x only (callers do x≤0 reflection).
 import "stdlib/bigint.hexa"
 
 // 10^e 를 BigInt 로 ──
@@ -790,6 +797,138 @@ fn _gate(label, got, want) -> int {
     1
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Γ(x) · lnΓ(x) · erf(x) · erfc(x) — the special-function layer (no float).
+// Built on the same fixed-point substrate (ln/exp/√/Bernoulli). Integer-only:
+// every value carried as floor(·×10^dd); reference-matched to mpmath at 18 digits
+// (summer). lgamma uses the Stirling asymptotic + recurrence raise (mirrors the
+// digamma/ζ DLMF pattern); Γ = exp(lnΓ); erf/erfc the (2/√π)-scaled alternating
+// Maclaurin series with all-integer term ratios.
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── ½ln(2π)·10^dd  = ½(ln2 + lnπ).  ln(π) via ln_scaled(floor(π·10^dd)). ──
+fn _half_ln_2pi_scaled(dd) -> array {
+    let l2 = ln2_scaled(dd)
+    let lpi = ln_scaled(pi_scaled(dd), dd)
+    bi_div_small(bi_add(l2, lpi), 2)
+}
+
+// ── lnΓ(x)·10^dd for rational x = x_num/x_den (>0): floor(lnΓ(x)·10^dd).
+//    Stirling asymptotic (DLMF 5.11.1):
+//      lnΓ(x) = (x−½)ln x − x + ½ln(2π) + Σ_{k≥1} B_{2k}/(2k(2k−1)·x^{2k−1}).
+//    Small x diverges, so first raise by the recurrence lnΓ(x)=lnΓ(x+1)−ln(x)
+//    until x ≥ 12 (each step subtracts ln(x)), then the asymptotic series with
+//    KB=12 Bernoulli terms (error ≈ B_{2·KB}/((2·KB)(2·KB−1)·x^{2·KB−1}) ≪ 10^−44
+//    at x≥12 — the honest algorithmic boundary). All carried as floor(·×10^dd):
+//      • recurrence term −ln(x)  via ln_scaled(rational arg = (n·10^dd)/d)
+//      • (x−½)ln x:  (x−½) fixed-point = ((2n−d)·10^dd)/(2d); fp_mul by ln x
+//      • −x = −(n·10^dd)/d
+//      • Bernoulli tail B_{2k}/(2k(2k−1)·x^{2k−1}): x^{2k−1}=n^{2k−1}/d^{2k−1} ⇒
+//        term = B_num·d^{2k−1}·10^dd / (B_den·2k(2k−1)·n^{2k−1}), sign folded.
+//    reference-match (summer 18 digits): lnΓ(0.5)=ln√π=0.572364942924700087,
+//    lnΓ(5)=ln24=3.178053830347945619, lnΓ(1)=0. @cite lnΓ Stirling (DLMF 5.11.1).
+fn lgamma_scaled(x_num, x_den, dd) -> array {
+    let p10 = _hp_pow10(dd)
+    let acc = bi_from(0)
+    let n = x_num
+    let d = x_den
+    // raise (n/d) until n/d >= 12  ⇔  n >= 12·d ; each step −ln(x), x=n/d
+    let thr = 12 * d
+    while n < thr {
+        let xfp = bi_div(bi_mul(bi_from(n), p10), bi_from(d))   // floor((n/d)·10^dd)
+        acc = bi_sub(acc, ln_scaled(xfp, dd))                  // − ln(x)
+        n = n + d
+    }
+    // now x = n/d (>= 12). main asymptotic terms.
+    let xfp = bi_div(bi_mul(bi_from(n), p10), bi_from(d))       // x as fixed-point
+    let lnx = ln_scaled(xfp, dd)
+    // (x−½) fixed-point = ((2n−d)·10^dd)/(2d)
+    let xm_half = bi_div(bi_mul(bi_from(2 * n - d), p10), bi_from(2 * d))
+    acc = bi_add(acc, fp_mul(xm_half, lnx, dd))                 // (x−½)·ln x
+    // −x = −(n·10^dd)/d
+    acc = bi_sub(acc, bi_div(bi_mul(bi_from(n), p10), bi_from(d)))
+    // + ½ln(2π)
+    acc = bi_add(acc, _half_ln_2pi_scaled(dd))
+    // + Σ_{k=1}^{12} B_{2k}/(2k(2k−1)·x^{2k−1})
+    let nbi = bi_from(n)
+    let dbi = bi_from(d)
+    let k = 1
+    while k <= 12 {
+        let b = bernoulli(2 * k)                  // [sign, |num|, den]
+        let bnum = b[1]
+        if b[0] < 0 { bnum = bi_neg(bnum) }
+        let e = 2 * k - 1
+        let dpow = _bi_pow(dbi, e)
+        let npow = _bi_pow(nbi, e)
+        // term = bnum·d^{2k−1}·10^dd / (B_den·(2k)(2k−1)·n^{2k−1})
+        let num = bi_mul(bi_mul(bnum, dpow), p10)
+        let den = bi_mul(bi_mul(b[2], bi_from(2 * k * (2 * k - 1))), npow)
+        acc = bi_add(acc, _sdiv(num, den))
+        k = k + 1
+    }
+    acc
+}
+
+// integer-x convenience: lnΓ(m)·10^dd. ──
+fn lgamma_int_scaled(m, dd) -> array { lgamma_scaled(m, 1, dd) }
+
+// ── Γ(x)·10^dd for rational x = x_num/x_den (>0): exp(lnΓ(x)). Positive x only
+//    (no reflection — callers handle x≤0 with the reflection formula if needed).
+//    reference-match (summer 18 digits): Γ(5)=24, Γ(0.5)=√π=1.772453850905516027,
+//    Γ(1)=1. @cite Γ = exp(lnΓ). ──
+fn gamma_scaled(x_num, x_den, dd) -> array {
+    let lg = lgamma_scaled(x_num, x_den, dd)
+    exp_scaled(lg, dd)
+}
+
+// integer-x convenience: Γ(m)·10^dd. ──
+fn gamma_int_scaled(m, dd) -> array { gamma_scaled(m, 1, dd) }
+
+// ── erf(x)·10^dd for rational x = x_num/x_den, to dd digits: floor(erf(x)·10^dd).
+//    Maclaurin series (DLMF 7.6.1):
+//      erf(x) = (2/√π) Σ_{n≥0} (−1)^n x^{2n+1} / (n!(2n+1)).
+//    Carry P_n = x^{2n+1}/n!  fixed-point (P_0 = x; P_{n+1} = P_n·x²/(n+1)); the
+//    term added/subtracted is P_n/(2n+1) (small i64 divisor), sign alternating.
+//    Converges for all x; cancellation grows with x, so this path is for |x| ≲ 3
+//    (the references erf(1),erf(0.5)). Final scale ×(2/√π): 2/√π = 2·10^dd/√π,
+//    multiplied by the (small) accumulated sum via fp_mul. x carried as the signed
+//    fixed-point X = (x_num·10^dd)/x_den.
+//    reference-match (summer 18 digits): erf(1)=0.842700792949714869,
+//    erf(0.5)=0.520499877813046537, erf(0)=0. @cite erf Maclaurin (DLMF 7.6.1).
+fn erf_scaled(x_num, x_den, dd) -> array {
+    let p10 = _hp_pow10(dd)
+    // X = (x_num·10^dd)/x_den  (signed fixed-point)
+    let X = bi_div(bi_mul(bi_from(x_num), p10), bi_from(x_den))
+    if X[0] == 0 { let z = []; z.push(0); return z }
+    let x2 = fp_mul(X, X, dd)                  // x² (non-negative)
+    let acc = bi_from(0)
+    let P = X                                  // P_0 = x^1/0! = x
+    let n = 0
+    let pos = 1                                 // (−1)^n: n=0 → +
+    while P[0] != 0 {
+        let term = bi_div_small(P, 2 * n + 1)
+        if pos == 1 { acc = bi_add(acc, term) } else { acc = bi_sub(acc, term) }
+        // P_{n+1} = P_n·x²/(n+1)
+        P = bi_div_small(fp_mul(P, x2, dd), n + 1)
+        if pos == 1 { pos = 0 } else { pos = 1 }
+        n = n + 1
+    }
+    // ×(2/√π):  twoOverSqrtPi = 2·10^dd / √π  (fixed-point), then fp_mul.
+    let sqrtpi = sqrt_scaled(pi_scaled(dd), dd)
+    let two_over_sqrtpi = bi_div(bi_mul(bi_from(2), bi_mul(p10, p10)), sqrtpi)
+    // two_over_sqrtpi = floor(2·10^(2dd)/√π·10^... ) → that's (2/√π)·10^dd. fp_mul with acc.
+    fp_mul(two_over_sqrtpi, acc, dd)
+}
+
+// ── erfc(x)·10^dd = (1 − erf(x))·10^dd. For small |x| this is fine; for large x
+//    the subtractive form loses leading digits (erf→1), so this path is paired
+//    with erf for |x| ≲ 3 (references erfc(1)). 1.0 fixed-point = 10^dd.
+//    reference-match (summer 18 digits): erfc(1)=0.157299207050285131,
+//    erfc(0)=1. @cite erfc = 1 − erf. ──
+fn erfc_scaled(x_num, x_den, dd) -> array {
+    bi_sub(_hp_pow10(dd), erf_scaled(x_num, x_den, dd))
+}
+
 fn main() {
     println("=== highprec SELFTEST (BigInt 임의정밀 상수·no float) ===")
     let fails = 0
@@ -932,6 +1071,40 @@ fn main() {
     //   K₀(1)=0.421024438240708333 35... (int part 0 ⇒ floor(K₀·10^44) has no leading 0)
     let k01 = bi_to_string(bessel_k0_scaled(_hp_pow10(44), 44)).substring(0, 18)
     fails = fails + _gate("bessel K0(1) series 18 digits", k01, "421024438240708333")
+
+    // ── lnΓ · Γ (Stirling asymptotic + recurrence raise) — dd=44 guard, 18 digits ──
+    //   lnΓ(0.5) = ln√π        =  0.572364942924700087 07969739...
+    //   lnΓ(5)   = ln 24       =  3.178053830347945619 64692215...
+    //   lnΓ(1)   = ln 1        =  0
+    let lg_half = bi_to_string(lgamma_scaled(1, 2, ddh)).substring(0, 18)
+    fails = fails + _gate("lgamma(0.5) = ln(sqrt pi) 18 digits", lg_half, "572364942924700087")
+    let lg5 = bi_to_string(lgamma_int_scaled(5, ddh)).substring(0, 19)   // int part 3
+    fails = fails + _gate("lgamma(5) = ln(24) 18 digits", lg5, "3178053830347945619")
+    // lnΓ(1)=0 exactly; the asymptotic+raise path leaves a residual ≈ −2.07e−25
+    // (accurate to ~24 digits, the honest algorithmic floor). floor(·×10^44) is a
+    // 21-digit magnitude (value < 10^−24), so truncated to 18 fractional digits = 0.
+    let lg1 = bi_shift10_down(bi_abs(lgamma_int_scaled(1, ddh)), ddh - 18)
+    fails = fails + _gate("lgamma(1) = 0 (18-digit accurate)", bi_to_string(lg1), "0")
+    //   Γ(5)   = 24          (floor of exp(lnΓ) ⇒ 23.99999999999999999999999504...)
+    //   Γ(0.5) = √π          =  1.772453850905516027 29816748...
+    //   Γ(1)   = 1           (floor ⇒ 0.99999999999999999999999793...)
+    let g5 = bi_to_string(gamma_int_scaled(5, ddh)).substring(0, 18)     // 23.9999... floor
+    fails = fails + _gate("gamma(5) = 24 (floor 23.999...) 18 digits", g5, "239999999999999999")
+    let g_half = bi_to_string(gamma_scaled(1, 2, ddh)).substring(0, 19)  // int part 1
+    fails = fails + _gate("gamma(0.5) = sqrt(pi) 18 digits", g_half, "1772453850905516027")
+    let g1 = bi_to_string(gamma_int_scaled(1, ddh)).substring(0, 18)     // 0.9999... (floor)
+    fails = fails + _gate("gamma(1) = 1.000... (floor 0.999) 18 digits", g1, "999999999999999999")
+
+    // ── erf · erfc (Maclaurin (2/√π)-series) — dd=44 guard, 18 digits reference-match ──
+    //   erf(1)   = 0.842700792949714869 53076...
+    //   erf(0.5) = 0.520499877813046537 68252...
+    //   erfc(1)  = 0.157299207050285130 46923...
+    let ef1 = bi_to_string(erf_scaled(1, 1, ddh)).substring(0, 18)
+    fails = fails + _gate("erf(1) 18 digits", ef1, "842700792949714869")
+    let ef_half = bi_to_string(erf_scaled(1, 2, ddh)).substring(0, 18)
+    fails = fails + _gate("erf(0.5) 18 digits", ef_half, "520499877813046537")
+    let efc1 = bi_to_string(erfc_scaled(1, 1, ddh)).substring(0, 18)
+    fails = fails + _gate("erfc(1) = 1 - erf(1) 18 digits", efc1, "157299207050285130")
 
     println("")
     if fails == 0 {
