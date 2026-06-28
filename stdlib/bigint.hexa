@@ -18,7 +18,9 @@
 // LIMB BASE 10000: limb*limb <= 9999^2 ~= 1e8, and schoolbook column sums over ~N limbs
 // stay < ~4e9 << i64 max (9.2e18) — overflow-safe carry propagation.
 //
-// Ops: bi_from(i64) · bi_cmp · bi_add · bi_sub · bi_neg · bi_mul · bi_to_string · bi_ndigits.
+// Ops: bi_from(i64) · bi_cmp · bi_add · bi_sub · bi_neg · bi_mul · bi_to_string · bi_ndigits ·
+//      bi_abs · bi_divmod_small(small i64 divisor) · bi_div_small · bi_shift10_down ·
+//      bi_divmod(full BigInt÷BigInt → [q,r], truncated-toward-zero) · bi_div · bi_mod · bi_gcd.
 
 // ── BASE constant (returned by a fn since hexa has no const literal sharing here) ──
 fn _BASE() -> int { 10000 }
@@ -351,6 +353,164 @@ fn bi_shift10_down(a, e) -> array {
     bi_div_small(shifted, dv)
 }
 
+// ── magnitude-only helpers for full division (operate on |a|, sign forced to 1) ──
+// |a| from a signed BigInt (sign-1 copy) ──
+fn bi_abs(a) -> array {
+    if a[0] == 0 { let z = []; z.push(0); return z }
+    let out = []
+    out.push(1)
+    let i = 1
+    while i < a.len() { out.push(a[i]); i = i + 1 }
+    out
+}
+
+// magnitude × small i64 limb-multiplier m in [0,9999]; arg already sign-1; returns sign-1 magnitude ──
+fn _mul_small_mag(a, m) -> array {
+    if a[0] == 0 { let z = []; z.push(0); return z }
+    if m == 0 { let z = []; z.push(0); return z }
+    let base = _BASE()
+    let na = _nlimb(a)
+    let out = []
+    out.push(1)
+    let carry = 0
+    let i = 1
+    while i <= na {
+        let cur = a[i] * m + carry
+        out.push(cur % base)
+        carry = cur / base
+        i = i + 1
+    }
+    while carry > 0 {
+        out.push(carry % base)
+        carry = carry / base
+    }
+    _norm(out)
+}
+
+// ── full BigInt ÷ BigInt → [quotient, remainder]. Truncated toward zero:
+//    |q| = floor(|a|/|b|), sign(q) = sign(a)*sign(b); sign(r) = sign(a), |r| < |b|.
+//    Algorithm: schoolbook long division, most-significant limb first (base-10000).
+//    For each incoming limb we append it to a running remainder BigInt `rem`, then find the
+//    quotient digit d in [0,9999] with d*|b| <= rem < (d+1)*|b| by BINARY SEARCH over the limb
+//    (every candidate tested with exact BigInt compare — no fragile 2-limb estimate). This is
+//    the classic restoring long-division (cf. any reference long-division pseudocode, e.g.
+//    Knuth TAOCP Vol.2 §4.3.1 Algorithm D, here with a per-digit bisection instead of the
+//    q-hat estimate-and-correct step). O(n_limbs · log BASE · n_limbs) — fine for stdlib sizes.
+//    b == 0 → SENTINEL: returns [ [0], a ] (quotient 0, remainder = a). Callers must guard. ──
+fn bi_divmod(a, b) -> array {
+    // b == 0 sentinel
+    if b[0] == 0 {
+        let z = []; z.push(0)
+        let res0 = []
+        res0.push(z)
+        res0.push(a)
+        return res0
+    }
+    let sa = a[0]
+    let sb = b[0]
+    // a == 0 → quotient 0, remainder 0
+    if sa == 0 {
+        let z = []; z.push(0)
+        let z2 = []; z2.push(0)
+        let r0 = []
+        r0.push(z)
+        r0.push(z2)
+        return r0
+    }
+    let am = bi_abs(a)
+    let bm = bi_abs(b)
+    // |a| < |b| → quotient 0, remainder = a (sign sa)
+    if _cmp_mag(am, bm) < 0 {
+        let z = []; z.push(0)
+        let r0 = []
+        r0.push(z)
+        r0.push(a)
+        return r0
+    }
+    let na = _nlimb(am)
+    // big-endian quotient limbs accumulated here
+    let qbig = []
+    // running remainder magnitude (sign-1), starts at 0
+    let rem = []
+    rem.push(0)
+    let idx = na
+    while idx >= 1 {
+        // rem = rem * BASE + am[idx]   (shift one limb up, add new low limb)
+        rem = _mul_small_mag(rem, _BASE())
+        let addlimb = bi_from(am[idx])      // am[idx] in [0,9999] fits i64
+        rem = bi_add(rem, addlimb)          // both non-negative → magnitude add, sign 1 (or 0)
+        // binary search digit d in [0,9999]: largest d with d*|b| <= rem
+        let lo = 0
+        let hi = _BASE() - 1
+        let d = 0
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            let prod = _mul_small_mag(bm, mid)     // mid*|b|, sign-1
+            let c = bi_cmp(prod, rem)              // both sign-1 (or 0) → magnitude compare
+            if c <= 0 {
+                d = mid
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
+        }
+        qbig.push(d)
+        // rem = rem - d*|b|
+        if d > 0 {
+            let sub = _mul_small_mag(bm, d)
+            rem = bi_sub(rem, sub)
+        }
+        idx = idx - 1
+    }
+    // assemble quotient little-endian: [sign, limbs...] reversing qbig
+    let qout = []
+    qout.push(sa * sb)
+    let j = qbig.len() - 1
+    while j >= 0 {
+        qout.push(qbig[j])
+        j = j - 1
+    }
+    let quot = _norm(qout)
+    // remainder sign = sa (rem currently sign-1 or 0)
+    let remout = []
+    if rem[0] == 0 {
+        remout.push(0)
+    } else {
+        remout.push(sa)
+        let t = 1
+        while t < rem.len() { remout.push(rem[t]); t = t + 1 }
+    }
+    let res = []
+    res.push(quot)
+    res.push(_norm(remout))
+    res
+}
+
+// ── full remainder a mod b (sign of a, |r| < |b|) ──
+fn bi_mod(a, b) -> array {
+    let qr = bi_divmod(a, b)
+    qr[1]
+}
+
+// ── full quotient a / b (truncated toward zero) ──
+fn bi_div(a, b) -> array {
+    let qr = bi_divmod(a, b)
+    qr[0]
+}
+
+// ── Euclidean gcd(|a|,|b|) → non-negative BigInt (gcd(0,0)=0). Uses full BigInt remainder. ──
+fn bi_gcd(a, b) -> array {
+    let x = bi_abs(a)
+    let y = bi_abs(b)
+    while y[0] != 0 {
+        let r = bi_mod(x, y)
+        x = y
+        // r magnitude (already sign-1 since x=|.| , y=|.| non-negative → rem sign follows x sign =1)
+        y = bi_abs(r)
+    }
+    x
+}
+
 // ── selftest ──
 fn _gate(label, got, want) -> int {
     if got == want {
@@ -412,6 +572,71 @@ fn main() {
     let dm2 = bi_divmod_small(q, 7)
     fails = fails + _gate("10^40 / 7 remainder = 4", to_string(dm2[1]), "4")
     fails = fails + _gate("10^40 / 7 quotient", bi_to_string(dm2[0]), "1428571428571428571428571428571428571428")
+
+    // ── full BigInt ÷ BigInt (bi_divmod) ──
+    // 7^13 = 96889010407 (fits i64) but build it as BigInt via repeated multiply for a real divisor
+    let seven = bi_from(7)
+    let b713 = bi_from(1)
+    let t = 0
+    while t < 13 { b713 = bi_mul(b713, seven); t = t + 1 }
+    fails = fails + _gate("7^13 = 96889010407", bi_to_string(b713), "96889010407")
+    // 10^40 ÷ 7^13  (q has 41 digits worth: reference from python divmod)
+    let dq = bi_divmod(q, b713)
+    fails = fails + _gate("10^40 / 7^13 quotient", bi_to_string(dq[0]), "103210879727155556146643346322")
+    fails = fails + _gate("10^40 / 7^13 remainder", bi_to_string(dq[1]), "90436826946")
+    // verify q*divisor + r == dividend
+    let recon = bi_add(bi_mul(dq[0], b713), dq[1])
+    fails = fails + _gate("10^40 / 7^13 reconstruct (q*b+r=a)", bi_to_string(recon), bi_to_string(q))
+
+    // 25! ÷ 13!  exact (remainder 0)
+    let f13 = bi_from(1)
+    let k13 = 1
+    while k13 <= 13 { f13 = bi_mul(f13, bi_from(k13)); k13 = k13 + 1 }
+    let dq2 = bi_divmod(f, f13)
+    fails = fails + _gate("25! / 13! quotient", bi_to_string(dq2[0]), "2490952020480000")
+    fails = fails + _gate("25! / 13! remainder = 0", bi_to_string(dq2[1]), "0")
+
+    // signed: (-10^40) ÷ 7^13  → q sign negative (truncate toward zero), r sign negative
+    let dqn = bi_divmod(bi_neg(q), b713)
+    fails = fails + _gate("(-10^40) / 7^13 quotient", bi_to_string(dqn[0]), "-103210879727155556146643346322")
+    fails = fails + _gate("(-10^40) / 7^13 remainder (sign of a)", bi_to_string(dqn[1]), "-90436826946")
+
+    // |a| < |b| → quotient 0, remainder = a
+    let small = bi_divmod(bi_from(5), bi_from(100))
+    fails = fails + _gate("5 / 100 quotient = 0", bi_to_string(small[0]), "0")
+    fails = fails + _gate("5 / 100 remainder = 5", bi_to_string(small[1]), "5")
+
+    // b == 0 sentinel → quotient 0, remainder = a
+    let zdiv = bi_divmod(bi_from(42), bi_from(0))
+    fails = fails + _gate("42 / 0 sentinel quotient = 0", bi_to_string(zdiv[0]), "0")
+    fails = fails + _gate("42 / 0 sentinel remainder = 42", bi_to_string(zdiv[1]), "42")
+
+    // ── gcd ──
+    // gcd(48!, 36!) = 36! (since 36! | 48!) — reference from python
+    let f48 = bi_from(1)
+    let k48 = 1
+    while k48 <= 48 { f48 = bi_mul(f48, bi_from(k48)); k48 = k48 + 1 }
+    let f36 = bi_from(1)
+    let k36 = 1
+    while k36 <= 36 { f36 = bi_mul(f36, bi_from(k36)); k36 = k36 + 1 }
+    let g1 = bi_gcd(f48, f36)
+    fails = fails + _gate("gcd(48!,36!) = 36!", bi_to_string(g1), "371993326789901217467999448150835200000000")
+    // gcd(2^100*3, 2^50*3*5) = 2^50*3 = 3377699720527872
+    let p2_100 = bi_from(1)
+    let e1 = 0
+    while e1 < 100 { p2_100 = bi_mul(p2_100, bi_from(2)); e1 = e1 + 1 }
+    let aA = bi_mul(p2_100, bi_from(3))
+    let p2_50 = bi_from(1)
+    let e2 = 0
+    while e2 < 50 { p2_50 = bi_mul(p2_50, bi_from(2)); e2 = e2 + 1 }
+    let bB = bi_mul(bi_mul(p2_50, bi_from(3)), bi_from(5))
+    let g2 = bi_gcd(aA, bB)
+    fails = fails + _gate("gcd(2^100*3, 2^50*3*5) = 2^50*3", bi_to_string(g2), "3377699720527872")
+    // gcd is non-negative even with negative inputs
+    let g3 = bi_gcd(bi_neg(bi_from(48)), bi_from(36))
+    fails = fails + _gate("gcd(-48,36) = 12", bi_to_string(g3), "12")
+    // bi_mod convenience
+    fails = fails + _gate("10^40 mod 7^13 = 90436826946", bi_to_string(bi_mod(q, b713)), "90436826946")
 
     println("")
     if fails == 0 {
