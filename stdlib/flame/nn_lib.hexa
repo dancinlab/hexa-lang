@@ -587,6 +587,14 @@ pub fn nn_rope_apply_bwd(dqp: int, cos_tab: int, sin_tab: int,
 // into X_out[i·d : i·d + d]. Mirrors anima d5_forward §"tok_emb embed
 // lookup" (HEXAD/D/d_train5_lib.hexa).
 pub fn nn_embedding_fwd(ids: int, table: int, X_out: int, T: int, d: int) {
+    // HEXA-FUSION L3 (glue half) device-resident seam → _hx_cuda_farr_embedding_gpu
+    // (one-thread-per-output-cell gather), keeps X_out DEVICE-RESIDENT so the first
+    // trunk conv GEMM H2D-skips it. Same env gate; OFF / no-CUDA → rc=-1 → the host
+    // gather loop below UNCHANGED (byte-eq, proven by clm_prod_embed_scatter_eq).
+    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_embedding(ids, table, X_out, T, d)
+        if rc == 0 { return }
+    }
     let mut i = 0
     while i < T {
         let tok = to_int(farr_get(ids, i))
@@ -605,6 +613,17 @@ pub fn nn_embedding_fwd(ids: int, table: int, X_out: int, T: int, d: int) {
 // from nn_lm_head_bwd).
 pub fn nn_embedding_bwd_scatter(dX: int, ids: int, dtable_inout: int,
                                 T: int, d: int) {
+    // HEXA-FUSION L3 (BWD glue half) device-resident seam →
+    // _hx_cuda_farr_embedding_bwd_scatter_gpu (one thread/vocab-row, ascending-i
+    // scan, NO atomics → bit-exact). The dispatcher needs V; the host fn signature
+    // has no V (callers must not change), so derive V = len(dtable)/d — dtable is
+    // [V·d] by construction. Same env gate; OFF / no-CUDA → rc=-1 → the host
+    // scatter loop below UNCHANGED (byte-eq, proven by clm_prod_embed_scatter_eq).
+    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+        let v = farr_len(dtable_inout) / d
+        let rc = forge_dispatch_embedding_bwd_scatter(dX, ids, dtable_inout, T, d, v)
+        if rc == 0 { return }
+    }
     let mut i = 0
     while i < T {
         let tok = to_int(farr_get(ids, i))
@@ -1011,6 +1030,16 @@ fn _nn_gelu_grad(x: float) -> float {
 
 // Elementwise GELU: a_out[i] = GELU(g[i]) over h elements.
 pub fn nn_gelu_fwd(g: int, a_out: int, h: int) {
+    // HEXA-FUSION L3 (glue half) device-resident seam: route the elementwise
+    // GELU onto _hx_cuda_farr_gelu_gpu, keeping a_out DEVICE-RESIDENT so the next
+    // GEMM H2D-skips it. Gated by env HEXA_DEVRESIDENT_NN + the dev-resident chain
+    // flag CLM_PROD_DEVRESIDENT; OFF / no-CUDA → rc=-1 → the host loop below runs
+    // UNCHANGED (byte-eq reference, proven by clm_prod_gelu2_hostdispatch_eq the
+    // dispatcher host body == this loop, max|Δ|=0).
+    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_gelu(g, a_out, h)
+        if rc == 0 { return }
+    }
     let mut i = 0
     while i < h {
         let _ = farr_set(a_out, i, _nn_gelu(farr_get(g, i)))
@@ -1021,6 +1050,13 @@ pub fn nn_gelu_fwd(g: int, a_out: int, h: int) {
 // Elementwise GELU backward: dg[i] = da[i] · GELU'(g[i]). `g` is the
 // PRE-activation (saved from forward). Caller allocates dg_out (h-len).
 pub fn nn_gelu_bwd(g: int, da: int, dg_out: int, h: int) {
+    // HEXA-FUSION L3 (BWD glue half) device-resident seam → _hx_cuda_farr_gelu_bwd_gpu,
+    // keeps dg_out DEVICE-RESIDENT. Same env gate; OFF / no-CUDA → rc=-1 → host loop
+    // below UNCHANGED (byte-eq, dispatcher host body == this loop, max|Δ|=0).
+    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_gelu_bwd(g, da, dg_out, h)
+        if rc == 0 { return }
+    }
     let mut i = 0
     while i < h {
         let _ = farr_set(dg_out, i, farr_get(da, i) * _nn_gelu_grad(farr_get(g, i)))
