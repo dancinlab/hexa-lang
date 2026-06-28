@@ -2100,6 +2100,17 @@ pub fn _is_cabi(fname: string) -> bool {
     // self/runtime.c rt_strchr / rt_strstr. No arm64 call-shape divergence.
     if fname == "hxlcl_strchr" { return true }
     if fname == "hxlcl_strstr" { return true }
+    // PURE-LEAF MIRROR batch — strrchr / memmove / bzero. NO new codegen mechanism:
+    // each is a byte-faithful mirror of an already-wired Route C leaf (strchr /
+    // memcpy / memset) — pure-payload byte ops, no syscall/errno/float/inner-call.
+    // strrchr returns the LAST match pointer (raw char*); memmove is memcpy + an
+    // overlap-direction branch (backward copy when dst>src), returning dst raw;
+    // bzero is memset(s,0,n) (void → unused result reg). Cross-target-identical
+    // (no NR, no arm64 call-shape divergence). Byte-faithful to the frozen 0-libc
+    // floor bodies self/runtime.c rt_strrchr:422 / rt_memmove:627 / hxlcl_bzero:575.
+    if fname == "hxlcl_strrchr" { return true }
+    if fname == "hxlcl_memmove" { return true }
+    if fname == "hxlcl_bzero" { return true }
     // batch G PARSE: hxlcl_strtoll — string→long long parse leaf with a
     // NULL-gated `char** endptr` out-param write (__hx_ptr_store64 to the
     // caller's pointer, the copy-family caller-write class widened to 64-bit,
