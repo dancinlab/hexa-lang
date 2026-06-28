@@ -2812,3 +2812,119 @@ pub fn hxlcl_free(p: HexaVal) -> int {
     let pp = __hx_payload_add(p, 0)            // (void)p — touch the arg, reclaim nothing
     return pp
 }
+
+// ── PURE-COMPUTE MIRROR batch 4 (Route C · parse leaf + no-op leaves) ──────────
+//
+// Three byte-faithful mirrors of the frozen 0-libc floor that need ZERO new codegen
+// mechanism — each composes only the already-proven raw-payload intrinsics
+// (__hx_payload_{add,sub,mul,div,and,eq,ne,ge,le,gt}) + __hx_ptr_{load8,store8}
+// (the byte-scan + caller-write classes proven by strchr / strncpy). No syscall,
+// no float, no inner call, no varargs → cross-target-identical bodies. Default
+// (gate OFF) compiles as ordinary HexaVal fns (byteeq-neutral — never linked).
+
+// hxlcl_inet_pton: parse a dotted-quad IPv4 string `src` into the 4-byte caller
+// buffer `dst`; return 1 on success, 0 on malformed input (dst UNMODIFIED), -1 if
+// `af` is not AF_INET (==2 on Linux AND Darwin). BYTE-FAITHFUL to the frozen 0-libc
+// floor body (self/runtime_emit_full.hexa:2905-2929). The frozen C buffers the four
+// octets in a `unsigned char b[4]` local and writes dst only after full validation
+// (so a malformed input leaves dst untouched). With NO __hx_stack_alloc intrinsic
+// in this campaign, the b[4] local is restructured into a single i64 `packed`
+// accumulator (`packed = packed*256 + octet`, big-endian) — pure register
+// arithmetic, no scratch buffer, no malloc — and the four bytes are extracted
+// (div/and) and stored to dst ONLY on the success path: byte-for-byte the same
+// observable contract (validate-all-then-write), just register-resident.
+//   '0'=48 '9'=57 '.'=46  NUL=0.
+pub fn hxlcl_inet_pton(af: HexaVal, src: HexaVal, dst: HexaVal) -> int {
+    let afv = __hx_payload_add(af, 0)          // int af (raw value)
+    if __hx_payload_ne(afv, 2) {               // af != AF_INET → -1
+        return -1
+    }
+    let ps = __hx_payload_add(src, 0)          // const char *src
+    let pd = __hx_payload_add(dst, 0)          // unsigned char *dst
+    let mut i = 0                              // index into src
+    let mut oct = 0                            // octets committed so far
+    let mut cur = 0                            // current octet accumulator
+    let mut hasdig = 0                         // 1 iff current octet saw ≥1 digit
+    let mut packed = 0                         // committed octets, big-endian pack
+    let mut ok = 1                             // 0 → malformed, will return 0
+    let mut done = 0                           // 1 → stop scanning (NUL or error)
+    while __hx_payload_eq(done, 0) {
+        let c = __hx_ptr_load8(ps, i)          // (unsigned char)src[i]
+        i = __hx_payload_add(i, 1)
+        let dlo = __hx_payload_ge(c, 48)       // c >= '0'
+        let dhi = __hx_payload_le(c, 57)       // c <= '9'
+        let isdig = __hx_payload_and(dlo, dhi)
+        if __hx_payload_ne(isdig, 0) {
+            let d = __hx_payload_sub(c, 48)    // c - '0'
+            let m = __hx_payload_mul(cur, 10)
+            cur = __hx_payload_add(m, d)       // cur = cur*10 + (c-'0')
+            hasdig = 1
+            let over = __hx_payload_gt(cur, 255)
+            if __hx_payload_ne(over, 0) {      // octet > 255 → malformed
+                ok = 0
+                done = 1
+            }
+        } else {
+            let isdot = __hx_payload_eq(c, 46) // '.'
+            let isnul = __hx_payload_eq(c, 0)  // '\0'
+            let term = __hx_payload_add(isdot, isnul)  // 1 iff '.' or NUL (disjoint)
+            if __hx_payload_ne(term, 0) {
+                let nodig = __hx_payload_eq(hasdig, 0) // empty octet
+                let toomany = __hx_payload_ge(oct, 4)  // already 4 octets
+                let bad = __hx_payload_add(nodig, toomany)
+                if __hx_payload_ne(bad, 0) {
+                    ok = 0
+                    done = 1
+                } else {
+                    let p8 = __hx_payload_mul(packed, 256)
+                    packed = __hx_payload_add(p8, cur)  // commit octet (big-endian)
+                    oct = __hx_payload_add(oct, 1)
+                    cur = 0
+                    hasdig = 0
+                    if __hx_payload_ne(isnul, 0) {
+                        done = 1               // end of string
+                    }
+                }
+            } else {
+                ok = 0                         // stray non-digit, non-'.' char
+                done = 1
+            }
+        }
+    }
+    if __hx_payload_eq(ok, 0) {
+        return 0
+    }
+    if __hx_payload_ne(oct, 4) {              // need EXACTLY four octets
+        return 0
+    }
+    // Success: extract the four big-endian octets and write the caller buffer.
+    let q3 = __hx_payload_div(packed, 16777216)
+    let b0 = __hx_payload_and(q3, 255)         // first octet
+    let q2 = __hx_payload_div(packed, 65536)
+    let b1 = __hx_payload_and(q2, 255)
+    let q1 = __hx_payload_div(packed, 256)
+    let b2 = __hx_payload_and(q1, 255)
+    let b3 = __hx_payload_and(packed, 255)     // last octet
+    __hx_ptr_store8(pd, 0, b0)
+    __hx_ptr_store8(pd, 1, b1)
+    __hx_ptr_store8(pd, 2, b2)
+    __hx_ptr_store8(pd, 3, b3)
+    return 1
+}
+
+// hxlcl_setvbuf: the frozen floor's trivial no-op buffering stub — `(void)fp;
+// (void)buf; (void)mode; (void)sz; return 0;` (self/runtime_emit_full.hexa:1247-1250,
+// the 0-libc floor has no stdio buffering to configure). Register-only, returns the
+// const success code 0 (like hxlcl_fflush). The four args are ignored.
+pub fn hxlcl_setvbuf(fp: HexaVal, buf: HexaVal, mode: HexaVal, sz: HexaVal) -> int {
+    return 0
+}
+
+// hxlcl_darwin_check_fd_set_overflow: the frozen floor's no-op fd_set overflow check —
+// `(void)fd; (void)p; (void)n; return 0;  // never overflowing`
+// (self/runtime_emit_full.hexa:2060-2063). Register-only, returns const 0. (This is
+// the plain helper, distinct from hxlcl_fd_overflow which is a Darwin asm-label alias
+// of ___darwin_check_fd_set_overflow and stays the floor — not a Route C target.)
+pub fn hxlcl_darwin_check_fd_set_overflow(fd: HexaVal, p: HexaVal, n: HexaVal) -> int {
+    return 0
+}

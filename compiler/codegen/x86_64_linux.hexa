@@ -2236,6 +2236,22 @@ pub fn _is_cabi(fname: string) -> bool {
     // it routes to libc malloc / the live arena (genuinely arena-coupled, NOT a
     // pure-compute leaf).
     if fname == "hxlcl_free" { return true }
+    // PURE-COMPUTE MIRROR batch 4 — the clean-mirror class endgame. inet_pton is a
+    // dotted-quad PARSE LEAF (byte-scan + caller 4-byte write, the strchr/strncpy
+    // class) with its frozen `unsigned char b[4]` local restructured into a single
+    // i64 register pack (validate-all-then-write contract preserved, NO scratch /
+    // malloc). setvbuf + darwin_check_fd_set_overflow are register-only NO-OP leaves
+    // (`return 0`, the hxlcl_free/fflush class). All three: no syscall/float/inner-
+    // call/varargs → cross-target-identical, byte-faithful to the frozen 0-libc floor
+    // (self/runtime_emit_full.hexa:2905 / :1247 / :2060). This EXHAUSTS the clean
+    // pure-compute mirror class; the only theoretical remainders (strerror = const
+    // char* raw-pointer RETURN shape; gmtime_r = static rodata mdays[12] table) need
+    // a NEW codegen mechanism, not a 1:1 mirror — everything else is wall-class
+    // (varargs printf, float atof/cos/sin/exp/log/fmod, syscall/socket/pty/signal
+    // svc-remainder, pthread, setjmp/longjmp, naked-asm chkstk/fd_overflow, mach).
+    if fname == "hxlcl_inet_pton" { return true }
+    if fname == "hxlcl_setvbuf" { return true }
+    if fname == "hxlcl_darwin_check_fd_set_overflow" { return true }
     return false
 }
 

@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi atoll strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strrchr memmove bzero strtoll strtoull strndup time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush popen pclose isalnum isalpha free; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi atoll strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strrchr memmove bzero strtoll strtoull strndup time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush popen pclose isalnum isalpha free inet_pton setvbuf darwin_check_fd_set_overflow; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -103,6 +103,7 @@ cat > "$TMP/harness.c" <<'CEOF'
 #include <poll.h>     /* struct pollfd / POLLIN — for the poll composition test */
 #include <time.h>     /* libc time() — the reference oracle for hxlcl_time */
 #include <sys/wait.h> /* waitpid / WIFEXITED / WEXITSTATUS — for the fork roundtrip test */
+#include <sys/socket.h> /* AF_INET / AF_INET6 — for the inet_pton parse test */
 
 /* Route-C-emitted symbols under test (raw C-ABI prototypes). */
 extern size_t hxlcl_strlen(const char *s);
@@ -123,6 +124,12 @@ extern int    hxlcl_isalnum(int c);
 extern int    hxlcl_isalpha(int c);
 /* alloc residue — no-op free (bump-arena floor reclaims nothing). */
 extern void   hxlcl_free(void *p);
+/* pure-compute mirror batch 4 — inet_pton (dotted-quad parse + 4-byte caller write,
+ * i64-pack restructure of the frozen b[4]) + setvbuf / darwin_check_fd_set_overflow
+ * (register-only no-op leaves, return 0). */
+extern int    hxlcl_inet_pton(int af, const char *src, void *dst);
+extern int    hxlcl_setvbuf(void *fp, char *buf, int mode, size_t sz);
+extern int    hxlcl_darwin_check_fd_set_overflow(int fd, const void *p, int n);
 extern char  *hxlcl_strdup(const char *s);
 /* dup mirror — strndup. Mirror of the strdup composite (inner malloc + byte loops)
  * with a cap-bounded scan; returns a fresh NUL-terminated copy of ≤cap bytes. */
@@ -396,6 +403,26 @@ int main(void) {
     hxlcl_free(NULL);
     { char *fp = (char *)malloc(8); hxlcl_free(fp); free(fp); }
     CK(1, "free no-op accepts NULL + heap ptr (no crash)");
+
+    /* pure-compute mirror batch 4 — inet_pton dotted-quad parse + caller-write. */
+    { unsigned char ip[4] = {9,9,9,9};
+      CK(hxlcl_inet_pton(AF_INET, "1.2.3.4", ip) == 1, "inet_pton valid returns 1");
+      CK(ip[0]==1 && ip[1]==2 && ip[2]==3 && ip[3]==4, "inet_pton writes 1.2.3.4"); }
+    { unsigned char ip[4] = {9,9,9,9};
+      CK(hxlcl_inet_pton(AF_INET, "255.0.128.17", ip) == 1, "inet_pton 255.0.128.17 ok");
+      CK(ip[0]==255 && ip[1]==0 && ip[2]==128 && ip[3]==17, "inet_pton boundary octets"); }
+    { unsigned char ip[4] = {7,7,7,7};
+      CK(hxlcl_inet_pton(AF_INET, "256.0.0.1", ip) == 0, "inet_pton octet>255 -> 0");
+      CK(ip[0]==7 && ip[1]==7 && ip[2]==7 && ip[3]==7, "inet_pton malformed leaves dst untouched"); }
+    CK(hxlcl_inet_pton(AF_INET, "1.2.3", (unsigned char[4]){0}) == 0, "inet_pton too few octets -> 0");
+    CK(hxlcl_inet_pton(AF_INET, "1.2.3.4.5", (unsigned char[4]){0}) == 0, "inet_pton too many octets -> 0");
+    CK(hxlcl_inet_pton(AF_INET, "1.2.x.4", (unsigned char[4]){0}) == 0, "inet_pton stray char -> 0");
+    CK(hxlcl_inet_pton(AF_INET, "1..3.4", (unsigned char[4]){0}) == 0, "inet_pton empty octet -> 0");
+    CK(hxlcl_inet_pton(AF_INET6, "1.2.3.4", (unsigned char[4]){0}) == -1, "inet_pton non-AF_INET -> -1");
+
+    /* pure-compute mirror batch 4 — no-op leaves return 0. */
+    CK(hxlcl_setvbuf(NULL, NULL, 0, 0) == 0, "setvbuf no-op returns 0");
+    CK(hxlcl_darwin_check_fd_set_overflow(3, NULL, 0) == 0, "darwin_check_fd_set_overflow returns 0");
 
     char *sdup = hxlcl_strdup("hi");
     CK(sdup != NULL && strcmp(sdup, "hi") == 0, "strdup content");
@@ -947,4 +974,4 @@ echo "[routec-smoke] (3) compile harness + link Route C .o + run …"
 "$TMP/routec_smoke"
 rc=$?
 [ "$rc" -eq 0 ] || { echo "[routec-smoke] FATAL: behaviour run rc=$rc" >&2; exit 1; }
-echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr + pure-leaf mirror strrchr/memmove/bzero + parse/dup mirror strtoull/strndup + parse-leaf promotion atoll + ctype isalnum/isalpha + alloc-residue free + Wall 3-a CORE FILE* fopen/fread/fwrite/fseek/ftell/fclose/fdopen + Wall 3-b STD-STREAM fputs/fputc/fflush, darwin-arm64)"
+echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr + pure-leaf mirror strrchr/memmove/bzero + parse/dup mirror strtoull/strndup + parse-leaf promotion atoll + ctype isalnum/isalpha + alloc-residue free + pure-compute mirror batch4 inet_pton/setvbuf/darwin_check_fd_set_overflow + Wall 3-a CORE FILE* fopen/fread/fwrite/fseek/ftell/fclose/fdopen + Wall 3-b STD-STREAM fputs/fputc/fflush, darwin-arm64)"
