@@ -67,7 +67,11 @@ emit_one() {
         printf '//   verified domain). These leaves are gen2-native-only (the hexat C-transpile\n'
         printf '//   bootstrap cannot lower them), so the body enters the shipped runtime.a ONLY\n'
         printf '//   via this seed.\n'
-        printf '//   ABI: %s. External: NONE (fully self-contained; float leaves lower inline).\n' "$abi"
+        printf '//   ABI: %s. External: the PARSE half is self-contained (float leaves lower\n' "$abi"
+        printf '//   inline, no libm call); the FORMAT half references the hexa string/array\n'
+        printf '//   runtime (hexa_array_new/push, hexa_bytes_to_str_raw, hexa_arena_alloc,\n'
+        printf '//   scalar ops) — resolved WITHIN runtime.a (the same archive this .o joins),\n'
+        printf '//   so no NEW undefined symbol appears at the app link.\n'
         printf '//   Lets stage_resolve_runtime_a define HEXA_RT_NUM_PARSE_FLOAT_NATIVE (parse,\n'
         printf '//   default-ON) + HEXA_RT_FORMAT_FLOAT_NATIVE (format, R6 opt-IN) + ar this .o\n'
         printf '//   into runtime.a so __hx_to_double and the float-repr path delegate to native.\n'
