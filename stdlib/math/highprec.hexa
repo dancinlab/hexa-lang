@@ -11,9 +11,12 @@
 // SUBSTRATE (2026-06-28): full BigInt÷BigInt (`bi_divmod`) + Euclidean `bi_gcd` landed in
 //   stdlib/bigint.hexa → Bernoulli B_n 유리수(분자/분모 BigInt + gcd 약분)를 native 구현
 //   (`bernoulli(n)` → [sign,num,den]; B_12=-691/2730 reference-match). atlas Bernoulli 갭 메움.
-// 잔여 갭 (honest, follow-on): Euler-Mascheroni γ 는 Brent–McMillan(ln·exp 필요) 또는 조화수-기반
-//   → ln/exp substrate 부재로 미구현. 여기엔 현 ops로 깨끗이 검증되는 상수(π·ζ(2..6)·ζ(3)·
-//   Catalan G·Bernoulli B_n)만 둔다 (억지 fudge 금지).
+//   같은 full-division 으로 ODD zeta ζ(5)·ζ(7) 도 native — Borwein–Bradley 중심이항 가속급수
+//   (조화보정 H_{k-1}^{(r)} 항은 C(2k,k) 로 full BigInt 나눗셈 필요 → `bi_div`).
+// 잔여 갭 (honest, follow-on): Euler-Mascheroni γ 는 BigInt ln/exp substrate 부재로 미구현 —
+//   3 경로(Brent–McMillan Bessel I0/K0·조화수−ln·Vacca) 모두 ln/exp 전제 또는 1bit/항 수렴
+//   (측정벽: state/atlas_stdlib_gap_census.md γ 항목). 여기엔 현 ops로 깨끗이 검증되는 상수
+//   (π·ζ(2..7)·Catalan G·Bernoulli B_n)만 둔다 (억지 fudge 금지).
 
 import "stdlib/bigint.hexa"
 
@@ -108,6 +111,75 @@ fn zeta3_scaled(dd) -> array {
     // ζ(3)·10^D = (5/2)·acc
     bi_div_small(bi_mul(bi_from(5), acc), 2)
 }
+
+// ── ODD zeta ζ(5)·ζ(7) — Borwein–Bradley central-binomial accelerated series ────────────
+// (MathWorld "Riemann Zeta Function"; Borwein & Bradley 1996/97. Apéry has no closed π form
+//  for odd s; the central-binomial series converge geometrically ~0.7 digit/term — like ζ(3).)
+//
+//   ζ(5) = 2 Σ_{k≥1} (-1)^{k+1}/(k⁵ C(2k,k))  −  (5/2) Σ_{k≥1} (-1)^{k+1} H_{k-1}^{(2)}/(k³ C(2k,k))
+//   ζ(7) = (5/2) Σ_{k≥1} (-1)^{k+1}/(k⁷ C(2k,k)) + (25/2) Σ_{k≥1} (-1)^{k+1} H_{k-1}^{(4)}/(k³ C(2k,k))
+//
+// where H_{k-1}^{(r)} = Σ_{m=1}^{k-1} 1/m^r (generalized harmonic, r=2 for ζ(5), r=4 for ζ(7)).
+//
+// Fixed-point integer scheme (all carried as floor(·×10^D)):
+//   • C(2k,k) as a BigInt, advanced by C_{k+1} = C_k·2(2k+1)/(k+1) (small-int ratio).
+//   • H_{k-1}^{(r)}·10^D as a BigInt, advanced by += floor(10^D / k^r) AFTER using term k.
+//   • plain term  S1_k = floor( floor(10^D / k^p) / C )   — k^p small i64 (p=5 or 7), then
+//     full BigInt÷BigInt by C  (`bi_div`, the #4180 substrate — C is NOT a small i64).
+//   • harmonic term S2_k = floor( floor(Hs / k³) / C )   — same shape.
+//   Both bi_div / bi_div_small truncate toward zero; S2 ends negative, the final ÷2 acts on a
+//   signed product (truncation matches the reference fixed-point model — verified to 30 digits).
+// Loop runs while either S1_k or S2_k is nonzero (S2 with k³ decays slowest → governs cutoff).
+// Shared core; `p` selects ζ(5)/ζ(7), `hr` the harmonic order, and the two outer prefactors.
+// @cite ζ(5)·ζ(7) Borwein–Bradley central-binomial series.
+fn _zeta_odd_bb(dd, p, hr, c1n, c1d, c2n, c2d) -> array {
+    let p10 = _hp_pow10(dd)
+    let s1 = bi_from(0)
+    let s2 = bi_from(0)
+    let hs = bi_from(0)                 // H_{k-1}^{(r)}·10^D  (starts at H_0=0)
+    let cbin = bi_from(2)               // C(2·1,1) = 2
+    let k = 1
+    let pos = 1                         // (-1)^{k+1}: k=1 → +
+    while true {
+        // plain term: floor(10^D / k^p) / C
+        let kp = 1
+        let i = 0
+        while i < p { kp = kp * k; i = i + 1 }           // k^p (small i64; k small, p≤7)
+        let t1 = bi_div(bi_div_small(p10, kp), cbin)
+        // harmonic term: floor(Hs / k^3) / C
+        let k3 = k * k * k
+        let t2 = bi_div(bi_div_small(hs, k3), cbin)
+        // stop once both contributions vanish (k>3 guards the early tiny-H rows)
+        if t1[0] == 0 { if t2[0] == 0 { if k > 3 { return _zeta_odd_combine(s1, s2, c1n, c1d, c2n, c2d) } } }
+        if pos == 1 {
+            s1 = bi_add(s1, t1)
+            s2 = bi_add(s2, t2)
+        } else {
+            s1 = bi_sub(s1, t1)
+            s2 = bi_sub(s2, t2)
+        }
+        // advance H_{k}^{(r)} = H_{k-1}^{(r)} + 1/k^r  (scaled): += floor(10^D / k^r)
+        let kr = 1
+        let j = 0
+        while j < hr { kr = kr * k; j = j + 1 }           // k^hr (small i64)
+        hs = bi_add(hs, bi_div_small(p10, kr))
+        // advance C(2(k+1),k+1) = C(2k,k)·2(2k+1)/(k+1)  (both small i64)
+        cbin = bi_div_small(bi_mul(cbin, bi_from(2 * (2 * k + 1))), k + 1)
+        if pos == 1 { pos = 0 } else { pos = 1 }
+        k = k + 1
+    }
+    bi_from(0)
+}
+// ζ·10^D = (c1n/c1d)·S1 + (c2n/c2d)·S2  (small-int prefactors; integer scale via mul-then-÷). ──
+fn _zeta_odd_combine(s1, s2, c1n, c1d, c2n, c2d) -> array {
+    let a = bi_div_small(bi_mul(bi_from(c1n), s1), c1d)
+    let b = bi_div_small(bi_mul(bi_from(c2n), s2), c2d)
+    bi_add(a, b)
+}
+// ζ(5) = 2·S1 − (5/2)·S2  (r=2 harmonic, p=5). @cite Borwein–Bradley ζ(5).
+fn zeta5_scaled(dd) -> array { _zeta_odd_bb(dd, 5, 2, 2, 1, 0 - 5, 2) }
+// ζ(7) = (5/2)·S1 + (25/2)·S2  (r=4 harmonic, p=7). @cite Borwein–Bradley ζ(7).
+fn zeta7_scaled(dd) -> array { _zeta_odd_bb(dd, 7, 4, 5, 2, 25, 2) }
 
 // Catalan's constant G to D digits — no closed π form (and the Ramanujan series
 //   G = (π/8)ln(2+√3) + (3/8)Σ 1/((2n+1)²C(2n,n)) needs ln, which BigInt lacks).
@@ -301,6 +373,12 @@ fn main() {
     //   ζ(3) = 1.20205690315959428539973816151...
     let z3 = bi_to_string(zeta3_scaled(44)).substring(0, 21)
     fails = fails + _gate("zeta(3) = Apery const", z3, "120205690315959428539")
+    // ODD zeta ζ(5)·ζ(7) (Borwein–Bradley central-binomial) — 앞 20 소수자리 reference-match (dd=44).
+    //   ζ(5) = 1.03692775514336992633136548645...  ζ(7) = 1.00834927738192282683979754984...
+    let z5 = bi_to_string(zeta5_scaled(44)).substring(0, 21)
+    fails = fails + _gate("zeta(5) = Borwein-Bradley", z5, "103692775514336992633")
+    let z7 = bi_to_string(zeta7_scaled(44)).substring(0, 21)
+    fails = fails + _gate("zeta(7) = Borwein-Bradley", z7, "100834927738192282683")
 
     // Catalan G (Guillera–Pilehrood log-free series) — 앞 21 소수자리 reference-match (dd=44 guard).
     //   G = 0.915965594177219015054603514932... (정수부 0 ⇒ floor(G·10^44)는 선행0 없는 44자리).
@@ -322,7 +400,7 @@ fn main() {
 
     println("")
     if fails == 0 {
-        println("=== ALL GATES PASS — BigInt π(Machin)·ζ(2..6)·ζ(3)·Catalan G validated (atlas 상수 갭 메움) ===")
+        println("=== ALL GATES PASS — BigInt π(Machin)·ζ(2..7)·Catalan G·Bernoulli B_n validated (atlas 상수 갭 메움) ===")
     } else {
         println("=== " + to_string(fails) + " GATE(S) FAILED ===")
     }
