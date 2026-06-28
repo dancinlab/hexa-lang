@@ -2083,6 +2083,13 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_residual_add(HexaVal a_v, HexaV
     int64_t o = hexa_as_num(out_v), n = hexa_as_num(n_v);
     if (n <= 0 || !_OP37_FA(a, n) || !_OP37_FA(b, n) || !_OP37_FA(o, n))
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_residual_add_gpu(int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_residual_add_gpu(a, b, o, n);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* A = _hx_farr_table[a].buf;
     double* B = _hx_farr_table[b].buf;
     double* O = _hx_farr_table[o].buf;
@@ -2174,6 +2181,13 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_embedding(HexaVal ids_v, HexaVa
         return hexa_int(-1);
     if (tab < 0 || tab >= _hx_farr_count || !_hx_farr_table[tab].buf)
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_embedding_gpu(int64_t, int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_embedding_gpu(ids, tab, out, T, d);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* IDS = _hx_farr_table[ids].buf;
     double* TAB = _hx_farr_table[tab].buf;
     int64_t tablen = _hx_farr_table[tab].len;
@@ -2208,6 +2222,15 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_groupnorm(HexaVal x_v, HexaVal 
     if (!_OP37_FA(x, n) || !_OP37_FA(y, n) || !_OP37_FA(xh, n) ||
         !_OP37_FA(gm, C) || !_OP37_FA(bt, C) ||
         !_OP37_FA(mn, G) || !_OP37_FA(iv, G))               return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_groupnorm_gpu(int64_t, int64_t, int64_t,
+                                               int64_t, int64_t, int64_t,
+                                               int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_groupnorm_gpu(x, gm, bt, y, mn, iv, xh, T, C, G);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* X = _hx_farr_table[x].buf;
     double* GM = _hx_farr_table[gm].buf;
     double* BT = _hx_farr_table[bt].buf;
@@ -2274,6 +2297,14 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_moe_router(HexaVal logits_v, He
     if (T <= 0 || E <= 0 || C <= 0)                         return hexa_int(-1);
     if (!_OP37_FA(lg, T * E) || !_OP37_FA(pr, T * E) ||
         !_OP37_FA(eo, E * T * C) || !_OP37_FA(y, T * C))    return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_moe_router_gpu(int64_t, int64_t, int64_t,
+                                                int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_moe_router_gpu(lg, eo, pr, y, T, E, C);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* LG = _hx_farr_table[lg].buf;
     double* EO = _hx_farr_table[eo].buf;
     double* PR = _hx_farr_table[pr].buf;
@@ -2420,6 +2451,13 @@ static double _op38_qabs(double x) { return x < 0.0 ? (0.0 - x) : x; }
 HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_gelu(HexaVal in_v, HexaVal out_v, HexaVal n_v) {
     int64_t in = hexa_as_num(in_v), out = hexa_as_num(out_v), n = hexa_as_num(n_v);
     if (n <= 0 || !_OP38_FA(in, n) || !_OP38_FA(out, n))    return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_gelu_gpu(int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_gelu_gpu(in, out, n);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* IN = _hx_farr_table[in].buf;
     double* O  = _hx_farr_table[out].buf;
     for (int64_t i = 0; i < n; i++) O[i] = _op18_gelu(IN[i]);
@@ -2437,6 +2475,13 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_gelu_bwd(HexaVal g_v, HexaVal d
     int64_t dg = hexa_as_num(dg_v), n = hexa_as_num(n_v);
     if (n <= 0 || !_OP38_FA(g, n) || !_OP38_FA(da, n) || !_OP38_FA(dg, n))
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_gelu_bwd_gpu(int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_gelu_bwd_gpu(g, da, dg, n);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* G  = _hx_farr_table[g].buf;
     double* DA = _hx_farr_table[da].buf;
     double* DG = _hx_farr_table[dg].buf;
@@ -2566,6 +2611,16 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_groupnorm_bwd(HexaVal xhat_v, H
     if (!_OP38_FA(xh, n) || !_OP38_FA(dy, n) || !_OP38_FA(dx, n) ||
         !_OP38_FA(gm, C) || !_OP38_FA(dgm, C) || !_OP38_FA(dbt, C) ||
         !_OP38_FA(iv, G))                                   return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_groupnorm_bwd_gpu(int64_t, int64_t, int64_t,
+                                                   int64_t, int64_t, int64_t,
+                                                   int64_t, int64_t, int64_t,
+                                                   int64_t);
+        int grc = _hx_cuda_farr_groupnorm_bwd_gpu(xh, iv, gm, dy, dgm, dbt, dx, T, C, G);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* XH = _hx_farr_table[xh].buf;
     double* IV = _hx_farr_table[iv].buf;
     double* GM = _hx_farr_table[gm].buf;
@@ -2630,6 +2685,15 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_moe_router_bwd(HexaVal probs_v,
     if (!_OP38_FA(pr, T * E) || !_OP38_FA(dl, T * E) ||
         !_OP38_FA(eo, E * T * C) || !_OP38_FA(dy, T * C) ||
         !_OP38_FA(dex, E * T * C))                          return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_moe_router_bwd_gpu(int64_t, int64_t, int64_t,
+                                                    int64_t, int64_t, int64_t,
+                                                    int64_t, int64_t);
+        int grc = _hx_cuda_farr_moe_router_bwd_gpu(pr, eo, dy, dl, dex, T, E, C);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* PR = _hx_farr_table[pr].buf;
     double* EO = _hx_farr_table[eo].buf;
     double* DY = _hx_farr_table[dy].buf;
@@ -2677,6 +2741,13 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_embedding_bwd_scatter(HexaVal d
     if (!_OP38_FA(dx, T * d) || !_OP38_FA(ids, T))          return hexa_int(-1);
     if (dt < 0 || dt >= _hx_farr_count || !_hx_farr_table[dt].buf)
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_embedding_bwd_scatter_gpu(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_embedding_bwd_scatter_gpu(dx, ids, dt, T, d, V);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* DX = _hx_farr_table[dx].buf;
     double* IDS = _hx_farr_table[ids].buf;
     double* DT = _hx_farr_table[dt].buf;
