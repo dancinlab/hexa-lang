@@ -575,7 +575,7 @@ resolve_native_num_float_core_seed() {
 # ── RT-NATIVE leg B M4 NUM-FLOAT EXACT (sh-float-exact lane) — exact-tail seed → build/float_parse_exact_native.o ──
 # The EXACT-tail twin of resolve_native_num_float_core_seed: assemble
 # build/float_parse_exact_native.o from the arch-matched frozen
-# self/native/float_parse_exact_*.s seed, and OPT-IN-enable the native
+# self/native/float_parse_exact_*.s seed, and AUTO-ENABLE the native
 # correctly-rounded string→f64 EXACT path (HEXA_RT_NUM_PARSE_FLOAT_EXACT=1) so the
 # __hexa_num_parse_float NATIVE arm composes fast(Clinger rt_parse_float_native) →
 # exact(rt_str_parse_float_exact big-integer round-half-even) → C strtod. The exact
@@ -583,13 +583,15 @@ resolve_native_num_float_core_seed() {
 # sweep, #4200) and returns a TAG_VOID sentinel for hex/inf/nan/malformed so the C
 # hxlcl_atof `#else` still ships as the no-seed fallback (#3583 lesson).
 #
-# CRITICAL POLARITY DIFFERENCE vs num_float_core: this lane is OPT-IN, NOT
-# auto-enable — it stays OFF unless HEXA_RT_NUM_PARSE_FLOAT_EXACT=1 is preset. That
-# default-OFF guard is what keeps the wiring PR byteeq-NEUTRAL: with the macro unset
-# the emitted runtime.c block is dead → DEFAULT runtime.a / shim.o bytes unchanged.
-# (Promotion to default-ON is a separate reconverge-flip PR — #4163/#4168 class.)
+# POLARITY (R5 default-ON, matches num_float_core): this lane now AUTO-ENABLES
+# (HEXA_RT_NUM_PARSE_FLOAT_EXACT=1) on every production build with a seed present;
+# opt-OUT to the C strtod tail via HEXA_RT_NUM_PARSE_FLOAT_EXACT=0. This is NOT
+# byteeq-neutral — the seed is now linked into DEFAULT runtime.a and the exact tail
+# enters the default runtime.c compile, so the bytes change. The default-ON flip is
+# therefore a 3-target gen3≡gen4 RECONVERGE-flip (gated like #4163/#4168), not a
+# byte-identical change. (R4 #4201 was the byteeq-neutral opt-IN wiring PR.)
 resolve_native_float_parse_exact_seed() {
-    [ "${HEXA_RT_NUM_PARSE_FLOAT_EXACT:-x}" != "1" ] && return 0   # opt-IN only (default-OFF)
+    [ "${HEXA_RT_NUM_PARSE_FLOAT_EXACT:-x}" = "0" ] && return 0   # explicit opt-out
     [ -f build/float_parse_exact_native.o ] && { export HEXA_RT_NUM_PARSE_FLOAT_EXACT=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"
@@ -1034,13 +1036,15 @@ build_runtime_a_from_source() {
         extra_obj="$extra_obj build/num_float_core_native.o"
         echo "[stage_resolve_runtime_a] RT-NATIVE NUM-FLOAT: HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1; ar'ing native num_float_core_native.o into runtime.a"
     fi
-    # RT-NATIVE NUM-FLOAT EXACT (sh-float-exact lane, OPT-IN): when the
+    # RT-NATIVE NUM-FLOAT EXACT (sh-float-exact lane, default-ON R5): when the
     # float_parse_exact seed is active, define HEXA_RT_NUM_PARSE_FLOAT_EXACT for the
     # runtime.c compile (so __hexa_num_parse_float's NATIVE arm composes the exact
     # big-integer tail before strtod) and ar build/float_parse_exact_native.o into
-    # runtime.a so rt_str_parse_float_exact resolves. Default-OFF → with the macro
-    # unset this block is inert and the preprocessed runtime.c is byte-identical (the
-    # C hxlcl_atof `#else`/strtod tail ships unchanged — #3583 no-seed fallback).
+    # runtime.a so rt_str_parse_float_exact resolves. Default-ON → the resolver
+    # exports =1 by default, so this block links the exact seed and the preprocessed
+    # runtime.c carries the exact tail (RECONVERGE-flip, not byte-identical). Opt-OUT
+    # via HEXA_RT_NUM_PARSE_FLOAT_EXACT=0 → C hxlcl_atof `#else`/strtod tail ships
+    # unchanged (#3583 no-seed fallback also keeps the `:-0` gate below correct).
     local rt_numf_exact_def=""
     if [ "${HEXA_RT_NUM_PARSE_FLOAT_EXACT:-0}" = "1" ] && [ -f build/float_parse_exact_native.o ]; then
         rt_numf_exact_def="-DHEXA_RT_NUM_PARSE_FLOAT_EXACT=1"
@@ -1475,10 +1479,11 @@ resolve_native_str_core_seed
 # num_float_core seed (sets HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1 on all 3 production
 # targets). Unknown targets / missing seed keep the C hxlcl_atof string→f64 path.
 resolve_native_num_float_core_seed
-# RT-NATIVE FLOAT-EXACT (sh-float-exact lane, OPT-IN): assemble the arch-matched
-# native exact-tail seed and set HEXA_RT_NUM_PARSE_FLOAT_EXACT=1 ONLY when preset to
-# 1 (default-OFF → byteeq-neutral). Composes fast(Clinger) → exact(big-int round-
-# half-even) → C strtod in __hexa_num_parse_float's NATIVE arm.
+# RT-NATIVE FLOAT-EXACT (sh-float-exact lane, default-ON R5): assemble the arch-
+# matched native exact-tail seed and AUTO-ENABLE HEXA_RT_NUM_PARSE_FLOAT_EXACT=1 on
+# all 3 production targets (opt-OUT via =0). RECONVERGE-flip (runtime.a bytes change),
+# not byteeq-neutral. Composes fast(Clinger) → exact(big-int round-half-even) → C
+# strtod in __hexa_num_parse_float's NATIVE arm.
 resolve_native_float_parse_exact_seed
 # RT-NATIVE NUM (sh-num-native lane): assemble the arch-matched native num_core
 # seed (sets HEXA_RT_NUM_PARSE_INT_NATIVE=1 on all 3 production targets). Unknown
