@@ -1530,7 +1530,7 @@ fn _pack_array_enabled() -> bool {
 // -DHEXA_PACK_ESCAPING). Default-OFF (env unset) → every branch below is
 // skipped → emit is byte-identical to origin (Gate-1 OFF-byteeq).
 fn _pack_escaping_enabled() -> bool {
-    return env("HEXA_PACK_ESCAPING") == "1"
+    return env("HEXA_PACK_ESCAPING") != "0"
 }
 
 // Should op on operand `o` take the escaping-poly path? Gate ON + `o` is a
