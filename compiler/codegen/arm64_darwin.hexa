@@ -383,7 +383,7 @@ fn _arm_max_local_id(mf: MFunc) -> i64 {
 // escape-relax gate (HEXA_PACK_ESCAPING). Default-OFF (env unset) → every esc
 // branch in _arm64_assign_regs + _emit_arm64_stmt is skipped → byte-identical.
 fn _arm_pack_escaping_enabled() -> bool {
-    return env("HEXA_PACK_ESCAPING") == "1"
+    return env("HEXA_PACK_ESCAPING") != "0"
 }
 
 // O(1) id → MIR type_id probe (0 = absent/unclassified). Empty `[]` when OFF.
