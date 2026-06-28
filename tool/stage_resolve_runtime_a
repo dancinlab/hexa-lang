@@ -537,7 +537,6 @@ resolve_native_str_core_seed() {
 # #3583 lesson). Override by pre-setting HEXA_RT_NUM_PARSE_FLOAT_NATIVE=0.
 resolve_native_num_float_core_seed() {
     [ "${HEXA_RT_NUM_PARSE_FLOAT_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
-    [ -f build/num_float_core_native.o ] && { export HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -551,6 +550,19 @@ resolve_native_num_float_core_seed() {
         linux-arm64)  seed="self/native/num_float_core_arm64-linux.s" ;;
         *)            seed="" ;;   # unknown → C #else path
     esac
+    # FORMAT-FLOAT availability (R6 sh-float-format lane): the SAME num_float_core
+    # SSOT/seed/.o now also carries the FORMAT half (rt_format_float_native, musl
+    # fmt_fp i64 dtoa). A freshly regen'd seed exports BOTH `.globl` symbols; an old
+    # parse-only seed exports parse only. Record a toolchain-free avail marker
+    # (`.globl` grep) so the rt_fmtf_def -D gate below NEVER enables the native FORMAT
+    # path against a seed that lacks the symbol (would be an undefined `rt_format_
+    # float_native` at the app link). Computed before the cached-.o early-return so
+    # the marker is set on warm rebuilds too.
+    if [ -n "$seed" ] && [ -f "$seed" ] && \
+       [ "$(grep -cE '^\.globl[[:space:]]+_?rt_format_float_native' "$seed" 2>/dev/null || echo 0)" -ge 1 ]; then
+        export HEXA_RT_FORMAT_FLOAT_NATIVE_AVAIL=1
+    fi
+    [ -f build/num_float_core_native.o ] && { export HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1; return 0; }
     [ -n "$seed" ] && [ -f "$seed" ] || return 0
     mkdir -p build
     # SAFETY: only adopt the native path if the seed exports the parse fn the
@@ -1036,6 +1048,24 @@ build_runtime_a_from_source() {
         extra_obj="$extra_obj build/num_float_core_native.o"
         echo "[stage_resolve_runtime_a] RT-NATIVE NUM-FLOAT: HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1; ar'ing native num_float_core_native.o into runtime.a"
     fi
+    # RT-NATIVE FORMAT-FLOAT (sh-float-format lane, R6, default-OFF opt-IN): when the
+    # num_float_core seed is active AND it exports the FORMAT half, define
+    # HEXA_RT_FORMAT_FLOAT_NATIVE for the runtime_core.c compile so the
+    # __hexa_format_float_mode NATIVE arm uses the hexa-native rt_format_float_native
+    # (musl fmt_fp i64 dtoa) instead of the snprintf("%.17g") no-seed fallback. NO
+    # extra_obj: rt_format_float_native lives in the SAME num_float_core_native.o that
+    # rt_numf_def above already ar's into runtime.a (one SSOT module). Gated default-
+    # OFF (`:-0`): the FORMAT path enters the runtime only with HEXA_RT_FORMAT_FLOAT_
+    # NATIVE=1 explicitly set AND a format-exporting seed — so with the flag unset the
+    # native FORMAT code is #ifdef'd out and the regen'd seed's rt_format_float_native
+    # is unreferenced (dead-stripped at the app link). The DEFAULT mode is still
+    # SHORTEST (self/runtime_core_emit.hexa), so this wiring is output-neutral; the
+    # default-mode flip to NATIVE is the R6 PR-2 reconverge-flip (#4163/#4168 class).
+    local rt_fmtf_def=""
+    if [ "${HEXA_RT_FORMAT_FLOAT_NATIVE:-0}" = "1" ] && [ -f build/num_float_core_native.o ] && [ "${HEXA_RT_FORMAT_FLOAT_NATIVE_AVAIL:-0}" = "1" ]; then
+        rt_fmtf_def="-DHEXA_RT_FORMAT_FLOAT_NATIVE=1"
+        echo "[stage_resolve_runtime_a] RT-NATIVE FORMAT-FLOAT: HEXA_RT_FORMAT_FLOAT_NATIVE=1; native rt_format_float_native (in already-ar'd num_float_core_native.o) wired into runtime_core.c format path"
+    fi
     # RT-NATIVE NUM-FLOAT EXACT (sh-float-exact lane, default-ON R5): when the
     # float_parse_exact seed is active, define HEXA_RT_NUM_PARSE_FLOAT_EXACT for the
     # runtime.c compile (so __hexa_num_parse_float's NATIVE arm composes the exact
@@ -1295,12 +1325,12 @@ build_runtime_a_from_source() {
         #      archive-internal resolution). NO HEXA_HAS_HEXA_RT_STDLIB (matches the
         #      default single-TU object; setting it would extern rt_log/… → multidef).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S2]: compile build/runtime.o (include-drop, HI-tier inline)…"
-        $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self -c self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
+        $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self -c self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
         # (S3) runtime_core.o — standalone TU (sysheaders prelude), runtime_hi_gen.c
         #      KEPT (supplies the HI-tier rt_* C bodies). SAME seed -D set. NO
         #      HEXA_HAS_HEXA_RT_STDLIB (keeps those bodies inline, not externed).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S3]: compile build/runtime_core.o (standalone TU, runtime_hi_gen.c kept)…"
-        $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self -include self/runtime_core_sysheaders.h -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
+        $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self -include self/runtime_core_sysheaders.h -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
         # (S4) hxlcl_shim.o — libc-delegate hxlcl_* sibling TU.
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S4]: compile build/hxlcl_shim.o…"
         $CC -c -O2 $_mo_archflag -std=gnu11 -D_GNU_SOURCE $_mo_shim_def self/runtime_core_hxlcl_shim.c -o build/hxlcl_shim.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: hxlcl_shim.o compile failed" >&2; return 1; }
@@ -1336,7 +1366,7 @@ build_runtime_a_from_source() {
             local _mo_cinc="$_mo_cuda_home/targets/x86_64-linux/include"
             [ -d "$_mo_cinc" ] || _mo_cinc="$_mo_cuda_home/include"
             echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA: build SEPARATE build/runtime.cuda.a (include-drop multi-object + cuda objects)"
-            $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
+            $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
             ar rcs build/runtime.cuda.a build/runtime_cuda_host.o build/runtime_core.o $_mo_hxlcl_members $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
             ls -la build/runtime.cuda.a
             local _mo_cseed _mo_cm
@@ -1352,7 +1382,7 @@ build_runtime_a_from_source() {
         echo "$RA"
         return 0
     fi
-    $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -I self -c self/runtime.c -o build/runtime.o
+    $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -I self -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     if [ "${HEXA_CUDA:-0}" = "1" ] && [ -f build/runtime_cuda.o ] && [ -f build/runtime_cuda_dlink.o ]; then
@@ -1360,7 +1390,7 @@ build_runtime_a_from_source() {
         local _cinc="$_cuda_home/targets/x86_64-linux/include"
         [ -d "$_cinc" ] || _cinc="$_cuda_home/include"
         echo "[stage_resolve_runtime_a] CUDA-R1: building SEPARATE consumer archive build/runtime.cuda.a (runtime.c -DHEXA_CUDA -I$_cinc + runtime_cuda.o + runtime_cuda_dlink.o); toolchain keeps the CPU build/runtime.a (libcuda-free, GPU-less-host-runnable)"
-        $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_CUDA -I "$_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o
+        $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_CUDA -I "$_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o
         ar rcs build/runtime.cuda.a build/runtime_cuda_host.o $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
         ls -la build/runtime.cuda.a
         # ING-35 #2 — fail loudly if the CUDA archive dropped a native-core seed the
