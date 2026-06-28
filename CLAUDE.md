@@ -148,9 +148,16 @@ git submodule update --init --recursive          # activate (hooks no-op until p
 ## native-canonical-default — polarity
 
 - do: 기본 경로는 **항상 hexa-native/own/canonical**. 외부 의존(cuBLAS · 외부 BLAS · 벤더
-  라이브러리) · 비결정 · 실험 · legacy fallback 은 **플래그(env/컴파일 매크로)로 opt-in 하는
+  라이브러리) · 실험 · legacy fallback 은 **플래그(env/컴파일 매크로)로 opt-in 하는
   "제약"으로만** 존재한다. 올바른 예 — forge GPU GEMM: own 커널이 default · cuBLAS 는
   `HEXA_USE_CUBLAS` opt-in.
+- do: **⚠️ determinism 축은 명시적 예외(owner 결정 2026-06-28)** — GPU 수치 determinism 은 위
+  "비결정=opt-in" 규칙에서 빠진다. torch/JAX 정석(non-det 기본 + `use_deterministic_algorithms`
+  opt-in)을 따라 **fast non-det 가 default · det 가 opt-in(`HEXA_DET`)**. 단 이 예외는 **오직
+  determinism 한 축**에만 적용되고 **own/vendor polarity 는 불변** — fast-default 도 **own-native
+  비결정 커널**(atomic split-K own-GEMM · own scatter · own batched)이 canonical default 이고,
+  vendor cuBLAS-TC 는 여전히 opt-in(`HEXA_USE_CUBLAS`, cuBLAS-independence 캠페인 정합). 상세 =
+  아래 [flame/forge determinism].
 - dont: **polarity 역전 절대 금지** — native 를 플래그 뒤로 숨기고 외부의존을 기본으로 두지 말
   것(잘못된 예 = `HEXA_NO_CUBLAS` 로 native 를 opt-in · #3742 교정 대상). 플래그 명명은 켜는 것이
   "제약/외부의존 활성화"여야 한다(`HEXA_USE_<vendor>` · `HEXA_<feature>_FALLBACK` ○ /
@@ -204,33 +211,40 @@ git submodule update --init --recursive          # activate (hooks no-op until p
   새 `@<attr>` 키워드 도입 금지(frozen blob 151c52c8 파서 미지 → faithful build-break ·
   name-prefix/whitelist hook 으로만).
 
-## flame/forge determinism — det-default(eval) / fast-nondet opt-in(학습) 2-경로
+## flame/forge determinism — fast-nondet DEFAULT / det opt-in(`HEXA_DET`) + eval 안전핀
 
-- do: flame/forge 는 **2 경로**를 제공한다(위 [native-canonical-default] polarity 의 determinism-축
-  특수화). **(A) deterministic 경로 = DEFAULT** — own-GEMM 고정-reduction-order·non-atomic
-  (`_hx_k_gemm` FP64 == cuBLAS bit-identical · `_hx_k_col2im` gather-reduce, atomic 無): run-to-run
-  ·cross-host byte-exact GPU 수치 = **eval/verdict/추론/릴리스용**. **(B) fast non-det 경로 =
-  OPT-IN** — cuBLAS Tensor-Core GEMM · atomic split-K/im2col-scatter/col2im-scatter/grad-accum ·
-  batched GEMM: bit-determinism 포기하고 최속 = **학습용**.
-- do: 두 경로는 **opt-in 플래그로 선택**한다(켜는 것이 "비결정 활성화" = polarity 정합 · 위
-  [native-canonical-default]). 개별 레버는 이미 존재 — `HEXA_GEMV_SPLITK`(atomic split-K, NOT
-  bit-id) · `HEXA_TF32_FASTMODE`/`HEXA_USE_CUBLAS`(cuBLAS TC) · `HEXA_BF16_OWN`. 학습 hot-path 일괄
-  토글은 우산 플래그 `HEXA_FAST_NONDET=1`(미구현 · ING) 로 이 family 를 한 번에 켠다. **DEFAULT
-  (플래그 無) = 항상 deterministic** — `_forge_gemv_splitk_on`/`_forge_own_gemm_on`/`_devfeed_on`/
-  `_fuse_on` 동일 env-gate 패턴(`getenv` → 0/unset 이면 native-det).
-- do: 소비자(anima) 계약은 **학습 = fast non-det(B) · eval/verdict = deterministic(A)** — anima
-  CLAUDE.md `a_train_nondeterministic_fast` 와 1:1. 근거: byte-determinism(고정 reduction-order·
-  non-atomic 강제)이 GPU util 4%·step 170s 의 근본(torch/JAX 가 빠른 건 non-det atomic-accum 이
-  기본이라서). 학습 산출 ckpt 품질은 **held-out DESCENT** 로 검증(bit-determinism 불요), eval/verdict
-  은 det 경로(A)로 byte-exact 재측정 → 학습 비결정성이 측정 권위를 오염시키지 않음.
-- do: 정합성 명시 — GPU 수치 determinism(이 규칙)은 self-host `selfhost-determinism-gate`(컴파일+링크
-  gen3 재현성)와 **별개 축**이다. fast non-det 학습은 컴파일러 self-host 게이트를 건드리지 않는다;
-  GPU 수치의 det 불변식은 own-GEMM==cuBLAS byte-eq 오라클(`HEXA_OWN_GEMM=0`/`HEXA_TF32_OWN=0`)이
-  지킨다(혼동 금지).
-- dont: **determinism 을 DEFAULT 에서 제거 금지**(eval/verdict/릴리스 byteeq + own==cuBLAS 오라클은
-  불변) · fast non-det 을 default-ON 으로 flip(polarity 역전 · #4016 revert 선례) · CI byteeq 3타깃
-  +nvptx GREEN 전 우산 플래그 default flip · non-det 경로를 verdict/박제 측정에 사용(anima
-  `a_engine_native_learning` det-eval 계약 위반).
+- do: flame/forge GPU 수치는 **2 경로**, **fast non-det 가 DEFAULT**(owner 결정 2026-06-28 · torch/JAX
+  정석 = non-det 기본 + det opt-in = native-canonical-first). **(A) fast non-det = DEFAULT(플래그 無)**
+  — **own-native 비결정 커널**: atomic split-K own-GEMM · own im2col/col2im atomic-scatter · own
+  grad-accum atomic · own batched GEMM(+ 선택적 vendor cuBLAS-TC via `HEXA_USE_CUBLAS`). bit-determinism
+  포기, 최속 = **학습 기본 혜택**. **(B) deterministic = OPT-IN(`HEXA_DET=1`)** — 고정-reduction-order
+  ·non-atomic own 커널(`_hx_k_gemm` FP64 == cuBLAS bit-identical · `_hx_k_col2im` gather-reduce):
+  run-to-run·cross-host byte-exact.
+- do: 🔒 **안전핀(BLOCKING) — eval/verdict/decode 진입점이 det 를 강제**한다. anima 의 채점·Ψ-checksum
+  ·cross-host byte-parity·verdict 박제 경로(eval/verdict/decode CLI 진입점)는 내부에서 **`HEXA_DET`
+  를 자동 세팅**(소비자가 안 줘도) → 기본이 fast 여도 측정 재현성은 불변. **학습만 기본 fast 혜택**을
+  받고, 측정 권위는 항상 det 경로(B)로 byte-exact. CI 의 byteeq/own==cuBLAS 오라클·determinism 검증
+  잡도 동일하게 `HEXA_DET` 강제(기본 non-det 가 그 잡들을 깨지 않도록).
+- do: 게이팅 = **"기본 fast, `HEXA_DET` 로 det 강제"** 패턴. 신규 `_forge_det_on(void)`{`getenv("HEXA_DET")`
+  → set 이면 1} = 단일 det-게이트(기존 `_forge_gemv_splitk_on`(777)/`_forge_own_gemm_on`(817)/`_devfeed_on`
+  /`_fuse_on` env-gate 패턴 reference-match, **단 polarity 반대** — unset=fast(비결정), set=det). 각 비결정
+  커널 분기는 `_forge_det_on()` 이 1 이면 고정순서 non-atomic 경로로 떨어진다. (구 `HEXA_FAST_NONDET`
+  우산은 폐기 — 기본이 이미 fast 이므로 불필요; det 우산 `HEXA_DET` 하나만.)
+- do: 소비자(anima) 계약 = **학습 = 기본 fast non-det(A, 플래그 無) · eval/verdict/decode = det(B,
+  진입점 자동 `HEXA_DET`)** — anima CLAUDE.md `a_train_nondeterministic_fast` 와 1:1. 근거:
+  byte-determinism(고정 reduction-order·non-atomic 강제)이 학습 GPU util 4%·step 170s 의 근본(torch/JAX
+  가 빠른 건 non-det atomic-accum 이 기본이라서). 학습 ckpt 품질은 **held-out DESCENT** 로 검증
+  (bit-determinism 불요); 측정은 안전핀이 det 로 강제하므로 학습 비결정성이 verdict 권위를 오염 못 함.
+- do: 정합성 — own/vendor polarity 불변(위 [native-canonical-default]): fast-default 도 **own-native
+  커널이 canonical**, vendor cuBLAS-TC 는 opt-in(`HEXA_USE_CUBLAS`) — cuBLAS-independence 캠페인
+  (`-lcublas` 제거)과 정합(vendor 를 기본으로 두면 캠페인 역행이므로 금지). GPU 수치 determinism(이
+  규칙)은 self-host `selfhost-determinism-gate`(컴파일+링크 gen3 재현성)와 **별개 축** — fast non-det
+  학습은 컴파일러 self-host 게이트 무관.
+- dont: **안전핀 우회 금지** — eval/verdict/decode 가 `HEXA_DET` 없이 non-det 로 채점/박제(측정 재현성
+  파괴 · anima `a_engine_native_learning` det-eval 계약 위반) · vendor cuBLAS 를 fast-default 로
+  승격(own/vendor polarity 역전 · cuBLAS-independence 역행 · `HEXA_NO_CUBLAS` 안티패턴) · CI byteeq/오라클
+  잡에 `HEXA_DET` 누락(기본 non-det 가 재현성 잡 false-fail) · det 를 다시 default 로 되돌림(owner
+  결정 역행).
 
 ## 아틀라스 · 검증
 
