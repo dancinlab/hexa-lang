@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush popen pclose; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strrchr memmove bzero strtoll time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush popen pclose; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -183,6 +183,15 @@ extern int    hxlcl_pipe(int fds[2]);
  * emit is bit-equal on all 3 targets; this run proves the BEHAVIOUR). */
 extern char  *hxlcl_strchr(const char *s, int c);
 extern char  *hxlcl_strstr(const char *h, const char *n);
+
+/* pure-leaf mirror batch — strrchr / memmove / bzero. Byte-faithful mirrors of the
+ * already-wired strchr / memcpy / memset leaves (no syscall/errno/float/inner-call);
+ * cross-target-identical compute (byteeq proves bit-equal emit, this run proves the
+ * behaviour). strrchr returns the LAST match char* (or NULL); memmove returns dst
+ * and handles overlap (backward copy when dst>src); bzero zeros n bytes. */
+extern char  *hxlcl_strrchr(const char *s, int c);
+extern void  *hxlcl_memmove(void *dst, const void *src, size_t n);
+extern void   hxlcl_bzero(void *s, size_t n);
 
 /* batch G parse family — strtoll. Pure-compute leaf (no syscall, no errno, no
  * inner call) with a NULL-gated `char** endptr` out-param write. Cross-target-
@@ -539,6 +548,33 @@ int main(void) {
         CK(hxlcl_strstr("aaa", "aab") == NULL,    "strstr partial-then-mismatch → NULL");
     }
 
+    /* pure-leaf mirror batch: strrchr / memmove / bzero — pure byte ops mirroring
+     * strchr / memcpy / memset. Pointers checked by identity AND content, so a
+     * PAIR-MODEL ABI leak (boxed pointer) or off-by-one would be caught. */
+    {
+        const char *abc = "abcXYZabc";
+        CK(hxlcl_strrchr(abc, 'a') == abc + 6, "strrchr finds LAST 'a' at &abc[6]");
+        CK(hxlcl_strrchr(abc, 'X') == abc + 3, "strrchr finds 'X' at &abc[3]");
+        CK(hxlcl_strrchr(abc, 'z') == NULL,    "strrchr('z') → NULL (absent)");
+        CK(hxlcl_strrchr(abc, 0) == abc + 9,   "strrchr(0) → terminator pointer");
+    }
+    {
+        char b1[16]; memcpy(b1, "ABCDEFGH", 9);
+        CK(hxlcl_memmove(b1, b1 + 2, 6) == b1, "memmove returns dst");
+        CK(memcmp(b1, "CDEFGH", 6) == 0, "memmove forward (dst<src overlap) shifts left");
+    }
+    {
+        char b2[16]; memcpy(b2, "ABCDEFGH", 9);
+        hxlcl_memmove(b2 + 2, b2, 6);          /* dst>src overlap → backward copy */
+        CK(memcmp(b2, "ABABCDEF", 8) == 0, "memmove backward (dst>src overlap) shifts right");
+    }
+    {
+        char b3[8]; memset(b3, 0x55, 8);
+        hxlcl_bzero(b3 + 1, 4);
+        CK(b3[0] == 0x55 && b3[1] == 0 && b3[2] == 0 && b3[3] == 0 &&
+           b3[4] == 0 && b3[5] == 0x55, "bzero zeros bytes [1..5), leaves neighbours");
+    }
+
     /* batch G: strtoll — value parse + endptr store64 (the OUT-PARAM write under
      * test). endptr==NULL exercises the NULL-gate (no store); endptr!=NULL
      * exercises the __hx_ptr_store64 → *endptr == nptr + consumed-length. */
@@ -820,4 +856,4 @@ echo "[routec-smoke] (3) compile harness + link Route C .o + run …"
 "$TMP/routec_smoke"
 rc=$?
 [ "$rc" -eq 0 ] || { echo "[routec-smoke] FATAL: behaviour run rc=$rc" >&2; exit 1; }
-echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr + Wall 3-a CORE FILE* fopen/fread/fwrite/fseek/ftell/fclose/fdopen + Wall 3-b STD-STREAM fputs/fputc/fflush, darwin-arm64)"
+echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr + pure-leaf mirror strrchr/memmove/bzero + Wall 3-a CORE FILE* fopen/fread/fwrite/fseek/ftell/fclose/fdopen + Wall 3-b STD-STREAM fputs/fputc/fflush, darwin-arm64)"
