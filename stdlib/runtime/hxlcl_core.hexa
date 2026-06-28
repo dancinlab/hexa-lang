@@ -364,6 +364,101 @@ pub fn hxlcl_strstr(h: HexaVal, n: HexaVal) -> int {
     return 0                                  // not found → NULL
 }
 
+// ── PURE-LEAF MIRROR BATCH (Route C · strrchr / memmove / bzero) ──────────────
+//
+// Three more pure-compute leaves that add NO new codegen mechanism — each is a
+// byte-faithful mirror of an already-wired Route C leaf (strchr / memcpy / memset):
+// no syscall, no errno, no float, no inner C-ABI call, no out-ptr extern-data.
+// Cross-target-identical compute (the byteeq build proves the emit is bit-equal on
+// all 3 targets; the routec-smoke run proves the BEHAVIOUR). Same un-nested raw-mem
+// rule as the mem/compare/copy/search leaves above: every __hx_payload_* /
+// __hx_ptr_* call writes EXACTLY ONE `let`/assignment with no nested intrinsic args;
+// comparisons use raw-int leaf intrinsics (__hx_payload_lt / _eq / _ne), NOT `<`/
+// `==`/`!=` (those lower to HexaVal helpers that misread the raw byte words).
+
+// hxlcl_strrchr: return a pointer to the LAST `c` byte of NUL-terminated `s`, or
+// NULL. BYTE-FAITHFUL to the frozen 0-libc floor body self/runtime.c:422 (rt_strrchr):
+//   if(!s) return NULL; target=(unsigned char)c; last=NULL;
+//   for(i=0;;i++){ x=(unsigned char)s[i]; if(x==target) last=s+i;
+//                  if(x==0) return last; }.
+// The c==0 case naturally returns the terminator pointer (the NUL matches target==0
+// and is the last byte scanned). Returns the raw char* in the single C-ABI result
+// register — the same pointer-into-input class as strchr/strstr.
+pub fn hxlcl_strrchr(s: HexaVal, c: HexaVal) -> int {
+    let ps = __hx_payload_add(s, 0)           // char* (payload word)
+    if __hx_payload_eq(ps, 0) {
+        return 0                              // NULL s → NULL (frozen `if(!s)`)
+    }
+    let target = __hx_payload_and(c, 255)     // (unsigned char)c
+    let mut last = 0                          // const char *last = NULL
+    let mut i = 0
+    while true {
+        let x = __hx_ptr_load8(ps, i)         // (unsigned char)s[i]
+        if __hx_payload_eq(x, target) {
+            last = __hx_payload_add(ps, i)    // last = s + i
+        }
+        if __hx_payload_eq(x, 0) {
+            return last                       // end of string → last match (or NULL)
+        }
+        i = __hx_payload_add(i, 1)
+    }
+    return last
+}
+
+// hxlcl_memmove: copy `n` bytes src→dst handling OVERLAP, return dst. BYTE-FAITHFUL
+// to the frozen 0-libc floor body self/runtime.c:627 (rt_memmove):
+//   d=dst; s=src; if(d==s || n==0) return dst;
+//   if(d<s) for(i=0;i<n;i++) d[i]=s[i];
+//   else    for(i=n;i>0;i--) d[i-1]=s[i-1];  return dst.
+// Forward copy when dst<src, backward copy otherwise — the only difference from
+// hxlcl_memcpy (which is forward-only and never aliased onto overlap). Returns the
+// dst pointer raw in the single C-ABI result register, like the copy family.
+pub fn hxlcl_memmove(dst: HexaVal, src: HexaVal, n: HexaVal) -> int {
+    let pd = __hx_payload_add(dst, 0)         // dst char* (payload word)
+    let ps = __hx_payload_add(src, 0)         // src char* (payload word)
+    if __hx_payload_eq(pd, ps) {
+        return pd                             // d == s → no-op
+    }
+    if __hx_payload_eq(n, 0) {
+        return pd                             // n == 0 → no-op
+    }
+    if __hx_payload_lt(pd, ps) {
+        // forward copy: for(i=0;i<n;i++) d[i]=s[i]
+        let mut i = 0
+        while __hx_payload_lt(i, n) {
+            let b = __hx_ptr_load8(ps, i)     // src[i]
+            __hx_ptr_store8(pd, i, b)         // dst[i] = src[i]
+            i = __hx_payload_add(i, 1)
+        }
+    } else {
+        // backward copy: for(i=n;i>0;i--) d[i-1]=s[i-1]
+        let mut j = n
+        while __hx_payload_ne(j, 0) {
+            let k = __hx_payload_sub(j, 1)    // i-1
+            let b = __hx_ptr_load8(ps, k)     // src[i-1]
+            __hx_ptr_store8(pd, k, b)         // dst[i-1] = src[i-1]
+            j = k
+        }
+    }
+    return pd
+}
+
+// hxlcl_bzero: write 0 into `n` bytes of `s`. BYTE-FAITHFUL to the frozen 0-libc
+// floor body self/runtime.c:575 (hxlcl_bzero):
+//   p=s; for(i=0;i<n;i++) p[i]=0;  (void return).
+// A trivial mirror of hxlcl_memset with c==0. The C body is `void`; the `int`
+// result register is unused by every caller (the frozen `#define bzero(p,n)`
+// expansion discards it), so a 0 return word is sound.
+pub fn hxlcl_bzero(s: HexaVal, n: HexaVal) -> int {
+    let ps = __hx_payload_add(s, 0)           // s char* (payload word)
+    let mut i = 0
+    while __hx_payload_lt(i, n) {
+        __hx_ptr_store8(ps, i, 0)             // s[i] = 0
+        i = __hx_payload_add(i, 1)
+    }
+    return 0
+}
+
 // ── ENV FAMILY (Route C Wall 2-b · extern-data named-data GOT reloc) ───────────
 //
 // hxlcl_getenv: look up `name` in the process environment, returning a pointer to
