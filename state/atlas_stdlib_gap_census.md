@@ -32,18 +32,42 @@ atlas(`compiler/atlas/embedded.gen.hexa` 17405 atom) 중 **계산 가능한데 s
   중심이항 가속급수·2026-06-28)·`catalan_scaled`(Guillera–Pilehrood)·`bernoulli(n)` 유리수
   (full BigInt÷BigInt + gcd, #4180). 전부 reference-match(40+자리) selftest 게이트.
 
-## GAP — atlas 등재·stdlib 미구현 (측정 확인)
+## GAP — 🏁 전부 CLOSED (2026-06-28 · 레버 고갈 달성)
 
-| 항목 | atlas 등재 | stdlib 현황 | 비고 |
-|------|-----------|------------|------|
-| **Möbius μ(n)** | af idx12·여러 L | `fn mobius` **없음** | liouville λ는 있는데 μ 누락(빠른 1-fn 갭) |
-| **Riemann ζ(s) 일반** | ζ(2)basel·ζ(3)apéry·ζ(4)·ζ(-1) | 짝수·ζ(3)·ζ(5)·ζ(7) 고정밀 done | 임의 s 일반 `zeta(s)`는 여전히 없음 |
-| **Euler-Mascheroni γ** | BIG-Euler-mascheroni | **없음** (substrate 벽·아래 §γ) | ln/exp BigInt 부재 = 측정된 substrate 벽 |
-| **digamma ψ(x)** | — | private(quantum 1곳)만 | 일반 fn 없음 |
-| **π/e 고정밀 급수** | PI-* 26개(Machin·Wallis·Leibniz·Ramanujan·Stirling·basel) | π Machin done | e 및 그 외 급수 미구현 |
-| **임의정밀 e/특수함수** | 상수 40+자리 등재 | e는 float64만 | exp/ln BigInt substrate 부재(아래 §γ와 동일 벽) |
+원래 갭 전 항목이 BigInt 위 native 구현 + summer reference-match 로 닫혔다. 아래 §γ 의 "ln/exp substrate
+측정벽" 예상은 **falsified** — atanh 고정소수점 ln/exp(#4186)로 돌파되어 γ·digamma·e 가 연쇄 언락됐다.
+
+| 항목 | stdlib 현황 (CLOSED) | PR |
+|------|---------------------|-----|
+| **Möbius μ(n)** | `mobius(n)` (core/math.hexa·OEIS A008683) | #4183 |
+| **Riemann ζ(s) 일반** | `zeta_int_scaled(s)` (Euler-Maclaurin·임의 정수 s≥2) + ζ(2~7) 고정밀 | #4188 (+#4172/#4173/#4185) |
+| **Euler-Mascheroni γ** | `gamma_euler_scaled` (Brent–McMillan·25자리) | #4186 |
+| **digamma ψ(x)** | `digamma_scaled`/`digamma_int_scaled` (DLMF 5.11.2·ψ(1)=−γ) | #4188 |
+| **π/e 고정밀** | `pi_scaled`(Machin·40자리) · e=`exp_scaled(1)`(25자리) | #4166·#4186 |
+| **BigInt ln/exp/√** | `ln_scaled`·`exp_scaled`·`sqrt_scaled` (ln2 48자리·reference-match) | #4186 |
+| **임의정밀 산술 substrate** | full BigInt÷BigInt `bi_divmod` + `bi_gcd` (exact rational) | #4180 |
+
+독립경로 cross-check: `zeta_int_scaled(2/3/4)` == 기존 `zeta2/3/4_scaled`(π²/6·Apéry·π⁴/90) 18자리 일치 →
+Euler-Maclaurin 과 closed/accelerated 두 독립 고정소수점 경로가 같은 값(verdict-integrity 강화).
+
+> 남은 후속(이 캠페인 범위 밖): atlas C 5763개 상수의 임의정밀 공식 보유 여부 전수 census · 임의 실수 s(비정수)
+> ζ(s) · 추가 특수함수(Bessel·polylog 등)는 별도 라운드. 위 표 = atlas n6 P-primitive + 핵심 해석 상수 갭의 closure.
+
+### (역사) 원래 GAP 표 — 측정 시점(닫히기 전)
+| 항목 | atlas 등재 | (당시) stdlib 현황 |
+|------|-----------|------------|
+| Möbius μ(n) | af idx12 | `fn mobius` 없음 |
+| Riemann ζ(s) 일반 | ζ(2)basel·ζ(3)apéry | 짝수·ζ(3)·ζ(5)·ζ(7) 고정밀만 |
+| Euler-Mascheroni γ | BIG-Euler-mascheroni | 없음 (substrate 벽 예상·아래 §γ) |
+| digamma ψ(x) | — | private(quantum 1곳)만 |
+| π/e 고정밀 급수 | PI-* 26개 | π Machin만 |
+| 임의정밀 e/특수함수 | 상수 40+자리 등재 | e는 float64만 |
 
 ## §γ — Euler-Mascheroni γ break-walls 측정 분류 (2026-06-28)
+
+> 🏁 **RESOLVED (#4186)**: 아래 "BigInt ln/exp substrate 부재 = 측정벽" 분류는 같은 날 **falsified·돌파**됐다 —
+> AGM 정밀도 한계를 우려했으나 atanh 고정소수점 ln/exp 가 ln2 48자리로 동작, γ 는 Brent–McMillan(렌즈 1)으로
+> `gamma_euler_scaled` 25자리 구현·머지. 아래는 돌파 전 측정 기록(예상 벽≠실제 벽의 사례로 보존).
 
 γ = 0.57721566490153286060651209008240243104215933593992... (BIG-Euler-mascheroni · OEIS A001620).
 
