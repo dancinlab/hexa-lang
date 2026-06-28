@@ -848,6 +848,137 @@ pub fn hxlcl_strtoll(nptr: HexaVal, endptr: HexaVal, base: HexaVal) -> int {
     return n
 }
 
+// ── PARSE MIRROR (Route C · strtoull) ─────────────────────────────────────────
+//
+// hxlcl_strtoull is the EXACT unsigned mirror of hxlcl_strtoll above — same parse
+// leaf class, adding NO new codegen mechanism: same whitespace skip, same base-0/16
+// prefix detection, same digit-accumulation loop, and the SAME NULL-gated `char**
+// endptr` store64 out-param write (the already-merged caller-pointer store class).
+// The ONLY two differences from strtoll: (a) no '-' sign — the C body skips a
+// leading '+' but never negates; (b) the result is the raw unsigned accumulation
+// `n`, returned directly (no sign branch). Pure compute otherwise → cross-target-
+// identical (no NR, no arm64 call-shape divergence), like strtoll.
+//
+// Same IN-BODY OPERATOR DISCIPLINE as strtoll: every op is a raw-payload intrinsic
+// (__hx_payload_{add,sub,mul,and,eq,ne,lt,le,ge}) in its own un-nested `let`, loads
+// are __hx_ptr_load8 (ZERO-EXTENDED — bytes ≥ 0x80 fall out of every digit range
+// and stop the scan), the endptr is __hx_ptr_store64. BYTE-FAITHFUL to the frozen
+// 0-libc floor self/runtime.c:542 (hxlcl_strtoull). Char codes as in strtoll.
+pub fn hxlcl_strtoull(nptr: HexaVal, endptr: HexaVal, base: HexaVal) -> int {
+    let p = __hx_payload_add(nptr, 0)          // const char* s = nptr (raw)
+    let pe = __hx_payload_add(endptr, 0)       // char** endptr (raw, may be NULL)
+    // NULL nptr: if (!nptr) { if (endptr) *endptr = nptr; return 0; }
+    if __hx_payload_eq(p, 0) {
+        if __hx_payload_ne(pe, 0) {
+            __hx_ptr_store64(pe, 0, p)         // *endptr = (char*)nptr (NULL)
+        }
+        return 0
+    }
+    let mut b = __hx_payload_add(base, 0)      // int base (raw)
+    let mut i = 0
+    // whitespace skip: while(*s==' '||*s=='\t'||*s=='\n') s++;
+    let mut ws = __hx_ptr_load8(p, i)
+    let mut wcont = 1
+    while __hx_payload_ne(wcont, 0) {
+        let is_sp = __hx_payload_eq(ws, 32)
+        let is_tab = __hx_payload_eq(ws, 9)
+        let is_nl = __hx_payload_eq(ws, 10)
+        let a1 = __hx_payload_add(is_sp, is_tab)
+        let a2 = __hx_payload_add(a1, is_nl)
+        if __hx_payload_ne(a2, 0) {
+            i = __hx_payload_add(i, 1)
+            ws = __hx_ptr_load8(p, i)
+        } else {
+            wcont = 0
+        }
+    }
+    // sign: if(*s=='+')s++;   (strtoull has NO '-' negate)
+    let cs = __hx_ptr_load8(p, i)
+    if __hx_payload_eq(cs, 43) {                // '+'
+        i = __hx_payload_add(i, 1)
+    }
+    // base prefix: base-0 auto-detect (0x→16, 0→8, else 10); base-16 0x-skip.
+    let i1 = __hx_payload_add(i, 1)
+    let c0 = __hx_ptr_load8(p, i)
+    let c1 = __hx_ptr_load8(p, i1)
+    let is0 = __hx_payload_eq(c0, 48)           // s[0]=='0'
+    let isx = __hx_payload_eq(c1, 120)          // s[1]=='x'
+    let isX = __hx_payload_eq(c1, 88)           // s[1]=='X'
+    let isxX = __hx_payload_add(isx, isX)       // 1 iff s[1] in {x,X} (exclusive)
+    if __hx_payload_eq(b, 0) {
+        if __hx_payload_ne(is0, 0) {
+            if __hx_payload_ne(isxX, 0) {
+                b = 16
+                i = __hx_payload_add(i, 2)
+            } else {
+                b = 8
+                i = __hx_payload_add(i, 1)
+            }
+        } else {
+            b = 10
+        }
+    } else {
+        if __hx_payload_eq(b, 16) {
+            if __hx_payload_ne(is0, 0) {
+                if __hx_payload_ne(isxX, 0) {
+                    i = __hx_payload_add(i, 2)
+                }
+            }
+        }
+    }
+    // digit accumulation: for(;;){ d=digit(c); if(none||d>=base) break;
+    //                              n = n*base + d; s++; }
+    let mut n = 0
+    let mut cont = 1
+    while __hx_payload_ne(cont, 0) {
+        let c = __hx_ptr_load8(p, i)
+        let mut isdig = 0
+        let mut d = 0
+        let ge0 = __hx_payload_ge(c, 48)        // c>='0'
+        let le9 = __hx_payload_le(c, 57)        // c<='9'
+        let is09 = __hx_payload_and(ge0, le9)
+        if __hx_payload_ne(is09, 0) {
+            isdig = 1
+            d = __hx_payload_sub(c, 48)         // c-'0'
+        } else {
+            let gea = __hx_payload_ge(c, 97)    // c>='a'
+            let lez = __hx_payload_le(c, 122)   // c<='z'
+            let isaz = __hx_payload_and(gea, lez)
+            if __hx_payload_ne(isaz, 0) {
+                isdig = 1
+                let da = __hx_payload_sub(c, 97)
+                d = __hx_payload_add(da, 10)    // c-'a'+10
+            } else {
+                let geA = __hx_payload_ge(c, 65)  // c>='A'
+                let leZ = __hx_payload_le(c, 90)  // c<='Z'
+                let isAZ = __hx_payload_and(geA, leZ)
+                if __hx_payload_ne(isAZ, 0) {
+                    isdig = 1
+                    let dA = __hx_payload_sub(c, 65)
+                    d = __hx_payload_add(dA, 10)  // c-'A'+10
+                }
+            }
+        }
+        if __hx_payload_eq(isdig, 0) {
+            cont = 0                            // non-digit → stop
+        } else {
+            if __hx_payload_ge(d, b) {
+                cont = 0                        // digit out of base → stop
+            } else {
+                let nb = __hx_payload_mul(n, b)
+                n = __hx_payload_add(nb, d)     // n = n*base + d
+                i = __hx_payload_add(i, 1)
+            }
+        }
+    }
+    // if (endptr) *endptr = (char *)s;   (s = nptr + i)
+    let endp = __hx_payload_add(p, i)
+    if __hx_payload_ne(pe, 0) {
+        __hx_ptr_store64(pe, 0, endp)
+    }
+    return n                                    // unsigned: no sign branch
+}
+
 // ── COMPOSITE FAMILY (Route C r7 · non-leaf — inner C-ABI bl to a sibling) ──
 //
 // COMPOSITE = the body is not a self-contained byte loop; it CALLS another
@@ -920,6 +1051,59 @@ pub fn hxlcl_strdup(s: HexaVal) -> int {
     }
     let cap = __hx_payload_add(n, 1)          // n + 1 (incl. terminator)
     let out = hxlcl_malloc(cap)               // C-ABI bl → raw ptr
+    let mut i = 0
+    while __hx_payload_lt(i, n) {
+        let b = __hx_ptr_load8(ps, i)         // s[i]
+        __hx_ptr_store8(out, i, b)            // out[i] = s[i]
+        i = __hx_payload_add(i, 1)
+    }
+    __hx_ptr_store8(out, n, 0)                // out[n] = '\0'
+    return out
+}
+
+// ── DUP MIRROR (Route C · strndup) ────────────────────────────────────────────
+//
+// hxlcl_strndup is the EXACT mirror of the r8 strdup composite above — same inner
+// C-ABI `bl hxlcl_malloc` + strlen-scan + copy + NUL-terminate byte loops, adding
+// NO new codegen mechanism. The ONLY difference is the scan loop is CAP-BOUNDED
+// (`while(n<cap && s[n]) n++`): the `n < cap` test is a `__hx_payload_lt(n, cap)`
+// guard already used throughout, and the `&&` short-circuit is expanded into the
+// un-nested two-condition stop-flag form (the frozen-parser `cont`-flag style) so
+// no `&&` lowers to a HexaVal helper. The inner callee hxlcl_malloc is the SAME
+// `extern fn hxlcl_malloc` declared above (shared with strdup/calloc/realloc).
+//
+// BYTE-FAITHFUL to the frozen 0-libc floor self/runtime.c:481 (hxlcl_strndup):
+//   if(!s) return NULL; n=0; while(n<cap && s[n]) n++; out=hxlcl_malloc(n+1);
+//   for(i<n) out[i]=s[i]; out[n]='\0'; return out.
+// The `if(!out) return NULL` malloc-failure guard is elided as a caller-precondition
+// on this PoC path (the floor hxlcl_malloc is a never-failing bump allocator), the
+// SAME precondition strdup's Route C body uses. Under the Route C gate the two args
+// arrive raw in rdi,rsi / x0,x1, the inner `bl hxlcl_malloc` is C-ABI, and the
+// return ships the out pointer raw. Default (gate OFF) compiles as a HexaVal fn
+// (byteeq-neutral — never linked in that mode).
+pub fn hxlcl_strndup(s: HexaVal, cap: HexaVal) -> int {
+    let ps = __hx_payload_add(s, 0)           // src char* (payload word)
+    if __hx_payload_eq(ps, 0) {
+        return 0                              // NULL s → NULL (frozen `if(!s)`)
+    }
+    // cap-bounded strlen scan: while(n<cap && s[n]) n++   (un-nested && form)
+    let mut n = 0
+    let mut scont = 1
+    while __hx_payload_ne(scont, 0) {
+        let lt = __hx_payload_lt(n, cap)      // n < cap
+        if __hx_payload_eq(lt, 0) {
+            scont = 0                          // n >= cap → stop
+        } else {
+            let c = __hx_ptr_load8(ps, n)     // s[n]
+            if __hx_payload_eq(c, 0) {
+                scont = 0                      // NUL → stop
+            } else {
+                n = __hx_payload_add(n, 1)
+            }
+        }
+    }
+    let total = __hx_payload_add(n, 1)        // n + 1 (incl. terminator)
+    let out = hxlcl_malloc(total)             // C-ABI bl → raw ptr
     let mut i = 0
     while __hx_payload_lt(i, n) {
         let b = __hx_ptr_load8(ps, i)         // s[i]
