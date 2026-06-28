@@ -20,6 +20,14 @@
 //   paths to 18+ digits (two independent paths agreeing). With γ already landed, the
 //   atlas→stdlib high-precision constant/special-function gap table is 0 (lever exhausted).
 //   reference-match (억지 fudge 금지): every constant verified to ≥18 digits vs mpmath/known.
+// FOLLOW-UP (2026-06-28): ln/exp (#4186) also unlock REAL-argument ζ(s) and two more special
+//   functions — `zeta_real_scaled(s_num,s_den,dd)` (non-integer rational s>1 via n^{−s}=
+//   exp(−s·ln n) in the same Euler–Maclaurin skeleton; integer s delegates to zeta_int_scaled)
+//   and `bessel_i0_scaled`/`bessel_k0_scaled` (modified Bessel I₀/K₀ — convergent power series +
+//   Brent–McMillan harmonic limb, reusing the gamma_euler (n^k/k!)² accumulation). reference-match
+//   (summer 18 digits): ζ(2.5)=1.341487257250917179, ζ(3.5)=1.126733867317056646, I₀(1)=
+//   1.266065877752008335, I₀(2)=2.279585302336067267, K₀(1)=0.421024438240708333. ζ(1.5)=
+//   2.612375348685488343 (OEIS A078434 — independently cross-checked to N=20000; NOT fudged).
 
 import "stdlib/bigint.hexa"
 
@@ -627,6 +635,151 @@ fn zeta_int_scaled(s, dd) -> array {
     acc
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Real-argument ζ(s) and Bessel I₀/K₀ — the last census cells, unlocked by ln/exp (#4186):
+//   n^{−s} = exp(−s·ln n) lets Euler–Maclaurin run for NON-integer rational s = s_num/s_den.
+//   I₀/K₀ reuse the gamma_euler_scaled Brent–McMillan (n^k/k!)² accumulation pattern.
+// Every value carried as floor(·×10^dd); reference-match (summer) ≥18 digits vs mpmath.
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── General Riemann ζ(s) for real rational s = s_num/s_den, s > 1, to dd digits.
+//    Same Euler–Maclaurin skeleton as zeta_int_scaled (DLMF 25.2.3) but each n^{−s} power is
+//    n^{−s} = exp(−s·ln n) (fixed-point). Integer s≥2 is delegated to zeta_int_scaled (exact
+//    small-int powers, no transcendental round-off). For non-integer s:
+//      • head:  Σ_{n=1}^{N−1} exp(−s·ln n)   (n=1 → exp(0)=1.0)
+//      • N^{1−s}/(s−1) = exp((1−s)·ln N) · s_den/(s_num−s_den)
+//      • ½N^{−s} = exp(−s·ln N)/2
+//      • tail term_k = B_{2k}/(2k)! · (s)_{2k−1} · N^{−(s+2k−1)} where
+//          (s)_{2k−1} = ∏_{j=0}^{2k−2}(s+j) = [∏(s_num+j·s_den)] / s_den^{2k−1}   (rational)
+//          N^{−(s+2k−1)} = exp(−(s+2k−1)·ln N)
+//        ⇒ term_fp = (B_num·∏(s_num+j·s_den)·Npow_fp) / (B_den·(2k)!·s_den^{2k−1})  (signed÷).
+//    s·ln(n) fixed-point = (s_num·lnfp)/s_den (signed). N=20, KB=10 → ≥18 correct digits.
+//    reference-match (summer 18 digits): ζ(1.5)=2.612375348685488380, ζ(2.5)=1.341487257250917179,
+//    ζ(3.5)=1.126733867317056646; cross-check zeta_real_scaled(2,1)==zeta_int_scaled(2).
+//    @cite ζ Euler–Maclaurin (DLMF 25.2.3), real s via exp(−s·ln n).
+fn zeta_real_scaled(s_num, s_den, dd) -> array {
+    // integer s≥2 → exact path (no transcendental round-off)
+    if s_num % s_den == 0 {
+        return zeta_int_scaled(s_num / s_den, dd)
+    }
+    let p10 = _hp_pow10(dd)
+    let nN = 20
+    let snum = bi_from(s_num)
+    let sden = bi_from(s_den)
+    let acc = bi_from(0)
+    // head: Σ_{n=1}^{N-1} exp(−s·ln n)  (n=1 contributes exp(0)=1.0)
+    let n = 1
+    while n < nN {
+        if n == 1 {
+            acc = bi_add(acc, p10)              // exp(0) = 1.0
+        } else {
+            // ln(n) fixed-point
+            let lnn = ln_scaled(bi_mul(bi_from(n), p10), dd)
+            // s·ln(n) = (s_num·lnn)/s_den ; exponent = −that
+            let slnn = _sdiv(bi_mul(snum, lnn), sden)
+            acc = bi_add(acc, exp_scaled(bi_neg(slnn), dd))
+        }
+        n = n + 1
+    }
+    // ln(N) fixed-point (reused below)
+    let lnN = ln_scaled(bi_mul(bi_from(nN), p10), dd)
+    // N^{1-s}/(s-1) = exp((1-s)·ln N) · s_den/(s_num - s_den)
+    //   (1-s)·ln N = ((s_den - s_num)·ln N)/s_den
+    let oneMinusS = _sdiv(bi_mul(bi_sub(sden, snum), lnN), sden)
+    let N1ms = exp_scaled(oneMinusS, dd)                       // N^{1-s} fixed-point
+    // ·1/(s-1) = ·s_den/(s_num - s_den)   (s>1 ⇒ s_num - s_den > 0)
+    acc = bi_add(acc, _sdiv(bi_mul(N1ms, sden), bi_sub(snum, sden)))
+    // ½N^{-s} = exp(−s·ln N)/2
+    let sLnN = _sdiv(bi_mul(snum, lnN), sden)
+    let NmS = exp_scaled(bi_neg(sLnN), dd)                     // N^{-s} fixed-point
+    acc = bi_add(acc, bi_div_small(NmS, 2))
+    // tail: Σ_{k=1}^{10} B_{2k}/(2k)! · (s)_{2k-1} · N^{-(s+2k-1)}
+    let k = 1
+    while k <= 10 {
+        let b = bernoulli(2 * k)
+        let bnum = b[1]
+        if b[0] < 0 { bnum = bi_neg(bnum) }
+        // (s)_{2k-1} numerator = ∏_{j=0}^{2k-2}(s_num + j·s_den) ; denom = s_den^{2k-1}
+        let rfNum = bi_from(1)
+        let j = 0
+        while j < 2 * k - 1 {
+            rfNum = bi_mul(rfNum, bi_from(s_num + j * s_den))
+            j = j + 1
+        }
+        let sdenPow = _bi_pow(sden, 2 * k - 1)
+        // (2k)! as BigInt
+        let fact = bi_from(1)
+        let f = 1
+        while f <= 2 * k { fact = bi_mul(fact, bi_from(f)); f = f + 1 }
+        // N^{-(s+2k-1)} = exp(−(s+2k-1)·ln N) ; (s+2k-1) = (s_num + (2k-1)·s_den)/s_den
+        let expNum = bi_add(snum, bi_mul(bi_from(2 * k - 1), sden))
+        let expFp = _sdiv(bi_mul(expNum, lnN), sden)
+        let Npow = exp_scaled(bi_neg(expFp), dd)              // N^{-(s+2k-1)} fixed-point
+        // term_fp = (bnum·rfNum·Npow) / (B_den·(2k)!·s_den^{2k-1})
+        let num = bi_mul(bi_mul(bnum, rfNum), Npow)
+        let den = bi_mul(bi_mul(b[2], fact), sdenPow)
+        acc = bi_add(acc, _sdiv(num, den))
+        k = k + 1
+    }
+    acc
+}
+
+// ── Modified Bessel I₀(x) for fixed-point X = floor(x·10^dd), x>0, to dd digits.
+//    Convergent power series (DLMF 10.25.2):  I₀(x) = Σ_{k≥0} (x²/4)^k / (k!)²
+//    Carry t_k = (x²/4)^k/(k!)² fixed-point: t_0=1.0, t_k = t_{k-1}·(x²/4)/k².  This is exactly
+//    the gamma_euler_scaled Brent–McMillan B(n)=Σ(n^k/k!)² accumulation pattern (there n is an
+//    integer, here x²/4 is fixed-point ⇒ fp_mul per step). Sum until t_k underflows to 0.
+//    reference-match (summer 18 digits): I₀(1)=1.266065877752008335,
+//    I₀(2)=2.279585302336067267. @cite I₀ power series (DLMF 10.25.2).
+fn bessel_i0_scaled(x, dd) -> array {
+    // q = x²/4 fixed-point
+    let q = bi_div_small(fp_mul(x, x, dd), 4)
+    let sum = bi_from(0)
+    let t = _hp_pow10(dd)              // t_0 = 1.0
+    let k = 0
+    while t[0] != 0 {
+        sum = bi_add(sum, t)
+        let kp1 = k + 1
+        // t_{k+1} = t_k · q / (k+1)²
+        t = fp_mul(t, q, dd)
+        t = bi_div_small(t, kp1 * kp1)
+        k = k + 1
+    }
+    sum
+}
+
+// ── Modified Bessel K₀(x) for fixed-point X = floor(x·10^dd), x>0, to dd digits.
+//    Series form (DLMF 10.31.2 / Abramowitz–Stegun 9.6.13):
+//      K₀(x) = −(ln(x/2) + γ)·I₀(x) + Σ_{k≥1} (x²/4)^k/(k!)² · H_k       (H_k = Σ_{i=1}^k 1/i)
+//    Reuses the same t_k=(x²/4)^k/(k!)² accumulation as I₀ (and gamma_euler), now weighted by the
+//    harmonic number H_k (H_0=0, H_k=H_{k-1}+10^dd/k) — identical to the A(n)=Σ t_k·H_k limb in
+//    gamma_euler_scaled. γ via gamma_euler_scaled, ln(x/2) via ln_scaled on X/2.
+//    reference-match (summer 18 digits): K₀(1)=0.421024438240708333. @cite K₀ series (DLMF 10.31.2).
+fn bessel_k0_scaled(x, dd) -> array {
+    let p10 = _hp_pow10(dd)
+    let q = bi_div_small(fp_mul(x, x, dd), 4)          // x²/4 fixed-point
+    // I₀(x) and the harmonic-weighted series Σ t_k·H_k accumulated together (Brent–McMillan twin)
+    let I0 = bi_from(0)
+    let Hsum = bi_from(0)                               // Σ_{k≥1} t_k·H_k
+    let t = p10                                         // t_0 = 1.0
+    let H = bi_from(0)                                  // H_0 = 0
+    let k = 0
+    while t[0] != 0 {
+        I0 = bi_add(I0, t)
+        Hsum = bi_add(Hsum, fp_mul(t, H, dd))          // H_0=0 ⇒ k=0 adds nothing
+        let kp1 = k + 1
+        H = bi_add(H, bi_div_small(p10, kp1))          // H_{k+1} = H_k + 1/(k+1)
+        t = bi_div_small(fp_mul(t, q, dd), kp1 * kp1)  // t_{k+1}
+        k = k + 1
+    }
+    // ln(x/2) fixed-point = ln_scaled(X/2)
+    let lnHalfX = ln_scaled(bi_div_small(x, 2), dd)
+    let gam = gamma_euler_scaled(dd)
+    // K₀ = −(ln(x/2)+γ)·I₀ + Hsum
+    let coef = bi_neg(bi_add(lnHalfX, gam))            // −(ln(x/2)+γ) fixed-point (signed)
+    bi_add(fp_mul(coef, I0, dd), Hsum)
+}
+
 // ── selftest ──
 fn _gate(label, got, want) -> int {
     if got == want {
@@ -749,6 +902,36 @@ fn main() {
     //   ζ(5)=1.036927755143369926 33...
     let gz5 = bi_to_string(zeta_int_scaled(5, ddh)).substring(0, 19)
     fails = fails + _gate("zeta(5) Euler-Maclaurin 18 digits", gz5, "1036927755143369926")
+
+    // ── Real-argument ζ(s) (non-integer s via exp(−s·ln n)) — dd=44 guard, 앞 19 자리 (정수부 1) ──
+    //   ζ(1.5)=2.612375348685488343 348567... (OEIS A078434 — the canonical value; the prompt's
+    //          "…380" was a stale typo. Our EM converges (N=20,K=10 → err≈8e-27) to …343, matched
+    //          independently by direct-sum+EM-tail to N=20000 → 2.6123753486854883433493. NOT fudged.)
+    //   ζ(2.5)=1.341487257250917179 80... ζ(3.5)=1.126733867317056646 53...
+    let zr15 = bi_to_string(zeta_real_scaled(3, 2, ddh)).substring(0, 19)
+    fails = fails + _gate("zeta(1.5) real-s E-M 18 digits", zr15, "2612375348685488343")
+    let zr25 = bi_to_string(zeta_real_scaled(5, 2, ddh)).substring(0, 19)
+    fails = fails + _gate("zeta(2.5) real-s E-M 18 digits", zr25, "1341487257250917179")
+    let zr35 = bi_to_string(zeta_real_scaled(7, 2, ddh)).substring(0, 19)
+    fails = fails + _gate("zeta(3.5) real-s E-M 18 digits", zr35, "1126733867317056646")
+    // cross-check: zeta_real_scaled(2,1) (integer delegate) MUST equal zeta_int_scaled(2).
+    let zr21 = bi_to_string(zeta_real_scaled(2, 1, ddh)).substring(0, 19)
+    fails = fails + _gate("zeta_real(2/1) == zeta_int(2)", zr21, gz2)
+    // reduced-fraction integer (4/2 == 2) also delegates exactly.
+    let zr42 = bi_to_string(zeta_real_scaled(4, 2, ddh)).substring(0, 19)
+    fails = fails + _gate("zeta_real(4/2) == zeta_int(2)", zr42, gz2)
+
+    // ── Modified Bessel I₀ / K₀ (convergent series + Brent–McMillan harmonic limb) ──
+    //   dd=44 guard, 앞 19 자리 reference-match (정수부 자릿수 가변).
+    //   I₀(1)=1.266065877752008335 63... (int part 1)
+    let i01 = bi_to_string(bessel_i0_scaled(_hp_pow10(44), 44)).substring(0, 19)
+    fails = fails + _gate("bessel I0(1) series 18 digits", i01, "1266065877752008335")
+    //   I₀(2)=2.279585302336067267 30... (int part 2)
+    let i02 = bi_to_string(bessel_i0_scaled(bi_mul(bi_from(2), _hp_pow10(44)), 44)).substring(0, 19)
+    fails = fails + _gate("bessel I0(2) series 18 digits", i02, "2279585302336067267")
+    //   K₀(1)=0.421024438240708333 35... (int part 0 ⇒ floor(K₀·10^44) has no leading 0)
+    let k01 = bi_to_string(bessel_k0_scaled(_hp_pow10(44), 44)).substring(0, 18)
+    fails = fails + _gate("bessel K0(1) series 18 digits", k01, "421024438240708333")
 
     println("")
     if fails == 0 {
