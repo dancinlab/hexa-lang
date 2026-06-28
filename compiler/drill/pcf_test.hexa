@@ -256,6 +256,70 @@ fn _bigten(e) -> array {
     while i < e { r = bi_mul(r, ten); i = i + 1 }
     r
 }
+// BigInt / small-i64 long division (base-10000 limbs, little-endian a[1..]).
+//   d is a small positive i64 with d*10000 < i64 max. Returns [quotient (sign=a[0]), remainder i64].
+//   MSB->LSB long division: cur = rem*10000 + limb; qlimb = cur/d; rem = cur%d.
+fn _bi_divmod_small(a, d) -> array {
+    if a[0] == 0 {
+        let z = []
+        z.push(0)
+        let r0 = []
+        r0.push(z)
+        r0.push(0)
+        return r0
+    }
+    let base = _BASE()
+    let na = _nlimb(a)
+    // qbig holds quotient limbs MSB-first
+    let qbig = []
+    let rem = 0
+    let i = na
+    while i >= 1 {
+        let cur = rem * base + a[i]
+        qbig.push(cur / d)
+        rem = cur % d
+        i = i - 1
+    }
+    // out limbs little-endian: sign then reverse(qbig)
+    let out = []
+    out.push(a[0])
+    let j = qbig.len() - 1
+    while j >= 0 { out.push(qbig[j]); j = j - 1 }
+    let res = []
+    res.push(_norm(out))
+    res.push(rem)
+    res
+}
+fn _bi_div_small(a, d) -> array {
+    let dm = _bi_divmod_small(a, d)
+    dm[0]
+}
+// Engine-computed floor(zeta(3) * 10^dd) via the Apery accelerated series
+//   zeta(3) = (5/2) * sum_{n>=1} (-1)^(n-1) / (n^3 * C(2n,n)).
+//   term_1 = 1/2; term_{n+1}/term_n = -n^3 / (2*(n+1)^2*(2n+1)).
+//   running carries |term_n| * 10^dd as BigInt; acc accumulates the alternating sum.
+fn _zeta3_series(dd) -> array {
+    let running = _bi_div_small(_bigten(dd), 2)   // = 10^dd / 2  (term_1 magnitude)
+    let acc = bi_from(0)
+    let n = 1
+    let pos = 1
+    while running[0] != 0 {
+        if pos == 1 {
+            acc = bi_add(acc, running)
+        } else {
+            acc = bi_add(acc, bi_neg(running))
+        }
+        let m = n * n * n
+        let np1 = n + 1
+        let dd2 = 2 * np1 * np1 * (2 * np1 - 1)
+        running = _bi_div_small(bi_mul(running, bi_from(m)), dd2)
+        if pos == 1 { pos = 0 } else { pos = 1 }
+        n = n + 1
+    }
+    // zeta(3)*10^dd = (5/2) * acc
+    _bi_div_small(bi_mul(bi_from(5), acc), 2)
+}
+
 // Mobius relation test (BigInt): V = A*q*CDEN + B*q*CNUM + C*p*CDEN + D*p*CNUM,
 //   holds iff |V|*10^guard < q*CDEN. aa..dd are small i64.
 fn _mobius_holds(p, q, cnum, cden, aa, bb, cc, dd, guard) -> int {
@@ -286,8 +350,10 @@ fn main() {
     let fails = 0
 
     // zeta(3) = 1.2020569031595942853997381615114499907649... (40 fractional digits)
-    let z3frac = [2,0,2,0,5,6,9,0,3,1,5,9,5,9,4,2,8,5,3,9,9,7,3,8,1,6,1,5,1,1,4,4,9,9,9,0,7,6,4,9]
-    let z3num = _rat_from_digits(1, z3frac)
+    // 엔진생성 zeta(3): no hardcoded digits — compute floor(zeta(3)*10^48) via the Apery
+    //   accelerated series, then /10^8 = floor(zeta(3)*10^40) (= CNUM at CDEN=10^40).
+    //   Discovery engine computes its own reference constant (discovery<->constant coupling).
+    let z3num = _bi_div_small(_zeta3_series(48), 100000000)
 
     // Apery PCF a=-n^6, b=34n^3+51n^2+27n+5 -> 6/zeta(3)
     let acoef = [0,0,0,0,0,0, 0 - 1]

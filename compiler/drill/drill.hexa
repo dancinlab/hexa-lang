@@ -1017,13 +1017,69 @@ fn _drill_mobius_holds(p, q, cnum, cden, aa, bb, cc, dd, guard) -> i64 {
     0
 }
 
+// small-divisor division |a|/d (d positive i64, d*10000 < i64) -> [quotient BigInt, remainder i64].
+fn _drill_bi_divmod_small(a, d) -> array {
+    if a[0] == 0 {
+        let z = []
+        z.push(0)
+        let r0 = []
+        r0.push(z)
+        r0.push(0)
+        return r0
+    }
+    let na = a.len() - 1
+    let qbig = []
+    let mut rem = 0
+    let mut i = na
+    while i >= 1 {
+        let cur = rem * 10000 + a[i]
+        qbig.push(cur / d)
+        rem = cur % d
+        i = i - 1
+    }
+    let out = []
+    out.push(a[0])
+    let mut j = qbig.len() - 1
+    while j >= 0 {
+        out.push(qbig[j])
+        j = j - 1
+    }
+    let res = []
+    res.push(_drill_bi_norm(out))
+    res.push(rem)
+    res
+}
+fn _drill_bi_div_small(a, d) -> array {
+    let qr = _drill_bi_divmod_small(a, d)
+    qr[0]
+}
+// floor(zeta(3) * 10^dd) via Apery's accelerated series (van der Poorten 1979):
+//   zeta(3) = (5/2) sum_{n>=1} (-1)^(n-1) / (n^3 C(2n,n)) ; term ratio all small ints:
+//   T_n = T_{n-1} * (n-1)^3 / (2 n^2 (2n-1)) , T_1 = 1/2.  (no full BigInt division needed)
+fn _drill_zeta3_series(dd) -> array {
+    let mut running = _drill_bi_div_small(_drill_bigten(dd), 2)
+    let mut acc = _drill_bi_from(0)
+    let mut n = 1
+    let mut pos = 1
+    while running[0] != 0 {
+        if pos == 1 { acc = _drill_bi_add(acc, running) } else { acc = _drill_bi_add(acc, _drill_bi_neg(running)) }
+        let m = n * n * n
+        let np1 = n + 1
+        let dv = 2 * np1 * np1 * (2 * np1 - 1)
+        running = _drill_bi_div_small(_drill_bi_mul(running, _drill_bi_from(m)), dv)
+        if pos == 1 { pos = 0 } else { pos = 1 }
+        n = n + 1
+    }
+    _drill_bi_div_small(_drill_bi_mul(_drill_bi_from(5), acc), 2)
+}
+
 // Per-round PCF screen: rediscover Apery's zeta(3) CF (live sanity) + report the
 // MEASURED-dry novel count (DRILL_PCF stderr audit). byte-eq-neutral.
 fn _native_pcf_screen(round: i64) -> void {
     let cden = _drill_bigten(40)
-    // zeta(3) = 1.2020569031595942853997381615114499907649... (40 fractional digits)
-    let z3frac = [2,0,2,0,5,6,9,0,3,1,5,9,5,9,4,2,8,5,3,9,9,7,3,8,1,6,1,5,1,1,4,4,9,9,9,0,7,6,4,9]
-    let z3num = _drill_rat_digits(1, z3frac)
+    // zeta(3) ENGINE-COMPUTED (Apery accelerated series) — replaces the 40-digit hardcode.
+    // floor(zeta(3)*10^40) = zeta3_series(48) / 10^8 (exact; byte-identical to old z3frac).
+    let z3num = _drill_bi_div_small(_drill_zeta3_series(48), 100000000)
     // Apery PCF a=-n^6, b=34n^3+51n^2+27n+5 -> 6/zeta(3)
     let acoef = [0,0,0,0,0,0, 0 - 1]
     let bcoef = [5,27,51,34]
