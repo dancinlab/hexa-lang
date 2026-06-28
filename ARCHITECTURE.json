@@ -4498,6 +4498,12 @@
                     "role": "",
                     "id": "language-surface-tier-1-true-gaps-both-go-and-rust-have-it-hexa-does-not-os-thre-3",
                     "detail": ""
+                  },
+                  {
+                    "name": "M:N green-thread integration DESIGNED (`state/rfc_mn_scheduler.md`): 1:1-spawn + async + work-stealing unified into Go GMP model; oracle `self/mn_scheduler.hexa` (29 assertions) + opt-in N=1 executor `HEXA_COROUTINE`; real `-DHEXA_MN_SCHED` C substrate = next pool slice; mid-fn yield = wall.",
+                    "role": "",
+                    "id": "language-surface-tier-1-true-gaps-both-go-and-rust-have-it-hexa-does-not-os-thre-4",
+                    "detail": ""
                   }
                 ]
               },
@@ -4875,6 +4881,12 @@
                     "name": "Default build never passes `-DHEXA_THREADS` (determinism isolation). state/rfc_real_concurrency_optin.md §c.",
                     "role": "",
                     "id": "language-surface-impact-ranking-largest-smallest-gap-real-concurrency-synchroniz-4",
+                    "detail": ""
+                  },
+                  {
+                    "name": "M:N scheduler (slice-③) DESIGNED + oracle landed (`state/rfc_mn_scheduler.md`, `self/mn_scheduler.hexa`): unify spawn/async/work-stealing into Go GMP; cooperative N=1 executor opt-in `HEXA_COROUTINE`; true-parallel C substrate `-DHEXA_MN_SCHED` = next pool slice.",
+                    "role": "",
+                    "id": "language-surface-impact-ranking-largest-smallest-gap-real-concurrency-synchroniz-5",
                     "detail": ""
                   }
                 ]
