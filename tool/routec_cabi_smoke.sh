@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strrchr memmove bzero strtoll time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush popen pclose; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strrchr memmove bzero strtoll strtoull strndup time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush popen pclose; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -116,6 +116,9 @@ extern char  *hxlcl_strncpy(char *d, const char *s, size_t n);
 extern char  *hxlcl_strcat(char *d, const char *s);
 extern int    hxlcl_atoi(const char *s);
 extern char  *hxlcl_strdup(const char *s);
+/* dup mirror — strndup. Mirror of the strdup composite (inner malloc + byte loops)
+ * with a cap-bounded scan; returns a fresh NUL-terminated copy of ≤cap bytes. */
+extern char  *hxlcl_strndup(const char *s, size_t cap);
 extern void  *hxlcl_calloc(size_t nmemb, size_t size);
 
 extern void  *hxlcl_realloc(void *p, size_t n);
@@ -198,6 +201,12 @@ extern void   hxlcl_bzero(void *s, size_t n);
  * identical compute; this run exercises both the value parse AND the endptr
  * store64 (a non-NULL endptr → *endptr == nptr + consumed-length). */
 extern long long hxlcl_strtoll(const char *nptr, char **endptr, int base);
+
+/* parse mirror — strtoull. EXACT unsigned mirror of strtoll (same parse loop + same
+ * NULL-gated endptr store64); differs only by no '-' negate + raw unsigned result.
+ * Cross-target-identical compute; this run exercises value parse AND the endptr
+ * store64 (non-NULL endptr → *endptr == nptr + consumed-length). */
+extern unsigned long long hxlcl_strtoull(const char *nptr, char **endptr, int base);
 
 /* batch H — time / poll. On darwin time uses gettimeofday(116) → reads tv_sec from
  * a hxlcl_malloc'd 16-byte scratch buffer (the heap-scratch substrate); poll uses
@@ -602,6 +611,49 @@ int main(void) {
         CK(endp3 == NULL, "strtoll(NULL) sets *endptr = NULL");
     }
 
+    /* parse mirror: strtoull — unsigned mirror of strtoll. Same parse + endptr
+     * store64 out-param; differs only by no '-' negate + raw unsigned result. */
+    {
+        CK(hxlcl_strtoull("42", NULL, 10) == 42ULL, "strtoull(\"42\",NULL,10) == 42 (endptr NULL-gate)");
+        CK(hxlcl_strtoull("+99", NULL, 10) == 99ULL, "strtoull(\"+99\",NULL,10) == 99 (plus sign)");
+        CK(hxlcl_strtoull("  123abc", NULL, 10) == 123ULL, "strtoull leading-ws + trailing-garbage stop");
+        CK(hxlcl_strtoull("0", NULL, 10) == 0ULL, "strtoull(\"0\") == 0");
+        CK(hxlcl_strtoull("ff", NULL, 16) == 255ULL, "strtoull(\"ff\",16) == 255 (lowercase hex)");
+        CK(hxlcl_strtoull("0755", NULL, 0) == 493ULL, "strtoull(\"0755\",0) == 0755 octal (493)");
+        CK(hxlcl_strtoull("10", NULL, 0) == 10ULL, "strtoull(\"10\",0) == 10 (decimal auto)");
+        /* large unsigned value that overflows signed long long → exercises the
+         * unsigned path (strtoll would wrap negative; strtoull returns it raw). */
+        CK(hxlcl_strtoull("18446744073709551615", NULL, 10) == 18446744073709551615ULL,
+           "strtoull(ULLONG_MAX) == 0xFFFFFFFFFFFFFFFF (unsigned, no negate)");
+        const char *uhx = "0xFF";
+        char *uendp = NULL;
+        unsigned long long uv = hxlcl_strtoull(uhx, &uendp, 16);
+        CK(uv == 255ULL, "strtoull(\"0xFF\",&end,16) == 255 (0x prefix skip)");
+        CK(uendp == uhx + 4, "strtoull endptr == nptr+4 (store64 out-param write)");
+        const char *umix = "12x";
+        char *uendp2 = NULL;
+        CK(hxlcl_strtoull(umix, &uendp2, 10) == 12ULL, "strtoull(\"12x\",&end,10) == 12");
+        CK(uendp2 == umix + 2, "strtoull endptr stops at first non-digit (mix+2)");
+        char *uendp3 = (char *)0x1;
+        CK(hxlcl_strtoull(NULL, &uendp3, 10) == 0ULL, "strtoull(NULL,&end,10) == 0");
+        CK(uendp3 == NULL, "strtoull(NULL) sets *endptr = NULL");
+    }
+
+    /* dup mirror: strndup — strdup composite + cap-bounded scan. Checks the cap
+     * truncation (no-NUL-within-cap), the NUL-before-cap short copy, cap==0, and
+     * NULL passthrough — the strndup behaviour battery from the SELFEMIT seed. */
+    {
+        char *d1 = hxlcl_strndup("hello", 3);   /* cap < strlen → truncated copy */
+        CK(d1 != NULL && strcmp(d1, "hel") == 0, "strndup(\"hello\",3) == \"hel\" (cap truncates)");
+        char *d2 = hxlcl_strndup("hi", 10);     /* cap > strlen → full copy (NUL-before-cap) */
+        CK(d2 != NULL && strcmp(d2, "hi") == 0, "strndup(\"hi\",10) == \"hi\" (NUL before cap)");
+        char *d3 = hxlcl_strndup("abc", 0);     /* cap == 0 → empty string */
+        CK(d3 != NULL && d3[0] == '\0', "strndup(\"abc\",0) == \"\" (cap==0)");
+        char *d4 = hxlcl_strndup("xyz", 3);     /* cap == strlen → full copy */
+        CK(d4 != NULL && strcmp(d4, "xyz") == 0, "strndup(\"xyz\",3) == \"xyz\" (cap==len)");
+        CK(hxlcl_strndup(NULL, 5) == NULL, "strndup(NULL,5) == NULL (NULL passthrough)");
+    }
+
     /* batch H — time / poll. FULLY EXERCISED on this darwin host (both legs run).
      * time: darwin has no BSD `time` trap, so the body uses gettimeofday(116) into a
      * hxlcl_malloc'd 16-byte scratch (the heap-scratch substrate) and reads tv_sec —
@@ -856,4 +908,4 @@ echo "[routec-smoke] (3) compile harness + link Route C .o + run …"
 "$TMP/routec_smoke"
 rc=$?
 [ "$rc" -eq 0 ] || { echo "[routec-smoke] FATAL: behaviour run rc=$rc" >&2; exit 1; }
-echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr + pure-leaf mirror strrchr/memmove/bzero + Wall 3-a CORE FILE* fopen/fread/fwrite/fseek/ftell/fclose/fdopen + Wall 3-b STD-STREAM fputs/fputc/fflush, darwin-arm64)"
+echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr + pure-leaf mirror strrchr/memmove/bzero + parse/dup mirror strtoull/strndup + Wall 3-a CORE FILE* fopen/fread/fwrite/fseek/ftell/fclose/fdopen + Wall 3-b STD-STREAM fputs/fputc/fflush, darwin-arm64)"

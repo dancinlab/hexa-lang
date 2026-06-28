@@ -1999,6 +1999,14 @@ pub fn _is_cabi(fname: string) -> bool {
     // plus one inner C-ABI call `bl hxlcl_malloc`. Whitelisting both binds the
     // inner alloc call C-ABI (size→rdi/x0, ptr←rax/x0) to the retained shim malloc.
     if fname == "hxlcl_strdup" { return true }
+    // DUP MIRROR — hxlcl_strndup. EXACT mirror of the r8 strdup composite: same
+    // inner C-ABI `bl hxlcl_malloc` + strlen-scan + copy + NUL-terminate byte
+    // loops, NO new codegen mechanism. The only difference is the scan loop is
+    // cap-bounded (`while(n<cap && s[n]) n++`) — a `__hx_payload_lt(n, cap)` guard
+    // already used throughout. Its inner callee hxlcl_malloc is the SAME symbol
+    // whitelisted just below (shared with strdup/calloc/realloc — not re-listed).
+    // Byte-faithful to the frozen 0-libc floor self/runtime.c:481 (hxlcl_strndup).
+    if fname == "hxlcl_strndup" { return true }
     // r9 composite — hxlcl_calloc is a NON-LEAF: inner C-ABI `bl hxlcl_malloc`
     // (pattern ON-path-confirmed by strdup) + a `__hx_ptr_store8` zero loop
     // (confirmed by memset). Whitelisting both binds the inner alloc call C-ABI.
@@ -2118,6 +2126,14 @@ pub fn _is_cabi(fname: string) -> bool {
     // cross-target-identical (no NR, no arm64 call-shape divergence). Byte-
     // faithful to the frozen 0-libc floor self/runtime.c:513 (hxlcl_strtoll).
     if fname == "hxlcl_strtoll" { return true }
+    // PARSE MIRROR — hxlcl_strtoull. EXACT mirror of hxlcl_strtoll (same parse
+    // leaf class, same NULL-gated `char** endptr` store64 out-param): no new
+    // codegen mechanism. The only differences from strtoll are (a) no '-' sign
+    // negate (strtoull skips a leading '+' but never negates) and (b) the result
+    // is the raw unsigned accumulation `n`. Pure compute → cross-target-identical
+    // (no NR, no arm64 call-shape divergence). Byte-faithful to the frozen 0-libc
+    // floor self/runtime.c:542 (hxlcl_strtoull).
+    if fname == "hxlcl_strtoull" { return true }
     // batch I — clock_gettime + execve (clean syscall leaves continuing the close
     // errno-store discipline). clock_gettime = getrusage's out-ptr shape (caller's
     // timespec*; uniform 2-arg on Linux, NR x86_64=228/arm64=113; darwin has NO trap
