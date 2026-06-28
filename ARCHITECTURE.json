@@ -3614,6 +3614,12 @@
                 "role": "",
                 "id": "blocking-frontiers-forge-gpu-gemm-cublas-independence-lcublas-removal-opt-in-fas",
                 "detail": ""
+              },
+              {
+                "name": "DETERMINISM POLICY (CLAUDE.md `flame/forge determinism`): flame/forge ships 2 GPU-numeric paths. (A) DEFAULT = deterministic (own-GEMM `_hx_k_gemm` FP64==cuBLAS bit-id, `_hx_k_col2im` gather, NO atomics) — run-to-run/cross-host byte-exact, for eval/verdict/inference/release. (B) OPT-IN = fast non-det (cuBLAS Tensor-Core GEMM + atomic split-K/im2col-scatter/col2im-scatter/grad-accum + batched GEMM) — gives up bit-determinism for max speed, for TRAINING. Selected by opt-in flags (켜는 것이 비결정 활성화 = native-canonical-default polarity); umbrella `HEXA_FAST_NONDET` (ING, unimplemented) flips the training family at once. Consumer (anima) contract: train=B, eval=A (anima `a_train_nondeterministic_fast`); training ckpt quality validated by held-out DESCENT not bit-determinism. ORTHOGONAL to selfhost-determinism-gate (that = compiler gen3 compile+link reproducibility, not GPU numerics; GPU det invariant = own==cuBLAS byteeq oracle HEXA_OWN_GEMM=0/HEXA_TF32_OWN=0).",
+                "role": "",
+                "id": "blocking-frontiers-forge-gpu-gemm-cublas-independence-determinism-policy-2path",
+                "detail": ""
               }
             ]
           },

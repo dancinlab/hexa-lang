@@ -204,6 +204,34 @@ git submodule update --init --recursive          # activate (hooks no-op until p
   새 `@<attr>` 키워드 도입 금지(frozen blob 151c52c8 파서 미지 → faithful build-break ·
   name-prefix/whitelist hook 으로만).
 
+## flame/forge determinism — det-default(eval) / fast-nondet opt-in(학습) 2-경로
+
+- do: flame/forge 는 **2 경로**를 제공한다(위 [native-canonical-default] polarity 의 determinism-축
+  특수화). **(A) deterministic 경로 = DEFAULT** — own-GEMM 고정-reduction-order·non-atomic
+  (`_hx_k_gemm` FP64 == cuBLAS bit-identical · `_hx_k_col2im` gather-reduce, atomic 無): run-to-run
+  ·cross-host byte-exact GPU 수치 = **eval/verdict/추론/릴리스용**. **(B) fast non-det 경로 =
+  OPT-IN** — cuBLAS Tensor-Core GEMM · atomic split-K/im2col-scatter/col2im-scatter/grad-accum ·
+  batched GEMM: bit-determinism 포기하고 최속 = **학습용**.
+- do: 두 경로는 **opt-in 플래그로 선택**한다(켜는 것이 "비결정 활성화" = polarity 정합 · 위
+  [native-canonical-default]). 개별 레버는 이미 존재 — `HEXA_GEMV_SPLITK`(atomic split-K, NOT
+  bit-id) · `HEXA_TF32_FASTMODE`/`HEXA_USE_CUBLAS`(cuBLAS TC) · `HEXA_BF16_OWN`. 학습 hot-path 일괄
+  토글은 우산 플래그 `HEXA_FAST_NONDET=1`(미구현 · ING) 로 이 family 를 한 번에 켠다. **DEFAULT
+  (플래그 無) = 항상 deterministic** — `_forge_gemv_splitk_on`/`_forge_own_gemm_on`/`_devfeed_on`/
+  `_fuse_on` 동일 env-gate 패턴(`getenv` → 0/unset 이면 native-det).
+- do: 소비자(anima) 계약은 **학습 = fast non-det(B) · eval/verdict = deterministic(A)** — anima
+  CLAUDE.md `a_train_nondeterministic_fast` 와 1:1. 근거: byte-determinism(고정 reduction-order·
+  non-atomic 강제)이 GPU util 4%·step 170s 의 근본(torch/JAX 가 빠른 건 non-det atomic-accum 이
+  기본이라서). 학습 산출 ckpt 품질은 **held-out DESCENT** 로 검증(bit-determinism 불요), eval/verdict
+  은 det 경로(A)로 byte-exact 재측정 → 학습 비결정성이 측정 권위를 오염시키지 않음.
+- do: 정합성 명시 — GPU 수치 determinism(이 규칙)은 self-host `selfhost-determinism-gate`(컴파일+링크
+  gen3 재현성)와 **별개 축**이다. fast non-det 학습은 컴파일러 self-host 게이트를 건드리지 않는다;
+  GPU 수치의 det 불변식은 own-GEMM==cuBLAS byte-eq 오라클(`HEXA_OWN_GEMM=0`/`HEXA_TF32_OWN=0`)이
+  지킨다(혼동 금지).
+- dont: **determinism 을 DEFAULT 에서 제거 금지**(eval/verdict/릴리스 byteeq + own==cuBLAS 오라클은
+  불변) · fast non-det 을 default-ON 으로 flip(polarity 역전 · #4016 revert 선례) · CI byteeq 3타깃
+  +nvptx GREEN 전 우산 플래그 default flip · non-det 경로를 verdict/박제 측정에 사용(anima
+  `a_engine_native_learning` det-eval 계약 위반).
+
 ## 아틀라스 · 검증
 
 - do: 발견 엔진(수론 · 물리 · 우주 · 생명)의 사람용 원장은 **`ATLAS/README.md` 단일 SSOT**(n=6 축0
