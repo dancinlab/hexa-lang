@@ -783,6 +783,29 @@ fn emit_runtime_cuda_c() -> str {
             "    C[m * N + n] = acc;\n" +
             "}\n" +
             "\n" +
+            "/* #4204 own-native fast-default — atomic split-K general GEMM (M>1). Splits\n" +
+            " * K across grid.z into KS chunks; each (m,n,kc) thread accumulates its chunk\n" +
+            " * partial then atomicAdd's into C[m*N+n]. CHANGES the reduction order (NOT\n" +
+            " * bit-identical) -> fast non-det DEFAULT (training). C MUST be pre-zeroed\n" +
+            " * (the dispatch cudaMemsetAsync's it before launch). HEXA_DET selects the\n" +
+            " * fixed-order _hx_k_gemm instead. gpu_only: needs nvcc compile + cuBLAS-\n" +
+            " * oracle numeric validation on summer BuildStage before trusting the\n" +
+            " * default training path. */\n" +
+            "__global__ void _hx_k_gemm_splitk(const double* __restrict__ A,\n" +
+            "                                  const double* __restrict__ B,\n" +
+            "                                  double* __restrict__ C,\n" +
+            "                                  int64_t M, int64_t K, int64_t N, int KS) {\n" +
+            "    int64_t n = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "    int64_t m = (int64_t)blockIdx.y * blockDim.y + threadIdx.y;\n" +
+            "    if (m >= M || n >= N) return;\n" +
+            "    int64_t kc = (K + KS - 1) / KS;\n" +
+            "    int64_t k0 = (int64_t)blockIdx.z * kc;\n" +
+            "    int64_t k1 = k0 + kc; if (k1 > K) k1 = K;\n" +
+            "    double acc = 0.0;\n" +
+            "    for (int64_t k = k0; k < k1; k++) acc += A[m * K + k] * B[k * N + n];\n" +
+            "    if (acc != 0.0) atomicAdd(&C[m * N + n], acc);\n" +
+            "}\n" +
+            "\n" +
             "/* ===== decode GEMV fast-path (M==1) ==================================\n" +
             " * kernel-quality-reffirst lane (profiler-driven, c1 root-cause). The 16x16\n" +
             " * _hx_k_gemm tile WASTES 15/16 threads at M==1 (only threadIdx.y==0 live)\n" +
@@ -821,6 +844,25 @@ fn emit_runtime_cuda_c() -> str {
             "}\n" +
             "static int _forge_gemv_splitk_on(void) {\n" +
             "    const char* v = getenv(\"HEXA_GEMV_SPLITK\");\n" +
+            "    return (v && v[0] && v[0] != '0') ? 1 : 0;\n" +
+            "}\n" +
+            "\n" +
+            "/* #4204 own-native fast-default — determinism axis (own/vendor polarity\n" +
+            " * UNTOUCHED). The own-native NON-deterministic atomic kernels (atomic\n" +
+            " * split-K GEMV/GEMM, atomic-scatter col2im, atomic embedding grad-accum)\n" +
+            " * are now the DEFAULT (training gets the fast benefit). Opt-IN HEXA_DET\n" +
+            " * forces the own fixed-order / non-atomic kernels for bit-identical,\n" +
+            " * cross-host byte-parity runs — the eval/verdict/decode entry points and\n" +
+            " * the GPU byteeq/oracle CI jobs export HEXA_DET=1 so Ψ-checksum + frozen\n" +
+            " * gate measurement stay byte-deterministic. INVERTED-POLARITY ref-match of\n" +
+            " * _forge_gemv_splitk_on: same opt-in env-read shape, but every kernel\n" +
+            " * dispatch branches on `!_forge_det_on()` (default=fast-atomic) instead of\n" +
+            " * gating the atomic path behind an opt-in. NOTE this is the OWN-vs-OWN\n" +
+            " * (atomic vs fixed-order) axis only — _forge_own_gemm_on / HEXA_USE_CUBLAS\n" +
+            " * vendor polarity is unchanged (cuBLAS stays opt-in). Returns 1 (det/\n" +
+            " * non-atomic) iff HEXA_DET is set+non-empty+non-'0'; else 0 (fast/atomic). */\n" +
+            "static int _forge_det_on(void) {\n" +
+            "    const char* v = getenv(\"HEXA_DET\");\n" +
             "    return (v && v[0] && v[0] != '0') ? 1 : 0;\n" +
             "}\n" +
             "\n" +
@@ -1204,11 +1246,13 @@ fn emit_runtime_cuda_c() -> str {
             "            fprintf(stderr, \"[OWN-GEMM-FIRED] _hx_k_gemm DEVICE path (no cuBLAS)\\n\"); }\n" +
             "        if (M == 1) {\n" +
             "            /* decode GEMV fast-path (kernel-quality-reffirst lane). The 16x16\n" +
-            "             * tile wastes 15/16 threads at M==1. _hx_k_gemv_1d is BYTE-IDENTICAL\n" +
-            "             * (same sequential K-loop reduction as _hx_k_gemm) -> default path.\n" +
-            "             * HEXA_GEMV_SPLITK opt-in adds K-splitting (atomicAdd, NOT bit-id)\n" +
-            "             * to fill the SMs at small N. */\n" +
-            "            if (_forge_gemv_splitk_on()) {\n" +
+            "             * tile wastes 15/16 threads at M==1. #4204 fast-default flip:\n" +
+            "             * split-K atomic (_hx_k_gemv_splitk, fills SMs at small N, NOT\n" +
+            "             * bit-id) is now the DEFAULT; HEXA_DET selects the BYTE-IDENTICAL\n" +
+            "             * _hx_k_gemv_1d (same sequential K-loop reduction as _hx_k_gemm).\n" +
+            "             * Legacy HEXA_GEMV_SPLITK still forces split-K even under HEXA_DET\n" +
+            "             * is NOT honoured — det wins (eval/verdict must stay byte-exact). */\n" +
+            "            if (!_forge_det_on()) {\n" +
             "                int _ks = 8; /* knee measured @sm_120: 128 blocks saturates DRAM 95% */\n" +
             "                cudaMemsetAsync(C_dev, 0, (size_t)N * sizeof(double), _forge_stream());\n" +
             "                dim3 _vblk(256);\n" +
@@ -1220,6 +1264,15 @@ fn emit_runtime_cuda_c() -> str {
             "                _hx_k_gemv_1d<<<_vgrd, _vblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, K, N);\n" +
             "            }\n" +
             "            if (_forge_launch_check(\"own_gemv\") != 0) return -1;\n" +
+            "        } else if (!_forge_det_on()) {\n" +
+            "            /* #4204 fast-default: atomic split-K general GEMM (NOT bit-id),\n" +
+            "             * fills the SMs along K. C pre-zeroed for the atomicAdd. */\n" +
+            "            int _gks = 8; /* K-split chunks; mirrors the GEMV knee */\n" +
+            "            cudaMemsetAsync(C_dev, 0, (size_t)(M * N) * sizeof(double), _forge_stream());\n" +
+            "            dim3 _skblk(16, 16);\n" +
+            "            dim3 _skgrd((unsigned)((N + 15) / 16), (unsigned)((M + 15) / 16), (unsigned)_gks);\n" +
+            "            _hx_k_gemm_splitk<<<_skgrd, _skblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, M, K, N, _gks);\n" +
+            "            if (_forge_launch_check(\"own_gemm_splitk\") != 0) return -1;\n" +
             "        } else {\n" +
             "        dim3 _gblk(16, 16);\n" +
             "        dim3 _ggrd((unsigned)((N + 15) / 16), (unsigned)((M + 15) / 16));\n" +
@@ -1582,6 +1635,31 @@ fn emit_runtime_cuda_c() -> str {
             "    }\n" +
             "}\n" +
             "\n" +
+            "/* #4204 own-native fast-default — atomic-SCATTER col2im. One thread per\n" +
+            " * DXC input cell (t, j=ci*K+k); maps to dX[p,ci] with p = t - dil*(K-1-k)\n" +
+            " * and atomicAdd's the tap into DX[p*Cin+ci]. CHANGES the float accum order\n" +
+            " * (NOT bit-identical) vs the transpose-GATHER _hx_k_col2im -> fast non-det\n" +
+            " * DEFAULT (training). DX MUST be pre-zeroed (the wrapper cudaMemsetAsync's\n" +
+            " * it). HEXA_DET selects the deterministic gather kernel. gpu_only: needs\n" +
+            " * nvcc compile + clm_conv_devfeed.hexa oracle (det path) on summer. */\n" +
+            "__global__ void _hx_k_col2im_scatter(const double* __restrict__ DXC,\n" +
+            "                                     double* __restrict__ DX,\n" +
+            "                                     int64_t T, int64_t Cin, int64_t K,\n" +
+            "                                     int64_t dil) {\n" +
+            "    int64_t Kdim = Cin * K;\n" +
+            "    int64_t total = T * Kdim;\n" +
+            "    int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;\n" +
+            "    for (int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         idx < total; idx += stride) {\n" +
+            "        int64_t t  = idx / Kdim;\n" +
+            "        int64_t j  = idx - t * Kdim;      /* j = ci*K + k */\n" +
+            "        int64_t ci = j / K;\n" +
+            "        int64_t k  = j - ci * K;\n" +
+            "        int64_t p  = t - dil * (K - 1 - k);\n" +
+            "        if (p >= 0) atomicAdd(&DX[p * Cin + ci], DXC[idx]);\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
             "/* Launch helper: one 1-D grid over `total` output cells. */\n" +
             "static void _hx_im2col_grid(int64_t total, int* grid_sz, int* block_sz) {\n" +
             "    *block_sz = 256;\n" +
@@ -1648,8 +1726,15 @@ fn emit_runtime_cuda_c() -> str {
             "    if (_ensure_dev_alloc_out(dx_id, T * Cin) != 0) return -1;\n" +
             "    const double* DXC = g_slots[dxc_id].d_buf;\n" +
             "    double*       DX  = g_slots[dx_id].d_buf;\n" +
+            "    if (!_forge_det_on()) {\n" +
+            "        /* #4204 fast-default: atomic-scatter (NOT bit-id). DX pre-zeroed. */\n" +
+            "        cudaMemsetAsync(DX, 0, (size_t)(T * Cin) * sizeof(double), _forge_stream());\n" +
+            "        int gss, bss; _hx_im2col_grid(T * Cin * K, &gss, &bss);\n" +
+            "        _hx_k_col2im_scatter<<<gss, bss, 0, _forge_stream()>>>(DXC, DX, T, Cin, K, dil);\n" +
+            "    } else {\n" +
             "    int grid_sz, block_sz; _hx_im2col_grid(T * Cin, &grid_sz, &block_sz);\n" +
             "    _hx_k_col2im<<<grid_sz, block_sz, 0, _forge_stream()>>>(DXC, DX, T, Cin, K, dil);\n" +
+            "    }\n" +
             "    cudaError_t er = cudaDeviceSynchronize();\n" +
             "    if (er != cudaSuccess) {\n" +
             "        fprintf(stderr, \"[cuda] col2im launch failed: %s\\n\", cudaGetErrorString(er));\n" +
@@ -4109,6 +4194,29 @@ fn emit_runtime_cuda_c() -> str {
             "    }\n" +
             "}\n" +
             "\n" +
+            "/* #4204 own-native fast-default — atomic embedding grad-accum. One thread\n" +
+            " * per (i,c): atomicAdd's DX[i*d+c] into DTABLE[tok*d+c] (tok=(int)IDS[i]).\n" +
+            " * Colliding tokens accumulate in nondeterministic order (NOT bit-id) ->\n" +
+            " * fast non-det DEFAULT (training); replaces the O(V*T) per-vocab-row scan.\n" +
+            " * DTABLE is pre-zeroed on the host (clm_prod_bwd) then H2D'd, so the\n" +
+            " * atomicAdds land on a clean table. HEXA_DET selects the deterministic\n" +
+            " * per-row scan _hx_k_embedding_bwd_scatter. gpu_only: needs nvcc compile +\n" +
+            " * clm_prod_embed_scatter_eq oracle (det path) on summer. */\n" +
+            "__global__ void _hx_k_embedding_bwd_scatter_atomic(const double* __restrict__ DX,\n" +
+            "                                                   const double* __restrict__ IDS,\n" +
+            "                                                   double* __restrict__ DTABLE,\n" +
+            "                                                   int64_t T, int64_t d, int64_t V) {\n" +
+            "    int64_t total = T * d;\n" +
+            "    int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;\n" +
+            "    for (int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         idx < total; idx += stride) {\n" +
+            "        int64_t i = idx / d;\n" +
+            "        int64_t c = idx - i * d;\n" +
+            "        int64_t tok = (int64_t)IDS[i];\n" +
+            "        if (tok >= 0 && tok < V) atomicAdd(&DTABLE[tok * d + c], DX[i * d + c]);\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
             "int _hx_cuda_farr_embedding_bwd_scatter_gpu(int64_t dx_id, int64_t ids_id,\n" +
             "                                            int64_t dtable_id,\n" +
             "                                            int64_t T, int64_t d, int64_t V) {\n" +
@@ -4120,12 +4228,23 @@ fn emit_runtime_cuda_c() -> str {
             "    const double* DX  = g_slots[dx_id].d_buf;\n" +
             "    const double* IDS = g_slots[ids_id].d_buf;\n" +
             "    double*       DTABLE = g_slots[dtable_id].d_buf;\n" +
+            "    if (!_forge_det_on()) {\n" +
+            "        /* #4204 fast-default: atomic grad-accum (NOT bit-id), one thread per\n" +
+            "         * (i,c). DTABLE is the host-pre-zeroed table just H2D'd above. */\n" +
+            "        int eblk = 256;\n" +
+            "        int64_t ewant = (T * d + eblk - 1) / eblk;\n" +
+            "        int egrid = (ewant > 1024) ? 1024 : (int)ewant;\n" +
+            "        if (egrid < 1) egrid = 1;\n" +
+            "        _hx_k_embedding_bwd_scatter_atomic<<<egrid, eblk, 0, _forge_stream()>>>(DX, IDS, DTABLE, T, d, V);\n" +
+            "        if (_forge_launch_check(\"embedding_bwd_scatter_atomic\") != 0) return -1;\n" +
+            "    } else {\n" +
             "    int block_sz = 128;\n" +
             "    int64_t want = (V + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
             "    _hx_k_embedding_bwd_scatter<<<grid_sz, block_sz, 0, _forge_stream()>>>(DX, IDS, DTABLE, T, d, V);\n" +
             "    if (_forge_launch_check(\"embedding_bwd_scatter\") != 0) return -1;\n" +
+            "    }\n" +
             "    {\n" +
             "        HexaFarrEntry* e = &_hx_farr_table[dtable_id];\n" +
             "        e->d_buf      = (void*)g_slots[dtable_id].d_buf;\n" +
