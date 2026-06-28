@@ -7,6 +7,12 @@
 // 임의정밀 정수로 계산한다 — codegen-fragile float Taylor 없이, 정확 정수 산술만.
 //
 // 표현: 상수 C를 D자리로 = BigInt floor(C * 10^D) (고정소수점 정수). 호출자가 10^D로 자릿수 해석.
+//
+// SUBSTRATE 갭 (honest, follow-on): Bernoulli B_n·Euler-Mascheroni γ 는 현 BigInt ops로 미구현.
+//   • Bernoulli B_n 은 유리수(분자/분모 BigInt + 약분) → full BigInt÷BigInt + gcd 가 전제인데
+//     현재는 bi_divmod_small(소제수 i64만)뿐. gcd/full division 추가는 별도 PR (fix-the-tool).
+//   • γ 는 Brent–McMillan(ln·exp 필요) 또는 조화수-기반 → ln/exp substrate 부재.
+//   여기엔 현 ops로 깨끗이 검증되는 상수(π·ζ(2..6)·ζ(3)·Catalan G)만 둔다 (억지 fudge 금지).
 
 import "stdlib/bigint.hexa"
 
@@ -102,6 +108,36 @@ fn zeta3_scaled(dd) -> array {
     bi_div_small(bi_mul(bi_from(5), acc), 2)
 }
 
+// Catalan's constant G to D digits — no closed π form (and the Ramanujan series
+//   G = (π/8)ln(2+√3) + (3/8)Σ 1/((2n+1)²C(2n,n)) needs ln, which BigInt lacks).
+// Instead use the purely-rational (log-free, π-free) Guillera–Pilehrood series
+// (used by y-cruncher; en.wikipedia.org/wiki/Catalan's_constant):
+//   G = (1/2) Σ_{k≥0} (-8)^k (3k+2) / ((2k+1)³ · C(2k,k)³)
+// Split the k-dependent prefactor (3k+2) off a geometric/binomial carrier
+//   R_k = (-8)^k / ((2k+1)³ · C(2k,k)³) ,  R_0 = 1 ,
+// whose ratio is ALL small integers (no full BigInt division):
+//   R_{k+1} = R_k · ( -(k+1)³ ) / (2k+3)³
+// (since C(2k+2,k+1)/C(2k,k) = 2(2k+1)/(k+1), the 8 in (-8) cancels the 2³).
+// Carry running = R_k·10^D as a SIGNED BigInt; each term adds (3k+2)·running. @cite G.
+fn catalan_scaled(dd) -> array {
+    let p10 = _hp_pow10(dd)
+    let acc = bi_from(0)
+    let running = p10                      // R_0·10^D = 10^D  (R_0 = 1)
+    let k = 0
+    while running[0] != 0 {                // running != 0 (sign limb 0 ⇒ value 0)
+        // term_k = (3k+2)·R_k ; accumulate
+        acc = bi_add(acc, bi_mul(bi_from(3 * k + 2), running))
+        // advance R_{k+1} = R_k · ( -(k+1)³ ) / (2k+3)³
+        let kp1 = k + 1
+        let numneg = 0 - kp1 * kp1 * kp1   // -(k+1)³  (small i64)
+        let den = (2 * k + 3) * (2 * k + 3) * (2 * k + 3)   // (2k+3)³ small i64
+        running = bi_div_small(bi_mul(running, bi_from(numneg)), den)
+        k = k + 1
+    }
+    // G·10^D = (1/2)·acc
+    bi_div_small(acc, 2)
+}
+
 // ── selftest ──
 fn _gate(label, got, want) -> int {
     if got == want {
@@ -136,9 +172,15 @@ fn main() {
     let z3 = bi_to_string(zeta3_scaled(44)).substring(0, 21)
     fails = fails + _gate("zeta(3) = Apery const", z3, "120205690315959428539")
 
+    // Catalan G (Guillera–Pilehrood log-free series) — 앞 21 소수자리 reference-match (dd=44 guard).
+    //   G = 0.915965594177219015054603514932... (정수부 0 ⇒ floor(G·10^44)는 선행0 없는 44자리).
+    // floor(G·10^44) 문자열 = "91596559417721901505460..." → 앞 21자 검사.
+    let g = bi_to_string(catalan_scaled(44)).substring(0, 21)
+    fails = fails + _gate("Catalan G (Guillera-Pilehrood)", g, "915965594177219015054")
+
     println("")
     if fails == 0 {
-        println("=== ALL GATES PASS — BigInt π(Machin) validated (atlas PI-* 갭 메움) ===")
+        println("=== ALL GATES PASS — BigInt π(Machin)·ζ(2..6)·ζ(3)·Catalan G validated (atlas 상수 갭 메움) ===")
     } else {
         println("=== " + to_string(fails) + " GATE(S) FAILED ===")
     }
