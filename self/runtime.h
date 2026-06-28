@@ -69,10 +69,10 @@ typedef struct HexaMapTable {
     int          len;
     int          order_cap;
     int          from_arena;
-#ifdef HEXA_IC_STRUCTID
-    /* fleet-lab b r2 (opt-in, default-OFF → byteeq-neutral): per-table JSC
-     * StructureID. MUST stay last + identically gated in runtime_core.c so the
-     * flag-OFF layout is byte-identical across the .h / generated .c ABI. */
+#ifndef HEXA_IC_STRUCTID_OFF
+    /* fleet-lab b r2 (default-ON, opt-OUT via -DHEXA_IC_STRUCTID_OFF): per-table
+     * JSC StructureID. MUST stay last + identically gated in runtime_core.c so the
+     * opt-OUT layout is byte-identical across the .h / generated .c ABI. */
     uint32_t     struct_id;
 #endif
 } HexaMapTable;
@@ -146,9 +146,10 @@ typedef struct HexaIC {
     int      idx;
     uint64_t hits;
     uint64_t misses;
-#ifdef HEXA_IC_STRUCTID
-    /* fleet-lab b r2 (opt-in): cached JSC StructureID for the single-int IC
-     * fast path. MUST mirror runtime_core.c's HexaIC, identically gated. */
+#ifndef HEXA_IC_STRUCTID_OFF
+    /* fleet-lab b r2 (default-ON, opt-OUT via -DHEXA_IC_STRUCTID_OFF): cached JSC
+     * StructureID for the single-int IC fast path. MUST mirror runtime_core.c's
+     * HexaIC, identically gated. */
     uint32_t struct_id;
 #endif
 } HexaIC;
@@ -779,9 +780,9 @@ extern uint64_t g_hexa_ic_hits;
 extern int      g_hexa_ic_stats_enabled;
 HexaVal         hexa_map_get_ic_slow(HexaVal m, const char* key, HexaIC* ic);
 
-#ifdef HEXA_IC_STRUCTID
-/* fleet-lab b r2 (opt-in, default-OFF): JSC StructureID single-int IC fast
- * path — mirrors runtime_core_emit.hexa. The 2-word (order_keys ptr + len)
+#ifndef HEXA_IC_STRUCTID_OFF
+/* fleet-lab b r2 (default-ON, opt-OUT via -DHEXA_IC_STRUCTID_OFF): JSC StructureID
+ * single-int IC fast path — mirrors runtime_core_emit.hexa. The 2-word (order_keys ptr + len)
  * shape check collapses to a single uint32 struct_id compare (the JSC
  * get_by_id idiom: cmp $id,(struct_id); jnz slow). MUST stay identical to the
  * runtime_core.c macro so the precompiled-runtime.o ABI path matches. */
