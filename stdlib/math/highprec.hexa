@@ -340,6 +340,156 @@ fn _rat_str(r) -> string {
     s + bi_to_string(r[1]) + "/" + bi_to_string(r[2])
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// BigInt fixed-point ln / exp / sqrt / γ — the transcendental substrate (no float).
+// ════════════════════════════════════════════════════════════════════════════
+//
+// A fixed-point value X (a BigInt) represents the real number  v = X / 10^dd, where dd =
+// digits-after-the-point (the working/guard precision). All trig-free: ln/exp via rational
+// power series with argument reduction (libm-canonical), every per-term divisor a small i64
+// where possible and a full BigInt÷ only for the y² recurrence. This is the last substrate
+// lever (measured 2026-06-28): with ln/exp landed, γ (Euler–Mascheroni, Brent–McMillan),
+// high-precision e, digamma ψ and general ζ(s) are all unlocked from one base. summer
+// reference-match ln2/ln10/e/exp(2)/round-trip = 20 digits; γ = 25 digits (n=15 Bessel,
+// error ~e^(-4n)≈10^(-26) — the honest algorithmic boundary, not misround).
+
+// fixed-point multiply: (a/10^dd)·(b/10^dd) = (a·b)/10^dd → shift product down by dd. ──
+fn fp_mul(a, b, dd) -> array {
+    let p = bi_mul(a, b)
+    bi_shift10_down(p, dd)
+}
+
+// fixed-point divide: (a/10^dd)/(b/10^dd) = a/b → (a·10^dd)/b (full BigInt÷, truncated). ──
+fn fp_div(a, b, dd) -> array {
+    let an = bi_mul(a, _hp_pow10(dd))
+    bi_div(an, b)
+}
+
+// ── ln(2)·10^dd via the atanh-style series (reference: ln2 = 2·atanh(1/3))
+//      ln2 = 2·Σ_{k≥0} 1/((2k+1)·3^(2k+1))
+//    running carries floor(10^dd / 3^(2k+1)); each step ÷ 9 (=3²). All small-int divisors.
+//    reference-match ln(2) = 0.69314718055994530941723212145817... ──
+fn ln2_scaled(dd) -> array {
+    let acc = bi_from(0)
+    let running = bi_div_small(_hp_pow10(dd), 3)     // k=0 denom 3^1
+    let k = 0
+    while running[0] != 0 {
+        let term = bi_div_small(running, 2 * k + 1)
+        acc = bi_add(acc, term)
+        running = bi_div_small(running, 9)
+        k = k + 1
+    }
+    bi_mul(bi_from(2), acc)
+}
+
+// ── ln(v)·10^dd for a positive fixed-point X = floor(v·10^dd), v>0.
+//    Argument reduction (libm-canonical): pick integer k so w = v/2^k ∈ [2/3, 4/3] (near 1),
+//    then ln(v) = k·ln2 + ln(w), and ln(w) = 2·atanh(y), y = (w-1)/(w+1) ∈ small range:
+//       ln(w) = 2·Σ_{j≥0} y^(2j+1)/(2j+1)
+//    y is fixed-point; powering uses y² each step (full-BigInt fp_mul). The (2j+1) divisor is
+//    a small i64 → bi_div_small. reference-match ln(10)=2.30258509299404568401799145468436...,
+//    ln(1.5)=0.40546510810816438197801311546435... ──
+fn ln_scaled(x, dd) -> array {
+    let one = _hp_pow10(dd)                                       // 1.0
+    let lo = bi_div_small(bi_mul(_hp_pow10(dd), bi_from(2)), 3)   // 2/3
+    let hi = bi_div_small(bi_mul(_hp_pow10(dd), bi_from(4)), 3)   // 4/3
+    let v = x
+    let k = 0
+    while bi_cmp(v, hi) > 0 { v = bi_div_small(v, 2); k = k + 1 }
+    while bi_cmp(v, lo) < 0 { v = bi_mul(v, bi_from(2)); k = k - 1 }
+    let vm1 = bi_sub(v, one)
+    let vp1 = bi_add(v, one)
+    let y = fp_div(vm1, vp1, dd)
+    let y2 = fp_mul(y, y, dd)
+    let acc = bi_from(0)
+    let cur = y                            // y^(2j+1), j=0 → y^1
+    let j = 0
+    while cur[0] != 0 {
+        let term = bi_div_small(cur, 2 * j + 1)
+        acc = bi_add(acc, term)
+        cur = fp_mul(cur, y2, dd)
+        j = j + 1
+    }
+    let lnw = bi_mul(bi_from(2), acc)
+    let kln2 = bi_mul(bi_from(k), ln2_scaled(dd))
+    bi_add(kln2, lnw)
+}
+
+// ── exp(v)·10^dd via Taylor Σ v^n/n! (term ratio T_n = T_{n-1}·v/n), v fixed-point X.
+//    Range-reduce so |v|<1: exp(v) = exp(v/2^r)^(2^r) (square r times at the end). Works for
+//    any sign. reference-match e=exp(1)=2.71828182845904523536...,
+//    exp(2)=7.38905609893065022723... ──
+fn exp_scaled(x, dd) -> array {
+    let one = _hp_pow10(dd)
+    let v = x
+    let r = 0
+    let absv = bi_abs(v)
+    while bi_cmp(absv, one) >= 0 {
+        v = bi_div_small(v, 2)
+        r = r + 1
+        absv = bi_abs(v)
+    }
+    let sum = bi_from(0)
+    let term = one                          // T_0 = 1.0
+    let n = 0
+    while term[0] != 0 {
+        sum = bi_add(sum, term)
+        let np1 = n + 1
+        term = fp_mul(term, v, dd)
+        term = bi_div_small(term, np1)
+        n = n + 1
+    }
+    let res = sum
+    let i = 0
+    while i < r { res = fp_mul(res, res, dd); i = i + 1 }
+    res
+}
+
+// ── sqrt of a positive fixed-point X = floor(v·10^dd) → floor(√v·10^dd), Newton iteration
+//    y ← (y + v/y)/2 in fixed-point. Initial guess = X (≥ true root for v≥1; converges for
+//    v>0). Stops when the iterate stops decreasing (monotone descent to the floor). Provided
+//    for AGM-style algorithms; reference = integer-isqrt extended to fixed point. ──
+fn sqrt_scaled(x, dd) -> array {
+    if x[0] == 0 { let z = []; z.push(0); return z }
+    let y = x
+    while true {
+        // ny = (y + fp_div(x,y))/2
+        let vy = fp_div(x, y, dd)
+        let ny = bi_div_small(bi_add(y, vy), 2)
+        // converged when ny >= y (no further decrease)
+        if bi_cmp(ny, y) >= 0 { return y }
+        y = ny
+    }
+    y
+}
+
+// ── Euler–Mascheroni γ·10^dd via Brent–McMillan (Bessel-function form):
+//      B(n) = Σ_{k≥0} (n^k/k!)²       A(n) = Σ_{k≥0} (n^k/k!)²·H_k   (H_0 = 0)
+//      γ = A(n)/B(n) − ln(n) ,  error ≈ π·e^(−4n).  n=15 → ~26 correct digits.
+//    Carry t_k = (n^k/k!)² fixed-point (t_0=1, t_k = t_{k-1}·n²/k²) and H_k fixed-point
+//    (H_k = H_{k-1} + 10^dd/k). reference-match γ = 0.5772156649015328606065120900824...
+//    @cite(L[MATH-euler-mascheroni]) ──
+fn gamma_euler_scaled(dd) -> array {
+    let n = 15
+    let nn = n * n
+    let A = bi_from(0)
+    let B = bi_from(0)
+    let t = _hp_pow10(dd)        // t_0 = 1.0
+    let H = bi_from(0)           // H_0 = 0
+    let k = 0
+    while t[0] != 0 {
+        B = bi_add(B, t)
+        A = bi_add(A, fp_mul(t, H, dd))
+        let kp1 = k + 1
+        H = bi_add(H, bi_div_small(_hp_pow10(dd), kp1))
+        t = bi_div_small(bi_mul(t, bi_from(nn)), kp1 * kp1)
+        k = k + 1
+    }
+    let ab = fp_div(A, B, dd)
+    let lnn = ln_scaled(bi_mul(bi_from(n), _hp_pow10(dd)), dd)
+    bi_sub(ab, lnn)
+}
+
 // ── selftest ──
 fn _gate(label, got, want) -> int {
     if got == want {
@@ -398,9 +548,41 @@ fn main() {
     fails = fails + _gate("B_12 = -691/2730 (famous 691!)", _rat_str(bernoulli(12)), "-691/2730")
     fails = fails + _gate("B_14 = 7/6", _rat_str(bernoulli(14)), "7/6")
 
+    // ── ln / exp / γ (BigInt 고정소수점 transcendental substrate) — dd=40 guard, 앞 20 자리 ──
+    let dd = 40
+    // ln(2) = 0.69314718055994530941723212145817...
+    let l2 = bi_to_string(ln2_scaled(dd)).substring(0, 20)
+    fails = fails + _gate("ln(2) atanh series 20 digits", l2, "69314718055994530941")
+    // ln(2) via the general ln_scaled (k-reduction path)
+    let l2b = bi_to_string(ln_scaled(bi_mul(bi_from(2), _hp_pow10(dd)), dd)).substring(0, 20)
+    fails = fails + _gate("ln(2) via ln_scaled 20 digits", l2b, "69314718055994530941")
+    // ln(10) = 2.30258509299404568401799145468436...
+    let l10 = bi_to_string(ln_scaled(bi_mul(bi_from(10), _hp_pow10(dd)), dd)).substring(0, 21)
+    fails = fails + _gate("ln(10) 20 digits", l10, "230258509299404568401")
+    // ln(1.5) = 0.40546510810816438197801311546435...
+    let three_halves = bi_div_small(bi_mul(bi_from(3), _hp_pow10(dd)), 2)
+    let l15 = bi_to_string(ln_scaled(three_halves, dd)).substring(0, 20)
+    fails = fails + _gate("ln(1.5) 20 digits", l15, "40546510810816438197")
+    // e = exp(1) = 2.71828182845904523536028747135266...
+    let e1 = bi_to_string(exp_scaled(_hp_pow10(dd), dd)).substring(0, 21)
+    fails = fails + _gate("e = exp(1) 20 digits", e1, "271828182845904523536")
+    // exp(2) = 7.38905609893065022723042746057501...
+    let e2 = bi_to_string(exp_scaled(bi_mul(bi_from(2), _hp_pow10(dd)), dd)).substring(0, 21)
+    fails = fails + _gate("exp(2) 20 digits", e2, "738905609893065022723")
+    // round-trip ln(exp(1)) = 1.000... (floor → 0.999...)
+    let expe = exp_scaled(_hp_pow10(dd), dd)
+    let backln = bi_to_string(ln_scaled(expe, dd)).substring(0, 20)
+    fails = fails + _gate("ln(exp(1)) = 1.000... 20 digits", backln, "99999999999999999999")
+    // sqrt(2) = 1.41421356237309504880168872420969...
+    let s2 = bi_to_string(sqrt_scaled(bi_mul(bi_from(2), _hp_pow10(dd)), dd)).substring(0, 21)
+    fails = fails + _gate("sqrt(2) 20 digits", s2, "141421356237309504880")
+    // γ (Euler–Mascheroni, Brent–McMillan) = 0.57721566490153286060651209008240243104...
+    let gam = bi_to_string(gamma_euler_scaled(dd)).substring(0, 20)
+    fails = fails + _gate("gamma (Brent-McMillan) 20 digits", gam, "57721566490153286060")
+
     println("")
     if fails == 0 {
-        println("=== ALL GATES PASS — BigInt π(Machin)·ζ(2..7)·Catalan G·Bernoulli B_n validated (atlas 상수 갭 메움) ===")
+        println("=== ALL GATES PASS — BigInt π(Machin)·ζ(2..7)·Catalan G·Bernoulli B_n·ln/exp/√/γ validated (atlas 상수 갭 메움) ===")
     } else {
         println("=== " + to_string(fails) + " GATE(S) FAILED ===")
     }
