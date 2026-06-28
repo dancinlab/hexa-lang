@@ -572,6 +572,59 @@ resolve_native_num_float_core_seed() {
     rm -f "$s_tmp"
 }
 
+# ── RT-NATIVE leg B M4 NUM-FLOAT EXACT (sh-float-exact lane) — exact-tail seed → build/float_parse_exact_native.o ──
+# The EXACT-tail twin of resolve_native_num_float_core_seed: assemble
+# build/float_parse_exact_native.o from the arch-matched frozen
+# self/native/float_parse_exact_*.s seed, and OPT-IN-enable the native
+# correctly-rounded string→f64 EXACT path (HEXA_RT_NUM_PARSE_FLOAT_EXACT=1) so the
+# __hexa_num_parse_float NATIVE arm composes fast(Clinger rt_parse_float_native) →
+# exact(rt_str_parse_float_exact big-integer round-half-even) → C strtod. The exact
+# body is bit-exact to strtod over the full finite-decimal domain (1M-input pool
+# sweep, #4200) and returns a TAG_VOID sentinel for hex/inf/nan/malformed so the C
+# hxlcl_atof `#else` still ships as the no-seed fallback (#3583 lesson).
+#
+# CRITICAL POLARITY DIFFERENCE vs num_float_core: this lane is OPT-IN, NOT
+# auto-enable — it stays OFF unless HEXA_RT_NUM_PARSE_FLOAT_EXACT=1 is preset. That
+# default-OFF guard is what keeps the wiring PR byteeq-NEUTRAL: with the macro unset
+# the emitted runtime.c block is dead → DEFAULT runtime.a / shim.o bytes unchanged.
+# (Promotion to default-ON is a separate reconverge-flip PR — #4163/#4168 class.)
+resolve_native_float_parse_exact_seed() {
+    [ "${HEXA_RT_NUM_PARSE_FLOAT_EXACT:-x}" != "1" ] && return 0   # opt-IN only (default-OFF)
+    [ -f build/float_parse_exact_native.o ] && { export HEXA_RT_NUM_PARSE_FLOAT_EXACT=1; return 0; }
+    local seed="" tgt="${TARGET:-}"
+    tgt="${tgt%-musl}"
+    [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
+        "Darwin arm64") tgt="darwin-arm64" ;;
+        "Linux x86_64") tgt="linux-x86_64" ;;
+        "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
+    esac
+    case "$tgt" in
+        darwin-arm64) seed="self/native/float_parse_exact_arm64.s" ;;
+        linux-x86_64) seed="self/native/float_parse_exact_x86_64.s" ;;
+        linux-arm64)  seed="self/native/float_parse_exact_arm64-linux.s" ;;
+        *)            seed="" ;;   # unknown → exact path stays off, C #else fallback
+    esac
+    [ -n "$seed" ] && [ -f "$seed" ] || { echo "[stage_resolve_runtime_a] RT-NATIVE FLOAT-EXACT: no seed for TARGET=$tgt — exact path stays off (C strtod tail)" >&2; return 0; }
+    mkdir -p build
+    # SAFETY: only adopt the exact path if the seed exports the parse fn the
+    # runtime_core.c delegation expects — a stale/partial seed would yield an
+    # `undefined reference` at the app link. Counted from `.globl` (toolchain-free).
+    local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_str_parse_float_exact' "$seed" 2>/dev/null || echo 0)"
+    if [ "${nsyms:-0}" -lt 1 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE FLOAT-EXACT: seed $seed exports only $nsyms/1 rt_str_parse_float_exact — exact path stays off (C strtod tail)" >&2
+        return 0
+    fi
+    local s_tmp="build/float_parse_exact_seed.s"
+    grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
+    if $CC -c "$s_tmp" -o build/float_parse_exact_native.o 2>/dev/null; then
+        export HEXA_RT_NUM_PARSE_FLOAT_EXACT=1
+        echo "[stage_resolve_runtime_a] RT-NATIVE FLOAT-EXACT: assembled build/float_parse_exact_native.o from $seed (TARGET=$tgt, $nsyms rt_str_parse_float_exact syms) → native correctly-rounded string→f64 exact tail"
+    else
+        echo "[stage_resolve_runtime_a] RT-NATIVE FLOAT-EXACT: WARN assemble of $seed failed — exact path stays off (C strtod tail)" >&2
+    fi
+    rm -f "$s_tmp"
+}
+
 # ── RT-NATIVE leg B M4 NUM (sh-num-native lane) — num-core parse native seed → build/num_core_native.o ──
 # The num twin of resolve_native_str_core_seed: assemble build/num_core_native.o
 # from the arch-matched frozen self/native/num_core_*.s seed, and AUTO-ENABLE the
@@ -981,6 +1034,19 @@ build_runtime_a_from_source() {
         extra_obj="$extra_obj build/num_float_core_native.o"
         echo "[stage_resolve_runtime_a] RT-NATIVE NUM-FLOAT: HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1; ar'ing native num_float_core_native.o into runtime.a"
     fi
+    # RT-NATIVE NUM-FLOAT EXACT (sh-float-exact lane, OPT-IN): when the
+    # float_parse_exact seed is active, define HEXA_RT_NUM_PARSE_FLOAT_EXACT for the
+    # runtime.c compile (so __hexa_num_parse_float's NATIVE arm composes the exact
+    # big-integer tail before strtod) and ar build/float_parse_exact_native.o into
+    # runtime.a so rt_str_parse_float_exact resolves. Default-OFF → with the macro
+    # unset this block is inert and the preprocessed runtime.c is byte-identical (the
+    # C hxlcl_atof `#else`/strtod tail ships unchanged — #3583 no-seed fallback).
+    local rt_numf_exact_def=""
+    if [ "${HEXA_RT_NUM_PARSE_FLOAT_EXACT:-0}" = "1" ] && [ -f build/float_parse_exact_native.o ]; then
+        rt_numf_exact_def="-DHEXA_RT_NUM_PARSE_FLOAT_EXACT=1"
+        extra_obj="$extra_obj build/float_parse_exact_native.o"
+        echo "[stage_resolve_runtime_a] RT-NATIVE FLOAT-EXACT: HEXA_RT_NUM_PARSE_FLOAT_EXACT=1; ar'ing native float_parse_exact_native.o into runtime.a"
+    fi
     # RT-NATIVE Route B (gated, opt-IN): native linked-block arena replaces the C
     # arena `#else` in runtime_core.c when HEXA_RT_ALLOC_NATIVE=1 + seed object built.
     local rt_alloc_def=""
@@ -1225,12 +1291,12 @@ build_runtime_a_from_source() {
         #      archive-internal resolution). NO HEXA_HAS_HEXA_RT_STDLIB (matches the
         #      default single-TU object; setting it would extern rt_log/… → multidef).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S2]: compile build/runtime.o (include-drop, HI-tier inline)…"
-        $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self -c self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
+        $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self -c self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
         # (S3) runtime_core.o — standalone TU (sysheaders prelude), runtime_hi_gen.c
         #      KEPT (supplies the HI-tier rt_* C bodies). SAME seed -D set. NO
         #      HEXA_HAS_HEXA_RT_STDLIB (keeps those bodies inline, not externed).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S3]: compile build/runtime_core.o (standalone TU, runtime_hi_gen.c kept)…"
-        $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self -include self/runtime_core_sysheaders.h -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
+        $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self -include self/runtime_core_sysheaders.h -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
         # (S4) hxlcl_shim.o — libc-delegate hxlcl_* sibling TU.
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S4]: compile build/hxlcl_shim.o…"
         $CC -c -O2 $_mo_archflag -std=gnu11 -D_GNU_SOURCE $_mo_shim_def self/runtime_core_hxlcl_shim.c -o build/hxlcl_shim.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: hxlcl_shim.o compile failed" >&2; return 1; }
@@ -1266,7 +1332,7 @@ build_runtime_a_from_source() {
             local _mo_cinc="$_mo_cuda_home/targets/x86_64-linux/include"
             [ -d "$_mo_cinc" ] || _mo_cinc="$_mo_cuda_home/include"
             echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA: build SEPARATE build/runtime.cuda.a (include-drop multi-object + cuda objects)"
-            $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
+            $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
             ar rcs build/runtime.cuda.a build/runtime_cuda_host.o build/runtime_core.o $_mo_hxlcl_members $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
             ls -la build/runtime.cuda.a
             local _mo_cseed _mo_cm
@@ -1282,7 +1348,7 @@ build_runtime_a_from_source() {
         echo "$RA"
         return 0
     fi
-    $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_valop_def $rt_alloc_def $rt_print_def -I self -c self/runtime.c -o build/runtime.o
+    $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -I self -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     if [ "${HEXA_CUDA:-0}" = "1" ] && [ -f build/runtime_cuda.o ] && [ -f build/runtime_cuda_dlink.o ]; then
@@ -1290,7 +1356,7 @@ build_runtime_a_from_source() {
         local _cinc="$_cuda_home/targets/x86_64-linux/include"
         [ -d "$_cinc" ] || _cinc="$_cuda_home/include"
         echo "[stage_resolve_runtime_a] CUDA-R1: building SEPARATE consumer archive build/runtime.cuda.a (runtime.c -DHEXA_CUDA -I$_cinc + runtime_cuda.o + runtime_cuda_dlink.o); toolchain keeps the CPU build/runtime.a (libcuda-free, GPU-less-host-runnable)"
-        $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_CUDA -I "$_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o
+        $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_CUDA -I "$_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o
         ar rcs build/runtime.cuda.a build/runtime_cuda_host.o $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
         ls -la build/runtime.cuda.a
         # ING-35 #2 — fail loudly if the CUDA archive dropped a native-core seed the
@@ -1409,6 +1475,11 @@ resolve_native_str_core_seed
 # num_float_core seed (sets HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1 on all 3 production
 # targets). Unknown targets / missing seed keep the C hxlcl_atof string→f64 path.
 resolve_native_num_float_core_seed
+# RT-NATIVE FLOAT-EXACT (sh-float-exact lane, OPT-IN): assemble the arch-matched
+# native exact-tail seed and set HEXA_RT_NUM_PARSE_FLOAT_EXACT=1 ONLY when preset to
+# 1 (default-OFF → byteeq-neutral). Composes fast(Clinger) → exact(big-int round-
+# half-even) → C strtod in __hexa_num_parse_float's NATIVE arm.
+resolve_native_float_parse_exact_seed
 # RT-NATIVE NUM (sh-num-native lane): assemble the arch-matched native num_core
 # seed (sets HEXA_RT_NUM_PARSE_INT_NATIVE=1 on all 3 production targets). Unknown
 # targets / missing seed keep the C strtoll string→int path.
