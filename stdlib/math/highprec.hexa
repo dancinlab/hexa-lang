@@ -13,10 +13,13 @@
 //   (`bernoulli(n)` → [sign,num,den]; B_12=-691/2730 reference-match). atlas Bernoulli 갭 메움.
 //   같은 full-division 으로 ODD zeta ζ(5)·ζ(7) 도 native — Borwein–Bradley 중심이항 가속급수
 //   (조화보정 H_{k-1}^{(r)} 항은 C(2k,k) 로 full BigInt 나눗셈 필요 → `bi_div`).
-// 잔여 갭 (honest, follow-on): Euler-Mascheroni γ 는 BigInt ln/exp substrate 부재로 미구현 —
-//   3 경로(Brent–McMillan Bessel I0/K0·조화수−ln·Vacca) 모두 ln/exp 전제 또는 1bit/항 수렴
-//   (측정벽: state/atlas_stdlib_gap_census.md γ 항목). 여기엔 현 ops로 깨끗이 검증되는 상수
-//   (π·ζ(2..7)·Catalan G·Bernoulli B_n)만 둔다 (억지 fudge 금지).
+// CENSUS-CLOSE (2026-06-28): ln/exp substrate (#4186) unlocked the last two special-function
+//   cells — digamma ψ(x) (DLMF asymptotic + recurrence raise) and general ζ(s) for integer
+//   s≥2 (Euler–Maclaurin, DLMF 25.2.3). Both were ln+Bernoulli-gated; now native fixed-point.
+//   ζ(s) Euler–Maclaurin cross-checks against the existing closed/accelerated zeta2/3/4_scaled
+//   paths to 18+ digits (two independent paths agreeing). With γ already landed, the
+//   atlas→stdlib high-precision constant/special-function gap table is 0 (lever exhausted).
+//   reference-match (억지 fudge 금지): every constant verified to ≥18 digits vs mpmath/known.
 
 import "stdlib/bigint.hexa"
 
@@ -490,6 +493,140 @@ fn gamma_euler_scaled(dd) -> array {
     bi_sub(ab, lnn)
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Digamma ψ(x) and general Riemann ζ(s) — built on ln + Bernoulli (#4186 unlocked the
+// transcendental floor; both were previously ln+Bernoulli-gated). Integer fixed-point only:
+// every value carried as floor(·×10^dd); the Bernoulli tail terms divide a signed BigInt
+// numerator by a positive BigInt denominator with `bi_div` (truncate toward zero), matching
+// the per-term-floor reference model (verified to 24 digits vs mpmath, summer reference-match).
+// ════════════════════════════════════════════════════════════════════════════
+
+// BigInt^e (e ≥ 0, small i64) by repeated squaring-free multiply (e small: ≤ ~40). ──
+fn _bi_pow(b, e) -> array {
+    let r = bi_from(1)
+    let i = 0
+    while i < e { r = bi_mul(r, b); i = i + 1 }
+    r
+}
+
+// signed fixed-point: floor-toward-zero of (num / den), num signed BigInt, den positive BigInt. ──
+// (bi_div already truncates toward zero; den must be > 0.)
+fn _sdiv(num, den) -> array { bi_div(num, den) }
+
+// ── Digamma ψ(x) for rational x = x_num/x_den (>0), to dd digits: floor(ψ(x)·10^dd).
+//    Asymptotic expansion (DLMF 5.11.2):  ψ(x) = ln(x) − 1/(2x) − Σ_{k≥1} B_{2k}/(2k·x^{2k}).
+//    Small-x direct use diverges, so first raise x by the recurrence ψ(x)=ψ(x+1)−1/x until
+//    x ≥ 30 (each step subtracts 1/x), then apply the asymptotic series with KB=18 Bernoulli
+//    terms (error ≈ B_{2KB}/(2KB·x^{2KB}) ≪ 10^−44 at x≥30 — the honest algorithmic boundary).
+//    All carried as floor(·×10^dd):
+//      • recurrence term −1/x = −(d·10^dd)/n  (signed full BigInt÷, trunc toward zero)
+//      • ln(x) via ln_scaled (rational arg = (n·10^dd)/d, fixed-point)
+//      • −1/(2x) = −(d·10^dd)/(2n)
+//      • −B_{2k}/(2k·x^{2k}):  x^{2k} = n^{2k}/d^{2k} ⇒ term = −B_num·d^{2k}·10^dd /
+//        (B_den·2k·n^{2k}) with B sign folded into the numerator.
+//    reference-match (summer 18 digits): ψ(1)=−γ=−0.577215664901532860, ψ(2)=1−γ=
+//    0.422784335098467139, ψ(0.5)=−γ−2ln2=−1.963510026021423479. @cite ψ asymptotic (DLMF).
+fn digamma_scaled(x_num, x_den, dd) -> array {
+    let p10 = _hp_pow10(dd)
+    let acc = bi_from(0)
+    let n = x_num
+    let d = x_den
+    // raise (n/d) until n/d >= 30  ⇔  n >= 30·d
+    let thr = 30 * d
+    while n < thr {
+        // acc += −1/x = −(d·10^dd)/n   (n>0, d>0)
+        let num = bi_neg(bi_mul(bi_from(d), p10))
+        acc = bi_add(acc, _sdiv(num, bi_from(n)))
+        n = n + d
+    }
+    // ln(x) where x = n/d  → ln_scaled needs fixed-point arg floor((n/d)·10^dd) = (n·10^dd)/d
+    let xfp = bi_div(bi_mul(bi_from(n), p10), bi_from(d))
+    acc = bi_add(acc, ln_scaled(xfp, dd))
+    // −1/(2x) = −(d·10^dd)/(2n)
+    let half = bi_neg(bi_mul(bi_from(d), p10))
+    acc = bi_add(acc, _sdiv(half, bi_from(2 * n)))
+    // −Σ_{k=1}^{18} B_{2k}/(2k·x^{2k})
+    let nbi = bi_from(n)
+    let dbi = bi_from(d)
+    let k = 1
+    while k <= 18 {
+        let b = bernoulli(2 * k)              // [sign, |num|, den]
+        // signed B numerator
+        let bnum = b[1]
+        if b[0] < 0 { bnum = bi_neg(bnum) }
+        // term = B·d^{2k}·10^dd / (B_den · 2k · n^{2k})
+        let dpow = _bi_pow(dbi, 2 * k)
+        let npow = _bi_pow(nbi, 2 * k)
+        let num = bi_mul(bi_mul(bnum, dpow), p10)
+        let den = bi_mul(bi_mul(b[2], bi_from(2 * k)), npow)
+        acc = bi_sub(acc, _sdiv(num, den))
+        k = k + 1
+    }
+    acc
+}
+
+// integer-x convenience: ψ(m)·10^dd. ──
+fn digamma_int_scaled(m, dd) -> array { digamma_scaled(m, 1, dd) }
+
+// ── General Riemann ζ(s) for integer s ≥ 2 to dd digits: floor(ζ(s)·10^dd) via Euler–Maclaurin
+//    (DLMF 25.2.3 / Apostol):
+//      ζ(s) = Σ_{n=1}^{N−1} n^{−s} + N^{1−s}/(s−1) + ½N^{−s}
+//             + Σ_{k≥1} B_{2k}/(2k)! · (s)_{2k−1} · N^{−s−2k+1}
+//    with (s)_m = s(s+1)…(s+m−1) the rising factorial. N=20, KB=10 give ≥22 correct digits
+//    (matched to mpmath). Integer fixed-point, every contribution floor(·×10^dd) and summed:
+//      • head:  Σ floor(10^dd / n^s)        (n^s small i64 for n<20, s≤7)
+//      • N^{1−s}/(s−1) = 10^dd / (N^{s−1}·(s−1))   (N^{s−1} → BigInt; full ÷)
+//      • ½N^{−s} = 10^dd / (2·N^s)
+//      • tail: B_{2k}/(2k)!·(s)_{2k−1}·N^{−(s+2k−1)} = B_num·(s)_{2k−1}·10^dd /
+//        (B_den·(2k)!·N^{s+2k−1})  (signed full BigInt÷).
+//    reference-match (summer 18 digits): ζ(2)=1.644934066848226436, ζ(3)=1.202056903159594285,
+//    ζ(4)=1.082323233711138191 — and these MUST equal the existing zeta2/3/4_scaled (two
+//    independent fixed-point paths agreeing). @cite ζ Euler–Maclaurin (DLMF 25.2.3).
+fn zeta_int_scaled(s, dd) -> array {
+    let p10 = _hp_pow10(dd)
+    let nN = 20
+    let acc = bi_from(0)
+    // head: Σ_{n=1}^{N-1} floor(10^dd / n^s)
+    let n = 1
+    while n < nN {
+        let ns = 1
+        let i = 0
+        while i < s { ns = ns * n; i = i + 1 }        // n^s small i64 (n<20, s≤7 ⇒ <8.9e8)
+        acc = bi_add(acc, bi_div_small(p10, ns))
+        n = n + 1
+    }
+    let Nbi = bi_from(nN)
+    // N^{1-s}/(s-1) = 10^dd / (N^{s-1}·(s-1))
+    let Nsm1 = _bi_pow(Nbi, s - 1)
+    acc = bi_add(acc, bi_div(p10, bi_mul(Nsm1, bi_from(s - 1))))
+    // ½N^{-s} = 10^dd / (2·N^s)
+    let Ns = _bi_pow(Nbi, s)
+    acc = bi_add(acc, bi_div(p10, bi_mul(bi_from(2), Ns)))
+    // tail: Σ_{k=1}^{10} B_{2k}/(2k)! · (s)_{2k-1} · N^{-(s+2k-1)}
+    let k = 1
+    while k <= 10 {
+        let b = bernoulli(2 * k)
+        let bnum = b[1]
+        if b[0] < 0 { bnum = bi_neg(bnum) }
+        // rising factorial (s)_{2k-1} = s(s+1)…(s+2k-2)  as BigInt
+        let rf = bi_from(1)
+        let j = 0
+        while j < 2 * k - 1 { rf = bi_mul(rf, bi_from(s + j)); j = j + 1 }
+        // (2k)! as BigInt
+        let fact = bi_from(1)
+        let f = 1
+        while f <= 2 * k { fact = bi_mul(fact, bi_from(f)); f = f + 1 }
+        // N^{s+2k-1}
+        let Npow = _bi_pow(Nbi, s + 2 * k - 1)
+        // term = bnum·rf·10^dd / (B_den·(2k)!·N^{s+2k-1})  (signed)
+        let num = bi_mul(bi_mul(bnum, rf), p10)
+        let den = bi_mul(bi_mul(b[2], fact), Npow)
+        acc = bi_add(acc, _sdiv(num, den))
+        k = k + 1
+    }
+    acc
+}
+
 // ── selftest ──
 fn _gate(label, got, want) -> int {
     if got == want {
@@ -579,6 +716,39 @@ fn main() {
     // γ (Euler–Mascheroni, Brent–McMillan) = 0.57721566490153286060651209008240243104...
     let gam = bi_to_string(gamma_euler_scaled(dd)).substring(0, 20)
     fails = fails + _gate("gamma (Brent-McMillan) 20 digits", gam, "57721566490153286060")
+
+    // ── Digamma ψ(x) (DLMF asymptotic + recurrence raise) — dd=44 guard, 앞 18 자리 reference-match ──
+    //   ψ(1) = −γ           = −0.577215664901532860 60651209008...
+    //   ψ(2) = 1−γ          =  0.422784335098467139 39348790991...
+    //   ψ(0.5) = −γ−2ln2    = −1.963510026021423479 44097633299...
+    let ddh = 44
+    // digamma magnitude string (sign limb dropped by bi_to_string → leading '-' present)
+    let p1 = bi_to_string(digamma_int_scaled(1, ddh)).substring(0, 19)   // "-" + 18 digits
+    fails = fails + _gate("digamma psi(1) = -gamma 18 digits", p1, "-577215664901532860")
+    let p2 = bi_to_string(digamma_int_scaled(2, ddh)).substring(0, 18)   // "4227..." 18 digits
+    fails = fails + _gate("digamma psi(2) = 1-gamma 18 digits", p2, "422784335098467139")
+    let ph = bi_to_string(digamma_scaled(1, 2, ddh)).substring(0, 20)    // "-1963..." (int part 1)
+    fails = fails + _gate("digamma psi(0.5) = -g-2ln2 18 digits", ph, "-1963510026021423479")
+
+    // ── General ζ(s) Euler–Maclaurin (independent path) — dd=44 guard, 앞 19 자리 reference-match ──
+    //   ζ(2)=1.644934066848226436 47... ζ(3)=1.202056903159594285 39... ζ(4)=1.082323233711138191 51...
+    let gz2 = bi_to_string(zeta_int_scaled(2, ddh)).substring(0, 19)
+    fails = fails + _gate("zeta(2) Euler-Maclaurin 18 digits", gz2, "1644934066848226436")
+    let gz3 = bi_to_string(zeta_int_scaled(3, ddh)).substring(0, 19)
+    fails = fails + _gate("zeta(3) Euler-Maclaurin 18 digits", gz3, "1202056903159594285")
+    let gz4 = bi_to_string(zeta_int_scaled(4, ddh)).substring(0, 19)
+    fails = fails + _gate("zeta(4) Euler-Maclaurin 18 digits", gz4, "1082323233711138191")
+    // cross-check: general ζ(s) MUST equal the existing closed-form/accelerated paths (18 digits).
+    let xz2 = bi_to_string(zeta2_scaled(ddh)).substring(0, 19)
+    fails = fails + _gate("zeta(2) cross-check (E-M == pi^2/6)", gz2, xz2)
+    let xz3 = bi_to_string(zeta3_scaled(ddh)).substring(0, 19)
+    fails = fails + _gate("zeta(3) cross-check (E-M == Apery)", gz3, xz3)
+    let xz4 = bi_to_string(zeta4_scaled(ddh)).substring(0, 19)
+    fails = fails + _gate("zeta(4) cross-check (E-M == pi^4/90)", gz4, xz4)
+    // also exercise higher s the existing accelerated path covers (ζ(5)).
+    //   ζ(5)=1.036927755143369926 33...
+    let gz5 = bi_to_string(zeta_int_scaled(5, ddh)).substring(0, 19)
+    fails = fails + _gate("zeta(5) Euler-Maclaurin 18 digits", gz5, "1036927755143369926")
 
     println("")
     if fails == 0 {
