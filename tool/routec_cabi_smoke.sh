@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strrchr memmove bzero strtoll strtoull strndup time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush popen pclose; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi atoll strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strrchr memmove bzero strtoll strtoull strndup time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush popen pclose isalnum isalpha free; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -115,6 +115,14 @@ extern char  *hxlcl_strcpy(char *d, const char *s);
 extern char  *hxlcl_strncpy(char *d, const char *s, size_t n);
 extern char  *hxlcl_strcat(char *d, const char *s);
 extern int    hxlcl_atoi(const char *s);
+/* parse-leaf promotion — atoll is now a real self-emitted Route C leaf (base-10,
+ * no-endptr simplification of strtoll); atoi bl's into it intra-object. */
+extern long long hxlcl_atoll(const char *s);
+/* ctype family — register-only pure-compute (arg is an int value, no mem access). */
+extern int    hxlcl_isalnum(int c);
+extern int    hxlcl_isalpha(int c);
+/* alloc residue — no-op free (bump-arena floor reclaims nothing). */
+extern void   hxlcl_free(void *p);
 extern char  *hxlcl_strdup(const char *s);
 /* dup mirror — strndup. Mirror of the strdup composite (inner malloc + byte loops)
  * with a cap-bounded scan; returns a fresh NUL-terminated copy of ≤cap bytes. */
@@ -285,16 +293,20 @@ extern void  *hxlcl_popen(const char *cmd, const char *mode);
 extern int    hxlcl_pclose(void *stream);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
- * here (sole provider) so there is no multidef with the libc shim: atoll for
- * atoi, malloc for strdup + calloc + realloc. (Each composite PR adds its callee.)
+ * here (sole provider) so there is no multidef with the libc shim: malloc for
+ * strdup + strndup + calloc + realloc. (Each composite PR adds its callee.)
+ *
+ * hxlcl_atoll is NO LONGER supplied here: the PARSE-LEAF PROMOTION batch made it a
+ * real self-emitted Route C leaf (in routec.o), so atoi's inner `bl _hxlcl_atoll`
+ * binds to that emitted body intra-object — defining it here too would multidef.
  *
  * This hxlcl_malloc writes the SAME 16-byte size header the floor hxlcl_malloc
  * does (store n at offset 0, hand back ptr+16) so hxlcl_realloc's negative-offset
  * header read `*(size_t*)(p - 16)` recovers the real old size. The 16-byte
  * payload prefix keeps the returned pointer 16-byte aligned. (Small leaks are
- * fine — this is a short-lived smoke process; no hxlcl_free here.) */
+ * fine — this is a short-lived smoke process; the self-emitted hxlcl_free is a
+ * no-op so it reclaims nothing anyway.) */
 #define HXLCL_HDR 16
-long long hxlcl_atoll(const char *s) { return s ? atoll(s) : 0; }
 void     *hxlcl_malloc(size_t n) {
     size_t want = n ? n : 1;
     unsigned char *base = (unsigned char *)malloc(want + HXLCL_HDR);
@@ -352,11 +364,38 @@ int main(void) {
     hxlcl_strcat(cat, "cd");
     CK(strcmp(cat, "abcd") == 0, "strcat");
 
-    /* composites (inner bl to retained atoll / header-writing malloc).
+    /* composites (inner bl to self-emitted atoll / header-writing malloc).
      * No free() here: the header-writing hxlcl_malloc returns ptr+16, so libc
      * free(ptr) is wrong — and small leaks in a short smoke process are fine. */
     CK(hxlcl_atoi("42") == 42, "atoi 42");
     CK(hxlcl_atoi("-7") == -7, "atoi -7");
+
+    /* parse-leaf promotion: atoll as a real self-emitted leaf — base-10 lenient
+     * decimal (ws skip + sign + digit accumulation), no endptr. Exercised directly
+     * (atoi above already bl's into it). */
+    CK(hxlcl_atoll("42") == 42LL, "atoll(\"42\") == 42");
+    CK(hxlcl_atoll("-7") == -7LL, "atoll(\"-7\") == -7 (sign)");
+    CK(hxlcl_atoll("+99") == 99LL, "atoll(\"+99\") == 99 (plus sign)");
+    CK(hxlcl_atoll("  123abc") == 123LL, "atoll leading-ws + trailing-garbage stop");
+    CK(hxlcl_atoll("0") == 0LL, "atoll(\"0\") == 0");
+    CK(hxlcl_atoll("") == 0LL, "atoll(\"\") == 0 (empty)");
+    CK(hxlcl_atoll(NULL) == 0LL, "atoll(NULL) == 0 (NULL guard)");
+
+    /* ctype: register-only pure-compute classification (arg is an int value). */
+    CK(hxlcl_isalnum('A') == 1, "isalnum('A') == 1");
+    CK(hxlcl_isalnum('z') == 1, "isalnum('z') == 1");
+    CK(hxlcl_isalnum('5') == 1, "isalnum('5') == 1");
+    CK(hxlcl_isalnum('_') == 0, "isalnum('_') == 0");
+    CK(hxlcl_isalnum(' ') == 0, "isalnum(' ') == 0");
+    CK(hxlcl_isalpha('A') == 1, "isalpha('A') == 1");
+    CK(hxlcl_isalpha('q') == 1, "isalpha('q') == 1");
+    CK(hxlcl_isalpha('5') == 0, "isalpha('5') == 0 (digit excluded)");
+    CK(hxlcl_isalpha('_') == 0, "isalpha('_') == 0");
+
+    /* alloc residue: no-op free must accept any pointer (incl. NULL) without crash. */
+    hxlcl_free(NULL);
+    { char *fp = (char *)malloc(8); hxlcl_free(fp); free(fp); }
+    CK(1, "free no-op accepts NULL + heap ptr (no crash)");
 
     char *sdup = hxlcl_strdup("hi");
     CK(sdup != NULL && strcmp(sdup, "hi") == 0, "strdup content");
@@ -908,4 +947,4 @@ echo "[routec-smoke] (3) compile harness + link Route C .o + run …"
 "$TMP/routec_smoke"
 rc=$?
 [ "$rc" -eq 0 ] || { echo "[routec-smoke] FATAL: behaviour run rc=$rc" >&2; exit 1; }
-echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr + pure-leaf mirror strrchr/memmove/bzero + parse/dup mirror strtoull/strndup + Wall 3-a CORE FILE* fopen/fread/fwrite/fseek/ftell/fclose/fdopen + Wall 3-b STD-STREAM fputs/fputc/fflush, darwin-arm64)"
+echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr + pure-leaf mirror strrchr/memmove/bzero + parse/dup mirror strtoull/strndup + parse-leaf promotion atoll + ctype isalnum/isalpha + alloc-residue free + Wall 3-a CORE FILE* fopen/fread/fwrite/fseek/ftell/fclose/fdopen + Wall 3-b STD-STREAM fputs/fputc/fflush, darwin-arm64)"

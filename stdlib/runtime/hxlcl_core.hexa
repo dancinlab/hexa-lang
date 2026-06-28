@@ -1001,9 +1001,91 @@ pub fn hxlcl_strtoull(nptr: HexaVal, endptr: HexaVal, base: HexaVal) -> int {
 // The int truncation (`(int)hxlcl_atoll`) is implicit: the result register carries
 // the value and a C `int` caller reads only the low 32 bits.
 
-// hxlcl_atoll: raw-C-ABI long-long parse leaf — RETAINED C shim body (not self-
-// emitted this round). Declared so hxlcl_atoi's inner call binds at link.
-extern fn hxlcl_atoll(s: HexaVal) -> int
+// ── PARSE LEAF PROMOTION (Route C · atoll real leaf) ──────────────────────────
+//
+// hxlcl_atoll was the RETAINED C shim extern that hxlcl_atoi (and the libc `atoll`
+// macro) bl into. This round PROMOTES it to a real self-emitted leaf — the
+// composite extern becomes a genuine Route C leaf, so atoi's inner `bl hxlcl_atoll`
+// now binds cross-object to THIS hexa-emitted body (within routec.o) instead of the
+// harness/shim atoll. It is a strict SIMPLIFICATION of hxlcl_strtoll above: base is
+// FIXED at 10 (no base-0/16 auto-detect, no 0x prefix skip) and there is NO endptr
+// out-param (no __hx_ptr_store64) — a pure-compute byte-walk parse with no syscall,
+// no errno, no inner call, no float. Cross-target-identical (no NR / no arm64 call-
+// shape divergence), exactly the strtoll/strtoull parse-leaf class.
+//
+// Same IN-BODY OPERATOR DISCIPLINE as strtoll: every op is a raw-payload intrinsic
+// (__hx_payload_{add,sub,mul,and,eq,ne,ge,le}) in its own un-nested `let`; loads are
+// __hx_ptr_load8 (ZERO-EXTENDED — bytes ≥ 0x80 fall out of the ['0'..'9'] range and
+// stop the scan, matching the C `s[i] >= '0' && s[i] <= '9'` break); `break` is
+// avoided in the frozen-parser style (each loop stops by clearing a `cont` flag).
+//
+// BYTE-FAITHFUL to the frozen 0-libc floor body (self/runtime_emit_full.hexa:2352,
+// the #else hxlcl_atoll fallback = lenient decimal):
+//   if(!s) return 0; i=0; while(s[i]==' '||'\t'||'\n') i++;
+//   sign=1; if(s[i]=='-'){sign=-1;i++;} else if(s[i]=='+')i++;
+//   n=0; while(s[i]>='0'&&s[i]<='9'){ n=n*10+(s[i]-'0'); i++; }
+//   return (sign<0)? -n : n;
+// (the unsigned-accumulation of the C body uses signed __hx_payload_mul/_add: bit-
+// identical for any non-overflowing value — the real callers parse small ints.)
+// Under the Route C gate the param arrives raw in rdi/x0 and the result ships raw in
+// rax/x0; default (gate OFF) compiles as a HexaVal fn (byteeq-neutral).
+pub fn hxlcl_atoll(s: HexaVal) -> int {
+    let p = __hx_payload_add(s, 0)             // const char* s (raw)
+    if __hx_payload_eq(p, 0) {
+        return 0                               // if(!s) return 0
+    }
+    let mut i = 0
+    // whitespace skip: while(s[i]==' '||s[i]=='\t'||s[i]=='\n') i++;
+    let mut ws = __hx_ptr_load8(p, i)
+    let mut wcont = 1
+    while __hx_payload_ne(wcont, 0) {
+        let is_sp = __hx_payload_eq(ws, 32)
+        let is_tab = __hx_payload_eq(ws, 9)
+        let is_nl = __hx_payload_eq(ws, 10)
+        let a1 = __hx_payload_add(is_sp, is_tab)
+        let a2 = __hx_payload_add(a1, is_nl)
+        if __hx_payload_ne(a2, 0) {
+            i = __hx_payload_add(i, 1)
+            ws = __hx_ptr_load8(p, i)
+        } else {
+            wcont = 0
+        }
+    }
+    // sign: if(s[i]=='-'){neg;i++;} else if(s[i]=='+')i++;
+    let cs = __hx_ptr_load8(p, i)
+    let mut neg = 0
+    if __hx_payload_eq(cs, 45) {                // '-'
+        neg = 1
+        i = __hx_payload_add(i, 1)
+    } else {
+        if __hx_payload_eq(cs, 43) {            // '+'
+            i = __hx_payload_add(i, 1)
+        }
+    }
+    // digit accumulation (base 10): while(s[i] in ['0'..'9']) n = n*10 + (s[i]-'0');
+    let mut n = 0
+    let mut cont = 1
+    while __hx_payload_ne(cont, 0) {
+        let c = __hx_ptr_load8(p, i)
+        let ge0 = __hx_payload_ge(c, 48)        // c>='0'
+        let le9 = __hx_payload_le(c, 57)        // c<='9'
+        let is09 = __hx_payload_and(ge0, le9)
+        if __hx_payload_eq(is09, 0) {
+            cont = 0                            // non-digit → stop
+        } else {
+            let d = __hx_payload_sub(c, 48)     // c-'0'
+            let nb = __hx_payload_mul(n, 10)
+            n = __hx_payload_add(nb, d)         // n = n*10 + d
+            i = __hx_payload_add(i, 1)
+        }
+    }
+    // return (sign < 0) ? -n : n;
+    if __hx_payload_ne(neg, 0) {
+        let r = __hx_payload_sub(0, n)
+        return r
+    }
+    return n
+}
 
 // hxlcl_atoi: parse `s` as int by delegating to hxlcl_atoll. BYTE-FAITHFUL to
 // runtime_core_hxlcl_shim.c:396 (`int hxlcl_atoi(const char *s){return (int)hxlcl_atoll(s);}`).
@@ -2654,4 +2736,79 @@ pub fn hxlcl_pclose(stream: HexaVal) -> int {
     let _w = hxlcl_waitpid(pid, stbuf, __hx_payload_add(0, 0))   // options=0 (HexaVal-boxed)
     let status = __hx_ptr_load32(stbuf, 0)        // raw wait status (frozen returns it)
     return status
+}
+
+// ── CTYPE FAMILY (Route C · isalnum/isalpha — pure register-only ASCII class) ──
+//
+// hxlcl_isalnum/hxlcl_isalpha are the FIRST register-only pure-compute Route C
+// leaves: the arg is an `int c` VALUE (not a pointer), so the body does ZERO memory
+// access (no __hx_ptr_load8) — only raw-payload range comparisons — and returns the
+// classification 0/1 in the single C-ABI result register. No syscall, no errno, no
+// inner call, no float; cross-target-identical (no NR / no arm64 call-shape
+// divergence). The ranges are MUTUALLY EXCLUSIVE so the OR is a faithful add of the
+// at-most-one set range flag (`(a)+(b)+(c)` is 0 or 1, never wraps).
+//
+// Same IN-BODY OPERATOR DISCIPLINE as the parse leaves: every test is a raw-payload
+// intrinsic (__hx_payload_{add,ge,le,and,ne}) in its own un-nested `let`, never a
+// bare op (which lowers to the PAIR-MODEL HexaVal helpers undefined in the raw C-ABI
+// link). BYTE-FAITHFUL to the frozen 0-libc floor rt_isalnum/rt_isalpha bodies
+// (self/runtime_emit_full.hexa:2265-2278, the #elif !HEXA_HAS_HEXA_RT_STDLIB
+// fallback): '0'=48 '9'=57 'A'=65 'Z'=90 'a'=97 'z'=122.
+
+// hxlcl_isalnum: 1 iff c is an ASCII letter or digit, else 0. Under the Route C gate
+// the arg arrives raw in rdi/x0 and the result ships raw in rax/x0; default (gate
+// OFF) compiles as a HexaVal fn (byteeq-neutral).
+pub fn hxlcl_isalnum(c: HexaVal) -> int {
+    let v = __hx_payload_add(c, 0)             // int c (raw value)
+    let ge0 = __hx_payload_ge(v, 48)           // c>='0'
+    let le9 = __hx_payload_le(v, 57)           // c<='9'
+    let dig = __hx_payload_and(ge0, le9)
+    let geA = __hx_payload_ge(v, 65)           // c>='A'
+    let leZ = __hx_payload_le(v, 90)           // c<='Z'
+    let upper = __hx_payload_and(geA, leZ)
+    let gea = __hx_payload_ge(v, 97)           // c>='a'
+    let lez = __hx_payload_le(v, 122)          // c<='z'
+    let lower = __hx_payload_and(gea, lez)
+    let s1 = __hx_payload_add(dig, upper)
+    let s2 = __hx_payload_add(s1, lower)       // at most one range matches → 0/1
+    if __hx_payload_ne(s2, 0) {
+        return 1
+    }
+    return 0
+}
+
+// hxlcl_isalpha: 1 iff c is an ASCII letter, else 0. (isalnum minus the digit range.)
+pub fn hxlcl_isalpha(c: HexaVal) -> int {
+    let v = __hx_payload_add(c, 0)             // int c (raw value)
+    let geA = __hx_payload_ge(v, 65)           // c>='A'
+    let leZ = __hx_payload_le(v, 90)           // c<='Z'
+    let upper = __hx_payload_and(geA, leZ)
+    let gea = __hx_payload_ge(v, 97)           // c>='a'
+    let lez = __hx_payload_le(v, 122)          // c<='z'
+    let lower = __hx_payload_and(gea, lez)
+    let s2 = __hx_payload_add(upper, lower)    // at most one range matches → 0/1
+    if __hx_payload_ne(s2, 0) {
+        return 1
+    }
+    return 0
+}
+
+// ── ALLOC RESIDUE (Route C · free — no-op leaf) ───────────────────────────────
+//
+// hxlcl_free is the frozen 0-libc floor's NO-OP free: the floor allocator is a bump
+// arena (hxlcl_malloc never reclaims), so the floor body is literally `(void)p;`
+// (self/runtime_core_hxlcl_shim.c:104 under HEXA_ZEROC_SHIM_BYTEID_EMIT — `void
+// hxlcl_free(void *p){ (void)p; }`). Self-emitting it removes one more shim
+// dependency from the Route C link with ZERO new mechanism: it touches the raw `p`
+// payload (the `(void)p`) and returns — no syscall, no inner call, no memory access.
+// (The sibling hxlcl_malloc stays the RETAINED extern — it routes to libc malloc /
+// the live arena, which is genuinely arena-coupled and NOT a pure-compute leaf.)
+//
+// C declares `void hxlcl_free(void*)`; modelling it `-> int` returning the raw
+// pointer word is harmless — every caller ignores the void return register.
+// BYTE-FAITHFUL to the no-op floor body. Default (gate OFF) compiles as a HexaVal fn
+// (byteeq-neutral — never linked in that mode).
+pub fn hxlcl_free(p: HexaVal) -> int {
+    let pp = __hx_payload_add(p, 0)            // (void)p — touch the arg, reclaim nothing
+    return pp
 }

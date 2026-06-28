@@ -1992,7 +1992,11 @@ pub fn _is_cabi(fname: string) -> bool {
     // r7 composite — hxlcl_atoi is a NON-LEAF whose body is one inner C-ABI call
     // `bl hxlcl_atoll`. BOTH the outer fn and the inner callee are whitelisted so
     // the inner call (keyed on the callee name s.op at the call boundary) lowers
-    // single-register C-ABI and binds cross-object to the retained shim atoll.
+    // single-register C-ABI and binds cross-object to hxlcl_atoll. As of the
+    // PARSE-LEAF PROMOTION batch hxlcl_atoll is now a REAL self-emitted leaf (a
+    // base-10, no-endptr SIMPLIFICATION of hxlcl_strtoll; pure-compute byte-walk),
+    // so atoi's inner `bl hxlcl_atoll` binds to that emitted body intra-object
+    // (no longer the retained C shim).
     if fname == "hxlcl_atoi" { return true }
     if fname == "hxlcl_atoll" { return true }
     // r8 composite — hxlcl_strdup is a NON-LEAF: inline strlen+copy byte loops
@@ -2217,6 +2221,21 @@ pub fn _is_cabi(fname: string) -> bool {
     if fname == "hxlcl_popen_remember" { return true }
     if fname == "hxlcl_popen_forget" { return true }
     if fname == "hxlcl_child_exit_nr" { return true }
+    // CTYPE family — isalnum/isalpha. The FIRST register-only pure-compute leaves:
+    // the arg is an `int c` VALUE, so the body does ZERO memory access (no
+    // __hx_ptr_load8) — only raw-payload range comparisons — and returns 0/1 in the
+    // single C-ABI result register. No syscall/errno/inner-call/float; cross-target-
+    // identical. Byte-faithful to the frozen rt_isalnum/rt_isalpha bodies
+    // (self/runtime_emit_full.hexa:2265-2278).
+    if fname == "hxlcl_isalnum" { return true }
+    if fname == "hxlcl_isalpha" { return true }
+    // ALLOC RESIDUE — free. The frozen 0-libc floor's NO-OP free (bump arena never
+    // reclaims; floor body is literally `(void)p;`, self/runtime_core_hxlcl_shim.c:104).
+    // Self-emitting it drops one more shim dependency with zero new mechanism (touch
+    // the raw p payload, return). The sibling hxlcl_malloc stays the RETAINED extern —
+    // it routes to libc malloc / the live arena (genuinely arena-coupled, NOT a
+    // pure-compute leaf).
+    if fname == "hxlcl_free" { return true }
     return false
 }
 

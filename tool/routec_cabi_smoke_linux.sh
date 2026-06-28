@@ -179,13 +179,16 @@ extern int    hxlcl_pclose(void *stream);
 
 /* The emit covers ALL whitelisted Route C symbols (the script emits the whole
  * hxlcl_core.hexa), so the routec.o carries the composites' undefined-external
- * inner callees `bl hxlcl_atoll` / `bl hxlcl_malloc`. This Linux harness only
- * EXERCISES hxlcl_close, but the link still needs those leaves resolved — supply
- * them here (sole provider, no shim → no multidef), mirroring the darwin harness.
- * hxlcl_malloc writes the same 16-byte size header the floor does (so a realloc
- * neg-offset header read would be meaningful), keeping the returned ptr aligned. */
+ * inner callee `bl hxlcl_malloc`. This Linux harness only EXERCISES hxlcl_close,
+ * but the link still needs that leaf resolved — supply it here (sole provider, no
+ * shim → no multidef), mirroring the darwin harness. hxlcl_malloc writes the same
+ * 16-byte size header the floor does (so a realloc neg-offset header read would be
+ * meaningful), keeping the returned ptr aligned.
+ *
+ * hxlcl_atoll is NO LONGER supplied here: the PARSE-LEAF PROMOTION batch made it a
+ * real self-emitted Route C leaf (in routec.o), so defining it here too would
+ * multidef. (atoi's inner `bl _hxlcl_atoll` now binds to the emitted body.) */
 #define HXLCL_HDR 16
-long long hxlcl_atoll(const char *s) { return s ? atoll(s) : 0; }
 void     *hxlcl_malloc(size_t n) {
     size_t want = n ? n : 1;
     unsigned char *base = (unsigned char *)malloc(want + HXLCL_HDR);
