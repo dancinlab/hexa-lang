@@ -154,17 +154,23 @@ enum { FARR_HOST = 0, FARR_DEVICE = 1, FARR_MIRRORED = 2 };
  * ════════════════════════════════════════════════════════════════════ */
 enum { FORGE_OUT_HOST_NOW = 0, FORGE_OUT_DEVICE_KEEP = 1 };
 
-/* Process-wide output-disposition register. Default HOST_NOW =
+/* Process-wide output-disposition register. -1 = UNSET → follow the
+ * device-resident gate (_forge_out_keep below): when CLM_PROD_DEVRESIDENT/
+ * HEXA_FUSE_ALL turns the device-resident chain on, the output stays
+ * device-resident (DEVICE_KEEP) so the next op's H2D §6.1-skips instead of
+ * a per-op D2H->H2D ping-pong (the glue-bound floor). Explicit
+ * _hx_cuda_set_out_disposition wins. UNSET + no gate = HOST_NOW =
  * byte-identical to the verified pre-RFC-056 substrate. */
-static int g_forge_out_disposition = FORGE_OUT_HOST_NOW;
+static int g_forge_out_disposition = -1;
 
 /* Called by the host runtime.c shim immediately before a `_gpu` op to
  * express §6.4's consumed-by-next-GPU-op hint. Returns the previous
  * value (so callers can save/restore). */
 int _hx_cuda_set_out_disposition(int d) {
     int prev = g_forge_out_disposition;
-    g_forge_out_disposition = (d == FORGE_OUT_DEVICE_KEEP)
-                              ? FORGE_OUT_DEVICE_KEEP : FORGE_OUT_HOST_NOW;
+    g_forge_out_disposition = (d == FORGE_OUT_DEVICE_KEEP) ? FORGE_OUT_DEVICE_KEEP
+                            : (d < 0) ? -1 /* unset -> follow device-resident gate */
+                            : FORGE_OUT_HOST_NOW;
     return prev;
 }
 
@@ -212,6 +218,21 @@ static int _forge_async_on(void) {
         }
     }
     return g_forge_async;
+}
+
+/* Resolve the EFFECTIVE output disposition. Explicit set wins; UNSET (-1)
+ * follows the device-resident gate (_forge_async_on = CLM_PROD_DEVRESIDENT/
+ * HEXA_FUSE_ALL) so turning device-residency ON actually keeps activations
+ * on-device (DEVICE_KEEP) — the gate previously flipped only the stream,
+ * leaving every glue op to D2H its output for the next op to re-H2D (the
+ * per-op ping-pong = glue-bound floor). UNSET + gate off = HOST_NOW =
+ * byte-identical to the verified substrate. (This perf coupling is safe
+ * only ON TOP of the stream-ordering family fix — same-stream producers
+ * make the device-resident H2D-skip hand-off race-free.) */
+static int _forge_out_keep(void) {
+    if (g_forge_out_disposition >= 0)
+        return g_forge_out_disposition == FORGE_OUT_DEVICE_KEEP;
+    return _forge_async_on();
 }
 
 #ifdef __CUDACC__
@@ -738,6 +759,29 @@ __global__ void _hx_k_gemm(const double* __restrict__ A,
     C[m * N + n] = acc;
 }
 
+/* #4204 own-native fast-default — atomic split-K general GEMM (M>1). Splits
+ * K across grid.z into KS chunks; each (m,n,kc) thread accumulates its chunk
+ * partial then atomicAdd's into C[m*N+n]. CHANGES the reduction order (NOT
+ * bit-identical) -> fast non-det DEFAULT (training). C MUST be pre-zeroed
+ * (the dispatch cudaMemsetAsync's it before launch). HEXA_DET selects the
+ * fixed-order _hx_k_gemm instead. gpu_only: needs nvcc compile + cuBLAS-
+ * oracle numeric validation on summer BuildStage before trusting the
+ * default training path. */
+__global__ void _hx_k_gemm_splitk(const double* __restrict__ A,
+                                  const double* __restrict__ B,
+                                  double* __restrict__ C,
+                                  int64_t M, int64_t K, int64_t N, int KS) {
+    int64_t n = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    int64_t m = (int64_t)blockIdx.y * blockDim.y + threadIdx.y;
+    if (m >= M || n >= N) return;
+    int64_t kc = (K + KS - 1) / KS;
+    int64_t k0 = (int64_t)blockIdx.z * kc;
+    int64_t k1 = k0 + kc; if (k1 > K) k1 = K;
+    double acc = 0.0;
+    for (int64_t k = k0; k < k1; k++) acc += A[m * K + k] * B[k * N + n];
+    if (acc != 0.0) atomicAdd(&C[m * N + n], acc);
+}
+
 /* ===== decode GEMV fast-path (M==1) ==================================
  * kernel-quality-reffirst lane (profiler-driven, c1 root-cause). The 16x16
  * _hx_k_gemm tile WASTES 15/16 threads at M==1 (only threadIdx.y==0 live)
@@ -776,6 +820,25 @@ __global__ void _hx_k_gemv_splitk(const double* __restrict__ A,
 }
 static int _forge_gemv_splitk_on(void) {
     const char* v = getenv("HEXA_GEMV_SPLITK");
+    return (v && v[0] && v[0] != '0') ? 1 : 0;
+}
+
+/* #4204 own-native fast-default — determinism axis (own/vendor polarity
+ * UNTOUCHED). The own-native NON-deterministic atomic kernels (atomic
+ * split-K GEMV/GEMM, atomic-scatter col2im, atomic embedding grad-accum)
+ * are now the DEFAULT (training gets the fast benefit). Opt-IN HEXA_DET
+ * forces the own fixed-order / non-atomic kernels for bit-identical,
+ * cross-host byte-parity runs — the eval/verdict/decode entry points and
+ * the GPU byteeq/oracle CI jobs export HEXA_DET=1 so Ψ-checksum + frozen
+ * gate measurement stay byte-deterministic. INVERTED-POLARITY ref-match of
+ * _forge_gemv_splitk_on: same opt-in env-read shape, but every kernel
+ * dispatch branches on `!_forge_det_on()` (default=fast-atomic) instead of
+ * gating the atomic path behind an opt-in. NOTE this is the OWN-vs-OWN
+ * (atomic vs fixed-order) axis only — _forge_own_gemm_on / HEXA_USE_CUBLAS
+ * vendor polarity is unchanged (cuBLAS stays opt-in). Returns 1 (det/
+ * non-atomic) iff HEXA_DET is set+non-empty+non-'0'; else 0 (fast/atomic). */
+static int _forge_det_on(void) {
+    const char* v = getenv("HEXA_DET");
     return (v && v[0] && v[0] != '0') ? 1 : 0;
 }
 
@@ -1159,11 +1222,13 @@ int _hx_cuda_farr_matmul_gpu(int64_t a_id, int64_t M, int64_t K,
             fprintf(stderr, "[OWN-GEMM-FIRED] _hx_k_gemm DEVICE path (no cuBLAS)\n"); }
         if (M == 1) {
             /* decode GEMV fast-path (kernel-quality-reffirst lane). The 16x16
-             * tile wastes 15/16 threads at M==1. _hx_k_gemv_1d is BYTE-IDENTICAL
-             * (same sequential K-loop reduction as _hx_k_gemm) -> default path.
-             * HEXA_GEMV_SPLITK opt-in adds K-splitting (atomicAdd, NOT bit-id)
-             * to fill the SMs at small N. */
-            if (_forge_gemv_splitk_on()) {
+             * tile wastes 15/16 threads at M==1. #4204 fast-default flip:
+             * split-K atomic (_hx_k_gemv_splitk, fills SMs at small N, NOT
+             * bit-id) is now the DEFAULT; HEXA_DET selects the BYTE-IDENTICAL
+             * _hx_k_gemv_1d (same sequential K-loop reduction as _hx_k_gemm).
+             * Legacy HEXA_GEMV_SPLITK still forces split-K even under HEXA_DET
+             * is NOT honoured — det wins (eval/verdict must stay byte-exact). */
+            if (!_forge_det_on()) {
                 int _ks = 8; /* knee measured @sm_120: 128 blocks saturates DRAM 95% */
                 cudaMemsetAsync(C_dev, 0, (size_t)N * sizeof(double), _forge_stream());
                 dim3 _vblk(256);
@@ -1175,6 +1240,15 @@ int _hx_cuda_farr_matmul_gpu(int64_t a_id, int64_t M, int64_t K,
                 _hx_k_gemv_1d<<<_vgrd, _vblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, K, N);
             }
             if (_forge_launch_check("own_gemv") != 0) return -1;
+        } else if (!_forge_det_on()) {
+            /* #4204 fast-default: atomic split-K general GEMM (NOT bit-id),
+             * fills the SMs along K. C pre-zeroed for the atomicAdd. */
+            int _gks = 8; /* K-split chunks; mirrors the GEMV knee */
+            cudaMemsetAsync(C_dev, 0, (size_t)(M * N) * sizeof(double), _forge_stream());
+            dim3 _skblk(16, 16);
+            dim3 _skgrd((unsigned)((N + 15) / 16), (unsigned)((M + 15) / 16), (unsigned)_gks);
+            _hx_k_gemm_splitk<<<_skgrd, _skblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, M, K, N, _gks);
+            if (_forge_launch_check("own_gemm_splitk") != 0) return -1;
         } else {
         dim3 _gblk(16, 16);
         dim3 _ggrd((unsigned)((N + 15) / 16), (unsigned)((M + 15) / 16));
@@ -1213,23 +1287,18 @@ int _hx_cuda_farr_matmul_gpu(int64_t a_id, int64_t M, int64_t K,
 #else
     }
 #endif
-    /* L2-b: sync the forge stream before reading the GEMM result back (async-on);
-     * no-op when async-off (default stream). Keeps D2H race-free + byte-eq. */
-    if (_forge_sync() != 0) return -1;
-    /* Copy C device → host so the host-side caller sees the result. */
-    cudaError_t er = cudaMemcpy(ce->buf, C_dev,
-                                (size_t)(M * N) * sizeof(double),
-                                cudaMemcpyDeviceToHost);
-    if (er != cudaSuccess) {
-        fprintf(stderr, "[cuda] cudaMemcpy C D2H failed: %s\n",
-                cudaGetErrorString(er));
-        return -1;
-    }
-    ce->d_buf      = (void*)C_dev;
-    ce->loc        = FARR_MIRRORED;
-    ce->dirty_host = 0;
-    ce->dirty_dev  = 0;
-    return 0;
+    /* RFC056 §6.4 — route the GEMM output through the disposition handler
+     * (_d2h_out) instead of a hardcoded D2H. FORGE_OUT_DEVICE_KEEP keeps C
+     * device-resident (loc=FARR_DEVICE, dirty_dev=1) so the next decode op's
+     * _h2d hits the §6.1 skip and the ~13k matmul/frag host round-trips that
+     * dominate single-token decode util collapse. _d2h_out syncs the forge
+     * stream itself in the HOST_NOW path (race-free, byte-eq); DEVICE_KEEP
+     * defers both sync and copy (stream-ordered with the next forge op).
+     * Default FORGE_OUT_HOST_NOW = the prior D2H, byte-identical — matmul
+     * (the most frequent decode op) was the lone forge holdout hardcoding
+     * the copy; every other forge op already routes output through _d2h_out.
+     * C's device buffer is g_slots[c_id].d_buf (= C_dev), already set above. */
+    return _d2h_out(c_id, M * N);
 }
 
 /* HEXA-FUSION Phase 1c (CUDA-OWN) — our OWN strided-batched FP64 GEMM, NO
@@ -1542,6 +1611,31 @@ __global__ void _hx_k_col2im(const double* __restrict__ DXC,
     }
 }
 
+/* #4204 own-native fast-default — atomic-SCATTER col2im. One thread per
+ * DXC input cell (t, j=ci*K+k); maps to dX[p,ci] with p = t - dil*(K-1-k)
+ * and atomicAdd's the tap into DX[p*Cin+ci]. CHANGES the float accum order
+ * (NOT bit-identical) vs the transpose-GATHER _hx_k_col2im -> fast non-det
+ * DEFAULT (training). DX MUST be pre-zeroed (the wrapper cudaMemsetAsync's
+ * it). HEXA_DET selects the deterministic gather kernel. gpu_only: needs
+ * nvcc compile + clm_conv_devfeed.hexa oracle (det path) on summer. */
+__global__ void _hx_k_col2im_scatter(const double* __restrict__ DXC,
+                                     double* __restrict__ DX,
+                                     int64_t T, int64_t Cin, int64_t K,
+                                     int64_t dil) {
+    int64_t Kdim = Cin * K;
+    int64_t total = T * Kdim;
+    int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;
+    for (int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+         idx < total; idx += stride) {
+        int64_t t  = idx / Kdim;
+        int64_t j  = idx - t * Kdim;      /* j = ci*K + k */
+        int64_t ci = j / K;
+        int64_t k  = j - ci * K;
+        int64_t p  = t - dil * (K - 1 - k);
+        if (p >= 0) atomicAdd(&DX[p * Cin + ci], DXC[idx]);
+    }
+}
+
 /* Launch helper: one 1-D grid over `total` output cells. */
 static void _hx_im2col_grid(int64_t total, int* grid_sz, int* block_sz) {
     *block_sz = 256;
@@ -1608,8 +1702,15 @@ int _hx_cuda_farr_col2im_gpu(int64_t dxc_id, int64_t dx_id,
     if (_ensure_dev_alloc_out(dx_id, T * Cin) != 0) return -1;
     const double* DXC = g_slots[dxc_id].d_buf;
     double*       DX  = g_slots[dx_id].d_buf;
+    if (!_forge_det_on()) {
+        /* #4204 fast-default: atomic-scatter (NOT bit-id). DX pre-zeroed. */
+        cudaMemsetAsync(DX, 0, (size_t)(T * Cin) * sizeof(double), _forge_stream());
+        int gss, bss; _hx_im2col_grid(T * Cin * K, &gss, &bss);
+        _hx_k_col2im_scatter<<<gss, bss, 0, _forge_stream()>>>(DXC, DX, T, Cin, K, dil);
+    } else {
     int grid_sz, block_sz; _hx_im2col_grid(T * Cin, &grid_sz, &block_sz);
     _hx_k_col2im<<<grid_sz, block_sz, 0, _forge_stream()>>>(DXC, DX, T, Cin, K, dil);
+    }
     cudaError_t er = cudaDeviceSynchronize();
     if (er != cudaSuccess) {
         fprintf(stderr, "[cuda] col2im launch failed: %s\n", cudaGetErrorString(er));
@@ -2345,14 +2446,17 @@ int _hx_cuda_farr_groupnorm_gelu_gpu(int64_t x_id, int64_t gamma_id, int64_t bet
     int64_t want = (G + block_sz - 1) / block_sz;
     int grid_sz = (want > 1024) ? 1024 : (int)want;
     if (grid_sz < 1) grid_sz = 1;
-    _hx_k_groupnorm_gelu<<<grid_sz, block_sz>>>(X, GAMMA, BETA, Y, A, MEAN, INV, XHAT,
+    /* forge stream (NOT the default stream): the async device-resident
+     * chain queues producers (residual_add/conv) on _forge_stream(), a
+     * cudaStreamNonBlocking stream that does NOT implicit-sync with the
+     * legacy default stream. A default-stream launch here would be UNORDERED
+     * vs those producers -> read stale/partial input -> mu/var corruption.
+     * Same stream = stream-order enforces the data dependency. async-off:
+     * _forge_stream()=0 + _forge_launch_check=cudaDeviceSynchronize() =
+     * byte-identical to the legacy default-stream barrier. */
+    _hx_k_groupnorm_gelu<<<grid_sz, block_sz, 0, _forge_stream()>>>(X, GAMMA, BETA, Y, A, MEAN, INV, XHAT,
                                                 T, C, G);
-    cudaError_t er = cudaDeviceSynchronize();
-    if (er != cudaSuccess) {
-        fprintf(stderr, "[cuda] groupnorm_gelu launch failed: %s\n",
-                cudaGetErrorString(er));
-        return -1;
-    }
+    if (_forge_launch_check("groupnorm_gelu") != 0) return -1;
     /* Y/A/xhat/mean/inv stay DEVICE-RESIDENT so the follow-up residual_add /
      * conv GEMM H2D-skip them (same residence convention as groupnorm). */
     {
@@ -2467,14 +2571,16 @@ int _hx_cuda_farr_groupnorm_gelu_residual_gpu(int64_t x_id, int64_t gamma_id,
     int64_t want = (G + block_sz - 1) / block_sz;
     int grid_sz = (want > 1024) ? 1024 : (int)want;
     if (grid_sz < 1) grid_sz = 1;
-    _hx_k_groupnorm_gelu_residual<<<grid_sz, block_sz>>>(X, GAMMA, BETA, R, Y, A, OUT,
+    /* forge stream (NOT default stream) — see _hx_k_groupnorm_gelu above.
+     * This FUSED trunk kernel was the ONE decode glue op launched on the
+     * default stream while its producers (conv/residual_add) ran on the
+     * nonblocking forge stream -> unordered RACE -> stale h -> GN mu/var
+     * corruption -> per-layer trunk activation divergence (the root of the
+     * CLM_PROD_DEVRESIDENT decode byte-eq FAIL: ON diverges from OFF while
+     * OFF is deterministic). async-off: byte-identical to legacy barrier. */
+    _hx_k_groupnorm_gelu_residual<<<grid_sz, block_sz, 0, _forge_stream()>>>(X, GAMMA, BETA, R, Y, A, OUT,
                                                 MEAN, INV, XHAT, T, C, G);
-    cudaError_t er = cudaDeviceSynchronize();
-    if (er != cudaSuccess) {
-        fprintf(stderr, "[cuda] groupnorm_gelu_residual launch failed: %s\n",
-                cudaGetErrorString(er));
-        return -1;
-    }
+    if (_forge_launch_check("groupnorm_gelu_residual") != 0) return -1;
     /* Y/A/OUT/xhat/mean/inv stay DEVICE-RESIDENT so the follow-up conv GEMM
      * (over xt = OUT) H2D-skips them (same residence convention as L3-a). */
     {
@@ -4064,6 +4170,29 @@ __global__ void _hx_k_embedding_bwd_scatter(const double* __restrict__ DX,
     }
 }
 
+/* #4204 own-native fast-default — atomic embedding grad-accum. One thread
+ * per (i,c): atomicAdd's DX[i*d+c] into DTABLE[tok*d+c] (tok=(int)IDS[i]).
+ * Colliding tokens accumulate in nondeterministic order (NOT bit-id) ->
+ * fast non-det DEFAULT (training); replaces the O(V*T) per-vocab-row scan.
+ * DTABLE is pre-zeroed on the host (clm_prod_bwd) then H2D'd, so the
+ * atomicAdds land on a clean table. HEXA_DET selects the deterministic
+ * per-row scan _hx_k_embedding_bwd_scatter. gpu_only: needs nvcc compile +
+ * clm_prod_embed_scatter_eq oracle (det path) on summer. */
+__global__ void _hx_k_embedding_bwd_scatter_atomic(const double* __restrict__ DX,
+                                                   const double* __restrict__ IDS,
+                                                   double* __restrict__ DTABLE,
+                                                   int64_t T, int64_t d, int64_t V) {
+    int64_t total = T * d;
+    int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;
+    for (int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+         idx < total; idx += stride) {
+        int64_t i = idx / d;
+        int64_t c = idx - i * d;
+        int64_t tok = (int64_t)IDS[i];
+        if (tok >= 0 && tok < V) atomicAdd(&DTABLE[tok * d + c], DX[i * d + c]);
+    }
+}
+
 int _hx_cuda_farr_embedding_bwd_scatter_gpu(int64_t dx_id, int64_t ids_id,
                                             int64_t dtable_id,
                                             int64_t T, int64_t d, int64_t V) {
@@ -4075,12 +4204,23 @@ int _hx_cuda_farr_embedding_bwd_scatter_gpu(int64_t dx_id, int64_t ids_id,
     const double* DX  = g_slots[dx_id].d_buf;
     const double* IDS = g_slots[ids_id].d_buf;
     double*       DTABLE = g_slots[dtable_id].d_buf;
+    if (!_forge_det_on()) {
+        /* #4204 fast-default: atomic grad-accum (NOT bit-id), one thread per
+         * (i,c). DTABLE is the host-pre-zeroed table just H2D'd above. */
+        int eblk = 256;
+        int64_t ewant = (T * d + eblk - 1) / eblk;
+        int egrid = (ewant > 1024) ? 1024 : (int)ewant;
+        if (egrid < 1) egrid = 1;
+        _hx_k_embedding_bwd_scatter_atomic<<<egrid, eblk, 0, _forge_stream()>>>(DX, IDS, DTABLE, T, d, V);
+        if (_forge_launch_check("embedding_bwd_scatter_atomic") != 0) return -1;
+    } else {
     int block_sz = 128;
     int64_t want = (V + block_sz - 1) / block_sz;
     int grid_sz = (want > 1024) ? 1024 : (int)want;
     if (grid_sz < 1) grid_sz = 1;
     _hx_k_embedding_bwd_scatter<<<grid_sz, block_sz, 0, _forge_stream()>>>(DX, IDS, DTABLE, T, d, V);
     if (_forge_launch_check("embedding_bwd_scatter") != 0) return -1;
+    }
     {
         HexaFarrEntry* e = &_hx_farr_table[dtable_id];
         e->d_buf      = (void*)g_slots[dtable_id].d_buf;
@@ -4222,12 +4362,23 @@ static int _ensure_dev_alloc_out(int64_t out_id, int64_t need_len) {
 static int _d2h_out(int64_t out_id, int64_t copy_len) {
     HexaFarrEntry* e = &_hx_farr_table[out_id];
     _CudaFarrSlot* s = &g_slots[out_id];
-    if (g_forge_out_disposition == FORGE_OUT_DEVICE_KEEP) {
+    if (_forge_out_keep()) {
         /* Defer D2H — device authoritative, host stale. No bytes
          * copied; the next op reads s->d_buf directly via H2D-skip. */
         e->d_buf      = (void*)s->d_buf;
         e->loc        = FARR_DEVICE;
-        e->dirty_host = 1;   /* host buf no longer current */
+        /* residency-fix: dirty_host MUST stay 0 here. The host buf is
+         * stale, but that is tracked by loc=FARR_DEVICE + dirty_dev=1 (a
+         * host-read materialises via hexa_farr_get loc==FARR_DEVICE D2H).
+         * dirty_host=1 means the USER mutated the host buf (hexa_farr_set)
+         * and forces a re-upload; setting it on a DEVICE_KEEP output wrongly
+         * BLOCKED the _h2d skip (which keys on !dirty_host) so the next GPU
+         * op re-uploaded the never-written host buffer, CLOBBERING this
+         * kernel device output with stale zeros -> device-resident fwd/grad
+         * garbage -> CLM_PROD_DEVRESIDENT/DEVFEED frozen-train (measured
+         * 4.7990 constant vs REF 3.5508 descend). Default = HOST_NOW so the
+         * shipped build stays byte-identical; only the opt-in path fixed. */
+        e->dirty_host = 0;
         e->dirty_dev  = 1;   /* device holds the freshest value */
         (void)copy_len;
         return 0;
@@ -5828,10 +5979,15 @@ static int _d2h_out_elem(int64_t id, int64_t len) {
     if (!e->buf || !s->d_buf || e->len < len || s->len < len) return -1;
     /* RFC 056 §6.1/§6.4 D2H-defer — same contract as _d2h_out. Default
      * FORGE_OUT_HOST_NOW = byte-identical to the verified substrate. */
-    if (g_forge_out_disposition == FORGE_OUT_DEVICE_KEEP) {
+    if (_forge_out_keep()) {
         e->d_buf      = (void*)s->d_buf;
         e->loc        = FARR_DEVICE;
-        e->dirty_host = 1;
+        /* residency-fix (same bug as _d2h_out): device-keep output is
+         * NOT user-mutated. dirty_host=1 here blocked the _h2d skip
+         * (!dirty_host) so the next op re-uploaded the never-written host
+         * buffer, clobbering this device output with stale zeros. loc=
+         * FARR_DEVICE + dirty_dev=1 already track host-staleness. */
+        e->dirty_host = 0;
         e->dirty_dev  = 1;
         return 0;
     }
@@ -6076,13 +6232,8 @@ int _hx_cuda_farr_add_gpu(int64_t a_id, int64_t b_id,
     double* B = g_slots[b_id].d_buf;
     double* C = g_slots[out_id].d_buf;
     int grid = _hx_cuda_elem_grid(n);
-    _hx_cuda_kern_add<<<grid, _HX_CUDA_ELEM_BLOCK>>>(A, B, C, n);
-    cudaError_t er = cudaGetLastError();
-    if (er != cudaSuccess) {
-        fprintf(stderr, "[cuda] add launch failed: %s\n",
-                cudaGetErrorString(er));
-        return -1;
-    }
+    _hx_cuda_kern_add<<<grid, _HX_CUDA_ELEM_BLOCK, 0, _forge_stream()>>>(A, B, C, n);
+    if (_forge_launch_check("add") != 0) return -1;
     if (_d2h_out(out_id, n) != 0) return -1;
     return 0;
 }
@@ -6111,13 +6262,8 @@ int _hx_cuda_farr_scale_gpu(int64_t x_id, double alpha,
     double* X = g_slots[x_id].d_buf;
     double* Y = g_slots[out_id].d_buf;
     int grid = _hx_cuda_elem_grid(n);
-    _hx_cuda_kern_scale<<<grid, _HX_CUDA_ELEM_BLOCK>>>(X, alpha, Y, n);
-    cudaError_t er = cudaGetLastError();
-    if (er != cudaSuccess) {
-        fprintf(stderr, "[cuda] scale launch failed: %s\n",
-                cudaGetErrorString(er));
-        return -1;
-    }
+    _hx_cuda_kern_scale<<<grid, _HX_CUDA_ELEM_BLOCK, 0, _forge_stream()>>>(X, alpha, Y, n);
+    if (_forge_launch_check("scale") != 0) return -1;
     if (_d2h_out(out_id, n) != 0) return -1;
     return 0;
 }
@@ -6150,13 +6296,8 @@ int _hx_cuda_farr_mul_gpu(int64_t a_id, int64_t b_id,
     double* B = g_slots[b_id].d_buf;
     double* C = g_slots[out_id].d_buf;
     int grid = _hx_cuda_elem_grid(n);
-    _hx_cuda_kern_mul<<<grid, _HX_CUDA_ELEM_BLOCK>>>(A, B, C, n);
-    cudaError_t er = cudaGetLastError();
-    if (er != cudaSuccess) {
-        fprintf(stderr, "[cuda] mul launch failed: %s\n",
-                cudaGetErrorString(er));
-        return -1;
-    }
+    _hx_cuda_kern_mul<<<grid, _HX_CUDA_ELEM_BLOCK, 0, _forge_stream()>>>(A, B, C, n);
+    if (_forge_launch_check("mul") != 0) return -1;
     if (_d2h_out(out_id, n) != 0) return -1;
     return 0;
 }
@@ -6184,13 +6325,8 @@ int _hx_cuda_farr_silu_gpu(int64_t x_id, int64_t n, int64_t out_id) {
     double* X = g_slots[x_id].d_buf;
     double* Y = g_slots[out_id].d_buf;
     int grid = _hx_cuda_elem_grid(n);
-    _hx_cuda_kern_silu<<<grid, _HX_CUDA_ELEM_BLOCK>>>(X, Y, n);
-    cudaError_t er = cudaGetLastError();
-    if (er != cudaSuccess) {
-        fprintf(stderr, "[cuda] silu launch failed: %s\n",
-                cudaGetErrorString(er));
-        return -1;
-    }
+    _hx_cuda_kern_silu<<<grid, _HX_CUDA_ELEM_BLOCK, 0, _forge_stream()>>>(X, Y, n);
+    if (_forge_launch_check("silu") != 0) return -1;
     if (_d2h_out(out_id, n) != 0) return -1;
     return 0;
 }
@@ -6218,13 +6354,8 @@ int _hx_cuda_farr_silu_grad_gpu(int64_t x_id, int64_t n, int64_t out_id) {
     double* X = g_slots[x_id].d_buf;
     double* Y = g_slots[out_id].d_buf;
     int grid = _hx_cuda_elem_grid(n);
-    _hx_cuda_kern_silu_grad<<<grid, _HX_CUDA_ELEM_BLOCK>>>(X, Y, n);
-    cudaError_t er = cudaGetLastError();
-    if (er != cudaSuccess) {
-        fprintf(stderr, "[cuda] silu_grad launch failed: %s\n",
-                cudaGetErrorString(er));
-        return -1;
-    }
+    _hx_cuda_kern_silu_grad<<<grid, _HX_CUDA_ELEM_BLOCK, 0, _forge_stream()>>>(X, Y, n);
+    if (_forge_launch_check("silu_grad") != 0) return -1;
     if (_d2h_out(out_id, n) != 0) return -1;
     return 0;
 }
@@ -6286,18 +6417,13 @@ static int _hx_cuda_rope_common(int64_t t_id, int64_t cos_id,
     double*       Y   = g_slots[out_id].d_buf;
     int grid = _hx_cuda_elem_grid(total);
     if (is_bwd) {
-        _hx_cuda_kern_rope_bwd<<<grid, _HX_CUDA_ELEM_BLOCK>>>(
+        _hx_cuda_kern_rope_bwd<<<grid, _HX_CUDA_ELEM_BLOCK, 0, _forge_stream()>>>(
             X, COS, SIN, Y, T, nheads, hd);
     } else {
-        _hx_cuda_kern_rope_fwd<<<grid, _HX_CUDA_ELEM_BLOCK>>>(
+        _hx_cuda_kern_rope_fwd<<<grid, _HX_CUDA_ELEM_BLOCK, 0, _forge_stream()>>>(
             X, COS, SIN, Y, T, nheads, hd);
     }
-    cudaError_t er = cudaGetLastError();
-    if (er != cudaSuccess) {
-        fprintf(stderr, "[cuda] %s launch failed: %s\n",
-                tag, cudaGetErrorString(er));
-        return -1;
-    }
+    if (_forge_launch_check(tag) != 0) return -1;
     if (_d2h_out(out_id, total) != 0) return -1;
     return 0;
 }
@@ -6400,14 +6526,9 @@ int _hx_cuda_farr_transpose_scatter_gpu(int64_t src_id, int64_t dst_id,
         return -1;
     }
     int grid = _hx_cuda_elem_grid(total);
-    _hx_cuda_kern_transpose_scatter<<<grid, _HX_CUDA_ELEM_BLOCK>>>(
+    _hx_cuda_kern_transpose_scatter<<<grid, _HX_CUDA_ELEM_BLOCK, 0, _forge_stream()>>>(
         SRC, DST, rows, cols, dst_off);
-    cudaError_t er = cudaGetLastError();
-    if (er != cudaSuccess) {
-        fprintf(stderr, "[cuda] transpose_scatter launch failed: %s\n",
-                cudaGetErrorString(er));
-        return -1;
-    }
+    if (_forge_launch_check("transpose_scatter") != 0) return -1;
     /* RFC 058 byte-eq fix — D2H the kernel result back to the host buffer.
      * Downstream A2-block consumers (RMSNorm/RoPE/attention/SwiGLU slabs)
      * read Bc via the RAW host pointer, NOT a farr API, so the lazy-D2H
@@ -6803,13 +6924,8 @@ int _hx_cuda_farr_silu_gate_gpu(int64_t a_id, int64_t b_id,
     double* B = g_slots[b_id].d_buf;
     double* O = g_slots[out_id].d_buf;
     int grid = _hx_cuda_elem_grid(n);
-    _hx_cuda_kern_silu_gate<<<grid, _HX_CUDA_ELEM_BLOCK>>>(A, B, O, n);
-    cudaError_t er = cudaGetLastError();
-    if (er != cudaSuccess) {
-        fprintf(stderr, "[cuda] silu_gate launch failed: %s\n",
-                cudaGetErrorString(er));
-        return -1;
-    }
+    _hx_cuda_kern_silu_gate<<<grid, _HX_CUDA_ELEM_BLOCK, 0, _forge_stream()>>>(A, B, O, n);
+    if (_forge_launch_check("silu_gate") != 0) return -1;
     if (_d2h_out(out_id, n) != 0) return -1;
     return 0;
 }
@@ -6862,13 +6978,8 @@ int _hx_cuda_farr_rmsnorm_mh_gpu(int64_t x_id, int64_t g_id,
     int block = 256;
     int64_t need = (T + block - 1) / block;
     int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));
-    _hx_cuda_kern_rmsnorm_mh<<<grid, block>>>(X, G, Y, XN, I, T, d);
-    cudaError_t er = cudaGetLastError();
-    if (er != cudaSuccess) {
-        fprintf(stderr, "[cuda] rmsnorm_mh launch failed: %s\n",
-                cudaGetErrorString(er));
-        return -1;
-    }
+    _hx_cuda_kern_rmsnorm_mh<<<grid, block, 0, _forge_stream()>>>(X, G, Y, XN, I, T, d);
+    if (_forge_launch_check("rmsnorm_mh") != 0) return -1;
     if (_d2h_out(y_id,   n_xy) != 0) return -1;
     if (_d2h_out(xn_id,  n_xy) != 0) return -1;
     if (_d2h_out(inv_id, T)    != 0) return -1;
@@ -6922,8 +7033,8 @@ int _hx_cuda_farr_attn_dt_fwd_gpu(int64_t q_id, int64_t k_id, int64_t v_id,
     /* Zero P first — only j < L positions are written, the upper
      * triangle (j ≥ L per row) must stay 0 to match the t_zeros init
      * on the host side. cudaMemset is fine (P is doubles; 0x00·8 == 0.0). */
-    cudaError_t ze = cudaMemset(g_slots[p_id].d_buf, 0,
-                                (size_t)np * sizeof(double));
+    cudaError_t ze = cudaMemsetAsync(g_slots[p_id].d_buf, 0,
+                                (size_t)np * sizeof(double), _forge_stream());
     if (ze != cudaSuccess) {
         fprintf(stderr, "[cuda] attn_dt_fwd: cudaMemset P failed: %s\n",
                 cudaGetErrorString(ze));
@@ -6939,13 +7050,8 @@ int _hx_cuda_farr_attn_dt_fwd_gpu(int64_t q_id, int64_t k_id, int64_t v_id,
     int block = 64;
     int64_t need = (total + block - 1) / block;
     int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));
-    _hx_cuda_kern_attn_dt_fwd<<<grid, block>>>(Q, K, V, P, C, T, nh, nkv, hd);
-    cudaError_t er = cudaGetLastError();
-    if (er != cudaSuccess) {
-        fprintf(stderr, "[cuda] attn_dt_fwd launch failed: %s\n",
-                cudaGetErrorString(er));
-        return -1;
-    }
+    _hx_cuda_kern_attn_dt_fwd<<<grid, block, 0, _forge_stream()>>>(Q, K, V, P, C, T, nh, nkv, hd);
+    if (_forge_launch_check("attn_dt_fwd") != 0) return -1;
     if (_d2h_out(p_id,   np) != 0) return -1;
     if (_d2h_out(ctx_id, nq) != 0) return -1;
     return 0;
@@ -7242,13 +7348,8 @@ int _hx_cuda_farr_add_inplace_gpu(int64_t dst_id, int64_t src_id, int64_t n) {
     int block = 256;
     int64_t need = (n + block - 1) / block;
     int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));
-    _hx_cuda_kern_add_inplace<<<grid, block>>>(D, S, n);
-    cudaError_t er = cudaGetLastError();
-    if (er != cudaSuccess) {
-        fprintf(stderr, "[cuda] add_inplace launch failed: %s\n",
-                cudaGetErrorString(er));
-        return -1;
-    }
+    _hx_cuda_kern_add_inplace<<<grid, block, 0, _forge_stream()>>>(D, S, n);
+    if (_forge_launch_check("add_inplace") != 0) return -1;
     if (_d2h_out(dst_id, de->len) != 0) return -1;
     return 0;
 }
@@ -7313,13 +7414,8 @@ int _hx_cuda_farr_transpose_2d_gpu(int64_t src_id, int64_t soff,
     int block = 256;
     int64_t need = (total + block - 1) / block;
     int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));
-    _hx_cuda_kern_transpose_2d<<<grid, block>>>(S, soff, D, doff, d_out, d_in);
-    cudaError_t er = cudaGetLastError();
-    if (er != cudaSuccess) {
-        fprintf(stderr, "[cuda] transpose_2d launch failed: %s\n",
-                cudaGetErrorString(er));
-        return -1;
-    }
+    _hx_cuda_kern_transpose_2d<<<grid, block, 0, _forge_stream()>>>(S, soff, D, doff, d_out, d_in);
+    if (_forge_launch_check("transpose_2d") != 0) return -1;
     if (_d2h_out(dst_id, de->len) != 0) return -1;
     return 0;
 }
