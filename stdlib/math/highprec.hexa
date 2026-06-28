@@ -8,11 +8,12 @@
 //
 // 표현: 상수 C를 D자리로 = BigInt floor(C * 10^D) (고정소수점 정수). 호출자가 10^D로 자릿수 해석.
 //
-// SUBSTRATE 갭 (honest, follow-on): Bernoulli B_n·Euler-Mascheroni γ 는 현 BigInt ops로 미구현.
-//   • Bernoulli B_n 은 유리수(분자/분모 BigInt + 약분) → full BigInt÷BigInt + gcd 가 전제인데
-//     현재는 bi_divmod_small(소제수 i64만)뿐. gcd/full division 추가는 별도 PR (fix-the-tool).
-//   • γ 는 Brent–McMillan(ln·exp 필요) 또는 조화수-기반 → ln/exp substrate 부재.
-//   여기엔 현 ops로 깨끗이 검증되는 상수(π·ζ(2..6)·ζ(3)·Catalan G)만 둔다 (억지 fudge 금지).
+// SUBSTRATE (2026-06-28): full BigInt÷BigInt (`bi_divmod`) + Euclidean `bi_gcd` landed in
+//   stdlib/bigint.hexa → Bernoulli B_n 유리수(분자/분모 BigInt + gcd 약분)를 native 구현
+//   (`bernoulli(n)` → [sign,num,den]; B_12=-691/2730 reference-match). atlas Bernoulli 갭 메움.
+// 잔여 갭 (honest, follow-on): Euler-Mascheroni γ 는 Brent–McMillan(ln·exp 필요) 또는 조화수-기반
+//   → ln/exp substrate 부재로 미구현. 여기엔 현 ops로 깨끗이 검증되는 상수(π·ζ(2..6)·ζ(3)·
+//   Catalan G·Bernoulli B_n)만 둔다 (억지 fudge 금지).
 
 import "stdlib/bigint.hexa"
 
@@ -138,6 +139,135 @@ fn catalan_scaled(dd) -> array {
     bi_div_small(acc, 2)
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Bernoulli numbers B_n (exact rationals) — needs full BigInt÷BigInt + gcd (#4161 substrate)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// A rational is represented as an array  [sign, num, den]  with
+//   sign ∈ {-1,0,1}   (0 only for value 0)
+//   num  = |numerator|   as a non-negative BigInt (magnitude, sign-1 or [0])
+//   den  = denominator   as a positive   BigInt (>0, never 0)
+// Always kept REDUCED (gcd(num,den)=1) and den>0; zero is [0, [0], [1]].
+//
+// B_n via the recurrence  Σ_{k=0}^{n} C(n+1,k) B_k = 0  ⇒
+//   B_n = -1/(n+1) · Σ_{k=0}^{n-1} C(n+1,k) B_k     (B_0 = 1).
+// This convention gives B_1 = -1/2 (the "first Bernoulli numbers"). Even-index values
+// (B_2, B_4, …) are identical in either ±1/2 convention. Reference: OEIS A027641 (num) /
+// A027642 (den). C(n+1,k) is an exact integer built incrementally with full BigInt ÷.
+
+// build rational [sign,num,den] from raw signed-num BigInt n and positive-den BigInt d, reduced ──
+fn _rat_make(n, d) -> array {
+    let sn = n[0]
+    if sn == 0 {
+        let z = []; z.push(0)
+        let one = bi_from(1)
+        let r = []
+        r.push(0); r.push(z); r.push(one)
+        return r
+    }
+    let num = bi_abs(n)
+    let den = bi_abs(d)
+    let g = bi_gcd(num, den)
+    let nr = bi_divmod(num, g)
+    let dr = bi_divmod(den, g)
+    let r = []
+    r.push(sn)
+    r.push(nr[0])
+    r.push(dr[0])
+    r
+}
+
+// rational zero ──
+fn _rat_zero() -> array {
+    let z = []; z.push(0)
+    let one = bi_from(1)
+    let r = []
+    r.push(0); r.push(z); r.push(one)
+    r
+}
+
+// add two rationals p + q → reduced [sign,num,den] ──
+fn _rat_add(p, q) -> array {
+    let sp = p[0]
+    let sq = q[0]
+    if sp == 0 { return q }
+    if sq == 0 { return p }
+    let pn = p[1]
+    let qn = q[1]
+    let pd = p[2]
+    let qd = q[2]
+    let t1 = bi_mul(pn, qd)
+    let t2 = bi_mul(qn, pd)
+    let st1 = t1
+    if sp < 0 { st1 = bi_neg(t1) }
+    let st2 = t2
+    if sq < 0 { st2 = bi_neg(t2) }
+    let numn = bi_add(st1, st2)
+    let den = bi_mul(pd, qd)
+    _rat_make(numn, den)
+}
+
+// multiply rational p by an integer BigInt m (signed) → reduced rational ──
+fn _rat_mul_int(p, m) -> array {
+    if p[0] == 0 { return p }
+    if m[0] == 0 { return _rat_zero() }
+    let pn = p[1]
+    let signed_pn = pn
+    if p[0] < 0 { signed_pn = bi_neg(pn) }
+    let numn = bi_mul(signed_pn, m)
+    _rat_make(numn, p[2])
+}
+
+// divide rational p by an integer BigInt m (signed, m != 0) → reduced rational ──
+fn _rat_div_int(p, m) -> array {
+    if p[0] == 0 { return p }
+    let pn = p[1]
+    let signed_pn = pn
+    if p[0] < 0 { signed_pn = bi_neg(pn) }
+    let sm = m[0]
+    if sm < 0 { signed_pn = bi_neg(signed_pn) }
+    let den = bi_mul(p[2], bi_abs(m))
+    _rat_make(signed_pn, den)
+}
+
+// Bernoulli B_n as reduced rational [sign, num, den] (num,den non-negative BigInts; den>0) ──
+fn bernoulli(n) -> array {
+    let B = []
+    B.push(_rat_make(bi_from(1), bi_from(1)))      // B_0 = 1/1
+    let mm = 1
+    while mm <= n {
+        // B_mm = -1/(mm+1) Σ_{k=0}^{mm-1} C(mm+1,k) B_k
+        // C(mm+1,k) incremental: C(mm+1,0)=1 ; C(mm+1,k)=C(mm+1,k-1)*(mm+1-(k-1))/k
+        let acc = _rat_zero()
+        let comb = bi_from(1)          // C(mm+1, 0) = 1
+        let k = 0
+        while k < mm {
+            let term = _rat_mul_int(B[k], comb)
+            acc = _rat_add(acc, term)
+            // advance comb to C(mm+1, k+1) = comb * (mm+1 - k) / (k+1)
+            let kp1 = k + 1
+            let mul = (mm + 1) - k
+            comb = bi_mul(comb, bi_from(mul))
+            let cq = bi_divmod(comb, bi_from(kp1))   // exact integer
+            comb = cq[0]
+            k = k + 1
+        }
+        let negacc = _rat_mul_int(acc, bi_from(0 - 1))
+        let bmm = _rat_div_int(negacc, bi_from(mm + 1))
+        B.push(bmm)
+        mm = mm + 1
+    }
+    B[n]
+}
+
+// rational → "num/den" string (signed) ──
+fn _rat_str(r) -> string {
+    if r[0] == 0 { return "0/1" }
+    let s = ""
+    if r[0] < 0 { s = "-" }
+    s + bi_to_string(r[1]) + "/" + bi_to_string(r[2])
+}
+
 // ── selftest ──
 fn _gate(label, got, want) -> int {
     if got == want {
@@ -177,6 +307,18 @@ fn main() {
     // floor(G·10^44) 문자열 = "91596559417721901505460..." → 앞 21자 검사.
     let g = bi_to_string(catalan_scaled(44)).substring(0, 21)
     fails = fails + _gate("Catalan G (Guillera-Pilehrood)", g, "915965594177219015054")
+
+    // ── Bernoulli numbers B_n (exact rational, OEIS A027641/A027642) ──
+    fails = fails + _gate("B_0 = 1/1", _rat_str(bernoulli(0)), "1/1")
+    fails = fails + _gate("B_1 = -1/2", _rat_str(bernoulli(1)), "-1/2")
+    fails = fails + _gate("B_2 = 1/6", _rat_str(bernoulli(2)), "1/6")
+    fails = fails + _gate("B_3 = 0/1", _rat_str(bernoulli(3)), "0/1")
+    fails = fails + _gate("B_4 = -1/30", _rat_str(bernoulli(4)), "-1/30")
+    fails = fails + _gate("B_6 = 1/42", _rat_str(bernoulli(6)), "1/42")
+    fails = fails + _gate("B_8 = -1/30", _rat_str(bernoulli(8)), "-1/30")
+    fails = fails + _gate("B_10 = 5/66", _rat_str(bernoulli(10)), "5/66")
+    fails = fails + _gate("B_12 = -691/2730 (famous 691!)", _rat_str(bernoulli(12)), "-691/2730")
+    fails = fails + _gate("B_14 = 7/6", _rat_str(bernoulli(14)), "7/6")
 
     println("")
     if fails == 0 {
