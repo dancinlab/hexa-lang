@@ -561,6 +561,12 @@ resolve_native_num_float_core_seed() {
     if [ -n "$seed" ] && [ -f "$seed" ] && \
        [ "$(grep -cE '^\.globl[[:space:]]+_?rt_format_float_native' "$seed" 2>/dev/null || echo 0)" -ge 1 ]; then
         export HEXA_RT_FORMAT_FLOAT_NATIVE_AVAIL=1
+        # R6 PR-2 default-ON (matches num_float_core parse + EXACT #4202 polarity):
+        # auto-enable the native FORMAT path whenever the seed exports format, so the
+        # default repr mode (now NATIVE in runtime_core_emit.hexa) uses the hexa-native
+        # dtoa instead of the %.17g no-D fallback. opt-OUT via HEXA_RT_FORMAT_FLOAT_NATIVE=0
+        # → the runtime ships the snprintf shortest path and NATIVE mode degrades to %.17g.
+        [ "${HEXA_RT_FORMAT_FLOAT_NATIVE:-x}" != "0" ] && export HEXA_RT_FORMAT_FLOAT_NATIVE=1
     fi
     [ -f build/num_float_core_native.o ] && { export HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1; return 0; }
     [ -n "$seed" ] && [ -f "$seed" ] || return 0
@@ -1048,19 +1054,22 @@ build_runtime_a_from_source() {
         extra_obj="$extra_obj build/num_float_core_native.o"
         echo "[stage_resolve_runtime_a] RT-NATIVE NUM-FLOAT: HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1; ar'ing native num_float_core_native.o into runtime.a"
     fi
-    # RT-NATIVE FORMAT-FLOAT (sh-float-format lane, R6, default-OFF opt-IN): when the
+    # RT-NATIVE FORMAT-FLOAT (sh-float-format lane, R6 PR-2 default-ON): when the
     # num_float_core seed is active AND it exports the FORMAT half, define
     # HEXA_RT_FORMAT_FLOAT_NATIVE for the runtime_core.c compile so the
     # __hexa_format_float_mode NATIVE arm uses the hexa-native rt_format_float_native
     # (musl fmt_fp i64 dtoa) instead of the snprintf("%.17g") no-seed fallback. NO
     # extra_obj: rt_format_float_native lives in the SAME num_float_core_native.o that
-    # rt_numf_def above already ar's into runtime.a (one SSOT module). Gated default-
-    # OFF (`:-0`): the FORMAT path enters the runtime only with HEXA_RT_FORMAT_FLOAT_
-    # NATIVE=1 explicitly set AND a format-exporting seed — so with the flag unset the
-    # native FORMAT code is #ifdef'd out and the regen'd seed's rt_format_float_native
-    # is unreferenced (dead-stripped at the app link). The DEFAULT mode is still
-    # SHORTEST (self/runtime_core_emit.hexa), so this wiring is output-neutral; the
-    # default-mode flip to NATIVE is the R6 PR-2 reconverge-flip (#4163/#4168 class).
+    # rt_numf_def above already ar's into runtime.a (one SSOT module). POLARITY (PR-2
+    # default-ON, matches num_float_core parse + EXACT #4202): the resolver auto-exports
+    # HEXA_RT_FORMAT_FLOAT_NATIVE=1 whenever the seed exports format, so the `:-0` gate
+    # below fires by default and the FORMAT path enters the DEFAULT runtime.c compile.
+    # Together with the runtime_core_emit.hexa default mode flip to NATIVE (guarded by
+    # the same #ifdef), the default float repr is now hexa-native shortest — byte-
+    # identical to the prior snprintf SHORTEST output (float_dtoa_shortest_gate.c proven)
+    # but a RECONVERGE-flip (runtime.a/runtime_core.o bytes change), gated like
+    # #4163/#4168/#4202, not byteeq-neutral. opt-OUT via HEXA_RT_FORMAT_FLOAT_NATIVE=0
+    # → snprintf SHORTEST ships and NATIVE mode degrades to %.17g (no-seed fallback).
     local rt_fmtf_def=""
     if [ "${HEXA_RT_FORMAT_FLOAT_NATIVE:-0}" = "1" ] && [ -f build/num_float_core_native.o ] && [ "${HEXA_RT_FORMAT_FLOAT_NATIVE_AVAIL:-0}" = "1" ]; then
         rt_fmtf_def="-DHEXA_RT_FORMAT_FLOAT_NATIVE=1"
