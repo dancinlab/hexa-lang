@@ -62,7 +62,7 @@ HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
 echo "[routec-smoke-linux] (2) assert errno-bearing syscall symbols defined in routec.o …"
 syms="$(nm "$TMP/routec.o" 2>/dev/null || true)"
 miss=0
-for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush popen pclose; do
+for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush popen pclose fp_addmul; do
     if ! grep -qE " T hxlcl_${s}\$" <<<"$syms"; then
         echo "[routec-smoke-linux] NOT DEFINED (T): hxlcl_${s}" >&2; miss=$((miss+1))
     fi
@@ -176,6 +176,14 @@ extern int    hxlcl_fflush(void *fp);
  * clean child exit(0)). Live roundtrip below: popen("echo hi","r") → read "hi\n". */
 extern void  *hxlcl_popen(const char *cmd, const char *mode);
 extern int    hxlcl_pclose(void *stream);
+
+/* fp-ABI (xmm) RUNG 1 — the FIRST SSE-class Route C symbol. SysV §3.2.3:
+ * `double hxlcl_fp_addmul(double x, double y)` takes x in xmm0, y in xmm1 and
+ * returns x*y + x in xmm0. A WRONG ABI (GP rdi/rsi/rax leak, the prior Route C
+ * INTEGER-only lowering) would read garbage from the integer regs and mis-compute
+ * — so a value-exact match vs the C oracle `x*y+x` PROVES the xmm boundary
+ * lowering (ingress xmm→gp, return gp→xmm0) is correct. */
+extern double hxlcl_fp_addmul(double x, double y);
 
 /* The emit covers ALL whitelisted Route C symbols (the script emits the whole
  * hxlcl_core.hexa), so the routec.o carries the composites' undefined-external
@@ -639,6 +647,30 @@ int main(void) {
             int pcst = hxlcl_pclose(phandle);
             CK(pcst == 0, "pclose(child exit 0) == 0 (status-exact)");
         }
+    }
+
+    /* fp-ABI (xmm) RUNG 1 — value-exact vs the C oracle. The raw C-ABI call passes
+     * x in xmm0, y in xmm1 and reads the result from xmm0 (the compiler emits the
+     * SSE-class movsd setup); if the Route C emit got the boundary right the bits
+     * round-trip exactly. Inputs chosen so x*y+x is EXACTLY representable in f64
+     * (no rounding), making `==` the load-bearing check. The reused `x` (a*b + a)
+     * proves the SSE arg reached the GP home intact (a PAIR-MODEL/GP leak would
+     * corrupt one use). */
+    {
+        double x = 3.0, y = 5.0;
+        double got = hxlcl_fp_addmul(x, y);      /* 3*5 + 3 = 18.0 (exact) */
+        double ref = x * y + x;
+        CK(got == ref, "fp_addmul(3,5) == 18.0 (SSE-class xmm arg/return, value-exact)");
+        CK(got == 18.0, "fp_addmul(3,5) == 18.0 literal (exact f64)");
+
+        double x2 = -2.5, y2 = 4.0;
+        double got2 = hxlcl_fp_addmul(x2, y2);   /* -2.5*4 + -2.5 = -12.5 (exact) */
+        CK(got2 == x2 * y2 + x2, "fp_addmul(-2.5,4) == -12.5 (negative, xmm sign bits)");
+        CK(got2 == -12.5, "fp_addmul(-2.5,4) == -12.5 literal");
+
+        double x3 = 0.5, y3 = 0.25;
+        double got3 = hxlcl_fp_addmul(x3, y3);   /* 0.5*0.25 + 0.5 = 0.625 (exact) */
+        CK(got3 == x3 * y3 + x3, "fp_addmul(0.5,0.25) == 0.625 (fractional, exact mantissa)");
     }
 
     if (fails == 0) { printf("[routec-smoke-linux] all Route C errno asserts PASS\n"); return 0; }
