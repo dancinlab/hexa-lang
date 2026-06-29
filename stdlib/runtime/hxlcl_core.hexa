@@ -3496,8 +3496,12 @@ pub fn hxlcl_cos(x: HexaVal) -> int {
     // |x| ~< pi/4 :  ix <= 0x3fe921fb  → __cos(x, 0)  (no reduction, iy=0, COS kernel)
     if __hx_payload_ule(ix, 1072243195) {
         // cos(tiny): |x| < 2**-27*sqrt(2) (ix < 0x3e46a09e) → return 1.0
+        // The fn returns the raw IEEE-754 payload WORD (i64-typed HexaVal), so the
+        // float literal 1.0 must be materialized as its bits: __hx_payload_i2f(1) =
+        // cvtsi2sd(1) → the TAG_FLOAT payload word holding double 1.0 (NOT a bare f64).
         if __hx_payload_ult(ix, 1044905630) {
-            return 1.0
+            let one = __hx_payload_i2f(1)
+            return one
         }
         kx = __hx_payload_add(uxi, 0)             // kernel x = x
         kiy = 0                                    // iy = 0 (tail absent)
