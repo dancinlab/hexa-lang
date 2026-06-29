@@ -2098,6 +2098,47 @@ build_runtime_a_from_source() {
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SETENV: HEXA_RT_NATIVE_SETENV=1 IGNORED — fp-ABI xmm Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim setenv member" >&2
             fi
         fi
+        # ── RFC061 §M8 RT-NATIVE-CLOCK_GETTIME (Route C whole-module emit · proc group · default OFF) ──
+        # hxlcl_clock_gettime x86_64-linux leg = syscall leaf: __hx_syscall6(228)
+        # (__NR_clock_gettime — kernel writes the caller's timespec out-ptr) + negative-result
+        # errno store via `bl __errno_location` (glibc-provided, resolved at link — the same
+        # errno provider the libc-delegate shim already pulls; NO new provider; arm64 NR-113 /
+        # darwin gettimeofday-synth legs DCE'd out). ZERO inner C-ABI callee, zero extern-data,
+        # zero malloc scratch (cleaner than pipe). objcopy isolates ONLY hxlcl_clock_gettime; its
+        # `bl __errno_location` is an undefined external resolved by libc. ld -r multidef gate
+        # (S5) is the AUTHORITY. x86_64-linux ONLY.
+        if [ "${HEXA_RT_NATIVE_CLOCK_GETTIME:-0}" = "1" ]; then
+            if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
+                local _rncg_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
+                if [ -z "$_rncg_bin" ]; then
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: HEXA_RT_NATIVE_CLOCK_GETTIME=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
+                fi
+                local _rncg_drv="build/_rncg_drv.hexa"
+                local _rncg_s="build/hxlcl_clock_gettime_native.s"
+                local _rncg_full="build/hxlcl_clock_gettime_native_full.o"
+                local _rncg_o="build/hxlcl_clock_gettime_native.o"
+                printf 'fn _rncg_unused() {}\n' > "$_rncg_drv"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME: emitting native Route C hxlcl_clock_gettime .o via $_rncg_bin (HEXA_CABI_HXLCL=1, replacing libc-shim clock_gettime member)…"
+                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                    "$_rncg_bin" "$_rncg_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rncg_s" stdlib/runtime/hxlcl_core.hexa \
+                    >"build/_rncg_clock_gettime.log" 2>&1 \
+                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: clock_gettime Route C asm emit failed — see build/_rncg_clock_gettime.log" >&2; cat "build/_rncg_clock_gettime.log" >&2; return 1; }
+                [ -s "$_rncg_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: empty $_rncg_s" >&2; return 1; }
+                $CC $_mo_archflag -c "$_rncg_s" -o "$_rncg_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: assemble $_rncg_s failed" >&2; return 1; }
+                if command -v objcopy >/dev/null 2>&1; then
+                    objcopy --keep-global-symbol=hxlcl_clock_gettime "$_rncg_full" "$_rncg_o" \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: objcopy isolate clock_gettime failed" >&2; return 1; }
+                else
+                    cp "$_rncg_full" "$_rncg_o"
+                fi
+                [ -f "$_rncg_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: $_rncg_o not produced" >&2; return 1; }
+                _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_CLOCK_GETTIME"
+                _mo_hxlcl_members="$_mo_hxlcl_members $_rncg_o"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME: hxlcl_clock_gettime → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_CLOCK_GETTIME (clock_gettime dropped) — ld -r multidef gate validates"
+            else
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME: HEXA_RT_NATIVE_CLOCK_GETTIME=1 IGNORED — fp-ABI xmm Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim clock_gettime member" >&2
+            fi
+        fi
         # (S1) guard the FROZEN `#include "runtime_core.c"` line in the RESTORED
         #      working-copy runtime.c (idempotent; gitignore'd regen — frozen git
         #      blob 151c52c8 NEVER touched). drop-ON then pulls runtime_core_decls.h.
