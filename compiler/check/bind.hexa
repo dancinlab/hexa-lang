@@ -1338,6 +1338,15 @@ fn _bind_builtin_names() -> [string] {
         // Frozen-SAFE: parse as ordinary identifier-calls (no new keyword/@attr).
         // ADD-only: the compiler itself never calls them.
         "__builtin_va_start", "__builtin_va_arg", "__builtin_va_end", "__builtin_va_copy",
+        // RFC061 §M8 varargs-ABI SSE-class (literal-∅ feature B, r1, 2026-06-30):
+        // `__builtin_va_arg_fp(ap)` fetches the next SSE-class (double/float) vararg per
+        // PSABI §3.5.7 fig 3.34 — the FP-class sibling of `__builtin_va_arg` (which is
+        // integer-class). It reads `fp_offset` (va_list+4), the XMM register-save area
+        // (reg_save_area + fp_offset, 16-byte stride), and the 8-byte overflow path.
+        // Needed by `hxlcl_fprintf`'s `double dv = va_arg(ap, double)` for `%g`/`%f`.
+        // x86_64_linux STMT_CALL special-case under HEXA_VA_INTRINSICS=1 — DCE-never-
+        // drops, default-OFF byte-eq NEUTRAL. arm64 AAPCS64 fp va_arg = the next rung.
+        "__builtin_va_arg_fp",
         // RT-NATIVE M4 ARRAY-R2 (2026-06-17): `__hx_make_val(tag, payload)` — the
         // symmetric write-half of `__hx_tag`. Builds a {tag, payload} 16-byte HexaVal
         // from two raw int64 words WITHOUT boxing-tag-loss, so a payload word loaded
