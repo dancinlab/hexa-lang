@@ -810,7 +810,33 @@ int   hxlcl_waitpid(int pid, int *status, int options){ return (int)waitpid((pid
 #ifndef HEXA_RT_SELFEMIT_DUP2
 int   hxlcl_dup2(int o, int n)                        { return dup2(o, n); }
 #endif
+/* RT-NATIVE-PIPE (HEXA_RT_NATIVE_PIPE, default OFF · proc group · errno-bearing chain
+ * batch E): hxlcl_pipe leaves the shim via the Route C whole-module emit (fork / time /
+ * open_sys / clock_gettime precedent). The native body (stdlib/runtime/hxlcl_core.hexa::
+ * hxlcl_pipe, whitelisted in _is_cabi at x86_64_linux.hexa:2290) is an OUT-POINTER syscall
+ * leaf on the x86_64-linux emit target: the kernel WRITES both fds into the caller's int[2]
+ * and returns 0/-errno (the same out-ptr shape as getrusage/stat). The live x86_64-linux leg
+ * is `__hx_syscall6(293, fds, 0, …)` (__NR_pipe2 with flags=0 — the "flags-trailing uniform"
+ * dup3 pattern) + a negative-result errno store via `bl __errno_location` (glibc-provided,
+ * resolved at link — the same errno provider the libc-delegate shim already pulls; NO new
+ * provider). The arm64-linux leg (NR 59) and the DARWIN leg (BSD SYS_pipe 42 — a genuine
+ * 2nd-return-register syscall captured via __hx_syscall6_out2 into a 24-byte hxlcl_malloc
+ * bump-arena heap scratch) are DCE'd OUT under the --target=x86_64-linux-gnu emit
+ * (target_is_linux()/target_is_x86_64() are compile-time-resolved per emit target) — so the
+ * isolated pipe .o references NEITHER __hx_syscall6_out2 NOR hxlcl_malloc; its only undefined
+ * external is __errno_location (libc-resolved). The darwin 24B heap-scratch leak is therefore
+ * inert on this gate (darwin path not emitted); it mirrors the frozen floor _hxlcl_pipe_cf
+ * dual-register asm shim's transient scratch (self/runtime_emit_full.hexa:1794) and the
+ * already-landed batch-H time/poll legs' same bump-arena scratch caveat — reference-faithful,
+ * not a new regression. objcopy isolates ONLY hxlcl_pipe; the ld -r multidef gate (S5) is the
+ * authority. BYTE-FAITHFUL to the frozen 0-libc floor body (linux pipe2 syscall leg), NOT to
+ * this shim's libc pipe(2) delegate (standalone-libc measurement TU only). Under
+ * HEXA_RT_NATIVE_PIPE=1 (x86_64-linux gate in tool/stage_resolve_runtime_a) the shim drops
+ * pipe (#ifndef below). DEFAULT (unset) keeps this libc delegate → shim.o + archive
+ * byte-identical (release-integrity invariant). */
+#ifndef HEXA_RT_NATIVE_PIPE
 int   hxlcl_pipe(int fds[2])                          { return pipe(fds); }
+#endif
 void *hxlcl_signal(int signum, void *handler)         { return (void *)signal(signum, (void (*)(int))handler); }
 
 /* ── file / io ───────────────────────────────────────────────────────────── */

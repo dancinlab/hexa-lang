@@ -2139,6 +2139,49 @@ build_runtime_a_from_source() {
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME: HEXA_RT_NATIVE_CLOCK_GETTIME=1 IGNORED — fp-ABI xmm Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim clock_gettime member" >&2
             fi
         fi
+        # ── RFC061 §M8 RT-NATIVE-PIPE (Route C whole-module emit · proc group · default OFF) ──
+        # hxlcl_pipe x86_64-linux leg = OUT-POINTER syscall leaf: __hx_syscall6(293, fds, 0…)
+        # (__NR_pipe2 with flags=0 — the kernel writes both fds into the caller's int[2] and
+        # returns 0/-errno) + negative-result errno store via `bl __errno_location` (glibc-
+        # provided, resolved at link — the SAME errno provider the libc-delegate shim already
+        # pulls; NO new provider). The arm64-linux (NR-59) and darwin (BSD SYS_pipe-42 2nd-
+        # return-register via __hx_syscall6_out2 + 24B hxlcl_malloc heap scratch) legs are
+        # DCE'd OUT under --target=x86_64-linux-gnu — so the isolated pipe .o references
+        # NEITHER __hx_syscall6_out2 NOR hxlcl_malloc (verified by nm); its only undefined
+        # external is __errno_location (libc-resolved). objcopy isolates ONLY hxlcl_pipe.
+        # ld -r multidef gate (S5) is the AUTHORITY. x86_64-linux ONLY.
+        if [ "${HEXA_RT_NATIVE_PIPE:-0}" = "1" ]; then
+            if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
+                local _rnpipe_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
+                if [ -z "$_rnpipe_bin" ]; then
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE FATAL: HEXA_RT_NATIVE_PIPE=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
+                fi
+                local _rnpipe_drv="build/_rnpipe_drv.hexa"
+                local _rnpipe_s="build/hxlcl_pipe_native.s"
+                local _rnpipe_full="build/hxlcl_pipe_native_full.o"
+                local _rnpipe_o="build/hxlcl_pipe_native.o"
+                printf 'fn _rnpipe_unused() {}\n' > "$_rnpipe_drv"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE: emitting native Route C hxlcl_pipe .o via $_rnpipe_bin (HEXA_CABI_HXLCL=1, replacing libc-shim pipe member)…"
+                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                    "$_rnpipe_bin" "$_rnpipe_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnpipe_s" stdlib/runtime/hxlcl_core.hexa \
+                    >"build/_rnpipe.log" 2>&1 \
+                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE FATAL: pipe Route C asm emit failed — see build/_rnpipe.log" >&2; cat "build/_rnpipe.log" >&2; return 1; }
+                [ -s "$_rnpipe_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE FATAL: empty $_rnpipe_s" >&2; return 1; }
+                $CC $_mo_archflag -c "$_rnpipe_s" -o "$_rnpipe_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE FATAL: assemble $_rnpipe_s failed" >&2; return 1; }
+                if command -v objcopy >/dev/null 2>&1; then
+                    objcopy --keep-global-symbol=hxlcl_pipe "$_rnpipe_full" "$_rnpipe_o" \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE FATAL: objcopy isolate pipe failed" >&2; return 1; }
+                else
+                    cp "$_rnpipe_full" "$_rnpipe_o"
+                fi
+                [ -f "$_rnpipe_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE FATAL: $_rnpipe_o not produced" >&2; return 1; }
+                _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_PIPE"
+                _mo_hxlcl_members="$_mo_hxlcl_members $_rnpipe_o"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE: hxlcl_pipe → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_PIPE (pipe dropped) — ld -r multidef gate validates"
+            else
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE: HEXA_RT_NATIVE_PIPE=1 IGNORED — Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim pipe member" >&2
+            fi
+        fi
         # (S1) guard the FROZEN `#include "runtime_core.c"` line in the RESTORED
         #      working-copy runtime.c (idempotent; gitignore'd regen — frozen git
         #      blob 151c52c8 NEVER touched). drop-ON then pulls runtime_core_decls.h.
