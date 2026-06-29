@@ -125,9 +125,26 @@ int main(void){
             n++;
         }
     }
+    /* k·pi/2 CANCELLATION-BOUNDARY stress (convergence hxlcl-core-hexa-1): the exact
+       argument-reduction band edges where the #4230/#4231 band-ladder lower-bound bug
+       lived. Sweep k∈[-20,20] · ±j·1e-10 so every band/medium diversion is exercised
+       at and around the half-integer-pi cancellation points (both signs). */
+    {
+        double H = 1.5707963267948966; /* pi/2 */
+        for(int k=-20;k<=20;k++){
+            for(int j=-4;j<=4;j++){
+                double x = (double)k*H + (double)j*1e-10;
+                double r=hxlcl_cos(x), e=cos(x);
+                long long u = (isnan(r)&&isnan(e))?0:ulp(r,e);
+                if(u>maxulp){ maxulp=u; worst_n=(long long)n; }
+                if(u>1){ fail++; if(fail<=12) printf("  >1ULP cos(%.17g) [k=%d j=%d]: got %.17g want %.17g ulp=%lld\n", x, k, j, r, e, u); }
+                n++;
+            }
+        }
+    }
     /* pseudo-random dense sweep inside the covered domain */
     srand(12345);
-    for(int i=0;i<4000;i++){
+    for(int i=0;i<8000;i++){
         double x = ((double)rand()/RAND_MAX*2.0-1.0) * 1.6e6;  /* |x| < 1.6e6 */
         double r=hxlcl_cos(x), e=cos(x);
         long long u = (isnan(r)&&isnan(e))?0:ulp(r,e);
