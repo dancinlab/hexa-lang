@@ -1775,6 +1775,14 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_matmul_batched(HexaVal a_v, Hex
         return hexa_int(-1);
     if (!_hx_farr_table[c_id].buf || _hx_farr_table[c_id].len < batch * M * N)
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_matmul_batched_gpu(int64_t, int64_t, int64_t,
+                                                    int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_matmul_batched_gpu(a_id, M, K, b_id, N, batch, c_id);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     for (int64_t g = 0; g < batch; g++) {
         HexaVal ag_h = hexa_farr_zeros(hexa_int(M * K));
         int64_t ag_id = HX_INT(ag_h);
@@ -2139,6 +2147,13 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_expert_pack2(HexaVal ex0_v, Hex
     int64_t eo = hexa_as_num(exo_v), n = hexa_as_num(n_v);
     if (n <= 0 || !_OP37_FA(e0, n) || !_OP37_FA(e1, n) || !_OP37_FA(eo, 2 * n))
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_expert_pack2_gpu(int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_expert_pack2_gpu(e0, e1, eo, n);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* E0 = _hx_farr_table[e0].buf;
     double* E1 = _hx_farr_table[e1].buf;
     double* EO = _hx_farr_table[eo].buf;

@@ -121,6 +121,22 @@ void __attribute__((noinline)) hxlcl_free(void *p) {
 void   hxlcl_free(void *p)                            { free(p); }
 #endif
 #endif /* !HEXA_RT_NATIVE_FREE */
+/* RT-NATIVE-REALLOC (HEXA_RT_NATIVE_REALLOC, default OFF · COMPOSITE non-libm leaf,
+ * inner C-ABI `bl hxlcl_malloc`):
+ * hxlcl_realloc leaves the shim via the fp-ABI Route C whole-module emit (free
+ * #4242 / strstr #4240 / strtoll #4241 precedent). It is NOT a pure leaf — its
+ * native body (hxlcl_core.hexa:1249) calls the RETAINED shim provider hxlcl_malloc
+ * (shim:101, ungated permanent malloc delegate) via an inner C-ABI `bl`, plus a
+ * NEGATIVE-offset header read (p-16) + byte copy. The inner callee stays served by
+ * the shim, so NO co-drop of malloc is needed; only realloc's own member drops.
+ * The Route C native body is BYTE-FAITHFUL to the BYTEID 0-libc floor arm below
+ * (grow/shrink min(n,old_n) preserve), NOT to this shim's libc realloc(p,n) delegate
+ * (which exists solely for the standalone-libc measurement TU). Under
+ * HEXA_RT_NATIVE_REALLOC=1 (x86_64-linux gate in tool/stage_resolve_runtime_a) the
+ * shim drops realloc and the objcopy-isolated native .o supplies it (malloc still
+ * the shim's). DEFAULT (unset) keeps this delegate; shim.o + archive byte-identical
+ * (release-integrity invariant). */
+#ifndef HEXA_RT_NATIVE_REALLOC
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_realloc (verbatim 0-libc floor body) */
 void *__attribute__((noinline)) hxlcl_realloc(void *p, size_t n) {
@@ -141,6 +157,22 @@ void *__attribute__((noinline)) hxlcl_realloc(void *p, size_t n) {
 #else
 void  *hxlcl_realloc(void *p, size_t n)               { return realloc(p, n); }
 #endif
+#endif /* !HEXA_RT_NATIVE_REALLOC */
+/* RT-NATIVE-CALLOC (HEXA_RT_NATIVE_CALLOC, default OFF · COMPOSITE non-libm leaf,
+ * inner C-ABI `bl hxlcl_malloc`):
+ * hxlcl_calloc leaves the shim via the fp-ABI Route C whole-module emit (free #4242
+ * precedent). It is NOT a pure leaf — its native body (hxlcl_core.hexa:1216) calls
+ * the RETAINED shim provider hxlcl_malloc (shim:101, ungated permanent malloc
+ * delegate) via an inner C-ABI `bl`, then a zero-fill byte loop. The inner callee
+ * stays served by the shim, so NO co-drop of malloc is needed; only calloc's own
+ * member drops. The Route C native body is BYTE-FAITHFUL to the BYTEID 0-libc floor
+ * arm below (total=nmemb*size; p=malloc(total); zero p[0..total)), NOT to this
+ * shim's libc calloc(nmemb,size) delegate (standalone-libc measurement TU only).
+ * Under HEXA_RT_NATIVE_CALLOC=1 (x86_64-linux gate in tool/stage_resolve_runtime_a)
+ * the shim drops calloc and the objcopy-isolated native .o supplies it (malloc
+ * still the shim's). DEFAULT (unset) keeps this delegate; shim.o + archive byte-
+ * identical (release-integrity invariant). */
+#ifndef HEXA_RT_NATIVE_CALLOC
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_calloc (verbatim 0-libc floor body) */
 void *__attribute__((noinline)) hxlcl_calloc(size_t nmemb, size_t size) {
@@ -155,6 +187,7 @@ void *__attribute__((noinline)) hxlcl_calloc(size_t nmemb, size_t size) {
 #else
 void  *hxlcl_calloc(size_t nmemb, size_t size)        { return calloc(nmemb ? nmemb : 1, size ? size : 1); }
 #endif
+#endif /* !HEXA_RT_NATIVE_CALLOC */
 /* SELFEMIT (HEXA_RT_SELFEMIT_MEMCPY, default OFF · RFC061 §M8 family r3):
  * hxlcl_memcpy is supplied by the hexa-NATIVE self-emitted .o
  * (test/native_build/emit_hxlcl_memcpy_o.hexa — verbatim rt_memcpy byte loop, no
@@ -410,7 +443,21 @@ const char *hxlcl_strstr(const char *h, const char *n){ return strstr(h, n); }
 #endif /* !HEXA_RT_NATIVE_STRSTR */
 
 /* ── numeric parse ───────────────────────────────────────────────────────── */
+/* RT-NATIVE-ATOLL (HEXA_RT_NATIVE_ATOLL, default OFF · literal-∅ non-libm leaf · proc
+ * group): hxlcl_atoll leaves the shim via the fp-ABI Route C whole-module emit (strstr
+ * #4240 / strtoll #4241 / free #4242 precedent). hxlcl_atoll is a PURE self-contained
+ * decimal-parse leaf (stdlib/runtime/hxlcl_core.hexa::hxlcl_atoll — whitespace skip +
+ * sign + base-10 digit accumulation via raw __hx_payload_* intrinsics): zero syscall,
+ * zero errno, zero inner C-ABI callee, zero extern-data — exactly the strstr/strtoll
+ * pure-leaf class. Under HEXA_RT_NATIVE_ATOLL=1 (x86_64-linux gate in
+ * tool/stage_resolve_runtime_a) the shim drops atoll (#ifndef below) and the
+ * objcopy-isolated native .o supplies it. DEFAULT (unset) keeps this libc delegate →
+ * shim.o + archive byte-identical (release-integrity invariant). NOTE: the SELFEMIT atoi
+ * composite (above) calls `bl hxlcl_atoll`; when atoll is itself Route-C-native that bl
+ * still resolves to the staged native def (atoi unaffected). */
+#ifndef HEXA_RT_NATIVE_ATOLL
 long long __attribute__((noinline)) hxlcl_atoll(const char *s) { return s ? atoll(s) : 0; }
+#endif
 /* SELFEMIT (HEXA_RT_SELFEMIT_ATOI, default OFF · RFC061 §M8 family r10): hxlcl_atoi is
  * supplied by the hexa-NATIVE self-emitted .o (test/native_build/emit_hxlcl_atoi_o.hexa
  * — verbatim rt_atoi 20-byte body: frame + `bl _hxlcl_atoll` BRANCH26 + epilogue,
@@ -664,6 +711,22 @@ double hxlcl_fmod(double x, double y)                 { return fmod(x, y); }
 #endif /* !HEXA_RT_NATIVE_FMOD */
 
 /* ── env / process ───────────────────────────────────────────────────────── */
+/* RT-NATIVE-GETENV (HEXA_RT_NATIVE_GETENV, default OFF · literal-∅ non-libm leaf
+ * RUNG 4): FOURTH non-libm hxlcl_* to LEAVE the shim via the Route C whole-module
+ * emit (strstr #4240 / strtoll #4241 / free #4242 precedent). hxlcl_getenv is the
+ * FIRST extern-DATA leaf to drop — it is NOT a pure self-contained leaf: it reads
+ * the libc `extern char **environ` global. The native Route C body
+ * (stdlib/runtime/hxlcl_core.hexa::hxlcl_getenv, whitelisted in _is_cabi) loads
+ * `&environ` through the GOT via the __hx_environ_ptr intrinsic (#4098), so the
+ * isolated native .o carries exactly ONE external reloc — `environ@GOTPCREL` —
+ * which the final link satisfies from libc (provider-PRESENT; every binary links
+ * libc, the shim itself declares `extern char **environ` above). No syscall, no
+ * errno, no inner C-ABI callee (the strlen is INLINED in the native body). Under
+ * HEXA_RT_NATIVE_GETENV=1 (x86_64-linux gate in tool/stage_resolve_runtime_a) the
+ * shim drops getenv and the objcopy-isolated native .o supplies it. DEFAULT
+ * (unset) keeps this libc delegate; shim.o + archive byte-identical (release-
+ * integrity invariant). */
+#ifndef HEXA_RT_NATIVE_GETENV
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_getenv (verbatim 0-libc floor body) */
 char *__attribute__((noinline)) hxlcl_getenv(const char *name) {
@@ -683,9 +746,37 @@ char *__attribute__((noinline)) hxlcl_getenv(const char *name) {
 #else
 char *hxlcl_getenv(const char *name)                  { return getenv(name); }
 #endif
+#endif /* !HEXA_RT_NATIVE_GETENV */
+/* RT-NATIVE-SETENV (HEXA_RT_NATIVE_SETENV, default OFF · proc group): hxlcl_setenv
+ * leaves the shim via the fp-ABI Route C whole-module emit (strstr/strtoll/free/getenv
+ * precedent). The native body (stdlib/runtime/hxlcl_core.hexa::hxlcl_setenv —
+ * REFERENCE-MATCH musl src/env/setenv.c) is a COMPOSITE leaf: it composes the already-
+ * whitelisted __hx_environ_ptr (returns &environ — the `environ` glibc symbol provides
+ * the extern-data, same as the already-dropped getenv #4243) + __hx_ptr_load/store
+ * intrinsics + an inner `bl hxlcl_malloc` C-ABI call. objcopy --keep-global-symbol
+ * isolates ONLY hxlcl_setenv; its `bl hxlcl_malloc` becomes an undefined external that
+ * the RETAINED shim global hxlcl_malloc resolves (exactly the atoi→atoll composite),
+ * and `environ` is resolved by libc — NO new provider. Under HEXA_RT_NATIVE_SETENV=1
+ * (x86_64-linux gate in tool/stage_resolve_runtime_a) the shim drops setenv (#ifndef
+ * below). DEFAULT (unset) keeps this libc delegate → shim.o + archive byte-identical. */
+#ifndef HEXA_RT_NATIVE_SETENV
 int   hxlcl_setenv(const char *n, const char *v, int o){ return setenv(n, v, o); }
+#endif
 int   hxlcl_atexit(void (*fn)(void))                  { return atexit(fn); }
+/* RT-NATIVE-FORK (HEXA_RT_NATIVE_FORK, default OFF · proc group): hxlcl_fork leaves the
+ * shim via the fp-ABI Route C whole-module emit. The native body
+ * (stdlib/runtime/hxlcl_core.hexa::hxlcl_fork) is a syscall leaf: under the x86_64-linux
+ * emit target the live leg is `__hx_syscall6(57, …)` (__NR_fork) + a negative-result
+ * errno store via `bl __errno_location` (glibc-provided, resolved at link — the same
+ * errno provider the libc-delegate shim already pulls; NO new provider). The arm64/darwin
+ * legs (clone / dual-return fork) are DCE'd out under target_is_x86_64. objcopy isolates
+ * ONLY hxlcl_fork; its `bl __errno_location` is an undefined external resolved by libc.
+ * Under HEXA_RT_NATIVE_FORK=1 (x86_64-linux gate in tool/stage_resolve_runtime_a) the
+ * shim drops fork (#ifndef below). DEFAULT (unset) keeps this libc delegate → shim.o +
+ * archive byte-identical (release-integrity invariant). */
+#ifndef HEXA_RT_NATIVE_FORK
 int   hxlcl_fork(void)                                { return (int)fork(); }
+#endif
 int   hxlcl_execvp(const char *file, char *const argv[]) { return execvp(file, argv); }
 /* SELFEMIT (HEXA_RT_SELFEMIT_WAITPID, default OFF · RFC061 §M8 family r9): hxlcl_waitpid
  * is supplied by the hexa-NATIVE self-emitted .o (test/native_build/emit_hxlcl_waitpid_o.hexa
@@ -707,11 +798,52 @@ int   hxlcl_pipe(int fds[2])                          { return pipe(fds); }
 void *hxlcl_signal(int signum, void *handler)         { return (void *)signal(signum, (void (*)(int))handler); }
 
 /* ── file / io ───────────────────────────────────────────────────────────── */
+/* RT-NATIVE CORE FILE* family (HEXA_RT_NATIVE_{FOPEN,FREAD,FTELL,FSEEK}, default
+ * OFF · Route C whole-module emit · COUPLED leaves, NOT pure like strstr/free):
+ * the frozen 0-libc floor models a FILE* as `(void*)(uintptr_t)(fd+1)` (NOT a libc
+ * stdio struct), so the native Route C bodies (stdlib/runtime/hxlcl_core.hexa:
+ * 2264 fopen · 2351 fread · 2415 ftell · 2427 fseek) are a PURE COMPOSITION over
+ * the already-dissolved syscall LEAVES — fopen→hxlcl_open_sys, fread→hxlcl_read,
+ * ftell/fseek→hxlcl_lseek — plus raw-payload pointer arithmetic. Those inner
+ * callees stay RETAINED shim globals (below), so the objcopy-isolated native .o's
+ * external relocs (bl hxlcl_open_sys/read/lseek) resolve from the shim (the
+ * atoi→atoll / strdup→malloc coupled-leaf class, NOT the strstr/free zero-reloc
+ * class). The libc-global stdout/stderr/stdin (fp>=0x1000) branch is out of scope
+ * — high pointers fail safe (shim-resident std-stream family). Under
+ * HEXA_RT_NATIVE_<SYM>=1 (x86_64-linux gate in tool/stage_resolve_runtime_a) the
+ * shim drops that member and the isolated native .o supplies it. DEFAULT (unset)
+ * keeps these libc delegates; shim.o + archive byte-identical (release-integrity
+ * invariant). Reference-matched to the frozen emitter bodies
+ * self/runtime_emit_full.hexa:1153-1242. */
+#ifndef HEXA_RT_NATIVE_FOPEN
 void  *hxlcl_fopen(const char *p, const char *m)      { return (void *)fopen(p, m); }
+#endif
+#ifndef HEXA_RT_NATIVE_FREAD
 size_t hxlcl_fread(void *b, size_t s, size_t n, void *fp) { return fread(b, s, n, (FILE *)fp); }
+#endif
+#ifndef HEXA_RT_NATIVE_FTELL
 long   hxlcl_ftell(void *fp)                          { return ftell((FILE *)fp); }
+#endif
+#ifndef HEXA_RT_NATIVE_FSEEK
 int    hxlcl_fseek(void *fp, long off, int whence)    { return fseek((FILE *)fp, off, whence); }
+#endif
+/* RT-NATIVE-OPEN_SYS (HEXA_RT_NATIVE_OPEN_SYS, default OFF · proc group): hxlcl_open_sys
+ * leaves the shim via the fp-ABI Route C whole-module emit. The native body
+ * (stdlib/runtime/hxlcl_core.hexa::hxlcl_open_sys) is a syscall leaf: under the
+ * x86_64-linux emit target the live leg is `__hx_syscall6(2, path, flags, mode, …)`
+ * (__NR_open) + a negative-result errno store via `bl __errno_location` (glibc-provided,
+ * resolved at link — the same errno provider the libc-delegate shim already pulls; NO new
+ * provider). The arm64 openat leg + darwin SYS_OPEN leg are DCE'd out under
+ * target_is_x86_64. objcopy isolates ONLY hxlcl_open_sys; its `bl __errno_location` is an
+ * undefined external resolved by libc. Under HEXA_RT_NATIVE_OPEN_SYS=1 (x86_64-linux gate
+ * in tool/stage_resolve_runtime_a) the shim drops open_sys (#ifndef below). DEFAULT
+ * (unset) keeps this libc delegate → shim.o + archive byte-identical.
+ * NOTE (FILE* coupled-leaf): hxlcl_fopen's native body bl's into hxlcl_open_sys; when
+ * BOTH gates are ON, open_sys is provided by the proc-group native .o (not the shim),
+ * still link-present — the coupled-leaf reloc resolves either way. */
+#ifndef HEXA_RT_NATIVE_OPEN_SYS
 int    hxlcl_open_sys(const char *path, int flags, ...) { return open(path, flags, 0644); }
+#endif
 /* SELFEMIT (HEXA_RT_SELFEMIT_READ, default OFF · RFC061 §M8 family r3): like
  * close below, hxlcl_read is supplied by the hexa-NATIVE self-emitted .o
  * (test/native_build/emit_hxlcl_read_o.hexa — raw `svc #0x80` read trap +
@@ -779,7 +911,20 @@ void  *hxlcl_popen(const char *cmd, const char *mode) { return (void *)popen(cmd
 int    hxlcl_pclose(void *stream)                     { return pclose((FILE *)stream); }
 
 /* ── time ────────────────────────────────────────────────────────────────── */
+/* RT-NATIVE-TIME (HEXA_RT_NATIVE_TIME, default OFF · proc group): hxlcl_time leaves the
+ * shim via the fp-ABI Route C whole-module emit. The native body
+ * (stdlib/runtime/hxlcl_core.hexa::hxlcl_time) is a PURE syscall leaf under the
+ * x86_64-linux emit target: the live leg is `__hx_syscall6(201, …)` (__NR_time —
+ * REGISTER-CLEAN, the kernel returns the epoch in the result reg, no buffer) + a
+ * NULL-gated `__hx_ptr_store32(t, …)` out-param write. ZERO inner C-ABI callee, zero
+ * errno, zero extern-data (the arm64/darwin gettimeofday legs that pull hxlcl_malloc are
+ * DCE'd out under target_is_x86_64). objcopy isolates ONLY hxlcl_time. Under
+ * HEXA_RT_NATIVE_TIME=1 (x86_64-linux gate in tool/stage_resolve_runtime_a) the shim
+ * drops time (#ifndef below). DEFAULT (unset) keeps this libc delegate → shim.o + archive
+ * byte-identical (release-integrity invariant). */
+#ifndef HEXA_RT_NATIVE_TIME
 int    hxlcl_time(int *t)                             { time_t r = time(NULL); if (t) *t = (int)r; return (int)r; }
+#endif
 int    hxlcl_clock_gettime(int clk, void *ts)         { return clock_gettime((clockid_t)clk, (struct timespec *)ts); }
 size_t hxlcl_strftime(char *buf, size_t cap, const char *fmt, void *tm) { return strftime(buf, cap, fmt, (struct tm *)tm); }
 /* SELFEMIT (HEXA_RT_SELFEMIT_GETRUSAGE, default OFF · RFC061 §M8 family #29): hxlcl_getrusage
