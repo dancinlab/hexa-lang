@@ -3872,10 +3872,18 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
         // Reference-match: musl src/math/fmod.c uses C unsigned `>>` (logical).
         if (s.op == "__hx_payload_shl" || s.op == "__hx_payload_shr")
             && len(s.args) >= 2 {
-            // Load count→rcx FIRST (cl), then value→r10 (cl-collision-safe order,
-            // same discipline as the BinOp shift path), shift, store TAG_INT.
-            _x86_hv_payload(s.args[1], st, rm, "rcx", opts)
-            _x86_hv_payload(s.args[0], st, rm, "r10", opts)
+            // Resolve BOTH operands into the disjoint scratch pair r11(count),
+            // r10(value) FIRST — exactly like the arith block — so neither
+            // operand is loaded directly into a pool-allocatable register (rcx is
+            // pool-allocatable; loading the count straight into rcx during operand
+            // resolve could clobber a value whose home IS rcx). THEN copy the
+            // count r11→rcx for the cl-based variable shift. b first (count→r11),
+            // a second (value→r10): a spilled value resolves through r10, so this
+            // order avoids the nested-intrinsic clobber.
+            _x86_hv_payload(s.args[1], st, rm, "r11", opts)  // count → r11
+            _x86_hv_payload(s.args[0], st, rm, "r10", opts)  // value → r10
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rcx"), _x86_op_reg("r11"),
+                             s.op + ": shift count → rcx (cl)"))
             let mut _sm = "shl"
             if s.op == "__hx_payload_shr" { _sm = "shr" } // LOGICAL right (zero-fill)
             _x86_buf.push(_x86_instr2(_sm, _x86_op_reg("r10"), _x86_op_reg("cl"),
