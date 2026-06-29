@@ -837,7 +837,19 @@ int   hxlcl_dup2(int o, int n)                        { return dup2(o, n); }
 #ifndef HEXA_RT_NATIVE_PIPE
 int   hxlcl_pipe(int fds[2])                          { return pipe(fds); }
 #endif
+/* RT-NATIVE SIGNAL (HEXA_RT_NATIVE_SIGNAL, default OFF · Route C ING#29 re-attack).
+ * The shim member delegates to libc signal(3) (which does the full __libc_sigaction
+ * bookkeeping — restorer trampoline, rt_sigprocmask SIGPT_SET unblock, handler_set).
+ * The native Route C body (stdlib/runtime/hxlcl_core.hexa hxlcl_signal) reproduces the
+ * musl signal.c→rt_sigaction path via heap-scratch k_sigaction + __hx_syscall6. On x86_64
+ * the SA_RESTORER/sa_restorer requirement is the measured wall under test (the codegen
+ * has no raw-fn-address mechanism); arm64 needs no restorer. Under
+ * HEXA_RT_NATIVE_SIGNAL=1 (x86_64-linux gate in tool/stage_resolve_runtime_a) the shim
+ * drops signal (#ifndef below). DEFAULT (unset) keeps this libc delegate → shim.o +
+ * archive byte-identical (release-integrity invariant). */
+#ifndef HEXA_RT_NATIVE_SIGNAL
 void *hxlcl_signal(int signum, void *handler)         { return (void *)signal(signum, (void (*)(int))handler); }
+#endif
 
 /* ── file / io ───────────────────────────────────────────────────────────── */
 /* RT-NATIVE CORE FILE* family (HEXA_RT_NATIVE_{FOPEN,FREAD,FTELL,FSEEK}, default

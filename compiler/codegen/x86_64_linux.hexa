@@ -2301,6 +2301,14 @@ pub fn _is_cabi(fname: string) -> bool {
     // __errno_location, so no new whitelist entry beyond the two fns themselves.
     if fname == "hxlcl_time" { return true }
     if fname == "hxlcl_poll" { return true }
+    // ING#29 — hxlcl_signal (signal(3) → rt_sigaction). NON-LEAF: heap-scratch
+    // k_sigaction struct via hxlcl_malloc + __hx_ptr_store64/load64 (pipe/time precedent)
+    // + __hx_syscall6(rt_sigaction, sig, act, oldact, 8) + the close errno epilogue's
+    // already-whitelisted __errno_location. 2 HexaVal args (signum, handler raw-ptr) →
+    // single-register C-ABI (rdi/rsi); returns old handler raw ptr in rax. Reference-
+    // matched to musl src/signal/signal.c:4-10. DEFAULT-OFF (HEXA_RT_NATIVE_SIGNAL);
+    // x86_64 SA_RESTORER/restorer-fn-address gap measured by the verify script.
+    if fname == "hxlcl_signal" { return true }
     // batch F search family — strchr / strstr. Pure byte-scan LEAVES (no syscall,
     // no float, no inner call, no errno): each walks the input with __hx_ptr_load8
     // ZERO-EXTENDED reads and returns a raw char* (the match position) or NULL(0)

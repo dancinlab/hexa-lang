@@ -2182,6 +2182,45 @@ build_runtime_a_from_source() {
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE: HEXA_RT_NATIVE_PIPE=1 IGNORED — Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim pipe member" >&2
             fi
         fi
+        # ── RFC061 §M8 RT-NATIVE-SIGNAL (Route C · ING#29 literal-∅ wall-falsify · default OFF) ──
+        # hxlcl_signal shim member (libc signal(3) delegate) → native Route C .o from
+        # stdlib/runtime/hxlcl_core.hexa (musl signal.c→rt_sigaction via heap-scratch
+        # k_sigaction + __hx_syscall6). The x86_64 SA_RESTORER/sa_restorer requirement is
+        # the measured wall under test — the codegen has no raw-fn-address mechanism. The
+        # routec_signal_native_verify.sh script is the authority (behavioral test: set
+        # SIGUSR1 handler → raise → handler fires; capture old handler). x86_64-linux ONLY.
+        if [ "${HEXA_RT_NATIVE_SIGNAL:-0}" = "1" ]; then
+            if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
+                local _rnsig_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
+                if [ -z "$_rnsig_bin" ]; then
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL FATAL: HEXA_RT_NATIVE_SIGNAL=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
+                fi
+                local _rnsig_drv="build/_rnsig_drv.hexa"
+                local _rnsig_s="build/hxlcl_signal_native.s"
+                local _rnsig_full="build/hxlcl_signal_native_full.o"
+                local _rnsig_o="build/hxlcl_signal_native.o"
+                printf 'fn _rnsig_unused() {}\n' > "$_rnsig_drv"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL: emitting native Route C hxlcl_signal .o via $_rnsig_bin (HEXA_CABI_HXLCL=1, replacing libc-shim signal member)…"
+                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                    "$_rnsig_bin" "$_rnsig_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnsig_s" stdlib/runtime/hxlcl_core.hexa \
+                    >"build/_rnsig.log" 2>&1 \
+                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL FATAL: signal Route C asm emit failed — see build/_rnsig.log" >&2; cat "build/_rnsig.log" >&2; return 1; }
+                [ -s "$_rnsig_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL FATAL: empty $_rnsig_s" >&2; return 1; }
+                $CC $_mo_archflag -c "$_rnsig_s" -o "$_rnsig_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL FATAL: assemble $_rnsig_s failed" >&2; return 1; }
+                if command -v objcopy >/dev/null 2>&1; then
+                    objcopy --keep-global-symbol=hxlcl_signal "$_rnsig_full" "$_rnsig_o" \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL FATAL: objcopy isolate signal failed" >&2; return 1; }
+                else
+                    cp "$_rnsig_full" "$_rnsig_o"
+                fi
+                [ -f "$_rnsig_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL FATAL: $_rnsig_o not produced" >&2; return 1; }
+                _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_SIGNAL"
+                _mo_hxlcl_members="$_mo_hxlcl_members $_rnsig_o"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL: hxlcl_signal → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_SIGNAL (signal dropped) — ld -r multidef gate validates"
+            else
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL: HEXA_RT_NATIVE_SIGNAL=1 IGNORED — Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim signal member" >&2
+            fi
+        fi
         # ── RFC061 §M8 RT-NATIVE-POPEN / RT-NATIVE-PCLOSE (Route C whole-module emit · Wall 3-c
         #    COMPOSITE · the LAST drop-ready frozen-safe leaf pair · default OFF) ──
         # popen/pclose come from the SAME module emit, so ONE asm emit isolates BOTH symbols.
