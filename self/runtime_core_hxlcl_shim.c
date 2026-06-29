@@ -949,8 +949,37 @@ int    hxlcl_mkdir(const char *path, int mode)        { return mkdir(path, (mode
 #ifndef HEXA_RT_SELFEMIT_POLL
 int    hxlcl_poll(void *fds, unsigned int nfds, int timeout) { return poll((struct pollfd *)fds, (nfds_t)nfds, timeout); }
 #endif
+/* RT-NATIVE-POPEN / RT-NATIVE-PCLOSE (HEXA_RT_NATIVE_POPEN / _PCLOSE, default OFF ·
+ * Route C whole-module emit · Wall 3-c COMPOSITE · the LAST drop-ready frozen-safe leaf
+ * pair). popen/pclose leave the shim together: the native bodies
+ * (stdlib/runtime/hxlcl_core.hexa::hxlcl_popen :2642 / hxlcl_pclose :2716, whitelisted in
+ * _is_cabi at x86_64_linux.hexa:2404-2421) replicate libc popen/pclose with NO libc popen
+ * call — popen("cmd","r") = pipe()+fork()+dup2()+execve("/bin/sh","-c",cmd) (ALL already-
+ * dissolved Route C leaves) returning the CORE-family (read_fd+1) fake FILE*; pclose decodes
+ * fd=fp-1, looks the child pid up in a file-local fd→pid table and close()+waitpid()s it.
+ * The fd→pid table is the __hx_static_slot(900,1024) self-defined BSS (#4116) — the def-side
+ * sibling of __hx_environ_ptr; it DISSOLVES the frozen floor's `static int _hxlcl_popen_fds
+ * [64]/_pids[64]/_init_done` (self/runtime_emit_full.hexa:3018-3050), so the composite no
+ * longer cascades into pulling frozen statics (the M6-r2 concern flagged in the header comment
+ * above is RESOLVED — the helpers hxlcl_popen_remember/forget/child_exit_nr are emitted as
+ * the .o's OWN local symbols, not pulled from frozen). The native .o references pipe/fork/
+ * dup2/close/execve/waitpid/malloc/fdopen + __errno_location as undefined externs resolved at
+ * link by the rest of runtime.a (the SAME composition model pipe #4256 / fopen Wall 3-a use;
+ * NO new provider). The whole emit (x86_64-linux) keeps the linux syscall legs and DCE's the
+ * arm64/darwin legs; objcopy keeps ONLY hxlcl_popen + hxlcl_pclose global (the 3 table/exit
+ * helpers stay local intra-.o). ld -r multidef gate (S5) is the AUTHORITY. The native bodies
+ * are FAITHFUL to the frozen 0-libc floor emitter (self/runtime_emit_full.hexa:3051-3091),
+ * NOT to this shim's libc popen/pclose delegate (standalone-libc measurement TU only).
+ * "r"-mode only (the only mode hexa_exec uses). Under HEXA_RT_NATIVE_POPEN=1 /
+ * HEXA_RT_NATIVE_PCLOSE=1 (x86_64-linux gate in tool/stage_resolve_runtime_a) the shim drops
+ * each. DEFAULT (both unset) keeps these libc delegates → shim.o + archive byte-identical
+ * (release-integrity invariant). default-OFF byteeq-neutral. */
+#ifndef HEXA_RT_NATIVE_POPEN
 void  *hxlcl_popen(const char *cmd, const char *mode) { return (void *)popen(cmd, mode); }
+#endif
+#ifndef HEXA_RT_NATIVE_PCLOSE
 int    hxlcl_pclose(void *stream)                     { return pclose((FILE *)stream); }
+#endif
 
 /* ── time ────────────────────────────────────────────────────────────────── */
 /* RT-NATIVE-TIME (HEXA_RT_NATIVE_TIME, default OFF · proc group): hxlcl_time leaves the
