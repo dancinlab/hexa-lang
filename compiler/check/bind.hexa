@@ -1297,6 +1297,18 @@ fn _bind_builtin_names() -> [string] {
         // keyword/@attr (frozen 151c52c8 immutable; an ordinary identifier-call). arm64 +
         // x86_64 STMT_CALL special-case. ADD-only: the compiler never calls it.
         "__hx_static_slot",
+        // RFC061 §M8 varargs-ABI (literal-∅ feature B, RUNG1, 2026-06-29): the SysV
+        // AMD64 va_list intrinsics that let a self-emitted variadic `hxlcl_*` body
+        // (e.g. the frozen-floor hxlcl_printf/hxlcl_fprintf, which forward a C va_list
+        // to hxlcl_vfprintf_fd — self/runtime_emit_full.hexa:1000-1013) walk its
+        // unnamed integer arguments WITHOUT the frozen runtime.c va_list. Named like the
+        // GCC/clang built-ins (reference-match: GCC `__builtin_va_start`/`va_arg`/`va_end`
+        // /`va_copy`). Lowered by the x86_64_linux backend STMT_CALL special-case
+        // (PSABI §3.5.7 fig 3.34, integer class) under HEXA_VA_INTRINSICS=1 — DCE-never-
+        // drops, default-OFF byte-eq NEUTRAL. arm64 + FP class = the honest next rung.
+        // Frozen-SAFE: parse as ordinary identifier-calls (no new keyword/@attr).
+        // ADD-only: the compiler itself never calls them.
+        "__builtin_va_start", "__builtin_va_arg", "__builtin_va_end", "__builtin_va_copy",
         // RT-NATIVE M4 ARRAY-R2 (2026-06-17): `__hx_make_val(tag, payload)` — the
         // symmetric write-half of `__hx_tag`. Builds a {tag, payload} 16-byte HexaVal
         // from two raw int64 words WITHOUT boxing-tag-loss, so a payload word loaded

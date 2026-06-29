@@ -1072,6 +1072,27 @@ pub let mut _x86_buf: [LInstr] = []
 // mutated → the labels never appear → byte-eq NEUTRAL by construction.
 pub let mut _x86_arru_lbl: i64 = 0
 
+// RFC061 §M8 varargs-ABI (literal-∅ feature B, RUNG1) — SysV AMD64 va_list state.
+// These four module globals carry the per-function va_list frame layout from the
+// prologue (where the reg_save_area is reserved + the 6 GP arg regs are spilled)
+// to the `__builtin_va_start`/`__builtin_va_arg` STMT_CALL special-cases (which read
+// the SAME rbp-relative offsets). They are SET ONCE per function at the top of
+// `_x86_64_lower_func` and read only inside the va builtins. `_x86_va_active` is
+// `_x86_is_variadic(mf.name)`, which is HARD-GATED behind `env("HEXA_VA_INTRINSICS")
+// == "1"` AND a name whitelist → DEFAULT OFF for every fn → the prologue spill +
+// every va branch is dead → byte-eq NEUTRAL by construction (mirrors the
+// `_x86_arru_lbl`/`_unbox_array_enabled` and `_is_cabi`/HEXA_CABI_HXLCL discipline).
+// Reference-match: GCC 13.3.0 `-O0 -S` of `int f(int n, ...)` (captured component-by-
+// component) + System V AMD64 PSABI §3.5.7 "Variable Argument Lists" fig 3.34.
+pub let mut _x86_va_lbl: i64 = 0
+pub let mut _x86_va_active: bool = false
+// rbp-relative byte offset of reg_save_area[0] (the LOWEST address of the 48-byte
+// GP register save area; GP reg i lives at rbp + _x86_va_rsa_base + 8*i).
+pub let mut _x86_va_rsa_base: i64 = 0
+// rbp-relative byte offset of the 24-byte va_list struct (gp_offset @ +0, fp_offset
+// @ +4, overflow_arg_area @ +8, reg_save_area ptr @ +16).
+pub let mut _x86_va_list_base: i64 = 0
+
 // RFC061 Route C Wall 3-c — __hx_static_slot self-defined BSS accumulator.
 // Each distinct `slot_id` literal that a whitelisted Route C body addresses via
 // `__hx_static_slot(slot_id, size_bytes)` records its encoded `slot_<id>__sz<N>`
@@ -2253,6 +2274,35 @@ pub fn _is_cabi(fname: string) -> bool {
     if fname == "hxlcl_setvbuf" { return true }
     if fname == "hxlcl_darwin_check_fd_set_overflow" { return true }
     return false
+}
+
+// RFC061 §M8 varargs-ABI (literal-∅ feature B, RUNG1) — variadic-function gate.
+// A whitelisted name is a SysV AMD64 variadic function: its prologue reserves a
+// 48-byte GP register-save area, spills the 6 GP arg registers (rdi,rsi,rdx,rcx,
+// r8,r9) into it, and reserves a 24-byte va_list struct, so the in-body
+// `__builtin_va_start`/`__builtin_va_arg` intrinsics can walk the unnamed integer
+// arguments per PSABI §3.5.7. A variadic fn is ALSO C-ABI for its NAMED params
+// (single-register ingress) — `_x86_64_lower_func` folds this into `_x86_cabi`, so
+// no separate `_is_cabi` entry is needed. HARD-GATED: `env("HEXA_VA_INTRINSICS") !=
+// "1"` → false for EVERY fn → prologue + va branches dead → byte-eq NEUTRAL (mirrors
+// `_is_cabi`/HEXA_CABI_HXLCL). RUNG1 = x86_64-linux + integer class only (no XMM
+// save, fp_offset pinned 48 so any FP va_arg would route to overflow — FP/arm64
+// DEFERRED, the honest next rung). The PoC symbol `hxlcl_va_smoke` proves the leaf.
+pub fn _x86_is_variadic(fname: string) -> bool {
+    if env("HEXA_VA_INTRINSICS") != "1" { return false }
+    if fname == "hxlcl_va_smoke" { return true }
+    return false
+}
+
+// Size-annotated rbp-relative memory operand `<sz> ptr [rbp ± N]`, rendered VERBATIM
+// (carried as a label, like the established `qword ptr [r10]` form in __hx_ptr_store64).
+// The string EXACTLY mirrors `_fmt_mem`'s Intel `[rbp + N]` / `[rbp - N]` spelling, so
+// the system assembler reads an ordinary sized memory access. x86_64-linux only (no
+// darwin "_" mangle on a non-symbol literal). Used by the va builtins for the 32-bit
+// gp_offset/fp_offset fields (PSABI packs both into the first 8 bytes of va_list).
+fn _x86_va_memsz(sz: string, base: string, off: i64) -> LOperand {
+    if off >= 0 { return _x86_op_label(sz + " ptr [" + base + " + " + to_string(off) + "]") }
+    return _x86_op_label(sz + " ptr [" + base + " - " + to_string(0 - off) + "]")
 }
 
 // ── SELFHOST-NEXT x86_64: HexaVal 16-byte SysV register-pair ABI ─────
@@ -4070,6 +4120,121 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                 return
             }
         }
+        // ── RFC061 §M8 varargs-ABI (literal-∅ feature B, RUNG1) ─────────────────────
+        // SysV AMD64 va_list intrinsics, integer class only. The prologue has already
+        // spilled the 6 GP arg regs into the reg_save_area at [rbp+_x86_va_rsa_base] and
+        // reserved the 24-byte va_list at [rbp+_x86_va_list_base]. Reference-match: GCC
+        // 13.3.0 `-O0 -S` of `int f(int n, ...)` (captured component-by-component) +
+        // System V AMD64 PSABI §3.5.7 "Variable Argument Lists" fig 3.34. DCE-never-drops
+        // (STMT_CALL); fires only under HEXA_VA_INTRINSICS=1 → byte-eq NEUTRAL default.
+        //
+        // `__builtin_va_start(num_named)` — initialise the va_list. num_named is a const_
+        // int = the count of NAMED integer params (gp_offset = num_named*8 skips them).
+        // Matches GCC's `movl $8,gp_off; movl $48,fp_off; lea 16(rbp)→ovf; lea rsa→rsa`.
+        // Returns the va_list POINTER (boxed TAG_INT) so the source binds it as `ap`.
+        if s.op == "__builtin_va_start" {
+            let vln = _x86_va_list_base
+            let vrn = _x86_va_rsa_base
+            let mut named = 0
+            if len(s.args) >= 1 && s.args[0].kind == "const_int" { named = s.args[0].int_val }
+            // gp_offset (u32) = named*8
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_imm(named * 8),
+                             "va_start: gp_offset = num_named*8"))
+            _x86_buf.push(_x86_instr2("mov", _x86_va_memsz("dword", "rbp", vln + 0),
+                             _x86_op_reg("r11d"), "va_start: va_list.gp_offset"))
+            // fp_offset (u32) = 48 (no XMM saved → FP varargs route to overflow; RUNG1)
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_imm(48),
+                             "va_start: fp_offset = 48 (int-class only)"))
+            _x86_buf.push(_x86_instr2("mov", _x86_va_memsz("dword", "rbp", vln + 4),
+                             _x86_op_reg("r11d"), "va_start: va_list.fp_offset"))
+            // overflow_arg_area = rbp + 16 (first stack vararg, above saved rbp + ret)
+            _x86_buf.push(_x86_instr2("lea", _x86_op_reg("r11"), _x86_op_mem("rbp", 16),
+                             "va_start: &overflow_arg_area = rbp+16"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_mem("rbp", vln + 8),
+                             _x86_op_reg("r11"), "va_start: va_list.overflow_arg_area"))
+            // reg_save_area = rbp + _x86_va_rsa_base
+            _x86_buf.push(_x86_instr2("lea", _x86_op_reg("r11"), _x86_op_mem("rbp", vrn),
+                             "va_start: &reg_save_area"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_mem("rbp", vln + 16),
+                             _x86_op_reg("r11"), "va_start: va_list.reg_save_area"))
+            // result = &va_list
+            _x86_buf.push(_x86_instr2("lea", _x86_op_reg("r11"), _x86_op_mem("rbp", vln),
+                             "va_start: result = &va_list"))
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r11", 0) }
+            return
+        }
+        // `__builtin_va_arg(ap)` — fetch the next INTEGER-class vararg (8 bytes). ap is
+        // the va_list pointer (payload). Exact PSABI §3.5.7 integer path, byte-for-byte
+        // the GCC sequence: if gp_offset < 48 read reg_save_area[gp_offset] & bump
+        // gp_offset by 8, else read overflow_arg_area & bump it by 8. (RUNG1: integer
+        // class only — a struct/FP va_arg is the honest next rung.)
+        if s.op == "__builtin_va_arg" {
+            let vn = _x86_va_lbl
+            _x86_va_lbl = _x86_va_lbl + 1
+            let ovf = ".Lvaarg_ovf" + to_string(vn)
+            let done = ".Lvaarg_done" + to_string(vn)
+            _x86_hv_payload(s.args[0], st, rm, "r10", opts)   // r10 = &va_list
+            // eax = gp_offset (u32); cmp 47; ja overflow  (matches GCC `cmpl $47; ja`)
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("eax"),
+                             _x86_va_memsz("dword", "r10", 0), "va_arg: eax = gp_offset"))
+            _x86_buf.push(_x86_instr2("cmp", _x86_op_reg("eax"), _x86_op_imm(47),
+                             "va_arg: gp_offset vs 47"))
+            _x86_buf.push(_x86_instr1("ja", _x86_op_label(ovf),
+                             "va_arg: gp_offset >= 48 → overflow"))
+            // reg path: rax(=gp_offset, zero-ext) + reg_save_area → addr in r11
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("eax"), _x86_op_reg("eax"),
+                             "va_arg: zero-extend gp_offset into rax"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r10", 16),
+                             "va_arg: r11 = reg_save_area"))
+            _x86_buf.push(_x86_instr2("add", _x86_op_reg("r11"), _x86_op_reg("rax"),
+                             "va_arg: addr = reg_save_area + gp_offset"))
+            // gp_offset += 8 (store back)
+            _x86_buf.push(_x86_instr2("add", _x86_op_reg("eax"), _x86_op_imm(8),
+                             "va_arg: gp_offset + 8"))
+            _x86_buf.push(_x86_instr2("mov", _x86_va_memsz("dword", "r10", 0),
+                             _x86_op_reg("eax"), "va_arg: store gp_offset back"))
+            _x86_buf.push(_x86_instr1("jmp", _x86_op_label(done), "va_arg: → load"))
+            // overflow path: addr = overflow_arg_area; overflow_arg_area += 8
+            _x86_buf.push(_x86_instr0("label", ovf))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r10", 8),
+                             "va_arg: r11 = overflow_arg_area"))
+            _x86_buf.push(_x86_instr2("lea", _x86_op_reg("rax"), _x86_op_mem("r11", 8),
+                             "va_arg: overflow + 8"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_mem("r10", 8), _x86_op_reg("rax"),
+                             "va_arg: store overflow_arg_area back"))
+            // load the value (8 bytes) and box as TAG_INT leaf
+            _x86_buf.push(_x86_instr0("label", done))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r11", 0),
+                             "va_arg: value = *(long*)addr"))
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r11", 0) }
+            return
+        }
+        // `__builtin_va_end(ap)` — SysV no-op (the va_list lives in the frame, nothing
+        // to release). Box 0 if a dst is present so the value-position is well-defined.
+        if s.op == "__builtin_va_end" {
+            _x86_buf.push(_x86_instr0("nop", "va_end: SysV no-op"))
+            if s.dst.id >= 0 {
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_imm(0),
+                                 "va_end: result = 0"))
+                _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r11", 0)
+            }
+            return
+        }
+        // `__builtin_va_copy(dst_ap, src_ap)` — copy the 24-byte va_list (3 qwords).
+        if s.op == "__builtin_va_copy" && len(s.args) >= 2 {
+            _x86_hv_payload(s.args[0], st, rm, "r10", opts)   // r10 = dst va_list*
+            _x86_hv_payload(s.args[1], st, rm, "r11", opts)   // r11 = src va_list*
+            let mut _vc = 0
+            while _vc < 24 {
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rax"), _x86_op_mem("r11", _vc),
+                                 "va_copy: load src qword"))
+                _x86_buf.push(_x86_instr2("mov", _x86_op_mem("r10", _vc), _x86_op_reg("rax"),
+                                 "va_copy: store dst qword"))
+                _vc = _vc + 8
+            }
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 0) }
+            return
+        }
         // UNLOCK-10: `__hx_ptr_store64(ptr, off, val)` — write 64-bit `val` to
         // raw address ptr+off. Returns ptr (chainable). r10=ptr, r11=off,
         // rsi=val; add; mov qword ptr [addr], val; result = original ptr.
@@ -4474,7 +4639,10 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             _x86_emit_zero_ret_pair(fname == "main")
         }
         if len(s.args) >= 1 {
-            if _is_cabi(fname) {
+            // A variadic fn (RUNG1, _x86_va_active) returns C-ABI single-register too
+            // (its named/return contract is raw C-ABI, like a Route C leaf). Fold it in
+            // so the C caller reads the value in rax, not the PAIR-MODEL tag.
+            if _is_cabi(fname) || _x86_va_active {
                 // Route C C-ABI return — a raw C-ABI fn returns its value in a
                 // SINGLE register (rax). Load just the payload eightbyte (the
                 // raw int/pointer); the HexaVal tag is dropped (the C caller
@@ -4616,7 +4784,24 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
     // bottom-of-frame at [rsp + slot*256], below the rbp-relative spill slots.
     let _try_cnt = _x86_count_try_setjmp(mf)
     let _try_buf_bytes = _try_cnt * 256
-    let spill_frame = alloc.frame_size + _try_buf_bytes
+    // RFC061 §M8 varargs-ABI (RUNG1) — reserve the SysV va_list frame for a variadic
+    // fn: a 48-byte GP reg_save_area + 24-byte va_list struct, rounded to 80 (16B mult,
+    // alignment-preserving). Wedged BETWEEN the regalloc spill slots (rbp-relative,
+    // logical [0, alloc.frame_size)) and the try jmp_bufs (rsp-relative, bottom), so it
+    // aliases neither. _x86_va_active/_x86_va_rsa_base/_x86_va_list_base carry the
+    // layout to the va builtins. NON-variadic (default) → va_block 0 → byte-eq NEUTRAL.
+    _x86_va_active = _x86_is_variadic(mf.name)
+    let mut _va_block = 0
+    if _x86_va_active { _va_block = 80 }
+    let spill_frame = alloc.frame_size + _va_block + _try_buf_bytes
+    if _x86_va_active {
+        // reg_save_area[0] (lowest addr) just above the try bufs; GP reg i @ +8*i.
+        _x86_va_rsa_base = 0 - (_X86_CALLEE_SAVE_BYTES + alloc.frame_size + _va_block)
+        _x86_va_list_base = _x86_va_rsa_base + 48
+    } else {
+        _x86_va_rsa_base = 0
+        _x86_va_list_base = 0
+    }
 
     // Prologue
     _x86_buf.push(_x86_instr1("push", _x86_op_reg("rbp"), "prologue: save rbp"))
@@ -4640,6 +4825,23 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
                             "prologue: alloc spill frame"))
     }
 
+    // RFC061 §M8 varargs-ABI (RUNG1) — spill the 6 GP arg registers into the
+    // reg_save_area BEFORE any param ingress clobbers them (PSABI §3.5.7; matches GCC
+    // 13.3.0's `movq %rsi,-168(%rbp) … %r9,-136(%rbp)` reg-save block, integer class
+    // only — no XMM/movaps, RUNG1 scope). GP reg i (rdi,rsi,rdx,rcx,r8,r9) → reg_save_
+    // area[i] = [rbp + _x86_va_rsa_base + 8*i]. Named params are skipped at va_start via
+    // gp_offset; storing all 6 (incl. the named rdi) is PSABI-faithful and harmless.
+    if _x86_va_active {
+        let mut _vgi = 0
+        while _vgi < 6 {
+            _x86_buf.push(_x86_instr2("mov",
+                _x86_op_mem("rbp", _x86_va_rsa_base + _vgi * 8),
+                _x86_op_reg(_x86_64_arg_reg_seq(_vgi)),
+                "va prologue: spill GP arg reg → reg_save_area[" + to_string(_vgi) + "]"))
+            _vgi = _vgi + 1
+        }
+    }
+
     // PAIR-MODEL ingress — each HexaVal param arrives as a 16-byte SysV
     // register PAIR: param0 → rdi:rsi, param1 → rdx:rcx, param2 → r8:r9
     // (tag = lo, payload = hi). Only THREE pairs fit in the six integer-arg
@@ -4653,7 +4855,10 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
     // TAG goes into the param's parallel tag-slot so it survives into any
     // downstream tag-dispatching runtime call.
     let mut p = 0
-    let _x86_cabi = _is_cabi(mf.name)
+    // A variadic fn (RUNG1) is C-ABI for its NAMED params too — they arrive in single
+    // arg registers (rdi,rsi,…), exactly like a Route C leaf — so fold _x86_va_active
+    // into the C-ABI ingress branch. (_x86_va_active is false on the default path.)
+    let _x86_cabi = _is_cabi(mf.name) || _x86_va_active
     while p < len(mf.params) {
         let pid = mf.params[p].id
         if _x86_cabi && p < 6 {
