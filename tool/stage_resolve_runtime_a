@@ -1561,6 +1561,52 @@ build_runtime_a_from_source() {
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRSTR: HEXA_RT_NATIVE_STRSTR=1 IGNORED — fp-ABI xmm Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim strstr member" >&2
             fi
         fi
+        # ── RFC061 §M8 RT-NATIVE-STRTOLL (Route C whole-module emit · non-libm leaf
+        #    RUNG 2, default OFF) ──
+        # SECOND non-libm leaf to leave the shim (strstr precedent #4240). hxlcl_strtoll
+        # is a PURE self-contained byte-walk parse leaf (no syscall, no errno, no inner
+        # C-ABI callee, no extern-data — its only write is `*endptr` to the CALLER's
+        # pointer arg, the memcpy-dst class). aprime/hexa with HEXA_CABI_HXLCL=1
+        # Route-C-lowers stdlib/runtime/hxlcl_core.hexa to one .o; the whitelisted
+        # hxlcl_strtoll lands in it. `objcopy --keep-global-symbol=hxlcl_strtoll`
+        # ISOLATES the staged member so the whole-module routec.o's sibling C-ABI defs
+        # stay served by the shim and the ld -r multidef gate (S5) sees exactly one new
+        # strong def. The shim drops strtoll via -DHEXA_RT_NATIVE_STRTOLL (#ifndef in
+        # shim.c). DEFAULT (unset) adds NO -D and NO member → shim.o + archive
+        # byte-identical (release-integrity invariant). x86_64-linux ONLY (same host
+        # gate as the libm leaves + strstr).
+        if [ "${HEXA_RT_NATIVE_STRTOLL:-0}" = "1" ]; then
+            if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
+                local _rnst_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
+                if [ -z "$_rnst_bin" ]; then
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRTOLL FATAL: HEXA_RT_NATIVE_STRTOLL=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
+                fi
+                local _rnst_drv="build/_rnst_drv.hexa"
+                local _rnst_s="build/hxlcl_strtoll_native.s"
+                local _rnst_full="build/hxlcl_strtoll_native_full.o"
+                local _rnst_o="build/hxlcl_strtoll_native.o"
+                printf 'fn _rnst_unused() {}\n' > "$_rnst_drv"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRTOLL: emitting native Route C hxlcl_strtoll .o via $_rnst_bin (HEXA_CABI_HXLCL=1, replacing libc-shim strtoll member)…"
+                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                    "$_rnst_bin" "$_rnst_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnst_s" stdlib/runtime/hxlcl_core.hexa \
+                    >"build/_rnst_strtoll.log" 2>&1 \
+                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRTOLL FATAL: strtoll Route C asm emit failed — see build/_rnst_strtoll.log" >&2; cat "build/_rnst_strtoll.log" >&2; return 1; }
+                [ -s "$_rnst_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRTOLL FATAL: empty $_rnst_s" >&2; return 1; }
+                $CC $_mo_archflag -c "$_rnst_s" -o "$_rnst_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRTOLL FATAL: assemble $_rnst_s failed" >&2; return 1; }
+                if command -v objcopy >/dev/null 2>&1; then
+                    objcopy --keep-global-symbol=hxlcl_strtoll "$_rnst_full" "$_rnst_o" \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRTOLL FATAL: objcopy isolate strtoll failed" >&2; return 1; }
+                else
+                    cp "$_rnst_full" "$_rnst_o"
+                fi
+                [ -f "$_rnst_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRTOLL FATAL: $_rnst_o not produced" >&2; return 1; }
+                _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_STRTOLL"
+                _mo_hxlcl_members="$_mo_hxlcl_members $_rnst_o"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRTOLL: hxlcl_strtoll → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_STRTOLL (strtoll dropped) — ld -r multidef gate validates"
+            else
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRTOLL: HEXA_RT_NATIVE_STRTOLL=1 IGNORED — fp-ABI xmm Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim strtoll member" >&2
+            fi
+        fi
         # (S1) guard the FROZEN `#include "runtime_core.c"` line in the RESTORED
         #      working-copy runtime.c (idempotent; gitignore'd regen — frozen git
         #      blob 151c52c8 NEVER touched). drop-ON then pulls runtime_core_decls.h.
