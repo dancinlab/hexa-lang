@@ -70,3 +70,48 @@ auto-detects CUDA_HOME (cuda-12.9), builds sm_120 objects, deploys clean (#4220 
 archive to `~/.hx/bin/build/runtime.a`, clears cache → `cuda_available()=1`, GEMM correct
 (rel_rms ≈ 1.6e-15, was all-zeros). Three merged fixes: #4213 (19× multidef), #4216
 (CUDA_HOME sm_80 zeros), #4220 (EVP no-openssl host), #4221 (emitter bootstrap-poison fallback).
+
+---
+
+## r3 lever 2 — device-resident im2col/col2im (conv_lib) — MEASURED 2026-06-29
+
+Branch `r3-lever2-conv-device` (PR pending). summer RTX 5070, sm_120, CUDA 12.9,
+current `test` hexat, CUDA runtime.a deployed (`hexa run` cuda_available()=1,
+`[OWN-GEMM-FIRED] _hx_k_gemm DEVICE path`). Same bench
+`~/bench_anima/bench_hexa_clm_step.hexa` (d=512, T=256, L=2, K=3, V=256, F64),
+N_WARM=3 + N_TIME=7, in-process median, fast non-det default.
+
+| conv_lib path | median step | GFLOP/s | vs PyTorch F64 (12.7ms) |
+|---------------|------------|---------|--------------------------|
+| BEFORE — origin/main (host im2col/col2im + GPU GEMM) | **459 ms** (457/459/476) | 7.3 | 36.1× |
+| AFTER  — device im2col/col2im + GPU GEMM            | **284 ms** (277/280/284×3) | 11.8 | **22.4×** |
+
+→ **1.62× faster** (459→284 ms), ~175 ms host gather/scatter removed. The
+forge device builtins (forge_dispatch_im2col / _im2col_t / _col2im / _db_colsum)
+replace the host scalar loops; buffers stay FARR_DEVICE-resident feeding the GEMM
+in place (cuDNN strategy). Gap vs PyTorch F64: 36.1× → 22.4×.
+
+### Parity (device vs host, HEXA_DET=1) — EXACT
+Both run the bench-shape conv1d fwd+bwd (~/conv_parity.hexa); checksums:
+
+| checksum | HOST (main, DET=1) | DEVICE (branch, DET=1) | Δ |
+|----------|--------------------|------------------------|---|
+| ysum  | -89.774481499062855 | -89.774481499062855 | **0** |
+| yabs  | 109372.9421875038   | 109372.9421875038   | **0** |
+| dWabs | 2614968.865484383   | 2614968.865484383   | **0** |
+| dXabs | 707990.6696253714   | 707990.6696253714   | **0** |
+| dbabs | 9367.5996339024667  | 9367.5996339024667  | **0** |
+
+→ **max|Δ| = 0 (byte-identical)** under HEXA_DET=1 (fixed-order non-atomic
+col2im-gather + non-atomic split-K GEMM). Non-DET fast default drifts ~1e-13 ULP
+(atomic split-K / atomic-scatter reassociation — the expected training fast path,
+not a defect). byteeq-safe: conv_lib is byteeq-neutral; CPU-only (cuda_available()
+==0) keeps the host path byte-identical to the pre-lever reference.
+
+### honest gap notes
+- BEFORE here = 459 ms (this host/hexat), not the 633 ms cited in the r3 lever-1
+  framing — different measurement context; the 1.62× delta (same-host BEFORE/AFTER
+  back-to-back) is the trustworthy figure.
+- Remaining 284 ms = other host glue still on CPU (Wt-transpose, bias-add,
+  GroupNorm/embedding seams, dW reshape) + own-FP64 GEMM vs cuDNN-F32. Next levers:
+  device Wt-transpose / fused bias-epilogue / FP32 path.
