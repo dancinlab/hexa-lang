@@ -2463,6 +2463,19 @@ pub fn _is_cabi(fname: string) -> bool {
     // libm leaves (hxlcl_fmod fdlibm port etc.) follow on the SAME mechanism.
     // default-OFF byteeq-neutral (HEXA_CABI_HXLCL unset → empty whitelist).
     if fname == "hxlcl_fp_addmul" { return true }
+    // fp-ABI MIXED-ABI leaf — hxlcl_atof (`double atof(const char *s)`). The FIRST
+    // Route C symbol with a MIXED SysV ABI: INTEGER-class string param (rdi/GP) +
+    // SSE-class double return (xmm0). Proves the per-arg/per-return SSE classifier
+    // (_cabi_sse_arg(idx=0)=FALSE → string GP; _cabi_sse_ret=TRUE → double xmm0).
+    // Body = stdlib/runtime/hxlcl_core.hexa::hxlcl_atof (1:1 port of the frozen 0-libc
+    // floor #else parse, self/runtime_emit_full.hexa:2299-2337; lenient ws+sign+int+
+    // .frac+eE, == musl atof=strtod(s,0) on the finite-decimal domain). The byte-scan
+    // is raw-int payload ops; digit→double via __hx_payload_i2f; accumulation via
+    // __hx_payload_fmul/fadd/fdiv (exp/log/fmod precedent). ON (HEXA_CABI_HXLCL=1)
+    // hxlcl_atof replaces the libc-shim atof member (shim drops via -DHEXA_RT_NATIVE_ATOF).
+    // x86_64-linux only (arm64 fp-ABI = later rung; _cabi_is_fp excludes it). default-OFF
+    // byteeq-neutral.
+    if fname == "hxlcl_atof" { return true }
     // fp-ABI libm-leaf RUNG 2 — hxlcl_fmod is the FIRST REAL libc-floor libm symbol
     // native-emitted via the fp-ABI (xmm) Route C path. `double hxlcl_fmod(double x,
     // double y)` — both args SSE-class (xmm0/xmm1), return SSE-class (xmm0). Body =
@@ -2528,6 +2541,13 @@ fn _cabi_sse_arg(fname: string, idx: i64) -> bool {
         if idx == 1 { return true }
         return false
     }
+    // hxlcl_atof(s: const char*) -> double : arg 0 is INTEGER class (string in
+    // rdi/GP, NOT SSE) — the MIXED-ABI case — return is SSE. So _cabi_sse_arg returns
+    // FALSE for every index (the string never goes to an xmm reg); only the return is
+    // SSE (handled by _cabi_sse_ret below).
+    if fname == "hxlcl_atof" {
+        return false
+    }
     // hxlcl_fmod(x: double, y: double) -> double : args 0,1 SSE; return SSE.
     if fname == "hxlcl_fmod" {
         if idx == 0 { return true }
@@ -2563,6 +2583,7 @@ fn _cabi_sse_arg(fname: string, idx: i64) -> bool {
 }
 fn _cabi_sse_ret(fname: string) -> bool {
     if fname == "hxlcl_fp_addmul" { return true }
+    if fname == "hxlcl_atof" { return true }     // double return (xmm0), string arg GP
     if fname == "hxlcl_fmod" { return true }
     if fname == "hxlcl_sin" { return true }
     if fname == "hxlcl_cos" { return true }
@@ -2578,6 +2599,7 @@ fn _cabi_sse_ret(fname: string) -> bool {
 // emit of a double leaf. Shared helper so both backends agree on the set.
 pub fn _cabi_is_fp(fname: string) -> bool {
     if fname == "hxlcl_fp_addmul" { return true }
+    if fname == "hxlcl_atof" { return true }     // SSE-class return → x86 fp-ABI; arm64 excluded
     if fname == "hxlcl_fmod" { return true }
     if fname == "hxlcl_sin" { return true }
     if fname == "hxlcl_cos" { return true }

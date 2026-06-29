@@ -473,7 +473,23 @@ int __attribute__((noinline)) hxlcl_atoi(const char *s) { return (int)hxlcl_atol
 int       hxlcl_atoi(const char *s)                   { return s ? atoi(s) : 0; }
 #endif
 #endif
+/* RT-NATIVE-ATOF (HEXA_RT_NATIVE_ATOF, default OFF · fp-ABI xmm Route C · MIXED-ABI
+ * leaf): hxlcl_atof leaves the shim via the fp-ABI (xmm) Route C whole-module emit
+ * (fmod/sin/cos/exp/log libm precedent + strstr/strtoll non-libm precedent). atof is
+ * the FIRST MIXED-ABI leaf — an INTEGER-class `const char*` param (rdi/GP) with an
+ * SSE-class `double` return (xmm0), exercising the per-arg/per-return SSE classifier
+ * (_cabi_sse_arg(0)=false → string GP; _cabi_sse_ret=true → xmm0). The native body is
+ * stdlib/runtime/hxlcl_core.hexa::hxlcl_atof (Route C, whitelisted in _is_cabi/
+ * _cabi_is_fp): a 1:1 port of the frozen 0-libc floor #else parse (lenient ws+sign+
+ * int+.frac+eE = musl atof=strtod(s,0) on the finite-decimal domain), self-contained
+ * (no syscall, no errno, no inner C-ABI callee, no extern-data). Under
+ * HEXA_RT_NATIVE_ATOF=1 (x86_64-linux gate in tool/stage_resolve_runtime_a) the shim
+ * drops atof (#ifndef below) and the objcopy-isolated native .o supplies it. DEFAULT
+ * (HEXA_RT_NATIVE_ATOF unset) adds NO -D and NO member → shim.o + archive byte-
+ * identical (release-integrity invariant). */
+#ifndef HEXA_RT_NATIVE_ATOF
 double    hxlcl_atof(const char *s)                   { return s ? atof(s) : 0.0; }
+#endif
 /* RT-NATIVE-STRTOLL (HEXA_RT_NATIVE_STRTOLL, default OFF · literal-∅ non-libm leaf
  * RUNG 2): SECOND non-libm hxlcl_* to LEAVE the shim via the fp-ABI Route C
  * whole-module emit (strstr precedent). hxlcl_strtoll is a PURE self-contained
