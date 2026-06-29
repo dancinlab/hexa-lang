@@ -138,10 +138,24 @@
     "source": "tool/stage_build_hexa"
    },
    {
+    "id": "CUDA-LINK-MISSING-SSL",
+    "state": "in_flight",
+    "value": "self/main.hexa CUDA link path (~L1487) early-returns after adding -lcudart/-lcuda/-lcudadevrt but BEFORE adding -lssl/-lcrypto (lines 1496-1500 are never reached for CUDA builds). When a deployed runtime.a has a CUDA host object compiled with -DHEXA_HAS_OPENSSL, the linker finds undefined refs to EVP_* in any hexa run. Workaround: compile runtime_cuda_host.o without -DHEXA_HAS_OPENSSL (gates out hexa_aes256_ctr_xor, the only EVP_* caller).",
+    "threshold": "Fix self/main.hexa ~L1487: probe OpenSSL (pkg-config --libs openssl) and append result to the CUDA return line before -lcudart/-lcuda. Requires 3-target byteeq CI PR. Until then, CUDA deploy archive must NOT include -DHEXA_HAS_OPENSSL-compiled objects.",
+    "source": "self/main.hexa"
+   },
+   {
     "id": "CUDA-BUILD-CORES-EXPLICIT-LINK-MULTIDEF",
     "state": "ossified",
     "value": "build_cuda_runtime extracted *_native.o from prebuilt runtime.a and linked them EXPLICITLY as .o files. The frozen runtime_core.c (restored from blob 151c52c82 by restore_frozen_seeds) predates HEXA_RT_ALLOC_NATIVE guards and still #includes runtime_hi_gen.c unconditionally → 19× `multiple definition`: hexa_arena_alloc/mark/rewind/reset (4) + rt_str_split/lines/pad_left/pad_right/repeat/center/to_upper/to_lower/trim/trim_start/trim_end/starts_with_b/ends_with_b/contains_b/from_int (15). SHIPPED runtime.a is fine (archive lazy-pulls only needed symbols) but explicit-link forces BOTH objects. Root cause = the frozen seed's gating does NOT match the symbol set provided by the native .o seeds.",
     "threshold": "After restore_frozen_seeds, call _regen_runtime_core_for_cuda() (awk-unescape of runtime_core_emit.hexa SSOT → runtime_core.c WITH HEXA_RT_ALLOC_NATIVE guards), reconcile_runtime_c_ssot_dups (drop 4 migrated f64<->bits weak defs from runtime.c), and Z2a patch (#include runtime_hi_gen.c removed when rt_hi_native.o in CORES). Same pattern as stage_resolve_runtime_a already does. CPU build: compile fresh runtime.o with RTFLAGS instead of extracting from archive.",
+    "source": "tool/build_cuda_runtime"
+   },
+   {
+    "id": "BUILD-CUDA-RUNTIME-CUDA-HOME-SM80-ZEROS",
+    "state": "ossified",
+    "value": "build_cuda_runtime defaulted CUDA_HOME=/usr/local/cuda-13.0. When that path is absent (e.g. summer has cuda-12.9 only), PATH prepend has no effect and system nvcc (CUDA 12.0, /usr/bin/nvcc) is used instead. CUDA 12.0 compiles sm_80 objects with -rdc=true. sm_80+rdc+clang-link silently fails device-link init on sm_120 (Blackwell RTX 5070) → ALL GPU GEMM kernels return zero. Stale ~/.hexa-cache/ entries (pre-compiled hexa run binaries keyed by source hash) perpetuate the problem after runtime.a is updated.",
+    "threshold": "CUDA_HOME auto-detect: try cuda-13.0 > cuda-12.9 > cuda-12.8 > /usr/local/cuda canonical symlink (Ubuntu alternatives, always points to active CUDA). DEPLOY step after successful gemm_cuda run: assemble runtime.cuda.a ($CORES + hxlcl_shim.o + runtime_cuda_host.o + runtime_cuda.o + runtime_cuda_dlink.o) → install to ~/.hx/bin/build/runtime.a + rm -rf ~/.hexa-cache/ (DX governance: one command activates GPU on CUDA host). Fix #4216.",
     "source": "tool/build_cuda_runtime"
    },
    {
