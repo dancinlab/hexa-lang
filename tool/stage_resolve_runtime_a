@@ -2182,6 +2182,56 @@ build_runtime_a_from_source() {
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE: HEXA_RT_NATIVE_PIPE=1 IGNORED — Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim pipe member" >&2
             fi
         fi
+        # ── RFC061 §M8 RT-NATIVE-POPEN / RT-NATIVE-PCLOSE (Route C whole-module emit · Wall 3-c
+        #    COMPOSITE · the LAST drop-ready frozen-safe leaf pair · default OFF) ──
+        # popen/pclose come from the SAME module emit, so ONE asm emit isolates BOTH symbols.
+        # popen("cmd","r") = pipe()+fork()+dup2()+execve("/bin/sh","-c",cmd) (ALL already-
+        # dissolved Route C leaves) → CORE-family (read_fd+1) fake FILE*; pclose decodes fd=fp-1,
+        # looks the child pid up in the __hx_static_slot(900,1024) self-defined BSS fd→pid table
+        # (#4116 — DISSOLVES the frozen `static int _hxlcl_popen_fds/_pids` cascade) and
+        # close()+waitpid()s it. The helpers hxlcl_popen_remember/forget/child_exit_nr are
+        # emitted as the .o's OWN symbols (objcopy localizes them); popen/pclose reference
+        # pipe/fork/dup2/close/execve/waitpid/malloc/fdopen + __errno_location as undefined
+        # externs resolved at link by the rest of runtime.a (the SAME composition model pipe
+        # #4256 / fopen Wall 3-a use; NO new provider). The arm64/darwin legs DCE OUT under
+        # --target=x86_64-linux-gnu. objcopy keeps ONLY hxlcl_popen + hxlcl_pclose global.
+        # ld -r multidef gate (S5) is the AUTHORITY. x86_64-linux ONLY.
+        if [ "${HEXA_RT_NATIVE_POPEN:-0}" = "1" ] || [ "${HEXA_RT_NATIVE_PCLOSE:-0}" = "1" ]; then
+            if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
+                local _rnpop_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
+                if [ -z "$_rnpop_bin" ]; then
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: HEXA_RT_NATIVE_POPEN/PCLOSE=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
+                fi
+                local _rnpop_drv="build/_rnpop_drv.hexa"
+                local _rnpop_s="build/hxlcl_popen_native.s"
+                local _rnpop_full="build/hxlcl_popen_native_full.o"
+                local _rnpop_o="build/hxlcl_popen_native.o"
+                local _rnpop_keep=""
+                [ "${HEXA_RT_NATIVE_POPEN:-0}" = "1" ]  && _rnpop_keep="$_rnpop_keep --keep-global-symbol=hxlcl_popen"
+                [ "${HEXA_RT_NATIVE_PCLOSE:-0}" = "1" ] && _rnpop_keep="$_rnpop_keep --keep-global-symbol=hxlcl_pclose"
+                printf 'fn _rnpop_unused() {}\n' > "$_rnpop_drv"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE: emitting native Route C popen/pclose .o via $_rnpop_bin (HEXA_CABI_HXLCL=1, replacing libc-shim member(s))…"
+                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                    "$_rnpop_bin" "$_rnpop_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnpop_s" stdlib/runtime/hxlcl_core.hexa \
+                    >"build/_rnpop.log" 2>&1 \
+                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: popen/pclose Route C asm emit failed — see build/_rnpop.log" >&2; cat "build/_rnpop.log" >&2; return 1; }
+                [ -s "$_rnpop_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: empty $_rnpop_s" >&2; return 1; }
+                $CC $_mo_archflag -c "$_rnpop_s" -o "$_rnpop_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: assemble $_rnpop_s failed" >&2; return 1; }
+                if command -v objcopy >/dev/null 2>&1; then
+                    objcopy $_rnpop_keep "$_rnpop_full" "$_rnpop_o" \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: objcopy isolate popen/pclose failed" >&2; return 1; }
+                else
+                    cp "$_rnpop_full" "$_rnpop_o"
+                fi
+                [ -f "$_rnpop_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: $_rnpop_o not produced" >&2; return 1; }
+                if [ "${HEXA_RT_NATIVE_POPEN:-0}" = "1" ];  then _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_POPEN"; fi
+                if [ "${HEXA_RT_NATIVE_PCLOSE:-0}" = "1" ]; then _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_PCLOSE"; fi
+                _mo_hxlcl_members="$_mo_hxlcl_members $_rnpop_o"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE: hxlcl_popen/pclose → native Route C .o (isolated:$_rnpop_keep); shim.o built with$([ "${HEXA_RT_NATIVE_POPEN:-0}" = "1" ] && printf ' -DHEXA_RT_NATIVE_POPEN')$([ "${HEXA_RT_NATIVE_PCLOSE:-0}" = "1" ] && printf ' -DHEXA_RT_NATIVE_PCLOSE') — ld -r multidef gate validates"
+            else
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE: HEXA_RT_NATIVE_POPEN/PCLOSE=1 IGNORED — Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim popen/pclose member(s)" >&2
+            fi
+        fi
         # (S1) guard the FROZEN `#include "runtime_core.c"` line in the RESTORED
         #      working-copy runtime.c (idempotent; gitignore'd regen — frozen git
         #      blob 151c52c8 NEVER touched). drop-ON then pulls runtime_core_decls.h.
