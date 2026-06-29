@@ -2419,6 +2419,24 @@ pub fn _is_cabi(fname: string) -> bool {
     if fname == "hxlcl_popen_remember" { return true }
     if fname == "hxlcl_popen_forget" { return true }
     if fname == "hxlcl_child_exit_nr" { return true }
+    // EXEC family TAIL — hxlcl_execvp. The native PATH-search wrapper over execve: if
+    // `file` contains a '/', exec it directly; else split $PATH on ':' and try each
+    // dir+'/'+file via execve until one succeeds (execve returns ONLY on failure). A
+    // PURE COMPOSITION over the already-whitelisted leaves — `bl hxlcl_getenv` (Wall
+    // 2-b, #4243 — fetch "PATH"), `bl hxlcl_strlen` (the file length), `bl hxlcl_execve`
+    // (batch I leaf), `bl hxlcl_malloc` (the candidate-path HEAP scratch replacing the
+    // frozen `char buf[1024]` stack local — the popen/fputc heap-scratch precedent, no
+    // in-body stack-alloc intrinsic on this campaign), and `__hx_environ_ptr`+ONE
+    // __hx_ptr_load64 to pass `environ` to execve (the getenv #4243 precedent). The
+    // '/'-scan and the dir-by-dir path-join are raw __hx_ptr_load8/store8 byte loops
+    // (the strchr/strstr class). NO new intrinsic, NO new provider — every inner `bl`
+    // resolves at link by the rest of runtime.a. Reference-matched to musl
+    // src/process/execvp.c (the same has-slash → direct / else $PATH-split-and-try
+    // structure; musl's __execvpe ENOENT/EACCES bookkeeping is simplified to "try next
+    // on any failure" exactly as the frozen 0-libc floor body does,
+    // self/runtime_emit_full.hexa:2963-2986). Cross-target-identical (no NR; execve
+    // carries the per-target NR internally).
+    if fname == "hxlcl_execvp" { return true }
     // CTYPE family — isalnum/isalpha. The FIRST register-only pure-compute leaves:
     // the arg is an `int c` VALUE, so the body does ZERO memory access (no
     // __hx_ptr_load8) — only raw-payload range comparisons — and returns 0/1 in the
