@@ -3781,6 +3781,13 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
                 buf.push(_arm64_instr2("fmov", _arm64_op_reg("d0"), _arm64_op_reg("x1"),
                                  "va fp return: d0 = result bits"))
+            } else if _arm64_va_active {
+                // RFC061 §M8 r2 — a variadic INT-return fn is C-ABI for its result: the
+                // raw value goes in x0 (the C caller reads x0, not the {tag,payload}
+                // pair). Load just the payload eightbyte into x0 (x9 = throwaway tag).
+                // Without this the {TAG_INT, value} pair landed tag(0) in x0 → every
+                // variadic-int call returned 0. default-OFF ⇒ byte-eq NEUTRAL.
+                buf = _hv_load(buf, s.args[0], st, rm, "x9", "x0")
             } else if _is_cabi(fname) && !_cabi_is_fp(fname) {
                 // Route C C-ABI return — a raw C-ABI fn returns a single value
                 // in x0. Load just the payload eightbyte into x0 (x9 = throwaway
@@ -4172,7 +4179,15 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
     // arm64 fp-ABI (AAPCS64 v0-v7) is the NEXT rung — exclude fp symbols so a
     // double leaf is NOT mis-lowered into GP x0/x1 here (it falls through to the
     // PAIR-MODEL path). x86_64 (PSABI §3.2.3 xmm) lands first.
-    let _arm_cabi = _is_cabi(fn_name) && !_cabi_is_fp(fn_name)
+    //
+    // RFC061 §M8 r2 — a VARIADIC fn is ALSO C-ABI for its NAMED params (they arrive
+    // RAW in one AAPCS64 GP register, NOT a {tag,payload} pair): mirrors x86_64's
+    // `_x86_cabi = _is_cabi(name) || _x86_va_active`. Without this fold the named `n`
+    // of `hxlcl_va_smoke(long n, ...)` was mis-ingested as a HexaVal PAIR {x0,x1},
+    // stealing the first vararg out of x1 → loop bound garbage. The r2 whitelist has
+    // only integer-class named params, so the GP single-reg ingress is exact. Gated by
+    // _arm64_va_active (default-OFF) ⇒ byte-eq NEUTRAL.
+    let _arm_cabi = (_is_cabi(fn_name) && !_cabi_is_fp(fn_name)) || _arm64_va_active
     while p < len(mf.params) {
         let pid = mf.params[p].id
         let poff = _arm_spill_offset(rm, pid)
