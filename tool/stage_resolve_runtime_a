@@ -1470,6 +1470,43 @@ build_runtime_a_from_source() {
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP: HEXA_RT_NATIVE_EXP=1 IGNORED — fp-ABI xmm Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim exp member" >&2
             fi
         fi
+        # RFC061 §M8 RT-NATIVE-LOG (literal-∅ libm-leaf RUNG 6, default OFF): the LAST clean
+        # libm shim symbol — hxlcl_log (`double log(double)`) native-emitted via the SAME
+        # fp-ABI (xmm) Route C + named-rodata-table path as exp. The codegen emits the WHOLE
+        # stdlib/runtime/hxlcl_core.hexa to one .o under HEXA_CABI_HXLCL=1; the whitelisted SSE
+        # symbol hxlcl_log lands in that .o, and the named-rodata-table mechanism (§M8 feature
+        # C) emits the 512-double __log_data (tab[128]+tab2[128]) as a `.rodata rotab_2:`
+        # constant addressed by `lea [rip+rotab_2]`. The body is a 1:1 musl src/math/log.c port
+        # (LOG_TABLE_BITS=7 N=128, NON-FMA path; libm-free). The shim drops its log member via
+        # -DHEXA_RT_NATIVE_LOG (#ifndef in shim.c). DEFAULT (HEXA_RT_NATIVE_LOG unset) adds NO -D
+        # and NO member → shim.o + archive byte-identical (release-integrity invariant). When ON,
+        # the libm shim member count drops 4→3. x86_64-linux ONLY (fp-ABI xmm + rodata-table
+        # intrinsic are x86_64-backend-only; arm64 fp-ABI is the NEXT rung — _cabi_is_fp excludes).
+        if [ "${HEXA_RT_NATIVE_LOG:-0}" = "1" ]; then
+            if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
+                local _rnl_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
+                if [ -z "$_rnl_bin" ]; then
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: HEXA_RT_NATIVE_LOG=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
+                fi
+                local _rnl_drv="build/_rnl_drv.hexa"
+                local _rnl_s="build/hxlcl_log_native.s"
+                local _rnl_o="build/hxlcl_log_native.o"
+                printf 'fn _rnl_unused() {}\n' > "$_rnl_drv"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG: emitting native fp-ABI (xmm) hxlcl_log .o via $_rnl_bin (HEXA_CABI_HXLCL=1, replacing libc-shim log member)…"
+                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                    "$_rnl_bin" "$_rnl_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnl_s" stdlib/runtime/hxlcl_core.hexa \
+                    >"build/_rnl_log.log" 2>&1 \
+                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: log Route C asm emit failed — see build/_rnl_log.log" >&2; cat "build/_rnl_log.log" >&2; return 1; }
+                [ -s "$_rnl_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: empty $_rnl_s" >&2; return 1; }
+                $CC $_mo_archflag -c "$_rnl_s" -o "$_rnl_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: assemble $_rnl_s failed" >&2; return 1; }
+                [ -f "$_rnl_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: $_rnl_o not produced" >&2; return 1; }
+                _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_LOG"
+                _mo_hxlcl_members="$_mo_hxlcl_members $_rnl_o"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG: hxlcl_log → native fp-ABI .o (rotab_2 .rodata table); shim.o built with -DHEXA_RT_NATIVE_LOG (log dropped) — ld -r multidef gate validates"
+            else
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG: HEXA_RT_NATIVE_LOG=1 IGNORED — fp-ABI xmm Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim log member" >&2
+            fi
+        fi
         # (S1) guard the FROZEN `#include "runtime_core.c"` line in the RESTORED
         #      working-copy runtime.c (idempotent; gitignore'd regen — frozen git
         #      blob 151c52c8 NEVER touched). drop-ON then pulls runtime_core_decls.h.
