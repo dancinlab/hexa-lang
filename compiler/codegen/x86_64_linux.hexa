@@ -2325,6 +2325,17 @@ pub fn _is_cabi(fname: string) -> bool {
     // (HEXA_CABI_HXLCL=1) hxlcl_sin replaces the libc-shim sin() member (shim drops
     // via -DHEXA_RT_NATIVE_SIN). default-OFF byteeq-neutral.
     if fname == "hxlcl_sin" { return true }
+    // fp-ABI libm-leaf RUNG 4 — hxlcl_cos (`double cos(double)`). SHARES hxlcl_sin's
+    // EXACT musl __rem_pio2 reduction + inlined __sin/__cos kernels; only the tiny/
+    // |x|<pi/4 special cases (cos(tiny)=1.0, |x|<pi/4 → __cos) and the n&3 dispatch
+    // table differ (musl cos.c: 0→cos 1→-sin 2→-cos 3→sin). No new intrinsic, no new
+    // mechanism (the f2i/i2f intrinsics sin added already cover it). ON
+    // (HEXA_CABI_HXLCL=1) hxlcl_cos replaces the libc-shim cos() member (shim drops
+    // via -DHEXA_RT_NATIVE_COS). default-OFF byteeq-neutral. (exp/log do NOT follow on
+    // this mechanism — modern musl exp/log are TABLE-driven: __exp_data.tab[256] /
+    // __log_data.tab[128] rodata lookup tables need a new named-rodata-array codegen
+    // mechanism = the same data-leaf wall as sin's deferred __rem_pio2_large table.)
+    if fname == "hxlcl_cos" { return true }
     return false
 }
 
@@ -2357,12 +2368,18 @@ fn _cabi_sse_arg(fname: string, idx: i64) -> bool {
         if idx == 0 { return true }
         return false
     }
+    // hxlcl_cos(x: double) -> double : arg 0 SSE; return SSE. (kernels inlined, like sin.)
+    if fname == "hxlcl_cos" {
+        if idx == 0 { return true }
+        return false
+    }
     return false
 }
 fn _cabi_sse_ret(fname: string) -> bool {
     if fname == "hxlcl_fp_addmul" { return true }
     if fname == "hxlcl_fmod" { return true }
     if fname == "hxlcl_sin" { return true }
+    if fname == "hxlcl_cos" { return true }
     return false
 }
 // fp-ABI symbols carry SSE-class params/return. The x86_64 backend lowers them
@@ -2374,6 +2391,7 @@ pub fn _cabi_is_fp(fname: string) -> bool {
     if fname == "hxlcl_fp_addmul" { return true }
     if fname == "hxlcl_fmod" { return true }
     if fname == "hxlcl_sin" { return true }
+    if fname == "hxlcl_cos" { return true }
     return false
 }
 
