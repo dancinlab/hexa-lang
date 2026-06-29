@@ -13,24 +13,29 @@
 #   (A) DEFAULT (all macros OFF) shim.o is BYTE-IDENTICAL to the origin/main baseline
 #       shim.o (the new `#ifndef HEXA_RT_NATIVE_<SYM>` guards compile out → the
 #       libc-delegate bodies are untouched; release-integrity invariant).
-#   (B) ON: the Route C codegen emits hxlcl_<sym> as a DEFINED (T) external in the
-#       native .o, AND the ON shim.o (-DHEXA_RT_NATIVE_<SYM>) NO LONGER defines it.
-#       The native object is ISOLATED via `objcopy --keep-global-symbol=hxlcl_<sym>`.
-#       The isolated .o's external relocs are ONLY the dissolved-syscall-leaf inner
-#       callees (open_sys/read/lseek) which the RETAINED shim members supply — no
-#       libc fopen/fread/ftell/fseek/__errno reference (those are the shim delegate's,
-#       gone in the native path).
-#   (C) BEHAVIOUR-EXACT vs libc: link the isolated native .o (+ a real-syscall
-#       open_sys/read/lseek harness) and exercise it against a temp file & a popen-
-#       captured echo, comparing to direct libc fopen/fread/ftell/fseek.
+#   (B) ARCHIVE: build runtime.a via stage_resolve_runtime_a (Case-B multi-object,
+#       HEXA_RT_MULTIOBJ=1 + all 4 HEXA_RT_NATIVE_<SYM>=1). Each symbol must be
+#       T-defined by its OWN isolated native member (hxlcl_<sym>_native.o), and the
+#       ld -r multidef gate (S5) must report multiple_definition=0. This is the
+#       AUTHORITATIVE release-path gate — NOT a standalone objcopy link: `objcopy
+#       --keep-global-symbol=X` only re-binds the sibling globals to LOCAL, leaving
+#       the whole-module .text present, so a standalone objdump over the isolated .o
+#       reports the WHOLE module's relocs (popen/execve/fputs/…) — a false-fail of
+#       "self-contained" that the merged strstr/free verify scripts also carry. The
+#       coupled-leaf inner callees (open_sys/read/lseek) + hxlcl_malloc resolve from
+#       the RETAINED shim members; the real proof is the archive links clean.
+#   (C) BEHAVIOUR-EXACT vs libc: link a behaviour smoke against the ON runtime.a and
+#       compare to direct libc fopen/fread/ftell/fseek:
 #         fopen+fread : read a known file's bytes correctly (== libc count + content)
 #         ftell       : current offset after a partial read (== libc ftell)
-#         fseek       : SEEK_SET/SEEK_CUR/SEEK_END reposition (== libc post-seek read)
+#         fseek       : SEEK_SET + SEEK_END reposition (== libc post-seek read)
 #   (D) literal-∅ measure: shim hxlcl_* DEFINITION count N (default) → N-4 (all ON).
 #
-# x86_64-linux ONLY for [B]/[C] — the Route C codegen + ELF objcopy isolate is the
-# x86_64-backend path. [A]/[D] are host-independent single-file compiles (also run on
-# darwin). MEASURE-ONLY: writes $OUT only; never stages/commits/flips.
+# x86_64-linux ONLY for [B]/[C] — Route C codegen + ELF objcopy isolate + the archive
+# build are the x86_64-backend path; needs a warm tree (self/runtime.c seeds present,
+# via tool/build_aprime.sh) + a patched compiler ($APRIME/HEXA_SELFEMIT_BIN). [A]/[D]
+# are host-independent single-file compiles (also run on darwin). MEASURE-ONLY:
+# writes $OUT + rebuilds build/runtime.a; never stages/commits/flips git.
 set -uo pipefail
 ROOT="${ROOT:-$PWD}"; OUT="${OUT:-/tmp/routec_file}"; CC="${CC:-clang}"
 mkdir -p "$OUT"; cd "$ROOT" || exit 1
@@ -101,46 +106,48 @@ if [ -z "$BIN" ] || [ ! -x "${BIN}" ]; then
     exit 0
 fi
 
-echo "[B] Route C native emit of FILE* family (HEXA_CABI_HXLCL=1) via $BIN…"
-printf 'fn _rnfile_unused() {}\n' > "$OUT/_drv.hexa"
-env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-    "$BIN" "$OUT/_drv.hexa" --emit=asm --target=x86_64-linux-gnu -o "$OUT/routec.s" "$SRC" \
-    >"$OUT/emit.log" 2>&1 || { echo "EMIT_FAIL"; cat "$OUT/emit.log" >&2; exit 1; }
-[ -s "$OUT/routec.s" ] || { echo "EMPTY_ASM"; exit 1; }
-$CC -c "$OUT/routec.s" -o "$OUT/routec_full.o" 2>"$OUT/asm.err" || { echo "ASSEMBLE_FAIL"; cat "$OUT/asm.err" >&2; exit 1; }
+# [B]/[C] use the AUTHORITATIVE archive path (build_runtime_a_from_source via
+# stage_resolve_runtime_a · Case-B multi-object), NOT a standalone objcopy link.
+# Rationale: `objcopy --keep-global-symbol=X` only re-BINDS the sibling globals to
+# LOCAL — the whole-module .text (popen/execve/fputs/…) stays present, so a
+# standalone objdump reports the WHOLE module's relocs (a false-fail of "self-
+# contained" — the merged strstr/free verify scripts share this artifact). The real
+# release gate is: (i) the symbol is T-defined by its isolated native member in the
+# built runtime.a, (ii) the ld -r multidef gate (S5) reports multiple_definition=0,
+# (iii) a behaviour smoke links against that runtime.a and matches libc.
+echo "[B] Route C native emit + ARCHIVE multidef gate (HEXA_RT_MULTIOBJ=1 + 4 gates ON) via $BIN…"
+RA="$ROOT/build/runtime.a"
+if [ ! -f "$ROOT/self/runtime.c" ]; then
+    echo "[B/C] SKIP — no seeds (self/runtime.c absent); run tool/build_aprime.sh first to warm the tree. A+D ran."
+    exit 0
+fi
+env CC="${CC:-clang}" LIBS="${LIBS:--lm}" CFLAGS_COMMON="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}" \
+    HEXA_SELFEMIT_BIN="$BIN" HEXA_RT_MULTIOBJ=1 \
+    HEXA_RT_NATIVE_FOPEN=1 HEXA_RT_NATIVE_FREAD=1 HEXA_RT_NATIVE_FTELL=1 HEXA_RT_NATIVE_FSEEK=1 \
+    bash tool/stage_resolve_runtime_a >"$OUT/archive.log" 2>&1 || { echo "ARCHIVE_BUILD_FAIL"; tail -30 "$OUT/archive.log" >&2; exit 1; }
+MULTIDEF=$(grep -oE 'multiple_definition=[0-9]+' "$OUT/archive.log" | tail -1 | cut -d= -f2)
+echo "    ld -r multidef gate (S5): multiple_definition=${MULTIDEF:-?}  (expect 0)"
 _b_ok=1
+[ "${MULTIDEF:-1}" = "0" ] || _b_ok=0
 for s in $SYMS; do
-    T=$(nm "$OUT/routec_full.o" 2>/dev/null | grep -E " T _?hxlcl_${s}\$" | wc -l | tr -d ' ')
-    echo "    hxlcl_${s} defined (T) in native routec.o = $T  (expect 1)"
-    objcopy --keep-global-symbol=hxlcl_${s} "$OUT/routec_full.o" "$OUT/${s}_only.o" 2>/dev/null \
-        || cp "$OUT/routec_full.o" "$OUT/${s}_only.o"
-    # external relocs must NOT reference libc stdio (fopen/fread/ftell/fseek/__errno).
-    BAD=$(objdump -dr "$OUT/${s}_only.o" 2>/dev/null | grep -cE 'R_X86_64_(PLT32|GOTPCREL).*\b(fopen|fread|ftell|fseek|__errno_location)\b')
-    # inner-callee leaf relocs (open_sys/read/lseek) ARE expected (coupled leaf).
-    LEAF=$(objdump -dr "$OUT/${s}_only.o" 2>/dev/null | grep -cE 'R_X86_64_(PLT32|GOTPCREL).*\bhxlcl_(open_sys|read|lseek)\b')
-    echo "      libc-stdio relocs=$BAD (expect 0)  ·  inner-leaf relocs=$LEAF (expect >=1, coupled)"
-    { [ "$T" = "1" ] && [ "${BAD:-1}" = "0" ]; } || _b_ok=0
+    # symbol must be T-defined by its OWN isolated native member in the built runtime.a
+    PROV=""
+    for m in $(ar t "$RA" 2>/dev/null | grep "hxlcl_${s}_native.o"); do
+        ar p "$RA" "$m" > "$OUT/_m.o" 2>/dev/null
+        nm "$OUT/_m.o" 2>/dev/null | grep -qE " T _?hxlcl_${s}\$" && PROV="$m"
+    done
+    echo "    hxlcl_${s}: T-defined by archive member = ${PROV:-NONE}  (expect hxlcl_${s}_native.o)"
+    [ "$PROV" = "hxlcl_${s}_native.o" ] || _b_ok=0
 done
-[ "$_b_ok" = "1" ] && echo "NATIVE_FILE_COUPLED_CLEAN=YES" || echo "NATIVE_FILE_COUPLED_CLEAN=NO"
+[ "$_b_ok" = "1" ] && echo "NATIVE_FILE_ARCHIVE_CLEAN=YES" || echo "NATIVE_FILE_ARCHIVE_CLEAN=NO"
 
-# ── [C] behaviour-exact vs libc — link native .o + real-syscall leaf harness ─
-echo "[C] behaviour-exact vs libc (fopen+fread content/count · ftell offset · fseek reposition)…"
-# Provide the inner-callee leaves (real syscalls) + the family-of-4 isolated native .o.
-cat > "$OUT/leaves.c" <<'EOF'
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/types.h>
-/* the dissolved syscall leaves the native FILE* bodies bl into (retained-shim class) */
-int  hxlcl_open_sys(const char *path, int flags, ...) { return open(path, flags, 0644); }
-long hxlcl_read(int fd, void *buf, unsigned long n)   { return (long)read(fd, buf, (size_t)n); }
-long hxlcl_lseek(int fd, long off, int whence)        { return (long)lseek(fd, (off_t)off, whence); }
-EOF
-$CC $CFLAGS "$OUT/leaves.c" -o "$OUT/leaves.o" 2>/dev/null
+# ── [C] behaviour-exact vs libc — link the behaviour smoke against the ON runtime.a ─
+echo "[C] behaviour-exact vs libc (fopen+fread content/count · ftell offset · fseek SEEK_SET/END)…"
 cat > "$OUT/acc.c" <<'EOF'
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-/* native FILE* family (fake FILE* = (void*)(fd+1)) */
+/* native FILE* family (fake FILE* = (void*)(fd+1)) — resolved from the ON runtime.a */
 extern void  *hxlcl_fopen(const char *p, const char *m);
 extern unsigned long hxlcl_fread(void *b, unsigned long s, unsigned long n, void *fp);
 extern long   hxlcl_ftell(void *fp);
@@ -151,36 +158,30 @@ int main(void){
     size_t N = sizeof(data) - 1;
     FILE *w = fopen(path, "wb"); fwrite(data, 1, N, w); fclose(w);
     int fail = 0;
-    /* (1) fopen+fread vs libc: read 10 bytes, compare content + count */
-    { void *nfp = hxlcl_fopen(path, "r");
-      if (!nfp) { printf("  fopen FAIL (NULL)\n"); fail=1; }
-      char nb[16]; size_t nc = hxlcl_fread(nb, 1, 10, nfp);
-      FILE *lf = fopen(path, "r"); char lb[16]; size_t lc = fread(lb, 1, 10, lf);
-      if (nc != lc || memcmp(nb, lb, 10) != 0) { printf("  fread MISMATCH nc=%zu lc=%zu\n", nc, lc); fail=1; }
-      else printf("  fread OK: %zu items, content matches libc\n", nc);
-      /* (2) ftell vs libc after the 10-byte read */
-      long noff = hxlcl_ftell(nfp); long loff = ftell(lf);
-      if (noff != loff) { printf("  ftell MISMATCH n=%ld l=%ld\n", noff, loff); fail=1; }
-      else printf("  ftell OK: offset=%ld == libc\n", noff);
-      /* (3) fseek SEEK_SET 5, then read 5 vs libc */
-      hxlcl_fseek(nfp, 5, SEEK_SET); fseek(lf, 5, SEEK_SET);
-      char nb2[8], lb2[8]; size_t n2 = hxlcl_fread(nb2, 1, 5, nfp); fread(lb2, 1, 5, lf);
-      if (n2 != 5 || memcmp(nb2, lb2, 5) != 0) { printf("  fseek(SET) MISMATCH\n"); fail=1; }
-      else printf("  fseek(SEEK_SET 5) OK: post-seek read matches libc ('%.*s')\n", 5, nb2);
-      /* (4) fseek SEEK_END -4, read 4 vs libc */
-      hxlcl_fseek(nfp, -4, SEEK_END); fseek(lf, -4, SEEK_END);
-      char nb3[8], lb3[8]; size_t n3 = hxlcl_fread(nb3, 1, 4, nfp); fread(lb3, 1, 4, lf);
-      if (n3 != 4 || memcmp(nb3, lb3, 4) != 0) { printf("  fseek(END) MISMATCH\n"); fail=1; }
-      else printf("  fseek(SEEK_END -4) OK: tail read matches libc ('%.*s')\n", 4, nb3);
-    }
+    void *nfp = hxlcl_fopen(path, "r");
+    if (!nfp) { printf("  fopen FAIL (NULL)\n"); return 2; }
+    char nb[16]; size_t nc = hxlcl_fread(nb, 1, 10, nfp);
+    FILE *lf = fopen(path, "r"); char lb[16]; size_t lc = fread(lb, 1, 10, lf);
+    if (nc != lc || memcmp(nb, lb, 10) != 0) { printf("  fread MISMATCH nc=%zu lc=%zu\n", nc, lc); fail=1; }
+    else printf("  fopen+fread OK: %zu items, content==libc (\"%.*s\")\n", nc, 10, nb);
+    long noff = hxlcl_ftell(nfp); long loff = ftell(lf);
+    if (noff != loff) { printf("  ftell MISMATCH n=%ld l=%ld\n", noff, loff); fail=1; }
+    else printf("  ftell OK: offset=%ld == libc\n", noff);
+    hxlcl_fseek(nfp, 5, SEEK_SET); fseek(lf, 5, SEEK_SET);
+    char nb2[8], lb2[8]; size_t n2 = hxlcl_fread(nb2, 1, 5, nfp); fread(lb2, 1, 5, lf);
+    if (n2 != 5 || memcmp(nb2, lb2, 5) != 0) { printf("  fseek(SET) MISMATCH\n"); fail=1; }
+    else printf("  fseek(SEEK_SET 5) OK: read==libc (\"%.*s\")\n", 5, nb2);
+    hxlcl_fseek(nfp, -4, SEEK_END); fseek(lf, -4, SEEK_END);
+    char nb3[8], lb3[8]; size_t n3 = hxlcl_fread(nb3, 1, 4, nfp); fread(lb3, 1, 4, lf);
+    if (n3 != 4 || memcmp(nb3, lb3, 4) != 0) { printf("  fseek(END) MISMATCH\n"); fail=1; }
+    else printf("  fseek(SEEK_END -4) OK: tail==libc (\"%.*s\")\n", 4, nb3);
     remove(path);
-    if (fail) { printf("BEHAVIOUR_EXACT=NO\n"); return 1; }
-    printf("BEHAVIOUR_EXACT=YES\n");
-    return 0;
+    printf(fail ? "BEHAVIOUR_EXACT=NO\n" : "BEHAVIOUR_EXACT=YES\n");
+    return fail;
 }
 EOF
-$CC "$OUT/acc.c" "$OUT/fopen_only.o" "$OUT/fread_only.o" "$OUT/ftell_only.o" "$OUT/fseek_only.o" "$OUT/leaves.o" -o "$OUT/acc" 2>"$OUT/link.err" \
-    || { echo "    [C] isolated link failed; see link.err"; cat "$OUT/link.err" >&2; echo "LINK_FAIL"; exit 1; }
+$CC "$OUT/acc.c" "$RA" ${LIBS:--lm} -o "$OUT/acc" 2>"$OUT/link.err" \
+    || { echo "    [C] archive link failed; see link.err"; tail -20 "$OUT/link.err" >&2; echo "LINK_FAIL"; exit 1; }
 "$OUT/acc"; RC=$?
 echo "════ routec_file_native_verify done (acc RC=$RC) ════"
 exit 0
