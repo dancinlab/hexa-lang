@@ -38,6 +38,8 @@
       },
       {
         "id": "MUSL-OPENSSL-STATIC-DEPS",
+        "state": "ossified",
+        "value": "musl static build needs libssl+libcrypto static archives (not available in all musl toolchains by default); hexa_cc needs -lbsd on musl for openssl compat",
         "source": "self/main.hexa"
       },
       {
@@ -134,6 +136,13 @@
         "value": "pool-build을 background agent로 돌리면 agent가 서버측 rate-limit(또는 호스트 재부팅)으로 죽어도 빌드는 호스트서 완료되는데, agent가 결과를 수확/verdict작성 못해 결과가 /tmp에 unharvested로 방치(R5 seed-converge=10시간 방치·R6 gcc-O1=2회 strand+재부팅 wipe). 메인세션이 의심하고 호스트 ground-truth(cat /tmp/*RESULT*)로 직접 수확해야 발견됨.",
         "threshold": "재발조건=heavy pool 빌드+검증을 agent로 위임 시 매번. 해결=빌드 스크립트가 self-harvest(결과를 host:/tmp/<job>_RESULT.txt에 직접 기록)하게 만들어 agent 생존에 무관하게 결과 보존+메인세션 cat 수확. 호스트 재부팅 시 /tmp wiped 가능→코드는 branch에 보존+verify 재실행. 죽은/타임아웃 호스트 재두드림 금지(poll-min-30m).",
         "source": "tool/stage_build_hexa"
+      },
+      {
+        "id": "CUDA-BUILD-CORES-EXPLICIT-LINK-MULTIDEF",
+        "state": "ossified",
+        "value": "build_cuda_runtime extracted *_native.o from prebuilt runtime.a and linked them EXPLICITLY as .o files. The frozen runtime_core.c (restored from blob 151c52c82 by restore_frozen_seeds) predates HEXA_RT_ALLOC_NATIVE guards and still #includes runtime_hi_gen.c unconditionally → 19× `multiple definition`: hexa_arena_alloc/mark/rewind/reset (4) + rt_str_split/lines/pad_left/pad_right/repeat/center/to_upper/to_lower/trim/trim_start/trim_end/starts_with_b/ends_with_b/contains_b/from_int (15). SHIPPED runtime.a is fine (archive lazy-pulls only needed symbols) but explicit-link forces BOTH objects. Root cause = the frozen seed's gating does NOT match the symbol set provided by the native .o seeds.",
+        "threshold": "After restore_frozen_seeds, call _regen_runtime_core_for_cuda() (awk-unescape of runtime_core_emit.hexa SSOT → runtime_core.c WITH HEXA_RT_ALLOC_NATIVE guards), reconcile_runtime_c_ssot_dups (drop 4 migrated f64<->bits weak defs from runtime.c), and Z2a patch (#include runtime_hi_gen.c removed when rt_hi_native.o in CORES). Same pattern as stage_resolve_runtime_a already does. CPU build: compile fresh runtime.o with RTFLAGS instead of extracting from archive.",
+        "source": "tool/build_cuda_runtime"
       },
       {
         "id": "CODEGEN-BOXED-SCALAR-SLOWPATH",
