@@ -1063,6 +1063,24 @@ fn _adam(W: int, gW: int, m: int, v: int, n: int, t: int) {
         let rc = forge_dispatch_adamw(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
         if rc == 0 { return }
     }
+    // r4 coherence guard: DEVRESIDENT must stay on the HOST adamw_step builtin,
+    // bypassing opt_adamw_step's new device seam (cuda_available()==1 → device).
+    // Under DEVRESIDENT the forward consumes an int4-quantized weight cache
+    // (_fq → forge_dispatch_int4_quant leaves W loc=FARR_DEVICE, dirty_host=0);
+    // device adamw updates the fp master in place but the next forward re-quants
+    // from the stale device W → weights freeze (measured flat ~4.80 vs REF descent;
+    // the force-host bisect descends to REF). The host write (hexa_farr_set →
+    // dirty_host=1) makes W host-authoritative so the next forward re-uploads and
+    // the update lands (verified DEVRESIDENT epoch-3 mean CE 3.55084 == REF). Same
+    // host numerics as the pre-r4 opt_adamw_step body (identical adamw_step call),
+    // so this guard is a no-op for DEVRESIDENT byte-eq — it only prevents the r4
+    // device seam from accidentally engaging on the frozen-path. The default (no
+    // env) path uses HOST int4 quant (W host-resident → host re-quants from the
+    // updated host W), so it is safe to take opt_adamw_step's device seam below.
+    if _devres_glue_on() {
+        adamw_step(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
+        return
+    }
     opt_adamw_step(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
 }
 
