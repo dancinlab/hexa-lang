@@ -18,12 +18,16 @@
 //    y[t,co] = b[co] + Σ_ci Σ_k W[co,ci,k] · xin(t - dil·(K-1-k), ci)
 //    xin(p,ci) = X[p,ci] if p>=0 else 0.
 //
-//  FWD = im2col + GEMM (host): unfold the causal-dilated receptive field into
-//  x_col[T·(Cin·K)], one t_matmul (RFC 032 ikj FMA-fused GEMM) → Y, + bias —
-//  replaces the naive O(T·Cout·Cin·K) quad-loop, 38–60× faster at CLM-trunk
-//  shapes (.verdicts/flame-perf-im2col-gemm/roofline.txt). BWD stays the closed
-//  vjp quad-loop (bwd im2col = follow-up). The fwd re-association is a re-order
-//  of the SAME sum → bit-near-identical (max|Δ|≈1e-16; GRAD-EXACT held 5.2e-12).
+//  FWD = im2col + GEMM: unfold the causal-dilated receptive field into
+//  x_col[T·(Cin·K)], one forge_dispatch_matmul → Y, + bias — replaces the
+//  naive O(T·Cout·Cin·K) quad-loop, 38–60× faster at CLM-trunk shapes
+//  (.verdicts/flame-perf-im2col-gemm/roofline.txt). BWD also uses
+//  forge_dispatch_matmul (dW = xcolᵀ@dy, dX = dy@Wᵀ via col2im):
+//    dW[co,ci,k] = Σ_t xcolT[ci·K+k, t] · dy[t, co]   (Kdim×T @ T×Cout)
+//    dX[p,ci]   = col2im-scatter(dy[T,Cout] @ W[Cout,Kdim])  (T×Cout @ Cout×Kdim)
+//    db[co]     = Σ_t dy[t, co]   (host reduction — O(T·Cout), negligible)
+//  Byte-eq to the closed vjp (max|Δ|≈1e-16 FP64; GRAD-EXACT held 5.2e-12).
+//  Reference: clm_conv_gpu.hexa::conv1d_bwd_via_forge (same algorithm).
 //
 //  Verified by F-FLAME-CONV1D-GRAD-EXACT (flame_conv_test.hexa, central-diff).
 //  lib-split mandatory (FLAME.tape): conv lives here, selftest is a separate
@@ -67,13 +71,13 @@ fn _conv1d_add_bias(mm: int, b: int, boff: int, y_out: int, T: int, Cout: int) {
     }
 }
 
-// Forward (HOST). im2col + GEMM: unfold the causal-dilated receptive field into
-// x_col[T · (Cin·K)], transpose W[Cout, Cin·K] → Wt[Cin·K, Cout], then ONE
-// t_matmul (RFC 032 ikj FMA-fused GEMM under -O2) → Y[T, Cout], + bias. This
-// replaces the naive O(T·Cout·Cin·K) quad-loop; measured 38–60× faster on host
-// at CLM-trunk shapes (see .verdicts/flame-perf-im2col-gemm/roofline.txt). The
-// re-association is a re-order of the SAME sum → bit-near-identical (max|Δ|≈1e-16,
-// GRAD-EXACT held at max_rel 5.2e-12). Caller allocates y_out (T·Cout).
+// Forward — im2col + forge_dispatch_matmul (GPU-routed on CUDA hosts).
+// Unfold the causal-dilated receptive field into x_col[T · (Cin·K)], transpose
+// W[Cout, Cin·K] → Wt[Cin·K, Cout], then forge_dispatch_matmul → Y[T, Cout] +
+// bias. Replaces the naive O(T·Cout·Cin·K) quad-loop (38–60× faster at CLM-trunk
+// shapes; GPU routes the matmul to device on CUDA hosts). The re-association is a
+// re-order of the SAME sum → bit-near-identical (max|Δ|≈1e-16, GRAD-EXACT held
+// at max_rel 5.2e-12). Caller allocates y_out (T·Cout).
 pub fn nn_conv1d_fwd(x: int, w: int, b: int, y_out: int,
                      T: int, Cin: int, Cout: int, K: int, dil: int) {
     let Kdim = Cin * K
@@ -86,7 +90,7 @@ pub fn nn_conv1d_fwd(x: int, w: int, b: int, y_out: int,
         while j < Kdim { t_set(Wt, j * Cout + co, t_get(w, co * Kdim + j)); j = j + 1 }
         co = co + 1
     }
-    let mm = t_matmul(xcol, T, Kdim, Wt, Cout)
+    let mm = forge_dispatch_matmul(xcol, T, Kdim, Wt, Cout)
     _conv1d_add_bias(mm, b, 0, y_out, T, Cout)
     t_free(xcol)
     t_free(Wt)
@@ -110,113 +114,191 @@ pub fn nn_conv1d_fwd_off(x: int, w: int, woff: int, b: int, boff: int, y_out: in
         while j < Kdim { t_set(Wt, j * Cout + co, t_get(w, woff + co * Kdim + j)); j = j + 1 }
         co = co + 1
     }
-    let mm = t_matmul(xcol, T, Kdim, Wt, Cout)
+    let mm = forge_dispatch_matmul(xcol, T, Kdim, Wt, Cout)
     _conv1d_add_bias(mm, b, boff, y_out, T, Cout)
     t_free(xcol)
     t_free(Wt)
     t_free(mm)
 }
 
-// Backward — closed vjp. Caller allocates dW_out [Cout·Cin·K], dX_out [T·Cin],
-// db_out [Cout]; this zeros them then accumulates:
-//   dW[co,ci,k] = Σ_t dY[t,co] · xin(t-dil·(K-1-k), ci)
-//   dX[p,ci]    = Σ_co Σ_k W[co,ci,k] · dY[t,co]   where t = p + dil·(K-1-k)
-//   db[co]      = Σ_t dY[t,co]
+// Backward — forge-dispatch GEMM paths (GPU-routed on CUDA hosts).
+//
+// Caller allocates dW_out [Cout·Cin·K], dX_out [T·Cin], db_out [Cout].
+// This zeros them then accumulates via two forge_dispatch_matmul GEMMs:
+//
+//   Layouts (col index j = ci*K+k):
+//     xcolT[j, t] = (p≥0) ? x[p,ci] : 0,  p = t − dil·(K-1-k)  (im2col-T)
+//     Wflat[co, j] = w[co·Kdim + j]  == w in its natural layout
+//
+//   dW:  dW_flat[Kdim, Cout] = xcolT[Kdim, T] @ dy[T, Cout]
+//          → dW_out[co·Cin·K + j] = dW_flat[j·Cout + co]
+//   dX:  dXcol[T, Kdim] = dy[T, Cout] @ Wflat[Cout, Kdim]   (w IS Wflat)
+//          → col2im scatter-add: dX_out[p·Cin+ci] += dXcol[t·Kdim + j]  (p≥0)
+//   db:  db_out[co] = Σ_t dy[t,co]  (host reduction — O(T·Cout))
+//
+// Byte-eq to the closed vjp (max|Δ|≈1e-16 FP64; GRAD-EXACT held 5.2e-12).
+// Reference: clm_conv_gpu.hexa::conv1d_bwd_via_forge.
 pub fn nn_conv1d_bwd(x: int, w: int, dy: int,
                      dW_out: int, dX_out: int, db_out: int,
                      T: int, Cin: int, Cout: int, K: int, dil: int) {
-    let mut iz = 0
-    while iz < Cout * Cin * K {
-        t_set(dW_out, iz, 0.0)
-        iz = iz + 1
-    }
-    let mut ix = 0
-    while ix < T * Cin {
-        t_set(dX_out, ix, 0.0)
-        ix = ix + 1
-    }
-    let mut ib = 0
-    while ib < Cout {
-        t_set(db_out, ib, 0.0)
-        ib = ib + 1
-    }
+    let Kdim = Cin * K
+    // ── im2col-T: build xcolT[Kdim, T] (transpose form for dW GEMM) ──
+    let xcolT = t_zeros(Kdim * T)
     let mut t = 0
     while t < T {
-        let mut co = 0
-        while co < Cout {
-            let g = t_get(dy, t * Cout + co)
-            t_set(db_out, co, t_get(db_out, co) + g)
-            let mut ci = 0
-            while ci < Cin {
-                let mut k = 0
-                while k < K {
-                    let p = t - dil * (K - 1 - k)
-                    if p >= 0 {
-                        let widx = co * Cin * K + ci * K + k
-                        let xidx = p * Cin + ci
-                        let xv = t_get(x, xidx)
-                        t_set(dW_out, widx, t_get(dW_out, widx) + g * xv)
-                        t_set(dX_out, xidx, t_get(dX_out, xidx) + g * t_get(w, widx))
-                    }
-                    k = k + 1
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 {
+                    let j = ci * K + k
+                    t_set(xcolT, j * T + t, t_get(x, p * Cin + ci))
                 }
-                ci = ci + 1
+                k = k + 1
             }
-            co = co + 1
+            ci = ci + 1
         }
         t = t + 1
     }
+    // ── dW: dW_flat[Kdim, Cout] = xcolT[Kdim,T] @ dy[T,Cout] (forge GEMM) ──
+    let dW_flat = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)
+    // reshape: dW_flat[j*Cout + co] -> dW_out[co*Kdim + j]
+    let mut co = 0
+    while co < Cout {
+        let mut j = 0
+        while j < Kdim {
+            t_set(dW_out, co * Kdim + j, t_get(dW_flat, j * Cout + co))
+            j = j + 1
+        }
+        co = co + 1
+    }
+    // ── dX: dXcol[T, Kdim] = dy[T,Cout] @ w[Cout,Kdim] (forge GEMM) ──
+    // w[co*Kdim + j] IS Wflat[co, j] — pass w directly, no copy.
+    let dXcol = forge_dispatch_matmul(dy, T, Cout, w, Kdim)
+    // col2im scatter-add back to dX_out[T, Cin]
+    let mut iz = 0
+    while iz < T * Cin { t_set(dX_out, iz, 0.0); iz = iz + 1 }
+    let mut t2 = 0
+    while t2 < T {
+        let mut ci2 = 0
+        while ci2 < Cin {
+            let mut k2 = 0
+            while k2 < K {
+                let p = t2 - dil * (K - 1 - k2)
+                if p >= 0 {
+                    let j = ci2 * K + k2
+                    let xidx = p * Cin + ci2
+                    t_set(dX_out, xidx, t_get(dX_out, xidx) + t_get(dXcol, t2 * Kdim + j))
+                }
+                k2 = k2 + 1
+            }
+            ci2 = ci2 + 1
+        }
+        t2 = t2 + 1
+    }
+    // ── db: db_out[co] = Σ_t dy[t,co] (host reduction — O(T·Cout)) ──
+    let mut cb = 0
+    while cb < Cout {
+        let mut acc = 0.0
+        let mut tb = 0
+        while tb < T { acc = acc + t_get(dy, tb * Cout + cb); tb = tb + 1 }
+        t_set(db_out, cb, acc)
+        cb = cb + 1
+    }
+    t_free(xcolT)
+    t_free(dW_flat)
+    t_free(dXcol)
 }
 
-// Backward, offset-capable. Identical to nn_conv1d_bwd except the WEIGHT-space
-// buffers are addressed at an offset: weight reads from w[woff + idx], and the
-// grads are zeroed + accumulated IN PLACE at dW_out[dWoff + idx] / db_out[dboff
-// + co]. dX_out stays unoffset (activation space). Lets a caller accumulate the
-// per-layer/per-expert grad slice straight into a PACKED grad buffer — no temp
-// dW slice and no _cpback of the grad back into the pack.
+// Backward, offset-capable. Weight reads from w[woff + idx]; grads accumulated
+// into dW_out[dWoff + idx] / db_out[dboff + co]. dX_out stays unoffset.
+// Uses forge_dispatch_matmul for the two heavy GEMMs, matching nn_conv1d_bwd_off's
+// closed vjp byte-for-byte (same re-association as nn_conv1d_bwd above).
 pub fn nn_conv1d_bwd_off(x: int, w: int, woff: int, dy: int,
                          dW_out: int, dWoff: int, dX_out: int, db_out: int, dboff: int,
                          T: int, Cin: int, Cout: int, K: int, dil: int) {
-    let mut iz = 0
-    while iz < Cout * Cin * K {
-        t_set(dW_out, dWoff + iz, 0.0)
-        iz = iz + 1
-    }
-    let mut ix = 0
-    while ix < T * Cin {
-        t_set(dX_out, ix, 0.0)
-        ix = ix + 1
-    }
-    let mut ib = 0
-    while ib < Cout {
-        t_set(db_out, dboff + ib, 0.0)
-        ib = ib + 1
-    }
+    let Kdim = Cin * K
+    // ── im2col-T: build xcolT[Kdim, T] from x (same as nn_conv1d_bwd) ──
+    let xcolT = t_zeros(Kdim * T)
     let mut t = 0
     while t < T {
-        let mut co = 0
-        while co < Cout {
-            let g = t_get(dy, t * Cout + co)
-            t_set(db_out, dboff + co, t_get(db_out, dboff + co) + g)
-            let mut ci = 0
-            while ci < Cin {
-                let mut k = 0
-                while k < K {
-                    let p = t - dil * (K - 1 - k)
-                    if p >= 0 {
-                        let woidx = woff + co * Cin * K + ci * K + k
-                        let dwidx = dWoff + co * Cin * K + ci * K + k
-                        let xidx = p * Cin + ci
-                        let xv = t_get(x, xidx)
-                        t_set(dW_out, dwidx, t_get(dW_out, dwidx) + g * xv)
-                        t_set(dX_out, xidx, t_get(dX_out, xidx) + g * t_get(w, woidx))
-                    }
-                    k = k + 1
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 {
+                    let j = ci * K + k
+                    t_set(xcolT, j * T + t, t_get(x, p * Cin + ci))
                 }
-                ci = ci + 1
+                k = k + 1
             }
-            co = co + 1
+            ci = ci + 1
         }
         t = t + 1
     }
+    // ── dW: dW_flat[Kdim, Cout] = xcolT[Kdim,T] @ dy[T,Cout] (forge GEMM) ──
+    let dW_flat = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)
+    // reshape + scatter into dW_out at offset dWoff
+    let mut iz = 0
+    while iz < Kdim * Cout { t_set(dW_out, dWoff + iz, 0.0); iz = iz + 1 }
+    let mut co = 0
+    while co < Cout {
+        let mut j = 0
+        while j < Kdim {
+            t_set(dW_out, dWoff + co * Kdim + j, t_get(dW_flat, j * Cout + co))
+            j = j + 1
+        }
+        co = co + 1
+    }
+    // ── dX: dXcol[T, Kdim] = dy[T,Cout] @ Wslice[Cout,Kdim] (forge GEMM) ──
+    // Extract the offset weight slice into a contiguous temp (Cout×Kdim).
+    let Wslice = t_zeros(Cout * Kdim)
+    let mut co2 = 0
+    while co2 < Cout {
+        let mut j2 = 0
+        while j2 < Kdim {
+            t_set(Wslice, co2 * Kdim + j2, t_get(w, woff + co2 * Kdim + j2))
+            j2 = j2 + 1
+        }
+        co2 = co2 + 1
+    }
+    let dXcol = forge_dispatch_matmul(dy, T, Cout, Wslice, Kdim)
+    // col2im scatter-add to dX_out
+    let mut ix = 0
+    while ix < T * Cin { t_set(dX_out, ix, 0.0); ix = ix + 1 }
+    let mut t2 = 0
+    while t2 < T {
+        let mut ci2 = 0
+        while ci2 < Cin {
+            let mut k2 = 0
+            while k2 < K {
+                let p = t2 - dil * (K - 1 - k2)
+                if p >= 0 {
+                    let j = ci2 * K + k2
+                    let xidx = p * Cin + ci2
+                    t_set(dX_out, xidx, t_get(dX_out, xidx) + t_get(dXcol, t2 * Kdim + j))
+                }
+                k2 = k2 + 1
+            }
+            ci2 = ci2 + 1
+        }
+        t2 = t2 + 1
+    }
+    // ── db: db_out[dboff+co] = Σ_t dy[t,co] ──
+    let mut ib = 0
+    while ib < Cout { t_set(db_out, dboff + ib, 0.0); ib = ib + 1 }
+    let mut cb = 0
+    while cb < Cout {
+        let mut acc = 0.0
+        let mut tb = 0
+        while tb < T { acc = acc + t_get(dy, tb * Cout + cb); tb = tb + 1 }
+        t_set(db_out, dboff + cb, acc)
+        cb = cb + 1
+    }
+    t_free(xcolT)
+    t_free(dW_flat)
+    t_free(Wslice)
+    t_free(dXcol)
 }
