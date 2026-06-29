@@ -2928,3 +2928,24 @@ pub fn hxlcl_setvbuf(fp: HexaVal, buf: HexaVal, mode: HexaVal, sz: HexaVal) -> i
 pub fn hxlcl_darwin_check_fd_set_overflow(fd: HexaVal, p: HexaVal, n: HexaVal) -> int {
     return 0
 }
+
+// fp-ABI (xmm) RUNG 1 — the FIRST Route C symbol with SSE-class (`double`)
+// params + return, exercising the new SysV §3.2.3 SSE-class boundary lowering
+// (args xmm0/xmm1, return xmm0) added to compiler/codegen/x86_64_linux.hexa
+// (`_cabi_sse_arg`/`_cabi_sse_ret`). This is the prerequisite root mechanism for
+// native-emitting the libc-floor libm family (`double sin(double)` etc.) — the
+// TERMINAL "[float XMM-ABI]" wall noted at hxlcl_core.hexa:2188.
+//
+// SYNTHETIC C-ABI prototype: `double hxlcl_fp_addmul(double x, double y)` returns
+// `x * y + x`. The body uses the existing __hx_payload_fmul/fadd float intrinsics
+// — those already movq the IEEE-754 bits GP↔xmm internally and run mulsd/addsd —
+// so once the BOUNDARY (ingress xmm→gp, return gp→xmm0) is correct the whole fn
+// computes the double result. `x` is reused twice (a*b + a), proving the SSE arg
+// reaches the GP home intact. Params/return are typed HexaVal/int at the source
+// level; the SSE class is asserted by the per-fn name-keyed classifier in codegen
+// (no MIR type_id dependence — frozen-build-safe). default-OFF byteeq-neutral.
+pub fn hxlcl_fp_addmul(x: HexaVal, y: HexaVal) -> int {
+    let prod = __hx_payload_fmul(x, y)        // xmm: x * y  (bits in GP home)
+    let sum = __hx_payload_fadd(prod, x)      // xmm: (x*y) + x
+    return sum                                 // SSE-class return → xmm0
+}

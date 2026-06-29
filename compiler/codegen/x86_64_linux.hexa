@@ -1967,6 +1967,28 @@ fn _x86_64_arg_reg_seq(idx: i64) -> string {
     return "rdi" // overflow → stack (TODO)
 }
 
+// Route C fp-ABI (xmm) — SysV AMD64 PSABI §3.2.3 SSE class. A `double` (or
+// `float`) argument is SSE-class and is passed in the NEXT available SSE
+// register xmm0..xmm7 (a SEPARATE counter from the INTEGER rdi/rsi/… seq); a
+// double return is SSE-class and comes back in xmm0. Reference-match:
+//   System V AMD64 ABI §3.2.3 "Parameter Passing" — classify SSE → "if there
+//   are SSE registers available, the next available is used" (xmm0..xmm7);
+//   return §3.2.3 — "the value is returned in %xmm0 (and %xmm1 for the second
+//   eightbyte of SSE-class aggregates)". Empirically cross-checked against
+//   `clang -O0 -S --target=x86_64-linux-gnu` of `double f(double x,double y)`:
+//   x in xmm0, y in xmm1, result returned in xmm0 (movsd/mulsd/addsd, retq).
+fn _x86_64_sse_arg_reg_seq(idx: i64) -> string {
+    if idx == 0 { return "xmm0" }
+    if idx == 1 { return "xmm1" }
+    if idx == 2 { return "xmm2" }
+    if idx == 3 { return "xmm3" }
+    if idx == 4 { return "xmm4" }
+    if idx == 5 { return "xmm5" }
+    if idx == 6 { return "xmm6" }
+    if idx == 7 { return "xmm7" }
+    return "xmm0" // >8 SSE args spill (not reached under the libm-leaf whitelist)
+}
+
 // RFC061 §M8 Route C — per-fn C-ABI (single-register) calling-convention gate.
 //
 // The canonical hexa ABI passes/returns every value as a 16-byte HexaVal
@@ -2273,6 +2295,52 @@ pub fn _is_cabi(fname: string) -> bool {
     if fname == "hxlcl_inet_pton" { return true }
     if fname == "hxlcl_setvbuf" { return true }
     if fname == "hxlcl_darwin_check_fd_set_overflow" { return true }
+    // fp-ABI (xmm) RUNG 1 — the FIRST Route C symbol with SSE-class (`double`)
+    // params + return. The TERMINAL "[float XMM-ABI]" wall named in
+    // stdlib/runtime/hxlcl_core.hexa:2188 — Route C lowered every prior symbol's
+    // boundary in GP INTEGER registers only (rdi/rsi/… + rax); a `double f(double)`
+    // libc-floor leaf (the whole libm family sin/cos/exp/log/fmod) needs the SysV
+    // SSE class (args xmm0..7, return xmm0, PSABI §3.2.3). hxlcl_fp_addmul is a
+    // SYNTHETIC `double f(double x, double y) = x*y + x` leaf (body uses the
+    // existing __hx_payload_fmul/fadd intrinsics, which already movq GP↔xmm), the
+    // smallest possible exerciser of the new SSE-class boundary lowering. SEE
+    // `_cabi_sse_arg` / `_cabi_sse_ret` for the per-fn SSE classification. The
+    // libm leaves (hxlcl_fmod fdlibm port etc.) follow on the SAME mechanism.
+    // default-OFF byteeq-neutral (HEXA_CABI_HXLCL unset → empty whitelist).
+    if fname == "hxlcl_fp_addmul" { return true }
+    return false
+}
+
+// Route C fp-ABI (xmm) — per-fn SSE-class CLASSIFICATION (PSABI §3.2.3). Keyed
+// on the whitelisted symbol NAME (mirroring `_is_cabi`'s frozen-safe name-key
+// discipline — no new @attr/keyword the frozen 151c52c8 parser would reject, and
+// no dependence on MIR type_id propagation through the frozen-built aprime). For
+// a marked double-signature symbol it reports which ARGUMENT positions are
+// SSE-class (→ passed/received in the next xmm reg via `_x86_64_sse_arg_reg_seq`)
+// and whether the RETURN is SSE-class (→ xmm0). Anything not listed stays
+// INTEGER-class (the unchanged GP rdi/rsi/… + rax path) — so an empty whitelist
+// (HEXA_CABI_HXLCL off) makes both return false for every fn ⇒ byte-identical.
+//
+// hxlcl_fp_addmul(x: double, y: double) -> double : args 0,1 SSE; return SSE.
+fn _cabi_sse_arg(fname: string, idx: i64) -> bool {
+    if fname == "hxlcl_fp_addmul" {
+        if idx == 0 { return true }
+        if idx == 1 { return true }
+        return false
+    }
+    return false
+}
+fn _cabi_sse_ret(fname: string) -> bool {
+    if fname == "hxlcl_fp_addmul" { return true }
+    return false
+}
+// fp-ABI symbols carry SSE-class params/return. The x86_64 backend lowers them
+// (PSABI §3.2.3 xmm); the arm64 backend's AAPCS64 NEON/v0-v7 fp-ABI is the NEXT
+// rung (not yet implemented), so arm64 codegen excludes these from its Route C
+// path (treats them as ordinary PAIR-MODEL fns) to avoid a WRONG GP-register
+// emit of a double leaf. Shared helper so both backends agree on the set.
+pub fn _cabi_is_fp(fname: string) -> bool {
+    if fname == "hxlcl_fp_addmul" { return true }
     return false
 }
 
@@ -4473,10 +4541,24 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             // reached by the strlen 1-symbol PoC — C calls hxlcl_strlen and the
             // leaf calls nothing — but completes the mechanism for the scale
             // round; gated empty-whitelist-off so byteeq-neutral.)
+            // SysV §3.2.3: SSE-class args go in xmm0..7, INTEGER-class in
+            // rdi/rsi/… — SEPARATE counters. For the integer-only whitelist no arg
+            // is SSE ⇒ _cabi_call_gp == ci ⇒ byte-identical to the prior form.
             let mut ci = 0
+            let mut _cabi_call_gp = 0
+            let mut _cabi_call_sse = 0
             while ci < arg_n {
-                if ci < 6 {
-                    _x86_hv_payload(s.args[ci], st, rm, _x86_64_arg_reg_seq(ci), opts)
+                if _cabi_sse_arg(target, ci) {
+                    // SSE-class arg — load the IEEE-754 payload bits into a GP
+                    // scratch (r10), then movq into the next xmm arg register.
+                    let _sse_reg = _x86_64_sse_arg_reg_seq(_cabi_call_sse)
+                    _cabi_call_sse = _cabi_call_sse + 1
+                    _x86_hv_payload(s.args[ci], st, rm, "r10", opts)
+                    _x86_buf.push(_x86_instr2("movq", _x86_op_reg(_sse_reg),
+                                     _x86_op_reg("r10"), "cabi fp arg: gp→xmm"))
+                } else if _cabi_call_gp < 6 {
+                    _x86_hv_payload(s.args[ci], st, rm, _x86_64_arg_reg_seq(_cabi_call_gp), opts)
+                    _cabi_call_gp = _cabi_call_gp + 1
                 }
                 ci = ci + 1
             }
@@ -4484,11 +4566,19 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 {
                 let dst_name = _x86_dst_reg(rm, s.dst.id)
                 let dst = _x86_op_reg(dst_name)
-                if dst.reg.name != "rax" {
-                    _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
-                        "cabi: unbox call result (rax)"))
+                if _cabi_sse_ret(target) {
+                    // SSE-class return — result in xmm0; movq the bits to the GP dst
+                    // home and stamp TAG_FLOAT(1).
+                    _x86_buf.push(_x86_instr2("movq", dst, _x86_op_reg("xmm0"),
+                        "cabi fp: unbox call result (xmm0→gp)"))
+                    _x86_store_tag_imm(rm, s.dst.id, 1)
+                } else {
+                    if dst.reg.name != "rax" {
+                        _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
+                            "cabi: unbox call result (rax)"))
+                    }
+                    _x86_store_tag_imm(rm, s.dst.id, 0)
                 }
-                _x86_store_tag_imm(rm, s.dst.id, 0)
                 _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
             }
             return
@@ -4639,10 +4729,18 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             _x86_emit_zero_ret_pair(fname == "main")
         }
         if len(s.args) >= 1 {
-            // A variadic fn (RUNG1, _x86_va_active) returns C-ABI single-register too
-            // (its named/return contract is raw C-ABI, like a Route C leaf). Fold it in
-            // so the C caller reads the value in rax, not the PAIR-MODEL tag.
-            if _is_cabi(fname) || _x86_va_active {
+            if _is_cabi(fname) && _cabi_sse_ret(fname) {
+                // Route C fp-ABI return — an SSE-class (`double`) C-ABI fn returns
+                // its value in xmm0 (PSABI §3.2.3), NOT rax. The payload eightbyte
+                // holds the IEEE-754 bits; load it into a GP scratch (r10) then movq
+                // into xmm0. Must run BEFORE frame teardown (reads spill slots).
+                _x86_hv_payload(s.args[0], st, rm, "r10", opts)
+                _x86_buf.push(_x86_instr2("movq", _x86_op_reg("xmm0"),
+                                 _x86_op_reg("r10"), "cabi fp return: gp→xmm0"))
+            } else if _is_cabi(fname) || _x86_va_active {
+                // A variadic fn (RUNG1, _x86_va_active) returns C-ABI single-register
+                // too (its named/return contract is raw C-ABI, like a Route C leaf).
+                // Folded in so the C caller reads the value in rax, not the PAIR tag.
                 // Route C C-ABI return — a raw C-ABI fn returns its value in a
                 // SINGLE register (rax). Load just the payload eightbyte (the
                 // raw int/pointer); the HexaVal tag is dropped (the C caller
@@ -4859,16 +4957,43 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
     // arg registers (rdi,rsi,…), exactly like a Route C leaf — so fold _x86_va_active
     // into the C-ABI ingress branch. (_x86_va_active is false on the default path.)
     let _x86_cabi = _is_cabi(mf.name) || _x86_va_active
+    // Route C fp-ABI — SysV §3.2.3 keeps SEPARATE INTEGER and SSE arg counters.
+    // `_x86_cabi_gp` counts INTEGER-class params consumed so far (rdi/rsi/…);
+    // `_x86_cabi_sse` counts SSE-class params (xmm0/xmm1/…). For the integer-only
+    // whitelist (incl. variadic named params) the SSE counter never advances ⇒
+    // gp == p ⇒ byte-identical to the prior `_x86_64_arg_reg_seq(p)` form.
+    let mut _x86_cabi_gp = 0
+    let mut _x86_cabi_sse = 0
     while p < len(mf.params) {
         let pid = mf.params[p].id
-        if _x86_cabi && p < 6 {
+        if _x86_cabi && _cabi_sse_arg(mf.name, p) {
+            // Route C fp-ABI ingress — param p is SSE-class: it arrives RAW in the
+            // next SSE register xmm0..xmm7 (NOT a GP reg, NOT a pair). The body's
+            // float intrinsics (__hx_payload_fmul/fadd) operate on the IEEE-754
+            // BITS held in a GP reg (movq GP↔xmm internally), so move the incoming
+            // xmm bits into the param's GP home and stamp TAG_FLOAT(1).
+            let sse_reg = _x86_64_sse_arg_reg_seq(_x86_cabi_sse)
+            _x86_cabi_sse = _x86_cabi_sse + 1
+            _x86_store_tag_imm(rm, pid, 1)   // TAG_FLOAT
+            if _x86_is_spilled(rm, pid) {
+                // movq the xmm bits into r11 (disjoint scratch), then spill.
+                _x86_buf.push(_x86_instr2("movq", _x86_op_reg("r11"),
+                                    _x86_op_reg(sse_reg), "cabi fp ingress: xmm→gp"))
+                _x86_store_spill(rm, pid, "r11")
+            } else {
+                let dst_name = _x86_reg_lookup(rm, pid)
+                _x86_buf.push(_x86_instr2("movq", _x86_op_reg(dst_name),
+                                    _x86_op_reg(sse_reg), "cabi fp ingress param payload (xmm→gp)"))
+            }
+        } else if _x86_cabi && _x86_cabi_gp < 6 {
             // Route C C-ABI ingress — param p arrives RAW in ONE SysV INTEGER
             // arg register (rdi,rsi,rdx,rcx,r8,r9), not a {tag,payload} pair.
             // Store TAG_INT(0) into the tag-slot (imm via r11 — disjoint from
             // every arg reg) and the raw word as the payload home, mirroring the
             // pair path's payload handling. (libc-floor leaves have ≤6 params, so
             // the >6 stack case never arises under the whitelist.)
-            let pay_reg = _x86_64_arg_reg_seq(p)
+            let pay_reg = _x86_64_arg_reg_seq(_x86_cabi_gp)
+            _x86_cabi_gp = _x86_cabi_gp + 1
             _x86_store_tag_imm(rm, pid, 0)
             if _x86_is_spilled(rm, pid) {
                 _x86_store_spill(rm, pid, pay_reg)

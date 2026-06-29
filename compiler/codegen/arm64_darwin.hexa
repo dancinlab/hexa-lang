@@ -3027,7 +3027,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // arg0→x0:x1, arg1→x2:x3, arg2→x4:x5, arg3→x6:x7 (4 pair-args
         // in the 8 GPRs); args ≥4 go to 16B stack slots [sp,#(i-4)*16].
         // Return is x0:x1 → dst slot.
-        if _is_cabi(s.op) {
+        if _is_cabi(s.op) && !_cabi_is_fp(s.op) {
             // Route C C-ABI call — callee takes each arg in ONE AAPCS64 arg reg
             // (x0..x7) and returns a single raw value in x0. Box only each arg's
             // PAYLOAD into its single reg (x9 = throwaway tag half); result x0 →
@@ -3173,7 +3173,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
     }
     if s.kind == _STMT_RETURN {
         if len(s.args) >= 1 {
-            if _is_cabi(fname) {
+            if _is_cabi(fname) && !_cabi_is_fp(fname) {
                 // Route C C-ABI return — a raw C-ABI fn returns a single value
                 // in x0. Load just the payload eightbyte into x0 (x9 = throwaway
                 // tag half); the HexaVal tag is dropped (C caller reads only x0).
@@ -3509,7 +3509,10 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
     // (all params are force-spilled). x29 set to old sp before the
     // frame `sub`, so [x29,#16+…] reaches the caller's outgoing area.
     let mut p = 0
-    let _arm_cabi = _is_cabi(fn_name)
+    // arm64 fp-ABI (AAPCS64 v0-v7) is the NEXT rung — exclude fp symbols so a
+    // double leaf is NOT mis-lowered into GP x0/x1 here (it falls through to the
+    // PAIR-MODEL path). x86_64 (PSABI §3.2.3 xmm) lands first.
+    let _arm_cabi = _is_cabi(fn_name) && !_cabi_is_fp(fn_name)
     while p < len(mf.params) {
         let pid = mf.params[p].id
         let poff = _arm_spill_offset(rm, pid)
