@@ -318,5 +318,5 @@ git submodule update --init --recursive          # activate (hooks no-op until p
 
 ## 거버넌스 기준 — no-LLVM 외 모두 허용 (사용자 standing 2026-06-29)
 
-- do: **유일 불가침 = no-LLVM**(소스는 항상 컴파일러 자체 IR→네이티브 객체→`hexa_ld`). 그 외 모든 구현 기법 허용 — 손수 수학커널·새 키워드/`@<attr>`/builtin·frozen seed re-baseline·va_list/setjmp ABI 등 전부 가능(과거 "기법 금지" 문구는 영구금지 아닌 측정비용 권고로 재해석).
+- do: **유일 불가침 = no-LLVM**(소스→컴파일러 IR→네이티브→`hexa_ld`). 그 외 모든 구현기법 허용 — 손수 수학커널·새 키워드/`@<attr>`/builtin·frozen re-baseline·va_list/setjmp ABI 전부 가능(과거 "기법 금지"=영구금지 아닌 측정비용 권고).
 - dont: no-LLVM 깨기(LLVM 백엔드/IR 경유) 절대금지 · 그리고 4규율(release-integrity·byteeq 3타깃 검증·reference-match·git-safety) 건너뛴 미검증 머지 금지(허용 기법도 게이트는 통과).
