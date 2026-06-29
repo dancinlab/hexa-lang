@@ -16,7 +16,7 @@ only (no domain registry).
 
 > ### ⚡ 성능 정답지 — 프론티어 언어/프레임워크 기준 (최우선 구현 렌즈 · 2026-06-29 오너)
 > hexa-lang 구현은 **Go · Rust · PyTorch 를 reference-match 정답지(gold standard)**로 삼아 우선 구현한다 (commons `reference-match`·`native-canonical-first` 강화 · 기존 '추월(overtake)' 규율과 정합 — 프론티어가 어떻게 하는지 먼저 보고 맞춘다).
-> - **성능 바 = Rust 동등 이상 (≥ Rust).** Rust 가 1차 성능 기준 — 컴파일러·런타임·생성코드·커널은 Rust 와 동등하거나 그 이상이어야 한다. "느리지만 LLVM-free/byte-exact 라서 OK"로 자족 금지 — Rust 에 성능으로 지면 그 자체가 미완.
+> - **성능 바 = Rust 동등 이상 (≥ Rust).** Rust 가 1차 성능 기준 — 컴파일러·런타임·생성코드·커널은 Rust 와 동등하거나 그 이상이어야 한다. **단 no-LLVM(LLVM-free)·byte-exact 는 양보 없는 핵심 불변(초월 축)으로 *유지*** — 이를 유지한 채로 Rust 성능에 닿는다(드롭/우회 아님). "LLVM-free 라서 느려도 OK"식 자족만 금지(불변 유지 ≠ 느림 정당화) — Rust 에 성능으로 지면 미완이되, **LLVM 도입으로 이기는 건 정답 아님**(no-LLVM 직접 native-emit codegen 으로 이긴다).
 > - **수치/ML throughput 축 = PyTorch(+cuBLAS) 동등 이상.** flame/forge GEMM·학습·디코드 throughput 은 PyTorch 를 정답지로 측정·대조.
 > - 정답지가 오픈소스면 그 구현을 **직접 보고 맞춘다**(소스 파일:라인 → 성분 1:1 대조 → 첫 발산점 정렬), parity 후 hexa 고유 '초월 축'(byte-exact·vendor-free·no-LLVM·device-residency)으로 전진. 성능 주장은 **실측이 증거**(c2 · measure-or-it-didn't-happen).
 > - **정석성 = 성능 parity 뿐 아니라 표면/관용(API·idiom)도 정답지에 맞춘다.** reference 생태계의 **1차 표면**(torch `use_deterministic_algorithms()` 같은 런타임 API · cargo/pip/go-mod 관행)을 그대로 따르고, bespoke env-flag/wrapper/shim 으로 대체하지 않는다. 성능이 동등해도 *표면이 비정석*(env-only·손수 우회)이면 미완. **commons `native-canonical-first` 는 성능 배너와 동급 1차 렌즈** — 성능·표면 둘 다 reference-match.
