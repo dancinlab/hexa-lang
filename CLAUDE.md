@@ -19,6 +19,8 @@ only (no domain registry).
 > - **성능 바 = Rust 동등 이상 (≥ Rust).** Rust 가 1차 성능 기준 — 컴파일러·런타임·생성코드·커널은 Rust 와 동등하거나 그 이상이어야 한다. "느리지만 LLVM-free/byte-exact 라서 OK"로 자족 금지 — Rust 에 성능으로 지면 그 자체가 미완.
 > - **수치/ML throughput 축 = PyTorch(+cuBLAS) 동등 이상.** flame/forge GEMM·학습·디코드 throughput 은 PyTorch 를 정답지로 측정·대조.
 > - 정답지가 오픈소스면 그 구현을 **직접 보고 맞춘다**(소스 파일:라인 → 성분 1:1 대조 → 첫 발산점 정렬), parity 후 hexa 고유 '초월 축'(byte-exact·vendor-free·no-LLVM·device-residency)으로 전진. 성능 주장은 **실측이 증거**(c2 · measure-or-it-didn't-happen).
+> - **정석성 = 성능 parity 뿐 아니라 표면/관용(API·idiom)도 정답지에 맞춘다.** reference 생태계의 **1차 표면**(torch `use_deterministic_algorithms()` 같은 런타임 API · cargo/pip/go-mod 관행)을 그대로 따르고, bespoke env-flag/wrapper/shim 으로 대체하지 않는다. 성능이 동등해도 *표면이 비정석*(env-only·손수 우회)이면 미완. **commons `native-canonical-first` 는 성능 배너와 동급 1차 렌즈** — 성능·표면 둘 다 reference-match.
+> - **실증(#4214):** 결정성 모드 표면 = env-only `HEXA_DET` 는 torch canon 의 절반(env=escape-hatch 수준) → 네이티브 API `set_deterministic(true/false)` 1차 + env escape-hatch 로 교정(PR #4214). = "표면도 정답지" 원칙의 첫 적용 — eval/verdict/decode 진입점이 `set_deterministic(true)` 인-프로세스 직접 호출로 결정성 강제 가능(구 `HEXA_DET` setenv 불가 caveat 해소).
 
 > 📍 구조/설계 SSOT: [ARCHITECTURE.json](ARCHITECTURE.json) — 디렉터리·모듈 트리 + dataflow 단일
 > 원장 (JSON; 사람용 뷰어 `architecture.html` · `python3 serve.py`) · 거버넌스/규칙 SSOT: 아래
@@ -217,40 +219,14 @@ git submodule update --init --recursive          # activate (hooks no-op until p
   새 `@<attr>` 키워드 도입 금지(frozen blob 151c52c8 파서 미지 → faithful build-break ·
   name-prefix/whitelist hook 으로만).
 
-## flame/forge determinism — fast-nondet DEFAULT / det opt-in(`HEXA_DET`) + eval 안전핀
+## flame/forge determinism — API 1차 + env escape-hatch / fast-nondet DEFAULT
 
-- do: flame/forge GPU 수치는 **2 경로**, **fast non-det 가 DEFAULT**(owner 결정 2026-06-28 · torch/JAX
-  정석 = non-det 기본 + det opt-in = native-canonical-first). **(A) fast non-det = DEFAULT(플래그 無)**
-  — **own-native 비결정 커널**: atomic split-K own-GEMM · own im2col/col2im atomic-scatter · own
-  grad-accum atomic · own batched GEMM(+ 선택적 vendor cuBLAS-TC via `HEXA_USE_CUBLAS`). bit-determinism
-  포기, 최속 = **학습 기본 혜택**. **(B) deterministic = OPT-IN(`HEXA_DET=1`)** — 고정-reduction-order
-  ·non-atomic own 커널(`_hx_k_gemm` FP64 == cuBLAS bit-identical · `_hx_k_col2im` gather-reduce):
-  run-to-run·cross-host byte-exact.
-- do: 🔒 **안전핀(BLOCKING) — eval/verdict/decode 진입점이 det 를 강제**한다. anima 의 채점·Ψ-checksum
-  ·cross-host byte-parity·verdict 박제 경로(eval/verdict/decode CLI 진입점)는 내부에서 **`HEXA_DET`
-  를 자동 세팅**(소비자가 안 줘도) → 기본이 fast 여도 측정 재현성은 불변. **학습만 기본 fast 혜택**을
-  받고, 측정 권위는 항상 det 경로(B)로 byte-exact. CI 의 byteeq/own==cuBLAS 오라클·determinism 검증
-  잡도 동일하게 `HEXA_DET` 강제(기본 non-det 가 그 잡들을 깨지 않도록).
-- do: 게이팅 = **"기본 fast, `HEXA_DET` 로 det 강제"** 패턴. 신규 `_forge_det_on(void)`{`getenv("HEXA_DET")`
-  → set 이면 1} = 단일 det-게이트(기존 `_forge_gemv_splitk_on`(777)/`_forge_own_gemm_on`(817)/`_devfeed_on`
-  /`_fuse_on` env-gate 패턴 reference-match, **단 polarity 반대** — unset=fast(비결정), set=det). 각 비결정
-  커널 분기는 `_forge_det_on()` 이 1 이면 고정순서 non-atomic 경로로 떨어진다. (구 `HEXA_FAST_NONDET`
-  우산은 폐기 — 기본이 이미 fast 이므로 불필요; det 우산 `HEXA_DET` 하나만.)
-- do: 소비자(anima) 계약 = **학습 = 기본 fast non-det(A, 플래그 無) · eval/verdict/decode = det(B,
-  진입점 자동 `HEXA_DET`)** — anima CLAUDE.md `a_train_nondeterministic_fast` 와 1:1. 근거:
-  byte-determinism(고정 reduction-order·non-atomic 강제)이 학습 GPU util 4%·step 170s 의 근본(torch/JAX
-  가 빠른 건 non-det atomic-accum 이 기본이라서). 학습 ckpt 품질은 **held-out DESCENT** 로 검증
-  (bit-determinism 불요); 측정은 안전핀이 det 로 강제하므로 학습 비결정성이 verdict 권위를 오염 못 함.
-- do: 정합성 — own/vendor polarity 불변(위 [native-canonical-default]): fast-default 도 **own-native
-  커널이 canonical**, vendor cuBLAS-TC 는 opt-in(`HEXA_USE_CUBLAS`) — cuBLAS-independence 캠페인
-  (`-lcublas` 제거)과 정합(vendor 를 기본으로 두면 캠페인 역행이므로 금지). GPU 수치 determinism(이
-  규칙)은 self-host `selfhost-determinism-gate`(컴파일+링크 gen3 재현성)와 **별개 축** — fast non-det
-  학습은 컴파일러 self-host 게이트 무관.
-- dont: **안전핀 우회 금지** — eval/verdict/decode 가 `HEXA_DET` 없이 non-det 로 채점/박제(측정 재현성
-  파괴 · anima `a_engine_native_learning` det-eval 계약 위반) · vendor cuBLAS 를 fast-default 로
-  승격(own/vendor polarity 역전 · cuBLAS-independence 역행 · `HEXA_NO_CUBLAS` 안티패턴) · CI byteeq/오라클
-  잡에 `HEXA_DET` 누락(기본 non-det 가 재현성 잡 false-fail) · det 를 다시 default 로 되돌림(owner
-  결정 역행).
+- do: flame/forge GPU 수치는 **2 경로**, fast non-det DEFAULT(owner 2026-06-28 · torch/JAX 정석). (A) DEFAULT = own-native atomic kernels (split-K GEMM/GEMV · atomic-scatter · atomic embed-bwd; + vendor cuBLAS-TC via `HEXA_USE_CUBLAS`). (B) det OPT-IN = fixed-order non-atomic (byte-exact cross-host).
+- do: #4214 **det 표면 = API 1차 + env escape-hatch** (torch `use_deterministic_algorithms()` ref-match). API = `set_deterministic(true/false)` / `is_deterministic()` (`stdlib/flame/forge_det.hexa`). env = `HEXA_DET=1` (shell/CI escape-hatch). precedence: API > env.
+- do: `set_deterministic` 구현 = `hexa_forge_set_deterministic(int)` C (`runtime_cuda.c` `_hx_forge_det_mode` process-global; `runtime.h` non-CUDA inline stub). `_forge_det_on()` = API mode 우선, fallback env.
+- do: eval/verdict/decode 안전핀 = 진입점이 `set_deterministic(true)` 직접 호출(API 1차). 구 HEXA_DET setenv 불가 caveat 해소. CI byteeq/오라클 잡은 `HEXA_DET=1` env(escape-hatch) 유지 가능.
+- do: 소비자(anima) = 학습 fast non-det default · eval/verdict/decode det(`set_deterministic(true)`). ckpt 품질 = held-out DESCENT(bit-det 불요). own/vendor polarity 불변 — own-native canonical, cuBLAS opt-in. GPU det 축은 selfhost-determinism-gate 와 별개.
+- dont: 안전핀 우회(eval/verdict/decode det 없이 채점·박제) · vendor cuBLAS fast-default 승격 · CI det 강제 누락 · det default 복귀 · HEXA_DET env 를 API 보다 우선순위 승격 금지.
 
 ## 아틀라스 · 검증
 
