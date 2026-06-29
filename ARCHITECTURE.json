@@ -16,6 +16,13 @@
     "source": "bench/clm_train_bench.hexa"
    },
    {
+    "id": "CLM-STEP-CONV-BWD-HOST-SCALAR-WALL",
+    "state": "in_flight",
+    "value": "nn_conv1d_bwd in stdlib/flame/conv_lib.hexa was a host-scalar 4-nested loop (T·Cout·Cin·K≈201M iter/call × 4 calls/step) with no GPU kernel — CLM step 60325ms vs PyTorch 12.7ms = 4750×. FIX: replaced with forge_dispatch_matmul im2col+GEMM+col2im path (same algorithm as clm_conv_gpu.hexa::conv1d_bwd_via_forge, verified max|Δ|≤1e-9). Also fwd upgraded t_matmul→forge_dispatch_matmul. Parity + speedup measurement on summer RTX5070 sm_120 pending (see bench/vs_pytorch/bench_hexa_clm_step.hexa).",
+    "threshold": "CLM step median on summer < 1000ms (>>1000× speedup expected); parity max|Δ|≤1e-9 vs naive path",
+    "source": "stdlib/flame/conv_lib.hexa"
+   },
+   {
     "id": "METACLOSURE-SEED-POSITIONAL",
     "state": "ossified",
     "value": "path defaulted to cli_positional(0) → `--seed \"expr\"` mis-bound expr as a filename (file-not-found) since the file-branch precedes the seed-branch; sister `absolute` works only because it has no --file path",
