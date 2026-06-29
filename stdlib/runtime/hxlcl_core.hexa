@@ -3092,7 +3092,11 @@ pub fn hxlcl_atof(s: HexaVal) -> int {
     // → -0.0). The xor operates on the FLOAT-tagged payload word (the raw double
     // bits); the SSE-ret branch ships that payload through xmm0 regardless of tag.
     if __hx_payload_ne(neg, 0) {
-        let r = __hx_payload_xor(n, 9223372036854775808)  // -n via sign-bit flip
+        // sign mask 0x8000000000000000 = 1<<63. Built via __hx_payload_shl (the codegen
+        // cannot materialize the 2^63 immediate directly — it exceeds the signed-i64
+        // `mov rXX, imm` range and emits a broken `-` operand; shl 1,63 is exact).
+        let signbit = __hx_payload_shl(1, 63)
+        let r = __hx_payload_xor(n, signbit)              // -n via sign-bit flip
         return r
     }
     return n
