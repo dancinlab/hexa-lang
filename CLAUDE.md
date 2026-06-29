@@ -192,8 +192,8 @@ git submodule update --init --recursive          # activate (hooks no-op until p
   `cuda_available()=0` 잔존 · ③ stock 릴리스에 `-cuda` 자산 미배포 + `hx install` 에 GPU 감지 경로 없음.
   → GPU 박스(nvcc+GPU 확인됨)에서도 한 명령으로 GPU 가 안 켜지는 건 결함이지 사용자 잘못이 아니다.
   같은 잣대로 다른 DX 표면(라이브러리 관리·의존성·설치)도 정석 대비 갭이 보이면 그 자리에서 교정.
-- do: stdlib signal/math 모듈은 **native libm trig**(`cos`/`sin`/…)를 쓴다.
-- dont: 손수 짠 Taylor series 금지 (codegen-fragile).
+- do: stdlib signal/math는 **native libm trig** 기본권장 · self-host(zero-c libm native-emit)·정확도 필요 시 **손수 수학 커널 허용**(fdlibm/musl minimax·Taylor · byteeq+reference-match 게이트).
+- dont: 정답지(fdlibm/musl) 무시 추측계수 fudge · reference-match 없는 정확도 주장 금지.
 - do: **cross-target libc-floor(`hxlcl_*`) native-emit 의 정석 = codegen per-fn C-ABI
   calling-convention** (Route C). `_is_cabi(fname)`(`hxlcl_` 프리픽스/whitelist) hook 이 codegen
   3 경계(param-ingress · return · call-boundary)×2 백엔드(x86_64·arm64)에서 PAIR-MODEL
@@ -214,8 +214,8 @@ git submodule update --init --recursive          # activate (hooks no-op until p
 - dont: 심볼당·타깃당 **hand-assembled machine-byte 배열**로 cross-target 확장 금지
   (non-canonical · O(symbols×targets) 노동 · 유지보수 폭발 — `test/native_build/emit_hxlcl_*_o.hexa`
   darwin Mach-O 손-assemble 은 codegen C-ABI 모드 부재 시의 임시 우회였고 Route C 로 승계).
-  새 `@<attr>` 키워드 도입 금지(frozen blob 151c52c8 파서 미지 → faithful build-break ·
-  name-prefix/whitelist hook 으로만).
+  새 `@<attr>`/키워드/builtin **허용**(no-LLVM 외 모두 허용) — frozen blob 151c52c8 파서 미지면
+  frozen re-baseline 동반 OR name-prefix/whitelist hook 으로 byteeq-safe 도입(faithful build-break 회피).
 
 ## flame/forge determinism — fast-nondet DEFAULT / det opt-in(`HEXA_DET`) + eval 안전핀
 
@@ -315,3 +315,8 @@ git submodule update --init --recursive          # activate (hooks no-op until p
   →  호스트에서 `cd ~/actions-runner-hexa && ./config.sh --url … --token <tok> --labels
   self-hosted,Linux,X64,<host>,hexa-build --unattended --replace && sudo ./svc.sh start`. 상태는
   `gh api repos/dancinlab/hexa-lang/actions/runners`.
+
+## 거버넌스 기준 — no-LLVM 외 모두 허용 (사용자 standing 2026-06-29)
+
+- do: **유일 불가침 = no-LLVM**(소스는 항상 컴파일러 자체 IR→네이티브 객체→`hexa_ld`). 그 외 모든 구현 기법 허용 — 손수 수학커널·새 키워드/`@<attr>`/builtin·frozen seed re-baseline·va_list/setjmp ABI 등 전부 가능(과거 "기법 금지" 문구는 영구금지 아닌 측정비용 권고로 재해석).
+- dont: no-LLVM 깨기(LLVM 백엔드/IR 경유) 절대금지 · 그리고 4규율(release-integrity·byteeq 3타깃 검증·reference-match·git-safety) 건너뛴 미검증 머지 금지(허용 기법도 게이트는 통과).
