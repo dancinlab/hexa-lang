@@ -2738,6 +2738,151 @@ pub fn hxlcl_pclose(stream: HexaVal) -> int {
     return status
 }
 
+// ── EXEC FAMILY TAIL (Route C · hxlcl_execvp — native PATH-search over execve) ──
+//
+// hxlcl_execvp is the exec family's LAST composite leaf: a $PATH search wrapping the
+// already-dissolved hxlcl_execve (#4222 batch I). If `file` contains a '/', exec it
+// directly; otherwise fetch $PATH (hxlcl_getenv, Wall 2-b #4243), split it on ':',
+// and try execve("<dir>/<file>", argv, environ) for each dir until one succeeds
+// (execve replaces the image, so it returns ONLY on failure → try the next dir).
+//
+// PURE COMPOSITION over already-whitelisted leaves — NO new intrinsic, NO new
+// provider:
+//   • hxlcl_getenv("PATH")  — Wall 2-b env lookup (#4243). environ-backed.
+//   • hxlcl_strlen(file)    — file length for the path-join (#4214 strlen leaf).
+//   • hxlcl_malloc(1024)    — the candidate-path HEAP scratch REPLACING the frozen
+//                             `char buf[1024]` STACK local. This campaign has no in-
+//                             body stack-alloc intrinsic, so (exactly like popen's
+//                             argv[] / fputc's 1-byte ch / pipe's fds scratch) the
+//                             buffer is a heap malloc. It leaks 1024B per FAILED
+//                             execvp call (on the bump arena); on the SUCCESS path the
+//                             image is replaced so nothing leaks — execvp is never
+//                             hot-looped (a one-shot just before image replacement),
+//                             the same heap-scratch caveat the batch-H/pipe legs note.
+//   • __hx_environ_ptr()    — &environ (the getenv #4243 precedent); ONE __hx_ptr_load64
+//                             dereference yields `environ` (the char** base) to pass as
+//                             execve's envp (the frozen body passes `environ`).
+//   • hxlcl_execve(...)     — batch I syscall leaf (#4222); inner `bl` keyed by name.
+//
+// The '/'-scan and the dir-by-dir path-join are raw __hx_ptr_load8/store8 byte loops
+// (the strchr/strstr/strcpy class), avoiding re-pulling strchr/memcpy/strcpy externs —
+// exactly the frozen body's "byte-loop path-join avoids strcpy/memcpy/strchr" comment.
+//
+// IN-BODY OPERATOR DISCIPLINE (same as the syscall/FILE* family): every test/arith is
+// a raw-payload leaf intrinsic (__hx_payload_{lt,le,ge,eq,ne,add,sub}), NEVER a bare
+// `<`/`-`/`*` (which lower to the PAIR-MODEL HexaVal helpers undefined in the raw
+// C-ABI link), each writing exactly one un-nested `let`. Inner calls lower as
+// single-register `bl` (the call boundary keys on the whitelisted callee name).
+//
+// BYTE-FAITHFUL to the frozen 0-libc floor body self/runtime_emit_full.hexa:2963-2986:
+//   has_slash scan; if has_slash return execve(file,argv,environ);
+//   path=getenv("PATH"); if(!path||!*path) path="/usr/bin:/bin:/usr/local/bin";
+//   flen=strlen(file); char buf[1024]; for each ':'-delimited dir (dlen):
+//     if(dlen+1+flen+1<=1024){ copy dir; buf[k++]='/'; copy file incl NUL;
+//                              execve(buf,argv,environ); }   // returns only on failure
+//   return -1;
+// Reference-matched to musl src/process/execvp.c __execvpe (the same has-slash→direct
+// / else $PATH-split-and-try structure; musl's ENOENT/EACCES bookkeeping is simplified
+// to "try next on any failure" exactly as the frozen floor body does). default PATH
+// differs cosmetically from musl ("/usr/local/bin:/bin:/usr/bin") — we mirror the
+// FROZEN floor default ("/usr/bin:/bin:/usr/local/bin"), the body the shim drops.
+// ':' == 58, '/' == 47. Cross-target-identical (execve carries the per-target NR).
+pub fn hxlcl_execvp(file: HexaVal, argv: HexaVal) -> int {
+    let pfile = __hx_payload_add(file, 0)         // char* file (payload word)
+    // environ (char** base) — execve's envp, the frozen body passes `environ`.
+    let envpp = __hx_environ_ptr()                // &environ (char***)
+    let environ_base = __hx_ptr_load64(envpp, 0)  // environ (char** array base)
+    // has_slash: scan file for '/'.
+    let mut has_slash = 0
+    let mut qi = 0
+    let mut qc = __hx_ptr_load8(pfile, 0)         // file[0]
+    while __hx_payload_ne(qc, 0) {                // *q
+        let isslash = __hx_payload_eq(qc, 47)     // '/' == 47
+        if __hx_payload_ne(isslash, 0) {
+            has_slash = 1
+            qc = 0                                 // break: stop the scan
+        } else {
+            qi = __hx_payload_add(qi, 1)
+            qc = __hx_ptr_load8(pfile, qi)         // file[qi]
+        }
+    }
+    if __hx_payload_ne(has_slash, 0) {
+        return hxlcl_execve(pfile, argv, environ_base)   // direct exec
+    }
+    // path = getenv("PATH"); if(!path||!*path) path = "/usr/bin:/bin:/usr/local/bin";
+    let penv = __hx_payload_add("PATH", 0)        // char* "PATH"
+    let mut path = hxlcl_getenv(penv)             // char* PATH value (or 0)
+    let nullpath = __hx_payload_eq(path, 0)
+    if __hx_payload_ne(nullpath, 0) {
+        path = __hx_payload_add("/usr/bin:/bin:/usr/local/bin", 0)
+    } else {
+        let p0 = __hx_ptr_load8(path, 0)          // *path
+        let emptypath = __hx_payload_eq(p0, 0)
+        if __hx_payload_ne(emptypath, 0) {
+            path = __hx_payload_add("/usr/bin:/bin:/usr/local/bin", 0)
+        }
+    }
+    let flen = hxlcl_strlen(file)                 // size_t strlen(file)
+    let bufsz = __hx_payload_add(0, 1024)
+    let buf = hxlcl_malloc(bufsz)                 // char buf[1024] (heap scratch)
+    let mut p = __hx_payload_add(path, 0)         // const char* p = path
+    let mut pc = __hx_ptr_load8(p, 0)             // *p
+    while __hx_payload_ne(pc, 0) {                // while(*p)
+        // dlen = length of this dir segment (up to ':' or NUL).
+        let mut dlen = 0
+        let mut dc = __hx_ptr_load8(p, 0)         // p[0]
+        let mut scan = 1
+        while __hx_payload_ne(scan, 0) {
+            let atend = __hx_payload_eq(dc, 0)    // p[dlen]==0
+            let atcolon = __hx_payload_eq(dc, 58) // p[dlen]==':' (58)
+            let stop = __hx_payload_add(atend, atcolon)
+            if __hx_payload_ne(stop, 0) {
+                scan = 0
+            } else {
+                dlen = __hx_payload_add(dlen, 1)
+                dc = __hx_ptr_load8(p, dlen)      // p[dlen]
+            }
+        }
+        // if (dlen + 1 + flen + 1 <= 1024) { join + execve }
+        let need0 = __hx_payload_add(dlen, 1)     // dlen + 1 ('/')
+        let need1 = __hx_payload_add(need0, flen) // + flen
+        let need = __hx_payload_add(need1, 1)     // + 1 (NUL)
+        let fits = __hx_payload_le(need, 1024)
+        if __hx_payload_ne(fits, 0) {
+            // copy dir bytes: for(i=0;i<dlen;i++) buf[k++]=p[i];
+            let mut k = 0
+            let mut i = 0
+            while __hx_payload_lt(i, dlen) {
+                let db = __hx_ptr_load8(p, i)     // p[i]
+                __hx_ptr_store8(buf, k, db)       // buf[k]=p[i]
+                k = __hx_payload_add(k, 1)
+                i = __hx_payload_add(i, 1)
+            }
+            __hx_ptr_store8(buf, k, 47)           // buf[k++]='/'
+            k = __hx_payload_add(k, 1)
+            // copy file incl NUL: for(i=0;i<=flen;i++) buf[k++]=file[i];
+            let mut j = 0
+            let jmax = __hx_payload_add(flen, 1)  // <= flen → < flen+1
+            while __hx_payload_lt(j, jmax) {
+                let fb = __hx_ptr_load8(pfile, j) // file[j]
+                __hx_ptr_store8(buf, k, fb)       // buf[k]=file[j]
+                k = __hx_payload_add(k, 1)
+                j = __hx_payload_add(j, 1)
+            }
+            let _e = hxlcl_execve(buf, argv, environ_base)   // returns only on failure
+        }
+        // p += dlen; if (*p == ':') p++;
+        p = __hx_payload_add(p, dlen)
+        let sep = __hx_ptr_load8(p, 0)            // *p
+        let iscolon = __hx_payload_eq(sep, 58)    // ':' == 58
+        if __hx_payload_ne(iscolon, 0) {
+            p = __hx_payload_add(p, 1)
+        }
+        pc = __hx_ptr_load8(p, 0)                 // *p (loop guard)
+    }
+    return -1                                      // no dir worked
+}
+
 // ── CTYPE FAMILY (Route C · isalnum/isalpha — pure register-only ASCII class) ──
 //
 // hxlcl_isalnum/hxlcl_isalpha are the FIRST register-only pure-compute Route C
