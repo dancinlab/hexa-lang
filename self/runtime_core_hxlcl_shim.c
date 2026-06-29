@@ -793,7 +793,22 @@ int   hxlcl_atexit(void (*fn)(void))                  { return atexit(fn); }
 #ifndef HEXA_RT_NATIVE_FORK
 int   hxlcl_fork(void)                                { return (int)fork(); }
 #endif
+/* RT-NATIVE-EXECVP (HEXA_RT_NATIVE_EXECVP, default OFF · RFC061 §M8 Wall 3-c COMPOSITE,
+ * exec family TAIL): hxlcl_execvp is supplied by the hexa-NATIVE Route C whole-module
+ * emit (stdlib/runtime/hxlcl_core.hexa::hxlcl_execvp, whitelisted in _is_cabi). The
+ * native body is a $PATH search wrapping execve — has_slash → direct hxlcl_execve, else
+ * split getenv("PATH") on ':' and try each dir+'/'+file via hxlcl_execve (all already-
+ * dissolved Route C leaves: getenv #4243 / strlen / malloc / execve #4222 / environ via
+ * __hx_environ_ptr). The candidate-path buffer is a hxlcl_malloc HEAP scratch (no in-body
+ * stack-alloc intrinsic on this campaign; popen/fputc/pipe heap-scratch precedent). The
+ * arm64/darwin legs DCE out under target_is_x86_64 (execve carries the per-target NR).
+ * Reference-matched to musl src/process/execvp.c __execvpe + the frozen 0-libc floor body
+ * self/runtime_emit_full.hexa:2963-2986. Under HEXA_RT_NATIVE_EXECVP=1 (x86_64-linux gate
+ * in tool/stage_resolve_runtime_a) the shim drops execvp; DEFAULT (macro undefined) keeps
+ * this libc delegate → shim.o + archive byte-identical (release-integrity invariant). */
+#ifndef HEXA_RT_NATIVE_EXECVP
 int   hxlcl_execvp(const char *file, char *const argv[]) { return execvp(file, argv); }
+#endif
 /* SELFEMIT (HEXA_RT_SELFEMIT_WAITPID, default OFF · RFC061 §M8 family r9): hxlcl_waitpid
  * is supplied by the hexa-NATIVE self-emitted .o (test/native_build/emit_hxlcl_waitpid_o.hexa
  * — class-C `svc #0x80` SYS_wait4 trap + carry-flag errno store, byte-identical to
