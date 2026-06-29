@@ -40,6 +40,11 @@
 // (strict bit-eq to anima d5_rope_tables 14-term Taylor path).
 use "stdlib/flame/flame_math"
 
+// #4214 forge determinism query (API > env precedence) — drives the GELU device
+// seam's det escape (see _nn_gelu_dev_on). Defined in runtime_cuda.c (CUDA) /
+// runtime.h inline stub (non-CUDA), the SAME extern forge_det.hexa declares.
+extern fn hexa_forge_is_deterministic() -> int
+
 // ── helpers (private) ──────────────────────────────────────────────────
 fn _nn_abs(x: float) -> float {
     if x < 0.0 { return 0.0 - x }
@@ -1028,15 +1033,38 @@ fn _nn_gelu_grad(x: float) -> float {
     return _nn_normal_cdf(x) + x * _nn_normal_pdf(x)
 }
 
+// native-canonical-default GPU GELU seam gate (flame/forge determinism regimen).
+//
+//   det mode ON  → host loop. Eval/verdict/decode safety-pin (set_deterministic(true))
+//                  OR the HEXA_DET escape-hatch demand cross-host byte-exact repro;
+//                  the OP-19b host loop (dt_erf/dt_exp) is byte-IDENTICAL across
+//                  x86-linux + arm64-macos, the proven reproducibility reference.
+//                  The device _hx_k_gelu replicates dt_erf/dt_exp but nvcc FMA
+//                  fusion can drift ~1 ULP vs the host cc build → det stays host.
+//   det mode OFF → fast non-det DEFAULT (training). A present CUDA device routes
+//                  the elementwise GELU onto the own _hx_k_gelu kernel — the GPU
+//                  OWN kernel is the CANONICAL default (NOT flag-gated), replacing
+//                  the per-element erf/exp host scalar loop (the r3 #2 33.8% peg).
+//                  cuda_available()==0 (CPU-only / byteeq build) → false → host
+//                  loop UNCHANGED (byteeq-neutral; this seam never flips off-GPU).
+//   legacy explicit env (HEXA_DEVRESIDENT_NN + CLM_PROD_DEVRESIDENT) still forces
+//                  the device seam on for non-CUDA-probe contexts (additive).
+fn _nn_gelu_dev_on() -> bool {
+    if hexa_forge_is_deterministic() != 0 { return false }
+    if cuda_available() == 1 { return true }
+    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" { return true }
+    return false
+}
+
 // Elementwise GELU: a_out[i] = GELU(g[i]) over h elements.
 pub fn nn_gelu_fwd(g: int, a_out: int, h: int) {
-    // HEXA-FUSION L3 (glue half) device-resident seam: route the elementwise
-    // GELU onto _hx_cuda_farr_gelu_gpu, keeping a_out DEVICE-RESIDENT so the next
-    // GEMM H2D-skips it. Gated by env HEXA_DEVRESIDENT_NN + the dev-resident chain
-    // flag CLM_PROD_DEVRESIDENT; OFF / no-CUDA → rc=-1 → the host loop below runs
-    // UNCHANGED (byte-eq reference, proven by clm_prod_gelu2_hostdispatch_eq the
-    // dispatcher host body == this loop, max|Δ|=0).
-    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+    // HEXA-FUSION L3 (glue half) device-resident seam: route the elementwise GELU
+    // onto _hx_cuda_farr_gelu_gpu (own _hx_k_gelu), keeping a_out DEVICE-RESIDENT so
+    // the next GEMM H2D-skips it. native-canonical-default: fires by default on CUDA
+    // (det → host); no-CUDA / rc!=0 → the host loop below runs UNCHANGED (byte-eq
+    // reference, proven by clm_prod_gelu2_hostdispatch_eq: dispatcher host body ==
+    // this loop, max|Δ|=0).
+    if _nn_gelu_dev_on() {
         let rc = forge_dispatch_gelu(g, a_out, h)
         if rc == 0 { return }
     }
@@ -1051,9 +1079,10 @@ pub fn nn_gelu_fwd(g: int, a_out: int, h: int) {
 // PRE-activation (saved from forward). Caller allocates dg_out (h-len).
 pub fn nn_gelu_bwd(g: int, da: int, dg_out: int, h: int) {
     // HEXA-FUSION L3 (BWD glue half) device-resident seam → _hx_cuda_farr_gelu_bwd_gpu,
-    // keeps dg_out DEVICE-RESIDENT. Same env gate; OFF / no-CUDA → rc=-1 → host loop
-    // below UNCHANGED (byte-eq, dispatcher host body == this loop, max|Δ|=0).
-    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+    // keeps dg_out DEVICE-RESIDENT. Same native-canonical-default gate as fwd (det →
+    // host); OFF / no-CUDA → rc=-1 → host loop below UNCHANGED (byte-eq, dispatcher
+    // host body == this loop, max|Δ|=0).
+    if _nn_gelu_dev_on() {
         let rc = forge_dispatch_gelu_bwd(g, da, dg_out, h)
         if rc == 0 { return }
     }
