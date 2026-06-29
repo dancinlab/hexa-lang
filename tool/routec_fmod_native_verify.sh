@@ -119,11 +119,32 @@ int main(void){
     return fail?1:0;
 }
 EOF
-# link native fmod .o + harness; the native body is libm-free so NO -lm needed for
-# hxlcl_fmod itself, but the harness calls libc fmod (the oracle) so -lm is linked
-# for the ORACLE only.
-$CC "$OUT/acc.c" "$OUT/routec.o" -o "$OUT/acc" -lm 2>"$OUT/link.err" \
-    || { echo "LINK_FAIL"; cat "$OUT/link.err" >&2; exit 1; }
+# hxlcl_fmod is a SELF-CONTAINED leaf (objdump -dr: only internal jmps, ZERO
+# external call/reloc — no hxlcl_malloc/environ/__errno_location). But routec.o is
+# the WHOLE module emit, so linking it wholesale drags its SIBLINGS' undefined
+# externs (hxlcl_setenv→setenv, strdup/calloc→hxlcl_malloc, getenv→environ, the
+# errno-syscall leaves→__errno_location) — NONE referenced by fmod. Extract ONLY
+# the hxlcl_fmod object section so the value-exact gate links fmod in isolation
+# (the same discipline the routec smoke uses for a single-symbol assert). Fallback:
+# if extraction is unavailable, supply weak stubs for the unrelated sibling externs
+# so the link resolves without pulling libc — fmod's own correctness is unaffected.
+cat > "$OUT/stubs.c" <<'EOF'
+/* weak stubs for hxlcl_fmod's UNRELATED siblings in the whole-module routec.o —
+ * fmod calls NONE of these (objdump-confirmed zero external relocs from fmod). */
+#include <stdlib.h>
+__attribute__((weak)) void *hxlcl_malloc(unsigned long n){ return malloc(n?n:1); }
+extern char **environ;
+__attribute__((weak)) int *__errno_location_stub(void){ static int e; return &e; }
+EOF
+$CC "$OUT/acc.c" "$OUT/routec.o" "$OUT/stubs.c" -o "$OUT/acc" -lm 2>"$OUT/link.err"
+if [ ! -x "$OUT/acc" ]; then
+    # whole-module link failed on a sibling extern — link fmod in ISOLATION via a
+    # filtered object (keep only hxlcl_fmod), proving fmod itself is self-contained.
+    echo "    [C] whole-module link pulled a sibling extern; isolating hxlcl_fmod…"
+    objcopy --keep-global-symbol=hxlcl_fmod "$OUT/routec.o" "$OUT/fmod_only.o" 2>/dev/null
+    $CC "$OUT/acc.c" "$OUT/fmod_only.o" -o "$OUT/acc" -lm 2>"$OUT/link2.err" \
+        || { echo "LINK_FAIL"; cat "$OUT/link.err" "$OUT/link2.err" >&2; exit 1; }
+fi
 "$OUT/acc"
 RC=$?
 echo "════ routec_fmod_native_verify done (acc RC=$RC) ════"
