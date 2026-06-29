@@ -144,6 +144,17 @@ git submodule update --init --recursive          # activate (hooks no-op until p
 - do: QA 산출(verdict · 측정 수치)은 memory/CHANGELOG/state 로 박제하고, cross-repo 측정은
   `ing add --to <repo>` 로 relay 한다. 빌드/측정은 aiden/summer/vast pool(mini=git/gh only ·
   akida 금지). 자세한 의무는 commons `verify-done` · `break-walls` · `reference-match` 와 lockstep.
+- do: **forge/flame GPU 성능 측정은 반드시 "현행 hexat"(`HEXA_VERSION=test` 설치)로 한다** — 풀에
+  깔린 stock 릴리스 hexat(예 v0.442.0)은 main 의 `forge_dispatch_*` builtin 을 모를 수 있어 그
+  심볼을 `hexa_call3/4` 값-디스패치로 잘못 lowering → 컴파일 실패(타입에러) 또는 **느린 CPU 폴백으로
+  측정**(75331ms 류 bad-hexat 아티팩트 → phantom 4750× 박을 뻔한 2026-06-29 교훈). 측정 전 ⓐ
+  `HEXA_VERSION=test sh install.sh`(롤링 prerelease·assets 매 main push force-update·stable 릴리스 컷
+  불요) → ⓑ `hexa gpu` 로 cuda_available + 버전 현행 확인 → ⓒ bench 실행 시 `[OWN-GEMM-FIRED] DEVICE
+  path` 발화 확인. ⚠️ `test` release 의 publishedAt 은 stale 표시되나 자산은 현행(혼동주의). SSOT =
+  convergence `bench-hexa-clm-step-hexa-1`.
+- dont: 풀 hexat 현행성 확인 없이 forge 벤치 절대시간 측정·박제(bad-hexat 폴백을 진짜 perf 로 오판) ·
+  builtin 부족을 per-op `hexa cc --regen` 으로 우회(공유 툴체인 오염 = 후속 측정 전부 무효) · stable
+  릴리스를 벤치 한 건 때문에 컷(release-integrity 과함 — `test` 채널이 정석 unblock).
 - do: QA 는 **native-canonical-default polarity 위반도 감사·교정**한다 — 기본 경로는 항상
   hexa-native/own/canonical 이고 외부의존(cuBLAS · 외부 BLAS · 벤더 라이브러리 · legacy fallback)은
   **opt-in 플래그로만** 존재해야 한다(아래 [native-canonical-default] 가드레일과 lockstep). QA 가
