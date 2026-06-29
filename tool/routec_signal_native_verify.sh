@@ -165,7 +165,7 @@ int main(void) {
     return fail ? 1 : 0;
 }
 EOF
-$CC "$OUT/acc.c" "$OUT/signal_only.o" "$OUT/shim_on.o" -o "$OUT/acc" 2>"$OUT/link.err" \
+$CC "$OUT/acc.c" "$OUT/signal_only.o" "$OUT/shim_on.o" -o "$OUT/acc" -lm 2>"$OUT/link.err" \
     || { echo "    [C] isolated link failed; see link.err"; cat "$OUT/link.err" >&2; echo "LINK_FAIL"; exit 1; }
 
 # Run with a SIGSEGV guard so we can DISTINGUISH the restorer crash (the wall) from
