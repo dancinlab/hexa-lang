@@ -2587,21 +2587,25 @@ pub fn _cabi_is_fp(fname: string) -> bool {
     return false
 }
 
-// RFC061 §M8 varargs-ABI (literal-∅ feature B, RUNG1) — variadic-function gate.
+// RFC061 §M8 varargs-ABI (literal-∅ feature B) — variadic-function gate.
 // A whitelisted name is a SysV AMD64 variadic function: its prologue reserves a
-// 48-byte GP register-save area, spills the 6 GP arg registers (rdi,rsi,rdx,rcx,
-// r8,r9) into it, and reserves a 24-byte va_list struct, so the in-body
-// `__builtin_va_start`/`__builtin_va_arg` intrinsics can walk the unnamed integer
-// arguments per PSABI §3.5.7. A variadic fn is ALSO C-ABI for its NAMED params
-// (single-register ingress) — `_x86_64_lower_func` folds this into `_x86_cabi`, so
-// no separate `_is_cabi` entry is needed. HARD-GATED: `env("HEXA_VA_INTRINSICS") !=
-// "1"` → false for EVERY fn → prologue + va branches dead → byte-eq NEUTRAL (mirrors
-// `_is_cabi`/HEXA_CABI_HXLCL). RUNG1 = x86_64-linux + integer class only (no XMM
-// save, fp_offset pinned 48 so any FP va_arg would route to overflow — FP/arm64
-// DEFERRED, the honest next rung). The PoC symbol `hxlcl_va_smoke` proves the leaf.
+// 176-byte register-save area (48 GP + 128 XMM), spills the 6 GP arg registers
+// (rdi,rsi,rdx,rcx,r8,r9) AND the 8 XMM arg registers (xmm0..xmm7) into it, and
+// reserves a 24-byte va_list struct, so the in-body `__builtin_va_start`/
+// `__builtin_va_arg` (integer class) / `__builtin_va_arg_fp` (SSE class) intrinsics
+// can walk the unnamed arguments per PSABI §3.5.7. A variadic fn is ALSO C-ABI for
+// its NAMED params (single-register ingress) — `_x86_64_lower_func` folds this into
+// `_x86_cabi`, so no separate `_is_cabi` entry is needed. HARD-GATED:
+// `env("HEXA_VA_INTRINSICS") != "1"` → false for EVERY fn → prologue + va branches
+// dead → byte-eq NEUTRAL (mirrors `_is_cabi`/HEXA_CABI_HXLCL). x86_64-linux; integer
+// + SSE class (r1). The PoC symbols `hxlcl_va_smoke` (int) + `hxlcl_va_fp_smoke`
+// (double) prove the leaves. arm64 AAPCS64 va_arg = the next rung.
 pub fn _x86_is_variadic(fname: string) -> bool {
     if env("HEXA_VA_INTRINSICS") != "1" { return false }
     if fname == "hxlcl_va_smoke" { return true }
+    // r1 SSE-class PoC — `double hxlcl_va_fp_smoke(long n, ...)` proves the FP-class
+    // va_arg leaf (the prologue XMM reg-save spill + __builtin_va_arg_fp walk).
+    if fname == "hxlcl_va_fp_smoke" { return true }
     return false
 }
 
