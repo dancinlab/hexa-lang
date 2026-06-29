@@ -1577,6 +1577,24 @@ HexaVal forge_dispatch_stdp_pair(HexaVal W_v, HexaVal tr_pre_v,
                                  HexaVal out_v, HexaVal A_plus_v,
                                  HexaVal A_minus_v, HexaVal w_max_v);      /* runtime.c — flame STDP GPU seam */
 
+/* ── #4214 forge determinism API — torch.use_deterministic_algorithms() ref-match ──
+ * PRIMARY surface for in-process det control. hexa callers use extern fn:
+ *   extern fn hexa_forge_set_deterministic(on: int)
+ *   extern fn hexa_forge_is_deterministic() -> int
+ * CUDA build: bodies in runtime_cuda.c (_hx_forge_det_mode process-global).
+ * Non-CUDA build: inline no-op stubs (det mode irrelevant; no GPU kernels).
+ * API takes precedence over HEXA_DET env (env = escape-hatch for shell/CI). */
+#ifdef HEXA_CUDA
+void hexa_forge_set_deterministic(int on);   /* runtime_cuda.c — #4214 */
+int  hexa_forge_is_deterministic(void);      /* runtime_cuda.c — #4214 */
+#else
+static inline void hexa_forge_set_deterministic(int on) { (void)on; }
+static inline int  hexa_forge_is_deterministic(void) {
+    const char* v = getenv("HEXA_DET");
+    return (v && v[0] && v[0] != '0') ? 1 : 0;
+}
+#endif
+
 /* ── safetensors mmap-backed zero-copy load (RFC 025) ──────────────
  * codegen.hexa lowers safetensors_mmap_* builtins to direct
  * `hexa_safetensors_mmap_*` calls (1-arg: open/header/data_offset/

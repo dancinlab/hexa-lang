@@ -826,29 +826,54 @@ static int _forge_gemv_splitk_on(void) {
 /* #4204 own-native fast-default — determinism axis (own/vendor polarity
  * UNTOUCHED). The own-native NON-deterministic atomic kernels (atomic
  * split-K GEMV/GEMM, atomic-scatter col2im, atomic embedding grad-accum)
- * are now the DEFAULT (training gets the fast benefit). Opt-IN HEXA_DET
+ * are now the DEFAULT (training gets the fast benefit). Opt-IN det mode
  * forces the own fixed-order / non-atomic kernels for bit-identical,
  * cross-host byte-parity runs — the eval/verdict/decode entry points and
- * the GPU byteeq/oracle CI jobs export HEXA_DET=1 so Ψ-checksum + frozen
+ * the GPU byteeq/oracle CI jobs set det mode so Ψ-checksum + frozen
  * gate measurement stay byte-deterministic. INVERTED-POLARITY ref-match of
- * _forge_gemv_splitk_on: same opt-in env-read shape, but every kernel
- * dispatch branches on `!_forge_det_on()` (default=fast-atomic) instead of
- * gating the atomic path behind an opt-in. NOTE this is the OWN-vs-OWN
+ * _forge_gemv_splitk_on: same opt-in shape, but every kernel dispatch
+ * branches on `!_forge_det_on()` (default=fast-atomic) instead of gating
+ * the atomic path behind an opt-in. NOTE this is the OWN-vs-OWN
  * (atomic vs fixed-order) axis only — _forge_own_gemm_on / HEXA_USE_CUBLAS
- * vendor polarity is unchanged (cuBLAS stays opt-in). Returns 1 (det/
- * non-atomic) iff HEXA_DET is set+non-empty+non-'0'; else 0 (fast/atomic). */
+ * vendor polarity is unchanged (cuBLAS stays opt-in).
+ *
+ * #4214 canonical API upgrade (torch ref-match):
+ *   PRIMARY surface = hexa_forge_set_deterministic(1/0) — in-process call
+ *     (torch.use_deterministic_algorithms(True/False) 1-1 analogue).
+ *   ESCAPE-HATCH = HEXA_DET env var — shell/CI/legacy setenv callers
+ *     (CUBLAS_WORKSPACE_CONFIG low-level knob analogue).
+ * Precedence: API (_hx_forge_det_mode >= 0) overrides env. Default
+ * (-1 = API not called + env unset) = fast non-det (training default). */
+
+/* process-global API mode: -1=unset (fall back to env), 0=fast-forced,
+ * 1=det-forced. Written by hexa_forge_set_deterministic(). */
+static int _hx_forge_det_mode = -1;
+
+/* Returns 1 (det) if API was set OR env HEXA_DET is active; else 0 (fast). */
 static int _forge_det_on(void) {
+    if (_hx_forge_det_mode >= 0) return _hx_forge_det_mode;
     const char* v = getenv("HEXA_DET");
     return (v && v[0] && v[0] != '0') ? 1 : 0;
 }
 
+/* #4214 public C API — hexa set_deterministic()/is_deterministic() land here.
+ * torch.use_deterministic_algorithms(True/False) 1-1 analogue. API call
+ * overrides env; env is the escape-hatch for callers that cannot make an
+ * in-process API call (shell scripts, CI launchers, legacy setenv). */
+void hexa_forge_set_deterministic(int on) {
+    _hx_forge_det_mode = on ? 1 : 0;
+}
+int hexa_forge_is_deterministic(void) {
+    return _forge_det_on();
+}
+
 /* #pytorch-canon alertNotDeterministic ref-match: called in any non-det
- * dispatch path that has NO det counterpart when HEXA_DET=1 is active.
+ * dispatch path that has NO det counterpart when det mode is active.
  * Currently never reached — all 4 non-det atomic ops (GEMM/GEMV split-K,
  * col2im scatter, embedding-bwd scatter) have det gates — but this makes
  * the guarantee machine-enforced: a new atomic op added without a
  * _forge_det_on() gate will abort + report at runtime rather than silently
- * mis-execute under HEXA_DET=1. torch ref: aten/src/ATen/Context.cpp
+ * mis-execute in det mode. torch ref: aten/src/ATen/Context.cpp
  * alertNotDeterministic (RuntimeError when use_deterministic_algorithms(True)
  * and op has no det impl). Convention: call _forge_det_alert("op_name") in
  * any non-det branch that CANNOT fall back to a det counterpart when
@@ -856,9 +881,10 @@ static int _forge_det_on(void) {
 static __attribute__((unused)) void _forge_det_alert(const char* opname) {
     if (!_forge_det_on()) return;
     fprintf(stderr,
-        "[HEXA_DET] RuntimeError: op '%s' has no deterministic implementation "
-        "but HEXA_DET=1 is set. Unset HEXA_DET to use the fast non-det path "
-        "(torch.use_deterministic_algorithms analogue).\n", opname);
+        "[forge det] RuntimeError: op '%s' has no deterministic implementation "
+        "but det mode is ON (set_deterministic(true) or HEXA_DET=1). "
+        "Disable det mode to use the fast non-det path "
+        "(set_deterministic(false) or unset HEXA_DET).\n", opname);
     abort();
 }
 
