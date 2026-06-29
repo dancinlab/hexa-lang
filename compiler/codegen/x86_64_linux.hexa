@@ -4541,9 +4541,12 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                              "va_start: gp_offset = num_named*8"))
             _x86_buf.push(_x86_instr2("mov", _x86_va_memsz("dword", "rbp", vln + 0),
                              _x86_op_reg("r11d"), "va_start: va_list.gp_offset"))
-            // fp_offset (u32) = 48 (no XMM saved → FP varargs route to overflow; RUNG1)
+            // fp_offset (u32) = 48 + num_named_sse*16 (r1: XMM ARE saved → first unnamed
+            // SSE vararg lives at reg_save_area + 48; GCC inits `movl $48,fp_off` for a
+            // fn with 0 named FP params, exactly matching PSABI §3.5.7). The r1 whitelist
+            // has no named FP params (count n is integer-class), so the base 48 is exact.
             _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_imm(48),
-                             "va_start: fp_offset = 48 (int-class only)"))
+                             "va_start: fp_offset = 48 (no named SSE params)"))
             _x86_buf.push(_x86_instr2("mov", _x86_va_memsz("dword", "rbp", vln + 4),
                              _x86_op_reg("r11d"), "va_start: va_list.fp_offset"))
             // overflow_arg_area = rbp + 16 (first stack vararg, above saved rbp + ret)
@@ -4606,6 +4609,64 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r11", 0),
                              "va_arg: value = *(long*)addr"))
             if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r11", 0) }
+            return
+        }
+        // `__builtin_va_arg_fp(ap)` — fetch the next SSE-class (double/float) vararg per
+        // PSABI §3.5.7 fig 3.34. The FP-class sibling of `__builtin_va_arg`: same control
+        // structure, but it walks `fp_offset` (va_list+4, the 32-bit field GCC packs into
+        // the SECOND half of the first eightbyte) over the 128-byte XMM register-save
+        // area (16-byte stride, base 48) and the 8-byte overflow path. Reference-match:
+        // GCC 13.3.0 `-O0 -S` of `double f(int n, ...)` `va_arg(ap, double)`:
+        //   movl fp_offset,%eax ; cmpl $175,%eax ; ja ovf
+        //   reg: rax=reg_save_area ; edx=fp_offset(zero-ext) ; add rdx,rax ; fp_offset+=16
+        //   ovf: rax=overflow_arg_area ; ovf+=8
+        //   movsd (rax),xmm0
+        // — exactly the cmp $175 / 16-byte-reg-stride / 8-byte-overflow sequence captured
+        // above. The loaded value's raw IEEE-754 BITS go into a GP reg (mov, not movsd —
+        // identical bytes, and the float intrinsics already operate on bits in a GP reg
+        // via movq), boxed as a TAG_FLOAT(1) leaf — mirroring the SSE param ingress which
+        // stamps TAG_FLOAT after movq'ing xmm→gp. fires only under HEXA_VA_INTRINSICS=1.
+        if s.op == "__builtin_va_arg_fp" {
+            let vfn = _x86_va_lbl
+            _x86_va_lbl = _x86_va_lbl + 1
+            let fovf = ".Lvaargfp_ovf" + to_string(vfn)
+            let fdone = ".Lvaargfp_done" + to_string(vfn)
+            _x86_hv_payload(s.args[0], st, rm, "r10", opts)   // r10 = &va_list
+            // eax = fp_offset (u32, va_list+4); cmp 175; ja overflow  (GCC `cmpl $175`)
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("eax"),
+                             _x86_va_memsz("dword", "r10", 4), "va_arg_fp: eax = fp_offset"))
+            _x86_buf.push(_x86_instr2("cmp", _x86_op_reg("eax"), _x86_op_imm(175),
+                             "va_arg_fp: fp_offset vs 175 (= 176-1, last 1-eightbyte SSE slot)"))
+            _x86_buf.push(_x86_instr1("ja", _x86_op_label(fovf),
+                             "va_arg_fp: fp_offset > 175 → overflow"))
+            // reg path: addr = reg_save_area + fp_offset (fp_offset already includes the
+            // 48-byte GP base; XMM_i sits at reg_save_area+48+16*i). 16-byte stride.
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("eax"), _x86_op_reg("eax"),
+                             "va_arg_fp: zero-extend fp_offset into rax"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r10", 16),
+                             "va_arg_fp: r11 = reg_save_area"))
+            _x86_buf.push(_x86_instr2("add", _x86_op_reg("r11"), _x86_op_reg("rax"),
+                             "va_arg_fp: addr = reg_save_area + fp_offset"))
+            // fp_offset += 16 (store back) — SSE slot stride per PSABI §3.5.7
+            _x86_buf.push(_x86_instr2("add", _x86_op_reg("eax"), _x86_op_imm(16),
+                             "va_arg_fp: fp_offset + 16"))
+            _x86_buf.push(_x86_instr2("mov", _x86_va_memsz("dword", "r10", 4),
+                             _x86_op_reg("eax"), "va_arg_fp: store fp_offset back"))
+            _x86_buf.push(_x86_instr1("jmp", _x86_op_label(fdone), "va_arg_fp: → load"))
+            // overflow path: addr = overflow_arg_area; overflow_arg_area += 8 (one
+            // eightbyte on the stack, NOT 16 — a stacked double occupies 8 bytes).
+            _x86_buf.push(_x86_instr0("label", fovf))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r10", 8),
+                             "va_arg_fp: r11 = overflow_arg_area"))
+            _x86_buf.push(_x86_instr2("lea", _x86_op_reg("rax"), _x86_op_mem("r11", 8),
+                             "va_arg_fp: overflow + 8"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_mem("r10", 8), _x86_op_reg("rax"),
+                             "va_arg_fp: store overflow_arg_area back"))
+            // load the raw 8 IEEE-754 bytes and box as TAG_FLOAT(1) leaf
+            _x86_buf.push(_x86_instr0("label", fdone))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r11", 0),
+                             "va_arg_fp: value bits = *(double*)addr"))
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r11", 1) }
             return
         }
         // `__builtin_va_end(ap)` — SysV no-op (the va_list lives in the frame, nothing
@@ -5213,20 +5274,24 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
     // bottom-of-frame at [rsp + slot*256], below the rbp-relative spill slots.
     let _try_cnt = _x86_count_try_setjmp(mf)
     let _try_buf_bytes = _try_cnt * 256
-    // RFC061 §M8 varargs-ABI (RUNG1) — reserve the SysV va_list frame for a variadic
-    // fn: a 48-byte GP reg_save_area + 24-byte va_list struct, rounded to 80 (16B mult,
-    // alignment-preserving). Wedged BETWEEN the regalloc spill slots (rbp-relative,
-    // logical [0, alloc.frame_size)) and the try jmp_bufs (rsp-relative, bottom), so it
-    // aliases neither. _x86_va_active/_x86_va_rsa_base/_x86_va_list_base carry the
-    // layout to the va builtins. NON-variadic (default) → va_block 0 → byte-eq NEUTRAL.
+    // RFC061 §M8 varargs-ABI (r1) — reserve the SysV va_list frame for a variadic
+    // fn: a 176-byte reg_save_area (48 GP + 128 XMM, PSABI §3.5.7 fig 3.34) + 24-byte
+    // va_list struct = 200, rounded to 208 (16B mult, alignment-preserving). Reference-
+    // match: GCC 13.3.0 spills `%rsi..%r9` at -168..-136(%rbp) and `%xmm0..%xmm7` via
+    // movaps at -128..-16(%rbp) → reg_save_area = 176 bytes, with XMM_i @ rsa+48+16*i.
+    // Wedged BETWEEN the regalloc spill slots (rbp-relative, logical [0, frame_size)) and
+    // the try jmp_bufs (rsp-relative, bottom), so it aliases neither. _x86_va_active/
+    // _x86_va_rsa_base/_x86_va_list_base carry the layout to the va builtins. NON-variadic
+    // (default) → va_block 0 → byte-eq NEUTRAL.
     _x86_va_active = _x86_is_variadic(mf.name)
     let mut _va_block = 0
-    if _x86_va_active { _va_block = 80 }
+    if _x86_va_active { _va_block = 208 }
     let spill_frame = alloc.frame_size + _va_block + _try_buf_bytes
     if _x86_va_active {
-        // reg_save_area[0] (lowest addr) just above the try bufs; GP reg i @ +8*i.
+        // reg_save_area[0] (lowest addr) just above the try bufs; GP reg i @ +8*i,
+        // XMM reg i @ +48+16*i (PSABI §3.5.7). va_list struct sits at rsa+176.
         _x86_va_rsa_base = 0 - (_X86_CALLEE_SAVE_BYTES + alloc.frame_size + _va_block)
-        _x86_va_list_base = _x86_va_rsa_base + 48
+        _x86_va_list_base = _x86_va_rsa_base + 176
     } else {
         _x86_va_rsa_base = 0
         _x86_va_list_base = 0
@@ -5254,12 +5319,12 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
                             "prologue: alloc spill frame"))
     }
 
-    // RFC061 §M8 varargs-ABI (RUNG1) — spill the 6 GP arg registers into the
+    // RFC061 §M8 varargs-ABI (r1) — spill the 6 GP arg registers into the
     // reg_save_area BEFORE any param ingress clobbers them (PSABI §3.5.7; matches GCC
-    // 13.3.0's `movq %rsi,-168(%rbp) … %r9,-136(%rbp)` reg-save block, integer class
-    // only — no XMM/movaps, RUNG1 scope). GP reg i (rdi,rsi,rdx,rcx,r8,r9) → reg_save_
-    // area[i] = [rbp + _x86_va_rsa_base + 8*i]. Named params are skipped at va_start via
-    // gp_offset; storing all 6 (incl. the named rdi) is PSABI-faithful and harmless.
+    // 13.3.0's `movq %rsi,-168(%rbp) … %r9,-136(%rbp)` reg-save block). GP reg i
+    // (rdi,rsi,rdx,rcx,r8,r9) → reg_save_area[i] = [rbp + _x86_va_rsa_base + 8*i].
+    // Named params are skipped at va_start via gp_offset; storing all 6 (incl. the
+    // named rdi) is PSABI-faithful and harmless.
     if _x86_va_active {
         let mut _vgi = 0
         while _vgi < 6 {
@@ -5268,6 +5333,24 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
                 _x86_op_reg(_x86_64_arg_reg_seq(_vgi)),
                 "va prologue: spill GP arg reg → reg_save_area[" + to_string(_vgi) + "]"))
             _vgi = _vgi + 1
+        }
+        // r1 SSE-class — spill the 8 XMM arg registers into the FP half of the reg_save_
+        // area (PSABI §3.5.7; GCC 13.3.0 spills `movaps %xmm0,-128(%rbp) … %xmm7,-16(%rbp)`
+        // i.e. XMM_i @ reg_save_area + 48 + 16*i, immediately after the 48-byte GP block).
+        // A `double` vararg occupies only the LOW eightbyte of its 16-byte slot, which the
+        // FP va_arg reads back with `movsd (addr)` — so spilling the low 8 bytes via
+        // `movq [mem], xmmN` (the same xmm↔gp/mem mnemonic the fp-ABI Route C ingress
+        // already emits) is value-faithful for the double/float class (no movaps needed:
+        // the high eightbyte is never consumed by a 1-eightbyte SSE va_arg). The xmm regs
+        // carry the unnamed FP varargs; named FP params (none under the r1 whitelist) would
+        // be skipped at va_start via fp_offset just like the GP half.
+        let mut _vfi = 0
+        while _vfi < 8 {
+            _x86_buf.push(_x86_instr2("movq",
+                _x86_op_mem("rbp", _x86_va_rsa_base + 48 + _vfi * 16),
+                _x86_op_reg(_x86_64_sse_arg_reg_seq(_vfi)),
+                "va prologue: spill XMM arg reg → reg_save_area FP[" + to_string(_vfi) + "]"))
+            _vfi = _vfi + 1
         }
     }
 
