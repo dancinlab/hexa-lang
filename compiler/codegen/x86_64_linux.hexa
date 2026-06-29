@@ -4639,7 +4639,10 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             _x86_emit_zero_ret_pair(fname == "main")
         }
         if len(s.args) >= 1 {
-            if _is_cabi(fname) {
+            // A variadic fn (RUNG1, _x86_va_active) returns C-ABI single-register too
+            // (its named/return contract is raw C-ABI, like a Route C leaf). Fold it in
+            // so the C caller reads the value in rax, not the PAIR-MODEL tag.
+            if _is_cabi(fname) || _x86_va_active {
                 // Route C C-ABI return — a raw C-ABI fn returns its value in a
                 // SINGLE register (rax). Load just the payload eightbyte (the
                 // raw int/pointer); the HexaVal tag is dropped (the C caller
