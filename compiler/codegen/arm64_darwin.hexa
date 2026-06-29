@@ -2395,15 +2395,21 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // RT-NATIVE UNLOCK-2b ext: signed-i64 payload relational compares
         // (__hx_payload_lt/gt/le/ge) — `cmp x1,x3; cset x0,<cond>` → bool, INLINE.
         // Unblocks the native dispatch core's hexa_cmp_lt/gt/le/ge int leaves.
+        // UNSIGNED variants (__hx_payload_ult/ule) use the aarch64 lo/ls cond codes
+        // (CF/unsigned), for the fdlibm fmod raw 64-bit bit-word magnitude compares
+        // where the high bit is data, not a sign. Mirror of x86_64 setb/setbe.
         if (s.op == "__hx_payload_lt" || s.op == "__hx_payload_gt"
             || s.op == "__hx_payload_le" || s.op == "__hx_payload_ge"
-            || s.op == "__hx_payload_eq" || s.op == "__hx_payload_ne") && len(s.args) >= 2 {
+            || s.op == "__hx_payload_eq" || s.op == "__hx_payload_ne"
+            || s.op == "__hx_payload_ult" || s.op == "__hx_payload_ule") && len(s.args) >= 2 {
             let mut _pcond = "lt"
             if s.op == "__hx_payload_gt" { _pcond = "gt" }
             if s.op == "__hx_payload_le" { _pcond = "le" }
             if s.op == "__hx_payload_ge" { _pcond = "ge" }
             if s.op == "__hx_payload_eq" { _pcond = "eq" }
             if s.op == "__hx_payload_ne" { _pcond = "ne" }
+            if s.op == "__hx_payload_ult" { _pcond = "lo" }  // unsigned <  (C clear)
+            if s.op == "__hx_payload_ule" { _pcond = "ls" }  // unsigned <= (C clear|Z set)
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // a → x1=payload
             buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // b → x3=payload
             buf.push(_arm64_instr2("cmp", _arm64_op_reg("x1"),
@@ -2420,16 +2426,36 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // arithmetic leaves (hexa_add_slow/sub/mul fast path).
         if (s.op == "__hx_payload_add" || s.op == "__hx_payload_sub"
             || s.op == "__hx_payload_mul" || s.op == "__hx_payload_and"
-            || s.op == "__hx_payload_xor") && len(s.args) >= 2 {
+            || s.op == "__hx_payload_xor" || s.op == "__hx_payload_or") && len(s.args) >= 2 {
             let mut _aop = "add"
             if s.op == "__hx_payload_sub" { _aop = "sub" }
             if s.op == "__hx_payload_mul" { _aop = "mul" }
             if s.op == "__hx_payload_and" { _aop = "and" }
             if s.op == "__hx_payload_xor" { _aop = "eor" }
+            if s.op == "__hx_payload_or"  { _aop = "orr" }
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // a → x1=payload
             buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // b → x3=payload
             buf.push(_arm64_instr3(_aop, _arm64_op_reg("x1"), _arm64_op_reg("x1"),
                              _arm64_op_reg("x3"), s.op + ": x1 = a.pl " + _aop + " b.pl"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), s.op + ": TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // payload-shift-leaf: LOGICAL shifts on the raw 64-bit payload word —
+        // `__hx_payload_shl(v,n)` = lslv (shift-left) / `__hx_payload_shr(v,n)` =
+        // lsrv LOGICAL/UNSIGNED right (zero-fill, NOT asrv). aarch64 register
+        // variable-shift: lslv/lsrv take the count in a GP reg. Mirrors the x86_64
+        // shr/shl payload-shift-leaf; ADD-only (the compiler never calls these),
+        // so arm64 emit is byte-unchanged when the intrinsics are unused.
+        if (s.op == "__hx_payload_shl" || s.op == "__hx_payload_shr")
+            && len(s.args) >= 2 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // v → x1=payload
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // n → x3=count
+            let mut _sm = "lslv"
+            if s.op == "__hx_payload_shr" { _sm = "lsrv" } // LOGICAL right (zero-fill)
+            buf.push(_arm64_instr3(_sm, _arm64_op_reg("x1"), _arm64_op_reg("x1"),
+                             _arm64_op_reg("x3"), s.op + ": x1 = v.pl " + _sm + " n"))
             buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
                              _arm64_op_label("#0"), s.op + ": TAG_INT"))
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }

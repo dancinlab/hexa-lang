@@ -439,6 +439,14 @@ double hxlcl_sin(double x)                            { return sin(x); }
 double hxlcl_cos(double x)                            { return cos(x); }
 double hxlcl_exp(double x)                            { return exp(x); }
 double hxlcl_log(double x)                            { return log(x); }
+/* RT-NATIVE-FMOD (HEXA_RT_NATIVE_FMOD, default OFF · literal-∅ libm-leaf RUNG 2):
+ * when set, hxlcl_fmod is supplied by the hexa-NATIVE Route C fp-ABI (xmm) .o
+ * emitted from stdlib/runtime/hxlcl_core.hexa (HEXA_CABI_HXLCL=1) — the FIRST real
+ * libm-floor symbol that LEAVES this libc shim (literal-∅ progress: shim member
+ * count N→N-1). The shim drops BOTH arms below so ld -r sees no duplicate def.
+ * stage_resolve_runtime_a passes -DHEXA_RT_NATIVE_FMOD when it links the native
+ * fmod .o; default (macro undefined) keeps the existing arms → shim.o byte-id. */
+#ifndef HEXA_RT_NATIVE_FMOD
 /* LIBM-NATIVE (HEXA_LIBM_NATIVE_FMOD, default OFF · literal-∅ libm-leaf rung 1):
  * hxlcl_fmod is supplied by a SELF-CONTAINED, libm-free body — a VERBATIM port of
  * SunPro fdlibm `e_fmod.c` (`__ieee754_fmod`, netlib.org/fdlibm/e_fmod.c L28-150;
@@ -563,6 +571,7 @@ double __attribute__((noinline)) hxlcl_fmod(double x, double y) {
 #else
 double hxlcl_fmod(double x, double y)                 { return fmod(x, y); }
 #endif
+#endif /* !HEXA_RT_NATIVE_FMOD */
 
 /* ── env / process ───────────────────────────────────────────────────────── */
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT

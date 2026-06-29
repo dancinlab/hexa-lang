@@ -2949,3 +2949,162 @@ pub fn hxlcl_fp_addmul(x: HexaVal, y: HexaVal) -> int {
     let sum = __hx_payload_fadd(prod, x)      // xmm: (x*y) + x
     return sum                                 // SSE-class return → xmm0
 }
+
+// hxlcl_fmod — FIRST native-emit libm leaf via the fp-ABI (xmm) Route C path.
+// `double hxlcl_fmod(double x, double y)` returns the IEEE-754 remainder of x/y,
+// libm-FREE: a 1:1 port of musl src/math/fmod.c (the modern 64-bit-uint64
+// rewrite of SunPro fdlibm e_fmod.c — netlib.org/fdlibm/e_fmod.c). The result of
+// fmod is mathematically EXACT, so this is CORRECTLY-ROUNDED (0 ULP vs libc fmod
+// for every finite input). NO fmod()/<math.h> function: the only float ops are
+// the NaN/Inf propagation `(x*y)/(x*y)` and the signed-zero `0*x`, bare hardware
+// mulsd/divsd (no -lm symbol).
+//
+// THE BIT-REINTERPRET IS FREE. The SSE-class Route C ingress (PSABI §3.2.3)
+// movq's x/y's xmm bits into their GP payload home (TAG_FLOAT). That payload word
+// IS the raw IEEE-754 bit pattern — so the integer payload intrinsics
+// (__hx_payload_and/or/shl/shr/sub/mul) operate on `ux.i` directly with NO
+// reinterpret step. The float ops (__hx_payload_fmul/fdiv) read the SAME word as
+// a double via movq GP→xmm. The return ships `uxi`'s payload word back through
+// xmm0 (the SSE-ret branch movq's payload→xmm0 regardless of tag).
+//
+// LOGICAL shifts: musl uses C `uint64_t >>` (ZERO-FILL). __hx_payload_shr is the
+// logical (shr/lsrv) shift, NOT the BinOp `>>` which is arithmetic (sar) — a
+// negative double's sign bit must not sign-extend on `ux.i>>52`/`>>63`.
+//
+// UN-NESTED (str_core NESTING discipline, this file's header): every intrinsic
+// call writes EXACTLY ONE `let`; comparisons use __hx_payload_eq/ne/lt/le/ge.
+// reference: musl src/math/fmod.c (commit-stable; == fdlibm e_fmod.c algorithm).
+// default-OFF byteeq-neutral (HEXA_CABI_HXLCL/HEXA_LIBM_NATIVE_FMOD off).
+pub fn hxlcl_fmod(x: HexaVal, y: HexaVal) -> int {
+    // ux.i / uy.i — the raw IEEE-754 bits (the FLOAT-tagged param payload word).
+    let mut uxi = __hx_payload_add(x, 0)          // uint64_t uxi = ux.i
+    let mut uyi = __hx_payload_add(y, 0)          // uint64_t uy.i
+    // ex = ux.i>>52 & 0x7ff ;  ey = uy.i>>52 & 0x7ff ;  sx = ux.i>>63
+    let ux52 = __hx_payload_shr(uxi, 52)
+    let mut ex = __hx_payload_and(ux52, 2047)     // 0x7ff
+    let uy52 = __hx_payload_shr(uyi, 52)
+    let mut ey = __hx_payload_and(uy52, 2047)     // 0x7ff
+    let sx = __hx_payload_shr(uxi, 63)            // sign of x (0 or 1)
+
+    // if (uy.i<<1 == 0 || isnan(y) || ex == 0x7ff) return (x*y)/(x*y);
+    //   uy.i<<1 == 0      → y is ±0
+    //   isnan(y)          → (uy.i<<1) > (0x7ff0000000000000<<1) i.e. exp all-ones + frac!=0
+    //   ex == 0x7ff       → x is inf/nan
+    let uy1 = __hx_payload_shl(uyi, 1)            // uy.i<<1
+    let y_is_zero = __hx_payload_eq(uy1, 0)
+    // isnan(y): (uy.i<<1) >  (0x7ff0000000000000 << 1) == 0xffe0000000000000.
+    // Compare as UNSIGNED magnitude: shr by 1 then >. Equivalent: uy1 > 0xffe0...
+    // Use logical compare via subtraction-free path: isnan iff ey==0x7ff AND frac!=0.
+    let y_exp_max = __hx_payload_eq(ey, 2047)
+    let uy_frac = __hx_payload_and(uyi, 4503599627370495) // 0x000fffffffffffff
+    let uy_frac_nz = __hx_payload_ne(uy_frac, 0)
+    let y_is_nan = __hx_payload_and(y_exp_max, uy_frac_nz)
+    let x_exp_max = __hx_payload_eq(ex, 2047)
+    let e1 = __hx_payload_add(y_is_zero, y_is_nan)
+    let e2 = __hx_payload_add(e1, x_exp_max)
+    if __hx_payload_ne(e2, 0) {
+        let p = __hx_payload_fmul(x, y)           // x*y
+        let q = __hx_payload_fdiv(p, p)           // (x*y)/(x*y)  → NaN propagation
+        return q
+    }
+
+    // if (uxi<<1 <= uy.i<<1) { if (uxi<<1 == uy.i<<1) return 0*x; return x; }
+    // Compare the sign-stripped 64-bit magnitude words UNSIGNED (__hx_payload_ule):
+    // after `<<1` the old exponent-MSB lands in bit-63, which is DATA not a sign, so
+    // a signed compare would misorder large-exponent operands (musl uses C unsigned
+    // `<=`). bits<<1 drops the sign bit; the rest orders by numeric magnitude.
+    let ux1 = __hx_payload_shl(uxi, 1)
+    let mag_le = __hx_payload_ule(ux1, uy1)       // |x| <= |y|  (unsigned)
+    let mag_eq = __hx_payload_eq(ux1, uy1)        // |x| == |y|
+    if __hx_payload_ne(mag_le, 0) {
+        if __hx_payload_ne(mag_eq, 0) {
+            let zx = __hx_payload_fmul(0.0, x)    // 0*x (signed zero)
+            return zx
+        }
+        return uxi                                // bits of x (TAG carried via xmm0 ret)
+    }
+
+    // normalize x:  if (!ex) { for(i=uxi<<12; i>>63==0; ex--,i<<=1); uxi <<= -ex+1; }
+    //               else { uxi &= -1ULL>>12; uxi |= 1ULL<<52; }
+    if __hx_payload_eq(ex, 0) {
+        let mut ii = __hx_payload_shl(uxi, 12)
+        let mut hb = __hx_payload_shr(ii, 63)
+        while __hx_payload_eq(hb, 0) {
+            ex = __hx_payload_sub(ex, 1)
+            ii = __hx_payload_shl(ii, 1)
+            hb = __hx_payload_shr(ii, 63)
+        }
+        let negex = __hx_payload_sub(0, ex)       // -ex
+        let sh = __hx_payload_add(negex, 1)       // -ex + 1
+        uxi = __hx_payload_shl(uxi, sh)
+    } else {
+        let m = __hx_payload_and(uxi, 4503599627370495) // -1ULL>>12 == 0x000fffffffffffff
+        let imp = __hx_payload_or(m, 4503599627370496)  // 1ULL<<52 == 0x0010000000000000
+        uxi = __hx_payload_add(imp, 0)
+    }
+    // normalize y (mirror)
+    if __hx_payload_eq(ey, 0) {
+        let mut jj = __hx_payload_shl(uyi, 12)
+        let mut hb2 = __hx_payload_shr(jj, 63)
+        while __hx_payload_eq(hb2, 0) {
+            ey = __hx_payload_sub(ey, 1)
+            jj = __hx_payload_shl(jj, 1)
+            hb2 = __hx_payload_shr(jj, 63)
+        }
+        let negey = __hx_payload_sub(0, ey)
+        let shy = __hx_payload_add(negey, 1)
+        uyi = __hx_payload_shl(uyi, shy)
+    } else {
+        let my = __hx_payload_and(uyi, 4503599627370495)
+        let impy = __hx_payload_or(my, 4503599627370496)
+        uyi = __hx_payload_add(impy, 0)
+    }
+
+    // x mod y:  for (; ex>ey; ex--) { i=uxi-uy.i; if(i>>63==0){ if(i==0) return 0*x; uxi=i;} uxi<<=1; }
+    while __hx_payload_lt(ey, ex) {               // ex > ey
+        let d = __hx_payload_sub(uxi, uyi)        // i = uxi - uy.i
+        let dsign = __hx_payload_shr(d, 63)       // i>>63
+        if __hx_payload_eq(dsign, 0) {
+            if __hx_payload_eq(d, 0) {
+                let zx2 = __hx_payload_fmul(0.0, x)
+                return zx2
+            }
+            uxi = __hx_payload_add(d, 0)          // uxi = i
+        }
+        uxi = __hx_payload_shl(uxi, 1)            // uxi <<= 1
+        ex = __hx_payload_sub(ex, 1)
+    }
+    // tail (one more subtract):  i=uxi-uy.i; if(i>>63==0){ if(i==0) return 0*x; uxi=i; }
+    let dt = __hx_payload_sub(uxi, uyi)
+    let dtsign = __hx_payload_shr(dt, 63)
+    if __hx_payload_eq(dtsign, 0) {
+        if __hx_payload_eq(dt, 0) {
+            let zx3 = __hx_payload_fmul(0.0, x)
+            return zx3
+        }
+        uxi = __hx_payload_add(dt, 0)
+    }
+    // for (; uxi>>52 == 0; uxi<<=1, ex--);  (renormalize)
+    let mut top = __hx_payload_shr(uxi, 52)
+    while __hx_payload_eq(top, 0) {
+        uxi = __hx_payload_shl(uxi, 1)
+        ex = __hx_payload_sub(ex, 1)
+        top = __hx_payload_shr(uxi, 52)
+    }
+
+    // scale result:  if (ex>0) { uxi -= 1ULL<<52; uxi |= (uint64_t)ex<<52; }
+    //                else { uxi >>= -ex + 1; }
+    if __hx_payload_lt(0, ex) {                   // ex > 0
+        uxi = __hx_payload_sub(uxi, 4503599627370496) // -= 1ULL<<52
+        let exb = __hx_payload_shl(ex, 52)        // (uint64_t)ex << 52
+        uxi = __hx_payload_or(uxi, exb)
+    } else {
+        let negex2 = __hx_payload_sub(0, ex)
+        let rsh = __hx_payload_add(negex2, 1)     // -ex + 1
+        uxi = __hx_payload_shr(uxi, rsh)
+    }
+    // uxi |= (uint64_t)sx << 63;  ux.i = uxi;  return ux.f;
+    let sxb = __hx_payload_shl(sx, 63)            // sx << 63
+    uxi = __hx_payload_or(uxi, sxb)
+    return uxi                                     // bits → xmm0 (SSE-class return)
+}

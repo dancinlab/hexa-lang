@@ -1236,9 +1236,18 @@ fn _bind_builtin_names() -> [string] {
         "__hx_tag", "__hx_payload_eq", "__hx_payload_nz",
         "__hx_payload_lt", "__hx_payload_gt", "__hx_payload_le", "__hx_payload_ge",
         "__hx_payload_eq", "__hx_payload_ne",
+        // UNSIGNED magnitude compares (libm-leaf fdlibm fmod): __hx_payload_ult/ule
+        // = unsigned < / <= (x86_64 setb/setbe · arm64 lo/ls). ADD-only.
+        "__hx_payload_ult", "__hx_payload_ule",
         "__hx_payload_add", "__hx_payload_sub", "__hx_payload_mul",
         "__hx_payload_div", "__hx_payload_mod",
-        "__hx_payload_and", "__hx_payload_xor",
+        "__hx_payload_and", "__hx_payload_xor", "__hx_payload_or",
+        // LOGICAL bit-shifts on the raw payload word (libm-leaf fdlibm fmod port):
+        // __hx_payload_shl = v<<n, __hx_payload_shr = v>>n ZERO-FILL (logical, NOT
+        // the BinOp `>>` arithmetic sar). x86_64 shl/shr · arm64 lslv/lsrv. ADD-only
+        // (compiler never calls them); parses as an ordinary identifier-call (frozen
+        // 151c52c8-safe, like the existing __hx_payload_* family).
+        "__hx_payload_shl", "__hx_payload_shr",
         "__hx_payload_fadd", "__hx_payload_fsub", "__hx_payload_fmul", "__hx_payload_fdiv",
         "__hx_payload_flt", "__hx_payload_fgt", "__hx_payload_fle", "__hx_payload_fge",
         "__hx_str_byte", "__hx_to_double", "__hx_arr_len", "__hx_syscall0", "__hx_syscall6", "__hx_ptr_store64", "__hx_ptr_load64", "__hx_ptr_store32", "__hx_ptr_load32", "__hx_ptr_store8", "__hx_ptr_load8",
