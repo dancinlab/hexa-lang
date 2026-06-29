@@ -1654,6 +1654,63 @@ build_runtime_a_from_source() {
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FREE: HEXA_RT_NATIVE_FREE=1 IGNORED — fp-ABI xmm Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim free member" >&2
             fi
         fi
+        # ── RFC061 §M8 RT-NATIVE CORE FILE* family (fopen/fread/ftell/fseek · Route C
+        #    whole-module emit · COUPLED leaves, default OFF) ──
+        # FIRST COUPLED (non-pure) leaves to leave the shim (strstr/free/strtoll were
+        # zero-reloc pure leaves). In the frozen 0-libc floor a FILE* is `(void*)(fd+1)`
+        # (NOT a libc stdio struct), so each native Route C body is a PURE COMPOSITION
+        # over already-dissolved syscall LEAVES — fopen→hxlcl_open_sys, fread→hxlcl_read,
+        # ftell/fseek→hxlcl_lseek — plus raw-payload pointer arithmetic. Those inner
+        # callees stay RETAINED shim globals, so the objcopy-isolated native .o keeps
+        # bl-relocs to them which resolve from the still-compiled shim (the atoi→atoll /
+        # strdup→malloc coupled-leaf class — NOT zero-reloc). hxlcl_core.hexa is
+        # Route-C-lowered ONCE per symbol via HEXA_CABI_HXLCL=1; objcopy
+        # --keep-global-symbol=<sym> ISOLATES that one strong def so the whole-module
+        # routec.o's sibling C-ABI defs stay served by the shim and the ld -r multidef
+        # gate (S5) sees exactly one new strong def. Each shim member drops via
+        # -DHEXA_RT_NATIVE_<SYM> (#ifndef in shim.c). DEFAULT (all unset) adds NO -D and
+        # NO member → shim.o + archive byte-identical (release-integrity invariant).
+        # x86_64-linux ONLY (same host gate as the libm + strstr/strtoll/free).
+        # Reference-matched body-for-body to self/runtime_emit_full.hexa:1153-1242.
+        for _rnfile_sym in fopen fread ftell fseek; do
+            _rnfile_macro="HEXA_RT_NATIVE_$(echo "$_rnfile_sym" | tr '[:lower:]' '[:upper:]')"
+            eval "_rnfile_on=\${$_rnfile_macro:-0}"
+            [ "$_rnfile_on" = "1" ] || continue
+            if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
+                local _rnfile_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
+                if [ -z "$_rnfile_bin" ]; then
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-${_rnfile_sym} FATAL: ${_rnfile_macro}=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
+                fi
+                local _rnfile_drv="build/_rnfile_${_rnfile_sym}_drv.hexa"
+                local _rnfile_s="build/hxlcl_${_rnfile_sym}_native.s"
+                local _rnfile_full="build/hxlcl_${_rnfile_sym}_native_full.o"
+                local _rnfile_o="build/hxlcl_${_rnfile_sym}_native.o"
+                printf 'fn _rnfile_unused() {}\n' > "$_rnfile_drv"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-${_rnfile_sym}: emitting native Route C hxlcl_${_rnfile_sym} .o via $_rnfile_bin (HEXA_CABI_HXLCL=1, replacing libc-shim ${_rnfile_sym} member)…"
+                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                    "$_rnfile_bin" "$_rnfile_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnfile_s" stdlib/runtime/hxlcl_core.hexa \
+                    >"build/_rnfile_${_rnfile_sym}.log" 2>&1 \
+                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-${_rnfile_sym} FATAL: ${_rnfile_sym} Route C asm emit failed — see build/_rnfile_${_rnfile_sym}.log" >&2; cat "build/_rnfile_${_rnfile_sym}.log" >&2; return 1; }
+                [ -s "$_rnfile_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-${_rnfile_sym} FATAL: empty $_rnfile_s" >&2; return 1; }
+                $CC $_mo_archflag -c "$_rnfile_s" -o "$_rnfile_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-${_rnfile_sym} FATAL: assemble $_rnfile_s failed" >&2; return 1; }
+                # ISOLATE hxlcl_<sym>: keep ONLY that strong global; sibling C-ABI defs
+                # (including the inner-callee leaves open_sys/read/lseek) localize → the
+                # ld -r multidef gate sees exactly one new strong def, and the inner bl
+                # targets resolve as UNDEF from the retained shim members.
+                if command -v objcopy >/dev/null 2>&1; then
+                    objcopy --keep-global-symbol=hxlcl_${_rnfile_sym} "$_rnfile_full" "$_rnfile_o" \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-${_rnfile_sym} FATAL: objcopy isolate ${_rnfile_sym} failed" >&2; return 1; }
+                else
+                    cp "$_rnfile_full" "$_rnfile_o"
+                fi
+                [ -f "$_rnfile_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-${_rnfile_sym} FATAL: $_rnfile_o not produced" >&2; return 1; }
+                _mo_shim_def="$_mo_shim_def -D${_rnfile_macro}"
+                _mo_hxlcl_members="$_mo_hxlcl_members $_rnfile_o"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-${_rnfile_sym}: hxlcl_${_rnfile_sym} → native Route C .o (isolated, coupled to retained shim syscall leaf); shim.o built with -D${_rnfile_macro} (${_rnfile_sym} dropped) — ld -r multidef gate validates"
+            else
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-${_rnfile_sym}: ${_rnfile_macro}=1 IGNORED — fp-ABI Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim ${_rnfile_sym} member" >&2
+            fi
+        done
         # ── RFC061 §M8 RT-NATIVE-CALLOC (Route C whole-module emit · COMPOSITE
         #    non-libm leaf, default OFF) ──
         # hxlcl_calloc leaves the shim (free #4242 precedent). NOT a pure leaf — its
