@@ -1364,8 +1364,8 @@ build_runtime_a_from_source() {
         # ── RFC061 §M8 RT-NATIVE-SIN (fp-ABI xmm Route C · libm-leaf RUNG 3, default OFF) ──
         # hxlcl_sin (`double sin(double)`) native-emitted via the SAME fp-ABI (xmm)
         # Route C path as fmod. The codegen emits the WHOLE stdlib/runtime/hxlcl_core.hexa
-        # to one .o under HEXA_CABI_HXLCL=1; the whitelisted SSE symbols (hxlcl_sin +
-        # its private kernels hxlcl__k_sin/hxlcl__k_cos) land in that .o. The body is a
+        # to one .o under HEXA_CABI_HXLCL=1; the whitelisted SSE symbol hxlcl_sin lands
+        # in that .o (the __sin/__cos kernels are inlined into its body). The body is a
         # 1:1 musl src/math/{sin,__sin,__cos,__rem_pio2}.c port (libm-free; small +
         # medium argument-reduction paths). The shim drops its sin member via
         # -DHEXA_RT_NATIVE_SIN (#ifndef in shim.c). DEFAULT (HEXA_RT_NATIVE_SIN unset)

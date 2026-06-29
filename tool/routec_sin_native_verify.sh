@@ -8,8 +8,8 @@
 #   (A) DEFAULT (HEXA_RT_NATIVE_SIN OFF) shim.o is BYTE-IDENTICAL to the origin/main
 #       baseline shim.o (the new `#ifndef HEXA_RT_NATIVE_SIN` guard compiles out →
 #       the libc-delegate body is untouched; release-integrity invariant).
-#   (B) ON: the Route C codegen emits `hxlcl_sin` (+ its private kernels
-#       hxlcl__k_sin/hxlcl__k_cos) as DEFINED (T) externals in the native .o, AND the
+#   (B) ON: the Route C codegen emits `hxlcl_sin` (with the __sin/__cos kernels inlined
+#       into its body) as a DEFINED (T) external in the native .o, AND the
 #       ON shim.o (-DHEXA_RT_NATIVE_SIN) NO LONGER defines hxlcl_sin — the symbol
 #       MOVES from the C shim to the native object (literal-∅ progress: one member
 #       dropped). NO undefined libm `sin` ref in the native object (libm-free).
@@ -85,9 +85,7 @@ env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
 [ -s "$OUT/routec.s" ] || { echo "EMPTY_ASM"; exit 1; }
 $CC -c "$OUT/routec.s" -o "$OUT/routec.o" 2>"$OUT/asm.err" || { echo "ASSEMBLE_FAIL"; cat "$OUT/asm.err" >&2; exit 1; }
 SIN_T_NATIVE=$(nm "$OUT/routec.o" 2>/dev/null | grep -E ' T _?hxlcl_sin$' | wc -l | tr -d ' ')
-KSIN_T=$(nm "$OUT/routec.o" 2>/dev/null | grep -E ' T _?hxlcl__k_sin$' | wc -l | tr -d ' ')
-KCOS_T=$(nm "$OUT/routec.o" 2>/dev/null | grep -E ' T _?hxlcl__k_cos$' | wc -l | tr -d ' ')
-echo "    hxlcl_sin / __k_sin / __k_cos defined (T) in native routec.o = $SIN_T_NATIVE / $KSIN_T / $KCOS_T  (expect 1/1/1)"
+echo "    hxlcl_sin defined (T) in native routec.o = $SIN_T_NATIVE  (expect 1; __sin/__cos kernels inlined)"
 # undefined libm sin/cos ref in the native object? (must be ZERO — libm-free)
 SIN_U_NATIVE=$(nm "$OUT/routec.o" 2>/dev/null | grep -E ' U _?(sin|cos)$' | wc -l | tr -d ' ')
 echo "    undefined libm 'sin'/'cos' refs in native routec.o = $SIN_U_NATIVE  (expect 0)"
@@ -143,19 +141,18 @@ int main(void){
     return fail?1:0;
 }
 EOF
-# hxlcl_sin + its kernels are SELF-CONTAINED (no external call/reloc). routec.o is the
-# WHOLE module emit, so wholesale linking drags siblings' undefined externs (setenv/
-# malloc/environ/__errno_location — NONE referenced by sin). Keep only the sin trio so
-# the value-exact gate links sin in isolation. Fallback: weak stubs for siblings.
+# hxlcl_sin is SELF-CONTAINED (kernels inlined; no external call/reloc). routec.o is
+# the WHOLE module emit, so wholesale linking drags siblings' undefined externs (setenv/
+# malloc/environ/__errno_location — NONE referenced by sin). Keep only hxlcl_sin so the
+# value-exact gate links sin in isolation. Fallback: weak stubs for siblings.
 cat > "$OUT/stubs.c" <<'EOF'
 #include <stdlib.h>
 __attribute__((weak)) void *hxlcl_malloc(unsigned long n){ return malloc(n?n:1); }
 EOF
 $CC "$OUT/acc.c" "$OUT/routec.o" "$OUT/stubs.c" -o "$OUT/acc" -lm 2>"$OUT/link.err"
 if [ ! -x "$OUT/acc" ]; then
-    echo "    [C] whole-module link pulled a sibling extern; isolating sin trio…"
-    objcopy --keep-global-symbol=hxlcl_sin --keep-global-symbol=hxlcl__k_sin \
-            --keep-global-symbol=hxlcl__k_cos "$OUT/routec.o" "$OUT/sin_only.o" 2>/dev/null
+    echo "    [C] whole-module link pulled a sibling extern; isolating hxlcl_sin…"
+    objcopy --keep-global-symbol=hxlcl_sin "$OUT/routec.o" "$OUT/sin_only.o" 2>/dev/null
     $CC "$OUT/acc.c" "$OUT/sin_only.o" -o "$OUT/acc" -lm 2>"$OUT/link2.err" \
         || { echo "LINK_FAIL"; cat "$OUT/link.err" "$OUT/link2.err" >&2; exit 1; }
 fi

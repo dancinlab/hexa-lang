@@ -2317,18 +2317,14 @@ pub fn _is_cabi(fname: string) -> bool {
     // ON (HEXA_CABI_HXLCL=1) it replaces the libc-shim fmod() member (shim drops it
     // via -DHEXA_LIBM_NATIVE_FMOD); default-OFF byteeq-neutral.
     if fname == "hxlcl_fmod" { return true }
-    // fp-ABI libm-leaf RUNG 3 — hxlcl_sin (`double sin(double)`) + its two private
-    // kernels hxlcl__k_sin / hxlcl__k_cos. A 1:1 musl src/math/{sin,__sin,__cos,
-    // __rem_pio2}.c port (small + medium reduction paths, libm-free) in stdlib/runtime/
-    // hxlcl_core.hexa. hxlcl_sin's body makes inner C-ABI calls `bl hxlcl__k_sin` /
-    // `bl hxlcl__k_cos` (both whitelisted so the call boundary lowers SSE-class —
-    // double args in xmm, double ret in xmm0 — and binds cross-fn intra-object, the
-    // atoi→atoll inner-call pattern extended to the SSE class). ON (HEXA_CABI_HXLCL=1)
-    // hxlcl_sin replaces the libc-shim sin() member (shim drops via -DHEXA_RT_NATIVE_SIN);
-    // the two kernels ship in the SAME native .o. default-OFF byteeq-neutral.
+    // fp-ABI libm-leaf RUNG 3 — hxlcl_sin (`double sin(double)`). A 1:1 musl
+    // src/math/{sin,__sin,__cos,__rem_pio2}.c port (small + medium reduction paths,
+    // libm-free) in stdlib/runtime/hxlcl_core.hexa, with the __sin/__cos kernels
+    // INLINED into the single self-contained body (no inner SSE-class call boundary —
+    // avoids passing HexaVal-typed literal args across an fn boundary). ON
+    // (HEXA_CABI_HXLCL=1) hxlcl_sin replaces the libc-shim sin() member (shim drops
+    // via -DHEXA_RT_NATIVE_SIN). default-OFF byteeq-neutral.
     if fname == "hxlcl_sin" { return true }
-    if fname == "hxlcl__k_sin" { return true }
-    if fname == "hxlcl__k_cos" { return true }
     return false
 }
 
@@ -2355,24 +2351,10 @@ fn _cabi_sse_arg(fname: string, idx: i64) -> bool {
         if idx == 1 { return true }
         return false
     }
-    // hxlcl_sin(x: double) -> double : arg 0 SSE; return SSE.
+    // hxlcl_sin(x: double) -> double : arg 0 SSE; return SSE. (kernels inlined → no
+    // multi-arg kernel signatures here.)
     if fname == "hxlcl_sin" {
         if idx == 0 { return true }
-        return false
-    }
-    // hxlcl__k_sin(x: double, y: double, iy: int) -> double : args 0,1 SSE (xmm0/xmm1);
-    // iy is INTEGER-class (rdi) — the SSE and INTEGER arg sequencers are SEPARATE
-    // counters (PSABI §3.2.3), so iy takes the FIRST integer reg while x,y take the
-    // first two xmm regs. Marking idx 2 as NOT-SSE routes it to the GP path.
-    if fname == "hxlcl__k_sin" {
-        if idx == 0 { return true }
-        if idx == 1 { return true }
-        return false
-    }
-    // hxlcl__k_cos(x: double, y: double) -> double : args 0,1 SSE; return SSE.
-    if fname == "hxlcl__k_cos" {
-        if idx == 0 { return true }
-        if idx == 1 { return true }
         return false
     }
     return false
@@ -2381,8 +2363,6 @@ fn _cabi_sse_ret(fname: string) -> bool {
     if fname == "hxlcl_fp_addmul" { return true }
     if fname == "hxlcl_fmod" { return true }
     if fname == "hxlcl_sin" { return true }
-    if fname == "hxlcl__k_sin" { return true }
-    if fname == "hxlcl__k_cos" { return true }
     return false
 }
 // fp-ABI symbols carry SSE-class params/return. The x86_64 backend lowers them
@@ -2394,8 +2374,6 @@ pub fn _cabi_is_fp(fname: string) -> bool {
     if fname == "hxlcl_fp_addmul" { return true }
     if fname == "hxlcl_fmod" { return true }
     if fname == "hxlcl_sin" { return true }
-    if fname == "hxlcl__k_sin" { return true }
-    if fname == "hxlcl__k_cos" { return true }
     return false
 }
 
