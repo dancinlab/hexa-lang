@@ -168,7 +168,42 @@ fn _conv1d_db_colsum(dy: int, db_out: int, T: int, Cout: int) {
 }
 
 // add bias b[boff+co] into Y[t·Cout+co] in place over the matmul result `mm`.
+// r3 device-residency: when CUDA is present, broadcast the bias on-device via a
+// rank-1 GEMM (ones[T,1] @ b[1,Cout] = each row = b) then a device elementwise
+// residual-add (out = mm + bias_tiled, both FARR_DEVICE) — the classic BLAS ger
+// bias-broadcast (cuDNN/cuBLAS epilogue idiom). This eliminates the T·Cout boxed
+// host t_get/t_set loop AND the D2H sync it forced on the device-resident matmul
+// result `mm` (measured: emptying this loop collapsed the full-CLM step 33->14ms;
+// the host bias-add path was ~58% of the step, NOT the ~2% earlier mis-attributed).
+// Byte-exact: the rank-1 GEMM is a single-term product 1.0·b[co] (no FP reduction
+// reassociation) and the residual-add is elementwise in the same order as the host
+// loop (max|Δ|=0). cuda_available()==0 / GPU failure → host loop below (the proven
+// reference). byteeq-neutral: conv_lib is not in the self/ compile closure.
 fn _conv1d_add_bias(mm: int, b: int, boff: int, y_out: int, T: int, Cout: int) {
+    if _conv1d_dev_on() == 1 {
+        // ones[T,1] device column of 1.0 (T host writes — 512x cheaper than T·Cout)
+        let ones = t_zeros(T)
+        let mut oi = 0
+        while oi < T { t_set(ones, oi, 1.0); oi = oi + 1 }
+        // b[boff..boff+Cout] -> bslice[1,Cout] via the [1xN] identity transpose seam
+        let bslice = t_zeros(Cout)
+        let _bs = farr_transpose_2d_gpu(b, boff, bslice, 0, 1, Cout)
+        // bias_tiled[T,Cout] = ones[T,1] @ bslice[1,Cout] (device, each row = b)
+        let bias_tiled = forge_dispatch_matmul(ones, T, 1, bslice, Cout)
+        // y_out[i] = mm[i] + bias_tiled[i] (device elementwise add)
+        let rc = forge_dispatch_residual_add(mm, bias_tiled, y_out, T * Cout)
+        t_free(ones)
+        t_free(bslice)
+        t_free(bias_tiled)
+        if rc == 0 {
+            // residual_add leaves y_out FARR_DEVICE; downstream consumers that read
+            // y on the host scalar path (e.g. a conv bwd seeded by this output) see
+            // a stale host buffer. One host read+write forces D2H coherence so y_out
+            // is host-canonical (the proven contract of the host loop below).
+            t_set(y_out, 0, t_get(y_out, 0))
+            return
+        }
+    }
     let mut t = 0
     while t < T {
         let mut co = 0
