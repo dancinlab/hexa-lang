@@ -3513,15 +3513,29 @@ pub fn hxlcl_cos(x: HexaVal) -> int {
         }
     }
 
-    // ── argument reduction (musl __rem_pio2 small + medium) — IDENTICAL to sin ──
+    // ── argument reduction (musl __rem_pio2 small + medium) ──
+    // CANCELLATION DIVERSION (musl __rem_pio2 `goto medium`): musl jumps STRAIGHT
+    // to the medium toint path for the three cancellation cases — (a) |x| ~= k*pi/2
+    // for k∈{1,2} (the `(ix & 0xfffff) == 0x921fb` mask, inside the ix<=0x400f6a7a
+    // block) and (b) |x| ~= 3pi/2 (`ix == 0x4012d97c`) and (c) |x| ~= 2pi
+    // (`ix == 0x401921fb`). When the SMALL-path band ladder is FLATTENED into
+    // independent `if reduced==0` bands, each goto-medium must skip ALL FOUR bands
+    // (NOT just its own) — otherwise a cancellation x falls through to the NEXT band
+    // and is reduced with the WRONG k (the #4230/#4231 sin band-ladder lower-bound
+    // bug; verified by a musl-vs-flat C oracle over the k*pi/2 boundaries). So gate
+    // every band with a SINGLE `divert` predicate spanning all three cases.
     let frac = __hx_payload_and(ix, 1048575)      // ix & 0xfffff
-    let is_half = __hx_payload_eq(frac, 598523)   // == 0x921fb → near k*pi/2 (medium)
+    let is_half = __hx_payload_eq(frac, 598523)   // == 0x921fb → |x|~=k*pi/2 (k=1,2)
+    let is_3pi2 = __hx_payload_eq(ix, 1074977148) // == 0x4012d97c → |x|~=3pi/2
+    let is_4pi2 = __hx_payload_eq(ix, 1075388923) // == 0x401921fb → |x|~=2pi
+    let half_or_3 = __hx_payload_or(is_half, is_3pi2)
+    let divert = __hx_payload_or(half_or_3, is_4pi2)   // any cancellation → medium
+    let nodivert = __hx_payload_eq(divert, 0)          // 1 iff NOT a cancellation case
 
     // |x| ~<= 3pi/4 : ix <= 0x4002d97c  → k=1
     if __hx_payload_eq(reduced, 0) {
         let in_band1 = __hx_payload_ule(ix, 1073928572)
-        let nothalf = __hx_payload_eq(is_half, 0)
-        let do1 = __hx_payload_and(in_band1, nothalf)
+        let do1 = __hx_payload_and(in_band1, nodivert)
         if __hx_payload_ne(do1, 0) {
             if __hx_payload_eq(sign, 0) {
                 let z = __hx_payload_fsub(x, 1.57079632673412561417e+00)        // x - pio2_1
@@ -3547,8 +3561,7 @@ pub fn hxlcl_cos(x: HexaVal) -> int {
     // 3pi/4 < |x| ~<= 5pi/4 : ix <= 0x400f6a7a  → k=2
     if __hx_payload_eq(reduced, 0) {
         let in_band2 = __hx_payload_ule(ix, 1074752122)
-        let nothalf = __hx_payload_eq(is_half, 0)
-        let do2 = __hx_payload_and(in_band2, nothalf)
+        let do2 = __hx_payload_and(in_band2, nodivert)
         if __hx_payload_ne(do2, 0) {
             if __hx_payload_eq(sign, 0) {
                 let z = __hx_payload_fsub(x, 3.14159265346825122834e+00)
@@ -3574,9 +3587,7 @@ pub fn hxlcl_cos(x: HexaVal) -> int {
     // 5pi/4 < |x| ~<= 7pi/4 : ix <= 0x4015fdbc  → k=3 (skip near 3pi/2 = 0x4012d97c)
     if __hx_payload_eq(reduced, 0) {
         let in_band3 = __hx_payload_ule(ix, 1075183036)
-        let near32 = __hx_payload_eq(ix, 1074977148)
-        let not32 = __hx_payload_eq(near32, 0)
-        let do3 = __hx_payload_and(in_band3, not32)
+        let do3 = __hx_payload_and(in_band3, nodivert)
         if __hx_payload_ne(do3, 0) {
             if __hx_payload_eq(sign, 0) {
                 let z = __hx_payload_fsub(x, 4.71238898020237684251e+00)
@@ -3602,9 +3613,7 @@ pub fn hxlcl_cos(x: HexaVal) -> int {
     // 7pi/4 < |x| ~<= 9pi/4 : ix <= 0x401c463b  → k=4 (skip near 4pi/2 = 0x401921fb)
     if __hx_payload_eq(reduced, 0) {
         let in_band4 = __hx_payload_ule(ix, 1075594811)
-        let near42 = __hx_payload_eq(ix, 1075388923)
-        let not42 = __hx_payload_eq(near42, 0)
-        let do4 = __hx_payload_and(in_band4, not42)
+        let do4 = __hx_payload_and(in_band4, nodivert)
         if __hx_payload_ne(do4, 0) {
             if __hx_payload_eq(sign, 0) {
                 let z = __hx_payload_fsub(x, 6.28318530693650245667e+00)
