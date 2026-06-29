@@ -76,11 +76,20 @@ printf 'fn _drv_unused() {}\n' > "$TMP/_drv.hexa"
 
 emit_one() {
     # $1 = source .hexa, $2 = output .o, $3 = symbol name
-    local src="$1" outo="$2" sym="$3" s="$TMP/$(basename "$outo" .o).s"
+    local src="$1" outo="$2" sym="$3"
+    local s="$TMP/$(basename "$outo" .o).s"
     echo "[va-arm64-smoke] emit $sym ($TARGET) …"
     HEXA_VA_INTRINSICS=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
         "$APRIME" "$TMP/_drv.hexa" --emit=asm --target="$TARGET" -o "$s" "$src"
     [ -s "$s" ] || { echo "[va-arm64-smoke] FATAL: empty $s" >&2; exit 1; }
+    # arm64-linux ELF GNU-as fixup: the shared arm64 codegen emits Mach-O-style
+    # `adrp X, sym@PAGE` + `add X, X, sym@PAGEOFF` (correct for darwin Mach-O via cc),
+    # but GNU `as` for ELF wants bare `adrp X, sym` + `add X, X, :lo12:sym`. Same
+    # established post-process the release regen_* scripts apply (codegen-emit gap, not a
+    # va-codegen issue — it's the shared const_float/global pool load path). Darwin skips.
+    if [ "$TARGET" = "arm64-linux-gnu" ]; then
+        perl -i -pe 's/(adrp\s+[xw]\d+,\s*)([._A-Za-z][._A-Za-z0-9]*)\@PAGE\b/$1$2/; s/(add\s+[xw]\d+,\s*[xw]\d+,\s*)([._A-Za-z][._A-Za-z0-9]*)\@PAGEOFF\b/$1:lo12:$2/' "$s"
+    fi
     "$CC" -c "$s" -o "$outo"
     [ -s "$outo" ] || { echo "[va-arm64-smoke] FATAL: empty $outo" >&2; exit 1; }
     # symbol is `_sym` on darwin Mach-O, bare on ELF.
