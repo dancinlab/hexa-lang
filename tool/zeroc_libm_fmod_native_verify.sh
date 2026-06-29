@@ -20,15 +20,28 @@ CFLAGS="-c -O2 -std=gnu11 -D_GNU_SOURCE"
 echo "════ zeroc_libm_fmod_native_verify ($(uname -srm) · $($CC --version|head -1)) ════"
 
 echo "[A] DEFAULT (macro OFF) shim.o byte-identity vs origin/main baseline…"
-git show "origin/main:$SHIM" > "$OUT/shim_base.c" 2>/dev/null || cp "$SHIM" "$OUT/shim_base.c"
-$CC $CFLAGS "$OUT/shim_base.c" -o "$OUT/shim_base.o" 2>"$OUT/base.err"
-$CC $CFLAGS "$SHIM"           -o "$OUT/shim_new.o"  2>"$OUT/new.err"
-# compare ONLY the hxlcl_fmod section is unchanged when OFF: full-object sha
-B=$(sha256sum "$OUT/shim_base.o" 2>/dev/null | cut -d' ' -f1)
-N=$(sha256sum "$OUT/shim_new.o"  2>/dev/null | cut -d' ' -f1)
+# Compile BOTH from the IDENTICAL basename in IDENTICAL cwd so the ELF STT_FILE
+# symbol + any path-derived metadata match (else the only diff is the source
+# filename string — the known DWARF/path artifact, project_hexa_byteeq_dwarf_cwd).
+BN=runtime_core_hxlcl_shim.c
+rm -rf "$OUT/base" "$OUT/new"; mkdir -p "$OUT/base" "$OUT/new"
+git show "origin/main:$SHIM" > "$OUT/base/$BN" 2>/dev/null || cp "$SHIM" "$OUT/base/$BN"
+cp "$SHIM" "$OUT/new/$BN"
+( cd "$OUT/base" && $CC $CFLAGS "$BN" -o shim.o 2>err )
+( cd "$OUT/new"  && $CC $CFLAGS "$BN" -o shim.o 2>err )
+B=$(sha256sum "$OUT/base/shim.o" 2>/dev/null | cut -d' ' -f1)
+N=$(sha256sum "$OUT/new/shim.o"  2>/dev/null | cut -d' ' -f1)
 echo "    base shim.o sha=$B"
 echo "    new  shim.o sha=$N"
+# backup: raw .text section bytes (codegen) must match regardless of metadata
+objcopy -O binary --only-section=.text "$OUT/base/shim.o" "$OUT/base.text" 2>/dev/null
+objcopy -O binary --only-section=.text "$OUT/new/shim.o"  "$OUT/new.text"  2>/dev/null
+TB=$(sha256sum "$OUT/base.text" 2>/dev/null | cut -d' ' -f1)
+TN=$(sha256sum "$OUT/new.text"  2>/dev/null | cut -d' ' -f1)
+echo "    .text base sha=$TB"
+echo "    .text new  sha=$TN"
 [ "$B" = "$N" ] && echo "DEFAULT_SHIM_O_BYTE_IDENTICAL=YES" || echo "DEFAULT_SHIM_O_BYTE_IDENTICAL=NO"
+[ "$TB" = "$TN" ] && echo "DEFAULT_SHIM_TEXT_BYTE_IDENTICAL=YES" || echo "DEFAULT_SHIM_TEXT_BYTE_IDENTICAL=NO"
 
 echo "[B] ON (HEXA_LIBM_NATIVE_FMOD) shim.o libm-fmod coupling…"
 $CC $CFLAGS -DHEXA_LIBM_NATIVE_FMOD "$SHIM" -o "$OUT/shim_on.o" 2>"$OUT/on.err"
