@@ -2339,6 +2339,74 @@ __global__ void _hx_k_groupnorm(const double* __restrict__ X,
     }
 }
 
+/* HEXA-GN-PARALLEL (fast non-det default) — one block per group + intra-block
+ * shared-mem tree reduction for mu/var, then embarrassingly-parallel
+ * normalize/write. Removes the single-block (grid 1, block 64, only G threads)
+ * sequential-reduction wall of _hx_k_groupnorm. The reduction re-associates the
+ * FP64 sum (tree vs host t-outer/c-inner) so it is NOT bit-exact — training-OK
+ * (fast non-det default, torch/JAX canon). DET opt-in routes to the sequential
+ * _hx_k_groupnorm (byte-exact oracle). reference-match: cub::BlockReduce / the
+ * canonical reduce-then-broadcast block pattern (block_sz power-of-2). */
+__global__ void _hx_k_groupnorm_par(const double* __restrict__ X,
+                                    const double* __restrict__ GAMMA,
+                                    const double* __restrict__ BETA,
+                                    double* __restrict__ Y,
+                                    double* __restrict__ MEAN,
+                                    double* __restrict__ INV,
+                                    double* __restrict__ XHAT,
+                                    int64_t T, int64_t C, int64_t G) {
+    extern __shared__ double _gn_sh[];
+    const double eps = 0.00001;
+    int64_t cg = C / G;
+    double m = (double)(cg * T);
+    int tid = (int)threadIdx.x;
+    int nth = (int)blockDim.x;
+    int64_t N = (int64_t)T * cg;
+    for (int64_t g = blockIdx.x; g < G; g += gridDim.x) {
+        int64_t c0 = g * cg;
+        /* pass 1 — sum -> mu (block parallel reduce). */
+        double p = 0.0;
+        for (int64_t i = tid; i < N; i += nth) {
+            int64_t t = i / cg, c = i % cg;
+            p += X[t * C + (c0 + c)];
+        }
+        _gn_sh[tid] = p;
+        __syncthreads();
+        for (int s = nth >> 1; s > 0; s >>= 1) {
+            if (tid < s) _gn_sh[tid] += _gn_sh[tid + s];
+            __syncthreads();
+        }
+        double mu = _gn_sh[0] / m;
+        __syncthreads();
+        /* pass 2 — var (block parallel reduce). */
+        double pv = 0.0;
+        for (int64_t i = tid; i < N; i += nth) {
+            int64_t t = i / cg, c = i % cg;
+            double d = X[t * C + (c0 + c)] - mu;
+            pv += d * d;
+        }
+        _gn_sh[tid] = pv;
+        __syncthreads();
+        for (int s = nth >> 1; s > 0; s >>= 1) {
+            if (tid < s) _gn_sh[tid] += _gn_sh[tid + s];
+            __syncthreads();
+        }
+        double var = _gn_sh[0] / m;
+        double inv = 1.0 / _hx_gn_sqrt_dev(var + eps);
+        if (tid == 0) { MEAN[g] = mu; INV[g] = inv; }
+        /* pass 3 — normalize + write (no reduction; parallel over the group). */
+        for (int64_t i = tid; i < N; i += nth) {
+            int64_t t = i / cg, c = i % cg;
+            int64_t ch = c0 + c;
+            int64_t idx = t * C + ch;
+            double xh = (X[idx] - mu) * inv;
+            XHAT[idx] = xh;
+            Y[idx] = GAMMA[ch] * xh + BETA[ch];
+        }
+        __syncthreads();
+    }
+}
+
 int _hx_cuda_farr_groupnorm_gpu(int64_t x_id, int64_t gamma_id, int64_t beta_id,
                                 int64_t y_id, int64_t mean_id, int64_t inv_id,
                                 int64_t xhat_id, int64_t T, int64_t C, int64_t G) {
@@ -2373,12 +2441,23 @@ int _hx_cuda_farr_groupnorm_gpu(int64_t x_id, int64_t gamma_id, int64_t beta_id,
     double*       MEAN  = g_slots[mean_id].d_buf;
     double*       INV   = g_slots[inv_id].d_buf;
     double*       XHAT  = g_slots[xhat_id].d_buf;
-    int block_sz = 64;
-    int64_t want = (G + block_sz - 1) / block_sz;
-    int grid_sz = (want > 1024) ? 1024 : (int)want;
-    if (grid_sz < 1) grid_sz = 1;
-    _hx_k_groupnorm<<<grid_sz, block_sz, 0, _forge_stream()>>>(X, GAMMA, BETA, Y, MEAN, INV, XHAT,
-                                           T, C, G);
+    if (!_forge_det_on()) {
+        /* FAST non-det default: block-per-group + parallel tree reduce. */
+        int block_sz = 256;
+        int grid_sz = (G > 65535) ? 65535 : (int)G;
+        if (grid_sz < 1) grid_sz = 1;
+        size_t shmem = (size_t)block_sz * sizeof(double);
+        _hx_k_groupnorm_par<<<grid_sz, block_sz, shmem, _forge_stream()>>>(X, GAMMA, BETA, Y, MEAN, INV, XHAT,
+                                               T, C, G);
+    } else {
+        /* DET opt-in: byte-exact sequential single-thread-per-group. */
+        int block_sz = 64;
+        int64_t want = (G + block_sz - 1) / block_sz;
+        int grid_sz = (want > 1024) ? 1024 : (int)want;
+        if (grid_sz < 1) grid_sz = 1;
+        _hx_k_groupnorm<<<grid_sz, block_sz, 0, _forge_stream()>>>(X, GAMMA, BETA, Y, MEAN, INV, XHAT,
+                                               T, C, G);
+    }
     if (_forge_launch_check("groupnorm") != 0) return -1;
     /* Y/xhat/mean/inv stay DEVICE-RESIDENT so the follow-up conv GEMM / gelu
      * H2D-skip them (same residence convention as residual_add). */
@@ -3821,6 +3900,57 @@ __global__ void _hx_k_groupnorm_bwd_dx(const double* __restrict__ XHAT,
     }
 }
 
+/* HEXA-GN-PARALLEL bwd-dx (fast non-det default) — one block per group +
+ * intra-block shared-mem tree reduction for s1/s2, then parallel DX write.
+ * Removes the single-block sequential wall of _hx_k_groupnorm_bwd_dx. Tree
+ * re-association of the FP64 sum -> NOT bit-exact (training-OK); DET opt-in
+ * routes to the sequential _hx_k_groupnorm_bwd_dx (byte-exact oracle). Shared
+ * mem = 2*block_sz doubles (s1 then s2). */
+__global__ void _hx_k_groupnorm_bwd_dx_par(const double* __restrict__ XHAT,
+                                           const double* __restrict__ INV,
+                                           const double* __restrict__ GAMMA,
+                                           const double* __restrict__ DY,
+                                           double* __restrict__ DX,
+                                           int64_t T, int64_t C, int64_t G) {
+    extern __shared__ double _gnb_sh[];
+    int64_t cg = C / G;
+    double m = (double)(cg * T);
+    int tid = (int)threadIdx.x;
+    int nth = (int)blockDim.x;
+    double* s1a = _gnb_sh;
+    double* s2a = _gnb_sh + nth;
+    int64_t N = (int64_t)T * cg;
+    for (int64_t g = blockIdx.x; g < G; g += gridDim.x) {
+        int64_t c0 = g * cg;
+        double inv_g = INV[g];
+        double q1 = 0.0, q2 = 0.0;
+        for (int64_t i = tid; i < N; i += nth) {
+            int64_t t = i / cg, cc = i % cg;
+            int64_t ch = c0 + cc;
+            int64_t idx = t * C + ch;
+            double dxh = DY[idx] * GAMMA[ch];
+            q1 += dxh;
+            q2 += dxh * XHAT[idx];
+        }
+        s1a[tid] = q1; s2a[tid] = q2;
+        __syncthreads();
+        for (int s = nth >> 1; s > 0; s >>= 1) {
+            if (tid < s) { s1a[tid] += s1a[tid + s]; s2a[tid] += s2a[tid + s]; }
+            __syncthreads();
+        }
+        double s1 = s1a[0], s2 = s2a[0];
+        __syncthreads();
+        for (int64_t i = tid; i < N; i += nth) {
+            int64_t t = i / cg, cc = i % cg;
+            int64_t ch = c0 + cc;
+            int64_t idx = t * C + ch;
+            double dxh = DY[idx] * GAMMA[ch];
+            DX[idx] = inv_g * (dxh - s1 / m - XHAT[idx] * s2 / m);
+        }
+        __syncthreads();
+    }
+}
+
 int _hx_cuda_farr_groupnorm_bwd_gpu(int64_t xhat_id, int64_t inv_id,
                                     int64_t gamma_id, int64_t dy_id,
                                     int64_t dgamma_id, int64_t dbeta_id,
@@ -3851,12 +3981,21 @@ int _hx_cuda_farr_groupnorm_bwd_gpu(int64_t xhat_id, int64_t inv_id,
                                                           DGAMMA, DBETA, T, C);
     }
     {
-        int block_sz = 64;
-        int64_t want = (G + block_sz - 1) / block_sz;
-        int grid_sz = (want > 1024) ? 1024 : (int)want;
-        if (grid_sz < 1) grid_sz = 1;
-        _hx_k_groupnorm_bwd_dx<<<grid_sz, block_sz, 0, _forge_stream()>>>(XHAT, INV, GAMMA, DY,
-                                                      DX, T, C, G);
+        if (!_forge_det_on()) {
+            int block_sz = 256;
+            int grid_sz = (G > 65535) ? 65535 : (int)G;
+            if (grid_sz < 1) grid_sz = 1;
+            size_t shmem = (size_t)block_sz * 2 * sizeof(double);
+            _hx_k_groupnorm_bwd_dx_par<<<grid_sz, block_sz, shmem, _forge_stream()>>>(XHAT, INV, GAMMA, DY,
+                                                          DX, T, C, G);
+        } else {
+            int block_sz = 64;
+            int64_t want = (G + block_sz - 1) / block_sz;
+            int grid_sz = (want > 1024) ? 1024 : (int)want;
+            if (grid_sz < 1) grid_sz = 1;
+            _hx_k_groupnorm_bwd_dx<<<grid_sz, block_sz, 0, _forge_stream()>>>(XHAT, INV, GAMMA, DY,
+                                                          DX, T, C, G);
+        }
     }
     if (_forge_launch_check("groupnorm_bwd") != 0) return -1;
     {
