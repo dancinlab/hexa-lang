@@ -866,6 +866,26 @@ fn emit_runtime_cuda_c() -> str {
             "    return (v && v[0] && v[0] != '0') ? 1 : 0;\n" +
             "}\n" +
             "\n" +
+            "/* #pytorch-canon alertNotDeterministic ref-match: called in any non-det\n" +
+            " * dispatch path that has NO det counterpart when HEXA_DET=1 is active.\n" +
+            " * Currently never reached — all 4 non-det atomic ops (GEMM/GEMV split-K,\n" +
+            " * col2im scatter, embedding-bwd scatter) have det gates — but this makes\n" +
+            " * the guarantee machine-enforced: a new atomic op added without a\n" +
+            " * _forge_det_on() gate will abort + report at runtime rather than silently\n" +
+            " * mis-execute under HEXA_DET=1. torch ref: aten/src/ATen/Context.cpp\n" +
+            " * alertNotDeterministic (RuntimeError when use_deterministic_algorithms(True)\n" +
+            " * and op has no det impl). Convention: call _forge_det_alert(\"op_name\") in\n" +
+            " * any non-det branch that CANNOT fall back to a det counterpart when\n" +
+            " * _forge_det_on()==1. */\n" +
+            "static __attribute__((unused)) void _forge_det_alert(const char* opname) {\n" +
+            "    if (!_forge_det_on()) return;\n" +
+            "    fprintf(stderr,\n" +
+            "        \"[HEXA_DET] RuntimeError: op '%s' has no deterministic implementation \"\n" +
+            "        \"but HEXA_DET=1 is set. Unset HEXA_DET to use the fast non-det path \"\n" +
+            "        \"(torch.use_deterministic_algorithms analogue).\\n\", opname);\n" +
+            "    abort();\n" +
+            "}\n" +
+            "\n" +
             "/* HEXA-0POD OP-24 (TF32 LIVE-WIRE) — deterministic TF32 fast-mode for the live\n" +
             " * forge GEMM dispatch. OP-20 PROVED (aiden RTX 5070): a TF32 tensor-op step is\n" +
             " * self-byte-eq run-to-run (max|delta|=0) AND W14-tol vs FP64 (rel-RMS ~1e-6) AND\n" +

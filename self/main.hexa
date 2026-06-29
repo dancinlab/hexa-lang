@@ -5704,6 +5704,14 @@ fn cmd_gpu_status() {
     } else {
         println("  HEXA_TF32_FASTMODE=(unset) → FP64 is the default dtype (deterministic)")
     }
+    // HEXA_DET — runtime det opt-in (#4208 flame/forge determinism; torch canon ref-match).
+    // fast non-det is DEFAULT (torch.use_deterministic_algorithms analogue).
+    let f_det = env_var("HEXA_DET")
+    if len(f_det) > 0 && f_det != "0" {
+        println("  HEXA_DET=" + f_det + "         → deterministic mode ON (non-atomic own kernels; eval/verdict safety-pin)")
+    } else {
+        println("  HEXA_DET=(unset)    → fast non-det DEFAULT (atomic split-K own kernels; training mode)")
+    }
     println("")
     println("3-LAYER LEGEND  (static — doctrine; kept fresh via CLAUDE.md lockstep)")
     println("  flame      native trainer (hexa-native CLMConvMoE; device-resident, byte-exact)")
