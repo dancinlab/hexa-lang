@@ -664,6 +664,22 @@ double hxlcl_fmod(double x, double y)                 { return fmod(x, y); }
 #endif /* !HEXA_RT_NATIVE_FMOD */
 
 /* ── env / process ───────────────────────────────────────────────────────── */
+/* RT-NATIVE-GETENV (HEXA_RT_NATIVE_GETENV, default OFF · literal-∅ non-libm leaf
+ * RUNG 4): FOURTH non-libm hxlcl_* to LEAVE the shim via the Route C whole-module
+ * emit (strstr #4240 / strtoll #4241 / free #4242 precedent). hxlcl_getenv is the
+ * FIRST extern-DATA leaf to drop — it is NOT a pure self-contained leaf: it reads
+ * the libc `extern char **environ` global. The native Route C body
+ * (stdlib/runtime/hxlcl_core.hexa::hxlcl_getenv, whitelisted in _is_cabi) loads
+ * `&environ` through the GOT via the __hx_environ_ptr intrinsic (#4098), so the
+ * isolated native .o carries exactly ONE external reloc — `environ@GOTPCREL` —
+ * which the final link satisfies from libc (provider-PRESENT; every binary links
+ * libc, the shim itself declares `extern char **environ` above). No syscall, no
+ * errno, no inner C-ABI callee (the strlen is INLINED in the native body). Under
+ * HEXA_RT_NATIVE_GETENV=1 (x86_64-linux gate in tool/stage_resolve_runtime_a) the
+ * shim drops getenv and the objcopy-isolated native .o supplies it. DEFAULT
+ * (unset) keeps this libc delegate; shim.o + archive byte-identical (release-
+ * integrity invariant). */
+#ifndef HEXA_RT_NATIVE_GETENV
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_getenv (verbatim 0-libc floor body) */
 char *__attribute__((noinline)) hxlcl_getenv(const char *name) {
@@ -683,6 +699,7 @@ char *__attribute__((noinline)) hxlcl_getenv(const char *name) {
 #else
 char *hxlcl_getenv(const char *name)                  { return getenv(name); }
 #endif
+#endif /* !HEXA_RT_NATIVE_GETENV */
 int   hxlcl_setenv(const char *n, const char *v, int o){ return setenv(n, v, o); }
 int   hxlcl_atexit(void (*fn)(void))                  { return atexit(fn); }
 int   hxlcl_fork(void)                                { return (int)fork(); }
