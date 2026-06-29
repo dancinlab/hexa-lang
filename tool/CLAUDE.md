@@ -76,15 +76,18 @@ verdict atom fold 는 항상 `hexa verify` g5 PASS 경로로만.
   softmax …). reference-match 측정용.
 - `gpu_*` · `cuda_*` · `*_driver.cu` · `dispatch_*` · `fusion_*` · `decode_*` · `wgmma/` ·
   `hexa-fusion/` — GPU 마이크로벤치 · cuBLAS 대조 · fused 커널 · 원격 dispatch 스크립트.
-- **`build_cuda_runtime`** — `cuda_available 0→1` CUDA 런타임 빌드 + `cuda_gemm_verify` verdict.
-  `CUDA_HOME=/usr/local/cuda-X.Y SM=120 bash tool/build_cuda_runtime` (sm_120 = RTX 50계열 ·
-  nvcc ≥12.8 필요). ✅ **구 결함(2026-06-26) FIXED(2026-06-29)**: 19× `multiple definition`
-  (`rt_str_*`·`hexa_arena_*`) collect2 fail — restore_frozen_seeds 후 `_regen_runtime_core_for_cuda()`
-  (SSOT 재생성 → HEXA_RT_ALLOC_NATIVE guard 복원) + reconcile_runtime_c_ssot_dups (4 migrated
-  f64↔bits weak defs drop) + RT-NATIVE Z2a (#include runtime_hi_gen.c 제거) + CPU build 직접
-  컴파일(archive 추출 대신)로 해소. convergence `CUDA-BUILD-CORES-EXPLICIT-LINK-MULTIDEF` SSOT.
-  summer RTX5070 sm_120 CUDA12.9 — d2048 FAST median 458.64 GFLOP/s · DET 454.14 GFLOP/s ·
-  FAST/DET=+0.99% (state/fast-vs-det-gemm-verdict.md).
+- **`build_cuda_runtime`** — `cuda_available 0→1` CUDA 런타임 빌드 + `cuda_gemm_verify` verdict
+  + **자동 deploy** (`~/.hx/bin/build/runtime.a` 교체 + `~/.hexa-cache/` 초기화 → `hexa run` 즉시 GPU 경로). 실행:
+  `bash tool/build_cuda_runtime` (CUDA_HOME 자동감지: cuda-13.0 > cuda-12.9 > /usr/local/cuda symlink ·
+  nvcc ≥12.8 필요 · SM=120 기본). 환경변수 override: `CUDA_HOME=/usr/local/cuda-X.Y SM=120`(명시) ·
+  `DEPLOY_RT=""` (deploy skip). ✅ **구 결함 FIXED**: (1) 19× multi-def (#4213): restore_frozen_seeds
+  후 `_regen_runtime_core_for_cuda()` + reconcile_runtime_c_ssot_dups + RT-NATIVE Z2a로 해소.
+  convergence `CUDA-BUILD-CORES-EXPLICIT-LINK-MULTIDEF` SSOT. (2) CUDA_HOME default 자동감지 (#4216):
+  구 default `/usr/local/cuda-13.0` 부재 시 시스템 nvcc(CUDA 12.0, sm_80) fallback → RTX 5070
+  sm_120에서 GEMM all-zero. 이제 `/usr/local/cuda-12.9`(혹은 `/usr/local/cuda` symlink)를 자동탐지.
+  summer RTX5070 sm_120 CUDA12.9 측정 — d2048 FAST median 458.64 GFLOP/s · DET 454.14 GFLOP/s ·
+  FAST/DET=+0.99% (state/fast-vs-det-gemm-verdict.md). hexa vs PyTorch F64 2048^3: hexa 464.3 vs
+  PyTorch 482.9 GFLOP/s → 96% parity (state/hexa-vs-pytorch-gemm-verdict.md).
 - `unshadow_*_bench.hexa` · `bench_*` · `train_floor_bench.hexa` — codegen/런타임 perf 벤치.
 
 ### 서브폴더
