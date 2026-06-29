@@ -1324,6 +1324,43 @@ build_runtime_a_from_source() {
                 echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-MEMLEAF: hxlcl_${_seml_sym} → native ELF .o; shim.o built with -DHEXA_RT_SELFEMIT_${_seml_SYM} (${_seml_sym} dropped) — ld -r multidef gate validates"
             done
         fi
+        # ── RFC061 §M8 RT-NATIVE-FMOD (fp-ABI xmm Route C · libm-leaf RUNG 2, default OFF) ──
+        # FIRST real libc-floor libm symbol to LEAVE the shim via the fp-ABI (xmm)
+        # Route C path. Unlike the MEMLEAF family (hand-assembled ELF byte fixtures),
+        # hxlcl_fmod is emitted by the REAL codegen: aprime/hexa with HEXA_CABI_HXLCL=1
+        # lowers stdlib/runtime/hxlcl_core.hexa's whitelisted SSE-class symbols at the
+        # SysV §3.2.3 xmm C-ABI (args xmm0/xmm1, return xmm0), --emit=asm → clang -c.
+        # The body is a 1:1 musl src/math/fmod.c port (libm-free, 0-ULP). The shim
+        # drops its fmod member via -DHEXA_RT_NATIVE_FMOD (#ifndef in shim.c). DEFAULT
+        # (HEXA_RT_NATIVE_FMOD unset) adds NO -D and NO member → shim.o + archive
+        # byte-identical (release-integrity invariant). x86_64-linux ONLY (the fp-ABI
+        # xmm lowering is implemented in the x86_64 backend; arm64 AAPCS64 v0-v7 is the
+        # NEXT rung — _cabi_is_fp excludes fp symbols from the arm64 Route C path).
+        if [ "${HEXA_RT_NATIVE_FMOD:-0}" = "1" ]; then
+            if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
+                local _rnf_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
+                if [ -z "$_rnf_bin" ]; then
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD FATAL: HEXA_RT_NATIVE_FMOD=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
+                fi
+                local _rnf_drv="build/_rnf_drv.hexa"
+                local _rnf_s="build/hxlcl_fmod_native.s"
+                local _rnf_o="build/hxlcl_fmod_native.o"
+                printf 'fn _rnf_unused() {}\n' > "$_rnf_drv"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD: emitting native fp-ABI (xmm) hxlcl_fmod .o via $_rnf_bin (HEXA_CABI_HXLCL=1, replacing libc-shim fmod member)…"
+                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                    "$_rnf_bin" "$_rnf_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnf_s" stdlib/runtime/hxlcl_core.hexa \
+                    >"build/_rnf_fmod.log" 2>&1 \
+                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD FATAL: fmod Route C asm emit failed — see build/_rnf_fmod.log" >&2; cat "build/_rnf_fmod.log" >&2; return 1; }
+                [ -s "$_rnf_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD FATAL: empty $_rnf_s" >&2; return 1; }
+                $CC $_mo_archflag -c "$_rnf_s" -o "$_rnf_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD FATAL: assemble $_rnf_s failed" >&2; return 1; }
+                [ -f "$_rnf_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD FATAL: $_rnf_o not produced" >&2; return 1; }
+                _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_FMOD"
+                _mo_hxlcl_members="$_mo_hxlcl_members $_rnf_o"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD: hxlcl_fmod → native fp-ABI .o; shim.o built with -DHEXA_RT_NATIVE_FMOD (fmod dropped) — ld -r multidef gate validates"
+            else
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD: HEXA_RT_NATIVE_FMOD=1 IGNORED — fp-ABI xmm Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim fmod member" >&2
+            fi
+        fi
         # (S1) guard the FROZEN `#include "runtime_core.c"` line in the RESTORED
         #      working-copy runtime.c (idempotent; gitignore'd regen — frozen git
         #      blob 151c52c8 NEVER touched). drop-ON then pulls runtime_core_decls.h.

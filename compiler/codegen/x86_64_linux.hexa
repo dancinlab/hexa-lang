@@ -2308,6 +2308,15 @@ pub fn _is_cabi(fname: string) -> bool {
     // libm leaves (hxlcl_fmod fdlibm port etc.) follow on the SAME mechanism.
     // default-OFF byteeq-neutral (HEXA_CABI_HXLCL unset → empty whitelist).
     if fname == "hxlcl_fp_addmul" { return true }
+    // fp-ABI libm-leaf RUNG 2 — hxlcl_fmod is the FIRST REAL libc-floor libm symbol
+    // native-emitted via the fp-ABI (xmm) Route C path. `double hxlcl_fmod(double x,
+    // double y)` — both args SSE-class (xmm0/xmm1), return SSE-class (xmm0). Body =
+    // a 1:1 musl src/math/fmod.c port (libm-free, 0-ULP) in stdlib/runtime/
+    // hxlcl_core.hexa, using the __hx_payload_and/or/shl/shr bit intrinsics on the
+    // raw IEEE-754 payload word (the ingress lands the xmm bits in the GP home).
+    // ON (HEXA_CABI_HXLCL=1) it replaces the libc-shim fmod() member (shim drops it
+    // via -DHEXA_LIBM_NATIVE_FMOD); default-OFF byteeq-neutral.
+    if fname == "hxlcl_fmod" { return true }
     return false
 }
 
@@ -2328,10 +2337,17 @@ fn _cabi_sse_arg(fname: string, idx: i64) -> bool {
         if idx == 1 { return true }
         return false
     }
+    // hxlcl_fmod(x: double, y: double) -> double : args 0,1 SSE; return SSE.
+    if fname == "hxlcl_fmod" {
+        if idx == 0 { return true }
+        if idx == 1 { return true }
+        return false
+    }
     return false
 }
 fn _cabi_sse_ret(fname: string) -> bool {
     if fname == "hxlcl_fp_addmul" { return true }
+    if fname == "hxlcl_fmod" { return true }
     return false
 }
 // fp-ABI symbols carry SSE-class params/return. The x86_64 backend lowers them
@@ -2341,6 +2357,7 @@ fn _cabi_sse_ret(fname: string) -> bool {
 // emit of a double leaf. Shared helper so both backends agree on the set.
 pub fn _cabi_is_fp(fname: string) -> bool {
     if fname == "hxlcl_fp_addmul" { return true }
+    if fname == "hxlcl_fmod" { return true }
     return false
 }
 
@@ -3788,15 +3805,21 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
         }
         // UNLOCK-2b ext: signed-i64 relational payload compares → bool.
         // setl/setg/setle/setge (signed cond codes, matching arm64 lt/gt/le/ge).
+        // UNSIGNED variants (libm-leaf fdlibm fmod: raw 64-bit bit-word magnitude
+        // compares where the high bit is data, not a sign) use setb/setbe (CF) —
+        // __hx_payload_ult/ule. arm64 mirrors with lo/ls (unsigned) cond codes.
         if (s.op == "__hx_payload_lt" || s.op == "__hx_payload_gt"
             || s.op == "__hx_payload_le" || s.op == "__hx_payload_ge"
-            || s.op == "__hx_payload_eq" || s.op == "__hx_payload_ne") && len(s.args) >= 2 {
+            || s.op == "__hx_payload_eq" || s.op == "__hx_payload_ne"
+            || s.op == "__hx_payload_ult" || s.op == "__hx_payload_ule") && len(s.args) >= 2 {
             let mut _scc = "setl"
             if s.op == "__hx_payload_gt" { _scc = "setg" }
             if s.op == "__hx_payload_le" { _scc = "setle" }
             if s.op == "__hx_payload_ge" { _scc = "setge" }
             if s.op == "__hx_payload_eq" { _scc = "sete" }
             if s.op == "__hx_payload_ne" { _scc = "setne" }
+            if s.op == "__hx_payload_ult" { _scc = "setb" }  // unsigned <  (CF=1)
+            if s.op == "__hx_payload_ule" { _scc = "setbe" } // unsigned <= (CF=1|ZF=1)
             // Load b→r11 before a→r10 (nested-intrinsic clobber fix — see the
             // arithmetic block); cmp r10,r11 reg assignment is unchanged.
             _x86_hv_payload(s.args[1], st, rm, "r11", opts)
@@ -3817,12 +3840,13 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
         // add/sub/imul into r10 (a.pl), then box as TAG_INT.
         if (s.op == "__hx_payload_add" || s.op == "__hx_payload_sub"
             || s.op == "__hx_payload_mul" || s.op == "__hx_payload_and"
-            || s.op == "__hx_payload_xor") && len(s.args) >= 2 {
+            || s.op == "__hx_payload_xor" || s.op == "__hx_payload_or") && len(s.args) >= 2 {
             let mut _aop = "add"
             if s.op == "__hx_payload_sub" { _aop = "sub" }
             if s.op == "__hx_payload_mul" { _aop = "imul" }
             if s.op == "__hx_payload_and" { _aop = "and" }
             if s.op == "__hx_payload_xor" { _aop = "xor" }
+            if s.op == "__hx_payload_or"  { _aop = "or"  }
             // Load b→r11 BEFORE a→r10: a spilled operand resolves through r10
             // (_x86_op_resolve line ~574), so loading b LAST would clobber a's
             // value already in r10. Loading b first (r10 free) then a→r10 avoids
@@ -3833,6 +3857,37 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             _x86_hv_payload(s.args[0], st, rm, "r10", opts)
             _x86_buf.push(_x86_instr2(_aop, _x86_op_reg("r10"), _x86_op_reg("r11"),
                              s.op + ": r10 = a.pl " + _aop + " b.pl"))
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 0) }
+            return
+        }
+        // payload-shift-leaf: LOGICAL shifts on the raw 64-bit payload word —
+        // `__hx_payload_shl(v,n)` = v << n (shl) / `__hx_payload_shr(v,n)` = v >> n
+        // LOGICAL/UNSIGNED (shr, NOT the BinOp `>>` which is arithmetic `sar`).
+        // The libm-leaf fdlibm fmod port treats a `double`'s payload AS its raw
+        // IEEE-754 bit pattern (the SSE-class Route C ingress lands the xmm bits in
+        // the GP payload home), so its high/low word splits (`u >> 32`), exponent
+        // extract (`hx >> 20`), sign-bit (`>> 31`) and ilogb realign (`<< 11`) need
+        // a ZERO-FILL right shift — a negative double's bit-63 must NOT sign-extend.
+        // x86 variable shift count must be in CL (mirrors the BinOp shift block).
+        // Reference-match: musl src/math/fmod.c uses C unsigned `>>` (logical).
+        if (s.op == "__hx_payload_shl" || s.op == "__hx_payload_shr")
+            && len(s.args) >= 2 {
+            // Resolve BOTH operands into the disjoint scratch pair r11(count),
+            // r10(value) FIRST — exactly like the arith block — so neither
+            // operand is loaded directly into a pool-allocatable register (rcx is
+            // pool-allocatable; loading the count straight into rcx during operand
+            // resolve could clobber a value whose home IS rcx). THEN copy the
+            // count r11→rcx for the cl-based variable shift. b first (count→r11),
+            // a second (value→r10): a spilled value resolves through r10, so this
+            // order avoids the nested-intrinsic clobber.
+            _x86_hv_payload(s.args[1], st, rm, "r11", opts)  // count → r11
+            _x86_hv_payload(s.args[0], st, rm, "r10", opts)  // value → r10
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rcx"), _x86_op_reg("r11"),
+                             s.op + ": shift count → rcx (cl)"))
+            let mut _sm = "shl"
+            if s.op == "__hx_payload_shr" { _sm = "shr" } // LOGICAL right (zero-fill)
+            _x86_buf.push(_x86_instr2(_sm, _x86_op_reg("r10"), _x86_op_reg("cl"),
+                             s.op + ": r10 = v.pl " + _sm + " cl"))
             if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 0) }
             return
         }
