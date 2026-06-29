@@ -1,0 +1,359 @@
+// test/native_build/emit_hxlcl_setjmp_elf_o.hexa
+//
+// literal-∅ feature C · setjmp/longjmp control-flow ABI · RUNG1 (x86_64).
+//
+// EMITS an ELF64 ET_REL relocatable object exporting TWO strong external
+// symbols — `hxlcl_setjmp` and `hxlcl_longjmp` (bare ELF names, no leading
+// underscore) — whose bodies are the verbatim musl x86_64 naked-register-save
+// setjmp/longjmp pair. This is the codegen-emit successor to the frozen
+// runtime.c:1657 darwin-arm64 naked-asm setjmp/longjmp precedent (cycle 86):
+// the same per-symbol shim-swap mechanism as the proven ELF mem/str pure-leaf
+// family (emit_hxlcl_strlen_elf_o.hexa et al.), only the saved-register
+// sequence and the jmp_buf semantics differ.
+//
+// Linux x86_64 was the LAST target still routing try/catch through libc
+// `setjmp`/`longjmp` (self/runtime.c:2046-2048 — a libc-setjmp macro + a libc
+// longjmp wrapper). This object provides the hexa-native pair so the x86_64
+// floor can drop those two libc externs, matching what darwin-arm64 already
+// does natively.
+//
+// ── ABI (x86_64 System V · musl src/setjmp/x86_64/{setjmp.S,longjmp.S}) ──
+//
+//   int  hxlcl_setjmp(void *buf)            -> rdi=buf ; returns 0 in eax.
+//   void hxlcl_longjmp(void *buf, int val)  -> rdi=buf, esi=val ; never returns,
+//                                              resumes hxlcl_setjmp with eax=val
+//                                              (val==0 coerced to 1).
+//
+//   jmp_buf layout (64 bytes, 8 slots) — IDENTICAL to musl x86_64:
+//     [0]=rbx [8]=rbp [16]=r12 [24]=r13 [32]=r14 [40]=r15 [48]=rsp [56]=rip.
+//   Pure leaf: no relocation, no arena state, no HexaVal touch, position-
+//   independent. The codegen reserves a 256-byte slot per try (glibc-sized
+//   headroom), so the 64-byte musl frame fits with room to spare.
+//
+// ── HONESTY ──
+//   - The 43+43 .text bytes are the canonical musl lowering, captured from
+//     `clang --target=x86_64-linux-gnu` assembling the EXACT musl setjmp.S /
+//     longjmp.S mnemonic sequence (objdump-verified byte-for-byte, NOT
+//     invented). clang/as appears ONLY as the cross-check oracle, NEVER in the
+//     emit path (the bytes are inlined verbatim below).
+//   - DEFAULT build is byte-identical: nothing links this .o unless an opt-in
+//     gate appends it. Unset gate = no behavior change (release-integrity).
+//   - no binaries committed.
+//
+// SELF-CONTAINED (no `use`): the local repo has no compiled module_loader, so
+// multi-`use` programs link-fail; the ELF wrapper is inlined (mirrors the
+// strlen/memcpy ELF emitters).
+
+// ═══════════════════════════════════════════════════════════════════
+// hxlcl_setjmp — x86_64 System V, 43 bytes (rdi=buf -> eax=0).
+//   verbatim musl src/setjmp/x86_64/setjmp.S
+//   48 89 1f            mov   %rbx, (%rdi)       ; buf[0]  = rbx
+//   48 89 6f 08         mov   %rbp, 8(%rdi)      ; buf[8]  = rbp
+//   4c 89 67 10         mov   %r12, 16(%rdi)     ; buf[16] = r12
+//   4c 89 6f 18         mov   %r13, 24(%rdi)     ; buf[24] = r13
+//   4c 89 77 20         mov   %r14, 32(%rdi)     ; buf[32] = r14
+//   4c 89 7f 28         mov   %r15, 40(%rdi)     ; buf[40] = r15
+//   48 8d 54 24 08      lea   8(%rsp), %rdx      ; caller rsp (sans ret addr)
+//   48 89 57 30         mov   %rdx, 48(%rdi)     ; buf[48] = rsp
+//   48 8b 14 24         mov   (%rsp), %rdx       ; return address
+//   48 89 57 38         mov   %rdx, 56(%rdi)     ; buf[56] = rip
+//   31 c0               xor   %eax, %eax         ; return 0
+//   c3                  ret
+// ═══════════════════════════════════════════════════════════════════
+fn x86_setjmp_bytes() -> [int] {
+    let mut c = []
+    c.push(0x48); c.push(0x89); c.push(0x1f)
+    c.push(0x48); c.push(0x89); c.push(0x6f); c.push(0x08)
+    c.push(0x4c); c.push(0x89); c.push(0x67); c.push(0x10)
+    c.push(0x4c); c.push(0x89); c.push(0x6f); c.push(0x18)
+    c.push(0x4c); c.push(0x89); c.push(0x77); c.push(0x20)
+    c.push(0x4c); c.push(0x89); c.push(0x7f); c.push(0x28)
+    c.push(0x48); c.push(0x8d); c.push(0x54); c.push(0x24); c.push(0x08)
+    c.push(0x48); c.push(0x89); c.push(0x57); c.push(0x30)
+    c.push(0x48); c.push(0x8b); c.push(0x14); c.push(0x24)
+    c.push(0x48); c.push(0x89); c.push(0x57); c.push(0x38)
+    c.push(0x31); c.push(0xc0)
+    c.push(0xc3)
+    return c
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// hxlcl_longjmp — x86_64 System V, 43 bytes (rdi=buf, esi=val -> noreturn).
+//   verbatim musl src/setjmp/x86_64/longjmp.S
+//   48 89 f0            mov   %rsi, %rax         ; rax = val
+//   48 85 c0            test  %rax, %rax
+//   75 02               jne   +2                 ; if val!=0 skip the inc
+//   ff c0               inc   %eax               ; val==0 -> return 1
+//   48 8b 1f            mov   (%rdi), %rbx        ; restore from buf
+//   48 8b 6f 08         mov   8(%rdi), %rbp
+//   4c 8b 67 10         mov   16(%rdi), %r12
+//   4c 8b 6f 18         mov   24(%rdi), %r13
+//   4c 8b 77 20         mov   32(%rdi), %r14
+//   4c 8b 7f 28         mov   40(%rdi), %r15
+//   48 8b 67 30         mov   48(%rdi), %rsp     ; restore caller rsp
+//   48 8b 57 38         mov   56(%rdi), %rdx     ; rdx = saved rip
+//   ff e2               jmp   *%rdx              ; resume hxlcl_setjmp
+// ═══════════════════════════════════════════════════════════════════
+fn x86_longjmp_bytes() -> [int] {
+    let mut c = []
+    c.push(0x48); c.push(0x89); c.push(0xf0)
+    c.push(0x48); c.push(0x85); c.push(0xc0)
+    c.push(0x75); c.push(0x02)
+    c.push(0xff); c.push(0xc0)
+    c.push(0x48); c.push(0x8b); c.push(0x1f)
+    c.push(0x48); c.push(0x8b); c.push(0x6f); c.push(0x08)
+    c.push(0x4c); c.push(0x8b); c.push(0x67); c.push(0x10)
+    c.push(0x4c); c.push(0x8b); c.push(0x6f); c.push(0x18)
+    c.push(0x4c); c.push(0x8b); c.push(0x77); c.push(0x20)
+    c.push(0x4c); c.push(0x8b); c.push(0x7f); c.push(0x28)
+    c.push(0x48); c.push(0x8b); c.push(0x67); c.push(0x30)
+    c.push(0x48); c.push(0x8b); c.push(0x57); c.push(0x38)
+    c.push(0xff); c.push(0xe2)
+    return c
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Little-endian byte writers + align (identical to the strlen ELF emitter).
+// ═══════════════════════════════════════════════════════════════════
+fn align_to_v(val: int, align: int) -> int {
+    return (val + align - 1) / align * align
+}
+
+fn push_u16_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256)
+}
+
+fn push_u32_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256).push((val / 65536) % 256).push((val / 16777216) % 256)
+}
+
+fn push_u64_le_v(buf: [int], val: int) -> [int] {
+    let mut b = push_u32_le_v(buf, val % 0x100000000)
+    return push_u32_le_v(b, val / 0x100000000)
+}
+
+// Push the .strtab body: "\0hxlcl_setjmp\0hxlcl_longjmp\0" (28 bytes).
+//   offset 1  = "hxlcl_setjmp"  (12)
+//   offset 14 = "hxlcl_longjmp" (13)
+fn push_strtab(buf: [int]) -> [int] {
+    let mut b = buf
+    b.push(0)
+    // hxlcl_setjmp
+    b.push(104); b.push(120); b.push(108); b.push(99); b.push(108); b.push(95) // hxlcl_
+    b.push(115); b.push(101); b.push(116); b.push(106); b.push(109); b.push(112) // setjmp
+    b.push(0)
+    // hxlcl_longjmp
+    b.push(104); b.push(120); b.push(108); b.push(99); b.push(108); b.push(95) // hxlcl_
+    b.push(108); b.push(111); b.push(110); b.push(103); b.push(106); b.push(109); b.push(112) // longjmp
+    b.push(0)
+    return b
+}
+
+// Push the section-header string table (49 bytes — identical to strlen ELF):
+//   \0 ".text" \0 ".note.GNU-stack" \0 ".symtab" \0 ".strtab" \0 ".shstrtab" \0
+// Names land at offsets 1 / 7 / 23 / 31 / 39.
+fn push_shstrtab(buf: [int]) -> [int] {
+    let mut b = buf
+    b.push(0)
+    b.push(46); b.push(116); b.push(101); b.push(120); b.push(116); b.push(0)  // .text
+    b.push(46); b.push(110); b.push(111); b.push(116); b.push(101)              // .note
+    b.push(46); b.push(71); b.push(78); b.push(85)                              // .GNU
+    b.push(45); b.push(115); b.push(116); b.push(97); b.push(99); b.push(107)   // -stack
+    b.push(0)
+    b.push(46); b.push(115); b.push(121); b.push(109); b.push(116); b.push(97); b.push(98); b.push(0) // .symtab
+    b.push(46); b.push(115); b.push(116); b.push(114); b.push(116); b.push(97); b.push(98); b.push(0) // .strtab
+    b.push(46); b.push(115); b.push(104); b.push(115); b.push(116); b.push(114); b.push(116); b.push(97); b.push(98); b.push(0) // .shstrtab
+    return b
+}
+
+// One Elf64_Shdr (64 bytes).
+fn push_shdr(buf: [int], name: int, typ: int, flags: int, off: int, size: int, link: int, info: int, addralign: int, entsize: int) -> [int] {
+    let mut b = buf
+    b = push_u32_le_v(b, name)
+    b = push_u32_le_v(b, typ)
+    b = push_u64_le_v(b, flags)
+    b = push_u64_le_v(b, 0)        // sh_addr
+    b = push_u64_le_v(b, off)
+    b = push_u64_le_v(b, size)
+    b = push_u32_le_v(b, link)
+    b = push_u32_le_v(b, info)
+    b = push_u64_le_v(b, addralign)
+    b = push_u64_le_v(b, entsize)
+    return b
+}
+
+// One Elf64_Sym (24 bytes): GLOBAL FUNC in .text (shndx=1).
+fn push_func_sym(buf: [int], name_off: int, value: int, size: int) -> [int] {
+    let mut b = buf
+    b = push_u32_le_v(b, name_off)   // st_name
+    b.push(0x12)                     // st_info: STB_GLOBAL<<4 | STT_FUNC
+    b.push(0)                        // st_other
+    b = push_u16_le_v(b, 1)          // st_shndx = .text
+    b = push_u64_le_v(b, value)      // st_value (offset into .text)
+    b = push_u64_le_v(b, size)       // st_size
+    return b
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ELF64 ET_REL wrapper exporting TWO .text functions. Layout:
+//   [0]   Elf64_Ehdr (64)
+//   [64]  .text = setjmp (43) ++ longjmp (43) = 86 bytes
+//   ...   .symtab (3 * Elf64_Sym = 72)   — 8-aligned: NULL, setjmp@0, longjmp@43
+//   ...   .strtab ("\0hxlcl_setjmp\0hxlcl_longjmp\0" = 28)
+//   ...   .shstrtab (49)
+//   ...   section header table (6 * Elf64_Shdr = 384)  — 8-aligned
+// Section indices: 0 NULL, 1 .text, 2 .note.GNU-stack, 3 .symtab,
+//                  4 .strtab, 5 .shstrtab.
+// ═══════════════════════════════════════════════════════════════════
+fn elf_obj_wrap(code: [int], setjmp_size: int, longjmp_size: int) -> [int] {
+    let code_size = len(code)
+
+    let text_off = 64
+    let symtab_off = align_to_v(text_off + code_size, 8)
+    let symtab_size = 3 * 24
+    let strtab_off = symtab_off + symtab_size
+    let strtab_size = 28                    // \0 hxlcl_setjmp \0 hxlcl_longjmp \0
+    let shstrtab_off = strtab_off + strtab_size
+    let shstrtab_size = 49
+    let shoff = align_to_v(shstrtab_off + shstrtab_size, 8)
+
+    let mut out = []
+
+    // ── Elf64_Ehdr ──
+    out.push(0x7f); out.push(0x45); out.push(0x4c); out.push(0x46)
+    out.push(2); out.push(1); out.push(1); out.push(0)
+    let mut p = 0
+    while p < 8 { out.push(0); p = p + 1 }
+    out = push_u16_le_v(out, 1)            // e_type = ET_REL
+    out = push_u16_le_v(out, 62)           // e_machine = EM_X86_64
+    out = push_u32_le_v(out, 1)            // e_version
+    out = push_u64_le_v(out, 0)            // e_entry
+    out = push_u64_le_v(out, 0)            // e_phoff
+    out = push_u64_le_v(out, shoff)        // e_shoff
+    out = push_u32_le_v(out, 0)            // e_flags
+    out = push_u16_le_v(out, 64)           // e_ehsize
+    out = push_u16_le_v(out, 0)            // e_phentsize
+    out = push_u16_le_v(out, 0)            // e_phnum
+    out = push_u16_le_v(out, 64)           // e_shentsize
+    out = push_u16_le_v(out, 6)            // e_shnum
+    out = push_u16_le_v(out, 5)            // e_shstrndx
+
+    // ── .text ──
+    let mut k = 0
+    while k < len(code) { out.push(code[k]); k = k + 1 }
+    while len(out) < symtab_off { out.push(0) }
+
+    // ── .symtab ──
+    // sym[0] = NULL
+    let mut z = 0
+    while z < 24 { out.push(0); z = z + 1 }
+    // sym[1] = hxlcl_setjmp  (st_name=1, value=0, size=setjmp_size)
+    out = push_func_sym(out, 1, 0, setjmp_size)
+    // sym[2] = hxlcl_longjmp (st_name=14, value=setjmp_size, size=longjmp_size)
+    out = push_func_sym(out, 14, setjmp_size, longjmp_size)
+
+    // ── .strtab ──
+    out = push_strtab(out)
+
+    // ── .shstrtab ──
+    out = push_shstrtab(out)
+
+    // pad to section header table
+    while len(out) < shoff { out.push(0) }
+
+    // ── section header table (6 entries) ──
+    out = push_shdr(out, 0, 0, 0, 0, 0, 0, 0, 0, 0)                          // [0] NULL
+    out = push_shdr(out, 1, 1, 6, text_off, code_size, 0, 0, 16, 0)          // [1] .text PROGBITS ALLOC|EXEC
+    out = push_shdr(out, 7, 1, 0, 0, 0, 0, 0, 1, 0)                          // [2] .note.GNU-stack (non-exec stack)
+    out = push_shdr(out, 23, 2, 0, symtab_off, symtab_size, 4, 1, 8, 24)     // [3] .symtab link=.strtab(4) info=1(first global)
+    out = push_shdr(out, 31, 3, 0, strtab_off, strtab_size, 0, 0, 1, 0)      // [4] .strtab
+    out = push_shdr(out, 39, 3, 0, shstrtab_off, shstrtab_size, 0, 0, 1, 0)  // [5] .shstrtab
+
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Driver
+// ═══════════════════════════════════════════════════════════════════
+fn emit_hxlcl_setjmp_elf_o() {
+    println("[wire] literal-∅ feature C · hxlcl_setjmp/hxlcl_longjmp x86_64 ELF native-emit")
+
+    let sj = x86_setjmp_bytes()
+    let lj = x86_longjmp_bytes()
+    if len(sj) != 43 {
+        println("FAIL: hxlcl_setjmp expected 43 bytes, got " + to_string(len(sj)))
+        return
+    }
+    if len(lj) != 43 {
+        println("FAIL: hxlcl_longjmp expected 43 bytes, got " + to_string(len(lj)))
+        return
+    }
+    println("  setjmp bytes   : " + to_string(len(sj)) + " (43 expected)")
+    println("  longjmp bytes  : " + to_string(len(lj)) + " (43 expected)")
+
+    // setjmp prefix `mov %rbx,(%rdi)` = 48 89 1f
+    if sj[0] != 0x48 || sj[1] != 0x89 || sj[2] != 0x1f {
+        println("FAIL: setjmp prefix mismatch")
+        return
+    }
+    // setjmp `xor %eax,%eax ; ret` = 31 c0 c3 trailer
+    if sj[40] != 0x31 || sj[41] != 0xc0 || sj[42] != 0xc3 {
+        println("FAIL: setjmp trailer mismatch")
+        return
+    }
+    println("  setjmp prefix  : 48 89 1f (mov %rbx,(%rdi)) OK · trailer 31 c0 c3 (xor eax;ret) OK")
+
+    // longjmp prefix `mov %rsi,%rax` = 48 89 f0
+    if lj[0] != 0x48 || lj[1] != 0x89 || lj[2] != 0xf0 {
+        println("FAIL: longjmp prefix mismatch")
+        return
+    }
+    // longjmp `jmp *%rdx` = ff e2 trailer
+    if lj[41] != 0xff || lj[42] != 0xe2 {
+        println("FAIL: longjmp trailer mismatch")
+        return
+    }
+    println("  longjmp prefix : 48 89 f0 (mov %rsi,%rax) OK · trailer ff e2 (jmp *%rdx) OK")
+
+    // .text = setjmp ++ longjmp
+    let mut code = []
+    let mut i = 0
+    while i < len(sj) { code.push(sj[i]); i = i + 1 }
+    i = 0
+    while i < len(lj) { code.push(lj[i]); i = i + 1 }
+    if len(code) != 86 {
+        println("FAIL: .text expected 86 bytes, got " + to_string(len(code)))
+        return
+    }
+
+    let obj = elf_obj_wrap(code, 43, 43)
+    println("  obj_wrap size  : " + to_string(len(obj)) + " bytes total")
+
+    // ELFMAG + ELFCLASS64 + ET_REL + EM_X86_64 sanity
+    if obj[0] != 0x7f || obj[1] != 0x45 || obj[2] != 0x4c || obj[3] != 0x46 {
+        println("FAIL: ELFMAG mismatch")
+        return
+    }
+    if obj[4] != 2 || obj[5] != 1 {
+        println("FAIL: EI_CLASS/EI_DATA mismatch")
+        return
+    }
+    if obj[16] != 1 || obj[17] != 0 {
+        println("FAIL: e_type not ET_REL")
+        return
+    }
+    if obj[18] != 62 || obj[19] != 0 {
+        println("FAIL: e_machine not EM_X86_64")
+        return
+    }
+    println("  ELFMAG + ELFCLASS64 + ET_REL + EM_X86_64 OK")
+
+    let out_path = env_var("HEXA_HXLCL_SETJMP_O")
+    let mut dest = out_path
+    if dest == "" { dest = "build/poc/hxlcl_setjmp_elf.o" }
+    write_bytes(dest, obj)
+    println("  wrote          : " + dest)
+    println("[wire] EMIT OK — link round-trip test; gate HEXA_RT_SELFEMIT_SETJMP=1 in stage_resolve_runtime_a")
+}
+
+emit_hxlcl_setjmp_elf_o()
