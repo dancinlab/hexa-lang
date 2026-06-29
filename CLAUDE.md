@@ -72,10 +72,13 @@ git submodule update --init --recursive          # activate (hooks no-op until p
   출하 smoke 통과**를 확인한 뒤에만 머지한다. 비트동일 개선은 게이트 없이 기본빌드로(예: gemm-perf
   #3636 무게이트 2.4×), 비트변경·환경의존 개선만 opt-in 토글로 격리한다(예: gemm-omp #3634
   `HEXA_OMP=1`).
-- do: 릴리스 채널은 딱 둘 — **`stable`**(소비자 기본 · 검증된 `vX.Y.Z` Latest) 과 **`test`**(실험
-  롤링 prerelease · `main` push 마다 갱신). 실험적 self-host 변경(byteeq · measure · RT-NATIVE ·
-  zero-C · static-musl)은 `main` push → test prerelease 로 상시 흘린다(`HEXA_VERSION=test`). 구
-  `edge` 채널은 **완전 폐기**됨 (install.sh alias · release.yml `edge` 태그 push · 원격 `edge` 태그 모두 제거).
+- do: 릴리스 채널은 **`stable` 단일** — 소비자 기본 · 검증된 `vX.Y.Z` Latest. 구 `edge`·`test`
+  롤링 prerelease 채널은 **모두 완전 폐기**됨 (`edge` 2026 초 · `test` 2026-06-30). `test` 폐기
+  = release.yml `on.push.branches:[main]` 트리거 제거 + setup `release_tag=test` 분기 제거 +
+  `test` 태그 force-move 스텝 제거 + install.sh `HEXA_VERSION=test` 경로 제거 + 원격 `test`
+  릴리스·태그 삭제. 실험적 self-host 변경(byteeq · measure · RT-NATIVE · zero-C · static-musl)의
+  검증은 **PR CI(Blacksmith 3타깃 byteeq) + pool 빌드**로 받는다 — 상시 흐르는 prerelease 채널 없음.
+  static-musl·cuda 보조 자산은 이제 매 `vX.Y.Z` 태그 릴리스에 동봉(install.sh 가 없으면 glibc 폴백).
 - dont: **"x86 만 green" 으로 stable 승격 금지** (v0.241.0 arm64 asset 미발행 회귀 교훈 — 한 타깃
   그린은 전체 그린이 아니다). stable 승격은 3타깃 릴리스 잡 전부 GREEN + install.sh 소비자
   스모크(`hexa --version` + hello/exit42 run) GREEN 일 때만.
@@ -144,17 +147,18 @@ git submodule update --init --recursive          # activate (hooks no-op until p
 - do: QA 산출(verdict · 측정 수치)은 memory/CHANGELOG/state 로 박제하고, cross-repo 측정은
   `ing add --to <repo>` 로 relay 한다. 빌드/측정은 aiden/summer/vast pool(mini=git/gh only ·
   akida 금지). 자세한 의무는 commons `verify-done` · `break-walls` · `reference-match` 와 lockstep.
-- do: **forge/flame GPU 성능 측정은 반드시 "현행 hexat"(`HEXA_VERSION=test` 설치)로 한다** — 풀에
-  깔린 stock 릴리스 hexat(예 v0.442.0)은 main 의 `forge_dispatch_*` builtin 을 모를 수 있어 그
-  심볼을 `hexa_call3/4` 값-디스패치로 잘못 lowering → 컴파일 실패(타입에러) 또는 **느린 CPU 폴백으로
-  측정**(75331ms 류 bad-hexat 아티팩트 → phantom 4750× 박을 뻔한 2026-06-29 교훈). 측정 전 ⓐ
-  `HEXA_VERSION=test sh install.sh`(롤링 prerelease·assets 매 main push force-update·stable 릴리스 컷
-  불요) → ⓑ `hexa gpu` 로 cuda_available + 버전 현행 확인 → ⓒ bench 실행 시 `[OWN-GEMM-FIRED] DEVICE
-  path` 발화 확인. ⚠️ `test` release 의 publishedAt 은 stale 표시되나 자산은 현행(혼동주의). SSOT =
+- do: **forge/flame GPU 성능 측정은 반드시 "현행 main hexat"으로 한다** — 풀에 깔린 stock 릴리스
+  hexat(예 v0.442.0)은 main 의 `forge_dispatch_*` builtin 을 모를 수 있어 그 심볼을 `hexa_call3/4`
+  값-디스패치로 잘못 lowering → 컴파일 실패(타입에러) 또는 **느린 CPU 폴백으로 측정**(75331ms 류
+  bad-hexat 아티팩트 → phantom 4750× 박을 뻔한 2026-06-29 교훈). `test` 롤링 채널 폐기(2026-06-30)
+  후 현행 hexat 확보 = **pool 호스트(aiden/summer)에서 main 체크아웃을 직접 빌드한 hexat**(`tool/release_build`
+  또는 `./hexa install.hexa`)으로 측정한다. 측정 전 ⓐ pool 에서 현행 main 빌드 → ⓑ `hexa gpu` 로
+  cuda_available + 버전 현행 확인 → ⓒ bench 실행 시 `[OWN-GEMM-FIRED] DEVICE path` 발화 확인. SSOT =
   convergence `bench-hexa-clm-step-hexa-1`.
 - dont: 풀 hexat 현행성 확인 없이 forge 벤치 절대시간 측정·박제(bad-hexat 폴백을 진짜 perf 로 오판) ·
   builtin 부족을 per-op `hexa cc --regen` 으로 우회(공유 툴체인 오염 = 후속 측정 전부 무효) · stable
-  릴리스를 벤치 한 건 때문에 컷(release-integrity 과함 — `test` 채널이 정석 unblock).
+  릴리스를 벤치 한 건 때문에 컷(release-integrity 과함 — pool 에서 main 직접 빌드가 정석 unblock) ·
+  폐기된 `HEXA_VERSION=test` 경로에 의존(채널 없음).
 - do: QA 는 **native-canonical-default polarity 위반도 감사·교정**한다 — 기본 경로는 항상
   hexa-native/own/canonical 이고 외부의존(cuBLAS · 외부 BLAS · 벤더 라이브러리 · legacy fallback)은
   **opt-in 플래그로만** 존재해야 한다(아래 [native-canonical-default] 가드레일과 lockstep). QA 가

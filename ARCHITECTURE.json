@@ -175,8 +175,8 @@
       {
         "id": "bench-hexa-clm-step-hexa-1",
         "state": "ossified",
-        "value": "풀CLM step 80× 측정모순 RESOLVED: 75331ms(r1)=anomalous — non-builtin-aware/오염 hexat이 forge_dispatch_*를 hexa_call3 값-디스패치로 잘못 lowering→느린 CPU폴백 측정. 진짜=882ms(현행 main hexat·HEXA_VERSION=test 설치·GPU OWN-GEMM-FIRED DEVICE path·median-7 877~886·workflow 931ms와 동차). PyTorch 12.7ms 대비 ≈69×(4750×는 phantom). conv-fix #4227 효과 있음(이전 FALSIFIED는 bad-hexat 아티팩트).",
-        "threshold": "재발조건: forge-using 벤치가 풀에서 비정상적으로 느리거나(75331ms류) hexa_call3/4 타입에러나면 = hexat이 builtin 미인지(stock/오염). 해결: HEXA_VERSION=test 설치(롤링 prerelease·assets 매 main push force-update·publishedAt은 stale 표시되나 자산 현행)로 현행 hexat 확보 후 측정. stable 릴리스 컷 불요. per-op regen으로 builtin 박지 말 것(툴체인 오염=측정무효).",
+        "value": "풀CLM step 80× 측정모순 RESOLVED: 75331ms(r1)=anomalous — non-builtin-aware/오염 hexat이 forge_dispatch_*를 hexa_call3 값-디스패치로 잘못 lowering→느린 CPU폴백 측정. 진짜=882ms(현행 main hexat·pool 호스트서 main 직접 빌드·GPU OWN-GEMM-FIRED DEVICE path·median-7 877~886·workflow 931ms와 동차). PyTorch 12.7ms 대비 ≈69×(4750×는 phantom). conv-fix #4227 효과 있음(이전 FALSIFIED는 bad-hexat 아티팩트).",
+        "threshold": "재발조건: forge-using 벤치가 풀에서 비정상적으로 느리거나(75331ms류) hexa_call3/4 타입에러나면 = hexat이 builtin 미인지(stock/오염). 해결: pool 호스트(aiden/summer)에서 현행 main 을 직접 빌드(tool/release_build·./hexa install.hexa)한 hexat 으로 측정. test 롤링 채널은 폐기됨(2026-06-30) — HEXA_VERSION=test 경로 없음. stable 릴리스 컷 불요. per-op regen으로 builtin 박지 말 것(툴체인 오염=측정무효).",
         "source": "bench/vs_pytorch/bench_hexa_clm_step.hexa"
       }
     ]
