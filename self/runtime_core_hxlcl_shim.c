@@ -941,7 +941,27 @@ int    hxlcl_pclose(void *stream)                     { return pclose((FILE *)st
 #ifndef HEXA_RT_NATIVE_TIME
 int    hxlcl_time(int *t)                             { time_t r = time(NULL); if (t) *t = (int)r; return (int)r; }
 #endif
+/* RT-NATIVE-CLOCK_GETTIME (HEXA_RT_NATIVE_CLOCK_GETTIME, default OFF · proc group):
+ * hxlcl_clock_gettime leaves the shim via the fp-ABI Route C whole-module emit (time
+ * #4250-era / open_sys / fork precedent). The native body
+ * (stdlib/runtime/hxlcl_core.hexa::hxlcl_clock_gettime, whitelisted in _is_cabi) is a
+ * syscall leaf: under the x86_64-linux emit target the live leg is
+ * `__hx_syscall6(228, clk, ts, …)` (__NR_clock_gettime — the kernel writes the caller's
+ * timespec out-ptr) + a negative-result errno store via `bl __errno_location` (glibc-
+ * provided, resolved at link — the same errno provider the libc-delegate shim already
+ * pulls; NO new provider). The arm64 (NR 113) + darwin (no trap → gettimeofday(116)
+ * synthesize, sec/usec*1000 into the out-ptr, leak-free) legs are DCE'd out under
+ * target_is_x86_64. ZERO inner C-ABI callee, zero extern-data, zero malloc scratch.
+ * objcopy isolates ONLY hxlcl_clock_gettime; its `bl __errno_location` is an undefined
+ * external resolved by libc. BYTE-FAITHFUL to the frozen 0-libc floor body
+ * (self/runtime_emit_full.hexa:1977-1990 darwin gettimeofday synth / linux syscall leg),
+ * NOT to this shim's libc clock_gettime(3) delegate (standalone-libc measurement TU only).
+ * Under HEXA_RT_NATIVE_CLOCK_GETTIME=1 (x86_64-linux gate in tool/stage_resolve_runtime_a)
+ * the shim drops clock_gettime (#ifndef below). DEFAULT (unset) keeps this libc delegate →
+ * shim.o + archive byte-identical (release-integrity invariant). */
+#ifndef HEXA_RT_NATIVE_CLOCK_GETTIME
 int    hxlcl_clock_gettime(int clk, void *ts)         { return clock_gettime((clockid_t)clk, (struct timespec *)ts); }
+#endif
 size_t hxlcl_strftime(char *buf, size_t cap, const char *fmt, void *tm) { return strftime(buf, cap, fmt, (struct tm *)tm); }
 /* SELFEMIT (HEXA_RT_SELFEMIT_GETRUSAGE, default OFF · RFC061 §M8 family #29): hxlcl_getrusage
  * is supplied by the hexa-NATIVE self-emitted .o (test/native_build/emit_hxlcl_getrusage_o.hexa
