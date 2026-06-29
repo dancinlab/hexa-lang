@@ -2317,6 +2317,14 @@ pub fn _is_cabi(fname: string) -> bool {
     // ON (HEXA_CABI_HXLCL=1) it replaces the libc-shim fmod() member (shim drops it
     // via -DHEXA_LIBM_NATIVE_FMOD); default-OFF byteeq-neutral.
     if fname == "hxlcl_fmod" { return true }
+    // fp-ABI libm-leaf RUNG 3 — hxlcl_sin (`double sin(double)`). A 1:1 musl
+    // src/math/{sin,__sin,__cos,__rem_pio2}.c port (small + medium reduction paths,
+    // libm-free) in stdlib/runtime/hxlcl_core.hexa, with the __sin/__cos kernels
+    // INLINED into the single self-contained body (no inner SSE-class call boundary —
+    // avoids passing HexaVal-typed literal args across an fn boundary). ON
+    // (HEXA_CABI_HXLCL=1) hxlcl_sin replaces the libc-shim sin() member (shim drops
+    // via -DHEXA_RT_NATIVE_SIN). default-OFF byteeq-neutral.
+    if fname == "hxlcl_sin" { return true }
     return false
 }
 
@@ -2343,11 +2351,18 @@ fn _cabi_sse_arg(fname: string, idx: i64) -> bool {
         if idx == 1 { return true }
         return false
     }
+    // hxlcl_sin(x: double) -> double : arg 0 SSE; return SSE. (kernels inlined → no
+    // multi-arg kernel signatures here.)
+    if fname == "hxlcl_sin" {
+        if idx == 0 { return true }
+        return false
+    }
     return false
 }
 fn _cabi_sse_ret(fname: string) -> bool {
     if fname == "hxlcl_fp_addmul" { return true }
     if fname == "hxlcl_fmod" { return true }
+    if fname == "hxlcl_sin" { return true }
     return false
 }
 // fp-ABI symbols carry SSE-class params/return. The x86_64 backend lowers them
@@ -2358,6 +2373,7 @@ fn _cabi_sse_ret(fname: string) -> bool {
 pub fn _cabi_is_fp(fname: string) -> bool {
     if fname == "hxlcl_fp_addmul" { return true }
     if fname == "hxlcl_fmod" { return true }
+    if fname == "hxlcl_sin" { return true }
     return false
 }
 
@@ -4011,6 +4027,32 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                              "__hx_to_double: tag == TAG_FLOAT?"))
             _x86_buf.push(_x86_instr2("cmove", _x86_op_reg("r10"), _x86_op_reg("r11"),
                              "__hx_to_double: if FLOAT keep original bits"))
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 1) }
+            return
+        }
+        // libm-leaf (musl sin argument reduction) — FLOAT↔INT conversion intrinsics.
+        // __hx_payload_f2i(v): reinterpret v's payload word as a double, TRUNCATE
+        // toward zero into a signed i64 (cvttsd2si) — the `(int32_t)fn` round-to-int
+        // step after the `fn = x*invpio2 + toint - toint` toint trick (fn is already
+        // integral, so truncation is exact). __hx_payload_i2f(v): convert v's signed
+        // int payload to a double (cvtsi2sd). Distinct from __hx_to_double (a TAGGED
+        // int-or-float coercion that keeps already-double bits via cmove) — these take
+        // a RAW payload word and do an unconditional SSE convert. ADD-only.
+        if s.op == "__hx_payload_f2i" && len(s.args) >= 1 {
+            _x86_hv_payload(s.args[0], st, rm, "r10", opts)  // r10 = double bits
+            _x86_buf.push(_x86_instr2("movq", _x86_op_reg("xmm0"), _x86_op_reg("r10"),
+                             "__hx_payload_f2i: xmm0 = v.f bits"))
+            _x86_buf.push(_x86_instr2("cvttsd2si", _x86_op_reg("r10"), _x86_op_reg("xmm0"),
+                             "__hx_payload_f2i: r10 = (i64)trunc(v.f)"))
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 0) }
+            return
+        }
+        if s.op == "__hx_payload_i2f" && len(s.args) >= 1 {
+            _x86_hv_payload(s.args[0], st, rm, "r10", opts)  // r10 = int payload
+            _x86_buf.push(_x86_instr2("cvtsi2sd", _x86_op_reg("xmm0"), _x86_op_reg("r10"),
+                             "__hx_payload_i2f: xmm0 = (double)v.i"))
+            _x86_buf.push(_x86_instr2("movq", _x86_op_reg("r10"), _x86_op_reg("xmm0"),
+                             "__hx_payload_i2f: r10 = converted bits"))
             if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 1) }
             return
         }

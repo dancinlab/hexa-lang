@@ -1948,7 +1948,7 @@ pub fn hxlcl_time(t: HexaVal) -> int {
         // mismatches. Box it via __hx_payload_add(0,16) → HexaVal{TAG_INT,16} — the
         // exact close/strtoll `__hx_payload_sub(0, x)` shape (the __hx_payload_*
         // intrinsics accept i64 literals and return HexaVal, unlike a declared
-        // extern fn). strdup/calloc pass HexaVal the same way (cap=__hx_payload_add,
+        // extern qn). strdup/calloc pass HexaVal the same way (cap=__hx_payload_add,
         // total=__hx_payload_mul). The malloc result is `int` (raw ptr word), fed
         // straight to the raw-ptr intrinsics like strdup/calloc do.
         let szl = __hx_payload_add(0, 16)      // HexaVal-box the scratch size
@@ -3107,4 +3107,358 @@ pub fn hxlcl_fmod(x: HexaVal, y: HexaVal) -> int {
     let sxb = __hx_payload_shl(sx, 63)            // sx << 63
     uxi = __hx_payload_or(uxi, sxb)
     return uxi                                     // bits → xmm0 (SSE-class return)
+}
+
+// ── hxlcl_sin — libm `double sin(double)` native-emit via the fp-ABI (xmm) Route C
+// path. A 1:1 port of musl src/math/{sin,__sin,__cos,__rem_pio2}.c (SunPro/FreeBSD
+// msun s_sin.c / k_sin.c / k_cos.c / e_rem_pio2.c), the small + medium
+// argument-reduction paths. libm-FREE: NO sin()/<math.h>, only SSE
+// mulsd/addsd/subsd via the __hx_payload_f* intrinsics + the integer bit-intrinsics
+// on the raw IEEE-754 payload word.
+//
+// The __sin / __cos kernels are INLINED here (single self-contained fn — same
+// discipline as hxlcl_fmod): the dispatch fills the top-level kernel args
+// (kx/ky/kiy + want_cos/neg) per the n&3 musl table, then ONE inlined __sin block
+// + ONE inlined __cos block compute the result (selected by want_cos, negated by
+// neg). This avoids inter-fn HexaVal-typed literal args (the typechecker rejects a
+// raw f64/i64 where a HexaVal param is declared) and the inner SSE-class call
+// boundary entirely. Every `mut` carried across nested blocks is hoisted to the
+// function-top scope (the hxlcl_fmod discipline — a block-local `let mut` reassigned
+// from a sibling/child block is rejected by the binder).
+//
+// COVERAGE / measured wall: SMALL (|x| ~<= 9pi/4, plain double k*pi/2 subtraction) +
+// MEDIUM (|x| < 2^20*pi/2 ≈ 1.647e6, the toint round-to-int + 3-round Cody-Waite
+// reduction) ported VERBATIM. The LARGE path (Payne-Hanek __rem_pio2_large, a 66-int
+// two_over_pi table) is NOT ported (🧱 separate ~400-line table leaf = honest next
+// rung); for |x| beyond the threshold this returns x-x (NaN-ish), and the verify
+// sweep stays inside the covered domain.
+//
+// The double→bits reinterpret is FREE (SSE-class Route C ingress movq's x's xmm bits
+// into the GP payload home — same as hxlcl_fmod). The S1..S6/C1..C6 minimax
+// coefficients + pio2 split constants become exact 64-bit immediates via
+// const_float→float_to_bits→movq xmm. reference: musl src/math/{sin,__sin,__cos,
+// __rem_pio2}.c (all constants verified bit-exact). default-OFF byteeq-neutral.
+pub fn hxlcl_sin(x: HexaVal) -> int {
+    // GET_HIGH_WORD(ix0, x); ix = ix0 & 0x7fffffff.  (uxi = the payload word)
+    let uxi = __hx_payload_add(x, 0)              // raw IEEE-754 bits of x
+    let hi = __hx_payload_shr(uxi, 32)            // high 32 bits
+    let ix = __hx_payload_and(hi, 2147483647)     // & 0x7fffffff
+
+    // |x| < 2**-26 (ix < 0x3e500000) → return x.  (test BEFORE the |x|<pi/4 kernel)
+    if __hx_payload_ult(ix, 1045430272) {
+        return uxi
+    }
+    // sin(Inf or NaN) is NaN :  ix >= 0x7ff00000  → return x - x
+    if __hx_payload_ule(2146435072, ix) {
+        let nan = __hx_payload_fsub(x, x)
+        return nan
+    }
+
+    // ── top-level carried state (hoisted muts — fmod discipline) ──
+    let sign = __hx_payload_shr(uxi, 63)          // sign of x (large-path only)
+    let mut n = 0                                  // k mod 4 accumulator
+    let mut reduced = 0                            // 1 once kx/ky/kiy are set
+    let mut kx = __hx_payload_add(uxi, 0)          // kernel x  (reduced remainder)
+    let mut ky = __hx_payload_fsub(x, x)           // kernel y  (tail; +0.0 default)
+    let mut kiy = 0                                // kernel iy flag (tail-present)
+    // medium-path scratch (hoisted)
+    let mut qn = __hx_payload_fsub(x, x)           // round(x/(pi/2)) as a double
+    let mut r = __hx_payload_fsub(x, x)            // reduced remainder hi
+    let mut w = __hx_payload_fsub(x, x)            // reduction correction
+    let mut ey = 0                                 // exponent of y[0]
+
+    // |x| ~< pi/4 :  ix <= 0x3fe921fb  → __sin(x, 0.0, 0)  (no reduction, iy=0)
+    if __hx_payload_ule(ix, 1072243195) {
+        kx = __hx_payload_add(uxi, 0)             // kernel x = x
+        kiy = 0                                    // iy = 0 (tail absent)
+        n = 0                                      // sin path
+        reduced = 1
+    }
+
+    // ── argument reduction (musl __rem_pio2 small + medium) ──
+    // SMALL path bands: |x| in (pi/4, 9pi/4], plain double k*pi/2 subtraction,
+    // diverting the |x|~=k*pi/2 cancellation cases to the MEDIUM toint path.
+    let frac = __hx_payload_and(ix, 1048575)      // ix & 0xfffff
+    let is_half = __hx_payload_eq(frac, 598523)   // == 0x921fb → near k*pi/2 (medium)
+
+    // |x| ~<= 3pi/4 : ix <= 0x4002d97c  → k=1
+    if __hx_payload_eq(reduced, 0) {
+        let in_band1 = __hx_payload_ule(ix, 1073928572)
+        let nothalf = __hx_payload_eq(is_half, 0)
+        let do1 = __hx_payload_and(in_band1, nothalf)
+        if __hx_payload_ne(do1, 0) {
+            if __hx_payload_eq(sign, 0) {
+                let z = __hx_payload_fsub(x, 1.57079632673412561417e+00)        // x - pio2_1
+                ky = __hx_payload_fsub(z, 6.07710050650619224932e-11)           // z - pio2_1t
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fsub(d, 6.07710050650619224932e-11)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = 1
+            } else {
+                let z = __hx_payload_fadd(x, 1.57079632673412561417e+00)        // x + pio2_1
+                ky = __hx_payload_fadd(z, 6.07710050650619224932e-11)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fadd(d, 6.07710050650619224932e-11)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = -1
+            }
+            kiy = 1
+            reduced = 1
+        }
+    }
+    // 3pi/4 < |x| ~<= 5pi/4 : ix <= 0x400f6a7a  → k=2
+    if __hx_payload_eq(reduced, 0) {
+        let in_band2 = __hx_payload_ule(ix, 1074752122)
+        let nothalf = __hx_payload_eq(is_half, 0)
+        let do2 = __hx_payload_and(in_band2, nothalf)
+        if __hx_payload_ne(do2, 0) {
+            // 2*pio2_1 = 3.14159265346825122834e+00 ; 2*pio2_1t = 1.21542010130123844986e-10
+            if __hx_payload_eq(sign, 0) {
+                let z = __hx_payload_fsub(x, 3.14159265346825122834e+00)
+                ky = __hx_payload_fsub(z, 1.21542010130123844986e-10)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fsub(d, 1.21542010130123844986e-10)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = 2
+            } else {
+                let z = __hx_payload_fadd(x, 3.14159265346825122834e+00)
+                ky = __hx_payload_fadd(z, 1.21542010130123844986e-10)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fadd(d, 1.21542010130123844986e-10)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = -2
+            }
+            kiy = 1
+            reduced = 1
+        }
+    }
+    // 5pi/4 < |x| ~<= 7pi/4 : ix <= 0x4015fdbc  → k=3 (skip near 3pi/2 = 0x4012d97c)
+    if __hx_payload_eq(reduced, 0) {
+        let in_band3 = __hx_payload_ule(ix, 1075183036)
+        let near32 = __hx_payload_eq(ix, 1074977148)
+        let not32 = __hx_payload_eq(near32, 0)
+        let do3 = __hx_payload_and(in_band3, not32)
+        if __hx_payload_ne(do3, 0) {
+            // 3*pio2_1 = 4.71238898020237684251e+00 ; 3*pio2_1t = 1.82313015195185767498e-10
+            if __hx_payload_eq(sign, 0) {
+                let z = __hx_payload_fsub(x, 4.71238898020237684251e+00)
+                ky = __hx_payload_fsub(z, 1.82313015195185767498e-10)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fsub(d, 1.82313015195185767498e-10)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = 3
+            } else {
+                let z = __hx_payload_fadd(x, 4.71238898020237684251e+00)
+                ky = __hx_payload_fadd(z, 1.82313015195185767498e-10)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fadd(d, 1.82313015195185767498e-10)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = -3
+            }
+            kiy = 1
+            reduced = 1
+        }
+    }
+    // 7pi/4 < |x| ~<= 9pi/4 : ix <= 0x401c463b  → k=4 (skip near 4pi/2 = 0x401921fb)
+    if __hx_payload_eq(reduced, 0) {
+        let in_band4 = __hx_payload_ule(ix, 1075594811)
+        let near42 = __hx_payload_eq(ix, 1075388923)
+        let not42 = __hx_payload_eq(near42, 0)
+        let do4 = __hx_payload_and(in_band4, not42)
+        if __hx_payload_ne(do4, 0) {
+            // 4*pio2_1 = 6.28318530693650245667e+00 ; 4*pio2_1t = 2.43084020260247689972e-10
+            if __hx_payload_eq(sign, 0) {
+                let z = __hx_payload_fsub(x, 6.28318530693650245667e+00)
+                ky = __hx_payload_fsub(z, 2.43084020260247689972e-10)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fsub(d, 2.43084020260247689972e-10)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = 4
+            } else {
+                let z = __hx_payload_fadd(x, 6.28318530693650245667e+00)
+                ky = __hx_payload_fadd(z, 2.43084020260247689972e-10)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fadd(d, 2.43084020260247689972e-10)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = -4
+            }
+            kiy = 1
+            reduced = 1
+        }
+    }
+
+    // MEDIUM path: |x| < 2^20*(pi/2)  (ix < 0x413921fb).  toint = 0x1.8p52 = 1.5/EPS.
+    if __hx_payload_eq(reduced, 0) {
+        if __hx_payload_ult(ix, 1094263291) {
+            // fn = x*invpio2 + toint - toint    (round-to-nearest-int as a double)
+            let xi = __hx_payload_fmul(x, 6.36619772367581382433e-01)   // x*invpio2
+            let fa = __hx_payload_fadd(xi, 6755399441055744.0)          // + toint
+            qn = __hx_payload_fsub(fa, 6755399441055744.0)              // - toint
+            n = __hx_payload_f2i(qn)              // n = (int32_t)qn
+            // r = x - fn*pio2_1 ;  w = fn*pio2_1t
+            let fnp1 = __hx_payload_fmul(qn, 1.57079632673412561417e+00)
+            r = __hx_payload_fsub(x, fnp1)
+            w = __hx_payload_fmul(qn, 6.07710050650619224932e-11)
+            // pio4 = 0x1.921fb54442d18p-1 = 7.85398163397448278999e-01
+            let rmw = __hx_payload_fsub(r, w)
+            if __hx_payload_flt(rmw, -7.85398163397448278999e-01) {
+                n = __hx_payload_sub(n, 1)
+                qn = __hx_payload_fsub(qn, 1.0)
+                let fnp1b = __hx_payload_fmul(qn, 1.57079632673412561417e+00)
+                r = __hx_payload_fsub(x, fnp1b)
+                w = __hx_payload_fmul(qn, 6.07710050650619224932e-11)
+            } else {
+                if __hx_payload_fgt(rmw, 7.85398163397448278999e-01) {
+                    n = __hx_payload_add(n, 1)
+                    qn = __hx_payload_fadd(qn, 1.0)
+                    let fnp1c = __hx_payload_fmul(qn, 1.57079632673412561417e+00)
+                    r = __hx_payload_fsub(x, fnp1c)
+                    w = __hx_payload_fmul(qn, 6.07710050650619224932e-11)
+                }
+            }
+            ky = __hx_payload_fsub(r, w)          // y[0] = r - w  (1st round)
+            // ey = bits(y0)>>52 & 0x7ff ;  ex = ix>>20.
+            let y0bits = __hx_payload_add(ky, 0)
+            let y0sh = __hx_payload_shr(y0bits, 52)
+            ey = __hx_payload_and(y0sh, 2047)
+            let ex = __hx_payload_shr(ix, 20)
+            let exmey = __hx_payload_sub(ex, ey)
+            if __hx_payload_lt(16, exmey) {       // ex - ey > 16  → 2nd round
+                // pio2_2 = 6.07710050630396597660e-11 ; pio2_2t = 2.02226624879595063154e-21
+                let t = __hx_payload_add(r, 0)
+                w = __hx_payload_fmul(qn, 6.07710050630396597660e-11)
+                r = __hx_payload_fsub(t, w)
+                let tmr = __hx_payload_fsub(t, r)
+                let tmrmw = __hx_payload_fsub(tmr, w)
+                let fp2t = __hx_payload_fmul(qn, 2.02226624879595063154e-21)
+                w = __hx_payload_fsub(fp2t, tmrmw)
+                ky = __hx_payload_fsub(r, w)
+                let y0b2 = __hx_payload_add(ky, 0)
+                let y0s2 = __hx_payload_shr(y0b2, 52)
+                ey = __hx_payload_and(y0s2, 2047)
+                let exmey2 = __hx_payload_sub(ex, ey)
+                if __hx_payload_lt(49, exmey2) {  // ex - ey > 49  → 3rd round
+                    // pio2_3 = 2.02226624871116645580e-21 ; pio2_3t = 8.47842766036889956997e-32
+                    let t3 = __hx_payload_add(r, 0)
+                    w = __hx_payload_fmul(qn, 2.02226624871116645580e-21)
+                    r = __hx_payload_fsub(t3, w)
+                    let tmr3 = __hx_payload_fsub(t3, r)
+                    let tmrmw3 = __hx_payload_fsub(tmr3, w)
+                    let fp3t = __hx_payload_fmul(qn, 8.47842766036889956997e-32)
+                    w = __hx_payload_fsub(fp3t, tmrmw3)
+                    ky = __hx_payload_fsub(r, w)
+                }
+            }
+            let rmy0 = __hx_payload_fsub(r, ky)
+            let y1v = __hx_payload_fsub(rmy0, w)  // y[1] = (r - y[0]) - w
+            kx = __hx_payload_add(ky, 0)          // kernel x = y[0]
+            ky = __hx_payload_add(y1v, 0)         // kernel y = y[1]
+            kiy = 1
+            reduced = 1
+        }
+    }
+
+    // LARGE path NOT ported (🧱 Payne-Hanek __rem_pio2_large table) — return x-x.
+    if __hx_payload_eq(reduced, 0) {
+        let big = __hx_payload_fsub(x, x)
+        return big
+    }
+
+    // ── n&3 → (want_cos, neg) per the musl sin.c switch ──
+    //   case 0:  __sin(kx,ky,kiy)        want_cos=0 neg=0
+    //   case 1:  __cos(kx,ky)            want_cos=1 neg=0
+    //   case 2: -__sin(kx,ky,kiy)        want_cos=0 neg=1
+    //   case 3: -__cos(kx,ky)            want_cos=1 neg=1
+    let nm3 = __hx_payload_and(n, 3)
+    let mut want_cos = 0
+    let mut neg = 0
+    if __hx_payload_eq(nm3, 1) { want_cos = 1 }
+    if __hx_payload_eq(nm3, 2) { neg = 1 }
+    if __hx_payload_eq(nm3, 3) {
+        want_cos = 1
+        neg = 1
+    }
+
+    // ── inlined __sin kernel (musl __sin.c · S1..S6) on (kx, ky, kiy) ──
+    //   z=kx*kx; w=z*z; r=S2+z*(S3+z*S4)+z*w*(S5+z*S6); v=z*kx;
+    //   kiy==0 ? kx + v*(S1+z*r) : kx - ((z*(0.5*ky - v*r) - ky) - v*S1)
+    let mut sin_res = __hx_payload_fsub(x, x)
+    if __hx_payload_eq(want_cos, 0) {
+        let z = __hx_payload_fmul(kx, kx)
+        let ww = __hx_payload_fmul(z, z)
+        let zS4 = __hx_payload_fmul(z, 2.75573137070700676789e-06)        // z*S4
+        let S3zS4 = __hx_payload_fadd(zS4, -1.98412698298579493134e-04)   // S3 + z*S4
+        let zInner = __hx_payload_fmul(z, S3zS4)
+        let part1 = __hx_payload_fadd(zInner, 8.33333333332248946124e-03) // S2 + …
+        let zS6 = __hx_payload_fmul(z, 1.58969099521155010221e-10)        // z*S6
+        let S5zS6 = __hx_payload_fadd(zS6, -2.50507602534068634195e-08)   // S5 + z*S6
+        let zw = __hx_payload_fmul(z, ww)
+        let part2 = __hx_payload_fmul(zw, S5zS6)
+        let rr = __hx_payload_fadd(part1, part2)                          // r
+        let v = __hx_payload_fmul(z, kx)                                  // v = z*kx
+        if __hx_payload_eq(kiy, 0) {
+            let zr = __hx_payload_fmul(z, rr)
+            let s1zr = __hx_payload_fadd(zr, -1.66666666666666324348e-01) // S1 + z*r
+            let vterm = __hx_payload_fmul(v, s1zr)
+            sin_res = __hx_payload_fadd(kx, vterm)                        // kx + v*(…)
+        } else {
+            let halfy = __hx_payload_fmul(0.5, ky)
+            let vr = __hx_payload_fmul(v, rr)
+            let inner = __hx_payload_fsub(halfy, vr)                      // 0.5*ky - v*r
+            let zin = __hx_payload_fmul(z, inner)
+            let zinmy = __hx_payload_fsub(zin, ky)                        // z*(…) - ky
+            let vS1 = __hx_payload_fmul(v, -1.66666666666666324348e-01)   // v*S1
+            let bracket = __hx_payload_fsub(zinmy, vS1)
+            sin_res = __hx_payload_fsub(kx, bracket)                      // kx - (…)
+        }
+    }
+
+    // ── inlined __cos kernel (musl __cos.c · C1..C6) on (kx, ky) ──
+    //   z=kx*kx; w=z*z; r=z*(C1+z*(C2+z*C3)) + w*w*(C4+z*(C5+z*C6));
+    //   hz=0.5*z; w=1.0-hz; return w + (((1.0-w)-hz) + (z*r - kx*ky))
+    let mut cos_res = __hx_payload_fsub(x, x)
+    if __hx_payload_eq(want_cos, 1) {
+        let z = __hx_payload_fmul(kx, kx)
+        let w0 = __hx_payload_fmul(z, z)
+        let zC3 = __hx_payload_fmul(z, 2.48015872894767294178e-05)        // z*C3
+        let C2zC3 = __hx_payload_fadd(zC3, -1.38888888888741095749e-03)   // C2 + z*C3
+        let zC2 = __hx_payload_fmul(z, C2zC3)
+        let C1in = __hx_payload_fadd(zC2, 4.16666666666666019037e-02)     // C1 + …
+        let rA = __hx_payload_fmul(z, C1in)
+        let zC6 = __hx_payload_fmul(z, -1.13596475577881948265e-11)       // z*C6 (neg)
+        let C5zC6 = __hx_payload_fadd(zC6, 2.08757232129817482790e-09)    // C5 + z*C6
+        let zC5 = __hx_payload_fmul(z, C5zC6)
+        let C4in = __hx_payload_fadd(zC5, -2.75573143513906633035e-07)    // C4 + …
+        let wwc = __hx_payload_fmul(w0, w0)                               // w*w
+        let rB = __hx_payload_fmul(wwc, C4in)
+        let rr = __hx_payload_fadd(rA, rB)                               // r
+        let hz = __hx_payload_fmul(0.5, z)                               // hz = 0.5*z
+        let wc = __hx_payload_fsub(1.0, hz)                              // w = 1.0 - hz
+        let omw = __hx_payload_fsub(1.0, wc)                             // 1.0 - w
+        let omwmhz = __hx_payload_fsub(omw, hz)                          // (1.0-w) - hz
+        let zr = __hx_payload_fmul(z, rr)                               // z*r
+        let xy = __hx_payload_fmul(kx, ky)                              // kx*ky
+        let zrmxy = __hx_payload_fsub(zr, xy)                           // z*r - kx*ky
+        let tail = __hx_payload_fadd(omwmhz, zrmxy)
+        cos_res = __hx_payload_fadd(wc, tail)                           // w + (…)
+    }
+
+    // select kernel result, then apply the sign from the n&3 table.
+    let mut res = __hx_payload_add(sin_res, 0)
+    if __hx_payload_eq(want_cos, 1) {
+        res = __hx_payload_add(cos_res, 0)
+    }
+    if __hx_payload_eq(neg, 1) {
+        let nres = __hx_payload_fsub(0.0, res)
+        return nres
+    }
+    return res
 }

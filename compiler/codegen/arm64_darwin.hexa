@@ -2944,6 +2944,36 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // libm-leaf (musl sin argument reduction) — FLOAT↔INT conversion intrinsics.
+        // __hx_payload_f2i(v): reinterpret v's payload word as a double, TRUNCATE
+        // toward zero into a signed i64 (fcvtzs) — the `(int32_t)fn` round-to-int step
+        // (fn is already integral, so truncation is exact). Result tag = TAG_INT(0).
+        // __hx_payload_i2f(v): convert v's signed int payload to a double (scvtf);
+        // tag = TAG_FLOAT(1). Distinct from __hx_to_double (a TAGGED int-or-float
+        // coercion with a csel) — these take a RAW payload word and do an
+        // unconditional FP convert. AAPCS64 mirror of the x86_64 cvttsd2si/cvtsi2sd.
+        if s.op == "__hx_payload_f2i" && len(s.args) >= 1 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // pl=x1 = double bits
+            buf.push(_arm64_instr2("fmov", _arm64_op_reg("d0"),
+                             _arm64_op_reg("x1"), "__hx_payload_f2i: d0 = v.f bits"))
+            buf.push(_arm64_instr2("fcvtzs", _arm64_op_reg("x1"),
+                             _arm64_op_reg("d0"), "__hx_payload_f2i: x1 = (i64)trunc(v.f)"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_payload_f2i: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        if s.op == "__hx_payload_i2f" && len(s.args) >= 1 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // pl=x1 = int payload
+            buf.push(_arm64_instr2("scvtf", _arm64_op_reg("d0"),
+                             _arm64_op_reg("x1"), "__hx_payload_i2f: d0 = (double)v.i"))
+            buf.push(_arm64_instr2("fmov", _arm64_op_reg("x1"),
+                             _arm64_op_reg("d0"), "__hx_payload_i2f: x1 = converted bits"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#1"), "__hx_payload_i2f: TAG_FLOAT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // RT-NATIVE M5-syscall-c: `__hx_str_ptr(s)` → int HexaVal whose payload IS
         // the string's char* base (the STR payload x1). Same str-payload load as
         // __hx_str_byte, minus the +index and byte deref — for handing a cstring to
