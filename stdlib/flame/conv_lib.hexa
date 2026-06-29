@@ -36,11 +36,43 @@
 
 use "stdlib/flame/tensor_lib"
 
+// ── native-canonical-default GPU conv1d seam gate (r3 lever 2) ───────────────
+// When a CUDA device is present (cuda_available()==1) the causal-dilated conv1d
+// fwd/bwd route their im2col / im2col_t / col2im gather-scatter onto the forge
+// DEVICE builtins (forge_dispatch_im2col{,_t} / _col2im / _db_colsum) and the
+// GEMMs onto forge_dispatch_matmul — the buffers stay FARR_DEVICE-resident so the
+// GEMM reads x_col in place (NO H2D pingpong) and the dominant host-scalar bwd
+// quad-loop (T·Cout·Cin·K ≈ 201M iter/call at CLM-trunk shapes — the r3 #2 51.5%
+// peg, profile a8ce7e72) is replaced by 2 device GEMMs + a device col2im scatter,
+// exactly cuDNN's strategy (im2col fused into the kernel, kept on-device). This
+// mirrors clm_prod.hexa's conv1d_via_forge / conv1d_bwd_via_forge byte-eq path
+// (F-CLM-CONV-GPU-EQ #2352 / F-CLM-CONV-BWD-FORGE-EQ #2383).
+//
+// determinism: the forge builtins handle the det axis INTERNALLY — under
+// set_deterministic(true) / HEXA_DET the runtime selects the fixed-order
+// non-atomic col2im-gather + non-atomic split-K GEMM (byte-exact cross-host, the
+// eval/verdict safety-pin); the fast non-det atomic kernels are the training
+// default. So this seam fires on CUDA regardless of det (no host fallback on det,
+// unlike the elementwise GELU seam whose device kernel FMA-drifts ~1 ULP).
+//
+// native-canonical / byteeq-safe: cuda_available()==0 (CPU-only / byteeq build)
+// → host path below runs UNCHANGED (byte-identical to the pre-lever code, the
+// proven reference). conv_lib is byteeq-neutral (self/ does not import it), so
+// this edit cannot move the gen3≡gen4 self-host fixpoint.
+fn _conv1d_dev_on() -> int { return cuda_available() }
+
 // im2col host buffer build (offset-capable weight space is irrelevant here —
 // the gather is over activations only). x_col[t, ci·K+k] = xin(p,ci),
 // p = t − dil·(K−1−k), zero where p<0 (causal left-pad). Mirrors the forge
 // im2col in clm_conv_gpu.hexa byte-for-byte (same gather → same re-association).
 fn _conv1d_im2col(x: int, xcol: int, T: int, Cin: int, K: int, dil: int) {
+    // r3 lever 2: device-resident im2col on CUDA (keeps xcol FARR_DEVICE for the
+    // in-place forge GEMM read; rc 0 = done on device). Falls through to the host
+    // gather on CPU-only builds / GPU failure (byte-eq, the proven reference).
+    if _conv1d_dev_on() == 1 {
+        let rc = forge_dispatch_im2col(x, xcol, T, Cin, K, dil)
+        if rc == 0 { return }
+    }
     let Kdim = Cin * K
     let mut t = 0
     while t < T {
@@ -55,6 +87,83 @@ fn _conv1d_im2col(x: int, xcol: int, T: int, Cin: int, K: int, dil: int) {
             ci = ci + 1
         }
         t = t + 1
+    }
+}
+
+// im2col-T (transpose form for the dW GEMM): xcolT[ci·K+k, t] = xin(p,ci),
+// p = t − dil·(K−1−k). r3 lever 2 device-resident on CUDA (forge_dispatch_im2col_t),
+// host transpose-gather fallback otherwise. Byte-eq to the inline reference.
+fn _conv1d_im2col_t(x: int, xcolT: int, T: int, Cin: int, K: int, dil: int) {
+    if _conv1d_dev_on() == 1 {
+        let rc = forge_dispatch_im2col_t(x, xcolT, T, Cin, K, dil)
+        if rc == 0 { return }
+    }
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 {
+                    let j = ci * K + k
+                    t_set(xcolT, j * T + t, t_get(x, p * Cin + ci))
+                }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+}
+
+// col2im scatter-add: dX_out[p·Cin+ci] = Σ_k (tt<T) dXcol[tt·Kdim + ci·K+k],
+// tt = p + dil·(K−1−k) — the transpose-GATHER form (one output cell sums its K
+// taps in k-ascending order → deterministic, no double-count). r3 lever 2
+// device-resident on CUDA (forge_dispatch_col2im); zeros + scatters dX_out either
+// way (the device kernel zeros internally too). Byte-eq to the inline reference.
+fn _conv1d_col2im(dXcol: int, dX_out: int, T: int, Cin: int, K: int, dil: int) {
+    if _conv1d_dev_on() == 1 {
+        let rc = forge_dispatch_col2im(dXcol, dX_out, T, Cin, K, dil)
+        if rc == 0 { return }
+    }
+    let Kdim = Cin * K
+    let mut iz = 0
+    while iz < T * Cin { t_set(dX_out, iz, 0.0); iz = iz + 1 }
+    let mut p = 0
+    while p < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut acc = 0.0
+            let mut k = 0
+            while k < K {
+                let tt = p + dil * (K - 1 - k)
+                if tt < T { let j = ci * K + k; acc = acc + t_get(dXcol, tt * Kdim + j) }
+                k = k + 1
+            }
+            t_set(dX_out, p * Cin + ci, acc)
+            ci = ci + 1
+        }
+        p = p + 1
+    }
+}
+
+// bias-grad column sum db_out[co] = Σ_{t} dy[t,co] (t-sequential per channel).
+// r3 lever 2 device-resident on CUDA (forge_dispatch_db_colsum keeps db_out
+// FARR_DEVICE for the next optimizer step), host reduction fallback otherwise.
+// Writes db_out from index 0 (caller offsets via a temp where needed). Byte-eq.
+fn _conv1d_db_colsum(dy: int, db_out: int, T: int, Cout: int) {
+    if _conv1d_dev_on() == 1 {
+        let rc = forge_dispatch_db_colsum(dy, db_out, T, Cout)
+        if rc == 0 { return }
+    }
+    let mut cb = 0
+    while cb < Cout {
+        let mut acc = 0.0
+        let mut tb = 0
+        while tb < T { acc = acc + t_get(dy, tb * Cout + cb); tb = tb + 1 }
+        t_set(db_out, cb, acc)
+        cb = cb + 1
     }
 }
 
@@ -143,24 +252,9 @@ pub fn nn_conv1d_bwd(x: int, w: int, dy: int,
                      T: int, Cin: int, Cout: int, K: int, dil: int) {
     let Kdim = Cin * K
     // ── im2col-T: build xcolT[Kdim, T] (transpose form for dW GEMM) ──
+    // r3 lever 2: device-resident on CUDA (kept FARR_DEVICE for the in-place GEMM).
     let xcolT = t_zeros(Kdim * T)
-    let mut t = 0
-    while t < T {
-        let mut ci = 0
-        while ci < Cin {
-            let mut k = 0
-            while k < K {
-                let p = t - dil * (K - 1 - k)
-                if p >= 0 {
-                    let j = ci * K + k
-                    t_set(xcolT, j * T + t, t_get(x, p * Cin + ci))
-                }
-                k = k + 1
-            }
-            ci = ci + 1
-        }
-        t = t + 1
-    }
+    _conv1d_im2col_t(x, xcolT, T, Cin, K, dil)
     // ── dW: dW_flat[Kdim, Cout] = xcolT[Kdim,T] @ dy[T,Cout] (forge GEMM) ──
     let dW_flat = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)
     // reshape: dW_flat[j*Cout + co] -> dW_out[co*Kdim + j]
@@ -176,36 +270,10 @@ pub fn nn_conv1d_bwd(x: int, w: int, dy: int,
     // ── dX: dXcol[T, Kdim] = dy[T,Cout] @ w[Cout,Kdim] (forge GEMM) ──
     // w[co*Kdim + j] IS Wflat[co, j] — pass w directly, no copy.
     let dXcol = forge_dispatch_matmul(dy, T, Cout, w, Kdim)
-    // col2im scatter-add back to dX_out[T, Cin]
-    let mut iz = 0
-    while iz < T * Cin { t_set(dX_out, iz, 0.0); iz = iz + 1 }
-    let mut t2 = 0
-    while t2 < T {
-        let mut ci2 = 0
-        while ci2 < Cin {
-            let mut k2 = 0
-            while k2 < K {
-                let p = t2 - dil * (K - 1 - k2)
-                if p >= 0 {
-                    let j = ci2 * K + k2
-                    let xidx = p * Cin + ci2
-                    t_set(dX_out, xidx, t_get(dX_out, xidx) + t_get(dXcol, t2 * Kdim + j))
-                }
-                k2 = k2 + 1
-            }
-            ci2 = ci2 + 1
-        }
-        t2 = t2 + 1
-    }
-    // ── db: db_out[co] = Σ_t dy[t,co] (host reduction — O(T·Cout)) ──
-    let mut cb = 0
-    while cb < Cout {
-        let mut acc = 0.0
-        let mut tb = 0
-        while tb < T { acc = acc + t_get(dy, tb * Cout + cb); tb = tb + 1 }
-        t_set(db_out, cb, acc)
-        cb = cb + 1
-    }
+    // col2im scatter-add back to dX_out[T, Cin] — r3 lever 2 device-resident.
+    _conv1d_col2im(dXcol, dX_out, T, Cin, K, dil)
+    // ── db: db_out[co] = Σ_t dy[t,co] — r3 lever 2 device-resident on CUDA ──
+    _conv1d_db_colsum(dy, db_out, T, Cout)
     t_free(xcolT)
     t_free(dW_flat)
     t_free(dXcol)
@@ -220,24 +288,9 @@ pub fn nn_conv1d_bwd_off(x: int, w: int, woff: int, dy: int,
                          T: int, Cin: int, Cout: int, K: int, dil: int) {
     let Kdim = Cin * K
     // ── im2col-T: build xcolT[Kdim, T] from x (same as nn_conv1d_bwd) ──
+    // r3 lever 2: device-resident on CUDA (kept FARR_DEVICE for the in-place GEMM).
     let xcolT = t_zeros(Kdim * T)
-    let mut t = 0
-    while t < T {
-        let mut ci = 0
-        while ci < Cin {
-            let mut k = 0
-            while k < K {
-                let p = t - dil * (K - 1 - k)
-                if p >= 0 {
-                    let j = ci * K + k
-                    t_set(xcolT, j * T + t, t_get(x, p * Cin + ci))
-                }
-                k = k + 1
-            }
-            ci = ci + 1
-        }
-        t = t + 1
-    }
+    _conv1d_im2col_t(x, xcolT, T, Cin, K, dil)
     // ── dW: dW_flat[Kdim, Cout] = xcolT[Kdim,T] @ dy[T,Cout] (forge GEMM) ──
     let dW_flat = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)
     // reshape + scatter into dW_out at offset dWoff
@@ -265,38 +318,15 @@ pub fn nn_conv1d_bwd_off(x: int, w: int, woff: int, dy: int,
         co2 = co2 + 1
     }
     let dXcol = forge_dispatch_matmul(dy, T, Cout, Wslice, Kdim)
-    // col2im scatter-add to dX_out
-    let mut ix = 0
-    while ix < T * Cin { t_set(dX_out, ix, 0.0); ix = ix + 1 }
-    let mut t2 = 0
-    while t2 < T {
-        let mut ci2 = 0
-        while ci2 < Cin {
-            let mut k2 = 0
-            while k2 < K {
-                let p = t2 - dil * (K - 1 - k2)
-                if p >= 0 {
-                    let j = ci2 * K + k2
-                    let xidx = p * Cin + ci2
-                    t_set(dX_out, xidx, t_get(dX_out, xidx) + t_get(dXcol, t2 * Kdim + j))
-                }
-                k2 = k2 + 1
-            }
-            ci2 = ci2 + 1
-        }
-        t2 = t2 + 1
-    }
-    // ── db: db_out[dboff+co] = Σ_t dy[t,co] ──
-    let mut ib = 0
-    while ib < Cout { t_set(db_out, dboff + ib, 0.0); ib = ib + 1 }
+    // col2im scatter-add to dX_out — r3 lever 2 device-resident on CUDA.
+    _conv1d_col2im(dXcol, dX_out, T, Cin, K, dil)
+    // ── db: db_out[dboff+co] = Σ_t dy[t,co] — r3 lever 2 device-resident sum
+    // into a temp (the builtin writes from index 0), then copy to the offset. ──
+    let db_tmp = t_zeros(Cout)
+    _conv1d_db_colsum(dy, db_tmp, T, Cout)
     let mut cb = 0
-    while cb < Cout {
-        let mut acc = 0.0
-        let mut tb = 0
-        while tb < T { acc = acc + t_get(dy, tb * Cout + cb); tb = tb + 1 }
-        t_set(db_out, dboff + cb, acc)
-        cb = cb + 1
-    }
+    while cb < Cout { t_set(db_out, dboff + cb, t_get(db_tmp, cb)); cb = cb + 1 }
+    t_free(db_tmp)
     t_free(xcolT)
     t_free(dW_flat)
     t_free(Wslice)
