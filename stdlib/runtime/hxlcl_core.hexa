@@ -3815,3 +3815,184 @@ pub fn hxlcl_cos(x: HexaVal) -> int {
     }
     return res
 }
+
+// ── RFC061 §M8 named-rodata-table PROBE (literal-∅ feature C, STEP-0 witness) ──
+// `double hxlcl_rotab_probe(void)` — the minimal end-to-end witness for the
+// named-rodata-double-array codegen mechanism that exp/log need. Addresses the
+// codegen-defined `rotab_0` constant table (id 0 = {1.0, 2.0}) via the
+// `__hx_rodata_tab_ptr(0)` intrinsic, loads tab[0] and tab[1] (8-byte LE doubles
+// at byte offsets 0 and 8) via __hx_ptr_load64, and returns tab[0]+tab[1] = 3.0
+// as an SSE-class double. If this survives emit->assemble->link->run and yields
+// exactly 3.0, the .rodata table data round-trips and the same loader serves
+// exp's tab[256]. NEVER imported by self/ -> byteeq-neutral (DEFAULT-OFF).
+pub fn hxlcl_rotab_probe() -> int {
+    let base = __hx_rodata_tab_ptr(0)        // &rotab_0  (boxed addr)
+    let q0 = __hx_ptr_load64(base, 0)        // tab[0] bits (1.0)
+    let q1 = __hx_ptr_load64(base, 8)        // tab[1] bits (2.0)
+    let s = __hx_payload_fadd(q0, q1)        // 1.0 + 2.0 = 3.0
+    return s
+}
+
+// ── RFC061 §M8 RT-NATIVE-EXP (table-driven libm leaf, literal-∅ feature C) ─────
+// `double hxlcl_exp(double x)` — a 1:1 port of musl src/math/exp.c (EXP_TABLE_BITS
+// =7, N=128, POLY_ORDER=5; non-FMA, non-TOINT path). Reference: musl exp.c
+// (git.musl-libc.org/cgit/musl/plain/src/math/exp.c) + exp_data.c. The 256-entry
+// __exp_data.tab lives as the codegen named-rodata table `rotab_1`
+// (`_x86_rodata_table_spec(1)`), addressed via __hx_rodata_tab_ptr(1) and read
+// per-cell with __hx_ptr_load64. All scalar coefficients are inline f64 literals
+// (full-precision decimal; bit-exact to musl's hex floats — verified by
+// build/exp_consts.c). All fp ops via __hx_payload_f{add,sub,mul} on raw IEEE-754
+// payload words; integer/bit ops via __hx_payload_{add,sub,and,or,shl,shr,ult,ule,
+// eq,ne}. `let mut` carried state hoisted to fn top (flatten discipline). The
+// shim drops its libc exp() member via -DHEXA_RT_NATIVE_EXP. default-OFF
+// byteeq-neutral (hxlcl_core never imported by self/).
+//
+// Constants (musl exp.c #defines, decoded by build/exp_consts.c):
+//   InvLn2N  = 0x1.71547652b82fep0*128 = 1.84664965233787313537e+02
+//   NegLn2hiN= -0x1.62e42fefa0000p-8   = -5.41521234811170870671e-03
+//   NegLn2loN= -0x1.cf79abc9e3b3ap-47  = -1.28640231116383455381e-14
+//   Shift    = 0x1.8p52                = 6.75539944105574400000e+15
+//   C2=0x1.ffffffffffdbdp-2  C3=0x1.555555555543cp-3
+//   C4=0x1.55555cf172b91p-5  C5=0x1.1111167a4d017p-7
+//   top12(0x1p-54)=969  top12(512)=1032  top12(1024)=1033  top12(INF)=2047
+pub fn hxlcl_exp(x: HexaVal) -> int {
+    let uxi = __hx_payload_add(x, 0)                 // asuint64(x)
+    let t12 = __hx_payload_shr(uxi, 52)              // top12(x) = bits>>52
+    let abstop0 = __hx_payload_and(t12, 2047)        // & 0x7ff
+
+    // ── hoisted carried state ──
+    let mut abstop = __hx_payload_add(abstop0, 0)    // may be zeroed on large path
+    let mut took_special = 0                          // 1 → an early return fired
+
+    // predict_false(abstop - top12(0x1p-54) >= top12(512) - top12(0x1p-54)):
+    //   (abstop - 969) >= 63   [unsigned 32-bit]
+    let d969 = __hx_payload_and(__hx_payload_sub(abstop0, 969), 4294967295)  // &0xffffffff
+    if __hx_payload_ule(63, d969) {
+        // tiny: (abstop - 969) >= 0x80000000 (unsigned) → return 1.0 + x
+        if __hx_payload_ule(2147483648, d969) {
+            let one_t = __hx_payload_i2f(1)
+            let r1 = __hx_payload_fadd(one_t, x)      // WANT_ROUNDING → 1.0 + x
+            return r1
+        }
+        // abstop >= top12(1024) = 1033 → over/underflow/inf/nan
+        if __hx_payload_ule(1033, abstop0) {
+            // asuint64(x) == asuint64(-INFINITY) → 0.0
+            if __hx_payload_eq(uxi, 18442240474082181120) {     // 0xfff0000000000000
+                return 0                                          // +0.0 bits
+            }
+            // abstop >= top12(INFINITY)=2047 → 1.0 + x  (NaN/+Inf)
+            if __hx_payload_ule(2047, abstop0) {
+                let one_n = __hx_payload_i2f(1)
+                let rn = __hx_payload_fadd(one_n, x)
+                return rn
+            }
+            // sign bit set (asuint64(x)>>63) → underflow → +0.0 ; else overflow → +Inf
+            let sgn = __hx_payload_shr(uxi, 63)
+            if __hx_payload_ne(sgn, 0) {
+                return 0                                          // __math_uflow(0) → +0.0
+            }
+            return 9218868437227405312                            // 0x7ff0000000000000 = +Inf (oflow)
+        }
+        // large x is special-cased below: abstop = 0
+        abstop = 0
+    }
+
+    // z = InvLn2N * x
+    let z = __hx_payload_fmul(1.84664965233787313537e+02, x)
+    // kd = eval_as_double(z + Shift); ki = asuint64(kd); kd -= Shift
+    let kd0 = __hx_payload_fadd(z, 6.75539944105574400000e+15)
+    let ki = __hx_payload_add(kd0, 0)                // asuint64(kd0)
+    let kd = __hx_payload_fsub(kd0, 6.75539944105574400000e+15)
+    // r = x + kd*NegLn2hiN + kd*NegLn2loN
+    let khi = __hx_payload_fmul(kd, -5.41521234811170870671e-03)
+    let klo = __hx_payload_fmul(kd, -1.28640231116383455381e-14)
+    let rxh = __hx_payload_fadd(x, khi)
+    let r = __hx_payload_fadd(rxh, klo)
+    // idx = 2*(ki % 128) ; top = ki << (52-7)=45 ; tail = asdouble(T[idx]) ;
+    // sbits = T[idx+1] + top
+    let kimod = __hx_payload_and(ki, 127)            // ki % 128
+    let idx = __hx_payload_shl(kimod, 1)             // 2*(ki%128)
+    let top = __hx_payload_shl(ki, 45)               // ki << 45
+    let tabbase = __hx_rodata_tab_ptr(1)             // &rotab_1 (exp tab[256])
+    let off0 = __hx_payload_shl(idx, 3)              // byte offset T[idx]   (idx*8)
+    let tail = __hx_ptr_load64(tabbase, off0)        // asdouble(T[idx]) bits
+    let off1 = __hx_payload_add(off0, 8)             // byte offset T[idx+1]
+    let tb1 = __hx_ptr_load64(tabbase, off1)         // T[idx+1] (uint64)
+    let sbits = __hx_payload_add(tb1, top)           // T[idx+1] + top
+    // r2 = r*r ; tmp = tail + r + r2*(C2 + r*C3) + r2*r2*(C4 + r*C5)
+    let r2 = __hx_payload_fmul(r, r)
+    let rC3 = __hx_payload_fmul(r, 1.66666666666658858098e-01)             // r*C3
+    let C2rC3 = __hx_payload_fadd(4.99999999999967859043e-01, rC3)         // C2 + r*C3
+    let p1 = __hx_payload_fmul(r2, C2rC3)                                  // r2*(C2+r*C3)
+    let rC5 = __hx_payload_fmul(r, 8.33333585305954908928e-03)            // r*C5
+    let C4rC5 = __hx_payload_fadd(4.16666808410674008312e-02, rC5)        // C4 + r*C5
+    let r2r2 = __hx_payload_fmul(r2, r2)                                   // r2*r2
+    let p2 = __hx_payload_fmul(r2r2, C4rC5)                                // r2*r2*(C4+r*C5)
+    let s0 = __hx_payload_fadd(tail, r)                                    // tail + r
+    let s1 = __hx_payload_fadd(s0, p1)
+    let tmp = __hx_payload_fadd(s1, p2)
+
+    // ── result selection — SINGLE return at fn end (flatten discipline: NO mid-
+    //    body returns; mutually-exclusive flag-guarded blocks write `result`). ──
+    //    musl: if (predict_false(abstop==0)) return specialcase(tmp,sbits,ki);
+    //          else return eval_as_double(scale + scale*tmp).
+    // (A) SIMPLE path computed UNCONDITIONALLY into `result` (scale=asdouble(sbits);
+    //     scale + scale*tmp). This is the dominant path; the specialcase below
+    //     OVERWRITES `result` only when abstop==0. Computing it unconditionally
+    //     (not under an `if`) keeps `tmp`/`sbits` short-lived — their consuming
+    //     ops run immediately after they are produced, before the heavy
+    //     specialcase locals exist — which the codegen spill-allocator lowers
+    //     identically to the standalone simple path (verified value-exact; the
+    //     guarded variant aliased a spill slot and lost 2 ULP at large |x|).
+    let scale_n = __hx_payload_add(sbits, 0)
+    let sctn = __hx_payload_fmul(scale_n, tmp)
+    let mut result = __hx_payload_fadd(scale_n, sctn)
+    let is_special = __hx_payload_eq(abstop, 0)        // 1 → over/underflow path
+
+    // (B) SPECIALCASE path (abstop == 0): inline musl specialcase(tmp,sbits,ki).
+    //     k>0 (ki&0x80000000==0) vs k<0 are mutually exclusive sub-branches; each
+    //     writes `result`. No mid-body return.
+    if __hx_payload_ne(is_special, 0) {
+        let kihi = __hx_payload_and(ki, 2147483648)    // ki & 0x80000000
+        // (B1) k > 0: sbits -= 1009<<52; scale=asdouble(sbits);
+        //             y = 0x1p1009 * (scale + scale*tmp).
+        if __hx_payload_eq(kihi, 0) {
+            let sb = __hx_payload_sub(sbits, 4544132024016830464)  // 1009<<52
+            let scale = __hx_payload_add(sb, 0)
+            let sct = __hx_payload_fmul(scale, tmp)
+            let sum = __hx_payload_fadd(scale, sct)
+            // 0x1p1009 passed as integer bits 0x7f00000000000000 (same strtod-
+            // boundary caution as 0x1p-1022; verified bit-exact).
+            result = __hx_payload_fmul(9151314442816847872, sum)   // 0x1p1009
+        }
+        // (B2) k < 0: sbits += 1022<<52; scale=asdouble(sbits); y = scale+scale*tmp;
+        //             if (y<1.0) precise subnormal rounding; y = 0x1p-1022 * y.
+        if __hx_payload_ne(kihi, 0) {
+            let sb2 = __hx_payload_add(sbits, 4602678819172646912)    // 1022<<52
+            let scale2 = __hx_payload_add(sb2, 0)
+            let sct2 = __hx_payload_fmul(scale2, tmp)
+            let mut y2 = __hx_payload_fadd(scale2, sct2)
+            // if (y < 1.0) { precise subnormal rounding } — flag-guarded (no early ret)
+            if __hx_payload_flt(y2, 1.0) {
+                let lo0 = __hx_payload_fsub(scale2, y2)                // scale - y
+                let lo1 = __hx_payload_fadd(lo0, sct2)                // + scale*tmp
+                let hi0 = __hx_payload_fadd(1.0, y2)                  // 1.0 + y
+                let lo2a = __hx_payload_fsub(1.0, hi0)                // 1.0 - hi
+                let lo2b = __hx_payload_fadd(lo2a, y2)                // + y
+                let lo2 = __hx_payload_fadd(lo2b, lo1)                // + lo
+                let hilo = __hx_payload_fadd(hi0, lo2)
+                y2 = __hx_payload_fsub(hilo, 1.0)                     // (hi+lo) - 1.0
+                // WANT_ROUNDING && y==0.0 → y=0.0 and the explicit underflow
+                // fp_force_eval signal are side-effect-only → omitted (value path).
+            }
+            // 0x1p-1022 * y — the smallest-normal scale 0x0010000000000000 is passed
+            // as its INTEGER bit pattern (4503599627370496), NOT the decimal
+            // 2.225…e-308: hexa's native strtod rounds that decimal 1 ULP high
+            // (→0x0010000000000001), which poisoned the subnormal-tail result by ≤2
+            // ULP. __hx_payload_fmul treats the payload word as the f64 bits, so the
+            // integer literal IS exactly 0x1p-1022 (verified value-exact).
+            result = __hx_payload_fmul(4503599627370496, y2)  // 0x1p-1022 * y
+        }
+    }
+    return result
+}

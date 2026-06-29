@@ -1134,6 +1134,88 @@ fn _x86_record_static_slot(slot_id: i64, size_bytes: i64) {
     _x86_static_slots.push(prefix + to_string(size_bytes))
 }
 
+// ── RFC061 §M8 named-rodata-table accumulator (literal-∅ feature C) ───────────
+// The SIBLING of _x86_static_slots, but for PRE-INITIALIZED `.rodata` constant
+// tables (the data-leaf wall named at hxlcl_fmod/sin/cos: modern musl exp/log are
+// TABLE-driven — __exp_data.tab[256] / __log_data.tab[128] — needing a named-
+// rodata-double-array codegen mechanism). Each distinct `table_id` literal a
+// whitelisted Route C body addresses via `__hx_rodata_tab_ptr(table_id)` records
+// its id here ONCE (deduped); `codegen_x86_64_linux` decodes each into an
+// LSection appended to LModule.rodata so emit/asm defines a `.p2align 3`
+// `rotab_<id>:` symbol whose bytes are the table's LITTLE-ENDIAN doubles. The
+// table CONTENTS live in codegen source (`_x86_rodata_table_spec`, BE-uint64
+// hex verbatim from musl), so the hexa source is just the frozen-safe identifier
+// call `__hx_rodata_tab_ptr(id)` (no new keyword/@attr, no inter-fn HexaVal
+// literal args). ONLY ever appended-to inside the `__hx_rodata_tab_ptr` STMT_CALL
+// special-case → absent from every byteeq program and every DEFAULT-OFF build
+// (hxlcl_core.hexa is never imported by self/) → stays [] → rodata unchanged →
+// byte-eq NEUTRAL (the release-integrity invariant; same property as
+// _x86_static_slots).
+pub let mut _x86_rodata_tabs: [i64] = []
+
+fn _x86_record_rodata_tab(table_id: i64) {
+    let mut i = 0
+    while i < len(_x86_rodata_tabs) {
+        if _x86_rodata_tabs[i] == table_id { return }   // idempotent (deduped)
+        i = i + 1
+    }
+    _x86_rodata_tabs.push(table_id)
+}
+
+// Table CONTENTS registry — keyed by table_id. Returns a whitespace/comma-
+// separated list of BIG-ENDIAN uint64 hex tokens (the verbatim form musl's
+// exp_data.c / log_data.c ship). `_x86_u64hex_list_to_le_payload` converts each
+// to 8 LE bytes for the `.byte` rodata payload. An unknown id returns "" (empty
+// table → empty section). Authoritative table data is appended here as each
+// table-driven libm leaf (exp, log) lands.
+//   id 0 = PROBE: tab[0]=1.0 (0x3ff0…), tab[1]=2.0 (0x4000…) — the STEP-0
+//          end-to-end mechanism witness (codegen→asm→assemble→link→run).
+fn _x86_rodata_table_spec(table_id: i64) -> string {
+    if table_id == 0 {
+        return "3ff0000000000000 4000000000000000"
+    }
+    // id 1 = musl exp __exp_data.tab[256] (src/math/exp_data.c, EXP_TABLE_BITS=7
+    // N=128 → 256 uint64 entries, interleaved {tail_off, sbits_base} pairs).
+    // BIG-ENDIAN uint64 hex VERBATIM from musl (raw bit patterns; no float_to_bits).
+    // `_x86_u64hex_list_to_le_payload` converts each to 8 LE bytes for the
+    // rotab_1 `.byte` payload. Authoritative: git.musl-libc.org exp_data.c.
+    if table_id == 1 {
+            return "0 3ff0000000000000 3c9b3b4f1a88bf6e 3feff63da9fb3335 bc7160139cd8dc5d 3fefec9a3e778061 bc905e7a108766d1 3fefe315e86e7f85 "
+                 + "3c8cd2523567f613 3fefd9b0d3158574 bc8bce8023f98efa 3fefd06b29ddf6de 3c60f74e61e6c861 3fefc74518759bc8 3c90a3e45b33d399 3fefbe3ecac6f383 "
+                 + "3c979aa65d837b6d 3fefb5586cf9890f 3c8eb51a92fdeffc 3fefac922b7247f7 3c3ebe3d702f9cd1 3fefa3ec32d3d1a2 bc6a033489906e0b 3fef9b66affed31b "
+                 + "bc9556522a2fbd0e 3fef9301d0125b51 bc5080ef8c4eea55 3fef8abdc06c31cc bc91c923b9d5f416 3fef829aaea92de0 3c80d3e3e95c55af 3fef7a98c8a58e51 "
+                 + "bc801b15eaa59348 3fef72b83c7d517b bc8f1ff055de323d 3fef6af9388c8dea 3c8b898c3f1353bf 3fef635beb6fcb75 bc96d99c7611eb26 3fef5be084045cd4 "
+                 + "3c9aecf73e3a2f60 3fef54873168b9aa bc8fe782cb86389d 3fef4d5022fcd91d 3c8a6f4144a6c38d 3fef463b88628cd6 3c807a05b0e4047d 3fef3f49917ddc96 "
+                 + "3c968efde3a8a894 3fef387a6e756238 3c875e18f274487d 3fef31ce4fb2a63f 3c80472b981fe7f2 3fef2b4565e27cdd bc96b87b3f71085e 3fef24dfe1f56381 "
+                 + "3c82f7e16d09ab31 3fef1e9df51fdee1 bc3d219b1a6fbffa 3fef187fd0dad990 3c8b3782720c0ab4 3fef1285a6e4030b 3c6e149289cecb8f 3fef0cafa93e2f56 "
+                 + "3c834d754db0abb6 3fef06fe0a31b715 3c864201e2ac744c 3fef0170fc4cd831 3c8fdd395dd3f84a 3feefc08b26416ff bc86a3803b8e5b04 3feef6c55f929ff1 "
+                 + "bc924aedcc4b5068 3feef1a7373aa9cb bc9907f81b512d8e 3feeecae6d05d866 bc71d1e83e9436d2 3feee7db34e59ff7 bc991919b3ce1b15 3feee32dc313a8e5 "
+                 + "3c859f48a72a4c6d 3feedea64c123422 bc9312607a28698a 3feeda4504ac801c bc58a78f4817895b 3feed60a21f72e2a bc7c2c9b67499a1b 3feed1f5d950a897 "
+                 + "3c4363ed60c2ac11 3feece086061892d 3c9666093b0664ef 3feeca41ed1d0057 3c6ecce1daa10379 3feec6a2b5c13cd0 3c93ff8e3f0f1230 3feec32af0d7d3de "
+                 + "3c7690cebb7aafb0 3feebfdad5362a27 3c931dbdeb54e077 3feebcb299fddd0d bc8f94340071a38e 3feeb9b2769d2ca7 bc87deccdc93a349 3feeb6daa2cf6642 "
+                 + "bc78dec6bd0f385f 3feeb42b569d4f82 bc861246ec7b5cf6 3feeb1a4ca5d920f 3c93350518fdd78e 3feeaf4736b527da 3c7b98b72f8a9b05 3feead12d497c7fd "
+                 + "3c9063e1e21c5409 3feeab07dd485429 3c34c7855019c6ea 3feea9268a5946b7 3c9432e62b64c035 3feea76f15ad2148 bc8ce44a6199769f 3feea5e1b976dc09 "
+                 + "bc8c33c53bef4da8 3feea47eb03a5585 bc845378892be9ae 3feea34634ccc320 bc93cedd78565858 3feea23882552225 3c5710aa807e1964 3feea155d44ca973 "
+                 + "bc93b3efbf5e2228 3feea09e667f3bcd bc6a12ad8734b982 3feea012750bdabf bc6367efb86da9ee 3fee9fb23c651a2f bc80dc3d54e08851 3fee9f7df9519484 "
+                 + "bc781f647e5a3ecf 3fee9f75e8ec5f74 bc86ee4ac08b7db0 3fee9f9a48a58174 bc8619321e55e68a 3fee9feb564267c9 3c909ccb5e09d4d3 3feea0694fde5d3f "
+                 + "bc7b32dcb94da51d 3feea11473eb0187 3c94ecfd5467c06b 3feea1ed0130c132 3c65ebe1abd66c55 3feea2f336cf4e62 bc88a1c52fb3cf42 3feea427543e1a12 "
+                 + "bc9369b6f13b3734 3feea589994cce13 bc805e843a19ff1e 3feea71a4623c7ad bc94d450d872576e 3feea8d99b4492ed 3c90ad675b0e8a00 3feeaac7d98a6699 "
+                 + "3c8db72fc1f0eab4 3feeace5422aa0db bc65b6609cc5e7ff 3feeaf3216b5448c 3c7bf68359f35f44 3feeb1ae99157736 bc93091fa71e3d83 3feeb45b0b91ffc6 "
+                 + "bc5da9b88b6c1e29 3feeb737b0cdc5e5 bc6c23f97c90b959 3feeba44cbc8520f bc92434322f4f9aa 3feebd829fde4e50 bc85ca6cd7668e4b 3feec0f170ca07ba "
+                 + "3c71affc2b91ce27 3feec49182a3f090 3c6dd235e10a73bb 3feec86319e32323 bc87c50422622263 3feecc667b5de565 3c8b1c86e3e231d5 3feed09bec4a2d33 "
+                 + "bc91bbd1d3bcbb15 3feed503b23e255d 3c90cc319cee31d2 3feed99e1330b358 3c8469846e735ab3 3feede6b5579fdbf bc82dfcd978e9db4 3feee36bbfd3f37a "
+                 + "3c8c1a7792cb3387 3feee89f995ad3ad bc907b8f4ad1d9fa 3feeee07298db666 bc55c3d956dcaeba 3feef3a2b84f15fb bc90a40e3da6f640 3feef9728de5593a "
+                 + "bc68d6f438ad9334 3feeff76f2fb5e47 bc91eee26b588a35 3fef05b030a1064a 3c74ffd70a5fddcd 3fef0c1e904bc1d2 bc91bdfbfa9298ac 3fef12c25bd71e09 "
+                 + "3c736eae30af0cb3 3fef199bdd85529c 3c8ee3325c9ffd94 3fef20ab5fffd07a 3c84e08fd10959ac 3fef27f12e57d14b 3c63cdaf384e1a67 3fef2f6d9406e7b5 "
+                 + "3c676b2c6c921968 3fef3720dcef9069 bc808a1883ccb5d2 3fef3f0b555dc3fa bc8fad5d3ffffa6f 3fef472d4a07897c bc900dae3875a949 3fef4f87080d89f2 "
+                 + "3c74a385a63d07a7 3fef5818dcfba487 bc82919e2040220f 3fef60e316c98398 3c8e5a50d5c192ac 3fef69e603db3285 3c843a59ac016b4b 3fef7321f301b460 "
+                 + "bc82d52107b43e1f 3fef7c97337b9b5f bc892ab93b470dc9 3fef864614f5a129 3c74b604603a88d3 3fef902ee78b3ff6 3c83c5ec519d7271 3fef9a51fbc74c83 "
+                 + "bc8ff7128fd391f0 3fefa4afa2a490da bc8dae98e223747d 3fefaf482d8e67f1 3c8ec3bc41aa2008 3fefba1bee615a27 3c842b94c3a9eb32 3fefc52b376bba97 "
+                 + "3c8a64a931d185ee 3fefd0765b6e4540 bc8e37bae43be3ed 3fefdbfdad9cbe14 3c77893b4d91cd9d 3fefe7c1819e90d8 3c5305c14160cc89 3feff3c22b8f71f1 "
+    }
+    return ""
+}
+
 // Fresh, independent instruction buffer for a new function-lowering scope.
 // A bare `[]` literal evaluated under a live fn-arena is arena-backed and
 // would be freed on the callee arena rewind (dangling module global); the
@@ -2336,6 +2418,16 @@ pub fn _is_cabi(fname: string) -> bool {
     // __log_data.tab[128] rodata lookup tables need a new named-rodata-array codegen
     // mechanism = the same data-leaf wall as sin's deferred __rem_pio2_large table.)
     if fname == "hxlcl_cos" { return true }
+    // §M8 named-rodata-table PROBE — `double hxlcl_rotab_probe(void)` (no args,
+    // SSE return). STEP-0 witness for the table-driven libm mechanism that exp
+    // needs. default-OFF byteeq-neutral (never imported by self/).
+    if fname == "hxlcl_rotab_probe" { return true }
+    // fp-ABI libm-leaf RUNG 5 — hxlcl_exp (`double exp(double)`). The FIRST
+    // TABLE-DRIVEN libm leaf: a 1:1 musl src/math/exp.c port (N=128, POLY_ORDER=5)
+    // reading the 256-entry __exp_data.tab via the §M8 named-rodata-table
+    // mechanism (rotab_1 / __hx_rodata_tab_ptr(1)). Replaces the libc-shim exp()
+    // member (shim drops via -DHEXA_RT_NATIVE_EXP). default-OFF byteeq-neutral.
+    if fname == "hxlcl_exp" { return true }
     return false
 }
 
@@ -2373,6 +2465,15 @@ fn _cabi_sse_arg(fname: string, idx: i64) -> bool {
         if idx == 0 { return true }
         return false
     }
+    // hxlcl_rotab_probe() -> double : NO args (SSE return only).
+    if fname == "hxlcl_rotab_probe" {
+        return false
+    }
+    // hxlcl_exp(x: double) -> double : arg 0 SSE; return SSE.
+    if fname == "hxlcl_exp" {
+        if idx == 0 { return true }
+        return false
+    }
     return false
 }
 fn _cabi_sse_ret(fname: string) -> bool {
@@ -2380,6 +2481,8 @@ fn _cabi_sse_ret(fname: string) -> bool {
     if fname == "hxlcl_fmod" { return true }
     if fname == "hxlcl_sin" { return true }
     if fname == "hxlcl_cos" { return true }
+    if fname == "hxlcl_rotab_probe" { return true }
+    if fname == "hxlcl_exp" { return true }
     return false
 }
 // fp-ABI symbols carry SSE-class params/return. The x86_64 backend lowers them
@@ -2392,6 +2495,8 @@ pub fn _cabi_is_fp(fname: string) -> bool {
     if fname == "hxlcl_fmod" { return true }
     if fname == "hxlcl_sin" { return true }
     if fname == "hxlcl_cos" { return true }
+    if fname == "hxlcl_rotab_probe" { return true }
+    if fname == "hxlcl_exp" { return true }
     return false
 }
 
@@ -4303,6 +4408,30 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                 return
             }
         }
+        // RFC061 §M8 named-rodata-table (literal-∅ feature C): `__hx_rodata_tab_ptr(
+        // table_id)` — DEFINE a PRE-INITIALIZED `.rodata` constant table named
+        // `rotab_<id>` (contents = `_x86_rodata_table_spec(id)`, LE doubles) and
+        // RETURN its address via `lea rax, [rip+rotab_<id>]` (R_X86_64_PC32 pc-rel,
+        // exactly like __hx_static_slot — but the data is initialized rodata, not a
+        // zero .data slot). The const_int `table_id` makes the symbol name
+        // deterministic at emit; the table is recorded ONCE into _x86_rodata_tabs,
+        // which codegen_x86_64_linux decodes into an LSection appended to
+        // LModule.rodata → emit/asm emits the `.byte`-payload table. Callers read
+        // cells via __hx_ptr_load64(ptr, byte_off). This is the table-driven libm
+        // mechanism (musl exp __exp_data.tab[256]); frozen-safe (identifier call,
+        // no new keyword/@attr). Empty on the byteeq path → byte-eq NEUTRAL.
+        if s.op == "__hx_rodata_tab_ptr" && len(s.args) >= 1 {
+            if s.args[0].kind == "const_int" {
+                let tid = s.args[0].int_val
+                _x86_record_rodata_tab(tid)
+                let rsym = "rotab_" + to_string(tid)
+                _x86_buf.push(_x86_instr2("lea", _x86_op_reg("rax"),
+                                 _x86_op_label("[rip+" + rsym + "]"),
+                                 "__hx_rodata_tab_ptr: rax = &" + rsym + " (.rodata table, pc-rel)"))
+                if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "rax", 0) }
+                return
+            }
+        }
         // ── RFC061 §M8 varargs-ABI (literal-∅ feature B, RUNG1) ─────────────────────
         // SysV AMD64 va_list intrinsics, integer class only. The prologue has already
         // spilled the 6 GP arg regs into the reg_save_area at [rbp+_x86_va_rsa_base] and
@@ -5275,6 +5404,69 @@ fn _x86_byte_to_hex(b: i64) -> string {
     return _x86_hex_nibble(hi) + _x86_hex_nibble(lo)
 }
 
+// ── RFC061 §M8 named-rodata-table (literal-∅ feature C — exp/log table data) ──
+// Convert a 16-hex-digit BIG-ENDIAN uint64 token (the form musl's exp_data.c /
+// log_data.c ships, e.g. "3ff0000000000000") into a 16-hex-digit LITTLE-ENDIAN
+// byte string ("000000000000f03f") suitable for the LSection `.byte` payload —
+// i.e. the exact 8 bytes a `.quad 0x3ff0000000000000` would assemble to on a
+// little-endian x86_64 target. Pure char-pair reversal (no integer parse — the
+// frozen-built compiler has no 64-bit hex-string→i64 path; byte-reversal of the
+// hex text is value-faithful and stage0-portable). Tokens shorter than 16 hex
+// digits are LEFT-zero-padded first (a uint64 with leading-zero nibbles).
+fn _x86_u64hex_to_le_hex(tok: string) -> string {
+    let cs = tok.chars()
+    let n = len(cs)
+    // left-pad to 16 hex digits
+    let mut padded = ""
+    let mut p = n
+    while p < 16 {
+        padded = padded + "0"
+        p = p + 1
+    }
+    let mut k = 0
+    while k < n {
+        padded = padded + cs[k]
+        k = k + 1
+    }
+    // reverse byte-pairs: bytes are at [0,1][2,3]…[14,15]; LE order is
+    // [14,15][12,13]…[0,1].
+    let pc = padded.chars()
+    let mut out = ""
+    let mut bi = 7
+    while bi >= 0 {
+        out = out + pc[bi * 2] + pc[bi * 2 + 1]
+        bi = bi - 1
+    }
+    return out
+}
+
+// Encode a whitespace-separated list of BIG-ENDIAN uint64 hex tokens into the
+// concatenated LITTLE-ENDIAN byte-hex payload for one rodata table. Each token
+// becomes 8 LE bytes (16 hex chars). Whitespace / commas separate tokens.
+fn _x86_u64hex_list_to_le_payload(spec: string) -> string {
+    let cs = spec.chars()
+    let n = len(cs)
+    let mut out = ""
+    let mut tok = ""
+    let mut i = 0
+    while i < n {
+        let c = cs[i]
+        if c == " " || c == "\n" || c == "\t" || c == "," || c == "\r" {
+            if len(tok) > 0 {
+                out = out + _x86_u64hex_to_le_hex(tok)
+                tok = ""
+            }
+        } else {
+            tok = tok + c
+        }
+        i = i + 1
+    }
+    if len(tok) > 0 {
+        out = out + _x86_u64hex_to_le_hex(tok)
+    }
+    return out
+}
+
 fn _x86_ascii_code(ch: string) -> i64 {
     if ch == " " { return 32 }
     if ch == "!" { return 33 }
@@ -5432,6 +5624,10 @@ pub fn codegen_x86_64_linux(module: MModule, opts: CodegenOptions) -> LModule {
     // lowering (it is module-scope mutable, so a prior module's slots must not
     // leak). On the byteeq path no body calls __hx_static_slot → stays [].
     _x86_static_slots = []
+    // §M8 feature C: reset the named-rodata-table accumulator for THIS module too
+    // (module-scope mutable; prior-module tables must not leak). Stays [] on the
+    // byteeq path → rodata unchanged → byte-eq NEUTRAL.
+    _x86_rodata_tabs = []
     let mut funcs = []
     let mut i = 0
     while i < len(module.funcs) {
@@ -5458,11 +5654,28 @@ pub fn codegen_x86_64_linux(module: MModule, opts: CodegenOptions) -> LModule {
         gnames.push(_x86_static_slots[si])
         si = si + 1
     }
+    // §M8 feature C: build the rodata list = string-table sections PLUS one
+    // `.rodata` LSection per referenced named table (`rotab_<id>`), aligned 8
+    // (.p2align 3) with the LE-double payload. Empty `_x86_rodata_tabs` on the
+    // byteeq path → identical to the bare `_x86_strtab_to_rodata(st)` → byte-eq
+    // NEUTRAL.
+    let mut rodata_secs = _x86_strtab_to_rodata(st)
+    let mut ti = 0
+    while ti < len(_x86_rodata_tabs) {
+        let tid = _x86_rodata_tabs[ti]
+        let payload = _x86_u64hex_list_to_le_payload(_x86_rodata_table_spec(tid))
+        rodata_secs.push(LSection {
+            name: "rotab_" + to_string(tid),
+            bytes: payload,
+            align: 3
+        })
+        ti = ti + 1
+    }
     return LModule {
         file: module.file,
         target: "x86_64-linux-gnu",
         funcs: funcs,
-        rodata: _x86_strtab_to_rodata(st),
+        rodata: rodata_secs,
         bss: [],
         globals: gnames,
         floats: []
