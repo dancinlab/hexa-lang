@@ -3208,9 +3208,15 @@ pub fn hxlcl_sin(x: HexaVal) -> int {
             reduced = 1
         }
     }
-    // 3pi/4 < |x| ~<= 5pi/4 : ix <= 0x400f6a7a  → k=2
+    // 3pi/4 < |x| ~<= 5pi/4 : 0x4002d97c < ix <= 0x400f6a7a  → k=2.  The LOWER bound
+    // (ix > 0x4002d97c) is REQUIRED: musl's __rem_pio2 is a strict ix-range ladder, so
+    // a cancellation case (is_half) below this range that band-1 diverted to medium
+    // must NOT be re-grabbed here. Without the lower bound a flattened reduced-flag
+    // fallthrough lets e.g. pi/2 (ix=0x3ff921fb) fall into a later band → wrong k.
     if __hx_payload_eq(reduced, 0) {
-        let in_band2 = __hx_payload_ule(ix, 1074752122)
+        let in_band2hi = __hx_payload_ule(ix, 1074752122)        // ix <= 0x400f6a7a
+        let in_band2lo = __hx_payload_ult(1073928572, ix)        // ix >  0x4002d97c
+        let in_band2 = __hx_payload_and(in_band2hi, in_band2lo)
         let nothalf = __hx_payload_eq(is_half, 0)
         let do2 = __hx_payload_and(in_band2, nothalf)
         if __hx_payload_ne(do2, 0) {
@@ -3236,9 +3242,12 @@ pub fn hxlcl_sin(x: HexaVal) -> int {
             reduced = 1
         }
     }
-    // 5pi/4 < |x| ~<= 7pi/4 : ix <= 0x4015fdbc  → k=3 (skip near 3pi/2 = 0x4012d97c)
+    // 5pi/4 < |x| ~<= 7pi/4 : 0x400f6a7a < ix <= 0x4015fdbc  → k=3 (skip near 3pi/2 =
+    // 0x4012d97c → medium).  LOWER bound required (see band-2 note).
     if __hx_payload_eq(reduced, 0) {
-        let in_band3 = __hx_payload_ule(ix, 1075183036)
+        let in_band3hi = __hx_payload_ule(ix, 1075183036)        // ix <= 0x4015fdbc
+        let in_band3lo = __hx_payload_ult(1074752122, ix)        // ix >  0x400f6a7a
+        let in_band3 = __hx_payload_and(in_band3hi, in_band3lo)
         let near32 = __hx_payload_eq(ix, 1074977148)
         let not32 = __hx_payload_eq(near32, 0)
         let do3 = __hx_payload_and(in_band3, not32)
@@ -3265,9 +3274,12 @@ pub fn hxlcl_sin(x: HexaVal) -> int {
             reduced = 1
         }
     }
-    // 7pi/4 < |x| ~<= 9pi/4 : ix <= 0x401c463b  → k=4 (skip near 4pi/2 = 0x401921fb)
+    // 7pi/4 < |x| ~<= 9pi/4 : 0x4015fdbc < ix <= 0x401c463b  → k=4 (skip near 4pi/2 =
+    // 0x401921fb → medium).  LOWER bound required (see band-2 note).
     if __hx_payload_eq(reduced, 0) {
-        let in_band4 = __hx_payload_ule(ix, 1075594811)
+        let in_band4hi = __hx_payload_ule(ix, 1075594811)        // ix <= 0x401c463b
+        let in_band4lo = __hx_payload_ult(1075183036, ix)        // ix >  0x4015fdbc
+        let in_band4 = __hx_payload_and(in_band4hi, in_band4lo)
         let near42 = __hx_payload_eq(ix, 1075388923)
         let not42 = __hx_payload_eq(near42, 0)
         let do4 = __hx_payload_and(in_band4, not42)
