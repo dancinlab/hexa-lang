@@ -109,11 +109,15 @@ static long long ulp(double a, double b){
 }
 int main(void){
     long long maxulp=0, worst_n=0; int fail=0, n=0;
-    /* dense sweep across the covered domain: small (|x|<9pi/4) + medium reduction. */
+    /* dense sweep across the covered domain: small (|x|<9pi/4) + medium reduction.
+       NOTE: 1647099.0 has ix==0x413921fb = EXACTLY the large-path boundary where musl
+       routes to the UNPORTED __rem_pio2_large Payne-Hanek table (the documented wall,
+       like #4232 for sin) — so the last point is 1.6e6 (strictly inside the covered
+       medium domain ix<0x413921fb), NOT the boundary. */
     double base[]={ 0.0, 1e-30, 1e-8, 0.1, 0.5, 0.7853981633974483 /*pi/4*/,
         1.0, 1.5707963267948966 /*pi/2*/, 2.0, 3.141592653589793 /*pi*/,
         4.0, 4.71238898038469 /*3pi/2*/, 6.283185307179586 /*2pi*/, 7.0, 10.0,
-        100.0, 1000.0, 12345.6789, 100000.5, 1000000.25, 1647099.0 /*~2^20*pi/2-eps*/ };
+        100.0, 1000.0, 12345.6789, 100000.5, 1000000.25, 1600000.0 /*<2^20*pi/2*/ };
     int nb=sizeof(base)/sizeof(base[0]);
     for(int i=0;i<nb;i++){
         for(int s=-1;s<=1;s+=2){
