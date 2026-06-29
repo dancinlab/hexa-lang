@@ -193,12 +193,9 @@ pub fn nn_conv1d_fwd(x: int, w: int, b: int, y_out: int,
     let xcol = t_zeros(T * Kdim)
     _conv1d_im2col(x, xcol, T, Cin, K, dil)
     let Wt = t_zeros(Kdim * Cout)
-    let mut co = 0
-    while co < Cout {
-        let mut j = 0
-        while j < Kdim { t_set(Wt, j * Cout + co, t_get(w, co * Kdim + j)); j = j + 1 }
-        co = co + 1
-    }
+    // r1 device-residency: W[Cout,Kdim] -> Wt[Kdim,Cout] on device (CPU: fast-C),
+    // replaces the 786K boxed t_get/t_set host transpose (21.5ms -> 0.37ms, byte-exact permutation).
+    let _tpf = farr_transpose_2d_gpu(w, 0, Wt, 0, Cout, Kdim)
     let mm = forge_dispatch_matmul(xcol, T, Kdim, Wt, Cout)
     _conv1d_add_bias(mm, b, 0, y_out, T, Cout)
     t_free(xcol)
@@ -217,12 +214,8 @@ pub fn nn_conv1d_fwd_off(x: int, w: int, woff: int, b: int, boff: int, y_out: in
     _conv1d_im2col(x, xcol, T, Cin, K, dil)
     // transpose the OFFSET weight slice w[woff + co·Kdim + j] → Wt[j·Cout + co]
     let Wt = t_zeros(Kdim * Cout)
-    let mut co = 0
-    while co < Cout {
-        let mut j = 0
-        while j < Kdim { t_set(Wt, j * Cout + co, t_get(w, woff + co * Kdim + j)); j = j + 1 }
-        co = co + 1
-    }
+    // r1 device-residency: offset W[woff..] [Cout,Kdim] -> Wt[Kdim,Cout] device transpose (soff=woff).
+    let _tpfo = farr_transpose_2d_gpu(w, woff, Wt, 0, Cout, Kdim)
     let mm = forge_dispatch_matmul(xcol, T, Kdim, Wt, Cout)
     _conv1d_add_bias(mm, b, boff, y_out, T, Cout)
     t_free(xcol)
@@ -257,16 +250,9 @@ pub fn nn_conv1d_bwd(x: int, w: int, dy: int,
     _conv1d_im2col_t(x, xcolT, T, Cin, K, dil)
     // ── dW: dW_flat[Kdim, Cout] = xcolT[Kdim,T] @ dy[T,Cout] (forge GEMM) ──
     let dW_flat = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)
-    // reshape: dW_flat[j*Cout + co] -> dW_out[co*Kdim + j]
-    let mut co = 0
-    while co < Cout {
-        let mut j = 0
-        while j < Kdim {
-            t_set(dW_out, co * Kdim + j, t_get(dW_flat, j * Cout + co))
-            j = j + 1
-        }
-        co = co + 1
-    }
+    // r1 device-residency: dW_flat[Kdim,Cout] -> dW_out[Cout,Kdim] device transpose
+    // (replaces 786K boxed t_get/t_set reshape, byte-exact permutation).
+    let _tpb = farr_transpose_2d_gpu(dW_flat, 0, dW_out, 0, Kdim, Cout)
     // ── dX: dXcol[T, Kdim] = dy[T,Cout] @ w[Cout,Kdim] (forge GEMM) ──
     // w[co*Kdim + j] IS Wflat[co, j] — pass w directly, no copy.
     let dXcol = forge_dispatch_matmul(dy, T, Cout, w, Kdim)
@@ -293,18 +279,9 @@ pub fn nn_conv1d_bwd_off(x: int, w: int, woff: int, dy: int,
     _conv1d_im2col_t(x, xcolT, T, Cin, K, dil)
     // ── dW: dW_flat[Kdim, Cout] = xcolT[Kdim,T] @ dy[T,Cout] (forge GEMM) ──
     let dW_flat = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)
-    // reshape + scatter into dW_out at offset dWoff
-    let mut iz = 0
-    while iz < Kdim * Cout { t_set(dW_out, dWoff + iz, 0.0); iz = iz + 1 }
-    let mut co = 0
-    while co < Cout {
-        let mut j = 0
-        while j < Kdim {
-            t_set(dW_out, dWoff + co * Kdim + j, t_get(dW_flat, j * Cout + co))
-            j = j + 1
-        }
-        co = co + 1
-    }
+    // r1 device-residency: dW_flat[Kdim,Cout] -> dW_out[dWoff..][Cout,Kdim] device transpose
+    // (doff=dWoff; transpose overwrites all Kdim*Cout cells so the prior zero-fill is redundant).
+    let _tpbo = farr_transpose_2d_gpu(dW_flat, 0, dW_out, dWoff, Kdim, Cout)
     // ── dX: dXcol[T, Kdim] = dy[T,Cout] @ Wslice[Cout,Kdim] (forge GEMM) ──
     // Extract the offset weight slice into a contiguous temp (Cout×Kdim).
     let Wslice = t_zeros(Cout * Kdim)
