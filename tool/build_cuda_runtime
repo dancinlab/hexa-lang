@@ -104,8 +104,32 @@ CORES="$(ls "$B"/*_native.o 2>/dev/null | tr '\n' ' ')"
 echo "[build_cuda_runtime] RT-NATIVE cores (dynamic from runtime.a): $CORES"
 
 echo "=== regen runtime_cuda.c + runtime_bf16.c from emitter SSOT ==="
-"$HEXA" run self/cuda/runtime_bf16_emit.hexa self/cuda/runtime_bf16.c >/dev/null
-"$HEXA" run self/cuda/runtime_cuda_emit.hexa self/cuda/runtime_cuda.c >/dev/null
+# Bootstrap-safe regen. `hexa run` links the CURRENTLY-deployed runtime.a. When that
+# archive is a CUDA build (runtime_cuda*.o members), hexa's runtime unconditionally
+# pulls those members AND the host object — so the emitter link needs BOTH the cuda
+# libs (-lcudart, added only by the CUDA branch self/main.hexa:1487) AND -lssl/-lcrypto
+# (added only by the CPU branch self/main.hexa:1496, when the host object was built
+# -DHEXA_HAS_OPENSSL on a pre-#4218 install). hexa picks ONE branch, never both, so the
+# emitter link is UNSATISFIABLE against a poisoned (cuda+openssl) archive — a pure
+# BOOTSTRAP deadlock, NOT a real defect (the final deployed archive is fine).
+# The emitters are deterministic text generators, so on link-failure we keep the
+# last-good regenerated .c (validity-checked by a sentinel symbol) and carry on;
+# build_cuda_runtime then redeploys a clean (#4218 no-openssl) archive, so the NEXT
+# build bootstraps cleanly. Same fallback philosophy as the restore_frozen_seeds path
+# in _regen_runtime_core_for_cuda(). HEXA_CUDA=0 is still set so a CLEAN (no-openssl)
+# CUDA archive — or a plain CPU archive — regenerates normally via the CPU link path.
+_regen_cuda_emit() {  # $1=emitter  $2=dst.c  $3=sentinel-substring
+    local emitter="$1" dst="$2" sentinel="$3"
+    if HEXA_CUDA=0 "$HEXA" run "$emitter" "$dst" >/dev/null 2>"$B/.emit_err"; then
+        echo "[build_cuda_runtime] regenerated $dst from $emitter"
+    elif [ -s "$dst" ] && grep -q "$sentinel" "$dst"; then
+        echo "[build_cuda_runtime] WARN: emitter $emitter link failed (bootstrap poison: deployed runtime.a needs both -lcudart and -lssl) — keeping last-good $dst ($(wc -l < "$dst") lines, sentinel '$sentinel' OK)"
+    else
+        echo "[build_cuda_runtime] FATAL: emitter $emitter failed AND $dst missing/invalid:"; cat "$B/.emit_err" 2>/dev/null; exit 1
+    fi
+}
+_regen_cuda_emit self/cuda/runtime_bf16_emit.hexa self/cuda/runtime_bf16.c "bf16"
+_regen_cuda_emit self/cuda/runtime_cuda_emit.hexa self/cuda/runtime_cuda.c "_hx_k_gemm_splitk"
 # emitter must emit _hx_dt_exp_dev exactly once (ing-cuda-build dup-def fix)
 n=$(grep -c '_hx_dt_exp_dev(double x) {' self/cuda/runtime_cuda.c || true)
 [ "$n" = "1" ] || { echo "runtime_cuda.c has $n _hx_dt_exp_dev defs (expected 1) — emitter dup-def regressed"; exit 1; }
