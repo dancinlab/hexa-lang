@@ -112,6 +112,12 @@ let _STMT_BR_COND  = "br_cond"
 // reference after _fmt_label.)
 pub let mut _arm64_static_slots: [string] = []
 
+// RFC061 §M8 varargs-ABI (r2) — set true by _arm64_lower_func iff the fn being lowered
+// is variadic under HEXA_VA_INTRINSICS=1 (mirrors x86_64's _x86_va_active). Consulted
+// by the _STMT_RETURN path to route a SIMD-class variadic return into d0. Default false
+// (HEXA_VA_INTRINSICS unset → never set) → the va return branch is dead → byte-eq NEUTRAL.
+pub let mut _arm64_va_active: bool = false
+
 // True iff `s` begins with `pfx` (char-walk; no .substr — keeps stage0-portable).
 fn _arm64_str_starts_with(s: string, pfx: string) -> bool {
     let cs = s.chars()
@@ -2037,6 +2043,72 @@ fn _emit_bool_box(buf: [LInstr], why: string) -> [LInstr] {
 // inlining series (int #1258 + bool #1270 + float documented above + str
 // documented here) is COMPLETE at the codegen-emit boundary.
 
+// ── RFC061 §M8 varargs-ABI (literal-∅ feature B, r2 arm64/AAPCS64) ──────────
+// The arm64 sibling of x86_64_linux.hexa's `_x86_is_variadic`. A whitelisted name
+// is an arm64 variadic function whose prologue (on the AAPCS64/linux path) reserves
+// a 192-byte register-save area (64 GP = x0..x7 + 128 FP = q0..q7) and a 32-byte
+// __va_list struct, so the in-body `__builtin_va_start` / `__builtin_va_arg` (general
+// class) / `__builtin_va_arg_fp` (SIMD class) intrinsics can walk the unnamed args.
+// HARD-GATED: `env("HEXA_VA_INTRINSICS") != "1"` → false for EVERY fn → prologue va
+// spill + va STMT_CALL branches dead → byte-eq NEUTRAL (mirrors `_x86_is_variadic`
+// and `_is_cabi`/HEXA_CABI_HXLCL). The PoC symbols `hxlcl_va_smoke` (int) +
+// `hxlcl_va_fp_smoke` (double) prove the leaves — the SAME whitelist the x86_64
+// backend uses, so a single smoke source serves both targets.
+//
+// ⚠️ darwin arm64 va_list ≠ linux arm64 va_list. Apple ARM64 passes ALL variadic
+// arguments on the STACK (named params still use x0..x7/v0..v7, but once the variadic
+// portion starts every arg is stacked — Apple "Writing ARM64 Code for Apple
+// Platforms"), so `va_list` is a SIMPLE `char*` and there is NO register-save area:
+// va_start points at the first caller stack slot, va_arg loads 8 bytes and bumps the
+// pointer (16B align for a 16B type). Linux uses the full AAPCS64 §B.4 `__va_list`
+// {__stack,__gr_top,__vr_top,__gr_offs,__vr_offs} with the GP+FP save areas. The two
+// paths are branched on `opts.target_triple == "arm64-linux-gnu"` inside each va
+// builtin — exactly the existing __hx_target_os / __hx_syscall* split.
+// Materialize `sp + off` (a frame address) into `reg`. ARM64 `add` immediate is
+// ≤4095, so a larger off is built into the reg (movz/movk) then added. Used by the
+// AAPCS64 va_start to compute the va_list base + the GP/FP save-area-end pointers.
+fn _arm64_va_addr(buf: [LInstr], reg: string, off: i64) -> [LInstr] {
+    let mut out = buf
+    if off <= 4095 {
+        out.push(_arm64_instr3("add", _arm64_op_reg(reg), _arm64_op_reg("sp"),
+                         _arm64_op_label("#" + to_string(off)), "va: &sp+" + to_string(off)))
+        return out
+    }
+    out = _arm64_emit_imm_to_reg(out, reg, off)
+    out.push(_arm64_instr3("add", _arm64_op_reg(reg), _arm64_op_reg("sp"),
+                     _arm64_op_reg(reg), "va: &sp+off (big)"))
+    return out
+}
+
+fn _arm64_is_variadic(fname: string) -> bool {
+    if env("HEXA_VA_INTRINSICS") != "1" { return false }
+    if fname == "hxlcl_va_smoke" { return true }
+    if fname == "hxlcl_va_fp_smoke" { return true }
+    return false
+}
+
+// A variadic fn whose RETURN is SIMD-class (`double`/`float`) returns its value in
+// d0/v0 (AAPCS64 §6.4 result return), NOT x0. Keyed on the variadic whitelist:
+// only `hxlcl_va_fp_smoke` (the r2 SIMD PoC) has a double return; `hxlcl_va_smoke`
+// is integer-return (x0). Gated by `_arm64_is_variadic` callers ⇒ default-OFF
+// byte-eq NEUTRAL.
+fn _arm64_va_ret_is_fp(fname: string) -> bool {
+    if fname == "hxlcl_va_fp_smoke" { return true }
+    return false
+}
+
+// va register-save block size (BYTES) reserved in the frame for a variadic fn,
+// wedged BETWEEN the regalloc spill slots and the try jmp_bufs (so it aliases
+// neither). LINUX/AAPCS64 = 192 (64-byte GP save x0..x7 + 128-byte FP save q0..q7)
+// + 32-byte __va_list = 224 → 16B-rounded. DARWIN = 0 (stack-passed varargs, char*
+// va_list lives in an ordinary spill slot bound by va_start). Non-variadic → 0 →
+// byte-eq NEUTRAL. `is_linux` is the caller's `opts.target_triple == "arm64-linux-gnu"`.
+fn _arm64_va_block_bytes(fname: string, is_linux: bool) -> i64 {
+    if !_arm64_is_variadic(fname) { return 0 }
+    if is_linux { return 224 }   // 64 GP + 128 FP + 32 va_list (16B mult)
+    return 0                     // darwin: stack-passed, no reg save area
+}
+
 // Cycle h20: extra params try_buf_bytes (total fn jmp_buf region size)
 // and try_slot_idx (this statement's slot index in 0..try_count).
 // try_slot_idx is meaningful only for STMT_TRY_SETJMP / STMT_TRY_POP;
@@ -3064,6 +3136,236 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 return buf
             }
         }
+        // ── RFC061 §M8 varargs-ABI (literal-∅ feature B, r2 arm64) ──────────────────
+        // The arm64 va_list intrinsics — the AAPCS64 (linux) / Apple-ARM64 (darwin)
+        // sibling of the x86_64 PSABI §3.5.7 va_* STMT_CALL special-cases. Two ABIs,
+        // branched on `_va_is_linux`:
+        //   • DARWIN  — va_list is a `char*` to the first STACKED vararg; va_start sets
+        //     it to the first caller stack slot ([x29,#16]); va_arg loads 8 bytes and
+        //     bumps it (8 for int/double). Reference-match: Apple "Writing ARM64 Code
+        //     for Apple Platforms" (variadic args are stack-passed; va_list = pointer).
+        //   • LINUX   — AAPCS64 §B.4 `__va_list` {__stack@0, __gr_top@8, __vr_top@16,
+        //     __gr_offs@24 (i32), __vr_offs@28 (i32)}. The prologue spills x0..x7 into a
+        //     64-byte GP save area and q0..q7 into a 128-byte FP save area; va_start sets
+        //     __gr_top/__vr_top to the END of each save area and __gr_offs/__vr_offs to
+        //     -(64 - named_gp*8) / -(128 - named_fp*16); va_arg(int) reads __gr_offs (if
+        //     <0 use __gr_top+__gr_offs and += 8, else __stack += 8) and va_arg_fp reads
+        //     __vr_offs (if <0 use __vr_top+__vr_offs and += 16, else __stack += 8).
+        //     Reference-match: clang AArch64ABIInfo::EmitAAPCSVAArg — `icmp sge reg_offs,
+        //     0 → on-stack`, GP stride 8 / SIMD stride 16, addr = reg_top + reg_offs.
+        // ALL gated by `_arm64_is_variadic` → HEXA_VA_INTRINSICS=1 (default-OFF, byte-eq
+        // NEUTRAL). The va save area lives at sp+`_va_base` (above the regalloc spill,
+        // below the try jmp_bufs — the same wedge x86_64 uses); `_va_base` is identical
+        // to the prologue/try-slot computation so the layout is one SSOT.
+        let _va_is_linux = opts.target_triple == "arm64-linux-gnu"
+        let _va_base = rm.call_overflow_bytes + spill_frame
+        let _va_list_off = _va_base + 192   // linux: va_list struct above the 192B save
+        if s.op == "__builtin_va_start" {
+            let mut named = 0
+            if len(s.args) >= 1 && s.args[0].kind == "const_int" { named = s.args[0].int_val }
+            if _va_is_linux {
+                // x10 = &va_list (sp + _va_list_off) once; all 5 fields stored relative
+                // to it via fixed +0/+8/+16/+24/+28 byte offsets (the AAPCS64 __va_list
+                // layout). Computing the base once keeps the stores immediate-safe even
+                // for a large frame (no per-field `[sp, #big]`).
+                buf = _arm64_va_addr(buf, "x10", _va_list_off)
+                // __stack = first stacked overflow vararg = [x29, #16] (above saved fp/lr).
+                buf.push(_arm64_instr3("add", _arm64_op_reg("x9"), _arm64_op_reg("x29"),
+                                 _arm64_op_label("#16"), "va_start: &first stack vararg"))
+                buf.push(_arm64_instr2("str", _arm64_op_reg("x9"),
+                                 _arm64_op_label("[x10]"), "va_start: va_list.__stack"))
+                // __gr_top = sp + _va_base + 64 (END of the 64-byte GP save area).
+                buf = _arm64_va_addr(buf, "x9", _va_base + 64)
+                buf.push(_arm64_instr2("str", _arm64_op_reg("x9"),
+                                 _arm64_op_label("[x10, #8]"), "va_start: va_list.__gr_top"))
+                // __vr_top = sp + _va_base + 192 (END of the 128-byte FP save area).
+                buf = _arm64_va_addr(buf, "x9", _va_base + 192)
+                buf.push(_arm64_instr2("str", _arm64_op_reg("x9"),
+                                 _arm64_op_label("[x10, #16]"), "va_start: va_list.__vr_top"))
+                // __gr_offs (i32) = -(64 - named_gp*8). r2 whitelist: all named params are
+                // general-class (the `long n` count), so named_gp == named, named_fp == 0.
+                buf = _arm64_emit_imm_to_reg(buf, "x9", 64 - named * 8)
+                buf.push(_arm64_instr2("neg", _arm64_op_reg("x9"), _arm64_op_reg("x9"),
+                                 "va_start: __gr_offs = -(64 - named_gp*8)"))
+                buf.push(_arm64_instr2("str", _arm64_op_reg("w9"),
+                                 _arm64_op_label("[x10, #24]"), "va_start: va_list.__gr_offs"))
+                // __vr_offs (i32) = -128 (no named FP params under the r2 whitelist).
+                buf = _arm64_emit_imm_to_reg(buf, "x9", 128)
+                buf.push(_arm64_instr2("neg", _arm64_op_reg("x9"), _arm64_op_reg("x9"),
+                                 "va_start: __vr_offs = -(128 - named_fp*16)"))
+                buf.push(_arm64_instr2("str", _arm64_op_reg("w9"),
+                                 _arm64_op_label("[x10, #28]"), "va_start: va_list.__vr_offs"))
+                // result = &va_list (boxed TAG_INT payload), bound by the source as `ap`.
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"), _arm64_op_reg("x10"),
+                                 "va_start: result = &va_list"))
+                buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                                 _arm64_op_label("#0"), "va_start: TAG_INT"))
+                if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+                return buf
+            }
+            // DARWIN — va_list is a single char* = &first stacked vararg. Named GP params
+            // occupy x0..x7 (registers, 0 stack bytes); under the r2 whitelist every named
+            // param is register-class, so the variadic portion begins at [x29, #16].
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x1"), _arm64_op_reg("x29"),
+                             _arm64_op_label("#16"), "va_start(darwin): ap = &first stack vararg"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "va_start(darwin): TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // `__builtin_va_arg(ap)` — fetch the next GENERAL-class (8-byte int) vararg.
+        if s.op == "__builtin_va_arg" {
+            buf = _hv_load(buf, s.args[0], st, rm, "x9", "x1")   // x1 = &va_list (darwin: ap=char*)
+            if _va_is_linux {
+                // Unique per-statement label base (each va_arg has a distinct dst.id;
+                // mirrors the `hvL<modhash>_<fname>_<dst.id>` logic-branch idiom above).
+                let vn = "vaL" + modhash + "_" + fname + "_" + to_string(s.dst.id)
+                let gstk = "L" + vn + "_stk"
+                let gdone = "L" + vn + "_done"
+                // w10 = __gr_offs; if >= 0 → on stack (cmp/b.ge). (clang `icmp sge ..,0`.)
+                buf.push(_arm64_instr2("ldr", _arm64_op_reg("w10"),
+                                 _arm64_op_label("[x1, #24]"), "va_arg: w10 = __gr_offs"))
+                buf.push(_arm64_instr2("cmp", _arm64_op_reg("w10"),
+                                 _arm64_op_label("#0"), "va_arg: __gr_offs vs 0"))
+                buf.push(_arm64_instr1("b.ge", _arm64_op_label("." + gstk),
+                                 "va_arg: __gr_offs >= 0 → stack"))
+                // reg path: addr = __gr_top + (sign-extended) __gr_offs; __gr_offs += 8.
+                buf.push(_arm64_instr2("ldr", _arm64_op_reg("x11"),
+                                 _arm64_op_label("[x1, #8]"), "va_arg: x11 = __gr_top"))
+                buf.push(_arm64_instr2("sxtw", _arm64_op_reg("x12"), _arm64_op_reg("w10"),
+                                 "va_arg: sign-extend __gr_offs"))
+                buf.push(_arm64_instr3("add", _arm64_op_reg("x11"), _arm64_op_reg("x11"),
+                                 _arm64_op_reg("x12"), "va_arg: addr = __gr_top + __gr_offs"))
+                buf.push(_arm64_instr3("add", _arm64_op_reg("w10"), _arm64_op_reg("w10"),
+                                 _arm64_op_label("#8"), "va_arg: __gr_offs += 8"))
+                buf.push(_arm64_instr2("str", _arm64_op_reg("w10"),
+                                 _arm64_op_label("[x1, #24]"), "va_arg: store __gr_offs"))
+                buf.push(_arm64_instr1("b", _arm64_op_label("." + gdone), "va_arg: → load"))
+                // stack path: addr = __stack; __stack += 8.
+                buf.push(_arm64_instr0("label", "." + gstk))
+                buf.push(_arm64_instr2("ldr", _arm64_op_reg("x11"),
+                                 _arm64_op_label("[x1]"), "va_arg: x11 = __stack"))
+                buf.push(_arm64_instr3("add", _arm64_op_reg("x12"), _arm64_op_reg("x11"),
+                                 _arm64_op_label("#8"), "va_arg: __stack + 8"))
+                buf.push(_arm64_instr2("str", _arm64_op_reg("x12"),
+                                 _arm64_op_label("[x1]"), "va_arg: store __stack"))
+                buf.push(_arm64_instr0("label", "." + gdone))
+                buf.push(_arm64_instr2("ldr", _arm64_op_reg("x1"),
+                                 _arm64_op_label("[x11]"), "va_arg: value = *(long*)addr"))
+                buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                                 _arm64_op_label("#0"), "va_arg: TAG_INT"))
+                if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+                return buf
+            }
+            // DARWIN — ap is a char*: value = *(long*)ap; ap += 8. x1 = ap (payload).
+            buf.push(_arm64_instr2("ldr", _arm64_op_reg("x12"),
+                             _arm64_op_label("[x1]"), "va_arg(darwin): value = *ap"))
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x1"), _arm64_op_reg("x1"),
+                             _arm64_op_label("#8"), "va_arg(darwin): ap += 8"))
+            // store the bumped ap {TAG_INT, ap+8} back into the source's va_list slot.
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "va_arg(darwin): ap tag = TAG_INT"))
+            if s.args[0].kind == "local" { buf = _hv_store(buf, rm, s.args[0].local_id, "x0", "x1") }
+            // result = {TAG_INT, loaded value}.
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"), _arm64_op_reg("x12"),
+                             "va_arg(darwin): payload = loaded value"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // `__builtin_va_arg_fp(ap)` — fetch the next SIMD/FP-class (double) vararg.
+        if s.op == "__builtin_va_arg_fp" {
+            buf = _hv_load(buf, s.args[0], st, rm, "x9", "x1")   // x1 = &va_list (darwin: ap=char*)
+            if _va_is_linux {
+                let vfn = "vafL" + modhash + "_" + fname + "_" + to_string(s.dst.id)
+                let fstk = "L" + vfn + "_stk"
+                let fdone = "L" + vfn + "_done"
+                // w10 = __vr_offs; if >= 0 → on stack.
+                buf.push(_arm64_instr2("ldr", _arm64_op_reg("w10"),
+                                 _arm64_op_label("[x1, #28]"), "va_arg_fp: w10 = __vr_offs"))
+                buf.push(_arm64_instr2("cmp", _arm64_op_reg("w10"),
+                                 _arm64_op_label("#0"), "va_arg_fp: __vr_offs vs 0"))
+                buf.push(_arm64_instr1("b.ge", _arm64_op_label("." + fstk),
+                                 "va_arg_fp: __vr_offs >= 0 → stack"))
+                // reg path: addr = __vr_top + __vr_offs; __vr_offs += 16 (q-reg stride).
+                buf.push(_arm64_instr2("ldr", _arm64_op_reg("x11"),
+                                 _arm64_op_label("[x1, #16]"), "va_arg_fp: x11 = __vr_top"))
+                buf.push(_arm64_instr2("sxtw", _arm64_op_reg("x12"), _arm64_op_reg("w10"),
+                                 "va_arg_fp: sign-extend __vr_offs"))
+                buf.push(_arm64_instr3("add", _arm64_op_reg("x11"), _arm64_op_reg("x11"),
+                                 _arm64_op_reg("x12"), "va_arg_fp: addr = __vr_top + __vr_offs"))
+                buf.push(_arm64_instr3("add", _arm64_op_reg("w10"), _arm64_op_reg("w10"),
+                                 _arm64_op_label("#16"), "va_arg_fp: __vr_offs += 16"))
+                buf.push(_arm64_instr2("str", _arm64_op_reg("w10"),
+                                 _arm64_op_label("[x1, #28]"), "va_arg_fp: store __vr_offs"))
+                buf.push(_arm64_instr1("b", _arm64_op_label("." + fdone), "va_arg_fp: → load"))
+                // stack path: addr = __stack; __stack += 8 (a stacked double is 8 bytes).
+                buf.push(_arm64_instr0("label", "." + fstk))
+                buf.push(_arm64_instr2("ldr", _arm64_op_reg("x11"),
+                                 _arm64_op_label("[x1]"), "va_arg_fp: x11 = __stack"))
+                buf.push(_arm64_instr3("add", _arm64_op_reg("x12"), _arm64_op_reg("x11"),
+                                 _arm64_op_label("#8"), "va_arg_fp: __stack + 8"))
+                buf.push(_arm64_instr2("str", _arm64_op_reg("x12"),
+                                 _arm64_op_label("[x1]"), "va_arg_fp: store __stack"))
+                buf.push(_arm64_instr0("label", "." + fdone))
+                // load the raw 8 IEEE-754 bytes into the payload reg, box TAG_FLOAT(1).
+                buf.push(_arm64_instr2("ldr", _arm64_op_reg("x1"),
+                                 _arm64_op_label("[x11]"), "va_arg_fp: value bits = *(double*)addr"))
+                buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                                 _arm64_op_label("#1"), "va_arg_fp: TAG_FLOAT"))
+                if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+                return buf
+            }
+            // DARWIN — ap is a char*: bits = *(double*)ap; ap += 8; box TAG_FLOAT.
+            buf.push(_arm64_instr2("ldr", _arm64_op_reg("x12"),
+                             _arm64_op_label("[x1]"), "va_arg_fp(darwin): bits = *ap"))
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x1"), _arm64_op_reg("x1"),
+                             _arm64_op_label("#8"), "va_arg_fp(darwin): ap += 8"))
+            // store bumped ap {TAG_INT, ap+8} back into the va_list slot.
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "va_arg_fp(darwin): ap tag = TAG_INT"))
+            if s.args[0].kind == "local" { buf = _hv_store(buf, rm, s.args[0].local_id, "x0", "x1") }
+            // result = {TAG_FLOAT, loaded bits}.
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"), _arm64_op_reg("x12"),
+                             "va_arg_fp(darwin): payload = loaded bits"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#1"), "va_arg_fp(darwin): TAG_FLOAT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // `__builtin_va_end(ap)` — AAPCS64/darwin no-op (va_list lives in the frame).
+        if s.op == "__builtin_va_end" {
+            buf.push(_arm64_instr0("nop", "va_end: no-op"))
+            if s.dst.id >= 0 {
+                buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
+                                 _arm64_op_label("#0"), "va_end: payload 0"))
+                buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                                 _arm64_op_label("#0"), "va_end: TAG_INT"))
+                buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+            }
+            return buf
+        }
+        // `__builtin_va_copy(dst_ap, src_ap)` — copy the va_list. Linux = 32-byte
+        // __va_list (4 qwords); darwin = a single 8-byte char* pointer.
+        if s.op == "__builtin_va_copy" && len(s.args) >= 2 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x9", "x1")   // x1 = dst va_list*
+            buf = _hv_load(buf, s.args[1], st, rm, "x9", "x2")   // x2 = src va_list*
+            let mut _vcn = 8
+            if _va_is_linux { _vcn = 32 }
+            let mut _vc = 0
+            while _vc < _vcn {
+                buf.push(_arm64_instr2("ldr", _arm64_op_reg("x10"),
+                                 _arm64_op_label("[x2, #" + to_string(_vc) + "]"),
+                                 "va_copy: load src qword"))
+                buf.push(_arm64_instr2("str", _arm64_op_reg("x10"),
+                                 _arm64_op_label("[x1, #" + to_string(_vc) + "]"),
+                                 "va_copy: store dst qword"))
+                _vc = _vc + 8
+            }
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "va_copy: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // RT-NATIVE UNLOCK-10: `__hx_ptr_store64(ptr, off, val)` — write the
         // 64-bit int `val` to raw address `ptr + off`. The arena bump path
         // (a native allocator writes object headers/fields into an mmap slab)
@@ -3469,7 +3771,24 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
     }
     if s.kind == _STMT_RETURN {
         if len(s.args) >= 1 {
-            if _is_cabi(fname) && !_cabi_is_fp(fname) {
+            if _arm64_va_active && _arm64_va_ret_is_fp(fname) {
+                // RFC061 §M8 r2 — a variadic fn whose return is SIMD-class (`double`)
+                // returns its value in d0/v0 (AAPCS64 §6.4), NOT x0. The payload eightbyte
+                // holds the raw IEEE-754 bits; load into x1 then `fmov d0, x1` (the same
+                // GP→SIMD move the __hx_payload_fadd path emits). A C caller reads the
+                // result in d0. Must precede frame teardown (reads spill slots). default-
+                // OFF (_arm64_va_active is gated by _arm64_is_variadic) ⇒ byte-eq NEUTRAL.
+                buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+                buf.push(_arm64_instr2("fmov", _arm64_op_reg("d0"), _arm64_op_reg("x1"),
+                                 "va fp return: d0 = result bits"))
+            } else if _arm64_va_active {
+                // RFC061 §M8 r2 — a variadic INT-return fn is C-ABI for its result: the
+                // raw value goes in x0 (the C caller reads x0, not the {tag,payload}
+                // pair). Load just the payload eightbyte into x0 (x9 = throwaway tag).
+                // Without this the {TAG_INT, value} pair landed tag(0) in x0 → every
+                // variadic-int call returned 0. default-OFF ⇒ byte-eq NEUTRAL.
+                buf = _hv_load(buf, s.args[0], st, rm, "x9", "x0")
+            } else if _is_cabi(fname) && !_cabi_is_fp(fname) {
                 // Route C C-ABI return — a raw C-ABI fn returns a single value
                 // in x0. Load just the payload eightbyte into x0 (x9 = throwaway
                 // tag half); the HexaVal tag is dropped (C caller reads only x0).
@@ -3489,9 +3808,11 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              _arm64_op_label("#0"), "ret void: payload 0"))
         }
         // C7 + cycle h20 — epilogue frees spill_frame + call-overflow
-        // region + try-jmp_buf region (all allocated in a single
-        // prologue sub; see _arm64_lower_func).
-        let epilogue_total = spill_frame + rm.call_overflow_bytes + try_buf_bytes
+        // region + va register-save block + try-jmp_buf region (all allocated in a
+        // single prologue sub; see _arm64_lower_func). The va block (0 unless this is
+        // a variadic fn under HEXA_VA_INTRINSICS=1) must be freed too so sp re-balances.
+        let _va_blk_epi = _arm64_va_block_bytes(fname, opts.target_triple == "arm64-linux-gnu")
+        let epilogue_total = spill_frame + rm.call_overflow_bytes + _va_blk_epi + try_buf_bytes
         if epilogue_total > 0 {
             buf = _hv_sp_adj(buf, "add", epilogue_total, "x15")
         }
@@ -3515,7 +3836,10 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // On first call setjmp returns 0; push jbuf onto try-stack, then
         // fall through to the try-body (target_block).
         // On longjmp-resumed setjmp returns 1; branch to target_block_else.
-        let off = rm.call_overflow_bytes + spill_frame + try_slot_idx * 192
+        // va_block (0 unless variadic+VA_INTRINSICS) shifts the try region above the
+        // va register-save area, keeping the layout one SSOT with the prologue.
+        let _va_blk_try = _arm64_va_block_bytes(fname, opts.target_triple == "arm64-linux-gnu")
+        let off = rm.call_overflow_bytes + spill_frame + _va_blk_try + try_slot_idx * 192
         buf = _hv_at(buf, off, "x15")
         // x15 now holds (sp + off / 16) * 16; _hv_at builds the immediate
         // offset via the scratch — use the helper that yields a register
@@ -3760,11 +4084,25 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
         local_type: alloc.map.local_type,
         local_packed_esc_ok: alloc.map.local_packed_esc_ok
     }
-    // Cycle h20 — reserve jmp_buf region above the spill area. Each try
-    // gets one 192-byte slot (16-aligned by construction).
+    // RFC061 §M8 varargs-ABI (r2) — reserve the AAPCS64 va register-save block for a
+    // variadic fn (LINUX: 224 = 64 GP + 128 FP save + 32 va_list; DARWIN: 0, stack-
+    // passed). Wedged BETWEEN the regalloc spill slots (sp+[call_overflow, +spill_frame))
+    // and the try jmp_bufs — the SAME wedge x86_64 uses. `_va_block` is threaded through
+    // the same `_arm64_va_block_bytes(fname, is_linux)` SSOT the va builtins use, so the
+    // prologue spill, the va_start/va_arg layout, and the try-slot base agree. NON-
+    // variadic (default, HEXA_VA_INTRINSICS unset) → 0 → byte-eq NEUTRAL.
+    let _va_is_linux_pro = opts.target_triple == "arm64-linux-gnu"
+    let _va_block = _arm64_va_block_bytes(fn_name, _va_is_linux_pro)
+    let _va_base_pro = call_overflow_bytes + spill_frame
+    // Module-level flag consulted by the _STMT_RETURN path (variadic SIMD return → d0).
+    // Set for EVERY fn (true only for a whitelisted variadic under HEXA_VA_INTRINSICS=1);
+    // default false → byte-eq NEUTRAL.
+    _arm64_va_active = _arm64_is_variadic(fn_name)
+    // Cycle h20 — reserve jmp_buf region above the spill area (now above the va block).
+    // Each try gets one 192-byte slot (16-aligned by construction).
     let try_count = _arm64_count_try_setjmp(mf)
     let try_buf_bytes = try_count * _ARM64_JMP_BUF_BYTES
-    let total_frame = spill_frame + call_overflow_bytes + try_buf_bytes
+    let total_frame = spill_frame + call_overflow_bytes + _va_block + try_buf_bytes
 
     // Prologue
     instrs.push(_arm64_instr3(
@@ -3793,9 +4131,42 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
     }
 
     // Spill-frame allocation (after fp/lr save). Covers both the SSA
-    // spill region (top) and the outgoing-call overflow region (bottom).
+    // spill region (top), the va register-save block (middle, variadic only), and
+    // the outgoing-call overflow region (bottom).
     if total_frame > 0 {
         instrs = _hv_sp_adj(instrs, "sub", total_frame, "x15")
+    }
+
+    // RFC061 §M8 varargs-ABI (r2) — LINUX/AAPCS64 register save. A variadic fn must
+    // spill the 8 GP arg regs (x0..x7) into the 64-byte GP save area and the 8 FP arg
+    // regs (q0..q7, low eightbyte) into the 128-byte FP save area BEFORE param ingress
+    // below clobbers x0..x7. Layout (sp-relative, after the `sub`): GP_i @ va_base+8*i,
+    // FP_i @ va_base+64+16*i, where va_base = call_overflow_bytes + spill_frame (the
+    // wedge just above the SSA spill). Reference-match: AAPCS64 §B.4 register save areas
+    // — GP 64 bytes + FP 128 bytes, va_arg reads them back via __gr_top/__vr_top. DARWIN
+    // skips this entirely (_va_block == 0: varargs are stack-passed). NON-variadic →
+    // _va_block 0 → this loop never runs → byte-eq NEUTRAL. (A stacked `double` vararg
+    // is read back with an 8-byte load, so spilling the low eightbyte of qN via `str dN`
+    // is value-faithful for the double/float class — the high eightbyte is never read.)
+    if _va_block > 0 {
+        let mut _vg = 0
+        while _vg < 8 {
+            let _go = _va_base_pro + 8 * _vg
+            instrs = _hv_at(instrs, _go, "x15")
+            instrs.push(_arm64_instr2("str", _arm64_op_reg("x" + to_string(_vg)),
+                             _hv_memb(_go, "x15"),
+                             "va prologue: spill GP arg reg x" + to_string(_vg)))
+            _vg = _vg + 1
+        }
+        let mut _vf = 0
+        while _vf < 8 {
+            let _fo = _va_base_pro + 64 + 16 * _vf
+            instrs = _hv_at(instrs, _fo, "x15")
+            instrs.push(_arm64_instr2("str", _arm64_op_reg("d" + to_string(_vf)),
+                             _hv_memb(_fo, "x15"),
+                             "va prologue: spill FP arg reg d" + to_string(_vf)))
+            _vf = _vf + 1
+        }
     }
 
     // Path A (A′): each 16B HexaVal param arrives in a register PAIR
@@ -3808,7 +4179,15 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
     // arm64 fp-ABI (AAPCS64 v0-v7) is the NEXT rung — exclude fp symbols so a
     // double leaf is NOT mis-lowered into GP x0/x1 here (it falls through to the
     // PAIR-MODEL path). x86_64 (PSABI §3.2.3 xmm) lands first.
-    let _arm_cabi = _is_cabi(fn_name) && !_cabi_is_fp(fn_name)
+    //
+    // RFC061 §M8 r2 — a VARIADIC fn is ALSO C-ABI for its NAMED params (they arrive
+    // RAW in one AAPCS64 GP register, NOT a {tag,payload} pair): mirrors x86_64's
+    // `_x86_cabi = _is_cabi(name) || _x86_va_active`. Without this fold the named `n`
+    // of `hxlcl_va_smoke(long n, ...)` was mis-ingested as a HexaVal PAIR {x0,x1},
+    // stealing the first vararg out of x1 → loop bound garbage. The r2 whitelist has
+    // only integer-class named params, so the GP single-reg ingress is exact. Gated by
+    // _arm64_va_active (default-OFF) ⇒ byte-eq NEUTRAL.
+    let _arm_cabi = (_is_cabi(fn_name) && !_cabi_is_fp(fn_name)) || _arm64_va_active
     while p < len(mf.params) {
         let pid = mf.params[p].id
         let poff = _arm_spill_offset(rm, pid)
