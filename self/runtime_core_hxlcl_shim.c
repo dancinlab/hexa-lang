@@ -365,6 +365,19 @@ const char *__attribute__((noinline)) hxlcl_strchr(const char *s, int c) {
 const char *hxlcl_strchr(const char *s, int c)        { return strchr(s, c); }
 #endif
 #endif
+/* RT-NATIVE-STRSTR (HEXA_RT_NATIVE_STRSTR, default OFF · literal-∅ non-libm leaf):
+ * FIRST non-libm hxlcl_* to LEAVE the shim via the fp-ABI (xmm) Route C whole-module
+ * emit path (the RT-NATIVE-{FMOD,SIN,COS,EXP,LOG} mechanism, generalized to an
+ * integer-returning PURE leaf). hxlcl_strstr is a self-contained byte-scan — no
+ * syscall, no errno, no external callee, no extern-data (objdump-confirmed zero
+ * external relocs) — exactly the strchr/strcmp class, so it isolates cleanly from
+ * the whole-module routec.o. The native body is stdlib/runtime/hxlcl_core.hexa::
+ * hxlcl_strstr (Route C, whitelisted in _is_cabi). Under HEXA_RT_NATIVE_STRSTR=1
+ * (x86_64-linux gate in tool/stage_resolve_runtime_a) the shim drops strstr
+ * (#ifndef below) and the system `ld` binds the `call hxlcl_strstr` callsites to
+ * the staged native .o. DEFAULT (HEXA_RT_NATIVE_STRSTR unset) adds NO -D and NO
+ * member → shim.o + archive byte-identical (release-integrity invariant). */
+#ifndef HEXA_RT_NATIVE_STRSTR
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_strstr (verbatim 0-libc floor body) */
 const char *__attribute__((noinline)) hxlcl_strstr(const char *h, const char *n) {
@@ -380,6 +393,7 @@ const char *__attribute__((noinline)) hxlcl_strstr(const char *h, const char *n)
 #else
 const char *hxlcl_strstr(const char *h, const char *n){ return strstr(h, n); }
 #endif
+#endif /* !HEXA_RT_NATIVE_STRSTR */
 
 /* ── numeric parse ───────────────────────────────────────────────────────── */
 long long __attribute__((noinline)) hxlcl_atoll(const char *s) { return s ? atoll(s) : 0; }
