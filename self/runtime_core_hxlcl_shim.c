@@ -99,6 +99,19 @@ long hxlcl_write(int fd, const void *buf, unsigned long n);
 
 /* ── mem / alloc ─────────────────────────────────────────────────────────── */
 void *__attribute__((noinline)) hxlcl_malloc(size_t n) { return malloc(n ? n : 1); }
+/* RT-NATIVE-FREE (HEXA_RT_NATIVE_FREE, default OFF · literal-∅ non-libm leaf RUNG 3):
+ * THIRD non-libm hxlcl_* to LEAVE the shim via the fp-ABI Route C whole-module emit
+ * (strstr #4240 / strtoll #4241 precedent). hxlcl_free is the PUREST self-contained
+ * leaf — the frozen 0-libc floor's no-op free (the bump arena from hxlcl_malloc
+ * never reclaims), so the native body is `(void)p; return p` (zero syscall, zero
+ * errno, zero inner callee, zero extern-data). The Route C native body is
+ * FAITHFUL to the frozen floor / BYTEID arm (no-op), NOT to this shim's libc-only
+ * `free(p)` delegate (which exists solely for the standalone-libc measurement TU).
+ * Under HEXA_RT_NATIVE_FREE=1 (x86_64-linux gate in tool/stage_resolve_runtime_a)
+ * the shim drops free and the objcopy-isolated native .o supplies it. DEFAULT
+ * (unset) keeps this libc delegate; shim.o + archive byte-identical (release-
+ * integrity invariant). */
+#ifndef HEXA_RT_NATIVE_FREE
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_free (verbatim 0-libc floor body) */
 void __attribute__((noinline)) hxlcl_free(void *p) {
@@ -107,6 +120,7 @@ void __attribute__((noinline)) hxlcl_free(void *p) {
 #else
 void   hxlcl_free(void *p)                            { free(p); }
 #endif
+#endif /* !HEXA_RT_NATIVE_FREE */
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_realloc (verbatim 0-libc floor body) */
 void *__attribute__((noinline)) hxlcl_realloc(void *p, size_t n) {
