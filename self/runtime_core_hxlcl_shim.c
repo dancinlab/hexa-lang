@@ -473,7 +473,21 @@ double hxlcl_cos(double x)                            { return cos(x); }
 #ifndef HEXA_RT_NATIVE_EXP
 double hxlcl_exp(double x)                            { return exp(x); }
 #endif
+/* RT-NATIVE-LOG (HEXA_RT_NATIVE_LOG, default OFF · literal-∅ libm-leaf RUNG 6):
+ * when set, hxlcl_log is supplied by the hexa-NATIVE Route C fp-ABI (xmm) .o emitted
+ * from stdlib/runtime/hxlcl_core.hexa (HEXA_CABI_HXLCL=1) — a 1:1 musl src/math/log.c
+ * port (LOG_TABLE_BITS=7, N=128, NON-FMA path), the SECOND TABLE-DRIVEN libm leaf and
+ * the LAST clean libm shim symbol (sin/cos/fmod/exp already native): it reads the 512-
+ * double __log_data (tab[128]×{invc,logc} + tab2[128]×{chi,clo}) through the §M8 named-
+ * rodata-table codegen mechanism (rotab_2 / __hx_rodata_tab_ptr(2)). The shim drops the
+ * hxlcl_log member below so `ld -r` sees no duplicate def. stage_resolve_runtime_a passes
+ * -DHEXA_RT_NATIVE_LOG when it links the native log .o; default (macro undefined) keeps
+ * the libc delegate → shim.o byte-identical (release-integrity invariant). When this drops,
+ * the libm shim member count is 4→3 (only sin/cos in the now-native set leave fmod/exp/log;
+ * exp/log are the table-driven pair). */
+#ifndef HEXA_RT_NATIVE_LOG
 double hxlcl_log(double x)                            { return log(x); }
+#endif
 /* RT-NATIVE-FMOD (HEXA_RT_NATIVE_FMOD, default OFF · literal-∅ libm-leaf RUNG 2):
  * when set, hxlcl_fmod is supplied by the hexa-NATIVE Route C fp-ABI (xmm) .o
  * emitted from stdlib/runtime/hxlcl_core.hexa (HEXA_CABI_HXLCL=1) — the FIRST real

@@ -3996,3 +3996,165 @@ pub fn hxlcl_exp(x: HexaVal) -> int {
     }
     return result
 }
+
+// ── RFC061 §M8 RT-NATIVE-LOG (table-driven libm leaf, literal-∅ feature C) ─────
+// `double hxlcl_log(double x)` — a 1:1 port of musl src/math/log.c (LOG_TABLE_BITS
+// =7, N=128, POLY_ORDER=6; NON-FMA path). Reference: musl log.c
+// (git.musl-libc.org/cgit/musl/plain/src/math/log.c) + log_data.c. This is the
+// LAST clean libm shim symbol (sin/cos/fmod/exp already native → shim libm 4→3).
+//
+// The 512 doubles of __log_data (tab[128]×{invc,logc} = 256 doubles, then
+// tab2[128]×{chi,clo} = 256 doubles) live as the codegen named-rodata table
+// `rotab_2` (`_x86_rodata_table_spec(2)`), addressed via __hx_rodata_tab_ptr(2)
+// and read per-cell with __hx_ptr_load64. The layout is tab FIRST (byte 0..2047)
+// then tab2 (byte 2048..4095); for subinterval index i (0..127):
+//   T[i].invc  = rotab_2[ i*16 +    0 ]   T[i].logc  = rotab_2[ i*16 +    8 ]
+//   T2[i].chi  = rotab_2[ i*16 + 2048 ]   T2[i].clo  = rotab_2[ i*16 + 2056 ]
+// All scalar coefficients (B[0..10], A[0..4], Ln2hi, Ln2lo) are inline f64
+// literals decoded by build/log_consts (bit-exact to musl's hex floats). All fp
+// ops via __hx_payload_f{add,sub,mul,div} on raw IEEE-754 payload words;
+// integer/bit ops via __hx_payload_{add,sub,and,or,shl,shr,ult,ule,eq,ne}.
+//
+// ⚠ ARITHMETIC SHIFT: musl `k = (int64_t)tmp >> 52` is an ARITHMETIC shift, but
+// __hx_payload_shr is LOGICAL (zero-fill). Reproduced bit-exactly with existing
+// ops: u = tmp>>52 (logical, always in [0,4095] — only 12 bits remain); if
+// u >= 2048 then k = u - 4096 (two's-complement sign-extend) else k = u. Verified
+// exact vs `(int64_t)tmp>>52` over 2M random + edge inputs (NO new intrinsic).
+// `let mut` carried state hoisted to fn top (flatten discipline). The shim drops
+// its libc log() member via -DHEXA_RT_NATIVE_LOG. default-OFF byteeq-neutral
+// (hxlcl_core never imported by self/).
+//
+// Constants (musl log.c #defines + log_data.c, decoded by build/log_consts):
+//   N=128  OFF=0x3fe6000000000000  Ln2hi=0x1.62e42fefa3800p-1 Ln2lo=0x1.ef35793c76730p-45
+//   LO=asuint64(1.0-0x1p-4)=0x3fee000000000000  HI=asuint64(1.0+0x1.09p-4)=0x3ff1090000000000
+//   HI-LO=0x3090000000000  top16(x)=ix>>48  top-0x0010>=0x7fe0 → special
+//   asuint64(1.0)=0x3ff0000000000000  asuint64(INFINITY)=0x7ff0000000000000
+//   0x1p52=0x4330000000000000  52<<52=0x340000000000000  0xfff<<52=0xfff0000000000000
+//   B[0]=-0.5(0xbfe0…)  0x1p27=0x41a0000000000000
+pub fn hxlcl_log(x: HexaVal) -> int {
+    let mut ix = __hx_payload_add(x, 0)              // asuint64(x)
+    let top = __hx_payload_shr(ix, 48)               // top16(x) = ix>>48
+
+    // ── (A) close-to-1.0 path: predict_false(ix - LO < HI - LO) [unsigned 64-bit].
+    //    LO=asuint64(1-0x1p-4)=0x3fee… ; HI-LO=0x3090000000000. musl mid-body
+    //    returns are fine here (hxlcl_exp's tiny/special branches do the same). ──
+    let lo_lt = __hx_payload_sub(ix, 4606619468846596096)   // ix - LO (LO=0x3fee000000000000)
+    if __hx_payload_ult(lo_lt, 854320534781952) {           // < (HI-LO)=0x3090000000000
+        // WANT_ROUNDING && ix == asuint64(1.0) → return +0 (fix sign of zero).
+        if __hx_payload_eq(ix, 4607182418800017408) {       // asuint64(1.0)=0x3ff0000000000000
+            return 0
+        }
+        let r = __hx_payload_fsub(x, 1.0)                    // r = x - 1.0
+        let r2 = __hx_payload_fmul(r, r)                     // r2 = r*r
+        let r3 = __hx_payload_fmul(r, r2)                    // r3 = r*r2
+        // y = r3*(B[1] + r*B[2] + r2*B[3] + r3*(B[4] + r*B[5] + r2*B[6]
+        //         + r3*(B[7] + r*B[8] + r2*B[9] + r3*B[10])))
+        // (coefficients passed as raw IEEE-754 bit patterns → fmul reinterprets as
+        //  f64; bit-exact to musl hex floats, NO strtod rounding — the exp powers-
+        //  of-2-as-bits discipline applied to every coeff.)
+        let inA = __hx_payload_fmul(r3, 13814037675563369933)            // r3*B[10]
+        let inB = __hx_payload_fadd(__hx_payload_fmul(r2, 4591280744628736133), inA)   // r2*B[9] + …
+        let inC = __hx_payload_fadd(__hx_payload_fmul(r, 13815242567667706111), inB)   // r*B[8] + …
+        let inD = __hx_payload_fadd(4592670532434581194, inC)            // B[7] + …
+        let inE = __hx_payload_fmul(r3, inD)                             // r3*(B7+…)
+        let inF = __hx_payload_fadd(__hx_payload_fmul(r2, 13817043655233518949), inE)  // r2*B[6] + …
+        let inG = __hx_payload_fadd(__hx_payload_fmul(r, 4594314991578177072), inF)    // r*B[5] + …
+        let inH = __hx_payload_fadd(13818544856649647527, inG)           // B[4] + …
+        let inI = __hx_payload_fmul(r3, inH)                             // r3*(B4+…)
+        let inJ = __hx_payload_fadd(__hx_payload_fmul(r2, 4596373779694083340), inI)   // r2*B[3] + …
+        let inK = __hx_payload_fadd(__hx_payload_fmul(r, 13821547256400051659), inJ)   // r*B[2] + …
+        let inL = __hx_payload_fadd(4599676419421066615, inK)            // B[1] + …
+        let mut y = __hx_payload_fmul(r3, inL)                           // y = r3*(B1+…)
+        // w = r*0x1p27 ; rhi = r + w - w ; rlo = r - rhi
+        let w0 = __hx_payload_fmul(r, 4728779608739020800)               // r * 0x1p27 (0x41a0…)
+        let rhi = __hx_payload_fsub(__hx_payload_fadd(r, w0), w0)        // r + w - w
+        let rlo = __hx_payload_fsub(r, rhi)                              // r - rhi
+        // w = rhi*rhi*B[0] (B[0] == -0.5) ; hi = r + w ; lo = r - hi + w
+        let w1 = __hx_payload_fmul(__hx_payload_fmul(rhi, rhi), 13826050856027422720)  // rhi*rhi*B[0]
+        let hi = __hx_payload_fadd(r, w1)                                // hi = r + w
+        let lo0 = __hx_payload_fadd(__hx_payload_fsub(r, hi), w1)        // lo = r - hi + w
+        // lo += B[0]*rlo*(rhi + r)
+        let lo1 = __hx_payload_fadd(lo0,
+                    __hx_payload_fmul(__hx_payload_fmul(13826050856027422720, rlo),
+                                      __hx_payload_fadd(rhi, r)))
+        y = __hx_payload_fadd(y, lo1)                                    // y += lo
+        y = __hx_payload_fadd(y, hi)                                     // y += hi
+        return y
+    }
+
+    // ── (B) special values: predict_false(top - 0x0010 >= 0x7ff0 - 0x0010) i.e.
+    //    (top - 16) >= 0x7fe0  [unsigned]. x < 0x1p-1022 or inf or nan. ──
+    let topm = __hx_payload_sub(top, 16)
+    if __hx_payload_ule(32736, topm) {                       // (top-16) >= 0x7fe0
+        // ix*2 == 0 → x == ±0 → log(0) = -inf (__math_divzero(1)).
+        let ix2 = __hx_payload_shl(ix, 1)
+        if __hx_payload_eq(ix2, 0) {
+            return 18442240474082181120                       // -INFINITY = 0xfff0000000000000
+        }
+        // ix == asuint64(INFINITY) → log(+inf) == +inf → return x.
+        if __hx_payload_eq(ix, 9218868437227405312) {        // +INFINITY = 0x7ff0000000000000
+            return x
+        }
+        // (top & 0x8000) [negative] || (top & 0x7ff0)==0x7ff0 [nan] → invalid → NaN.
+        let neg = __hx_payload_and(top, 32768)               // top & 0x8000
+        let nanm = __hx_payload_and(top, 32752)              // top & 0x7ff0
+        if __hx_payload_ne(neg, 0) {
+            let xmx = __hx_payload_fsub(x, x)                 // __math_invalid: (x-x)/(x-x)
+            return __hx_payload_fdiv(xmx, xmx)
+        }
+        if __hx_payload_eq(nanm, 32752) {
+            let xmx2 = __hx_payload_fsub(x, x)
+            return __hx_payload_fdiv(xmx2, xmx2)
+        }
+        // x is subnormal, normalize: ix = asuint64(x * 0x1p52); ix -= 52ULL<<52.
+        let xs = __hx_payload_fmul(x, 4841369599423283200)   // x * 0x1p52 (0x4330…)
+        ix = __hx_payload_sub(__hx_payload_add(xs, 0), 234187180623265792)  // -= 52<<52
+    }
+
+    // ── (C) general case. x = 2^k z ; z in [OFF, 2*OFF). tmp = ix - OFF. ──
+    let tmp = __hx_payload_sub(ix, 4604367669032910848)      // ix - OFF (OFF=0x3fe6000000000000)
+    // i = (tmp >> (52-7)) % N = (tmp >> 45) & 127
+    let i = __hx_payload_and(__hx_payload_shr(tmp, 45), 127)
+    // k = (int64_t)tmp >> 52  (ARITHMETIC). __hx_payload_shr is LOGICAL → reproduce
+    //   exactly: u = tmp>>52 ∈ [0,4095]; k = (u>=2048) ? u-4096 : u. (verified exact.)
+    let ku = __hx_payload_shr(tmp, 52)
+    let mut kw = __hx_payload_add(ku, 0)
+    if __hx_payload_ule(2048, ku) {
+        kw = __hx_payload_sub(ku, 4096)                      // two's-complement sign-extend
+    }
+    // iz = ix - (tmp & 0xfffULL<<52) ; z = asdouble(iz)
+    let iz = __hx_payload_sub(ix, __hx_payload_and(tmp, 18442240474082181120))  // 0xfff<<52
+    let z = __hx_payload_add(iz, 0)                          // asdouble(iz) bits
+    // table reads: rotab_2 = tab(0..2047) then tab2(2048..4095). cell = i*16.
+    let tabbase = __hx_rodata_tab_ptr(2)
+    let icell = __hx_payload_shl(i, 4)                       // i*16 byte offset
+    let invc = __hx_ptr_load64(tabbase, icell)               // T[i].invc  (off i*16)
+    let logc = __hx_ptr_load64(tabbase, __hx_payload_add(icell, 8))         // T[i].logc
+    let chi  = __hx_ptr_load64(tabbase, __hx_payload_add(icell, 2048))      // T2[i].chi
+    let clo  = __hx_ptr_load64(tabbase, __hx_payload_add(icell, 2056))      // T2[i].clo
+    // NON-FMA: r = (z - T2[i].chi - T2[i].clo) * invc
+    let zr0 = __hx_payload_fsub(z, chi)
+    let zr1 = __hx_payload_fsub(zr0, clo)
+    let r = __hx_payload_fmul(zr1, invc)
+    let kd = __hx_payload_i2f(kw)                            // kd = (double_t)k (signed)
+    // w = kd*Ln2hi + logc ; hi = w + r ; lo = w - hi + r + kd*Ln2lo
+    let w = __hx_payload_fadd(__hx_payload_fmul(kd, 4604418534313441280), logc)  // kd*Ln2hi + logc
+    let hi = __hx_payload_fadd(w, r)
+    let loA = __hx_payload_fadd(__hx_payload_fadd(__hx_payload_fsub(w, hi), r),
+                                __hx_payload_fmul(kd, 4408728642709317424))      // + kd*Ln2lo
+    // r2 = r*r ; y = lo + r2*A[0] + r*r2*(A[1] + r*A[2] + r2*(A[3] + r*A[4])) + hi
+    // A bits: A[0]=13826050856027422721 A[1]=4599676419420794971 A[2]=13821547256398693776
+    //         A[3]=4596373889406271761  A[4]=13818544996498196639
+    let r2g = __hx_payload_fmul(r, r)
+    // Horner inner = A[1] + r*A[2] + r2*(A[3] + r*A[4])
+    let q0 = __hx_payload_fadd(4596373889406271761,          // A[3]
+                __hx_payload_fmul(r, 13818544996498196639))  // + r*A[4]
+    let q1 = __hx_payload_fmul(r2g, q0)                      // r2*(A[3]+r*A[4])
+    let q2 = __hx_payload_fadd(__hx_payload_fmul(r, 13821547256398693776), q1)  // r*A[2] + …
+    let q3 = __hx_payload_fadd(4599676419420794971, q2)      // A[1] + …
+    let q4 = __hx_payload_fmul(__hx_payload_fmul(r, r2g), q3)  // r*r2*(A[1]+…)
+    let yA = __hx_payload_fadd(loA, __hx_payload_fmul(r2g, 13826050856027422721))  // lo + r2*A[0]
+    let yB = __hx_payload_fadd(yA, q4)
+    let y = __hx_payload_fadd(yB, hi)
+    return y
+}
