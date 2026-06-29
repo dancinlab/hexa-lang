@@ -121,6 +121,22 @@ void __attribute__((noinline)) hxlcl_free(void *p) {
 void   hxlcl_free(void *p)                            { free(p); }
 #endif
 #endif /* !HEXA_RT_NATIVE_FREE */
+/* RT-NATIVE-REALLOC (HEXA_RT_NATIVE_REALLOC, default OFF · COMPOSITE non-libm leaf,
+ * inner C-ABI `bl hxlcl_malloc`):
+ * hxlcl_realloc leaves the shim via the fp-ABI Route C whole-module emit (free
+ * #4242 / strstr #4240 / strtoll #4241 precedent). It is NOT a pure leaf — its
+ * native body (hxlcl_core.hexa:1249) calls the RETAINED shim provider hxlcl_malloc
+ * (shim:101, ungated permanent malloc delegate) via an inner C-ABI `bl`, plus a
+ * NEGATIVE-offset header read (p-16) + byte copy. The inner callee stays served by
+ * the shim, so NO co-drop of malloc is needed; only realloc's own member drops.
+ * The Route C native body is BYTE-FAITHFUL to the BYTEID 0-libc floor arm below
+ * (grow/shrink min(n,old_n) preserve), NOT to this shim's libc realloc(p,n) delegate
+ * (which exists solely for the standalone-libc measurement TU). Under
+ * HEXA_RT_NATIVE_REALLOC=1 (x86_64-linux gate in tool/stage_resolve_runtime_a) the
+ * shim drops realloc and the objcopy-isolated native .o supplies it (malloc still
+ * the shim's). DEFAULT (unset) keeps this delegate; shim.o + archive byte-identical
+ * (release-integrity invariant). */
+#ifndef HEXA_RT_NATIVE_REALLOC
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_realloc (verbatim 0-libc floor body) */
 void *__attribute__((noinline)) hxlcl_realloc(void *p, size_t n) {
@@ -141,6 +157,22 @@ void *__attribute__((noinline)) hxlcl_realloc(void *p, size_t n) {
 #else
 void  *hxlcl_realloc(void *p, size_t n)               { return realloc(p, n); }
 #endif
+#endif /* !HEXA_RT_NATIVE_REALLOC */
+/* RT-NATIVE-CALLOC (HEXA_RT_NATIVE_CALLOC, default OFF · COMPOSITE non-libm leaf,
+ * inner C-ABI `bl hxlcl_malloc`):
+ * hxlcl_calloc leaves the shim via the fp-ABI Route C whole-module emit (free #4242
+ * precedent). It is NOT a pure leaf — its native body (hxlcl_core.hexa:1216) calls
+ * the RETAINED shim provider hxlcl_malloc (shim:101, ungated permanent malloc
+ * delegate) via an inner C-ABI `bl`, then a zero-fill byte loop. The inner callee
+ * stays served by the shim, so NO co-drop of malloc is needed; only calloc's own
+ * member drops. The Route C native body is BYTE-FAITHFUL to the BYTEID 0-libc floor
+ * arm below (total=nmemb*size; p=malloc(total); zero p[0..total)), NOT to this
+ * shim's libc calloc(nmemb,size) delegate (standalone-libc measurement TU only).
+ * Under HEXA_RT_NATIVE_CALLOC=1 (x86_64-linux gate in tool/stage_resolve_runtime_a)
+ * the shim drops calloc and the objcopy-isolated native .o supplies it (malloc
+ * still the shim's). DEFAULT (unset) keeps this delegate; shim.o + archive byte-
+ * identical (release-integrity invariant). */
+#ifndef HEXA_RT_NATIVE_CALLOC
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_calloc (verbatim 0-libc floor body) */
 void *__attribute__((noinline)) hxlcl_calloc(size_t nmemb, size_t size) {
@@ -155,6 +187,7 @@ void *__attribute__((noinline)) hxlcl_calloc(size_t nmemb, size_t size) {
 #else
 void  *hxlcl_calloc(size_t nmemb, size_t size)        { return calloc(nmemb ? nmemb : 1, size ? size : 1); }
 #endif
+#endif /* !HEXA_RT_NATIVE_CALLOC */
 /* SELFEMIT (HEXA_RT_SELFEMIT_MEMCPY, default OFF · RFC061 §M8 family r3):
  * hxlcl_memcpy is supplied by the hexa-NATIVE self-emitted .o
  * (test/native_build/emit_hxlcl_memcpy_o.hexa — verbatim rt_memcpy byte loop, no
