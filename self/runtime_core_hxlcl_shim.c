@@ -413,6 +413,18 @@ int       hxlcl_atoi(const char *s)                   { return s ? atoi(s) : 0; 
 #endif
 #endif
 double    hxlcl_atof(const char *s)                   { return s ? atof(s) : 0.0; }
+/* RT-NATIVE-STRTOLL (HEXA_RT_NATIVE_STRTOLL, default OFF · literal-∅ non-libm leaf
+ * RUNG 2): SECOND non-libm hxlcl_* to LEAVE the shim via the fp-ABI Route C
+ * whole-module emit (strstr precedent). hxlcl_strtoll is a PURE self-contained
+ * byte-walk parse leaf — no syscall, no errno, no inner C-ABI callee, no
+ * extern-data; the only memory write is `*endptr` to the CALLER-supplied pointer
+ * (a function argument, not a global — same class as memcpy's dst). The native
+ * body is stdlib/runtime/hxlcl_core.hexa::hxlcl_strtoll (Route C, whitelisted in
+ * _is_cabi, integer C-ABI). Under HEXA_RT_NATIVE_STRTOLL=1 (x86_64-linux gate in
+ * tool/stage_resolve_runtime_a) the shim drops strtoll and the staged native .o
+ * (objcopy-isolated) supplies it. DEFAULT (unset) adds NO -D and NO member →
+ * shim.o + archive byte-identical (release-integrity invariant). */
+#ifndef HEXA_RT_NATIVE_STRTOLL
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_strtoll (verbatim 0-libc floor body) */
 long long __attribute__((noinline)) hxlcl_strtoll(const char *nptr, char **endptr, int base) {
@@ -447,6 +459,7 @@ long long __attribute__((noinline)) hxlcl_strtoll(const char *nptr, char **endpt
 #else
 long long hxlcl_strtoll(const char *p, char **e, int b){ return strtoll(p, e, b); }
 #endif
+#endif /* !HEXA_RT_NATIVE_STRTOLL */
 
 /* ── math (libm) ─────────────────────────────────────────────────────────── */
 /* RT-NATIVE-SIN (HEXA_RT_NATIVE_SIN, default OFF · literal-∅ libm-leaf RUNG 3):
