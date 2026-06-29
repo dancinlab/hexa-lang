@@ -1314,6 +1314,18 @@ fn _bind_builtin_names() -> [string] {
         // keyword/@attr (frozen 151c52c8 immutable; an ordinary identifier-call). arm64 +
         // x86_64 STMT_CALL special-case. ADD-only: the compiler never calls it.
         "__hx_static_slot",
+        // RFC061 §M8 named-rodata-table (literal-∅ feature C, 2026-06-29):
+        // `__hx_rodata_tab_ptr(table_id)` — the PRE-INITIALIZED-rodata sibling of
+        // __hx_static_slot. DEFINES a named `.rodata` constant table (`rotab_<id>`,
+        // contents from the x86_64 backend's `_x86_rodata_table_spec`, LE doubles)
+        // and RETURNS its address (boxed TAG_INT) via a LOCAL pc-rel `lea
+        // [rip+rotab_<id>]`. table_id MUST be a compile-time const_int (deterministic
+        // symbol name). This is the table-driven libm mechanism the musl exp/log
+        // ports need (__exp_data.tab[256] / __log_data.tab[128]); callers read cells
+        // via __hx_ptr_load64. NO new keyword/@attr (ordinary identifier-call, frozen
+        // 151c52c8 safe). x86_64 STMT_CALL special-case. ADD-only: the compiler never
+        // calls it → byte-eq NEUTRAL (no byteeq-path body references it).
+        "__hx_rodata_tab_ptr",
         // RFC061 §M8 varargs-ABI (literal-∅ feature B, RUNG1, 2026-06-29): the SysV
         // AMD64 va_list intrinsics that let a self-emitted variadic `hxlcl_*` body
         // (e.g. the frozen-floor hxlcl_printf/hxlcl_fprintf, which forward a C va_list

@@ -460,7 +460,19 @@ double hxlcl_sin(double x)                            { return sin(x); }
 #ifndef HEXA_RT_NATIVE_COS
 double hxlcl_cos(double x)                            { return cos(x); }
 #endif
+/* RT-NATIVE-EXP (HEXA_RT_NATIVE_EXP, default OFF · literal-∅ libm-leaf RUNG 5):
+ * when set, hxlcl_exp is supplied by the hexa-NATIVE Route C fp-ABI (xmm) .o emitted
+ * from stdlib/runtime/hxlcl_core.hexa (HEXA_CABI_HXLCL=1) — a 1:1 musl src/math/exp.c
+ * port (N=128, POLY_ORDER=5, non-FMA path), the FIRST TABLE-DRIVEN libm leaf: it
+ * reads the 256-entry __exp_data.tab through the §M8 named-rodata-table codegen
+ * mechanism (rotab_1 / __hx_rodata_tab_ptr(1)) — the data-leaf wall named at
+ * fmod/sin/cos. The shim drops the hxlcl_exp member below so `ld -r` sees no
+ * duplicate def. stage_resolve_runtime_a passes -DHEXA_RT_NATIVE_EXP when it links
+ * the native exp .o; default (macro undefined) keeps the libc delegate → shim.o
+ * byte-identical (release-integrity invariant). */
+#ifndef HEXA_RT_NATIVE_EXP
 double hxlcl_exp(double x)                            { return exp(x); }
+#endif
 double hxlcl_log(double x)                            { return log(x); }
 /* RT-NATIVE-FMOD (HEXA_RT_NATIVE_FMOD, default OFF · literal-∅ libm-leaf RUNG 2):
  * when set, hxlcl_fmod is supplied by the hexa-NATIVE Route C fp-ABI (xmm) .o

@@ -2425,15 +2425,43 @@ fn _align_up8(v: Int) -> Int {
     return v + (8 - r)
 }
 
+// True iff this rodata LSection is a §M8 named-rodata-table (`rotab_<id>` /
+// `_rotab_<id>`), NOT a `.LCstr*` cstring. These carry binary LE-double payloads
+// (musl exp __exp_data.tab etc.) with interior NUL bytes, so they MUST go into
+// `__TEXT,__const` (S_REGULAR, 8-aligned — the float-pool section) and NOT into
+// `__cstring` (S_CSTRING_LITERALS, which NUL-splits/dedups). Matches the
+// `__hx_rodata_tab_ptr` codegen which names the LSection `_rotab_<id>` (darwin) /
+// `rotab_<id>` (ELF). Off the byteeq path (no rotab sections) this is never true.
+fn _is_rotab_section(name: string) -> bool {
+    let cs = name.chars()
+    let n = len(cs)
+    // accept "rotab_" (ELF/bare) or "_rotab_" (darwin _fmt_label-spelled)
+    let mut base = name
+    if n >= 1 && cs[0] == "_" { base = name.substring(1, n) }
+    let bc = base.chars()
+    if len(bc) < 6 { return false }
+    let mut k = 0
+    let pfx = "rotab_".chars()
+    while k < 6 {
+        if bc[k] != pfx[k] { return false }
+        k = k + 1
+    }
+    return true
+}
+
 fn _build_cstr_pool(lm: LModule) -> CstrPool {
     let pool = CstrPool { bytes: [], labels: [], offsets: [] }
     let n = len(lm.rodata)
     let mut i = 0
     while i < n {
         let sec = lm.rodata[i]
-        pool.labels.push(sec.name)
-        pool.offsets.push(len(pool.bytes))
-        _append_hex_bytes(pool.bytes, sec.bytes)
+        // §M8: rotab_<id> tables are __const (binary doubles), handled by
+        // _build_flt_pool — skip here so __cstring stays cstring-only.
+        if !_is_rotab_section(sec.name) {
+            pool.labels.push(sec.name)
+            pool.offsets.push(len(pool.bytes))
+            _append_hex_bytes(pool.bytes, sec.bytes)
+        }
         i = i + 1
     }
     return pool
@@ -2466,6 +2494,24 @@ fn _build_flt_pool(lm: LModule) -> CstrPool {
         let bits = float_to_bits(to_float(f.text))
         _append_u64_le_bytes(pool.bytes, bits)
         i = i + 1
+    }
+    // §M8 feature C — named-rodata-tables (`rotab_<id>`) share the `__TEXT,__const`
+    // 8-aligned section with the float pool (both S_REGULAR binary-double blobs). Each
+    // table is ONE label at its pool offset with the full LE-double payload (already
+    // hex-encoded by the codegen `_arm64_u64hex_list_to_le_payload`). Float entries are
+    // 8 bytes each + table payloads are whole 8-byte-multiple, so `len(pool.bytes)`
+    // stays 8-aligned (no inter-entry padding needed). Off the byteeq path lm.rodata
+    // has no rotab sections → this loop adds nothing → __const byte-stable.
+    let rn = len(lm.rodata)
+    let mut ri = 0
+    while ri < rn {
+        let sec = lm.rodata[ri]
+        if _is_rotab_section(sec.name) {
+            pool.labels.push(sec.name)
+            pool.offsets.push(len(pool.bytes))
+            _append_hex_bytes(pool.bytes, sec.bytes)
+        }
+        ri = ri + 1
     }
     return pool
 }
