@@ -2961,7 +2961,7 @@ pub fn hxlcl_darwin_check_fd_set_overflow(fd: HexaVal, p: HexaVal, n: HexaVal) -
 pub fn hxlcl_atof(s: HexaVal) -> int {
     let p = __hx_payload_add(s, 0)             // const char* s (raw payload word)
     if __hx_payload_eq(p, 0) {
-        return 0.0                             // if(!s) return 0.0
+        return 0                               // if(!s) return 0.0 (all-zero bits = +0.0 in xmm0)
     }
     let mut i = 0
     // whitespace skip: while(s[i]==' '||s[i]=='\t'||s[i]=='\n') i++;
@@ -2992,7 +2992,11 @@ pub fn hxlcl_atof(s: HexaVal) -> int {
         }
     }
     // integer digits: while(s[i] in ['0'..'9']) n = n*10.0 + (double)(s[i]-'0');
-    let mut n = 0.0
+    // n carries the running double's BITS as an int-typed HexaVal (the f* intrinsics
+    // return the int-tagged payload word, like fmod/exp); seed +0.0 via i2f(0) (not a
+    // bare `0.0` float literal, which would type the binding f64 and break `return n`
+    // against the `-> int` signature — HX3004).
+    let mut n = __hx_payload_i2f(0)            // +0.0 (int-typed bits)
     let mut icont = 1
     while __hx_payload_ne(icont, 0) {
         let c = __hx_ptr_load8(p, i)
@@ -3013,7 +3017,11 @@ pub fn hxlcl_atof(s: HexaVal) -> int {
     let dot = __hx_ptr_load8(p, i)
     if __hx_payload_eq(dot, 46) {               // '.'
         i = __hx_payload_add(i, 1)
-        let mut frac = 0.1
+        // frac = 0.1 as int-typed bits: i2f(0)=+0.0 then fadd the 0.1 literal arg
+        // (bare float literal as an INTRINSIC ARG is fine — fmod's __hx_payload_fmul(0.0,x)
+        // precedent — only a float-literal *binding*/*return* trips HX3004).
+        let frac_z = __hx_payload_i2f(0)
+        let mut frac = __hx_payload_fadd(frac_z, 0.1)   // 0.0 + 0.1 = 0.1
         let mut fcont = 1
         while __hx_payload_ne(fcont, 0) {
             let fc = __hx_ptr_load8(p, i)
@@ -3066,7 +3074,7 @@ pub fn hxlcl_atof(s: HexaVal) -> int {
             }
         }
         // mul = 1.0; for(k=0;k<exp_val;k++) mul *= 10.0;
-        let mut mul = 1.0
+        let mut mul = __hx_payload_i2f(1)        // 1.0 (int-typed bits)
         let mut k = 0
         while __hx_payload_lt(k, exp_val) {
             mul = __hx_payload_fmul(mul, 10.0)
