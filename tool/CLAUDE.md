@@ -87,7 +87,10 @@ verdict atom fold 는 항상 `hexa verify` g5 PASS 경로로만.
   sm_120에서 GEMM all-zero. 이제 `/usr/local/cuda-12.9`(혹은 `/usr/local/cuda` symlink)를 자동탐지.
   summer RTX5070 sm_120 CUDA12.9 측정 — d2048 FAST median 458.64 GFLOP/s · DET 454.14 GFLOP/s ·
   FAST/DET=+0.99% (state/fast-vs-det-gemm-verdict.md). hexa vs PyTorch F64 2048^3: hexa 464.3 vs
-  PyTorch 482.9 GFLOP/s → 96% parity (state/hexa-vs-pytorch-gemm-verdict.md).
+  PyTorch 482.9 GFLOP/s → 96% parity (state/hexa-vs-pytorch-gemm-verdict.md). (3) EVP_* undef
+  (#4218): host compile 에서 `-DHEXA_HAS_OPENSSL` 제거 → deploy archive 의 `runtime_cuda_host.o`
+  가 EVP_* 미참조. 원인: `self/main.hexa` CUDA link path(~L1487)가 early-return 전에 -lssl 추가 안 함
+  (TODO: follow-up PR 로 self/main.hexa ~L1487 에 SSL probe 추가). convergence `CUDA-LINK-MISSING-SSL`.
 - `unshadow_*_bench.hexa` · `bench_*` · `train_floor_bench.hexa` — codegen/런타임 perf 벤치.
 
 ### 서브폴더
