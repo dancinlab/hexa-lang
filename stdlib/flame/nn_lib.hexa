@@ -40,11 +40,6 @@
 // (strict bit-eq to anima d5_rope_tables 14-term Taylor path).
 use "stdlib/flame/flame_math"
 
-// #4214 forge determinism query (API > env precedence) — drives the GELU device
-// seam's det escape (see _nn_gelu_dev_on). Defined in runtime_cuda.c (CUDA) /
-// runtime.h inline stub (non-CUDA), the SAME extern forge_det.hexa declares.
-extern fn hexa_forge_is_deterministic() -> int
-
 // ── helpers (private) ──────────────────────────────────────────────────
 fn _nn_abs(x: float) -> float {
     if x < 0.0 { return 0.0 - x }
@@ -1035,12 +1030,17 @@ fn _nn_gelu_grad(x: float) -> float {
 
 // native-canonical-default GPU GELU seam gate (flame/forge determinism regimen).
 //
-//   det mode ON  → host loop. Eval/verdict/decode safety-pin (set_deterministic(true))
-//                  OR the HEXA_DET escape-hatch demand cross-host byte-exact repro;
-//                  the OP-19b host loop (dt_erf/dt_exp) is byte-IDENTICAL across
-//                  x86-linux + arm64-macos, the proven reproducibility reference.
-//                  The device _hx_k_gelu replicates dt_erf/dt_exp but nvcc FMA
-//                  fusion can drift ~1 ULP vs the host cc build → det stays host.
+//   det mode ON  → host loop. The HEXA_DET escape-hatch demands cross-host
+//                  byte-exact repro; the OP-19b host loop (dt_erf/dt_exp) is
+//                  byte-IDENTICAL across x86-linux + arm64-macos, the proven
+//                  reproducibility reference. The device _hx_k_gelu replicates
+//                  dt_erf/dt_exp but nvcc FMA fusion can drift ~1 ULP vs the host
+//                  cc build (measured: fwd max|Δ|=4.4e-16) → det stays host.
+//                  (The #4214 set_deterministic() in-process API governs the
+//                  PRODUCTION eval path, which runs through clm_prod's forge
+//                  megakernel — NOT this naive nn_lib seam — so the HEXA_DET env
+//                  check is the right surface here; the shipped `hexa run` codegen
+//                  does not lower an `extern fn …->int` det query correctly.)
 //   det mode OFF → fast non-det DEFAULT (training). A present CUDA device routes
 //                  the elementwise GELU onto the own _hx_k_gelu kernel — the GPU
 //                  OWN kernel is the CANONICAL default (NOT flag-gated), replacing
@@ -1050,7 +1050,8 @@ fn _nn_gelu_grad(x: float) -> float {
 //   legacy explicit env (HEXA_DEVRESIDENT_NN + CLM_PROD_DEVRESIDENT) still forces
 //                  the device seam on for non-CUDA-probe contexts (additive).
 fn _nn_gelu_dev_on() -> bool {
-    if hexa_forge_is_deterministic() != 0 { return false }
+    let det = env("HEXA_DET")
+    if det != "" && det != "0" { return false }
     if cuda_available() == 1 { return true }
     if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" { return true }
     return false
