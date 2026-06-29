@@ -2609,6 +2609,16 @@ pub fn _x86_is_variadic(fname: string) -> bool {
     return false
 }
 
+// A variadic fn whose RETURN is SSE-class (`double`/`float`) returns its value in
+// xmm0 (PSABI §3.2.3), NOT rax — the same split as a non-variadic Route C leaf
+// (_cabi_sse_ret). Keyed on the variadic whitelist: only `hxlcl_va_fp_smoke` (the
+// r1 SSE PoC) has a double return; `hxlcl_va_smoke` is integer-return (rax). Gated
+// by `_x86_is_variadic` callers ⇒ default-OFF byte-eq NEUTRAL.
+pub fn _x86_va_ret_is_fp(fname: string) -> bool {
+    if fname == "hxlcl_va_fp_smoke" { return true }
+    return false
+}
+
 // Size-annotated rbp-relative memory operand `<sz> ptr [rbp ± N]`, rendered VERBATIM
 // (carried as a label, like the established `qword ptr [r10]` form in __hx_ptr_store64).
 // The string EXACTLY mirrors `_fmt_mem`'s Intel `[rbp + N]` / `[rbp - N]` spelling, so
@@ -5125,11 +5135,14 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             _x86_emit_zero_ret_pair(fname == "main")
         }
         if len(s.args) >= 1 {
-            if _is_cabi(fname) && _cabi_sse_ret(fname) {
-                // Route C fp-ABI return — an SSE-class (`double`) C-ABI fn returns
+            if (_is_cabi(fname) && _cabi_sse_ret(fname))
+                || (_x86_va_active && _x86_va_ret_is_fp(fname)) {
+                // Route C / variadic fp-ABI return — an SSE-class (`double`) fn returns
                 // its value in xmm0 (PSABI §3.2.3), NOT rax. The payload eightbyte
                 // holds the IEEE-754 bits; load it into a GP scratch (r10) then movq
-                // into xmm0. Must run BEFORE frame teardown (reads spill slots).
+                // into xmm0. Must run BEFORE frame teardown (reads spill slots). A
+                // variadic double-returning leaf (hxlcl_va_fp_smoke) takes this path so
+                // a C caller reads the result in xmm0, not the leftover-in-rax word.
                 _x86_hv_payload(s.args[0], st, rm, "r10", opts)
                 _x86_buf.push(_x86_instr2("movq", _x86_op_reg("xmm0"),
                                  _x86_op_reg("r10"), "cabi fp return: gp→xmm0"))
