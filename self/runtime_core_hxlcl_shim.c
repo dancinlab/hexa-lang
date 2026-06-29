@@ -707,10 +707,35 @@ int   hxlcl_pipe(int fds[2])                          { return pipe(fds); }
 void *hxlcl_signal(int signum, void *handler)         { return (void *)signal(signum, (void (*)(int))handler); }
 
 /* ── file / io ───────────────────────────────────────────────────────────── */
+/* RT-NATIVE CORE FILE* family (HEXA_RT_NATIVE_{FOPEN,FREAD,FTELL,FSEEK}, default
+ * OFF · Route C whole-module emit · COUPLED leaves, NOT pure like strstr/free):
+ * the frozen 0-libc floor models a FILE* as `(void*)(uintptr_t)(fd+1)` (NOT a libc
+ * stdio struct), so the native Route C bodies (stdlib/runtime/hxlcl_core.hexa:
+ * 2264 fopen · 2351 fread · 2415 ftell · 2427 fseek) are a PURE COMPOSITION over
+ * the already-dissolved syscall LEAVES — fopen→hxlcl_open_sys, fread→hxlcl_read,
+ * ftell/fseek→hxlcl_lseek — plus raw-payload pointer arithmetic. Those inner
+ * callees stay RETAINED shim globals (below), so the objcopy-isolated native .o's
+ * external relocs (bl hxlcl_open_sys/read/lseek) resolve from the shim (the
+ * atoi→atoll / strdup→malloc coupled-leaf class, NOT the strstr/free zero-reloc
+ * class). The libc-global stdout/stderr/stdin (fp>=0x1000) branch is out of scope
+ * — high pointers fail safe (shim-resident std-stream family). Under
+ * HEXA_RT_NATIVE_<SYM>=1 (x86_64-linux gate in tool/stage_resolve_runtime_a) the
+ * shim drops that member and the isolated native .o supplies it. DEFAULT (unset)
+ * keeps these libc delegates; shim.o + archive byte-identical (release-integrity
+ * invariant). Reference-matched to the frozen emitter bodies
+ * self/runtime_emit_full.hexa:1153-1242. */
+#ifndef HEXA_RT_NATIVE_FOPEN
 void  *hxlcl_fopen(const char *p, const char *m)      { return (void *)fopen(p, m); }
+#endif
+#ifndef HEXA_RT_NATIVE_FREAD
 size_t hxlcl_fread(void *b, size_t s, size_t n, void *fp) { return fread(b, s, n, (FILE *)fp); }
+#endif
+#ifndef HEXA_RT_NATIVE_FTELL
 long   hxlcl_ftell(void *fp)                          { return ftell((FILE *)fp); }
+#endif
+#ifndef HEXA_RT_NATIVE_FSEEK
 int    hxlcl_fseek(void *fp, long off, int whence)    { return fseek((FILE *)fp, off, whence); }
+#endif
 int    hxlcl_open_sys(const char *path, int flags, ...) { return open(path, flags, 0644); }
 /* SELFEMIT (HEXA_RT_SELFEMIT_READ, default OFF · RFC061 §M8 family r3): like
  * close below, hxlcl_read is supplied by the hexa-NATIVE self-emitted .o
