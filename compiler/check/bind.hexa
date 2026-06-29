@@ -1250,6 +1250,14 @@ fn _bind_builtin_names() -> [string] {
         "__hx_payload_shl", "__hx_payload_shr",
         "__hx_payload_fadd", "__hx_payload_fsub", "__hx_payload_fmul", "__hx_payload_fdiv",
         "__hx_payload_flt", "__hx_payload_fgt", "__hx_payload_fle", "__hx_payload_fge",
+        // FLOAT→INT truncate (libm-leaf musl sin argument reduction `(int32_t)fn`):
+        // __hx_payload_f2i reinterprets the payload word as a double and truncates
+        // toward zero into a signed integer (x86_64 cvttsd2si · arm64 fcvtzs). The
+        // dual __hx_payload_i2f converts a signed-int payload to a double (x86_64
+        // cvtsi2sd · arm64 scvtf) — distinct from __hx_to_double which is a tagged
+        // int-or-float coercion; i2f takes a RAW int payload. ADD-only, frozen
+        // 151c52c8-safe identifier-calls (compiler never emits them).
+        "__hx_payload_f2i", "__hx_payload_i2f",
         "__hx_str_byte", "__hx_to_double", "__hx_arr_len", "__hx_syscall0", "__hx_syscall6", "__hx_ptr_store64", "__hx_ptr_load64", "__hx_ptr_store32", "__hx_ptr_load32", "__hx_ptr_store8", "__hx_ptr_load8",
         // RFC061 Route C 2nd-return-register (2026-06-27): `__hx_syscall6_out2(
         // num, a0..a5, outptr)` issues ONE syscall and writes BOTH return

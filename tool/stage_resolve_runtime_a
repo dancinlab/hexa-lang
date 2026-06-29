@@ -1361,6 +1361,42 @@ build_runtime_a_from_source() {
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD: HEXA_RT_NATIVE_FMOD=1 IGNORED — fp-ABI xmm Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim fmod member" >&2
             fi
         fi
+        # ── RFC061 §M8 RT-NATIVE-SIN (fp-ABI xmm Route C · libm-leaf RUNG 3, default OFF) ──
+        # hxlcl_sin (`double sin(double)`) native-emitted via the SAME fp-ABI (xmm)
+        # Route C path as fmod. The codegen emits the WHOLE stdlib/runtime/hxlcl_core.hexa
+        # to one .o under HEXA_CABI_HXLCL=1; the whitelisted SSE symbols (hxlcl_sin +
+        # its private kernels hxlcl__k_sin/hxlcl__k_cos) land in that .o. The body is a
+        # 1:1 musl src/math/{sin,__sin,__cos,__rem_pio2}.c port (libm-free; small +
+        # medium argument-reduction paths). The shim drops its sin member via
+        # -DHEXA_RT_NATIVE_SIN (#ifndef in shim.c). DEFAULT (HEXA_RT_NATIVE_SIN unset)
+        # adds NO -D and NO member → shim.o + archive byte-identical (release-integrity
+        # invariant). x86_64-linux ONLY (fp-ABI xmm lowering is x86_64-backend-only;
+        # arm64 AAPCS64 v0-v7 is the NEXT rung — _cabi_is_fp excludes fp on arm64).
+        if [ "${HEXA_RT_NATIVE_SIN:-0}" = "1" ]; then
+            if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
+                local _rns_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
+                if [ -z "$_rns_bin" ]; then
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: HEXA_RT_NATIVE_SIN=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
+                fi
+                local _rns_drv="build/_rns_drv.hexa"
+                local _rns_s="build/hxlcl_sin_native.s"
+                local _rns_o="build/hxlcl_sin_native.o"
+                printf 'fn _rns_unused() {}\n' > "$_rns_drv"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN: emitting native fp-ABI (xmm) hxlcl_sin .o via $_rns_bin (HEXA_CABI_HXLCL=1, replacing libc-shim sin member)…"
+                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                    "$_rns_bin" "$_rns_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rns_s" stdlib/runtime/hxlcl_core.hexa \
+                    >"build/_rns_sin.log" 2>&1 \
+                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: sin Route C asm emit failed — see build/_rns_sin.log" >&2; cat "build/_rns_sin.log" >&2; return 1; }
+                [ -s "$_rns_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: empty $_rns_s" >&2; return 1; }
+                $CC $_mo_archflag -c "$_rns_s" -o "$_rns_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: assemble $_rns_s failed" >&2; return 1; }
+                [ -f "$_rns_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: $_rns_o not produced" >&2; return 1; }
+                _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_SIN"
+                _mo_hxlcl_members="$_mo_hxlcl_members $_rns_o"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN: hxlcl_sin → native fp-ABI .o; shim.o built with -DHEXA_RT_NATIVE_SIN (sin dropped) — ld -r multidef gate validates"
+            else
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN: HEXA_RT_NATIVE_SIN=1 IGNORED — fp-ABI xmm Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim sin member" >&2
+            fi
+        fi
         # (S1) guard the FROZEN `#include "runtime_core.c"` line in the RESTORED
         #      working-copy runtime.c (idempotent; gitignore'd regen — frozen git
         #      blob 151c52c8 NEVER touched). drop-ON then pulls runtime_core_decls.h.

@@ -435,7 +435,18 @@ long long hxlcl_strtoll(const char *p, char **e, int b){ return strtoll(p, e, b)
 #endif
 
 /* ── math (libm) ─────────────────────────────────────────────────────────── */
+/* RT-NATIVE-SIN (HEXA_RT_NATIVE_SIN, default OFF · literal-∅ libm-leaf RUNG 3):
+ * when set, hxlcl_sin is supplied by the hexa-NATIVE Route C fp-ABI (xmm) .o emitted
+ * from stdlib/runtime/hxlcl_core.hexa (HEXA_CABI_HXLCL=1) — a 1:1 musl src/math/
+ * {sin,__sin,__cos,__rem_pio2}.c port (libm-free; small + medium argument-reduction
+ * paths, the table-based __rem_pio2_large LARGE path is a separate next rung). The
+ * native .o also carries the two private kernels hxlcl__k_sin / hxlcl__k_cos. The
+ * shim drops the hxlcl_sin member below so `ld -r` sees no duplicate def.
+ * stage_resolve_runtime_a passes -DHEXA_RT_NATIVE_SIN when it links the native sin .o;
+ * default (macro undefined) keeps the libc delegate → shim.o byte-identical. */
+#ifndef HEXA_RT_NATIVE_SIN
 double hxlcl_sin(double x)                            { return sin(x); }
+#endif
 double hxlcl_cos(double x)                            { return cos(x); }
 double hxlcl_exp(double x)                            { return exp(x); }
 double hxlcl_log(double x)                            { return log(x); }
