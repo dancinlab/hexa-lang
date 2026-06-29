@@ -447,7 +447,19 @@ long long hxlcl_strtoll(const char *p, char **e, int b){ return strtoll(p, e, b)
 #ifndef HEXA_RT_NATIVE_SIN
 double hxlcl_sin(double x)                            { return sin(x); }
 #endif
+/* RT-NATIVE-COS (HEXA_RT_NATIVE_COS, default OFF · literal-∅ libm-leaf RUNG 4):
+ * when set, hxlcl_cos is supplied by the hexa-NATIVE Route C fp-ABI (xmm) .o emitted
+ * from stdlib/runtime/hxlcl_core.hexa (HEXA_CABI_HXLCL=1) — a 1:1 musl src/math/
+ * {cos,__sin,__cos,__rem_pio2}.c port (libm-free; small + medium argument-reduction
+ * paths; shares hxlcl_sin's reduction + inlined __sin/__cos kernels — only the tiny/
+ * |x|<pi/4 special cases and the n&3 dispatch differ; the table-based __rem_pio2_large
+ * LARGE path is a separate next rung). The shim drops the hxlcl_cos member below so
+ * `ld -r` sees no duplicate def.
+ * stage_resolve_runtime_a passes -DHEXA_RT_NATIVE_COS when it links the native cos .o;
+ * default (macro undefined) keeps the libc delegate → shim.o byte-identical. */
+#ifndef HEXA_RT_NATIVE_COS
 double hxlcl_cos(double x)                            { return cos(x); }
+#endif
 double hxlcl_exp(double x)                            { return exp(x); }
 double hxlcl_log(double x)                            { return log(x); }
 /* RT-NATIVE-FMOD (HEXA_RT_NATIVE_FMOD, default OFF · literal-∅ libm-leaf RUNG 2):
