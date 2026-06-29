@@ -138,6 +138,13 @@
     "source": "tool/stage_build_hexa"
    },
    {
+    "id": "CUDA-LINK-MISSING-SSL",
+    "state": "in_flight",
+    "value": "self/main.hexa CUDA link path (~L1487) early-returns after adding -lcudart/-lcuda/-lcudadevrt but BEFORE adding -lssl/-lcrypto (lines 1496-1500 are never reached for CUDA builds). When a deployed runtime.a has a CUDA host object compiled with -DHEXA_HAS_OPENSSL, the linker finds undefined refs to EVP_* in any hexa run. Workaround: compile runtime_cuda_host.o without -DHEXA_HAS_OPENSSL (gates out hexa_aes256_ctr_xor, the only EVP_* caller).",
+    "threshold": "Fix self/main.hexa ~L1487: probe OpenSSL (pkg-config --libs openssl) and append result to the CUDA return line before -lcudart/-lcuda. Requires 3-target byteeq CI PR. Until then, CUDA deploy archive must NOT include -DHEXA_HAS_OPENSSL-compiled objects.",
+    "source": "self/main.hexa"
+   },
+   {
     "id": "CUDA-BUILD-CORES-EXPLICIT-LINK-MULTIDEF",
     "state": "ossified",
     "value": "build_cuda_runtime extracted *_native.o from prebuilt runtime.a and linked them EXPLICITLY as .o files. The frozen runtime_core.c (restored from blob 151c52c82 by restore_frozen_seeds) predates HEXA_RT_ALLOC_NATIVE guards and still #includes runtime_hi_gen.c unconditionally → 19× `multiple definition`: hexa_arena_alloc/mark/rewind/reset (4) + rt_str_split/lines/pad_left/pad_right/repeat/center/to_upper/to_lower/trim/trim_start/trim_end/starts_with_b/ends_with_b/contains_b/from_int (15). SHIPPED runtime.a is fine (archive lazy-pulls only needed symbols) but explicit-link forces BOTH objects. Root cause = the frozen seed's gating does NOT match the symbol set provided by the native .o seeds.",

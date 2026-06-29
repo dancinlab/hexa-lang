@@ -265,7 +265,15 @@ fi
 
 echo "=== host runtime.o (-DHEXA_CUDA + the RT-NATIVE flag set) ==="
 RTFLAGS="-DHEXA_RT_ARRAY_NATIVE=1 -DHEXA_RT_MAP_NATIVE=1 -DHEXA_RT_INTERN_NATIVE=1 -DHEXA_RT_ALLOC_NATIVE=1"
-gcc -O2 -D_GNU_SOURCE -DHEXA_HAS_OPENSSL -DHEXA_CUDA $RTFLAGS -w \
+# DEPLOY-SAFE: compile WITHOUT -DHEXA_HAS_OPENSSL so the archive member has NO
+# EVP_* undefined-refs. Root cause: self/main.hexa CUDA link path (line ~1487)
+# returns early before adding -lssl/-lcrypto, so any archive member with EVP_*
+# refs causes "undefined reference" in `hexa run`. Omitting -DHEXA_HAS_OPENSSL
+# gates out hexa_aes256_ctr_xor (the only EVP_* user) — SHA-256/SHA-1 use the
+# pure-C hexa_sha256_raw path which does NOT require OpenSSL. Matches the
+# manually assembled runtime_cuda_host_sm120_noossl.o from the 2026-06-29
+# session fix. TODO: also fix self/main.hexa CUDA link to include -lssl.
+gcc -O2 -D_GNU_SOURCE -DHEXA_CUDA $RTFLAGS -w \
     -I self -I . -I "$CINC" -c self/runtime.c -o "$B/runtime_cuda_host.o"
 
 echo "=== PRIMARY verify harness — CPU vs CUDA ==="
