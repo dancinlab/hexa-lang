@@ -2929,6 +2929,179 @@ pub fn hxlcl_darwin_check_fd_set_overflow(fd: HexaVal, p: HexaVal, n: HexaVal) -
     return 0
 }
 
+// fp-ABI (xmm) MIXED-ABI leaf — hxlcl_atof (`double atof(const char *s)`). The
+// FIRST Route C symbol with a MIXED SysV ABI: the param is a `const char*` (INTEGER
+// class → rdi/GP, NOT SSE) but the return is `double` (SSE class → xmm0). The prior
+// fp-ABI leaves (fp_addmul/fmod/sin/cos/exp/log) were all-SSE (double args + double
+// ret); atof proves the per-arg/per-return SSE classifier (_cabi_sse_arg returns
+// FALSE for arg 0 → string stays GP; _cabi_sse_ret returns TRUE → double in xmm0).
+//
+// BODY = a 1:1 port of the frozen 0-libc floor's lenient string→double parse
+// (self/runtime_emit_full.hexa:2299-2337, the `#else` C fallback that ships in
+// runtime.c when HEXA_HAS_HEXA_RT_STDLIB is off): whitespace skip + sign +
+// integer-digit fold (n = n*10 + d) + optional `.frac` (n += d*frac; frac *= 0.1)
+// + optional `eE` decimal exponent (mul = 10^|exp|; n /= mul or n *= mul) + sign.
+// This is the SAME lenient grammar as musl `atof` = `strtod(s, NULL)` over its
+// finite-decimal domain (no hex/inf/nan — the frozen floor body never parses those
+// either, matching the shim default exactly). reference: musl src/stdlib/atof.c
+// (`return strtod(s, 0)`) + the frozen #else body it mirrors. The result is
+// bit-identical to the frozen C #else atof for every input (same op order: the
+// integer/fraction/exponent folds use the IDENTICAL double arithmetic sequence).
+//
+// FP CONSTRUCTION: the byte-scan + index/digit/sign/exp are raw-int payload ops
+// (__hx_payload_add/sub/mul/eq/ge/le/and/ne — the atoll class); the digit→double
+// lift uses __hx_payload_i2f (cvtsi2sd, exp/log precedent), and the accumulation
+// uses __hx_payload_fmul/fadd/fdiv (mulsd/addsd/divsd) on FLOAT-tagged HexaVals.
+// Float LITERALS (10.0, 0.1, 1.0, 0.0) are written directly (the fmod/exp pattern —
+// they lower to a .rodata double + movq into the GP payload home). UN-NESTED (this
+// file's str_core NESTING discipline): every intrinsic call writes EXACTLY ONE
+// `let`/assignment; comparisons use __hx_payload_eq/ne/ge/le. The return ships the
+// FLOAT-tagged payload word through xmm0 (the SSE-ret branch movq's payload→xmm0).
+// default-OFF byteeq-neutral (HEXA_CABI_HXLCL off → not whitelisted → ordinary fn).
+pub fn hxlcl_atof(s: HexaVal) -> int {
+    let p = __hx_payload_add(s, 0)             // const char* s (raw payload word)
+    if __hx_payload_eq(p, 0) {
+        return 0                               // if(!s) return 0.0 (all-zero bits = +0.0 in xmm0)
+    }
+    let mut i = 0
+    // whitespace skip: while(s[i]==' '||s[i]=='\t'||s[i]=='\n') i++;
+    let mut ws = __hx_ptr_load8(p, i)
+    let mut wcont = 1
+    while __hx_payload_ne(wcont, 0) {
+        let is_sp = __hx_payload_eq(ws, 32)
+        let is_tab = __hx_payload_eq(ws, 9)
+        let is_nl = __hx_payload_eq(ws, 10)
+        let a1 = __hx_payload_add(is_sp, is_tab)
+        let a2 = __hx_payload_add(a1, is_nl)
+        if __hx_payload_ne(a2, 0) {
+            i = __hx_payload_add(i, 1)
+            ws = __hx_ptr_load8(p, i)
+        } else {
+            wcont = 0
+        }
+    }
+    // sign: if(s[i]=='-'){sign=-1;i++;} else if(s[i]=='+')i++;
+    let cs = __hx_ptr_load8(p, i)
+    let mut neg = 0
+    if __hx_payload_eq(cs, 45) {                // '-'
+        neg = 1
+        i = __hx_payload_add(i, 1)
+    } else {
+        if __hx_payload_eq(cs, 43) {            // '+'
+            i = __hx_payload_add(i, 1)
+        }
+    }
+    // integer digits: while(s[i] in ['0'..'9']) n = n*10.0 + (double)(s[i]-'0');
+    // n carries the running double's BITS as an int-typed HexaVal (the f* intrinsics
+    // return the int-tagged payload word, like fmod/exp); seed +0.0 via i2f(0) (not a
+    // bare `0.0` float literal, which would type the binding f64 and break `return n`
+    // against the `-> int` signature — HX3004).
+    let mut n = __hx_payload_i2f(0)            // +0.0 (int-typed bits)
+    let mut icont = 1
+    while __hx_payload_ne(icont, 0) {
+        let c = __hx_ptr_load8(p, i)
+        let ge0 = __hx_payload_ge(c, 48)        // c>='0'
+        let le9 = __hx_payload_le(c, 57)        // c<='9'
+        let is09 = __hx_payload_and(ge0, le9)
+        if __hx_payload_eq(is09, 0) {
+            icont = 0                           // non-digit → stop
+        } else {
+            let d = __hx_payload_sub(c, 48)     // c-'0' (int)
+            let df = __hx_payload_i2f(d)        // (double)d
+            let n10 = __hx_payload_fmul(n, 10.0)
+            n = __hx_payload_fadd(n10, df)      // n = n*10 + d
+            i = __hx_payload_add(i, 1)
+        }
+    }
+    // fraction: if(s[i]=='.'){ i++; frac=0.1; while digit { n += d*frac; frac*=0.1; i++; } }
+    let dot = __hx_ptr_load8(p, i)
+    if __hx_payload_eq(dot, 46) {               // '.'
+        i = __hx_payload_add(i, 1)
+        // frac = 0.1 as int-typed bits: i2f(0)=+0.0 then fadd the 0.1 literal arg
+        // (bare float literal as an INTRINSIC ARG is fine — fmod's __hx_payload_fmul(0.0,x)
+        // precedent — only a float-literal *binding*/*return* trips HX3004).
+        let frac_z = __hx_payload_i2f(0)
+        let mut frac = __hx_payload_fadd(frac_z, 0.1)   // 0.0 + 0.1 = 0.1
+        let mut fcont = 1
+        while __hx_payload_ne(fcont, 0) {
+            let fc = __hx_ptr_load8(p, i)
+            let fge0 = __hx_payload_ge(fc, 48)
+            let fle9 = __hx_payload_le(fc, 57)
+            let fis09 = __hx_payload_and(fge0, fle9)
+            if __hx_payload_eq(fis09, 0) {
+                fcont = 0
+            } else {
+                let fd = __hx_payload_sub(fc, 48)
+                let fdf = __hx_payload_i2f(fd)
+                let contrib = __hx_payload_fmul(fdf, frac)
+                n = __hx_payload_fadd(n, contrib)   // n += d*frac
+                frac = __hx_payload_fmul(frac, 0.1) // frac *= 0.1
+                i = __hx_payload_add(i, 1)
+            }
+        }
+    }
+    // exponent: if(s[i]=='e'||s[i]=='E'){ esign; exp_val; mul=10^exp; n/=mul or n*=mul; }
+    let ec = __hx_ptr_load8(p, i)
+    let is_e = __hx_payload_eq(ec, 101)         // 'e'
+    let is_E = __hx_payload_eq(ec, 69)          // 'E'
+    let is_exp = __hx_payload_add(is_e, is_E)
+    if __hx_payload_ne(is_exp, 0) {
+        i = __hx_payload_add(i, 1)
+        let esc = __hx_ptr_load8(p, i)
+        let mut eneg = 0
+        if __hx_payload_eq(esc, 45) {           // '-'
+            eneg = 1
+            i = __hx_payload_add(i, 1)
+        } else {
+            if __hx_payload_eq(esc, 43) {       // '+'
+                i = __hx_payload_add(i, 1)
+            }
+        }
+        let mut exp_val = 0
+        let mut econt = 1
+        while __hx_payload_ne(econt, 0) {
+            let xc = __hx_ptr_load8(p, i)
+            let xge0 = __hx_payload_ge(xc, 48)
+            let xle9 = __hx_payload_le(xc, 57)
+            let xis09 = __hx_payload_and(xge0, xle9)
+            if __hx_payload_eq(xis09, 0) {
+                econt = 0
+            } else {
+                let xd = __hx_payload_sub(xc, 48)
+                let e10 = __hx_payload_mul(exp_val, 10)
+                exp_val = __hx_payload_add(e10, xd)  // exp_val = exp_val*10 + d
+                i = __hx_payload_add(i, 1)
+            }
+        }
+        // mul = 1.0; for(k=0;k<exp_val;k++) mul *= 10.0;
+        let mut mul = __hx_payload_i2f(1)        // 1.0 (int-typed bits)
+        let mut k = 0
+        while __hx_payload_lt(k, exp_val) {
+            mul = __hx_payload_fmul(mul, 10.0)
+            k = __hx_payload_add(k, 1)
+        }
+        if __hx_payload_ne(eneg, 0) {
+            n = __hx_payload_fdiv(n, mul)        // n /= mul
+        } else {
+            n = __hx_payload_fmul(n, mul)        // n *= mul
+        }
+    }
+    // return (sign < 0) ? -n : n;
+    // C unary `-n` on a double = flip the IEEE-754 sign bit (xor 0x8000000000000000),
+    // bit-exact vs a mulsd by -1.0 for every finite value AND for ±0.0 (atof("-0")
+    // → -0.0). The xor operates on the FLOAT-tagged payload word (the raw double
+    // bits); the SSE-ret branch ships that payload through xmm0 regardless of tag.
+    if __hx_payload_ne(neg, 0) {
+        // sign mask 0x8000000000000000 = 1<<63. Built via __hx_payload_shl (the codegen
+        // cannot materialize the 2^63 immediate directly — it exceeds the signed-i64
+        // `mov rXX, imm` range and emits a broken `-` operand; shl 1,63 is exact).
+        let signbit = __hx_payload_shl(1, 63)
+        let r = __hx_payload_xor(n, signbit)              // -n via sign-bit flip
+        return r
+    }
+    return n
+}
+
 // fp-ABI (xmm) RUNG 1 — the FIRST Route C symbol with SSE-class (`double`)
 // params + return, exercising the new SysV §3.2.3 SSE-class boundary lowering
 // (args xmm0/xmm1, return xmm0) added to compiler/codegen/x86_64_linux.hexa

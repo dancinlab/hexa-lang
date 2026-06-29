@@ -1654,6 +1654,55 @@ build_runtime_a_from_source() {
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FREE: HEXA_RT_NATIVE_FREE=1 IGNORED — fp-ABI xmm Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim free member" >&2
             fi
         fi
+        # ── RFC061 §M8 RT-NATIVE-ATOF (fp-ABI xmm Route C · MIXED-ABI leaf, default OFF) ──
+        # FIRST MIXED-ABI leaf to leave the shim: an INTEGER-class `const char*` param
+        # (rdi/GP) with an SSE-class `double` return (xmm0). Prior fp-ABI leaves were
+        # all-SSE (fmod/sin/cos/exp/log: double args + double ret); atof exercises the
+        # per-arg/per-return SSE classifier (_cabi_sse_arg(0)=false → string stays GP;
+        # _cabi_sse_ret=true → double in xmm0). aprime/hexa with HEXA_CABI_HXLCL=1
+        # Route-C-lowers stdlib/runtime/hxlcl_core.hexa to one .o; the whitelisted
+        # hxlcl_atof lands in it as a self-contained string→double parse (1:1 port of
+        # the frozen 0-libc floor #else body = musl atof=strtod(s,0) on the finite-
+        # decimal domain: ws+sign+int+.frac+eE; no syscall, no errno, no inner callee,
+        # no extern-data). `objcopy --keep-global-symbol=hxlcl_atof` ISOLATES the staged
+        # member so the whole-module routec.o's sibling C-ABI defs stay served by the
+        # shim and the ld -r multidef gate (S5) sees exactly one new strong def. The
+        # shim drops atof via -DHEXA_RT_NATIVE_ATOF (#ifndef in shim.c). DEFAULT (unset)
+        # adds NO -D and NO member → shim.o + archive byte-identical (release-integrity
+        # invariant). x86_64-linux ONLY (the fp-ABI xmm lowering is x86_64-backend-only;
+        # arm64 AAPCS64 v0-v7 fp-ABI is a later rung — _cabi_is_fp excludes it).
+        if [ "${HEXA_RT_NATIVE_ATOF:-0}" = "1" ]; then
+            if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
+                local _rnat_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
+                if [ -z "$_rnat_bin" ]; then
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF FATAL: HEXA_RT_NATIVE_ATOF=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
+                fi
+                local _rnat_drv="build/_rnat_drv.hexa"
+                local _rnat_s="build/hxlcl_atof_native.s"
+                local _rnat_full="build/hxlcl_atof_native_full.o"
+                local _rnat_o="build/hxlcl_atof_native.o"
+                printf 'fn _rnat_unused() {}\n' > "$_rnat_drv"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF: emitting native fp-ABI (xmm) hxlcl_atof .o via $_rnat_bin (HEXA_CABI_HXLCL=1, replacing libc-shim atof member)…"
+                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                    "$_rnat_bin" "$_rnat_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnat_s" stdlib/runtime/hxlcl_core.hexa \
+                    >"build/_rnat_atof.log" 2>&1 \
+                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF FATAL: atof Route C asm emit failed — see build/_rnat_atof.log" >&2; cat "build/_rnat_atof.log" >&2; return 1; }
+                [ -s "$_rnat_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF FATAL: empty $_rnat_s" >&2; return 1; }
+                $CC $_mo_archflag -c "$_rnat_s" -o "$_rnat_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF FATAL: assemble $_rnat_s failed" >&2; return 1; }
+                if command -v objcopy >/dev/null 2>&1; then
+                    objcopy --keep-global-symbol=hxlcl_atof "$_rnat_full" "$_rnat_o" \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF FATAL: objcopy isolate atof failed" >&2; return 1; }
+                else
+                    cp "$_rnat_full" "$_rnat_o"
+                fi
+                [ -f "$_rnat_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF FATAL: $_rnat_o not produced" >&2; return 1; }
+                _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_ATOF"
+                _mo_hxlcl_members="$_mo_hxlcl_members $_rnat_o"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF: hxlcl_atof → native fp-ABI .o (isolated); shim.o built with -DHEXA_RT_NATIVE_ATOF (atof dropped) — ld -r multidef gate validates"
+            else
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF: HEXA_RT_NATIVE_ATOF=1 IGNORED — fp-ABI xmm Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim atof member" >&2
+            fi
+        fi
         # ── RFC061 §M8 RT-NATIVE CORE FILE* family (fopen/fread/ftell/fseek · Route C
         #    whole-module emit · COUPLED leaves, default OFF) ──
         # FIRST COUPLED (non-pure) leaves to leave the shim (strstr/free/strtoll were
