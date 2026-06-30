@@ -196,6 +196,9 @@ typedef struct HexaIC {
 #define HX_MAKE_VOID()   ((HexaVal){.tag=TAG_VOID})
 #define HX_MAKE_STR(v)   ((HexaVal){.tag=TAG_STR, .s=(v)})
 #define HX_MAKE_ENUM(v)  ((HexaVal){.tag=TAG_ENUM, .s=(v)})
+/* Tag-only constructor for declare-then-populate values (descriptor/scalar field
+ * set afterward via HX_SET_*). Generalizes HX_MAKE_VOID to any tag. */
+#define HX_MAKE_TAG(t)   ((HexaVal){.tag=(t)})
 #endif
 
 /* Step 3 cycle 100 — pointer-eq inline builtins for hexa_eq TAG_VALSTRUCT
@@ -231,6 +234,16 @@ static inline HexaVal __map_ptr_eq(HexaVal a, HexaVal b) {
 #define HX_SET_CLO_PTR(v, p)   ((v).clo_ptr->fn_ptr = (p))
 #define HX_SET_CLO_ARITY(v, n) ((v).clo_ptr->arity = (n))
 #define HX_SET_CLO_ENV(v, p)   ((v).clo_ptr->env_box = (p))
+/* STRUCTURAL-1 Phase A: raw descriptor-POINTER read accessors (read siblings of
+ * the HX_SET_*_PTR writers above) — return the union pointer slot itself (no
+ * deref) for casting/null-check/compare. The flip decodes the NaN-boxed pointer
+ * here in one spot. */
+#ifndef HX_ARR_PTR
+#define HX_ARR_PTR(v)   ((v).arr_ptr)
+#define HX_MAP_PTR(v)   ((v).map_ptr)
+#define HX_FN_PTR_D(v)  ((v).fn_ptr_d)
+#define HX_CLO_PTR_D(v) ((v).clo_ptr)
+#endif
 
 HexaVal hexa_add_slow(HexaVal a, HexaVal b);          /* runtime.c:4731 (was static) */
 double  __hx_to_double(HexaVal v);                    /* runtime.c:1242 (was `static inline`) */

@@ -70,6 +70,14 @@ typedef struct HexaVal_ {
 #define HX_CLO_ARITY(v) ((v).clo_ptr->arity)
 #define HX_CLO_ENV(v)   ((v).clo_ptr->env_box)
 #define HX_VS(v)        ((v).vs)
+// ── STRUCTURAL-1 Phase A: raw descriptor-POINTER read accessors ──
+// Sibling of the HX_SET_*_PTR writers: return the union pointer slot itself
+// (no deref) for callers that cast it (e.g. (HexaArrI64*)HX_ARR_PTR(v)) or
+// null-check/compare it. The flip decodes the NaN-boxed pointer here in one spot.
+#define HX_ARR_PTR(v)   ((v).arr_ptr)
+#define HX_MAP_PTR(v)   ((v).map_ptr)
+#define HX_FN_PTR_D(v)  ((v).fn_ptr_d)
+#define HX_CLO_PTR_D(v) ((v).clo_ptr)
 
 // ── S1-D3a: compound-type SET macros (write accessors) — heap descriptor ──
 #define HX_SET_ARR_ITEMS(v, p) ((v).arr_ptr->items = (p))
@@ -126,5 +134,8 @@ typedef struct HexaVal_ {
 #define HX_MAKE_VOID()   ((HexaVal){.tag=TAG_VOID})
 #define HX_MAKE_STR(v)   ((HexaVal){.tag=TAG_STR, .s=(v)})
 #define HX_MAKE_ENUM(v)  ((HexaVal){.tag=TAG_ENUM, .s=(v)})
+// Tag-only constructor for declare-then-populate values (descriptor/scalar
+// field set afterward via HX_SET_*). Generalizes HX_MAKE_VOID to any tag.
+#define HX_MAKE_TAG(t)   ((HexaVal){.tag=(t)})
 
 #endif /* HEXA_RUNTIME_HEXAVAL_ABI_H */
