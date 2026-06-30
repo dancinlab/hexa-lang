@@ -4090,12 +4090,21 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
     // monomorphization candidate (the same single-surface attribute R1
     // already parses + the surface test exercises).
     let mut __is_specialize = false
+    // ING #29 literal-∅ (2026-06-30): `@naked` fn attribute — detect on the HIR
+    // FnDecl (same single-surface @<name> annotation mechanism as @gpu_kernel /
+    // @specialize). Propagated to MFunc.is_naked so the codegen SKIPS the
+    // compiler-generated prologue/epilogue (reference-match: GCC
+    // __attribute__((naked)) / rustc #[naked] / zig callconv(.Naked)). Building
+    // block for the SA_RESTORER (signal) + setjmp/longjmp walls. DEFAULT false
+    // on every existing fn → byte-eq NEUTRAL (no byteeq-path fn carries @naked).
+    let mut __is_naked = false
     let mut __ai = 0
     while __ai < len(it.annotations) {
         let __an = it.annotations[__ai].name
         if __an == "gpu_kernel" { __gpu_kind = GPU_KIND_KERNEL }
         if __an == "gpu_device" { __gpu_kind = GPU_KIND_DEVICE }
         if __an == "specialize" { __is_specialize = true }
+        if __an == "naked" { __is_naked = true }
         __ai = __ai + 1
     }
     // F6 P0c-2 — forced copy: it.name is the HItem's name handle
@@ -4134,7 +4143,8 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
         // #13 DWARF .loc — carry the fn-definition source line through to
         // codegen so it can emit a `.loc 1 <line> 0` directive.
         def_line: it.span.line,
-        gpu_kind: __gpu_kind
+        gpu_kind: __gpu_kind,
+        is_naked: __is_naked
     }
 }
 

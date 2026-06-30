@@ -117,6 +117,16 @@ pub let mut _arm64_static_slots: [string] = []
 // by the _STMT_RETURN path to route a SIMD-class variadic return into d0. Default false
 // (HEXA_VA_INTRINSICS unset → never set) → the va return branch is dead → byte-eq NEUTRAL.
 pub let mut _arm64_va_active: bool = false
+// ING #29 literal-∅ (2026-06-30): `@naked` fn attribute — set per-fn by
+// `_arm64_lower_func` from MFunc.is_naked. When true the prologue (stp x29,x30
+// / mov x29,sp / spill alloc) and BOTH epilogue emit sites are SKIPPED, leaving
+// the fn body as raw asm (the body must terminate itself). reference-match:
+// GCC __attribute__((naked)) / rustc #[naked] / zig callconv(.Naked). DEFAULT
+// false on every existing fn → byte-eq NEUTRAL. NOTE: rt_sigreturn trampoline
+// measurement is x86_64-only (arm64 kernel supplies the signal trampoline), so
+// this guard keeps arm64 codegen correct for a `@naked` fn but is not exercised
+// by the rt_sigreturn probe (x86_64 scope).
+pub let mut _arm64_is_naked: bool = false
 
 // True iff `s` begins with `pfx` (char-walk; no .substr — keeps stage0-portable).
 fn _arm64_str_starts_with(s: string, pfx: string) -> bool {
@@ -3838,6 +3848,9 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // region + va register-save block + try-jmp_buf region (all allocated in a
         // single prologue sub; see _arm64_lower_func). The va block (0 unless this is
         // a variadic fn under HEXA_VA_INTRINSICS=1) must be freed too so sp re-balances.
+        // ING #29 literal-∅: @naked fn — NO return-statement epilogue (the body
+        // is raw asm that terminates itself). DEFAULT false → unchanged on every fn.
+        if !_arm64_is_naked {
         let _va_blk_epi = _arm64_va_block_bytes(fname, opts.target_triple == "arm64-linux-gnu")
         let epilogue_total = spill_frame + rm.call_overflow_bytes + _va_blk_epi + try_buf_bytes
         if epilogue_total > 0 {
@@ -3846,6 +3859,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         buf.push(_arm64_instr3("ldp", _arm64_op_reg("x29"), _arm64_op_reg("x30"),
                          _arm64_op_label("[sp], #16"), "epilogue: restore fp/lr"))
         buf.push(_arm64_instr0("ret", "return"))
+        }
         return buf
     }
     if s.kind == _STMT_BR {
@@ -4125,6 +4139,9 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
     // Set for EVERY fn (true only for a whitelisted variadic under HEXA_VA_INTRINSICS=1);
     // default false → byte-eq NEUTRAL.
     _arm64_va_active = _arm64_is_variadic(fn_name)
+    // ING #29 literal-∅ (2026-06-30): @naked — propagate MFunc.is_naked to the
+    // per-fn global so the prologue/epilogue guards read it. Reset every fn.
+    _arm64_is_naked = mf.is_naked
     // Cycle h20 — reserve jmp_buf region above the spill area (now above the va block).
     // Each try gets one 192-byte slot (16-aligned by construction).
     let try_count = _arm64_count_try_setjmp(mf)
@@ -4132,6 +4149,13 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
     let total_frame = spill_frame + call_overflow_bytes + _va_block + try_buf_bytes
 
     // Prologue
+    // ING #29 literal-∅ (2026-06-30): @naked SKIPS prologue+epilogue (the body
+    // is raw asm; reference-match GCC __attribute__((naked)) / rustc #[naked]).
+    // arm64 scope: rt_sigreturn measurement is x86_64-only (arm64 kernel
+    // supplies the signal trampoline), so this guard keeps arm64 codegen
+    // correct for a @naked fn but is not exercised by the rt_sigreturn probe.
+    // DEFAULT false on every existing fn → byte-eq NEUTRAL.
+    if !_arm64_is_naked {
     instrs.push(_arm64_instr3(
         "stp",
         _arm64_op_reg("x29"),
@@ -4195,6 +4219,7 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
             _vf = _vf + 1
         }
     }
+    } // end `if !_arm64_is_naked` (prologue) — ING #29 @naked skips frame setup
 
     // Path A (A′): each 16B HexaVal param arrives in a register PAIR
     // (param0→x0:x1, param1→x2:x3, param2→x4:x5, param3→x6:x7); params
@@ -4313,6 +4338,9 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
     // #40 — fall-through epilogue also hands back a real TAG_VOID HexaVal
     // (x0:x1), matching the value-less STMT_RETURN path above; a function
     // reaching here without an explicit return yields void.
+    // ING #29 literal-∅: @naked fn — NO fall-through epilogue (the body is raw
+    // asm that must terminate itself). DEFAULT false → unchanged on every fn.
+    if !_arm64_is_naked {
     instrs.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
                         _arm64_op_label("#4"), "ret void: TAG_VOID"))
     instrs.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
@@ -4323,6 +4351,7 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
     instrs.push(_arm64_instr3("ldp", _arm64_op_reg("x29"), _arm64_op_reg("x30"),
                         _arm64_op_label("[sp], #16"), "epilogue: restore fp/lr"))
     instrs.push(_arm64_instr0("ret", "return"))
+    }
 
     return LFunc {
         name: fn_name,

@@ -1092,6 +1092,15 @@ pub let mut _x86_va_rsa_base: i64 = 0
 // rbp-relative byte offset of the 24-byte va_list struct (gp_offset @ +0, fp_offset
 // @ +4, overflow_arg_area @ +8, reg_save_area ptr @ +16).
 pub let mut _x86_va_list_base: i64 = 0
+// ING #29 literal-∅ (2026-06-30): `@naked` fn attribute — set per-fn by
+// `_x86_64_lower_func` from MFunc.is_naked. When true the prologue (push rbp /
+// mov rbp,rsp / callee-save / spill alloc) and BOTH epilogue emit sites (the
+// return-statement path + the fall-through safety epilogue) are SKIPPED, leaving
+// the fn body as raw asm (the body must terminate itself — e.g. a signal
+// trampoline ends in `syscall` which never returns). reference-match: GCC
+// __attribute__((naked)) / rustc #[naked] / zig callconv(.Naked). DEFAULT false
+// on every existing fn → byte-eq NEUTRAL (the guards are no-ops when false).
+pub let mut _x86_is_naked: bool = false
 
 // RFC061 Route C Wall 3-c — __hx_static_slot self-defined BSS accumulator.
 // Each distinct `slot_id` literal that a whitelisted Route C body addresses via
@@ -5228,7 +5237,12 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                 _x86_hv_box_arg(s.args[0], st, rm, "rax", "rdx", opts)
             }
         }
-        _x86_emit_epilogue(spill_frame)
+        // ING #29 literal-∅: @naked fn — NO compiler-generated epilogue (the body
+        // is raw asm; e.g. a signal trampoline ends in `syscall` which never
+        // returns). reference-match: GCC __attribute__((naked)).
+        if !_x86_is_naked {
+            _x86_emit_epilogue(spill_frame)
+        }
         return
     }
     if s.kind == _STMT_BR {
@@ -5363,6 +5377,10 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
     // _x86_va_rsa_base/_x86_va_list_base carry the layout to the va builtins. NON-variadic
     // (default) → va_block 0 → byte-eq NEUTRAL.
     _x86_va_active = _x86_is_variadic(mf.name)
+    // ING #29 literal-∅ (2026-06-30): `@naked` — propagate MFunc.is_naked to the
+    // per-fn global so the prologue/epilogue guards + the return-statement path
+    // read it. Reset every fn (same discipline as _x86_va_active above).
+    _x86_is_naked = mf.is_naked
     let mut _va_block = 0
     if _x86_va_active { _va_block = 208 }
     let spill_frame = alloc.frame_size + _va_block + _try_buf_bytes
@@ -5377,6 +5395,13 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
     }
 
     // Prologue
+    // ING #29 literal-∅ (2026-06-30): @naked SKIPS the entire prologue+epilogue
+    // (reference-match: GCC __attribute__((naked)) / rustc #[naked] — the body
+    // is raw asm with no compiler-generated frame setup/teardown). The naked
+    // body must terminate itself (a signal trampoline ends in `syscall` which
+    // never returns; a setjmp restorer emits its own `ret`). DEFAULT false on
+    // every existing fn → the guard is a no-op → byte-eq NEUTRAL.
+    if !_x86_is_naked {
     _x86_buf.push(_x86_instr1("push", _x86_op_reg("rbp"), "prologue: save rbp"))
     _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rbp"), _x86_op_reg("rsp"), "prologue: set rbp"))
     // PAIR-MODEL — preserve the callee-saved allocation pool (rbx/r12-r15) for
@@ -5432,6 +5457,7 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
             _vfi = _vfi + 1
         }
     }
+    } // end `if !_x86_is_naked` (prologue) — ING #29 @naked skips frame setup
 
     // PAIR-MODEL ingress — each HexaVal param arrives as a 16-byte SysV
     // register PAIR: param0 → rdi:rsi, param1 → rdx:rcx, param2 → r8:r9
@@ -5568,8 +5594,13 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
     // r15/r25 — fall-through (no explicit return reached): main → tag 0 (so a
     // top-level program exits 0, not stale rax), every other fn → TAG_VOID so
     // a void-returning fn's result reads type_of == "void".
-    _x86_emit_zero_ret_pair(mf.name == "main")
-    _x86_emit_epilogue(spill_frame)
+    // ING #29 literal-∅: @naked fn — NO fall-through epilogue either (the body
+    // is raw asm that must terminate itself; a stray zero-ret-pair + ret would
+    // corrupt the trampoline). DEFAULT false → unchanged on every existing fn.
+    if !_x86_is_naked {
+        _x86_emit_zero_ret_pair(mf.name == "main")
+        _x86_emit_epilogue(spill_frame)
+    }
 
     return LFunc {
         name: mf.name,
