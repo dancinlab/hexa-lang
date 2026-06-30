@@ -303,6 +303,23 @@ if [ -f "$rt" ] && ! grep -q 'HXFARR_CALLOC' "$rt"; then
   echo "[restore_frozen_seeds] FARR-NOOP-FREE: routed farr buffers to libc (calloc=$_hxf_c free=$_hxf_n) in $rt"
 fi
 
+# ── ZEROC-LIBM Box-Muller — route hexa_tensor_randn off libm sqrt/log/cos (post-restore) ─
+# @convergence(state="ossified", id="ZEROC-LIBM-BOXMULLER")
+# tensor_kernels.c is a FROZEN_SEED (restored above) with NO regen-from-emitter block (unlike
+# runtime.c at the awk synthesis above), so its single bare-libm line — the hexa_tensor_randn
+# float32 Box-Muller `(float)(sqrt(-2.0*log(u)) * cos(2pi*w))` — is routed here (post-restore,
+# same precedent as OP-17 / FARR-NOOP-FREE / gemm-perf) to the native _hx_sqrt / hxlcl_log
+# (-> rt_log) / _hx_cos. All three are in scope: tensor_kernels.c is #include'd into runtime.c
+# at :14158, AFTER the _hx_sqrt / _hx_cos definitions and the hxlcl_log forward-decl. Drops the
+# last libm cos/sqrt/log from the default ship (zero-c #29). The SSOT is ALSO updated in
+# self/native/tensor_kernels_emit.hexa (currently inert — no regen block — but kept in lockstep).
+# Idempotent: the _hx_cos marker guards against double-apply (and the sed is a no-op if absent).
+_tk="self/native/tensor_kernels.c"
+if [ -f "$_tk" ] && ! grep -q '_hx_cos(6.28318530718' "$_tk"; then
+  sed -i.hxbmbak 's|(float)(sqrt(-2\.0\*log(u)) \* cos(6\.28318530718\*w))|(float)(_hx_sqrt(-2.0*hxlcl_log(u)) * _hx_cos(6.28318530718*w))|' "$_tk" && rm -f "$_tk.hxbmbak"
+  echo "[restore_frozen_seeds] ZEROC-LIBM: routed hexa_tensor_randn Box-Muller off libm sqrt/log/cos in $_tk"
+fi
+
 # ── DEVRESIDENT adamw dirty_host coherence (frozen-train fix, post-restore) ───
 # Root cause: under CLM_PROD_DEVRESIDENT the host opt_adamw_step -> hexa_adamw_step
 # builtin mutates the param's HOST buffer P[i] in place but never raises

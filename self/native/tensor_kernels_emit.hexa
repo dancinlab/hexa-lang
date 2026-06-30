@@ -309,7 +309,7 @@ fn emit_tensor_kernels_c() -> str {
             "    for (int64_t i = 0; i < n; i++) {\n" +
             "        double u = (rand()+1.0)/(RAND_MAX+1.0);\n" +
             "        double w = (rand()+1.0)/(RAND_MAX+1.0);\n" +
-            "        t->data[i] = (float)(sqrt(-2.0*log(u)) * cos(6.28318530718*w));\n" +
+            "        t->data[i] = (float)(_hx_sqrt(-2.0*hxlcl_log(u)) * _hx_cos(6.28318530718*w));\n" +
             "    }\n" +
             "    return v;\n" +
             "}\n" +
