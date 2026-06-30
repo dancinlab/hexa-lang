@@ -1,113 +1,114 @@
-# tool/ — 빌드·셀프호스트·린트·로드맵 도구 (sub-CLAUDE)
+# tool/ — build · self-host · lint · roadmap tooling (sub-CLAUDE)
 
-> hexa-lang **거버넌스 SSOT 는 repo-root `../CLAUDE.md`** (이 파일은 그 하위 폴더 안내일 뿐,
-> 충돌 시 root 우선). 설계/모듈 SSOT 는 `../ARCHITECTURE.json`, 이력은 `../CHANGELOG.md` + git.
+> hexa-lang **governance SSOT is the repo-root `../CLAUDE.md`** (this file is just a guide to that
+> subfolder; on conflict root wins). Design/module SSOT is `../ARCHITECTURE.json`, history is `../CHANGELOG.md` + git.
 
-## 이 디렉터리는 무엇인가
+## What this directory is
 
-`tool/` = 컴파일러 본체(`../compiler` · `../self`)와 stdlib 을 둘러싼 **운영 도구 모음** — 릴리스
-빌드 스테이지, 셀프호스트(byteeq · zero-C) 게이트, Stage-0 린트, 로드맵 엔진, atlas 운영, GPU
-프로브/벤치를 한 곳에 모은다. 대부분 `.hexa`(proof-carrying · `hexa run tool/<x>.hexa` 로 실행),
-무거운 빌드 오케스트레이션은 `.sh`, 일회성 측정/덤프는 `.py`. 파일 수가 많아 아래는 **파일별이
-아니라 family 별** 안내다 — 정확한 인벤토리는 `ls tool/`, 각 스크립트 상단 주석이 사용법 SSOT.
+`tool/` = the **operational tooling collection** wrapped around the compiler proper (`../compiler` · `../self`)
+and stdlib — release build stages, self-host (byteeq · zero-C) gates, Stage-0 lint, the roadmap engine,
+atlas operations, GPU probe/bench all gathered in one place. Most are `.hexa` (proof-carrying · run via
+`hexa run tool/<x>.hexa`), heavy build orchestration is `.sh`, one-off measurement/dumps are `.py`. There
+are many files, so the guide below is **per-family, not per-file** — the exact inventory is `ls tool/`,
+and each script's top comment is the usage SSOT.
 
-## 파일 family
+## File families
 
-### 빌드 · 릴리스 스테이지
-- `stage_*` — release 파이프라인 단계 (`stage_prebuild_hexat` · `stage_regen_hexa_cc` ·
-  `stage_build_hexa` · `stage_resolve_runtime_a` · `stage_precompile_package`). frozen seed +
-  shallow-checkout 함정 주의 (`../CHANGELOG` history 참조).
-- `build_*` — 타깃별 빌드 드라이버 (`build_hexa_cli*` · `build_native*` · `build_precompile.hexa`
-  · `build_selfhost.sh` · `build_aprime.sh` · `build_hx*_linux.hexa` 가속 라이브러리). 무거운
-  빌드는 pool(aiden/summer/ghost)에서만 — mini 금지.
-- `cross_*` · `regen_*` — 크로스 타깃 emit + 런타임/codegen `.c`·`.o`·`.s` seed 재생성기.
-  `regen_*` 는 emitter SSOT 에서 생성물(`runtime_core.c` 등 gitignored)을 다시 빚는다 — stale
-  seed 충돌 시 여기서 재생성 (regen skip → alloc-seed multidef 사고 전례).
-- `release_*` · `restore_frozen_seeds` · `promote_selfhost.sh` — 패키징 · frozen seed 복원 ·
-  셀프호스트 default flip.
+### Build · release stages
+- `stage_*` — release pipeline stages (`stage_prebuild_hexat` · `stage_regen_hexa_cc` ·
+  `stage_build_hexa` · `stage_resolve_runtime_a` · `stage_precompile_package`). Beware the frozen seed +
+  shallow-checkout traps (see `../CHANGELOG` history).
+- `build_*` — per-target build drivers (`build_hexa_cli*` · `build_native*` · `build_precompile.hexa`
+  · `build_selfhost.sh` · `build_aprime.sh` · `build_hx*_linux.hexa` acceleration libs). Heavy builds
+  only on the pool (aiden/summer/ghost) — mini forbidden.
+- `cross_*` · `regen_*` — cross-target emit + runtime/codegen `.c`·`.o`·`.s` seed regenerators.
+  `regen_*` re-bakes generated artifacts (`runtime_core.c` etc., gitignored) from the emitter SSOT — on a
+  stale seed conflict, regenerate here (regen skip → alloc-seed multidef incident precedent).
+- `release_*` · `restore_frozen_seeds` · `promote_selfhost.sh` — packaging · frozen seed restore ·
+  self-host default flip.
 
-### 셀프호스트 게이트 (byteeq · zero-C)
+### Self-host gates (byteeq · zero-C)
 - `selfhost_*` — `gen3≡gen4` byteeq · parity · shim-integrity · crossemit smoke · codegen guard
-  게이트. `selfhost_gates_summary.sh` 가 묶음 요약, 3타깃 GREEN 이 stable 승격 전제.
-- `zeroc_*` — zero-C drop/flip 측정 · ztrace 계측 (`zeroc_flip_measure.sh` ·
-  `zeroc_drop_runtime_measure.sh` · `zeroc_exec_graduate.sh` 등). RFC061 사다리 측정 도구.
-- `fixpoint_*` · `miscompile_zero_gate.sh` · `musl_ctor_abi_gate.sh` — fixpoint 비교/사전점검 +
-  관련 무결성 게이트.
+  gates. `selfhost_gates_summary.sh` is the bundled summary; 3-target GREEN is the prerequisite for stable promotion.
+- `zeroc_*` — zero-C drop/flip measurement · ztrace instrumentation (`zeroc_flip_measure.sh` ·
+  `zeroc_drop_runtime_measure.sh` · `zeroc_exec_graduate.sh` etc.). RFC061 ladder measurement tools.
+- `fixpoint_*` · `miscompile_zero_gate.sh` · `musl_ctor_abi_gate.sh` — fixpoint comparison/pre-check +
+  related integrity gates.
 
-### Stage-0 린트 (`*_lint.hexa`)
-`hexa run tool/<name>_lint.hexa` 로 도는 proof-carrying 텍스트 스캐너. 대부분 `.githooks/pre-commit`
-에 배선 — 일부는 BLOCK(exit 1), 일부는 ADVISORY(warn-only). 새 린트 추가 시 폴리시(block vs warn)를
-주석 상단에 명시할 것.
-- 코드 규율: `bounded_loop_lint`(RFC-010 bounded-for/decreases-while) ·
-  `blocking_timeout_lint`(blocking I/O 에 `timeout` 강제) · `no_hardcode_lint`(magic path/URL/host ·
+### Stage-0 lint (`*_lint.hexa`)
+Proof-carrying text scanners run via `hexa run tool/<name>_lint.hexa`. Most are wired into
+`.githooks/pre-commit` — some BLOCK (exit 1), some are ADVISORY (warn-only). When adding a new lint, state
+its policy (block vs warn) in the comment at the top.
+- Code discipline: `bounded_loop_lint` (RFC-010 bounded-for/decreases-while) ·
+  `blocking_timeout_lint` (forces `timeout` on blocking I/O) · `no_hardcode_lint` (magic path/URL/host ·
   `.hardcode-baseline` grandfather) · `total_fn_lint` · `exec_eq_int_lint` ·
   `runaway_pattern_lint` · `resource_lint`.
-- 코드젠/셀프호스트: `codegen_tau4_lint`(τ=4 emit-slot 불변량) · `module_loader_collision_lint` ·
+- Codegen/self-host: `codegen_tau4_lint` (τ=4 emit-slot invariant) · `module_loader_collision_lint` ·
   `private_fn_collision_lint` · `parser_format_stability_lint`.
-- **`stdlib_guard_lint`** — Stage-0 ADVISORY(warn, 절대 block 안 함). 같은 함수 안에 empty/zero
-  가드 없이 **새로** 추가된 `arr[0]` 첫-원소 read / `/ divisor` 나눗셈을 잡아낸다 — PR
-  #3943..#3963 에서 고친 "malformed-input guard" 버그 클래스의 회귀 방지. 실행:
+- **`stdlib_guard_lint`** — Stage-0 ADVISORY (warn, never blocks). Catches **newly** added `arr[0]`
+  first-element reads / `/ divisor` divisions added without an empty/zero guard in the same function — regression
+  prevention for the "malformed-input guard" bug class fixed in PRs #3943..#3963. Run:
   `hexa run tool/stdlib_guard_lint.hexa --selftest | --mode=warn <files> | --changed`.
-  `.githooks/pre-commit` 에 ADVISORY 로 배선(경고만, 커밋 차단 안 함). 일회성 전수 census 는
-  `guard_class_census.py`(재실행 가능 · `state/` 는 gitignore 라 `tool/` 에 둠).
-- 위생/기타: `backup_file_lint`(working-tree backup 파일 금지) · `ext_lint`/`doc_lint`/`poc_lint` ·
+  Wired into `.githooks/pre-commit` as ADVISORY (warn only, does not block the commit). The one-off full census is
+  `guard_class_census.py` (re-runnable · kept in `tool/` since `state/` is gitignored).
+- Hygiene/misc: `backup_file_lint` (no working-tree backup files) · `ext_lint`/`doc_lint`/`poc_lint` ·
   `spawn_lint`/`precommit_spawn_lint`/`swarm_lint`/`telegram_lint`/`runaway_pattern` ·
-  `lb_state_lint` · `roadmap_lint`/`roadmap_schema_lint`(+ `test_roadmap_lint`).
+  `lb_state_lint` · `roadmap_lint`/`roadmap_schema_lint` (+ `test_roadmap_lint`).
 
-### 로드맵 엔진 (`roadmap_*`)
-DAG 기반 작업 로드맵 파서·스케줄러·관찰성 모듈군 (`roadmap_engine` · `roadmap_kahn` ·
-`roadmap_critical_path` · `roadmap_dispatch` · `roadmap_status_flip` · `roadmap_to_changelog` 등).
-`roadmap_cli.hexa` 가 진입점.
+### Roadmap engine (`roadmap_*`)
+DAG-based work-roadmap parser·scheduler·observability module group (`roadmap_engine` · `roadmap_kahn` ·
+`roadmap_critical_path` · `roadmap_dispatch` · `roadmap_status_flip` · `roadmap_to_changelog` etc.).
+`roadmap_cli.hexa` is the entry point.
 
-### atlas 운영 (`atlas_*`)
-사람층(`../ATLAS/`) ↔ 기계층(`../compiler/atlas/embedded.gen.hexa`) 운영 —
+### atlas operations (`atlas_*`)
+Human layer (`../ATLAS/`) ↔ machine layer (`../compiler/atlas/embedded.gen.hexa`) operations —
 `atlas_cli` · `atlas_verify` · `atlas_embed_gen` · `atlas_bulk_absorb` · `atlas_split_by_kind`.
-verdict atom fold 는 항상 `hexa verify` g5 PASS 경로로만.
+verdict atom fold goes only through the `hexa verify` g5 PASS path.
 
-### CLI · 진단 · 검증
-- `hx.hexa`/`hx_*` — `hx` 패키지매니저 보조 (drift/coverage/stage-health 스캐너).
+### CLI · diagnostics · verification
+- `hx.hexa`/`hx_*` — `hx` package-manager helpers (drift/coverage/stage-health scanners).
 - `verify_*` · `cross_prover.hexa` · `dod_gate.hexa` · `doctor.hexa` · `hexa_diag.hexa` —
-  검증 인증서 · DoD 게이트 · 진단.
+  verification certificates · DoD gate · diagnostics.
 - `hexa_ld.hexa` · `hexa_link.hexa` · `hexa_repl.hexa` · `hexa_init.hexa` · `compile.hexa` —
-  링커 · REPL · 프로젝트 init 등 CLI 보조 표면.
+  linker · REPL · project init and other CLI helper surfaces.
 
-### GPU · 벤치 · 프로브 (대부분 일회성 측정)
-- `probe_*_f64.hexa` · `*_probe.hexa` — 커널 정밀도/오라클 프로브 (libm trig · gemm · rope ·
-  softmax …). reference-match 측정용.
+### GPU · bench · probe (mostly one-off measurement)
+- `probe_*_f64.hexa` · `*_probe.hexa` — kernel precision/oracle probes (libm trig · gemm · rope ·
+  softmax …). For reference-match measurement.
 - `gpu_*` · `cuda_*` · `*_driver.cu` · `dispatch_*` · `fusion_*` · `decode_*` · `wgmma/` ·
-  `hexa-fusion/` — GPU 마이크로벤치 · cuBLAS 대조 · fused 커널 · 원격 dispatch 스크립트.
-- **`build_cuda_runtime`** — `cuda_available 0→1` CUDA 런타임 빌드 + `cuda_gemm_verify` verdict
-  + **자동 deploy** (`~/.hx/bin/build/runtime.a` 교체 + `~/.hexa-cache/` 초기화 → `hexa run` 즉시 GPU 경로). 실행:
-  `bash tool/build_cuda_runtime` (CUDA_HOME 자동감지: cuda-13.0 > cuda-12.9 > /usr/local/cuda symlink ·
-  nvcc ≥12.8 필요 · SM=120 기본). 환경변수 override: `CUDA_HOME=/usr/local/cuda-X.Y SM=120`(명시) ·
-  `DEPLOY_RT=""` (deploy skip). ✅ **구 결함 FIXED**: (1) 19× multi-def (#4213): restore_frozen_seeds
-  후 `_regen_runtime_core_for_cuda()` + reconcile_runtime_c_ssot_dups + RT-NATIVE Z2a로 해소.
-  convergence `CUDA-BUILD-CORES-EXPLICIT-LINK-MULTIDEF` SSOT. (2) CUDA_HOME default 자동감지 (#4216):
-  구 default `/usr/local/cuda-13.0` 부재 시 시스템 nvcc(CUDA 12.0, sm_80) fallback → RTX 5070
-  sm_120에서 GEMM all-zero. 이제 `/usr/local/cuda-12.9`(혹은 `/usr/local/cuda` symlink)를 자동탐지.
-  summer RTX5070 sm_120 CUDA12.9 측정 — d2048 FAST median 458.64 GFLOP/s · DET 454.14 GFLOP/s ·
+  `hexa-fusion/` — GPU microbench · cuBLAS comparison · fused kernels · remote dispatch scripts.
+- **`build_cuda_runtime`** — `cuda_available 0→1` CUDA runtime build + `cuda_gemm_verify` verdict
+  + **auto deploy** (swap `~/.hx/bin/build/runtime.a` + reset `~/.hexa-cache/` → `hexa run` immediately takes the GPU path). Run:
+  `bash tool/build_cuda_runtime` (CUDA_HOME auto-detect: cuda-13.0 > cuda-12.9 > /usr/local/cuda symlink ·
+  needs nvcc ≥12.8 · SM=120 default). Env overrides: `CUDA_HOME=/usr/local/cuda-X.Y SM=120` (explicit) ·
+  `DEPLOY_RT=""` (deploy skip). ✅ **old defects FIXED**: (1) 19× multi-def (#4213): resolved after
+  restore_frozen_seeds via `_regen_runtime_core_for_cuda()` + reconcile_runtime_c_ssot_dups + RT-NATIVE Z2a.
+  convergence `CUDA-BUILD-CORES-EXPLICIT-LINK-MULTIDEF` SSOT. (2) CUDA_HOME default auto-detect (#4216):
+  when the old default `/usr/local/cuda-13.0` is absent it fell back to system nvcc (CUDA 12.0, sm_80) → GEMM all-zero
+  on RTX 5070 sm_120. Now auto-detects `/usr/local/cuda-12.9` (or the `/usr/local/cuda` symlink).
+  summer RTX5070 sm_120 CUDA12.9 measurement — d2048 FAST median 458.64 GFLOP/s · DET 454.14 GFLOP/s ·
   FAST/DET=+0.99% (state/fast-vs-det-gemm-verdict.md). hexa vs PyTorch F64 2048^3: hexa 464.3 vs
   PyTorch 482.9 GFLOP/s → 96% parity (state/hexa-vs-pytorch-gemm-verdict.md). (3) EVP_* undef
-  (#4218): host compile 에서 `-DHEXA_HAS_OPENSSL` 제거 → deploy archive 의 `runtime_cuda_host.o`
-  가 EVP_* 미참조. 원인: `self/main.hexa` CUDA link path(~L1487)가 early-return 전에 -lssl 추가 안 함
-  (TODO: follow-up PR 로 self/main.hexa ~L1487 에 SSL probe 추가). convergence `CUDA-LINK-MISSING-SSL`.
-- `unshadow_*_bench.hexa` · `bench_*` · `train_floor_bench.hexa` — codegen/런타임 perf 벤치.
+  (#4218): removing `-DHEXA_HAS_OPENSSL` from the host compile → the deploy archive's `runtime_cuda_host.o`
+  no longer references EVP_*. Cause: `self/main.hexa` CUDA link path (~L1487) doesn't add -lssl before the early-return
+  (TODO: follow-up PR to add an SSL probe at self/main.hexa ~L1487). convergence `CUDA-LINK-MISSING-SSL`.
+- `unshadow_*_bench.hexa` · `bench_*` · `train_floor_bench.hexa` — codegen/runtime perf benches.
 
-### 서브폴더
-`bin/`(빌드 진입) · `wrappers/`(CLI 래퍼) · `hooks/` · `config/` · `docs/`(stdlib 모듈 레퍼런스
+### Subfolders
+`bin/` (build entry) · `wrappers/` (CLI wrappers) · `hooks/` · `config/` · `docs/` (stdlib module reference
 `.md`) · `bench/` · `jit/` · `pkg/` · `test/` · `clm/` · `training/` · `phi_extractor/` ·
-`*_selftest_fixtures/` · `transient_py/`(폐기 예정 일회성 py) · `r9_walls`/`r14_walls`/`r15_walls`
-(측정 wall 아티팩트).
+`*_selftest_fixtures/` · `transient_py/` (one-off py, slated for removal) · `r9_walls`/`r14_walls`/`r15_walls`
+(measurement wall artifacts).
 
-## 작업 규칙 (root 거버넌스 + 폴더 보강)
+## Work rules (root governance + folder reinforcement)
 
-- **빌드/regen/byteeq 는 pool(aiden·summer·ghost)에서만.** mini = git/gh/read only (heavy build
-  crash). akida 빌드 farm 금지.
-- **린트 추가/수정 시 폴리시 명시** — BLOCK 인지 ADVISORY(warn-only)인지 스크립트 상단 주석에
-  적고, `.githooks/pre-commit` 배선을 같은 변경에서 갱신. ADVISORY 린트는 절대 커밋을 막지 않는다
-  (`stdlib_guard_lint` 가 기준 예시).
-- **regen 생성물은 SSOT 아님** — `regen_*` 출력(`runtime_core.c`·`*.o`·`*.s`)은 emitter 에서
-  재생성되는 gitignored 산출물. 직접 손대지 말고 emitter + regen 스크립트로 빚는다.
-- **codegen/runtime/stage 변경은 byteeq-safe 확인 후 머지** — 3타깃 GREEN + 출하 smoke (root
-  [릴리스 무결성] 가드레일). docs-only 도구 변경은 게이트 무관.
-- 상세 history 는 `../CHANGELOG.md` + git (이 파일은 update-in-place CURRENT-STATE).
+- **Build/regen/byteeq on the pool (aiden·summer·ghost) only.** mini = git/gh/read only (heavy build
+  crashes). akida build farm forbidden.
+- **State the policy when adding/editing a lint** — write whether it's BLOCK or ADVISORY (warn-only) in the
+  comment at the top of the script, and update the `.githooks/pre-commit` wiring in the same change. ADVISORY
+  lints never block a commit (`stdlib_guard_lint` is the reference example).
+- **regen artifacts are not SSOT** — `regen_*` output (`runtime_core.c`·`*.o`·`*.s`) are gitignored
+  artifacts regenerated from the emitter. Don't touch them directly; bake them via the emitter + regen scripts.
+- **Merge codegen/runtime/stage changes only after a byteeq-safe check** — 3-target GREEN + ship smoke (root
+  [release integrity] guardrail). docs-only tooling changes are gate-exempt.
+- Detailed history is in `../CHANGELOG.md` + git (this file is update-in-place CURRENT-STATE).
