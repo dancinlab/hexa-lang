@@ -5,8 +5,11 @@ package manager. No LLVM anywhere: source is lowered through the compiler's own 
 objects (ELF64 / Mach-O arm64) and linked with `hexa_ld` — a byte-identical self-host fixpoint
 (`gen3 ≡ gen4`), default for `--emit`. Two C pieces still remain: a C-transpile fallback
 delegate for some full `hexa build`/`run` flows, and the ~5.5k-LOC C runtime substrate (the
-libc/syscall bootstrap floor, generated from `.hexa` emitters) — the floor RUNTIME-PORT is
-still shrinking (M3 open), an irreducible-bootstrap assessment, **not** a permanence policy.
+libc/syscall bootstrap floor, generated from `.hexa` emitters). The hand-tracked `self/*.c`
+floor is being driven to zero — its last direct member became an emitter SSOT (literal
+`ls self/*.c == ∅` reached **flip-free**, #4282); the emitted C content is a **fully
+reducible** RUNTIME-PORT target (M3 open) — **never an irreducible floor, never a permanence
+policy** (the old "irreducible-bootstrap" framing is retired: every wall is research-then-break).
 Every formula-bearing function must cite an atlas law (`@cite(L[id])`), carry an active
 `@verify`, or declare a `@grace` — otherwise the build refuses to emit a binary (stage S8,
 fatal `HX8004`). **Domain tracking is fully retired** (2026-06-20): the per-domain `*.md`
