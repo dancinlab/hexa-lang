@@ -1547,6 +1547,51 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 }
             }
         }
+        // ING #29 literal-∅ (2026-06-30): `__hx_fn_addr(name)` — raw-unboxed-fn-ptr
+        // intrinsic. The callee is the intrinsic name; the SINGLE arg MUST be a bare
+        // ident that is a top-level `fn` name (validated via _lr_fn_ref_arity ≥ 0, the
+        // SAME resolver fn_ref uses). Lower to op="__hx_fn_addr" args=[name_str] — the
+        // codegen STMT_CALL special-case emits the raw .text address (lea/adrp+add)
+        // WITHOUT the hexa_fn_new_native TAG_FN boxing that fn_ref performs. This is the
+        // lowering shape shared with carrier_call (bare-fn-ident name extraction). A
+        // non-fn-ident arg (local/global/string) falls through to normal call lowering,
+        // which will then fail to find a runtime `__hx_fn_addr` symbol → clear error
+        // rather than silent mis-emit. Runs BEFORE the named-call path so the bare fn
+        // ident isn't first boxed as a fn_ref value. ADD-only / byte-eq NEUTRAL.
+        if len(e.children) > 0 {
+            let fc0 = e.children[0]
+            if fc0.kind == "ident" {
+                let fcn = _strip_mut_prefix(fc0.text)
+                if fcn == "__hx_fn_addr"
+                    && _mir_lookup(ctx, fcn) < 0
+                    && _mir_lookup_global(ctx, fcn) < 0 {
+                    // Need exactly 1 arg: a bare fn-ident.
+                    if len(e.children) == 2 && e.children[1].kind == "ident" {
+                        let argn = _strip_mut_prefix(e.children[1].text)
+                        // Must be a known top-level fn (mirrors fn_ref's guard).
+                        if _lr_fn_ref_arity(argn) >= 0
+                            && _mir_lookup(ctx, argn) < 0
+                            && _mir_lookup_global(ctx, argn) < 0 {
+                            let mut fctx = ctx
+                            let mut fa_args: [Operand] = []
+                            fa_args.push(_const_str_op(argn))   // args[0] = fn symbol name
+                            fctx = _fresh_local(fctx, e.typ, "fnaddr_ret")
+                            let fdst = _lr_locals[len(_lr_locals) - 1]
+                            let fs = Stmt {
+                                kind: STMT_ASSIGN,
+                                dst: fdst,
+                                op: "__hx_fn_addr",
+                                args: fa_args,
+                                target_block: -1,
+                                target_block_else: -1
+                            }
+                            fctx = _push_stmt(fctx, fs)
+                            return _value(fctx, _local_op(fdst.id))
+                        }
+                    }
+                }
+            }
+        }
         let mut ctx_r = ctx
         let mut callee_text = ""
         let mut arg_ops: [Operand] = []

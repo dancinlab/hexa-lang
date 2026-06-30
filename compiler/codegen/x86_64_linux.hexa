@@ -4573,6 +4573,28 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                 return
             }
         }
+        // ING #29 literal-∅ (2026-06-30): `__hx_fn_addr(name)` — the raw-unboxed-fn-ptr
+        // sibling of `fn_ref`. hir_to_mir lowers `__hx_fn_addr(worker)` to
+        // op="__hx_fn_addr" args=[name_str]; THIS special-case emits ONLY the pc-relative
+        // address-of the .text symbol `name` via `lea rax, [rip+name]` (R_X86_64_PC32,
+        // the EXACT same relocation `fn_ref` uses at line ~3322 — that lea IS the raw fn
+        // address; `fn_ref` then wastes a `call hexa_fn_new_native` to box it as TAG_FN).
+        // Here we SKIP the boxing: rax holds the raw .text pointer, stored as a TAG_INT
+        // HexaVal (tag=0, payload=fn ptr). reference-match: C `&fn` / GCC `&&label` /
+        // rustc fn-ptr / zig `@intFromPtr(fn)` — every compiler emits a fn address as a
+        // raw pointer. Prerequisite building block for SA_RESTORER (signal) +
+        // setjmp/longjmp (naked-asm) walls, which need a raw fn ptr in a struct field the
+        // kernel jumps to directly. ADD-only / byte-eq NEUTRAL (empty on byteeq path).
+        if s.op == "__hx_fn_addr" && len(s.args) >= 1 {
+            if s.args[0].kind == "const_str" {
+                let fn_sym = s.args[0].str_val
+                _x86_buf.push(_x86_instr2("lea", _x86_op_reg("rax"),
+                                 _x86_op_label("[rip+" + fn_sym + "]"),
+                                 "__hx_fn_addr: rax = &" + fn_sym + " (raw .text fn ptr, pc-rel)"))
+                if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "rax", 0) }
+                return
+            }
+        }
         // ── RFC061 §M8 varargs-ABI (literal-∅ feature B, RUNG1) ─────────────────────
         // SysV AMD64 va_list intrinsics, integer class only. The prologue has already
         // spilled the 6 GP arg regs into the reg_save_area at [rbp+_x86_va_rsa_base] and
