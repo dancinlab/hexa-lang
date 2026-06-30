@@ -1073,7 +1073,14 @@ int    hxlcl_getrusage(int who, void *usage)          { return getrusage(who, (s
  * is the same owner-dedup discipline the gate already relies on for
  * _hexa_init_fn_shims (runtime.o=1T, sibling=U). DEFAULT single-TU build never
  * compiles this shim, so byteeq is unaffected. */
-#ifndef __APPLE__
+/* RFC061 §M8 ∅−8 re-baseline: x86_64-linux is EXCLUDED here — the re-baselined
+ * runtime.o now OWNS the native musl-layout hxlcl_setjmp/hxlcl_longjmp pair on
+ * x86_64 (self/runtime_emit_full.hexa / synthesized runtime.c
+ * `#if defined(__x86_64__)`), mirroring the darwin owner-dedup above (runtime.o
+ * owns _hxlcl_*; the shim excludes it to avoid a Case-B multidef). The shim
+ * keeps the libc-delegate wrapper ONLY for arm64-linux (and any other
+ * non-x86_64 non-Apple linux arch), where runtime.c still uses the macro form. */
+#if !defined(__APPLE__) && !defined(__x86_64__)
 int    hxlcl_setjmp(void *buf)                        { return setjmp(*(jmp_buf *)buf); }
 void   hxlcl_longjmp(void *buf, int val)              { longjmp(*(jmp_buf *)buf, val ? val : 1); }
 #endif
