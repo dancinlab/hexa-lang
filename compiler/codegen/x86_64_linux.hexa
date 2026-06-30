@@ -2310,6 +2310,15 @@ pub fn _is_cabi(fname: string) -> bool {
     // __errno_location, so no new whitelist entry beyond the two fns themselves.
     if fname == "hxlcl_time" { return true }
     if fname == "hxlcl_poll" { return true }
+    // ING#29 ∅−7 — hxlcl_signal (signal(3) → rt_sigaction · sa_restorer WIRED). NON-LEAF:
+    // heap-scratch k_sigaction struct via hxlcl_malloc + __hx_ptr_store64/load64
+    // (pipe/time precedent) + __hx_syscall6(rt_sigaction, sig, act, oldact, 8) + the close
+    // errno epilogue's already-whitelisted __errno_location. 2 HexaVal args (signum, handler
+    // raw-ptr) → single-register C-ABI (rdi/rsi); returns old handler raw ptr in rax. The
+    // x86_64 sa_restorer field is wired via __hx_fn_addr(_hx_rt_sigreturn_trampoline) — the
+    // @naked trampoline fn (mov rax,15 ; syscall) whose raw .text addr is stored at offset 16
+    // + SA_RESTORER flag set (reference-match glibc/musl). DEFAULT-OFF (HEXA_RT_NATIVE_SIGNAL).
+    if fname == "hxlcl_signal" { return true }
     // batch F search family — strchr / strstr. Pure byte-scan LEAVES (no syscall,
     // no float, no inner call, no errno): each walks the input with __hx_ptr_load8
     // ZERO-EXTENDED reads and returns a raw char* (the match position) or NULL(0)
