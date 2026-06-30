@@ -1563,7 +1563,6 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             if fc0.kind == "ident" {
                 let fcn = _strip_mut_prefix(fc0.text)
                 if fcn == "__hx_fn_addr"
-                    && _mir_lookup(ctx, fcn) < 0
                     && _mir_lookup_global(ctx, fcn) < 0 {
                     // Need exactly 1 arg: a bare fn-ident.
                     if len(e.children) == 2 && e.children[1].kind == "ident" {
