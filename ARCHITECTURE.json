@@ -178,6 +178,20 @@
         "value": "풀CLM step 80× 측정모순 RESOLVED: 75331ms(r1)=anomalous — non-builtin-aware/오염 hexat이 forge_dispatch_*를 hexa_call3 값-디스패치로 잘못 lowering→느린 CPU폴백 측정. 진짜=882ms(현행 main hexat·pool 호스트서 main 직접 빌드·GPU OWN-GEMM-FIRED DEVICE path·median-7 877~886·workflow 931ms와 동차). PyTorch 12.7ms 대비 ≈69×(4750×는 phantom). conv-fix #4227 효과 있음(이전 FALSIFIED는 bad-hexat 아티팩트).",
         "threshold": "재발조건: forge-using 벤치가 풀에서 비정상적으로 느리거나(75331ms류) hexa_call3/4 타입에러나면 = hexat이 builtin 미인지(stock/오염). 해결: pool 호스트(aiden/summer)에서 현행 main 을 직접 빌드(tool/release_build·./hexa install.hexa)한 hexat 으로 측정. test 롤링 채널은 폐기됨(2026-06-30) — HEXA_VERSION=test 경로 없음. stable 릴리스 컷 불요. per-op regen으로 builtin 박지 말 것(툴체인 오염=측정무효).",
         "source": "bench/vs_pytorch/bench_hexa_clm_step.hexa"
+      },
+      {
+        "id": "optim-lib-hexa-1",
+        "state": "ossified",
+        "value": "AdamW device seam(opt_adamw_step→forge_dispatch_adamw) r4 #4261 측정: full-CLM 172.94→159.64ms=7.7% win(summer sm_120·cuda=1·[OWN-GEMM-FIRED]·단일변수 A/B·#4258 173.35 재현). parity: max|dW|=1.11e-16(0.5-ULP FMA)·dm=0·dv=0 — 엄격 max|Δ|=0 아님(gelu/conv device-seam 머지 선례 동급 1-ULP FMA-class). 핵심학습: (1)hexa gpu 가 cuda_available=0 오보고(정적 바이너리 프로브)하지만 hexa run 은 배포 runtime.a 로 cuda=1 정상 → cuda 현행성은 hexa gpu 아닌 hexa run [OWN-GEMM-FIRED]/nsys 커널로 검증(build_cuda_runtime wall 진단). (2)AdamW device kernel 자체는 GPU kernel time 5.4%뿐 → 7.7% win은 host-scalar-loop→device 교체, memcpy/sync/alloc 대량은 잔여(r5 mempool+async+megakernel). (3)DEVRESIDENT int4 경로(anima 생산)는 코히런스 가드로 host 강제→이 PR benefit 없음(후속 device 재양자화 코히런스).",
+        "threshold": "재발조건: device seam 머지 시 'byte-exact by construction' 주장 vs 실측 max|Δ|. 확인: 실측 parity 찍기(주장 금지) — elementwise여도 device FMA/host mul+sub 차로 1-ULP FMA-class(1.11e-16) 날 수 있음(gelu/conv 선례). 머지 bar: 1-ULP FMA-class는 repo 기존 device-seam 동급·det/학습 무해(byteeq 게이트가 결정성 보장)이면 수용 OR 엄격 max|Δ|=0 요구 시 device-kernel FMA-align(runtime_cuda.c frozen-blob follow-on). cuda 현행성은 hexa gpu 미신뢰·hexa run [OWN-GEMM-FIRED]/nsys 커널로. cf convergence conv-lib-hexa-1(install-sh-1 cuda wall).",
+        "source": "stdlib/flame/optim_lib.hexa"
+      },
+      {
+        "id": "runtime-cuda-c-1",
+        "state": "ossified",
+        "value": "device-residency r5 host-dispatch 레버 측정완료(full-CLM #4261 baseline 159.64ms=PyTorch 12.6×): ①async stream(HEXA_CUDA_ASYNC=1)=9% win(159→143ms)·_forge_launch_check가 async-off서 매 런치 cudaDeviceSync(720회/7step=103/step)→async-on은 cudaGetLastError만=sync 30% 제거·run-to-run byte-identical(더 결정적). 단 loss 4.819(OFF) vs 4.799(ON) 차이=MoE scatter atomic 순서(fast-non-det 정석)·async-OFF/OFF 1-ULP hole(F-OP15 max|dW|=2.78e-17)→default-flip은 3타깃 byteeq CI 동반 후속 PR(머지 안 함·측정만). ②mempool(HEXA_CUDA_ALLOCCACHE)=win≈0(CLOSED-NEG): 이전 L2 'alloc setup-loop 밖' 가설 정정→진짜 원인=CUDA driver 자체 stream-ordered memory pool(CUDA 11.2+)이 이미 cudaMalloc 무료화→user-space free-list 중복. ③memcpy 46.6%+sync 28.7%=75%=host-dispatch 직렬천장 핵심·다음 레버=device-residency 중간 텐서 상주화(graph/megakernel parity-integrity 게이트). 핵심 부발견: 기존 bench 스크립트(run_3way/batch_sweep)가 HEXA_CUDA_ASYNC=0 강제→9% win masking. r6 랜딩: bench masking 교정(run_3way·batch_sweep HEXA_CUDA_ASYNC=0 제거→9% win 노출·batch_byteeq는 baseline pin 유지·RE-PINNABLE). opt-in 정상(HEXA_CUDA_ASYNC=1 또는 DEVRESIDENT 따름)·felt-default=sync·default-flip=후속(3타깃 byteeq+canonical-trajectory 결정).",
+        "threshold": "재발조건: host-dispatch 병목(cudart API host 시간 지배)에서 async/stream-pool/caching-allocator 레버 평가. 진단법: ⓐmempool/allocache win은 CUDA driver stream-ordered pool(11.2+)이 이미 cudaMalloc 무료화했는지 먼저 확인→user-space 중복이면 win≈0(불필요 머지 금지) ⓑasync stream win 측정 시 cudaDeviceSync 호출 횟수(103/step=per-launch sync)가 주원본인지 nsys로→launch_check의 sync 제거가 레버 ⓒbench 스크립트가 env=0 강제로 win masking하는지 감사. 해결: async-on 9% win+byte-identical이면 fast-path canonical 후보·단 default-flip은 3타깃 byteeq CI 동반(MoE atomic 순서로 loss 수치 다를 수 있음=fast-non-det 정석·det축과 별개). cf convergence optim-lib-hexa-1(cuda wall 진단).",
+        "source": "self/cuda/runtime_cuda.c"
       }
     ]
   },
