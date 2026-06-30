@@ -120,6 +120,13 @@ jobs:
           LIBS: ""
           GH_TOKEN: ${{ github.token }}
           HEXA_CCACHE: "1"
+          # FAITHFUL preserves the edge baseline byte-for-byte → opt OUT of the
+          # ship-default seed-convergence (release_build defaults it to 1). The
+          # convergence is a deterministic fixpoint, so release-converged ≡
+          # faithful-unconverged for every assertion below; this keeps the
+          # historical darwin-arm64 faithful path byte-identical (the stage
+          # comment's documented caveat).
+          HEXA_SEED_CONVERGE: "0"
         run: bash tool/release_build
 
       - name: ccache stats
@@ -271,6 +278,8 @@ jobs:
           LIBS: "-lm -ldl"
           GH_TOKEN: ${{ github.token }}
           HEXA_CCACHE: "1"
+          # FAITHFUL: opt OUT of ship-default seed-convergence (see darwin job).
+          HEXA_SEED_CONVERGE: "0"
         run: bash tool/release_build
 
       - name: ccache stats
@@ -359,6 +368,8 @@ jobs:
           LIBS: "-lm -ldl"
           GH_TOKEN: ${{ github.token }}
           HEXA_CCACHE: "1"
+          # FAITHFUL: opt OUT of ship-default seed-convergence (see darwin job).
+          HEXA_SEED_CONVERGE: "0"
         run: bash tool/release_build
 
       - name: ccache stats
