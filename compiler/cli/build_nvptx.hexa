@@ -443,7 +443,8 @@ fn _build_hand_mir_vec_add() -> MModule {
         entry_block: 0,
         arena_root: 1,
         def_line: 0,
-        gpu_kind: GPU_KIND_KERNEL
+        gpu_kind: GPU_KIND_KERNEL,
+        is_naked: false
     }
     let mut fns = []
     fns.push(mf)

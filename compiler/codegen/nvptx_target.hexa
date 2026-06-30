@@ -4727,7 +4727,8 @@ fn _nvptx_cse_apply(mfn: MFunc, flat: [i64]) -> MFunc {
         entry_block: mfn.entry_block,
         arena_root: mfn.arena_root,
         def_line: mfn.def_line,
-        gpu_kind: mfn.gpu_kind
+        gpu_kind: mfn.gpu_kind,
+        is_naked: mfn.is_naked
     }
 }
 
@@ -7572,7 +7573,8 @@ pub fn _nvptx_unroll_pass(mfn: MFunc, factor: i64) -> MFunc {
         entry_block: mfn.entry_block,
         arena_root: mfn.arena_root,
         def_line: mfn.def_line,
-        gpu_kind: mfn.gpu_kind
+        gpu_kind: mfn.gpu_kind,
+        is_naked: mfn.is_naked
     }
 }
 
