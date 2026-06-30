@@ -10499,7 +10499,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "HexaVal hexa_fma(HexaVal a, HexaVal b, HexaVal c) {\n"
     buf = buf + "    if (HX_IS_INT(a) && HX_IS_INT(b) && HX_IS_INT(c))\n"
     buf = buf + "        return hexa_int(HX_INT(a) * HX_INT(b) + HX_INT(c));\n"
-    buf = buf + "    return hexa_float(fma(__hx_to_double(a), __hx_to_double(b), __hx_to_double(c)));\n"
+    buf = buf + "    return hexa_float(__hx_to_double(a) * __hx_to_double(b) + __hx_to_double(c));  // zero-c #29: a*b+c (C-mirror = libm fma 0ulp; __builtin_fma would add a libm fma extern)\n"
     buf = buf + "}\n"
     buf = buf + "#else\n"
     buf = buf + "extern HexaVal rt_fma_int(HexaVal a, HexaVal b, HexaVal c);\n"
