@@ -199,6 +199,13 @@
         "value": "frozen-seed 재baseline(emitter runtime_emit_full.hexa 편집)을 '비가역 owner-go terminal 벽'으로 반복 오분류한 over-conservative 오류. VALIDATED #4272: setjmp/longjmp frozen-static RESTORE 벽을 reference-match(GCC stage2≡stage3 byte-compare·rustc stage0 cadence 재pin·frozen blob 폐기)로 실제 돌파→∅−8 머지. 확증: runtime.c는 tracked emitter awk합성이라 FROZEN_SEED_REF/151c52c8 재pin 불요·그냥 tracked-file 편집+byteeq 3타깃 reconverge(=GCC make compare)로 검증되는 정석 self-host 진화. 잔여 frozen-static 벽(atexit·varargs fprintf)도 동일 접근 droppable 후보.",
         "threshold": "frozen runtime emitter 변경으로 shim-static 심볼 native화시 '비가역이라 owner-go' punt 금지(반례=#4272 ∅−8 성공). 게이트=새 byteeq 3타깃 reconverge+clean-pipeline ship smoke(hexa build try/catch 포함·stage_prebuild_hexat가 hexat을 current source로 reconcile=GCC downstream-rebuild) GREEN 전 머지금지. reconverge diverge시만 STOP(진짜 miscompile).",
         "source": "self/runtime_emit_full.hexa"
+      },
+      {
+        "id": "runtime-core-hxlcl-shim-c-1",
+        "state": "ossified",
+        "value": "shim-member count != floor-reduction: literal-empty 목표는 FILE count=FLOOR(self runtime.c·byteeq clang 소비·출하) 감소. runtime_core_hxlcl_shim.c는 standalone-libc MEASUREMENT TU·여기 member 감소는 floor 안줄임(time afad8e5d 실증: floor body inert stub@runtime_emit_full.hexa:2679·flag는 측정 shim만 swap·byteeq는 runtime.a 안소비=구조적 no-op). 대부분 shim flip=svc-remainder floor-reduction-0 벽(time/getrusage/signal). setjmp #4272만 진짜 floor 전진=FLOOR emitter runtime_emit_full.hexa re-baseline해 byteeq가 실제 소비·reconverge 의미有.",
+        "threshold": "shim member 드롭을 literal-empty(ls self c-files) 전진으로 카운트 전: floor-reduction>0 확인(FLOOR runtime_emit_full.hexa body가 native화되어 byteeq 소비분 이동하는가). measurement-shim flip(byteeq 구조적 no-op·floor inert stub 유지)이면 svc-remainder 벽 분류·카운트 금지. 진짜 전진=frozen-floor re-baseline(setjmp式).",
+        "source": "self/runtime_core_hxlcl_shim.c"
       }
     ]
   },
