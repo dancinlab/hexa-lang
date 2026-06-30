@@ -244,7 +244,7 @@ static cudaStream_t _forge_stream(void) {
     if (!_forge_async_on()) return 0;
     if (g_forge_stream == 0) {
         cudaStream_t st = 0;
-        cudaError_t er = cudaStreamCreateWithFlags(&st, cudaStreamNonBlocking);
+        cudaError_t er = cudaStreamCreateWithFlags(&st, cudaStreamDefault);
         if (er != cudaSuccess || st == 0) {
             fprintf(stderr, "[cuda] forge stream create failed: %s\n",
                     cudaGetErrorString(er));

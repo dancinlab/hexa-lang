@@ -268,7 +268,7 @@ fn emit_runtime_cuda_c() -> str {
             "    if (!_forge_async_on()) return 0;\n" +
             "    if (g_forge_stream == 0) {\n" +
             "        cudaStream_t st = 0;\n" +
-            "        cudaError_t er = cudaStreamCreateWithFlags(&st, cudaStreamNonBlocking);\n" +
+            "        cudaError_t er = cudaStreamCreateWithFlags(&st, cudaStreamDefault);\n" +
             "        if (er != cudaSuccess || st == 0) {\n" +
             "            fprintf(stderr, \"[cuda] forge stream create failed: %s\\n\",\n" +
             "                    cudaGetErrorString(er));\n" +
