@@ -13844,6 +13844,13 @@ fn codegen_full(ast) {
     // edit swapping the call site back to bare `setjmp` re-opens the defect.
     out_parts.push("#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)\n")
     out_parts.push("int hxlcl_setjmp(void *buf) __asm__(\"_hxlcl_setjmp\");\n")
+    out_parts.push("#elif defined(__x86_64__)\n")
+    out_parts.push("// RFC061 §M8 ∅−8: x86_64-linux uses the NATIVE musl hxlcl_setjmp (real\n")
+    out_parts.push("// global in runtime.o), matching the native musl hxlcl_longjmp the re-\n")
+    out_parts.push("// baselined runtime.c provides. NOT the `setjmp` macro below — a glibc\n")
+    out_parts.push("// setjmp SAVE paired with the musl-layout longjmp RESTORE is the M3\n")
+    out_parts.push("// layout-mismatch SEGV. Mirrors the darwin real-fn decl above.\n")
+    out_parts.push("int hxlcl_setjmp(void *buf) __attribute__((returns_twice));\n")
     out_parts.push("#elif !defined(hxlcl_setjmp)\n")
     out_parts.push("#define hxlcl_setjmp(buf) setjmp(*(jmp_buf *)(buf))\n")
     out_parts.push("#endif\n\n")

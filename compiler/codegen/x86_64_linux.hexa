@@ -5314,15 +5314,24 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
     }
     if s.kind == "try_setjmp" {
         // jmp_buf slot at [rsp + slot*256] (bottom of frame). lea &jbuf →
-        // rdi, call libc setjmp; on nonzero return (longjmp-resumed) jump
-        // to catch (target_block_else); on first call (0) push jbuf onto the
-        // runtime try-stack then jump into the try body (target_block).
+        // rdi, call native musl hxlcl_setjmp; on nonzero return (longjmp-
+        // resumed) jump to catch (target_block_else); on first call (0) push
+        // jbuf onto the runtime try-stack then jump into the try body.
+        // RFC061 §M8 re-baseline (ING#29 ∅−8): the linux-x86_64 try-block SAVE
+        // now calls the hexa-native musl-layout `hxlcl_setjmp` (64-B jmp_buf:
+        // [0]=rbx [8]=rbp [16]=r12 [24]=r13 [32]=r14 [40]=r15 [48]=rsp [56]=rip,
+        // no glibc PTR_MANGLE), byte-id to musl src/setjmp/x86_64/setjmp.S. It
+        // is PAIRED with the native musl `hxlcl_longjmp` RESTORE baked into the
+        // re-baselined frozen runtime (self/runtime.c, x86_64 branch). Both
+        // halves are musl-layout-consistent — replaces the prior glibc `call
+        // setjmp` + glibc-longjmp pair (gen3≡gen4 reconverged 3-target). The
+        // 256-B slot is kept (musl writes 64 B; the extra is unused headroom).
         let _off = try_slot_idx * 256
         _x86_buf.push(_x86_instr2("lea", _x86_op_reg("rdi"),
                          _x86_op_mem("rsp", _off),
                          "try_setjmp: &jbuf[" + to_string(try_slot_idx) + "]"))
-        _x86_buf.push(_x86_instr1("call", _x86_op_label("setjmp"),
-                         "try_setjmp: call libc setjmp (hxlcl_setjmp is a macro on x86_64)"))
+        _x86_buf.push(_x86_instr1("call", _x86_op_label("hxlcl_setjmp"),
+                         "try_setjmp: call native musl hxlcl_setjmp (64-B jmp_buf)"))
         _x86_buf.push(_x86_instr2("test", _x86_op_reg("eax"), _x86_op_reg("eax"),
                          "try_setjmp: setjmp rc"))
         let _catch_lab = _x86_64_block_label(modhash, fname, s.target_block_else)
