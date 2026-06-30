@@ -95,6 +95,12 @@ jobs:
         run: |
           set -euo pipefail
           ./hexa --version
+          # #4214 forge-det builtin compile-smoke — set_deterministic/is_deterministic
+          # MUST compile on the from-source hexa (latent-regression guard for the FFI/
+          # C-ABI name collision that made the canonical determinism surface uncompilable
+          # with no test exercising it). Verifies compilation+run, not det values
+          # (set_deterministic is a no-op on this non-CUDA CI build).
+          ./hexa run test/native_build/forge_det_builtin_smoke.hexa
 
       # ── Gate invocation ──────────────────────────────────────────────────
       # Same root cause as miscompile-zero-gate / determinism-gate: the released

@@ -1766,6 +1766,8 @@ HexaVal hexa_farr_matmul_gpu(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
  * external so the committed codegen's fallback path resolves cleanly. */
 extern HexaVal cuda_available;                                         /* runtime.c — RFC 040 fn carrier */
 extern HexaVal cuda_device_count;                                      /* runtime.c — RFC 040 fn carrier */
+extern HexaVal set_deterministic;                                      /* runtime.c — #4214 forge-det carrier (mirror cuda_available) */
+extern HexaVal is_deterministic;                                       /* runtime.c — #4214 forge-det carrier (mirror cuda_available) */
 extern HexaVal farr_to_device;                                         /* runtime.c — RFC 040 fn carrier */
 extern HexaVal farr_to_host;                                           /* runtime.c — RFC 040 fn carrier */
 extern HexaVal farr_pin;                                               /* runtime.c — RFC 040 fn carrier */
