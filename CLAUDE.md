@@ -5,8 +5,11 @@ package manager. No LLVM anywhere: source is lowered through the compiler's own 
 objects (ELF64 / Mach-O arm64) and linked with `hexa_ld` — a byte-identical self-host fixpoint
 (`gen3 ≡ gen4`), default for `--emit`. Two C pieces still remain: a C-transpile fallback
 delegate for some full `hexa build`/`run` flows, and the ~5.5k-LOC C runtime substrate (the
-libc/syscall bootstrap floor, generated from `.hexa` emitters) — the floor RUNTIME-PORT is
-still shrinking (M3 open), an irreducible-bootstrap assessment, **not** a permanence policy.
+libc/syscall bootstrap floor, generated from `.hexa` emitters). The hand-tracked `self/*.c`
+floor is being driven to zero — its last direct member became an emitter SSOT (literal
+`ls self/*.c == ∅` reached **flip-free**, #4282); the emitted C content is a **fully
+reducible** RUNTIME-PORT target (M3 open) — **never an irreducible floor, never a permanence
+policy** (the old "irreducible-bootstrap" framing is retired: every wall is research-then-break).
 Every formula-bearing function must cite an atlas law (`@cite(L[id])`), carry an active
 `@verify`, or declare a `@grace` — otherwise the build refuses to emit a binary (stage S8,
 fatal `HX8004`). **Domain tracking is fully retired** (2026-06-20): the per-domain `*.md`
@@ -220,15 +223,18 @@ git submodule update --init --recursive          # activate (hooks no-op until p
   `ABI0` — 모든 주요 컴파일러의 정석. **한 codegen 기능이 전 `hxlcl_*` 심볼 × 3 타깃을 일괄
   cross-target dissolve** (default-OFF whitelist · byteeq-neutral · DEFAULT shim.o sha 불변).
   SSOT: 메모리 `project_hexa_rfc061_hxlcl_crosstarget_abi_wall`.
-- 상태(RFC061 #29 Route C 캠페인 · 측정종착): syscall/2nd-return-reg/named-data/environ/FILE*/
-  file-local-static family + ELF cross-target member-swap mem/str pure-leaf 10/10(strlen·memcpy·
-  memset·memcmp·strcmp·strncmp·strcpy·strncpy·strcat·strchr) + pipe/fork/getenv/setenv/popen +
-  signal(sa_restorer WIRED via @naked trampoline + __hx_fn_addr · ING#29 ∅−7) 등
-  dissolve(전부 default-OFF·byteeq-neutral·admin-merge). 잔여 = 측정벽 1개뿐 — varargs-ABI
-  (`hxlcl_fprintf` · va_list 가 frozen runtime.c 거주 → frozen blob 편집 불가 = release-integrity
-  하드라인 🧱) · svc-remainder(getrusage/time = frozen floor inert stub이라 native-emit 해도
-  floor-reduction 0 = investment-poor 🧱). reopen 조건: hexa IR opaque va_list 추상 OR frozen
-  re-baseline OR floor-meaningful syscall leaf 출현.
+- 상태(RFC061 #29 Route C 캠페인 · **진행중 · literal `ls self/*.c == ∅` flip-free 도달 #4282**):
+  syscall/2nd-return-reg/named-data/environ/FILE*/file-local-static family + ELF cross-target
+  member-swap mem/str pure-leaf 10/10(strlen·memcpy·memset·memcmp·strcmp·strncmp·strcpy·strncpy·
+  strcat·strchr) + pipe/fork/getenv/setenv/popen + signal(sa_restorer WIRED via @naked trampoline
+  + __hx_fn_addr · ∅−7) + setjmp/longjmp(frozen-RESTORE re-baseline · ∅−8 #4272) +
+  hxlcl_shim→에미터 SSOT(literal ∅ #4282) 등 dissolve(전부 default-OFF·byteeq-neutral·admin-merge).
+  **현 frontier(종착 아님 · 전부 환원 대상)**: varargs-ABI(`hxlcl_fprintf`·va_list) · svc-remainder
+  (getrusage/time) · emitted C content(runtime.c 등 .hexa 에미터 생성물) · recursive `self/**/*.c`
+  (`self/native/timegm_native.c` · `self/cuda/*.c` GPU-FFI) · functional libc floor. **"frozen 편집
+  불가 🧱"·"측정종착"·"irreducible" framing 폐기** — frozen re-baseline은 #4272가 보인 정석
+  tracked-emitter 편집(awk 합성·byteeq 3타깃 reconverge = GCC make compare)이지 owner-go-영구벽이
+  아니고, 모든 벽은 정답지 research-then-break(setjmp #4272·libm·shim #4282 실증).
 - dont: 심볼당·타깃당 **hand-assembled machine-byte 배열**로 cross-target 확장 금지
   (non-canonical · O(symbols×targets) 노동 · 유지보수 폭발 — `test/native_build/emit_hxlcl_*_o.hexa`
   darwin Mach-O 손-assemble 은 codegen C-ABI 모드 부재 시의 임시 우회였고 Route C 로 승계).
