@@ -1,0 +1,50 @@
+// test/runtime/trig_accuracy_smoke.hexa — accuracy smoke for stdlib/runtime/math.hexa
+//   rt_cos / rt_sin (musl __cos/__sin minimax + Cody-Waite range reduction · zero-c #29).
+//
+// Reference values from libm/SciPy (full double). Covers small angles, π multiples,
+// AND large RoPE-range angles (the crude 8-term Taylor + naive reduction failed here):
+//   cos(0)=1  cos(1)=0.5403023058681398  cos(3.141592653589793)=-1
+//   cos(1000)=0.5623790762907029  sin(1)=0.8414709848078965  sin(1.5707963267948966)=1
+//   sin(1000)=0.8268795405320025  cos(-1)=0.5403023058681398(even)  sin(-1)=-0.8414709848078965(odd)
+//   sin(10000)=-0.30561438888825215  cos(10000)=-0.9521553682590148
+// Tolerance ~1e-12 (minimax+Cody-Waite is ~1e-15; rt_exp-free path, no extra error).
+//
+// Run:  hexa run test/runtime/trig_accuracy_smoke.hexa
+// Sentinel: __TRIG_SMOKE__ PASS|FAIL on the final line.
+
+import "stdlib/runtime/math.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn chk(label: string, got: float, want: float) {
+    let d = got - want
+    let ad = if d < 0.0 { 0.0 - d } else { d }
+    if ad <= 1.0e-12 {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label + " got=" + to_string(got) + " want=" + to_string(want))
+    }
+}
+
+chk("cos(0)",       rt_cos(0.0),    1.0)
+chk("cos(1)",       rt_cos(1.0),    0.5403023058681398)
+chk("cos(pi)",      rt_cos(3.141592653589793), -1.0)
+chk("cos(1000)",    rt_cos(1000.0), 0.5623790762907029)
+chk("cos(10000)",   rt_cos(10000.0), -0.9521553682590148)
+chk("cos(-1)even",  rt_cos(-1.0),   0.5403023058681398)
+chk("sin(0)",       rt_sin(0.0),    0.0)
+chk("sin(1)",       rt_sin(1.0),    0.8414709848078965)
+chk("sin(pi/2)",    rt_sin(1.5707963267948966), 1.0)
+chk("sin(1000)",    rt_sin(1000.0), 0.8268795405320025)
+chk("sin(10000)",   rt_sin(10000.0), -0.30561438888825215)
+chk("sin(-1)odd",   rt_sin(-1.0),   -0.8414709848078965)
+
+println("trig_accuracy_smoke: PASS=" + to_string(PASS) + " FAIL=" + to_string(FAIL))
+if FAIL == 0 {
+    println("__TRIG_SMOKE__ PASS")
+} else {
+    println("__TRIG_SMOKE__ FAIL")
+}
