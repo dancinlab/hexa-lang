@@ -197,7 +197,7 @@
         "id": "runtime-emit-full-hexa-1",
         "state": "ossified",
         "value": "frozen-seed 재baseline(emitter runtime_emit_full.hexa 편집)을 '비가역 owner-go terminal 벽'으로 반복 오분류한 over-conservative 오류. VALIDATED #4272: setjmp/longjmp frozen-static RESTORE 벽을 reference-match(GCC stage2≡stage3 byte-compare·rustc stage0 cadence 재pin·frozen blob 폐기)로 실제 돌파→∅−8 머지. 확증: runtime.c는 tracked emitter awk합성이라 FROZEN_SEED_REF/151c52c8 재pin 불요·그냥 tracked-file 편집+byteeq 3타깃 reconverge(=GCC make compare)로 검증되는 정석 self-host 진화. 잔여 frozen-static 벽(atexit·varargs fprintf)도 동일 접근 droppable 후보.",
-        "threshold": "frozen runtime emitter 변경으로 shim-static 심볼 native화시 '비가역이라 owner-go' punt 금지(반례=#4272 ∅−8 성공). 게이트=새 byteeq 3타깃 reconverge+clean-pipeline ship smoke(hexa build try/catch 포함·stage_prebuild_hexat가 hexat을 current source로 reconcile=GCC downstream-rebuild) GREEN 전 머지금지. reconverge diverge시만 STOP(진짜 miscompile).",
+        "threshold": "frozen runtime emitter 변경으로 shim-static 심볼 native화시 '비가역이라 owner-go' punt 금지(반례=#4272 ∅−8 성공). 게이트=새 byteeq 3타깃 reconverge+clean-pipeline ship smoke GREEN 전 머지금지. reconverge diverge시만 STOP(진짜 miscompile). ★ORDERING(PR#4280 FALSIFIED 실증): install.sh runtime-compile 게이트(clang-18)는 frozen bootstrap seed restore 후 新regen runtime.c 컴파일 → FLOOR runtime.c body가 참조하는 HX_* 매크로(HX_MAKE_STR 등 #4277/#4278 신규)는 runtime_core.c 인라인 정의와 독립 seed-lifecycle이라 '미정의 함수' 컴파일 실패. 따라서 FLOOR raw 생성자를 HX_* 매크로로 drain하려면 frozen-seed가 그 매크로를 먼저 담아야 함(seed re-baseline THEN emitter 참조 · pool 빌드). 로컬 regen runtime.c는 #include 2201로 scope 있어 보여도 frozen-seed 경로는 다름 — 로컬 컴파일로 byteeq-neutral 단정 금지, install.sh clang-18 게이트가 canary.",
         "source": "self/runtime_emit_full.hexa"
       },
       {
