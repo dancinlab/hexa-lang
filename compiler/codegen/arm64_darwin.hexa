@@ -2283,6 +2283,32 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
             return buf
         }
+        // ING #29 literal-∅ (2026-06-30): `__hx_fn_addr(name)` — the arm64 raw-unboxed-fn-ptr
+        // sibling of `fn_ref`. hir_to_mir lowers `__hx_fn_addr(worker)` to STMT_ASSIGN
+        // op="__hx_fn_addr" args=[name_str] (the SAME stmt kind as fn_ref). THIS special-
+        // case emits ONLY the PC-relative address-of via `adrp x1, name@PAGE` + `add x1,
+        // x1, name@PAGEOFF` (the EXACT relocation pair `fn_ref` uses above) and SKIPS the
+        // `bl hexa_fn_new_native` boxing call. x1 = raw .text pointer, x0 = TAG_INT (0).
+        // reference-match: C `&fn` / rustc fn-ptr / zig `@intFromPtr(fn)`. NOTE: this
+        // handler lives in the _STMT_ASSIGN block (NOT _STMT_CALL) because hir_to_mir
+        // emits it as STMT_ASSIGN — a prior copy in _STMT_CALL was unreachable (silent
+        // mis-emit root cause). ADD-only / byte-eq NEUTRAL.
+        if s.op == "__hx_fn_addr" && len(s.args) >= 1 {
+            if s.args[0].kind == "const_str" {
+                let fn_sym = s.args[0].str_val
+                buf.push(_arm64_instr2("adrp", _arm64_op_reg("x1"),
+                                 _arm64_op_label(fn_sym + "@PAGE"),
+                                 "__hx_fn_addr: &" + fn_sym + " page (raw .text fn ptr)"))
+                buf.push(_arm64_instr3("add", _arm64_op_reg("x1"),
+                                 _arm64_op_reg("x1"),
+                                 _arm64_op_label(fn_sym + "@PAGEOFF"),
+                                 "__hx_fn_addr: x1 = &" + fn_sym + " (raw .text fn ptr)"))
+                buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                                 _arm64_op_label("#0"), "__hx_fn_addr: TAG_INT"))
+                if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+                return buf
+            }
+        }
         // carrier call: invoke a runtime TAG_FN/TAG_CLOSURE carrier DATA global
         // (thread_spawn, …). hir_to_mir lowers `thread_spawn(worker, 1)` to
         // STMT_ASSIGN op="carrier_call" args=[carrier_name_str, a1, …]. ABI:
@@ -3146,33 +3172,10 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 return buf
             }
         }
-        // ING #29 literal-∅ (2026-06-30): `__hx_fn_addr(name)` — the arm64 raw-unboxed-
-        // fn-ptr sibling of `fn_ref`. hir_to_mir lowers `__hx_fn_addr(worker)` to
-        // op="__hx_fn_addr" args=[name_str]; THIS special-case emits ONLY the PC-relative
-        // address-of the .text symbol `name` via `adrp x1, name@PAGE` + `add x1, x1,
-        // name@PAGEOFF` (the EXACT relocation pair `fn_ref` uses at line ~2260 — that
-        // adrp+add IS the raw fn address; `fn_ref` then wastes a `bl hexa_fn_new_native`
-        // to box it as TAG_FN). Here we SKIP the boxing: x1 holds the raw .text pointer,
-        // x0 = TAG_INT (0). reference-match: C `&fn` / rustc fn-ptr / zig `@intFromPtr`.
-        // The symbol is mangled by _fmt_label (adds `_` on darwin, bare on ELF) — same
-        // spelling discipline as fn_ref's fn_sym. Prerequisite building block for
-        // SA_RESTORER (signal) + setjmp/longjmp (naked-asm). ADD-only / byte-eq NEUTRAL.
-        if s.op == "__hx_fn_addr" && len(s.args) >= 1 {
-            if s.args[0].kind == "const_str" {
-                let fn_sym = s.args[0].str_val
-                buf.push(_arm64_instr2("adrp", _arm64_op_reg("x1"),
-                                 _arm64_op_label(fn_sym + "@PAGE"),
-                                 "__hx_fn_addr: &" + fn_sym + " page (raw .text fn ptr)"))
-                buf.push(_arm64_instr3("add", _arm64_op_reg("x1"),
-                                 _arm64_op_reg("x1"),
-                                 _arm64_op_label(fn_sym + "@PAGEOFF"),
-                                 "__hx_fn_addr: x1 = &" + fn_sym + " (raw .text fn ptr)"))
-                buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
-                                 _arm64_op_label("#0"), "__hx_fn_addr: TAG_INT"))
-                if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
-                return buf
-            }
-        }
+        // ING #29 literal-∅ (2026-06-30): `__hx_fn_addr(name)` — MOVED to the
+        // _STMT_ASSIGN block (next to fn_ref). This _STMT_CALL copy was UNREACHABLE
+        // because hir_to_mir emits __hx_fn_addr as STMT_ASSIGN (same root cause as the
+        // x86_64 sibling). The live handler is in the _STMT_ASSIGN block above.
         // ── RFC061 §M8 varargs-ABI (literal-∅ feature B, r2 arm64) ──────────────────
         // The arm64 va_list intrinsics — the AAPCS64 (linux) / Apple-ARM64 (darwin)
         // sibling of the x86_64 PSABI §3.5.7 va_* STMT_CALL special-cases. Two ABIs,

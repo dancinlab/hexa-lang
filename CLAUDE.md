@@ -222,10 +222,11 @@ git submodule update --init --recursive          # activate (hooks no-op until p
   SSOT: 메모리 `project_hexa_rfc061_hxlcl_crosstarget_abi_wall`.
 - 상태(RFC061 #29 Route C 캠페인 · 측정종착): syscall/2nd-return-reg/named-data/environ/FILE*/
   file-local-static family + ELF cross-target member-swap mem/str pure-leaf 10/10(strlen·memcpy·
-  memset·memcmp·strcmp·strncmp·strcpy·strncpy·strcat·strchr) + pipe/fork/getenv/setenv/popen 등
-  dissolve(전부 default-OFF·byteeq-neutral·admin-merge). 잔여 = 측정벽 2개뿐 — varargs-ABI
+  memset·memcmp·strcmp·strncmp·strcpy·strncpy·strcat·strchr) + pipe/fork/getenv/setenv/popen +
+  signal(sa_restorer WIRED via @naked trampoline + __hx_fn_addr · ING#29 ∅−7) 등
+  dissolve(전부 default-OFF·byteeq-neutral·admin-merge). 잔여 = 측정벽 1개뿐 — varargs-ABI
   (`hxlcl_fprintf` · va_list 가 frozen runtime.c 거주 → frozen blob 편집 불가 = release-integrity
-  하드라인 🧱) · svc-remainder(getrusage/time/signal = frozen floor inert stub이라 native-emit 해도
+  하드라인 🧱) · svc-remainder(getrusage/time = frozen floor inert stub이라 native-emit 해도
   floor-reduction 0 = investment-poor 🧱). reopen 조건: hexa IR opaque va_list 추상 OR frozen
   re-baseline OR floor-meaningful syscall leaf 출현.
 - dont: 심볼당·타깃당 **hand-assembled machine-byte 배열**로 cross-target 확장 금지
