@@ -3351,6 +3351,29 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
             return
         }
+        // ING #29 literal-∅ (2026-06-30): `__hx_fn_addr(name)` — the raw-unboxed-fn-ptr
+        // sibling of `fn_ref`. hir_to_mir lowers `__hx_fn_addr(worker)` to STMT_ASSIGN
+        // op="__hx_fn_addr" args=[name_str] (the SAME stmt kind as fn_ref). THIS special-
+        // case emits ONLY the pc-relative address-of the .text symbol `name` via
+        // `lea rax, [rip+name]` (R_X86_64_PC32, the EXACT same relocation `fn_ref` uses
+        // above) and SKIPS the `hexa_fn_new_native` boxing call. rax holds the raw .text
+        // pointer, stored as a TAG_INT HexaVal (tag=0, payload=fn ptr). reference-match:
+        // C `&fn` / GCC `&&label` / rustc fn-ptr / zig `@intFromPtr(fn)`. Prerequisite
+        // building block for SA_RESTORER (signal) + setjmp/longjmp (naked-asm) walls.
+        // NOTE: this handler lives in the _STMT_ASSIGN block (NOT _STMT_CALL) because
+        // hir_to_mir emits it as STMT_ASSIGN, matching fn_ref — a prior copy in the
+        // _STMT_CALL block was unreachable (the stmt never matched that kind), causing
+        // silent fallthrough to default call lowering (string-ptr mis-emit). ADD-only.
+        if s.op == "__hx_fn_addr" && len(s.args) >= 1 {
+            if s.args[0].kind == "const_str" {
+                let fn_sym = s.args[0].str_val
+                _x86_buf.push(_x86_instr2("lea", _x86_op_reg("rax"),
+                                 _x86_op_label("[rip+" + fn_sym + "]"),
+                                 "__hx_fn_addr: rax = &" + fn_sym + " (raw .text fn ptr, pc-rel)"))
+                if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "rax", 0) }
+                return
+            }
+        }
         // carrier call: invoke a runtime TAG_FN/TAG_CLOSURE carrier DATA global
         // (thread_spawn, …). hir_to_mir lowers `thread_spawn(worker, 1)` to
         // STMT_ASSIGN op="carrier_call" args=[carrier_name_str, a1, …]. ABI:
@@ -4592,27 +4615,11 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             }
         }
         // ING #29 literal-∅ (2026-06-30): `__hx_fn_addr(name)` — the raw-unboxed-fn-ptr
-        // sibling of `fn_ref`. hir_to_mir lowers `__hx_fn_addr(worker)` to
-        // op="__hx_fn_addr" args=[name_str]; THIS special-case emits ONLY the pc-relative
-        // address-of the .text symbol `name` via `lea rax, [rip+name]` (R_X86_64_PC32,
-        // the EXACT same relocation `fn_ref` uses at line ~3322 — that lea IS the raw fn
-        // address; `fn_ref` then wastes a `call hexa_fn_new_native` to box it as TAG_FN).
-        // Here we SKIP the boxing: rax holds the raw .text pointer, stored as a TAG_INT
-        // HexaVal (tag=0, payload=fn ptr). reference-match: C `&fn` / GCC `&&label` /
-        // rustc fn-ptr / zig `@intFromPtr(fn)` — every compiler emits a fn address as a
-        // raw pointer. Prerequisite building block for SA_RESTORER (signal) +
-        // setjmp/longjmp (naked-asm) walls, which need a raw fn ptr in a struct field the
-        // kernel jumps to directly. ADD-only / byte-eq NEUTRAL (empty on byteeq path).
-        if s.op == "__hx_fn_addr" && len(s.args) >= 1 {
-            if s.args[0].kind == "const_str" {
-                let fn_sym = s.args[0].str_val
-                _x86_buf.push(_x86_instr2("lea", _x86_op_reg("rax"),
-                                 _x86_op_label("[rip+" + fn_sym + "]"),
-                                 "__hx_fn_addr: rax = &" + fn_sym + " (raw .text fn ptr, pc-rel)"))
-                if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "rax", 0) }
-                return
-            }
-        }
+        // sibling of `fn_ref`. MOVED to the _STMT_ASSIGN block (next to fn_ref) — this
+        // _STMT_CALL copy was UNREACHABLE because hir_to_mir emits __hx_fn_addr as
+        // STMT_ASSIGN, not STMT_CALL, so the stmt never entered this kind block (the
+        // silent-mis-emit root cause). Kept as a guard comment for future readers; the
+        // live handler is in the _STMT_ASSIGN block above.
         // ── RFC061 §M8 varargs-ABI (literal-∅ feature B, RUNG1) ─────────────────────
         // SysV AMD64 va_list intrinsics, integer class only. The prologue has already
         // spilled the 6 GP arg regs into the reg_save_area at [rbp+_x86_va_rsa_base] and
