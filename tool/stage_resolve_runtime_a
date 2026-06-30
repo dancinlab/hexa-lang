@@ -101,6 +101,33 @@ _unescape_emit_to_c() {
     ' "$1"
 }
 
+# zero-c #29: materialize self/runtime_core_hxlcl_shim.c from its .hexa SSOT emitter.
+# The hxlcl_* sibling-shim TU was the LAST hand-tracked self/*.c; it now has a
+# byte-identical .c-text emitter (self/runtime_core_hxlcl_shim_emit.hexa, built by
+# tool/gen_c_text_emitter.hexa — same #3858 pattern as runtime.c / runtime_core.c),
+# so `git ls-files self/*.c` is empty (literal zero-c, flip-free — no HexaVal change).
+# release_build calls stage_resolve_runtime_a WITHOUT restore_frozen_seeds, and the
+# shim is gitignored, so it MUST be regenerated HERE before the MULTIOBJ shim compile
+# (point-of-use, mirroring regen_runtime_core_from_emitter). The un-escape reproduces
+# the prior tracked .c byte-for-byte → hxlcl_shim.o is byte-identical → byteeq-neutral.
+regen_shim_from_emitter() {
+    local emitter="self/runtime_core_hxlcl_shim_emit.hexa"
+    local dst="self/runtime_core_hxlcl_shim.c"
+    [ -f "$emitter" ] || { echo "[stage_resolve_runtime_a] hxlcl_shim.c regen SKIP — emitter absent (in-tree .c used)"; return 0; }
+    local atmp
+    atmp="$(mktemp -t regen_shim_awk.XXXXXX)" || atmp=""
+    if [ -n "$atmp" ] && _unescape_emit_to_c "$emitter" > "$atmp" 2>/dev/null \
+       && [ -s "$atmp" ] && grep -q 'sibling-shim TU' "$atmp"; then
+        cp -f "$atmp" "$dst"
+        rm -f "$atmp"
+        echo "[stage_resolve_runtime_a] hxlcl_shim.c SYNTHESIZED from emitter SSOT (awk un-escape, $(wc -l < "$dst") lines, hexat-free)"
+        return 0
+    fi
+    rm -f "$atmp"
+    echo "[stage_resolve_runtime_a] hxlcl_shim.c regen FAILED (malformed emitter?) — gitignored .c NOT materialized" >&2
+    return 1
+}
+
 regen_runtime_core_from_emitter() {
     local emitter="self/runtime_core_emit.hexa"
     local dst="self/runtime_core.c"
@@ -1175,6 +1202,9 @@ build_runtime_a_from_source() {
     # 3-target gate-ON GREEN + consumer smoke (release-integrity > self-host).
     if [ "${HEXA_RT_MULTIOBJ:-0}" = "1" ]; then
         echo "[stage_resolve_runtime_a] RFC061 Case-B: HEXA_RT_MULTIOBJ=1 — INCLUDE-DROP multi-object runtime.a (opt-in; default ship path is single-TU)"
+        # zero-c #29: materialize the gitignored hxlcl_shim.c from its emitter SSOT
+        # before [S4] compiles it (release_build doesn't call restore_frozen_seeds).
+        regen_shim_from_emitter || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: hxlcl_shim.c could not be materialized from emitter" >&2; return 1; }
         local _mo_archflag=""; [ "$(uname -s)" = "Darwin" ] && _mo_archflag="-arch arm64"
         # ── RFC061 §M8 SELFEMIT (HEXA_RT_SELFEMIT, default OFF · darwin-arm64-only) ──
         # Opt-in: replace the libc-delegate shim members with their hexa-NATIVE
