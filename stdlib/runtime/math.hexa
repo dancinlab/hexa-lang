@@ -85,6 +85,144 @@ pub fn rt_lgamma(z: float) -> float {
     return (x - 0.5) * rt_log(x) - x + LOG_SQRT_2PI + series - shift
 }
 
+// ── error function (erf / erfc) — reference-match: W.J. Cody, "Rational
+//    Chebyshev approximation for the error function" (Math. Comp. 1969),
+//    as implemented in SPECFUN CALERF / Cephes erf.c / Boost / fdlibm-class
+//    libm. Three rational-Chebyshev regions give full-double accuracy
+//    (the surrounding rt_exp/rt_log approximations cap residual at ~1e-12,
+//    which is why callers gate with verify --tol). Replaces the
+//    unconditional libm erf/erfc in self/runtime.c (VERIFY-KIT V4:
+//    native-accurate, NOT collapsing hand-Taylor). zero-c #29.
+
+// |x| <= 0.46875: erf(x) = x · P(x²)/Q(x²) (signed, direct).
+fn _rt_erf_small(x: float) -> float {
+    let a0 = 3.16112374387056560e0
+    let a1 = 1.13864154151050156e2
+    let a2 = 3.77485237685302021e2
+    let a3 = 3.20937758913846947e3
+    let a4 = 1.85777706184603153e-1
+    let b0 = 2.36012909523441209e1
+    let b1 = 2.44024637934444173e2
+    let b2 = 1.28261652607737228e3
+    let b3 = 2.84423683343917062e3
+    let ysq = x * x
+    let mut xnum = a4 * ysq
+    let mut xden = ysq
+    xnum = (xnum + a0) * ysq
+    xden = (xden + b0) * ysq
+    xnum = (xnum + a1) * ysq
+    xden = (xden + b1) * ysq
+    xnum = (xnum + a2) * ysq
+    xden = (xden + b2) * ysq
+    return x * (xnum + a3) / (xden + b3)
+}
+
+// erfc(y) for y > 0.46875 (accurate tail path). Regions 2 (y<=4) and 3 (y>4).
+fn _rt_erfc_pos(y: float) -> float {
+    if y > 26.5 { return 0.0 }  // exp(-y²) underflows to 0
+    let mut result = 0.0
+    if y <= 4.0 {
+        // 0.46875 < y <= 4: erfc(y) = exp(-y²) · P(y)/Q(y)
+        let c0 = 5.64188496988670089e-1
+        let c1 = 8.88314979438837594e0
+        let c2 = 6.61191906371416295e1
+        let c3 = 2.98635138197400131e2
+        let c4 = 8.81952221241769090e2
+        let c5 = 1.71204761263407058e3
+        let c6 = 2.05107837782607147e3
+        let c7 = 1.23033935479799725e3
+        let c8 = 2.15311535474403846e-8
+        let d0 = 1.57449261107098347e1
+        let d1 = 1.17693950891312499e2
+        let d2 = 5.37181101862009858e2
+        let d3 = 1.62138957456669019e3
+        let d4 = 3.29079923573345963e3
+        let d5 = 4.36261909014324716e3
+        let d6 = 3.43936767414372164e3
+        let d7 = 1.23033935480374942e3
+        let mut xnum = c8 * y
+        let mut xden = y
+        xnum = (xnum + c0) * y
+        xden = (xden + d0) * y
+        xnum = (xnum + c1) * y
+        xden = (xden + d1) * y
+        xnum = (xnum + c2) * y
+        xden = (xden + d2) * y
+        xnum = (xnum + c3) * y
+        xden = (xden + d3) * y
+        xnum = (xnum + c4) * y
+        xden = (xden + d4) * y
+        xnum = (xnum + c5) * y
+        xden = (xden + d5) * y
+        xnum = (xnum + c6) * y
+        xden = (xden + d6) * y
+        result = (xnum + c7) / (xden + d7)
+    } else {
+        // y > 4: erfc(y) = exp(-y²)/y · (1/√π - P(1/y²)/Q(1/y²)/y²)
+        let p0 = 3.05326634961232344e-1
+        let p1 = 3.60344899949804439e-1
+        let p2 = 1.25781726111229246e-1
+        let p3 = 1.60837851487422766e-2
+        let p4 = 6.58749161529837803e-4
+        let p5 = 1.63153871373020978e-2
+        let q0 = 2.56852019228982242e0
+        let q1 = 1.87295284992346047e0
+        let q2 = 5.27905102951428412e-1
+        let q3 = 6.05183413124413191e-2
+        let q4 = 2.33520497626869185e-3
+        let SQRPI = 5.64189583547756287e-1
+        let zsq = 1.0 / (y * y)
+        let mut xnum = p5 * zsq
+        let mut xden = zsq
+        xnum = (xnum + p0) * zsq
+        xden = (xden + q0) * zsq
+        xnum = (xnum + p1) * zsq
+        xden = (xden + q1) * zsq
+        xnum = (xnum + p2) * zsq
+        xden = (xden + q2) * zsq
+        xnum = (xnum + p3) * zsq
+        xden = (xden + q3) * zsq
+        result = zsq * (xnum + p4) / (xden + q4)
+        result = (SQRPI - result) / y
+    }
+    // Cody exp-cancellation guard: split y² into a 16ths-truncated part
+    // (exact) + remainder so exp(-ysq²) stays well-conditioned.
+    let ti = (y * 16.0) as int
+    let ysq = (ti as float) / 16.0
+    let del = (y - ysq) * (y + ysq)
+    return rt_exp(0.0 - ysq * ysq) * rt_exp(0.0 - del) * result
+}
+
+// erf(x) — odd; small region direct, else 1 - erfc(|x|).
+pub fn rt_erf(x: float) -> float {
+    let ax = if x < 0.0 { 0.0 - x } else { x }
+    if ax <= 0.46875 { return _rt_erf_small(x) }
+    let r = 1.0 - _rt_erfc_pos(ax)
+    return if x < 0.0 { 0.0 - r } else { r }
+}
+
+// erfc(x) = 1 - erf(x); positive tail uses the direct accurate path,
+// negative side via erfc(x) = 2 - erfc(-x) (erfc(neg) ∈ (1,2], no tail loss).
+pub fn rt_erfc(x: float) -> float {
+    if x < 0.0 { return 2.0 - rt_erfc(0.0 - x) }
+    if x <= 0.46875 { return 1.0 - _rt_erf_small(x) }
+    return _rt_erfc_pos(x)
+}
+
+// Γ(x) — gamma via exp(lgamma) for x>0, reflection Γ(x)=π/(sin(πx)·Γ(1-x))
+//   for x<0. Poles at non-positive integers saturate to 1e308 (matches
+//   rt_lgamma's pole convention). Reuses rt_lgamma (Stirling+reflection).
+pub fn rt_tgamma(x: float) -> float {
+    if x > 0.0 { return rt_exp(rt_lgamma(x)) }
+    let xi = x as int
+    if (xi as float) == x { return 1e308 }  // pole at 0, -1, -2, …
+    let PI = 3.141592653589793
+    let sinpx = rt_sin(PI * x)
+    if sinpx == 0.0 { return 1e308 }
+    let g1mx = rt_exp(rt_lgamma(1.0 - x))   // Γ(1-x) > 0 (1-x > 1)
+    return PI / (sinpx * g1mx)
+}
+
 // Step 3 cycle 19 — naive matmul (row-major, cblas-style M/K/N order).
 //   C[i*N + j] = Σ_p A[i*K + p] * B[p*N + j]
 // Bounds-guarded inner accumulator (skips out-of-range index instead of
