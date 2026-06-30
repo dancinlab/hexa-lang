@@ -1326,6 +1326,24 @@ fn _bind_builtin_names() -> [string] {
         // 151c52c8 safe). x86_64 STMT_CALL special-case. ADD-only: the compiler never
         // calls it → byte-eq NEUTRAL (no byteeq-path body references it).
         "__hx_rodata_tab_ptr",
+        // ING #29 literal-∅ (2026-06-30): `__hx_fn_addr(name)` — emit the RAW UNBOXED
+        // address of a top-level `fn name` (the .text entry-point symbol) as a TAG_INT
+        // HexaVal, WITHOUT the TAG_FN boxing that `fn_ref` performs. This is the
+        // reference-match of C `&fn` / GCC `&&label` / rustc fn-ptr / zig `@intFromPtr(fn)`
+        // — every major compiler emits a function address as a raw pointer. It is the
+        // PREREQUISITE BUILDING BLOCK for the SA_RESTORER (signal) + setjmp/longjmp
+        // (naked-asm) walls, both of which need a raw fn ptr stored into a struct field
+        // (sigaction.sa_restorer / the trampoline slot) that the kernel jumps to directly
+        // — a TAG_FN HexaVal box is rejected there. hir_to_mir lowers the bare-ident arg
+        // `__hx_fn_addr(worker)` to op="__hx_fn_addr" args=[name_str] (the SAME lowering
+        // shape as fn_ref / carrier_call, which also extract a bare fn-ident name). The
+        // codegen STMT_CALL special-case emits ONLY the pc-relative address materialisation
+        // (x86_64 `lea rax,[rip+name]` · arm64 `adrp x1,name@PAGE` + `add x1,x1,name@PAGEOFF`)
+        // and skips the `hexa_fn_new_native` boxing call — the result is the raw .text
+        // pointer in the payload (tag=TAG_INT=0). NO new keyword/@attr (ordinary
+        // identifier-call, frozen 151c52c8 safe). ADD-only: the compiler itself never
+        // calls it → byte-eq NEUTRAL (no byteeq-path body references it).
+        "__hx_fn_addr",
         // RFC061 §M8 varargs-ABI (literal-∅ feature B, RUNG1, 2026-06-29): the SysV
         // AMD64 va_list intrinsics that let a self-emitted variadic `hxlcl_*` body
         // (e.g. the frozen-floor hxlcl_printf/hxlcl_fprintf, which forward a C va_list
