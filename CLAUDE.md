@@ -223,10 +223,19 @@ git submodule update --init --recursive          # activate (hooks no-op until p
 - 상태(RFC061 #29 Route C 캠페인 · 측정종착): syscall/2nd-return-reg/named-data/environ/FILE*/
   file-local-static family + ELF cross-target member-swap mem/str pure-leaf 10/10(strlen·memcpy·
   memset·memcmp·strcmp·strncmp·strcpy·strncpy·strcat·strchr) + pipe/fork/getenv/setenv/popen 등
-  dissolve(전부 default-OFF·byteeq-neutral·admin-merge). 잔여 = 측정벽 2개뿐 — varargs-ABI
+  dissolve(전부 default-OFF·byteeq-neutral·admin-merge). 잔여 = 측정벽 3개 — varargs-ABI
   (`hxlcl_fprintf` · va_list 가 frozen runtime.c 거주 → frozen blob 편집 불가 = release-integrity
-  하드라인 🧱) · svc-remainder(getrusage/time/signal = frozen floor inert stub이라 native-emit 해도
-  floor-reduction 0 = investment-poor 🧱). reopen 조건: hexa IR opaque va_list 추상 OR frozen
+  하드라인 🧱) · svc-remainder(getrusage/time = frozen floor inert stub이라 native-emit 해도
+  floor-reduction 0 = investment-poor 🧱) · **hxlcl_signal = SA_RESTORER/raw-fn-address codegen 벽 🧱**
+  (ING#29 측정교정: literal-∅ 렌즈로 재점검 — shim 멤버 −1 은 달성 57→56·DEFAULT byte-identical·
+  rt_sigaction install 은 OK·old disposition SIG_DFL 반환·raise→handler 발화 OK, **but SIGSEGV on
+  return RC=139** — x86_64 커널이 sa_restorer 진짜 기계어 fn(`mov rax,15;syscall`=rt_sigreturn) 요구·
+  codegen 에 raw-fn-address intrinsic 부재(fn-address 는 TAG_FN box 로만 존재·struct 필드에 못 넣음)·
+  libc signal() control 은 동일호스트서 RC=0). reopen = raw-fn-address codegen intrinsic OR
+  restorer-trampoline emit mechanism. **주의: "floor-reduction 0" 은 signal 의 wall 근거가 아님**
+  (직전 agent 가 frozen floor TU 와 drop-ON shim TU 를 혼동 — literal-∅≠floor-reduction, convergence
+  `runtime-core-hxlcl-shim-c-1` 재확정). arm64 leg 은 restorer 불필요(커널이 trampoline 제공)하나
+  Route C emit 이 x86_64-linux-only 라 미측정. reopen 조건: hexa IR raw-fn-address 추상 OR frozen
   re-baseline OR floor-meaningful syscall leaf 출현.
 - dont: 심볼당·타깃당 **hand-assembled machine-byte 배열**로 cross-target 확장 금지
   (non-canonical · O(symbols×targets) 노동 · 유지보수 폭발 — `test/native_build/emit_hxlcl_*_o.hexa`

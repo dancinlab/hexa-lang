@@ -4364,16 +4364,21 @@ pub fn hxlcl_log(x: HexaVal) -> int {
 // HexaVal carrying a raw pointer payload (the C `void(*)(int)` fn ptr passed by callers);
 // __hx_payload_add(handler, 0) extracts the raw word.
 //
-// ★ MEASUREMENT-GATED HONEST CAVEAT (the wall under test): the x86_64 leg sets
-// SA_RESTORER + sa_restorer. But the codegen has NO mechanism to take the raw C-ABI
-// address of a hexa-defined fn (grep-clean: fn-addresses only exist boxed as TAG_FN via
-// hexa_fn_new, never as a raw ptr to store in a struct field). A restorer trampoline must
-// be a real machine-code fn the kernel jumps to (it executes `mov rax,15; syscall` =
-// rt_sigreturn, NR 15). The VERIFY SCRIPT measures whether (a) the arm64 leg (no restorer
-// needed) reproduces libc signal() semantics byte-faithfully, and (b) the x86_64 leg either
-// builds+works (wall FALSIFIED) or fails the behavioral test (wall CONFIRMED — restorer
-// gap is the real obstacle, NOT floor-reduction). This body is DEFAULT-OFF
-// (HEXA_RT_NATIVE_SIGNAL unset → shim libc delegate retained → archive byte-identical).
+// ★ MEASURED WALL CONFIRMED (ING#29 aiden x86_64-linux, routec_signal_native_verify):
+// The x86_64 leg installs the handler CORRECTLY (rt_sigaction syscall succeeds, returns
+// old disposition = SIG_DFL — the syscall path works), but raise(SIGUSR1) → handler fires
+// → SIGSEGV on return (RC=139). libc signal() control on the same host fires + returns
+// cleanly (RC=0). The ONLY difference is the restorer trampoline: the kernel requires
+// sa_restorer to point at a real machine-code fn (`mov rax,15; syscall` = rt_sigreturn,
+// NR 15) on x86_64, and the codegen has NO mechanism to take the raw C-ABI address of a
+// hexa-defined fn (grep-clean: fn-addresses only exist boxed as TAG_FN via hexa_fn_new,
+// never as a raw ptr to store in a struct field). This is a STRUCTURAL codegen gap
+// (raw-fn-address / trampoline emission), NOT floor-reduction and NOT an rt_sigaction
+// codegen gap — the syscall itself emitted + linked + ran. arm64 needs no restorer (kernel
+// supplies the trampoline itself), so the arm64 leg is NOT blocked by this wall (untested
+// here — Route C emit is x86_64-linux-only). DEFAULT-OFF (HEXA_RT_NATIVE_SIGNAL unset →
+// shim libc delegate retained → archive byte-identical). Reopen = codegen raw-fn-address
+// intrinsic OR a restorer-trampoline emit mechanism.
 
 pub fn hxlcl_signal(signum: HexaVal, handler: HexaVal) -> int {
     let sig = __hx_payload_add(signum, 0)            // raw signum payload
