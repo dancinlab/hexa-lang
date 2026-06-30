@@ -145,6 +145,28 @@ pub struct MFunc {
                          // CPU output is byte-identical when no @gpu_*
                          // function is present (F-RFC055-CPU-CODEGEN-
                          // UNTOUCHED holds).
+    is_naked: bool       // ING #29 literal-∅ (2026-06-30): `@naked` fn attribute.
+                         //   false = default — every existing fn (full prologue/
+                         //            epilogue; byte-identical when no @naked fn).
+                         //   true  = @naked  — codegen SKIPS the prologue (push rbp
+                         //            / mov rbp,rsp / callee-save / spill alloc)
+                         //            AND the epilogue (spill free / callee-restore
+                         //            / pop rbp / ret). The fn body must terminate
+                         //            itself (e.g. a signal trampoline ends in
+                         //            `syscall` which never returns; a setjmp
+                         //            restorer ends in `ret` the body emits).
+                         // reference-match: GCC `__attribute__((naked))` /
+                         // rustc `#[naked]` / zig `callconv(.Naked)` — every major
+                         // compiler exposes a naked-fn attribute that suppresses
+                         // the compiler-generated prologue/epilogue so the body is
+                         // raw asm. Set by `hir_to_mir::_lower_fn` from the HIR
+                         // FnDecl's `@naked` annotation (same single-surface
+                         // attribute mechanism as @gpu_kernel/@specialize).
+                         // Building block for the SA_RESTORER (signal) +
+                         // setjmp/longjmp walls — both need a fn whose body is raw
+                         // machine code the kernel/CPU jumps to directly. ADD-only
+                         // / byte-eq NEUTRAL: no existing fn carries @naked, so the
+                         // default emit path is byte-identical (false on every fn).
 }
 
 // ── Module ────────────────────────────────────────────────────
