@@ -184,6 +184,20 @@ typedef struct HexaIC {
 #define HX_VS(v)         ((v).vs)
 #endif
 
+/* STRUCTURAL-1 Phase A: HexaVal CONSTRUCTOR macros (struct-literal residue).
+ * IDENTITY-mapped to the current 16B tagged union (mirror of the SSOT block in
+ * runtime_hexaval_abi.h / the runtime_core.c inline block) so the NaN-boxing
+ * typedef flip is a single-spot edit. Also the def the @bitfield setter codegen
+ * (self/codegen.hexa) emits HX_MAKE_INT against into user.c. */
+#ifndef HX_MAKE_INT
+#define HX_MAKE_INT(v)   ((HexaVal){.tag=TAG_INT, .i=(v)})
+#define HX_MAKE_FLOAT(v) ((HexaVal){.tag=TAG_FLOAT, .f=(v)})
+#define HX_MAKE_BOOL(v)  ((HexaVal){.tag=TAG_BOOL, .b=(v)})
+#define HX_MAKE_VOID()   ((HexaVal){.tag=TAG_VOID})
+#define HX_MAKE_STR(v)   ((HexaVal){.tag=TAG_STR, .s=(v)})
+#define HX_MAKE_ENUM(v)  ((HexaVal){.tag=TAG_ENUM, .s=(v)})
+#endif
+
 /* Step 3 cycle 100 — pointer-eq inline builtins for hexa_eq TAG_VALSTRUCT
  * + TAG_MAP branches (RUNTIME.md 잔여 #4, 4 of 9 branches ported). The
  * aprime_cc codegen inlines these to `hexa_bool(HX_VS(a)==HX_VS(b))` etc

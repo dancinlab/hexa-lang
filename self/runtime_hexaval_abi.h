@@ -113,4 +113,18 @@ typedef struct HexaVal_ {
 #define HX_IS_CLOSURE(v)((v).tag == TAG_CLOSURE)
 #define HX_IS_VALSTRUCT(v) ((v).tag == TAG_VALSTRUCT)
 
+// ── STRUCTURAL-1 Phase A: HexaVal CONSTRUCTOR macros (struct-literal residue) ──
+// Drain raw compound-literal constructors ((HexaVal){.tag=T, .field=v}) into one
+// site so the NaN-boxing typedef flip (HexaVal to uint64_t) becomes a single-spot
+// edit. Bodies stay IDENTITY-mapped to the current 16B tagged union, so the DEFAULT
+// build is byte-identical (pure preprocessor refactor); Phase B swaps the bodies to
+// encode-into-u64 in this one place. HX_MAKE_INT is also the def the @bitfield
+// setter codegen (self/codegen.hexa) already references.
+#define HX_MAKE_INT(v)   ((HexaVal){.tag=TAG_INT, .i=(v)})
+#define HX_MAKE_FLOAT(v) ((HexaVal){.tag=TAG_FLOAT, .f=(v)})
+#define HX_MAKE_BOOL(v)  ((HexaVal){.tag=TAG_BOOL, .b=(v)})
+#define HX_MAKE_VOID()   ((HexaVal){.tag=TAG_VOID})
+#define HX_MAKE_STR(v)   ((HexaVal){.tag=TAG_STR, .s=(v)})
+#define HX_MAKE_ENUM(v)  ((HexaVal){.tag=TAG_ENUM, .s=(v)})
+
 #endif /* HEXA_RUNTIME_HEXAVAL_ABI_H */
