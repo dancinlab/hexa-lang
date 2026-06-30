@@ -4476,3 +4476,114 @@ pub fn hxlcl_log(x: HexaVal) -> int {
     let y = __hx_payload_fadd(yB, hi)
     return y
 }
+
+// ── SIGNAL (Route C · ING#29 literal-∅ ∅−7 · sa_restorer WIRED) ─────────────
+//
+// hxlcl_signal(signum, handler) — DROP-ON literal-∅ candidate. The shim member at
+// self/runtime_core_hxlcl_shim.c is `return (void*)signal(signum, handler)` — a libc
+// `signal(3)` delegate. The frozen floor (runtime_emit_full.hexa) has a SEPARATE inert
+// `rt_posix_ok()` stub under the same name in a different TU — the two are NOT the same
+// surface (literal-∅ = shim member, NOT floor-reduction; do not conflate).
+//
+// REFERENCE-MATCH (musl src/signal/signal.c:4-10 + src/signal/sigaction.c):
+//   void (*signal(int sig, void (*func)(int)))(int) {
+//       struct sigaction sa_old, sa = { .sa_handler = func, .sa_flags = SA_RESTART };
+//       if (__sigaction(sig, &sa, &sa_old) < 0) return SIG_ERR;
+//       return sa_old.sa_handler;
+//   }
+// musl __sigaction → __libc_sigaction issues the kernel
+//   __syscall(SYS_rt_sigaction, sig, &ksa, &ksa_old, _NSIG/8)
+// with the KERNEL k_sigaction struct. On x86_64-linux the kernel struct is
+//   { void* sa_handler@0; unsigned long sa_flags@8; void* sa_restorer@16; sigset_t sa_mask@24 }
+// (size 32, _NSIG/8 = 8). On arm64-linux there is NO sa_restorer field:
+//   { void* sa_handler@0; unsigned long sa_flags@8; sigset_t sa_mask@16 } (size 24).
+// NR rt_sigaction: x86_64 = 13 (syscall_64.tbl) · arm64 = 134 (asm-generic/unistd.h).
+// SA_RESTART = 0x10000000 (Linux UAPI signal.h). SA_RESTORER = 0x04000000 (x86_64 ONLY —
+// the kernel REQUIRES sa_restorer set on x86_64; arm64 does NOT use a restorer, the kernel
+// supplies the return trampoline itself).
+//
+// ★ WALL DISSOLVED (ING#29 ∅−7 · 2026-06-30): the prior wall (commit 01f13609b) was the
+// codegen having NO raw-fn-address mechanism — sa_restorer had to be 0 and raise() crashed
+// with SIGSEGV on handler return (RC=139). Two building blocks landed on main dissolve it:
+//   #4264 __hx_fn_addr(name) — emits the RAW UNBOXED .text address of a top-level fn as a
+//          TAG_INT HexaVal (reference-match: C &fn / GCC &&label / rustc fn-ptr).
+//   #4265 @naked fn attribute  — skips prologue+epilogue, emitting ONLY the raw body
+//          (reference-match: GCC __attribute__((naked)) / rustc #[naked]).
+// Together they let us define a rt_sigreturn trampoline as a @naked fn (body =
+// `__hx_syscall0(15)` → `mov rax,15 ; syscall`, reference-match musl __restore_rt /
+// glibc restore_rt / Linux arch/x86/kernel/signal.c) and store its raw address in
+// sa_restorer via __hx_fn_addr. This is EXACTLY what musl/glibc do:
+//   musl src/signal/sigaction.c: __restore_rt = `mov eax,15 ; syscall` (x86_64)
+//   glibc sysdeps/unix/sysv/linux/x86_64/libc_sigaction.c: ksa.restorer = &restore_rt.
+//
+// SUBSTRATE (proven, NO new intrinsic beyond the two building blocks): heap scratch via
+// hxlcl_malloc (pipe/time/poll precedent) + __hx_ptr_store64 (strtoll/realloc precedent)
+// + __hx_syscall6 (close/pipe precedent) + the close errno epilogue's __errno_location.
+// The handler arg arrives as a HexaVal carrying a raw pointer payload (the C
+// `void(*)(int)` fn ptr passed by callers); __hx_payload_add(handler, 0) extracts the raw word.
+
+// rt_sigreturn trampoline — @naked so the codegen emits ONLY the body (no prologue/epilogue).
+// x86_64 body = `mov rax,15 ; syscall` (NR rt_sigreturn=15 · 9 bytes · ref musl __restore_rt).
+// arm64 does NOT need a restorer (the kernel supplies the trampoline itself), so this fn is
+// x86_64-only in effect — on arm64 the codegen still emits it (harmless, never stored).
+// NEVER CALLED directly by hexa code — its raw .text address is taken via __hx_fn_addr and
+// stored in struct sigaction.sa_restorer for the kernel to jump to after a handler returns.
+@naked
+fn _hx_rt_sigreturn_trampoline() {
+    __hx_syscall0(15)
+    return
+}
+
+pub fn hxlcl_signal(signum: HexaVal, handler: HexaVal) -> int {
+    let sig = __hx_payload_add(signum, 0)            // raw signum payload
+    let hnd = __hx_payload_add(handler, 0)           // raw handler fn-ptr payload
+    // musl: struct sigaction sa = { .sa_handler = func, .sa_flags = SA_RESTART };
+    // kernel k_sigaction layout is TARGET-DEPENDENT (arm64 has no sa_restorer).
+    // We allocate a 32-byte scratch (covers the larger x86_64 struct; arm64 uses 24).
+    let sz = __hx_payload_add(0, 32)
+    let sa = hxlcl_malloc(sz)                         // new k_sigaction (act)
+    __hx_ptr_store64(sa, 0, hnd)                      // ksa.handler = handler (offset 0)
+    // SA_RESTART = 0x10000000 (linux uapi); x86_64 also ORs SA_RESTORER = 0x04000000.
+    let mut flags = 268435456                          // SA_RESTART (0x10000000)
+    if target_is_x86_64() {
+        // x86_64 kernel REQUIRES SA_RESTORER set AND sa_restorer pointing at a real
+        // machine-code restorer fn. __hx_fn_addr(_hx_rt_sigreturn_trampoline) yields the
+        // raw .text address of the @naked trampoline (mov rax,15 ; syscall = rt_sigreturn,
+        // NR 15) — reference-match glibc `ksa.restorer = &restore_rt` / musl __restore_rt.
+        // This DISSOLVES the prior SIGSEGV-on-return wall (commit 01f13609b): the kernel
+        // now has a valid restorer to jump to, so the handler returns cleanly.
+        flags = __hx_payload_or(flags, 67108864)       // |= SA_RESTORER (0x04000000)
+        let restorer = __hx_fn_addr(_hx_rt_sigreturn_trampoline)
+        __hx_ptr_store64(sa, 16, restorer)             // ksa.restorer@16 = &trampoline
+    }
+    __hx_ptr_store64(sa, 8, flags)                     // ksa.flags (offset 8)
+    // ksa.mask: x86_64 mask@24, arm64 mask@16. Zero both (empty sigset — matches signal(3)
+    // default; we do NOT block other signals, unlike sigaction's sa_mask semantics). The
+    // bump arena is NOT guaranteed zeroed, so we zero the mask region explicitly. On x86_64
+    // offset 16 was already written above (restorer); offset 24 = mask[0]. On arm64 offset
+    // 16 = mask[0] (no restorer field).
+    __hx_ptr_store64(sa, 24, 0)                        // x86_64: mask[0]=0
+    // old k_sigaction (oldact) — capture sa_old.sa_handler to return it (musl semantics).
+    let sa_old = hxlcl_malloc(sz)
+    __hx_ptr_store64(sa_old, 0, 0)
+    // __syscall(SYS_rt_sigaction, sig, act, oldact, _NSIG/8=8)
+    let mut nr = 134                                   // Linux arm64 __NR_rt_sigaction (default)
+    if target_is_x86_64() {
+        nr = 13                                        // Linux x86_64 __NR_rt_sigaction
+    }
+    let sigsetsize = __hx_payload_add(0, 8)            // _NSIG/8 = 8
+    let r = __hx_syscall6(nr, sig, sa, sa_old, sigsetsize, 0, 0)
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        // musl: __syscall_ret — errno = -r, return SIG_ERR ((void*)-1)
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1                                       // SIG_ERR (raw -1 payload)
+    }
+    // musl: return sa_old.sa_handler (the previous disposition)
+    let old_hnd = __hx_ptr_load64(sa_old, 0)
+    return old_hnd
+}
