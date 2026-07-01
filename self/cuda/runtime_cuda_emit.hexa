@@ -7351,6 +7351,125 @@ fn emit_runtime_cuda_c() -> str {
             "    return 0;\n" +
             "}\n" +
             "\n" +
+            "/* P2 device-resident decode (2026-07-01): single-query KV-cache decode\n" +
+            " * attention. Mirrors _hx_cuda_kern_attn_dt_fwd's per-(hh,i) body\n" +
+            " * (dt_sqrt scale + dt_exp softmax, normalize-first, non-contracted\n" +
+            " * __d*_rn) but with ONE query row q[nh*hd] attending over Lrows cached\n" +
+            " * K/V rows (L = Lrows, NOT i+1) → the decode ctx equals the full-forward\n" +
+            " * last row byte-for-byte. GQA kvh = hh/n_rep (nkv=nh no-GQA in bytegpt).\n" +
+            " * S[nh*Lrows] = per-head score scratch (every element written). */\n" +
+            "__global__ void _hx_cuda_kern_attn_dt_decode(const double* __restrict__ Q,\n" +
+            "                                             const double* __restrict__ K,\n" +
+            "                                             const double* __restrict__ V,\n" +
+            "                                             double* __restrict__ S,\n" +
+            "                                             double* __restrict__ CTX,\n" +
+            "                                             int64_t Lrows, int64_t nh,\n" +
+            "                                             int64_t nkv, int64_t hd) {\n" +
+            "    int64_t flat   = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;\n" +
+            "    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;\n" +
+            "    int64_t n_rep  = nh / nkv;\n" +
+            "    double scale = __ddiv_rn(1.0, _hx_cuda_dt_sqrt_d((double)hd));\n" +
+            "    for (; flat < nh; flat += stride) {\n" +
+            "        int64_t hh  = flat;\n" +
+            "        int64_t kvh = hh / n_rep;\n" +
+            "        /* Step 1: S[hh,j] = dot(q[hh,.], K[j,kvh,.]) * scale, j<Lrows */\n" +
+            "        for (int64_t j = 0; j < Lrows; j++) {\n" +
+            "            double dot = 0.0;\n" +
+            "            for (int64_t c = 0; c < hd; c++) {\n" +
+            "                dot = __dadd_rn(dot,\n" +
+            "                                __dmul_rn(Q[hh*hd + c],\n" +
+            "                                          K[(j*nkv + kvh)*hd + c]));\n" +
+            "            }\n" +
+            "            S[hh*Lrows + j] = __dmul_rn(dot, scale);\n" +
+            "        }\n" +
+            "        /* Step 2: max */\n" +
+            "        double mx = S[hh*Lrows + 0];\n" +
+            "        for (int64_t j = 1; j < Lrows; j++) {\n" +
+            "            double v = S[hh*Lrows + j];\n" +
+            "            if (v > mx) mx = v;\n" +
+            "        }\n" +
+            "        /* Step 3: e = dt_exp(S - mx); S := e; tot += e. */\n" +
+            "        double tot = 0.0;\n" +
+            "        for (int64_t j = 0; j < Lrows; j++) {\n" +
+            "            double e = _hx_cuda_dt_exp_d(S[hh*Lrows + j] - mx);\n" +
+            "            S[hh*Lrows + j] = e;\n" +
+            "            tot = __dadd_rn(tot, e);\n" +
+            "        }\n" +
+            "        /* Step 4: normalize */\n" +
+            "        for (int64_t j = 0; j < Lrows; j++) {\n" +
+            "            S[hh*Lrows + j] = __ddiv_rn(S[hh*Lrows + j], tot);\n" +
+            "        }\n" +
+            "        /* Step 5: ctx[hh,c2] = sum_j S[hh,j] * V[j,kvh,c2] */\n" +
+            "        for (int64_t c2 = 0; c2 < hd; c2++) {\n" +
+            "            double acc = 0.0;\n" +
+            "            for (int64_t j = 0; j < Lrows; j++) {\n" +
+            "                acc = __dadd_rn(acc,\n" +
+            "                                __dmul_rn(S[hh*Lrows + j],\n" +
+            "                                          V[(j*nkv + kvh)*hd + c2]));\n" +
+            "            }\n" +
+            "            CTX[hh*hd + c2] = acc;\n" +
+            "        }\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "/* P2 (2026-07-01): single-query KV-decode forge-route. q[d]=1 query row,\n" +
+            " * K/V caches with Lrows live rows (row-major [row*d + kvh*hd + c]),\n" +
+            " * S[nh*Lrows] score scratch, CTX[d] out. Honours DEVICE_KEEP via _d2h_out. */\n" +
+            "int _hx_cuda_farr_attn_dt_decode_gpu(int64_t q_id, int64_t k_id, int64_t v_id,\n" +
+            "                                     int64_t s_id, int64_t ctx_id,\n" +
+            "                                     int64_t Lrows, int64_t nh, int64_t nkv,\n" +
+            "                                     int64_t hd) {\n" +
+            "    if (q_id < 0 || k_id < 0 || v_id < 0 || s_id < 0 || ctx_id < 0) {\n" +
+            "        fprintf(stderr, \"[cuda] attn_dt_decode: bad ids\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (Lrows <= 0 || nh <= 0 || nkv <= 0 || hd <= 0) {\n" +
+            "        fprintf(stderr, \"[cuda] attn_dt_decode: bad dims Lrows=%lld nh=%lld nkv=%lld hd=%lld\\n\",\n" +
+            "                (long long)Lrows, (long long)nh, (long long)nkv, (long long)hd);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (nh % nkv != 0) {\n" +
+            "        fprintf(stderr, \"[cuda] attn_dt_decode: nh=%lld not divisible by nkv=%lld\\n\",\n" +
+            "                (long long)nh, (long long)nkv);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (q_id >= _hx_farr_count || k_id >= _hx_farr_count ||\n" +
+            "        v_id >= _hx_farr_count || s_id >= _hx_farr_count ||\n" +
+            "        ctx_id >= _hx_farr_count) {\n" +
+            "        fprintf(stderr, \"[cuda] attn_dt_decode: id out of range\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    int64_t nqd = nh    * hd;\n" +
+            "    int64_t nk  = Lrows * nkv * hd;\n" +
+            "    int64_t ns  = nh    * Lrows;\n" +
+            "    if (_hx_farr_table[q_id].len   < nqd ||\n" +
+            "        _hx_farr_table[k_id].len   < nk  ||\n" +
+            "        _hx_farr_table[v_id].len   < nk  ||\n" +
+            "        _hx_farr_table[s_id].len   < ns  ||\n" +
+            "        _hx_farr_table[ctx_id].len < nqd) {\n" +
+            "        fprintf(stderr, \"[cuda] attn_dt_decode: host len mismatch\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (_h2d(q_id) != 0) return -1;\n" +
+            "    if (_h2d(k_id) != 0) return -1;\n" +
+            "    if (_h2d(v_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_buf(s_id,   ns)  != 0) return -1;\n" +
+            "    if (_ensure_dev_buf(ctx_id, nqd) != 0) return -1;\n" +
+            "    double* Q = g_slots[q_id].d_buf;\n" +
+            "    double* K = g_slots[k_id].d_buf;\n" +
+            "    double* V = g_slots[v_id].d_buf;\n" +
+            "    double* S = g_slots[s_id].d_buf;\n" +
+            "    double* C = g_slots[ctx_id].d_buf;\n" +
+            "    /* one thread per head — nh threads. */\n" +
+            "    int block = 64;\n" +
+            "    int64_t need = (nh + block - 1) / block;\n" +
+            "    int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));\n" +
+            "    _hx_cuda_kern_attn_dt_decode<<<grid, block, 0, _forge_stream()>>>(Q, K, V, S, C, Lrows, nh, nkv, hd);\n" +
+            "    if (_forge_launch_check(\"attn_dt_decode\") != 0) return -1;\n" +
+            "    if (_d2h_out(ctx_id, nqd) != 0) return -1;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
             "/* mk2-C4-bwd (2026-05-19): GQA attention-dt bwd forge-route. 3-kernel\n" +
             " * pipeline using a temporary dP_row[nh·T·T] scratch (reused as dS\n" +
             " * after step 2). dQ/dK/dV must be FRESH t_zeros at the call site —\n" +

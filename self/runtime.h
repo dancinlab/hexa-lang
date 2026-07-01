@@ -1878,6 +1878,9 @@ HexaVal farr_rmsnorm_mh_gpu(HexaVal x_v, HexaVal g_v, HexaVal y_v,
 HexaVal farr_attn_dt_fwd_gpu(HexaVal q_v, HexaVal k_v, HexaVal v_v,
                              HexaVal p_v, HexaVal ctx_v, HexaVal T_v,
                              HexaVal nh_v, HexaVal nkv_v, HexaVal hd_v);       /* runtime.c — mk2-C4 (9-arg bare) */
+HexaVal farr_attn_dt_decode_gpu(HexaVal q_v, HexaVal k_v, HexaVal v_v,
+                                HexaVal s_v, HexaVal ctx_v, HexaVal Lrows_v,
+                                HexaVal nh_v, HexaVal nkv_v, HexaVal hd_v);    /* runtime.c — P2 single-query KV-decode (9-arg bare) */
 HexaVal farr_attn_dt_bwd_gpu(HexaVal q_v, HexaVal k_v, HexaVal v_v,
                              HexaVal p_v, HexaVal dctx_v, HexaVal dq_v,
                              HexaVal dk_v, HexaVal dv_v, HexaVal T_v,
