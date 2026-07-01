@@ -1886,18 +1886,26 @@ HexaVal farr_attn_dt_decode_batch_gpu(HexaVal q_v, HexaVal k_v, HexaVal v_v,
                                       HexaVal Lrows_v, HexaVal cap_v,
                                       HexaVal nh_v, HexaVal nkv_v,
                                       HexaVal hd_v);                          /* runtime.c — lever3 batched KV-decode (11-arg bare) */
-/* S1 FP32-e2e decode (#21 gold, opt-in HEXA_DECODE_FP32) — bare carriers. */
-HexaVal farr_mark_f32(HexaVal id_v, HexaVal n_v);                            /* runtime.c — alloc+zero f32 mirror */
-HexaVal farr_to_f32(HexaVal id_v, HexaVal n_v);                             /* runtime.c — cast d_buf→d_f32 */
-HexaVal farr_to_f64(HexaVal id_v, HexaVal n_v);                             /* runtime.c — cast d_f32→host f64 */
+/* S1 FP32-e2e decode (#21 gold, opt-in HEXA_DECODE_FP32) — bare carriers.
+ * NOTE: the ≤4-arity ops carry trailing reserved args (r*_v, pass 0) so their
+ * arity is ≥5 — the transpiler's indirect-call path tops out at hexa_call4, so
+ * a bare ≤4-arg carrier would route through hexa_callN (boxed-callable dispatch)
+ * instead of a direct C call. ≥5 args forces the direct call. */
+HexaVal farr_mark_f32(HexaVal id_v, HexaVal n_v,
+                      HexaVal r1_v, HexaVal r2_v, HexaVal r3_v);             /* runtime.c — alloc+zero f32 mirror */
+HexaVal farr_to_f32(HexaVal id_v, HexaVal n_v,
+                    HexaVal r1_v, HexaVal r2_v, HexaVal r3_v);              /* runtime.c — cast d_buf→d_f32 */
+HexaVal farr_to_f64(HexaVal id_v, HexaVal n_v,
+                    HexaVal r1_v, HexaVal r2_v, HexaVal r3_v);              /* runtime.c — cast d_f32→host f64 */
 HexaVal farr_matmul_f32_gpu(HexaVal a_v, HexaVal M_v, HexaVal K_v,
                             HexaVal w_v, HexaVal N_v, HexaVal out_v);        /* runtime.c — cast-free f32 own-GEMM */
 HexaVal farr_layernorm_f32_gpu(HexaVal x_v, HexaVal g_v, HexaVal b_v,
                                HexaVal out_v, HexaVal r_v, HexaVal c_v,
                                HexaVal eps_v);                              /* runtime.c — f32 layernorm rows */
-HexaVal farr_gelu_f32_gpu(HexaVal in_v, HexaVal out_v, HexaVal n_v);        /* runtime.c — f32 gelu */
+HexaVal farr_gelu_f32_gpu(HexaVal in_v, HexaVal out_v, HexaVal n_v,
+                          HexaVal r1_v, HexaVal r2_v);                       /* runtime.c — f32 gelu */
 HexaVal farr_residual_add_f32_gpu(HexaVal a_v, HexaVal b_v,
-                                  HexaVal out_v, HexaVal n_v);               /* runtime.c — f32 residual add */
+                                  HexaVal out_v, HexaVal n_v, HexaVal r1_v); /* runtime.c — f32 residual add */
 HexaVal farr_copy_slice_f32_gpu(HexaVal src_v, HexaVal soff_v, HexaVal dst_v,
                                 HexaVal doff_v, HexaVal n_v);                /* runtime.c — f32 D2D KV append */
 HexaVal farr_attn_dt_decode_batch_f32_gpu(HexaVal q_v, HexaVal k_v, HexaVal v_v,
