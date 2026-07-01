@@ -282,6 +282,33 @@ jobs:
           HEXA_SEED_CONVERGE: "0"
         run: bash tool/release_build
 
+      - name: nm-UND floor dump — RFC061 zero-c authoritative reducible libc (advisory)
+        if: always()
+        shell: bash
+        run: |
+          # RFC061 §M8 frozen-flip prerequisite: emit the DEFAULT build's undefined-libc
+          # floor so the reducible set is measurable from the CI log (mini cannot build;
+          # ad-hoc pool release_build/build_selfhost miss env → authoritative measurement
+          # is CI-harness-bound). Advisory only (never gates). SSOT: memory
+          # project_hexa_functional_zeroc_libc_floor_census.
+          RT="$(find build . -name runtime.a 2>/dev/null | head -1)"
+          echo "runtime.a: $RT ($(stat -c%s "$RT" 2>/dev/null || echo 0) bytes)"
+          if [ -f "$RT" ]; then
+            echo "=== RFC061 nm-UND reducible libc floor (sanctioned FFI/CRT/hexa-own/cuda excluded) ==="
+            nm -u "$RT" 2>/dev/null | awk '{print $2}' | sort -u \
+              | grep -vE '^(_hx_|__hexa|__hx_|__blk_|rt_|hexa_|_hexa|hxlcl_|_GLOBAL)' \
+              | grep -vE 'cuda|fatbin' \
+              | grep -vE '^(accept|bind|connect|listen|socket|recv|recvfrom|send|sendto|setsockopt|getsockopt|getaddrinfo|freeaddrinfo|gai_strerror|dlopen|dlsym|dlclose|dlerror|dladdr)' \
+              | grep -vE '^(__libc_|_exit|atexit|environ|mallopt|__cxa|__errno_location|__stack_chk|__assert)' \
+              | grep -vE '^(execve|execvp|setns|unshare|mount|umount2?|posix_spawn|opendir|readdir|closedir|glob|globfree|mkstemp|mkdtemp)' \
+              | grep -vE '^(qsort|rand|srand|strtod|strtof|strtold)' \
+              | tr '\n' ' '
+            echo ""
+            echo "=== RFC061 nm-UND TOTAL undefined: $(nm -u "$RT" 2>/dev/null | awk '{print $2}' | sort -u | wc -l) ==="
+          else
+            echo "(no runtime.a found — nm-UND dump skipped)"
+          fi
+
       - name: ccache stats
         if: always()
         shell: bash
