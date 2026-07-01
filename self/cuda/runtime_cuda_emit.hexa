@@ -6794,6 +6794,91 @@ fn emit_runtime_cuda_c() -> str {
             "    return g;\n" +
             "}\n" +
             "\n" +
+            "/* ────────────────────────────────────────────────────────────────────\n" +
+            " * P1a — layernorm_rows (device-resident decode): mirrors host\n" +
+            " *   _bg_layernorm (anima bytegpt_decode.hexa): per row r,\n" +
+            " *     mean = mean_j X[r,j];  var = mean_j (X[r,j]-mean)^2  (population);\n" +
+            " *     inv  = 1 / dt_sqrt(var + eps);\n" +
+            " *     Y[r,j] = G[j]*(X[r,j]-mean)*inv + B[j].\n" +
+            " *   dt_sqrt (NOT libm sqrt) = host parity; non-contracted __d*_rn ops\n" +
+            " *   (no FMA fusion) = host per-op parity. One block per row, two block\n" +
+            " *   reductions (mean, then var). NOTE: the block tree-reduction sums in\n" +
+            " *   a different order than the host serial loop, so this is argmax-eq\n" +
+            " *   (~1e-16), not bit-eq, to host LN (owner-accepted for the decode gate).\n" +
+            " * ──────────────────────────────────────────────────────────────────── */\n" +
+            "__global__ void _hx_k_layernorm_rows(const double* __restrict__ X,\n" +
+            "                                     const double* __restrict__ G,\n" +
+            "                                     const double* __restrict__ B,\n" +
+            "                                     double* __restrict__ Y,\n" +
+            "                                     int64_t R, int64_t C, double eps) {\n" +
+            "    int64_t r = blockIdx.x;\n" +
+            "    if (r >= R) return;\n" +
+            "    const double* xr = X + r * C;\n" +
+            "    double*       yr = Y + r * C;\n" +
+            "    __shared__ double smem[HX_RR_BLOCK / 32];\n" +
+            "    /* pass 1 — mean */\n" +
+            "    double s = 0.0;\n" +
+            "    for (int64_t j = threadIdx.x; j < C; j += blockDim.x) s = __dadd_rn(s, xr[j]);\n" +
+            "    double mean = __ddiv_rn(_hx_block_sum(s, smem), (double)C);\n" +
+            "    __syncthreads();  /* guard smem[0] before reusing _hx_block_sum */\n" +
+            "    /* pass 2 — population variance about mean (host two-pass formula) */\n" +
+            "    double v = 0.0;\n" +
+            "    for (int64_t j = threadIdx.x; j < C; j += blockDim.x) {\n" +
+            "        double d = __dadd_rn(xr[j], -mean);\n" +
+            "        v = __dadd_rn(v, __dmul_rn(d, d));\n" +
+            "    }\n" +
+            "    double var = __ddiv_rn(_hx_block_sum(v, smem), (double)C);\n" +
+            "    double inv = __ddiv_rn(1.0, _hx_cuda_dt_sqrt_d(__dadd_rn(var, eps)));\n" +
+            "    /* affine */\n" +
+            "    for (int64_t j = threadIdx.x; j < C; j += blockDim.x) {\n" +
+            "        double xn = __dmul_rn(__dadd_rn(xr[j], -mean), inv);\n" +
+            "        yr[j] = __dadd_rn(__dmul_rn(G[j], xn), B[j]);\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "/* Host launcher for _hx_k_layernorm_rows — DEVICE-RESIDENT (keeps OUT\n" +
+            " * FARR_DEVICE, no d2h; clone of the gelu resident wrapper). H2D-pins X,\n" +
+            " * G, B; one block per row on _forge_stream(). */\n" +
+            "int _hx_cuda_farr_layernorm_rows_gpu(int64_t x_id, int64_t g_id, int64_t b_id,\n" +
+            "                                     int64_t out_id, int64_t R, int64_t C,\n" +
+            "                                     double eps) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (R <= 0 || C <= 0) {\n" +
+            "        fprintf(stderr, \"[cuda] layernorm_rows: bad shape R=%lld C=%lld\\n\",\n" +
+            "                (long long)R, (long long)C);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (!(eps >= 0.0)) {\n" +
+            "        fprintf(stderr, \"[cuda] layernorm_rows: bad eps %g\\n\", eps);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (_h2d(x_id) != 0) return -1;\n" +
+            "    if (_h2d(g_id) != 0) return -1;\n" +
+            "    if (_h2d(b_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(out_id, R * C) != 0) return -1;\n" +
+            "    const double* X = g_slots[x_id].d_buf;\n" +
+            "    const double* G = g_slots[g_id].d_buf;\n" +
+            "    const double* B = g_slots[b_id].d_buf;\n" +
+            "    double*       Y = g_slots[out_id].d_buf;\n" +
+            "    _hx_k_layernorm_rows<<<(unsigned)R, HX_RR_BLOCK, 0, _forge_stream()>>>(\n" +
+            "        X, G, B, Y, R, C, eps);\n" +
+            "    if (_forge_launch_check(\"layernorm_rows\") != 0) return -1;\n" +
+            "    {\n" +
+            "        HexaFarrEntry* e = &_hx_farr_table[out_id];\n" +
+            "        e->d_buf      = (void*)g_slots[out_id].d_buf;\n" +
+            "        e->loc        = FARR_DEVICE;\n" +
+            "        e->dirty_host = 0;\n" +
+            "        e->dirty_dev  = 0;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)x_id; (void)g_id; (void)b_id; (void)out_id;\n" +
+            "    (void)R; (void)C; (void)eps;\n" +
+            "    fprintf(stderr, \"[cuda] layernorm_rows: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
             "/* ── mk2-C5 __global__ device kernels restored from e030fa31 ───────\n" +
             " * Launched by the host wrappers immediately below; the A/B/C merge\n" +
             " * dropped both halves. Pure double* math kernels, FP_CONTRACT-safe\n" +
