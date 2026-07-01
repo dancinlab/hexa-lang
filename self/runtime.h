@@ -1775,6 +1775,10 @@ extern HexaVal cuda_available;                                         /* runtim
 extern HexaVal cuda_device_count;                                      /* runtime.c — RFC 040 fn carrier */
 extern HexaVal set_deterministic;                                      /* runtime.c — #4214 forge-det carrier (mirror cuda_available) */
 extern HexaVal is_deterministic;                                       /* runtime.c — #4214 forge-det carrier (mirror cuda_available) */
+extern HexaVal forge_graph_begin;                                      /* runtime.c — P3 lever2 STEP2 CUDA-graph carrier (mirror cuda_available) */
+extern HexaVal forge_graph_end;                                        /* runtime.c — P3 lever2 STEP2 CUDA-graph carrier */
+extern HexaVal forge_graph_replay;                                     /* runtime.c — P3 lever2 STEP2 CUDA-graph carrier */
+extern HexaVal forge_graph_reset;                                      /* runtime.c — P3 lever2 STEP2 CUDA-graph carrier */
 extern HexaVal farr_to_device;                                         /* runtime.c — RFC 040 fn carrier */
 extern HexaVal farr_to_host;                                           /* runtime.c — RFC 040 fn carrier */
 extern HexaVal farr_pin;                                               /* runtime.c — RFC 040 fn carrier */
