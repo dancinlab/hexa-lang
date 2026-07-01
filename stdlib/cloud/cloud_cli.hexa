@@ -427,6 +427,26 @@ fn _basename(p: str) -> str {
     return p.substring(last + 1, n)
 }
 
+// _repo_root_basename — the CANONICAL git-repo name, worktree-safe. A git
+// worktree's `--show-toplevel` returns the WORKTREE dir (e.g.
+// `anima/.claude/worktrees/evaluate-py-option`), so sibling worktrees of ONE
+// repo mis-resolve to different project basenames and the cross-project guard
+// treats them as foreign (a legitimate same-repo teardown from another worktree
+// is REFUSED). `--git-common-dir` (absolute) always points at the MAIN repo's
+// `.git` (`<mainroot>/.git`), so its parent basename is the true repo identity
+// (`anima`) from ANY worktree. "" when not a git repo.
+fn _repo_root_basename() -> str {
+    let common = exec("git rev-parse --path-format=absolute --git-common-dir 2>/dev/null").trim()
+    if len(common) > 0 {
+        let parent = exec("dirname \"" + common + "\" 2>/dev/null").trim()
+        let base = _basename(parent)
+        if len(base) > 0 {
+            return base
+        }
+    }
+    return ""
+}
+
 // _at_prefix — render a repo/folder name as an `@`-prefixed project tag
 // (the rent-invocation cwd's project identity, e.g. cwd
 // `/Users/mini/dancinlab/demiurge` → `@demiurge`). Idempotent: a name that
@@ -444,9 +464,10 @@ fn _at_prefix(name: str) -> str {
 // _resolve_project — the owning PROJECT (= repo / folder / project name) of the
 // rent-invocation cwd, used by rent/up/run/nohup/adopt to STAMP attribution and
 // by down/destroy to derive the cwd project for the cross-project kill-guard.
-// Resolution order: an explicit `--project <name>` flag wins; else the cwd
-// git-repo basename (`git rev-parse --show-toplevel` → basename); else (NOT a
-// git repo) the cwd folder basename (`pwd`). All forms are `@`-prefixed, so a
+// Resolution order: an explicit `--project <name>` flag wins; else the cwd's
+// worktree-safe canonical repo basename (_repo_root_basename, via
+// `--git-common-dir` so all worktrees of one repo agree); else (NOT a git repo)
+// the cwd folder basename (`pwd`). All forms are `@`-prefixed, so a
 // rent from `/Users/mini/dancinlab/demiurge` tags the pod `@demiurge`. Only an
 // empty cwd degrades to "@unattributed".
 fn _resolve_project(av: [str], start: int) -> str {
@@ -454,9 +475,13 @@ fn _resolve_project(av: [str], start: int) -> str {
     if len(flag) > 0 {
         return _at_prefix(flag)
     }
-    let git_top = exec("git rev-parse --show-toplevel 2>/dev/null").trim()
-    if len(git_top) > 0 {
-        return _at_prefix(_basename(git_top))
+    // worktree-safe canonical repo id (see _repo_root_basename) — the old
+    // `--show-toplevel` returned the WORKTREE dir, so sibling worktrees of one
+    // repo tagged pods under DIFFERENT project names and the down-guard then
+    // refused a legitimate same-repo teardown from another worktree.
+    let repo = _repo_root_basename()
+    if len(repo) > 0 {
+        return _at_prefix(repo)
     }
     let pwd = exec("pwd").trim()
     if len(pwd) > 0 {
@@ -546,9 +571,15 @@ fn _project_purpose_label(project: str, purpose: str) -> str {
 // here: the guard must compare the REAL cwd, not an asserted one (--force is
 // the only bypass).
 fn _cwd_project() -> str {
-    let git_top = exec("git rev-parse --show-toplevel 2>/dev/null").trim()
-    if len(git_top) > 0 {
-        return _basename(git_top)
+    // worktree-safe canonical repo id (see _repo_root_basename). The old
+    // `--show-toplevel` returned the WORKTREE dir, so sibling worktrees of ONE
+    // repo mis-matched here and the down-guard fired a FALSE cross-project
+    // refusal on a legitimate same-repo teardown. Bare basename kept (the guard
+    // `_at_prefix`-normalizes both sides), so the mirror decision logic in
+    // down_guard_project_test.hexa is unchanged.
+    let repo = _repo_root_basename()
+    if len(repo) > 0 {
+        return repo
     }
     return "unattributed"
 }
