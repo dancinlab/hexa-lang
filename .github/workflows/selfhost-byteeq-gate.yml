@@ -118,6 +118,16 @@ jobs:
           # can't ship. Non-CUDA build → CPU mirror (rc 0); reaching PASS = the
           # bare-name lowering + carrier link. SSOT: convergence codegen-hexa-1.
           ./hexa run test/native_build/forge_attn_decode_builtin_smoke.hexa
+          # lever3 (#21 P2 launch-bound amortizer) farr_attn_dt_decode_batch_gpu
+          # consumer-compile smoke — the 11-arg batched KV-decode attention builtin
+          # (N independent single-query attentions in ONE launch) MUST lower (same
+          # bare-name fallthrough seam as farr_attn_dt_decode_gpu) to a declared
+          # symbol + link. Same latent-break class (#4339/#4285): byteeq passes
+          # (self/ never calls it → inert) even if the proto/carrier is broken.
+          # This CALLS it so a green-but-broken wiring can't ship. Non-CUDA build →
+          # CPU mirror (rc 0); reaching PASS = bare-name lowering + carrier link.
+          # SSOT: convergence codegen-hexa-1.
+          ./hexa run test/native_build/forge_attn_decode_batch_builtin_smoke.hexa
 
       # ── Gate invocation ──────────────────────────────────────────────────
       # Same root cause as miscompile-zero-gate / determinism-gate: the released
