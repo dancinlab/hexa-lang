@@ -427,6 +427,25 @@ fn _basename(p: str) -> str {
     return p.substring(last + 1, n)
 }
 
+// _repo_root_basename — the CANONICAL git-repo name, worktree-safe. A git
+// worktree's `--show-toplevel` returns the WORKTREE dir (e.g.
+// `anima/.claude/worktrees/evaluate-py-option`), so sibling worktrees of ONE
+// repo mis-resolve to different project basenames and the cross-project guard
+// treats them as foreign. `--git-common-dir` (absolute) always points at the
+// MAIN repo's `.git` (`<mainroot>/.git`), so its parent basename is the true
+// repo identity (`anima`) from ANY worktree. "" when not a git repo.
+fn _repo_root_basename() -> str {
+    let common = exec("git rev-parse --path-format=absolute --git-common-dir 2>/dev/null").trim()
+    if len(common) > 0 {
+        let parent = exec("dirname \"" + common + "\" 2>/dev/null").trim()
+        let base = _basename(parent)
+        if len(base) > 0 {
+            return base
+        }
+    }
+    return ""
+}
+
 // _at_prefix — render a repo/folder name as an `@`-prefixed project tag
 // (the rent-invocation cwd's project identity, e.g. cwd
 // `/Users/mini/dancinlab/demiurge` → `@demiurge`). Idempotent: a name that
@@ -454,9 +473,9 @@ fn _resolve_project(av: [str], start: int) -> str {
     if len(flag) > 0 {
         return _at_prefix(flag)
     }
-    let git_top = exec("git rev-parse --show-toplevel 2>/dev/null").trim()
-    if len(git_top) > 0 {
-        return _at_prefix(_basename(git_top))
+    let repo = _repo_root_basename()
+    if len(repo) > 0 {
+        return _at_prefix(repo)
     }
     let pwd = exec("pwd").trim()
     if len(pwd) > 0 {
@@ -546,9 +565,14 @@ fn _project_purpose_label(project: str, purpose: str) -> str {
 // here: the guard must compare the REAL cwd, not an asserted one (--force is
 // the only bypass).
 fn _cwd_project() -> str {
-    let git_top = exec("git rev-parse --show-toplevel 2>/dev/null").trim()
-    if len(git_top) > 0 {
-        return _basename(git_top)
+    // worktree-safe canonical repo identity, `@`-prefixed to match the STORED
+    // owner format (`_resolve_project` always `@`-prefixes). The old code
+    // returned a bare worktree basename, so (a) sibling worktrees of one repo
+    // mis-matched, and (b) the `@`-asymmetry made even a same-repo teardown
+    // fail. Both fixed here.
+    let repo = _repo_root_basename()
+    if len(repo) > 0 {
+        return _at_prefix(repo)
     }
     return "unattributed"
 }
@@ -2086,7 +2110,8 @@ fn _provider_for_id(id: str) -> str {
 // (not ""/"unattributed"). `--force` bypasses; same-project or unattributed
 // pods behave as before. NO env-var opt-out (sidecar s11). Returns 1 = refuse
 // (caller exits non-zero), 0 = allow.
-fn _down_guard_refuses(id: str, force: int) -> int {
+fn _down_guard_refuses(id: str, force: int, asserted: str) -> int {
+    // @convergence state=in_flight id=CLOUD-CROSSPROJECT-FORCE value="--force is a CONFIRM-skip, NOT a cross-project license: a rent-session trap auto-passing --force (with a mis-parsed id) destroyed another project's pod (an anima session killed a runpod pod tagged to a different project). SEPARATELY: the cwd project was a WORKTREE basename, so sibling worktrees of ONE repo (e.g. anima's evaluate-py-option vs clm303-noverfit-retrain) mis-resolved as foreign projects and blocked legitimate same-repo teardown" threshold="cwd project = worktree-safe canonical repo (git-common-dir parent basename, @-prefixed) so all worktrees of one repo interoperate; --force still never bypasses a REAL cross-repo mismatch; the ONLY cross-project escape is an EXPLICIT --project <owner> that EXACTLY equals the pod's stored owner (immune to the mis-parsed-id incident, which supplied no correct owner string) — reaps a legacy pod tagged from a now-gone worktree"
     // --force NO LONGER bypasses the cross-project guard. It skips the [y/N]
     // confirm, but a REAL cross-project mismatch is refused REGARDLESS, so an
     // automated `--force` teardown (e.g. a rent-session trap that mis-parsed
@@ -2113,8 +2138,19 @@ fn _down_guard_refuses(id: str, force: int) -> int {
     if owner == cur {
         return 0
     }
+    // Explicit same-owner assertion escape: `--project <owner>` must EXACTLY
+    // equal the pod's stored owner. This reaps a legacy pod tagged from a
+    // now-gone worktree WITHOUT weakening the guard: the mis-parsed-id +
+    // blanket --force incident supplied NO correct owner string, so requiring
+    // the caller to name the exact owner is immune to it. Distinct from --force
+    // (a confirm-skip, never a cross-project license).
+    if len(asserted) > 0 && _at_prefix(asserted) == _at_prefix(owner) {
+        println("[cloud] cross-project guard: --project '" + owner
+            + "' matches pod " + id + " owner — teardown allowed (explicit assertion).")
+        return 0
+    }
     println("[cloud] REFUSE: pod " + id + " belongs to project '" + owner
-        + "' (cwd='" + cur + "'). --force does NOT override a cross-project teardown — re-run from that repo.")
+        + "' (cwd='" + cur + "'). --force does NOT override — re-run from the owner repo, or assert `--project " + owner + "` if you own it.")
     return 1
 }
 
@@ -2306,7 +2342,7 @@ fn _rm_confirm_yes(ans: str) -> int {
 //      then pod_registry_remove + pod_registry_forget — registry cleanup
 //      runs even on provider failure so a confirmed-gone pod never lingers
 //   5. exit 0 on destroyed, 1 on provider-rejected, 2 on cancel
-fn _cloud_rm(id: str, provider_in: str, force: int) -> int {
+fn _cloud_rm(id: str, provider_in: str, force: int, asserted: str) -> int {
     if len(id) == 0 {
         println("[cloud] rm: empty <id>")
         return 2
@@ -2333,7 +2369,7 @@ fn _cloud_rm(id: str, provider_in: str, force: int) -> int {
     // runs, leaving an UNGUARDED back-door: an auto-trap `rm --force` (with a
     // mis-parsed id) destroyed another project's pod. Mirror down's pre-
     // teardown safety here so rm is no longer the unguarded path.
-    if _down_guard_refuses(id, force) == 1 {
+    if _down_guard_refuses(id, force, asserted) == 1 {
         return 2
     }
     let _ = _down_attribution_surface(id)
@@ -3064,7 +3100,8 @@ fn main() {
         let id = av[si + 1]
         let provider = _flag_val(av, si + 2, "--provider", "")
         let force = _has_flag(av, si + 2, "--force")
-        exit(_cloud_rm(id, provider, force))
+        let asserted = _flag_val(av, si + 2, "--project", "")
+        exit(_cloud_rm(id, provider, force, asserted))
     }
     if sub == "down" || sub == "destroy" {
         // (legacy alias of `cloud rm` — kept for back-compat with deployed
@@ -3090,7 +3127,8 @@ fn main() {
         if _has_flag(av, si + 2, "--yes") == 1 {
             force = 1
         }
-        if _down_guard_refuses(id, force) == 1 {
+        let asserted = _flag_val(av, si + 2, "--project", "")
+        if _down_guard_refuses(id, force, asserted) == 1 {
             exit(3)
         }
         // @L9 — surface project·purpose + running-job check, then require
