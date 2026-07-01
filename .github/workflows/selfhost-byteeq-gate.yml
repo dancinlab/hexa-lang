@@ -101,6 +101,14 @@ jobs:
           # with no test exercising it). Verifies compilation+run, not det values
           # (set_deterministic is a no-op on this non-CUDA CI build).
           ./hexa run test/native_build/forge_det_builtin_smoke.hexa
+          # P1a (#4339-fix) forge_dispatch_layernorm consumer-compile smoke — the
+          # 7-arg device-LN builtin MUST lower to hexa_forge_dispatch_layernorm +
+          # link. #4339 placed its codegen binding in the len==3 block (unreachable
+          # for a 7-arg call) → consumer undefined-function; byteeq passed (self/
+          # never calls it → inert). This CALLS it so a green-but-broken binding
+          # can't ship again. Non-CUDA build → rc -1 (host fallback); reaching PASS
+          # = the binding lowers+links. SSOT: convergence codegen-hexa-1.
+          ./hexa run test/native_build/forge_layernorm_builtin_smoke.hexa
 
       # ── Gate invocation ──────────────────────────────────────────────────
       # Same root cause as miscompile-zero-gate / determinism-gate: the released
