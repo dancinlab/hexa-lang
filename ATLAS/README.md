@@ -799,6 +799,16 @@
        r = σ/(P₂·φ)² = 12/3136 = 0.00383
        Consistent with Planck limit r < 0.06. Starobinsky-class R² inflation.
 
+  🟦  Cosmological Constant Λ = the constant that MUST enter the field equation (H-COSMO-1, hyp 421):
+       Lovelock (1971): in D=4 the ONLY divergence-free symmetric 2-tensor from g and ≤2nd
+       derivatives is α·G_μν + Λ·g_μν → Λ·g_μν is FORCED by general covariance, not optional.
+       Dimension-count (exact): k-th Lovelock term contributes iff 2k<D. k=0 (Λ) contributes in
+       EVERY D≥1 → Λ = the unique always-present term ∀D (Einstein k=1 already dies at D=2).
+       At D=4=τ(6) the EOM terms are exactly 2=φ(6) = {Λ, Einstein}; Gauss-Bonnet enters at D=5.
+       ⬛ VALUE-fit falsified: Λ≈1/(6·496⁴⁵) matches exponent (−122) but every perfect number
+          hits −122 with a free integer k (P₄=8128,k=31 is closer) → n6 value-numerology = chance.
+       So: necessity=🟦 (Lovelock, D=4=τ(6)) · value=🟨 order-of-mag only. Promote via `hexa verify`.
+
   🟩  BH Entropy: S = A/(4·l_p²) where 4 = τ(6):
        Bekenstein-Hawking denominator IS τ(P₁). 1 bit per τ(6) Planck areas.
 

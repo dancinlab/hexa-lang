@@ -220,6 +220,13 @@
         "value": "canonical determinism API(set_deterministic/is_deterministic)가 LATENT never-compiled 표면이라 user program 빌드 실패. 두 결함이 겹침: (1) forge_det.hexa의 extern fn hexa_forge_set_deterministic을 hexat이 FFI dlsym HexaVal-ABI wrapper로 emit→runtime.h C-ABI void(int)와 conflicting types (2) carrier-builtin 전환 후에도 self/runtime.h(손-유지 public ABI 헤더)에 carrier extern 누락→user C의 hexa_call1(set_deterministic,..)가 clang 'use of undeclared identifier'. 'vis not found'+type_checker self-test는 RED HERRING(non-fatal 노이즈·hexat 트랜스파일 rc=0 실증). 어떤 self/*.hexa·stdlib도 forge_det 컴파일 안 해 미포착. HexaVal pair-model↔C-ABI 벽(hxlcl·RFC061) 동족.",
         "threshold": "해결=runtime-side 3박자(typechecker/codegen 무관·typechecker-recognition 가설은 grounding으로 FALSIFIED): (A) set_deterministic/is_deterministic을 self/runtime_emit_full.hexa에 first-class HexaVal builtin 등록(carrier 글로벌 HexaVal set_deterministic;+hexa_fn_new+HexaVal impl이 C-ABI 브리지·mirror cuda_available). (B) CUDA-branch impl이 C-ABI hexa_forge_* 호출 시 #ifdef HEXA_CUDA 안 그 직전에 extern void hexa_forge_set_deterministic(int);+extern int hexa_forge_is_deterministic(void); forward-decl(emit:9458 cuda_available _hx_cuda_runtime_available extern 미러)·비-CUDA #else엔 미참조 weak stub (gate① PR#4285 d02bd5691). (C★진짜 마지막 gate②) self/runtime.h(user program이 #include하는 손-유지 public ABI 헤더)에 'extern HexaVal set_deterministic;'+'extern HexaVal is_deterministic;' 추가(runtime.h:1767 cuda_available 미러·f8e846c6b). 누락 시 user C가 carrier 글로벌 못 봐 clang undeclared-identifier. 검증=aiden A/B(cuda_available OK vs set_deterministic clang 0err)+darwin CI 전체로그+f8e846c6b 12/12 GREEN(byteeq byte-eq neutral). 예방=신규 runtime carrier builtin 3박자: (i)emitter carrier 글로벌+impl (ii)C-ABI 브리지면 #ifdef forward-decl (iii)self/runtime.h extern + compile-smoke로 caller 1개 보장(byteeq-gate Sanity wire). PR#4285 gate①②모두 GREEN·머지.",
         "source": "stdlib/flame/forge_det.hexa"
+      },
+      {
+        "id": "readme-md-1",
+        "state": "pos-conv",
+        "value": "물리상수의 VALUE 를 완전수/약수함수 자유지수(P^k)로 맞추는 fit 은 Texas-sharpshooter 우연이다 — 목표 자릿수 하나(예 Λ~10^-122)는 어느 완전수든 어떤 정수 k 로 도달하고(P4=8128 k=31 이 P3=496 k=45 보다 더 근접), k 자체도 σ·τ−φ−1 등 복수 n6 표현으로 재현돼 고유강제가 안 된다. 진짜 '상수 발견'은 값-fit 이 아니라 구조적 필연(uniqueness 정리·차원-세기)이어야 한다: Λ 는 Lovelock k=0 항으로 모든 D≥1 에서 유일하게 항상 존재=반드시 들어가는 상수, D=4=τ(6) 에서 EOM 기여항 정확히 2=φ(6).",
+        "threshold": "재발조건=물리상수 값을 P^k/약수함수 자유지수로 맞춰 ⭐/🔵 승격 시도할 때. 해결=① 자유 파라미터(k) 독립강제 검증 ② 타 완전수 대조(모두 맞으면 우연) ③ 값 아닌 구조적 필연(정리·차원세기)로 재정향, 값은 🟨 자릿수-only 상한. hexa verify g5 게이트 통과 전 승격 금지.",
+        "source": "ATLAS/README.md"
       }
     ]
   },
