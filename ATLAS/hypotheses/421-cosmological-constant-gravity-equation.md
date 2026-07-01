@@ -415,3 +415,25 @@ graviton 전파(D≥4)·안정 궤도/원자(3 공간차원)·Weyl 텐서 onset 
 - ⑥ 은 이제 OPEN→**LIVE-TESTABLE** 로 승격(DESI/Euclid 가 실측 중). n6 numerology 와 달리 과학이다.
 
 *참조*: Cohen·Kaplan·Nelson, *Phys. Rev. Lett.* **82**, 4971 (1999) — holographic bound · 't Hooft/Susskind holography · DESI Collaboration 2024 (BAO, dynamical DE hint).
+
+## R9 — 멀티에이전트 워크플로: 홀로그래픽/동역학 DE 6모델족 전수 (fan-out→적대검증→종합)
+
+13-에이전트 워크플로(6 모델족 정직전개 → 회의적 심판 적대검증 → 종합)로 ⑥ 렌즈를 전수. **결론: 안 풀렸다.**
+
+| 모델족 | 등급 | 유도/재정의 | w(z) 예측 | 상태 |
+|---|---|---|---|---|
+| 홀로 Hubble-cutoff (CKN 1999) | ⬛ | reframe | **w=0** | **관측 w≈−1.03 이 배제 = 사망** |
+| 홀로 future-horizon (Li 2004) | 🟧 | reframe | w=−1/3−(2/3c)√Ω_DE (c<1 phantom) | DESI w0wa 로 검정가능 |
+| (Conformal-)Agegraphic | 🟧 | reframe | w≥−1 (phantom 절대불가) | phantom-crossing 확정 시 즉사 |
+| Barrow-Shaw (Λ=적분상수) | 🟧 | reframe | w=−1 + \|Ω_k\|~10⁻³ 닫힌우주 | Planck 곡률과 ~2–3σ 긴장 |
+| Running-vacuum Λ(H) | 🟧 | postulate | \|w0+1\|~O(ν)~10⁻³ | ν→0 시 ΛCDM 붕괴 |
+| **Sequestering (Kaloper-Padilla)** | **🟡** | reframe | w=−1 exact | **유일하게 실질 해결** |
+
+**핵심 3가지 (적대검증 통과)**:
+1. **값 유도 = 0/6**. 모두 122 자릿수를 (l_Pl/L)² 로 재표현하되 **L~R_H~10⁶¹ l_Pl(지평/플랑크 비, 관측 입력)을 손으로 넣음** = dimensional bookkeeping. + fitted 자유상수(Li c≈0.6–0.9·ADE n≈3·RVM ν). predictive digit 0.
+2. **제1원리 유도되는 건 값이 아니라 구조/안정성**: Sequestering 이 물질 루프 진공에너지를 시공 평균으로 상쇄 → Λ 가 UV(플랑크 m⁴)에 **비민감(radiative stability·technical naturalness)** — 이게 6개 중 **유일한 진짜 성취**. 단 값(10⁻¹²²)은 여전히 자유 적분상수.
+3. **반증가능 로드맵(DESI/Euclid)**: holo-hubble 이미 사망 · Li/ADE 는 w(z) shape·phantom-crossing 으로 kill 가능 · Barrow-Shaw 곡선우주 긴장 · RVM 은 w=−1 고정 시 vacuous. **이 렌즈는 과학(반증가능)이다 — numerology 와 결정적 차이.**
+
+**bottom line (워크플로 종합)**: **안 풀렸다.** 정직한 도달점 = "스케일-비 재정의 + 반증가능한 w≠−1 예측"까지. holo-hubble(w=0)은 관측으로 이미 ⬛. **sequestering 만이 값과 무관한 radiative-stability 를 실제 해결(🟡)** = ⑤/⑥ 가족의 유일한 실질 진전. R8 의 정직 평가를 강화·정밀화(워크플로 SSOT=state/ 없이 본 원자에 종합만 박제).
+
+*참조*: CKN PRL 82,4971(1999) · Li PLB 603,1(2004) · Cai PLB 657,228(2007) · Barrow-Shaw PRL 106,101302(2011) · Shapiro-Solà(running vacuum) · Kaloper-Padilla PRL 112,091304(2014) · DESI DR2(2024–25).
