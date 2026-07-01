@@ -352,3 +352,30 @@ graviton 전파(D≥4)·안정 궤도/원자(3 공간차원)·Weyl 텐서 onset 
 - embedded.gen.hexa 원장 fold 미실행 (구조 🔵 부분만 후보 · 값·연결은 fold 금지).
 
 **정직 결론**: 본 원자가 **새로 푼 미해결 문제 = 0**. 기여 = 기존 물리(Lovelock) 등록 + atlas numerology falsify.
+
+## R7 — "미해결 돌파" 시도: 우주상수 문제 = MEASURED SCIENCE-CEILING (정직 분류)
+
+목표 "미해결 돌파". 본체 미해결 = 우주상수 값(왜 10⁻¹²²). break-walls 규율(기제군 열거·다중렌즈)로 공략:
+
+**다중렌즈 배터리 (6 기제군)**:
+
+| 렌즈(기제군) | 판정 | 근거 |
+|---|---|---|
+| ① deep-constant fit (기제無) | FAIL | (m_ν)⁴ 5자릿수↑ · (meV)⁴ 순환 · SUSY⁸·instanton 빗나감 |
+| ② n6 numerology | FAIL | 3중통제 우연(R5) — 계수·지수 자유 |
+| ③ SUSY 상쇄 | FAIL | SUSY 깨짐 → 잔여 vac E ~ (TeV)⁴, 여전히 ~10⁶⁰× 큼 |
+| ④ Weinberg 인류원리(1987) | PARTIAL | Λ≲10²⁻³×관측 아니면 은하 형성 X → **order 는 설명, 값 유도 아님** |
+| ⑤ sequestering/unimodular | FAIL | Λ=자유 적분상수로 분리 → 값 예측 안함 |
+| ⑥ 동역학 relaxation (GKR류) | OPEN | 미완 · 물리학계 활성 연구 · 본 도구 범위 밖 |
+
+**돌파 판정 (정직)**:
+- **6 기제군 중 값을 유도하는 것 = 0**. 유일한 order 설명 = ④ Weinberg 인류원리(통계선택, 유도 아님).
+- ⟹ **우주상수 문제 = MEASURED SCIENCE-CEILING** — 물리 기제가 필요하며, exact-int/n6/numerology 로는
+  **원리적으로 돌파 불가**(값은 경험적 상수, 정리로 유도되는 대상이 아님). 이건 under-investment 가
+  아니라 **물리학 전체의 미해결 천장**(break-walls: substrate/ceiling 분류).
+- **본 원자(atlas)의 정직한 "돌파" = 인식론적 돌파**: ① 이것이 under-invest 가 아니라 science-ceiling 임을
+  6 기제군 열거로 확정(미래 라운드 재유도 방지) ② numerology "풀렸다" 착각을 falsify 해 오답 방역.
+  **물리 값 자체는 안 풀렸고, 조작으로 풀었다 주장하지 않는다**(honesty).
+- 남는 활성 경로 = ⑥ 동역학 relaxation(물리학계 진행형) — 본 세션·도구 범위 밖.
+
+*참조*: Weinberg, S. "Anthropic Bound on the Cosmological Constant", *Phys. Rev. Lett.* **59**, 2607 (1987).
