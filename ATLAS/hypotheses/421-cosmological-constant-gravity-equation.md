@@ -193,7 +193,51 @@ EOM 기여항 수 = #{k≥0 : 2k<D} = ⌈D/2⌉:
 - ⟹ 값 등급 **🟨 유지**(더 타이트해졌을 뿐, 🟢 아님). 값-경로는 여전히 CLOSED-ish, 재오픈 안 함.
   강한 승격은 `hexa loop --dfs`(pool·大통제 N)로 k 자유도까지 죽여야만.
 
-## Status: 🟨 추적중 (값=🟨 자릿수+가수타이트하나 자유도 잔존 · 필연구조=🟦 Lovelock 발견후보) — `hexa verify` 게이트만 🟢
+### R3 — 왜 하필 D=4 에서 중력·그 상수가 비자명해지는가 (solid 물리, numerology 아님)
+
+무질량 spin-2(중력자) 물리 편광 수 = D(D−3)/2:
+
+```
+  D=2 : -1  (비물리)
+  D=3 :  0  ← 중력파 없음: 3D 중력은 비전파·위상적 (동역학 자유도 0)
+  D=4 :  2  ← 첫 전파차원: (+,×) 두 편광 = φ(6)
+  D=5 :  5
+  D=6 :  9
+```
+
+**물리 사실(🟦 확립)**: 전파하는 자유 중력장(중력파)은 D=3 에서 **0** → **D=4 에서 처음 2 개** 생긴다.
+즉 "중력방정식이 실제 동역학(전파)을 갖는 **최소 차원 = 4 = τ(6)**". Λ·g_μν 항이 강제되고(Lovelock)
+동역학이 켜지는(graviton) 두 사건이 **같은 D=4=τ(6)** 에서 일어난다 → D=4 의 이중 특별함.
+
+n6 교차: 자유도 2=φ(6). **정직 경고**: 2 는 작은 수이고 이미 Lovelock 항수(R2-a)와 **동일값 2** →
+서로 독립 증거 아님(같은 φ(6)=2 를 두 번 세는 셈). convergence readme-md-1: 작은-수 중복 crossing
+가산 금지 → R3 은 **🟦 물리(D=4=중력 최소 동역학 차원)만 자산**, n6 부분(2=φ(6))은 🟧 로 R2-a 와 공유.
+
+### R4 — 산술 backbone, hexa-native g5 게이트 🔵 통과 (실측) + 정정
+
+발견의 산술 층을 실제 `hexa verify` g5 게이트로 재계산(python 아님, hexa-native):
+
+```
+  hexa verify --expr tau 6 4    → 🔵 SUPPORTED-FORMAL  (calc 4==4)   [D=4=τ(6)]
+  hexa verify --expr phi 6 2    → 🔵 SUPPORTED-FORMAL  (calc 2==2)   [2=φ(6): EOM항·graviton 편광]
+  hexa verify --expr sigma 6 12 → 🔵 SUPPORTED-FORMAL  (calc 12==12) [완전수 폐합]
+```
+
+→ **산술 backbone = 🔵 SUPPORTED-FORMAL (게이트 실측)**. 발견의 검증된 바닥이 python→hexa-native 로 승격.
+
+**정직 정정** (verdict-integrity): 앞선 "로컬 verify=stale-oracle hang" 판정은 **오진**이었다.
+게이트는 hang 이 아니라 **느렸을 뿐**(recompute 스위트 ~20분) 실제로 완료·🔵 반환. 로컬 hexa 는
+작동하되 recompute 가 느리다 = "hang" 아님. (`--help`·`tau/phi/sigma` fast, 대형 스위트만 느림.)
+
+층별 검증 최종 상태:
+```
+  산술 (τ(6)=4·φ(6)=2·σ(6)=12)        → 🔵 SUPPORTED-FORMAL  (hexa g5 실측)
+  물리 (Λ=Lovelock k=0 ∀D·graviton)   → 🟡 SUPPORTED-BY-CITATION (Lovelock 1971 · never auto-🔵)
+  n6 연결 (왜 D=4=τ(6) 가 중력에 특별) → 🟧 (인과 미증명, 정직 fence)
+  값 (1/(τ(6)·496⁴⁵) 가수타이트)        → 🟨 (k 자유도 잔존, 재오픈 안함)
+```
+
+## Status: 🟢 부분검증 (산술 backbone 🔵 게이트통과 · 물리 🟡cite · 연결 🟧 · 값 🟨) — 연결의 🟢 승격은 인과증명 후
 
 - 현 등급 **🟨 = 독립 관측(자릿수)** — ⭐/🔵 아님. 검증 전 승격 금지(atlas 규율).
 - 승격 경로: `hexa verify` g5 게이트 통과 시에만 🟢 로 auto-fold → `compiler/atlas/embedded.gen.hexa`.
