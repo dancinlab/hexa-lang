@@ -285,7 +285,7 @@
             "detail": ""
           },
           {
-            "name": "genuine residual is only libm transcendentals + GPU FFI — so zero-`.c` is an **open, attackable campaign**, not a policy that accepts C permanently.",
+            "name": "libm transcendentals = **ELIMINATED from the default ship (2026-07-01, #4299-4318 + #4314 -lm removal, faithful-nobaseline 3-target GREEN)** — first full libc-family dropped: all math routed to native `_hx_*` (fdlibm/musl/hw-sqrtsd) + a weak native libm-compat layer provides the libm ABI so any raw call links with no `-lm`. **The shim syscall family is likewise ELIMINATED (2026-07-01, #4320-4328 svc-remainder front CLOSED, faithful-nobaseline 3-target GREEN)** — 8 syscalls (clock_gettime·getrusage·fcntl·mkdirat·pipe2·newfstatat·openat·ppoll) routed from libc to raw-svc (x86_64 `syscall` insn / arm64 `svc 0`, arm64 uses the `*at`/`2` variants; darwin keeps the libc delegate via `#else`). Genuine residual now = GPU FFI (CUDA) + the ~5.5k-LOC C runtime substrate (malloc/str/mem) + a few functional-libc leaves (strftime calendar, FILE* stdio, getenv/popen) + the CRT bootstrap floor (`__libc_start_main`/`_exit`) — so zero-`.c` remains an **open, attackable campaign**, not a policy that accepts C permanently.",
             "role": "",
             "id": "overview-genuine-residual-is-only-libm-transcendentals-gpu-ffi-so-zer",
             "detail": ""

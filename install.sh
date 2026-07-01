@@ -443,9 +443,27 @@ install_src() {
 
     if [ -d "$HX_SRC/.git" ]; then
         dim "  updating existing source at $HX_SRC"
-        git -C "$HX_SRC" fetch --depth 1 origin "$HEXA_BRANCH" >/dev/null 2>&1 || true
-        git -C "$HX_SRC" checkout -q "$HEXA_BRANCH" >/dev/null 2>&1 || true
-        git -C "$HX_SRC" reset --hard "origin/$HEXA_BRANCH" >/dev/null 2>&1 || true
+        # Pin origin to the hexa-lang repo BEFORE fetching, then re-clone if the
+        # update fails. Guards the wrong-repo silent-staleness class: if $HX_SRC was
+        # previously cloned from a DIFFERENT repo (observed on a pool host whose
+        # origin pointed at dancinlab/anima), the `|| true`-swallowed fetch/reset
+        # would otherwise track THAT repo's main → self/ symlinked to a foreign tree
+        # → user `hexa build` fails with confusing 'undeclared identifier' errors
+        # that re-running install could never cure (the binary updates but self/
+        # stays stale). set-url forces the correct source; a still-failing update
+        # falls back to a fresh clone so a corrupt/foreign tree can never persist.
+        git -C "$HX_SRC" remote set-url origin "$repo_url" >/dev/null 2>&1 || true
+        if git -C "$HX_SRC" fetch --depth 1 origin "$HEXA_BRANCH" >/dev/null 2>&1 \
+           && git -C "$HX_SRC" reset --hard FETCH_HEAD >/dev/null 2>&1; then
+            :
+        else
+            dim "  update failed — re-cloning fresh from $repo_url"
+            rm -rf "$HX_SRC"
+            if ! git clone --depth 1 --branch "$HEXA_BRANCH" "$repo_url" "$HX_SRC" >/dev/null 2>&1; then
+                red "  ✗ git clone failed: $repo_url ($HEXA_BRANCH)"
+                return 1
+            fi
+        fi
     else
         dim "  cloning $repo_url (branch: $HEXA_BRANCH, shallow)"
         rm -rf "$HX_SRC"
