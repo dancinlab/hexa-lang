@@ -88,7 +88,14 @@
         "id": "CLOUD-CROSSPROJECT-FORCE",
         "state": "in_flight",
         "value": "--force is a CONFIRM-skip, NOT a cross-project license: a rent-session trap auto-passing --force (with a mis-parsed id) destroyed another project's pod (an anima session killed a runpod pod tagged to a different project)",
-        "threshold": "cross-project REAL-mismatch refuses even under --force; teardown requires re-running from the owner repo (same-project/orphan/untracked unaffected)",
+        "threshold": "cross-project REAL-mismatch refuses even under --force; teardown requires re-running from the owner repo (same-project/orphan/untracked unaffected). ESCAPE (PR #4337): a billing pod unreachable from its owner repo is NOT un-killable — the EXPLICIT --yes-cross-project flag (never --force alone) overrides",
+        "source": "stdlib/cloud/cloud_cli.hexa"
+      },
+      {
+        "id": "CLOUD-RENT-COST-TRAP",
+        "state": "in_flight",
+        "value": "cloud rent had NO way to list offers without provisioning a billable pod — verifying 'do offers exist / at what $/hr?' cost a real rental; worse, an unrecognized --dry-run was SILENTLY IGNORED, the search picked an offer ($0.43/hr) and CREATED an instance (LIVE incident 2026-07-01). Sibling gap: the cross-project down-guard made a cost-leaking pod owned by another project UN-KILLABLE via the sanctioned CLI (only raw vastai destroy + cloud forget worked).",
+        "threshold": "cloud rent --search-only/--dry-run lists offers then EXITS renting NOTHING (vast prints id/$hr/specs via vast_list_offers; runpod reports the --gpu selector); an unknown flag on the $-incurring rent verb FAILS LOUD (exit 2, no provider call) — never silently ignored; teardown escape = explicit --yes-cross-project (never --force alone); cloud forget stays guard-free for already-gone registry cleanup",
         "source": "stdlib/cloud/cloud_cli.hexa"
       },
       {
