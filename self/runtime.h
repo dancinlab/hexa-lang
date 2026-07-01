@@ -1296,6 +1296,13 @@ HexaVal hexa_forge_dispatch_gelu(HexaVal in_v, HexaVal out_v,
                                   HexaVal n_v);                              /* runtime.c — fusion L3 glue */
 HexaVal forge_dispatch_gelu(HexaVal in_v, HexaVal out_v,
                              HexaVal n_v);                                    /* runtime.c — fusion L3 glue seam */
+/* P1a (device-resident decode) — forge_dispatch_layernorm(x, g, b, out, R, C,
+ * eps) -> int rc (0 ok / -1 host fallback). Row-wise LayerNorm mirroring host
+ * _bg_layernorm (population var, dt_sqrt, γ/β affine); keeps OUT DEVICE-RESIDENT
+ * via _hx_cuda_farr_layernorm_rows_gpu. no-CUDA → -1 → host _bg_layernorm. */
+HexaVal hexa_forge_dispatch_layernorm(HexaVal x_v, HexaVal g_v, HexaVal b_v,
+                                      HexaVal out_v, HexaVal r_v, HexaVal c_v,
+                                      HexaVal eps_v);                          /* runtime.c — P1a device LN */
 /* HEXA-FUSION L3-b — dual GELU fused (the 2 expert-conv activations
  * eo0->ex0, eo1->ex1) in ONE device launch. 5 args; calls _hx_cuda_farr_gelu2_gpu.
  * byte-eq == two separate forge_dispatch_gelu (same erf-based cdf per input). */
