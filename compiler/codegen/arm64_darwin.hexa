@@ -2094,6 +2094,8 @@ fn _arm64_is_variadic(fname: string) -> bool {
     if env("HEXA_VA_INTRINSICS") != "1" { return false }
     if fname == "hxlcl_va_smoke" { return true }
     if fname == "hxlcl_va_fp_smoke" { return true }
+    // RUNG2 forwarding PoC (outer variadic fn — see stdlib/runtime/hxlcl_va_fwd_smoke.hexa).
+    if fname == "hxlcl_va_fwd_smoke" { return true }
     return false
 }
 

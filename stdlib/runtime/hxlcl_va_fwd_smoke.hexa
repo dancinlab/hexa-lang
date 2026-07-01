@@ -1,0 +1,39 @@
+// stdlib/runtime/hxlcl_va_fwd_smoke.hexa — RFC061 §M8 varargs-ABI (feature B · RUNG2)
+// FORWARDING-leg proof. The same-frame PoCs (hxlcl_va_smoke/hxlcl_va_fp_smoke) create a
+// va_list with __builtin_va_start AND walk it in the SAME frame. The real printf family
+// (hxlcl_vfprintf_fd/hxlcl_vsnprintf, self/runtime_emit_full.hexa:977/698) instead takes
+// `va_list ap` AS A PARAMETER. This smoke proves that missing leg: an OUTER variadic frame
+// runs va_start, then PASSES the &va_list across a call boundary into a NON-variadic inner
+// walker that runs __builtin_va_arg on the caller-supplied list. Mirrors musl vfprintf.c
+// printf_core→pop_arg(union arg*, int, va_list *ap) (va_arg(*ap,T) on a forwarded pointer).
+//
+// C link contract (harness asserts value-exactness through reg AND overflow paths):
+//   long hxlcl_va_fwd_inner(long ap, long n);  // ap = forwarded &va_list; sums n int varargs
+//   long hxlcl_va_fwd_smoke(long n, ...);      // va_start → forward ap → va_end; returns sum
+//
+// The inner walker is NON-variadic: it never calls va_start (no reg-save prologue), it only
+// reads through the forwarded pointer — va_arg lowering (x86_64_linux.hexa:4674) is a
+// standalone per-op handler NOT gated on _x86_va_active, so it lowers in a plain fn. Only
+// the OUTER hxlcl_va_fwd_smoke needs a _is_variadic whitelist entry. va_start stores
+// ABSOLUTE runtime addresses (overflow=rbp+16, reg_save_area=rbp+base) into the va_list, so
+// forwarding a pointer to it is sound cross-call. Gated by HEXA_VA_INTRINSICS=1 → default-OFF.
+//
+// IN-BODY DISCIPLINE (hxlcl_core un-nested rule): every intrinsic writes exactly ONE let;
+// comparisons use the raw-payload leaf __hx_payload_lt (a bare `<` would re-box the raw word).
+pub fn hxlcl_va_fwd_inner(ap: HexaVal, n: HexaVal) -> int {
+    let mut acc = 0
+    let mut i = 0
+    while __hx_payload_lt(i, n) {
+        let v = __builtin_va_arg(ap)          // walk the FORWARDED va_list (outer frame)
+        acc = __hx_payload_add(acc, v)
+        i = __hx_payload_add(i, 1)
+    }
+    return acc
+}
+
+pub fn hxlcl_va_fwd_smoke(n: HexaVal) -> int {
+    let ap = __builtin_va_start(1)            // 1 named param (n) → gp_offset = 8
+    let r = hxlcl_va_fwd_inner(ap, n)         // forward &va_list across the call boundary
+    let _e = __builtin_va_end(ap)             // SysV/AAPCS no-op
+    return r
+}
