@@ -600,7 +600,7 @@ fn vast_search_offers(query: str, verified_only: int) -> VastOffer {
 // regardless of whether vast's --raw JSON typed it int / float / string. ""
 // when the field is absent. Used only by the SEARCH-ONLY table printer below
 // (never binds a claim / rent). Mirrors _vast_offer_dph's type-agnostic read.
-fn _vast_field_str(elem, key: str) -> str {
+fn _vast_field_str(elem: any, key: str) -> str {
     let v = json_object_get(elem, key)
     let t = type_of(v)
     if t == "int" || t == "float" || t == "string" {
