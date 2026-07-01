@@ -1641,7 +1641,7 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     // (the 2026-06-02 fire2→fire5 leak: a driver re-renting a fresh pod on every
     // pod-death) has been DEPRECATED — a fire that loses its pod NO LONGER
     // auto-rents; pod-loss FAILS LOUD and the user must `cloud rent` again.
-    if search_only == 0 && _has_flag(av, start, "--force-new") == 0 {
+    if !search_only && _has_flag(av, start, "--force-new") == 0 {
         let existing = pod_registry_find_by_purpose(project, purpose)
         if len(existing) > 0 {
             println("[cloud] rent vast: reusing existing pod " + existing + " for " + project + "/" + purpose + " (M5 registry; pass --force-new to override)")
@@ -1708,7 +1708,7 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     // no billing. This is the last point before any $-incurring step, so a
     // `--search-only` / `--dry-run` is a guaranteed cost-free "what would I
     // rent?" surface (the exact gap that made verifying offers cost a rental).
-    if search_only == 1 {
+    if search_only {
         let _n = vast_list_offers(query, 1)
         return 0
     }
