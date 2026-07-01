@@ -1550,10 +1550,11 @@ build_runtime_a_from_source() {
         # def. The shim drops its strcmp def via -DHEXA_RT_NATIVE_STRCMP (#ifndef in
         # shim_emit). DEFAULT (HEXA_RT_NATIVE_STRCMP unset) adds NO -D and NO member →
         # shim.o + archive byte-identical (release-integrity invariant). x86_64-linux ONLY
-        # (same host gate as strstr/strtoll; arm64 --target/objcopy is the NEXT rung).
+        # (extends the strstr/strtoll host gate to arm64-linux — the NEXT rung, now WIRED:
+        # --target=arm64-linux-gnu + @PAGE→:lo12: ELF fixup + arch-selected as/objcopy).
         # Supersedes the hand-assembled MEMLEAF ELF fixture (HEXA_RT_SELFEMIT_STRCMP).
         if [ "${HEXA_RT_NATIVE_STRCMP:-0}" = "1" ]; then
-            if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
+            if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ] || [ "$(uname -m)" = "aarch64" ] || [ "$(uname -m)" = "arm64" ]; }; then
                 local _rnsc_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
                 if [ -z "$_rnsc_bin" ]; then
                     echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCMP FATAL: HEXA_RT_NATIVE_STRCMP=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
@@ -1562,19 +1563,44 @@ build_runtime_a_from_source() {
                 local _rnsc_s="build/hxlcl_strcmp_native.s"
                 local _rnsc_full="build/hxlcl_strcmp_native_full.o"
                 local _rnsc_o="build/hxlcl_strcmp_native.o"
+                # arm64-linux NEXT rung (#4347 follow-up): the shared arm64 backend
+                # (arm64_darwin.hexa) Route-C-lowers hxlcl_strcmp via the SAME target-neutral
+                # _is_cabi whitelist (x86_64_linux.hexa:2192 · pure byte-walk leaf, no fp/xmm
+                # ABI → AAPCS64 x0/x1 in, x0 out — ingress arm64_darwin.hexa:4245-4261, ret
+                # :3831). Select emit-target + assembler + isolator by host arch. NOTE: the
+                # codegen triple is arm64-linux-gnu (compiler/main.hexa:146,885), NOT
+                # aarch64-linux-gnu. arm64 additionally needs the @PAGE→:lo12: ELF fixup (the
+                # shared arm64 codegen emits Mach-O page-rel syntax regardless of ELF target).
+                local _rnsc_target="x86_64-linux-gnu"; local _rnsc_cc="$CC"; local _rnsc_objcopy="objcopy"; local _rnsc_arm64=0
+                case "$(uname -m)" in
+                    aarch64|arm64)
+                        _rnsc_target="arm64-linux-gnu"; _rnsc_arm64=1
+                        command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 && _rnsc_cc="aarch64-linux-gnu-gcc"
+                        command -v aarch64-linux-gnu-objcopy >/dev/null 2>&1 && _rnsc_objcopy="aarch64-linux-gnu-objcopy"
+                        ;;
+                esac
                 printf 'fn _rnsc_unused() {}\n' > "$_rnsc_drv"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCMP: emitting native Route C hxlcl_strcmp .o via $_rnsc_bin (HEXA_CABI_HXLCL=1, replacing libc-shim strcmp member)…"
                 env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnsc_bin" "$_rnsc_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnsc_s" stdlib/runtime/hxlcl_core.hexa \
+                    "$_rnsc_bin" "$_rnsc_drv" --emit=asm --target="$_rnsc_target" -o "$_rnsc_s" stdlib/runtime/hxlcl_core.hexa \
                     >"build/_rnsc_strcmp.log" 2>&1 \
                     || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCMP FATAL: strcmp Route C asm emit failed — see build/_rnsc_strcmp.log" >&2; cat "build/_rnsc_strcmp.log" >&2; return 1; }
                 [ -s "$_rnsc_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCMP FATAL: empty $_rnsc_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnsc_s" -o "$_rnsc_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCMP FATAL: assemble $_rnsc_s failed" >&2; return 1; }
+                if [ "$_rnsc_arm64" = "1" ]; then
+                    # Mach-O page-rel → ELF GNU-as: `adrp X, sym@PAGE`→`adrp X, sym`;
+                    # `add X, X, sym@PAGEOFF`→`add X, X, :lo12:sym`. The shared arm64 codegen
+                    # emits Mach-O syntax for ELF too (const_float/global pool load path) so
+                    # this is needed even natively on arm64. Verbatim from the proven fixup at
+                    # tool/va_intrinsics_smoke_arm64.sh:91 (release regen_* scripts carry it).
+                    perl -i -pe 's/(adrp\s+[xw]\d+,\s*)([._A-Za-z][._A-Za-z0-9]*)\@PAGE\b/$1$2/; s/(add\s+[xw]\d+,\s*[xw]\d+,\s*)([._A-Za-z][._A-Za-z0-9]*)\@PAGEOFF\b/$1:lo12:$2/' "$_rnsc_s" \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCMP FATAL: arm64 @PAGE→:lo12: fixup failed" >&2; return 1; }
+                fi
+                $_rnsc_cc $_mo_archflag -c "$_rnsc_s" -o "$_rnsc_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCMP FATAL: assemble $_rnsc_s failed" >&2; return 1; }
                 # ISOLATE hxlcl_strcmp from the whole-module emit: keep ONLY that strong
                 # global so the staged member carries no sibling C-ABI defs (those stay
                 # served by the still-compiled shim). Mirrors RT-NATIVE-STRSTR/STRTOLL.
-                if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_strcmp "$_rnsc_full" "$_rnsc_o" \
+                if command -v "$_rnsc_objcopy" >/dev/null 2>&1; then
+                    "$_rnsc_objcopy" --keep-global-symbol=hxlcl_strcmp "$_rnsc_full" "$_rnsc_o" \
                         || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCMP FATAL: objcopy isolate strcmp failed" >&2; return 1; }
                 else
                     cp "$_rnsc_full" "$_rnsc_o"
@@ -1584,7 +1610,7 @@ build_runtime_a_from_source() {
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnsc_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCMP: hxlcl_strcmp → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_STRCMP (strcmp dropped) — ld -r multidef gate validates"
             else
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCMP: HEXA_RT_NATIVE_STRCMP=1 IGNORED — Route C whole-module emit is x86_64-linux-only (host=$(uname -sm)); retaining libc shim strcmp member" >&2
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCMP: HEXA_RT_NATIVE_STRCMP=1 IGNORED — Route C whole-module emit is x86_64/arm64-linux-only (host=$(uname -sm)); retaining libc shim strcmp member" >&2
             fi
         fi
         # ── RFC061 §M8 RT-NATIVE-STRSTR (Route C whole-module emit · FIRST non-libm
