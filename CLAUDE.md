@@ -1,7 +1,7 @@
 # hexa-lang
 
 ## Project
-Native `.hexa` compiler with an embedded theorem **atlas** + `hx` package manager. **No LLVM anywhere**: source→own-IR→native, linked by `hexa_ld` — byte-identical self-host fixpoint (`gen3 ≡ gen4`). `self/*.c` floor → zero; emitted C is reducible, never an irreducible floor. Every formula-bearing fn must cite an atlas law (`@cite`)/`@verify`/`@grace`, else the build refuses to emit (`HX8004`). Domain tracking is retired.
+Native `.hexa` compiler with an embedded theorem **atlas** + `hx` package manager. **No LLVM anywhere**: source→own-IR→native, linked by `hexa_ld` — byte-identical self-host fixpoint (`gen3 ≡ gen4`). `self/*.c` floor → **∅ REACHED** (tracked `git ls-files self/**/*.c == ∅`, #4356 cuda + #4352 timegm emitter-graduation); the ~5.5k-LOC emitted-C substrate is now a **reducible** RUNTIME-PORT target (never an irreducible floor) whose authoritative nm-UND libc floor is exposed per-CI (advisory dump in `nobaseline-gate.yml`, #4360). Reduction runs as measured tracks: fortify `__*_chk` dropped via `-D_FORTIFY_SOURCE=0` (#4361) · perf-neutral syscall leaves routed to raw-svc (getpid #4358 · setpgid #4364) · compiler-synth `memcpy/memset` is a measured perf-wall (byte-loop vs libc SIMD → deferred until a reference-matched fast native body lands). Every formula-bearing fn must cite an atlas law (`@cite`)/`@verify`/`@grace`, else the build refuses to emit (`HX8004`). Domain tracking is retired.
 
 Governed by the vendored `.harness-engine` (`hardcore`) via `.claude/settings.json` hooks (no-op when absent): single-doc discipline, L0 lockdown, `.hexa` changelog gate, protected branches. `hexa verify` = g5 gate.
 
