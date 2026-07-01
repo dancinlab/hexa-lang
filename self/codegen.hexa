@@ -7986,6 +7986,20 @@ fn gen2_expr(node) {
                 }
             }
             if len(node.args) == 7 {
+                // P1a (device-resident decode): forge_dispatch_layernorm(x, g, b,
+                // out, R, C, eps) -> int rc. Row-wise LayerNorm mirroring host
+                // _bg_layernorm (dt_sqrt, population var, γ/β affine); keeps OUT
+                // DEVICE-RESIDENT (no d2h). no-CUDA -> -1 -> host _bg_layernorm loop.
+                // (#4339 placed this in the len==3 block by mistake — it takes 7
+                // args, so the binding was unreachable and the call fell through to
+                // an undeclared generic `forge_dispatch_layernorm` C symbol.)
+                if name == "forge_dispatch_layernorm" {
+                    return "hexa_forge_dispatch_layernorm("
+                        + arg_strs[0] + ", " + arg_strs[1] + ", "
+                        + arg_strs[2] + ", " + arg_strs[3] + ", "
+                        + arg_strs[4] + ", " + arg_strs[5] + ", "
+                        + arg_strs[6] + ")"
+                }
                 // feat/primitive-float-array — CNOT kernel.
                 if name == "farr_apply_cnot" {
                     return "hexa_farr_apply_cnot(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ")"
@@ -13844,6 +13858,13 @@ fn codegen_full(ast) {
     // edit swapping the call site back to bare `setjmp` re-opens the defect.
     out_parts.push("#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)\n")
     out_parts.push("int hxlcl_setjmp(void *buf) __asm__(\"_hxlcl_setjmp\");\n")
+    out_parts.push("#elif defined(__x86_64__)\n")
+    out_parts.push("// RFC061 §M8 ∅−8: x86_64-linux uses the NATIVE musl hxlcl_setjmp (real\n")
+    out_parts.push("// global in runtime.o), matching the native musl hxlcl_longjmp the re-\n")
+    out_parts.push("// baselined runtime.c provides. NOT the `setjmp` macro below — a glibc\n")
+    out_parts.push("// setjmp SAVE paired with the musl-layout longjmp RESTORE is the M3\n")
+    out_parts.push("// layout-mismatch SEGV. Mirrors the darwin real-fn decl above.\n")
+    out_parts.push("int hxlcl_setjmp(void *buf) __attribute__((returns_twice));\n")
     out_parts.push("#elif !defined(hxlcl_setjmp)\n")
     out_parts.push("#define hxlcl_setjmp(buf) setjmp(*(jmp_buf *)(buf))\n")
     out_parts.push("#endif\n\n")

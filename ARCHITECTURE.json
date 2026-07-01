@@ -16,6 +16,13 @@
         "source": "bench/clm_train_bench.hexa"
       },
       {
+        "id": "CLM-STEP-CONV-BWD-HOST-SCALAR-WALL",
+        "state": "in_flight",
+        "value": "nn_conv1d_bwd in stdlib/flame/conv_lib.hexa was a host-scalar 4-nested loop (T·Cout·Cin·K≈201M iter/call × 4 calls/step) with no GPU kernel — CLM step 60325ms vs PyTorch 12.7ms = 4750×. FIX: replaced with forge_dispatch_matmul im2col+GEMM+col2im path (same algorithm as clm_conv_gpu.hexa::conv1d_bwd_via_forge, verified max|Δ|≤1e-9). Also fwd upgraded t_matmul→forge_dispatch_matmul. Parity + speedup measurement on summer RTX5070 sm_120 pending (see bench/vs_pytorch/bench_hexa_clm_step.hexa).",
+        "threshold": "CLM step median on summer < 1000ms (>>1000× speedup expected); parity max|Δ|≤1e-9 vs naive path",
+        "source": "stdlib/flame/conv_lib.hexa"
+      },
+      {
         "id": "METACLOSURE-SEED-POSITIONAL",
         "state": "ossified",
         "value": "path defaulted to cli_positional(0) → `--seed \"expr\"` mis-bound expr as a filename (file-not-found) since the file-branch precedes the seed-branch; sister `absolute` works only because it has no --file path",
@@ -38,6 +45,8 @@
       },
       {
         "id": "MUSL-OPENSSL-STATIC-DEPS",
+        "state": "ossified",
+        "value": "musl static build needs libssl+libcrypto static archives (not available in all musl toolchains by default); hexa_cc needs -lbsd on musl for openssl compat",
         "source": "self/main.hexa"
       },
       {
@@ -79,7 +88,14 @@
         "id": "CLOUD-CROSSPROJECT-FORCE",
         "state": "in_flight",
         "value": "--force is a CONFIRM-skip, NOT a cross-project license: a rent-session trap auto-passing --force (with a mis-parsed id) destroyed another project's pod (an anima session killed a runpod pod tagged to a different project)",
-        "threshold": "cross-project REAL-mismatch refuses even under --force; teardown requires re-running from the owner repo (same-project/orphan/untracked unaffected)",
+        "threshold": "cross-project REAL-mismatch refuses even under --force; teardown requires re-running from the owner repo (same-project/orphan/untracked unaffected). ESCAPE (PR #4337): a billing pod unreachable from its owner repo is NOT un-killable — the EXPLICIT --yes-cross-project flag (never --force alone) overrides",
+        "source": "stdlib/cloud/cloud_cli.hexa"
+      },
+      {
+        "id": "CLOUD-RENT-COST-TRAP",
+        "state": "in_flight",
+        "value": "cloud rent had NO way to list offers without provisioning a billable pod — verifying 'do offers exist / at what $/hr?' cost a real rental; worse, an unrecognized --dry-run was SILENTLY IGNORED, the search picked an offer ($0.43/hr) and CREATED an instance (LIVE incident 2026-07-01). Sibling gap: the cross-project down-guard made a cost-leaking pod owned by another project UN-KILLABLE via the sanctioned CLI (only raw vastai destroy + cloud forget worked).",
+        "threshold": "cloud rent --search-only/--dry-run lists offers then EXITS renting NOTHING (vast prints id/$hr/specs via vast_list_offers; runpod reports the --gpu selector); an unknown flag on the $-incurring rent verb FAILS LOUD (exit 2, no provider call) — never silently ignored; teardown escape = explicit --yes-cross-project (never --force alone); cloud forget stays guard-free for already-gone registry cleanup",
         "source": "stdlib/cloud/cloud_cli.hexa"
       },
       {
@@ -136,11 +152,74 @@
         "source": "tool/stage_build_hexa"
       },
       {
+        "id": "CUDA-LINK-MISSING-SSL",
+        "state": "in_flight",
+        "value": "self/main.hexa CUDA link path (~L1487) early-returns after adding -lcudart/-lcuda/-lcudadevrt but BEFORE adding -lssl/-lcrypto (lines 1496-1500 are never reached for CUDA builds). When a deployed runtime.a has a CUDA host object compiled with -DHEXA_HAS_OPENSSL, the linker finds undefined refs to EVP_* in any hexa run. Workaround: compile runtime_cuda_host.o without -DHEXA_HAS_OPENSSL (gates out hexa_aes256_ctr_xor, the only EVP_* caller).",
+        "threshold": "Fix self/main.hexa ~L1487: probe OpenSSL (pkg-config --libs openssl) and append result to the CUDA return line before -lcudart/-lcuda. Requires 3-target byteeq CI PR. Until then, CUDA deploy archive must NOT include -DHEXA_HAS_OPENSSL-compiled objects.",
+        "source": "self/main.hexa"
+      },
+      {
+        "id": "CUDA-BUILD-CORES-EXPLICIT-LINK-MULTIDEF",
+        "state": "ossified",
+        "value": "build_cuda_runtime extracted *_native.o from prebuilt runtime.a and linked them EXPLICITLY as .o files. The frozen runtime_core.c (restored from blob 151c52c82 by restore_frozen_seeds) predates HEXA_RT_ALLOC_NATIVE guards and still #includes runtime_hi_gen.c unconditionally → 19× `multiple definition`: hexa_arena_alloc/mark/rewind/reset (4) + rt_str_split/lines/pad_left/pad_right/repeat/center/to_upper/to_lower/trim/trim_start/trim_end/starts_with_b/ends_with_b/contains_b/from_int (15). SHIPPED runtime.a is fine (archive lazy-pulls only needed symbols) but explicit-link forces BOTH objects. Root cause = the frozen seed's gating does NOT match the symbol set provided by the native .o seeds.",
+        "threshold": "After restore_frozen_seeds, call _regen_runtime_core_for_cuda() (awk-unescape of runtime_core_emit.hexa SSOT → runtime_core.c WITH HEXA_RT_ALLOC_NATIVE guards), reconcile_runtime_c_ssot_dups (drop 4 migrated f64<->bits weak defs from runtime.c), and Z2a patch (#include runtime_hi_gen.c removed when rt_hi_native.o in CORES). Same pattern as stage_resolve_runtime_a already does. CPU build: compile fresh runtime.o with RTFLAGS instead of extracting from archive.",
+        "source": "tool/build_cuda_runtime"
+      },
+      {
+        "id": "BUILD-CUDA-RUNTIME-CUDA-HOME-SM80-ZEROS",
+        "state": "ossified",
+        "value": "build_cuda_runtime defaulted CUDA_HOME=/usr/local/cuda-13.0. When that path is absent (e.g. summer has cuda-12.9 only), PATH prepend has no effect and system nvcc (CUDA 12.0, /usr/bin/nvcc) is used instead. CUDA 12.0 compiles sm_80 objects with -rdc=true. sm_80+rdc+clang-link silently fails device-link init on sm_120 (Blackwell RTX 5070) → ALL GPU GEMM kernels return zero. Stale ~/.hexa-cache/ entries (pre-compiled hexa run binaries keyed by source hash) perpetuate the problem after runtime.a is updated.",
+        "threshold": "CUDA_HOME auto-detect: try cuda-13.0 > cuda-12.9 > cuda-12.8 > /usr/local/cuda canonical symlink (Ubuntu alternatives, always points to active CUDA). DEPLOY step after successful gemm_cuda run: assemble runtime.cuda.a ($CORES + hxlcl_shim.o + runtime_cuda_host.o + runtime_cuda.o + runtime_cuda_dlink.o) → install to ~/.hx/bin/build/runtime.a + rm -rf ~/.hexa-cache/ (DX governance: one command activates GPU on CUDA host). Fix #4216.",
+        "source": "tool/build_cuda_runtime"
+      },
+      {
         "id": "CODEGEN-BOXED-SCALAR-SLOWPATH",
         "state": "in_flight",
         "value": "hexa native-emit(aprime_cc --emit=obj)의 일반 동적타입 scalar/array 경로가 gcc-O2 대비 measured 2.9~23× 느림(geomean 8.6×·aiden·reference-match·state/codegen-quality-probe-verdict.md). 커널별 ratio: k1_sum(scalar reduce) 2.86× · k5_fncall 4.41× · k2_collatz(branchy int) 12.53× · k4_branch(modulo) 12.73× · k3_arrmap(배열 map) 23.23×(최대). 어셈 root-cause=박싱 HexaVal 태그-디스패치 모델: scalar op마다 런타임 함수호출(hexa_add_slow/hexa_mul/hexa_mod, 타입태그 스택슬롯)·레지스터할당無·unboxed i64無·strength-reduction無. k3=원소당 7call(hexa_index_get/set bounds-check+box) vs gcc 0call(register pointer-walk+lea+magic-multiply). HEXA_INLINE_INT_BOX=1도 unbox 안됨(5-7 call/iter 잔존). 손튜닝 farr/GEMM은 별도 unboxed 경로=BLIS/cuBLAS parity(일반 유저코드는 거기로 안 내려감).",
         "threshold": "돌파레버=static-type-inference 기반 int/float scalar unboxing + native-array element access(farr unboxed 기계를 일반 scalar loop로 확장). 진행=codegen-unbox-breakthrough workflow(Map→Design→Plan→state/codegen-unboxing-campaign-plan.md)→최소프로토타입 opt-in HEXA_UNBOX_* default-OFF→런타임 ratio측정+byteeq3타깃 gen3≡gen4+출하smoke→pr-cycle. ⚠️고위험 substrate(codegen)·릴리스무결성 최상위·multi-session·OFF경로 byte-identical 필수. 종착=커널 ratio≈1(parity 도달) 또는 measured 천장.",
         "source": "self/codegen.hexa"
+      },
+      {
+        "id": "bench-hexa-clm-step-hexa-1",
+        "state": "ossified",
+        "value": "풀CLM step 80× 측정모순 RESOLVED: 75331ms(r1)=anomalous — non-builtin-aware/오염 hexat이 forge_dispatch_*를 hexa_call3 값-디스패치로 잘못 lowering→느린 CPU폴백 측정. 진짜=882ms(현행 main hexat·pool 호스트서 main 직접 빌드·GPU OWN-GEMM-FIRED DEVICE path·median-7 877~886·workflow 931ms와 동차). PyTorch 12.7ms 대비 ≈69×(4750×는 phantom). conv-fix #4227 효과 있음(이전 FALSIFIED는 bad-hexat 아티팩트).",
+        "threshold": "재발조건: forge-using 벤치가 풀에서 비정상적으로 느리거나(75331ms류) hexa_call3/4 타입에러나면 = hexat이 builtin 미인지(stock/오염). 해결: pool 호스트(aiden/summer)에서 현행 main 을 직접 빌드(tool/release_build·./hexa install.hexa)한 hexat 으로 측정. test 롤링 채널은 폐기됨(2026-06-30) — HEXA_VERSION=test 경로 없음. stable 릴리스 컷 불요. per-op regen으로 builtin 박지 말 것(툴체인 오염=측정무효).",
+        "source": "bench/vs_pytorch/bench_hexa_clm_step.hexa"
+      },
+      {
+        "id": "optim-lib-hexa-1",
+        "state": "ossified",
+        "value": "AdamW device seam(opt_adamw_step→forge_dispatch_adamw) r4 #4261 측정: full-CLM 172.94→159.64ms=7.7% win(summer sm_120·cuda=1·[OWN-GEMM-FIRED]·단일변수 A/B·#4258 173.35 재현). parity: max|dW|=1.11e-16(0.5-ULP FMA)·dm=0·dv=0 — 엄격 max|Δ|=0 아님(gelu/conv device-seam 머지 선례 동급 1-ULP FMA-class). 핵심학습: (1)hexa gpu 가 cuda_available=0 오보고(정적 바이너리 프로브)하지만 hexa run 은 배포 runtime.a 로 cuda=1 정상 → cuda 현행성은 hexa gpu 아닌 hexa run [OWN-GEMM-FIRED]/nsys 커널로 검증(build_cuda_runtime wall 진단). (2)AdamW device kernel 자체는 GPU kernel time 5.4%뿐 → 7.7% win은 host-scalar-loop→device 교체, memcpy/sync/alloc 대량은 잔여(r5 mempool+async+megakernel). (3)DEVRESIDENT int4 경로(anima 생산)는 코히런스 가드로 host 강제→이 PR benefit 없음(후속 device 재양자화 코히런스).",
+        "threshold": "재발조건: device seam 머지 시 'byte-exact by construction' 주장 vs 실측 max|Δ|. 확인: 실측 parity 찍기(주장 금지) — elementwise여도 device FMA/host mul+sub 차로 1-ULP FMA-class(1.11e-16) 날 수 있음(gelu/conv 선례). 머지 bar: 1-ULP FMA-class는 repo 기존 device-seam 동급·det/학습 무해(byteeq 게이트가 결정성 보장)이면 수용 OR 엄격 max|Δ|=0 요구 시 device-kernel FMA-align(runtime_cuda.c frozen-blob follow-on). cuda 현행성은 hexa gpu 미신뢰·hexa run [OWN-GEMM-FIRED]/nsys 커널로. cf convergence conv-lib-hexa-1(install-sh-1 cuda wall).",
+        "source": "stdlib/flame/optim_lib.hexa"
+      },
+      {
+        "id": "runtime-cuda-c-1",
+        "state": "ossified",
+        "value": "device-residency 측정 TERMINAL(r7 clean GPU 결정판·summer 타세션0·OOM=0·file-script): real ~41% D2H-elim lever(clm_prod 35.4→20.9s) BUT byte-eq INHERENTLY FAILS at d=512 — NOT anima-contention artifact(#4274 confound 결판). matched C1 HOST_NOW ep1 3.6744(bit-stable·healthy→2.45) vs C2 DEVICE_KEEP ep1 4.275/4.459(Δ0.6-0.8·run-to-run 비결정·거의 정체)·BC2≠BC1 at 2-step(누적없이도 발산). TWO SEPARATE bugs: H2(byte-eq killer)=device-resident forward op이 d=512서 racy/wrong(epoch-1부터·run-to-run 비결정·async 무효=L2704 decode race 계열 stream-ordering/atomic). H1(독립 lifecycle leak)=device-mem 2→2002MiB 단조증가(DEVICE_KEEP per-step free 없음)·clean 12GB 무해 OOM=0·압박시 OOM(이전 contended OOM=anima 2.8GB+이 2GB squeeze). bench DEVICE_KEEP NaN도 같은 H2 계열. env-only path TERMINAL·NOT landable. per-op seam(#4237~4261)은 byte-exact win 유지.",
+        "threshold": "재발조건/해결: whole-chain device-residency(CLM_PROD_DEVRESIDENT/DEVICE_KEEP)는 d≥512서 byte-eq INHERENTLY FAIL(clean GPU·OOM=0서도)=측정 TERMINAL wall(env-only). ~41% D2H-elim은 real이나 2 codegen/runtime 버그 fix 선결: (1)H2 forward race/parity — clm_step_determinism_eq oracle을 d=512서 돌려 어느 device-resident op(groupnorm/moe/gelu under DEVICE_KEEP)이 racy/non-det인지 bisect→stream-ordering/atomic fix(L2704 decode race 계열). (2)H1 residency lifecycle — DEVICE_KEEP가 per-step device 텐서 안 free(2→2002MiB ramp)→per-step device-free 추가. 둘 다 codegen/runtime debug round(measure 아님). d=8 byte-eq는 scale 보장 못 함(d=512 필수). 측정은 CLEAN uncontended GPU에서만(타세션 pool 점유 시 HOLD). per-op seam은 byte-exact라 무관·landable.",
+        "source": "self/cuda/runtime_cuda.c"
+      },
+      {
+        "id": "runtime-emit-full-hexa-1",
+        "state": "ossified",
+        "value": "frozen-seed 재baseline(emitter runtime_emit_full.hexa 편집)을 '비가역 owner-go terminal 벽'으로 반복 오분류한 over-conservative 오류. VALIDATED #4272: setjmp/longjmp frozen-static RESTORE 벽을 reference-match(GCC stage2≡stage3 byte-compare·rustc stage0 cadence 재pin·frozen blob 폐기)로 실제 돌파→∅−8 머지. 확증: runtime.c는 tracked emitter awk합성이라 FROZEN_SEED_REF/151c52c8 재pin 불요·그냥 tracked-file 편집+byteeq 3타깃 reconverge(=GCC make compare)로 검증되는 정석 self-host 진화. 잔여 frozen-static 벽(atexit·varargs fprintf)도 동일 접근 droppable 후보.",
+        "threshold": "frozen runtime emitter 변경으로 shim-static 심볼 native화시 '비가역이라 owner-go' punt 금지(반례=#4272 ∅−8 성공). 게이트=새 byteeq 3타깃 reconverge+clean-pipeline ship smoke GREEN 전 머지금지. reconverge diverge시만 STOP(진짜 miscompile). ★ORDERING(PR#4280 FALSIFIED 실증): install.sh runtime-compile 게이트(clang-18)는 frozen bootstrap seed restore 후 新regen runtime.c 컴파일 → FLOOR runtime.c body가 참조하는 HX_* 매크로(HX_MAKE_STR 등 #4277/#4278 신규)는 runtime_core.c 인라인 정의와 독립 seed-lifecycle이라 '미정의 함수' 컴파일 실패. 따라서 FLOOR raw 생성자를 HX_* 매크로로 drain하려면 frozen-seed가 그 매크로를 먼저 담아야 함(seed re-baseline THEN emitter 참조 · pool 빌드). 로컬 regen runtime.c는 #include 2201로 scope 있어 보여도 frozen-seed 경로는 다름 — 로컬 컴파일로 byteeq-neutral 단정 금지, install.sh clang-18 게이트가 canary.",
+        "source": "self/runtime_emit_full.hexa"
+      },
+      {
+        "id": "runtime-core-hxlcl-shim-c-1",
+        "state": "ossified",
+        "value": "shim-member count != floor-reduction: literal-empty 목표는 FILE count=FLOOR(self runtime.c·byteeq clang 소비·출하) 감소. runtime_core_hxlcl_shim.c는 standalone-libc MEASUREMENT TU·여기 member 감소는 floor 안줄임(time afad8e5d 실증: floor body inert stub@runtime_emit_full.hexa:2679·flag는 측정 shim만 swap·byteeq는 runtime.a 안소비=구조적 no-op). 대부분 shim flip=svc-remainder floor-reduction-0 벽(time/getrusage/signal). setjmp #4272만 진짜 floor 전진=FLOOR emitter runtime_emit_full.hexa re-baseline해 byteeq가 실제 소비·reconverge 의미有.",
+        "threshold": "shim member 드롭을 literal-empty(ls self c-files) 전진으로 카운트 전: floor-reduction>0 확인(FLOOR runtime_emit_full.hexa body가 native화되어 byteeq 소비분 이동하는가). measurement-shim flip(byteeq 구조적 no-op·floor inert stub 유지)이면 svc-remainder 벽 분류·카운트 금지. 진짜 전진=frozen-floor re-baseline(setjmp式).",
+        "source": "self/runtime_core_hxlcl_shim.c"
+      },
+      {
+        "id": "forge-det-hexa-1",
+        "state": "ossified",
+        "value": "canonical determinism API(set_deterministic/is_deterministic)가 LATENT never-compiled 표면이라 user program 빌드 실패. 두 결함이 겹침: (1) forge_det.hexa의 extern fn hexa_forge_set_deterministic을 hexat이 FFI dlsym HexaVal-ABI wrapper로 emit→runtime.h C-ABI void(int)와 conflicting types (2) carrier-builtin 전환 후에도 self/runtime.h(손-유지 public ABI 헤더)에 carrier extern 누락→user C의 hexa_call1(set_deterministic,..)가 clang 'use of undeclared identifier'. 'vis not found'+type_checker self-test는 RED HERRING(non-fatal 노이즈·hexat 트랜스파일 rc=0 실증). 어떤 self/*.hexa·stdlib도 forge_det 컴파일 안 해 미포착. HexaVal pair-model↔C-ABI 벽(hxlcl·RFC061) 동족.",
+        "threshold": "해결=runtime-side 3박자(typechecker/codegen 무관·typechecker-recognition 가설은 grounding으로 FALSIFIED): (A) set_deterministic/is_deterministic을 self/runtime_emit_full.hexa에 first-class HexaVal builtin 등록(carrier 글로벌 HexaVal set_deterministic;+hexa_fn_new+HexaVal impl이 C-ABI 브리지·mirror cuda_available). (B) CUDA-branch impl이 C-ABI hexa_forge_* 호출 시 #ifdef HEXA_CUDA 안 그 직전에 extern void hexa_forge_set_deterministic(int);+extern int hexa_forge_is_deterministic(void); forward-decl(emit:9458 cuda_available _hx_cuda_runtime_available extern 미러)·비-CUDA #else엔 미참조 weak stub (gate① PR#4285 d02bd5691). (C★진짜 마지막 gate②) self/runtime.h(user program이 #include하는 손-유지 public ABI 헤더)에 'extern HexaVal set_deterministic;'+'extern HexaVal is_deterministic;' 추가(runtime.h:1767 cuda_available 미러·f8e846c6b). 누락 시 user C가 carrier 글로벌 못 봐 clang undeclared-identifier. 검증=aiden A/B(cuda_available OK vs set_deterministic clang 0err)+darwin CI 전체로그+f8e846c6b 12/12 GREEN(byteeq byte-eq neutral). 예방=신규 runtime carrier builtin 3박자: (i)emitter carrier 글로벌+impl (ii)C-ABI 브리지면 #ifdef forward-decl (iii)self/runtime.h extern + compile-smoke로 caller 1개 보장(byteeq-gate Sanity wire). PR#4285 gate①②모두 GREEN·머지.",
+        "source": "stdlib/flame/forge_det.hexa"
       }
     ]
   },
@@ -206,7 +285,7 @@
             "detail": ""
           },
           {
-            "name": "genuine residual is only libm transcendentals + GPU FFI — so zero-`.c` is an **open, attackable campaign**, not a policy that accepts C permanently.",
+            "name": "libm transcendentals = **ELIMINATED from the default ship (2026-07-01, #4299-4318 + #4314 -lm removal, faithful-nobaseline 3-target GREEN)** — first full libc-family dropped: all math routed to native `_hx_*` (fdlibm/musl/hw-sqrtsd) + a weak native libm-compat layer provides the libm ABI so any raw call links with no `-lm`. **The shim syscall family is likewise ELIMINATED (2026-07-01, #4320-4328 svc-remainder front CLOSED, faithful-nobaseline 3-target GREEN)** — 8 syscalls (clock_gettime·getrusage·fcntl·mkdirat·pipe2·newfstatat·openat·ppoll) routed from libc to raw-svc (x86_64 `syscall` insn / arm64 `svc 0`, arm64 uses the `*at`/`2` variants; darwin keeps the libc delegate via `#else`). A further 8 fs/time syscalls (nanosleep·getcwd·unlink→unlinkat·fstat·stat→newfstatat·mkdir→mkdirat·rename→renameat) were routed libc→raw-svc this session (#4330-4336, per-PR nm-UND delta measured, faithful-nobaseline 3-target GREEN), closing the reducible fs/time syscall front. Genuine residual now = a **measured** runtime.a nm-UND floor of 60 (2026-07-01, HEAD b7db5085), of which 6 are hexa-own (rt_*_native, resolved at final link, not libc) → ~54 true libc, categorized: ~17 sanctioned FFI (network sockets accept/bind/connect/… + dlopen/dlsym), ~6 CRT bootstrap (__libc_calloc/__libc_free/_exit/atexit/environ/mallopt), ~8 stdio/dir (opendir/readdir/glob/mkstemp), ~3 own-algo (qsort/rand/strtod, separate campaign), ~7 process/ns (execve/setns/unshare/mount), ~13 reducible-remaining (getpid-family via codegen-wrapper, sigaddset/sigemptyset macros, memcpy/memset via Route C default-OFF, flock stub) + GPU FFI (CUDA) — so zero-`.c` remains an **open, attackable campaign** with a measured, categorized floor, not a policy that accepts C permanently.",
             "role": "",
             "id": "overview-genuine-residual-is-only-libm-transcendentals-gpu-ffi-so-zer",
             "detail": ""
@@ -438,6 +517,12 @@
                     "role": "",
                     "id": "self-host-status-remaining-residuals-tracked-not-silent-zero-c-leg-b-rfc061-incl-10",
                     "detail": ""
+                  },
+                  {
+                    "name": "🟢 literal `ls self/*.c == ∅`(비재귀) REACHED **flip-free** (PR #4282) — self/ 직속 마지막 hand-tracked .c `runtime_core_hxlcl_shim.c`가 `.hexa` 에미터 SSOT(`runtime_core_hxlcl_shim_emit.hexa`, gen_c_text_emitter byte-id BY CONSTRUCTION)로 전환→gitignored build artifact(runtime.c/runtime_core.c/runtime_hi_gen.c와 동급)→`git ls-files self/*.c` 직속=∅. 증분 member-drain 측정 TERMINAL @∅−8(잔여=HexaVal-coupled·flip 필요)을 **파일 메트릭은 에미터화로 우회**(C를 비우는 대신 GENERATE·정답지=프로젝트 runtime.c 패턴+GCC gen*.c→insn-*.c). HexaVal flip 0·frozen 0·byteeq-neutral(regen byte-id·byteeq는 shim 미소비). 🟢 **재귀 메트릭 `git ls-files self/**/*.c == ∅` 도 REACHED (2026-07-02)** — 서브디렉터리 잔여 3개도 동일 에미터-SSOT 패턴으로 졸업: self/native/timegm_native.c(#4352) + self/cuda/{runtime_cuda,runtime_bf16}.c(#4356·80 __global__ 커널 7740줄+BF16 substrate). cuda 졸업 recipe=gen_c_text_emitter canonical `buf = buf +` 재-emit + build_cuda_runtime/stage_resolve_runtime_a를 hexat-FREE awk un-escaper로 마이그레이션(정답지=regen_timegm verbatim·#3701 chicken-egg 트랩 root-cause 해결) + gitignore/rm. summer RTX5070 검증: awk regen byte-identical 양파일 + nvcc 716KB .o + byteeq 3타깃 GREEN(cuda .c는 HEXA_CUDA-only=default 빌드 미참조=byteeq-neutral). 파일 메트릭(직속+재귀) 양쪽 ∅ 달성 — 잔여 zero-c = emitted-C RUNTIME-PORT content(runtime.c 등 substrate·M3) + varargs printf-dispatch, 파일 트래킹 아닌 기능적 libc.",
+                    "role": "",
+                    "id": "zero-c-literal-empty-measured-terminal",
+                    "detail": "측정 직교 벽: (1) shim libm-float sin/cos/exp/log/fmod = Route C integer-reg only(XMM/SSE class 부재) 벽. (2) setjmp/longjmp = control-flow ABI 벽. (3) 생성 runtime.c self-emit varargs `hxlcl_fprintf` = hexa va_list/va_arg IR 부재(언어 벽·reopen: __builtin_va_start 화이트리스트 intrinsic + SysV reg_save_area/AAPCS64 3타깃·musl/Go 정답지·multi-day). varargs는 tracked shim엔 0개(frozen 생성 runtime.c 거주)=literal ∅ off-path. (4) signal/time = errno-free stub → #3894 emitter-gate externalize 가능(release-safe·비-frozen·default-OFF·유일 tractable rung·shim 축소만·∅ 미달). frozen-static errno/read/write는 이미 seed #ifdef HEXA_RT_SELFEMIT extern 가드(re-baseline 불요). linux ELF syscall=🏁 Route C 종결(#4037→#4145). cuda 정정: cuBLAS=OPT-IN(HEXA_USE_CUBLAS·default OFF·own-kernel 100%·forge 독립 #3718/#3727)·진짜 GPU floor=cudart device-mgmt(-lcudart)·GPU 지원 release-integrity. SSOT: project_hexa_m8_irreducible_floor."
                   }
                 ]
               },
@@ -3614,6 +3699,12 @@
                 "role": "",
                 "id": "blocking-frontiers-forge-gpu-gemm-cublas-independence-lcublas-removal-opt-in-fas",
                 "detail": ""
+              },
+              {
+                "name": "DETERMINISM POLICY (CLAUDE.md `flame/forge determinism` · owner 2026-06-28 FLIP): fast non-det is DEFAULT, det is OPT-IN (torch/JAX convention = native-canonical-first). (A) DEFAULT (no flag) = fast non-det own-native kernels (atomic split-K own-GEMM + own im2col/col2im atomic-scatter + own grad-accum atomic + own batched GEMM; optional vendor cuBLAS-TC via HEXA_USE_CUBLAS) — gives up bit-determinism for max TRAINING speed. (B) OPT-IN HEXA_DET=1 = deterministic (own-GEMM `_hx_k_gemm` FP64==cuBLAS bit-id, `_hx_k_col2im` gather, no atomics) — run-to-run/cross-host byte-exact. SAFETY PIN: eval/verdict/decode entry points (+CI byteeq/oracle/determinism jobs) AUTO-FORCE HEXA_DET so measurement/Ψ-checksum/byte-parity reproducibility holds even with fast default; only TRAINING gets the fast default. Gate = new `_forge_det_on()` {getenv HEXA_DET} (reference-match of `_forge_gemv_splitk_on` env-gate but INVERTED polarity: unset=fast, set=det). own/vendor polarity UNCHANGED — own-native is canonical default, vendor cuBLAS stays opt-in (cuBLAS-independence campaign aligned; vendor-default forbidden). Consumer (anima): train=A default, eval=B forced (anima `a_train_nondeterministic_fast`); ckpt validated by held-out DESCENT not bit-determinism. #4208 IMPL (own-native fast-default WIRED · summer pool build GREEN + det safety-pin PASS: host oracle max|delta|=0, device CKSUM x3 identical; edit SSOT `self/cuda/runtime_cuda_emit.hexa`, runtime_cuda.c generated): host gate `_forge_det_on()` {getenv HEXA_DET, INVERTED-polarity ref-match of `_forge_gemv_splitk_on`}; DEFAULT-path atomic kernels = `_hx_k_gemv_splitk` (M==1 atomic split-K) + NEW `_hx_k_gemm_splitk` (M>1 general GEMM atomic split-K, grid.z over K, C pre-memset) + NEW `_hx_k_col2im_scatter` (atomic-scatter col2im, DX pre-zeroed) + NEW `_hx_k_embedding_bwd_scatter_atomic` (one thread/(i,c) atomicAdd); HEXA_DET=1 det fallbacks = `_hx_k_gemm`/`_hx_k_gemv_1d` (bit-id) + `_hx_k_col2im` gather + per-row embedding-bwd scan. im2col fwd = pure gather (untouched); own/vendor cuBLAS polarity UNCHANGED. ORTHOGONAL to selfhost-determinism-gate (compiler gen3 reproducibility, not GPU numerics).",
+                "role": "",
+                "id": "blocking-frontiers-forge-gpu-gemm-cublas-independence-determinism-policy-2path",
+                "detail": ""
               }
             ]
           },
@@ -4498,6 +4589,12 @@
                     "role": "",
                     "id": "language-surface-tier-1-true-gaps-both-go-and-rust-have-it-hexa-does-not-os-thre-3",
                     "detail": ""
+                  },
+                  {
+                    "name": "M:N green-thread integration DESIGNED (`state/rfc_mn_scheduler.md`): 1:1-spawn + async + work-stealing unified into Go GMP model; oracle `self/mn_scheduler.hexa` (29 assertions) + opt-in N=1 executor `HEXA_COROUTINE`; real `-DHEXA_MN_SCHED` C substrate = next pool slice; mid-fn yield = wall.",
+                    "role": "",
+                    "id": "language-surface-tier-1-true-gaps-both-go-and-rust-have-it-hexa-does-not-os-thre-4",
+                    "detail": ""
                   }
                 ]
               },
@@ -4875,6 +4972,12 @@
                     "name": "Default build never passes `-DHEXA_THREADS` (determinism isolation). state/rfc_real_concurrency_optin.md §c.",
                     "role": "",
                     "id": "language-surface-impact-ranking-largest-smallest-gap-real-concurrency-synchroniz-4",
+                    "detail": ""
+                  },
+                  {
+                    "name": "M:N scheduler (slice-③) DESIGNED + oracle landed (`state/rfc_mn_scheduler.md`, `self/mn_scheduler.hexa`): unify spawn/async/work-stealing into Go GMP; cooperative N=1 executor opt-in `HEXA_COROUTINE`; true-parallel C substrate `-DHEXA_MN_SCHED` = next pool slice.",
+                    "role": "",
+                    "id": "language-surface-impact-ranking-largest-smallest-gap-real-concurrency-synchroniz-5",
                     "detail": ""
                   }
                 ]

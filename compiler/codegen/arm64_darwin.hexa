@@ -112,6 +112,22 @@ let _STMT_BR_COND  = "br_cond"
 // reference after _fmt_label.)
 pub let mut _arm64_static_slots: [string] = []
 
+// RFC061 §M8 varargs-ABI (r2) — set true by _arm64_lower_func iff the fn being lowered
+// is variadic under HEXA_VA_INTRINSICS=1 (mirrors x86_64's _x86_va_active). Consulted
+// by the _STMT_RETURN path to route a SIMD-class variadic return into d0. Default false
+// (HEXA_VA_INTRINSICS unset → never set) → the va return branch is dead → byte-eq NEUTRAL.
+pub let mut _arm64_va_active: bool = false
+// ING #29 literal-∅ (2026-06-30): `@naked` fn attribute — set per-fn by
+// `_arm64_lower_func` from MFunc.is_naked. When true the prologue (stp x29,x30
+// / mov x29,sp / spill alloc) and BOTH epilogue emit sites are SKIPPED, leaving
+// the fn body as raw asm (the body must terminate itself). reference-match:
+// GCC __attribute__((naked)) / rustc #[naked] / zig callconv(.Naked). DEFAULT
+// false on every existing fn → byte-eq NEUTRAL. NOTE: rt_sigreturn trampoline
+// measurement is x86_64-only (arm64 kernel supplies the signal trampoline), so
+// this guard keeps arm64 codegen correct for a `@naked` fn but is not exercised
+// by the rt_sigreturn probe (x86_64 scope).
+pub let mut _arm64_is_naked: bool = false
+
 // True iff `s` begins with `pfx` (char-walk; no .substr — keeps stage0-portable).
 fn _arm64_str_starts_with(s: string, pfx: string) -> bool {
     let cs = s.chars()
@@ -135,6 +151,209 @@ fn _arm64_record_static_slot(label_no_sz: string, size_bytes: i64) {
     }
     _arm64_static_slots.push(enc + to_string(size_bytes))
 }
+
+// RFC061 §M8 named-rodata-table (literal-∅ feature C) — arm64 sibling of x86_64's
+// _x86_rodata_tabs. PRE-INITIALIZED `.rodata` constant tables (the data-leaf wall
+// named at hxlcl_fmod/sin/cos: modern musl exp/log are TABLE-driven —
+// __exp_data.tab[256] / __log_data.tab[128]). Each distinct `table_id` literal a
+// whitelisted Route C body addresses via `__hx_rodata_tab_ptr(table_id)` records its
+// id here ONCE (deduped); `codegen_arm64_darwin` decodes each into an LSection
+// appended to LModule.rodata so emit defines a `.p2align 3` `rotab_<id>` symbol whose
+// bytes are the table's LITTLE-ENDIAN doubles (AArch64 is LE, same payload as x86_64).
+// ONLY appended-to inside the `__hx_rodata_tab_ptr` STMT_CALL special-case → empty on
+// the byteeq path → rodata unchanged → byte-eq NEUTRAL (same property as
+// _arm64_static_slots; hxlcl_core.hexa is never imported by self/).
+pub let mut _arm64_rodata_tabs: [i64] = []
+
+fn _arm64_record_rodata_tab(table_id: i64) {
+    let mut i = 0
+    while i < len(_arm64_rodata_tabs) {
+        if _arm64_rodata_tabs[i] == table_id { return }   // idempotent (deduped)
+        i = i + 1
+    }
+    _arm64_rodata_tabs.push(table_id)
+}
+
+// Table CONTENTS registry — keyed by table_id. Returns a whitespace/comma-separated
+// list of BIG-ENDIAN uint64 hex tokens (the verbatim form musl's exp_data.c ships;
+// `_arm64_u64hex_list_to_le_payload` converts each to 8 LE bytes). Content is
+// IDENTICAL to x86_64's _x86_rodata_table_spec (same musl bit patterns; both targets
+// little-endian). An unknown id returns "" (empty table).
+//   id 0 = PROBE: tab[0]=1.0, tab[1]=2.0 — the STEP-0 mechanism witness.
+//   id 1 = musl exp __exp_data.tab[256] (src/math/exp_data.c, EXP_TABLE_BITS=7 N=128).
+fn _arm64_rodata_table_spec(table_id: i64) -> string {
+    if table_id == 0 {
+        return "3ff0000000000000 4000000000000000"
+    }
+    // id 1 = musl exp __exp_data.tab[256] (src/math/exp_data.c, EXP_TABLE_BITS=7
+    // N=128 → 256 uint64 entries, interleaved {tail_off, sbits_base} pairs).
+    // BIG-ENDIAN uint64 hex VERBATIM from musl (raw bit patterns; no float_to_bits).
+    // `_arm64_u64hex_list_to_le_payload` converts each to 8 LE bytes for the
+    // rotab_1 `.byte` payload. Authoritative: git.musl-libc.org exp_data.c.
+    if table_id == 1 {
+            return "0 3ff0000000000000 3c9b3b4f1a88bf6e 3feff63da9fb3335 bc7160139cd8dc5d 3fefec9a3e778061 bc905e7a108766d1 3fefe315e86e7f85 "
+                 + "3c8cd2523567f613 3fefd9b0d3158574 bc8bce8023f98efa 3fefd06b29ddf6de 3c60f74e61e6c861 3fefc74518759bc8 3c90a3e45b33d399 3fefbe3ecac6f383 "
+                 + "3c979aa65d837b6d 3fefb5586cf9890f 3c8eb51a92fdeffc 3fefac922b7247f7 3c3ebe3d702f9cd1 3fefa3ec32d3d1a2 bc6a033489906e0b 3fef9b66affed31b "
+                 + "bc9556522a2fbd0e 3fef9301d0125b51 bc5080ef8c4eea55 3fef8abdc06c31cc bc91c923b9d5f416 3fef829aaea92de0 3c80d3e3e95c55af 3fef7a98c8a58e51 "
+                 + "bc801b15eaa59348 3fef72b83c7d517b bc8f1ff055de323d 3fef6af9388c8dea 3c8b898c3f1353bf 3fef635beb6fcb75 bc96d99c7611eb26 3fef5be084045cd4 "
+                 + "3c9aecf73e3a2f60 3fef54873168b9aa bc8fe782cb86389d 3fef4d5022fcd91d 3c8a6f4144a6c38d 3fef463b88628cd6 3c807a05b0e4047d 3fef3f49917ddc96 "
+                 + "3c968efde3a8a894 3fef387a6e756238 3c875e18f274487d 3fef31ce4fb2a63f 3c80472b981fe7f2 3fef2b4565e27cdd bc96b87b3f71085e 3fef24dfe1f56381 "
+                 + "3c82f7e16d09ab31 3fef1e9df51fdee1 bc3d219b1a6fbffa 3fef187fd0dad990 3c8b3782720c0ab4 3fef1285a6e4030b 3c6e149289cecb8f 3fef0cafa93e2f56 "
+                 + "3c834d754db0abb6 3fef06fe0a31b715 3c864201e2ac744c 3fef0170fc4cd831 3c8fdd395dd3f84a 3feefc08b26416ff bc86a3803b8e5b04 3feef6c55f929ff1 "
+                 + "bc924aedcc4b5068 3feef1a7373aa9cb bc9907f81b512d8e 3feeecae6d05d866 bc71d1e83e9436d2 3feee7db34e59ff7 bc991919b3ce1b15 3feee32dc313a8e5 "
+                 + "3c859f48a72a4c6d 3feedea64c123422 bc9312607a28698a 3feeda4504ac801c bc58a78f4817895b 3feed60a21f72e2a bc7c2c9b67499a1b 3feed1f5d950a897 "
+                 + "3c4363ed60c2ac11 3feece086061892d 3c9666093b0664ef 3feeca41ed1d0057 3c6ecce1daa10379 3feec6a2b5c13cd0 3c93ff8e3f0f1230 3feec32af0d7d3de "
+                 + "3c7690cebb7aafb0 3feebfdad5362a27 3c931dbdeb54e077 3feebcb299fddd0d bc8f94340071a38e 3feeb9b2769d2ca7 bc87deccdc93a349 3feeb6daa2cf6642 "
+                 + "bc78dec6bd0f385f 3feeb42b569d4f82 bc861246ec7b5cf6 3feeb1a4ca5d920f 3c93350518fdd78e 3feeaf4736b527da 3c7b98b72f8a9b05 3feead12d497c7fd "
+                 + "3c9063e1e21c5409 3feeab07dd485429 3c34c7855019c6ea 3feea9268a5946b7 3c9432e62b64c035 3feea76f15ad2148 bc8ce44a6199769f 3feea5e1b976dc09 "
+                 + "bc8c33c53bef4da8 3feea47eb03a5585 bc845378892be9ae 3feea34634ccc320 bc93cedd78565858 3feea23882552225 3c5710aa807e1964 3feea155d44ca973 "
+                 + "bc93b3efbf5e2228 3feea09e667f3bcd bc6a12ad8734b982 3feea012750bdabf bc6367efb86da9ee 3fee9fb23c651a2f bc80dc3d54e08851 3fee9f7df9519484 "
+                 + "bc781f647e5a3ecf 3fee9f75e8ec5f74 bc86ee4ac08b7db0 3fee9f9a48a58174 bc8619321e55e68a 3fee9feb564267c9 3c909ccb5e09d4d3 3feea0694fde5d3f "
+                 + "bc7b32dcb94da51d 3feea11473eb0187 3c94ecfd5467c06b 3feea1ed0130c132 3c65ebe1abd66c55 3feea2f336cf4e62 bc88a1c52fb3cf42 3feea427543e1a12 "
+                 + "bc9369b6f13b3734 3feea589994cce13 bc805e843a19ff1e 3feea71a4623c7ad bc94d450d872576e 3feea8d99b4492ed 3c90ad675b0e8a00 3feeaac7d98a6699 "
+                 + "3c8db72fc1f0eab4 3feeace5422aa0db bc65b6609cc5e7ff 3feeaf3216b5448c 3c7bf68359f35f44 3feeb1ae99157736 bc93091fa71e3d83 3feeb45b0b91ffc6 "
+                 + "bc5da9b88b6c1e29 3feeb737b0cdc5e5 bc6c23f97c90b959 3feeba44cbc8520f bc92434322f4f9aa 3feebd829fde4e50 bc85ca6cd7668e4b 3feec0f170ca07ba "
+                 + "3c71affc2b91ce27 3feec49182a3f090 3c6dd235e10a73bb 3feec86319e32323 bc87c50422622263 3feecc667b5de565 3c8b1c86e3e231d5 3feed09bec4a2d33 "
+                 + "bc91bbd1d3bcbb15 3feed503b23e255d 3c90cc319cee31d2 3feed99e1330b358 3c8469846e735ab3 3feede6b5579fdbf bc82dfcd978e9db4 3feee36bbfd3f37a "
+                 + "3c8c1a7792cb3387 3feee89f995ad3ad bc907b8f4ad1d9fa 3feeee07298db666 bc55c3d956dcaeba 3feef3a2b84f15fb bc90a40e3da6f640 3feef9728de5593a "
+                 + "bc68d6f438ad9334 3feeff76f2fb5e47 bc91eee26b588a35 3fef05b030a1064a 3c74ffd70a5fddcd 3fef0c1e904bc1d2 bc91bdfbfa9298ac 3fef12c25bd71e09 "
+                 + "3c736eae30af0cb3 3fef199bdd85529c 3c8ee3325c9ffd94 3fef20ab5fffd07a 3c84e08fd10959ac 3fef27f12e57d14b 3c63cdaf384e1a67 3fef2f6d9406e7b5 "
+                 + "3c676b2c6c921968 3fef3720dcef9069 bc808a1883ccb5d2 3fef3f0b555dc3fa bc8fad5d3ffffa6f 3fef472d4a07897c bc900dae3875a949 3fef4f87080d89f2 "
+                 + "3c74a385a63d07a7 3fef5818dcfba487 bc82919e2040220f 3fef60e316c98398 3c8e5a50d5c192ac 3fef69e603db3285 3c843a59ac016b4b 3fef7321f301b460 "
+                 + "bc82d52107b43e1f 3fef7c97337b9b5f bc892ab93b470dc9 3fef864614f5a129 3c74b604603a88d3 3fef902ee78b3ff6 3c83c5ec519d7271 3fef9a51fbc74c83 "
+                 + "bc8ff7128fd391f0 3fefa4afa2a490da bc8dae98e223747d 3fefaf482d8e67f1 3c8ec3bc41aa2008 3fefba1bee615a27 3c842b94c3a9eb32 3fefc52b376bba97 "
+                 + "3c8a64a931d185ee 3fefd0765b6e4540 bc8e37bae43be3ed 3fefdbfdad9cbe14 3c77893b4d91cd9d 3fefe7c1819e90d8 3c5305c14160cc89 3feff3c22b8f71f1 "
+    }
+    // id 2 = musl log __log_data (src/math/log_data.c, LOG_TABLE_BITS=7 N=128).
+    // Layout: tab[128]×{invc,logc}=256 doubles (byte 0..2047) THEN tab2[128]×
+    // {chi,clo}=256 doubles (byte 2048..4095) = 512 doubles. BIG-ENDIAN uint64 hex
+    // VERBATIM from musl (raw bit patterns; converted to LE bytes by
+    // _arm64_u64hex_list_to_le_payload). hxlcl_log reads cells via byte offsets
+    // i*16{+0,+8} (tab) / i*16{+2048,+2056} (tab2). Authoritative: git.musl-libc.org
+    // log_data.c.
+    if table_id == 2 {
+            return "3ff734f0c3e0de9f bfd7cc7f79e69000 3ff713786a2ce91f bfd76feec20d0000 3ff6f26008fab5a0 bfd713e31351e000 3ff6d1a61f138c7d bfd6b85b38287800 "
+                 + "3ff6b1490bc5b4d1 bfd65d5590807800 3ff69147332f0cba bfd602d076180000 3ff6719f18224223 bfd5a8ca86909000 3ff6524f99a51ed9 bfd54f4356035000 "
+                 + "3ff63356aa8f24c4 bfd4f637c36b4000 3ff614b36b9ddc14 bfd49da7fda85000 3ff5f66452c65c4c bfd445923989a800 3ff5d867b5912c4f bfd3edf439b0b800 "
+                 + "3ff5babccb5b90de bfd396ce448f7000 3ff59d61f2d91a78 bfd3401e17bda000 3ff5805612465687 bfd2e9e2ef468000 3ff56397cee76bd3 bfd2941b3830e000 "
+                 + "3ff54725e2a77f93 bfd23ec58cda8800 3ff52aff42064583 bfd1e9e129279000 3ff50f22dbb2bddf bfd1956d2b48f800 3ff4f38f4734ded7 bfd141679ab9f800 "
+                 + "3ff4d843cfde2840 bfd0edd094ef9800 3ff4bd3ec078a3c8 bfd09aa518db1000 3ff4a27fc3e0258a bfd047e65263b800 3ff4880524d48434 bfcfeb224586f000 "
+                 + "3ff46dce1b192d0b bfcf474a7517b000 3ff453d9d3391854 bfcea4443d103000 3ff43a2744b4845a bfce020d44e9b000 3ff420b54115f8fb bfcd60a22977f000 "
+                 + "3ff40782da3ef4b1 bfccc00104959000 3ff3ee8f5d57fe8f bfcc202956891000 3ff3d5d9a00b4ce9 bfcb81178d811000 3ff3bd60c010c12b bfcae2c9ccd3d000 "
+                 + "3ff3a5242b75dab8 bfca45402e129000 3ff38d22cd9fd002 bfc9a877681df000 3ff3755bc5847a1c bfc90c6d69483000 3ff35dce49ad36e2 bfc87120a645c000 "
+                 + "3ff34679984dd440 bfc7d68fb4143000 3ff32f5cceffcb24 bfc73cb83c627000 3ff3187775a10d49 bfc6a39a9b376000 3ff301c8373e3990 bfc60b3154b7a000 "
+                 + "3ff2eb4ebb95f841 bfc5737d76243000 3ff2d50a0219a9d1 bfc4dc7b8fc23000 3ff2bef9a8b7fd2a bfc4462c51d20000 3ff2a91c7a0c1bab bfc3b08abc830000 "
+                 + "3ff293726014b530 bfc31b996b490000 3ff27dfa5757a1f5 bfc2875490a44000 3ff268b39b1d3bbf bfc1f3b9f879a000 3ff2539d838ff5bd bfc160c8252ca000 "
+                 + "3ff23eb7aac9083b bfc0ce7f57f72000 3ff22a012ba940b6 bfc03cdc49fea000 3ff2157996cc4132 bfbf57bdbc4b8000 3ff201201dd2fc9b bfbe370896404000 "
+                 + "3ff1ecf4494d480b bfbd17983ef94000 3ff1d8f5528f6569 bfbbf9674ed8a000 3ff1c52311577e7c bfbadc79202f6000 3ff1b17c74cb26e9 bfb9c0c3e7288000 "
+                 + "3ff19e010c2c1ab6 bfb8a646b372c000 3ff18ab07bb670bd bfb78d01b3ac0000 3ff1778a25efbcb6 bfb674f145380000 3ff1648d354c31da bfb55e0e6d878000 "
+                 + "3ff151b990275fdd bfb4485cdea1e000 3ff13f0ea432d24c bfb333d94d6aa000 3ff12c8b7210f9da bfb22079f8c56000 3ff11a3028ecb531 bfb10e4698622000 "
+                 + "3ff107fbda8434af bfaffa6c6ad20000 3ff0f5ee0f4e6bb3 bfadda8d4a774000 3ff0e4065d2a9fce bfabbcece4850000 3ff0d244632ca521 bfa9a1894012c000 "
+                 + "3ff0c0a77ce2981a bfa788583302c000 3ff0af2f83c636d1 bfa5715e67d68000 3ff09ddb98a01339 bfa35c8a49658000 3ff08cabaf52e7df bfa149e364154000 "
+                 + "3ff07b9f2f4e28fb bf9e72c082eb8000 3ff06ab58c358f19 bf9a55f152528000 3ff059eea5ecf92c bf963d62cf818000 3ff04949cdd12c90 bf9228fb8caa0000 "
+                 + "3ff038c6c6f0ada9 bf8c317b20f90000 3ff02865137932a9 bf8419355daa0000 3ff0182427ea7348 bf781203c2ec0000 3ff008040614b195 bf60040979240000 "
+                 + "3fefe01ff726fa1a 3f6feff384900000 3fefa11cc261ea74 3f87dc41353d0000 3fef6310b081992e 3f93cea3c4c28000 3fef25f63ceeadcd 3f9b9fc114890000 "
+                 + "3feee9c8039113e7 3fa1b0d8ce110000 3feeae8078cbb1ab 3fa58a5bd001c000 3fee741aa29d0c9b 3fa95c8340d88000 3fee3a91830a99b5 3fad276aef578000 "
+                 + "3fee01e009609a56 3fb07598e598c000 3fedca01e577bb98 3fb253f5e30d2000 3fed92f20b7c9103 3fb42edd8b380000 3fed5cac66fb5cce 3fb606598757c000 "
+                 + "3fed272caa5ede9d 3fb7da76356a0000 3fecf26e3e6b2ccd 3fb9ab434e1c6000 3fecbe6da2a77902 3fbb78c7bb0d6000 3fec8b266d37086d 3fbd431332e72000 "
+                 + "3fec5894bd5d5804 3fbf0a3171de6000 3fec26b533bb9f8c 3fc067152b914000 3febf583eeece73f 3fc147858292b000 3febc4fd75db96c1 3fc2266ecdca3000 "
+                 + "3feb951e0c864a28 3fc303d7a6c55000 3feb65e2c5ef3e2c 3fc3dfc33c331000 3feb374867c9888b 3fc4ba366b7a8000 3feb094b211d304a 3fc5933928d1f000 "
+                 + "3feadbe885f2ef7e 3fc66acd2418f000 3feaaf1d31603da2 3fc740f8ec669000 3fea82e63fd358a7 3fc815c0f51af000 3fea5740ef09738b 3fc8e92954f68000 "
+                 + "3fea2c2a90ab4b27 3fc9bb3602f84000 3fea01a01393f2d1 3fca8bed1c2c0000 3fe9d79f24db3c1b 3fcb5b515c01d000 3fe9ae2505c7b190 3fcc2967ccbcc000 "
+                 + "3fe9852ef297ce2f 3fccf635d5486000 3fe95cbaeea44b75 3fcdc1bd3446c000 3fe934c69de74838 3fce8c01b8cfe000 3fe90d4f2f6752e6 3fcf5509c0179000 "
+                 + "3fe8e6528effd79d 3fd00e6c121fb800 3fe8bfce9fcc007c 3fd071b80e93d000 3fe899c0dabec30e 3fd0d46b9e867000 3fe87427aa2317fb 3fd13687334bd000 "
+                 + "3fe84f00acb39a08 3fd1980d67234800 3fe82a49e8653e55 3fd1f8ffe0cc8000 3fe8060195f40260 3fd2595fd7636800 3fe7e22563e0a329 3fd2b9300914a800 "
+                 + "3fe7beb377dcb5ad 3fd3187210436000 3fe79baa679725c2 3fd377266dec1800 3fe77907f2170657 3fd3d54ffbaf3000 3fe756cadbd6130c 3fd432eee32fe000 "
+                 + "3fe61000014fb66b 3c7e026c91425b3c 3fe63000034db495 3c8dbfea48005d41 3fe650000d94d478 3c8e7fa786d6a5b7 3fe67000074e6fad 3c61fcea6b54254c "
+                 + "3fe68ffffedf0fae bc7c7e274c590efd 3fe6b0000763c5bc bc8ac16848dcda01 3fe6d0001e5cc1f6 3c833f1c9d499311 3fe6efffeb05f63e bc7e80041ae22d53 "
+                 + "3fe710000e869780 3c7bff6671097952 3fe72ffffc67e912 3c8c00e226bd8724 3fe74fffdf81116a bc6e02916ef101d2 3fe770000f679c90 bc67fc71cd549c74 "
+                 + "3fe78ffffa7ec835 3c81bec19ef50483 3fe7affffe20c2e6 bc707e1729cc6465 3fe7cfffed3fc900 bc808072087b8b1c 3fe7efffe9261a76 3c8dc0286d9df9ae "
+                 + "3fe81000049ca3e8 3c897fd251e54c33 3fe8300017932c8f bc8afee9b630f381 3fe850000633739c 3c89bfbf6b6535bc 3fe87000204289c6 bc8bbf65f3117b75 "
+                 + "3fe88fffebf57904 bc89006ea23dcb57 3fe8b00022bc04df bc7d00df38e04b0a 3fe8cfffe50c1b8a bc88007146ff9f05 3fe8effffc918e43 3c83817bd07a7038 "
+                 + "3fe910001efa5fc7 3c893e9176dfb403 3fe9300013467bb9 3c7f804e4b980276 3fe94fffe6ee076f bc8f7ef0d9ff622e 3fe96fffde3c12d1 bc7082aa962638ba "
+                 + "3fe98ffff4458a0d bc87801b9164a8ef 3fe9afffdd982e3e bc8740e08a5a9337 3fe9cfffed49fb66 3c3fce08c19be000 3fe9f00020f19c51 bc8a3faa27885b0a "
+                 + "3fea10001145b006 3c74ff489958da56 3fea300007bbf6fa 3c8cbeab8a2b6d18 3fea500010971d79 3c88fecadd787930 3fea70001df52e48 bc8f41763dd8abdb "
+                 + "3fea90001c593352 bc8ebf0284c27612 3feab0002a4f3e4b bc69fd043cff3f5f 3feacfffd7ae1ed1 bc823ee7129070b4 3feaefffee510478 3c6a063ee00edea3 "
+                 + "3feb0fffdb650d5b 3c5a06c8381f0ab9 3feb2ffffeaaca57 bc79011e74233c1d 3feb4fffd995badc bc79ff1068862a9f 3feb7000249e659c 3c8aff45d0864f3e "
+                 + "3feb8ffff9871640 3c7cfe7796c2c3f9 3febafffd204cb4f bc63ff27eef22bc4 3febcfffd2415c45 bc6cffb7ee3bea21 3febeffff86309df bc814103972e0b5c "
+                 + "3fec0fffe1b57653 3c8bc16494b76a19 3fec2ffff1fa57e3 bc64feef8d30c6ed 3fec4fffdcbfe424 bc843f68bcec4775 3fec6fffed54b9f7 3c847ea3f053e0ec "
+                 + "3fec8fffeb998fd5 3c7383068df992f1 3fecb0002125219a bc68fd8e64180e04 3feccfffdd94469c 3c8e7ebe1cc7ea72 3fecefffeafdc476 3c8ebe39ad9f88fe "
+                 + "3fed1000169af82b 3c757d91a8b95a71 3fed30000d0ff71d 3c89c1906970c7da 3fed4fffea790fc4 bc580e37c558fe0c 3fed70002edc87e5 bc7f80d64dc10f44 "
+                 + "3fed900021dc82aa bc747c8f94fd5c5c 3fedafffd86b0283 3c8c7f1dc521617e 3fedd000296c4739 3c88019eb2ffb153 3fedefffe54490f5 3c6e00d2c652cc89 "
+                 + "3fee0fffcdabf694 bc7f8340202d69d2 3fee2fffdb52c8dd 3c7b00c1ca1b0864 3fee4ffff24216ef 3c72ffa8b094ab51 3fee6fffe88a5e11 bc57f673b1efbe59 "
+                 + "3fee9000119eff0d bc84808d5e0bc801 3feeafffdfa51744 3c780006d54320b5 3feed0001a127fa1 bc5002f860565c92 3feef00007babcc4 bc8540445d35e611 "
+                 + "3fef0ffff57a8d02 bc4ffb3139ef9105 3fef30001ee58ac7 3c8a81acf2731155 3fef4ffff5823494 3c8a3f41d4d7c743 3fef6ffffca94c6b bc6202f41c987875 "
+                 + "3fef8fffe1f9c441 3c777dd1f477e74b 3fefafffd2e0e37e bc6f01199a7ca331 3fefd0001c77e49e 3c7181ee4bceacb1 3fefeffff7e0c331 bc6e05370170875a "
+                 + "3ff00ffff465606e bc8a7ead491c0ada 3ff02ffff3867a58 bc977f69c3fcb2e0 3ff04ffffdfc0d17 3c97bffe34cb945b 3ff0700003cd4d82 3c820083c0e456cb "
+                 + "3ff08ffff9f2cbe8 bc6dffdfbe37751a 3ff0b000010cda65 bc913f7faee626eb 3ff0d00001a4d338 3c807dfa79489ff7 3ff0effffadafdfd bc77040570d66bc0 "
+                 + "3ff110000bbafd96 3c8e80d4846d0b62 3ff12ffffae5f45d 3c9dbffa64fd36ef 3ff150000dd59ad9 3c9a0077701250ae 3ff170000f21559a 3c8dfdf9e2e3deee "
+                 + "3ff18ffffc275426 3c910030dc3b7273 3ff1b000123d3c59 3c997f7980030188 3ff1cffff8299eb7 bc65f932ab9f8c67 3ff1effff48ad400 3c937fbf9da75beb "
+                 + "3ff210000c8b86a4 3c9f806b91fd5b22 3ff2300003854303 3c93ffc2eb9fbf33 3ff24fffffbcf684 3c7601e77e2e2e72 3ff26ffff52921d9 3c7ffcbb767f0c61 "
+                 + "3ff2900014933a3c bc7202ca3c02412b 3ff2b00014556313 bc92808233f21f02 3ff2cfffebfe523b bc88ff7e384fdcf2 3ff2f0000bb8ad96 bc85ff51503041c5 "
+                 + "3ff30ffffb7ae2af bc810071885e289d 3ff32ffffeac5f7f bc91ff5d3fb7b715 3ff350000ca66756 3c957f82228b82bd 3ff3700011fbf721 3c8000bac40dd5cc "
+                 + "3ff38ffff9592fb9 bc943f9d2db2a751 3ff3b00004ddd242 3c857f6b707638e1 3ff3cffff5b2c957 3c7a023a10bf1231 3ff3efffeab0b418 3c987f6d66b152b0 "
+                 + "3ff410001532aff4 3c67f8375f198524 3ff4300017478b29 3c8301e672dc5143 3ff44fffe795b463 3c89ff69b8b2895a 3ff46fffe80475e0 bc95c0b19bc2f254 "
+                 + "3ff48fffef6fc1e7 3c9b4009f23a2a72 3ff4afffe5bea704 bc94ffb7bf0d7d45 3ff4d000171027de bc99c06471dc6a3d 3ff4f0000ff03ee2 3c977f890b85531c "
+                 + "3ff5100012dc4bd1 3c6004657166a436 3ff530001605277a bc96bfcece233209 3ff54fffecdb704c bc8902720505a1d7 3ff56fffef5f54a9 3c9bbfe60ec96412 "
+                 + "3ff5900017e61012 3c887ec581afef90 3ff5b00003c93e92 bc9f41080abf0cc0 3ff5d0001d4919bc bc98812afb254729 3ff5efffe7b87a89 bc947eb780ed6904 "
+    }
+    return ""
+}
+
+fn _arm64_u64hex_to_le_hex(tok: string) -> string {
+    let cs = tok.chars()
+    let n = len(cs)
+    // left-pad to 16 hex digits
+    let mut padded = ""
+    let mut p = n
+    while p < 16 {
+        padded = padded + "0"
+        p = p + 1
+    }
+    let mut k = 0
+    while k < n {
+        padded = padded + cs[k]
+        k = k + 1
+    }
+    // reverse byte-pairs: bytes are at [0,1][2,3]…[14,15]; LE order is
+    // [14,15][12,13]…[0,1].
+    let pc = padded.chars()
+    let mut out = ""
+    let mut bi = 7
+    while bi >= 0 {
+        out = out + pc[bi * 2] + pc[bi * 2 + 1]
+        bi = bi - 1
+    }
+    return out
+}
+
+// Encode a whitespace-separated list of BIG-ENDIAN uint64 hex tokens into the
+// concatenated LITTLE-ENDIAN byte-hex payload for one rodata table. Each token
+// becomes 8 LE bytes (16 hex chars). Whitespace / commas separate tokens.
+fn _arm64_u64hex_list_to_le_payload(spec: string) -> string {
+    let cs = spec.chars()
+    let n = len(cs)
+    let mut out = ""
+    let mut tok = ""
+    let mut i = 0
+    while i < n {
+        let c = cs[i]
+        if c == " " || c == "\n" || c == "\t" || c == "," || c == "\r" {
+            if len(tok) > 0 {
+                out = out + _arm64_u64hex_to_le_hex(tok)
+                tok = ""
+            }
+        } else {
+            tok = tok + c
+        }
+        i = i + 1
+    }
+    if len(tok) > 0 {
+        out = out + _arm64_u64hex_to_le_hex(tok)
+    }
+    return out
+}
+
 
 // ── PReg / LOperand helpers ──────────────────────────────────
 
@@ -265,7 +484,22 @@ pub struct RegMap {
     // pre-allocated at prologue bottom. _arm_spill_offset shifts every
     // SSA spill access above this region so per-call stack-spill stores
     // can use [sp, #(i-8)*8] without disturbing SSA offsets.
-    call_overflow_bytes: i64
+    call_overflow_bytes: i64,
+    // FLEET arm64 element-pack (HEXA_PACK_ESCAPING) — mirror of x86_64's
+    // X86RegMap.local_type + .local_packed_esc_ok. The arm64 backend never had a
+    // per-local type lattice (it routes everything through the boxed runtime), so
+    // escape-relax (the x86_64-only #4133 fix shipped #4140/#4143/#4151) was a
+    // no-op here: an escaping typed-prim [i64] stayed boxed. These two slots add
+    // the SAME esc-mint + poly-route lattice the x86_64 backend uses, gated on
+    // `_arm_pack_escaping_enabled()` so they stay EMPTY `[]` when the flag is OFF
+    // → never consulted → emit byte-identical to origin (arm64-linux + darwin-arm64
+    // OFF-byteeq). Built ONLY in `_arm64_assign_regs`.
+    //   local_type[id]          — id → MIR Local.type_id (101/102 = HexaArrI64
+    //                             i64/i32 typed-prim array). 0 = absent/unclassified.
+    //   local_packed_esc_ok[id] — id → 1 when this array_lit STORAGE T should
+    //                             esc-mint (hexa_arr_i64_new_esc → TAG_ARRAY_I64).
+    local_type: [i64],
+    local_packed_esc_ok: [i64]
 }
 
 pub struct ArmAllocResult {
@@ -318,6 +552,83 @@ fn _arm_index_of(ids: [i64], id: i64) -> i64 {
         i = i + 1
     }
     return -1
+}
+
+// ── FLEET arm64 element-pack (HEXA_PACK_ESCAPING) — gate + probes ─────────────
+// Direct mirror of x86_64_linux.hexa's _pack_escaping_enabled / _x86_local_type /
+// _x86_operand_pack_esc / _x86_local_esc_mint (#4143/#4151), prefixed `_arm_` so
+// the two backends share NO top-level symbol (flatten-collision-safe, #3899). The
+// SAME env flag HEXA_PACK_ESCAPING gates BOTH backends (shared opt-in). The runtime
+// half (TAG_ARRAY_I64 discriminator + hexa_arr_poly_* readers, #4140, compiled
+// -DHEXA_PACK_ESCAPING) is platform-agnostic C, so an esc-minted array is read
+// soundly on arm64 by the SAME poly readers. Default-OFF (env unset) → every
+// branch below returns false/empty → emit byte-identical to origin (OFF-byteeq).
+
+// Max local id across locals/params/stmts (sizing the esc lattices). Mirror of
+// _x86_max_local_id.
+fn _arm_max_local_id(mf: MFunc) -> i64 {
+    let mut m = -1
+    let mut li = 0
+    while li < len(mf.locals) {
+        if mf.locals[li].id > m { m = mf.locals[li].id }
+        li = li + 1
+    }
+    let mut pi = 0
+    while pi < len(mf.params) {
+        if mf.params[pi].id > m { m = mf.params[pi].id }
+        pi = pi + 1
+    }
+    let mut bi = 0
+    while bi < len(mf.blocks) {
+        let blk = mf.blocks[bi]
+        let mut si = 0
+        while si < len(blk.stmts) {
+            let s = blk.stmts[si]
+            if s.dst.id > m { m = s.dst.id }
+            let mut ai = 0
+            while ai < len(s.args) {
+                if s.args[ai].kind == "local" && s.args[ai].local_id > m {
+                    m = s.args[ai].local_id
+                }
+                ai = ai + 1
+            }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    return m
+}
+
+// escape-relax gate (HEXA_PACK_ESCAPING). Default-OFF (env unset) → every esc
+// branch in _arm64_assign_regs + _emit_arm64_stmt is skipped → byte-identical.
+fn _arm_pack_escaping_enabled() -> bool {
+    return env("HEXA_PACK_ESCAPING") != "0"
+}
+
+// O(1) id → MIR type_id probe (0 = absent/unclassified). Empty `[]` when OFF.
+fn _arm_local_type(rm: RegMap, id: i64) -> i64 {
+    if id < 0 || id >= len(rm.local_type) { return 0 }
+    return rm.local_type[id]
+}
+
+// Should op on operand `o` take the escaping-poly path? Gate ON + `o` is a
+// PROVABLY typed-prim array container (MIR type_id 101..102 → HexaArrI64). i64/i32
+// only for r1 (the runtime poly readers cover HexaArrI64). Globals are a separate
+// id space → conservatively boxed. Mirror of _x86_operand_pack_esc.
+fn _arm_operand_pack_esc(o: Operand, rm: RegMap) -> bool {
+    if !_arm_pack_escaping_enabled() { return false }
+    if o.kind != "local" { return false }
+    let t = _arm_local_type(rm, o.local_id)
+    return t == 101 || t == 102
+}
+
+// id → should this array_lit STORAGE esc-mint (TAG_ARRAY_I64)? O(1) probe of the
+// lattice the regmap builder fills (empty/false when OFF). Mirror of
+// _x86_local_esc_mint.
+fn _arm_local_esc_mint(rm: RegMap, id: i64) -> bool {
+    if !_arm_pack_escaping_enabled() { return false }
+    if id < 0 || id >= len(rm.local_packed_esc_ok) { return false }
+    return rm.local_packed_esc_ok[id] == 1
 }
 
 fn _arm_compute_live_ranges(mf: MFunc) -> ArmIntervals {
@@ -649,11 +960,87 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
     if rem2 != 0 { frame2 = frame2 + (16 - rem2) }
     frame = frame2
 
+    // ── FLEET arm64 element-pack (HEXA_PACK_ESCAPING) — type + esc-mint lattice ──
+    // Mirror of x86_64_linux.hexa's rm_local_type + rm_packed_esc_ok builders
+    // (#4143/#4151). The arm64 backend had NO per-local type tracking, so the
+    // hir_to_mir element-kind stamp (type_id 101/102, already PLATFORM-AGNOSTIC —
+    // gated on HEXA_PACK_ESCAPING since #4151) reached this backend unread. We now
+    // read it into `rm_local_type` (id → MIR Local.type_id) and derive the esc-mint
+    // storage lattice `rm_packed_esc_ok`. Built ONLY when `_arm_pack_escaping_enabled()`
+    // → OFF leaves BOTH `[]` (never consulted by the emit boundaries) → byte-identical.
+    let mut rm_local_type: [i64] = []
+    let mut rm_packed_esc_ok: [i64] = []
+    if _arm_pack_escaping_enabled() {
+        let at_maxid = _arm_max_local_id(mf)
+        let mut a0 = 0
+        while a0 <= at_maxid { rm_local_type.push(0); rm_packed_esc_ok.push(0); a0 = a0 + 1 }
+        // type-id from MIR locals + params (key: container 101/102 typed-prim).
+        let mut ali = 0
+        while ali < len(mf.locals) {
+            let lid = mf.locals[ali].id
+            if lid >= 0 && lid <= at_maxid { rm_local_type[lid] = mf.locals[ali].type_id }
+            ali = ali + 1
+        }
+        let mut api = 0
+        while api < len(mf.params) {
+            let pid = mf.params[api].id
+            if pid >= 0 && pid <= at_maxid { rm_local_type[pid] = mf.params[api].type_id }
+            api = api + 1
+        }
+        // Pass 1: collect array_lit dst ids (storage T candidates); a DIRECT typed
+        // literal storage (X==T, T already 101/102) esc-mints immediately.
+        let mut a_is_alit: [i64] = []
+        let mut az = 0
+        while az <= at_maxid { a_is_alit.push(0); az = az + 1 }
+        let mut ab = 0
+        while ab < len(mf.blocks) {
+            let ablk = mf.blocks[ab]
+            let mut asx = 0
+            while asx < len(ablk.stmts) {
+                let ast = ablk.stmts[asx]
+                if ast.kind == _STMT_ASSIGN && ast.op == "array_lit" {
+                    let ad = ast.dst.id
+                    if ad >= 0 && ad <= at_maxid {
+                        a_is_alit[ad] = 1
+                        let atd = rm_local_type[ad]
+                        if atd == 101 || atd == 102 { rm_packed_esc_ok[ad] = 1 }
+                    }
+                }
+                asx = asx + 1
+            }
+            ab = ab + 1
+        }
+        // Pass 2: a typed (101/102) `let X = T` where T is an array_lit storage
+        // propagates the typed element-kind back to T → esc-mint T.
+        let mut ab2 = 0
+        while ab2 < len(mf.blocks) {
+            let ablk2 = mf.blocks[ab2]
+            let mut as2 = 0
+            while as2 < len(ablk2.stmts) {
+                let ast2 = ablk2.stmts[as2]
+                if ast2.kind == _STMT_ASSIGN && ast2.op == "let" && len(ast2.args) >= 1 &&
+                   ast2.args[0].kind == "local" {
+                    let ax = ast2.dst.id
+                    let asrc = ast2.args[0].local_id
+                    let axt = if ax >= 0 && ax <= at_maxid { rm_local_type[ax] } else { 0 }
+                    if (axt == 101 || axt == 102) && asrc >= 0 && asrc <= at_maxid &&
+                       a_is_alit[asrc] == 1 {
+                        rm_packed_esc_ok[asrc] = 1
+                    }
+                }
+                as2 = as2 + 1
+            }
+            ab2 = ab2 + 1
+        }
+    }
+
     let map = RegMap {
         ids: map_ids,
         regs: map_regs,
         slots: map_slots,
-        call_overflow_bytes: 0   // filled in by _arm64_lower_func once max-overflow is known
+        call_overflow_bytes: 0,   // filled in by _arm64_lower_func once max-overflow is known
+        local_type: rm_local_type,
+        local_packed_esc_ok: rm_packed_esc_ok
     }
     return ArmAllocResult { map: map, frame_size: frame }
 }
@@ -1666,6 +2053,74 @@ fn _emit_bool_box(buf: [LInstr], why: string) -> [LInstr] {
 // inlining series (int #1258 + bool #1270 + float documented above + str
 // documented here) is COMPLETE at the codegen-emit boundary.
 
+// ── RFC061 §M8 varargs-ABI (literal-∅ feature B, r2 arm64/AAPCS64) ──────────
+// The arm64 sibling of x86_64_linux.hexa's `_x86_is_variadic`. A whitelisted name
+// is an arm64 variadic function whose prologue (on the AAPCS64/linux path) reserves
+// a 192-byte register-save area (64 GP = x0..x7 + 128 FP = q0..q7) and a 32-byte
+// __va_list struct, so the in-body `__builtin_va_start` / `__builtin_va_arg` (general
+// class) / `__builtin_va_arg_fp` (SIMD class) intrinsics can walk the unnamed args.
+// HARD-GATED: `env("HEXA_VA_INTRINSICS") != "1"` → false for EVERY fn → prologue va
+// spill + va STMT_CALL branches dead → byte-eq NEUTRAL (mirrors `_x86_is_variadic`
+// and `_is_cabi`/HEXA_CABI_HXLCL). The PoC symbols `hxlcl_va_smoke` (int) +
+// `hxlcl_va_fp_smoke` (double) prove the leaves — the SAME whitelist the x86_64
+// backend uses, so a single smoke source serves both targets.
+//
+// ⚠️ darwin arm64 va_list ≠ linux arm64 va_list. Apple ARM64 passes ALL variadic
+// arguments on the STACK (named params still use x0..x7/v0..v7, but once the variadic
+// portion starts every arg is stacked — Apple "Writing ARM64 Code for Apple
+// Platforms"), so `va_list` is a SIMPLE `char*` and there is NO register-save area:
+// va_start points at the first caller stack slot, va_arg loads 8 bytes and bumps the
+// pointer (16B align for a 16B type). Linux uses the full AAPCS64 §B.4 `__va_list`
+// {__stack,__gr_top,__vr_top,__gr_offs,__vr_offs} with the GP+FP save areas. The two
+// paths are branched on `opts.target_triple == "arm64-linux-gnu"` inside each va
+// builtin — exactly the existing __hx_target_os / __hx_syscall* split.
+// Materialize `sp + off` (a frame address) into `reg`. ARM64 `add` immediate is
+// ≤4095, so a larger off is built into the reg (movz/movk) then added. Used by the
+// AAPCS64 va_start to compute the va_list base + the GP/FP save-area-end pointers.
+fn _arm64_va_addr(buf: [LInstr], reg: string, off: i64) -> [LInstr] {
+    let mut out = buf
+    if off <= 4095 {
+        out.push(_arm64_instr3("add", _arm64_op_reg(reg), _arm64_op_reg("sp"),
+                         _arm64_op_label("#" + to_string(off)), "va: &sp+" + to_string(off)))
+        return out
+    }
+    out = _arm64_emit_imm_to_reg(out, reg, off)
+    out.push(_arm64_instr3("add", _arm64_op_reg(reg), _arm64_op_reg("sp"),
+                     _arm64_op_reg(reg), "va: &sp+off (big)"))
+    return out
+}
+
+fn _arm64_is_variadic(fname: string) -> bool {
+    if env("HEXA_VA_INTRINSICS") != "1" { return false }
+    if fname == "hxlcl_va_smoke" { return true }
+    if fname == "hxlcl_va_fp_smoke" { return true }
+    // RUNG2 forwarding PoC (outer variadic fn — see stdlib/runtime/hxlcl_va_fwd_smoke.hexa).
+    if fname == "hxlcl_va_fwd_smoke" { return true }
+    return false
+}
+
+// A variadic fn whose RETURN is SIMD-class (`double`/`float`) returns its value in
+// d0/v0 (AAPCS64 §6.4 result return), NOT x0. Keyed on the variadic whitelist:
+// only `hxlcl_va_fp_smoke` (the r2 SIMD PoC) has a double return; `hxlcl_va_smoke`
+// is integer-return (x0). Gated by `_arm64_is_variadic` callers ⇒ default-OFF
+// byte-eq NEUTRAL.
+fn _arm64_va_ret_is_fp(fname: string) -> bool {
+    if fname == "hxlcl_va_fp_smoke" { return true }
+    return false
+}
+
+// va register-save block size (BYTES) reserved in the frame for a variadic fn,
+// wedged BETWEEN the regalloc spill slots and the try jmp_bufs (so it aliases
+// neither). LINUX/AAPCS64 = 192 (64-byte GP save x0..x7 + 128-byte FP save q0..q7)
+// + 32-byte __va_list = 224 → 16B-rounded. DARWIN = 0 (stack-passed varargs, char*
+// va_list lives in an ordinary spill slot bound by va_start). Non-variadic → 0 →
+// byte-eq NEUTRAL. `is_linux` is the caller's `opts.target_triple == "arm64-linux-gnu"`.
+fn _arm64_va_block_bytes(fname: string, is_linux: bool) -> i64 {
+    if !_arm64_is_variadic(fname) { return 0 }
+    if is_linux { return 224 }   // 64 GP + 128 FP + 32 va_list (16B mult)
+    return 0                     // darwin: stack-passed, no reg save area
+}
+
 // Cycle h20: extra params try_buf_bytes (total fn jmp_buf region size)
 // and try_slot_idx (this statement's slot index in 0..try_count).
 // try_slot_idx is meaningful only for STMT_TRY_SETJMP / STMT_TRY_POP;
@@ -1684,6 +2139,37 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // rebuild-verification DEFERRED (Track-A clang wall) — logic
         // parity with shipped concat emit.
         if s.op == "array_lit" {
+            // FLEET arm64 element-pack (HEXA_PACK_ESCAPING) — escaping-packed mint:
+            // build a RAW contiguous HexaArrI64 tagged TAG_ARRAY_I64 via
+            // hexa_arr_i64_new_esc so a worker that receives this array as a param
+            // of unknown packed-ness discriminates it at runtime via hexa_arr_poly_*.
+            // AAPCS64: hexa_arr_i64_new_esc(int cap) → cap in w0, returns HexaVal
+            // x0:x1; hexa_arr_i64_push(HexaVal v, int64_t x) → v in x0:x1, raw int x
+            // in x2, returns the (possibly realloc'd) descriptor x0:x1. The element
+            // is loaded as a HexaVal pair and its PAYLOAD (x_hi) is the raw int64 —
+            // mirror of x86_64's _x86_hv_payload(arg → rdx). Takes priority over the
+            // boxed hexa_array_new mint when ON (uniform representation).
+            if _arm_local_esc_mint(rm, s.dst.id) {
+                let mut ecap = len(s.args)
+                if ecap < 1 { ecap = 1 }
+                buf = _arm64_emit_imm_to_reg(buf, "x0", ecap)
+                buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_arr_i64_new_esc"),
+                                 "arresc new: escaping packed int64 storage (TAG_ARRAY_I64)"))
+                buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+                let mut ei = 0
+                while ei < len(s.args) {
+                    // raw element payload → x9:x10 (x10 = payload), descriptor → x0:x1.
+                    buf = _hv_load(buf, s.args[ei], st, rm, "x9", "x10")
+                    buf = _hv_ldslot(buf, rm, s.dst.id, "x0", "x1")
+                    buf.push(_arm64_instr2("mov", _arm64_op_reg("x2"),
+                                     _arm64_op_reg("x10"), "arresc push: raw elem payload → x2"))
+                    buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_arr_i64_push"),
+                                     "arresc push: raw elem " + to_string(ei)))
+                    buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+                    ei = ei + 1
+                }
+                return buf
+            }
             buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_array_new"),
                              "array_lit: new array"))
             buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
@@ -1770,6 +2256,106 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // fn pointer is the address of the lifted lambda symbol (adrp/add);
         // mirrors self/codegen_c2.hexa::gen2_lambda_expr's
         // `hexa_closure_new((void*)&__hexa_lambda_N, arity, env)`.
+        // fn-ref-as-value: hir_to_mir lowers a bare top-level-fn ident used in
+        // value position to STMT_ASSIGN op="fn_ref" with args = [name_str,
+        // arity_int]. Runtime ABI: hexa_fn_new(void* fn_ptr, int arity) →
+        // fn_ptr in x0, arity (C int) in w1; returns the TAG_FN HexaVal in
+        // x0:x1. fn_ptr = address of the user fn symbol (adrp/add @PAGE/@PAGEOFF,
+        // same symbol the direct `bl <target>` uses). TAG_FN (not TAG_CLOSURE)
+        // so the runtime call dispatch does NOT prepend an env — a plain fn
+        // `worker(start)` takes its arg directly. Mirrors the C-transpile
+        // hexa_fn_new auto-wrap.
+        if s.op == "fn_ref" && len(s.args) >= 2 {
+            let fn_sym = s.args[0].str_val
+            let fn_arity = s.args[1].int_val
+            // x0 = &<fn_sym> (PC-relative; symbol mangled by _fmt_label)
+            buf.push(_arm64_instr2("adrp", _arm64_op_reg("x0"),
+                             _arm64_op_label(fn_sym + "@PAGE"),
+                             "fn_ref: fn-ptr page"))
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x0"),
+                             _arm64_op_reg("x0"),
+                             _arm64_op_label(fn_sym + "@PAGEOFF"),
+                             "fn_ref: fn-ptr off"))
+            // w1 = arity (C int)
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
+                             _arm64_op_label("#" + to_string(fn_arity)),
+                             "fn_ref: arity"))
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_fn_new_native"),
+                             "fn_ref: build TAG_FN"))
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+            return buf
+        }
+        // ING #29 literal-∅ (2026-06-30): `__hx_fn_addr(name)` — the arm64 raw-unboxed-fn-ptr
+        // sibling of `fn_ref`. hir_to_mir lowers `__hx_fn_addr(worker)` to STMT_ASSIGN
+        // op="__hx_fn_addr" args=[name_str] (the SAME stmt kind as fn_ref). THIS special-
+        // case emits ONLY the PC-relative address-of via `adrp x1, name@PAGE` + `add x1,
+        // x1, name@PAGEOFF` (the EXACT relocation pair `fn_ref` uses above) and SKIPS the
+        // `bl hexa_fn_new_native` boxing call. x1 = raw .text pointer, x0 = TAG_INT (0).
+        // reference-match: C `&fn` / rustc fn-ptr / zig `@intFromPtr(fn)`. NOTE: this
+        // handler lives in the _STMT_ASSIGN block (NOT _STMT_CALL) because hir_to_mir
+        // emits it as STMT_ASSIGN — a prior copy in _STMT_CALL was unreachable (silent
+        // mis-emit root cause). ADD-only / byte-eq NEUTRAL.
+        if s.op == "__hx_fn_addr" && len(s.args) >= 1 {
+            if s.args[0].kind == "const_str" {
+                let fn_sym = s.args[0].str_val
+                buf.push(_arm64_instr2("adrp", _arm64_op_reg("x1"),
+                                 _arm64_op_label(fn_sym + "@PAGE"),
+                                 "__hx_fn_addr: &" + fn_sym + " page (raw .text fn ptr)"))
+                buf.push(_arm64_instr3("add", _arm64_op_reg("x1"),
+                                 _arm64_op_reg("x1"),
+                                 _arm64_op_label(fn_sym + "@PAGEOFF"),
+                                 "__hx_fn_addr: x1 = &" + fn_sym + " (raw .text fn ptr)"))
+                buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                                 _arm64_op_label("#0"), "__hx_fn_addr: TAG_INT"))
+                if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+                return buf
+            }
+        }
+        // carrier call: invoke a runtime TAG_FN/TAG_CLOSURE carrier DATA global
+        // (thread_spawn, …). hir_to_mir lowers `thread_spawn(worker, 1)` to
+        // STMT_ASSIGN op="carrier_call" args=[carrier_name_str, a1, …]. ABI:
+        // hexa_callN_native(HexaVal carrier, HexaVal a1, …) — carrier pair →
+        // x0:x1, a1 → x2:x3, a2 → x4:x5 (AAPCS64 16B HexaVal-by-value pairs).
+        // The carrier is loaded from its global: adrp/add → addr, ldp x0,x1,[addr]
+        // (lo=tag@0, hi=payload@8). Box the call args FIRST (they use x15 scratch
+        // + write x2:x3/x4:x5, never x0:x1), THEN load the carrier into x0:x1 so
+        // it survives. Returns the HexaVal in x0:x1.
+        if s.op == "carrier_call" && len(s.args) >= 1 {
+            let carrier = s.args[0].str_val
+            let ncall = len(s.args) - 1
+            // box call args into pairs 1.. (carrier is pair0=x0:x1; a1=x2:x3,
+            // a2=x4:x5, a3=x6:x7 — the carriers are all ≤2-arg so ≤x4:x5).
+            let mut ci = 1
+            while ci < len(s.args) {
+                let mut lo = "x2"
+                let mut hi = "x3"
+                if ci == 2 { lo = "x4"; hi = "x5" }
+                if ci == 3 { lo = "x6"; hi = "x7" }
+                if ci == 4 { lo = "x8"; hi = "x9" }
+                buf = _hv_load(buf, s.args[ci], st, rm, lo, hi)
+                ci = ci + 1
+            }
+            // carrier HexaVal → x0:x1 from the global symbol.
+            buf.push(_arm64_instr2("adrp", _arm64_op_reg("x9"),
+                             _arm64_op_label(carrier + "@PAGE"),
+                             "carrier_call: " + carrier + " page"))
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x9"),
+                             _arm64_op_reg("x9"),
+                             _arm64_op_label(carrier + "@PAGEOFF"),
+                             "carrier_call: " + carrier + " off"))
+            buf.push(_arm64_instr3("ldp", _arm64_op_reg("x0"), _arm64_op_reg("x1"),
+                             _arm64_op_mem("x9", 0),
+                             "carrier_call: load carrier HexaVal"))
+            let mut dispatch = "hexa_call0_native"
+            if ncall == 1 { dispatch = "hexa_call1_native" }
+            if ncall == 2 { dispatch = "hexa_call2_native" }
+            if ncall == 3 { dispatch = "hexa_call3_native" }
+            if ncall == 4 { dispatch = "hexa_call4_native" }
+            buf.push(_arm64_instr1("bl", _arm64_op_label(dispatch),
+                             "carrier_call: dispatch " + carrier))
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+            return buf
+        }
         if s.op == "closure_new" && len(s.args) >= 3 {
             let lam_sym = s.args[1].str_val
             let arity = s.args[2].int_val
@@ -1800,6 +2386,22 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // dispatches arrays via hexa_array_get and unwraps VALSTRUCT
         // before the array path.
         if s.op == "index" && len(s.args) >= 2 {
+            // FLEET arm64 element-pack (HEXA_PACK_ESCAPING) — escaping-poly index:
+            // a typed-prim array operand of unknown packed-ness routes through
+            // hexa_arr_poly_get, which branches on HX_TAG==TAG_ARRAY_I64 at RUNTIME
+            // (stride-8 raw) else delegates to the boxed hexa_array_get (stride-16).
+            // AAPCS64: v → x0:x1 pair, RAW idx → x2 (the idx HexaVal payload = x_hi);
+            // returns the element HexaVal x0:x1. Mirror of x86_64's hexa_arr_poly_get.
+            if _arm_operand_pack_esc(s.args[0], rm) {
+                buf = _hv_load(buf, s.args[1], st, rm, "x9", "x10")  // idx → x10 = payload
+                buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")   // descriptor pair
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x2"),
+                                 _arm64_op_reg("x10"), "index: raw idx payload → x2"))
+                buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_arr_poly_get"),
+                                 "index: hexa_arr_poly_get (runtime discriminate)"))
+                buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+                return buf
+            }
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // base → x0:x1
             buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // idx → x2:x3
             buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_index_get"),
@@ -1831,6 +2433,40 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // hexa_array_push: store the result back into the container
         // lvalue when it is a storable local/global Operand.
         if s.op == "index_set" && len(s.args) >= 3 {
+            // FLEET arm64 element-pack (HEXA_PACK_ESCAPING) — escaping-poly index_set:
+            // a typed-prim array operand of unknown packed-ness routes through
+            // hexa_arr_poly_set (TAG_ARRAY_I64 → raw stride-8 store; else boxed
+            // hexa_index_set). AAPCS64: v → x0:x1, RAW idx → x2 (idx HexaVal payload),
+            // item → x3:x4 pair; returns the descriptor x0:x1 → store-back so a copied
+            // handle stays coherent (the in-place store also mutates aliases). Mirror
+            // of x86_64's hexa_arr_poly_set.
+            if _arm_operand_pack_esc(s.args[0], rm) {
+                buf = _hv_load(buf, s.args[1], st, rm, "x9", "x10")  // idx → x10 = payload
+                buf = _hv_load(buf, s.args[2], st, rm, "x3", "x4")   // item pair
+                buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")   // descriptor pair
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x2"),
+                                 _arm64_op_reg("x10"), "index_set: raw idx payload → x2"))
+                buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_arr_poly_set"),
+                                 "index_set: hexa_arr_poly_set (runtime discriminate)"))
+                let econt = s.args[0]
+                if econt.kind == "local" {
+                    buf = _hv_store(buf, rm, econt.local_id, "x0", "x1")
+                } else if econt.kind == "global" {
+                    let egl = "g" + to_string(econt.global_id)
+                    buf.push(_arm64_instr2("adrp", _arm64_op_reg("x15"),
+                                     _arm64_op_label(egl + "@PAGE"),
+                                     "index_set: poly container global page (store-back)"))
+                    buf.push(_arm64_instr3("add", _arm64_op_reg("x15"),
+                                     _arm64_op_reg("x15"),
+                                     _arm64_op_label(egl + "@PAGEOFF"),
+                                     "index_set: poly container global off (store-back)"))
+                    buf.push(_arm64_instr3("stp", _arm64_op_reg("x0"),
+                                     _arm64_op_reg("x1"),
+                                     _arm64_op_label("[x15]"),
+                                     "index_set: poly store-back into global " + egl))
+                }
+                return buf
+            }
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // container
             buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // key
             buf = _hv_load(buf, s.args[2], st, rm, "x4", "x5")  // value
@@ -2072,15 +2708,21 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // RT-NATIVE UNLOCK-2b ext: signed-i64 payload relational compares
         // (__hx_payload_lt/gt/le/ge) — `cmp x1,x3; cset x0,<cond>` → bool, INLINE.
         // Unblocks the native dispatch core's hexa_cmp_lt/gt/le/ge int leaves.
+        // UNSIGNED variants (__hx_payload_ult/ule) use the aarch64 lo/ls cond codes
+        // (CF/unsigned), for the fdlibm fmod raw 64-bit bit-word magnitude compares
+        // where the high bit is data, not a sign. Mirror of x86_64 setb/setbe.
         if (s.op == "__hx_payload_lt" || s.op == "__hx_payload_gt"
             || s.op == "__hx_payload_le" || s.op == "__hx_payload_ge"
-            || s.op == "__hx_payload_eq" || s.op == "__hx_payload_ne") && len(s.args) >= 2 {
+            || s.op == "__hx_payload_eq" || s.op == "__hx_payload_ne"
+            || s.op == "__hx_payload_ult" || s.op == "__hx_payload_ule") && len(s.args) >= 2 {
             let mut _pcond = "lt"
             if s.op == "__hx_payload_gt" { _pcond = "gt" }
             if s.op == "__hx_payload_le" { _pcond = "le" }
             if s.op == "__hx_payload_ge" { _pcond = "ge" }
             if s.op == "__hx_payload_eq" { _pcond = "eq" }
             if s.op == "__hx_payload_ne" { _pcond = "ne" }
+            if s.op == "__hx_payload_ult" { _pcond = "lo" }  // unsigned <  (C clear)
+            if s.op == "__hx_payload_ule" { _pcond = "ls" }  // unsigned <= (C clear|Z set)
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // a → x1=payload
             buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // b → x3=payload
             buf.push(_arm64_instr2("cmp", _arm64_op_reg("x1"),
@@ -2097,16 +2739,36 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // arithmetic leaves (hexa_add_slow/sub/mul fast path).
         if (s.op == "__hx_payload_add" || s.op == "__hx_payload_sub"
             || s.op == "__hx_payload_mul" || s.op == "__hx_payload_and"
-            || s.op == "__hx_payload_xor") && len(s.args) >= 2 {
+            || s.op == "__hx_payload_xor" || s.op == "__hx_payload_or") && len(s.args) >= 2 {
             let mut _aop = "add"
             if s.op == "__hx_payload_sub" { _aop = "sub" }
             if s.op == "__hx_payload_mul" { _aop = "mul" }
             if s.op == "__hx_payload_and" { _aop = "and" }
             if s.op == "__hx_payload_xor" { _aop = "eor" }
+            if s.op == "__hx_payload_or"  { _aop = "orr" }
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // a → x1=payload
             buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // b → x3=payload
             buf.push(_arm64_instr3(_aop, _arm64_op_reg("x1"), _arm64_op_reg("x1"),
                              _arm64_op_reg("x3"), s.op + ": x1 = a.pl " + _aop + " b.pl"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), s.op + ": TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // payload-shift-leaf: LOGICAL shifts on the raw 64-bit payload word —
+        // `__hx_payload_shl(v,n)` = lslv (shift-left) / `__hx_payload_shr(v,n)` =
+        // lsrv LOGICAL/UNSIGNED right (zero-fill, NOT asrv). aarch64 register
+        // variable-shift: lslv/lsrv take the count in a GP reg. Mirrors the x86_64
+        // shr/shl payload-shift-leaf; ADD-only (the compiler never calls these),
+        // so arm64 emit is byte-unchanged when the intrinsics are unused.
+        if (s.op == "__hx_payload_shl" || s.op == "__hx_payload_shr")
+            && len(s.args) >= 2 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // v → x1=payload
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // n → x3=count
+            let mut _sm = "lslv"
+            if s.op == "__hx_payload_shr" { _sm = "lsrv" } // LOGICAL right (zero-fill)
+            buf.push(_arm64_instr3(_sm, _arm64_op_reg("x1"), _arm64_op_reg("x1"),
+                             _arm64_op_reg("x3"), s.op + ": x1 = v.pl " + _sm + " n"))
             buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
                              _arm64_op_label("#0"), s.op + ": TAG_INT"))
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
@@ -2475,6 +3137,277 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 return buf
             }
         }
+        // RFC061 §M8 named-rodata-table (literal-∅ feature C) — arm64 sibling of the
+        // x86_64 `__hx_rodata_tab_ptr` special-case. `__hx_rodata_tab_ptr(table_id)` —
+        // DEFINE a PRE-INITIALIZED `.rodata` constant table named `rotab_<id>`
+        // (contents = `_arm64_rodata_table_spec(id)`, LE doubles) and RETURN its
+        // address via `adrp x1, rotab_<id>@PAGE` + `add x1, x1, rotab_<id>@PAGEOFF`
+        // (the AArch64 PC-relative materialization, exactly like __hx_static_slot — but
+        // the data is initialized rodata, not a zero .data slot). The const_int
+        // `table_id` makes the symbol name deterministic at emit; the table is recorded
+        // ONCE into _arm64_rodata_tabs, which codegen_arm64_darwin decodes into an
+        // LSection appended to LModule.rodata. The adrp REFERENCE uses the bare
+        // `rotab_<id>` (which _fmt_label prefixes to `_rotab_<id>` on darwin, bare on
+        // ELF — same spelling discipline as __hx_static_slot's refsym). x0 = TAG_INT
+        // (0), x1 = &table; callers read cells via __hx_ptr_load64. This is the
+        // table-driven libm mechanism (musl exp __exp_data.tab[256]); frozen-safe
+        // (identifier call, no new keyword/@attr). Empty on the byteeq path → byte-eq
+        // NEUTRAL. Without this arm path the darwin Route C ON-path emit (the whole
+        // hxlcl_core.hexa is emitted under HEXA_CABI_HXLCL=1, so hxlcl_exp's body — with
+        // this intrinsic — is present even though exp is x86-gated at the shim layer)
+        // hits an unhandled STMT_CALL.
+        if s.op == "__hx_rodata_tab_ptr" && len(s.args) >= 1 {
+            if s.args[0].kind == "const_int" {
+                let rtid = s.args[0].int_val
+                _arm64_record_rodata_tab(rtid)
+                let rrefsym = "rotab_" + to_string(rtid)   // _fmt_label adds `_` on darwin
+                buf.push(_arm64_instr2("adrp", _arm64_op_reg("x1"),
+                                 _arm64_op_label(rrefsym + "@PAGE"),
+                                 "__hx_rodata_tab_ptr: &" + rrefsym + " page (.rodata table)"))
+                buf.push(_arm64_instr3("add", _arm64_op_reg("x1"),
+                                 _arm64_op_reg("x1"),
+                                 _arm64_op_label(rrefsym + "@PAGEOFF"),
+                                 "__hx_rodata_tab_ptr: x1 = &" + rrefsym))
+                buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                                 _arm64_op_label("#0"), "__hx_rodata_tab_ptr: TAG_INT"))
+                if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+                return buf
+            }
+        }
+        // ING #29 literal-∅ (2026-06-30): `__hx_fn_addr(name)` — MOVED to the
+        // _STMT_ASSIGN block (next to fn_ref). This _STMT_CALL copy was UNREACHABLE
+        // because hir_to_mir emits __hx_fn_addr as STMT_ASSIGN (same root cause as the
+        // x86_64 sibling). The live handler is in the _STMT_ASSIGN block above.
+        // ── RFC061 §M8 varargs-ABI (literal-∅ feature B, r2 arm64) ──────────────────
+        // The arm64 va_list intrinsics — the AAPCS64 (linux) / Apple-ARM64 (darwin)
+        // sibling of the x86_64 PSABI §3.5.7 va_* STMT_CALL special-cases. Two ABIs,
+        // branched on `_va_is_linux`:
+        //   • DARWIN  — va_list is a `char*` to the first STACKED vararg; va_start sets
+        //     it to the first caller stack slot ([x29,#16]); va_arg loads 8 bytes and
+        //     bumps it (8 for int/double). Reference-match: Apple "Writing ARM64 Code
+        //     for Apple Platforms" (variadic args are stack-passed; va_list = pointer).
+        //   • LINUX   — AAPCS64 §B.4 `__va_list` {__stack@0, __gr_top@8, __vr_top@16,
+        //     __gr_offs@24 (i32), __vr_offs@28 (i32)}. The prologue spills x0..x7 into a
+        //     64-byte GP save area and q0..q7 into a 128-byte FP save area; va_start sets
+        //     __gr_top/__vr_top to the END of each save area and __gr_offs/__vr_offs to
+        //     -(64 - named_gp*8) / -(128 - named_fp*16); va_arg(int) reads __gr_offs (if
+        //     <0 use __gr_top+__gr_offs and += 8, else __stack += 8) and va_arg_fp reads
+        //     __vr_offs (if <0 use __vr_top+__vr_offs and += 16, else __stack += 8).
+        //     Reference-match: clang AArch64ABIInfo::EmitAAPCSVAArg — `icmp sge reg_offs,
+        //     0 → on-stack`, GP stride 8 / SIMD stride 16, addr = reg_top + reg_offs.
+        // ALL gated by `_arm64_is_variadic` → HEXA_VA_INTRINSICS=1 (default-OFF, byte-eq
+        // NEUTRAL). The va save area lives at sp+`_va_base` (above the regalloc spill,
+        // below the try jmp_bufs — the same wedge x86_64 uses); `_va_base` is identical
+        // to the prologue/try-slot computation so the layout is one SSOT.
+        let _va_is_linux = opts.target_triple == "arm64-linux-gnu"
+        let _va_base = rm.call_overflow_bytes + spill_frame
+        let _va_list_off = _va_base + 192   // linux: va_list struct above the 192B save
+        if s.op == "__builtin_va_start" {
+            let mut named = 0
+            if len(s.args) >= 1 && s.args[0].kind == "const_int" { named = s.args[0].int_val }
+            if _va_is_linux {
+                // x10 = &va_list (sp + _va_list_off) once; all 5 fields stored relative
+                // to it via fixed +0/+8/+16/+24/+28 byte offsets (the AAPCS64 __va_list
+                // layout). Computing the base once keeps the stores immediate-safe even
+                // for a large frame (no per-field `[sp, #big]`).
+                buf = _arm64_va_addr(buf, "x10", _va_list_off)
+                // __stack = first stacked overflow vararg = [x29, #16] (above saved fp/lr).
+                buf.push(_arm64_instr3("add", _arm64_op_reg("x9"), _arm64_op_reg("x29"),
+                                 _arm64_op_label("#16"), "va_start: &first stack vararg"))
+                buf.push(_arm64_instr2("str", _arm64_op_reg("x9"),
+                                 _arm64_op_label("[x10]"), "va_start: va_list.__stack"))
+                // __gr_top = sp + _va_base + 64 (END of the 64-byte GP save area).
+                buf = _arm64_va_addr(buf, "x9", _va_base + 64)
+                buf.push(_arm64_instr2("str", _arm64_op_reg("x9"),
+                                 _arm64_op_label("[x10, #8]"), "va_start: va_list.__gr_top"))
+                // __vr_top = sp + _va_base + 192 (END of the 128-byte FP save area).
+                buf = _arm64_va_addr(buf, "x9", _va_base + 192)
+                buf.push(_arm64_instr2("str", _arm64_op_reg("x9"),
+                                 _arm64_op_label("[x10, #16]"), "va_start: va_list.__vr_top"))
+                // __gr_offs (i32) = -(64 - named_gp*8). r2 whitelist: all named params are
+                // general-class (the `long n` count), so named_gp == named, named_fp == 0.
+                buf = _arm64_emit_imm_to_reg(buf, "x9", 64 - named * 8)
+                buf.push(_arm64_instr2("neg", _arm64_op_reg("x9"), _arm64_op_reg("x9"),
+                                 "va_start: __gr_offs = -(64 - named_gp*8)"))
+                buf.push(_arm64_instr2("str", _arm64_op_reg("w9"),
+                                 _arm64_op_label("[x10, #24]"), "va_start: va_list.__gr_offs"))
+                // __vr_offs (i32) = -128 (no named FP params under the r2 whitelist).
+                buf = _arm64_emit_imm_to_reg(buf, "x9", 128)
+                buf.push(_arm64_instr2("neg", _arm64_op_reg("x9"), _arm64_op_reg("x9"),
+                                 "va_start: __vr_offs = -(128 - named_fp*16)"))
+                buf.push(_arm64_instr2("str", _arm64_op_reg("w9"),
+                                 _arm64_op_label("[x10, #28]"), "va_start: va_list.__vr_offs"))
+                // result = &va_list (boxed TAG_INT payload), bound by the source as `ap`.
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"), _arm64_op_reg("x10"),
+                                 "va_start: result = &va_list"))
+                buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                                 _arm64_op_label("#0"), "va_start: TAG_INT"))
+                if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+                return buf
+            }
+            // DARWIN — va_list is a single char* = &first stacked vararg. Named GP params
+            // occupy x0..x7 (registers, 0 stack bytes); under the r2 whitelist every named
+            // param is register-class, so the variadic portion begins at [x29, #16].
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x1"), _arm64_op_reg("x29"),
+                             _arm64_op_label("#16"), "va_start(darwin): ap = &first stack vararg"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "va_start(darwin): TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // `__builtin_va_arg(ap)` — fetch the next GENERAL-class (8-byte int) vararg.
+        if s.op == "__builtin_va_arg" {
+            buf = _hv_load(buf, s.args[0], st, rm, "x9", "x1")   // x1 = &va_list (darwin: ap=char*)
+            if _va_is_linux {
+                // Unique per-statement label base (each va_arg has a distinct dst.id;
+                // mirrors the `hvL<modhash>_<fname>_<dst.id>` logic-branch idiom above).
+                let vn = "vaL" + modhash + "_" + fname + "_" + to_string(s.dst.id)
+                let gstk = "L" + vn + "_stk"
+                let gdone = "L" + vn + "_done"
+                // w10 = __gr_offs; if >= 0 → on stack (cmp/b.ge). (clang `icmp sge ..,0`.)
+                buf.push(_arm64_instr2("ldr", _arm64_op_reg("w10"),
+                                 _arm64_op_label("[x1, #24]"), "va_arg: w10 = __gr_offs"))
+                buf.push(_arm64_instr2("cmp", _arm64_op_reg("w10"),
+                                 _arm64_op_label("#0"), "va_arg: __gr_offs vs 0"))
+                buf.push(_arm64_instr1("b.ge", _arm64_op_label("." + gstk),
+                                 "va_arg: __gr_offs >= 0 → stack"))
+                // reg path: addr = __gr_top + (sign-extended) __gr_offs; __gr_offs += 8.
+                buf.push(_arm64_instr2("ldr", _arm64_op_reg("x11"),
+                                 _arm64_op_label("[x1, #8]"), "va_arg: x11 = __gr_top"))
+                buf.push(_arm64_instr2("sxtw", _arm64_op_reg("x12"), _arm64_op_reg("w10"),
+                                 "va_arg: sign-extend __gr_offs"))
+                buf.push(_arm64_instr3("add", _arm64_op_reg("x11"), _arm64_op_reg("x11"),
+                                 _arm64_op_reg("x12"), "va_arg: addr = __gr_top + __gr_offs"))
+                buf.push(_arm64_instr3("add", _arm64_op_reg("w10"), _arm64_op_reg("w10"),
+                                 _arm64_op_label("#8"), "va_arg: __gr_offs += 8"))
+                buf.push(_arm64_instr2("str", _arm64_op_reg("w10"),
+                                 _arm64_op_label("[x1, #24]"), "va_arg: store __gr_offs"))
+                buf.push(_arm64_instr1("b", _arm64_op_label("." + gdone), "va_arg: → load"))
+                // stack path: addr = __stack; __stack += 8.
+                buf.push(_arm64_instr0("label", "." + gstk))
+                buf.push(_arm64_instr2("ldr", _arm64_op_reg("x11"),
+                                 _arm64_op_label("[x1]"), "va_arg: x11 = __stack"))
+                buf.push(_arm64_instr3("add", _arm64_op_reg("x12"), _arm64_op_reg("x11"),
+                                 _arm64_op_label("#8"), "va_arg: __stack + 8"))
+                buf.push(_arm64_instr2("str", _arm64_op_reg("x12"),
+                                 _arm64_op_label("[x1]"), "va_arg: store __stack"))
+                buf.push(_arm64_instr0("label", "." + gdone))
+                buf.push(_arm64_instr2("ldr", _arm64_op_reg("x1"),
+                                 _arm64_op_label("[x11]"), "va_arg: value = *(long*)addr"))
+                buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                                 _arm64_op_label("#0"), "va_arg: TAG_INT"))
+                if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+                return buf
+            }
+            // DARWIN — ap is a char*: value = *(long*)ap; ap += 8. x1 = ap (payload).
+            buf.push(_arm64_instr2("ldr", _arm64_op_reg("x12"),
+                             _arm64_op_label("[x1]"), "va_arg(darwin): value = *ap"))
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x1"), _arm64_op_reg("x1"),
+                             _arm64_op_label("#8"), "va_arg(darwin): ap += 8"))
+            // store the bumped ap {TAG_INT, ap+8} back into the source's va_list slot.
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "va_arg(darwin): ap tag = TAG_INT"))
+            if s.args[0].kind == "local" { buf = _hv_store(buf, rm, s.args[0].local_id, "x0", "x1") }
+            // result = {TAG_INT, loaded value}.
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"), _arm64_op_reg("x12"),
+                             "va_arg(darwin): payload = loaded value"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // `__builtin_va_arg_fp(ap)` — fetch the next SIMD/FP-class (double) vararg.
+        if s.op == "__builtin_va_arg_fp" {
+            buf = _hv_load(buf, s.args[0], st, rm, "x9", "x1")   // x1 = &va_list (darwin: ap=char*)
+            if _va_is_linux {
+                let vfn = "vafL" + modhash + "_" + fname + "_" + to_string(s.dst.id)
+                let fstk = "L" + vfn + "_stk"
+                let fdone = "L" + vfn + "_done"
+                // w10 = __vr_offs; if >= 0 → on stack.
+                buf.push(_arm64_instr2("ldr", _arm64_op_reg("w10"),
+                                 _arm64_op_label("[x1, #28]"), "va_arg_fp: w10 = __vr_offs"))
+                buf.push(_arm64_instr2("cmp", _arm64_op_reg("w10"),
+                                 _arm64_op_label("#0"), "va_arg_fp: __vr_offs vs 0"))
+                buf.push(_arm64_instr1("b.ge", _arm64_op_label("." + fstk),
+                                 "va_arg_fp: __vr_offs >= 0 → stack"))
+                // reg path: addr = __vr_top + __vr_offs; __vr_offs += 16 (q-reg stride).
+                buf.push(_arm64_instr2("ldr", _arm64_op_reg("x11"),
+                                 _arm64_op_label("[x1, #16]"), "va_arg_fp: x11 = __vr_top"))
+                buf.push(_arm64_instr2("sxtw", _arm64_op_reg("x12"), _arm64_op_reg("w10"),
+                                 "va_arg_fp: sign-extend __vr_offs"))
+                buf.push(_arm64_instr3("add", _arm64_op_reg("x11"), _arm64_op_reg("x11"),
+                                 _arm64_op_reg("x12"), "va_arg_fp: addr = __vr_top + __vr_offs"))
+                buf.push(_arm64_instr3("add", _arm64_op_reg("w10"), _arm64_op_reg("w10"),
+                                 _arm64_op_label("#16"), "va_arg_fp: __vr_offs += 16"))
+                buf.push(_arm64_instr2("str", _arm64_op_reg("w10"),
+                                 _arm64_op_label("[x1, #28]"), "va_arg_fp: store __vr_offs"))
+                buf.push(_arm64_instr1("b", _arm64_op_label("." + fdone), "va_arg_fp: → load"))
+                // stack path: addr = __stack; __stack += 8 (a stacked double is 8 bytes).
+                buf.push(_arm64_instr0("label", "." + fstk))
+                buf.push(_arm64_instr2("ldr", _arm64_op_reg("x11"),
+                                 _arm64_op_label("[x1]"), "va_arg_fp: x11 = __stack"))
+                buf.push(_arm64_instr3("add", _arm64_op_reg("x12"), _arm64_op_reg("x11"),
+                                 _arm64_op_label("#8"), "va_arg_fp: __stack + 8"))
+                buf.push(_arm64_instr2("str", _arm64_op_reg("x12"),
+                                 _arm64_op_label("[x1]"), "va_arg_fp: store __stack"))
+                buf.push(_arm64_instr0("label", "." + fdone))
+                // load the raw 8 IEEE-754 bytes into the payload reg, box TAG_FLOAT(1).
+                buf.push(_arm64_instr2("ldr", _arm64_op_reg("x1"),
+                                 _arm64_op_label("[x11]"), "va_arg_fp: value bits = *(double*)addr"))
+                buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                                 _arm64_op_label("#1"), "va_arg_fp: TAG_FLOAT"))
+                if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+                return buf
+            }
+            // DARWIN — ap is a char*: bits = *(double*)ap; ap += 8; box TAG_FLOAT.
+            buf.push(_arm64_instr2("ldr", _arm64_op_reg("x12"),
+                             _arm64_op_label("[x1]"), "va_arg_fp(darwin): bits = *ap"))
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x1"), _arm64_op_reg("x1"),
+                             _arm64_op_label("#8"), "va_arg_fp(darwin): ap += 8"))
+            // store bumped ap {TAG_INT, ap+8} back into the va_list slot.
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "va_arg_fp(darwin): ap tag = TAG_INT"))
+            if s.args[0].kind == "local" { buf = _hv_store(buf, rm, s.args[0].local_id, "x0", "x1") }
+            // result = {TAG_FLOAT, loaded bits}.
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"), _arm64_op_reg("x12"),
+                             "va_arg_fp(darwin): payload = loaded bits"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#1"), "va_arg_fp(darwin): TAG_FLOAT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // `__builtin_va_end(ap)` — AAPCS64/darwin no-op (va_list lives in the frame).
+        if s.op == "__builtin_va_end" {
+            buf.push(_arm64_instr0("nop", "va_end: no-op"))
+            if s.dst.id >= 0 {
+                buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
+                                 _arm64_op_label("#0"), "va_end: payload 0"))
+                buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                                 _arm64_op_label("#0"), "va_end: TAG_INT"))
+                buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+            }
+            return buf
+        }
+        // `__builtin_va_copy(dst_ap, src_ap)` — copy the va_list. Linux = 32-byte
+        // __va_list (4 qwords); darwin = a single 8-byte char* pointer.
+        if s.op == "__builtin_va_copy" && len(s.args) >= 2 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x9", "x1")   // x1 = dst va_list*
+            buf = _hv_load(buf, s.args[1], st, rm, "x9", "x2")   // x2 = src va_list*
+            let mut _vcn = 8
+            if _va_is_linux { _vcn = 32 }
+            let mut _vc = 0
+            while _vc < _vcn {
+                buf.push(_arm64_instr2("ldr", _arm64_op_reg("x10"),
+                                 _arm64_op_label("[x2, #" + to_string(_vc) + "]"),
+                                 "va_copy: load src qword"))
+                buf.push(_arm64_instr2("str", _arm64_op_reg("x10"),
+                                 _arm64_op_label("[x1, #" + to_string(_vc) + "]"),
+                                 "va_copy: store dst qword"))
+                _vc = _vc + 8
+            }
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "va_copy: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // RT-NATIVE UNLOCK-10: `__hx_ptr_store64(ptr, off, val)` — write the
         // 64-bit int `val` to raw address `ptr + off`. The arena bump path
         // (a native allocator writes object headers/fields into an mmap slab)
@@ -2595,6 +3528,36 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // libm-leaf (musl sin argument reduction) — FLOAT↔INT conversion intrinsics.
+        // __hx_payload_f2i(v): reinterpret v's payload word as a double, TRUNCATE
+        // toward zero into a signed i64 (fcvtzs) — the `(int32_t)fn` round-to-int step
+        // (fn is already integral, so truncation is exact). Result tag = TAG_INT(0).
+        // __hx_payload_i2f(v): convert v's signed int payload to a double (scvtf);
+        // tag = TAG_FLOAT(1). Distinct from __hx_to_double (a TAGGED int-or-float
+        // coercion with a csel) — these take a RAW payload word and do an
+        // unconditional FP convert. AAPCS64 mirror of the x86_64 cvttsd2si/cvtsi2sd.
+        if s.op == "__hx_payload_f2i" && len(s.args) >= 1 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // pl=x1 = double bits
+            buf.push(_arm64_instr2("fmov", _arm64_op_reg("d0"),
+                             _arm64_op_reg("x1"), "__hx_payload_f2i: d0 = v.f bits"))
+            buf.push(_arm64_instr2("fcvtzs", _arm64_op_reg("x1"),
+                             _arm64_op_reg("d0"), "__hx_payload_f2i: x1 = (i64)trunc(v.f)"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_payload_f2i: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        if s.op == "__hx_payload_i2f" && len(s.args) >= 1 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // pl=x1 = int payload
+            buf.push(_arm64_instr2("scvtf", _arm64_op_reg("d0"),
+                             _arm64_op_reg("x1"), "__hx_payload_i2f: d0 = (double)v.i"))
+            buf.push(_arm64_instr2("fmov", _arm64_op_reg("x1"),
+                             _arm64_op_reg("d0"), "__hx_payload_i2f: x1 = converted bits"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#1"), "__hx_payload_i2f: TAG_FLOAT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // RT-NATIVE M5-syscall-c: `__hx_str_ptr(s)` → int HexaVal whose payload IS
         // the string's char* base (the STR payload x1). Same str-payload load as
         // __hx_str_byte, minus the +index and byte deref — for handing a cstring to
@@ -2704,7 +3667,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // arg0→x0:x1, arg1→x2:x3, arg2→x4:x5, arg3→x6:x7 (4 pair-args
         // in the 8 GPRs); args ≥4 go to 16B stack slots [sp,#(i-4)*16].
         // Return is x0:x1 → dst slot.
-        if _is_cabi(s.op) {
+        if _is_cabi(s.op) && !_cabi_is_fp(s.op) {
             // Route C C-ABI call — callee takes each arg in ONE AAPCS64 arg reg
             // (x0..x7) and returns a single raw value in x0. Box only each arg's
             // PAYLOAD into its single reg (x9 = throwaway tag half); result x0 →
@@ -2744,7 +3707,20 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             }
             i = i + 1
         }
-        let target = _builtin_runtime_sym(s.op)
+        let mut target = _builtin_runtime_sym(s.op)
+        // FLEET arm64 element-pack (HEXA_PACK_ESCAPING) — escaping-poly push/len.
+        // The generic builtin emit already lands the args in the SAME registers the
+        // poly readers want (push: v → x0:x1, item → x2:x3 ≡ hexa_arr_poly_push;
+        // len: v → x0:x1 ≡ hexa_arr_poly_len, returning int64 in x0 — IDENTICAL
+        // ABI + ret-box to hexa_len), so ONLY the call target changes. The runtime
+        // discriminates on HX_TAG==TAG_ARRAY_I64 (stride-8 raw) else delegates to
+        // the boxed hexa_array_push / hexa_len. Mirror of x86_64's poly push/len.
+        if s.op == "push" && len(s.args) >= 2 && _arm_operand_pack_esc(s.args[0], rm) {
+            target = "hexa_arr_poly_push"
+        }
+        if s.op == "len" && len(s.args) >= 1 && _arm_operand_pack_esc(s.args[0], rm) {
+            target = "hexa_arr_poly_len"
+        }
         buf.push(_arm64_instr1("bl", _arm64_op_label(target), "call " + target))
         // Box int/bool-returning runtime builtins into a HexaVal (the
         // callee returns a C int in w0; A′ expects x0:x1 HexaVal).
@@ -2837,7 +3813,24 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
     }
     if s.kind == _STMT_RETURN {
         if len(s.args) >= 1 {
-            if _is_cabi(fname) {
+            if _arm64_va_active && _arm64_va_ret_is_fp(fname) {
+                // RFC061 §M8 r2 — a variadic fn whose return is SIMD-class (`double`)
+                // returns its value in d0/v0 (AAPCS64 §6.4), NOT x0. The payload eightbyte
+                // holds the raw IEEE-754 bits; load into x1 then `fmov d0, x1` (the same
+                // GP→SIMD move the __hx_payload_fadd path emits). A C caller reads the
+                // result in d0. Must precede frame teardown (reads spill slots). default-
+                // OFF (_arm64_va_active is gated by _arm64_is_variadic) ⇒ byte-eq NEUTRAL.
+                buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+                buf.push(_arm64_instr2("fmov", _arm64_op_reg("d0"), _arm64_op_reg("x1"),
+                                 "va fp return: d0 = result bits"))
+            } else if _arm64_va_active {
+                // RFC061 §M8 r2 — a variadic INT-return fn is C-ABI for its result: the
+                // raw value goes in x0 (the C caller reads x0, not the {tag,payload}
+                // pair). Load just the payload eightbyte into x0 (x9 = throwaway tag).
+                // Without this the {TAG_INT, value} pair landed tag(0) in x0 → every
+                // variadic-int call returned 0. default-OFF ⇒ byte-eq NEUTRAL.
+                buf = _hv_load(buf, s.args[0], st, rm, "x9", "x0")
+            } else if _is_cabi(fname) && !_cabi_is_fp(fname) {
                 // Route C C-ABI return — a raw C-ABI fn returns a single value
                 // in x0. Load just the payload eightbyte into x0 (x9 = throwaway
                 // tag half); the HexaVal tag is dropped (C caller reads only x0).
@@ -2857,15 +3850,21 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              _arm64_op_label("#0"), "ret void: payload 0"))
         }
         // C7 + cycle h20 — epilogue frees spill_frame + call-overflow
-        // region + try-jmp_buf region (all allocated in a single
-        // prologue sub; see _arm64_lower_func).
-        let epilogue_total = spill_frame + rm.call_overflow_bytes + try_buf_bytes
+        // region + va register-save block + try-jmp_buf region (all allocated in a
+        // single prologue sub; see _arm64_lower_func). The va block (0 unless this is
+        // a variadic fn under HEXA_VA_INTRINSICS=1) must be freed too so sp re-balances.
+        // ING #29 literal-∅: @naked fn — NO return-statement epilogue (the body
+        // is raw asm that terminates itself). DEFAULT false → unchanged on every fn.
+        if !_arm64_is_naked {
+        let _va_blk_epi = _arm64_va_block_bytes(fname, opts.target_triple == "arm64-linux-gnu")
+        let epilogue_total = spill_frame + rm.call_overflow_bytes + _va_blk_epi + try_buf_bytes
         if epilogue_total > 0 {
             buf = _hv_sp_adj(buf, "add", epilogue_total, "x15")
         }
         buf.push(_arm64_instr3("ldp", _arm64_op_reg("x29"), _arm64_op_reg("x30"),
                          _arm64_op_label("[sp], #16"), "epilogue: restore fp/lr"))
         buf.push(_arm64_instr0("ret", "return"))
+        }
         return buf
     }
     if s.kind == _STMT_BR {
@@ -2883,7 +3882,10 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // On first call setjmp returns 0; push jbuf onto try-stack, then
         // fall through to the try-body (target_block).
         // On longjmp-resumed setjmp returns 1; branch to target_block_else.
-        let off = rm.call_overflow_bytes + spill_frame + try_slot_idx * 192
+        // va_block (0 unless variadic+VA_INTRINSICS) shifts the try region above the
+        // va register-save area, keeping the layout one SSOT with the prologue.
+        let _va_blk_try = _arm64_va_block_bytes(fname, opts.target_triple == "arm64-linux-gnu")
+        let off = rm.call_overflow_bytes + spill_frame + _va_blk_try + try_slot_idx * 192
         buf = _hv_at(buf, off, "x15")
         // x15 now holds (sp + off / 16) * 16; _hv_at builds the immediate
         // offset via the scratch — use the helper that yields a register
@@ -3121,15 +4123,44 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
         ids: alloc.map.ids,
         regs: alloc.map.regs,
         slots: alloc.map.slots,
-        call_overflow_bytes: call_overflow_bytes
+        call_overflow_bytes: call_overflow_bytes,
+        // FLEET arm64 element-pack — forward the esc lattice built in
+        // _arm64_assign_regs (both `[]` when HEXA_PACK_ESCAPING is OFF → emit
+        // boundaries never consult them → byte-identical to origin).
+        local_type: alloc.map.local_type,
+        local_packed_esc_ok: alloc.map.local_packed_esc_ok
     }
-    // Cycle h20 — reserve jmp_buf region above the spill area. Each try
-    // gets one 192-byte slot (16-aligned by construction).
+    // RFC061 §M8 varargs-ABI (r2) — reserve the AAPCS64 va register-save block for a
+    // variadic fn (LINUX: 224 = 64 GP + 128 FP save + 32 va_list; DARWIN: 0, stack-
+    // passed). Wedged BETWEEN the regalloc spill slots (sp+[call_overflow, +spill_frame))
+    // and the try jmp_bufs — the SAME wedge x86_64 uses. `_va_block` is threaded through
+    // the same `_arm64_va_block_bytes(fname, is_linux)` SSOT the va builtins use, so the
+    // prologue spill, the va_start/va_arg layout, and the try-slot base agree. NON-
+    // variadic (default, HEXA_VA_INTRINSICS unset) → 0 → byte-eq NEUTRAL.
+    let _va_is_linux_pro = opts.target_triple == "arm64-linux-gnu"
+    let _va_block = _arm64_va_block_bytes(fn_name, _va_is_linux_pro)
+    let _va_base_pro = call_overflow_bytes + spill_frame
+    // Module-level flag consulted by the _STMT_RETURN path (variadic SIMD return → d0).
+    // Set for EVERY fn (true only for a whitelisted variadic under HEXA_VA_INTRINSICS=1);
+    // default false → byte-eq NEUTRAL.
+    _arm64_va_active = _arm64_is_variadic(fn_name)
+    // ING #29 literal-∅ (2026-06-30): @naked — propagate MFunc.is_naked to the
+    // per-fn global so the prologue/epilogue guards read it. Reset every fn.
+    _arm64_is_naked = mf.is_naked
+    // Cycle h20 — reserve jmp_buf region above the spill area (now above the va block).
+    // Each try gets one 192-byte slot (16-aligned by construction).
     let try_count = _arm64_count_try_setjmp(mf)
     let try_buf_bytes = try_count * _ARM64_JMP_BUF_BYTES
-    let total_frame = spill_frame + call_overflow_bytes + try_buf_bytes
+    let total_frame = spill_frame + call_overflow_bytes + _va_block + try_buf_bytes
 
     // Prologue
+    // ING #29 literal-∅ (2026-06-30): @naked SKIPS prologue+epilogue (the body
+    // is raw asm; reference-match GCC __attribute__((naked)) / rustc #[naked]).
+    // arm64 scope: rt_sigreturn measurement is x86_64-only (arm64 kernel
+    // supplies the signal trampoline), so this guard keeps arm64 codegen
+    // correct for a @naked fn but is not exercised by the rt_sigreturn probe.
+    // DEFAULT false on every existing fn → byte-eq NEUTRAL.
+    if !_arm64_is_naked {
     instrs.push(_arm64_instr3(
         "stp",
         _arm64_op_reg("x29"),
@@ -3156,10 +4187,44 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
     }
 
     // Spill-frame allocation (after fp/lr save). Covers both the SSA
-    // spill region (top) and the outgoing-call overflow region (bottom).
+    // spill region (top), the va register-save block (middle, variadic only), and
+    // the outgoing-call overflow region (bottom).
     if total_frame > 0 {
         instrs = _hv_sp_adj(instrs, "sub", total_frame, "x15")
     }
+
+    // RFC061 §M8 varargs-ABI (r2) — LINUX/AAPCS64 register save. A variadic fn must
+    // spill the 8 GP arg regs (x0..x7) into the 64-byte GP save area and the 8 FP arg
+    // regs (q0..q7, low eightbyte) into the 128-byte FP save area BEFORE param ingress
+    // below clobbers x0..x7. Layout (sp-relative, after the `sub`): GP_i @ va_base+8*i,
+    // FP_i @ va_base+64+16*i, where va_base = call_overflow_bytes + spill_frame (the
+    // wedge just above the SSA spill). Reference-match: AAPCS64 §B.4 register save areas
+    // — GP 64 bytes + FP 128 bytes, va_arg reads them back via __gr_top/__vr_top. DARWIN
+    // skips this entirely (_va_block == 0: varargs are stack-passed). NON-variadic →
+    // _va_block 0 → this loop never runs → byte-eq NEUTRAL. (A stacked `double` vararg
+    // is read back with an 8-byte load, so spilling the low eightbyte of qN via `str dN`
+    // is value-faithful for the double/float class — the high eightbyte is never read.)
+    if _va_block > 0 {
+        let mut _vg = 0
+        while _vg < 8 {
+            let _go = _va_base_pro + 8 * _vg
+            instrs = _hv_at(instrs, _go, "x15")
+            instrs.push(_arm64_instr2("str", _arm64_op_reg("x" + to_string(_vg)),
+                             _hv_memb(_go, "x15"),
+                             "va prologue: spill GP arg reg x" + to_string(_vg)))
+            _vg = _vg + 1
+        }
+        let mut _vf = 0
+        while _vf < 8 {
+            let _fo = _va_base_pro + 64 + 16 * _vf
+            instrs = _hv_at(instrs, _fo, "x15")
+            instrs.push(_arm64_instr2("str", _arm64_op_reg("d" + to_string(_vf)),
+                             _hv_memb(_fo, "x15"),
+                             "va prologue: spill FP arg reg d" + to_string(_vf)))
+            _vf = _vf + 1
+        }
+    }
+    } // end `if !_arm64_is_naked` (prologue) — ING #29 @naked skips frame setup
 
     // Path A (A′): each 16B HexaVal param arrives in a register PAIR
     // (param0→x0:x1, param1→x2:x3, param2→x4:x5, param3→x6:x7); params
@@ -3168,7 +4233,18 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
     // (all params are force-spilled). x29 set to old sp before the
     // frame `sub`, so [x29,#16+…] reaches the caller's outgoing area.
     let mut p = 0
-    let _arm_cabi = _is_cabi(fn_name)
+    // arm64 fp-ABI (AAPCS64 v0-v7) is the NEXT rung — exclude fp symbols so a
+    // double leaf is NOT mis-lowered into GP x0/x1 here (it falls through to the
+    // PAIR-MODEL path). x86_64 (PSABI §3.2.3 xmm) lands first.
+    //
+    // RFC061 §M8 r2 — a VARIADIC fn is ALSO C-ABI for its NAMED params (they arrive
+    // RAW in one AAPCS64 GP register, NOT a {tag,payload} pair): mirrors x86_64's
+    // `_x86_cabi = _is_cabi(name) || _x86_va_active`. Without this fold the named `n`
+    // of `hxlcl_va_smoke(long n, ...)` was mis-ingested as a HexaVal PAIR {x0,x1},
+    // stealing the first vararg out of x1 → loop bound garbage. The r2 whitelist has
+    // only integer-class named params, so the GP single-reg ingress is exact. Gated by
+    // _arm64_va_active (default-OFF) ⇒ byte-eq NEUTRAL.
+    let _arm_cabi = (_is_cabi(fn_name) && !_cabi_is_fp(fn_name)) || _arm64_va_active
     while p < len(mf.params) {
         let pid = mf.params[p].id
         let poff = _arm_spill_offset(rm, pid)
@@ -3267,6 +4343,9 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
     // #40 — fall-through epilogue also hands back a real TAG_VOID HexaVal
     // (x0:x1), matching the value-less STMT_RETURN path above; a function
     // reaching here without an explicit return yields void.
+    // ING #29 literal-∅: @naked fn — NO fall-through epilogue (the body is raw
+    // asm that must terminate itself). DEFAULT false → unchanged on every fn.
+    if !_arm64_is_naked {
     instrs.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
                         _arm64_op_label("#4"), "ret void: TAG_VOID"))
     instrs.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
@@ -3277,6 +4356,7 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
     instrs.push(_arm64_instr3("ldp", _arm64_op_reg("x29"), _arm64_op_reg("x30"),
                         _arm64_op_label("[sp], #16"), "epilogue: restore fp/lr"))
     instrs.push(_arm64_instr0("ret", "return"))
+    }
 
     return LFunc {
         name: fn_name,
@@ -3570,6 +4650,10 @@ pub fn codegen_arm64_darwin(module: MModule, opts: CodegenOptions) -> LModule {
     // Wall 3-c: reset the __hx_static_slot accumulator for THIS module (module-scope
     // mutable; a prior module's slots must not leak). Empty on the byteeq path.
     _arm64_static_slots = []
+    // §M8 feature C: reset the named-rodata-table accumulator for THIS module too
+    // (module-scope mutable; prior-module tables must not leak). Stays [] on the
+    // byteeq path → rodata unchanged → byte-eq NEUTRAL.
+    _arm64_rodata_tabs = []
     let mut funcs = []
     let mut i = 0
     while i < len(module.funcs) {
@@ -3625,11 +4709,32 @@ pub fn codegen_arm64_darwin(module: MModule, opts: CodegenOptions) -> LModule {
         })
         fp = fp + 1
     }
+    // §M8 feature C: build the rodata list = string-table sections PLUS one
+    // `.rodata` LSection per referenced named table (`rotab_<id>`), aligned 8
+    // (.p2align 3) with the LE-double payload. The DEFINED section symbol must match
+    // the adrp REFERENCE after _fmt_label: `_rotab_<id>` on darwin (Mach-O user-symbol
+    // `_` prefix), bare `rotab_<id>` on ELF — the same platform spelling discipline as
+    // the static-slot deflabel. Empty `_arm64_rodata_tabs` on the byteeq path →
+    // identical to the bare `_strtab_to_rodata(st)` → byte-eq NEUTRAL.
+    let mut rodata_secs = _strtab_to_rodata(st)
+    let mut rti = 0
+    while rti < len(_arm64_rodata_tabs) {
+        let rtid = _arm64_rodata_tabs[rti]
+        let mut rtname = "_rotab_" + to_string(rtid)   // darwin: _fmt_label-spelled
+        if elf { rtname = "rotab_" + to_string(rtid) }  // ELF: bare
+        let rtpayload = _arm64_u64hex_list_to_le_payload(_arm64_rodata_table_spec(rtid))
+        rodata_secs.push(LSection {
+            name: rtname,
+            bytes: rtpayload,
+            align: 3
+        })
+        rti = rti + 1
+    }
     return LModule {
         file: module.file,
         target: cg_target,
         funcs: funcs,
-        rodata: _strtab_to_rodata(st),
+        rodata: rodata_secs,
         bss: [],
         globals: gnames,
         floats: flts
