@@ -2664,6 +2664,10 @@ pub fn _x86_is_variadic(fname: string) -> bool {
     // r1 SSE-class PoC — `double hxlcl_va_fp_smoke(long n, ...)` proves the FP-class
     // va_arg leaf (the prologue XMM reg-save spill + __builtin_va_arg_fp walk).
     if fname == "hxlcl_va_fp_smoke" { return true }
+    // RUNG2 forwarding PoC — `long hxlcl_va_fwd_smoke(long n, ...)` va_starts then forwards
+    // &va_list into a non-variadic inner walker (proves va_list-as-parameter, the printf
+    // family shape). Only the OUTER fn needs the variadic prologue; the inner walker does not.
+    if fname == "hxlcl_va_fwd_smoke" { return true }
     return false
 }
 
