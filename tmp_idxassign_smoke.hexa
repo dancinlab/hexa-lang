@@ -17,6 +17,10 @@ fn ck(name, cond) {
     }
 }
 
+// struct types for the Field-lvalue extension (2026-07-03).
+struct Cell { w: u32 }
+struct Grid { cells: [Cell], top: Cell }
+
 fn main() {
     // ── 1-level array (regression — must stay correct) ──────────────
     let mut a = [10, 20, 30]
@@ -115,6 +119,21 @@ fn main() {
     ck("seq-3", seq[0][1][0] == 3)
     ck("seq-4", seq[1][1][1] == 4)
     ck("seq-untouched", seq[1][0][0] == 0 && seq[0][1][1] == 0)
+
+    // ── struct Field lvalue through a place (RFC-037 extension) ─────
+    // `obj.arr[i].field = v` (Field-of-Index) and `obj.a.b = v` (Field-of-
+    // Field): the plain Field-AssignStmt branch assigned to a map_get/index_get
+    // rvalue → clang "expression is not assignable". Fix recurses to the root.
+    let mut g = Grid { cells: [], top: Cell { w: 0 } }
+    g.cells.push(Cell { w: 1 })
+    g.cells.push(Cell { w: 2 })
+    g.cells[0].w = 88
+    ck("field-of-index-write", g.cells[0].w == 88)
+    ck("field-of-index-untouched", g.cells[1].w == 2)
+    ck("field-of-index-len", len(g.cells) == 2)
+    g.top.w = 77
+    ck("field-of-field-write", g.top.w == 77)
+    ck("field-of-field-cells-untouched", g.cells[0].w == 88)
 
     print("---")
     print("PASS=" + to_string(PASS) + " FAIL=" + to_string(FAIL))
