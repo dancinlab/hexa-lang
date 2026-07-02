@@ -3063,6 +3063,43 @@ fn _gen2_nested_index_assign_stmt(lhs, val_c, pad) {
     return pad + root_c + " = " + expr + ";\n"
 }
 
+// 2026-07-03: generalized nested lvalue assignment for a mixed Field/Index spine
+// rooted at a variable — `root.f[i].g = v`, `root.a.b = v`, etc. The plain
+// Field-AssignStmt branch lowered `obj.field = v` as `<obj_c> = hexa_map_set(...)`
+// with obj_c = gen2_expr(obj); when obj is itself a place (Field/Index) that
+// obj_c is a function-call rvalue (hexa_map_get_ic(...) / hexa_index_get(...)),
+// so the C `<rvalue> = …` was rejected ("expression is not assignable"). Fix:
+// walk the whole place spine to the ROOT lvalue (a bare Ident) and rebuild it
+// with nested hexa_map_set / hexa_index_set, assigning ONCE to the root. Every
+// intermediate object read is an rvalue ARGUMENT to set (valid C); only the root
+// is a C lvalue. Byte-identical to the old branch for the single-level
+// `ident.field = v` case (steps = [Field], root_c = ident).
+fn _gen2_nested_field_assign_stmt(lhs, val_c, pad) {
+    // Collect place steps leaf→root (each step is the Field/Index AST node).
+    let mut steps = []
+    let mut cur = lhs
+    while type_of(cur) != "string" && (cur.kind == "Field" || cur.kind == "Index") {
+        steps.push(cur)
+        cur = cur.left
+    }
+    let root_c = gen2_expr(cur)
+    // Rebuild innermost (leaf, first collected) outward. Each wrapper's object is
+    // the step node's own `.left`, lowered via gen2_expr (correct read incl. IC).
+    let mut expr = val_c
+    let mut i = 0
+    while i < len(steps) {
+        let node = steps[i]
+        let obj_c = gen2_expr(node.left)
+        if node.kind == "Field" {
+            expr = "hexa_map_set(" + obj_c + ", \"" + node.name + "\", " + expr + ")"
+        } else {
+            expr = "hexa_index_set(" + obj_c + ", " + gen2_expr(node.right) + ", " + expr + ")"
+        }
+        i = i + 1
+    }
+    return pad + root_c + " = " + expr + ";\n"
+}
+
 // decreases node — structural
 // PROBE r15-D2 (2026-05-24): gen2_stmt wrapper for postfix `?` hoisting.
 // Saves + clears the Try-preamble buffer, emits the statement via the
@@ -3343,12 +3380,13 @@ fn _gen2_stmt_inner(node, depth) {
             let val = gen2_expr(node.right)
             return _gen2_nested_index_assign_stmt(node.left, val, pad)
         }
-        // Field assignment: obj.field = val
+        // Field assignment: obj.field = val — recurse to the ROOT lvalue so a
+        // nested object place (obj.f[i].g / obj.a.b) rebinds the base variable
+        // instead of assigning to a map_get/index_get rvalue. Single-level
+        // ident.field = v stays byte-identical (steps=[Field], root=ident).
         if type_of(node.left) != "string" && node.left.kind == "Field" {
-            let obj = gen2_expr(node.left.left)
-            let field = node.left.name
             let val = gen2_expr(node.right)
-            return pad + obj + " = hexa_map_set(" + obj + ", \"" + field + "\", " + val + ");\n"
+            return _gen2_nested_field_assign_stmt(node.left, val, pad)
         }
         // closure mut-capture: assigning to a boxed `let mut` Ident writes
         // through the shared cell via hexa_array_set (in-place mutate; returns
