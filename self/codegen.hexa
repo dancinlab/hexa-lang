@@ -2567,6 +2567,36 @@ fn gen2_static_ffi_block(ast) {
     return parts.join("")
 }
 
+// FFI-NATIVE-ROUTE: an `@link("m")` extern fn whose C symbol is a libm function
+// hexa already implements natively resolves to the builtin (hexa_math_*) instead
+// of dlopen+dlsym. A statically-linked musl binary CANNOT dlopen, so the dlsym
+// path produced a NULL fn_ptr and the CLM decode deadlocked calling through it.
+// native-canonical-default polarity makes the own-impl the correct default anyway,
+// and the *builtin* `erf(x)` already lowers to hexa_math_erf — routing unifies the
+// shadowed-extern case with the builtin. Scope v1 = libm double->double set; a
+// symbol hexa has no native for (e.g. cblas_sgemm) returns "" -> unchanged FFI path.
+// Named next wall: libc symbols with native equivalents (strlen family) need a
+// char*/HexaVal-str marshalling-safety pass first.
+fn gen2_extern_native_route(node, c_sym) {
+    if node.op != "m" && node.op != "libm" { return "" }
+    if gen2_ffi_c_ret_type(node.ret_type) != "double" { return "" }
+    let mut i = 0
+    while i < len(node.params) {
+        if gen2_ffi_c_type(node.params[i].value) != "double" { return "" }
+        i = i + 1
+    }
+    let n = len(node.params)
+    let mut key = ""
+    if n == 1 {
+        if c_sym == "sqrt" || c_sym == "sin" || c_sym == "cos" || c_sym == "tan" || c_sym == "asin" || c_sym == "acos" || c_sym == "atan" || c_sym == "log" || c_sym == "exp" || c_sym == "tanh" || c_sym == "lgamma" || c_sym == "tgamma" || c_sym == "erf" || c_sym == "erfc" { key = c_sym }
+    }
+    if n == 2 {
+        if c_sym == "pow" || c_sym == "atan2" || c_sym == "fmod" { key = c_sym }
+    }
+    if key == "" { return "" }
+    return cg_math_sym(key)
+}
+
 fn gen2_extern_wrapper(node) {
     let name = node.name
     let nargs = len(node.params)
@@ -2610,6 +2640,35 @@ fn gen2_extern_wrapper(node) {
     // against void's _hx_is_wide_cjk). The wrapper is per-TU anyway and
     // doesn't need external linkage; dlsym-loaded __ffi_sym_* is the ABI.
     let forward = "static HexaVal " + cname + "(" + sig_p + ");"
+
+    // FFI-NATIVE-ROUTE (musl-static erf/exp deadlock fix): if this @link("m") extern
+    // resolves to a hexa native libm builtin, emit a direct call to it and emit NO
+    // __ffi_sym_* slot / NO dlopen+dlsym init line — so it works on statically-linked
+    // musl builds (which cannot dlopen) and follows native-canonical polarity. The
+    // wrapper keeps the exact `static HexaVal cname(HexaVal...)` shape so call sites
+    // are untouched; args round-trip through hexa_float(<marshalled double>) into the
+    // hexa_math_*(HexaVal)->HexaVal builtin (already declared in runtime.h).
+    let native_sym = gen2_extern_native_route(node, c_sym)
+    if native_sym != "" {
+        let mut ncall_args = []
+        let mut nci = 0
+        while nci < nargs {
+            ncall_args.push("hexa_float(" + gen2_ffi_marshal_arg(_hexa_mangle_ident(node.params[nci].name), node.params[nci].value) + ")")
+            nci = nci + 1
+        }
+        let mut nparts = []
+        nparts.push("static HexaVal " + cname + "(" + sig_p + ") {\n")
+        nparts.push("    return " + native_sym + "(" + ncall_args.join(", ") + ");\n")
+        nparts.push("}\n")
+        return #{
+            "global": "", "forward": forward, "fn_code": nparts.join(""), "init": "",
+            "kind": "", "name": "", "value": "", "op": "",
+            "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": "", "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+    }
 
     let has_float = gen2_has_float_param(node.params)
 
