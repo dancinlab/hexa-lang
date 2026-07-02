@@ -194,8 +194,15 @@ fn emit_term_ffi_c() -> str {
             " * loops can poll this every N iterations and exit when parent==1, in\n" +
             " * case POLLHUP isn't delivered (e.g. stdin is /dev/null or a still-live\n" +
             " * pipe whose other end leaked to a different process). */\n" +
+            "/* zero-c #29: route to the raw-svc hxlcl_getppid (runtime.c). Frozen-seed lifecycle\n" +
+            " * fallback (PR#4280): self-defining guard so mixed old-runtime.c builds keep libc. */\n" +
+            "#ifndef HXLCL_PROC_SC0\n" +
+            "#define HXLCL_PROC_SC0 1\n" +
+            "static inline int hxlcl_getppid(void) { return (int)getppid(); }\n" +
+            "static inline int hxlcl_setsid(void)  { long _r = (long)setsid(); return _r < 0 ? -errno : (int)_r; }\n" +
+            "#endif\n" +
             "int term_getppid(void) {\n" +
-            "    return (int)getppid();\n" +
+            "    return (int)hxlcl_getppid();\n" +
             "}\n" +
             "\n" +
             "int term_read_byte(void) {\n" +
