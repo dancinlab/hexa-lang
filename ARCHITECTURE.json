@@ -227,6 +227,13 @@
         "value": "identity_engine.hexa의 unguarded module-level selftest 'fn main'이 이 파일을 import하는 fresh 모듈의 entry main을 hijack(flatten이 dep main 먼저 emit→entry main drop). ✅RESOLVED(M2·PR pending): selftest main+gate를 compiler/atlas/identity_engine_test.hexa로 이동→identity_engine.hexa main-free→import 안전(grammar.hexa가 이제 직접 import·grammar_test 12/12 자기 main 실행 확인). LESSON=라이브러리 모듈에 module-level fn main 금지·selftest는 항상 companion _test.hexa로 분리.",
         "threshold": "재발조건=라이브러리 .hexa에 module-level fn main을 두고 그걸 import하는 새 모듈의 자체 main이 안 돎 · 해결=selftest main을 companion <module>_test.hexa로 분리(module은 main-free 유지)·drill/ 관례",
         "source": "compiler/atlas/identity_engine.hexa"
+      },
+      {
+        "id": "architecture-json-1",
+        "state": "pos-conv",
+        "value": "ARCHITECTURE.json blind write가 파일 훼손 재발 (1차 #4135 UU conflict-marker blind-add · 2차 2026-07-02 json.dump indent=1 재포맷→5369줄 diff 커밋). 프로그램적 rewrite 전 round-trip 검증 필수: json.dumps(load(src), ensure_ascii=False, indent=2)+chr(10) == src 확인 후에만 수정 저장 → 노드 1줄 diff 보장",
+        "threshold": "재발조건=ARCHITECTURE.json을 스크립트/머지로 쓰면서 사전 round-trip(또는 JSON validate) 없이 커밋 · 해결=수정 전 원문 round-trip 동일성 확인(indent=2·ensure_ascii=False·trailing newline)+git diff --stat으로 1~수줄 diff 확인 후 커밋",
+        "source": "ARCHITECTURE.json"
       }
     ]
   },
