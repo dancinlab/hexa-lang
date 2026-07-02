@@ -994,11 +994,26 @@ resolve_cuda_runtime_seed() {
     # #35 cause-3). -Xcompiler -fno-threadsafe-statics drops the guard symbols
     # (single-threaded static init is fine for these constants) and -fno-exceptions
     # drops the EH personality — both are host-codegen-only, device code unchanged.
-    if nvcc -x cu -DHEXA_CUDA -rdc=true -gencode arch=compute_$SM,code=sm_$SM -O2 -w \
+    #
+    # GENCODE — SASS + PTX (the sm_80-SASS-only ship defect, 2026-07-02): with only
+    # `code=sm_$SM` nvcc embeds SASS for that ONE arch and NO PTX, so on any newer
+    # consumer GPU (e.g. RTX 5070 sm_120 vs the release's SM=80) EVERY kernel launch
+    # fails cudaErrorNoKernelImageForDevice — silently, because launches are
+    # unchecked — and device results come back as zero-filled garbage (measured:
+    # bytegpt_devres_smoke argmax dev=0, max|Δ|=551 with the shipped v0.547.0 -cuda
+    # asset; PASS max|Δ|=2.5e-06 after re-splicing the SAME source built with PTX).
+    # `code=compute_$SM` additionally embeds the PTX so the driver JITs forward to
+    # whatever arch the consumer actually has (one-time JIT, cached in
+    # ~/.nv/ComputeCache). release.yml always believed this forward-JIT happened —
+    # now it actually does.
+    if nvcc -x cu -DHEXA_CUDA -rdc=true \
+            -gencode arch=compute_$SM,code=sm_$SM \
+            -gencode arch=compute_$SM,code=compute_$SM -O2 -w \
             -Xcompiler -fno-threadsafe-statics -Xcompiler -fno-exceptions \
             -I "$CINC/cccl" -I "$CINC" -I self -I self/cuda -I . \
             -c self/cuda/runtime_cuda.c -o build/runtime_cuda.o \
-       && nvcc -dlink -gencode arch=compute_$SM,code=sm_$SM build/runtime_cuda.o \
+       && nvcc -dlink -gencode arch=compute_$SM,code=sm_$SM \
+            -gencode arch=compute_$SM,code=compute_$SM build/runtime_cuda.o \
             -o build/runtime_cuda_dlink.o -lcudadevrt; then
         echo "[stage_resolve_runtime_a] CUDA-R1: built build/runtime_cuda.o + runtime_cuda_dlink.o (sm_$SM) → folding into runtime.a (-DHEXA_CUDA)"
     else

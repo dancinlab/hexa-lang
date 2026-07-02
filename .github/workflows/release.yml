@@ -824,6 +824,26 @@ jobs:
             exit 1
           fi
           echo "✓ hexa driver binary is libcuda-free (runs on GPU-less + GPU hosts; consumer link adds cuBLAS)"
+          # PTX-EMBED ASSERTION (sm_80-SASS-only ship defect, 2026-07-02): the
+          # builder compiles SM=80 but consumer GPUs are newer (RTX 5070 = sm_120),
+          # so the fatbin MUST carry PTX for the driver to JIT forward. SASS-only
+          # objects load fine and cuda_available()==1, but EVERY kernel launch
+          # fails cudaErrorNoKernelImageForDevice silently → zero-filled device
+          # results (measured: bytegpt_devres_smoke argmax dev=0 max|Δ|=551 on the
+          # v0.547.0 asset; PASS after re-splicing the same source built with
+          # `-gencode arch=compute_80,code=compute_80` added). Fail loud here so a
+          # gencode regression can never ship a silently-broken -cuda asset again.
+          tmpx="$(mktemp -d)"
+          ( cd "$tmpx" && ar x "$OLDPWD/$RA" runtime_cuda.o )
+          CUOBJDUMP="${CUDA_PATH:-/usr/local/cuda}/bin/cuobjdump"
+          command -v "$CUOBJDUMP" >/dev/null 2>&1 || CUOBJDUMP="cuobjdump"
+          if "$CUOBJDUMP" -lptx "$tmpx/runtime_cuda.o" | grep -q '\.ptx'; then
+            echo "✓ runtime_cuda.o embeds PTX (driver JIT-forward to any consumer GPU arch)"
+          else
+            echo "✗ runtime_cuda.o has NO PTX — SASS-only fatbin silently no-ops on newer GPU archs (gencode must include code=compute_\$SM)" >&2
+            "$CUOBJDUMP" -lelf "$tmpx/runtime_cuda.o" || true
+            exit 1
+          fi
 
       - name: Upload to GitHub Release (supplementary asset)
         uses: softprops/action-gh-release@v2

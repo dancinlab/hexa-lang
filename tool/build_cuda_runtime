@@ -150,11 +150,18 @@ echo "=== nvcc runtime_cuda.o (sm_$SM) + device-link ==="
 # static guards + __gxx_personality_v0/_Unwind_Resume EH) so a C-linked consumer
 # (gcc/cc, no libstdc++) resolves clean. host-codegen-only; device code unchanged.
 # Mirrors the same flags in tool/stage_resolve_runtime_a (the shipped recipe).
-nvcc -x cu -DHEXA_CUDA $CUBLAS_MACRO -rdc=true -gencode arch=compute_$SM,code=sm_$SM -O2 -w \
+# GENCODE — SASS + PTX (mirrors stage_resolve_runtime_a): `code=sm_$SM` alone embeds
+# SASS for that one arch and NO PTX, so the archive silently no-ops (all launches
+# fail cudaErrorNoKernelImageForDevice) on any newer GPU arch. `code=compute_$SM`
+# adds the PTX so the driver JITs forward.
+nvcc -x cu -DHEXA_CUDA $CUBLAS_MACRO -rdc=true \
+     -gencode arch=compute_$SM,code=sm_$SM \
+     -gencode arch=compute_$SM,code=compute_$SM -O2 -w \
      -Xcompiler -fno-threadsafe-statics -Xcompiler -fno-exceptions \
      -I "$CINC/cccl" -I "$CINC" -I self -I self/cuda -I . \
      -c self/cuda/runtime_cuda.c -o "$B/runtime_cuda.o"
-nvcc -dlink -gencode arch=compute_$SM,code=sm_$SM "$B/runtime_cuda.o" \
+nvcc -dlink -gencode arch=compute_$SM,code=sm_$SM \
+     -gencode arch=compute_$SM,code=compute_$SM "$B/runtime_cuda.o" \
      -o "$B/runtime_cuda_dlink.o" -lcudadevrt
 
 # ── ING-33 — regenerate self/runtime.c from the SSOT before the CUDA host compile ──
