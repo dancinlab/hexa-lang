@@ -306,7 +306,7 @@
       "detail": ""
      },
      {
-      "name": "libm transcendentals = **ELIMINATED from the default ship (2026-07-01, #4299-4318 + #4314 -lm removal, faithful-nobaseline 3-target GREEN)** — first full libc-family dropped: all math routed to native `_hx_*` (fdlibm/musl/hw-sqrtsd) + a weak native libm-compat layer provides the libm ABI so any raw call links with no `-lm`. **The shim syscall family is likewise ELIMINATED (2026-07-01, #4320-4328 svc-remainder front CLOSED, faithful-nobaseline 3-target GREEN)** — 8 syscalls (clock_gettime·getrusage·fcntl·mkdirat·pipe2·newfstatat·openat·ppoll) routed from libc to raw-svc (x86_64 `syscall` insn / arm64 `svc 0`, arm64 uses the `*at`/`2` variants; darwin keeps the libc delegate via `#else`). A further 8 fs/time syscalls (nanosleep·getcwd·unlink→unlinkat·fstat·stat→newfstatat·mkdir→mkdirat·rename→renameat) were routed libc→raw-svc this session (#4330-4336, per-PR nm-UND delta measured, faithful-nobaseline 3-target GREEN), closing the reducible fs/time syscall front. Genuine residual now = a **measured** runtime.a nm-UND floor of 60 (2026-07-01, HEAD b7db5085), of which 6 are hexa-own (rt_*_native, resolved at final link, not libc) → ~54 true libc, categorized: ~17 sanctioned FFI (network sockets accept/bind/connect/… + dlopen/dlsym), ~6 CRT bootstrap (__libc_calloc/__libc_free/_exit/atexit/environ/mallopt), ~8 stdio/dir (opendir/readdir/glob/mkstemp), ~3 own-algo (qsort/rand/strtod, separate campaign), ~7 process/ns (execve/setns/unshare/mount), ~13 reducible-remaining (getpid-family via codegen-wrapper, sigaddset/sigemptyset macros, memcpy/memset via Route C default-OFF, flock stub) + GPU FFI (CUDA) — so zero-`.c` remains an **open, attackable campaign** with a measured, categorized floor, not a policy that accepts C permanently.",
+      "name": "libm transcendentals = **ELIMINATED from the default ship (2026-07-01, #4299-4318 + #4314 -lm removal, faithful-nobaseline 3-target GREEN)** — first full libc-family dropped: all math routed to native `_hx_*` (fdlibm/musl/hw-sqrtsd) + a weak native libm-compat layer provides the libm ABI so any raw call links with no `-lm`. **The shim syscall family is likewise ELIMINATED (2026-07-01, #4320-4328 svc-remainder front CLOSED, faithful-nobaseline 3-target GREEN)** — 8 syscalls (clock_gettime·getrusage·fcntl·mkdirat·pipe2·newfstatat·openat·ppoll) routed from libc to raw-svc (x86_64 `syscall` insn / arm64 `svc 0`, arm64 uses the `*at`/`2` variants; darwin keeps the libc delegate via `#else`). A further 8 fs/time syscalls (nanosleep·getcwd·unlink→unlinkat·fstat·stat→newfstatat·mkdir→mkdirat·rename→renameat) were routed libc→raw-svc this session (#4330-4336, per-PR nm-UND delta measured, faithful-nobaseline 3-target GREEN), closing the reducible fs/time syscall front. Genuine residual = a **measured WALL-only floor** (2026-07-03, HEAD 654cbb5e + FRAG-REGEN sentinel-fix, summer clang-18): with every zero-c lever ON (HEXA_ZEROC_FRAG_REGEN=1 restore + -DHEXA_RT_SIGSYS_SVC -DHEXA_RT_DROP_MALLOPT -DHEXA_ZEROC_OWN_MKTEMP -DHEXA_ZEROC_RAND_NATIVE -DHEXA_ZEROC_PROC_SC0_RAW -DHEXA_ZEROC_SIGSET_NATIVE) the runtime.a nm-UND libc floor = **15 U, exactly the sanctioned WALL set**: __libc_calloc/__libc_free (transitive) · atexit/environ (CRT) · dlopen/dlsym/dlerror (FFI) · fgets (FILE*) · glob/globfree (fnmatch fidelity) · qsort (tie-order) · regcomp/regexec/regfree (ERE oracle) · strtod (IEEE oracle) — reducible remainder 0 (state/zeroc-floor-census-2026-07-03.md + state/zeroc-flip-measure-2026-07-03.txt 측정#2). All levers are default-OFF byte-neutral; the default-ON flip is gated on byteeq 3-target + faithful-nobaseline + install smoke GREEN. zero-`.c` is thus a **converged campaign at its measured WALL floor**, not a policy that accepts C permanently.",
       "role": "",
       "id": "overview-genuine-residual-is-only-libm-transcendentals-gpu-ffi-so-zer",
       "detail": ""
@@ -3982,33 +3982,33 @@
       "detail": "",
       "children": [
        {
-        "name": "📦 DEFERRED — the on-path native-seed floor is EXHAUSTED (valop 7-prim + 6 seed families default-ON, byteeq gen3≡gen4 3-target GREEN; see Self-host status). ",
+        "name": "🟢 file metric REACHED (direct + recursive `git ls-files self/**/*.c == ∅`, #4282/#4352/#4356) — remaining zero-c = the functional nm-UND libc floor of the emitted-C substrate (runtime.a), drained as a measured campaign.",
         "role": "",
-        "id": "blocking-frontiers-self-host-zero-c-ls-self-c-deferred-the-on-path-native-seed-f",
+        "id": "zeroc-frontier-file-metric-reached",
         "detail": ""
        },
        {
-        "name": "The only remaining lever to fully drop the C substrate is zero-c leg B = io.hexa whole-runtime flip (rt.c substrate replacement, RUNTIME-PORT M3) — an architecture migration with shipped-runtime regression risk, gated on its own risk budget + explicit start decision (self-host≠release ",
+        "name": "🟢 nm-UND floor drain CONVERGED at WALL-only (2026-07-03 measured, summer clang-18, HEAD 654cbb5e + FRAG-REGEN sentinel-fix): all-levers-ON floor = 15 U = exactly the sanctioned WALL set (__libc_calloc/__libc_free · atexit/environ · dlopen/dlsym/dlerror · fgets · glob/globfree · qsort · regcomp/regexec/regfree · strtod); reducible remainder 0. Evidence = state/zeroc-flip-measure-2026-07-03.txt 측정#2 + state/zeroc-floor-census-2026-07-03.md QA VERDICT.",
         "role": "",
-        "id": "blocking-frontiers-self-host-zero-c-ls-self-c-the-only-remaining-lever-to-fully",
+        "id": "zeroc-frontier-floor-wall-only-converged",
         "detail": ""
        },
        {
-        "name": "ABSOLUTE). ",
+        "name": "Mechanism: tool/restore_frozen_seeds FRAG-REGEN block (HEXA_ZEROC_FRAG_REGEN=1) synthesizes the 6 native fragments (mount·namespace·signal_flock·proc_fork·term_ffi·tensor_kernels) from their _emit.hexa SSOTs, shipping the native wiring (#4371/#4373/#4377/#4385/#4387/#4420/#4421/#4422); per-symbol micro-gates = HEXA_RT_SIGSYS_SVC(sysconf) · HEXA_RT_DROP_MALLOPT · HEXA_ZEROC_OWN_MKTEMP · HEXA_ZEROC_RAND_NATIVE · HEXA_ZEROC_PROC_SC0_RAW(getppid/setsid) · HEXA_ZEROC_SIGSET_NATIVE.",
         "role": "",
-        "id": "blocking-frontiers-self-host-zero-c-ls-self-c-absolute",
+        "id": "zeroc-frontier-fragregen-mechanism",
         "detail": ""
        },
        {
-        "name": "Residual besides leg B = irreducible-J (raw svc/syscall emit · ",
+        "name": "📦 DEFERRED — default-ON flip of the levers (bit-changing): gated on byteeq 3-target + faithful-nobaseline + install.sh smoke GREEN (release-integrity > self-host progress). Until then every lever is default-OFF byte-neutral.",
         "role": "",
-        "id": "blocking-frontiers-self-host-zero-c-ls-self-c-residual-besides-leg-b-irreducible",
+        "id": "zeroc-frontier-flip-deferred-gates",
         "detail": ""
        },
        {
-        "name": "libm · HexaVal struct · _start/CRT) + off-path-K (~84%, free/realloc/spawn/popen/async). print-fmt/fd-write census = @syscall irreducible (lateral relocation, not floor reduction). SSOT: memory `project_hexa_selfhost_floor_census` + `project_hexa_zeroc_breakthrough`.",
+        "name": "🧱 WALL residual (~15, each a separate campaign or honest-keep): strtod (IEEE oracle) · dlopen/dlsym/dlerror (FFI) · environ/atexit/__libc_calloc/__libc_free (CRT bootstrap) · fgets (FILE* layer) · glob/globfree (fnmatch fidelity, MEDIUM) · qsort (tie-order) · regcomp/regexec/regfree (ERE oracle). SSOT: state/zeroc-floor-census-2026-07-03.md + memory project_hexa_zeroc_floor_goal_state.",
         "role": "",
-        "id": "blocking-frontiers-self-host-zero-c-ls-self-c-libm-hexaval-struct-start-crt-off",
+        "id": "zeroc-frontier-wall-residual",
         "detail": ""
        }
       ]
