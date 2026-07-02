@@ -34,11 +34,7 @@ LIBS="${LIBS:-}"
 # stage_resolve_runtime_a when HEXA_ZEROC_OWN_START=1). Without -nostartfiles the $CC link ALSO
 # pulls glibc crt1.o _start -> duplicate _start. Same env gates archive-carry + link-drop.
 # linux x86_64/arm64 ONLY (darwin = Mach-O LC_MAIN). DEFAULT-OFF byte-neutral; flip = PR-C.
-# PR-C default-ON flip (linux x86_64/arm64): unset -> ON so shipped/user links crt-drop by default;
-# darwin never enters (outer Linux guard); env=0 force-overrides OFF. Mirrors build_selfhost.sh #4392.
-_zc_own_default=0
-if [ "$(uname -s 2>/dev/null)" = "Linux" ] && { [ "$(uname -m 2>/dev/null)" = "x86_64" ] || [ "$(uname -m 2>/dev/null)" = "aarch64" ] || [ "$(uname -m 2>/dev/null)" = "arm64" ]; }; then _zc_own_default=1; fi
-if [ "${HEXA_ZEROC_OWN_START:-$_zc_own_default}" = "1" ] && [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
+if [ "${HEXA_ZEROC_OWN_START:-0}" = "1" ] && [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
     _zc_arch="$(uname -m 2>/dev/null)"
     if [ "$_zc_arch" = "x86_64" ] || [ "$_zc_arch" = "aarch64" ] || [ "$_zc_arch" = "arm64" ]; then
         LIBS="$LIBS -nostartfiles"
