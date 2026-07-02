@@ -74,8 +74,14 @@ jobs:
             CFLAGS_COMMON="-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs" \
             EDGE_ASSET="hexa-linux-x86_64.tar.gz" GH_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
             bash tool/stage_resolve_runtime_a
+          # own-start #29: runtime.a carries its own _start on linux (default-ON
+          # post-#4399), so this link must drop the glibc crt (Scrt1.o) or it dies
+          # with 'multiple definition of _start' — the missed-link-site class
+          # #4403 fixed for stage_prebuild_hexat. This workflow is linux-x86_64
+          # only (ubuntu runner), so the gate is unconditional here.
           clang -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
               -I self \
+              -nostartfiles \
               build/grace_consent/check_grace_consent.c build/runtime.a \
               -ldl -lpthread -lm \
               -o build/grace_consent/check_grace_consent
