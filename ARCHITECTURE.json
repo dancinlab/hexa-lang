@@ -173,6 +173,13 @@
         "source": "tool/build_cuda_runtime"
       },
       {
+        "id": "RELEASE-CUDA-ASSET-SASS-ONLY-NO-PTX",
+        "state": "ossified",
+        "value": "The shipped hexa-linux-x86_64-cuda asset was built by release CI (GPU-less, SM=80) with `-gencode arch=compute_80,code=sm_80` ONLY — that embeds sm_80 SASS and NO PTX, so on any newer consumer GPU (RTX 5070 = sm_120) every kernel launch fails cudaErrorNoKernelImageForDevice SILENTLY (launches unchecked): cuda_available()==1, [OWN-GEMM-FIRED] banners print, but device buffers stay zero-filled → garbage results. Measured on summer v0.547.0 asset: bytegpt_devres_smoke argmax dev=0/host=46, max|Δ|=551; re-splicing the SAME v0.547.0 emitter source built with the PTX gencode added → PASS argmax 32==32==32, max|Δ|=2.5e-06. release.yml's comment always CLAIMED sm_80 PTX driver-JITs forward — the flag never embedded the PTX. Sibling of BUILD-CUDA-RUNTIME-CUDA-HOME-SM80-ZEROS (local-build variant of the same sm_80-on-sm_120 zeros class).",
+        "threshold": "Both nvcc calls (compile + -dlink) in tool/stage_resolve_runtime_a AND tool/build_cuda_runtime must carry `-gencode arch=compute_$SM,code=sm_$SM -gencode arch=compute_$SM,code=compute_$SM` (SASS + PTX). release.yml cuda job Verify step asserts `cuobjdump -lptx runtime_cuda.o` lists a .ptx image and fails the job otherwise — a gencode regression can never ship a silently-broken -cuda asset again. Consumer-side one-time JIT cost is cached (~/.nv/ComputeCache).",
+        "source": "tool/stage_resolve_runtime_a"
+      },
+      {
         "id": "CODEGEN-BOXED-SCALAR-SLOWPATH",
         "state": "in_flight",
         "value": "hexa native-emit(aprime_cc --emit=obj)의 일반 동적타입 scalar/array 경로가 gcc-O2 대비 measured 2.9~23× 느림(geomean 8.6×·aiden·reference-match·state/codegen-quality-probe-verdict.md). 커널별 ratio: k1_sum(scalar reduce) 2.86× · k5_fncall 4.41× · k2_collatz(branchy int) 12.53× · k4_branch(modulo) 12.73× · k3_arrmap(배열 map) 23.23×(최대). 어셈 root-cause=박싱 HexaVal 태그-디스패치 모델: scalar op마다 런타임 함수호출(hexa_add_slow/hexa_mul/hexa_mod, 타입태그 스택슬롯)·레지스터할당無·unboxed i64無·strength-reduction無. k3=원소당 7call(hexa_index_get/set bounds-check+box) vs gcc 0call(register pointer-walk+lea+magic-multiply). HEXA_INLINE_INT_BOX=1도 unbox 안됨(5-7 call/iter 잔존). 손튜닝 farr/GEMM은 별도 unboxed 경로=BLIS/cuBLAS parity(일반 유저코드는 거기로 안 내려감).",
