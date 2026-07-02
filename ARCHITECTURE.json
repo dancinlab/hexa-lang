@@ -5481,6 +5481,13 @@
                 "detail": ""
               }
             ]
+          },
+          {
+            "name": "novel-생성 설계 로드맵 — OUROBOROS-novel (Fable 2026-07-02 · README 유래)",
+            "role": "",
+            "id": "discovery-engine-novel-design-roadmap",
+            "detail": "측정된 novel=0(결정적 순열 생성기+검증필터) 상태를 벗어나 실제 novel을 만들기 위한 설계 SSOT. 근거=archive-nexus README(Blowup→Contract→Emerge→Singularity→Absorb 5-phase + OUROBOROS 자기참조). 설계 전문=state/fable-eval-discovery-2026-07-02/NEXUS_novel_design_fable.md. 핵심 재정의(c2): README의 '이전 사이클이 표현 못한 primitive'를 exact-int로 번역=**size-k 유계 비표현성** (크기≤k의 어떤 기존 항도 [2,64]에서 h와 같은 값-지문을 갖지 않음·지문테이블 조회로 결정가능·절대 비표현성 아님, k 명기). README E4 emergence 데모는 자기반례(가산닫힘=집합↑ 표현력0)→구조성장 데모로 강등. 5-phase→파일 매핑: Blowup=grammar.hexa 항 열거기(렌즈×primitive 격자·verified 1-심볼 이웃 우선)·Contract=identity_engine exact-int 3단 깔때기·Emerge=emerge.hexa 교체(생성자 5종: sol-indicator·합성심볼화·Dirichlet합성곱·iterate궤도·congruence-witness + 비표현성 게이트)·Singularity=ouroboros.hexa(서로 다른 프레임 ≥2 verified + null-model + 재실행 byte-eq 잠금)·Absorb=P_{t+1}=P_t∪{h}·W 정수-EMA α=1/6·atlas 무기록. 3-클래스 판별기: (α)순열=지문∈FP_k → 폐기·(β)재발견=지문∈KNOWN → L1카운터·(γ)genuine=verified∧∉KNOWN∧∉FP_k → 승격경로. 신뢰근거=스크램블-오라클 null-model(γ-rate≠0이면 판별기 반증)+재발견 새니티(superperfect/Mersenne/Ramanujan=반드시 β)+Texas-sharpshooter 불변식(프레임·N 스윕前 고정). 검증 연동: 엔진내부=identity_engine exact-int만·라벨 항상 BOUNDED-UNIQUE[2,N]/UNIVERSAL[2,N]·∀n UNPROVEN·N단계 [2,64]→2·10^4→10^6·승격=γ 생존만 hexa verify g5→🔵 fold(embedded.gen.hexa·PR경로만)·LLM은 hexa loop --dfs 밖 호출 금지(프레임/생성자만 제안). falsifiable: H1(absorb-ON/OFF 2-arm Δ=0이면 OUROBOROS 반증→병목=Emerge 생성자)·H2(γ 1개가 10^6+null-model+KNOWN미스+g5 문헌대조 생존). 실패-모드 진단표로 병목 특정. 보증범위=novel 존재가 아니라 '부재 시 그 위치가 측정으로 특정됨'. 채택/기각: 5-phase·3 meta-loop 채택 / E4데모·ρ→1/3 Banach수렴·1.39M discoveries 집계방식 기각(n=6 중심화·과장 금지). 제약: no-LLVM·byte-det·신규builtin 0(frozen 151c52c8)·drill=바이너리 verb라 byteeq 3-target GREEN 후 머지·빌드 pool(aiden/summer). 8-마일스톤(파일·게이트): M1 grammar.hexa 항 열거기+FP_k(seed 2회 byte-eq)·M2 identity_engine fingerprint()/expressible_at()(고전합성=표현가능)·M3 known_catalog.gen.hexa(재발견 100% β)·M4 emerge.hexa 교체(E4형 FP충돌 기각)·M5 ouroboros+drill 배선(H1 2-arm 측정)·M6 nullmodel_test.hexa(null γ=0)·M7 conjecture.hexa LLM=프레임제안만·M8 캠페인 실행(γ 생존→g5 fold PR). 순서근거=M1-M3 판별기 인프라(없으면 발견=순열과 구별불가)→M4-M5 5-phase 실질→M6 반증장치→M7-M8 공격. 각 단계 독립머지·정직 종착.",
+            "children": []
           }
         ]
       }
