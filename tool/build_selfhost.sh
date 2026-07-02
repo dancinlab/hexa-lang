@@ -156,8 +156,13 @@ if [ ! -x build/hexat ]; then
     # (___hexa_last_error, ___hexa_fn_arena_*, ___hx_to_double, …), so self/runtime.c
     # MUST be in the same link (+ -lm for libm trig). Omitting it left a from-scratch
     # build failing `Undefined symbols … ___hexa_last_error` — fixed OP-129.
-    clang -O2 $HOST_ARCH -std=gnu11 -D_GNU_SOURCE $HOST_EXTRA -Wno-trigraphs \
-        -I self -I . self/native/hexa_cc.c self/runtime.c -o build/hexat -lm \
+    # zero-c #29 own-_start flip (default-OFF byte-neutral): HEXA_ZEROC_OWN_START=1 compiles the
+    # runtime scaffold (payload #ifdef) AND links -nostartfiles so the shipped hexat uses its own
+    # _start (drops __libc_start_main/_start from the binary nm-u). Unset -> both empty -> identical.
+    _zc_own_def=""; _zc_own_link=""
+    if [ "${HEXA_ZEROC_OWN_START:-0}" = "1" ]; then _zc_own_def="-DHEXA_ZEROC_OWN_START"; _zc_own_link="-nostartfiles"; fi
+    clang -O2 $HOST_ARCH -std=gnu11 -D_GNU_SOURCE $HOST_EXTRA $_zc_own_def -Wno-trigraphs \
+        -I self -I . self/native/hexa_cc.c self/runtime.c -o build/hexat -lm $_zc_own_link \
         2>&1 | grep -iE 'error:|undefined' | head -5
     [ -x build/hexat ] || fail seed hexat-build
 fi
