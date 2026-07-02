@@ -41,6 +41,20 @@
 set -euo pipefail
 : "${CC:?CC must be set}"
 LIBS="${LIBS:-}"
+# own-start #29: runtime.a on this link may CARRY own _start (stage_resolve_runtime_a folds it in
+# under HEXA_ZEROC_OWN_START=1). Drop crt1 _start (-nostartfiles) to avoid a duplicate _start at the
+# build/hexat link — THIS was the dup-_start site that RED'd faithful-nobaseline before the #4408 revert
+# (the #4403 gate was reverted with the flip). Re-added here DEFAULT-OFF byte-neutral so the link
+# coverage is complete; the default-ON flip is a SEPARATE PR gated on faithful-nobaseline 3-target GREEN.
+# Both _r7_cc_compile_link call sites end in $LIBS, so this single mutation covers cold + seed-converge.
+# linux x86_64/arm64 ONLY (darwin = Mach-O LC_MAIN); env=0 force-overrides OFF. Mirrors stage_build_hexa C0.
+if [ "${HEXA_ZEROC_OWN_START:-0}" = "1" ] && [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
+    _zc_arch="$(uname -m 2>/dev/null)"
+    if [ "$_zc_arch" = "x86_64" ] || [ "$_zc_arch" = "aarch64" ] || [ "$_zc_arch" = "arm64" ]; then
+        LIBS="$LIBS -nostartfiles"
+        echo "stage_prebuild_hexat: HEXA_ZEROC_OWN_START=1 (linux/$_zc_arch) — -nostartfiles on hexat link (own _start from runtime.a)"
+    fi
+fi
 CFLAGS="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
 # -fbracket-depth is clang-only (deeply-nested generated C); gcc rejects it.
 case "$CC" in *clang*) CFLAGS="$CFLAGS -fbracket-depth=4096";; esac

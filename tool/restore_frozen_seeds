@@ -320,6 +320,116 @@ if [ -f "$_tk" ] && ! grep -q '_hx_cos(6.28318530718' "$_tk"; then
   echo "[restore_frozen_seeds] ZEROC-LIBM: routed hexa_tensor_randn Box-Muller off libm sqrt/log/cos in $_tk"
 fi
 
+# ── ZEROC-RAND — gate hexa_tensor_randn PRNG onto hxlcl_rand (post-restore, SSOT lockstep) ─
+# tensor_kernels.c is a FROZEN_SEED with NO regen-from-emitter block, so its two
+# `double u/w = (rand()+1.0)/(RAND_MAX+1.0)` lines ship RAW libc rand() — the last libc rand
+# in the default runtime.a. Gate them onto hxlcl_rand (the native Knuth-MMIX LCG, static in this
+# TU, defined at runtime_emit_full ~4856 BEFORE this include) behind HEXA_ZEROC_RAND_NATIVE
+# (default-OFF), same post-restore precedent as ZEROC-LIBM above. flag-OFF => preprocessed
+# expansion identical (rand()) => object-byte-neutral; flag-ON => hxlcl_rand (divisor
+# RAND_MAX+1.0 == 2147483648.0 on glibc, so ON is numerically the intended stream). The SSOT
+# self/native/tensor_kernels_emit.hexa carries the same #ifdef in lockstep. Idempotent: the
+# HEXA_ZEROC_RAND_NATIVE marker guards double-apply. Flip default-ON only after byteeq 3-target
+# + faithful-nobaseline + shipping smoke GREEN.
+if [ -f "$_tk" ] && ! grep -q 'HEXA_ZEROC_RAND_NATIVE' "$_tk"; then
+  awk '
+    /double u = \(rand\(\)\+1\.0\)\/\(RAND_MAX\+1\.0\);/ && !done {
+      print "#ifdef HEXA_ZEROC_RAND_NATIVE"
+      print "        double u = (hxlcl_rand()+1.0)/(2147483648.0);"
+      print "        double w = (hxlcl_rand()+1.0)/(2147483648.0);"
+      print "#else"
+      print $0
+      getline; print $0
+      print "#endif"
+      done=1; next
+    }
+    { print }
+  ' "$_tk" > "$_tk.zrbak" && mv "$_tk.zrbak" "$_tk"
+  echo "[restore_frozen_seeds] ZEROC-RAND: gated hexa_tensor_randn PRNG onto hxlcl_rand (HEXA_ZEROC_RAND_NATIVE, default-OFF) in $_tk"
+fi
+
+# ── ZEROC-GETPPID — gate frozen term_ffi.c term_getppid onto hxlcl_getppid (post-restore) ─
+# term_ffi.c is a FROZEN_SEED with NO regen-from-emitter block, so its `return (int)getppid();`
+# ships RAW libc getppid() even though the SSOT emitter (term_ffi_emit.hexa:213) already routes to
+# hxlcl_getppid (#4373). Gate it onto the native raw-svc hxlcl_getppid (defined at runtime_emit_full
+# ~1824/2927 BEFORE the term_ffi.c include ~15382) behind HEXA_ZEROC_PROC_SC0_RAW (default-OFF), same
+# post-restore precedent as ZEROC-RAND above. getppid cannot fail, takes no args, and hxlcl_getppid
+# returns the identical ppid via raw NR 110/173 (darwin uses its platform svc-trap; on !linux the
+# gate is inert since the flag is only flipped on linux targets) — so flag-ON is value-identical, no
+# errno path. flag-OFF => preprocessed expansion identical (getppid()) => object-byte-neutral.
+# Idempotent: the HEXA_ZEROC_PROC_SC0_RAW marker guards double-apply. Flip default-ON only after
+# byteeq 3-target + faithful-nobaseline + shipping smoke GREEN.
+_tf="self/native/term_ffi.c"
+if [ -f "$_tf" ] && ! grep -q 'HEXA_ZEROC_PROC_SC0_RAW' "$_tf"; then
+  awk '
+    /^    return \(int\)getppid\(\);$/ && !done {
+      print "#ifdef HEXA_ZEROC_PROC_SC0_RAW"
+      print "    return (int)hxlcl_getppid();"
+      print "#else"
+      print $0
+      print "#endif"
+      done=1; next
+    }
+    { print }
+  ' "$_tf" > "$_tf.zgbak" && mv "$_tf.zgbak" "$_tf"
+  echo "[restore_frozen_seeds] ZEROC-GETPPID: gated term_getppid onto hxlcl_getppid (HEXA_ZEROC_PROC_SC0_RAW, default-OFF) in $_tf"
+fi
+
+# ── ZEROC-SETSID — gate frozen proc_fork.c hexa_proc_setsid onto hxlcl_setsid (post-restore) ─
+# proc_fork.c is a FROZEN_SEED with NO regen-from-emitter block, so its `pid_t sid = setsid();`
+# ships RAW libc setsid() even though the SSOT emitter (proc_fork_emit.hexa:54) already routes to
+# hxlcl_setsid (#4373). Same HEXA_ZEROC_PROC_SC0_RAW gate as ZEROC-GETPPID (the proc-sc family flips
+# together). CRITICAL errno handling: the active raw-svc hxlcl_setsid (runtime_emit_full ~2928/2931)
+# returns `sid or -errno` WITHOUT setting the libc errno global — so the frozen `-errno` branch would
+# read a STALE errno. The ON branch therefore returns the raw `sid` (already -errno on failure)
+# directly, preserving the caller's `-errno`-on-failure contract. flag-OFF => preprocessed expansion
+# identical (setsid()+errno) => object-byte-neutral. Idempotent: the marker (already grep'd for
+# term_ffi.c above, but proc_fork.c is a distinct file) guards double-apply. Flip default-ON only
+# after byteeq 3-target + faithful-nobaseline + shipping smoke GREEN.
+_pf="self/native/proc_fork.c"
+if [ -f "$_pf" ] && ! grep -q 'HEXA_ZEROC_PROC_SC0_RAW' "$_pf"; then
+  awk '
+    /^    pid_t sid = setsid\(\);$/ && !done {
+      print "#ifdef HEXA_ZEROC_PROC_SC0_RAW"
+      print "    pid_t sid = hxlcl_setsid();"
+      print "    if (sid < 0) return hexa_int((int64_t)sid);"
+      print "    return hexa_int((int64_t)sid);"
+      print "#else"
+      print $0
+      getline; print $0
+      getline; print $0
+      print "#endif"
+      done=1; next
+    }
+    { print }
+  ' "$_pf" > "$_pf.zsbak" && mv "$_pf.zsbak" "$_pf"
+  echo "[restore_frozen_seeds] ZEROC-SETSID: gated hexa_proc_setsid onto hxlcl_setsid (HEXA_ZEROC_PROC_SC0_RAW, default-OFF) in $_pf"
+fi
+
+# ── ZEROC-SIGSET — gate frozen term_ffi.c sigemptyset calls onto hxlcl_sigemptyset (post-restore) ─
+# term_ffi.c is a FROZEN_SEED with two `sigemptyset(&sa.sa_mask);` calls shipping RAW libc even though
+# the SSOT emitter (term_ffi_emit.hexa) already spells hxlcl_sigemptyset (#4371). On linux
+# hxlcl_sigemptyset is the native word-indexed bitset (runtime_emit_full ~2898, `#if __linux__`; the
+# `#else` #define aliases to libc on darwin) with identical semantics (zero the sigset, return 0),
+# defined BEFORE the term_ffi.c include. Gate both calls behind HEXA_ZEROC_SIGSET_NATIVE (default-OFF).
+# flag-OFF => preprocessed expansion identical (sigemptyset) => object-byte-neutral. NO `!done` — both
+# occurrences are patched; the HEXA_ZEROC_SIGSET_NATIVE marker guards double-apply. Flip default-ON
+# only after byteeq 3-target + faithful-nobaseline + shipping smoke GREEN.
+if [ -f "$_tf" ] && ! grep -q 'HEXA_ZEROC_SIGSET_NATIVE' "$_tf"; then
+  awk '
+    /^    sigemptyset\(&sa\.sa_mask\);$/ {
+      print "#ifdef HEXA_ZEROC_SIGSET_NATIVE"
+      print "    hxlcl_sigemptyset(&sa.sa_mask);"
+      print "#else"
+      print $0
+      print "#endif"
+      next
+    }
+    { print }
+  ' "$_tf" > "$_tf.zsgbak" && mv "$_tf.zsgbak" "$_tf"
+  echo "[restore_frozen_seeds] ZEROC-SIGSET: gated 2 sigemptyset calls onto hxlcl_sigemptyset (HEXA_ZEROC_SIGSET_NATIVE, default-OFF) in $_tf"
+fi
+
 # ── DEVRESIDENT adamw dirty_host coherence (frozen-train fix, post-restore) ───
 # Root cause: under CLM_PROD_DEVRESIDENT the host opt_adamw_step -> hexa_adamw_step
 # builtin mutates the param's HOST buffer P[i] in place but never raises
