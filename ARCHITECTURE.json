@@ -269,6 +269,20 @@
         "value": "Stale-installed hexa가 대형 소비자(anima engine)를 깨는 두 형태: ①pool 설치가 codegen 매핑보다 오래됨(v0.511 lever3 사례) ②러너가 Latest를 설치하는데 Latest 자체가 고착 — release finalize가 cuda-asset RED(v0.553~)로 막혀 Latest=v0.556 동결→canonical install.sh가 신선 호스트에 신형 runtime carrier(hexa_forge_dispatch_gelu_bwd/hexa_farr_packed_gemv_offset) 없는 hexa를 배포→ghost cold-compile 20 errors가 v0.552와 v0.556 둘 다에서 재현(2026-07-03). cloud CI는 Actions 캐시(warm ~/.hexa-cache)로만 살아있었음 = self-hosted 라우팅이 cold-compile을 강제하기 전까지 파손이 가려짐.",
         "threshold": "'러너/pool이 X를 컴파일 못함'을 대상 결함으로 단정하기 전: ①같은 X가 소비자 CI서 green인지(green=stale install) ②Latest가 고착인지(release finalize RED 체인) 확인 — 고착이면 최신 verified tag 명시 설치(HEXA_VERSION=<tag> install.sh·v0.574.1이 ghost 해결)+릴리스 체인 unstick이 root fix. warm-cache로만 green인 소비자=가려진 파손이지 건강 아님.",
         "source": "self/native/hexa_cc.c"
+      },
+      {
+        "id": "install-sh-1",
+        "state": "pos-conv",
+        "value": "mini서 install.sh 무한 hang/무출력 — stage_resolve_runtime_a(build 단계) 시도(mini=heavy build 금지). 사례: hexa cloud pods가 mini v0.548 runtime.a의 rt_format_float_native entry-T 부재로 링크실패.",
+        "threshold": "재발=mini서 hexa 재설치 필요(stale runtime.a·rt_*_native undefined). 해결=install.sh 대신 PREBUILT asset 직접교체(gh release download→build/runtime.a+hexad 백업후 교체·동일ver 일관·rm ~/.hexa-cache·nm 'T rt_*_native' 결함판정). darwin wrapper=hexa→hexa.real→hexad→hx-selfhost-cli.",
+        "source": "install.sh"
+      },
+      {
+        "id": "selfhost-byteeq-real-yml-1",
+        "state": "pos-conv",
+        "value": "selfhost-byteeq-real이 ghost서 fast-fail(11s·SETUP ERROR no native compiler/gen3 slot missing)=ghost gen3슬롯 부재 인프라오류(ghost-anima 셋업중)이지 flip byteeq 발산 아님.",
+        "threshold": "재발=bit-changing PR서 byteeq-real RED(fast·SETUP ERROR/gen3 slot missing). 판정=verdict-integrity 로그먼저→ghost 인프라면 revert 금지. 실byteeq=faithful-nobaseline 3타깃+required selfhost-gates-summary. byteeq-real=non-required advisory→faithful 3/3+summary로 머지(#4430 선례). 근본=ghost gen3슬롯 배치.",
+        "source": ".github/workflows/selfhost-byteeq-real.yml"
       }
     ]
   },
