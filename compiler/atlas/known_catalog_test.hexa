@@ -1,0 +1,97 @@
+// compiler/atlas/known_catalog_test.hexa — companion selftest for
+// known_catalog.gen.hexa (OUROBOROS-novel M3). Module is main-free (M2
+// convergence identity-engine-hexa-1: an unguarded module `fn main` hijacks an
+// importer's entry main), so the M3 gate lives here. Run via
+// `hexa run compiler/atlas/known_catalog_test.hexa`.
+//
+// M3 GATE (design §3 · roadmap M3 row): every EXISTING rediscovery classifies as
+// (β) — 100% — with ZERO (α)/(γ) misclassification. Concretely:
+//   A  all 58 atlas @F product identities → kc_known_identity == true (β, 100%)
+//   B  canonicalization: A↔B swap & side swap stay known · a non-atlas tuple rejected
+//   C  the 10 KNOWN sequences (incl. σ∘σ = superperfect/Mersenne · partition =
+//      Ramanujan) → kc_classify == β; each proves ∉ FP_k (else it would be α)
+//   D  FP_k terms (basis σ · product φ·J₂) → kc_classify == α (inside well)
+//   E  an out-of-well non-known candidate (size-3 term) → kc_classify == γ
+
+use "compiler/atlas/known_catalog"
+use "compiler/atlas/identity_engine"
+use "stdlib/io"
+
+fn gate(label, cond) -> int {
+    if cond { println("  [PASS] " + label); return 0 }
+    println("  [FAIL] " + label); return 1
+}
+
+fn main() {
+    let N = 64
+    println("=== known_catalog M3 SELFTEST (N=" + to_string(N) + ") ===")
+    let fails = 0
+    let fp_table = ie_fp_table_build(N)
+
+    // ── A. atlas @F identity shard: 100% (β) rediscovery ──
+    println("A. atlas @F product-identity shard (statement β):")
+    let t = kc_af_identity_tuples()
+    let matched = 0
+    let i = 0
+    while i < len(t) {
+        if kc_known_identity(t[i], t[i + 1], t[i + 2], t[i + 3], N) { matched = matched + 1 }
+        i = i + 4
+    }
+    fails = fails + gate("count == 58 pure-basis identities", kc_af_identity_count() == 58)
+    fails = fails + gate("all 58 identities known (β 100%)", matched == kc_af_identity_count())
+
+    // ── B. canonicalization + no over-match ──
+    println("B. canonical fingerprint (permutation-invariant, no over-match):")
+    // identity #0 = n*J2 = psi*psi  (5,8,9,9). A↔B swap and side swap stay known.
+    fails = fails + gate("A<->B swap known (8,5,9,9)", kc_known_identity(8, 5, 9, 9, N))
+    fails = fails + gate("side swap known (9,9,5,8)", kc_known_identity(9, 9, 5, 8, N))
+    // sigma*sigma = tau*tau (0,0,4,4) is NOT an atlas identity → must be rejected.
+    fails = fails + gate("non-atlas tuple rejected (0,0,4,4)",
+                 kc_known_identity(0, 0, 4, 4, N) == false)
+
+    // ── C. classical / composition shard: (β), and each ∉ FP_k ──
+    println("C. KNOWN sequence shard (β rediscovery · negative-control):")
+    let seq_beta = 0
+    let k = 0
+    while k < 8 {
+        if kc_classify(kc_seq_fingerprint(k, N), fp_table, N) == 1 { seq_beta = seq_beta + 1 }
+        k = k + 1
+    }
+    let sig_sig = kc_comp_fingerprint(0, 0, N)   // σ∘σ  (superperfect + Mersenne)
+    let phi_phi = kc_comp_fingerprint(3, 3, N)   // φ∘φ
+    let part = kc_seq_fingerprint(0, N)          // partition p(n) (Ramanujan)
+    if kc_classify(sig_sig, fp_table, N) == 1 { seq_beta = seq_beta + 1 }
+    if kc_classify(phi_phi, fp_table, N) == 1 { seq_beta = seq_beta + 1 }
+    fails = fails + gate("all 10 KNOWN sequences classify (β 100%)", seq_beta == 10)
+    fails = fails + gate("negctrl superperfect/Mersenne σ∘σ -> β",
+                 kc_classify(sig_sig, fp_table, N) == 1)
+    fails = fails + gate("negctrl Ramanujan partition p(n) -> β",
+                 kc_classify(part, fp_table, N) == 1)
+    // explicit: σ∘σ and partition are genuinely OUTSIDE the product grammar.
+    fails = fails + gate("σ∘σ NOT in FP_k (composition ⊄ product frame)",
+                 ie_fp_contains(fp_table, sig_sig) == false)
+    fails = fails + gate("partition NOT in FP_k (additive ⊄ multiplicative frame)",
+                 ie_fp_contains(fp_table, part) == false)
+
+    // ── D. FP_k terms are inside the well → (α), never mis-labeled (β)/(γ) ──
+    println("D. FP_k terms classify (α · inside the well):")
+    let fp_sig = ie_term_fingerprint(0, 0 - 1, N)    // σ alone (size-1)
+    let fp_phiJ2 = ie_term_fingerprint(3, 8, N)       // φ·J₂ (size-2 product)
+    fails = fails + gate("σ (size-1) -> α", kc_classify(fp_sig, fp_table, N) == 0)
+    fails = fails + gate("φ·J₂ (size-2) -> α", kc_classify(fp_phiJ2, fp_table, N) == 0)
+    // n·n (5,5) is OEIS A000290 (squares) yet lives in FP_k → α, not β (the
+    // deliberately-omitted-from-KNOWN square sequence — proves precedence).
+    let fp_nn = ie_term_fingerprint(5, 5, N)
+    fails = fails + gate("n·n squares in FP_k -> α (not β)",
+                 kc_classify(fp_nn, fp_table, N) == 0)
+
+    // ── E. genuine-novel candidate: out-of-well AND not known → (γ) ──
+    println("E. out-of-well non-known candidate (γ · the M4 admit case):")
+    let h3 = ie_term3_fingerprint(5, 0, 3, N)         // n·σ·φ (size-3, ∉ FP_2)
+    fails = fails + gate("size-3 term n·σ·φ -> γ (∉FP_k ∧ ∉KNOWN)",
+                 kc_classify(h3, fp_table, N) == 2)
+
+    println("")
+    if fails == 0 { println("M3 GATE PASS — β 100% · α/γ misclassification 0"); exit(0) }
+    println("M3 GATE FAIL — " + to_string(fails) + " gate(s) failed"); exit(1)
+}
