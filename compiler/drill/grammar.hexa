@@ -1,0 +1,235 @@
+// compiler/drill/grammar.hexa — M1 of the OUROBOROS-novel design
+// (ARCHITECTURE discovery-engine-novel-design-roadmap · state/fable-eval-
+// discovery-2026-07-02/NEXUS_novel_design_fable.md).
+//
+// The BLOWUP phase's term enumerator + the FP_k fingerprint table that makes
+// "a primitive the previous cycle could not express" (NEXUS README §Not an LLM)
+// a DECIDABLE predicate: a candidate is inside the well at size k iff some
+// enumerated term of size <=k has the SAME value-signature over n in [2,N].
+//
+// Scope of M1 (honest boundary): the IDENTITY frame only — a term is a product
+// of function symbols, size 1 (a single fn) or size 2 (a pair A*B), over the
+// 18-fn exact-int basis of `../atlas/identity_engine.hexa::af()`. This is the
+// frame the `A*B=C*D` grammar already consumes. The composition (f(g(n))) and
+// congruence (a(αn+β)≡0 mod m) frames are later milestones; their enumerators
+// slot in beside `enum_ident_*` here. No new builtin, no float — every value is
+// exact-int via _gram_af(); the fingerprint is a deterministic rolling hash mod a
+// fixed prime, so the whole table is byte-deterministic (BigInt stays bounded
+// because every step reduces mod P).
+//
+// c2 honesty: the fingerprint proves size-<=k BOUNDED inexpressibility over
+// [2,N] (a value-signature collision test), NOT absolute inexpressibility. A
+// "not in FP_k" verdict means "no size-<=k term matches on [2,N]" — the k and N
+// are part of the claim and are logged, never dropped.
+
+// Self-contained (no identity_engine import): drill/ selftests inline their
+// exact-int kernel to sidestep the cross-module flattener trap (cf drill.hexa's
+// inlined BigInt + composition_test.hexa self-containment). `_gram_af` is a
+// verbatim mirror of `../atlas/identity_engine.hexa::af()` (indices 0..17) — M2
+// of the roadmap consolidates fingerprint()/expressible_at() INTO identity_engine
+// and this local mirror is retired then.
+
+fn _gram_ipow(base: int, e: int) -> int {
+    let mut r = 1
+    let mut i = 0
+    while i < e { r = r * base; i = i + 1 }
+    return r
+}
+
+fn _gram_spf(m0: int) -> int {
+    if m0 % 2 == 0 { return 2 }
+    let mut p = 3
+    while p * p <= m0 {
+        if m0 % p == 0 { return p }
+        p = p + 2
+    }
+    return m0
+}
+
+// _gram_af(n, which) — value of the `which`-th (0..17) arithmetic fn at n.
+// Verbatim exact-int mirror of identity_engine::af (μ/λ signed; μ² 0/1).
+fn _gram_af(n: int, which: int) -> int {
+    if n == 1 {
+        if which == 6 { return 0 }
+        if which == 10 { return 0 }
+        if which == 11 { return 0 }
+        return 1
+    }
+    let mut m = n
+    let mut sig = 1
+    let mut sig2 = 1
+    let mut sig3 = 1
+    let mut tau = 1
+    let mut phi = 1
+    let mut psi = 1
+    let mut j2 = 1
+    let mut j3 = 1
+    let mut sopfr = 0
+    let mut rad = 1
+    let mut om_big = 0
+    let mut om_small = 0
+    let mut squarefree = 1
+    while m > 1 {
+        let p = _gram_spf(m)
+        let mut e = 0
+        while m % p == 0 { m = m / p; e = e + 1 }
+        sig = sig * ((_gram_ipow(p, e + 1) - 1) / (p - 1))
+        sig2 = sig2 * ((_gram_ipow(p, 2 * (e + 1)) - 1) / (_gram_ipow(p, 2) - 1))
+        sig3 = sig3 * ((_gram_ipow(p, 3 * (e + 1)) - 1) / (_gram_ipow(p, 3) - 1))
+        tau = tau * (e + 1)
+        phi = phi * (_gram_ipow(p, e - 1) * (p - 1))
+        psi = psi * (_gram_ipow(p, e - 1) * (p + 1))
+        j2 = j2 * (_gram_ipow(p, 2 * e) - _gram_ipow(p, 2 * (e - 1)))
+        j3 = j3 * (_gram_ipow(p, 3 * e) - _gram_ipow(p, 3 * (e - 1)))
+        sopfr = sopfr + p * e
+        rad = rad * p
+        om_big = om_big + e
+        om_small = om_small + 1
+        if e >= 2 { squarefree = 0 }
+    }
+    if which == 0 { return sig }
+    if which == 1 { return sig2 }
+    if which == 2 { return sig3 }
+    if which == 3 { return phi }
+    if which == 4 { return tau }
+    if which == 5 { return n }
+    if which == 6 { return sopfr }
+    if which == 7 { return rad }
+    if which == 8 { return j2 }
+    if which == 9 { return psi }
+    if which == 10 { return om_big }
+    if which == 11 { return om_small }
+    if which == 14 { return squarefree }
+    if which == 12 {
+        if squarefree == 0 { return 0 }
+        if om_small % 2 == 0 { return 1 }
+        return 0 - 1
+    }
+    if which == 13 {
+        if om_big % 2 == 0 { return 1 }
+        return 0 - 1
+    }
+    if which == 15 { return j3 }
+    if which == 16 { return _gram_ipow(2, om_small) }
+    return n / rad
+}
+
+// ── 18-fn basis (index -> canonical name · mirrors drill.hexa::_fn_index and
+//    identity_engine af() indices 0..17) ──
+pub fn gram_vocab_size() -> int { return 18 }
+
+pub fn gram_fn_name(i: int) -> string {
+    if i == 0  { return "sigma" }
+    if i == 1  { return "sigma2" }
+    if i == 2  { return "sigma3" }
+    if i == 3  { return "phi" }
+    if i == 4  { return "tau" }
+    if i == 5  { return "n" }
+    if i == 6  { return "sopfr" }
+    if i == 7  { return "rad" }
+    if i == 8  { return "J2" }
+    if i == 9  { return "psi" }
+    if i == 10 { return "Omega" }
+    if i == 11 { return "omega" }
+    if i == 12 { return "mu" }
+    if i == 13 { return "lambda" }
+    if i == 14 { return "mu2" }
+    if i == 15 { return "J3" }
+    if i == 16 { return "tw_omega" }
+    if i == 17 { return "core" }
+    return "?"
+}
+
+// rolling-hash constants — P = 2^61 - 1 (Mersenne prime, fits i64), B = base.
+// Reducing mod P each step keeps the (BigInt) accumulator bounded < P.
+fn _gram_P() -> int { return 2305843009213693951 }
+fn _gram_B() -> int { return 1000003 }
+
+// non-negative residue of v mod P (_gram_af() can be negative for mu/lambda).
+fn _gram_res(v: int) -> int {
+    let p = _gram_P()
+    let r = v % p
+    if r < 0 { return r + p }
+    return r
+}
+
+// value of a size-1 or size-2 IDENTITY term at n:
+//   b == -1  -> single symbol  _gram_af(n,a)
+//   else     -> product        _gram_af(n,a) * _gram_af(n,b)
+pub fn gram_term_value(a: int, b: int, n: int) -> int {
+    let va = _gram_af(n, a)
+    if b < 0 { return va }
+    return va * _gram_af(n, b)
+}
+
+// fingerprint of a term = rolling hash of its value vector over n in [2,N].
+// Deterministic (fixed seed · fixed traversal · mod P each step).
+pub fn gram_term_fingerprint(a: int, b: int, N: int) -> int {
+    let p = _gram_P()
+    let base = _gram_B()
+    let mut h = 1469598103
+    let mut n = 2
+    while n <= N {
+        let v = _gram_res(gram_term_value(a, b, n))
+        h = ((h * base) + v) % p
+        n = n + 1
+    }
+    return h
+}
+
+// ── FP_k table (k=2 identity frame): every size-1 and size-2 term fingerprint.
+//    Enumeration order is deterministic: singles a=0..17, then pairs a<=b.
+//    Count = 18 (singles) + 18*19/2 (unordered pairs incl. squares) = 18 + 171.
+pub fn gram_fp_table_build(N: int) -> array {
+    let vsz = gram_vocab_size()
+    let mut table: array = []
+    let mut a = 0
+    while a < vsz {
+        table.push(gram_term_fingerprint(a, 0 - 1, N))   // size-1
+        a = a + 1
+    }
+    a = 0
+    while a < vsz {
+        let mut b = a
+        while b < vsz {
+            table.push(gram_term_fingerprint(a, b, N))    // size-2, a<=b
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return table
+}
+
+// size-3 product term A*B*C — used by the inexpressibility demo (a genuine
+// size-3 signature that no size-<=2 term matches) and by later frames. Same
+// deterministic rolling hash as the size-<=2 path.
+pub fn gram_term3_fingerprint(a: int, b: int, c: int, N: int) -> int {
+    let p = _gram_P()
+    let base = _gram_B()
+    let mut h = 1469598103
+    let mut n = 2
+    while n <= N {
+        let v = _gram_res(_gram_af(n, a) * _gram_af(n, b) * _gram_af(n, c))
+        h = ((h * base) + v) % p
+        n = n + 1
+    }
+    return h
+}
+
+// the count the enumerator MUST produce (closed form · selftest cross-check).
+pub fn gram_fp_table_count() -> int {
+    let v = gram_vocab_size()
+    return v + (v * (v + 1)) / 2
+}
+
+// expressibility test: is fingerprint `fp` present in the size-<=k table?
+// (membership = the candidate is INSIDE the well at size k over [2,N].)
+pub fn gram_fp_contains(table: array, fp: int) -> bool {
+    let m = len(table)
+    let mut i = 0
+    while i < m {
+        if table[i] == fp { return true }
+        i = i + 1
+    }
+    return false
+}
