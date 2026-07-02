@@ -320,6 +320,34 @@ if [ -f "$_tk" ] && ! grep -q '_hx_cos(6.28318530718' "$_tk"; then
   echo "[restore_frozen_seeds] ZEROC-LIBM: routed hexa_tensor_randn Box-Muller off libm sqrt/log/cos in $_tk"
 fi
 
+# ── ZEROC-RAND — gate hexa_tensor_randn PRNG onto hxlcl_rand (post-restore, SSOT lockstep) ─
+# tensor_kernels.c is a FROZEN_SEED with NO regen-from-emitter block, so its two
+# `double u/w = (rand()+1.0)/(RAND_MAX+1.0)` lines ship RAW libc rand() — the last libc rand
+# in the default runtime.a. Gate them onto hxlcl_rand (the native Knuth-MMIX LCG, static in this
+# TU, defined at runtime_emit_full ~4856 BEFORE this include) behind HEXA_ZEROC_RAND_NATIVE
+# (default-OFF), same post-restore precedent as ZEROC-LIBM above. flag-OFF => preprocessed
+# expansion identical (rand()) => object-byte-neutral; flag-ON => hxlcl_rand (divisor
+# RAND_MAX+1.0 == 2147483648.0 on glibc, so ON is numerically the intended stream). The SSOT
+# self/native/tensor_kernels_emit.hexa carries the same #ifdef in lockstep. Idempotent: the
+# HEXA_ZEROC_RAND_NATIVE marker guards double-apply. Flip default-ON only after byteeq 3-target
+# + faithful-nobaseline + shipping smoke GREEN.
+if [ -f "$_tk" ] && ! grep -q 'HEXA_ZEROC_RAND_NATIVE' "$_tk"; then
+  awk '
+    /double u = \(rand\(\)\+1\.0\)\/\(RAND_MAX\+1\.0\);/ && !done {
+      print "#ifdef HEXA_ZEROC_RAND_NATIVE"
+      print "        double u = (hxlcl_rand()+1.0)/(2147483648.0);"
+      print "        double w = (hxlcl_rand()+1.0)/(2147483648.0);"
+      print "#else"
+      print $0
+      getline; print $0
+      print "#endif"
+      done=1; next
+    }
+    { print }
+  ' "$_tk" > "$_tk.zrbak" && mv "$_tk.zrbak" "$_tk"
+  echo "[restore_frozen_seeds] ZEROC-RAND: gated hexa_tensor_randn PRNG onto hxlcl_rand (HEXA_ZEROC_RAND_NATIVE, default-OFF) in $_tk"
+fi
+
 # ── DEVRESIDENT adamw dirty_host coherence (frozen-train fix, post-restore) ───
 # Root cause: under CLM_PROD_DEVRESIDENT the host opt_adamw_step -> hexa_adamw_step
 # builtin mutates the param's HOST buffer P[i] in place but never raises
