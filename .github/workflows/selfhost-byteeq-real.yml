@@ -64,7 +64,11 @@ jobs:
         with:
           kind: darwin
           eligible: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
-          token: ${{ github.token }}
+          # administration:read PAT (self-hosted runners list needs it; the
+          # default github.token CANNOT carry that scope → empty list → blind
+          # fallback). Absent secret → `|| github.token` = today's harmless
+          # macos-15 fallback; present → routing goes live. See PR/root-cause.
+          token: ${{ secrets.RUNNER_PROBE_TOKEN || github.token }}
 
   byteeq-real:
     name: selfhost-byteeq-real
