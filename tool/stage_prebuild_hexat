@@ -41,6 +41,19 @@
 set -euo pipefail
 : "${CC:?CC must be set}"
 LIBS="${LIBS:-}"
+# own-start #29: -nostartfiles when the linked runtime.a carries own _start (default-ON on linux
+# x86_64/arm64 post-PR-C #4399; env=0 overrides). The $CC link below (lines ~100/103) combines
+# hexa_cc.c + runtime.a; without -nostartfiles it ALSO pulls glibc Scrt1.o _start -> "multiple
+# definition of _start". This mirrors stage_resolve_runtime_a's runtime.a own-start default (and
+# stage_build_hexa's C0) so archive-carry + link-drop stay coherent. darwin OFF (Mach-O LC_MAIN).
+_zc_own_default=0
+if [ "$(uname -s 2>/dev/null)" = "Linux" ] && { [ "$(uname -m 2>/dev/null)" = "x86_64" ] || [ "$(uname -m 2>/dev/null)" = "aarch64" ] || [ "$(uname -m 2>/dev/null)" = "arm64" ]; }; then _zc_own_default=1; fi
+if [ "${HEXA_ZEROC_OWN_START:-$_zc_own_default}" = "1" ] && [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
+    _zc_arch="$(uname -m 2>/dev/null)"
+    if [ "$_zc_arch" = "x86_64" ] || [ "$_zc_arch" = "aarch64" ] || [ "$_zc_arch" = "arm64" ]; then
+        LIBS="$LIBS -nostartfiles"
+    fi
+fi
 CFLAGS="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
 # -fbracket-depth is clang-only (deeply-nested generated C); gcc rejects it.
 case "$CC" in *clang*) CFLAGS="$CFLAGS -fbracket-depth=4096";; esac
