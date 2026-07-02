@@ -54,3 +54,39 @@ ATLAS/
   report (no fabrication). The pivot itself is the deliverable (the engine natively represents non-multiplicative sequences + the congruence FORM). The congruence is [0,N]
   bounded · ∀n UNPROVEN (c2). The next unexplored dimension is still composed/iterated functions (Ralph 372).
 - Detailed history is in `../CHANGELOG.md` + git.
+
+## External open-problem targets — the Erdős problem ledger (preferred over the 7 Millennium problems)
+
+The mechanical DFS sweeps are measured-DRY (novel=0, Ralph 375/377), and the README's own terminal verdict names
+**external open problems** as the honest remaining path. For that path the target ledger is the **Erdős problem corpus**,
+not the 7 Millennium problems — it dominates on every axis this engine can actually engage:
+
+- **Scale + gradation**: ~1,217 catalogued problems, ~553 (≈45%) already solved (erdosproblems.com, 2026-07 snapshot)
+  vs 7 monoliths. A graded ladder with a live "recently solved" tail — including modern computer-/AI-assisted
+  resolutions (discrepancy: C=2 case by SAT then Tao 2015 · primitive-set conjecture, Lichtman 2022 · the $10,000
+  prime-gaps problem, Ford–Green–Konyagin–Tao + Maynard 2014) — instead of seven vertical walls with zero
+  computational attack surface.
+- **Engine fit**: most Erdős problems are elementary-statement, exact-integer / combinatorial, with a **finite-witness
+  attack surface** (counterexample search · bounded verification · extremal construction) — exactly what
+  `identity_engine`/`drill`'s exact-int gate emits (bounded-unique 🟩). No Millennium problem has a finite-witness
+  surface this engine can touch (RH zero-verification is not a lever).
+- **Map overlap**: Egyptian fractions (Erdős–Straus `4/n = 1/x+1/y+1/z` · Erdős–Graham), divisor/perfect-number
+  arithmetic, covering-system congruences — these are already nodes on the Math System Map, so targets attach to
+  existing structure instead of opening foreign domains.
+- **Live status SSOT**: `erdosproblems.com` (Thomas Bloom, 2023–) = canonical statement + open/solved status +
+  literature per problem. Treat it as the external status SSOT; re-check it before claiming a problem is open.
+
+Rules (root governance applied to this ledger):
+
+- **Tier discipline (c2)**: an open Erdős problem enters the map as 🟥 (open conjecture). A bounded computational
+  verification is 🟩 `[2,N]` bounded-only — never a solve claim. ⭐ requires an actual proof; a literature find is a
+  status correction, not a discovery.
+- **Routing**: new open-problem targeting goes to this ledger first. The README "Connection to Millennium Problems"
+  table stays as-is — it is a connection ledger, not a target list.
+- **No per-problem .md**: same as the DFS rule — chronicle goes to README "DFS Exploration Status", verify atoms to
+  `../compiler/atlas/embedded.gen.hexa`; exploration runs on `hexa loop --dfs` (budget cap + verify gate).
+- **Candidate short-list** (finite-witness fit · already-mapped nodes; statements/status on the DB):
+  Erdős–Straus (Egyptian fractions) · Erdős–Moser `1^k+…+(m-1)^k = m^k` (only 1+2=3 known; bounded search space
+  with known analytic constraints) · minimum-overlap problem · Erdős–Szekeres happy-ending bound (SAT-verified at
+  n=6) · covering systems with distinct moduli variants. The $5,000 reciprocal-AP conjecture (Σ1/a diverges ⇒
+  arbitrarily long APs) is the prestige anchor of the corpus, **not** a computational target here.
