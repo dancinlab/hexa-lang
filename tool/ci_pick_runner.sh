@@ -45,6 +45,11 @@ case "$kind" in
     fallback='"macos-15"'
     want_labels='self-hosted macOS ARM64 selfhost-gen2fix'
     sh_label='["self-hosted","macOS","ARM64","selfhost-gen2fix"]'
+    # ordered insurance chain: ghost (primary) → mini (fallback-only, distinct
+    # label so it never load-balances with ghost in normal operation) → macos-15.
+    # mini is a daily-driver Mac: it must receive jobs ONLY when ghost is offline.
+    alt_want_labels='self-hosted macOS ARM64 hexa-darwin-mini'
+    alt_sh_label='["self-hosted","macOS","ARM64","hexa-darwin-mini"]'
     ;;
   *)
     echo "::error::ci_pick_runner: unknown kind '$kind' (want linux|darwin)" >&2
@@ -114,8 +119,20 @@ online_matches="$(printf '%s' "$api_json" | jq "$jq_filter" --args $want_labels 
 if [ "${online_matches:-0}" -ge 1 ] 2>/dev/null; then
   echo "::notice::$online_matches online self-hosted runner(s) match [$want_labels] → self-hosted"
   emit "$sh_label"
-else
-  echo "::notice::no online self-hosted runner matches [$want_labels] → GitHub-hosted fallback"
-  emit "$fallback"
+  exit 0
 fi
+
+# ── ordered fallback probe (darwin only): mini insurance runner ──────────────
+if [ -n "${alt_want_labels:-}" ]; then
+  # shellcheck disable=SC2086  # intentional word-split of the wanted-label list
+  alt_matches="$(printf '%s' "$api_json" | jq "$jq_filter" --args $alt_want_labels 2>/dev/null || echo 0)"
+  if [ "${alt_matches:-0}" -ge 1 ] 2>/dev/null; then
+    echo "::notice::primary self-hosted offline; $alt_matches insurance runner(s) match [$alt_want_labels] → self-hosted (mini)"
+    emit "$alt_sh_label"
+    exit 0
+  fi
+fi
+
+echo "::notice::no online self-hosted runner matches [$want_labels] → GitHub-hosted fallback"
+emit "$fallback"
 exit 0
