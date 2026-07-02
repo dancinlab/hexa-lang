@@ -71,6 +71,7 @@ fn emit_runtime_to(out_path: str) {
     buf = buf + "// the environ block (OP-19e post-restore patch anchors there — #4388 root cause).\n"
     buf = buf + "#ifdef HEXA_ZEROC_OWN_START\n"
     buf = buf + "extern int main(int, char **);\n"
+    buf = buf + "static void hxlcl_exit(int code) __attribute__((noreturn));  /* fwd: def is later, _hx_start_c calls it */\n"
     buf = buf + "typedef void (*_hx_initfn)(int, char **, char **);\n"
     buf = buf + "extern _hx_initfn __init_array_start[] __attribute__((weak));\n"
     buf = buf + "extern _hx_initfn __init_array_end[] __attribute__((weak));\n"
