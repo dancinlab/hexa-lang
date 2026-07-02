@@ -184,7 +184,7 @@ fi
 # ON: synth to mktemp, per-frag SENTINEL grep, cmp-skip no-op, and on awk-fail/empty/sentinel-miss
 # KEEP the restored frozen .c (NO-OP-SAFE, same shape as the runtime.c synth). Flip default-ON only
 # after the ghost cmp gate (GATE A 6/6 awk==hexa-run) + byteeq 3-target + faithful GREEN.
-if [ "${HEXA_ZEROC_FRAG_REGEN:-0}" = "1" ]; then
+if [ "${HEXA_ZEROC_FRAG_REGEN:-1}" = "1" ]; then
   _FRAG_SPEC='
 mount|self/native/mount_emit.hexa|native/mount.c
 namespace|self/native/namespace_emit.hexa|CLONE_NEWNS
