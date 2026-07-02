@@ -241,6 +241,13 @@
     "value": "ARCHITECTURE.json blind write가 파일 훼손 재발 (1차 #4135 UU conflict-marker blind-add · 2차 2026-07-02 json.dump indent=1 재포맷→5369줄 diff 커밋). 프로그램적 rewrite 전 round-trip 검증 필수: json.dumps(load(src), ensure_ascii=False, indent=2)+chr(10) == src 확인 후에만 수정 저장 → 노드 1줄 diff 보장",
     "threshold": "재발조건=ARCHITECTURE.json을 스크립트/머지로 쓰면서 사전 round-trip(또는 JSON validate) 없이 커밋 · 해결=수정 전 원문 round-trip 동일성 확인(indent=2·ensure_ascii=False·trailing newline)+git diff --stat으로 1~수줄 diff 확인 후 커밋",
     "source": "ARCHITECTURE.json"
+   },
+   {
+    "id": "restore-frozen-seeds-1",
+    "state": "pos-conv",
+    "value": "FRAG-REGEN 블록이 같은 vehicle서 2연속 결함: ①#4426 착륙 전 OFF-중립 테스트의 git checkout -q . 가 uncommitted 편집을 wipe→머지커밋에 블록 유실 ②#4427 재착륙 spec의 signal_flock sentinel(hexa_signal_install)이 emitter 출력에 없는 심볼(실재=hexa_os_sig_install/hexa_os_flock_open)→항상 sentinel-miss. 두 결함 다 NO-OP-SAFE fallback(FROZEN 유지)이 실패를 조용히 삼켜 rc=0 GREEN으로 위장 — flag-ON 실측 census(nm -u)만이 진짜 검증이었다(#4428/#4429 dual-fix로 종결·ON floor=15 U WALL-only 수렴).",
+    "threshold": "재발조건: ①손편집 상태로 검증 스크립트가 git checkout/reset 류를 실행 ②sentinel/guard 상수를 실제 산출물에 grep 실재확인 없이 지정 ③NO-OP-SAFE fallback이 있는 경로를 rc=0만으로 done 처리. 해결: 편집은 검증 전 커밋 먼저·sentinel은 emitter 출력에 grep 확인 후 지정·fallback 있는 레버는 반드시 flag-ON 측정(심볼 drop 델타)으로 닫는다.",
+    "source": "tool/restore_frozen_seeds"
    }
   ]
  },
