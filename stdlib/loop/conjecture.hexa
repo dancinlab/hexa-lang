@@ -264,6 +264,11 @@ fn _cj_parse_congruence(expr: string) -> array {
     }
     let ni = anpart.index_of("n")
     if ni < 0 { return empty }
+    // reject any residual after 'n' (e.g. "5n^2", "5n3"): the coefficient frame is
+    // strictly α·n, so 'n' must be the LAST char of the coefficient part. Without
+    // this, "p(5n^2+4)=0 mod5" silently mis-parsed as "p(5n+4)=0 mod5" — a TRUE
+    // statement labelled onto a DIFFERENT claim (c2 violation via parser leniency).
+    if ni + 1 != len(anpart) { return empty }
     let alpha_str = anpart.substring(0, ni)
     let mut alpha = 1
     if len(alpha_str) > 0 { alpha = _cj_parse_int(alpha_str) }
@@ -281,6 +286,174 @@ fn _cj_is_known_congruence(which: int, a: int, b: int, m: int) -> bool {
     if a == 7 && b == 5 && m == 7 { return true }
     if a == 11 && b == 6 && m == 11 { return true }
     return false
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// NOVEL-CLOSURE gate — port of ATLAS/state/novel-dfs/novel_closure_classifier.py
+// (PR #4120) into exact-int hexa. An exact-int-CONFIRMED relation that the gate
+// would otherwise label `verified-novel` must additionally SURVIVE the four
+// MEASURED false-positive classes; otherwise it is a known/degenerate/coincidence
+// relation — TRUE, but NOT genuinely novel — and is demoted to `verified-known`.
+// The closure is what makes the engine's NOVEL verdict TRUSTWORTHY: every measured
+// false-positive (82 raw "?NOVEL?" hits) auto-collapses, so a future SURVIVOR is a
+// real candidate (deferred to `hexa verify` g5 / PR for final novelty).
+//
+//   C1 ASSOC-CHAIN    : reduces to a KNOWN single-step law — a congruence
+//                       sub-progression of a base Ramanujan congruence at the same
+//                       modulus (e.g. p(10n+9)≡0 mod5 ⊆ p(5n+4)≡0 mod5), OR the
+//                       classical RAMANUJAN-WATSON tower p(m·n+δ)≡0 mod m with
+//                       24δ≡1 mod m and m smooth over {5,7,11} (Watson 1938 /
+//                       Ahlgren-Ono 2000 · C1-WATSON-TOWER · measured live run #3).
+//   C2 EPS-DEGENERATE : one full product side is supported only at n=1 (≡ε ⇒
+//                       ≡0 over n∈[2,N]) — the identity holds 0=0 trivially.
+//   C3 SQUARE/DEFN    : holds via square-support (the witness n is a perfect
+//                       square — a λ(□)=+1 / definitional coincidence).
+//   C4 BOUNDED-COINC  : |solution set| < 3 — a singleton/pair witness is a bounded
+//                       coincidence, NOT a forall-n law (the verify_identity /
+//                       verify_composition frames emit ONLY bounded-unique
+//                       singletons, so the whole multiplicative ring closes here:
+//                       its measured-DRY exhaustion is baked into the gate).
+//   C5 RECURRENCE-PERIODIC : a fib/lucas/bell congruence — a finite-state linear
+//                       recurrence is eventually periodic mod m (Pisano/Touchard),
+//                       so its zero-set is structurally periodic and every holding
+//                       AP is classical (rank-of-apparition), never a deep
+//                       congruence. Only the partition p(n) (no finite-state mod-m
+//                       recurrence) can yield a SURVIVOR. (Added 2026-06-28 after a
+//                       live LLM run surfaced 15 such classical congruences.)
+//
+// HONESTY (c2): the closure NEVER claims a SURVIVOR is proven — it only certifies
+// that the candidate is not one of the five measured false-positive classes; the
+// ∀n statement stays UNPROVEN until `hexa verify` g5 / a proof lands.
+
+// integer-exact perfect-square test (no float path · byte-deterministic).
+fn _cj_is_square(n: int) -> bool {
+    if n < 0 { return false }
+    let mut i = 0
+    while i * i < n { i = i + 1 }
+    return i * i == n
+}
+
+// C2 helper: is the pointwise product af(·,x)·af(·,y) ≡ 0 over n∈[2,512]?
+// (eps-support ⇒ identically zero off n=1). For the 18-fn vocab every fn is
+// non-zero at n=2, so this never fires — an honest structural guard, not dead.
+fn _cj_side_zero(x: int, y: int) -> bool {
+    let mut n = 2
+    while n <= 512 {
+        if af(n, x) * af(n, y) != 0 { return false }
+        n = n + 1
+    }
+    return true
+}
+
+// C1 helper: is {α·n+β} a sub-progression of the base {α0·k+β0} at the SAME
+// modulus m0? (α≡0 mod α0 ∧ β≡β0 mod α0 ∧ β≥β0 ⇒ every term inherits ≡0 mod m0).
+fn _cj_subprog(w: int, a: int, b: int, m: int, w0: int, a0: int, b0: int, m0: int) -> bool {
+    if w != w0 { return false }
+    if m != m0 { return false }
+    if a0 <= 0 { return false }
+    if a % a0 != 0 { return false }
+    if b < b0 { return false }
+    if (b - b0) % a0 != 0 { return false }
+    return true
+}
+
+// canonical Ramanujan-Watson residue at modulus m: the unique δ in [0,m) with
+// 24·δ ≡ 1 (mod m). Exists iff gcd(24,m)=1 — true for every {5,7,11}-smooth m
+// (5·7·11 all coprime to 24). Returns -1 when no such δ exists.
+fn _cj_watson_delta(m: int) -> int {
+    let mut d = 0
+    while d < m {
+        if (24 * d) % m == 1 { return d }
+        d = d + 1
+    }
+    return 0 - 1
+}
+
+// C1 for the congruence frame: does the candidate reduce to a KNOWN Ramanujan-
+// Watson congruence (same-modulus sub-progression)? Then it is a re-statement, not
+// novel. Generalized (2026-07-02) from the 3 hardcoded base congruences (m=5/7/11)
+// to the FULL canonical tower: for every {5,7,11}-smooth m, the canonical
+// p(m·n+δ) ≡ 0 (mod m) (24δ≡1) is classical, so a candidate that is an
+// arithmetic SUB-PROGRESSION of it is classical too. This closes the measured
+// false-positive where p(50n+49) ≡ 0 (mod 25) — a trivial sub-progression of
+// Watson's p(25n+24) with a=50≠m=25 — slipped BOTH the 3-base table and the
+// canonical a==m check and was mislabelled `verified-novel`.
+fn _cj_congruence_reduces_known(which: int, a: int, b: int, m: int) -> bool {
+    if which != 0 { return false }
+    if m < 5 { return false }
+    if _cj_smooth_5_7_11(m) == false { return false }
+    let delta = _cj_watson_delta(m)
+    if delta < 0 { return false }
+    return _cj_subprog(which, a, b, m, 0, m, delta, m)
+}
+
+// is m composed ONLY of the primes {5,7,11}? (the Ramanujan-Watson prime tower)
+fn _cj_smooth_5_7_11(m: int) -> bool {
+    let mut x = m
+    while x % 5 == 0 { x = x / 5 }
+    while x % 7 == 0 { x = x / 7 }
+    while x % 11 == 0 { x = x / 11 }
+    return x == 1
+}
+
+// C1 (extended · measured 2026-06-28 live run #3) — the classical RAMANUJAN-WATSON
+// partition congruence tower. Watson 1938 + Atkin + Ahlgren-Ono 2000: the canonical
+// congruence p(m·n+δ) ≡ 0 (mod m) with 24·δ ≡ 1 (mod m) holds for EVERY modulus m
+// composed of the primes {5,7,11} (5^a·7^b·11^c — prime powers + CRT products), and
+// (proven) NO simple linear congruence p(m·n+δ)≡0 mod m exists for any modulus with
+// a prime factor outside {5,7,11}. So a {5,7,11}-smooth canonical congruence is
+// CLASSICAL (un-catalogued by the 3-element base table, but Watson's) — demote. The
+// live LLM run #3 surfaced 12 of these (mod 25/49/121/35/55/77, all 24δ≡1) — all
+// classical, genuine-novel = 0. (Empirically confirmed: 0 holding simple partition
+// congruences exist outside this tower — ATLAS/state/novel-dfs cong_search.)
+fn _cj_is_ramanujan_watson(which: int, a: int, b: int, m: int) -> bool {
+    if which != 0 { return false }
+    if a != m { return false }                  // canonical p(m·n+δ) form
+    if m < 5 { return false }
+    if _cj_smooth_5_7_11(m) == false { return false }
+    if (24 * b) % m != 1 { return false }       // Ramanujan δ: 24·δ ≡ 1 (mod m)
+    return true
+}
+
+// ── closure class for an exact-int-confirmed IDENTITY singleton (witness n). ──
+// C2 (degenerate side) → C3 (square witness) → C4 (coincidence). Never SURVIVOR:
+// a 2-vs-2 multiplicative singleton is always a bounded coincidence.
+fn _cj_class_identity(a: int, b: int, c: int, d: int, first_n: int) -> string {
+    if _cj_side_zero(a, b) { return "C2-EPS" }
+    if _cj_side_zero(c, d) { return "C2-EPS" }
+    if _cj_is_square(first_n) { return "C3-SQUARE" }
+    return "C4-COINCIDENCE"
+}
+
+// ── closure class for an exact-int-confirmed COMPOSITION singleton (witness n). ──
+fn _cj_class_composition(first_n: int) -> string {
+    if _cj_is_square(first_n) { return "C3-SQUARE" }
+    return "C4-COINCIDENCE"
+}
+
+// ── closure class for an exact-int-confirmed CONGRUENCE (holds over the
+// progression · |sol|≥12 ⇒ passes C4). ──
+// C5 RECURRENCE-PERIODIC (measured 2026-06-28 · live aiden run): fib/lucas/bell
+// (which 2/3/4) are FINITE-STATE linear recurrences — an order-k state space (m^k)
+// ⇒ eventually PERIODIC mod m (Pisano period for fib/lucas, Touchard period for
+// bell) ⇒ the zero-set {n : seq(n)≡0 mod m} is itself eventually periodic, so
+// EVERY holding arithmetic progression is a STRUCTURAL sub-progression of that
+// classical period (rank-of-apparition / Pisano / Touchard) — provable by one
+// period, NOT a deep congruence. The first live LLM run surfaced 15 such
+// "survivors" (fib(7n)≡0 mod13 = 13's apparition rank 7 · fib(6n)≡0 mod8 = F6=8 ·
+// bell(3n+2)≡0 mod2 = Bell mod2 period 3 · …) — all classical, genuine-novel = 0.
+// So finite-state-recurrence congruences are demoted here. ONLY the partition
+// function p(n) (which 0) has NO finite-state mod-m recurrence — its mod-m
+// behaviour is non-periodic, which is exactly why Ramanujan's congruences are
+// deep — so only a partition congruence can be a SURVIVOR (and then only at a NEW
+// modulus, not a C1 sub-progression of a base Ramanujan congruence). ──
+fn _cj_class_congruence(which: int, a: int, b: int, m: int) -> string {
+    if which != 0 { return "C5-RECURRENCE-PERIODIC" }
+    // canonical p(m·n+δ) form first (distinct honest label), then any same-modulus
+    // sub-progression of the tower. Both are classical ⇒ demote to verified-known.
+    if _cj_is_ramanujan_watson(which, a, b, m) { return "C1-WATSON-TOWER" }
+    if _cj_congruence_reduces_known(which, a, b, m) { return "C1-ASSOC-CHAIN" }
+    return "SURVIVOR"
 }
 
 // ── extract a single `CONJECTURE:` claim from a child body ──
@@ -321,8 +494,11 @@ fn _cj_marker_value(line: string) -> string {
 //   "unparseable"    — a CONJECTURE: line present but grammar not recognized
 //   "unverified"     — parsed, but exact-int evaluation REFUTES it
 //   "verified-known" — exact-int confirmed AND in the documented classical set
-//                      (G1-G3 / σ∘φ=2n / Ramanujan), OR a universal-in-[2,N] identity
-//   "verified-novel" — exact-int confirmed AND NOT in any classical set
+//                      (G1-G3 / σ∘φ=2n / Ramanujan), a universal-in-[2,N] identity,
+//                      OR exact-int confirmed but DEMOTED by the NOVEL-CLOSURE gate
+//                      (a false-positive class C1-C4 — true, but not genuinely novel)
+//   "verified-novel" — exact-int confirmed, NOT in any classical set, AND SURVIVES
+//                      all four NOVEL-CLOSURE classes (a genuine novel candidate)
 pub fn cj_verdict(body: string) -> string {
     let raw = cj_extract(body)
     if len(raw) == 0 { return "" }
@@ -337,7 +513,9 @@ pub fn cj_verdict(body: string) -> string {
         let r = verify_congruence(cg[0], cg[1], cg[2], cg[3], n_cong)
         if r == 1 {
             if _cj_is_known_congruence(cg[0], cg[1], cg[2], cg[3]) { return "verified-known" }
-            return "verified-novel"
+            // NOVEL-CLOSURE — survives only if not a known sub-progression (C1).
+            if _cj_class_congruence(cg[0], cg[1], cg[2], cg[3]) == "SURVIVOR" { return "verified-novel" }
+            return "verified-known"
         }
         return "unverified"
     }
@@ -349,7 +527,10 @@ pub fn cj_verdict(body: string) -> string {
         let r = verify_composition(cp[0], cp[1], cp[2], cp[3], n_id)
         if r >= 4 {
             if _cj_is_known_composition(cp[0], cp[1], cp[2], cp[3]) { return "verified-known" }
-            return "verified-novel"
+            // NOVEL-CLOSURE — a bounded-unique composition singleton is a C4
+            // coincidence (never SURVIVOR) ⇒ demoted to verified-known.
+            if _cj_class_composition(r) == "SURVIVOR" { return "verified-novel" }
+            return "verified-known"
         }
         return "unverified"
     }
@@ -360,11 +541,49 @@ pub fn cj_verdict(body: string) -> string {
     let r = verify_identity(idx[0], idx[1], idx[2], idx[3], n_id)
     if r >= 4 {
         if _cj_is_known_identity(idx[0], idx[1], idx[2], idx[3]) { return "verified-known" }
-        return "verified-novel"
+        // NOVEL-CLOSURE — a 2-vs-2 multiplicative singleton is a bounded
+        // coincidence (C2/C3/C4, never SURVIVOR) ⇒ demoted to verified-known.
+        if _cj_class_identity(idx[0], idx[1], idx[2], idx[3], r) == "SURVIVOR" { return "verified-novel" }
+        return "verified-known"
     }
     // bounded-unique failed — accept a universal-in-[2,N] relation as classical
     // (every clean 18-fn universal is classical/definitional · measured
     // vocab_universal_hunt.py CLEAN_GENERATORS=2, both classical).
     if is_universal2(idx[0], idx[1], idx[2], idx[3], n_id) == 1 { return "verified-known" }
     return "unverified"
+}
+
+// ── NOVEL-CLOSURE class tag (honest provenance) — routes an extracted claim to
+// the right closure classifier and returns SURVIVOR / C1-ASSOC-CHAIN / C2-EPS /
+// C3-SQUARE / C4-COINCIDENCE, or "" when there is no exact-int-confirmed claim to
+// classify (prose / unparseable / unverified / classical-known). Used by the DFS
+// emit label for the PR reviewer; the gating decision lives in cj_verdict. ──
+pub fn cj_closure_class(body: string) -> string {
+    let raw = cj_extract(body)
+    if len(raw) == 0 { return "" }
+    let expr = _cj_normalize(raw)
+    let n_id = 20000
+    let n_cong = 4000
+
+    if expr.index_of("mod") >= 0 {
+        let cg = _cj_parse_congruence(expr)
+        if len(cg) != 4 { return "" }
+        if verify_congruence(cg[0], cg[1], cg[2], cg[3], n_cong) != 1 { return "" }
+        if _cj_is_known_congruence(cg[0], cg[1], cg[2], cg[3]) { return "" }
+        return _cj_class_congruence(cg[0], cg[1], cg[2], cg[3])
+    }
+    if expr.index_of("∘") >= 0 {
+        let cp = _cj_parse_composition(expr)
+        if len(cp) != 4 { return "" }
+        let r = verify_composition(cp[0], cp[1], cp[2], cp[3], n_id)
+        if r < 4 { return "" }
+        if _cj_is_known_composition(cp[0], cp[1], cp[2], cp[3]) { return "" }
+        return _cj_class_composition(r)
+    }
+    let idx = _cj_parse_identity(expr)
+    if len(idx) != 4 { return "" }
+    let r = verify_identity(idx[0], idx[1], idx[2], idx[3], n_id)
+    if r < 4 { return "" }
+    if _cj_is_known_identity(idx[0], idx[1], idx[2], idx[3]) { return "" }
+    return _cj_class_identity(idx[0], idx[1], idx[2], idx[3], r)
 }

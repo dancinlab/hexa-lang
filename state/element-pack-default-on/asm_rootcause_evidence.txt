@@ -1,0 +1,34 @@
+### kc_alias.on.s — packed xs vs BOXED ys alias (hexa_index_get on packed buffer)
+24:    call hexa_arr_i64_new # arrpk new: packed int64 storage
+53:    call hexa_arr_i64_push # push: packed raw int64 grow
+75:    mov r11, [r10 + 8] # arrpk set: len
+76:    cmp rax, r11 # arrpk set: idx vs len
+77:    jae .Larrpk_slow0 # arrpk set: OOB -> hexa_arr_i64_box (bounds throw)
+78:    mov r11, [r10] # arrpk set: data*
+79:    imul rax, rax, 8 # arrpk set: idx * sizeof(int64_t)
+80:    add r11, rax # arrpk set: &data[idx]
+81:    mov [r11], r8 # arrpk set: raw packed store
+82:    jmp .Larrpk_done0 # arrpk set: skip OOB slow path
+94:    call hexa_index_get # index: hexa_index_get
+100:    mov r11, [r10 + 8] # arrpk get: len
+101:    cmp rax, r11 # arrpk get: idx vs len
+102:    jae .Larrpk_slow1 # arrpk get: OOB -> hexa_arr_i64_box
+103:    mov r11, [r10] # arrpk get: data*
+104:    imul rax, rax, 8 # arrpk get: idx * sizeof(int64_t)
+105:    add r11, rax # arrpk get: &data[idx]
+106:    mov r10, [r11] # arrpk get: raw packed element
+108:    jmp .Larrpk_done1 # arrpk get: skip OOB slow path
+135:    call hexa_index_get # index: hexa_index_get
+153:    mov r11, [r10 + 8] # arrpk get: len
+154:    cmp rax, r11 # arrpk get: idx vs len
+155:    jae .Larrpk_slow2 # arrpk get: OOB -> hexa_arr_i64_box
+156:    mov r11, [r10] # arrpk get: data*
+157:    imul rax, rax, 8 # arrpk get: idx * sizeof(int64_t)
+158:    add r11, rax # arrpk get: &data[idx]
+159:    mov r10, [r11] # arrpk get: raw packed element
+161:    jmp .Larrpk_done2 # arrpk get: skip OOB slow path
+
+### ka_arg_escape.on.s — storage packed in main, callee reads boxed
+46:    call hexa_index_get # index: hexa_index_get
+104:    call hexa_arr_i64_new # arrpk new: packed int64 storage
+159:    call sumarr # call sumarr

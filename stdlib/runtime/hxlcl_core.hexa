@@ -364,6 +364,101 @@ pub fn hxlcl_strstr(h: HexaVal, n: HexaVal) -> int {
     return 0                                  // not found → NULL
 }
 
+// ── PURE-LEAF MIRROR BATCH (Route C · strrchr / memmove / bzero) ──────────────
+//
+// Three more pure-compute leaves that add NO new codegen mechanism — each is a
+// byte-faithful mirror of an already-wired Route C leaf (strchr / memcpy / memset):
+// no syscall, no errno, no float, no inner C-ABI call, no out-ptr extern-data.
+// Cross-target-identical compute (the byteeq build proves the emit is bit-equal on
+// all 3 targets; the routec-smoke run proves the BEHAVIOUR). Same un-nested raw-mem
+// rule as the mem/compare/copy/search leaves above: every __hx_payload_* /
+// __hx_ptr_* call writes EXACTLY ONE `let`/assignment with no nested intrinsic args;
+// comparisons use raw-int leaf intrinsics (__hx_payload_lt / _eq / _ne), NOT `<`/
+// `==`/`!=` (those lower to HexaVal helpers that misread the raw byte words).
+
+// hxlcl_strrchr: return a pointer to the LAST `c` byte of NUL-terminated `s`, or
+// NULL. BYTE-FAITHFUL to the frozen 0-libc floor body self/runtime.c:422 (rt_strrchr):
+//   if(!s) return NULL; target=(unsigned char)c; last=NULL;
+//   for(i=0;;i++){ x=(unsigned char)s[i]; if(x==target) last=s+i;
+//                  if(x==0) return last; }.
+// The c==0 case naturally returns the terminator pointer (the NUL matches target==0
+// and is the last byte scanned). Returns the raw char* in the single C-ABI result
+// register — the same pointer-into-input class as strchr/strstr.
+pub fn hxlcl_strrchr(s: HexaVal, c: HexaVal) -> int {
+    let ps = __hx_payload_add(s, 0)           // char* (payload word)
+    if __hx_payload_eq(ps, 0) {
+        return 0                              // NULL s → NULL (frozen `if(!s)`)
+    }
+    let target = __hx_payload_and(c, 255)     // (unsigned char)c
+    let mut last = 0                          // const char *last = NULL
+    let mut i = 0
+    while true {
+        let x = __hx_ptr_load8(ps, i)         // (unsigned char)s[i]
+        if __hx_payload_eq(x, target) {
+            last = __hx_payload_add(ps, i)    // last = s + i
+        }
+        if __hx_payload_eq(x, 0) {
+            return last                       // end of string → last match (or NULL)
+        }
+        i = __hx_payload_add(i, 1)
+    }
+    return last
+}
+
+// hxlcl_memmove: copy `n` bytes src→dst handling OVERLAP, return dst. BYTE-FAITHFUL
+// to the frozen 0-libc floor body self/runtime.c:627 (rt_memmove):
+//   d=dst; s=src; if(d==s || n==0) return dst;
+//   if(d<s) for(i=0;i<n;i++) d[i]=s[i];
+//   else    for(i=n;i>0;i--) d[i-1]=s[i-1];  return dst.
+// Forward copy when dst<src, backward copy otherwise — the only difference from
+// hxlcl_memcpy (which is forward-only and never aliased onto overlap). Returns the
+// dst pointer raw in the single C-ABI result register, like the copy family.
+pub fn hxlcl_memmove(dst: HexaVal, src: HexaVal, n: HexaVal) -> int {
+    let pd = __hx_payload_add(dst, 0)         // dst char* (payload word)
+    let ps = __hx_payload_add(src, 0)         // src char* (payload word)
+    if __hx_payload_eq(pd, ps) {
+        return pd                             // d == s → no-op
+    }
+    if __hx_payload_eq(n, 0) {
+        return pd                             // n == 0 → no-op
+    }
+    if __hx_payload_lt(pd, ps) {
+        // forward copy: for(i=0;i<n;i++) d[i]=s[i]
+        let mut i = 0
+        while __hx_payload_lt(i, n) {
+            let b = __hx_ptr_load8(ps, i)     // src[i]
+            __hx_ptr_store8(pd, i, b)         // dst[i] = src[i]
+            i = __hx_payload_add(i, 1)
+        }
+    } else {
+        // backward copy: for(i=n;i>0;i--) d[i-1]=s[i-1]
+        let mut j = n
+        while __hx_payload_ne(j, 0) {
+            let k = __hx_payload_sub(j, 1)    // i-1
+            let b = __hx_ptr_load8(ps, k)     // src[i-1]
+            __hx_ptr_store8(pd, k, b)         // dst[i-1] = src[i-1]
+            j = k
+        }
+    }
+    return pd
+}
+
+// hxlcl_bzero: write 0 into `n` bytes of `s`. BYTE-FAITHFUL to the frozen 0-libc
+// floor body self/runtime.c:575 (hxlcl_bzero):
+//   p=s; for(i=0;i<n;i++) p[i]=0;  (void return).
+// A trivial mirror of hxlcl_memset with c==0. The C body is `void`; the `int`
+// result register is unused by every caller (the frozen `#define bzero(p,n)`
+// expansion discards it), so a 0 return word is sound.
+pub fn hxlcl_bzero(s: HexaVal, n: HexaVal) -> int {
+    let ps = __hx_payload_add(s, 0)           // s char* (payload word)
+    let mut i = 0
+    while __hx_payload_lt(i, n) {
+        __hx_ptr_store8(ps, i, 0)             // s[i] = 0
+        i = __hx_payload_add(i, 1)
+    }
+    return 0
+}
+
 // ── ENV FAMILY (Route C Wall 2-b · extern-data named-data GOT reloc) ───────────
 //
 // hxlcl_getenv: look up `name` in the process environment, returning a pointer to
@@ -753,6 +848,137 @@ pub fn hxlcl_strtoll(nptr: HexaVal, endptr: HexaVal, base: HexaVal) -> int {
     return n
 }
 
+// ── PARSE MIRROR (Route C · strtoull) ─────────────────────────────────────────
+//
+// hxlcl_strtoull is the EXACT unsigned mirror of hxlcl_strtoll above — same parse
+// leaf class, adding NO new codegen mechanism: same whitespace skip, same base-0/16
+// prefix detection, same digit-accumulation loop, and the SAME NULL-gated `char**
+// endptr` store64 out-param write (the already-merged caller-pointer store class).
+// The ONLY two differences from strtoll: (a) no '-' sign — the C body skips a
+// leading '+' but never negates; (b) the result is the raw unsigned accumulation
+// `n`, returned directly (no sign branch). Pure compute otherwise → cross-target-
+// identical (no NR, no arm64 call-shape divergence), like strtoll.
+//
+// Same IN-BODY OPERATOR DISCIPLINE as strtoll: every op is a raw-payload intrinsic
+// (__hx_payload_{add,sub,mul,and,eq,ne,lt,le,ge}) in its own un-nested `let`, loads
+// are __hx_ptr_load8 (ZERO-EXTENDED — bytes ≥ 0x80 fall out of every digit range
+// and stop the scan), the endptr is __hx_ptr_store64. BYTE-FAITHFUL to the frozen
+// 0-libc floor self/runtime.c:542 (hxlcl_strtoull). Char codes as in strtoll.
+pub fn hxlcl_strtoull(nptr: HexaVal, endptr: HexaVal, base: HexaVal) -> int {
+    let p = __hx_payload_add(nptr, 0)          // const char* s = nptr (raw)
+    let pe = __hx_payload_add(endptr, 0)       // char** endptr (raw, may be NULL)
+    // NULL nptr: if (!nptr) { if (endptr) *endptr = nptr; return 0; }
+    if __hx_payload_eq(p, 0) {
+        if __hx_payload_ne(pe, 0) {
+            __hx_ptr_store64(pe, 0, p)         // *endptr = (char*)nptr (NULL)
+        }
+        return 0
+    }
+    let mut b = __hx_payload_add(base, 0)      // int base (raw)
+    let mut i = 0
+    // whitespace skip: while(*s==' '||*s=='\t'||*s=='\n') s++;
+    let mut ws = __hx_ptr_load8(p, i)
+    let mut wcont = 1
+    while __hx_payload_ne(wcont, 0) {
+        let is_sp = __hx_payload_eq(ws, 32)
+        let is_tab = __hx_payload_eq(ws, 9)
+        let is_nl = __hx_payload_eq(ws, 10)
+        let a1 = __hx_payload_add(is_sp, is_tab)
+        let a2 = __hx_payload_add(a1, is_nl)
+        if __hx_payload_ne(a2, 0) {
+            i = __hx_payload_add(i, 1)
+            ws = __hx_ptr_load8(p, i)
+        } else {
+            wcont = 0
+        }
+    }
+    // sign: if(*s=='+')s++;   (strtoull has NO '-' negate)
+    let cs = __hx_ptr_load8(p, i)
+    if __hx_payload_eq(cs, 43) {                // '+'
+        i = __hx_payload_add(i, 1)
+    }
+    // base prefix: base-0 auto-detect (0x→16, 0→8, else 10); base-16 0x-skip.
+    let i1 = __hx_payload_add(i, 1)
+    let c0 = __hx_ptr_load8(p, i)
+    let c1 = __hx_ptr_load8(p, i1)
+    let is0 = __hx_payload_eq(c0, 48)           // s[0]=='0'
+    let isx = __hx_payload_eq(c1, 120)          // s[1]=='x'
+    let isX = __hx_payload_eq(c1, 88)           // s[1]=='X'
+    let isxX = __hx_payload_add(isx, isX)       // 1 iff s[1] in {x,X} (exclusive)
+    if __hx_payload_eq(b, 0) {
+        if __hx_payload_ne(is0, 0) {
+            if __hx_payload_ne(isxX, 0) {
+                b = 16
+                i = __hx_payload_add(i, 2)
+            } else {
+                b = 8
+                i = __hx_payload_add(i, 1)
+            }
+        } else {
+            b = 10
+        }
+    } else {
+        if __hx_payload_eq(b, 16) {
+            if __hx_payload_ne(is0, 0) {
+                if __hx_payload_ne(isxX, 0) {
+                    i = __hx_payload_add(i, 2)
+                }
+            }
+        }
+    }
+    // digit accumulation: for(;;){ d=digit(c); if(none||d>=base) break;
+    //                              n = n*base + d; s++; }
+    let mut n = 0
+    let mut cont = 1
+    while __hx_payload_ne(cont, 0) {
+        let c = __hx_ptr_load8(p, i)
+        let mut isdig = 0
+        let mut d = 0
+        let ge0 = __hx_payload_ge(c, 48)        // c>='0'
+        let le9 = __hx_payload_le(c, 57)        // c<='9'
+        let is09 = __hx_payload_and(ge0, le9)
+        if __hx_payload_ne(is09, 0) {
+            isdig = 1
+            d = __hx_payload_sub(c, 48)         // c-'0'
+        } else {
+            let gea = __hx_payload_ge(c, 97)    // c>='a'
+            let lez = __hx_payload_le(c, 122)   // c<='z'
+            let isaz = __hx_payload_and(gea, lez)
+            if __hx_payload_ne(isaz, 0) {
+                isdig = 1
+                let da = __hx_payload_sub(c, 97)
+                d = __hx_payload_add(da, 10)    // c-'a'+10
+            } else {
+                let geA = __hx_payload_ge(c, 65)  // c>='A'
+                let leZ = __hx_payload_le(c, 90)  // c<='Z'
+                let isAZ = __hx_payload_and(geA, leZ)
+                if __hx_payload_ne(isAZ, 0) {
+                    isdig = 1
+                    let dA = __hx_payload_sub(c, 65)
+                    d = __hx_payload_add(dA, 10)  // c-'A'+10
+                }
+            }
+        }
+        if __hx_payload_eq(isdig, 0) {
+            cont = 0                            // non-digit → stop
+        } else {
+            if __hx_payload_ge(d, b) {
+                cont = 0                        // digit out of base → stop
+            } else {
+                let nb = __hx_payload_mul(n, b)
+                n = __hx_payload_add(nb, d)     // n = n*base + d
+                i = __hx_payload_add(i, 1)
+            }
+        }
+    }
+    // if (endptr) *endptr = (char *)s;   (s = nptr + i)
+    let endp = __hx_payload_add(p, i)
+    if __hx_payload_ne(pe, 0) {
+        __hx_ptr_store64(pe, 0, endp)
+    }
+    return n                                    // unsigned: no sign branch
+}
+
 // ── COMPOSITE FAMILY (Route C r7 · non-leaf — inner C-ABI bl to a sibling) ──
 //
 // COMPOSITE = the body is not a self-contained byte loop; it CALLS another
@@ -775,9 +1001,91 @@ pub fn hxlcl_strtoll(nptr: HexaVal, endptr: HexaVal, base: HexaVal) -> int {
 // The int truncation (`(int)hxlcl_atoll`) is implicit: the result register carries
 // the value and a C `int` caller reads only the low 32 bits.
 
-// hxlcl_atoll: raw-C-ABI long-long parse leaf — RETAINED C shim body (not self-
-// emitted this round). Declared so hxlcl_atoi's inner call binds at link.
-extern fn hxlcl_atoll(s: HexaVal) -> int
+// ── PARSE LEAF PROMOTION (Route C · atoll real leaf) ──────────────────────────
+//
+// hxlcl_atoll was the RETAINED C shim extern that hxlcl_atoi (and the libc `atoll`
+// macro) bl into. This round PROMOTES it to a real self-emitted leaf — the
+// composite extern becomes a genuine Route C leaf, so atoi's inner `bl hxlcl_atoll`
+// now binds cross-object to THIS hexa-emitted body (within routec.o) instead of the
+// harness/shim atoll. It is a strict SIMPLIFICATION of hxlcl_strtoll above: base is
+// FIXED at 10 (no base-0/16 auto-detect, no 0x prefix skip) and there is NO endptr
+// out-param (no __hx_ptr_store64) — a pure-compute byte-walk parse with no syscall,
+// no errno, no inner call, no float. Cross-target-identical (no NR / no arm64 call-
+// shape divergence), exactly the strtoll/strtoull parse-leaf class.
+//
+// Same IN-BODY OPERATOR DISCIPLINE as strtoll: every op is a raw-payload intrinsic
+// (__hx_payload_{add,sub,mul,and,eq,ne,ge,le}) in its own un-nested `let`; loads are
+// __hx_ptr_load8 (ZERO-EXTENDED — bytes ≥ 0x80 fall out of the ['0'..'9'] range and
+// stop the scan, matching the C `s[i] >= '0' && s[i] <= '9'` break); `break` is
+// avoided in the frozen-parser style (each loop stops by clearing a `cont` flag).
+//
+// BYTE-FAITHFUL to the frozen 0-libc floor body (self/runtime_emit_full.hexa:2352,
+// the #else hxlcl_atoll fallback = lenient decimal):
+//   if(!s) return 0; i=0; while(s[i]==' '||'\t'||'\n') i++;
+//   sign=1; if(s[i]=='-'){sign=-1;i++;} else if(s[i]=='+')i++;
+//   n=0; while(s[i]>='0'&&s[i]<='9'){ n=n*10+(s[i]-'0'); i++; }
+//   return (sign<0)? -n : n;
+// (the unsigned-accumulation of the C body uses signed __hx_payload_mul/_add: bit-
+// identical for any non-overflowing value — the real callers parse small ints.)
+// Under the Route C gate the param arrives raw in rdi/x0 and the result ships raw in
+// rax/x0; default (gate OFF) compiles as a HexaVal fn (byteeq-neutral).
+pub fn hxlcl_atoll(s: HexaVal) -> int {
+    let p = __hx_payload_add(s, 0)             // const char* s (raw)
+    if __hx_payload_eq(p, 0) {
+        return 0                               // if(!s) return 0
+    }
+    let mut i = 0
+    // whitespace skip: while(s[i]==' '||s[i]=='\t'||s[i]=='\n') i++;
+    let mut ws = __hx_ptr_load8(p, i)
+    let mut wcont = 1
+    while __hx_payload_ne(wcont, 0) {
+        let is_sp = __hx_payload_eq(ws, 32)
+        let is_tab = __hx_payload_eq(ws, 9)
+        let is_nl = __hx_payload_eq(ws, 10)
+        let a1 = __hx_payload_add(is_sp, is_tab)
+        let a2 = __hx_payload_add(a1, is_nl)
+        if __hx_payload_ne(a2, 0) {
+            i = __hx_payload_add(i, 1)
+            ws = __hx_ptr_load8(p, i)
+        } else {
+            wcont = 0
+        }
+    }
+    // sign: if(s[i]=='-'){neg;i++;} else if(s[i]=='+')i++;
+    let cs = __hx_ptr_load8(p, i)
+    let mut neg = 0
+    if __hx_payload_eq(cs, 45) {                // '-'
+        neg = 1
+        i = __hx_payload_add(i, 1)
+    } else {
+        if __hx_payload_eq(cs, 43) {            // '+'
+            i = __hx_payload_add(i, 1)
+        }
+    }
+    // digit accumulation (base 10): while(s[i] in ['0'..'9']) n = n*10 + (s[i]-'0');
+    let mut n = 0
+    let mut cont = 1
+    while __hx_payload_ne(cont, 0) {
+        let c = __hx_ptr_load8(p, i)
+        let ge0 = __hx_payload_ge(c, 48)        // c>='0'
+        let le9 = __hx_payload_le(c, 57)        // c<='9'
+        let is09 = __hx_payload_and(ge0, le9)
+        if __hx_payload_eq(is09, 0) {
+            cont = 0                            // non-digit → stop
+        } else {
+            let d = __hx_payload_sub(c, 48)     // c-'0'
+            let nb = __hx_payload_mul(n, 10)
+            n = __hx_payload_add(nb, d)         // n = n*10 + d
+            i = __hx_payload_add(i, 1)
+        }
+    }
+    // return (sign < 0) ? -n : n;
+    if __hx_payload_ne(neg, 0) {
+        let r = __hx_payload_sub(0, n)
+        return r
+    }
+    return n
+}
 
 // hxlcl_atoi: parse `s` as int by delegating to hxlcl_atoll. BYTE-FAITHFUL to
 // runtime_core_hxlcl_shim.c:396 (`int hxlcl_atoi(const char *s){return (int)hxlcl_atoll(s);}`).
@@ -825,6 +1133,59 @@ pub fn hxlcl_strdup(s: HexaVal) -> int {
     }
     let cap = __hx_payload_add(n, 1)          // n + 1 (incl. terminator)
     let out = hxlcl_malloc(cap)               // C-ABI bl → raw ptr
+    let mut i = 0
+    while __hx_payload_lt(i, n) {
+        let b = __hx_ptr_load8(ps, i)         // s[i]
+        __hx_ptr_store8(out, i, b)            // out[i] = s[i]
+        i = __hx_payload_add(i, 1)
+    }
+    __hx_ptr_store8(out, n, 0)                // out[n] = '\0'
+    return out
+}
+
+// ── DUP MIRROR (Route C · strndup) ────────────────────────────────────────────
+//
+// hxlcl_strndup is the EXACT mirror of the r8 strdup composite above — same inner
+// C-ABI `bl hxlcl_malloc` + strlen-scan + copy + NUL-terminate byte loops, adding
+// NO new codegen mechanism. The ONLY difference is the scan loop is CAP-BOUNDED
+// (`while(n<cap && s[n]) n++`): the `n < cap` test is a `__hx_payload_lt(n, cap)`
+// guard already used throughout, and the `&&` short-circuit is expanded into the
+// un-nested two-condition stop-flag form (the frozen-parser `cont`-flag style) so
+// no `&&` lowers to a HexaVal helper. The inner callee hxlcl_malloc is the SAME
+// `extern fn hxlcl_malloc` declared above (shared with strdup/calloc/realloc).
+//
+// BYTE-FAITHFUL to the frozen 0-libc floor self/runtime.c:481 (hxlcl_strndup):
+//   if(!s) return NULL; n=0; while(n<cap && s[n]) n++; out=hxlcl_malloc(n+1);
+//   for(i<n) out[i]=s[i]; out[n]='\0'; return out.
+// The `if(!out) return NULL` malloc-failure guard is elided as a caller-precondition
+// on this PoC path (the floor hxlcl_malloc is a never-failing bump allocator), the
+// SAME precondition strdup's Route C body uses. Under the Route C gate the two args
+// arrive raw in rdi,rsi / x0,x1, the inner `bl hxlcl_malloc` is C-ABI, and the
+// return ships the out pointer raw. Default (gate OFF) compiles as a HexaVal fn
+// (byteeq-neutral — never linked in that mode).
+pub fn hxlcl_strndup(s: HexaVal, cap: HexaVal) -> int {
+    let ps = __hx_payload_add(s, 0)           // src char* (payload word)
+    if __hx_payload_eq(ps, 0) {
+        return 0                              // NULL s → NULL (frozen `if(!s)`)
+    }
+    // cap-bounded strlen scan: while(n<cap && s[n]) n++   (un-nested && form)
+    let mut n = 0
+    let mut scont = 1
+    while __hx_payload_ne(scont, 0) {
+        let lt = __hx_payload_lt(n, cap)      // n < cap
+        if __hx_payload_eq(lt, 0) {
+            scont = 0                          // n >= cap → stop
+        } else {
+            let c = __hx_ptr_load8(ps, n)     // s[n]
+            if __hx_payload_eq(c, 0) {
+                scont = 0                      // NUL → stop
+            } else {
+                n = __hx_payload_add(n, 1)
+            }
+        }
+    }
+    let total = __hx_payload_add(n, 1)        // n + 1 (incl. terminator)
+    let out = hxlcl_malloc(total)             // C-ABI bl → raw ptr
     let mut i = 0
     while __hx_payload_lt(i, n) {
         let b = __hx_ptr_load8(ps, i)         // s[i]
@@ -1587,7 +1948,7 @@ pub fn hxlcl_time(t: HexaVal) -> int {
         // mismatches. Box it via __hx_payload_add(0,16) → HexaVal{TAG_INT,16} — the
         // exact close/strtoll `__hx_payload_sub(0, x)` shape (the __hx_payload_*
         // intrinsics accept i64 literals and return HexaVal, unlike a declared
-        // extern fn). strdup/calloc pass HexaVal the same way (cap=__hx_payload_add,
+        // extern qn). strdup/calloc pass HexaVal the same way (cap=__hx_payload_add,
         // total=__hx_payload_mul). The malloc result is `int` (raw ptr word), fed
         // straight to the raw-ptr intrinsics like strdup/calloc do.
         let szl = __hx_payload_add(0, 16)      // HexaVal-box the scratch size
@@ -2081,4 +2442,2148 @@ pub fn hxlcl_fdopen(fd: HexaVal, mode: HexaVal) -> int {
     let bad = __hx_payload_lt(fd, 0)
     if __hx_payload_ne(bad, 0) { return 0 }
     return __hx_payload_add(fd, 1)              // (mode unused — unbuffered wrapper)
+}
+
+// ── WALL 3-b — STD-STREAM FAMILY (fputs/fputc/fflush · std-fd dissolve) ──────
+//
+// The frozen 0-libc floor keeps THREE stdio helpers on the libc-global path that
+// the CORE FILE* family (Wall 3-a) explicitly carved out: hxlcl_fputs / hxlcl_fputc
+// / hxlcl_fflush. Their real callers in the runtime (self/runtime_emit_full.hexa:
+// 6132 `fputs(prompt, stdout)` · 11788 `fputs(line, stderr)` · 11790 `fputc('\n',
+// stderr)` · the `fflush(NULL)`/`fflush(stdout)` sites) pass the LIBC GLOBALS
+// stdout/stderr — NOT the fd+1 fake FILE* of the CORE family — so the frozen body
+// detects the target fd by the pointer-compare `if (fp == (void*)stderr) fd = 2;`
+// (default fd=1), self/runtime_emit_full.hexa:1014-1027. That extern-global
+// pointer-compare is what kept these on the shim: a Route C body could not read the
+// ADDRESS of the libc `stderr`/`stdout` globals.
+//
+// The ONE new substrate piece (the named-data sibling of __hx_environ_ptr / #4098)
+// is `__hx_stderr_ptr()` — a 0-arg intrinsic loading `&stderr` (FILE**) through the
+// GOT (x86_64-linux glibc `stderr@GOTPCREL`; darwin `__stderrp@GOTPAGE`, the
+// `#define stderr __stderrp` macro target). ONE __hx_ptr_load64 deref yields the
+// `stderr` FILE* value itself, so `__hx_payload_eq(fp, stderrval)` replicates the
+// frozen `fp == (void*)stderr` BYTE-FAITHFULLY — no behavioural deviation, the
+// `fputs(line, stderr)` site still routes to fd 2. (A companion __hx_stdout_ptr is
+// whitelisted for symmetry but the faithful body needs only the stderr compare, to
+// match the frozen single `if(fp==stderr)`.) Once fd is known these compose the
+// already-dissolved Route C `bl hxlcl_write` syscall leaf (Wall 1) + a strlen scan.
+//
+// fprintf is the DEFERRED sibling (NOT in this wall): its frozen body
+// (self/runtime_emit_full.hexa:1006 `hxlcl_fprintf(void*,const char*,...)`) takes a
+// C `va_list ap` and forwards it to hxlcl_vfprintf_fd — hexa has NO va_list type,
+// no va_start/va_copy/va_end intrinsics, and no variadic-arg forwarding across the
+// C-ABI boundary, so it is a genuine architectural varargs-ABI wall (a whole new
+// ABI, not realistic this round). fprintf stays the retained shim; std-stream is
+// the fputs/fputc/fflush GO subset the census green-lit.
+//
+// IN-BODY OPERATOR DISCIPLINE (the #4042 rule) + un-nested lets throughout, same as
+// the CORE FILE* family above: every test is a raw-payload leaf intrinsic, never a
+// bare op (which would lower to the PAIR-MODEL HexaVal helpers undefined in the raw
+// C-ABI link); the inner `bl hxlcl_write` lowers single-register C-ABI on the
+// whitelisted callee name.
+
+// hxlcl_write: raw-C-ABI write(2) syscall leaf — the Wall 1 dissolved body (defined
+// above at the ERRNO-BEARING batch C). Declared so the std-stream bodies' inner
+// `bl hxlcl_write` binds C-ABI; it is the SAME symbol, not re-emitted here.
+//
+// (No `extern fn` needed — hxlcl_write is a `pub fn` already in this file; the inner
+// call resolves intra-object.)
+
+// hxlcl_fputs: write the NUL-terminated string `s` to the stream `fp`, returning the
+// byte count (>=0) or -1. BYTE-FAITHFUL to self/runtime_emit_full.hexa:1014-1019:
+//   int fd = 1; if (fp == (void *)stderr) fd = 2;
+//   if (!s) return -1; size_t n=0; while(s[n]) n++; return (int)hxlcl_write(fd,s,n);
+// The std-stream detection is the frozen single `if(fp==stderr)`: default fd=1
+// (stdout AND any other handle), fd=2 only when fp matches the libc stderr global —
+// read via __hx_stderr_ptr()+__hx_ptr_load64 (the GOT named-data deref) so the
+// compare is value-exact against the live `stderr` FILE*.
+pub fn hxlcl_fputs(s: HexaVal, fp: HexaVal) -> int {
+    let ps = __hx_payload_add(s, 0)               // const char* s (payload word)
+    let pfp = __hx_payload_add(fp, 0)             // void* fp (payload word)
+    let snull = __hx_payload_eq(ps, 0)
+    if __hx_payload_ne(snull, 0) {
+        return __hx_payload_sub(0, 1)             // !s → -1
+    }
+    // fd = 1; if (fp == stderr) fd = 2;
+    let mut fd = 1
+    let perr = __hx_stderr_ptr()                  // &stderr (FILE**)
+    let errval = __hx_ptr_load64(perr, 0)         // *(&stderr) == the stderr FILE*
+    let iserr = __hx_payload_eq(pfp, errval)
+    if __hx_payload_ne(iserr, 0) {
+        fd = 2
+    }
+    // n = strlen(s)
+    let mut n = 0
+    let mut c = __hx_ptr_load8(ps, 0)             // s[0]
+    while __hx_payload_ne(c, 0) {
+        n = __hx_payload_add(n, 1)
+        c = __hx_ptr_load8(ps, n)                 // s[n]
+    }
+    return hxlcl_write(fd, ps, n)                 // C-ABI bl → bytes written
+}
+
+// hxlcl_fputc: write the single byte `c` to the stream `fp`, returning `c` on
+// success or -1. BYTE-FAITHFUL to self/runtime_emit_full.hexa:1020-1024:
+//   int fd = 1; if (fp == (void *)stderr) fd = 2;
+//   unsigned char ch = (unsigned char)c; return hxlcl_write(fd,&ch,1)==1 ? c : -1;
+// Same stderr detection as fputs. The frozen `unsigned char ch` stack scratch is a
+// 1-byte HEAP scratch here (hxlcl_malloc(1) — no in-body stack-alloc intrinsic on
+// this campaign, the batch-H scratch-buffer precedent); the low byte of `c` is
+// stored and written. (Leaks 1 byte/call on the default-OFF HEXA_CABI_HXLCL=1
+// research path — never shipped; flagged, like the batch-H poll caveat.)
+pub fn hxlcl_fputc(c: HexaVal, fp: HexaVal) -> int {
+    let pfp = __hx_payload_add(fp, 0)             // void* fp (payload word)
+    // fd = 1; if (fp == stderr) fd = 2;
+    let mut fd = 1
+    let perr = __hx_stderr_ptr()                  // &stderr (FILE**)
+    let errval = __hx_ptr_load64(perr, 0)         // *(&stderr) == the stderr FILE*
+    let iserr = __hx_payload_eq(pfp, errval)
+    if __hx_payload_ne(iserr, 0) {
+        fd = 2
+    }
+    // ch = (unsigned char)c; write(fd, &ch, 1)
+    let lowc = __hx_payload_and(c, 255)           // (unsigned char)c
+    let one = __hx_payload_add(0, 1)              // HexaVal-box the literal 1 (#4082)
+    let scratch = hxlcl_malloc(one)               // 1-byte heap scratch
+    __hx_ptr_store8(scratch, 0, lowc)             // ch
+    let w = hxlcl_write(fd, scratch, one)         // C-ABI bl → bytes written
+    if __hx_payload_eq(w, 1) {
+        return __hx_payload_add(c, 0)             // success → c (the ORIGINAL int, byte-faithful to the frozen `return c`)
+    }
+    return __hx_payload_sub(0, 1)                 // write failed → -1
+}
+
+// hxlcl_fflush: flush the stream `fp`. BYTE-FAITHFUL to
+// self/runtime_emit_full.hexa:1025-1028 (`int hxlcl_fflush(void *fp){ (void)fp;
+// return 0; }`) — the floor is UNBUFFERED (every write is a direct syscall, no
+// stdio buffer), so flush is a definitional no-op returning success. No fd
+// detection, no syscall, no new intrinsic — the trivial GO leaf of this wall.
+pub fn hxlcl_fflush(fp: HexaVal) -> int {
+    let _pfp = __hx_payload_add(fp, 0)            // (void)fp
+    return 0
+}
+
+// ── WALL 3-c — POPEN FAMILY (pipe+fork+execve / close+waitpid · the LAST
+//                             frozen-floor static-array dependency) ──────────
+//
+// hxlcl_popen/hxlcl_pclose replicate libc popen/pclose with NO libc popen call.
+// popen("cmd","r") = pipe() + fork(); child dup2's the pipe write end onto fd 1 and
+// execve("/bin/sh","-c",cmd); parent stores (read_fd, child_pid) in a file-local
+// fd→pid table and returns the CORE-family `(fd+1)` fake FILE* (so hxlcl_fread reads
+// the child's stdout). pclose(fp) decodes fd = fp-1, looks the pid up in the table,
+// close()'s the fd and waitpid()'s the child → exit status. This is the EXACT frozen
+// floor body (self/runtime_emit_full.hexa:3051-3091), reference-matched, composed
+// purely over the ALREADY-dissolved Route C leaves — pipe (#4076), fork (#4087),
+// dup2/close/execve/waitpid (Route C syscall family), malloc, fdopen (Wall 3-a).
+//
+// THE ONE NEW SUBSTRATE — file-local STATIC MUTABLE state. The frozen floor keeps the
+// fd→pid map in three `static` C arrays (`_hxlcl_popen_fds[64]`, `_hxlcl_popen_pids[64]`,
+// `_hxlcl_popen_init_done`). hxlcl_core.hexa has ZERO static-decl syntax and bind.hexa
+// no static-alloc intrinsic, so this is the campaign's last frozen-safe lever:
+// __hx_static_slot(slot_id, size_bytes) — a 0-source-keyword codegen intrinsic that
+// DEFINES a self-static, zero-initialized .data buffer (`.zero N` via the system
+// assembler under Route C) and returns its address. We use ONE 1024-byte slot of 64
+// 16-byte entries: entry i = [fd_plus_1 : u64 @ +0][pid : u64 @ +8]. BSS is zero-init,
+// so we encode "empty" as fd_plus_1==0 (store fd+1, never -1) — this DISSOLVES the
+// frozen `_hxlcl_popen_init()` -1-fill entirely (no init pass needed). slot_id=900.
+//
+// IN-BODY OPERATOR DISCIPLINE (the #4042/#4082 rule): every test/arith is a raw-payload
+// intrinsic (__hx_payload_{eq,ne,lt,add,sub,mul}), never a bare `==`/`<`/`-`; every raw
+// integer literal crossing a HexaVal-param boundary is boxed via __hx_payload_add(0,N).
+// Each intrinsic result lands in its own un-nested `let` (scratch-clobber safety).
+//
+// _is_cabi has hxlcl_popen/hxlcl_pclose (Wall 3-c). default-OFF byteeq-neutral
+// (HEXA_CABI_HXLCL unset → empty whitelist → PAIR-MODEL emit byte-identical; the new
+// __hx_static_slot only emits when a whitelisted body addresses it).
+
+// Remember (read_fd, child_pid) in the next empty slot (fd_plus_1==0). No-op if full.
+pub fn hxlcl_popen_remember(fd: HexaVal, pid: HexaVal) -> int {
+    let tbl = __hx_static_slot(900, 1024)         // 64 × 16-byte entries, zero-init
+    let fdp1 = __hx_payload_add(fd, 1)            // store fd+1 (0 = empty sentinel)
+    let mut i = 0
+    let cap = __hx_payload_add(0, 64)             // box literal 64 (#4082)
+    while __hx_payload_lt(i, cap) {
+        let off = __hx_payload_mul(i, 16)         // entry i base
+        let cur = __hx_ptr_load64(tbl, off)       // current fd_plus_1
+        if __hx_payload_eq(cur, 0) {              // empty slot
+            __hx_ptr_store64(tbl, off, fdp1)      // entry.fd_plus_1 = fd+1
+            let poff = __hx_payload_add(off, 8)   // entry.pid offset
+            __hx_ptr_store64(tbl, poff, pid)      // entry.pid = pid
+            return 0
+        }
+        i = __hx_payload_add(i, 1)
+    }
+    return -1                                      // table full
+}
+
+// Find+clear the entry for `fd`, return its pid (or -1 if not found).
+pub fn hxlcl_popen_forget(fd: HexaVal) -> int {
+    let tbl = __hx_static_slot(900, 1024)
+    let fdp1 = __hx_payload_add(fd, 1)            // match on fd+1
+    let mut i = 0
+    let cap = __hx_payload_add(0, 64)
+    while __hx_payload_lt(i, cap) {
+        let off = __hx_payload_mul(i, 16)
+        let cur = __hx_ptr_load64(tbl, off)
+        if __hx_payload_eq(cur, fdp1) {           // match
+            let poff = __hx_payload_add(off, 8)
+            let pid = __hx_ptr_load64(tbl, poff)  // saved pid
+            __hx_ptr_store64(tbl, off, 0)         // clear fd_plus_1 (mark empty)
+            __hx_ptr_store64(tbl, poff, 0)        // clear pid
+            return pid
+        }
+        i = __hx_payload_add(i, 1)
+    }
+    return -1
+}
+
+// hxlcl_popen(cmd, mode) — "r"-mode only (the only mode hexa_exec uses).
+// Returns the CORE-family fake FILE* `(read_fd + 1)`, or 0 on failure.
+pub fn hxlcl_popen(cmd: HexaVal, mode: HexaVal) -> int {
+    let pcmd = __hx_payload_add(cmd, 0)           // char* cmd (payload word)
+    if __hx_payload_eq(pcmd, 0) {
+        return 0                                   // NULL cmd
+    }
+    let pmode = __hx_payload_add(mode, 0)         // char* mode
+    if __hx_payload_eq(pmode, 0) {
+        return 0
+    }
+    let m0 = __hx_ptr_load8(pmode, 0)             // mode[0]
+    if __hx_payload_ne(m0, 114) {                 // 'r' == 114; only "r" supported
+        return 0
+    }
+    // int pfd[2]; if (pipe(pfd) != 0) return 0;
+    let two = __hx_payload_add(0, 2)
+    let pfdsz = __hx_payload_mul(two, 4)          // 2 * sizeof(int)=8 bytes
+    let pfd = hxlcl_malloc(pfdsz)
+    let pr = hxlcl_pipe(pfd)
+    if __hx_payload_ne(pr, 0) {
+        return 0
+    }
+    let rfd = __hx_ptr_load32(pfd, 0)             // pfd[0] (read end)
+    let wfd = __hx_ptr_load32(pfd, 4)             // pfd[1] (write end)
+    let pid = hxlcl_fork()
+    let isneg = __hx_payload_lt(pid, 0)
+    if __hx_payload_ne(isneg, 0) {
+        let _c0 = hxlcl_close(rfd)
+        let _c1 = hxlcl_close(wfd)
+        return 0
+    }
+    let ischild = __hx_payload_eq(pid, 0)
+    if __hx_payload_ne(ischild, 0) {
+        // child: dup2(wfd, 1); close both pipe fds; execve("/bin/sh","-c",cmd)
+        let one = __hx_payload_add(0, 1)
+        let _d = hxlcl_dup2(wfd, one)             // stdout = pipe write end
+        let _cr = hxlcl_close(rfd)
+        let _cw = hxlcl_close(wfd)
+        // build argv = ["/bin/sh", "-c", cmd, NULL] as a char**[4]
+        let four = __hx_payload_add(0, 4)
+        let avsz = __hx_payload_mul(four, 8)      // 4 pointer slots
+        let argv = hxlcl_malloc(avsz)
+        let psh = __hx_payload_add("/bin/sh", 0)  // char* "/bin/sh"
+        let pdc = __hx_payload_add("-c", 0)       // char* "-c"
+        __hx_ptr_store64(argv, 0, psh)            // argv[0]
+        __hx_ptr_store64(argv, 8, pdc)            // argv[1]
+        __hx_ptr_store64(argv, 16, pcmd)          // argv[2] = cmd
+        __hx_ptr_store64(argv, 24, 0)             // argv[3] = NULL
+        let psh2 = __hx_payload_add("/bin/sh", 0) // path
+        let _e = hxlcl_execve(psh2, argv, __hx_payload_add(0, 0))      // envp=NULL (HexaVal-boxed)
+        // execve only returns on failure → terminate the child via exit syscall.
+        // close everything we can and fall through to the parent-style cleanup is
+        // unsafe (child must not return into the caller); issue exit(127) directly.
+        let exnr = hxlcl_child_exit_nr()
+        let onetwoseven = __hx_payload_add(0, 127)
+        __hx_syscall6(exnr, onetwoseven, 0, 0, 0, 0, 0)  // _exit(127)
+        return 0                                   // unreachable
+    }
+    // parent: close write end; remember (rfd, pid); return fdopen(rfd,"r")
+    let _cw2 = hxlcl_close(wfd)
+    let _rm = hxlcl_popen_remember(rfd, pid)
+    return hxlcl_fdopen(rfd, mode)               // (rfd + 1) fake FILE*
+}
+
+// Per-target _exit syscall number (no errno path — the process is dying).
+// Linux x86_64 __NR_exit=60 / arm64 __NR_exit=93 / darwin SYS_exit=1.
+pub fn hxlcl_child_exit_nr() -> int {
+    if target_is_linux() {
+        if target_is_x86_64() { return 60 }
+        return 93
+    }
+    return 1
+}
+
+// hxlcl_pclose(stream) — decode fd, waitpid the child, return status.
+pub fn hxlcl_pclose(stream: HexaVal) -> int {
+    let pstream = __hx_payload_add(stream, 0)     // the (fd+1) fake FILE* payload
+    if __hx_payload_eq(pstream, 0) {
+        return -1                                  // NULL stream
+    }
+    let fd = __hx_payload_sub(pstream, 1)         // fd = stream - 1
+    let badfd = __hx_payload_lt(fd, 0)
+    if __hx_payload_ne(badfd, 0) {
+        return -1
+    }
+    let pid = hxlcl_popen_forget(fd)              // child pid (or -1)
+    let _c = hxlcl_close(fd)
+    let nopid = __hx_payload_lt(pid, 1)           // pid <= 0 → no child
+    if __hx_payload_ne(nopid, 0) {
+        return -1
+    }
+    // int status=0; waitpid(pid, &status, 0); return status;
+    let four = __hx_payload_add(0, 4)
+    let stbuf = hxlcl_malloc(four)                // 4-byte int status slot
+    __hx_ptr_store32(stbuf, 0, 0)                 // status = 0
+    let _w = hxlcl_waitpid(pid, stbuf, __hx_payload_add(0, 0))   // options=0 (HexaVal-boxed)
+    let status = __hx_ptr_load32(stbuf, 0)        // raw wait status (frozen returns it)
+    return status
+}
+
+// ── EXEC FAMILY TAIL (Route C · hxlcl_execvp — native PATH-search over execve) ──
+//
+// hxlcl_execvp is the exec family's LAST composite leaf: a $PATH search wrapping the
+// already-dissolved hxlcl_execve (#4222 batch I). If `file` contains a '/', exec it
+// directly; otherwise fetch $PATH (hxlcl_getenv, Wall 2-b #4243), split it on ':',
+// and try execve("<dir>/<file>", argv, environ) for each dir until one succeeds
+// (execve replaces the image, so it returns ONLY on failure → try the next dir).
+//
+// PURE COMPOSITION over already-whitelisted leaves — NO new intrinsic, NO new
+// provider:
+//   • hxlcl_getenv("PATH")  — Wall 2-b env lookup (#4243). environ-backed.
+//   • hxlcl_strlen(file)    — file length for the path-join (#4214 strlen leaf).
+//   • hxlcl_malloc(1024)    — the candidate-path HEAP scratch REPLACING the frozen
+//                             `char buf[1024]` STACK local. This campaign has no in-
+//                             body stack-alloc intrinsic, so (exactly like popen's
+//                             argv[] / fputc's 1-byte ch / pipe's fds scratch) the
+//                             buffer is a heap malloc. It leaks 1024B per FAILED
+//                             execvp call (on the bump arena); on the SUCCESS path the
+//                             image is replaced so nothing leaks — execvp is never
+//                             hot-looped (a one-shot just before image replacement),
+//                             the same heap-scratch caveat the batch-H/pipe legs note.
+//   • __hx_environ_ptr()    — &environ (the getenv #4243 precedent); ONE __hx_ptr_load64
+//                             dereference yields `environ` (the char** base) to pass as
+//                             execve's envp (the frozen body passes `environ`).
+//   • hxlcl_execve(...)     — batch I syscall leaf (#4222); inner `bl` keyed by name.
+//
+// The '/'-scan and the dir-by-dir path-join are raw __hx_ptr_load8/store8 byte loops
+// (the strchr/strstr/strcpy class), avoiding re-pulling strchr/memcpy/strcpy externs —
+// exactly the frozen body's "byte-loop path-join avoids strcpy/memcpy/strchr" comment.
+//
+// IN-BODY OPERATOR DISCIPLINE (same as the syscall/FILE* family): every test/arith is
+// a raw-payload leaf intrinsic (__hx_payload_{lt,le,ge,eq,ne,add,sub}), NEVER a bare
+// `<`/`-`/`*` (which lower to the PAIR-MODEL HexaVal helpers undefined in the raw
+// C-ABI link), each writing exactly one un-nested `let`. Inner calls lower as
+// single-register `bl` (the call boundary keys on the whitelisted callee name).
+//
+// BYTE-FAITHFUL to the frozen 0-libc floor body self/runtime_emit_full.hexa:2963-2986:
+//   has_slash scan; if has_slash return execve(file,argv,environ);
+//   path=getenv("PATH"); if(!path||!*path) path="/usr/bin:/bin:/usr/local/bin";
+//   flen=strlen(file); char buf[1024]; for each ':'-delimited dir (dlen):
+//     if(dlen+1+flen+1<=1024){ copy dir; buf[k++]='/'; copy file incl NUL;
+//                              execve(buf,argv,environ); }   // returns only on failure
+//   return -1;
+// Reference-matched to musl src/process/execvp.c __execvpe (the same has-slash→direct
+// / else $PATH-split-and-try structure; musl's ENOENT/EACCES bookkeeping is simplified
+// to "try next on any failure" exactly as the frozen floor body does). default PATH
+// differs cosmetically from musl ("/usr/local/bin:/bin:/usr/bin") — we mirror the
+// FROZEN floor default ("/usr/bin:/bin:/usr/local/bin"), the body the shim drops.
+// ':' == 58, '/' == 47. Cross-target-identical (execve carries the per-target NR).
+pub fn hxlcl_execvp(file: HexaVal, argv: HexaVal) -> int {
+    let pfile = __hx_payload_add(file, 0)         // char* file (payload word)
+    // environ (char** base) — execve's envp, the frozen body passes `environ`.
+    let envpp = __hx_environ_ptr()                // &environ (char***)
+    let environ_base = __hx_ptr_load64(envpp, 0)  // environ (char** array base)
+    // has_slash: scan file for '/'.
+    let mut has_slash = 0
+    let mut qi = 0
+    let mut qc = __hx_ptr_load8(pfile, 0)         // file[0]
+    while __hx_payload_ne(qc, 0) {                // *q
+        let isslash = __hx_payload_eq(qc, 47)     // '/' == 47
+        if __hx_payload_ne(isslash, 0) {
+            has_slash = 1
+            qc = 0                                 // break: stop the scan
+        } else {
+            qi = __hx_payload_add(qi, 1)
+            qc = __hx_ptr_load8(pfile, qi)         // file[qi]
+        }
+    }
+    if __hx_payload_ne(has_slash, 0) {
+        return hxlcl_execve(pfile, argv, environ_base)   // direct exec
+    }
+    // path = getenv("PATH"); if(!path||!*path) path = "/usr/bin:/bin:/usr/local/bin";
+    let penv = __hx_payload_add("PATH", 0)        // char* "PATH"
+    let mut path = hxlcl_getenv(penv)             // char* PATH value (or 0)
+    let nullpath = __hx_payload_eq(path, 0)
+    if __hx_payload_ne(nullpath, 0) {
+        path = __hx_payload_add("/usr/bin:/bin:/usr/local/bin", 0)
+    } else {
+        let p0 = __hx_ptr_load8(path, 0)          // *path
+        let emptypath = __hx_payload_eq(p0, 0)
+        if __hx_payload_ne(emptypath, 0) {
+            path = __hx_payload_add("/usr/bin:/bin:/usr/local/bin", 0)
+        }
+    }
+    let flen = hxlcl_strlen(file)                 // size_t strlen(file)
+    let bufsz = __hx_payload_add(0, 1024)
+    let buf = hxlcl_malloc(bufsz)                 // char buf[1024] (heap scratch)
+    let mut p = __hx_payload_add(path, 0)         // const char* p = path
+    let mut pc = __hx_ptr_load8(p, 0)             // *p
+    while __hx_payload_ne(pc, 0) {                // while(*p)
+        // dlen = length of this dir segment (up to ':' or NUL).
+        let mut dlen = 0
+        let mut dc = __hx_ptr_load8(p, 0)         // p[0]
+        let mut scan = 1
+        while __hx_payload_ne(scan, 0) {
+            let atend = __hx_payload_eq(dc, 0)    // p[dlen]==0
+            let atcolon = __hx_payload_eq(dc, 58) // p[dlen]==':' (58)
+            let stop = __hx_payload_add(atend, atcolon)
+            if __hx_payload_ne(stop, 0) {
+                scan = 0
+            } else {
+                dlen = __hx_payload_add(dlen, 1)
+                dc = __hx_ptr_load8(p, dlen)      // p[dlen]
+            }
+        }
+        // if (dlen + 1 + flen + 1 <= 1024) { join + execve }
+        let need0 = __hx_payload_add(dlen, 1)     // dlen + 1 ('/')
+        let need1 = __hx_payload_add(need0, flen) // + flen
+        let need = __hx_payload_add(need1, 1)     // + 1 (NUL)
+        let fits = __hx_payload_le(need, 1024)
+        if __hx_payload_ne(fits, 0) {
+            // copy dir bytes: for(i=0;i<dlen;i++) buf[k++]=p[i];
+            let mut k = 0
+            let mut i = 0
+            while __hx_payload_lt(i, dlen) {
+                let db = __hx_ptr_load8(p, i)     // p[i]
+                __hx_ptr_store8(buf, k, db)       // buf[k]=p[i]
+                k = __hx_payload_add(k, 1)
+                i = __hx_payload_add(i, 1)
+            }
+            __hx_ptr_store8(buf, k, 47)           // buf[k++]='/'
+            k = __hx_payload_add(k, 1)
+            // copy file incl NUL: for(i=0;i<=flen;i++) buf[k++]=file[i];
+            let mut j = 0
+            let jmax = __hx_payload_add(flen, 1)  // <= flen → < flen+1
+            while __hx_payload_lt(j, jmax) {
+                let fb = __hx_ptr_load8(pfile, j) // file[j]
+                __hx_ptr_store8(buf, k, fb)       // buf[k]=file[j]
+                k = __hx_payload_add(k, 1)
+                j = __hx_payload_add(j, 1)
+            }
+            let _e = hxlcl_execve(buf, argv, environ_base)   // returns only on failure
+        }
+        // p += dlen; if (*p == ':') p++;
+        p = __hx_payload_add(p, dlen)
+        let sep = __hx_ptr_load8(p, 0)            // *p
+        let iscolon = __hx_payload_eq(sep, 58)    // ':' == 58
+        if __hx_payload_ne(iscolon, 0) {
+            p = __hx_payload_add(p, 1)
+        }
+        pc = __hx_ptr_load8(p, 0)                 // *p (loop guard)
+    }
+    return -1                                      // no dir worked
+}
+
+// ── CTYPE FAMILY (Route C · isalnum/isalpha — pure register-only ASCII class) ──
+//
+// hxlcl_isalnum/hxlcl_isalpha are the FIRST register-only pure-compute Route C
+// leaves: the arg is an `int c` VALUE (not a pointer), so the body does ZERO memory
+// access (no __hx_ptr_load8) — only raw-payload range comparisons — and returns the
+// classification 0/1 in the single C-ABI result register. No syscall, no errno, no
+// inner call, no float; cross-target-identical (no NR / no arm64 call-shape
+// divergence). The ranges are MUTUALLY EXCLUSIVE so the OR is a faithful add of the
+// at-most-one set range flag (`(a)+(b)+(c)` is 0 or 1, never wraps).
+//
+// Same IN-BODY OPERATOR DISCIPLINE as the parse leaves: every test is a raw-payload
+// intrinsic (__hx_payload_{add,ge,le,and,ne}) in its own un-nested `let`, never a
+// bare op (which lowers to the PAIR-MODEL HexaVal helpers undefined in the raw C-ABI
+// link). BYTE-FAITHFUL to the frozen 0-libc floor rt_isalnum/rt_isalpha bodies
+// (self/runtime_emit_full.hexa:2265-2278, the #elif !HEXA_HAS_HEXA_RT_STDLIB
+// fallback): '0'=48 '9'=57 'A'=65 'Z'=90 'a'=97 'z'=122.
+
+// hxlcl_isalnum: 1 iff c is an ASCII letter or digit, else 0. Under the Route C gate
+// the arg arrives raw in rdi/x0 and the result ships raw in rax/x0; default (gate
+// OFF) compiles as a HexaVal fn (byteeq-neutral).
+pub fn hxlcl_isalnum(c: HexaVal) -> int {
+    let v = __hx_payload_add(c, 0)             // int c (raw value)
+    let ge0 = __hx_payload_ge(v, 48)           // c>='0'
+    let le9 = __hx_payload_le(v, 57)           // c<='9'
+    let dig = __hx_payload_and(ge0, le9)
+    let geA = __hx_payload_ge(v, 65)           // c>='A'
+    let leZ = __hx_payload_le(v, 90)           // c<='Z'
+    let upper = __hx_payload_and(geA, leZ)
+    let gea = __hx_payload_ge(v, 97)           // c>='a'
+    let lez = __hx_payload_le(v, 122)          // c<='z'
+    let lower = __hx_payload_and(gea, lez)
+    let s1 = __hx_payload_add(dig, upper)
+    let s2 = __hx_payload_add(s1, lower)       // at most one range matches → 0/1
+    if __hx_payload_ne(s2, 0) {
+        return 1
+    }
+    return 0
+}
+
+// hxlcl_isalpha: 1 iff c is an ASCII letter, else 0. (isalnum minus the digit range.)
+pub fn hxlcl_isalpha(c: HexaVal) -> int {
+    let v = __hx_payload_add(c, 0)             // int c (raw value)
+    let geA = __hx_payload_ge(v, 65)           // c>='A'
+    let leZ = __hx_payload_le(v, 90)           // c<='Z'
+    let upper = __hx_payload_and(geA, leZ)
+    let gea = __hx_payload_ge(v, 97)           // c>='a'
+    let lez = __hx_payload_le(v, 122)          // c<='z'
+    let lower = __hx_payload_and(gea, lez)
+    let s2 = __hx_payload_add(upper, lower)    // at most one range matches → 0/1
+    if __hx_payload_ne(s2, 0) {
+        return 1
+    }
+    return 0
+}
+
+// ── ALLOC RESIDUE (Route C · free — no-op leaf) ───────────────────────────────
+//
+// hxlcl_free is the frozen 0-libc floor's NO-OP free: the floor allocator is a bump
+// arena (hxlcl_malloc never reclaims), so the floor body is literally `(void)p;`
+// (self/runtime_core_hxlcl_shim.c:104 under HEXA_ZEROC_SHIM_BYTEID_EMIT — `void
+// hxlcl_free(void *p){ (void)p; }`). Self-emitting it removes one more shim
+// dependency from the Route C link with ZERO new mechanism: it touches the raw `p`
+// payload (the `(void)p`) and returns — no syscall, no inner call, no memory access.
+// (The sibling hxlcl_malloc stays the RETAINED extern — it routes to libc malloc /
+// the live arena, which is genuinely arena-coupled and NOT a pure-compute leaf.)
+//
+// C declares `void hxlcl_free(void*)`; modelling it `-> int` returning the raw
+// pointer word is harmless — every caller ignores the void return register.
+// BYTE-FAITHFUL to the no-op floor body. Default (gate OFF) compiles as a HexaVal fn
+// (byteeq-neutral — never linked in that mode).
+pub fn hxlcl_free(p: HexaVal) -> int {
+    let pp = __hx_payload_add(p, 0)            // (void)p — touch the arg, reclaim nothing
+    return pp
+}
+
+// ── PURE-COMPUTE MIRROR batch 4 (Route C · parse leaf + no-op leaves) ──────────
+//
+// Three byte-faithful mirrors of the frozen 0-libc floor that need ZERO new codegen
+// mechanism — each composes only the already-proven raw-payload intrinsics
+// (__hx_payload_{add,sub,mul,div,and,eq,ne,ge,le,gt}) + __hx_ptr_{load8,store8}
+// (the byte-scan + caller-write classes proven by strchr / strncpy). No syscall,
+// no float, no inner call, no varargs → cross-target-identical bodies. Default
+// (gate OFF) compiles as ordinary HexaVal fns (byteeq-neutral — never linked).
+
+// hxlcl_inet_pton: parse a dotted-quad IPv4 string `src` into the 4-byte caller
+// buffer `dst`; return 1 on success, 0 on malformed input (dst UNMODIFIED), -1 if
+// `af` is not AF_INET (==2 on Linux AND Darwin). BYTE-FAITHFUL to the frozen 0-libc
+// floor body (self/runtime_emit_full.hexa:2905-2929). The frozen C buffers the four
+// octets in a `unsigned char b[4]` local and writes dst only after full validation
+// (so a malformed input leaves dst untouched). With NO __hx_stack_alloc intrinsic
+// in this campaign, the b[4] local is restructured into a single i64 `packed`
+// accumulator (`packed = packed*256 + octet`, big-endian) — pure register
+// arithmetic, no scratch buffer, no malloc — and the four bytes are extracted
+// (div/and) and stored to dst ONLY on the success path: byte-for-byte the same
+// observable contract (validate-all-then-write), just register-resident.
+//   '0'=48 '9'=57 '.'=46  NUL=0.
+pub fn hxlcl_inet_pton(af: HexaVal, src: HexaVal, dst: HexaVal) -> int {
+    let afv = __hx_payload_add(af, 0)          // int af (raw value)
+    if __hx_payload_ne(afv, 2) {               // af != AF_INET → -1
+        return -1
+    }
+    let ps = __hx_payload_add(src, 0)          // const char *src
+    let pd = __hx_payload_add(dst, 0)          // unsigned char *dst
+    let mut i = 0                              // index into src
+    let mut oct = 0                            // octets committed so far
+    let mut cur = 0                            // current octet accumulator
+    let mut hasdig = 0                         // 1 iff current octet saw ≥1 digit
+    let mut packed = 0                         // committed octets, big-endian pack
+    let mut ok = 1                             // 0 → malformed, will return 0
+    let mut done = 0                           // 1 → stop scanning (NUL or error)
+    while __hx_payload_eq(done, 0) {
+        let c = __hx_ptr_load8(ps, i)          // (unsigned char)src[i]
+        i = __hx_payload_add(i, 1)
+        let dlo = __hx_payload_ge(c, 48)       // c >= '0'
+        let dhi = __hx_payload_le(c, 57)       // c <= '9'
+        let isdig = __hx_payload_and(dlo, dhi)
+        if __hx_payload_ne(isdig, 0) {
+            let d = __hx_payload_sub(c, 48)    // c - '0'
+            let m = __hx_payload_mul(cur, 10)
+            cur = __hx_payload_add(m, d)       // cur = cur*10 + (c-'0')
+            hasdig = 1
+            let over = __hx_payload_gt(cur, 255)
+            if __hx_payload_ne(over, 0) {      // octet > 255 → malformed
+                ok = 0
+                done = 1
+            }
+        } else {
+            let isdot = __hx_payload_eq(c, 46) // '.'
+            let isnul = __hx_payload_eq(c, 0)  // '\0'
+            let term = __hx_payload_add(isdot, isnul)  // 1 iff '.' or NUL (disjoint)
+            if __hx_payload_ne(term, 0) {
+                let nodig = __hx_payload_eq(hasdig, 0) // empty octet
+                let toomany = __hx_payload_ge(oct, 4)  // already 4 octets
+                let bad = __hx_payload_add(nodig, toomany)
+                if __hx_payload_ne(bad, 0) {
+                    ok = 0
+                    done = 1
+                } else {
+                    let p8 = __hx_payload_mul(packed, 256)
+                    packed = __hx_payload_add(p8, cur)  // commit octet (big-endian)
+                    oct = __hx_payload_add(oct, 1)
+                    cur = 0
+                    hasdig = 0
+                    if __hx_payload_ne(isnul, 0) {
+                        done = 1               // end of string
+                    }
+                }
+            } else {
+                ok = 0                         // stray non-digit, non-'.' char
+                done = 1
+            }
+        }
+    }
+    if __hx_payload_eq(ok, 0) {
+        return 0
+    }
+    if __hx_payload_ne(oct, 4) {              // need EXACTLY four octets
+        return 0
+    }
+    // Success: extract the four big-endian octets and write the caller buffer.
+    let q3 = __hx_payload_div(packed, 16777216)
+    let b0 = __hx_payload_and(q3, 255)         // first octet
+    let q2 = __hx_payload_div(packed, 65536)
+    let b1 = __hx_payload_and(q2, 255)
+    let q1 = __hx_payload_div(packed, 256)
+    let b2 = __hx_payload_and(q1, 255)
+    let b3 = __hx_payload_and(packed, 255)     // last octet
+    __hx_ptr_store8(pd, 0, b0)
+    __hx_ptr_store8(pd, 1, b1)
+    __hx_ptr_store8(pd, 2, b2)
+    __hx_ptr_store8(pd, 3, b3)
+    return 1
+}
+
+// hxlcl_setvbuf: the frozen floor's trivial no-op buffering stub — `(void)fp;
+// (void)buf; (void)mode; (void)sz; return 0;` (self/runtime_emit_full.hexa:1247-1250,
+// the 0-libc floor has no stdio buffering to configure). Register-only, returns the
+// const success code 0 (like hxlcl_fflush). The four args are ignored.
+pub fn hxlcl_setvbuf(fp: HexaVal, buf: HexaVal, mode: HexaVal, sz: HexaVal) -> int {
+    return 0
+}
+
+// hxlcl_darwin_check_fd_set_overflow: the frozen floor's no-op fd_set overflow check —
+// `(void)fd; (void)p; (void)n; return 0;  // never overflowing`
+// (self/runtime_emit_full.hexa:2060-2063). Register-only, returns const 0. (This is
+// the plain helper, distinct from hxlcl_fd_overflow which is a Darwin asm-label alias
+// of ___darwin_check_fd_set_overflow and stays the floor — not a Route C target.)
+pub fn hxlcl_darwin_check_fd_set_overflow(fd: HexaVal, p: HexaVal, n: HexaVal) -> int {
+    return 0
+}
+
+// fp-ABI (xmm) MIXED-ABI leaf — hxlcl_atof (`double atof(const char *s)`). The
+// FIRST Route C symbol with a MIXED SysV ABI: the param is a `const char*` (INTEGER
+// class → rdi/GP, NOT SSE) but the return is `double` (SSE class → xmm0). The prior
+// fp-ABI leaves (fp_addmul/fmod/sin/cos/exp/log) were all-SSE (double args + double
+// ret); atof proves the per-arg/per-return SSE classifier (_cabi_sse_arg returns
+// FALSE for arg 0 → string stays GP; _cabi_sse_ret returns TRUE → double in xmm0).
+//
+// BODY = a 1:1 port of the frozen 0-libc floor's lenient string→double parse
+// (self/runtime_emit_full.hexa:2299-2337, the `#else` C fallback that ships in
+// runtime.c when HEXA_HAS_HEXA_RT_STDLIB is off): whitespace skip + sign +
+// integer-digit fold (n = n*10 + d) + optional `.frac` (n += d*frac; frac *= 0.1)
+// + optional `eE` decimal exponent (mul = 10^|exp|; n /= mul or n *= mul) + sign.
+// This is the SAME lenient grammar as musl `atof` = `strtod(s, NULL)` over its
+// finite-decimal domain (no hex/inf/nan — the frozen floor body never parses those
+// either, matching the shim default exactly). reference: musl src/stdlib/atof.c
+// (`return strtod(s, 0)`) + the frozen #else body it mirrors. The result is
+// bit-identical to the frozen C #else atof for every input (same op order: the
+// integer/fraction/exponent folds use the IDENTICAL double arithmetic sequence).
+//
+// FP CONSTRUCTION: the byte-scan + index/digit/sign/exp are raw-int payload ops
+// (__hx_payload_add/sub/mul/eq/ge/le/and/ne — the atoll class); the digit→double
+// lift uses __hx_payload_i2f (cvtsi2sd, exp/log precedent), and the accumulation
+// uses __hx_payload_fmul/fadd/fdiv (mulsd/addsd/divsd) on FLOAT-tagged HexaVals.
+// Float LITERALS (10.0, 0.1, 1.0, 0.0) are written directly (the fmod/exp pattern —
+// they lower to a .rodata double + movq into the GP payload home). UN-NESTED (this
+// file's str_core NESTING discipline): every intrinsic call writes EXACTLY ONE
+// `let`/assignment; comparisons use __hx_payload_eq/ne/ge/le. The return ships the
+// FLOAT-tagged payload word through xmm0 (the SSE-ret branch movq's payload→xmm0).
+// default-OFF byteeq-neutral (HEXA_CABI_HXLCL off → not whitelisted → ordinary fn).
+pub fn hxlcl_atof(s: HexaVal) -> int {
+    let p = __hx_payload_add(s, 0)             // const char* s (raw payload word)
+    if __hx_payload_eq(p, 0) {
+        return 0                               // if(!s) return 0.0 (all-zero bits = +0.0 in xmm0)
+    }
+    let mut i = 0
+    // whitespace skip: while(s[i]==' '||s[i]=='\t'||s[i]=='\n') i++;
+    let mut ws = __hx_ptr_load8(p, i)
+    let mut wcont = 1
+    while __hx_payload_ne(wcont, 0) {
+        let is_sp = __hx_payload_eq(ws, 32)
+        let is_tab = __hx_payload_eq(ws, 9)
+        let is_nl = __hx_payload_eq(ws, 10)
+        let a1 = __hx_payload_add(is_sp, is_tab)
+        let a2 = __hx_payload_add(a1, is_nl)
+        if __hx_payload_ne(a2, 0) {
+            i = __hx_payload_add(i, 1)
+            ws = __hx_ptr_load8(p, i)
+        } else {
+            wcont = 0
+        }
+    }
+    // sign: if(s[i]=='-'){sign=-1;i++;} else if(s[i]=='+')i++;
+    let cs = __hx_ptr_load8(p, i)
+    let mut neg = 0
+    if __hx_payload_eq(cs, 45) {                // '-'
+        neg = 1
+        i = __hx_payload_add(i, 1)
+    } else {
+        if __hx_payload_eq(cs, 43) {            // '+'
+            i = __hx_payload_add(i, 1)
+        }
+    }
+    // integer digits: while(s[i] in ['0'..'9']) n = n*10.0 + (double)(s[i]-'0');
+    // n carries the running double's BITS as an int-typed HexaVal (the f* intrinsics
+    // return the int-tagged payload word, like fmod/exp); seed +0.0 via i2f(0) (not a
+    // bare `0.0` float literal, which would type the binding f64 and break `return n`
+    // against the `-> int` signature — HX3004).
+    let mut n = __hx_payload_i2f(0)            // +0.0 (int-typed bits)
+    let mut icont = 1
+    while __hx_payload_ne(icont, 0) {
+        let c = __hx_ptr_load8(p, i)
+        let ge0 = __hx_payload_ge(c, 48)        // c>='0'
+        let le9 = __hx_payload_le(c, 57)        // c<='9'
+        let is09 = __hx_payload_and(ge0, le9)
+        if __hx_payload_eq(is09, 0) {
+            icont = 0                           // non-digit → stop
+        } else {
+            let d = __hx_payload_sub(c, 48)     // c-'0' (int)
+            let df = __hx_payload_i2f(d)        // (double)d
+            let n10 = __hx_payload_fmul(n, 10.0)
+            n = __hx_payload_fadd(n10, df)      // n = n*10 + d
+            i = __hx_payload_add(i, 1)
+        }
+    }
+    // fraction: if(s[i]=='.'){ i++; frac=0.1; while digit { n += d*frac; frac*=0.1; i++; } }
+    let dot = __hx_ptr_load8(p, i)
+    if __hx_payload_eq(dot, 46) {               // '.'
+        i = __hx_payload_add(i, 1)
+        // frac = 0.1 as int-typed bits: i2f(0)=+0.0 then fadd the 0.1 literal arg
+        // (bare float literal as an INTRINSIC ARG is fine — fmod's __hx_payload_fmul(0.0,x)
+        // precedent — only a float-literal *binding*/*return* trips HX3004).
+        let frac_z = __hx_payload_i2f(0)
+        let mut frac = __hx_payload_fadd(frac_z, 0.1)   // 0.0 + 0.1 = 0.1
+        let mut fcont = 1
+        while __hx_payload_ne(fcont, 0) {
+            let fc = __hx_ptr_load8(p, i)
+            let fge0 = __hx_payload_ge(fc, 48)
+            let fle9 = __hx_payload_le(fc, 57)
+            let fis09 = __hx_payload_and(fge0, fle9)
+            if __hx_payload_eq(fis09, 0) {
+                fcont = 0
+            } else {
+                let fd = __hx_payload_sub(fc, 48)
+                let fdf = __hx_payload_i2f(fd)
+                let contrib = __hx_payload_fmul(fdf, frac)
+                n = __hx_payload_fadd(n, contrib)   // n += d*frac
+                frac = __hx_payload_fmul(frac, 0.1) // frac *= 0.1
+                i = __hx_payload_add(i, 1)
+            }
+        }
+    }
+    // exponent: if(s[i]=='e'||s[i]=='E'){ esign; exp_val; mul=10^exp; n/=mul or n*=mul; }
+    let ec = __hx_ptr_load8(p, i)
+    let is_e = __hx_payload_eq(ec, 101)         // 'e'
+    let is_E = __hx_payload_eq(ec, 69)          // 'E'
+    let is_exp = __hx_payload_add(is_e, is_E)
+    if __hx_payload_ne(is_exp, 0) {
+        i = __hx_payload_add(i, 1)
+        let esc = __hx_ptr_load8(p, i)
+        let mut eneg = 0
+        if __hx_payload_eq(esc, 45) {           // '-'
+            eneg = 1
+            i = __hx_payload_add(i, 1)
+        } else {
+            if __hx_payload_eq(esc, 43) {       // '+'
+                i = __hx_payload_add(i, 1)
+            }
+        }
+        let mut exp_val = 0
+        let mut econt = 1
+        while __hx_payload_ne(econt, 0) {
+            let xc = __hx_ptr_load8(p, i)
+            let xge0 = __hx_payload_ge(xc, 48)
+            let xle9 = __hx_payload_le(xc, 57)
+            let xis09 = __hx_payload_and(xge0, xle9)
+            if __hx_payload_eq(xis09, 0) {
+                econt = 0
+            } else {
+                let xd = __hx_payload_sub(xc, 48)
+                let e10 = __hx_payload_mul(exp_val, 10)
+                exp_val = __hx_payload_add(e10, xd)  // exp_val = exp_val*10 + d
+                i = __hx_payload_add(i, 1)
+            }
+        }
+        // mul = 1.0; for(k=0;k<exp_val;k++) mul *= 10.0;
+        let mut mul = __hx_payload_i2f(1)        // 1.0 (int-typed bits)
+        let mut k = 0
+        while __hx_payload_lt(k, exp_val) {
+            mul = __hx_payload_fmul(mul, 10.0)
+            k = __hx_payload_add(k, 1)
+        }
+        if __hx_payload_ne(eneg, 0) {
+            n = __hx_payload_fdiv(n, mul)        // n /= mul
+        } else {
+            n = __hx_payload_fmul(n, mul)        // n *= mul
+        }
+    }
+    // return (sign < 0) ? -n : n;
+    // C unary `-n` on a double = flip the IEEE-754 sign bit (xor 0x8000000000000000),
+    // bit-exact vs a mulsd by -1.0 for every finite value AND for ±0.0 (atof("-0")
+    // → -0.0). The xor operates on the FLOAT-tagged payload word (the raw double
+    // bits); the SSE-ret branch ships that payload through xmm0 regardless of tag.
+    if __hx_payload_ne(neg, 0) {
+        // sign mask 0x8000000000000000 = 1<<63. Built via __hx_payload_shl (the codegen
+        // cannot materialize the 2^63 immediate directly — it exceeds the signed-i64
+        // `mov rXX, imm` range and emits a broken `-` operand; shl 1,63 is exact).
+        let signbit = __hx_payload_shl(1, 63)
+        let r = __hx_payload_xor(n, signbit)              // -n via sign-bit flip
+        return r
+    }
+    return n
+}
+
+// fp-ABI (xmm) RUNG 1 — the FIRST Route C symbol with SSE-class (`double`)
+// params + return, exercising the new SysV §3.2.3 SSE-class boundary lowering
+// (args xmm0/xmm1, return xmm0) added to compiler/codegen/x86_64_linux.hexa
+// (`_cabi_sse_arg`/`_cabi_sse_ret`). This is the prerequisite root mechanism for
+// native-emitting the libc-floor libm family (`double sin(double)` etc.) — the
+// TERMINAL "[float XMM-ABI]" wall noted at hxlcl_core.hexa:2188.
+//
+// SYNTHETIC C-ABI prototype: `double hxlcl_fp_addmul(double x, double y)` returns
+// `x * y + x`. The body uses the existing __hx_payload_fmul/fadd float intrinsics
+// — those already movq the IEEE-754 bits GP↔xmm internally and run mulsd/addsd —
+// so once the BOUNDARY (ingress xmm→gp, return gp→xmm0) is correct the whole fn
+// computes the double result. `x` is reused twice (a*b + a), proving the SSE arg
+// reaches the GP home intact. Params/return are typed HexaVal/int at the source
+// level; the SSE class is asserted by the per-fn name-keyed classifier in codegen
+// (no MIR type_id dependence — frozen-build-safe). default-OFF byteeq-neutral.
+pub fn hxlcl_fp_addmul(x: HexaVal, y: HexaVal) -> int {
+    let prod = __hx_payload_fmul(x, y)        // xmm: x * y  (bits in GP home)
+    let sum = __hx_payload_fadd(prod, x)      // xmm: (x*y) + x
+    return sum                                 // SSE-class return → xmm0
+}
+
+// hxlcl_fmod — FIRST native-emit libm leaf via the fp-ABI (xmm) Route C path.
+// `double hxlcl_fmod(double x, double y)` returns the IEEE-754 remainder of x/y,
+// libm-FREE: a 1:1 port of musl src/math/fmod.c (the modern 64-bit-uint64
+// rewrite of SunPro fdlibm e_fmod.c — netlib.org/fdlibm/e_fmod.c). The result of
+// fmod is mathematically EXACT, so this is CORRECTLY-ROUNDED (0 ULP vs libc fmod
+// for every finite input). NO fmod()/<math.h> function: the only float ops are
+// the NaN/Inf propagation `(x*y)/(x*y)` and the signed-zero `0*x`, bare hardware
+// mulsd/divsd (no -lm symbol).
+//
+// THE BIT-REINTERPRET IS FREE. The SSE-class Route C ingress (PSABI §3.2.3)
+// movq's x/y's xmm bits into their GP payload home (TAG_FLOAT). That payload word
+// IS the raw IEEE-754 bit pattern — so the integer payload intrinsics
+// (__hx_payload_and/or/shl/shr/sub/mul) operate on `ux.i` directly with NO
+// reinterpret step. The float ops (__hx_payload_fmul/fdiv) read the SAME word as
+// a double via movq GP→xmm. The return ships `uxi`'s payload word back through
+// xmm0 (the SSE-ret branch movq's payload→xmm0 regardless of tag).
+//
+// LOGICAL shifts: musl uses C `uint64_t >>` (ZERO-FILL). __hx_payload_shr is the
+// logical (shr/lsrv) shift, NOT the BinOp `>>` which is arithmetic (sar) — a
+// negative double's sign bit must not sign-extend on `ux.i>>52`/`>>63`.
+//
+// UN-NESTED (str_core NESTING discipline, this file's header): every intrinsic
+// call writes EXACTLY ONE `let`; comparisons use __hx_payload_eq/ne/lt/le/ge.
+// reference: musl src/math/fmod.c (commit-stable; == fdlibm e_fmod.c algorithm).
+// default-OFF byteeq-neutral (HEXA_CABI_HXLCL/HEXA_LIBM_NATIVE_FMOD off).
+pub fn hxlcl_fmod(x: HexaVal, y: HexaVal) -> int {
+    // ux.i / uy.i — the raw IEEE-754 bits (the FLOAT-tagged param payload word).
+    let mut uxi = __hx_payload_add(x, 0)          // uint64_t uxi = ux.i
+    let mut uyi = __hx_payload_add(y, 0)          // uint64_t uy.i
+    // ex = ux.i>>52 & 0x7ff ;  ey = uy.i>>52 & 0x7ff ;  sx = ux.i>>63
+    let ux52 = __hx_payload_shr(uxi, 52)
+    let mut ex = __hx_payload_and(ux52, 2047)     // 0x7ff
+    let uy52 = __hx_payload_shr(uyi, 52)
+    let mut ey = __hx_payload_and(uy52, 2047)     // 0x7ff
+    let sx = __hx_payload_shr(uxi, 63)            // sign of x (0 or 1)
+
+    // if (uy.i<<1 == 0 || isnan(y) || ex == 0x7ff) return (x*y)/(x*y);
+    //   uy.i<<1 == 0      → y is ±0
+    //   isnan(y)          → (uy.i<<1) > (0x7ff0000000000000<<1) i.e. exp all-ones + frac!=0
+    //   ex == 0x7ff       → x is inf/nan
+    let uy1 = __hx_payload_shl(uyi, 1)            // uy.i<<1
+    let y_is_zero = __hx_payload_eq(uy1, 0)
+    // isnan(y): (uy.i<<1) >  (0x7ff0000000000000 << 1) == 0xffe0000000000000.
+    // Compare as UNSIGNED magnitude: shr by 1 then >. Equivalent: uy1 > 0xffe0...
+    // Use logical compare via subtraction-free path: isnan iff ey==0x7ff AND frac!=0.
+    let y_exp_max = __hx_payload_eq(ey, 2047)
+    let uy_frac = __hx_payload_and(uyi, 4503599627370495) // 0x000fffffffffffff
+    let uy_frac_nz = __hx_payload_ne(uy_frac, 0)
+    let y_is_nan = __hx_payload_and(y_exp_max, uy_frac_nz)
+    let x_exp_max = __hx_payload_eq(ex, 2047)
+    let e1 = __hx_payload_add(y_is_zero, y_is_nan)
+    let e2 = __hx_payload_add(e1, x_exp_max)
+    if __hx_payload_ne(e2, 0) {
+        let p = __hx_payload_fmul(x, y)           // x*y
+        let q = __hx_payload_fdiv(p, p)           // (x*y)/(x*y)  → NaN propagation
+        return q
+    }
+
+    // if (uxi<<1 <= uy.i<<1) { if (uxi<<1 == uy.i<<1) return 0*x; return x; }
+    // Compare the sign-stripped 64-bit magnitude words UNSIGNED (__hx_payload_ule):
+    // after `<<1` the old exponent-MSB lands in bit-63, which is DATA not a sign, so
+    // a signed compare would misorder large-exponent operands (musl uses C unsigned
+    // `<=`). bits<<1 drops the sign bit; the rest orders by numeric magnitude.
+    let ux1 = __hx_payload_shl(uxi, 1)
+    let mag_le = __hx_payload_ule(ux1, uy1)       // |x| <= |y|  (unsigned)
+    let mag_eq = __hx_payload_eq(ux1, uy1)        // |x| == |y|
+    if __hx_payload_ne(mag_le, 0) {
+        if __hx_payload_ne(mag_eq, 0) {
+            let zx = __hx_payload_fmul(0.0, x)    // 0*x (signed zero)
+            return zx
+        }
+        return uxi                                // bits of x (TAG carried via xmm0 ret)
+    }
+
+    // normalize x:  if (!ex) { for(i=uxi<<12; i>>63==0; ex--,i<<=1); uxi <<= -ex+1; }
+    //               else { uxi &= -1ULL>>12; uxi |= 1ULL<<52; }
+    if __hx_payload_eq(ex, 0) {
+        let mut ii = __hx_payload_shl(uxi, 12)
+        let mut hb = __hx_payload_shr(ii, 63)
+        while __hx_payload_eq(hb, 0) {
+            ex = __hx_payload_sub(ex, 1)
+            ii = __hx_payload_shl(ii, 1)
+            hb = __hx_payload_shr(ii, 63)
+        }
+        let negex = __hx_payload_sub(0, ex)       // -ex
+        let sh = __hx_payload_add(negex, 1)       // -ex + 1
+        uxi = __hx_payload_shl(uxi, sh)
+    } else {
+        let m = __hx_payload_and(uxi, 4503599627370495) // -1ULL>>12 == 0x000fffffffffffff
+        let imp = __hx_payload_or(m, 4503599627370496)  // 1ULL<<52 == 0x0010000000000000
+        uxi = __hx_payload_add(imp, 0)
+    }
+    // normalize y (mirror)
+    if __hx_payload_eq(ey, 0) {
+        let mut jj = __hx_payload_shl(uyi, 12)
+        let mut hb2 = __hx_payload_shr(jj, 63)
+        while __hx_payload_eq(hb2, 0) {
+            ey = __hx_payload_sub(ey, 1)
+            jj = __hx_payload_shl(jj, 1)
+            hb2 = __hx_payload_shr(jj, 63)
+        }
+        let negey = __hx_payload_sub(0, ey)
+        let shy = __hx_payload_add(negey, 1)
+        uyi = __hx_payload_shl(uyi, shy)
+    } else {
+        let my = __hx_payload_and(uyi, 4503599627370495)
+        let impy = __hx_payload_or(my, 4503599627370496)
+        uyi = __hx_payload_add(impy, 0)
+    }
+
+    // x mod y:  for (; ex>ey; ex--) { i=uxi-uy.i; if(i>>63==0){ if(i==0) return 0*x; uxi=i;} uxi<<=1; }
+    while __hx_payload_lt(ey, ex) {               // ex > ey
+        let d = __hx_payload_sub(uxi, uyi)        // i = uxi - uy.i
+        let dsign = __hx_payload_shr(d, 63)       // i>>63
+        if __hx_payload_eq(dsign, 0) {
+            if __hx_payload_eq(d, 0) {
+                let zx2 = __hx_payload_fmul(0.0, x)
+                return zx2
+            }
+            uxi = __hx_payload_add(d, 0)          // uxi = i
+        }
+        uxi = __hx_payload_shl(uxi, 1)            // uxi <<= 1
+        ex = __hx_payload_sub(ex, 1)
+    }
+    // tail (one more subtract):  i=uxi-uy.i; if(i>>63==0){ if(i==0) return 0*x; uxi=i; }
+    let dt = __hx_payload_sub(uxi, uyi)
+    let dtsign = __hx_payload_shr(dt, 63)
+    if __hx_payload_eq(dtsign, 0) {
+        if __hx_payload_eq(dt, 0) {
+            let zx3 = __hx_payload_fmul(0.0, x)
+            return zx3
+        }
+        uxi = __hx_payload_add(dt, 0)
+    }
+    // for (; uxi>>52 == 0; uxi<<=1, ex--);  (renormalize)
+    let mut top = __hx_payload_shr(uxi, 52)
+    while __hx_payload_eq(top, 0) {
+        uxi = __hx_payload_shl(uxi, 1)
+        ex = __hx_payload_sub(ex, 1)
+        top = __hx_payload_shr(uxi, 52)
+    }
+
+    // scale result:  if (ex>0) { uxi -= 1ULL<<52; uxi |= (uint64_t)ex<<52; }
+    //                else { uxi >>= -ex + 1; }
+    if __hx_payload_lt(0, ex) {                   // ex > 0
+        uxi = __hx_payload_sub(uxi, 4503599627370496) // -= 1ULL<<52
+        let exb = __hx_payload_shl(ex, 52)        // (uint64_t)ex << 52
+        uxi = __hx_payload_or(uxi, exb)
+    } else {
+        let negex2 = __hx_payload_sub(0, ex)
+        let rsh = __hx_payload_add(negex2, 1)     // -ex + 1
+        uxi = __hx_payload_shr(uxi, rsh)
+    }
+    // uxi |= (uint64_t)sx << 63;  ux.i = uxi;  return ux.f;
+    let sxb = __hx_payload_shl(sx, 63)            // sx << 63
+    uxi = __hx_payload_or(uxi, sxb)
+    return uxi                                     // bits → xmm0 (SSE-class return)
+}
+
+// ── hxlcl_sin — libm `double sin(double)` native-emit via the fp-ABI (xmm) Route C
+// path. A 1:1 port of musl src/math/{sin,__sin,__cos,__rem_pio2}.c (SunPro/FreeBSD
+// msun s_sin.c / k_sin.c / k_cos.c / e_rem_pio2.c), the small + medium
+// argument-reduction paths. libm-FREE: NO sin()/<math.h>, only SSE
+// mulsd/addsd/subsd via the __hx_payload_f* intrinsics + the integer bit-intrinsics
+// on the raw IEEE-754 payload word.
+//
+// The __sin / __cos kernels are INLINED here (single self-contained fn — same
+// discipline as hxlcl_fmod): the dispatch fills the top-level kernel args
+// (kx/ky/kiy + want_cos/neg) per the n&3 musl table, then ONE inlined __sin block
+// + ONE inlined __cos block compute the result (selected by want_cos, negated by
+// neg). This avoids inter-fn HexaVal-typed literal args (the typechecker rejects a
+// raw f64/i64 where a HexaVal param is declared) and the inner SSE-class call
+// boundary entirely. Every `mut` carried across nested blocks is hoisted to the
+// function-top scope (the hxlcl_fmod discipline — a block-local `let mut` reassigned
+// from a sibling/child block is rejected by the binder).
+//
+// COVERAGE / measured wall: SMALL (|x| ~<= 9pi/4, plain double k*pi/2 subtraction) +
+// MEDIUM (|x| < 2^20*pi/2 ≈ 1.647e6, the toint round-to-int + 3-round Cody-Waite
+// reduction) ported VERBATIM. The LARGE path (Payne-Hanek __rem_pio2_large, a 66-int
+// two_over_pi table) is NOT ported (🧱 separate ~400-line table leaf = honest next
+// rung); for |x| beyond the threshold this returns x-x (NaN-ish), and the verify
+// sweep stays inside the covered domain.
+//
+// The double→bits reinterpret is FREE (SSE-class Route C ingress movq's x's xmm bits
+// into the GP payload home — same as hxlcl_fmod). The S1..S6/C1..C6 minimax
+// coefficients + pio2 split constants become exact 64-bit immediates via
+// const_float→float_to_bits→movq xmm. reference: musl src/math/{sin,__sin,__cos,
+// __rem_pio2}.c (all constants verified bit-exact). default-OFF byteeq-neutral.
+pub fn hxlcl_sin(x: HexaVal) -> int {
+    // GET_HIGH_WORD(ix0, x); ix = ix0 & 0x7fffffff.  (uxi = the payload word)
+    let uxi = __hx_payload_add(x, 0)              // raw IEEE-754 bits of x
+    let hi = __hx_payload_shr(uxi, 32)            // high 32 bits
+    let ix = __hx_payload_and(hi, 2147483647)     // & 0x7fffffff
+
+    // |x| < 2**-26 (ix < 0x3e500000) → return x.  (test BEFORE the |x|<pi/4 kernel)
+    if __hx_payload_ult(ix, 1045430272) {
+        return uxi
+    }
+    // sin(Inf or NaN) is NaN :  ix >= 0x7ff00000  → return x - x
+    if __hx_payload_ule(2146435072, ix) {
+        let nan = __hx_payload_fsub(x, x)
+        return nan
+    }
+
+    // ── top-level carried state (hoisted muts — fmod discipline) ──
+    let sign = __hx_payload_shr(uxi, 63)          // sign of x (large-path only)
+    let mut n = 0                                  // k mod 4 accumulator
+    let mut reduced = 0                            // 1 once kx/ky/kiy are set
+    let mut kx = __hx_payload_add(uxi, 0)          // kernel x  (reduced remainder)
+    let mut ky = __hx_payload_fsub(x, x)           // kernel y  (tail; +0.0 default)
+    let mut kiy = 0                                // kernel iy flag (tail-present)
+    // medium-path scratch (hoisted)
+    let mut qn = __hx_payload_fsub(x, x)           // round(x/(pi/2)) as a double
+    let mut r = __hx_payload_fsub(x, x)            // reduced remainder hi
+    let mut w = __hx_payload_fsub(x, x)            // reduction correction
+    let mut ey = 0                                 // exponent of y[0]
+
+    // |x| ~< pi/4 :  ix <= 0x3fe921fb  → __sin(x, 0.0, 0)  (no reduction, iy=0)
+    if __hx_payload_ule(ix, 1072243195) {
+        kx = __hx_payload_add(uxi, 0)             // kernel x = x
+        kiy = 0                                    // iy = 0 (tail absent)
+        n = 0                                      // sin path
+        reduced = 1
+    }
+
+    // ── argument reduction (musl __rem_pio2 small + medium) ──
+    // SMALL path bands: |x| in (pi/4, 9pi/4], plain double k*pi/2 subtraction,
+    // diverting the |x|~=k*pi/2 cancellation cases to the MEDIUM toint path.
+    let frac = __hx_payload_and(ix, 1048575)      // ix & 0xfffff
+    let is_half = __hx_payload_eq(frac, 598523)   // == 0x921fb → near k*pi/2 (medium)
+
+    // |x| ~<= 3pi/4 : ix <= 0x4002d97c  → k=1
+    if __hx_payload_eq(reduced, 0) {
+        let in_band1 = __hx_payload_ule(ix, 1073928572)
+        let nothalf = __hx_payload_eq(is_half, 0)
+        let do1 = __hx_payload_and(in_band1, nothalf)
+        if __hx_payload_ne(do1, 0) {
+            if __hx_payload_eq(sign, 0) {
+                let z = __hx_payload_fsub(x, 1.57079632673412561417e+00)        // x - pio2_1
+                ky = __hx_payload_fsub(z, 6.07710050650619224932e-11)           // z - pio2_1t
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fsub(d, 6.07710050650619224932e-11)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = 1
+            } else {
+                let z = __hx_payload_fadd(x, 1.57079632673412561417e+00)        // x + pio2_1
+                ky = __hx_payload_fadd(z, 6.07710050650619224932e-11)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fadd(d, 6.07710050650619224932e-11)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = -1
+            }
+            kiy = 1
+            reduced = 1
+        }
+    }
+    // 3pi/4 < |x| ~<= 5pi/4 : 0x4002d97c < ix <= 0x400f6a7a  → k=2.  The LOWER bound
+    // (ix > 0x4002d97c) is REQUIRED: musl's __rem_pio2 is a strict ix-range ladder, so
+    // a cancellation case (is_half) below this range that band-1 diverted to medium
+    // must NOT be re-grabbed here. Without the lower bound a flattened reduced-flag
+    // fallthrough lets e.g. pi/2 (ix=0x3ff921fb) fall into a later band → wrong k.
+    if __hx_payload_eq(reduced, 0) {
+        let in_band2hi = __hx_payload_ule(ix, 1074752122)        // ix <= 0x400f6a7a
+        let in_band2lo = __hx_payload_ult(1073928572, ix)        // ix >  0x4002d97c
+        let in_band2 = __hx_payload_and(in_band2hi, in_band2lo)
+        let nothalf = __hx_payload_eq(is_half, 0)
+        let do2 = __hx_payload_and(in_band2, nothalf)
+        if __hx_payload_ne(do2, 0) {
+            // 2*pio2_1 = 3.14159265346825122834e+00 ; 2*pio2_1t = 1.21542010130123844986e-10
+            if __hx_payload_eq(sign, 0) {
+                let z = __hx_payload_fsub(x, 3.14159265346825122834e+00)
+                ky = __hx_payload_fsub(z, 1.21542010130123844986e-10)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fsub(d, 1.21542010130123844986e-10)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = 2
+            } else {
+                let z = __hx_payload_fadd(x, 3.14159265346825122834e+00)
+                ky = __hx_payload_fadd(z, 1.21542010130123844986e-10)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fadd(d, 1.21542010130123844986e-10)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = -2
+            }
+            kiy = 1
+            reduced = 1
+        }
+    }
+    // 5pi/4 < |x| ~<= 7pi/4 : 0x400f6a7a < ix <= 0x4015fdbc  → k=3 (skip near 3pi/2 =
+    // 0x4012d97c → medium).  LOWER bound required (see band-2 note).
+    if __hx_payload_eq(reduced, 0) {
+        let in_band3hi = __hx_payload_ule(ix, 1075183036)        // ix <= 0x4015fdbc
+        let in_band3lo = __hx_payload_ult(1074752122, ix)        // ix >  0x400f6a7a
+        let in_band3 = __hx_payload_and(in_band3hi, in_band3lo)
+        let near32 = __hx_payload_eq(ix, 1074977148)
+        let not32 = __hx_payload_eq(near32, 0)
+        let do3 = __hx_payload_and(in_band3, not32)
+        if __hx_payload_ne(do3, 0) {
+            // 3*pio2_1 = 4.71238898020237684251e+00 ; 3*pio2_1t = 1.82313015195185767498e-10
+            if __hx_payload_eq(sign, 0) {
+                let z = __hx_payload_fsub(x, 4.71238898020237684251e+00)
+                ky = __hx_payload_fsub(z, 1.82313015195185767498e-10)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fsub(d, 1.82313015195185767498e-10)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = 3
+            } else {
+                let z = __hx_payload_fadd(x, 4.71238898020237684251e+00)
+                ky = __hx_payload_fadd(z, 1.82313015195185767498e-10)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fadd(d, 1.82313015195185767498e-10)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = -3
+            }
+            kiy = 1
+            reduced = 1
+        }
+    }
+    // 7pi/4 < |x| ~<= 9pi/4 : 0x4015fdbc < ix <= 0x401c463b  → k=4 (skip near 4pi/2 =
+    // 0x401921fb → medium).  LOWER bound required (see band-2 note).
+    if __hx_payload_eq(reduced, 0) {
+        let in_band4hi = __hx_payload_ule(ix, 1075594811)        // ix <= 0x401c463b
+        let in_band4lo = __hx_payload_ult(1075183036, ix)        // ix >  0x4015fdbc
+        let in_band4 = __hx_payload_and(in_band4hi, in_band4lo)
+        let near42 = __hx_payload_eq(ix, 1075388923)
+        let not42 = __hx_payload_eq(near42, 0)
+        let do4 = __hx_payload_and(in_band4, not42)
+        if __hx_payload_ne(do4, 0) {
+            // 4*pio2_1 = 6.28318530693650245667e+00 ; 4*pio2_1t = 2.43084020260247689972e-10
+            if __hx_payload_eq(sign, 0) {
+                let z = __hx_payload_fsub(x, 6.28318530693650245667e+00)
+                ky = __hx_payload_fsub(z, 2.43084020260247689972e-10)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fsub(d, 2.43084020260247689972e-10)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = 4
+            } else {
+                let z = __hx_payload_fadd(x, 6.28318530693650245667e+00)
+                ky = __hx_payload_fadd(z, 2.43084020260247689972e-10)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fadd(d, 2.43084020260247689972e-10)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = -4
+            }
+            kiy = 1
+            reduced = 1
+        }
+    }
+
+    // MEDIUM path: |x| < 2^20*(pi/2)  (ix < 0x413921fb).  toint = 0x1.8p52 = 1.5/EPS.
+    if __hx_payload_eq(reduced, 0) {
+        if __hx_payload_ult(ix, 1094263291) {
+            // fn = x*invpio2 + toint - toint    (round-to-nearest-int as a double)
+            let xi = __hx_payload_fmul(x, 6.36619772367581382433e-01)   // x*invpio2
+            let fa = __hx_payload_fadd(xi, 6755399441055744.0)          // + toint
+            qn = __hx_payload_fsub(fa, 6755399441055744.0)              // - toint
+            n = __hx_payload_f2i(qn)              // n = (int32_t)qn
+            // r = x - fn*pio2_1 ;  w = fn*pio2_1t
+            let fnp1 = __hx_payload_fmul(qn, 1.57079632673412561417e+00)
+            r = __hx_payload_fsub(x, fnp1)
+            w = __hx_payload_fmul(qn, 6.07710050650619224932e-11)
+            // pio4 = 0x1.921fb54442d18p-1 = 7.85398163397448278999e-01
+            let rmw = __hx_payload_fsub(r, w)
+            if __hx_payload_flt(rmw, -7.85398163397448278999e-01) {
+                n = __hx_payload_sub(n, 1)
+                qn = __hx_payload_fsub(qn, 1.0)
+                let fnp1b = __hx_payload_fmul(qn, 1.57079632673412561417e+00)
+                r = __hx_payload_fsub(x, fnp1b)
+                w = __hx_payload_fmul(qn, 6.07710050650619224932e-11)
+            } else {
+                if __hx_payload_fgt(rmw, 7.85398163397448278999e-01) {
+                    n = __hx_payload_add(n, 1)
+                    qn = __hx_payload_fadd(qn, 1.0)
+                    let fnp1c = __hx_payload_fmul(qn, 1.57079632673412561417e+00)
+                    r = __hx_payload_fsub(x, fnp1c)
+                    w = __hx_payload_fmul(qn, 6.07710050650619224932e-11)
+                }
+            }
+            ky = __hx_payload_fsub(r, w)          // y[0] = r - w  (1st round)
+            // ey = bits(y0)>>52 & 0x7ff ;  ex = ix>>20.
+            let y0bits = __hx_payload_add(ky, 0)
+            let y0sh = __hx_payload_shr(y0bits, 52)
+            ey = __hx_payload_and(y0sh, 2047)
+            let ex = __hx_payload_shr(ix, 20)
+            let exmey = __hx_payload_sub(ex, ey)
+            if __hx_payload_lt(16, exmey) {       // ex - ey > 16  → 2nd round
+                // pio2_2 = 6.07710050630396597660e-11 ; pio2_2t = 2.02226624879595063154e-21
+                let t = __hx_payload_add(r, 0)
+                w = __hx_payload_fmul(qn, 6.07710050630396597660e-11)
+                r = __hx_payload_fsub(t, w)
+                let tmr = __hx_payload_fsub(t, r)
+                let tmrmw = __hx_payload_fsub(tmr, w)
+                let fp2t = __hx_payload_fmul(qn, 2.02226624879595063154e-21)
+                w = __hx_payload_fsub(fp2t, tmrmw)
+                ky = __hx_payload_fsub(r, w)
+                let y0b2 = __hx_payload_add(ky, 0)
+                let y0s2 = __hx_payload_shr(y0b2, 52)
+                ey = __hx_payload_and(y0s2, 2047)
+                let exmey2 = __hx_payload_sub(ex, ey)
+                if __hx_payload_lt(49, exmey2) {  // ex - ey > 49  → 3rd round
+                    // pio2_3 = 2.02226624871116645580e-21 ; pio2_3t = 8.47842766036889956997e-32
+                    let t3 = __hx_payload_add(r, 0)
+                    w = __hx_payload_fmul(qn, 2.02226624871116645580e-21)
+                    r = __hx_payload_fsub(t3, w)
+                    let tmr3 = __hx_payload_fsub(t3, r)
+                    let tmrmw3 = __hx_payload_fsub(tmr3, w)
+                    let fp3t = __hx_payload_fmul(qn, 8.47842766036889956997e-32)
+                    w = __hx_payload_fsub(fp3t, tmrmw3)
+                    ky = __hx_payload_fsub(r, w)
+                }
+            }
+            let rmy0 = __hx_payload_fsub(r, ky)
+            let y1v = __hx_payload_fsub(rmy0, w)  // y[1] = (r - y[0]) - w
+            kx = __hx_payload_add(ky, 0)          // kernel x = y[0]
+            ky = __hx_payload_add(y1v, 0)         // kernel y = y[1]
+            kiy = 1
+            reduced = 1
+        }
+    }
+
+    // LARGE path NOT ported (🧱 Payne-Hanek __rem_pio2_large table) — return x-x.
+    if __hx_payload_eq(reduced, 0) {
+        let big = __hx_payload_fsub(x, x)
+        return big
+    }
+
+    // ── n&3 → (want_cos, neg) per the musl sin.c switch ──
+    //   case 0:  __sin(kx,ky,kiy)        want_cos=0 neg=0
+    //   case 1:  __cos(kx,ky)            want_cos=1 neg=0
+    //   case 2: -__sin(kx,ky,kiy)        want_cos=0 neg=1
+    //   case 3: -__cos(kx,ky)            want_cos=1 neg=1
+    let nm3 = __hx_payload_and(n, 3)
+    let mut want_cos = 0
+    let mut neg = 0
+    if __hx_payload_eq(nm3, 1) { want_cos = 1 }
+    if __hx_payload_eq(nm3, 2) { neg = 1 }
+    if __hx_payload_eq(nm3, 3) {
+        want_cos = 1
+        neg = 1
+    }
+
+    // ── inlined __sin kernel (musl __sin.c · S1..S6) on (kx, ky, kiy) ──
+    //   z=kx*kx; w=z*z; r=S2+z*(S3+z*S4)+z*w*(S5+z*S6); v=z*kx;
+    //   kiy==0 ? kx + v*(S1+z*r) : kx - ((z*(0.5*ky - v*r) - ky) - v*S1)
+    let mut sin_res = __hx_payload_fsub(x, x)
+    if __hx_payload_eq(want_cos, 0) {
+        let z = __hx_payload_fmul(kx, kx)
+        let ww = __hx_payload_fmul(z, z)
+        let zS4 = __hx_payload_fmul(z, 2.75573137070700676789e-06)        // z*S4
+        let S3zS4 = __hx_payload_fadd(zS4, -1.98412698298579493134e-04)   // S3 + z*S4
+        let zInner = __hx_payload_fmul(z, S3zS4)
+        let part1 = __hx_payload_fadd(zInner, 8.33333333332248946124e-03) // S2 + …
+        let zS6 = __hx_payload_fmul(z, 1.58969099521155010221e-10)        // z*S6
+        let S5zS6 = __hx_payload_fadd(zS6, -2.50507602534068634195e-08)   // S5 + z*S6
+        let zw = __hx_payload_fmul(z, ww)
+        let part2 = __hx_payload_fmul(zw, S5zS6)
+        let rr = __hx_payload_fadd(part1, part2)                          // r
+        let v = __hx_payload_fmul(z, kx)                                  // v = z*kx
+        if __hx_payload_eq(kiy, 0) {
+            let zr = __hx_payload_fmul(z, rr)
+            let s1zr = __hx_payload_fadd(zr, -1.66666666666666324348e-01) // S1 + z*r
+            let vterm = __hx_payload_fmul(v, s1zr)
+            sin_res = __hx_payload_fadd(kx, vterm)                        // kx + v*(…)
+        } else {
+            let halfy = __hx_payload_fmul(0.5, ky)
+            let vr = __hx_payload_fmul(v, rr)
+            let inner = __hx_payload_fsub(halfy, vr)                      // 0.5*ky - v*r
+            let zin = __hx_payload_fmul(z, inner)
+            let zinmy = __hx_payload_fsub(zin, ky)                        // z*(…) - ky
+            let vS1 = __hx_payload_fmul(v, -1.66666666666666324348e-01)   // v*S1
+            let bracket = __hx_payload_fsub(zinmy, vS1)
+            sin_res = __hx_payload_fsub(kx, bracket)                      // kx - (…)
+        }
+    }
+
+    // ── inlined __cos kernel (musl __cos.c · C1..C6) on (kx, ky) ──
+    //   z=kx*kx; w=z*z; r=z*(C1+z*(C2+z*C3)) + w*w*(C4+z*(C5+z*C6));
+    //   hz=0.5*z; w=1.0-hz; return w + (((1.0-w)-hz) + (z*r - kx*ky))
+    let mut cos_res = __hx_payload_fsub(x, x)
+    if __hx_payload_eq(want_cos, 1) {
+        let z = __hx_payload_fmul(kx, kx)
+        let w0 = __hx_payload_fmul(z, z)
+        let zC3 = __hx_payload_fmul(z, 2.48015872894767294178e-05)        // z*C3
+        let C2zC3 = __hx_payload_fadd(zC3, -1.38888888888741095749e-03)   // C2 + z*C3
+        let zC2 = __hx_payload_fmul(z, C2zC3)
+        let C1in = __hx_payload_fadd(zC2, 4.16666666666666019037e-02)     // C1 + …
+        let rA = __hx_payload_fmul(z, C1in)
+        let zC6 = __hx_payload_fmul(z, -1.13596475577881948265e-11)       // z*C6 (neg)
+        let C5zC6 = __hx_payload_fadd(zC6, 2.08757232129817482790e-09)    // C5 + z*C6
+        let zC5 = __hx_payload_fmul(z, C5zC6)
+        let C4in = __hx_payload_fadd(zC5, -2.75573143513906633035e-07)    // C4 + …
+        let wwc = __hx_payload_fmul(w0, w0)                               // w*w
+        let rB = __hx_payload_fmul(wwc, C4in)
+        let rr = __hx_payload_fadd(rA, rB)                               // r
+        let hz = __hx_payload_fmul(0.5, z)                               // hz = 0.5*z
+        let wc = __hx_payload_fsub(1.0, hz)                              // w = 1.0 - hz
+        let omw = __hx_payload_fsub(1.0, wc)                             // 1.0 - w
+        let omwmhz = __hx_payload_fsub(omw, hz)                          // (1.0-w) - hz
+        let zr = __hx_payload_fmul(z, rr)                               // z*r
+        let xy = __hx_payload_fmul(kx, ky)                              // kx*ky
+        let zrmxy = __hx_payload_fsub(zr, xy)                           // z*r - kx*ky
+        let tail = __hx_payload_fadd(omwmhz, zrmxy)
+        cos_res = __hx_payload_fadd(wc, tail)                           // w + (…)
+    }
+
+    // select kernel result, then apply the sign from the n&3 table.
+    let mut res = __hx_payload_add(sin_res, 0)
+    if __hx_payload_eq(want_cos, 1) {
+        res = __hx_payload_add(cos_res, 0)
+    }
+    if __hx_payload_eq(neg, 1) {
+        let nres = __hx_payload_fsub(0.0, res)
+        return nres
+    }
+    return res
+}
+
+// ── hxlcl_cos — libm-free double cos(double) (RFC061 fp-ABI xmm Route C RUNG 4) ──
+// 1:1 port of musl src/math/{cos,__sin,__cos,__rem_pio2}.c (libm-free; small +
+// medium argument-reduction paths). SHARES the EXACT reduction + inlined __sin/__cos
+// kernels of hxlcl_sin above — the ONLY divergence from sin is (a) the tiny/|x|~<pi/4
+// special cases (cos(tiny)=1.0; |x|<pi/4 → __cos(x,0)) and (b) the n&3 dispatch table
+// (musl cos.c: 0→__cos, 1→-__sin, 2→-__cos, 3→__sin). The LARGE path (Payne-Hanek
+// __rem_pio2_large table) is NOT ported (same 🧱 table-leaf as sin). All S1..S6 /
+// C1..C6 minimax coeffs + pio2 split consts are bit-exact musl (verified in sin).
+pub fn hxlcl_cos(x: HexaVal) -> int {
+    // GET_HIGH_WORD(ix0, x); ix = ix0 & 0x7fffffff.  (uxi = the payload word)
+    let uxi = __hx_payload_add(x, 0)              // raw IEEE-754 bits of x
+    let hi = __hx_payload_shr(uxi, 32)            // high 32 bits
+    let ix = __hx_payload_and(hi, 2147483647)     // & 0x7fffffff
+
+    // ── top-level carried state (hoisted muts — fmod/sin discipline) ──
+    let sign = __hx_payload_shr(uxi, 63)          // sign of x
+    let mut n = 0                                  // k mod 4 accumulator
+    let mut reduced = 0                            // 1 once kx/ky/kiy are set
+    let mut kx = __hx_payload_add(uxi, 0)          // kernel x  (reduced remainder)
+    let mut ky = __hx_payload_fsub(x, x)           // kernel y  (tail; +0.0 default)
+    let mut kiy = 0                                // kernel iy flag (tail-present)
+    // medium-path scratch (hoisted)
+    let mut qn = __hx_payload_fsub(x, x)           // round(x/(pi/2)) as a double
+    let mut r = __hx_payload_fsub(x, x)            // reduced remainder hi
+    let mut w = __hx_payload_fsub(x, x)            // reduction correction
+    let mut ey = 0                                 // exponent of y[0]
+    // cos dispatch differs from sin: want_cos starts at 1 for n&3==0 (musl cos.c).
+    let mut want_cos = 0
+    let mut neg = 0
+
+    // |x| ~< pi/4 :  ix <= 0x3fe921fb  → __cos(x, 0)  (no reduction, iy=0, COS kernel)
+    if __hx_payload_ule(ix, 1072243195) {
+        // cos(tiny): |x| < 2**-27*sqrt(2) (ix < 0x3e46a09e) → return 1.0
+        // The fn returns the raw IEEE-754 payload WORD (i64-typed HexaVal), so the
+        // float literal 1.0 must be materialized as its bits: __hx_payload_i2f(1) =
+        // cvtsi2sd(1) → the TAG_FLOAT payload word holding double 1.0 (NOT a bare f64).
+        if __hx_payload_ult(ix, 1044905630) {
+            let one = __hx_payload_i2f(1)
+            return one
+        }
+        kx = __hx_payload_add(uxi, 0)             // kernel x = x
+        kiy = 0                                    // iy = 0 (tail absent)
+        want_cos = 1                               // cos path
+        reduced = 1
+    }
+
+    // cos(Inf or NaN) is NaN :  ix >= 0x7ff00000  → return x - x
+    if __hx_payload_eq(reduced, 0) {
+        if __hx_payload_ule(2146435072, ix) {
+            let nan = __hx_payload_fsub(x, x)
+            return nan
+        }
+    }
+
+    // ── argument reduction (musl __rem_pio2 small + medium) ──
+    // CANCELLATION DIVERSION (musl __rem_pio2 `goto medium`): musl jumps STRAIGHT
+    // to the medium toint path for the three cancellation cases — (a) |x| ~= k*pi/2
+    // for k∈{1,2} (the `(ix & 0xfffff) == 0x921fb` mask, inside the ix<=0x400f6a7a
+    // block) and (b) |x| ~= 3pi/2 (`ix == 0x4012d97c`) and (c) |x| ~= 2pi
+    // (`ix == 0x401921fb`). When the SMALL-path band ladder is FLATTENED into
+    // independent `if reduced==0` bands, each goto-medium must skip ALL FOUR bands
+    // (NOT just its own) — otherwise a cancellation x falls through to the NEXT band
+    // and is reduced with the WRONG k (the #4230/#4231 sin band-ladder lower-bound
+    // bug; verified by a musl-vs-flat C oracle over the k*pi/2 boundaries). So gate
+    // every band with a SINGLE `divert` predicate spanning all three cases.
+    let frac = __hx_payload_and(ix, 1048575)      // ix & 0xfffff
+    let is_half = __hx_payload_eq(frac, 598523)   // == 0x921fb → |x|~=k*pi/2 (k=1,2)
+    let is_3pi2 = __hx_payload_eq(ix, 1074977148) // == 0x4012d97c → |x|~=3pi/2
+    let is_4pi2 = __hx_payload_eq(ix, 1075388923) // == 0x401921fb → |x|~=2pi
+    let half_or_3 = __hx_payload_or(is_half, is_3pi2)
+    let divert = __hx_payload_or(half_or_3, is_4pi2)   // any cancellation → medium
+    let nodivert = __hx_payload_eq(divert, 0)          // 1 iff NOT a cancellation case
+
+    // |x| ~<= 3pi/4 : ix <= 0x4002d97c  → k=1
+    if __hx_payload_eq(reduced, 0) {
+        let in_band1 = __hx_payload_ule(ix, 1073928572)
+        let do1 = __hx_payload_and(in_band1, nodivert)
+        if __hx_payload_ne(do1, 0) {
+            if __hx_payload_eq(sign, 0) {
+                let z = __hx_payload_fsub(x, 1.57079632673412561417e+00)        // x - pio2_1
+                ky = __hx_payload_fsub(z, 6.07710050650619224932e-11)           // z - pio2_1t
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fsub(d, 6.07710050650619224932e-11)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = 1
+            } else {
+                let z = __hx_payload_fadd(x, 1.57079632673412561417e+00)        // x + pio2_1
+                ky = __hx_payload_fadd(z, 6.07710050650619224932e-11)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fadd(d, 6.07710050650619224932e-11)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = -1
+            }
+            kiy = 1
+            reduced = 1
+        }
+    }
+    // 3pi/4 < |x| ~<= 5pi/4 : ix <= 0x400f6a7a  → k=2
+    if __hx_payload_eq(reduced, 0) {
+        let in_band2 = __hx_payload_ule(ix, 1074752122)
+        let do2 = __hx_payload_and(in_band2, nodivert)
+        if __hx_payload_ne(do2, 0) {
+            if __hx_payload_eq(sign, 0) {
+                let z = __hx_payload_fsub(x, 3.14159265346825122834e+00)
+                ky = __hx_payload_fsub(z, 1.21542010130123844986e-10)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fsub(d, 1.21542010130123844986e-10)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = 2
+            } else {
+                let z = __hx_payload_fadd(x, 3.14159265346825122834e+00)
+                ky = __hx_payload_fadd(z, 1.21542010130123844986e-10)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fadd(d, 1.21542010130123844986e-10)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = -2
+            }
+            kiy = 1
+            reduced = 1
+        }
+    }
+    // 5pi/4 < |x| ~<= 7pi/4 : ix <= 0x4015fdbc  → k=3 (skip near 3pi/2 = 0x4012d97c)
+    if __hx_payload_eq(reduced, 0) {
+        let in_band3 = __hx_payload_ule(ix, 1075183036)
+        let do3 = __hx_payload_and(in_band3, nodivert)
+        if __hx_payload_ne(do3, 0) {
+            if __hx_payload_eq(sign, 0) {
+                let z = __hx_payload_fsub(x, 4.71238898020237684251e+00)
+                ky = __hx_payload_fsub(z, 1.82313015195185767498e-10)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fsub(d, 1.82313015195185767498e-10)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = 3
+            } else {
+                let z = __hx_payload_fadd(x, 4.71238898020237684251e+00)
+                ky = __hx_payload_fadd(z, 1.82313015195185767498e-10)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fadd(d, 1.82313015195185767498e-10)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = -3
+            }
+            kiy = 1
+            reduced = 1
+        }
+    }
+    // 7pi/4 < |x| ~<= 9pi/4 : ix <= 0x401c463b  → k=4 (skip near 4pi/2 = 0x401921fb)
+    if __hx_payload_eq(reduced, 0) {
+        let in_band4 = __hx_payload_ule(ix, 1075594811)
+        let do4 = __hx_payload_and(in_band4, nodivert)
+        if __hx_payload_ne(do4, 0) {
+            if __hx_payload_eq(sign, 0) {
+                let z = __hx_payload_fsub(x, 6.28318530693650245667e+00)
+                ky = __hx_payload_fsub(z, 2.43084020260247689972e-10)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fsub(d, 2.43084020260247689972e-10)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = 4
+            } else {
+                let z = __hx_payload_fadd(x, 6.28318530693650245667e+00)
+                ky = __hx_payload_fadd(z, 2.43084020260247689972e-10)
+                let d = __hx_payload_fsub(z, ky)
+                let t = __hx_payload_fadd(d, 2.43084020260247689972e-10)
+                kx = __hx_payload_add(ky, 0)
+                ky = __hx_payload_add(t, 0)
+                n = -4
+            }
+            kiy = 1
+            reduced = 1
+        }
+    }
+
+    // MEDIUM path: |x| < 2^20*(pi/2)  (ix < 0x413921fb) — IDENTICAL to sin.
+    if __hx_payload_eq(reduced, 0) {
+        if __hx_payload_ult(ix, 1094263291) {
+            let xi = __hx_payload_fmul(x, 6.36619772367581382433e-01)   // x*invpio2
+            let fa = __hx_payload_fadd(xi, 6755399441055744.0)          // + toint
+            qn = __hx_payload_fsub(fa, 6755399441055744.0)              // - toint
+            n = __hx_payload_f2i(qn)              // n = (int32_t)qn
+            let fnp1 = __hx_payload_fmul(qn, 1.57079632673412561417e+00)
+            r = __hx_payload_fsub(x, fnp1)
+            w = __hx_payload_fmul(qn, 6.07710050650619224932e-11)
+            let rmw = __hx_payload_fsub(r, w)
+            if __hx_payload_flt(rmw, -7.85398163397448278999e-01) {
+                n = __hx_payload_sub(n, 1)
+                qn = __hx_payload_fsub(qn, 1.0)
+                let fnp1b = __hx_payload_fmul(qn, 1.57079632673412561417e+00)
+                r = __hx_payload_fsub(x, fnp1b)
+                w = __hx_payload_fmul(qn, 6.07710050650619224932e-11)
+            } else {
+                if __hx_payload_fgt(rmw, 7.85398163397448278999e-01) {
+                    n = __hx_payload_add(n, 1)
+                    qn = __hx_payload_fadd(qn, 1.0)
+                    let fnp1c = __hx_payload_fmul(qn, 1.57079632673412561417e+00)
+                    r = __hx_payload_fsub(x, fnp1c)
+                    w = __hx_payload_fmul(qn, 6.07710050650619224932e-11)
+                }
+            }
+            ky = __hx_payload_fsub(r, w)          // y[0] = r - w  (1st round)
+            let y0bits = __hx_payload_add(ky, 0)
+            let y0sh = __hx_payload_shr(y0bits, 52)
+            ey = __hx_payload_and(y0sh, 2047)
+            let ex = __hx_payload_shr(ix, 20)
+            let exmey = __hx_payload_sub(ex, ey)
+            if __hx_payload_lt(16, exmey) {       // ex - ey > 16  → 2nd round
+                let t = __hx_payload_add(r, 0)
+                w = __hx_payload_fmul(qn, 6.07710050630396597660e-11)
+                r = __hx_payload_fsub(t, w)
+                let tmr = __hx_payload_fsub(t, r)
+                let tmrmw = __hx_payload_fsub(tmr, w)
+                let fp2t = __hx_payload_fmul(qn, 2.02226624879595063154e-21)
+                w = __hx_payload_fsub(fp2t, tmrmw)
+                ky = __hx_payload_fsub(r, w)
+                let y0b2 = __hx_payload_add(ky, 0)
+                let y0s2 = __hx_payload_shr(y0b2, 52)
+                ey = __hx_payload_and(y0s2, 2047)
+                let exmey2 = __hx_payload_sub(ex, ey)
+                if __hx_payload_lt(49, exmey2) {  // ex - ey > 49  → 3rd round
+                    let t3 = __hx_payload_add(r, 0)
+                    w = __hx_payload_fmul(qn, 2.02226624871116645580e-21)
+                    r = __hx_payload_fsub(t3, w)
+                    let tmr3 = __hx_payload_fsub(t3, r)
+                    let tmrmw3 = __hx_payload_fsub(tmr3, w)
+                    let fp3t = __hx_payload_fmul(qn, 8.47842766036889956997e-32)
+                    w = __hx_payload_fsub(fp3t, tmrmw3)
+                    ky = __hx_payload_fsub(r, w)
+                }
+            }
+            let rmy0 = __hx_payload_fsub(r, ky)
+            let y1v = __hx_payload_fsub(rmy0, w)  // y[1] = (r - y[0]) - w
+            kx = __hx_payload_add(ky, 0)          // kernel x = y[0]
+            ky = __hx_payload_add(y1v, 0)         // kernel y = y[1]
+            kiy = 1
+            reduced = 1
+        }
+    }
+
+    // LARGE path NOT ported (🧱 Payne-Hanek __rem_pio2_large table) — return x-x.
+    if __hx_payload_eq(reduced, 0) {
+        let big = __hx_payload_fsub(x, x)
+        return big
+    }
+
+    // ── n&3 → (want_cos, neg) per the musl COS.c switch (differs from sin) ──
+    //   case 0:  __cos(kx,ky)            want_cos=1 neg=0
+    //   case 1: -__sin(kx,ky,iy)         want_cos=0 neg=1
+    //   case 2: -__cos(kx,ky)            want_cos=1 neg=1
+    //   case 3:  __sin(kx,ky,iy)         want_cos=0 neg=0
+    // (only set from the reduction path — the |x|<pi/4 fast path already set
+    //  want_cos=1 and left reduced=1 BEFORE reaching here, with n=0 untouched, so its
+    //  nm3==0 maps to want_cos=1 too — consistent.)
+    let nm3 = __hx_payload_and(n, 3)
+    if __hx_payload_eq(nm3, 0) { want_cos = 1 }
+    if __hx_payload_eq(nm3, 1) {
+        want_cos = 0
+        neg = 1
+    }
+    if __hx_payload_eq(nm3, 2) {
+        want_cos = 1
+        neg = 1
+    }
+    if __hx_payload_eq(nm3, 3) { want_cos = 0 }
+
+    // ── inlined __sin kernel (musl __sin.c · S1..S6) on (kx, ky, kiy) ──
+    let mut sin_res = __hx_payload_fsub(x, x)
+    if __hx_payload_eq(want_cos, 0) {
+        let z = __hx_payload_fmul(kx, kx)
+        let ww = __hx_payload_fmul(z, z)
+        let zS4 = __hx_payload_fmul(z, 2.75573137070700676789e-06)        // z*S4
+        let S3zS4 = __hx_payload_fadd(zS4, -1.98412698298579493134e-04)   // S3 + z*S4
+        let zInner = __hx_payload_fmul(z, S3zS4)
+        let part1 = __hx_payload_fadd(zInner, 8.33333333332248946124e-03) // S2 + …
+        let zS6 = __hx_payload_fmul(z, 1.58969099521155010221e-10)        // z*S6
+        let S5zS6 = __hx_payload_fadd(zS6, -2.50507602534068634195e-08)   // S5 + z*S6
+        let zw = __hx_payload_fmul(z, ww)
+        let part2 = __hx_payload_fmul(zw, S5zS6)
+        let rr = __hx_payload_fadd(part1, part2)                          // r
+        let v = __hx_payload_fmul(z, kx)                                  // v = z*kx
+        if __hx_payload_eq(kiy, 0) {
+            let zr = __hx_payload_fmul(z, rr)
+            let s1zr = __hx_payload_fadd(zr, -1.66666666666666324348e-01) // S1 + z*r
+            let vterm = __hx_payload_fmul(v, s1zr)
+            sin_res = __hx_payload_fadd(kx, vterm)                        // kx + v*(…)
+        } else {
+            let halfy = __hx_payload_fmul(0.5, ky)
+            let vr = __hx_payload_fmul(v, rr)
+            let inner = __hx_payload_fsub(halfy, vr)                      // 0.5*ky - v*r
+            let zin = __hx_payload_fmul(z, inner)
+            let zinmy = __hx_payload_fsub(zin, ky)                        // z*(…) - ky
+            let vS1 = __hx_payload_fmul(v, -1.66666666666666324348e-01)   // v*S1
+            let bracket = __hx_payload_fsub(zinmy, vS1)
+            sin_res = __hx_payload_fsub(kx, bracket)                      // kx - (…)
+        }
+    }
+
+    // ── inlined __cos kernel (musl __cos.c · C1..C6) on (kx, ky) ──
+    let mut cos_res = __hx_payload_fsub(x, x)
+    if __hx_payload_eq(want_cos, 1) {
+        let z = __hx_payload_fmul(kx, kx)
+        let w0 = __hx_payload_fmul(z, z)
+        let zC3 = __hx_payload_fmul(z, 2.48015872894767294178e-05)        // z*C3
+        let C2zC3 = __hx_payload_fadd(zC3, -1.38888888888741095749e-03)   // C2 + z*C3
+        let zC2 = __hx_payload_fmul(z, C2zC3)
+        let C1in = __hx_payload_fadd(zC2, 4.16666666666666019037e-02)     // C1 + …
+        let rA = __hx_payload_fmul(z, C1in)
+        let zC6 = __hx_payload_fmul(z, -1.13596475577881948265e-11)       // z*C6 (neg)
+        let C5zC6 = __hx_payload_fadd(zC6, 2.08757232129817482790e-09)    // C5 + z*C6
+        let zC5 = __hx_payload_fmul(z, C5zC6)
+        let C4in = __hx_payload_fadd(zC5, -2.75573143513906633035e-07)    // C4 + …
+        let wwc = __hx_payload_fmul(w0, w0)                               // w*w
+        let rB = __hx_payload_fmul(wwc, C4in)
+        let rr = __hx_payload_fadd(rA, rB)                               // r
+        let hz = __hx_payload_fmul(0.5, z)                               // hz = 0.5*z
+        let wc = __hx_payload_fsub(1.0, hz)                              // w = 1.0 - hz
+        let omw = __hx_payload_fsub(1.0, wc)                             // 1.0 - w
+        let omwmhz = __hx_payload_fsub(omw, hz)                          // (1.0-w) - hz
+        let zr = __hx_payload_fmul(z, rr)                               // z*r
+        let xy = __hx_payload_fmul(kx, ky)                              // kx*ky
+        let zrmxy = __hx_payload_fsub(zr, xy)                           // z*r - kx*ky
+        let tail = __hx_payload_fadd(omwmhz, zrmxy)
+        cos_res = __hx_payload_fadd(wc, tail)                           // w + (…)
+    }
+
+    // select kernel result, then apply the sign from the n&3 table.
+    let mut res = __hx_payload_add(sin_res, 0)
+    if __hx_payload_eq(want_cos, 1) {
+        res = __hx_payload_add(cos_res, 0)
+    }
+    if __hx_payload_eq(neg, 1) {
+        let nres = __hx_payload_fsub(0.0, res)
+        return nres
+    }
+    return res
+}
+
+// ── RFC061 §M8 named-rodata-table PROBE (literal-∅ feature C, STEP-0 witness) ──
+// `double hxlcl_rotab_probe(void)` — the minimal end-to-end witness for the
+// named-rodata-double-array codegen mechanism that exp/log need. Addresses the
+// codegen-defined `rotab_0` constant table (id 0 = {1.0, 2.0}) via the
+// `__hx_rodata_tab_ptr(0)` intrinsic, loads tab[0] and tab[1] (8-byte LE doubles
+// at byte offsets 0 and 8) via __hx_ptr_load64, and returns tab[0]+tab[1] = 3.0
+// as an SSE-class double. If this survives emit->assemble->link->run and yields
+// exactly 3.0, the .rodata table data round-trips and the same loader serves
+// exp's tab[256]. NEVER imported by self/ -> byteeq-neutral (DEFAULT-OFF).
+pub fn hxlcl_rotab_probe() -> int {
+    let base = __hx_rodata_tab_ptr(0)        // &rotab_0  (boxed addr)
+    let q0 = __hx_ptr_load64(base, 0)        // tab[0] bits (1.0)
+    let q1 = __hx_ptr_load64(base, 8)        // tab[1] bits (2.0)
+    let s = __hx_payload_fadd(q0, q1)        // 1.0 + 2.0 = 3.0
+    return s
+}
+
+// ── RFC061 §M8 RT-NATIVE-EXP (table-driven libm leaf, literal-∅ feature C) ─────
+// `double hxlcl_exp(double x)` — a 1:1 port of musl src/math/exp.c (EXP_TABLE_BITS
+// =7, N=128, POLY_ORDER=5; non-FMA, non-TOINT path). Reference: musl exp.c
+// (git.musl-libc.org/cgit/musl/plain/src/math/exp.c) + exp_data.c. The 256-entry
+// __exp_data.tab lives as the codegen named-rodata table `rotab_1`
+// (`_x86_rodata_table_spec(1)`), addressed via __hx_rodata_tab_ptr(1) and read
+// per-cell with __hx_ptr_load64. All scalar coefficients are inline f64 literals
+// (full-precision decimal; bit-exact to musl's hex floats — verified by
+// build/exp_consts.c). All fp ops via __hx_payload_f{add,sub,mul} on raw IEEE-754
+// payload words; integer/bit ops via __hx_payload_{add,sub,and,or,shl,shr,ult,ule,
+// eq,ne}. `let mut` carried state hoisted to fn top (flatten discipline). The
+// shim drops its libc exp() member via -DHEXA_RT_NATIVE_EXP. default-OFF
+// byteeq-neutral (hxlcl_core never imported by self/).
+//
+// Constants (musl exp.c #defines, decoded by build/exp_consts.c):
+//   InvLn2N  = 0x1.71547652b82fep0*128 = 1.84664965233787313537e+02
+//   NegLn2hiN= -0x1.62e42fefa0000p-8   = -5.41521234811170870671e-03
+//   NegLn2loN= -0x1.cf79abc9e3b3ap-47  = -1.28640231116383455381e-14
+//   Shift    = 0x1.8p52                = 6.75539944105574400000e+15
+//   C2=0x1.ffffffffffdbdp-2  C3=0x1.555555555543cp-3
+//   C4=0x1.55555cf172b91p-5  C5=0x1.1111167a4d017p-7
+//   top12(0x1p-54)=969  top12(512)=1032  top12(1024)=1033  top12(INF)=2047
+pub fn hxlcl_exp(x: HexaVal) -> int {
+    let uxi = __hx_payload_add(x, 0)                 // asuint64(x)
+    let t12 = __hx_payload_shr(uxi, 52)              // top12(x) = bits>>52
+    let abstop0 = __hx_payload_and(t12, 2047)        // & 0x7ff
+
+    // ── hoisted carried state ──
+    let mut abstop = __hx_payload_add(abstop0, 0)    // may be zeroed on large path
+    let mut took_special = 0                          // 1 → an early return fired
+
+    // predict_false(abstop - top12(0x1p-54) >= top12(512) - top12(0x1p-54)):
+    //   (abstop - 969) >= 63   [unsigned 32-bit]
+    let d969 = __hx_payload_and(__hx_payload_sub(abstop0, 969), 4294967295)  // &0xffffffff
+    if __hx_payload_ule(63, d969) {
+        // tiny: (abstop - 969) >= 0x80000000 (unsigned) → return 1.0 + x
+        if __hx_payload_ule(2147483648, d969) {
+            let one_t = __hx_payload_i2f(1)
+            let r1 = __hx_payload_fadd(one_t, x)      // WANT_ROUNDING → 1.0 + x
+            return r1
+        }
+        // abstop >= top12(1024) = 1033 → over/underflow/inf/nan
+        if __hx_payload_ule(1033, abstop0) {
+            // asuint64(x) == asuint64(-INFINITY) → 0.0
+            if __hx_payload_eq(uxi, 18442240474082181120) {     // 0xfff0000000000000
+                return 0                                          // +0.0 bits
+            }
+            // abstop >= top12(INFINITY)=2047 → 1.0 + x  (NaN/+Inf)
+            if __hx_payload_ule(2047, abstop0) {
+                let one_n = __hx_payload_i2f(1)
+                let rn = __hx_payload_fadd(one_n, x)
+                return rn
+            }
+            // sign bit set (asuint64(x)>>63) → underflow → +0.0 ; else overflow → +Inf
+            let sgn = __hx_payload_shr(uxi, 63)
+            if __hx_payload_ne(sgn, 0) {
+                return 0                                          // __math_uflow(0) → +0.0
+            }
+            return 9218868437227405312                            // 0x7ff0000000000000 = +Inf (oflow)
+        }
+        // large x is special-cased below: abstop = 0
+        abstop = 0
+    }
+
+    // z = InvLn2N * x
+    let z = __hx_payload_fmul(1.84664965233787313537e+02, x)
+    // kd = eval_as_double(z + Shift); ki = asuint64(kd); kd -= Shift
+    let kd0 = __hx_payload_fadd(z, 6.75539944105574400000e+15)
+    let ki = __hx_payload_add(kd0, 0)                // asuint64(kd0)
+    let kd = __hx_payload_fsub(kd0, 6.75539944105574400000e+15)
+    // r = x + kd*NegLn2hiN + kd*NegLn2loN
+    let khi = __hx_payload_fmul(kd, -5.41521234811170870671e-03)
+    let klo = __hx_payload_fmul(kd, -1.28640231116383455381e-14)
+    let rxh = __hx_payload_fadd(x, khi)
+    let r = __hx_payload_fadd(rxh, klo)
+    // idx = 2*(ki % 128) ; top = ki << (52-7)=45 ; tail = asdouble(T[idx]) ;
+    // sbits = T[idx+1] + top
+    let kimod = __hx_payload_and(ki, 127)            // ki % 128
+    let idx = __hx_payload_shl(kimod, 1)             // 2*(ki%128)
+    let top = __hx_payload_shl(ki, 45)               // ki << 45
+    let tabbase = __hx_rodata_tab_ptr(1)             // &rotab_1 (exp tab[256])
+    let off0 = __hx_payload_shl(idx, 3)              // byte offset T[idx]   (idx*8)
+    let tail = __hx_ptr_load64(tabbase, off0)        // asdouble(T[idx]) bits
+    let off1 = __hx_payload_add(off0, 8)             // byte offset T[idx+1]
+    let tb1 = __hx_ptr_load64(tabbase, off1)         // T[idx+1] (uint64)
+    let sbits = __hx_payload_add(tb1, top)           // T[idx+1] + top
+    // r2 = r*r ; tmp = tail + r + r2*(C2 + r*C3) + r2*r2*(C4 + r*C5)
+    let r2 = __hx_payload_fmul(r, r)
+    let rC3 = __hx_payload_fmul(r, 1.66666666666658858098e-01)             // r*C3
+    let C2rC3 = __hx_payload_fadd(4.99999999999967859043e-01, rC3)         // C2 + r*C3
+    let p1 = __hx_payload_fmul(r2, C2rC3)                                  // r2*(C2+r*C3)
+    let rC5 = __hx_payload_fmul(r, 8.33333585305954908928e-03)            // r*C5
+    let C4rC5 = __hx_payload_fadd(4.16666808410674008312e-02, rC5)        // C4 + r*C5
+    let r2r2 = __hx_payload_fmul(r2, r2)                                   // r2*r2
+    let p2 = __hx_payload_fmul(r2r2, C4rC5)                                // r2*r2*(C4+r*C5)
+    let s0 = __hx_payload_fadd(tail, r)                                    // tail + r
+    let s1 = __hx_payload_fadd(s0, p1)
+    let tmp = __hx_payload_fadd(s1, p2)
+
+    // ── result selection — SINGLE return at fn end (flatten discipline: NO mid-
+    //    body returns; mutually-exclusive flag-guarded blocks write `result`). ──
+    //    musl: if (predict_false(abstop==0)) return specialcase(tmp,sbits,ki);
+    //          else return eval_as_double(scale + scale*tmp).
+    // (A) SIMPLE path computed UNCONDITIONALLY into `result` (scale=asdouble(sbits);
+    //     scale + scale*tmp). This is the dominant path; the specialcase below
+    //     OVERWRITES `result` only when abstop==0. Computing it unconditionally
+    //     (not under an `if`) keeps `tmp`/`sbits` short-lived — their consuming
+    //     ops run immediately after they are produced, before the heavy
+    //     specialcase locals exist — which the codegen spill-allocator lowers
+    //     identically to the standalone simple path (verified value-exact; the
+    //     guarded variant aliased a spill slot and lost 2 ULP at large |x|).
+    let scale_n = __hx_payload_add(sbits, 0)
+    let sctn = __hx_payload_fmul(scale_n, tmp)
+    let mut result = __hx_payload_fadd(scale_n, sctn)
+    let is_special = __hx_payload_eq(abstop, 0)        // 1 → over/underflow path
+
+    // (B) SPECIALCASE path (abstop == 0): inline musl specialcase(tmp,sbits,ki).
+    //     k>0 (ki&0x80000000==0) vs k<0 are mutually exclusive sub-branches; each
+    //     writes `result`. No mid-body return.
+    if __hx_payload_ne(is_special, 0) {
+        let kihi = __hx_payload_and(ki, 2147483648)    // ki & 0x80000000
+        // (B1) k > 0: sbits -= 1009<<52; scale=asdouble(sbits);
+        //             y = 0x1p1009 * (scale + scale*tmp).
+        if __hx_payload_eq(kihi, 0) {
+            let sb = __hx_payload_sub(sbits, 4544132024016830464)  // 1009<<52
+            let scale = __hx_payload_add(sb, 0)
+            let sct = __hx_payload_fmul(scale, tmp)
+            let sum = __hx_payload_fadd(scale, sct)
+            // 0x1p1009 passed as integer bits 0x7f00000000000000 (same strtod-
+            // boundary caution as 0x1p-1022; verified bit-exact).
+            result = __hx_payload_fmul(9151314442816847872, sum)   // 0x1p1009
+        }
+        // (B2) k < 0: sbits += 1022<<52; scale=asdouble(sbits); y = scale+scale*tmp;
+        //             if (y<1.0) precise subnormal rounding; y = 0x1p-1022 * y.
+        if __hx_payload_ne(kihi, 0) {
+            let sb2 = __hx_payload_add(sbits, 4602678819172646912)    // 1022<<52
+            let scale2 = __hx_payload_add(sb2, 0)
+            let sct2 = __hx_payload_fmul(scale2, tmp)
+            let mut y2 = __hx_payload_fadd(scale2, sct2)
+            // if (y < 1.0) { precise subnormal rounding } — flag-guarded (no early ret)
+            if __hx_payload_flt(y2, 1.0) {
+                let lo0 = __hx_payload_fsub(scale2, y2)                // scale - y
+                let lo1 = __hx_payload_fadd(lo0, sct2)                // + scale*tmp
+                let hi0 = __hx_payload_fadd(1.0, y2)                  // 1.0 + y
+                let lo2a = __hx_payload_fsub(1.0, hi0)                // 1.0 - hi
+                let lo2b = __hx_payload_fadd(lo2a, y2)                // + y
+                let lo2 = __hx_payload_fadd(lo2b, lo1)                // + lo
+                let hilo = __hx_payload_fadd(hi0, lo2)
+                y2 = __hx_payload_fsub(hilo, 1.0)                     // (hi+lo) - 1.0
+                // WANT_ROUNDING && y==0.0 → y=0.0 and the explicit underflow
+                // fp_force_eval signal are side-effect-only → omitted (value path).
+            }
+            // 0x1p-1022 * y — the smallest-normal scale 0x0010000000000000 is passed
+            // as its INTEGER bit pattern (4503599627370496), NOT the decimal
+            // 2.225…e-308: hexa's native strtod rounds that decimal 1 ULP high
+            // (→0x0010000000000001), which poisoned the subnormal-tail result by ≤2
+            // ULP. __hx_payload_fmul treats the payload word as the f64 bits, so the
+            // integer literal IS exactly 0x1p-1022 (verified value-exact).
+            result = __hx_payload_fmul(4503599627370496, y2)  // 0x1p-1022 * y
+        }
+    }
+    return result
+}
+
+// ── RFC061 §M8 RT-NATIVE-LOG (table-driven libm leaf, literal-∅ feature C) ─────
+// `double hxlcl_log(double x)` — a 1:1 port of musl src/math/log.c (LOG_TABLE_BITS
+// =7, N=128, POLY_ORDER=6; NON-FMA path). Reference: musl log.c
+// (git.musl-libc.org/cgit/musl/plain/src/math/log.c) + log_data.c. This is the
+// LAST clean libm shim symbol (sin/cos/fmod/exp already native → shim libm 4→3).
+//
+// The 512 doubles of __log_data (tab[128]×{invc,logc} = 256 doubles, then
+// tab2[128]×{chi,clo} = 256 doubles) live as the codegen named-rodata table
+// `rotab_2` (`_x86_rodata_table_spec(2)`), addressed via __hx_rodata_tab_ptr(2)
+// and read per-cell with __hx_ptr_load64. The layout is tab FIRST (byte 0..2047)
+// then tab2 (byte 2048..4095); for subinterval index i (0..127):
+//   T[i].invc  = rotab_2[ i*16 +    0 ]   T[i].logc  = rotab_2[ i*16 +    8 ]
+//   T2[i].chi  = rotab_2[ i*16 + 2048 ]   T2[i].clo  = rotab_2[ i*16 + 2056 ]
+// All scalar coefficients (B[0..10], A[0..4], Ln2hi, Ln2lo) are inline f64
+// literals decoded by build/log_consts (bit-exact to musl's hex floats). All fp
+// ops via __hx_payload_f{add,sub,mul,div} on raw IEEE-754 payload words;
+// integer/bit ops via __hx_payload_{add,sub,and,or,shl,shr,ult,ule,eq,ne}.
+//
+// ⚠ ARITHMETIC SHIFT: musl `k = (int64_t)tmp >> 52` is an ARITHMETIC shift, but
+// __hx_payload_shr is LOGICAL (zero-fill). Reproduced bit-exactly with existing
+// ops: u = tmp>>52 (logical, always in [0,4095] — only 12 bits remain); if
+// u >= 2048 then k = u - 4096 (two's-complement sign-extend) else k = u. Verified
+// exact vs `(int64_t)tmp>>52` over 2M random + edge inputs (NO new intrinsic).
+// `let mut` carried state hoisted to fn top (flatten discipline). The shim drops
+// its libc log() member via -DHEXA_RT_NATIVE_LOG. default-OFF byteeq-neutral
+// (hxlcl_core never imported by self/).
+//
+// Constants (musl log.c #defines + log_data.c, decoded by build/log_consts):
+//   N=128  OFF=0x3fe6000000000000  Ln2hi=0x1.62e42fefa3800p-1 Ln2lo=0x1.ef35793c76730p-45
+//   LO=asuint64(1.0-0x1p-4)=0x3fee000000000000  HI=asuint64(1.0+0x1.09p-4)=0x3ff1090000000000
+//   HI-LO=0x3090000000000  top16(x)=ix>>48  top-0x0010>=0x7fe0 → special
+//   asuint64(1.0)=0x3ff0000000000000  asuint64(INFINITY)=0x7ff0000000000000
+//   0x1p52=0x4330000000000000  52<<52=0x340000000000000  0xfff<<52=0xfff0000000000000
+//   B[0]=-0.5(0xbfe0…)  0x1p27=0x41a0000000000000
+pub fn hxlcl_log(x: HexaVal) -> int {
+    let mut ix = __hx_payload_add(x, 0)              // asuint64(x)
+    let top = __hx_payload_shr(ix, 48)               // top16(x) = ix>>48
+
+    // ── (A) close-to-1.0 path: predict_false(ix - LO < HI - LO) [unsigned 64-bit].
+    //    LO=asuint64(1-0x1p-4)=0x3fee… ; HI-LO=0x3090000000000. musl mid-body
+    //    returns are fine here (hxlcl_exp's tiny/special branches do the same). ──
+    let lo_lt = __hx_payload_sub(ix, 4606619468846596096)   // ix - LO (LO=0x3fee000000000000)
+    if __hx_payload_ult(lo_lt, 854320534781952) {           // < (HI-LO)=0x3090000000000
+        // WANT_ROUNDING && ix == asuint64(1.0) → return +0 (fix sign of zero).
+        if __hx_payload_eq(ix, 4607182418800017408) {       // asuint64(1.0)=0x3ff0000000000000
+            return 0
+        }
+        let r = __hx_payload_fsub(x, 1.0)                    // r = x - 1.0
+        let r2 = __hx_payload_fmul(r, r)                     // r2 = r*r
+        let r3 = __hx_payload_fmul(r, r2)                    // r3 = r*r2
+        // y = r3*(B[1] + r*B[2] + r2*B[3] + r3*(B[4] + r*B[5] + r2*B[6]
+        //         + r3*(B[7] + r*B[8] + r2*B[9] + r3*B[10])))
+        // (coefficients passed as raw IEEE-754 bit patterns → fmul reinterprets as
+        //  f64; bit-exact to musl hex floats, NO strtod rounding — the exp powers-
+        //  of-2-as-bits discipline applied to every coeff.)
+        let inA = __hx_payload_fmul(r3, 13814037675563369933)            // r3*B[10]
+        let inB = __hx_payload_fadd(__hx_payload_fmul(r2, 4591280744628736133), inA)   // r2*B[9] + …
+        let inC = __hx_payload_fadd(__hx_payload_fmul(r, 13815242567667706111), inB)   // r*B[8] + …
+        let inD = __hx_payload_fadd(4592670532434581194, inC)            // B[7] + …
+        let inE = __hx_payload_fmul(r3, inD)                             // r3*(B7+…)
+        let inF = __hx_payload_fadd(__hx_payload_fmul(r2, 13817043655233518949), inE)  // r2*B[6] + …
+        let inG = __hx_payload_fadd(__hx_payload_fmul(r, 4594314991578177072), inF)    // r*B[5] + …
+        let inH = __hx_payload_fadd(13818544856649647527, inG)           // B[4] + …
+        let inI = __hx_payload_fmul(r3, inH)                             // r3*(B4+…)
+        let inJ = __hx_payload_fadd(__hx_payload_fmul(r2, 4596373779694083340), inI)   // r2*B[3] + …
+        let inK = __hx_payload_fadd(__hx_payload_fmul(r, 13821547256400051659), inJ)   // r*B[2] + …
+        let inL = __hx_payload_fadd(4599676419421066615, inK)            // B[1] + …
+        let mut y = __hx_payload_fmul(r3, inL)                           // y = r3*(B1+…)
+        // w = r*0x1p27 ; rhi = r + w - w ; rlo = r - rhi
+        let w0 = __hx_payload_fmul(r, 4728779608739020800)               // r * 0x1p27 (0x41a0…)
+        let rhi = __hx_payload_fsub(__hx_payload_fadd(r, w0), w0)        // r + w - w
+        let rlo = __hx_payload_fsub(r, rhi)                              // r - rhi
+        // w = rhi*rhi*B[0] (B[0] == -0.5) ; hi = r + w ; lo = r - hi + w
+        let w1 = __hx_payload_fmul(__hx_payload_fmul(rhi, rhi), 13826050856027422720)  // rhi*rhi*B[0]
+        let hi = __hx_payload_fadd(r, w1)                                // hi = r + w
+        let lo0 = __hx_payload_fadd(__hx_payload_fsub(r, hi), w1)        // lo = r - hi + w
+        // lo += B[0]*rlo*(rhi + r)
+        let lo1 = __hx_payload_fadd(lo0,
+                    __hx_payload_fmul(__hx_payload_fmul(13826050856027422720, rlo),
+                                      __hx_payload_fadd(rhi, r)))
+        y = __hx_payload_fadd(y, lo1)                                    // y += lo
+        y = __hx_payload_fadd(y, hi)                                     // y += hi
+        return y
+    }
+
+    // ── (B) special values: predict_false(top - 0x0010 >= 0x7ff0 - 0x0010) i.e.
+    //    (top - 16) >= 0x7fe0  [unsigned]. x < 0x1p-1022 or inf or nan. ──
+    let topm = __hx_payload_sub(top, 16)
+    if __hx_payload_ule(32736, topm) {                       // (top-16) >= 0x7fe0
+        // ix*2 == 0 → x == ±0 → log(0) = -inf (__math_divzero(1)).
+        let ix2 = __hx_payload_shl(ix, 1)
+        if __hx_payload_eq(ix2, 0) {
+            return 18442240474082181120                       // -INFINITY = 0xfff0000000000000
+        }
+        // ix == asuint64(INFINITY) → log(+inf) == +inf → return x.
+        if __hx_payload_eq(ix, 9218868437227405312) {        // +INFINITY = 0x7ff0000000000000
+            return x
+        }
+        // (top & 0x8000) [negative] || (top & 0x7ff0)==0x7ff0 [nan] → invalid → NaN.
+        let neg = __hx_payload_and(top, 32768)               // top & 0x8000
+        let nanm = __hx_payload_and(top, 32752)              // top & 0x7ff0
+        if __hx_payload_ne(neg, 0) {
+            let xmx = __hx_payload_fsub(x, x)                 // __math_invalid: (x-x)/(x-x)
+            return __hx_payload_fdiv(xmx, xmx)
+        }
+        if __hx_payload_eq(nanm, 32752) {
+            let xmx2 = __hx_payload_fsub(x, x)
+            return __hx_payload_fdiv(xmx2, xmx2)
+        }
+        // x is subnormal, normalize: ix = asuint64(x * 0x1p52); ix -= 52ULL<<52.
+        let xs = __hx_payload_fmul(x, 4841369599423283200)   // x * 0x1p52 (0x4330…)
+        ix = __hx_payload_sub(__hx_payload_add(xs, 0), 234187180623265792)  // -= 52<<52
+    }
+
+    // ── (C) general case. x = 2^k z ; z in [OFF, 2*OFF). tmp = ix - OFF. ──
+    let tmp = __hx_payload_sub(ix, 4604367669032910848)      // ix - OFF (OFF=0x3fe6000000000000)
+    // i = (tmp >> (52-7)) % N = (tmp >> 45) & 127
+    let i = __hx_payload_and(__hx_payload_shr(tmp, 45), 127)
+    // k = (int64_t)tmp >> 52  (ARITHMETIC). __hx_payload_shr is LOGICAL → reproduce
+    //   exactly: u = tmp>>52 ∈ [0,4095]; k = (u>=2048) ? u-4096 : u. (verified exact.)
+    let ku = __hx_payload_shr(tmp, 52)
+    let mut kw = __hx_payload_add(ku, 0)
+    if __hx_payload_ule(2048, ku) {
+        kw = __hx_payload_sub(ku, 4096)                      // two's-complement sign-extend
+    }
+    // iz = ix - (tmp & 0xfffULL<<52) ; z = asdouble(iz)
+    let iz = __hx_payload_sub(ix, __hx_payload_and(tmp, 18442240474082181120))  // 0xfff<<52
+    let z = __hx_payload_add(iz, 0)                          // asdouble(iz) bits
+    // table reads: rotab_2 = tab(0..2047) then tab2(2048..4095). cell = i*16.
+    let tabbase = __hx_rodata_tab_ptr(2)
+    let icell = __hx_payload_shl(i, 4)                       // i*16 byte offset
+    let invc = __hx_ptr_load64(tabbase, icell)               // T[i].invc  (off i*16)
+    let logc = __hx_ptr_load64(tabbase, __hx_payload_add(icell, 8))         // T[i].logc
+    let chi  = __hx_ptr_load64(tabbase, __hx_payload_add(icell, 2048))      // T2[i].chi
+    let clo  = __hx_ptr_load64(tabbase, __hx_payload_add(icell, 2056))      // T2[i].clo
+    // NON-FMA: r = (z - T2[i].chi - T2[i].clo) * invc
+    let zr0 = __hx_payload_fsub(z, chi)
+    let zr1 = __hx_payload_fsub(zr0, clo)
+    let r = __hx_payload_fmul(zr1, invc)
+    let kd = __hx_payload_i2f(kw)                            // kd = (double_t)k (signed)
+    // w = kd*Ln2hi + logc ; hi = w + r ; lo = w - hi + r + kd*Ln2lo
+    let w = __hx_payload_fadd(__hx_payload_fmul(kd, 4604418534313441280), logc)  // kd*Ln2hi + logc
+    let hi = __hx_payload_fadd(w, r)
+    let loA = __hx_payload_fadd(__hx_payload_fadd(__hx_payload_fsub(w, hi), r),
+                                __hx_payload_fmul(kd, 4408728642709317424))      // + kd*Ln2lo
+    // r2 = r*r ; y = lo + r2*A[0] + r*r2*(A[1] + r*A[2] + r2*(A[3] + r*A[4])) + hi
+    // A bits: A[0]=13826050856027422721 A[1]=4599676419420794971 A[2]=13821547256398693776
+    //         A[3]=4596373889406271761  A[4]=13818544996498196639
+    let r2g = __hx_payload_fmul(r, r)
+    // Horner inner = A[1] + r*A[2] + r2*(A[3] + r*A[4])
+    let q0 = __hx_payload_fadd(4596373889406271761,          // A[3]
+                __hx_payload_fmul(r, 13818544996498196639))  // + r*A[4]
+    let q1 = __hx_payload_fmul(r2g, q0)                      // r2*(A[3]+r*A[4])
+    let q2 = __hx_payload_fadd(__hx_payload_fmul(r, 13821547256398693776), q1)  // r*A[2] + …
+    let q3 = __hx_payload_fadd(4599676419420794971, q2)      // A[1] + …
+    let q4 = __hx_payload_fmul(__hx_payload_fmul(r, r2g), q3)  // r*r2*(A[1]+…)
+    let yA = __hx_payload_fadd(loA, __hx_payload_fmul(r2g, 13826050856027422721))  // lo + r2*A[0]
+    let yB = __hx_payload_fadd(yA, q4)
+    let y = __hx_payload_fadd(yB, hi)
+    return y
+}
+
+// ── SIGNAL (Route C · ING#29 literal-∅ ∅−7 · sa_restorer WIRED) ─────────────
+//
+// hxlcl_signal(signum, handler) — DROP-ON literal-∅ candidate. The shim member at
+// self/runtime_core_hxlcl_shim.c is `return (void*)signal(signum, handler)` — a libc
+// `signal(3)` delegate. The frozen floor (runtime_emit_full.hexa) has a SEPARATE inert
+// `rt_posix_ok()` stub under the same name in a different TU — the two are NOT the same
+// surface (literal-∅ = shim member, NOT floor-reduction; do not conflate).
+//
+// REFERENCE-MATCH (musl src/signal/signal.c:4-10 + src/signal/sigaction.c):
+//   void (*signal(int sig, void (*func)(int)))(int) {
+//       struct sigaction sa_old, sa = { .sa_handler = func, .sa_flags = SA_RESTART };
+//       if (__sigaction(sig, &sa, &sa_old) < 0) return SIG_ERR;
+//       return sa_old.sa_handler;
+//   }
+// musl __sigaction → __libc_sigaction issues the kernel
+//   __syscall(SYS_rt_sigaction, sig, &ksa, &ksa_old, _NSIG/8)
+// with the KERNEL k_sigaction struct. On x86_64-linux the kernel struct is
+//   { void* sa_handler@0; unsigned long sa_flags@8; void* sa_restorer@16; sigset_t sa_mask@24 }
+// (size 32, _NSIG/8 = 8). On arm64-linux there is NO sa_restorer field:
+//   { void* sa_handler@0; unsigned long sa_flags@8; sigset_t sa_mask@16 } (size 24).
+// NR rt_sigaction: x86_64 = 13 (syscall_64.tbl) · arm64 = 134 (asm-generic/unistd.h).
+// SA_RESTART = 0x10000000 (Linux UAPI signal.h). SA_RESTORER = 0x04000000 (x86_64 ONLY —
+// the kernel REQUIRES sa_restorer set on x86_64; arm64 does NOT use a restorer, the kernel
+// supplies the return trampoline itself).
+//
+// ★ WALL DISSOLVED (ING#29 ∅−7 · 2026-06-30): the prior wall (commit 01f13609b) was the
+// codegen having NO raw-fn-address mechanism — sa_restorer had to be 0 and raise() crashed
+// with SIGSEGV on handler return (RC=139). Two building blocks landed on main dissolve it:
+//   #4264 __hx_fn_addr(name) — emits the RAW UNBOXED .text address of a top-level fn as a
+//          TAG_INT HexaVal (reference-match: C &fn / GCC &&label / rustc fn-ptr).
+//   #4265 @naked fn attribute  — skips prologue+epilogue, emitting ONLY the raw body
+//          (reference-match: GCC __attribute__((naked)) / rustc #[naked]).
+// Together they let us define a rt_sigreturn trampoline as a @naked fn (body =
+// `__hx_syscall0(15)` → `mov rax,15 ; syscall`, reference-match musl __restore_rt /
+// glibc restore_rt / Linux arch/x86/kernel/signal.c) and store its raw address in
+// sa_restorer via __hx_fn_addr. This is EXACTLY what musl/glibc do:
+//   musl src/signal/sigaction.c: __restore_rt = `mov eax,15 ; syscall` (x86_64)
+//   glibc sysdeps/unix/sysv/linux/x86_64/libc_sigaction.c: ksa.restorer = &restore_rt.
+//
+// SUBSTRATE (proven, NO new intrinsic beyond the two building blocks): heap scratch via
+// hxlcl_malloc (pipe/time/poll precedent) + __hx_ptr_store64 (strtoll/realloc precedent)
+// + __hx_syscall6 (close/pipe precedent) + the close errno epilogue's __errno_location.
+// The handler arg arrives as a HexaVal carrying a raw pointer payload (the C
+// `void(*)(int)` fn ptr passed by callers); __hx_payload_add(handler, 0) extracts the raw word.
+
+// rt_sigreturn trampoline — @naked so the codegen emits ONLY the body (no prologue/epilogue).
+// x86_64 body = `mov rax,15 ; syscall` (NR rt_sigreturn=15 · 9 bytes · ref musl __restore_rt).
+// arm64 does NOT need a restorer (the kernel supplies the trampoline itself), so this fn is
+// x86_64-only in effect — on arm64 the codegen still emits it (harmless, never stored).
+// NEVER CALLED directly by hexa code — its raw .text address is taken via __hx_fn_addr and
+// stored in struct sigaction.sa_restorer for the kernel to jump to after a handler returns.
+@naked
+fn _hx_rt_sigreturn_trampoline() {
+    __hx_syscall0(15)
+    return
+}
+
+pub fn hxlcl_signal(signum: HexaVal, handler: HexaVal) -> int {
+    let sig = __hx_payload_add(signum, 0)            // raw signum payload
+    let hnd = __hx_payload_add(handler, 0)           // raw handler fn-ptr payload
+    // musl: struct sigaction sa = { .sa_handler = func, .sa_flags = SA_RESTART };
+    // kernel k_sigaction layout is TARGET-DEPENDENT (arm64 has no sa_restorer).
+    // We allocate a 32-byte scratch (covers the larger x86_64 struct; arm64 uses 24).
+    let sz = __hx_payload_add(0, 32)
+    let sa = hxlcl_malloc(sz)                         // new k_sigaction (act)
+    __hx_ptr_store64(sa, 0, hnd)                      // ksa.handler = handler (offset 0)
+    // SA_RESTART = 0x10000000 (linux uapi); x86_64 also ORs SA_RESTORER = 0x04000000.
+    let mut flags = 268435456                          // SA_RESTART (0x10000000)
+    if target_is_x86_64() {
+        // x86_64 kernel REQUIRES SA_RESTORER set AND sa_restorer pointing at a real
+        // machine-code restorer fn. __hx_fn_addr(_hx_rt_sigreturn_trampoline) yields the
+        // raw .text address of the @naked trampoline (mov rax,15 ; syscall = rt_sigreturn,
+        // NR 15) — reference-match glibc `ksa.restorer = &restore_rt` / musl __restore_rt.
+        // This DISSOLVES the prior SIGSEGV-on-return wall (commit 01f13609b): the kernel
+        // now has a valid restorer to jump to, so the handler returns cleanly.
+        flags = __hx_payload_or(flags, 67108864)       // |= SA_RESTORER (0x04000000)
+        let restorer = __hx_fn_addr(_hx_rt_sigreturn_trampoline)
+        __hx_ptr_store64(sa, 16, restorer)             // ksa.restorer@16 = &trampoline
+    }
+    __hx_ptr_store64(sa, 8, flags)                     // ksa.flags (offset 8)
+    // ksa.mask: x86_64 mask@24, arm64 mask@16. Zero both (empty sigset — matches signal(3)
+    // default; we do NOT block other signals, unlike sigaction's sa_mask semantics). The
+    // bump arena is NOT guaranteed zeroed, so we zero the mask region explicitly. On x86_64
+    // offset 16 was already written above (restorer); offset 24 = mask[0]. On arm64 offset
+    // 16 = mask[0] (no restorer field).
+    __hx_ptr_store64(sa, 24, 0)                        // x86_64: mask[0]=0
+    // old k_sigaction (oldact) — capture sa_old.sa_handler to return it (musl semantics).
+    let sa_old = hxlcl_malloc(sz)
+    __hx_ptr_store64(sa_old, 0, 0)
+    // __syscall(SYS_rt_sigaction, sig, act, oldact, _NSIG/8=8)
+    let mut nr = 134                                   // Linux arm64 __NR_rt_sigaction (default)
+    if target_is_x86_64() {
+        nr = 13                                        // Linux x86_64 __NR_rt_sigaction
+    }
+    let sigsetsize = __hx_payload_add(0, 8)            // _NSIG/8 = 8
+    let r = __hx_syscall6(nr, sig, sa, sa_old, sigsetsize, 0, 0)
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        // musl: __syscall_ret — errno = -r, return SIG_ERR ((void*)-1)
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1                                       // SIG_ERR (raw -1 payload)
+    }
+    // musl: return sa_old.sa_handler (the previous disposition)
+    let old_hnd = __hx_ptr_load64(sa_old, 0)
+    return old_hnd
 }

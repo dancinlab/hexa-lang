@@ -1,0 +1,284 @@
+// @state-ok — bench measurement script (vs_pytorch family, committed)
+// ═══════════════════════════════════════════════════════════════════════════
+//  bench/vs_pytorch/bench_hexa_clm_step.hexa — CLMConvMoE fwd+bwd step bench
+//
+//  Measures wall-clock time for a full CLMConvMoE train step (fwd + CE loss +
+//  bwd + AdamW) using stdlib/flame/conv_lib (nn_conv1d_fwd / nn_conv1d_bwd),
+//  which now routes both fwd and bwd through forge_dispatch_matmul (GPU on
+//  CUDA hosts, host GEMM on CPU).
+//
+//  Shape: d=512, T=256, L=1, K=3, E=2, V=256 (F64)
+//  This is the same shape used in state/hexa-vs-pytorch-clm-step-verdict.md
+//  (prior naive run: median 60325ms vs PyTorch 12.7ms = 4750×).
+//
+//  Protocol (matches prior measurement):
+//    N_WARM=3 warmup steps (discarded), N_TIME=7 timed steps.
+//    Reports: each timed step ms + median.
+//
+//  Usage: hexa run bench/vs_pytorch/bench_hexa_clm_step.hexa
+//  On CUDA host: ensure cuda_available()=1 (run tool/build_cuda_runtime first).
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/conv_lib"
+use "stdlib/flame/gn_lib"
+use "stdlib/flame/moe_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/optim_lib"
+
+// ── CLMConvMoE forward (L=1 block) ──────────────────────────────────────
+fn clm_fwd(tokens: int,
+            embed: int, ecW: int, ecB: int, tcW: int, tcB: int, tgG: int, tgB: int,
+            rW: int, rB: int, e0W: int, e0B: int, e1W: int, e1B: int,
+            noG: int, noB: int, roW: int, roB: int,
+            xe: int, xec: int, xt: int, hn0: int, xhat0: int, inv0: int,
+            eo0: int, eo1: int, probs: int, ex_out: int, yn: int, xhatN: int, invN: int,
+            out_logits: int, T: int, d: int, E: int, V: int, K: int) {
+    nn_embedding_fwd(tokens, embed, xe, T, d)
+    nn_conv1d_fwd(xe, ecW, ecB, xec, T, d, d, K, 1)
+    let h0 = t_zeros(T * d)
+    nn_conv1d_fwd(xec, tcW, tcB, h0, T, d, d, K, 1)
+    let mean0 = t_zeros(1)
+    nn_groupnorm_fwd(h0, tgG, tgB, hn0, mean0, inv0, xhat0, T, d, 1)
+    let hg0 = t_zeros(T * d); nn_gelu_fwd(hn0, hg0, T * d)
+    let mut i = 0
+    while i < T * d { t_set(xt, i, t_get(xec, i) + t_get(hg0, i)); i = i + 1 }
+    let logits_r = t_zeros(T * E)
+    nn_conv1d_fwd(xt, rW, rB, logits_r, T, d, E, 1, 1)
+    nn_conv1d_fwd(xt, e0W, e0B, eo0, T, d, d, K, 1)
+    nn_conv1d_fwd(xt, e1W, e1B, eo1, T, d, d, K, 1)
+    let ex0 = t_zeros(T * d); nn_gelu_fwd(eo0, ex0, T * d)
+    let ex1 = t_zeros(T * d); nn_gelu_fwd(eo1, ex1, T * d)
+    let mut j = 0
+    while j < T * d {
+        t_set(ex_out, 0 * T * d + j, t_get(ex0, j))
+        t_set(ex_out, 1 * T * d + j, t_get(ex1, j))
+        j = j + 1
+    }
+    let y = t_zeros(T * d)
+    nn_moe_router_fwd(logits_r, ex_out, probs, y, T, E, d)
+    let meanN = t_zeros(1)
+    nn_groupnorm_fwd(y, noG, noB, yn, meanN, invN, xhatN, T, d, 1)
+    nn_conv1d_fwd(yn, roW, roB, out_logits, T, d, V, 1, 1)
+    t_free(h0); t_free(mean0); t_free(hg0); t_free(logits_r)
+    t_free(ex0); t_free(ex1); t_free(y); t_free(meanN)
+}
+
+// ── CE gradient seed ─────────────────────────────────────────────────────
+fn clm_ce_grad(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        let mut mx = t_get(logits, base)
+        let mut i = 1
+        while i < V { let v = t_get(logits, base + i); if v > mx { mx = v }; i = i + 1 }
+        let mut sm = 0.0
+        let mut i2 = 0
+        while i2 < V { sm = sm + exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }
+        let invT = 1.0 / to_float(T)
+        let mut v3 = 0
+        while v3 < V {
+            let p = exp(t_get(logits, base + v3) - mx) / sm
+            t_set(dlogits_out, base + v3, p * invT)
+            v3 = v3 + 1
+        }
+        let tgt = to_int(t_get(targets, t))
+        t_set(dlogits_out, base + tgt, t_get(dlogits_out, base + tgt) - invT)
+        t = t + 1
+    }
+}
+
+// ── Backward chain ──────────────────────────────────────────────────────
+fn clm_bwd(dlogits: int, tokens: int,
+           embed: int, ecW: int, tcW: int, tgG: int, rW: int, e0W: int, e1W: int, noG: int, roW: int,
+           xe: int, xec: int, xt: int, hn0: int, xhat0: int, inv0: int,
+           eo0: int, eo1: int, probs: int, ex_out: int, yn: int, xhatN: int, invN: int,
+           dembed: int, decW: int, decB: int, dtcW: int, dtcB: int, dtgG: int, dtgB: int,
+           drW: int, drB: int, de0W: int, de0B: int, de1W: int, de1B: int,
+           dnoG: int, dnoB: int, droW: int, droB: int,
+           T: int, d: int, E: int, V: int, K: int) {
+    let dynorm = t_zeros(T * d)
+    nn_conv1d_bwd(yn, roW, dlogits, droW, dynorm, droB, T, d, V, 1, 1)
+    let dy = t_zeros(T * d)
+    nn_groupnorm_bwd(xhatN, invN, noG, dynorm, dnoG, dnoB, dy, T, d, 1)
+    let dlogits_r = t_zeros(T * E)
+    let dex_out = t_zeros(E * T * d)
+    nn_moe_router_bwd(probs, ex_out, dy, dlogits_r, dex_out, T, E, d)
+    let dxt_r = t_zeros(T * d)
+    nn_conv1d_bwd(xt, rW, dlogits_r, drW, dxt_r, drB, T, d, E, 1, 1)
+    let dex0 = t_zeros(T * d); let dex1 = t_zeros(T * d)
+    let mut ei = 0
+    while ei < T * d {
+        t_set(dex0, ei, t_get(dex_out, 0 * T * d + ei))
+        t_set(dex1, ei, t_get(dex_out, 1 * T * d + ei))
+        ei = ei + 1
+    }
+    let deo0 = t_zeros(T * d); nn_gelu_bwd(eo0, dex0, deo0, T * d)
+    let deo1 = t_zeros(T * d); nn_gelu_bwd(eo1, dex1, deo1, T * d)
+    let dxt_e0 = t_zeros(T * d); nn_conv1d_bwd(xt, e0W, deo0, de0W, dxt_e0, de0B, T, d, d, K, 1)
+    let dxt_e1 = t_zeros(T * d); nn_conv1d_bwd(xt, e1W, deo1, de1W, dxt_e1, de1B, T, d, d, K, 1)
+    let dxt = t_zeros(T * d)
+    let mut xi = 0
+    while xi < T * d {
+        t_set(dxt, xi, t_get(dxt_r, xi) + t_get(dxt_e0, xi) + t_get(dxt_e1, xi))
+        xi = xi + 1
+    }
+    let dhn0 = t_zeros(T * d); nn_gelu_bwd(hn0, dxt, dhn0, T * d)
+    let dh0 = t_zeros(T * d)
+    nn_groupnorm_bwd(xhat0, inv0, tgG, dhn0, dtgG, dtgB, dh0, T, d, 1)
+    let dxec_b = t_zeros(T * d)
+    nn_conv1d_bwd(xec, tcW, dh0, dtcW, dxec_b, dtcB, T, d, d, K, 1)
+    let dxec = t_zeros(T * d)
+    let mut ci = 0
+    while ci < T * d { t_set(dxec, ci, t_get(dxt, ci) + t_get(dxec_b, ci)); ci = ci + 1 }
+    let dxe = t_zeros(T * d)
+    nn_conv1d_bwd(xe, ecW, dxec, decW, dxe, decB, T, d, d, K, 1)
+    let mut zi = 0
+    while zi < V * d { t_set(dembed, zi, 0.0); zi = zi + 1 }
+    nn_embedding_bwd_scatter(dxe, tokens, dembed, T, d)
+    t_free(dynorm); t_free(dy); t_free(dlogits_r); t_free(dex_out)
+    t_free(dxt_r); t_free(dex0); t_free(dex1)
+    t_free(deo0); t_free(deo1); t_free(dxt_e0); t_free(dxt_e1)
+    t_free(dxt); t_free(dhn0); t_free(dh0); t_free(dxec_b); t_free(dxec); t_free(dxe)
+}
+
+fn _adam(W: int, gW: int, m: int, v: int, n: int, t: int) {
+    opt_adamw_step(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
+}
+
+// ── insertion sort 7 floats, return median (index 3) ────────────────────
+fn _median7(a0: float, a1: float, a2: float, a3: float, a4: float, a5: float, a6: float) -> float {
+    let arr = t_zeros(7)
+    t_set(arr, 0, a0); t_set(arr, 1, a1); t_set(arr, 2, a2); t_set(arr, 3, a3)
+    t_set(arr, 4, a4); t_set(arr, 5, a5); t_set(arr, 6, a6)
+    let mut i = 1
+    while i < 7 {
+        let key = t_get(arr, i)
+        let mut j = i - 1
+        let mut placed = 0
+        while j >= 0 {
+            if placed == 0 {
+                if t_get(arr, j) > key {
+                    t_set(arr, j + 1, t_get(arr, j))
+                    j = j - 1
+                } else { placed = 1 }
+            } else { j = 0 - 1 }
+        }
+        t_set(arr, j + 1, key)
+        i = i + 1
+    }
+    let med = t_get(arr, 3)
+    t_free(arr)
+    return med
+}
+
+fn main() {
+    let T = 256; let d = 512; let E = 2; let V = 256; let K = 3
+    let dd = d * d * K; let ed = E * d; let vd = V * d; let Td = T * d; let TV = T * V
+
+    println("bench_hexa_clm_step — d=512/T=256/L=1/K=3/E=2/V=256 F64")
+    println("conv_lib fwd+bwd via forge_dispatch_matmul (GPU-routed on CUDA hosts)")
+    println("N_WARM=3 N_TIME=7 median reported")
+    println("")
+
+    // tokens + targets
+    let tokens = t_zeros(T); let targets = t_zeros(T)
+    let mut ti = 0
+    while ti < T { t_set(tokens, ti, to_float(ti % V)); t_set(targets, ti, to_float((ti + 1) % V)); ti = ti + 1 }
+
+    // params
+    let embed = t_zeros(vd);  t_fill_lcg(embed, vd, 1, 0.3)
+    let ecW = t_zeros(dd);    t_fill_lcg(ecW, dd, 2, 0.2)
+    let ecB = t_zeros(d);     t_fill_lcg(ecB, d, 3, 0.1)
+    let tcW = t_zeros(dd);    t_fill_lcg(tcW, dd, 4, 0.2)
+    let tcB = t_zeros(d);     t_fill_lcg(tcB, d, 5, 0.1)
+    let tgG = t_zeros(d);     t_fill_lcg(tgG, d, 6, 0.5)
+    let tgB = t_zeros(d);     t_fill_lcg(tgB, d, 7, 0.1)
+    let rW = t_zeros(ed);     t_fill_lcg(rW, ed, 12, 0.2)
+    let rB = t_zeros(E);      t_fill_lcg(rB, E, 13, 0.1)
+    let e0W = t_zeros(dd);    t_fill_lcg(e0W, dd, 14, 0.2)
+    let e0B = t_zeros(d);     t_fill_lcg(e0B, d, 15, 0.1)
+    let e1W = t_zeros(dd);    t_fill_lcg(e1W, dd, 16, 0.2)
+    let e1B = t_zeros(d);     t_fill_lcg(e1B, d, 17, 0.1)
+    let noG = t_zeros(d);     t_fill_lcg(noG, d, 18, 0.5)
+    let noB = t_zeros(d);     t_fill_lcg(noB, d, 19, 0.1)
+    let roW = t_zeros(vd);    t_fill_lcg(roW, vd, 20, 0.2)
+    let roB = t_zeros(V);     t_fill_lcg(roB, V, 21, 0.1)
+
+    // grads
+    let dembed=t_zeros(vd); let decW=t_zeros(dd); let decB=t_zeros(d)
+    let dtcW=t_zeros(dd); let dtcB=t_zeros(d); let dtgG=t_zeros(d); let dtgB=t_zeros(d)
+    let drW=t_zeros(ed); let drB=t_zeros(E)
+    let de0W=t_zeros(dd); let de0B=t_zeros(d); let de1W=t_zeros(dd); let de1B=t_zeros(d)
+    let dnoG=t_zeros(d); let dnoB=t_zeros(d); let droW=t_zeros(vd); let droB=t_zeros(V)
+
+    // adam state
+    let m_embed=t_zeros(vd); let v_embed=t_zeros(vd)
+    let m_ecW=t_zeros(dd); let v_ecW=t_zeros(dd)
+    let m_tcW=t_zeros(dd); let v_tcW=t_zeros(dd)
+    let m_rW=t_zeros(ed); let v_rW=t_zeros(ed)
+    let m_e0W=t_zeros(dd); let v_e0W=t_zeros(dd)
+    let m_e1W=t_zeros(dd); let v_e1W=t_zeros(dd)
+    let m_roW=t_zeros(vd); let v_roW=t_zeros(vd)
+
+    // caches
+    let xe=t_zeros(Td); let xec=t_zeros(Td); let xt=t_zeros(Td)
+    let hn0=t_zeros(Td); let xhat0=t_zeros(Td); let inv0=t_zeros(1)
+    let eo0=t_zeros(Td); let eo1=t_zeros(Td)
+    let probs=t_zeros(T*E); let ex_out=t_zeros(E*Td)
+    let yn=t_zeros(Td); let xhatN=t_zeros(Td); let invN=t_zeros(1)
+    let logits=t_zeros(TV); let dlogits=t_zeros(TV)
+
+    // warmup
+    println("warming up (N_WARM=3)...")
+    let mut ws = 0
+    while ws < 3 {
+        clm_fwd(tokens, embed, ecW, ecB, tcW, tcB, tgG, tgB, rW, rB, e0W, e0B, e1W, e1B, noG, noB, roW, roB, xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out, yn, xhatN, invN, logits, T, d, E, V, K)
+        clm_ce_grad(logits, targets, dlogits, T, V)
+        clm_bwd(dlogits, tokens, embed, ecW, tcW, tgG, rW, e0W, e1W, noG, roW, xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out, yn, xhatN, invN, dembed, decW, decB, dtcW, dtcB, dtgG, dtgB, drW, drB, de0W, de0B, de1W, de1B, dnoG, dnoB, droW, droB, T, d, E, V, K)
+        _adam(embed, dembed, m_embed, v_embed, vd, ws + 1)
+        _adam(ecW, decW, m_ecW, v_ecW, dd, ws + 1)
+        _adam(tcW, dtcW, m_tcW, v_tcW, dd, ws + 1)
+        _adam(rW, drW, m_rW, v_rW, ed, ws + 1)
+        _adam(e0W, de0W, m_e0W, v_e0W, dd, ws + 1)
+        _adam(e1W, de1W, m_e1W, v_e1W, dd, ws + 1)
+        _adam(roW, droW, m_roW, v_roW, vd, ws + 1)
+        ws = ws + 1
+    }
+    println("warmup done")
+    println("")
+
+    // timed N_TIME=7
+    let ms_arr = t_zeros(7)
+    let mut step = 0
+    while step < 7 {
+        let t0 = clock()
+        clm_fwd(tokens, embed, ecW, ecB, tcW, tcB, tgG, tgB, rW, rB, e0W, e0B, e1W, e1B, noG, noB, roW, roB, xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out, yn, xhatN, invN, logits, T, d, E, V, K)
+        clm_ce_grad(logits, targets, dlogits, T, V)
+        clm_bwd(dlogits, tokens, embed, ecW, tcW, tgG, rW, e0W, e1W, noG, roW, xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out, yn, xhatN, invN, dembed, decW, decB, dtcW, dtcB, dtgG, dtgB, drW, drB, de0W, de0B, de1W, de1B, dnoG, dnoB, droW, droB, T, d, E, V, K)
+        _adam(embed, dembed, m_embed, v_embed, vd, 3 + step + 1)
+        _adam(ecW, decW, m_ecW, v_ecW, dd, 3 + step + 1)
+        _adam(tcW, dtcW, m_tcW, v_tcW, dd, 3 + step + 1)
+        _adam(rW, drW, m_rW, v_rW, ed, 3 + step + 1)
+        _adam(e0W, de0W, m_e0W, v_e0W, dd, 3 + step + 1)
+        _adam(e1W, de1W, m_e1W, v_e1W, dd, 3 + step + 1)
+        _adam(roW, droW, m_roW, v_roW, vd, 3 + step + 1)
+        let t1 = clock()
+        t_set(ms_arr, step, (t1 - t0) * 1000.0)
+        step = step + 1
+    }
+
+    // report
+    let ms0 = t_get(ms_arr, 0); let ms1 = t_get(ms_arr, 1)
+    let ms2 = t_get(ms_arr, 2); let ms3 = t_get(ms_arr, 3)
+    let ms4 = t_get(ms_arr, 4); let ms5 = t_get(ms_arr, 5)
+    let ms6 = t_get(ms_arr, 6)
+    print("timed ms: "); print(to_string(ms0)); print(" "); print(to_string(ms1))
+    print(" "); print(to_string(ms2)); print(" "); print(to_string(ms3))
+    print(" "); print(to_string(ms4)); print(" "); print(to_string(ms5))
+    print(" "); println(to_string(ms6))
+    let med = _median7(ms0, ms1, ms2, ms3, ms4, ms5, ms6)
+    print("[BENCH-HEXA-CLM-STEP] median="); print(to_string(med)); println(" ms")
+    println("[BENCH-HEXA-CLM-STEP] shape: d=512 T=256 L=1 K=3 E=2 V=256 F64")
+    println("[BENCH-HEXA-CLM-STEP] DONE — compare to prior naive median 60325ms (4750x PyTorch)")
+}

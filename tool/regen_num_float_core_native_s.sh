@@ -46,20 +46,35 @@ emit_one() {
     "$APRIME" "$TMP/_drv.hexa" --emit=asm --target="$triple" -o "$raw" "$SRC" >/dev/null 2>&1
     local n; n="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?rt_parse_float_native' "$raw" || echo 0)"
     [ "$n" -ge 1 ] || { echo "[regen_num_float_core] ERROR: $triple emitted only $n/1 rt_parse_float_native" >&2; exit 1; }
+    # R6 sh-float-format: the SAME SSOT module also exports the FORMAT half
+    # (rt_format_float_native, musl fmt_fp i64 dtoa). Module-wide emit means a fresh
+    # seed carries BOTH `.globl` symbols — assert format too so stage_resolve_runtime_a
+    # can wire the native FORMAT path (HEXA_RT_FORMAT_FLOAT_NATIVE) without an
+    # undefined `rt_format_float_native` at the app link.
+    local nf; nf="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?rt_format_float_native' "$raw" || echo 0)"
+    [ "$nf" -ge 1 ] || { echo "[regen_num_float_core] ERROR: $triple emitted only $nf/1 rt_format_float_native" >&2; exit 1; }
     {
         printf '// %s — FROZEN BOOTSTRAP SEED (RT-NATIVE leg B M4 NUM-FLOAT — sh-num-float).\n' "$(basename "$out")"
         printf '// GENERATED: tool/regen_num_float_core_native_s.sh — aprime_cc _drv.hexa --emit=asm\n'
         printf '//   --target=%s -o %s stdlib/runtime/num_float_core.hexa.\n' "$triple" "$(basename "$out")"
-        printf '//   Provides the num-float parse half (rt_parse_float_native) as a native\n'
-        printf '//   raw-mem + float body (__hx_ptr_load8 byte scan + integer mantissa fold +\n'
-        printf '//   __hx_to_double cast + __hx_payload_{fmul,fdiv} Clinger fast-path scale,\n'
-        printf '//   bit-exact to strtod on the mantissa<=2^53 AND |exp10|<=22 domain; out of\n'
-        printf '//   domain returns a TAG_VOID sentinel so the C wrapper falls back to strtod).\n'
-        printf '//   These leaves are gen2-native-only (the hexat C-transpile bootstrap cannot\n'
-        printf '//   lower them), so the body enters the shipped runtime.a ONLY via this seed.\n'
-        printf '//   ABI: %s. External: NONE (fully self-contained; float leaves lower inline).\n' "$abi"
-        printf '//   Lets stage_resolve_runtime_a define HEXA_RT_NUM_PARSE_FLOAT_NATIVE + ar this\n'
-        printf '//   .o into runtime.a so __hx_to_double delegates its string→f64 path to native.\n'
+        printf '//   Provides BOTH num-float halves as a native body: the PARSE half\n'
+        printf '//   (rt_parse_float_native) — raw-mem + float (__hx_ptr_load8 byte scan +\n'
+        printf '//   integer mantissa fold + __hx_to_double cast + __hx_payload_{fmul,fdiv}\n'
+        printf '//   Clinger fast-path scale, bit-exact to strtod on the mantissa<=2^53 AND\n'
+        printf '//   |exp10|<=22 domain; out of domain returns a TAG_VOID sentinel so the C\n'
+        printf '//   wrapper falls back to strtod) — AND the FORMAT half (rt_format_float_native,\n'
+        printf '//   a pure-i64 musl fmt_fp dtoa port, byte-exact to snprintf("%%.*g") on its\n'
+        printf '//   verified domain). These leaves are gen2-native-only (the hexat C-transpile\n'
+        printf '//   bootstrap cannot lower them), so the body enters the shipped runtime.a ONLY\n'
+        printf '//   via this seed.\n'
+        printf '//   ABI: %s. External: the PARSE half is self-contained (float leaves lower\n' "$abi"
+        printf '//   inline, no libm call); the FORMAT half references the hexa string/array\n'
+        printf '//   runtime (hexa_array_new/push, hexa_bytes_to_str_raw, hexa_arena_alloc,\n'
+        printf '//   scalar ops) — resolved WITHIN runtime.a (the same archive this .o joins),\n'
+        printf '//   so no NEW undefined symbol appears at the app link.\n'
+        printf '//   Lets stage_resolve_runtime_a define HEXA_RT_NUM_PARSE_FLOAT_NATIVE (parse,\n'
+        printf '//   default-ON) + HEXA_RT_FORMAT_FLOAT_NATIVE (format, R6 opt-IN) + ar this .o\n'
+        printf '//   into runtime.a so __hx_to_double and the float-repr path delegate to native.\n'
         sed -E -e 's#"[^"]*num_float_core\.hexa"#"stdlib/runtime/num_float_core.hexa"#g' \
                -e 's#^// source: .*num_float_core\.hexa#// source: stdlib/runtime/num_float_core.hexa#' "$raw"
     } > "$out"
@@ -71,10 +86,11 @@ emit_one() {
     esac
     if $CC $cc_extra -c "$s" -o "$o" 2>/dev/null; then
         local t; t="$( (nm "$o" 2>/dev/null || echo) | grep -cE ' T _?rt_parse_float_native')"
-        echo "[regen_num_float_core] $triple → $out ($n globl · $t T)"
+        local tf; tf="$( (nm "$o" 2>/dev/null || echo) | grep -cE ' T _?rt_format_float_native')"
+        echo "[regen_num_float_core] $triple → $out (parse $n globl·$t T · format $nf globl·$tf T)"
     else
         echo "[regen_num_float_core] WARN $triple: cross-assemble check skipped (no matching toolchain)" >&2
-        echo "[regen_num_float_core] $triple → $out ($n globl)"
+        echo "[regen_num_float_core] $triple → $out (parse $n globl · format $nf globl)"
     fi
 }
 
