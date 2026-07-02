@@ -159,8 +159,13 @@ if [ ! -x build/hexat ]; then
     # zero-c #29 own-_start flip (default-OFF byte-neutral): HEXA_ZEROC_OWN_START=1 compiles the
     # runtime scaffold (payload #ifdef) AND links -nostartfiles so the shipped hexat uses its own
     # _start (drops __libc_start_main/_start from the binary nm-u). Unset -> both empty -> identical.
+    # DEFAULT-ON flip on x86_64-linux (validated 2-host summer+aiden: own _start boots, __libc_start_main
+    # dropped). arm64-linux stays OFF (arm64 asm not yet 2-host-validated); darwin stays OFF (Mach-O
+    # dyld/LC_MAIN entry — no -nostartfiles own _start). Env HEXA_ZEROC_OWN_START=0 force-overrides OFF.
+    _zc_own_default=0
+    if [ "$(uname -s)" = "Linux" ] && [ "$(uname -m)" = "x86_64" ]; then _zc_own_default=1; fi
     _zc_own_def=""; _zc_own_link=""
-    if [ "${HEXA_ZEROC_OWN_START:-0}" = "1" ]; then _zc_own_def="-DHEXA_ZEROC_OWN_START"; _zc_own_link="-nostartfiles"; fi
+    if [ "${HEXA_ZEROC_OWN_START:-$_zc_own_default}" = "1" ]; then _zc_own_def="-DHEXA_ZEROC_OWN_START"; _zc_own_link="-nostartfiles"; fi
     clang -O2 $HOST_ARCH -std=gnu11 -D_GNU_SOURCE $HOST_EXTRA $_zc_own_def -Wno-trigraphs \
         -I self -I . self/native/hexa_cc.c self/runtime.c -o build/hexat -lm $_zc_own_link \
         2>&1 | grep -iE 'error:|undefined' | head -5
