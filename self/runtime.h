@@ -1902,6 +1902,9 @@ HexaVal farr_matmul_f32_gpu(HexaVal a_v, HexaVal M_v, HexaVal K_v,
 HexaVal farr_layernorm_f32_gpu(HexaVal x_v, HexaVal g_v, HexaVal b_v,
                                HexaVal out_v, HexaVal r_v, HexaVal c_v,
                                HexaVal eps_v);                              /* runtime.c — f32 layernorm rows */
+HexaVal farr_resid_layernorm_f32_gpu(HexaVal h_v, HexaVal add_v, HexaVal g_v,
+                                     HexaVal b_v, HexaVal y_v, HexaVal r_v,
+                                     HexaVal c_v, HexaVal eps_v);           /* runtime.c — r7 fused resid+LN */
 HexaVal farr_gelu_f32_gpu(HexaVal in_v, HexaVal out_v, HexaVal n_v,
                           HexaVal r1_v, HexaVal r2_v);                       /* runtime.c — f32 gelu */
 HexaVal farr_residual_add_f32_gpu(HexaVal a_v, HexaVal b_v,
