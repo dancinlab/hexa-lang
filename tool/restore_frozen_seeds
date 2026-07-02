@@ -411,7 +411,7 @@ fi
 if [ -f "$_tk" ] && ! grep -q 'HEXA_ZEROC_RAND_NATIVE' "$_tk"; then
   awk '
     /double u = \(rand\(\)\+1\.0\)\/\(RAND_MAX\+1\.0\);/ && !done {
-      print "#ifdef HEXA_ZEROC_RAND_NATIVE"
+      print "#if defined(HEXA_ZEROC_RAND_NATIVE) || (defined(__linux__) && !defined(HEXA_ZEROC_RAND_NATIVE_OFF))"
       print "        double u = (hxlcl_rand()+1.0)/(2147483648.0);"
       print "        double w = (hxlcl_rand()+1.0)/(2147483648.0);"
       print "#else"
