@@ -162,6 +162,83 @@ if [ -f "$_RT_EMIT" ]; then
   fi
   rm -f "$_rttmp"
 fi
+# ── zero-c FRAG-REGEN (ING #29) — SOURCE the 6 native-fragment .c from emitter SSOTs ─
+# Generalizes the runtime.c M3 block above to the six self/native/<X>.c fragments that
+# have a .hexa string-emitter SSOT: mount · namespace · signal_flock · proc_fork · term_ffi
+# · tensor_kernels. MEASURED root-cause (state/zeroc-flip-measure-2026-07-03.txt): the frozen
+# 151c52c82 blobs restored above ship raw libc (flock/mount/unshare/setns/umount2/sigaddset/
+# getppid/setsid/sigemptyset/syscall) even though each _emit.hexa SSOT carries native wiring
+# (#4371/#4373/#4385/#4387/#4377) — restore serves the frozen blob and no regen block overwrites
+# it (Zone B exists only for runtime.c). This block un-escapes each _emit.hexa string body to
+# its .c, the frag-family generalization of the runtime.c synth.
+# Each emitter builds the body as ONE leading-quote concat chain (distinct from runtime.c's
+# `buf = buf + "..."` form): `    let s =` … `            "<hexa-escaped C line>\n" +` … `    return s`.
+# Escape alphabet is provably CLOSED at exactly { \n , \" , \\ } (census 1324/86/16). The awk
+# scans char-by-char L->R and consumes \\ ATOMICALLY, so `\\0`/`\\r`/`\\n` become the C-source
+# text `\0`/`\r`/`\n` (backslash+letter), NOT NUL/CR/LF — a naive gsub would corrupt them.
+# Refs contain RAW UTF-8 (box-drawing/em-dash banners) so the awk runs LC_ALL=C (byte-oriented).
+# VERIFIED byte-identical to `hexa run <emit>` for all 6 (ghost gnu awk + BSD awk;
+# state/zeroc-fragregen-fable-full-2026-07-03.md GATE A 6/6).
+# Default-OFF (unset/0 => body never runs => Zone-A frozen blobs untouched => every downstream
+# ZEROC-*/ING#2 patch sees today's exact frozen text => byteeq-neutral). Belt-and-suspenders in
+# ON: synth to mktemp, per-frag SENTINEL grep, cmp-skip no-op, and on awk-fail/empty/sentinel-miss
+# KEEP the restored frozen .c (NO-OP-SAFE, same shape as the runtime.c synth). Flip default-ON only
+# after the ghost cmp gate (GATE A 6/6 awk==hexa-run) + byteeq 3-target + faithful GREEN.
+if [ "${HEXA_ZEROC_FRAG_REGEN:-0}" = "1" ]; then
+  _FRAG_SPEC='
+mount|self/native/mount_emit.hexa|native/mount.c
+namespace|self/native/namespace_emit.hexa|CLONE_NEWNS
+signal_flock|self/native/signal_flock_emit.hexa|hexa_signal_install
+proc_fork|self/native/proc_fork_emit.hexa|hexa_proc_fork
+term_ffi|self/native/term_ffi_emit.hexa|term_getppid
+tensor_kernels|self/native/tensor_kernels_emit.hexa|hexa_tensor_randn
+'
+  printf '%s\n' "$_FRAG_SPEC" | while IFS='|' read -r _fname _femit _fsent; do
+    [ -n "$_fname" ] || continue
+    _fdst="self/native/${_fname}.c"
+    if [ ! -f "$_femit" ]; then
+      echo "[restore_frozen_seeds] zero-c FRAG-REGEN: $_femit absent — kept FROZEN $_fdst (NO-OP-SAFE fallback)" >&2
+      continue
+    fi
+    _ftmp="$(mktemp -t regen_frag_${_fname}.XXXXXX)" || _ftmp=""
+    [ -n "$_ftmp" ] || { echo "[restore_frozen_seeds] zero-c FRAG-REGEN: mktemp failed for $_fname — kept FROZEN $_fdst" >&2; continue; }
+    if LC_ALL=C awk '
+        BEGIN { inblock = 0; saw = 0 }
+        /^    let s =$/   { inblock = 1; next }
+        /^    return s$/  { inblock = 0; next }
+        inblock {
+          line = $0
+          sub(/^[[:space:]]*"/, "", line)
+          sub(/"[[:space:]]*\+?[[:space:]]*$/, "", line)
+          saw = 1
+          out = ""; n = length(line); i = 1
+          while (i <= n) {
+            c = substr(line, i, 1)
+            if (c == "\\" && i < n) {
+              e = substr(line, i + 1, 1)
+              if      (e == "n")  { out = out "\n"; i += 2 }
+              else if (e == "\"") { out = out "\""; i += 2 }
+              else if (e == "\\") { out = out "\\"; i += 2 }
+              else                { out = out e;    i += 2 }
+            } else { out = out c; i += 1 }
+          }
+          printf "%s", out
+        }
+        END { if (!saw) exit 3 }
+      ' "$_femit" > "$_ftmp" 2>/dev/null \
+       && [ -s "$_ftmp" ] && LC_ALL=C grep -q "$_fsent" "$_ftmp"; then
+      if ! cmp -s "$_ftmp" "$_fdst"; then
+        cp -f "$_ftmp" "$_fdst"
+        echo "[restore_frozen_seeds] zero-c FRAG-REGEN: ${_fname}.c SYNTHESIZED from emitter SSOT (awk un-escape, $(wc -l < "$_fdst") lines, hexat-free) — frozen blob was fallback"
+      else
+        echo "[restore_frozen_seeds] zero-c FRAG-REGEN: ${_fname}.c already byte-identical to emitter SSOT — no-op (frozen-blob-independent)"
+      fi
+    else
+      echo "[restore_frozen_seeds] zero-c FRAG-REGEN: ${_fname}.c emitter synth unavailable/sentinel-miss — kept FROZEN (NO-OP-SAFE fallback)" >&2
+    fi
+    rm -f "$_ftmp"
+  done
+fi
 # ── OP-17 (HEXA-0POD) — -Wmacro-redefined hygiene patch ──────────────────────
 # The frozen self/runtime.c #defines 9 libc names (strcat/bzero/memcpy/memset/
 # memmove/strncpy/strcpy/snprintf/sprintf) that Darwin clang's _FORTIFY_SOURCE
