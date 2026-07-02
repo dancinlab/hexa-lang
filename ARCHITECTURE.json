@@ -5426,7 +5426,7 @@
                 "name": "fatal HX8004) + ⓒ `hexa verify` g5 게이트. 🔵/🟢 verify PASS 시 atom 이 compiler/atlas/embedded.gen.hexa 로 자동 fold (별도 register ceremony 없음). 빌드불가(mini) 노드는 state/novel-dfs/*_fold.py 로 @F atom PR-fold. 사람층(atlas/README.md) + 기계층(embedded.gen.hexa) 항상 양층. ",
                 "role": "",
                 "id": "discovery-engine-n-fatal-hx8004-hexa-verify-g5-verify-pass-atom-compiler-atlas",
-                "detail": ""
+                "detail": " NOVEL-CLOSURE 신뢰성 하드닝(2026-07-02·fable-eval 유래): ⓐ congruence 클로저 기저를 3-base(5/7/11) 하드코딩에서 canonical Ramanujan-Watson 타워 전체(모든 {5,7,11}-smooth m·24δ≡1)의 sub-progression 검사로 일반화 — p(50n+49)≡0 mod25(a≠m) 류 자명 하위진행이 verified-novel로 새던 오탐 봉쇄(conjecture.hexa). ⓑ congruence 파서가 α·n 계수틀에서 n 뒤 잔여문자(n^2 등)를 silent-drop하던 mis-parse를 unparseable로 차단(진술≠검증 c2 위반 제거). ⓒ drill PCF/additive 스크린의 하드코딩 novel:0 텔레메트리(탐색 없이 매 라운드 방송) 제거 → scope=rediscovery-sanity로 정직화. ⓓ stdlib/discovery/saddle_escape fail-loud(len-mismatch·NaN/inf→empty). 회귀=conjecture_test 33/33·saddle_escape_test 6/6."
               },
               {
                 "name": "numerology/lattice-fit/미증명 conjecture 의 🔵 승격 금지.",
