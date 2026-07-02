@@ -1,0 +1,54 @@
+name: own-start-nm-clean-gate
+
+# ── #29 own-start ship invariant (0-GPU) ─────────────────────────────────────
+# Locks GATE-1: build/runtime.a built with HEXA_ZEROC_OWN_START=1 (the shipped
+# ON-path after the PR-C default flip on linux) must carry ZERO glibc startup/
+# atexit U-refs (atexit|__cxa_atexit|__dso_handle) and a DEFINED own `_start`.
+# A runtime.c edit that reintroduces a libc atexit ref would silently break the
+# shipped `-nostartfiles` crt-drop link — this gate fails such a change at PR
+# time, on the SAME build path the release runs (tool/stage_resolve_runtime_a),
+# NOT a lexical proxy. SSOT: tool/own_start_nm_clean_gate.sh (runnable locally).
+#
+# Path-filtered so it only fires when the runtime source / the own-start build
+# or link gates / the guard itself change (cheap; never a blanket gate).
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'self/runtime.c'
+      - 'self/runtime_core.c'
+      - 'self/runtime_emit_full.hexa'
+      - 'self/runtime_core_emit.hexa'
+      - 'tool/stage_resolve_runtime_a'
+      - 'tool/own_start_nm_clean_gate.sh'
+      - '.github/workflows/own-start-nm-clean-gate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: own-start-nm-clean-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  own-start-nm-clean:
+    name: own-start runtime.a nm-clean guard (GATE-1)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install clang
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang binutils
+
+      - name: Run own-start nm-clean gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          CC=clang bash tool/own_start_nm_clean_gate.sh

@@ -42,8 +42,12 @@ CFLAGS="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
 # runtime.a bit-identical to today); the bit-changing default-ON flip is a separate PR gated on
 # byteeq 3-target + install.sh smoke. Env HEXA_ZEROC_OWN_START=1 exercises it for validation.
 # Linux-intent; the scaffold's own #if __x86_64__/__aarch64__ arch-gates the asm (harmless elsewhere).
+# PR-C default-ON flip (linux x86_64/arm64): shipped runtime.a CARRIES own _start by default on
+# linux x86_64/aarch64 (mirrors build_selfhost.sh #4392); darwin/other stay OFF; env=0 force-overrides.
+_zc_own_default=0
+if [ "$(uname -s 2>/dev/null)" = "Linux" ] && { [ "$(uname -m 2>/dev/null)" = "x86_64" ] || [ "$(uname -m 2>/dev/null)" = "aarch64" ]; }; then _zc_own_default=1; fi
 _zc_own_def=""
-[ "${HEXA_ZEROC_OWN_START:-0}" = "1" ] && _zc_own_def="-DHEXA_ZEROC_OWN_START"
+[ "${HEXA_ZEROC_OWN_START:-$_zc_own_default}" = "1" ] && _zc_own_def="-DHEXA_ZEROC_OWN_START"
 ROOT="$PWD"
 RA="$ROOT/build/runtime.a"
 mkdir -p build

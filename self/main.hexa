@@ -1419,11 +1419,14 @@ fn os_clang_ldflags() {
         // link ALSO pulls glibc crt1.o _start -> duplicate _start. Append to `base` BEFORE the musl/cuda/
         // default returns so it propagates through all of them. Linux x86_64/arm64 only (darwin = Mach-O
         // LC_MAIN, never entered here). Default-OFF byte-neutral (env unset -> base unchanged).
-        if env_var("HEXA_ZEROC_OWN_START") == "1" {
-            let _zc_arch = exec("uname -m 2>/dev/null | tr -d ' \\n\\t'")
-            if _zc_arch == "x86_64" || _zc_arch == "aarch64" || _zc_arch == "arm64" {
-                base = base + " -nostartfiles"
-            }
+        // PR-C default-ON flip (linux x86_64/arm64): env=="1" forces ON; env unset defaults ON on a
+        // qualifying linux arch; env=="0"/other force-overrides OFF (env_var returns "" when unset).
+        let _zc_own_env = env_var("HEXA_ZEROC_OWN_START")
+        let _zc_arch = exec("uname -m 2>/dev/null | tr -d ' \\n\\t'")
+        let _zc_arch_ok = _zc_arch == "x86_64" || _zc_arch == "aarch64" || _zc_arch == "arm64"
+        let _zc_own = _zc_own_env == "1" || (_zc_own_env == "" && _zc_arch_ok)
+        if _zc_own && _zc_arch_ok {
+            base = base + " -nostartfiles"
         }
     }
     // HEXA_STATIC_DEPS=1 — see os_clang_cflags: a `-static` musl link has no
@@ -4428,7 +4431,11 @@ fn cmd_run_user_direct(file, extra_args) {
                     // --start-group so libc still resolves. This block is x86_64-hardcoded (arm64 never
                     // reaches here). Default-OFF byte-neutral: else-branch char-identical to today.
                     // Loud-fail-safe: a failed ld link falls through to the clang path below.
-                    let _zc_own = env_var("HEXA_ZEROC_OWN_START") == "1"
+                    // PR-C default-ON flip (x86_64-linux only; this ld block is x86_64-hardcoded, arm64
+                    // never reaches it): env=="1" forces ON; env unset defaults ON here (host is linux
+                    // x86_64 to be in this native-ld path); env=="0"/other force-overrides OFF.
+                    let _zc_own_env = env_var("HEXA_ZEROC_OWN_START")
+                    let _zc_own = _zc_own_env == "1" || _zc_own_env == ""
                     let _lnk = if _zc_own { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread --end-group -L'" + _crt + "' -o '" + _nbin + "' 2>&1" } else { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _crt + "/crt1.o' '" + _crt + "/crti.o' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread --end-group '" + _crt + "/crtn.o' -L'" + _crt + "' -o '" + _nbin + "' 2>&1" }
                     let _lr = exec(_lnk)
                     let _nbin_ok = exec("test -x '" + _nbin + "' && printf yes || printf no")
