@@ -188,7 +188,7 @@ if [ "${HEXA_ZEROC_FRAG_REGEN:-0}" = "1" ]; then
   _FRAG_SPEC='
 mount|self/native/mount_emit.hexa|native/mount.c
 namespace|self/native/namespace_emit.hexa|CLONE_NEWNS
-signal_flock|self/native/signal_flock_emit.hexa|hexa_os_sig_install
+signal_flock|self/native/signal_flock_emit.hexa|hexa_os_flock_open
 proc_fork|self/native/proc_fork_emit.hexa|hexa_proc_fork
 term_ffi|self/native/term_ffi_emit.hexa|term_getppid
 tensor_kernels|self/native/tensor_kernels_emit.hexa|hexa_tensor_randn
