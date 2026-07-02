@@ -74,11 +74,13 @@ if [ "${SELF_HOSTED_ELIGIBLE:-0}" != "1" ]; then
   exit 0
 fi
 
-# ── probe: is a matching self-hosted runner ONLINE and (optionally) idle? ────
-# We require status=online. We do NOT require !busy: a queued job will wait for
-# the single ghost runner, which is acceptable (best-effort-strong), and the
-# 1-SSH pool serializes by design. If you prefer to skip-when-busy, gate on
-# `.busy==false` too — left online-only so transient busy doesn't bounce to cloud.
+# ── probe: is a matching self-hosted runner ONLINE and (preferably) idle? ────
+# BUSY-AWARE selection (measured 2026-07-03: ghost busy=true queued 10 runs while
+# mini sat online+idle — online-only matching converged every darwin job on ghost).
+# Priority: ① primary online+idle → ② alt online+idle → ③ primary online (busy —
+# queueing on the primary is still preferred over cloud) → ④ alt online (busy)
+# → ⑤ GitHub-hosted fallback. linux has no alt, so it naturally degrades to
+# primary-idle → primary-busy → cloud.
 api_json=""
 if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
   api_json="$(gh api repos/"${GITHUB_REPOSITORY:-dancinlab/hexa-lang}"/actions/runners --paginate 2>/dev/null || true)"
@@ -112,25 +114,54 @@ jq_filter='[ .runners[]
   | select(.status=="online")
   | select( ($ARGS.positional - [ .labels[].name ]) == [] )
 ] | length'
+# same filter, but additionally require the runner to be IDLE (busy==false).
+# shellcheck disable=SC2016  # jq program — must NOT be shell-expanded
+jq_filter_idle='[ .runners[]
+  | select(.status=="online")
+  | select(.busy==false)
+  | select( ($ARGS.positional - [ .labels[].name ]) == [] )
+] | length'
 
 # shellcheck disable=SC2086  # intentional word-split of the wanted-label list
+idle_matches="$(printf '%s' "$api_json" | jq "$jq_filter_idle" --args $want_labels 2>/dev/null || echo 0)"
+# shellcheck disable=SC2086  # intentional word-split of the wanted-label list
 online_matches="$(printf '%s' "$api_json" | jq "$jq_filter" --args $want_labels 2>/dev/null || echo 0)"
+alt_idle_matches=0
+alt_matches=0
+if [ -n "${alt_want_labels:-}" ]; then
+  # shellcheck disable=SC2086  # intentional word-split of the wanted-label list
+  alt_idle_matches="$(printf '%s' "$api_json" | jq "$jq_filter_idle" --args $alt_want_labels 2>/dev/null || echo 0)"
+  # shellcheck disable=SC2086  # intentional word-split of the wanted-label list
+  alt_matches="$(printf '%s' "$api_json" | jq "$jq_filter" --args $alt_want_labels 2>/dev/null || echo 0)"
+fi
 
-if [ "${online_matches:-0}" -ge 1 ] 2>/dev/null; then
-  echo "::notice::$online_matches online self-hosted runner(s) match [$want_labels] → self-hosted"
+# ① primary online + idle
+if [ "${idle_matches:-0}" -ge 1 ] 2>/dev/null; then
+  echo "::notice::$idle_matches online+idle self-hosted runner(s) match [$want_labels] → self-hosted"
   emit "$sh_label"
   exit 0
 fi
 
-# ── ordered fallback probe (darwin only): mini insurance runner ──────────────
-if [ -n "${alt_want_labels:-}" ]; then
-  # shellcheck disable=SC2086  # intentional word-split of the wanted-label list
-  alt_matches="$(printf '%s' "$api_json" | jq "$jq_filter" --args $alt_want_labels 2>/dev/null || echo 0)"
-  if [ "${alt_matches:-0}" -ge 1 ] 2>/dev/null; then
-    echo "::notice::primary self-hosted offline; $alt_matches insurance runner(s) match [$alt_want_labels] → self-hosted (mini)"
-    emit "$alt_sh_label"
-    exit 0
-  fi
+# ② alt online + idle (darwin insurance runner: mini) — busy-aware spillover so
+# an idle mini takes the job instead of queueing behind a busy ghost.
+if [ "${alt_idle_matches:-0}" -ge 1 ] 2>/dev/null; then
+  echo "::notice::primary busy/offline; $alt_idle_matches online+idle insurance runner(s) match [$alt_want_labels] → self-hosted (mini)"
+  emit "$alt_sh_label"
+  exit 0
+fi
+
+# ③ primary online (busy) — queue on the primary (today's behavior preserved)
+if [ "${online_matches:-0}" -ge 1 ] 2>/dev/null; then
+  echo "::notice::$online_matches online (busy) self-hosted runner(s) match [$want_labels] → self-hosted (will queue)"
+  emit "$sh_label"
+  exit 0
+fi
+
+# ④ alt online (busy)
+if [ "${alt_matches:-0}" -ge 1 ] 2>/dev/null; then
+  echo "::notice::primary offline; $alt_matches online (busy) insurance runner(s) match [$alt_want_labels] → self-hosted (mini, will queue)"
+  emit "$alt_sh_label"
+  exit 0
 fi
 
 echo "::notice::no online self-hosted runner matches [$want_labels] → GitHub-hosted fallback"
