@@ -13,7 +13,7 @@
 //   D  FP_k terms (basis σ · product φ·J₂) → kc_classify == α (inside well)
 //   E  an out-of-well non-known candidate (size-3 term) → kc_classify == γ
 
-use "compiler/atlas/known_catalog"
+use "compiler/atlas/known_catalog.gen"
 use "compiler/atlas/identity_engine"
 use "stdlib/io"
 
