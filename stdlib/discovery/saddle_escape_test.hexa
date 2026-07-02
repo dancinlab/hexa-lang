@@ -1,0 +1,54 @@
+// stdlib/discovery/saddle_escape_test.hexa — selftest for the fail-loud escape
+// primitive. Proves saddle_escape (1) makes a correct finite displacement,
+// (2) FAILS LOUD (empty array) on a len mismatch, and (3) REJECTS a non-finite
+// step/direction instead of emitting an all-NaN "escape".
+// Runs via `hexa run stdlib/discovery/saddle_escape_test.hexa`.
+
+use "stdlib/discovery/saddle_escape"
+use "stdlib/io"
+
+fn gate(label: string, cond: bool) -> int {
+    if cond {
+        println("  [PASS] " + label)
+        return 0
+    }
+    println("  [FAIL] " + label)
+    return 1
+}
+
+fn main() -> int {
+    let mut fails = 0
+
+    // (1) valid displacement: x=[1,2], v=[1,0], delta=0.5 -> [1.5, 2.0]
+    let d = saddle_escape([1.0, 2.0], [1.0, 0.0], 0.5)
+    fails = fails + gate("valid-step returns len 2", len(d) == 2)
+    if len(d) == 2 {
+        fails = fails + gate("valid-step x0 = 1.5", d[0] == 1.5)
+        fails = fails + gate("valid-step x1 = 2.0", d[1] == 2.0)
+    }
+
+    // (2) len mismatch -> fail-loud empty (NOT x unchanged)
+    let mm = saddle_escape([1.0, 2.0, 3.0], [1.0], 0.5)
+    fails = fails + gate("len-mismatch returns empty", len(mm) == 0)
+
+    // Build non-finite floats via overflow (hexa TRAPS float div-by-zero, so 0/0
+    // can't be used): big*big -> +inf, inf-inf -> NaN.
+    let big = 1.0e308
+    let inf = big * big
+    let nan = inf - inf
+
+    // (3a) non-finite delta (NaN) -> empty.
+    let bd = saddle_escape([1.0], [1.0], nan)
+    fails = fails + gate("NaN delta rejected", len(bd) == 0)
+
+    // (3b) non-finite v[i] (inf) -> empty.
+    let bv = saddle_escape([1.0], [inf], 0.5)
+    fails = fails + gate("inf direction rejected", len(bv) == 0)
+
+    if fails == 0 {
+        println("saddle_escape: ALL PASS")
+        return 0
+    }
+    println("saddle_escape: " + to_string(fails) + " FAIL")
+    return 1
+}

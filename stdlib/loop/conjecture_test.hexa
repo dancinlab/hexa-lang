@@ -94,6 +94,12 @@ fn main() {
     f = f + gate("CLO Watson p(35n+19)=0 mod35", cj_verdict(body("partition(35*n+19) = 0 mod 35")), "verified-known")
     f = f + gate("CLOcls p(25n+24)=0 mod25 -> C1-WATSON", cj_closure_class(body("partition(25*n+24) = 0 mod 25")), "C1-WATSON-TOWER")
     f = f + gate("CLOcls p(121n+116)=0 mod121 -> C1-WATSON", cj_closure_class(body("partition(121*n+116) = 0 mod 121")), "C1-WATSON-TOWER")
+    // REGRESSION (2026-07-02) — a SUB-PROGRESSION of a tower modulus (a≠m) must NOT
+    // survive as novel. p(50n+49)≡0 mod25 = p(25(2n+1)+24) is a trivial odd-index
+    // sub-progression of Watson's p(25n+24); a=50≠m=25 slipped BOTH the old 3-base
+    // table and the canonical a==m check → mislabelled verified-novel. Now C1.
+    f = f + gate("CLO p(50n+49)=0 mod25 (Watson subprog)", cj_verdict(body("partition(50*n+49) = 0 mod 25")), "verified-known")
+    f = f + gate("CLOcls p(50n+49)=0 mod25 -> C1", cj_closure_class(body("partition(50*n+49) = 0 mod 25")), "C1-ASSOC-CHAIN")
     // a classical-known relation is NOT closure-classified (returns "").
     f = f + gate("CLOcls phi*J2=n*psi (classical) -> empty", cj_closure_class(body("phi*J2 = n*psi")), "")
 
@@ -115,6 +121,11 @@ fn main() {
     f = f + gate("PROSE no claim", cj_verdict("Just a prose hypothesis about sigma growth, no formal relation."), "")
     // Claim present but vocab not recognized -> unparseable (grammar enforced).
     f = f + gate("UNPARSE foo*bar=baz*qux", cj_verdict(body("foo*bar = baz*qux")), "unparseable")
+    // REGRESSION (2026-07-02) — congruence coefficient frame is strictly α·n. A
+    // residual after 'n' (e.g. n^2) must NOT be silently dropped and re-read as
+    // a DIFFERENT (linear) claim; it is unparseable. Guards the c2 mis-label where
+    // "p(5n^2+4)=0 mod5" was verified AS "p(5n+4)=0 mod5".
+    f = f + gate("UNPARSE p(5n^2+4)=0 mod5 (nonlinear)", cj_verdict(body("partition(5*n^2+4) = 0 mod 5")), "unparseable")
     // Greek glyphs accepted (σ·J2 = n·ψ == G1) -> known.
     f = f + gate("ID greek σ glyphs G1", cj_verdict(body("φ·J2 = n·ψ")), "verified-known")
 

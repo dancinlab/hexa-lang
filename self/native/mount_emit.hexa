@@ -55,7 +55,15 @@ fn emit_mount_c() -> str {
             "    const char* fs  = HX_STR(fs_v);\n" +
             "    unsigned long flags = HX_IS_INT(flags_v) ? (unsigned long)HX_INT(flags_v) : 0;\n" +
             "    const char* data = HX_IS_STR(data_v) ? HX_STR(data_v) : NULL;\n" +
-            "    if (mount(src, tgt, fs, flags, data) < 0) return hexa_int((int64_t)-errno);\n" +
+            "    // zero-c #29: raw mount via _hxlcl_lx_sc5 (5-arg, safe helper). musl x86_64=165 / arm64=40.\n" +
+            "#if defined(__x86_64__)\n" +
+            "    long _mt = _hxlcl_lx_sc5(165, (long)src, (long)tgt, (long)fs, (long)flags, (long)data);\n" +
+            "#elif defined(__aarch64__)\n" +
+            "    long _mt = _hxlcl_lx_sc5(40, (long)src, (long)tgt, (long)fs, (long)flags, (long)data);\n" +
+            "#else\n" +
+            "    long _mt = mount(src, tgt, fs, flags, data);\n" +
+            "#endif\n" +
+            "    if (_mt < 0) return hexa_int((int64_t)-errno);\n" +
             "    return hexa_int(0);\n" +
             "#else\n" +
             "    (void)src_v; (void)tgt_v; (void)fs_v; (void)flags_v; (void)data_v;\n" +
@@ -68,7 +76,15 @@ fn emit_mount_c() -> str {
             "    if (!HX_IS_STR(tgt_v)) return hexa_int((int64_t)-EINVAL);\n" +
             "    const char* tgt = HX_STR(tgt_v);\n" +
             "    int flags = HX_IS_INT(flags_v) ? (int)HX_INT(flags_v) : 0;\n" +
-            "    if (umount2(tgt, flags) < 0) return hexa_int((int64_t)-errno);\n" +
+            "    // zero-c #29: raw umount2 via _hxlcl_lx_sc2. musl x86_64=166 / arm64=39.\n" +
+            "#if defined(__x86_64__)\n" +
+            "    long _um = _hxlcl_lx_sc2(166, (long)tgt, (long)flags);\n" +
+            "#elif defined(__aarch64__)\n" +
+            "    long _um = _hxlcl_lx_sc2(39, (long)tgt, (long)flags);\n" +
+            "#else\n" +
+            "    long _um = umount2(tgt, flags);\n" +
+            "#endif\n" +
+            "    if (_um < 0) return hexa_int((int64_t)-errno);\n" +
             "    return hexa_int(0);\n" +
             "#else\n" +
             "    (void)tgt_v; (void)flags_v;\n" +

@@ -1095,16 +1095,16 @@ fn _native_pcf_screen(round: i64) -> void {
             }
         }
     }
-    // Novel hunt over the PCF-constant frontier this round is MEASURED dry at this
-    // (mini/native) coefficient bound — all detected relations classical (Apery/Gauss/
-    // Brouncker · cf state/novel-dfs + pool widesweep 73024@0). The native screen reports
-    // 0 honestly (no fab); genuine novel needs RM-scale / evolve-GA pool depth.
-    let novel = 0
+    // This screen performs a FIXED rediscovery check only — it consumes no per-round
+    // candidate, so it can make NO novel measurement. Emitting a "novel":0 literal
+    // each round would be a false telemetry claim (c2). We report the rediscovery
+    // result honestly and mark the scope; the genuine PCF novel hunt (RM-scale /
+    // evolve-GA pool depth · state/novel-dfs + pool widesweep 73024@0) is OFF-path.
     let mut msg = "DRILL_PCF {"
     msg = msg + "\"round\":" + to_string(round)
     msg = msg + ",\"frame\":\"continued_fraction\""
+    msg = msg + ",\"scope\":\"rediscovery-sanity\""
     msg = msg + ",\"apery_rediscovered\":" + to_string(rediscovered)
-    msg = msg + ",\"novel\":" + to_string(novel)
     msg = msg + "}"
     eprintln(msg)
 }
@@ -1119,15 +1119,15 @@ fn _native_additive_screen(round: i64) -> void {
     if _drill_partition_cong(t5, 5, 4, N) == 1 { rediscovered = rediscovered + 1 }
     if _drill_partition_cong(t7, 7, 5, N) == 1 { rediscovered = rediscovered + 1 }
     if _drill_partition_cong(t11, 11, 6, N) == 1 { rediscovered = rediscovered + 1 }
-    // Novel hunt over this round's modular progressions is MEASURED dry (all hits
-    // classical — Ramanujan / Touchard / Lucas-divisibility / Deutsch–Sagan). The
-    // reference engine confirms 0; the native screen reports 0 honestly (no fab).
-    let novel = 0
+    // FIXED rediscovery check only — consumes no per-round candidate, so it can make
+    // NO novel measurement. A "novel":0 literal each round would be a false telemetry
+    // claim (c2). Report the rediscovery result + scope honestly; the genuine
+    // congruence novel hunt (Ono-class large-modulus · state/novel-dfs) is OFF-path.
     let mut msg = "DRILL_ADDITIVE {"
     msg = msg + "\"round\":" + to_string(round)
     msg = msg + ",\"frame\":\"partition_congruence\""
+    msg = msg + ",\"scope\":\"rediscovery-sanity\""
     msg = msg + ",\"ramanujan_rediscovered\":" + to_string(rediscovered)
-    msg = msg + ",\"novel\":" + to_string(novel)
     msg = msg + "}"
     eprintln(msg)
 }

@@ -35,6 +35,15 @@ set -uo pipefail
 
 CC="${CC:?CC must be set}"
 CFLAGS="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
+# zero-c #29 own-start BUILD-half gate (PR-A · default-OFF byte-neutral). When ON, compile
+# self/runtime.c with the #ifdef HEXA_ZEROC_OWN_START scaffold so the shipped runtime.a CARRIES
+# own `_start` (+ _hx_start_c/_hx_run_init_array/atexit-LIFO) for shipped/user binaries — the
+# load-bearing prerequisite before any link-half crt-drop is sound. Default-OFF here (empty ->
+# runtime.a bit-identical to today); the bit-changing default-ON flip is a separate PR gated on
+# byteeq 3-target + install.sh smoke. Env HEXA_ZEROC_OWN_START=1 exercises it for validation.
+# Linux-intent; the scaffold's own #if __x86_64__/__aarch64__ arch-gates the asm (harmless elsewhere).
+_zc_own_def=""
+[ "${HEXA_ZEROC_OWN_START:-0}" = "1" ] && _zc_own_def="-DHEXA_ZEROC_OWN_START"
 ROOT="$PWD"
 RA="$ROOT/build/runtime.a"
 mkdir -p build
@@ -894,20 +903,15 @@ resolve_cuda_runtime_seed() {
         unset HEXA_CUDA; return 0
     fi
     mkdir -p build
-    # ── FROZEN-SEED FIRST (#3701 — stable -cuda asset never shipped) ──────────
+    # ── MATERIALIZED-SEED FIRST (#3701 lineage — stable -cuda asset never shipped) ──
     # runtime_cuda.c (+ runtime_bf16.c) are the DETERMINISTIC output of their
-    # *_emit.hexa SSOTs (byte-eq re-emit verified) and are now CHECKED IN as
-    # build seeds. The committed seed is the PRIMARY path: when it is present AND
-    # has the canonical single _hx_dt_exp_dev def, use it as-is and SKIP the
-    # runner emit. This is the root-cause fix for the chicken-egg / stale-prebuilt
-    # trap: resolve_cuda_runtime_seed runs at Stage 0b — BEFORE build/hexat is
-    # built (Stage 0a-pre) — so the only emit-runner is the prior STALE edge
-    # binary, whose native-run fast-path can SIGSEGV before writing the 333KB file
-    # → "runtime_cuda.c not emitted" → the -cuda nvcc fold is skipped → the whole
-    # -cuda asset silently never ships (v0.245.x had NO hexa-*-cuda.tar.gz). A
-    # committed seed removes the dependency on any runner at all. If the seed is
-    # absent or regressed (e.g. someone edited the emitter without regenerating),
-    # fall back to the runner-emit path below so a fresh emit still works locally.
+    # *_emit.hexa SSOTs (byte-eq re-emit verified). Post-#4356 they are NO LONGER
+    # tracked (self/*.c ∅ graduation) — but a locally materialized .c (gitignored,
+    # e.g. from tool/build_cuda_runtime) is still the fastest path: when present AND
+    # carrying the canonical single _hx_dt_exp_dev def, use it as-is and SKIP the
+    # synthesis. Otherwise synthesize from the emitter SSOT below (awk un-escape,
+    # hexat-free — resolve_cuda_runtime_seed runs at Stage 0b, BEFORE build/hexat
+    # exists, so it must not depend on any hexa runner).
     local _cuda_ndef
     _cuda_ndef="$(grep -c '_hx_dt_exp_dev(double x) {' self/cuda/runtime_cuda.c 2>/dev/null || true)"
     if [ -f self/cuda/runtime_cuda.c ] && [ "$_cuda_ndef" = "1" ]; then
@@ -915,36 +919,58 @@ resolve_cuda_runtime_seed() {
         # runtime_bf16.c rides along as a frozen seed too (committed); it has no
         # _hx_dt_exp_dev contract to assert, so presence is enough.
     else
-        # Seed absent/regressed → emit from the *_emit.hexa SSOT via a hexa RUNNER.
-        # The cuda emitter uses string-concat returns (NOT the `buf = buf + "…"`
-        # line literals the runtime_core awk un-escaper handles) → a hexa RUNNER is
-        # REQUIRED. At Stage 0b ./hexa / build/hexat do not exist, so resolve a
-        # runner: PATH hexa(-run) for local dev, else the prior BASE edge
-        # `hexa-linux-x86_64.tar.gz` binary (a CPU hexa runs the cuda emitter fine —
-        # it just prints C text). The cuda edge asset is chicken-egg on the first
-        # run, so we pull the base x86_64 edge, not EDGE_ASSET.
-        echo "[stage_resolve_runtime_a] CUDA-R1: frozen seed absent/regressed (ndef='$_cuda_ndef') — emitting from *_emit.hexa SSOT via runner" >&2
-        local RUNNER=""
-        if command -v hexa-run >/dev/null 2>&1; then RUNNER="hexa-run"
-        elif command -v hexa >/dev/null 2>&1; then RUNNER="hexa run"
-        elif [ -x build/hexat ]; then RUNNER="build/hexat run"
+        # Seed absent → SYNTHESIZE from the *_emit.hexa SSOT. Post-#4356 the tracked
+        # .c seeds are GRADUATED (self/*.c ∅ milestone): the emitters are now
+        # gen_c_text_emitter output — pure `buf = buf + "…"` line literals — so the
+        # same _unescape_emit_to_c awk used for runtime_core.c reproduces the emit
+        # BYTE-IDENTICALLY with no hexa runner at all (verified: awk output sha256 ==
+        # hexa-runner emit sha256 for both runtime_cuda.c and runtime_bf16.c). This
+        # is the PRIMARY path — it is immune to the Stage-0b chicken-egg (no ./hexa /
+        # build/hexat yet) that previously made this branch depend on downloading the
+        # retired `edge` release asset (edge retired 2026-06-30 → download failed →
+        # HEXA_CUDA silently unset → the -cuda asset shipped CPU-only and the job's
+        # post-build guard failed every release since #4356).
+        echo "[stage_resolve_runtime_a] CUDA-R1: no tracked seed (emitter-SSOT graduated #4356) — synthesizing via awk un-escape (hexat-free)" >&2
+        local _cbt _cct
+        _cbt="$(mktemp -t regen_bf16_awk.XXXXXX)" || _cbt=""
+        _cct="$(mktemp -t regen_cuda_awk.XXXXXX)" || _cct=""
+        if [ -n "$_cbt" ] && [ -n "$_cct" ] \
+           && _unescape_emit_to_c self/cuda/runtime_bf16_emit.hexa > "$_cbt" 2>/dev/null && [ -s "$_cbt" ] \
+           && _unescape_emit_to_c self/cuda/runtime_cuda_emit.hexa > "$_cct" 2>/dev/null && [ -s "$_cct" ] \
+           && [ "$(grep -c '_hx_dt_exp_dev(double x) {' "$_cct" || true)" = "1" ]; then
+            cp -f "$_cbt" self/cuda/runtime_bf16.c
+            cp -f "$_cct" self/cuda/runtime_cuda.c
+            echo "[stage_resolve_runtime_a] CUDA-R1: runtime_cuda.c + runtime_bf16.c SYNTHESIZED from emitter SSOT (awk un-escape, $(wc -l < self/cuda/runtime_cuda.c) + $(wc -l < self/cuda/runtime_bf16.c) lines)"
         else
-            local _edge_dir="/tmp/edge_cuda_runner"
-            rm -rf "$_edge_dir"; mkdir -p "$_edge_dir"
-            if gh release download edge --repo "${GITHUB_REPOSITORY:-dancinlab/hexa-lang}" \
-                  --pattern "hexa-linux-x86_64.tar.gz" --dir "$_edge_dir" --clobber 2>/tmp/cuda_dl.err \
-               && tar xzf "$_edge_dir/hexa-linux-x86_64.tar.gz" -C "$_edge_dir" 2>/dev/null; then
-                local _edge_hexa
-                _edge_hexa="$(find "$_edge_dir" -name hexa -type f 2>/dev/null | head -1)"
-                if [ -n "$_edge_hexa" ]; then chmod +x "$_edge_hexa" 2>/dev/null || true; RUNNER="$_edge_hexa run"; fi
+            # awk synthesis failed (emitter shape changed?) → FALLBACK: a hexa RUNNER
+            # (a CPU hexa runs the cuda emitter fine — it just prints C text). At
+            # Stage 0b ./hexa / build/hexat may not exist; last resort downloads the
+            # LATEST STABLE release binary (the old `edge` channel is retired).
+            echo "[stage_resolve_runtime_a] CUDA-R1: awk synthesis failed — falling back to a hexa runner emit" >&2
+            local RUNNER=""
+            if command -v hexa-run >/dev/null 2>&1; then RUNNER="hexa-run"
+            elif command -v hexa >/dev/null 2>&1; then RUNNER="hexa run"
+            elif [ -x build/hexat ]; then RUNNER="build/hexat run"
+            else
+                local _rel_dir="/tmp/stable_cuda_runner"
+                rm -rf "$_rel_dir"; mkdir -p "$_rel_dir"
+                if gh release download --repo "${GITHUB_REPOSITORY:-dancinlab/hexa-lang}" \
+                      --pattern "hexa-linux-x86_64.tar.gz" --dir "$_rel_dir" --clobber 2>/tmp/cuda_dl.err \
+                   && tar xzf "$_rel_dir/hexa-linux-x86_64.tar.gz" -C "$_rel_dir" 2>/dev/null; then
+                    local _rel_hexa
+                    _rel_hexa="$(find "$_rel_dir" -name hexa -type f 2>/dev/null | head -1)"
+                    if [ -n "$_rel_hexa" ]; then chmod +x "$_rel_hexa" 2>/dev/null || true; RUNNER="$_rel_hexa run"; fi
+                fi
             fi
+            if [ -z "$RUNNER" ]; then
+                rm -f "$_cbt" "$_cct"
+                echo "[stage_resolve_runtime_a] CUDA-R1: WARN no hexa runner to emit runtime_cuda.c (and awk synthesis failed) — unsetting HEXA_CUDA, CPU runtime.a" >&2
+                unset HEXA_CUDA; return 0
+            fi
+            HEXA_LANG="$ROOT" $RUNNER self/cuda/runtime_bf16_emit.hexa self/cuda/runtime_bf16.c >/dev/null 2>&1 || true
+            HEXA_LANG="$ROOT" $RUNNER self/cuda/runtime_cuda_emit.hexa self/cuda/runtime_cuda.c >/dev/null 2>&1 || true
         fi
-        if [ -z "$RUNNER" ]; then
-            echo "[stage_resolve_runtime_a] CUDA-R1: WARN no hexa runner to emit runtime_cuda.c (and no frozen seed) — unsetting HEXA_CUDA, CPU runtime.a" >&2
-            unset HEXA_CUDA; return 0
-        fi
-        HEXA_LANG="$ROOT" $RUNNER self/cuda/runtime_bf16_emit.hexa self/cuda/runtime_bf16.c >/dev/null 2>&1 || true
-        HEXA_LANG="$ROOT" $RUNNER self/cuda/runtime_cuda_emit.hexa self/cuda/runtime_cuda.c >/dev/null 2>&1 || true
+        rm -f "$_cbt" "$_cct"
     fi
     if [ ! -f self/cuda/runtime_cuda.c ]; then
         echo "[stage_resolve_runtime_a] CUDA-R1: WARN runtime_cuda.c absent (no frozen seed + runner failed?) — unsetting HEXA_CUDA, CPU runtime.a" >&2
@@ -964,11 +990,26 @@ resolve_cuda_runtime_seed() {
     # #35 cause-3). -Xcompiler -fno-threadsafe-statics drops the guard symbols
     # (single-threaded static init is fine for these constants) and -fno-exceptions
     # drops the EH personality — both are host-codegen-only, device code unchanged.
-    if nvcc -x cu -DHEXA_CUDA -rdc=true -gencode arch=compute_$SM,code=sm_$SM -O2 -w \
+    #
+    # GENCODE — SASS + PTX (the sm_80-SASS-only ship defect, 2026-07-02): with only
+    # `code=sm_$SM` nvcc embeds SASS for that ONE arch and NO PTX, so on any newer
+    # consumer GPU (e.g. RTX 5070 sm_120 vs the release's SM=80) EVERY kernel launch
+    # fails cudaErrorNoKernelImageForDevice — silently, because launches are
+    # unchecked — and device results come back as zero-filled garbage (measured:
+    # bytegpt_devres_smoke argmax dev=0, max|Δ|=551 with the shipped v0.547.0 -cuda
+    # asset; PASS max|Δ|=2.5e-06 after re-splicing the SAME source built with PTX).
+    # `code=compute_$SM` additionally embeds the PTX so the driver JITs forward to
+    # whatever arch the consumer actually has (one-time JIT, cached in
+    # ~/.nv/ComputeCache). release.yml always believed this forward-JIT happened —
+    # now it actually does.
+    if nvcc -x cu -DHEXA_CUDA -rdc=true \
+            -gencode arch=compute_$SM,code=sm_$SM \
+            -gencode arch=compute_$SM,code=compute_$SM -O2 -w \
             -Xcompiler -fno-threadsafe-statics -Xcompiler -fno-exceptions \
             -I "$CINC/cccl" -I "$CINC" -I self -I self/cuda -I . \
             -c self/cuda/runtime_cuda.c -o build/runtime_cuda.o \
-       && nvcc -dlink -gencode arch=compute_$SM,code=sm_$SM build/runtime_cuda.o \
+       && nvcc -dlink -gencode arch=compute_$SM,code=sm_$SM \
+            -gencode arch=compute_$SM,code=compute_$SM build/runtime_cuda.o \
             -o build/runtime_cuda_dlink.o -lcudadevrt; then
         echo "[stage_resolve_runtime_a] CUDA-R1: built build/runtime_cuda.o + runtime_cuda_dlink.o (sm_$SM) → folding into runtime.a (-DHEXA_CUDA)"
     else
@@ -2445,12 +2486,12 @@ build_runtime_a_from_source() {
         #      archive-internal resolution). NO HEXA_HAS_HEXA_RT_STDLIB (matches the
         #      default single-TU object; setting it would extern rt_log/… → multidef).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S2]: compile build/runtime.o (include-drop, HI-tier inline)…"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self -c self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self -c self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
         # (S3) runtime_core.o — standalone TU (sysheaders prelude), runtime_hi_gen.c
         #      KEPT (supplies the HI-tier rt_* C bodies). SAME seed -D set. NO
         #      HEXA_HAS_HEXA_RT_STDLIB (keeps those bodies inline, not externed).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S3]: compile build/runtime_core.o (standalone TU, runtime_hi_gen.c kept)…"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self -include self/runtime_core_sysheaders.h -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self -include self/runtime_core_sysheaders.h -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
         # (S4) hxlcl_shim.o — libc-delegate hxlcl_* sibling TU.
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S4]: compile build/hxlcl_shim.o…"
         $CC -c -O2 $_mo_archflag -std=gnu11 -D_GNU_SOURCE $_mo_shim_def self/runtime_core_hxlcl_shim.c -o build/hxlcl_shim.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: hxlcl_shim.o compile failed" >&2; return 1; }
@@ -2486,7 +2527,7 @@ build_runtime_a_from_source() {
             local _mo_cinc="$_mo_cuda_home/targets/x86_64-linux/include"
             [ -d "$_mo_cinc" ] || _mo_cinc="$_mo_cuda_home/include"
             echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA: build SEPARATE build/runtime.cuda.a (include-drop multi-object + cuda objects)"
-            $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
+            $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
             ar rcs build/runtime.cuda.a build/runtime_cuda_host.o build/runtime_core.o $_mo_hxlcl_members $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
             ls -la build/runtime.cuda.a
             local _mo_cseed _mo_cm
@@ -2502,7 +2543,7 @@ build_runtime_a_from_source() {
         echo "$RA"
         return 0
     fi
-    $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -I self -c self/runtime.c -o build/runtime.o
+    $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -I self -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     if [ "${HEXA_CUDA:-0}" = "1" ] && [ -f build/runtime_cuda.o ] && [ -f build/runtime_cuda_dlink.o ]; then
@@ -2510,7 +2551,7 @@ build_runtime_a_from_source() {
         local _cinc="$_cuda_home/targets/x86_64-linux/include"
         [ -d "$_cinc" ] || _cinc="$_cuda_home/include"
         echo "[stage_resolve_runtime_a] CUDA-R1: building SEPARATE consumer archive build/runtime.cuda.a (runtime.c -DHEXA_CUDA -I$_cinc + runtime_cuda.o + runtime_cuda_dlink.o); toolchain keeps the CPU build/runtime.a (libcuda-free, GPU-less-host-runnable)"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_CUDA -I "$_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_CUDA -I "$_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o
         ar rcs build/runtime.cuda.a build/runtime_cuda_host.o $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
         ls -la build/runtime.cuda.a
         # ING-35 #2 — fail loudly if the CUDA archive dropped a native-core seed the

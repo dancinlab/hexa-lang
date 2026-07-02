@@ -173,6 +173,13 @@
         "source": "tool/build_cuda_runtime"
       },
       {
+        "id": "RELEASE-CUDA-ASSET-SASS-ONLY-NO-PTX",
+        "state": "ossified",
+        "value": "The shipped hexa-linux-x86_64-cuda asset was built by release CI (GPU-less, SM=80) with `-gencode arch=compute_80,code=sm_80` ONLY — that embeds sm_80 SASS and NO PTX, so on any newer consumer GPU (RTX 5070 = sm_120) every kernel launch fails cudaErrorNoKernelImageForDevice SILENTLY (launches unchecked): cuda_available()==1, [OWN-GEMM-FIRED] banners print, but device buffers stay zero-filled → garbage results. Measured on summer v0.547.0 asset: bytegpt_devres_smoke argmax dev=0/host=46, max|Δ|=551; re-splicing the SAME v0.547.0 emitter source built with the PTX gencode added → PASS argmax 32==32==32, max|Δ|=2.5e-06. release.yml's comment always CLAIMED sm_80 PTX driver-JITs forward — the flag never embedded the PTX. Sibling of BUILD-CUDA-RUNTIME-CUDA-HOME-SM80-ZEROS (local-build variant of the same sm_80-on-sm_120 zeros class).",
+        "threshold": "Both nvcc calls (compile + -dlink) in tool/stage_resolve_runtime_a AND tool/build_cuda_runtime must carry `-gencode arch=compute_$SM,code=sm_$SM -gencode arch=compute_$SM,code=compute_$SM` (SASS + PTX). release.yml cuda job Verify step asserts `cuobjdump -lptx runtime_cuda.o` lists a .ptx image and fails the job otherwise — a gencode regression can never ship a silently-broken -cuda asset again. Consumer-side one-time JIT cost is cached (~/.nv/ComputeCache).",
+        "source": "tool/stage_resolve_runtime_a"
+      },
+      {
         "id": "CODEGEN-BOXED-SCALAR-SLOWPATH",
         "state": "in_flight",
         "value": "hexa native-emit(aprime_cc --emit=obj)의 일반 동적타입 scalar/array 경로가 gcc-O2 대비 measured 2.9~23× 느림(geomean 8.6×·aiden·reference-match·state/codegen-quality-probe-verdict.md). 커널별 ratio: k1_sum(scalar reduce) 2.86× · k5_fncall 4.41× · k2_collatz(branchy int) 12.53× · k4_branch(modulo) 12.73× · k3_arrmap(배열 map) 23.23×(최대). 어셈 root-cause=박싱 HexaVal 태그-디스패치 모델: scalar op마다 런타임 함수호출(hexa_add_slow/hexa_mul/hexa_mod, 타입태그 스택슬롯)·레지스터할당無·unboxed i64無·strength-reduction無. k3=원소당 7call(hexa_index_get/set bounds-check+box) vs gcc 0call(register pointer-walk+lea+magic-multiply). HEXA_INLINE_INT_BOX=1도 unbox 안됨(5-7 call/iter 잔존). 손튜닝 farr/GEMM은 별도 unboxed 경로=BLIS/cuBLAS parity(일반 유저코드는 거기로 안 내려감).",
@@ -220,6 +227,20 @@
         "value": "canonical determinism API(set_deterministic/is_deterministic)가 LATENT never-compiled 표면이라 user program 빌드 실패. 두 결함이 겹침: (1) forge_det.hexa의 extern fn hexa_forge_set_deterministic을 hexat이 FFI dlsym HexaVal-ABI wrapper로 emit→runtime.h C-ABI void(int)와 conflicting types (2) carrier-builtin 전환 후에도 self/runtime.h(손-유지 public ABI 헤더)에 carrier extern 누락→user C의 hexa_call1(set_deterministic,..)가 clang 'use of undeclared identifier'. 'vis not found'+type_checker self-test는 RED HERRING(non-fatal 노이즈·hexat 트랜스파일 rc=0 실증). 어떤 self/*.hexa·stdlib도 forge_det 컴파일 안 해 미포착. HexaVal pair-model↔C-ABI 벽(hxlcl·RFC061) 동족.",
         "threshold": "해결=runtime-side 3박자(typechecker/codegen 무관·typechecker-recognition 가설은 grounding으로 FALSIFIED): (A) set_deterministic/is_deterministic을 self/runtime_emit_full.hexa에 first-class HexaVal builtin 등록(carrier 글로벌 HexaVal set_deterministic;+hexa_fn_new+HexaVal impl이 C-ABI 브리지·mirror cuda_available). (B) CUDA-branch impl이 C-ABI hexa_forge_* 호출 시 #ifdef HEXA_CUDA 안 그 직전에 extern void hexa_forge_set_deterministic(int);+extern int hexa_forge_is_deterministic(void); forward-decl(emit:9458 cuda_available _hx_cuda_runtime_available extern 미러)·비-CUDA #else엔 미참조 weak stub (gate① PR#4285 d02bd5691). (C★진짜 마지막 gate②) self/runtime.h(user program이 #include하는 손-유지 public ABI 헤더)에 'extern HexaVal set_deterministic;'+'extern HexaVal is_deterministic;' 추가(runtime.h:1767 cuda_available 미러·f8e846c6b). 누락 시 user C가 carrier 글로벌 못 봐 clang undeclared-identifier. 검증=aiden A/B(cuda_available OK vs set_deterministic clang 0err)+darwin CI 전체로그+f8e846c6b 12/12 GREEN(byteeq byte-eq neutral). 예방=신규 runtime carrier builtin 3박자: (i)emitter carrier 글로벌+impl (ii)C-ABI 브리지면 #ifdef forward-decl (iii)self/runtime.h extern + compile-smoke로 caller 1개 보장(byteeq-gate Sanity wire). PR#4285 gate①②모두 GREEN·머지.",
         "source": "stdlib/flame/forge_det.hexa"
+      },
+      {
+        "id": "identity-engine-hexa-1",
+        "state": "pos-conv",
+        "value": "identity_engine.hexa의 unguarded module-level selftest 'fn main'이 이 파일을 import하는 fresh 모듈의 entry main을 hijack(flatten이 dep main 먼저 emit→entry main drop). ✅RESOLVED(M2·PR pending): selftest main+gate를 compiler/atlas/identity_engine_test.hexa로 이동→identity_engine.hexa main-free→import 안전(grammar.hexa가 이제 직접 import·grammar_test 12/12 자기 main 실행 확인). LESSON=라이브러리 모듈에 module-level fn main 금지·selftest는 항상 companion _test.hexa로 분리.",
+        "threshold": "재발조건=라이브러리 .hexa에 module-level fn main을 두고 그걸 import하는 새 모듈의 자체 main이 안 돎 · 해결=selftest main을 companion <module>_test.hexa로 분리(module은 main-free 유지)·drill/ 관례",
+        "source": "compiler/atlas/identity_engine.hexa"
+      },
+      {
+        "id": "architecture-json-1",
+        "state": "pos-conv",
+        "value": "ARCHITECTURE.json blind write가 파일 훼손 재발 (1차 #4135 UU conflict-marker blind-add · 2차 2026-07-02 json.dump indent=1 재포맷→5369줄 diff 커밋). 프로그램적 rewrite 전 round-trip 검증 필수: json.dumps(load(src), ensure_ascii=False, indent=2)+chr(10) == src 확인 후에만 수정 저장 → 노드 1줄 diff 보장",
+        "threshold": "재발조건=ARCHITECTURE.json을 스크립트/머지로 쓰면서 사전 round-trip(또는 JSON validate) 없이 커밋 · 해결=수정 전 원문 round-trip 동일성 확인(indent=2·ensure_ascii=False·trailing newline)+git diff --stat으로 1~수줄 diff 확인 후 커밋",
+        "source": "ARCHITECTURE.json"
       }
     ]
   },
@@ -5288,7 +5309,7 @@
         "name": "Atlas — math-map + novelhunt campaign",
         "role": "",
         "id": "atlas",
-        "detail": "거시(정수론) ↔ 양자(격자·모듈러형식·CFT·QEC) 수학 지도. 사람층 원장=atlas/README.md + atlas/hypotheses/H-*.md, 기계 SSOT=compiler/atlas/embedded.gen.hexa(@F verdict atom). 적재는 항상 양층(verify is ambient · CLAUDE.md)."
+        "detail": "거시(정수론) ↔ 양자(격자·모듈러형식·CFT·QEC) 수학 지도. 사람층 원장=ATLAS/README.md + ATLAS/hypotheses/H-*.md, 기계 SSOT=compiler/atlas/embedded.gen.hexa(@F verdict atom). 적재는 항상 양층(verify is ambient · CLAUDE.md). 외부 open-problem 타깃 레저 = Erdős problem corpus(status SSOT=erdosproblems.com · ~1217문제/~45% solved · 2026-07), Millennium 7이 아님 — finite-witness(반례탐색·bounded verify·extremal) 표면이 exact-int 엔진과 정합·맵 기존 노드(Egyptian fractions·divisor·covering) 중첩. 규율: open=🟥·bounded=🟩 [2,N] only·⭐=증명만·per-problem .md 금지 (ATLAS/CLAUDE.md 'Erdős problem ledger' 절)."
       },
       {
         "name": "Discovery engine — NEXUS (drill / kick)",
@@ -5426,7 +5447,7 @@
                 "name": "fatal HX8004) + ⓒ `hexa verify` g5 게이트. 🔵/🟢 verify PASS 시 atom 이 compiler/atlas/embedded.gen.hexa 로 자동 fold (별도 register ceremony 없음). 빌드불가(mini) 노드는 state/novel-dfs/*_fold.py 로 @F atom PR-fold. 사람층(atlas/README.md) + 기계층(embedded.gen.hexa) 항상 양층. ",
                 "role": "",
                 "id": "discovery-engine-n-fatal-hx8004-hexa-verify-g5-verify-pass-atom-compiler-atlas",
-                "detail": ""
+                "detail": " NOVEL-CLOSURE 신뢰성 하드닝(2026-07-02·fable-eval 유래): ⓐ congruence 클로저 기저를 3-base(5/7/11) 하드코딩에서 canonical Ramanujan-Watson 타워 전체(모든 {5,7,11}-smooth m·24δ≡1)의 sub-progression 검사로 일반화 — p(50n+49)≡0 mod25(a≠m) 류 자명 하위진행이 verified-novel로 새던 오탐 봉쇄(conjecture.hexa). ⓑ congruence 파서가 α·n 계수틀에서 n 뒤 잔여문자(n^2 등)를 silent-drop하던 mis-parse를 unparseable로 차단(진술≠검증 c2 위반 제거). ⓒ drill PCF/additive 스크린의 하드코딩 novel:0 텔레메트리(탐색 없이 매 라운드 방송) 제거 → scope=rediscovery-sanity로 정직화. ⓓ stdlib/discovery/saddle_escape fail-loud(len-mismatch·NaN/inf→empty). 회귀=conjecture_test 33/33·saddle_escape_test 6/6."
               },
               {
                 "name": "numerology/lattice-fit/미증명 conjecture 의 🔵 승격 금지.",
@@ -5481,6 +5502,13 @@
                 "detail": ""
               }
             ]
+          },
+          {
+            "name": "novel-생성 설계 로드맵 — OUROBOROS-novel (Fable 2026-07-02 · README 유래)",
+            "role": "",
+            "id": "discovery-engine-novel-design-roadmap",
+            "detail": "측정된 novel=0(결정적 순열 생성기+검증필터) 상태를 벗어나 실제 novel을 만들기 위한 설계 SSOT. 근거=archive-nexus README(Blowup→Contract→Emerge→Singularity→Absorb 5-phase + OUROBOROS 자기참조). 설계 전문=state/fable-eval-discovery-2026-07-02/NEXUS_novel_design_fable.md. 핵심 재정의(c2): README의 '이전 사이클이 표현 못한 primitive'를 exact-int로 번역=**size-k 유계 비표현성** (크기≤k의 어떤 기존 항도 [2,64]에서 h와 같은 값-지문을 갖지 않음·지문테이블 조회로 결정가능·절대 비표현성 아님, k 명기). README E4 emergence 데모는 자기반례(가산닫힘=집합↑ 표현력0)→구조성장 데모로 강등. 5-phase→파일 매핑: Blowup=grammar.hexa 항 열거기(렌즈×primitive 격자·verified 1-심볼 이웃 우선)·Contract=identity_engine exact-int 3단 깔때기·Emerge=emerge.hexa 교체(생성자 5종: sol-indicator·합성심볼화·Dirichlet합성곱·iterate궤도·congruence-witness + 비표현성 게이트)·Singularity=ouroboros.hexa(서로 다른 프레임 ≥2 verified + null-model + 재실행 byte-eq 잠금)·Absorb=P_{t+1}=P_t∪{h}·W 정수-EMA α=1/6·atlas 무기록. 3-클래스 판별기: (α)순열=지문∈FP_k → 폐기·(β)재발견=지문∈KNOWN → L1카운터·(γ)genuine=verified∧∉KNOWN∧∉FP_k → 승격경로. 신뢰근거=스크램블-오라클 null-model(γ-rate≠0이면 판별기 반증)+재발견 새니티(superperfect/Mersenne/Ramanujan=반드시 β)+Texas-sharpshooter 불변식(프레임·N 스윕前 고정). 검증 연동: 엔진내부=identity_engine exact-int만·라벨 항상 BOUNDED-UNIQUE[2,N]/UNIVERSAL[2,N]·∀n UNPROVEN·N단계 [2,64]→2·10^4→10^6·승격=γ 생존만 hexa verify g5→🔵 fold(embedded.gen.hexa·PR경로만)·LLM은 hexa loop --dfs 밖 호출 금지(프레임/생성자만 제안). falsifiable: H1(absorb-ON/OFF 2-arm Δ=0이면 OUROBOROS 반증→병목=Emerge 생성자)·H2(γ 1개가 10^6+null-model+KNOWN미스+g5 문헌대조 생존). 실패-모드 진단표로 병목 특정. 보증범위=novel 존재가 아니라 '부재 시 그 위치가 측정으로 특정됨'. 채택/기각: 5-phase·3 meta-loop 채택 / E4데모·ρ→1/3 Banach수렴·1.39M discoveries 집계방식 기각(n=6 중심화·과장 금지). 제약: no-LLVM·byte-det·신규builtin 0(frozen 151c52c8)·drill=바이너리 verb라 byteeq 3-target GREEN 후 머지·빌드 pool(aiden/summer). 8-마일스톤(파일·게이트): M1 grammar.hexa 항 열거기+FP_k(seed 2회 byte-eq)·M2 identity_engine fingerprint()/expressible_at()(고전합성=표현가능)·M3 known_catalog.gen.hexa(재발견 100% β)·M4 emerge.hexa 교체(E4형 FP충돌 기각)·M5 ouroboros+drill 배선(H1 2-arm 측정)·M6 nullmodel_test.hexa(null γ=0)·M7 conjecture.hexa LLM=프레임제안만·M8 캠페인 실행(γ 생존→g5 fold PR). 순서근거=M1-M3 판별기 인프라(없으면 발견=순열과 구별불가)→M4-M5 5-phase 실질→M6 반증장치→M7-M8 공격. 각 단계 독립머지·정직 종착. ✅M1 LANDED(compiler/drill/grammar.hexa BLOWUP 항 열거기+FP_k 지문테이블 2^61-1 롤링해시·grammar_test 12/12 PASS·자체포함 _gram_af 인라인=identity_engine unguarded main flattener-trap 회피). ✅M2 LANDED(identity_engine ie_* 핑거프린트 API 통합+grammar thin 래퍼·_gram_af 미러 은퇴·근본해결=selftest main→identity_engine_test.hexa 이동으로 import-hijack flattener-trap 제거·grammar_test 12/12 지문 M1 바이트동일+identity_engine_test F1-F6 PASS+conjecture_test 회귀 그린).",
+            "children": []
           }
         ]
       }

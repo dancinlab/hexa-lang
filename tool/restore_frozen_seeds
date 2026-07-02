@@ -1478,7 +1478,7 @@ if [ -f "$rt" ] && ! grep -q 'OP-19e (HEXA-0POD' "$rt"; then
       print "extern char **environ;"
       print "static char **hxlcl_environ = 0;"
       print "__attribute__((constructor(101)))"
-      print "static void hxlcl_capture_environ(void) { hxlcl_environ = environ; }"
+      print "static void hxlcl_capture_environ(void) { if (!hxlcl_environ) hxlcl_environ = environ; }"
       print "#define environ hxlcl_environ"
       skip=1; patched=1; next
     }

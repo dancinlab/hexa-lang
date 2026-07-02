@@ -78,8 +78,16 @@ esac
 #   regen + SSOT reconcile + build runtime.a) -> stage_prebuild_hexat.
 # IDEMPOTENT: skip entirely when both artifacts are already fresh, so a
 # warm tree (or a re-run) is a no-op and the recipe stays byte-stable.
-if [ -x "$HEXA_V2" ] && [ -f self/runtime.c ]; then
-    echo "  [0/5] regen: SKIP — hexat + self/runtime.c already present (warm tree)"
+# #42416907 freshness guard: a warm $HEXA_V2 built BEFORE a compiler-source edit
+# (e.g. a lexer.hexa change) is STALE — it transpiles the current source with the
+# old rules (the "unbalanced regex literal / s) / at line 45516" failure = a pre-
+# RParen-value-ender hexat seen on summer+aiden warm trees). If ANY self/ or
+# compiler/lex .hexa is newer than the hexat seed, do NOT skip — rebuild it from
+# current source (byte-stable: the SSOT-regen produces a fresh, correct hexat).
+_apw_stale=""
+[ -x "$HEXA_V2" ] && _apw_stale="$(find self compiler/lex -name '*.hexa' -newer "$HEXA_V2" -print -quit 2>/dev/null || true)"
+if [ -x "$HEXA_V2" ] && [ -f self/runtime.c ] && [ -z "$_apw_stale" ]; then
+    echo "  [0/5] regen: SKIP — hexat + self/runtime.c already present (warm tree, hexat fresh)"
     # zero-c leg-B r2a — alloc multiple-definition wall (warm-tree stale .c).
     # STAGE-0 is skipped on a warm tree, so a STALE self/runtime_core.c (a
     # .gitignore'd GENERATED artifact left from a pre-#3583 emitter, where the C

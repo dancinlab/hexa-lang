@@ -95,6 +95,14 @@ fn emit_term_ffi_c() -> str {
             "#include <termios.h>\n" +
             "#include <unistd.h>\n" +
             "\n" +
+            "/* zero-c #29: hxlcl sigset bitops live in runtime.c (this file is #include'd into the\n" +
+            " * same TU). Independent frozen-seed lifecycles (PR#4280 lesson): when compiled against\n" +
+            " * a frozen runtime.c that predates the bitops, fall back to libc sigemptyset/sigaddset. */\n" +
+            "#ifndef HXLCL_SIGSET_BITOPS\n" +
+            "#define hxlcl_sigemptyset(s)   sigemptyset((s))\n" +
+            "#define hxlcl_sigaddset(s,n)   sigaddset((s), (n))\n" +
+            "#endif\n" +
+            "\n" +
             "/* ─── module state ─── */\n" +
             "\n" +
             "static struct termios _term_saved;\n" +
@@ -252,7 +260,7 @@ fn emit_term_ffi_c() -> str {
             "    memset(&sa, 0, sizeof(sa));\n" +
             "    sa.sa_handler = _on_sigwinch;\n" +
             "    sa.sa_flags = SA_RESTART;\n" +
-            "    sigemptyset(&sa.sa_mask);\n" +
+            "    hxlcl_sigemptyset(&sa.sa_mask);\n" +
             "    return (hxlcl_sigaction(SIGWINCH, &sa, NULL) == 0) ? 0 : -1;\n" +
             "}\n" +
             "\n" +
@@ -267,7 +275,7 @@ fn emit_term_ffi_c() -> str {
             "    memset(&sa, 0, sizeof(sa));\n" +
             "    sa.sa_handler = _on_sigint;\n" +
             "    sa.sa_flags = 0;  /* no SA_RESTART — Ctrl-C interrupts blocking reads */\n" +
-            "    sigemptyset(&sa.sa_mask);\n" +
+            "    hxlcl_sigemptyset(&sa.sa_mask);\n" +
             "    if (hxlcl_sigaction(SIGINT, &sa, NULL) != 0) return -1;\n" +
             "    if (hxlcl_sigaction(SIGTERM, &sa, NULL) != 0) return -1;\n" +
             "    return 0;\n" +
