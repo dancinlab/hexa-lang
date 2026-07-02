@@ -163,7 +163,7 @@ if [ ! -x build/hexat ]; then
     # dropped). arm64-linux stays OFF (arm64 asm not yet 2-host-validated); darwin stays OFF (Mach-O
     # dyld/LC_MAIN entry — no -nostartfiles own _start). Env HEXA_ZEROC_OWN_START=0 force-overrides OFF.
     _zc_own_default=0
-    if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "aarch64" ]; }; then _zc_own_default=1; fi
+    if [ "$(uname -s)" = "Linux" ] && [ "$(uname -m)" = "x86_64" ]; then _zc_own_default=1; fi
     _zc_own_def=""; _zc_own_link=""
     if [ "${HEXA_ZEROC_OWN_START:-$_zc_own_default}" = "1" ]; then _zc_own_def="-DHEXA_ZEROC_OWN_START"; _zc_own_link="-nostartfiles"; fi
     clang -O2 $HOST_ARCH -std=gnu11 -D_GNU_SOURCE $HOST_EXTRA $_zc_own_def -Wno-trigraphs \
