@@ -718,7 +718,13 @@ jobs:
           # sub-packages mapped to the nonexistent `cuda-cublas-12-6` →
           # "E: Unable to locate package" (Jimver issue #371). cuBLAS therefore
           # goes through `non-cuda-sub-packages` (no prefix → libcublas-12-6).
-          sub-packages: '["nvcc", "cudart", "cudart-dev"]'
+          # `cuobjdump` ships in its own sub-package (cuda-cuobjdump-12-6), NOT in
+          # nvcc — without it the PTX-embed Verify assertion (#4404) dies with
+          # `cuobjdump: command not found` → the whole cuda job RED → NO cuda
+          # asset uploaded (installer silently falls back to the CPU asset on GPU
+          # hosts). The fail-loud guard worked as designed — it refused to pass
+          # unverified — but the tool it verifies WITH must be installed.
+          sub-packages: '["nvcc", "cudart", "cudart-dev", "cuobjdump"]'
           non-cuda-sub-packages: '["libcublas", "libcublas-dev"]'
 
       - name: Probe CUDA toolkit (build-only — no GPU on CI)
@@ -867,8 +873,18 @@ jobs:
           # gencode regression can never ship a silently-broken -cuda asset again.
           tmpx="$(mktemp -d)"
           ( cd "$tmpx" && ar x "$OLDPWD/$RA" runtime_cuda.o )
+          # Resolve cuobjdump: toolkit bin → PATH → find under the toolkit root
+          # (Jimver layouts vary: /usr/local/cuda-12.6/bin vs targets/x86_64-linux).
+          # If it is genuinely absent the assertion below fails LOUD with this
+          # message — never skip the PTX check (the check exists because a missing
+          # verify let the SASS-only asset ship silently in the first place).
           CUOBJDUMP="${CUDA_PATH:-/usr/local/cuda}/bin/cuobjdump"
-          command -v "$CUOBJDUMP" >/dev/null 2>&1 || CUOBJDUMP="cuobjdump"
+          [ -x "$CUOBJDUMP" ] || CUOBJDUMP="$(command -v cuobjdump || true)"
+          [ -n "$CUOBJDUMP" ] && [ -x "$CUOBJDUMP" ] || CUOBJDUMP="$(find "${CUDA_PATH:-/usr/local/cuda}" /usr/local/cuda* -maxdepth 4 -name cuobjdump -type f -perm -u+x 2>/dev/null | head -1)"
+          if [ -z "$CUOBJDUMP" ]; then
+            echo "✗ cuobjdump not found (install the 'cuobjdump' toolkit sub-package) — cannot verify PTX embed; refusing to ship unverified" >&2
+            exit 1
+          fi
           if "$CUOBJDUMP" -lptx "$tmpx/runtime_cuda.o" | grep -q '\.ptx'; then
             echo "✓ runtime_cuda.o embeds PTX (driver JIT-forward to any consumer GPU arch)"
           else
