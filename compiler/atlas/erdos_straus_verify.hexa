@@ -1,0 +1,57 @@
+// compiler/atlas/erdos_straus_verify.hexa — deep bounded-verify runner for the
+// Erdős–Straus exact-int verifier (erdos_straus.hexa). Run on the build pool:
+//   hexa run compiler/atlas/erdos_straus_verify.hexa
+// Sweeps n = 2..N proving 4/n = 1/x+1/y+1/z is solvable in positive integers for
+// every n (exhaustive x∈(n/4,3n/4] search · exact integer · no floats), printing
+// milestone progress + sample triples + the bounded 🟩 verdict. STATUS 🟥 OPEN:
+// a PASS is a BOUNDED verification over [2,N], NOT a ∀n solve claim (c2).
+
+use "compiler/atlas/erdos_straus"
+
+fn show(n) {
+    let t = es_find_triple(n)
+    if len(t) == 3 {
+        println("    4/" + to_string(n) + " = 1/" + to_string(t[0]) + " + 1/" + to_string(t[1]) + " + 1/" + to_string(t[2]))
+    } else {
+        println("    4/" + to_string(n) + " : NO SOLUTION (counterexample!)")
+    }
+}
+
+fn main() {
+    let N = 10000
+    println("=== Erdős–Straus BOUNDED VERIFY (exact-int · 4/n=1/x+1/y+1/z) ===")
+    println("Erdős problem #290 · erdosproblems.com · STATUS 🟥 OPEN · target N=" + to_string(N))
+    println("sample triples (smallest-x complete search):")
+    show(2)
+    show(3)
+    show(5)
+    show(97)
+    show(1009)
+    show(8737)
+
+    println("sweeping n = 2.." + to_string(N) + " (milestone every 1000):")
+    let n = 2
+    let solved = 0
+    let firstfail = 0
+    while n <= N {
+        if es_verify_n(n) == 1 {
+            solved = solved + 1
+        } else {
+            if firstfail == 0 { firstfail = n }
+        }
+        if n % 1000 == 0 {
+            println("    [" + to_string(n) + "] solved so far = " + to_string(solved))
+        }
+        n = n + 1
+    }
+
+    println("")
+    println("total n in [2," + to_string(N) + "] = " + to_string(N - 1))
+    println("solved = " + to_string(solved))
+    if firstfail == 0 {
+        println("RESULT: 🟩 BOUNDED PASS [2," + to_string(N) + "] — every n solved (exact integer). ∀n 🟥 OPEN (c2).")
+        exit(0)
+    }
+    println("RESULT: COUNTEREXAMPLE at n=" + to_string(firstfail) + " (would refute Erdős–Straus!)")
+    exit(1)
+}

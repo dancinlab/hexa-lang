@@ -1,0 +1,163 @@
+// HEXA Native Compiler — Erdős–Straus exact-int bounded verifier (main-free module)
+//
+// Lives in compiler/atlas/ (the verification domain, beside identity_engine.hexa)
+// — it is a companion exact-int verifier for ONE external open problem from the
+// Erdős problem ledger (ATLAS/CLAUDE.md "External open-problem targets"):
+//
+//   Erdős–Straus conjecture (erdosproblems.com #290 · Egyptian fractions):
+//   for every integer n ≥ 2 the equation  4/n = 1/x + 1/y + 1/z  has a solution
+//   in POSITIVE integers x, y, z.  STATUS: OPEN (🟥). No proof; verified by
+//   computer to very large bounds (Swett/Salez ≥ 10^17). This module does the
+//   exact-integer BOUNDED verification only — 🟩 [2,N], NEVER a ∀n solve claim.
+//
+// Honesty (c2 · ATLAS ledger tier discipline): a PASS over [2,N] is a bounded
+// computational verification (🟩), evidence for the open conjecture, NOT a
+// resolution. The ∀n statement stays 🟥 OPEN until a proof lands.
+//
+// ── Method (exact integer, no floating point anywhere) ────────────────────
+// A solution 4/n = 1/x+1/y+1/z with x ≤ y ≤ z has its SMALLEST element x in the
+// half-open range (n/4, 3n/4]:  1/x < 4/n ⟹ x > n/4, and 1/x ≥ (4/n)/3 ⟹
+// x ≤ 3n/4. So scanning x over [⌊n/4⌋+1, ⌊3n/4⌋] and, for each x, solving the
+// residual  1/y + 1/z = 4/n − 1/x = (4x−n)/(n·x) = p/q  is COMPLETE: it finds a
+// triple iff one exists. The two-unit-fraction residual is solved exactly by the
+// classic hyperbola identity — from 1/y+1/z = p/q,
+//        (p·y − q)·(p·z − q) = q²
+// so every (y,z) corresponds to a divisor pair u·v = q² with
+//        y = (u + q)/p,   z = (v + q)/p   (both must be positive integers).
+// We enumerate the divisors of q² from the prime factorization of q (cheap:
+// trial division to √q) and test the two exact-divisibility conditions. hexa
+// `int` is native BigInt (#4161) so no overflow guards are needed.
+//
+// Reference cross-check of the residual algebra: Guy, "Unsolved Problems in
+// Number Theory" D11 (Egyptian fractions); the (ay−b)(az−b)=b² hyperbola is the
+// standard exact enumerator for 1/y+1/z = a/b.
+
+// ── prime factorization of m (trial division): flat [p1,e1,p2,e2,…] ──
+pub fn es_factor(m) -> array {
+    let f = []
+    let mm = m
+    let e2 = 0
+    while mm % 2 == 0 {
+        mm = mm / 2
+        e2 = e2 + 1
+    }
+    if e2 > 0 {
+        f.push(2)
+        f.push(e2)
+    }
+    let p = 3
+    while p * p <= mm {
+        let e = 0
+        while mm % p == 0 {
+            mm = mm / p
+            e = e + 1
+        }
+        if e > 0 {
+            f.push(p)
+            f.push(e)
+        }
+        p = p + 2
+    }
+    if mm > 1 {
+        f.push(mm)
+        f.push(1)
+    }
+    f
+}
+
+// ── all divisors of q² given the factorization f=[p,e,…] of q (exponents are
+//    doubled for q²). Deterministic order (byte-stable). ──
+pub fn es_divisors_sq(f) -> array {
+    let divs = []
+    divs.push(1)
+    let i = 0
+    while i < len(f) {
+        let p = f[i]
+        let e = f[i + 1] * 2            // q² doubles every exponent
+        let cur = len(divs)
+        let base = 1
+        let k = 1
+        while k <= e {
+            base = base * p
+            let j = 0
+            while j < cur {
+                divs.push(divs[j] * base)
+                j = j + 1
+            }
+            k = k + 1
+        }
+        i = i + 2
+    }
+    divs
+}
+
+// ── solve the residual 1/y + 1/z = (4x−n)/(n·x) exactly. Returns [y, z] for the
+//    first divisor pair yielding positive-integer y,z (y ≤ z), or [] if none. ──
+pub fn es_split_yz(n, x) -> array {
+    let p = 4 * x - n                    // caller guarantees p > 0 (x > n/4)
+    let q = n * x
+    let q2 = q * q
+    let divs = es_divisors_sq(es_factor(q))
+    let i = 0
+    while i < len(divs) {
+        let u = divs[i]
+        if u <= q {                      // u ≤ v ⟺ u ≤ q (u·v = q²) — pairs once
+            if (u + q) % p == 0 {
+                let v = q2 / u
+                if (v + q) % p == 0 {
+                    let out = []
+                    out.push((u + q) / p)
+                    out.push((v + q) / p)
+                    return out
+                }
+            }
+        }
+        i = i + 1
+    }
+    let empty = []
+    empty
+}
+
+// ── find a full [x, y, z] with 4/n = 1/x+1/y+1/z, or [] if the complete
+//    x∈(n/4,3n/4] scan finds none (a genuine counterexample). ──
+pub fn es_find_triple(n) -> array {
+    let x = n / 4 + 1                    // smallest x with 4x > n
+    let xhi = 3 * n / 4
+    while x <= xhi {
+        let yz = es_split_yz(n, x)
+        if len(yz) == 2 {
+            let out = []
+            out.push(x)
+            out.push(yz[0])
+            out.push(yz[1])
+            return out
+        }
+        x = x + 1
+    }
+    let empty = []
+    empty
+}
+
+// ── 1 if 4/n = 1/x+1/y+1/z is solvable in positive integers, else 0. ──
+pub fn es_verify_n(n) -> int {
+    if len(es_find_triple(n)) == 3 { return 1 }
+    return 0
+}
+
+// ── exact integer identity check: 1/x + 1/y + 1/z == 4/n ⟺
+//    n·(y·z + x·z + x·y) == 4·x·y·z. Returns 1 if the triple is exact. ──
+pub fn es_check(n, x, y, z) -> int {
+    if n * (y * z + x * z + x * y) == 4 * (x * y * z) { return 1 }
+    return 0
+}
+
+// ── bounded sweep [2,N]: first n with NO solution (a counterexample to the
+//    open conjecture), or -1 if every n in [2,N] is solved (🟩 bounded PASS). ──
+pub fn es_first_fail(N) -> int {
+    let n = 2
+    while n <= N {
+        if es_verify_n(n) == 0 { return n }
+        n = n + 1
+    }
+    return 0 - 1
+}

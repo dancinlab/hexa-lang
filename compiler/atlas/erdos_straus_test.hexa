@@ -1,0 +1,84 @@
+// compiler/atlas/erdos_straus_test.hexa — companion selftest for
+// erdos_straus.hexa. The module is main-free (an unguarded module-level `fn main`
+// would hijack the entry main of any fresh importer — convergence
+// identity-engine-hexa-1). Run via `hexa run compiler/atlas/erdos_straus_test.hexa`.
+//
+// Gates the Erdős–Straus exact-int bounded verifier: known-solution spot checks
+// (each reconstructed triple is re-verified by the independent integer identity
+// es_check), a complete bounded sweep over [2,N] (must find a solution for every
+// n — 🟩 bounded · ∀n stays 🟥 OPEN · c2), plus negative controls that es_check
+// rejects a non-solution.
+
+use "compiler/atlas/erdos_straus"
+
+fn gate(label, got, want) -> int {
+    if got == want {
+        println("  [PASS] " + label + "  -> " + to_string(got))
+        return 0
+    }
+    println("  [FAIL] " + label + "  -> got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+
+// Verify es_find_triple(n) returns a triple that es_check confirms is exact.
+fn gate_triple(fails, n) -> int {
+    let t = es_find_triple(n)
+    if len(t) != 3 {
+        println("  [FAIL] n=" + to_string(n) + " no triple found")
+        return fails + 1
+    }
+    let x = t[0]
+    let y = t[1]
+    let z = t[2]
+    if es_check(n, x, y, z) == 1 {
+        println("  [PASS] 4/" + to_string(n) + " = 1/" + to_string(x) + " + 1/" + to_string(y) + " + 1/" + to_string(z))
+        return fails
+    }
+    println("  [FAIL] n=" + to_string(n) + " triple NOT exact: x=" + to_string(x) + " y=" + to_string(y) + " z=" + to_string(z))
+    return fails + 1
+}
+
+fn main() {
+    let N = 3000
+    println("=== Erdős–Straus SELFTEST (native exact-int · 4/n=1/x+1/y+1/z · N=" + to_string(N) + ") ===")
+    println("Erdős problem #290 (Egyptian fractions) · STATUS 🟥 OPEN · this = 🟩 BOUNDED [2,N] only (c2)")
+    let fails = 0
+
+    // ── KNOWN-SOLUTION SPOT CHECKS (reconstructed triple re-verified by es_check) ──
+    println("SPOT CHECKS (found triple must satisfy the exact integer identity):")
+    fails = gate_triple(fails, 2)        // 4/2 = 2
+    fails = gate_triple(fails, 3)        // 4/3
+    fails = gate_triple(fails, 5)        // prime
+    fails = gate_triple(fails, 6)
+    fails = gate_triple(fails, 7)        // 7 ≡ 7 mod 24
+    fails = gate_triple(fails, 13)
+    fails = gate_triple(fails, 97)       // prime 97 ≡ 1 mod 24 (the hard residue class)
+    fails = gate_triple(fails, 1009)     // prime 1009 ≡ 1 mod 24
+    fails = gate_triple(fails, 1849)     // 43² = 1849 (prime square, ≡ 1 mod 24)
+
+    // ── DIRECT es_check ANCHORS (hand-computed exact triples) ──
+    println("es_check IDENTITY ANCHORS (hand-verified exact triples):");
+    // 4/2 = 1/2 + 1/2 + 1/... no; canonical small ones:
+    fails = fails + gate("A1 4/5 = 1/2+1/4+1/20",  es_check(5, 2, 4, 20), 1)
+    fails = fails + gate("A2 4/3 = 1/1+1/6+1/6",   es_check(3, 1, 6, 6), 1)
+    fails = fails + gate("A3 4/6 = 1/2+1/6+1/6",   es_check(6, 2, 6, 6), 1)
+    fails = fails + gate("A4 4/13 = 1/4+1/18+1/468", es_check(13, 4, 18, 468), 1)
+
+    // ── NEGATIVE CONTROLS (es_check must REJECT a non-solution) ──
+    println("NEGATIVE CONTROLS (es_check must reject = 0):")
+    fails = fails + gate("NC1 4/5 ≠ 1/2+1/4+1/21", es_check(5, 2, 4, 21), 0)
+    fails = fails + gate("NC2 4/7 ≠ 1/2+1/2+1/2",  es_check(7, 2, 2, 2), 0)
+
+    // ── COMPLETE BOUNDED SWEEP [2,N] (every n must be solved) ──
+    println("BOUNDED SWEEP [2," + to_string(N) + "] (first unsolved n, -1 = ALL solved):")
+    let ff = es_first_fail(N)
+    fails = fails + gate("SWEEP es_first_fail([2,N])", ff, 0 - 1)
+
+    println("")
+    if fails == 0 {
+        println("RESULT: PASS - Erdős–Straus exact-int verifier: 🟩 BOUNDED [2," + to_string(N) + "] all solved (∀n 🟥 OPEN · c2)")
+        exit(0)
+    }
+    println("RESULT: FAIL (" + to_string(fails) + ")")
+    exit(1)
+}
