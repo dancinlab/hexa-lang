@@ -180,6 +180,13 @@
     "source": "tool/stage_resolve_runtime_a"
    },
    {
+    "id": "OWN-START-GATE-VS-SHIP-ARCHIVE-SHAPE-DRIFT",
+    "state": "ossified",
+    "value": "#4399/#4403 own-start flip shipped with GATE-1 (own_start_nm_clean_gate) GREEN, yet every release/faithful linux link died: `hidden symbol __dso_handle isn't defined` via libc_nonshared.a(atexit.oS). The gate audited the SINGLE-TU runtime.a while the ship (release_build) uses HEXA_RT_MULTIOBJ=1 — the MULTIOBJ member hxlcl_shim.o carried glibc `U atexit` (S4 compile lacked $_zc_own_def AND the shim source had no OWN_START branch: hxlcl_atexit unconditionally delegated to glibc atexit). -nostartfiles drops crtbegin = __dso_handle provider. Same false-green class the shared release_build entrypoint was built to seal, recurring one level down (archive SHAPE, not env vars).",
+    "threshold": "A nm-clean/link-shape gate MUST run the SHIP recipe verbatim (HEXA_RT_MULTIOBJ=1 + ship env defaults), never a reduced archive shape — #4408 revert DELETED own_start_nm_clean_gate.sh, so the re-flip MUST resurrect it MULTIOBJ-keyed. Any -D gate that alters symbol routing ($_zc_own_def) must flow to EVERY member's compile line (S2/S3/S4), and every extern TU (hxlcl_shim) needs the matching #ifdef branch — grep all `runtime_core_hxlcl_shim.c -o` sites. Fix landed (default-OFF byte-neutral): shim hxlcl_atexit → exported _hxlcl_atexit_register (own 64-slot LIFO, drained by hxlcl_exit) + S4 define flow; verified aiden release_build RED→GREEN @ flip-ON. Complements #4410 weak __dso_handle (link-resolves __cxa_atexit) — routing makes registered handlers actually RUN.",
+    "source": "tool/stage_resolve_runtime_a"
+   },
+   {
     "id": "CODEGEN-BOXED-SCALAR-SLOWPATH",
     "state": "in_flight",
     "value": "hexa native-emit(aprime_cc --emit=obj)의 일반 동적타입 scalar/array 경로가 gcc-O2 대비 measured 2.9~23× 느림(geomean 8.6×·aiden·reference-match·state/codegen-quality-probe-verdict.md). 커널별 ratio: k1_sum(scalar reduce) 2.86× · k5_fncall 4.41× · k2_collatz(branchy int) 12.53× · k4_branch(modulo) 12.73× · k3_arrmap(배열 map) 23.23×(최대). 어셈 root-cause=박싱 HexaVal 태그-디스패치 모델: scalar op마다 런타임 함수호출(hexa_add_slow/hexa_mul/hexa_mod, 타입태그 스택슬롯)·레지스터할당無·unboxed i64無·strength-reduction無. k3=원소당 7call(hexa_index_get/set bounds-check+box) vs gcc 0call(register pointer-walk+lea+magic-multiply). HEXA_INLINE_INT_BOX=1도 unbox 안됨(5-7 call/iter 잔존). 손튜닝 farr/GEMM은 별도 unboxed 경로=BLIS/cuBLAS parity(일반 유저코드는 거기로 안 내려감).",
