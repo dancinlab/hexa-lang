@@ -5288,7 +5288,7 @@
         "name": "Atlas — math-map + novelhunt campaign",
         "role": "",
         "id": "atlas",
-        "detail": "거시(정수론) ↔ 양자(격자·모듈러형식·CFT·QEC) 수학 지도. 사람층 원장=atlas/README.md + atlas/hypotheses/H-*.md, 기계 SSOT=compiler/atlas/embedded.gen.hexa(@F verdict atom). 적재는 항상 양층(verify is ambient · CLAUDE.md)."
+        "detail": "거시(정수론) ↔ 양자(격자·모듈러형식·CFT·QEC) 수학 지도. 사람층 원장=ATLAS/README.md + ATLAS/hypotheses/H-*.md, 기계 SSOT=compiler/atlas/embedded.gen.hexa(@F verdict atom). 적재는 항상 양층(verify is ambient · CLAUDE.md). 외부 open-problem 타깃 레저 = Erdős problem corpus(status SSOT=erdosproblems.com · ~1217문제/~45% solved · 2026-07), Millennium 7이 아님 — finite-witness(반례탐색·bounded verify·extremal) 표면이 exact-int 엔진과 정합·맵 기존 노드(Egyptian fractions·divisor·covering) 중첩. 규율: open=🟥·bounded=🟩 [2,N] only·⭐=증명만·per-problem .md 금지 (ATLAS/CLAUDE.md 'Erdős problem ledger' 절)."
       },
       {
         "name": "Discovery engine — NEXUS (drill / kick)",
