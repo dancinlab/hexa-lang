@@ -166,6 +166,13 @@
         "source": "tool/build_cuda_runtime"
       },
       {
+        "id": "OWN-START-GATE-VS-SHIP-ARCHIVE-SHAPE-DRIFT",
+        "state": "ossified",
+        "value": "#4399/#4403 own-start flip shipped with GATE-1 (own_start_nm_clean_gate) GREEN, yet every release/faithful linux link died: `hidden symbol __dso_handle isn't defined` via libc_nonshared.a(atexit.oS). The gate audited the SINGLE-TU runtime.a while the ship (release_build) uses HEXA_RT_MULTIOBJ=1 — the MULTIOBJ member hxlcl_shim.o carried glibc `U atexit` (S4 compile lacked $_zc_own_def AND the shim source had no OWN_START branch: hxlcl_atexit unconditionally delegated to glibc atexit). -nostartfiles drops crtbegin = __dso_handle provider. Same false-green class the shared release_build entrypoint was built to seal, recurring one level down (archive SHAPE, not env vars).",
+        "threshold": "A nm-clean/link-shape gate MUST run the SHIP recipe verbatim (HEXA_RT_MULTIOBJ=1 + ship env defaults), never a reduced archive shape. Any -D gate that alters symbol routing ($_zc_own_def) must flow to EVERY member's compile line (S2/S3/S4), and every extern TU (hxlcl_shim) needs the matching #ifdef branch — grep all `runtime_core_hxlcl_shim.c -o` sites. Fix: shim hxlcl_atexit → exported _hxlcl_atexit_register (own 64-slot LIFO, drained by hxlcl_exit); verified aiden release_build RED→GREEN.",
+        "source": "tool/own_start_nm_clean_gate.sh"
+      },
+      {
         "id": "BUILD-CUDA-RUNTIME-CUDA-HOME-SM80-ZEROS",
         "state": "ossified",
         "value": "build_cuda_runtime defaulted CUDA_HOME=/usr/local/cuda-13.0. When that path is absent (e.g. summer has cuda-12.9 only), PATH prepend has no effect and system nvcc (CUDA 12.0, /usr/bin/nvcc) is used instead. CUDA 12.0 compiles sm_80 objects with -rdc=true. sm_80+rdc+clang-link silently fails device-link init on sm_120 (Blackwell RTX 5070) → ALL GPU GEMM kernels return zero. Stale ~/.hexa-cache/ entries (pre-compiled hexa run binaries keyed by source hash) perpetuate the problem after runtime.a is updated.",

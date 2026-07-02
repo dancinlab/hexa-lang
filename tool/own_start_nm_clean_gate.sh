@@ -17,8 +17,16 @@ cd "$ROOT"
 # placeholder only to satisfy the ${EDGE_ASSET:?} guard evaluated BEFORE the
 # frozen-seed source-build branch (the source path exits 0 before any edge
 # tarball fetch — validated on summer, wf wdxedope8 GATE-1).
+# HEXA_RT_MULTIOBJ=1 mirrors tool/release_build's default so the gate audits the
+# SHIP archive shape ({runtime.o, runtime_core.o, hxlcl_shim.o, seeds}), not the
+# single-TU one. The single-TU gate stayed GREEN while the MULTIOBJ ship archive
+# carried a glibc `U atexit` in hxlcl_shim.o (compiled without $_zc_own_def) →
+# -nostartfiles hexat link died on crtbegin's __dso_handle (measured aiden
+# release_build @ main a372449a). Archive-shape drift between gate and ship is
+# exactly what this gate exists to prevent — key it to the ship default.
 CC="${CC:-clang}" \
 HEXA_ZEROC_OWN_START=1 \
+HEXA_RT_MULTIOBJ="${HEXA_RT_MULTIOBJ:-1}" \
 EDGE_ASSET="${EDGE_ASSET:-hexa-linux-x86_64.tar.gz}" \
   bash tool/stage_resolve_runtime_a
 
