@@ -67,9 +67,34 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # ── dispatch — fallback-dispatch runner picker (free · always available) ─────
+  # Probes whether ghost-selfhost (darwin arm64, gen2_fix slot) is ONLINE and
+  # emits the darwin job's `runs-on` at runtime: ghost when online + same-repo
+  # (fast, and — holding the graduated slot — the gate runs REAL instead of the
+  # exit-2 NEUTRAL it takes on a slot-less cloud host), else the free GitHub-
+  # hosted macos-15 fallback. Ghost-offline (or a fork PR) therefore NEVER wedges
+  # this gate — it just falls back to macos-15. Mirrors the linux picker in
+  # nobaseline-gate.yml 1:1 (tool/ci_pick_runner.sh · .github/actions/pick-runner).
+  dispatch:
+    name: dispatch (pick runner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      darwin_label: ${{ steps.darwin.outputs.label }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: darwin
+        uses: ./.github/actions/pick-runner
+        with:
+          kind: darwin
+          # self-hosted only for same-repo events; fork PRs → GitHub-hosted (RCE).
+          eligible: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
+          token: ${{ github.token }}
+
   determinism-gate:
     name: determinism (re-emit + relink byte-eq, darwin-arm64)
-    runs-on: macos-15
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.darwin_label) }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
