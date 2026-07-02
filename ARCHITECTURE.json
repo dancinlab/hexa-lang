@@ -262,6 +262,13 @@
         "value": "darwin 잡 지연의 구조(2026-07-03 실측): picker 매칭이 status==online만 보고 busy를 안 봐(ci_pick_runner.sh jq_filter) ghost가 바빠도 전 darwin 잡이 ghost 1대·1잡 직렬로 수렴, mini는 ghost-offline시에만 쓰는 보험 체인. 여기에 (a)세션 머지 트레인(main 머지 5건)이 main-push 게이트 풀세트를 큐 앞에 쌓아 자기 PR 잡을 starve (b)DIRTY 해소 base-merge 재푸시마다 engine/게이트 잡 재-enqueue(큐 위치 리셋) (c)anima engine cold ~39min/잡이 곱해져 수 시간 대기. churn-race(runtime-cuda-emit-hexa-1)의 러너-큐 판.",
         "threshold": "재발조건: 짧은 간격 다중 main 머지+PR CI 동시 대기, 또는 busy ghost에 darwin 잡 적체 중 idle darwin 러너 방치. 해결: ①머지 트레인은 PR CI가 소화될 간격으로(또는 PR 완주 후 일괄) ②DIRTY 재푸시는 대상 PR의 잡이 실행 직전이 아닐 때만 ③구조 레버(별도 결정 필요)=picker busy-aware 분산(mini heavy-build 금지 원칙과 충돌 검토)·main-push 게이트 superseded-cancel(이력 보존 설계와 트레이드오프).",
         "source": "tool/ci_pick_runner.sh"
+      },
+      {
+        "id": "hexa-cc-c-1",
+        "state": "pos-conv",
+        "value": "Stale-installed hexa가 대형 소비자(anima engine)를 깨는 두 형태: ①pool 설치가 codegen 매핑보다 오래됨(v0.511 lever3 사례) ②러너가 Latest를 설치하는데 Latest 자체가 고착 — release finalize가 cuda-asset RED(v0.553~)로 막혀 Latest=v0.556 동결→canonical install.sh가 신선 호스트에 신형 runtime carrier(hexa_forge_dispatch_gelu_bwd/hexa_farr_packed_gemv_offset) 없는 hexa를 배포→ghost cold-compile 20 errors가 v0.552와 v0.556 둘 다에서 재현(2026-07-03). cloud CI는 Actions 캐시(warm ~/.hexa-cache)로만 살아있었음 = self-hosted 라우팅이 cold-compile을 강제하기 전까지 파손이 가려짐.",
+        "threshold": "'러너/pool이 X를 컴파일 못함'을 대상 결함으로 단정하기 전: ①같은 X가 소비자 CI서 green인지(green=stale install) ②Latest가 고착인지(release finalize RED 체인) 확인 — 고착이면 최신 verified tag 명시 설치(HEXA_VERSION=<tag> install.sh·v0.574.1이 ghost 해결)+릴리스 체인 unstick이 root fix. warm-cache로만 green인 소비자=가려진 파손이지 건강 아님.",
+        "source": "self/native/hexa_cc.c"
       }
     ]
   },
