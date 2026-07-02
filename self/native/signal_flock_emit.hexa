@@ -68,6 +68,7 @@ fn emit_signal_flock_c() -> str {
             "#include <unistd.h>\n" +
             "#include <string.h>\n" +
             "#include <sys/file.h>   /* flock(2) */\n" +
+            "#include <sys/syscall.h>  /* SYS_flock — zero-c #29 Linux raw-svc */\n" +
             "#include <sys/types.h>\n" +
             "\n" +
             "#ifndef NSIG\n" +
@@ -272,6 +273,11 @@ fn emit_signal_flock_c() -> str {
             "    // file's include — same semantics, errno-set on failure.\n" +
             "#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)\n" +
             "    if (_hxlcl_syscall2_cf(HXLCL_SYS_FLOCK, fd, op) < 0) {\n" +
+            "#elif defined(__linux__)\n" +
+            "    /* zero-c #29: Linux raw-svc via _hxlcl_lx_sc2 (runtime.c, existing) — SYS_flock\n" +
+            "     * x86_64=73 / arm64=32; blocking LOCK_EX preserved (kernel blocks); _hxlcl_lx_ret\n" +
+            "     * maps -errno -> -1+errno so the errno read below is valid. Drops the libc flock UND. */\n" +
+            "    if (_hxlcl_lx_sc2(SYS_flock, fd, op) < 0) {\n" +
             "#else\n" +
             "    if (flock(fd, op) < 0) {\n" +
             "#endif\n" +
@@ -289,6 +295,8 @@ fn emit_signal_flock_c() -> str {
             "    /* Best-effort unlock; close always runs. (arch gate as above) */\n" +
             "#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)\n" +
             "    (void)_hxlcl_syscall2_cf(HXLCL_SYS_FLOCK, fd, LOCK_UN);\n" +
+            "#elif defined(__linux__)\n" +
+            "    (void)_hxlcl_lx_sc2(SYS_flock, fd, LOCK_UN);  /* zero-c #29: Linux raw-svc */\n" +
             "#else\n" +
             "    (void)flock(fd, LOCK_UN);\n" +
             "#endif\n" +
