@@ -3145,6 +3145,40 @@ fn cmd_build(src, out, c_only, target, shared) {
             println("  [flat] warn: compiled module_loader not found — falling back to raw src")
         }
     }
+    // ─── HX3012 @own use-after-move lint — opt-in ADVISORY (HEXA_OWN_LINT=1) ──
+    // Vehicle (b), state/hexa-own/ownlint_shipping_wiring.md §2b/§3. The real
+    // own-lint lives only in the native frontend (compiler/check/types.hexa,
+    // itself gated on HEXA_OWN_LINT — the env var inherits into the child, so
+    // ONE flag both triggers this block and activates the lint registry). The
+    // gen2 ship path runs no own pass; under the flag we spawn one advisory
+    // aprime_cc compile of the flattened source (sits AFTER flatten so it sees
+    // __actual_src, BEFORE the backend select so it covers both C and native
+    // backends) and forward its merged diag stream (HX3012 + anything else
+    // aprime renders) on stderr. `--emit=obj` deliberately: it takes the
+    // empty_atlas_index() branch in compiler/main.hexa (skips the measured
+    // ~1.85GB full-atlas RSS); the .o itself is discarded — only diags matter.
+    // The `_drv.hexa` placeholder token is REQUIRED by aprime's
+    // _normalize_argv (see the native-backend stage-1 comment below).
+    // ADVISORY CONTRACT: never changes build rc, never blocks emission, never
+    // touches the produced artifact — aprime rc is deliberately ignored (it is
+    // measured rc=1 on gen2-valid shipping files, census §2b); a missing
+    // aprime_cc degrades to ONE loud line, NOT die_no_native_cc (a lint must
+    // never kill a build). Flag unset = this whole block is a single env()
+    // compare — default path byte-identical (byteeq 3-target gate = proof).
+    if env("HEXA_OWN_LINT") == "1" {
+        let __ol_cc = resolve_native_cc()
+        if len(__ol_cc) == 0 {
+            eprintln("  [own-lint] advisory unavailable: aprime_cc not found — build it: bash tool/build_aprime.sh -o build/aprime_cc (build continues)")
+        } else {
+            let __ol_obj = runtime_tmpname("hexa_own_lint") + ".o"
+            let __ol_out = exec("'" + __ol_cc + "' _drv.hexa --emit=obj -o '" + __ol_obj + "' '" + __actual_src + "' 2>&1")
+            if len(__ol_out) > 0 {
+                eprintln("  [own-lint] advisory diagnostics (aprime frontend · rc ignored · build continues):")
+                eprintln(__ol_out)
+            }
+            let _ = exec("rm -f '" + __ol_obj + "' 2>/dev/null")
+        }
+    }
     // ─── S5 native-codegen backend selector ────────────────────────────
     // HEXA_BACKEND=native → after the flatten step above, dispatch CODEGEN
     // to the native compiler (aprime_cc) instead of the hexat transpiler.

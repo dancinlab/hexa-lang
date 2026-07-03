@@ -350,6 +350,12 @@ fn _p_is_known_attr(name) {
     if name == "sibling_call" { return true }
     if name == "partial" { return true }
     if name == "unsafe" { return true }
+    // @own — ownership/move lint marker (native frontend HX3012, opt-in
+    // HEXA_OWN_LINT=1 · cmd_build advisory). Registered so the shipping
+    // parser stops warning "unknown attribute @own"; the generic
+    // fall-through below already records it into p_pending_attrs →
+    // LetStmt.op unchanged.
+    if name == "own" { return true }
     // Data-layout / domain hints (ai_native_pass attr_has set).
     if name == "soa" { return true }
     if name == "cow" { return true }
