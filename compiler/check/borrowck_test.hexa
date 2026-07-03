@@ -355,34 +355,108 @@ fn _run_tp_own() -> bool {
     return ok
 }
 
+// ── L4 A2 — WOULD-MOVE CENSUS (HEXA_BORROWCK_CENSUS=1) ────────
+//
+// Census is a SEPARATE observe-only lane (no HX3014, no _lr_diag): under
+// HEXA_BORROWCK_CENSUS=1 the loan pass runs (census implies `_bck_on`) and
+// pushes one `[borrowck-census]` marker per recorded `let b = a` aggregate
+// handle-copy — the exact move-by-default (A3) migration worklist. The
+// markers also stream to stderr for the pool grep; here we count them via
+// the in-process `bck_census_lines()` accessor.
+//
+// The probe below has THREE handle-copy edges over one tracked root:
+//   let a = [1, 2]   root (tracked at the composite-literal birth)
+//   let b = a        copy #1  (b joins group(a))
+//   let c = b        copy #2  (b is tracked via #1)
+//   let d = a        copy #3
+// → 3 census markers ON, 0 OFF (byteeq-neutral: the lane is untouched
+//   unless HEXA_BORROWCK_CENSUS=1).
+
+fn _src_census_copies() -> string {
+    let mut s = "fn cen() {\n"
+    s = s + "    let a = [1, 2]\n"
+    s = s + "    let b = a\n"
+    s = s + "    let c = b\n"
+    s = s + "    let d = a\n"
+    s = s + "    println(a[0] + b[0] + c[0] + d[0])\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _run_census() -> bool {
+    let census_on = env("HEXA_BORROWCK_CENSUS") == "1"
+    let mut want = 0
+    if census_on { want = 3 }
+    let mut ok = true
+    println("")
+    println("── census_copies (expect [borrowck-census] ×" + to_string(want) + ") ──")
+    let toks = lex(_src_census_copies(), "census.hexa")
+    let m = parse(toks, "census.hexa")
+    let hm = lower(m, empty_atlas_index())
+    let mm = lower_hir(hm)
+    if len(mm.funcs) == 0 { println("  WARN: census probe lowered 0 fns") }
+    let lines = bck_census_lines()
+    let mut i = 0
+    while i < len(lines) {
+        println("      " + lines[i])
+        i = i + 1
+    }
+    let n = len(lines)
+    if n != want {
+        println("  FAIL: census markers = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
 // ── driver ───────────────────────────────────────────────────
 
 fn main() {
+    let census_mode = env("HEXA_BORROWCK_CENSUS") == "1"
     println("══════════════════════════════════════════════")
     println("  HEXA-OWN L3 M3 — intra-block loan pass (HX3014)")
     let mut mode = "OFF (byteeq-neutral sweep)"
     if env("HEXA_BORROWCK") == "1" { mode = "ON (HEXA_BORROWCK=1)" }
+    if census_mode { mode = "CENSUS (HEXA_BORROWCK_CENSUS=1 — L4 A2 would-move)" }
     println("  flag mode: " + mode)
     println("══════════════════════════════════════════════")
 
-    let mut ok = true
-
-    if !_run_probe("hz_write_alias", _src_hz_write_alias(), 1) { ok = false }
-    if !_run_probe("hz_write_alias_field", _src_hz_write_alias_field(), 1) { ok = false }
-    if !_run_probe("hz_push_alias", _src_hz_push_alias(), 1) { ok = false }
-    if !_run_probe("fp_arr_alias_read", _src_fp_arr_alias_read(), 0) { ok = false }
-    if !_run_probe("fp_callarg", _src_fp_callarg(), 0) { ok = false }
-    if !_run_probe("fp_copy_int", _src_fp_copy_int(), 0) { ok = false }
-    if !_run_probe("fp_write_same_name", _src_fp_write_same_name(), 0) { ok = false }
-    if !_run_probe("fp_repoint", _src_fp_repoint(), 0) { ok = false }
-    if !_run_probe("xb_write_in_branch", _src_xb_write_in_branch(), 0) { ok = false }
-    if !_run_tp_own() { ok = false }
-
-    println("")
-    if ok {
-        println("ALL PASS — M3 discriminator holds (write-alias warns, read-alias silent)")
+    // In CENSUS mode the M3 pass runs (census implies `_bck_on`), so the
+    // HX3014 hazard probes — whose expectations key on HEXA_BORROWCK — would
+    // spuriously fire. Run ONLY the census assertion in that mode.
+    if census_mode {
+        let cok = _run_census()
+        println("")
+        if cok {
+            println("CENSUS PASS — N would-move sites counted (move-by-default worklist)")
+        } else {
+            println("CENSUS FAILURES — see above")
+            exit(1)
+        }
     } else {
-        println("FAILURES — see above")
-        exit(1)
+        let mut ok = true
+
+        if !_run_probe("hz_write_alias", _src_hz_write_alias(), 1) { ok = false }
+        if !_run_probe("hz_write_alias_field", _src_hz_write_alias_field(), 1) { ok = false }
+        if !_run_probe("hz_push_alias", _src_hz_push_alias(), 1) { ok = false }
+        if !_run_probe("fp_arr_alias_read", _src_fp_arr_alias_read(), 0) { ok = false }
+        if !_run_probe("fp_callarg", _src_fp_callarg(), 0) { ok = false }
+        if !_run_probe("fp_copy_int", _src_fp_copy_int(), 0) { ok = false }
+        if !_run_probe("fp_write_same_name", _src_fp_write_same_name(), 0) { ok = false }
+        if !_run_probe("fp_repoint", _src_fp_repoint(), 0) { ok = false }
+        if !_run_probe("xb_write_in_branch", _src_xb_write_in_branch(), 0) { ok = false }
+        if !_run_tp_own() { ok = false }
+        // census lane must be silent whenever HEXA_BORROWCK_CENSUS is unset
+        // (byteeq-neutral proof at the census-count level).
+        if !_run_census() { ok = false }
+
+        println("")
+        if ok {
+            println("ALL PASS — M3 discriminator holds (write-alias warns, read-alias silent)")
+        } else {
+            println("FAILURES — see above")
+            exit(1)
+        }
     }
 }
