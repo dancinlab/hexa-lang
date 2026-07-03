@@ -318,6 +318,13 @@
         "value": "regex native path(HEXA_REGEX_NATIVE)를 default-ON flip하면 undefined reference to rt_regex_* 링크실패: emitted runtime.c(runtime.a)가 rt_regex_*로 위임하나 rt_regex_*는 compiler closure(regex_rt.hexa via compiler/main.hexa import)에만 있고 runtime.a엔 미포함. runtime.a를 standalone 링크하는 소비자(consent-checker·faithful runtime-link·유저바이너리)는 rt_regex_* 미해결→ld fail(linux-arm64 #4451). default-OFF는 libc regex라 무해(rt_regex_* 미참조)·flip이 노출.",
         "threshold": "재발=closure-import 심볼(rt_*)에 위임하는 runtime.c seam을 default-ON flip시 'undefined reference to rt_*' 링크에러(standalone runtime.a 링크서). 판정=OFF byteeq/faithful GREEN이나 flip이 링크RED. 해결=위임대상 심볼을 runtime.a 자체에 컴파일 포함(regex_rt.hexa+thompson+backtrack를 runtime 빌드 TU에 넣거나 .s seed화·glob/fgets/qsort는 runtime.c 내부 self-contained라 무관)·closure import만으론 standalone runtime.a 링크 부족. regex reduction은 gate MERGED default-OFF(#4445)이나 flip=이 wiring 선행. glob/fgets flip은 self-contained라 성공(#4449/#4450).",
         "source": "stdlib/runtime/regex_rt.hexa"
+      },
+      {
+        "id": "install-sh-1",
+        "state": "pos-conv",
+        "value": "install-relative 앵커(bin/self·bin/stdlib)는 심링크가 불변식 — 실디렉토리 잔재가 앉으면 BSD ln -sfn이 교체 대신 내부 중첩링크를 만들어 fresh_install이 성공으로 위장한 채 리졸버가 stale 트리를 영구 해석(ghost 5주+ · anima engine 0/6 RED · gelu 미선언). 잔재-그림자 클래스=wrong-repo silent-staleness 가드 동족",
+        "threshold": "재발조건: 설치 앵커에 non-symlink 존재. 해결: install.sh가 non-symlink 앵커 선제 rm -rf 후 ln -sfn (fix/install-anchor-remnant). 진단신호: <anchor>/<anchor> 중첩 심링크 존재 = 이 병리 확정",
+        "source": "install.sh"
       }
     ]
   },
