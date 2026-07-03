@@ -7235,7 +7235,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    for (int i = 0; i < n; i++) {\n"
     buf = buf + "        result = hexa_array_push(result, HX_ARR_ITEMS(arr)[i]);\n"
     buf = buf + "    }\n"
-    buf = buf + "#ifdef HEXA_RT_ARRAY_SORT_NATIVE\n"
+    buf = buf + "#if !defined(HEXA_RT_ARRAY_SORT_NATIVE_OFF)   /* zeroc #29 FLIP: stable native merge-sort default-ON (env escape -DHEXA_RT_ARRAY_SORT_NATIVE_OFF); drops qsort */\n"
     buf = buf + "    /* zero-c #29: stable native bottom-up merge-sort (drops libc qsort).\n"
     buf = buf + "     * glibc qsort is UNSTABLE (introsort) with an UNSPECIFIED equal-key order;\n"
     buf = buf + "     * a stable merge-sort keeps insertion order on ties, so it is MORE\n"
