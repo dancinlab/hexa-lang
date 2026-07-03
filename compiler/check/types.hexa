@@ -1216,9 +1216,20 @@ fn _types_lookup_variant_payload_types(enum_name: string, variant_name: string) 
 // condition #5 "post env-hoist").
 let mut _types_static_on: bool = false
 let mut _types_array_lower_on: bool = false
+// static-types F4 warn-first two-step (wall_a_endgame.md §B.3 F4): the opt-in
+// static-types REJECTs (HX3011 let/assign/match-mismatch, HX3016 struct-field
+// existence) ship as a WARNING band under the plain HEXA_STATIC_TYPES=1 flag —
+// a default-ON flip with fatal errors would break the shipping path on any
+// latent true-positive. HEXA_STATIC_TYPES_STRICT=1 re-escalates them to the
+// build-refusing Error (REJECT), keeping the fatal path reachable so no
+// coverage is lost. Consulted ONLY at the HX3011/HX3016 emit sites, which are
+// themselves reached only under _types_static_on — so STRICT without STATIC is
+// an inert no-op (no diagnostic fires to re-severity).
+let mut _types_strict: bool = false
 
 fn _types_static_flags_hoist() {
     _types_static_on = env("HEXA_STATIC_TYPES") == "1"
+    _types_strict = env("HEXA_STATIC_TYPES_STRICT") == "1"
     // static-types F0 flag-fold (wall_a_endgame.md §B.3 F0): HEXA_STATIC_TYPES
     // IMPLIES array-lower. A default-ON flip of a two-flag AND is incoherent,
     // so the r7-prep/r8/r9 array-lowering rungs fold under the single
@@ -1846,16 +1857,23 @@ fn _emit_hx3001(expected: Type, actual: Type, sp: Span, out: array) {
 
 // HX3011 — opt-in static-type let-mismatch (HEXA_STATIC_TYPES=1).
 // Rust E0308-faithful "mismatched types": a `let x: T = <literal>` whose
-// scalar-literal RHS provably disagrees with the declared scalar T. Error
-// severity (catalog.hexa) → main.hexa `_has_errors` aborts before codegen
-// (REJECT, not advisory warning). Only emitted under the flag, so the
-// default diagnostic stream is byte-identical (byteeq-neutral).
+// scalar-literal RHS provably disagrees with the declared scalar T. F4
+// warn-first two-step (wall_a_endgame.md §B.3 F4): WARNING band under the
+// plain flag (renders, never aborts) so a default-ON flip cannot break the
+// shipping path on a latent true-positive; HEXA_STATIC_TYPES_STRICT=1
+// re-escalates to Error → main.hexa `_has_errors` aborts before codegen
+// (REJECT). Only emitted under HEXA_STATIC_TYPES, so the default diagnostic
+// stream is byte-identical in BOTH bands (byteeq-neutral).
 fn _emit_hx3011(expected: Type, actual: Type, sp: Span, out: array) {
     let mut b = diag_new("HX3011")
     b = diag_span(b, sp)
     b = diag_arg(b, "expected", _type_display(expected))
     b = diag_arg(b, "actual", _type_display(actual))
-    out.push(diag_emit(b))
+    if _types_strict {
+        out.push(diag_emit(b))
+    } else {
+        out.push(diag_emit_sev(b, Severity::Warning))
+    }
 }
 
 // HX3012 — opt-in @own use-after-move lint (HEXA_OWN_LINT=1).
@@ -1890,15 +1908,21 @@ fn _emit_hx3013(name: string, global: string, def_line: i64, sp: Span, out: arra
 // HX3016 — opt-in struct-literal field-EXISTENCE reject (HEXA_STATIC_TYPES=1),
 // static-types r9d. Rust E0560-faithful "struct has no field named": a
 // field-init whose name misses the r5 registry for a struct the registry
-// KNOWS. Error severity (catalog.hexa) → REJECT, same abort contract as
-// HX3011. Only emitted under the flag, so the default diagnostic stream is
-// byte-identical (byteeq-neutral).
+// KNOWS. F4 warn-first two-step (wall_a_endgame.md §B.3 F4), the SAME band
+// policy as HX3011: WARNING under the plain flag, HEXA_STATIC_TYPES_STRICT=1
+// re-escalates to Error (REJECT) — the strict abort contract of HX3011. Only
+// emitted under HEXA_STATIC_TYPES, so the default diagnostic stream is
+// byte-identical in BOTH bands (byteeq-neutral).
 fn _emit_hx3014(sname: string, fname: string, sp: Span, out: array) {
     let mut b = diag_new("HX3016")
     b = diag_span(b, sp)
     b = diag_arg(b, "name", sname)
     b = diag_arg(b, "field", fname)
-    out.push(diag_emit(b))
+    if _types_strict {
+        out.push(diag_emit(b))
+    } else {
+        out.push(diag_emit_sev(b, Severity::Warning))
+    }
 }
 
 // HX3017 — opt-in struct-literal MISSING-required-field warning
