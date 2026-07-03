@@ -4142,7 +4142,7 @@
             "children": []
           },
           {
-            "name": "required 게이트(selfhost-gates-summary)는 ubuntu 고정으로 self-hosted에 하드 의존하지 않는다. fork-PR은 eligible 가드로 무조건 클라우드(RCE). ghost는 단일 직렬 러너 — PR 폭주 시 큐잉(설계된 트레이드오프).",
+            "name": "required 게이트(selfhost-gates-summary)는 ubuntu 고정으로 self-hosted에 하드 의존하지 않는다. fork-PR은 eligible 가드로 무조건 클라우드(RCE). ghost는 단일 직렬 러너 — PR 폭주 시 큐잉(설계된 트레이드오프). cancel 정책: 전 워크플로 main push run 무취소(PR-only supersede 취소) — 직렬 darwin 러너에서 무거운 게이트 완주 보장(byteeq-real·gates-required 정렬 완료).",
             "role": "",
             "id": "ci-substrate-runner-routing-guards",
             "detail": "",
