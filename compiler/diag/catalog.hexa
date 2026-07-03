@@ -121,6 +121,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::Replace
     },
     DiagSpec {
+        code: "HX0014",
+        title: "defer in unsupported position",
+        severity: Severity::Error,
+        stage: "S0",
+        template: "`defer` body cannot be used here (found {found}) — use `defer <expr>` or `defer <block>`; assignment bodies and closure bodies are not deferable",
+        explain: "HEXA-OWN M1 — `defer` registers a scope-exit action that drains at fn exit in LIFO order (at-most-once per lexical defer, drain-time variable values; gen2 reference semantics, self/parser.hexa parse_defer_stmt + self/codegen.hexa __fn_exit). Two shapes are rejected: (1) an assignment body such as `defer x = 1` — the reference gen2 grammar rejects it, and the native expr body parses via parse_logical_or precisely so an Eq-family token after the body surfaces here instead of being silently absorbed by parse_assignment; (2) `defer` inside a closure body — a closure is a separate call frame and the M1 lowering scopes defer to top-level fn bodies. Wrap the assignment in a block if the intent really is a deferred store; move a closure-body defer into the enclosing fn.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX1042",
         title: "atlas node not found",
         severity: Severity::Error,
@@ -341,7 +350,7 @@ pub let CATALOG: [DiagSpec] = [
         severity: Severity::Error,
         stage: "S3",
         template: "mismatched types: expected `{expected}`, found `{actual}`",
-        explain: "Opt-in static type check (`HEXA_STATIC_TYPES=1`). A `let <name>: T = <literal>` local binding declared an explicit annotation `T` whose primitive type provably differs from the literal initialiser's type — e.g. `let x: i32 = \"s\"` or `let ok: bool = 1`. This is the Rust E0308 'mismatched types' rule brought to LOCAL (in-fn-body) lets: a string/bool/char literal never coerces to a numeric annotation, and an integer literal never coerces to `bool`. The default build does NOT emit this (the flag is off → diagnostic stream byte-identical to today); under the flag it is a FATAL error (REJECT, not advisory warning), so the build aborts before codegen. Scope r1 = scalar-literal RHS vs scalar-primitive annotation only; broader inference (idents, calls, ranges, struct/enum types) is deferred to later rungs. Fix: change the literal to match the annotation, or the annotation to match the value. The integer-literal/float-literal coercions Rust allows (`let x: i32 = 5`, `let y: f64 = 1.5`) still type-check.",
+        explain: "Opt-in static type check (`HEXA_STATIC_TYPES=1`). A local binding, assignment, or struct-literal field-init declared (or its place has) an explicit annotation `T` whose primitive type provably differs from the initialiser's inferred type — e.g. `let x: i32 = \"s\"` or `let ok: bool = 1`. This is the Rust E0308 'mismatched types' rule brought to LOCAL (in-fn-body) positions: a string/bool/char literal never coerces to a numeric annotation, and an integer literal never coerces to `bool`. The default build does NOT emit this (the flag is off → diagnostic stream byte-identical to today); under the flag it is a FATAL error (REJECT, not advisory warning), so the build aborts before codegen. Coverage is a scope-local rung set (all KNOWN-scalar-primitive vs KNOWN-scalar-primitive only): r1 scalar-literal RHS on a typed `let`; r2 ident/call RHS on a typed `let`; r3 ident-LHS re-assignment; r4 array-element assign `a[i] = …`; r5 struct-field assign `s.field = …`; r6 struct-literal field-init `Point{ x: … }` (the last scope-wireable rung). Generic/trait static-dispatch and nested receivers (`s.inner.x`) are a measured ceiling — the `_infer_expr` scope cannot reach them (dynamic runtime type-erasure). Fix: change the value to match the annotation, or the annotation to match the value. The integer-literal/float-literal coercions Rust allows (`let x: i32 = 5`, `let y: f64 = 1.5`) still type-check.",
         fix_it_kind: FixItKind::None
     },
     DiagSpec {

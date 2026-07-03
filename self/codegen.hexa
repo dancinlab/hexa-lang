@@ -1022,6 +1022,7 @@ fn codegen(ast) {
     _strlit_keys = []
     _strlit_ids = []
     _strlit_counter = 0
+    _strlit_index_init()
     _destr_counter = 0
     // b2-fnref: reset by-value builtin/method thunk set per codegen call.
     _fnref_thunk_names = []
@@ -5708,13 +5709,11 @@ fn gen2_expr(node) {
             if _chain_n >= _LONG_CONCAT_THRESH {
                 let _parts = _collect_plus_parts(node)
                 let _n = len(_parts)
-                let mut _body = ""
-                let mut _pi = 0
-                while _pi < _n {
-                    if _pi > 0 { _body = _body + ", " }
-                    _body = _body + _parts[_pi]
-                    _pi = _pi + 1
-                }
+                // PERF (2026-07-03): single-allocation join replaces the
+                // `_body = _body + part` re-copy loop (O(k²) on long chains).
+                // join(", ") emits the exact same separator bytes — the C
+                // text is byte-identical (same idiom as params.join(", ")).
+                let _body = _parts.join(", ")
                 return "hexa_concat_many(" + to_string(_n) + ", (HexaVal[]){" + _body + "})"
             }
         }
@@ -10159,6 +10158,32 @@ let mut _strlit_ids = []
 // loop at emit time (mirror of fcf275f4 IC fix).
 let mut _strlit_counter = 0
 
+// PERF (2026-07-03): 64-bucket hash index over _strlit_keys — mirror of the
+// _known_fn_globals_set idiom (_known_hash). _strlit_dedup used to LINEAR-SCAN
+// the whole _strlit_keys array per string-literal occurrence, which is O(L²)
+// in the number of unique literals per TU and was the measured quadratic on
+// large real-code TUs (1600-fn contains-chain corpus: 47.8s -> 1.5s; anima-class
+// 25k-line closures were >30min). The index is LOOKUP-ONLY acceleration:
+// _strlit_keys/_strlit_ids stay the emission SSOT in first-seen order, ids come
+// from the same _strlit_counter — emitted C is byte-identical.
+// _strlit_idx_keys[b]: escaped literals whose _known_hash() == b
+// _strlit_idx_ids[b]:  parallel id for each (same value as _strlit_ids entry)
+let mut _strlit_idx_keys = []
+let mut _strlit_idx_ids = []
+
+fn _strlit_index_init() {
+    let mut ik = []
+    let mut iv = []
+    let mut i = 0
+    while i < 64 {
+        ik.push([])
+        iv.push([])
+        i = i + 1
+    }
+    _strlit_idx_keys = ik
+    _strlit_idx_ids = iv
+}
+
 // Destructure tmp-name counter (PROBE r7).  Each DestructLetStmt /
 // MapDestructLetStmt allocates a fresh `__destr_<N>` to single-eval the rhs.
 let mut _destr_counter = 0
@@ -10180,10 +10205,16 @@ fn _lookup_comptime_const(name) {
 // referencing the cached static HexaVal (e.g. "__hexa_sl_0").
 // `escaped` is the already-C-escaped string content (without quotes).
 fn _strlit_dedup(escaped) {
+    // PERF (2026-07-03): bucket lookup replaces the full-table linear scan
+    // (O(L²) across a TU — see _strlit_idx_keys above). Same first-seen
+    // registration order + same ids => byte-identical emitted C.
+    if len(_strlit_idx_keys) != 64 { _strlit_index_init() }
+    let b = _known_hash(escaped)
+    let bucket = _strlit_idx_keys[b]
     let mut i = 0
-    while i < len(_strlit_keys) {
-        if _strlit_keys[i] == escaped {
-            return "__hexa_sl_" + to_string(_strlit_ids[i])
+    while i < len(bucket) {
+        if bucket[i] == escaped {
+            return "__hexa_sl_" + to_string(_strlit_idx_ids[b][i])
         }
         i = i + 1
     }
@@ -10192,6 +10223,8 @@ fn _strlit_dedup(escaped) {
     _strlit_counter = _strlit_counter + 1
     _strlit_keys.push(escaped)
     _strlit_ids.push(id)
+    _strlit_idx_keys[b] = _strlit_idx_keys[b].push(escaped)
+    _strlit_idx_ids[b] = _strlit_idx_ids[b].push(id)
     let varname = "__hexa_sl_" + to_string(id)
     // rt#32-SL: no push into _strlit_def_parts — decls emitted via
     // deterministic _strlit_counter loop in codegen_c2 main emit path.
@@ -13549,6 +13582,7 @@ fn codegen_full(ast) {
     _strlit_keys = []
     _strlit_ids = []
     _strlit_counter = 0
+    _strlit_index_init()
     // b2-fnref: reset by-value builtin/method thunk set (mirror codegen_c2).
     _fnref_thunk_names = []
     _gen2_current_fn_lets = []

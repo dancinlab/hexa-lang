@@ -2372,6 +2372,57 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         return _types_empty_type()
     }
 
+    // Wall A r6 — opt-in struct-literal field-init REJECT (HEXA_STATIC_TYPES=1).
+    // The LAST scope-wireable rung of the static-type ladder. A struct literal
+    // `Point{ x: <expr>, y: <expr> }` parses (parser.hexa:1184
+    // parse_struct_lit_after_name) as a StructLit whose `text` is the struct
+    // NAME and whose `children` are per-field-init Ident nodes — each with
+    // `text`=field NAME and `children[0]`=the field VALUE expr. Reuse the r5
+    // (struct,field)→declared-typename side registry (the env's struct Type
+    // keeps field types but DROPS field names, so the registry is the only
+    // carrier): for each field-init whose declared field type AND inferred
+    // value type are BOTH known scalars that provably disagree, REJECT with
+    // HX3011 — the SAME Rust E0308 "mismatched types" path the r1/r2/r3/r4/r5
+    // arms mirror (rustc_hir_typeck check_expr_struct_fields → demand_coerce →
+    // report_mismatched_types). int/float-literal values still coerce (via
+    // `_types_assignable`'s literal-coercion arm, `src`=the value expr); an
+    // unknown struct, unknown field, or non-scalar field type stays silent
+    // (field-existence / nominal-field diagnostics are separate, not r6 scope).
+    //
+    // ENTIRELY flag-gated (env check is the FIRST `&&` operand, short-circuit)
+    // so the default build falls through to the byte-identical STUB below —
+    // byteeq / gen3≡gen4 preserved. The flag-ON path infers each value expr
+    // (which the legacy STUB's per-Ident walk did NOT reach, since the Ident
+    // arm returns before recursing into children[0]) so inner value errors are
+    // ALSO surfaced under the flag.
+    if env("HEXA_STATIC_TYPES") == "1" && _cg_is_struct_lit(e.kind) {
+        let sname = e.text
+        let mut fi = 0
+        while fi < len(e.children) {
+            let finit = e.children[fi]
+            if _types_is_ident(finit.kind) && len(finit.text) > 0 && len(finit.children) > 0 {
+                let val = finit.children[0]
+                let val_t = _infer_expr(val, env, ctx, out)
+                if len(sname) > 0 {
+                    let lk = _types_lookup_struct_field_typename(sname, finit.text)
+                    if lk.found && len(lk.field_typename) > 0 {
+                        let ftr = TypeRef { kind: "named", name: lk.field_typename, args: [], span: finit.span }
+                        let field_t = _types_lower_type_ref(ftr)
+                        if _types_kind_is_scalar(field_t.kind) && _types_kind_is_scalar(val_t.kind) {
+                            if !_types_assignable(field_t, val_t, val) {
+                                _emit_hx3011(field_t, val_t, val.span, out)
+                            }
+                        }
+                    }
+                }
+            } else {
+                let _t = _infer_expr(finit, env, ctx, out)
+            }
+            fi = fi + 1
+        }
+        return _types_empty_type()
+    }
+
     // Field / Index / StructLit / Wildcard — STUB v1.
     // Walk children for inner errors; return unknown so outer sites that
     // gate on equality tolerate (per _types_equal).
