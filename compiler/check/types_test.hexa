@@ -795,6 +795,7 @@ fn _build_case_static_types_r6() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+<<<<<<< HEAD
 // HEXA-OWN L2 r1 — @own use-after-move lint (HEXA_OWN_LINT=1). A block-local
 // `@own let` binding is single-owner: its first bare-ident consumption (the
 // RHS of a later `let`, an assignment RHS, or a call argument) MOVES it; any
@@ -834,6 +835,8 @@ fn _build_case_own_lint() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+=======
+>>>>>>> origin/main
 // ── Driver ───────────────────────────────────────────────────
 
 fn _run_case(label: string, m: Module) -> array {
@@ -1090,6 +1093,7 @@ fn main() {
         }
     }
 
+<<<<<<< HEAD
     // (n) HEXA-OWN L2 r1 — @own use-after-move lint (HEXA_OWN_LINT). Under
     // the flag, `@own let x = 5; let a = x; let b = x` warns HX3012 exactly
     // ONCE (at `let b = x`): the first use is the move (clean), the second is
@@ -1114,6 +1118,8 @@ fn main() {
         }
     }
 
+=======
+>>>>>>> origin/main
     println("")
     println("══════════════════════════════════════════════")
     if ok {

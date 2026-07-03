@@ -1,0 +1,356 @@
+// stdlib/runtime/regex_rt.hexa — zero-c #29 regex native-reduction.
+//
+// Pure-hexa backing for the 6 `hexa_regex_*` runtime builtins, so the emitted
+// runtime.c can DROP the libc POSIX-regex floor (regcomp / regexec / regfree,
+// #include <regex.h>) under -DHEXA_REGEX_NATIVE. Default-OFF: the emitter's
+// #else arm keeps the character-identical libc bodies, so the OFF-path emitted C
+// is byte-neutral.
+//
+// These 6 `pub fn rt_regex_*` compile to external-linkage C-ABI symbols the
+// emitted runtime.c extern-declares and one-line-delegates to (mirroring the
+// rt_to_bool seam in self/runtime_emit_full.hexa). Each mirrors the control flow
+// of the corresponding hexa_regex_* libc body (self/runtime_emit_full.hexa
+// ~L14030-14207) VERBATIM, substituting libc regexec with the pure-hexa Thompson
+// NFA engine (leftmost-longest = POSIX, matching regexec's tie-break).
+//
+// ENGINE: stdlib/regex/thompson.hexa (linear-time NFA, POSIX leftmost-longest via
+// _re_longest_from) with auto-dispatch to stdlib/regex/backtrack.hexa for the
+// interval {n,m} route (FIX-A). regex_compile / regex_valid / regex_search /
+// regex_search_from / regex_find_all are its public API.
+//
+// REFERENCE-MATCH FIXES vs glibc POSIX ERE (regcomp REG_EXTENDED):
+//   FIX-A  {n,m} counted-repeat  — routed to the backtrack VM in bt_needs_backtrack
+//          (stdlib/regex/backtrack.hexa); no shim work here beyond using the fixed
+//          engine.
+//   FIX-B  (?i) / REG_ICASE  — neither engine has case-fold, so the shim strips a
+//          leading "(?i)" and ASCII-lowercase-folds BOTH the pattern literals and
+//          the subject before compile/search. Fold is byte-for-byte index-
+//          preserving (A-Z -> a-z), so returned spans map 1:1 to original indices;
+//          no span remapping needed.
+//   FIX-C  \d \D \w \W \s \S  — glibc regcomp(REG_EXTENDED) treats these as the
+//          LITERAL second char (\d matches 'd'); the pure engines treat them as
+//          classes. To reference-match libc, the shim rewrites each PCRE escape to
+//          its literal second byte BEFORE compile — done in the shim (not the
+//          engine) so thompson keeps PCRE semantics for its other callers.
+//   FIX-D  backref \1..\9 / lookaround (?= (?! (?<  — glibc regcomp REJECTS these
+//          (returns nonzero -> the libc bodies' compile-fail branch returns the
+//          no-match / passthrough value). The pure engine would instead SUCCEED
+//          via the backtrack VM, a divergence. The shim probes for these
+//          constructs (INDEPENDENT of the {n,m} interval route) and returns the
+//          compile-fail value, exactly mirroring libc's rejection.
+//
+// KNOWN DIVERGENCE (documented, not exercised by the self-host closure, which runs
+// 0 regex): a character-class RANGE under icase, e.g. `(?i)[A-Z]`, is widened by
+// glibc to also match a-z; the shim's literal-fold does not widen class ranges.
+// Escalate to a _re_parse_class widening pass only if a gate corpus adds that case.
+
+use "stdlib/regex/thompson"
+
+// ── ASCII helpers ────────────────────────────────────────────────────────────
+
+// Lowercase-fold a single ASCII byte (A-Z -> a-z); all other bytes unchanged.
+@pure
+fn _rt_re_fold_byte(c: int) -> int {
+    if c >= 65 && c <= 90 { return c + 32 }
+    return c
+}
+
+// ASCII-lowercase-fold every byte of a string. Index-preserving (1 byte in, 1
+// byte out), so match spans are identical between folded and original subject.
+@pure
+fn _rt_re_ascii_fold(s: string) -> string {
+    let n = byte_len(s)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        out = out + chr(_rt_re_fold_byte(s.byte_at(i)))
+        i = i + 1
+    }
+    return out
+}
+
+// ── (?i) inline-flag strip (FIX-B) ───────────────────────────────────────────
+// Mirror self/runtime_emit_full.hexa `_hexa_re_strip_flags`: a leading "(?i)"
+// sets icase and is dropped. Returns [stripped_pattern, "1"|"0"].
+@pure
+fn _rt_re_strip_iflag(pat: string) -> [string] {
+    let n = byte_len(pat)
+    if n >= 4 && pat.byte_at(0) == 40 && pat.byte_at(1) == 63 && pat.byte_at(2) == 105 && pat.byte_at(3) == 41 {
+        return [pat.substring(4, n), "1"]
+    }
+    return [pat, "0"]
+}
+
+// ── \d \w \s -> literal (FIX-C) ──────────────────────────────────────────────
+// glibc regcomp(REG_EXTENDED) drops the backslash before a NON-metacharacter and
+// matches the char literally: `\d` == literal 'd'. The pure engines treat \d etc.
+// as classes, so rewrite the six PCRE shorthands to their literal second byte
+// before compile. Other escapes (\. \* \\ \n \t \r and escaped metachars) are
+// left intact — those already match libc ERE semantics in the pure engine.
+// Bytes inside a [...] bracket class are copied through untouched (a `\d` inside
+// a class is a distinct case the class parser handles; leaving it avoids changing
+// bracket semantics — and the closure exercises none of this).
+@pure
+fn _rt_re_pcre_literal(pat: string) -> string {
+    let n = byte_len(pat)
+    let mut out = ""
+    let mut i = 0
+    let mut in_class = false
+    while i < n {
+        let c = pat.byte_at(i)
+        if c == 92 && i + 1 < n {                 // '\' escape
+            let d = pat.byte_at(i + 1)
+            // \d \D \w \W \s \S  ->  literal d D w W s S  (only outside a class)
+            if !in_class && (d == 100 || d == 68 || d == 119 || d == 87 || d == 115 || d == 83) {
+                out = out + chr(d)
+                i = i + 2
+                continue
+            }
+            // keep any other escape as-is (two bytes)
+            out = out + chr(c)
+            out = out + chr(d)
+            i = i + 2
+            continue
+        }
+        if c == 91 && !in_class { in_class = true }        // '[' opens a class
+        else if c == 93 && in_class { in_class = false }   // ']' closes a class
+        out = out + chr(c)
+        i = i + 1
+    }
+    return out
+}
+
+// ── backref / lookaround reject probe (FIX-D) ────────────────────────────────
+// glibc regcomp(REG_EXTENDED) rejects backreferences \1..\9 and lookaround
+// (?= (?! (?<  — the libc bodies then hit their compile-fail branch. The pure
+// engine would route these to the backtrack VM and SUCCEED, a divergence. This
+// probe detects ONLY those constructs (deliberately NOT the {n,m} interval that
+// FIX-A also routes to the backtrack VM) so the shim can reject exactly what libc
+// rejects while still serving intervals. It is the original bt_needs_backtrack
+// backref/lookaround logic, without the FIX-A interval clause.
+@pure
+fn _rt_re_has_backref_lookaround(pat: string) -> bool {
+    let n = byte_len(pat)
+    let mut i = 0
+    while i < n {
+        let c = pat.byte_at(i)
+        if c == 92 {                              // '\' escape
+            if i + 1 < n {
+                let d = pat.byte_at(i + 1)
+                if d >= 49 && d <= 57 { return true }   // \1..\9 backreference
+            }
+            i = i + 2
+            continue
+        }
+        if c == 91 {                              // '[' — skip whole char class
+            i = i + 1
+            if i < n && pat.byte_at(i) == 94 { i = i + 1 }   // leading '^'
+            if i < n && pat.byte_at(i) == 93 { i = i + 1 }   // leading ']' literal
+            while i < n && pat.byte_at(i) != 93 {
+                if pat.byte_at(i) == 92 { i = i + 2 } else { i = i + 1 }
+            }
+            if i < n { i = i + 1 }                // consume ']'
+            continue
+        }
+        if c == 40 && i + 1 < n && pat.byte_at(i + 1) == 63 {   // '(?'
+            if i + 2 < n {
+                let q = pat.byte_at(i + 2)
+                if q == 61 || q == 33 || q == 60 { return true }   // = ! <  -> lookaround
+            }
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// ── shared prep ──────────────────────────────────────────────────────────────
+// Strip (?i), apply the \d-literal rewrite, and (if icase) fold the pattern.
+// Returns [prepped_pattern, "1"|"0" icase]. Order matches libc: the flag strip
+// happens first (on the raw pattern), then the ERE body is compiled.
+@pure
+fn _rt_re_prep_pat(pat: string) -> [string] {
+    let sf = _rt_re_strip_iflag(pat)
+    let mut body = sf[0]
+    body = _rt_re_pcre_literal(body)
+    if sf[1] == "1" { body = _rt_re_ascii_fold(body) }
+    return [body, sf[1]]
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  PUBLIC SHIMS  (C-ABI: HexaVal args, HexaVal result — codegen boxes the native
+//  bool/[int]/[[int]]/[string]/string returns at the ABI boundary, exactly as
+//  rt_to_bool's `-> bool` lowers to `extern HexaVal rt_to_bool(HexaVal)`.)
+// ════════════════════════════════════════════════════════════════════════════
+
+// hexa_regex_match: libc regexec(nmatch=0) == unanchored SEARCH (NOT a full
+// match). So use regex_search-presence, NOT thompson regex_match (anchored-full).
+@pure
+pub fn rt_regex_match(pat_v: HexaVal, s_v: HexaVal) -> bool {
+    if typeof(pat_v) != "string" || typeof(s_v) != "string" { return false }
+    let pat_raw = pat_v as string
+    let subj0 = s_v as string
+    if _rt_re_has_backref_lookaround(pat_raw) { return false }   // FIX-D: libc rejects -> no match
+    let prep = _rt_re_prep_pat(pat_raw)
+    let re = regex_compile(prep[0])
+    if !regex_valid(re) { return false }
+    let mut subj = subj0
+    if prep[1] == "1" { subj = _rt_re_ascii_fold(subj0) }
+    let sp = regex_search(re, subj)
+    if len(sp) == 0 { return false }
+    return true
+}
+
+// hexa_regex_match_full: full iff the leftmost search span == [0, len(subj)].
+@pure
+pub fn rt_regex_match_full(pat_v: HexaVal, s_v: HexaVal) -> bool {
+    if typeof(pat_v) != "string" || typeof(s_v) != "string" { return false }
+    let pat_raw = pat_v as string
+    let subj0 = s_v as string
+    if _rt_re_has_backref_lookaround(pat_raw) { return false }
+    let prep = _rt_re_prep_pat(pat_raw)
+    let re = regex_compile(prep[0])
+    if !regex_valid(re) { return false }
+    let mut subj = subj0
+    if prep[1] == "1" { subj = _rt_re_ascii_fold(subj0) }
+    let sp = regex_search(re, subj)
+    if len(sp) == 0 { return false }
+    if sp[0] == 0 && sp[1] == byte_len(subj) { return true }
+    return false
+}
+
+// hexa_regex_search: [so, eo] on match, [] otherwise.
+@pure
+pub fn rt_regex_search(pat_v: HexaVal, s_v: HexaVal) -> [int] {
+    if typeof(pat_v) != "string" || typeof(s_v) != "string" { return [] }
+    let pat_raw = pat_v as string
+    let subj0 = s_v as string
+    if _rt_re_has_backref_lookaround(pat_raw) { return [] }
+    let prep = _rt_re_prep_pat(pat_raw)
+    let re = regex_compile(prep[0])
+    if !regex_valid(re) { return [] }
+    let mut subj = subj0
+    if prep[1] == "1" { subj = _rt_re_ascii_fold(subj0) }
+    let sp = regex_search(re, subj)
+    if len(sp) == 0 { return [] }
+    return [sp[0], sp[1]]
+}
+
+// hexa_regex_findall: [[so,eo],…]. Mirrors the libc loop VERBATIM — from-offset
+// search with REG_NOTBOL for off>0, zero-width skip (m_eo==m_so -> off+=1), and
+// off += m_eo advance. (Spans are absolute; the ASCII fold is index-preserving so
+// they map to the original subject unchanged.)
+@pure
+pub fn rt_regex_findall(pat_v: HexaVal, s_v: HexaVal) -> [[int]] {
+    let mut out: [[int]] = []
+    if typeof(pat_v) != "string" || typeof(s_v) != "string" { return out }
+    let pat_raw = pat_v as string
+    let subj0 = s_v as string
+    if _rt_re_has_backref_lookaround(pat_raw) { return out }
+    let prep = _rt_re_prep_pat(pat_raw)
+    let re = regex_compile(prep[0])
+    if !regex_valid(re) { return out }
+    let mut subj = subj0
+    if prep[1] == "1" { subj = _rt_re_ascii_fold(subj0) }
+    let L = byte_len(subj)
+    let mut off = 0
+    while off <= L {
+        let m = regex_search_from(re, subj, off, off > 0)
+        if len(m) == 0 { break }
+        let so = m[0]
+        let eo = m[1]
+        if eo == so {                             // zero-width match — advance one
+            off = off + 1
+            continue
+        }
+        out.push([so, eo])
+        off = eo
+    }
+    return out
+}
+
+// hexa_regex_split: [string,…]. Mirrors the libc loop VERBATIM — emit the
+// unmatched segment before each match, then the final tail. Zero-width matches
+// advance by one (off+=1; continue) so no segment is emitted for them.
+@pure
+pub fn rt_regex_split(pat_v: HexaVal, s_v: HexaVal) -> [string] {
+    let mut out: [string] = []
+    if typeof(pat_v) != "string" || typeof(s_v) != "string" { return out }
+    let pat_raw = pat_v as string
+    let subj = s_v as string
+    if _rt_re_has_backref_lookaround(pat_raw) {
+        // libc compile-fail branch: split returns [s] (the whole string).
+        out.push(subj)
+        return out
+    }
+    let prep = _rt_re_prep_pat(pat_raw)
+    let re = regex_compile(prep[0])
+    if !regex_valid(re) {
+        out.push(subj)
+        return out
+    }
+    // Case-fold only affects WHERE matches land, not the emitted text; split on
+    // the folded copy for match positions, but slice the ORIGINAL subject.
+    let mut match_subj = subj
+    if prep[1] == "1" { match_subj = _rt_re_ascii_fold(subj) }
+    let L = byte_len(match_subj)
+    let mut off = 0
+    while off <= L {
+        let m = regex_search_from(re, match_subj, off, off > 0)
+        if len(m) == 0 { break }
+        let so = m[0]
+        let eo = m[1]
+        if eo == so { off = off + 1; continue }   // zero-width — no segment
+        out.push(subj.substring(off, so))         // unmatched segment [off, so)
+        off = eo
+    }
+    // Final segment after the last match.
+    if off <= L {
+        out.push(subj.substring(off, L))
+    }
+    return out
+}
+
+// hexa_regex_replace: string. Mirrors the libc loop VERBATIM — copy the unmatched
+// prefix + the replacement (no backreferences), advance to m_eo; a zero-width
+// match copies one char and advances; finally append the tail.
+@pure
+pub fn rt_regex_replace(pat_v: HexaVal, s_v: HexaVal, repl_v: HexaVal) -> string {
+    if typeof(pat_v) != "string" || typeof(s_v) != "string" || typeof(repl_v) != "string" {
+        // libc returns s_v unchanged on a non-string arg.
+        if typeof(s_v) == "string" { return s_v as string }
+        return ""
+    }
+    let pat_raw = pat_v as string
+    let subj = s_v as string
+    let repl = repl_v as string
+    if _rt_re_has_backref_lookaround(pat_raw) { return subj }   // compile-fail -> s unchanged
+    let prep = _rt_re_prep_pat(pat_raw)
+    let re = regex_compile(prep[0])
+    if !regex_valid(re) { return subj }
+    let mut match_subj = subj
+    if prep[1] == "1" { match_subj = _rt_re_ascii_fold(subj) }
+    let L = byte_len(match_subj)
+    let mut off = 0
+    let mut out = ""
+    while off <= L {
+        let m = regex_search_from(re, match_subj, off, off > 0)
+        if len(m) == 0 { break }
+        let so = m[0]
+        let eo = m[1]
+        if eo == so {                             // zero-width — copy one char, advance
+            if off < L {
+                out = out + subj.substring(off, off + 1)
+            }
+            off = off + 1
+            continue
+        }
+        out = out + subj.substring(off, so)       // unmatched prefix [off, so)
+        out = out + repl                          // replacement (no backrefs)
+        off = eo
+    }
+    // Tail after the last match.
+    if off <= L {
+        out = out + subj.substring(off, L)
+    }
+    return out
+}
