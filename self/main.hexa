@@ -1410,9 +1410,9 @@ fn os_clang_cflags() {
     return base
 }
 fn os_clang_ldflags() {
-    let mut base = " -lpthread"
+    let mut base = " -lpthread -lm"
     if exec("uname 2>/dev/null | tr -d ' \\n\\t'") == "Linux" {
-        base = " -lpthread"  // zero-c #29: runtime is libm-free (flag-off runtime.a nm-UND libm = ∅, #4299-4313) — drop -lm
+        base = " -lpthread -lm"  // H_9111/H_9119: runtime.c special-fns (erf/erfc/tgamma/j0/j1 @6010-6014, gelu=erf/softmax) are UNCONDITIONAL bare libm — re-add -lm (reverts zero-c #29 libm-free claim; dlsym erf undefined on Ubuntu pods)
         // own-start #29 PR-B (C1/C2): -nostartfiles when the scaffold-bearing runtime.a is on the link.
         // #4395 makes runtime.a CARRY own _start/_hx_start_c/_hx_run_init_array (self/runtime.c #ifdef
         // HEXA_ZEROC_OWN_START) when built with HEXA_ZEROC_OWN_START=1; without -nostartfiles the clang
@@ -1748,9 +1748,10 @@ fn cmd_cc() {
         // the SAME prebuilt runtime.a (rt_o) as the user-binary link, so when that
         // archive is the CUDA build its runtime_cuda*.o cuda symbols need -lcudart/
         // -lcudadevrt here too — a bare link left them undefined and the hexat rebuild
-        // died (summer pool 2026-06-27). os_clang_ldflags()'s Linux base is "-lpthread"
-        // (zero-c #29: -lm dropped — runtime is libm-free, flag-off runtime.a nm-UND
-        // libm = ∅) so this is a strict superset on the CPU default (cuda_on=false →
+        // died (summer pool 2026-06-27). os_clang_ldflags()'s Linux base is now
+        // "-lpthread -lm" (H_9111/H_9119: runtime.c has UNCONDITIONAL bare libm —
+        // erf/erfc/tgamma/j0/j1 @6010-6014, gelu=erf/softmax=exp — so -lm is required;
+        // reverts zero-c #29's false "libm-free" claim) so this is a strict superset on the CPU default (cuda_on=false →
         // identical cuda-free link), plus the libsodium/openssl flags the runtime.a
         // may reference — consistent with the user-binary link sites.
         cmd = host_cc() + " -O2 -D_GNU_SOURCE -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "'" + _ffi_dyn_obj(__hxroot + "/self") + " -o '" + __hxroot + "/build/hexat'" + os_clang_ldflags() + " 2>&1"
@@ -3712,7 +3713,7 @@ fn cmd_build(src, out, c_only, target, shared) {
         let mut ldf_target = ""
         if target.starts_with("linux-") {
             cf_target = "-D_GNU_SOURCE "
-            ldf_target = ""  // zero-c #29: runtime libm-free — drop -lm (cross zig-cc)
+            ldf_target = " -lm"  // H_9111/H_9119: runtime.c erf/erfc/tgamma/j0/j1 are unconditional bare libm — Linux cross targets need -lm (reverts zero-c #29 libm-free claim)
         }
         compile = "zig cc -O2 -target " + zt + static_f + " " + cf_target + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " '" + __runtime_c + "' -o '" + tmp + "'" + ldf_target + " 2>&1"
     }
@@ -4472,7 +4473,7 @@ fn cmd_run_user_direct(file, extra_args) {
                     // reaches here). Default-OFF byte-neutral: else-branch char-identical to today.
                     // Loud-fail-safe: a failed ld link falls through to the clang path below.
                     let _zc_own = env_var("HEXA_ZEROC_OWN_START") == "1"
-                    let _lnk = if _zc_own { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread --end-group -L'" + _crt + "' -o '" + _nbin + "' 2>&1" } else { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _crt + "/crt1.o' '" + _crt + "/crti.o' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread --end-group '" + _crt + "/crtn.o' -L'" + _crt + "' -o '" + _nbin + "' 2>&1" }
+                    let _lnk = if _zc_own { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread -lm --end-group -L'" + _crt + "' -o '" + _nbin + "' 2>&1" } else { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _crt + "/crt1.o' '" + _crt + "/crti.o' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread -lm --end-group '" + _crt + "/crtn.o' -L'" + _crt + "' -o '" + _nbin + "' 2>&1" }
                     let _lr = exec(_lnk)
                     let _nbin_ok = exec("test -x '" + _nbin + "' && printf yes || printf no")
                     if _nbin_ok == "yes" {
