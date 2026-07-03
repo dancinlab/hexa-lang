@@ -63,6 +63,9 @@ jobs:
         uses: ./.github/actions/pick-runner
         with:
           kind: darwin
+          # slot-bound: the byte-eq/determinism legs need ghost's provisioned
+          # gen3 slot — never spill to the insurance runner (false exit-2 RED).
+          primary-only: '1'
           eligible: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
           # administration:read PAT (self-hosted runners list needs it; the
           # default github.token CANNOT carry that scope → empty list → blind
