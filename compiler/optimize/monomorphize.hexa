@@ -138,7 +138,8 @@ fn _mono_clone_renamed(tpl: MFunc, new_name: string) -> MFunc {
         entry_block: tpl.entry_block,
         arena_root: tpl.arena_root,
         def_line: tpl.def_line,
-        gpu_kind: tpl.gpu_kind
+        gpu_kind: tpl.gpu_kind,
+        is_naked: tpl.is_naked
     }
 }
 
@@ -233,7 +234,8 @@ fn _mono_rewrite_calls(mf: MFunc, bases: [string]) -> MFunc {
         entry_block: mf.entry_block,
         arena_root: mf.arena_root,
         def_line: mf.def_line,
-        gpu_kind: mf.gpu_kind
+        gpu_kind: mf.gpu_kind,
+        is_naked: mf.is_naked
     }
 }
 

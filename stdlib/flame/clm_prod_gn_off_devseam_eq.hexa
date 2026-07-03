@@ -1,0 +1,121 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_prod_gn_off_devseam_eq.hexa — OFFSET groupnorm device-seam byte-eq ORACLE.
+//
+//  HEXA-0POD: 0-GPU (`hexa run`) oracle proving the NEW offset-capable device seam
+//  in gn_lib.hexa nn_groupnorm_fwd_off / nn_groupnorm_bwd_off is BYTE-EQ to the
+//  pure-host offset reference.
+//
+//  The zero-offset dispatcher forge_dispatch_groupnorm{,_bwd} takes no goff/boff.
+//  The seam feeds it a CONTIGUOUS [C] slice of the packed affine (gamma[goff:goff+C]
+//  / beta[boff:boff+C]) and, for bwd, copies the [C] grads back to dgoff/dboff. This
+//  oracle reproduces that exact slice→dispatch→copy-back path against the host
+//  nn_groupnorm_fwd_off / nn_groupnorm_bwd_off loops with a NONZERO offset and
+//  asserts max|Δ| = 0. The dispatcher host body == the host GN math is already locked
+//  by clm_prod_gn_gelu_hostdispatch_eq; this adds the OFFSET-slice contract.
+//
+//  F-GNOFF-FWD / F-GNOFF-BWD : offset device seam (host body) == host fwd/bwd_off.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/gn_lib"
+
+fn _ab(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _md(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let d = _ab(t_get(a, i) - t_get(b, i)); if d > m { m = d }; i = i + 1 }
+    return m
+}
+fn _fill(a: int, n: int, seed: int) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        t_set(a, i, (to_float(s % 1000) - 500.0) * 0.01)
+        i = i + 1
+    }
+}
+
+fn main() {
+    println("clm_prod_gn_off_devseam_eq — offset GN device seam (host body) == host fwd/bwd_off")
+    let T = 6
+    let C = 8
+    let G = 2
+    let L = 3              // packed layers; pick layer l=2 → goff=boff=l·C
+    let l = 2
+    let goff = l * C
+    let boff = l * C
+    let dgoff = l * C
+    let dboff = l * C
+
+    // packed affine [L·C], slice layer l
+    let gamma = t_zeros(L * C)
+    let beta  = t_zeros(L * C)
+    _fill(gamma, L * C, 3)
+    _fill(beta, L * C, 11)
+    let x = t_zeros(T * C)
+    _fill(x, T * C, 19)
+
+    // ── FWD: host offset reference ──
+    let y_h    = t_zeros(T * C)
+    let mean_h = t_zeros(G)
+    let inv_h  = t_zeros(G)
+    let xhat_h = t_zeros(T * C)
+    nn_groupnorm_fwd_off(x, gamma, goff, beta, boff, y_h, mean_h, inv_h, xhat_h, T, C, G)
+
+    // ── FWD: device-seam path replica (slice → zero-offset dispatcher host body) ──
+    let gsl = t_zeros(C)
+    let bsl = t_zeros(C)
+    let mut k = 0
+    while k < C { t_set(gsl, k, t_get(gamma, goff + k)); t_set(bsl, k, t_get(beta, boff + k)); k = k + 1 }
+    let y_d    = t_zeros(T * C)
+    let mean_d = t_zeros(G)
+    let inv_d  = t_zeros(G)
+    let xhat_d = t_zeros(T * C)
+    let rcf = forge_dispatch_groupnorm(x, gsl, bsl, y_d, mean_d, inv_d, xhat_d, T, C, G)
+    if rcf != 0 { println("  !! forge_dispatch_groupnorm rc=" + to_string(rcf)); println("F-GNOFF-FWD = 0"); return }
+    let df_y  = _md(y_h, y_d, T * C)
+    let df_m  = _md(mean_h, mean_d, G)
+    let df_i  = _md(inv_h, inv_d, G)
+    let df_xh = _md(xhat_h, xhat_d, T * C)
+    let mut wf = df_y
+    if df_m  > wf { wf = df_m }
+    if df_i  > wf { wf = df_i }
+    if df_xh > wf { wf = df_xh }
+
+    // ── BWD: host offset reference ──
+    let dy = t_zeros(T * C)
+    _fill(dy, T * C, 37)
+    let dg_h = t_zeros(L * C)
+    let db_h = t_zeros(L * C)
+    let dx_h = t_zeros(T * C)
+    nn_groupnorm_bwd_off(xhat_h, inv_h, gamma, goff, dy, dg_h, dgoff, db_h, dboff, dx_h, T, C, G)
+
+    // ── BWD: device-seam replica (slice gamma → dispatch into [C] temps → copy back) ──
+    let dgt = t_zeros(C)
+    let dbt = t_zeros(C)
+    let dx_d = t_zeros(T * C)
+    let rcb = forge_dispatch_groupnorm_bwd(xhat_h, inv_h, gsl, dy, dgt, dbt, dx_d, T, C, G)
+    if rcb != 0 { println("  !! forge_dispatch_groupnorm_bwd rc=" + to_string(rcb)); println("F-GNOFF-BWD = 0"); return }
+    let dg_d = t_zeros(L * C)
+    let db_d = t_zeros(L * C)
+    let mut ko = 0
+    while ko < C { t_set(dg_d, dgoff + ko, t_get(dgt, ko)); t_set(db_d, dboff + ko, t_get(dbt, ko)); ko = ko + 1 }
+    // compare only the active layer slice of dg/db (host zeroes the rest, we never touch it)
+    let db_dg = _md(dg_h, dg_d, L * C)
+    let db_db = _md(db_h, db_d, L * C)
+    let db_dx = _md(dx_h, dx_d, T * C)
+    let mut wb = db_dg
+    if db_db > wb { wb = db_db }
+    if db_dx > wb { wb = db_dx }
+
+    println("  fwd max|Δ| = " + to_string(wf) + "  (y/mean/inv/xhat)")
+    println("  bwd max|Δ| = " + to_string(wb) + "  (dgamma/dbeta/dx)")
+    if wf == 0.0 { println("F-GNOFF-FWD = 1") } else { println("F-GNOFF-FWD = 0  FAIL") }
+    if wb == 0.0 { println("F-GNOFF-BWD = 1") } else { println("F-GNOFF-BWD = 0  FAIL") }
+    if wf == 0.0 && wb == 0.0 {
+        println("PASS — offset GN device seam (slice→dispatch→copy-back) == host fwd/bwd_off, byte-eq (max|Δ|=0)")
+    } else {
+        println("FAIL — offset GN device seam diverges from host reference")
+    }
+}

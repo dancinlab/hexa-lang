@@ -1,0 +1,7 @@
+GPU: NVIDIA GeForce RTX 5070 (sm_120)
+=== #21 rank-7 epilogue-fusion BYTEEQ guard (fused resid+LN == separate) ===
+  R=1   C=1024 : Y byte-eq=YES  H byte-eq=YES
+  R=8   C=1024 : Y byte-eq=YES  H byte-eq=YES
+  R=32  C=1024 : Y byte-eq=YES  H byte-eq=YES
+  R=16  C=4096 : Y byte-eq=YES  H byte-eq=YES
+=== VERDICT: PASS — fused == separate, byte-for-byte (HEXA_EPI_FUSE is byteeq-neutral) ===

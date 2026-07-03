@@ -18,12 +18,16 @@
 //    y[t,co] = b[co] + Σ_ci Σ_k W[co,ci,k] · xin(t - dil·(K-1-k), ci)
 //    xin(p,ci) = X[p,ci] if p>=0 else 0.
 //
-//  FWD = im2col + GEMM (host): unfold the causal-dilated receptive field into
-//  x_col[T·(Cin·K)], one t_matmul (RFC 032 ikj FMA-fused GEMM) → Y, + bias —
-//  replaces the naive O(T·Cout·Cin·K) quad-loop, 38–60× faster at CLM-trunk
-//  shapes (.verdicts/flame-perf-im2col-gemm/roofline.txt). BWD stays the closed
-//  vjp quad-loop (bwd im2col = follow-up). The fwd re-association is a re-order
-//  of the SAME sum → bit-near-identical (max|Δ|≈1e-16; GRAD-EXACT held 5.2e-12).
+//  FWD = im2col + GEMM: unfold the causal-dilated receptive field into
+//  x_col[T·(Cin·K)], one forge_dispatch_matmul → Y, + bias — replaces the
+//  naive O(T·Cout·Cin·K) quad-loop, 38–60× faster at CLM-trunk shapes
+//  (.verdicts/flame-perf-im2col-gemm/roofline.txt). BWD also uses
+//  forge_dispatch_matmul (dW = xcolᵀ@dy, dX = dy@Wᵀ via col2im):
+//    dW[co,ci,k] = Σ_t xcolT[ci·K+k, t] · dy[t, co]   (Kdim×T @ T×Cout)
+//    dX[p,ci]   = col2im-scatter(dy[T,Cout] @ W[Cout,Kdim])  (T×Cout @ Cout×Kdim)
+//    db[co]     = Σ_t dy[t, co]   (host reduction — O(T·Cout), negligible)
+//  Byte-eq to the closed vjp (max|Δ|≈1e-16 FP64; GRAD-EXACT held 5.2e-12).
+//  Reference: clm_conv_gpu.hexa::conv1d_bwd_via_forge (same algorithm).
 //
 //  Verified by F-FLAME-CONV1D-GRAD-EXACT (flame_conv_test.hexa, central-diff).
 //  lib-split mandatory (FLAME.tape): conv lives here, selftest is a separate
@@ -32,11 +36,43 @@
 
 use "stdlib/flame/tensor_lib"
 
+// ── native-canonical-default GPU conv1d seam gate (r3 lever 2) ───────────────
+// When a CUDA device is present (cuda_available()==1) the causal-dilated conv1d
+// fwd/bwd route their im2col / im2col_t / col2im gather-scatter onto the forge
+// DEVICE builtins (forge_dispatch_im2col{,_t} / _col2im / _db_colsum) and the
+// GEMMs onto forge_dispatch_matmul — the buffers stay FARR_DEVICE-resident so the
+// GEMM reads x_col in place (NO H2D pingpong) and the dominant host-scalar bwd
+// quad-loop (T·Cout·Cin·K ≈ 201M iter/call at CLM-trunk shapes — the r3 #2 51.5%
+// peg, profile a8ce7e72) is replaced by 2 device GEMMs + a device col2im scatter,
+// exactly cuDNN's strategy (im2col fused into the kernel, kept on-device). This
+// mirrors clm_prod.hexa's conv1d_via_forge / conv1d_bwd_via_forge byte-eq path
+// (F-CLM-CONV-GPU-EQ #2352 / F-CLM-CONV-BWD-FORGE-EQ #2383).
+//
+// determinism: the forge builtins handle the det axis INTERNALLY — under
+// set_deterministic(true) / HEXA_DET the runtime selects the fixed-order
+// non-atomic col2im-gather + non-atomic split-K GEMM (byte-exact cross-host, the
+// eval/verdict safety-pin); the fast non-det atomic kernels are the training
+// default. So this seam fires on CUDA regardless of det (no host fallback on det,
+// unlike the elementwise GELU seam whose device kernel FMA-drifts ~1 ULP).
+//
+// native-canonical / byteeq-safe: cuda_available()==0 (CPU-only / byteeq build)
+// → host path below runs UNCHANGED (byte-identical to the pre-lever code, the
+// proven reference). conv_lib is byteeq-neutral (self/ does not import it), so
+// this edit cannot move the gen3≡gen4 self-host fixpoint.
+fn _conv1d_dev_on() -> int { return cuda_available() }
+
 // im2col host buffer build (offset-capable weight space is irrelevant here —
 // the gather is over activations only). x_col[t, ci·K+k] = xin(p,ci),
 // p = t − dil·(K−1−k), zero where p<0 (causal left-pad). Mirrors the forge
 // im2col in clm_conv_gpu.hexa byte-for-byte (same gather → same re-association).
 fn _conv1d_im2col(x: int, xcol: int, T: int, Cin: int, K: int, dil: int) {
+    // r3 lever 2: device-resident im2col on CUDA (keeps xcol FARR_DEVICE for the
+    // in-place forge GEMM read; rc 0 = done on device). Falls through to the host
+    // gather on CPU-only builds / GPU failure (byte-eq, the proven reference).
+    if _conv1d_dev_on() == 1 {
+        let rc = forge_dispatch_im2col(x, xcol, T, Cin, K, dil)
+        if rc == 0 { return }
+    }
     let Kdim = Cin * K
     let mut t = 0
     while t < T {
@@ -54,8 +90,120 @@ fn _conv1d_im2col(x: int, xcol: int, T: int, Cin: int, K: int, dil: int) {
     }
 }
 
+// im2col-T (transpose form for the dW GEMM): xcolT[ci·K+k, t] = xin(p,ci),
+// p = t − dil·(K−1−k). r3 lever 2 device-resident on CUDA (forge_dispatch_im2col_t),
+// host transpose-gather fallback otherwise. Byte-eq to the inline reference.
+fn _conv1d_im2col_t(x: int, xcolT: int, T: int, Cin: int, K: int, dil: int) {
+    if _conv1d_dev_on() == 1 {
+        let rc = forge_dispatch_im2col_t(x, xcolT, T, Cin, K, dil)
+        if rc == 0 { return }
+    }
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 {
+                    let j = ci * K + k
+                    t_set(xcolT, j * T + t, t_get(x, p * Cin + ci))
+                }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+}
+
+// col2im scatter-add: dX_out[p·Cin+ci] = Σ_k (tt<T) dXcol[tt·Kdim + ci·K+k],
+// tt = p + dil·(K−1−k) — the transpose-GATHER form (one output cell sums its K
+// taps in k-ascending order → deterministic, no double-count). r3 lever 2
+// device-resident on CUDA (forge_dispatch_col2im); zeros + scatters dX_out either
+// way (the device kernel zeros internally too). Byte-eq to the inline reference.
+fn _conv1d_col2im(dXcol: int, dX_out: int, T: int, Cin: int, K: int, dil: int) {
+    if _conv1d_dev_on() == 1 {
+        let rc = forge_dispatch_col2im(dXcol, dX_out, T, Cin, K, dil)
+        if rc == 0 { return }
+    }
+    let Kdim = Cin * K
+    let mut iz = 0
+    while iz < T * Cin { t_set(dX_out, iz, 0.0); iz = iz + 1 }
+    let mut p = 0
+    while p < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut acc = 0.0
+            let mut k = 0
+            while k < K {
+                let tt = p + dil * (K - 1 - k)
+                if tt < T { let j = ci * K + k; acc = acc + t_get(dXcol, tt * Kdim + j) }
+                k = k + 1
+            }
+            t_set(dX_out, p * Cin + ci, acc)
+            ci = ci + 1
+        }
+        p = p + 1
+    }
+}
+
+// bias-grad column sum db_out[co] = Σ_{t} dy[t,co] (t-sequential per channel).
+// r3 lever 2 device-resident on CUDA (forge_dispatch_db_colsum keeps db_out
+// FARR_DEVICE for the next optimizer step), host reduction fallback otherwise.
+// Writes db_out from index 0 (caller offsets via a temp where needed). Byte-eq.
+fn _conv1d_db_colsum(dy: int, db_out: int, T: int, Cout: int) {
+    if _conv1d_dev_on() == 1 {
+        let rc = forge_dispatch_db_colsum(dy, db_out, T, Cout)
+        if rc == 0 { return }
+    }
+    let mut cb = 0
+    while cb < Cout {
+        let mut acc = 0.0
+        let mut tb = 0
+        while tb < T { acc = acc + t_get(dy, tb * Cout + cb); tb = tb + 1 }
+        t_set(db_out, cb, acc)
+        cb = cb + 1
+    }
+}
+
 // add bias b[boff+co] into Y[t·Cout+co] in place over the matmul result `mm`.
+// r3 device-residency: when CUDA is present, broadcast the bias on-device via a
+// rank-1 GEMM (ones[T,1] @ b[1,Cout] = each row = b) then a device elementwise
+// residual-add (out = mm + bias_tiled, both FARR_DEVICE) — the classic BLAS ger
+// bias-broadcast (cuDNN/cuBLAS epilogue idiom). This eliminates the T·Cout boxed
+// host t_get/t_set loop AND the D2H sync it forced on the device-resident matmul
+// result `mm` (measured: emptying this loop collapsed the full-CLM step 33->14ms;
+// the host bias-add path was ~58% of the step, NOT the ~2% earlier mis-attributed).
+// Byte-exact: the rank-1 GEMM is a single-term product 1.0·b[co] (no FP reduction
+// reassociation) and the residual-add is elementwise in the same order as the host
+// loop (max|Δ|=0). cuda_available()==0 / GPU failure → host loop below (the proven
+// reference). byteeq-neutral: conv_lib is not in the self/ compile closure.
 fn _conv1d_add_bias(mm: int, b: int, boff: int, y_out: int, T: int, Cout: int) {
+    if _conv1d_dev_on() == 1 {
+        // ones[T,1] device column of 1.0 (T host writes — 512x cheaper than T·Cout)
+        let ones = t_zeros(T)
+        let mut oi = 0
+        while oi < T { t_set(ones, oi, 1.0); oi = oi + 1 }
+        // b[boff..boff+Cout] -> bslice[1,Cout] via the [1xN] identity transpose seam
+        let bslice = t_zeros(Cout)
+        let _bs = farr_transpose_2d_gpu(b, boff, bslice, 0, 1, Cout)
+        // bias_tiled[T,Cout] = ones[T,1] @ bslice[1,Cout] (device, each row = b)
+        let bias_tiled = forge_dispatch_matmul(ones, T, 1, bslice, Cout)
+        // y_out[i] = mm[i] + bias_tiled[i] (device elementwise add)
+        let rc = forge_dispatch_residual_add(mm, bias_tiled, y_out, T * Cout)
+        t_free(ones)
+        t_free(bslice)
+        t_free(bias_tiled)
+        if rc == 0 {
+            // residual_add leaves y_out FARR_DEVICE; downstream consumers that read
+            // y on the host scalar path (e.g. a conv bwd seeded by this output) see
+            // a stale host buffer. One host read+write forces D2H coherence so y_out
+            // is host-canonical (the proven contract of the host loop below).
+            t_set(y_out, 0, t_get(y_out, 0))
+            return
+        }
+    }
     let mut t = 0
     while t < T {
         let mut co = 0
@@ -67,26 +215,23 @@ fn _conv1d_add_bias(mm: int, b: int, boff: int, y_out: int, T: int, Cout: int) {
     }
 }
 
-// Forward (HOST). im2col + GEMM: unfold the causal-dilated receptive field into
-// x_col[T · (Cin·K)], transpose W[Cout, Cin·K] → Wt[Cin·K, Cout], then ONE
-// t_matmul (RFC 032 ikj FMA-fused GEMM under -O2) → Y[T, Cout], + bias. This
-// replaces the naive O(T·Cout·Cin·K) quad-loop; measured 38–60× faster on host
-// at CLM-trunk shapes (see .verdicts/flame-perf-im2col-gemm/roofline.txt). The
-// re-association is a re-order of the SAME sum → bit-near-identical (max|Δ|≈1e-16,
-// GRAD-EXACT held at max_rel 5.2e-12). Caller allocates y_out (T·Cout).
+// Forward — im2col + forge_dispatch_matmul (GPU-routed on CUDA hosts).
+// Unfold the causal-dilated receptive field into x_col[T · (Cin·K)], transpose
+// W[Cout, Cin·K] → Wt[Cin·K, Cout], then forge_dispatch_matmul → Y[T, Cout] +
+// bias. Replaces the naive O(T·Cout·Cin·K) quad-loop (38–60× faster at CLM-trunk
+// shapes; GPU routes the matmul to device on CUDA hosts). The re-association is a
+// re-order of the SAME sum → bit-near-identical (max|Δ|≈1e-16, GRAD-EXACT held
+// at max_rel 5.2e-12). Caller allocates y_out (T·Cout).
 pub fn nn_conv1d_fwd(x: int, w: int, b: int, y_out: int,
                      T: int, Cin: int, Cout: int, K: int, dil: int) {
     let Kdim = Cin * K
     let xcol = t_zeros(T * Kdim)
     _conv1d_im2col(x, xcol, T, Cin, K, dil)
     let Wt = t_zeros(Kdim * Cout)
-    let mut co = 0
-    while co < Cout {
-        let mut j = 0
-        while j < Kdim { t_set(Wt, j * Cout + co, t_get(w, co * Kdim + j)); j = j + 1 }
-        co = co + 1
-    }
-    let mm = t_matmul(xcol, T, Kdim, Wt, Cout)
+    // r1 device-residency: W[Cout,Kdim] -> Wt[Kdim,Cout] on device (CPU: fast-C),
+    // replaces the 786K boxed t_get/t_set host transpose (21.5ms -> 0.37ms, byte-exact permutation).
+    let _tpf = farr_transpose_2d_gpu(w, 0, Wt, 0, Cout, Kdim)
+    let mm = forge_dispatch_matmul(xcol, T, Kdim, Wt, Cout)
     _conv1d_add_bias(mm, b, 0, y_out, T, Cout)
     t_free(xcol)
     t_free(Wt)
@@ -104,119 +249,94 @@ pub fn nn_conv1d_fwd_off(x: int, w: int, woff: int, b: int, boff: int, y_out: in
     _conv1d_im2col(x, xcol, T, Cin, K, dil)
     // transpose the OFFSET weight slice w[woff + co·Kdim + j] → Wt[j·Cout + co]
     let Wt = t_zeros(Kdim * Cout)
-    let mut co = 0
-    while co < Cout {
-        let mut j = 0
-        while j < Kdim { t_set(Wt, j * Cout + co, t_get(w, woff + co * Kdim + j)); j = j + 1 }
-        co = co + 1
-    }
-    let mm = t_matmul(xcol, T, Kdim, Wt, Cout)
+    // r1 device-residency: offset W[woff..] [Cout,Kdim] -> Wt[Kdim,Cout] device transpose (soff=woff).
+    let _tpfo = farr_transpose_2d_gpu(w, woff, Wt, 0, Cout, Kdim)
+    let mm = forge_dispatch_matmul(xcol, T, Kdim, Wt, Cout)
     _conv1d_add_bias(mm, b, boff, y_out, T, Cout)
     t_free(xcol)
     t_free(Wt)
     t_free(mm)
 }
 
-// Backward — closed vjp. Caller allocates dW_out [Cout·Cin·K], dX_out [T·Cin],
-// db_out [Cout]; this zeros them then accumulates:
-//   dW[co,ci,k] = Σ_t dY[t,co] · xin(t-dil·(K-1-k), ci)
-//   dX[p,ci]    = Σ_co Σ_k W[co,ci,k] · dY[t,co]   where t = p + dil·(K-1-k)
-//   db[co]      = Σ_t dY[t,co]
+// Backward — forge-dispatch GEMM paths (GPU-routed on CUDA hosts).
+//
+// Caller allocates dW_out [Cout·Cin·K], dX_out [T·Cin], db_out [Cout].
+// This zeros them then accumulates via two forge_dispatch_matmul GEMMs:
+//
+//   Layouts (col index j = ci*K+k):
+//     xcolT[j, t] = (p≥0) ? x[p,ci] : 0,  p = t − dil·(K-1-k)  (im2col-T)
+//     Wflat[co, j] = w[co·Kdim + j]  == w in its natural layout
+//
+//   dW:  dW_flat[Kdim, Cout] = xcolT[Kdim, T] @ dy[T, Cout]
+//          → dW_out[co·Cin·K + j] = dW_flat[j·Cout + co]
+//   dX:  dXcol[T, Kdim] = dy[T, Cout] @ Wflat[Cout, Kdim]   (w IS Wflat)
+//          → col2im scatter-add: dX_out[p·Cin+ci] += dXcol[t·Kdim + j]  (p≥0)
+//   db:  db_out[co] = Σ_t dy[t,co]  (host reduction — O(T·Cout))
+//
+// Byte-eq to the closed vjp (max|Δ|≈1e-16 FP64; GRAD-EXACT held 5.2e-12).
+// Reference: clm_conv_gpu.hexa::conv1d_bwd_via_forge.
 pub fn nn_conv1d_bwd(x: int, w: int, dy: int,
                      dW_out: int, dX_out: int, db_out: int,
                      T: int, Cin: int, Cout: int, K: int, dil: int) {
-    let mut iz = 0
-    while iz < Cout * Cin * K {
-        t_set(dW_out, iz, 0.0)
-        iz = iz + 1
-    }
-    let mut ix = 0
-    while ix < T * Cin {
-        t_set(dX_out, ix, 0.0)
-        ix = ix + 1
-    }
-    let mut ib = 0
-    while ib < Cout {
-        t_set(db_out, ib, 0.0)
-        ib = ib + 1
-    }
-    let mut t = 0
-    while t < T {
-        let mut co = 0
-        while co < Cout {
-            let g = t_get(dy, t * Cout + co)
-            t_set(db_out, co, t_get(db_out, co) + g)
-            let mut ci = 0
-            while ci < Cin {
-                let mut k = 0
-                while k < K {
-                    let p = t - dil * (K - 1 - k)
-                    if p >= 0 {
-                        let widx = co * Cin * K + ci * K + k
-                        let xidx = p * Cin + ci
-                        let xv = t_get(x, xidx)
-                        t_set(dW_out, widx, t_get(dW_out, widx) + g * xv)
-                        t_set(dX_out, xidx, t_get(dX_out, xidx) + g * t_get(w, widx))
-                    }
-                    k = k + 1
-                }
-                ci = ci + 1
-            }
-            co = co + 1
-        }
-        t = t + 1
-    }
+    let Kdim = Cin * K
+    // ── im2col-T: build xcolT[Kdim, T] (transpose form for dW GEMM) ──
+    // r3 lever 2: device-resident on CUDA (kept FARR_DEVICE for the in-place GEMM).
+    let xcolT = t_zeros(Kdim * T)
+    _conv1d_im2col_t(x, xcolT, T, Cin, K, dil)
+    // ── dW: dW_flat[Kdim, Cout] = xcolT[Kdim,T] @ dy[T,Cout] (forge GEMM) ──
+    let dW_flat = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)
+    // r1 device-residency: dW_flat[Kdim,Cout] -> dW_out[Cout,Kdim] device transpose
+    // (replaces 786K boxed t_get/t_set reshape, byte-exact permutation).
+    let _tpb = farr_transpose_2d_gpu(dW_flat, 0, dW_out, 0, Kdim, Cout)
+    // ── dX: dXcol[T, Kdim] = dy[T,Cout] @ w[Cout,Kdim] (forge GEMM) ──
+    // w[co*Kdim + j] IS Wflat[co, j] — pass w directly, no copy.
+    let dXcol = forge_dispatch_matmul(dy, T, Cout, w, Kdim)
+    // col2im scatter-add back to dX_out[T, Cin] — r3 lever 2 device-resident.
+    _conv1d_col2im(dXcol, dX_out, T, Cin, K, dil)
+    // ── db: db_out[co] = Σ_t dy[t,co] — r3 lever 2 device-resident on CUDA ──
+    _conv1d_db_colsum(dy, db_out, T, Cout)
+    t_free(xcolT)
+    t_free(dW_flat)
+    t_free(dXcol)
 }
 
-// Backward, offset-capable. Identical to nn_conv1d_bwd except the WEIGHT-space
-// buffers are addressed at an offset: weight reads from w[woff + idx], and the
-// grads are zeroed + accumulated IN PLACE at dW_out[dWoff + idx] / db_out[dboff
-// + co]. dX_out stays unoffset (activation space). Lets a caller accumulate the
-// per-layer/per-expert grad slice straight into a PACKED grad buffer — no temp
-// dW slice and no _cpback of the grad back into the pack.
+// Backward, offset-capable. Weight reads from w[woff + idx]; grads accumulated
+// into dW_out[dWoff + idx] / db_out[dboff + co]. dX_out stays unoffset.
+// Uses forge_dispatch_matmul for the two heavy GEMMs, matching nn_conv1d_bwd_off's
+// closed vjp byte-for-byte (same re-association as nn_conv1d_bwd above).
 pub fn nn_conv1d_bwd_off(x: int, w: int, woff: int, dy: int,
                          dW_out: int, dWoff: int, dX_out: int, db_out: int, dboff: int,
                          T: int, Cin: int, Cout: int, K: int, dil: int) {
-    let mut iz = 0
-    while iz < Cout * Cin * K {
-        t_set(dW_out, dWoff + iz, 0.0)
-        iz = iz + 1
-    }
-    let mut ix = 0
-    while ix < T * Cin {
-        t_set(dX_out, ix, 0.0)
-        ix = ix + 1
-    }
-    let mut ib = 0
-    while ib < Cout {
-        t_set(db_out, dboff + ib, 0.0)
-        ib = ib + 1
-    }
-    let mut t = 0
-    while t < T {
-        let mut co = 0
-        while co < Cout {
-            let g = t_get(dy, t * Cout + co)
-            t_set(db_out, dboff + co, t_get(db_out, dboff + co) + g)
-            let mut ci = 0
-            while ci < Cin {
-                let mut k = 0
-                while k < K {
-                    let p = t - dil * (K - 1 - k)
-                    if p >= 0 {
-                        let woidx = woff + co * Cin * K + ci * K + k
-                        let dwidx = dWoff + co * Cin * K + ci * K + k
-                        let xidx = p * Cin + ci
-                        let xv = t_get(x, xidx)
-                        t_set(dW_out, dwidx, t_get(dW_out, dwidx) + g * xv)
-                        t_set(dX_out, xidx, t_get(dX_out, xidx) + g * t_get(w, woidx))
-                    }
-                    k = k + 1
-                }
-                ci = ci + 1
-            }
-            co = co + 1
-        }
-        t = t + 1
-    }
+    let Kdim = Cin * K
+    // ── im2col-T: build xcolT[Kdim, T] from x (same as nn_conv1d_bwd) ──
+    // r3 lever 2: device-resident on CUDA (kept FARR_DEVICE for the in-place GEMM).
+    let xcolT = t_zeros(Kdim * T)
+    _conv1d_im2col_t(x, xcolT, T, Cin, K, dil)
+    // ── dW: dW_flat[Kdim, Cout] = xcolT[Kdim,T] @ dy[T,Cout] (forge GEMM) ──
+    let dW_flat = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)
+    // r1 device-residency: dW_flat[Kdim,Cout] -> dW_out[dWoff..][Cout,Kdim] device transpose
+    // (doff=dWoff; transpose overwrites all Kdim*Cout cells so the prior zero-fill is redundant).
+    let _tpbo = farr_transpose_2d_gpu(dW_flat, 0, dW_out, dWoff, Kdim, Cout)
+    // ── dX: dXcol[T, Kdim] = dy[T,Cout] @ Wslice[Cout,Kdim] (forge GEMM) ──
+    // r2 device-residency: w[woff..][Cout*Kdim] is CONTIGUOUS, so extract the offset
+    // weight slice on-device via a [1 x N] -> [N x 1] identity transpose (byte-exact
+    // permutation) instead of a 786K boxed t_get/t_set host copy per layer — the host
+    // copy was the dominant residual glue (bwd_off 53->4ms under HEXA_DEVRESIDENT_NN).
+    // Same r1 farr_transpose_2d_gpu seam; keeps Wslice FARR_DEVICE for the in-place GEMM.
+    let Wslice = t_zeros(Cout * Kdim)
+    let _wsl = farr_transpose_2d_gpu(w, woff, Wslice, 0, 1, Cout * Kdim)
+    let dXcol = forge_dispatch_matmul(dy, T, Cout, Wslice, Kdim)
+    // col2im scatter-add to dX_out — r3 lever 2 device-resident on CUDA.
+    _conv1d_col2im(dXcol, dX_out, T, Cin, K, dil)
+    // ── db: db_out[dboff+co] = Σ_t dy[t,co] — r3 lever 2 device-resident sum
+    // into a temp (the builtin writes from index 0), then copy to the offset. ──
+    let db_tmp = t_zeros(Cout)
+    _conv1d_db_colsum(dy, db_tmp, T, Cout)
+    let mut cb = 0
+    while cb < Cout { t_set(db_out, dboff + cb, t_get(db_tmp, cb)); cb = cb + 1 }
+    t_free(db_tmp)
+    t_free(xcolT)
+    t_free(dW_flat)
+    t_free(Wslice)
+    t_free(dXcol)
 }

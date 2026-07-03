@@ -204,7 +204,12 @@ say "--- kernel ($(wc -l < "$KERN") lines) ---"; sed 's/^/    | /' "$KERN" | tee
 emit_one() { # $1=flag(0/1) $2=outbase
     local f="$1" out="$2"
     ( cd "$SRC"
-      if [ "$f" = 1 ]; then export "$FLAG=1"; else unset "$FLAG"; fi
+      # OFF = explicit FLAG=0 (NOT unset): after a default-ON polarity flip (e.g.
+      # HEXA_PACK_ARRAY / HEXA_UNBOX_* now `env != "0"`, #4163/#4168), UNSET means
+      # ON, so `unset` would emit ON-vs-ON → false ratio=NA / "lever did not fire"
+      # (caught on aiden during #4163 accel re-measure). FLAG=0 is OFF for BOTH
+      # polarities (default-OFF flag: 0==unset; default-ON flag: 0=the opt-OUT).
+      if [ "$f" = 1 ]; then export "$FLAG=1"; else export "$FLAG=0"; fi
       "$AP" _drv.hexa --emit=asm --target="$TGT" -o "$out.s" "$KERN" >"$out.s.log" 2>&1 || echo "emit asm rc=$? f=$f"
       "$AP" _drv.hexa --emit=obj --target="$TGT" -o "$out.o" "$KERN" >"$out.o.log" 2>&1 || echo "emit obj rc=$? f=$f" ); }
 emit_one 0 "$WORK/off"

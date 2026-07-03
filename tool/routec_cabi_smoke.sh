@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush popen pclose; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi atoll strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strrchr memmove bzero strtoll strtoull strndup time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush popen pclose isalnum isalpha free inet_pton setvbuf darwin_check_fd_set_overflow; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -103,6 +103,7 @@ cat > "$TMP/harness.c" <<'CEOF'
 #include <poll.h>     /* struct pollfd / POLLIN — for the poll composition test */
 #include <time.h>     /* libc time() — the reference oracle for hxlcl_time */
 #include <sys/wait.h> /* waitpid / WIFEXITED / WEXITSTATUS — for the fork roundtrip test */
+#include <sys/socket.h> /* AF_INET / AF_INET6 — for the inet_pton parse test */
 
 /* Route-C-emitted symbols under test (raw C-ABI prototypes). */
 extern size_t hxlcl_strlen(const char *s);
@@ -115,7 +116,24 @@ extern char  *hxlcl_strcpy(char *d, const char *s);
 extern char  *hxlcl_strncpy(char *d, const char *s, size_t n);
 extern char  *hxlcl_strcat(char *d, const char *s);
 extern int    hxlcl_atoi(const char *s);
+/* parse-leaf promotion — atoll is now a real self-emitted Route C leaf (base-10,
+ * no-endptr simplification of strtoll); atoi bl's into it intra-object. */
+extern long long hxlcl_atoll(const char *s);
+/* ctype family — register-only pure-compute (arg is an int value, no mem access). */
+extern int    hxlcl_isalnum(int c);
+extern int    hxlcl_isalpha(int c);
+/* alloc residue — no-op free (bump-arena floor reclaims nothing). */
+extern void   hxlcl_free(void *p);
+/* pure-compute mirror batch 4 — inet_pton (dotted-quad parse + 4-byte caller write,
+ * i64-pack restructure of the frozen b[4]) + setvbuf / darwin_check_fd_set_overflow
+ * (register-only no-op leaves, return 0). */
+extern int    hxlcl_inet_pton(int af, const char *src, void *dst);
+extern int    hxlcl_setvbuf(void *fp, char *buf, int mode, size_t sz);
+extern int    hxlcl_darwin_check_fd_set_overflow(int fd, const void *p, int n);
 extern char  *hxlcl_strdup(const char *s);
+/* dup mirror — strndup. Mirror of the strdup composite (inner malloc + byte loops)
+ * with a cap-bounded scan; returns a fresh NUL-terminated copy of ≤cap bytes. */
+extern char  *hxlcl_strndup(const char *s, size_t cap);
 extern void  *hxlcl_calloc(size_t nmemb, size_t size);
 
 extern void  *hxlcl_realloc(void *p, size_t n);
@@ -184,11 +202,26 @@ extern int    hxlcl_pipe(int fds[2]);
 extern char  *hxlcl_strchr(const char *s, int c);
 extern char  *hxlcl_strstr(const char *h, const char *n);
 
+/* pure-leaf mirror batch — strrchr / memmove / bzero. Byte-faithful mirrors of the
+ * already-wired strchr / memcpy / memset leaves (no syscall/errno/float/inner-call);
+ * cross-target-identical compute (byteeq proves bit-equal emit, this run proves the
+ * behaviour). strrchr returns the LAST match char* (or NULL); memmove returns dst
+ * and handles overlap (backward copy when dst>src); bzero zeros n bytes. */
+extern char  *hxlcl_strrchr(const char *s, int c);
+extern void  *hxlcl_memmove(void *dst, const void *src, size_t n);
+extern void   hxlcl_bzero(void *s, size_t n);
+
 /* batch G parse family — strtoll. Pure-compute leaf (no syscall, no errno, no
  * inner call) with a NULL-gated `char** endptr` out-param write. Cross-target-
  * identical compute; this run exercises both the value parse AND the endptr
  * store64 (a non-NULL endptr → *endptr == nptr + consumed-length). */
 extern long long hxlcl_strtoll(const char *nptr, char **endptr, int base);
+
+/* parse mirror — strtoull. EXACT unsigned mirror of strtoll (same parse loop + same
+ * NULL-gated endptr store64); differs only by no '-' negate + raw unsigned result.
+ * Cross-target-identical compute; this run exercises value parse AND the endptr
+ * store64 (non-NULL endptr → *endptr == nptr + consumed-length). */
+extern unsigned long long hxlcl_strtoull(const char *nptr, char **endptr, int base);
 
 /* batch H — time / poll. On darwin time uses gettimeofday(116) → reads tv_sec from
  * a hxlcl_malloc'd 16-byte scratch buffer (the heap-scratch substrate); poll uses
@@ -267,16 +300,20 @@ extern void  *hxlcl_popen(const char *cmd, const char *mode);
 extern int    hxlcl_pclose(void *stream);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
- * here (sole provider) so there is no multidef with the libc shim: atoll for
- * atoi, malloc for strdup + calloc + realloc. (Each composite PR adds its callee.)
+ * here (sole provider) so there is no multidef with the libc shim: malloc for
+ * strdup + strndup + calloc + realloc. (Each composite PR adds its callee.)
+ *
+ * hxlcl_atoll is NO LONGER supplied here: the PARSE-LEAF PROMOTION batch made it a
+ * real self-emitted Route C leaf (in routec.o), so atoi's inner `bl _hxlcl_atoll`
+ * binds to that emitted body intra-object — defining it here too would multidef.
  *
  * This hxlcl_malloc writes the SAME 16-byte size header the floor hxlcl_malloc
  * does (store n at offset 0, hand back ptr+16) so hxlcl_realloc's negative-offset
  * header read `*(size_t*)(p - 16)` recovers the real old size. The 16-byte
  * payload prefix keeps the returned pointer 16-byte aligned. (Small leaks are
- * fine — this is a short-lived smoke process; no hxlcl_free here.) */
+ * fine — this is a short-lived smoke process; the self-emitted hxlcl_free is a
+ * no-op so it reclaims nothing anyway.) */
 #define HXLCL_HDR 16
-long long hxlcl_atoll(const char *s) { return s ? atoll(s) : 0; }
 void     *hxlcl_malloc(size_t n) {
     size_t want = n ? n : 1;
     unsigned char *base = (unsigned char *)malloc(want + HXLCL_HDR);
@@ -334,11 +371,58 @@ int main(void) {
     hxlcl_strcat(cat, "cd");
     CK(strcmp(cat, "abcd") == 0, "strcat");
 
-    /* composites (inner bl to retained atoll / header-writing malloc).
+    /* composites (inner bl to self-emitted atoll / header-writing malloc).
      * No free() here: the header-writing hxlcl_malloc returns ptr+16, so libc
      * free(ptr) is wrong — and small leaks in a short smoke process are fine. */
     CK(hxlcl_atoi("42") == 42, "atoi 42");
     CK(hxlcl_atoi("-7") == -7, "atoi -7");
+
+    /* parse-leaf promotion: atoll as a real self-emitted leaf — base-10 lenient
+     * decimal (ws skip + sign + digit accumulation), no endptr. Exercised directly
+     * (atoi above already bl's into it). */
+    CK(hxlcl_atoll("42") == 42LL, "atoll(\"42\") == 42");
+    CK(hxlcl_atoll("-7") == -7LL, "atoll(\"-7\") == -7 (sign)");
+    CK(hxlcl_atoll("+99") == 99LL, "atoll(\"+99\") == 99 (plus sign)");
+    CK(hxlcl_atoll("  123abc") == 123LL, "atoll leading-ws + trailing-garbage stop");
+    CK(hxlcl_atoll("0") == 0LL, "atoll(\"0\") == 0");
+    CK(hxlcl_atoll("") == 0LL, "atoll(\"\") == 0 (empty)");
+    CK(hxlcl_atoll(NULL) == 0LL, "atoll(NULL) == 0 (NULL guard)");
+
+    /* ctype: register-only pure-compute classification (arg is an int value). */
+    CK(hxlcl_isalnum('A') == 1, "isalnum('A') == 1");
+    CK(hxlcl_isalnum('z') == 1, "isalnum('z') == 1");
+    CK(hxlcl_isalnum('5') == 1, "isalnum('5') == 1");
+    CK(hxlcl_isalnum('_') == 0, "isalnum('_') == 0");
+    CK(hxlcl_isalnum(' ') == 0, "isalnum(' ') == 0");
+    CK(hxlcl_isalpha('A') == 1, "isalpha('A') == 1");
+    CK(hxlcl_isalpha('q') == 1, "isalpha('q') == 1");
+    CK(hxlcl_isalpha('5') == 0, "isalpha('5') == 0 (digit excluded)");
+    CK(hxlcl_isalpha('_') == 0, "isalpha('_') == 0");
+
+    /* alloc residue: no-op free must accept any pointer (incl. NULL) without crash. */
+    hxlcl_free(NULL);
+    { char *fp = (char *)malloc(8); hxlcl_free(fp); free(fp); }
+    CK(1, "free no-op accepts NULL + heap ptr (no crash)");
+
+    /* pure-compute mirror batch 4 — inet_pton dotted-quad parse + caller-write. */
+    { unsigned char ip[4] = {9,9,9,9};
+      CK(hxlcl_inet_pton(AF_INET, "1.2.3.4", ip) == 1, "inet_pton valid returns 1");
+      CK(ip[0]==1 && ip[1]==2 && ip[2]==3 && ip[3]==4, "inet_pton writes 1.2.3.4"); }
+    { unsigned char ip[4] = {9,9,9,9};
+      CK(hxlcl_inet_pton(AF_INET, "255.0.128.17", ip) == 1, "inet_pton 255.0.128.17 ok");
+      CK(ip[0]==255 && ip[1]==0 && ip[2]==128 && ip[3]==17, "inet_pton boundary octets"); }
+    { unsigned char ip[4] = {7,7,7,7};
+      CK(hxlcl_inet_pton(AF_INET, "256.0.0.1", ip) == 0, "inet_pton octet>255 -> 0");
+      CK(ip[0]==7 && ip[1]==7 && ip[2]==7 && ip[3]==7, "inet_pton malformed leaves dst untouched"); }
+    CK(hxlcl_inet_pton(AF_INET, "1.2.3", (unsigned char[4]){0}) == 0, "inet_pton too few octets -> 0");
+    CK(hxlcl_inet_pton(AF_INET, "1.2.3.4.5", (unsigned char[4]){0}) == 0, "inet_pton too many octets -> 0");
+    CK(hxlcl_inet_pton(AF_INET, "1.2.x.4", (unsigned char[4]){0}) == 0, "inet_pton stray char -> 0");
+    CK(hxlcl_inet_pton(AF_INET, "1..3.4", (unsigned char[4]){0}) == 0, "inet_pton empty octet -> 0");
+    CK(hxlcl_inet_pton(AF_INET6, "1.2.3.4", (unsigned char[4]){0}) == -1, "inet_pton non-AF_INET -> -1");
+
+    /* pure-compute mirror batch 4 — no-op leaves return 0. */
+    CK(hxlcl_setvbuf(NULL, NULL, 0, 0) == 0, "setvbuf no-op returns 0");
+    CK(hxlcl_darwin_check_fd_set_overflow(3, NULL, 0) == 0, "darwin_check_fd_set_overflow returns 0");
 
     char *sdup = hxlcl_strdup("hi");
     CK(sdup != NULL && strcmp(sdup, "hi") == 0, "strdup content");
@@ -539,6 +623,33 @@ int main(void) {
         CK(hxlcl_strstr("aaa", "aab") == NULL,    "strstr partial-then-mismatch → NULL");
     }
 
+    /* pure-leaf mirror batch: strrchr / memmove / bzero — pure byte ops mirroring
+     * strchr / memcpy / memset. Pointers checked by identity AND content, so a
+     * PAIR-MODEL ABI leak (boxed pointer) or off-by-one would be caught. */
+    {
+        const char *abc = "abcXYZabc";
+        CK(hxlcl_strrchr(abc, 'a') == abc + 6, "strrchr finds LAST 'a' at &abc[6]");
+        CK(hxlcl_strrchr(abc, 'X') == abc + 3, "strrchr finds 'X' at &abc[3]");
+        CK(hxlcl_strrchr(abc, 'z') == NULL,    "strrchr('z') → NULL (absent)");
+        CK(hxlcl_strrchr(abc, 0) == abc + 9,   "strrchr(0) → terminator pointer");
+    }
+    {
+        char b1[16]; memcpy(b1, "ABCDEFGH", 9);
+        CK(hxlcl_memmove(b1, b1 + 2, 6) == b1, "memmove returns dst");
+        CK(memcmp(b1, "CDEFGH", 6) == 0, "memmove forward (dst<src overlap) shifts left");
+    }
+    {
+        char b2[16]; memcpy(b2, "ABCDEFGH", 9);
+        hxlcl_memmove(b2 + 2, b2, 6);          /* dst>src overlap → backward copy */
+        CK(memcmp(b2, "ABABCDEF", 8) == 0, "memmove backward (dst>src overlap) shifts right");
+    }
+    {
+        char b3[8]; memset(b3, 0x55, 8);
+        hxlcl_bzero(b3 + 1, 4);
+        CK(b3[0] == 0x55 && b3[1] == 0 && b3[2] == 0 && b3[3] == 0 &&
+           b3[4] == 0 && b3[5] == 0x55, "bzero zeros bytes [1..5), leaves neighbours");
+    }
+
     /* batch G: strtoll — value parse + endptr store64 (the OUT-PARAM write under
      * test). endptr==NULL exercises the NULL-gate (no store); endptr!=NULL
      * exercises the __hx_ptr_store64 → *endptr == nptr + consumed-length. */
@@ -564,6 +675,49 @@ int main(void) {
         char *endp3 = (char *)0x1;
         CK(hxlcl_strtoll(NULL, &endp3, 10) == 0, "strtoll(NULL,&end,10) == 0");
         CK(endp3 == NULL, "strtoll(NULL) sets *endptr = NULL");
+    }
+
+    /* parse mirror: strtoull — unsigned mirror of strtoll. Same parse + endptr
+     * store64 out-param; differs only by no '-' negate + raw unsigned result. */
+    {
+        CK(hxlcl_strtoull("42", NULL, 10) == 42ULL, "strtoull(\"42\",NULL,10) == 42 (endptr NULL-gate)");
+        CK(hxlcl_strtoull("+99", NULL, 10) == 99ULL, "strtoull(\"+99\",NULL,10) == 99 (plus sign)");
+        CK(hxlcl_strtoull("  123abc", NULL, 10) == 123ULL, "strtoull leading-ws + trailing-garbage stop");
+        CK(hxlcl_strtoull("0", NULL, 10) == 0ULL, "strtoull(\"0\") == 0");
+        CK(hxlcl_strtoull("ff", NULL, 16) == 255ULL, "strtoull(\"ff\",16) == 255 (lowercase hex)");
+        CK(hxlcl_strtoull("0755", NULL, 0) == 493ULL, "strtoull(\"0755\",0) == 0755 octal (493)");
+        CK(hxlcl_strtoull("10", NULL, 0) == 10ULL, "strtoull(\"10\",0) == 10 (decimal auto)");
+        /* large unsigned value that overflows signed long long → exercises the
+         * unsigned path (strtoll would wrap negative; strtoull returns it raw). */
+        CK(hxlcl_strtoull("18446744073709551615", NULL, 10) == 18446744073709551615ULL,
+           "strtoull(ULLONG_MAX) == 0xFFFFFFFFFFFFFFFF (unsigned, no negate)");
+        const char *uhx = "0xFF";
+        char *uendp = NULL;
+        unsigned long long uv = hxlcl_strtoull(uhx, &uendp, 16);
+        CK(uv == 255ULL, "strtoull(\"0xFF\",&end,16) == 255 (0x prefix skip)");
+        CK(uendp == uhx + 4, "strtoull endptr == nptr+4 (store64 out-param write)");
+        const char *umix = "12x";
+        char *uendp2 = NULL;
+        CK(hxlcl_strtoull(umix, &uendp2, 10) == 12ULL, "strtoull(\"12x\",&end,10) == 12");
+        CK(uendp2 == umix + 2, "strtoull endptr stops at first non-digit (mix+2)");
+        char *uendp3 = (char *)0x1;
+        CK(hxlcl_strtoull(NULL, &uendp3, 10) == 0ULL, "strtoull(NULL,&end,10) == 0");
+        CK(uendp3 == NULL, "strtoull(NULL) sets *endptr = NULL");
+    }
+
+    /* dup mirror: strndup — strdup composite + cap-bounded scan. Checks the cap
+     * truncation (no-NUL-within-cap), the NUL-before-cap short copy, cap==0, and
+     * NULL passthrough — the strndup behaviour battery from the SELFEMIT seed. */
+    {
+        char *d1 = hxlcl_strndup("hello", 3);   /* cap < strlen → truncated copy */
+        CK(d1 != NULL && strcmp(d1, "hel") == 0, "strndup(\"hello\",3) == \"hel\" (cap truncates)");
+        char *d2 = hxlcl_strndup("hi", 10);     /* cap > strlen → full copy (NUL-before-cap) */
+        CK(d2 != NULL && strcmp(d2, "hi") == 0, "strndup(\"hi\",10) == \"hi\" (NUL before cap)");
+        char *d3 = hxlcl_strndup("abc", 0);     /* cap == 0 → empty string */
+        CK(d3 != NULL && d3[0] == '\0', "strndup(\"abc\",0) == \"\" (cap==0)");
+        char *d4 = hxlcl_strndup("xyz", 3);     /* cap == strlen → full copy */
+        CK(d4 != NULL && strcmp(d4, "xyz") == 0, "strndup(\"xyz\",3) == \"xyz\" (cap==len)");
+        CK(hxlcl_strndup(NULL, 5) == NULL, "strndup(NULL,5) == NULL (NULL passthrough)");
     }
 
     /* batch H — time / poll. FULLY EXERCISED on this darwin host (both legs run).
@@ -820,4 +974,4 @@ echo "[routec-smoke] (3) compile harness + link Route C .o + run …"
 "$TMP/routec_smoke"
 rc=$?
 [ "$rc" -eq 0 ] || { echo "[routec-smoke] FATAL: behaviour run rc=$rc" >&2; exit 1; }
-echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr + Wall 3-a CORE FILE* fopen/fread/fwrite/fseek/ftell/fclose/fdopen + Wall 3-b STD-STREAM fputs/fputc/fflush, darwin-arm64)"
+echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr + pure-leaf mirror strrchr/memmove/bzero + parse/dup mirror strtoull/strndup + parse-leaf promotion atoll + ctype isalnum/isalpha + alloc-residue free + pure-compute mirror batch4 inet_pton/setvbuf/darwin_check_fd_set_overflow + Wall 3-a CORE FILE* fopen/fread/fwrite/fseek/ftell/fclose/fdopen + Wall 3-b STD-STREAM fputs/fputc/fflush, darwin-arm64)"
