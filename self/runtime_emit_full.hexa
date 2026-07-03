@@ -13177,7 +13177,7 @@ fn emit_runtime_to(out_path: str) {
     buf = buf + "    if (!HX_IS_STR(pattern) || !HX_STR(pattern)) return hexa_array_new();\n"
     buf = buf + "#if defined(__linux__) && (defined(HEXA_RT_GLOB_NATIVE) || !defined(HEXA_RT_GLOB_NATIVE_OFF))\n"
     buf = buf + "    /* zero-c #29: native single-level glob (last-'/' split + getdents64 dir scan\n"
-    buf = buf + "     * mirroring hexa_listdir + inline */?/literal matcher + selection sort by\n"
+    buf = buf + "     * mirroring hexa_listdir + inline star/question/literal matcher + sort by\n"
     buf = buf + "     * hxlcl_strcmp (glibc glob(3) default = strcmp-sorted). Leading-dot skipped\n"
     buf = buf + "     * unless pattern[0]=='.'. Drops libc glob AND globfree. No hexa_array_sort\n"
     buf = buf + "     * (would re-pull _qsort). default-OFF byte-neutral. */\n"
