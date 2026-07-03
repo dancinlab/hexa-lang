@@ -960,7 +960,7 @@ fn _types_lower_type_ref(tr: TypeRef) -> Type {
     // annotation as kind:"named" (`_types_let_type_text` string) and parses
     // the element out of the raw text via `_types_array_elem_kind`, so this
     // kind:"generic"-gated branch never fires there.
-    if env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1" && tr.kind == "generic" && _types_is_array_name(tr.name) && len(tr.args) >= 1 {
+    if _types_array_lower_on && tr.kind == "generic" && _types_is_array_name(tr.name) && len(tr.args) >= 1 {
         let mut elem_args: [Type] = []
         elem_args.push(_types_lower_type_ref(tr.args[0]))
         return Type {
@@ -1201,6 +1201,27 @@ fn _types_lookup_variant_payload_types(enum_name: string, variant_name: string) 
 // `kind == "named"` spelling is stored (the common scalar/nominal field case —
 // `x: i32`, `inner: Widget`); non-named fields store "" → the r5 fit check
 // conservatively skips them (r6+ scope).
+// ── static-types §F3 pre-flip env-hoist (wall_a_endgame.md §B.3 F3) ──
+//
+// Every static-types gate used to read `env("HEXA_STATIC_TYPES")` (and
+// `…_ARRAY_LOWER`) inline — a per-NODE string compare on hot `_infer_expr`
+// paths once the ladder grew past a handful of sites. Hoist both reads to
+// once-per-`type_check()` cached bools (process env cannot change mid-pass,
+// so this is semantics-preserving), refreshed at the top of `type_check`
+// alongside the registry resets. The gate idiom is unchanged: the cached
+// bool stays the FIRST `&&` operand at every site (short-circuit), and the
+// default build (both false) takes the byte-identical fallthrough paths —
+// diagnostic stream unchanged (byteeq-neutral). This is the census-named
+// prerequisite for the flip-gate perf measurement (stage-1 wall ON vs OFF,
+// condition #5 "post env-hoist").
+let mut _types_static_on: bool = false
+let mut _types_array_lower_on: bool = false
+
+fn _types_static_flags_hoist() {
+    _types_static_on = env("HEXA_STATIC_TYPES") == "1"
+    _types_array_lower_on = env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1"
+}
+
 let mut _types_struct_names: [string] = []
 let mut _types_struct_field_offsets: [i64] = []
 let mut _types_struct_field_counts: [i64] = []
@@ -2338,7 +2359,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         let mut i = 0
         while i < len(e.children) {
             last = _infer_expr(e.children[i], benv, ctx, out)
-            if env("HEXA_STATIC_TYPES") == "1" {
+            if _types_static_on {
                 let ch = e.children[i]
                 if _types_is_let(ch.kind) {
                     let nm = _types_let_name(ch.text)
@@ -2562,7 +2583,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         // default build skips it → diagnostic stream byte-identical → byteeq
         // (gen3≡gen4) preserved. Same structural slot + env-gate idiom as the
         // already-shipped `_exh_check_module`/`_cg_check_module` opt-in passes.
-        if env("HEXA_STATIC_TYPES") == "1" {
+        if _types_static_on {
             // text encodes `<name>|<typename>`; require an annotation + RHS.
             let tt = _types_let_type_text(e.text)
             if len(tt) > 0 && len(e.children) > 0 {
@@ -2659,7 +2680,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // identical (byteeq-neutral). When it fires it SUPPRESSES the
             // generic HX3001 below (`r3_rejected`) so one mistake = one error.
             let mut r3_rejected = false
-            if env("HEXA_STATIC_TYPES") == "1" {
+            if _types_static_on {
                 if _types_is_ident(e.children[0].kind) && _types_kind_is_scalar(lhs_t.kind) && _types_kind_is_scalar(rhs_t.kind) {
                     if !_types_assignable(lhs_t, rhs_t, e.children[1]) {
                         _emit_hx3011(lhs_t, rhs_t, e.span, out)
@@ -2692,7 +2713,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                                 _emit_hx3011(elem_t, rhs_t, e.span, out)
                                 r3_rejected = true
                             }
-                        } else if env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1" && !_types_kind_is_scalar(elem_t.kind) {
+                        } else if _types_array_lower_on && !_types_kind_is_scalar(elem_t.kind) {
                             // static-types r8b — param / module-let array base
                             // fallback. The `[]<name>` record above only exists
                             // for BLOCK-LOCAL annotated lets (Block-arm r4
@@ -2917,7 +2938,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     // (which the legacy STUB's per-Ident walk did NOT reach, since the Ident
     // arm returns before recursing into children[0]) so inner value errors are
     // ALSO surfaced under the flag.
-    if env("HEXA_STATIC_TYPES") == "1" && _cg_is_struct_lit(e.kind) {
+    if _types_static_on && _cg_is_struct_lit(e.kind) {
         let sname = e.text
         let mut fi = 0
         while fi < len(e.children) {
@@ -2984,7 +3005,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     // as bare `array` in diagnostics. Both env checks are the FIRST `&&`
     // operands (short-circuit) → the default build takes the byte-identical
     // STUB path below (byteeq / gen3≡gen4 preserved, r1-r6 gate idiom).
-    if env("HEXA_STATIC_TYPES") == "1" && env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1" && _types_is_array_lit(e.kind) {
+    if _types_static_on && _types_array_lower_on && _types_is_array_lit(e.kind) {
         let mut elem_t = _types_empty_type()
         let mut uniform = true
         let mut ai = 0
@@ -3035,7 +3056,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     // r2 soundness gates. Both env checks are the FIRST `&&` operands
     // (short-circuit) → the default build takes the byte-identical STUB
     // path below (byteeq / gen3≡gen4 preserved, r1-r8 gate idiom).
-    if env("HEXA_STATIC_TYPES") == "1" && env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1" && _types_is_index(e.kind) {
+    if _types_static_on && _types_array_lower_on && _types_is_index(e.kind) {
         let mut base_t = _types_empty_type()
         let mut xi = 0
         while xi < len(e.children) {
@@ -3075,7 +3096,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     // flag-ON false-positive class — flip-blocking, §B F0). Flag check is
     // the FIRST `&&` operand (short-circuit) → the default build takes the
     // byte-identical STUB path below.
-    if env("HEXA_STATIC_TYPES") == "1" && _types_is_field(e.kind) && len(e.children) > 0 {
+    if _types_static_on && _types_is_field(e.kind) && len(e.children) > 0 {
         let mut recv_t = _types_empty_type()
         let mut wi = 0
         while wi < len(e.children) {
@@ -3439,7 +3460,7 @@ fn _check_match(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // FIRST `&&` operand, short-circuit) so the default build keeps
             // the discard-only walk → diagnostic stream byte-identical →
             // byteeq (gen3≡gen4) preserved.
-            if env("HEXA_STATIC_TYPES") == "1" && (_types_is_lit_int(pat_i.kind) || _types_is_lit_float(pat_i.kind) || _types_is_lit_string(pat_i.kind) || _is_lit_bool(pat_i.kind) || _is_lit_char(pat_i.kind)) {
+            if _types_static_on && (_types_is_lit_int(pat_i.kind) || _types_is_lit_float(pat_i.kind) || _types_is_lit_string(pat_i.kind) || _is_lit_bool(pat_i.kind) || _is_lit_char(pat_i.kind)) {
                 if _types_kind_is_scalar(scrut_t.kind) && _types_kind_is_scalar(pt.kind) {
                     if !_types_assignable(scrut_t, pt, pat_i) {
                         _emit_hx3011(scrut_t, pt, pat_i.span, out)
@@ -4399,6 +4420,9 @@ fn _types_bind_params(env: TypeEnv, it: Item, caller_file: string) -> TypeEnv {
 
 pub fn type_check(module: Module) -> array {
     let mut out = []
+    // static-types §F3 env-hoist — refresh the cached flag bools ONCE per
+    // pass, FIRST thing (before any registry/lowering work reads them).
+    _types_static_flags_hoist()
     // RFC-074 Phase 2.1 — reset the per-module enum variant payload type
     // registry before `_collect_item_types` re-populates it on this run.
     // `type_check()` is called once per module pass; registry lifetime ==
