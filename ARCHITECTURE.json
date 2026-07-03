@@ -1025,7 +1025,7 @@
                         "detail": ""
                       },
                       {
-                        "name": "release.yml, miscompile-zero-gate, determinism-gate). ",
+                        "name": "release.yml, miscompile-zero-gate, determinism-gate). finalize=softprops make_latest + 명시 gh release edit --latest 검증 스텝(2026-07-03: update 경로 make_latest 미실효로 Latest 7일 v0.588 고착 → 소비자 stale 설치 재발 방지). ",
                         "role": "",
                         "id": "self-host-status-remaining-residuals-tracked-not-silent-runtime-c-floor-reducibl-39",
                         "detail": ""
