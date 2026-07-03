@@ -1,0 +1,330 @@
+// test/native_build/emit_hxlcl_strchr_elf_o.hexa
+//
+// RFC061 §M8 SELFEMIT · Route B′ · cross-target ELF extension of the proven
+// mem/str leaf precedent (emit_hxlcl_{strlen,memcpy,memset,memcmp,strcmp,
+// strncmp,strcpy,strncpy,strcat}_elf_o.hexa, PR #4000/#4124/#4127) —
+// generalized to hxlcl_strchr.
+//
+// EMITS an ELF64 ET_REL relocatable object exporting strong external symbol
+// `hxlcl_strchr` (NO leading underscore — Linux/ELF C symbols are bare, unlike
+// Mach-O's `_`-prefix) whose body is a verbatim byte-scan returning a pointer
+// to the first match (NUL matchable) or NULL. Under HEXA_RT_SELFEMIT_STRCHR=1
+// (linux gate in tool/stage_resolve_runtime_a), the libc-delegate shim drops
+// `hxlcl_strchr` (#ifndef HEXA_RT_SELFEMIT_STRCHR) and the system `ld` binds the
+// `call/bl hxlcl_strchr` callsites to THIS .o's strong symbol. Same per-symbol
+// shim-swap mechanism as memcpy; only the bytes, the symbol name (and its
+// strtab length) differ.
+//
+// ── ABI ──
+//   char *strchr(s, c) -> pointer to first byte of s equal to (char)c, or NULL
+//   if not found; the terminating NUL is matchable (strchr(s,0) returns the
+//   terminator ptr). Returns NULL-or-pointer with NO external callee, NO errno.
+//   x86_64 SysV: rdi=s esi=c, rax=ptr|NULL (low byte sil compared). AArch64:
+//   x0=s w1=c, x0=ptr|NULL.
+//   Pure leaf: no relocation, no arena state, no HexaVal touch, no external
+//   callee, no errno. Position-independent.
+//
+// ── ARCH (env HEXA_SELFEMIT_ELF_ARCH) ──
+//   "x86_64"  -> EM_X86_64 (62), 29-byte System V AMD64 byte-scan loop.
+//   "arm64"   -> EM_AARCH64 (183), 44-byte AArch64 loop — bytes are
+//                CHARACTER-IDENTICAL to self/codegen/runtime_arm64.hexa::
+//                rt_strchr() (same ISA as the darwin Mach-O seed
+//                emit_hxlcl_strchr_o.hexa; only the container changes
+//                ELF<->Mach-O).
+//
+// ── HONESTY ──
+//   - x86_64 bytes are the canonical SysV byte-scan lowering (match-first, then
+//     NUL-terminates the scan — strchr(s,0) returns the terminator). Cross-
+//     checked against `clang --target=x86_64-linux-gnu` assembling the identical
+//     mnemonic sequence (xor rcx,rcx; loop: movzbl (rdi,rcx),edx; cmp dl,sil;
+//     je found; test dl,dl; je notfound; inc rcx; jmp loop; found: lea (rdi,
+//     rcx),rax; ret; notfound: xor eax,eax; ret): emitted .text == these 29
+//     bytes (verified, not invented).
+//   - arm64 bytes are verbatim rt_strchr (proven shipping darwin seed).
+//   - clang appears ONLY as the cross-check oracle, NEVER in emit.
+//   - HEXA_RT_SELFEMIT_STRCHR=1 gates the build append; unset = no behavior
+//     change (DEFAULT shim.o byte-identical preserved).
+//   - no binaries committed.
+//
+// SELF-CONTAINED (no `use`): mirrors the memcpy ELF emitter — the local repo
+// has no compiled module_loader, so multi-`use` programs link-fail.
+
+// ═══════════════════════════════════════════════════════════════════
+// x86_64 System V AMD64 strchr — 29 bytes (rdi=s,esi=c -> rax=ptr|NULL).
+//   48 31 c9              xor    rcx, rcx          ; i = 0
+//   loop:                                          ; (offset 0x3)
+//   0f b6 14 0f           movzbl (rdi,rcx), edx    ; ch = s[i]
+//   40 38 d6              cmp    sil, dl           ; ch == (char)c ?
+//   74 09                 je     found             ; -> 0x15
+//   84 d2                 test   dl, dl            ; ch == 0 ?
+//   74 0a                 je     notfound          ; -> 0x1a
+//   48 ff c1              inc    rcx
+//   eb ee                 jmp    loop              ; -> 0x3
+//   found:                                         ; (offset 0x15)
+//   48 8d 04 0f           lea    (rdi,rcx), rax    ; s + i
+//   c3                    ret
+//   notfound:                                      ; (offset 0x1a)
+//   31 c0                 xor    eax, eax          ; NULL
+//   c3                    ret
+// ═══════════════════════════════════════════════════════════════════
+fn x86_strchr_bytes() -> [int] {
+    let mut c = []
+    c.push(0x48); c.push(0x31); c.push(0xc9)
+    c.push(0x0f); c.push(0xb6); c.push(0x14); c.push(0x0f)
+    c.push(0x40); c.push(0x38); c.push(0xd6)
+    c.push(0x74); c.push(0x09)
+    c.push(0x84); c.push(0xd2)
+    c.push(0x74); c.push(0x0a)
+    c.push(0x48); c.push(0xff); c.push(0xc1)
+    c.push(0xeb); c.push(0xee)
+    c.push(0x48); c.push(0x8d); c.push(0x04); c.push(0x0f)
+    c.push(0xc3)
+    c.push(0x31); c.push(0xc0)
+    c.push(0xc3)
+    return c
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// AArch64 strchr — 44 bytes, verbatim self/codegen/runtime_arm64.hexa::rt_strchr.
+// (x0=s w1=c -> x0=ptr|NULL.)
+// ═══════════════════════════════════════════════════════════════════
+fn arm64_strchr_bytes() -> [int] {
+    let mut c = []
+    // mov x2, #0  (index i)          0xD2800002
+    c.push(2); c.push(0); c.push(128); c.push(210)
+    // loop: ldrb w3, [x0, x2]        0x38626803
+    c.push(3); c.push(104); c.push(98); c.push(56)
+    // cmp w3, w1                     0x6B01007F
+    c.push(127); c.push(0); c.push(1); c.push(107)
+    // b.eq found (+4 instrs = +16)   0x54000080
+    c.push(128); c.push(0); c.push(0); c.push(84)
+    // cbz w3, notfound (+5 = +20)    0x340000A3
+    c.push(163); c.push(0); c.push(0); c.push(52)
+    // add x2, x2, #1                 0x91000442
+    c.push(66); c.push(4); c.push(0); c.push(145)
+    // b loop (-5 instrs = -20)       0x17FFFFFB
+    c.push(251); c.push(255); c.push(255); c.push(23)
+    // found: add x0, x0, x2          0x8B020000
+    c.push(0); c.push(0); c.push(2); c.push(139)
+    // ret                            0xD65F03C0
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    // notfound: mov x0, #0           0xD2800000
+    c.push(0); c.push(0); c.push(128); c.push(210)
+    // ret                            0xD65F03C0
+    c.push(192); c.push(3); c.push(95); c.push(214)
+    return c
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Little-endian byte writers + align (identical to the memcpy ELF emitter).
+// ═══════════════════════════════════════════════════════════════════
+fn align_to_v(val: int, align: int) -> int {
+    return (val + align - 1) / align * align
+}
+
+fn push_u16_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256)
+}
+
+fn push_u32_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256).push((val / 65536) % 256).push((val / 16777216) % 256)
+}
+
+fn push_u64_le_v(buf: [int], val: int) -> [int] {
+    let mut b = push_u32_le_v(buf, val % 0x100000000)
+    return push_u32_le_v(b, val / 0x100000000)
+}
+
+// Push "hxlcl_strchr" (12 bytes, no leading underscore for ELF).
+fn push_sym_name(buf: [int]) -> [int] {
+    let mut b = buf
+    b.push(104) // h
+    b.push(120) // x
+    b.push(108) // l
+    b.push(99)  // c
+    b.push(108) // l
+    b.push(95)  // _
+    b.push(115) // s
+    b.push(116) // t
+    b.push(114) // r
+    b.push(99)  // c
+    b.push(104) // h
+    b.push(114) // r
+    return b
+}
+
+// shstrtab — \0 ".text" \0 ".note.GNU-stack" \0 ".symtab" \0 ".strtab" \0 ".shstrtab" \0
+//   (49 bytes; names land at offsets 1 / 7 / 23 / 31 / 39).
+fn push_shstrtab(buf: [int]) -> [int] {
+    let mut b = buf
+    b.push(0)
+    // .text
+    b.push(46); b.push(116); b.push(101); b.push(120); b.push(116); b.push(0)
+    // .note.GNU-stack (marks the stack NON-executable)
+    b.push(46); b.push(110); b.push(111); b.push(116); b.push(101) // .note
+    b.push(46); b.push(71); b.push(78); b.push(85)                 // .GNU
+    b.push(45); b.push(115); b.push(116); b.push(97); b.push(99); b.push(107) // -stack
+    b.push(0)
+    // .symtab
+    b.push(46); b.push(115); b.push(121); b.push(109); b.push(116); b.push(97); b.push(98); b.push(0)
+    // .strtab
+    b.push(46); b.push(115); b.push(116); b.push(114); b.push(116); b.push(97); b.push(98); b.push(0)
+    // .shstrtab
+    b.push(46); b.push(115); b.push(104); b.push(115); b.push(116); b.push(114); b.push(116); b.push(97); b.push(98); b.push(0)
+    return b
+}
+
+// One Elf64_Shdr (64 bytes).
+fn push_shdr(buf: [int], name: int, typ: int, flags: int, off: int, size: int, link: int, info: int, addralign: int, entsize: int) -> [int] {
+    let mut b = buf
+    b = push_u32_le_v(b, name)
+    b = push_u32_le_v(b, typ)
+    b = push_u64_le_v(b, flags)
+    b = push_u64_le_v(b, 0)        // sh_addr
+    b = push_u64_le_v(b, off)
+    b = push_u64_le_v(b, size)
+    b = push_u32_le_v(b, link)
+    b = push_u32_le_v(b, info)
+    b = push_u64_le_v(b, addralign)
+    b = push_u64_le_v(b, entsize)
+    return b
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ELF64 ET_REL wrapper (sym name = "hxlcl_strchr" = 12 bytes).
+// Section indices: 0 NULL, 1 .text, 2 .note.GNU-stack, 3 .symtab,
+//                  4 .strtab, 5 .shstrtab.
+// ═══════════════════════════════════════════════════════════════════
+fn elf_obj_wrap(code: [int], e_machine: int) -> [int] {
+    let code_size = len(code)
+
+    let text_off = 64
+    let symtab_off = align_to_v(text_off + code_size, 8)
+    let symtab_size = 2 * 24
+    let strtab_off = symtab_off + symtab_size
+    let strtab_size = 1 + 12 + 1            // \0 hxlcl_strchr \0
+    let shstrtab_off = strtab_off + strtab_size
+    let shstrtab_size = 49
+    let shoff = align_to_v(shstrtab_off + shstrtab_size, 8)
+
+    let mut out = []
+
+    // ── Elf64_Ehdr ──
+    out.push(0x7f); out.push(0x45); out.push(0x4c); out.push(0x46)
+    out.push(2); out.push(1); out.push(1); out.push(0)
+    let mut p = 0
+    while p < 8 { out.push(0); p = p + 1 }
+    out = push_u16_le_v(out, 1)            // e_type = ET_REL
+    out = push_u16_le_v(out, e_machine)    // e_machine
+    out = push_u32_le_v(out, 1)            // e_version = EV_CURRENT
+    out = push_u64_le_v(out, 0)            // e_entry
+    out = push_u64_le_v(out, 0)            // e_phoff
+    out = push_u64_le_v(out, shoff)        // e_shoff
+    out = push_u32_le_v(out, 0)            // e_flags
+    out = push_u16_le_v(out, 64)           // e_ehsize
+    out = push_u16_le_v(out, 0)            // e_phentsize
+    out = push_u16_le_v(out, 0)            // e_phnum
+    out = push_u16_le_v(out, 64)           // e_shentsize
+    out = push_u16_le_v(out, 6)            // e_shnum
+    out = push_u16_le_v(out, 5)            // e_shstrndx
+
+    // ── .text ──
+    let mut k = 0
+    while k < len(code) { out.push(code[k]); k = k + 1 }
+    while len(out) < symtab_off { out.push(0) }
+
+    // ── .symtab ──
+    // sym[0] = NULL (24 zero bytes)
+    let mut z = 0
+    while z < 24 { out.push(0); z = z + 1 }
+    // sym[1] = hxlcl_strchr : st_name=1, st_info=(GLOBAL<<4|FUNC)=0x12,
+    //          st_other=0, st_shndx=1(.text), st_value=0, st_size=code_size
+    out = push_u32_le_v(out, 1)            // st_name -> strtab offset 1
+    out.push(0x12)                         // st_info: STB_GLOBAL<<4 | STT_FUNC
+    out.push(0)                            // st_other
+    out = push_u16_le_v(out, 1)            // st_shndx = .text
+    out = push_u64_le_v(out, 0)            // st_value
+    out = push_u64_le_v(out, code_size)    // st_size
+
+    // ── .strtab ──
+    out.push(0)
+    out = push_sym_name(out)
+    out.push(0)
+
+    // ── .shstrtab ──
+    out = push_shstrtab(out)
+
+    // pad to section header table
+    while len(out) < shoff { out.push(0) }
+
+    // ── section header table (6 entries) ──
+    out = push_shdr(out, 0, 0, 0, 0, 0, 0, 0, 0, 0)                          // [0] NULL
+    out = push_shdr(out, 1, 1, 6, text_off, code_size, 0, 0, 16, 0)          // [1] .text PROGBITS, ALLOC|EXEC
+    out = push_shdr(out, 7, 1, 0, 0, 0, 0, 0, 1, 0)                          // [2] .note.GNU-stack PROGBITS, size 0, flags 0
+    out = push_shdr(out, 23, 2, 0, symtab_off, symtab_size, 4, 1, 8, 24)     // [3] .symtab, link=.strtab(4), info=1(first global)
+    out = push_shdr(out, 31, 3, 0, strtab_off, strtab_size, 0, 0, 1, 0)      // [4] .strtab
+    out = push_shdr(out, 39, 3, 0, shstrtab_off, shstrtab_size, 0, 0, 1, 0)  // [5] .shstrtab
+
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Driver
+// ═══════════════════════════════════════════════════════════════════
+fn emit_hxlcl_strchr_elf_o() {
+    let arch = env_var("HEXA_SELFEMIT_ELF_ARCH")
+    println("[wire] RFC061 §M8 SELFEMIT ELF · hxlcl_strchr · arch=" + arch)
+
+    let mut code = []
+    let mut e_machine = 0
+    let mut want = 0
+    if arch == "x86_64" {
+        code = x86_strchr_bytes()
+        e_machine = 62
+        want = 29
+    } else if arch == "arm64" {
+        code = arm64_strchr_bytes()
+        e_machine = 183
+        want = 44
+    } else {
+        println("FAIL: HEXA_SELFEMIT_ELF_ARCH must be 'x86_64' or 'arm64' (got '" + arch + "')")
+        return
+    }
+
+    if len(code) != want {
+        println("FAIL: code expected " + to_string(want) + " bytes, got " + to_string(len(code)))
+        return
+    }
+    println("  code bytes     : " + to_string(len(code)) + " (" + to_string(want) + " expected)")
+
+    let obj = elf_obj_wrap(code, e_machine)
+    println("  obj_wrap size  : " + to_string(len(obj)) + " bytes total")
+
+    // ELFMAG sanity (0x7f 'E' 'L' 'F')
+    if obj[0] != 0x7f || obj[1] != 0x45 || obj[2] != 0x4c || obj[3] != 0x46 {
+        println("FAIL: ELFMAG mismatch")
+        return
+    }
+    if obj[4] != 2 || obj[5] != 1 {
+        println("FAIL: EI_CLASS/EI_DATA mismatch")
+        return
+    }
+    if obj[16] != 1 || obj[17] != 0 {
+        println("FAIL: e_type not ET_REL")
+        return
+    }
+    if obj[18] != (e_machine % 256) || obj[19] != ((e_machine / 256) % 256) {
+        println("FAIL: e_machine mismatch")
+        return
+    }
+    println("  ELFMAG + ELFCLASS64 + ET_REL + e_machine OK")
+
+    let out_path = env_var("HEXA_HXLCL_STRCHR_O")
+    let mut dest = out_path
+    if dest == "" { dest = "build/poc/hxlcl_strchr_elf.o" }
+    write_bytes(dest, obj)
+    println("  wrote          : " + dest)
+    println("[wire] EMIT OK — link via runtime.a with HEXA_RT_SELFEMIT_STRCHR=1")
+}
+
+emit_hxlcl_strchr_elf_o()

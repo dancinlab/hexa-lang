@@ -91,6 +91,15 @@ pub fn nn_moe_softmax(logits: int, probs_out: int, T: int, E: int) {
 pub fn nn_moe_router_fwd(logits: int, ex_out: int,
                          probs_out: int, y_out: int,
                          T: int, E: int, C: int) {
+    // HEXA-FUSION L3 (glue half) device-resident seam → _hx_cuda_farr_moe_router_gpu
+    // (per-t softmax replaying moe_lib's hand-rolled _moe_exp + sequential combine,
+    // one thread/t, NO tree re-assoc → bit-exact). Keeps probs_out + y_out
+    // DEVICE-RESIDENT. Same env gate; OFF / no-CUDA → rc=-1 → the host
+    // softmax+combine below UNCHANGED (byte-eq, proven by clm_prod_moe_block2_hostdispatch_eq).
+    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_moe_router(logits, ex_out, probs_out, y_out, T, E, C)
+        if rc == 0 { return }
+    }
     nn_moe_softmax(logits, probs_out, T, E)
     let mut t = 0
     while t < T {
@@ -118,6 +127,15 @@ pub fn nn_moe_router_fwd(logits: int, ex_out: int,
 pub fn nn_moe_router_bwd(probs: int, ex_out: int, dy: int,
                          dlogits_out: int, dex_out: int,
                          T: int, E: int, C: int) {
+    // HEXA-FUSION L3 (BWD glue half) device-resident seam → _hx_cuda_farr_moe_router_bwd_gpu
+    // (reads CACHED probs — no _moe_exp replay; per-t 2-pass over E with inner Σ_c,
+    // one thread/t, sequential → bit-exact). Keeps dlogits_out + dex_out
+    // DEVICE-RESIDENT. Same env gate; OFF / no-CUDA → rc=-1 → the host 2-pass below
+    // UNCHANGED (byte-eq, dispatcher host body == this loop, max|Δ|=0).
+    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_moe_router_bwd(probs, ex_out, dy, dlogits_out, dex_out, T, E, C)
+        if rc == 0 { return }
+    }
     let mut t = 0
     while t < T {
         // dex_out + dgate

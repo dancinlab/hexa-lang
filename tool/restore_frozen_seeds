@@ -162,6 +162,83 @@ if [ -f "$_RT_EMIT" ]; then
   fi
   rm -f "$_rttmp"
 fi
+# ── zero-c FRAG-REGEN (ING #29) — SOURCE the 6 native-fragment .c from emitter SSOTs ─
+# Generalizes the runtime.c M3 block above to the six self/native/<X>.c fragments that
+# have a .hexa string-emitter SSOT: mount · namespace · signal_flock · proc_fork · term_ffi
+# · tensor_kernels. MEASURED root-cause (state/zeroc-flip-measure-2026-07-03.txt): the frozen
+# 151c52c82 blobs restored above ship raw libc (flock/mount/unshare/setns/umount2/sigaddset/
+# getppid/setsid/sigemptyset/syscall) even though each _emit.hexa SSOT carries native wiring
+# (#4371/#4373/#4385/#4387/#4377) — restore serves the frozen blob and no regen block overwrites
+# it (Zone B exists only for runtime.c). This block un-escapes each _emit.hexa string body to
+# its .c, the frag-family generalization of the runtime.c synth.
+# Each emitter builds the body as ONE leading-quote concat chain (distinct from runtime.c's
+# `buf = buf + "..."` form): `    let s =` … `            "<hexa-escaped C line>\n" +` … `    return s`.
+# Escape alphabet is provably CLOSED at exactly { \n , \" , \\ } (census 1324/86/16). The awk
+# scans char-by-char L->R and consumes \\ ATOMICALLY, so `\\0`/`\\r`/`\\n` become the C-source
+# text `\0`/`\r`/`\n` (backslash+letter), NOT NUL/CR/LF — a naive gsub would corrupt them.
+# Refs contain RAW UTF-8 (box-drawing/em-dash banners) so the awk runs LC_ALL=C (byte-oriented).
+# VERIFIED byte-identical to `hexa run <emit>` for all 6 (ghost gnu awk + BSD awk;
+# state/zeroc-fragregen-fable-full-2026-07-03.md GATE A 6/6).
+# Default-OFF (unset/0 => body never runs => Zone-A frozen blobs untouched => every downstream
+# ZEROC-*/ING#2 patch sees today's exact frozen text => byteeq-neutral). Belt-and-suspenders in
+# ON: synth to mktemp, per-frag SENTINEL grep, cmp-skip no-op, and on awk-fail/empty/sentinel-miss
+# KEEP the restored frozen .c (NO-OP-SAFE, same shape as the runtime.c synth). Flip default-ON only
+# after the ghost cmp gate (GATE A 6/6 awk==hexa-run) + byteeq 3-target + faithful GREEN.
+if [ "${HEXA_ZEROC_FRAG_REGEN:-1}" = "1" ]; then
+  _FRAG_SPEC='
+mount|self/native/mount_emit.hexa|native/mount.c
+namespace|self/native/namespace_emit.hexa|CLONE_NEWNS
+signal_flock|self/native/signal_flock_emit.hexa|hexa_os_flock_open
+proc_fork|self/native/proc_fork_emit.hexa|hexa_proc_fork
+term_ffi|self/native/term_ffi_emit.hexa|term_getppid
+tensor_kernels|self/native/tensor_kernels_emit.hexa|hexa_tensor_randn
+'
+  printf '%s\n' "$_FRAG_SPEC" | while IFS='|' read -r _fname _femit _fsent; do
+    [ -n "$_fname" ] || continue
+    _fdst="self/native/${_fname}.c"
+    if [ ! -f "$_femit" ]; then
+      echo "[restore_frozen_seeds] zero-c FRAG-REGEN: $_femit absent — kept FROZEN $_fdst (NO-OP-SAFE fallback)" >&2
+      continue
+    fi
+    _ftmp="$(mktemp -t regen_frag_${_fname}.XXXXXX)" || _ftmp=""
+    [ -n "$_ftmp" ] || { echo "[restore_frozen_seeds] zero-c FRAG-REGEN: mktemp failed for $_fname — kept FROZEN $_fdst" >&2; continue; }
+    if LC_ALL=C awk '
+        BEGIN { inblock = 0; saw = 0 }
+        /^    let s =$/   { inblock = 1; next }
+        /^    return s$/  { inblock = 0; next }
+        inblock {
+          line = $0
+          sub(/^[[:space:]]*"/, "", line)
+          sub(/"[[:space:]]*\+?[[:space:]]*$/, "", line)
+          saw = 1
+          out = ""; n = length(line); i = 1
+          while (i <= n) {
+            c = substr(line, i, 1)
+            if (c == "\\" && i < n) {
+              e = substr(line, i + 1, 1)
+              if      (e == "n")  { out = out "\n"; i += 2 }
+              else if (e == "\"") { out = out "\""; i += 2 }
+              else if (e == "\\") { out = out "\\"; i += 2 }
+              else                { out = out e;    i += 2 }
+            } else { out = out c; i += 1 }
+          }
+          printf "%s", out
+        }
+        END { if (!saw) exit 3 }
+      ' "$_femit" > "$_ftmp" 2>/dev/null \
+       && [ -s "$_ftmp" ] && LC_ALL=C grep -q "$_fsent" "$_ftmp"; then
+      if ! cmp -s "$_ftmp" "$_fdst"; then
+        cp -f "$_ftmp" "$_fdst"
+        echo "[restore_frozen_seeds] zero-c FRAG-REGEN: ${_fname}.c SYNTHESIZED from emitter SSOT (awk un-escape, $(wc -l < "$_fdst") lines, hexat-free) — frozen blob was fallback"
+      else
+        echo "[restore_frozen_seeds] zero-c FRAG-REGEN: ${_fname}.c already byte-identical to emitter SSOT — no-op (frozen-blob-independent)"
+      fi
+    else
+      echo "[restore_frozen_seeds] zero-c FRAG-REGEN: ${_fname}.c emitter synth unavailable/sentinel-miss — kept FROZEN (NO-OP-SAFE fallback)" >&2
+    fi
+    rm -f "$_ftmp"
+  done
+fi
 # ── OP-17 (HEXA-0POD) — -Wmacro-redefined hygiene patch ──────────────────────
 # The frozen self/runtime.c #defines 9 libc names (strcat/bzero/memcpy/memset/
 # memmove/strncpy/strcpy/snprintf/sprintf) that Darwin clang's _FORTIFY_SOURCE
@@ -301,6 +378,133 @@ if [ -f "$rt" ] && ! grep -q 'HXFARR_CALLOC' "$rt"; then
   _hxf_n=$(grep -c 'HXFARR_FREE(e->buf)' "$rt")
   _hxf_c=$(grep -c 'HXFARR_CALLOC((size_t)n' "$rt")
   echo "[restore_frozen_seeds] FARR-NOOP-FREE: routed farr buffers to libc (calloc=$_hxf_c free=$_hxf_n) in $rt"
+fi
+
+# ── ZEROC-LIBM Box-Muller — route hexa_tensor_randn off libm sqrt/log/cos (post-restore) ─
+# @convergence(state="ossified", id="ZEROC-LIBM-BOXMULLER")
+# tensor_kernels.c is a FROZEN_SEED (restored above) with NO regen-from-emitter block (unlike
+# runtime.c at the awk synthesis above), so its single bare-libm line — the hexa_tensor_randn
+# float32 Box-Muller `(float)(sqrt(-2.0*log(u)) * cos(2pi*w))` — is routed here (post-restore,
+# same precedent as OP-17 / FARR-NOOP-FREE / gemm-perf) to the native _hx_sqrt / hxlcl_log
+# (-> rt_log) / _hx_cos. All three are in scope: tensor_kernels.c is #include'd into runtime.c
+# at :14158, AFTER the _hx_sqrt / _hx_cos definitions and the hxlcl_log forward-decl. Drops the
+# last libm cos/sqrt/log from the default ship (zero-c #29). The SSOT is ALSO updated in
+# self/native/tensor_kernels_emit.hexa (currently inert — no regen block — but kept in lockstep).
+# Idempotent: the _hx_cos marker guards against double-apply (and the sed is a no-op if absent).
+_tk="self/native/tensor_kernels.c"
+if [ -f "$_tk" ] && ! grep -q '_hx_cos(6.28318530718' "$_tk"; then
+  sed -i.hxbmbak 's|(float)(sqrt(-2\.0\*log(u)) \* cos(6\.28318530718\*w))|(float)(_hx_sqrt(-2.0*hxlcl_log(u)) * _hx_cos(6.28318530718*w))|' "$_tk" && rm -f "$_tk.hxbmbak"
+  echo "[restore_frozen_seeds] ZEROC-LIBM: routed hexa_tensor_randn Box-Muller off libm sqrt/log/cos in $_tk"
+fi
+
+# ── ZEROC-RAND — gate hexa_tensor_randn PRNG onto hxlcl_rand (post-restore, SSOT lockstep) ─
+# tensor_kernels.c is a FROZEN_SEED with NO regen-from-emitter block, so its two
+# `double u/w = (rand()+1.0)/(RAND_MAX+1.0)` lines ship RAW libc rand() — the last libc rand
+# in the default runtime.a. Gate them onto hxlcl_rand (the native Knuth-MMIX LCG, static in this
+# TU, defined at runtime_emit_full ~4856 BEFORE this include) behind HEXA_ZEROC_RAND_NATIVE
+# (default-OFF), same post-restore precedent as ZEROC-LIBM above. flag-OFF => preprocessed
+# expansion identical (rand()) => object-byte-neutral; flag-ON => hxlcl_rand (divisor
+# RAND_MAX+1.0 == 2147483648.0 on glibc, so ON is numerically the intended stream). The SSOT
+# self/native/tensor_kernels_emit.hexa carries the same #ifdef in lockstep. Idempotent: the
+# HEXA_ZEROC_RAND_NATIVE marker guards double-apply. Flip default-ON only after byteeq 3-target
+# + faithful-nobaseline + shipping smoke GREEN.
+if [ -f "$_tk" ] && ! grep -q 'HEXA_ZEROC_RAND_NATIVE' "$_tk"; then
+  awk '
+    /double u = \(rand\(\)\+1\.0\)\/\(RAND_MAX\+1\.0\);/ && !done {
+      print "#if defined(HEXA_ZEROC_RAND_NATIVE) || (defined(__linux__) && !defined(HEXA_ZEROC_RAND_NATIVE_OFF))"
+      print "        double u = (hxlcl_rand()+1.0)/(2147483648.0);"
+      print "        double w = (hxlcl_rand()+1.0)/(2147483648.0);"
+      print "#else"
+      print $0
+      getline; print $0
+      print "#endif"
+      done=1; next
+    }
+    { print }
+  ' "$_tk" > "$_tk.zrbak" && mv "$_tk.zrbak" "$_tk"
+  echo "[restore_frozen_seeds] ZEROC-RAND: gated hexa_tensor_randn PRNG onto hxlcl_rand (HEXA_ZEROC_RAND_NATIVE, default-OFF) in $_tk"
+fi
+
+# ── ZEROC-GETPPID — gate frozen term_ffi.c term_getppid onto hxlcl_getppid (post-restore) ─
+# term_ffi.c is a FROZEN_SEED with NO regen-from-emitter block, so its `return (int)getppid();`
+# ships RAW libc getppid() even though the SSOT emitter (term_ffi_emit.hexa:213) already routes to
+# hxlcl_getppid (#4373). Gate it onto the native raw-svc hxlcl_getppid (defined at runtime_emit_full
+# ~1824/2927 BEFORE the term_ffi.c include ~15382) behind HEXA_ZEROC_PROC_SC0_RAW (default-OFF), same
+# post-restore precedent as ZEROC-RAND above. getppid cannot fail, takes no args, and hxlcl_getppid
+# returns the identical ppid via raw NR 110/173 (darwin uses its platform svc-trap; on !linux the
+# gate is inert since the flag is only flipped on linux targets) — so flag-ON is value-identical, no
+# errno path. flag-OFF => preprocessed expansion identical (getppid()) => object-byte-neutral.
+# Idempotent: the HEXA_ZEROC_PROC_SC0_RAW marker guards double-apply. Flip default-ON only after
+# byteeq 3-target + faithful-nobaseline + shipping smoke GREEN.
+_tf="self/native/term_ffi.c"
+if [ -f "$_tf" ] && ! grep -q 'HEXA_ZEROC_PROC_SC0_RAW' "$_tf"; then
+  awk '
+    /^    return \(int\)getppid\(\);$/ && !done {
+      print "#ifdef HEXA_ZEROC_PROC_SC0_RAW"
+      print "    return (int)hxlcl_getppid();"
+      print "#else"
+      print $0
+      print "#endif"
+      done=1; next
+    }
+    { print }
+  ' "$_tf" > "$_tf.zgbak" && mv "$_tf.zgbak" "$_tf"
+  echo "[restore_frozen_seeds] ZEROC-GETPPID: gated term_getppid onto hxlcl_getppid (HEXA_ZEROC_PROC_SC0_RAW, default-OFF) in $_tf"
+fi
+
+# ── ZEROC-SETSID — gate frozen proc_fork.c hexa_proc_setsid onto hxlcl_setsid (post-restore) ─
+# proc_fork.c is a FROZEN_SEED with NO regen-from-emitter block, so its `pid_t sid = setsid();`
+# ships RAW libc setsid() even though the SSOT emitter (proc_fork_emit.hexa:54) already routes to
+# hxlcl_setsid (#4373). Same HEXA_ZEROC_PROC_SC0_RAW gate as ZEROC-GETPPID (the proc-sc family flips
+# together). CRITICAL errno handling: the active raw-svc hxlcl_setsid (runtime_emit_full ~2928/2931)
+# returns `sid or -errno` WITHOUT setting the libc errno global — so the frozen `-errno` branch would
+# read a STALE errno. The ON branch therefore returns the raw `sid` (already -errno on failure)
+# directly, preserving the caller's `-errno`-on-failure contract. flag-OFF => preprocessed expansion
+# identical (setsid()+errno) => object-byte-neutral. Idempotent: the marker (already grep'd for
+# term_ffi.c above, but proc_fork.c is a distinct file) guards double-apply. Flip default-ON only
+# after byteeq 3-target + faithful-nobaseline + shipping smoke GREEN.
+_pf="self/native/proc_fork.c"
+if [ -f "$_pf" ] && ! grep -q 'HEXA_ZEROC_PROC_SC0_RAW' "$_pf"; then
+  awk '
+    /^    pid_t sid = setsid\(\);$/ && !done {
+      print "#ifdef HEXA_ZEROC_PROC_SC0_RAW"
+      print "    pid_t sid = hxlcl_setsid();"
+      print "    if (sid < 0) return hexa_int((int64_t)sid);"
+      print "    return hexa_int((int64_t)sid);"
+      print "#else"
+      print $0
+      getline; print $0
+      getline; print $0
+      print "#endif"
+      done=1; next
+    }
+    { print }
+  ' "$_pf" > "$_pf.zsbak" && mv "$_pf.zsbak" "$_pf"
+  echo "[restore_frozen_seeds] ZEROC-SETSID: gated hexa_proc_setsid onto hxlcl_setsid (HEXA_ZEROC_PROC_SC0_RAW, default-OFF) in $_pf"
+fi
+
+# ── ZEROC-SIGSET — gate frozen term_ffi.c sigemptyset calls onto hxlcl_sigemptyset (post-restore) ─
+# term_ffi.c is a FROZEN_SEED with two `sigemptyset(&sa.sa_mask);` calls shipping RAW libc even though
+# the SSOT emitter (term_ffi_emit.hexa) already spells hxlcl_sigemptyset (#4371). On linux
+# hxlcl_sigemptyset is the native word-indexed bitset (runtime_emit_full ~2898, `#if __linux__`; the
+# `#else` #define aliases to libc on darwin) with identical semantics (zero the sigset, return 0),
+# defined BEFORE the term_ffi.c include. Gate both calls behind HEXA_ZEROC_SIGSET_NATIVE (default-OFF).
+# flag-OFF => preprocessed expansion identical (sigemptyset) => object-byte-neutral. NO `!done` — both
+# occurrences are patched; the HEXA_ZEROC_SIGSET_NATIVE marker guards double-apply. Flip default-ON
+# only after byteeq 3-target + faithful-nobaseline + shipping smoke GREEN.
+if [ -f "$_tf" ] && ! grep -q 'HEXA_ZEROC_SIGSET_NATIVE' "$_tf"; then
+  awk '
+    /^    sigemptyset\(&sa\.sa_mask\);$/ {
+      print "#ifdef HEXA_ZEROC_SIGSET_NATIVE"
+      print "    hxlcl_sigemptyset(&sa.sa_mask);"
+      print "#else"
+      print $0
+      print "#endif"
+      next
+    }
+    { print }
+  ' "$_tf" > "$_tf.zsgbak" && mv "$_tf.zsgbak" "$_tf"
+  echo "[restore_frozen_seeds] ZEROC-SIGSET: gated 2 sigemptyset calls onto hxlcl_sigemptyset (HEXA_ZEROC_SIGSET_NATIVE, default-OFF) in $_tf"
 fi
 
 # ── DEVRESIDENT adamw dirty_host coherence (frozen-train fix, post-restore) ───
@@ -1461,7 +1665,7 @@ if [ -f "$rt" ] && ! grep -q 'OP-19e (HEXA-0POD' "$rt"; then
       print "extern char **environ;"
       print "static char **hxlcl_environ = 0;"
       print "__attribute__((constructor(101)))"
-      print "static void hxlcl_capture_environ(void) { hxlcl_environ = environ; }"
+      print "static void hxlcl_capture_environ(void) { if (!hxlcl_environ) hxlcl_environ = environ; }"
       print "#define environ hxlcl_environ"
       skip=1; patched=1; next
     }
@@ -1775,6 +1979,14 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_matmul_batched(HexaVal a_v, Hex
         return hexa_int(-1);
     if (!_hx_farr_table[c_id].buf || _hx_farr_table[c_id].len < batch * M * N)
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_matmul_batched_gpu(int64_t, int64_t, int64_t,
+                                                    int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_matmul_batched_gpu(a_id, M, K, b_id, N, batch, c_id);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     for (int64_t g = 0; g < batch; g++) {
         HexaVal ag_h = hexa_farr_zeros(hexa_int(M * K));
         int64_t ag_id = HX_INT(ag_h);
@@ -2083,6 +2295,13 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_residual_add(HexaVal a_v, HexaV
     int64_t o = hexa_as_num(out_v), n = hexa_as_num(n_v);
     if (n <= 0 || !_OP37_FA(a, n) || !_OP37_FA(b, n) || !_OP37_FA(o, n))
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_residual_add_gpu(int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_residual_add_gpu(a, b, o, n);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* A = _hx_farr_table[a].buf;
     double* B = _hx_farr_table[b].buf;
     double* O = _hx_farr_table[o].buf;
@@ -2132,6 +2351,13 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_expert_pack2(HexaVal ex0_v, Hex
     int64_t eo = hexa_as_num(exo_v), n = hexa_as_num(n_v);
     if (n <= 0 || !_OP37_FA(e0, n) || !_OP37_FA(e1, n) || !_OP37_FA(eo, 2 * n))
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_expert_pack2_gpu(int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_expert_pack2_gpu(e0, e1, eo, n);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* E0 = _hx_farr_table[e0].buf;
     double* E1 = _hx_farr_table[e1].buf;
     double* EO = _hx_farr_table[eo].buf;
@@ -2174,6 +2400,13 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_embedding(HexaVal ids_v, HexaVa
         return hexa_int(-1);
     if (tab < 0 || tab >= _hx_farr_count || !_hx_farr_table[tab].buf)
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_embedding_gpu(int64_t, int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_embedding_gpu(ids, tab, out, T, d);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* IDS = _hx_farr_table[ids].buf;
     double* TAB = _hx_farr_table[tab].buf;
     int64_t tablen = _hx_farr_table[tab].len;
@@ -2208,6 +2441,15 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_groupnorm(HexaVal x_v, HexaVal 
     if (!_OP37_FA(x, n) || !_OP37_FA(y, n) || !_OP37_FA(xh, n) ||
         !_OP37_FA(gm, C) || !_OP37_FA(bt, C) ||
         !_OP37_FA(mn, G) || !_OP37_FA(iv, G))               return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_groupnorm_gpu(int64_t, int64_t, int64_t,
+                                               int64_t, int64_t, int64_t,
+                                               int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_groupnorm_gpu(x, gm, bt, y, mn, iv, xh, T, C, G);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* X = _hx_farr_table[x].buf;
     double* GM = _hx_farr_table[gm].buf;
     double* BT = _hx_farr_table[bt].buf;
@@ -2274,6 +2516,14 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_moe_router(HexaVal logits_v, He
     if (T <= 0 || E <= 0 || C <= 0)                         return hexa_int(-1);
     if (!_OP37_FA(lg, T * E) || !_OP37_FA(pr, T * E) ||
         !_OP37_FA(eo, E * T * C) || !_OP37_FA(y, T * C))    return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_moe_router_gpu(int64_t, int64_t, int64_t,
+                                                int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_moe_router_gpu(lg, eo, pr, y, T, E, C);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* LG = _hx_farr_table[lg].buf;
     double* EO = _hx_farr_table[eo].buf;
     double* PR = _hx_farr_table[pr].buf;
@@ -2420,6 +2670,13 @@ static double _op38_qabs(double x) { return x < 0.0 ? (0.0 - x) : x; }
 HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_gelu(HexaVal in_v, HexaVal out_v, HexaVal n_v) {
     int64_t in = hexa_as_num(in_v), out = hexa_as_num(out_v), n = hexa_as_num(n_v);
     if (n <= 0 || !_OP38_FA(in, n) || !_OP38_FA(out, n))    return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_gelu_gpu(int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_gelu_gpu(in, out, n);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* IN = _hx_farr_table[in].buf;
     double* O  = _hx_farr_table[out].buf;
     for (int64_t i = 0; i < n; i++) O[i] = _op18_gelu(IN[i]);
@@ -2437,6 +2694,13 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_gelu_bwd(HexaVal g_v, HexaVal d
     int64_t dg = hexa_as_num(dg_v), n = hexa_as_num(n_v);
     if (n <= 0 || !_OP38_FA(g, n) || !_OP38_FA(da, n) || !_OP38_FA(dg, n))
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_gelu_bwd_gpu(int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_gelu_bwd_gpu(g, da, dg, n);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* G  = _hx_farr_table[g].buf;
     double* DA = _hx_farr_table[da].buf;
     double* DG = _hx_farr_table[dg].buf;
@@ -2566,6 +2830,16 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_groupnorm_bwd(HexaVal xhat_v, H
     if (!_OP38_FA(xh, n) || !_OP38_FA(dy, n) || !_OP38_FA(dx, n) ||
         !_OP38_FA(gm, C) || !_OP38_FA(dgm, C) || !_OP38_FA(dbt, C) ||
         !_OP38_FA(iv, G))                                   return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_groupnorm_bwd_gpu(int64_t, int64_t, int64_t,
+                                                   int64_t, int64_t, int64_t,
+                                                   int64_t, int64_t, int64_t,
+                                                   int64_t);
+        int grc = _hx_cuda_farr_groupnorm_bwd_gpu(xh, iv, gm, dy, dgm, dbt, dx, T, C, G);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* XH = _hx_farr_table[xh].buf;
     double* IV = _hx_farr_table[iv].buf;
     double* GM = _hx_farr_table[gm].buf;
@@ -2630,6 +2904,15 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_moe_router_bwd(HexaVal probs_v,
     if (!_OP38_FA(pr, T * E) || !_OP38_FA(dl, T * E) ||
         !_OP38_FA(eo, E * T * C) || !_OP38_FA(dy, T * C) ||
         !_OP38_FA(dex, E * T * C))                          return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_moe_router_bwd_gpu(int64_t, int64_t, int64_t,
+                                                    int64_t, int64_t, int64_t,
+                                                    int64_t, int64_t);
+        int grc = _hx_cuda_farr_moe_router_bwd_gpu(pr, eo, dy, dl, dex, T, E, C);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* PR = _hx_farr_table[pr].buf;
     double* EO = _hx_farr_table[eo].buf;
     double* DY = _hx_farr_table[dy].buf;
@@ -2677,6 +2960,13 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_embedding_bwd_scatter(HexaVal d
     if (!_OP38_FA(dx, T * d) || !_OP38_FA(ids, T))          return hexa_int(-1);
     if (dt < 0 || dt >= _hx_farr_count || !_hx_farr_table[dt].buf)
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_embedding_bwd_scatter_gpu(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_embedding_bwd_scatter_gpu(dx, ids, dt, T, d, V);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* DX = _hx_farr_table[dx].buf;
     double* IDS = _hx_farr_table[ids].buf;
     double* DT = _hx_farr_table[dt].buf;

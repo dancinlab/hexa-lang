@@ -64,6 +64,10 @@ jobs:
     timeout-minutes: 5
     outputs:
       linux_label: ${{ steps.linux.outputs.label }}
+      # darwin picker: ghost-selfhost (arm64 gen2_fix slot) when online + same-
+      # repo, else the free GitHub-hosted macos-15. The three faithful/smoke
+      # darwin jobs consume it via fromJSON — ghost-offline never wedges them.
+      darwin_label: ${{ steps.darwin.outputs.label }}
     steps:
       - uses: actions/checkout@v6
       - id: linux
@@ -72,7 +76,22 @@ jobs:
           kind: linux
           # self-hosted only for same-repo events; fork PRs → GitHub-hosted.
           eligible: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
-          token: ${{ github.token }}
+          # administration:read PAT (self-hosted runners list needs it; the
+          # default github.token CANNOT carry that scope → empty list → blind
+          # fallback). Absent secret → `|| github.token` = today's harmless
+          # macos-15 fallback; present → routing goes live. See PR/root-cause.
+          token: ${{ secrets.RUNNER_PROBE_TOKEN || github.token }}
+      - id: darwin
+        uses: ./.github/actions/pick-runner
+        with:
+          kind: darwin
+          # self-hosted only for same-repo events; fork PRs → GitHub-hosted.
+          eligible: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
+          # administration:read PAT (self-hosted runners list needs it; the
+          # default github.token CANNOT carry that scope → empty list → blind
+          # fallback). Absent secret → `|| github.token` = today's harmless
+          # macos-15 fallback; present → routing goes live. See PR/root-cause.
+          token: ${{ secrets.RUNNER_PROBE_TOKEN || github.token }}
 
   # ── faithful-nobaseline — the authoritative seed-removed release-safety gate.
   #
@@ -86,7 +105,8 @@ jobs:
   # shared definition.
   faithful-nobaseline-darwin-arm64:
     name: faithful-nobaseline (darwin-arm64)
-    runs-on: macos-15
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.darwin_label) }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
@@ -120,6 +140,13 @@ jobs:
           LIBS: ""
           GH_TOKEN: ${{ github.token }}
           HEXA_CCACHE: "1"
+          # FAITHFUL preserves the edge baseline byte-for-byte → opt OUT of the
+          # ship-default seed-convergence (release_build defaults it to 1). The
+          # convergence is a deterministic fixpoint, so release-converged ≡
+          # faithful-unconverged for every assertion below; this keeps the
+          # historical darwin-arm64 faithful path byte-identical (the stage
+          # comment's documented caveat).
+          HEXA_SEED_CONVERGE: "0"
         run: bash tool/release_build
 
       - name: ccache stats
@@ -258,6 +285,11 @@ jobs:
       # ── SINGLE-JOB-FAITHFUL — same shared release_build + release_package the
       # real release runs, with seeds removed. Dynamic seed-removed run of the
       # real release path (no separate copy). See darwin job for full rationale.
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
       - name: Build — shared release_build (seeds removed, edge-pull)
         shell: bash
         env:
@@ -265,7 +297,42 @@ jobs:
           CC: gcc
           LIBS: "-lm -ldl"
           GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
+          # FAITHFUL: opt OUT of ship-default seed-convergence (see darwin job).
+          HEXA_SEED_CONVERGE: "0"
         run: bash tool/release_build
+
+      - name: nm-UND floor dump — RFC061 zero-c authoritative reducible libc (advisory)
+        if: always()
+        shell: bash
+        run: |
+          # RFC061 §M8 frozen-flip prerequisite: emit the DEFAULT build's undefined-libc
+          # floor so the reducible set is measurable from the CI log (mini cannot build;
+          # ad-hoc pool release_build/build_selfhost miss env → authoritative measurement
+          # is CI-harness-bound). Advisory only (never gates). SSOT: memory
+          # project_hexa_functional_zeroc_libc_floor_census.
+          RT="$(find build . -name runtime.a 2>/dev/null | head -1)"
+          echo "runtime.a: $RT ($(stat -c%s "$RT" 2>/dev/null || echo 0) bytes)"
+          if [ -f "$RT" ]; then
+            echo "=== RFC061 nm-UND reducible libc floor (sanctioned FFI/CRT/hexa-own/cuda excluded) ==="
+            nm -u "$RT" 2>/dev/null | awk '{print $2}' | sort -u \
+              | grep -vE '^(_hx_|__hexa|__hx_|__blk_|rt_|hexa_|_hexa|hxlcl_|_GLOBAL)' \
+              | grep -vE 'cuda|fatbin' \
+              | grep -vE '^(accept|bind|connect|listen|socket|recv|recvfrom|send|sendto|setsockopt|getsockopt|getaddrinfo|freeaddrinfo|gai_strerror|dlopen|dlsym|dlclose|dlerror|dladdr)' \
+              | grep -vE '^(__libc_|_exit|atexit|environ|mallopt|__cxa|__errno_location|__stack_chk|__assert)' \
+              | grep -vE '^(execve|execvp|setns|unshare|mount|umount2?|posix_spawn|opendir|readdir|closedir|glob|globfree|mkstemp|mkdtemp)' \
+              | grep -vE '^(qsort|rand|srand|strtod|strtof|strtold)' \
+              | tr '\n' ' '
+            echo ""
+            echo "=== RFC061 nm-UND TOTAL undefined: $(nm -u "$RT" 2>/dev/null | awk '{print $2}' | sort -u | wc -l) ==="
+          else
+            echo "(no runtime.a found — nm-UND dump skipped)"
+          fi
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
 
       - name: Assert — ./hexa runs with seeds removed
         shell: bash
@@ -348,6 +415,8 @@ jobs:
           LIBS: "-lm -ldl"
           GH_TOKEN: ${{ github.token }}
           HEXA_CCACHE: "1"
+          # FAITHFUL: opt OUT of ship-default seed-convergence (see darwin job).
+          HEXA_SEED_CONVERGE: "0"
         run: bash tool/release_build
 
       - name: ccache stats
@@ -433,7 +502,8 @@ jobs:
   # tracked `.c`=0 are untouched.
   selfemit-livelink-smoke-darwin-arm64:
     name: SELFEMIT live-link smoke (darwin-arm64, advisory)
-    runs-on: macos-15
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.darwin_label) }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -599,7 +669,8 @@ jobs:
   # shipping binaries + byteeq + tracked `.c`=0 are untouched.
   routec-cabi-smoke-darwin-arm64:
     name: Route C ON-path emit smoke (darwin-arm64, advisory)
-    runs-on: macos-15
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.darwin_label) }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6

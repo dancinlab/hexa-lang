@@ -33,14 +33,19 @@ fn _at_prefix(name: str) -> str {
 // the registry to find `owner` and calls _cwd_project() for `cur`; here both are
 // passed in. Returns 1 = REFUSE (cross-project), 0 = ALLOW. force is intentionally
 // NOT consulted (the @convergence CLOUD-CROSSPROJECT-FORCE invariant: --force is a
-// confirm-skip, NOT a cross-project license).
-fn _guard_refuses(stored_project: str, cwd_project: str) -> int {
+// confirm-skip, NOT a cross-project license). `override_xproj` (--yes-cross-project)
+// is the ING #34-(C) EXPLICIT escape for a cost-leaking pod unreachable from its
+// owner repo — it, and ONLY it (never --force), allows a real cross-project kill.
+fn _guard_refuses(stored_project: str, cwd_project: str, override_xproj: int) -> int {
     let owner = _at_prefix(stored_project)
     if len(owner) == 0 || owner == "@unattributed" {
         return 0
     }
     let cur = _at_prefix(cwd_project)
     if owner == cur {
+        return 0
+    }
+    if override_xproj == 1 {
         return 0
     }
     return 1
@@ -56,21 +61,30 @@ fn _ck(name: str, got: int, want: int) {
 
 fn main() {
     // ── the regression: stored `@rtsc` vs cwd `rtsc` is the SAME project ──
-    _ck("@rtsc stored vs rtsc cwd → ALLOW", _guard_refuses("@rtsc", "rtsc"), 0)
+    _ck("@rtsc stored vs rtsc cwd → ALLOW", _guard_refuses("@rtsc", "rtsc", 0), 0)
     // symmetric: a legacy bare-stored tag vs an `@`-cwd also matches.
-    _ck("rtsc stored vs @rtsc cwd → ALLOW", _guard_refuses("rtsc", "@rtsc"), 0)
-    _ck("both bare → ALLOW",                _guard_refuses("rtsc", "rtsc"), 0)
-    _ck("both @ → ALLOW",                   _guard_refuses("@rtsc", "@rtsc"), 0)
+    _ck("rtsc stored vs @rtsc cwd → ALLOW", _guard_refuses("rtsc", "@rtsc", 0), 0)
+    _ck("both bare → ALLOW",                _guard_refuses("rtsc", "rtsc", 0), 0)
+    _ck("both @ → ALLOW",                   _guard_refuses("@rtsc", "@rtsc", 0), 0)
 
     // ── genuine cross-project teardowns STILL refuse (safety preserved) ──
-    _ck("@rtsc vs demiurge → REFUSE",  _guard_refuses("@rtsc", "demiurge"), 1)
-    _ck("@rtsc vs @demiurge → REFUSE", _guard_refuses("@rtsc", "@demiurge"), 1)
-    _ck("rtsc vs demiurge → REFUSE",   _guard_refuses("rtsc", "demiurge"), 1)
+    _ck("@rtsc vs demiurge → REFUSE",  _guard_refuses("@rtsc", "demiurge", 0), 1)
+    _ck("@rtsc vs @demiurge → REFUSE", _guard_refuses("@rtsc", "@demiurge", 0), 1)
+    _ck("rtsc vs demiurge → REFUSE",   _guard_refuses("rtsc", "demiurge", 0), 1)
 
     // ── unattributed / empty stored project → ALLOW (no attribution to guard) ──
-    _ck("empty stored → ALLOW",            _guard_refuses("", "rtsc"), 0)
-    _ck("@unattributed stored → ALLOW",    _guard_refuses("@unattributed", "rtsc"), 0)
-    _ck("bare unattributed → ALLOW",       _guard_refuses("unattributed", "rtsc"), 0)
+    _ck("empty stored → ALLOW",            _guard_refuses("", "rtsc", 0), 0)
+    _ck("@unattributed stored → ALLOW",    _guard_refuses("@unattributed", "rtsc", 0), 0)
+    _ck("bare unattributed → ALLOW",       _guard_refuses("unattributed", "rtsc", 0), 0)
+
+    // ── ING #34-(C): the EXPLICIT --yes-cross-project escape allows a real
+    //    cross-project teardown (a cost-leaking pod unreachable from its owner
+    //    repo must never be un-killable). --force alone (override_xproj=0 above)
+    //    still refuses — the escape is a SEPARATE, deliberate flag.
+    _ck("@rtsc vs demiurge +xproj → ALLOW",  _guard_refuses("@rtsc", "demiurge", 1), 0)
+    _ck("@rtsc vs @demiurge +xproj → ALLOW", _guard_refuses("@rtsc", "@demiurge", 1), 0)
+    // same-project with the escape set is still ALLOW (escape is a no-op there).
+    _ck("@rtsc vs rtsc +xproj → ALLOW",      _guard_refuses("@rtsc", "rtsc", 1), 0)
 
     println("down_guard_project_test PASS")
 }

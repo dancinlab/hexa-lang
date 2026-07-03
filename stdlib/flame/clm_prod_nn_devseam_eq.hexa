@@ -1,0 +1,146 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_prod_nn_devseam_eq.hexa — NN host-seam byte-eq ORACLE (no-offset families).
+//
+//  HEXA-0POD: 0-GPU (`hexa run`) oracle proving the NEW device-resident seams in
+//  stdlib/flame nn_lib (gelu fwd/bwd, embedding fwd/bwd_scatter) + moe_lib
+//  (moe_router fwd/bwd) route through the existing forge_dispatch_* host body
+//  BYTE-EQ to the pure-host nn_* reference loops. The seam fires the dispatcher
+//  (off-CUDA = host fallback body, rc=0) and on-CUDA = device kernel; both are
+//  locked byte-eq to these host references (max|Δ|=0).
+//
+//  Embedding bwd_scatter carries an extra wrinkle: the dispatcher needs V but the
+//  host nn_embedding_bwd_scatter signature has none, so the seam derives
+//  V = len(dtable)/d. This oracle reproduces that derivation and asserts byte-eq.
+//
+//  F-GELU-SEAM / F-EMB-SEAM / F-MOE-SEAM : dispatcher host body == host nn_* loop.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/moe_lib"
+
+fn _ab(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _md(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let d = _ab(t_get(a, i) - t_get(b, i)); if d > m { m = d }; i = i + 1 }
+    return m
+}
+fn _fill(a: int, n: int, seed: int) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        t_set(a, i, (to_float(s % 1000) - 500.0) * 0.01)
+        i = i + 1
+    }
+}
+fn _fill_ids(a: int, n: int, V: int, seed: int) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        t_set(a, i, to_float(s % V))
+        i = i + 1
+    }
+}
+
+fn main() {
+    println("clm_prod_nn_devseam_eq — gelu/embedding/moe_router device seam (host body) == host nn_*")
+
+    // ── GELU fwd/bwd ──
+    let n = 257
+    let g = t_zeros(n)
+    let da = t_zeros(n)
+    _fill(g, n, 7)
+    _fill(da, n, 23)
+    let a_h = t_zeros(n)
+    let a_d = t_zeros(n)
+    nn_gelu_fwd(g, a_h, n)
+    let rcg = forge_dispatch_gelu(g, a_d, n)
+    let dgf = _md(a_h, a_d, n)
+    let dgh_h = t_zeros(n)
+    let dgh_d = t_zeros(n)
+    nn_gelu_bwd(g, da, dgh_h, n)
+    let rcgb = forge_dispatch_gelu_bwd(g, da, dgh_d, n)
+    let dgb = _md(dgh_h, dgh_d, n)
+
+    // ── EMBEDDING fwd/bwd_scatter (V derived = len(dtable)/d) ──
+    let V = 17
+    let d = 5
+    let T = 11
+    let ids = t_zeros(T)
+    _fill_ids(ids, T, V, 41)
+    let table = t_zeros(V * d)
+    _fill(table, V * d, 53)
+    let xh = t_zeros(T * d)
+    let xd = t_zeros(T * d)
+    nn_embedding_fwd(ids, table, xh, T, d)
+    let rce = forge_dispatch_embedding(ids, table, xd, T, d)
+    let def = _md(xh, xd, T * d)
+    // bwd scatter: dtable pre-zeroed; dX random
+    let dX = t_zeros(T * d)
+    _fill(dX, T * d, 67)
+    let dt_h = t_zeros(V * d)
+    let dt_d = t_zeros(V * d)
+    nn_embedding_bwd_scatter(dX, ids, dt_h, T, d)
+    let vderiv = farr_len(dt_d) / d
+    let rceb = forge_dispatch_embedding_bwd_scatter(dX, ids, dt_d, T, d, vderiv)
+    let deb = _md(dt_h, dt_d, V * d)
+
+    // ── MOE ROUTER fwd/bwd ──
+    let Tm = 7
+    let E = 4
+    let Cm = 6
+    let logits = t_zeros(Tm * E)
+    _fill(logits, Tm * E, 71)
+    let ex_out = t_zeros(E * Tm * Cm)
+    _fill(ex_out, E * Tm * Cm, 89)
+    let probs_h = t_zeros(Tm * E)
+    let y_h = t_zeros(Tm * Cm)
+    let probs_d = t_zeros(Tm * E)
+    let y_d = t_zeros(Tm * Cm)
+    nn_moe_router_fwd(logits, ex_out, probs_h, y_h, Tm, E, Cm)
+    let rcm = forge_dispatch_moe_router(logits, ex_out, probs_d, y_d, Tm, E, Cm)
+    let dmf_p = _md(probs_h, probs_d, Tm * E)
+    let dmf_y = _md(y_h, y_d, Tm * Cm)
+    let mut dmf = dmf_p
+    if dmf_y > dmf { dmf = dmf_y }
+    // bwd uses cached host probs
+    let dy = t_zeros(Tm * Cm)
+    _fill(dy, Tm * Cm, 97)
+    let dlog_h = t_zeros(Tm * E)
+    let dex_h = t_zeros(E * Tm * Cm)
+    let dlog_d = t_zeros(Tm * E)
+    let dex_d = t_zeros(E * Tm * Cm)
+    nn_moe_router_bwd(probs_h, ex_out, dy, dlog_h, dex_h, Tm, E, Cm)
+    let rcmb = forge_dispatch_moe_router_bwd(probs_h, ex_out, dy, dlog_d, dex_d, Tm, E, Cm)
+    let dmb_l = _md(dlog_h, dlog_d, Tm * E)
+    let dmb_e = _md(dex_h, dex_d, E * Tm * Cm)
+    let mut dmb = dmb_l
+    if dmb_e > dmb { dmb = dmb_e }
+
+    if rcg != 0 || rcgb != 0 || rce != 0 || rceb != 0 || rcm != 0 || rcmb != 0 {
+        println("  !! a dispatcher returned rc!=0 (host body not linked?)")
+        println("  rc gelu=" + to_string(rcg) + " gelu_bwd=" + to_string(rcgb) + " emb=" + to_string(rce) + " emb_bwd=" + to_string(rceb) + " moe=" + to_string(rcm) + " moe_bwd=" + to_string(rcmb))
+    }
+    println("  gelu fwd max|Δ| = " + to_string(dgf) + "   gelu bwd max|Δ| = " + to_string(dgb))
+    println("  emb  fwd max|Δ| = " + to_string(def) + "   emb  bwd max|Δ| = " + to_string(deb) + "  (V derived=" + to_string(vderiv) + ")")
+    println("  moe  fwd max|Δ| = " + to_string(dmf) + "   moe  bwd max|Δ| = " + to_string(dmb))
+
+    let mut worst = dgf
+    if dgb > worst { worst = dgb }
+    if def > worst { worst = def }
+    if deb > worst { worst = deb }
+    if dmf > worst { worst = dmf }
+    if dmb > worst { worst = dmb }
+    let ok = worst == 0.0 && rcg == 0 && rcgb == 0 && rce == 0 && rceb == 0 && rcm == 0 && rcmb == 0
+    if dgf == 0.0 && dgb == 0.0 { println("F-GELU-SEAM = 1") } else { println("F-GELU-SEAM = 0") }
+    if def == 0.0 && deb == 0.0 { println("F-EMB-SEAM = 1") } else { println("F-EMB-SEAM = 0") }
+    if dmf == 0.0 && dmb == 0.0 { println("F-MOE-SEAM = 1") } else { println("F-MOE-SEAM = 0") }
+    if ok {
+        println("PASS — gelu/embedding/moe_router device seam (host body) == host nn_*, byte-eq (max|Δ|=0)")
+    } else {
+        println("FAIL — max|Δ| = " + to_string(worst))
+    }
+}
