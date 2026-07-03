@@ -1208,6 +1208,96 @@ fn _types_lookup_struct_field_typename(struct_name: string, field_name: string) 
     return StructFieldLookup { found: false, field_typename: "" }
 }
 
+// ── HEXA-OWN L2 r1 — @own use-after-move lint registry ───────
+//
+// Opt-in (`HEXA_OWN_LINT=1`), warning-band, per-FN side registry for
+// block-local `@own let` bindings (single-owner discipline, Rust move
+// semantics as a LINT — no codegen/MIR change, no drop insertion).
+// Parallel-array shape mirrors the r5 struct field registry above, with
+// TWO deliberate deviations, both recipe-mandated:
+//   * population is FLAG-GATED (r5 populates unconditionally; own-lint
+//     must be structurally zero-cost when OFF — every push below happens
+//     only under `env("HEXA_OWN_LINT") == "1"` at the call sites);
+//   * lifetime is ONE FN body, not one module pass (reset at the top of
+//     `type_check`'s per-fn loop) — move state must never leak across fns
+//     (fn A moving `x` must not poison an unrelated `@own let x` in fn B).
+// Own-state is NEVER encoded via benv key redefinition — `_types_env_lookup`
+// is first-hit-wins, so a redefined key silently reads the stale entry.
+// The registry is PUSH-ONLY (proven registry discipline, no element
+// mutation): a move pushes a state-1 entry that shadows the live state-0
+// one; `_own_lint_find` scans from the END so the newest entry wins —
+// which also gives a re-declared (shadowing) `@own let x` fresh state.
+let mut _own_lint_names: [string] = []
+let mut _own_lint_states: [i64] = []     // 0 = live, 1 = moved
+let mut _own_lint_def_lines: [i64] = []  // declaration line (diag arg)
+let mut _own_lint_move_lines: [i64] = [] // first-move site line (0 while live)
+let mut _own_lint_move_cols: [i64] = []  // first-move site col  (0 while live)
+
+fn _own_lint_reset() {
+    _own_lint_names = []
+    _own_lint_states = []
+    _own_lint_def_lines = []
+    _own_lint_move_lines = []
+    _own_lint_move_cols = []
+}
+
+// Newest-entry-wins scan (from the END): the state-1 move entry pushed on
+// top of a live one — or a fresh shadowing re-declaration — is found first.
+fn _own_lint_find(name: string) -> i64 {
+    let mut i = len(_own_lint_names) - 1
+    while i >= 0 {
+        if _own_lint_names[i] == name { return i }
+        i = i - 1
+    }
+    return 0 - 1
+}
+
+fn _own_lint_register(name: string, sp: Span) {
+    _own_lint_names.push(name)
+    _own_lint_states.push(0)
+    _own_lint_def_lines.push(sp.line)
+    _own_lint_move_lines.push(0)
+    _own_lint_move_cols.push(0)
+}
+
+// One move/use touch of a candidate node. r1 move sites (bare-ident only):
+// let-RHS, assignment-RHS, call argument. First touch of a live binding
+// marks it moved (pushes the state-1 shadow entry); a later touch of a
+// moved binding emits the HX3012 use-after-move WARNING. A re-visit of the
+// SAME node (opt-in passes like the r2/r5 scratch re-infer walk an expr
+// twice) is recognised by the recorded move-site span and stays silent —
+// one source-level use is never double-counted as a second move.
+fn _own_lint_touch(use_node: Expr, out: array) {
+    if !_types_is_ident(use_node.kind) { return }
+    if len(use_node.text) == 0 { return }
+    let idx = _own_lint_find(use_node.text)
+    if idx < 0 { return }
+    if _own_lint_states[idx] == 0 {
+        _own_lint_names.push(use_node.text)
+        _own_lint_states.push(1)
+        _own_lint_def_lines.push(_own_lint_def_lines[idx])
+        _own_lint_move_lines.push(use_node.span.line)
+        _own_lint_move_cols.push(use_node.span.col)
+        return
+    }
+    if _own_lint_move_lines[idx] == use_node.span.line && _own_lint_move_cols[idx] == use_node.span.col {
+        return
+    }
+    _emit_hx3012(use_node.text, _own_lint_def_lines[idx], _own_lint_move_lines[idx], use_node.span, out)
+}
+
+// Does this (let) Expr carry a bare `@own` annotation? The parser already
+// collects arbitrary `@name` annotations ahead of a body-level let
+// (parser.hexa parse_stmt → Expr.annotations) — no parser change needed.
+fn _own_lint_has_own_ann(e: Expr) -> bool {
+    let mut i = 0
+    while i < len(e.annotations) {
+        if e.annotations[i].name == "own" { return true }
+        i = i + 1
+    }
+    return false
+}
+
 // Wall A r5 — strip the `named:` prefix a struct-typed receiver's inferred /
 // recorded Type carries (`_types_lower_type_ref` lowers any non-primitive
 // named annotation `Point` to kind `named:Point`). Returns the bare struct
@@ -1504,6 +1594,20 @@ fn _emit_hx3011(expected: Type, actual: Type, sp: Span, out: array) {
     b = diag_span(b, sp)
     b = diag_arg(b, "expected", _type_display(expected))
     b = diag_arg(b, "actual", _type_display(actual))
+    out.push(diag_emit(b))
+}
+
+// HX3012 — opt-in @own use-after-move lint (HEXA_OWN_LINT=1).
+// Rust E0382-shaped "use of moved value", surfaced as a WARNING (renders,
+// never aborts — the HX3006 warning-band contract, main.hexa `_has_errors`
+// counts Severity::Error only). Only emitted under the flag, so the default
+// diagnostic stream is byte-identical (byteeq-neutral).
+fn _emit_hx3012(name: string, def_line: i64, moved_line: i64, sp: Span, out: array) {
+    let mut b = diag_new("HX3012")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "def_line", to_string(def_line))
+    b = diag_arg(b, "moved_line", to_string(moved_line))
     out.push(diag_emit(b))
 }
 
@@ -1994,6 +2098,25 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                     }
                 }
             }
+            // HEXA-OWN L2 r1 — register a block-local `@own let` binding into
+            // the per-fn own-lint side registry (name + live state + decl
+            // line). Registration happens AFTER the child was inferred, so an
+            // RHS mentioning an OUTER same-named owned binding still touches
+            // the outer entry first (shadowing then takes over via the
+            // newest-entry-wins scan). Entirely flag-gated — the default
+            // build pushes nothing (structurally zero-cost, unlike the r5
+            // registry's unconditional population). NOT threaded through
+            // benv: `_types_env_lookup` is first-hit-wins, so encoding move
+            // state as an env redefinition would silently read stale.
+            if env("HEXA_OWN_LINT") == "1" {
+                let och = e.children[i]
+                if _types_is_let(och.kind) && _own_lint_has_own_ann(och) {
+                    let onm = _types_let_name(och.text)
+                    if len(onm) > 0 {
+                        _own_lint_register(onm, och.span)
+                    }
+                }
+            }
             i = i + 1
         }
         return last
@@ -2174,6 +2297,13 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                 }
             }
         }
+        // HEXA-OWN L2 r1 — a bare-ident RHS of a `let` MOVES the owned value
+        // (`let y = x` where `x` is a registered `@own` binding): first such
+        // use marks it moved, a second one warns HX3012 (use-after-move).
+        // Flag first (short-circuit) → the default build is byteeq-neutral.
+        if env("HEXA_OWN_LINT") == "1" && len(e.children) > 0 && _types_is_ident(e.children[0].kind) {
+            _own_lint_touch(e.children[0], out)
+        }
         return _types_t_unit()
     }
 
@@ -2287,6 +2417,13 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             if !r3_rejected && !_types_assignable(lhs_t, rhs_t, e.children[1]) {
                 _emit_hx3001(lhs_t, rhs_t, e.span, out)
             }
+            // HEXA-OWN L2 r1 — a bare-ident RHS of an assignment MOVES the
+            // owned value (`y = x` where `x` is a registered `@own` binding):
+            // second use after the move warns HX3012. Flag first
+            // (short-circuit) → the default build is byteeq-neutral.
+            if env("HEXA_OWN_LINT") == "1" && _types_is_ident(e.children[1].kind) {
+                _own_lint_touch(e.children[1], out)
+            }
         }
         return _types_t_unit()
     }
@@ -2368,6 +2505,57 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                 }
             }
             ei = ei + 1
+        }
+        return _types_empty_type()
+    }
+
+    // Wall A r6 — opt-in struct-literal field-init REJECT (HEXA_STATIC_TYPES=1).
+    // The LAST scope-wireable rung of the static-type ladder. A struct literal
+    // `Point{ x: <expr>, y: <expr> }` parses (parser.hexa:1184
+    // parse_struct_lit_after_name) as a StructLit whose `text` is the struct
+    // NAME and whose `children` are per-field-init Ident nodes — each with
+    // `text`=field NAME and `children[0]`=the field VALUE expr. Reuse the r5
+    // (struct,field)→declared-typename side registry (the env's struct Type
+    // keeps field types but DROPS field names, so the registry is the only
+    // carrier): for each field-init whose declared field type AND inferred
+    // value type are BOTH known scalars that provably disagree, REJECT with
+    // HX3011 — the SAME Rust E0308 "mismatched types" path the r1/r2/r3/r4/r5
+    // arms mirror (rustc_hir_typeck check_expr_struct_fields → demand_coerce →
+    // report_mismatched_types). int/float-literal values still coerce (via
+    // `_types_assignable`'s literal-coercion arm, `src`=the value expr); an
+    // unknown struct, unknown field, or non-scalar field type stays silent
+    // (field-existence / nominal-field diagnostics are separate, not r6 scope).
+    //
+    // ENTIRELY flag-gated (env check is the FIRST `&&` operand, short-circuit)
+    // so the default build falls through to the byte-identical STUB below —
+    // byteeq / gen3≡gen4 preserved. The flag-ON path infers each value expr
+    // (which the legacy STUB's per-Ident walk did NOT reach, since the Ident
+    // arm returns before recursing into children[0]) so inner value errors are
+    // ALSO surfaced under the flag.
+    if env("HEXA_STATIC_TYPES") == "1" && _cg_is_struct_lit(e.kind) {
+        let sname = e.text
+        let mut fi = 0
+        while fi < len(e.children) {
+            let finit = e.children[fi]
+            if _types_is_ident(finit.kind) && len(finit.text) > 0 && len(finit.children) > 0 {
+                let val = finit.children[0]
+                let val_t = _infer_expr(val, env, ctx, out)
+                if len(sname) > 0 {
+                    let lk = _types_lookup_struct_field_typename(sname, finit.text)
+                    if lk.found && len(lk.field_typename) > 0 {
+                        let ftr = TypeRef { kind: "named", name: lk.field_typename, args: [], span: finit.span }
+                        let field_t = _types_lower_type_ref(ftr)
+                        if _types_kind_is_scalar(field_t.kind) && _types_kind_is_scalar(val_t.kind) {
+                            if !_types_assignable(field_t, val_t, val) {
+                                _emit_hx3011(field_t, val_t, val.span, out)
+                            }
+                        }
+                    }
+                }
+            } else {
+                let _t = _infer_expr(finit, env, ctx, out)
+            }
+            fi = fi + 1
         }
         return _types_empty_type()
     }
@@ -2577,6 +2765,15 @@ fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     while i < arg_count {
         let at = _infer_expr(e.children[1 + i], env, ctx, out)
         arg_types.push(at)
+        // HEXA-OWN L2 r1 — a bare-ident call ARGUMENT moves the owned value
+        // (`f(x)` where `x` is a registered `@own` binding): second use after
+        // the move warns HX3012. A scratch-sink re-infer of the same call
+        // (the r2 let-arm) re-touches the SAME node — the registry's
+        // move-site span dedupe keeps that silent. Flag first
+        // (short-circuit) → the default build is byteeq-neutral.
+        if env("HEXA_OWN_LINT") == "1" && _types_is_ident(e.children[1 + i].kind) {
+            _own_lint_touch(e.children[1 + i], out)
+        }
         i = i + 1
     }
 
@@ -3269,6 +3466,152 @@ fn _cg_check_module(module: Module, out: array) {
     }
 }
 
+// ── Higher-kinded types — kind-arity consistency (opt-in HEXA_HKT) ──
+//
+// Opt-in (`HEXA_HKT=1`), check-only, byteeq-neutral pass — structurally
+// identical to the `_cg_*` const-generics and `_exh_*` exhaustiveness passes:
+//   * env-gated at the top of `_hkt_check_module` → no-op on the default build
+//     (the `out` diagnostic stream is byte-identical when the flag is unset);
+//   * it only appends diagnostics, never touches MIR/lower/codegen, so even ON
+//     it cannot change a single emitted object byte;
+//   * it reuses the SAME `__cg` declaration-param carriers (`P:<name>:<bound>`)
+//     that the opt-in parser capture attaches — the two parser gates are widened
+//     to also fire under HEXA_HKT (one-token OR), so no new AST field / keyword
+//     (frozen-seed safe).
+//
+// WHAT IT CHECKS — the kind-ARITY-consistency fragment of a full kind system.
+// hexa's dynamic {tag,payload} runtime erases every generic to one monomorphic
+// MIR (the parser generic-erase loop), so there is ZERO runtime realization of
+// higher-kinded polymorphism — even a complete front-end lowers to identical
+// erased bytes. What IS tractable purely in the checker is kind-arity
+// unification across a single signature: a declared type parameter used as
+// `F<A>` is a unary type constructor (kind `*->*`); the same `F` may not also
+// appear applied to a different number of arguments, nor bare in a proper-type
+// slot (kind `*`). This is the faithful core of Haskell kind inference.
+//
+// reference (faithful-match cites):
+//   • Haskell 2010 Report §4.1.1 — kinds are `*` (proper types) and `k1->k2`
+//     (type constructors); in an application `f a`, `f :: k->*` and `a :: k`; a
+//     kind mismatch is reported as "Expected kind X, but has kind Y".
+//   • Scala — `trait Functor[F[_]]` declares `F` at ctor-kind `*->*`
+//     (type-constructor polymorphism, Moors et al., "Generics of a Higher
+//     Kind", OOPSLA'08); an application must respect that declared arity.
+//   • Rust RFC 1598 (generic associated types) — Rust deliberately DECLINES
+//     full `F: *->*` type parameters and offers GATs as an HKT *substitute*;
+//     this anchors the design ceiling we report honestly. Full HKT (Functor /
+//     Monad typeclass polymorphism, instance resolution, type-level ctor
+//     application/`fmap` dispatch) is NOT implementable here: (a) there is no
+//     trait/typeclass/instance registry (the checker stays silent on user
+//     types), (b) `class`/`instance`/kind-annotation syntax would violate the
+//     frozen seed, (c) the dynamic {tag,payload} runtime erases all generics to
+//     one monomorphic MIR → zero runtime realization.
+//
+// Polarity / release integrity: a kind-arity mismatch is a non-fatal WARNING
+// (HX3011) — a new diag ships opt-in and non-fatal, never breaking a build.
+
+// Recover the declared type-parameter names from an Item's `__cg` "P:" carriers.
+fn _hkt_collect_params(it: Item) -> [string] {
+    let mut out: [string] = []
+    if !_cg_has_cg_ann(it.annotations) { return out }
+    let args = _cg_get_cg_args(it.annotations)
+    let mut j = 0
+    while j < len(args) {
+        let parts = _cg_split_ch(args[j].text, ':')
+        if len(parts) >= 2 {
+            if parts[0] == "P" { out.push(parts[1]) }
+        }
+        j = j + 1
+    }
+    return out
+}
+
+fn _hkt_is_decl(name: string, decls: [string]) -> bool {
+    let mut i = 0
+    while i < len(decls) {
+        if decls[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Walk a TypeRef, recording for every node whose `name` is a declared param the
+// application arity at that use site: a `kind:"generic"` `F<A,…>` records arity
+// = len(args) (used as a type constructor), any other use records arity 0 (used
+// as a proper type). Observations accumulate into parallel `obs_names` /
+// `obs_arity`. Recurses into `args` so nested applications (`F<G<A>>`) are seen.
+fn _hkt_walk_typeref(tr: TypeRef, decls: [string], obs_names: array, obs_arity: array) {
+    if _hkt_is_decl(tr.name, decls) {
+        let mut arity = 0
+        if tr.kind == "generic" { arity = len(tr.args) }
+        obs_names.push(tr.name)
+        obs_arity.push(arity)
+    }
+    let mut i = 0
+    while i < len(tr.args) {
+        _hkt_walk_typeref(tr.args[i], decls, obs_names, obs_arity)
+        i = i + 1
+    }
+}
+
+// Kind-arity unification for a single Item signature. For fn items the signature
+// TypeRefs are every param type + the return type; for struct items they are the
+// field types (`it.params[].typ`). A declared param observed with ≥2 distinct
+// arities is a kind mismatch (e.g. `F<A>` vs `F<A,B>`, or higher-kinded `F` used
+// bare in a proper-type slot) → emit HX3011.
+fn _hkt_check_item(it: Item, out: array) {
+    let decls = _hkt_collect_params(it)
+    if len(decls) == 0 { return }
+    let mut obs_names = []
+    let mut obs_arity = []
+    let mut p = 0
+    while p < len(it.params) {
+        _hkt_walk_typeref(it.params[p].typ, decls, obs_names, obs_arity)
+        p = p + 1
+    }
+    _hkt_walk_typeref(it.return_type, decls, obs_names, obs_arity)
+    let mut d = 0
+    while d < len(decls) {
+        let pname = decls[d]
+        let mut min_ar = -1
+        let mut max_ar = -1
+        let mut o = 0
+        while o < len(obs_names) {
+            if obs_names[o] == pname {
+                let a = obs_arity[o]
+                if min_ar == -1 || a < min_ar { min_ar = a }
+                if max_ar == -1 || a > max_ar { max_ar = a }
+            }
+            o = o + 1
+        }
+        if min_ar != -1 && min_ar != max_ar {
+            let mut b = diag_new("HX3011")
+            b = diag_span(b, it.span)
+            b = diag_arg(b, "param", pname)
+            b = diag_arg(b, "owner", it.name)
+            b = diag_arg(b, "first_arity", to_string(min_ar))
+            b = diag_arg(b, "second_arity", to_string(max_ar))
+            out.push(diag_emit(b))
+        }
+        d = d + 1
+    }
+}
+
+fn _hkt_check_module(module: Module, out: array) {
+    if env("HEXA_HKT") != "1" { return }
+    let mut i = 0
+    while i < len(module.items) {
+        let it = module.items[i]
+        if item_is_parse_only(it) {
+            i = i + 1
+            continue
+        }
+        if _types_is_fn_item(it.kind) || _types_is_struct_item(it.kind) {
+            _hkt_check_item(it, out)
+        }
+        i = i + 1
+    }
+}
+
 // ── Pre-pass: collect Item types into TypeEnv ────────────────
 
 fn _types_signature_type(it: Item) -> Type {
@@ -3556,6 +3899,14 @@ pub fn type_check(module: Module) -> array {
         // applies the right caller-module to private visibility.
         let ctx_for_fn = _types_new_ctx(fn_file)
         let ctx = _ctx_with_fn(ctx_for_fn, it.name, ret)
+        // HEXA-OWN L2 r1 — the @own use-after-move registry is PER-FN: reset
+        // before every body walk so move state never leaks across fns (fn A
+        // moving `x` must not poison an unrelated `@own let x` in fn B).
+        // Flag-gated like every own-lint site → structurally zero-cost on
+        // the default build (byteeq-neutral; the registry stays empty).
+        if env("HEXA_OWN_LINT") == "1" {
+            _own_lint_reset()
+        }
         // Walk body — inner Returns validate against ctx.fn_return.
         let body_t = _infer_expr(it.body, local, ctx, out)
         // Trailing block expression must also satisfy the return type
@@ -3600,6 +3951,11 @@ pub fn type_check(module: Module) -> array {
     // Opt-in (HEXA_CONST_GENERICS=1); no-op on the default build. Identical
     // structural slot to the exhaustiveness pass above.
     _cg_check_module(module, out)
+
+    // Higher-kinded types — kind-arity consistency (HX3011). Opt-in
+    // (HEXA_HKT=1); no-op on the default build. Same structural slot; reuses the
+    // shared `__cg` declaration-param carriers as its kind-arity data source.
+    _hkt_check_module(module, out)
 
     return out
 }

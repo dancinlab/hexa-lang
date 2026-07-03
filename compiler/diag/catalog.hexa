@@ -121,6 +121,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::Replace
     },
     DiagSpec {
+        code: "HX0014",
+        title: "defer in unsupported position",
+        severity: Severity::Error,
+        stage: "S0",
+        template: "`defer` body cannot be used here (found {found}) — use `defer <expr>` or `defer <block>`; assignment bodies and closure bodies are not deferable",
+        explain: "HEXA-OWN M1 — `defer` registers a scope-exit action that drains at fn exit in LIFO order (at-most-once per lexical defer, drain-time variable values; gen2 reference semantics, self/parser.hexa parse_defer_stmt + self/codegen.hexa __fn_exit). Two shapes are rejected: (1) an assignment body such as `defer x = 1` — the reference gen2 grammar rejects it, and the native expr body parses via parse_logical_or precisely so an Eq-family token after the body surfaces here instead of being silently absorbed by parse_assignment; (2) `defer` inside a closure body — a closure is a separate call frame and the M1 lowering scopes defer to top-level fn bodies. Wrap the assignment in a block if the intent really is a deferred store; move a closure-body defer into the enclosing fn.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX1042",
         title: "atlas node not found",
         severity: Severity::Error,
@@ -341,7 +350,16 @@ pub let CATALOG: [DiagSpec] = [
         severity: Severity::Error,
         stage: "S3",
         template: "mismatched types: expected `{expected}`, found `{actual}`",
-        explain: "Opt-in static type check (`HEXA_STATIC_TYPES=1`). A `let <name>: T = <literal>` local binding declared an explicit annotation `T` whose primitive type provably differs from the literal initialiser's type — e.g. `let x: i32 = \"s\"` or `let ok: bool = 1`. This is the Rust E0308 'mismatched types' rule brought to LOCAL (in-fn-body) lets: a string/bool/char literal never coerces to a numeric annotation, and an integer literal never coerces to `bool`. The default build does NOT emit this (the flag is off → diagnostic stream byte-identical to today); under the flag it is a FATAL error (REJECT, not advisory warning), so the build aborts before codegen. Scope r1 = scalar-literal RHS vs scalar-primitive annotation only; broader inference (idents, calls, ranges, struct/enum types) is deferred to later rungs. Fix: change the literal to match the annotation, or the annotation to match the value. The integer-literal/float-literal coercions Rust allows (`let x: i32 = 5`, `let y: f64 = 1.5`) still type-check.",
+        explain: "Opt-in static type check (`HEXA_STATIC_TYPES=1`). A local binding, assignment, or struct-literal field-init declared (or its place has) an explicit annotation `T` whose primitive type provably differs from the initialiser's inferred type — e.g. `let x: i32 = \"s\"` or `let ok: bool = 1`. This is the Rust E0308 'mismatched types' rule brought to LOCAL (in-fn-body) positions: a string/bool/char literal never coerces to a numeric annotation, and an integer literal never coerces to `bool`. The default build does NOT emit this (the flag is off → diagnostic stream byte-identical to today); under the flag it is a FATAL error (REJECT, not advisory warning), so the build aborts before codegen. Coverage is a scope-local rung set (all KNOWN-scalar-primitive vs KNOWN-scalar-primitive only): r1 scalar-literal RHS on a typed `let`; r2 ident/call RHS on a typed `let`; r3 ident-LHS re-assignment; r4 array-element assign `a[i] = …`; r5 struct-field assign `s.field = …`; r6 struct-literal field-init `Point{ x: … }` (the last scope-wireable rung). Generic/trait static-dispatch and nested receivers (`s.inner.x`) are a measured ceiling — the `_infer_expr` scope cannot reach them (dynamic runtime type-erasure). Fix: change the value to match the annotation, or the annotation to match the value. The integer-literal/float-literal coercions Rust allows (`let x: i32 = 5`, `let y: f64 = 1.5`) still type-check.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3012",
+        title: "use of moved value",
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "use of moved value `{name}`: this `@own` binding (declared at line {def_line}) was already moved at line {moved_line}",
+        explain: "Opt-in ownership lint (`HEXA_OWN_LINT=1`). `@own` marks a `let` binding as a SINGLE-OWNER value: the first time its bare name is consumed by a move site — the RHS of a later `let`, the RHS of an assignment, or a call argument — ownership is considered transferred out of the binding. This warning fires on any SECOND read/move of the same binding after that transfer, mirroring Rust's E0382 'borrow of moved value' shape (rustc_borrowck use-after-move) as a non-fatal WARNING: the build still compiles and codegen is untouched — this is a lint band, not a REJECT. Scope is HEXA-OWN L2 r1: block-local `@own let` bindings inside one fn body only; fn params, return values, struct fields, borrows (`&`), and drop insertion are later rungs. The default build (flag unset) emits nothing and populates no registry — the diagnostic stream is byte-identical (byteeq-neutral). Fix: don't reuse the binding after its move — restructure so each owned value has exactly one consumer, clone/recompute the value, or drop the `@own` annotation if the binding is intentionally shared.",
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
@@ -588,6 +606,15 @@ pub let CATALOG: [DiagSpec] = [
         stage: "S3",
         template: "the trait `{trait}` is not implemented for `{type}` (required by `{owner}`)",
         explain: "The strict-mode (`HEXA_STRICT_BOUNDS=1`) escalation of HX3008: a generic trait bound is provably unsatisfied at an instantiation site and the user has opted into fatal bound checking. See HX3008 for the bound-satisfaction model (rustc-faithful builtin impls; The Rust Reference §\"Where clauses\"). Emitted only under the opt-in const-generics pass; the default build is byte-identical.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3011",
+        title: "higher-kinded type parameter arity mismatch",
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "type parameter `{param}` is used at conflicting kind-arities ({first_arity} vs {second_arity}) in `{owner}`",
+        explain: "The opt-in higher-kinded-types pass (`HEXA_HKT=1`) checks kind-arity consistency: within one signature a declared type parameter must be used at a single kind. A parameter applied as `F<A>` is a unary type constructor (Haskell kind `*->*`, Scala `F[_]`); the same `F` may not also appear applied to a different number of arguments (`F<A,B>`) nor bare in a proper-type slot (kind `*`). This reproduces the core of Haskell kind inference (Haskell 2010 Report §4.1.1 — `f a` requires `f :: k->*` and `a :: k`; a mismatch is reported as \"Expected kind X, but has kind Y\") and Scala type-constructor polymorphism (Moors et al., \"Generics of a Higher Kind\", OOPSLA'08). CEILING (honest): this is ONLY the kind-arity fragment — full HKT (Functor/Monad typeclass polymorphism, instance resolution, type-level constructor application/`fmap` dispatch) is NOT implementable here, the same reason Rust RFC 1598 declines full `F: *->*` and offers generic associated types as a substitute: hexa has no trait/typeclass/instance registry, `class`/`instance`/kind-annotation syntax would violate the frozen seed, and the dynamic {tag,payload} runtime erases all generics to one monomorphic MIR (zero runtime realization). Default severity is a non-fatal warning; emitted only under the opt-in pass, so the default build is byte-identical.",
         fix_it_kind: FixItKind::None
     }
 ]

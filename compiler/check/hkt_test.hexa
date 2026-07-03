@@ -1,0 +1,211 @@
+// ═══════════════════════════════════════════════════════════
+//  hkt_test.hexa — Higher-kinded types kind-arity pass (opt-in HEXA_HKT)
+//
+//  Exercises the `_hkt_*` kind-arity-consistency pass directly. The pass driver
+//  `_hkt_check_module` is env-gated (HEXA_HKT=1), but the per-Item core
+//  `_hkt_check_item` has NO gate, so these cases are deterministic regardless of
+//  the ambient env. Module construction mirrors the programmatic builder style
+//  of `types_test.hexa`.
+//
+//  Cases (faithful fragment of Haskell kind-arity unification):
+//    ① PASS  — fn map<F,A,B>(x: F<A>, f: A) -> F<B>   : F consistently arity 1
+//    ② FAIL  — fn bad<F,A,B>(x: F<A>, y: F<A,B>)      : F arity 1 vs 2 → HX3011
+//    ③ FAIL  — fn mix<F,A>(x: F<A>, y: F)             : F arity 1 vs 0 → HX3011
+//    ④ PASS  — fn id<T>(x: T) -> T                     : T proper type, no HKT
+//    ⑤ PASS  — fn nest<F,A>(x: F<F<A>>) -> A           : F consistently arity 1
+//
+//  Run: hexa run compiler/check/hkt_test.hexa
+// ═══════════════════════════════════════════════════════════
+
+import "../parse/ast.hexa"
+import "../diag/catalog.hexa"
+import "../lex/tokens.hexa"
+import "../ir/hir.hexa"
+import "./types.hexa"
+
+// ── construction helpers ─────────────────────────────────────
+
+fn _hspan() -> Span {
+    return Span { file: "hkt.hexa", line: 1, col: 1, len: 1 }
+}
+
+fn _hatlas() -> AtlasRef {
+    return AtlasRef { kind: "", id: "", span: _hspan() }
+}
+
+fn _hnamed(name: string) -> TypeRef {
+    return TypeRef { kind: "named", name: name, args: [], span: _hspan() }
+}
+
+fn _hempty_ty() -> TypeRef {
+    return TypeRef { kind: "", name: "", args: [], span: _hspan() }
+}
+
+fn _hgen1(name: string, a: TypeRef) -> TypeRef {
+    let mut args = []
+    args.push(a)
+    return TypeRef { kind: "generic", name: name, args: args, span: _hspan() }
+}
+
+fn _hgen2(name: string, a: TypeRef, b: TypeRef) -> TypeRef {
+    let mut args = []
+    args.push(a)
+    args.push(b)
+    return TypeRef { kind: "generic", name: name, args: args, span: _hspan() }
+}
+
+fn _hstr(text: string) -> Expr {
+    return Expr {
+        kind: ExprKind::LiteralString,
+        span: _hspan(),
+        text: text,
+        annotations: [],
+        children: [],
+        atlas_ref: _hatlas()
+    }
+}
+
+// `__cg` annotation from declared param names — each becomes a "P:<name>:"
+// carrier, exactly as the opt-in parser capture (`_cg_capture_decl_params`)
+// emits it. The HKT pass reads these "P:" carriers as its declared-param set.
+fn _hcg(names: [string]) -> Annotation {
+    let mut args = []
+    let mut i = 0
+    while i < len(names) {
+        args.push(_hstr("P:" + names[i] + ":"))
+        i = i + 1
+    }
+    return Annotation { name: "__cg", args: args, span: _hspan() }
+}
+
+fn _hparam(name: string, t: TypeRef) -> Param {
+    return Param { name: name, typ: t, typs: [t], span: _hspan() }
+}
+
+fn _hbody() -> Expr {
+    return Expr {
+        kind: ExprKind::Block,
+        span: _hspan(),
+        text: "",
+        annotations: [],
+        children: [],
+        atlas_ref: _hatlas()
+    }
+}
+
+fn _hfn(name: string, decls: [string], params: [Param], ret: TypeRef) -> Item {
+    let mut anns = []
+    anns.push(_hcg(decls))
+    return Item {
+        kind: ItemKind::Fn,
+        name: name,
+        span: _hspan(),
+        annotations: anns,
+        params: params,
+        return_type: ret,
+        body: _hbody(),
+        is_pub: false
+    }
+}
+
+fn _hcount(out: array, code: string) -> i64 {
+    let mut i = 0
+    let mut n = 0
+    while i < len(out) {
+        if out[i].code == code { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+// ── cases ────────────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  HEXA Compiler — HKT kind-arity pass (S3 · HEXA_HKT)")
+    println("══════════════════════════════════════════════")
+    let mut ok = true
+
+    // ① PASS: fn map<F,A,B>(x: F<A>, f: A) -> F<B>  — F always applied at arity 1.
+    let mut p1 = []
+    p1.push(_hparam("x", _hgen1("F", _hnamed("A"))))
+    p1.push(_hparam("f", _hnamed("A")))
+    let it1 = _hfn("map", ["F", "A", "B"], p1, _hgen1("F", _hnamed("B")))
+    let mut o1 = []
+    _hkt_check_item(it1, o1)
+    let n1 = _hcount(o1, "HX3011")
+    if n1 != 0 {
+        println("  FAIL ①: expected 0 HX3011, got " + to_string(n1))
+        ok = false
+    } else {
+        println("  ok ①: F<A>/F<B> consistent kind *->* → 0 HX3011")
+    }
+
+    // ② FAIL: fn bad<F,A,B>(x: F<A>, y: F<A,B>) — F applied at arity 1 then 2.
+    let mut p2 = []
+    p2.push(_hparam("x", _hgen1("F", _hnamed("A"))))
+    p2.push(_hparam("y", _hgen2("F", _hnamed("A"), _hnamed("B"))))
+    let it2 = _hfn("bad", ["F", "A", "B"], p2, _hempty_ty())
+    let mut o2 = []
+    _hkt_check_item(it2, o2)
+    let n2 = _hcount(o2, "HX3011")
+    if n2 != 1 {
+        println("  FAIL ②: expected 1 HX3011 (F arity 1 vs 2), got " + to_string(n2))
+        ok = false
+    } else {
+        println("  ok ②: F<A> vs F<A,B> → 1 HX3011")
+    }
+
+    // ③ FAIL: fn mix<F,A>(x: F<A>, y: F) — F constructor used bare in a proper-type slot.
+    let mut p3 = []
+    p3.push(_hparam("x", _hgen1("F", _hnamed("A"))))
+    p3.push(_hparam("y", _hnamed("F")))
+    let it3 = _hfn("mix", ["F", "A"], p3, _hempty_ty())
+    let mut o3 = []
+    _hkt_check_item(it3, o3)
+    let n3 = _hcount(o3, "HX3011")
+    if n3 != 1 {
+        println("  FAIL ③: expected 1 HX3011 (F arity 1 vs 0), got " + to_string(n3))
+        ok = false
+    } else {
+        println("  ok ③: F<A> vs bare F → 1 HX3011")
+    }
+
+    // ④ PASS: fn id<T>(x: T) -> T — T is a proper type, never applied.
+    let mut p4 = []
+    p4.push(_hparam("x", _hnamed("T")))
+    let it4 = _hfn("id", ["T"], p4, _hnamed("T"))
+    let mut o4 = []
+    _hkt_check_item(it4, o4)
+    let n4 = _hcount(o4, "HX3011")
+    if n4 != 0 {
+        println("  FAIL ④: expected 0 HX3011, got " + to_string(n4))
+        ok = false
+    } else {
+        println("  ok ④: proper-type T → 0 HX3011")
+    }
+
+    // ⑤ PASS: fn nest<F,A>(x: F<F<A>>) -> A — nested application, F always arity 1.
+    let mut p5 = []
+    p5.push(_hparam("x", _hgen1("F", _hgen1("F", _hnamed("A")))))
+    let it5 = _hfn("nest", ["F", "A"], p5, _hnamed("A"))
+    let mut o5 = []
+    _hkt_check_item(it5, o5)
+    let n5 = _hcount(o5, "HX3011")
+    if n5 != 0 {
+        println("  FAIL ⑤: expected 0 HX3011, got " + to_string(n5))
+        ok = false
+    } else {
+        println("  ok ⑤: nested F<F<A>> consistent arity 1 → 0 HX3011")
+    }
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok {
+        println("PASS: HKT kind-arity contract satisfied.")
+    } else {
+        println("FAIL: HKT kind-arity contract not satisfied.")
+    }
+    println("══════════════════════════════════════════════")
+    if !ok { exit(1) }
+}

@@ -187,6 +187,13 @@
         "source": "self/codegen.hexa"
       },
       {
+        "id": "WALL-A-STATIC-TYPES-REJECT-LADDER",
+        "state": "in_flight",
+        "value": "정적타입 REJECT 사다리 r1~r6 land(literal→ident/call→decl-split→array→struct-field→struct-literal·전부 opt-in HEXA_STATIC_TYPES default-OFF·byteeq중립·HX3011 Rust E0308·삽입점 compiler/check/types.hexa _infer_expr)·r7+ generic/trait static-dispatch=measured 천장(dynamic 런타임 type-erasure 근본벽).",
+        "threshold": "r7+ 불가=_types_lower_type_ref:931-939 degraded sentinel(generic:/fn:/tuple: → args:[]/ret:[] 타입파라미터 소거)→concrete T 미보유→generic monomorphization·trait static-dispatch은 dynamic→static 런타임 재설계 필요(scope-local _infer_expr 鋼 아님). nested receiver(s.inner.x)도 同벽. SSOT=state/rfc_static_types_rust_ladder.md.",
+        "source": "compiler/check/types.hexa"
+      },
+      {
         "id": "bench-hexa-clm-step-hexa-1",
         "state": "ossified",
         "value": "풀CLM step 80× 측정모순 RESOLVED: 75331ms(r1)=anomalous — non-builtin-aware/오염 hexat이 forge_dispatch_*를 hexa_call3 값-디스패치로 잘못 lowering→느린 CPU폴백 측정. 진짜=882ms(현행 main hexat·pool 호스트서 main 직접 빌드·GPU OWN-GEMM-FIRED DEVICE path·median-7 877~886·workflow 931ms와 동차). PyTorch 12.7ms 대비 ≈69×(4750×는 phantom). conv-fix #4227 효과 있음(이전 FALSIFIED는 bad-hexat 아티팩트).",
@@ -311,13 +318,6 @@
         "value": "regex native path(HEXA_REGEX_NATIVE)를 default-ON flip하면 undefined reference to rt_regex_* 링크실패: emitted runtime.c(runtime.a)가 rt_regex_*로 위임하나 rt_regex_*는 compiler closure(regex_rt.hexa via compiler/main.hexa import)에만 있고 runtime.a엔 미포함. runtime.a를 standalone 링크하는 소비자(consent-checker·faithful runtime-link·유저바이너리)는 rt_regex_* 미해결→ld fail(linux-arm64 #4451). default-OFF는 libc regex라 무해(rt_regex_* 미참조)·flip이 노출.",
         "threshold": "재발=closure-import 심볼(rt_*)에 위임하는 runtime.c seam을 default-ON flip시 'undefined reference to rt_*' 링크에러(standalone runtime.a 링크서). 판정=OFF byteeq/faithful GREEN이나 flip이 링크RED. 해결=위임대상 심볼을 runtime.a 자체에 컴파일 포함(regex_rt.hexa+thompson+backtrack를 runtime 빌드 TU에 넣거나 .s seed화·glob/fgets/qsort는 runtime.c 내부 self-contained라 무관)·closure import만으론 standalone runtime.a 링크 부족. regex reduction은 gate MERGED default-OFF(#4445)이나 flip=이 wiring 선행. glob/fgets flip은 self-contained라 성공(#4449/#4450).",
         "source": "stdlib/runtime/regex_rt.hexa"
-      },
-      {
-        "id": "cloud-cli-hexa-1",
-        "state": "pos-conv",
-        "value": "hexa cloud subcommand canon is 'list' (alias 'status') — 'ls' NEVER shipped; it exists only in archived 2026-05-24 design docs (archive/patches/archive/hexa-cloud-pod-registry-tracking-2026-05-24.md). Sessions keep retrying 'hexa cloud ls' because an unknown subcommand silently falls through to _cloud_help() (si<0 at cloud_cli.hexa:3135) instead of failing loud, so the miss never teaches.",
-        "threshold": "recurs whenever a session types 'hexa cloud ls' (shell muscle-memory + stale archive docs); resolution = always use 'hexa cloud list'; hardening SHIPPED #4459: main() scanner recognizes 'ls' and fails loud with a did-you-mean-`list` hint + exit 2 (not a silent alias; drift-test _is_alias carries 'ls'; parallel to the #4337 unknown-flag FAILS-LOUD lesson on rent)",
-        "source": "stdlib/cloud/cloud_cli.hexa"
       }
     ]
   },
@@ -4142,7 +4142,7 @@
             "children": []
           },
           {
-            "name": "required 게이트(selfhost-gates-summary)는 ubuntu 고정으로 self-hosted에 하드 의존하지 않는다. fork-PR은 eligible 가드로 무조건 클라우드(RCE). ghost는 단일 직렬 러너 — PR 폭주 시 큐잉(설계된 트레이드오프).",
+            "name": "required 게이트(selfhost-gates-summary)는 ubuntu 고정으로 self-hosted에 하드 의존하지 않는다. fork-PR은 eligible 가드로 무조건 클라우드(RCE). ghost는 단일 직렬 러너 — PR 폭주 시 큐잉(설계된 트레이드오프). cancel 정책: 전 워크플로 main push run 무취소(PR-only supersede 취소) — 직렬 darwin 러너에서 무거운 게이트 완주 보장(byteeq-real·gates-required 정렬 완료).",
             "role": "",
             "id": "ci-substrate-runner-routing-guards",
             "detail": "",
@@ -4166,7 +4166,7 @@
                 "name": "Compiler driver",
                 "role": "",
                 "id": "component-map-table-component-path-role-compiler-driver",
-                "detail": "Path: `compiler/main.hexa` · Role: Entry point: arg parse, atlas load, S0–S8 dispatch, codegen routing, emit/link orchestration"
+                "detail": "Path: `compiler/main.hexa` · Role: Entry point: arg parse, atlas load, S0–S8 dispatch, codegen routing, emit/link orchestration · HEXA_CG_PROFILE=1 = per-phase stderr rows across the FULL pipeline (lex→emit_asm; frontend marks 2026-07-03, ~99.9% wall coverage; env unset = silent no-op)"
               },
               {
                 "name": "Lex (S0)",
@@ -4268,7 +4268,7 @@
                 "name": "Codegen (LIR)",
                 "role": "",
                 "id": "component-map-table-component-path-role-codegen-lir",
-                "detail": "Path: `compiler/codegen/{arm64_darwin,x86_64_linux,thumbv7em_eabihf,nvptx_target}.hexa` · Role: MIR → LIR, target-specific regalloc + instruction selection"
+                "detail": "Path: `compiler/codegen/{arm64_darwin,x86_64_linux,thumbv7em_eabihf,nvptx_target}.hexa` · Role: MIR → LIR, target-specific regalloc + instruction selection · per-operand 조회 O(1): regalloc id2idx 직접배열(#3712·arm64 포트) + strtab 64-bucket FNV-1a 해시인덱스(#4454 계열·양 백엔드·byteeq-neutral)"
               },
               {
                 "name": "Emit (asm/object)",
@@ -4541,6 +4541,12 @@
                     "detail": ""
                   }
                 ]
+              },
+              {
+                "name": "Per-module compile gate",
+                "role": "",
+                "id": "component-map-table-component-path-role-per-module-compile-gate",
+                "detail": "Path: `tool/compile_gate.py` (+`compile_gate_selftest.py`) · Role: design-D closure-delta compile gate — changed module alone `hexa build --c-only` + clang -fsyntax-only vs generated sibling interface skeleton (runtime.h hexa_callN boxing asymmetry encoded); NON-BYPASSABLE escalation to whole-closure `hexa build` on interface delta/misparse/infra/stale-anchor; never invokes `hexa run`, run-binary cache untouched (byteeq/determinism gates unaffected). Measured on real 23-file closure: 10.06s full → 1.54s worst-case module gate; selftest 16/16"
               }
             ]
           }
@@ -5395,13 +5401,13 @@
             "detail": ""
           },
           {
-            "name": "L1 defer — ✅ MERGED(#4446 · squash c7c1832c4): native aprime 패리티 포트 착지, byteeq 3-target(gen3≡gen4+byteeq-real+faithful darwin/linux-x86_64/linux-arm64)+miscompile-zero+determinism ALL-GREEN으로 무사용 bit-identity CI 증명. 구현=contextual Ident 게이트(compiler/parse/parser.hexa parse_defer_expr·Q4 화이트리스트·assignment-body HX0014 거부)+Block carrier(text __defer__)+HIR kind defer+MIR 단일-exit epilogue(count==0=완전 무변경·신규 runtime 심볼 0)+selftest 2면(stdlib/lang/defer_test.hexa @ci_gate·self/test/miscompile_zero/c13_defer.hexa)+tree-sitter 키워드. oracle=gen2(fn-exit LIFO·at-most-once·throw no-drain 문서화). Step0 실측 QA 완료(aiden·state/hexa-own/step0_verdict.md=SSOT): 확증 5/6(LIFO·reached-flag·loop at-most-once drain-time·return-drain·throw-우회)·FRESHRUN==GEN2==SHIPRUN. 실측 divergence 2건 = ① C4(루프-carried defer를 return이 앞지름): native 발화(규범 일치) vs gen2 미발화 → 처분(b) gen2 결함 분류·후속=gen2 emitted-C 검사→self/codegen.hexa fix(byteeq-민감 별도 PR)+defer_test C4 게이트 ② native 파서 bare-return이 다음 줄 ident-선두 문장을 return값으로 삼킴(HX2001·gen2는 정상) → M1 후속 수정감. 계획서=state/hexa-own/M1_defer_wiring.md.",
+            "name": "L1 defer + @own drop — census(wrk4s86e9) 판정: defer는 이미 gen2 C-transpile(self/lexer.hexa:39·parser.hexa:4749·codegen.hexa fn-exit LIFO drain, 무사용 zero-emission 기설계)과 interp에 존재 · M1의 유일한 갭=native aprime 경로(compiler/) → 성격=in-repo reference-match 패리티 포트(oracle=gen2: fn-exit LIFO·reached-flag at-most-once·throw는 drain 안 탐). 계획서 SSOT=state/hexa-own/M1_defer_wiring.md (Step0 특성화→PARSER-1 contextual carrier→HIR 문자열 태그→MIR 단일-exit epilogue(count==0=완전 무변경)→codegen 무수정 검증→3실행기 selftest→HX0xxx 진단).",
             "role": "",
             "id": "hexa-own-ladder-l1-defer",
             "detail": ""
           },
           {
-            "name": "L2 move/affine — r1 ✅ MERGED(#4455 · a4f511afe): HEXA_OWN_LINT=1 opt-in own-lint, 블록-로컬 @own let의 use-after-move를 HX3012 Warning으로 검출(레지스트리=r5형 병렬배열·benv 키 재정의 금지 준수·flag-OFF 구조적 zero-cost). byteeq 3-target+faithful+miscompile+det GREEN으로 flag-OFF bit-identity CI 증명. Wall A 기판(_infer_expr Block arm) 확장·파서 무수정. 다음 rung=param/return/field own·error 승격(M4)·레시피=state/hexa-own/L2_own_static_integration.md.",
+            "name": "L2 move/affine own-lint = 소유권 이동 후 사용(double-free·use-after-move) 컴파일타임 검출 — lifetime 추론 없음. 설계 전제: 진행중인 Wall A static-types 캠페인(compiler/check/types.hexa · HEXA_STATIC_TYPES=1 opt-in REJECT 사다리 r1~r5 main·r6 브랜치·Rust-target) 위에 탄다 — @own은 정적 타입 한정자로, own-lint는 Wall A와 같은 opt-in 검사 패스로 통합(별도 dataflow 전용 설계 아님).",
             "role": "",
             "id": "hexa-own-ladder-l2-affine",
             "detail": ""
