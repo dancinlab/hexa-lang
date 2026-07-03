@@ -33,7 +33,10 @@ pub fn gcd(a, b) -> int {
 }
 
 pub fn lcm(a, b) -> int {
-    if a == 0 || b == 0 { 0 } else { abs(a * b) / gcd(a, b) }
+    // divide BEFORE multiply so the intermediate never exceeds the result:
+    // abs(a*b) overflows i64 when a*b > 2^63-1 even if the true lcm fits
+    // (e.g. lcm(6e9, 9e9) wrapped negative). abs(a)/gcd is exact (gcd | a).
+    if a == 0 || b == 0 { 0 } else { abs(a) / gcd(a, b) * abs(b) }
 }
 
 pub fn pow(base, exp) -> int {
@@ -269,6 +272,30 @@ pub fn omega_big(n) -> int {
 // λ(6)=λ(2·3)=(−1)²=1; λ(8)=λ(2³)=(−1)³=−1.
 pub fn liouville(n) -> int {
     if omega_big(n) % 2 == 0 { 1 } else { -1 }
+}
+
+// mobius(n) = μ(n) — the Möbius function (OEIS A008683). μ(1)=1; μ(n)=0 if n
+// has a squared prime factor; otherwise μ(n)=(−1)^k where k is the number of
+// distinct prime factors. Same √x trial-division skeleton as omega_big()/
+// sopfr(): for each prime divisor d, divide it out once and bail to 0 the
+// moment a second copy survives (squared factor); count distinct primes; the
+// residual x>1 is one final distinct prime. μ(2)=−1, μ(6)=μ(2·3)=1, μ(4)=0,
+// μ(30)=μ(2·3·5)=−1, μ(210)=μ(2·3·5·7)=1.
+pub fn mobius(n) -> int {
+    if n == 1 { return 1 }
+    let count = 0
+    let x = n
+    let d = 2
+    while d * d <= x {
+        if x % d == 0 {
+            x = x / d
+            if x % d == 0 { return 0 }
+            count = count + 1
+        }
+        d = d + 1
+    }
+    if x > 1 { count = count + 1 }
+    if count % 2 == 0 { 1 } else { -1 }
 }
 
 // liouville_summatory(n) = L(n) = Σ_{k=1}^{n} λ(k) (OEIS A002819).

@@ -49,13 +49,16 @@ emit_one() {
     local raw="$TMP/raw.s"
     "$APRIME" "$TMP/_drv.hexa" --emit=asm --target="$triple" -o "$raw" "$SRC" >/dev/null 2>&1
     local n; n="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?rt_map_(get|fnv1a|strcmp0|contains)_native' "$raw" || echo 0)"
-    [ "$n" -ge 4 ] || { echo "[regen_map_core] ERROR: $triple emitted only $n/4 rt_map_*_native" >&2; exit 1; }
+    [ "$n" -ge 4 ] || { echo "[regen_map_core] ERROR: $triple emitted only $n/4 read-half rt_map_*_native" >&2; exit 1; }
+    local ni; ni="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?rt_map_set_inplace_native' "$raw" || echo 0)"
+    [ "$ni" -ge 1 ] || { echo "[regen_map_core] ERROR: $triple missing construct-half rt_map_set_inplace_native" >&2; exit 1; }
     {
-        printf '// %s — FROZEN BOOTSTRAP SEED (RT-NATIVE leg B M4 MAP-R3).\n' "$(basename "$out")"
+        printf '// %s — FROZEN BOOTSTRAP SEED (RT-NATIVE leg B M4 MAP-CONSTRUCT-R1).\n' "$(basename "$out")"
         printf '// GENERATED: tool/regen_map_core_native_s.sh — aprime_cc _drv.hexa --emit=asm\n'
         printf '//   --target=%s -o %s stdlib/runtime/map_core.hexa.\n' "$triple" "$(basename "$out")"
-        printf '//   Provides the map-core READ-half (rt_map_get_native / rt_map_set_native /\n'
-        printf '//   rt_map_len_native / rt_map_pop_native) as native raw-mem bodies\n'
+        printf '//   Provides the map-core READ-half (rt_map_get_native / rt_map_fnv1a_native /\n'
+        printf '//   rt_map_strcmp0_native / rt_map_contains_native) PLUS the CONSTRUCT-half\n'
+        printf '//   in-place write (rt_map_set_inplace_native) as native raw-mem bodies\n'
         printf '//   (__hx_ptr_load64/store64 over the HexaArr descriptor + __hx_make_val tag\n'
         printf '//   re-stamp). These intrinsics are gen2-native-only (the hexat C-transpile\n'
         printf '//   bootstrap cannot lower them), so the bodies enter the shipped runtime.a ONLY\n'
@@ -63,11 +66,13 @@ emit_one() {
         printf '//   ABI: %s. External: hexa_to_int (runtime.c).\n' "$abi"
         printf '//   Lets stage_resolve_runtime_a define HEXA_RT_ARRAY_NATIVE + ar this .o into\n'
         printf '//   runtime.a so hexa_array_get/set delegate to the native bodies.\n'
-        # Normalize the `.file` quoted path AND the unquoted `// source: <abspath>`
-        # comment (emitted by some backends) so the frozen seed is byte-stable and
-        # host-independent (no /home/<user> path leaks into the committed artifact).
+        # Normalize the `.file` quoted path AND the unquoted `<cmt> source: <abspath>`
+        # comment (emitted by the backends with `//`, `#`, or `;` comment prefixes —
+        # the x86 backend uses `#`, the arm64 backend `;`) so the frozen seed is
+        # byte-stable and host-independent (no /home/<user> or /tmp/<wt> path leaks
+        # into the committed artifact).
         sed -E -e 's#"[^"]*map_core\.hexa"#"stdlib/runtime/map_core.hexa"#g' \
-               -e 's#^// source: .*map_core\.hexa#// source: stdlib/runtime/map_core.hexa#' "$raw"
+               -e 's#^([[:space:]]*(//|#|;))[[:space:]]*source:[[:space:]]*.*map_core\.hexa#\1 source: stdlib/runtime/map_core.hexa#' "$raw"
     } > "$out"
     # Sanity: cross-assemble + count defined-global rt_map_*_native.
     local cc_extra="" s="$TMP/check.s" o="$TMP/check.o"
@@ -77,8 +82,8 @@ emit_one() {
         arm64-linux-gnu)  [ "$(uname -s)" = Darwin ] && cc_extra="-target aarch64-linux-gnu" ;;
     esac
     if $CC $cc_extra -c "$s" -o "$o" 2>/dev/null; then
-        local t; t="$( (nm "$o" 2>/dev/null || echo) | grep -cE ' T _?rt_map_(get|fnv1a|strcmp0|contains)_native')"
-        echo "[regen_map_core] $triple → $out ($n globl · $t T)"
+        local t; t="$( (nm "$o" 2>/dev/null || echo) | grep -cE ' T _?rt_map_(get|fnv1a|strcmp0|contains|set_inplace)_native')"
+        echo "[regen_map_core] $triple → $out ($n read + $ni inplace globl · $t T)"
     else
         echo "[regen_map_core] WARN $triple: cross-assemble check skipped (no matching toolchain)" >&2
         echo "[regen_map_core] $triple → $out ($n globl)"

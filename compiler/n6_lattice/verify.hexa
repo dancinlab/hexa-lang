@@ -94,7 +94,6 @@ fn _compose(p, q) {
     let mut out = []
     let mut i = 0
     while i < n {
-        // @convergence state=in_flight id=N6LATTICE-COMPOSE-INDEX-MISCOMPILE value="p[q[i]] read garbage index 0x8_0000_0006 (len4 OOB) = HexaVal tag/payload upper-32 corruption (cf #3551/#3544 array-element-as-index)" threshold="split let idx=q[i] before p[idx]; real fix = codegen index-from-array-element lowering"
         let idx = q[i]
         out.push(p[idx])
         i = i + 1

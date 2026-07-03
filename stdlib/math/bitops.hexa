@@ -1,4 +1,4 @@
-// HEXA Standard Library — math/bitops
+// HEXA Standard Library — integer bit ops: pow2_int · bit_set
 //
 // @version 0.1.0
 // @capabilities [pure]

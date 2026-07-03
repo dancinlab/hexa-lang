@@ -35,10 +35,40 @@ fn _dce_contains(xs: [i64], v: i64) -> bool {
 }
 
 fn _dce_add(xs: [i64], v: i64) -> [i64] {
-    if _dce_contains(xs, v) { return xs }
+    // #3712 — push without the O(len) dedup scan: `uses` is consumed only as a
+    // SET (membership), and _dce_func converts it to an id-indexed boolean
+    // array, so duplicate entries are harmless. Dropping the per-add
+    // _dce_contains scan turns use-collection from O(uses²) to O(uses) on deep
+    // functions (the 7000-stmt runtime_cuda_emit). Byte-eq NEUTRAL — the
+    // resulting membership set is identical.
     let mut out = xs
     out.push(v)
     return out
+}
+
+// #3712 — largest local id referenced (dst or operand), to size the boolean
+// used-set. Bounded single pass.
+fn _dce_max_id(f: MFunc) -> i64 {
+    let mut m = -1
+    let mut bi = 0
+    while bi < len(f.blocks) {
+        let b = f.blocks[bi]
+        let mut si = 0
+        while si < len(b.stmts) {
+            let s = b.stmts[si]
+            if s.dst.id > m { m = s.dst.id }
+            let mut ai = 0
+            while ai < len(s.args) {
+                if s.args[ai].kind == "local" && s.args[ai].local_id > m {
+                    m = s.args[ai].local_id
+                }
+                ai = ai + 1
+            }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    return m
 }
 
 fn _dce_collect_uses_op(uses: [i64], o: Operand) -> [i64] {
@@ -100,7 +130,7 @@ fn _dce_has_dst(s: Stmt) -> bool {
 
 // ── Per-block, per-func ──────────────────────────────────────
 
-fn _dce_filter_block(b: Block, uses: [i64]) -> Block {
+fn _dce_filter_block(b: Block, used: [bool]) -> Block {
     let mut out: [Stmt] = []
     let mut i = 0
     while i < len(b.stmts) {
@@ -108,7 +138,11 @@ fn _dce_filter_block(b: Block, uses: [i64]) -> Block {
         let mut keep = true
         if !_dce_must_keep(s) {
             if _dce_has_dst(s) {
-                if s.dst.id >= 0 && !_dce_contains(uses, s.dst.id) {
+                // #3712 — O(1) id-indexed membership (was _dce_contains O(uses)
+                // scan per stmt → O(stmts·uses)). Identical decision.
+                let did = s.dst.id
+                let is_used = did >= 0 && did < len(used) && used[did]
+                if did >= 0 && !is_used {
                     keep = false
                 }
             }
@@ -121,10 +155,23 @@ fn _dce_filter_block(b: Block, uses: [i64]) -> Block {
 
 fn _dce_func(f: MFunc) -> MFunc {
     let uses = _dce_collect_uses(f)
+    // #3712 — fold the use-list into an id-indexed boolean set ONCE, so the
+    // per-stmt membership test in _dce_filter_block is O(1) (kills the
+    // O(stmts·uses) contains-scan). Byte-eq NEUTRAL — same membership.
+    let maxid = _dce_max_id(f)
+    let mut used: [bool] = []
+    let mut zi = 0
+    while zi <= maxid { used.push(false); zi = zi + 1 }
+    let mut ui = 0
+    while ui < len(uses) {
+        let uid = uses[ui]
+        if uid >= 0 && uid <= maxid { used[uid] = true }
+        ui = ui + 1
+    }
     let mut blocks: [Block] = []
     let mut i = 0
     while i < len(f.blocks) {
-        blocks.push(_dce_filter_block(f.blocks[i], uses))
+        blocks.push(_dce_filter_block(f.blocks[i], used))
         i = i + 1
     }
     return MFunc {
@@ -136,7 +183,8 @@ fn _dce_func(f: MFunc) -> MFunc {
         entry_block: f.entry_block,
         arena_root: f.arena_root,
         def_line: f.def_line,
-        gpu_kind: GPU_KIND_CPU
+        gpu_kind: GPU_KIND_CPU,
+        is_naked: false
     }
 }
 

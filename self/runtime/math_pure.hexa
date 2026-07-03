@@ -189,6 +189,15 @@ fn _to_float(x) {
 @pure
 pub fn trunc_pure(x) {
     let f = _to_float(x)
+    // Edge guards (QA stdlib-primitive audit, 2026-06-25): NaN propagates;
+    // ±Inf and any |x| >= 2^52 are already integral so return as-is. Without
+    // these the subtraction loop below NEVER terminates on +/-Inf (hang) and
+    // spins ~|x|/2^40 times on huge finite x. Finite |x| < 2^52 path unchanged
+    // (byte-eq). floor/ceil/round_pure all delegate here so the whole family
+    // is covered (round(Inf)->floor(Inf)->trunc(Inf)=Inf, NaN propagates).
+    if f != f { return f }                   // NaN (only value != itself)
+    if f >= 4503599627370496.0 { return f }  // >= 2^52 (covers +Inf): integral
+    if f <= -4503599627370496.0 { return f } // <= -2^52 (covers -Inf): integral
     // Integer truncation: subtract the fractional part
     // For positive: floor; for negative: ceil (toward zero)
     if f >= 0.0 {

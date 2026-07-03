@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# tool/build_bf16_own_smoke — r3-cublas-independence r2 BF16 own-GEMM production smoke.
+# Mirrors tool/build_cuda_runtime's proven object set, but links tool/cuda_bf16_verify.c
+# (the BF16 matmul entry point) instead of the FP64 harness. Regens runtime_bf16.c +
+# runtime_cuda.c from the emitter SSOT, nvcc-builds runtime_cuda.o (+dlink), recompiles
+# self/runtime.c with -DHEXA_CUDA + RT-NATIVE flags, links the matched prebuilt cores,
+# runs own (default) + cuBLAS (HEXA_BF16_OWN=0), compares own-vs-cuBLAS rel-RMS.
+# Run on aiden (RTX 5070 sm_120) after a `hexa run` of any program works (matched prebuilt).
+set -euo pipefail
+REPO="$(cd "$(dirname "$0")/.." && pwd)"; cd "$REPO"
+CUDA_HOME="${CUDA_HOME:-/usr/local/cuda-13.0}"
+[ -d "$CUDA_HOME" ] || CUDA_HOME=/usr/local/cuda
+SM="${SM:-120}"
+PREBUILT_RT="${PREBUILT_RT:-$HOME/.hx/bin/build/runtime.a}"
+HEXA="${HEXA:-$(command -v hexa || echo $HOME/.local/bin/hexa)}"
+CINC="$CUDA_HOME/targets/x86_64-linux/include"
+CLIB="$CUDA_HOME/targets/x86_64-linux/lib"
+export PATH="$CUDA_HOME/bin:$PATH"
+mkdir -p build/cuda; B=build/cuda; rm -f "$B"/*.o 2>/dev/null || true
+
+echo "=== probe ==="; nvcc --version | grep -i release
+[ -f "$PREBUILT_RT" ] || { echo "no prebuilt runtime.a at $PREBUILT_RT"; exit 1; }
+
+echo "=== extract RT-NATIVE cores (dynamic) ==="
+( cd "$B" && ar x "$PREBUILT_RT" )
+CORES="$(ls "$B"/*_native.o 2>/dev/null | tr '\n' ' ')"
+[ -n "$CORES" ] || { echo "no *_native.o cores"; exit 1; }
+
+echo "=== regen runtime_bf16.c + runtime_cuda.c from emitter SSOT ==="
+"$HEXA" run self/cuda/runtime_bf16_emit.hexa self/cuda/runtime_bf16.c >/dev/null
+"$HEXA" run self/cuda/runtime_cuda_emit.hexa self/cuda/runtime_cuda.c >/dev/null
+grep -q "_hx_k_gemm_bf16_owngemm" self/cuda/runtime_bf16.c || { echo "FATAL: own bf16 kernel missing from regen"; exit 1; }
+
+echo "=== nvcc runtime_cuda.o (sm_$SM) + dlink ==="
+nvcc -x cu -DHEXA_CUDA -rdc=true -gencode arch=compute_$SM,code=sm_$SM -O2 -w \
+     -I "$CINC/cccl" -I "$CINC" -I self -I self/cuda -I . \
+     -c self/cuda/runtime_cuda.c -o "$B/runtime_cuda.o"
+nvcc -dlink -gencode arch=compute_$SM,code=sm_$SM "$B/runtime_cuda.o" \
+     -o "$B/runtime_cuda_dlink.o" -lcudadevrt
+
+echo "=== host runtime.o (-DHEXA_CUDA + RT-NATIVE flags) — provides _hx_farr_table etc. ==="
+RTFLAGS="-DHEXA_RT_ARRAY_NATIVE=1 -DHEXA_RT_MAP_NATIVE=1 -DHEXA_RT_INTERN_NATIVE=1 -DHEXA_RT_ALLOC_NATIVE=1"
+gcc -O2 -D_GNU_SOURCE -DHEXA_HAS_OPENSSL -DHEXA_CUDA $RTFLAGS -w \
+    -I self -I . -I "$CINC" -c self/runtime.c -o "$B/runtime_cuda_host.o"
+
+echo "=== link bf16 smoke harness ==="
+gcc -O2 -w -c tool/cuda_bf16_verify.c -o "$B/bf16_harness.o"
+g++ -O2 "$B/bf16_harness.o" "$B/runtime_cuda_host.o" "$B/runtime_cuda.o" \
+    "$B/runtime_cuda_dlink.o" $CORES \
+    -L"$CLIB" -lcudart -lcublas -lcuda -lcudadevrt -lm -lpthread -lssl -lcrypto -ldl \
+    -o "$B/bf16_smoke"
+
+echo "### cuBLAS (default, HEXA_BF16_OWN unset) — must NOT print [BF16-OWN-FIRED] ###"
+LD_LIBRARY_PATH="$CLIB:${LD_LIBRARY_PATH:-}" "$B/bf16_smoke"
+echo "### OWN (HEXA_BF16_OWN=1) — must print [BF16-OWN-FIRED] ###"
+HEXA_BF16_OWN=1 LD_LIBRARY_PATH="$CLIB:${LD_LIBRARY_PATH:-}" "$B/bf16_smoke"
+
+echo "=== own-vs-cuBLAS-BF16 rel-RMS (the campaign gate, <=1e-2) ==="
+python3 - <<'PY'
+import struct, math
+for S in (512,1024,2048):
+    try:
+        a=open(f"/tmp/bf16_own_{S}.bin","rb").read(); b=open(f"/tmp/bf16_cub_{S}.bin","rb").read()
+    except FileNotFoundError: continue
+    n=len(a)//8
+    av=struct.unpack(f"<{n}d",a); bv=struct.unpack(f"<{n}d",b)
+    se=sum((x-y)**2 for x,y in zip(av,bv)); sr=sum(y*y for y in bv)
+    rr=math.sqrt(se/n)/math.sqrt(sr/n) if sr>0 else 0.0
+    print(f"  S={S}  own-vs-cuBLAS-BF16 rel-RMS = {rr:.3e}  (gate<=1e-2: {'PASS' if rr<=1e-2 else 'FAIL'})")
+PY
+echo "=== DONE ==="

@@ -68,6 +68,9 @@ pub enum TokenKind {
     Shr,           // >>  shift right
     At,
     Dot,
+    DotDot,        // ..  exclusive range / slice (r13)
+    DotDotEq,      // ..= inclusive range
+    DotDotDot,     // ... spread
 
     // Keywords
     KwFn,

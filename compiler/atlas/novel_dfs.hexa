@@ -1,0 +1,81 @@
+// HEXA Native Compiler — atlas novel-dfs hunt families (binary-absorbed)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Lives in compiler/atlas/ (verification domain). Ports the ATLAS exact-integer
+// hunt ENGINE (`../../ATLAS/state/novel-dfs/*_hunt.py`) natively — the orthogonal
+// mechanism families beyond the `=` product-identity class in `identity_engine.hexa`:
+//
+//   ≤  inequality-extremal  (inequality-extremal_hunt.py)  — universal bound over [2,N]
+//   ≡  congruence-mod-m     (congruence-modm_hunt.py)      — af(a) ≡ af(b) (mod m) ∀n
+//
+// Reuses `identity_engine`'s exact-int 12-fn `af()` table (no float). Honesty (c2):
+// a "universal" verdict is BOUNDED over [2,N] — forall-n stays UNPROVEN. The standard-
+// vocabulary relation space is MEASURED-EXHAUSTED (ATLAS/README DFS r1–r4, novel-fold 0);
+// this reproduces the terminal honestly, it does not fabricate. Special-function hunts
+// (r₂ / Ramanujan τ / partition p(n)) reuse `stdlib/math/numtheory_modular.hexa` and are
+// a separate follow-on (bignum / non-multiplicative classes). The state/novel-dfs/*.py
+// stay as the human-layer reference/cross-check engines (ATLAS/CLAUDE.md).
+
+use "compiler/atlas/identity_engine"
+
+// ── ≤ inequality-extremal: af(a) <= af(b) for ALL n in [2,N]? ──
+// Returns: 1 if universal (holds ∀n∈[2,N]), 0 if a counterexample exists.
+pub fn verify_le_universal(a, b, N) -> int {
+    let n = 2
+    while n <= N {
+        if af(n, a) > af(n, b) { return 0 }
+        n = n + 1
+    }
+    1
+}
+
+// ── ≡ congruence-mod-m: af(a) ≡ af(b) (mod m) for ALL n in [2,N]? ──
+// Returns: 1 if universal, 0 otherwise. m<=1 → rejected (0, degenerate).
+pub fn verify_congruence_universal(a, b, m, N) -> int {
+    if m <= 1 { return 0 }
+    let n = 2
+    while n <= N {
+        if (af(n, a) % m) != (af(n, b) % m) { return 0 }
+        n = n + 1
+    }
+    1
+}
+
+// ── selftest: prove the hunt families are REAL (sanity gates + negative controls,
+//    mirrors r2-sum-two-squares_hunt.py G/C methodology). ──
+fn ineq_gate(label, got, want) -> int {
+    if got == want {
+        println("  [PASS] " + label + "  -> universal=" + to_string(got))
+        return 0
+    }
+    println("  [FAIL] " + label + "  -> got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+
+fn main() {
+    let N = 20000
+    println("=== novel_dfs SELFTEST (native exact-int hunt families, N=" + to_string(N) + ") ===")
+    let fails = 0
+    // ids: 0=sigma 3=phi 5=n 7=rad 9=psi
+    println("≤ INEQUALITY GATES (known universal bounds — must hold ∀n):")
+    fails = fails + ineq_gate("G1 phi <= n", verify_le_universal(3, 5, N), 1)        // φ(n)<n
+    fails = fails + ineq_gate("G2 rad <= n", verify_le_universal(7, 5, N), 1)        // rad(n)≤n
+    fails = fails + ineq_gate("G3 n <= sigma", verify_le_universal(5, 0, N), 1)      // σ(n)≥n
+    fails = fails + ineq_gate("G4 n <= psi", verify_le_universal(5, 9, N), 1)        // ψ(n)≥n
+    println("≤ NEGATIVE CONTROLS (must have a counterexample — universal=0):")
+    fails = fails + ineq_gate("C1 sigma <= n (false)", verify_le_universal(0, 5, N), 0)  // σ(n)>n
+    fails = fails + ineq_gate("C2 n <= phi (false)", verify_le_universal(5, 3, N), 0)    // n>φ(n)
+    println("≡ CONGRUENCE (machinery check):")
+    fails = fails + ineq_gate("G5 n ≡ n (mod 6)", verify_congruence_universal(5, 5, 6, N), 1)
+    fails = fails + ineq_gate("C3 phi ≡ n (mod 2) (false)", verify_congruence_universal(3, 5, 2, N), 0)
+    fails = fails + ineq_gate("C4 m=1 degenerate reject", verify_congruence_universal(0, 3, 1, N), 0)
+    println("")
+    if fails == 0 {
+        println("RESULT: PASS - novel-dfs hunt families (≤ ≡) absorbed into binary (atlas)")
+        exit(0)
+    }
+    println("RESULT: FAIL (" + to_string(fails) + ")")
+    exit(1)
+}

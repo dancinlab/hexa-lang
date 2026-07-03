@@ -34,7 +34,7 @@ struct CloudCmd {
 fn cloud_commands() -> [CloudCmd] {
     let mut out: [CloudCmd] = []
     out.push(CloudCmd { name: "rent", group: "lifecycle",
-            args: "<provider> [--gpu T] [--image IMG] [--disk GiB] [--volume-gb N] [--ephemeral] [--desc TEXT] [--owner TAG] [--project NAME] [--query Q] [--max-wait-sec N] [--no-register] [--force-new]",
+            args: "<provider> [--gpu FAMILY|N] [--image IMG] [--disk GiB] [--volume-gb N] [--ephemeral] [--tier secure|community] [--secure] [--desc TEXT] [--owner TAG] [--project NAME] [--query Q] [--max-wait-sec N] [--no-register] [--force-new]",
             summary: "provision a GPU pod (vast|runpod) — auto-tags PROJECT (@<cwd repo/folder>, e.g. @demiurge) + PURPOSE (--desc/--purpose TEXT, else --owner, else unspecified), persists both + stamps a project-purpose slug on the provider --label; DEFAULTS to a persistent /workspace volume (>=40 GiB, --volume-gb N to size, --ephemeral to opt out + warn); IDEMPOTENT per (project,purpose): reuses a live M5 pod unless --force-new (MANUAL single-rent flag, never auto-invoked; auto re-rent on pod-loss DEPRECATED, pod-loss FAILS LOUD); waits ssh-ready, prints host:port + id (alias: up)" })
     out.push(CloudCmd { name: "rm", group: "lifecycle",
             args: "<id> [--provider P] [--force]",
@@ -120,6 +120,9 @@ fn cloud_commands() -> [CloudCmd] {
     out.push(CloudCmd { name: "copy-from", group: "io",
             args: "<host> <remote> <local> [conn] [--resume] [--verify-sha]",
             summary: "download (scp; --resume=rsync; sha256 check)" })
+    out.push(CloudCmd { name: "bootstrap", group: "io",
+            args: "<id> [--hexa edge|stable] [--push local:remote]... [--exec 'cmd'] [conn]",
+            summary: "one-shot pod setup: install hexa + SEQUENTIAL parent-mkdir+scp-retry+sha pushes + exec (composes the #71~77 trap-free primitives)" })
     out.push(CloudCmd { name: "dft-run", group: "plan",
             args: "<deck-dir> [--go] [--bin-pack] [--query Q] [--walltime-h N] [--identity P] [--image I] [--disk G] [--owner T]",
             summary: "guarded DFT el-ph (QE) dispatch; PREVIEW ($0) unless --go" })

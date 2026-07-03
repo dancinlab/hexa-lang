@@ -11,7 +11,7 @@
 #      (the dummy `_drv.hexa` first token satisfies the standalone driver's
 #       "missing SOURCE" guard; the real lib source is the trailing arg).
 #   3) prepend the frozen-seed header (provenance + ABI notes).
-#   4) sanity: cross-assemble + assert all 14 rt_str_* are defined-global (T).
+#   4) sanity: cross-assemble + assert all 15 rt_str_* are defined-global (T).
 #
 # NOTE on determinism: the emitted GLOBAL symbol set (the ABI/linkage contract)
 # is byte-identical across regen runs, but local `.L<hex>_bbN` basic-block label
@@ -21,8 +21,9 @@
 # refreshing the seed against an SSOT change, not for bit-reproducing the file.
 #
 # Targets:
-#   darwin  → self/native/runtime_hi_native.s  (arm64-apple-darwin, Mach-O)
-#   x86_64  → self/native/runtime_hi_x86_64.s  (x86_64-linux-gnu,    ELF)
+#   darwin      → self/native/runtime_hi_native.s       (arm64-apple-darwin, Mach-O)
+#   x86_64      → self/native/runtime_hi_x86_64.s       (x86_64-linux-gnu,    ELF)
+#   arm64-linux → self/native/runtime_hi_arm64-linux.s  (arm64-linux-gnu,     ELF aarch64)
 #
 # Requires a native compiler at $APRIME (default build/aprime_cc) — the gen3
 # self-host binary — and a C driver ($CC, default clang) to cross-assemble.
@@ -53,7 +54,7 @@ emit_one() {
     local raw="$TMP/raw.s"
     "$APRIME" "$TMP/_drv.hexa" --emit=asm --target="$triple" -o "$raw" "$LIB" >/dev/null 2>&1
     local n; n="$(grep -cE '^\.globl[[:space:]]+_?rt_str_' "$raw" || echo 0)"
-    [ "$n" -ge 14 ] || { echo "[regen_rt_hi] ERROR: $triple emitted only $n/14 rt_str_*" >&2; exit 1; }
+    [ "$n" -ge 15 ] || { echo "[regen_rt_hi] ERROR: $triple emitted only $n/15 rt_str_*" >&2; exit 1; }
     # PIC fixup (x86_64-linux only): the emitter loads a few string-literal
     # addresses with an ABSOLUTE `mov <reg>, .LCstrN`, which yields an
     # R_X86_64_32S relocation against `.rodata` — REJECTED when linking the
@@ -68,6 +69,27 @@ emit_one() {
             sed -E -i.picbak 's/^([[:space:]]*)mov ([a-z0-9]+), (\.LC[A-Za-z0-9_]+)([[:space:]].*)?$/\1lea \2, [rip+\3]\4/' "$raw"
             rm -f "$raw.picbak"
             ;;
+        arm64-linux-gnu)
+            # ELF-aarch64 reloc-syntax fixup: the shared arm64 codegen
+            # (compiler/codegen/arm64_darwin.hexa) emits Mach-O `@PAGE`/`@PAGEOFF`
+            # adrp/add pairs for string-literal (.LCstrN) address loads — the
+            # GNU/LLVM aarch64 ELF assembler instead spells the page-pair as a
+            # BARE symbol after `adrp` + a `:lo12:`-prefixed operand on `add`
+            # (R_AARCH64_ADR_PREL_PG_HI21 / R_AARCH64_ADD_ABS_LO12_NC, the same
+            # relocations the @PAGE/@PAGEOFF Mach-O pair encodes). Rewrite them so
+            # GNU `as`/clang accept the seed. The 8 prior native-seed families have
+            # NO string literals (pure raw-mem/arith), so rt_hi is the first
+            # arm64-linux seed to hit this — the direct `--emit=obj` ELF serializer
+            # (compiler/emit/elf_arm64.hexa) already emits the correct relocations;
+            # only the `--emit=asm` text path carries the Mach-O spelling. This is a
+            # text-spelling normalization, NOT a semantic change (verified: the sed
+            # output cross-assembles to a byte-equivalent .text/.rela set).
+            sed -E -i.armbak \
+                -e 's/^([[:space:]]*adrp [a-z0-9]+, )(\.?[A-Za-z0-9_.]+)@PAGE([[:space:]].*)?$/\1\2\3/' \
+                -e 's/^([[:space:]]*add [a-z0-9]+, [a-z0-9]+, )(\.?[A-Za-z0-9_.]+)@PAGEOFF([[:space:]].*)?$/\1:lo12:\2\3/' \
+                "$raw"
+            rm -f "$raw.armbak"
+            ;;
     esac
     {
         printf '// %s — FROZEN BOOTSTRAP SEED (RT-NATIVE leg B Z2a).\n' "$(basename "$out")"
@@ -75,7 +97,7 @@ emit_one() {
         printf '//   --target=%s -o %s runtime_hi_lib.hexa (lib-only head of self/runtime_hi.hexa).\n' "$triple" "$(basename "$out")"
         printf '//   Provides rt_str_* (zero C): split/lines/pad_left/pad_right/repeat/center +\n'
         printf '//   to_upper/to_lower/trim/trim_start/trim_end +\n'
-        printf '//   starts_with_b/ends_with_b/contains_b (14 fns). ABI: %s.\n' "$abi"
+        printf '//   starts_with_b/ends_with_b/contains_b + from_int (15 fns). ABI: %s.\n' "$abi"
         printf '//   Lets this target avoid #include "runtime_hi_gen.c" (leg B ls-reduction).\n'
         # Normalize the `.file`/source path (a per-run mktemp tmpdir) to a fixed
         # string so the frozen seed is byte-deterministic across regen runs — the
@@ -86,7 +108,8 @@ emit_one() {
     local cc_extra="" s="$TMP/check.s" o="$TMP/check.o"
     grep -vE '^// ' "$out" > "$s"
     case "$triple" in
-        x86_64-linux-gnu) [ "$(uname -s)" = Darwin ] && cc_extra="-target x86_64-linux-gnu" ;;
+        x86_64-linux-gnu) [ "$(uname -m)" = x86_64 ] || cc_extra="-target x86_64-linux-gnu" ;;
+        arm64-linux-gnu)  [ "$(uname -m)" = aarch64 ] || [ "$(uname -m)" = arm64 ] || cc_extra="-target aarch64-linux-gnu" ;;
     esac
     if $CC $cc_extra -c "$s" -o "$o" 2>/dev/null; then
         local t; t="$( (nm "$o" 2>/dev/null || echo) | grep -cE ' T _?rt_str_')"
@@ -101,6 +124,9 @@ emit_one() {
                 printf 'typedef struct{long a,b;}HexaVal;HexaVal rt_str_trim(HexaVal);int main(void){HexaVal z={0,0};rt_str_trim(z);return 0;}\n' > "$stub"
                 # define the hexa_* externs the seed calls so the stub link resolves
                 printf 'HexaVal hexa_array_new(void){HexaVal z={0,0};return z;}void hexa_array_push(HexaVal a,HexaVal b){(void)a;(void)b;}long hexa_len(HexaVal a){(void)a;return 0;}HexaVal hexa_str_byte_at(HexaVal a,long b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_str_join(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_str_substring(HexaVal a,long b,long c){(void)a;(void)b;(void)c;HexaVal z={0,0};return z;}HexaVal hexa_int(long a){(void)a;HexaVal z={0,0};return z;}HexaVal hexa_eq(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}int hexa_truthy(HexaVal a){(void)a;return 0;}\n' >> "$stub"
+                # arithmetic/compare/index externs introduced by rt_str_from_int
+                # (the construct-half itoa prim — integer math + array index).
+                printf 'HexaVal hexa_add_slow(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_sub(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_mul(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_div(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_mod(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_cmp_lt(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_cmp_le(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_cmp_gt(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_cmp_ge(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_index_get(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}\n' >> "$stub"
                 # Prefer a full cross toolchain (zig cc) for the PIE LINK — plain
                 # clang on a non-linux host has no linux crt/libc and fails the
                 # link for reasons unrelated to relocations (false negative). zig
@@ -130,8 +156,10 @@ emit_one() {
 case "$WHICH" in
     darwin) emit_one arm64-apple-darwin "$HX/self/native/runtime_hi_native.s" "Mach-O, _rt_str_* underscore + .private_extern" ;;
     x86_64) emit_one x86_64-linux-gnu   "$HX/self/native/runtime_hi_x86_64.s"  "ELF, rt_str_* no underscore + .hidden" ;;
+    arm64-linux) emit_one arm64-linux-gnu "$HX/self/native/runtime_hi_arm64-linux.s" "ELF aarch64, rt_str_* no underscore + .hidden" ;;
     all)
         emit_one arm64-apple-darwin "$HX/self/native/runtime_hi_native.s" "Mach-O, _rt_str_* underscore + .private_extern"
-        emit_one x86_64-linux-gnu   "$HX/self/native/runtime_hi_x86_64.s"  "ELF, rt_str_* no underscore + .hidden" ;;
-    *) echo "usage: $0 [darwin|x86_64|all]" >&2; exit 2 ;;
+        emit_one x86_64-linux-gnu   "$HX/self/native/runtime_hi_x86_64.s"  "ELF, rt_str_* no underscore + .hidden"
+        emit_one arm64-linux-gnu    "$HX/self/native/runtime_hi_arm64-linux.s" "ELF aarch64, rt_str_* no underscore + .hidden" ;;
+    *) echo "usage: $0 [darwin|x86_64|arm64-linux|all]" >&2; exit 2 ;;
 esac

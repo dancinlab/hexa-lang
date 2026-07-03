@@ -135,6 +135,36 @@ fn case_missing_close_brace() {
     dump_module("case i: missing } (HX0012 + resync)", src)
 }
 
+// Type-alias declarations (`type Name = Underlying`, Rust/Go). `type` is an
+// Ident leader (no keyword token), parsed into an ItemKind::Let carrier tagged
+// `__type_alias` + `@phase("parse_only")`. We expect: items count includes the
+// alias carriers, each alias is flagged by `item_is_type_alias`, and the
+// underlying type lands in `return_type`. The alias is then used in a fn
+// signature + arithmetic — type resolution makes `Celsius`/`MyInt` behave as
+// their underlying primitive so no spurious HX3001 in the later check passes.
+fn case_type_alias() {
+    let src = "type MyInt = i64\npub type Celsius = f64\ntype Box<T> = i64\ntype Temp = Celsius\nfn warm(t: Celsius) -> Celsius { return t * 1.8 + 32.0 }\nfn idx(n: MyInt) -> MyInt { return n + 1 }"
+    println("── case j: type alias (decl + generic + chain + use) ──")
+    let toks = lex(src, "<inline>")
+    let m = parse(toks, "<inline>")
+    println("  items=" + to_string(len(m.items)))
+    let mut i = 0
+    let mut alias_count = 0
+    while i < len(m.items) {
+        let it = m.items[i]
+        if item_is_type_alias(it) {
+            alias_count = alias_count + 1
+            // return_type carries the underlying spelling (named).
+            println("    alias " + it.name + " = " + it.return_type.name
+                    + " (parse_only=" + to_string(item_is_parse_only(it)) + ")")
+        }
+        i = i + 1
+    }
+    println("  alias_count=" + to_string(alias_count) + " (expect 4)")
+    let diags = parse_diags()
+    println("  parse_diags=" + to_string(len(diags)) + " (expect 0)")
+}
+
 println("══════════════════════════════════════════════")
 println("  HEXA Compiler — Parser Smoke Test (A1)")
 println("══════════════════════════════════════════════")
@@ -148,5 +178,6 @@ case_for_loop()
 case_assignment()
 case_missing_open_brace()
 case_missing_close_brace()
+case_type_alias()
 println("══════════════════════════════════════════════")
 println("  done.")

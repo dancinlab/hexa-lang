@@ -168,6 +168,22 @@ pub fn mbar_solve(u_kn: array, N_k: array, tol: float, max_iter: int) {
     let K = N_k.len()
     let Ntot = to_int(_ntot(N_k))
 
+    // empty data (no samples in any window): the sweep's logsumexp over an empty
+    // set returns the -1e300 sentinel, and 0 - (-1e300) = +1e300 then cancels in
+    // the gauge-fix to all-zeros — silently masquerading as a (non-converged)
+    // result. Return an explicit empty-data verdict instead of overflow algebra.
+    if Ntot == 0 {
+        let mut fz = []
+        let mut iz = 0
+        while iz < K { fz.push(0.0) iz = iz + 1 }
+        let oz = #{}
+        oz["f"] = fz
+        oz["iters"] = 0
+        oz["max_df"] = 0.0
+        oz["converged"] = false
+        return oz
+    }
+
     // init f_k = 0 (any gauge; the fixed point is gauge-independent).
     let mut f = []
     let mut i0 = 0

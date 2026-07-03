@@ -141,7 +141,25 @@ fi
 
 # ── stage 4: gcc compile the native compiler (native x86_64) ──────────────────
 log "stage4: gcc compile -> cc_native"
-CL_ERR="$($CC $GCC_FLAGS -I self -I . "$WORK/ap_post.c" -o "$WORK/cc_native" -lm -ldl 2>&1 | grep -iE 'error:|undefined' | head -10)"
+# RT-NATIVE PRINT (leg-B prerequisite, opt-IN default-OFF): when
+# HEXA_RT_PRINT_NATIVE=1, restore_frozen_seeds (above) injected a raw-`syscall`
+# Linux hxlcl_write into self/runtime.c; pass -DHEXA_RT_PRINT_NATIVE so the
+# injected #ifdef selects it. Unset (default) -> libc write() #else -> the
+# compiler binary is byte-identical to baseline. This is the compiler's OWN
+# on-path print leaf (the byteeq #18 fragility test).
+PRINT_NATIVE_DEF=""
+if [ "${HEXA_RT_PRINT_NATIVE:-0}" != "0" ]; then
+    PRINT_NATIVE_DEF="-DHEXA_RT_PRINT_NATIVE=1"
+    log "stage4: HEXA_RT_PRINT_NATIVE=1 — x86_64 raw-syscall hxlcl_write (libc write dropped on print leaf)"
+fi
+# Append build/runtime.a (the native runtime archive) so rt_array_*_native and
+# other native-runtime leaves resolve — ap_post.c inlines runtime_core.c but NOT
+# the native-emit runtime leaves. Archive link is LAZY (only undefined symbols are
+# pulled) → no multiple-definition with the inlined runtime (cf tool/CLAUDE.md:
+# archive=무충돌, only explicit-.o force-pulls). Verified: closes `undefined
+# reference rt_array_*_native` on the linux self-host link path.
+RT_A=""; [ -f "$REPO/build/runtime.a" ] && RT_A="$REPO/build/runtime.a"
+CL_ERR="$($CC $GCC_FLAGS $PRINT_NATIVE_DEF -I self -I . "$WORK/ap_post.c" $RT_A -o "$WORK/cc_native" -lm -ldl 2>&1 | grep -iE 'error:|undefined' | head -10)"
 if [ -n "$CL_ERR" ] || [ ! -x "$WORK/cc_native" ]; then
     echo "$CL_ERR" >&2
     fail gcc "cc_native compile/link failed"

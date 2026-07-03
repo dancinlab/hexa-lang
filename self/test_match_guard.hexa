@@ -1,0 +1,94 @@
+// ═══════════════════════════════════════════════════════════════════
+//  test_match_guard.hexa — match-arm pattern guards (RFC pattern guards)
+//
+//  Reference: The Rust Reference, "Match guards" —
+//    match x { n if n > 0 => …, _ => … }
+//  An arm `pattern if cond -> body` is taken iff the pattern matches AND
+//  the guard `cond` is truthy; a failed guard falls through to the next
+//  arm. Guards reuse the existing `if` token (no new keyword) and are
+//  parsed in compiler/parse/parser.hexa::parse_match_expr, lowered in
+//  compiler/lower/{ast_to_hir,hir_to_mir}.hexa.
+//
+//  NOTE: this exercises the NEW parser/lowering — it requires a hexa
+//  compiler built from this branch. The stale local oracle (~/.hx/bin)
+//  predates guards and cannot run it; verification is via pool/CI build.
+//
+//  Expected stdout:
+//    sign(0)=zero
+//    sign(5)=pos
+//    sign(-3)=neg
+//    band(0)=lo
+//    band(50)=mid
+//    band(150)=hi
+//    opt_some_pos=2
+//    opt_some_nonpos=0
+//    opt_none=-1
+//    ALL-PASS
+// ═══════════════════════════════════════════════════════════════════
+
+enum Opt {
+    None,
+    Some(i64)
+}
+
+// Literal arm + guarded ident arm + wildcard fall-through.
+fn sign(n: i64) -> string {
+    return match n {
+        0 -> "zero",
+        m if m > 0 -> "pos",
+        _ -> "neg"
+    }
+}
+
+// Multiple guards on the same catch-all binder — first truthy guard wins,
+// later arms are only reached when earlier guards fail.
+fn band(n: i64) -> string {
+    return match n {
+        x if x < 10 -> "lo",
+        x if x < 100 -> "mid",
+        _ -> "hi"
+    }
+}
+
+// Guard referencing an enum payload binder (`Some(v) if v > 0`). A failed
+// guard on a matched constructor must fall through to the next arm, NOT to
+// the body — proving the guard branch is inserted after the payload bind.
+fn opt_kind(o: Opt) -> i64 {
+    return match o {
+        Opt::Some(v) if v > 0 -> v,
+        Opt::Some(v) -> 0,
+        Opt::None -> -1
+    }
+}
+
+fn expect_s(label: string, got: string, want: string, acc: [i64]) {
+    println(label + "=" + got)
+    if got != want { acc[0] = 1 }
+}
+
+fn expect_i(label: string, got: i64, want: i64, acc: [i64]) {
+    println(label + "=" + to_string(got))
+    if got != want { acc[0] = 1 }
+}
+
+fn main() {
+    let mut acc = [0]
+
+    expect_s("sign(0)", sign(0), "zero", acc)
+    expect_s("sign(5)", sign(5), "pos", acc)
+    expect_s("sign(-3)", sign(-3), "neg", acc)
+
+    expect_s("band(0)", band(0), "lo", acc)
+    expect_s("band(50)", band(50), "mid", acc)
+    expect_s("band(150)", band(150), "hi", acc)
+
+    expect_i("opt_some_pos", opt_kind(Opt::Some(2)), 2, acc)
+    expect_i("opt_some_nonpos", opt_kind(Opt::Some(-7)), 0, acc)
+    expect_i("opt_none", opt_kind(Opt::None), -1, acc)
+
+    if acc[0] == 0 {
+        println("ALL-PASS")
+    } else {
+        println("FAIL")
+    }
+}

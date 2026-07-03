@@ -207,6 +207,139 @@ fn _type_id_of(t: Type) -> i64 {
     return 0
 }
 
+// runtime-gap r2c PRODUCER (HEXA_UNBOX_ARRAY_NATIVE) — gate check, mirrors the
+// codegen consumer `_unbox_array_enabled` exactly. When OFF the let-decl type_id
+// override below is skipped, so every Local's type_id is byte-identical to the
+// pre-r2c lowering (Gate-1 OFF-byteeq). Default-ON (opt-OUT via
+// HEXA_UNBOX_ARRAY_NATIVE=0) — release-safe once the regular 3-target byteeq
+// gate proves gen3≡gen4 holds with the stamping pass live.
+fn _arru_native_enabled() -> bool {
+    // element-pack (HEXA_PACK_ARRAY) ALSO needs the typed-prim element-kind
+    // (type_id 101..104) stamped on the container Local — it is the V8
+    // PACKED_SMI element-kind signal the native backend reads to choose the
+    // raw 8B packed storage path. element-pack is now DEFAULT-ON (opt-OUT via
+    // HEXA_PACK_ARRAY=0) — the stamping pass runs by default so the codegen
+    // _pack_array_enabled() consumer (also default-ON) sees the element-kind. The
+    // stamp alone is emit-neutral; the packing decision lives in the codegen gate.
+    // FLEET lane A2 (HEXA_PACK_ESCAPING, still opt-in) — escape-relax ALSO needs
+    // the typed-prim element-kind (101..104) stamped on the container Local so the
+    // codegen esc-mint lattice + poly-route can identify a typed-prim array.
+    return env("HEXA_UNBOX_ARRAY_NATIVE") != "0" || env("HEXA_PACK_ARRAY") != "0" ||
+           env("HEXA_PACK_ESCAPING") != "0"
+}
+
+// runtime-gap r2c PRODUCER — recover the typed-prim array type_id (101..104)
+// from a `let`'s declared array annotation text. The let text encodes the type
+// as `<name>|<type-text>` where the type-text for an array is `Array:<elem>` or
+// the sized `Array:<elem>:<N>` (parser r2c carry + RFC 085). We read the elem
+// segment (between the first and the optional second `:`) and map it to the same
+// id space `_type_id_of` produces for a `kind:"array"` Type. Returns 0 when the
+// text is not a typed-prim array annotation (untyped / non-prim elem / no `:`),
+// leaving the local's RHS-derived type_id untouched.
+//
+// WHY this is the missing producer: for `let mut xs: [i64] = []` the RHS is an
+// EMPTY array literal whose inferred `.typ` carries no element, so `_type_id_of`
+// over the RHS type returns 0. The declared `[i64]` annotation is the only place
+// the element survives; without this recovery the container Local reaches the
+// codegen index callsite with type_id 0 and the native-unbox guard never fires
+// (r2b probe `cont.type_id=0`). This stamps the proven element type onto the
+// container Local so `_x86_local_type` reports 101..104 at the index site.
+fn _arru_array_type_id_from_text(type_text: string) -> i64 {
+    let pfx = "Array:"
+    if len(type_text) <= len(pfx) { return 0 }
+    if type_text.substring(0, len(pfx)) != pfx { return 0 }
+    // elem = substring after `Array:` up to the next `:` (sized) or end.
+    let rest = type_text.substring(len(pfx), len(type_text))
+    let rchars = rest.chars()
+    let mut elem = ""
+    let mut ci = 0
+    while ci < len(rchars) {
+        if rchars[ci] == ':' { break }
+        elem = elem + to_string(rchars[ci])
+        ci = ci + 1
+    }
+    if elem == "i64" { return 101 }
+    if elem == "i32" { return 102 }
+    if elem == "f64" { return 103 }
+    if elem == "f32" { return 104 }
+    return 0
+}
+
+// element-pack FUSE (HEXA_PACK_ARRAY) — separate, NARROWER gate than
+// `_arru_native_enabled()` (which also fires for HEXA_UNBOX_ARRAY_NATIVE). The
+// element-type THREADING below (index-dst / let-copy / int-binop-result stamps)
+// is intentionally PACK-ONLY so the PROVEN r2c HEXA_UNBOX_ARRAY_NATIVE byteeq
+// (k3 2.7×) and the r5 HEXA_UNBOX_NATIVE path stay byte-identical to origin —
+// only the regressed PACK lane (standalone 1.147) changes. Default-OFF.
+fn _arrpk_fuse_enabled() -> bool {
+    // DEFAULT-ON with HEXA_PACK_ARRAY (opt-OUT via =0); escape-relax (FLEET lane A2)
+    // needs the same element-type THREADING (index-dst / let-copy / int-binop-result
+    // stamps) so a typed-prim array handle reaches the codegen esc lattice with
+    // type_id 101..104 (not 0). HEXA_PACK_ESCAPING stays opt-in.
+    return env("HEXA_PACK_ARRAY") != "0" || env("HEXA_PACK_ESCAPING") != "0"
+}
+
+// element-pack FUSE — inverse of `_arru_array_type_id_from_text`'s container map:
+// a typed-prim ARRAY type_id (101..104) → its SCALAR ELEMENT type_id. This is the
+// V8 PACKED_SMI element-tag: an [i64] container's element is statically i64
+// (type_id 1), [i32]→2, [f64]→3, [f32]→4. Returns 0 for a non-array / untyped
+// container (no element provenance to thread). Pure compile-time.
+fn _arru_elem_scalar_tid(arr_tid: i64) -> i64 {
+    if arr_tid == 101 { return 1 }   // [i64] element = i64
+    if arr_tid == 102 { return 2 }   // [i32] element = i32
+    if arr_tid == 103 { return 3 }   // [f64] element = f64
+    if arr_tid == 104 { return 4 }   // [f32] element = f32
+    return 0
+}
+
+// element-pack FUSE — look up a `local` operand's CURRENT MIR type_id by scanning
+// the module-scope `_lr_locals` for op.local_id. Lets a lowering site read the
+// type_id another site already stamped (e.g. the index-get dst's stamped element
+// type) without adding a new IR field. Returns 0 when `op` is not a local or the
+// id is not found (conservative: no element provenance).
+fn _lr_type_of_op(op: Operand) -> i64 {
+    if op.kind != "local" { return 0 }
+    let mut i = 0
+    while i < len(_lr_locals) {
+        if _lr_locals[i].id == op.local_id { return _lr_locals[i].type_id }
+        i = i + 1
+    }
+    return 0
+}
+
+// element-pack FUSE — is `op` PROVABLY a raw i64 payload at lowering time? Mirrors
+// the codegen `_x86_operand_provably_int` EXACTLY (const_int/const_bool literal,
+// or a `local` whose stamped MIR type_id == 1 = i64). Used to decide whether an
+// int-arith binop's untyped result dst can be stamped i64 (so the codegen
+// binop-unbox dst-check passes). i32(2)/f64(3)/f32(4) are deliberately NOT
+// provably-i64 here — they fall through to the boxed path, same as codegen.
+fn _lr_operand_provably_i64(op: Operand) -> bool {
+    if op.kind == "const_int"  { return true }
+    if op.kind == "const_bool" { return true }
+    if op.kind == "local" { return _lr_type_of_op(op) == 1 }
+    return false
+}
+
+// element-pack FUSE — stamp the LAST `_lr_locals` Local with `tid`, rebuilt from
+// the supplied `base` copy's fields (NOT re-read from the module-global inside a
+// helper — that routing produced a cyclic Stmt → infinite hexa_val_heapify on the
+// self-hosted backend). Mirrors the proven inline line-1666 PRODUCER pattern.
+// PURE — rebuild `base` with type_id = `tid`, all other fields preserved. No
+// module-global mutation here (the `_lr_locals[_li] = …` assignment stays INLINE
+// at each call site, byte-for-byte mirroring the proven line-1666 PRODUCER; an
+// earlier void-helper that mutated `_lr_locals` itself produced a miscompiled
+// cyclic Stmt → infinite hexa_val_heapify on the self-hosted backend).
+fn _lr_rebuild_local_tid(base: Local, tid: i64) -> Local {
+    return Local {
+        id: base.id,
+        arena_id: base.arena_id,
+        type_id: tid,
+        name_hint: base.name_hint,
+        precision: base.precision,
+        space: base.space
+    }
+}
+
 // ── Local-name binding (HIR ident → MIR Local) ──────────────
 
 pub struct LocalBinding {
@@ -245,6 +378,82 @@ pub let mut _lr_frame_starts: [i64] = []
 // Module-level globals -- set once per module in lower_hir, then
 // read-only for the rest of the pass (every fn / closure body shares).
 pub let mut _lr_globals: [Local] = []
+
+// ── fn-ref-as-value registry ─────────────────────────────────
+// Top-level `fn` names + their parameter arities, collected in a pre-pass
+// at lower_hir entry (BEFORE the body-lowering loop, so a fn referenced
+// before its own declaration still resolves). When a bare ident in VALUE
+// position (not a call callee, not a local, not a module `let` global)
+// matches a name here, it is lowered to a `closure_new` with an empty env
+// — exactly mirroring the C-transpile path's `hexa_fn_new((void*)<name>,
+// arity)` auto-wrap (self/codegen.hexa `_gen2_should_autowrap_fnref`,
+// e.g. line 4433/5411/7254). Without this, `thread_spawn(worker, 1)` (a fn
+// passed as a value across the spawn boundary) hit HX1101 "unbound
+// identifier in lower" because _mir_lookup/_mir_lookup_global only know
+// locals + ITEM_LET globals, never `fn` names. closure_new is the proven
+// indirect-callable carrier (both backends emit hexa_closure_new; the
+// runtime hexa_call1 the thread entry uses dispatches TAG_CLOSURE), so an
+// empty-env closure_new over the fn symbol is a callable fn value.
+pub let mut _lr_fn_ref_names: [string] = []
+pub let mut _lr_fn_ref_arities: [i64] = []
+
+// ── defer state (HEXA-OWN M1 — native port of gen2's flags+goto) ─────
+// Mirrors self/codegen.hexa `_gen2_defer_bodies` / `_gen2_defer_flag_count`
+// (2739-2740): _lower_fn pre-scans the fn's HIR body for "defer" nodes.
+// COUNT==0 → every field below stays inert and the lowering is
+// byte-for-byte identical to a defer-free build (the whole bit-identity
+// requirement). COUNT>0 → _lower_fn allocates one i64 flag local per
+// lexical defer (init 0) plus a `__defer_ret` carrier local and an
+// up-front exit block; the "defer" case in _lower_hexpr sets the next
+// flag to 1 (reached-flag registration = at-most-once, incl. loops) and
+// stashes the body HExpr here; the "return" case reroutes through
+// `__defer_ret` + STMT_BR to the exit block; _lower_fn materializes the
+// exit block as reverse-order (LIFO) STMT_BR_COND-guarded drains ending
+// in a single STMT_RETURN(__defer_ret). Only existing MIR stmt kinds are
+// used — no new runtime symbols, no codegen/emit changes.
+// _lower_closure suspends `_lr_defer_active` for the lambda body (a
+// closure is its own call frame; a `defer` inside one is diagnosed).
+pub let mut _lr_defer_active = false
+pub let mut _lr_defer_flag_ids: [i64] = []
+pub let mut _lr_defer_bodies: [HExpr] = []
+pub let mut _lr_defer_next = 0
+pub let mut _lr_defer_exit_block = -1
+pub let mut _lr_defer_ret_local = -1
+
+// arity (param count) of a top-level fn name, or -1 if not a known fn.
+fn _lr_fn_ref_arity(name: string) -> i64 {
+    let mut i = 0
+    while i < len(_lr_fn_ref_names) {
+        if _lr_fn_ref_names[i] == name { return _lr_fn_ref_arities[i] }
+        i = i + 1
+    }
+    return -1
+}
+
+// ── runtime TAG_FN/TAG_CLOSURE carrier names ─────────────────
+// The `_hexa_init_thread_fn_shims` family (self/native/thread_emit.hexa) — each
+// is a `HexaVal <name>;` DATA carrier global registered at runtime, NOT a C
+// function. A call `thread_spawn(worker, 1)` must dispatch through the runtime
+// hexa_callN dispatcher (which reads the TAG_FN payload + invokes the fn-ptr),
+// NOT a direct `call thread_spawn` (which jumps into BSS data → SIGSEGV). These
+// names mirror the bind allowlist additions (compiler/check/bind.hexa) — same
+// carrier set. Mirrors the C-transpile hexa_callN fallback (codegen.hexa:8251).
+fn _lr_is_carrier_call(name: string) -> bool {
+    if name == "thread_spawn" { return true }
+    if name == "thread_join" { return true }
+    if name == "thread_channel_new" { return true }
+    if name == "thread_channel_send" { return true }
+    if name == "thread_channel_recv" { return true }
+    if name == "thread_channel_close" { return true }
+    if name == "now_ms" { return true }
+    if name == "atomic_cell_new" { return true }
+    if name == "atomic_cell_load" { return true }
+    if name == "atomic_cell_store" { return true }
+    if name == "atomic_cell_add" { return true }
+    if name == "atomic_cell_sub" { return true }
+    if name == "atomic_cell_cas" { return true }
+    return false
+}
 
 pub struct LowerCtx {
     next_local: i64,
@@ -780,7 +989,28 @@ fn _is_known_hexpr_kind(k: string) -> bool {
     if k == "try" { return true }
     if k == "throw" { return true }
     if k == "closure" { return true }
+    if k == "defer" { return true }
     return false
+}
+
+// HEXA-OWN M1 — pre-scan a fn's HIR body for `defer` nodes, mirroring
+// self/codegen.hexa::_gen2_count_defers (2752-2781): recurse into every
+// statement container but NEVER into a nested closure body — a closure is
+// a separate call frame with its own (unsupported-in-M1) defer scope.
+// Counts nodes that may later be skipped by has_returned short-circuits
+// (e.g. a defer after `return`); the drain loop iterates only over
+// REGISTERED defers (_lr_defer_next), so an over-count just leaves an
+// unused flag local behind (dead-stored, DCE-safe).
+fn _count_defers_hexpr(e: HExpr) -> i64 {
+    if e.kind == "closure" { return 0 }
+    let mut n = 0
+    if e.kind == "defer" { n = 1 }
+    let mut i = 0
+    while i < len(e.children) {
+        n = n + _count_defers_hexpr(e.children[i])
+        i = i + 1
+    }
+    return n
 }
 
 // ── RFC closure C2 — free-variable analysis ─────────────────
@@ -851,6 +1081,25 @@ fn _collect_free(e: HExpr, bound: [string], acc: [string],
 
 // ── HExpr lowering core ─────────────────────────────────────
 
+// #3709 — detect a left-spine binop chain deep enough that the recursive
+// _lower_hexpr would risk overflowing gen3's own native stack. Only such
+// pathological chains (e.g. the 7000-`+` runtime_cuda_emit.hexa string
+// build) take the iterative path; everything below the threshold keeps the
+// proven recursive lowering UNCHANGED, so the byte-eq baseline for all
+// hand-written code is untouched (the iterative path is only ever exercised
+// where recursion would otherwise crash — there is no prior baseline to
+// violate there). Walk is O(depth) but bounded: it stops at the threshold.
+fn _hir_binop_left_spine_deep(e: HExpr) -> bool {
+    let mut depth = 0
+    let mut cur = e
+    while cur.kind == "binop" && len(cur.children) >= 2 {
+        depth = depth + 1
+        if depth > 1000 { return true }
+        cur = cur.children[0]
+    }
+    return false
+}
+
 fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     let k = e.kind
 
@@ -914,6 +1163,41 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let gid = _mir_lookup_global(ctx, e.text)
         if gid >= 0 {
             return _value(ctx, _global_op(gid, e.text))
+        }
+        // fn-ref-as-value: a bare ident that is NOT a local/param and NOT a
+        // module `let` global, but IS a top-level `fn` name, used in value
+        // position (e.g. passed as `thread_spawn(worker, 1)`). Box it as a
+        // plain TAG_FN fn value — the native analogue of the C-transpile
+        // `hexa_fn_new((void*)worker, arity)` auto-wrap (self/codegen.hexa
+        // _gen2_should_autowrap_fnref, e.g. line 4433/5411/7254). Without this,
+        // fn-refs-as-value hit the HX1101 fatal below (native backend never
+        // supported them).
+        //
+        // MUST be TAG_FN (op="fn_ref"), NOT closure_new (TAG_CLOSURE): the
+        // runtime call dispatch (runtime.h hexa_call1_hv) PREPENDS the env for
+        // a TAG_CLOSURE — `fp(hexa_closure_env(f), a1)` — which is correct for
+        // a lifted lambda `__hexa_lambda_N(__env, …)` but WRONG for a plain fn
+        // `worker(start)` (it has no env param; the env would be read as
+        // `start`). TAG_FN dispatches `fp(a1)` with no env, matching the plain
+        // fn signature. codegen lowers op="fn_ref" → hexa_fn_new((void*)<sym>,
+        // arity). args = [name_str, arity_int].
+        let _farity = _lr_fn_ref_arity(e.text)
+        if _farity >= 0 {
+            let mut ectx = _fresh_local(ctx, e.typ, "fnref_val")
+            let fn_l = _lr_locals[len(_lr_locals) - 1]
+            let mut fn_args: [Operand] = []
+            fn_args.push(_const_str_op(e.text))
+            fn_args.push(_const_int_op(_farity))
+            let fn_s = Stmt {
+                kind: STMT_ASSIGN,
+                dst: fn_l,
+                op: "fn_ref",
+                args: fn_args,
+                target_block: -1,
+                target_block_else: -1
+            }
+            ectx = _push_stmt(ectx, fn_s)
+            return _value(ectx, _local_op(fn_l.id))
         }
         // Stage1 punch list C5 — unbound ident in lower is fatal.
         // Previously returned `_const_int_op(0)`, masking cross-file
@@ -1068,6 +1352,105 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     // §3 P1/P2.
     //
     // ── binop → STMT_BINOP ──────────────────────────────────
+    //
+    // ITERATIVE LEFT-SPINE FLATTEN (#3709). Mirrors the _lower_expr fix in
+    // ast_to_hir.hexa: same-operator runs parse LEFT-LEANING (`a+b+c+…` →
+    // `((a+b)+c)…`), so child[0] is another binop all the way down. A naive
+    // `_lower_hexpr(child[0])` recursion is as deep as the chain — the same
+    // 7000-deep `+` emitter (self/cuda/runtime_cuda_emit.hexa) that blew
+    // _lower_expr's stack also drives THIS HIR→MIR pass ~7000 frames deep.
+    // We descend the child[0] spine with an explicit worklist and emit
+    // STMT_BINOP bottom-up — IDENTICAL post-order statement emission +
+    // _lr_locals mutation + ctx threading as the recursion, O(1) stack.
+    if k == "binop" && _hir_binop_left_spine_deep(e) {
+        // Collect the spine: spine[0] OUTERMOST (== e), each next is its
+        // child[0] while that child is also a 2-child binop.
+        //
+        // PERF (deep-spine O(n²) kill, r3): mirrors the ast_to_hir fix — do
+        // NOT `spine.push(cur)` the whole node. `cur.children[0]` is the
+        // O(N)-deep left subtree, so pushing the node into `[HExpr]`
+        // deep-`hexa_val_heapify`'d the entire remaining spine each iteration
+        // → O(N²) just to COLLECT the spine (measured: depth-2000 lowering
+        // dominated by hexa_val_heapify under lower_hir;…;_lower_hexpr;
+        // hexa_array_push). The unwind only reads each node's RIGHT child
+        // (`children[1]`, a shallow leaf) + `typ`/`text`, and the BASE leaf
+        // (`children[0]` of the deepest node). We collect a SHALLOW per-node
+        // carrier (right children only — child[0] dropped) so each push is
+        // O(1); field-identical for every field the unwind reads → byte-eq
+        // NEUTRAL, collapses spine collection from O(N²) to O(N).
+        let mut spine: [HExpr] = []
+        let mut cur = e
+        let mut base_leaf = cur
+        while true {
+            let mut rkids: [HExpr] = []
+            let mut rci = 1
+            while rci < len(cur.children) {
+                rkids.push(cur.children[rci])
+                rci = rci + 1
+            }
+            // Shallow carrier: same fields except children = RIGHT operands
+            // only (child[0] — the deep left — intentionally dropped; the
+            // unwind never reads spine[si].children[0]).
+            spine.push(HExpr {
+                kind: cur.kind,
+                span: cur.span,
+                typ: cur.typ,
+                text: cur.text,
+                children: rkids,
+                atlas: cur.atlas,
+                def: cur.def,
+                annotations: cur.annotations
+            })
+            if cur.children[0].kind == "binop" && len(cur.children[0].children) >= 2 {
+                cur = cur.children[0]
+            } else {
+                base_leaf = cur.children[0]
+                break
+            }
+        }
+        // Lower the spine base (deepest child[0]) first — matches the
+        // recursion fully lowering the leftmost leaf before any binop emit.
+        let mut acc = _lower_hexpr(ctx, base_leaf)
+        let mut cur_ctx = acc.ctx
+        let mut left_op = acc.operand
+        // Unwind deepest→outermost. Each node: lower its right child, emit
+        // STMT_BINOP(left_op, right) into a fresh local, propagate as left.
+        // Right operand is now stored at carrier children[0] (child[0] dropped).
+        let mut si = len(spine) - 1
+        while si >= 0 {
+            let bnode = spine[si]
+            let rr0 = _lower_hexpr(cur_ctx, bnode.children[0])
+            let mut bctx = _fresh_local(rr0.ctx, bnode.typ, "t")
+            let braw_dst = _lr_locals[len(_lr_locals) - 1]
+            let bdst_precision = _precision_from_typ_kind(bnode.typ.kind)
+            let bdst = Local {
+                id: braw_dst.id,
+                arena_id: braw_dst.arena_id,
+                type_id: braw_dst.type_id,
+                name_hint: braw_dst.name_hint,
+                precision: bdst_precision,
+                space: ""
+            }
+            _lr_locals[len(_lr_locals) - 1] = bdst
+            let bop_name = _op_with_precision(bnode.text, bdst_precision)
+            let mut bargs: [Operand] = []
+            bargs.push(left_op)
+            bargs.push(rr0.operand)
+            let bs = Stmt {
+                kind: STMT_BINOP,
+                dst: bdst,
+                op: bop_name,
+                args: bargs,
+                target_block: -1,
+                target_block_else: -1
+            }
+            bctx = _push_stmt(bctx, bs)
+            cur_ctx = bctx
+            left_op = _local_op(bdst.id)
+            si = si - 1
+        }
+        return _value(cur_ctx, left_op)
+    }
     if k == "binop" {
         if len(e.children) < 2 { return _no_value(ctx) }
         let lr = _lower_hexpr(ctx, e.children[0])
@@ -1086,7 +1469,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // so downstream walks see the precision tag too.
         let raw_dst = _lr_locals[len(_lr_locals) - 1]
         let dst_precision = _precision_from_typ_kind(e.typ.kind)
-        let dst = Local {
+        let mut dst = Local {
             id: raw_dst.id,
             arena_id: raw_dst.arena_id,
             type_id: raw_dst.type_id,
@@ -1095,6 +1478,23 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             space: ""
         }
         _lr_locals[len(_lr_locals) - 1] = dst
+        // element-pack FUSE — an int-arith binop (`+ - *`) whose result the
+        // typechecker left UNTYPED (type_id 0, e.g. `v + acc` when v came from an
+        // untyped index) but whose BOTH operands are provably raw i64 produces a
+        // raw i64 (two's-complement wraparound = native ALU semantics). Stamp the
+        // result i64 so the codegen `_x86_binop_unbox_ok` dst-check (== 1) passes
+        // and downstream readers of the result are also provably-int. Mirrors the
+        // codegen unbox gate (add/sub/mul only — NOT `/ %` which keep the boxed
+        // div-zero throw). Override-only-when-0, PACK-gated.
+        let _is_int_arith = (e.text == "add" || e.text == "+" ||
+                             e.text == "sub" || e.text == "-" ||
+                             e.text == "mul" || e.text == "*")
+        if _arrpk_fuse_enabled() && dst.type_id == 0 && _is_int_arith &&
+           _lr_operand_provably_i64(lr.operand) && _lr_operand_provably_i64(rr.operand) {
+            let _bi = len(_lr_locals) - 1
+            _lr_locals[_bi] = _lr_rebuild_local_tid(dst, 1)
+            dst = _lr_locals[_bi]
+        }
         let op_name = _op_with_precision(e.text, dst_precision)
         let mut args: [Operand] = []
         args.push(lr.operand)
@@ -1153,6 +1553,88 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
 
     // ── call → STMT_CALL ───────────────────────────────────
     if k == "call" {
+        // carrier call: `thread_spawn(worker, 1)` etc — the callee is a runtime
+        // TAG_FN/TAG_CLOSURE carrier DATA global, not a C fn. Emit op="carrier_call"
+        // with args = [carrier_name_str, arg1, …]; codegen loads the carrier
+        // HexaVal from the global and dispatches via hexa_callN_native. Must run
+        // BEFORE the named-call path, which would emit a fatal direct `call <name>`
+        // into BSS data. Skipped if the name is shadowed by a local/global binding.
+        if len(e.children) > 0 {
+            let cc0 = e.children[0]
+            if cc0.kind == "ident" {
+                let ccn = _strip_mut_prefix(cc0.text)
+                if _lr_is_carrier_call(ccn)
+                    && _mir_lookup(ctx, ccn) < 0
+                    && _mir_lookup_global(ctx, ccn) < 0 {
+                    let mut cctx = ctx
+                    let mut cc_args: [Operand] = []
+                    cc_args.push(_const_str_op(ccn))   // args[0] = carrier symbol
+                    let mut cai = 1
+                    while cai < len(e.children) {
+                        let cr = _lower_hexpr(cctx, e.children[cai])
+                        cctx = cr.ctx
+                        cc_args.push(cr.operand)
+                        cai = cai + 1
+                    }
+                    cctx = _fresh_local(cctx, e.typ, "carrier_ret")
+                    let cdst = _lr_locals[len(_lr_locals) - 1]
+                    let cs = Stmt {
+                        kind: STMT_ASSIGN,
+                        dst: cdst,
+                        op: "carrier_call",
+                        args: cc_args,
+                        target_block: -1,
+                        target_block_else: -1
+                    }
+                    cctx = _push_stmt(cctx, cs)
+                    return _value(cctx, _local_op(cdst.id))
+                }
+            }
+        }
+        // ING #29 literal-∅ (2026-06-30): `__hx_fn_addr(name)` — raw-unboxed-fn-ptr
+        // intrinsic. The callee is the intrinsic name; the SINGLE arg MUST be a bare
+        // ident that is a top-level `fn` name (validated via _lr_fn_ref_arity ≥ 0, the
+        // SAME resolver fn_ref uses). Lower to op="__hx_fn_addr" args=[name_str] — the
+        // codegen STMT_CALL special-case emits the raw .text address (lea/adrp+add)
+        // WITHOUT the hexa_fn_new_native TAG_FN boxing that fn_ref performs. This is the
+        // lowering shape shared with carrier_call (bare-fn-ident name extraction). A
+        // non-fn-ident arg (local/global/string) falls through to normal call lowering,
+        // which will then fail to find a runtime `__hx_fn_addr` symbol → clear error
+        // rather than silent mis-emit. Runs BEFORE the named-call path so the bare fn
+        // ident isn't first boxed as a fn_ref value. ADD-only / byte-eq NEUTRAL.
+        if len(e.children) > 0 {
+            let fc0 = e.children[0]
+            if fc0.kind == "ident" {
+                let fcn = _strip_mut_prefix(fc0.text)
+                if fcn == "__hx_fn_addr"
+                    && _mir_lookup_global(ctx, fcn) < 0 {
+                    // Need exactly 1 arg: a bare fn-ident.
+                    if len(e.children) == 2 && e.children[1].kind == "ident" {
+                        let argn = _strip_mut_prefix(e.children[1].text)
+                        // Must be a known top-level fn (mirrors fn_ref's guard).
+                        if _lr_fn_ref_arity(argn) >= 0
+                            && _mir_lookup(ctx, argn) < 0
+                            && _mir_lookup_global(ctx, argn) < 0 {
+                            let mut fctx = ctx
+                            let mut fa_args: [Operand] = []
+                            fa_args.push(_const_str_op(argn))   // args[0] = fn symbol name
+                            fctx = _fresh_local(fctx, e.typ, "fnaddr_ret")
+                            let fdst = _lr_locals[len(_lr_locals) - 1]
+                            let fs = Stmt {
+                                kind: STMT_ASSIGN,
+                                dst: fdst,
+                                op: "__hx_fn_addr",
+                                args: fa_args,
+                                target_block: -1,
+                                target_block_else: -1
+                            }
+                            fctx = _push_stmt(fctx, fs)
+                            return _value(fctx, _local_op(fdst.id))
+                        }
+                    }
+                }
+            }
+        }
         let mut ctx_r = ctx
         let mut callee_text = ""
         let mut arg_ops: [Operand] = []
@@ -1337,6 +1819,39 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 return _no_value(ctx_mm)
             }
         }
+        // r8 ROOT B — multi-arg print/println split (mirror self/codegen.hexa:6063).
+        // hexa_println/print_val/eprintln take ONE HexaVal; a single multi-arg call
+        // drops args[1..]. Emit print_val(op="print") per non-last arg, then let the
+        // normal STMT_CALL below handle the LAST arg with the original verb.
+        // Scope: println/print (stdout) only — the non-last arg uses op="print"
+        // (→hexa_print_val, mapped in _builtin_runtime_sym). eprintln/eprint are
+        // EXCLUDED (native has no "eprint"→hexa_eprint_val sym; splitting them would
+        // emit an undefined ref) — they keep the current single-call behavior (no
+        // regression). The corpus print-empty bugs (c1/c3/c7) all use println.
+        let _is_print_fam = callee_text == "println" || callee_text == "print"
+        if _is_print_fam && len(arg_ops) > 1 {
+            let mut _pi = 0
+            while _pi < len(arg_ops) - 1 {
+                let mut _pctx = _fresh_local(ctx_r, e.typ, "print_arg")
+                let _pdst = _lr_locals[len(_lr_locals) - 1]
+                let mut _pargs: [Operand] = []
+                _pargs.push(arg_ops[_pi])
+                let _ps = Stmt {
+                    kind: STMT_CALL,
+                    dst: _pdst,
+                    op: "print",
+                    args: _pargs,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx_r = _push_stmt(_pctx, _ps)
+                _pi = _pi + 1
+            }
+            // reduce arg_ops to just the LAST arg for the trailing call below
+            let mut _last: [Operand] = []
+            _last.push(arg_ops[len(arg_ops) - 1])
+            arg_ops = _last
+        }
         let mut ctx2 = _fresh_local(ctx_r, e.typ, "call_ret")
         let dst = _lr_locals[len(_lr_locals) - 1]
         let s = Stmt {
@@ -1360,6 +1875,41 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             ctx2 = r.ctx
             args.push(r.operand)
         }
+        // HEXA-OWN M1 — fn-exit single-exit epilogue (Q2). When the
+        // enclosing fn registered any defer, a `return` reroutes:
+        // `__defer_ret = value` (bare return keeps the void init) +
+        // STMT_BR to the pre-allocated exit block, where the LIFO drain
+        // and the single STMT_RETURN live. Defer-free fns
+        // (_lr_defer_active false) take the original path below,
+        // byte-identical. Return-site inline drains are deliberately NOT
+        // used — a textually-later defer reached via a loop back-edge
+        // would be missed; only the single exit block sees every flag.
+        if _lr_defer_active {
+            if len(args) > 0 {
+                let rs = Stmt {
+                    kind: STMT_ASSIGN,
+                    dst: _lr_locals[_lr_defer_ret_local],
+                    op: "assign",
+                    args: args,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx2 = _push_stmt(ctx2, rs)
+            }
+            let from_id = ctx2.cur_block
+            let bs = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: _lr_defer_exit_block,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt(ctx2, bs)
+            ctx2 = _add_edge(ctx2, from_id, _lr_defer_exit_block)
+            ctx2 = _set_returned(ctx2, true)
+            return _no_value(ctx2)
+        }
         let s = Stmt {
             kind: STMT_RETURN,
             dst: _miss_local(),
@@ -1370,6 +1920,47 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         }
         ctx2 = _push_stmt(ctx2, s)
         ctx2 = _set_returned(ctx2, true)
+        return _no_value(ctx2)
+    }
+
+    // ── defer (HEXA-OWN M1) — registration site ────────────
+    // Emits ONLY `__defer_flag_<slot> = 1` (reached-flag registration:
+    // at-most-once, incl. loop bodies — gen2 semantics, unlike Go's
+    // once-per-iteration) and stashes the body HExpr for the fn-exit
+    // drain _lower_fn materializes. The body is NOT lowered here, so its
+    // effects run at drain time with drain-time variable values (no
+    // registration-time capture — gen2 parity, documented divergence
+    // from Go).
+    if k == "defer" {
+        if !_lr_defer_active || _lr_defer_next >= len(_lr_defer_flag_ids) {
+            // Unsupported lowering position (closure body — its own call
+            // frame; M1 scopes defer to top-level fn bodies). Same
+            // diagnostic code as the parser's assignment-body reject.
+            let mut b = diag_new("HX0014")
+            b = diag_span(b, e.span)
+            b = diag_arg(b, "found", "closure body")
+            _lr_diag.push(diag_emit(b))
+            return _no_value(ctx)
+        }
+        let slot = _lr_defer_next
+        _lr_defer_next = _lr_defer_next + 1
+        let mut body = HExpr {
+            kind: "block", span: e.span, typ: e.typ, text: "",
+            children: [], atlas: e.atlas, def: e.def, annotations: []
+        }
+        if len(e.children) > 0 { body = e.children[0] }
+        _lr_defer_bodies.push(body)
+        let mut fargs: [Operand] = []
+        fargs.push(_const_int_op(1))
+        let fs = Stmt {
+            kind: STMT_ASSIGN,
+            dst: _lr_locals[_lr_defer_flag_ids[slot]],
+            op: "assign",
+            args: fargs,
+            target_block: -1,
+            target_block_else: -1
+        }
+        let ctx2 = _push_stmt(ctx, fs)
         return _no_value(ctx2)
     }
 
@@ -1451,7 +2042,44 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             }
         }
         ctx2 = _fresh_local_with_space(ctx2, rhs_t, hint, space)
-        let dst = _lr_locals[len(_lr_locals) - 1]
+        let mut dst = _lr_locals[len(_lr_locals) - 1]
+        // runtime-gap r2c PRODUCER — when the RHS type was unclassified
+        // (type_id 0, e.g. an empty `[]` array literal) but the declared
+        // annotation names a typed-prim array (`let xs: [i64]`), stamp the
+        // proven element type_id (101..104) onto the container Local. Gated on
+        // HEXA_UNBOX_ARRAY_NATIVE so the OFF path leaves type_id byte-identical.
+        // Only overrides when the RHS contributed nothing (0) — an already-typed
+        // RHS (e.g. a typed array-returning call) is authoritative and kept.
+        if _arru_native_enabled() && dst.type_id == 0 {
+            let _arr_tid = _arru_array_type_id_from_text(_hir_let_type_text(e.text))
+            if _arr_tid != 0 {
+                let _li = len(_lr_locals) - 1
+                _lr_locals[_li] = Local {
+                    id: dst.id,
+                    arena_id: dst.arena_id,
+                    type_id: _arr_tid,
+                    name_hint: dst.name_hint,
+                    precision: dst.precision,
+                    space: dst.space
+                }
+                dst = _lr_locals[_li]
+            }
+        }
+        // element-pack FUSE — a `let v = xs[j]` binding whose RHS is the
+        // (now-stamped) index-get temp is ITSELF left untyped by the typechecker
+        // (RHS index expr untyped → inferred let type 0). Without threading the
+        // element type onto `v`, a later `v + acc` sees v as type 0 → NOT
+        // provably-int → boxed. Copy the RHS local's stamped SCALAR type (1..4)
+        // onto v. Override-only-when-0, PACK-gated. Same first-divergence as the
+        // index-dst stamp, just at the let-copy site.
+        if _arrpk_fuse_enabled() && dst.type_id == 0 {
+            let _rtid = _lr_type_of_op(rhs_op)
+            if _rtid >= 1 && _rtid <= 4 {
+                let _li2 = len(_lr_locals) - 1
+                _lr_locals[_li2] = _lr_rebuild_local_tid(dst, _rtid)
+                dst = _lr_locals[_li2]
+            }
+        }
         let mut args: [Operand] = []
         args.push(rhs_op)
         let s = Stmt {
@@ -1493,6 +2121,33 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // runtime dispatches arrays via hexa_array_set and unwraps
         // VALSTRUCT, mirroring the existing index-get path
         // (7b00bd54).
+        // r24 — field-lhs assign `obj.field = val`. The prior path lowered a
+        // field lhs the same as an ident lhs (fresh local + rebind), which
+        // SILENTLY DROPPED the store on the actual struct map — every
+        // `c.depth = c.depth+1` through a fn param left the caller's struct
+        // unchanged (structs are map-backed reference values, so a field write
+        // must mutate the backing map). Mirrors the index-lhs path: route
+        // through op="field_set" args=[base, "<name>"_str, val] → codegen emits
+        // hexa_map_set(base, key, val), symmetric to the field-read map_get.
+        // (C-path self/codegen.hexa:3287 "Field assignment: obj.field = val".)
+        if lhs.kind == "field" && len(lhs.children) >= 1 {
+            let fbr = _lower_hexpr(ctx, lhs.children[0])
+            let frr = _lower_hexpr(fbr.ctx, e.children[1])
+            let mut fargs: [Operand] = []
+            fargs.push(fbr.operand)
+            fargs.push(_const_str_op(lhs.text))
+            fargs.push(frr.operand)
+            let fs = Stmt {
+                kind: STMT_ASSIGN,
+                dst: _miss_local(),
+                op: "field_set",
+                args: fargs,
+                target_block: -1,
+                target_block_else: -1
+            }
+            let fctx = _push_stmt(frr.ctx, fs)
+            return _no_value(fctx)
+        }
         if lhs.kind == "index" && len(lhs.children) >= 2 {
             let br = _lower_hexpr(ctx, lhs.children[0])
             let kr = _lower_hexpr(br.ctx, lhs.children[1])
@@ -2012,8 +2667,23 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
 
         let mut idx = 1
         while idx + 1 < len(e.children) {
-            let pat = e.children[idx]
+            let mut pat = e.children[idx]
             let body = e.children[idx + 1]
+
+            // RFC pattern guards — a guarded arm's pattern is a "match_guard"
+            // HExpr (children [inner_pattern, guard]). Unwrap to the inner
+            // pattern for the test + binding logic below; the guard HExpr is
+            // lowered AFTER the bindings (so it sees the bound payload vars)
+            // as a STMT_BR_COND that takes the body on truthy, else falls
+            // through to `next_id` (the next arm, or `join_id` for the last
+            // arm) — matching Rust's "guard fails → try next arm" semantics.
+            let mut has_guard = false
+            let mut guard_h = pat
+            if pat.kind == "match_guard" {
+                has_guard = true
+                guard_h = pat.children[1]
+                pat = pat.children[0]
+            }
 
             ctx2 = _new_block(ctx2)
             let arm_id = _lr_blocks[len(_lr_blocks) - 1].id
@@ -2362,6 +3032,34 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                     pi = pi + 1
                 }
             }
+            // RFC pattern guards — bindings are now emitted in `arm_id`; lower
+            // the guard expr HERE so it can read the payload binders, then
+            // split: a fresh `body_block` holds the arm body, and the guard
+            // STMT_BR_COND branches to it on truthy or to `next_id` on falsy
+            // (guard fail → try next arm). For the last arm `next_id` is the
+            // join, so a failed guard yields no value — exactly the Rust
+            // semantics that the S3 exhaustiveness warning (HX3006) flags.
+            if has_guard {
+                let gr = _lower_hexpr(ctx2, guard_h)
+                ctx2 = gr.ctx
+                let guard_end = ctx2.cur_block
+                ctx2 = _new_block(ctx2)
+                let body_block_id = _lr_blocks[len(_lr_blocks) - 1].id
+                let mut gargs: [Operand] = []
+                gargs.push(gr.operand)
+                let gbr = Stmt {
+                    kind: STMT_BR_COND,
+                    dst: _miss_local(),
+                    op: "",
+                    args: gargs,
+                    target_block: body_block_id,
+                    target_block_else: next_id
+                }
+                ctx2 = _push_stmt_to(ctx2, guard_end, gbr)
+                ctx2 = _add_edge(ctx2, guard_end, body_block_id)
+                ctx2 = _add_edge(ctx2, guard_end, next_id)
+                ctx2 = _set_cur_block(ctx2, body_block_id)
+            }
             let br_b = _lower_hexpr(ctx2, body)
             ctx2 = br_b.ctx
             if !ctx2.has_returned {
@@ -2617,10 +3315,41 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     // ── index: base[idx] → STMT_ASSIGN op="index" args=[base, idx] ─
     if k == "index" {
         if len(e.children) < 2 { return _no_value(ctx) }
+        // r13 — `arr[lo..hi]` / `arr[lo..=hi]`: the rhs is a range BinOp
+        // (text "range"/"range_inclusive", children=[lo,hi]). Lower to
+        // hexa_array_slice(base, lo, hi) (hi+1 for inclusive) instead of
+        // hexa_index_get, which would be handed a range value and crash.
+        // Mirrors self/codegen.hexa:8602-8613.
+        let _ridx = e.children[1]
+        if _ridx.kind == "binop" && (_ridx.text == "range" || _ridx.text == "range_inclusive") && len(_ridx.children) >= 2 {
+            let _slo = _ridx.children[0]
+            let mut _shi = _ridx.children[1]
+            if _ridx.text == "range_inclusive" {
+                _shi = _hir_add(_shi, _hir_lit_int("1", e), e)
+            }
+            let _sl = _hir_call3("hexa_array_slice", e.children[0], _slo, _shi, e)
+            return _lower_hexpr(ctx, _sl)
+        }
         let lr = _lower_hexpr(ctx, e.children[0])
         let rr = _lower_hexpr(lr.ctx, e.children[1])
         let mut ctx2 = _fresh_local(rr.ctx, e.typ, "idx")
-        let dst = _lr_locals[len(_lr_locals) - 1]
+        let mut dst = _lr_locals[len(_lr_locals) - 1]
+        // element-pack FUSE (PRIMARY EDIT) — the typechecker leaves an index
+        // expression UNTYPED (type_id 0): the index-get dst reaches codegen with
+        // no element provenance, so `_x86_operand_provably_int` is false and a
+        // downstream `xs[i] * C` binop stays BOXED (RECON-2). Thread the proven
+        // element type from the CONTAINER (lr.operand, stamped 101..104 by the
+        // r2c/element-pack producer) onto this dst (101→1, …). Override ONLY when
+        // the dst was untyped (0) — mirrors the line-1662 PRODUCER firewall — and
+        // ONLY under the PACK fuse gate, so the r2c/r5 paths stay byte-identical.
+        if _arrpk_fuse_enabled() && dst.type_id == 0 {
+            let _etid = _arru_elem_scalar_tid(_lr_type_of_op(lr.operand))
+            if _etid != 0 {
+                let _li = len(_lr_locals) - 1
+                _lr_locals[_li] = _lr_rebuild_local_tid(dst, _etid)
+                dst = _lr_locals[_li]
+            }
+        }
         let mut args: [Operand] = []
         args.push(lr.operand)
         args.push(rr.operand)
@@ -2704,6 +3433,15 @@ fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
     // enclosing fn sees (no per-ctx `globals` seed needed any more).
     let _lr_saved_arrays = _lr_ctx_save()
     _lr_ctx_fresh()
+    // HEXA-OWN M1 — suspend the enclosing fn's defer state for the lambda
+    // body: a closure is its own call frame, so its `return`s must emit
+    // plain STMT_RETURN (never the enclosing fn's __defer_ret reroute) and
+    // a `defer` inside it hits the HX0014 unsupported-position diagnostic
+    // instead of stealing an enclosing flag slot. Restored right after the
+    // enclosing arrays are restored below. No-op (false→false) when the
+    // enclosing fn has no defers — byte-identity preserved.
+    let _lr_saved_defer_active = _lr_defer_active
+    _lr_defer_active = false
     let mut lctx = _new_lower_ctx()
     lctx = _new_block(lctx)
     let lam_entry = _lr_blocks[len(_lr_blocks) - 1].id
@@ -2784,11 +3522,13 @@ fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
         entry_block: lam_entry,
         arena_root: lctx.arena_root,
         def_line: e.span.line,
-        gpu_kind: GPU_KIND_CPU
+        gpu_kind: GPU_KIND_CPU,
+        is_naked: false
     }
     _lr_lambdas.push(lam_func)
     // restore the enclosing fn's accumulators before lowering the site.
     _lr_ctx_restore(_lr_saved_arrays)
+    _lr_defer_active = _lr_saved_defer_active
 
     // ── 2. lower the closure SITE in the enclosing ctx ───────
     // env array: hexa_array_new() then push each captured value, in the
@@ -3166,6 +3906,51 @@ fn _hir_call1(fn_name: string, arg: HExpr, proto: HExpr) -> HExpr {
     }
 }
 
+// r13 — 3-arg builtin call HExpr (callee + a0,a1,a2). Used to synthesize
+// hexa_array_slice(base, lo, hi) for range-index slices.
+fn _hir_call3(fn_name: string, a0: HExpr, a1: HExpr, a2: HExpr, proto: HExpr) -> HExpr {
+    let callee = HExpr {
+        kind: "ident", span: proto.span,
+        typ: Type { kind: "", def: DefId { module: "", index: -1 }, args: [], ret: [], domain: "", unit: "" },
+        text: fn_name, children: [],
+        atlas: AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" },
+        def: DefId { module: "", index: -1 }, annotations: []
+    }
+    let mut kids: [HExpr] = []
+    kids.push(callee)
+    kids.push(a0)
+    kids.push(a1)
+    kids.push(a2)
+    return HExpr {
+        kind: "call", span: proto.span, typ: proto.typ, text: "", children: kids,
+        atlas: AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" },
+        def: DefId { module: "", index: -1 }, annotations: []
+    }
+}
+
+// r13 — literal-int HExpr (for the inclusive `..=` hi+1 adjustment).
+fn _hir_lit_int(v: string, proto: HExpr) -> HExpr {
+    return HExpr {
+        kind: "literal_int", span: proto.span,
+        typ: Type { kind: "int", def: DefId { module: "", index: -1 }, args: [], ret: [], domain: "", unit: "" },
+        text: v, children: [],
+        atlas: AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" },
+        def: DefId { module: "", index: -1 }, annotations: []
+    }
+}
+
+// r13 — binop `a + b` HExpr (hi + 1 for inclusive range end).
+fn _hir_add(a: HExpr, b: HExpr, proto: HExpr) -> HExpr {
+    let mut kids: [HExpr] = []
+    kids.push(a)
+    kids.push(b)
+    return HExpr {
+        kind: "binop", span: proto.span, typ: proto.typ, text: "+", children: kids,
+        atlas: AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" },
+        def: DefId { module: "", index: -1 }, annotations: []
+    }
+}
+
 // `_hir_is_nested_matmul_body` — true iff the fn body is the canonical
 // triple-nested-for desugared shape (outer-i wraps middle-j wraps
 // inner-k, with sum-accumulator + store) the WMMA matmul codegen lane
@@ -3359,6 +4144,64 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
         ann_i = ann_i + 1
     }
 
+    // HEXA-OWN M1 — defer pre-scan (mirrors _gen2_count_defers gating,
+    // self/codegen.hexa:2737-2738 "zero-cost when absent"). COUNT==0 →
+    // the module defer state is reset to inert and NOTHING below emits:
+    // no extra local, no extra block, no extra stmt — the lowering is
+    // byte-for-byte identical to today (the entire bit-identity
+    // requirement; cf. the @naked default-false precedent). COUNT>0 →
+    // allocate the single exit block up-front (so every return site BRs
+    // to a known id), a `__defer_ret` carrier local initialized to void
+    // (bare `return` in a unit fn keeps returning void), and one i64
+    // flag local per lexical defer, each initialized to 0.
+    let __defer_count = _count_defers_hexpr(it.body)
+    _lr_defer_active = false
+    _lr_defer_flag_ids = []
+    _lr_defer_bodies = []
+    _lr_defer_next = 0
+    _lr_defer_exit_block = -1
+    _lr_defer_ret_local = -1
+    if __defer_count > 0 {
+        _lr_defer_active = true
+        ctx = _new_block(ctx)
+        _lr_defer_exit_block = _lr_blocks[len(_lr_blocks) - 1].id
+        ctx = _fresh_local(ctx, it.sig_return, "__defer_ret")
+        _lr_defer_ret_local = _lr_locals[len(_lr_locals) - 1].id
+        let mut __ri: [Operand] = []
+        __ri.push(_const_void_op())
+        let __rs = Stmt {
+            kind: STMT_ASSIGN,
+            dst: _lr_locals[_lr_defer_ret_local],
+            op: "let",
+            args: __ri,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx = _push_stmt(ctx, __rs)
+        let __any_t = Type {
+            kind: "?", def: DefId { module: "", index: -1 },
+            args: [], ret: [], domain: "", unit: ""
+        }
+        let mut __df = 0
+        while __df < __defer_count {
+            ctx = _fresh_local(ctx, __any_t, "__defer_flag_" + to_string(__df))
+            let __fl = _lr_locals[len(_lr_locals) - 1]
+            _lr_defer_flag_ids.push(__fl.id)
+            let mut __fi: [Operand] = []
+            __fi.push(_const_int_op(0))
+            let __fs = Stmt {
+                kind: STMT_ASSIGN,
+                dst: __fl,
+                op: "let",
+                args: __fi,
+                target_block: -1,
+                target_block_else: -1
+            }
+            ctx = _push_stmt(ctx, __fs)
+            __df = __df + 1
+        }
+    }
+
     // RFC 071 P5++ follow-on (N101) — nested-loop matmul auto-synth.
     // BEFORE the normal body lowering, peek at (i) the fn-level
     // `@gpu_kernel` annotation, (ii) the canonical (a, b, c, M, N, K)
@@ -3408,6 +4251,102 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
         br_operand = br.operand
     }
 
+    if __defer_count > 0 {
+        // HEXA-OWN M1 — single-exit epilogue materialization (Q2).
+        // 1) Implicit fall-through mirrors a `return <last value>`:
+        //    stash the trailing block value into __defer_ret and BR to
+        //    the exit block.
+        if !ctx.has_returned {
+            if br_has_value {
+                let mut __fa: [Operand] = []
+                __fa.push(br_operand)
+                let __fs2 = Stmt {
+                    kind: STMT_ASSIGN,
+                    dst: _lr_locals[_lr_defer_ret_local],
+                    op: "assign",
+                    args: __fa,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx = _push_stmt(ctx, __fs2)
+            }
+            let __ft = ctx.cur_block
+            let __fb = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: _lr_defer_exit_block,
+                target_block_else: -1
+            }
+            ctx = _push_stmt(ctx, __fb)
+            ctx = _add_edge(ctx, __ft, _lr_defer_exit_block)
+        }
+        // 2) Exit block: reverse-registration-order (LIFO) drain. Each
+        //    REGISTERED defer contributes `br_cond flag_i ? body_i :
+        //    next_i`; the body is lowered HERE (bindings are never popped
+        //    in this pass — see _bind's "nothing ever pops _lr_bindings"
+        //    note — so drain-time name resolution sees the fn's locals,
+        //    matching gen2's flat-hoisted C names and drain-time-value
+        //    semantics). The chain ends in the single STMT_RETURN of
+        //    __defer_ret. Runs BEFORE the fn arena epilogue by
+        //    construction (codegen emits the arena return at
+        //    STMT_RETURN), preserving gen2's drain-then-arena order.
+        ctx = _set_cur_block(ctx, _lr_defer_exit_block)
+        let mut __di2 = _lr_defer_next - 1
+        while __di2 >= 0 {
+            ctx = _new_block(ctx)
+            let __body_id = _lr_blocks[len(_lr_blocks) - 1].id
+            ctx = _new_block(ctx)
+            let __next_id = _lr_blocks[len(_lr_blocks) - 1].id
+            let __chk_id = ctx.cur_block
+            let mut __ca: [Operand] = []
+            __ca.push(_local_op(_lr_defer_flag_ids[__di2]))
+            let __cs = Stmt {
+                kind: STMT_BR_COND,
+                dst: _miss_local(),
+                op: "",
+                args: __ca,
+                target_block: __body_id,
+                target_block_else: __next_id
+            }
+            ctx = _push_stmt_to(ctx, __chk_id, __cs)
+            ctx = _add_edge(ctx, __chk_id, __body_id)
+            ctx = _add_edge(ctx, __chk_id, __next_id)
+            ctx = _set_cur_block(ctx, __body_id)
+            let __dr = _lower_hexpr(ctx, _lr_defer_bodies[__di2])
+            ctx = __dr.ctx
+            if !ctx.has_returned {
+                let __de = ctx.cur_block
+                let __db = Stmt {
+                    kind: STMT_BR,
+                    dst: _miss_local(),
+                    op: "",
+                    args: [],
+                    target_block: __next_id,
+                    target_block_else: -1
+                }
+                ctx = _push_stmt(ctx, __db)
+                ctx = _add_edge(ctx, __de, __next_id)
+            }
+            ctx = _set_cur_block(ctx, __next_id)
+            __di2 = __di2 - 1
+        }
+        let mut __ra: [Operand] = []
+        __ra.push(_local_op(_lr_defer_ret_local))
+        let __rr = Stmt {
+            kind: STMT_RETURN,
+            dst: _miss_local(),
+            op: "",
+            args: __ra,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx = _push_stmt(ctx, __rr)
+        ctx = _set_returned(ctx, true)
+        _lr_defer_active = false
+    }
+
     if !ctx.has_returned {
         let mut args: [Operand] = []
         if br_has_value { args.push(br_operand) }
@@ -3429,17 +4368,56 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
     // the field (F-RFC055-CPU-CODEGEN-UNTOUCHED holds; the CPU emit
     // path is byte-identical when no @gpu_* function is present).
     let mut __gpu_kind = GPU_KIND_CPU
+    // RFC static-generics ①·R2 — opt-in monomorphization template marker.
+    // Mirror the @gpu_* → gpu_kind precedent above: read the HIR FnDecl's
+    // annotations and detect `@specialize`, which marks the fn as a
+    // monomorphization candidate (the same single-surface attribute R1
+    // already parses + the surface test exercises).
+    let mut __is_specialize = false
+    // ING #29 literal-∅ (2026-06-30): `@naked` fn attribute — detect on the HIR
+    // FnDecl (same single-surface @<name> annotation mechanism as @gpu_kernel /
+    // @specialize). Propagated to MFunc.is_naked so the codegen SKIPS the
+    // compiler-generated prologue/epilogue (reference-match: GCC
+    // __attribute__((naked)) / rustc #[naked] / zig callconv(.Naked)). Building
+    // block for the SA_RESTORER (signal) + setjmp/longjmp walls. DEFAULT false
+    // on every existing fn → byte-eq NEUTRAL (no byteeq-path fn carries @naked).
+    let mut __is_naked = false
     let mut __ai = 0
     while __ai < len(it.annotations) {
         let __an = it.annotations[__ai].name
         if __an == "gpu_kernel" { __gpu_kind = GPU_KIND_KERNEL }
         if __an == "gpu_device" { __gpu_kind = GPU_KIND_DEVICE }
+        if __an == "specialize" { __is_specialize = true }
+        if __an == "naked" { __is_naked = true }
         __ai = __ai + 1
     }
+    // F6 P0c-2 — forced copy: it.name is the HItem's name handle
+    // (hmodule outlives the streaming loop). PLAN-stage3-footprint-F6.md.
+    let mut __fn_name = it.name.substring(0, len(it.name))
+    // RFC static-generics ①·R2 — when an `@specialize` fn is lowered under
+    // HEXA_MONOMORPHIZE=1, suffix its MFunc name with the template sentinel
+    // MONO_TEMPLATE_MARK ("$$g") so compiler/optimize/monomorphize.hexa
+    // recognises it as a generic template (collect → infer per-call-site
+    // concrete tag from arg[0] operand kind → clone+mangle `base$tag` →
+    // retarget calls). This is the R1 pass's missing input: until now no
+    // default lowering emitted the marker, so the pass was a guaranteed
+    // no-op. Reference-match: rustc keys MonoItem::Fn(Instance) off the
+    // (template, concrete-type) pair; zig instantiates per comptime-T.
+    //
+    // DEFAULT byte-identity: the env flag is UNSET in every build (incl.
+    // self-host gen2/3/4 — they never set HEXA_MONOMORPHIZE), so the name
+    // stays byte-identical and no `$$g` symbol is ever emitted. The env()
+    // lookup is gated behind the (rare) `@specialize` annotation so the
+    // common path adds no syscall. Polarity: the type-erased dynamic shape
+    // remains the canonical default; monomorphization is an opt-in
+    // constraint (native-canonical-default rule).
+    if __is_specialize {
+        if env("HEXA_MONOMORPHIZE") == "1" {
+            __fn_name = __fn_name + "$$g"
+        }
+    }
     return MFunc {
-        // F6 P0c-2 — forced copy: it.name is the HItem's name handle
-        // (hmodule outlives the streaming loop). PLAN-stage3-footprint-F6.md.
-        name: it.name.substring(0, len(it.name)),
+        name: __fn_name,
         params: params,
         return_local: ret_local,
         locals: _lr_locals,
@@ -3449,7 +4427,8 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
         // #13 DWARF .loc — carry the fn-definition source line through to
         // codegen so it can emit a `.loc 1 <line> 0` directive.
         def_line: it.span.line,
-        gpu_kind: __gpu_kind
+        gpu_kind: __gpu_kind,
+        is_naked: __is_naked
     }
 }
 
@@ -3492,6 +4471,31 @@ pub fn lower_hir(module: HModule) -> MModule {
     // _lower_fn / closure body resolves them via `_lr_globals` without
     // threading a per-ctx `globals` array.
     _lr_globals = globals
+    // ── fn-ref-as-value pre-pass: collect top-level fn names + arities ──
+    // Runs BEFORE the body-lowering loop so a fn used as a value (e.g.
+    // `thread_spawn(worker, 1)`) resolves even when referenced before its
+    // own declaration. Skips body-less `extern fn` (FFI decls — those are
+    // real `bl <name>` externs, never boxed as fn values). See
+    // _lr_fn_ref_arity + the `ident` value-position branch.
+    _lr_fn_ref_names = []
+    _lr_fn_ref_arities = []
+    let mut fpp = 0
+    while fpp < len(module.items) {
+        let fit = module.items[fpp]
+        if fit.kind == "ITEM_FN" {
+            let mut _is_ext = false
+            let mut _ea = 0
+            while _ea < len(fit.annotations) {
+                if fit.annotations[_ea].name == "__extern_decl" { _is_ext = true; break }
+                _ea = _ea + 1
+            }
+            if !_is_ext {
+                _lr_fn_ref_names.push(fit.name.substring(0, len(fit.name)))
+                _lr_fn_ref_arities.push(len(fit.sig_params))
+            }
+        }
+        fpp = fpp + 1
+    }
     let mut funcs: [MFunc] = []
     let mut fn_names: [string] = []
     let mut i = 0

@@ -27,9 +27,18 @@
 /* native port (gen2-emitted object); key passed as int64 pointer value. */
 extern HexaVal rt_map_get_native(HexaVal m, HexaVal keyp);  /* key boxed as TAG_INT HexaVal */
 extern HexaVal rt_map_contains_native(HexaVal m, HexaVal keyp);  /* {0,1} TAG_INT bool */
+extern HexaVal rt_map_set_inplace_native(HexaVal m, HexaVal keyp, HexaVal val);  /* construct-half: in-place overwrite, returns {0,1} found */
 
 /* 16-byte image equality of two HexaVals (tag word + payload word). */
-static int hv_eq(HexaVal a, HexaVal b) { return memcmp(&a, &b, sizeof(HexaVal)) == 0; }
+/* Semantic 16-byte HexaVal equality: tag (low 4 bytes) + payload (8 bytes @ +8).
+ * NOT a raw 16-byte memcmp — HexaVal is { HexaTag tag; union{...}; } so there are
+ * 4 UNDEFINED padding bytes between the 4-byte enum tag and the 8-aligned union.
+ * A function that RETURNS a HexaVal by value (hexa_map_get) leaves those pad bytes
+ * nondeterministic in the register-pair return, so a raw memcmp over all 16 bytes
+ * spuriously differs on padding even when tag+payload are identical (measured:
+ * vals[] storage byte-identical native==C, yet by-value memcmp diffs on pad). The
+ * value IS (tag, payload); compare exactly those. */
+static int hv_eq(HexaVal a, HexaVal b) { return HX_TAG(a) == HX_TAG(b) && a.i == b.i; }
 
 static int fails = 0;
 static void chk(int cond, const char* what) {
@@ -89,7 +98,57 @@ int main(void) {
     HexaVal miss_n = rt_map_get_native(m, hexa_int((int64_t)(intptr_t)"no_such_key"));
     chk(HX_TAG(miss_n) == TAG_VOID, "missing key native -> TAG_VOID");
 
-    if (fails == 0) { printf("[map_core_gate] PASS (all native==C, %d checks)\n", 16); return 21; }
+    /* PART C — CONSTRUCT-half in-place write oracle (rt_map_set_inplace_native).
+     * Build TWO maps with identical contents, then overwrite the SAME present
+     * keys with new values: map mc via the C hexa_map_set (which on a present key
+     * does t->vals[si]=val + t->order_vals[order_idx]=val), map mn via the native
+     * rt_map_set_inplace_native (same dual writeback in raw mem). The two maps must
+     * then be bit-identical on every get() AND on insertion-order value-at — proving
+     * the native in-place write reproduces both the hash-indexed slot AND the
+     * ROI-24 cached-order-index update. (New-key INSERT stays C — not exercised
+     * here; set_inplace returns 0 on absent and writes nothing.) */
+    HexaVal mc = hexa_map_new();   /* C-overwrite target  */
+    HexaVal mn = hexa_map_new();   /* native-overwrite target */
+    const char* ck[] = { "a", "bb", "ccc", "d", "x", "y", "z" };
+    int nck = (int)(sizeof(ck)/sizeof(ck[0]));
+    for (int i = 0; i < nck; i++) {
+        mc = hexa_map_set(mc, ck[i], hexa_int(i));
+        mn = hexa_map_set(mn, ck[i], hexa_int(i));
+    }
+    /* overwrite present keys with distinct new values (int / str / bool mix) */
+    HexaVal nv[] = { hexa_int(999), hexa_str("over"), hexa_bool(1), hexa_int(-5), hexa_int(0), hexa_str(""), hexa_int(424242) };
+    for (int i = 0; i < nck; i++) {
+        mc = hexa_map_set(mc, ck[i], nv[i]);                                   /* C path */
+        HexaVal r = rt_map_set_inplace_native(mn, hexa_int((int64_t)(intptr_t)ck[i]), nv[i]); /* native */
+        char b[96]; snprintf(b, sizeof(b), "set_inplace('%s') returned found=1", ck[i]);
+        chk(HX_INT(r) == 1, b);
+    }
+    /* every key now reads identically across the two maps (hash-indexed) */
+    for (int i = 0; i < nck; i++) {
+        HexaVal vc = hexa_map_get(mc, ck[i]);
+        HexaVal vn = hexa_map_get(mn, ck[i]);
+        char b[96]; snprintf(b, sizeof(b), "post-inplace get('%s') C==native", ck[i]);
+        chk(hv_eq(vc, vn), b);
+    }
+    /* insertion-order values match too (proves order_vals[order_idx] writeback) */
+    {
+        HexaMapTable* tc = HX_MAP_TBL(mc);
+        HexaMapTable* tn = HX_MAP_TBL(mn);
+        chk(tc && tn && tc->len == tn->len, "inplace: order len C==native");
+        if (tc && tn && tc->len == tn->len) {
+            for (int i = 0; i < tc->len; i++) {
+                char b[64]; snprintf(b, sizeof(b), "order_vals[%d] C==native", i);
+                chk(hv_eq(tc->order_vals[i], tn->order_vals[i]), b);
+            }
+        }
+    }
+    /* absent key → native returns 0, writes nothing (insert stays C) */
+    {
+        HexaVal r = rt_map_set_inplace_native(mn, hexa_int((int64_t)(intptr_t)"absent_key_q"), hexa_int(1));
+        chk(HX_INT(r) == 0, "set_inplace absent key -> found=0 (no write)");
+    }
+
+    if (fails == 0) { printf("[map_core_gate] PASS (all native==C, read + construct-inplace)\n"); return 21; }
     fprintf(stderr, "[map_core_gate] %d FAIL(s)\n", fails);
     return fails;
 }

@@ -1,0 +1,104 @@
+// @ci_gate — pure · network-free · deterministic
+// stdlib/cloud/rent_hardening_test.hexa — ING #34 regression gate.
+//
+// Binds the PURE decision bodies of the four rent-hardening guards against
+// captured strings (no network — the verdict/resolver helpers are factored
+// out of the rent/rm paths exactly so this can assert them, c2):
+//
+//   (1) /workspace volume mount df-check — overlay/undersize → loud warn.
+//       cloud_workspace_df_verdict over a `SRC GIB` df line + requested GiB.
+//   (4) --docker-args guard — covered by the dispatch warn (not pure); the
+//       pure surface here is the image/df logic; the docker-args branch is a
+//       println so it has no unit-testable verdict (asserted by code review).
+//   (5) sshd-bearing CPU default image — cloud_resolve_cpu_image +
+//       _cloud_image_lacks_sshd: a no-explicit-image bare base swaps to sshd;
+//       an explicit user image is honored; a known-sshd image is unchanged.
+//
+//   (2)'s runpod_pod_exists is a live GraphQL read (network) — its 404 logic
+//       (data.pod==null → 0) is asserted by code review, not here.
+//
+// Run:  hexa run stdlib/cloud/rent_hardening_test.hexa
+// PASS: exits 0, prints "rent_hardening_test PASS".
+
+use "stdlib/cloud/cloud"
+
+fn main() {
+    let mut fails = 0
+
+    // ── (5) sshd-bearing CPU default image ───────────────────────────
+    let sshd = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
+
+    // bare bases lack sshd
+    if _cloud_image_lacks_sshd("ubuntu:22.04") != 1 { println("FAIL lacks-ubuntu"); fails = fails + 1 }
+    if _cloud_image_lacks_sshd("ubuntu") != 1 { println("FAIL lacks-ubuntu-bare"); fails = fails + 1 }
+    if _cloud_image_lacks_sshd("debian:12") != 1 { println("FAIL lacks-debian"); fails = fails + 1 }
+    if _cloud_image_lacks_sshd("alpine:3.20") != 1 { println("FAIL lacks-alpine"); fails = fails + 1 }
+    if _cloud_image_lacks_sshd("busybox") != 1 { println("FAIL lacks-busybox"); fails = fails + 1 }
+    if _cloud_image_lacks_sshd("python:3.11-slim") != 1 { println("FAIL lacks-python"); fails = fails + 1 }
+    if _cloud_image_lacks_sshd("") != 1 { println("FAIL lacks-empty"); fails = fails + 1 }
+    // sshd-bearing / custom images are assumed OK (denylist, not allowlist)
+    if _cloud_image_lacks_sshd(sshd) != 0 { println("FAIL ok-runpod-pytorch"); fails = fails + 1 }
+    if _cloud_image_lacks_sshd("dancinlab/cpu-sshd:1") != 0 { println("FAIL ok-custom"); fails = fails + 1 }
+    // a custom image whose NAME merely contains 'python' (not a bare python: base)
+    if _cloud_image_lacks_sshd("runpod/python-ssh:1") != 0 { println("FAIL ok-python-ssh"); fails = fails + 1 }
+
+    // resolver: no explicit image (user_set=0) + bare base → swap to sshd
+    if cloud_resolve_cpu_image("ubuntu:22.04", 0, sshd) != sshd {
+        println("FAIL resolve-default-swap"); fails = fails + 1
+    }
+    // explicit image (user_set=1) → honored EVEN if sshd-less (caller warns)
+    if cloud_resolve_cpu_image("ubuntu:22.04", 1, sshd) != "ubuntu:22.04" {
+        println("FAIL resolve-explicit-honored"); fails = fails + 1
+    }
+    // no explicit image but already sshd-bearing default → unchanged
+    if cloud_resolve_cpu_image(sshd, 0, sshd) != sshd {
+        println("FAIL resolve-sshd-unchanged"); fails = fails + 1
+    }
+    // explicit sshd-bearing image → unchanged
+    if cloud_resolve_cpu_image("dancinlab/cpu-sshd:1", 1, sshd) != "dancinlab/cpu-sshd:1" {
+        println("FAIL resolve-explicit-sshd"); fails = fails + 1
+    }
+
+    // ── (1) /workspace volume mount df-check ─────────────────────────
+    // mounted OK: a real device, size >= 80% of request → exit 0
+    let ok_v = cloud_workspace_df_verdict("/dev/sdb 100", 100)
+    if ok_v.exit_code != 0 { println("FAIL df-ok-exact: " + ok_v.message); fails = fails + 1 }
+    // 90 of 100 requested (>= 80% floor) → still OK
+    let ok_near = cloud_workspace_df_verdict("/dev/nvme1n1 90", 100)
+    if ok_near.exit_code != 0 { println("FAIL df-ok-near: " + ok_near.message); fails = fails + 1 }
+
+    // overlay backing → volume NOT mounted (exit 1, the data-loss case)
+    let ov = cloud_workspace_df_verdict("overlay 30", 100)
+    if ov.exit_code != 1 { println("FAIL df-overlay: " + ov.message); fails = fails + 1 }
+    let tm = cloud_workspace_df_verdict("tmpfs 16", 50)
+    if tm.exit_code != 1 { println("FAIL df-tmpfs: " + tm.message); fails = fails + 1 }
+    let nn = cloud_workspace_df_verdict("none 30", 100)
+    if nn.exit_code != 1 { println("FAIL df-none: " + nn.message); fails = fails + 1 }
+
+    // real device but far under request (30 of 100, < 80 floor) → exit 2
+    let us = cloud_workspace_df_verdict("/dev/sdb 30", 100)
+    if us.exit_code != 2 { println("FAIL df-undersize: " + us.message); fails = fails + 1 }
+
+    // no /workspace line → inconclusive (exit 3, caller stays quiet)
+    let nc = cloud_workspace_df_verdict("", 100)
+    if nc.exit_code != 3 { println("FAIL df-inconclusive: " + nc.message); fails = fails + 1 }
+
+    // requested 0 (ephemeral): only overlay flagged, a real-device small disk OK
+    let eph_ok = cloud_workspace_df_verdict("/dev/sdb 20", 0)
+    if eph_ok.exit_code != 0 { println("FAIL df-ephemeral-ok: " + eph_ok.message); fails = fails + 1 }
+    let eph_ov = cloud_workspace_df_verdict("overlay 20", 0)
+    if eph_ov.exit_code != 1 { println("FAIL df-ephemeral-overlay: " + eph_ov.message); fails = fails + 1 }
+
+    // df cmd shape (pure): targets /workspace, single-GiB blocks, 2nd row.
+    let cmd = cloud_workspace_df_cmd()
+    if !cmd.contains("/workspace") { println("FAIL df-cmd-target"); fails = fails + 1 }
+    if !cmd.contains("-PB1G") { println("FAIL df-cmd-blocks"); fails = fails + 1 }
+    if !cmd.contains("NR==2") { println("FAIL df-cmd-row"); fails = fails + 1 }
+
+    if fails == 0 {
+        println("rent_hardening_test PASS")
+        exit(0)
+    }
+    println("rent_hardening_test FAIL: " + to_string(fails) + " assertion(s)")
+    exit(1)
+}

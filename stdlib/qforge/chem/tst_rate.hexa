@@ -136,11 +136,16 @@ pub fn tst_dG_barrier(dE_kcalmol: float, ts: TSClass, reactant: TSClass,
 //     E_a = −R · (ln k2 − ln k1) / (1/T2 − 1/T1)    [J/mol]
 //   반환 = E_a [kcal/mol].
 pub fn tst_arrhenius_Ea(k1: float, T1: float, k2: float, T2: float) -> float {
+    // undefined inputs: ln(k<=0)=-inf/NaN; equal temperatures (T1==T2) → the
+    // Arrhenius denominator (1/T2 - 1/T1)=0 → inf/NaN E_a returned as finite.
+    if k1 <= 0.0 || k2 <= 0.0 || T1 <= 0.0 || T2 <= 0.0 { return 0.0 }
     let lnk1 = ln(k1)
     let lnk2 = ln(k2)
     let inv1 = 1.0 / T1
     let inv2 = 1.0 / T2
-    let Ea_J = -tst_R_gas() * (lnk2 - lnk1) / (inv2 - inv1)
+    let dinv = inv2 - inv1
+    if dinv == 0.0 { return 0.0 }
+    let Ea_J = -tst_R_gas() * (lnk2 - lnk1) / dinv
     return Ea_J / tst_kcalmol_to_J()
 }
 

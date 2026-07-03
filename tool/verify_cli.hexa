@@ -427,6 +427,8 @@ fn cmd_rubric() {
     println("   lattice/code int invariants (atlas-bridge · stdlib Fincke-Pohst/Bareiss-verified, 0-arg-dummy):")
     println("             kissing_e8=240 · kissing_k12=756 · det_k12=729 · kissing_bw16=4320 · det_bw16=256")
     println("             kissing_leech=196560 · det_leech=1 · golay24_min_weight=8 · golay24_a8=759 · golay24_a12=2576")
+    println("   chemistry atomic-shell (Pauli, n-arg COMPUTE):")
+    println("             electron_shell_capacity(n)→2n² (1→2 2→8 3→18 4→32) · subshell_capacity(l)→2(2l+1) (s2 p6 d10 f14)")
 }
 
 let NOCALC: int = -999999
@@ -579,6 +581,17 @@ fn _recompute(fn_name: string, n: int) -> int {
     if fn_name == "golay24_min_weight" { return 8 }
     if fn_name == "golay24_a8"         { return 759 }
     if fn_name == "golay24_a12"        { return 2576 }
+    // ── CHEMISTRY — atomic-shell exact integers (Pauli exclusion) ──────────
+    // Closed-form n-arg COMPUTES (not 0-dummy constants): the periodic-table
+    // shell structure is the macro↔quantum bridge (classical periods ↔ quantum
+    // orbital filling). Pauli exclusion forces exact integer capacities:
+    //   electron_shell_capacity(n) = 2n²  — principal shell n holds 2n²
+    //     electrons (n=1→2 K, 2→8 L, 3→18 M, 4→32 N). Bohr/Pauli.
+    //   subshell_capacity(l) = 2(2l+1)    — orbital angular momentum l holds
+    //     2(2l+1) (l=0 s→2, 1 p→6, 2 d→10, 3 f→14): (2l+1) m_l × 2 spin.
+    // Invoke as `--expr electron_shell_capacity 3 18` → recompute 2·9=18 → 🔵.
+    if fn_name == "electron_shell_capacity" { return 2 * n * n }
+    if fn_name == "subshell_capacity"       { return 2 * (2 * n + 1) }
     // ── TECS-L F21 — INBOX 3 absorbed (PR #1378 follow-on) ─────────────────
     // mertens(n) = M(n) = Σ_{k=1..n} μ(k)  (OEIS A002321, Mertens function).
     // Closed-form via stdlib `mobius` (compiler/atlas/symbolic/

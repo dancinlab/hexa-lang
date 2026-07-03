@@ -1,0 +1,56 @@
+// test/runtime/bessel_smoke.hexa — smoke for stdlib/runtime/math.hexa
+//   rt_j0 / rt_j1 (fdlibm e_j0.c/e_j1.c rational + asymptotic · zero-c #29).
+//
+// Reference values from libm/SciPy (scipy.special.jv(0,x) / jv(1,x)), full double:
+//   j0(0)=1  j0(1)=0.7651976865579666  j0(2)=0.22389077914123567
+//   j0(5)=-0.17759677131433835  j0(10)=-0.2459357644513483
+//   j1(0)=0  j1(1)=0.4400505857449335 (= atlas bessel_j1 verify anchor)
+//   j1(2)=0.5767248077568734  j1(5)=-0.3275791375914652  j1(10)=0.04347274616886144
+//
+// Covers BOTH branches: |x|<2 rational (j0(1),j1(1)) AND |x|>=2 asymptotic
+// pzero/qzero·pone/qone ranges (x=2 boundary, x=5 mid, x=10 → R8 range).
+// Tolerance: rt_sin/cos/sqrt are native approximations → rel band ~1e-6.
+//
+// Run:  hexa run test/runtime/bessel_smoke.hexa
+// Sentinel: __BESSEL_SMOKE__ PASS|FAIL on the final line.
+
+import "stdlib/runtime/math.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn rel_ok(label: string, got: float, want: float, tol: float) {
+    let d = got - want
+    let ad = if d < 0.0 { 0.0 - d } else { d }
+    let aw = if want < 0.0 { 0.0 - want } else { want }
+    let bound = if aw > 1.0 { tol * aw } else { tol }
+    if ad <= bound {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label + "  got=" + to_string(got) + " want=" + to_string(want))
+    }
+}
+
+// ── j0 (|x|<2 rational + |x|>=2 asymptotic) ────────────────────────────────
+rel_ok("j0(0)",   rt_j0(0.0),  1.0,                  1.0e-9)
+rel_ok("j0(1)",   rt_j0(1.0),  0.7651976865579666,   1.0e-6)
+rel_ok("j0(2)",   rt_j0(2.0),  0.22389077914123567,  1.0e-6)
+rel_ok("j0(5)",   rt_j0(5.0),  -0.17759677131433835, 1.0e-5)
+rel_ok("j0(10)",  rt_j0(10.0), -0.2459357644513483,  1.0e-5)
+
+// ── j1 (odd; x=1 is the atlas verify anchor) ───────────────────────────────
+rel_ok("j1(0)",   rt_j1(0.0),  0.0,                  1.0e-9)
+rel_ok("j1(1)",   rt_j1(1.0),  0.4400505857449335,   1.0e-6)
+rel_ok("j1(-1)",  rt_j1(-1.0), -0.4400505857449335,  1.0e-6)
+rel_ok("j1(2)",   rt_j1(2.0),  0.5767248077568734,   1.0e-6)
+rel_ok("j1(5)",   rt_j1(5.0),  -0.3275791375914652,  1.0e-5)
+rel_ok("j1(10)",  rt_j1(10.0), 0.04347274616886144,  1.0e-4)
+
+println("bessel_smoke: PASS=" + to_string(PASS) + " FAIL=" + to_string(FAIL))
+if FAIL == 0 {
+    println("__BESSEL_SMOKE__ PASS")
+} else {
+    println("__BESSEL_SMOKE__ FAIL")
+}

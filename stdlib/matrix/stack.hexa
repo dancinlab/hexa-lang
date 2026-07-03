@@ -47,6 +47,9 @@ pub fn matrix_vstack(arrs: array, ncols: int) -> array {
 // laid out row-major so we have to interleave per-row across inputs.
 pub fn matrix_hstack(arrs: array, nrows: int) -> array {
     let nbatch = len(arrs)
+    // numpy np.hstack of (0,k) arrays yields a (0, Σk) empty result, never an
+    // error — but `len(arrs[k]) / nrows` below divides by zero at nrows==0.
+    if nrows == 0 { return [] }
     // Pre-compute per-input column counts so we can index without
     // repeated division.
     let mut ncols_per = []

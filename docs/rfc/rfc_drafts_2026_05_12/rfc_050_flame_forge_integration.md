@@ -302,7 +302,7 @@ All perf anchors trace to forge measured Phase R fires + RFC 049 literature (Lay
 - `stdlib/flame/FLAME.tape` — consumer-side SSOT (`x_rfc043` design SSOT, `x_rfc048` Phase 4-C scope, `x_oracle_cpu_bitequal` 7.97116 → 3.73374e-07)
 - `stdlib/flame/PLAN.md` — staged roadmap (Phase 4-B SHIPPED 2026-05-17, Phase 4-C/4-D pending)
 - `stdlib/flame/PERF.md` — 5-run × 8-iter measurement convention
-- `stdlib/flame/README.md` — overview + foundation pointer
+- `stdlib/flame/PERF.md` / `PLAN.md` — overview + foundation pointer (README retired #3754)
 
 ### Literature anchors (RFC 049 inheritance)
 - LayerCast (arxiv 2506.09501) — BF16 storage + FP32 compute, ≤ 3.4% divergence, 34% memory save

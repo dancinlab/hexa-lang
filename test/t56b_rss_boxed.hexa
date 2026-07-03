@@ -1,0 +1,27 @@
+// t56b_rss_boxed.hexa — RSS of the OLD BOXED ranged-read path.
+//  Loads the SAME raw f32 .bin via read_bytes_at, which returns a
+//  boxed int[] — one HexaVal per BYTE (~16 B/byte on a 64-bit box).
+//  This is the head of the pre-r2 anima bg_load shape (read_bytes_at →
+//  boxed bytes → decode → boxed [float]); read_bytes_at's boxed int[]
+//  alone is already ~16× the raw bytes, i.e. ~64× per f32.
+//  read_f32_array_at (t56b_rss_farr32) replaces the whole chain with a
+//  native float[] at 4 B/elem. Peak RSS is captured externally by
+//  /usr/bin/time -v (the in-hexa /proc reader is unreliable — read_file
+//  returns empty on /proc/self/statm).
+//
+//  Keeps the boxed int[] resident (sum it) so the allocator can't free
+//  it before the peak-RSS sample. The boxed int[] alone is the
+//  boxing-blowup witness (one HexaVal box per byte); a full decode into
+//  a boxed [float] via bytes_to_f32_le(arr, off) would add the per-elem
+//  float boxes on top — this witness already isolates the ~16 B/byte head.
+let path = "/tmp/_t56_raw_f32.bin"
+let bytes = file_size(path)
+let raw = read_bytes_at(path, 0, bytes)   // boxed int per byte (~16 B/byte)
+let n = len(raw)
+let mut acc = 0
+let mut i = 0
+while i < n {
+    acc = acc + raw[i]
+    i = i + 1
+}
+println("BOXED raw_bytes=" + to_string(bytes) + " boxed_ints=" + to_string(n) + " checksum=" + to_string(acc))

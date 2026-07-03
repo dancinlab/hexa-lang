@@ -84,6 +84,7 @@ pub fn qforge_eeq_gamma(rij: float, alpha_i: float, alpha_j: float) -> float {
     let two_over_pi_sqrt = 0.7978845608028654   // sqrt(2/π)
     if rij <= 0.0 {
         // same-site self-Coulomb (R→0 limit): sqrt(2/π)/α, the EEQ diagonal term.
+        if alpha_i <= 0.0 { return 0.0 }   // EEQ width α≤0 → /α Inf
         return two_over_pi_sqrt / alpha_i
     }
     let gij = _sqrt(alpha_i * alpha_i + alpha_j * alpha_j)

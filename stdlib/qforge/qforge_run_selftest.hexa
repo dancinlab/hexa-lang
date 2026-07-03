@@ -117,6 +117,7 @@ fn _build_deck(n_ef: float) -> QforgeDeck {
         h_diag: h_diag, n: HN, nocc: nocc,
         phi: phi, masses: masses, qvec: qvec, natoms: 1, ncells: 1, cell_R: cell_R,
         dv_modes: dv_modes,
+        nbra: 0, eps_bra: [],
         e_fermi: 0.0, n_ef: n_ef, omega_grid: grid, mode_weight: 0.05,
         sigma_el: 0.05, sigma_ph: 50.0, mu_star: 0.10, n_mats: 256
     }

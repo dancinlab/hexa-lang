@@ -95,6 +95,7 @@ pub fn vdmos_solve_vgsth(vto: float, kp: float, lam: float, id_target: float) ->
 // the only unknown is the internal Vds_i — found by 1-D Newton on the
 // triode equation. R_DS(on) = (Vds_i + id*(rs+rd)) / id.
 pub fn vdmos_solve_rdson(vto: float, kp: float, lam: float, rs: float, rd: float, vgs: float, id: float) -> float {
+    if id <= 0.0 { return -1.0 }   // forced drain current ≤0 → vds_ext/id = Inf (-1.0 sentinel)
     let vgs_int = vgs - id * rs
     let vov = vgs_int - vto
     if vov <= 0.0 { return -1.0 }

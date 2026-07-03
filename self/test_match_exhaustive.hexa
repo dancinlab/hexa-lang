@@ -1,0 +1,85 @@
+// ═══════════════════════════════════════════════════════════════════
+//  test_match_exhaustive.hexa — non-exhaustive enum-match warning (HX3006)
+//
+//  Reference: Luc Maranget, "Warnings for pattern matching", JFP 17(3),
+//  2007 — the usefulness predicate U(P, q). We implement the single-column
+//  enum case (compiler/check/types.hexa::_exh_*): the head constructors
+//  covered by the UNGUARDED arms are compared to the enum's full variant
+//  signature; if a variant is neither covered nor subsumed by a `_`
+//  wildcard / irrefutable ident catch-all, the wildcard row is useful and
+//  the match is non-exhaustive → HX3006 (Warning, non-fatal).
+//
+//  The check is OPT-IN: compile/run with `HEXA_EXHAUSTIVE=1` to surface the
+//  warnings. The default build emits nothing new (release integrity).
+//
+//  Expected, when built from this branch with HEXA_EXHAUSTIVE=1, stderr:
+//    HX3006 ... non-exhaustive match on enum `Color`: missing variant(s)
+//           Color::Blue; add the arm(s) or a `_` wildcard
+//  and NO HX3006 for `full_cover` / `wild_cover` / `guarded_still_warns`
+//  is suppressed-incorrectly — note `guarded_still_warns` MUST still warn
+//  (Color::Green is only matched under a guard, so it is not covered).
+//
+//  Runtime stdout (the program also runs):
+//    name(R)=red
+//    name(G)=green
+//    name(B)=blue
+//    OK
+// ═══════════════════════════════════════════════════════════════════
+
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+// NON-EXHAUSTIVE — missing Color::Blue, no wildcard → HX3006 under
+// HEXA_EXHAUSTIVE=1 (missing variant: Color::Blue).
+fn partial(c: Color) -> i64 {
+    return match c {
+        Color::Red -> 0,
+        Color::Green -> 1
+    }
+}
+
+// EXHAUSTIVE — every variant covered → no warning.
+fn full_cover(c: Color) -> string {
+    return match c {
+        Color::Red -> "red",
+        Color::Green -> "green",
+        Color::Blue -> "blue"
+    }
+}
+
+// EXHAUSTIVE via wildcard catch-all → no warning even though only Red is
+// named explicitly.
+fn wild_cover(c: Color) -> i64 {
+    return match c {
+        Color::Red -> 10,
+        _ -> 99
+    }
+}
+
+// NON-EXHAUSTIVE — Color::Green is matched ONLY under a guard, so it does
+// not count toward coverage; Blue is absent too → HX3006 (missing
+// Color::Green, Color::Blue) under HEXA_EXHAUSTIVE=1.
+fn guarded_still_warns(c: Color, hot: bool) -> i64 {
+    return match c {
+        Color::Red -> 1,
+        Color::Green if hot -> 2
+    }
+}
+
+fn name(c: Color) -> string {
+    return full_cover(c)
+}
+
+fn main() {
+    println("name(R)=" + name(Color::Red))
+    println("name(G)=" + name(Color::Green))
+    println("name(B)=" + name(Color::Blue))
+    // touch the partial/guarded fns so they are not dead-code-eliminated.
+    let _a = partial(Color::Red)
+    let _b = wild_cover(Color::Blue)
+    let _c = guarded_still_warns(Color::Red, true)
+    println("OK")
+}

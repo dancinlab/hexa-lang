@@ -183,8 +183,10 @@ fn _deploy_one(driver_out: string, dst: string, uname: string) {
 }
 
 // CANON M8 — install step. The shim resolves ~/.hx/bin/hexa → main-worktree
-// `hexa` shim → __hexa_dir = main-worktree → tries `hxv2` (preferred) →
-// falls back to `hexa.real`. The root cause of the M3b deploy gap (M5
+// `hexa` shim → __hexa_dir = main-worktree → tries `hexad` (canonical) →
+// `hxv2` → `hexa.real` (the retired names are compat symlinks → hexad, so
+// all three resolve to the same binary). The root cause of the M3b deploy
+// gap (M5
 // diagnosis, PR #975) was that the build produced build/hexa_cli_driver but
 // never copied it to these targets, so a post-pull deployed hexa stayed
 // stale (PRE-M3b) and broke. This copies the fresh driver to all four
@@ -235,16 +237,27 @@ fn _install_driver(repo_root: string, uname: string) {
     // ~/.hx/bin/self/runtime.o (via symlink) resolves on first
     // `hexa cc --regen` / `hexa verify` invocation.
     _install_runtime_o(repo_root, uname)
-    // main-worktree: hxv2 (shim-preferred) + hexa.real (fallback)
-    _deploy_one(driver_out, repo_root + "/hxv2",      uname)
-    _deploy_one(driver_out, repo_root + "/hexa.real", uname)
-    // ~/.hx/bin: hxv2 + hexa.real
+    // Canonical on-disk name = `hexad` (AMFI burning-matcher treadmill
+    // terminal: hexadrv → hexa.real → hxv2 → hexad · cli_wrappers.hexa:38,
+    // tool/bin/build.hexa:119, install.sh). Deploy the REAL driver to the
+    // single canonical `hexad` (the name the shim execs, AMFI sees, AND the
+    // flip sentinel — promote_selfhost.sh keys on `[ -L hexad ]`). The retired
+    // `hexa.real`/`hxv2` are compat symlinks → hexad. Every consumer of those
+    // PATHS (cli_wrappers shim, promote_selfhost.sh, hx-selfhost-cli
+    // backup-convention, selfhost_shim_integrity gate, firmware fixtures)
+    // resolves losslessly through the symlink.
+    // main-worktree: hexad (real) + hexa.real,hxv2 (symlinks → hexad)
+    _deploy_one(driver_out, repo_root + "/hexad",     uname)
+    let _ = exec("ln -sf hexad " + _shq(repo_root + "/hexa.real"))
+    let _ = exec("ln -sf hexad " + _shq(repo_root + "/hxv2"))
+    // ~/.hx/bin: hexad (real) + hexa.real,hxv2 (symlinks → hexad)
     let home = _home()
     if home != "" {
         let hxbin = home + "/.hx/bin"
         let _ = exec("mkdir -p " + _shq(hxbin))
-        _deploy_one(driver_out, hxbin + "/hxv2",      uname)
-        _deploy_one(driver_out, hxbin + "/hexa.real", uname)
+        _deploy_one(driver_out, hxbin + "/hexad",     uname)
+        let _lr = exec("ln -sf hexad " + _shq(hxbin + "/hexa.real"))
+        let _l1 = exec("ln -sf hexad " + _shq(hxbin + "/hxv2"))
     } else {
         eprintln("  warn: $HOME unresolved — skipped ~/.hx/bin targets")
     }
@@ -502,6 +515,67 @@ fn _regen_vendor_native_c(repo_root: string) {
     }
 }
 
+//
+// _native_seed_suffix: arch token for self/native/<stem>_<sfx>.s (x86_64 /
+// arm64 [Mach-O darwin] / arm64-linux [ELF]).
+fn _native_seed_suffix(repo_root: string, cc: string) -> string {
+    let arch = exec("uname -m 2>/dev/null | tr -d ' \n'")
+    if arch == "aarch64" || arch == "arm64" {
+        let os = exec("uname -s 2>/dev/null | tr -d ' \n'")
+        if os == "Darwin" { return "arm64" }
+        return "arm64-linux"
+    }
+    return "x86_64"
+}
+// _assemble_native_seeds: assemble the arch-matched canonical native-seed .o set
+// (array/map/alloc/rt_hi [+ str if a seed exists]) into build/ and return a
+// space-prefixed list of quoted .o paths. Best-effort per seed; a missing host-arch
+// .s is skipped (link then fails loud on exactly that symbol — never a silent
+// miscompile). The CALLER must add -DHEXA_RT_ALLOC_NATIVE=1 when the alloc seed is
+// present (see _alloc_seed_present) so runtime_core.c drops its C arena (else
+// multiple-definition). Mirrors build_aprime.sh:272-406. Idempotent (re-assembles
+// the same bytes; the rt_hi runtime_hi_gen.c #include strip is marker-safe).
+fn _assemble_native_seeds(repo_root: string, cc: string) -> string {
+    let sfx = _native_seed_suffix(repo_root, cc)
+    let stems = ["array_core", "map_core", "alloc_syscall", "str_core"]
+    let outs  = ["array_core_native.o", "map_core_native.o", "alloc_syscall_native.o", "str_core_native.o"]
+    let mut objs = ""
+    let mut i = 0
+    while i < len(stems) {
+        let seed = repo_root + "/self/native/" + stems[i] + "_" + sfx + ".s"
+        let obj  = repo_root + "/build/" + outs[i]
+        if exec("test -f " + _shq(seed) + " && printf yes || printf no") == "yes" {
+            let tmp_s = repo_root + "/build/." + outs[i] + ".seed.s"
+            let _g = exec("grep -vE '^// ' " + _shq(seed) + " > " + _shq(tmp_s) + " 2>/dev/null || cp " + _shq(seed) + " " + _shq(tmp_s))
+            let _a = exec(cc + " -c " + _shq(tmp_s) + " -o " + _shq(obj) + " 2>/dev/null")
+            let _r = exec("rm -f " + _shq(tmp_s) + " 2>/dev/null")
+            if exec("test -s " + _shq(obj) + " && printf yes || printf no") == "yes" { objs = objs + " " + _shq(obj) }
+        }
+        i = i + 1
+    }
+    let mut rt_hi_seed = repo_root + "/self/native/runtime_hi_" + sfx + ".s"
+    if sfx == "arm64" { rt_hi_seed = repo_root + "/self/native/runtime_hi_native.s" }
+    let rt_hi_obj = repo_root + "/build/rt_hi_native.o"
+    if exec("test -f " + _shq(rt_hi_seed) + " && printf yes || printf no") == "yes" {
+        let tmp_s = repo_root + "/build/.rt_hi_native.seed.s"
+        let _g = exec("grep -vE '^// ' " + _shq(rt_hi_seed) + " > " + _shq(tmp_s) + " 2>/dev/null || cp " + _shq(rt_hi_seed) + " " + _shq(tmp_s))
+        let _a = exec(cc + " -c " + _shq(tmp_s) + " -o " + _shq(rt_hi_obj) + " 2>/dev/null")
+        let _r = exec("rm -f " + _shq(tmp_s) + " 2>/dev/null")
+        if exec("test -s " + _shq(rt_hi_obj) + " && printf yes || printf no") == "yes" {
+            objs = objs + " " + _shq(rt_hi_obj)
+            let _sed = exec("sed -i.zbak 's|#include \"runtime_hi_gen.c\"|/* native rt_hi_native.o supplies rt_str_* */|' " + _shq(repo_root + "/self/runtime_core.c") + " 2>/dev/null; rm -f " + _shq(repo_root + "/self/runtime_core.c.zbak") + " 2>/dev/null")
+        }
+    }
+    return objs
+}
+// Pairing-macro: -DHEXA_RT_ALLOC_NATIVE=1 when the alloc seed assembled (so
+// runtime_core.c:1450 drops the C arena → no multiple-definition vs the seed).
+fn _native_seed_defs(repo_root: string) -> string {
+    if exec("test -s " + _shq(repo_root + "/build/alloc_syscall_native.o") + " && printf yes || printf no") == "yes" {
+        return " -DHEXA_RT_ALLOC_NATIVE=1"
+    }
+    return ""
+}
 fn _do_build(repo_root: string) {
     // multiarch-aware: Linux x86_64 → hexat_linux_x86_64; Mac arm64 → hexat.
     // Falls back to legacy "hexat" path when the arch-specific binary
@@ -934,7 +1008,10 @@ fn _do_build(repo_root: string) {
         println("[2/5] compile hexa_module_loader (stage-1 flattener)")
         // selfemit_objs is a space-prefixed list of quoted .o paths (empty
         // when HEXA_RT_SELFEMIT is unset → default link, 0-extra-objects).
-        _run(cc + " " + cflags + " " + _shq(ml_c) + " " + _shq(runtime_c) + selfemit_objs + " -o " + _shq(ml_out) + " " + ldflags, "compile module_loader")
+        let _native_seeds = _assemble_native_seeds(repo_root, cc)
+        let _native_defs = _native_seed_defs(repo_root)
+        if len(_native_seeds) > 0 { println("  [native-seed] canonical set:" + _native_seeds + "  defs:" + _native_defs) }
+        _run(cc + " " + cflags + _native_defs + " " + _shq(ml_c) + " " + _shq(runtime_c) + selfemit_objs + _native_seeds + " -o " + _shq(ml_out) + " " + ldflags, "compile module_loader")
 
         println("[3/5] flatten main.hexa            → " + main_expanded)
         _run(_shq(ml_out) + " " + _shq(main_hexa) + " " + _shq(main_expanded), "flatten main.hexa")
@@ -948,7 +1025,9 @@ fn _do_build(repo_root: string) {
 
     // ── Step 4: compile driver (runtime.c appended as 2nd TU)
     println("[4/5] compile hexa_cli_driver")
-    _run(cc + " " + cflags + " " + _shq(main_c) + " " + _shq(runtime_c) + selfemit_objs + " -o " + _shq(driver_out) + " " + ldflags, "compile driver")
+    let _native_seeds2 = _assemble_native_seeds(repo_root, cc)
+    let _native_defs2 = _native_seed_defs(repo_root)
+    _run(cc + " " + cflags + _native_defs2 + " " + _shq(main_c) + " " + _shq(runtime_c) + selfemit_objs + _native_seeds2 + " -o " + _shq(driver_out) + " " + ldflags, "compile driver")
 
     // ── Step 4b: Darwin codesign — stable identity (env) to dodge ASP burning, else ad-hoc.
     if uname == "Darwin" {

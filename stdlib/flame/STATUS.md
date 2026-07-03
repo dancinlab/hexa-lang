@@ -299,7 +299,7 @@ gap (GPU acceleration absent in binary) rather than fabricating progress.
 | `stdlib/flame/PERF.md` | extended | 3 mechanism probes + IPCP measurement |
 | `stdlib/flame/NEXT_CYCLE.md` | updated | Phase 4-B status |
 | `stdlib/flame/STATUS.md` | new+updated × 3 (this file) | single-page consolidated state |
-| `stdlib/flame/README.md` | updated | Phase 4-B-2 SHIPPED entry |
+| `stdlib/flame/PERF.md` | updated | Phase 4-B-2 SHIPPED entry (README retired #3754) |
 | `stdlib/flame/PHASE4B3_LEAF_PRIORITY.md` | new | leaf ABI + priority (commit 725ff6bb) |
 | `stdlib/flame/PHASE4B3_DESIGN_CORRECTION.md` | new | block_fwd INLINE not leaf-call (commit 122e186d) |
 | `stdlib/flame/PHASE4B3_BLOCK_FWD_AUDIT.md` | new+updated | 9-section roadmap + matmul SKIP (490e7b2a + e7472b1e) |

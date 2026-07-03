@@ -70,6 +70,7 @@ fn _pi() -> float { return 3.14159265358979323846 }
 // (ky=kz=0) so it feeds qforge_kinetic_diag UNCHANGED (d19 — the same kinetic brick
 // the SCF assembler calls; here ky,kz are pinned 0 for the 1D chain).
 pub fn qforge_chip_pw_gset_1d(a: float, mmax: int) -> [float] {
+    if a <= 0.0 { return [] }   // lattice length a≤0 → 2π/a Inf
     let g0 = 2.0 * _pi() / a            // first reciprocal-lattice vector |g|
     let mut gv: [float] = []
     let mut m = -mmax
@@ -172,6 +173,7 @@ pub fn qforge_chip_scf_band_min(a: float, mmax: int, k: float, vshell: [float]) 
 // V_g≠0 → gap>0 (insulator). The metal↔insulator lever, recovered from H(k) eig — not
 // assumed. Returns ε₁−ε₀ at k=π/a.
 pub fn qforge_chip_scf_bragg_gap(a: float, mmax: int, vg: float) -> float {
+    if a <= 0.0 { return 0.0 }   // lattice length a≤0 → π/a Inf
     let kbz = _pi() / a                               // zone boundary k=π/a
     // vshell = [V(0)=0, V(±g)=vg] — single first-shell Fourier component.
     let vshell = [0.0, vg]

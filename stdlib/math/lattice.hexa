@@ -1,4 +1,4 @@
-// HEXA Standard Library — math/lattice
+// HEXA Standard Library — lattice tools: short-vector enum (Fincke–Pohst) · Cholesky · theta series · Bareiss determinant (covolume/kissing)
 //
 // @version 0.1.0
 // @capabilities [pure]
@@ -85,8 +85,34 @@ pub fn lattice_det(gram) -> int {
         i = i + 1
     }
     let prev = 1
+    let sign = 1
     let k = 0
     while k < d - 1 {
+        // Bareiss has no implicit pivoting: when the pivot a[k][k] is zero, `prev`
+        // becomes 0 and the next step divides by zero. Swap in a nonzero pivot row
+        // from below (flipping the determinant sign); if the whole sub-column is
+        // zero the matrix is singular → det 0.
+        if a[k * d + k] == 0 {
+            let sr = k + 1
+            let found = 0 - 1
+            while sr < d {
+                if a[sr * d + k] != 0 {
+                    found = sr
+                    sr = d
+                } else {
+                    sr = sr + 1
+                }
+            }
+            if found < 0 { return 0 }
+            let cc = 0
+            while cc < d {
+                let tmp = a[k * d + cc]
+                a[k * d + cc] = a[found * d + cc]
+                a[found * d + cc] = tmp
+                cc = cc + 1
+            }
+            sign = 0 - sign
+        }
         let r = k + 1
         while r < d {
             let c = k + 1
@@ -101,7 +127,7 @@ pub fn lattice_det(gram) -> int {
         prev = a[k * d + k]
         k = k + 1
     }
-    a[(d - 1) * d + (d - 1)]
+    sign * a[(d - 1) * d + (d - 1)]
 }
 
 // ── Cholesky (SPLAG q-form) ──────────────────────────────────────────────
@@ -398,23 +424,26 @@ pub fn gram_E8() -> array {
 // Eisenstein-integer (ℤ[ω]) lattice; the integral Gram used here is the
 // standard even form with minimum 4.
 pub fn gram_K12() -> array {
-    // 12×12, row-major. Source: SPLAG K12 Gram (Coxeter–Todd), even, min 4.
+    // 12×12, row-major. Coxeter-Todd K12 — VERIFIED Gram from the Catalogue of
+    // Lattices (G. Nebe & N. Sloane, RWTH Aachen), the same matrix the test inlines.
+    // det = 3^6 = 729, min norm = 4, kissing = 756, positive-definite (min eig
+    // ≈ 0.268). The prior transcription drifted to a NON-lattice matrix (det 16384,
+    // min eig -1.32 → not positive-definite), silently corrupting every downstream
+    // lattice_det / short_vectors_count result.
     let g = []
-    // diagonal 4, the cyclic Eisenstein construction off-diagonals.
-    // (Transcribed; validated by invariants in the test, not trusted blind.)
     let rows = [
-        [4,-2,0,-2,2,0,-2,0,0,-2,2,0],
-        [-2,4,-2,2,-2,0,2,-2,0,2,-2,0],
-        [0,-2,4,0,2,-2,0,2,-2,0,2,-2],
-        [-2,2,0,4,-2,0,2,0,0,2,-2,0],
-        [2,-2,2,-2,4,-2,-2,2,0,-2,2,0],
-        [0,0,-2,0,-2,4,0,-2,2,0,-2,2],
-        [-2,2,0,2,-2,0,4,-2,0,2,-2,0],
-        [0,-2,2,0,2,-2,-2,4,-2,-2,2,0],
-        [0,0,-2,0,0,2,0,-2,4,0,0,-2],
-        [-2,2,0,2,-2,0,2,-2,0,4,-2,0],
-        [2,-2,2,-2,2,-2,-2,2,0,-2,4,-2],
-        [0,0,-2,0,0,2,0,0,-2,0,-2,4]
+        [4,0,0,-2,0,0,2,-1,-1,-1,2,-1],
+        [0,4,0,0,-2,0,2,-1,-1,-1,-1,2],
+        [0,0,4,0,0,-2,2,2,2,-1,-1,-1],
+        [-2,0,0,4,0,0,-1,-1,2,2,-1,-1],
+        [0,-2,0,0,4,0,-1,2,-1,2,-1,-1],
+        [0,0,-2,0,0,4,-1,-1,-1,2,2,2],
+        [2,2,2,-1,-1,-1,4,0,0,-2,0,0],
+        [-1,-1,2,-1,2,-1,0,4,0,0,-2,0],
+        [-1,-1,2,2,-1,-1,0,0,4,0,0,-2],
+        [-1,-1,-1,2,2,2,-2,0,0,4,0,0],
+        [2,-1,-1,-1,-1,2,0,-2,0,0,4,0],
+        [-1,2,-1,-1,-1,2,0,0,-2,0,0,4]
     ]
     let i = 0
     while i < 12 {

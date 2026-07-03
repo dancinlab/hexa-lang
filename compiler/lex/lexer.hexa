@@ -511,9 +511,28 @@ pub fn lex(source: string, file: string) -> [Token] {
                 pos = pos + 1
                 col = col + 1
             } else if ch == '.' {
-                tokens.push(mk_tok(TokenKind::Dot, ".", mk_span(file, line, start_col, 1)))
-                pos = pos + 1
-                col = col + 1
+                // r13 — peek for `..` range / `..=` inclusive / `...` spread
+                // (maximal munch). Without this `arr[i..j]` lexed as two Dot
+                // tokens → parsed as chained field access → native SEGV (r8).
+                if pos + 2 < n && chars[pos + 1] == '.' && chars[pos + 2] == '.' {
+                    tokens.push(mk_tok(TokenKind::DotDotDot, "...", mk_span(file, line, start_col, 3)))
+                    pos = pos + 3
+                    col = col + 3
+                } else if pos + 1 < n && chars[pos + 1] == '.' {
+                    if pos + 2 < n && chars[pos + 2] == '=' {
+                        tokens.push(mk_tok(TokenKind::DotDotEq, "..=", mk_span(file, line, start_col, 3)))
+                        pos = pos + 3
+                        col = col + 3
+                    } else {
+                        tokens.push(mk_tok(TokenKind::DotDot, "..", mk_span(file, line, start_col, 2)))
+                        pos = pos + 2
+                        col = col + 2
+                    }
+                } else {
+                    tokens.push(mk_tok(TokenKind::Dot, ".", mk_span(file, line, start_col, 1)))
+                    pos = pos + 1
+                    col = col + 1
+                }
             } else if ch == '!' {
                 // != already consumed as Neq in the multi-char section above.
                 tokens.push(mk_tok(TokenKind::Bang, "!", mk_span(file, line, start_col, 1)))

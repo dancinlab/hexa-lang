@@ -38,6 +38,7 @@ pub fn beer_lambert_log10(i_0: float, eps: float, c_conc: float, l_path: float) 
 // laser-tissue interaction canonical endpoint (ANSI Z136.1 laser safety
 // standard). power P · exposure t · spot area A.
 pub fn fluence(power_w: float, area_cm2: float, t_time: float) -> float {
+    if area_cm2 <= 0.0 { return 0.0 }   // zero/negative spot area → P·t/0 = Inf
     return power_w * t_time / area_cm2
 }
 
@@ -45,6 +46,7 @@ pub fn fluence(power_w: float, area_cm2: float, t_time: float) -> float {
 // axial distance z 에서 Gaussian-mode beam radius (waist w0, Rayleigh range zR).
 // Source: Siegman 1986 (Lasers, §17.3).
 pub fn beam_waist(w0: float, z_axial: float, z_rayleigh: float) -> float {
+    if z_rayleigh <= 0.0 { return w0 }   // z_R≤0 → z/z_R = Inf; degenerate → waist w0
     let ratio = z_axial / z_rayleigh
     return w0 * sqrt(1.0 + ratio * ratio)
 }
@@ -53,6 +55,7 @@ pub fn beam_waist(w0: float, z_axial: float, z_rayleigh: float) -> float {
 // beam waist 에서 radius 가 sqrt(2)·w0 (= 면적 2배) 가 되는 거리.
 // Source: Siegman 1986 (Lasers, §17.2). `beam_waist` 와 짝.
 pub fn rayleigh_range(w0: float, lambda_wl: float) -> float {
+    if lambda_wl <= 0.0 { return 0.0 }   // λ≤0 → /λ = Inf
     return _OPT_PI * w0 * w0 / lambda_wl
 }
 
@@ -60,5 +63,6 @@ pub fn rayleigh_range(w0: float, lambda_wl: float) -> float {
 // absorption coefficient α 인 매질의 characteristic 1/e penetration depth.
 // Source: Born & Wolf 1999 (Principles of Optics 7th ed §14.1).
 pub fn absorption_depth(alpha_abs: float) -> float {
+    if alpha_abs <= 0.0 { return 0.0 }   // transparent medium (α≤0) → 1/0 = Inf sentinel hazard
     return 1.0 / alpha_abs
 }

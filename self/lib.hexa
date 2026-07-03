@@ -45,6 +45,7 @@ pub let mut MODULE_REGISTRY = [
     ["simd_hint",         true,  true],
     ["pgo",               true,  true],
     ["work_stealing",     false, true],
+    ["mn_scheduler",      false, true],
     ["jit",               false, true],
     ["lsp",               false, true],
     ["debugger",          false, true],

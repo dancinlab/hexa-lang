@@ -1,0 +1,122 @@
+F-M8-ROUTEB-SOAK-DUALCONFIG — MEASURE-8 (the genuine arena-substrate byte
+                              reduction = DROP the C `#else` arena body + keep
+                              HEXA_RT_ALLOC_NATIVE default-ON) is CORRECTLY
+                              SOAK-GATED, not punt-deferred. The native linked-
+                              block arena is ALREADY default-ON on all 3 targets
+                              and shipped stable (v0.241.9, 2026-06-19); the
+                              `#else` C arena is RETAINED as the live revert /
+                              no-seed-fallback net. This round captures the
+                              release-safe soak evidence: BOTH the native
+                              default-ON config AND the HEXA_RT_ALLOC_NATIVE=0
+                              revert path build + smoke GREEN on real x86_64
+                              (aiden), proving the #3583 `=0` re-break class is
+                              absent and the revert net is intact. The `#else`
+                              drop stays a measured WALL this round (release
+                              integrity > progress). (2026-06-19, aiden x86_64 RAN)
+================================================================================
+LANE: RT-NATIVE-ZEROC Route B, measure-8 (alloc-substrate `ls` byte reduction).
+GOAL (this round): on real state, decide whether Option (B) — make the source
+build use the native seed so the C arena `#else` can DROP (the first genuine
+alloc-substrate byte DECREASE) — is feasible release-safely RIGHT NOW, or is a
+measured wall; take the largest release-safe increment.
+
+================================================================================
+1. CURRENT STATE (c2 — git + ARCHITECTURE.json + CI, verified not trusted)
+================================================================================
+The frontier is PAST the brief's framing. measure-6/7 (F-M6-ROUTEB-CABI-BRIDGE,
+F-M7-ROUTEB-GLOBAL-TAG-SECTION, #3551) CLEARED the last codegen wall: the native
+HexaArenaBlock-chain arena (self/rt/alloc.hexa → frozen self/native/alloc_syscall
+_*.s seeds, 3-target) now runs the WHOLE compiler C-free. Consequences ALREADY on
+main + shipped stable:
+
+  • HEXA_RT_ALLOC_NATIVE is DEFAULT-ON (tool/stage_resolve_runtime_a:375,
+    `${HEXA_RT_ALLOC_NATIVE:-1}`); the seed is ar'd into runtime.a on all 3
+    targets (x86_64 measure-6/7, darwin-arm64, linux-arm64 #3624 r1).
+  • v0.241.9 (Latest stable, 2026-06-19 04:12Z) SHIPS native-arena default-ON on
+    all 3 targets — `git merge-base --is-ancestor 72fbbc8f7(#3624) v0.241.9` = TRUE.
+  • CI `selfhost-byteeq-real` GREEN on main HEAD; `selfhost-gates-summary`,
+    `release`, `nobaseline-gate` all GREEN at v0.241.9.
+  • The full-release_build linux-arm64 native-arena CI (arm64-native-arena-
+    release-build.yml) is GREEN (25m46s, 2026-06-18) — it RAN the exact #3597
+    SIGSEGV site (stage-0 module_loader transpile, heavy arena traffic) and passed.
+
+So Option (B)'s MECHANISM is done and live. What remains is ONLY the `ls`-reducing
+final brick: DROP the ~115L C arena `#else` body (runtime_core_emit.hexa
+~4027-4859, the `hexa_arena_alloc/new_block/mark/rewind/reset` + RSS-hygiene C
+bodies under `#ifndef HEXA_RT_ALLOC_NATIVE`).
+
+================================================================================
+2. IS THE `#else` DROP RELEASE-SAFE RIGHT NOW? — NO. TWO REAL GATES (c2).
+================================================================================
+GATE 1 — the `=0` consumer/revert FALLBACK path (STRUCTURAL, the #3583 re-break):
+  stage_resolve_runtime_a SILENTLY falls back to the C arena `#else` whenever the
+  native seed object is absent (no build/alloc_syscall_native.o, or explicit
+  HEXA_RT_ALLOC_NATIVE=0). #3553/#3568 already DROPPED this body once and #3583
+  had to RESTORE it: with the body gone, the `=0` build fails to compile
+  (`hexa_arena_on` / `hexa_arena_alloc` undeclared at the unconditional call site
+  in hexa_str_join, runtime_core.c:4859) and BLOCKS the gen3==gen4 byteeq gate.
+  Dropping the body now re-arms exactly that regression class.
+
+GATE 2 — the linux-arm64 SOAK invariant (TIME, the #3597 precedent):
+  tool/stage_resolve_runtime_a's own governance comment (written WITH the #3624
+  flip) states the `#else` drop "is deferred until the linux-arm64 native arena
+  has soaked on the edge channel (invariant: no #3597 regression; the fallback
+  stays a live net until soak, not just one full-build PASS)." #3624 (the arm64
+  default-ON flip) merged 2026-06-19 08:22 KST — HOURS old. #3597 is a real,
+  recent arm64-default-ON SIGSEGV regression (v0.241.0/.1) that this exact arena
+  caused once; the soak net exists precisely because one full-build PASS proved
+  insufficient before.
+
+VERDICT (c16): the `#else` drop is reachable ONLY by removing the live revert net
+mid-soak on a path that regressed within the last day. That is the precise
+self-host≠release trap (DO-NOT-MERGE #3553). Forcing it = release integrity loss
+for a deferred-anyway byte reduction. NO drop authored this round (c9/c10) — no
+fake reduction.
+
+================================================================================
+3. RELEASE-SAFE INCREMENT TAKEN — dual-config soak evidence (aiden x86_64 RAN, c2)
+================================================================================
+The release-safe move that ADVANCES the soak (not a re-run for its own sake) is
+to capture that BOTH live configs are GREEN — the default-ON path the soak is
+accruing on, AND the `=0` revert net the drop will eventually retire — so the
+GATE-1 re-break class is provably ABSENT on current main and the revert is real.
+
+aiden (Linux x86_64, 12 cores), origin/main @ 49b8da7a1, tool/build_aprime.sh:
+
+  CONFIG 1  HEXA_RT_ALLOC_NATIVE=1  (native default-ON; the v0.241.9 live config)
+     build RC=0 · stage-5 smoke exit(6*7)==42 PASS · `hexat run` exit42 RC=0
+     hexat md5 e5141ca554069b353310555cd79cc52a · aprime_cc 2,387,768 B
+
+  CONFIG 2  HEXA_RT_ALLOC_NATIVE=0  (C-arena revert / no-seed consumer fallback)
+     build RC=0 · stage-5 smoke exit(6*7)==42 PASS · `hexat run` exit42 RC=0
+     hexat md5 581f5ae722408e963d6c16a1d8bf4ce9 · aprime_cc 2,366,400 B
+
+  Byte-Δ (captured): the native seed adds +21,368 B to aprime_cc (the assembled
+  arena/syscall .s seed object) — an INCREASE, as expected while the C `#else` is
+  RETAINED. The genuine `runtime_core.c` `ls`/wc DECREASE (~115 C-arena lines)
+  is the DEFERRED drop, NOT claimable now (GATE 1+2). byte-Δ of the substrate
+  reduction = 0 this round (no source change ⇒ byteeq untouched).
+
+Both configs compile + smoke clean ⇒ the GATE-1 `=0` re-break is NOT present on
+main, and the revert net is verified-live (de-risks the eventual drop). CI
+`selfhost-byteeq-real` remains the gen3≡gen4 authority and is GREEN on main HEAD.
+
+================================================================================
+4. NEXT (measure-8 drop, r2) — when the soak gate opens
+================================================================================
+The drop becomes release-safe when BOTH gates clear:
+  (G1) the `=0` fallback no longer needs the C body — either the native seed is
+       GUARANTEED present in every build incl. consumer source build (#3632
+       standalone-rtlink runs stage_resolve_runtime_a in install.sh = a start, but
+       a seed-assembly failure still silently lands `=0`), OR the `#else` forward-
+       decl surface alone satisfies every unconditional call site without the C
+       arena body (decl-only `#else`, bodies gone) — verify by a `=0` byteeq build.
+  (G2) the linux-arm64 native arena has soaked on edge with NO #3597-class
+       regression across real consumer usage (time/usage gate, started 2026-06-19).
+Then: DROP the ~115L arena C `#else` body + keep default-ON → first alloc-
+substrate `ls`/wc DECREASE; 3-target byteeq + shipping smoke GREEN before merge;
+then map_set/keys + io/fmt/proc/fs/intern/math construct-half ports unblock
+(they gate behind the now-native alloc/grow).
+
+No emitter / build-script / runtime / seed edit this round (ADD: this verdict +
+CHANGELOG only) ⇒ the self-host fixpoint is structurally untouched on all targets.
