@@ -512,7 +512,7 @@
                 ]
               },
               {
-                "name": "✅ **Full native `hexa build` end-to-end** (done 2026-06-15) — `hexa build <src> -o OUT` now produces a native executable with **zero clang / zero system ld**: the `hx-selfhost-cli` launcher's new `build` route (native-first + delegate-fallback, mirroring the `run` route #3325) runs `gen3 ",
+                "name": "✅ **Full native `hexa build` end-to-end** (done 2026-06-15) — `hexa build <src> -o OUT` now produces a native executable with **zero clang / zero system ld**: the `hx-selfhost-cli` launcher's new `build` route (native-first + delegate-fallback, mirroring the `run` route #3325) runs `gen3 native --emit=obj 경로는 Linux-x86_64 호스트 게이트(2026-07-03: darwin은 emit 완주 후 crt 프로브 폐기 = 24min/24m30s 낭비 실측 → 폴백 직행) + HEXA_CG_PROFILE=1 시 캡처 출력(_ne·bout) stderr forwarding. ",
                 "role": "",
                 "id": "self-host-status-remaining-residuals-tracked-not-silent-full-native-hexa-build-e",
                 "detail": "",
