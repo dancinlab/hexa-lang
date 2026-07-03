@@ -575,6 +575,32 @@ pub fn ie_term3_fingerprint(a, b, c, N) -> int {
     return h
 }
 
+// Fold a caller-supplied value vector into the frozen rolling hash — the SAME
+// kernel as ie_term_fingerprint (seed 1469598103 · base 1000003 · P=2^61-1 ·
+// _ie_res sign-fold), so the OUROBOROS-novel Emerge generators (emerge.hexa
+// emerge2) can fingerprint NET-NEW value sequences (Dirichlet convolution ·
+// iterate/orbit · congruence-witness · solution-indicator) in the SAME space
+// as FP_k and the KNOWN catalog WITHOUT re-implementing the hash (a 1-line
+// drift would silently degrade every kc_classify to always-gamma). vals[i] is
+// the value at n = lo+i; the fold runs n = lo..hi inclusive (callers use
+// lo=2, hi=N). Values may be any exact int (negative or >= P) — _ie_res folds
+// them. The to_int(to_string(.)) generic-array read is exact for native BigInt
+// (#4161), so witness quotients beyond i64 round-trip exactly.
+// Equivalence (gate T1 in emerge_test): for a size-2 term the vals-vector fold
+// reproduces ie_term_fingerprint byte-for-byte by construction.
+pub fn ie_vec_fingerprint(vals: array, lo, hi) -> int {
+    let p = _ie_P()
+    let base = _ie_B()
+    let h = 1469598103
+    let n = lo
+    while n <= hi {
+        let v = _ie_res(to_int(to_string(vals[n - lo])))
+        h = ((h * base) + v) % p
+        n = n + 1
+    }
+    return h
+}
+
 // FP_2 table over the 18-fn basis: size-1 (a=0..17) then size-2 (a<=b), in that
 // deterministic order. Count = 18 + 18*19/2 = 189.
 pub fn ie_fp_table_build(N) -> array {
