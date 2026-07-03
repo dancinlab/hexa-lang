@@ -1838,6 +1838,34 @@ fn _is_hexaval(t: Type) -> bool { return t.kind == "named:HexaVal" || t.kind == 
 fn _types_assignable(expected: Type, actual: Type, src: Expr) -> bool {
     if _types_equal(expected, actual) { return true }
     if _is_hexaval(expected) || _is_hexaval(actual) { return true }
+    // static-types r9b — ELEMENT-level literal coercion for array-literal
+    // sources. The literal-coercion arms below key on `src.kind` being a
+    // scalar literal; an ArrayLit src is NEITHER, so an expected `[f32]`
+    // against an inferred `array[f64]` from `[0.0]` would FALSE-fire (HX3004
+    // on `fn g() -> [f32] { return [0.0] }`, HX3011 on `let xs: [f32] =
+    // [0.0]`, HX3003 on `g([0])` vs `[i32]`) — the sole false-positive
+    // source the r8 structural-ArrayLit inference introduces, and a
+    // flip-blocker (§B F0). Recurse per ELEMENT instead, with each element
+    // EXPR as the coercion src (Rust E0308: rustc_hir_typeck
+    // coerce/demand_coerce applies the literal-inference rule per array
+    // element, so `[0.0]` fits `[f32]` while a non-literal f64 ident element
+    // still REJECTs). Both sides' element type is args[0] — the r8 producer
+    // only builds uniform-scalar ArrayLit types and the r7-prep lowering
+    // always pushes args[0], and `_types_equal` above already tolerated any
+    // missing-args side, so both args are non-empty here. NO env gate needed
+    // — kind:"array" is ONLY ever produced by the opt-in ARRAY_LOWER /
+    // r8-inference branches (the `_types_equal` r7-prep precedent: this arm
+    // is DEAD CODE on the default build, byte-neutral).
+    if expected.kind == "array" && actual.kind == "array" && _types_is_array_lit(src.kind) {
+        let mut si = 0
+        while si < len(src.children) {
+            if !_types_assignable(expected.args[0], actual.args[0], src.children[si]) {
+                return false
+            }
+            si = si + 1
+        }
+        return true
+    }
     if _types_is_lit_int(src.kind) && _is_integer_kind(expected) && _is_integer_kind(actual) {
         return true
     }
@@ -2370,8 +2398,18 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                             _emit_hx3011(declared, rhs_t, e.span, out)
                         }
                     }
-                } else if _types_is_ident(rhs.kind) || _types_is_call(rhs.kind) {
+                } else if _types_is_ident(rhs.kind) || _types_is_call(rhs.kind) || _types_is_index(rhs.kind) || _types_is_field(rhs.kind) {
                     // Wall A r2 — non-literal known-type RHS (ident / call).
+                    // static-types r9a widens the accepted RHS kinds with
+                    // Index/Field READs: their inference arms (see the
+                    // pre-STUB arms in `_infer_expr`) recover the array
+                    // element / declared field type, so the SAME scratch
+                    // re-infer + soundness gates below reject
+                    // `let s: string = xs[0]` / `let n: i64 = p.name`. On
+                    // the default build those arms are env-gated off and the
+                    // re-infer returns the unknown sentinel → gate ② skips
+                    // (byteeq-neutral; this whole branch is already inside
+                    // the HEXA_STATIC_TYPES gate).
                     // Rust E0308 'mismatched types' fires on a typed `let`
                     // whose RHS is an inferred-scalar ident/call that provably
                     // disagrees with the annotation — e.g.
@@ -2751,6 +2789,97 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                 ret: [],
                 domain: "",
                 unit: ""
+            }
+        }
+        return _types_empty_type()
+    }
+
+    // static-types r9a — OPT-IN Index READ inference (HEXA_STATIC_TYPES=1
+    // AND HEXA_STATIC_TYPES_ARRAY_LOWER=1; element types only exist under
+    // the r7-prep structured lowering). An Index READ (`xs[0]`,
+    // children[0]=base, children[1]=index, parser.hexa:753) has NO inference
+    // arm: it falls to the STUB below and returns the unknown sentinel, so
+    // `let s: string = xs[0]` with `xs: [i64]` passed SILENTLY in both
+    // modes. Infer the BASE instead: under ARRAY_LOWER a param / ArrayLit /
+    // lowered-let base carries the structured Type{kind:"array",
+    // args:[elem]}, so the element type is args[0] — returned as this
+    // READ's type. NO new diagnostic site — the recovered element feeds the
+    // EXISTING r1/r2 let checks, the r3 assign check, and the default-ON
+    // HX3003/HX3004/HX3005 sites (Rust E0308: rustc_hir_typeck
+    // check_expr_index resolves the element ty as the expression type; the
+    // coercion sites the r1-r8 arms mirror do the reject). Every child is
+    // inferred exactly once into `out` — STUB walk parity, inner errors
+    // still surface, nothing double-reports. A non-array base (flag-OFF
+    // string sentinel shape, unknown ident, nested unknown) or a missing
+    // element degrades to the unknown sentinel — conservative, mirrors the
+    // r2 soundness gates. Both env checks are the FIRST `&&` operands
+    // (short-circuit) → the default build takes the byte-identical STUB
+    // path below (byteeq / gen3≡gen4 preserved, r1-r8 gate idiom).
+    if env("HEXA_STATIC_TYPES") == "1" && env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1" && _types_is_index(e.kind) {
+        let mut base_t = _types_empty_type()
+        let mut xi = 0
+        while xi < len(e.children) {
+            let ct = _infer_expr(e.children[xi], env, ctx, out)
+            if xi == 0 { base_t = ct }
+            xi = xi + 1
+        }
+        if base_t.kind == "array" && len(base_t.args) > 0 {
+            return base_t.args[0]
+        }
+        return _types_empty_type()
+    }
+
+    // static-types r9a — OPT-IN Field READ inference (HEXA_STATIC_TYPES=1;
+    // no ARRAY_LOWER needed — the field type comes from the r5 side
+    // registry, not the structured array lowering). A Field READ (`p.x`,
+    // text=field name, children[0]=receiver, parser.hexa:715) also falls to
+    // the STUB and returns unknown, so `let n: i64 = p.name` with
+    // `name: string` passed SILENTLY. Recover the declared field type via
+    // the r5 (struct,field)→typename registry (the SAME registry the r5
+    // assign arm and the r6 struct-lit arm already consume), with the r5
+    // two-way receiver recovery: block-local `let s: Point` from the
+    // `{}<name>` env slot, else the receiver's own `named:<Struct>` type
+    // (params / module-lets). NO new diagnostic site — the field type feeds
+    // the same downstream checks as the Index arm above (Rust E0308:
+    // rustc_hir_typeck check_field resolves the field ty as the expression
+    // type). Every child is inferred exactly once into `out` (STUB walk
+    // parity). Conservative fallbacks keep it silent: a non-Ident receiver
+    // (nested `s.inner.x` — the documented r7+ type-erasure ceiling), an
+    // unknown struct/field, and a non-named or non-scalar field type (the
+    // registry stores "" for non-named; `named:<Struct>` fields fail the
+    // scalar gate) all return the unknown sentinel. A field name colliding
+    // with the codegen method-builtin set (`_is_builtin_method` — `s.len`,
+    // `s.count`, …) is ALSO skipped: `recv.<m>(…)` is dispatched on the
+    // receiver by codegen, so returning a field type for that callee would
+    // false-fire HX2003 "not callable" on a legal builtin-method call (a
+    // flag-ON false-positive class — flip-blocking, §B F0). Flag check is
+    // the FIRST `&&` operand (short-circuit) → the default build takes the
+    // byte-identical STUB path below.
+    if env("HEXA_STATIC_TYPES") == "1" && _types_is_field(e.kind) && len(e.children) > 0 {
+        let mut recv_t = _types_empty_type()
+        let mut wi = 0
+        while wi < len(e.children) {
+            let ct = _infer_expr(e.children[wi], env, ctx, out)
+            if wi == 0 { recv_t = ct }
+            wi = wi + 1
+        }
+        let recv = e.children[0]
+        if _types_is_ident(recv.kind) && len(recv.text) > 0 && len(e.text) > 0 && !_is_builtin_method(e.text) {
+            let mut sname = ""
+            let blk = _types_env_lookup(env, "{}" + recv.text)
+            sname = _types_struct_name_of(blk.kind)
+            if len(sname) == 0 {
+                sname = _types_struct_name_of(recv_t.kind)
+            }
+            if len(sname) > 0 {
+                let lk = _types_lookup_struct_field_typename(sname, e.text)
+                if lk.found && len(lk.field_typename) > 0 {
+                    let ftr = TypeRef { kind: "named", name: lk.field_typename, args: [], span: e.span }
+                    let field_t = _types_lower_type_ref(ftr)
+                    if _types_kind_is_scalar(field_t.kind) {
+                        return field_t
+                    }
+                }
             }
         }
         return _types_empty_type()
