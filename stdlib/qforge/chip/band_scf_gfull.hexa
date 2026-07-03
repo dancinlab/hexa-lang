@@ -176,6 +176,7 @@ pub fn qforge_chip_gfull_vshell(rho: [float], n: int, b1: float,
 // b1 = 2π/a so the FFT frequency lands on the chip G-set. d4/d19: data-swap + reused eig.
 pub fn qforge_chip_scf_gfull_band_eps(a: float, mmax: int, k: float,
                                       rho: [float], n: int, xc_mode: int) -> [float] {
+    if a <= 0.0 { return [] }   // lattice length a≤0 → 2π/a Inf
     let b1 = 2.0 * _pi_r7() / a
     let nshell = 2 * mmax + 1                                  // |Δm| up to 2·mmax needs this many
     let vshell = qforge_chip_gfull_vshell(rho, n, b1, xc_mode, nshell)
@@ -206,6 +207,7 @@ pub fn qforge_chip_scf_gfull_band_min(a: float, mmax: int, k: float,
 // gap = ε₁−ε₀ at k=π/a. The metal↔insulator lever, now driven by ρ_sc — not assumed.
 pub fn qforge_chip_scf_gfull_gap(a: float, mmax: int,
                                  rho: [float], n: int, xc_mode: int) -> float {
+    if a <= 0.0 { return 0.0 }   // lattice length a≤0 → π/a Inf
     let kbz = _pi_r7() / a
     let eps = qforge_chip_scf_gfull_band_eps(a, mmax, kbz, rho, n, xc_mode)
     if len(eps) < 2 { return 0.0 }

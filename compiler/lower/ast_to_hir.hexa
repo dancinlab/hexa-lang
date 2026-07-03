@@ -142,6 +142,32 @@ fn _hir_lower_type_ref(tr: TypeRef) -> Type {
             unit: ""
         }
     }
+    // Array element-type preservation (runtime-gap r2-pre). The parser
+    // (compiler/parse/parser.hexa `[T]`/`[T; N]`) emits arrays as
+    //   TypeRef{kind:"generic", name:"Array" | "Array:<N>" | "Array:<elem>:<N>",
+    //           args:[<element TypeRef>]}
+    // Previously the generic fallback below collapsed this to
+    // Type{kind:"generic:Array", args:[]} — DROPPING the element type — so
+    // hir_to_mir::_type_id_of (which keys on kind=="array" + args[0].kind to
+    // emit the 101-104 typed-array ids) hit a dead branch and every array
+    // local fell through to type_id=0 (unclassified). Lower the Array shape
+    // to kind:"array" and RECURSE on the element TypeRef so args[0].kind is a
+    // real scalar (i64/i32/f64/f32). No consumer reads the old "generic:Array"
+    // kind (grep-verified), so this only activates the intended typed-array
+    // path. Arrays of non-primitive elements still produce a non-{i64..f32}
+    // args[0].kind, so _type_id_of returns 0 for them — unchanged.
+    if tr.kind == "generic" && _hir_is_array_name(tr.name) && len(tr.args) >= 1 {
+        let mut elem_args: [Type] = []
+        elem_args.push(_hir_lower_type_ref(tr.args[0]))
+        return Type {
+            kind: "array",
+            def: _hir_miss_def_id(),
+            args: elem_args,
+            ret: [],
+            domain: "",
+            unit: ""
+        }
+    }
     return Type {
         kind: tr.kind + ":" + tr.name,
         def: _hir_miss_def_id(),
@@ -150,6 +176,17 @@ fn _hir_lower_type_ref(tr: TypeRef) -> Type {
         domain: "",
         unit: ""
     }
+}
+
+// True when a generic TypeRef `name` denotes an array — bare "Array" or the
+// sized/typed encodings "Array:<N>" / "Array:<elem>:<N>" (parser RFC 085).
+fn _hir_is_array_name(n: string) -> bool {
+    if n == "Array" { return true }
+    let pfx = "Array:"
+    if len(n) > len(pfx) {
+        if n.substring(0, len(pfx)) == pfx { return true }
+    }
+    return false
 }
 
 // ── ItemKind dispatch (enum match) ───────────────────────────
@@ -1581,6 +1618,26 @@ fn _desugar_for(e: Expr) -> Expr {
     let loop_var = e.text
     let iter_e = _pick_for_iter(e.children, _mk_ast_ident(loop_var, sp))
     let body_e = _pick_for_body(e.children, _mk_ast_block([], sp))
+    // r13 — range iter `for i in lo..hi` → counter while-loop (ABI-safe; no
+    // hexa_range_array int-arg). `let mut i=lo; while i </<= hi { body; i=i+1 }`.
+    if _hir_is_binop_kind(iter_e.kind) && (iter_e.text == "range" || iter_e.text == "range_inclusive") && len(iter_e.children) >= 2 {
+        let _rlo = iter_e.children[0]
+        let _rhi = iter_e.children[1]
+        let mut _rcmp = "<"
+        if iter_e.text == "range_inclusive" { _rcmp = "<=" }
+        let _rlet = _mk_ast_let(loop_var, true, _rlo, sp)
+        let _rcond = _mk_ast_binop(_rcmp, _mk_ast_ident(loop_var, sp), _rhi, sp)
+        let _rinc = _mk_ast_assign("=", _mk_ast_ident(loop_var, sp),
+            _mk_ast_binop("+", _mk_ast_ident(loop_var, sp), _mk_ast_lit_int("1", sp), sp), sp)
+        let mut _rwbody: [Expr] = []
+        _rwbody.push(body_e)
+        _rwbody.push(_rinc)
+        let _rwhile = _mk_ast_while(_rcond, _mk_ast_block(_rwbody, sp), sp)
+        let mut _router: [Expr] = []
+        _router.push(_rlet)
+        _router.push(_rwhile)
+        return _mk_ast_block(_router, sp)
+    }
     let uid = _next_for_uid()
     let it_name  = "__for_it_"  + to_string(uid)
     let idx_name = "__for_idx_" + to_string(uid)
@@ -1693,28 +1750,65 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
     if _hir_is_binop_kind(k) && _hir_lower_binop_spine_deep(e) {
         // spine[0] OUTERMOST (== e); each next is its child[0] while that
         // child is also a binop. The deepest node's child[0] is the BASE.
+        //
+        // PERF (deep-spine O(n²) kill, r3): we DO NOT `spine.push(cur)` the
+        // whole node — `cur.children[0]` is the O(N)-deep left subtree, so
+        // pushing the node into `[Expr]` deep-`hexa_val_heapify`'d the entire
+        // remaining spine each iteration → O(N²) just to COLLECT the spine
+        // (measured: depth-2000 = 98s; >36% wall in hexa_val_heapify under
+        // spine.push). The unwind only ever reads each node's RIGHT operands
+        // (`children[1..]`, shallow leaves) + `kind`/`span`/`text`, and the
+        // BASE leaf (`children[0]` of the deepest node). We therefore collect
+        // a SHALLOW per-node carrier (right children only — child[0] dropped)
+        // so each push is O(right-arity)≈O(1); the carrier is field-identical
+        // to the original node for every field the unwind reads, and the
+        // deepest left leaf is captured once at loop exit → byte-eq NEUTRAL,
+        // collapses the spine collection from O(N²) to O(N).
         let mut spine: [Expr] = []
         let mut cur = e
-        spine.push(cur)
-        while len(cur.children) > 0 && _hir_is_binop_kind(cur.children[0].kind) {
-            cur = cur.children[0]
-            spine.push(cur)
+        let mut base_leaf = cur
+        while true {
+            let mut rkids: [Expr] = []
+            let mut rci = 1
+            while rci < len(cur.children) {
+                rkids.push(cur.children[rci])
+                rci = rci + 1
+            }
+            // Shallow carrier: same kind/span/text/annotations/atlas_ref, but
+            // children = RIGHT operands only (child[0] — the deep left — is
+            // intentionally dropped; the unwind never reads spine[si].child[0]).
+            spine.push(Expr {
+                kind: cur.kind,
+                span: cur.span,
+                text: cur.text,
+                annotations: cur.annotations,
+                children: rkids,
+                atlas_ref: cur.atlas_ref
+            })
+            if len(cur.children) > 0 && _hir_is_binop_kind(cur.children[0].kind) {
+                cur = cur.children[0]
+            } else {
+                // deepest node reached — its child[0] is the BASE leaf.
+                if len(cur.children) > 0 { base_leaf = cur.children[0] }
+                break
+            }
         }
         // Lower the base (deepest child[0]) first — matches the recursion,
         // which fully lowers the leftmost leaf before any enclosing binop.
         let mut new_sc = sc
-        let base_r = _lower_expr(spine[len(spine) - 1].children[0], atlas, new_sc)
+        let base_r = _lower_expr(base_leaf, atlas, new_sc)
         let mut acc = base_r.expr
         new_sc = base_r.sc
         // Unwind from the deepest spine node outward. For each node, child[0]
         // is the accumulated left HExpr (`acc`); lower the remaining children
-        // (child[1..], shallow — the right operands) in order, threading scope.
+        // (now stored as `node.children[0..]`, shallow — the right operands)
+        // in order, threading scope.
         let mut si = len(spine) - 1
         while si >= 0 {
             let node = spine[si]
             let mut kids: [HExpr] = []
             kids.push(acc)
-            let mut ci = 1
+            let mut ci = 0
             while ci < len(node.children) {
                 let r = _lower_expr(node.children[ci], atlas, new_sc)
                 kids.push(r.expr)
@@ -1841,6 +1935,24 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
         return LowerResult { expr: h, sc: new_sc }
     }
 
+    // ── defer carrier (HEXA-OWN M1) — MUST precede the generic block
+    // case: the carrier is ExprKind::Block + text "__defer__" + children
+    // [body_block] (ast.hexa::ast_is_defer). Lowers to HExpr kind "defer"
+    // (string tag — no HIR enum change) with the lowered body block as its
+    // single child. The child IS a Block, so recursing through
+    // `_lower_expr` runs the generic block case below, which pushes/pops
+    // the LowerScope frame — identical scope threading to a plain block.
+    // hir_to_mir consumes the "defer" kind (flag registration + fn-exit
+    // LIFO drain); no other pass sees it.
+    if ast_is_defer(e) && len(e.children) == 1 {
+        let r = _lower_expr(e.children[0], atlas, sc)
+        let mut dkids: [HExpr] = []
+        dkids.push(r.expr)
+        let h = _mk_hexpr("defer", e.span, _hir_t_unit(), "",
+                          dkids, _empty_atlas_binding(), _hir_miss_def_id())
+        return LowerResult { expr: h, sc: r.sc }
+    }
+
     // ── block: type = last child's type, opens a scope frame ──
     if _hir_is_block_kind(k) {
         let mut new_sc = _push_frame(sc)
@@ -1958,6 +2070,39 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             let body = e.children[idx + 1]
             // arm scope
             let mut arm_sc = _push_frame(new_sc)
+            // RFC pattern guards — a guarded arm wraps its pattern as a
+            // "match_guard" carrier (children [inner_pattern, guard]). Lower
+            // the inner pattern + guard in the arm scope and re-emit them as a
+            // HIR "match_guard" HExpr (children [inner, guard]); hir_to_mir's
+            // match loop unwraps it and inserts the guard branch. Unguarded
+            // arms take the legacy path unchanged (byte-identical HIR).
+            if ast_is_match_guard(pat) {
+                let inner = pat.children[0]
+                let guard = pat.children[1]
+                if _hir_is_ident_kind(inner.kind) && len(inner.text) > 0 && inner.text != "_" {
+                    arm_sc = _define_in_scope(arm_sc, inner.text, _hir_empty_type())
+                }
+                let ipr = _lower_expr(inner, atlas, arm_sc)
+                arm_sc = ipr.sc
+                let gpr = _lower_expr(guard, atlas, arm_sc)
+                arm_sc = gpr.sc
+                let mut gkids: [HExpr] = []
+                gkids.push(ipr.expr)
+                gkids.push(gpr.expr)
+                let gh = _mk_hexpr("match_guard", pat.span, ipr.expr.typ, "match_guard",
+                                   gkids, _empty_atlas_binding(), _hir_miss_def_id())
+                let br = _lower_expr(body, atlas, arm_sc)
+                kids.push(gh)
+                kids.push(br.expr)
+                arm_sc = br.sc
+                new_sc = _pop_frame(arm_sc)
+                if !have_first {
+                    first_body_t = br.expr.typ
+                    have_first = true
+                }
+                idx = idx + 2
+                continue
+            }
             // bind ident-pattern names so body lookups can see them
             if _hir_is_ident_kind(pat.kind) && len(pat.text) > 0 && pat.text != "_" {
                 arm_sc = _define_in_scope(arm_sc, pat.text, _hir_empty_type())
@@ -2415,7 +2560,13 @@ pub fn lower(module: Module, atlas: AtlasIndex) -> HModule {
         let it = module.items[i]
         let def = DefId { module: module.file, index: idx }
         item_defs.push(def)
-        if _is_import_item(it.kind) {
+        if item_is_type_alias(it) {
+            // Type-alias carrier (ItemKind::Let + `__type_alias`) is a pure
+            // parse/resolve substitution — it binds no runtime value, so it is
+            // NOT defined in module scope (and is dropped from lowering in the
+            // pass below). `def`/`idx` still advance to keep item_defs[]
+            // index-aligned with module.items for the lowering pass.
+        } else if _is_import_item(it.kind) {
             // Imports are not bound as defs in scope.
         } else if _hir_is_fn_item(it.kind) {
             module_sc = _define_with_def(module_sc, it.name, def, _hir_signature_type(it))
@@ -2435,6 +2586,11 @@ pub fn lower(module: Module, atlas: AtlasIndex) -> HModule {
     let mut k = 0
     while k < len(module.items) {
         let it = module.items[k]
+        // Type-alias carriers emit nothing (resolved away in the types pass).
+        if item_is_type_alias(it) {
+            k = k + 1
+            continue
+        }
         let def = item_defs[k]
         let h = _lower_item(it, def, atlas, module_sc)
         hitems.push(h)

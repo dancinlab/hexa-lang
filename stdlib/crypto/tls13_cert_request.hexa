@@ -37,6 +37,7 @@ pub fn tls13_cr_build(context: [int], extensions_concat: [int]) -> [int] {
 
 @pure
 pub fn tls13_cr_context_length(body: [int]) -> int {
+    if len(body) == 0 { return 0 }   // empty/truncated CertificateRequest → no context-length byte
     return body[0] & 0xFF
 }
 
@@ -53,6 +54,7 @@ pub fn tls13_cr_context(body: [int]) -> [int] {
 @pure
 pub fn tls13_cr_extensions_length(body: [int]) -> int {
     let cl = tls13_cr_context_length(body)
+    if 2 + cl >= len(body) { return 0 }   // truncated CR body → body[1+cl]/body[2+cl] OOB
     return ((body[1 + cl] & 0xFF) << 8) | (body[2 + cl] & 0xFF)
 }
 

@@ -114,8 +114,11 @@ fn elliptic_K_E(k_in: float) -> [float] {
         return [HALF_PI, HALF_PI]
     }
 
-    // Anchor k = 1 (K diverges; E(1) = 1 in closed form).
-    if k >= 1.0 - 1.0e-15 {
+    // Anchor k = 1 (K diverges; E(1) = 1 in closed form). Fire only AT k == 1 —
+    // the prior `k >= 1 - 1e-15` returned the divergence sentinel for in-domain
+    // k < 1 (e.g. 0.999999999999999, true K ≈ 18); the AGM stays well-conditioned
+    // arbitrarily close to but below 1.
+    if k >= 1.0 {
         return [K_AT_ONE, 1.0]
     }
 

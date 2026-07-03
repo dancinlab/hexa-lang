@@ -1,0 +1,67 @@
+// test/runtime/erf_gamma_smoke.hexa — smoke for stdlib/runtime/math.hexa
+//   rt_erf / rt_erfc / rt_tgamma (W.J. Cody rational-Chebyshev erf + Stirling
+//   reflection gamma · zero-c #29 native special functions).
+//
+// Reference values from libm/SciPy (scipy.special.erf/erfc/gamma), full double:
+//   erf(0.5)=0.5204998778130465  erf(1)=0.8427007929497149
+//   erf(2)=0.9953222650189527    erfc(1)=0.15729920705028513
+//   erfc(3)=2.209049699858544e-05  erfc(5)=1.5374597944280349e-12
+//   tgamma(5)=24  tgamma(0.5)=1.7724538509055159(√π)  tgamma(1.5)=0.8862269254527580
+//   tgamma(-0.5)=-3.5449077018110318
+//
+// Tolerance: rt_exp/rt_log/rt_sin are native approximations (the module is
+// "NOT bit-exact with libm" by design), so checks use a relative band ~1e-6 —
+// the same posture as the verify --tol gate these functions feed.
+//
+// Run:  hexa run test/runtime/erf_gamma_smoke.hexa
+// Sentinel: __ERF_GAMMA_SMOKE__ PASS|FAIL on the final line.
+
+import "stdlib/runtime/math.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn rel_ok(label: string, got: float, want: float, tol: float) {
+    let d = got - want
+    let ad = if d < 0.0 { 0.0 - d } else { d }
+    let aw = if want < 0.0 { 0.0 - want } else { want }
+    let bound = if aw > 1.0 { tol * aw } else { tol }
+    if ad <= bound {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label + "  got=" + to_string(got) + " want=" + to_string(want))
+    }
+}
+
+// ── erf ──────────────────────────────────────────────────────────────────
+rel_ok("erf(0)",     rt_erf(0.0),  0.0,                 1.0e-12)
+rel_ok("erf(0.3)",   rt_erf(0.3),  0.3286267594591274,  1.0e-6)
+rel_ok("erf(0.5)",   rt_erf(0.5),  0.5204998778130465,  1.0e-6)
+rel_ok("erf(1)",     rt_erf(1.0),  0.8427007929497149,  1.0e-6)
+rel_ok("erf(2)",     rt_erf(2.0),  0.9953222650189527,  1.0e-6)
+rel_ok("erf(-1)",    rt_erf(-1.0), -0.8427007929497149, 1.0e-6)
+rel_ok("erf(3)",     rt_erf(3.0),  0.9999779095030014,  1.0e-6)
+
+// ── erfc (tail accuracy is the whole point of a separate fn) ───────────────
+rel_ok("erfc(0.5)",  rt_erfc(0.5), 0.4795001221869535,  1.0e-6)
+rel_ok("erfc(1)",    rt_erfc(1.0), 0.15729920705028513, 1.0e-6)
+rel_ok("erfc(3)",    rt_erfc(3.0), 2.209049699858544e-05, 1.0e-5)
+rel_ok("erfc(5)",    rt_erfc(5.0), 1.5374597944280349e-12, 1.0e-4)
+rel_ok("erfc(-1)",   rt_erfc(-1.0), 1.8427007929497148, 1.0e-6)
+
+// ── tgamma ─────────────────────────────────────────────────────────────────
+rel_ok("tgamma(1)",   rt_tgamma(1.0),  1.0,                1.0e-9)
+rel_ok("tgamma(5)",   rt_tgamma(5.0),  24.0,               1.0e-6)
+rel_ok("tgamma(0.5)", rt_tgamma(0.5),  1.7724538509055159, 1.0e-6)
+rel_ok("tgamma(1.5)", rt_tgamma(1.5),  0.8862269254527580, 1.0e-6)
+rel_ok("tgamma(2.5)", rt_tgamma(2.5),  1.3293403881791370, 1.0e-6)
+rel_ok("tgamma(-0.5)", rt_tgamma(-0.5), -3.5449077018110318, 1.0e-6)
+
+println("erf_gamma_smoke: PASS=" + to_string(PASS) + " FAIL=" + to_string(FAIL))
+if FAIL == 0 {
+    println("__ERF_GAMMA_SMOKE__ PASS")
+} else {
+    println("__ERF_GAMMA_SMOKE__ FAIL")
+}

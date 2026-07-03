@@ -197,6 +197,40 @@ fn main() {
     let cosim = dotdf / (sqrt(ndp) * sqrt(nfd))
     fails = fails + _ck_close("(E) FD direction cos(dpsi,fd) ~ 1", cosim, 1.0, 1.0e-4)
 
+    // ── (F) DEGENERATE-SUBSPACE: 점유 εₙ 가 점유 εₘ 와 근축퇴여도 안정·정확 ──────
+    //   diagonal H 로 명시 스펙트럼 구성: 점유 {0,1} 의 ε 를 Δ=1e-6 로 근축퇴시킨다.
+    //   응답 상태 n=1 은 점유 0 과 ε 거의 동일 → 무시프트 P_c(H−εₙ)P_c 는 점유 0
+    //   방향으로 거의-특이(degenerate-subspace 벽). α·P_v 레벨시프트가 이를 들어올려
+    //   CG 가 수렴하고, 전도공간 해는 스펙트럴 합과 일치해야 한다(α 불변).
+    //   diagonal 이므로 ψ = 표준기저, εᵢ = Dᵢ.
+    let ND = 4
+    set_mat([ 1.000000, 0.0, 0.0, 0.0,
+              0.0, 1.000001, 0.0, 0.0,      // 점유 1: ε≈점유 0 (Δ=1e-6 근축퇴)
+              0.0, 0.0, 3.0, 0.0,           // 전도 2
+              0.0, 0.0, 0.0, 5.0 ], ND)     // 전도 3
+    let de0 = [1.0, 0.0, 0.0, 0.0]
+    let de1 = [0.0, 1.0, 0.0, 0.0]
+    let de2 = [0.0, 0.0, 1.0, 0.0]
+    let de3 = [0.0, 0.0, 0.0, 1.0]
+    let deps = [1.000000, 1.000001, 3.0, 5.0]
+    let mut docc = []
+    docc.push(de0)
+    docc.push(de1)
+    let dn = 1                              // 응답 상태 = 점유 1 (점유 0 과 근축퇴)
+    let ddV = [0.0, 0.0, 0.4, 0.7]          // 섭동 = 전도 {2,3} 성분만
+    // 스펙트럴 합(전도 2,3): Δψ_m = ψ_m ⟨ψ_m|dV⟩/(ε1−ε_m)
+    //   m=2: 0.4/(1.000001−3.0) = 0.4/(−1.999999)
+    //   m=3: 0.7/(1.000001−5.0) = 0.7/(−3.999999)
+    let dsp2 = 0.4 / (deps[dn] - deps[2])
+    let dsp3 = 0.7 / (deps[dn] - deps[3])
+    let dres = qforge_sternheimer(h_apply, deps[dn], de1, docc, ddV, ND, 1.0e-12, 500)
+    fails = fails + _ck_bool("(F) degenerate-subspace converged", dres.converged, true)
+    fails = fails + _ck_close("(F) dpsi[2] == spectral", dres.dpsi[2], dsp2, 1.0e-6)
+    fails = fails + _ck_close("(F) dpsi[3] == spectral", dres.dpsi[3], dsp3, 1.0e-6)
+    // 전도공간 응답이므로 점유 0/1 성분 ≈ 0 (degenerate 점유에도 누설 없음)
+    fails = fails + _ck_close("(F) dpsi[0] (occ-degenerate) ~ 0", dres.dpsi[0], 0.0, 1.0e-8)
+    fails = fails + _ck_close("(F) dpsi[1] (occ-self) ~ 0", dres.dpsi[1], 0.0, 1.0e-8)
+
     if fails == 0 { println("qforge_sternheimer_selftest PASS") }
     else { println("qforge_sternheimer_selftest FAIL — " + to_string(fails) + " case(s)") }
 }

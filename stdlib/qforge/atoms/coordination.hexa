@@ -148,6 +148,7 @@ pub fn qforge_cn_derf_dz(x: float) -> float {
 //   r = R_cov ⇒ argument 0 ⇒ exactly ½ (the bond half-on point). r ≪ R_cov ⇒ →1,
 //   r ≫ R_cov ⇒ →0. Pure function of (r, R_cov, k_cn) — element-agnostic (d4).
 pub fn qforge_cn_term(r: float, rcov: float, kcn: float) -> float {
+    if rcov <= 0.0 { return 0.0 }   // covalent radius≤0 → (r-rcov)/rcov Inf
     let u = 0.0 - kcn * (r - rcov) / rcov
     return 0.5 * (1.0 + erf_fn(u))
 }
@@ -160,6 +161,7 @@ pub fn qforge_cn_term(r: float, rcov: float, kcn: float) -> float {
 //   −k/R_cov factor is <0 and erf'>0, so s ≤ 0 — a stretch lowers the count
 //   (the monotonicity the selftest pins).
 pub fn qforge_cn_term_dR(r: float, rcov: float, kcn: float) -> float {
+    if rcov <= 0.0 { return 0.0 }   // covalent radius≤0 → /rcov Inf
     let u = 0.0 - kcn * (r - rcov) / rcov
     let du_dr = 0.0 - kcn / rcov
     return 0.5 * qforge_cn_derf_dz(u) * du_dr

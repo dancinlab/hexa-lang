@@ -1,0 +1,89 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/thread_real.hexa — OPT-IN real OS threads (HEXA_THREADS build)
+//
+//  @module(slug="thread_real", desc="thin hexa wrappers over the POSIX pthread
+//          spawn/join + condvar-channel runtime; opt-in, real OS threads only in
+//          a -DHEXA_THREADS build (default build runs them synchronously)")
+//  @usage(use "stdlib/thread_real"; let t = thread_start(worker, arg); let r = thread_wait(t))
+//  @stability preview
+//  @since 2026-06-27
+//  @rfc state/rfc_real_concurrency_optin.md (slice ② — real OS-thread spawn)
+//
+//  ── TWO BACKENDS, ONE API ─────────────────────────────────────────────────
+//
+//  The `thread_spawn` / `thread_join` / `thread_channel_*` runtime fn-globals
+//  (self/native/thread.c, registered in _hexa_init_thread_fn_shims) route every
+//  pthread call through the `hxlcl_pthread_*` libc-floor shims. Those shims have
+//  TWO compile-time backends, selected in self/runtime_emit_full.hexa:
+//
+//    · DEFAULT build (HEXA_THREADS undefined) — the shims are SYNCHRONOUS:
+//      `hxlcl_pthread_create` runs the thread entry inline on the caller's stack
+//      and returns; `thread_join` then returns the already-computed result. The
+//      program is single-threaded and fully deterministic. The runtime object is
+//      byte-identical to origin/main (the real-pthread block preprocesses out),
+//      so the byteeq gen3≡gen4 self-host fixpoint is unaffected.
+//
+//    · `-DHEXA_THREADS` build — the shims map 1:1 onto POSIX pthread:
+//      `pthread_create(&tid, NULL, entry, slot)` spawns a real OS thread,
+//      `pthread_join(tid, NULL)` blocks for it. Multicore parallelism is real.
+//
+//  This module's API is IDENTICAL on both backends; only the observable
+//  scheduling (and whether work runs concurrently) changes.
+//
+//  ── REFERENCE-MATCH (1:1 OS-thread model) ─────────────────────────────────
+//
+//    · POSIX.1-2017  pthread_create / pthread_join — entry `void *(*)(void *)`,
+//      joined by an opaque handle; the canonical 1-thread-per-spawn model.
+//    · Go runtime v1  was 1:1 goroutine→OS thread before the M:N scheduler;
+//      `go f()` ≈ pthread_create(entry-trampoline).
+//    · Rust  std::thread::spawn → pthread_create on every Unix target; JoinHandle
+//      ::join → pthread_join. Same shape as `thread_start` / `thread_wait` here.
+//
+//  Determinism note: a program that spawns N workers each producing an
+//  INDEPENDENT partial result and sums the joined values is order-insensitive,
+//  so it yields the SAME total under the synchronous default and under real OS
+//  threads. That order-insensitive shape is the contract test_real_spawn.hexa
+//  encodes — do NOT introduce shared-mutable split-work that depends on the
+//  thread schedule (it would make output non-deterministic).
+// ═══════════════════════════════════════════════════════════════════════════
+
+// thread_start(fn, arg) → opaque thread id (>=0), or negative -errno on
+// table-full / pthread_create failure. `fn` is a hexa function value taking one
+// argument; it is invoked as fn(arg) on the new thread (synchronously inline in
+// the default build). The returned id is a small dense integer handle.
+pub fn thread_start(fn, arg) -> int {
+    return thread_spawn(fn, arg)
+}
+
+// thread_wait(tid) → the value the worker fn returned (join). Blocks until the
+// worker finishes (already finished in the synchronous default build). Returns
+// the sentinel "" HexaVal on a bad/inactive handle.
+pub fn thread_wait(tid: int) {
+    return thread_join(tid)
+}
+
+// ── condvar-backed channel (real cross-thread queue under -DHEXA_THREADS) ────
+
+// chan_new() → channel id (>=0) or -errno. A bounded MPSC queue protected by a
+// pthread mutex + condvars (real locks under -DHEXA_THREADS, no-ops otherwise).
+pub fn chan_new() -> int {
+    return thread_channel_new()
+}
+
+// chan_send(ch, v) → 0 ok / -errno (-EPIPE on closed channel). Blocks while full.
+pub fn chan_send(ch: int, v) -> int {
+    return thread_channel_send(ch, v)
+}
+
+// chan_recv(ch, timeout_ms) → value, or "" sentinel on timeout/closed-empty.
+//   timeout_ms < 0 : block indefinitely
+//   timeout_ms = 0 : non-blocking peek
+//   timeout_ms > 0 : block up to that many milliseconds
+pub fn chan_recv(ch: int, timeout_ms: int) {
+    return thread_channel_recv(ch, timeout_ms)
+}
+
+// chan_close(ch) → 0 ok / -errno. Wakes all blocked send/recv waiters.
+pub fn chan_close(ch: int) -> int {
+    return thread_channel_close(ch)
+}

@@ -129,6 +129,11 @@ let mut struct_field_counts = []
 let mut struct_field_offsets = []   // start index into flat field arrays
 let mut struct_all_field_names = [] // flat: [s0_f0, s0_f1, s1_f0, ...]
 let mut struct_all_field_types = [] // flat: [s0_t0, s0_t1, s1_t0, ...]
+// lane field-visibility: parallel to struct_all_field_types — per-field
+// visibility string ("pub" / "private" / a pub(scope) name). Empty "" is
+// fail-open (treated as visible) so synthesized field nodes that predate
+// the parser `vis` slot never raise a false private-access diagnostic.
+let mut struct_all_field_vis = []
 
 // Enum registry: enum_names[], enum_variant_names[] (flat), enum_variant_offsets[], enum_variant_counts[]
 let mut enum_names = []
@@ -395,9 +400,12 @@ fn tc_register_struct(name, field_count) {
     struct_field_offsets.push(len(struct_all_field_names))
 }
 
-fn tc_register_struct_field(fname, ftype) {
+fn tc_register_struct_field(fname, ftype, fvis) {
     struct_all_field_names.push(fname)
     struct_all_field_types.push(ftype)
+    // lane field-visibility: keep struct_all_field_vis index-aligned with
+    // the name/type arrays. "" = unknown/visible (fail-open).
+    struct_all_field_vis.push(fvis)
 }
 
 fn tc_register_enum(name, variant_count) {
@@ -463,6 +471,32 @@ fn tc_lookup_struct_field(struct_name, field_name) {
             while fi < count {
                 if struct_all_field_names[offset + fi] == field_name {
                     return struct_all_field_types[offset + fi]
+                }
+                fi = fi + 1
+            }
+            return ""
+        }
+        si = si + 1
+    }
+    return ""
+}
+
+// lane field-visibility: return the visibility string for a struct field
+// ("pub" / "private" / a pub(scope) name), or "" if the struct/field is
+// unknown OR the field carries no recorded visibility (fail-open).
+fn tc_lookup_struct_field_vis(struct_name, field_name) {
+    let mut si = 0
+    while si < len(struct_names) {
+        if struct_names[si] == struct_name {
+            let offset = struct_field_offsets[si]
+            let count = struct_field_counts[si]
+            let mut fi = 0
+            while fi < count {
+                if struct_all_field_names[offset + fi] == field_name {
+                    if (offset + fi) < len(struct_all_field_vis) {
+                        return struct_all_field_vis[offset + fi]
+                    }
+                    return ""
                 }
                 fi = fi + 1
             }
@@ -663,7 +697,7 @@ fn tc_alias_graph_reaches(start, target) {
 // operators lift uniformly across the 3 universes). We only *record* the
 // level under `tc_universes_enabled`; no new rejections are emitted here.
 fn tc_universe_level(ann) {
-    if ann == "int" || ann == "float" || ann == "bool" || ann == "string" || ann == "char" { return 0 }
+    if ann == "int" || ann == "float" || ann == "bool" || ann == "string" || ann == "str" || ann == "String" || ann == "char" { return 0 }
     if ann == "type" { return 2 }
     return 1
 }
@@ -945,6 +979,13 @@ fn annotation_to_type(ann) {
     if ann == "float" { return "float" }
     if ann == "bool" { return "bool" }
     if ann == "string" { return "string" }
+    // `str` / `String` are surface spellings of the canonical string type —
+    // normalize them here so a `str`-annotated field/return reconciles with a
+    // StringLit (inferred "string"). Mirrors the shipping compiler
+    // (compiler/check/types.hexa: `n == "string" || "String" || "str"`),
+    // which this self-test checker had drifted from — the source of the
+    // phantom `expected 'str', got 'string'` mismatches.
+    if ann == "str" || ann == "String" { return "string" }
     if ann == "char" { return "char" }
     if ann == "void" { return "void" }
     if ann == "any" { return "any" }
@@ -972,6 +1013,17 @@ fn annotation_to_type(ann) {
 // Type compatibility check
 // ══════════════════════════════════════════════════════════════
 
+// A declared list annotation has the surface form `[T]` — starts with `[`
+// and ends with `]` (e.g. `[str]`, `[int]`, `[[float]]`). Used by
+// types_compatible to unify the generic inferred `array` token with any
+// concrete list annotation. Mirrors the shipping compiler's List/Array Type.
+fn tc_is_list_annotation(t) {
+    if len(t) < 2 { return false }
+    if t.substring(0, 1) != "[" { return false }
+    if t.substring(len(t) - 1, len(t)) != "]" { return false }
+    return true
+}
+
 fn types_compatible(expected, actual) {
     if expected == "unknown" { return true }
     if actual == "unknown" { return true }
@@ -980,12 +1032,60 @@ fn types_compatible(expected, actual) {
     if expected == actual { return true }
     // int -> float coercion
     if expected == "float" && actual == "int" { return true }
+    // List/array unification: an array literal (or `[]`) infers as the generic
+    // token "array" (element type unknown — `tc_infer_expr` doesn't reconstruct
+    // [T] from items), while a declared list annotation `[str]`/`[int]`/… keeps
+    // its surface spelling. The shipping compiler models these as a structured
+    // List/Array Type and unifies them; this string-based self-checker had
+    // drifted into an exact compare and flagged phantom
+    // `expected '[str]', got 'array'` mismatches. Mirror the shipping behavior:
+    // the generic `array` is element-agnostic, so it unifies with ANY declared
+    // `[T]` list annotation (and vice-versa). Conservative — this only relaxes
+    // array-vs-[T]; non-list mismatches (int vs [str], string vs int) still error.
+    if expected == "array" && tc_is_list_annotation(actual) { return true }
+    if actual == "array" && tc_is_list_annotation(expected) { return true }
     // C4: Type params are compatible with any concrete type
     if expected == "typeparam" { return true }
     if actual == "typeparam" { return true }
     // C4: If either side is a type param name currently in scope, it's compatible
     if tc_is_type_param(expected) { return true }
     if tc_is_type_param(actual) { return true }
+    return false
+}
+
+// ══════════════════════════════════════════════════════════════
+// lane field-visibility: per-field pub/private enforcement (opt-in)
+// ══════════════════════════════════════════════════════════════
+
+// Gate the private-field-access diagnostic. Default OFF (env unset) → no
+// diagnostics at all, so the HEXA_TYPECHECK corpus and every shipping build
+// path stay byte/behaviour identical (the field-vis check is purely a
+// checker-side warning, never reached by codegen). Set
+// HEXA_CHECK_FIELD_VIS=warn (or 1) for a soft "[warn]"; =fatal (or error)
+// to promote it to a hard type error. Reference: rustc gates private-field
+// access at the def-collection/privacy pass; Go's `go vet`/compiler rejects
+// unexported field access across packages.
+fn tc_field_vis_mode() {
+    let v = env("HEXA_CHECK_FIELD_VIS")
+    if v == "" { return "off" }
+    if v == "0" || v == "off" { return "off" }
+    if v == "fatal" || v == "error" { return "fatal" }
+    return "warn"
+}
+
+// An access is "internal" only when the receiver is the method receiver
+// `self` (or `Self`). The module loader's flatten concatenates every
+// module's source before parsing, so no per-declaration module id survives
+// to the AST — `self`-access is therefore the soundest available
+// encapsulation unit (the type's own methods). Any other receiver counts
+// as external. The module-scoped Rust/Go granularity is the documented
+// follow-up in state/rfc_field_visibility.md.
+fn tc_is_self_access(left) {
+    if left == "" { return false }
+    if left.kind == "Ident" {
+        if left.name == "self" { return true }
+        if left.name == "Self" { return true }
+    }
     return false
 }
 
@@ -1136,6 +1236,25 @@ fn tc_infer_expr(node) {
                 }
                 tc_error("Struct '" + obj_type + "' has no field '" + field_name + "'" + hint)
                 return "unknown"
+            }
+            // lane field-visibility: a private field (default visibility, or
+            // anything not declared `pub`) is reachable only from the type's
+            // own methods via `self`. Opt-in via HEXA_CHECK_FIELD_VIS — when
+            // unset this whole arm is skipped, so default builds are
+            // unchanged.
+            let vmode = tc_field_vis_mode()
+            if vmode != "off" {
+                let fvis = tc_lookup_struct_field_vis(obj_type, field_name)
+                if fvis == "private" {
+                    if !tc_is_self_access(node.left) {
+                        let vmsg = "private field '" + field_name + "' of struct '" + obj_type + "' accessed from outside its own methods — mark it `pub` to allow external access"
+                        if vmode == "fatal" {
+                            tc_error(vmsg)
+                        } else {
+                            tc_warn(vmsg)
+                        }
+                    }
+                }
             }
             return annotation_to_type(ftype)
         }
@@ -1403,7 +1522,7 @@ fn tc_check_stmt(node) {
         let mut fi = 0
         while fi < fc {
             let f = node.fields[fi]
-            tc_register_struct_field(f.name, f.value)
+            tc_register_struct_field(f.name, f.value, f.vis)
             fi = fi + 1
         }
         tc_define(node.name, "type")
@@ -1612,7 +1731,7 @@ fn tc_first_pass(stmts) {
             tc_register_struct(s.name, fc)
             let mut fi = 0
             while fi < fc {
-                tc_register_struct_field(s.fields[fi].name, s.fields[fi].value)
+                tc_register_struct_field(s.fields[fi].name, s.fields[fi].value, s.fields[fi].vis)
                 fi = fi + 1
             }
             // C4: Register generic params in first pass
@@ -1680,6 +1799,7 @@ fn type_check(stmts) {
     struct_field_offsets = []
     struct_all_field_names = []
     struct_all_field_types = []
+    struct_all_field_vis = []
     enum_names = []
     enum_variant_counts = []
     enum_variant_offsets = []
@@ -2128,6 +2248,42 @@ let errs10 = type_check(s10)
 assert len(errs10) == 0
 test_pass = test_pass + 1
 println("PASS: Test 10 — nested fn return type isolation (inner:int, outer:string)")
+
+// ── Test 11: list return type — array literal & [] unify with [str] ──
+// Regression: a fn declared `-> [str]` returning an array literal (or `[]`)
+// infers the value as the generic token "array"; the exact-compare checker
+// used to flag a phantom `expected '[str]', got 'array'` mismatch.
+
+let mut body11a = []
+body11a.push(ret_stmt(nd("Array", "")))
+let mut s11a = []
+s11a.push(fn_decl("strs", [], body11a, "[str]"))
+let errs11a = type_check(s11a)
+assert len(errs11a) == 0
+test_pass = test_pass + 1
+println("PASS: Test 11a — fn -> [str] returning array literal accepted")
+
+let mut body11b = []
+body11b.push(ret_stmt(nd("Array", "")))
+let mut s11b = []
+s11b.push(fn_decl("empty_strs", [], body11b, "[str]"))
+let errs11b = type_check(s11b)
+assert len(errs11b) == 0
+test_pass = test_pass + 1
+println("PASS: Test 11b — fn -> [str] returning [] accepted")
+
+// ── Test 12: genuine mismatch into a list type STILL errors ─────────
+// Conservative guard: returning an int (5) from a fn declared `-> [str]`
+// must still be reported (do not over-suppress).
+
+let mut body12 = []
+body12.push(ret_stmt(lit("IntLit", "5")))
+let mut s12 = []
+s12.push(fn_decl("bad_list", [], body12, "[str]"))
+let errs12 = type_check(s12)
+assert type_errors_has(errs12, "Return type mismatch")
+test_pass = test_pass + 1
+println("PASS: Test 12 — fn -> [str] returning int (5) still flagged")
 
 // ── Summary ────────────────────────────────────────────────────
 

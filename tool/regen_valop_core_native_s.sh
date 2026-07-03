@@ -11,7 +11,7 @@
 #       "missing SOURCE" guard; the real source is the trailing arg).
 #   2) normalize the `.file` source path (deterministic) + prepend the frozen
 #      header (provenance + ABI notes).
-#   3) sanity: cross-assemble + assert all 3 rt_*_native symbols are defined-global.
+#   3) sanity: cross-assemble + assert all 10 rt_*_native symbols are defined-global.
 #
 # The bodies use only the value-op leaf intrinsics (__hx_tag / __hx_make_val /
 # __hx_payload_* / __hx_payload_f* / __hx_to_double) which the native gen2 backend
@@ -42,8 +42,9 @@ TMP="$(mktemp -d -t regen_valop_core.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 printf 'fn _drv_unused() {}\n' > "$TMP/_drv.hexa"
 
-# the three native value-op symbols this seed must export.
-SYMS="rt_truthy_native rt_sub_native rt_mul_native"
+# the native value-op symbols this seed must export.
+SYMS="rt_truthy_native rt_sub_native rt_mul_native rt_add_native rt_cmp_lt_native rt_cmp_gt_native rt_cmp_le_native rt_cmp_ge_native rt_div_native rt_mod_native"
+NSYMS=10
 
 emit_one() {
     local triple="$1" out="$2" abi="$3"
@@ -59,15 +60,16 @@ emit_one() {
         printf '// GENERATED: tool/regen_valop_core_native_s.sh — aprime_cc _drv.hexa --emit=asm\n'
         printf '//   --target=%s -o %s stdlib/runtime/valop_core.hexa.\n' "$triple" "$(basename "$out")"
         printf '//   Provides the SCALAR value-op core (rt_truthy_native, rt_sub_native,\n'
-        printf '//   rt_mul_native) as native raw-mem bodies: __hx_tag tag-read + raw int/\n'
-        printf '//   float payload arithmetic + __hx_make_val re-box, byte-faithful to the C\n'
-        printf '//   hexa_truthy/hexa_sub/hexa_mul scalar switch arms. These intrinsics are\n'
+        printf '//   rt_mul_native, rt_add_native, rt_cmp_*_native, rt_div_native, rt_mod_native) as native raw-mem bodies: __hx_tag\n'
+        printf '//   tag-read + raw int/float payload arithmetic + __hx_make_val re-box,\n'
+        printf '//   byte-faithful to the C hexa_truthy/sub/mul/add/cmp/div/mod scalar arms. The\n'
+        printf '//   intrinsics are\n'
         printf '//   gen2-native-only (the hexat C-transpile bootstrap cannot lower them), so\n'
         printf '//   the bodies enter the shipped runtime.a ONLY via this seed — the array/\n'
         printf '//   num_core mechanism (resolve_native_valop_core_seed).\n'
         printf '//   ABI: %s. External: NONE (fully self-contained).\n' "$abi"
         printf '//   Lets stage_resolve_runtime_a define HEXA_RT_VALOP_NATIVE + ar this .o\n'
-        printf '//   into runtime.a so hexa_truthy/hexa_sub/hexa_mul scalar paths go native.\n'
+        printf '//   into runtime.a so hexa_truthy/sub/mul/add/cmp/div/mod scalar paths go native.\n'
         sed -E -e 's#"[^"]*valop_core\.hexa"#"stdlib/runtime/valop_core.hexa"#g' \
                -e 's#^// source: .*valop_core\.hexa#// source: stdlib/runtime/valop_core.hexa#' "$raw"
     } > "$out"
@@ -84,7 +86,7 @@ emit_one() {
             t="$( (nm "$o" 2>/dev/null || echo) | grep -cE " T _?${sym}\$")"
             tcount=$((tcount + t))
         done
-        echo "[regen_valop_core] $triple → $out ($tcount/3 T defined)"
+        echo "[regen_valop_core] $triple → $out ($tcount/$NSYMS T defined)"
     else
         echo "[regen_valop_core] WARN $triple: cross-assemble check skipped (no matching toolchain)" >&2
         echo "[regen_valop_core] $triple → $out (globl emitted)"

@@ -182,7 +182,7 @@ pub fn qforge_sscha_freq(harmonic_omega: [float], force_const: [float],
         while mj < nmode {
             phi[mj] = phi_new[mj]
             let mut w = 0.0
-            if phi_new[mj] > 0.0 { w = sqrt(phi_new[mj] / masses[mj]) }
+            if phi_new[mj] > 0.0 && masses[mj] > 0.0 { w = sqrt(phi_new[mj] / masses[mj]) }   // mass≤0 → /0 Inf
             let dw = if w > omega[mj] { w - omega[mj] } else { omega[mj] - w }
             if dw > max_dw { max_dw = dw }
             omega[mj] = w

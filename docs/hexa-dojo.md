@@ -90,6 +90,34 @@ win here is **ownership and completeness** — a persistent whole-step kernel *c
 call our device GEMM in-line where it can never call cuBLAS — **not** a util or
 perf victory over the vendor library.
 
+> ⚠️ **HW-귀속 정정 (2026-06-20 · forge cuBLAS 7→0).** 위 W-ladder 수치(W10
+> 70.7 TFLOP/s · 6.09× off · "parity 미달성")는 **H100 `sm_90a` `wgmma`** 의
+> 것이다 — forge 출하 parity 측정 호스트(**RTX 5070 `sm_120`**)와 **다른 HW** 이고,
+> consumer Blackwell `sm_120` 엔 `wgmma` 가 없다. **`sm_120` 실측 결론은 정반대다**:
+> forge own-GEMM 이 cuBLAS **PARITY** 에 도달했다 — **FP64 own 1.15~1.24× (전 shape
+> 더 빠름 · rel-RMS 0 bit-exact)** — `sm_120` 엔 FP64 텐서코어가 없어 cuBLAS Dgemm 도
+> SIMT 폴백이라 own 이 오히려 빠르다. **TF32 own `mma.sync` 는 cuBLAS-TF32 의 roofline 에
+> 막힌 parity-band** (2026-06-20 sm_120 square sweep 실측: @768 1.05×·@2048 parity·256/
+> 512/1024/4096 은 cuBLAS 가 12~46% 빠름 · opt/pipe 변종 전수 측정도 cuBLAS 미추월),
+> vs cuBLAS-TF32 정확도는 rel-RMS ~1e-5 (FP64-ref 게이트 PASS · bit-exact 아님 — bit-exact 인
+> 건 FP64 own 뿐). 즉 TF32 own 의 가치는 perf 가 아니라 byte-eq 결정성·cuBLAS 독립이다.
+> 따라서 "parity 미달성 · 가치는 ownership 이지
+> perf 아님" 은 **stale H100 결론**이고, **forge 는 production GEMM 에서 cuBLAS 호출
+> 7→0 으로 독립**했다 (FP64 PR #3718 + TF32 PR #3727 · `self/cuda/runtime_cuda_emit.hexa`
+> 의 6 GEMM 호출 전부 own-kernel env 게이트의 OFF 폴백으로 강등). flame 은 이 경로를
+> 자동 상속한다(직접 cuBLAS 호출 0건 · 모든 GEMM 이 forge 게이트 런처로 수렴).
+>
+> **결정적(byte-eq) GPU 학습 — own-kernel 이 이제 기본.** cloud/dojo 잡은 별도 설정 없이
+> own-GEMM 으로 돌고(cuBLAS 호출 0), 필요시 아래 env 로 opt-OUT 한다:
+> - `HEXA_OWN_GEMM=0` — FP64(기본) GEMM 을 cuBLAS Dgemm 으로 되돌림. default(미설정)는
+>   own `_hx_k_gemm`(`[OWN-GEMM-FIRED] … (no cuBLAS)` 마커) — FP64 own==cuBLAS bit-identical
+>   이라 default-ON 이 byte-neutral. flame 기본 학습 경로가 이것.
+> - `HEXA_TF32_OWN=0` — `HEXA_TF32_FASTMODE` 하위 레인의 own `mma.sync` 를 cublasGemmEx 로
+>   되돌림. default 는 own(byte-changing vs cuBLAS — 이미 비결정 fastmode 레인 안).
+>
+> cloud 는 `cloud_validate_env_passthrough` 가 dispatcher 의 `--env` 전달을 검증할 뿐
+> allowlist 차단이 아니므로, 이 두 env 는 별도 배선 없이 그대로 pod 로 전달된다.
+
 **The W-ladder (own-GEMM, `wgmma`+TMA on native `sm_90a`).** Each rung is
 bit-exact (rel-RMS 0); the lift is occupancy, not precision:
 

@@ -85,6 +85,7 @@ fn wheeler_bz(n_turns: float, i_amp: float,
     let dp = sqrt_pure(zp * zp + r_m * r_m)
     let dn = sqrt_pure(zn * zn + r_m * r_m)
     if dp < 1.0e-30 || dn < 1.0e-30 { return 0.0 }
+    if l_m <= 0.0 { return 0.0 }   // zero-axial-length solenoid → 1/(2·l_m) div-by-zero
     let pref = MU0 * n_turns * i_amp / (2.0 * l_m)
     return pref * (zp / dp - zn / dn)
 }

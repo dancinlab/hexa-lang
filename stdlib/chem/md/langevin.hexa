@@ -171,8 +171,11 @@ pub fn langevin_o_step(particles: array, prm: LangevinParams,
         let zx = g0[1]
         let zy = g0[2]
         let zz = g1[1]
-        // amplitude √(kT/m) per component.
-        let amp = sqrt(kT / p.mass)
+        // amplitude √(kT/m) per component. massless/virtual site (mass<=0) → kT/m
+        // = Inf → sqrt = Inf poisons every BAOAB step; skip the kick (amp=0). A
+        // negative radicand (kT<0) likewise → 0 instead of NaN.
+        let arg = if p.mass > 0.0 { kT / p.mass } else { 0.0 }
+        let amp = if arg > 0.0 { sqrt(arg) } else { 0.0 }
         let vx_new = c1 * p.vx + c2 * amp * zx
         let vy_new = c1 * p.vy + c2 * amp * zy
         let vz_new = c1 * p.vz + c2 * amp * zz
@@ -194,7 +197,7 @@ fn _b_kick(particles: array, dt: float) -> array {
     let mut i = 0
     while i < n {
         let p = particles[i]
-        let inv_m = 1.0 / p.mass
+        let inv_m = if p.mass > 0.0 { 1.0 / p.mass } else { 0.0 }   // massless site → no kick (frozen)
         out = push(out, MdParticle{
             x: p.x, y: p.y, z: p.z,
             vx: p.vx + half * p.fx * inv_m,
@@ -340,7 +343,7 @@ pub fn langevin_run_constrained(initial: array, force_fn,
 pub fn instantaneous_temperature(particles: array, kB: float) -> float {
     let n = len(particles)
     let dof = to_float(3 * n)
-    if dof <= 0.0 { return 0.0 }
+    if dof <= 0.0 || kB <= 0.0 { return 0.0 }   // kB=0 (unset units) → div-by-zero T
     let ke = kinetic_energy(particles)
     return 2.0 * ke / (dof * kB)
 }
@@ -349,7 +352,7 @@ pub fn instantaneous_temperature(particles: array, kB: float) -> float {
 // remove 3 constraint DOF each → caller passes the reduced dof).
 pub fn instantaneous_temperature_dof(particles: array, kB: float,
                                      dof: float) -> float {
-    if dof <= 0.0 { return 0.0 }
+    if dof <= 0.0 || kB <= 0.0 { return 0.0 }   // kB=0 (unset units) → div-by-zero T
     let ke = kinetic_energy(particles)
     return 2.0 * ke / (dof * kB)
 }

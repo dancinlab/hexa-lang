@@ -1,0 +1,64 @@
+// stdlib/test/test_stdlib_edge_qa.hexa — regression lock for the stdlib .hexa
+// correctness QA round (2026-06-25, find→adversarial-verify workflow).
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Run:  hexa build stdlib/test/test_stdlib_edge_qa.hexa -o /tmp/qa.bin && /tmp/qa.bin
+// Sentinel: __QA_EDGE_STDLIB__ PASS|FAIL on the final line.
+//
+// Locks five edge-case fixes (each was a confirmed correctness bug):
+//   string.reverse   — codepoint-aware (was byte-reverse → UTF-8 mojibake)
+//   string.pad_left  — codepoint width (was byte width → non-ASCII mis-align)
+//   collections.sort — copies input (was alias → caller array corrupted)
+//   math.lcm         — divide before multiply (was a*b → i64 overflow wrap)
+//   parse.to_int_safe — overflow guard (was unguarded → i64 wrap UB)
+
+import "stdlib/core/string.hexa"
+import "stdlib/alloc/collections.hexa"
+import "stdlib/core/math.hexa"
+import "stdlib/core/parse.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label, cond) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+fn main() {
+    // reverse: codepoint order, not byte order. "ab한" → "한ba" (not byte junk).
+    check("reverse utf8 codepoint", reverse("ab한") == "한ba")
+    check("reverse ascii unchanged", reverse("abc") == "cba")
+
+    // pad_left: width counts codepoints. "한" padded to 4 with "x" → "xxx한".
+    check("pad_left codepoint width", pad_left("한", 4, "x") == "xxx한")
+    check("pad_left ascii unchanged", pad_left("ab", 4, "x") == "xxab")
+
+    // sort: must NOT mutate the input array (Python `sorted` contract).
+    let a = [3, 1, 2]
+    let b = sort(a)
+    check("sort result sorted", b[0] == 1 && b[1] == 2 && b[2] == 3)
+    check("sort input preserved", a[0] == 3 && a[1] == 1 && a[2] == 2)
+
+    // lcm: no intermediate overflow. lcm(6e9, 9e9) = 18e9 (a*b = 5.4e19 wraps).
+    check("lcm no overflow", lcm(6000000000, 9000000000) == 18000000000)
+    check("lcm small", lcm(4, 6) == 12)
+
+    // to_int_safe: >19-digit input returns the deterministic 0 fallback, not a
+    // wrapped garbage value.
+    check("to_int overflow → 0", to_int_safe("99999999999999999999") == 0)
+    check("to_int normal", to_int_safe("42") == 42)
+
+    if FAIL == 0 {
+        println("__QA_EDGE_STDLIB__ PASS")
+    } else {
+        println("__QA_EDGE_STDLIB__ FAIL")
+    }
+}

@@ -85,7 +85,10 @@ pub fn qforge_dynmat(phi: [float], masses: [float], qvec: [float],
         let mut j = 0
         while j < dim {
             let mj = masses[j / 3]
-            mat[i * dim + j] = acc[i * dim + j] / sqrt(mi * mj)
+            // non-positive mass (placeholder/massless site) → sqrt(0)=0 → Inf/NaN
+            // mass-weighted element; guard to 0.0 (mirror qforge_elph_amp2 convention).
+            let mw = sqrt(mi * mj)
+            mat[i * dim + j] = if mw > 0.0 { acc[i * dim + j] / mw } else { 0.0 }
             j = j + 1
         }
         i = i + 1

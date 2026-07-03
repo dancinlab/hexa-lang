@@ -419,6 +419,28 @@ fn _cmd_init(args: array) -> int {
     return r[1]
 }
 
+// ─── subcommand: resolve (MVS dependency resolver) ───────────────
+//
+// Thin delegate to tool/hx_resolve.hexa (Go Minimal Version Selection over
+// hexa.toml [dependencies] → hexa.lock). Decoupled by exec — a compile error
+// in the resolver/stdlib chain cannot break `hx commit`/`push`.
+fn _cmd_resolve(args: array) -> int {
+    if !_interp_ok() {
+        eprintln("hx resolve: " + _interp() + " not executable")
+        return 1
+    }
+    if !_tool_exists("tool/hx_resolve.hexa") {
+        eprintln("hx resolve: tool/hx_resolve.hexa not found")
+        return 1
+    }
+    let mut cmd = _interp() + " tool/hx_resolve.hexa"
+    for a in args { cmd = cmd + " " + _shell_quote(a) }
+    cmd = cmd + " 2>&1"
+    let r = exec_with_status(cmd)
+    print(to_string(r[0]))
+    return r[1]
+}
+
 fn _cmd_harden(args: array) -> int {
     // Level 1 → Level 2 승격 wrapper (args 통과).
     if !_interp_ok() {
@@ -627,6 +649,7 @@ fn _usage() {
     eprintln("  fixpoint  <sub> [args...]        fixpoint verify/archive/bisect/check/promote")
     eprintln("  chain     <sub> [args...]        forward-chain run/status/list/reset (OS-level)")
     eprintln("")
+    eprintln("  resolve   [project-dir]          MVS resolve hexa.toml [dependencies] → hexa.lock")
     eprintln("  install   <target>               install external CLI as shim (own#5)")
     eprintln("  update    [<name>]               refresh shim(s) (git pull cloned pkgs)")
     eprintln("  search                           list available packages")
@@ -695,6 +718,7 @@ fn main() -> int {
     if sub == "downgrade"   { return _cmd_downgrade(args) }
     if sub == "fixpoint"    { return _cmd_fixpoint(args) }
     if sub == "chain"       { return _cmd_chain(args) }
+    if sub == "resolve"     { return _cmd_resolve(args) }
     if sub == "install"     { return _cmd_pkg_delegate("install", args) }
     if sub == "update"      { return _cmd_pkg_delegate("update", args) }
     if sub == "search"      { return _cmd_pkg_delegate("search", args) }

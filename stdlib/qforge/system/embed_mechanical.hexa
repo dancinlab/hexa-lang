@@ -55,6 +55,7 @@ pub fn embed_mechanical_total(e_qm_inner: float, e_mm_outer: float, e_coupling: 
 // cubic cell of side L. Returns the qforge Ewald (Madelung) energy — a real
 // SCF electrostatic total, the directly-callable qforge energy primitive.
 pub fn embed_qm_inner_energy(pos_inner: [float], q_inner: [float], L: float, eta: float, kmax: int) -> float {
+    if L <= 0.0 { return 0.0 }   // box side L≤0 → 2π/L Inf
     let a1 = [L, 0.0, 0.0]
     let a2 = [0.0, L, 0.0]
     let a3 = [0.0, 0.0, L]

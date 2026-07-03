@@ -1,4 +1,5 @@
 #!hexa strict
+// @canonical-ok intentional parallel format-version — grammar_v1..v5 are all registered in grammar_format/core (grammar_format_main) as distinct ACTIVE format versions, not history-in-filename (canonical-naming exempt; see module/README.ai.md).
 // hexa-lang/grammar_format/module/grammar_v1.hexa — current free-form (mk1) WRAPPER
 //
 // @tool(slug="grammar_v1", desc="Wrapper around canonical self/lexer.hexa + self/parser.hexa (mk1)")

@@ -65,6 +65,7 @@ pub fn qforge_chip_tb1d_bandwidth(t: float) -> float {
 // Group velocity v_g = (1/ħ) dε/dk = (1/ħ)·2t·a·sin(k·a).
 // Vanishes at band edges k=0 and k=π/a (the van-Hove / flat-band-edge points).
 pub fn qforge_chip_tb1d_vg(eps0: float, t: float, a: float, k: float, hbar: float) -> float {
+    if hbar <= 0.0 { return 0.0 }   // ℏ≤0 → /ℏ Inf
     return (2.0 * t * a * sin(k * a)) / hbar
 }
 

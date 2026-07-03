@@ -1,0 +1,26 @@
+[f32-measure] cuda_available = 1
+[f32-measure] loaded vocab=256 d=1024 nlay=24 nh=16 block=512
+[f32-measure] weights cast to f32 mirror (hoisted, once)
+
+=== (1) CORRECTNESS — f32-e2e vs FP64 batched (argmax-faithful) ===
+[FP32-E2E-FIRED] farr_matmul_f32_gpu own mma.sync m16n8k8, no d2f/f2d cast (S1 #21 gold, opt-in)
+[FP32-E2E-CUBLAS-FIRED] cublasGemmEx COMPUTE_32F_FAST_TF32 on f32 decode matmul (B-probe GEMM ceiling)
+[ATTN-FLASH-F32-FIRED] fused warp-per-head online-softmax f32 flash-decode (S2 wall#2, no roundtrip/OOM)
+[ATTN-FLASH-F32EXP-FIRED] fp32 __expf online softmax (RANK-1 gold-v2, opt-in HEXA_ATTN_F32EXP)
+[ATTN-FLASH-F32EXP-U4-FIRED] 4-row j-unroll, bit-identical to fexp (RANK-3, opt-in HEXA_ATTN_U4)
+[EPI-FUSE-FIRED] fused resid+LN 1-launch (RANK-7, opt-in HEXA_EPI_FUSE)
+[GELU-F32ERF-FIRED] fp32 erff GELU (RANK-4 gold-v2, opt-in HEXA_GELU_F32ERF)
+[OWN-GEMM-FIRED] _hx_k_gemm DEVICE path (no cuBLAS)
+[EAGER-DEVGLUE-FIRED] _hx_k_gelu device CUDA-erf GELU (separate launch, P1B-a' device-resident eager ref)
+[f32-correctness N=2] f32-vs-FP64 per-frag argmax = 23/24   worst max|Δ| = 0.03330642419997787   => FAIL@701
+[f32-correctness N=4] f32-vs-FP64 per-frag argmax = 46/48   worst max|Δ| = 0.0333064241999832   => FAIL@3
+
+=== (2) THROUGHPUT — median of 3, FP64 single-stream baseline ===
+[f32 baseline FP64 single-stream] samples(ms/step)=17.29166666666667,17.29166666666667,17.29166666666667  median ms/tok=17.29166666666667
+[f32-throughput N=1] median ms/step=3.5  per-frag ms/tok=3.5  speedup-vs-FP64single(17.29166666666667)=4.940476190476191x
+[f32-throughput N=4] median ms/step=4.291666666666667  per-frag ms/tok=1.0729166666666667  speedup-vs-FP64single(17.29166666666667)=16.116504854368934x
+[f32-throughput N=8] median ms/step=4.791666666666667  per-frag ms/tok=0.5989583333333334  speedup-vs-FP64single(17.29166666666667)=28.869565217391306x
+[f32-throughput N=16] median ms/step=5.833333333333333  per-frag ms/tok=0.3645833333333333  speedup-vs-FP64single(17.29166666666667)=47.42857142857144x
+[f32-throughput N=32] median ms/step=7.875  per-frag ms/tok=0.24609375  speedup-vs-FP64single(17.29166666666667)=70.26455026455027x
+
+decode_f32_measure: DONE

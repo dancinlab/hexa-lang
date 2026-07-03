@@ -1,0 +1,57 @@
+// test/native_build/rt_parse_float_exact_byteeq.hexa
+//
+// zero-c float-dtoa R3 verification harness for stdlib/runtime/float_parse_exact.hexa
+// (rt_str_parse_float_exact). Each case asserts the parsed double is BIT-IDENTICAL
+// to C strtod / Python float() (round-to-nearest-even): float_to_bits(parsed) vs the
+// golden signed-i64 reinterpretation of strtod(s). Golden constants generated from
+// CPython `struct.unpack('<q', struct.pack('<d', float(s)))` (CPython float() ==
+// glibc strtod == correctly-rounded round-half-even).
+//
+// Covers: simple, ≥16 sig digits (>2^53 mantissa), DBL_MAX/DBL_MIN, min subnormal
+// 5e-324, halfway ties (round-even), overflow→±inf, underflow→±0, signed zero,
+// fast-path exponent edges (1e22/1e23). The exhaustive 1,000,000-input randomized
+// bit-exact sweep vs strtod ran on the aiden pool (see CHANGELOG #zero-c float-dtoa R3).
+//
+// Run: hexa test/native_build/rt_parse_float_exact_byteeq.hexa
+// Expected: "ALL PASS".
+
+import "stdlib/runtime/float_parse_exact.hexa"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn t(s, want) {
+    let got = float_to_bits(rt_str_parse_float_exact(s))
+    if got == want {
+        pass_count = pass_count + 1
+    } else {
+        fail_count = fail_count + 1
+        println("  [FAIL] " + s + "  got=" + to_string(got) + " want=" + to_string(want))
+    }
+}
+
+fn main() {
+    t("0.1", 4591870180066957722)
+    t("3.14", 4614253070214989087)
+    t("-2.5", 0 - 4610560118520545280)
+    t("1.7976931348623157e308", 9218868437227405311)        // DBL_MAX
+    t("2.2250738585072014e-308", 4503599627370496)           // DBL_MIN (smallest normal)
+    t("5e-324", 1)                                           // min subnormal
+    t("9007199254740993", 4845873199050653696)               // 2^53+1 -> rounds to even 2^53
+    t("1.0000000000000002", 4607182418800017409)             // smallest > 1.0
+    t("1e23", 4950912855330343670)
+    t("0.0", 0)
+    t("-0.0", 0 - 9223372036854775808)
+    t("1e309", 9218868437227405312)                          // overflow -> +inf
+    t("-1e309", 0 - 4503599627370496)                        // overflow -> -inf
+    t("1e-400", 0)                                           // underflow -> +0
+    t("123456789012345678", 4862596447618666293)             // 18 sig digits
+    t("8.98846567431158e307", 9214364837600034816)           // Gay/Paxson hard case
+    t("1e22", 4936209963552724370)                           // fast-path exp edge
+
+    if fail_count == 0 {
+        println("ALL PASS — " + to_string(pass_count) + "/" + to_string(pass_count) + " bit-exact vs strtod")
+    } else {
+        println("FAILED — " + to_string(fail_count) + " of " + to_string(pass_count + fail_count))
+    }
+}

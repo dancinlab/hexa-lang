@@ -478,6 +478,29 @@ fn fl_scan_private_decls(src) {
                     rest = body.substring(7, len(body))
                 } else if body.starts_with("enum ") {
                     rest = body.substring(5, len(body))
+                } else if body.starts_with("let ") {
+                    // ING #33 (#10/#11 class): top-level `let`/`const` globals are
+                    // emitted by codegen as bare `HexaVal <name>;` tentative defs
+                    // (self/codegen.hexa:1374 LetStmt / :1318 ConstStmt). With
+                    // -fno-common (clang ≥11 linux default) two modules each with a
+                    // top-level `let CONFIG = …` collide → hard "multiple
+                    // definition" at link (mac ld64 merged tentative defs, so it
+                    // only ever failed on linux). The fn/struct/enum scanner had no
+                    // branch for globals, so they were never collision-mangled.
+                    // Collect them here; the existing collision-gated word-replace
+                    // then mangles ONLY genuinely-colliding global names to
+                    // `<File>__name`, leaving the no-collision common case byte-id.
+                    //
+                    // `let [mut] NAME …`: skip an optional `mut ` so we read NAME.
+                    let lr = body.substring(4, len(body)).trim()
+                    rest = if lr.starts_with("mut ") { lr.substring(4, len(lr)) } else { lr }
+                } else if body.starts_with("const ") {
+                    // `const NAME = …` module-level constant (parser ConstStmt).
+                    // comptime-foldable consts are inlined by codegen and emit no
+                    // global symbol, so mangling their (then-unused) name is inert;
+                    // non-foldable consts emit `HexaVal NAME;` and DO collide — both
+                    // cases are correctly covered by collision-gated name-mangling.
+                    rest = body.substring(6, len(body))
                 }
                 if rest != "" {
                     let trimmed = rest.trim()

@@ -1,0 +1,596 @@
+// stdlib/runtime/num_float_core.hexa — RT-NATIVE-ZEROC M4 num-core PARSE-FLOAT half.
+//
+// The hexa-source raw-mem body for the public string→f64 parse primitive: the
+// string-coercion path of __hx_to_double (runtime_core_emit.hexa) — the strtod /
+// hxlcl_atof inverse. The integer twin (stdlib/runtime/num_core.hexa,
+// rt_parse_int_native) proved the byte-scan + integer-accumulate template; this
+// lane extends it to FLOAT accumulation (the first float-arithmetic native seed —
+// __hx_to_double int→f64 cast + __hx_payload_{fmul,fdiv,fadd}, de-risk-probed
+// bit-exact in scripts/scratch/rt_native/float_leaf_probe.hexa before this body).
+//
+// READ-ONLY / NO ALLOC: a byte scan over one existing string buffer + integer
+// mantissa accumulation in registers + a single float scale. No calloc/realloc/
+// arena — so it ports here. The alloc-bearing FORMAT direction (f64→str → strbuf)
+// is the array-write lane class, NOT this lane.
+//
+// ── CORRECTNESS BOUND (honest, c2) ──────────────────────────────────────────
+// strtod is CORRECTLY ROUNDED (round-to-nearest-even on the infinite-precision
+// decimal value). A naive `int_part + frac/pow10` f64 fold (the C-transpile pure
+// form ctype.hexa::rt_str_parse_float) accumulates per-op rounding error and is
+// NOT bit-exact to strtod even on simple decimals ("0.1", "3.14"). So this body
+// does NOT naive-fold. It uses the CLINGER FAST PATH, which IS bit-exact to
+// strtod over a precisely-characterised domain, and DELEGATES everything else
+// back to C strtod via a TAG_VOID sentinel (so byte-eq HOLDS EVERYWHERE — fast
+// path: native == strtod; slow path: the C wrapper runs strtod itself):
+//
+//   Collect the significant decimal digits into an integer mantissa `m` and a
+//   net base-10 exponent `e10` (digits after the point + explicit e/E exponent).
+//   IF m <= 2^53 (9007199254740992, exactly representable as f64) AND |e10| <= 22
+//   (10^22 < 2^53, so pow10[e10] is exactly representable as f64), THEN
+//     (double)m * pow10[e10]      (e10 >= 0)
+//     (double)m / pow10[-e10]     (e10 <  0)
+//   is a SINGLE IEEE rounding of an exact product/quotient of two exact doubles —
+//   hence CORRECTLY ROUNDED, == strtod bit-for-bit (Clinger 1990 / David Gay;
+//   the same fast path glibc/musl/Go/Rust strtod implementations take first).
+//   pow10[e] is built by exact repeated __hx_payload_fmul from 1.0 (each 10^e
+//   for e<=22 is exact, so the chain stays exact).
+//
+//   OUT OF FAST DOMAIN → return the TAG_VOID sentinel (__hx_make_val(4,0)). The
+//   C __hx_to_double thunk tests HX_IS_VOID and falls back to hxlcl_atof/strtod.
+//   Out-of-domain = mantissa > 2^53 (>= 16 significant digits, or 10^e overflow),
+//   |e10| > 22, leading/trailing junk that strtod's lenient scan handles
+//   differently, inf/nan/hex-float strings, or an empty/no-digit parse.
+//
+// The MEASURED RESIDUAL (the c2 honesty record): the native seed gives bit-exact
+// strtod parity ONLY on the fast-path domain (mantissa <= 15-16 sig digits AND
+// |exp| <= 22). The high-precision / extreme-magnitude tail is NOT reproduced
+// natively — it is delegated to C strtod (a full Grisu/Ryu/bignum-grade parser
+// would be needed for native coverage there; that is the measured WALL of this
+// lane, NOT fudged to green).
+//
+// RAW-MEM, un-nested (NESTING finding, map_core.hexa): every __hx_payload_* /
+// __hx_ptr_* / __hx_to_double call writes EXACTLY ONE `let`. ALL integer
+// arithmetic uses the raw-int leaves (__hx_payload_add/sub/mul/and/eq/ne/lt); ALL
+// float arithmetic uses the float leaves (__hx_to_double / __hx_payload_fmul /
+// fdiv). The __hx_ptr_load8 leaf reads one byte ZERO-EXTENDED into a TAG_INT.
+//
+// CIRCULARITY (array/map/str/num-int r1 trap, c1): NO s.byte_at(i) / byte_len(s) /
+// float operators — every byte access is RAW MEM via __hx_ptr_load8 over the
+// data pointer, every float op is a leaf. The body never re-enters the runtime.
+//
+// Ships to the linked rt-stdlib object set ONLY via the frozen .s seed
+// (self/native/num_float_core_*.s) — the leaves are gen2-native-only. The
+// runtime_core_emit.hexa `#ifdef HEXA_RT_NUM_PARSE_FLOAT_NATIVE` arm delegates to
+// this body; the C `#else` (hxlcl_atof) is RETAINED for the no-seed fallback.
+
+// NOT @pure: touches raw memory through __hx_ptr_load8. Mirrors rt_parse_int_native.
+
+// rt_parse_float_native: parse the TAG_STR HexaVal `s` as a strtod-faithful f64
+// via the Clinger fast path; returns a TAG_FLOAT HexaVal on the fast-path domain
+// (bit-exact to strtod) or a TAG_VOID sentinel (C falls back to strtod) otherwise.
+pub fn rt_parse_float_native(s: HexaVal) -> float {
+    let p = __hx_payload_add(s, 0)                   // char* of s (payload word)
+    let mut i = 0
+
+    // 1. skip C-isspace leading bytes (0x09..0x0D, 0x20).
+    let mut ws = 1
+    while __hx_payload_ne(ws, 0) {
+        let sb = __hx_ptr_load8(p, i)
+        let is_sp = __hx_payload_eq(sb, 32)
+        let ge9 = __hx_payload_lt(8, sb)
+        let le13 = __hx_payload_lt(sb, 14)
+        let in_tab = __hx_payload_and(ge9, le13)
+        let any = __hx_payload_add(is_sp, in_tab)
+        if __hx_payload_ne(any, 0) {
+            i = __hx_payload_add(i, 1)
+        } else {
+            ws = 0
+        }
+    }
+
+    // 2. optional sign.
+    let mut c = __hx_ptr_load8(p, i)
+    let mut neg = 0
+    if __hx_payload_eq(c, 43) {                       // '+'
+        i = __hx_payload_add(i, 1)
+    } else if __hx_payload_eq(c, 45) {                // '-'
+        neg = 1
+        i = __hx_payload_add(i, 1)
+    }
+
+    // 3. integer + fractional digits → integer mantissa `m` + net exp10 `e10`.
+    //    mant_of stays the running mantissa; ndig = significant digit count (for
+    //    the <=2^53 bound, tracked via mantissa magnitude); seen_dot toggles the
+    //    fractional-digit counting (each fractional digit decrements e10).
+    let mut m = 0
+    let mut ndig = 0
+    let mut e10 = 0
+    let mut seen_dot = 0
+    let mut overflow_mant = 0
+    let mut go = 1
+    while __hx_payload_ne(go, 0) {
+        let b = __hx_ptr_load8(p, i)
+        let ge0 = __hx_payload_lt(47, b)              // b >= '0'
+        let le9 = __hx_payload_lt(b, 58)              // b <= '9'
+        let isdig = __hx_payload_and(ge0, le9)
+        let isdot = __hx_payload_eq(b, 46)            // '.'
+        if __hx_payload_ne(isdig, 0) {
+            let d = __hx_payload_sub(b, 48)
+            // accumulate into mantissa; flag if it would pass 2^53 (fast-path bound).
+            // cutoff for *10+9 staying <= 2^53: m <= (2^53-9)/10 = 900719925474099(.8)
+            let mcut = __hx_payload_lt(900719925474099, m)   // m > cutoff → would overflow bound
+            if __hx_payload_ne(mcut, 0) {
+                overflow_mant = 1
+            } else {
+                let m10 = __hx_payload_mul(m, 10)
+                m = __hx_payload_add(m10, d)
+            }
+            ndig = __hx_payload_add(ndig, 1)
+            if __hx_payload_ne(seen_dot, 0) {
+                e10 = __hx_payload_sub(e10, 1)        // fractional digit → exp--
+            }
+            i = __hx_payload_add(i, 1)
+        } else if __hx_payload_ne(isdot, 0) {
+            if __hx_payload_ne(seen_dot, 0) {
+                go = 0                                 // second '.' → stop (let C handle)
+            } else {
+                seen_dot = 1
+                i = __hx_payload_add(i, 1)
+            }
+        } else {
+            go = 0                                     // first non-digit non-dot
+        }
+    }
+
+    // 4. optional exponent e/E [sign] digits.
+    let ec = __hx_ptr_load8(p, i)
+    let is_e = __hx_payload_eq(ec, 101)               // 'e'
+    let is_E = __hx_payload_eq(ec, 69)                // 'E'
+    let has_exp = __hx_payload_add(is_e, is_E)
+    let mut exp_neg = 0
+    let mut exp_val = 0
+    let mut exp_had_digit = 0
+    if __hx_payload_ne(has_exp, 0) {
+        i = __hx_payload_add(i, 1)
+        let es = __hx_ptr_load8(p, i)
+        if __hx_payload_eq(es, 43) {                  // '+'
+            i = __hx_payload_add(i, 1)
+        } else if __hx_payload_eq(es, 45) {           // '-'
+            exp_neg = 1
+            i = __hx_payload_add(i, 1)
+        }
+        let mut eg = 1
+        while __hx_payload_ne(eg, 0) {
+            let eb = __hx_ptr_load8(p, i)
+            let ege0 = __hx_payload_lt(47, eb)
+            let ele9 = __hx_payload_lt(eb, 58)
+            let edig = __hx_payload_and(ege0, ele9)
+            if __hx_payload_ne(edig, 0) {
+                let ed = __hx_payload_sub(eb, 48)
+                let ev10 = __hx_payload_mul(exp_val, 10)
+                exp_val = __hx_payload_add(ev10, ed)
+                exp_had_digit = 1
+                // cap exp_val so it can't wrap; >40 already past fast-path bound.
+                let ecap = __hx_payload_lt(1000, exp_val)
+                if __hx_payload_ne(ecap, 0) { exp_val = 1000 }
+                i = __hx_payload_add(i, 1)
+            } else {
+                eg = 0
+            }
+        }
+    }
+
+    // fold the explicit exponent into e10.
+    if __hx_payload_ne(has_exp, 0) {
+        if __hx_payload_ne(exp_neg, 0) {
+            e10 = __hx_payload_sub(e10, exp_val)
+        } else {
+            e10 = __hx_payload_add(e10, exp_val)
+        }
+    }
+
+    // ── fast-path eligibility gate ──────────────────────────────────────────
+    // Bail to the C strtod sentinel when ANY holds:
+    //   - no significant digit consumed (empty / junk)        → ndig == 0
+    //   - mantissa passed the 2^53 bound                      → overflow_mant
+    //   - an 'e'/'E' was present but had no exponent digits   → malformed
+    //   - the NEXT byte after our parse is not the NUL term    → trailing junk
+    //     (strtod's lenient stop differs; let C own it)
+    //   - |e10| > 22                                           → pow10 inexact
+    let nul = __hx_ptr_load8(p, i)
+    let mut bail = 0
+    if __hx_payload_eq(ndig, 0) { bail = 1 }
+    if __hx_payload_ne(overflow_mant, 0) { bail = 1 }
+    if __hx_payload_ne(has_exp, 0) {
+        if __hx_payload_eq(exp_had_digit, 0) { bail = 1 }
+    }
+    if __hx_payload_ne(nul, 0) { bail = 1 }           // trailing bytes remain
+    // |e10| <= 22 check (e10 may be negative).
+    let e_hi = __hx_payload_lt(22, e10)               // e10 > 22
+    let e_lo = __hx_payload_lt(e10, 0)                // e10 < 0 → check magnitude
+    if __hx_payload_ne(e_hi, 0) { bail = 1 }
+    if __hx_payload_ne(e_lo, 0) {
+        let neg_e = __hx_payload_sub(0, e10)
+        let elo_hi = __hx_payload_lt(22, neg_e)       // -e10 > 22
+        if __hx_payload_ne(elo_hi, 0) { bail = 1 }
+    }
+    if __hx_payload_ne(bail, 0) {
+        return __hx_make_val(4, 0)                     // TAG_VOID sentinel → C strtod
+    }
+
+    // ── fast path: (double)m scaled by an EXACT pow10[|e10|], single rounding ──
+    let mf = __hx_to_double(m)                         // (double)mantissa (exact, m<=2^53)
+
+    // build pow10 = 10^|e10| as an EXACT double via repeated fmul from 1.0.
+    let one_i = __hx_payload_add(0, 1)
+    let mut pw = __hx_to_double(one_i)                 // 1.0
+    let ten_i = __hx_payload_add(0, 10)
+    let tenf = __hx_to_double(ten_i)
+    let mut absE = e10
+    let neg_exp = __hx_payload_lt(e10, 0)
+    if __hx_payload_ne(neg_exp, 0) {
+        absE = __hx_payload_sub(0, e10)
+    }
+    let mut k = 0
+    while __hx_payload_lt(k, absE) {
+        pw = __hx_payload_fmul(pw, tenf)
+        k = __hx_payload_add(k, 1)
+    }
+
+    // scale: multiply for e10>=0, divide for e10<0. SINGLE rounding → correctly rounded.
+    let mut val = mf
+    if __hx_payload_ne(neg_exp, 0) {
+        val = __hx_payload_fdiv(mf, pw)
+    } else {
+        val = __hx_payload_fmul(mf, pw)
+    }
+
+    // apply sign (negate exactly via fmul by -1.0; preserves -0.0 like strtod).
+    if __hx_payload_ne(neg, 0) {
+        let negone_i = __hx_payload_sub(0, 1)
+        let negonef = __hx_to_double(negone_i)         // -1.0
+        val = __hx_payload_fmul(val, negonef)
+    }
+    return val
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FORMAT twin — zero-c float→string %.Ng keystone (NORMAL stdlib fn).
+//
+// rt_format_float_native is the f64→string FORMAT counterpart of the PARSE half
+// above. UNLIKE rt_parse_float_native (a raw-mem leaf body shipped via the frozen
+// self/native/num_float_core_*.s seed), this is a PLAIN native-compiled stdlib
+// function — ordinary hexa `[int]` limb buffers + byte-array string build. It is
+// NOT part of the .s seed (it uses bytes_to_str_raw/push, which the seed forbids)
+// and is NOT in the compiler self-host closure, so it is byteeq-NEUTRAL until
+// explicitly wired (the opt-in HEXA_FLOAT_REPR=native path under
+// HEXA_RT_FORMAT_FLOAT_NATIVE in runtime_core_emit.hexa).
+//
+// ── ALGORITHM (faithful port, NO float arithmetic) ──────────────────────────
+// A 1:1 INTEGER port of musl `fmt_fp` for `double`, conversion t='g'
+// (reference: musl src/stdio/vfprintf.c:180-419 — fmt_fp; pad/fmt_u 138-171).
+// The float-scatter (musl 268-276, which uses long double + frexpl) is REPLACED
+// by an exact integer decomposition via `float_to_bits`:
+//     bits   = float_to_bits(v)
+//     m      = (frac | 2^52)         (normal)    | frac (subnormal)
+//     e2     = exp_field - 1075      (normal)    | -1074 (subnormal)
+//     value  = (-1)^sign * m * 2^e2         (m a <=53-bit integer)
+// then the value is carried into a base-1e9 limb buffer and shifted by 2^e2 with
+// musl's exact integer mul/div loops (vfprintf.c:278-304), rounded round-half-to-
+// EVEN (309-342 — musl's `round=2/EPSILON` float probe is replaced by the exact
+// integer half/odd test it computes), then %g-selected + trailing-zero-trimmed
+// (345-363) and emitted in e/f style (365-417). EVERYTHING is i64: the 53-bit
+// mantissa + base-1e9 limbs keep every intermediate < 2^63, so the result is
+// constructively identical across all 3 targets (no FP op = no target drift).
+//
+// ── VERIFIED byte-exact vs glibc snprintf("%.17g", v) ───────────────────────
+// C-prototype (same integer algorithm): 20,220,144 cases (full random bit-space
+// sweep + extremes + dense integer/decimal sweeps) → 0 mismatch. This hexa body:
+// 19,813 cases (representatives + subnormals + ±inf/±nan + DBL_MAX/MIN + 12,000
+// random full-bit-space doubles) → 0 mismatch. The C-differential oracle is
+// scripts/scratch/rt_native/float_dtoa_core_gate.c (mirror of num_float_core_gate.c).
+//
+// `sig` = significant-digit precision (the %g `p`; 17 = round-trip-safe %.17g).
+// NaN/inf are handled here (glibc lowercase "inf"/"nan", sign-aware).
+
+// forward-order decimal digit bytes of x; [] when x==0 (musl fmt_u semantics).
+fn _g_digits(x: int) -> [int] {
+    if x == 0 { return [] }
+    let mut rev: [int] = []
+    let mut y = x
+    while y > 0 {
+        rev = rev.push(48 + (y % 10))
+        y = y / 10
+    }
+    let mut o: [int] = []
+    let mut i = len(rev) - 1
+    while i >= 0 {
+        o = o.push(rev[i])
+        i = i - 1
+    }
+    return o
+}
+
+pub fn rt_format_float_native(v: float, sig: int) -> string {
+    let u = float_to_bits(v)
+    let sign = (u >> 63) & 1
+    let exp_field = (u >> 52) & 2047
+    let frac = u & 4503599627370495
+    let mut out: [int] = []
+
+    if exp_field == 2047 {
+        if sign != 0 { out = out.push(45) }
+        if frac == 0 {
+            out = out.push(105); out = out.push(110); out = out.push(102)
+        } else {
+            out = out.push(110); out = out.push(97); out = out.push(110)
+        }
+        return bytes_to_str_raw(out)
+    }
+
+    let mut m = 0
+    let mut e2 = 0
+    if exp_field == 0 {
+        m = frac
+        e2 = -1074
+        if m == 0 {
+            if sign != 0 { out = out.push(45) }
+            out = out.push(48)
+            return bytes_to_str_raw(out)
+        }
+    } else {
+        m = frac | 4503599627370496
+        e2 = exp_field - 1075
+    }
+
+    let mut p = sig
+    if p < 0 { p = 6 }
+
+    let nlimb = 512
+    let r0 = 400
+    let mut big: [int] = []
+    let mut q = 0
+    while q < nlimb { big = big.push(0); q = q + 1 }
+
+    let mut r = r0
+    let mut a = r0
+    let mut z = r0 + 1
+    if m >= 1000000000 {
+        big[r] = m % 1000000000
+        big[r - 1] = m / 1000000000
+        a = r - 1
+    } else {
+        big[r] = m
+    }
+
+    // e2>0: multiply by 2^e2 (musl vfprintf.c:278-289).
+    while e2 > 0 {
+        let mut carry = 0
+        let mut sh = e2
+        if sh > 29 { sh = 29 }
+        let mut d = z - 1
+        while d >= a {
+            let x = (big[d] << sh) + carry
+            big[d] = x % 1000000000
+            carry = x / 1000000000
+            d = d - 1
+        }
+        if carry != 0 { a = a - 1; big[a] = carry }
+        while z > a {
+            if big[z - 1] == 0 { z = z - 1 } else { break }
+        }
+        e2 = e2 - sh
+    }
+
+    // e2<0: divide by 2^-e2 (musl vfprintf.c:290-304; MANT_DIG/3 = 53/3 = 17).
+    while e2 < 0 {
+        let mut carry = 0
+        let mut sh = -e2
+        if sh > 9 { sh = 9 }
+        let need = 1 + (p + 17 + 8) / 9
+        let mask = (1 << sh) - 1
+        let dv = 1000000000 >> sh
+        let mut d = a
+        while d < z {
+            let rm = big[d] & mask
+            big[d] = (big[d] >> sh) + carry
+            carry = dv * rm
+            d = d + 1
+        }
+        if big[a] == 0 { a = a + 1 }
+        if carry != 0 { big[z] = carry; z = z + 1 }
+        if z - a > need { z = a + need }
+        e2 = e2 + sh
+    }
+
+    // leading decimal exponent e (musl vfprintf.c:306-307).
+    let mut e = 0
+    if a < z {
+        let mut i = 10
+        e = 9 * (r - a)
+        while big[a] >= i { i = i * 10; e = e + 1 }
+    }
+
+    // rounding, round-half-to-even (musl vfprintf.c:309-342). t='g'(103).
+    let mut t = 103
+    let mut jj = p - e
+    if p != 0 { jj = jj - 1 }
+    if jj < 9 * (z - r - 1) {
+        let maxe = 1024
+        let mut d = r + 1 + ((jj + 9 * maxe) / 9 - maxe)
+        let mut jm = (jj + 9 * maxe) % 9
+        let mut i = 10
+        jm = jm + 1
+        while jm < 9 { i = i * 10; jm = jm + 1 }
+        let x = big[d] % i
+        let cond = (x != 0) || (d + 1 != z)
+        if cond {
+            let half = i / 2
+            let mut odd = 0
+            if ((big[d] / i) & 1) != 0 { odd = 1 }
+            if i == 1000000000 {
+                if d > a {
+                    if (big[d - 1] & 1) != 0 { odd = 1 }
+                }
+            }
+            let mut roundup = 0
+            if x < half {
+                roundup = 0
+            } else if x == half {
+                if d + 1 == z { roundup = odd } else { roundup = 1 }
+            } else {
+                roundup = 1
+            }
+            big[d] = big[d] - x
+            if roundup != 0 {
+                big[d] = big[d] + i
+                while big[d] > 999999999 {
+                    big[d] = 0
+                    d = d - 1
+                    if d < a { a = a - 1; big[a] = 0 }
+                    big[d] = big[d] + 1
+                }
+                let mut i2 = 10
+                e = 9 * (r - a)
+                while big[a] >= i2 { i2 = i2 * 10; e = e + 1 }
+            }
+        }
+        if z > d + 1 { z = d + 1 }
+    }
+    while z > a {
+        if big[z - 1] == 0 { z = z - 1 } else { break }
+    }
+
+    // %g selection + trailing-zero trim (musl vfprintf.c:345-363).
+    if p == 0 { p = 1 }
+    if p > e && e >= -4 {
+        t = t - 1                              // 'g'->'f' (102)
+        p = p - (e + 1)
+    } else {
+        t = t - 2                              // 'g'->'e' (101)
+        p = p - 1
+    }
+    let mut jt = 9
+    if z > a {
+        if big[z - 1] != 0 {
+            let mut i = 10
+            jt = 0
+            while (big[z - 1] % i) == 0 { i = i * 10; jt = jt + 1 }
+        }
+    }
+    let avail = 9 * (z - r - 1)
+    if t == 102 {
+        let mut qv = avail - jt
+        if qv < 0 { qv = 0 }
+        if p > qv { p = qv }
+    } else {
+        let mut qv = avail + e - jt
+        if qv < 0 { qv = 0 }
+        if p > qv { p = qv }
+    }
+
+    // output (musl vfprintf.c:384-414); no width/prefix/pad except sign.
+    if sign != 0 { out = out.push(45) }
+    if t == 102 {
+        if a > r { a = r }
+        let mut d = a
+        while d <= r {
+            let ds = _g_digits(big[d])
+            if d != a {
+                let mut k = len(ds)
+                while k < 9 { out = out.push(48); k = k + 1 }
+                let mut j2 = 0
+                while j2 < len(ds) { out = out.push(ds[j2]); j2 = j2 + 1 }
+            } else {
+                if len(ds) == 0 {
+                    out = out.push(48)
+                } else {
+                    let mut j2 = 0
+                    while j2 < len(ds) { out = out.push(ds[j2]); j2 = j2 + 1 }
+                }
+            }
+            d = d + 1
+        }
+        if p != 0 { out = out.push(46) }       // '.'
+        d = r + 1
+        while d < z && p > 0 {
+            let ds = _g_digits(big[d])
+            let mut limb9: [int] = []
+            let mut k = len(ds)
+            while k < 9 { limb9 = limb9.push(48); k = k + 1 }
+            let mut j2 = 0
+            while j2 < len(ds) { limb9 = limb9.push(ds[j2]); j2 = j2 + 1 }
+            let mut take = 9
+            if p < 9 { take = p }
+            let mut t2 = 0
+            while t2 < take { out = out.push(limb9[t2]); t2 = t2 + 1 }
+            p = p - 9
+            d = d + 1
+        }
+        if p > 0 {
+            let mut k = 0
+            while k < p { out = out.push(48); k = k + 1 }
+        }
+    } else {
+        let mut eabs = e
+        let mut eneg = 0
+        if e < 0 { eneg = 1; eabs = -e }
+        let edig = _g_digits(eabs)
+        let mut estr: [int] = []
+        estr = estr.push(t)                    // 'e' (101)
+        if eneg != 0 { estr = estr.push(45) } else { estr = estr.push(43) }
+        if len(edig) < 2 {
+            let mut k = len(edig)
+            while k < 2 { estr = estr.push(48); k = k + 1 }
+        }
+        let mut j3 = 0
+        while j3 < len(edig) { estr = estr.push(edig[j3]); j3 = j3 + 1 }
+
+        if z <= a { z = a + 1 }
+        let mut d = a
+        while d < z && p >= 0 {
+            let ds = _g_digits(big[d])
+            let mut limb: [int] = []
+            if d != a {
+                let mut k = len(ds)
+                while k < 9 { limb = limb.push(48); k = k + 1 }
+                let mut j2 = 0
+                while j2 < len(ds) { limb = limb.push(ds[j2]); j2 = j2 + 1 }
+            } else {
+                if len(ds) == 0 {
+                    limb = limb.push(48)
+                } else {
+                    let mut j2 = 0
+                    while j2 < len(ds) { limb = limb.push(ds[j2]); j2 = j2 + 1 }
+                }
+            }
+            let rem0 = len(limb)
+            if d == a {
+                out = out.push(limb[0])
+                if p > 0 { out = out.push(46) }
+                let remaining = rem0 - 1
+                let mut take = remaining
+                if p < take { take = p }
+                let mut idx = 1
+                let mut c2 = 0
+                while c2 < take { out = out.push(limb[idx]); idx = idx + 1; c2 = c2 + 1 }
+                p = p - remaining
+            } else {
+                let mut take = rem0
+                if p < take { take = p }
+                let mut idx = 0
+                let mut c2 = 0
+                while c2 < take { out = out.push(limb[idx]); idx = idx + 1; c2 = c2 + 1 }
+                p = p - rem0
+            }
+            d = d + 1
+        }
+        if p > 0 {
+            let mut k = 0
+            while k < p { out = out.push(48); k = k + 1 }
+        }
+        let mut j4 = 0
+        while j4 < len(estr) { out = out.push(estr[j4]); j4 = j4 + 1 }
+    }
+    return bytes_to_str_raw(out)
+}

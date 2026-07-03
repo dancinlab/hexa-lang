@@ -64,7 +64,7 @@ import "stdlib/cloud/fill_plan.hexa"
 // single edit needed to register a new prototype (alongside its emitter).
 // Keep this list in lockstep with the dispatch branches in `emit_rtsc`.
 pub fn rtsc_prototypes() -> [string] {
-    return ["beh8_clathrate", "perovskite_pm3m", "im3m_group17", "sodalite_im3m_yh10", "a15_ysbh6", "li2mgh16", "pm3n_bc_clathrate"]
+    return ["beh8_clathrate", "perovskite_pm3m", "im3m_group17", "sodalite_im3m_yh10", "a15_ysbh6", "li2mgh16", "pm3n_bc_clathrate", "general"]
 }
 
 // ── pub entry point ──────────────────────────────────────────────────
@@ -136,9 +136,204 @@ pub fn emit_rtsc(spec: DeckSpec) -> [DeckFile] {
         deck_push(files, "RUNBOOK.md",  _rtsc_bcclath_runbook(spec))
         return files
     }
+    if proto == "general" {
+        deck_push(files, "vc-relax.in", _rtsc_general_vc_relax(spec))
+        deck_push(files, "scf.in",      _rtsc_general_scf(spec))
+        deck_push(files, "ph.in",       _rtsc_general_ph(spec))
+        deck_push(files, "RUNBOOK.md",  _rtsc_general_runbook(spec))
+        return files
+    }
     // Unreachable: the coverage guard above panics on anything not in the
     // dispatch. Kept as a defensive no-op so the dispatch stays total.
     return files
+}
+
+// ── general-cell prototype (ibrav=0 · MP/CIF import) ─────────────────
+// For arbitrary low-symmetry structures (monoclinic/triclinic/etc.) that no
+// fixed-symmetry prototype covers. The CALLER pre-formats the cell + atoms
+// into spec strings (d4 — the generic layer stays structure-agnostic):
+//   cell_parameters  — 3 lattice-vector lines in Angstrom (trailing \n each)
+//   atomic_species   — ATOMIC_SPECIES body lines "  Sym  mass  UPF\n" (auto from MP)
+//   atomic_positions — ATOMIC_POSITIONS crystal body "  Sym  fx fy fz\n"
+//   nat, ntyp, prefix — counts + prefix
+// d15 metallic SCF aids (smear+degauss+maxiter) are baked in. Symmetry is left
+// ON (QE default) — el-ph benefits; pass nosym=true only if checkallsym crashes.
+// _rtsc_lines — caller-passed blocks use "|" as the line separator (the hexa
+// JSON spec carrier does not survive embedded "\n"); split on "|" and rejoin
+// with real newlines so CELL_PARAMETERS/ATOMIC_* render as proper QE lines.
+fn _rtsc_lines(body: string) -> string {
+    let parts = body.split("|")
+    let mut out = ""
+    let mut i = 0
+    while i < len(parts) {
+        if parts[i] != "" {
+            out = out + parts[i] + "\n"
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn _rtsc_general_vc_relax(spec: DeckSpec) -> string {
+    let prefix    = spec_get(spec, "prefix")
+    let nat       = spec_get(spec, "nat")
+    let ntyp      = spec_get(spec, "ntyp")
+    let cellpar   = spec_get(spec, "cell_parameters")
+    let species   = spec_get(spec, "atomic_species")
+    let positions = spec_get(spec, "atomic_positions")
+    let ecutwfc   = spec_get_or(spec, "ecutwfc", "80")
+    let ecutrho   = spec_get_or(spec, "ecutrho", "640")
+    let k_relax   = spec_get_or(spec, "k_relax", "12")
+    let press_kb  = spec_get_or(spec, "pressure_kbar", "0.0")
+    let press_cmt = spec_get_or(spec, "pressure_comment", "ambient (1 atm ~ 0 GPa)")
+    let cell_dof  = spec_get_or(spec, "cell_dofree", "all")
+    let nosym     = spec_get_or(spec, "nosym", ".false.")
+    let mut s = ""
+    s = s + "&CONTROL\n"
+    s = s + "  calculation     = 'vc-relax'\n"
+    s = s + "  prefix          = '" + prefix + "'\n"
+    s = s + "  outdir          = './out'\n"
+    s = s + "  pseudo_dir      = './pseudo'\n"
+    s = s + "  forc_conv_thr   = 1.0d-4\n"
+    s = s + "  etot_conv_thr   = 1.0d-6\n"
+    s = s + "  tstress         = .true.\n"
+    s = s + "  tprnfor         = .true.\n"
+    s = s + "  nstep           = 200\n"
+    s = s + "/\n"
+    s = s + "&SYSTEM\n"
+    s = s + "  ibrav           = 0                ! general cell — CELL_PARAMETERS below (MP/CIF import)\n"
+    s = s + "  nat             = " + nat + "\n"
+    s = s + "  ntyp            = " + ntyp + "\n"
+    s = s + "  ecutwfc         = " + ecutwfc + "\n"
+    s = s + "  ecutrho         = " + ecutrho + "\n"
+    s = s + "  nosym           = " + nosym + "\n"
+    s = s + "  occupations     = 'smearing'\n"
+    s = s + "  smearing        = 'mp'             ! Methfessel-Paxton — metallic (d15)\n"
+    s = s + "  degauss         = 0.01             ! d15 small-gap SCF aid\n"
+    s = s + "/\n"
+    s = s + "&ELECTRONS\n"
+    s = s + "  conv_thr        = 1.0d-10\n"
+    s = s + "  mixing_beta     = 0.3\n"
+    s = s + "  mixing_mode     = 'plain'\n"
+    s = s + "  diagonalization = 'david'\n"
+    s = s + "  electron_maxstep = 400             ! d15 maxiter 400\n"
+    s = s + "/\n"
+    s = s + "&IONS\n"
+    s = s + "  ion_dynamics    = 'bfgs'\n"
+    s = s + "/\n"
+    s = s + "&CELL\n"
+    s = s + "  cell_dynamics   = 'bfgs'\n"
+    s = s + "  press           = " + press_kb + "            ! target " + press_cmt + "\n"
+    s = s + "  press_conv_thr  = 0.5\n"
+    s = s + "  cell_dofree     = '" + cell_dof + "'\n"
+    s = s + "/\n"
+    s = s + "CELL_PARAMETERS angstrom\n"
+    s = s + _rtsc_lines(cellpar)
+    s = s + "ATOMIC_SPECIES\n"
+    s = s + _rtsc_lines(species)
+    s = s + "ATOMIC_POSITIONS crystal\n"
+    s = s + _rtsc_lines(positions)
+    s = s + "K_POINTS automatic\n"
+    s = s + "  " + k_relax + " " + k_relax + " " + k_relax + "  0 0 0\n"
+    return s
+}
+
+fn _rtsc_general_scf(spec: DeckSpec) -> string {
+    let prefix    = spec_get(spec, "prefix")
+    let nat       = spec_get(spec, "nat")
+    let ntyp      = spec_get(spec, "ntyp")
+    let cellpar   = spec_get(spec, "cell_parameters")
+    let species   = spec_get(spec, "atomic_species")
+    let positions = spec_get(spec, "atomic_positions")
+    let ecutwfc   = spec_get_or(spec, "ecutwfc", "80")
+    let ecutrho   = spec_get_or(spec, "ecutrho", "640")
+    let k_scf     = spec_get_or(spec, "k_scf", "16")
+    let nosym     = spec_get_or(spec, "nosym", ".false.")
+    let mut s = ""
+    s = s + "&CONTROL\n"
+    s = s + "  calculation     = 'scf'\n"
+    s = s + "  prefix          = '" + prefix + "'\n"
+    s = s + "  outdir          = './out'\n"
+    s = s + "  pseudo_dir      = './pseudo'\n"
+    s = s + "  tstress         = .true.\n"
+    s = s + "  tprnfor         = .true.\n"
+    s = s + "  verbosity       = 'high'           ! DOS/bands@E_F flat-band check\n"
+    s = s + "/\n"
+    s = s + "&SYSTEM\n"
+    s = s + "  ibrav           = 0                ! general cell — REPLACE CELL_PARAMETERS/positions with RELAXED vc-relax.out\n"
+    s = s + "  nat             = " + nat + "\n"
+    s = s + "  ntyp            = " + ntyp + "\n"
+    s = s + "  ecutwfc         = " + ecutwfc + "\n"
+    s = s + "  ecutrho         = " + ecutrho + "\n"
+    s = s + "  nosym           = " + nosym + "\n"
+    s = s + "  occupations     = 'smearing'\n"
+    s = s + "  smearing        = 'mp'\n"
+    s = s + "  degauss         = 0.01\n"
+    s = s + "/\n"
+    s = s + "&ELECTRONS\n"
+    s = s + "  conv_thr        = 1.0d-12\n"
+    s = s + "  mixing_beta     = 0.3\n"
+    s = s + "  diagonalization = 'david'\n"
+    s = s + "  electron_maxstep = 400\n"
+    s = s + "/\n"
+    s = s + "! REPLACE CELL_PARAMETERS + ATOMIC_POSITIONS below with the RELAXED blocks from vc-relax.out.\n"
+    s = s + "CELL_PARAMETERS angstrom\n"
+    s = s + _rtsc_lines(cellpar)
+    s = s + "ATOMIC_SPECIES\n"
+    s = s + _rtsc_lines(species)
+    s = s + "ATOMIC_POSITIONS crystal\n"
+    s = s + _rtsc_lines(positions)
+    s = s + "K_POINTS automatic\n"
+    s = s + "  " + k_scf + " " + k_scf + " " + k_scf + "  0 0 0\n"
+    return s
+}
+
+fn _rtsc_general_ph(spec: DeckSpec) -> string {
+    let prefix   = spec_get(spec, "prefix")
+    let title    = spec_get_or(spec, "ph_title", prefix + " electron-phonon (general cell, q-grid for el-ph lambda/Tc)")
+    let nq       = spec_get_or(spec, "nq", "2")
+    let max_secs = spec_get_or(spec, "max_seconds", "172800")
+    let mut s = ""
+    s = s + title + "\n"
+    s = s + "&inputph\n"
+    s = s + "  prefix              = '" + prefix + "'\n"
+    s = s + "  outdir              = './out'\n"
+    s = s + "  fildyn              = '" + prefix + ".dyn'\n"
+    s = s + "  fildvscf            = 'dvscf'\n"
+    s = s + "  ldisp               = .true.\n"
+    s = s + "  nq1                 = " + nq + "            ! " + nq + "x" + nq + "x" + nq + " q-grid — start coarse, refine on survivors\n"
+    s = s + "  nq2                 = " + nq + "\n"
+    s = s + "  nq3                 = " + nq + "\n"
+    s = s + "  tr2_ph              = 1.0d-14\n"
+    s = s + "  electron_phonon     = 'simple'     ! Allen-Dynes Tc from lambda/omega_log\n"
+    s = s + "  el_ph_sigma         = 0.005\n"
+    s = s + "  el_ph_nsigma        = 10           ! sigma scan -> lambda plateau (broadening-matched, d6)\n"
+    s = s + "  recover             = .true.\n"
+    s = s + "  alpha_mix(1)        = 0.3\n"
+    s = s + "  max_seconds         = " + max_secs + "\n"
+    s = s + "/\n"
+    return s
+}
+
+fn _rtsc_general_runbook(spec: DeckSpec) -> string {
+    let prefix = spec_get(spec, "prefix")
+    let formula = spec_get_or(spec, "formula", prefix)
+    let src    = spec_get_or(spec, "structure_source", "Materials Project")
+    let mut s = ""
+    s = s + "# RTSC general-cell deck — " + formula + " (ibrav=0 · " + src + ")\n\n"
+    s = s + "> 일반셀(monoclinic/triclinic 등) flat-band SC 후보용. 고정대칭 프로토타입이 못 덮는 구조를 "
+    s = s + "MP/CIF 임포트로 직접 받는다 (caller가 CELL_PARAMETERS·ATOMIC_SPECIES·ATOMIC_POSITIONS 포맷).\n\n"
+    s = s + "## 게이트 순서 (d_roomt_ambient g5 · d6 정직)\n"
+    s = s + "1. **vc-relax** (상압 press=0) → 평형 CELL_PARAMETERS/positions. 수렴 확인.\n"
+    s = s + "2. **scf** (verbosity high) → E_F·밴드폭·flat-band@E_F·자성. 완화 셀/positions 전파.\n"
+    s = s + "3. **matdyn 동적안정** (ph_gamma 또는 full-q) → 허수모드 0 확인 (상압 동적안정 = g5 #2).\n"
+    s = s + "4. **el-ph** (ph.in) → lambda·omega_log → Allen-Dynes/Eliashberg Tc. broadening-matched sigma scan.\n\n"
+    s = s + "## 규율\n"
+    s = s + "- d16: 발사 전 free `pool on <host>` 1-iter dry-run.\n"
+    s = s + "- pseudo/ 에 ATOMIC_SPECIES UPF 배치 (d13 element 커버 확인).\n"
+    s = s + "- 동적불안정(허수모드)이면 el-ph 신뢰불가 (d6) — 절대 λ/Tc 박제 금지.\n"
+    s = s + "- 신규성: 이미 출판된 조성/Tc는 재현 금지 (d_novel_only) — 미지 Δ만 발사.\n"
+    return s
 }
 
 // _rtsc_proto_known — membership test against rtsc_prototypes() (no name

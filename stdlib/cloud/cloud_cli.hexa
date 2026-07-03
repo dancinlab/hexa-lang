@@ -107,6 +107,14 @@ fn _cloud_help() {
     println("  --recursive,-r  (copy-to) copy a directory tree (scp -r).")
     println("  --verify-sha    (copy-to/copy-from) after transfer, compare sha256 of")
     println("                  local vs remote; exit 103 mismatch / 104 if no sha tool.")
+    println("  NB: for LARGE pod transfers use `copy-to` (scp, auto-retries a dropped")
+    println("      stream up to 3×) — NOT raw `rsync` over a vast proxy, which drops")
+    println("      mid-stream ('unexpected end of file'). copy-to + --verify-sha is the")
+    println("      stable path; pair with `--recursive` for a tree. copy-to auto-creates")
+    println("      the remote PARENT dir (mkdir -p; --no-mkparent opts out).")
+    println("      Run MULTIPLE big transfers SEQUENTIALLY (not concurrent nohup) — a")
+    println("      vast proxy races concurrent scp streams and silently drops one; or")
+    println("      use `cloud bootstrap` which sequences them.")
     println("")
     println("`run` uses structured argv — every token POSIX-quoted before ssh, so")
     println("no remote shell parsing / glob / /* */ comment mis-parse can corrupt")
@@ -116,6 +124,31 @@ fn _cloud_help() {
     println("variables all parse on the remote side. Use `exec` for ad-hoc")
     println("inspection (`cd /work && nvidia-smi | head -5`); caller owns quoting.")
     println("`host` is an ssh destination or ~/.ssh/config alias.")
+    println("")
+    println("provisioning flags (rent):")
+    println("  --tier T        secure|community (alias --secure) — CANONICAL,")
+    println("                  provider-agnostic tier select; the sanctioned")
+    println("                  surface that replaces raw `runpodctl --secureCloud`.")
+    println("                  secure = on-demand (host does NOT reclaim mid-run →")
+    println("                  a build completes). runpod: → --cloud-type")
+    println("                  SECURE/COMMUNITY (explicit --cloud-type wins). vast:")
+    println("                  secure = the on-demand default; community unwired.")
+    println("                  Absent = default behavior UNCHANGED.")
+    println("  --cloud-type C  (runpod) SECURE|COMMUNITY|ALL low-level pin")
+    println("                  (default ALL). Prefer the canonical --tier.")
+    println("  --query Q       (vast) raw offer predicate; picks the first match.")
+    println("                  NB: cpu_ram is in GB (2TB RAM = `cpu_ram>=2000`,")
+    println("                  NOT the MB value `cloud api /bundles` reports).")
+    println("  --include-unverified  (vast) also search unverified host-machines —")
+    println("                  reaches cheap large-RAM / CPU-only boxes the default")
+    println("                  verified=true filter hides. (= adds `verified=false`.)")
+    println("  --offer ID      (vast) PIN a specific offer id — skips the query")
+    println("                  search and binds THAT box; offers rotate, so a")
+    println("                  --query that looked cheap can bind a different box.")
+    println("                  Confirms the offer is still listed + captures its")
+    println("                  dph BEFORE create.  e.g. cloud rent vast --offer 40455967")
+    println("  --max-dph USD   (vast) rate ceiling — REFUSE any offer over USD/hr")
+    println("                  before the billing create (works on --offer + --query).")
 }
 
 // _mh_json_str — JSON-encode a path-typed string for the __MONITOR_HANDLE__=
@@ -394,6 +427,26 @@ fn _basename(p: str) -> str {
     return p.substring(last + 1, n)
 }
 
+// _repo_root_basename — the CANONICAL git-repo name, worktree-safe. A git
+// worktree's `--show-toplevel` returns the WORKTREE dir (e.g.
+// `anima/.claude/worktrees/evaluate-py-option`), so sibling worktrees of ONE
+// repo mis-resolve to different project basenames and the cross-project guard
+// treats them as foreign (a legitimate same-repo teardown from another worktree
+// is REFUSED). `--git-common-dir` (absolute) always points at the MAIN repo's
+// `.git` (`<mainroot>/.git`), so its parent basename is the true repo identity
+// (`anima`) from ANY worktree. "" when not a git repo.
+fn _repo_root_basename() -> str {
+    let common = exec("git rev-parse --path-format=absolute --git-common-dir 2>/dev/null").trim()
+    if len(common) > 0 {
+        let parent = exec("dirname \"" + common + "\" 2>/dev/null").trim()
+        let base = _basename(parent)
+        if len(base) > 0 {
+            return base
+        }
+    }
+    return ""
+}
+
 // _at_prefix — render a repo/folder name as an `@`-prefixed project tag
 // (the rent-invocation cwd's project identity, e.g. cwd
 // `/Users/mini/dancinlab/demiurge` → `@demiurge`). Idempotent: a name that
@@ -411,9 +464,10 @@ fn _at_prefix(name: str) -> str {
 // _resolve_project — the owning PROJECT (= repo / folder / project name) of the
 // rent-invocation cwd, used by rent/up/run/nohup/adopt to STAMP attribution and
 // by down/destroy to derive the cwd project for the cross-project kill-guard.
-// Resolution order: an explicit `--project <name>` flag wins; else the cwd
-// git-repo basename (`git rev-parse --show-toplevel` → basename); else (NOT a
-// git repo) the cwd folder basename (`pwd`). All forms are `@`-prefixed, so a
+// Resolution order: an explicit `--project <name>` flag wins; else the cwd's
+// worktree-safe canonical repo basename (_repo_root_basename, via
+// `--git-common-dir` so all worktrees of one repo agree); else (NOT a git repo)
+// the cwd folder basename (`pwd`). All forms are `@`-prefixed, so a
 // rent from `/Users/mini/dancinlab/demiurge` tags the pod `@demiurge`. Only an
 // empty cwd degrades to "@unattributed".
 fn _resolve_project(av: [str], start: int) -> str {
@@ -421,9 +475,13 @@ fn _resolve_project(av: [str], start: int) -> str {
     if len(flag) > 0 {
         return _at_prefix(flag)
     }
-    let git_top = exec("git rev-parse --show-toplevel 2>/dev/null").trim()
-    if len(git_top) > 0 {
-        return _at_prefix(_basename(git_top))
+    // worktree-safe canonical repo id (see _repo_root_basename) — the old
+    // `--show-toplevel` returned the WORKTREE dir, so sibling worktrees of one
+    // repo tagged pods under DIFFERENT project names and the down-guard then
+    // refused a legitimate same-repo teardown from another worktree.
+    let repo = _repo_root_basename()
+    if len(repo) > 0 {
+        return _at_prefix(repo)
     }
     let pwd = exec("pwd").trim()
     if len(pwd) > 0 {
@@ -513,9 +571,15 @@ fn _project_purpose_label(project: str, purpose: str) -> str {
 // here: the guard must compare the REAL cwd, not an asserted one (--force is
 // the only bypass).
 fn _cwd_project() -> str {
-    let git_top = exec("git rev-parse --show-toplevel 2>/dev/null").trim()
-    if len(git_top) > 0 {
-        return _basename(git_top)
+    // worktree-safe canonical repo id (see _repo_root_basename). The old
+    // `--show-toplevel` returned the WORKTREE dir, so sibling worktrees of ONE
+    // repo mis-matched here and the down-guard fired a FALSE cross-project
+    // refusal on a legitimate same-repo teardown. Bare basename kept (the guard
+    // `_at_prefix`-normalizes both sides), so the mirror decision logic in
+    // down_guard_project_test.hexa is unchanged.
+    let repo = _repo_root_basename()
+    if len(repo) > 0 {
+        return repo
     }
     return "unattributed"
 }
@@ -1173,6 +1237,106 @@ fn _has_flag(av: [str], start: int, flag: str) -> int {
     return 0
 }
 
+// _rent_flag_arity — classify a `rent` verb flag (ING #34-(A) silent-ignore
+// fix): 2 = KNOWN value-consuming (skip flag + its value), 1 = KNOWN boolean
+// (skip flag only), 0 = UNKNOWN. The set is the UNION of the vast + runpod rent
+// flags (a flag inert on one provider is still KNOWN, never rejected). This
+// lets the dispatch REFUSE an unrecognized flag on the ONE $-incurring verb,
+// instead of silently ignoring it — the exact trap where a typo'd `--dry-run`
+// was dropped and a real pod got rented.
+fn _rent_flag_arity(flag: str) -> int {
+    if flag == "--gpu" || flag == "--image" || flag == "--disk" || flag == "--owner"
+       || flag == "--project" || flag == "--desc" || flag == "--purpose" || flag == "--query"
+       || flag == "--offer" || flag == "--max-dph" || flag == "--max-wait-sec" || flag == "--ttl"
+       || flag == "--max-cost-usd" || flag == "--identity" || flag == "--vcpu" || flag == "--cpu-flavor"
+       || flag == "--volume-gb" || flag == "--cloud-type" || flag == "--tier" || flag == "--docker-args" {
+        return 2
+    }
+    if flag == "--secure" || flag == "--ephemeral" || flag == "--force-new"
+       || flag == "--include-unverified" || flag == "--no-register" || flag == "--selftest"
+       || flag == "--search-only" || flag == "--dry-run" || flag == "--help" {
+        return 1
+    }
+    return 0
+}
+
+// _rent_unknown_flag — scan av[start..] and return the FIRST `--`-leading token
+// that is not a known rent flag ("" = all recognized). A known value-flag's
+// value is skipped (arity 2) so a value that itself begins with `--` (e.g.
+// `--docker-args "--gpus all"`) is never mis-read as an unknown flag. Stops at a
+// bare `--` (rent takes no post-`--` argv). Drives the dispatch's refuse-loud.
+fn _rent_unknown_flag(av: [str], start: int) -> str {
+    let mut i = start
+    while i < len(av) {
+        let t = av[i]
+        if t == "--" {
+            return ""
+        }
+        if len(t) >= 2 && t.substring(0, 2) == "--" {
+            let ar = _rent_flag_arity(t)
+            if ar == 0 {
+                return t
+            }
+            if ar == 2 {
+                i = i + 2
+            } else {
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    return ""
+}
+
+// _tier_to_cloud_type — map the CANONICAL `--tier secure|community|on-demand|
+// interruptible` value (provider-agnostic words the operator thinks in) to a
+// runpod cloud-type token (SECURE | COMMUNITY | ALL). This is the canonical
+// surface that REPLACES reaching for the raw `runpodctl ... --secureCloud`
+// flag (canonical-cli governance): secure/on-demand = a tier the provider does
+// NOT reclaim mid-run (build completes), community/interruptible = the cheap
+// pre-emptible pool. "" / unknown → "" (no tier asked — caller keeps its
+// default). Pure; equality-only to match this file's style.
+fn _tier_to_cloud_type(tier: str) -> str {
+    let t = tier.trim().to_lower()
+    if len(t) == 0 {
+        return ""
+    }
+    if t == "secure" || t == "on-demand" || t == "ondemand" {
+        return "SECURE"
+    }
+    if t == "community" || t == "interruptible" || t == "spot" {
+        return "COMMUNITY"
+    }
+    if t == "all" || t == "any" {
+        return "ALL"
+    }
+    return ""
+}
+
+// _resolve_tier — read the canonical tier surface from av[start..] and return
+// the runpod cloud-type token it implies, or "" when the operator asked for no
+// tier. Surface (opt-in, default-OFF → behavior UNCHANGED when absent):
+//   --tier <secure|community|all>   canonical, provider-agnostic
+//   --secure                        convenience alias for `--tier secure`
+// An explicit low-level `--cloud-type` (runpod) still wins at the call site;
+// this only synthesizes a cloud-type from the higher-level tier word. A typo
+// in `--tier` returns "" with a warn — never a hard fail (availability first).
+fn _resolve_tier(av: [str], start: int) -> str {
+    if _has_flag(av, start, "--secure") == 1 {
+        return "SECURE"
+    }
+    let raw = _flag_val(av, start, "--tier", "")
+    if len(raw) == 0 {
+        return ""
+    }
+    let ct = _tier_to_cloud_type(raw)
+    if len(ct) == 0 {
+        println("[cloud] rent: ⚠ --tier '" + raw + "' not recognized (expected secure|community|all, or on-demand|interruptible) — ignoring (tier unset)")
+    }
+    return ct
+}
+
 // _copy_from_run — pick the download path: rsync resume (R3) when
 // `--resume` was given, else the plain scp+verify path. Branching here
 // (not at the call site) keeps a single network op — resume never first
@@ -1327,6 +1491,96 @@ fn _cloud_rent_selftest() -> int {
     return 1
 }
 
+// _cpu_ram_mb_suspect — 1 iff `query` constrains `cpu_ram` with a value that
+// looks like MEGABYTES mistakenly passed where vast's query DSL expects
+// GIGABYTES (ING #71). vast `cpu_ram` is GB (2TB box = `cpu_ram>=2000`), but
+// the `cloud api /bundles` JSON reports cpu_ram in MB (2052096) — so a user
+// who copies the MB number into `--query 'cpu_ram>=2000000'` asks for ~2M GB
+// (impossible) and gets a SILENT 0-match. Heuristic: a cpu_ram value ≥ 100000
+// (= 100 TB as GB) is almost certainly an MB value. Scans the first digit run
+// after the `cpu_ram` token's operator.
+fn _cpu_ram_mb_suspect(query: str) -> int {
+    let at = query.index_of("cpu_ram")
+    if at < 0 { return 0 }
+    // Skip the field name + operator/space chars to the first digit.
+    let mut i = at + 7
+    let mut digits = ""
+    let mut in_num = 0
+    while i < len(query) {
+        let c = query.substring(i, i + 1)
+        if c >= "0" && c <= "9" {
+            digits = digits + c
+            in_num = 1
+        } else if in_num == 1 {
+            // first non-digit after the number ends the scan
+            i = len(query)
+        } else if c == "=" || c == ">" || c == "<" || c == " " {
+            // still skipping the operator gap before the number
+        } else {
+            // a non-operator before any digit → not a numeric cpu_ram constraint
+            return 0
+        }
+        i = i + 1
+    }
+    if len(digits) == 0 { return 0 }
+    if _cli_atoi(digits) >= 100000 { return 1 }
+    return 0
+}
+
+// _push_args_cli — collect every `--push <local:remote>` pair (repeatable),
+// stopping at `--`. The bootstrap one-shot (ING #78) sequences these uploads.
+fn _push_args_cli(av: [str], start: int) -> [str] {
+    let mut out = []
+    let mut i = start
+    while i < len(av) {
+        let t = av[i]
+        if t == "--" { return out }
+        else if t == "--push" {
+            out.push(_need_val(av, i, "--push"))
+            i = i + 2
+        } else {
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// _split_first_colon — split "local:remote" on the FIRST ':' into [local, remote].
+// Local filesystem paths rarely contain ':'; a remote path never starts with one.
+// Returns [whole, ""] when there is no ':'.
+fn _split_first_colon(s: str) -> [str] {
+    let mut i = 0
+    while i < len(s) {
+        if s.substring(i, i + 1) == ":" {
+            return [s.substring(0, i), s.substring(i + 1, len(s))]
+        }
+        i = i + 1
+    }
+    return [s, ""]
+}
+
+// _remote_dirname — the parent directory of a remote path, i.e. everything
+// before the last "/". "/root/anima/state/x.bin" → "/root/anima/state";
+// "bins" (no slash) → "" (cwd-relative, no parent to create). Trailing slashes
+// are trimmed first so ".../state/" → ".../state"'s parent ".../" collapses
+// sanely. Used by copy-to to `mkdir -p` the destination parent (ING #75).
+fn _remote_dirname(path: str) -> str {
+    let mut p = path
+    // trim trailing slashes (but keep a lone "/")
+    while len(p) > 1 && p.substring(len(p) - 1, len(p)) == "/" {
+        p = p.substring(0, len(p) - 1)
+    }
+    let mut last = -1
+    let mut i = 0
+    while i < len(p) {
+        if p.substring(i, i + 1) == "/" { last = i }
+        i = i + 1
+    }
+    if last < 0 { return "" }
+    if last == 0 { return "/" }
+    return p.substring(0, last)
+}
+
 // _cloud_rent_vast — vast.ai provision path: search-offers → create → wait
 // ssh-ready → register. Prints host:port + instance id. Returns the exit
 // code (0 ok, 1 failure). The created instance is registered with the
@@ -1336,6 +1590,15 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     let image = _flag_val(av, start, "--image", "ubuntu:22.04")
     let disk = _cli_atoi(_flag_val(av, start, "--disk", "30"))
     let owner = _flag_val(av, start, "--owner", "(hexa-cloud rent)")
+    // SEARCH-ONLY / DRY-RUN (ING #34-(A) cost-trap fix) — list the matching
+    // offers WITHOUT provisioning a billable instance. Before this, there was
+    // no way to answer "do offers exist?" without a real rental (a silently-
+    // ignored `--dry-run` picked an offer and CREATED an instance). Both
+    // spellings accepted (`--search-only` canonical · `--dry-run` reference-
+    // match with terraform/`--dry-run` convention). Handled below, AFTER the
+    // full query is assembled, so the listed offers are exactly the ones a real
+    // rent would consider (same --gpu / --max-dph / --include-unverified query).
+    let search_only = _has_flag(av, start, "--search-only") == 1 || _has_flag(av, start, "--dry-run") == 1
     // Project attribution (down-guard source) — explicit --project, else cwd
     // git-repo basename, else cwd folder basename; @-prefixed (e.g. @demiurge).
     let project = _resolve_project(av, start)
@@ -1361,10 +1624,36 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
             query = gpu_pred
         }
     }
+    // CPU-pod note (ING #30-vast): vast's `search offers` returns GPU boxes by
+    // default even with no num_gpus constraint — the CPU pool surfaces ONLY
+    // with `num_gpus=0` (which vast_gpu_predicate now emits for `--gpu cpu`).
+    // Before this, `--gpu cpu` searched `gpu_name=cpu` → 0 offers.
+    let mut image_eff = image
+    if gpu_pred == "num_gpus=0" {
+        println("[cloud] rent vast: CPU-only pod (num_gpus=0; vast CPU pool, ~\$0.01/hr cores)")
+        // (ING #34-(5)) sshd-bearing default image for the CPU pool: the vast
+        // `--image` default is `ubuntu:22.04`, which has NO sshd → ssh-ready
+        // loops until the bounded gate destroys the (healthy) pod. With no
+        // explicit --image, swap a known sshd-less default to the official
+        // sshd image; an explicit user image is honored (warn only).
+        let v_image_set = _has_flag(av, start, "--image")
+        image_eff = cloud_resolve_cpu_image(image, v_image_set, cloud_cpu_sshd_image())
+        if v_image_set == 1 && _cloud_image_lacks_sshd(image) == 1 {
+            println("[cloud] rent vast: ⚠ --image " + image + " has no sshd — ssh-ready will likely fail until the bounded gate destroys the pod. Pick a sshd-bearing image (e.g. " + cloud_cpu_sshd_image() + ") or set HEXA_CLOUD_CPU_IMAGE.")
+        } else if image_eff != image {
+            println("[cloud] rent vast: CPU default image → " + image_eff + " (sshd-bearing; bare " + image + " has no sshd → ssh-ready would never succeed). Override with --image or HEXA_CLOUD_CPU_IMAGE.")
+        }
+        // (ING #34-(4)) --docker-args is a runpod-only knob; vast's create
+        // (`vastai create instance`) does not take it, so it is silently
+        // dropped. Warn rather than let the user assume it applied.
+        if _has_flag(av, start, "--docker-args") == 1 {
+            println("[cloud] rent vast: ⚠ --docker-args is IGNORED on vast (no equivalent create flag) — the value is dropped. Bake it into the image / use --env-file instead.")
+        }
+    }
     // M1 — bounded SSH-readiness gate. Default 180s; 0/negative = legacy
     // unbounded (opt-in). Caps the rent so a ghost-RUNNING pod whose ssh
     // transport never comes up (exit 255 forever) can't bleed billing.
-    let max_wait_sec = _cli_atoi(_flag_val(av, start, "--max-wait-sec", "180"))
+    let max_wait_sec = _cli_atoi(_flag_val(av, start, "--max-wait-sec", "300"))
     // M2/M3 — opt-in guard limits (stored in registry after READY).
     let ttl_sec = _ttl_to_sec(_flag_val(av, start, "--ttl", ""))
     let max_cost = _flag_val(av, start, "--max-cost-usd", "")
@@ -1383,7 +1672,7 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     // (the 2026-06-02 fire2→fire5 leak: a driver re-renting a fresh pod on every
     // pod-death) has been DEPRECATED — a fire that loses its pod NO LONGER
     // auto-rents; pod-loss FAILS LOUD and the user must `cloud rent` again.
-    if _has_flag(av, start, "--force-new") == 0 {
+    if !search_only && _has_flag(av, start, "--force-new") == 0 {
         let existing = pod_registry_find_by_purpose(project, purpose)
         if len(existing) > 0 {
             println("[cloud] rent vast: reusing existing pod " + existing + " for " + project + "/" + purpose + " (M5 registry; pass --force-new to override)")
@@ -1392,16 +1681,86 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
             return 0
         }
     }
+    // --offer <id> — PIN a specific box (box-specific rent). vast offers
+    // rotate every few minutes, so a `--query` that looked like the cheap
+    // 1.5TB box can silently bind a $30/h box on the next call (2026-06-21
+    // anima incident). Pinning the exact id confirms it is still listed +
+    // captures its live dph BEFORE create, so the human commits to a known
+    // box at a known rate. Empty → legacy query-search path (unchanged).
+    let pin_offer = _flag_val(av, start, "--offer", "")
+    // --max-dph <usd> — pre-rent rate ceiling (opt-in). REFUSES the rent if
+    // the chosen offer's dollars-per-hour exceeds <usd>, on BOTH the pinned
+    // and the query-search path — the direct guard against the rate surprise.
+    let max_dph = _flag_val(av, start, "--max-dph", "")
+    // CANONICAL TIER (ING #34) on vast: `vastai create instance` with NO `--bid`
+    // is ALREADY an ON-DEMAND, NON-INTERRUPTIBLE rent — the host does not reclaim
+    // it mid-run (the reclaim-loss the optA byte-eq run hit was a vast COMMUNITY/
+    // interruptible pod). So `--tier secure` (alias `--secure`) is the DEFAULT
+    // path here — we confirm it loudly so the operator never has to reach for a
+    // raw provider flag. `--tier community`/`interruptible` (a cheap pre-emptible
+    // bid via `vastai --bid`) is NOT wired through the canonical surface yet;
+    // fail loud rather than silently renting a reclaimable pod. Default (no tier
+    // flag) is UNCHANGED (on-demand, no bid).
+    let v_tier_ct = _resolve_tier(av, start)
+    if v_tier_ct == "SECURE" {
+        println("[cloud] rent vast: tier=secure (on-demand, non-interruptible — vast create has no `--bid`, so the host does NOT reclaim it mid-run; this is the default vast path).")
+    } else if v_tier_ct == "COMMUNITY" {
+        println("[cloud] rent vast: ✗ --tier community/interruptible is NOT supported on vast via the canonical surface (interruptible-bid `vastai --bid` is unwired). vast's on-demand default (no flag, or `--tier secure`) is already non-reclaimable — re-run without the tier flag, or use runpod `--tier community`.")
+        return 2
+    }
+    // --include-unverified — reach the cheap large-RAM / CPU-only boxes that the
+    // default `verified=true` filter hides (ING #73). Appends `verified=false`,
+    // which _vast_build_query now treats as a caller override (drops the default
+    // verified=true). No-op on the --offer pin path (it searches the general
+    // pool already). Skip if the caller already set verified in --query.
+    if _has_flag(av, start, "--include-unverified") == 1 && query.index_of("verified") < 0 {
+        if len(query) > 0 { query = query + " verified=false" }
+        else { query = "verified=false" }
+    }
+    // --max-dph search injection (ING #72): push the ceiling into the SEARCH
+    // predicate (`dph_total<=N`) so an over-budget box is never even picked —
+    // not only refused post-pick. The post-pick vast_dph_exceeds guard below
+    // stays as the authoritative belt-and-suspenders (catches a rotated rate).
+    // Only inject on the query-search path (pin path is a single named box) and
+    // only when the caller didn't already constrain dph_total.
+    if len(max_dph) > 0 && len(pin_offer) == 0 && query.index_of("dph_total") < 0 {
+        if len(query) > 0 { query = query + " dph_total<=" + max_dph }
+        else { query = "dph_total<=" + max_dph }
+    }
+    // cpu_ram unit guard (ING #71): vast's query DSL `cpu_ram` is in GB
+    // (2TB = cpu_ram>=2000); a value ≥100000 is almost certainly an MB number
+    // copied from `cloud api /bundles` → an impossible filter → silent 0-match.
+    if _cpu_ram_mb_suspect(query) == 1 {
+        println("[cloud] rent vast: ⚠ --query cpu_ram looks like MEGABYTES — vast cpu_ram is in GB")
+        println("                   (2TB RAM = `cpu_ram>=2000`, NOT 2000000). An MB value matches 0 offers.")
+    }
+    // SEARCH-ONLY / DRY-RUN terminal (ING #34-(A)): the query is now fully
+    // assembled — list the matching offers and STOP. No claim-lock, no create,
+    // no billing. This is the last point before any $-incurring step, so a
+    // `--search-only` / `--dry-run` is a guaranteed cost-free "what would I
+    // rent?" surface (the exact gap that made verifying offers cost a rental).
+    if search_only {
+        let _n = vast_list_offers(query, 1)
+        return 0
+    }
     // verified_only=1 → vast.hexa applies the campaign-proven default
     // filters (reliability>=0.95 + verified + rentable). An explicit
-    // --query opts into the caller's raw predicate string instead.
-    let offer = vast_search_offers(query, 1)
+    // --query opts into the caller's raw predicate string instead. A
+    // non-empty --offer takes the box-specific pin path (vast_pick_offer).
+    let offer = vast_pick_offer(pin_offer, query, 1)
     if offer.ok == 0 {
         println("[cloud] rent vast: " + offer.message)
         return 1
     }
-    println("[cloud] rent vast: picked offer " + offer.offer_id)
-    let inst = vast_create_labeled(offer.offer_id, image, disk_gb, prov_label)
+    // Rate ceiling — refuse a box over --max-dph BEFORE the billing create.
+    if vast_dph_exceeds(offer.dph, max_dph) == 1 {
+        // Release the claim lock so a sibling rent can reuse the offer.
+        vast_offer_release(offer.offer_id)
+        println("[cloud] rent vast: REFUSED — offer " + offer.offer_id + " is $" + offer.dph + "/hr > --max-dph $" + max_dph + "/hr (no pod created)")
+        return 1
+    }
+    println("[cloud] rent vast: picked offer " + offer.offer_id + " ($" + offer.dph + "/hr)")
+    let inst = vast_create_labeled(offer.offer_id, image_eff, disk_gb, prov_label)
     if inst.ok == 0 {
         // create failed → return the offer claim so a sibling can reuse it.
         vast_offer_release(offer.offer_id)
@@ -1442,8 +1801,25 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     // non-default key is never presented → `Permission denied (publickey)`
     // → the bounded gate declares a good pod "never ready" and DESTROYS it.
     let rent_identity = _flag_val(av, start, "--identity", _vast_default_identity())
-    let ssh = vast_wait_ssh_id(inst.instance_id, tries, wait_cadence, rent_identity)
-    if ssh.ok == 0 {
+    // GONE-aware readiness gate (Bug 1: created ≠ live). Cross-verifies the
+    // instance's actual_status every tick so a host that never brought the
+    // contract up (→ vast auto-removed it) is detected IMMEDIATELY and FAILS
+    // LOUD + rolls back, instead of silently registering a GHOST and burning
+    // the whole --max-wait-sec budget on an ssh endpoint that can't appear.
+    let ready = vast_wait_ssh_status(inst.instance_id, tries, wait_cadence, rent_identity)
+    if ready.gone == 1 {
+        // LOUD FAIL — the host never brought the pod up. Roll the rent back:
+        // best-effort destroy (idempotent — it may already be removed) + drop
+        // the GHOST registry row so `cloud alive`/`pods` never reports a pod
+        // that does not exist. No host:port is printed (there is none).
+        let v = vast_destroy(inst.instance_id)
+        let _ = pod_registry_forget(inst.instance_id)
+        println("[cloud] rent vast: ✗ FAILED — instance " + inst.instance_id + " is GONE (" + ready.status + "): " + ready.message)
+        println("[cloud] rent vast: the host failed to provision it (created ≠ live). Rolled back: registry row dropped" + _vast_rollback_destroy_note(v.ok, v.message))
+        println("[cloud] rent vast: no charge should accrue for an instance that never ran; verify with `cloud api vast GET instances`. Re-run `cloud rent` (a different offer often provisions).")
+        return 2
+    }
+    if ready.ok == 0 {
         if bounded {
             // Auto-teardown — the M1 contract. A billing pod whose ssh
             // never came up is a 100% loss; destroy it rather than leak.
@@ -1451,17 +1827,32 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
             if v.ok == 1 {
                 let _ = pod_registry_forget(inst.instance_id)
                 println("[cloud] rent: SSH never ready within " + str(max_wait_sec) + "s, pod " + inst.instance_id + " destroyed")
+                println("[cloud] rent: large-RAM (2TB) pods can take 5min+ to boot — retry with `--max-wait-sec 600` (ING #77)")
             } else {
                 println("[cloud] rent: SSH never ready within " + str(max_wait_sec) + "s, pod " + inst.instance_id + " ALIVE — manual destroy required (vast_destroy: " + v.message + ")")
             }
             return 2
         }
-        println("[cloud] rent vast: " + ssh.message)
-        println("[cloud] instance " + inst.instance_id + " is created + tracked; ssh not yet ready — re-check with: cloud list / vastai show instance " + inst.instance_id)
+        println("[cloud] rent vast: " + ready.message)
+        println("[cloud] instance " + inst.instance_id + " is created + tracked; ssh not yet ready — re-check with: cloud list / cloud ssh-port " + inst.instance_id)
         return 1
     }
-    println("[cloud] rent vast: READY " + ssh.host + ":" + ssh.port + " (root@" + ssh.host + " -p " + ssh.port + ")")
-    let _ = pod_registry_add(inst.instance_id, "vast", project, purpose, ssh.host, ssh.port, "READY")
+    let ssh_host = ready.host
+    let ssh_port = ready.port
+    println("[cloud] rent vast: READY " + ssh_host + ":" + ssh_port + " (root@" + ssh_host + " -p " + ssh_port + ")")
+    let _ = pod_registry_add(inst.instance_id, "vast", project, purpose, ssh_host, ssh_port, "READY")
+    // (ING #34-(1)) /workspace mount df-check: some images/regions bring
+    // /workspace up on the container overlay instead of the requested disk,
+    // so the capacity isn't there and writes silently land on ephemeral disk.
+    // Overlay is the authoritative signal; the size floor uses --disk (the
+    // vast instance-disk request). Only when --disk was sized (disk_gb > 0).
+    if disk_gb > 0 {
+        let v_ws = cloud_check_workspace_mount("root@" + ssh_host, vast_ssh_opts_id(ssh_port, rent_identity), disk_gb)
+        if v_ws.exit_code == 1 || v_ws.exit_code == 2 {
+            println("[cloud] rent vast: ⚠ /workspace MOUNT SUSPECT — " + v_ws.message)
+            println("                   work under /workspace may be on EPHEMERAL overlay (not the " + str(disk_gb) + " GiB disk). Verify: cloud run root@" + ssh_host + " -p " + ssh_port + " -- df -h /workspace")
+        }
+    }
     // Always capture the vast offer's hourly rate (dph_total) into the registry
     // so `cloud list` can render the dph column even without a cost-cap flag.
     // "" when the offer JSON didn't carry dph (column shows "-").
@@ -1489,13 +1880,24 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     // kind} attribution write (no-omission + fallback). `--no-register` is kept
     // as a contract-stable no-op so existing callers / hooks never break.
     if _has_flag(av, start, "--no-register") == 0 {
-        _emit_rent_result(inst.instance_id, ssh.host, "vast", "READY", project, "")
+        _emit_rent_result(inst.instance_id, ssh_host, "vast", "READY", project, "")
     }
     println("instance_id=" + inst.instance_id)
-    println("host=" + ssh.host)
-    println("port=" + ssh.port)
+    println("host=" + ssh_host)
+    println("port=" + ssh_port)
     println("owner=" + owner)
     return 0
+}
+
+// _vast_rollback_destroy_note — diag tail for the GONE LOUD-FAIL message:
+// names whether the rollback destroy confirmed (idempotent — the contract may
+// already be gone) or needs a manual check. Pure formatting helper; takes the
+// primitives (not the VastInstance struct) so it stays module-local.
+fn _vast_rollback_destroy_note(destroy_ok: int, destroy_msg: str) -> str {
+    if destroy_ok == 1 {
+        return " + destroy confirmed."
+    }
+    return " (destroy: " + destroy_msg + " — likely already removed; confirm with `cloud api vast GET instances`)."
 }
 
 // _cloud_rent_runpod — runpod provision path: create (single GPU type) →
@@ -1505,6 +1907,19 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
 // GPU type (RunPod has no offer-search; the type IS the selector).
 // Returns 0 ok / 1 failure.
 fn _cloud_rent_runpod(av: [str], start: int) -> int {
+    // SEARCH-ONLY / DRY-RUN (ING #34-(A)) — RunPod has NO offer marketplace to
+    // list (unlike vast): the GPU TYPE is the selector, chosen directly with
+    // `--gpu`. So a dry-run has nothing to search; report that + the current
+    // --gpu selection and STOP — creating NOTHING, billing NOTHING. Handled
+    // FIRST (before the api-key / pubkey preflight) so `--dry-run` never even
+    // needs credentials, and a mis-typed `--dry-run` can never fall through to
+    // a real create. Exit 0 (informational).
+    if _has_flag(av, start, "--search-only") == 1 || _has_flag(av, start, "--dry-run") == 1 {
+        let sel_gpu = _flag_val(av, start, "--gpu", "NVIDIA A100 80GB PCIe")
+        println("[cloud] search runpod (dry-run · NO rent · NO billing): RunPod has no offer marketplace to list — the GPU TYPE is the selector (`--gpu`).")
+        println("[cloud]   current selection: --gpu \"" + sel_gpu + "\" (cpu-pod when --gpu cpu). To rent: drop --dry-run/--search-only.")
+        return 0
+    }
     let api_key = cloud_runpod_must_have_api_key("rent")
     let pubkey = read_file(env_var("HOME") + "/.ssh/id_ed25519.pub").trim()
     if len(pubkey) == 0 {
@@ -1525,7 +1940,7 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     // M1 — bounded SSH-readiness gate (default 180s). The 2026-05-28
     // RunPod H100 SXM dump (pod RUNNING + ssh exit 255 forever) is the
     // motivating incident; without a cap a dead-ssh pod bleeds billing.
-    let max_wait_sec = _cli_atoi(_flag_val(av, start, "--max-wait-sec", "180"))
+    let max_wait_sec = _cli_atoi(_flag_val(av, start, "--max-wait-sec", "300"))
     // M2/M3 — opt-in guard limits stored in the M5 registry after READY.
     // ttl: --ttl 30m/90s/3600 → deadman teardown. cost: --max-cost-usd 5.
     let ttl_sec = _ttl_to_sec(_flag_val(av, start, "--ttl", ""))
@@ -1566,7 +1981,84 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     } else {
         println("[cloud] rent runpod: persistent /workspace volume " + str(volume_gb) + " GiB (pod-kill-survivable; --ephemeral to opt out)")
     }
-    let pod = runpod_create_vol(api_key, gpu, image, pubkey, prov_label, volume_gb)
+    // CONTAINER-DISK (`--disk GiB`, ING #30): runpod previously ignored --disk
+    // and hardcoded an 80 GiB container disk. Thread it through; <= 0 keeps the
+    // 80 GiB default inside runpod_create_vol. (vast already wires --disk.)
+    let mut disk_gb = 0
+    let dv = _flag_val(av, start, "--disk", "")
+    if len(dv) > 0 {
+        let d = _cli_atoi(dv)
+        if d > 0 { disk_gb = d }
+    }
+    if disk_gb > 0 {
+        println("[cloud] rent runpod: container disk " + str(disk_gb) + " GiB (--disk)")
+    }
+    // CPU-POD path (ING #30): `--gpu cpu` (or none/empty) launches a CPU-only
+    // pod via the REST v1 API (computeType:CPU) — runpodctl `pod create`
+    // requires a GPU. `--vcpu N` sizes the vCPU count (default 4); `--cpu-flavor
+    // cpu5c,cpu5g` overrides the flavor preference list. These flags are inert
+    // on the GPU path.
+    let mut pod = RunPodPod { ok: 0, pod_id: "", cost_per_hr: "", message: "" }
+    if runpod_is_cpu_selector(gpu) == 1 {
+        let vcpu = _cli_atoi(_flag_val(av, start, "--vcpu", "4"))
+        let flavors = _flag_val(av, start, "--cpu-flavor", "")
+        // (ING #34-(4)) --docker-args is INERT on the CPU path: the REST v1
+        // CPU deploy body has no dockerArgs field (only the retired GPU
+        // GraphQL mutation carried it), so a `--docker-args …` here is
+        // SILENTLY dropped by the provider. Warn loudly rather than let the
+        // user believe their container args took effect.
+        if _has_flag(av, start, "--docker-args") == 1 {
+            println("[cloud] rent runpod: ⚠ --docker-args is IGNORED on a CPU pod (REST v1 computeType=CPU has no dockerArgs field) — the value is dropped. Use the image's onstart / an env var (--env-file) instead.")
+        }
+        // (ING #34-(5)) sshd-bearing default image: a bare base (ubuntu:22.04
+        // etc.) has no sshd, so ssh-ready loops until the bounded gate
+        // DESTROYS the healthy-but-unreachable pod. With no explicit --image,
+        // swap a known sshd-less default to the official sshd image; an
+        // explicit user image is honored (warn only).
+        let image_set = _has_flag(av, start, "--image")
+        let cpu_image = cloud_resolve_cpu_image(image, image_set, cloud_cpu_sshd_image())
+        if image_set == 1 && _cloud_image_lacks_sshd(image) == 1 {
+            println("[cloud] rent runpod: ⚠ --image " + image + " has no sshd — ssh-ready will likely fail until the bounded gate destroys the pod. Pick a sshd-bearing image (e.g. " + cloud_cpu_sshd_image() + ") or set HEXA_CLOUD_CPU_IMAGE.")
+        } else if cpu_image != image {
+            println("[cloud] rent runpod: CPU default image → " + cpu_image + " (sshd-bearing; bare " + image + " has no sshd → ssh-ready would never succeed). Override with --image or HEXA_CLOUD_CPU_IMAGE.")
+        }
+        // CPU disk routing (ING #31, edge-proven): RunPod caps a CPU pod's
+        // containerDiskInGb at 20, so a large `--disk` must size the PERSISTENT
+        // volume, not the container disk. `--disk N` (explicit) is the disk the
+        // user wants → it drives volumeInGb and takes precedence over the
+        // default volume; without --disk, the default /workspace volume stands.
+        // `_runpod_create_cpu_rest` caps containerDiskInGb ≤20 regardless.
+        let mut cpu_vol = volume_gb
+        if disk_gb > 0 { cpu_vol = disk_gb }
+        println("[cloud] rent runpod: CPU pod (computeType=CPU, " + str(vcpu) + " vCPU, /workspace volume " + str(cpu_vol) + " GiB, container disk ≤20, cloudType=COMMUNITY) via REST v1 API")
+        pod = runpod_create_cpu(api_key, cpu_image, pubkey, prov_label, cpu_vol, disk_gb, vcpu, flavors)
+    } else {
+        // --cloud-type SECURE|COMMUNITY|ALL — defaults to ALL (was an implicit
+        // hardcoded SECURE that silently excluded the COMMUNITY datacenters
+        // holding most RTX4090/A40 stock → "no longer any instances available"
+        // even at high capacity). A typo warns and falls back to ALL.
+        //
+        // CANONICAL TIER (ING #34): `--tier secure|community` (alias `--secure`)
+        // is the provider-agnostic surface — it REPLACES reaching for the raw
+        // `runpodctl ... --secureCloud` flag (canonical-cli governance).
+        // `--tier secure` rents the on-demand SECURE tier (no mid-run reclaim →
+        // a build completes), which is exactly the reclaim-loss fix the optA
+        // cuda byte-eq run needs. The low-level `--cloud-type` still WINS when
+        // explicitly given (it is the fine-grained pin); `--tier` only supplies
+        // the cloud-type when `--cloud-type` is absent. Default (neither flag) is
+        // UNCHANGED — ALL.
+        let tier_ct = _resolve_tier(av, start)
+        let mut ct_raw = _flag_val(av, start, "--cloud-type", "ALL")
+        if _has_flag(av, start, "--cloud-type") == 0 && len(tier_ct) > 0 {
+            ct_raw = tier_ct
+        }
+        if runpod_cloud_type_valid(ct_raw) == 0 {
+            println("[cloud] rent runpod: ⚠ --cloud-type '" + ct_raw + "' not recognized (expected SECURE|COMMUNITY|ALL) — defaulting to ALL")
+        }
+        let cloud_type = runpod_norm_cloud_type(ct_raw)
+        println("[cloud] rent runpod: cloud-type " + cloud_type + " (SECURE+COMMUNITY search when ALL; --cloud-type / --tier to pin)")
+        pod = runpod_create_vol_ct(api_key, gpu, image, pubkey, prov_label, volume_gb, disk_gb, cloud_type)
+    }
     if pod.ok == 0 {
         println("[cloud] rent runpod: " + pod.message)
         return 1
@@ -1610,6 +2102,18 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     }
     println("[cloud] rent runpod: READY " + port.ip + ":" + port.port + " (root@" + port.ip + " -p " + port.port + ")")
     let _ = pod_registry_add(pod.pod_id, "runpod", project, purpose, port.ip, port.port, "READY")
+    // (ING #34-(1)) volume mount df-check: a requested /workspace volume can
+    // SILENTLY land on the container overlay (community CPU + some regions),
+    // so the requested capacity isn't there and a pod kill wipes the data.
+    // Re-read `df /workspace` and LOUD-warn on overlay/undersize. Only when a
+    // persistent volume was actually requested (volume_gb > 0).
+    if volume_gb > 0 {
+        let wsv = cloud_check_workspace_mount("root@" + port.ip, runpod_pod_opts(port.port), volume_gb)
+        if wsv.exit_code == 1 || wsv.exit_code == 2 {
+            println("[cloud] rent runpod: ⚠ /workspace VOLUME MOUNT SUSPECT — " + wsv.message)
+            println("                     work written under /workspace may be on EPHEMERAL disk (pod kill wipes it) and the requested " + str(volume_gb) + " GiB may not be present. Verify: cloud run root@" + port.ip + " -p " + port.port + " -- df -h /workspace")
+        }
+    }
     // Always capture the RunPod hourly rate into the registry so `cloud list`
     // renders the dph column even without a cost-cap flag ("" → column "-").
     let mut dph_now = pod.cost_per_hr
@@ -1693,29 +2197,55 @@ fn _provider_for_id(id: str) -> str {
 // RTSC pods were almost destroyed from another project's session). Look up the
 // target pod's stored `project`, derive the cwd project, and REFUSE the
 // teardown when they MISMATCH and the pod is attributed to a REAL project
-// (not ""/"unattributed"). `--force` bypasses; same-project or unattributed
-// pods behave as before. NO env-var opt-out (sidecar s11). Returns 1 = refuse
-// (caller exits non-zero), 0 = allow.
-fn _down_guard_refuses(id: str, force: int) -> int {
-    if force == 1 {
-        return 0
-    }
+// (not ""/"unattributed"). `--force` does NOT bypass; same-project or
+// unattributed pods behave as before. NO env-var opt-out (sidecar s11).
+// Returns 1 = refuse (caller exits non-zero), 0 = allow.
+//
+// ESCAPE (ING #34-(C) teardown-strand fix): a cost-LEAKING pod must never be
+// un-killable. When the operator KNOWS the pod is billing and cannot reach it
+// from its owner repo, the EXPLICIT `--yes-cross-project` flag (override_xproj)
+// overrides — a deliberate, hard-to-mis-parse escape that is NEVER auto-passed.
+// `--force` ALONE still refuses (convergence CLOUD-CROSSPROJECT-FORCE: a rent-
+// session trap auto-passing --force with a mis-parsed id must not cross
+// projects), so the escape is a SEPARATE flag, not `--force`.
+fn _down_guard_refuses(id: str, force: int, override_xproj: int) -> int {
+    // --force does NOT bypass the cross-project guard. It skips the [y/N]
+    // confirm, but a REAL cross-project mismatch is refused REGARDLESS, so an
+    // automated `--force` teardown (e.g. a rent-session trap that mis-parsed
+    // the pod id) can never reach another project's pods. Same-project, orphan,
+    // and unattributed pods are unaffected (fall through to return 0).
+    let _ = force
     let records = pod_registry_load()
     let idx = _m5_find(records, id)
     if idx < 0 {
         // Untracked pod (orphan / never-registered) — no attribution to guard.
         return 0
     }
-    let owner = records[idx].project
-    if len(owner) == 0 || owner == "unattributed" {
+    // Normalize BOTH sides to the canonical `@`-prefixed tag before comparing.
+    // Pods are STAMPED via _resolve_project (always `@`-prefixed, e.g. `@rtsc`),
+    // but _cwd_project derives the BARE git basename (e.g. `rtsc`). Without this
+    // normalization a same-project teardown string-compares `@rtsc` != `rtsc`
+    // and the guard fires a FALSE cross-project refusal. _at_prefix is
+    // idempotent, so a legacy bare-stored tag normalizes the same way.
+    let owner = _at_prefix(records[idx].project)
+    if len(owner) == 0 || owner == "@unattributed" {
         return 0
     }
-    let cur = _cwd_project()
+    let cur = _at_prefix(_cwd_project())
     if owner == cur {
         return 0
     }
+    // Cross-project mismatch. The EXPLICIT `--yes-cross-project` escape (never
+    // `--force` alone) allows it — the deliberate path for a cost-leaking pod
+    // that cannot be reached from its owner repo (ING #34-(C)). Loud so an
+    // audit trail records the deliberate cross-project kill.
+    if override_xproj == 1 {
+        println("[cloud] ⚠ CROSS-PROJECT OVERRIDE: destroying pod " + id + " owned by '" + owner
+            + "' from cwd '" + cur + "' (--yes-cross-project) — the deliberate escape for a billing pod unreachable from its owner repo.")
+        return 0
+    }
     println("[cloud] REFUSE: pod " + id + " belongs to project '" + owner
-        + "' (cwd='" + cur + "'). Re-run from that repo or pass --force.")
+        + "' (cwd='" + cur + "'). --force does NOT override a cross-project teardown. Escapes: (a) re-run from that repo; (b) `--yes-cross-project` to force the kill here (a billing pod you cannot reach); (c) if the pod is ALREADY GONE at the provider, `cloud forget " + id + "` does registry-only cleanup (no guard).")
     return 1
 }
 
@@ -1907,7 +2437,10 @@ fn _rm_confirm_yes(ans: str) -> int {
 //      then pod_registry_remove + pod_registry_forget — registry cleanup
 //      runs even on provider failure so a confirmed-gone pod never lingers
 //   5. exit 0 on destroyed, 1 on provider-rejected, 2 on cancel
-fn _cloud_rm(id: str, provider_in: str, force: int) -> int {
+// `override_xproj` (--yes-cross-project) is the ING #34-(C) escape for a
+// cost-leaking pod owned by another project — threaded into the guard, NEVER
+// implied by --force alone.
+fn _cloud_rm(id: str, provider_in: str, force: int, override_xproj: int) -> int {
     if len(id) == 0 {
         println("[cloud] rm: empty <id>")
         return 2
@@ -1928,6 +2461,16 @@ fn _cloud_rm(id: str, provider_in: str, force: int) -> int {
         println("[cloud] rm: " + id + " — provider unknown, pass --provider <vast|runpod>")
         return 2
     }
+    // (2.5) cross-project kill-guard + attribution surface — rm is the M4
+    // CANONICAL teardown ("unifies down/destroy/forget") yet historically
+    // skipped the _down_guard_refuses + _down_attribution_surface that `down`
+    // runs, leaving an UNGUARDED back-door: an auto-trap `rm --force` (with a
+    // mis-parsed id) destroyed another project's pod. Mirror down's pre-
+    // teardown safety here so rm is no longer the unguarded path.
+    if _down_guard_refuses(id, force, override_xproj) == 1 {
+        return 2
+    }
+    let _ = _down_attribution_surface(id)
     // (3) confirm gate (skipped on --force)
     if force == 0 {
         println("[cloud] rm " + id + " (provider=" + provider + "): destroy this pod? [y/N]")
@@ -1941,11 +2484,29 @@ fn _cloud_rm(id: str, provider_in: str, force: int) -> int {
     let _ = pod_registry_update_status(id, "STOPPING")
     let mut ok = 0
     let mut why = ""
+    // confirmed_alive — a DEFINITE "the provider still reports this pod live
+    // after the delete" signal (ING #34-(2)). When set we MUST NOT scrub the
+    // registry row: scrubbing would orphan a billing pod from tracking. An
+    // ambiguous/failed delete (ok==0 without this flag) still scrubs, matching
+    // the prior "confirmed-gone never lingers" semantics.
+    let mut confirmed_alive = 0
     if provider == "runpod" {
         let api_key = cloud_runpod_must_have_api_key("rm")
         ok = runpod_terminate(api_key, id)
         if ok == 1 {
-            why = "runpod terminated"
+            // (ING #34-(2)) "delete returned" ≠ "pod gone": a runpodctl
+            // `pod delete` can reply success/"not found" while the pod is
+            // STILL ALIVE and billing (stale cache, races a migration, a
+            // no-op podId). Cross-verify with a GraphQL pod-get: a live
+            // object means the delete did NOT take → DON'T claim success
+            // (and keep the registry row so the pod stays tracked).
+            if runpod_pod_exists(api_key, id) == 1 {
+                ok = 0
+                confirmed_alive = 1
+                why = "runpod terminate returned success but `pod get` STILL shows the pod LIVE — NOT deleted, BILLING CONTINUES. Retry `cloud rm " + id + "` or destroy via the RunPod console."
+            } else {
+                why = "runpod terminated (404-confirmed gone)"
+            }
         } else {
             why = "runpod terminate rejected"
         }
@@ -1953,9 +2514,23 @@ fn _cloud_rm(id: str, provider_in: str, force: int) -> int {
         let v = vast_destroy(id)
         ok = v.ok
         why = "vast: " + v.message
+        // vast_destroy already cross-verifies via `show instance` — a
+        // "LEAK SUSPECTED" verdict (ok==0 with a live status) is the same
+        // confirmed-alive case: keep the registry row.
+        if v.ok == 0 && v.message.index_of("LEAK SUSPECTED") >= 0 {
+            confirmed_alive = 1
+        }
     }
-    // Registry cleanup runs regardless of provider verdict — a confirmed-
-    // gone pod never lingers as a GHOST row. Mirrors _cloud_down semantics.
+    // Registry cleanup runs on a confirmed-gone OR an ambiguous teardown — a
+    // confirmed-gone pod never lingers as a GHOST row (mirrors _cloud_down).
+    // The ONE exception: a confirmed-STILL-ALIVE pod keeps its row so the
+    // billing pod stays tracked (ING #34-(2)), not orphaned out of the registry.
+    if confirmed_alive == 1 {
+        let _ = pod_registry_update_status(id, "RUNNING")
+        println("[cloud] rm: " + id + " — KEPT in registry (still live · billing); status reset to RUNNING")
+        println("[cloud] rm: " + id + " destroy FAILED — " + why)
+        return 1
+    }
     let _ = pod_registry_forget(id)
     let _ = pod_registry_remove(id)
     if ok == 1 {
@@ -2549,7 +3124,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "reboot" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "fire-shards" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "alive" || t == "probe" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "idle-reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "api" || t == "provider-cli" || t == "dft-run" || t == "dft-fanout" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "reboot" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "fire-shards" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "alive" || t == "probe" || t == "copy-to" || t == "copy-from" || t == "bootstrap" || t == "orphans" || t == "reconcile" || t == "reap" || t == "idle-reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "api" || t == "provider-cli" || t == "dft-run" || t == "dft-fanout" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "ls" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -2586,15 +3161,33 @@ fn main() {
         // RENTED a real pod because -h/--help was just an unparsed trailing
         // token. Print usage and exit 0 — creating NOTHING.
         if _has_flag(av, si + 1, "--help") == 1 || _has_flag(av, si + 1, "-h") == 1 {
-            println("usage: cloud rent <vast|runpod> [--gpu FAMILY|N] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N] [--no-register] [--force-new]")
+            println("usage: cloud rent <vast|runpod> [--search-only|--dry-run] [--gpu FAMILY|N|cpu] [--image IMG] [--disk GiB] [--vcpu N] [--cpu-flavor IDS] [--tier secure|community] [--secure] [--cloud-type SECURE|COMMUNITY|ALL] [--owner TAG] [--query Q] [--offer ID] [--max-dph USD] [--max-wait-sec N] [--no-register] [--force-new]")
+            println("  --search-only (alias --dry-run) — LIST matching offers and EXIT, renting NOTHING (no billing). The cost-safe way to answer 'do offers exist / at what $/hr?' — before this, verifying offers cost a real rental. vast: prints id·$/hr·gpu·specs (rent one with --offer <ID>). runpod: reports the --gpu selector (no marketplace to list). An UNKNOWN flag now FAILS LOUD (exit 2) instead of being silently ignored — a dropped --dry-run was the accidental-rent trap.")
+            println("  --tier secure|community (CANONICAL · alias --secure=`--tier secure`) — provider-agnostic tier select, the sanctioned surface that REPLACES raw `runpodctl --secureCloud`. secure = on-demand (host does NOT reclaim mid-run → a build completes; the reclaim-loss fix). runpod: maps to --cloud-type SECURE/COMMUNITY (explicit --cloud-type still wins). vast: secure = the on-demand default (no `--bid` → non-interruptible); community/interruptible is NOT wired (fails loud). Default (no tier flag) is UNCHANGED.")
+            println("  --cloud-type (runpod) SECURE|COMMUNITY|ALL — low-level pin; default ALL (searches BOTH clouds; was an implicit SECURE-only that excluded the COMMUNITY datacenters holding most RTX4090/A40 stock → 'no longer any instances available' even at high capacity). Pin SECURE/COMMUNITY only when required, or use the canonical --tier.")
+            println("  --gpu cpu    launch a CPU-only pod. runpod: REST v1 computeType=CPU (runpodctl can't) — --vcpu N (default 4) + --cpu-flavor cpu5c,cpu5g. vast: searches the CPU pool (num_gpus=0; vast's search returns GPU boxes by default — `--gpu cpu` used to find 0). --disk GiB now sizes the runpod container disk too (vast already wired it).")
+            println("  --offer ID   (vast) PIN a specific offer id — skips the query search and binds THAT box, confirming it is still listed + capturing its dph before create (offers rotate; --query can silently bind a different box). --max-dph USD refuses any offer over USD/hr BEFORE billing.")
+            println("  CPU pods default to a sshd-bearing image (a bare ubuntu:22.04 has NO sshd → ssh-ready would loop until the gate destroys the pod). Override with --image or HEXA_CLOUD_CPU_IMAGE; --docker-args is IGNORED on CPU pods (warns).")
+            println("  POST-RENT GUARDS: warns if /workspace mounted on the container overlay instead of the requested volume (silent data loss); `cloud rm` cross-checks the provider after delete and KEEPS a still-live pod tracked (billing leak guard).")
             println("  IDEMPOTENT per (project,owner): a repeated same-key rent REUSES the live M5 pod; --force-new is a MANUAL flag to provision one fresh pod (never auto-invoked). Automatic re-rent on pod-loss is DEPRECATED — pod-loss FAILS LOUD; rent again explicitly. `cloud rent --selftest` checks the dedup offline.")
             return
         }
         if si + 1 >= len(av) {
-            println("[cloud] rent: missing <provider> — usage: cloud rent <vast|runpod> [--gpu FAMILY|N] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N]")
+            println("[cloud] rent: missing <provider> — usage: cloud rent <vast|runpod> [--gpu FAMILY|N] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--offer ID] [--max-dph USD] [--max-wait-sec N]")
             exit(2)
         }
         let provider = av[si + 1]
+        // UNKNOWN-FLAG GUARD (ING #34-(A)) — refuse an unrecognized flag on the
+        // ONE $-incurring verb instead of silently ignoring it. This is the
+        // root-cause fix for the cost-trap: a `--dry-run` (never a real flag
+        // before) was dropped without a word, the search picked an offer, and a
+        // billable pod was created. Now a typo / unknown flag FAILS LOUD (exit
+        // 2) BEFORE any provider call — reference-match: strict CLI arg parsers.
+        let _unk = _rent_unknown_flag(av, si + 2)
+        if len(_unk) > 0 {
+            eprintln("[cloud] rent: unknown flag '" + _unk + "' — REFUSING to rent (an unrecognized flag is NEVER silently ignored; a dropped --dry-run/--search-only was the accidental-rent cost-trap). Run `cloud rent --help` for valid flags, or `cloud rent " + provider + " --search-only` to list offers WITHOUT renting.")
+            exit(2)
+        }
         if provider == "vast" {
             exit(_cloud_rent_vast(av, si + 2))
         }
@@ -2611,13 +3204,25 @@ fn main() {
         // of an absent pod exits 0. Exit 0 destroyed · 1 provider-rejected
         // · 2 cancel / usage.
         if si + 1 >= len(av) {
-            println("[cloud] rm: missing <id> — usage: cloud rm <id> [--provider vast|runpod] [--force]")
+            println("[cloud] rm: missing <id> — usage: cloud rm <id> [--provider vast|runpod] [--force] [--yes-cross-project]")
+            exit(2)
+        }
+        // Fix B (ING #34): `cloud rm vast <id>` mis-orders the PROVIDER into the
+        // id slot ("vast"/"runpod" parsed AS the id → silent no-op that left a
+        // billing pod alive). A real vast/runpod id is never literally the word
+        // — so a provider-name in the id slot with a following positional is a
+        // mis-order; error with the correct usage instead of no-op'ing.
+        if (av[si + 1] == "vast" || av[si + 1] == "runpod") && si + 2 < len(av) && !av[si + 2].starts_with("--") {
+            eprintln("[cloud] rm: '" + av[si + 1] + "' is a PROVIDER, not a pod id — the id comes FIRST. Use `cloud rm " + av[si + 2] + " --provider " + av[si + 1] + "` (you wrote `cloud rm " + av[si + 1] + " " + av[si + 2] + "`).")
             exit(2)
         }
         let id = av[si + 1]
         let provider = _flag_val(av, si + 2, "--provider", "")
         let force = _has_flag(av, si + 2, "--force")
-        exit(_cloud_rm(id, provider, force))
+        // ING #34-(C): --yes-cross-project is the EXPLICIT escape to tear down a
+        // billing pod owned by another project (never implied by --force).
+        let override_xproj = _has_flag(av, si + 2, "--yes-cross-project")
+        exit(_cloud_rm(id, provider, force, override_xproj))
     }
     if sub == "down" || sub == "destroy" {
         // (legacy alias of `cloud rm` — kept for back-compat with deployed
@@ -2626,7 +3231,13 @@ fn main() {
         // teardown path (default vast). Wires vast_destroy /
         // runpod_terminate + pod_registry_forget.
         if si + 1 >= len(av) {
-            println("[cloud] down: missing <id> — usage: cloud down <id> [--provider vast|runpod] [--yes|--force]")
+            println("[cloud] down: missing <id> — usage: cloud down <id> [--provider vast|runpod] [--yes|--force] [--yes-cross-project]")
+            exit(2)
+        }
+        // Fix B (ING #34): reject a mis-ordered `cloud down vast <id>` (provider
+        // in the id slot → silent no-op leaving a billing pod alive).
+        if (av[si + 1] == "vast" || av[si + 1] == "runpod") && si + 2 < len(av) && !av[si + 2].starts_with("--") {
+            eprintln("[cloud] down: '" + av[si + 1] + "' is a PROVIDER, not a pod id — the id comes FIRST. Use `cloud down " + av[si + 2] + " --provider " + av[si + 1] + "` (you wrote `cloud down " + av[si + 1] + " " + av[si + 2] + "`).")
             exit(2)
         }
         let id = av[si + 1]
@@ -2637,12 +3248,16 @@ fn main() {
             provider = _provider_for_id(id)
         }
         // Cross-project kill-guard — refuse a teardown of a pod owned by a
-        // different project unless --force. (The anima RTSC near-miss fix.)
+        // different project (--force does NOT override a cross-project kill;
+        // re-run from the owner repo, or pass the EXPLICIT --yes-cross-project
+        // escape for a billing pod you cannot reach). (The anima RTSC near-miss
+        // fix + ING #34-(C) un-killable-pod escape.)
         let mut force = _has_flag(av, si + 2, "--force")
         if _has_flag(av, si + 2, "--yes") == 1 {
             force = 1
         }
-        if _down_guard_refuses(id, force) == 1 {
+        let override_xproj = _has_flag(av, si + 2, "--yes-cross-project")
+        if _down_guard_refuses(id, force, override_xproj) == 1 {
             exit(3)
         }
         // @L9 — surface project·purpose + running-job check, then require
@@ -2668,6 +3283,14 @@ fn main() {
         let id = av[si + 1]
         let provider = _flag_val(av, si + 2, "--provider", "vast")
         exit(_cloud_reboot(id, provider))
+    }
+    if sub == "ls" {
+        // Typo guidance (git/cargo convention): `ls` is NOT a verb — point
+        // at the canonical `list` and exit nonzero instead of dumping the
+        // whole _cloud_help wall (the pre-guard behavior, which buried the
+        // one-word answer). NOT a silent alias: scripts must say `list`.
+        eprintln("[cloud] unknown verb 'ls' — did you mean `list`? Run `hexa cloud list` (alias: status) to show live pods.")
+        exit(2)
     }
     if sub == "list" || sub == "status" {
         // List live pods (read-only, $-free). Bare → both providers;
@@ -2788,8 +3411,16 @@ fn main() {
         if pa.ok == 0 {
             println("[cloud] pods: provider liveness UNREACHABLE (" + pa.message
                 + ") — showing tracked jobs UNVERIFIED (not confirmed alive)")
+        } else if pa.runpod_ok == 0 {
+            println("[cloud] pods: runpod degraded (" + pa.message
+                + ") — its pods shown UNKNOWN (not GONE); vast authoritative")
+        } else if pa.vast_ok == 0 {
+            println("[cloud] pods: vast degraded (" + pa.message
+                + ") — its pods shown UNKNOWN (not GONE); runpod authoritative")
         }
-        exit(pods_local_print_table_live(false, pa.ok, pa.ids, show_all))
+        // Per-provider authority — a degraded provider must not GONE its own
+        // pods (the merged-ok bug: vast-only ok=1 marked live runpod pods GONE).
+        exit(pods_local_print_table_live(false, pa.runpod_ok, pa.vast_ok, pa.ids, show_all))
     }
     if sub == "dispatch" {
         // Manage the per-project ./pods.json manifest:
@@ -3718,6 +4349,34 @@ fn main() {
         if _has_flag(av, si + 2, "-r") == 1 {
             want_recursive = 1
         }
+        // ING #75 — scp can't create a missing destination PARENT, so a
+        // copy-to into /root/anima/state/... died with a silent `scp exit 1`
+        // when the parent dir didn't exist. mkdir -p the remote parent FIRST
+        // (idempotent; no-op when the dir already exists or the dest is
+        // cwd-relative with no parent). `--no-mkparent` opts out.
+        //
+        // IDEMPOTENT-DIR (bug-fix 2026-06-24): for the RECURSIVE (`-r`) path
+        // mkdir -p the DEST dir ITSELF (not just its parent). cloud_copy_to_
+        // recursive_opts now copies the source's CONTENTS (`localdir/.`) INTO
+        // remote_path so a `copy-to dir dir` merges instead of nesting
+        // (destdir/localdir) — but `scp -r src/. dest` needs `dest` to already
+        // exist as a directory. Creating it here makes the merge target present
+        // on a first copy too (and is a no-op when it already exists). The
+        // single-file path keeps the parent-only mkdir (scp creates the file).
+        // (cloud_copy_to_recursive_opts ALSO mkdir-p's the dest defensively, so
+        // non-CLI callers like dft_dispatch's _dft_upload are correct too; the
+        // double mkdir -p is harmless / idempotent.)
+        let mut _mkdir_target = _remote_dirname(remote_path)
+        if want_recursive == 1 {
+            _mkdir_target = remote_path
+        }
+        if len(_mkdir_target) > 0 && _has_flag(av, si + 2, "--no-mkparent") == 0 {
+            let _mk = cloud_exec_opts(host, ssh_opts, "mkdir -p " + _shq(_mkdir_target))
+            if _mk.ok == 0 {
+                println("[cloud] copy-to: ⚠ remote mkdir -p " + _mkdir_target + " failed (rc "
+                    + to_string(_mk.exit_code) + ") — scp may fail if the dir is absent")
+            }
+        }
         let r = _copy_to_run(host, ssh_opts, local_path, remote_path, want_recursive)
         println("[cloud] " + r.message + " · " + local_path + " -> " + host + ":" + remote_path)
         if r.ok == 1 && _has_flag(av, si + 2, "--verify-sha") == 1 {
@@ -3726,6 +4385,80 @@ fn main() {
             exit(v.exit_code)
         }
         exit(r.exit_code)
+    }
+    if sub == "bootstrap" {
+        // ING #78 — one-shot pod setup that composes the now-hardened
+        // primitives so a fresh pod never re-treads the #71~77 traps:
+        //   [--hexa edge|stable]  install hexa on the pod
+        //   [--push local:remote] (repeatable)  SEQUENTIAL copy-to with auto
+        //        parent-mkdir (#75) + scp retry (#74) + sha verify, one stream
+        //        at a time (#76 — never concurrent over a vast proxy)
+        //   [--exec cmd]          run a final command on the pod
+        // Pure composition of verified verbs (exec/copy-to); rents nothing.
+        if si + 1 >= len(av) {
+            println("[cloud] bootstrap: usage — cloud bootstrap <id> [--hexa edge|stable] [--push local:remote]... [--exec 'cmd'] [--port N] [--insecure]")
+            exit(2)
+        }
+        let _id = _checked_host(av[si + 1])
+        let _rh = _resolve_cloud_host(_id)
+        _guard_resolved_or_die("bootstrap", _id, _rh)
+        let host = _rh.host
+        let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 2), _rh)
+        // 1) install hexa (optional)
+        let hexa_ver = _flag_val(av, si + 2, "--hexa", "")
+        if len(hexa_ver) > 0 {
+            let mut inst_cmd = "curl -fsSL https://raw.githubusercontent.com/dancinlab/hexa-lang/main/install.sh | sh"
+            if hexa_ver == "edge" {
+                inst_cmd = "curl -fsSL https://raw.githubusercontent.com/dancinlab/hexa-lang/main/install.sh | HEXA_VERSION=edge sh"
+            }
+            println("[cloud] bootstrap: installing hexa (" + hexa_ver + ") …")
+            let ir = cloud_exec_opts(host, ssh_opts, inst_cmd)
+            if ir.ok == 0 {
+                println("[cloud] bootstrap: hexa install FAILED (rc " + to_string(ir.exit_code) + ") — aborting")
+                exit(ir.exit_code)
+            }
+        }
+        // 2) sequential pushes (parent-mkdir + scp-retry + verify, one at a time)
+        let pushes = _push_args_cli(av, si + 2)
+        let mut pi = 0
+        while pi < len(pushes) {
+            let pair = _split_first_colon(pushes[pi])
+            let lp = pair[0]
+            let rp = pair[1]
+            if len(rp) == 0 {
+                println("[cloud] bootstrap: --push '" + pushes[pi] + "' missing :remote — skipped")
+                pi = pi + 1
+                continue
+            }
+            let parent = _remote_dirname(rp)
+            if len(parent) > 0 {
+                let _ = cloud_exec_opts(host, ssh_opts, "mkdir -p " + _shq(parent))
+            }
+            println("[cloud] bootstrap: push " + lp + " -> " + rp + " …")
+            let cr = _copy_to_run(host, ssh_opts, lp, rp, 1)
+            if cr.ok == 0 {
+                println("[cloud] bootstrap: push FAILED (" + cr.message + ") — aborting")
+                exit(cr.exit_code)
+            }
+            let v = cloud_verify_sha(host, ssh_opts, rp, lp)
+            println("[cloud] bootstrap: verify-sha " + rp + " — " + v.message)
+            if v.exit_code != 0 {
+                println("[cloud] bootstrap: sha mismatch — aborting")
+                exit(v.exit_code)
+            }
+            pi = pi + 1
+        }
+        // 3) final exec (optional)
+        let exec_cmd = _flag_val(av, si + 2, "--exec", "")
+        if len(exec_cmd) > 0 {
+            println("[cloud] bootstrap: exec " + exec_cmd)
+            let er = cloud_exec_opts(host, ssh_opts, exec_cmd)
+            if len(er.stdout_) > 0 { print(er.stdout_) }
+            println("[cloud] bootstrap: " + er.message)
+            exit(er.exit_code)
+        }
+        println("[cloud] bootstrap: DONE (" + to_string(len(pushes)) + " push(es))")
+        exit(0)
     }
     if sub == "copy-from" {
         if si + 1 >= len(av) {

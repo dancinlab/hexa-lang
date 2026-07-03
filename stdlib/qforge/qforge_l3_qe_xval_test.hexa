@@ -220,11 +220,14 @@ fn main() {
     }
 
     // ── (2) QFORGE L3 assembler: 2∫α²F/ω → QE λ_BZ, σ_ph→0 convergence ───────
-    // Per mode deposit A = ½ (w_q/W) λ ω onto a uniform grid via QFORGE's own
-    // normalized phonon delta (qforge_gaussian_delta). Integrate with the
-    // verified L2 moment integrator (qforge_a2f_lambda). Densify the grid (σ_ph
-    // scaled to the cell) and assert MONOTONE convergence to ≤1%.
+    // Per mode deposit A = ½ (w_q/W) λ ω_K · ha_per_kelvin() onto a uniform grid
+    // via QFORGE's own normalized phonon delta (qforge_gaussian_delta). The
+    // ha_per_kelvin() factor matches the energy-unit divisor in qforge_a2f_lambda
+    // (post-#2502 F2 Hartree-scaling) so the round-trip 2∫α²F/ω = λ is exact.
+    // Integrate with the verified L2 moment integrator (qforge_a2f_lambda).
+    // Densify the grid (σ_ph scaled to the cell) and assert MONOTONE conv. ≤1%.
     println("── QFORGE assembler: λ = 2∫α²F/ω from assembled α²F (σ_ph→0) ──")
+    let hak = ha_per_kelvin()
     let gmax = omax * 1.05
     let mut prev_rel = 9.99
     let mut grids: [int] = []
@@ -251,7 +254,7 @@ fn main() {
             let lam = s_lam[si]
             let om = s_om[si]
             if lam > 0.0 && om > 0.0 {
-                let dep = 0.5 * s_wnorm[si] * lam * om
+                let dep = 0.5 * s_wnorm[si] * lam * om * hak
                 // only deposit within ±8σ of the mode (rest is ~0)
                 let jc = to_int(om / gmax * to_float(ng)) - 1
                 let lo = if jc - 10 < 0 { 0 } else { jc - 10 }

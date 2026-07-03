@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# tool/regen_zeroc_hxlcl_delegate_o.sh — ZERO-C leg-B (ING #35, r11).
+# Assemble build/zeroc_hxlcl_delegate.o from the C SSOT
+# self/native/zeroc_hxlcl_delegate.c — the 17 EXTERNAL hxlcl_* delegates
+# (math 5 → external rt_* cores, libc 12 → real libc) the drop-ON executable
+# link needs (the frozen-static hxlcl_* bodies are post-include-boundary and
+# invisible to the arena-globals seed TU). #3798 fmod→rt_fmod delegate pattern,
+# does NOT touch the frozen blob. Default build never compiles this (byte-id OFF).
+set -uo pipefail
+ROOT="$PWD"
+SEED="$ROOT/self/native/zeroc_hxlcl_delegate.c"
+OUT="${1:-$ROOT/build/zeroc_hxlcl_delegate.o}"
+# ZERO-C recursive (ING #29): the .c SSOT is now a GENERATED artifact —
+# regenerate it byte-deterministically from its emitter SSOT
+# (self/native/zeroc_hxlcl_delegate_emit.hexa) before compiling. NO-OP-SAFE
+# (emitter absent / already-fresh tree → in-tree .c kept, SHA-identical).
+bash "$ROOT/tool/regen_zeroc_hxlcl_delegate_c.sh" "$ROOT" >&2 || true
+[ -f "$SEED" ] || { echo "regen_zeroc_hxlcl_delegate: missing $SEED" >&2; exit 1; }
+mkdir -p "$(dirname "$OUT")"
+TU="$(mktemp /tmp/zeroc_hxlcl_tu.XXXXXX.c)"; trap 'rm -f "$TU"' EXIT
+printf '#include "runtime.h"\n#include "native/zeroc_hxlcl_delegate.c"\n' > "$TU"
+EXTRA=""; [ "$(uname -s)" = "Darwin" ] && EXTRA="-D_DARWIN_C_SOURCE"
+${CC:-clang} -c -O2 ${ARCH_FLAG:-} -std=gnu11 -D_GNU_SOURCE $EXTRA -Wno-trigraphs \
+    -I "$ROOT/self" -I "$ROOT" "$TU" -o "$OUT" 2>&1 | grep -iE 'error:' | head -8
+[ -f "$OUT" ] || { echo "regen_zeroc_hxlcl_delegate: compile failed (no $OUT)" >&2; exit 2; }
+N="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?hxlcl_(cos|sin|exp|log|fmod|atoll|atof|time|atexit|signal|getrusage|gmtime_r|strftime|execvp|popen|pclose|write)$')"
+# r23 — the 7 runtime.c-private mem/str statics now re-supplied as EXTERNAL
+# delegates (memcpy/memset/strlen/strncmp/strtoll/getenv/strdup). These were
+# seedprov=0 (file-static, no exported symbol) and WALLED 8 HI-tier bodies.
+R23="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?hxlcl_(memcpy|memset|strlen|strncmp|strtoll|getenv|strdup)$')"
+# r25 — the 3 runtime.c-private syscall statics now re-supplied as EXTERNAL
+# delegates (clock_gettime/read/nanosleep), byte-faithful to the frozen
+# Linux-branch bodies. These were seedprov=0 (file-static, no exported symbol)
+# and WALLED the time/sleep/input HI-tier family.
+R25="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?hxlcl_(clock_gettime|read|nanosleep)$')"
+echo "regen_zeroc_hxlcl_delegate: $OUT — $N/17 hxlcl_* delegates + $R23/7 r23 mem/str statics + $R25/3 r25 syscall statics exported"
+[ "$N" = "17" ] || { echo "regen_zeroc_hxlcl_delegate: expected 17, got $N" >&2; exit 3; }
+[ "$R23" = "7" ] || { echo "regen_zeroc_hxlcl_delegate: expected 7 r23 mem/str statics, got $R23" >&2; exit 4; }
+[ "$R25" = "3" ] || { echo "regen_zeroc_hxlcl_delegate: expected 3 r25 syscall statics, got $R25" >&2; exit 5; }

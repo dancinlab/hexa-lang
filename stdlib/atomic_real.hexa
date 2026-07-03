@@ -1,0 +1,82 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/atomic_real.hexa — OPT-IN real hardware atomics (HEXA_THREADS build)
+//
+//  @module(slug="atomic_real", desc="thin hexa wrappers over the C11/GCC __atomic
+//          cell runtime; opt-in, requires a -DHEXA_THREADS build")
+//  @usage(use "stdlib/atomic_real"; let c = atomic_cell(0); atomic_incr(c); ...)
+//  @stability preview
+//  @since 2026-06-27
+//  @rfc state/rfc_real_concurrency_optin.md (slice ⑥ — real mutex/atomic)
+//
+//  ── WHY THIS MODULE IS SEPARATE ───────────────────────────────────────────
+//
+//  self/atomic_ops.hexa is a by-VALUE simulation (immutable AtomicValue structs,
+//  no shared cell) and stays the byte-deterministic default. Real hardware
+//  atomics need an ADDRESSABLE cell. The substrate is C11/GCC `__atomic_*`
+//  over a slot table of `_Atomic int64_t`, emitted by
+//  self/native/thread_emit.hexa into thread.c behind `#if defined(HEXA_THREADS)`
+//  and exposed as runtime fn-globals: `atomic_cell_new/_load/_store/_add/_sub/_cas`.
+//
+//  Those globals only EXIST in a `-DHEXA_THREADS` build (the C block is
+//  preprocessed out of the default runtime object → default bytes are
+//  byte-identical → byteeq gen3≡gen4 unaffected). Referencing them therefore
+//  only links under -DHEXA_THREADS. Keeping these wrappers in their own module
+//  — NOT imported by any default closure — means a default user build never
+//  pulls an undefined `atomic_cell_*` symbol. Import this module only when you
+//  build with real threads enabled.
+//
+//  ── REFERENCE-MATCH (memory order = sequential consistency, seq-cst) ───────
+//
+//    · C11 §7.17.7  atomic_fetch_add / atomic_compare_exchange_strong
+//    · GCC/Clang     __atomic_fetch_add / __atomic_compare_exchange_n,
+//                    memory order __ATOMIC_SEQ_CST
+//    · Go            sync/atomic.AddInt64 / CompareAndSwapInt64 (seq-cst)
+//    · Rust          core::sync::atomic::AtomicI64 with Ordering::SeqCst
+//
+//  Invariant (single-thread oracle): with no contention these return the SAME
+//  results as the AtomicValue sim — fetch_add returns the pre-add value, CAS
+//  swaps iff load()==expected. The observable win is only under real OS threads
+//  (the follow-on spawn slice, RFC §c).
+// ═══════════════════════════════════════════════════════════════════════════
+
+// atomic_cell(init) → opaque int cell id (>=0), or negative -errno on table-full.
+// Backed by an `_Atomic int64_t` slot; the id is a small dense integer handle.
+pub fn atomic_cell(init: int) -> int {
+    return atomic_cell_new(init)
+}
+
+// atomic_get(cell) → current value via __atomic_load_n (seq-cst).
+pub fn atomic_get(cell: int) -> int {
+    return atomic_cell_load(cell)
+}
+
+// atomic_set(cell, v) → store v via __atomic_store_n (seq-cst); 0 ok / -errno.
+pub fn atomic_set(cell: int, v: int) -> int {
+    return atomic_cell_store(cell, v)
+}
+
+// atomic_fetch_add(cell, d) → PRE-add value (fetch-and-add, seq-cst).
+pub fn atomic_fetch_add(cell: int, d: int) -> int {
+    return atomic_cell_add(cell, d)
+}
+
+// atomic_fetch_sub(cell, d) → PRE-sub value (fetch-and-sub, seq-cst).
+pub fn atomic_fetch_sub(cell: int, d: int) -> int {
+    return atomic_cell_sub(cell, d)
+}
+
+// atomic_incr(cell) → PRE-increment value (convenience for +1).
+pub fn atomic_incr(cell: int) -> int {
+    return atomic_cell_add(cell, 1)
+}
+
+// atomic_decr(cell) → PRE-decrement value (convenience for -1).
+pub fn atomic_decr(cell: int) -> int {
+    return atomic_cell_sub(cell, 1)
+}
+
+// atomic_compare_and_swap(cell, expected, desired) → 1 if swapped else 0.
+// Strong CAS (no spurious failure), seq-cst on both success and failure orders.
+pub fn atomic_compare_and_swap(cell: int, expected: int, desired: int) -> int {
+    return atomic_cell_cas(cell, expected, desired)
+}

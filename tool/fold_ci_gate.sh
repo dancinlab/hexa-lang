@@ -10,8 +10,8 @@
 # linux-arm64, linux-x86_64):
 #
 #   CEBWD-TAYLOR-bits  (dt_exp)      = 7679248634312321699
-#   GELUFWD-DET-bits   (dt_erf fwd)  = 1088281529475491513   (OP-138 re-pin)
-#   GELUBWD-DET-bits   (dt_erf bwd)  = 2045849491002578884   (OP-138 re-pin)
+#   GELUFWD-DET-bits   (dt_erf fwd)  = 6336059440709859003   (native-parse re-pin)
+#   GELUBWD-DET-bits   (dt_erf bwd)  = 3837435693766553512   (native-parse re-pin)
 #
 # Any drift = a REAL machine-independence regression (compiler codegen changed
 # FP semantics, a deterministic primitive was edited, or someone re-routed a
@@ -45,6 +45,29 @@
 #   * The script is the SSOT (also runnable locally: `sh tool/fold_ci_gate.sh
 #     [hexa-bin]`); the CI step is a thin wrapper around it.
 #
+# ── #3689: dt_erf golden RE-PIN #2 (native string->f64 parse = correctly-rounded)
+# The OP-138 re-pin above MIS-LABELED its target as "compiler-correct". It was
+# inferred WITHOUT running the oracle (F-OP138 section 5 admits the local `hexa
+# run` could not execute) and assumed the OP-37/40/132 float-fix applied here. It
+# did not: OP-37/40 fixed only the C-transpile / comptime-fold serialize. This
+# gate runs the oracle via `hexa run` = the NATIVE-EMIT route, which bakes every
+# float LITERAL through the compiler runtime `to_float` (compiler/lower/
+# hir_to_mir.hexa:891 `to_float(e.text)` -> emit at compiler/emit/macho_arm64.hexa
+# `float_to_bits(to_float(f.text))` + compiler/codegen/x86_64_linux.hexa
+# `float_to_bits(o.float_val)`). With the seed OFF that `to_float` is the NAIVE
+# hxlcl_atof/rt_str_parse_float digit-accumulator -- NOT correctly rounded; it
+# lands 6 GELU-path constants 1 ULP off strtod (0.254829592 0.284496736
+# 1.421413741 1.061405429 dt_erf coeffs; 0.70710678118654752440 = 1/sqrt2; 0.01
+# _fill scale). So the OP-138 golden 1088281529475491513 / 2045849491002578884
+# was in fact the naive-atof artifact, not the correct value. PR #3689
+# (HEXA_RT_NUM_PARSE_FLOAT_NATIVE) routes that last naive-atof site through
+# rt_parse_float_native (Clinger fast path = strtod, CORRECTLY ROUNDED -- proven
+# per-constant native==strtod bit-for-bit), so dt_erf folds to its TRUE value
+# (GELUFWD-DET 6336059440709859003 / GELUBWD-DET 3837435693766553512). This is a
+# CORRECTNESS re-pin (correctly-rounded invariant, 3-platform byte-identical;
+# float-fix is compile-time + libm-free so platform-independent), NOT
+# green-by-masking and NOT seed removal/tune-to-green. CEBWD (dt_exp) UNCHANGED --
+# its constants (0.25/1.0/2.0/12) round identically under naive-atof and strtod.
 # Usage: sh tool/fold_ci_gate.sh [path-to-hexa]   (default ./hexa)
 # 0-GPU, $0: tiny CPU runs (<1 s each).
 # ─────────────────────────────────────────────────────────────────────────────
@@ -56,8 +79,8 @@ HEXA_BIN="${1:-./hexa}"
 # dt_erf folds re-pinned in OP-138 to the compiler-correct (post-float-fix)
 # value; old pre-fix goldens were 4548590605583584556 / 4249661408190172843.
 GOLD_CEBWD=7679248634312321699
-GOLD_GELUFWD=1088281529475491513
-GOLD_GELUBWD=2045849491002578884
+GOLD_GELUFWD=6336059440709859003
+GOLD_GELUBWD=3837435693766553512
 
 ORACLE_19=stdlib/flame/op19_crossplatform_selfcontained.hexa
 ORACLE_19B=stdlib/flame/op19b_crossplatform_erf.hexa
