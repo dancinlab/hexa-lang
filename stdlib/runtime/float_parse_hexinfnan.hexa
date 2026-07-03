@@ -1,0 +1,363 @@
+// stdlib/runtime/float_parse_hexinfnan.hexa — the strtod TAIL: hex-float / inf /
+// nan / malformed string→f64, IEEE-bit-exact WITHOUT libc (zero-c #29 last reducible).
+//
+// This is the LAST leg of the native string→f64 parse. It sits BELOW two existing
+// finite seeds and captures ONLY the inputs they decline:
+//   1. num_float_core.hexa::rt_parse_float_native — Clinger fast path (finite decimal,
+//      mantissa ≤ 2^53 AND |e10| ≤ 22). TAG_VOID sentinel out of domain.
+//   2. float_parse_exact.hexa::rt_str_parse_float_exact — EXACT big-integer round-
+//      half-even over the FULL finite-decimal domain (#4200). TAG_VOID sentinel for
+//      hex-float / inf / nan / malformed.
+//   3. THIS module — rt_str_parse_float_hexinfnan — the tail those two decline:
+//      hex-float, inf/infinity, nan/nan(payload), malformed/no-digit. After all three,
+//      the only strtod-served inputs are gone; this returns the bit-exact value or 0.0.
+//
+// ── REFERENCE-MATCH (white-box, the LINKED libc, not musl) ───────────────────────
+// The runtime links the HOST libc's strtod (glibc on linux, Apple libc on darwin),
+// NOT musl. Empirical cross-libc probe (glibc-2.39 x86_64 · Apple libc arm64):
+// all hex/inf/nan/malformed VALUES are bit-identical across both linked libcs,
+// including round-half-even boundaries, carry-into-exponent
+// (0x1.fffffffffffffcp0 → 0x4000000000000000), deep subnormal (0x1p-1074 → …001),
+// overflow→±inf, underflow→±0. The one divergence found — 0x1.fffffffffffffp-1023:
+// glibc errno=ERANGE vs Apple errno=0 — is errno-ONLY, bits identical
+// (0x0010000000000000), and the hexa value-parse path structurally discards errno,
+// so it is invisible to hexa semantics.
+//
+// ★ THE ONE TRAP — nan(payload): MATCH glibc/Apple (PARSE the payload via a
+//   strtoull-equivalent and OR its low 51 bits into the mantissa), NOT musl (which
+//   ignores the payload and returns bare NAN). Verified nan(123)→…007b, nan(0xff)→…00ff
+//   on BOTH linked libcs. Reference-matching musl's nan handling here would be a
+//   bit-miscompile — the linked libc parses it.
+//
+// ── METHOD ───────────────────────────────────────────────────────────────────────
+// hex-float is EXACT-BY-CONSTRUCTION: the significand is an integer of hex digits,
+// value = sig · 2^(4·(−fracHexDigits) + pExp). Normalize to 53 significand bits by
+// INTEGER guard/round/sticky round-half-even (compare 2·rem vs 2^k, tie→even) — the
+// SAME machinery as float_parse_exact.hexa's fpe_assemble round-even, but the
+// significand fits in ≤64 bits so NO big-integer is needed (pure i64 arithmetic).
+// inf/nan are constant bit patterns. NO long double / scalbnl (byteeq-hostile) — the
+// design proves integer arithmetic suffices and is cross-target-stable at double.
+//
+// REUSE from float_parse_exact.hexa: bits_to_float (the 4-surface codegen builtin,
+// self/nanbox.hexa:224), the fpe_assemble(sign,ebits,frac) field composition
+// (bits = frac + ebits·4503599627370496, sign via the i64-min constant — fields
+// disjoint so + == |), the ws/sign scan idiom (rt_str_parse_float_exact L342+), and
+// the TAG_VOID sentinel __hx_make_val(4,0) for the DECLINE (malformed → the C wrapper
+// still runs strtod, whose value on true junk is 0.0 — identical). This body prefers
+// the DECLINE sentinel over a bare 0.0 return so the wrapper's #else strtod remains
+// the authoritative fallback (#3583 lesson: never bypass the C fallback).
+//
+// BYTEEQ STATUS: not imported by self/ — byteeq-NEUTRAL standalone. The runtime
+// WIRING (runtime_core_emit.hexa #ifdef HEXA_RT_STRTOD_TAIL_NATIVE tier +
+// resolve_native_float_parse_hexinfnan_seed + rt-stdlib compile-set add, default-OFF)
+// is byteeq-RELEVANT and lands behind the 3-target Blacksmith byteeq gate. Default-OFF:
+// with the macro unset the emitter block is dead → preprocessed runtime.c is
+// byte-identical to origin/main (same mechanism #4200's EXACT gate uses).
+
+// ── IEEE-754 double field assembler (mirrors float_parse_exact.hexa fpe_assemble) ──
+// fields disjoint so + == | ; sign bit 63 set via the i64-min constant (bit 63 was 0).
+fn hpx_assemble(sign, ebits, frac) -> float {
+    let bits = frac + ebits * 4503599627370496
+    if sign == 1 {
+        bits = bits + (0 - 9223372036854775807 - 1)
+    }
+    return bits_to_float(bits)
+}
+
+// value = m · 2^e2, where m is an INTEGER significand (m >= 0) and e2 its binary
+// exponent, plus a `sticky` bit carrying any 1-bits already shifted off below m's
+// LSB (set to 1 if lower bits were dropped during accumulation). Correctly-rounded
+// (round-half-even) IEEE-754 double. Overflow→±inf, underflow→±0, subnormal handled.
+// This is the exact-by-construction hex assembler: no decimal rounding anywhere.
+fn hpx_pack(sign, m, e2, sticky) -> float {
+    if m == 0 {
+        // significand all zero → ±0 (sticky, if any, is a nonzero bit strictly below
+        // 2^(e2) with no set significand above it — cannot round to a normal; ±0).
+        return hpx_assemble(sign, 0, 0)
+    }
+    // bit length of m (m > 0): bl such that 2^(bl-1) <= m < 2^bl.
+    let mut bl = 0
+    let mut t = m
+    while t > 0 {
+        t = t / 2
+        bl = bl + 1
+    }
+    // The value is m · 2^e2. The exponent of the TOP set bit (bit bl-1) is
+    // e2 + (bl - 1). For a normal double the biased exponent of that leading bit is
+    // (e2 + bl - 1) + 1023. We want a 53-bit significand (leading bit at index 52),
+    // so we must drop (bl - 53) low bits when bl > 53 (round-half-even), or the value
+    // is already <=53 bits (drop 0, exact). SUBNORMAL clamps precision further.
+    let ebits_lead = e2 + bl - 1 + 1023   // biased exp if result is normal
+    if ebits_lead >= 2047 { return hpx_assemble(sign, 2047, 0) }   // overflow → ±inf
+    // Determine how many low bits of m to drop so the kept significand fits the format.
+    // normal (ebits_lead >= 1): keep 53 bits → drop = bl - 53.
+    // subnormal (ebits_lead <= 0): the significand's LSB must land at 2^-1074, i.e.
+    //   we keep bits down to exponent -1074. The lowest kept bit exponent for m·2^e2
+    //   is e2; we must drop (−1074 − e2) low bits (if positive) → ndrop.
+    let mut ndrop = 0
+    if ebits_lead >= 1 {
+        ndrop = bl - 53
+    } else {
+        ndrop = (0 - 1074) - e2
+    }
+    if ndrop <= 0 {
+        // exact — no rounding. Assemble directly. For a normal, shift m up to a
+        // 53-bit significand (leading bit at 52) if bl < 53; ndrop<=0 ⇒ bl<=53.
+        // value = m · 2^e2, leading bit exp = e2+bl-1.
+        if ebits_lead >= 1 {
+            // scale m to [2^52, 2^53): multiply by 2^(52-(bl-1)) = 2^(53-bl).
+            let mut mm = m
+            let mut kk = 53 - bl
+            while kk > 0 { mm = mm * 2; kk = kk - 1 }
+            return hpx_assemble(sign, ebits_lead, mm - 4503599627370496)
+        }
+        // subnormal-range but ndrop<=0 means value fits with the LSB at/above 2^-1074:
+        // significand (in units of 2^-1074) = m · 2^(e2 + 1074).
+        let mut mm = m
+        let mut kk = e2 + 1074
+        while kk > 0 { mm = mm * 2; kk = kk - 1 }
+        // sticky can't matter (nothing dropped). mm < 2^52 (subnormal) or ==2^52.
+        if mm >= 4503599627370496 {
+            return hpx_assemble(sign, 1, mm - 4503599627370496)
+        }
+        return hpx_assemble(sign, 0, mm)
+    }
+    // ndrop > 0 → round-half-even drop of the low `ndrop` bits, folding prior sticky.
+    return hpx_round_shift(sign, m, ndrop, sticky, ebits_lead)
+}
+
+// round-half-even shift of significand `m` right by `ndrop` (>0) bits, folding an
+// existing sticky `st`. `ebits_lead` is the biased exponent the leading bit would take
+// as a normal (<=0 ⇒ the result is subnormal, assembled with ebits 0/1 by carry).
+fn hpx_round_shift(sign, m, ndrop, st, ebits_lead) -> float {
+    if ndrop >= 64 {
+        // more than the whole i64 significand shifts out → below half min-subnormal → ±0.
+        return hpx_assemble(sign, 0, 0)
+    }
+    // divisor = 2^ndrop (ndrop < 64, fits in i64 as long as ndrop <= 62; guard 63).
+    let mut div = 1
+    let mut k = 0
+    while k < ndrop {
+        div = div * 2
+        k = k + 1
+    }
+    let q = m / div
+    let r = m % div
+    let half = div / 2
+    let mut qi = q
+    // round-half-even: r>half → up ; r<half → down ; r==half → up iff sticky OR q odd.
+    if r > half {
+        qi = qi + 1
+    } else if r == half {
+        if st == 1 { qi = qi + 1 }
+        else if qi % 2 == 1 { qi = qi + 1 }
+    }
+    // Post-round assembly. Two regimes:
+    if ebits_lead >= 1 {
+        // NORMAL: qi is the 53-bit significand in [2^52, 2^53), unless a round carry
+        // pushed it to exactly 2^53 → renormalize (significand halves, exponent +1).
+        let mut ebits = ebits_lead
+        if qi >= 9007199254740992 {
+            qi = qi / 2
+            ebits = ebits + 1
+            if ebits >= 2047 { return hpx_assemble(sign, 2047, 0) }
+        }
+        return hpx_assemble(sign, ebits, qi - 4503599627370496)
+    }
+    // SUBNORMAL: qi is the significand in units of 2^-1074. A round carry to 2^52
+    // promotes it to the smallest NORMAL (ebits=1).
+    if qi >= 4503599627370496 {
+        return hpx_assemble(sign, 1, qi - 4503599627370496)
+    }
+    return hpx_assemble(sign, 0, qi)
+}
+
+// EXACT hex-float → f64. `s` positioned at the char AFTER the "0x"/"0X" prefix.
+// Accumulates the integer significand across hex digits (integer + fractional part),
+// tracks the fractional-digit count as a binary exponent, reads the mandatory p/P
+// exponent, then normalizes to 53 significand bits with round-half-even.
+fn hpx_hexfloat(s: string, i0, n, sign) -> float {
+    let mut i = i0
+    // accumulate significand into i64 `sig`; once sig has >=60 bits we stop shifting
+    // it left and instead fold further hex digits into `sticky` + still adjust the
+    // implied binary exponent (bexp counts binary positions of the point). We track
+    // `bexp` = the binary exponent contributed by fractional hex digits (each frac
+    // hex digit = 4 fractional bits → bexp -= 4 as we go), and `extra` = binary
+    // positions the significand's LSB is above 2^0 when we stop absorbing bits.
+    let mut sig = 0
+    let mut anydig = 0
+    let mut seen_dot = 0
+    let mut bexp = 0        // net binary exponent from the radix point placement
+    let mut sticky = 0      // 1 if any nonzero hex bit was dropped past sig capacity
+    let mut go = 1
+    // capacity guard: keep sig below 2^59 so sig*16+15 stays < 2^63 (no i64 overflow:
+    // 2^59*16 = 2^63 = i64 max+1, so the strict `< 2^59` bound keeps sig*16+15 in range).
+    // 59 retained significand bits ≫ the 53 needed + guard/round/sticky → exact rounding.
+    while go == 1 && i < n {
+        let b = s.byte_at(i)
+        let mut d = 0 - 1
+        if b >= 48 && b <= 57 { d = b - 48 }
+        else if b >= 97 && b <= 102 { d = b - 87 }   // 'a'..'f' → 10..15
+        else if b >= 65 && b <= 70 { d = b - 55 }    // 'A'..'F' → 10..15
+        if d >= 0 {
+            anydig = 1
+            if sig < 576460752303423488 {             // sig < 2^59 → room for 4 more bits
+                sig = sig * 16 + d
+                if seen_dot == 1 { bexp = bexp - 4 }
+            } else {
+                // no room: this hex digit's 4 bits are dropped from `sig`. If we are
+                // in the INTEGER part, those 4 positions raise the exponent by 4; if
+                // in the FRACTION they'd lower it by 4 then the drop restores it — net
+                // 0 for fraction. Any nonzero dropped digit sets sticky.
+                if d != 0 { sticky = 1 }
+                if seen_dot == 0 { bexp = bexp + 4 }
+            }
+            i = i + 1
+        } else if b == 46 {                            // '.'
+            if seen_dot == 1 { go = 0 } else { seen_dot = 1; i = i + 1 }
+        } else {
+            go = 0
+        }
+    }
+    // a hex-float REQUIRES a binary exponent 'p'/'P' (C99). No 'p' AND no digit → junk.
+    if anydig == 0 { return __hx_make_val(4, 0) }
+    // read mandatory p/P exponent.
+    if i >= n { return __hx_make_val(4, 0) }
+    let pc = s.byte_at(i)
+    if pc != 112 && pc != 80 { return __hx_make_val(4, 0) }   // 'p'/'P' required
+    i = i + 1
+    let mut psign = 1
+    if i < n {
+        let pb = s.byte_at(i)
+        if pb == 45 { psign = 0 - 1; i = i + 1 }
+        else if pb == 43 { i = i + 1 }
+    }
+    let mut pval = 0
+    let mut phad = 0
+    while i < n {
+        let pb = s.byte_at(i)
+        if pb >= 48 && pb <= 57 {
+            pval = pval * 10 + (pb - 48)
+            phad = 1
+            if pval > 100000 { pval = 100000 }        // clamp (past overflow anyway)
+            i = i + 1
+        } else { break }
+    }
+    if phad == 0 { return __hx_make_val(4, 0) }        // 'p' with no digits → junk
+    // value = sig · 2^(bexp + psign·pval). sig==0 → signed zero.
+    if sig == 0 {
+        if sticky == 0 { return hpx_assemble(sign, 0, 0) }
+        // sig==0 but sticky set means the entire (huge) integer part was dropped as
+        // zero digits — impossible to reach with sticky==1 here (sticky only set on a
+        // NONZERO dropped digit, which would also mean sig!=0 earlier). Guard anyway.
+        return hpx_assemble(sign, 0, 0)
+    }
+    let e2 = bexp + psign * pval
+    return hpx_pack(sign, sig, e2, sticky)
+}
+
+// parse the nan(...) payload body as glibc/Apple does: strtoull(p, 0, 0)-style —
+// leading 0x/0X = base 16, else base 10; '_' separators skipped; stop at ')'.
+// Returns the parsed unsigned value (low bits used). Matches glibc __strtod nan().
+fn hpx_nan_payload(s: string, i0, n) -> int {
+    let mut i = i0
+    let mut base = 10
+    if i + 1 < n {
+        let a = s.byte_at(i)
+        let bb = s.byte_at(i + 1)
+        if a == 48 && (bb == 120 || bb == 88) { base = 16; i = i + 2 }
+    }
+    let mut v = 0
+    while i < n {
+        let b = s.byte_at(i)
+        if b == 95 { i = i + 1 }                       // '_' digit separator (glibc)
+        else {
+            let mut d = 0 - 1
+            if b >= 48 && b <= 57 { d = b - 48 }
+            else if base == 16 && b >= 97 && b <= 102 { d = b - 87 }
+            else if base == 16 && b >= 65 && b <= 70 { d = b - 55 }
+            if d < 0 || d >= base { break }
+            v = v * base + d
+            i = i + 1
+        }
+    }
+    return v
+}
+
+// TAIL string→f64: hex-float / inf / nan(+payload) / malformed. Returns the double,
+// or the TAG_VOID sentinel __hx_make_val(4,0) for TRUE junk (so the C wrapper's
+// #else strtod stays the authoritative fallback; strtod's value on junk is 0.0).
+pub fn rt_str_parse_float_hexinfnan(s: string) -> float {
+    let n = byte_len(s)
+    let mut i = 0
+    // 1. skip leading C-isspace (mirrors rt_str_parse_float_exact L344-348).
+    while i < n {
+        let b = s.byte_at(i)
+        if b == 32 || b == 9 || b == 10 || b == 13 { i = i + 1 } else { break }
+    }
+    // 2. optional sign.
+    let mut sign = 0
+    if i < n {
+        let b = s.byte_at(i)
+        if b == 45 { sign = 1; i = i + 1 }
+        else if b == 43 { i = i + 1 }
+    }
+    if i >= n { return __hx_make_val(4, 0) }
+    let c = s.byte_at(i)
+    let cl = c | 32                                     // ASCII-lowercase (bit 5)
+    // 3. inf / infinity (case-insensitive). Accept "inf" (i==3) or "infinity" (i==8).
+    if cl == 105 {                                      // 'i'
+        let inf = "infinity"
+        let mut k = 0
+        while k < 8 && i < n {
+            let sb = s.byte_at(i) | 32
+            if sb != inf.byte_at(k) { break }
+            i = i + 1
+            k = k + 1
+        }
+        if k == 3 || k == 8 {
+            return hpx_assemble(sign, 2047, 0)          // ±inf
+        }
+        return __hx_make_val(4, 0)                      // "in", "infi…" partial → junk
+    }
+    // 4. nan / NAN / nan(payload) (case-insensitive). Needs 3 chars at i,i+1,i+2 →
+    //    index i+2 must be valid (i + 2 < n).
+    if cl == 110 {                                      // 'n'
+        if i + 2 < n {
+            let n0 = s.byte_at(i) | 32
+            let n1 = s.byte_at(i + 1) | 32
+            let n2 = s.byte_at(i + 2) | 32
+            let mut ok = 0
+            if n0 == 110 && n1 == 97 && n2 == 110 { ok = 1 }   // "nan"
+            if ok == 1 {
+                i = i + 3
+                // canonical quiet NaN mantissa top bit = 2^51 = 0x8000000000000.
+                let mut frac = 2251799813685248
+                // optional (payload)
+                if i < n {
+                    let pb = s.byte_at(i)
+                    if pb == 40 {                        // '('
+                        let pay = hpx_nan_payload(s, i + 1, n)
+                        // OR the payload's low 51 bits into the mantissa (glibc/Apple).
+                        // low 51 bits = pay % 2^51 ; quiet bit (2^51) stays set via +.
+                        // fields disjoint (quiet bit is bit 51, payload is bits 0..50)
+                        // so + == | . Payload cannot touch the quiet bit.
+                        let low = pay % 2251799813685248
+                        frac = frac + low
+                    }
+                }
+                return hpx_assemble(sign, 2047, frac)
+            }
+        }
+        return __hx_make_val(4, 0)
+    }
+    // 5. hex-float: "0x" / "0X".
+    if c == 48 && i + 1 < n {                           // '0'
+        let x = s.byte_at(i + 1)
+        if x == 120 || x == 88 {                        // 'x'/'X'
+            return hpx_hexfloat(s, i + 2, n, sign)
+        }
+    }
+    // 6. anything else the finite seeds already declined → true junk → sentinel.
+    return __hx_make_val(4, 0)
+}

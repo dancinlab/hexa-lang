@@ -1,0 +1,19 @@
+// Kc — ALIAS (two names). CRITICAL SOUNDNESS PROBE. `let ys = xs` makes ys a
+// second handle. In the escape scan, op=="let" at arg-position 0 is treated as
+// SAFE, so the SOURCE xs is NOT voided and may stay PACKED — while the alias ys
+// (let_src is a handle, not an array_lit dst) is NOT marked packed -> BOXED.
+// A boxed (stride-16, tagged) read of a raw-packed (stride-8, untagged) buffer
+// would be a layout mismatch -> divergence. If OFF!=ON here, the lattice has a
+// real alias hole and default-ON is unsafe. MEASURE, do not assume.
+fn main() {
+    let N = 64
+    let mut xs: [i64] = []
+    let mut i = 0
+    while i < N {
+        xs.push(i + 1)
+        i = i + 1
+    }
+    let ys = xs
+    xs[0] = 999
+    println(ys[0] + xs[0] + ys[63] + xs[63])
+}

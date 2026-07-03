@@ -15,7 +15,7 @@
       "self/bootstrap.hexa"
     ],
     "fromMarkdown": "CLAUDE.md",
-    "onEditReminder": "L0 file edited \u2014 update CHANGELOG + issue tracker in the same change."
+    "onEditReminder": "L0 file edited — update CHANGELOG + issue tracker in the same change."
   },
   "enforcementFile": ".harness/enforcement.json",
   "keywordsFile": ".harness/keywords.json",
@@ -43,6 +43,9 @@
     "protectedBranches": [
       "main",
       "master"
+    ],
+    "injectEnglishOnly": [
+      "CLAUDE.md"
     ]
   },
   "guides": [

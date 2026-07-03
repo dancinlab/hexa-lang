@@ -596,6 +596,85 @@ fn vast_search_offers(query: str, verified_only: int) -> VastOffer {
     return VastOffer { ok: 1, offer_id: ids[0], dph: _vast_offer_dph(out, ids[0]), message: "search offers — " + to_string(len(ids)) + " offers (unlocked pick)" }
 }
 
+// _vast_field_str — read `key` off a parsed offer object as a plain string,
+// regardless of whether vast's --raw JSON typed it int / float / string. ""
+// when the field is absent. Used only by the SEARCH-ONLY table printer below
+// (never binds a claim / rent). Mirrors _vast_offer_dph's type-agnostic read.
+fn _vast_field_str(elem: any, key: str) -> str {
+    let v = json_object_get(elem, key)
+    let t = type_of(v)
+    if t == "int" || t == "float" || t == "string" {
+        return to_string(v)
+    }
+    return ""
+}
+
+// vast_list_offers — COST-SAFE dry-run of `cloud rent vast` (ING #34-(A)). Runs
+// the SAME `vastai search offers '<query>' -n --raw` the rent path would run,
+// then PRINTS the matching offers (id · $/hr · gpu · count · RAM · disk · geo ·
+// reliability) and RETURNS the count — creating NOTHING, claiming NOTHING,
+// billing NOTHING. This is the missing "list offers without provisioning"
+// surface: before this, verifying "do offers exist?" cost a real rental (the
+// silently-ignored `--dry-run` → picked-offer → created-instance trap). Verb-
+// style + reference-match: `terraform plan` / `--dry-run` — show what WOULD be
+// rented, change nothing. `verified_only` matches the rent default (1). Returns
+// the offer count (0 = none matched / vastai unavailable — no offers listed).
+fn vast_list_offers(query: str, verified_only: int) -> int {
+    let vc = _vastai_path()
+    if len(vc) == 0 {
+        println("[cloud] search vast: vastai not found (set VASTAI_DISABLE=1 to silence) — no offers listed")
+        return 0
+    }
+    let eff = _vast_build_query(query, verified_only)
+    println("[cloud] search vast (offers only · NO rent · NO billing) — query: " + eff)
+    let cmd = _vast_timeout_prefix() + _shq_local(vc) + " search offers " + _shq_local(eff)
+        + " -n --raw 2>&1"
+    let out = exec(cmd)
+    let parsed = json_parse(_vast_strip_to_json(out))
+    if type_of(parsed) != "array" || len(parsed) == 0 {
+        println("[cloud] search vast: no matching offers — " + _vast_exec_diag(out))
+        return 0
+    }
+    println("  OFFER-ID    $/HR      GPU                 N   RAM(GB)  DISK(GB)  RELIAB  GEO")
+    let mut i = 0
+    while i < len(parsed) {
+        let e = parsed[i]
+        let id_s = _vast_field_str(e, "id")
+        let dph = _vast_field_str(e, "dph_total")
+        let gpu = _vast_field_str(e, "gpu_name")
+        let ngpu = _vast_field_str(e, "num_gpus")
+        let ram = _vast_field_str(e, "cpu_ram")
+        let disk = _vast_field_str(e, "disk_space")
+        let rel = _vast_field_str(e, "reliability2")
+        let geo = _vast_field_str(e, "geolocation")
+        println("  " + _vast_pad(id_s, 11) + " " + _vast_pad("$" + dph, 9) + " "
+            + _vast_pad(gpu, 19) + " " + _vast_pad(ngpu, 3) + " " + _vast_pad(ram, 8) + " "
+            + _vast_pad(disk, 9) + " " + _vast_pad(rel, 7) + " " + geo)
+        i = i + 1
+    }
+    println("[cloud] search vast: " + to_string(len(parsed)) + " offer(s) — none rented. To rent one: cloud rent vast --offer <OFFER-ID> [--max-dph USD]")
+    return len(parsed)
+}
+
+// _vast_pad — right-pad `s` with spaces to `w` cols for the search-only table
+// (truncates an over-long field so columns stay aligned). Table-only helper.
+fn _vast_pad(s: str, w: int) -> str {
+    let n = len(s)
+    if n >= w {
+        if w <= 1 {
+            return s
+        }
+        return s.substring(0, w - 1) + " "
+    }
+    let mut out = s
+    let mut i = n
+    while i < w {
+        out = out + " "
+        i = i + 1
+    }
+    return out
+}
+
 // vast_offer_by_id — PIN a specific offer id (the `--offer <id>` rent path).
 // vast.ai's search results rotate every few minutes, so a `--query` that
 // LOOKED like "$0.53/h 1.5TB" can silently bind a $30/h box on the next call
