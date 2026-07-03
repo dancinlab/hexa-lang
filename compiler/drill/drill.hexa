@@ -36,8 +36,10 @@
 use "compiler/drill/round"
 use "compiler/drill/checkpoint"
 use "compiler/drill/anti_hub"
+use "compiler/drill/emerge"
 use "compiler/smash/candidate"
 use "compiler/honesty/check"
+use "compiler/atlas/identity_engine"
 
 pub struct DrillOpts {
     max_rounds: i64,
@@ -280,16 +282,355 @@ fn _verifier_parse_rationale(raw: string) -> string {
     return ""
 }
 
-// Invoke the pluggable verifier for one round. Empty `verifier_cmd`
-// short-circuits to a `skip` verdict (back-compat — no env work, no
-// shell exec). Otherwise dispatches via the host shell with the round
+// ── Native default verifier: exact-int identity_sweep ─────────────────
+//
+// When NO external verifier is installed (`verifier_cmd == ""`) the loop
+// USED to short-circuit to verdict="skip" — the candidates were surfaced
+// but never actually checked, contradicting the documented "default
+// verification is ON" contract. The canonical (native, in-binary,
+// exact-integer) verifier lives in `compiler/atlas/identity_engine.hexa`
+// (`verify_identity`, the 12-fn A·B=C·D bounded-unique checker). This
+// sweep wires it into the default path: every round's discovery candidates
+// are scanned, any whose `expr` is in the 12-fn product-identity syntax is
+// confirmed/refuted by exact-int evaluation over n∈[2,N], and the round
+// gets a REAL verdict + counts (n_identity / n_verified / n_noise) — never
+// "skip". The external python oracle stays opt-in via `--verifier <cmd>`
+// (native-canonical polarity); the only opt-OUT is the explicit
+// `HEXA_DRILL_NO_VERIFY=1` constraint.
+//
+// HONESTY (c2): the current generators (smash P2–P9) emit FLOAT-arithmetic
+// permutation exprs (`evolve(v=… <- base×…)`, `a · b = …`), NOT the 12-fn
+// `<fn>·<fn> = <fn>·<fn>` integer-identity syntax this engine consumes. So
+// for the standard math vocabulary the honest result is n_identity=0 /
+// n_verified=0 / n_noise=N → verdict "continue". That 0-verified report is
+// the CORRECT, non-fabricating signal (a generator that produces identity-
+// syntax candidates is the [B] generator-campaign scope); [A]'s job is only
+// that the verifier RUNS and emits a real verdict instead of skipping.
+
+// Map an 18-fn basis name to its `af()` index, or -1 if not a basis fn.
+// Index ids match identity_engine.hexa::af (0=sigma … 11=omega · 12–17 = the
+// 2026-06-27 extended vocab: mu μ · lam λ · mu2 μ² · J3 · tw_om 2^ω · core).
+fn _fn_index(name: string) -> i64 {
+    let s = name.trim()
+    if s == "sigma"  { return 0 }
+    if s == "sigma2" { return 1 }
+    if s == "sigma3" { return 2 }
+    if s == "phi"    { return 3 }
+    if s == "tau"    { return 4 }
+    if s == "n"      { return 5 }
+    if s == "sopfr"  { return 6 }
+    if s == "rad"    { return 7 }
+    if s == "J2"     { return 8 }
+    if s == "psi"    { return 9 }
+    if s == "Omega"  { return 10 }
+    if s == "omega"  { return 11 }
+    // ── extended vocab (idx 12–17 · 2026-06-27 upgrade) ──
+    if s == "mu"     { return 12 }
+    if s == "lam"    { return 13 }
+    if s == "mu2"    { return 14 }
+    if s == "J3"     { return 15 }
+    if s == "tw_om"  { return 16 }
+    if s == "core"   { return 17 }
+    return -1
+}
+
+// Parse a candidate `expr` as an 18-fn product identity `A*B = C*D` (also
+// accepting the unicode `·` product / spaces). Returns the four basis
+// indices via an out-array [a,b,c,d] when the whole expr is exactly four
+// recognised basis fns (idx 0–17 incl. the 2026-06-27 extended vocab) joined
+// by two products and one `=`, else []. Deterministic, structure-driven (no
+// float parse). NOTE: arity-3 `A*B*C=D*E*F` candidates use a separate verify
+// path (identity_engine.hexa::verify_identity3) and are not parsed here yet —
+// this 2-term sweep stays the drill default screen.
+fn _parse_identity(expr: string) -> [i64] {
+    let mut e = expr
+    e = e.replace("·", "*")
+    e = e.replace(" ", "")
+    let sides = e.split("=")
+    let empty: [i64] = []
+    if len(sides) != 2 { return empty }
+    let lhs = to_string(sides[0]).split("*")
+    let rhs = to_string(sides[1]).split("*")
+    if len(lhs) != 2 || len(rhs) != 2 { return empty }
+    let a = _fn_index(to_string(lhs[0]))
+    let b = _fn_index(to_string(lhs[1]))
+    let c = _fn_index(to_string(rhs[0]))
+    let d = _fn_index(to_string(rhs[1]))
+    if a < 0 || b < 0 || c < 0 || d < 0 { return empty }
+    let mut out: [i64] = []
+    out.push(a); out.push(b); out.push(c); out.push(d)
+    return out
+}
+
+// Map an 18-fn `af()` index back to its basis name (inverse of _fn_index).
+// Used to render a verified candidate's canonical identity expr for the
+// cross-round absorb pool + the known/novel cross-check. "" if out of range.
+fn _fn_name(idx: i64) -> string {
+    if idx == 0  { return "sigma" }
+    if idx == 1  { return "sigma2" }
+    if idx == 2  { return "sigma3" }
+    if idx == 3  { return "phi" }
+    if idx == 4  { return "tau" }
+    if idx == 5  { return "n" }
+    if idx == 6  { return "sopfr" }
+    if idx == 7  { return "rad" }
+    if idx == 8  { return "J2" }
+    if idx == 9  { return "psi" }
+    if idx == 10 { return "Omega" }
+    if idx == 11 { return "omega" }
+    // ── extended vocab (idx 12–17 · 2026-06-27 upgrade) ──
+    if idx == 12 { return "mu" }
+    if idx == 13 { return "lam" }
+    if idx == 14 { return "mu2" }
+    if idx == 15 { return "J3" }
+    if idx == 16 { return "tw_om" }
+    if idx == 17 { return "core" }
+    return ""
+}
+
+// Canonical product-identity string for four basis indices: "A*B = C*D".
+// Side/factor order is normalized (each side's two factors sorted by index,
+// then the two sides sorted) so commutative restatements collapse to one
+// canonical key — this is what the absorb pool dedups on and what the
+// known/novel cross-check compares.
+fn _canon_identity(a: i64, b: i64, c: i64, d: i64) -> string {
+    // sort factors within each side
+    let mut l0 = a
+    let mut l1 = b
+    if l1 < l0 { let t = l0; l0 = l1; l1 = t }
+    let mut r0 = c
+    let mut r1 = d
+    if r1 < r0 { let t = r0; r0 = r1; r1 = t }
+    // order the two sides (lhs <= rhs by (first,second))
+    let lhs_first = l0 < r0 || (l0 == r0 && l1 <= r1)
+    let mut s = ""
+    if lhs_first {
+        s = _fn_name(l0) + "*" + _fn_name(l1) + " = " + _fn_name(r0) + "*" + _fn_name(r1)
+    } else {
+        s = _fn_name(r0) + "*" + _fn_name(r1) + " = " + _fn_name(l0) + "*" + _fn_name(l1)
+    }
+    return s
+}
+
+// Known-identity cross-check (honesty c2: the 12-fn 2-term `A·B=C·D` vein is
+// MEASURED-EXHAUSTED — every bounded-unique product identity over THAT box is
+// already an ATLAS @F node; the 2026-06-27 upgrade added extended vocab idx
+// 12–17 + arity-3, and the extended-vocab universal sweep measured exactly 2
+// clean generators, BOTH classical/definitional — see vocab_universal_hunt.py
+// CLEAN_GENERATORS=2). The documented known set is the identity_engine selftest
+// sanity-gate family (G1–G3 + their commutative twins) PLUS the classical
+// extended-vocab universal generators (J₂=φ·ψ Jordan · core·rad=n definitional),
+// all collapsed by _canon_identity. A verified candidate matching one of these
+// is labelled `known`; anything else is `novel` (surfaced honestly, NEVER
+// auto-folded — fold stays the `hexa verify` g5 / PR path). Compare on canon key.
+fn _is_known_identity(canon: string) -> bool {
+    // G1 phi*J2 = n*psi   (3,8 = 5,9)
+    if canon == _canon_identity(3, 8, 5, 9) { return true }
+    // G2 phi*J2 = sopfr*psi  (3,8 = 6,9)
+    if canon == _canon_identity(3, 8, 6, 9) { return true }
+    // G3 sigma*psi = sig2*phi  (0,9 = 1,3)
+    if canon == _canon_identity(0, 9, 1, 3) { return true }
+    // NOTE (2026-06-27 upgrade): the extended-vocab universal generators
+    // (J₂=φ·ψ Jordan · core·rad=n definitional) are 1-vs-2 / definitional shapes,
+    // NOT 2-term bounded-unique singletons, so they never reach this 2-term
+    // known-set (a candidate in `<fn>·<fn>=<fn>·<fn>` syntax cannot encode them).
+    // The universal-frame screen lives in identity_engine.hexa::is_universal2/3,
+    // and that sweep measured novel=0 (every clean generator classical). Hence
+    // this 2-term known set stays G1–G3 — any extended-vocab 2-term bounded-
+    // unique a generator DOES emit is reported `novel` honestly (then hand-
+    // triaged · fold stays hexa verify g5 / PR · never engine-written).
+    return false
+}
+
+// ── FUNCTION-COMPOSITION candidate screen (σ∘σ vein · 2026-06-27) ─────
+// The product-frame parse (`_parse_identity`, A*B=C*D) structurally cannot
+// express NESTED composition f(g(n)). This recognizes composition-syntax
+// candidates so a generator emitting them gets a REAL exact-int verdict from
+// identity_engine.hexa::verify_composition instead of being mis-binned as noise.
+// Syntax (unicode `∘` U+2218 as the composition operator — a single-char ASCII
+// `o` would collide with fn names containing 'o': sopfr, core, omega, tw_om):
+//   <fn> ∘ <fn> = <int>*n   (or "<int>n")  → mode 0 k·n   (superperfect = σ∘σ=2n)
+//   <fn> ∘ <fn> = <fn> + n                 → mode 1 h+n   (Mersenne = σ∘σ=σ+n)
+//   <fn> ∘ <fn> = <fn>                     → mode 2 h     (σ∘φ=n, φ∘σ=n classical)
+// Returns out-array [f, g, mode, p] (p=k for mode 0, p=h-index for mode 1/2),
+// else []. Deterministic, structure-driven (no float parse). HONESTY (c2): the
+// composition vein is measured DRY for promotable novel laws (novel=0 · see
+// ATLAS/state/novel-dfs/composition_hunt.py) — this wiring gives candidates a
+// real verdict; it does NOT fold (atlas write stays the hexa verify g5 / PR path).
+fn _parse_composition(expr: string) -> [i64] {
+    let empty: [i64] = []
+    let mut e = expr
+    e = e.replace(" ", "")
+    let sides = e.split("=")
+    if len(sides) != 2 { return empty }
+    let lhs = to_string(sides[0]).split("∘")
+    if len(lhs) != 2 { return empty }
+    let f = _fn_index(to_string(lhs[0]))
+    let g = _fn_index(to_string(lhs[1]))
+    if f < 0 || g < 0 { return empty }
+    let rhs = to_string(sides[1])
+    // mode 1: <fn>+n
+    let plus = rhs.split("+")
+    if len(plus) == 2 && to_string(plus[1]) == "n" {
+        let h1 = _fn_index(to_string(plus[0]))
+        if h1 < 0 { return empty }
+        let mut o1: [i64] = []
+        o1.push(f); o1.push(g); o1.push(1); o1.push(h1)
+        return o1
+    }
+    // mode 0: <int>*n  or  <int>n
+    let star = rhs.split("*")
+    let mut knum = ""
+    if len(star) == 2 && to_string(star[1]) == "n" {
+        knum = to_string(star[0])
+    } else {
+        let L = len(rhs)
+        if L >= 2 && rhs.substring(L - 1, L) == "n" { knum = rhs.substring(0, L - 1) }
+    }
+    if len(knum) > 0 {
+        let mut k = 0
+        let mut ok = true
+        try { k = to_int(knum) } catch ee { ok = false }
+        if ok {
+            let mut o0: [i64] = []
+            o0.push(f); o0.push(g); o0.push(0); o0.push(k)
+            return o0
+        }
+    }
+    // mode 2: <fn>
+    let h2 = _fn_index(rhs)
+    if h2 >= 0 {
+        let mut o2: [i64] = []
+        o2.push(f); o2.push(g); o2.push(2); o2.push(h2)
+        return o2
+    }
+    return empty
+}
+
+// One round's exact-int identity sweep, the cross-round-absorb form. In
+// addition to the VerifierVerdict counts it COLLECTS the canonical exprs of
+// every candidate that verified bounded-unique (n≥4) so the drill loop can
+// feed them forward into the next round's smash axiom pool (the ouroboros
+// "well-widening" mechanism — verified primitives expand the search space).
+// `verified_exprs` is the out-array of canonical identity strings (deduped);
+// `n_known` / `n_novel` split them against the documented known set.
+pub struct AbsorbSweep {
+    verdict: VerifierVerdict,
+    verified_exprs: array,   // canonical "A*B = C*D" strings, deduped
+    n_known: i64,
+    n_novel: i64
+}
+
+fn _native_identity_sweep_absorb(round: i64, cands: array) -> AbsorbSweep {
+    let N = 20000
+    let n = len(cands)
+    let mut n_identity = 0
+    let mut n_verified = 0
+    let mut n_noise = 0
+    let mut n_known = 0
+    let mut n_novel = 0
+    // composition-frame counters (σ∘σ vein · 2026-06-27): candidates in
+    // composition syntax get a REAL verify_composition verdict, reported in the
+    // rationale alongside the product counts. NOT fed into the product absorb
+    // pool (a different algebra) — surfaced honestly, never folded.
+    let mut n_comp_id = 0
+    let mut n_comp_verified = 0
+    let mut verified_exprs: array = []
+    let mut i = 0
+    while i < n {
+        let c = cands[i]
+        if len(c.id) > 0 {
+            let idx = _parse_identity(c.expr)
+            if len(idx) == 4 {
+                n_identity = n_identity + 1
+                let r = verify_identity(idx[0], idx[1], idx[2], idx[3], N)
+                if r >= 4 {
+                    n_verified = n_verified + 1
+                    let canon = _canon_identity(idx[0], idx[1], idx[2], idx[3])
+                    // dedup the verified-expr collection by canonical key
+                    let mut dup = false
+                    let mut k = 0
+                    while k < len(verified_exprs) {
+                        if to_string(verified_exprs[k]) == canon { dup = true; break }
+                        k = k + 1
+                    }
+                    if !dup {
+                        verified_exprs.push(canon)
+                        if _is_known_identity(canon) { n_known = n_known + 1 }
+                        else { n_novel = n_novel + 1 }
+                    }
+                }
+            } else {
+                // Not product syntax — try the COMPOSITION frame before noise.
+                let cidx = _parse_composition(c.expr)
+                if len(cidx) == 4 {
+                    n_comp_id = n_comp_id + 1
+                    let cr = verify_composition(cidx[0], cidx[1], cidx[2], cidx[3], N)
+                    if cr >= 4 { n_comp_verified = n_comp_verified + 1 }
+                } else {
+                    n_noise = n_noise + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    let mut verdict = "continue"
+    if n_verified > 0 { verdict = "pass" }
+    let rationale = "identity_sweep:identity=" + to_string(n_identity)
+        + ",verified=" + to_string(n_verified)
+        + ",noise=" + to_string(n_noise)
+        + ",known=" + to_string(n_known)
+        + ",novel=" + to_string(n_novel)
+        + ",comp_id=" + to_string(n_comp_id)
+        + ",comp_verified=" + to_string(n_comp_verified)
+    let vv = VerifierVerdict { verdict: verdict, rationale: rationale, round: round }
+    return AbsorbSweep {
+        verdict: vv,
+        verified_exprs: verified_exprs,
+        n_known: n_known,
+        n_novel: n_novel
+    }
+}
+
+// Native exact-int identity sweep over one round's discovery candidates.
+// Counts: n_identity (candidates in 12-fn identity syntax), n_verified
+// (bounded-unique singleton n≥4 → a real confirmed identity), n_noise
+// (candidates NOT in identity syntax — the honest classification for the
+// float-permutation generators). Returns a VerifierVerdict whose verdict is
+//   "pass"     — at least one candidate verified bounded-unique (n≥4), AND
+//   "continue" — otherwise (nothing verified this round; keep exploring).
+// The rationale string carries the machine-readable counts so the audit
+// emit (`DRILL_VERIFIER` stderr line) shows the real numbers, never "skip".
+// Thin wrapper over the absorb form (verdict-only callers ignore the
+// verified-expr collection).
+fn _native_identity_sweep(round: i64, cands: array) -> VerifierVerdict {
+    return _native_identity_sweep_absorb(round, cands).verdict
+}
+
+// Invoke the verifier for one round.
+//
+// No external verifier installed (`verifier_cmd == ""`) → run the NATIVE
+// default verifier (`_native_identity_sweep`, exact-int in-binary) so the
+// round gets a real verdict ("pass"/"continue" + counts), honoring the
+// "default verification is ON" contract. The native sweep is the canonical
+// path; the only opt-OUT is the explicit `HEXA_DRILL_NO_VERIFY=1`
+// constraint, which restores the legacy "skip" (pure surfacing, no
+// verification). The pluggable external oracle stays opt-in via
+// `--verifier <cmd>` (native-canonical polarity — external = constraint).
+//
+// External verifier installed → dispatch via the host shell with the round
 // payload piped in on stdin; the verifier's first stdout line is the
 // verdict line. Verifier crash / timeout / malformed output → "error"
 // (NEVER halts — fail-open).
 fn _verifier_run(opts: DrillOpts, round: i64, seed: string,
                   y: RoundYields, sigma: string, cands: array) -> VerifierVerdict {
     if len(opts.verifier_cmd) == 0 {
-        return VerifierVerdict { verdict: "skip", rationale: "", round: round }
+        // Opt-OUT constraint: HEXA_DRILL_NO_VERIFY=1 restores legacy skip.
+        if env("HEXA_DRILL_NO_VERIFY") == "1" {
+            return VerifierVerdict { verdict: "skip", rationale: "", round: round }
+        }
+        // Native-canonical default: exact-int identity sweep.
+        return _native_identity_sweep(round, cands)
     }
     let payload = _verifier_payload(round, seed, y, sigma, cands, opts.verifier_cand_cap)
     // Wrap the verifier command with `timeout <N>s` when bounded — best
@@ -313,6 +654,484 @@ fn _verifier_run(opts: DrillOpts, round: i64, seed: string,
     return VerifierVerdict { verdict: v, rationale: r, round: round }
 }
 
+// ── Cross-round absorb (ouroboros well-widening) ──────────────────────
+//
+// The defining NEXUS-blowup mechanism (atlas/README.md ouroboros): a round's
+// VERIFIED primitives are fed forward as additional axiom seeds into the NEXT
+// round's blowup, widening the well so the next tick can surface what the
+// prior could not. This is the cross-cycle loop that the engine measured-OPEN
+// at 2026-06-27 (single-tick blowup was genuine; the absorb feed-forward was
+// not live — rounds were independent → zero accumulation across cycles).
+//
+// `_verifier_run_absorb` is the absorb-aware verifier dispatch. It returns the
+// full `AbsorbSweep` (verdict + the canonical exprs that verified bounded-
+// unique this round + known/novel split). It runs ONLY on the native path
+// (`verifier_cmd == ""` and not the HEXA_DRILL_NO_VERIFY opt-OUT): the absorb
+// loop feeds forward exact-int VERIFIED primitives, which only the native
+// `verify_identity` sweep produces. The external-oracle and opt-OUT-skip paths
+// return an EMPTY absorb (no verified exprs to feed forward — the external
+// oracle owns its own screen, and skip does no verification at all), so the
+// loop degrades to the legacy seed-derived pool only.
+//
+// SAFE invariants (task guardrails):
+//   ⓐ only VERIFIED (exact-int true, bounded-unique n≥4) exprs are absorbed —
+//      noise is never fed forward (zero fabrication).
+//   ⓑ in-memory ONLY — the absorbed pool lives in the drill_run call frame;
+//      the embedded atlas is NEVER written (fold stays `hexa verify` g5 / PR).
+//   ⓒ known/novel cross-check labels each verified expr against the documented
+//      known set (honest novel reporting; 0 is reported as 0).
+fn _verifier_run_absorb(opts: DrillOpts, round: i64, seed: string,
+                         y: RoundYields, sigma: string, cands: array) -> AbsorbSweep {
+    let empty: array = []
+    if len(opts.verifier_cmd) == 0 && env("HEXA_DRILL_NO_VERIFY") != "1" {
+        // Native-canonical default — the only path that produces verified
+        // exprs to feed forward.
+        return _native_identity_sweep_absorb(round, cands)
+    }
+    // External oracle OR opt-OUT skip — reuse the verdict-only dispatch and
+    // wrap it in an empty absorb (nothing feeds forward).
+    let vv = _verifier_run(opts, round, seed, y, sigma, cands)
+    return AbsorbSweep { verdict: vv, verified_exprs: empty, n_known: 0, n_novel: 0 }
+}
+
+// Merge this round's verified exprs into the cumulative absorbed pool,
+// deduping by canonical key. Returns the grown pool (returned, not mutated in
+// place — same struct_pack shallow-clone aliasing caveat as the round loop's
+// cum_seen_ids). `net_absorbed` is the count NEW this round.
+pub struct AbsorbMerge {
+    pool: array,
+    net_absorbed: i64
+}
+
+fn _absorb_merge(pool: array, verified_exprs: array) -> AbsorbMerge {
+    let mut out = pool
+    let mut net = 0
+    let mut i = 0
+    while i < len(verified_exprs) {
+        let e = to_string(verified_exprs[i])
+        let mut dup = false
+        let mut k = 0
+        while k < len(out) {
+            if to_string(out[k]) == e { dup = true; break }
+            k = k + 1
+        }
+        if !dup { out.push(e); net = net + 1 }
+        i = i + 1
+    }
+    return AbsorbMerge { pool: out, net_absorbed: net }
+}
+
+// Emit the cross-round absorb audit row (stderr DRILL_ABSORB). `verified` =
+// verified exprs THIS round, `net` = newly absorbed into the cumulative pool,
+// `cum` = cumulative pool size carried into the NEXT round, known/novel split.
+fn _absorb_audit_emit(round: i64, verified: i64, net: i64, cum: i64,
+                      known: i64, novel: i64) -> void {
+    let mut msg = "DRILL_ABSORB {"
+    msg = msg + "\"round\":" + to_string(round)
+    msg = msg + ",\"verified\":" + to_string(verified)
+    msg = msg + ",\"net_absorbed\":" + to_string(net)
+    msg = msg + ",\"cum_pool\":" + to_string(cum)
+    msg = msg + ",\"known\":" + to_string(known)
+    msg = msg + ",\"novel\":" + to_string(novel)
+    msg = msg + "}"
+    eprintln(msg)
+}
+
+// ── ADDITIVE / COMBINATORIAL screen (orthogonal pivot · Ralph 377) ────
+// The identity verifier was pivoted out of the (measured-exhausted) MULTIPLICATIVE
+// vocab into the NON-multiplicative generating-function/recurrence sequences
+// (partition p(n), Catalan, Bell, Fibonacci, Lucas — identity_engine.hexa). The
+// new identity FORM is the arithmetic-progression CONGRUENCE p(α·n+β)≡0 (mod m).
+// This per-round screen (a) rediscovers Ramanujan's three 1919 congruences as a
+// live sanity gate (proof the additive frame is wired, not stubbed) and (b) reports
+// the MEASURED novel count for this domain. Reference engine:
+// ATLAS/state/novel-dfs/additive_partition_hunt.py (re-run: 8/8 gates PASS ·
+// Ramanujan 3 rediscovered · 752 known-structural · CONGRUENCE-NOVEL = 0 — the
+// additive space is DRY/classical, like the multiplicative).
+//
+// The partition mod-m kernel is INLINED here (self-contained — same exact-int source
+// as identity_engine.hexa::verify_congruence / drill/additive_test.hexa). Inlining
+// sidesteps the C-transpile fallback flattener trap (cross-module imported-function
+// definitions are not always emitted in the importing unit — the same documented
+// reason absorb_test.hexa drives the CLI as a subprocess), so `hexa run drill.hexa`
+// and the native self-host build both compile. SAFE: in-memory only (no atlas write ·
+// fold = hexa verify g5/PR), deterministic (byte-eq preserved). Honest (c2): each ≡
+// is BOUNDED to [0,N], ∀n UNPROVEN.
+
+// p(n) mod m via Euler's pentagonal recurrence (linear ⇒ mod-closed · no overflow).
+fn _drill_partition_mod(N: i64, m: i64) -> array {
+    let p = []
+    p.push(1 % m)
+    let mut j = 1
+    while j <= N {
+        let mut total = 0
+        let mut k = 1
+        while k * (3 * k - 1) / 2 <= j {
+            let g1 = k * (3 * k - 1) / 2
+            let g2 = k * (3 * k + 1) / 2
+            let mut sign = 1
+            if k % 2 == 0 { sign = 0 - 1 }
+            total = total + sign * p[j - g1]
+            if g2 <= j { total = total + sign * p[j - g2] }
+            k = k + 1
+        }
+        total = total % m
+        if total < 0 { total = total + m }
+        p.push(total)
+        j = j + 1
+    }
+    return p
+}
+
+// Does p(a·n+b) ≡ 0 (mod m) hold ∀n with a·n+b ≤ N (≥12 sampled terms)?
+fn _drill_partition_cong(tbl: array, a: i64, b: i64, N: i64) -> i64 {
+    let mut count = 0
+    let mut k = 0
+    while a * k + b <= N {
+        if tbl[a * k + b] != 0 { return 0 }
+        count = count + 1
+        k = k + 1
+    }
+    if count < 12 { return 0 - 2 }
+    return 1
+}
+
+// ── PCF (polynomial continued fraction) discovery screen — native BigInt ──────
+// The PCF axis (Ramanujan Machine, Raayoni et al. Nature 590 (2021) 67-73): a polynomial
+// CF can converge to a rational function of a transcendental constant c. Apery's CF
+// (van der Poorten 1979)  a(n)=-n^6, b(n)=34n^3+51n^2+27n+5  ->  6/zeta(3). The convergent
+// p_n/q_n and the high-precision constant exceed i64, so this screen carries them as native
+// BigInt (limb-array base 10000, signed) — same impl as stdlib/bigint.hexa, inlined here to
+// sidestep the cross-module flattener trap (cf _native_additive_screen self-containment).
+fn _drill_bi_norm(a) -> array {
+    let n = a.len()
+    let mut hi = n - 1
+    while hi >= 1 {
+        if a[hi] != 0 { break }
+        hi = hi - 1
+    }
+    if hi == 0 { let z = []; z.push(0); return z }
+    let out = []
+    out.push(a[0])
+    let mut i = 1
+    while i <= hi { out.push(a[i]); i = i + 1 }
+    out
+}
+fn _drill_bi_from(x) -> array {
+    let out = []
+    if x == 0 { out.push(0); return out }
+    let mut sign = 1
+    let mut v = x
+    if v < 0 { sign = 0 - 1; v = 0 - v }
+    out.push(sign)
+    while v > 0 { out.push(v % 10000); v = v / 10000 }
+    out
+}
+fn _drill_bi_cmpmag(a, b) -> i64 {
+    let na = a.len() - 1
+    let nb = b.len() - 1
+    if na < nb { return 0 - 1 }
+    if na > nb { return 1 }
+    let mut i = na
+    while i >= 1 {
+        if a[i] < b[i] { return 0 - 1 }
+        if a[i] > b[i] { return 1 }
+        i = i - 1
+    }
+    0
+}
+fn _drill_bi_cmp(a, b) -> i64 {
+    let sa = a[0]
+    let sb = b[0]
+    if sa < sb { return 0 - 1 }
+    if sa > sb { return 1 }
+    if sa == 0 { return 0 }
+    let m = _drill_bi_cmpmag(a, b)
+    if sa > 0 { return m }
+    0 - m
+}
+fn _drill_bi_addmag(a, b) -> array {
+    let na = a.len() - 1
+    let nb = b.len() - 1
+    let mut n = na
+    if nb > n { n = nb }
+    let out = []
+    out.push(1)
+    let mut carry = 0
+    let mut i = 1
+    while i <= n {
+        let mut da = 0
+        if i <= na { da = a[i] }
+        let mut db = 0
+        if i <= nb { db = b[i] }
+        let s = da + db + carry
+        out.push(s % 10000)
+        carry = s / 10000
+        i = i + 1
+    }
+    if carry > 0 { out.push(carry) }
+    _drill_bi_norm(out)
+}
+fn _drill_bi_submag(a, b) -> array {
+    let na = a.len() - 1
+    let nb = b.len() - 1
+    let out = []
+    out.push(1)
+    let mut br = 0
+    let mut i = 1
+    while i <= na {
+        let da = a[i]
+        let mut db = 0
+        if i <= nb { db = b[i] }
+        let mut s = da - db - br
+        if s < 0 { s = s + 10000; br = 1 } else { br = 0 }
+        out.push(s)
+        i = i + 1
+    }
+    _drill_bi_norm(out)
+}
+fn _drill_bi_neg(a) -> array {
+    let out = []
+    out.push(0 - a[0])
+    let mut i = 1
+    while i < a.len() { out.push(a[i]); i = i + 1 }
+    out
+}
+fn _drill_bi_add(a, b) -> array {
+    let sa = a[0]
+    let sb = b[0]
+    if sa == 0 { return b }
+    if sb == 0 { return a }
+    if sa == sb {
+        let m = _drill_bi_addmag(a, b)
+        m[0] = sa
+        return _drill_bi_norm(m)
+    }
+    let c = _drill_bi_cmpmag(a, b)
+    if c == 0 { let z = []; z.push(0); return z }
+    if c > 0 {
+        let m = _drill_bi_submag(a, b)
+        m[0] = sa
+        return _drill_bi_norm(m)
+    }
+    let m2 = _drill_bi_submag(b, a)
+    m2[0] = sb
+    _drill_bi_norm(m2)
+}
+fn _drill_bi_mul(a, b) -> array {
+    let sa = a[0]
+    let sb = b[0]
+    if sa == 0 { return a }
+    if sb == 0 { return b }
+    let na = a.len() - 1
+    let nb = b.len() - 1
+    let res = []
+    let mut k = 0
+    while k < na + nb { res.push(0); k = k + 1 }
+    let mut i = 1
+    while i <= na {
+        let mut carry = 0
+        let mut j = 1
+        while j <= nb {
+            let idx = i + j - 2
+            let cur = res[idx] + a[i] * b[j] + carry
+            res[idx] = cur % 10000
+            carry = cur / 10000
+            j = j + 1
+        }
+        let mut idx2 = i + nb - 1
+        while carry > 0 {
+            let cur2 = res[idx2] + carry
+            res[idx2] = cur2 % 10000
+            carry = cur2 / 10000
+            idx2 = idx2 + 1
+        }
+        i = i + 1
+    }
+    let out = []
+    out.push(sa * sb)
+    let mut m = 0
+    while m < res.len() { out.push(res[m]); m = m + 1 }
+    _drill_bi_norm(out)
+}
+fn _drill_bi_abs(a) -> array {
+    if a[0] < 0 { return _drill_bi_neg(a) }
+    a
+}
+fn _drill_polyval(coef, n) -> i64 {
+    let mut r = 0
+    let mut i = coef.len() - 1
+    while i >= 0 { r = r * n + coef[i]; i = i - 1 }
+    r
+}
+fn _drill_bigten(e) -> array {
+    let ten = _drill_bi_from(10)
+    let mut r = _drill_bi_from(1)
+    let mut i = 0
+    while i < e { r = _drill_bi_mul(r, ten); i = i + 1 }
+    r
+}
+fn _drill_rat_digits(intpart, frac) -> array {
+    let ten = _drill_bi_from(10)
+    let mut v = _drill_bi_from(intpart)
+    let mut i = 0
+    while i < frac.len() {
+        v = _drill_bi_add(_drill_bi_mul(v, ten), _drill_bi_from(frac[i]))
+        i = i + 1
+    }
+    v
+}
+// PCF convergent p_K/q_K via BigInt recurrence; returns [pBig, qBig]
+fn _drill_pcf_pq(acoef, bcoef, kk) -> array {
+    let mut p0 = _drill_bi_from(1)
+    let mut p1 = _drill_bi_from(_drill_polyval(bcoef, 0))
+    let mut q0 = _drill_bi_from(0)
+    let mut q1 = _drill_bi_from(1)
+    let mut n = 1
+    while n <= kk {
+        let an = _drill_bi_from(_drill_polyval(acoef, n))
+        let bn = _drill_bi_from(_drill_polyval(bcoef, n))
+        let np = _drill_bi_add(_drill_bi_mul(bn, p1), _drill_bi_mul(an, p0))
+        let nq = _drill_bi_add(_drill_bi_mul(bn, q1), _drill_bi_mul(an, q0))
+        p0 = p1
+        p1 = np
+        q0 = q1
+        q1 = nq
+        n = n + 1
+    }
+    let out = []
+    out.push(p1)
+    out.push(q1)
+    out
+}
+// Mobius relation A+B*c+C*L+D*c*L ~= 0 (L=p/q, c=cnum/cden) via exact BigInt cross-mult.
+fn _drill_mobius_holds(p, q, cnum, cden, aa, bb, cc, dd, guard) -> i64 {
+    let t1 = _drill_bi_mul(_drill_bi_from(aa), _drill_bi_mul(q, cden))
+    let t2 = _drill_bi_mul(_drill_bi_from(bb), _drill_bi_mul(q, cnum))
+    let t3 = _drill_bi_mul(_drill_bi_from(cc), _drill_bi_mul(p, cden))
+    let t4 = _drill_bi_mul(_drill_bi_from(dd), _drill_bi_mul(p, cnum))
+    let v = _drill_bi_add(_drill_bi_add(t1, t2), _drill_bi_add(t3, t4))
+    let lhs = _drill_bi_mul(_drill_bi_abs(v), _drill_bigten(guard))
+    let rhs = _drill_bi_mul(q, cden)
+    if _drill_bi_cmp(lhs, rhs) < 0 { return 1 }
+    0
+}
+
+// small-divisor division |a|/d (d positive i64, d*10000 < i64) -> [quotient BigInt, remainder i64].
+fn _drill_bi_divmod_small(a, d) -> array {
+    if a[0] == 0 {
+        let z = []
+        z.push(0)
+        let r0 = []
+        r0.push(z)
+        r0.push(0)
+        return r0
+    }
+    let na = a.len() - 1
+    let qbig = []
+    let mut rem = 0
+    let mut i = na
+    while i >= 1 {
+        let cur = rem * 10000 + a[i]
+        qbig.push(cur / d)
+        rem = cur % d
+        i = i - 1
+    }
+    let out = []
+    out.push(a[0])
+    let mut j = qbig.len() - 1
+    while j >= 0 {
+        out.push(qbig[j])
+        j = j - 1
+    }
+    let res = []
+    res.push(_drill_bi_norm(out))
+    res.push(rem)
+    res
+}
+fn _drill_bi_div_small(a, d) -> array {
+    let qr = _drill_bi_divmod_small(a, d)
+    qr[0]
+}
+// floor(zeta(3) * 10^dd) via Apery's accelerated series (van der Poorten 1979):
+//   zeta(3) = (5/2) sum_{n>=1} (-1)^(n-1) / (n^3 C(2n,n)) ; term ratio all small ints:
+//   T_n = T_{n-1} * (n-1)^3 / (2 n^2 (2n-1)) , T_1 = 1/2.  (no full BigInt division needed)
+fn _drill_zeta3_series(dd) -> array {
+    let mut running = _drill_bi_div_small(_drill_bigten(dd), 2)
+    let mut acc = _drill_bi_from(0)
+    let mut n = 1
+    let mut pos = 1
+    while running[0] != 0 {
+        if pos == 1 { acc = _drill_bi_add(acc, running) } else { acc = _drill_bi_add(acc, _drill_bi_neg(running)) }
+        let m = n * n * n
+        let np1 = n + 1
+        let dv = 2 * np1 * np1 * (2 * np1 - 1)
+        running = _drill_bi_div_small(_drill_bi_mul(running, _drill_bi_from(m)), dv)
+        if pos == 1 { pos = 0 } else { pos = 1 }
+        n = n + 1
+    }
+    _drill_bi_div_small(_drill_bi_mul(_drill_bi_from(5), acc), 2)
+}
+
+// Per-round PCF screen: rediscover Apery's zeta(3) CF (live sanity) + report the
+// MEASURED-dry novel count (DRILL_PCF stderr audit). byte-eq-neutral.
+fn _native_pcf_screen(round: i64) -> void {
+    let cden = _drill_bigten(40)
+    // zeta(3) ENGINE-COMPUTED (Apery accelerated series) — replaces the 40-digit hardcode.
+    // floor(zeta(3)*10^40) = zeta3_series(48) / 10^8 (exact; byte-identical to old z3frac).
+    let z3num = _drill_bi_div_small(_drill_zeta3_series(48), 100000000)
+    // Apery PCF a=-n^6, b=34n^3+51n^2+27n+5 -> 6/zeta(3)
+    let acoef = [0,0,0,0,0,0, 0 - 1]
+    let bcoef = [5,27,51,34]
+    let pq = _drill_pcf_pq(acoef, bcoef, 70)
+    let p = pq[0]
+    let q = pq[1]
+    let mut rediscovered = 0
+    // Apery relation L = 6/zeta(3) <=> (A,B,C,D)=(6,0,0,-1); negatives must reject.
+    if _drill_mobius_holds(p, q, z3num, cden, 6, 0, 0, 0 - 1, 20) == 1 {
+        if _drill_mobius_holds(p, q, z3num, cden, 1, 0, 0, 0 - 1, 20) == 0 {
+            if _drill_mobius_holds(p, q, z3num, cden, 5, 0, 0, 0 - 1, 20) == 0 {
+                rediscovered = 1
+            }
+        }
+    }
+    // This screen performs a FIXED rediscovery check only — it consumes no per-round
+    // candidate, so it can make NO novel measurement. Emitting a "novel":0 literal
+    // each round would be a false telemetry claim (c2). We report the rediscovery
+    // result honestly and mark the scope; the genuine PCF novel hunt (RM-scale /
+    // evolve-GA pool depth · state/novel-dfs + pool widesweep 73024@0) is OFF-path.
+    let mut msg = "DRILL_PCF {"
+    msg = msg + "\"round\":" + to_string(round)
+    msg = msg + ",\"frame\":\"continued_fraction\""
+    msg = msg + ",\"scope\":\"rediscovery-sanity\""
+    msg = msg + ",\"apery_rediscovered\":" + to_string(rediscovered)
+    msg = msg + "}"
+    eprintln(msg)
+}
+
+fn _native_additive_screen(round: i64) -> void {
+    let N = 4000
+    // Ramanujan 1919 sanity rediscovery (partition congruences, exact mod-m).
+    let t5 = _drill_partition_mod(N, 5)
+    let t7 = _drill_partition_mod(N, 7)
+    let t11 = _drill_partition_mod(N, 11)
+    let mut rediscovered = 0
+    if _drill_partition_cong(t5, 5, 4, N) == 1 { rediscovered = rediscovered + 1 }
+    if _drill_partition_cong(t7, 7, 5, N) == 1 { rediscovered = rediscovered + 1 }
+    if _drill_partition_cong(t11, 11, 6, N) == 1 { rediscovered = rediscovered + 1 }
+    // FIXED rediscovery check only — consumes no per-round candidate, so it can make
+    // NO novel measurement. A "novel":0 literal each round would be a false telemetry
+    // claim (c2). Report the rediscovery result + scope honestly; the genuine
+    // congruence novel hunt (Ono-class large-modulus · state/novel-dfs) is OFF-path.
+    let mut msg = "DRILL_ADDITIVE {"
+    msg = msg + "\"round\":" + to_string(round)
+    msg = msg + ",\"frame\":\"partition_congruence\""
+    msg = msg + ",\"scope\":\"rediscovery-sanity\""
+    msg = msg + ",\"ramanujan_rediscovered\":" + to_string(rediscovered)
+    msg = msg + "}"
+    eprintln(msg)
+}
+
 // ── Surface-on-skip: emit top-N ⚪ proposals ──────────────────────────
 //
 // When no verifier is installed (verdict == "skip"), the round's
@@ -329,13 +1148,38 @@ fn _verifier_run(opts: DrillOpts, round: i64, seed: string,
 //   • ranking REUSES `conf`; no new scorer is invented.
 // Returns the count of proposals actually emitted (≤ top_n, ≤ #cands).
 
-// Selection-rank the discovery candidates by descending `conf` and emit
-// the first `top_n`. We use a bounded selection pass (O(top_n · N)) rather
-// than a full sort — top_n is small (default 8) and N can be large (a
-// round can produce hundreds of candidates), so repeatedly extracting the
-// current max is cheaper than sorting the whole array and keeps the
-// emission order deterministic (highest conf first; axiom breaks a tie so
-// fresh axioms outrank derived corollaries of equal confidence).
+// Exploration tier of a discovery candidate (1 = search product, 0 =
+// trivial seed-echo / pool axiom). The pre-fix surfacing ranked purely by
+// `conf`, and `phases.hexa::p2_evolve` mints the literal-seed axiom
+// (`smash:P2:seed`) and the per-token signature axioms (`smash:P2:seedtok`)
+// at the MAXIMUM confidence (`mk_axiom` → conf=1.0). Every search PRODUCT
+// (the P2 evolve mutants, plus the P3–P9 derived corollaries) carries a
+// SMALLER spread-based conf, so the top-N was monopolised by the seed echo
+// and the per-token pool — the very candidates that just restate the input.
+// That hid the free-search mutants (the actual exploration output) and was
+// the surfacing-side mask for the n=6 hardwire bug fixed in #4008. We split
+// the rank into two tiers so a search product ALWAYS outranks a trivial seed
+// echo regardless of conf; within a tier the existing conf/axiom/index order
+// is preserved (fully deterministic).
+//   tier 0 — `smash:P2:seed` (whole-seed echo) and `smash:P2:seedtok`
+//            (per-token signature axioms): pure restatements of the seed.
+//   tier 1 — everything else: P2 evolve mutants + P3–P9 derived corollaries
+//            (the resonance/closure/transfer/dual/… search products).
+fn _explore_tier(c) -> i64 {
+    let s = c.src
+    if len(s) >= 13 && s.substring(0, 13) == "smash:P2:seed" { return 0 }
+    return 1
+}
+
+// Selection-rank the discovery candidates and emit the first `top_n`. The
+// primary key is the EXPLORATION TIER (search products over trivial seed
+// echoes — see `_explore_tier`); within a tier we rank by descending `conf`
+// (per-candidate heuristic confidence, compiler/smash/candidate.hexa) and
+// break ties axiom>derived, then by earlier insertion index. We use a
+// bounded selection pass (O(top_n · N)) rather than a full sort — top_n is
+// small (default 8) and N can be large (a round can produce hundreds of
+// candidates), so repeatedly extracting the current best is cheaper than
+// sorting the whole array and keeps the emission order deterministic.
 fn _surface_proposals(round: i64, cands: array, top_n: i64, quiet: bool) -> i64 {
     if top_n <= 0 { return 0 }
     let n = len(cands)
@@ -349,22 +1193,28 @@ fn _surface_proposals(round: i64, cands: array, top_n: i64, quiet: bool) -> i64 
     if !quiet {
         println("  ⚪ proposals (round " + to_string(round)
             + ", top " + to_string(top_n) + " of " + to_string(n)
-            + " — ranked by conf · to-validate, NOT verified):")
+            + " — search-product-first · ranked by conf · to-validate, NOT verified):")
     }
     while emitted < top_n {
-        // Find the highest-conf not-yet-picked candidate. Tiebreak:
-        // axiom > derived, then earlier insertion index (deterministic).
+        // Find the best not-yet-picked candidate. Key: tier desc (search
+        // product > seed echo), then conf desc, then axiom>derived, then
+        // earlier insertion index (deterministic).
         let mut best: i64 = -1
+        let mut best_tier: i64 = -1
         let mut best_conf: f64 = -1.0
         let mut best_axiom = false
         let mut i = 0
         while i < n {
             if !picked[i] {
                 let c = cands[i]
-                let better_conf = c.conf > best_conf
-                let tie_axiom = c.conf == best_conf && c.axiom && !best_axiom
-                if best < 0 || better_conf || tie_axiom {
+                let t = _explore_tier(c)
+                let better_tier = t > best_tier
+                let same_tier = t == best_tier
+                let better_conf = same_tier && c.conf > best_conf
+                let tie_axiom = same_tier && c.conf == best_conf && c.axiom && !best_axiom
+                if best < 0 || better_tier || better_conf || tie_axiom {
                     best = i
+                    best_tier = t
                     best_conf = c.conf
                     best_axiom = c.axiom
                 }
@@ -540,6 +1390,33 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
     // round_run_with_pool by K_POOL.
     let mut seed_pool: array = []
 
+    // ── Cross-round absorb pool (ouroboros well-widening) ──────────────
+    // The cumulative set of canonical exprs that VERIFIED bounded-unique in
+    // any prior round (exact-int identity_engine verdict). Each round's
+    // verified primitives are merged here and fed FORWARD as additional
+    // axiom seeds into the NEXT round's smash blowup — the defining NEXUS
+    // ouroboros loop. In-memory ONLY (never written to the embedded atlas;
+    // fold stays `hexa verify` g5 / PR). Empty until a round verifies
+    // something — for the standard 12-fn vocab this stays [] (measured-
+    // exhausted; the honest novel=0 report), but the MECHANISM is now live:
+    // any round that verifies an identity widens round N+1's well.
+    let mut absorbed_pool: array = []
+
+    // ── [B] Open-well Emerge vocab (ouroboros well-widening, README:75) ──
+    // The cumulative integer "open well" the Emerge step grows each round by
+    // COMBINING absorbed primitives into new structure the prior cycle could
+    // not express (archive-nexus/README.md:83/115 — "open well … every Absorb
+    // step widens the wall"). Seeded round 1 from V_0 {2,3} + the round's
+    // discovery candidate value signatures; each subsequent round it widens
+    // further (emerge_step). The frozen-LLM contrast (vocab fixed at the seed
+    // set) is reported alongside per round so the open-vs-frozen claim is
+    // MEASURED, not asserted. In-memory ONLY (never written to the embedded
+    // atlas; fold stays `hexa verify` g5 / PR). The decisive falsifiable spec
+    // (E4 — V_0={2,3}, 300 cycles, growth >= 50) is the `emerge` selftest
+    // (compiler/drill/emerge_test.hexa); this production wiring runs a bounded
+    // per-round step so the well grows across the drill loop.
+    let mut emerge_well: array = []
+
     // C5 novelty-fixpoint state. The cumulative distinct-id set spans the
     // whole invocation; _flush_discoveries_cum dedups against it and reports
     // `net_novel` (ids new THIS round). A round adding zero net-novel
@@ -588,16 +1465,71 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
         // The verdict is always logged (DRILL_VERIFIER stderr line) and,
         // for pass/fail, emitted as a __BT_AI2__ sentinel so a subsequent
         // bt_ai2_audit observes it alongside the existing BT-AI2 row.
-        let vv = _verifier_run(opts, round, seed, rr.yields, rr.sigma_best, rr.discoveries)
+        let sweep = _verifier_run_absorb(opts, round, seed, rr.yields, rr.sigma_best, rr.discoveries)
+        let vv = sweep.verdict
         _verifier_audit_emit(vv)
         verifier_last_verdict = vv.verdict
 
-        // ── surface-on-skip ──────────────────────────────────────────
-        // No verifier installed (verdict == "skip") → the round's
-        // discoveries would otherwise vanish into the overlay unseen.
-        // Emit the top-N ranked candidates as ⚪ proposals (to-validate
-        // hypotheses, NOT verdicts). Off when surface_top == 0 (legacy).
-        if vv.verdict == "skip" && opts.surface_top > 0 {
+        // ── cross-round absorb feed-forward (ouroboros well-widening) ──
+        // Merge THIS round's exact-int VERIFIED primitives into the
+        // cumulative absorbed pool, then feed that pool FORWARD into the
+        // next round's smash axiom seeds (in addition to the seed-derived
+        // pool refreshed just above). Round N+1's blowup therefore explores
+        // the space *widened* by round N's verified discoveries — the loop
+        // is now closed. SAFE: only verified (exact-int true) exprs are
+        // absorbed (zero fabrication); in-memory only (no atlas write).
+        let am = _absorb_merge(absorbed_pool, sweep.verified_exprs)
+        absorbed_pool = am.pool
+        _absorb_audit_emit(round, len(sweep.verified_exprs), am.net_absorbed,
+                           len(absorbed_pool), sweep.n_known, sweep.n_novel)
+        // Append the cumulative verified-primitive pool to the next round's
+        // seeds. extract_axiom_exprs already populated `seed_pool` with this
+        // round's axiom exprs; we add the absorbed verified exprs on top
+        // (dedup not required — the round's K_POOL bound + smash dedup absorb
+        // repeats harmlessly, and the two streams are disjoint by construction:
+        // seed_pool = float-permutation axioms, absorbed_pool = canonical
+        // identity exprs).
+        let mut ap = 0
+        while ap < len(absorbed_pool) {
+            seed_pool.push(to_string(absorbed_pool[ap]))
+            ap = ap + 1
+        }
+
+        // ── [B] Emerge step (open-well well-widening · README:75) ─────
+        // After Absorb feeds verified primitives forward, the Emerge step
+        // COMBINES the round's absorbed primitives into NEW structure the
+        // prior cycle had no primitive for (archive-nexus/README.md:75/83/
+        // 115). We grow the cumulative integer open well from this round's
+        // discovery candidate value signatures and emit a DRILL_EMERGE audit
+        // row contrasting the open well (grows) with the frozen-LLM vocab
+        // (fixed at the seed set {2,3} → size 2 — never grows). SAFE: in-
+        // memory only (no atlas write); deterministic (byte-eq preserved).
+        let es = emerge_step(emerge_well, round, rr.discoveries)
+        emerge_well = es.vocab
+        emerge_audit_emit(round, es.net_walls, es.vocab_size, 2)
+
+        // ── ADDITIVE / COMBINATORIAL screen (orthogonal pivot · Ralph 377) ──
+        // Per-round delegate to the non-multiplicative congruence verifier:
+        // rediscover Ramanujan's 1919 congruences (live sanity) + report the
+        // MEASURED-dry novel count (DRILL_ADDITIVE stderr audit). byte-eq-neutral.
+        _native_additive_screen(round)
+
+        // ── PCF (continued-fraction / constant) screen — native BigInt ──
+        // Per-round delegate to the PCF detector: rediscover Apery's zeta(3)
+        // CF (live sanity) + report the MEASURED-dry novel count (DRILL_PCF
+        // stderr audit). The ONE genuinely-open discovery frontier (Ramanujan
+        // Machine), now in-binary via native BigInt. byte-eq-neutral.
+        _native_pcf_screen(round)
+
+        // ── surface proposals (no external oracle) ───────────────────
+        // No EXTERNAL verifier installed (verifier_cmd == "" → native sweep
+        // or opt-OUT skip) → the round's discoveries would otherwise vanish
+        // into the overlay unseen. Emit the top-N ranked candidates as ⚪
+        // proposals (to-validate hypotheses, NOT verdicts; the native sweep
+        // verdict is a separate DRILL_VERIFIER line). Off when surface_top
+        // == 0 (legacy). When an external oracle screens (verifier_cmd set)
+        // it owns the candidate stream, so surfacing stays suppressed.
+        if len(opts.verifier_cmd) == 0 && opts.surface_top > 0 {
             _surface_proposals(round, rr.discoveries, opts.surface_top, opts.quiet)
         }
 

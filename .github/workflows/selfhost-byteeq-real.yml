@@ -4,11 +4,17 @@
 # REAL (not exit-2-neutral) in CI, on the self-hosted runner `ghost-selfhost`
 # which holds the graduated gen3 slot ($HX_HOME/self/native/selfhost/).
 #
-# SAFETY: this workflow is PATH-FILTERED (only compiler-relevant changes) and is
-# NOT a required status check. If ghost is offline its check simply doesn't run /
-# stays pending, which does NOT block merges (the required gate is the always-on
-# ubuntu `selfhost-gates-summary`). Real byte-eq enforcement is best-effort-strong
-# here; the required floor stays deadlock-proof.
+# FALLBACK-DISPATCH (tool/ci_pick_runner.sh via the `dispatch` job): when ghost
+# is ONLINE + the event is same-repo we run REAL byte-eq on ghost; when ghost is
+# OFFLINE (or a fork PR) we fall back to the free GitHub-hosted macos-15, where
+# the gate runs in exit-2-NEUTRAL mode (no gen3 slot → byte-eq untestable, NOT
+# broken) instead of sitting pending forever. The dispatch job also emits an
+# `is_selfhosted` flag so the exit-2 REMAP is correct on each: on ghost exit-2 =
+# a real slot-missing FAILURE; on the macos-15 fallback exit-2 = expected NEUTRAL.
+#
+# SAFETY: PATH-FILTERED (only compiler-relevant changes) and NOT a required
+# status check. The required floor is the always-on ubuntu `selfhost-gates-summary`
+# — this workflow stays best-effort-strong + deadlock-proof either way.
 name: selfhost-byteeq-real
 
 on:
@@ -18,6 +24,8 @@ on:
       - 'compiler/**'
       - 'tool/selfhost_byteeq_gate.sh'
       - 'tool/determinism_gate.sh'
+      - 'tool/ci_pick_runner.sh'
+      - '.github/actions/pick-runner/**'
       - '.github/workflows/selfhost-byteeq-real.yml'
   push:
     branches: [main]
@@ -26,6 +34,8 @@ on:
       - 'compiler/**'
       - 'tool/selfhost_byteeq_gate.sh'
       - 'tool/determinism_gate.sh'
+      - 'tool/ci_pick_runner.sh'
+      - '.github/actions/pick-runner/**'
       - '.github/workflows/selfhost-byteeq-real.yml'
   workflow_dispatch:
 
@@ -37,35 +47,71 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ── dispatch — fallback-dispatch runner picker (free · always available) ─────
+  # Emits the darwin runs-on label (ghost when online + same-repo, else
+  # macos-15) plus `is_selfhosted` so the byte-eq job remaps exit-2 correctly.
+  dispatch:
+    name: dispatch (pick runner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      darwin_label: ${{ steps.darwin.outputs.label }}
+      is_selfhosted: ${{ contains(steps.darwin.outputs.label, 'self-hosted') }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: darwin
+        uses: ./.github/actions/pick-runner
+        with:
+          kind: darwin
+          eligible: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
+          # administration:read PAT (self-hosted runners list needs it; the
+          # default github.token CANNOT carry that scope → empty list → blind
+          # fallback). Absent secret → `|| github.token` = today's harmless
+          # macos-15 fallback; present → routing goes live. See PR/root-cause.
+          token: ${{ secrets.RUNNER_PROBE_TOKEN || github.token }}
+
   byteeq-real:
     name: selfhost-byteeq-real
-    runs-on: [self-hosted, macOS, ARM64, selfhost-gen2fix]
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.darwin_label) }}
     timeout-minutes: 90
+    env:
+      # 'true' on ghost (gen3 slot present → exit-2 is a real failure); 'false'
+      # on the macos-15 fallback (no slot → exit-2 is the expected NEUTRAL).
+      IS_SELFHOSTED: ${{ needs.dispatch.outputs.is_selfhosted }}
     steps:
       - uses: actions/checkout@v6
 
-      - name: byte-eq fixpoint — REAL (ghost gen3 slot)
+      - name: byte-eq fixpoint — REAL (ghost gen3 slot) / NEUTRAL (cloud fallback)
         shell: bash
         run: |
           set -uo pipefail
           rc=0
           bash tool/selfhost_byteeq_gate.sh || rc=$?
-          # On THIS runner the graduated gen3 slot is present, so exit 2
-          # (cannot-native-emit) means the slot went missing — a real failure here.
           if [ "$rc" -eq 2 ]; then
-            echo "::error::byte-eq exit-2 on the slot runner — gen3 slot missing at \$HX_HOME/self/native/selfhost"
-            exit 1
+            if [ "${IS_SELFHOSTED}" = "true" ]; then
+              # Slot is supposed to be present on ghost → exit-2 is a real regression.
+              echo "::error::byte-eq exit-2 on the slot runner — gen3 slot missing at \$HX_HOME/self/native/selfhost"
+              exit 1
+            fi
+            # GitHub-hosted fallback: no gen3 slot, byte-eq untestable NOT broken.
+            echo "::notice::byte-eq exit-2 on GitHub-hosted fallback (no gen3 slot) → NEUTRAL"
+            exit 0
           fi
           exit "$rc"
 
-      - name: determinism — REAL (gen3 default path)
+      - name: determinism — REAL (gen3 default path) / NEUTRAL (cloud fallback)
         shell: bash
         run: |
           set -uo pipefail
           rc=0
           bash tool/determinism_gate.sh || rc=$?
           if [ "$rc" -eq 2 ]; then
-            echo "::error::determinism exit-2 on the slot runner — gen3 slot missing"
-            exit 1
+            if [ "${IS_SELFHOSTED}" = "true" ]; then
+              echo "::error::determinism exit-2 on the slot runner — gen3 slot missing"
+              exit 1
+            fi
+            echo "::notice::determinism exit-2 on GitHub-hosted fallback (no gen3 slot) → NEUTRAL"
+            exit 0
           fi
           exit "$rc"

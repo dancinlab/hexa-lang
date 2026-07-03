@@ -1,114 +1,114 @@
-# stdlib — 폴더 가이드 (sub-CLAUDE)
+# stdlib — folder guide (sub-CLAUDE)
 
-> hexa-lang **거버넌스 SSOT 는 repo-root `../CLAUDE.md`** (이 파일은 그 하위 디렉터리 안내일
-> 뿐, 충돌 시 root 우선). 설계 SSOT 는 `../ARCHITECTURE.json` (Component map · Data flow).
-> 이력은 git + `../CHANGELOG.md`. 이 파일은 지도일 뿐 — 버전/날짜 누적 금지.
+> hexa-lang **governance SSOT is the repo-root `../CLAUDE.md`** (this file is only a guide to that
+> subdirectory; on conflict, root wins). The design SSOT is `../ARCHITECTURE.json` (Component map · Data flow).
+> History lives in git + `../CHANGELOG.md`. This file is only a map — no accumulating versions/dates.
 
-## 이 디렉터리는 무엇인가
+## What is this directory
 
-`stdlib/` = `.hexa` 표준 라이브러리. ~2270 `.hexa` 파일로, 성격이 다른 **두 반구**가 한
-디렉터리에 산다 — ⓐ 범용 spine(core·collections·io·json·net·http·time·path·crypto·…)와
-ⓑ 거대한 **과학-수치 반구**(qforge·bio·flame·quantum·chem·signal·matter·physics·kernels·…).
-범용 spine 은 컴파일러/툴체인이 쓰는 일반 자료구조·I/O·파싱 유틸이고, 과학 반구는
-도메인 시뮬·수치 커널·ML 학습/추론 스택으로 대부분 `hexa <verb>`(예 `hexa qforge`) 런타임
-디스패치나 도메인 라이브러리로 소비된다.
+`stdlib/` = the `.hexa` standard library. ~2270 `.hexa` files in which **two hemispheres** of differing
+character live in one directory — ⓐ the general-purpose spine (core·collections·io·json·net·http·time·path·crypto·…) and
+ⓑ the huge **science-numeric hemisphere** (qforge·bio·flame·quantum·chem·signal·matter·physics·kernels·…).
+The general-purpose spine is the everyday data-structure·I/O·parsing utilities the compiler/toolchain uses, while the science hemisphere is
+domain sims·numeric kernels·ML train/inference stacks consumed mostly via `hexa <verb>` (e.g. `hexa qforge`) runtime
+dispatch or as domain libraries.
 
-## 주요 서브트리 맵
+## Main subtree map
 
-### 범용 spine (core / 일반)
+### general-purpose spine (core / general)
 ```
-core/          — 기반 타입·산술: string · bytes · math · parse · special · option/result · trait fixtures
-collections.hexa · hashset.hexa · record.hexa · smart_ptr.hexa — 일반 자료구조
-io.hexa · log.hexa · path.hexa · portable_fs.hexa · proc.hexa · sys.hexa — I/O·프로세스·FS
-json* · yaml.hexa · csv·parse.hexa · semver.hexa · argparse.hexa · regex/ — 파싱·직렬화
-net/ · http*.hexa · http_sse.hexa · websocket.hexa · channel.hexa · future.hexa · cancel.hexa — 네트워크·동시성
-crypto/ (101) · hash/ · cert/ · qrng/ · cloak/ · keychain.hexa — 암호·해시·자격증명
-codec/ · regex/ · tokenize/ · time/ · stats/ · linalg/ · matrix/ · tensor/ — 인코딩·수치 유틸
-c_ffi.hexa · python_ffi.hexa · dynlink_caps.hexa · wasm/ · posix/ · hal/ (139) — FFI·플랫폼·HW abstraction
-hx/ · build/ · cloud/ (84) · ddp/ · registry_autodiscover.hexa — 패키지/빌드/클러스터 글루
+core/          — base types·arithmetic: string · bytes · math · parse · special · option/result · trait fixtures
+collections.hexa · hashset.hexa · record.hexa · smart_ptr.hexa — general data structures
+io.hexa · log.hexa · path.hexa · portable_fs.hexa · proc.hexa · sys.hexa — I/O·process·FS
+json* · yaml.hexa · csv·parse.hexa · semver.hexa · argparse.hexa · regex/ — parsing·serialization
+net/ · http*.hexa · http_sse.hexa · websocket.hexa · channel.hexa · future.hexa · cancel.hexa — networking·concurrency
+crypto/ (101) · hash/ · cert/ · qrng/ · cloak/ · keychain.hexa — crypto·hash·credentials
+codec/ · regex/ · tokenize/ · time/ · stats/ · linalg/ · matrix/ · tensor/ — encoding·numeric utilities
+c_ffi.hexa · python_ffi.hexa · dynlink_caps.hexa · wasm/ · posix/ · hal/ (139) — FFI·platform·HW abstraction
+hx/ · build/ · cloud/ (84) · ddp/ · registry_autodiscover.hexa — package/build/cluster glue
 ```
 
-### 과학-수치 반구 (numeric / ML)
+### science-numeric hemisphere (numeric / ML)
 ```
-qforge/ (365)  — 최대 과학 서브트리: SCF·DFPT·el-ph·MAE·smearing 등 first-principles 물리 (QE reference-match · `hexa qforge` CLI)
-bio/ (247)     — 생명: PK/PD · protein-fold · gene-edit · rna-therapy · organoid · xeno
-flame/ (140)   — ML 학습 스택 (decoder·trainer·flame_math) — 일부 byteeq-relevant (아래 참조)
-quantum/ (116) · qubit/ — 양자 회로·상태 시뮬
+qforge/ (365)  — largest science subtree: SCF·DFPT·el-ph·MAE·smearing and other first-principles physics (QE reference-match · `hexa qforge` CLI)
+bio/ (247)     — life: PK/PD · protein-fold · gene-edit · rna-therapy · organoid · xeno
+flame/ (140)   — ML training stack (decoder·trainer·flame_math) — some byteeq-relevant (see below)
+quantum/ (116) · qubit/ — quantum circuit·state sim
 chem/ (48)     — MD(langevin·verlet) · kinetics(TST·Arrhenius) · FEP/MBAR · SMILES
-signal/ (25)   — DSP: FFT · 필터(biquad) · mel filterbank · autocorrelation (native libm trig)
+signal/ (25)   — DSP: FFT · filters(biquad) · mel filterbank · autocorrelation (native libm trig)
 math/          — ode · special(elliptic) · lattice(A₂…Λ₂₄ Gram) · numtheory · rng · quadrature
-kernels/ (54)  — 저수준 수치/신경 커널 (lif_kernel 등) · mc_integrate/ · optim/
-physics/ · matter/ (42) · material/ · sim_universe/ (77) · space/ · nuclear/ — 물리·재료·우주
-nn.hexa · autograd.hexa · optim.hexa · safetensors.hexa — ML 코어 프리미티브
+kernels/ (54)  — low-level numeric/neural kernels (lif_kernel etc.) · mc_integrate/ · optim/
+physics/ · matter/ (42) · material/ · sim_universe/ (77) · space/ · nuclear/ — physics·materials·cosmos
+nn.hexa · autograd.hexa · optim.hexa · safetensors.hexa — ML core primitives
 ```
 
-### 도메인 클러스터 (응용 과학·엔지니어링)
+### domain clusters (applied science·engineering)
 ```
-재료/소자: crystal · graphene · perovskite · spintronic · photonic · memristor · neuromorphic · chip · metamaterial · aerogel
-에너지/화학: fusion · energy · co2-capture · green-nh3 · electrocat · photoredox · mlff · mol*.hexa
-회로/HW: vhdl · yosys · firmware · rtsc · booksim · component · memristor · srr · sscb
-시스템/툴: demi · deck · dojo · loop · lsp · scope · policy · research · discovery · easy · bot · cockpit · cluster
+materials/devices: crystal · graphene · perovskite · spintronic · photonic · memristor · neuromorphic · chip · metamaterial · aerogel
+energy/chemistry: fusion · energy · co2-capture · green-nh3 · electrocat · photoredox · mlff · mol*.hexa
+circuits/HW: vhdl · yosys · firmware · rtsc · booksim · component · memristor · srr · sscb
+systems/tools: demi · deck · dojo · loop · lsp · scope · policy · research · discovery · easy · bot · cockpit · cluster
 ```
-(전체 모듈 트리·dataflow 는 `../ARCHITECTURE.json` — 여기 중복 금지. 위는 기여자 진입용 지도.)
+(The full module tree·dataflow is `../ARCHITECTURE.json` — no duplication here. The above is a contributor-entry map.)
 
-## byteeq-neutrality 컨벤션 (IMPORTANT gotcha)
+## byteeq-neutrality convention (IMPORTANT gotcha)
 
-stdlib 모듈은 **self-host 컴파일러 클로저(`self/`)가 import 하지 않으면 "byteeq-neutral"** 이다.
-byteeq-neutral 모듈 편집은 `gen3≡gen4` 바이트-동일 self-host fixpoint 를 **바꿀 수 없으므로**,
-3타깃 byteeq 게이트 없이 **직접 고치고 PR CI 로 검증**한다 (과학 stdlib 대부분이 여기 해당 —
-런타임 디스패치 `hexa qforge`/`hexa deck` 등으로만 소비됨).
+A stdlib module is **"byteeq-neutral" unless the self-host compiler closure (`self/`) imports it**.
+Editing a byteeq-neutral module **cannot change** the `gen3≡gen4` byte-identical self-host fixpoint,
+so you **fix it directly and verify via PR CI** without the 3-target byteeq gate (most science stdlib is here —
+consumed only via runtime dispatch `hexa qforge`/`hexa deck` etc.).
 
-확인:
+Check:
 ```sh
 grep -rl "<module-path>" self/ | grep -vE 'test_|_test'   # empty = neutral
 ```
-⚠️ bare grep 은 **주석·CLI 디스패치 문자열에서 false-positive** 가 난다 — 예컨대 `self/main.hexa`
-는 `"stdlib/qforge/qforge_cli.hexa"` 를 런타임 verb 디스패치 경로로 **문자열로** 들고 있을 뿐
-컴파일 클로저에 끌어들이지 않는다(여전히 neutral). 애매하면 실제 `import …`/`from …` 구문인지
-hit 라인을 눈으로 확인할 것.
+⚠️ A bare grep gets **false-positives from comment·CLI dispatch strings** — e.g. `self/main.hexa`
+merely holds `"stdlib/qforge/qforge_cli.hexa"` **as a string** for a runtime verb dispatch path and does
+not pull it into the compile closure (still neutral). When in doubt, eyeball the hit line to confirm whether it is
+a real `import …`/`from …` statement.
 
-self/ 가 **진짜로 import** 하는 모듈은 **byteeq-RELEVANT** — 변경은 3타깃(x86_64-linux ·
-arm64-linux · darwin-arm64) byteeq 게이트가 필요하다. 알려진 예:
+Modules that self/ **actually imports** are **byteeq-RELEVANT** — a change needs the 3-target (x86_64-linux ·
+arm64-linux · darwin-arm64) byteeq gate. Known examples:
 - `nn.hexa` ← `self/env.hexa`
-- `autograd.hexa` ← `self/token.hexa` (외 codegen·parser·attrs 경로)
-- `path.hexa` · `self/stdlib/*` (array·map·random·tensor_ops) 도 클로저 내부
-relevant 모듈은 mini 에서 머지하지 말고 pool(aiden·summer·ghost) byteeq 실측 후 머지한다.
+- `autograd.hexa` ← `self/token.hexa` (plus codegen·parser·attrs paths)
+- `path.hexa` · `self/stdlib/*` (array·map·random·tensor_ops) are also inside the closure
+For relevant modules, do not merge on mini — merge after pool (aiden·summer·ghost) byteeq actual-measurement.
 
-## malformed-input guard 컨벤션
+## malformed-input guard convention
 
-stdlib 함수는 malformed/degenerate 입력을 **가드**해야 한다 — Inf/NaN/OOB 를 토해내는 대신
-문서화된 sentinel(`[]` · `0.0` · `-1.0` 등)을 반환한다.
-- `arr[0]`/`arr[i]` 읽기는 `len(arr)==0`(또는 인덱스 범위) 체크로 가드.
-- `/ divisor`(파라미터·길이·질량·sample_rate·temperature 등)는 `divisor<=0` 체크로 가드.
+A stdlib function must **guard** malformed/degenerate input — instead of spitting out Inf/NaN/OOB it
+returns a documented sentinel (`[]` · `0.0` · `-1.0` etc.).
+- `arr[0]`/`arr[i]` reads are guarded with a `len(arr)==0` (or index-range) check.
+- `/ divisor` (parameter·length·mass·sample_rate·temperature etc.) is guarded with a `divisor<=0` check.
 
-이 클래스는 대형 QA 캠페인의 주제였다(`../CHANGELOG.md` #3943..#3969 — ~69 byteeq-neutral 수정).
-한 번의 census(`tool/guard_class_census.py` · 재실행 가능)가 **~2576 후보 사이트/658 파일** 을
-측정 → 클래스가 stdlib 전반이라 수동 라운드론 고갈 불가 → **회귀 게이트로 전환**했다:
-- `tool/stdlib_guard_lint.hexa` — `.githooks/pre-commit` 에 **advisory(warn-only · non-blocking)**
-  로 와이어. 새로 추가된 unguarded 사이트(G1 unguarded-index · G2 unguarded-divide)를 flag.
-  휴리스틱이라 hard-fail 아닌 warn. (`--selftest`/`--mode=warn`/`--changed`)
-- `tool/guard_class_census.py` — 1회 전수 감사(one-shot)용.
+This class was the subject of a large QA campaign (`../CHANGELOG.md` #3943..#3969 — ~69 byteeq-neutral fixes).
+One census (`tool/guard_class_census.py` · re-runnable) measured **~2576 candidate sites/658 files**
+→ the class spans all of stdlib so manual round-robin can't deplete it → **converted to a regression gate**:
+- `tool/stdlib_guard_lint.hexa` — wired into `.githooks/pre-commit` as **advisory (warn-only · non-blocking)**.
+  Flags newly added unguarded sites (G1 unguarded-index · G2 unguarded-divide).
+  Heuristic, so warn not hard-fail. (`--selftest`/`--mode=warn`/`--changed`)
+- `tool/guard_class_census.py` — for a one-shot full audit.
 
-## native-canonical 컨벤션
+## native-canonical convention
 
-- math/signal 은 **native libm trig**(`cos`/`sin`/`tan`/…)를 쓴다 — 손짜기 Taylor series 금지
-  (codegen-fragile). 일반 polarity 는 root `../CLAUDE.md` [native-canonical-default] 와 lockstep.
-- 수치 커널은 **reference-match** 로 정답을 검증한다 — QE(qforge el-ph) · scipy/numpy(special·
-  lattice·stats) · LAPACK(linalg). parity 는 출발점이지 종착점이 아니다.
-- 테스트는 모듈 옆에 `*_test.hexa` / `*_selftest.hexa` 로 둔다(예 `core/string.hexa` ↔
-  `core/cmp_total_order_test.hexa` · `math/ode.hexa` ↔ `math/ode_test.hexa`). 일부 모듈은
-  자정답을 inline 한 self-contained 테스트라 출하 데이터 drift 를 못 잡을 수 있다(예 과거
-  `lattice_test` 가 inline Gram 으로 통과해 `gram_K12` 데이터 오류를 가렸음 — 출하 경로와 대조).
+- math/signal use **native libm trig** (`cos`/`sin`/`tan`/…) — no hand-rolled Taylor series
+  (codegen-fragile). General polarity is in lockstep with root `../CLAUDE.md` [native-canonical-default].
+- Numeric kernels verify correctness via **reference-match** — QE(qforge el-ph) · scipy/numpy(special·
+  lattice·stats) · LAPACK(linalg). Parity is a starting point, not the destination.
+- Tests sit beside the module as `*_test.hexa` / `*_selftest.hexa` (e.g. `core/string.hexa` ↔
+  `core/cmp_total_order_test.hexa` · `math/ode.hexa` ↔ `math/ode_test.hexa`). Some modules are
+  self-contained tests that inline their own answers and may miss shipped-data drift (e.g. in the past
+  `lattice_test` passed with an inline Gram and masked a `gram_K12` data error — cross-check the shipped path).
 
 ## gotcha
 
-- **거대 stdlib · per-module ownership** — 2270 파일이라 단일 소유자가 없다. 한 모듈을 고칠 때
-  옆 `*_test.hexa`/`*_selftest.hexa` 와 reference 정답을 같이 확인한다.
-- **공식 보유 함수는 atlas 인용 필수** — formula-bearing 함수는 `@cite(L[id])` · 활성 `@verify` ·
-  `@grace` 중 하나가 없으면 빌드가 binary emit 을 거부한다(S8 citation 게이트 · fatal `HX8004`).
-- **편집 전 byteeq 분류** — 손대기 전에 위 grep 으로 neutral/relevant 를 가른다. neutral 이면
-  mini 에서 직접 고쳐 PR CI; relevant 면 pool byteeq 3타깃 GREEN 후에만 머지.
-- **빌드/byteeq/측정은 pool**(aiden·summer·ghost) — `mini` 는 git/gh/read·write 전용
-  (heavy build·akida 금지).
-- **`.ai.md` 사이드카** — 일부 모듈 옆 `*.ai.md`(io·yaml·semver·channel·cancel·c_ffi 등)는 그
-  모듈의 AI 보조 노트다(소스 SSOT 아님 · root CLAUDE.md 우선).
+- **huge stdlib · per-module ownership** — at 2270 files there is no single owner. When fixing one module,
+  check the neighboring `*_test.hexa`/`*_selftest.hexa` and the reference answers together.
+- **formula-bearing functions require an atlas citation** — a formula-bearing function whose build lacks one of
+  `@cite(L[id])` · an active `@verify` · `@grace` will refuse binary emit (S8 citation gate · fatal `HX8004`).
+- **classify byteeq before editing** — before touching, split neutral/relevant with the grep above. If neutral,
+  fix directly on mini and PR CI; if relevant, merge only after pool byteeq 3-target GREEN.
+- **build/byteeq/measurement on pool** (aiden·summer·ghost) — `mini` is git/gh/read·write only
+  (no heavy build·akida).
+- **`.ai.md` sidecar** — the `*.ai.md` next to some modules (io·yaml·semver·channel·cancel·c_ffi etc.) is that
+  module's AI-assist note (not the source SSOT · root CLAUDE.md wins).

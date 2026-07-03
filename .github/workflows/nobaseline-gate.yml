@@ -42,7 +42,57 @@ env:
     self/native/hexa_cc.c self/forge/forge_tier_v1.c
     test/native_build/classd_behavioral_harness.c
 
+concurrency:
+  # Cancel a SUPERSEDED run only on PR re-push (a newer PR run replaces it and
+  # supplies the fresh required check); push/dispatch runs always complete so
+  # main's required-gate history stays intact. Frees runner minutes + shortens
+  # the PR queue on rapid re-pushes. Byteeq-inert (cancels stale work; never
+  # changes a build's inputs/outputs).
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # ── dispatch — fallback-dispatch runner picker (free · always available) ─────
+  # Probes whether a matching self-hosted runner is ONLINE and emits the heavy
+  # linux job's `runs-on` at runtime: self-hosted pool (aiden/summer · 12c/30G,
+  # far faster) when online + same-repo, else the free GitHub-hosted fallback.
+  # Pool-offline therefore NEVER wedges this gate — it just falls back. Fork PRs
+  # are forced to GitHub-hosted (no self-hosted RCE). See tool/ci_pick_runner.sh.
+  dispatch:
+    name: dispatch (pick runner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      linux_label: ${{ steps.linux.outputs.label }}
+      # darwin picker: ghost-selfhost (arm64 gen2_fix slot) when online + same-
+      # repo, else the free GitHub-hosted macos-15. The three faithful/smoke
+      # darwin jobs consume it via fromJSON — ghost-offline never wedges them.
+      darwin_label: ${{ steps.darwin.outputs.label }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: linux
+        uses: ./.github/actions/pick-runner
+        with:
+          kind: linux
+          # self-hosted only for same-repo events; fork PRs → GitHub-hosted.
+          eligible: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
+          # administration:read PAT (self-hosted runners list needs it; the
+          # default github.token CANNOT carry that scope → empty list → blind
+          # fallback). Absent secret → `|| github.token` = today's harmless
+          # macos-15 fallback; present → routing goes live. See PR/root-cause.
+          token: ${{ secrets.RUNNER_PROBE_TOKEN || github.token }}
+      - id: darwin
+        uses: ./.github/actions/pick-runner
+        with:
+          kind: darwin
+          # self-hosted only for same-repo events; fork PRs → GitHub-hosted.
+          eligible: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
+          # administration:read PAT (self-hosted runners list needs it; the
+          # default github.token CANNOT carry that scope → empty list → blind
+          # fallback). Absent secret → `|| github.token` = today's harmless
+          # macos-15 fallback; present → routing goes live. See PR/root-cause.
+          token: ${{ secrets.RUNNER_PROBE_TOKEN || github.token }}
+
   # ── faithful-nobaseline — the authoritative seed-removed release-safety gate.
   #
   # These faithful-* jobs model a `.c=0` checkout FAITHFULLY: remove ALL seeds
@@ -55,7 +105,8 @@ jobs:
   # shared definition.
   faithful-nobaseline-darwin-arm64:
     name: faithful-nobaseline (darwin-arm64)
-    runs-on: macos-latest
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.darwin_label) }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
@@ -76,6 +127,11 @@ jobs:
       # with the 23 seeds REMOVED. There is no separate gate copy of the stage
       # sequence to drift from release; this IS a dynamic seed-removed run of the
       # real release path. gate-green ≡ release-green by shared definition.
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
       - name: Build — shared release_build (seeds removed, edge-pull)
         shell: bash
         env:
@@ -83,7 +139,20 @@ jobs:
           CC: clang
           LIBS: ""
           GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
+          # FAITHFUL preserves the edge baseline byte-for-byte → opt OUT of the
+          # ship-default seed-convergence (release_build defaults it to 1). The
+          # convergence is a deterministic fixpoint, so release-converged ≡
+          # faithful-unconverged for every assertion below; this keeps the
+          # historical darwin-arm64 faithful path byte-identical (the stage
+          # comment's documented caveat).
+          HEXA_SEED_CONVERGE: "0"
         run: bash tool/release_build
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
 
       - name: Assert — ./hexa runs with seeds removed
         shell: bash
@@ -191,14 +260,16 @@ jobs:
 
   faithful-nobaseline-linux-x86_64:
     name: faithful-nobaseline (linux-x86_64)
-    # SELF-HOSTED (aiden/summer · linux-x64 · label hexa-build) — the faithful
-    # seeds-removed build is the heaviest x86_64 leg (~13–19 min on ubuntu);
-    # the shared x86_64 build pool serves it far faster (12c/30G hosts). Public
-    # repo: fork-PR runs require maintainer approval before any self-hosted
-    # runner picks them up (RCE-mitigated). If both runners are offline this
-    # job sits queued — see CLAUDE.md › CI for re-registration. arm64 + darwin
+    needs: dispatch
+    # FALLBACK-DISPATCH (tool/ci_pick_runner.sh via `dispatch` job): runs on the
+    # self-hosted x86_64 pool (aiden/summer · 12c/30G, far faster than the 2-core
+    # GitHub-hosted runner) WHEN a `hexa-build` runner is online + the event is
+    # same-repo; otherwise falls back to the free GitHub-hosted ubuntu-latest.
+    # This is the heaviest x86_64 leg (~13–19 min on cloud). Pool-offline no
+    # longer sits this job pending — it falls back, so the gate never wedges.
+    # Fork PRs are forced to GitHub-hosted (no self-hosted RCE). arm64 + darwin
     # legs stay on their cloud runners (no arm64 self-hosted host).
-    runs-on: [self-hosted, Linux, X64, hexa-build]
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.linux_label) }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -214,6 +285,11 @@ jobs:
       # ── SINGLE-JOB-FAITHFUL — same shared release_build + release_package the
       # real release runs, with seeds removed. Dynamic seed-removed run of the
       # real release path (no separate copy). See darwin job for full rationale.
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
       - name: Build — shared release_build (seeds removed, edge-pull)
         shell: bash
         env:
@@ -221,7 +297,42 @@ jobs:
           CC: gcc
           LIBS: "-lm -ldl"
           GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
+          # FAITHFUL: opt OUT of ship-default seed-convergence (see darwin job).
+          HEXA_SEED_CONVERGE: "0"
         run: bash tool/release_build
+
+      - name: nm-UND floor dump — RFC061 zero-c authoritative reducible libc (advisory)
+        if: always()
+        shell: bash
+        run: |
+          # RFC061 §M8 frozen-flip prerequisite: emit the DEFAULT build's undefined-libc
+          # floor so the reducible set is measurable from the CI log (mini cannot build;
+          # ad-hoc pool release_build/build_selfhost miss env → authoritative measurement
+          # is CI-harness-bound). Advisory only (never gates). SSOT: memory
+          # project_hexa_functional_zeroc_libc_floor_census.
+          RT="$(find build . -name runtime.a 2>/dev/null | head -1)"
+          echo "runtime.a: $RT ($(stat -c%s "$RT" 2>/dev/null || echo 0) bytes)"
+          if [ -f "$RT" ]; then
+            echo "=== RFC061 nm-UND reducible libc floor (sanctioned FFI/CRT/hexa-own/cuda excluded) ==="
+            nm -u "$RT" 2>/dev/null | awk '{print $2}' | sort -u \
+              | grep -vE '^(_hx_|__hexa|__hx_|__blk_|rt_|hexa_|_hexa|hxlcl_|_GLOBAL)' \
+              | grep -vE 'cuda|fatbin' \
+              | grep -vE '^(accept|bind|connect|listen|socket|recv|recvfrom|send|sendto|setsockopt|getsockopt|getaddrinfo|freeaddrinfo|gai_strerror|dlopen|dlsym|dlclose|dlerror|dladdr)' \
+              | grep -vE '^(__libc_|_exit|atexit|environ|mallopt|__cxa|__errno_location|__stack_chk|__assert)' \
+              | grep -vE '^(execve|execvp|setns|unshare|mount|umount2?|posix_spawn|opendir|readdir|closedir|glob|globfree|mkstemp|mkdtemp)' \
+              | grep -vE '^(qsort|rand|srand|strtod|strtof|strtold)' \
+              | tr '\n' ' '
+            echo ""
+            echo "=== RFC061 nm-UND TOTAL undefined: $(nm -u "$RT" 2>/dev/null | awk '{print $2}' | sort -u | wc -l) ==="
+          else
+            echo "(no runtime.a found — nm-UND dump skipped)"
+          fi
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
 
       - name: Assert — ./hexa runs with seeds removed
         shell: bash
@@ -291,6 +402,11 @@ jobs:
 
       # ── SINGLE-JOB-FAITHFUL — same shared release_build + release_package the
       # real release runs, with seeds removed. See darwin job for full rationale.
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
       - name: Build — shared release_build (seeds removed, edge-pull)
         shell: bash
         env:
@@ -298,7 +414,15 @@ jobs:
           CC: gcc
           LIBS: "-lm -ldl"
           GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
+          # FAITHFUL: opt OUT of ship-default seed-convergence (see darwin job).
+          HEXA_SEED_CONVERGE: "0"
         run: bash tool/release_build
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
 
       - name: Assert — ./hexa runs with seeds removed
         shell: bash
@@ -378,10 +502,16 @@ jobs:
   # tracked `.c`=0 are untouched.
   selfemit-livelink-smoke-darwin-arm64:
     name: SELFEMIT live-link smoke (darwin-arm64, advisory)
-    runs-on: macos-latest
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.darwin_label) }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
+
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
 
       # ── (1) Build ./hexa via the SHARED release path (DEFAULT runtime.a =
       #    libc-shim members; HEXA_RT_SELFEMIT unset). This both produces the
@@ -397,11 +527,17 @@ jobs:
           CC: clang
           LIBS: ""
           GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
         run: |
           set -euo pipefail
           bash tool/release_build
           ./hexa --version
           echo "(1) ./hexa built + seeds restored OK"
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
 
       # ── (2) Rebuild build/runtime.a WITH the §M8 SELFEMIT native members.
       #    SELFEMIT is nested INSIDE the HEXA_RT_MULTIOBJ packaging branch — BOTH
@@ -511,3 +647,129 @@ jobs:
           [ "$hello_out" = "hello" ] || { echo "FAIL: hello output != hello"; exit 1; }
           [ "$undef" = "0" ] || { echo "FAIL: $undef undefined hxlcl_* at consumer link"; exit 1; }
           echo "SELFEMIT live-link smoke GREEN — 21/55 §M8 members link + run (darwin-arm64)"
+
+  # ── ROUTE C ON-PATH emit smoke — RFC061 §M8 verify-done gap closure (ADVISORY) ──
+  #
+  # SIBLING to the SELFEMIT smoke above, but exercises the OTHER §M8 path: the
+  # Route C per-fn C-ABI codegen (`HEXA_CABI_HXLCL`). The SELFEMIT job runs the
+  # hand-assembled SEED objects; this job runs the actual Route C EMIT of
+  # stdlib/runtime/hxlcl_core.hexa — emit with HEXA_CABI_HXLCL=1, link the
+  # emitted .o against a self-contained C harness (which supplies the composite
+  # inner-callee leaves hxlcl_malloc/hxlcl_atoll and CALLS every Route-C-emitted
+  # symbol with raw C-ABI prototypes + behaviour asserts), then RUN. A clean
+  # build + all-asserts-pass is the direct ON-path proof the Route C emit produces
+  # correct, linkable, behaviourally-faithful raw-C-ABI objects — the coverage the
+  # SELFEMIT (seed) smoke does NOT provide (seed shape-match was the prior, weaker,
+  # inferential evidence). Advisory first; promote to required after measured green.
+  #
+  # DARWIN-ONLY: aprime_cc builds Mach-O arm64 (clang -arch arm64) — the single
+  # host where the patched compiler builds. macos-15 cloud runner (github-hosted;
+  # no blacksmith). CODE-NEUTRAL: adds ONLY this job + tool/routec_cabi_smoke.sh;
+  # HEXA_CABI_HXLCL stays default-OFF everywhere (release_build never sets it), so
+  # shipping binaries + byteeq + tracked `.c`=0 are untouched.
+  routec-cabi-smoke-darwin-arm64:
+    name: Route C ON-path emit smoke (darwin-arm64, advisory)
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.darwin_label) }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
+      # (1) Build ./hexa via the shared release path — also restores the gitignored
+      #     self/native/hexat transpiler + self/runtime.c seeds that build_aprime
+      #     needs present.
+      - name: (1) Build ./hexa — shared release_build (restores hexat + seeds)
+        shell: bash
+        env:
+          TARGET: darwin-arm64
+          CC: clang
+          LIBS: ""
+          GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
+        run: |
+          set -euo pipefail
+          bash tool/release_build
+          ./hexa --version
+          echo "(1) ./hexa built + hexat/seeds restored OK"
+
+      # (2) Build aprime_cc (the native arm64-asm compiler) — the binary that emits
+      #     the Route C .s under HEXA_CABI_HXLCL=1.
+      - name: (2) Build aprime_cc
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tool/build_aprime.sh -o build/aprime_cc
+          [ -x build/aprime_cc ] && echo "(2) aprime_cc built OK"
+
+      # (3) Emit hxlcl_core.hexa with HEXA_CABI_HXLCL=1, link the Route C .o against
+      #     the behaviour harness, run + assert. The script is a loud no-op off
+      #     darwin-arm64 (it is the only host here, so it runs).
+      - name: (3) Route C emit + link + behaviour run
+        shell: bash
+        env:
+          APRIME: build/aprime_cc
+          CC: clang
+        run: |
+          set -euo pipefail
+          bash tool/routec_cabi_smoke.sh
+
+  # ── Route C ON-path errno smoke (LINUX) — the errno-store value-exact gate ───
+  # The darwin smoke above DCE's out hxlcl_close's errno-store leg (its
+  # target_is_linux() guard is a compile-time FALSE const on darwin), so the ②
+  # extern-data substrate (errno SET via __errno_location + __hx_ptr_store32) has
+  # NO ON-path coverage there. This LINUX sibling runs the errno-store LIVE and
+  # asserts close's errno contract VALUE-EXACT (errno == EBADF) — the substrate's
+  # core claim. Self-hosted x86_64 pool (aiden/summer) when online; fork PRs +
+  # offline pool fall back to GitHub-hosted via the dispatch job, same as the
+  # faithful-nobaseline linux-x86_64 leg. Advisory first (promote after green).
+  # CODE-NEUTRAL: adds ONLY this job + tool/routec_cabi_smoke_linux.sh;
+  # HEXA_CABI_HXLCL stays default-OFF (release_build never sets it).
+  routec-cabi-smoke-linux-x86_64:
+    name: Route C ON-path errno smoke (linux-x86_64, advisory)
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.linux_label) }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
+      # (1) Build ./hexa via the shared release path — restores the gitignored
+      #     hexat transpiler + self/runtime.c seeds that build_aprime needs.
+      - name: (1) Build ./hexa — shared release_build (restores hexat + seeds)
+        shell: bash
+        env:
+          TARGET: linux-x86_64
+          CC: gcc
+          LIBS: "-lm -ldl"
+          GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
+        run: |
+          set -euo pipefail
+          bash tool/release_build
+          ./hexa --version
+          echo "(1) ./hexa built + hexat/seeds restored OK (linux-x86_64)"
+
+      # (2) Build aprime_cc (the native x86_64-asm compiler) — the binary that
+      #     emits the Route C .s under HEXA_CABI_HXLCL=1 for the linux target.
+      - name: (2) Build aprime_cc
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tool/build_aprime.sh -o build/aprime_cc
+          [ -x build/aprime_cc ] && echo "(2) aprime_cc built OK"
+
+      # (3) Emit hxlcl_core.hexa (--target=x86_64-linux), link the Route C .o
+      #     against the errno harness, run + assert errno == EBADF value-exact.
+      - name: (3) Route C errno emit + link + value-exact run
+        shell: bash
+        env:
+          APRIME: build/aprime_cc
+          CC: gcc
+        run: |
+          set -euo pipefail
+          bash tool/routec_cabi_smoke_linux.sh

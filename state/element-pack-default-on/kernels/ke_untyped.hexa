@@ -1,0 +1,16 @@
+// Ke — UNTYPED / non-typed-prim element kind. `let mut xs = []` has no element
+// type annotation -> MIR type_id stays 0 (not 101/102) -> the lattice never
+// marks it packed (only i64/i32 typed-prim qualify) -> BOXED. OFF==ON.
+fn main() {
+    let mut xs = []
+    xs.push(1)
+    xs.push(2)
+    xs.push(3)
+    let mut s = 0
+    let mut j = 0
+    while j < 3 {
+        s = s + xs[j]
+        j = j + 1
+    }
+    println(s)
+}

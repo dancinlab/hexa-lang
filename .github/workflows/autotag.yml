@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   autotag:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,12 +60,12 @@ jobs:
           # 순수 docs/chore/ci/style/test/refactor 머지는 출하 바이너리가
           # byte-identical 이므로 풀 3타깃 재빌드 + tag-storm 만 유발 → skip
           # (squash-merge 커밋 subject = PR 제목 = conventional type 으로 판정).
-          # `test` 롤링 prerelease (release.yml 의 main-push 트리거) 는 여전히
-          # 매 머지 발행되므로 실험 채널·`HEXA_VERSION=test` 소비자는 무영향.
+          # skip 된 byte-identical 변경은 다음 release-worthy 머지의 stable 태그에
+          # 함께 실린다 (구 `test` 롤링 prerelease 채널은 폐기됨 — 2026-06-30).
           subjects="$(git log --format='%s' "$range")"
           if ! grep -qiE '^(feat|fix|perf)(\([^)]*\))?!?:' <<<"$subjects" \
              && ! grep -q 'BREAKING CHANGE' <<<"$msgs"; then
-            echo "no release-worthy commit (feat/fix/perf/BREAKING) since ${last} — skip stable tag (docs/chore/ci-only). test prerelease still ships."
+            echo "no release-worthy commit (feat/fix/perf/BREAKING) since ${last} — skip stable tag (docs/chore/ci-only · byte-identical, folds into next release-worthy tag)."
             exit 0
           fi
 

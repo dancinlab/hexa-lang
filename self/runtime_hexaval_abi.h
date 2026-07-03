@@ -70,6 +70,14 @@ typedef struct HexaVal_ {
 #define HX_CLO_ARITY(v) ((v).clo_ptr->arity)
 #define HX_CLO_ENV(v)   ((v).clo_ptr->env_box)
 #define HX_VS(v)        ((v).vs)
+// ── STRUCTURAL-1 Phase A: raw descriptor-POINTER read accessors ──
+// Sibling of the HX_SET_*_PTR writers: return the union pointer slot itself
+// (no deref) for callers that cast it (e.g. (HexaArrI64*)HX_ARR_PTR(v)) or
+// null-check/compare it. The flip decodes the NaN-boxed pointer here in one spot.
+#define HX_ARR_PTR(v)   ((v).arr_ptr)
+#define HX_MAP_PTR(v)   ((v).map_ptr)
+#define HX_FN_PTR_D(v)  ((v).fn_ptr_d)
+#define HX_CLO_PTR_D(v) ((v).clo_ptr)
 
 // ── S1-D3a: compound-type SET macros (write accessors) — heap descriptor ──
 #define HX_SET_ARR_ITEMS(v, p) ((v).arr_ptr->items = (p))
@@ -112,5 +120,22 @@ typedef struct HexaVal_ {
 #define HX_IS_FN(v)     ((v).tag == TAG_FN)
 #define HX_IS_CLOSURE(v)((v).tag == TAG_CLOSURE)
 #define HX_IS_VALSTRUCT(v) ((v).tag == TAG_VALSTRUCT)
+
+// ── STRUCTURAL-1 Phase A: HexaVal CONSTRUCTOR macros (struct-literal residue) ──
+// Drain raw compound-literal constructors ((HexaVal){.tag=T, .field=v}) into one
+// site so the NaN-boxing typedef flip (HexaVal to uint64_t) becomes a single-spot
+// edit. Bodies stay IDENTITY-mapped to the current 16B tagged union, so the DEFAULT
+// build is byte-identical (pure preprocessor refactor); Phase B swaps the bodies to
+// encode-into-u64 in this one place. HX_MAKE_INT is also the def the @bitfield
+// setter codegen (self/codegen.hexa) already references.
+#define HX_MAKE_INT(v)   ((HexaVal){.tag=TAG_INT, .i=(v)})
+#define HX_MAKE_FLOAT(v) ((HexaVal){.tag=TAG_FLOAT, .f=(v)})
+#define HX_MAKE_BOOL(v)  ((HexaVal){.tag=TAG_BOOL, .b=(v)})
+#define HX_MAKE_VOID()   ((HexaVal){.tag=TAG_VOID})
+#define HX_MAKE_STR(v)   ((HexaVal){.tag=TAG_STR, .s=(v)})
+#define HX_MAKE_ENUM(v)  ((HexaVal){.tag=TAG_ENUM, .s=(v)})
+// Tag-only constructor for declare-then-populate values (descriptor/scalar
+// field set afterward via HX_SET_*). Generalizes HX_MAKE_VOID to any tag.
+#define HX_MAKE_TAG(t)   ((HexaVal){.tag=(t)})
 
 #endif /* HEXA_RUNTIME_HEXAVAL_ABI_H */

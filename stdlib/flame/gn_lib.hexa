@@ -97,6 +97,34 @@ pub fn nn_groupnorm_fwd(x: int, gamma: int, beta: int,
 pub fn nn_groupnorm_fwd_off(x: int, gamma: int, goff: int, beta: int, boff: int,
                             y_out: int, mean_out: int, inv_out: int, xhat_out: int,
                             T: int, C: int, G: int) {
+    // HEXA-FUSION L3 (glue half) device-resident seam → _hx_cuda_farr_groupnorm_gpu.
+    // The existing zero-offset forge_dispatch_groupnorm takes no goff/boff (the
+    // unfused trunk packs gamma/beta at l·C — line 136-137 of cli/train.hexa names
+    // this the "groupnorm stays on host" secondary bottleneck). Rather than fork
+    // an offset-arg dispatcher into runtime.h / runtime_cuda.c / restore_frozen_seeds
+    // (= high merge-conflict surface with the live forge storm), we feed the device
+    // kernel a CONTIGUOUS [C] slice: when goff/boff != 0 copy gamma[goff:goff+C] /
+    // beta[boff:boff+C] into a temp (pure copy → byte-identical), else pass the
+    // buffers directly. The kernel's affine read then matches the host gamma[goff+ch]
+    // exactly. Same env gate; OFF / no-CUDA → rc=-1 → the host loop below UNCHANGED
+    // (byte-eq, proven by clm_prod_gn_gelu_hostdispatch_eq for the GN math).
+    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+        let mut gsl = gamma
+        let mut bsl = beta
+        let need_slice = goff != 0 || boff != 0
+        if need_slice {
+            gsl = t_zeros(C)
+            bsl = t_zeros(C)
+            let mut k = 0
+            while k < C {
+                t_set(gsl, k, t_get(gamma, goff + k))
+                t_set(bsl, k, t_get(beta, boff + k))
+                k = k + 1
+            }
+        }
+        let rc = forge_dispatch_groupnorm(x, gsl, bsl, y_out, mean_out, inv_out, xhat_out, T, C, G)
+        if rc == 0 { return }
+    }
     let eps = 0.00001
     let cg = C / G
     let m = to_float(cg * T)
@@ -221,6 +249,43 @@ pub fn nn_groupnorm_bwd(xhat: int, inv: int, gamma: int, dy: int,
 pub fn nn_groupnorm_bwd_off(xhat: int, inv: int, gamma: int, goff: int, dy: int,
                             dgamma_out: int, dgoff: int, dbeta_out: int, dboff: int, dX_out: int,
                             T: int, C: int, G: int) {
+    // HEXA-FUSION L3 (BWD glue half) device-resident seam → _hx_cuda_farr_groupnorm_bwd_gpu.
+    // The zero-offset forge_dispatch_groupnorm_bwd reads gamma at offset 0 and writes
+    // dgamma/dbeta at offset 0; the offset variant reads gamma[goff+ch] and writes the
+    // grads at dgoff/dboff. To stay off the storming runtime.h/runtime_cuda.c/
+    // restore_frozen_seeds surface, feed the kernel CONTIGUOUS [C] buffers: slice the
+    // gamma read into a temp, dispatch into temp dgamma/dbeta, then copy them out to
+    // dgamma_out[dgoff+ch] / dbeta_out[dboff+ch] (the host uses t_set = OVERWRITE, so a
+    // copy-back is byte-identical). dX_out is unoffset → written in place by the kernel.
+    // Same env gate; OFF / no-CUDA → rc=-1 → the host loops below UNCHANGED (byte-eq).
+    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+        let mut gsl = gamma
+        let need_gslice = goff != 0
+        if need_gslice {
+            gsl = t_zeros(C)
+            let mut kg = 0
+            while kg < C { t_set(gsl, kg, t_get(gamma, goff + kg)); kg = kg + 1 }
+        }
+        let need_oslice = dgoff != 0 || dboff != 0
+        let mut dgt = dgamma_out
+        let mut dbt = dbeta_out
+        if need_oslice {
+            dgt = t_zeros(C)
+            dbt = t_zeros(C)
+        }
+        let rc = forge_dispatch_groupnorm_bwd(xhat, inv, gsl, dy, dgt, dbt, dX_out, T, C, G)
+        if rc == 0 {
+            if need_oslice {
+                let mut ko = 0
+                while ko < C {
+                    t_set(dgamma_out, dgoff + ko, t_get(dgt, ko))
+                    t_set(dbeta_out, dboff + ko, t_get(dbt, ko))
+                    ko = ko + 1
+                }
+            }
+            return
+        }
+    }
     let cg = C / G
     let m = to_float(cg * T)
     let mut c = 0

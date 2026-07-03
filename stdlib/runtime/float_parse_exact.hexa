@@ -1,0 +1,479 @@
+// stdlib/runtime/float_parse_exact.hexa — EXACT correctly-rounded string→f64.
+//
+// zero-c float-dtoa R3: the correctly-rounded (round-half-even) native decimal→
+// double parse that replaces the strtod TAIL for inputs the fast paths decline.
+// It sits ABOVE two existing native parse seeds:
+//   1. num_float_core.hexa::rt_parse_float_native — the Clinger fast path (integer
+//      mantissa ≤ 2^53 AND |e10| ≤ 22, a SINGLE exact pow10 scale → bit-exact to
+//      strtod). Returns a TAG_VOID sentinel out of that small domain.
+//   2. THIS module — for everything the fast path declines (≥16 sig digits,
+//      |e10| > 22, subnormal, overflow, ties): an EXACT big-integer scaling that is
+//      correctly rounded EVERYWHERE finite-decimal, so the C strtod tail is needed
+//      only for hex-float / inf / nan strings (those still return the sentinel).
+//
+// ── REFERENCE-MATCH (white-box, file:line) ──────────────────────────────────────
+// Algorithm = David Gay `dtoa.c` strtod / glibc `stdlib/strtod_l.c` __mpn_* exact
+// rational scaling. The INTEGER FRONT (decimal digit scan → base limb significand +
+// power-of-ten denominator) mirrors musl `src/internal/floatscan.c:79-255`
+// (zig 0.15 lib/zig/libc/musl/src/internal/floatscan.c). The musl TAIL
+// (floatscan.c:256-311) assembles in `long double y` with `scalbnl`/`fmodl`/
+// `LDBL_EPSILON` bias — that is target-variable width (x86_64 80-bit / arm64-linux
+// 128-bit / darwin-arm64 64-bit) + x87 excess precision = byteeq-HOSTILE, so it is
+// NOT ported. The tail is rewritten as INTEGER round-half-even: compare 2·rem vs
+// den (Gay/glibc), which is bit-deterministic across all three targets (no long
+// double, no x87). Honest record: the front is a faithful musl mapping; the tail is
+// a from-spec rewrite (Gay/glibc reference, no line-level musl correspondence).
+//
+// ── METHOD (steps 1–5) ──────────────────────────────────────────────────────────
+//  1. scan sign + all significant decimal digits → big integer D + net e10.
+//  2. exact rational: e10≥0 → num=D·10^e10, den=1 ; e10<0 → num=D, den=10^(−e10).
+//  3. binary-scale num/den so floor(num/den) holds 53 bits (2^52 ≤ num/den < 2^53),
+//     tracking binexp where value = (num/den)·2^binexp.
+//  4. round-half-even by integer remainder: q=floor(num/den), r=num−q·den; compare
+//     2·r vs den (< trunc, > increment, = → increment iff q is odd). Subnormal:
+//     re-divide with den shifted left by (1−ebits). Overflow→±inf, underflow→±0.
+//  5. assemble bits = (sign<<63)|(ebits<<52)|frac ; return bits_to_float(bits)
+//     (the 4-surface codegen builtin; see self/nanbox.hexa:224).
+//
+// CORRECTNESS = bit-exact to C strtod (round-to-nearest-even) over every finite
+// decimal: verified vs glibc strtod (CPython float()) on the aiden/summer pool —
+// the named hard corpus (DBL_MAX, DBL_MIN, 5e-324, 2^53+1, halfway ties, Gay/Paxson)
+// exercising every code path (normal / subnormal / overflow→±inf / underflow→±0 /
+// round-even), plus 5046 mixed + ≥100,000 randomized inputs all bit-identical (a
+// 1,000,000-input pool sweep confirms the same). See
+// test/native_build/rt_parse_float_exact_byteeq.hexa.
+//
+// DECLINE (TAG_VOID sentinel __hx_make_val(4,0), mirrors num_float_core.hexa): no
+// significant digit, second '.', malformed/empty exponent, trailing junk → the C
+// wrapper falls back to strtod (hex-float / inf / nan). Finite decimals never
+// decline.
+//
+// BYTEEQ STATUS: not imported by self/ — byteeq-NEUTRAL standalone (verified
+// `grep -rl stdlib/runtime/float_parse_exact self/` == ∅). The runtime WIRING
+// (runtime_core_emit.hexa #ifdef HEXA_RT_NUM_PARSE_FLOAT_EXACT tier + resolve_ +
+// rt-stdlib compile-set add, default-OFF) is byteeq-RELEVANT and lands in R3-3
+// behind the 3-target Blacksmith byteeq gate.
+
+// ── unsigned big integer: base-10000 little-endian limb array; [] == zero ──
+
+fn fpe_norm(a) -> array {
+    let n = a.len()
+    let hi = n - 1
+    while hi >= 0 {
+        if a[hi] != 0 { break }
+        hi = hi - 1
+    }
+    let out = []
+    let i = 0
+    while i <= hi {
+        out.push(a[i])
+        i = i + 1
+    }
+    return out
+}
+
+fn fpe_is_zero(a) -> int {
+    if a.len() == 0 { return 1 }
+    return 0
+}
+
+fn fpe_from(x) -> array {
+    let out = []
+    let v = x
+    while v > 0 {
+        out.push(v % 10000)
+        v = v / 10000
+    }
+    return out
+}
+
+fn fpe_cmp(a, b) -> int {
+    let na = a.len()
+    let nb = b.len()
+    if na < nb { return 0 - 1 }
+    if na > nb { return 1 }
+    let i = na - 1
+    while i >= 0 {
+        if a[i] < b[i] { return 0 - 1 }
+        if a[i] > b[i] { return 1 }
+        i = i - 1
+    }
+    return 0
+}
+
+fn fpe_add(a, b) -> array {
+    let na = a.len()
+    let nb = b.len()
+    let n = na
+    if nb > n { n = nb }
+    let out = []
+    let carry = 0
+    let i = 0
+    while i < n {
+        let da = 0
+        if i < na { da = a[i] }
+        let db = 0
+        if i < nb { db = b[i] }
+        let s = da + db + carry
+        out.push(s % 10000)
+        carry = s / 10000
+        i = i + 1
+    }
+    if carry > 0 { out.push(carry) }
+    return fpe_norm(out)
+}
+
+// magnitude subtraction, requires a >= b
+fn fpe_sub(a, b) -> array {
+    let na = a.len()
+    let nb = b.len()
+    let out = []
+    let br = 0
+    let i = 0
+    while i < na {
+        let da = a[i]
+        let db = 0
+        if i < nb { db = b[i] }
+        let s = da - db - br
+        if s < 0 {
+            s = s + 10000
+            br = 1
+        } else {
+            br = 0
+        }
+        out.push(s)
+        i = i + 1
+    }
+    return fpe_norm(out)
+}
+
+fn fpe_mul_small(a, m) -> array {
+    if m == 0 { return [] }
+    let na = a.len()
+    let out = []
+    let carry = 0
+    let i = 0
+    while i < na {
+        let cur = a[i] * m + carry
+        out.push(cur % 10000)
+        carry = cur / 10000
+        i = i + 1
+    }
+    while carry > 0 {
+        out.push(carry % 10000)
+        carry = carry / 10000
+    }
+    return fpe_norm(out)
+}
+
+fn fpe_mul(a, b) -> array {
+    if fpe_is_zero(a) == 1 { return [] }
+    if fpe_is_zero(b) == 1 { return [] }
+    let na = a.len()
+    let nb = b.len()
+    let res = []
+    let k = 0
+    while k < na + nb {
+        res.push(0)
+        k = k + 1
+    }
+    let i = 0
+    while i < na {
+        let carry = 0
+        let j = 0
+        while j < nb {
+            let idx = i + j
+            let cur = res[idx] + a[i] * b[j] + carry
+            res[idx] = cur % 10000
+            carry = cur / 10000
+            j = j + 1
+        }
+        let idx2 = i + nb
+        while carry > 0 {
+            let cur2 = res[idx2] + carry
+            res[idx2] = cur2 % 10000
+            carry = cur2 / 10000
+            idx2 = idx2 + 1
+        }
+        i = i + 1
+    }
+    return fpe_norm(res)
+}
+
+// 2^n as a bignum
+fn fpe_pow2(n) -> array {
+    let out = []
+    out.push(1)
+    let r = n
+    while r >= 13 {
+        out = fpe_mul_small(out, 8192)
+        r = r - 13
+    }
+    let f = 1
+    let t = 0
+    while t < r {
+        f = f * 2
+        t = t + 1
+    }
+    out = fpe_mul_small(out, f)
+    return out
+}
+
+// 10^n as a bignum
+fn fpe_pow10(n) -> array {
+    let out = []
+    out.push(1)
+    let r = n
+    while r >= 4 {
+        out = fpe_mul_small(out, 10000)
+        r = r - 4
+    }
+    let f = 1
+    let t = 0
+    while t < r {
+        f = f * 10
+        t = t + 1
+    }
+    out = fpe_mul_small(out, f)
+    return out
+}
+
+// left shift by n bits = multiply by 2^n
+fn fpe_shl(a, n) -> array {
+    if n == 0 { return a }
+    if fpe_is_zero(a) == 1 { return a }
+    return fpe_mul(a, fpe_pow2(n))
+}
+
+fn fpe_ilog2(t) -> int {
+    let c = 0
+    let v = t
+    while v > 1 {
+        v = v / 2
+        c = c + 1
+    }
+    return c
+}
+
+// approximate bit length (within ~1; the correction loop fixes it exactly)
+fn fpe_bitlen(a) -> int {
+    if fpe_is_zero(a) == 1 { return 0 }
+    let k = a.len() - 1
+    let top = a[k]
+    return (k * 132877) / 10000 + fpe_ilog2(top) + 1
+}
+
+// unsigned divmod a/b -> [q, r] (b != 0). Schoolbook long division, per-limb
+// binary search (Knuth TAOCP 4.3.1 Alg.D with bisection; cf stdlib/bigint.hexa).
+fn fpe_divmod(a, b) -> array {
+    if fpe_is_zero(a) == 1 {
+        let res = []
+        res.push([])
+        res.push([])
+        return res
+    }
+    if fpe_cmp(a, b) < 0 {
+        let res = []
+        res.push([])
+        res.push(a)
+        return res
+    }
+    let na = a.len()
+    let qbig = []
+    let rem = []
+    let idx = na - 1
+    while idx >= 0 {
+        rem = fpe_mul_small(rem, 10000)
+        rem = fpe_add(rem, fpe_from(a[idx]))
+        let lo = 0
+        let hi = 9999
+        let d = 0
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            let prod = fpe_mul_small(b, mid)
+            let c = fpe_cmp(prod, rem)
+            if c <= 0 {
+                d = mid
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
+        }
+        qbig.push(d)
+        if d > 0 {
+            rem = fpe_sub(rem, fpe_mul_small(b, d))
+        }
+        idx = idx - 1
+    }
+    let qle = []
+    let j = qbig.len() - 1
+    while j >= 0 {
+        qle.push(qbig[j])
+        j = j - 1
+    }
+    let res = []
+    res.push(fpe_norm(qle))
+    res.push(fpe_norm(rem))
+    return res
+}
+
+fn fpe_to_i64(a) -> int {
+    let v = 0
+    let i = a.len() - 1
+    while i >= 0 {
+        v = v * 10000 + a[i]
+        i = i - 1
+    }
+    return v
+}
+
+// assemble IEEE-754 double from sign/biased-exponent/52-bit-fraction (fields
+// disjoint, so + == |). sign bit 63 set via the i64-min constant (bit 63 was 0).
+fn fpe_assemble(sign, ebits, frac) -> float {
+    let bits = frac + ebits * 4503599627370496
+    if sign == 1 {
+        bits = bits + (0 - 9223372036854775807 - 1)
+    }
+    return bits_to_float(bits)
+}
+
+// EXACT correctly-rounded decimal → f64. Returns the double, or the TAG_VOID
+// sentinel __hx_make_val(4,0) for non-decimal / malformed (C strtod fallback).
+pub fn rt_str_parse_float_exact(s: string) -> float {
+    let n = byte_len(s)
+    let i = 0
+    while i < n {
+        let b = s.byte_at(i)
+        if b == 32 || b == 9 || b == 10 || b == 13 { i = i + 1 } else { break }
+    }
+    let sign = 0
+    if i < n {
+        let b = s.byte_at(i)
+        if b == 45 { sign = 1; i = i + 1 }
+        else if b == 43 { i = i + 1 }
+    }
+    let F = []
+    let e10 = 0
+    let ndig = 0
+    let seen_dot = 0
+    let go = 1
+    while go == 1 && i < n {
+        let b = s.byte_at(i)
+        if b >= 48 && b <= 57 {
+            F = fpe_add(fpe_mul_small(F, 10), fpe_from(b - 48))
+            ndig = ndig + 1
+            if seen_dot == 1 { e10 = e10 - 1 }
+            i = i + 1
+        } else if b == 46 {
+            if seen_dot == 1 { go = 0 } else { seen_dot = 1; i = i + 1 }
+        } else {
+            go = 0
+        }
+    }
+    if ndig == 0 { return __hx_make_val(4, 0) }
+    if i < n {
+        let b = s.byte_at(i)
+        if b == 101 || b == 69 {
+            i = i + 1
+            let esign = 1
+            if i < n {
+                let bb = s.byte_at(i)
+                if bb == 45 { esign = 0 - 1; i = i + 1 }
+                else if bb == 43 { i = i + 1 }
+            }
+            let ev = 0
+            let ehad = 0
+            while i < n {
+                let bb = s.byte_at(i)
+                if bb >= 48 && bb <= 57 {
+                    ev = ev * 10 + (bb - 48)
+                    ehad = 1
+                    if ev > 100000 { ev = 100000 }
+                    i = i + 1
+                } else { break }
+            }
+            if ehad == 0 { return __hx_make_val(4, 0) }
+            e10 = e10 + esign * ev
+        }
+    }
+    while i < n {
+        let b = s.byte_at(i)
+        if b == 32 || b == 9 || b == 10 || b == 13 { i = i + 1 } else { break }
+    }
+    if i < n { return __hx_make_val(4, 0) }
+    // F == 0 → signed zero
+    if fpe_is_zero(F) == 1 { return fpe_assemble(sign, 0, 0) }
+    // exact rational num/den
+    let num = []
+    let den = []
+    if e10 >= 0 {
+        num = fpe_mul(F, fpe_pow10(e10))
+        den = fpe_from(1)
+    } else {
+        num = F
+        den = fpe_pow10(0 - e10)
+    }
+    // normalize: 2^52 <= num/den < 2^53; value = (num/den)*2^binexp
+    let binexp = 0
+    let diff = fpe_bitlen(num) - fpe_bitlen(den)
+    if diff >= 53 {
+        let t = diff - 52
+        den = fpe_shl(den, t)
+        binexp = binexp + t
+    } else {
+        let sft = 52 - diff
+        if sft < 0 { sft = 0 }
+        num = fpe_shl(num, sft)
+        binexp = binexp - sft
+    }
+    let P52 = fpe_pow2(52)
+    let P53 = fpe_pow2(53)
+    let done = 0
+    while done == 0 {
+        let den52 = fpe_mul(den, P52)
+        let den53 = fpe_mul(den, P53)
+        if fpe_cmp(num, den53) >= 0 {
+            den = fpe_mul_small(den, 2)
+            binexp = binexp + 1
+        } else if fpe_cmp(num, den52) < 0 {
+            num = fpe_mul_small(num, 2)
+            binexp = binexp - 1
+        } else {
+            done = 1
+        }
+    }
+    let ebits = binexp + 1075
+    if ebits >= 2047 { return fpe_assemble(sign, 2047, 0) }
+    if ebits >= 1 {
+        // normal
+        let qr = fpe_divmod(num, den)
+        let qi = fpe_to_i64(qr[0])
+        let c = fpe_cmp(fpe_mul_small(qr[1], 2), den)
+        let roundup = 0
+        if c > 0 { roundup = 1 }
+        else if c == 0 { if qi % 2 == 1 { roundup = 1 } }
+        if roundup == 1 {
+            qi = qi + 1
+            if qi == 9007199254740992 {
+                qi = 4503599627370496
+                ebits = ebits + 1
+            }
+        }
+        if ebits >= 2047 { return fpe_assemble(sign, 2047, 0) }
+        return fpe_assemble(sign, ebits, qi - 4503599627370496)
+    }
+    // subnormal / underflow
+    let ndrop = 1 - ebits
+    let den2 = fpe_shl(den, ndrop)
+    let qr = fpe_divmod(num, den2)
+    let qi = fpe_to_i64(qr[0])
+    let c = fpe_cmp(fpe_mul_small(qr[1], 2), den2)
+    let roundup = 0
+    if c > 0 { roundup = 1 }
+    else if c == 0 { if qi % 2 == 1 { roundup = 1 } }
+    if roundup == 1 { qi = qi + 1 }
+    if qi >= 4503599627370496 {
+        return fpe_assemble(sign, 1, qi - 4503599627370496)
+    }
+    return fpe_assemble(sign, 0, qi)
+}
