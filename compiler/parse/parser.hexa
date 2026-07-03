@@ -1955,8 +1955,19 @@ fn parse_stmt() -> Expr {
     // `defer = …` / `defer.foo` / `defer[i]` / `defer + 1` (uses of a
     // binding named `defer`) fall through to expression parsing — same
     // contextual dispatch idiom as `var` above (#3681).
+    //
+    // Same-line rule (R1 census hazard (b), mirrors parse_return_expr):
+    // the body must START on the keyword's line. gen2's parse_defer_stmt
+    // (self/parser.hexa:4749) consumes `defer` then immediately parses the
+    // body — its lexer emits Newline tokens, so a next-line body hits
+    // parse_primary's unknown-token arm ("unexpected token Newline"): a
+    // cross-line defer body is never valid in gen2. This lexer drops
+    // newlines, so without the span.line check a bare expr-stmt `defer`
+    // (use of a binding named defer) at end-of-line would swallow the NEXT
+    // LINE's expression-start statement as its defer body.
     if check_kind(TokenKind::Ident) && peek().text == "defer" {
-        if _defer_body_start(peek_at(1).kind) {
+        if _defer_body_start(peek_at(1).kind)
+           && peek_at(1).span.line == peek().span.line {
             return parse_defer_expr(anns)
         }
     }

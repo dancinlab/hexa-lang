@@ -192,6 +192,53 @@ fn case_valued_throw_multiline() {
     dump_module("case n: valued throw (same-line start, multi-line ok)", src)
 }
 
+// Defer same-line dispatch (R1 census hazard (b) — mirrors the bare-return
+// span.line rule): `defer` is a contextual Ident (M1 Q4 whitelist — bindings
+// named `defer` are legal in the NATIVE frontend; gen2 reserves it as a
+// keyword, self/lexer.hexa:114, so this shape is native-only and gen2 has no
+// twin snippet). A bare expr-stmt `defer` (use of a binding named defer) at
+// end-of-line followed by a next-line expression-start token must parse as
+// TWO sibling statements — pre-fix the dispatch checked only
+// _defer_body_start(peek_at(1).kind) and swallowed the next line as the
+// defer body. gen2 reference: parse_defer_stmt (self/parser.hexa:4749)
+// parses the body immediately after the keyword, and gen2's lexer emits
+// Newline tokens — a cross-line body is "unexpected token Newline", so
+// cross-line defer dispatch is structurally impossible there.
+
+fn count_defer_carriers(body: Expr) -> i64 {
+    let mut defers = 0
+    let mut i = 0
+    while i < len(body.children) {
+        if ast_is_defer(body.children[i]) { defers = defers + 1 }
+        i = i + 1
+    }
+    return defers
+}
+
+fn case_defer_ident_nextline() {
+    let src = "fn a() {\n    let defer = 1\n    defer\n    g()\n}"
+    println("── case o: bare ident defer + next-line call (2 siblings, no swallow) ──")
+    let toks = lex(src, "<inline>")
+    let m = parse(toks, "<inline>")
+    let body = m.items[0].body
+    println("  body_stmts=" + to_string(len(body.children)) + " (expect 3)"
+            + " defer_carriers=" + to_string(count_defer_carriers(body)) + " (expect 0)")
+    println("  parse_diags=" + to_string(len(parse_diags())) + " (expect 0)")
+}
+
+fn case_defer_sameline_control() {
+    // Positive control: bodies STARTING on the keyword's line still
+    // dispatch as defer stmts (expr form + block form).
+    let src = "fn a() {\n    defer close(f)\n    defer { g() }\n}"
+    println("── case p: same-line defer bodies (2 defer carriers) ──")
+    let toks = lex(src, "<inline>")
+    let m = parse(toks, "<inline>")
+    let body = m.items[0].body
+    println("  body_stmts=" + to_string(len(body.children)) + " (expect 2)"
+            + " defer_carriers=" + to_string(count_defer_carriers(body)) + " (expect 2)")
+    println("  parse_diags=" + to_string(len(parse_diags())) + " (expect 0)")
+}
+
 fn case_type_alias() {
     let src = "type MyInt = i64\npub type Celsius = f64\ntype Box<T> = i64\ntype Temp = Celsius\nfn warm(t: Celsius) -> Celsius { return t * 1.8 + 32.0 }\nfn idx(n: MyInt) -> MyInt { return n + 1 }"
     println("── case j: type alias (decl + generic + chain + use) ──")
@@ -233,6 +280,8 @@ case_valued_return_multiline()
 case_bare_throw_diag()
 case_throw_nextline_value()
 case_valued_throw_multiline()
+case_defer_ident_nextline()
+case_defer_sameline_control()
 case_type_alias()
 println("══════════════════════════════════════════════")
 println("  done.")
