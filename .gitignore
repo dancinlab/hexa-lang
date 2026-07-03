@@ -171,8 +171,10 @@ state/*
 # Tracked SSOT docs that live under state/ (negate the blanket above)
 !state/merge_order.md
 !state/rfc_advanced_typesystem.md
+!state/rfc_operator_overload.md
 !state/rfc_value_unbox_layout.md
 !state/rfc_thread_fnglobal_fwddecl.md
+!state/x86_codegen_anima_eval/
 !state/rfc_thread_channel_e2e.md
 !state/rfc_mn_scheduler.md
 # Per-test regression state (markers/ holds timestamp-suffixed runtime artifacts)
