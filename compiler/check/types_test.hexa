@@ -216,6 +216,36 @@ fn _field_expr(recv: Expr, field: string, file: string, line: i64, col: i64) -> 
     }
 }
 
+// Wall A r6 — one struct-literal field-init. The parser
+// (parser.hexa:1184 parse_struct_lit_after_name) builds each `name: value`
+// pair as an Ident node whose text = field NAME and children[0] = value expr.
+fn _field_init(field: string, value: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(value)
+    return Expr {
+        kind: ExprKind::Ident,
+        span: _span(file, line, col, len(field)),
+        text: field,
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// Wall A r6 — struct literal `Name { f0: v0, f1: v1 }`. text = struct NAME,
+// children = the field-init Ident nodes (parser.hexa:1204 shape the r6 arm in
+// types.hexa:_infer_expr reads).
+fn _struct_lit_expr(name: string, inits: [Expr], file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::StructLit,
+        span: _span(file, line, col, len(name)),
+        text: name,
+        annotations: [],
+        children: inits,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
 fn _block(children: [Expr], file: string, line: i64, col: i64) -> Expr {
     return Expr {
         kind: ExprKind::Block,
@@ -706,6 +736,47 @@ fn _build_case_static_types_r5() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// Wall A r6 — struct-literal field-init mismatch. The LAST scope-wireable
+// rung. The same `struct Point { x: i32, y: i32 }` registry r5 builds also
+// types a CONSTRUCTION site `Point{ x: <expr>, y: <expr> }`: each field-init
+// value is matched to the declared field type and a known-scalar mismatch is
+// REJECTed with HX3011 (Rust E0308 check_expr_struct_fields coercion). Two
+// REJECT shapes + one matching control:
+//   struct Point { x: i32, y: i32 }
+//   fn f() {
+//       let _p = Point { x: "s", y: 7 }   // x: string ≠ i32 → REJECT;
+//                                          // y: 7 int-lit coerces → clean
+//       let _q = Point { x: true }        // x: bool ≠ i32   → REJECT
+//   }
+// Under the flag exactly 2 HX3011 (x:"s" + x:true); the matching `y: 7` and
+// the default build (flag-off) emit zero — the byteeq-neutral proof. Extends
+// r5's field-place-assign contract to the struct-literal construction place.
+fn _build_case_static_types_r6() -> Module {
+    let f = "case_static_r6.hexa"
+    // struct Point { x: i32, y: i32 }
+    let mut sfields = []
+    sfields.push(_param("x", "i32", f, 1, 15))
+    sfields.push(_param("y", "i32", f, 1, 23))
+    let item_pt = _struct_item("Point", sfields, f, 1)
+    // fn f() { … }
+    let mut kids = []
+    // let _p = Point { x: "s", y: 7 }
+    let mut inits_p = []
+    inits_p.push(_field_init("x", _string_expr("s", f, 3, 25), f, 3, 22))
+    inits_p.push(_field_init("y", _int_expr("7", f, 3, 33), f, 3, 30))
+    kids.push(_struct_lit_expr("Point", inits_p, f, 3, 14))
+    // let _q = Point { x: true }
+    let mut inits_q = []
+    inits_q.push(_field_init("x", _bool_expr("true", f, 4, 25), f, 4, 22))
+    kids.push(_struct_lit_expr("Point", inits_q, f, 4, 14))
+    let body = _block(kids, f, 2, 1)
+    let item_f = _fn_item("f", [], _empty_type_ref(), body, f, 2)
+    let mut items = []
+    items.push(item_pt)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // ── Driver ───────────────────────────────────────────────────
 
 fn _run_case(label: string, m: Module) -> array {
@@ -931,6 +1002,31 @@ fn main() {
     } else {
         if nl != 0 {
             println("  FAIL: case (l) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nl) + " (total=" + to_string(len(diags_l)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (m) Wall A r6 — struct-literal field-init mismatch. Under the flag, with
+    // `struct Point { x: i32, y: i32 }`, a construction `Point { x: "s", y: 7 }`
+    // REJECTs the `x: "s"` (string ≠ i32) while `y: 7` coerces, and a second
+    // `Point { x: true }` REJECTs `x: true` (bool ≠ i32) → 2 HX3011 total. On
+    // the default build → 0 (byteeq-neutral). Extends (l)'s field-place-assign
+    // contract to the struct-literal construction place — the LAST scope-
+    // wireable rung (r7+ = generic/trait static-dispatch = measured ceiling).
+    let diags_m = _run_case("(m) static-types r6 — struct-literal field-init mismatch (HEXA_STATIC_TYPES)", _build_case_static_types_r6())
+    let nm = _count_code(diags_m, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if nm != 2 {
+            println("  FAIL: case (m) HEXA_STATIC_TYPES=1 expected 2 HX3011 (x:\"s\" + x:true), got " + to_string(nm) + " (total=" + to_string(len(diags_m)) + ")")
+            ok = false
+        } else {
+            println("  ok: 2 HX3011 emitted (Point{x:\"s\"} string + Point{x:true} bool; matching y:7 stays clean)")
+        }
+    } else {
+        if nm != 0 {
+            println("  FAIL: case (m) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nm) + " (total=" + to_string(len(diags_m)) + ")")
             ok = false
         } else {
             println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
