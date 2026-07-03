@@ -372,6 +372,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3014",
+        title: "struct has no field with this name",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "struct `{name}` has no field named `{field}`",
+        explain: "Opt-in static type check (`HEXA_STATIC_TYPES=1`), static-types r9d. A struct-literal field-init names a field the struct does not declare — e.g. `Point{ x: 1, z: 2 }` when `Point` declares only `x`/`y`. This is the Rust E0560 'struct has no field named' rule (rustc_hir_typeck check_expr_struct_fields → report_unknown_field), and it also hardens the r6 field-init TYPE check: before r9d a typo'd field name silently skipped both the existence and the type comparison. The check reads the same (struct,field) side registry r5/r6 use; a struct name the registry does not know (cross-module or unresolved receiver) stays SILENT — conservative unknown-fallback, consistent with the ladder's under-reject contract. Missing REQUIRED fields (Rust E0063) are deliberately NOT this diagnostic — that is a separate warning-band follow-on. The default build does NOT emit this (flag off → diagnostic stream byte-identical); under the flag it is a FATAL error (REJECT), the same abort contract as HX3011. Fix: correct the field name, or add the field to the struct declaration.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
