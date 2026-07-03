@@ -112,8 +112,13 @@ emit_one() {
         printf '//   Lets stage_resolve_runtime_a define HEXA_REGEX_NATIVE (opt-IN, default-OFF)\n'
         printf '//   + ar this .o into runtime.a so the regcomp/regexec/regfree seams route\n'
         printf '//   native, dropping those libc symbols from the nm-UND floor on flip.\n'
-        sed -E -e 's#"[^"]*regex_rt\.hexa"#"stdlib/runtime/regex_rt.hexa"#g' \
-               -e 's#^// source: .*regex_rt\.hexa#// source: stdlib/runtime/regex_rt.hexa#' "$demoted"
+        # Strip the absolute build-root prefix so paths in comments (e.g. aprime's
+        # `# source: <HX>/stdlib/...`) and any `.file` directives are RELATIVE →
+        # the frozen seed is reproducible across build hosts (a comment leak does
+        # not change the assembled .o, but a git-diff on regen elsewhere would).
+        sed -E -e "s@${HX%/}/@@g" \
+               -e 's@"[^"]*regex_rt\.hexa"@"stdlib/runtime/regex_rt.hexa"@g' \
+               -e 's@^(#|//) source: .*regex_rt\.hexa@\1 source: stdlib/runtime/regex_rt.hexa@' "$demoted"
     } > "$out"
 
     local cc_extra="" s="$TMP/check.s" o="$TMP/check.o"
