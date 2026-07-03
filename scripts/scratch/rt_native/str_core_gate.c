@@ -2,26 +2,30 @@
  *
  * Byte-eq oracle for the native public-string scan/compare ports
  * (stdlib/runtime/str_core.hexa::rt_str_eq_native + rt_str_starts_with_native +
- * rt_str_ends_with_native, str r2/r3 sh-str-scan) against the standalone runtime.c
- * C path (hexa_str_eq's hxlcl_strcmp(...)==0 + rt_str_starts_with's
- * hxlcl_strncmp(s,prefix,plen)==0 + rt_str_ends_with's
- * sfxlen<=slen && strcmp(s+slen-sfxlen,suffix)==0). Each native body does the SAME
- * NUL-terminated byte walk in raw memory (__hx_ptr_load8 over each data pointer);
- * this gate proves the bool result is IDENTICAL to the C strcmp/strncmp oracles
- * for: equal strings, prefix/suffix-differ, length-differ, the empty string,
- * embedded-mid-difference, single-char, long strings, and UTF-8 multibyte — and
+ * rt_str_ends_with_native + rt_str_index_of_native + rt_str_contains_native, str
+ * r2/r3/r4 sh-str-scan) against the standalone runtime.c C path (hexa_str_eq's
+ * hxlcl_strcmp(...)==0 + rt_str_starts_with's hxlcl_strncmp(s,prefix,plen)==0 +
+ * rt_str_ends_with's sfxlen<=slen && strcmp(s+slen-sfxlen,suffix)==0 +
+ * hexa_str_index_of's strstr-offset/-1 + hexa_str_contains's strstr!=NULL). The
+ * compare bodies are single NUL-stop byte walks; index_of/contains are a naive
+ * O(n*m) substring search. This gate proves the result is IDENTICAL to the C
+ * strcmp/strncmp/strstr oracles for: equal strings, prefix/suffix-differ,
+ * length-differ, empty string/needle, mid-difference, single-char, long strings,
+ * repeated/overlapping/backtrack-requiring patterns, and UTF-8 multibyte — and
  * that the end-to-end wrappers (compiled with -DHEXA_RT_STR_EQ_NATIVE +
- * -DHEXA_RT_STR_STARTS_WITH_NATIVE + -DHEXA_RT_STR_ENDS_WITH_NATIVE) agree with the
+ * -DHEXA_RT_STR_STARTS_WITH_NATIVE + -DHEXA_RT_STR_ENDS_WITH_NATIVE +
+ * -DHEXA_RT_STR_INDEX_OF_NATIVE + -DHEXA_RT_STR_CONTAINS_NATIVE) agree with the
  * reference C for the same pairs.
  *
- * NO ALLOC: all three prims are pure raw-byte reads — this is the alloc-free
+ * NO ALLOC: all five prims are pure raw-byte reads — this is the alloc-free
  * scan/compare surface (concat / substring / replace are the alloc lane's WALL,
  * not exercised here).
  *
  * Build (x86_64 / arm64, native str_core.o + standalone runtime.c):
  *   <aprime_cc> _drv --emit=obj --target=<t> -o str_core.o str_core.hexa
  *   cc -O2 -std=gnu11 -D_GNU_SOURCE -DHEXA_RT_STR_EQ_NATIVE=1 \
- *      -DHEXA_RT_STR_STARTS_WITH_NATIVE=1 -DHEXA_RT_STR_ENDS_WITH_NATIVE=1 -I self \
+ *      -DHEXA_RT_STR_STARTS_WITH_NATIVE=1 -DHEXA_RT_STR_ENDS_WITH_NATIVE=1 \
+ *      -DHEXA_RT_STR_INDEX_OF_NATIVE=1 -DHEXA_RT_STR_CONTAINS_NATIVE=1 -I self \
  *      str_core_gate.c self/runtime.c str_core.o -o /tmp/strgate && /tmp/strgate ; echo $?
  *
  * Exit code = 23 on FULL pass (distinct sentinel); 1..N on the first failing
@@ -39,11 +43,15 @@
 extern HexaVal rt_str_eq_native(HexaVal a, HexaVal b);
 extern HexaVal rt_str_starts_with_native(HexaVal s, HexaVal prefix);
 extern HexaVal rt_str_ends_with_native(HexaVal s, HexaVal suffix);
+extern HexaVal rt_str_index_of_native(HexaVal s, HexaVal sub);   /* int offset / -1 */
+extern HexaVal rt_str_contains_native(HexaVal s, HexaVal sub);   /* bool */
 
-/* end-to-end C wrappers (return int 0/1). */
+/* end-to-end C wrappers. */
 int hexa_str_eq(HexaVal a, HexaVal b);
 int rt_str_starts_with(HexaVal s, HexaVal prefix);
 int rt_str_ends_with(HexaVal s, HexaVal suffix);
+int64_t hexa_str_index_of(HexaVal s, HexaVal sub);
+int hexa_str_contains(HexaVal s, HexaVal sub);
 
 static int fails = 0, checks = 0;
 static void chk(int cond, const char* what) {
@@ -115,6 +123,36 @@ static void chk_pair_ew(const char* s, const char* suffix) {
     int wr = rt_str_ends_with(vs, vx);
     snprintf(buf, sizeof(buf), "rt_str_ends_with(\"%s\",\"%s\") wrapper=%d ref=%d", s, suffix, wr, ref);
     chk(wr == ref, buf);
+}
+
+/* Reference C oracle for index_of: the EXACT semantics the C `#else` body
+ * produces — p = strstr(s, sub); p ? (int64_t)(p - s) : -1. */
+static int64_t c_oracle_io(const char* s, const char* sub) {
+    const char* p = strstr(s, sub);
+    return p ? (int64_t)(p - s) : -1;
+}
+
+/* Drive native rt_str_index_of_native (offset/-1) + reference + the end-to-end
+ * hexa_str_index_of wrapper. */
+static void chk_pair_io(const char* s, const char* sub) {
+    HexaVal vs = hexa_str(s);
+    HexaVal vn = hexa_str(sub);
+    int64_t nat = HX_INT(rt_str_index_of_native(vs, vn));
+    int64_t ref = c_oracle_io(s, sub);
+    char buf[220];
+    snprintf(buf, sizeof(buf), "rt_str_index_of_native(\"%s\",\"%s\") native=%lld ref=%lld", s, sub, (long long)nat, (long long)ref);
+    chk(nat == ref, buf);
+    int64_t wr = hexa_str_index_of(vs, vn);
+    snprintf(buf, sizeof(buf), "hexa_str_index_of(\"%s\",\"%s\") wrapper=%lld ref=%lld", s, sub, (long long)wr, (long long)ref);
+    chk(wr == ref, buf);
+    /* contains == (index_of >= 0); native bool + C wrapper agree with strstr!=NULL */
+    int cnat = hexa_truthy(rt_str_contains_native(vs, vn)) ? 1 : 0;
+    int cref = (strstr(s, sub) != NULL) ? 1 : 0;
+    snprintf(buf, sizeof(buf), "rt_str_contains_native(\"%s\",\"%s\") native=%d ref=%d", s, sub, cnat, cref);
+    chk(cnat == cref, buf);
+    int cwr = hexa_str_contains(vs, vn);
+    snprintf(buf, sizeof(buf), "hexa_str_contains(\"%s\",\"%s\") wrapper=%d ref=%d", s, sub, cwr, cref);
+    chk(cwr == cref, buf);
 }
 
 int main(void) {
@@ -207,6 +245,38 @@ int main(void) {
         chk_pair_ew(hay, "caf\xC3\xA9");          /* UTF-8 multibyte suffix → true */
         chk_pair_ew(hay, "caf\xC3\xA8");          /* UTF-8 last-byte differs → false */
         chk_pair_ew(hay, "\xC3\xA9");             /* UTF-8 continuation-byte tail → true */
+    }
+
+    /* PART E — index_of / contains oracle: native == reference strstr offset (-1
+     * if absent) + contains == (strstr != NULL). Covers empty needle (offset 0),
+     * empty haystack, match at start/mid/end, absent, needle-longer-than-haystack,
+     * first occurrence among repeats (overlap), single char, full-string, and
+     * UTF-8 multibyte needle. */
+    chk_pair_io("", "");                     /* empty needle in empty → 0 */
+    chk_pair_io("hello", "");                /* empty needle → 0 */
+    chk_pair_io("", "h");                    /* needle in empty haystack → -1 */
+    chk_pair_io("hello", "h");               /* match at start → 0 */
+    chk_pair_io("hello", "hello");           /* full-string match → 0 */
+    chk_pair_io("hello", "ll");              /* match mid → 2 */
+    chk_pair_io("hello", "o");               /* match at end → 4 */
+    chk_pair_io("hello", "lo");              /* two-byte tail match → 3 */
+    chk_pair_io("hello", "z");               /* absent single → -1 */
+    chk_pair_io("hello", "xyz");             /* absent multi → -1 */
+    chk_pair_io("hi", "hello");              /* needle LONGER than haystack → -1 */
+    chk_pair_io("ababab", "ab");             /* first of repeated → 0 */
+    chk_pair_io("ababab", "ba");             /* first ba → 1 */
+    chk_pair_io("aaaa", "aa");               /* overlapping repeat, first → 0 */
+    chk_pair_io("abcabcabd", "abcabd");      /* backtrack-requiring naive match → 3 */
+    chk_pair_io("mississippi", "issip");     /* classic near-miss before match → 4 */
+    chk_pair_io("mississippi", "issis");     /* match at 1 (the only one) → 1 */
+    chk_pair_io("a", "a");                   /* single equal → 0 */
+    chk_pair_io("a", "b");                   /* single differ → -1 */
+    chk_pair_io("abcdefghijklmnopqrstuvwxyz", "mno");  /* long haystack mid → 12 */
+    {
+        const char* hay = "caf\xC3\xA9 latte";   /* "café latte" */
+        chk_pair_io(hay, "\xC3\xA9");             /* UTF-8 continuation byte → offset 3 */
+        chk_pair_io(hay, "latte");                /* ASCII needle after UTF-8 → 5 */
+        chk_pair_io(hay, "\xC3\xA8");             /* absent UTF-8 byte → -1 */
     }
 
     if (fails == 0) printf("[str_core_gate] GATE PASS — %d checks, 0 fails\n", checks);
