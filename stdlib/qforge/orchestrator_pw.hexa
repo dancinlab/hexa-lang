@@ -71,6 +71,47 @@ pub fn qforge_pw_occ_states(rho: [float], n: int, nbands: int) -> [[float]] {
     return states
 }
 
+// ── BLOCK el-ph hot path: occupied KS states via the batched GEMM Davidson ─────
+//   The GPU hot path twin of qforge_pw_occ_states. Identical eigenproblem and
+//   identical preconditioner-diagonal extraction, but the inner H·Ψ applies the
+//   WHOLE nbands block in ONE GEMM (qforge_pw_h_apply_block over the staged
+//   PW_HAM) instead of nbands sequential scalar matvecs. On a CUDA-built hexa
+//   this fires one cuBLAS Dgemm per Davidson iteration (the 74.9×/14.6× win
+//   measured on RTX 5070); on a no-GPU build the block path is element-eq to the
+//   scalar matvecs (the parity contract qforge_davidson_block holds, verified by
+//   davidson_block_e2e_bench: max|Δλ| ≤ 8.9e-16). qforge_atoms_to_tc_block routes
+//   the el-ph contraction (the Sternheimer/|g|² hot loop) through this.
+//
+//   PRE: the SAME cell qforge_scf_pw ran is staged — qforge_h_block_of_rho_global
+//   re-stages PW_HAM from ρ exactly as qforge_h_of_rho_global does, so the scalar
+//   diag-extraction and the block diagonalize see one consistent H(ρ).
+pub fn qforge_pw_occ_states_block(rho: [float], n: int, nbands: int) -> [[float]] {
+    let h_apply = qforge_h_of_rho_global(rho)               // scalar apply (diag + parity ref)
+    let h_block = qforge_h_block_of_rho_global(rho)         // batched GEMM apply over PW_HAM
+    // preconditioner diagonal — identical to the scalar path (one matvec per col).
+    let mut e = []
+    let mut d = 0
+    while d < n {
+        let mut col = []
+        let mut t = 0
+        while t < n { if t == d { col.push(1.0) } else { col.push(0.0) } ; t = t + 1 }
+        let hc = h_apply(col)
+        e.push(hc[d])
+        d = d + 1
+    }
+    let dr = qforge_davidson_block(h_apply, h_block, e, n, nbands, 1.0e-12, 300)
+    let mut states: [[float]] = []
+    let mut b = 0
+    while b < nbands {
+        let mut v = []
+        let mut i = 0
+        while i < n { v.push(dr.evecs[b * n + i]) ; i = i + 1 }
+        states.push(v)
+        b = b + 1
+    }
+    return states
+}
+
 // ── the full independent chain: cell+modes → (λ, ω_log, Tc) ──────────────────
 //
 //   PRE: the caller has staged the cell via qforge_scf_pw (M5.5) and holds the
@@ -97,8 +138,40 @@ pub fn qforge_atoms_to_tc(rho: [float], evals: [float], n: int, nocc: int,
                           e_fermi: float, n_ef: float, omega_grid: [float],
                           sigma_el: float, sigma_ph: float,
                           mu_star: float, n_mats: int) -> QforgeElphResult {
+    return atoms_to_tc_impl(rho, evals, n, nocc, dv_modes, omega_modes,
+                            mode_weight, drho_to_dvscf, e_fermi, n_ef, omega_grid,
+                            sigma_el, sigma_ph, mu_star, n_mats, false)
+}
+
+// ── BLOCK el-ph hot path: atoms→Tc with the batched-GEMM occupied-state solve ──
+//   Identical chain + identical |g|² contraction as qforge_atoms_to_tc, but the
+//   occupied-state re-diagonalization (step 1, the el-ph hot loop's eigensolve)
+//   runs through qforge_pw_occ_states_block → one cuBLAS Dgemm per Davidson
+//   iteration on a CUDA build (74.9×/14.6× measured, RTX 5070), element-eq to the
+//   scalar path on a no-GPU build. Same QforgeElphResult — block ≡ scalar λ/Tc.
+pub fn qforge_atoms_to_tc_block(rho: [float], evals: [float], n: int, nocc: int,
+                          dv_modes: [[float]], omega_modes: [float],
+                          mode_weight: float, drho_to_dvscf,
+                          e_fermi: float, n_ef: float, omega_grid: [float],
+                          sigma_el: float, sigma_ph: float,
+                          mu_star: float, n_mats: int) -> QforgeElphResult {
+    return atoms_to_tc_impl(rho, evals, n, nocc, dv_modes, omega_modes,
+                            mode_weight, drho_to_dvscf, e_fermi, n_ef, omega_grid,
+                            sigma_el, sigma_ph, mu_star, n_mats, true)
+}
+
+// shared body for qforge_atoms_to_tc / _block — use_block toggles ONLY the
+// occupied-state eigensolve (block-GEMM vs scalar matvec); everything downstream
+// (|g|², α²F, λ, Tc) is identical, so block ≡ scalar to davidson_block tol.
+fn atoms_to_tc_impl(rho: [float], evals: [float], n: int, nocc: int,
+                    dv_modes: [[float]], omega_modes: [float],
+                    mode_weight: float, drho_to_dvscf,
+                    e_fermi: float, n_ef: float, omega_grid: [float],
+                    sigma_el: float, sigma_ph: float,
+                    mu_star: float, n_mats: int, use_block: bool) -> QforgeElphResult {
     // (1) occupied ψ_n from the converged ρ (re-diagonalize H(ρ)).
-    let occ = qforge_pw_occ_states(rho, n, nocc)
+    let mut occ = qforge_pw_occ_states(rho, n, nocc)
+    if use_block { occ = qforge_pw_occ_states_block(rho, n, nocc) }
     let h_apply = qforge_h_of_rho_global(rho)
     // occupied eigenvalues (lowest nocc).
     let mut eps_occ = []
