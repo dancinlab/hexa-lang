@@ -19,7 +19,7 @@
 //  • Raw coincidental singletons are the measured bounded-coincidence floor —
 //    the engine already classifies bounded-unique singletons as single-point
 //    accidents; the Texas-sharpshooter tribunal (own-scan rate 1/(N-1),
-//    Bonferroni over the TRUE multiplicity K=14535) grades them "chance".
+//    Bonferroni over the TRUE multiplicity K'=496 — exactly the cells swept, see D12 rescale below) grades them "chance".
 //    A scan design with K/(N-1) < 0.01 would grade a lone chance hit
 //    "structural" and go RED — a real falsification channel, not a rubber-stamp.
 //  • γ (real pipeline) stays catalog-relative bounded[2,N] — NOT absolute
@@ -33,6 +33,20 @@
 //  • No atlas write · no new builtin (LCG = existing NR pair 1664525/1013904223,
 //    hash constants = frozen fp kernel 1469598103/1000003/2^61-1) ·
 //    byteeq-NEUTRAL companion (hexa run only, not in the drill binary).
+//  • D12 RESCALE (measured wall, 2026-07-04): the original pre-registration
+//    (full K=C(171,2)=14535 grid × NV=2000 × 2 sweeps ≈ 5.8e7 verify iters)
+//    is IMPRACTICAL as a companion selftest — measured on aiden: RSS 20 GB,
+//    >2 h without finishing (hexa int = native BigInt #4161; the hot loop's
+//    transient BigInts are never freed mid-loop, so RSS ∝ iteration count).
+//    NEW pre-registration (D12, fixed BEFORE any rescaled run): sweep grid =
+//    the FIRST NPAIRS=32 pairs of the same fixed a<=b enumeration order
+//    ⇒ K' = C(32,2) = 496 cells × NV=200 × 2 sweeps ≈ 2e5 iters (~293× less).
+//    K' fed to Bonferroni = exactly the 496 cells swept; K'/(NV-1) = 2.49 >=
+//    0.05 so a lone chance singleton still grades "chance"; the falsification
+//    channel stays live (K'/(NV-1) < 0.01 — e.g. NPAIRS=2 at NV=200 — would
+//    grade a lone chance hit "structural" and go RED). Runtime recalibration,
+//    NOT tune-to-green: every N-gate keeps its ability to fail (N4 floor ~24
+//    analytically forced non-unique tuples at this scale).
 //
 // Run:
 //   hexa run compiler/drill/nullmodel_test.hexa      (pool: aiden)
@@ -173,10 +187,13 @@ fn _nm_canon_fp(a: i64, b: i64, c: i64, d: i64, N: i64) -> i64 {
 }
 
 // ── the null sweep — pre-registered exhaustive grid ─────────────────────
-// Candidate space: canonical pairs (a<=b) over the 18-fn basis (171 pairs),
-// sentences = pair-index i<j (multiset-degenerate A·B=A·B excluded by i<j)
-// ⇒ K = C(171,2) = 14535. Fixed grid, zero RNG, zero data-dependent choice:
-// the enumerator IS the pre-registration (design §3 sharpshooter guard).
+// Candidate space (D12): the FIRST npairs=32 canonical pairs (a<=b) of the
+// fixed 18-fn enumeration order (row a=0 complete + (1,1)..(1,14), spanning all
+// six growth classes incl. the collision slots 12-14), sentences = pair-index
+// i<j (multiset-degenerate A·B=A·B excluded by i<j) ⇒ K' = C(32,2) = 496 swept
+// cells. Full grid C(171,2)=14535 × NV=2000 = measured wall (20 GB · >2 h,
+// aiden). Fixed prefix, zero RNG, zero data-dependent choice: the enumeration
+// prefix IS the pre-registration (design §3 sharpshooter guard).
 pub struct NullSweep {
     k: int,          // pre-registered tuple count (14535)
     nosol: int,      // -2: no solution in [2,N]
@@ -189,7 +206,7 @@ pub struct NullSweep {
     sighash: int     // rolling hash of the (a,b,c,d,n) singleton list (D1 gate)
 }
 
-fn _nm_sweep(N: i64, Nw: i64, known_canon: array) -> NullSweep {
+fn _nm_sweep(N: i64, Nw: i64, npairs: i64, known_canon: array) -> NullSweep {
     let pa = []
     let pb = []
     let mut a = 0
@@ -202,7 +219,7 @@ fn _nm_sweep(N: i64, Nw: i64, known_canon: array) -> NullSweep {
         }
         a = a + 1
     }
-    let np = len(pa)
+    let np = npairs   // D12: pre-registered prefix of the fixed a<=b list (full list stays 171)
     let kk = np * (np - 1) / 2
     let P = 2305843009213693951
     let mut nosol = 0
@@ -276,7 +293,8 @@ fn _check(label: string, got: i64, want: i64, fails: array) {
 fn main() {
     println("OUROBOROS-novel M6 — scramble-oracle null-model (design §3 · null γ-rate = 0)")
     let fails = []
-    let NV = 2000      // null verify window [2,NV] (pre-registered)
+    let NV = 200       // D12 re-registration (was 2000 = measured wall 20GB·>2h)
+    let NPAIRS = 32    // pair-prefix bound ⇒ K' = C(32,2) = 496 swept cells (D12)
     let NW = 64        // fingerprint/classify window (M1/M3 convention)
     let NP = 20000     // positive-control window (= identity_engine_test)
 
@@ -319,25 +337,25 @@ fn main() {
         known_canon.push(kc_identity_canon_fp(kt[q], kt[q + 1], kt[q + 2], kt[q + 3], NW))
         q = q + 4
     }
-    let s = _nm_sweep(NV, NW, known_canon)
+    let s = _nm_sweep(NV, NW, NPAIRS, known_canon)
     println("  swept K=" + to_string(s.k) + " pre-registered tuples over [2," + to_string(NV) + "]")
     println("  no-solution=" + to_string(s.nosol) + "  non-unique=" + to_string(s.nonuniq)
         + "  singletons(coincidence floor)=" + to_string(s.singles)
         + "  universal=" + to_string(s.univ))
     println("  β(∈KNOWN)=" + to_string(s.beta_hits) + "  γ-candidates=" + to_string(s.gamma_cand)
         + "  PROMOTED(structural)=" + to_string(s.promoted))
-    _check("N0 K = C(171,2) closed-form",            s.k, 14535, fails)
+    _check("N0 K' = C(32,2) closed-form (pre-registered pair prefix · D12)", s.k, 496, fails)
     _check("N1 null γ-rate == 0 (tribunal-promoted — THE falsification bar)", s.promoted, 0, fails)
     _check("N2 universal-by-chance == 0",            s.univ, 0, fails)
     _check("N3 coincidence floor < 10% of K (fair, non-degenerate oracle)",
            (if s.singles * 10 < s.k { 1 } else { 0 }), 1, fails)
-    _check("N4 collision mass >= 100 non-unique (null not rigged-to-0 by range inflation)",
-           (if s.nonuniq >= 100 { 1 } else { 0 }), 1, fails)
+    _check("N4 collision mass >= 20 non-unique (analytic floor ~24 forced tuples at NV=200 · not rigged-to-0 by range inflation)",
+           (if s.nonuniq >= 20 { 1 } else { 0 }), 1, fails)
     _check("N5 scrambled canon-fp never ∈ KNOWN",    s.beta_hits, 0, fails)
 
     println("")
     println("D-gate: deterministic byte-eq rerun (pre-registration invariant)")
-    let s2 = _nm_sweep(NV, NW, known_canon)
+    let s2 = _nm_sweep(NV, NW, NPAIRS, known_canon)
     let mut same = 0
     if s2.singles == s.singles {
         if s2.nonuniq == s.nonuniq {
