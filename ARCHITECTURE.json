@@ -245,8 +245,8 @@
       {
         "id": "architecture-json-1",
         "state": "pos-conv",
-        "value": "ARCHITECTURE.json blind write가 파일 훼손/거대diff 재발 (1차 #4135 UU conflict-marker blind-add · 2차 json.dump indent=1 재포맷→5369줄 diff 커밋 · 3차 2026-07-03 hexa-own-ladder 노드 삽입을 indent=1로 덤프→5.5k줄 재포맷, 커밋 전 이 레코드 열람으로 자체 적발·canonical 재저장으로 67줄 복원). 프로그램적 rewrite는 반드시 json.dumps(d,ensure_ascii=False,indent=2)+개행 canonical로 저장하고 git diff --stat으로 실변경 줄수만 남았는지 확인",
-        "threshold": "재발조건=ARCHITECTURE.json을 스크립트로 쓰면서 indent=2+trailing-newline canonical 미준수 또는 diff --stat 미확인 · 해결=수정 전 HEAD round-trip 동일성 확인+canonical 저장+diff --stat 실변경 확인 후 커밋",
+        "value": "ARCHITECTURE.json blind write가 파일 훼손/거대diff 재발 (1차 #4135 UU blind-add · 2차 jsonl · 3차 indent=1 덤프·자체적발 · 4차 2026-07-03 anima: sidecar convergence add 자체가 indent=2 고정 직렬화로 indent=1 파일 전체 재포맷 13k줄 — 도구 라이터가 원인·diff --stat 검사로 적발 후 indent 복원 커밋으로 상쇄)",
+        "threshold": "재발조건: ARCHITECTURE.json 프로그램 write 시(sidecar convergence add 포함·타 repo일수록 주의). 해결: 기존 파일 indent 감지→동일 스타일 재직렬화→diff --stat로 레코드-only 확인 후 커밋. 근본fix 후보=sidecar 라이터 indent 자동감지(follow-on)",
         "source": "ARCHITECTURE.json"
       },
       {
