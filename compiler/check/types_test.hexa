@@ -1154,24 +1154,24 @@ fn main() {
         }
     }
 
-    // (o) HEXA-OWN L2 r2 — @own use-after-move at RETURN position
+    // (p) HEXA-OWN L2 r2 — @own use-after-move at RETURN position
     // (HEXA_OWN_LINT). Under the flag, `@own let x = 5; consume(x);
     // return x` warns HX3012 exactly ONCE (at `return x`): the call-arg is
     // the move, the return is the use-after-move. g's first-use `return r`
     // is a clean move (registers only). On the default build → 0
     // (byteeq-neutral). Same self-adapting contract as (n).
-    let diags_o = _run_case("(o) own-lint r2 — @own moved then returned (HEXA_OWN_LINT)", _build_case_own_lint_r2())
+    let diags_o = _run_case("(p) own-lint r2 — @own moved then returned (HEXA_OWN_LINT)", _build_case_own_lint_r2())
     let oo = _count_code(diags_o, "HX3012")
     if env("HEXA_OWN_LINT") == "1" {
         if oo != 1 {
-            println("  FAIL: case (o) HEXA_OWN_LINT=1 expected 1 HX3012 (return x), got " + to_string(oo) + " (total=" + to_string(len(diags_o)) + ")")
+            println("  FAIL: case (p) HEXA_OWN_LINT=1 expected 1 HX3012 (return x), got " + to_string(oo) + " (total=" + to_string(len(diags_o)) + ")")
             ok = false
         } else {
             println("  ok: 1 HX3012 emitted (call-arg move clean; `return x` after move warns; g's first-use return clean)")
         }
     } else {
         if oo != 0 {
-            println("  FAIL: case (o) default build expected 0 HX3012 (byteeq-neutral), got " + to_string(oo) + " (total=" + to_string(len(diags_o)) + ")")
+            println("  FAIL: case (p) default build expected 0 HX3012 (byteeq-neutral), got " + to_string(oo) + " (total=" + to_string(len(diags_o)) + ")")
             ok = false
         } else {
             println("  ok: 0 HX3012 (default-OFF → byteeq-neutral)")
