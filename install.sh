@@ -478,8 +478,22 @@ install_src() {
         return 1
     fi
 
-    # Wire the install-relative discovery anchors. ln -sfn: replace any stale
-    # link/dir atomically without descending into it.
+    # Wire the install-relative discovery anchors.
+    # ⚠️ `ln -sfn` does NOT replace a REAL directory: BSD/macOS ln silently
+    # creates the link INSIDE it (observed 2026-07-03 on ghost: a May-27
+    # real-dir ~/.hx/bin/self — an 884-file pre-symlink-layout source remnant —
+    # shadowed the fresh $HX_SRC/self for 5+ weeks; every fresh_install
+    # "succeeded" (nested self/self symlink) while the compiler's
+    # install-relative resolver kept reading the stale runtime.h with zero
+    # forge-gelu decls → anima engine gate 0/6 lifetime red, clang
+    # implicit-declaration). Clear any non-symlink remnant first so the anchor
+    # is ALWAYS the symlink and a re-install can never be silently stale.
+    for anchor in stdlib self; do
+        if [ -e "$HX_BIN/$anchor" ] && [ ! -L "$HX_BIN/$anchor" ]; then
+            dim "  clearing non-symlink remnant at $HX_BIN/$anchor (pre-symlink install layout)"
+            rm -rf "${HX_BIN:?}/$anchor"
+        fi
+    done
     ln -sfn "$HX_SRC/stdlib" "$HX_BIN/stdlib"
     ln -sfn "$HX_SRC/self"   "$HX_BIN/self"
     green "  ✓ $HX_SRC (stdlib/ + self/ linked into $HX_BIN)"
