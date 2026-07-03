@@ -1,0 +1,162 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  tool/hx_resolve.hexa — `hx resolve` CLI surface (MVS dependency resolver)
+//
+//  Prod wiring for stdlib/hx/resolve.hexa (Go Minimal Version Selection). Reads
+//  the project's hexa.toml `[dependencies]`, builds the transitive require graph
+//  from the locally-vendored package tree (`<dir>/packages/<name>/hexa.toml` —
+//  the cargo path-dep / go-vendor analog; network fetch of manifests is a
+//  separate lane), runs MVS, and writes the deterministic `hexa.lock`.
+//
+//  Usage:
+//    hexa run tool/hx_resolve.hexa [project-dir]     (default: ".")
+//    ./hx resolve [project-dir]                       (via tool/hx.hexa delegate)
+//
+//  Exit: 0 on success (hexa.lock written); 1 on a missing manifest or an
+//        unresolved / conflicting graph (the resolver's error is printed).
+//
+//  This is a standalone tool (NOT imported by self/main.hexa) so it — and the
+//  stdlib/hx/resolve + semver + lockfile modules it pulls in — stays
+//  byte-eq-NEUTRAL. Touches no codegen / runtime / frozen seed: pure additive.
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/hx/resolve"
+use "stdlib/hx/lockfile"
+
+fn _str(x) -> string {
+    if type_of(x) == "string" { return x }
+    return to_string(x)
+}
+
+fn _read(path: string) -> string {
+    if !file_exists(path) { return "" }
+    return _str(read_file(path))
+}
+
+// Strip a single layer of surrounding ASCII double-quotes, if present.
+fn _unquote(s: string) -> string {
+    let t = s.trim()
+    if len(t) >= 2 {
+        if t.substring(0, 1) == "\"" && t.substring(len(t) - 1, len(t)) == "\"" {
+            return t.substring(1, len(t) - 1)
+        }
+    }
+    return t
+}
+
+// Minimal TOML-ish reader: collect the `key = "value"` pairs that live under
+// `[section]`. Returns #{ "keys": [string], "vals": [string] } in source order.
+// Comment lines (`#`) and blank lines are skipped; `[[bin]]`-style array tables
+// are simply non-matching sections. (Full TOML is the future hexa-toml lane —
+// this mirrors the loose grep already used by tool/pkg/hx::detect_entry.)
+fn _section_kv(content: string, section: string) -> map {
+    let mut keys: [string] = []
+    let mut vals: [string] = []
+    let lines = content.split("\n")
+    let mut cur = ""
+    let mut i = 0
+    while i < len(lines) {
+        let ln = lines[i].trim()
+        i = i + 1
+        if len(ln) == 0 { continue }
+        if ln.substring(0, 1) == "#" { continue }
+        if ln.substring(0, 1) == "[" {
+            let e = ln.index_of("]")
+            if e > 0 { cur = ln.substring(1, e).trim() }
+            continue
+        }
+        if cur != section { continue }
+        let eq = ln.index_of("=")
+        if eq < 0 { continue }
+        let k = ln.substring(0, eq).trim()
+        if len(k) == 0 { continue }
+        let v = _unquote(ln.substring(eq + 1, len(ln)))
+        keys.push(k)
+        vals.push(v)
+    }
+    return #{ "keys": keys, "vals": vals }
+}
+
+fn _kv_get(kv: map, key: string, dflt: string) -> string {
+    let keys = kv["keys"]
+    let vals = kv["vals"]
+    let mut i = 0
+    while i < len(keys) {
+        if keys[i] == key { return vals[i] }
+        i = i + 1
+    }
+    return dflt
+}
+
+// Parse a manifest's `[dependencies]` into resolver requirement edges.
+fn _deps_of(toml: string) -> [ResolveReq] {
+    let kv = _section_kv(toml, "dependencies")
+    let keys = kv["keys"]
+    let vals = kv["vals"]
+    let mut out: [ResolveReq] = []
+    let mut i = 0
+    while i < len(keys) {
+        out.push(resolve_req(keys[i], vals[i]))
+        i = i + 1
+    }
+    return out
+}
+
+// Build the require graph (registry) from the vendored package tree. Each
+// `<pkgroot>/<dir>/hexa.toml` contributes one node: its [package] name+version
+// and its [dependencies]. (One version per vendored package — exercises linear
+// and diamond graphs against real files; multi-version registries are the
+// network-fetch lane.)
+fn _build_registry(pkgroot: string) -> [ResolveModule] {
+    let mut reg: [ResolveModule] = []
+    // NOTE: don't guard with file_exists(pkgroot) — file_exists is file-only on
+    // some toolchains (returns false for a directory). list_dir already yields
+    // [] for a missing/empty dir, so we walk it directly.
+    let entries = list_dir(pkgroot)
+    if type_of(entries) != "array" { return reg }
+    let mut i = 0
+    while i < len(entries) {
+        let dname = _str(entries[i])
+        i = i + 1
+        let mtoml = pkgroot + "/" + dname + "/hexa.toml"
+        if !file_exists(mtoml) { continue }
+        let c = _read(mtoml)
+        let pk = _section_kv(c, "package")
+        let pname = _kv_get(pk, "name", dname)
+        let pver = _kv_get(pk, "version", "0.0.0")
+        reg.push(resolve_module(pname, pver, _deps_of(c)))
+    }
+    return reg
+}
+
+fn main() -> int {
+    let av = argv()
+    let dir = if len(av) >= 3 { _str(av[2]) } else { "." }
+
+    let toml = _read(dir + "/hexa.toml")
+    if toml == "" {
+        eprintln("hx resolve: no hexa.toml found in " + dir)
+        return 1
+    }
+
+    let root = _deps_of(toml)
+    let reg = _build_registry(dir + "/packages")
+    let res = mvs_resolve(root, reg)
+    if !res.ok {
+        eprintln("hx resolve: " + res.error)
+        return 1
+    }
+
+    let lock = lockfile_render(res.build)
+    let lockpath = dir + "/hexa.lock"
+    write_file(lockpath, lock)
+
+    println("hx resolve: wrote " + lockpath + " (" + to_string(len(res.build)) + " packages)")
+    let mut i = 0
+    while i < len(res.build) {
+        println("  " + res.build[i].name + " " + res.build[i].version)
+        i = i + 1
+    }
+    return 0
+}
+
+exit(main())

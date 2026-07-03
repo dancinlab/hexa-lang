@@ -1,0 +1,2 @@
+{"round": 1, "seed": "x", "n_total": 1, "n_identity": 0, "n_verified": 0, "n_trivial": 0, "n_nonident": 1, "detail": [{"id": "c1", "expr": "closure(sigma.sigma_n6 = 12.0, psi.alpha = 0.014)", "class": "non-identity"}]}
+{"round": 2, "seed": "arith", "n_total": 2, "n_identity": 1, "n_verified": 1, "n_trivial": 0, "n_nonident": 1, "detail": [{"id": "real1", "expr": "phi*J2 = n*psi", "class": "VERIFIED", "solset": [4]}, {"id": "noise1", "expr": "ded(a,b)", "class": "non-identity"}]}

@@ -1,0 +1,119 @@
+// stdlib/cloud/rent_create_surface_test.hexa — deterministic falsifiers for
+// the `cloud rent` create-path SILENT-HANG fix (root-cause, not workaround).
+//
+// Reproduced bug (2026-06-23 8×A100 labeling rent): when a vast `--offer` had
+// rotated to rentable=false / `vastai create` returned a non-2xx body /
+// the API stalled, the rent wrapper SILENTLY HUNG or swallowed the error,
+// while `cloud api vast PUT asks/<offer>/` returned the same error INSTANTLY.
+// Root cause: vast_create_labeled's raw exec() had no walltime bound and its
+// fail path truncated to 200 chars. Fix: a `timeout <sec>` watchdog prefix +
+// _vast_exec_diag that surfaces the reply VERBATIM (and names the watchdog on
+// empty output), so a create failure is fail-loud — exactly like `cloud api`.
+//
+// Part 1 — pure-string unit tests of _vast_exec_diag (no shell).
+// Part 2 — e2e through vast_create_labeled with a fake vastai shim that emits
+//          a `success:false` (no new_contract) create reply → must FAIL with
+//          the reply surfaced verbatim (NOT a silent ok / hang).
+//
+// Run:   hexa run stdlib/cloud/rent_create_surface_test.hexa
+// PASS:  exits 0, prints "rent_create_surface_test PASS — N/N cases".
+
+use "stdlib/cloud/vast"
+
+fn _fail(case: str, msg: str) {
+    println("FAIL " + case + ": " + msg)
+    exit(1)
+}
+
+fn main() {
+    let mut n = 0
+
+    // ── Part 1: _vast_exec_diag pure-string tests ────────────────────
+
+    // 1a. A non-empty provider reply is surfaced VERBATIM (full, not 200-cap).
+    let reply = "{\"success\": false, \"error\": \"offer 40455967 is no longer rentable\"}"
+    let d1 = vast_exec_diag_TEST(reply)
+    if d1.index_of("no longer rentable") < 0 {
+        _fail("1a-verbatim", "provider error not surfaced: [" + d1 + "]")
+    }
+    if d1.index_of("success") < 0 {
+        _fail("1a-verbatim", "reply was truncated / mangled: [" + d1 + "]")
+    }
+    n = n + 1
+
+    // 1b. Empty output ⇒ name the watchdog (former silent hang made explicit).
+    //     With the default bound (>0) the message must mention a timeout/watchdog.
+    let d2 = vast_exec_diag_TEST("")
+    if d2.index_of("watchdog") < 0 && d2.index_of("timed out") < 0 && d2.index_of("no output") < 0 {
+        _fail("1b-empty-watchdog", "empty output not explained: [" + d2 + "]")
+    }
+    n = n + 1
+
+    // 1c. Whitespace-only output is treated as empty (still explained).
+    let d3 = vast_exec_diag_TEST("   \n\t ")
+    if len(d3) == 0 {
+        _fail("1c-ws-empty", "whitespace output produced an empty diag (silent)")
+    }
+    n = n + 1
+
+    // ── Part 2: e2e through vast_create_labeled (fake vastai shim) ────
+    // Guard: only run e2e when HOME is redirected into a hexa scratch dir
+    // (a real /Users HOME would shell out to the user's actual vastai). The
+    // test runner sets HOME=*hexa_vast_test*; a bare `hexa run` skips Part 2.
+    let home = env_var("HOME")
+    if home.index_of("hexa_vast_test") < 0 {
+        println("rent_create_surface_test PASS (Part 1 only — set HOME=*hexa_vast_test* to run e2e) — " + to_string(n) + "/" + to_string(n) + " cases")
+        exit(0)
+    }
+
+    let bindir = home + "/bin"
+    let _mk = exec("mkdir -p '" + bindir + "'")
+    let shim = bindir + "/vastai"
+
+    // 2a. create returns success:false (no new_contract) → MUST fail-loud
+    //     with the reason surfaced (the silent-swallow we are fixing).
+    let body_fail = "#!/bin/sh\n"
+        + "printf '%s\\n' '{\"success\": false, \"error\": \"no_such_ask: offer rotated to rentable=false\"}'\n"
+    write_file(shim, body_fail)
+    let _c1 = exec("chmod +x '" + shim + "'")
+    let r1 = vast_create_labeled("40455967", "img", 50, "lbl")
+    if r1.ok != 0 {
+        _fail("2a-create-fail", "success:false reply must FAIL (ok=0), got ok=" + to_string(r1.ok) + " msg=" + r1.message)
+    }
+    if r1.message.index_of("rentable=false") < 0 && r1.message.index_of("no_such_ask") < 0 {
+        _fail("2a-create-fail", "create failure reason NOT surfaced verbatim: " + r1.message)
+    }
+    n = n + 1
+
+    // 2b. create emits NOTHING (the stall/timeout shape) → fail-loud, NOT hang,
+    //     and the message explains the empty output (watchdog).
+    let body_empty = "#!/bin/sh\n" + "exit 124\n"
+    write_file(shim, body_empty)
+    let _c2 = exec("chmod +x '" + shim + "'")
+    let r2 = vast_create_labeled("40455967", "img", 50, "lbl")
+    if r2.ok != 0 {
+        _fail("2b-create-empty", "empty/timeout create must FAIL (ok=0), got ok=" + to_string(r2.ok))
+    }
+    if r2.message.index_of("FAILED") < 0 {
+        _fail("2b-create-empty", "empty create did not fail loud: " + r2.message)
+    }
+    n = n + 1
+
+    // 2c. POSITIVE control: a well-formed new_contract reply still SUCCEEDS
+    //     (the fix is backward-compatible — the happy path is untouched).
+    let body_ok = "#!/bin/sh\n"
+        + "printf '%s\\n' '{\"success\": true, \"new_contract\": 98765}'\n"
+    write_file(shim, body_ok)
+    let _c3 = exec("chmod +x '" + shim + "'")
+    let r3 = vast_create_labeled("40455967", "img", 50, "lbl")
+    if r3.ok != 1 {
+        _fail("2c-create-ok", "valid new_contract must SUCCEED (ok=1), got ok=" + to_string(r3.ok) + " msg=" + r3.message)
+    }
+    if r3.instance_id != "98765" {
+        _fail("2c-create-ok", "instance_id wrong: " + r3.instance_id)
+    }
+    n = n + 1
+
+    println("rent_create_surface_test PASS — " + to_string(n) + "/" + to_string(n) + " cases")
+    exit(0)
+}

@@ -60,5 +60,9 @@ pub fn pitch_max_lag(sample_rate: int, min_hz: float) -> int {
 pub fn parabolic_interp_offset(r_prev: float, r_peak: float, r_next: float) -> float {
     let denom = 2.0 * (2.0 * r_peak - r_prev - r_next)
     if abs(denom) < 0.00001 { return 0.0 }
-    return (r_prev - r_next) / denom
+    // QIFFT sub-sample peak: δ = 0.5·(r_prev - r_next) / (r_prev - 2·r_peak + r_next).
+    // denom here = 2·(2·r_peak - r_prev - r_next) = -2·(r_prev - 2·r_peak + r_next),
+    // so the numerator must be (r_next - r_prev) for the right sign — the prior
+    // (r_prev - r_next) returned the NEGATED offset (peak leaned the wrong way).
+    return (r_next - r_prev) / denom
 }

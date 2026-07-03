@@ -1029,7 +1029,18 @@ fn _bind_walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> B
             let pat = e.children[i]
             let body = e.children[i + 1]
             sc = _push_scope(sc)
-            sc = _bind_pattern(pat, sc, mod_file, out)
+            // RFC pattern guards — a guarded arm wraps its pattern as a
+            // "match_guard" carrier (children [inner_pattern, guard]). Bind
+            // the inner pattern's payload binders FIRST, then walk the guard
+            // in the same arm scope so `Some(n) if n > 0` resolves `n`
+            // (no spurious HX2001). The guard sees binders; the body sees
+            // both. Unguarded arms take the legacy path unchanged.
+            if ast_is_match_guard(pat) {
+                sc = _bind_pattern(pat.children[0], sc, mod_file, out)
+                sc = _bind_walk_expr(pat.children[1], sc, mod_file, out)
+            } else {
+                sc = _bind_pattern(pat, sc, mod_file, out)
+            }
             sc = _bind_walk_expr(body, sc, mod_file, out)
             sc = _pop_scope(sc)
             i = i + 2
@@ -1225,12 +1236,135 @@ fn _bind_builtin_names() -> [string] {
         "__hx_tag", "__hx_payload_eq", "__hx_payload_nz",
         "__hx_payload_lt", "__hx_payload_gt", "__hx_payload_le", "__hx_payload_ge",
         "__hx_payload_eq", "__hx_payload_ne",
+        // UNSIGNED magnitude compares (libm-leaf fdlibm fmod): __hx_payload_ult/ule
+        // = unsigned < / <= (x86_64 setb/setbe · arm64 lo/ls). ADD-only.
+        "__hx_payload_ult", "__hx_payload_ule",
         "__hx_payload_add", "__hx_payload_sub", "__hx_payload_mul",
         "__hx_payload_div", "__hx_payload_mod",
-        "__hx_payload_and", "__hx_payload_xor",
+        "__hx_payload_and", "__hx_payload_xor", "__hx_payload_or",
+        // LOGICAL bit-shifts on the raw payload word (libm-leaf fdlibm fmod port):
+        // __hx_payload_shl = v<<n, __hx_payload_shr = v>>n ZERO-FILL (logical, NOT
+        // the BinOp `>>` arithmetic sar). x86_64 shl/shr · arm64 lslv/lsrv. ADD-only
+        // (compiler never calls them); parses as an ordinary identifier-call (frozen
+        // 151c52c8-safe, like the existing __hx_payload_* family).
+        "__hx_payload_shl", "__hx_payload_shr",
         "__hx_payload_fadd", "__hx_payload_fsub", "__hx_payload_fmul", "__hx_payload_fdiv",
         "__hx_payload_flt", "__hx_payload_fgt", "__hx_payload_fle", "__hx_payload_fge",
+        // FLOAT→INT truncate (libm-leaf musl sin argument reduction `(int32_t)fn`):
+        // __hx_payload_f2i reinterprets the payload word as a double and truncates
+        // toward zero into a signed integer (x86_64 cvttsd2si · arm64 fcvtzs). The
+        // dual __hx_payload_i2f converts a signed-int payload to a double (x86_64
+        // cvtsi2sd · arm64 scvtf) — distinct from __hx_to_double which is a tagged
+        // int-or-float coercion; i2f takes a RAW int payload. ADD-only, frozen
+        // 151c52c8-safe identifier-calls (compiler never emits them).
+        "__hx_payload_f2i", "__hx_payload_i2f",
         "__hx_str_byte", "__hx_to_double", "__hx_arr_len", "__hx_syscall0", "__hx_syscall6", "__hx_ptr_store64", "__hx_ptr_load64", "__hx_ptr_store32", "__hx_ptr_load32", "__hx_ptr_store8", "__hx_ptr_load8",
+        // RFC061 Route C 2nd-return-register (2026-06-27): `__hx_syscall6_out2(
+        // num, a0..a5, outptr)` issues ONE syscall and writes BOTH return
+        // registers + the carry/error flag into a caller-supplied scratch:
+        // outptr[0]=x0/rax (1st return), outptr[8]=x1/rdx (2nd return),
+        // outptr[16]=1 if the BSD carry-flag (darwin error) was set else 0. The
+        // single-result __hx_syscall6 exposes only x0, so it cannot serve the
+        // darwin 2nd-return-register syscalls pipe(2)/fork(2) (fds in x0/x1;
+        // child disambiguated by x1==1). The caller reads the slots back with the
+        // already-whitelisted __hx_ptr_load64. arm64 + x86_64 STMT_CALL
+        // special-case (mirror of __hx_syscall6 + dual-store). ADD-only leaf:
+        // the compiler never calls it.
+        "__hx_syscall6_out2",
+        // RFC061 Route C Wall 2-b — extern-data named-data reloc (2026-06-27):
+        // `__hx_environ_ptr()` is a 0-arg intrinsic that loads the ADDRESS of the
+        // libc `extern char **environ` global THROUGH THE GOT (x86_64 `mov rax,
+        // [rip+environ@GOTPCREL]` → R_X86_64_(REX_)GOTPCREL; arm64 `adrp/ldr
+        // …@GOTPAGE/@GOTPAGEOFF` → ARM64_RELOC_GOT_LOAD_*), boxed as a TAG_INT
+        // payload. It returns `&environ` (char***), so ONE __hx_ptr_load64 yields
+        // the char** array base — letting hxlcl_getenv walk the environment with a
+        // pure byte-compare instead of the libc-`environ`-global shim body. This is
+        // the FIRST named-data (vs named-text/call) GOT reloc a Route C body needs;
+        // it is frozen-SAFE (parses as an ordinary identifier-call, like the 24
+        // syscall intrinsics + __hx_syscall6_out2) and DCE-never-drops the STMT_CALL.
+        // arm64 + x86_64 STMT_CALL special-case. ADD-only: the compiler never calls it.
+        "__hx_environ_ptr",
+        // RFC061 Route C Wall 3-b — std-stream extern-data reloc (2026-06-27):
+        // `__hx_stderr_ptr()` / `__hx_stdout_ptr()` are 0-arg intrinsics that load
+        // the ADDRESS of the libc standard-stream FILE* globals (`extern FILE *stderr`
+        // / `*stdout`) THROUGH THE GOT — the named-data sibling of __hx_environ_ptr,
+        // keyed to the per-target libc symbols (x86_64-linux glibc `stderr`/`stdout`
+        // direct; darwin `__stderrp`/`__stdoutp`, the `#define stderr __stderrp`
+        // macro target). Each returns `&stderr` (FILE**), so ONE __hx_ptr_load64
+        // yields the `stderr` FILE* value itself — letting hxlcl_fputs/hxlcl_fputc
+        // replicate the frozen body's `if (fp == (void*)stderr) fd = 2;` standard-
+        // stream detection (self/runtime_emit_full.hexa:1014-1024) with a pure
+        // pointer-load + compare, instead of the libc-`stderr`-global shim body.
+        // These are the FIRST per-TARGET-NAMED named-data GOT relocs (the symbol
+        // STRING differs by platform, unlike `environ`); frozen-SAFE (parse as
+        // ordinary identifier-calls, like the 24 syscall intrinsics + __hx_environ_ptr)
+        // and DCE-never-drops the STMT_CALL. arm64 + x86_64 STMT_CALL special-case.
+        // ADD-only: the compiler never calls them.
+        "__hx_stderr_ptr", "__hx_stdout_ptr",
+        // RFC061 Route C Wall 3-c (2026-06-27): `__hx_static_slot(slot_id, size_bytes)`
+        // — DEFINE a self-static, zero-initialized file-local data buffer of size_bytes
+        // and return its address (boxed TAG_INT). The named-data sibling of
+        // __hx_environ_ptr / __hx_stderr_ptr, but DEFINES a local symbol (`slot_<id>`)
+        // instead of referencing an extern — the address materializes via a LOCAL pc-rel
+        // ref (`lea [rip+slot_<id>]` x86 / `adrp+add @PAGE/@PAGEOFF` arm64), and the
+        // backend records the slot so emit/asm emits a `.zero size_bytes` data symbol.
+        // Both args MUST be compile-time const_int literals (deterministic name + fixed
+        // size). This gives Route C bodies file-local STATIC MUTABLE state (the popen
+        // fd→pid table) — the last frozen-floor static-array dep — with NO new parser
+        // keyword/@attr (frozen 151c52c8 immutable; an ordinary identifier-call). arm64 +
+        // x86_64 STMT_CALL special-case. ADD-only: the compiler never calls it.
+        "__hx_static_slot",
+        // RFC061 §M8 named-rodata-table (literal-∅ feature C, 2026-06-29):
+        // `__hx_rodata_tab_ptr(table_id)` — the PRE-INITIALIZED-rodata sibling of
+        // __hx_static_slot. DEFINES a named `.rodata` constant table (`rotab_<id>`,
+        // contents from the x86_64 backend's `_x86_rodata_table_spec`, LE doubles)
+        // and RETURNS its address (boxed TAG_INT) via a LOCAL pc-rel `lea
+        // [rip+rotab_<id>]`. table_id MUST be a compile-time const_int (deterministic
+        // symbol name). This is the table-driven libm mechanism the musl exp/log
+        // ports need (__exp_data.tab[256] / __log_data.tab[128]); callers read cells
+        // via __hx_ptr_load64. NO new keyword/@attr (ordinary identifier-call, frozen
+        // 151c52c8 safe). x86_64 STMT_CALL special-case. ADD-only: the compiler never
+        // calls it → byte-eq NEUTRAL (no byteeq-path body references it).
+        "__hx_rodata_tab_ptr",
+        // ING #29 literal-∅ (2026-06-30): `__hx_fn_addr(name)` — emit the RAW UNBOXED
+        // address of a top-level `fn name` (the .text entry-point symbol) as a TAG_INT
+        // HexaVal, WITHOUT the TAG_FN boxing that `fn_ref` performs. This is the
+        // reference-match of C `&fn` / GCC `&&label` / rustc fn-ptr / zig `@intFromPtr(fn)`
+        // — every major compiler emits a function address as a raw pointer. It is the
+        // PREREQUISITE BUILDING BLOCK for the SA_RESTORER (signal) + setjmp/longjmp
+        // (naked-asm) walls, both of which need a raw fn ptr stored into a struct field
+        // (sigaction.sa_restorer / the trampoline slot) that the kernel jumps to directly
+        // — a TAG_FN HexaVal box is rejected there. hir_to_mir lowers the bare-ident arg
+        // `__hx_fn_addr(worker)` to op="__hx_fn_addr" args=[name_str] (the SAME lowering
+        // shape as fn_ref / carrier_call, which also extract a bare fn-ident name). The
+        // codegen STMT_CALL special-case emits ONLY the pc-relative address materialisation
+        // (x86_64 `lea rax,[rip+name]` · arm64 `adrp x1,name@PAGE` + `add x1,x1,name@PAGEOFF`)
+        // and skips the `hexa_fn_new_native` boxing call — the result is the raw .text
+        // pointer in the payload (tag=TAG_INT=0). NO new keyword/@attr (ordinary
+        // identifier-call, frozen 151c52c8 safe). ADD-only: the compiler itself never
+        // calls it → byte-eq NEUTRAL (no byteeq-path body references it).
+        "__hx_fn_addr",
+        // RFC061 §M8 varargs-ABI (literal-∅ feature B, RUNG1, 2026-06-29): the SysV
+        // AMD64 va_list intrinsics that let a self-emitted variadic `hxlcl_*` body
+        // (e.g. the frozen-floor hxlcl_printf/hxlcl_fprintf, which forward a C va_list
+        // to hxlcl_vfprintf_fd — self/runtime_emit_full.hexa:1000-1013) walk its
+        // unnamed integer arguments WITHOUT the frozen runtime.c va_list. Named like the
+        // GCC/clang built-ins (reference-match: GCC `__builtin_va_start`/`va_arg`/`va_end`
+        // /`va_copy`). Lowered by the x86_64_linux backend STMT_CALL special-case
+        // (PSABI §3.5.7 fig 3.34, integer class) under HEXA_VA_INTRINSICS=1 — DCE-never-
+        // drops, default-OFF byte-eq NEUTRAL. arm64 + FP class = the honest next rung.
+        // Frozen-SAFE: parse as ordinary identifier-calls (no new keyword/@attr).
+        // ADD-only: the compiler itself never calls them.
+        "__builtin_va_start", "__builtin_va_arg", "__builtin_va_end", "__builtin_va_copy",
+        // RFC061 §M8 varargs-ABI SSE-class (literal-∅ feature B, r1, 2026-06-30):
+        // `__builtin_va_arg_fp(ap)` fetches the next SSE-class (double/float) vararg per
+        // PSABI §3.5.7 fig 3.34 — the FP-class sibling of `__builtin_va_arg` (which is
+        // integer-class). It reads `fp_offset` (va_list+4), the XMM register-save area
+        // (reg_save_area + fp_offset, 16-byte stride), and the 8-byte overflow path.
+        // Needed by `hxlcl_fprintf`'s `double dv = va_arg(ap, double)` for `%g`/`%f`.
+        // x86_64_linux STMT_CALL special-case under HEXA_VA_INTRINSICS=1 — DCE-never-
+        // drops, default-OFF byte-eq NEUTRAL. arm64 AAPCS64 fp va_arg = the next rung.
+        "__builtin_va_arg_fp",
         // RT-NATIVE M4 ARRAY-R2 (2026-06-17): `__hx_make_val(tag, payload)` — the
         // symmetric write-half of `__hx_tag`. Builds a {tag, payload} 16-byte HexaVal
         // from two raw int64 words WITHOUT boxing-tag-loss, so a payload word loaded
@@ -1253,6 +1387,16 @@ fn _bind_builtin_names() -> [string] {
         // lets self/rt/syscall.hexa select the aarch64-Linux numbers natively.
         // ADD-only: the compiler never calls it.
         "__hx_target_arch",
+        // ING #32 friendly OS/arch-detect (2026-06-22): source-callable aliases of
+        // the `__hx_target_os()`/`__hx_target_arch()` leaf intrinsics, so user .hexa
+        // can branch on the build target WITHOUT importing self/rt/syscall (where the
+        // `@pure fn target_is_*()` wrappers live, invisible to ordinary `hexa build`
+        // source). Each is a 0-arg compile-time bool const emitted DIRECTLY as 1/0 by
+        // the per-target backend (arm64_darwin → darwin/arm64 = 1, x86_64_linux →
+        // linux/x86_64 = 1; the arm64-linux-gnu triple flips OS to linux). anima
+        // reported these as undeclared (they were only runtime .globl symbols, not
+        // source builtins). ADD-only leaves — the compiler never calls them.
+        "target_is_darwin", "target_is_linux", "target_is_arm64", "target_is_x86_64",
         // RT-NATIVE M5-syscall-c (2026-06-18): `__hx_str_ptr(s)` — the char* base
         // of a string HexaVal (its payload word) as an int HexaVal, for passing a
         // NUL-terminated cstring to a raw syscall (e.g. sys_open). The shipping
@@ -1369,7 +1513,36 @@ fn _bind_builtin_names() -> [string] {
         // nvptx_target.hexa `_nvptx_mfunc_is_matmul_shape` (N86) /
         // rocm_target.hexa `_rocm_mfunc_is_matmul_shape` /
         // metal_target.hexa `_metal_mfunc_is_matmul_shape`.
-        "gpu_matmul", "gpu_matmul_NT_a", "gpu_matmul_NT_b"
+        "gpu_matmul", "gpu_matmul_NT_a", "gpu_matmul_NT_b",
+        // FLEET A3 (#4154 follow-on) — thread/channel runtime fn-global carriers.
+        // These are NOT source-level `fn` decls: native/thread.c declares them as
+        // bare `HexaVal thread_spawn;` … carrier globals and registers them at
+        // runtime via `_hexa_init_thread_fn_shims` (thread_emit.hexa:383-398), the
+        // exact mirror of the `float_to_bits`/`bits_to_float` runtime-intrinsic
+        // pattern (see self/nanbox.hexa:223-230). #4154 fwd-declared them in
+        // runtime.h so the C-transpile / `hexa run` paths resolve `thread_spawn(f,
+        // arg)` → `hexa_call2(thread_spawn, …)` (codegen.hexa:8251 hexa_callN
+        // fallback) through the extern HexaVal carrier. The raw `aprime --emit`
+        // native path stalled BEFORE codegen: bind's S1 name-resolution saw the
+        // bare callee as unknown → HX2001 (cf. cf6fc2af8 which dropped the thread
+        // fn-globals from the escape-relax test for exactly this reason). Adding
+        // the names here ONLY registers them in the module scope (a name-resolution
+        // exemption); codegen is unaffected (they are absent from `_is_builtin_name`
+        // and `_is_known_fn_global`, so they still route through hexa_callN to the
+        // carrier). Byteeq-neutral: a name-only scope `_define` changes no emitted
+        // bytes for any program that does not reference these names, and any program
+        // that does reference them currently fails to compile (no prior byte output).
+        "thread_spawn", "thread_join",
+        "thread_channel_new", "thread_channel_send",
+        "thread_channel_recv", "thread_channel_close",
+        // …and the rest of the `_hexa_init_thread_fn_shims` carrier family that
+        // multithreaded `.hexa` references alongside spawn/join (the game thread
+        // microbench uses atomic_cell_*; now_ms is the spawn-family timer; sleep_ms
+        // is already registered above as a plain builtin). All 8 below are the same
+        // TAG_FN carrier globals (thread_emit.hexa:383-398) and resolve identically.
+        "now_ms",
+        "atomic_cell_new", "atomic_cell_load", "atomic_cell_store",
+        "atomic_cell_add", "atomic_cell_sub", "atomic_cell_cas"
     ]
 }
 

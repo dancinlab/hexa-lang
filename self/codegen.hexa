@@ -1022,6 +1022,7 @@ fn codegen(ast) {
     _strlit_keys = []
     _strlit_ids = []
     _strlit_counter = 0
+    _strlit_index_init()
     _destr_counter = 0
     // b2-fnref: reset by-value builtin/method thunk set per codegen call.
     _fnref_thunk_names = []
@@ -2567,6 +2568,36 @@ fn gen2_static_ffi_block(ast) {
     return parts.join("")
 }
 
+// FFI-NATIVE-ROUTE: an `@link("m")` extern fn whose C symbol is a libm function
+// hexa already implements natively resolves to the builtin (hexa_math_*) instead
+// of dlopen+dlsym. A statically-linked musl binary CANNOT dlopen, so the dlsym
+// path produced a NULL fn_ptr and the CLM decode deadlocked calling through it.
+// native-canonical-default polarity makes the own-impl the correct default anyway,
+// and the *builtin* `erf(x)` already lowers to hexa_math_erf — routing unifies the
+// shadowed-extern case with the builtin. Scope v1 = libm double->double set; a
+// symbol hexa has no native for (e.g. cblas_sgemm) returns "" -> unchanged FFI path.
+// Named next wall: libc symbols with native equivalents (strlen family) need a
+// char*/HexaVal-str marshalling-safety pass first.
+fn gen2_extern_native_route(node, c_sym) {
+    if node.op != "m" && node.op != "libm" { return "" }
+    if gen2_ffi_c_ret_type(node.ret_type) != "double" { return "" }
+    let mut i = 0
+    while i < len(node.params) {
+        if gen2_ffi_c_type(node.params[i].value) != "double" { return "" }
+        i = i + 1
+    }
+    let n = len(node.params)
+    let mut key = ""
+    if n == 1 {
+        if c_sym == "sqrt" || c_sym == "sin" || c_sym == "cos" || c_sym == "tan" || c_sym == "asin" || c_sym == "acos" || c_sym == "atan" || c_sym == "log" || c_sym == "exp" || c_sym == "tanh" || c_sym == "lgamma" || c_sym == "tgamma" || c_sym == "erf" || c_sym == "erfc" { key = c_sym }
+    }
+    if n == 2 {
+        if c_sym == "pow" || c_sym == "atan2" || c_sym == "fmod" { key = c_sym }
+    }
+    if key == "" { return "" }
+    return cg_math_sym(key)
+}
+
 fn gen2_extern_wrapper(node) {
     let name = node.name
     let nargs = len(node.params)
@@ -2610,6 +2641,35 @@ fn gen2_extern_wrapper(node) {
     // against void's _hx_is_wide_cjk). The wrapper is per-TU anyway and
     // doesn't need external linkage; dlsym-loaded __ffi_sym_* is the ABI.
     let forward = "static HexaVal " + cname + "(" + sig_p + ");"
+
+    // FFI-NATIVE-ROUTE (musl-static erf/exp deadlock fix): if this @link("m") extern
+    // resolves to a hexa native libm builtin, emit a direct call to it and emit NO
+    // __ffi_sym_* slot / NO dlopen+dlsym init line — so it works on statically-linked
+    // musl builds (which cannot dlopen) and follows native-canonical polarity. The
+    // wrapper keeps the exact `static HexaVal cname(HexaVal...)` shape so call sites
+    // are untouched; args round-trip through hexa_float(<marshalled double>) into the
+    // hexa_math_*(HexaVal)->HexaVal builtin (already declared in runtime.h).
+    let native_sym = gen2_extern_native_route(node, c_sym)
+    if native_sym != "" {
+        let mut ncall_args = []
+        let mut nci = 0
+        while nci < nargs {
+            ncall_args.push("hexa_float(" + gen2_ffi_marshal_arg(_hexa_mangle_ident(node.params[nci].name), node.params[nci].value) + ")")
+            nci = nci + 1
+        }
+        let mut nparts = []
+        nparts.push("static HexaVal " + cname + "(" + sig_p + ") {\n")
+        nparts.push("    return " + native_sym + "(" + ncall_args.join(", ") + ");\n")
+        nparts.push("}\n")
+        return #{
+            "global": "", "forward": forward, "fn_code": nparts.join(""), "init": "",
+            "kind": "", "name": "", "value": "", "op": "",
+            "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": "", "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+    }
 
     let has_float = gen2_has_float_param(node.params)
 
@@ -3004,6 +3064,43 @@ fn _gen2_nested_index_assign_stmt(lhs, val_c, pad) {
     return pad + root_c + " = " + expr + ";\n"
 }
 
+// 2026-07-03: generalized nested lvalue assignment for a mixed Field/Index spine
+// rooted at a variable — `root.f[i].g = v`, `root.a.b = v`, etc. The plain
+// Field-AssignStmt branch lowered `obj.field = v` as `<obj_c> = hexa_map_set(...)`
+// with obj_c = gen2_expr(obj); when obj is itself a place (Field/Index) that
+// obj_c is a function-call rvalue (hexa_map_get_ic(...) / hexa_index_get(...)),
+// so the C `<rvalue> = …` was rejected ("expression is not assignable"). Fix:
+// walk the whole place spine to the ROOT lvalue (a bare Ident) and rebuild it
+// with nested hexa_map_set / hexa_index_set, assigning ONCE to the root. Every
+// intermediate object read is an rvalue ARGUMENT to set (valid C); only the root
+// is a C lvalue. Byte-identical to the old branch for the single-level
+// `ident.field = v` case (steps = [Field], root_c = ident).
+fn _gen2_nested_field_assign_stmt(lhs, val_c, pad) {
+    // Collect place steps leaf→root (each step is the Field/Index AST node).
+    let mut steps = []
+    let mut cur = lhs
+    while type_of(cur) != "string" && (cur.kind == "Field" || cur.kind == "Index") {
+        steps.push(cur)
+        cur = cur.left
+    }
+    let root_c = gen2_expr(cur)
+    // Rebuild innermost (leaf, first collected) outward. Each wrapper's object is
+    // the step node's own `.left`, lowered via gen2_expr (correct read incl. IC).
+    let mut expr = val_c
+    let mut i = 0
+    while i < len(steps) {
+        let node = steps[i]
+        let obj_c = gen2_expr(node.left)
+        if node.kind == "Field" {
+            expr = "hexa_map_set(" + obj_c + ", \"" + node.name + "\", " + expr + ")"
+        } else {
+            expr = "hexa_index_set(" + obj_c + ", " + gen2_expr(node.right) + ", " + expr + ")"
+        }
+        i = i + 1
+    }
+    return pad + root_c + " = " + expr + ";\n"
+}
+
 // decreases node — structural
 // PROBE r15-D2 (2026-05-24): gen2_stmt wrapper for postfix `?` hoisting.
 // Saves + clears the Try-preamble buffer, emits the statement via the
@@ -3284,12 +3381,13 @@ fn _gen2_stmt_inner(node, depth) {
             let val = gen2_expr(node.right)
             return _gen2_nested_index_assign_stmt(node.left, val, pad)
         }
-        // Field assignment: obj.field = val
+        // Field assignment: obj.field = val — recurse to the ROOT lvalue so a
+        // nested object place (obj.f[i].g / obj.a.b) rebinds the base variable
+        // instead of assigning to a map_get/index_get rvalue. Single-level
+        // ident.field = v stays byte-identical (steps=[Field], root=ident).
         if type_of(node.left) != "string" && node.left.kind == "Field" {
-            let obj = gen2_expr(node.left.left)
-            let field = node.left.name
             let val = gen2_expr(node.right)
-            return pad + obj + " = hexa_map_set(" + obj + ", \"" + field + "\", " + val + ");\n"
+            return _gen2_nested_field_assign_stmt(node.left, val, pad)
         }
         // closure mut-capture: assigning to a boxed `let mut` Ident writes
         // through the shared cell via hexa_array_set (in-place mutate; returns
@@ -5611,13 +5709,11 @@ fn gen2_expr(node) {
             if _chain_n >= _LONG_CONCAT_THRESH {
                 let _parts = _collect_plus_parts(node)
                 let _n = len(_parts)
-                let mut _body = ""
-                let mut _pi = 0
-                while _pi < _n {
-                    if _pi > 0 { _body = _body + ", " }
-                    _body = _body + _parts[_pi]
-                    _pi = _pi + 1
-                }
+                // PERF (2026-07-03): single-allocation join replaces the
+                // `_body = _body + part` re-copy loop (O(k²) on long chains).
+                // join(", ") emits the exact same separator bytes — the C
+                // text is byte-identical (same idiom as params.join(", ")).
+                let _body = _parts.join(", ")
                 return "hexa_concat_many(" + to_string(_n) + ", (HexaVal[]){" + _body + "})"
             }
         }
@@ -7629,7 +7725,6 @@ fn gen2_expr(node) {
                 if name == "min"            { return cg_math_sym("min") + "(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "max"            { return cg_math_sym("max") + "(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "has_key"        { return "hexa_bool(hexa_map_contains_key(" + arg_strs[0] + ", hexa_to_cstring(" + arg_strs[1] + ")))" }
-                // @convergence state=ossified id=CONTAINS-KEY-FREEFN-EMIT value="free-fn contains_key(m,k) fell through to bare _contains_key (dyld not found) — only .contains_key method + has_key/map_contains_key were mapped" threshold="map free-fn contains_key to hexa_map_contains_key like has_key"
                 if name == "contains_key"   { return "hexa_bool(hexa_map_contains_key(" + arg_strs[0] + ", hexa_to_cstring(" + arg_strs[1] + ")))" }
                 // F10 retire (2026-04-28): bare-call 2-arg map_* builtins.
                 if name == "map_contains_key" { return "hexa_bool(hexa_map_contains_key(" + arg_strs[0] + ", hexa_to_cstring(" + arg_strs[1] + ")))" }
@@ -7987,6 +8082,20 @@ fn gen2_expr(node) {
                 }
             }
             if len(node.args) == 7 {
+                // P1a (device-resident decode): forge_dispatch_layernorm(x, g, b,
+                // out, R, C, eps) -> int rc. Row-wise LayerNorm mirroring host
+                // _bg_layernorm (dt_sqrt, population var, γ/β affine); keeps OUT
+                // DEVICE-RESIDENT (no d2h). no-CUDA -> -1 -> host _bg_layernorm loop.
+                // (#4339 placed this in the len==3 block by mistake — it takes 7
+                // args, so the binding was unreachable and the call fell through to
+                // an undeclared generic `forge_dispatch_layernorm` C symbol.)
+                if name == "forge_dispatch_layernorm" {
+                    return "hexa_forge_dispatch_layernorm("
+                        + arg_strs[0] + ", " + arg_strs[1] + ", "
+                        + arg_strs[2] + ", " + arg_strs[3] + ", "
+                        + arg_strs[4] + ", " + arg_strs[5] + ", "
+                        + arg_strs[6] + ")"
+                }
                 // feat/primitive-float-array — CNOT kernel.
                 if name == "farr_apply_cnot" {
                     return "hexa_farr_apply_cnot(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ")"
@@ -10049,6 +10158,32 @@ let mut _strlit_ids = []
 // loop at emit time (mirror of fcf275f4 IC fix).
 let mut _strlit_counter = 0
 
+// PERF (2026-07-03): 64-bucket hash index over _strlit_keys — mirror of the
+// _known_fn_globals_set idiom (_known_hash). _strlit_dedup used to LINEAR-SCAN
+// the whole _strlit_keys array per string-literal occurrence, which is O(L²)
+// in the number of unique literals per TU and was the measured quadratic on
+// large real-code TUs (1600-fn contains-chain corpus: 47.8s -> 1.5s; anima-class
+// 25k-line closures were >30min). The index is LOOKUP-ONLY acceleration:
+// _strlit_keys/_strlit_ids stay the emission SSOT in first-seen order, ids come
+// from the same _strlit_counter — emitted C is byte-identical.
+// _strlit_idx_keys[b]: escaped literals whose _known_hash() == b
+// _strlit_idx_ids[b]:  parallel id for each (same value as _strlit_ids entry)
+let mut _strlit_idx_keys = []
+let mut _strlit_idx_ids = []
+
+fn _strlit_index_init() {
+    let mut ik = []
+    let mut iv = []
+    let mut i = 0
+    while i < 64 {
+        ik.push([])
+        iv.push([])
+        i = i + 1
+    }
+    _strlit_idx_keys = ik
+    _strlit_idx_ids = iv
+}
+
 // Destructure tmp-name counter (PROBE r7).  Each DestructLetStmt /
 // MapDestructLetStmt allocates a fresh `__destr_<N>` to single-eval the rhs.
 let mut _destr_counter = 0
@@ -10070,10 +10205,16 @@ fn _lookup_comptime_const(name) {
 // referencing the cached static HexaVal (e.g. "__hexa_sl_0").
 // `escaped` is the already-C-escaped string content (without quotes).
 fn _strlit_dedup(escaped) {
+    // PERF (2026-07-03): bucket lookup replaces the full-table linear scan
+    // (O(L²) across a TU — see _strlit_idx_keys above). Same first-seen
+    // registration order + same ids => byte-identical emitted C.
+    if len(_strlit_idx_keys) != 64 { _strlit_index_init() }
+    let b = _known_hash(escaped)
+    let bucket = _strlit_idx_keys[b]
     let mut i = 0
-    while i < len(_strlit_keys) {
-        if _strlit_keys[i] == escaped {
-            return "__hexa_sl_" + to_string(_strlit_ids[i])
+    while i < len(bucket) {
+        if bucket[i] == escaped {
+            return "__hexa_sl_" + to_string(_strlit_idx_ids[b][i])
         }
         i = i + 1
     }
@@ -10082,6 +10223,8 @@ fn _strlit_dedup(escaped) {
     _strlit_counter = _strlit_counter + 1
     _strlit_keys.push(escaped)
     _strlit_ids.push(id)
+    _strlit_idx_keys[b] = _strlit_idx_keys[b].push(escaped)
+    _strlit_idx_ids[b] = _strlit_idx_ids[b].push(id)
     let varname = "__hexa_sl_" + to_string(id)
     // rt#32-SL: no push into _strlit_def_parts — decls emitted via
     // deterministic _strlit_counter loop in codegen_c2 main emit path.
@@ -13439,6 +13582,7 @@ fn codegen_full(ast) {
     _strlit_keys = []
     _strlit_ids = []
     _strlit_counter = 0
+    _strlit_index_init()
     // b2-fnref: reset by-value builtin/method thunk set (mirror codegen_c2).
     _fnref_thunk_names = []
     _gen2_current_fn_lets = []
@@ -13845,6 +13989,13 @@ fn codegen_full(ast) {
     // edit swapping the call site back to bare `setjmp` re-opens the defect.
     out_parts.push("#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)\n")
     out_parts.push("int hxlcl_setjmp(void *buf) __asm__(\"_hxlcl_setjmp\");\n")
+    out_parts.push("#elif defined(__x86_64__)\n")
+    out_parts.push("// RFC061 §M8 ∅−8: x86_64-linux uses the NATIVE musl hxlcl_setjmp (real\n")
+    out_parts.push("// global in runtime.o), matching the native musl hxlcl_longjmp the re-\n")
+    out_parts.push("// baselined runtime.c provides. NOT the `setjmp` macro below — a glibc\n")
+    out_parts.push("// setjmp SAVE paired with the musl-layout longjmp RESTORE is the M3\n")
+    out_parts.push("// layout-mismatch SEGV. Mirrors the darwin real-fn decl above.\n")
+    out_parts.push("int hxlcl_setjmp(void *buf) __attribute__((returns_twice));\n")
     out_parts.push("#elif !defined(hxlcl_setjmp)\n")
     out_parts.push("#define hxlcl_setjmp(buf) setjmp(*(jmp_buf *)(buf))\n")
     out_parts.push("#endif\n\n")

@@ -42,8 +42,12 @@ pub fn smash(seed: string, depth: i64) -> [DiscoveryCandidate] {
     let norm = p1_normalize_seed(seed)
     if len(norm) == 0 { return all }
 
+    // seed-derived attractor lattice — the per-seed target set the whole
+    // 9-phase machine grades against (replaces the fixed n=6 constants).
+    let attr = seed_attractors(norm)
+
     // ─── P2: ouroboros evolution → axiom pool ───
-    let axioms = p2_evolve(norm)
+    let axioms = p2_evolve(norm, attr)
     let mut a = 0
     while a < len(axioms) {
         all.push(axioms[a])
@@ -51,7 +55,7 @@ pub fn smash(seed: string, depth: i64) -> [DiscoveryCandidate] {
     }
 
     // ─── P3: singularity detection ───
-    let singularities = p3_singularities(axioms)
+    let singularities = p3_singularities(axioms, attr)
     let mut s = 0
     while s < len(singularities) {
         all.push(singularities[s])
@@ -59,7 +63,7 @@ pub fn smash(seed: string, depth: i64) -> [DiscoveryCandidate] {
     }
 
     // ─── P4: corollary expansion (7 types) ───
-    let p4_cands = p4_corollaries(axioms)
+    let p4_cands = p4_corollaries(axioms, attr)
     let mut c4 = 0
     while c4 < len(p4_cands) {
         all.push(p4_cands[c4])
@@ -67,15 +71,15 @@ pub fn smash(seed: string, depth: i64) -> [DiscoveryCandidate] {
     }
 
     // ─── P5: telescope (5-lens consensus boost) ───
-    let p5_cands = p5_telescope(p4_cands)
+    let p5_cands = p5_telescope(p4_cands, attr)
     let mut c5 = 0
     while c5 < len(p5_cands) {
         all.push(p5_cands[c5])
         c5 = c5 + 1
     }
 
-    // ─── P6: n=6 invariance projection ───
-    let p6_cands = p6_n6_invariant(p5_cands)
+    // ─── P6: attractor-resonance projection ───
+    let p6_cands = p6_attractor_filter(p5_cands, attr)
     let mut c6 = 0
     while c6 < len(p6_cands) {
         all.push(p6_cands[c6])
@@ -87,7 +91,7 @@ pub fn smash(seed: string, depth: i64) -> [DiscoveryCandidate] {
     let mut cur_depth = d
     let mut growth_input = p5_cands
     while cur_depth > 0 {
-        let grown = p7_recursive_growth(axioms, growth_input, cur_depth)
+        let grown = p7_recursive_growth(axioms, growth_input, cur_depth, attr)
         let mut g = 0
         while g < len(grown) {
             all.push(grown[g])
@@ -101,7 +105,7 @@ pub fn smash(seed: string, depth: i64) -> [DiscoveryCandidate] {
     }
 
     // ─── P8: wave propagation (sequential — TODO parallelize) ───
-    let p8_cands = p8_wave_propagate(p6_cands)
+    let p8_cands = p8_wave_propagate(p6_cands, attr)
     let mut c8 = 0
     while c8 < len(p8_cands) {
         all.push(p8_cands[c8])
@@ -109,7 +113,7 @@ pub fn smash(seed: string, depth: i64) -> [DiscoveryCandidate] {
     }
 
     // ─── P9: meta-closure DFS ───
-    let p9_cands = p9_meta_dfs(all, d)
+    let p9_cands = p9_meta_dfs(all, d, attr)
     let mut c9 = 0
     while c9 < len(p9_cands) {
         all.push(p9_cands[c9])

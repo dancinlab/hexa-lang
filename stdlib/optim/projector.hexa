@@ -117,6 +117,9 @@ pub fn matmul_right(G: array, P: array) -> array {
     if total_p == 0 { return [] }
     let mut n = 0
     while n * n < total_p { n = n + 1 }
+    // P must be a perfect square N×N; a non-square length means the inferred stride
+    // n is wrong and every P[a*n+b] read is mis-strided → silent garbage. Reject it.
+    if n * n != total_p { return [] }
     let total_g = len(G)
     if n == 0 { return [] }
     let rows = total_g / n

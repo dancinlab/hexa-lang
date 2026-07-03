@@ -14,7 +14,7 @@
 //   when the alloc seed is native) + ar this .o into runtime.a so hexa_array_get/set
 //   delegate to the native bodies + hexa_array_arena_alloc_items uses the native arena.
 # hexa-lang emit pass — target=x86_64-linux-gnu
-# source: /home/aiden/hexa-lang/stdlib/runtime/array_core.hexa
+# source: /home/aiden/wt-rfc061-strbuf-arena/stdlib/runtime/array_core.hexa
 .intel_syntax noprefix
 .file 1 "stdlib/runtime/array_core.hexa"
 .text
@@ -34,7 +34,7 @@ rt_array_arena_alloc_items_native:
     sub rsp, 32 # prologue: alloc spill frame
     mov [rbp - 56], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.L01db_rt_array_arena_alloc_items_native_bb0:
+.Ld116_rt_array_arena_alloc_items_native_bb0:
     mov rsi, rbx # hv arg payload
     mov rdi, [rbp - 56] # tag L0 from tag-slot
     mov rcx, 16 # hv arg payload
@@ -61,11 +61,95 @@ rt_array_arena_alloc_items_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
+.globl rt_array_arena_alloc_desc_native
+.hidden rt_array_arena_alloc_desc_native
+    .p2align 4
+rt_array_arena_alloc_desc_native:
+    .loc 1 97 0
+    push rbp # prologue: save rbp
+    mov rbp, rsp # prologue: set rbp
+    push rbx # prologue: save rbx
+    push r12 # prologue: save r12
+    push r13 # prologue: save r13
+    push r14 # prologue: save r14
+    push r15 # prologue: save r15
+    sub rsp, 8 # prologue: callee-save align pad
+    sub rsp, 80 # prologue: alloc spill frame
+.Ld116_rt_array_arena_alloc_desc_native_bb0:
+    mov rsi, 24 # hv arg payload
+    mov rdi, 0 # tag default = TAG_INT
+    call hexa_arena_alloc # call hexa_arena_alloc
+    mov [rbp - 72], rax # store tag L0
+    mov rbx, rdx # hv: unbox user-call result payload
+    mov r12, rbx # assign L1
+    mov r11, [rbp - 72] # tag L0 from tag-slot
+    mov [rbp - 80], r11 # store tag L1
+    mov rsi, r12 # hv arg payload
+    mov rdi, [rbp - 80] # tag L1 from tag-slot
+    mov rcx, 0 # hv arg payload
+    mov rdx, 0 # tag default = TAG_INT
+    call hexa_eq # binop ==: tag-dispatch hexa_eq
+    mov r13, rdx # binop ==: capture bool payload
+    mov [rbp - 88], rax # store tag L2
+    test r13, r13 # br_cond test
+    jz .Ld116_rt_array_arena_alloc_desc_native_bb2 # jump-if-zero -> else
+    jmp .Ld116_rt_array_arena_alloc_desc_native_bb1 # jump -> then
+.Ld116_rt_array_arena_alloc_desc_native_bb1:
+    mov rdx, 0 # hv arg payload
+    mov rax, 0 # tag default = TAG_INT
+    add rsp, 80 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
+    pop rbp # epilogue: restore rbp
+    ret # return
+.Ld116_rt_array_arena_alloc_desc_native_bb2:
+    mov r10, r12 # hv payload
+    mov r11, 0 # hv payload
+    mov rsi, 0 # hv payload
+    add r10, r11 # __hx_ptr_store64: addr = ptr + off
+    mov qword ptr [r10], rsi # __hx_ptr_store64: *(addr) = val
+    mov r10, r12 # hv payload
+    mov r15, r10 # leaf: payload → dst L4
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 104], r11 # store tag L4
+    mov r10, r12 # hv payload
+    mov r11, 8 # hv payload
+    mov rsi, 0 # hv payload
+    add r10, r11 # __hx_ptr_store64: addr = ptr + off
+    mov qword ptr [r10], rsi # __hx_ptr_store64: *(addr) = val
+    mov r10, r12 # hv payload
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 112], r11 # store tag L5
+    mov [rbp - 56], r10 # spill L5 to slot
+    mov r10, r12 # hv payload
+    mov r11, 16 # hv payload
+    mov rsi, 0 # hv payload
+    add r10, r11 # __hx_ptr_store64: addr = ptr + off
+    mov qword ptr [r10], rsi # __hx_ptr_store64: *(addr) = val
+    mov r10, r12 # hv payload
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 120], r11 # store tag L6
+    mov [rbp - 64], r10 # spill L6 to slot
+    mov rdx, r12 # hv arg payload
+    mov rax, [rbp - 80] # tag L1 from tag-slot
+    add rsp, 80 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
+    pop rbp # epilogue: restore rbp
+    ret # return
 .globl rt_array_len_native
 .hidden rt_array_len_native
     .p2align 4
 rt_array_len_native:
-    .loc 1 82 0
+    .loc 1 107 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -77,7 +161,7 @@ rt_array_len_native:
     sub rsp, 48 # prologue: alloc spill frame
     mov [rbp - 56], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.L01db_rt_array_len_native_bb0:
+.Ld116_rt_array_len_native_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -114,7 +198,7 @@ rt_array_len_native:
 .hidden rt_array_get_native
     .p2align 4
 rt_array_get_native:
-    .loc 1 91 0
+    .loc 1 116 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -128,7 +212,7 @@ rt_array_get_native:
     mov rbx, rsi # ingress param payload
     mov [rbp - 136], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.L01db_rt_array_get_native_bb0:
+.Ld116_rt_array_get_native_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -217,7 +301,7 @@ rt_array_get_native:
 .hidden rt_array_set_native
     .p2align 4
 rt_array_set_native:
-    .loc 1 105 0
+    .loc 1 130 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -233,7 +317,7 @@ rt_array_set_native:
     mov r12, rcx # ingress param payload
     mov [rbp - 160], r8 # store tag L2
     mov r13, r9 # ingress param payload
-.L01db_rt_array_set_native_bb0:
+.Ld116_rt_array_set_native_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -334,7 +418,7 @@ rt_array_set_native:
 .hidden rt_array_pop_native
     .p2align 4
 rt_array_pop_native:
-    .loc 1 121 0
+    .loc 1 146 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -346,7 +430,7 @@ rt_array_pop_native:
     sub rsp, 128 # prologue: alloc spill frame
     mov [rbp - 96], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.L01db_rt_array_pop_native_bb0:
+.Ld116_rt_array_pop_native_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -417,7 +501,7 @@ rt_array_pop_native:
 .hidden rt_array_shift_native
     .p2align 4
 rt_array_shift_native:
-    .loc 1 138 0
+    .loc 1 163 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -429,7 +513,7 @@ rt_array_shift_native:
     sub rsp, 464 # prologue: alloc spill frame
     mov [rbp - 264], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.L01db_rt_array_shift_native_bb0:
+.Ld116_rt_array_shift_native_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -502,8 +586,8 @@ rt_array_shift_native:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 368], r11 # store tag L13
     mov [rbp - 120], r10 # spill L13 to slot
-    jmp .L01db_rt_array_shift_native_bb1 # branch
-.L01db_rt_array_shift_native_bb1:
+    jmp .Ld116_rt_array_shift_native_bb1 # branch
+.Ld116_rt_array_shift_native_bb1:
     mov r11, [rbp - 112] # reload L12 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 120] # reload L13 from spill slot
@@ -516,9 +600,9 @@ rt_array_shift_native:
     mov [rbp - 128], r10 # spill L14 to slot
     mov r10, [rbp - 128] # reload L14 from spill slot
     test r10, r10 # br_cond test
-    jz .L01db_rt_array_shift_native_bb3 # jump-if-zero -> else
-    jmp .L01db_rt_array_shift_native_bb2 # jump -> then
-.L01db_rt_array_shift_native_bb2:
+    jz .Ld116_rt_array_shift_native_bb3 # jump-if-zero -> else
+    jmp .Ld116_rt_array_shift_native_bb2 # jump -> then
+.Ld116_rt_array_shift_native_bb2:
     mov r11, 16 # hv payload
     mov r10, [rbp - 120] # reload L13 from spill slot
     mov r10, r10 # hv payload
@@ -627,8 +711,8 @@ rt_array_shift_native:
     mov r11, [rbp - 496] # tag L29 from tag-slot
     mov [rbp - 368], r11 # store tag L13
     mov [rbp - 120], r10 # spill L13 to slot
-    jmp .L01db_rt_array_shift_native_bb1 # branch
-.L01db_rt_array_shift_native_bb3:
+    jmp .Ld116_rt_array_shift_native_bb1 # branch
+.Ld116_rt_array_shift_native_bb3:
     mov r10, r13 # hv payload
     mov r11, 8 # hv payload
     mov rsi, [rbp - 112] # reload L12 from spill slot
@@ -655,7 +739,7 @@ rt_array_shift_native:
 .hidden rt_array_truncate_native
     .p2align 4
 rt_array_truncate_native:
-    .loc 1 169 0
+    .loc 1 194 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -669,7 +753,7 @@ rt_array_truncate_native:
     mov rbx, rsi # ingress param payload
     mov [rbp - 152], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.L01db_rt_array_truncate_native_bb0:
+.Ld116_rt_array_truncate_native_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -724,16 +808,16 @@ rt_array_truncate_native:
     mov [rbp - 96], r10 # spill L10 to slot
     mov r10, [rbp - 96] # reload L10 from spill slot
     test r10, r10 # br_cond test
-    jz .L01db_rt_array_truncate_native_bb2 # jump-if-zero -> else
-    jmp .L01db_rt_array_truncate_native_bb1 # jump -> then
-.L01db_rt_array_truncate_native_bb1:
+    jz .Ld116_rt_array_truncate_native_bb2 # jump-if-zero -> else
+    jmp .Ld116_rt_array_truncate_native_bb1 # jump -> then
+.Ld116_rt_array_truncate_native_bb1:
     mov r11, [rbp - 72] # reload L7 from spill slot
     mov r10, r11 # assign L9
     mov r11, [rbp - 200] # tag L7 from tag-slot
     mov [rbp - 216], r11 # store tag L9
     mov [rbp - 88], r10 # spill L9 to slot
-    jmp .L01db_rt_array_truncate_native_bb2 # branch
-.L01db_rt_array_truncate_native_bb2:
+    jmp .Ld116_rt_array_truncate_native_bb2 # branch
+.Ld116_rt_array_truncate_native_bb2:
     mov r11, [rbp - 88] # reload L9 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 56] # reload L5 from spill slot
@@ -746,9 +830,9 @@ rt_array_truncate_native:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L01db_rt_array_truncate_native_bb4 # jump-if-zero -> else
-    jmp .L01db_rt_array_truncate_native_bb3 # jump -> then
-.L01db_rt_array_truncate_native_bb3:
+    jz .Ld116_rt_array_truncate_native_bb4 # jump-if-zero -> else
+    jmp .Ld116_rt_array_truncate_native_bb3 # jump -> then
+.Ld116_rt_array_truncate_native_bb3:
     mov r11, 0 # hv payload
     mov r10, [rbp - 56] # reload L5 from spill slot
     mov r10, r10 # hv payload
@@ -761,8 +845,8 @@ rt_array_truncate_native:
     mov r11, [rbp - 256] # tag L14 from tag-slot
     mov [rbp - 216], r11 # store tag L9
     mov [rbp - 88], r10 # spill L9 to slot
-    jmp .L01db_rt_array_truncate_native_bb4 # branch
-.L01db_rt_array_truncate_native_bb4:
+    jmp .Ld116_rt_array_truncate_native_bb4 # branch
+.Ld116_rt_array_truncate_native_bb4:
     mov r10, r14 # hv payload
     mov r11, 8 # hv payload
     mov rsi, [rbp - 88] # reload L9 from spill slot

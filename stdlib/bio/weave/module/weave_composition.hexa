@@ -82,8 +82,13 @@ fn lcg_uint(state: int) -> int {
 // Returns next state; the caller extracts `lcg_uint(state) % n`.
 fn lcg_int(state: int, n: int) -> int {
     if n <= 0 { return 0 }
-    let pos = lcg_uint(state)
-    return pos % n
+    // lcg_uint's "+2^64" is a NO-OP on fixed-width i64, so a negative LCG state
+    // stayed negative and `pos % n` returned a NEGATIVE index → out-of-bounds
+    // arr[j] in lcg_shuffle (Fisher-Yates). The full-range i64 state is uniform,
+    // so reduce it Euclidean-ly: ((state % n) + n) % n is a uniform [0, n) draw.
+    let mut m = state % n
+    if m < 0 { m = m + n }
+    return m
 }
 
 // Returns float in [0, 1). Uses upper 53 bits of |state|.

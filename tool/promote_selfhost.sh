@@ -10,8 +10,8 @@
 #                       launcher on PATH. The default `hx`/`hexa` is UNTOUCHED.
 #                       Users opt in per-invocation: `hx-selfhost build ...` or
 #                       `HX_SELFHOST=1 hx ...` (the launcher honours the env).
-#   tier 2  --default — flip the default: back up the current hexa.real to
-#                       hexa.real.pre-selfhost.<ts> and symlink hexa.real ->
+#   tier 2  --default — flip the default: back up the current hexad to
+#                       hexad.pre-selfhost.<ts> and symlink hexad ->
 #                       the selfhost launcher. REVERSIBLE via --revert. This
 #                       tier is REFUSED unless --i-have-reviewed-parity is also
 #                       passed AND the parity gate re-runs green here.
@@ -57,7 +57,11 @@ done
 SLOT="$HX_HOME/self/native/selfhost"
 LAUNCHER="$HX_HOME/bin/hx-selfhost"          # bare: exec gen3 (compile surface only)
 CLI_LAUNCHER="$HX_HOME/bin/hx-selfhost-cli"  # safe: compile->gen3, everything else->delegate
-REAL="$HX_HOME/bin/hexa.real"
+# Flip sentinel = the canonical `hexad` (the name the shim execs + AMFI sees).
+# An unflipped install has hexad a plain REAL FILE; a tier2 flip backs it up to
+# hexad.pre-selfhost.<ts> and symlinks hexad -> hx-selfhost-cli (the unique
+# `[ -L hexad ]` state). hexa.real/hxv2 are compat symlinks -> hexad and follow.
+REAL="$HX_HOME/bin/hexad"
 
 status() {
     echo "=== selfhost promotion status (HX_HOME=$HX_HOME) ==="
@@ -65,22 +69,22 @@ status() {
     echo "launcher  : $([ -x "$LAUNCHER" ] && echo "present ($LAUNCHER)" || echo absent)"
     echo "cli-shim  : $([ -x "$CLI_LAUNCHER" ] && echo "present ($CLI_LAUNCHER)" || echo absent)"
     if [ -L "$REAL" ]; then
-        echo "default   : hexa.real -> $(readlink "$REAL") (FLIPPED to selfhost)"
+        echo "default   : hexad -> $(readlink "$REAL") (FLIPPED to selfhost)"
     else
-        echo "default   : hexa.real = shipped binary (NOT flipped)"
+        echo "default   : hexad = shipped binary (NOT flipped)"
     fi
-    ls -1 "$HX_HOME/bin/"hexa.real.pre-selfhost.* 2>/dev/null | sed 's/^/backup    : /'
+    ls -1 "$HX_HOME/bin/"hexad.pre-selfhost.* 2>/dev/null | sed 's/^/backup    : /'
 }
 
 if [ "$MODE" = status ]; then status; exit 0; fi
 
 if [ "$MODE" = revert ]; then
-    BK="$(ls -1t "$HX_HOME/bin/"hexa.real.pre-selfhost.* 2>/dev/null | head -1)"
+    BK="$(ls -1t "$HX_HOME/bin/"hexad.pre-selfhost.* 2>/dev/null | head -1)"
     if [ -L "$REAL" ] && [ -n "$BK" ]; then
         rm -f "$REAL"; mv "$BK" "$REAL"; rm -f "$HX_HOME/.selfhost-default"
-        echo "reverted: hexa.real restored from $BK (cleared persistence marker)"; status; exit 0
+        echo "reverted: hexad restored from $BK (cleared persistence marker)"; status; exit 0
     fi
-    echo "revert: nothing to revert (hexa.real is not a selfhost symlink, or no backup)" >&2
+    echo "revert: nothing to revert (hexad is not a selfhost symlink, or no backup)" >&2
     exit 2
 fi
 
@@ -136,12 +140,12 @@ if [ "$DO_DEFAULT" = 1 ]; then
     fi
     if [ -e "$REAL" ] && [ ! -L "$REAL" ]; then
         TS="$(date +%Y%m%d-%H%M%S)"
-        mv "$REAL" "$HX_HOME/bin/hexa.real.pre-selfhost.$TS"
-        echo "tier2: backed up shipped hexa.real -> hexa.real.pre-selfhost.$TS"
+        mv "$REAL" "$HX_HOME/bin/hexad.pre-selfhost.$TS"
+        echo "tier2: backed up shipped hexad -> hexad.pre-selfhost.$TS"
     fi
     ln -sf "$CLI_LAUNCHER" "$REAL"
     : > "$HX_HOME/.selfhost-default"   # persistence marker — install.sh re-applies this flip after a reinstall
-    echo "tier2: DEFAULT FLIPPED — hexa.real -> $CLI_LAUNCHER (revert: tool/promote_selfhost.sh --revert)"
+    echo "tier2: DEFAULT FLIPPED — hexad -> $CLI_LAUNCHER (revert: tool/promote_selfhost.sh --revert)"
     echo "tier2: wrote persistence marker $HX_HOME/.selfhost-default (install.sh re-applies the flip on reinstall)"
 fi
 status

@@ -29,10 +29,11 @@ fn _read_src(path: str) -> str {
 
 // Aliases the dispatcher accepts but that are NOT roster verbs (they map onto
 // a canonical verb). Excluded from the dispatch verb set so the comparison is
-// against the canonical roster the COMMANDS SSOT carries.
+// against the canonical roster the COMMANDS SSOT carries. `ls` is a guided
+// typo (prints "did you mean `list`" + exit 2), not a verb.
 fn _is_alias(v: str) -> bool {
     return v == "up" || v == "status" || v == "destroy"
-        || v == "probe"
+        || v == "probe" || v == "ls"
         || v == "--help" || v == "-h"
         || v == "--version" || v == "-v"
 }

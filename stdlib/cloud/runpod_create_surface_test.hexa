@@ -1,0 +1,138 @@
+// stdlib/cloud/runpod_create_surface_test.hexa — deterministic falsifiers for
+// the runpod create-path fix (cloud-type default + fail-loud surface).
+//
+// Reproduced bug (label8gpu diagnostic): `hexa cloud rent runpod` create
+// returned `{"error":"There are no longer any instances available with the
+// requested specifications."}` for EVERY GPU — including high-stock RTX4090 /
+// A40 1x. Not a real shortage: the create path HARDCODED `--cloud-type SECURE`,
+// which excludes the COMMUNITY datacenters holding most of that stock. Same
+// silent-class as the vast hang: the error was masked / the spec was wrong.
+//
+// Fix: cloud-type defaults to ALL (search BOTH clouds; --cloud-type pins one),
+// a `timeout` watchdog on the runpodctl shellout, and the reply surfaced
+// VERBATIM (with an ALL-widen hint when a pin yields "no instances").
+//
+// Part 1 — pure cloud-type + diag unit tests (no shell).
+// Part 2 — e2e through _runpod_create_cli via a fake runpodctl shim:
+//          (a) default command emits `--cloud-type ALL`,
+//          (b) a "no instances" reply under a SECURE pin FAILS LOUD + hints ALL,
+//          (c) a valid id reply SUCCEEDS (backward-compatible positive control).
+//
+// Run:   hexa run stdlib/cloud/runpod_create_surface_test.hexa
+// PASS:  exits 0, prints "runpod_create_surface_test PASS — N/N cases".
+
+use "stdlib/cloud/runpod"
+
+fn _fail(case: str, msg: str) {
+    println("FAIL " + case + ": " + msg)
+    exit(1)
+}
+
+fn _eq(case: str, got: str, want: str) {
+    if got != want {
+        _fail(case, "got [" + got + "] want [" + want + "]")
+    }
+}
+
+fn main() {
+    let mut n = 0
+
+    // ── Part 1: cloud-type normalization + validity ──────────────────
+    _eq("1a-default-all", runpod_norm_cloud_type(""), "ALL")
+    n = n + 1
+    _eq("1b-secure-pin", runpod_norm_cloud_type("secure"), "SECURE")
+    n = n + 1
+    _eq("1c-community", runpod_norm_cloud_type("COMMUNITY"), "COMMUNITY")
+    n = n + 1
+    _eq("1d-typo-falls-to-all", runpod_norm_cloud_type("securee"), "ALL")
+    n = n + 1
+    if runpod_cloud_type_valid("all") != 1 { _fail("1e-valid", "all should be valid") }
+    if runpod_cloud_type_valid("bogus") != 0 { _fail("1e-valid", "bogus should be invalid") }
+    n = n + 1
+
+    // diag: verbatim surface + empty→watchdog.
+    let reply = "{\"error\":\"There are no longer any instances available with the requested specifications.\"}"
+    let d1 = runpod_exec_diag_TEST(reply)
+    if d1.index_of("no longer any instances") < 0 {
+        _fail("1f-verbatim", "error not surfaced: [" + d1 + "]")
+    }
+    n = n + 1
+    let d2 = runpod_exec_diag_TEST("")
+    if d2.index_of("watchdog") < 0 && d2.index_of("timed out") < 0 && d2.index_of("no output") < 0 {
+        _fail("1g-empty-watchdog", "empty output not explained: [" + d2 + "]")
+    }
+    n = n + 1
+
+    // ── Part 2: e2e through the create path (fake runpodctl shim) ─────
+    // Guard: only run e2e when HOME is redirected into a hexa scratch dir.
+    let home = env_var("HOME")
+    if home.index_of("hexa_rp_test") < 0 {
+        println("runpod_create_surface_test PASS (Part 1 only — set HOME=*hexa_rp_test* to run e2e) — " + to_string(n) + "/" + to_string(n) + " cases")
+        exit(0)
+    }
+
+    let bindir = home + "/bin"
+    let _mk = exec("mkdir -p '" + bindir + "'")
+    let shim = bindir + "/runpodctl"
+
+    // 2a. DEFAULT (cloud-type ALL): a shim that ECHOES its own argv to a file,
+    //     then returns a valid id. Assert the create command carried
+    //     `--cloud-type ALL` (the SECURE-pin regression is gone) AND succeeds.
+    let arglog = home + "/rp_args.txt"
+    let body_ok = "#!/bin/sh\n"
+        + "printf '%s\\n' \"$*\" > '" + arglog + "'\n"
+        + "printf '%s\\n' '{\"id\":\"abc123\",\"costPerHr\":0.34}'\n"
+    write_file(shim, body_ok)
+    let _c1 = exec("chmod +x '" + shim + "'")
+    let r1 = runpod_create_vol("KEY", "NVIDIA GeForce RTX 4090", "img", "pubkey", "lbl", 40, 0)
+    if r1.ok != 1 {
+        _fail("2a-default-ok", "valid id must SUCCEED (ok=1), got ok=" + to_string(r1.ok) + " msg=" + r1.message)
+    }
+    if r1.pod_id != "abc123" {
+        _fail("2a-default-ok", "pod_id wrong: " + r1.pod_id)
+    }
+    let args = read_file(arglog)
+    if args.index_of("--cloud-type ALL") < 0 {
+        _fail("2a-cloud-type", "default create did NOT emit --cloud-type ALL (SECURE-pin regression?): " + args)
+    }
+    n = n + 1
+
+    // 2b. SECURE pin + "no instances" reply → FAIL LOUD, surface verbatim,
+    //     and hint to widen to ALL (the exact stuck-state the user hit).
+    let body_none = "#!/bin/sh\n"
+        + "printf '%s\\n' '{\"error\":\"There are no longer any instances available with the requested specifications.\"}'\n"
+    write_file(shim, body_none)
+    let _c2 = exec("chmod +x '" + shim + "'")
+    let r2 = runpod_create_vol_ct("KEY", "NVIDIA A40", "img", "pubkey", "lbl", 40, 0, "SECURE")
+    if r2.ok != 0 {
+        _fail("2b-secure-none", "no-instances reply must FAIL (ok=0), got ok=" + to_string(r2.ok))
+    }
+    if r2.message.index_of("no longer any instances") < 0 {
+        _fail("2b-secure-none", "reason NOT surfaced verbatim: " + r2.message)
+    }
+    if r2.message.index_of("ALL") < 0 {
+        _fail("2b-secure-none", "no widen-to-ALL hint on a pinned-SECURE no-instances fail: " + r2.message)
+    }
+    n = n + 1
+
+    // 2c. POSITIVE control under an explicit COMMUNITY pin: a valid id reply
+    //     still succeeds and the command carries --cloud-type COMMUNITY.
+    let arglog2 = home + "/rp_args2.txt"
+    let body_ok2 = "#!/bin/sh\n"
+        + "printf '%s\\n' \"$*\" > '" + arglog2 + "'\n"
+        + "printf '%s\\n' '{\"id\":\"def456\"}'\n"
+    write_file(shim, body_ok2)
+    let _c3 = exec("chmod +x '" + shim + "'")
+    let r3 = runpod_create_vol_ct("KEY", "NVIDIA A40", "img", "pubkey", "lbl", 40, 0, "COMMUNITY")
+    if r3.ok != 1 {
+        _fail("2c-community-ok", "valid id must SUCCEED (ok=1), got ok=" + to_string(r3.ok) + " msg=" + r3.message)
+    }
+    let args2 = read_file(arglog2)
+    if args2.index_of("--cloud-type COMMUNITY") < 0 {
+        _fail("2c-community-ct", "explicit COMMUNITY pin not honored: " + args2)
+    }
+    n = n + 1
+
+    println("runpod_create_surface_test PASS — " + to_string(n) + "/" + to_string(n) + " cases")
+    exit(0)
+}

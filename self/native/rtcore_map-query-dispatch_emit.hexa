@@ -1,0 +1,161 @@
+#!hexa strict
+// rtcore_map-query-dispatch_emit.hexa
+//   B9.C (.c-text · #1850 pattern) — rtcore_map-query-dispatch.c source emitter.
+//
+// zero-c leg-B r10 map-query-dispatch seed (9 map query/projection dispatchers)
+//
+// Emits rtcore_map-query-dispatch.c VERBATIM. The hexa build regenerates the .c
+// from this emitter before compiling, so the emitter becomes the SSOT and the
+// .c becomes a build artifact. Byte-identity (gate-1 source-SHA) => identical
+// .o/.so => PERF UNCHANGED.
+//
+// Mechanically generated from the hand-written rtcore_map-query-dispatch.c via the
+// deterministic escaper (inverse of the awk un-escaper in
+// tool/regen_rtcore_map-query-dispatch_c.sh) — do not hand-edit; re-run the escaper
+// against the .c if it ever changes.
+//
+// Invocation:  hexa-run rtcore_map-query-dispatch_emit.hexa <output-path>
+// Default output path (if argv missing): "rtcore_map-query-dispatch.c" in cwd.
+
+let MODULE_NAME = "rtcore_map_query_dispatch_emit"
+
+fn _flush_rtcore_map_query_dispatch(out_path: str, buf: str) {
+    let _ = exec("cat >> \"" + out_path + "\" <<'GEN_rtcore_map_query_dispatch_EOF'\n" + buf + "GEN_rtcore_map_query_dispatch_EOF")
+}
+
+fn emit_rtcore_map_query_dispatch_to(out_path: str) {
+    let _ = exec("printf '' > \"" + out_path + "\"")
+    let mut buf = ""
+    buf = buf + "// self/native/rtcore_map-query-dispatch.c — zero-c leg-B r10 MAP-QUERY-DISPATCH SEED (link de-risk).\n"
+    buf = buf + "//\n"
+    buf = buf + "// Supplies 9 map query/projection DISPATCHER HexaVal wrappers as a SEPARATE\n"
+    buf = buf + "// object so that build_aprime can LINK these bodies from a standalone .o instead\n"
+    buf = buf + "// of compiling them inline in runtime_core.c:\n"
+    buf = buf + "//   hexa_map_keys · hexa_map_values · hexa_map_contains_key · hexa_map_entries ·\n"
+    buf = buf + "//   hexa_map_map_values · hexa_map_filter_keys ·\n"
+    buf = buf + "//   hexa_map_count · hexa_map_any · hexa_map_all\n"
+    buf = buf + "//\n"
+    buf = buf + "// runtime_core.c externs these away under the narrow HEXA_RT_CORE_MAP_QUERY_DISPATCH_NATIVE\n"
+    buf = buf + "// guard (NOT the broad whole-runtime HEXA_RT_SELFEMIT). Compiled to a SEPARATE\n"
+    buf = buf + "// .o (build/rtcore_map-query-dispatch_native.o) and linked when\n"
+    buf = buf + "// HEXA_ZEROC_RT_CORE_MAP_QUERY_DISPATCH=1, so the build LINKS these bodies from a\n"
+    buf = buf + "// standalone object.\n"
+    buf = buf + "//\n"
+    buf = buf + "// PURPOSE = the M5 map-query-dispatch cluster — the thin C dispatchers that sit\n"
+    buf = buf + "// ABOVE the hexa-source rt_map_* query/projection bodies (rt_map_keys/values/\n"
+    buf = buf + "// entries/contains_key_b/map_values/filter_keys/count_pred/any_pred_b/all_pred_b in\n"
+    buf = buf + "// stdlib/runtime/*.hexa). Each dispatcher only NULL-table-guards then delegates to\n"
+    buf = buf + "// the rt_* hexa-source body (or, for the projection ports, supplies the empty\n"
+    buf = buf + "// starting map via the external hexa_map_new ctor) — so EVERY callee is\n"
+    buf = buf + "// external-linkage or a macro (the r5 seed-portability rule), with NO frozen-static\n"
+    buf = buf + "// callee.\n"
+    buf = buf + "//\n"
+    buf = buf + "// It does NOT drop the .c file (runtime_core.c drop is all-or-nothing). Default\n"
+    buf = buf + "// build (flag unset) is byte-IDENTICAL: these bodies are not compiled and the\n"
+    buf = buf + "// inline shipping-arm bodies in runtime_core.c are used verbatim (cpp-proven — the\n"
+    buf = buf + "// new outer #else preserves the whole HEXA_HAS_HEXA_RT_STDLIB block exactly).\n"
+    buf = buf + "//\n"
+    buf = buf + "// SEED-PORTABILITY (the r5 rule): a fn is seed-portable ONLY if EVERY callee is\n"
+    buf = buf + "// external-linkage or a macro. All 9 are clean:\n"
+    buf = buf + "//   rt_map_keys/values/entries/map_map_values/map_filter_keys/contains_key_b/\n"
+    buf = buf + "//     count_pred/any_pred_b/all_pred_b — EXTERNAL T hexa-source bodies.\n"
+    buf = buf + "//   hexa_array_new · hexa_map_new · hexa_str · hexa_int · hexa_bool · hexa_truthy —\n"
+    buf = buf + "//     PUBLIC defs in runtime_core.c / leaf seed (external T symbols in the link).\n"
+    buf = buf + "//   HX_MAP_TBL/HX_IS_VOID/HX_INT — macros.\n"
+    buf = buf + "// No frozen-STATIC callee anywhere (unlike hexa_is_type's hxlcl_strcmp), so no\n"
+    buf = buf + "// external-delegate re-route is needed.\n"
+    buf = buf + "//\n"
+    buf = buf + "// BIT-IDENTITY: the 9 seed bodies below are textually identical to the\n"
+    buf = buf + "// runtime_core.c shipping-arm bodies (HEXA_HAS_HEXA_RT_STDLIB defined — the release\n"
+    buf = buf + "// build), same C, same callees resolved from the rest of the link, so ON and OFF\n"
+    buf = buf + "// compute the same bits. The OFF arm is preserved verbatim (runtime_core_emit.hexa\n"
+    buf = buf + "// outer #else) so the default build is byte-identical.\n"
+    buf = buf + "//\n"
+    buf = buf + "// This file is #include'd by a 1-line TU at seed-regen time with the runtime\n"
+    buf = buf + "// headers already in scope (HexaVal / HX_INT/HX_MAP_TBL/HX_IS_MAP macros + the\n"
+    buf = buf + "// hexa_truthy proto come from runtime.h). The rt_* bodies + the\n"
+    buf = buf + "// hexa_array_new/hexa_map_new/hexa_str/hexa_int/hexa_bool ctors are NOT declared by\n"
+    buf = buf + "// runtime.h, so re-declare them here (same prototype as the frozen runtime_core.c\n"
+    if buf.len() > 65536 { _flush_rtcore_map_query_dispatch(out_path, buf); buf = "" }
+    buf = buf + "// SSOT). HX_IS_VOID lives in runtime_core.c (not runtime.h), so re-#define it under\n"
+    buf = buf + "// an #ifndef guard (same expansion as the SSOT). hexa_truthy is declared by\n"
+    buf = buf + "// runtime.h (returns int), so it is NOT re-declared here.\n"
+    buf = buf + "\n"
+    buf = buf + "extern HexaVal rt_map_keys(HexaVal m);\n"
+    buf = buf + "extern HexaVal rt_map_values(HexaVal m);\n"
+    buf = buf + "extern HexaVal rt_map_contains_key_b(HexaVal m, HexaVal key);\n"
+    buf = buf + "extern HexaVal rt_map_entries(HexaVal m);\n"
+    buf = buf + "extern HexaVal rt_map_map_values(HexaVal m, HexaVal fn, HexaVal empty);\n"
+    buf = buf + "extern HexaVal rt_map_filter_keys(HexaVal m, HexaVal fn, HexaVal empty);\n"
+    buf = buf + "extern HexaVal rt_map_count_pred(HexaVal m, HexaVal pred);\n"
+    buf = buf + "extern HexaVal rt_map_any_pred_b(HexaVal m, HexaVal pred);\n"
+    buf = buf + "extern HexaVal rt_map_all_pred_b(HexaVal m, HexaVal pred);\n"
+    buf = buf + "extern HexaVal hexa_array_new(void);\n"
+    buf = buf + "extern HexaVal hexa_map_new(void);\n"
+    buf = buf + "extern HexaVal hexa_str(const char* s);\n"
+    buf = buf + "extern HexaVal hexa_int(int64_t v);\n"
+    buf = buf + "extern HexaVal hexa_bool(int b);\n"
+    buf = buf + "\n"
+    buf = buf + "#ifndef HX_IS_VOID\n"
+    buf = buf + "#define HX_IS_VOID(v)   ((v).tag == TAG_VOID)\n"
+    buf = buf + "#endif\n"
+    buf = buf + "\n"
+    buf = buf + "// zero-c r10 — the 9 map-query dispatchers, bodies copied VERBATIM from the\n"
+    buf = buf + "// runtime_core.c shipping arm (HEXA_HAS_HEXA_RT_STDLIB).\n"
+    buf = buf + "HexaVal hexa_map_keys(HexaVal m) {\n"
+    buf = buf + "    if (!HX_MAP_TBL(m)) return hexa_array_new();\n"
+    buf = buf + "    return rt_map_keys(m);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_map_values(HexaVal m) {\n"
+    buf = buf + "    if (!HX_MAP_TBL(m)) return hexa_array_new();\n"
+    buf = buf + "    return rt_map_values(m);\n"
+    buf = buf + "}\n"
+    buf = buf + "int hexa_map_contains_key(HexaVal m, const char* key) {\n"
+    buf = buf + "    if (!HX_MAP_TBL(m)) return 0;\n"
+    buf = buf + "    return hexa_truthy(rt_map_contains_key_b(m, hexa_str(key)));\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_map_entries(HexaVal m) {\n"
+    buf = buf + "    if (!HX_MAP_TBL(m)) return hexa_array_new();\n"
+    buf = buf + "    return rt_map_entries(m);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_map_map_values(HexaVal m, HexaVal fn) {\n"
+    buf = buf + "    HexaVal empty = hexa_map_new();\n"
+    buf = buf + "    if (!HX_MAP_TBL(m)) return empty;\n"
+    buf = buf + "    return rt_map_map_values(m, fn, empty);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_map_filter_keys(HexaVal m, HexaVal fn) {\n"
+    buf = buf + "    HexaVal empty = hexa_map_new();\n"
+    buf = buf + "    if (!HX_MAP_TBL(m)) return empty;\n"
+    buf = buf + "    return rt_map_filter_keys(m, fn, empty);\n"
+    if buf.len() > 65536 { _flush_rtcore_map_query_dispatch(out_path, buf); buf = "" }
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_map_count(HexaVal m, HexaVal pred) {\n"
+    buf = buf + "    if (!HX_MAP_TBL(m)) return hexa_int(0);\n"
+    buf = buf + "    if (HX_IS_VOID(pred)) return hexa_int(HX_MAP_TBL(m)->len);\n"
+    buf = buf + "    return hexa_int(HX_INT(rt_map_count_pred(m, pred)));\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_map_any(HexaVal m, HexaVal pred) {\n"
+    buf = buf + "    if (!HX_MAP_TBL(m)) return hexa_bool(0);\n"
+    buf = buf + "    if (HX_IS_VOID(pred)) return hexa_bool(0);\n"
+    buf = buf + "    return hexa_bool(hexa_truthy(rt_map_any_pred_b(m, pred)));\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_map_all(HexaVal m, HexaVal pred) {\n"
+    buf = buf + "    if (!HX_MAP_TBL(m)) return hexa_bool(1);\n"
+    buf = buf + "    if (HX_IS_VOID(pred)) return hexa_bool(1);\n"
+    buf = buf + "    return hexa_bool(hexa_truthy(rt_map_all_pred_b(m, pred)));\n"
+    buf = buf + "}\n"
+    if buf.len() > 0 { _flush_rtcore_map_query_dispatch(out_path, buf) }
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "rtcore_map-query-dispatch.c" }
+    emit_rtcore_map_query_dispatch_to(out_path)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[rtcore_map_query_dispatch_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[rtcore_map_query_dispatch_emit] wrote " + out_path)
+    exit(0)
+}

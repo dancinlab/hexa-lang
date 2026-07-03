@@ -57,10 +57,12 @@ pub fn tls13_alert_build(level: int, description: int) -> [int] {
 
 @pure
 pub fn tls13_alert_level(body: [int]) -> int {
+    if len(body) == 0 { return 0 }   // empty/truncated alert → no level byte
     return body[0] & 0xFF
 }
 
 @pure
 pub fn tls13_alert_description(body: [int]) -> int {
+    if len(body) < 2 { return 0 }   // truncated alert (<2 bytes) → no description byte
     return body[1] & 0xFF
 }

@@ -9,14 +9,47 @@
 #   [d=1024] CUDA 347 GFLOP/s vs CPU 22 GFLOP/s  → ~15x   rel_rms 4.3e-16
 #   [d=2048] CUDA 404 GFLOP/s vs CPU 18 GFLOP/s  → ~25x   rel_rms 5.1e-16
 #
+# ⚠️ KNOWN DEFECT — explicit-link multiple-definition (summer, nvcc 12.9; 2026-06-26).
+#   The link step below force-links the extracted RT-NATIVE cores ($CORES:
+#   rt_hi_native.o / alloc_syscall_native.o / …) AS EXPLICIT .o ALONGSIDE
+#   runtime_cuda_host.o (compiled from runtime.c). Both DEFINE the same bodies
+#   (rt_str_split/lines/pad/center/contains_b/from_int · hexa_arena_alloc/mark/
+#   reset/rewind) → 19× `multiple definition` → collect2 ld error → DONE_RC=1.
+#   Why the SHIPPING runtime.a does NOT hit this: it is an ARCHIVE, so the linker
+#   lazily pulls only the core members that resolve UNDEFINED symbols and skips
+#   the ones runtime.o already defines. Explicit-.o link has no lazy resolution
+#   → both force-pulled. Root = frozen runtime.c (restore_frozen_seeds re-seed)
+#   gates rt_str_* / hexa_arena_* INCONSISTENTLY vs the rt_hi_native.o seed's
+#   symbol set: adding -DHEXA_HAS_HEXA_RT_STDLIB=1 / -DHEXA_RT_ALLOC_NATIVE=1 did
+#   NOT extern them, and wrapping $CORES in an archive (cores.a) ALSO failed
+#   (rt_hi_native.o carries BOTH needed-extern + duplicate-defined symbols, so
+#   pulling it for the former drags the latter). FALSIFIED: stale-.o hypothesis
+#   (clean rm + rebuild reproduces identically).
+#   ROOT FIX (TODO · hexa-lang): align the frozen runtime.c rt_str_*/hexa_arena_*
+#   gating with the EXACT symbol set rt_hi_native.o provides (seed-provided ⇒
+#   always extern), OR link $CORES as a lazy archive with host.o compiled to
+#   extern that exact set. cf ARCHITECTURE convergence
+#   `CUDA-BUILD-CORES-EXPLICIT-LINK-MULTIDEF` + `x86-native-seed-link-wiring`.
+#   VERIFICATION-ONLY workaround (NOT for shipping — no-escape-hatch): the
+#   cuda_gemm_verify / custom probe HARNESSES may be relinked with
+#   `g++ -Wl,--allow-multiple-definition …` because the duplicate symbols are
+#   BYTE-IDENTICAL runtime bodies (linker picks host.o's; correct for a verify
+#   binary). 2026-06-26 summer run THIS way: cuda_available=1 · [d=2048] 451
+#   GFLOP/s · farr_packed_gemv_offset [V=151643×64] GPU out_id=2 (no illegal-D2H)
+#   · max|GPU−host_ref|=3.3e-16 — confirmed anima PR #2631 (decoder expert gemv).
+#
 # The default release build is CPU-only (no cuBLAS dep) — this is the OPT-IN
 # CUDA path (HEXA_CUDA). self-host ≠ release: additive, does not change the
 # default build or the byteeq fixpoint (the GPU path is runtime opt-in).
 #
 # Env:
-#   CUDA_HOME   CUDA toolkit root      (default: /usr/local/cuda-13.0)
+#   CUDA_HOME   CUDA toolkit root      (default: auto-detect best available
+#               cuda-13.0 > cuda-12.9 > cuda-12.8 > /usr/local/cuda canonical
+#               symlink — explicit override beats any auto-detection)
 #   SM          GPU arch               (default: 120 for RTX 50-series)
 #   PREBUILT_RT prebuilt CPU runtime.a (default: $HOME/.hx/bin/build/runtime.a)
+#   DEPLOY_RT   deploy target after build (default: same as PREBUILT_RT; set to
+#               "" to skip deploy)
 #
 # Extension-less (not .sh) per the tool/stage_* / tool/release_build precedent
 # (sidecar hook blocks .sh Write/Edit). Invoke as `bash tool/build_cuda_runtime`.
@@ -26,13 +59,23 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
 
-CUDA_HOME="${CUDA_HOME:-/usr/local/cuda-13.0}"
+# Auto-detect CUDA_HOME: prefer highest version, fall back to /usr/local/cuda
+# (canonical alternatives symlink on Ubuntu, always points to active CUDA).
+# Explicit CUDA_HOME env override skips detection entirely.
+if [ -z "${CUDA_HOME:-}" ]; then
+    for _cuda_candidate in /usr/local/cuda-13.0 /usr/local/cuda-12.9 /usr/local/cuda-12.8 /usr/local/cuda; do
+        if [ -x "$_cuda_candidate/bin/nvcc" ]; then CUDA_HOME="$_cuda_candidate"; break; fi
+    done
+    CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
+fi
 SM="${SM:-120}"
 PREBUILT_RT="${PREBUILT_RT:-$HOME/.hx/bin/build/runtime.a}"
+DEPLOY_RT="${DEPLOY_RT:-$PREBUILT_RT}"
 HEXA="${HEXA:-$HOME/.local/bin/hexa}"
 CINC="$CUDA_HOME/targets/x86_64-linux/include"
 CLIB="$CUDA_HOME/targets/x86_64-linux/lib"
 export PATH="$CUDA_HOME/bin:$PATH"
+echo "[build_cuda_runtime] CUDA_HOME=$CUDA_HOME"
 
 mkdir -p build/cuda
 B=build/cuda
@@ -61,8 +104,32 @@ CORES="$(ls "$B"/*_native.o 2>/dev/null | tr '\n' ' ')"
 echo "[build_cuda_runtime] RT-NATIVE cores (dynamic from runtime.a): $CORES"
 
 echo "=== regen runtime_cuda.c + runtime_bf16.c from emitter SSOT ==="
-"$HEXA" run self/cuda/runtime_bf16_emit.hexa self/cuda/runtime_bf16.c >/dev/null
-"$HEXA" run self/cuda/runtime_cuda_emit.hexa self/cuda/runtime_cuda.c >/dev/null
+# Bootstrap-safe regen. `hexa run` links the CURRENTLY-deployed runtime.a. When that
+# archive is a CUDA build (runtime_cuda*.o members), hexa's runtime unconditionally
+# pulls those members AND the host object — so the emitter link needs BOTH the cuda
+# libs (-lcudart, added only by the CUDA branch self/main.hexa:1487) AND -lssl/-lcrypto
+# (added only by the CPU branch self/main.hexa:1496, when the host object was built
+# -DHEXA_HAS_OPENSSL on a pre-#4218 install). hexa picks ONE branch, never both, so the
+# emitter link is UNSATISFIABLE against a poisoned (cuda+openssl) archive — a pure
+# BOOTSTRAP deadlock, NOT a real defect (the final deployed archive is fine).
+# The emitters are deterministic text generators, so on link-failure we keep the
+# last-good regenerated .c (validity-checked by a sentinel symbol) and carry on;
+# build_cuda_runtime then redeploys a clean (#4218 no-openssl) archive, so the NEXT
+# build bootstraps cleanly. Same fallback philosophy as the restore_frozen_seeds path
+# in _regen_runtime_core_for_cuda(). HEXA_CUDA=0 is still set so a CLEAN (no-openssl)
+# CUDA archive — or a plain CPU archive — regenerates normally via the CPU link path.
+_regen_cuda_emit() {  # $1=emitter  $2=dst.c  $3=sentinel-substring
+    local emitter="$1" dst="$2" sentinel="$3"
+    if HEXA_CUDA=0 "$HEXA" run "$emitter" "$dst" >/dev/null 2>"$B/.emit_err"; then
+        echo "[build_cuda_runtime] regenerated $dst from $emitter"
+    elif [ -s "$dst" ] && grep -q "$sentinel" "$dst"; then
+        echo "[build_cuda_runtime] WARN: emitter $emitter link failed (bootstrap poison: deployed runtime.a needs both -lcudart and -lssl) — keeping last-good $dst ($(wc -l < "$dst") lines, sentinel '$sentinel' OK)"
+    else
+        echo "[build_cuda_runtime] FATAL: emitter $emitter failed AND $dst missing/invalid:"; cat "$B/.emit_err" 2>/dev/null; exit 1
+    fi
+}
+_regen_cuda_emit self/cuda/runtime_bf16_emit.hexa self/cuda/runtime_bf16.c "bf16"
+_regen_cuda_emit self/cuda/runtime_cuda_emit.hexa self/cuda/runtime_cuda.c "_hx_k_gemm_splitk"
 # emitter must emit _hx_dt_exp_dev exactly once (ing-cuda-build dup-def fix)
 n=$(grep -c '_hx_dt_exp_dev(double x) {' self/cuda/runtime_cuda.c || true)
 [ "$n" = "1" ] || { echo "runtime_cuda.c has $n _hx_dt_exp_dev defs (expected 1) — emitter dup-def regressed"; exit 1; }
@@ -79,27 +146,194 @@ else
 fi
 
 echo "=== nvcc runtime_cuda.o (sm_$SM) + device-link ==="
-nvcc -x cu -DHEXA_CUDA $CUBLAS_MACRO -rdc=true -gencode arch=compute_$SM,code=sm_$SM -O2 -w \
+# ING-35 #3 — drop nvcc's default libstdc++ host symbols (__cxa_guard_* thread-safe
+# static guards + __gxx_personality_v0/_Unwind_Resume EH) so a C-linked consumer
+# (gcc/cc, no libstdc++) resolves clean. host-codegen-only; device code unchanged.
+# Mirrors the same flags in tool/stage_resolve_runtime_a (the shipped recipe).
+# GENCODE — SASS + PTX (mirrors stage_resolve_runtime_a): `code=sm_$SM` alone embeds
+# SASS for that one arch and NO PTX, so the archive silently no-ops (all launches
+# fail cudaErrorNoKernelImageForDevice) on any newer GPU arch. `code=compute_$SM`
+# adds the PTX so the driver JITs forward.
+nvcc -x cu -DHEXA_CUDA $CUBLAS_MACRO -rdc=true \
+     -gencode arch=compute_$SM,code=sm_$SM \
+     -gencode arch=compute_$SM,code=compute_$SM -O2 -w \
+     -Xcompiler -fno-threadsafe-statics -Xcompiler -fno-exceptions \
      -I "$CINC/cccl" -I "$CINC" -I self -I self/cuda -I . \
      -c self/cuda/runtime_cuda.c -o "$B/runtime_cuda.o"
-nvcc -dlink -gencode arch=compute_$SM,code=sm_$SM "$B/runtime_cuda.o" \
+nvcc -dlink -gencode arch=compute_$SM,code=sm_$SM \
+     -gencode arch=compute_$SM,code=compute_$SM "$B/runtime_cuda.o" \
      -o "$B/runtime_cuda_dlink.o" -lcudadevrt
+
+# ── ING-33 — regenerate self/runtime.c from the SSOT before the CUDA host compile ──
+# ROOT-CAUSE (measured summer 2026-06-24): the CUDA host object below is compiled
+# from `self/runtime.c` as it sits in the WARM TREE. install.sh runs
+# tool/restore_frozen_seeds (which emits the current SSOT — incl. the weak
+# forge_dispatch host twins, ING-82 silu-gate decl, openssl wiring), but this script
+# is run SEPARATELY against whatever warm copy already exists. If that copy predates
+# the weak-host-twin landing, `runtime_cuda_host.o` carries only the 2 always-defined
+# forge seams (matmul/ffn) instead of all 33 → a -DHEXA_CUDA consumer link of an
+# app that calls e.g. forge_dispatch_groupnorm_gelu fails with `undefined reference`
+# (the anima cli/anima.hexa full-stack failure). MEASURED: stale shipped host obj =
+# 2 forge_dispatch syms / 765376 B; SSOT-regenerated = 33 / weak / openssl-wired.
+# FIX = re-seed self/runtime.c from the frozen SSOT here, so the host obj can never
+# be stale regardless of warm-tree state (mirrors build_aprime.sh / build_selfhost.sh
+# which restore_frozen_seeds before compiling). CPU-build byte-neutral: this script
+# only produces the CUDA-variant objects; the shipped CPU runtime.a is built by
+# install.sh's own restore path and is untouched. release_runtime_compile_gate
+# already proves the SSOT carries all 66 forge bodies under -DHEXA_CUDA.
+if [ -x tool/restore_frozen_seeds ]; then
+  echo "=== ING-33: re-seed self/runtime.c from frozen SSOT (restore_frozen_seeds) ==="
+  bash tool/restore_frozen_seeds >/dev/null 2>&1 \
+    || { echo "[build_cuda_runtime] restore_frozen_seeds failed — self/runtime.c may be stale"; exit 1; }
+else
+  echo "[build_cuda_runtime] WARN: tool/restore_frozen_seeds not executable — using warm-tree self/runtime.c as-is"
+fi
+
+# ── MULTIDEF-FIX — regen runtime_core.c from SSOT + Z2a rt_hi patch ──────────
+# ROOT-CAUSE (summer nvcc 12.9 2026-06-26 · convergence CUDA-BUILD-CORES-EXPLICIT-LINK-MULTIDEF):
+#   restore_frozen_seeds above restores self/runtime_core.c from the frozen blob
+#   151c52c82. That blob PREDATES the HEXA_RT_ALLOC_NATIVE guards (the C hexa_arena_alloc
+#   body lives outside any #ifdef) AND still #includes "runtime_hi_gen.c" (which defines
+#   rt_str_split/lines/pad/center/… 15 symbols). $CORES (from the prebuilt runtime.a) already
+#   provides alloc_syscall_native.o (hexa_arena_alloc) and rt_hi_native.o (rt_str_*) as
+#   explicit .o files. Linking both → 19× `multiple definition` → collect2 fail.
+#
+#   stage_resolve_runtime_a avoids this by: (1) calling regen_runtime_core_from_emitter
+#   (awk-unescape of runtime_core_emit.hexa → runtime_core.c WITH the guards) and (2)
+#   patching out #include "runtime_hi_gen.c" when HEXA_ZEROC_RT_HI=1. We mirror both here.
+#
+# This is NOT a frozen-blob edit — it operates on the *working-tree* runtime_core.c that
+# restore_frozen_seeds just wrote, identical to what stage_resolve_runtime_a already does
+# for every release build. The fix is additive (no SSOT change) and byte-neutral for the
+# shipped runtime.a (which is already built via the fixed path in stage_resolve_runtime_a).
+echo "=== MULTIDEF-FIX: regen runtime_core.c from emitter SSOT (HEXA_RT_ALLOC_NATIVE guards) ==="
+_regen_runtime_core_for_cuda() {
+    local emitter="self/runtime_core_emit.hexa"
+    local dst="self/runtime_core.c"
+    [ -f "$emitter" ] || { echo "[build_cuda_runtime] regen SKIP — emitter absent (frozen blob used)"; return 0; }
+    local atmp
+    atmp="$(mktemp -t regen_rtcore.XXXXXX)" || { echo "[build_cuda_runtime] mktemp fail — frozen runtime_core.c used"; return 0; }
+    awk '
+      BEGIN { saw = 0 }
+      {
+        line = $0
+        pfx = "    buf = buf + \""
+        if (substr(line, 1, length(pfx)) != pfx) next
+        body = substr(line, length(pfx) + 1)
+        if (substr(body, length(body), 1) != "\"") next
+        body = substr(body, 1, length(body) - 1)
+        saw = 1
+        out = ""; n = length(body); i = 1
+        while (i <= n) {
+          c = substr(body, i, 1)
+          if (c == "\\" && i < n) {
+            d = substr(body, i+1, 1)
+            if (d == "n")  { out = out "\n"; i += 2; continue }
+            if (d == "t")  { out = out "\t"; i += 2; continue }
+            if (d == "\"") { out = out "\""; i += 2; continue }
+            if (d == "\\") { out = out "\\"; i += 2; continue }
+            out = out "\\"; i += 1; continue
+          }
+          out = out c; i += 1
+        }
+        printf "%s", out
+      }
+      END { if (!saw) exit 3 }
+    ' "$emitter" > "$atmp" 2>/dev/null \
+    && [ -s "$atmp" ] && grep -q 'HexaVal hexa_str_join' "$atmp" \
+    && cp -f "$atmp" "$dst" \
+    && echo "[build_cuda_runtime] runtime_core.c REGENERATED from emitter SSOT ($(wc -l < "$dst") lines, HEXA_RT_ALLOC_NATIVE guards now present)" \
+    || echo "[build_cuda_runtime] regen FAILED — frozen runtime_core.c used (multi-def may persist)"
+    rm -f "$atmp"
+    # reconcile_runtime_c_ssot_dups: frozen runtime.c carries 4 weak f64<->bits defs that
+    # the emitter-regenerated runtime_core.c now owns as non-weak — drop the stale dups.
+    # Mirrors stage_resolve_runtime_a's reconcile_runtime_c_ssot_dups() verbatim.
+    if [ -f self/runtime.c ] && grep -q '__attribute__((weak)) HexaVal hexa_float_to_bits' self/runtime.c; then
+        sed -E -i.ssotbak \
+          '/__attribute__\(\(weak\)\) HexaVal (hexa_float_to_bits|hexa_bits_to_float|float_to_bits|bits_to_float)\(HexaVal x\) \{/d' \
+          self/runtime.c
+        rm -f self/runtime.c.ssotbak
+        echo "[build_cuda_runtime] SSOT reconcile: dropped 4 migrated f64<->bits weak defs from runtime.c"
+    fi
+}
+_regen_runtime_core_for_cuda
+
+# RT-NATIVE Z2a: remove #include "runtime_hi_gen.c" when rt_hi_native.o is in $CORES,
+# mirroring stage_resolve_runtime_a line ~962 to prevent 15× rt_str_* multi-def.
+if echo "$CORES" | grep -q "rt_hi_native.o" && [ -f self/runtime_core.c ]; then
+    sed -i.zbak 's|#include "runtime_hi_gen.c"|/* RT-NATIVE Z2a (build_cuda_runtime): rt_str_* from native rt_hi_native.o in CORES */|' self/runtime_core.c
+    rm -f self/runtime_core.c.zbak
+    echo "[build_cuda_runtime] RT-NATIVE Z2a: #include runtime_hi_gen.c patched out — rt_str_* provided by rt_hi_native.o"
+fi
+
+# ── ING-35/ING-82 — silu_gate_gpu extern-before-use guard (warm-tree CUDA build) ──
+# The frozen self/runtime.c (151c52c8…) declares `extern int _hx_cuda_farr_silu_
+# gate_gpu(...)` ~581 lines AFTER its first CALL inside hexa_farr_silu_gate_gpu's
+# `#ifdef HEXA_CUDA` block. restore_frozen_seeds injects the fix (ING-82), but this
+# script compiles whatever self/runtime.c is already in the warm tree — if that copy
+# was produced by a STALE (pre-#3784) restore_frozen_seeds it still has the
+# out-of-order decl. gcc -w below tolerates it (implicit-decl = suppressed warning),
+# but a strict-C99 host compiler (clang, or nvcc-as-clang) ERRORS with `call to
+# undeclared function '_hx_cuda_farr_silu_gate_gpu'` (the anima ING #35 failure).
+# Re-apply the same matmul-precedent inline extern HERE, idempotently, so the CUDA
+# host compile is toolchain-consistent regardless of how the warm tree was seeded.
+# OFF-CUDA the whole #ifdef block (this decl included) is preprocessed away, so the
+# default CPU build is byte-identical — verified empty preprocessed diff.
+if [ -f self/runtime.c ] && ! grep -q 'ING-82 silu_gate_gpu extern-before-use' self/runtime.c; then
+  awk '
+    /^    int rc = _hx_cuda_farr_silu_gate_gpu\(a_id, b_id, n, out_id\);$/ && !patched {
+      print "    // ING-82 silu_gate_gpu extern-before-use — declare BEFORE the call"
+      print "    // (mirrors the matmul/softmax/rmsnorm siblings) so HEXA_CUDA builds"
+      print "    // compile under strict-C99 clang, not just gcc (implicit-decl warns)."
+      print "    extern int _hx_cuda_farr_silu_gate_gpu(int64_t a_id, int64_t b_id,"
+      print "                                           int64_t n, int64_t out_id);"
+      patched=1
+    }
+    { print }
+  ' self/runtime.c > self/runtime.c.ing82 && mv self/runtime.c.ing82 self/runtime.c
+  echo "[build_cuda_runtime] ING-35/ING-82: injected silu_gate_gpu extern-before-use (warm-tree CUDA clang-safe)"
+fi
 
 echo "=== host runtime.o (-DHEXA_CUDA + the RT-NATIVE flag set) ==="
 RTFLAGS="-DHEXA_RT_ARRAY_NATIVE=1 -DHEXA_RT_MAP_NATIVE=1 -DHEXA_RT_INTERN_NATIVE=1 -DHEXA_RT_ALLOC_NATIVE=1"
-gcc -O2 -D_GNU_SOURCE -DHEXA_HAS_OPENSSL -DHEXA_CUDA $RTFLAGS -w \
+# DEPLOY-SAFE: compile WITHOUT -DHEXA_HAS_OPENSSL so the archive member has NO
+# EVP_* undefined-refs. Root cause: self/main.hexa CUDA link path (line ~1487)
+# returns early before adding -lssl/-lcrypto, so any archive member with EVP_*
+# refs causes "undefined reference" in `hexa run`. Omitting -DHEXA_HAS_OPENSSL
+# gates out hexa_aes256_ctr_xor (the only EVP_* user) — SHA-256/SHA-1 use the
+# pure-C hexa_sha256_raw path which does NOT require OpenSSL. Matches the
+# manually assembled runtime_cuda_host_sm120_noossl.o from the 2026-06-29
+# session fix. TODO: also fix self/main.hexa CUDA link to include -lssl.
+gcc -O2 -D_GNU_SOURCE -DHEXA_CUDA $RTFLAGS -w \
     -I self -I . -I "$CINC" -c self/runtime.c -o "$B/runtime_cuda_host.o"
 
 echo "=== PRIMARY verify harness — CPU vs CUDA ==="
-# (A) CPU-only: archived CPU runtime.o + cores
-( cd "$B" && ar x "$PREBUILT_RT" runtime.o )
-gcc -O2 -D_GNU_SOURCE -DHEXA_HAS_OPENSSL -w -I self -I . \
-    tool/cuda_gemm_verify.c "$B/runtime.o" $CORES \
-    -lm -lpthread -lssl -lcrypto -o "$B/gemm_cpu"
+# (A) CPU-only: compile runtime.o from the MULTIDEF-FIX-patched self/runtime.c (no -DHEXA_CUDA).
+# The prebuilt runtime.a from recent installs no longer bundles a runtime.o member (it
+# ships only the *_native.o seeds) — ar x fails silently. Compile fresh WITH RTFLAGS so
+# the HEXA_RT_ALLOC_NATIVE guard suppresses hexa_arena_alloc and the runtime_hi_gen.c
+# #include-drop hides rt_str_* — matching the CUDA host recipe (same patched runtime_core.c,
+# just without -DHEXA_CUDA). If self/runtime.c is absent (edge-only install), skip CPU build.
+if [ -f self/runtime.c ]; then
+    gcc -O2 -D_GNU_SOURCE -DHEXA_HAS_OPENSSL $RTFLAGS -w \
+        -I self -I . -c self/runtime.c -o "$B/runtime.o"
+    gcc -O2 -D_GNU_SOURCE -DHEXA_HAS_OPENSSL -w -I self -I . \
+        tool/cuda_gemm_verify.c "$B/runtime.o" $CORES \
+        -lm -lpthread -lssl -lcrypto -o "$B/gemm_cpu" \
+    && echo "[build_cuda_runtime] CPU harness built OK" \
+    || echo "[build_cuda_runtime] WARN: CPU harness link failed (CUDA-only mode)"
+else
+    echo "[build_cuda_runtime] SKIP CPU build — self/runtime.c absent"
+fi
 # (B) CUDA: host runtime.o (HEXA_CUDA) + runtime_cuda.o + dlink + cudart
 #     ($CUBLAS_LDLIB = -lcublas only when HEXA_USE_CUBLAS=1; default = cuBLAS-free)
 gcc -O2 -D_GNU_SOURCE -DHEXA_HAS_OPENSSL -DHEXA_CUDA -w -I self -I . -I "$CINC" \
     -c tool/cuda_gemm_verify.c -o "$B/harness_cuda.o"
+# $CORES force-linked alongside runtime_cuda_host.o — multi-def FIXED via
+# _regen_runtime_core_for_cuda() + Z2a above (convergence CUDA-BUILD-CORES-EXPLICIT-LINK-MULTIDEF
+# ossified in #4213): frozen runtime_core.c now has HEXA_RT_ALLOC_NATIVE guards and
+# #include "runtime_hi_gen.c" is patched out, so hexa_arena_*/rt_str_* are no longer
+# defined in runtime_cuda_host.o when $CORES provides them as native .o.
 g++ -O2 "$B/harness_cuda.o" "$B/runtime_cuda_host.o" "$B/runtime_cuda.o" \
     "$B/runtime_cuda_dlink.o" $CORES \
     -L"$CLIB" -lcudart $CUBLAS_LDLIB -lcuda -lcudadevrt -lm -lpthread -lssl -lcrypto -ldl \
@@ -109,4 +343,45 @@ echo "### CPU-only build ###"
 "$B/gemm_cpu"
 echo "### CUDA build (sm_$SM) ###"
 LD_LIBRARY_PATH="$CLIB:${LD_LIBRARY_PATH:-}" "$B/gemm_cuda"
+
+# ── DEPLOY: assemble CUDA runtime.a and install to DEPLOY_RT ─────────────────
+# After the gemm_cuda harness confirms CUDA works, assemble and deploy runtime.a
+# so that `hexa run` picks up the GPU path automatically.
+#
+# Archive contents:
+#   $CORES                  — RT-NATIVE cores (*_native.o: array/map/intern/fs/num/valop/alloc)
+#   hxlcl_shim.o            — hexa C ABI shim (extracted from PREBUILT_RT, if present)
+#   runtime_cuda_host.o     — host runtime compiled with -DHEXA_CUDA (no-dup, multidef-fixed)
+#   runtime_cuda.o          — CUDA device code (sm_$SM)
+#   runtime_cuda_dlink.o    — CUDA device-link blob
+#
+# NOT included: runtime.o (CPU-only, would duplicate host syms), harness_cuda.o (test only).
+#
+# DX governance (native-canonical-default): after this deploy `hexa run <file>` on a CUDA
+# host should give cuda_available()=1 without any extra env flags (GPU activation = one step).
+# Also clears ~/.hexa-cache/ (hexa run caches pre-linked binaries keyed by source hash +
+# hexa version; stale sm_80-linked cache entries give zero results on sm_120 Blackwell GPUs).
+if [ -n "${DEPLOY_RT:-}" ]; then
+    echo "=== DEPLOY: assembling CUDA runtime.a ==="
+    DEPLOY_ARCHIVE="$B/runtime.cuda.a"
+    rm -f "$DEPLOY_ARCHIVE"
+    # hxlcl_shim.o may be in $B/ (extracted from PREBUILT_RT) — include if present
+    SHIM=""
+    [ -f "$B/hxlcl_shim.o" ] && SHIM="$B/hxlcl_shim.o"
+    ar rcs "$DEPLOY_ARCHIVE" $CORES $SHIM \
+        "$B/runtime_cuda_host.o" "$B/runtime_cuda.o" "$B/runtime_cuda_dlink.o"
+    echo "[build_cuda_runtime] DEPLOY archive members: $(ar t "$DEPLOY_ARCHIVE" | tr '\n' ' ')"
+    # Install: replace DEPLOY_RT with the new CUDA-enabled archive
+    mkdir -p "$(dirname "$DEPLOY_RT")"
+    cp "$DEPLOY_ARCHIVE" "$DEPLOY_RT"
+    echo "[build_cuda_runtime] DEPLOYED: $DEPLOY_ARCHIVE → $DEPLOY_RT"
+    # Clear hexa run cache: stale entries are linked against the old (possibly sm_80) runtime.a
+    if [ -d "$HOME/.hexa-cache" ]; then
+        rm -rf "$HOME/.hexa-cache"
+        echo "[build_cuda_runtime] CLEARED: ~/.hexa-cache/ (stale binaries linked against pre-sm_120 runtime.a)"
+    fi
+    echo "[build_cuda_runtime] GPU activation complete — 'hexa run' will now use sm_$SM CUDA path"
+else
+    echo "[build_cuda_runtime] DEPLOY_RT='' — skipping deploy (CUDA objects in $B/ only)"
+fi
 echo "=== DONE — CUDA runtime objects in $B/, harness binaries gemm_cpu / gemm_cuda ==="

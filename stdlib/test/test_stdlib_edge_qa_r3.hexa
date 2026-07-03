@@ -1,0 +1,49 @@
+// stdlib/test/test_stdlib_edge_qa_r3.hexa — regression lock for the stdlib .hexa
+// correctness QA round 3 (2026-06-25, find→adversarial-verify workflow).
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Run:  hexa build stdlib/test/test_stdlib_edge_qa_r3.hexa -o /tmp/qa3.bin && /tmp/qa3.bin
+// Sentinel: __QA_EDGE_STDLIB_R3__ PASS|FAIL on the final line.
+//
+// Locks the public-surface fixes (weave lcg_int is an internal fn, covered by
+// source reasoning + the OOB it prevents in lcg_shuffle):
+//   bytes.uint64_to_unit_float — sign-safe [0,1) (was negative float on high-bit input)
+//   civil.iso8601_format_native — floor-div (was malformed time on negative epoch)
+
+import "stdlib/core/bytes.hexa"
+import "stdlib/time/civil.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label, cond) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+fn main() {
+    // uint64_to_unit_float: must stay in [0,1) even for a "negative" hexa int
+    // (= a uint64 whose high bit is set after the BE fold).
+    let neg = uint64_to_unit_float(0 - 1)
+    check("unit_float neg in range", neg >= 0.0 && neg < 1.0)
+    let pos = uint64_to_unit_float(42)
+    check("unit_float pos in range", pos >= 0.0 && pos < 1.0)
+
+    // iso8601_format_native: floor semantics for negative (sub-day) epoch.
+    check("iso negative -1", iso8601_format_native(0 - 1) == "1969-12-31T23:59:59Z")
+    check("iso negative -100", iso8601_format_native(0 - 100) == "1969-12-31T23:58:20Z")
+    check("iso epoch 0", iso8601_format_native(0) == "1970-01-01T00:00:00Z")
+
+    if FAIL == 0 {
+        println("__QA_EDGE_STDLIB_R3__ PASS")
+    } else {
+        println("__QA_EDGE_STDLIB_R3__ FAIL")
+    }
+}

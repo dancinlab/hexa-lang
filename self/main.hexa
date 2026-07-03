@@ -124,6 +124,8 @@ fn cmd_help() {
     println("    e.g. hexa loop --dfs --allow-llm --llm-cmd \"claude -p\" --target-absorb 10")
     println("                                          live LLM descent → 1 batched PR (compiler/atlas/embedded.gen.hexa)")
     println("                                          per @D g_atlas_absorb_direct (no .n6 shard, no inbox markdown intermediate)")
+    println("  gpu [status]                            GPU/flame/forge/cuda 상태 (cuda_available · own-kernel flags · 3-layer legend)")
+    println("    e.g. hexa gpu                           probe cuda + print subsystem SSOT view")
     println("  gpu fire <kernel.ptx> <host.c> [target] Remote GPU fire harness (GPU.md §7c)")
     println("                                          scp + nvcc + run + pull result.json")
     println("                                          default target = ubu-2 (RTX 5070 sm_120)")
@@ -133,6 +135,8 @@ fn cmd_help() {
     println("")
     println("ATLAS SSOT  (compiler/atlas/embedded.gen.hexa, text-parsed at load)")
     println("  atlas hash | stats                      Read meta")
+    println("  atlas census                            count BLANK cells of the @F identity grid (census vs cartography)")
+    println("  atlas resolve [--n N] [--fold]          MECHANICAL no-LLM loop: classify ALL grid cells (filled/closed-⚪/multi-⊞/degenerate)")
     println("  atlas lookup <id> | <K> <id> | --prefix=<p>   Read node(s)")
     println("  atlas dump [K] [--json]                 Read full kind")
     println("  atlas register --from-verify <fn> <args> <v>  verify IN-PROCESS → fold into embedded.gen.hexa")
@@ -1382,7 +1386,6 @@ fn os_clang_cflags() {
     // `-lsodium` → `cannot find -lssl` at link. Both binds are optional (the
     // native stubs return errors when the symbol is undefined), so a static build
     // simply ships without them. Mirrored in os_clang_ldflags.
-    // @convergence state=ossified id=MUSL-OPENSSL-STATIC-DEPS value="static-musl release pkg(build_precompile) linked -lssl/-lcrypto → musl toolchain has no glibc-shared OpenSSL/libsodium → ld cannot find -lssl; HEXA_STATIC_DEPS env did not propagate through the nested hexa-run AOT compile spawn" threshold="detect musl toolchain at flag-compute point (host_cc contains musl) → treat as static_deps, env-independent; non-musl CC (clang/gcc) unaffected so 3-target byteeq inert"
     let static_deps = env("HEXA_STATIC_DEPS") == "1" || host_cc().contains("musl")
     // 2026-05-14: libsodium optional bind for stdlib/crypto + SSH client.
     // Probe via pkg-config; on Mac without pkg-config, fall back to the
@@ -1408,11 +1411,25 @@ fn os_clang_cflags() {
 }
 fn os_clang_ldflags() {
     let mut base = " -lpthread"
-    if exec("uname 2>/dev/null | tr -d ' \\n\\t'") == "Linux" { base = " -lm -lpthread" }
+    if exec("uname 2>/dev/null | tr -d ' \\n\\t'") == "Linux" {
+        base = " -lpthread"  // zero-c #29: runtime is libm-free (flag-off runtime.a nm-UND libm = ∅, #4299-4313) — drop -lm
+        // own-start #29 PR-B (C1/C2): -nostartfiles when the scaffold-bearing runtime.a is on the link.
+        // #4395 makes runtime.a CARRY own _start/_hx_start_c/_hx_run_init_array (self/runtime.c #ifdef
+        // HEXA_ZEROC_OWN_START) when built with HEXA_ZEROC_OWN_START=1; without -nostartfiles the clang
+        // link ALSO pulls glibc crt1.o _start -> duplicate _start. Append to `base` BEFORE the musl/cuda/
+        // default returns so it propagates through all of them. Linux x86_64/arm64 only (darwin = Mach-O
+        // LC_MAIN, never entered here). Default-OFF byte-neutral (env unset -> base unchanged).
+        if env_var("HEXA_ZEROC_OWN_START") == "1" {
+            let _zc_arch = exec("uname -m 2>/dev/null | tr -d ' \\n\\t'")
+            if _zc_arch == "x86_64" || _zc_arch == "aarch64" || _zc_arch == "arm64" {
+                base = base + " -nostartfiles"
+            }
+        }
+    }
     // HEXA_STATIC_DEPS=1 — see os_clang_cflags: a `-static` musl link has no
     // glibc shared OpenSSL/libsodium to satisfy these, and the cflags side
     // already dropped the -DHEXA_HAS_* defines, so skip the link flags too.
-    if env("HEXA_STATIC_DEPS") == "1" || host_cc().contains("musl") { return base }   // @convergence id=MUSL-OPENSSL-STATIC-DEPS (musl CC → no glibc-shared OpenSSL/libsodium; env-independent twin of the cflags guard)
+    if env("HEXA_STATIC_DEPS") == "1" || host_cc().contains("musl") { return base }
     // ── HEXA_CUDA=1 (opt-in · `-cuda` release variant) — pull cuBLAS/cudart so a
     // consumer `hexa build`/`run` program links the CUDA-enabled runtime.a (which
     // ar's runtime_cuda.o + the nvcc -dlink device blob, folded in by
@@ -1431,10 +1448,29 @@ fn os_clang_ldflags() {
     // or runtime_cuda.o's cudaLaunchKernel/cublas symbols went undefined at link
     // (#3723 link wall). HEXA_CUDA=0 stays a hard opt-out. A CPU install / self-host
     // source build has no marker → cuda_on=false → byte-identical to before (NEUTRAL).
-    // @convergence state=in_flight id=CUDA-RUNTIME-MARKER value="cuda asset consumer needed HEXA_CUDA=1 on EVERY hexa build else cudaLaunchKernel/cublas undefined (-lcudart env-gated); install.sh auto-pulls cuda asset but build did not auto-link (#3723 v6b)" threshold="cuda asset hexa run/build links cudart WITHOUT env (marker-detected); CPU install byte-identical"
     let hx_home = if env("HX_HOME") != "" { env("HX_HOME") } else { env("HOME") + "/.hx" }
     let cuda_marked = exec("test -f '" + hx_home + "/.cuda-runtime' && printf 1 || printf 0").trim()
-    let cuda_on = env("HEXA_CUDA") == "1" || (env("HEXA_CUDA") != "0" && cuda_marked == "1")
+    let mut cuda_on = env("HEXA_CUDA") == "1" || (env("HEXA_CUDA") != "0" && cuda_marked == "1")
+    // runtime.a auto-detect (marker-independent): a CUDA-built runtime.a ar's
+    // runtime_cuda*.o members whose cudaLaunchKernel/cudaMalloc/__cudaRegister*
+    // symbols go undefined at link unless the cuda libs are on the line. install.sh's
+    // prefer_cuda path drops the .cuda-runtime marker, but a manual build_cuda_runtime
+    // / pool sync (a GPU campaign) installs the cuda runtime.a WITHOUT the marker →
+    // cuda_marked=0 → the link omitted cudart and died "undefined reference cudaMalloc"
+    // (summer pool, 2026-06-27). Probe the RESOLVED runtime.a directly so the link
+    // follows the archive it links (native-canonical: the link adapts to the runtime,
+    // not a side-band marker). HEXA_CUDA=0 stays a hard opt-out; a CPU runtime.a has no
+    // runtime_cuda* members → cuda_on stays false → byte-identical to before (NEUTRAL).
+    if !cuda_on && env("HEXA_CUDA") != "0" {
+        let __rt_probe = resolve_prebuilt_runtime()
+        if len(__rt_probe) > 0 {
+            // grep -c always prints a count (0 on no-match / unreadable archive),
+            // so NO `|| printf 0` fallback — that would append a 2nd "0" → "00" and
+            // mis-trip cuda_on. Empty (exec failure) is treated as "no cuda".
+            let __nc = exec("ar t '" + __rt_probe + "' 2>/dev/null | grep -c '^runtime_cuda'").trim()
+            if __nc != "0" && __nc != "" { cuda_on = true }
+        }
+    }
     if cuda_on {
         // CUDA_HOME from env (release job sets it); else the standard toolkit root on
         // a consumer GPU host (libcudart resolves from /usr/local/cuda/lib64).
@@ -1451,7 +1487,6 @@ fn os_clang_ldflags() {
             // box). Without the stubs search path `-lcuda` fails the link with
             // "ld: cannot find -lcuda" — #3696 added stubs to release_package's
             // FINAL link but this self-compile (hexa run) cuda LIBS still omitted it.
-            // @convergence state=in_flight id=CUDA-STUBS-SELFCOMPILE value="hexa run self-compile cuda link omitted -L<lib>/stubs → ld cannot find -lcuda in -cuda release Package step" threshold="release -cuda job Package step green (libcuda resolved from stubs)"
             if cuda_probe != "" { cuda_l = " -L" + cuda_probe.trim() + " -L" + cuda_probe.trim() + "/stubs" }
         }
         // cudadevrt is a STATIC archive shipped by the toolkit (device-runtime for
@@ -1684,11 +1719,21 @@ fn cmd_cc() {
     }
     let mut cmd = ""
     if uname == "Linux" {
-        cmd = host_cc() + " -O2 -D_GNU_SOURCE -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexat' -lm 2>&1"
+        // os_clang_ldflags() (not a bare flag set): the transpiler-bootstrap link consumes
+        // the SAME prebuilt runtime.a (rt_o) as the user-binary link, so when that
+        // archive is the CUDA build its runtime_cuda*.o cuda symbols need -lcudart/
+        // -lcudadevrt here too — a bare link left them undefined and the hexat rebuild
+        // died (summer pool 2026-06-27). os_clang_ldflags()'s Linux base is "-lpthread"
+        // (zero-c #29: -lm dropped — runtime is libm-free, flag-off runtime.a nm-UND
+        // libm = ∅) so this is a strict superset on the CPU default (cuda_on=false →
+        // identical cuda-free link), plus the libsodium/openssl flags the runtime.a
+        // may reference — consistent with the user-binary link sites.
+        cmd = host_cc() + " -O2 -D_GNU_SOURCE -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexat'" + os_clang_ldflags() + " 2>&1"
     } else {
         // macOS (Darwin) — libSystem 이 libm 자동 포함, _GNU_SOURCE 무의미.
-        // 단, `-I self` 는 runtime.h 경로 해석에 반드시 필요.
-        cmd = host_cc() + " -O2 -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexat' 2>&1"
+        // 단, `-I self` 는 runtime.h 경로 해석에 반드시 필요. os_clang_ldflags() 로
+        // user-binary 링크와 동일 플래그(예: cuda runtime.a 시 cudart) 적용.
+        cmd = host_cc() + " -O2 -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexat'" + os_clang_ldflags() + " 2>&1"
     }
     println("  " + cmd)
     let r = exec(cmd)
@@ -3638,7 +3683,7 @@ fn cmd_build(src, out, c_only, target, shared) {
         let mut ldf_target = ""
         if target.starts_with("linux-") {
             cf_target = "-D_GNU_SOURCE "
-            ldf_target = " -lm"
+            ldf_target = ""  // zero-c #29: runtime libm-free — drop -lm (cross zig-cc)
         }
         compile = "zig cc -O2 -target " + zt + static_f + " " + cf_target + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " '" + __runtime_c + "' -o '" + tmp + "'" + ldf_target + " 2>&1"
     }
@@ -4216,7 +4261,6 @@ fn _run_cache_base_key(file) {
     return sha256_file(file).substring(0, 16) + "_" + version_str()
 }
 
-// @convergence state=ossified id=CLI-RUNCACHE-STALE-ABI value="local run-cache key used only sha(source)+static version_str('0.1.0-dispatch') → toolchain upgrade reused a stale hexa_run.<key> .o built against an older runtime ABI → dyld 'Symbol not found: _regex_match/_json_stringify/_contains_key' on v0.241.x" threshold="fold running-binary size+mtime into the LOCAL cache key (precompile probe base-key unchanged so shipped precompile still hits)"
 fn _self_build_tag() {
     // build-identity of the running hexa binary (size + mtime_ns) so any
     // toolchain rebuild/upgrade invalidates the local run-cache. fs_stat →
@@ -4378,7 +4422,14 @@ fn cmd_run_user_direct(file, extra_args) {
                 let _crt = exec("for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do if [ -f $d/crt1.o ]; then printf %s $d; break; fi; done")
                 let _dl = exec("for f in /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-x86-64.so.2; do if [ -e $f ]; then printf %s $f; break; fi; done")
                 if len(_crt) > 0 && len(_dl) > 0 {
-                    let _lnk = "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _crt + "/crt1.o' '" + _crt + "/crti.o' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lm -lpthread --end-group '" + _crt + "/crtn.o' -L'" + _crt + "' -o '" + _nbin + "' 2>&1"
+                    // own-start #29 PR-B (C3): crt-drop when runtime.a carries own _start (#4390/#4395,
+                    // HEXA_ZEROC_OWN_START=1). Omitting crt1/crti/crtn stops glibc's _start from linking
+                    // so runtime.a's own _start/_hx_run_init_array is used; -lc -lpthread stay in the
+                    // --start-group so libc still resolves. This block is x86_64-hardcoded (arm64 never
+                    // reaches here). Default-OFF byte-neutral: else-branch char-identical to today.
+                    // Loud-fail-safe: a failed ld link falls through to the clang path below.
+                    let _zc_own = env_var("HEXA_ZEROC_OWN_START") == "1"
+                    let _lnk = if _zc_own { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread --end-group -L'" + _crt + "' -o '" + _nbin + "' 2>&1" } else { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _crt + "/crt1.o' '" + _crt + "/crti.o' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread --end-group '" + _crt + "/crtn.o' -L'" + _crt + "' -o '" + _nbin + "' 2>&1" }
                     let _lr = exec(_lnk)
                     let _nbin_ok = exec("test -x '" + _nbin + "' && printf yes || printf no")
                     if _nbin_ok == "yes" {
@@ -5603,18 +5654,116 @@ fn cmd_gpu_lint(args) {
     }
 }
 
+// ─── cmd_gpu_status — `hexa gpu status` / bare `hexa gpu` ─────────────
+//
+// Make flame/forge/hexa-cuda + the live GPU state legible FROM THE BINARY
+// ITSELF, so any repo that has `hexa` installed (anima etc.) can SSOT-check
+// it without grepping the source tree. Two information classes, labelled
+// honestly:
+//   • PROBED  — read from this binary's linked runtime at call time:
+//                 cuda_available() / cuda_device_count() (RFC 040 carriers)
+//                 + the runtime env-flag polarity (HEXA_USE_CUBLAS etc.).
+//   • STATIC  — the 3-layer subsystem legend + measured-on-silicon notes;
+//                 these are doctrine/measurement facts, not runtime probes,
+//                 and are kept fresh via the CLAUDE.md `hexa gpu lockstep`
+//                 rule (update this text in the SAME change as any GPU
+//                 capability / flag / build-variant / dtype-parity change).
+//
+// cuda_available() == 1 ONLY in a `-cuda` release build variant (the stock
+// release `hexa` is CPU-only: subsystem wired but the CUDA runtime is not
+// compiled in → 0). See CLAUDE.md "CUDA-enabled hexa build".
+fn cmd_gpu_status() {
+    // ── PROBED: live runtime accessors (RFC 040 fn carriers in runtime.c) ──
+    let avail = cuda_available()
+    let ndev  = cuda_device_count()
+
+    println("HEXA GPU / subsystem status")
+    println("  version:           " + version_str())
+    println("")
+    println("RUNTIME PROBE  (this binary, read at call time)")
+    if avail != 0 {
+        println("  cuda_available():  1  (CUDA toolkit + device present — -cuda build variant)")
+        println("  cuda_device_count: " + str(ndev))
+    } else {
+        println("  cuda_available():  0  (CPU-only — stock release build, or no GPU/toolkit)")
+        println("  cuda_device_count: " + str(ndev))
+        println("    note: stock release `hexa` is CPU-only (subsystem wired, CUDA runtime")
+        println("          not compiled in). cuda_available()==1 needs the `-cuda` asset.")
+        println("    ENABLE GPU: on a CUDA host run  HEXA_CUDA=1 sh install.sh")
+        println("          (auto-installs the -cuda asset; install.sh prefer_cuda() also")
+        println("           auto-detects nvidia-smi+libcudart → cuda when HEXA_CUDA unset,")
+        println("           pip-install-torch style). Verify: hexa run 'fn main(){print(cuda_available())}' → 1")
+    }
+    println("")
+    println("OWN-KERNEL POLARITY  (native-canonical-default; cuBLAS = opt-in constraint)")
+    println("  Default path is ALWAYS hexa-own kernels; cuBLAS is opt-in only.")
+    // Runtime flags — own is the default; the flags below only CONSTRAIN.
+    let f_cublas   = env_var("HEXA_USE_CUBLAS")
+    let f_owngemm  = env_var("HEXA_OWN_GEMM")
+    let f_tf32own  = env_var("HEXA_TF32_OWN")
+    let f_tf32fast = env_var("HEXA_TF32_FASTMODE")
+    // HEXA_USE_CUBLAS — compile-time #ifdef opt-in to the cuBLAS path.
+    if len(f_cublas) > 0 {
+        println("  HEXA_USE_CUBLAS=" + f_cublas + "  → cuBLAS opt-in path ACTIVE (own-default overridden)")
+    } else {
+        println("  HEXA_USE_CUBLAS=(unset) → own kernels own 100% of GEMM/gemv (default)")
+    }
+    // HEXA_OWN_GEMM — runtime; own is default (1) unless =0 reverts to cuBLAS.
+    if f_owngemm == "0" {
+        println("  HEXA_OWN_GEMM=0     → FP64 GEMM reverted to cublasDgemm (own-default opt-OUT)")
+    } else {
+        println("  HEXA_OWN_GEMM=(default) → own FP64 GEMM active (byte-identical to cuBLAS)")
+    }
+    // HEXA_TF32_OWN — runtime; own is default unless =0 reverts to cublasGemmEx.
+    if f_tf32own == "0" {
+        println("  HEXA_TF32_OWN=0     → TF32 reverted to cublasGemmEx (within fastmode lane)")
+    } else {
+        println("  HEXA_TF32_OWN=(default) → own mma.sync TF32 active (within fastmode lane)")
+    }
+    // HEXA_TF32_FASTMODE — runtime opt-in; default 0 (FP64 stays the default dtype).
+    if len(f_tf32fast) > 0 {
+        println("  HEXA_TF32_FASTMODE=" + f_tf32fast + "  → TF32 fast lane ON (byte-changing approx)")
+    } else {
+        println("  HEXA_TF32_FASTMODE=(unset) → FP64 is the default dtype (deterministic)")
+    }
+    // #4214 forge det API + HEXA_DET env (torch ref-match: API 1st, env escape-hatch).
+    // fast non-det is DEFAULT (torch.use_deterministic_algorithms analogue).
+    let f_det = env_var("HEXA_DET")
+    if len(f_det) > 0 && f_det != "0" {
+        println("  HEXA_DET=" + f_det + "         → deterministic mode ON via env (non-atomic own kernels; eval/verdict safety-pin)")
+    } else {
+        println("  HEXA_DET=(unset)    → fast non-det DEFAULT (atomic split-K own kernels; training mode)")
+    }
+    println("  API: set_deterministic(true/false) — in-process 1st-class surface (torch.use_deterministic_algorithms ref-match)")
+    println("       HEXA_DET env = escape-hatch for shell/CI (CUBLAS_WORKSPACE_CONFIG analogue)")
+    println("")
+    println("3-LAYER LEGEND  (static — doctrine; kept fresh via CLAUDE.md lockstep)")
+    println("  flame      native trainer (hexa-native CLMConvMoE; device-resident, byte-exact)")
+    println("  forge      GPU kernels (own-default GEMM/gemv/attn; cuBLAS opt-in via flags above)")
+    println("  hexa-cuda  release build VARIANT — cuda_available()==1 only with the `-cuda` asset")
+    println("             (stock release = CPU-only; build recipe in CLAUDE.md \"CUDA-enabled hexa build\")")
+    println("")
+    println("MEASURED ON SILICON  (static — do NOT conflate chips)")
+    println("  sm_120 (RTX 5070) = forge shipping parity host:")
+    println("    · TF32 GEMM   ≈ cuBLAS parity (own 1.02~1.10×, bit-exact)")
+    println("    · GEMV / FP64 = own beats cuBLAS (FP64 1.15~1.24×; own==cuBLAS bit-identical default)")
+    println("    · BF16/FP16   ≈ 0.83~0.85× cuBLAS (~15% gap, HW-bound — no sm_120 wgmma)")
+    println("  H100 sm_90 (wgmma) figures are a DIFFERENT chip — do not conflate with sm_120.")
+}
+
 fn cmd_gpu(args) {
     // args = av[3..]  (i.e. starts with the gpu sub-verb)
+    // Bare `hexa gpu` → status (the SSOT view other repos check), not an
+    // error — `hexa gpu help` still prints the full sub-verb usage.
     if len(args) == 0 {
-        println("usage: hexa gpu <fire|disasm|lint> ...")
-        println("  GPU CLI dispatcher (GPU.md §7c)")
-        println("  fire    scp PTX + host C → remote → nvcc + run → pull result.json")
-        println("  disasm  PTX opcode-family histogram (pure hexa scan, no ptxas)")
-        println("  lint    static checks: non-ASCII / sm-target / .reg count")
-        println("  env     HEXA_GPU_DRY=1  print the planned commands, do not execute")
-        exit(1)
+        cmd_gpu_status()
+        return 0
     }
     let sub = args[0]
+    if sub == "status" {
+        cmd_gpu_status()
+        return 0
+    }
     if sub == "disasm" {
         let mut rest = []
         let mut ri = 1
@@ -5712,10 +5861,14 @@ fn cmd_gpu(args) {
         println("hexa gpu — GPU CLI dispatcher (GPU.md §7c)")
         println("")
         println("USAGE")
+        println("  hexa gpu                                (bare) → status (alias of `hexa gpu status`)")
+        println("  hexa gpu status                         GPU / flame / forge / cuda state (SSOT view)")
         println("  hexa gpu fire   <kernel.ptx> <host.c> [target-host]")
         println("  hexa gpu disasm <kernel.ptx>")
         println("  hexa gpu lint   <kernel.ptx>")
         println("")
+        println("  status  PROBED cuda_available()/device_count + own-kernel flag polarity +")
+        println("          static 3-layer legend (flame/forge/hexa-cuda) + measured-on-silicon notes.")
         println("  fire    target-host defaults to 'ubu-2' (RTX 5070, sm_120).")
         println("          Remote workdir = /tmp/hexa_gpu_fire_<basename_noext>")
         println("          Pipeline: ssh-mkdir → scp → nvcc -O2 -arch=sm_90 + run → pull result.json")
@@ -5727,7 +5880,7 @@ fn cmd_gpu(args) {
         println("  HEXA_GPU_DRY=1   print planned commands, do not execute (fire only)")
     } else {
         eprintln("error: unknown gpu sub-verb '" + sub + "'")
-        eprintln("usage: hexa gpu <fire|disasm|lint> ...")
+        eprintln("usage: hexa gpu <status|fire|disasm|lint> ...")
         exit(2)
     }
 }

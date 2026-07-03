@@ -29,9 +29,76 @@ set -euo pipefail
 
 CC="${CC:?CC must be set (clang|gcc)}"
 LIBS="${LIBS:-}"
+# own-start #29 PR-B (C0): drop crt startup objects when the runtime.a on the link CARRIES
+# own _start (#4395: self/runtime.c #ifdef HEXA_ZEROC_OWN_START, folded into runtime.a by
+# stage_resolve_runtime_a when HEXA_ZEROC_OWN_START=1). Without -nostartfiles the $CC link ALSO
+# pulls glibc crt1.o _start -> duplicate _start. Same env gates archive-carry + link-drop.
+# linux x86_64/arm64 ONLY (darwin = Mach-O LC_MAIN). DEFAULT-OFF byte-neutral; flip = PR-C.
+if [ "${HEXA_ZEROC_OWN_START:-0}" = "1" ] && [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
+    _zc_arch="$(uname -m 2>/dev/null)"
+    if [ "$_zc_arch" = "x86_64" ] || [ "$_zc_arch" = "aarch64" ] || [ "$_zc_arch" = "arm64" ]; then
+        LIBS="$LIBS -nostartfiles"
+        echo "stage_build_hexa: HEXA_ZEROC_OWN_START=1 (linux/$_zc_arch) — appending -nostartfiles to final links (own _start from runtime.a)"
+    fi
+fi
 CFLAGS="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
 OUT_HEXA="${OUT_HEXA:-hexa}"
 ROOT="$PWD"
+
+# ── OPT-IN: bootstrap-only -O1 (release-safe, default OFF) ────────────────────
+# HEXA_BOOTSTRAP_O1=1 compiles ONLY the INTERMEDIATE bootstrap transpilers
+# (Stage-0 build/hexa_v2 + Stage-1 build/hexa_module_loader) at -O1 instead of
+# the shipped -O2. The FINAL driver ($OUT_HEXA, Stage 2) and the runtime archive
+# (runtime.a, built upstream by stage_resolve_runtime_a) STAY -O2 — what ships is
+# unchanged. Rationale (compile-speed R6): R4 measured the gcc -O2 compile of the
+# transpiler C (hexa_cc.c, module_loader.c) as the build's #1 cost; -O1 cuts that
+# without touching the SHIPPED binary's optimisation level.
+#
+# BYTEEQ-SAFE HYPOTHESIS: the C the transpiler EMITS (build/stage1/main.c,
+# module_loader.c) is a deterministic function of the .hexa SOURCE, INDEPENDENT
+# of the -O level its OWN binary was compiled at, so the emit sha is identical
+# OFF vs ON (the verification gate). The flag NAME enables the experimental
+# fast-bootstrap CONSTRAINT (polarity: opt-in; UNSET = byte-for-byte the
+# historical -O2-everywhere path).
+CFLAGS_BOOTSTRAP="$CFLAGS"
+if [ "${HEXA_BOOTSTRAP_O1:-0}" = "1" ]; then
+    case " $CFLAGS " in
+        *" -O2 "*|*"-O2 "*|*" -O2"*) CFLAGS_BOOTSTRAP="${CFLAGS//-O2/-O1}" ;;
+        *" -O3 "*|*"-O3 "*|*" -O3"*) CFLAGS_BOOTSTRAP="${CFLAGS//-O3/-O1}" ;;
+        *)                           CFLAGS_BOOTSTRAP="$CFLAGS -O1" ;;
+    esac
+    echo "stage_build_hexa: HEXA_BOOTSTRAP_O1=1 — intermediate transpilers (hexa_v2, module_loader) at -O1 [$CFLAGS_BOOTSTRAP]; final $OUT_HEXA stays -O2 [$CFLAGS]"
+fi
+
+# ── OPT-IN: ccache the per-TU compiles (release-safe, default OFF) ─────────────
+# HEXA_CCACHE=1 SPLITS each combined compile+link in this stage into a
+# ccache-cacheable `-c` compile + a plain link: the intermediate transpilers
+# (hexa_v2 from the hexa_cc.c amalgam, hexa_module_loader from module_loader.c)
+# AND the SHIPPED CLI driver ($OUT_HEXA from the emitted build/stage1/main.c).
+# A combined compile+link is UNCACHEABLE by ccache (measured 0% cacheable), so
+# the naive `CC="ccache gcc"` never hits — the split is what enables the cache.
+# The final main.c (the biggest emitted compile, ~19s of the build) is the main
+# warm-rebuild lever, so it IS split here too (PHASE-2 measures the final ./hexa
+# binary sha OFF==ON-cold==ON-warm to PROVE the shipped binary is byte-identical,
+# not just the emit-sha of the C). byteeq-safe: `gcc -c x.c -o x.o` + `gcc x.o
+# lib -o bin` produces the byte-identical binary as the combined `gcc x.c lib -o
+# bin`, and ccache's same-input=>same-.o guarantee keeps each produced binary
+# byte-identical (so the C the transpilers EMIT is unchanged too — emit-sha
+# invariant, same argument as the R6 bootstrap-O1 round). The final $OUT_HEXA
+# keeps its -O2 $CFLAGS (only the compile is rerouted through the cache; the -O
+# level is unchanged). UNSET => byte-for-byte the historical single-step
+# compile+link on every site.
+_r7_cc_compile_link() { # <incs> <cflags> <src.c> <out> [link inputs...]
+    local incs="$1" cflags="$2" src="$3" out="$4"; shift 4
+    if [ "${HEXA_CCACHE:-0}" = "1" ] && command -v ccache >/dev/null 2>&1; then
+        local obj="${out}.r7cc.o"
+        ccache $CC $cflags $incs -c "$src" -o "$obj"
+        $CC $cflags "$obj" "$@" -o "$out" $LIBS
+        rm -f "$obj"
+    else
+        $CC $cflags $incs "$src" "$@" -o "$out" $LIBS
+    fi
+}
 
 mkdir -p self/native build/stage1
 
@@ -44,15 +111,111 @@ else
     echo "stage_build_hexa: source path — compiling self/runtime.c"
 fi
 
-echo "::group::Stage 0 — compile self-hosted transpiler (hexa_v2)"
-$CC $CFLAGS -I self self/native/hexa_cc.c "$RT_ARG" -o build/hexa_v2 $LIBS
-file build/hexa_v2
-echo "::endgroup::"
+# ── OPT-IN: none-hexa_cc native-seed bootstrap (release-safe, default OFF) ────
+# HEXA_BOOTSTRAP_NATIVE_SEED=<path-to-a-native-hexa-compiler-binary> demonstrates
+# that the cold-start transpiler (build/hexa_v2) can be produced WITHOUT a single
+# `clang self/native/hexa_cc.c`. Instead of clang-compiling the C-transpiled seed,
+# a PRIOR native hexa compiler (a gen3-class binary — itself the link of a
+# HEXA-EMITTED native object, the verified self-host fixpoint produced by
+# tool/build_selfhost.sh / aprime_cc) NATIVE-EMITS the self/main.hexa driver
+# closure to a relocatable object, which is then linked with the runtime archive
+# into build/hexa_v2. No C source of the compiler/transpiler is compiled in this
+# path — "none hexa_cc" achieved as an opt-in demonstration.
+#
+# WHY THE C-SEED REMAINS THE DEFAULT (release integrity, NOT a polarity violation):
+# the default `clang hexa_cc.c` path rebuilds gen-0 from the committed/regenerated
+# C seed on EVERY build, which is what detects seed-drift (a divergence between the
+# C seed and the .hexa SSOT). A default-flip to the native seed awaits a seed-drift
+# guard that catches that divergence by another mechanism. Until then, native-seed
+# is the experimental proof-of-achievability, gated behind this flag. The flag
+# NAME enables the experimental/constraint path (polarity: the constraint is the
+# opt-in), and when UNSET behaviour is BYTE-FOR-BYTE identical to the historical
+# clang path.
+NATIVE_SEED="${HEXA_BOOTSTRAP_NATIVE_SEED:-}"
+if [ -n "$NATIVE_SEED" ] && [ -x "$NATIVE_SEED" ]; then
+    echo "::group::Stage 0 — none-hexa_cc NATIVE-SEED bootstrap (hexa_v2 via $NATIVE_SEED)"
+    echo "stage_build_hexa: HEXA_BOOTSTRAP_NATIVE_SEED set — building hexa_v2 by"
+    echo "                  NATIVE-EMITTING self/main.hexa via a prior native compiler"
+    echo "                  (NO clang of self/native/hexa_cc.c on this path)."
+    # Derive the native --target triple from the C $CC target / uname, so the
+    # emitted object matches this host's ABI (Mach-O arm64 vs ELF x86_64/arm64).
+    case "$(uname -sm 2>/dev/null)" in
+        "Darwin arm64")  NS_TARGET="arm64-apple-darwin" ;;
+        "Linux x86_64")  NS_TARGET="x86_64-linux-gnu" ;;
+        "Linux aarch64") NS_TARGET="aarch64-linux-gnu" ;;
+        *)               NS_TARGET="${HEXA_BOOTSTRAP_NATIVE_TARGET:-x86_64-linux-gnu}" ;;
+    esac
+    [ -n "${HEXA_BOOTSTRAP_NATIVE_TARGET:-}" ] && NS_TARGET="$HEXA_BOOTSTRAP_NATIVE_TARGET"
+    NS_WORK="build/native_seed"; mkdir -p "$NS_WORK"
+    # Flatten the self/main.hexa driver closure (the SAME source hexa_cc.c is the
+    # C-transpiled form of). Atlas embed stubbed (empty ATLAS_* arrays) — the
+    # transpiler/driver does not need the embedded atlas literal to bootstrap.
+    NS_FLAT="$NS_WORK/self-flat.hexa"
+    SELF_FLAT_OUT="$NS_FLAT" SELF_FLAT_ENTRY="self/main.hexa" python3 - <<'PYFLAT'
+import re, os
+flat=os.environ["SELF_FLAT_OUT"]; entry=os.environ["SELF_FLAT_ENTRY"]
+seen=[]; sset=set()
+STUB=('pub let ATLAS_HASH: string = "fixture"\n'
+      'pub let ATLAS_SOURCE_COUNT: i64 = 0\n'
+      'pub let ATLAS_GENERATED_AT: string = "fixture"\n'
+      + ''.join(f'pub let ATLAS_{k}_NODES: [AtlasNode] = []\n' for k in "PCLEFRSXQ"))
+def walk(f):
+    f=os.path.normpath(f)
+    if f in sset or not os.path.exists(f): return
+    sset.add(f); d=os.path.dirname(f)
+    txt=open(f,encoding="utf-8",errors="replace").read(); deps=[]
+    for m in re.finditer(r'^\s*import\s+"([^"]+)"',txt,re.M):
+        deps.append(os.path.normpath(os.path.join(d,m.group(1))))
+    for m in re.finditer(r'^\s*use\s+"([^"]+)"',txt,re.M):
+        p=m.group(1)
+        if not p.endswith(".hexa"): p+=".hexa"
+        for c in [p,os.path.join(d,p),os.path.join(d,os.path.basename(p))]:
+            if os.path.exists(os.path.normpath(c)): deps.append(os.path.normpath(c)); break
+    for x in deps: walk(x)
+    seen.append(f)
+walk(entry)
+out=[]
+for f in seen:
+    if f.endswith("embedded.gen.hexa"): out.append("// STUB\n"+STUB); continue
+    t=open(f,encoding="utf-8",errors="replace").read()
+    t=re.sub(r'^\s*(import|use)\s+"[^"]*".*$','',t,flags=re.M)
+    out.append("// ==== "+f+" ====\n"+t)
+open(flat,"w").write("\n".join(out))
+print("[native-seed] flatten:",len(seen),"files",("\n".join(out)).count(chr(10))+1,"lines")
+PYFLAT
+    [ -s "$NS_FLAT" ] || { echo "stage_build_hexa: native-seed flatten produced no $NS_FLAT" >&2; exit 1; }
+    # The driver needs a leading driver token (argv normalization) — _drv.hexa.
+    touch _drv.hexa
+    NS_OBJ="$NS_WORK/hexa_v2_seed.o"
+    NS_NOATLAS="$NS_WORK/noatlas"; mkdir -p "$NS_NOATLAS"
+    echo "stage_build_hexa: native-emit $NS_FLAT -> $NS_OBJ (target=$NS_TARGET)"
+    HEXA_ATLAS_EMBED="$NS_NOATLAS" "$NATIVE_SEED" _drv.hexa --emit=obj \
+        --target="$NS_TARGET" --ignore-errors -o "$NS_OBJ" "$NS_FLAT" \
+        > "$NS_WORK/emit.log" 2>&1 || { echo "stage_build_hexa: native-emit FAILED" >&2; tail -8 "$NS_WORK/emit.log" >&2; exit 1; }
+    [ -s "$NS_OBJ" ] || { echo "stage_build_hexa: native-emit produced no object" >&2; tail -8 "$NS_WORK/emit.log" >&2; exit 1; }
+    NS_MISS=$(grep -c "ENCODE-MISS" "$NS_WORK/emit.log" 2>/dev/null || echo 0)
+    echo "stage_build_hexa: native-seed object = $(wc -c < "$NS_OBJ") bytes (ENCODE-MISS=$NS_MISS)"
+    # Link the hexa-emitted driver object with the runtime + crt into hexa_v2.
+    # $RT_ARG is the runtime ARCHIVE (HEXA_PREBUILT_RUNTIME) in the release path;
+    # the host C driver ($CC) is used ONLY as the LINKER here (crt0/libc glue) —
+    # it does NOT compile any hexa/compiler C source. This keeps the link portable
+    # across Mach-O/ELF without re-implementing hexa_ld inside this stage.
+    $CC $CFLAGS_BOOTSTRAP -I self "$NS_OBJ" "$RT_ARG" -o build/hexa_v2 $LIBS \
+        || { echo "stage_build_hexa: native-seed link FAILED" >&2; exit 1; }
+    file build/hexa_v2
+    echo "stage_build_hexa: hexa_v2 built from a HEXA-EMITTED object — none-hexa_cc OK"
+    echo "::endgroup::"
+else
+    echo "::group::Stage 0 — compile self-hosted transpiler (hexa_v2)"
+    _r7_cc_compile_link "-I self" "$CFLAGS_BOOTSTRAP" self/native/hexa_cc.c build/hexa_v2 "$RT_ARG"
+    file build/hexa_v2
+    echo "::endgroup::"
+fi
 
 echo "::group::Stage 1 — flatten + transpile self/main.hexa -> build/stage1/main.c"
 export HEXA_LANG="$ROOT"
 ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
-$CC $CFLAGS -I self build/stage1/module_loader.c "$RT_ARG" -o build/hexa_module_loader $LIBS
+_r7_cc_compile_link "-I self" "$CFLAGS_BOOTSTRAP" build/stage1/module_loader.c build/hexa_module_loader "$RT_ARG"
 export HEXA_MODULE_LOADER="$ROOT/build/hexa_module_loader"
 ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
 # Transpiling the large flattened main_expanded.hexa (~11k lines) drives deep
@@ -66,6 +229,6 @@ export HEXA_MODULE_LOADER="$ROOT/build/hexa_module_loader"
 echo "::endgroup::"
 
 echo "::group::Stage 2 — compile CLI driver ($OUT_HEXA)"
-$CC $CFLAGS -I self build/stage1/main.c "$RT_ARG" -o "$OUT_HEXA" $LIBS
+_r7_cc_compile_link "-I self" "$CFLAGS" build/stage1/main.c "$OUT_HEXA" "$RT_ARG"
 file "$OUT_HEXA"
 echo "::endgroup::"

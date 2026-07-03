@@ -254,6 +254,69 @@ fn _vast_strip_to_json(s: str) -> str {
     return s
 }
 
+// ── rent-path watchdog (silent-hang fix) ──────────────────────────────
+// The rent/create path shells out to the `vastai` CLI with a bare exec()
+// that has NO walltime bound. When the vast API stalls (a stale offer that
+// rotated to rentable=false, a non-2xx create, a network hang) the exec
+// BLOCKS FOREVER — the rent wrapper looks hung while surfacing nothing,
+// even though `cloud api vast PUT asks/<offer>/` (which goes through
+// _api_method_curl's `--max-time`) returns the same error instantly. This
+// is the 2026-06-23 8×A100 silent-hang incident. The fix is to give every
+// rent-path vastai shellout the SAME bound: a `timeout <sec>` prefix (the
+// POSIX timeout(1) utility, exit 124 on expiry → falls through to the
+// existing fail-loud parse path). Bound is HEXA_VAST_EXEC_TIMEOUT seconds
+// (default 120 — a real create returns in a few s; 120s is pure stall
+// insurance), 0/empty disables. Prefix is "" when timeout(1) is absent so
+// the legacy unbounded behaviour is preserved (never breaks a working box).
+fn _vast_exec_timeout_sec() -> int {
+    let env_t = env_var("HEXA_VAST_EXEC_TIMEOUT")
+    if len(env_t) == 0 {
+        return 120
+    }
+    let t = to_int(env_t.trim())
+    if t < 0 {
+        return 0
+    }
+    return t
+}
+
+// _vast_timeout_prefix — "timeout <sec> " when timeout(1) is on PATH and the
+// bound is > 0, else "" (legacy unbounded). Memo-free; the `command -v`
+// probe is a cheap local builtin lookup. macOS ships `timeout` via coreutils
+// (gtimeout) — both names are probed so the watchdog still arms there.
+fn _vast_timeout_prefix() -> str {
+    let sec = _vast_exec_timeout_sec()
+    if sec <= 0 {
+        return ""
+    }
+    if len(exec("command -v timeout 2>/dev/null").trim()) > 0 {
+        return "timeout " + to_string(sec) + " "
+    }
+    if len(exec("command -v gtimeout 2>/dev/null").trim()) > 0 {
+        return "gtimeout " + to_string(sec) + " "
+    }
+    return ""
+}
+
+// _vast_exec_diag — render a vastai shellout's raw output for a fail-loud
+// message. Surfaces the reply VERBATIM (full, not truncated) so a provider
+// error / non-2xx body is visible — mirroring the `cloud api` passthrough
+// that always returned the error instantly. Empty output means the process
+// produced nothing, which on the bounded path is almost always the watchdog
+// SIGTERM (exit 124) — so we name that as the likely cause and the bound,
+// turning a former silent hang into an explicit "timed out after Ns" line.
+fn _vast_exec_diag(out: str) -> str {
+    let trimmed = out.trim()
+    if len(trimmed) == 0 {
+        let sec = _vast_exec_timeout_sec()
+        if sec > 0 {
+            return "(no output — the " + to_string(sec) + "s watchdog likely fired: the vastai call stalled/timed out. Raise HEXA_VAST_EXEC_TIMEOUT or re-pick an offer.)"
+        }
+        return "(no output from vastai)"
+    }
+    return trimmed
+}
+
 // ── offer search (inbox: vast-offer-pool-verified-filter-default.md) ──
 
 // _vast_default_filters — the demiurge-empirical default predicates that
@@ -367,8 +430,28 @@ fn _vast_all_digits(s: str) -> int {
     return 1
 }
 
+// _vast_lc — ASCII-lowercase a short token (A-Z → a-z), dependency-free
+// char-walk to match this module's style. Used to accept `CPU`/`None` as well
+// as `cpu`/`none` for the `--gpu` CPU selector.
+fn _vast_lc(s: str) -> str {
+    let mut out = ""
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        let cc = char_code(c)
+        if cc >= 65 && cc <= 90 {
+            out = out + chr(cc + 32)
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out
+}
+
 // vast_gpu_predicate — turn a `--gpu` value into a vast query predicate.
 //   empty            -> "" (no filter)
+//   cpu / none       -> num_gpus=0 (CPU-only pool; GPU pool is the default)
 //   bare count (N)   -> num_gpus>=N  (the `--gpu N` usage reading; a digit-only
 //                       value is a COUNT, not a SKU name — never `gpu_name=N`)
 //   already exact    -> gpu_name=<v> (contains `_`, e.g. H100_NVL)
@@ -380,6 +463,18 @@ fn _vast_all_digits(s: str) -> int {
 pub fn vast_gpu_predicate(gpu: str) -> str {
     if len(gpu) == 0 {
         return ""
+    }
+    // CPU-only selector (`--gpu cpu` / `--gpu none`, ING #30-vast). vast's
+    // `search offers` returns GPU machines even with NO num_gpus constraint —
+    // MEASURED: `rentable=true verified=true reliability>=0.95` (the hexa
+    // default filter) surfaced 64 offers, ALL num_gpus>0, ZERO CPU-only; the
+    // CPU pool (cores 32-512, ~$0.011/hr) appears ONLY with an explicit
+    // `num_gpus=0`. Without this, `--gpu cpu` fell through to `gpu_name=cpu`
+    // (a GPU literally named "cpu") → 0 offers → "no matching offers". Map the
+    // CPU selector to `num_gpus=0` so the CPU pool is actually searched.
+    let glc = _vast_lc(gpu.trim())
+    if glc == "cpu" || glc == "none" {
+        return "num_gpus=0"
     }
     if _vast_all_digits(gpu) == 1 {
         return "num_gpus>=" + gpu
@@ -480,12 +575,12 @@ fn vast_search_offers(query: str, verified_only: int) -> VastOffer {
         return _vast_fail_offer("vastai not found (set VASTAI_DISABLE=1 to silence)")
     }
     let eff = _vast_build_query(query, verified_only)
-    let cmd = _shq_local(vc) + " search offers " + _shq_local(eff)
+    let cmd = _vast_timeout_prefix() + _shq_local(vc) + " search offers " + _shq_local(eff)
         + " -n --raw 2>&1"
     let out = exec(cmd)
     let ids = _vast_collect_offer_ids(out)
     if len(ids) == 0 {
-        return _vast_fail_offer("search offers: no matching offers — " + out.substring(0, 200))
+        return _vast_fail_offer("search offers: no matching offers — " + _vast_exec_diag(out))
     }
     // Claim-lock: walk the candidate ids and pick the first one not
     // already claimed by a sibling rent on this host (best-effort, see
@@ -499,6 +594,85 @@ fn vast_search_offers(query: str, verified_only: int) -> VastOffer {
     // Lock unavailable / all claimed → fall back to the first id so a
     // single-track caller (no siblings) is never blocked.
     return VastOffer { ok: 1, offer_id: ids[0], dph: _vast_offer_dph(out, ids[0]), message: "search offers — " + to_string(len(ids)) + " offers (unlocked pick)" }
+}
+
+// _vast_field_str — read `key` off a parsed offer object as a plain string,
+// regardless of whether vast's --raw JSON typed it int / float / string. ""
+// when the field is absent. Used only by the SEARCH-ONLY table printer below
+// (never binds a claim / rent). Mirrors _vast_offer_dph's type-agnostic read.
+fn _vast_field_str(elem: any, key: str) -> str {
+    let v = json_object_get(elem, key)
+    let t = type_of(v)
+    if t == "int" || t == "float" || t == "string" {
+        return to_string(v)
+    }
+    return ""
+}
+
+// vast_list_offers — COST-SAFE dry-run of `cloud rent vast` (ING #34-(A)). Runs
+// the SAME `vastai search offers '<query>' -n --raw` the rent path would run,
+// then PRINTS the matching offers (id · $/hr · gpu · count · RAM · disk · geo ·
+// reliability) and RETURNS the count — creating NOTHING, claiming NOTHING,
+// billing NOTHING. This is the missing "list offers without provisioning"
+// surface: before this, verifying "do offers exist?" cost a real rental (the
+// silently-ignored `--dry-run` → picked-offer → created-instance trap). Verb-
+// style + reference-match: `terraform plan` / `--dry-run` — show what WOULD be
+// rented, change nothing. `verified_only` matches the rent default (1). Returns
+// the offer count (0 = none matched / vastai unavailable — no offers listed).
+fn vast_list_offers(query: str, verified_only: int) -> int {
+    let vc = _vastai_path()
+    if len(vc) == 0 {
+        println("[cloud] search vast: vastai not found (set VASTAI_DISABLE=1 to silence) — no offers listed")
+        return 0
+    }
+    let eff = _vast_build_query(query, verified_only)
+    println("[cloud] search vast (offers only · NO rent · NO billing) — query: " + eff)
+    let cmd = _vast_timeout_prefix() + _shq_local(vc) + " search offers " + _shq_local(eff)
+        + " -n --raw 2>&1"
+    let out = exec(cmd)
+    let parsed = json_parse(_vast_strip_to_json(out))
+    if type_of(parsed) != "array" || len(parsed) == 0 {
+        println("[cloud] search vast: no matching offers — " + _vast_exec_diag(out))
+        return 0
+    }
+    println("  OFFER-ID    $/HR      GPU                 N   RAM(GB)  DISK(GB)  RELIAB  GEO")
+    let mut i = 0
+    while i < len(parsed) {
+        let e = parsed[i]
+        let id_s = _vast_field_str(e, "id")
+        let dph = _vast_field_str(e, "dph_total")
+        let gpu = _vast_field_str(e, "gpu_name")
+        let ngpu = _vast_field_str(e, "num_gpus")
+        let ram = _vast_field_str(e, "cpu_ram")
+        let disk = _vast_field_str(e, "disk_space")
+        let rel = _vast_field_str(e, "reliability2")
+        let geo = _vast_field_str(e, "geolocation")
+        println("  " + _vast_pad(id_s, 11) + " " + _vast_pad("$" + dph, 9) + " "
+            + _vast_pad(gpu, 19) + " " + _vast_pad(ngpu, 3) + " " + _vast_pad(ram, 8) + " "
+            + _vast_pad(disk, 9) + " " + _vast_pad(rel, 7) + " " + geo)
+        i = i + 1
+    }
+    println("[cloud] search vast: " + to_string(len(parsed)) + " offer(s) — none rented. To rent one: cloud rent vast --offer <OFFER-ID> [--max-dph USD]")
+    return len(parsed)
+}
+
+// _vast_pad — right-pad `s` with spaces to `w` cols for the search-only table
+// (truncates an over-long field so columns stay aligned). Table-only helper.
+fn _vast_pad(s: str, w: int) -> str {
+    let n = len(s)
+    if n >= w {
+        if w <= 1 {
+            return s
+        }
+        return s.substring(0, w - 1) + " "
+    }
+    let mut out = s
+    let mut i = n
+    while i < w {
+        out = out + " "
+        i = i + 1
+    }
+    return out
 }
 
 // vast_offer_by_id — PIN a specific offer id (the `--offer <id>` rent path).
@@ -517,7 +691,12 @@ fn vast_offer_by_id(offer_id: str) -> VastOffer {
     if len(vc) == 0 {
         return _vast_fail_offer("vastai not found (set VASTAI_DISABLE=1 to silence)")
     }
-    let cmd = _shq_local(vc) + " search offers " + _shq_local("id=" + offer_id)
+    // `rentable=true` is ANDed with the id so an offer that is still LISTED
+    // but has rotated to non-rentable (the silent-hang root cause: it passes
+    // a bare `id=` confirm, then `vastai create` stalls/non-2xx) is rejected
+    // HERE, fail-loud, before any billing create is attempted.
+    let cmd = _vast_timeout_prefix() + _shq_local(vc) + " search offers "
+        + _shq_local("id=" + offer_id) + " " + _shq_local("rentable=true")
         + " -n --raw 2>&1"
     let out = exec(cmd)
     let ids = _vast_collect_offer_ids(out)
@@ -532,7 +711,7 @@ fn vast_offer_by_id(offer_id: str) -> VastOffer {
         i = i + 1
     }
     if found == 0 {
-        return _vast_fail_offer("offer " + offer_id + " not listed / not rentable (rotated away?) — " + out.substring(0, 200))
+        return _vast_fail_offer("offer " + offer_id + " not listed / not rentable (rotated away or rentable=false?) — re-pick with `cloud rent vast --query ...` or `cloud api vast GET 'bundles?q=...'`. vastai said: " + _vast_exec_diag(out))
     }
     return VastOffer { ok: 1, offer_id: offer_id, dph: _vast_offer_dph(out, offer_id), message: "offer pinned " + offer_id }
 }
@@ -857,7 +1036,11 @@ fn vast_create_labeled(offer_id: str, image: str, disk_gb: int, label: str) -> V
     if len(onstart) > 0 {
         onstart_arg = " --onstart-cmd " + _shq_local(onstart)
     }
-    let cmd = _shq_local(vc) + " create instance " + _shq_local(offer_id)
+    // Watchdog prefix: a stalled `vastai create` (vast API hang on a stale
+    // offer) must NOT block forever — `timeout` SIGTERMs at the bound (exit
+    // 124, empty/partial output) and we fall through to the fail-loud path
+    // below rather than silently hanging the whole rent (silent-hang fix).
+    let cmd = _vast_timeout_prefix() + _shq_local(vc) + " create instance " + _shq_local(offer_id)
         + " --image " + _shq_local(image)
         + " --disk " + _shq_local(to_string(disk_gb))
         + label_arg
@@ -880,7 +1063,12 @@ fn vast_create_labeled(offer_id: str, image: str, disk_gb: int, label: str) -> V
             return VastInstance { ok: 1, instance_id: iid2, message: "created (cli) on offer " + offer_id }
         }
     }
-    return _vast_fail_instance("create (cli) failed: " + out.substring(0, 200))
+    // No new_contract → create did NOT succeed. Surface the provider's reply
+    // VERBATIM (not a 200-char truncation) so a `success:false` / non-2xx /
+    // stale-offer / timeout reason is visible immediately, exactly like the
+    // `cloud api` passthrough. Empty output ⇒ the watchdog likely fired.
+    return _vast_fail_instance("create (cli) FAILED on offer " + offer_id
+        + " — no instance was created. vastai reply: " + _vast_exec_diag(out))
 }
 
 // ── teardown — THE CRITICAL FIX ───────────────────────────────────────
@@ -1068,6 +1256,20 @@ fn vast_strip_to_json_TEST(s: str) -> str {
     return _vast_strip_to_json(s)
 }
 
+// vast_exec_diag_TEST — public alias for the fail-loud rent diagnostic so the
+// silent-hang fix (empty output ⇒ name the watchdog; non-empty ⇒ surface the
+// reply verbatim) can be unit-tested without a live vastai stall.
+fn vast_exec_diag_TEST(out: str) -> str {
+    return _vast_exec_diag(out)
+}
+
+// vast_timeout_prefix_TEST — public alias for the rent-path watchdog prefix
+// builder so the bound resolution (env override, 0/disable, timeout(1) probe)
+// is testable.
+fn vast_timeout_prefix_TEST() -> str {
+    return _vast_timeout_prefix()
+}
+
 // vast_vastai_resolve_TEST — public alias for the PURE precedence resolver so
 // the ordered chain (override → venv_a → venv_b → $HOME/bin → PATH → python -m)
 // can be unit-tested by injecting each rung's candidate, with no live HOME /
@@ -1099,23 +1301,21 @@ fn vast_reboot_cmd_TEST(vc: str, iid: str) -> str {
     return _shq_local(vc) + " reboot instance " + _shq_local(iid) + " --raw 2>&1"
 }
 
-// _vast_instance_still_live — `vastai show instance <iid> --raw`; return 1
-// iff the instance still reports a running/loading/starting status. A
-// missing instance (empty / non-object / not-found) → 0 (gone). Returns 0
-// when vastai is unavailable so unit tests do not spuriously fail.
+// _vast_instance_still_live — return 1 iff the instance is still reported in
+// a live state (running/loading/starting/created). Used by vast_destroy's
+// post-destroy cross-verify. Reads via the crash-immune PLURAL list form
+// (vast_instance_status) — the singular `show instance <id>` python CLI
+// throws a traceback on a just-destroyed / start_date=None contract, which
+// the old code swallowed as "non-object → gone" (correct-by-accident) but
+// which leaked raw to other callers. A "gone"/terminal/"unknown" status → 0
+// (not live). vastai-unavailable → 0 so unit tests never spuriously fail.
 fn _vast_instance_still_live(iid: str) -> int {
     let vc = _vastai_path()
     if len(vc) == 0 {
         return 0
     }
     let _settle = exec("sleep 3 2>/dev/null || sleep 1")
-    let cmd = _shq_local(vc) + " show instance " + _shq_local(iid) + " --raw 2>&1"
-    let out = exec(cmd)
-    let parsed = json_parse(_vast_strip_to_json(out))
-    if type_of(parsed) != "map" {
-        return 0
-    }
-    let st = json_object_get_str(parsed, "actual_status", "")
+    let st = vast_instance_status(iid)
     if st == "running" {
         return 1
     }
@@ -1125,11 +1325,99 @@ fn _vast_instance_still_live(iid: str) -> int {
     if st == "starting" {
         return 1
     }
-    let ist = json_object_get_str(parsed, "intended_status", "")
-    if ist == "running" {
+    if st == "created" {
         return 1
     }
     return 0
+}
+
+// ── crash-immune instance-status (Bug 1/2: GONE cross-verify) ─────────
+// The singular `vastai show instance <id> --raw` python CLI CRASHES with a
+// traceback when the instance is GONE (host failed to bring it up → vast
+// auto-removed it) OR freshly-created with start_date=None (#1239(2)). That
+// traceback is exactly the `hexa cloud ssh-port <gone-id>` python-traceback
+// the user hit (Bug 2), and the same singular path is why a GONE pod was
+// never detected during the rent ssh-wait (Bug 1 — the rent just burned the
+// whole --max-wait-sec budget waiting for an ssh endpoint that can never
+// appear). The robust fix is to read the status from the PLURAL `show
+// instances --raw` list (an ARRAY — the vast CLI does NOT crash on it, same
+// reason vast_direct_endpoint already uses the plural form), which also lets
+// us tell GONE (id absent from the list) apart from not-yet-ready.
+
+// vast_parse_instance_status — PURE: raw `show instances --raw` JSON (ARRAY)
+// + an instance id → the live actual_status string for that id, or "gone"
+// when the id is NOT in the list at all (GONE / never-provisioned / removed).
+// A present-but-unstatused row yields its intended_status, else "unknown" so
+// a live-but-statusless row is never misread as GONE. Empty reply → "" (keep
+// waiting); a non-empty non-array (an error body / python traceback) → also
+// "unknown" so a transient API hiccup is NOT mistaken for a destroyed pod.
+pub fn vast_parse_instance_status(raw: str, iid: str) -> str {
+    let parsed = json_parse(_vast_strip_to_json(raw))
+    if type_of(parsed) != "array" {
+        // Could not read the list — do NOT claim GONE on a transient/garbled
+        // reply (that would tear down a healthy pod). "unknown" = keep waiting.
+        if len(raw.trim()) == 0 {
+            return ""
+        }
+        return "unknown"
+    }
+    let mut i = 0
+    while i < len(parsed) {
+        let inst = parsed[i]
+        let id_v = json_object_get(inst, "id")
+        let mut id_s = ""
+        if type_of(id_v) == "int" {
+            id_s = to_string(id_v)
+        }
+        if type_of(id_v) == "string" {
+            id_s = to_string(id_v)
+        }
+        if id_s == iid {
+            let st = json_object_get_str(inst, "actual_status", "")
+            if len(st) > 0 {
+                return st
+            }
+            let ist = json_object_get_str(inst, "intended_status", "")
+            if len(ist) > 0 {
+                return ist
+            }
+            return "unknown"
+        }
+        i = i + 1
+    }
+    // id not present in the instances list → the pod is GONE.
+    return "gone"
+}
+
+// vast_status_is_gone — PURE: does a status string mean the pod is no longer
+// alive (absent from the list, or in a terminal/exited state)? "unknown" and
+// the live states (running/loading/starting/created) are NOT gone.
+pub fn vast_status_is_gone(st: str) -> int {
+    if st == "gone" {
+        return 1
+    }
+    if st == "exited" {
+        return 1
+    }
+    if st == "stopped" {
+        return 1
+    }
+    if st == "error" {
+        return 1
+    }
+    return 0
+}
+
+// vast_instance_status — shell the PLURAL list form (crash-immune) → the live
+// status of `iid` via vast_parse_instance_status. "unknown" when vastai is
+// unavailable (so unit tests / a missing CLI never spuriously declare GONE).
+fn vast_instance_status(iid: str) -> str {
+    let vc = _vastai_path()
+    if len(vc) == 0 {
+        return "unknown"
+    }
+    let out = exec(_shq_local(vc) + " show instances --raw 2>&1")
+    return vast_parse_instance_status(out, iid)
 }
 
 // ── instance list ─────────────────────────────────────────────────────
@@ -1189,10 +1477,54 @@ fn _vast_fail_ssh(msg: str) -> VastSsh {
     return VastSsh { ok: 0, host: "", port: "", message: msg }
 }
 
-// vast_ssh_endpoint — one-shot `show instance <iid> --raw` → ssh_host /
-// ssh_port. ok=0 (not yet mapped) when either field is absent, when the
-// JSON is not an object, or when vastai is unavailable. Does NOT wait —
-// callers poll via vast_wait_ssh.
+// vast_parse_ssh_endpoint — PURE: raw `show instances --raw` JSON (ARRAY) +
+// an instance id → ssh_host / ssh_port for that id. ok=0 with a SPECIFIC
+// message: "GONE" when the id is absent from the list (so a `ssh-port` /
+// resolve on a destroyed pod gets a clean "instance not found" line, NOT a
+// raw python traceback — Bug 2), "not yet mapped" when present but the ssh
+// fields aren't populated yet (still booting). Non-array JSON → graceful fail.
+pub fn vast_parse_ssh_endpoint(raw: str, iid: str) -> VastSsh {
+    let parsed = json_parse(_vast_strip_to_json(raw))
+    if type_of(parsed) != "array" {
+        return _vast_fail_ssh("ssh_endpoint: could not read instances list — " + raw.substring(0, 160))
+    }
+    let mut i = 0
+    while i < len(parsed) {
+        let inst = parsed[i]
+        let id_v = json_object_get(inst, "id")
+        let mut id_s = ""
+        if type_of(id_v) == "int" {
+            id_s = to_string(id_v)
+        }
+        if type_of(id_v) == "string" {
+            id_s = to_string(id_v)
+        }
+        if id_s == iid {
+            let host = json_object_get_str(inst, "ssh_host", "")
+            // ssh_port may parse as int or string depending on vastai version.
+            let mut port = json_object_get_str(inst, "ssh_port", "")
+            if len(port) == 0 {
+                let pv = json_object_get(inst, "ssh_port")
+                if type_of(pv) == "int" {
+                    port = to_string(pv)
+                }
+            }
+            if len(host) == 0 || len(port) == 0 {
+                return _vast_fail_ssh("ssh_endpoint: ssh_host/ssh_port not yet mapped for " + iid)
+            }
+            return VastSsh { ok: 1, host: host, port: port, message: "ssh endpoint " + host + ":" + port }
+        }
+        i = i + 1
+    }
+    return _vast_fail_ssh("ssh_endpoint: instance " + iid + " not found (GONE — destroyed / never provisioned)")
+}
+
+// vast_ssh_endpoint — `show instances --raw` (PLURAL — crash-immune; the
+// singular `show instance <id>` python CLI throws an unhandled traceback when
+// the instance is GONE or has start_date=None, #1239(2)/Bug 2) → ssh_host /
+// ssh_port via vast_parse_ssh_endpoint. ok=0 (with a GONE-vs-not-yet-mapped
+// message) when the fields are absent / the id is gone / vastai is
+// unavailable. Does NOT wait — callers poll via vast_wait_ssh.
 fn vast_ssh_endpoint(iid: str) -> VastSsh {
     if len(iid) == 0 {
         return _vast_fail_ssh("ssh_endpoint: empty instance id")
@@ -1201,25 +1533,8 @@ fn vast_ssh_endpoint(iid: str) -> VastSsh {
     if len(vc) == 0 {
         return _vast_fail_ssh("vastai not found (set VASTAI_DISABLE=1 to silence)")
     }
-    let cmd = _shq_local(vc) + " show instance " + _shq_local(iid) + " --raw 2>&1"
-    let out = exec(cmd)
-    let parsed = json_parse(_vast_strip_to_json(out))
-    if type_of(parsed) != "map" {
-        return _vast_fail_ssh("ssh_endpoint: non-object JSON — " + out.substring(0, 160))
-    }
-    let host = json_object_get_str(parsed, "ssh_host", "")
-    // ssh_port may parse as int or string depending on vastai version.
-    let mut port = json_object_get_str(parsed, "ssh_port", "")
-    if len(port) == 0 {
-        let pv = json_object_get(parsed, "ssh_port")
-        if type_of(pv) == "int" {
-            port = to_string(pv)
-        }
-    }
-    if len(host) == 0 || len(port) == 0 {
-        return _vast_fail_ssh("ssh_endpoint: ssh_host/ssh_port not yet mapped for " + iid)
-    }
-    return VastSsh { ok: 1, host: host, port: port, message: "ssh endpoint " + host + ":" + port }
+    let out = exec(_shq_local(vc) + " show instances --raw 2>&1")
+    return vast_parse_ssh_endpoint(out, iid)
 }
 
 // vast_ssh_opts_id — canonical ssh_opts for an ephemeral vast.ai instance,
@@ -1291,6 +1606,87 @@ fn vast_wait_ssh_id(iid: str, max_tries: int, sleep_each_sec: int, identity: str
 // because its probe could not present the non-default key.
 fn vast_wait_ssh(iid: str, max_tries: int, sleep_each_sec: int) -> VastSsh {
     return vast_wait_ssh_id(iid, max_tries, sleep_each_sec, "")
+}
+
+// ── GONE-aware rent readiness gate (Bug 1: created ≠ live) ────────────
+// A vast `create` returning a new_contract id does NOT mean the host actually
+// brought the instance up — the host can fail to provision and vast then
+// auto-removes the contract (the "created (registered) but immediately GONE"
+// incident). The plain vast_wait_ssh_id can't tell that apart from a slow
+// boot, so it burns the WHOLE --max-wait-sec budget on a pod that will never
+// come up. vast_wait_ssh_status cross-verifies the instance's actual_status
+// every tick (via the crash-immune plural list) and BREAKS EARLY with gone=1
+// the moment the contract leaves the list / goes terminal — so the rent path
+// can FAIL LOUD + roll back immediately instead of after a 600s false wait.
+// This is the symmetric dual of ING#34 (2)'s "rm not-found ≠ deleted →
+// provider get cross-check": here "created ≠ live → provider actual_status
+// cross-check". A "gone" verdict is only declared from an authoritative
+// list read (id absent / terminal) — never from "unknown" (transient API
+// hiccup) — so a healthy-but-slow pod is never torn down by mistake.
+
+struct VastReady {
+    ok:      int,   // 1 iff ssh handshaked (host/port valid)
+    gone:    int,   // 1 iff the instance left the provider (LOUD-FAIL + rollback)
+    host:    str,
+    port:    str,
+    status:  str,   // last observed actual_status (diag)
+    message: str
+}
+
+fn vast_wait_ssh_status(iid: str, max_tries: int, sleep_each_sec: int, identity: str) -> VastReady {
+    let mut i = 0
+    let sleep_cmd = "sleep " + to_string(sleep_each_sec)
+    let mut last_status = "unknown"
+    // Debounce: a just-created contract can take a few seconds to PROPAGATE
+    // into `show instances`, so a single "gone" on the very first tick is NOT
+    // authoritative (eventual consistency). Require TWO consecutive gone reads
+    // before declaring GONE — UNLESS we already saw the instance present (a
+    // present→absent transition IS authoritative and breaks immediately).
+    let mut gone_streak = 0
+    let mut ever_seen = false
+    while i < max_tries {
+        // (a) provider liveness cross-check FIRST — a GONE contract means the
+        //     ssh endpoint can NEVER appear, so stop waiting immediately.
+        let st = vast_instance_status(iid)
+        if len(st) > 0 {
+            last_status = st
+        }
+        if vast_status_is_gone(st) == 1 {
+            gone_streak = gone_streak + 1
+            // Authoritative GONE: either we watched it leave (present→absent),
+            // or it has been absent for 2+ consecutive ticks (not just slow to
+            // propagate). A first-tick blip alone is not enough.
+            if ever_seen || gone_streak >= 2 {
+                return VastReady { ok: 0, gone: 1, host: "", port: "",
+                    status: st,
+                    message: "instance " + iid + " is " + st
+                        + " — the host never brought it up (created ≠ live)" }
+            }
+        } else {
+            gone_streak = 0
+            // A non-gone, non-"unknown" status means the contract is really in
+            // the list (running/loading/starting/created) — mark it seen so a
+            // LATER disappearance is treated as authoritative.
+            if st != "unknown" && len(st) > 0 {
+                ever_seen = true
+            }
+        }
+        // (b) ssh-ready probe (the success path).
+        let e = vast_ssh_endpoint(iid)
+        if e.ok == 1 {
+            let probe = cloud_run_opts("root@" + e.host, vast_ssh_opts_id(e.port, identity), ["echo", "__VAST_UP__"])
+            if probe.ok == 1 {
+                if probe.stdout_.index_of("__VAST_UP__") >= 0 {
+                    return VastReady { ok: 1, gone: 0, host: e.host, port: e.port,
+                        status: last_status, message: "ssh ready " + e.host + ":" + e.port }
+                }
+            }
+        }
+        exec(sleep_cmd)
+        i = i + 1
+    }
+    return VastReady { ok: 0, gone: 0, host: "", port: "", status: last_status,
+        message: "ssh never ready in " + to_string(max_tries * sleep_each_sec) + "s (last status: " + last_status + ")" }
 }
 
 // ── direct bare-IP endpoint (DFT-dispatch transport guard ②) ──────────

@@ -1,0 +1,159 @@
+// test_field_visibility.hexa — lane field-visibility
+//
+// Self-contained interpreter-runnable test for the per-field pub/private
+// visibility decision logic landed in self/type_checker.hexa. The local
+// interpreter (stale oracle) predates the parser `pub`-field-vis capture, so
+// this test drives the registry arrays directly (the same flat parallel-array
+// shape the typechecker builds) and asserts the lookup + access-decision +
+// env-mode helpers — the byte-eq-irrelevant, checker-only logic. Production
+// wiring (parser vis slot → type_checker enforcement) is exercised by the
+// self-host build + HEXA_TYPECHECK corpus in CI.
+//
+// Reference: rustc privacy pass (private struct fields reachable only inside
+// the defining module) · Go unexported (lowercase) fields across packages.
+
+// ── flat struct-field registry (mirrors type_checker.hexa) ──
+let mut struct_names = []
+let mut struct_field_counts = []
+let mut struct_field_offsets = []
+let mut struct_all_field_names = []
+let mut struct_all_field_types = []
+let mut struct_all_field_vis = []
+
+fn tc_register_struct(name, field_count) {
+    struct_names.push(name)
+    struct_field_counts.push(field_count)
+    struct_field_offsets.push(len(struct_all_field_names))
+}
+
+fn tc_register_struct_field(fname, ftype, fvis) {
+    struct_all_field_names.push(fname)
+    struct_all_field_types.push(ftype)
+    struct_all_field_vis.push(fvis)
+}
+
+fn tc_lookup_struct_field_vis(struct_name, field_name) {
+    let mut si = 0
+    while si < len(struct_names) {
+        if struct_names[si] == struct_name {
+            let offset = struct_field_offsets[si]
+            let count = struct_field_counts[si]
+            let mut fi = 0
+            while fi < count {
+                if struct_all_field_names[offset + fi] == field_name {
+                    if (offset + fi) < len(struct_all_field_vis) {
+                        return struct_all_field_vis[offset + fi]
+                    }
+                    return ""
+                }
+                fi = fi + 1
+            }
+            return ""
+        }
+        si = si + 1
+    }
+    return ""
+}
+
+// ── access-decision helpers (mirrors type_checker.hexa) ──
+
+fn tc_is_self_access(left) {
+    if left == "" { return false }
+    if left.kind == "Ident" {
+        if left.name == "self" { return true }
+        if left.name == "Self" { return true }
+    }
+    return false
+}
+
+// returns true when an access to `field_name` on `struct_name` with receiver
+// `left` should raise the private-field diagnostic.
+fn tc_field_access_flagged(struct_name, field_name, left) {
+    let fvis = tc_lookup_struct_field_vis(struct_name, field_name)
+    if fvis == "private" {
+        if !tc_is_self_access(left) {
+            return true
+        }
+    }
+    return false
+}
+
+// env-mode parsing (mirrors tc_field_vis_mode but takes the raw value so the
+// pure decision is testable without setting process env)
+fn vis_mode_of(v) {
+    if v == "" { return "off" }
+    if v == "0" || v == "off" { return "off" }
+    if v == "fatal" || v == "error" { return "fatal" }
+    return "warn"
+}
+
+let mut pass = 0
+let mut fail = 0
+
+fn check(label, got, want) {
+    if got == want {
+        pass = pass + 1
+        println("ok   " + label)
+    } else {
+        fail = fail + 1
+        println("FAIL " + label + " got=" + to_string(got) + " want=" + to_string(want))
+    }
+}
+
+fn ident(nm) {
+    return #{ "kind": "Ident", "name": nm }
+}
+
+fn main() {
+    // struct P { pub x: int, secret: int }
+    tc_register_struct("P", 2)
+    tc_register_struct_field("x", "int", "pub")
+    tc_register_struct_field("secret", "int", "private")
+    // struct Q { pub a: int }  (second struct → exercises offsets)
+    tc_register_struct("Q", 1)
+    tc_register_struct_field("a", "int", "pub")
+
+    // lookup: visibility strings resolve per (struct, field), offset-correct
+    check("vis P.x = pub", tc_lookup_struct_field_vis("P", "x"), "pub")
+    check("vis P.secret = private", tc_lookup_struct_field_vis("P", "secret"), "private")
+    check("vis Q.a = pub", tc_lookup_struct_field_vis("Q", "a"), "pub")
+    check("vis unknown struct = ''", tc_lookup_struct_field_vis("Z", "x"), "")
+    check("vis unknown field = ''", tc_lookup_struct_field_vis("P", "nope"), "")
+
+    // self-receiver detection
+    check("self is internal", tc_is_self_access(ident("self")), true)
+    check("Self is internal", tc_is_self_access(ident("Self")), true)
+    check("p is external", tc_is_self_access(ident("p")), false)
+    check("empty receiver external", tc_is_self_access(""), false)
+
+    // access decision: external private → flagged
+    check("p.secret flagged", tc_field_access_flagged("P", "secret", ident("p")), true)
+    // self private → ok (encapsulation unit = own methods)
+    check("self.secret ok", tc_field_access_flagged("P", "secret", ident("self")), false)
+    // external pub → ok
+    check("p.x ok (pub)", tc_field_access_flagged("P", "x", ident("p")), false)
+    // self pub → ok
+    check("self.x ok", tc_field_access_flagged("P", "x", ident("self")), false)
+    // unknown field never flagged (fail-open)
+    check("p.unknown not flagged", tc_field_access_flagged("P", "ghost", ident("p")), false)
+    // second-struct pub external → ok (offset alignment)
+    check("q.a ok (pub)", tc_field_access_flagged("Q", "a", ident("q")), false)
+
+    // env-mode gate: default OFF, opt-in warn/fatal, explicit off
+    check("mode unset = off", vis_mode_of(""), "off")
+    check("mode 1 = warn", vis_mode_of("1"), "warn")
+    check("mode warn = warn", vis_mode_of("warn"), "warn")
+    check("mode fatal = fatal", vis_mode_of("fatal"), "fatal")
+    check("mode error = fatal", vis_mode_of("error"), "fatal")
+    check("mode 0 = off", vis_mode_of("0"), "off")
+    check("mode off = off", vis_mode_of("off"), "off")
+
+    // live env() builtin reads the gate (mirrors tc_field_vis_mode in prod)
+    check("env gate default off", vis_mode_of(env("HEXA_CHECK_FIELD_VIS")), "off")
+
+    println("")
+    println("field-visibility: " + to_string(pass) + "/" + to_string(pass + fail) + " passed")
+    if fail > 0 {
+        println("FAILURES: " + to_string(fail))
+    }
+}

@@ -183,8 +183,10 @@ fn _deploy_one(driver_out: string, dst: string, uname: string) {
 }
 
 // CANON M8 — install step. The shim resolves ~/.hx/bin/hexa → main-worktree
-// `hexa` shim → __hexa_dir = main-worktree → tries `hxv2` (preferred) →
-// falls back to `hexa.real`. The root cause of the M3b deploy gap (M5
+// `hexa` shim → __hexa_dir = main-worktree → tries `hexad` (canonical) →
+// `hxv2` → `hexa.real` (the retired names are compat symlinks → hexad, so
+// all three resolve to the same binary). The root cause of the M3b deploy
+// gap (M5
 // diagnosis, PR #975) was that the build produced build/hexa_cli_driver but
 // never copied it to these targets, so a post-pull deployed hexa stayed
 // stale (PRE-M3b) and broke. This copies the fresh driver to all four
@@ -235,16 +237,27 @@ fn _install_driver(repo_root: string, uname: string) {
     // ~/.hx/bin/self/runtime.o (via symlink) resolves on first
     // `hexa cc --regen` / `hexa verify` invocation.
     _install_runtime_o(repo_root, uname)
-    // main-worktree: hxv2 (shim-preferred) + hexa.real (fallback)
-    _deploy_one(driver_out, repo_root + "/hxv2",      uname)
-    _deploy_one(driver_out, repo_root + "/hexa.real", uname)
-    // ~/.hx/bin: hxv2 + hexa.real
+    // Canonical on-disk name = `hexad` (AMFI burning-matcher treadmill
+    // terminal: hexadrv → hexa.real → hxv2 → hexad · cli_wrappers.hexa:38,
+    // tool/bin/build.hexa:119, install.sh). Deploy the REAL driver to the
+    // single canonical `hexad` (the name the shim execs, AMFI sees, AND the
+    // flip sentinel — promote_selfhost.sh keys on `[ -L hexad ]`). The retired
+    // `hexa.real`/`hxv2` are compat symlinks → hexad. Every consumer of those
+    // PATHS (cli_wrappers shim, promote_selfhost.sh, hx-selfhost-cli
+    // backup-convention, selfhost_shim_integrity gate, firmware fixtures)
+    // resolves losslessly through the symlink.
+    // main-worktree: hexad (real) + hexa.real,hxv2 (symlinks → hexad)
+    _deploy_one(driver_out, repo_root + "/hexad",     uname)
+    let _ = exec("ln -sf hexad " + _shq(repo_root + "/hexa.real"))
+    let _ = exec("ln -sf hexad " + _shq(repo_root + "/hxv2"))
+    // ~/.hx/bin: hexad (real) + hexa.real,hxv2 (symlinks → hexad)
     let home = _home()
     if home != "" {
         let hxbin = home + "/.hx/bin"
         let _ = exec("mkdir -p " + _shq(hxbin))
-        _deploy_one(driver_out, hxbin + "/hxv2",      uname)
-        _deploy_one(driver_out, hxbin + "/hexa.real", uname)
+        _deploy_one(driver_out, hxbin + "/hexad",     uname)
+        let _lr = exec("ln -sf hexad " + _shq(hxbin + "/hexa.real"))
+        let _l1 = exec("ln -sf hexad " + _shq(hxbin + "/hxv2"))
     } else {
         eprintln("  warn: $HOME unresolved — skipped ~/.hx/bin targets")
     }
@@ -502,19 +515,6 @@ fn _regen_vendor_native_c(repo_root: string) {
     }
 }
 
-// @convergence(state="ossified", id="x86-native-seed-link-wiring", recurrence=3,
-//   rule="Any build script that links self/runtime.c MUST assemble + link the
-//   CANONICAL native-seed object set AND pass its pairing -D macros, exactly as
-//   build_aprime.sh:272-406 does. runtime_core.c dropped the C bodies of
-//   rt_array_*_native / rt_map_*_native / rt_str_*_native (always extern) and gates
-//   the C arena behind #ifdef HEXA_RT_ALLOC_NATIVE (runtime_core.c:1450). So:
-//   (a) omitting array/map/alloc/rt_hi seed .o = `undefined reference to
-//   rt_map_get_native / hexa_arena_alloc`; (b) linking the alloc seed WITHOUT
-//   -DHEXA_RT_ALLOC_NATIVE=1 = `multiple definition of hexa_arena_*` (both the C
-//   arena and the seed define them). Recurrences: (1) build_native_linux_x86_64 gcc
-//   line, (2) shipped v0.262.0 runtime.a missing array_core_native.o (bricked hexa
-//   run/build of every x86_64 program), (3) THIS build_hexa_cli driver+module_loader
-//   link. Fix = the canonical set + the alloc macro, the build_aprime way.")
 //
 // _native_seed_suffix: arch token for self/native/<stem>_<sfx>.s (x86_64 /
 // arm64 [Mach-O darwin] / arm64-linux [ELF]).

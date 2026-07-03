@@ -1,0 +1,637 @@
+// HEXA Native Compiler — META-OUROBOROS v2 self-evolving engine (drill spine)
+//
+// @version 0.1.0
+// @capabilities []
+//
+// Faithful native port of the original NEXUS meta-ouroboros engine
+// (archive-nexus/cli/blowup/ouroboros/ouroboros_meta.hexa, 581 LOC). The
+// core idea — the evolution algorithm itself evolves: mutation STRATEGIES
+// mutate, selection criteria adapt, the snake eats its own tail — is
+// preserved verbatim in behavior:
+//
+//   • Strategy — a parameter vector {shift_count, threshold, operator(+|*|/),
+//     constant_idx, combine_mode(geo|arith), generation} encoding a mutation
+//     strategy. Initial pool = 6 named strategies.
+//   • Strategy application — apply_strategy_to_value runs the strategy over an
+//     n=6 seed value; measure_exact_yield counts EXACT matches against the
+//     n=6 target set.
+//   • Meta-mutation — meta_mutate_strategy perturbs a strategy's own params
+//     (shift ±1, threshold ±0.1, operator/constant/combine swaps) under a
+//     deterministic pseudo_rand.
+//   • Tournament — strategies compete on identical seeds; ranked descending
+//     by total yield (stable bubble sort, matching the archive).
+//   • Breeding — breed_strategies crosses the top two (crossover_point=3:
+//     shift/threshold/operator from A, constant_idx/combine_mode from B).
+//   • Self-evaluation + meta-convergence — evaluate_generation scores each
+//     generation (best/avg/diversity → composite); check_meta_convergence
+//     detects a meta-fixed-point when the composite plateaus.
+//
+// Dialect port (archive older-hexa → current drill/atlas idiom): `pure fn`
+// → `fn`; `comptime const` scalars → module-level `let`; module-level array
+// constants → small accessor fns (n6_constants()/n6_labels()/exact_targets());
+// `.len()` → `len()`; array `+`-concat → `.push()`; `for x in xs` → indexed
+// `while`; the `MetaEvolutionResult.final_pool/score_history` loose `str`
+// fields → `array`; the archive's top-level CLI dispatch + `assert`/`proof`
+// blocks → a deterministic `fn main` selftest with fail-counting checks.
+//
+// DEFERRED: none — the archive meta engine carries no file-I/O / telemetry
+// glue; the entire math core is ported and exercised live.
+
+// ─── tuning constants (n=6 algebra) ───
+let default_generations: int = 6
+let pool_size: int = 6
+let tournament_seeds: int = 4
+let tournament_rounds: int = 3
+let meta_plateau_window: int = 3
+let meta_plateau_epsilon: float = 0.005
+let breeding_crossover_point: int = 3
+let max_param_shift: int = 5
+let max_param_threshold: float = 2.0
+
+// ─── n=6 상수 ───
+let N6: int = 6
+let N6_SIGMA: int = 12
+let N6_PHI: int = 2
+let N6_TAU: int = 4
+let N6_J2: int = 24
+let N6_SOPFR: int = 5
+let N6_MASTER: int = 24
+
+// 연산자 / 결합 모드 ids
+let OP_ADD: int = 0
+let OP_MUL: int = 1
+let OP_DIV: int = 2
+let COMBINE_GEO: int = 0
+let COMBINE_ARITH: int = 1
+
+// module-level array constants → accessor fns (current-dialect idiom)
+fn n6_constants() -> array {
+    return [6.0, 12.0, 2.0, 4.0, 24.0, 5.0, 10.0, 8.0, 1.333333333, 0.287682072]
+}
+fn n6_labels() -> array {
+    return ["n", "sigma", "phi", "tau", "J2", "sopfr", "sigma-phi", "sigma-tau", "tau^2/sigma", "ln(4/3)"]
+}
+// n=6 EXACT 매치 타겟 값들
+fn exact_targets() -> array {
+    return [6.0, 12.0, 2.0, 4.0, 24.0, 5.0, 10.0, 8.0, 1.333333333]
+}
+
+// ─── 수학 유틸 ───
+
+fn abs_f(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn clamp_f(x: float, lo: float, hi: float) -> float {
+    if x < lo { return lo }
+    if x > hi { return hi }
+    return x
+}
+
+fn sqrt_f(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut guess = x / 2.0
+    let mut i = 0
+    while i < 20 {
+        guess = (guess + x / guess) / 2.0
+        i = i + 1
+    }
+    return guess
+}
+
+// 결정론적 pseudo-random: seed -> [0.0, 1.0)
+fn pseudo_rand(seed: int) -> float {
+    let x = ((seed * 1103515245 + 12345) % 2147483647)
+    let pos = if x < 0 { 0 - x } else { x }
+    return to_float(pos % 10000) / 10000.0
+}
+
+// ─── 연산자 / 결합 모드 ───
+
+fn op_name(op: int) -> string {
+    if op == 0 { return "+" }
+    if op == 1 { return "*" }
+    if op == 2 { return "/" }
+    return "+"
+}
+
+fn op_apply(op: int, a: float, b: float) -> float {
+    if op == 0 { return a + b }
+    if op == 1 { return a * b }
+    if op == 2 {
+        if abs_f(b) > 0.0001 { return a / b }
+        return a
+    }
+    return a + b
+}
+
+fn combine_name(c: int) -> string {
+    if c == 0 { return "geo" }
+    return "arith"
+}
+
+fn combine_apply(mode: int, a: float, b: float) -> float {
+    if mode == 0 { return sqrt_f(abs_f(a * b)) }
+    return (a + b) / 2.0
+}
+
+// ═══════════════════════════════════════════
+// Strategy: 파라미터 벡터로 인코딩된 변이 전략
+// ═══════════════════════════════════════════
+
+struct Strategy {
+    name: string,
+    shift_count: int,
+    threshold: float,
+    operator: int,
+    constant_idx: int,
+    combine_mode: int,
+    generation: int
+}
+
+fn make_strategy(nm: string, sc: int, thr: float, op: int, ci: int, cm: int) -> Strategy {
+    return Strategy { name: nm, shift_count: sc, threshold: thr, operator: op, constant_idx: ci, combine_mode: cm, generation: 0 }
+}
+
+// 초기 6종 전략 풀
+fn make_initial_pool() -> array {
+    let mut pool = []
+    pool.push(make_strategy("shift",       1, 0.5, OP_ADD, 0, COMBINE_ARITH))
+    pool.push(make_strategy("invert",      0, 0.3, OP_DIV, 1, COMBINE_GEO))
+    pool.push(make_strategy("combine",     2, 0.6, OP_MUL, 2, COMBINE_ARITH))
+    pool.push(make_strategy("transfer",    3, 0.4, OP_ADD, 3, COMBINE_GEO))
+    pool.push(make_strategy("symmetry",    1, 0.7, OP_MUL, 4, COMBINE_ARITH))
+    pool.push(make_strategy("bifurcation", 4, 0.2, OP_DIV, 5, COMBINE_GEO))
+    return pool
+}
+
+// 전략 요약 문자열
+fn strategy_summary(s: Strategy) -> string {
+    return s.name + "(shift=" + to_string(s.shift_count) + ",thr=" + to_string(s.threshold) + ",op=" + op_name(s.operator) + ",c=" + to_string(s.constant_idx) + ",comb=" + combine_name(s.combine_mode) + ",gen=" + to_string(s.generation) + ")"
+}
+
+// ═══════════════════════════════════════════
+// STEP 1: Strategy Application — EXACT yield 측정
+// ═══════════════════════════════════════════
+
+// 전략을 시드 값에 적용 -> 변환된 값 반환
+fn apply_strategy_to_value(s: Strategy, seed_val: float) -> float {
+    let nc = n6_constants()
+    let c_idx = s.constant_idx % len(nc)
+    let n6c = nc[c_idx]
+    let mut shifted = seed_val
+    let mut si = 0
+    while si < s.shift_count {
+        shifted = op_apply(s.operator, shifted, n6c)
+        si = si + 1
+    }
+    // threshold 필터: 결과가 threshold 미만이면 보정
+    if abs_f(shifted) < s.threshold {
+        shifted = shifted + n6c
+    }
+    // combine with seed
+    return combine_apply(s.combine_mode, shifted, seed_val)
+}
+
+// EXACT yield: 전략을 seeds 에 적용하고 exact_targets 에 매치하는 수 세기
+fn measure_exact_yield(s: Strategy, seeds: array) -> int {
+    let targets = exact_targets()
+    let mut matches = 0
+    let mut i = 0
+    while i < len(seeds) {
+        let result = apply_strategy_to_value(s, seeds[i])
+        let mut t = 0
+        while t < len(targets) {
+            if abs_f(result - targets[t]) < 0.01 {
+                matches = matches + 1
+            }
+            t = t + 1
+        }
+        i = i + 1
+    }
+    return matches
+}
+
+// 토너먼트 시드 값 생성 (결정론적)
+fn make_tournament_seeds(round: int) -> array {
+    let nc = n6_constants()
+    let mut seeds = []
+    let mut i = 0
+    while i < tournament_seeds {
+        let base = nc[i % len(nc)]
+        let perturb = to_float((round * 7 + i * 13) % 100) / 100.0
+        seeds.push(base + perturb)
+        i = i + 1
+    }
+    return seeds
+}
+
+// ═══════════════════════════════════════════
+// STEP 2: Meta-Mutation — 전략 자체를 변이
+// ═══════════════════════════════════════════
+
+fn meta_mutate_strategy(s: Strategy, mutation_seed: int, gen: int) -> Strategy {
+    let r1 = pseudo_rand(mutation_seed)
+    let r2 = pseudo_rand(mutation_seed + 1)
+    let r3 = pseudo_rand(mutation_seed + 2)
+    let r4 = pseudo_rand(mutation_seed + 3)
+    let nc = n6_constants()
+
+    // shift_count 변이: +1 또는 -1 또는 유지
+    let mut new_shift = s.shift_count
+    if r1 < 0.33 {
+        if s.shift_count > 0 { new_shift = s.shift_count - 1 } else { new_shift = 0 }
+    } else {
+        if r1 > 0.66 {
+            if s.shift_count < max_param_shift { new_shift = s.shift_count + 1 } else { new_shift = max_param_shift }
+        }
+    }
+
+    // threshold 변이: +/- 0.1 범위
+    let thr_delta = (r2 - 0.5) * 0.2
+    let new_threshold = clamp_f(s.threshold + thr_delta, 0.01, max_param_threshold)
+
+    // operator 변이: 30% 확률로 교체
+    let mut new_op = s.operator
+    if r3 < 0.3 { new_op = to_int(r3 * 10.0) % 3 }
+
+    // constant_idx 변이: 20% 확률로 교체
+    let mut new_cidx = s.constant_idx
+    if r4 < 0.2 { new_cidx = to_int(r4 * 50.0) % len(nc) }
+
+    // combine_mode 토글: 15% 확률
+    let mut new_combine = s.combine_mode
+    if pseudo_rand(mutation_seed + 4) < 0.15 {
+        if s.combine_mode == COMBINE_GEO { new_combine = COMBINE_ARITH } else { new_combine = COMBINE_GEO }
+    }
+
+    return Strategy {
+        name: s.name + "'",
+        shift_count: new_shift,
+        threshold: new_threshold,
+        operator: new_op,
+        constant_idx: new_cidx,
+        combine_mode: new_combine,
+        generation: gen
+    }
+}
+
+// ═══════════════════════════════════════════
+// STEP 3: Strategy Tournament — 동일 시드에서 전략 경쟁
+// ═══════════════════════════════════════════
+
+struct TournamentEntry {
+    strategy: Strategy,
+    total_yield: int
+}
+
+// 내림차순 안정 버블소트 (archive 와 동일)
+fn sort_entries_desc(entries: array) -> array {
+    let mut sorted = entries
+    let mut i = 0
+    while i < len(sorted) {
+        let mut j = 0
+        while j < len(sorted) - 1 - i {
+            if sorted[j].total_yield < sorted[j + 1].total_yield {
+                let tmp = sorted[j]
+                sorted[j] = sorted[j + 1]
+                sorted[j + 1] = tmp
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return sorted
+}
+
+fn run_tournament(pool: array, gen: int) -> array {
+    let mut entries = []
+    let mut p = 0
+    while p < len(pool) {
+        let s = pool[p]
+        let mut total = 0
+        let mut round = 0
+        while round < tournament_rounds {
+            let seeds = make_tournament_seeds(gen * 100 + round)
+            total = total + measure_exact_yield(s, seeds)
+            round = round + 1
+        }
+        entries.push(TournamentEntry { strategy: s, total_yield: total })
+        p = p + 1
+    }
+    return sort_entries_desc(entries)
+}
+
+// ═══════════════════════════════════════════
+// STEP 4: Strategy Breeding — 상위 2개 전략 교차
+// ═══════════════════════════════════════════
+
+fn breed_strategies(parent_a: Strategy, parent_b: Strategy, gen: int) -> Strategy {
+    // crossover_point=3: shift,threshold,operator 는 A / constant_idx,combine_mode 는 B
+    return Strategy {
+        name: "bred(" + parent_a.name + "+" + parent_b.name + ")",
+        shift_count: parent_a.shift_count,
+        threshold: parent_a.threshold,
+        operator: parent_a.operator,
+        constant_idx: parent_b.constant_idx,
+        combine_mode: parent_b.combine_mode,
+        generation: gen
+    }
+}
+
+// ═══════════════════════════════════════════
+// STEP 5: Self-Evaluation — 메타 알고리즘이 자신을 평가
+// ═══════════════════════════════════════════
+
+struct MetaScore {
+    generation: int,
+    best_yield: int,
+    avg_yield: float,
+    diversity: float,
+    composite: float
+}
+
+fn mk_ms(g: int, by: int, comp: float) -> MetaScore {
+    return MetaScore { generation: g, best_yield: by, avg_yield: 3.0, diversity: 1.0, composite: comp }
+}
+
+fn evaluate_generation(ranked: array, gen: int) -> MetaScore {
+    if len(ranked) == 0 {
+        return MetaScore { generation: gen, best_yield: 0, avg_yield: 0.0, diversity: 0.0, composite: 0.0 }
+    }
+
+    let best = ranked[0].total_yield
+
+    // 평균 yield
+    let mut sum = 0
+    let mut i = 0
+    while i < len(ranked) {
+        sum = sum + ranked[i].total_yield
+        i = i + 1
+    }
+    let avg = to_float(sum) / to_float(len(ranked))
+
+    // 다양성: 인접 yield 차이 평균
+    let mut diff_sum = 0.0
+    let mut di = 0
+    while di + 1 < len(ranked) {
+        diff_sum = diff_sum + abs_f(to_float(ranked[di].total_yield - ranked[di + 1].total_yield))
+        di = di + 1
+    }
+    let mut diversity = 0.0
+    if len(ranked) > 1 {
+        diversity = diff_sum / to_float(len(ranked) - 1)
+    }
+
+    // 합성 점수: best*0.5 + avg*0.3 + diversity*0.2
+    let composite = to_float(best) * 0.5 + avg * 0.3 + diversity * 0.2
+
+    return MetaScore {
+        generation: gen,
+        best_yield: best,
+        avg_yield: avg,
+        diversity: diversity,
+        composite: composite
+    }
+}
+
+// ═══════════════════════════════════════════
+// STEP 6: Meta-Convergence Detection
+// ═══════════════════════════════════════════
+
+// 메타 수렴: composite 점수 개선이 plateau window 동안 epsilon 미만
+fn check_meta_convergence(score_history: array) -> bool {
+    if len(score_history) < meta_plateau_window + 1 {
+        return false
+    }
+    let start = len(score_history) - meta_plateau_window
+    let baseline = score_history[start - 1].composite
+    let mut all_flat = true
+    let mut ci = start
+    while ci < len(score_history) {
+        let delta = abs_f(score_history[ci].composite - baseline)
+        if delta > meta_plateau_epsilon {
+            all_flat = false
+        }
+        ci = ci + 1
+    }
+    return all_flat
+}
+
+// ═══════════════════════════════════════════
+// STEP 7: Report — 진화 결과 리포트
+// ═══════════════════════════════════════════
+
+fn print_improvement_curve(history: array) {
+    println("  gen | best | avg    | div   | composite")
+    println("  ----+------+--------+-------+----------")
+    let mut i = 0
+    while i < len(history) {
+        let ms = history[i]
+        println("  " + to_string(ms.generation) + "   | " + to_string(ms.best_yield) + "    | " + to_string(ms.avg_yield) + " | " + to_string(ms.diversity) + " | " + to_string(ms.composite))
+        i = i + 1
+    }
+}
+
+fn print_strategy_pool(pool: array) {
+    let mut idx = 0
+    while idx < len(pool) {
+        println("  [" + to_string(idx) + "] " + strategy_summary(pool[idx]))
+        idx = idx + 1
+    }
+}
+
+// ═══════════════════════════════════════════
+// META-OUROBOROS 메인 진화 루프
+// ═══════════════════════════════════════════
+
+struct MetaEvolutionResult {
+    final_pool: array,
+    score_history: array,
+    generations_run: int,
+    converged: bool,
+    best_strategy: Strategy,
+    best_yield: int
+}
+
+fn make_result(pool: array, hist: array, gens: int, conv: bool, best: Strategy, by: int) -> MetaEvolutionResult {
+    return MetaEvolutionResult { final_pool: pool, score_history: hist, generations_run: gens, converged: conv, best_strategy: best, best_yield: by }
+}
+
+fn run_meta_evolution(max_gen: int) -> MetaEvolutionResult {
+    println("=== META-OUROBOROS v2: Self-Evolving Evolution ===")
+    println("generations=" + to_string(max_gen) + " pool=" + to_string(pool_size) + " rounds=" + to_string(tournament_rounds))
+    println("")
+
+    let mut pool = make_initial_pool()
+    let mut score_history = []
+    let mut best_ever = pool[0]
+    let mut best_yield_ever = 0
+
+    println("--- Initial Strategy Pool ---")
+    print_strategy_pool(pool)
+    println("")
+
+    let mut gen = 0
+    while gen < max_gen {
+        println("--- Generation " + to_string(gen + 1) + " ---")
+
+        // Meta-Mutation: 하위 절반 변이
+        let half = len(pool) / 2
+        let mut mutated_pool = []
+        let mut mi = 0
+        while mi < len(pool) {
+            if mi >= half {
+                mutated_pool.push(meta_mutate_strategy(pool[mi], gen * 1000 + mi * 7, gen + 1))
+            } else {
+                mutated_pool.push(pool[mi])
+            }
+            mi = mi + 1
+        }
+
+        // Tournament
+        let ranked = run_tournament(mutated_pool, gen + 1)
+        let mut ri = 0
+        while ri < len(ranked) {
+            println("  #" + to_string(ri + 1) + " yield=" + to_string(ranked[ri].total_yield) + " " + strategy_summary(ranked[ri].strategy))
+            ri = ri + 1
+        }
+
+        // Breeding: top 2 교차 → 최하위 교체
+        if len(ranked) >= 2 {
+            let offspring = breed_strategies(ranked[0].strategy, ranked[1].strategy, gen + 1)
+            println("  bred: " + strategy_summary(offspring))
+            let mut new_pool = []
+            let keep = if len(ranked) > pool_size - 1 { pool_size - 1 } else { len(ranked) }
+            let mut ki = 0
+            while ki < keep {
+                new_pool.push(ranked[ki].strategy)
+                ki = ki + 1
+            }
+            new_pool.push(offspring)
+            pool = new_pool
+        } else {
+            let mut new_pool = []
+            let mut ei = 0
+            while ei < len(ranked) {
+                new_pool.push(ranked[ei].strategy)
+                ei = ei + 1
+            }
+            pool = new_pool
+        }
+
+        // Self-Evaluation
+        let score = evaluate_generation(ranked, gen + 1)
+        score_history.push(score)
+        if score.best_yield > best_yield_ever {
+            best_yield_ever = score.best_yield
+            best_ever = ranked[0].strategy
+        }
+        println("  score: best=" + to_string(score.best_yield) + " avg=" + to_string(score.avg_yield) + " composite=" + to_string(score.composite))
+
+        // Convergence check
+        if check_meta_convergence(score_history) {
+            println("")
+            println("  >>> META-FIXED-POINT at generation " + to_string(gen + 1) + " <<<")
+            return make_result(pool, score_history, gen + 1, true, best_ever, best_yield_ever)
+        }
+        println("")
+        gen = gen + 1
+    }
+    return make_result(pool, score_history, max_gen, false, best_ever, best_yield_ever)
+}
+
+fn print_full_report(result: MetaEvolutionResult) {
+    println("")
+    println("=== META-OUROBOROS v2 — EVOLUTION REPORT ===")
+    println("")
+    println("--- Evolved Strategies ---")
+    print_strategy_pool(result.final_pool)
+    println("")
+    println("--- Improvement Curve ---")
+    print_improvement_curve(result.score_history)
+    println("")
+    println("--- Summary ---")
+    let conv_label = if result.converged { "true" } else { "false" }
+    println("  generations: " + to_string(result.generations_run) + "  converged: " + conv_label)
+    println("  best: " + strategy_summary(result.best_strategy) + "  yield=" + to_string(result.best_yield))
+    let nc = n6_constants()
+    let labels = n6_labels()
+    let ci = result.best_strategy.constant_idx % len(nc)
+    println("  n=6 alignment: " + labels[ci] + "=" + to_string(nc[ci]) + " op=" + op_name(result.best_strategy.operator) + " comb=" + combine_name(result.best_strategy.combine_mode))
+    println("")
+    println("  The snake has eaten its tail. The evolution algorithm has evolved itself.")
+}
+
+// ═══════════════════════════════════════════
+// deterministic demo / selftest
+// ═══════════════════════════════════════════
+
+fn main() {
+    println("=== META-OUROBOROS v2 native port (drill spine) — selftest ===")
+    println("")
+
+    // ── 1. self-evolving meta-loop (breed/mutate strategies + meta-convergence) ──
+    let result = run_meta_evolution(default_generations)
+    print_full_report(result)
+    println("")
+
+    // ── 2. engine-logic self-checks (mirror the archive asserts) ──
+    let mut fails = 0
+    if abs_f(0.0 - 3.14) <= 3.0 { fails = fails + 1; println("  [FAIL] abs_f") }
+    if clamp_f(5.0, 0.0, 1.0) != 1.0 { fails = fails + 1; println("  [FAIL] clamp hi") }
+    if clamp_f(0.0 - 1.0, 0.0, 1.0) != 0.0 { fails = fails + 1; println("  [FAIL] clamp lo") }
+    if op_name(OP_ADD) != "+" { fails = fails + 1; println("  [FAIL] op_name") }
+    if op_apply(OP_MUL, 3.0, 4.0) != 12.0 { fails = fails + 1; println("  [FAIL] op_apply mul") }
+    if combine_apply(COMBINE_ARITH, 4.0, 8.0) != 6.0 { fails = fails + 1; println("  [FAIL] combine arith") }
+
+    let test_pool = make_initial_pool()
+    if len(test_pool) != pool_size { fails = fails + 1; println("  [FAIL] pool size") }
+    if len(make_tournament_seeds(0)) != tournament_seeds { fails = fails + 1; println("  [FAIL] tournament seeds") }
+    if apply_strategy_to_value(test_pool[0], 6.0) <= 0.0 { fails = fails + 1; println("  [FAIL] apply>0") }
+    if measure_exact_yield(test_pool[0], [6.0, 12.0, 2.0, 4.0]) < 0 { fails = fails + 1; println("  [FAIL] yield>=0") }
+
+    let mutated = meta_mutate_strategy(test_pool[0], 42, 1)
+    if mutated.shift_count < 0 { fails = fails + 1; println("  [FAIL] mut shift") }
+    if mutated.threshold <= 0.0 { fails = fails + 1; println("  [FAIL] mut thr") }
+
+    let bred = breed_strategies(test_pool[0], test_pool[1], 1)
+    if bred.shift_count != test_pool[0].shift_count { fails = fails + 1; println("  [FAIL] bred shift") }
+    if bred.operator != test_pool[0].operator { fails = fails + 1; println("  [FAIL] bred op") }
+    if bred.constant_idx != test_pool[1].constant_idx { fails = fails + 1; println("  [FAIL] bred cidx") }
+    if bred.combine_mode != test_pool[1].combine_mode { fails = fails + 1; println("  [FAIL] bred comb") }
+
+    // 수렴: plateau된 점수 -> true, 발산 점수 -> false
+    let flat_scores = [mk_ms(1, 5, 4.0), mk_ms(2, 5, 4.0), mk_ms(3, 5, 4.0), mk_ms(4, 5, 4.001), mk_ms(5, 5, 4.002)]
+    if check_meta_convergence(flat_scores) {
+        // expected true — ok
+    } else {
+        fails = fails + 1; println("  [FAIL] converge flat")
+    }
+    let div_scores = [mk_ms(1, 1, 1.0), mk_ms(2, 3, 3.0), mk_ms(3, 5, 5.0), mk_ms(4, 8, 8.0), mk_ms(5, 12, 12.0)]
+    if check_meta_convergence(div_scores) {
+        fails = fails + 1; println("  [FAIL] converge div")
+    }
+
+    // meta-mutation bounded sweep
+    let mut seed = 0
+    while seed < 50 {
+        let m = meta_mutate_strategy(test_pool[0], seed, 1)
+        if m.shift_count < 0 { fails = fails + 1 }
+        if m.shift_count > max_param_shift { fails = fails + 1 }
+        if m.threshold <= 0.0 { fails = fails + 1 }
+        if m.threshold > max_param_threshold { fails = fails + 1 }
+        seed = seed + 1
+    }
+
+    if N6_SIGMA * N6_PHI != N6 * N6_TAU { fails = fails + 1; println("  [FAIL] n6 master sigma*phi=n*tau") }
+    if N6_MASTER != 24 { fails = fails + 1; println("  [FAIL] n6 master=24") }
+
+    if fails == 0 {
+        println("=== ouroboros_meta native: PASS (mutate + breed + tournament + meta-convergence live) ===")
+        exit(0)
+    }
+    println("=== ouroboros_meta native: FAIL (" + to_string(fails) + ") ===")
+    exit(1)
+}
