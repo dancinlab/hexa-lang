@@ -485,6 +485,17 @@ pub struct RegMap {
     // SSA spill access above this region so per-call stack-spill stores
     // can use [sp, #(i-8)*8] without disturbing SSA offsets.
     call_overflow_bytes: i64,
+    // #3712 (arm64 port) — id → index-into-`ids` direct array (sized maxid+1,
+    // -1 = absent). The per-operand reg/spill lookups (_arm_reg_lookup /
+    // _arm_is_spilled / _arm_spill_offset) probe this in O(1) instead of an
+    // O(len(ids)) `_arm_index_of` scan — collapsing per-function codegen from
+    // O(stmts·locals) to O(stmts) (the x86_64 backend hit this as the gen3
+    // obj-emit wall: O(n²) hang on the 7000-binop runtime_cuda_emit; the
+    // _arm_index_of ids[id]==id fast path only covers the dense in-order
+    // prefix, every other id fell back to the linear scan). Built once from
+    // the final `ids` order, so every lookup returns the identical slot —
+    // byte-eq NEUTRAL.
+    id2idx: [i64],
     // FLEET arm64 element-pack (HEXA_PACK_ESCAPING) — mirror of x86_64's
     // X86RegMap.local_type + .local_packed_esc_ok. The arm64 backend never had a
     // per-local type lattice (it routes everything through the boxed runtime), so
@@ -539,10 +550,13 @@ fn _arm_index_of(ids: [i64], id: i64) -> i64 {
     // id-arrays here (ids / iv.ids / rm.ids) are built in id order, so
     // ids[id] == id is the common case. ids is dedup-built (each id
     // appears once) so when ids[id]==id, `id` is THE unique index —
-    // sound. Falls back to the linear scan otherwise. Without this the
-    // per-operand lookups in _arm_reg_lookup/_arm_is_spilled/
-    // _arm_spill_offset + the live-range/regalloc loops are O(N²) on a
-    // huge function (the synthetic `fn main`) — minutes-long stage-1.
+    // sound. Falls back to the linear scan otherwise.
+    // #3712 (arm64 port) — the HOT users are gone: the live-range dedup
+    // probes a direct id2slot array and the per-operand RegMap lookups
+    // (_arm_reg_lookup/_arm_is_spilled/_arm_spill_offset) probe RegMap.id2idx,
+    // both O(1) always (the fast path here only covered the dense in-order
+    // prefix; out-of-order ids fell back to the O(len(ids)) scan). Remaining
+    // callers are the one-time O(params·ids) param scans in _arm64_assign_regs.
     if id >= 0 && id < len(ids) {
         if ids[id] == id { return id }
     }
@@ -636,10 +650,23 @@ fn _arm_compute_live_ranges(mf: MFunc) -> ArmIntervals {
     let mut starts: [i64] = []
     let mut ends: [i64] = []
 
+    // #3712 (arm64 port) — O(1) id→slot membership for the live-range build.
+    // Local ids are dense non-negative ints (hir_to_mir `next_local` counter),
+    // so a direct-indexed `id2slot[id]` array (sized maxid+1, -1 = absent)
+    // replaces the `_arm_index_of` probe whose ids[id]==id fast path missed
+    // any out-of-order id (falling back to the O(len(ids)) scan → O(locals²)).
+    // Byte-eq NEUTRAL: `ids` keeps the exact first-occurrence order (push
+    // sites unchanged) — only the probe gets faster.
+    let maxid = _arm_max_local_id(mf)
+    let mut id2slot: [i64] = []
+    let mut zi = 0
+    while zi <= maxid { id2slot.push(-1); zi = zi + 1 }
+
     let mut li = 0
     while li < len(mf.locals) {
         let id = mf.locals[li].id
-        if id >= 0 && _arm_index_of(ids, id) < 0 {
+        if id >= 0 && id2slot[id] < 0 {
+            id2slot[id] = len(ids)
             ids.push(id)
             starts.push(-1)
             ends.push(-1)
@@ -650,7 +677,7 @@ fn _arm_compute_live_ranges(mf: MFunc) -> ArmIntervals {
     let mut pi = 0
     while pi < len(mf.params) {
         let pid = mf.params[pi].id
-        let idx = _arm_index_of(ids, pid)
+        let idx = if pid >= 0 && pid <= maxid { id2slot[pid] } else { -1 }
         if idx >= 0 {
             if starts[idx] < 0 { starts[idx] = 0 }
             if ends[idx] < 0   { ends[idx] = 0 }
@@ -667,12 +694,13 @@ fn _arm_compute_live_ranges(mf: MFunc) -> ArmIntervals {
             let s = blk.stmts[si]
             let did = s.dst.id
             if did >= 0 {
-                let mut idx = _arm_index_of(ids, did)
+                let mut idx = id2slot[did]
                 if idx < 0 {
+                    idx = len(ids)
+                    id2slot[did] = idx
                     ids.push(did)
                     starts.push(pos)
                     ends.push(pos)
-                    idx = len(ids) - 1
                 } else {
                     if starts[idx] < 0 || pos < starts[idx] { starts[idx] = pos }
                     if pos > ends[idx] { ends[idx] = pos }
@@ -684,12 +712,13 @@ fn _arm_compute_live_ranges(mf: MFunc) -> ArmIntervals {
                 if o.kind == "local" {
                     let lid = o.local_id
                     if lid >= 0 {
-                        let mut idx2 = _arm_index_of(ids, lid)
+                        let mut idx2 = id2slot[lid]
                         if idx2 < 0 {
+                            idx2 = len(ids)
+                            id2slot[lid] = idx2
                             ids.push(lid)
                             starts.push(pos)
                             ends.push(pos)
-                            idx2 = len(ids) - 1
                         } else {
                             if starts[idx2] < 0 || pos < starts[idx2] {
                                 starts[idx2] = pos
@@ -960,6 +989,25 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
     if rem2 != 0 { frame2 = frame2 + (16 - rem2) }
     frame = frame2
 
+    // #3712 (arm64 port) — build the O(1) id→index array from the final
+    // `map_ids` order (mirror of x86_64's rm_id2idx builder). Every
+    // per-operand lookup returns the identical slot the `_arm_index_of`
+    // scan would (same first-occurrence order) — byte-eq NEUTRAL.
+    let mut rm_maxid: i64 = -1
+    let mut mj = 0
+    while mj < len(map_ids) {
+        if map_ids[mj] > rm_maxid { rm_maxid = map_ids[mj] }
+        mj = mj + 1
+    }
+    let mut rm_id2idx: [i64] = []
+    let mut zj = 0
+    while zj <= rm_maxid { rm_id2idx.push(-1); zj = zj + 1 }
+    let mut mk = 0
+    while mk < len(map_ids) {
+        if map_ids[mk] >= 0 { rm_id2idx[map_ids[mk]] = mk }
+        mk = mk + 1
+    }
+
     // ── FLEET arm64 element-pack (HEXA_PACK_ESCAPING) — type + esc-mint lattice ──
     // Mirror of x86_64_linux.hexa's rm_local_type + rm_packed_esc_ok builders
     // (#4143/#4151). The arm64 backend had NO per-local type tracking, so the
@@ -1039,14 +1087,25 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
         regs: map_regs,
         slots: map_slots,
         call_overflow_bytes: 0,   // filled in by _arm64_lower_func once max-overflow is known
+        id2idx: rm_id2idx,
         local_type: rm_local_type,
         local_packed_esc_ok: rm_packed_esc_ok
     }
     return ArmAllocResult { map: map, frame_size: frame }
 }
 
+// #3712 (arm64 port) — O(1) RegMap probe: id → index-into-`ids` (-1 =
+// absent/out-of-range). Replaces the `_arm_index_of(rm.ids, id)` probe
+// (O(len(ids)) linear scan whenever the ids[id]==id fast path misses) at
+// the per-operand codegen lookups. Returns the identical slot the scan
+// would (built from the same `ids` order) → byte-eq NEUTRAL.
+fn _arm_rm_idx(rm: RegMap, id: i64) -> i64 {
+    if id < 0 || id >= len(rm.id2idx) { return -1 }
+    return rm.id2idx[id]
+}
+
 fn _arm_reg_lookup(rm: RegMap, id: i64) -> string {
-    let idx = _arm_index_of(rm.ids, id)
+    let idx = _arm_rm_idx(rm, id)
     if idx < 0 { return _arm64_reg_for_local(id) }
     if rm.slots[idx] >= 0 { return "x9" }
     if len(rm.regs[idx]) == 0 { return _arm64_reg_for_local(id) }
@@ -1054,13 +1113,13 @@ fn _arm_reg_lookup(rm: RegMap, id: i64) -> string {
 }
 
 fn _arm_is_spilled(rm: RegMap, id: i64) -> bool {
-    let idx = _arm_index_of(rm.ids, id)
+    let idx = _arm_rm_idx(rm, id)
     if idx < 0 { return false }
     return rm.slots[idx] >= 0
 }
 
 fn _arm_spill_offset(rm: RegMap, id: i64) -> i64 {
-    let idx = _arm_index_of(rm.ids, id)
+    let idx = _arm_rm_idx(rm, id)
     if idx < 0 { return rm.call_overflow_bytes }
     return rm.slots[idx] + rm.call_overflow_bytes
 }
@@ -4124,6 +4183,9 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
         regs: alloc.map.regs,
         slots: alloc.map.slots,
         call_overflow_bytes: call_overflow_bytes,
+        // #3712 (arm64 port) — forward the O(1) id→index array built in
+        // _arm64_assign_regs so the per-operand emit lookups probe it.
+        id2idx: alloc.map.id2idx,
         // FLEET arm64 element-pack — forward the esc lattice built in
         // _arm64_assign_regs (both `[]` when HEXA_PACK_ESCAPING is OFF → emit
         // boundaries never consult them → byte-identical to origin).

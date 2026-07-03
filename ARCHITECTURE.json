@@ -4268,7 +4268,7 @@
                 "name": "Codegen (LIR)",
                 "role": "",
                 "id": "component-map-table-component-path-role-codegen-lir",
-                "detail": "Path: `compiler/codegen/{arm64_darwin,x86_64_linux,thumbv7em_eabihf,nvptx_target}.hexa` · Role: MIR → LIR, target-specific regalloc + instruction selection"
+                "detail": "Path: `compiler/codegen/{arm64_darwin,x86_64_linux,thumbv7em_eabihf,nvptx_target}.hexa` · Role: MIR → LIR, target-specific regalloc + instruction selection · per-operand regalloc 조회는 O(1) id2idx 직접배열 (x86_64 #3712 · arm64 패리티 포트, byteeq-neutral)"
               },
               {
                 "name": "Emit (asm/object)",
