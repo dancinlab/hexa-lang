@@ -1260,8 +1260,9 @@ fn _own_lint_register(name: string, sp: Span) {
     _own_lint_move_cols.push(0)
 }
 
-// One move/use touch of a candidate node. r1 move sites (bare-ident only):
-// let-RHS, assignment-RHS, call argument. First touch of a live binding
+// One move/use touch of a candidate node. Move sites (bare-ident only):
+// let-RHS, assignment-RHS, call argument (r1), return value (r2). First
+// touch of a live binding
 // marks it moved (pushes the state-1 shadow entry); a later touch of a
 // moved binding emits the HX3012 use-after-move WARNING. A re-visit of the
 // SAME node (opt-in passes like the r2/r5 scratch re-infer walk an expr
@@ -2203,6 +2204,18 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         if len(e.children) > 0 {
             val_t = _infer_expr(e.children[0], env, ctx, out)
             val_src = e.children[0]
+            // HEXA-OWN L2 r2 — a bare-ident RETURN value moves the owned
+            // value out of the fn (`return x` where `x` is a registered
+            // `@own` binding): a return AFTER a prior move warns HX3012
+            // (returning a moved-out binding), and the return itself
+            // registers the move so any later use warns too. Touch AFTER
+            // the child inference, same idiom as the assign-RHS site; the
+            // pinned-frame HX3004 reads above/below are not reordered.
+            // Flag first (short-circuit) → the default build is
+            // byteeq-neutral.
+            if env("HEXA_OWN_LINT") == "1" && _types_is_ident(e.children[0].kind) {
+                _own_lint_touch(e.children[0], out)
+            }
         }
         // Validate against enclosing fn return type. _types_assignable
         // permits the standard integer-literal coercion (e.g. `return 0`
