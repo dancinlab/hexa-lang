@@ -371,10 +371,13 @@ if _stream_env == "1" { stream_mode = true }
 
 // HEXA_CG_PROFILE=1 — S1-step-1 codegen instrumentation (compiler/PLAN.md
 // #18). Emits per-phase wall-clock timing to stderr for lower_hir
-// (HIR->MIR), MIR-opt, codegen (MIR->LIR) and emit (LIR->asm). The probe
-// localises the super-linear codegen cost without changing any output:
-// when the env var is unset every cg_profile* call is a silent no-op
-// (gated on `cg_profile` — no mono_ns() syscall, no stderr write).
+// (HIR->MIR), MIR-opt, codegen (MIR->LIR) and emit (LIR->asm), plus —
+// S1-step-1 follow-up — the frontend phases (lex/parse/atlas_load/resolve/
+// bind/type_check/unit_check/lower_ast_to_hir), so the whole pipeline is
+// visible, not just codegen. The probe localises per-phase cost without
+// changing any output: when the env var is unset every cg_profile* call is
+// a silent no-op (gated on `cg_profile` — no mono_ns() syscall, no stderr
+// write).
 let mut cg_profile = false
 let _cgp_env = env("HEXA_CG_PROFILE")
 if _cgp_env == "1" { cg_profile = true }
@@ -600,12 +603,33 @@ fn cg_profile_mark(label: string) {
     }
 }
 
+// cg_profile_front_begin() — frontend coverage (S1-step-1 follow-up).
+// cg_profile_begin() fires only at the entry of the lower_hir/opt/codegen/
+// emit pipeline, so lex/parse/atlas-load/resolve/bind/type_check/unit_check/
+// AST->HIR were invisible (measured precedent: 94s wall vs 9.66s profiled —
+// ~90% blind). This seeds the SAME cursor at the true pipeline start so the
+// frontend phases emit CG_PROFILE rows too. cg_profile_begin() later
+// RE-seeds the cursor at codegen entry, so the original backend rows
+// (begin/lower_hir/mir_opt/codegen/emit_asm — or stream_fused) are
+// byte-identical for existing row consumers. Same gating as the rest of
+// the probe: when HEXA_CG_PROFILE is unset this is a silent no-op (no
+// mono_ns() syscall, no stderr write, zero behavior change).
+fn cg_profile_front_begin() {
+    if cg_profile {
+        _cg_last_ns = mono_ns()
+        eprintln("CG_PROFILE  phase=front_begin        delta_ms=0")
+    }
+}
+
 // ── Pipeline ─────────────────────────────────────────────────
 
+cg_profile_front_begin()
 phase_log("pipeline_start")
 let tokens = lex(source, source_path)
+cg_profile_mark("lex")
 phase_log("post_lex")
 let module = parse(tokens, source_path)
+cg_profile_mark("parse")
 if verbose {
     eprintln("hexa-compiler: parsed " + to_string(len(module.items))
         + " top-level item(s) (multi-file flat-splice; Stage 1 Gap 1)")
@@ -625,6 +649,7 @@ phase_reset("post_parse")
 // the embed-absent path (verified: N=10 1.88GB→17MB, N=400 2.57GB→0.58GB, .o
 // unchanged, 0 new diagnostics on cite-free sources).
 let atlas = if emit_kind == "obj" { empty_atlas_index() } else { _load_atlas() }
+cg_profile_mark("atlas_load")
 
 // Stage1 punch list C14: type as `[Diagnostic]` instead of bare `array` so
 // stage0 stores concrete Diagnostic structs in array_store rather than boxing
@@ -652,18 +677,22 @@ let mut kg = 0
 while kg < len(r_gate) { diags.push(r_gate[kg]); kg = kg + 1 }
 
 let r1 = resolve(module, atlas)
+cg_profile_mark("resolve")
 let mut k = 0
 while k < len(r1) { diags.push(r1[k]); k = k + 1 }
 
 let r2 = bind(module)
+cg_profile_mark("bind")
 k = 0
 while k < len(r2) { diags.push(r2[k]); k = k + 1 }
 
 let r3 = type_check(module)
+cg_profile_mark("type_check")
 k = 0
 while k < len(r3) { diags.push(r3[k]); k = k + 1 }
 
 let r4 = unit_check(module)
+cg_profile_mark("unit_check")
 k = 0
 while k < len(r4) { diags.push(r4[k]); k = k + 1 }
 
@@ -711,6 +740,7 @@ phase_reset("post_check")
 // ── Lower → MIR → LIR ────────────────────────────────────────
 
 let hmodule = lower(module, atlas)
+cg_profile_mark("lower_ast_to_hir")
 
 // Stage1 Gap 14: drain lower-pass diagnostics (HX1100 closure-capture).
 // Warnings only — we render them but do not abort, since closure
