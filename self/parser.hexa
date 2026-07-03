@@ -309,6 +309,11 @@ fn _p_is_known_attr(name) {
     if name == "async" { return true }
     if name == "compile_trace" { return true }
     if name == "self_check" { return true }
+    // HEXA-OWN L2 — `@own` (let-binding + fn-param position) drives the
+    // native frontend's HX3012 use-after-move lint (HEXA_OWN_LINT=1);
+    // gen2 accepts it (attrs channel on let · own|<pname> annotation
+    // carrier on params) so files using the L2 surface stay two-backend.
+    if name == "own" { return true }
     // Optimization hints (codegen_c2 gen2_has_attr + ai_native_pass attr_has).
     if name == "hot" { return true }
     if name == "cold" { return true }
@@ -2343,11 +2348,67 @@ fn parse_type_annotation() {
     return base
 }
 
+// HEXA-OWN L2 r2b two-backend parity — inline param-annotation absorption.
+// `fn f(@own p: [int])` must parse under gen2 too: the native (aprime)
+// frontend's parse_param accepts leading `@name(...)` annotations
+// (compiler/parse/parser.hexa parse_param, r2b), so without this the syntax
+// made a file native-only — violating the hexa-own ladder's two-backend gate
+// (state/hexa-own/l3_borrow_census.md §(3) trap). Returns true iff an `@own`
+// marker was among the absorbed annotations; the caller re-attaches it as an
+// "own|<param-name>" entry on the EXISTING p_pending_annotations channel
+// (drained into FnDecl.annotations "kind|raw;kind|raw" by parse_fn_decl) —
+// the same fn-item-level carrier shape as the native side's
+// Annotation{ name: "own", args: [LiteralString pname] } (p_param_own_anns).
+// gen2's typecheck/codegen do NOT consume the carrier (HX3012 own-lint is
+// native-frontend-only); attaching instead of dropping keeps the info for a
+// future gen2-side consumer at zero extra cost. Purely additive: an `@` in
+// param position was previously a hard parse error (p_expect_ident saw the
+// At token), so no existing corpus routes through this path — corpus without
+// @-params parses byte-identically. Non-`own` param annotations are absorbed
+// and dropped, mirroring the native parse_param. Note: the carrier rides the
+// shared pending-annotations channel, so a non-draining param-list context
+// (extern fn, trait method signature) leaves the entry for the next draining
+// FnDecl — the same pre-existing behavior as every other annotation kind on
+// those decl forms (corpus impact zero: nothing uses @-params there).
+fn p_absorb_param_annotations() {
+    let mut saw_own = false
+    while p_peek_kind() == "At" {
+        p_advance() // consume @
+        // Attribute name may be a keyword — `own` lexes as kind "Own"
+        // (self/lexer.hexa keyword_kind); same tolerance as parse_stmt's
+        // M0 attr collector.
+        let mut pa_name = ""
+        if p_peek_kind() == "Ident" {
+            pa_name = p_expect_ident()
+        } else {
+            let pa_tok = p_peek()
+            pa_name = pa_tok.value
+            p_advance()
+        }
+        // Optional balanced `( ... )` payload — absorbed (mirrors the
+        // unknown-attribute skip in parse_attribute_prefix).
+        if p_peek_kind() == "LParen" {
+            p_advance()
+            let mut pa_depth = 1
+            while pa_depth > 0 && p_peek_kind() != "Eof" {
+                if p_peek_kind() == "LParen" { pa_depth = pa_depth + 1 }
+                if p_peek_kind() == "RParen" { pa_depth = pa_depth - 1 }
+                p_advance()
+            }
+        }
+        if pa_name == "own" { saw_own = true }
+    }
+    return saw_own
+}
+
 fn parse_params() {
     let mut params = []
     if p_peek_kind() == "RParen" {
         return params
     }
+    // HEXA-OWN L2 r2b parity — optional leading `@own` (and other absorbed
+    // annotations) on the first param; see p_absorb_param_annotations.
+    let own_first = p_absorb_param_annotations()
     // Optional `&` / `&mut` (Rust-style borrow receiver) — hexa has
     // no borrow checker, so the prefix is absorbed and discarded; the
     // canonical `fn area(&self)` / `fn scale(&mut self, k: int)` Rust
@@ -2362,6 +2423,11 @@ fn parse_params() {
         name = ""
     } else {
         name = p_expect_ident()
+    }
+    // HEXA-OWN L2 r2b — re-attach an inline `@own` as the fn-level carrier
+    // (native-frontend shape: fn-item Annotation own("<pname>")).
+    if own_first && name != "" {
+        p_pending_annotations.push("own|" + name)
     }
     // RFC r16 (varargs): `fn f(xs...)` — Go-style trailing `...` right after
     // the param name marks a variadic param (collects the rest of the call
@@ -2399,6 +2465,9 @@ fn parse_params() {
     })
     while p_peek_kind() == "Comma" {
         p_advance()
+        // Symmetric `@own` absorption on comma-tail params (see first-param
+        // comment above — HEXA-OWN L2 r2b parity).
+        let own_tail = p_absorb_param_annotations()
         // Symmetric `&` / `&mut` accept (see first-param comment above).
         if p_peek_kind() == "BitAnd" { p_advance() }
         if p_peek_kind() == "Mut" { p_advance() }
@@ -2407,6 +2476,10 @@ fn parse_params() {
             pname = ""
         } else {
             pname = p_expect_ident()
+        }
+        // HEXA-OWN L2 r2b — fn-level own-carrier (see first-param site).
+        if own_tail && pname != "" {
+            p_pending_annotations.push("own|" + pname)
         }
         // RFC r16 (varargs) — trailing `...` on a comma-tail param.
         let mut pvar2 = false

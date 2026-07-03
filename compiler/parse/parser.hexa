@@ -2207,11 +2207,14 @@ fn parse_param() -> Param {
     // re-attached as a fn-level `@own("p")` carrier (see p_param_own_anns)
     // rather than a Param field — no-ripple `__cg` idiom. Non-`own` param
     // annotations are absorbed and silently dropped, mirroring parse_stmt's
-    // non-let tolerance. NOTE (frontend drift, deliberate): the gen2 parser
-    // (self/parser.hexa parse_params) does not accept `@` in param position —
-    // inline `@own p: T` is aprime-only, like the HX3012 lint itself; the
-    // gen2-parseable spelling is the fn-level `@own("p")` form, which lands
-    // in the same Item.annotations shape.
+    // non-let tolerance. NOTE (two-backend parity, r2b follow-up): the gen2
+    // parser accepts the same inline surface — self/parser.hexa
+    // p_absorb_param_annotations absorbs `@name(...)` at param position and
+    // re-attaches `@own` as an "own|<pname>" entry on its fn-level
+    // annotations channel (the gen2 mirror of this p_param_own_anns carrier);
+    // gen2's typecheck does not consume it (HX3012 stays native-frontend-
+    // only), but files using the syntax parse under BOTH frontends,
+    // satisfying the ladder's two-backend gate.
     let mut anns: [Annotation] = []
     while check_kind(TokenKind::At) {
         anns.push(parse_annotation())
