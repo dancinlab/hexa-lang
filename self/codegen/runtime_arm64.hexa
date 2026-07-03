@@ -5298,6 +5298,89 @@ fn rt_waitpid_reloc_kinds() {
     return k
 }
 
+// ── rt_getrusage (RFC061 #29 — class-C syscall · int+ptr _cf + errno) ────
+// getrusage(int who, void *usage) -> int. A 2-arg svc-_cf where the FIRST arg
+// is an int (who, x0 sign-extended) and the SECOND is a pointer (usage, x1
+// untouched) — STRUCTURALLY IDENTICAL to rt_fstat (B9.6-C6): only the syscall
+// number differs. 9-instr 36 B body — same length as fstat/mkdir; the sxtw
+// target register (x0, the int `who`) and the SYS number are the sole shape
+// inputs. runtime_core_hxlcl_shim.c L563:
+//   hxlcl_getrusage(int who, void *usage) { return getrusage(who, (struct rusage *)usage); }
+// SYS_getrusage = 117 (0x75) on darwin (SDK sys/syscall.h: #define SYS_getrusage
+// 117) — the darwin BSD trap number in x16, consistent with the SDK-matching
+// precedents in this file (rt_waitpid SYS_wait4=7, rt_mmap SYS_mmap=197). clang
+// -O2 (== as -arch arm64, errno-define context) is byte-for-byte:
+//   sxtw x0,w0 / mov w16,#117 / svc #0x80 / cset x8,hs / cbz x8,Lret
+//   / adrp x8,errno / str w0,[x8] / mov x0,#-1 / ret
+// errno reloc sites: 0x14 (PAGE21) / 0x18 (PAGEOFF12) — same as rt_fstat
+// (identical-length body; only the sxtw register's source and SYS number differ).
+fn rt_getrusage() {
+    let mut c = []
+    // sxtw x0, w0  (sign-extend who arg)    0x93407C00
+    c.push(0)
+    c.push(124)
+    c.push(64)
+    c.push(147)
+    // mov w16, #117  (SYS_getrusage)        0x52800EB0
+    c.push(176)
+    c.push(14)
+    c.push(128)
+    c.push(82)
+    // svc #0x80                             0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // cset x8, hs  (capture carry = error)  0x9A9F37E8
+    c.push(232)
+    c.push(55)
+    c.push(159)
+    c.push(154)
+    // cbz x8, Lret (success → skip errno)   0xB4000088  (+0x10 to ret)
+    c.push(136)
+    c.push(0)
+    c.push(0)
+    c.push(180)
+    // adrp x8, errno@PAGE  [RELOC PAGE21]   0x90000008  (imm zeroed)
+    c.push(8)
+    c.push(0)
+    c.push(0)
+    c.push(144)
+    // str w0, [x8, errno@PAGEOFF] [RELOC]   0xB9000100  (imm zeroed)
+    c.push(0)
+    c.push(1)
+    c.push(0)
+    c.push(185)
+    // mov x0, #-1  (error return)           0x92800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(146)
+    // ret  (x0 = 0 on success / -1 error)   0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// Reloc table for rt_getrusage — two errno records (adrp/str), same offsets as
+// rt_fstat (9-instr body of identical length):
+//   offset 0x14 (20) → ARM64_RELOC_PAGE21   (kind 3, pcrel adrp)
+//   offset 0x18 (24) → ARM64_RELOC_PAGEOFF12 (kind 4, str low-12 bits)
+fn rt_getrusage_reloc_offs() {
+    let mut o = []
+    o.push(20)
+    o.push(24)
+    return o
+}
+fn rt_getrusage_reloc_kinds() {
+    let mut k = []
+    k.push(3)
+    k.push(4)
+    return k
+}
+
 // ── rt_mmap (B9.6-C17 — class-C syscall · 6-arg _cf + errno) ─────────────
 // mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off)
 // -> void *. A 6-arg svc-_cf — the wrapper itself is a pure svc trap (the arena
@@ -5484,6 +5567,11 @@ fn test_runtime_arm64() {
     let mmap_b = rt_mmap()
     let mm_roff = rt_mmap_reloc_offs()
     let mm_rkind = rt_mmap_reloc_kinds()
+    // RFC061 #29 — class-C syscall ABI: getrusage 2-arg _cf + errno (int+ptr,
+    // fstat mirror — only sxtw x0 `who`, x1 `usage` untouched; SYS_getrusage=117).
+    let getrusage_b = rt_getrusage()
+    let gru_roff = rt_getrusage_reloc_offs()
+    let gru_rkind = rt_getrusage_reloc_kinds()
 
     println("runtime_arm64 — ARM64 machine code byte arrays")
     println("  rt_exit          : " + to_string(len(exit_bytes)) + " bytes")
@@ -5537,6 +5625,7 @@ fn test_runtime_arm64() {
     println("  rt_poll          : " + to_string(len(poll_b)) + " bytes (no reloc)")
     println("  rt_waitpid       : " + to_string(len(waitpid_b)) + " bytes (" + to_string(len(wp_roff)) + " relocs)")
     println("  rt_mmap          : " + to_string(len(mmap_b)) + " bytes (" + to_string(len(mm_roff)) + " relocs)")
+    println("  rt_getrusage     : " + to_string(len(getrusage_b)) + " bytes (" + to_string(len(gru_roff)) + " relocs)")
 
     // Verify sizes match expected instruction counts * 4
     let mut ok = true
@@ -5958,6 +6047,27 @@ fn test_runtime_arm64() {
     if len(mm_roff) != 2 { println("  FAIL: rt_mmap expected 2 reloc offsets, got " + to_string(len(mm_roff))); ok = false }
     if mm_roff[0] != 28 || mm_roff[1] != 32 { println("  FAIL: rt_mmap reloc offsets must be 0x1c,0x20"); ok = false }
     if mm_rkind[0] != 3 || mm_rkind[1] != 4 { println("  FAIL: rt_mmap reloc kinds must be PAGE21(3),PAGEOFF12(4)"); ok = false }
+    // RFC061 #29 — class-C syscall ABI: rt_getrusage is a 9-instr 36 B body (2-arg
+    //   svc-_cf int+ptr; sxtw x0/who — x1/usage untouched — then the full _cf errno
+    //   tail; -1 on error). STRUCTURALLY IDENTICAL to rt_fstat; only SYS number differs.
+    if len(getrusage_b) != 36 { println("  FAIL: rt_getrusage expected 36, got " + to_string(len(getrusage_b))); ok = false }
+    // sxtw x0,w0 prefix (00 7c 40 93) — who arg sign-extended.
+    if getrusage_b[0] != 0 || getrusage_b[1] != 124 || getrusage_b[2] != 64 || getrusage_b[3] != 147 { println("  FAIL: rt_getrusage missing sxtw x0 (who)"); ok = false }
+    // mov w16,#117 (b0 0e 80 52) — SYS_getrusage loaded into x16.
+    if getrusage_b[4] != 176 || getrusage_b[5] != 14 || getrusage_b[6] != 128 || getrusage_b[7] != 82 { println("  FAIL: rt_getrusage wrong syscall number (SYS_getrusage=117)"); ok = false }
+    // svc #0x80 at offset 8 (01 10 00 d4).
+    if getrusage_b[8] != 1 || getrusage_b[9] != 16 || getrusage_b[10] != 0 || getrusage_b[11] != 212 { println("  FAIL: rt_getrusage missing svc #0x80 at offset 8"); ok = false }
+    // cset x8,hs at offset 12 (e8 37 9f 9a) — carry-flag capture.
+    if getrusage_b[12] != 232 || getrusage_b[13] != 55 || getrusage_b[14] != 159 || getrusage_b[15] != 154 { println("  FAIL: rt_getrusage missing cset (carry capture)"); ok = false }
+    // adrp x8,errno at offset 20 (08 00 00 90) — PAGE21 reloc site.
+    if getrusage_b[20] != 8 || getrusage_b[21] != 0 || getrusage_b[22] != 0 || getrusage_b[23] != 144 { println("  FAIL: rt_getrusage missing adrp errno (reloc 0x14)"); ok = false }
+    // str w0,[x8] at offset 24 (00 01 00 b9) — PAGEOFF12 reloc site.
+    if getrusage_b[24] != 0 || getrusage_b[25] != 1 || getrusage_b[26] != 0 || getrusage_b[27] != 185 { println("  FAIL: rt_getrusage missing str errno (reloc 0x18)"); ok = false }
+    // ret trailer (c0 03 5f d6).
+    if getrusage_b[32] != 192 || getrusage_b[33] != 3 || getrusage_b[34] != 95 || getrusage_b[35] != 214 { println("  FAIL: rt_getrusage no RET"); ok = false }
+    if len(gru_roff) != 2 { println("  FAIL: rt_getrusage expected 2 reloc offsets, got " + to_string(len(gru_roff))); ok = false }
+    if gru_roff[0] != 20 || gru_roff[1] != 24 { println("  FAIL: rt_getrusage reloc offsets must be 0x14,0x18"); ok = false }
+    if gru_rkind[0] != 3 || gru_rkind[1] != 4 { println("  FAIL: rt_getrusage reloc kinds must be PAGE21(3),PAGEOFF12(4)"); ok = false }
 
     // Verify all sizes are multiples of 4 (ARM64 fixed-width)
     if len(exit_bytes) % 4 != 0 { println("  FAIL: rt_exit not aligned"); ok = false }
@@ -6011,6 +6121,7 @@ fn test_runtime_arm64() {
     if len(poll_b) % 4 != 0 { println("  FAIL: rt_poll not aligned"); ok = false }
     if len(waitpid_b) % 4 != 0 { println("  FAIL: rt_waitpid not aligned"); ok = false }
     if len(mmap_b) % 4 != 0 { println("  FAIL: rt_mmap not aligned"); ok = false }
+    if len(getrusage_b) % 4 != 0 { println("  FAIL: rt_getrusage not aligned"); ok = false }
     // B9.6-D2 — all three end with ret (192,3,95,214).
     let nhf = len(hfloat)
     if hfloat[nhf - 4] != 192 { println("  FAIL: rt_hexa_float no RET"); ok = false }

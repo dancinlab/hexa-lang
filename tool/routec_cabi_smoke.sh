@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi atoll strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strrchr memmove bzero strtoll strtoull strndup time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush popen pclose isalnum isalpha free inet_pton setvbuf darwin_check_fd_set_overflow; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -102,6 +102,8 @@ cat > "$TMP/harness.c" <<'CEOF'
 #include <sys/resource.h> /* struct rusage / RUSAGE_SELF — for the getrusage composition test */
 #include <poll.h>     /* struct pollfd / POLLIN — for the poll composition test */
 #include <time.h>     /* libc time() — the reference oracle for hxlcl_time */
+#include <sys/wait.h> /* waitpid / WIFEXITED / WEXITSTATUS — for the fork roundtrip test */
+#include <sys/socket.h> /* AF_INET / AF_INET6 — for the inet_pton parse test */
 
 /* Route-C-emitted symbols under test (raw C-ABI prototypes). */
 extern size_t hxlcl_strlen(const char *s);
@@ -114,7 +116,24 @@ extern char  *hxlcl_strcpy(char *d, const char *s);
 extern char  *hxlcl_strncpy(char *d, const char *s, size_t n);
 extern char  *hxlcl_strcat(char *d, const char *s);
 extern int    hxlcl_atoi(const char *s);
+/* parse-leaf promotion — atoll is now a real self-emitted Route C leaf (base-10,
+ * no-endptr simplification of strtoll); atoi bl's into it intra-object. */
+extern long long hxlcl_atoll(const char *s);
+/* ctype family — register-only pure-compute (arg is an int value, no mem access). */
+extern int    hxlcl_isalnum(int c);
+extern int    hxlcl_isalpha(int c);
+/* alloc residue — no-op free (bump-arena floor reclaims nothing). */
+extern void   hxlcl_free(void *p);
+/* pure-compute mirror batch 4 — inet_pton (dotted-quad parse + 4-byte caller write,
+ * i64-pack restructure of the frozen b[4]) + setvbuf / darwin_check_fd_set_overflow
+ * (register-only no-op leaves, return 0). */
+extern int    hxlcl_inet_pton(int af, const char *src, void *dst);
+extern int    hxlcl_setvbuf(void *fp, char *buf, int mode, size_t sz);
+extern int    hxlcl_darwin_check_fd_set_overflow(int fd, const void *p, int n);
 extern char  *hxlcl_strdup(const char *s);
+/* dup mirror — strndup. Mirror of the strdup composite (inner malloc + byte loops)
+ * with a cap-bounded scan; returns a fresh NUL-terminated copy of ≤cap bytes. */
+extern char  *hxlcl_strndup(const char *s, size_t cap);
 extern void  *hxlcl_calloc(size_t nmemb, size_t size);
 
 extern void  *hxlcl_realloc(void *p, size_t n);
@@ -170,9 +189,10 @@ extern long   hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int
  * getrusage = plain uniform 2-arg (out-ptr usage*). */
 extern int    hxlcl_open_sys(const char *path, int flags, int mode);
 extern int    hxlcl_getrusage(int who, void *usage);
-/* batch E — pipe. On darwin the Route C leg is a documented -1 stub (BSD pipe is
- * 2nd-return-register, unreachable by single-result __hx_syscall6); the Linux
- * sibling (pipe2 out-ptr) carries the success/roundtrip claim. */
+/* batch E — pipe. On darwin BSD pipe is 2nd-return-register (fds in x0/x1); the
+ * Route C leg DISSOLVES via __hx_syscall6_out2 (dual-return capture) and runs the
+ * full success + write/read roundtrip here, the same claim the Linux pipe2 sibling
+ * carries. */
 extern int    hxlcl_pipe(int fds[2]);
 
 /* batch F search family — strchr / strstr. Pure byte-scan leaves (no syscall, no
@@ -182,11 +202,26 @@ extern int    hxlcl_pipe(int fds[2]);
 extern char  *hxlcl_strchr(const char *s, int c);
 extern char  *hxlcl_strstr(const char *h, const char *n);
 
+/* pure-leaf mirror batch — strrchr / memmove / bzero. Byte-faithful mirrors of the
+ * already-wired strchr / memcpy / memset leaves (no syscall/errno/float/inner-call);
+ * cross-target-identical compute (byteeq proves bit-equal emit, this run proves the
+ * behaviour). strrchr returns the LAST match char* (or NULL); memmove returns dst
+ * and handles overlap (backward copy when dst>src); bzero zeros n bytes. */
+extern char  *hxlcl_strrchr(const char *s, int c);
+extern void  *hxlcl_memmove(void *dst, const void *src, size_t n);
+extern void   hxlcl_bzero(void *s, size_t n);
+
 /* batch G parse family — strtoll. Pure-compute leaf (no syscall, no errno, no
  * inner call) with a NULL-gated `char** endptr` out-param write. Cross-target-
  * identical compute; this run exercises both the value parse AND the endptr
  * store64 (a non-NULL endptr → *endptr == nptr + consumed-length). */
 extern long long hxlcl_strtoll(const char *nptr, char **endptr, int base);
+
+/* parse mirror — strtoull. EXACT unsigned mirror of strtoll (same parse loop + same
+ * NULL-gated endptr store64); differs only by no '-' negate + raw unsigned result.
+ * Cross-target-identical compute; this run exercises value parse AND the endptr
+ * store64 (non-NULL endptr → *endptr == nptr + consumed-length). */
+extern unsigned long long hxlcl_strtoull(const char *nptr, char **endptr, int base);
 
 /* batch H — time / poll. On darwin time uses gettimeofday(116) → reads tv_sec from
  * a hxlcl_malloc'd 16-byte scratch buffer (the heap-scratch substrate); poll uses
@@ -195,17 +230,90 @@ extern long long hxlcl_strtoll(const char *nptr, char **endptr, int base);
 extern int  hxlcl_time(int *t);
 extern int  hxlcl_poll(void *fds, unsigned int nfds, int timeout);
 
+/* batch I — clock_gettime / execve. clock_gettime: darwin has no trap → the body
+ * synthesizes a timespec from gettimeofday(116) written DIRECTLY into the caller's
+ * out-ptr (leak-free); fully exercised here. execve: plain 3-arg; a bad path returns
+ * the raw positive errno on darwin (carry-flag not read — the deferred darwin errno
+ * path), composition-asserted (the Linux sibling carries the -1 + ENOENT claim). */
+extern int  hxlcl_clock_gettime(int clk, void *ts);
+extern int  hxlcl_execve(const char *path, char *const argv[], char *const envp[]);
+
+/* batch J — fork. On darwin BSD fork(2) is 2nd-return-register: child pid in x0 for
+ * BOTH processes, child disambiguated by x1==1. The Route C leg DISSOLVES via
+ * __hx_syscall6_out2 (dual-return capture) and runs the live fork+_exit+waitpid
+ * roundtrip here, the same claim the Linux sibling carries. */
+extern int  hxlcl_fork(void);
+
+/* Wall 2-b ENV — getenv. The FIRST Route C body to reference an extern DATA symbol:
+ * it resolves the libc `environ` global through the GOT (the new __hx_environ_ptr
+ * intrinsic) and byte-walks the NUL-terminated char** array. Pure compute after the
+ * GOT load (no syscall, no errno, no inner bl). Returns a raw char* INTO the live
+ * environ block (or NULL). `environ` itself comes from the C runtime (no harness
+ * definition needed — the routec.o's GOT ref to _environ resolves against libSystem). */
+extern char *hxlcl_getenv(const char *name);
+
+/* Wall 2-b ENV (sibling) — setenv. The FIRST Route C body to WRITE BACK to the
+ * `&environ` global: replace an existing slot in place (`*e = s`) or GROW a fresh
+ * (N+2)-slot char** array and store it into environ via __hx_ptr_store64. Returns 0
+ * on success, -1 (EINVAL) for NULL/empty name. The grow path mallocs via the same
+ * header-writing hxlcl_malloc below; the writeback to environ is proven by reading
+ * the new value back through BOTH hxlcl_getenv AND libc getenv (same live global). */
+extern int hxlcl_setenv(const char *name, const char *value, int overwrite);
+
+/* Wall 3-a CORE FILE* family — fopen/fclose/fread/fwrite/ftell/fseek/fdopen. The
+ * FILE* is the frozen-floor fake pointer `(void*)(uintptr_t)(fd+1)` (NOT a libc
+ * stdio struct), so these are a pure composition over the already-Route-C syscall
+ * leaves (open_sys/read/write/lseek/close, all from routec.o). fread/fwrite return
+ * the ITEM count (got/size), looping partial transfers; ftell/fseek wrap lseek.
+ * Exercised here by a full write→close→reopen→read roundtrip with byte-exact +
+ * position-exact asserts (the same behavioral claim the Linux sibling carries). */
+extern void  *hxlcl_fopen(const char *path, const char *mode);
+extern int    hxlcl_fclose(void *fp);
+extern size_t hxlcl_fread(void *buf, size_t sz, size_t n, void *fp);
+extern size_t hxlcl_fwrite(const void *buf, size_t sz, size_t n, void *fp);
+extern long   hxlcl_ftell(void *fp);
+extern int    hxlcl_fseek(void *fp, long offset, int whence);
+extern void  *hxlcl_fdopen(int fd, const char *mode);
+
+/* Wall 3-b STD-STREAM family — fputs/fputc/fflush. Unlike the CORE FILE* family
+ * (fd+1 fake pointers), these take the LIBC GLOBALS stdout/stderr and detect the
+ * target fd via __hx_stderr_ptr() (the new named-data GOT intrinsic): default fd=1,
+ * fd=2 iff fp==stderr — byte-faithful to the frozen body. Exercised here by writing
+ * a known string to a PIPE'd fd (dup2 stdout→pipe), reading it back byte-exact, and
+ * asserting stderr-routing via a second pipe (dup2 stderr→pipe). fflush is the
+ * trivial no-op (return 0). */
+extern int    hxlcl_fputs(const char *s, void *fp);
+extern int    hxlcl_fputc(int c, void *fp);
+extern int    hxlcl_fflush(void *fp);
+
+/* Wall 3-c POPEN family — popen/pclose. popen("cmd","r") = pipe()+fork()+execve(
+ * "/bin/sh","-c",cmd), returning the CORE-family (read_fd+1) fake FILE*; pclose
+ * decodes the fd, looks the child pid up in the __hx_static_slot fd→pid table, and
+ * close()+waitpid()'s the child → status. THE NEW SUBSTRATE under test is
+ * __hx_static_slot: a self-defined zero-init data buffer (the popen table) addressed
+ * by a LOCAL `adrp _slot_900@PAGE / add @PAGEOFF` pair (DEFINED here, NOT an extern
+ * GOT load — the def-side sibling of __hx_environ_ptr). This darwin run is the
+ * self-static Mach-O `.zerofill`/`.zero` symbol emit+assemble+link proof. popen forks
+ * /bin/sh via the darwin 2nd-return-register fork (out2); the child execve's; the
+ * parent reads the pipe → "hi\n" and pclose waitpid's → 0. */
+extern void  *hxlcl_popen(const char *cmd, const char *mode);
+extern int    hxlcl_pclose(void *stream);
+
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
- * here (sole provider) so there is no multidef with the libc shim: atoll for
- * atoi, malloc for strdup + calloc + realloc. (Each composite PR adds its callee.)
+ * here (sole provider) so there is no multidef with the libc shim: malloc for
+ * strdup + strndup + calloc + realloc. (Each composite PR adds its callee.)
+ *
+ * hxlcl_atoll is NO LONGER supplied here: the PARSE-LEAF PROMOTION batch made it a
+ * real self-emitted Route C leaf (in routec.o), so atoi's inner `bl _hxlcl_atoll`
+ * binds to that emitted body intra-object — defining it here too would multidef.
  *
  * This hxlcl_malloc writes the SAME 16-byte size header the floor hxlcl_malloc
  * does (store n at offset 0, hand back ptr+16) so hxlcl_realloc's negative-offset
  * header read `*(size_t*)(p - 16)` recovers the real old size. The 16-byte
  * payload prefix keeps the returned pointer 16-byte aligned. (Small leaks are
- * fine — this is a short-lived smoke process; no hxlcl_free here.) */
+ * fine — this is a short-lived smoke process; the self-emitted hxlcl_free is a
+ * no-op so it reclaims nothing anyway.) */
 #define HXLCL_HDR 16
-long long hxlcl_atoll(const char *s) { return s ? atoll(s) : 0; }
 void     *hxlcl_malloc(size_t n) {
     size_t want = n ? n : 1;
     unsigned char *base = (unsigned char *)malloc(want + HXLCL_HDR);
@@ -263,14 +371,61 @@ int main(void) {
     hxlcl_strcat(cat, "cd");
     CK(strcmp(cat, "abcd") == 0, "strcat");
 
-    /* composites (inner bl to retained atoll / header-writing malloc).
+    /* composites (inner bl to self-emitted atoll / header-writing malloc).
      * No free() here: the header-writing hxlcl_malloc returns ptr+16, so libc
      * free(ptr) is wrong — and small leaks in a short smoke process are fine. */
     CK(hxlcl_atoi("42") == 42, "atoi 42");
     CK(hxlcl_atoi("-7") == -7, "atoi -7");
 
-    char *dup = hxlcl_strdup("hi");
-    CK(dup != NULL && strcmp(dup, "hi") == 0, "strdup content");
+    /* parse-leaf promotion: atoll as a real self-emitted leaf — base-10 lenient
+     * decimal (ws skip + sign + digit accumulation), no endptr. Exercised directly
+     * (atoi above already bl's into it). */
+    CK(hxlcl_atoll("42") == 42LL, "atoll(\"42\") == 42");
+    CK(hxlcl_atoll("-7") == -7LL, "atoll(\"-7\") == -7 (sign)");
+    CK(hxlcl_atoll("+99") == 99LL, "atoll(\"+99\") == 99 (plus sign)");
+    CK(hxlcl_atoll("  123abc") == 123LL, "atoll leading-ws + trailing-garbage stop");
+    CK(hxlcl_atoll("0") == 0LL, "atoll(\"0\") == 0");
+    CK(hxlcl_atoll("") == 0LL, "atoll(\"\") == 0 (empty)");
+    CK(hxlcl_atoll(NULL) == 0LL, "atoll(NULL) == 0 (NULL guard)");
+
+    /* ctype: register-only pure-compute classification (arg is an int value). */
+    CK(hxlcl_isalnum('A') == 1, "isalnum('A') == 1");
+    CK(hxlcl_isalnum('z') == 1, "isalnum('z') == 1");
+    CK(hxlcl_isalnum('5') == 1, "isalnum('5') == 1");
+    CK(hxlcl_isalnum('_') == 0, "isalnum('_') == 0");
+    CK(hxlcl_isalnum(' ') == 0, "isalnum(' ') == 0");
+    CK(hxlcl_isalpha('A') == 1, "isalpha('A') == 1");
+    CK(hxlcl_isalpha('q') == 1, "isalpha('q') == 1");
+    CK(hxlcl_isalpha('5') == 0, "isalpha('5') == 0 (digit excluded)");
+    CK(hxlcl_isalpha('_') == 0, "isalpha('_') == 0");
+
+    /* alloc residue: no-op free must accept any pointer (incl. NULL) without crash. */
+    hxlcl_free(NULL);
+    { char *fp = (char *)malloc(8); hxlcl_free(fp); free(fp); }
+    CK(1, "free no-op accepts NULL + heap ptr (no crash)");
+
+    /* pure-compute mirror batch 4 — inet_pton dotted-quad parse + caller-write. */
+    { unsigned char ip[4] = {9,9,9,9};
+      CK(hxlcl_inet_pton(AF_INET, "1.2.3.4", ip) == 1, "inet_pton valid returns 1");
+      CK(ip[0]==1 && ip[1]==2 && ip[2]==3 && ip[3]==4, "inet_pton writes 1.2.3.4"); }
+    { unsigned char ip[4] = {9,9,9,9};
+      CK(hxlcl_inet_pton(AF_INET, "255.0.128.17", ip) == 1, "inet_pton 255.0.128.17 ok");
+      CK(ip[0]==255 && ip[1]==0 && ip[2]==128 && ip[3]==17, "inet_pton boundary octets"); }
+    { unsigned char ip[4] = {7,7,7,7};
+      CK(hxlcl_inet_pton(AF_INET, "256.0.0.1", ip) == 0, "inet_pton octet>255 -> 0");
+      CK(ip[0]==7 && ip[1]==7 && ip[2]==7 && ip[3]==7, "inet_pton malformed leaves dst untouched"); }
+    CK(hxlcl_inet_pton(AF_INET, "1.2.3", (unsigned char[4]){0}) == 0, "inet_pton too few octets -> 0");
+    CK(hxlcl_inet_pton(AF_INET, "1.2.3.4.5", (unsigned char[4]){0}) == 0, "inet_pton too many octets -> 0");
+    CK(hxlcl_inet_pton(AF_INET, "1.2.x.4", (unsigned char[4]){0}) == 0, "inet_pton stray char -> 0");
+    CK(hxlcl_inet_pton(AF_INET, "1..3.4", (unsigned char[4]){0}) == 0, "inet_pton empty octet -> 0");
+    CK(hxlcl_inet_pton(AF_INET6, "1.2.3.4", (unsigned char[4]){0}) == -1, "inet_pton non-AF_INET -> -1");
+
+    /* pure-compute mirror batch 4 — no-op leaves return 0. */
+    CK(hxlcl_setvbuf(NULL, NULL, 0, 0) == 0, "setvbuf no-op returns 0");
+    CK(hxlcl_darwin_check_fd_set_overflow(3, NULL, 0) == 0, "darwin_check_fd_set_overflow returns 0");
+
+    char *sdup = hxlcl_strdup("hi");
+    CK(sdup != NULL && strcmp(sdup, "hi") == 0, "strdup content");
 
     char *z = (char *)hxlcl_calloc(3, 4);  /* 12 bytes, all zero */
     int allzero = (z != NULL);
@@ -424,16 +579,23 @@ int main(void) {
         CK(hxlcl_getrusage(RUSAGE_SELF, &ru) == 0, "getrusage(RUSAGE_SELF) == 0 (composition, out-ptr)");
     }
 
-    /* batch E: pipe — DARWIN is the genuine 2nd-return-register wall. BSD pipe(42)
-     * returns the two fds in x0/x1; the single-result __hx_syscall6 exposes only
-     * x0, so the Route C darwin leg CANNOT write fds[1] and returns -1 (documented
-     * incomplete — the real darwin pipe stays the floor _hxlcl_pipe_cf asm shim).
-     * Asserting == -1 locks in that documented gap (a future dual-reg fix would
-     * flip this and force a smoke update). The Linux sibling carries the success +
-     * write/read roundtrip claim (pipe2 out-ptr). */
+    /* batch E: pipe — DARWIN 2nd-return-register DISSOLVE (via __hx_syscall6_out2).
+     * BSD pipe(42) returns the two fds in x0/x1; the dual-return intrinsic captures
+     * both regs into a heap scratch and the darwin leg copies them into the int[2].
+     * Full success + write→read roundtrip (the same claim the Linux pipe2 sibling
+     * carries) — proving both fds are valid and usable, i.e. fds[1] is no longer
+     * lost. */
     {
         int pfd[2] = { -1, -1 };
-        CK(hxlcl_pipe(pfd) == -1, "pipe() == -1 on darwin (documented 2nd-return-reg wall)");
+        CK(hxlcl_pipe(pfd) == 0, "pipe() == 0 on darwin (2nd-return-reg dual capture)");
+        CK(pfd[0] >= 0 && pfd[1] >= 0, "pipe() fills fds[0],fds[1] from x0/x1 (value-exact)");
+        if (pfd[0] >= 0 && pfd[1] >= 0) {
+            char wb = 'Z', rb = 0;
+            CK(write(pfd[1], &wb, 1) == 1, "darwin pipe write end usable");
+            CK(read(pfd[0], &rb, 1) == 1 && rb == 'Z', "darwin pipe read end roundtrip == 'Z'");
+            hxlcl_close(pfd[0]);
+            hxlcl_close(pfd[1]);
+        }
     }
 
     /* batch F: strchr / strstr — pure byte-scan leaves (cross-target-identical,
@@ -461,6 +623,33 @@ int main(void) {
         CK(hxlcl_strstr("aaa", "aab") == NULL,    "strstr partial-then-mismatch → NULL");
     }
 
+    /* pure-leaf mirror batch: strrchr / memmove / bzero — pure byte ops mirroring
+     * strchr / memcpy / memset. Pointers checked by identity AND content, so a
+     * PAIR-MODEL ABI leak (boxed pointer) or off-by-one would be caught. */
+    {
+        const char *abc = "abcXYZabc";
+        CK(hxlcl_strrchr(abc, 'a') == abc + 6, "strrchr finds LAST 'a' at &abc[6]");
+        CK(hxlcl_strrchr(abc, 'X') == abc + 3, "strrchr finds 'X' at &abc[3]");
+        CK(hxlcl_strrchr(abc, 'z') == NULL,    "strrchr('z') → NULL (absent)");
+        CK(hxlcl_strrchr(abc, 0) == abc + 9,   "strrchr(0) → terminator pointer");
+    }
+    {
+        char b1[16]; memcpy(b1, "ABCDEFGH", 9);
+        CK(hxlcl_memmove(b1, b1 + 2, 6) == b1, "memmove returns dst");
+        CK(memcmp(b1, "CDEFGH", 6) == 0, "memmove forward (dst<src overlap) shifts left");
+    }
+    {
+        char b2[16]; memcpy(b2, "ABCDEFGH", 9);
+        hxlcl_memmove(b2 + 2, b2, 6);          /* dst>src overlap → backward copy */
+        CK(memcmp(b2, "ABABCDEF", 8) == 0, "memmove backward (dst>src overlap) shifts right");
+    }
+    {
+        char b3[8]; memset(b3, 0x55, 8);
+        hxlcl_bzero(b3 + 1, 4);
+        CK(b3[0] == 0x55 && b3[1] == 0 && b3[2] == 0 && b3[3] == 0 &&
+           b3[4] == 0 && b3[5] == 0x55, "bzero zeros bytes [1..5), leaves neighbours");
+    }
+
     /* batch G: strtoll — value parse + endptr store64 (the OUT-PARAM write under
      * test). endptr==NULL exercises the NULL-gate (no store); endptr!=NULL
      * exercises the __hx_ptr_store64 → *endptr == nptr + consumed-length. */
@@ -486,6 +675,49 @@ int main(void) {
         char *endp3 = (char *)0x1;
         CK(hxlcl_strtoll(NULL, &endp3, 10) == 0, "strtoll(NULL,&end,10) == 0");
         CK(endp3 == NULL, "strtoll(NULL) sets *endptr = NULL");
+    }
+
+    /* parse mirror: strtoull — unsigned mirror of strtoll. Same parse + endptr
+     * store64 out-param; differs only by no '-' negate + raw unsigned result. */
+    {
+        CK(hxlcl_strtoull("42", NULL, 10) == 42ULL, "strtoull(\"42\",NULL,10) == 42 (endptr NULL-gate)");
+        CK(hxlcl_strtoull("+99", NULL, 10) == 99ULL, "strtoull(\"+99\",NULL,10) == 99 (plus sign)");
+        CK(hxlcl_strtoull("  123abc", NULL, 10) == 123ULL, "strtoull leading-ws + trailing-garbage stop");
+        CK(hxlcl_strtoull("0", NULL, 10) == 0ULL, "strtoull(\"0\") == 0");
+        CK(hxlcl_strtoull("ff", NULL, 16) == 255ULL, "strtoull(\"ff\",16) == 255 (lowercase hex)");
+        CK(hxlcl_strtoull("0755", NULL, 0) == 493ULL, "strtoull(\"0755\",0) == 0755 octal (493)");
+        CK(hxlcl_strtoull("10", NULL, 0) == 10ULL, "strtoull(\"10\",0) == 10 (decimal auto)");
+        /* large unsigned value that overflows signed long long → exercises the
+         * unsigned path (strtoll would wrap negative; strtoull returns it raw). */
+        CK(hxlcl_strtoull("18446744073709551615", NULL, 10) == 18446744073709551615ULL,
+           "strtoull(ULLONG_MAX) == 0xFFFFFFFFFFFFFFFF (unsigned, no negate)");
+        const char *uhx = "0xFF";
+        char *uendp = NULL;
+        unsigned long long uv = hxlcl_strtoull(uhx, &uendp, 16);
+        CK(uv == 255ULL, "strtoull(\"0xFF\",&end,16) == 255 (0x prefix skip)");
+        CK(uendp == uhx + 4, "strtoull endptr == nptr+4 (store64 out-param write)");
+        const char *umix = "12x";
+        char *uendp2 = NULL;
+        CK(hxlcl_strtoull(umix, &uendp2, 10) == 12ULL, "strtoull(\"12x\",&end,10) == 12");
+        CK(uendp2 == umix + 2, "strtoull endptr stops at first non-digit (mix+2)");
+        char *uendp3 = (char *)0x1;
+        CK(hxlcl_strtoull(NULL, &uendp3, 10) == 0ULL, "strtoull(NULL,&end,10) == 0");
+        CK(uendp3 == NULL, "strtoull(NULL) sets *endptr = NULL");
+    }
+
+    /* dup mirror: strndup — strdup composite + cap-bounded scan. Checks the cap
+     * truncation (no-NUL-within-cap), the NUL-before-cap short copy, cap==0, and
+     * NULL passthrough — the strndup behaviour battery from the SELFEMIT seed. */
+    {
+        char *d1 = hxlcl_strndup("hello", 3);   /* cap < strlen → truncated copy */
+        CK(d1 != NULL && strcmp(d1, "hel") == 0, "strndup(\"hello\",3) == \"hel\" (cap truncates)");
+        char *d2 = hxlcl_strndup("hi", 10);     /* cap > strlen → full copy (NUL-before-cap) */
+        CK(d2 != NULL && strcmp(d2, "hi") == 0, "strndup(\"hi\",10) == \"hi\" (NUL before cap)");
+        char *d3 = hxlcl_strndup("abc", 0);     /* cap == 0 → empty string */
+        CK(d3 != NULL && d3[0] == '\0', "strndup(\"abc\",0) == \"\" (cap==0)");
+        char *d4 = hxlcl_strndup("xyz", 3);     /* cap == strlen → full copy */
+        CK(d4 != NULL && strcmp(d4, "xyz") == 0, "strndup(\"xyz\",3) == \"xyz\" (cap==len)");
+        CK(hxlcl_strndup(NULL, 5) == NULL, "strndup(NULL,5) == NULL (NULL passthrough)");
     }
 
     /* batch H — time / poll. FULLY EXERCISED on this darwin host (both legs run).
@@ -518,6 +750,218 @@ int main(void) {
         }
     }
 
+    /* batch I — clock_gettime / execve. FULLY exercised on this darwin host.
+     * clock_gettime: darwin has no trap, so the body uses gettimeofday(116) written
+     * directly into the caller's timespec out-ptr and converts tv_usec→tv_nsec*1000
+     * in place — assert it returns 0, tv_sec is post-2023, and tv_nsec is a valid
+     * [0,1e9) sub-second (the usec*1000 conversion + the trailing-garbage overwrite).
+     * execve: a bad path can never succeed (success replaces the process); on darwin
+     * the carry flag is not read, so the body returns the raw POSITIVE errno (> 0) —
+     * composition-assert it returns a positive failure code and the process survives
+     * (the Linux sibling carries the -1 + ENOENT value-exact claim). Asserting > 0
+     * locks the documented darwin carry-flag-deferred gap (a future darwin errno fix
+     * would flip it to -1 and force a smoke update, same discipline as pipe == -1). */
+    {
+        struct timespec ts;
+        ts.tv_sec = 0; ts.tv_nsec = -1;
+        CK(hxlcl_clock_gettime(CLOCK_REALTIME, &ts) == 0, "clock_gettime(CLOCK_REALTIME) == 0 (darwin gettimeofday synth)");
+        CK(ts.tv_sec > 1700000000, "clock_gettime tv_sec > 2023-11 epoch (out-ptr written)");
+        CK(ts.tv_nsec >= 0 && ts.tv_nsec < 1000000000, "clock_gettime tv_nsec in [0,1e9) (usec*1000, garbage overwritten)");
+
+        char *eargv[] = { (char *)"x", NULL };
+        char *eenvp[] = { NULL };
+        CK(hxlcl_execve("/nonexistent_xyz_exec_zzz", eargv, eenvp) > 0, "execve(bad path) > 0 (darwin raw +errno, carry deferred; process intact)");
+    }
+
+    /* batch J — fork. DARWIN 2nd-return-register DISSOLVE (via __hx_syscall6_out2).
+     * BSD fork(2) returns the child pid in x0 for BOTH parent and child and
+     * disambiguates the child by x1==1; the dual-return intrinsic captures x0/x1 so
+     * the darwin leg returns 0 in the child and the child pid in the parent (mirror
+     * of the floor raw-asm dual-reg shim). Live fork+_exit+waitpid roundtrip — the
+     * same behavioral claim the Linux sibling carries. */
+    {
+        int pid = hxlcl_fork();
+        if (pid == 0) { _exit(42); }   /* child: distinguish via the 2nd return reg */
+        CK(pid > 0, "fork() > 0 in parent (child pid via x0; child took x1==1 path)");
+        if (pid > 0) {
+            int st = 0;
+            int w = (int)waitpid(pid, &st, 0);
+            CK(w == pid && WIFEXITED(st) && WEXITSTATUS(st) == 42,
+               "darwin fork+_exit(42)+waitpid roundtrip (dual-return disambiguation)");
+        }
+    }
+
+    /* Wall 2-b — getenv via the __hx_environ_ptr named-data GOT intrinsic + byte-walk.
+     * FULLY exercised here (the GOT load + array walk is host-runnable on darwin).
+     * Value-exact vs libc getenv() AND content-exact for a set var; an absent key →
+     * NULL; a prefix of a real key → NULL (the break-free early-stop must not match a
+     * longer entry, nor over-read a shorter one). The returned pointer is INTO the same
+     * live environ block libc walks, so identity (== libc getenv) holds — a wrong GOT
+     * deref depth, a PAIR-MODEL ABI leak, or an over-read would crash/mis-return. */
+    {
+        CK(hxlcl_getenv("__HX_NONEXISTENT_KEY_ZZZ__") == NULL, "getenv(absent key) → NULL");
+        char *hp = hxlcl_getenv("PATH");
+        char *lp = getenv("PATH");
+        CK(hp != NULL, "getenv(\"PATH\") != NULL");
+        CK(hp != NULL && hp[0] != 0, "getenv(\"PATH\") non-empty");
+        CK(hp == lp, "getenv(\"PATH\") == libc getenv (same environ-block pointer, value-exact)");
+        setenv("HX_SMOKE_ENVVAR", "route-c-wall2b", 1);
+        char *sv = hxlcl_getenv("HX_SMOKE_ENVVAR");
+        CK(sv != NULL && strcmp(sv, "route-c-wall2b") == 0, "getenv(set var) == value (content-exact)");
+        setenv("HX_SMOKE_LONGKEY", "L", 1);
+        CK(hxlcl_getenv("HX_SMOKE_LONG") == NULL, "getenv(prefix of a real key) → NULL (early-stop, no over-read)");
+        /* A longer query than any matching entry must also miss (entry NUL before
+         * nlen → the `entry[i]==0` early-stop fires, no over-read past the entry). */
+        CK(hxlcl_getenv("HX_SMOKE_ENVVAR_EXTRA") == NULL, "getenv(query longer than a real key) → NULL (short-entry stop)");
+    }
+
+    /* Wall 2-b (sibling) — setenv: the environ WRITE-BACK. Reference-match POSIX
+     * setenv(3): GROW for a fresh key (writeback must reach the live global so BOTH
+     * hxlcl_getenv AND libc getenv see it), in-place slot REPLACE on overwrite!=0,
+     * NO-OP preserve on overwrite==0, repeated GROW (second fresh key) keeping the
+     * first, and EINVAL (-1) for NULL/empty name. Value-exact throughout. A writeback
+     * that landed in a COPY instead of &environ would make libc getenv miss the new
+     * key — the strongest proof the store reached the global. */
+    {
+        /* (1) GROW — fresh key; writeback reaches the live global (libc getenv sees it). */
+        CK(hxlcl_setenv("HX_RC_NEW", "v1", 1) == 0, "setenv(fresh key) → 0");
+        char *g1 = hxlcl_getenv("HX_RC_NEW");
+        CK(g1 != NULL && strcmp(g1, "v1") == 0, "setenv(fresh): hxlcl_getenv == \"v1\" (content-exact)");
+        char *l1 = getenv("HX_RC_NEW");
+        CK(l1 != NULL && strcmp(l1, "v1") == 0, "setenv(fresh): libc getenv == \"v1\" (writeback reached &environ)");
+        /* (2) REPLACE — overwrite!=0 swaps the slot in place. */
+        CK(hxlcl_setenv("HX_RC_NEW", "v2", 1) == 0, "setenv(overwrite=1) → 0");
+        char *g2 = hxlcl_getenv("HX_RC_NEW");
+        CK(g2 != NULL && strcmp(g2, "v2") == 0, "setenv(overwrite): value replaced → \"v2\"");
+        /* (3) NO-OP — overwrite==0 must preserve the existing value. */
+        CK(hxlcl_setenv("HX_RC_NEW", "v3", 0) == 0, "setenv(overwrite=0, exists) → 0");
+        char *g3 = hxlcl_getenv("HX_RC_NEW");
+        CK(g3 != NULL && strcmp(g3, "v2") == 0, "setenv(overwrite=0): value preserved → \"v2\"");
+        /* (4) repeated GROW — a second fresh key; the prior key must survive the regrow. */
+        CK(hxlcl_setenv("HX_RC_NEW2", "w1", 1) == 0, "setenv(second fresh key) → 0");
+        char *g4 = hxlcl_getenv("HX_RC_NEW2");
+        CK(g4 != NULL && strcmp(g4, "w1") == 0, "setenv(regrow): new key == \"w1\"");
+        char *g5 = hxlcl_getenv("HX_RC_NEW");
+        CK(g5 != NULL && strcmp(g5, "v2") == 0, "setenv(regrow): prior key HX_RC_NEW survives == \"v2\"");
+        /* (5) EINVAL — NULL and empty name → -1. */
+        CK(hxlcl_setenv(NULL, "x", 1) == -1, "setenv(NULL name) → -1 (EINVAL)");
+        CK(hxlcl_setenv("", "x", 1) == -1, "setenv(empty name) → -1 (EINVAL)");
+    }
+
+    /* Wall 3-a — CORE FILE* family roundtrip. fopen("w") → fwrite known bytes →
+     * fclose → fopen("r") → fread → byte-exact match + ftell/fseek position-exact.
+     * The fake FILE* is fd+1 (the floor encoding), so this exercises the full
+     * compose-over-syscalls path (open_sys/write/close/read/lseek). FULLY run on
+     * darwin (real file I/O). */
+    {
+        char tmpl[] = "/tmp/routec_file_XXXXXX";
+        int tfd = mkstemp(tmpl);
+        CK(tfd >= 0, "mkstemp for FILE* roundtrip");
+        if (tfd >= 0) close(tfd);   /* close; reopen through hxlcl_fopen */
+
+        const char payload[] = "RouteC-FILE-roundtrip-0123456789";  /* 32 bytes */
+        size_t plen = sizeof(payload) - 1;
+
+        void *fw = hxlcl_fopen(tmpl, "w");
+        CK(fw != NULL, "fopen(w) != NULL (fd+1 fake FILE*)");
+        CK(hxlcl_fwrite(payload, 1, plen, fw) == plen, "fwrite(size=1) item count == 32");
+        CK(hxlcl_fclose(fw) == 0, "fclose(w) == 0");
+
+        void *fr = hxlcl_fopen(tmpl, "r");
+        CK(fr != NULL, "fopen(r) != NULL");
+        char rbuf[64]; memset(rbuf, 0, sizeof rbuf);
+        CK(hxlcl_fread(rbuf, 1, plen, fr) == plen, "fread(size=1) item count == 32");
+        CK(memcmp(rbuf, payload, plen) == 0, "fread bytes == fwrite bytes (value-exact)");
+        CK(hxlcl_ftell(fr) == (long)plen, "ftell after reading 32 == 32 (position-exact)");
+
+        CK(hxlcl_fseek(fr, 0, SEEK_SET) == 0, "fseek(SET, 0) == 0");
+        CK(hxlcl_ftell(fr) == 0, "ftell after rewind == 0");
+        char ib[8]; memset(ib, 0, sizeof ib);
+        CK(hxlcl_fread(ib, 4, 1, fr) == 1, "fread(size=4, n=1) → 1 item (item-count math)");
+        CK(memcmp(ib, payload, 4) == 0, "fread item content matches first 4 bytes");
+        CK(hxlcl_ftell(fr) == 4, "ftell after a 4-byte item == 4");
+        CK(hxlcl_fseek(fr, 10, SEEK_SET) == 0, "fseek(SET, 10) == 0");
+        CK(hxlcl_ftell(fr) == 10, "ftell after seek(10) == 10 (position-exact)");
+        CK(hxlcl_fclose(fr) == 0, "fclose(r) == 0");
+
+        /* fdopen: wrap a raw fd and read through the fake FILE*. */
+        int rawfd = open(tmpl, O_RDONLY);
+        CK(rawfd >= 0, "open raw fd for fdopen test");
+        void *fd_fp = hxlcl_fdopen(rawfd, "r");
+        CK(fd_fp != NULL, "fdopen(rawfd) != NULL (fd+1 wrap)");
+        char db[8]; memset(db, 0, sizeof db);
+        CK(hxlcl_fread(db, 1, 4, fd_fp) == 4, "fread via fdopen'd fd → 4");
+        CK(memcmp(db, payload, 4) == 0, "fdopen fread content matches");
+        CK(hxlcl_fclose(fd_fp) == 0, "fclose(fdopen) == 0");
+
+        unlink(tmpl);
+    }
+
+    /* Wall 3-b — STD-STREAM family fputs/fputc/fflush. fflush is a definitional
+     * no-op; fputs/fputc detect the target fd from the libc stdout/stderr globals
+     * (default fd=1, fd=2 iff fp==stderr — via __hx_stderr_ptr). Exercised by
+     * redirecting fd 1 and fd 2 to pipes (dup2), writing through hxlcl_fputs/fputc
+     * with the REAL libc stdout/stderr pointers, then reading each pipe back byte-
+     * exact — proving the stderr-vs-default routing is value-correct (a wrong
+     * __hx_stderr_ptr GOT load, or a missing pointer-compare, would misroute the
+     * stderr write to fd 1 and the stdout pipe would carry the wrong bytes). */
+    {
+        CK(hxlcl_fflush(stdout) == 0, "fflush(stdout) == 0 (no-op leaf)");
+        CK(hxlcl_fflush(stderr) == 0, "fflush(stderr) == 0 (no-op leaf)");
+        CK(hxlcl_fflush(NULL)   == 0, "fflush(NULL) == 0 (no-op leaf)");
+
+        int op1[2], op2[2];
+        if (pipe(op1) == 0 && pipe(op2) == 0) {
+            int save1 = dup(1), save2 = dup(2);
+            /* route fd 1 → op1 write-end, fd 2 → op2 write-end */
+            dup2(op1[1], 1);
+            dup2(op2[1], 2);
+            /* stdout path: default fd=1 (fp != stderr) */
+            int wo = hxlcl_fputs("OUT", stdout);
+            int wc = hxlcl_fputc('!', stdout);
+            /* stderr path: fp == stderr → fd=2 */
+            int we = hxlcl_fputs("ERR", stderr);
+            /* restore real stdout/stderr BEFORE any printf in CK */
+            dup2(save1, 1); dup2(save2, 2);
+            close(save1); close(save2);
+            close(op1[1]); close(op2[1]);
+
+            char b1[16]; char b2[16];
+            ssize_t r1 = read(op1[0], b1, sizeof(b1)); if (r1 < 0) r1 = 0; b1[r1] = 0;
+            ssize_t r2 = read(op2[0], b2, sizeof(b2)); if (r2 < 0) r2 = 0; b2[r2] = 0;
+            close(op1[0]); close(op2[0]);
+
+            CK(wo == 3, "fputs(\"OUT\", stdout) → 3 bytes");
+            CK(wc == '!', "fputc('!', stdout) → '!' (success returns the char)");
+            CK(we == 3, "fputs(\"ERR\", stderr) → 3 bytes");
+            CK(strcmp(b1, "OUT!") == 0, "stdout pipe got \"OUT!\" (default fd=1, byte-exact)");
+            CK(strcmp(b2, "ERR") == 0, "stderr pipe got \"ERR\" (fp==stderr → fd=2, routing-exact)");
+        } else {
+            CK(0, "pipe() setup for std-stream routing test");
+        }
+    }
+
+    /* Wall 3-c — popen/pclose roundtrip over the __hx_static_slot fd→pid table.
+     * popen("echo hi","r") forks /bin/sh -c "echo hi" (darwin 2nd-return-reg fork via
+     * out2); its stdout (the pipe) yields "hi\n"; pclose waitpid's the child → 0. The
+     * self-static popen table is the new __hx_static_slot Mach-O .data buffer — this
+     * is its emit+assemble+link+address proof. Locals named to AVOID any libc shadow
+     * (no `popen`/`read`/`status` local overriding a libc name — the dup()-shadow
+     * lesson). Value-exact: content == "hi\n" AND pclose status == 0. */
+    {
+        void *phandle = hxlcl_popen("echo hi", "r");
+        CK(phandle != (void *)0, "popen(\"echo hi\",\"r\") != NULL");
+        if (phandle != (void *)0) {
+            char rdbuf[32];
+            memset(rdbuf, 0, sizeof(rdbuf));
+            size_t got = hxlcl_fread(rdbuf, 1, sizeof(rdbuf) - 1, phandle);
+            rdbuf[got] = 0;
+            CK(strcmp(rdbuf, "hi\n") == 0, "popen child stdout == \"hi\\n\" (byte-exact)");
+            int pcst = hxlcl_pclose(phandle);
+            CK(pcst == 0, "pclose(child exit 0) == 0 (status-exact)");
+        }
+    }
+
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }
     printf("[routec-smoke] %d assert(s) FAILED\n", fails);
     return 1;
@@ -530,4 +974,4 @@ echo "[routec-smoke] (3) compile harness + link Route C .o + run …"
 "$TMP/routec_smoke"
 rc=$?
 [ "$rc" -eq 0 ] || { echo "[routec-smoke] FATAL: behaviour run rc=$rc" >&2; exit 1; }
-echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr, darwin-arm64)"
+echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr + pure-leaf mirror strrchr/memmove/bzero + parse/dup mirror strtoull/strndup + parse-leaf promotion atoll + ctype isalnum/isalpha + alloc-residue free + pure-compute mirror batch4 inet_pton/setvbuf/darwin_check_fd_set_overflow + Wall 3-a CORE FILE* fopen/fread/fwrite/fseek/ftell/fclose/fdopen + Wall 3-b STD-STREAM fputs/fputc/fflush, darwin-arm64)"
