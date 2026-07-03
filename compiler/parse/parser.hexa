@@ -1807,6 +1807,89 @@ fn parse_let_expr(anns: [Annotation]) -> Expr {
     }
 }
 
+// ── Contextual `defer` (HEXA-OWN M1) ──────────────────────────
+//
+// `defer <expr>` / `defer <block>` registers a scope-exit action that
+// drains at fn exit in LIFO order (gen2 parity port of
+// self/parser.hexa::parse_defer_stmt). `defer` is NOT a reserved keyword —
+// it lexes as an ordinary Ident so bindings named `defer` keep working.
+//
+// Gate (Q4): parse_primary never rejects a token — it returns a
+// placeholder Ident for anything unknown — so a try-parse gate is
+// structurally impossible. The dispatch must therefore be an EXPLICIT
+// TokenKind whitelist of expression-start tokens. Anything else after a
+// stmt-position `defer` Ident (Eq / Colon / Dot / LBracket / binary
+// operators / RBrace / Eof / …) means "use of a binding named defer" and
+// falls through to expression parsing in parse_stmt.
+fn _defer_body_start(k: TokenKind) -> bool {
+    if same_kind(k, TokenKind::LBrace) { return true }
+    if same_kind(k, TokenKind::Number) { return true }
+    if same_kind(k, TokenKind::String) { return true }
+    if same_kind(k, TokenKind::Char) { return true }
+    if same_kind(k, TokenKind::KwTrue) { return true }
+    if same_kind(k, TokenKind::KwFalse) { return true }
+    if same_kind(k, TokenKind::PNode) { return true }
+    if same_kind(k, TokenKind::CNode) { return true }
+    if same_kind(k, TokenKind::LNode) { return true }
+    if same_kind(k, TokenKind::ENode) { return true }
+    if same_kind(k, TokenKind::Ident) { return true }
+    if same_kind(k, TokenKind::LParen) { return true }
+    return false
+}
+
+// parse_defer_expr — modeled on parse_let_expr. Cursor sits on the
+// contextual `defer` Ident; the gate above already validated peek_at(1).
+//
+// Body forms:
+//   defer { stmt* }   → body = the block itself
+//   defer <expr>      → expr parses via parse_logical_or — NOT parse_expr
+//     (== parse_assignment), which would silently ACCEPT an assignment
+//     body like `defer x = 1`. gen2 rejects that shape, so the native
+//     grammar rejects it too (Q3): if the token after the expr body is an
+//     Eq-family operator, emit HX0014 and resync. The expr is wrapped in
+//     a single-child Block so the carrier's child is always a Block.
+//
+// Carrier encoding: ExprKind::Block + text "__defer__" + children
+// [body_block] (see ast.hexa::ast_is_defer) — the match_guard
+// no-new-variant idiom, avoiding the ~92-site exhaustive-match churn.
+fn parse_defer_expr(anns: [Annotation]) -> Expr {
+    let kw = peek()
+    advance()
+    let mut body = empty_expr()
+    if check_kind(TokenKind::LBrace) {
+        body = parse_block_expr()
+    } else {
+        let inner = parse_logical_or()
+        if check_kind(TokenKind::Eq) || check_kind(TokenKind::PlusEq)
+           || check_kind(TokenKind::MinusEq) || check_kind(TokenKind::StarEq)
+           || check_kind(TokenKind::SlashEq) {
+            let t = peek()
+            _push_parse_diag("HX0014", t.span, tag_of(t.kind))
+            _skip_to_resync()
+        }
+        let mut bk = []
+        bk.push(inner)
+        body = Expr {
+            kind: ExprKind::Block,
+            span: kw.span,
+            text: "",
+            annotations: [],
+            children: bk,
+            atlas_ref: empty_atlas()
+        }
+    }
+    let mut kids = []
+    kids.push(body)
+    return Expr {
+        kind: ExprKind::Block,
+        span: kw.span,
+        text: "__defer__",
+        annotations: anns,
+        children: kids,
+        atlas_ref: empty_atlas()
+    }
+}
+
 // statement-as-expr: anything legal inside a block. Returns an Expr.
 //
 // PR-C piece 2: collect any `@name(...)` annotations that precede the stmt
@@ -1832,6 +1915,17 @@ fn parse_stmt() -> Expr {
         if same_kind(_vn.kind, TokenKind::Ident)
            && (same_kind(_va.kind, TokenKind::Eq) || same_kind(_va.kind, TokenKind::Colon)) {
             return parse_let_expr(anns)
+        }
+    }
+    // Contextual `defer <expr>` / `defer <block>` (HEXA-OWN M1). `defer` is
+    // an ordinary Ident; only a stmt-position `defer` followed by a
+    // whitelisted expression-start token routes to parse_defer_expr.
+    // `defer = …` / `defer.foo` / `defer[i]` / `defer + 1` (uses of a
+    // binding named `defer`) fall through to expression parsing — same
+    // contextual dispatch idiom as `var` above (#3681).
+    if check_kind(TokenKind::Ident) && peek().text == "defer" {
+        if _defer_body_start(peek_at(1).kind) {
+            return parse_defer_expr(anns)
         }
     }
     return parse_expr()

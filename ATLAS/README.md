@@ -4569,6 +4569,117 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
      candidates get a REAL exact-int verdict instead of a parse-reject. Bounded-unique ⟺ ∀n stays
      UNPROVEN (c2). NO atlas write (fold = hexa verify g5 / PR only).
      engines: state/novel-dfs/vocab_universal_hunt.py · grid_expand_sweep.py (re-runnable).
+
+  --- Ralph 376 (2026-06-27): FUNCTION-COMPOSITION frame — σ∘σ vein swept ---
+  🔬 The productive vein Ralph 372/375 named (function COMPOSITION f(g(n)), the algebra the
+     PRODUCT frame A·B=C·D structurally cannot express — σ(σ(n))=2n has no product restatement)
+     is now IMPLEMENTED + SWEPT. Native exact-int evaluator absorbed into the binary
+     (compiler/atlas/identity_engine.hexa::af_compose / comp_holds / comp_count /
+     verify_composition · 18×18 ordered composition table × comparison frames k·n / h+n / h / comp).
+  ✅ SANITY (classical = open answer-key, REDISCOVERED exact-int): superperfect σ(σ(n))=2n hits
+     {2,4,16,64,4096} = 2^(p−1) for 2^p−1 Mersenne prime (Suryanarayana 1969 / OEIS A019279,
+     exactly 5 in [2,2·10⁴]) · Mersenne characterization σ(σ(n))=σ(n)+n hits {3,7,31,127,8191}.
+  📊 SWEEP (state/novel-dfs/composition_hunt.py · N=2·10⁴ · 18×18 table · exact-int · deterministic):
+       total finite-solution hits = 3359 — of which coincidence noise (|sol|<3) = 1727 (NOT
+       identities), STRUCTURED-sparse (|sol|≥3) = 1632 (KNOWN/classical 4 + bounded-EVIDENCE 1628),
+       universal-in-[2,N] structural restatements = 2909 (n∘g=g-type, not composition-NEW).
+  🧱 HONEST VERDICT (c2): novel PROMOTABLE composition laws (bounded-unique singleton n≥4 OR
+     universal-forall, non-classical) = **0** — DRY. The bounded-unique singletons are single-
+     point numeric ACCIDENTS (composition vs a comparison form coincides at a lone n, no law);
+     the |sol|≥3 "structured" sets are THIN restricted-domain coincidences (e.g. sopfr∘rad=core on
+     prime-squares p²; ω∘σ=ω∘core on squares) — bounded-evidence only, forall UNPROVEN, elementary/
+     classical-reducible. The composition vein reproduces ONLY the classical Mersenne-linked family
+     (superperfect · σ∘σ=σ+n · σ∘φ=n · φ∘σ=n · …). SAME terminal as the product frame (Ralph 375
+     novel=0), reached HONESTLY across a genuinely DIFFERENT algebra. The implementation is the
+     deliverable: future generators emitting composition-syntax candidates now get a REAL exact-int
+     verdict (wired into drill.hexa::_native_identity_sweep · comp_id/comp_verified audit counts)
+     instead of a parse-reject. NO atlas write (fold = hexa verify g5 / PR only). selftest:
+     compiler/drill/composition_test.hexa (superperfect/Mersenne G-gates) + identity_engine.hexa
+     main CMP1–CMP5. engine: state/novel-dfs/composition_hunt.py (re-runnable, arg = N).
+```
+
+  --- Ralph 377 (2026-06-27): ORTHOGONAL PIVOT — additive/combinatorial number theory ---
+```
+  ⚙️ Ralph 369–375 measured the MULTIPLICATIVE arithmetic-function space (σ,φ,τ,μ,λ,J_k,ψ,
+     2^ω,core, …) exhausted — every primitive collapses to the classical Mersenne/superperfect
+     core because those functions are ALL built on the factorization n=∏p^e. This round PIVOTS
+     to a genuinely ORTHOGONAL algebra: the NON-multiplicative GENERATING-FUNCTION / RECURRENCE
+     sequences, which cannot be written through the factorization of n:
+       p(n) partition (A000041 · Euler ∏1/(1−q^k))   C(n) Catalan (A000108)
+       B(n) Bell (A000110)   F(n) Fibonacci (A000045)   L(n) Lucas (A000032)   M(n) Motzkin
+     p is NOT multiplicative (p(6)=11 ≠ p(2)·p(3)=6). The new identity FORM is the arithmetic-
+     progression CONGRUENCE  a(α·n+β) ≡ 0 (mod m) — Ramanujan's p(5n+4)≡0 (mod 5) is the canonical
+     instance, and it has NO multiplicative analogue (proof the domain is orthogonal to σ/φ).
+  🔧 IMPLEMENTED (exact-int, native, byteeq-neutral):
+     · compiler/atlas/identity_engine.hexa — partition_p · catalan · bell · fib · lucas · tri ·
+       pent · sq (exact i64) + mod-m recurrence tables (no overflow) + verify_congruence
+       (a(αn+β)≡0 mod m auto-test). 13 new additive selftest gates (Ramanujan R1–R3 rediscovered,
+       2 neg-controls, 8 exact value gates).
+     · compiler/drill/additive_test.hexa — self-contained kernel selftest (Euler p(10)=42 + the
+       Ramanujan G-gate + neg-controls).
+     · compiler/drill/drill.hexa — _native_additive_screen wired per-round (DRILL_ADDITIVE audit:
+       ramanujan_rediscovered=3, novel=0).
+     · ATLAS/state/novel-dfs/additive_partition_hunt.py — re-runnable reference engine (exact
+       bignum, OEIS-cited A000041/108/110/45/32/001006).
+  📊 MEASURED (additive_partition_hunt.py, exact bignum, N=4000):
+     · SANITY GATES 8/8 PASS — Ramanujan p(5n+4)≡0 mod5, p(7n+5)≡0 mod7, p(11n+6)≡0 mod11 ALL
+       rediscovered (G1–G3); Euler gen-fn (Σp·∏(1−q^k)=1) G4; pentagonal==coin-DP G5; Catalan
+       convolution G6; Cassini Fibonacci G7; Bell recurrence G8.
+     · CONGRUENCE SWEEP  seq(αn+β)≡0 mod m  (seq∈{p,C,B,F,L,M}, α∈[1,30], 0≤β<α, m∈12 moduli,
+       ≥12 terms): RAMANUJAN-rediscovered=3 (sanity ✓) · KNOWN-structural=752 (Bell periodicity
+       /Touchard, Fibonacci&Lucas divisibility/Lucas rank-of-apparition, Catalan 2-adic
+       Deutsch–Sagan) · TAUTOLOGY-subprogression=31 · **CONGRUENCE-NOVEL = 0**.
+     · CROSS-SEQUENCE bounded-unique coincidences seqA(n)==seqB(n) (13 pairs, n∈[2,200]):
+       **bounded-unique = 0**.
+     · NEGATIVE CONTROLS all FAIL as expected (p(5n+3)≢0 mod5, p(7n+4)≢0 mod7, p(5n+4)≢0 mod7,
+       F(3n+1)≢0 mod2) — the search discriminates.
+  🧱 HONEST VERDICT (c2): the additive/combinatorial domain is ORTHOGONAL to the multiplicative one
+     (verified: Ramanujan congruences have no σ/φ analogue), BUT it is equally DRY under the
+     arithmetic-progression-congruence + bounded-unique frames — **independent-novel = 0**. Every
+     hit is classical: Ramanujan/Watson/Atkin (partition), Touchard (Bell periodicity mod p),
+     Lucas/Carmichael (Fibonacci & Lucas divisibility / rank of apparition), Deutsch–Sagan
+     (Catalan 2-adic). This is among the most exhaustively studied terrain in number theory
+     (Ramanujan→Ono→Ahlgren), so 0 novel is expected and reported as 0 (no fabrication). The PIVOT
+     itself is the deliverable: the engine now carries the non-multiplicative sequences + the
+     congruence identity FORM natively, so a future generator emitting partition/Catalan/Bell
+     congruence candidates gets a REAL exact-int verdict (Ramanujan rediscovery = the live proof
+     the frame works). Confirmed ≡ is BOUNDED to [0,N]; ∀n stays UNPROVEN (c2). NO atlas write
+     (fold = hexa verify g5 / PR only). Next un-swept dimension remains COMPOSED/ITERATED functions
+     (Ralph 372) — function composition, not value/congruence over a single sequence.
+     engine: state/novel-dfs/additive_partition_hunt.py (re-runnable).
+```
+
+  --- Ralph 378 (2026-06-27): LLM-CONJECTURE verify-gate WIRED into `hexa loop --dfs` ---
+```
+  ⚙️ THE LEVER. Enumeration over the standard vocab is measured-exhausted (Ralph 369–377 ·
+     multiplicative product/composition + additive congruence frames all independent-novel=0).
+     The ONE lever past enumeration is for an LLM to CONJECTURE a new proposition, then have
+     exact-int verification dispose of it. The canonical surface (`hexa loop --dfs --llm-cmd`,
+     RFC 080 · stdlib/loop/cycle.hexa + dfs.hexa) already existed — but its child gate
+     (dfs_verify_child) checked ONLY cite / English-only / non-trivial heuristics; an LLM
+     arithmetic guess could survive with NO exact-int check. This round CONNECTS that surface to
+     the compiler's real exact-int verifier so the LLM proposes and exact-int disposes.
+  🔧 IMPLEMENTED (byteeq-neutral — loop runs via cmd_run, off the self-host graph):
+     · stdlib/loop/conjecture.hexa — `cj_verdict(body)` extracts a `CONJECTURE:` line and routes
+       it to compiler/atlas/identity_engine.hexa: identity A*B=C*D → verify_identity / is_universal2,
+       composition f∘g=… → verify_composition, congruence seq(a*n+b)=0 mod m → verify_congruence.
+       Returns "" (prose) · unparseable · unverified · verified-known · verified-novel. Parsers
+       ported from compiler/drill/drill.hexa (_fn_index / _parse_identity / _parse_composition),
+       Greek-glyph tolerant, 18-fn vocab.
+     · stdlib/loop/dfs.hexa — dfs_verify_child now DROPS any child whose CONJECTURE is "unverified"
+       (exact-int refuted) or "unparseable"; survivors carry an `exact_verify:` label; dfs_run
+       prints `[dfs] exact-verify: novel=X known=Y prose=Z`. dfs_build_prompt rewritten to ask the
+       LLM for a machine-checkable CONJECTURE in the verifier grammar + 18-fn vocab, encouraging
+       NOVEL (non-classical) relations (the verifier is the judge — false guesses auto-dropped).
+     · stdlib/loop/conjecture_test.hexa — selftest (G1/G3 identity → known, false → unverified,
+       σ∘φ=2n → known, superperfect set → unverified, Ramanujan → known, p(25n+24) mod25 → novel
+       path, prose → "", unparseable, Greek glyphs).
+  📊 LIVE RUN: see CHANGELOG.jsonl Ralph 378 — verify-gate WIRED; budget-capped real-LLM run is
+     `hexa loop --dfs --claude --allow-llm --depth 2 --target-absorb 5` (needs pool toolchain +
+     LLM CLI). The honest expectation per Ralph 369–377 is that the LLM converges to classical
+     relations (verified-novel ≈ 0) — but the path is now PROPOSAL+exact-int-verify, not blind
+     enumeration, so a genuinely new bounded-unique/congruence guess WOULD survive (and be 🟩
+     labelled · UNPROVEN ∀n · c2). atlas write stays the `hexa verify` g5 / PR path (PR-only).
 ```
 
   --- Ralph 369: Combinatorial Designs DFS ---
