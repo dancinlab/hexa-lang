@@ -160,6 +160,16 @@ fn main() {
     fails = fails + gate("F5 size-3 n*sigma*phi NOT in FP_2 (out-of-well)", outw, 0)
     fails = fails + gate("F6 ie_term_value sigma(6)=12", ie_term_value(0, 0 - 1, 6), 12)
     println("")
+    // ── Erdős–Straus bounded-witness gates (🟩 ledger atom · [2,N] finite) ──
+    //    forall n>=2 stays 🟥 OPEN — these only assert the finite [2,N] atom.
+    println("ERDOS-STRAUS BOUNDED-WITNESS GATES (4/n = 1/x+1/y+1/z over [2,N]):")
+    fails = fails + gate("E1 witness at n=2 (1,2,2)", es_witness_at(2), 1)
+    fails = fails + gate("E2 witness at n=3", es_witness_at(3), 1)
+    fails = fails + gate("E3 witness at n=5", es_witness_at(5), 1)
+    fails = fails + gate("E4 witness at prime n=101", es_witness_at(101), 1)
+    fails = fails + gate("E5 bounded [2,100] all have witness", verify_erdos_straus(100), 1)
+    fails = fails + gate("E6 no counterexample in [2,100]", es_first_counterexample(100), 0)
+    println("")
     if fails == 0 {
         println("RESULT: PASS - native exact-int identity verifier absorbed into binary")
         exit(0)

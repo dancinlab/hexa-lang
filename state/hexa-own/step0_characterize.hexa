@@ -1,0 +1,124 @@
+// ─────────────────────────────────────────────────────────────────────────
+// state/hexa-own/step0_characterize.hexa — HEXA-OWN M1 Step-0 oracle capture.
+//
+// Characterizes the SHIPPING gen2 defer semantics (self/codegen.hexa:2082-2303
+// fn-exit LIFO drain · reached-flag at-most-once · drain-time values · throw
+// bypasses __fn_exit via hexa_throw/hxlcl_longjmp, codegen.hexa:3825).
+//
+// Run IDENTICALLY under both executors (see step0_pool_commands.md):
+//   A) shipping `hexa run state/hexa-own/step0_characterize.hexa`
+//   B) fresh release_build driver: `./hexa build ... -o /tmp/step0_gen2 && /tmp/step0_gen2`
+// Frozen oracle: state/hexa-own/step0_expected_gen2.txt (exact stdout, diff-able).
+//
+// Syntax witnesses (every construct has a live repo usage site):
+//   defer block+expr forms  self/parser.hexa:4748-4767
+//   fn + typed params       example/test_53_keywords.hexa:107-129
+//   while/let mut/to_string self/codegen.hexa:2095-2099 · test/regression.hexa:95
+//   throw / try-catch       test/regression.hexa:455-483 · example/regressions/rt36-d/try_mvp.hexa:44-54
+//   top-level driver stmts  example/test_53_keywords.hexa:116-129
+// NOTE: defer bodies reference ONLY fn-top-level variables (C-scope visible at
+// __fn_exit). No @verify/@law/L[*] anywhere → HX8004 cannot fire
+// (compiler/check/citation.hexa:20-34).
+// ─────────────────────────────────────────────────────────────────────────
+
+// C1 — multiple-defer LIFO on normal fall-through exit.
+// gen2: registration in textual order [A,B,C], drain reversed → C, B, A.
+fn case1_lifo() {
+    println("C1: enter")
+    defer { println("C1: defer A (1st registered)") }
+    defer { println("C1: defer B (2nd registered)") }
+    defer println("C1: defer C (3rd registered, expr form)")
+    println("C1: body end")
+}
+
+// C2 — early-return-before-defer.
+// flag=1: return fires BEFORE the defer stmt is reached → flag stays 0 → no drain output.
+// flag=0: defer reached → drains on fn exit.
+fn case2_early(flag: int) {
+    println("C2: enter flag=" + to_string(flag))
+    if flag == 1 {
+        println("C2: early return before defer")
+        return
+    }
+    defer { println("C2: defer D (reached only when flag=0)") }
+    println("C2: body end")
+}
+
+// C3 — defer-in-while-loop, iteration count visible.
+// gen2 reached-flag semantics: the SAME textual defer sets its flag each
+// iteration (idempotent) but drains AT MOST ONCE at fn exit, with the
+// DRAIN-TIME value of i (loop-exit value 3) — Go would print 3 lines (i=0,1,2).
+fn case3_loop() {
+    println("C3: enter")
+    let mut i = 0
+    while i < 3 {
+        println("C3: iter " + to_string(i))
+        defer { println("C3: loop defer fired, i=" + to_string(i)) }
+        i = i + 1
+    }
+    println("C3: loop done, i=" + to_string(i))
+}
+
+// C4 — return textually BEFORE a loop-carried defer.
+// Iterations i=0,1 reach the defer (flag set); iteration i=2 returns from a
+// point textually ABOVE the defer. gen2: flag already 1 → drain still fires
+// once, with drain-time i=2. Proves textual position is irrelevant, only the
+// runtime reached-flag matters.
+fn case4_return_mid_loop() {
+    println("C4: enter")
+    let mut i = 0
+    while i < 5 {
+        if i == 2 {
+            println("C4: return at i=2 (loop defer below reached on i=0,1)")
+            return
+        }
+        defer { println("C4: loop defer fired, i=" + to_string(i)) }
+        i = i + 1
+    }
+    println("C4: UNREACHED loop-done")
+}
+
+// C5 — defer textually AFTER an unconditional return: never reached, its
+// __defer flag stays 0, so it must NOT fire even though its body IS emitted
+// in the drain block (self/codegen.hexa:2276-2288, flag-guarded).
+fn case5_defer_after_return() {
+    println("C5: enter")
+    defer { println("C5: defer E (reached, fires)") }
+    println("C5: returning now")
+    if 1 == 1 {
+        return
+    }
+    defer { println("C5: defer F after unconditional return (must NOT fire)") }
+}
+
+// C6 — defer + throw. gen2: hexa_throw longjmps to the caller's try
+// (hxlcl_setjmp pair, self/codegen.hexa:1006-1008) and BYPASSES __fn_exit →
+// defer G must NOT fire. (Documented M1 out-of-scope semantics — pinned here.)
+fn case6_throw() {
+    println("C6: enter")
+    defer { println("C6: defer G (must NOT fire on throw path)") }
+    println("C6: throwing")
+    throw "C6-boom"
+}
+
+// ═══════════ RUN ALL (top-level driver, test_53_keywords.hexa pattern) ═══════════
+println("== STEP0 defer characterization START ==")
+case1_lifo()
+println("-- after C1 --")
+case2_early(1)
+case2_early(0)
+println("-- after C2 --")
+case3_loop()
+println("-- after C3 --")
+case4_return_mid_loop()
+println("-- after C4 --")
+case5_defer_after_return()
+println("-- after C5 --")
+try {
+    case6_throw()
+    println("C6: UNREACHED after throw")
+} catch e {
+    println("C6: caught: " + e)
+}
+println("-- after C6 --")
+println("== STEP0 defer characterization END ==")
