@@ -3662,6 +3662,152 @@ fn _cg_check_module(module: Module, out: array) {
     }
 }
 
+// ── Higher-kinded types — kind-arity consistency (opt-in HEXA_HKT) ──
+//
+// Opt-in (`HEXA_HKT=1`), check-only, byteeq-neutral pass — structurally
+// identical to the `_cg_*` const-generics and `_exh_*` exhaustiveness passes:
+//   * env-gated at the top of `_hkt_check_module` → no-op on the default build
+//     (the `out` diagnostic stream is byte-identical when the flag is unset);
+//   * it only appends diagnostics, never touches MIR/lower/codegen, so even ON
+//     it cannot change a single emitted object byte;
+//   * it reuses the SAME `__cg` declaration-param carriers (`P:<name>:<bound>`)
+//     that the opt-in parser capture attaches — the two parser gates are widened
+//     to also fire under HEXA_HKT (one-token OR), so no new AST field / keyword
+//     (frozen-seed safe).
+//
+// WHAT IT CHECKS — the kind-ARITY-consistency fragment of a full kind system.
+// hexa's dynamic {tag,payload} runtime erases every generic to one monomorphic
+// MIR (the parser generic-erase loop), so there is ZERO runtime realization of
+// higher-kinded polymorphism — even a complete front-end lowers to identical
+// erased bytes. What IS tractable purely in the checker is kind-arity
+// unification across a single signature: a declared type parameter used as
+// `F<A>` is a unary type constructor (kind `*->*`); the same `F` may not also
+// appear applied to a different number of arguments, nor bare in a proper-type
+// slot (kind `*`). This is the faithful core of Haskell kind inference.
+//
+// reference (faithful-match cites):
+//   • Haskell 2010 Report §4.1.1 — kinds are `*` (proper types) and `k1->k2`
+//     (type constructors); in an application `f a`, `f :: k->*` and `a :: k`; a
+//     kind mismatch is reported as "Expected kind X, but has kind Y".
+//   • Scala — `trait Functor[F[_]]` declares `F` at ctor-kind `*->*`
+//     (type-constructor polymorphism, Moors et al., "Generics of a Higher
+//     Kind", OOPSLA'08); an application must respect that declared arity.
+//   • Rust RFC 1598 (generic associated types) — Rust deliberately DECLINES
+//     full `F: *->*` type parameters and offers GATs as an HKT *substitute*;
+//     this anchors the design ceiling we report honestly. Full HKT (Functor /
+//     Monad typeclass polymorphism, instance resolution, type-level ctor
+//     application/`fmap` dispatch) is NOT implementable here: (a) there is no
+//     trait/typeclass/instance registry (the checker stays silent on user
+//     types), (b) `class`/`instance`/kind-annotation syntax would violate the
+//     frozen seed, (c) the dynamic {tag,payload} runtime erases all generics to
+//     one monomorphic MIR → zero runtime realization.
+//
+// Polarity / release integrity: a kind-arity mismatch is a non-fatal WARNING
+// (HX3011) — a new diag ships opt-in and non-fatal, never breaking a build.
+
+// Recover the declared type-parameter names from an Item's `__cg` "P:" carriers.
+fn _hkt_collect_params(it: Item) -> [string] {
+    let mut out: [string] = []
+    if !_cg_has_cg_ann(it.annotations) { return out }
+    let args = _cg_get_cg_args(it.annotations)
+    let mut j = 0
+    while j < len(args) {
+        let parts = _cg_split_ch(args[j].text, ':')
+        if len(parts) >= 2 {
+            if parts[0] == "P" { out.push(parts[1]) }
+        }
+        j = j + 1
+    }
+    return out
+}
+
+fn _hkt_is_decl(name: string, decls: [string]) -> bool {
+    let mut i = 0
+    while i < len(decls) {
+        if decls[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Walk a TypeRef, recording for every node whose `name` is a declared param the
+// application arity at that use site: a `kind:"generic"` `F<A,…>` records arity
+// = len(args) (used as a type constructor), any other use records arity 0 (used
+// as a proper type). Observations accumulate into parallel `obs_names` /
+// `obs_arity`. Recurses into `args` so nested applications (`F<G<A>>`) are seen.
+fn _hkt_walk_typeref(tr: TypeRef, decls: [string], obs_names: array, obs_arity: array) {
+    if _hkt_is_decl(tr.name, decls) {
+        let mut arity = 0
+        if tr.kind == "generic" { arity = len(tr.args) }
+        obs_names.push(tr.name)
+        obs_arity.push(arity)
+    }
+    let mut i = 0
+    while i < len(tr.args) {
+        _hkt_walk_typeref(tr.args[i], decls, obs_names, obs_arity)
+        i = i + 1
+    }
+}
+
+// Kind-arity unification for a single Item signature. For fn items the signature
+// TypeRefs are every param type + the return type; for struct items they are the
+// field types (`it.params[].typ`). A declared param observed with ≥2 distinct
+// arities is a kind mismatch (e.g. `F<A>` vs `F<A,B>`, or higher-kinded `F` used
+// bare in a proper-type slot) → emit HX3011.
+fn _hkt_check_item(it: Item, out: array) {
+    let decls = _hkt_collect_params(it)
+    if len(decls) == 0 { return }
+    let mut obs_names = []
+    let mut obs_arity = []
+    let mut p = 0
+    while p < len(it.params) {
+        _hkt_walk_typeref(it.params[p].typ, decls, obs_names, obs_arity)
+        p = p + 1
+    }
+    _hkt_walk_typeref(it.return_type, decls, obs_names, obs_arity)
+    let mut d = 0
+    while d < len(decls) {
+        let pname = decls[d]
+        let mut min_ar = -1
+        let mut max_ar = -1
+        let mut o = 0
+        while o < len(obs_names) {
+            if obs_names[o] == pname {
+                let a = obs_arity[o]
+                if min_ar == -1 || a < min_ar { min_ar = a }
+                if max_ar == -1 || a > max_ar { max_ar = a }
+            }
+            o = o + 1
+        }
+        if min_ar != -1 && min_ar != max_ar {
+            let mut b = diag_new("HX3011")
+            b = diag_span(b, it.span)
+            b = diag_arg(b, "param", pname)
+            b = diag_arg(b, "owner", it.name)
+            b = diag_arg(b, "first_arity", to_string(min_ar))
+            b = diag_arg(b, "second_arity", to_string(max_ar))
+            out.push(diag_emit(b))
+        }
+        d = d + 1
+    }
+}
+
+fn _hkt_check_module(module: Module, out: array) {
+    if env("HEXA_HKT") != "1" { return }
+    let mut i = 0
+    while i < len(module.items) {
+        let it = module.items[i]
+        if item_is_parse_only(it) {
+            i = i + 1
+            continue
+        }
+        if _types_is_fn_item(it.kind) || _types_is_struct_item(it.kind) {
+            _hkt_check_item(it, out)
+        }
+        i = i + 1
+    }
+}
+
 // ── Pre-pass: collect Item types into TypeEnv ────────────────
 
 fn _types_signature_type(it: Item) -> Type {
@@ -4001,6 +4147,11 @@ pub fn type_check(module: Module) -> array {
     // Opt-in (HEXA_CONST_GENERICS=1); no-op on the default build. Identical
     // structural slot to the exhaustiveness pass above.
     _cg_check_module(module, out)
+
+    // Higher-kinded types — kind-arity consistency (HX3011). Opt-in
+    // (HEXA_HKT=1); no-op on the default build. Same structural slot; reuses the
+    // shared `__cg` declaration-param carriers as its kind-arity data source.
+    _hkt_check_module(module, out)
 
     return out
 }

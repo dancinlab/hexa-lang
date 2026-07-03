@@ -44,7 +44,7 @@ permissions:
 
 concurrency:
   group: selfhost-byteeq-real-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}  # main push runs are NOT cancelled — supersede-cancel on the serial darwin runner left required-gate history holes (anima run 28651287277 precedent, 2026-07-03); PR runs still cancel-on-supersede like every sibling selfhost gate
 
 jobs:
   # ── dispatch — fallback-dispatch runner picker (free · always available) ─────
@@ -63,6 +63,9 @@ jobs:
         uses: ./.github/actions/pick-runner
         with:
           kind: darwin
+          # slot-bound: the byte-eq/determinism legs need ghost's provisioned
+          # gen3 slot — never spill to the insurance runner (false exit-2 RED).
+          primary-only: '1'
           eligible: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
           # administration:read PAT (self-hosted runners list needs it; the
           # default github.token CANNOT carry that scope → empty list → blind
