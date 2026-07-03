@@ -3351,7 +3351,7 @@ fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
 fn _check_match(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     // children: [scrut, pat0, body0, pat1, body1, ...]
     if len(e.children) == 0 { return _types_empty_type() }
-    let _scrut_t = _infer_expr(e.children[0], env, ctx, out)
+    let scrut_t = _infer_expr(e.children[0], env, ctx, out)
     let mut first_t = _types_empty_type()
     let mut have_first = false
     let mut arm_idx = 0
@@ -3359,7 +3359,8 @@ fn _check_match(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     while i + 1 < len(e.children) {
         // Pattern children may include ident binders (S2 handles binding) —
         // walk them so any type-bearing pattern still gets inspected, but
-        // discard the inferred pattern type (no equality check at v1).
+        // discard the inferred pattern type (no equality check at v1; the
+        // opt-in r9c literal-pattern arm below is the sole exception).
         //
         // RFC pattern guards — a guarded arm's pattern is a "match_guard"
         // carrier (If-kind, children [inner_pattern, guard]). Infer the inner
@@ -3372,7 +3373,32 @@ fn _check_match(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             let _ip = _infer_expr(pat_i.children[0], env, ctx, out)
             let _gd = _infer_expr(pat_i.children[1], env, ctx, out)
         } else {
-            let _pt = _infer_expr(pat_i, env, ctx, out)
+            let pt = _infer_expr(pat_i, env, ctx, out)
+            // static-types r9c — opt-in literal-pattern vs scrutinee REJECT
+            // (HEXA_STATIC_TYPES=1). Rust E0308 "mismatched types" as fired
+            // from `check_pat` (rustc_hir_typeck/src/pat.rs check_pat_lit →
+            // demand_suptype → report_mismatched_types): a scalar LITERAL
+            // pattern (`match n { "x" -> … }` on an i64 scrutinee) can never
+            // match and is a silent-mismatch bug class. Conservative by
+            // construction: only fires when the pattern is a scalar literal
+            // kind (int/float/string/bool/char — ident binders, `_`
+            // Wildcard, EnumPath, and match_guard carriers all fall outside
+            // the probes / stay on the discard path above) AND both the
+            // scrutinee's inferred type and the pattern's are KNOWN scalar
+            // primitives (unknown sentinel / aggregate / named: → skip, the
+            // r2 soundness-gate idiom). `_types_assignable` (src = the
+            // pattern expr) keeps int/float-literal coercion — `match x_i32
+            // { 1 -> … }` stays clean. ENTIRELY flag-gated (env check is the
+            // FIRST `&&` operand, short-circuit) so the default build keeps
+            // the discard-only walk → diagnostic stream byte-identical →
+            // byteeq (gen3≡gen4) preserved.
+            if env("HEXA_STATIC_TYPES") == "1" && (_types_is_lit_int(pat_i.kind) || _types_is_lit_float(pat_i.kind) || _types_is_lit_string(pat_i.kind) || _is_lit_bool(pat_i.kind) || _is_lit_char(pat_i.kind)) {
+                if _types_kind_is_scalar(scrut_t.kind) && _types_kind_is_scalar(pt.kind) {
+                    if !_types_assignable(scrut_t, pt, pat_i) {
+                        _emit_hx3011(scrut_t, pt, pat_i.span, out)
+                    }
+                }
+            }
         }
         let bt = _infer_expr(e.children[i + 1], env, ctx, out)
         if !have_first {

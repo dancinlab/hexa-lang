@@ -317,6 +317,39 @@ fn _struct_lit_expr(name: string, inits: [Expr], file: string, line: i64, col: i
     }
 }
 
+// static-types r9c — `match scrut { pat -> body, … }`. children =
+// [scrut, pat0, body0, pat1, body1, …] per the parser's Match shape
+// (the exact layout _check_match documents and walks).
+fn _match_expr(scrut: Expr, arms: [Expr], file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(scrut)
+    let mut i = 0
+    while i < len(arms) {
+        kids.push(arms[i])
+        i = i + 1
+    }
+    return Expr {
+        kind: ExprKind::Match,
+        span: _span(file, line, col, 5),
+        text: "",
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// static-types r9c — `_` wildcard pattern (ExprKind::Wildcard, no children).
+fn _wildcard_expr(file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Wildcard,
+        span: _span(file, line, col, 1),
+        text: "_",
+        annotations: [],
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
 fn _block(children: [Expr], file: string, line: i64, col: i64) -> Expr {
     return Expr {
         kind: ExprKind::Block,
@@ -1029,6 +1062,43 @@ fn _build_case_static_types_r9b() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// static-types r9c — match literal-pattern vs scrutinee REJECT
+// (HEXA_STATIC_TYPES=1; no ARRAY_LOWER dependency — scalar rung).
+//   fn f(n: i64) {
+//       match n {
+//           "x" -> 1,   // string literal pattern vs i64 scrutinee → HX3011 (×1)
+//           7   -> 2,   // matching int-literal control            → clean
+//           _   -> 3    // wildcard = conservative skip class      → clean
+//       }
+//   }
+// All arm bodies are i64 so the default-ON HX3005 body-consistency site
+// stays silent in every mode — the case isolates the NEW pattern check.
+// Flag-ON → exactly 1 HX3011 (the "x" pattern); default build → 0
+// (byteeq-neutral proof — the discard-only pattern walk is unchanged).
+fn _build_case_static_types_r9c() -> Module {
+    let f = "case_static_r9c.hexa"
+    let mut arms = []
+    // "x" -> 1   — literal-pattern mismatch → HX3011
+    arms.push(_string_expr("x", f, 3, 9))
+    arms.push(_int_expr("1", f, 3, 16))
+    // 7 -> 2     — matching int-literal control → clean
+    arms.push(_int_expr("7", f, 4, 9))
+    arms.push(_int_expr("2", f, 4, 16))
+    // _ -> 3     — wildcard skip class → clean
+    arms.push(_wildcard_expr(f, 5, 9))
+    arms.push(_int_expr("3", f, 5, 16))
+    let m = _match_expr(_ident_expr("n", f, 2, 11), arms, f, 2, 5)
+    let mut kids = []
+    kids.push(m)
+    let body = _block(kids, f, 2, 1)
+    let mut fparams = []
+    fparams.push(_param("n", "i64", f, 1, 6))
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // HEXA-OWN L2 r1 — @own use-after-move lint (HEXA_OWN_LINT=1). A block-local
 // `@own let` binding is single-owner: its first bare-ident consumption (the
 // RHS of a later `let`, an assignment RHS, or a call argument) MOVES it; any
@@ -1636,6 +1706,31 @@ fn main() {
             ok = false
         } else {
             println("  ok: 0 HX3013 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (u) static-types r9c — match literal-pattern vs scrutinee REJECT.
+    // Flag-ON (HEXA_STATIC_TYPES=1, no ARRAY_LOWER dependency): exactly 1
+    // HX3011 — the `"x"` string-literal pattern against the i64 scrutinee
+    // (the NEW _check_match arm); the matching `7` int-literal control and
+    // the `_` wildcard stay clean, and the uniform-i64 arm bodies keep the
+    // default-ON HX3005 site silent. Default build: 0 (byteeq-neutral
+    // proof — the discard-only pattern walk is unchanged).
+    let diags_u = _run_case("(u) static-types r9c — match \"x\" pattern vs i64 scrutinee REJECT (HEXA_STATIC_TYPES)", _build_case_static_types_r9c())
+    let nu = _count_code(diags_u, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if nu != 1 {
+            println("  FAIL: case (u) HEXA_STATIC_TYPES=1 expected 1 HX3011 (\"x\" pattern vs i64 scrutinee; 7 + _ stay clean), got " + to_string(nu) + " (total=" + to_string(len(diags_u)) + ")")
+            ok = false
+        } else {
+            println("  ok: 1 HX3011 emitted (string-literal pattern vs i64 scrutinee; matching literal + wildcard stay clean)")
+        }
+    } else {
+        if nu != 0 {
+            println("  FAIL: case (u) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nu) + " (total=" + to_string(len(diags_u)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
         }
     }
 
