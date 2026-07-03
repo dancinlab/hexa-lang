@@ -24,6 +24,13 @@ fn gate(label: string, got: string, want: string) -> int {
     return 1
 }
 
+// M7 — mimic the child markdown around a GENERATOR (frame-proposal) line.
+fn body_gen(claim: string) -> string {
+    return "This child proposes a frame to escape the exhausted ring.\n"
+         + "GENERATOR: " + claim + "\n"
+         + "The enumerator sweeps the wildcards and the exact-int verifier judges.\n"
+}
+
 fn main() {
     println("=== conjecture verify-gate SELFTEST (Ralph 378) ===")
     let mut f = 0
@@ -128,6 +135,41 @@ fn main() {
     f = f + gate("UNPARSE p(5n^2+4)=0 mod5 (nonlinear)", cj_verdict(body("partition(5*n^2+4) = 0 mod 5")), "unparseable")
     // Greek glyphs accepted (σ·J2 = n·ψ == G1) -> known.
     f = f + gate("ID greek σ glyphs G1", cj_verdict(body("φ·J2 = n·ψ")), "verified-known")
+
+    // ─── M7 GENERATOR frame (LLM proposes a bounded family; exact-int judges) ───
+    println("")
+    println("scenario M7: GENERATOR frame-proposal (prod3 3-factor · verify_identity3 + C6)")
+    // known: phi*psi*X=J2*core*rad sweeps X∈18; X=n → universal (phi*psi=J2 ×
+    // core*rad=n), C6-REDUCIBLE → known. Other X hold at most at n=2 (first<4) or
+    // no solution. Exactly 1 held.  (negative-control for C6 — MUST be known, not novel.)
+    f = f + gate("GEN known phi*psi*?=J2*core*rad",
+                 cj_generator_verdict(body_gen("prod3 phi*psi*? = J2*core*rad")), "generator-known")
+    f = f + gate("GEN report exact",
+                 cj_generator_report(body_gen("prod3 phi*psi*? = J2*core*rad")),
+                 "tpl=prod3 enum=18 held=1 known=1 novel=0")
+    // dry: mu2^3 = n^2*Y — lhs∈{0,1}; Y∈{mu,mu2}→non-unique 0=0 (not universal),
+    // else rhs≥n²≥4>1≥lhs → no solution. Nothing held.
+    f = f + gate("GEN dry mu2*mu2*mu2=n*n*?",
+                 cj_generator_verdict(body_gen("prod3 mu2*mu2*mu2 = n*n*?")), "generator-dry")
+    f = f + gate("GEN dry report",
+                 cj_generator_report(body_gen("prod3 mu2*mu2*mu2 = n*n*?")),
+                 "tpl=prod3 enum=18 held=0 known=0 novel=0")
+    // diag: phi*J2*X = J2*phi*Y (2 wildcards) — a 1-vs-1 commutative restatement;
+    // any X=Y universal → C6-REDUCIBLE (1-vs-1 split) → known.
+    f = f + gate("GEN diag phi*J2*?=J2*phi*?",
+                 cj_generator_verdict(body_gen("prod3 phi*J2*? = J2*phi*?")), "generator-known")
+    // grammar guards
+    f = f + gate("GEN bad tpl (prod4)",   cj_generator_verdict(body_gen("prod4 phi*J2*? = n*psi*?")), "unparseable")
+    f = f + gate("GEN bad token (foo)",   cj_generator_verdict(body_gen("prod3 foo*?*? = n*n*n")),    "unparseable")
+    f = f + gate("GEN 0 wildcards",       cj_generator_verdict(body_gen("prod3 phi*J2*mu = n*psi*mu")), "unparseable")
+    f = f + gate("GEN 3 wildcards",       cj_generator_verdict(body_gen("prod3 ?*?*? = n*n*n")),       "unparseable")
+    f = f + gate("GEN absent line -> \"\"", cj_generator_verdict(body("phi*J2 = n*psi")),             "")
+    f = f + gate("GEN determinism (rerun)",
+                 cj_generator_report(body_gen("prod3 phi*psi*? = J2*core*rad")),
+                 cj_generator_report(body_gen("prod3 phi*psi*? = J2*core*rad")))
+    // precedence: a body with BOTH a CONJECTURE and a GENERATOR line = GROUND child
+    // (cj_verdict wins; the generator route is only reached when cj_verdict=="").
+    f = f + gate("GEN precedence (ground wins)", cj_verdict(body("phi*J2 = n*psi")), "verified-known")
 
     println("")
     if f == 0 {
