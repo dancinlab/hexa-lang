@@ -373,7 +373,7 @@ fi
 # path per-prim even when a seed exists.
 STR_CORE_OBJ=""
 STR_DEF=""
-if [ "${HEXA_RT_STR_EQ_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-1}" != "0" ]; then
+if [ "${HEXA_RT_STR_EQ_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_INDEX_OF_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_CONTAINS_NATIVE:-1}" != "0" ]; then
     case "$(uname -sm 2>/dev/null)" in
         "Linux x86_64")                 STR_SEED="$REPO/self/native/str_core_x86_64.s" ;;
         "Linux aarch64"|"Linux arm64")  STR_SEED="$REPO/self/native/str_core_arm64-linux.s" ;;
@@ -389,6 +389,8 @@ if [ "${HEXA_RT_STR_EQ_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_STARTS_WITH_NATI
         [ "${HEXA_RT_STR_EQ_NATIVE:-1}" != "0" ] && STR_DEF="$STR_DEF -DHEXA_RT_STR_EQ_NATIVE=1"
         [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-1}" != "0" ] && STR_DEF="$STR_DEF -DHEXA_RT_STR_STARTS_WITH_NATIVE=1"
         [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-1}" != "0" ] && STR_DEF="$STR_DEF -DHEXA_RT_STR_ENDS_WITH_NATIVE=1"
+        [ "${HEXA_RT_STR_INDEX_OF_NATIVE:-1}" != "0" ] && STR_DEF="$STR_DEF -DHEXA_RT_STR_INDEX_OF_NATIVE=1"
+        [ "${HEXA_RT_STR_CONTAINS_NATIVE:-1}" != "0" ] && STR_DEF="$STR_DEF -DHEXA_RT_STR_CONTAINS_NATIVE=1"
         echo "  [3/5] RT-NATIVE STR: defs [$STR_DEF] — native string scan/compare path"
     else
         echo "  [3/5] RT-NATIVE STR: no seed for $(uname -m) — C strcmp/strncmp #else path (no-seed fallback)" >&2
