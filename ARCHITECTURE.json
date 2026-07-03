@@ -5414,19 +5414,19 @@
             "detail": ""
           },
           {
-            "name": "L2 move/affine own-lint = 소유권 이동 후 사용(double-free·use-after-move) 컴파일타임 검출 — lifetime 추론 없음. 설계 전제: 진행중인 Wall A static-types 캠페인(compiler/check/types.hexa · HEXA_STATIC_TYPES=1 opt-in REJECT 사다리 r1~r5 main·r6 브랜치·Rust-target) 위에 탄다 — @own은 정적 타입 한정자로, own-lint는 Wall A와 같은 opt-in 검사 패스로 통합(별도 dataflow 전용 설계 아님).",
+            "name": "L2 move/affine own-lint — HX3012 use-after-move(HEXA_OWN_LINT=1 opt-in·Wall A 통합 패스). 현행: r1 let-이동 ✅main·r2b PARAM+@own+Copy-면제 ✅#4485·gen2 파서 패리티 ✅#4493·r2 RETURN=#4470 open. ★M0 실측(state/hexa-own/l3_m0_measurement.md): 전 계열이 native 프론트엔드 전용 — shipping(gen2) 경로는 미배선. vehicle(b)=cmd_build HEXA_OWN_LINT advisory(#4497 open·aiden e2e 4케이스 진행)·설계=state/hexa-own/ownlint_shipping_wiring.md",
             "role": "",
             "id": "hexa-own-ladder-l2-affine",
             "detail": ""
           },
           {
-            "name": "L2.5 region/arena escape 검사 = 기존 arena-bump 기판+@no_arena 위 Cyclone식 region 태그 — arena 수명 밖 포인터 유출(반환·전역 저장)을 컴파일 에러로.",
+            "name": "L2.5 region/arena escape ✅ MERGED(#4477): HX3013 arena-escape(composite가 module 전역 저장 시·HEXA_ARENA_ESCAPE_LINT=1 opt-in)·_arena_esc_* 별도 레지스트리·케이스 (r). Rule A gen2 @no_arena advisory(#4486)는 base-머지 충돌로 close(브랜치 보존) → 재착지 후속",
             "role": "",
             "id": "hexa-own-ladder-l25-region",
             "detail": ""
           },
           {
-            "name": "L3 full borrow checker(&/&mut·NLL) = rustc MIR borrowck reference-match — go/no-go는 L1~L2.5가 못 잡은 실전 결함 클래스 실측 후 결정(측정 없는 착수 금지).",
+            "name": "L3 borrow — 이중게이트 해소·M3 ✅ MERGED(#4503): ①M0 실측=own-lint shipping 미배선 적발+#4088 walker 실코퍼스 ~950 diag ≈100% FP(bare-ident call-arg 과근사)→#4088 부활 기각. ②M3=hir_to_mir.hexa _bck_* intra-block loan pass(관찰전용 +411 add-only)·HEXA_BORROWCK=1(첫 && 오퍼랜드)·HX3014 warning·hir_to_mir_diags 채널·closure suspend/restore·@own 파라미터 MOVE 분류·mutator-whitelist WRITE. 검증=10/10 probe(M0 판별차: write-alias 경고·benign read-alias 침묵)·flag-OFF diag 0·CI required+faithful 3-타깃+byteeq+det green. 다음: M4 NLL liveness(분기 write=문서화 ceiling)·aprime M0 재측정(pool)·@own 소스 프로브(#4470 후)·스펙=state/hexa-own/l3_m3_spec.md",
             "role": "",
             "id": "hexa-own-ladder-l3-borrow",
             "detail": ""
