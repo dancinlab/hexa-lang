@@ -2214,7 +2214,12 @@ fn parse_fn_item(is_pub: bool, anns: [Annotation]) -> Item {
     // annotation (byteeq-neutral: env-unset runs the verbatim erase loop).
     let mut cg_anns = []
     if check_kind(TokenKind::Lt) {
-        if env("HEXA_CONST_GENERICS") == "1" {
+        if env("HEXA_CONST_GENERICS") == "1" || env("HEXA_HKT") == "1" {
+            // The `__cg` "P:" carriers are the shared kind-arity data source for
+            // BOTH the const-generics pass (HEXA_CONST_GENERICS) and the
+            // higher-kinded-types kind-arity pass (HEXA_HKT). Either flag attaches
+            // the carrier; both-unset runs the verbatim erase loop below, so the
+            // default-build AST stays byte-identical (byteeq-neutral).
             let pexprs = _cg_capture_decl_params(kw.span)
             if len(pexprs) > 0 {
                 cg_anns.push(Annotation { name: "__cg", args: pexprs, span: kw.span })
@@ -2320,7 +2325,9 @@ fn parse_struct_item(is_pub: bool, anns: [Annotation]) -> Item {
     // erase loop, so the default-build AST is byte-identical (byteeq-neutral).
     let mut cg_anns = []
     if check_kind(TokenKind::Lt) {
-        if env("HEXA_CONST_GENERICS") == "1" {
+        if env("HEXA_CONST_GENERICS") == "1" || env("HEXA_HKT") == "1" {
+            // Shared `__cg` capture for the const-generics AND HKT kind-arity
+            // passes (see parse_fn_item); both-unset = verbatim erase (byteeq-neutral).
             let mut cg_args = _cg_capture_decl_params(kw.span)
             // contextual `where T: Ord, …` — `where` is a bare Ident, not a kw.
             if check_kind(TokenKind::Ident) && peek().text == "where" {
