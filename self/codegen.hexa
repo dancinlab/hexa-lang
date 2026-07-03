@@ -1978,6 +1978,10 @@ fn gen2_fn_decl(node) {
     // itself no-ops when OFF) → boxed default path unchanged. Runs AFTER
     // _gen2_boxed_cells so closure-captured accumulators are excluded.
     _known_int_accum_scan(node.body)
+    // HEXA_UNBOX_INFER (R1): per-fn inference lattice — admit mut accumulators
+    // whose every write provably stays TAG_INT into the emit-consulted infer set.
+    // NO-OP (sets stay []) when HEXA_UNBOX_INFER is unset → OFF-path byte-id.
+    _build_unbox_facts(node.body)
     // UNSHADOW [HEADLINE] F1 part-2: pre-scan the body for monomorphic int/f64
     // array-literal bindings whose name is PROVEN non-escaping (whole-body escape
     // analysis via _stmt_escapes_name). Those auto-fire native contiguous storage
@@ -2325,6 +2329,9 @@ fn gen2_fn_decl(node) {
     // UNSHADOW known-int-accum: clear the fn-scoped accumulator proof on exit so
     // a later fn's same-named `let mut` isn't spuriously certified known-int.
     _known_int_accum_reset()
+    // HEXA_UNBOX_INFER (R1): clear the fn-scoped inference facts on exit (mirror)
+    // so a later fn's / the script body's same-named binding isn't certified.
+    _infer_facts_reset()
     return chunks.join("")
 }
 
@@ -11340,6 +11347,407 @@ fn _known_int_accum_scan(body) {
     }
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// HEXA_UNBOX_INFER (R1) — opt-in local type-inference unboxing (default-OFF).
+//
+// A per-fn monotone (fixpoint) pass that WIDENS the set of names the existing
+// certification predicate `_is_known_int` blesses, WITHOUT inventing any new emit
+// machinery: once a name is certified known-int, the ALREADY-PRESENT inline
+// compound-literal fast-path (codegen.hexa:5550 etc.) fires unchanged. The NEW
+// lever over the default build is the mut accumulator `let mut acc = 0` whose
+// every write provably stays TAG_INT — even when that write contains `%`/`/`
+// (hexa `int%int`→int, `int/int`→hexa_int(...) truncating int — see
+// runtime_core_emit.hexa hexa_div/__raw_imod) which the emit-conservative
+// `_is_accum_int_safe` rejects PURELY for the div-zero-throw reason. The throw is
+// preserved here: emit still routes `%`/`/` through boxed hexa_mod/hexa_div (the
+// scalar fast-path at :5533 excludes them); ONLY the result-type is inferred, so
+// a surrounding `+` can extract the raw `.i` of the accumulator.
+//
+// Default-OFF & OFF-path byte-identical BY CONSTRUCTION:
+//   • `_build_unbox_facts` early-returns (sets stay []) when the env flag
+//     HEXA_UNBOX_INFER is unset, so `_infer_int_member` returns false.
+//   • The single predicate hook (Patch B) calls `_infer_int_member`, which itself
+//     re-checks `_unbox_infer_enabled()` — when OFF it short-circuits to false, so
+//     `_is_known_int` returns today's exact answer → emitted .c/.o byte-identical.
+// FN-LOCAL (reset every fn) so there is NO cross-fn module-global pollution —
+// hence the emit-consulted set may be trusted WITHOUT the cur_lets/param/collision
+// guards that `_is_known_int_name` needs for the GLOBAL `_known_int_set`.
+// ════════════════════════════════════════════════════════════════════════════
+
+// Memoized env gate (read once; env is stable during a compile). Cached so the
+// hot `_is_known_int` hook pays no repeated getenv. -1 = unread, 0 = OFF, 1 = ON.
+let mut _unbox_infer_flag = -1
+fn _unbox_infer_enabled() {
+    if _unbox_infer_flag < 0 {
+        if env("HEXA_UNBOX_INFER") != "" { _unbox_infer_flag = 1 } else { _unbox_infer_flag = 0 }
+    }
+    return _unbox_infer_flag == 1
+}
+
+// EMIT-consulted, fn-local: names certified TAG_INT / TAG_FLOAT by inference
+// (admitted accumulators). Flat lists (few per fn). Consulted by Patch B.
+// NOTE (R1 scope): only the INT accumulator path is admitted below; the FLOAT set
+// stays empty (its predicate hook is a gated forward-wire for r2 float-accum).
+let mut _infer_int_set = []
+let mut _infer_float_set = []
+// SCAN-only, fn-local: the int/float facts (loop counters + immutable typed/literal
+// lets + admitted accumulators) used by the accumulator type proof at scan time.
+// NEVER consulted at emit, so loop counters / inner lets never leak past their
+// lexical scope into the emit predicate — the soundness firewall.
+let mut _infer_scan_int = []
+let mut _infer_scan_float = []
+
+fn _infer_facts_reset() {
+    _infer_int_set = []
+    _infer_float_set = []
+    _infer_scan_int = []
+    _infer_scan_float = []
+}
+
+fn _infer_int_add(name) {
+    let mut i = 0
+    while i < len(_infer_int_set) {
+        if _infer_int_set[i] == name { return }
+        i = i + 1
+    }
+    _infer_int_set = _infer_int_set.push(name)
+}
+fn _infer_int_member(name) {
+    if !_unbox_infer_enabled() { return false }
+    let mut i = 0
+    while i < len(_infer_int_set) {
+        if _infer_int_set[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+fn _infer_float_add(name) {
+    let mut i = 0
+    while i < len(_infer_float_set) {
+        if _infer_float_set[i] == name { return }
+        i = i + 1
+    }
+    _infer_float_set = _infer_float_set.push(name)
+}
+fn _infer_float_member(name) {
+    if !_unbox_infer_enabled() { return false }
+    let mut i = 0
+    while i < len(_infer_float_set) {
+        if _infer_float_set[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+fn _infer_scan_int_add(name) {
+    let mut i = 0
+    while i < len(_infer_scan_int) {
+        if _infer_scan_int[i] == name { return }
+        i = i + 1
+    }
+    _infer_scan_int = _infer_scan_int.push(name)
+}
+fn _infer_scan_int_has(name) {
+    let mut i = 0
+    while i < len(_infer_scan_int) {
+        if _infer_scan_int[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+fn _infer_scan_float_add(name) {
+    let mut i = 0
+    while i < len(_infer_scan_float) {
+        if _infer_scan_float[i] == name { return }
+        i = i + 1
+    }
+    _infer_scan_float = _infer_scan_float.push(name)
+}
+fn _infer_scan_float_has(name) {
+    let mut i = 0
+    while i < len(_infer_scan_float) {
+        if _infer_scan_float[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Recursively collect range-for loop counters (always materialized as hexa_int —
+// codegen.hexa:3656) into the scan-int fact set. Only Range-iter for-loops; a
+// for-in over an array/map yields elements of unknown tag, so they are excluded.
+// decreases node — structural
+fn _infer_collect_counters(node) {
+    if type_of(node) == "string" { return }
+    if type_of(node) == "array" {
+        let mut i = 0
+        while i < len(node) {
+            _infer_collect_counters(node[i])
+            i = i + 1
+        }
+        return
+    }
+    if node.kind == "ForStmt" {
+        let it = node.iter_expr
+        if type_of(it) != "string" && it.kind == "Range" {
+            _infer_scan_int_add(node.name)
+        }
+    }
+    if type_of(node.then_body) != "string" { _infer_collect_counters(node.then_body) }
+    if type_of(node.else_body) != "string" { _infer_collect_counters(node.else_body) }
+    if type_of(node.body) != "string" { _infer_collect_counters(node.body) }
+    if type_of(node.arms) == "array" {
+        let mut ai = 0
+        while ai < len(node.arms) {
+            let arm = node.arms[ai]
+            if type_of(arm) != "string" && type_of(arm.body) != "string" {
+                _infer_collect_counters(arm.body)
+            }
+            ai = ai + 1
+        }
+    }
+}
+
+// Scan-aware "is this initializer provably TAG_INT?" — consults the scan facts so
+// forward let-chains converge under the fixpoint. `%`/`/` admitted (int/int→int).
+// decreases node — structural
+fn _infer_init_is_int(node) {
+    if type_of(node) == "string" { return false }
+    let k = node.kind
+    if k == "IntLit" { return true }
+    if k == "Ident" { return _infer_scan_int_has(node.name) || _is_known_int_name(node.name) }
+    if k == "BinOp" {
+        let op = node.op
+        if op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" {
+            return _infer_init_is_int(node.left) && _infer_init_is_int(node.right)
+        }
+        if op == "as" {
+            if type_of(node.right) != "string" && node.right.kind == "Ident" {
+                let tn = node.right.name
+                if tn == "int" || tn == "i64" || tn == "Int" || tn == "i32" || tn == "u32" || tn == "u64" { return true }
+            }
+            return false
+        }
+        return false
+    }
+    if k == "UnaryOp" {
+        if node.op == "-" || node.op == "~" { return _infer_init_is_int(node.left) }
+        return false
+    }
+    return false
+}
+
+// Scan-aware float initializer test (float-returning math builtins + float BinOp;
+// mixed int+float promotes to float, mirroring `_is_float_init_expr`).
+// decreases node — structural
+fn _infer_init_is_float(node) {
+    if type_of(node) == "string" { return false }
+    let k = node.kind
+    if k == "FloatLit" { return true }
+    if k == "Ident" { return _infer_scan_float_has(node.name) || _is_known_float_name(node.name) }
+    if k == "Call" {
+        let callee = node.left
+        if type_of(callee) != "string" && callee.kind == "Ident" {
+            if _is_float_returning_call(callee.name) { return true }
+        }
+        return false
+    }
+    if k == "BinOp" {
+        let op = node.op
+        if op == "+" || op == "-" || op == "*" || op == "/" {
+            let lf = _infer_init_is_float(node.left)
+            let rf = _infer_init_is_float(node.right)
+            if lf && rf { return true }
+            if lf && _infer_init_is_int(node.right) { return true }
+            if rf && _infer_init_is_int(node.left) { return true }
+        }
+        return false
+    }
+    if k == "UnaryOp" {
+        if node.op == "-" { return _infer_init_is_float(node.left) }
+        return false
+    }
+    return false
+}
+
+// Seed immutable typed/literal lets into the scan fact sets, to FIXPOINT. A
+// `let y = <int-expr>` is int once its operands are known int; iterating makes
+// forward chains (`let a = 1; let b = a + 2`) converge regardless of source order.
+// Bounded by #lets so it terminates. Top-level lets only (fn-scoped facts).
+fn _infer_seed_lets(body) {
+    if type_of(body) != "array" { return }
+    let n = len(body)
+    let mut changed = true
+    let mut guard = 0
+    while changed && guard <= n {
+        changed = false
+        guard = guard + 1
+        let mut i = 0
+        while i < n {
+            let s = body[i]
+            if type_of(s) != "string" && s.kind == "LetStmt" {
+                if type_of(s.left) != "string" {
+                    if !_infer_scan_int_has(s.name) && !_infer_scan_float_has(s.name) {
+                        if _infer_init_is_int(s.left) {
+                            _infer_scan_int_add(s.name)
+                            changed = true
+                        } else if _infer_init_is_float(s.left) {
+                            _infer_scan_float_add(s.name)
+                            changed = true
+                        }
+                    }
+                }
+            }
+            i = i + 1
+        }
+    }
+}
+
+// TYPE proof (NOT an emit decision): is `node` provably TAG_INT given the scan
+// facts? Unlike `_is_accum_int_safe` this ADMITS `%` and `/` because hexa
+// int%int / int/int both yield TAG_INT — the div-zero THROW is preserved because
+// emit still routes %/ through boxed hexa_mod/hexa_div; only the result-type is
+// inferred. `acc_name` self-reference is int by induction (init+prior writes int).
+// decreases node — structural
+fn _infer_accum_int_safe(node, acc_name) {
+    if type_of(node) == "string" { return false }
+    let k = node.kind
+    if k == "IntLit" { return true }
+    if k == "Ident" {
+        if node.name == acc_name { return true }
+        if _infer_scan_int_has(node.name) { return true }
+        if _is_known_int_name(node.name) { return true }
+        if _is_known_int_accum_name(node.name) { return true }
+        return false
+    }
+    if k == "BinOp" {
+        let op = node.op
+        if op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" {
+            return _infer_accum_int_safe(node.left, acc_name) && _infer_accum_int_safe(node.right, acc_name)
+        }
+        return false
+    }
+    if k == "UnaryOp" {
+        if node.op == "-" || node.op == "~" { return _infer_accum_int_safe(node.left, acc_name) }
+        return false
+    }
+    return false
+}
+
+// Conservative whole-body scan: does EVERY write to `acc_name` keep it TAG_INT?
+// Mirror of `_accum_writes_all_int`'s structural recursion, but the leaf int-test
+// is `_infer_accum_int_safe` (the %/-permissive type proof) and CompoundAssign
+// admits `/` `%` too (result int). `**` and LogicalAssign (??=/||=/&&=) still void
+// the proof (pow→float, logical can carry non-int). decreases node — structural
+fn _infer_accum_writes_all_int(node, acc_name) {
+    if type_of(node) == "string" { return true }
+    if type_of(node) == "array" {
+        let mut i = 0
+        while i < len(node) {
+            if !_infer_accum_writes_all_int(node[i], acc_name) { return false }
+            i = i + 1
+        }
+        return true
+    }
+    let k = node.kind
+    if k == "AssignStmt" {
+        if type_of(node.left) != "string" && node.left.kind == "Ident" && node.left.name == acc_name {
+            if !_infer_accum_int_safe(node.right, acc_name) { return false }
+        }
+    }
+    if k == "CompoundAssign" {
+        if type_of(node.left) != "string" && node.left.kind == "Ident" && node.left.name == acc_name {
+            let op = node.op
+            if op == "**" { return false }
+            if !(op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>") { return false }
+            if !_infer_accum_int_safe(node.right, acc_name) { return false }
+        }
+    }
+    if k == "LogicalAssign" {
+        if type_of(node.left) != "string" && node.left.kind == "Ident" && node.left.name == acc_name {
+            return false
+        }
+    }
+    if type_of(node.left) != "string" {
+        if !_infer_accum_writes_all_int(node.left, acc_name) { return false }
+    }
+    if type_of(node.right) != "string" {
+        if !_infer_accum_writes_all_int(node.right, acc_name) { return false }
+    }
+    if type_of(node.cond) != "string" {
+        if !_infer_accum_writes_all_int(node.cond, acc_name) { return false }
+    }
+    if type_of(node.then_body) != "string" {
+        if !_infer_accum_writes_all_int(node.then_body, acc_name) { return false }
+    }
+    if type_of(node.else_body) != "string" {
+        if !_infer_accum_writes_all_int(node.else_body, acc_name) { return false }
+    }
+    if type_of(node.body) != "string" {
+        if !_infer_accum_writes_all_int(node.body, acc_name) { return false }
+    }
+    if type_of(node.iter_expr) != "string" {
+        if !_infer_accum_writes_all_int(node.iter_expr, acc_name) { return false }
+    }
+    if type_of(node.args) == "array" {
+        let mut ai = 0
+        while ai < len(node.args) {
+            if !_infer_accum_writes_all_int(node.args[ai], acc_name) { return false }
+            ai = ai + 1
+        }
+    }
+    if type_of(node.items) == "array" {
+        let mut ii = 0
+        while ii < len(node.items) {
+            if !_infer_accum_writes_all_int(node.items[ii], acc_name) { return false }
+            ii = ii + 1
+        }
+    }
+    if type_of(node.arms) == "array" {
+        let mut mi = 0
+        while mi < len(node.arms) {
+            let arm = node.arms[mi]
+            if type_of(arm) != "string" && type_of(arm.body) == "array" {
+                if !_infer_accum_writes_all_int(arm.body, acc_name) { return false }
+            }
+            mi = mi + 1
+        }
+    }
+    return true
+}
+
+// Per-fn entry point (called from gen2_fn_decl). Populate the emit-consulted
+// `_infer_int_set` with admitted accumulators. NO-OP (sets stay []) when
+// HEXA_UNBOX_INFER is unset → OFF-path byte-identical.
+fn _build_unbox_facts(body) {
+    _infer_facts_reset()
+    if !_unbox_infer_enabled() { return }
+    if type_of(body) != "array" { return }
+    // 1) scan facts: loop counters + immutable typed/literal lets (to fixpoint).
+    _infer_collect_counters(body)
+    _infer_seed_lets(body)
+    // 2) admit top-level mut accumulators whose every write provably stays int.
+    //    Guards: init int-safe · not closure-captured boxed cell · name is not a
+    //    fn param (a param shadow could carry a non-int) → all conservative.
+    let n = len(body)
+    let mut i = 0
+    while i < n {
+        let s = body[i]
+        if type_of(s) != "string" && s.kind == "LetMutStmt" {
+            let nm = s.name
+            if type_of(s.left) != "string" && !_gen2_name_in_cur_params(nm) {
+                if _infer_accum_int_safe(s.left, nm) {
+                    if !_gen2_is_boxed_cell(nm) {
+                        if _infer_accum_writes_all_int(body, nm) {
+                            _infer_int_add(nm)
+                            _infer_scan_int_add(nm)
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+}
+
 // ── enum-variant access fix (inbox: enum-variant-access-miscodegen) ──
 // `<EnumName>.<VARIANT>` (e.g. RegionShape.K_BY_K) is an enum-variant
 // constant, NOT a runtime field access — the gen2_enum_decl #define
@@ -12630,10 +13038,17 @@ fn _is_known_int_name(name) {
 // Check if an AST node is provably TAG_INT at codegen time:
 //   - IntLit → always int
 //   - Ident in _known_int_set → immutable let with int initializer
+//   - (HEXA_UNBOX_INFER) int-closed BinOp over provably-int operands (recursive)
+// decreases node — structural
 fn _is_known_int(node) {
     if type_of(node) == "string" { return false }
     if node.kind == "IntLit" { return true }
     if node.kind == "Ident" {
+        // HEXA_UNBOX_INFER (R1): per-fn inference certified this name TAG_INT
+        // (admitted mut accumulator). Self-gated (returns false unless the env
+        // flag is ON) + fn-LOCAL set → OFF-path byte-identical, and it may be
+        // trusted ahead of the global-pollution guards in _is_known_int_name.
+        if _infer_int_member(node.name) { return true }
         // UNSHADOW known-int-accum: a proven mut accumulator is statically
         // TAG_INT (whole-body writes scanned all-int). Checked BEFORE
         // _is_known_int_name because the accumulator is a fn-LOCAL `let mut`
@@ -12655,6 +13070,23 @@ fn _is_known_int(node) {
         if type_of(_l) != "string" && _l.kind == "Ident" && _is_known_intarr_name(_l.name) {
             if type_of(_r) != "string" && _r.kind == "Ident" {
                 if _inrange_counter_for(_l.name, _r.name) != "" { return true }
+            }
+        }
+    }
+    // HEXA_UNBOX_INFER (R1): recursively certify an int-closed BinOp whose BOTH
+    // operands are provably TAG_INT, so a PARENT int op can extract its raw `.i`.
+    // k1_sum: `s + i*1009` — the `*` subexpr must itself be known-int for the `+`
+    // fast-path (:5529) to fire; without this only flat leaf-OP-leaf unboxes and
+    // any nested arithmetic operand keeps the outer op boxed (hexa_add ABI wall).
+    // Restricted to the SAME op set the emit fast-path inlines (:5533) — `%`/`/`
+    // stay BOXED so the runtime div-by-zero throw is preserved. This is a PURE
+    // predicate (no emission) so there is no double-eval; gated on the env flag so
+    // OFF-path `_is_known_int` returns today's exact answer → emit byte-identical.
+    if _unbox_infer_enabled() {
+        if node.kind == "BinOp" {
+            let _op = node.op
+            if _op == "+" || _op == "-" || _op == "*" || _op == "&" || _op == "|" || _op == "^" || _op == "<<" || _op == ">>" {
+                if _is_known_int(node.left) && _is_known_int(node.right) { return true }
             }
         }
     }
@@ -12875,7 +13307,13 @@ fn _is_int_init_expr(node) {
 fn _is_known_float(node) {
     if type_of(node) == "string" { return false }
     if node.kind == "FloatLit" { return true }
-    if node.kind == "Ident" { return _is_known_float_name(node.name) }
+    if node.kind == "Ident" {
+        // HEXA_UNBOX_INFER (R1): gated forward-wire (r2 float-accum). Self-gated +
+        // fn-LOCAL; in R1 _infer_float_set is never populated so this is a no-op
+        // (returns false) → OFF-path AND ON-path R1 emit byte-unchanged for float.
+        if _infer_float_member(node.name) { return true }
+        return _is_known_float_name(node.name)
+    }
     // UNSHADOW [HEADLINE] F1 (F64 mirror): a read `arr[i]` of a proven known-
     // float-array, where the index is covered by a live in-range fact, is
     // statically TAG_FLOAT — its element kind is monomorphic f64 by the array-
@@ -13586,6 +14024,8 @@ fn codegen_full(ast) {
     // b2-fnref: reset by-value builtin/method thunk set (mirror codegen_c2).
     _fnref_thunk_names = []
     _gen2_current_fn_lets = []
+    // HEXA_UNBOX_INFER (R1): reset fn-scoped inference facts (mirror codegen_c2).
+    _infer_facts_reset()
     // 2026-04-18 use-resolver dedup table — mirror codegen_c2's reset.
     _resolved_modules = []
     _resolve_caller_dir_inited = false
