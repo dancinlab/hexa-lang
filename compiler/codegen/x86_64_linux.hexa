@@ -1422,10 +1422,61 @@ fn _x86_tag_resolve(o: Operand, rm: X86RegMap, scratch: string) {
 // step so a fixed source MIR yields the same per-target label index.
 pub struct X86StrTab {
     keys: [string],
-    labels: [string]
+    labels: [string],
+    // PERF #4454-class (2026-07-03): 64-bucket FNV-1a hash index over
+    // `keys` — same mechanism as self/codegen.hexa's
+    // _strlit_idx_keys/_strlit_idx_ids (65b7d871e) and the arm64 twin
+    // (ArmStrTab.idx_keys). LOOKUP-ONLY acceleration: `keys`/`labels`
+    // stay the emission SSOT in first-occurrence order (.LCstrN
+    // numbering unchanged) — emitted asm is byte-identical.
+    idx_keys: [[string]],
+    idx_labels: [[string]]
+}
+
+// FNV-1a 32-bit fold reduced to 64 buckets — mirror of _arm64_strtab_hash
+// (`% 4294967296` keeps the i64 multiply overflow-free). Index-only.
+fn _x86_strtab_hash(s: string) -> i64 {
+    let mut h: i64 = 2166136261
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        h = (h ^ s.char_code_at(i)) * 16777619
+        h = h % 4294967296
+        i = i + 1
+    }
+    let mut b = h % 64
+    if b < 0 { b = b + 64 }
+    return b
+}
+
+fn _x86_strtab_empty_buckets() -> [[string]] {
+    let mut bs: [[string]] = []
+    let mut i = 0
+    while i < 64 {
+        let empty: [string] = []
+        bs.push(empty)
+        i = i + 1
+    }
+    return bs
 }
 
 fn _x86_strtab_lookup(st: X86StrTab, s: string) -> string {
+    // PERF #4454-class: bucket lookup replaces the full-table linear scan
+    // when the hash index is primed. Same hit/miss result — the buckets
+    // partition `keys` exactly.
+    if len(st.idx_keys) == 64 {
+        let b = _x86_strtab_hash(s)
+        let bucket = st.idx_keys[b]
+        let blabels = st.idx_labels[b]
+        let mut bi = 0
+        while bi < len(bucket) {
+            if bucket[bi] == s { return blabels[bi] }
+            bi = bi + 1
+        }
+        return ""
+    }
+    // Un-indexed strtab (e.g. the empty _x86_64_op_for_operand fallback) —
+    // keep the legacy linear scan.
     let mut i = 0
     while i < len(st.keys) {
         if st.keys[i] == s { return st.labels[i] }
@@ -1461,7 +1512,7 @@ fn _x86_64_op_for_operand_st(o: Operand, st: X86StrTab) -> LOperand {
 }
 
 fn _x86_64_op_for_operand(o: Operand) -> LOperand {
-    let st = X86StrTab { keys: [], labels: [] }
+    let st = X86StrTab { keys: [], labels: [], idx_keys: [], idx_labels: [] }
     return _x86_64_op_for_operand_st(o, st)
 }
 
@@ -5657,10 +5708,33 @@ fn _x86_collect_strs_from_stmt(st: X86StrTab, s: Stmt) -> X86StrTab {
             if len(_x86_strtab_lookup(out, o.str_val)) == 0 {
                 let mut keys = out.keys
                 let mut labs = out.labels
+                // PERF #4454-class: prime the 64-bucket hash index lazily
+                // (one-time O(existing) rebuild for pre-index strtabs).
+                let mut ik = out.idx_keys
+                let mut il = out.idx_labels
+                if len(ik) != 64 {
+                    ik = _x86_strtab_empty_buckets()
+                    il = _x86_strtab_empty_buckets()
+                    let mut ri = 0
+                    while ri < len(keys) {
+                        let rb = _x86_strtab_hash(keys[ri])
+                        ik[rb] = ik[rb].push(keys[ri])
+                        il[rb] = il[rb].push(labs[ri])
+                        ri = ri + 1
+                    }
+                }
                 let n = len(keys)
-                keys.push(o.str_val)
-                labs.push(".LCstr" + to_string(n))
-                out = X86StrTab { keys: keys, labels: labs }
+                let key = o.str_val
+                let lab = ".LCstr" + to_string(n)
+                keys.push(key)
+                labs.push(lab)
+                // Index the same handles — .LCstrN numbering untouched
+                // (emission still walks `keys`/`labels` in first-occurrence
+                // order).
+                let b = _x86_strtab_hash(key)
+                ik[b] = ik[b].push(key)
+                il[b] = il[b].push(lab)
+                out = X86StrTab { keys: keys, labels: labs, idx_keys: ik, idx_labels: il }
             }
         }
         i = i + 1
@@ -5669,7 +5743,7 @@ fn _x86_collect_strs_from_stmt(st: X86StrTab, s: Stmt) -> X86StrTab {
 }
 
 fn _build_x86_strtab(module: MModule) -> X86StrTab {
-    let mut st = X86StrTab { keys: [], labels: [] }
+    let mut st = X86StrTab { keys: [], labels: [], idx_keys: [], idx_labels: [] }
     let mut fi = 0
     while fi < len(module.funcs) {
         let f = module.funcs[fi]
@@ -5887,14 +5961,17 @@ fn _x86_str_to_hex_bytes(s: string) -> string {
     // was fixed). s.bytes() returns per-byte i64 entries (raw 0..255),
     // preserving every UTF-8 byte verbatim.
     let bs = s.bytes()
-    let mut out = ""
+    // PERF #4454-class: parts+join instead of `out = out + hex` per byte —
+    // the '+' re-copied the whole accumulator each iteration, O(L²) per
+    // literal. join("") is a single length-summed alloc; output identical.
+    let mut parts: [string] = []
     let mut i = 0
     while i < len(bs) {
-        out = out + _x86_byte_to_hex(bs[i])
+        parts.push(_x86_byte_to_hex(bs[i]))
         i = i + 1
     }
-    out = out + "00"
-    return out
+    parts.push("00")
+    return parts.join("")
 }
 
 fn _x86_strtab_to_rodata(st: X86StrTab) -> [LSection] {

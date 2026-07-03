@@ -261,6 +261,39 @@ pub fn qforge_pw_apply_global(ham: PwHam) {
 }
 pub fn qforge_pw_h_apply(v: [float]) { return qforge_h_apply(PW_HAM, v) }
 
+// ── QFORGE-PERF round 2: BATCHED block apply over the shared PW_HAM slot ───────
+//   The block twin of qforge_pw_h_apply — applies H to a ROW-MAJOR Ψ[n,m] block
+//   in ONE GEMM via qforge_h_apply_forge_block (forge_dispatch_matmul → cuBLAS on
+//   a CUDA build, FP64 CPU GEMM otherwise). Reads the SAME assembled PW_HAM the
+//   scalar apply reads, so the two describe the identical H(ρ) (the parity
+//   contract qforge_davidson_block / qforge_scf_block rely on). Returns [] on a
+//   shape mismatch / bad handle → davidson_block falls back to the scalar path.
+pub fn qforge_pw_h_apply_block(psi_flat: [float], m: int) {
+    return qforge_h_apply_forge_block(PW_HAM, psi_flat, m)
+}
+
+// ── the BLOCK H_of_rho closure (M5.7 in-loop V_H[ρ], batched apply) ────────────
+//   Mirrors qforge_h_of_rho_global EXACTLY (same vscr → same assembled ham → same
+//   PW_HAM stage) but returns the BATCHED block apply. qforge_scf_block calls BOTH
+//   this and qforge_h_of_rho_global on the same ρ each iteration; because both
+//   assemble the identical PwHam into PW_HAM, the scalar diag-extraction and the
+//   block diagonalize see one consistent H(ρ).
+pub fn qforge_h_block_of_rho_global(rho: [float]) {
+    let mut vh = PW_VH
+    if PW_HGRID_ON {
+        if len(rho) == PW_NX * PW_NY * PW_NZ {
+            vh = qforge_vhartree_from_rho(rho, PW_NX, PW_NY, PW_NZ, PW_B1, PW_B2, PW_B3)
+        }
+    }
+    let vscr = qforge_vscr_diag(rho, vh, PW_XCMODE)
+    let ham = qforge_assemble_h(PW_KVEC, PW_GVECS, PW_POS,
+                                PW_R, PW_RAB, PW_VLOC, PW_Z,
+                                PW_BETAS, PW_LS, PW_DIJ, PW_NPROJ,
+                                PW_OMEGA, vscr)
+    PW_HAM = ham
+    return qforge_pw_h_apply_block
+}
+
 // ── doubled apply slots for the LSDA driver (↑,↓ live simultaneously) ─────────
 //   The spin SCF driver probes H↑ and H↓ in the same iteration, so each spin
 //   binds its own PwHam slot + named apply fn (the single PW_HAM would alias).
@@ -345,6 +378,31 @@ pub fn qforge_scf_pw_h(kvec: [float], gvecs: [float], pos: [float],
     let n = len(gvecs) / 3
     return qforge_scf(qforge_h_of_rho_global, qforge_rho_of_psi, n, nbands, nelec,
                       mix, tol, max_iter)
+}
+
+// ── QFORGE-PERF round 2: BLOCK-WIRED in-loop-V_H PW SCF (GPU-GEMM Davidson) ────
+//   Identical staging + physics to qforge_scf_pw_h, but drives qforge_scf_block —
+//   so every inner Davidson diagonalize applies H to the WHOLE nbands block in ONE
+//   GEMM H[n,n]@Ψ[n,m] (qforge_pw_h_apply_block → forge_dispatch_matmul). On a
+//   CUDA-built hexa that GEMM is cuBLAS (74.9× at n=2048,m=64; QFORGE-PERF.bench.md
+//   §8); on a no-GPU build it is the identical FP64 CPU GEMM (a few× faster than
+//   the scalar loop — davidson_block_e2e_bench) and BIT-IDENTICAL in eigenvalues
+//   (max |Δλ| ≤ 9e-16). This is the production seam SCF/DFPT take to ride the GPU
+//   Davidson; a separate entry so qforge_scf_pw_h stays byte-identical (d4 no-reg).
+pub fn qforge_scf_pw_h_block(kvec: [float], gvecs: [float], pos: [float],
+                             r: [float], rab: [float], vloc_r: [float], z: float,
+                             betas: [float], ls: [int], dij: [float], nproj: int,
+                             omega: float, vh_diag: [float], xc_mode: int,
+                             nx: int, ny: int, nz: int,
+                             b1: [float], b2: [float], b3: [float],
+                             nbands: int, nelec: int, mix: float, tol: float,
+                             max_iter: int) -> ScfResult {
+    qforge_scf_pw_set(kvec, gvecs, pos, r, rab, vloc_r, z,
+                      betas, ls, dij, nproj, omega, vh_diag, xc_mode)
+    qforge_scf_pw_set_hgrid(nx, ny, nz, b1, b2, b3)        // enable in-loop V_H[ρ]
+    let n = len(gvecs) / 3
+    return qforge_scf_block(qforge_h_of_rho_global, qforge_h_block_of_rho_global,
+                            qforge_rho_of_psi, n, nbands, nelec, mix, tol, max_iter)
 }
 
 // ── MULTI-SPECIES in-loop-V_H PW SCF (M5.7 PR3 — real heteroatomic cell) ───────
