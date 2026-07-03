@@ -949,6 +949,86 @@ fn _build_case_static_types_r8() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// static-types r9a — Index/Field READ inference. Index READs need BOTH flags
+// (element types only exist under the r7-prep structured lowering); Field
+// READs need HEXA_STATIC_TYPES alone (the r5 side registry carries the
+// declared field type). Two REJECT shapes + two matching controls:
+//   struct Point { x: i32, y: i32 }
+//   fn f(xs: [i64], p: Point) {
+//       let n: string = xs[0]   // Index READ: i64 elem vs string → HX3011 (both flags)
+//       let m: i64    = xs[1]   // matching control                → clean
+//       let q: string = p.x     // Field READ: i32 vs string → HX3011 (HEXA_STATIC_TYPES)
+//       let r: i32    = p.y     // matching control            → clean
+//   }
+// The rung adds NO new diagnostic site — the recovered element/field type
+// feeds the EXISTING r2 let check (typed-let RHS soundness gates). Contract
+// is three-way self-adapting: both flags ON → 2 HX3011; HEXA_STATIC_TYPES
+// alone → 1 (only the Field rung fires; the Index base stays a string
+// sentinel); default build → 0 (byteeq-neutral proof).
+fn _build_case_static_types_r9a() -> Module {
+    let f = "case_static_r9a.hexa"
+    // struct Point { x: i32, y: i32 }
+    let mut sfields = []
+    sfields.push(_param("x", "i32", f, 1, 15))
+    sfields.push(_param("y", "i32", f, 1, 23))
+    let item_pt = _struct_item("Point", sfields, f, 1)
+    // fn f(xs: [i64], p: Point) { … }
+    let mut kids = []
+    // let n: string = xs[0]   — Index READ element mismatch
+    kids.push(_let_expr("n|string", _index_expr(_ident_expr("xs", f, 3, 21), _int_expr("0", f, 3, 24), f, 3, 23), f, 3, 5))
+    // let m: i64 = xs[1]      — Index READ matching control
+    kids.push(_let_expr("m|i64", _index_expr(_ident_expr("xs", f, 4, 18), _int_expr("1", f, 4, 21), f, 4, 20), f, 4, 5))
+    // let q: string = p.x     — Field READ mismatch
+    kids.push(_let_expr("q|string", _field_expr(_ident_expr("p", f, 5, 21), "x", f, 5, 23), f, 5, 5))
+    // let r: i32 = p.y        — Field READ matching control
+    kids.push(_let_expr("r|i32", _field_expr(_ident_expr("p", f, 6, 18), "y", f, 6, 20), f, 6, 5))
+    let body = _block(kids, f, 2, 1)
+    let mut fparams = []
+    fparams.push(_array_param("xs", "i64", f, 2, 6))
+    fparams.push(_param("p", "Point", f, 2, 17))
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), body, f, 2)
+    let mut items = []
+    items.push(item_pt)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// static-types r9b — fn-return array-element REJECT + element-literal
+// coercion no-FP (HEXA_STATIC_TYPES=1 + HEXA_STATIC_TYPES_ARRAY_LOWER=1).
+// One REJECT shape + one coercion control:
+//   fn f() -> [i64] { return [1.5] }   // [f64] literal vs [i64] ret → HX3004 (×1)
+//   fn g() -> [f32] { return [0.0] }   // element float-lit coerces  → clean (the
+//                                       // r9b _types_assignable arm; without it
+//                                       // this FALSE-fires — flip-blocking FP)
+// Both-flags-ON: exactly 1 HX3004 — the return annotation lowers structured
+// (r7-prep), `[1.5]` infers array[f64] (r8), and the EXISTING default-ON
+// HX3004 site rejects via `_types_assignable`; `[0.0]` vs [f32] passes the
+// NEW per-element literal-coercion arm. Default build / either flag alone:
+// 0 (the ArrayLit infers the unknown sentinel and/or the annotation stays a
+// string sentinel → tolerated — byteeq-neutral proof). A count of 2 here
+// catches the coercion-FP regression (g() rejecting) exactly.
+fn _build_case_static_types_r9b() -> Module {
+    let f = "case_static_r9b.hexa"
+    // fn f() -> [i64] { return [1.5] }   — element REJECT
+    let mut bad_elems = []
+    bad_elems.push(_float_expr("1.5", f, 1, 27))
+    let mut f_kids = []
+    f_kids.push(_return_expr(_array_lit_expr(bad_elems, f, 1, 26), f, 1, 19))
+    let f_body = _block(f_kids, f, 1, 17)
+    let item_f = _fn_item("f", [], _generic_array_type_ref("i64"), f_body, f, 1)
+    // fn g() -> [f32] { return [0.0] }   — element literal coercion (no-FP)
+    let mut ok_elems = []
+    ok_elems.push(_float_expr("0.0", f, 2, 27))
+    let mut g_kids = []
+    g_kids.push(_return_expr(_array_lit_expr(ok_elems, f, 2, 26), f, 2, 19))
+    let g_body = _block(g_kids, f, 2, 17)
+    let item_g = _fn_item("g", [], _generic_array_type_ref("f32"), g_body, f, 2)
+    let mut items = []
+    items.push(item_f)
+    items.push(item_g)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // HEXA-OWN L2 r1 — @own use-after-move lint (HEXA_OWN_LINT=1). A block-local
 // `@own let` binding is single-owner: its first bare-ident consumption (the
 // RHS of a later `let`, an assignment RHS, or a call argument) MOVES it; any
@@ -1316,6 +1396,66 @@ fn main() {
             ok = false
         } else {
             println("  ok: 0 HX3003 / 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (s) static-types r9a — Index/Field READ inference feeding the EXISTING
+    // r2 let check (letters o/p/q/r taken; p reserved by own-l2-r2). Three-
+    // way self-adapting contract: BOTH flags → 2 HX3011 (`let n: string =
+    // xs[0]` Index-READ elem i64 + `let q: string = p.x` Field-READ i32);
+    // HEXA_STATIC_TYPES alone → 1 (only the Field rung — Index element
+    // types need the ARRAY_LOWER structured lowering); default build → 0
+    // (byteeq-neutral proof). The matching `let m: i64 = xs[1]` and
+    // `let r: i32 = p.y` stay clean in every mode.
+    let diags_s = _run_case("(s) static-types r9a — Index/Field READ inference into typed let (HEXA_STATIC_TYPES [+ARRAY_LOWER])", _build_case_static_types_r9a())
+    let ns = _count_code(diags_s, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" && env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1" {
+        if ns != 2 {
+            println("  FAIL: case (s) both-flags-ON expected 2 HX3011 (n:string=xs[0] + q:string=p.x), got " + to_string(ns) + " (total=" + to_string(len(diags_s)) + ")")
+            ok = false
+        } else {
+            println("  ok: 2 HX3011 emitted (Index READ i64-elem + Field READ i32 vs string; matching m/r stay clean)")
+        }
+    } else if env("HEXA_STATIC_TYPES") == "1" {
+        if ns != 1 {
+            println("  FAIL: case (s) HEXA_STATIC_TYPES-only expected 1 HX3011 (q:string=p.x; Index rung needs ARRAY_LOWER), got " + to_string(ns) + " (total=" + to_string(len(diags_s)) + ")")
+            ok = false
+        } else {
+            println("  ok: 1 HX3011 emitted (Field READ only — Index READ stays conservative without ARRAY_LOWER)")
+        }
+    } else {
+        if ns != 0 {
+            println("  FAIL: case (s) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(ns) + " (total=" + to_string(len(diags_s)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (t) static-types r9b — fn-return array-element REJECT + element-literal
+    // coercion no-FP. Both-flags-ON: exactly 1 HX3004 (`fn f() -> [i64] {
+    // return [1.5] }` — structural [f64] vs the lowered [i64] return, at the
+    // EXISTING default-ON HX3004 site) while `fn g() -> [f32] { return [0.0]
+    // }` passes via the NEW per-element literal-coercion arm of
+    // _types_assignable — a count of 2 catches the flip-blocking FP exactly.
+    // Default build / either flag alone: 0 (ArrayLit infers the unknown
+    // sentinel and/or the annotation stays a string sentinel → tolerated —
+    // byteeq-neutral proof).
+    let diags_t = _run_case("(t) static-types r9b — return [1.5] vs [i64] REJECT + [0.0] vs [f32] coercion no-FP (HEXA_STATIC_TYPES+ARRAY_LOWER)", _build_case_static_types_r9b())
+    let nt = _count_code(diags_t, "HX3004")
+    if env("HEXA_STATIC_TYPES") == "1" && env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1" {
+        if nt != 1 {
+            println("  FAIL: case (t) both-flags-ON expected 1 HX3004 (f: [1.5] vs [i64] REJECT; g: [0.0] vs [f32] coerces), got " + to_string(nt) + " (total=" + to_string(len(diags_t)) + ")")
+            ok = false
+        } else {
+            println("  ok: 1 HX3004 emitted (return-position element REJECT; [0.0]→[f32] element coercion stays clean — no FP)")
+        }
+    } else {
+        if nt != 0 {
+            println("  FAIL: case (t) flags-OFF expected 0 HX3004 (byteeq-neutral), got " + to_string(nt) + " (total=" + to_string(len(diags_t)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3004 (default-OFF → byteeq-neutral)")
         }
     }
 
