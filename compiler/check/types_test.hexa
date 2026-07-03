@@ -1105,11 +1105,11 @@ fn _build_case_static_types_r9c() -> Module {
 // One module, one REJECT + three conservative controls:
 //   struct Q { x: i64, y: i64 }
 //   fn f() {
-//       Q { x: 1, z: 2 }     // z: no such field           → HX3014 (×1)
+//       Q { x: 1, z: 2 }     // z: no such field           → HX3016 (×1)
 //       Q { y: 3 }           // subset init (E0063 scope)  → clean
 //       Nope { w: 1 }        // struct unknown to registry → clean (silent)
 //   }
-// Under the flag exactly 1 HX3014 (the `z` init; `x: 1` coerces, `z`'s value
+// Under the flag exactly 1 HX3016 (the `z` init; `x: 1` coerces, `z`'s value
 // is never type-compared) and 0 HX3011 (no type mismatch anywhere). Default
 // build → 0 (byteeq-neutral proof — the STUB walk is unchanged).
 fn _build_case_static_types_r9d() -> Module {
@@ -1120,7 +1120,7 @@ fn _build_case_static_types_r9d() -> Module {
     sfields.push(_param("y", "i64", f, 1, 20))
     let item_q = _struct_item("Q", sfields, f, 1)
     let mut kids = []
-    // Q { x: 1, z: 2 }   — `z` misses the registry for KNOWN struct Q → HX3014
+    // Q { x: 1, z: 2 }   — `z` misses the registry for KNOWN struct Q → HX3016
     let mut inits_bad = []
     inits_bad.push(_field_init("x", _int_expr("1", f, 3, 12), f, 3, 9))
     inits_bad.push(_field_init("z", _int_expr("2", f, 3, 18), f, 3, 15))
@@ -1778,27 +1778,27 @@ fn main() {
 
     // (v) static-types r9d — struct-literal field-EXISTENCE REJECT.
     // Flag-ON (HEXA_STATIC_TYPES=1, no ARRAY_LOWER dependency): exactly 1
-    // HX3014 — `Q{ x: 1, z: 2 }` where `z` is not a field of the KNOWN
+    // HX3016 — `Q{ x: 1, z: 2 }` where `z` is not a field of the KNOWN
     // struct Q (the NEW r9d existence arm); the subset init `Q{ y: 3 }` and
     // the registry-unknown `Nope{ w: 1 }` stay clean (conservative
     // unknown-fallback), and 0 HX3011 proves no type-mismatch cross-fire.
     // Default build: 0 (byteeq-neutral proof — the STUB walk is unchanged).
     let diags_v = _run_case("(v) static-types r9d — struct-literal unknown field name REJECT (HEXA_STATIC_TYPES)", _build_case_static_types_r9d())
-    let nv3014 = _count_code(diags_v, "HX3014")
+    let nv3014 = _count_code(diags_v, "HX3016")
     let nv3011 = _count_code(diags_v, "HX3011")
     if env("HEXA_STATIC_TYPES") == "1" {
         if nv3014 != 1 || nv3011 != 0 {
-            println("  FAIL: case (v) HEXA_STATIC_TYPES=1 expected 1 HX3014 (Q has no field `z`; subset + unknown-struct stay clean) + 0 HX3011, got " + to_string(nv3014) + " HX3014 / " + to_string(nv3011) + " HX3011 (total=" + to_string(len(diags_v)) + ")")
+            println("  FAIL: case (v) HEXA_STATIC_TYPES=1 expected 1 HX3016 (Q has no field `z`; subset + unknown-struct stay clean) + 0 HX3011, got " + to_string(nv3014) + " HX3016 / " + to_string(nv3011) + " HX3011 (total=" + to_string(len(diags_v)) + ")")
             ok = false
         } else {
-            println("  ok: 1 HX3014 emitted (unknown field `z` on known struct Q; subset init + unknown struct stay clean)")
+            println("  ok: 1 HX3016 emitted (unknown field `z` on known struct Q; subset init + unknown struct stay clean)")
         }
     } else {
         if nv3014 != 0 || nv3011 != 0 {
-            println("  FAIL: case (v) default build expected 0 HX3014 + 0 HX3011 (byteeq-neutral), got " + to_string(nv3014) + " HX3014 / " + to_string(nv3011) + " HX3011 (total=" + to_string(len(diags_v)) + ")")
+            println("  FAIL: case (v) default build expected 0 HX3016 + 0 HX3011 (byteeq-neutral), got " + to_string(nv3014) + " HX3016 / " + to_string(nv3011) + " HX3011 (total=" + to_string(len(diags_v)) + ")")
             ok = false
         } else {
-            println("  ok: 0 HX3014 / 0 HX3011 (default-OFF → byteeq-neutral)")
+            println("  ok: 0 HX3016 / 0 HX3011 (default-OFF → byteeq-neutral)")
         }
     }
 

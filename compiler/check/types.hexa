@@ -1290,7 +1290,7 @@ fn _types_lookup_struct_field_typename(struct_name: string, field_name: string) 
 // Disambiguates the two `found=false` shapes of the lookup above: struct
 // unknown to the registry (cross-module/unresolved receiver → the r9d
 // existence check stays SILENT, conservative unknown-fallback) vs struct
-// known but the field name missing (→ HX3014 REJECT). Read only under the
+// known but the field name missing (→ HX3016 REJECT). Read only under the
 // opt-in flag — the registry itself is populated unconditionally (r5
 // contract), so the default build stays byte-identical.
 fn _types_struct_registry_has(struct_name: string) -> bool {
@@ -1834,14 +1834,14 @@ fn _emit_hx3013(name: string, global: string, def_line: i64, sp: Span, out: arra
     out.push(diag_emit(b))
 }
 
-// HX3014 — opt-in struct-literal field-EXISTENCE reject (HEXA_STATIC_TYPES=1),
+// HX3016 — opt-in struct-literal field-EXISTENCE reject (HEXA_STATIC_TYPES=1),
 // static-types r9d. Rust E0560-faithful "struct has no field named": a
 // field-init whose name misses the r5 registry for a struct the registry
 // KNOWS. Error severity (catalog.hexa) → REJECT, same abort contract as
 // HX3011. Only emitted under the flag, so the default diagnostic stream is
 // byte-identical (byteeq-neutral).
 fn _emit_hx3014(sname: string, fname: string, sp: Span, out: array) {
-    let mut b = diag_new("HX3014")
+    let mut b = diag_new("HX3016")
     b = diag_span(b, sp)
     b = diag_arg(b, "name", sname)
     b = diag_arg(b, "field", fname)
@@ -2961,7 +2961,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                         // r6 deliberately scoped out above). `found=false` is
                         // ambiguous: struct unknown to the r5 registry (cross-
                         // module receiver → stay SILENT, unknown-fallback) vs
-                        // struct KNOWN but no such field → HX3014 (Rust E0560
+                        // struct KNOWN but no such field → HX3016 (Rust E0560
                         // "struct has no field named", rustc_hir_typeck
                         // check_expr_struct_fields → report_unknown_field). A
                         // found field with a non-named type spelling
