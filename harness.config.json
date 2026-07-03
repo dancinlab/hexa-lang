@@ -33,6 +33,7 @@
     "freshnessFiles": [],
     "changelog": {
       "file": "CHANGELOG.jsonl",
+      "fragmentDir": "CHANGELOG.d",
       "triggerPattern": "\\.(hexa)$",
       "ignore": [
         "(^|/)(tests?|__tests__|spec)/",
@@ -65,6 +66,7 @@
       "README.en.md",
       "README.ko.md",
       "CHANGELOG.jsonl",
+      "CHANGELOG.d/",
       "ARCHITECTURE.json",
       "architecture.html",
       "serve.py",

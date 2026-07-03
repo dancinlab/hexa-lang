@@ -1047,6 +1047,7 @@ fn codegen(ast) {
     // a second compilation in the same process doesn't inherit the first.
     _gen2_tu_has_strict_fp = 0
     _gen2_current_fn_strict_fp = 0
+    _gen2_tu_has_vendor_ffi = 0
     let mut _gi = 0
     while _gi < len(ast) {
         let _gk = ast[_gi].kind
@@ -1233,6 +1234,11 @@ fn codegen(ast) {
             global_parts.push(ew.global)
             fwd_parts.push(ew.forward + "\n")
             fn_parts.push(ew.fn_code + "\n\n")
+            // zero-c #29 PR-2: a non-empty ew.init means native-route did NOT absorb this
+            // extern → a real hexa_ffi_dlsym(hexa_ffi_dlopen(..)) init line survives, so this
+            // program needs the partitioned-out runtime_ffi_dyn.o. (native-route survivors
+            // return init=="" at codegen.hexa's FFI-NATIVE-ROUTE.)
+            if ew.init != "" { _gen2_tu_has_vendor_ffi = 1 }
             init_parts.push(ew.init)
         } else if k == "StructDecl" {
             // T33-rebuild: emit a forward declaration so the generated
@@ -1505,6 +1511,15 @@ fn codegen(ast) {
     } else {
         parts.push("/* HEXA_STRICT_FP_TU: 0 */\n")
     }
+    // zero-c #29 PR-2: emit both polarities so the driver detects "no vendor FFI" too.
+    // 1 = this program has a surviving vendor extern / interpreter host_ffi dispatch and
+    // must link build/runtime_ffi_dyn.o (dl* lives there post-S1); 0 = it does not, so the
+    // link stays runtime_ffi_dyn-free and byte-identical to the pre-S1 non-FFI program.
+    if _gen2_tu_has_vendor_ffi == 1 {
+        parts.push("/* HEXA_FFI_DYN_TU: 1 */\n")
+    } else {
+        parts.push("/* HEXA_FFI_DYN_TU: 0 */\n")
+    }
     // T3 fix: emit `int main(int argc, char** argv)` + hexa_set_args(argc, argv)
     // 이전 구현은 `int main()` 으로 argv 를 받지 않아 args() 가 항상 빈 배열을
     // 반환했다. main.hexa 의 dispatch (av[2] 등) 가 동작하려면 필수.
@@ -1732,7 +1747,7 @@ fn gen2_specialize_guard(node) {
 // stay byte-identical. The pad argument controls indentation; pass the same
 // pad the surrounding C block uses.
 fn _gen2_emit_tail_return_expr(expr, pad) {
-    if _gen2_defer_flag_count > 0 {
+    if _gen2_defer_fn_total > 0 {
         return pad + "__ret_val = " + gen2_expr(expr) + "; goto __fn_exit;\n"
     }
     if _gen2_arena_wrap == 1 {
@@ -1748,7 +1763,7 @@ fn _gen2_emit_tail_return_expr(expr, pad) {
 // emission paths so the early-return stays byte-identical to a normal
 // `return <recv>;` under defer / arena / plain regimes.
 fn _gen2_emit_tail_return_expr_raw(cexpr, pad) {
-    if _gen2_defer_flag_count > 0 {
+    if _gen2_defer_fn_total > 0 {
         return pad + "__ret_val = " + cexpr + "; goto __fn_exit;\n"
     }
     if _gen2_arena_wrap == 1 {
@@ -2092,9 +2107,11 @@ fn gen2_fn_decl(node) {
     //   stays identical to the pre-Phase-3 codegen.
     let _prev_defer_bodies = _gen2_defer_bodies
     let _prev_defer_flag_count = _gen2_defer_flag_count
+    let _prev_defer_fn_total = _gen2_defer_fn_total
     _gen2_defer_bodies = []
     _gen2_defer_flag_count = 0
     let _defer_total = _gen2_count_defers(node.body)
+    _gen2_defer_fn_total = _defer_total
     if _defer_total > 0 {
         chunks.push("    HexaVal __ret_val = hexa_void();\n")
         let mut _df = 0
@@ -2242,7 +2259,7 @@ fn gen2_fn_decl(node) {
                         // so the drain runs before the arena-wrapped
                         // return. Same shape as the explicit ReturnStmt
                         // branch in gen2_stmt.
-                        if _gen2_defer_flag_count > 0 {
+                        if _gen2_defer_fn_total > 0 {
                             chunks.push("    __ret_val = " + gen2_expr(stmt.left) + "; goto __fn_exit;\n")
                         } else if has_no_arena {
                             chunks.push("    return " + gen2_expr(stmt.left) + ";\n")
@@ -2269,7 +2286,7 @@ fn gen2_fn_decl(node) {
     // body in reverse-registration order (LIFO — matches Go + the
     // interp interpreter) under its activation flag, then flows into
     // the arena-wrapped __ret_val return.
-    if _gen2_defer_flag_count > 0 {
+    if _gen2_defer_fn_total > 0 {
         // Fall-through path (body ran to the closing brace without
         // hitting a return or a tail-return) needs to reach __fn_exit
         // too — force the jump. Also prevents "label declared but not
@@ -2306,6 +2323,7 @@ fn gen2_fn_decl(node) {
     // Plan B Phase 3: restore outer fn's defer state (nested FnDecl case).
     _gen2_defer_bodies = _prev_defer_bodies
     _gen2_defer_flag_count = _prev_defer_flag_count
+    _gen2_defer_fn_total = _prev_defer_fn_total
     // @lazy thunk wrapper: emit a second fn with the original name that
     // guards the body via a static `computed` flag. One-shot; zero-arg only.
     // Wrapper is NOT @hot/@cold/@restrict-decorated — it's a trivial cache
@@ -2785,6 +2803,12 @@ let mut _gen2_arena_wrap = 0
 //     the build driver (self/main.hexa) can inject IEEE-strict clang flags.
 let mut _gen2_current_fn_strict_fp = 0
 let mut _gen2_tu_has_strict_fp = 0
+// zero-c #29 S1/PR-2: sticky 1 once any fn in this TU has a surviving vendor extern
+// (an @link extern that native-route did NOT absorb → a real hexa_ffi_dlsym init line)
+// or an interpreter host_ffi dispatch. Feeds the `/* HEXA_FFI_DYN_TU */` marker so the
+// driver links build/runtime_ffi_dyn.o ONLY for programs that actually need dl* — the
+// S1 partition moved those symbols out of the canonical runtime.a. Mirrors _gen2_tu_has_strict_fp.
+let mut _gen2_tu_has_vendor_ffi = 0
 
 // Plan B Phase 3 — defer/scope/spawn codegen state (per-function).
 //
@@ -2805,6 +2829,13 @@ let mut _gen2_tu_has_strict_fp = 0
 // no flag vars, no __fn_exit label, no goto rewrites.
 let mut _gen2_defer_bodies = []
 let mut _gen2_defer_flag_count = 0
+// _gen2_defer_fn_total: pre-scanned defer count for the CURRENT fn.
+// Return-reroute gates read THIS (not the running flag counter) so a
+// return textually ABOVE a later defer still routes through __fn_exit —
+// the drain checks the runtime flag, so an unreached defer stays inert.
+// (C4 fix: the running-counter gate missed loop-carried defers overtaken
+// by a nested return — state/hexa-own/step0_verdict.md.)
+let mut _gen2_defer_fn_total = 0
 
 // _gen2_count_defers — pre-scan the fn body to count DeferStmt nodes
 // so gen2_fn_decl can emit the right number of `__defer_N_active`
@@ -2842,6 +2873,17 @@ fn _gen2_count_defers(stmts) {
                 }
                 j = j + 1
             }
+        }
+        // If-as-expression: `if cond { ... }` in statement position parses as
+        // ExprStmt wrapping an if-expr whose then/else bodies live on the
+        // INNER node (s.left) — mirror _gen2_collect_lets_stmt's descent.
+        // Without this the decl pre-scan undercounts (t_cond: __defer_1
+        // emitted but never declared -> C compile error).
+        if k == "ExprStmt" && type_of(s.left) != "string" {
+            let e = s.left
+            if type_of(e.body) == "array" { n = n + _gen2_count_defers(e.body) }
+            if type_of(e.then_body) == "array" { n = n + _gen2_count_defers(e.then_body) }
+            if type_of(e.else_body) == "array" { n = n + _gen2_count_defers(e.else_body) }
         }
     }
     return n
@@ -3565,7 +3607,7 @@ fn _gen2_stmt_inner(node, depth) {
         // Plan B Phase 3: when this fn registered at least one defer,
         // route through __fn_exit so the drain + arena return run in
         // order. Non-defer fns keep the original zero-overhead path.
-        if _gen2_defer_flag_count > 0 {
+        if _gen2_defer_fn_total > 0 {
             if type_of(node.left) != "string" && !_ret_is_void {
                 return pad + "__ret_val = " + gen2_expr(node.left) + "; goto __fn_exit;\n"
             }
@@ -7031,6 +7073,8 @@ fn gen2_expr(node) {
             }
             // C2 Step 3: Dynamic FFI host dispatch (interpreter path)
             if name == "host_ffi_open" {
+                // zero-c #29 PR-2: interpreter dynamic-FFI dispatch → needs runtime_ffi_dyn.o.
+                _gen2_tu_has_vendor_ffi = 1
                 return "hexa_host_ffi_open(" + gen2_expr(node.args[0]) + ")"
             }
             if name == "host_ffi_sym" {
@@ -14420,6 +14464,11 @@ fn codegen_full(ast) {
             global_parts.push(ew.global)
             fwd_parts.push(ew.forward + "\n")
             fn_parts.push(ew.fn_code + "\n\n")
+            // zero-c #29 PR-2: a non-empty ew.init means native-route did NOT absorb this
+            // extern → a real hexa_ffi_dlsym(hexa_ffi_dlopen(..)) init line survives, so this
+            // program needs the partitioned-out runtime_ffi_dyn.o. (native-route survivors
+            // return init=="" at codegen.hexa's FFI-NATIVE-ROUTE.)
+            if ew.init != "" { _gen2_tu_has_vendor_ffi = 1 }
             init_parts.push(ew.init)
         } else if k == "StructDecl" {
             // T33-rebuild: emit a forward declaration so the generated
