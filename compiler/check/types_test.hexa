@@ -909,6 +909,34 @@ fn _own_fn_item(name: string, own_pname: string, params: [Param], body: Expr, fi
     }
 }
 
+// HEXA-OWN L2.5 r1 — array literal `[e0, e1, …]`. children = elements
+// (parser shape per ast.hexa ExprKind::ArrayLit).
+fn _array_lit_expr(elems: [Expr], file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::ArrayLit,
+        span: _span(file, line, col, 1),
+        text: "",
+        annotations: [],
+        children: elems,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// HEXA-OWN L2.5 r1 — module-level `let <name> = rhs` item (ItemKind::Let;
+// body = RHS expr, unannotated return_type — the lint reads only names).
+fn _let_item(name: string, rhs: Expr, file: string, line: i64) -> Item {
+    return Item {
+        kind: ItemKind::Let,
+        name: name,
+        span: _span(file, line, 1, len(name)),
+        annotations: [],
+        params: [],
+        return_type: _empty_type_ref(),
+        body: rhs,
+        is_pub: false
+    }
+}
+
 fn _build_case_own_lint_r2b() -> Module {
     let f = "case_own_lint_r2b.hexa"
     // fn h(@own xs: string) { consume(xs); let b = xs }
@@ -934,6 +962,67 @@ fn _build_case_own_lint_r2b() -> Module {
     let mut items = []
     items.push(item_h)
     items.push(item_k)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// HEXA-OWN L2.5 r1 — arena-escape lint (HEXA_ARENA_ESCAPE_LINT=1). A
+// fn-local `let` whose RHS is a composite literal is arena-allocated; only
+// the RETURN value is heapified by the fn-arena runtime, so assigning such
+// a binding to a module-level `let` global leaves the global dangling after
+// scope_pop → HX3013 (warning band). One module covers the r1 contracts:
+//   let g_sink = []              // module-level global (escape target)
+//   fn clean() {
+//       let b = [3]              // composite local
+//       let keep = b             // local-to-local: NOT an escape   → clean
+//       let g_sink = 5           // fn-local SHADOW of the global name
+//       g_sink = b               // assigns the shadow, not the global → clean
+//   }
+//   fn scalar_ok() {
+//       let s = 7                // NON-composite local
+//       g_sink = s               // global store of a scalar binding → clean
+//   }
+//   fn bad() {
+//       let a = [1, 2]           // composite local (arena-allocated)
+//       g_sink = a               // escapes into the module global → HX3013 (×1)
+//   }
+// bad() runs LAST: if the per-fn registry reset ever leaked clean()'s
+// `g_sink` shadow entry, bad()'s warn would be suppressed → the ×1 contract
+// also proves per-fn isolation. Under the flag exactly 1 HX3013; on the
+// default build → 0 (byteeq-neutral proof).
+fn _build_case_arena_escape() -> Module {
+    let f = "case_arena_escape.hexa"
+    // let g_sink = []
+    let item_g = _let_item("g_sink", _array_lit_expr([], f, 1, 14), f, 1)
+    // fn clean() { let b = [3]; let keep = b; let g_sink = 5; g_sink = b }
+    let mut kids_clean = []
+    let mut elems_b = []
+    elems_b.push(_int_expr("3", f, 4, 14))
+    kids_clean.push(_let_expr("b", _array_lit_expr(elems_b, f, 4, 13), f, 4, 5))
+    kids_clean.push(_let_expr("keep", _ident_expr("b", f, 5, 16), f, 5, 5))
+    kids_clean.push(_let_expr("g_sink", _int_expr("5", f, 6, 18), f, 6, 5))
+    kids_clean.push(_assign_expr(_ident_expr("g_sink", f, 7, 5), _ident_expr("b", f, 7, 14), f, 7, 12))
+    let body_clean = _block(kids_clean, f, 3, 1)
+    let item_clean = _fn_item("clean", [], _empty_type_ref(), body_clean, f, 3)
+    // fn scalar_ok() { let s = 7; g_sink = s }
+    let mut kids_scalar = []
+    kids_scalar.push(_let_expr("s", _int_expr("7", f, 11, 13), f, 11, 5))
+    kids_scalar.push(_assign_expr(_ident_expr("g_sink", f, 12, 5), _ident_expr("s", f, 12, 14), f, 12, 12))
+    let body_scalar = _block(kids_scalar, f, 10, 1)
+    let item_scalar = _fn_item("scalar_ok", [], _empty_type_ref(), body_scalar, f, 10)
+    // fn bad() { let a = [1, 2]; g_sink = a }
+    let mut kids_bad = []
+    let mut elems_a = []
+    elems_a.push(_int_expr("1", f, 16, 14))
+    elems_a.push(_int_expr("2", f, 16, 17))
+    kids_bad.push(_let_expr("a", _array_lit_expr(elems_a, f, 16, 13), f, 16, 5))
+    kids_bad.push(_assign_expr(_ident_expr("g_sink", f, 17, 5), _ident_expr("a", f, 17, 14), f, 17, 12))
+    let body_bad = _block(kids_bad, f, 15, 1)
+    let item_bad = _fn_item("bad", [], _empty_type_ref(), body_bad, f, 15)
+    let mut items = []
+    items.push(item_g)
+    items.push(item_clean)
+    items.push(item_scalar)
+    items.push(item_bad)
     return Module { file: f, items: items, imports: [] }
 }
 
@@ -1262,6 +1351,32 @@ fn main() {
             ok = false
         } else {
             println("  ok: 0 HX3012 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (r) HEXA-OWN L2.5 r1 — arena-escape lint (HEXA_ARENA_ESCAPE_LINT).
+    // Under the flag, `let a = [1,2]; g_sink = a` (g_sink = module-level
+    // let) warns HX3013 exactly ONCE. The clean controls never fire: a
+    // local-to-local `let keep = b`, a store through a fn-local SHADOW of
+    // the global name, and a global store of a NON-composite binding
+    // (`g_sink = s`). bad() runs last, so the ×1 also proves the per-fn
+    // registry reset. On the default build → 0 (byteeq-neutral). Same
+    // self-adapting contract as (h)-(p), on the NEW arena-escape flag.
+    let diags_r = _run_case("(r) arena-escape L2.5 r1 — composite local stored into module global (HEXA_ARENA_ESCAPE_LINT)", _build_case_arena_escape())
+    let nr = _count_code(diags_r, "HX3013")
+    if env("HEXA_ARENA_ESCAPE_LINT") == "1" {
+        if nr != 1 {
+            println("  FAIL: case (r) HEXA_ARENA_ESCAPE_LINT=1 expected 1 HX3013 (g_sink = a), got " + to_string(nr) + " (total=" + to_string(len(diags_r)) + ")")
+            ok = false
+        } else {
+            println("  ok: 1 HX3013 emitted (escape `g_sink = a` warns; local move / shadowed store / scalar store stay clean)")
+        }
+    } else {
+        if nr != 0 {
+            println("  FAIL: case (r) default build expected 0 HX3013 (byteeq-neutral), got " + to_string(nr) + " (total=" + to_string(len(diags_r)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3013 (default-OFF → byteeq-neutral)")
         }
     }
 

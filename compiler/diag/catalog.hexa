@@ -363,6 +363,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3013",
+        title: "arena-allocated value escapes to a module global",
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "arena escape: fn-local composite `{name}` (declared at line {def_line}) is stored into module global `{global}`; the fn arena is reclaimed on return and only the RETURN value is heapified",
+        explain: "Opt-in arena-escape lint (`HEXA_ARENA_ESCAPE_LINT=1`), HEXA-OWN L2.5 r1 Rule B. On the default fn-arena path (hexa_val_arena_on) a composite literal built inside a fn — an array literal `[…]` or struct literal `S{…}` — is bump-allocated in that fn's arena scope. `__hexa_fn_arena_return` heapifies ONLY the fn's RETURN value before `scope_pop` reclaims the arena, and `hexa_array_push` dynamically heapifies push-into-outer-array — but a store into a MODULE-LEVEL `let` global is the runtime-admitted unheapified escape (self/runtime_core.c:3432): after the fn returns, the global references reclaimed arena memory. This lint warns when a fn-local `let` binding whose initialiser was a composite literal is later assigned (bare-ident RHS) to a module-level `let` global not shadowed by a fn-local binding. Non-fatal WARNING band (build still compiles; codegen/runtime untouched — check-side only, native aprime frontend). Scope is L2.5 r1: direct `global = local_composite` assignment inside one fn body; gen2 `@no_arena` contract-violation scanning (Rule A), stores through fields/indices, closure captures, and region-returns depth are later rungs. The default build (flag unset) emits nothing and populates no registry — the diagnostic stream is byte-identical (byteeq-neutral). Fix: return the composite and assign at the caller, build the global's value at module scope, or copy element-by-element into a heap-resident structure instead of aliasing the fn-arena allocation.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,

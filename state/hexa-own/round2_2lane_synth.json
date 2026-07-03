@@ -1,0 +1,140 @@
+{
+  "laneA": {
+    "verdicts": [
+      "Q1 LOOP-DEFER ORACLE — SETTLED: gen2 at-most-once flag model is the sole canonical semantics. DeferStmt registers the body once at COMPILE time and emits only an idempotent `__defer_N_active = 1;` (self/codegen.hexa:3526-3531, verified); drain runs each body at most once under its flag at __fn_exit with drain-time variable values (self/codegen.hexa:2275-2289, verified). The interp's per-iteration push (N executions) is moot: self/hexa_full.hexa was DELETED at ab7015fa1 (2026-05-19, 'R7 Cycle C step-1 — delete interpreter source, 25,548 lines', verified via git log). The plan's contingency 'interp가 갈리면 별도 byte-neutral PR로 정렬' (state/hexa-own/M1_defer_wiring.md 미결 §1) is DEAD — there is nothing to align and it would have been byteeq-invisible anyway (.github/workflows/selfhost-byteeq-gate.yml compares compiler-generation objects only). CAVEAT: gen2's own comment at self/codegen.hexa:3528-3530 claims it 'matches the interp interpreter's defer_stack.push behavior' — TRUE only for the unreached-defer case, FALSE for loop multiplicity; M1 docs must state the flag model on its own terms, not as interp-parity.",
+      "Q2 FN-EXIT vs PER-BLOCK — SETTLED: fn-exit only. gen2 emits exactly one __fn_exit label per fn with the drain and arena return there (self/codegen.hexa:2267-2295, verified: forced fall-through goto at ~2273, reverse-registration drain, `return __hexa_fn_arena_return(__ret_val)`); explicit return routes `__ret_val = …; goto __fn_exit;` only when _gen2_defer_flag_count > 0 (self/codegen.hexa:~3498-3505, verified — non-defer fns keep the zero-overhead direct return). break/continue/inner-block exits never drain. THROW never drains: ThrowStmt → hexa_throw (self/codegen.hexa:~3844) = hxlcl_longjmp to the caller's hxlcl_setjmp try frame, bypassing __fn_exit entirely — canonical M1-out-of-scope semantics, pinned by test as must-NOT-fire. Per-block drain would be a shipping-behavior change requiring its own byteeq+smoke decision; not M1.",
+      "Q3 DEFER-ASSIGNMENT LEGALITY — SETTLED: REJECT, matching gen2, but the naive native port would silently ACCEPT it. Verified: gen2 parse_expr has no `=` level (self/parser.hexa:3083-3095 — only walrus ColonEq; assignment is stmt-level AssignStmt at self/parser.hexa:1508-1520), so gen2 `defer x = 1` parses `x`, leaves `=` unconsumed, and the dangling assignment errors downstream. Native parse_expr == parse_assignment (compiler/parse/parser.hexa:480-481) and parse_assignment consumes Eq/PlusEq/MinusEq/StarEq/SlashEq into ExprKind::Assign (parser.hexa:488-506, verified) — so the native defer expr-form MUST call parse_logical_or() (the level directly below assignment) instead of parse_expr(), then diag if next token ∈ {Eq, PlusEq, MinusEq, StarEq, SlashEq}. Use the NATIVE 5-token set only — gen2's wider compound set (PercentEq/PowerEq/ShlEq/... at self/parser.hexa:1500) has no counterpart in compiler/lex/tokens.hexa.",
+      "Q4 CONTEXTUAL GATE SHAPE — SETTLED: explicit TokenKind whitelist is MANDATORY, not just recommended. Verified: parse_primary never rejects — it consumes ANY unrecognized token and returns a placeholder Ident (compiler/parse/parser.hexa:1156-1166), so a try-parse gate is structurally impossible. tokens.hexa has zero KwDefer (grep verified) — `defer` lexes as Ident; gate = stmt-position Ident(text=='defer') AND next ∈ {LBrace, Number, String, Char, KwTrue, KwFalse, PNode, CNode, LNode, ENode, Ident, Bang, Tilde, KwIf, KwWhile, KwFor, KwMatch, KwTry, KwThrow, KwFn, HashLBrace, LParen}. Ambiguous tokens resolve to identifier-use (EXCLUDED): Minus (`defer - 1` binop), Pipe/PipePipe (`defer | x` — cost: pipe-closure form `defer |x| body` rejected, a divergence from gen2's hard keyword), LBracket (`defer[i]` index). LParen included (matches gen2 `defer (expr)`, self/parser.hexa:4756-4765; corpus has zero code identifiers named `defer`). Hard-keyword promotion stays rejected per state/rfc_reseed_canonical_keywords.md contextual-sanction.",
+      "CARRIER CORRECTION (affects plan Step 1 wording): the match_guard precedent rides ExprKind::If + text=='match_guard' (compiler/parse/ast.hexa:172-178, verified), NOT ExprKind::Block as the plan implies — but the Block+text carrier is still viable: Block lowering passes e.text verbatim into _mk_hexpr (compiler/lower/ast_to_hir.hexa:1954, verified) and all three check passes are transparent to Block .text (resolve.hexa:195-211 kind-agnostic walk · bind.hexa:945-954 scope push/walk/pop · types.hexa:1926-1957 child iteration, Wall A HEXA_STATIC_TYPES slice reads only child-let .text). Exhaustive-match ripple = exactly 93 sites (grep 'ExprKind::Throw ->' == 93, verified), so the no-new-ExprKind rule stands.",
+      "STALE PLAN ROW: M1_defer_wiring.md's executor table lists 'interp (hexa run) ✅ per-call defer_stack' — STALE. `hexa run` is compile-then-exec gen2 (interp retired R7, g_interp_deprecated in self/main.hexa); only TWO lanes exist (gen2 C-transpile default + aprime opt-in). Step 0 and Step 5's '3 실행기' language must become 2-lane."
+    ],
+    "next_steps": [
+      {
+        "title": "Step 0 (revised) — freeze the gen2 oracle, 2-lane not 3",
+        "what": "Land the scout's KIT (step0_characterize.hexa C1-C6 + step0_expected_gen2.txt + pool commands) and run on aiden/summer: lane A = shipping `hexa run` (stale-binary guard: hexa --version + rm -rf ~/.hexa-cache first), lane B = fresh release_build `hexa build -o` binary + same driver via run verb. Drop all interp language. C3/C4 pin at-most-once + drain-time values; C5 pins defer-after-return no-fire; C6 pins no-drain-on-throw. All diffs against the frozen expected file; commit captured output as the Step-0 artifact.",
+        "files": [
+          "state/hexa-own/M1_defer_wiring.md",
+          "state/hexa-own/step0_characterize.hexa",
+          "state/hexa-own/step0_expected_gen2.txt",
+          "state/hexa-own/step0_pool_commands.md"
+        ]
+      },
+      {
+        "title": "Step 1 (revised) — PARSER-1 contextual defer with verdict-3/4 specifics",
+        "what": "In parse_stmt (compiler/parse/parser.hexa:~1744, var #3681 idiom): gate = Ident('defer') + explicit whitelist from Q4 (parse_primary:1156-1166 makes try-parse impossible). Block form → parse block; expr form → parse_logical_or() (parser.hexa:513) NOT parse_expr(), then diag HX0xxx if next ∈ {Eq,PlusEq,MinusEq,StarEq,SlashEq} with advance()+parse_assignment() recovery (mirrors gen2 leave-=-unconsumed erroring). Carrier = ExprKind::Block + text:'__defer__' + ast_is_defer() helper next to ast_is_match_guard (ast.hexa:172-178 — cite it as the If-kind precedent, not Block-kind). PARSER-2 untouched.",
+        "files": [
+          "compiler/parse/parser.hexa",
+          "compiler/parse/ast.hexa"
+        ]
+      },
+      {
+        "title": "Step 2 (unchanged mechanics, add scoping note) — AST→HIR carrier passthrough",
+        "what": "Block carrier's .text survives via the verified verbatim e.text handoff (ast_to_hir.hexa:1954); map to HExpr kind='defer' string tag. check/ passes need zero edits (resolve.hexa:195-211, bind.hexa:945-954, types.hexa:1926-1957 all verified transparent). DOCUMENT: bind auto-opens a scope frame on the Block carrier (bind.hexa:946) so names bound inside a defer body don't leak — subtly different from gen2's single-ExprStmt expr form; pin with a test rather than fight it.",
+        "files": [
+          "compiler/lower/ast_to_hir.hexa",
+          "compiler/check/bind.hexa"
+        ]
+      },
+      {
+        "title": "Step 3 (unchanged) — HIR→MIR single-exit epilogue, count==0 bit-identical",
+        "what": "Pre-scan defer count in _lower_fn; count==0 → today's lowering byte-for-byte (the whole bit-identity story). count>0 → flag locals + __ret + single exit block using ONLY existing MIR stmt kinds (gen2 flags+goto is the template, no new runtime symbols — frozen blob 151c52c8 rule). No return-site inline drain (loop back-edge trap).",
+        "files": [
+          "compiler/lower/hir_to_mir.hexa"
+        ]
+      },
+      {
+        "title": "Step 5 (revised) — selftest matrix, 2-lane, add the untested regimes",
+        "what": "stdlib/lang/defer_test.hexa (@ci_gate) + miscompile_zero corpus: normal/early-return/LIFO/nested/defer-after-return/loop-break/conditional-registration PLUS the three regimes the R7 parity suite provably missed (it passed despite the divergences): loop-defer at-most-once with drain-time value, defer-under-throw must-NOT-fire, return-mid-loop with already-flagged defer. Capture identical output across gen2 + native aprime (2 lanes; '3 실행기' wording deleted).",
+        "files": [
+          "stdlib/lang/defer_test.hexa",
+          "self/test/miscompile_zero/"
+        ]
+      },
+      {
+        "title": "Steps 4/6/7 (unchanged) + optional stale-comment sweep",
+        "what": "Step 4 codegen-untouched proof (git diff --stat empty on compiler/codegen+emit, defer-free .o byte-compare same-cwd on pool). Step 6 HX0xxx parse band (HX9xxx rejected — occupied). Step 7 byteeq 3-target + SELFHOST_SLOT_READY=1 + tree-sitter grammar.js keyword. OPTIONAL byte-neutral hygiene PR: fix stale deleted-file citations (self/codegen.hexa:2725,3524,3533 · self/parser.hexa:821,958,3456 point into nonexistent hexa_full.hexa at wrong line numbers) and correct the half-false 'matches the interp' comment at codegen.hexa:3528-3530.",
+        "files": [
+          "self/codegen.hexa",
+          "self/parser.hexa",
+          "tree-sitter-hexa/grammar.js",
+          ".github/workflows/selfhost-byteeq-gate.yml"
+        ]
+      }
+    ],
+    "risks": [
+      "Doc-contamination: gen2's comment (self/codegen.hexa:3528-3530) claims interp defer_stack.push parity — copying it into M1 docs/tests enshrines a false loop-multiplicity claim; spec the flag model on its own terms.",
+      "no-drain-on-throw means defer is NOT a safe resource-cleanup primitive across throwing code in the shipping compiler; M1 ports it faithfully, but any future drain-on-throw 'fix' is a behavior change needing byteeq 3-target + shipping smoke (release-integrity rule).",
+      "Gate divergence vs gen2 hard keyword: native contextual gate rejects `defer |x| body` (pipe-closure) and `defer -1` that gen2-keyword would accept — zero corpus impact today (0 defer usage, verified), but it is a permanent surface difference unless special-cased.",
+      "Whitelist maintenance hazard: any future expression-start TokenKind added to parse_primary must also be added to the defer gate or that form silently fails after `defer` (parse_primary's never-fail fallback masks it as a placeholder-Ident parse).",
+      "Block-carrier auto-scoping (bind.hexa:946 scope push) differs from gen2's expr-form scoping; if a defer body's bindings were ever expected to leak, tests would diverge — pin the native scoping in Step 5.",
+      "R7 parity gate passed with loop-defer and throw-drain divergences live, meaning those regimes had zero coverage; until Step 5 lands, nothing prevents a regression in exactly the semantics M1 canonicalizes.",
+      "Defer bodies referencing loop-block-scoped `let`s would read out-of-scope C variables at __fn_exit in the gen2 template — keep the KIT/tests constrained to fn-top-level variables until the native lowering defines the rule."
+    ],
+    "open": [
+      "LParen in the defer gate: include (gen2-compatible `defer (expr)`, zero corpus collision today) vs exclude (reserves `defer(x)` as a call to a future fn named defer). Recommendation: include; needs user sign-off since it fixes surface grammar permanently.",
+      "Accept the `defer |x| body` pipe-closure rejection as a documented divergence from gen2's hard keyword, or special-case Pipe/PipePipe into the gate?",
+      "File the byte-neutral stale-comment cleanup PR (deleted hexa_full.hexa citations + half-false parity comment) now, or bundle into the M1 PR?",
+      "Is the Step-0 pool run still required given the interp is gone and gen2 semantics are fully source-traced? Recommendation: yes — cheap, and it splits stale-shipping-binary findings from semantics before lowering work starts."
+    ]
+  },
+  "laneB": {
+    "verdicts": [
+      "WALL A COVERAGE MAP (verified on main @ 9f1b7a70d): HEXA_STATIC_TYPES=1 rejects exactly 5 scalar-only shapes, all HX3011 (Severity::Error, catalog.hexa:339-345), all inside _infer_expr in compiler/check/types.hexa — r1 let-literal (:2119), r2 let ident/call RHS (:2140), r3 decl/init-split assign (:2199 + Block recorder :1940), r4 array elem index-assign (:2205, `[]name` benv key :1971), r5 struct field-assign (:2234, `{}name` key :1991 + field-name side registry). Exactly 3 live env() read sites in compiler code (:1940, :2119, :2199 — grep-verified, no reads outside types.hexa/types_test.hexa), never cached. NOT covered: call-arg strictness (baseline HX3003 uses _types_equal, tolerates unknown/unit/HexaVal), returns (baseline HX3004, unannotated fns never checked), generics (separate HEXA_CONST_GENERICS pass, wired at types.hexa:3602), match arms (baseline HX3005 + HEXA_EXHAUSTIVE HX3006), closures (bare `fn` stub). Fatality path verified: main.hexa:692 _has_errors → exit(1) before codegen, WITH an --ignore-errors escape hatch (main.hexa:696-698) the scouts did not mention.",
+      "R6 MERGE-READINESS (verified via git merge-tree + gh): PR #4108 OPEN, branch tip 41368e561, 307 commits behind origin/main; merge-tree vs current main yields EXACTLY ONE conflict — ARCHITECTURE.json (content); both compiler files + CHANGELOG.jsonl auto-merge. Byteeq-neutral by construction: the sole new compiler branch is gated `env(\"HEXA_STATIC_TYPES\") == \"1\" && _cg_is_struct_lit(e.kind)` with env() as FIRST short-circuit operand (verified on branch blob ~:2398); diff touches only check/tests/docs, zero MIR/codegen/self files. CONFIRMED DEFECT: state/rfc_static_types_rust_ladder.md is referenced by the branch CHANGELOG entry + ARCHITECTURE cell as SSOT but ABSENT from both the branch tree and main (git ls-tree verified) — dangling doc pointer must be authored or scrubbed at merge. Fresh byteeq 3-target required post-merge (branch gates ran vs r5-era main).",
+      "R7+ GAP LADDER TO RUST-CLASS STATIC TYPING (repo-anchored): the r6 branch declares the scope-local ladder TERMINATED; the wall is real and verified — _types_lower_type_ref degrades generic/fn/tuple TypeRefs to an empty-args string sentinel ('degrade gracefully' comment + `kind: tr.kind+\":\"+tr.name, args:[], ret:[]` at types.hexa:931-939), and the check-side lowerer has NO array branch (arrays → `generic:Array:<spelling>` string) even though the HIR-side one does (ast_to_hir.hexa:159-169 array branch → typed-array ids, verified with the 'grep-verified no consumer' comment). Remaining rungs beyond r6, in ascending cost: (i) check-side array-branch parity with the HIR lowerer, (ii) call-arg/return escalation under the flag (sites exist: _types_check_call per-arg loop :2629-2647, Return arm :2067-2103, but params/args are HexaVal-carried at runtime), (iii) cross-fn container invariance (blocked on i), (iv) generic monomorphization / trait static-dispatch = the declared measured wall (dynamic {tag,payload} HexaVal carries no reified T). HexaVal/any is a universal wildcard in _types_assignable (:1661-1665) — the structural soundness ceiling forcing every rung's KNOWN-scalar-both-sides gate.",
+      "@OWN (L2) INTEGRATION RECIPE — pass placement: EXTEND the existing Wall A walk in _infer_expr, not a tail-slot module pass — use-after-move needs statement ORDER, which only the Block arm's sequential benv-threading loop (types.hexa:1936-1998) has; the tail slots (:3597 _exh_check_module, :3602 _cg_check_module) see items without flow. Move-sites are already exposed: let-ident-RHS :2140, Assign :2180-2292, call args :2577-2581/:2629-2647, return :2067-2103 + trailing expr :3560-3575, match scrutinee :2659. Surface: ZERO parser change — parse_stmt already collects `@name` runs into Expr.annotations for lets (parser.hexa:1744-1751, verified; non-let annotations silently dropped per comment :1739-1743); item-level @own rides Item.annotations (parser.hexa:2423). Own-bit storage: CORRECTED vs scout 3 — _types_env_lookup is explicitly FIRST-hit-wins (verified comment 'first hit wins' + loop, types.hexa:1466-1476), so the scout's 'redefine marker key, take LAST entry' option is INVALID with the existing lookup; the recipe MUST use a per-fn side registry (r5 _types_struct_registry parallel-array precedent, reset at :3490-3501) for mutable moved-state, optionally with a `own:<name>` benv marker for declaration-site tagging only. Do NOT add a Type field: 83 `Type {` literal construction sites across 7 files (grep-verified count), stage0 spells all fields. Flag polarity: own env var HEXA_OWN_LINT=1 (default-OFF), NOT riding HEXA_STATIC_TYPES — Wall A is REJECT-band fatal, own-lint must start warning-band. Diagnostic: HX3012 (verified unclaimed in catalog.hexa and types.hexa), stage S3, Severity::Warning — warnings render but never abort (main.hexa:692 _has_errors checks Error severity only); escalation via HEXA_OWN_STRICT=1 mirroring the verified HX2006 Warning-default + HEXA_STRICT_LET=1 precedent (catalog.hexa:258-266). Byteeq neutrality argument identical to r1-r6: env-gated first-operand short-circuit + diag-append-only, no MIR/codegen writes."
+    ],
+    "next_steps": [
+      {
+        "title": "Land r6 first (or base @own on it)",
+        "what": "Merge PR #4108 with the single mechanical ARCHITECTURE.json conflict resolution (re-insert WALL-A-STATIC-TYPES-REJECT-LADDER cell into current main's array, JSON-validate before commit per #4135 lesson), author state/rfc_static_types_rust_ladder.md or scrub the two dangling references, then re-run byteeq 3-target on the merged tree. @own touches the same _infer_expr arms — branching @own off pre-r6 main guarantees a textual conflict with the r6 StructLit arm.",
+        "files": [
+          "ARCHITECTURE.json",
+          "CHANGELOG.jsonl",
+          "compiler/check/types.hexa",
+          "state/rfc_static_types_rust_ladder.md"
+        ]
+      },
+      {
+        "title": "Fix stale HX3011 explain text",
+        "what": "catalog.hexa:339-345 explain still documents r1 scope only ('Scope r1 = scalar-literal RHS... deferred to later rungs') while r2-r5 are merged and r6 is pending — `hexa explain HX3011` misleads users. One-line-band doc fix, byteeq-trivial; fold into the r6 merge or a follow-up.",
+        "files": [
+          "compiler/diag/catalog.hexa"
+        ]
+      },
+      {
+        "title": "@own r1 implementation slice",
+        "what": "Warning-band use-after-move for block-local `@own let` bindings: (1) in the Block arm's guarded section (types.hexa:1936-1998, new HEXA_OWN_LINT gate) scan ch.annotations for name==\"own\" and register the binding in a NEW per-fn side registry (parallel arrays, r5 registry shape, reset in type_check :3490-3501) — NOT env-key redefinition (first-wins lookup, types.hexa:1466); (2) mark moved on ident-RHS let (:2140), ident-RHS assign (:2183), call-arg ident (:2629-2647), return ident (:2082); (3) emit new HX3012 Severity::Warning on use/re-move of a moved binding; (4) tests mirroring the types_test.hexa self-adapting flag-ON/OFF case pattern.",
+        "files": [
+          "compiler/check/types.hexa",
+          "compiler/check/types_test.hexa",
+          "compiler/diag/catalog.hexa"
+        ]
+      },
+      {
+        "title": "Optional r7-prep: check-side array lowering parity",
+        "what": "Port the HIR-side array branch (ast_to_hir.hexa:159-169) into _types_lower_type_ref (types.hexa:890-941) so future rungs compare structured array Types instead of `generic:Array:<spelling>` strings; lets r4 drop its annotation-string parsing (_types_array_elem_kind :1846) and unblocks cross-fn container invariance. Independent of @own, flag-neutral (lowered Types are only READ under flags).",
+        "files": [
+          "compiler/check/types.hexa",
+          "compiler/lower/ast_to_hir.hexa"
+        ]
+      }
+    ],
+    "risks": [
+      "Byteeq neutrality of @own holds only if the HEXA_OWN_LINT gate is the FIRST && operand at every new site and no unconditional registry population is added to hot paths — note the r5 struct registry is populated UNCONDITIONALLY (read-only under the flag, types.hexa:3493 comment), a precedent @own should NOT copy for per-statement move tracking; keep all @own writes inside the gate.",
+      "CORRECTED design hazard: _types_env_lookup is first-hit-wins (types.hexa:1466-1476, 'first hit wins') — any @own design that mutates moved-state by re-defining an env key silently reads the STALE first entry and never fires; side registry is mandatory, not merely 'safer' as scout 3 hedged.",
+      "Per-param @own has no AST carrier — Param (ast.hexa:52-63, verified) has name/typ/typs/span only, and parse_stmt silently drops annotations on non-let stmts (parser.hexa:1741-1743 comment); a param-position @own parses then vanishes with no diagnostic. Fn-level `@own(\"pname\")` arg-form fits Annotation{args:[Expr]} with zero parser change but is a non-canonical surface.",
+      "The :1940 Block-recorder env() read runs once per block child under the flag (and @own would add a second); fine while opt-in, but a getenv-per-node hot path if either flag ever defaults ON — cache once per type_check() before any default flip.",
+      "--ignore-errors (main.hexa:696) lets a build proceed to codegen past HX3011 errors — any claim that flag-ON rejects are unconditionally pre-codegen-fatal must carry this caveat.",
+      "Two-pipeline divergence: an aprime-only @own creates gen2(self/) vs compiler/ annotation drift (self/parser.hexa has its own attr system incl. @no_arena), same divergence Wall A already carries — acceptable but should be stated in the PR.",
+      "r6 flag-ON behavior change beyond its headline check: the new arm infers field-init VALUE exprs the legacy STUB never visited, so HEXA_STATIC_TYPES=1 users get NEW inner-expression diagnostics vs r5 builds (intended per hunk comment, needs PR-description mention)."
+    ],
+    "open": [
+      "r6 dangling RFC: author state/rfc_static_types_rust_ladder.md at merge time, or scrub the CHANGELOG/ARCHITECTURE references? (single-doc discipline violation either way if unaddressed)",
+      "@own surface for fn params: fn-level `@own(\"pname\")` arg-form (zero parser change, non-canonical) vs adding an annotations field to Param (canonical Rust-like, AST ripple across parser/ast_to_hir) — needs a user call per the native-canonical-surface rule",
+      "@own flag lifecycle: keep HEXA_OWN_LINT permanently independent, or promote to ride HEXA_STATIC_TYPES once the corpus measures clean (HX3006-style promote path)?",
+      "Accept the r6 branch's ladder-TERMINATED verdict as-is, or commission the r7-prep array-parity rung (which the ceiling RFC would forbid framing as a ladder continuation)?",
+      "Base @own work on the r6 branch vs wait for #4108 to merge first (recommended: merge first — 307-behind branch, one doc conflict)"
+    ]
+  }
+}
