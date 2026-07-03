@@ -1583,6 +1583,17 @@ fn strict_fp_cflags(c_file) {
     return "-ffp-contract=off -fno-fast-math -fno-associative-math -fno-reciprocal-math -fsignaling-nans "
 }
 
+// zero-c #29 PR-2: link the partitioned FFI TU (build/runtime_ffi_dyn.o) into a PROGRAM
+// only when codegen marked it HEXA_FFI_DYN_TU: 1 (a surviving vendor extern or an
+// interpreter host_ffi dispatch). Non-FFI programs get "" → byte-identical to the pre-S1
+// link. Drivers (hexat/hexa) link runtime_ffi_dyn.o unconditionally (they run the
+// dynamic-FFI interpreter) — that stays in _ffi_dyn_obj call sites. Mirrors strict_fp_cflags.
+fn ffi_dyn_objs(c_file, selfdir) {
+    let probe = exec("grep -q 'HEXA_FFI_DYN_TU: 1' '" + c_file + "' 2>/dev/null && printf yes || printf no")
+    if probe != "yes" { return "" }
+    return _ffi_dyn_obj(selfdir)
+}
+
 // #12 leftover (3) — wilson-needs-hexa-build-out-of-tree: `hexa cc` /
 // `hexa cc --regen` resolved `self/native/hexa_cc.c`, the SSOT modules and
 // the `-I` paths *relative to cwd*, so invoking from outside the repo failed
@@ -3680,7 +3691,7 @@ fn cmd_build(src, out, c_only, target, shared) {
         // @link program AND the compiler-as-program (interpreter host_ffi_*) resolves. PR-1
         // links it unconditionally (byteeq-neutral: gen .o bytes unchanged); PR-2 will gate
         // it on a surviving vendor extern (HEXA_FFI_DYN_TU marker).
-        compile = host_cc() + " -O2 " + omp_cflags() + _shared_cflags + os_clang_cflags() + _strict + cc_deep_nest_cflags() + "-I '" + __self_dir + "' " + c_file + " " + _rt_input + _ffi_dyn_obj(__self_dir) + " -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
+        compile = host_cc() + " -O2 " + omp_cflags() + _shared_cflags + os_clang_cflags() + _strict + cc_deep_nest_cflags() + "-I '" + __self_dir + "' " + c_file + " " + _rt_input + ffi_dyn_objs(c_file, __self_dir) + " -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
     } else {
         let zt = target_zig_triple(target)
         if len(zt) == 0 {
