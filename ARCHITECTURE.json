@@ -59,8 +59,8 @@
       {
         "id": "CUDA-STUBS-SELFCOMPILE",
         "state": "in_flight",
-        "value": "hexa run self-compile cuda link omitted -L<lib>/stubs → ld cannot find -lcuda in -cuda release Package step",
-        "threshold": "release -cuda job Package step green (libcuda resolved from stubs)",
+        "value": "self/main.hexa os_clang_ldflags cuda -L discovery is TOOLKIT-LAYOUT-ONLY and repeatedly misses real lib locations. (1) #3696-era: omitted -L<lib>/stubs → 'ld cannot find -lcuda' in the -cuda release Package step. (2) 2026-07 extension: the -L probe only knew CUDA_HOME=/usr/local/cuda (targets/x86_64-linux/lib | lib64) → a bare vast/runpod pod (NO toolkit, pip-wheel nvidia-cuda-runtime-cu12 puts libcudart.so.12 under <site-packages>/nvidia/*/lib with NO bare .so linker-name) → cuda_probe='' → no -L → -lcudart link wall → cuda_available()=0 despite HEXA_CUDA=1. install.sh _has_cuda_runtime had the SAME toolkit-only blindspot. FIXED: install.sh _pip_nvidia_roots/_wire_pip_cuda_libs materialize a hexa-owned symlink farm $HX_HOME/cuda-libs (bare .so linker names, existence IS the record); _has_cuda_runtime=toolkit∪pip; os_clang_ldflags probes farm(tier1,-L+-rpath)→CUDA_HOME(tier2,verbatim)→live-pip(tier3). Root pattern: cuda lib discovery must enumerate ALL real lib sources (toolkit + stubs + pip site-packages), not assume /usr/local/cuda.",
+        "threshold": "(a) release -cuda Package step green (libcuda from stubs). (b) bare pip pod: cuda_available()=1 with ZERO per-pod symlink/export. Byte-eq NEUTRAL on non-pip/toolkit hosts (all new main.hexa code inside if cuda_on; toolkit host has no farm → tier2 verbatim → char-identical link line incl. no rpath) → byteeq 3-target GREEN gate. install.sh farm builder locally verified (glob fallback + 6 bare .so names + idempotent). Remaining: byteeq 3-target CI + real bare-pip-pod smoke.",
         "source": "self/main.hexa"
       },
       {
