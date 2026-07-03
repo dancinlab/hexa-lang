@@ -39,7 +39,24 @@
 
 use "compiler/atlas/identity_engine"
 use "compiler/atlas/known_catalog.gen"
-use "compiler/atlas/symbolic/texas_sharpshooter"
+
+// Bonferroni multiple-comparison correction + verdict, INLINED verbatim from
+// compiler/atlas/symbolic/texas_sharpshooter.hexa (bonferroni_p / verdict).
+// WHY inlined not imported: importing that module triggered a pathological cold
+// compile (>75min vs <7min for the identity_engine+known_catalog-only
+// emerge_test — texas_sharpshooter was the sole import delta). Both formulas
+// are trivial (correction = p·n capped 1.0 · thresholds 0.01/0.05), so this is
+// reference-faithful to the frozen kernel, not a re-implementation of logic.
+fn _nm_bonferroni_p(p: float, n_total: int) -> float {
+    let bp = p * to_float(n_total)
+    if bp > 1.0 { return 1.0 }
+    return bp
+}
+fn _nm_verdict(bonf_p: float) -> string {
+    if bonf_p < 0.01 { return "structural" }
+    if bonf_p < 0.05 { return "weak" }
+    return "chance"
+}
 
 // ── scramble oracle (INLINE: hexa has no fn-pointers, so the scrambled verify
 //    path re-implements the kernels 1:1 with af→af_rand — same reason
@@ -205,7 +222,7 @@ fn _nm_sweep(N: i64, Nw: i64, known_canon: array) -> NullSweep {
                 // universal by chance: own-scan rate = (N-1)/(N-1) = 1.0
                 univ = univ + 1
                 gamma_cand = gamma_cand + 1
-                if verdict(bonferroni_p(1.0, kk)) == "structural" {
+                if _nm_verdict(_nm_bonferroni_p(1.0, kk)) == "structural" {
                     promoted = promoted + 1
                 }
             } else {
@@ -236,7 +253,7 @@ fn _nm_sweep(N: i64, Nw: i64, known_canon: array) -> NullSweep {
                         // chance rate is 1/(N-1), corrected over the K cells
                         // actually swept. K/(N-1) >= 0.05 ⇒ honest "chance".
                         let ps = 1.0 / to_float(N - 1)
-                        if verdict(bonferroni_p(ps, kk)) == "structural" {
+                        if _nm_verdict(_nm_bonferroni_p(ps, kk)) == "structural" {
                             promoted = promoted + 1
                         }
                     }
