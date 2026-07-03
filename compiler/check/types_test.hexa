@@ -834,6 +834,46 @@ fn _build_case_own_lint() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// HEXA-OWN L2 r2 — @own use-after-move at RETURN position (HEXA_OWN_LINT=1).
+// A bare-ident `return x` is a MOVE site: returning an `@own` binding that
+// was already moved (here: consumed as a call argument) warns HX3012, and a
+// return that is the binding's FIRST use is a clean move (it registers the
+// move for any later use). Two fns cover both halves:
+//   fn f() {
+//       @own let x = 5        // register x (own, live)
+//       consume(x)            // FIRST use = move (call-arg)    → clean
+//       return x              // return AFTER move → HX3012 (×1)
+//   }
+//   fn g() {
+//       @own let r = 1        // independent own binding
+//       return r              // FIRST use = move at return     → clean
+//   }
+// Under the flag exactly 1 HX3012 (the `return x` site); g's first-use
+// return never fires, and the per-fn registry reset keeps f's moved state
+// out of g. On the default build → 0 (byteeq-neutral proof).
+fn _build_case_own_lint_r2() -> Module {
+    let f = "case_own_lint_r2.hexa"
+    // fn f() { @own let x = 5; consume(x); return x }
+    let mut kids_f = []
+    kids_f.push(_own_let_expr("x", _int_expr("5", f, 2, 18), f, 2, 5))
+    let mut args = []
+    args.push(_ident_expr("x", f, 3, 13))
+    kids_f.push(_call_expr(_ident_expr("consume", f, 3, 5), args, f, 3, 5))
+    kids_f.push(_return_expr(_ident_expr("x", f, 4, 12), f, 4, 5))
+    let body_f = _block(kids_f, f, 2, 1)
+    let item_f = _fn_item("f", [], _empty_type_ref(), body_f, f, 1)
+    // fn g() { @own let r = 1; return r }
+    let mut kids_g = []
+    kids_g.push(_own_let_expr("r", _int_expr("1", f, 7, 18), f, 7, 5))
+    kids_g.push(_return_expr(_ident_expr("r", f, 8, 12), f, 8, 5))
+    let body_g = _block(kids_g, f, 7, 1)
+    let item_g = _fn_item("g", [], _empty_type_ref(), body_g, f, 6)
+    let mut items = []
+    items.push(item_f)
+    items.push(item_g)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // ── Driver ───────────────────────────────────────────────────
 
 fn _run_case(label: string, m: Module) -> array {
@@ -1108,6 +1148,30 @@ fn main() {
     } else {
         if nn != 0 {
             println("  FAIL: case (n) default build expected 0 HX3012 (byteeq-neutral), got " + to_string(nn) + " (total=" + to_string(len(diags_n)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3012 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (p) HEXA-OWN L2 r2 — @own use-after-move at RETURN position
+    // (HEXA_OWN_LINT). Under the flag, `@own let x = 5; consume(x);
+    // return x` warns HX3012 exactly ONCE (at `return x`): the call-arg is
+    // the move, the return is the use-after-move. g's first-use `return r`
+    // is a clean move (registers only). On the default build → 0
+    // (byteeq-neutral). Same self-adapting contract as (n).
+    let diags_o = _run_case("(p) own-lint r2 — @own moved then returned (HEXA_OWN_LINT)", _build_case_own_lint_r2())
+    let oo = _count_code(diags_o, "HX3012")
+    if env("HEXA_OWN_LINT") == "1" {
+        if oo != 1 {
+            println("  FAIL: case (p) HEXA_OWN_LINT=1 expected 1 HX3012 (return x), got " + to_string(oo) + " (total=" + to_string(len(diags_o)) + ")")
+            ok = false
+        } else {
+            println("  ok: 1 HX3012 emitted (call-arg move clean; `return x` after move warns; g's first-use return clean)")
+        }
+    } else {
+        if oo != 0 {
+            println("  FAIL: case (p) default build expected 0 HX3012 (byteeq-neutral), got " + to_string(oo) + " (total=" + to_string(len(diags_o)) + ")")
             ok = false
         } else {
             println("  ok: 0 HX3012 (default-OFF → byteeq-neutral)")
