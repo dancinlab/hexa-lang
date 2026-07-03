@@ -84,7 +84,7 @@ pub fn qforge_eeq_matrix(pos: [float], chi: [float], eta: [float],
     let mut i = 0
     while i < n {
         // diagonal: hardness + Gaussian self-Coulomb sqrt(2/π)/α_i
-        a[i * m + i] = eta[i] + two_over_pi_sqrt / alpha[i]
+        a[i * m + i] = eta[i] + (if alpha[i] > 0.0 { two_over_pi_sqrt / alpha[i] } else { 0.0 })
         let mut j = i + 1
         while j < n {
             let rij = qforge_eeq_distance(pos, i, j)
@@ -217,7 +217,7 @@ pub fn qforge_eeq_energy(pos: [float], chi: [float], eta: [float],
     let mut e = 0.0
     let mut i = 0
     while i < n {
-        let self_coul = two_over_pi_sqrt / alpha[i]
+        let self_coul = (if alpha[i] > 0.0 { two_over_pi_sqrt / alpha[i] } else { 0.0 })
         e = e + chi[i] * q[i] + 0.5 * (eta[i] + self_coul) * q[i] * q[i]
         let mut j = i + 1
         while j < n {

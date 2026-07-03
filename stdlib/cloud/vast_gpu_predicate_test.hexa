@@ -82,5 +82,16 @@ fn main() {
     _check("H200: in[] list", _has(vast_gpu_predicate("H200"), "gpu_name in ["), 1)
     _check("B200: in[] list (single SKU)", _has(vast_gpu_predicate("B200"), "gpu_name in ["), 1)
 
+    // (6) CPU selector (ING #30-vast) -> num_gpus=0, NOT gpu_name=cpu.
+    // MEASURED on live vast: the hexa default filter surfaced 64 offers, ALL
+    // num_gpus>0 (zero CPU); the CPU pool appears ONLY with num_gpus=0. The old
+    // path searched gpu_name=cpu (a GPU named "cpu") → 0 offers → silent fail.
+    _check("cpu: num_gpus=0", _seq(vast_gpu_predicate("cpu"), "num_gpus=0"), 1)
+    _check("cpu: NOT gpu_name", _has(vast_gpu_predicate("cpu"), "gpu_name"), 0)
+    _check("CPU upper: num_gpus=0", _seq(vast_gpu_predicate("CPU"), "num_gpus=0"), 1)
+    _check("none: num_gpus=0", _seq(vast_gpu_predicate("none"), "num_gpus=0"), 1)
+    _check("None upper: num_gpus=0", _seq(vast_gpu_predicate("None"), "num_gpus=0"), 1)
+    _check("' cpu ' trimmed: num_gpus=0", _seq(vast_gpu_predicate("  cpu  "), "num_gpus=0"), 1)
+
     println("vast_gpu_predicate_test PASS")
 }

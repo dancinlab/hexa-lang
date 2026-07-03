@@ -277,6 +277,7 @@ pub fn geo_total_thickness(spec: ComponentSpec) -> f64 {
 // geo_layer_center_y(spec, index) — Swift layerCenterY: assembled centre Y of
 // layer `index`, whole model centred on origin, index 0 = top.
 pub fn geo_layer_center_y(spec: ComponentSpec, index: int) -> f64 {
+    if index < 0 || index >= len(spec.layers) { return 0.0 }   // OOB / empty layers
     let mut top = geo_total_thickness(spec) / 2.0
     let mut i = 0
     while i < index {
@@ -308,6 +309,7 @@ fn _box(cx: f64, cy: f64, cz: f64, sx: f64, sy: f64, sz: f64) -> GeoBox {
 // layer into detail boxes per its `render`. Byte-faithful port incl. the exact
 // magic factors (0.92 / 0.86 grid · 0.09 frame bar · 0.28 base + 15 fins · …).
 pub fn geo_layer_boxes(spec: ComponentSpec, index: int) -> [GeoBox] {
+    if index < 0 || index >= len(spec.layers) { return [] }   // OOB / empty layers
     let l = spec.layers[index]
     let w = spec.width
     let d = spec.depth

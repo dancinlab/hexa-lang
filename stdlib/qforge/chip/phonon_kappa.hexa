@@ -87,6 +87,7 @@ pub fn qforge_chip_bose_einstein(omega: float, temp_k: float) -> float {
 //   The factor ħω·∂n_BE/∂T = (k_B x)·… collapses to (k_B/T)·x²e^x/(e^x−1)² inside
 //   the integral — the dimensionless Landauer thermal kernel K(x).
 pub fn qforge_chip_dnbe_dt(omega: float, temp_k: float) -> float {
+    if temp_k <= 0.0 { return 0.0 }   // T≤0 → /(kB·T) Inf
     let x  = (_hbar() * omega) / (_kb() * temp_k)
     let ex = exp(x)
     let d  = ex - 1.0

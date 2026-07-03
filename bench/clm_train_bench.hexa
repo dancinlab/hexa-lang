@@ -416,4 +416,3 @@ run_bench_scale(medium)
 println("")
 println("=== Done ===")
 
-// @convergence state=completed id=BENCH-CLM-TRAIN-SEGFAULT value="alloc_raw buffers allocated inline + filled via void helpers (no raw-pointer return across val-arena fn-scope); tiny+small+medium run SIGSEGV-free" threshold="hexa run bench/clm_train_bench.hexa exits 0 with default HEXA_VAL_ARENA (on); all 3 scales print valid loss"

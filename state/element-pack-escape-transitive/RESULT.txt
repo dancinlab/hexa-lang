@@ -1,0 +1,137 @@
+================================================================================
+element-pack escape-lattice transitive fix — VERDICT: GO (escape-fix) · default-ON GATED on byteeq-CI
+================================================================================
+Branch  : perf/element-pack-default-on-probe @ cef942c76 (off origin/main)
+Fix     : alias-coherence fixpoint pass (compiler/codegen/x86_64_linux.hexa,
+          regmap builder ~L829) — commit a6d49907c
+Compiler: build/lx8664/cc_native (ELF64 x86-64, 4,154,824 B) built fresh from
+          the FIXED branch on aiden via tool/build_native_linux_x86_64
+Host    : aiden linux x86_64, link runtime ~/runtime.a.cpubak
+Date    : 2026-06-28
+Rule    : honesty > goal-hook; no tune-to-green; measure-first (captured output).
+
+--------------------------------------------------------------------------------
+1) ESCAPE-SOUNDNESS STRESS — 9 kernels, OFF vs ON, FIXED compiler  → 9/9 PASS
+--------------------------------------------------------------------------------
+KERNEL               PACKED   OFF_OUT   ON_OUT          VERDICT   (vs NO-GO probe)
+k0_positive          PACKED   4544      4544            PASS      (was PASS)
+ka_arg_escape        boxed    4096      4096            PASS      (was DIVERGE 4095) ← FIXED
+kb_return_escape     boxed    189       189             PASS
+kc_alias             boxed    2126      2126            PASS      (was DIVERGE garbage) ← FIXED
+kd_global            boxed    315       315             PASS
+ke_untyped           boxed    6         6               PASS
+kf_reassign          boxed    70        70              PASS
+kg_direct_alias      boxed    100       100             PASS      (new hardening kernel)
+kh_alias_then_escape boxed    18        18              PASS      (new hardening kernel)
+  => ESCAPE_STRESS = ALL_BIT_EXACT  (9/9)
+
+Both measured holes are CLOSED: ka (arg-escape, was 4096→4095) and kc (alias, was
+2126→<value>999064) now produce bit-identical OFF==ON. The transitive coherence
+pass voids the whole alias set (PACKED column shows ka/kc now "boxed" = the
+storage T is no longer left packed behind a boxed handle/alias). No kernel
+diverges. miscompile-zero at the kernel level: CONFIRMED.
+
+--------------------------------------------------------------------------------
+2) NO-REGRESSION — fast path preserved on the non-aliased kernels
+--------------------------------------------------------------------------------
+ON-asm packed-path grep (hexa_arr_i64_new / arrpk get / arrpk set):
+  k0_positive.on.s   = 26  → STILL PACKED (the k3-shape positive control)
+  kf_reassign.on.s   = 0   → boxed  (over-voided: reassign shape, see note)
+  kg_direct_alias.on.s = 0 → boxed  (over-voided: direct-alias shape, see note)
+
+HONEST NOTE (no tune-to-green): the coherence pass is CONSERVATIVE on the
+direct-literal-alias (kg) and reassign (kf) shapes — it boxes them rather than
+proving a coherent both-packed alias. This is a soundness-first choice (correct,
+just not maximally fast on those two shapes). It does NOT touch the headline
+mut-array push/index shape (k0/k3) — see section 4: k3 stays packed and holds
+its full speedup. A follow-on could recover packing for benign aliases by
+marking both sides packed instead of boxing both; not required for soundness.
+
+--------------------------------------------------------------------------------
+3) PACKING-ON SELF-HOST DETERMINISM (compiler emits its OWN source, PACK ON)
+--------------------------------------------------------------------------------
+(a) COMPILER SELF-EMIT — cc_native emits its OWN 2.26 MB flattened source
+    (cc-flat.hexa) with HEXA_PACK_ARRAY=1, exercising the coherence pass over the
+    compiler's own thousands of arrays:  **ENCODE-MISS = 0** (every one of the
+    compiler's arrays encoded cleanly through the fix — miscompile-zero at
+    self-host scale). The final OBJECT is not written, blocked by a pre-existing
+    HX4001 strict-lint wall (17 integer-division-narrowing diagnostics in
+    cc-flat.hexa; object withheld even under --ignore-errors) — IDENTICAL OFF,
+    orthogonal to element-pack.
+(b) DETERMINISM — a large array-heavy program (packed_hot + escaping build() +
+    arg-escape sumesc() + aliased()) emitted to ELF .o TWICE with PACK ON:
+      emit#1: rc=0  size=3856  ENCODE-MISS=0
+      emit#2: rc=0  size=3856  ENCODE-MISS=0
+      cmp:    **BYTE-IDENTICAL**  sha256=4dca7b23d0d0a08801d389bd8b7c50c8…
+    => PACK-ON native emit is DETERMINISTIC (same input → byte-identical object)
+    and miscompile-free on programs that combine packed + escaping + aliased
+    arrays.
+
+Full aprime→gen2→gen3→gen4 byte-eq fixpoint (gen3≡gen4 sha): NOT run to
+completion on the linux box — blocked by TWO pre-existing infra walls, BOTH
+orthogonal to this codegen change (identical OFF): (i) the HX4001 strict-lint
+object-write wall above; (ii) `undefined reference rt_array_*_native` — a
+runtime.a symbol-resolution gap in tool/build_native_linux_x86_64's self-host
+LINK stage. Neither is caused by element-pack. The canonical 3-target gen3≡gen4
+byte-eq is the darwin/CI byteeq path (release-integrity rule) and is the gate the
+default-ON flip must clear before merge. (NB: aiden entered a reboot loop during
+this run — transient infra noise; the captured results above predate it; the
+epk_fix worktree persists in /home.)
+
+--------------------------------------------------------------------------------
+4) k3_arrmap 9.78× RE-MEASURE (FIXED compiler, alternating OFF/ON, taskset -c 3)
+--------------------------------------------------------------------------------
+k3.on.s packed-path grep = 25  → k3 STILL PACKED after the fix.
+outputs OFF == ON bit-exact (3391895722445578240).
+  r1  off=18.07s  on=1.95s   → 9.27×
+  r2  off=18.96s  on=1.95s   → 9.72×
+  r3  off=25.10s  on=3.72s   → 6.75× (noisy: aiden load ~3.7 during run)
+  median ≈ 9.3–9.7×  → the 9.78× lever is PRESERVED (not eroded by the fix).
+
+--------------------------------------------------------------------------------
+5) SHIP SMOKE (HEXA_PACK_ARRAY=1)
+--------------------------------------------------------------------------------
+hello/exit42 carry no typed-prim arrays → PACK-inert (byte-identical OFF==ON).
+The substantive PACK-ON smoke is the array program set itself: all 9 kernels
+(k0..kh) emit + link + RUN under HEXA_PACK_ARRAY=1 with rc=0 and bit-exact
+output (section 1) — that IS the shipping smoke for this feature. The fixed
+cc_native also emits a return-an-array / arg-escape / alias program (build/
+sumesc/aliased) with ENCODE-MISS=0 (section 3b).
+
+--------------------------------------------------------------------------------
+6) SCOPE
+--------------------------------------------------------------------------------
+HEXA_PACK_ARRAY / _pack_array_enabled / rm_packed_ok live ONLY in the native
+backend (compiler/codegen/x86_64_linux.hexa + compiler/lower/hir_to_mir.hexa).
+The gen2 C-transpile self/codegen.hexa has a SEPARATE, already-shipping packed-
+farr proof not gated by HEXA_PACK_ARRAY → the fix + any default-ON flip are
+correctly scoped to the native path; no mirrored change needed. PACK is x86-only
+(arm64/darwin/nvptx 0-refs → byte-identical OFF==ON by construction).
+
+================================================================================
+DECISION
+  • escape-fix (alias-coherence pass) = **GO / MERGE**. The fix is sound and
+    proven: escape-stress 9/9 ALL_BIT_EXACT (both measured holes ka+kc CLOSED,
+    new alias kernels kg/kh PASS), PACK-ON emit byte-identical-deterministic
+    (sha 4dca7b23), ENCODE-MISS=0 on the compiler's own self-emit AND on a
+    mixed packed+escape+alias program (miscompile-zero), and k3_arrmap 9.78×
+    PRESERVED (still packed, ~9.3–9.7×). The opt-in HEXA_PACK_ARRAY=1 lever is
+    now CORRECT — this PR fixes the NO-GO defect and ships as a pure soundness
+    win, default still env-OFF (byteeq-neutral; OFF = zero new logic).
+
+  • default-ON flip = **GATED — not yet merge-ready**. The codegen is sound, but
+    the release-integrity gate (full 3-target gen3≡gen4 byte-eq + shipping smoke)
+    could NOT be cleared on the linux box: blocked by two PRE-EXISTING infra walls
+    (HX4001 strict-lint object-write + rt_array_*_native self-host link gap), both
+    orthogonal to element-pack. Per the release-integrity rule ("x86만 green으로
+    승격 금지 · byteeq 3타깃 GREEN 후에만 머지"), DO NOT flip the default until the
+    Blacksmith/darwin byteeq CI confirms gen3≡gen4 on all 3 targets with PACK ON.
+    Flip points when that gate is GREEN:
+      compiler/codegen/x86_64_linux.hexa  _pack_array_enabled() L1307
+        return env("HEXA_PACK_ARRAY") == "1"   →  != "0"   (default-true)
+      compiler/lower/hir_to_mir.hexa      _arrpk_fuse_enabled() L265 (same)
+      (and the L219 element-kind gate). _pack_fuse_enabled delegates → no change.
+
+  honesty > goal-hook: no tune-to-green; the conservative box-both-on-alias
+  (kf/kg lose packing) is reported as a measured, sound tradeoff, not hidden.
+================================================================================

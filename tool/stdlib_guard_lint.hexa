@@ -1,0 +1,277 @@
+// tool/stdlib_guard_lint.hexa — malformed-input guard-convention lint (Stage 0 warn).
+//
+// The QA campaign (CHANGELOG 2026-06-25/26, PRs #3943..#3963) fixed ~64 instances
+// of one recurring CLASS in the scientific stdlib: a scalar/array primitive that
+//   (G1) reads `arr[0]` (or `arr[i]`) with NO preceding `len(arr)==0` guard, or
+//   (G2) divides by a parameter / length / mass with NO preceding `denom<=0` guard,
+// and so returns Inf/NaN or reads out of bounds on empty/degenerate input.
+// A one-shot census (state/guard_class_census.py) measured ~2576 candidate sites —
+// the class is stdlib-wide, so per-round manual fixing cannot drain it. This lint is
+// the systematic enforcer: it stops NEW unguarded sites from landing (warn on the
+// changed files of a PR), turning an open-ended sweep into a bounded regression gate.
+//
+// Heuristic, conservative, Stage-0 WARN only (never blocks). Per-function guard
+// tracking is line-based: a token is "guarded" once an `if` referencing it with a
+// `0`/`<=`/`==`/`len(...)` test has been seen earlier in the same function body.
+//
+// Usage:
+//   hexa run tool/stdlib_guard_lint.hexa --selftest
+//   hexa run tool/stdlib_guard_lint.hexa --mode=warn  stdlib/x.hexa stdlib/y.hexa
+//   hexa run tool/stdlib_guard_lint.hexa --changed         (lint files changed vs origin/main)
+
+fn _gl_is_alpha(c) {
+    let k = char_code(c, 0)
+    return (k >= 97 && k <= 122) || (k >= 65 && k <= 90) || (k == 95)
+}
+fn _gl_is_digit(c) { let k = char_code(c, 0); return k >= 48 && k <= 57 }
+fn _gl_is_alnum(c) { return _gl_is_alpha(c) || _gl_is_digit(c) }
+
+// strip `//` line comments, `/* */` blocks, and `"..."` string bodies → spaces,
+// preserving newlines so line numbers stay accurate.
+fn _gl_strip(src) {
+    let n = len(src)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let c = src[i]
+        if c == "/" && i + 1 < n && src[i + 1] == "/" {
+            while i < n && src[i] != "\n" { out = out + " "; i = i + 1 }
+        } else if c == "/" && i + 1 < n && src[i + 1] == "*" {
+            out = out + "  "; i = i + 2
+            while i + 1 < n && !(src[i] == "*" && src[i + 1] == "/") {
+                if src[i] == "\n" { out = out + "\n" } else { out = out + " " }
+                i = i + 1
+            }
+            if i + 1 < n { out = out + "  "; i = i + 2 }
+        } else if c == "\"" {
+            out = out + " "; i = i + 1
+            while i < n && src[i] != "\"" {
+                if src[i] == "\\" && i + 1 < n { out = out + "  "; i = i + 2 }
+                else { out = out + " "; i = i + 1 }
+            }
+            if i < n { out = out + " "; i = i + 1 }
+        } else {
+            out = out + c; i = i + 1
+        }
+    }
+    return out
+}
+
+// collect bare identifiers on a line (length ≥ 1, alpha-start).
+fn _gl_idents(ln) {
+    let n = len(ln)
+    let mut ids = []
+    let mut i = 0
+    while i < n {
+        if _gl_is_alpha(ln[i]) {
+            let mut j = i
+            let mut w = ""
+            while j < n && _gl_is_alnum(ln[j]) { w = w + ln[j]; j = j + 1 }
+            ids.push(w)
+            i = j
+        } else {
+            i = i + 1
+        }
+    }
+    return ids
+}
+
+fn _gl_in(lst, s) {
+    let mut i = 0
+    while i < len(lst) { if lst[i] == s { return true }; i = i + 1 }
+    return false
+}
+
+fn _gl_is_fn_header(ln) {
+    return ln.contains("fn ") && ln.contains("(")
+}
+
+// is `ln` a guard line that admits token(s)? (`if` + a 0/len/<=/== test)
+fn _gl_is_guard(ln) {
+    if !ln.contains("if ") { return false }
+    return ln.contains("== 0") || ln.contains("<= 0") || ln.contains("< 0.")
+        || ln.contains("> 0") || ln.contains("< 1") || ln.contains("len(")
+        || ln.contains(".len()") || ln.contains("!= ") == false && false
+        || ln.contains("> 1.0e-") || ln.contains("< 1.0e-")
+}
+
+// find an `<ident>[0]` access on the line → return the array token, else "".
+fn _gl_find_idx0(ln) {
+    let n = len(ln)
+    let mut i = 0
+    while i + 2 < n {
+        if ln[i] == "[" && ln[i + 1] == "0" && ln[i + 2] == "]" {
+            // walk back over the identifier just before '['
+            let mut j = i - 1
+            let mut w = ""
+            while j >= 0 && _gl_is_alnum(ln[j]) { w = ln[j] + w; j = j - 1 }
+            if len(w) > 0 && _gl_is_alpha(w[0]) { return w }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// find a `/ <ident>` (optionally `/ to_float(<ident>)`) divisor → token, else "".
+// only flags when divisor is a bare identifier (param/len/derived), not a literal.
+fn _gl_find_div(ln) {
+    let n = len(ln)
+    let mut i = 0
+    while i + 1 < n {
+        if ln[i] == "/" && ln[i + 1] != "/" && ln[i + 1] != "*" {
+            // skip spaces
+            let mut j = i + 1
+            while j < n && ln[j] == " " { j = j + 1 }
+            // optional to_float(
+            if j + 9 <= n && ln.substring(j, j + 9) == "to_float(" { j = j + 9
+                while j < n && ln[j] == " " { j = j + 1 }
+            }
+            // read identifier (allow a single .field)
+            if j < n && _gl_is_alpha(ln[j]) {
+                let mut w = ""
+                while j < n && (_gl_is_alnum(ln[j]) || ln[j] == ".") { w = w + ln[j]; j = j + 1 }
+                // base token before any '.'
+                let mut base = ""
+                let mut k = 0
+                while k < len(w) && w[k] != "." { base = base + w[k]; k = k + 1 }
+                return base
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// lint a source string → array of [lineno_str, code, token].
+fn _gl_lint_text(src) {
+    let clean = _gl_strip(src)
+    let lines = clean.split("\n")
+    let mut viol = []
+    let mut guarded = []
+    let mut lineno = 0
+    let mut i = 0
+    while i < len(lines) {
+        lineno = lineno + 1
+        let ln = lines[i]
+        if _gl_is_fn_header(ln) { guarded = [] }
+        if _gl_is_guard(ln) {
+            let toks = _gl_idents(ln)
+            let mut t = 0
+            while t < len(toks) { guarded.push(toks[t]); t = t + 1 }
+        }
+        let a0 = _gl_find_idx0(ln)
+        if a0 != "" && !_gl_in(guarded, a0) {
+            viol.push([to_string(lineno), "G1", a0])
+        }
+        let dv = _gl_find_div(ln)
+        if dv != "" && !_gl_in(guarded, dv) {
+            viol.push([to_string(lineno), "G2", dv])
+        }
+        i = i + 1
+    }
+    return viol
+}
+
+fn _gl_lint_file(path, mode) {
+    let src = to_string(read_file(path))
+    let viol = _gl_lint_text(src)
+    let mut k = 0
+    while k < len(viol) {
+        let v = viol[k]
+        let kind = "unguarded-divide"
+        if v[1] == "G1" { kind = "unguarded-index" }
+        println(path + ":" + v[0] + ": [guard-lint " + v[1] + "] " + kind + " on `" + v[2] + "` (no empty/zero guard in this fn)")
+        k = k + 1
+    }
+    return len(viol)
+}
+
+fn _gl_changed_files() {
+    let cmd = "git diff --name-only --diff-filter=ACM origin/main...HEAD -- '*.hexa' 2>/dev/null || true"
+    let raw = to_string(exec(cmd))
+    let lines = raw.split("\n")
+    let mut out = []
+    let mut i = 0
+    while i < len(lines) {
+        let f = lines[i]
+        if len(f) > 5 && f.contains("stdlib/") && !f.contains("_test.hexa") { out.push(f) }
+        i = i + 1
+    }
+    return out
+}
+
+fn cmd_gl_selftest() {
+    // G1 bad — arr[0] with no guard
+    let bad1 = "fn f(a) {\n let lo = a[0]\n}\n"
+    let v1 = _gl_lint_text(bad1)
+    let mut g1 = 0
+    let mut q = 0
+    while q < len(v1) { if v1[q][1] == "G1" { g1 = g1 + 1 }; q = q + 1 }
+    if g1 != 1 { println("[guard_lint selftest] FAIL G1 bad: expected 1 got " + to_string(g1)); return 1 }
+
+    // G1 good — guarded
+    let good1 = "fn f(a) {\n if len(a) == 0 { return 0.0 }\n let lo = a[0]\n}\n"
+    let v2 = _gl_lint_text(good1)
+    q = 0; let mut g1g = 0
+    while q < len(v2) { if v2[q][1] == "G1" { g1g = g1g + 1 }; q = q + 1 }
+    if g1g != 0 { println("[guard_lint selftest] FAIL G1 good: expected 0 got " + to_string(g1g)); return 1 }
+
+    // G2 bad — / to_float(n) unguarded
+    let bad2 = "fn f(n) {\n let r = s / to_float(n)\n}\n"
+    let v3 = _gl_lint_text(bad2)
+    q = 0; let mut g2 = 0
+    while q < len(v3) { if v3[q][1] == "G2" { g2 = g2 + 1 }; q = q + 1 }
+    if g2 != 1 { println("[guard_lint selftest] FAIL G2 bad: expected 1 got " + to_string(g2)); return 1 }
+
+    // G2 good — guarded n
+    let good2 = "fn f(n) {\n if n <= 0 { return 0.0 }\n let r = s / to_float(n)\n}\n"
+    let v4 = _gl_lint_text(good2)
+    q = 0; let mut g2g = 0
+    while q < len(v4) { if v4[q][1] == "G2" { g2g = g2g + 1 }; q = q + 1 }
+    if g2g != 0 { println("[guard_lint selftest] FAIL G2 good: expected 0 got " + to_string(g2g)); return 1 }
+
+    println("[guard_lint selftest] OK")
+    return 0
+}
+
+fn _gl_usage() {
+    println("usage: hexa run tool/stdlib_guard_lint.hexa [--mode=warn|error] <file.hexa>...")
+    println("       hexa run tool/stdlib_guard_lint.hexa --changed")
+    println("       hexa run tool/stdlib_guard_lint.hexa --selftest")
+}
+
+fn main() {
+    let argv = args()
+    let mut mode = "warn"
+    let mut do_selftest = false
+    let mut do_changed = false
+    let mut files = []
+    let mut i = 0
+    while i < len(argv) {
+        let a = argv[i]
+        if a == "--selftest" || a == "selftest" { do_selftest = true }
+        else if a == "--changed" { do_changed = true }
+        else if len(a) >= 7 && a.substring(0, 7) == "--mode=" { mode = a.substring(7, len(a)) }
+        else if i > 0 && (len(a) < 2 || a.substring(0, 2) != "--") && !a.contains("stdlib_guard_lint") {
+            files.push(a)
+        }
+        i = i + 1
+    }
+    if do_selftest { exit(cmd_gl_selftest()) }
+    if do_changed { files = _gl_changed_files() }
+    if len(files) == 0 { _gl_usage(); return }
+    let mut total = 0
+    let mut k = 0
+    while k < len(files) {
+        try { total = total + _gl_lint_file(files[k], mode) }
+        catch e { println(files[k] + ": [lint error] " + e) }
+        k = k + 1
+    }
+    if total > 0 {
+        println("")
+        println("stdlib-guard-lint: " + to_string(total) + " candidate unguarded site(s) [mode=" + mode + ", advisory]")
+        if mode == "error" { exit(1) }
+    } else {
+        println("stdlib-guard-lint: CLEAN")
+    }
+}

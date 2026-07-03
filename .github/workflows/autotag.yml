@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  actions: write   # `gh workflow run release.yml` (workflow_dispatch) on the new tag
 
 concurrency:
   group: autotag-${{ github.ref }}
@@ -20,15 +21,17 @@ concurrency:
 
 jobs:
   autotag:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Compute + push next SemVer tag
+      - name: Compute + push next SemVer tag + trigger release.yml
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -50,6 +53,21 @@ jobs:
             range="HEAD"
           fi
           msgs="$(git log --format='%s%x1f%b%x1e' "$range")"
+
+          # ── DEBOUNCE (release-worthy gate · stable 빌드 횟수↓) ────────
+          # 새 stable vX.Y.Z (+ 3-target 풀빌드) 는 last 태그 이후 범위에
+          # release-worthy 커밋(feat/fix/perf 또는 BREAKING)이 있을 때만 만든다.
+          # 순수 docs/chore/ci/style/test/refactor 머지는 출하 바이너리가
+          # byte-identical 이므로 풀 3타깃 재빌드 + tag-storm 만 유발 → skip
+          # (squash-merge 커밋 subject = PR 제목 = conventional type 으로 판정).
+          # skip 된 byte-identical 변경은 다음 release-worthy 머지의 stable 태그에
+          # 함께 실린다 (구 `test` 롤링 prerelease 채널은 폐기됨 — 2026-06-30).
+          subjects="$(git log --format='%s' "$range")"
+          if ! grep -qiE '^(feat|fix|perf)(\([^)]*\))?!?:' <<<"$subjects" \
+             && ! grep -q 'BREAKING CHANGE' <<<"$msgs"; then
+            echo "no release-worthy commit (feat/fix/perf/BREAKING) since ${last} — skip stable tag (docs/chore/ci-only · byte-identical, folds into next release-worthy tag)."
+            exit 0
+          fi
 
           # ── ATLAS-PATCH HOOK (hexa-lang) ─────────────────────────────
           # 기본 generic: 아래 줄은 no-op. hexa-lang 에서는 atlas builtin 추가가
@@ -82,3 +100,14 @@ jobs:
           fi
           git tag "$next" "${GITHUB_SHA}"
           git push origin "$next"
+
+          # A GITHUB_TOKEN-pushed tag does NOT auto-trigger release.yml (push-event
+          # recursion guard) — which left every autotag'd vX.Y.Z an orphan with no
+          # published release, so stable Latest sat dormant at v0.262.0 while tags
+          # climbed to v0.31x. workflow_dispatch IS exempt from that guard, so
+          # explicitly dispatch release.yml on the just-created tag → 3-target build
+          # → the `finalize` job promotes Latest ONLY on 3/3 green (all-green gate
+          # intact: a failing target leaves the release as prerelease, never Latest).
+          gh workflow run release.yml -f tag="$next" \
+            && echo "dispatched release.yml for $next" \
+            || echo "warn: release.yml dispatch failed for $next (tag still pushed)"

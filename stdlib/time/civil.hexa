@@ -65,8 +65,14 @@ fn _zpad(val: int, width: int) -> string {
 // epoch seconds (UTC) → "YYYY-MM-DDTHH:MM:SSZ".
 @pure
 pub fn iso8601_format_native(epoch: int) -> string {
-    let days = epoch / _SECS_PER_DAY
-    let secs = epoch - days * _SECS_PER_DAY      // [0, 86399] for epoch >= 0
+    let mut days = epoch / _SECS_PER_DAY
+    let mut secs = epoch - days * _SECS_PER_DAY
+    // floor-division: hexa `/` truncates toward zero, so a negative non-day-aligned
+    // epoch yields a NEGATIVE `secs` (and a wrong date — e.g. iso(-1) gave
+    // "1970-01-01T00:00:-1Z"). Push the remainder into [0, 86399] and borrow a day,
+    // matching Python datetime.utcfromtimestamp floor semantics. civil_from_days
+    // already handles a negative `days`.
+    if secs < 0 { secs = secs + _SECS_PER_DAY; days = days - 1 }
     let ymd = civil_from_days(days)
     let hh = secs / 3600
     let mm = (secs - hh * 3600) / 60
@@ -86,6 +92,11 @@ pub fn rfc3339_format_native(epoch: int) -> string {
 @pure
 pub fn iso8601_parse_native(s: string) -> int {
     if byte_len(s) < 19 { return 0 - 1 }
+    // separator validation: digit-position-only checks accepted garbage separators
+    // ("2024:01:01X00.00.00") as valid. Require the canonical '-' '-' 'T'/' ' ':' ':'.
+    if s.byte_at(4) != 45 || s.byte_at(7) != 45 { return 0 - 1 }
+    if s.byte_at(10) != 84 && s.byte_at(10) != 32 { return 0 - 1 }   // 'T' or ' '
+    if s.byte_at(13) != 58 || s.byte_at(16) != 58 { return 0 - 1 }   // ':'
     // Fixed-offset field extraction (ISO 8601 basic UTC form).
     let yr = _digits4(s, 0)
     let mo = _digits2(s, 5)
@@ -103,7 +114,23 @@ pub fn iso8601_parse_native(s: string) -> int {
     let dim = _days_in_month(yr, mo)
     if dy < 1 || dy > dim { return 0 - 1 }
     let days = days_from_civil(yr, mo, dy)
-    return days * _SECS_PER_DAY + hh * 3600 + mm * 60 + ss
+    let mut epoch = days * _SECS_PER_DAY + hh * 3600 + mm * 60 + ss
+    // RFC 3339 timezone offset: the wall-clock fields were parsed as if UTC, but a
+    // trailing "+HH:MM" / "-HH:MM" shifts them. UTC = local - offset, so "-05:00"
+    // (local 5h behind UTC) is +18000s in UTC, "+09:00" is -32400s. The prior code
+    // ignored the offset → wrong epoch (and disagreed with utc_iso_parse).
+    if byte_len(s) >= 25 {
+        let sign = s.byte_at(19)
+        if sign == 43 || sign == 45 {        // '+' (43) or '-' (45)
+            let oh = _digits2(s, 20)
+            let om = _digits2(s, 23)
+            if oh >= 0 && om >= 0 {
+                let off = oh * 3600 + om * 60
+                if sign == 43 { epoch = epoch - off } else { epoch = epoch + off }
+            }
+        }
+    }
+    return epoch
 }
 
 // Days in month `m` (1-12) of proleptic-Gregorian year `y`, leap-aware.

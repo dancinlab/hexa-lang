@@ -32,5 +32,6 @@ pub fn tls13_key_update_build(request_update: int) -> [int] {
 
 @pure
 pub fn tls13_key_update_request(body: [int]) -> int {
+    if len(body) == 0 { return 0 }   // empty/truncated KeyUpdate → no request byte
     return body[0] & 0xFF
 }

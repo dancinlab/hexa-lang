@@ -19,10 +19,21 @@
 //   HexaArr { HexaVal* items @0;  int64_t len @8;  int64_t cap @16 }  sizeof 24
 //   element stride in items[] = sizeof(HexaVal) = 16:  tag @ +0,  payload @ +8.
 //
-// ALLOC stays C (WALL-2, alloc lane domain): new / push / reserve / snapshot all
-// touch calloc/realloc/arena/heapify and are NOT ported here. set/pop/shift/
-// truncate are alloc-free (in-place index write / pure length edit) so they DO
-// port.
+// ALLOC is NOT a monolithic WALL (sh-array-write, "alloc not a wall" thesis):
+// the allocator splits into TWO substrates. (a) calloc/realloc — libc per-object
+// heap, NO native seed exists (only the arena is native), so new()'s calloc
+// descriptor + push()'s realloc grow-branch stay C (🧱 the seed cannot express a
+// persistent individually-freeable heap). (b) the ARENA bump path — already
+// native: self/rt/alloc.hexa::hexa_arena_alloc ships in the frozen alloc seed
+// (self/native/alloc_syscall_*.s, HEXA_RT_ALLOC_NATIVE default-ON). The array
+// module's bridge to it, hexa_array_arena_alloc_items (runtime_core_emit.hexa,
+// `hexa_arena_alloc(n*sizeof(HexaVal))`), is therefore a NATIVE-arena alloc, NOT
+// a libc wall — so it ports here as rt_array_arena_alloc_items_native, calling
+// the already-native arena via `extern fn hexa_arena_alloc`. The C gates
+// (hexa_array_arena_on + __hexa_val_mark_top live-mark check + NULL→malloc
+// fallback) stay C-side; this delegates ONLY the size math + arena call — the
+// exact read-half guard-C / body-native split. set/pop/shift/truncate remain
+// alloc-free in-place edits; new()/reserve()/snapshot()'s calloc/realloc stay C.
 //
 // These live in the LINKED rt-stdlib object set (imported by compiler/main.hexa
 // alongside numeric.hexa::rt_len). The runtime_core_emit.hexa #ifdef
@@ -40,6 +51,57 @@
 // __hx_ptr_store64 (loads of mutable descriptor state, stores with side
 // effects). @pure would license the optimizer to CSE/elide these — wrong for
 // raw-mem. Mirrors rt_array_for_each (also side-effecting, also un-pure).
+
+// The native arena allocator (self/rt/alloc.hexa). Compiled by the SAME native
+// compiler as this module (aprime_cc), so the call uses the matching HexaVal
+// 2-register ABI (arg {tag,payload} in rdi:rsi, raw-ptr return in rdx) — no C
+// bridge needed for this native→native edge (the __hxseed_arena_alloc C bridge
+// in runtime_core_emit.hexa exists only for C-side callers). Resolved at link by
+// the alloc seed .o that stage_resolve_runtime_a ar's into runtime.a alongside
+// this array-core seed. `hexa_arena_alloc`'s arg is BYTES (this body multiplies
+// the slot count by the 16-byte HexaVal stride before the call).
+extern fn hexa_arena_alloc(n: int) -> int
+
+// rt_array_arena_alloc_items_native: allocate `n` HexaVal slots (n * 16 bytes,
+// sizeof(HexaVal)=16 per the LAYOUT note above) from the NATIVE arena and return
+// the raw items-buffer pointer (as int). This is the array module's bridge to
+// the already-native arena — proving the arena alloc path is NOT a libc wall.
+// Like the C hexa_array_arena_alloc_items, the buffer is NOT zeroed (the caller
+// memcpy's over it or writes `len` items before reading — skipping memset is the
+// measured hot-path win). NO gates here: the C wrapper keeps hexa_array_arena_on
+// + the __hexa_val_mark_top live-mark check + the NULL→malloc fallback (returns
+// 0 only on arena OOM, which the wrapper treats as the malloc-fallback signal),
+// exactly the read-half guard-C / body-native split. Un-nested leaves (one op
+// per temp), mirroring the C `hexa_arena_alloc((size_t)n * sizeof(HexaVal))`.
+pub fn rt_array_arena_alloc_items_native(n: int) -> int {
+    let bytes = n * 16                  // n * sizeof(HexaVal)
+    return hexa_arena_alloc(bytes)
+}
+
+// rt_array_arena_alloc_desc_native: allocate a single zeroed HexaArr descriptor
+// (sizeof(HexaArr)=24 bytes — {HexaVal* items; int64_t len; int64_t cap;}, three
+// 8-byte words @ runtime.h:74) from the NATIVE arena and return its raw pointer
+// (as int). This is the descriptor sibling of rt_array_arena_alloc_items_native:
+// the slice_fast / array_new descriptor was the last libc `calloc(1,
+// sizeof(HexaArr))` in the array fast path; routing it through the already-native
+// arena bump proves the descriptor calloc is NOT a libc wall either. UNLIKE the
+// items buffer (caller memcpy's over it, so it is left un-zeroed), the descriptor
+// MUST be zeroed — its items/len/cap fields are read before any full write (a
+// slice_fast empty-array early-return returns the descriptor with NULL items / 0
+// len / 0 cap), so we memset-zero the 3 words explicitly (the calloc(1,...)
+// contract). NO gates here: the C wrapper keeps hexa_array_arena_on +
+// __hexa_val_mark_top live-mark + the NULL→calloc fallback (returns 0 only on
+// arena OOM, which the wrapper treats as the calloc-fallback signal), exactly the
+// guard-C / body-native split of the #3687 items pattern. Un-nested leaves (one
+// op per temp), mirroring the C `hexa_arena_alloc(sizeof(HexaArr))` + memset.
+pub fn rt_array_arena_alloc_desc_native() -> int {
+    let desc = hexa_arena_alloc(24)         // sizeof(HexaArr) = 3 * 8
+    if desc == 0 { return 0 }               // arena OOM -> caller falls back to calloc
+    __hx_ptr_store64(desc, 0, 0)            // items <- NULL
+    __hx_ptr_store64(desc, 8, 0)            // len   <- 0
+    __hx_ptr_store64(desc, 16, 0)           // cap   <- 0
+    return desc
+}
 
 // rt_array_len_native: HexaArr.len @ offset 8 of the descriptor.
 pub fn rt_array_len_native(arr: HexaVal) -> int {

@@ -1,0 +1,71 @@
+// ═══════════════════════════════════════════════════════════
+//  test_monomorphize.hexa — static-generic surface + opt-in
+//  monomorphization (RFC state/rfc_static_generics_monomorphization.md)
+//
+//  Validates the R1 slice's RELEASE-SAFE surface contract:
+//   * `fn id<T>(x: T) -> T` and `@specialize fn …<T>` PARSE without the
+//     historical hang (compiler/parse/parser.hexa parse_fn_item now
+//     consumes + discards `<T>`, mirroring parse_struct_item).
+//   * DEFAULT behavior is the type-erased dynamic path — a generic fn is
+//     runtime-identity-neutral whether or not it carries @specialize, and
+//     whether or not HEXA_MONOMORPHIZE is set. Monomorphization is opt-in
+//     and changes only SYMBOL emission (id$int / id$str), never observable
+//     runtime values — so this behavior test holds on both paths.
+//
+//  The MIR-level clone/mangle/rewrite transform itself is unit-tested in
+//  compiler/optimize/monomorphize_test.hexa (hand-built MModule).
+//
+//  Run: hexa run self/test_monomorphize.hexa
+// ═══════════════════════════════════════════════════════════
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, actual, expected) {
+    if to_string(actual) == to_string(expected) {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + to_string(expected) + ", got: " + to_string(actual))
+        fail_count = fail_count + 1
+    }
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  HEXA static-generics — surface + opt-in monomorphization")
+println("═══════════════════════════════════════════════════════")
+
+// ── 1. generic free fn parses + runs (erased identity) ──────
+fn id<T>(x: T) -> T { return x }
+
+check("id(int)  → erased identity", id(5), 5)
+check("id(str)  → erased identity", id("hi"), "hi")
+check("id(bool) → erased identity", id(true), true)
+
+// ── 2. @specialize-tagged generic fn — runtime-neutral ──────
+// @specialize marks the fn as a monomorphization candidate (opt-in via
+// HEXA_MONOMORPHIZE). Observable behavior is unchanged on the default
+// erased path; the attribute is recognized, not behavior-changing.
+@specialize fn box_of<T>(x: T) -> T { return x }
+
+check("box_of(int) neutral", box_of(42), 42)
+check("box_of(str) neutral", box_of("zz"), "zz")
+
+// ── 3. multi-type-param generic parses ──────────────────────
+fn first_of<A, B>(a: A, b: B) -> A { return a }
+
+check("first_of<A,B> picks first (int)", first_of(7, "x"), 7)
+check("first_of<A,B> picks first (str)", first_of("p", 9), "p")
+
+// ── 4. two distinct call-site types on one generic (the slice) ──
+// Models the RFC minimal example: id specialized at int + str call sites.
+// Under monomorphization these resolve to id$int / id$str; the erased
+// default resolves both to one dynamic id. Either way the value is exact.
+fn twice<T>(x: T) -> T { return id(x) }
+
+check("twice(int)  composes generics", twice(11), 11)
+check("twice(str)  composes generics", twice("ok"), "ok")
+
+println("──────────────────────────────────────────────────────")
+println("  " + to_string(pass_count) + " passed, " + to_string(fail_count) + " failed")
+if fail_count > 0 { exit(1) }

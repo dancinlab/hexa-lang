@@ -1,0 +1,19 @@
+loaded d=1024 nlay=24 nh=16
+
+=== torch strictFP32 (allow_tf32=False) ===
+[strictFP32] greedy ids=[32, 84, 104, 101, 32, 115, 116, 97, 116, 105, 111, 110, 32, 119, 97, 115, 32, 97, 108, 115, 111, 32, 97, 32]
+[strictFP32] greedy str=' The station was also a '
+[strictFP32 N=1] ms/step=3.381  agg tok/s=295.8
+[strictFP32 N=4] ms/step=3.835  agg tok/s=1043.0
+[strictFP32 N=8] ms/step=3.959  agg tok/s=2020.8
+[strictFP32 N=16] ms/step=5.384  agg tok/s=2971.7
+[strictFP32 N=32] ms/step=5.433  agg tok/s=5890.4
+
+=== torch TF32 (allow_tf32=True) ===
+[TF32] greedy ids=[32, 84, 104, 101, 32, 115, 116, 97, 116, 105, 111, 110, 32, 119, 97, 115, 32, 97, 108, 115, 111, 32, 97, 32]
+[TF32] greedy str=' The station was also a '
+[TF32 N=1] ms/step=3.381  agg tok/s=295.7
+[TF32 N=4] ms/step=3.832  agg tok/s=1043.8
+[TF32 N=8] ms/step=3.896  agg tok/s=2053.3
+[TF32 N=16] ms/step=3.950  agg tok/s=4050.4
+[TF32 N=32] ms/step=4.111  agg tok/s=7784.1

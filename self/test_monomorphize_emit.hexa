@@ -1,0 +1,81 @@
+// ═══════════════════════════════════════════════════════════
+//  test_monomorphize_emit.hexa — static-generic END-TO-END emit
+//  (RFC state/rfc_static_generics_monomorphization.md, lane ①·R2)
+//
+//  R1 (#4044) landed the parser `<T>` consume, the monomorphize MIR pass,
+//  and the HEXA_MONOMORPHIZE gate — but no lowering emitted the `$$g`
+//  template marker, so the pass was a guaranteed no-op. R2 wires
+//  compiler/lower/hir_to_mir.hexa::_lower_fn to suffix an `@specialize`
+//  fn's MFunc name with `$$g` under HEXA_MONOMORPHIZE=1 (mirroring the
+//  @gpu_* → gpu_kind precedent), so the pass now actually emits one
+//  concrete instance per call-site arg type.
+//
+//  Two layers of contract are checked:
+//
+//   (A) RUNTIME-NEUTRAL (this file, run on either path) — monomorphization
+//       changes only SYMBOL emission (id$int / id$str), never observable
+//       runtime values. `id` is value-identity on int and str whether the
+//       flag is set or not, so this behavior test passes on both paths
+//       (erased default AND monomorphized). Run:
+//           hexa run self/test_monomorphize_emit.hexa
+//
+//   (B) EMIT (asm grep, gated) — compiling THIS file with the source
+//       compiler under HEXA_MONOMORPHIZE=1 to `--emit=asm` must produce
+//       the per-type instance symbols `id$int` and `id$str`; compiling
+//       with the flag OFF must NOT (one erased shape). That is asserted by
+//       tool/test_monomorphize_emit.sh (delegated to the build pool / CI —
+//       mini is git/gh-only), and on the 3 byteeq targets the DEFAULT
+//       (flag-unset) asm is byte-identical to pre-R2.
+//
+//  reference-match: rustc keys MonoItem::Fn(Instance) off the (template,
+//  concrete-type) pair (rustc_monomorphize::collector); zig instantiates a
+//  fresh fn per comptime-T. We borrow: instance = (template, arg-type),
+//  deduped, deterministic emission order, erased fn kept as a sound
+//  fallback for dyn call sites.
+// ═══════════════════════════════════════════════════════════
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, actual, expected) {
+    if to_string(actual) == to_string(expected) {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + to_string(expected) + ", got: " + to_string(actual))
+        fail_count = fail_count + 1
+    }
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  HEXA static-generics — end-to-end monomorphization emit")
+println("═══════════════════════════════════════════════════════")
+
+// ── The RFC minimal example ─────────────────────────────────
+// `@specialize fn id<T>(x: T) -> T` called at an int site and a str site.
+// Under HEXA_MONOMORPHIZE=1 the lowering names this template `id$$g`; the
+// pass infers `int` from the const_int arg of id(7) and `str` from the
+// const_str arg of id("ok"), emits id$int + id$str, retargets the two
+// calls, and keeps `id` as the erased fallback. On the default (flag-off)
+// path the single erased `id` shape serves both calls. Either way the
+// returned VALUE is exact — that invariant is what this file asserts.
+@specialize fn id<T>(x: T) -> T { return x }
+
+check("id(int) value-identity", id(7), 7)
+check("id(str) value-identity", id("ok"), "ok")
+
+// A second distinct int site must fold to the SAME id$int instance (dedup,
+// not a third symbol) — value unchanged.
+check("id(int) second site", id(100), 100)
+
+// ── A second specialized template, distinct base ────────────
+// Proves the marker is per-fn, not global: dup_of gets its own dup_of$int
+// / dup_of$str instances independent of id's.
+@specialize fn dup_of<T>(x: T) -> T { return x }
+
+check("dup_of(int) value-identity", dup_of(3), 3)
+check("dup_of(str) value-identity", dup_of("hi"), "hi")
+
+println("──────────────────────────────────────────────────────")
+println("  " + to_string(pass_count) + " passed, " + to_string(fail_count) + " failed")
+if fail_count > 0 { exit(1) }

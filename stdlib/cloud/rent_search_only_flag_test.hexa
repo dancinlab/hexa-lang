@@ -1,0 +1,92 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/rent_search_only_flag_test.hexa — ING #34-(A) cost-trap fixes:
+//   (1) the rent verb's UNKNOWN-FLAG guard REFUSES an unrecognized flag on the
+//       one $-incurring verb (a silently-dropped `--dry-run` was the accidental-
+//       rent root cause), and
+//   (2) `--search-only` / `--dry-run` are KNOWN flags (arity 1), so they are
+//       never treated as unknown.
+//
+// MIRROR-TEST (stdlib/cloud convention): the PURE decision logic of
+// cloud_cli.hexa:_rent_flag_arity + _rent_unknown_flag is mirrored VERBATIM here
+// over synthetic argv. Keep byte-identical to cloud_cli.hexa; a drift makes this
+// test meaningless — review them together. NO live rent is ever attempted.
+//
+// Run:   hexa run stdlib/cloud/rent_search_only_flag_test.hexa
+// PASS:  exits 0, prints "rent_search_only_flag_test PASS".
+
+// mirror of cloud_cli.hexa:_rent_flag_arity — KEEP IN SYNC.
+fn _rent_flag_arity(flag: str) -> int {
+    if flag == "--gpu" || flag == "--image" || flag == "--disk" || flag == "--owner"
+       || flag == "--project" || flag == "--desc" || flag == "--purpose" || flag == "--query"
+       || flag == "--offer" || flag == "--max-dph" || flag == "--max-wait-sec" || flag == "--ttl"
+       || flag == "--max-cost-usd" || flag == "--identity" || flag == "--vcpu" || flag == "--cpu-flavor"
+       || flag == "--volume-gb" || flag == "--cloud-type" || flag == "--tier" || flag == "--docker-args" {
+        return 2
+    }
+    if flag == "--secure" || flag == "--ephemeral" || flag == "--force-new"
+       || flag == "--include-unverified" || flag == "--no-register" || flag == "--selftest"
+       || flag == "--search-only" || flag == "--dry-run" || flag == "--help" {
+        return 1
+    }
+    return 0
+}
+
+// mirror of cloud_cli.hexa:_rent_unknown_flag — KEEP IN SYNC.
+fn _rent_unknown_flag(av: [str], start: int) -> str {
+    let mut i = start
+    while i < len(av) {
+        let t = av[i]
+        if t == "--" {
+            return ""
+        }
+        if len(t) >= 2 && t.substring(0, 2) == "--" {
+            let ar = _rent_flag_arity(t)
+            if ar == 0 {
+                return t
+            }
+            if ar == 2 {
+                i = i + 2
+            } else {
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    return ""
+}
+
+fn _ck(name: str, got: str, want: str) {
+    if got != want {
+        println("  FAIL: " + name + " got '" + got + "' want '" + want + "'")
+        exit(1)
+    }
+    println("  ok: " + name)
+}
+
+fn main() {
+    // ── a typo'd / unknown flag is DETECTED (the cost-trap root: it must not be
+    //    silently ignored, then a real pod rented) ──
+    _ck("--dry-runn typo → unknown", _rent_unknown_flag(["--gpu", "H100", "--dry-runn"], 0), "--dry-runn")
+    _ck("--bogus → unknown",         _rent_unknown_flag(["--bogus"], 0), "--bogus")
+
+    // ── --search-only / --dry-run are KNOWN (never flagged unknown) ──
+    _ck("--search-only known",  _rent_unknown_flag(["--search-only", "--gpu", "H100"], 0), "")
+    _ck("--dry-run known",      _rent_unknown_flag(["--dry-run", "--gpu", "cpu"], 0), "")
+
+    // ── a full, all-known rent argv passes clean ──
+    _ck("all-known vast argv",
+        _rent_unknown_flag(["--gpu", "H100", "--max-dph", "1.50", "--include-unverified", "--owner", "qa"], 0), "")
+    _ck("all-known runpod argv",
+        _rent_unknown_flag(["--gpu", "cpu", "--vcpu", "8", "--cpu-flavor", "cpu5c", "--volume-gb", "40", "--ephemeral"], 0), "")
+
+    // ── a value-flag's value that itself begins with `--` is NOT mis-read as an
+    //    unknown flag (docker-args carries an arbitrary value, arity 2) ──
+    _ck("--docker-args '--gpus all' value skipped",
+        _rent_unknown_flag(["--docker-args", "--gpus all", "--gpu", "H100"], 0), "")
+
+    // ── a bare `--` stops the scan (rent takes no post-`--` argv) ──
+    _ck("bare -- stops scan", _rent_unknown_flag(["--gpu", "H100", "--", "--whatever"], 0), "")
+
+    println("rent_search_only_flag_test PASS")
+}

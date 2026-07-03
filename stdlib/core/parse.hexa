@@ -68,6 +68,9 @@ fn to_int_strict_or_zero(s) {
     while i < n {
         let cb = ord(s.substring(i, i + 1))
         if cb < 48 || cb > 57 { return 0 }   // not '0'-'9'
+        // overflow guard: i64 signed wrap is UB and returns garbage for >19-digit
+        // inputs — `v*10+(cb-48)` must not exceed i64max(9223372036854775807).
+        if v > (9223372036854775807 - (cb - 48)) / 10 { return 0 }
         v = v * 10 + (cb - 48)
         i = i + 1
     }

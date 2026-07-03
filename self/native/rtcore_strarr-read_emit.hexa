@@ -1,0 +1,147 @@
+#!hexa strict
+// rtcore_strarr-read_emit.hexa
+//   B9.C (.c-text · #1850 pattern) — rtcore_strarr-read.c source emitter.
+//
+// zero-c RFC061 M5 r11 str-byte-read + array-thin-read native seed.
+//
+// Emits rtcore_strarr-read.c VERBATIM. The hexa build regenerates the .c from
+// this emitter before compiling, so the emitter becomes the SSOT and the
+// .c becomes a build artifact. Byte-identity ⇒ identical .o ⇒ PERF UNCHANGED.
+//
+// Bodies are EXTRACTED VERBATIM from runtime_core.c's #else arms (byte-identity
+// by construction). GENERATED from the seed .c by tool/gen path; the awk
+// un-escape in tool/regen_rtcore_strarr-read_c.sh recovers the .c byte-for-byte.
+//
+// Invocation:  hexa-run rtcore_strarr-read_emit.hexa <output-path>
+
+let MODULE_NAME = "rtcore_strarr-read_emit"
+
+fn _flush_rtcore_strarr_read(out_path: str, buf: str) {
+    let _ = exec("cat >> \"" + out_path + "\" <<'GEN_rtcore_strarr_read_EOF\n" + buf + "GEN_rtcore_strarr_read_EOF")
+}
+
+fn emit_rtcore_strarr-read_to(out_path: str) {
+    let _ = exec("printf '' > \"" + out_path + "\"")
+    let mut buf = ""
+    buf = buf + "// self/native/rtcore_strarr-read.c — zero-c RFC061 M5 r11 STR-BYTE-READ SEED (link de-risk).\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "//\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "// Supplies 2 seed-portable runtime_core.c symbols from the clean 1:1\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "// \"str-byte-read\" cluster (hexa_str_char_code_at / hexa_str_byte_at) that\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "// runtime_core.c externs away under HEXA_RT_CORE_STRARR_READ_NATIVE (narrow\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "// guard, NOT the broad whole-runtime HEXA_RT_SELFEMIT). Compiled to a SEPARATE\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "// .o (build/rtcore_strarr-read_native.o) and linked when\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "// HEXA_ZEROC_RT_CORE_STRARR_READ=1 — the build LINKS these bodies from a\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "// standalone object instead of compiling them inline in runtime_core.c.\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "//\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "// CLEAN-1:1 (r11 census — every callee external-linkage or a macro):\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "//   hexa_str_char_code_at — thin: raw byte read + hexa_int; SELF-CONTAINED (the\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "//                           documented byte_at recursion trap is hexa-SOURCE-only;\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "//                           a native .o reads HX_STR(s)[i] directly, no recursion).\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "//   hexa_str_byte_at      — thin: raw HX_STR(s)[i] read + hexa_throw/hexa_str/\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "//                           hexa_void/hexa_int/snprintf; no tag-switch+recursion,\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "//                           no frozen-static, no in-body calloc/realloc/strbuf/malloc.\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "//\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "// EXCLUDED (NOT clean, stays inline): hexa_array_get — its HEXA_OOB_TRACE branch\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "// calls hxlcl_getenv / hxlcl_backtrace[_symbols_fd], which are runtime.c\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "// FILE-LOCAL statics a separate .o cannot resolve (same exclusion rule as the\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "// runtime-misc seed's file-local-static touch). It stays an inline #else body.\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "//\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "// Default build (flag unset) is byte-IDENTICAL (bodies not externed). Bodies are\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "// EXTRACTED VERBATIM from runtime_core.c's #else arms (byte-identity by\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "// construction). GENERATED .c is a build artifact (gitignored); SSOT = the\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "// emitter self/native/rtcore_strarr-read_emit.hexa (awk un-escape, hexat-free).\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "HexaVal hexa_str_char_code_at(HexaVal s, HexaVal idx) {\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "    if (!HX_IS_STR(s)) return hexa_int(-1);\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "    int64_t i = HX_INT(idx);\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "    int64_t n = (int64_t)HX_STRLEN(s);\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "    if (i < 0) i += n;  // 음수 wraparound — char_at 과 align\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "    if (i < 0 || i >= n) return hexa_int(-1);\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "    return hexa_int((int64_t)(unsigned char)HX_STR(s)[i]);\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "}\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "HexaVal hexa_str_byte_at(HexaVal s, HexaVal idx) {\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "    if (!HX_IS_STR(s)) {\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "        hexa_throw(hexa_str(\"byte_at(): receiver is not a string\"));\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "        return hexa_void();\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "    }\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "    int64_t _orig = HX_INT(idx);\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "    int64_t n = (int64_t)HX_STRLEN(s);\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "    int64_t i = _orig;\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "    if (i < 0) i += n;  // 음수 wraparound — char_at/char_code_at 과 align\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "    if (i < 0 || i >= n) {\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "        char _buf[96];\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "        snprintf(_buf, sizeof(_buf),\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "                 \"byte_at index %lld out of bounds (len %lld)\",\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "                 (long long)_orig, (long long)n);\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "        hexa_throw(hexa_str(_buf));\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "        return hexa_void();\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "    }\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "    return hexa_int((int64_t)(unsigned char)HX_STR(s)[i]);\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    buf = buf + "}\n"
+    if buf.len() > 65536 { _flush_rtcore_strarr_read(out_path, buf); buf = "" }
+    if buf.len() > 0 { _flush_rtcore_strarr_read(out_path, buf) }
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "rtcore_strarr-read.c" }
+    emit_rtcore_strarr-read_to(out_path)
+    println("[rtcore_strarr-read_emit] wrote " + out_path)
+    exit(0)
+}

@@ -471,6 +471,7 @@ fn state_force_N(state: int, kT_J: float) -> float {
 }
 
 fn langevin_step(x_m: float, force_N: float, dt_s: float, kT_J: float, gamma: float, rng) -> float {
+    if gamma <= 0.0 { return x_m }   // γ≤0 → force/γ·kT/γ = Inf/NaN (no drag → no step)
     let drift = (force_N / gamma) * dt_s
     let var_term = 2.0 * kT_J * dt_s / gamma
     let mut sigma = 0.0

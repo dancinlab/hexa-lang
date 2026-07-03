@@ -1,0 +1,20 @@
+torch 2.11.0+cu130 gpu NVIDIA GeForce RTX 5070
+loaded vocab=256 d=1024 nlay=24 nh=16 block=512
+[torch self-consistency] kv-decode vs full-forward greedy: 24/24 argmax match
+[torch greedy kv] prompt='The quick brown fox jumps over the lazy dog.'
+[torch greedy kv] bytes=[32, 84, 104, 101, 32, 115, 116, 97, 116, 105, 111, 110, 32, 119, 97, 115, 32, 97, 108, 115, 111, 32, 97, 32]
+[torch greedy kv] str=' The station was also a '
+
+=== torch fp32 KV-cache batched decode (gen=24, median-3, warmup excl) ===
+[torch-fp32 N=1] ms/step=3.381  agg tok/s=295.7  per-seq tok/s=295.74
+[torch-fp32 N=4] ms/step=3.834  agg tok/s=1043.3  per-seq tok/s=1043.28
+[torch-fp32 N=8] ms/step=3.957  agg tok/s=2021.5  per-seq tok/s=2021.49
+[torch-fp32 N=16] ms/step=5.382  agg tok/s=2973.0  per-seq tok/s=2972.99
+[torch-fp32 N=32] ms/step=5.391  agg tok/s=5935.6  per-seq tok/s=5935.57
+
+=== torch fp64 KV-cache batched decode (gen=24, median-3, warmup excl) ===
+[torch-fp64 N=1] ms/step=6.742  agg tok/s=148.3  per-seq tok/s=148.33
+[torch-fp64 N=4] ms/step=44.970  agg tok/s=88.9  per-seq tok/s=88.95
+[torch-fp64 N=8] ms/step=45.240  agg tok/s=176.8  per-seq tok/s=176.83
+[torch-fp64 N=16] ms/step=29.620  agg tok/s=540.2  per-seq tok/s=540.17
+[torch-fp64 N=32] ms/step=41.973  agg tok/s=762.4  per-seq tok/s=762.39

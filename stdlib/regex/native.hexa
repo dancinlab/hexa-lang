@@ -73,14 +73,25 @@ fn _re_parse_class(p: ReParse) -> int {
             return len(p.classes) - 1
         }
         first = false
-        // Handle range a-b.
-        let lo = c
+        // Handle range a-b. A leading '\' escapes the next byte so class members
+        // like ']', '\', '^', '-' can be quoted (`[\]]` = class {]}). The prior
+        // code took '\' as a literal member and then mis-read the following ']' as
+        // the class terminator.
+        let mut lo = c
         p.pos = p.pos + 1
-        if _re_peek(p) == 45 && (p.pos + 1) < p.plen && p.pat.byte_at(p.pos + 1) != 93 {
-            // range
-            p.pos = p.pos + 1   // skip '-'
-            let hi = _re_peek(p)
+        if lo == 92 && p.pos < p.plen {       // '\' escape: take next byte literally
+            lo = _re_peek(p)
             p.pos = p.pos + 1
+        }
+        if _re_peek(p) == 45 && (p.pos + 1) < p.plen && p.pat.byte_at(p.pos + 1) != 93 {
+            // range a-b
+            p.pos = p.pos + 1   // skip '-'
+            let mut hi = _re_peek(p)
+            p.pos = p.pos + 1
+            if hi == 92 && p.pos < p.plen {   // '\' escape on the range's high end
+                hi = _re_peek(p)
+                p.pos = p.pos + 1
+            }
             ranges.push(lo)
             ranges.push(hi)
         } else {
@@ -294,8 +305,14 @@ fn _re_run(nodes: [[int]], classes: [[int]], conts: [int], s: string, si: int, n
         return _re_run(nodes, classes, rest, s, si, n)
     }
     if kind == 3 {                                            // STAR (greedy)
-        // Try one-more-rep (child then STAR again) FIRST, else skip.
-        let more = _re_run(nodes, classes, _re_cons(rec[1], _re_cons(ni, rest)), s, si, n)
+        // Try one-more-rep (child then a STAR loop-guard) FIRST, else skip. The
+        // guard (kind 13) threads this iteration's start position `si`; on re-entry
+        // it stops looping when the child matched empty-width (no progress) —
+        // preventing `(a*)*`-style nullable-quantifier infinite recursion / stack
+        // overflow (CWE-1333). The prior code re-entered the STAR node `ni` at the
+        // same `si`, so a nullable child looped forever.
+        let guard = _re_star_guard(nodes, rec[1], si)
+        let more = _re_run(nodes, classes, _re_cons(rec[1], _re_cons(guard, rest)), s, si, n)
         if more >= 0 && more > si { return more }
         return _re_run(nodes, classes, rest, s, si, n)
     }
@@ -315,13 +332,41 @@ fn _re_run(nodes: [[int]], classes: [[int]], conts: [int], s: string, si: int, n
     if kind == 12 {                                          // REPEAT-CONT marker
         return _re_run_repeat(nodes, classes, rec[1], rec[2], rec[3], rest, s, si, n)
     }
+    if kind == 13 {                                          // STAR loop-guard
+        // rec = [13, child, start_si]. If the position is unchanged since this STAR
+        // iteration began, the child matched empty-width → stop looping and continue
+        // with the rest (the nullable-quantifier bail). Otherwise progress was made
+        // → run the child + a fresh guard for the next iteration.
+        if si == rec[2] { return _re_run(nodes, classes, rest, s, si, n) }
+        let guard = _re_star_guard(nodes, rec[1], si)
+        return _re_run(nodes, classes, _re_cons(rec[1], _re_cons(guard, rest)), s, si, n)
+    }
     return -1
 }
 
-// Lazily materialize a STAR node wrapping `child`, return its index.
-// (Append-only; safe because matching never re-parses.)
+// Materialize a STAR node wrapping `child`, return its index. The STAR view is
+// value-determined by `child` alone ([3,child,0,0]), so an already-materialized
+// record for a given child is interchangeable across every PLUS evaluation —
+// reuse it instead of pushing a fresh node each time, otherwise `nodes` leaks
+// O(starts*backtracks) identical records (matching never re-parses, so reuse is
+// exact). Append-only fallback when none exists.
 fn _re_star_view(nodes: [[int]], child: int) -> int {
+    let mut i = 0
+    let total = len(nodes)
+    while i < total {
+        let r = nodes[i]
+        if r[0] == 3 && r[1] == child { return i }
+        i = i + 1
+    }
     nodes.push([3, child, 0, 0])
+    return len(nodes) - 1
+}
+
+// Kind-13 STAR loop-guard: records the position `start_si` at which the current
+// STAR iteration began so the matcher can detect zero-width progress and bail
+// (see kind 13 in `_re_run`) — terminates nullable-quantifier loops (CWE-1333).
+fn _re_star_guard(nodes: [[int]], child: int, start_si: int) -> int {
+    nodes.push([13, child, start_si])
     return len(nodes) - 1
 }
 

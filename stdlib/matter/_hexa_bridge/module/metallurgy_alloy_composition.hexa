@@ -43,10 +43,12 @@ fn wt_to_at(csym: [str], cwt: [float]) -> [float] {
     let mut i = 0
     while i < csym.len() {
         let m = atomic_mass(csym[i])
+        if m <= 0.0 { return [] }   // unknown element (atomic_mass 0 sentinel) → unrepresentable alloy
         moles.push(cwt[i] / m)
         i = i + 1
     }
     let tot = sum_f(moles)
+    if tot <= 0.0 { return [] }   // empty/zero composition → no atomic fractions
     let mut at: [float] = []
     let mut k = 0
     while k < moles.len() {

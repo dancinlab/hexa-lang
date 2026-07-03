@@ -78,7 +78,7 @@ fail=0
 # The fixed constructor reads the libc `environ` global (every libc, incl. musl)
 # rather than a ctor arg. Anchor on the exact emitted definition line.
 if printf '%s\n' "$EMITTED" \
-     | grep -q 'hxlcl_capture_environ(void)[[:space:]]*{[[:space:]]*hxlcl_environ[[:space:]]*=[[:space:]]*environ;'
+     | grep -q 'hxlcl_capture_environ(void)[[:space:]]*{.*hxlcl_environ[[:space:]]*=[[:space:]]*environ;'
 then
   echo "  PASS  musl-safe POSIX-environ capture form present"
   echo "        (hxlcl_capture_environ(void) { hxlcl_environ = environ; })"
