@@ -2052,7 +2052,7 @@ build_runtime_a_from_source() {
         # strong def. The shim drops calloc via -DHEXA_RT_NATIVE_CALLOC (#ifndef in
         # shim.c). DEFAULT (unset) adds NO -D and NO member → shim.o + archive byte-
         # identical (release-integrity invariant). x86_64-linux ONLY.
-        if [ "${HEXA_RT_NATIVE_CALLOC:-0}" = "1" ]; then
+        if [ "${HEXA_RT_NATIVE_CALLOC:-1}" != "0" ]; then   # zero-c #29 FLIP: default-ON (x86_64-linux drops `calloc`); HEXA_RT_NATIVE_CALLOC=0 reverts
             if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
                 local _rnca_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
                 if [ -z "$_rnca_bin" ]; then
@@ -2099,7 +2099,7 @@ build_runtime_a_from_source() {
         # -DHEXA_RT_NATIVE_REALLOC (#ifndef in shim.c). DEFAULT (unset) adds NO -D and
         # NO member → shim.o + archive byte-identical (release-integrity invariant).
         # x86_64-linux ONLY.
-        if [ "${HEXA_RT_NATIVE_REALLOC:-0}" = "1" ]; then
+        if [ "${HEXA_RT_NATIVE_REALLOC:-1}" != "0" ]; then   # zero-c #29 FLIP: default-ON (x86_64-linux drops `realloc`); HEXA_RT_NATIVE_REALLOC=0 reverts
             if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
                 local _rnre_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
                 if [ -z "$_rnre_bin" ]; then
