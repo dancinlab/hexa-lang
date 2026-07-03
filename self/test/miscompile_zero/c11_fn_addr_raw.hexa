@@ -1,0 +1,33 @@
+// c11_fn_addr_raw.hexa — miscompile class: __hx_fn_addr raw-fn-ptr emit (ING #29).
+// Exercises the raw-unboxed-fn-address codegen path (the building block for the
+// signal SA_RESTORER + setjmp/longjmp naked-asm walls). Verifies:
+//   (1) __hx_fn_addr(target_fn) returns a TAG_INT (unboxed) value, NOT TAG_FN;
+//   (2) its payload equals the TAG_FN box payload from `target_fn` (value pos)
+//       — both reference the same .text entry-point symbol (reference-match:
+//       C `&fn == (void*)fn`, only the type wrapper differs).
+// A mis-lowered __hx_fn_addr would surface as a TAG_FN box (boxing not skipped),
+// a wrong symbol, or ENCODE-MISS.
+// Added by ING #29 (__hx_fn_addr intrinsic building block, 2026-06-30).
+
+fn target_fn(x: i64) -> i64 {
+    return x + 100
+}
+
+let raw_ptr = __hx_fn_addr(target_fn)
+let fn_val = target_fn
+
+let raw_tag = __hx_tag(raw_ptr)
+let fn_tag = __hx_tag(fn_val)
+
+println("raw_tag (want 0=TAG_INT):", raw_tag)
+println("fn_tag  (want !=0 TAG_FN):", fn_tag)
+
+if raw_tag != 0 {
+    println("FAIL: __hx_fn_addr returned tag", raw_tag, "(expected TAG_INT=0 — boxing not skipped)")
+} else if fn_tag == 0 {
+    println("FAIL: control — fn_val should be TAG_FN, got TAG_INT")
+} else if __hx_payload_eq(raw_ptr, fn_val) {
+    println("PASS: raw unboxed ptr == TAG_FN payload (same .text sym)")
+} else {
+    println("FAIL: payloads differ — different symbols emitted")
+}

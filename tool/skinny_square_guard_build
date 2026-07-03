@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# tool/skinny_square_guard_build — compile + link the #21 rank-2 skinny-M square
+# NON-REGRESSION guard (tool/skinny_square_guard.c).
+#
+# The guard calls only the SHIPPED decision _hx_skinny_shape_ok() (in
+# runtime_cuda.o) — it launches NO kernel, so the resulting binary runs on a
+# CPU-only host (no GPU needed). Linking pulls the CUDA archive transitively, so
+# the CUDA driver/runtime libs are linked (CPU-side link, not a GPU run).
+#
+# Env:
+#   ARCHIVE   CUDA runtime archive with _hx_skinny_shape_ok (default: the private
+#             gemmskinny deploy, else the pool default). Must be a CUDA build.
+#   CUDA_HOME CUDA toolkit root (auto-detected if unset).
+#
+# Extension-less (not .sh) per the tool/ precedent (the sidecar hook blocks .sh
+# Write/Edit). Invoke: bash tool/skinny_square_guard_build
+set -euo pipefail
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO"
+
+if [ -z "${CUDA_HOME:-}" ]; then
+    for c in /usr/local/cuda-13.0 /usr/local/cuda-12.9 /usr/local/cuda-12.8 /usr/local/cuda-12.0 /usr/local/cuda; do
+        [ -x "$c/bin/nvcc" ] && { CUDA_HOME="$c"; break; }
+    done
+    CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
+fi
+CLIB="$CUDA_HOME/targets/x86_64-linux/lib"
+ARCHIVE="${ARCHIVE:-build/runtime.gemmskinny.cuda.a}"
+B=build/cuda; mkdir -p "$B"
+
+echo "[skinny_square_guard] compile-verify (gcc -c) ..."
+gcc -O2 -w -c tool/skinny_square_guard.c -o "$B/skinny_square_guard.o"
+echo "[skinny_square_guard] compile OK (rc=0)"
+
+if [ -f "$ARCHIVE" ]; then
+    echo "[skinny_square_guard] linking against $ARCHIVE (CPU-side, no GPU launch) ..."
+    # g++ because the CUDA archive carries C++/device-link symbols.
+    g++ -O2 "$B/skinny_square_guard.o" "$ARCHIVE" \
+        -L"$CLIB" -lcudart -lcuda -lcudadevrt -lm -lpthread -lssl -lcrypto -ldl \
+        -o "$B/skinny_square_guard"
+    echo "[skinny_square_guard] linked -> $B/skinny_square_guard"
+    echo "[skinny_square_guard] run (CPU-only, no GPU) ..."
+    "$B/skinny_square_guard"
+else
+    echo "[skinny_square_guard] ARCHIVE=$ARCHIVE not found — compile-verify only (link/run skipped)."
+    echo "[skinny_square_guard] set ARCHIVE=<a CUDA runtime.a with _hx_skinny_shape_ok> to link + run."
+fi
