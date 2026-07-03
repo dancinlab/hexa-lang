@@ -5426,10 +5426,39 @@
             "detail": ""
           },
           {
-            "name": "L3 borrow — 이중게이트 해소·M3 ✅ MERGED(#4503): ①M0 실측=own-lint shipping 미배선 적발+#4088 walker 실코퍼스 ~950 diag ≈100% FP(bare-ident call-arg 과근사)→#4088 부활 기각. ②M3=hir_to_mir.hexa _bck_* intra-block loan pass(관찰전용 +411 add-only)·HEXA_BORROWCK=1(첫 && 오퍼랜드)·HX3014 warning·hir_to_mir_diags 채널·closure suspend/restore·@own 파라미터 MOVE 분류·mutator-whitelist WRITE. 검증=10/10 probe(M0 판별차: write-alias 경고·benign read-alias 침묵)·flag-OFF diag 0·CI required+faithful 3-타깃+byteeq+det green. 다음: M4 NLL liveness(분기 write=문서화 ceiling)·aprime M0 재측정(pool)·@own 소스 프로브(#4470 후)·스펙=state/hexa-own/l3_m3_spec.md",
+            "name": "L3 borrow — 이중게이트 해소·M3 ✅ MERGED(#4503): ①M0 실측=own-lint shipping 미배선 적발+#4088 walker 실코퍼스 ~950 diag ≈100% FP(bare-ident call-arg 과근사)→#4088 부활 기각. ②M3=hir_to_mir.hexa _bck_* intra-block loan pass(관찰전용 +411 add-only)·HEXA_BORROWCK=1(첫 && 오퍼랜드)·HX3014 warning·hir_to_mir_diags 채널·closure suspend/restore·@own 파라미터 MOVE 분류·mutator-whitelist WRITE. 검증=10/10 probe(M0 판별차: write-alias 경고·benign read-alias 침묵)·flag-OFF diag 0·CI required+faithful 3-타깃+byteeq+det green. 다음: M4 NLL liveness(분기 write=문서화 ceiling)·aprime M0 재측정(pool)·@own 소스 프로브(#4470 후)·스펙=state/hexa-own/l3_m3_spec.md ★M4 ✅ cross-block NLL(#4506·loan pass fixed-point over preds)=own 레인 measured ceiling 🧱. @own FP-probe 직접증명(aiden·state/hexa-own/fp_probe_and_m6_verdict.md): #4088 walker ~950 FP shape 재현 안됨(fp_callarg/fp_arr_alias_read=0·hz_write_alias=1)=Rule1 정밀도 실측. M5/M6 full &/&mut borrow-checker=NO-GO(측정벽): arena enforcement vacuous+substrate 불가(no place projection·frozen lexer)+코퍼스 0 결함클래스. M5+ 재개조건=비-arena allocator default OR 새 residual 측정.",
             "role": "",
             "id": "hexa-own-ladder-l3-borrow",
             "detail": ""
+          },
+          {
+            "name": "L4 default-ownership (Rust move-by-default · semantics A) — 사용자 지시(2026-07-04): @own opt-in이 아니라 **기본 소유권**. 정직 crux: bump-arena는 scope 중 free 안 함→borrow 위반이 use-after-free 불가→enforcement=correctness lint until PREREQ-X(비-arena free-tree HEXA_STREAM_RECLAIM allocator default). 2-lane 사다리→flip. 로드맵 SSOT=state/hexa-own/default_own_roadmap.md(#4516 MERGED).",
+            "role": "",
+            "id": "hexa-own-l4-default-ownership",
+            "detail": "",
+            "children": [
+              {
+                "name": "Lane B(enforcement default-ON·semantics 무변경·static-types flip 재현): B0 HEXA_BORROWCK_STRICT opt-in fatal HX3014(PR#4521·diag_with_severity)→B0.5 M4+@own stack 머지→B1 corpus census(pool·loan pass 자기 worklist 열거)→B2 vehicle(aprime advisory child)→B3 default-ON Warning band→B4 Warning→Error.",
+                "role": "",
+                "id": "l4-lane-b",
+                "detail": "",
+                "children": []
+              },
+              {
+                "name": "Lane A(move/borrow·PREREQ-X gated): A1 &/&mut surface(PR#4517·양파서·*T name-fold·신규토큰0)→A2 would-move census(PR#4520·HEXA_BORROWCK_CENSUS=[borrowck-census] 마커=마이그레이션 worklist 측정)→A3 HEXA_MOVE_DEFAULT opt-in move(A2 측정 후·크기 추정금지)→A4 default flip(PREREQ-X 후에만 유의미·place projection 별도).",
+                "role": "",
+                "id": "l4-lane-a",
+                "detail": "",
+                "children": []
+              },
+              {
+                "name": "정직 walls: ①arena-vacuous는 스케줄됨(PREREQ-X)·모든 Lane-B=lint until then ②move-by-default는 &-surface 전 불가(self-host _add_edge shared-handle 의존)·A1→A3 불변 ③whole-local granularity 천장(no place projection)→B4 fatal시 FP원 ④gen2 vehicle=aprime child만(warm-cache/비-linux cold lag) ⑤Rule2=#4470 머지 전 inert.",
+                "role": "",
+                "id": "l4-honest-walls",
+                "detail": "",
+                "children": []
+              }
+            ]
           },
           {
             "name": "마일스톤: M1 defer native-패리티 포트(신규 TokenKind/ExprKind/런타임심볼 3금지 — carrier 관용구·기존 MIR kind만·frozen blob 보존) → M2 @own 스코프-엔드 drop → M3 own-lint(warning·codegen 무변경) → M4 error 승격+double-free/UAF selftest군+anima scratch 재현 → M5 region escape → M6 borrow go/no-go. 각 단 독립 머지·어디서 멈춰도 완결.",
