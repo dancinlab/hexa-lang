@@ -396,6 +396,31 @@ fn parse_type() -> TypeRef {
         }
         return TypeRef { kind: "named", name: pname, args: [], span: t.span }
     }
+    // `&T` / `&mut T` borrow type (HEXA-OWN L4 A1 — surface only). Rides the
+    // exact `*T` name-fold precedent above (:390-398): consume the leading
+    // `&` (and an optional `mut`, already a hard TokenKind::KwMut in type
+    // position) and fold the marker into the type-name string ("&T" / "&mut T")
+    // — zero new TokenKind, zero TypeRef schema change, no semantics. A1 is a
+    // PARSE-ONLY prep rung: the borrow marker is carried in the name so a later
+    // rung can read "shared", but there is NO borrow checking (Lane B) and NO
+    // move (A3) yet; the generic `named:` lowering treats it transparently
+    // exactly as `*T`. Purely additive — the corpus has no `&` in type
+    // position, so the emitted binary + diag stream stay byte-identical
+    // (gen3≡gen4).
+    if check_kind(TokenKind::Amp) {
+        advance()
+        let mut bmark = "&"
+        if check_kind(TokenKind::KwMut) {
+            advance()
+            bmark = "&mut "
+        }
+        let pointee = parse_type()
+        let mut bname = bmark
+        if len(pointee.name) > 0 {
+            bname = bmark + pointee.name
+        }
+        return TypeRef { kind: "named", name: bname, args: [], span: t.span }
+    }
     if check_kind(TokenKind::LBracket) {
         advance()
         let inner = parse_type()
@@ -694,6 +719,32 @@ fn parse_unary() -> Expr {
             kind: ExprKind::UnOp,
             span: op.span,
             text: op.text,
+            annotations: [],
+            children: kids,
+            atlas_ref: empty_atlas()
+        }
+    }
+    // `&x` / `&mut x` borrow-of expression (HEXA-OWN L4 A1 — surface only).
+    // Mirrors the Minus/Bang/Tilde prefix arm above: `&` at expression START
+    // is currently a parse error (binary Amp needs a left operand, consumed in
+    // parse_bitwise AFTER its left), so this arm is purely additive — the
+    // binary `a & b` path is UNTOUCHED. Reuse ExprKind::UnOp with text "&" /
+    // "&mut" (dispatch-on-text, like "-"/"!"/"~"); NO new ExprKind, NO lowering
+    // — A3 move / Lane-B borrow-check are later rungs.
+    if check_kind(TokenKind::Amp) {
+        let op = advance()
+        let mut optext = "&"
+        if check_kind(TokenKind::KwMut) {
+            advance()
+            optext = "&mut"
+        }
+        let inner = parse_unary()
+        let mut kids = []
+        kids.push(inner)
+        return Expr {
+            kind: ExprKind::UnOp,
+            span: op.span,
+            text: optext,
             annotations: [],
             children: kids,
             atlas_ref: empty_atlas()
