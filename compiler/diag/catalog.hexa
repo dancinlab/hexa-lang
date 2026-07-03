@@ -372,6 +372,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3014",
+        title: "shared-handle aliasing hazard",
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "shared-handle hazard ({rule}): `{name}` is used after `{other}` at line {line} in the same block; both names refer to the same underlying value",
+        explain: "Opt-in MIR intra-block loan pass (`HEXA_BORROWCK=1`), HEXA-OWN L3 M3. hexa aggregates (arrays, map-backed structs) are REFERENCE values: `let b = a` copies the handle, not the buffer, so a write through one name is visible through every alias. This warning fires on two intra-block shapes, both at HIR→MIR lowering time (native aprime frontend; spans in hand): Rule 1 'aliased write' — a value is used through one name after the SAME underlying value was written through a DIFFERENT name (field-assign `x.f = v`, index-assign `a[i] = v`, or a receiver-mutating method `a.push/pop/truncate/set`) earlier in the same straight-line block — the mutate-one-alias-then-read-the-other shape that silently observes the mutation; benign read-only aliasing (`let b = a` + reads through both) never fires. Rule 2 'use after move' — a binding whose value was passed into a callee parameter declared `@own` (ownership transfer) is used again in the same block; call args into non-`@own` params are READS, never moves, so ordinary calls never fire. Scope is deliberately intra-block (every if/while/match/for splits blocks — cross-branch flows are the L3 M4 dataflow rung) and whole-local (no place projections in MIR Operands: a write to `x.a` also arms reads of `x.b`). Aliases created via fn returns, struct-field/array-element loads, cross-param aliasing, and unknown-typed locals are not tracked (precision-first: quiet false-negatives over loud false-positives). Non-fatal WARNING band: the build compiles and codegen is untouched — the pass only observes the lowering; the default build (flag unset) populates no registry and the diagnostic stream plus emitted binary are byte-identical (byteeq-neutral). Fix: don't interleave a write through one alias with uses through another in the same block — mutate through a single name, copy the aggregate element-by-element if independent buffers were intended, or restructure so the moved-from binding is not reused.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
