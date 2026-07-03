@@ -2731,6 +2731,10 @@ build_runtime_a_from_source() {
             done
             echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA: runtime.cuda.a member parity OK"
         fi
+        # zero-c #29 S1: FFI-dyn TU (dlopen/dlsym/host_ffi_*) compiled to .o but NOT ar'd
+        # into canonical runtime.a — keeps runtime.a nm-UND dl*-free; program/driver links
+        # pick up build/runtime_ffi_dyn.o. (state/zeroc-29-s1-ffi-floor-partition-spec)
+        [ -f "$ROOT/self/runtime_ffi_dyn.c" ] && $CC $CFLAGS -D_FORTIFY_SOURCE=0 -I self -c "$ROOT/self/runtime_ffi_dyn.c" -o build/runtime_ffi_dyn.o
         echo "$RA"
         return 0
     fi
@@ -2761,6 +2765,8 @@ build_runtime_a_from_source() {
         done
         echo "[stage_resolve_runtime_a] CUDA-R1: runtime.cuda.a native-core parity OK ($(echo $extra_obj | wc -w) seed members present)"
     fi
+    # zero-c #29 S1: FFI-dyn TU compiled to .o (not ar'd) — see Case-B note above.
+    [ -f "$ROOT/self/runtime_ffi_dyn.c" ] && $CC $CFLAGS -D_FORTIFY_SOURCE=0 -I self -c "$ROOT/self/runtime_ffi_dyn.c" -o build/runtime_ffi_dyn.o
     echo "$RA"
 }
 
