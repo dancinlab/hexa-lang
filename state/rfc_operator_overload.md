@@ -91,4 +91,4 @@ interpreter-runnable parser/AST anchor.
 ## Verification gate (mini = git/gh only)
 
 DEFAULT 3-target byteeq + selfhost-byteeq + faithful-nobaseline + shipping smoke
-on aiden / summer / Blacksmith CI before any merge. Keep default-OFF.
+on aiden / summer / github-hosted PR-CI before any merge. Keep default-OFF.
