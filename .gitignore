@@ -307,6 +307,7 @@ self/native/thread.c
 self/native/timegm_native.c
 self/native/wait.c
 self/runtime.c
+self/runtime_ffi_dyn.c
 self/runtime_core.c
 self/runtime_hi_gen.c
 # RFC 061 ∅ r13 — runtime_hi_seed.c is the GENERATED artifact of the .hexa SSOT
