@@ -175,8 +175,15 @@ pub fn rt_array_slice_float(arr: [float], start: int, end: int) -> [float] {
 // and values in normal scientific range, byte-identical to libm.
 fn _rt_int_to_dec_str(n: int) -> string {
     if n == 0 { return "0" }
-    let mut digits: [int] = []
+    // Sign handling (Python-canonical, mirroring the C-substrate %d handler's `neg`
+    // idiom at self/runtime_emit_full.hexa:741-746): negatives were collecting zero
+    // digits (`while x > 0` is false for x < 0) and returning "" — a real to_string
+    // defect. Emit a '-' prefix and format the magnitude. int is native BigInt, so
+    // `0 - x` cannot overflow (no INT_MIN edge).
+    let mut neg = false
     let mut x = n
+    if x < 0 { neg = true; x = 0 - x }
+    let mut digits: [int] = []
     while x > 0 {
         let d = x - (x / 10) * 10
         digits = digits.push(48 + d)
@@ -189,6 +196,7 @@ fn _rt_int_to_dec_str(n: int) -> string {
         bytes = bytes.push(digits[i])
         i = i - 1
     }
+    if neg { return "-" + bytes_to_str_raw(bytes) }
     return bytes_to_str_raw(bytes)
 }
 

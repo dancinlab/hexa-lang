@@ -397,6 +397,29 @@ pub let mut _lr_globals: [Local] = []
 pub let mut _lr_fn_ref_names: [string] = []
 pub let mut _lr_fn_ref_arities: [i64] = []
 
+// ── defer state (HEXA-OWN M1 — native port of gen2's flags+goto) ─────
+// Mirrors self/codegen.hexa `_gen2_defer_bodies` / `_gen2_defer_flag_count`
+// (2739-2740): _lower_fn pre-scans the fn's HIR body for "defer" nodes.
+// COUNT==0 → every field below stays inert and the lowering is
+// byte-for-byte identical to a defer-free build (the whole bit-identity
+// requirement). COUNT>0 → _lower_fn allocates one i64 flag local per
+// lexical defer (init 0) plus a `__defer_ret` carrier local and an
+// up-front exit block; the "defer" case in _lower_hexpr sets the next
+// flag to 1 (reached-flag registration = at-most-once, incl. loops) and
+// stashes the body HExpr here; the "return" case reroutes through
+// `__defer_ret` + STMT_BR to the exit block; _lower_fn materializes the
+// exit block as reverse-order (LIFO) STMT_BR_COND-guarded drains ending
+// in a single STMT_RETURN(__defer_ret). Only existing MIR stmt kinds are
+// used — no new runtime symbols, no codegen/emit changes.
+// _lower_closure suspends `_lr_defer_active` for the lambda body (a
+// closure is its own call frame; a `defer` inside one is diagnosed).
+pub let mut _lr_defer_active = false
+pub let mut _lr_defer_flag_ids: [i64] = []
+pub let mut _lr_defer_bodies: [HExpr] = []
+pub let mut _lr_defer_next = 0
+pub let mut _lr_defer_exit_block = -1
+pub let mut _lr_defer_ret_local = -1
+
 // arity (param count) of a top-level fn name, or -1 if not a known fn.
 fn _lr_fn_ref_arity(name: string) -> i64 {
     let mut i = 0
@@ -966,7 +989,28 @@ fn _is_known_hexpr_kind(k: string) -> bool {
     if k == "try" { return true }
     if k == "throw" { return true }
     if k == "closure" { return true }
+    if k == "defer" { return true }
     return false
+}
+
+// HEXA-OWN M1 — pre-scan a fn's HIR body for `defer` nodes, mirroring
+// self/codegen.hexa::_gen2_count_defers (2752-2781): recurse into every
+// statement container but NEVER into a nested closure body — a closure is
+// a separate call frame with its own (unsupported-in-M1) defer scope.
+// Counts nodes that may later be skipped by has_returned short-circuits
+// (e.g. a defer after `return`); the drain loop iterates only over
+// REGISTERED defers (_lr_defer_next), so an over-count just leaves an
+// unused flag local behind (dead-stored, DCE-safe).
+fn _count_defers_hexpr(e: HExpr) -> i64 {
+    if e.kind == "closure" { return 0 }
+    let mut n = 0
+    if e.kind == "defer" { n = 1 }
+    let mut i = 0
+    while i < len(e.children) {
+        n = n + _count_defers_hexpr(e.children[i])
+        i = i + 1
+    }
+    return n
 }
 
 // ── RFC closure C2 — free-variable analysis ─────────────────
@@ -1547,6 +1591,50 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 }
             }
         }
+        // ING #29 literal-∅ (2026-06-30): `__hx_fn_addr(name)` — raw-unboxed-fn-ptr
+        // intrinsic. The callee is the intrinsic name; the SINGLE arg MUST be a bare
+        // ident that is a top-level `fn` name (validated via _lr_fn_ref_arity ≥ 0, the
+        // SAME resolver fn_ref uses). Lower to op="__hx_fn_addr" args=[name_str] — the
+        // codegen STMT_CALL special-case emits the raw .text address (lea/adrp+add)
+        // WITHOUT the hexa_fn_new_native TAG_FN boxing that fn_ref performs. This is the
+        // lowering shape shared with carrier_call (bare-fn-ident name extraction). A
+        // non-fn-ident arg (local/global/string) falls through to normal call lowering,
+        // which will then fail to find a runtime `__hx_fn_addr` symbol → clear error
+        // rather than silent mis-emit. Runs BEFORE the named-call path so the bare fn
+        // ident isn't first boxed as a fn_ref value. ADD-only / byte-eq NEUTRAL.
+        if len(e.children) > 0 {
+            let fc0 = e.children[0]
+            if fc0.kind == "ident" {
+                let fcn = _strip_mut_prefix(fc0.text)
+                if fcn == "__hx_fn_addr"
+                    && _mir_lookup_global(ctx, fcn) < 0 {
+                    // Need exactly 1 arg: a bare fn-ident.
+                    if len(e.children) == 2 && e.children[1].kind == "ident" {
+                        let argn = _strip_mut_prefix(e.children[1].text)
+                        // Must be a known top-level fn (mirrors fn_ref's guard).
+                        if _lr_fn_ref_arity(argn) >= 0
+                            && _mir_lookup(ctx, argn) < 0
+                            && _mir_lookup_global(ctx, argn) < 0 {
+                            let mut fctx = ctx
+                            let mut fa_args: [Operand] = []
+                            fa_args.push(_const_str_op(argn))   // args[0] = fn symbol name
+                            fctx = _fresh_local(fctx, e.typ, "fnaddr_ret")
+                            let fdst = _lr_locals[len(_lr_locals) - 1]
+                            let fs = Stmt {
+                                kind: STMT_ASSIGN,
+                                dst: fdst,
+                                op: "__hx_fn_addr",
+                                args: fa_args,
+                                target_block: -1,
+                                target_block_else: -1
+                            }
+                            fctx = _push_stmt(fctx, fs)
+                            return _value(fctx, _local_op(fdst.id))
+                        }
+                    }
+                }
+            }
+        }
         let mut ctx_r = ctx
         let mut callee_text = ""
         let mut arg_ops: [Operand] = []
@@ -1787,6 +1875,41 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             ctx2 = r.ctx
             args.push(r.operand)
         }
+        // HEXA-OWN M1 — fn-exit single-exit epilogue (Q2). When the
+        // enclosing fn registered any defer, a `return` reroutes:
+        // `__defer_ret = value` (bare return keeps the void init) +
+        // STMT_BR to the pre-allocated exit block, where the LIFO drain
+        // and the single STMT_RETURN live. Defer-free fns
+        // (_lr_defer_active false) take the original path below,
+        // byte-identical. Return-site inline drains are deliberately NOT
+        // used — a textually-later defer reached via a loop back-edge
+        // would be missed; only the single exit block sees every flag.
+        if _lr_defer_active {
+            if len(args) > 0 {
+                let rs = Stmt {
+                    kind: STMT_ASSIGN,
+                    dst: _lr_locals[_lr_defer_ret_local],
+                    op: "assign",
+                    args: args,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx2 = _push_stmt(ctx2, rs)
+            }
+            let from_id = ctx2.cur_block
+            let bs = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: _lr_defer_exit_block,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt(ctx2, bs)
+            ctx2 = _add_edge(ctx2, from_id, _lr_defer_exit_block)
+            ctx2 = _set_returned(ctx2, true)
+            return _no_value(ctx2)
+        }
         let s = Stmt {
             kind: STMT_RETURN,
             dst: _miss_local(),
@@ -1797,6 +1920,47 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         }
         ctx2 = _push_stmt(ctx2, s)
         ctx2 = _set_returned(ctx2, true)
+        return _no_value(ctx2)
+    }
+
+    // ── defer (HEXA-OWN M1) — registration site ────────────
+    // Emits ONLY `__defer_flag_<slot> = 1` (reached-flag registration:
+    // at-most-once, incl. loop bodies — gen2 semantics, unlike Go's
+    // once-per-iteration) and stashes the body HExpr for the fn-exit
+    // drain _lower_fn materializes. The body is NOT lowered here, so its
+    // effects run at drain time with drain-time variable values (no
+    // registration-time capture — gen2 parity, documented divergence
+    // from Go).
+    if k == "defer" {
+        if !_lr_defer_active || _lr_defer_next >= len(_lr_defer_flag_ids) {
+            // Unsupported lowering position (closure body — its own call
+            // frame; M1 scopes defer to top-level fn bodies). Same
+            // diagnostic code as the parser's assignment-body reject.
+            let mut b = diag_new("HX0014")
+            b = diag_span(b, e.span)
+            b = diag_arg(b, "found", "closure body")
+            _lr_diag.push(diag_emit(b))
+            return _no_value(ctx)
+        }
+        let slot = _lr_defer_next
+        _lr_defer_next = _lr_defer_next + 1
+        let mut body = HExpr {
+            kind: "block", span: e.span, typ: e.typ, text: "",
+            children: [], atlas: e.atlas, def: e.def, annotations: []
+        }
+        if len(e.children) > 0 { body = e.children[0] }
+        _lr_defer_bodies.push(body)
+        let mut fargs: [Operand] = []
+        fargs.push(_const_int_op(1))
+        let fs = Stmt {
+            kind: STMT_ASSIGN,
+            dst: _lr_locals[_lr_defer_flag_ids[slot]],
+            op: "assign",
+            args: fargs,
+            target_block: -1,
+            target_block_else: -1
+        }
+        let ctx2 = _push_stmt(ctx, fs)
         return _no_value(ctx2)
     }
 
@@ -3269,6 +3433,15 @@ fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
     // enclosing fn sees (no per-ctx `globals` seed needed any more).
     let _lr_saved_arrays = _lr_ctx_save()
     _lr_ctx_fresh()
+    // HEXA-OWN M1 — suspend the enclosing fn's defer state for the lambda
+    // body: a closure is its own call frame, so its `return`s must emit
+    // plain STMT_RETURN (never the enclosing fn's __defer_ret reroute) and
+    // a `defer` inside it hits the HX0014 unsupported-position diagnostic
+    // instead of stealing an enclosing flag slot. Restored right after the
+    // enclosing arrays are restored below. No-op (false→false) when the
+    // enclosing fn has no defers — byte-identity preserved.
+    let _lr_saved_defer_active = _lr_defer_active
+    _lr_defer_active = false
     let mut lctx = _new_lower_ctx()
     lctx = _new_block(lctx)
     let lam_entry = _lr_blocks[len(_lr_blocks) - 1].id
@@ -3349,11 +3522,13 @@ fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
         entry_block: lam_entry,
         arena_root: lctx.arena_root,
         def_line: e.span.line,
-        gpu_kind: GPU_KIND_CPU
+        gpu_kind: GPU_KIND_CPU,
+        is_naked: false
     }
     _lr_lambdas.push(lam_func)
     // restore the enclosing fn's accumulators before lowering the site.
     _lr_ctx_restore(_lr_saved_arrays)
+    _lr_defer_active = _lr_saved_defer_active
 
     // ── 2. lower the closure SITE in the enclosing ctx ───────
     // env array: hexa_array_new() then push each captured value, in the
@@ -3969,6 +4144,64 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
         ann_i = ann_i + 1
     }
 
+    // HEXA-OWN M1 — defer pre-scan (mirrors _gen2_count_defers gating,
+    // self/codegen.hexa:2737-2738 "zero-cost when absent"). COUNT==0 →
+    // the module defer state is reset to inert and NOTHING below emits:
+    // no extra local, no extra block, no extra stmt — the lowering is
+    // byte-for-byte identical to today (the entire bit-identity
+    // requirement; cf. the @naked default-false precedent). COUNT>0 →
+    // allocate the single exit block up-front (so every return site BRs
+    // to a known id), a `__defer_ret` carrier local initialized to void
+    // (bare `return` in a unit fn keeps returning void), and one i64
+    // flag local per lexical defer, each initialized to 0.
+    let __defer_count = _count_defers_hexpr(it.body)
+    _lr_defer_active = false
+    _lr_defer_flag_ids = []
+    _lr_defer_bodies = []
+    _lr_defer_next = 0
+    _lr_defer_exit_block = -1
+    _lr_defer_ret_local = -1
+    if __defer_count > 0 {
+        _lr_defer_active = true
+        ctx = _new_block(ctx)
+        _lr_defer_exit_block = _lr_blocks[len(_lr_blocks) - 1].id
+        ctx = _fresh_local(ctx, it.sig_return, "__defer_ret")
+        _lr_defer_ret_local = _lr_locals[len(_lr_locals) - 1].id
+        let mut __ri: [Operand] = []
+        __ri.push(_const_void_op())
+        let __rs = Stmt {
+            kind: STMT_ASSIGN,
+            dst: _lr_locals[_lr_defer_ret_local],
+            op: "let",
+            args: __ri,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx = _push_stmt(ctx, __rs)
+        let __any_t = Type {
+            kind: "?", def: DefId { module: "", index: -1 },
+            args: [], ret: [], domain: "", unit: ""
+        }
+        let mut __df = 0
+        while __df < __defer_count {
+            ctx = _fresh_local(ctx, __any_t, "__defer_flag_" + to_string(__df))
+            let __fl = _lr_locals[len(_lr_locals) - 1]
+            _lr_defer_flag_ids.push(__fl.id)
+            let mut __fi: [Operand] = []
+            __fi.push(_const_int_op(0))
+            let __fs = Stmt {
+                kind: STMT_ASSIGN,
+                dst: __fl,
+                op: "let",
+                args: __fi,
+                target_block: -1,
+                target_block_else: -1
+            }
+            ctx = _push_stmt(ctx, __fs)
+            __df = __df + 1
+        }
+    }
+
     // RFC 071 P5++ follow-on (N101) — nested-loop matmul auto-synth.
     // BEFORE the normal body lowering, peek at (i) the fn-level
     // `@gpu_kernel` annotation, (ii) the canonical (a, b, c, M, N, K)
@@ -4018,6 +4251,102 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
         br_operand = br.operand
     }
 
+    if __defer_count > 0 {
+        // HEXA-OWN M1 — single-exit epilogue materialization (Q2).
+        // 1) Implicit fall-through mirrors a `return <last value>`:
+        //    stash the trailing block value into __defer_ret and BR to
+        //    the exit block.
+        if !ctx.has_returned {
+            if br_has_value {
+                let mut __fa: [Operand] = []
+                __fa.push(br_operand)
+                let __fs2 = Stmt {
+                    kind: STMT_ASSIGN,
+                    dst: _lr_locals[_lr_defer_ret_local],
+                    op: "assign",
+                    args: __fa,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx = _push_stmt(ctx, __fs2)
+            }
+            let __ft = ctx.cur_block
+            let __fb = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: _lr_defer_exit_block,
+                target_block_else: -1
+            }
+            ctx = _push_stmt(ctx, __fb)
+            ctx = _add_edge(ctx, __ft, _lr_defer_exit_block)
+        }
+        // 2) Exit block: reverse-registration-order (LIFO) drain. Each
+        //    REGISTERED defer contributes `br_cond flag_i ? body_i :
+        //    next_i`; the body is lowered HERE (bindings are never popped
+        //    in this pass — see _bind's "nothing ever pops _lr_bindings"
+        //    note — so drain-time name resolution sees the fn's locals,
+        //    matching gen2's flat-hoisted C names and drain-time-value
+        //    semantics). The chain ends in the single STMT_RETURN of
+        //    __defer_ret. Runs BEFORE the fn arena epilogue by
+        //    construction (codegen emits the arena return at
+        //    STMT_RETURN), preserving gen2's drain-then-arena order.
+        ctx = _set_cur_block(ctx, _lr_defer_exit_block)
+        let mut __di2 = _lr_defer_next - 1
+        while __di2 >= 0 {
+            ctx = _new_block(ctx)
+            let __body_id = _lr_blocks[len(_lr_blocks) - 1].id
+            ctx = _new_block(ctx)
+            let __next_id = _lr_blocks[len(_lr_blocks) - 1].id
+            let __chk_id = ctx.cur_block
+            let mut __ca: [Operand] = []
+            __ca.push(_local_op(_lr_defer_flag_ids[__di2]))
+            let __cs = Stmt {
+                kind: STMT_BR_COND,
+                dst: _miss_local(),
+                op: "",
+                args: __ca,
+                target_block: __body_id,
+                target_block_else: __next_id
+            }
+            ctx = _push_stmt_to(ctx, __chk_id, __cs)
+            ctx = _add_edge(ctx, __chk_id, __body_id)
+            ctx = _add_edge(ctx, __chk_id, __next_id)
+            ctx = _set_cur_block(ctx, __body_id)
+            let __dr = _lower_hexpr(ctx, _lr_defer_bodies[__di2])
+            ctx = __dr.ctx
+            if !ctx.has_returned {
+                let __de = ctx.cur_block
+                let __db = Stmt {
+                    kind: STMT_BR,
+                    dst: _miss_local(),
+                    op: "",
+                    args: [],
+                    target_block: __next_id,
+                    target_block_else: -1
+                }
+                ctx = _push_stmt(ctx, __db)
+                ctx = _add_edge(ctx, __de, __next_id)
+            }
+            ctx = _set_cur_block(ctx, __next_id)
+            __di2 = __di2 - 1
+        }
+        let mut __ra: [Operand] = []
+        __ra.push(_local_op(_lr_defer_ret_local))
+        let __rr = Stmt {
+            kind: STMT_RETURN,
+            dst: _miss_local(),
+            op: "",
+            args: __ra,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx = _push_stmt(ctx, __rr)
+        ctx = _set_returned(ctx, true)
+        _lr_defer_active = false
+    }
+
     if !ctx.has_returned {
         let mut args: [Operand] = []
         if br_has_value { args.push(br_operand) }
@@ -4045,12 +4374,21 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
     // monomorphization candidate (the same single-surface attribute R1
     // already parses + the surface test exercises).
     let mut __is_specialize = false
+    // ING #29 literal-∅ (2026-06-30): `@naked` fn attribute — detect on the HIR
+    // FnDecl (same single-surface @<name> annotation mechanism as @gpu_kernel /
+    // @specialize). Propagated to MFunc.is_naked so the codegen SKIPS the
+    // compiler-generated prologue/epilogue (reference-match: GCC
+    // __attribute__((naked)) / rustc #[naked] / zig callconv(.Naked)). Building
+    // block for the SA_RESTORER (signal) + setjmp/longjmp walls. DEFAULT false
+    // on every existing fn → byte-eq NEUTRAL (no byteeq-path fn carries @naked).
+    let mut __is_naked = false
     let mut __ai = 0
     while __ai < len(it.annotations) {
         let __an = it.annotations[__ai].name
         if __an == "gpu_kernel" { __gpu_kind = GPU_KIND_KERNEL }
         if __an == "gpu_device" { __gpu_kind = GPU_KIND_DEVICE }
         if __an == "specialize" { __is_specialize = true }
+        if __an == "naked" { __is_naked = true }
         __ai = __ai + 1
     }
     // F6 P0c-2 — forced copy: it.name is the HItem's name handle
@@ -4089,7 +4427,8 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
         // #13 DWARF .loc — carry the fn-definition source line through to
         // codegen so it can emit a `.loc 1 <line> 0` directive.
         def_line: it.span.line,
-        gpu_kind: __gpu_kind
+        gpu_kind: __gpu_kind,
+        is_naked: __is_naked
     }
 }
 
