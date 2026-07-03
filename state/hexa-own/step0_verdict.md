@@ -32,3 +32,7 @@
 `hexa build`의 [2/2] clang 링크가 ① `-lm` 미포함(log2/fma/sin/cos undefined) ② 로그인 env의 stale `HEXA_PREBUILT_RUNTIME`(~/core 타 체크아웃 runtime.a)을 조용히 채택 — pool cuda+ssl 링크벽(memory)과 동족. 우회=`LIBS="-lm -ldl"`+`HEXA_PREBUILT_RUNTIME=<fresh worktree>/build/runtime.a` 명시. 근본 수정 후보=hexa build가 -lm을 기본 포함(수학 심볼은 runtime.a 상수 의존)·PREBUILT 경로-불일치 경고.
 
 재현: state/hexa-own/step0_pool_commands.md + LIBS/HEXA_PREBUILT_RUNTIME 오버라이드(v4). 산출물: /tmp/step0_{run,gen2,freshrun,native}.out (aiden).
+
+## fix 최종 실측 (aiden · hexat 재빌드 · 캐시 퍼지 · PR #4467)
+
+`GEN2==EXPECTED-POSTFIX` ✅ · `GEN2==NATIVE` ✅ · defer_test **14게이트 ALL PASS** ✅(신규 C4 게이트 `-> 2;` 포함). 검증 중 노출된 2차 결함까지 동반 수정: `_gen2_count_defers`가 ExprStmt-래핑 if-expr 바디를 미하강 → 선언 언더카운트(`__defer_1` undeclared C 에러·main에도 기존재). 부수 규명: defer_test는 `tool/stdlib_selftest_aggregate.hexa`(--ci-gate)가 수집하지만 이 aggregate 자체가 "CI gate (future)" — **PR 게이트 미배선**이라 기존 결함이 CI에서 안 들킨 것(후속=aggregate --strict의 PR 게이트 승격 검토). 검증 함정 재확인: stale-hexat(빌드 후 hexat 미갱신)이 1차 검증 위양성 원인 — hexat 삭제 후 release_build로 강제 재생.
