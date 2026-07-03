@@ -25,7 +25,7 @@ Governance → rules below · history → CHANGELOG.jsonl.
 ## Release integrity — absolute top guardrail
 - do: self-host proceeds **only if it doesn't break the used release**, else defer — **release integrity > self-host progress**.
 - do: merge codegen/runtime only after **byteeq 3-target GREEN + shipping smoke**; bit-identical ungated, bit-changing behind opt-in toggles; then sync pool hosts.
-- do: one channel = **`stable`** (`edge`·`test` retired), verified via Blacksmith byteeq + pool builds; `finalize` flips Latest on 3/3.
+- do: one channel = **`stable`** (`edge`·`test` retired), verified via github-hosted PR-CI byteeq + pool builds; `finalize` flips Latest on 3/3.
 - dont: never merge changes breaking the user-facing path (shipping binaries·`build`/`run`·stdlib·C-fallback) for a self-host gate.
 - dont: **never promote on "only x86 green"** — require all-3-target GREEN + install.sh consumer smoke GREEN.
 
@@ -76,7 +76,7 @@ Governance → rules below · history → CHANGELOG.jsonl.
 - dont: never commit a >50-line deletion from `stdlib`/`runtime`/`codegen`/`rt` without a scoped subject or `WIPE-OK:` trailer.
 
 ## CI · self-hosted runners
-- do: **cloud CI = Blacksmith** 3-target runs all PR gates; if the local SSH pool is down, verify via **a PR**.
+- do: **cloud CI = github-hosted runners** 3-target run all PR gates (Blacksmith retired for cost, #4015→#4016 revert); if the local SSH pool is down, verify via **a PR**.
 - do: heavy faithful/byteeq builds → **self-hosted runners** (`ghost`·`aiden`·`summer`); arm64/darwin/ephemeral stay on cloud (no arm64 self-hosted host).
 - do: public-repo fork-PRs run on self-hosted only after maintainer approval (RCE).
 - dont: **never let the required gate (`selfhost-gates-summary`) depend on an offline/unverified runner** — promote a job only after measuring it green.

@@ -1,0 +1,20 @@
+// k1_sum — the 2.86x slice from state/codegen-quality-probe-verdict.md.
+// Pure scalar reduce `s = (s + i*1009) % M`, no array overhead = cleanest
+// signal for the HEXA_UNBOX_INFER (R1) accumulator-unbox lever.
+//
+// Under the flag the codegen should:
+//   • admit `s` (mut accumulator, every write provably TAG_INT even through %)
+//   • recursively certify `i*1009` (int-closed `*` BinOp) as known-int
+//   → the outer `s + i*1009` lowers to an INLINE `((HexaVal){.tag=TAG_INT,.i=…})`
+//     compound literal (NO `hexa_add` call); the `% M` stays BOXED (hexa_mod,
+//     div-zero throw preserved). Net: 1 fewer runtime call/iter (hexa_add gone).
+// Output must be IDENTICAL with the flag OFF vs ON (gate 4 parity).
+fn main() {
+    let M = 1000000007
+    let mut s = 0
+    let N = 200000000
+    for i in 0..N {
+        s = (s + i * 1009) % M
+    }
+    println(s)
+}

@@ -19,7 +19,7 @@ permissions:
 
 concurrency:
   group: selfhost-gates-summary-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}  # main push runs are NOT cancelled — supersede-cancel on the serial darwin runner left required-gate history holes (anima run 28651287277 precedent, 2026-07-03); PR runs still cancel-on-supersede like every sibling selfhost gate
 
 jobs:
   selfhost-gates-summary:
