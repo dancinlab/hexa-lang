@@ -1889,6 +1889,94 @@ fn _gen2_arm_body_is_void(body) {
     return false
 }
 
+// ── HEXA-OWN L2.5 Rule A — @no_arena zero-arena-alloc contract ADVISORY scan ──
+// @no_arena promises the fn never touches the VAL arena: gen2_fn_decl skips
+// __hexa_fn_arena_enter/__hexa_fn_arena_return emission because these fns are
+// called from inside heapify/scope-pop (runtime scope rewind), where ANY
+// val-arena bump allocation corrupts the rewind — stdlib/runtime/numeric.hexa
+// (rt_eq_int/rt_cmp_le 🚫 markers) documents the corruption class (infinite
+// scope_pop re-entry → SIGSEGV). Composite LITERALS violate that promise on
+// the default arena-ON path (hexa_val_arena_on):
+//   Array/Tuple/TupleLit → hexa_array_new + hexa_array_push chain; the items
+//                          buffer is hexa_array_arena_alloc_items when arena on
+//   MapLit               → hexa_map_new + hexa_map_set; the HexaMapTable
+//                          slots/vals/order arrays are hexa_val_arena_calloc
+//   StructInit           → HexaValStruct via hexa_val_arena_calloc
+// String concat is deliberately NOT flagged: sanctioned @no_arena fns concat
+// strings (rt_cmp_* throw paths, rt_to_string_array/map) — the string arena is
+// a separate substrate with a heap-malloc fallback, distinct from the val-arena
+// scope stack the @no_arena contract protects.
+// ADVISORY ONLY, opt-in via HEXA_ARENA_ESCAPE_LINT=1 (the L2.5 lint flag, see
+// compiler/check/types.hexa Rule B / HX3013): the scan writes to stderr via
+// eprintln and NEVER pushes to chunks — emitted C is byte-identical flag-ON by
+// construction; flag-OFF the scan never runs (env gate is the FIRST && operand
+// at the gen2_fn_decl call site), so stderr is also byte-identical.
+// Scope: literal materialization forms only — positional struct-constructor
+// calls `Pt(…)`, method-call allocators (.push into fresh arrays), and string
+// concat are out of scope for r1. Nested FnDecl/Lambda bodies are skipped:
+// they emit as their OWN C functions (normally arena-wrapped) and do not run
+// inside this fn's @no_arena frame.
+let mut _noarena_arr_hits = 0
+let mut _noarena_map_hits = 0
+let mut _noarena_struct_hits = 0
+
+fn _noarena_scan_list(nodes) {
+    if type_of(nodes) != "array" { return 0 }
+    let mut i = 0
+    while i < len(nodes) {
+        _noarena_scan_node(nodes[i])
+        i = i + 1
+    }
+    return 0
+}
+
+fn _noarena_scan_node(node) {
+    // Empty AST slots are "" strings; literal payloads (IntLit.value) can be
+    // non-map scalars — positively gate on "map" (every parser node is a #{}
+    // full-template map, cf. _stmt_escapes_name's slot discipline).
+    if type_of(node) != "map" { return 0 }
+    let k = node.kind
+    // Nested fns/lambdas: own C fn, own arena frame — not this fn's contract.
+    if k == "FnDecl" || k == "Lambda" { return 0 }
+    if k == "Array" || k == "Tuple" || k == "TupleLit" { _noarena_arr_hits = _noarena_arr_hits + 1 }
+    if k == "MapLit" { _noarena_map_hits = _noarena_map_hits + 1 }
+    if k == "StructInit" { _noarena_struct_hits = _noarena_struct_hits + 1 }
+    _noarena_scan_node(node.left)
+    _noarena_scan_node(node.right)
+    _noarena_scan_node(node.value)
+    _noarena_scan_node(node.cond)
+    _noarena_scan_node(node.iter_expr)
+    _noarena_scan_list(node.items)
+    _noarena_scan_list(node.args)
+    _noarena_scan_list(node.fields)
+    _noarena_scan_list(node.then_body)
+    _noarena_scan_list(node.else_body)
+    _noarena_scan_list(node.body)
+    _noarena_scan_list(node.arms)
+    return 0
+}
+
+// Driver: reset counters, walk the @no_arena fn body, print one [warn] line
+// per violating shape (with site count). Mimics the existing gen2 warning
+// idiom (eprintln "[warn] …", cf. the fn-redefined / non-exhaustive-match
+// warns) — stderr only, never chunks.
+fn _gen2_noarena_lint_scan(node, fn_name) {
+    _noarena_arr_hits = 0
+    _noarena_map_hits = 0
+    _noarena_struct_hits = 0
+    _noarena_scan_list(node.body)
+    if _noarena_arr_hits > 0 {
+        eprintln("[warn] @no_arena fn `" + fn_name + "` contains " + to_string(_noarena_arr_hits) + " array/tuple literal site(s) — hexa_array_push items bump-allocate from the caller's val-arena frame; @no_arena promises zero arena touch (unsafe inside heapify/scope-pop) [HEXA_ARENA_ESCAPE_LINT]")
+    }
+    if _noarena_map_hits > 0 {
+        eprintln("[warn] @no_arena fn `" + fn_name + "` contains " + to_string(_noarena_map_hits) + " map literal site(s) — HexaMapTable slots/vals allocate via hexa_val_arena_calloc; @no_arena promises zero arena touch (unsafe inside heapify/scope-pop) [HEXA_ARENA_ESCAPE_LINT]")
+    }
+    if _noarena_struct_hits > 0 {
+        eprintln("[warn] @no_arena fn `" + fn_name + "` contains " + to_string(_noarena_struct_hits) + " struct literal site(s) — HexaValStruct allocates via hexa_val_arena_calloc; @no_arena promises zero arena touch (unsafe inside heapify/scope-pop) [HEXA_ARENA_ESCAPE_LINT]")
+    }
+    return 0
+}
+
 fn gen2_fn_decl(node) {
     let has_restrict = gen2_has_attr(node, "restrict")
     let has_flatten = gen2_has_attr(node, "flatten")
@@ -2083,6 +2171,13 @@ fn gen2_fn_decl(node) {
     } else {
         _gen2_arena_wrap = 1
         chunks.push("    __hexa_fn_arena_enter();\n")
+    }
+    // HEXA-OWN L2.5 Rule A — @no_arena contract ADVISORY scan (opt-in,
+    // default-OFF; env gate FIRST && operand). stderr-only: the scan never
+    // pushes to chunks, so emitted C is unchanged flag-ON and flag-OFF is
+    // byte-identical in both C and stderr. See _gen2_noarena_lint_scan.
+    if env("HEXA_ARENA_ESCAPE_LINT") == "1" && has_no_arena {
+        _gen2_noarena_lint_scan(node, _fn_name)
     }
     // Plan B Phase 3: defer/scope/spawn codegen entry.
     //   Save previous fn's state (enables nested FnDecl emission to
