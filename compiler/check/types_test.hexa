@@ -94,6 +94,38 @@ fn _int_expr(text: string, file: string, line: i64, col: i64) -> Expr {
     }
 }
 
+// static-types r8 — float literal (`1.5`). Mirrors `_int_expr` with the
+// LiteralFloat kind so an array-literal element can infer f64.
+fn _float_expr(text: string, file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::LiteralFloat,
+        span: _span(file, line, col, len(text)),
+        text: text,
+        annotations: [],
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// static-types r8 — `[e0, e1, …]` array literal. children = elements
+// (ast.hexa:93), text empty, per the parser's ArrayLit shape.
+fn _array_lit_expr(elems: [Expr], file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    let mut i = 0
+    while i < len(elems) {
+        kids.push(elems[i])
+        i = i + 1
+    }
+    return Expr {
+        kind: ExprKind::ArrayLit,
+        span: _span(file, line, col, 1),
+        text: "",
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
 fn _string_expr(text: string, file: string, line: i64, col: i64) -> Expr {
     return Expr {
         kind: ExprKind::LiteralString,
@@ -857,6 +889,66 @@ fn _build_case_static_types_r7prep() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// static-types r8 — array-literal call-arg element REJECT + r8b param-base
+// index-assign fallback (HEXA_STATIC_TYPES=1 + HEXA_STATIC_TYPES_ARRAY_LOWER=1).
+// One module, four fns — two REJECT shapes + two matching controls:
+//   fn g(xs: [i64]) {}
+//   fn h() { g([1.5]) }            // ArrayLit [f64] arg vs [i64] param → HX3003 (×1)
+//   fn k() { g([1, 2]) }           // ArrayLit [i64] arg vs [i64] param → clean
+//   fn f(ws: [i64]) { ws[0] = "s" }  // r8b: param array base, string ≠ i64 → HX3011 (×1)
+//   fn p(vs: [i64]) { vs[1] = 7 }    // r8b: int-literal coerces           → clean
+// BOTH flags on: exactly 1 HX3003 (the structural ArrayLit inference feeds
+// the EXISTING default-ON call-arg check) + exactly 1 HX3011 (the r8b
+// re-infer of the param base recovers args[0]). Default build / either flag
+// alone: 0 of each — the ArrayLit still infers the unknown sentinel and the
+// r4 fallback stays gated (byteeq-neutral proof). Unlike case (o)'s
+// mode-IDENTICAL contract, this one is mode-DIFFERENT: literal args carry no
+// flag-OFF string sentinel, so only the structural path can reject them.
+fn _build_case_static_types_r8() -> Module {
+    let f = "case_static_r8.hexa"
+    // fn g(xs: [i64]) {}
+    let g_body = _block([], f, 1, 17)
+    let item_g = _fn_item("g", [_array_param("xs", "i64", f, 1, 6)], _empty_type_ref(), g_body, f, 1)
+    // fn h() { g([1.5]) }   — element mismatch ([f64] literal vs [i64] param)
+    let mut bad_elems = []
+    bad_elems.push(_float_expr("1.5", f, 2, 13))
+    let mut bad_args = []
+    bad_args.push(_array_lit_expr(bad_elems, f, 2, 12))
+    let bad_call = _call_expr(_ident_expr("g", f, 2, 10), bad_args, f, 2, 10)
+    let mut h_kids = []
+    h_kids.push(bad_call)
+    let h_body = _block(h_kids, f, 2, 8)
+    let item_h = _fn_item("h", [], _empty_type_ref(), h_body, f, 2)
+    // fn k() { g([1, 2]) }   — element match (clean in both modes)
+    let mut good_elems = []
+    good_elems.push(_int_expr("1", f, 3, 13))
+    good_elems.push(_int_expr("2", f, 3, 16))
+    let mut good_args = []
+    good_args.push(_array_lit_expr(good_elems, f, 3, 12))
+    let good_call = _call_expr(_ident_expr("g", f, 3, 10), good_args, f, 3, 10)
+    let mut k_kids = []
+    k_kids.push(good_call)
+    let k_body = _block(k_kids, f, 3, 8)
+    let item_k = _fn_item("k", [], _empty_type_ref(), k_body, f, 3)
+    // fn f(ws: [i64]) { ws[0] = "s" }   — r8b param-base element mismatch
+    let mut f_kids = []
+    f_kids.push(_assign_expr(_index_expr(_ident_expr("ws", f, 4, 19), _int_expr("0", f, 4, 22), f, 4, 21), _string_expr("s", f, 4, 27), f, 4, 25))
+    let f_body = _block(f_kids, f, 4, 17)
+    let item_f = _fn_item("f", [_array_param("ws", "i64", f, 4, 6)], _empty_type_ref(), f_body, f, 4)
+    // fn p(vs: [i64]) { vs[1] = 7 }     — r8b matching control (int-lit coercion)
+    let mut p_kids = []
+    p_kids.push(_assign_expr(_index_expr(_ident_expr("vs", f, 5, 19), _int_expr("1", f, 5, 22), f, 5, 21), _int_expr("7", f, 5, 27), f, 5, 25))
+    let p_body = _block(p_kids, f, 5, 17)
+    let item_p = _fn_item("p", [_array_param("vs", "i64", f, 5, 6)], _empty_type_ref(), p_body, f, 5)
+    let mut items = []
+    items.push(item_g)
+    items.push(item_h)
+    items.push(item_k)
+    items.push(item_f)
+    items.push(item_p)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // HEXA-OWN L2 r1 — @own use-after-move lint (HEXA_OWN_LINT=1). A block-local
 // `@own let` binding is single-owner: its first bare-ident consumption (the
 // RHS of a later `let`, an assignment RHS, or a call argument) MOVES it; any
@@ -1195,6 +1287,35 @@ fn main() {
             println("  ok: 1 HX3003 emitted (structured lowering — [f64] ≠ [i32] element recursion; matching g(zs) stays clean)")
         } else {
             println("  ok: 1 HX3003 emitted (string sentinel — generic:Array:f64 ≠ generic:Array:i32; default-OFF path untouched)")
+        }
+    }
+
+    // (q) static-types r8 — array-literal call-arg element mismatch + r8b
+    // param-base index-assign (HEXA_STATIC_TYPES + HEXA_STATIC_TYPES_ARRAY_LOWER).
+    // Letter (p) is reserved by the own-l2-r2 return rung (parallel PR).
+    // Mode-DIFFERENT contract, unlike case (o): with BOTH flags on, exactly
+    // 1 HX3003 (`g([1.5])` — structural ArrayLit inference [f64] vs the
+    // lowered [i64] param, rejected by the EXISTING call-arg check) and
+    // exactly 1 HX3011 (`ws[0] = "s"` — r8b re-infers the param base to
+    // recover the i64 element); the matching `g([1, 2])` and coercing
+    // `vs[1] = 7` stay clean. Default build or either flag alone: 0 of each
+    // (ArrayLit args carry no flag-OFF sentinel → byteeq-neutral proof).
+    let diags_q = _run_case("(q) static-types r8 — array-literal call-arg element mismatch (HEXA_STATIC_TYPES_ARRAY_LOWER)", _build_case_static_types_r8())
+    let nq3003 = _count_code(diags_q, "HX3003")
+    let nq3011 = _count_code(diags_q, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" && env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1" {
+        if nq3003 != 1 || nq3011 != 1 {
+            println("  FAIL: case (q) both-flags-ON expected 1 HX3003 (g([1.5])) + 1 HX3011 (ws[0]=\"s\"), got " + to_string(nq3003) + " HX3003 / " + to_string(nq3011) + " HX3011 (total=" + to_string(len(diags_q)) + ")")
+            ok = false
+        } else {
+            println("  ok: 1 HX3003 + 1 HX3011 emitted (matching g([1,2]) and coercing vs[1]=7 stay clean)")
+        }
+    } else {
+        if nq3003 != 0 || nq3011 != 0 {
+            println("  FAIL: case (q) flags-OFF expected 0 HX3003 + 0 HX3011 (byteeq-neutral), got " + to_string(nq3003) + " HX3003 / " + to_string(nq3011) + " HX3011 (total=" + to_string(len(diags_q)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3003 / 0 HX3011 (default-OFF → byteeq-neutral)")
         }
     }
 

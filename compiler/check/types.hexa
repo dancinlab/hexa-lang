@@ -2008,6 +2008,45 @@ fn _types_is_field(k: ExprKind) -> bool {
     }
 }
 
+// static-types r8 — ArrayLit-expr probe (stage0 has no derived Eq). Mirrors
+// the per-ExprKind match shape of `_types_is_index`/`_types_is_field`; only
+// `ExprKind::ArrayLit` (`[e0, e1, …]` — children = elements, ast.hexa:93) is
+// true. Used by the opt-in structural array-literal inference arm so every
+// other STUB-bound kind keeps the byte-identical fallthrough.
+fn _types_is_array_lit(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::ArrayLit -> true,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::Assign -> false,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
 // Wall A r4 — parse the element-type spelling out of a sized/unsized array
 // annotation. The parser (parser.hexa:parse_type, RFC 085) encodes `[T; N]`
 // as the type-name `Array:<elem>:<N>` and bare `[T]` as `Array:<elem>`;
@@ -2430,6 +2469,40 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                                 _emit_hx3011(elem_t, rhs_t, e.span, out)
                                 r3_rejected = true
                             }
+                        } else if env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1" && !_types_kind_is_scalar(elem_t.kind) {
+                            // static-types r8b — param / module-let array base
+                            // fallback. The `[]<name>` record above only exists
+                            // for BLOCK-LOCAL annotated lets (Block-arm r4
+                            // recording); an array-typed fn PARAM (`fn f(xs:
+                            // [i64]) { xs[0] = "s" }`) or module-level let has
+                            // no record, so r4 stayed silent there. Under the
+                            // ARRAY_LOWER flag the param DOES carry a
+                            // structured Type{kind:"array", args:[elem]} in the
+                            // env (`_types_bind_params` → the r7-prep
+                            // `_types_lower_type_ref` branch) — recover it by
+                            // re-inferring the base ident into a SCRATCH sink
+                            // (no double-report; the r5 receiver idiom) and
+                            // fit-check `args[0]` against the RHS: the SAME
+                            // Rust E0308 index-place coercion path as the
+                            // recorded r4 case above. kind:"array" is only
+                            // ever produced flag-ON (see _types_equal note),
+                            // and the flag check is the FIRST `&&` operand, so
+                            // the default build never enters — byteeq-neutral.
+                            // int/float-literal RHS still coerces; a missing/
+                            // non-scalar element (nested arrays) stays silent.
+                            // The recorded block-local path above is UNTOUCHED
+                            // in both modes (it lowers via the kind:"named"
+                            // annotation-text route, never kind:"array").
+                            let mut bscratch: array = []
+                            let base_t = _infer_expr(base, env, ctx, bscratch)
+                            if base_t.kind == "array" && len(base_t.args) > 0 {
+                                if _types_kind_is_scalar(base_t.args[0].kind) && _types_kind_is_scalar(rhs_t.kind) {
+                                    if !_types_assignable(base_t.args[0], rhs_t, e.children[1]) {
+                                        _emit_hx3011(base_t.args[0], rhs_t, e.span, out)
+                                        r3_rejected = true
+                                    }
+                                }
+                            }
                         }
                     }
                 } else if _types_is_field(e.children[0].kind) && len(e.children[0].children) > 0 {
@@ -2627,6 +2700,58 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                 let _t = _infer_expr(finit, env, ctx, out)
             }
             fi = fi + 1
+        }
+        return _types_empty_type()
+    }
+
+    // static-types r8 — OPT-IN structural array-literal inference
+    // (HEXA_STATIC_TYPES=1 AND HEXA_STATIC_TYPES_ARRAY_LOWER=1). An ArrayLit
+    // has NO inference arm today: it falls to the STUB below and returns the
+    // unknown sentinel, which `_types_equal` tolerates — so a literal array
+    // ARGUMENT `g([1.5])` against `fn g(xs: [i64])` passed SILENTLY in both
+    // modes, even though the ident-arg equivalent already REJECTs via the
+    // default-ON HX3003 call-arg check (r7-prep #4457 proved that for
+    // `g(ys)`). Infer the literal structurally instead: walk EVERY element
+    // (preserving the STUB's inner-error surfacing — each child is inferred
+    // exactly once into `out`, same as the fallthrough), and when all
+    // elements infer to the SAME known scalar kind, return the structured
+    // Type{kind:"array", args:[elem]} — the same shape the r7-prep lowering
+    // gives the callee's declared param, so the EXISTING HX3003 site
+    // (`_types_equal`'s array element recursion) does the reject with ZERO
+    // changes there (Rust E0308: rustc_hir_typeck check_argument_types →
+    // demand_coerce → report_mismatched_types, the coercion path the r1-r6
+    // arms mirror). Empty `[]` (no element evidence), mixed, nested, or
+    // non-scalar elements degrade to the unknown sentinel — conservative,
+    // mirrors the r2 soundness gates; kind:"array" with NO args would render
+    // as bare `array` in diagnostics. Both env checks are the FIRST `&&`
+    // operands (short-circuit) → the default build takes the byte-identical
+    // STUB path below (byteeq / gen3≡gen4 preserved, r1-r6 gate idiom).
+    if env("HEXA_STATIC_TYPES") == "1" && env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1" && _types_is_array_lit(e.kind) {
+        let mut elem_t = _types_empty_type()
+        let mut uniform = true
+        let mut ai = 0
+        while ai < len(e.children) {
+            let ct = _infer_expr(e.children[ai], env, ctx, out)
+            if !_types_kind_is_scalar(ct.kind) {
+                uniform = false
+            } else if len(elem_t.kind) == 0 {
+                elem_t = ct
+            } else if ct.kind != elem_t.kind {
+                uniform = false
+            }
+            ai = ai + 1
+        }
+        if uniform && len(elem_t.kind) > 0 {
+            let mut elem_args: [Type] = []
+            elem_args.push(elem_t)
+            return Type {
+                kind: "array",
+                def: _types_miss_def_id(),
+                args: elem_args,
+                ret: [],
+                domain: "",
+                unit: ""
+            }
         }
         return _types_empty_type()
     }
