@@ -1649,32 +1649,33 @@ fn main() {
         println("  FAIL: case (o) expected 1 HX3003 in BOTH modes (g(ys) [f64]≠[i32]; matching g(zs) clean), got " + to_string(no) + " (total=" + to_string(len(diags_o)) + ")")
         ok = false
     } else {
-        if env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1" {
-            println("  ok: 1 HX3003 emitted (structured lowering — [f64] ≠ [i32] element recursion; matching g(zs) stays clean)")
+        if env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1" || env("HEXA_STATIC_TYPES") == "1" {
+            println("  ok: 1 HX3003 emitted (structured lowering — [f64] ≠ [i32] element recursion; matching g(zs) stays clean; F0 fold: STATIC implies array-lower)")
         } else {
             println("  ok: 1 HX3003 emitted (string sentinel — generic:Array:f64 ≠ generic:Array:i32; default-OFF path untouched)")
         }
     }
 
     // (q) static-types r8 — array-literal call-arg element mismatch + r8b
-    // param-base index-assign (HEXA_STATIC_TYPES + HEXA_STATIC_TYPES_ARRAY_LOWER).
-    // Letter (p) is reserved by the own-l2-r2 return rung (parallel PR).
-    // Mode-DIFFERENT contract, unlike case (o): with BOTH flags on, exactly
+    // param-base index-assign. Letter (p) is reserved by the own-l2-r2 return
+    // rung (parallel PR). After the F0 flag-fold HEXA_STATIC_TYPES=1 alone
+    // supplies the array-lowering, so under the single flag: exactly
     // 1 HX3003 (`g([1.5])` — structural ArrayLit inference [f64] vs the
     // lowered [i64] param, rejected by the EXISTING call-arg check) and
     // exactly 1 HX3011 (`ws[0] = "s"` — r8b re-infers the param base to
     // recover the i64 element); the matching `g([1, 2])` and coercing
-    // `vs[1] = 7` stay clean. Default build or either flag alone: 0 of each
-    // (ArrayLit args carry no flag-OFF sentinel → byteeq-neutral proof).
-    let diags_q = _run_case("(q) static-types r8 — array-literal call-arg element mismatch (HEXA_STATIC_TYPES_ARRAY_LOWER)", _build_case_static_types_r8())
+    // `vs[1] = 7` stay clean. Default build: 0 of each (ArrayLit args carry no
+    // flag-OFF sentinel → byteeq-neutral proof). (ARRAY_LOWER alone — STATIC
+    // off — also 0: ArrayLit inference and r8b gate on _types_static_on.)
+    let diags_q = _run_case("(q) static-types r8 — array-literal call-arg element mismatch (HEXA_STATIC_TYPES)", _build_case_static_types_r8())
     let nq3003 = _count_code(diags_q, "HX3003")
     let nq3011 = _count_code(diags_q, "HX3011")
-    if env("HEXA_STATIC_TYPES") == "1" && env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1" {
+    if env("HEXA_STATIC_TYPES") == "1" {
         if nq3003 != 1 || nq3011 != 1 {
-            println("  FAIL: case (q) both-flags-ON expected 1 HX3003 (g([1.5])) + 1 HX3011 (ws[0]=\"s\"), got " + to_string(nq3003) + " HX3003 / " + to_string(nq3011) + " HX3011 (total=" + to_string(len(diags_q)) + ")")
+            println("  FAIL: case (q) HEXA_STATIC_TYPES=1 expected 1 HX3003 (g([1.5])) + 1 HX3011 (ws[0]=\"s\"; F0 fold → array-lower under the single flag), got " + to_string(nq3003) + " HX3003 / " + to_string(nq3011) + " HX3011 (total=" + to_string(len(diags_q)) + ")")
             ok = false
         } else {
-            println("  ok: 1 HX3003 + 1 HX3011 emitted (matching g([1,2]) and coercing vs[1]=7 stay clean)")
+            println("  ok: 1 HX3003 + 1 HX3011 emitted (matching g([1,2]) and coercing vs[1]=7 stay clean; F0 fold)")
         }
     } else {
         if nq3003 != 0 || nq3011 != 0 {
@@ -1686,28 +1687,22 @@ fn main() {
     }
 
     // (s) static-types r9a — Index/Field READ inference feeding the EXISTING
-    // r2 let check (letters o/p/q/r taken; p reserved by own-l2-r2). Three-
-    // way self-adapting contract: BOTH flags → 2 HX3011 (`let n: string =
-    // xs[0]` Index-READ elem i64 + `let q: string = p.x` Field-READ i32);
-    // HEXA_STATIC_TYPES alone → 1 (only the Field rung — Index element
-    // types need the ARRAY_LOWER structured lowering); default build → 0
-    // (byteeq-neutral proof). The matching `let m: i64 = xs[1]` and
-    // `let r: i32 = p.y` stay clean in every mode.
-    let diags_s = _run_case("(s) static-types r9a — Index/Field READ inference into typed let (HEXA_STATIC_TYPES [+ARRAY_LOWER])", _build_case_static_types_r9a())
+    // r2 let check (letters o/p/q/r taken; p reserved by own-l2-r2). After the
+    // F0 flag-fold HEXA_STATIC_TYPES=1 IMPLIES array-lower, so the Index rung
+    // no longer needs a separate HEXA_STATIC_TYPES_ARRAY_LOWER=1: under the
+    // single flag → 2 HX3011 (`let n: string = xs[0]` Index-READ elem i64 +
+    // `let q: string = p.x` Field-READ i32); default build → 0 (byteeq-neutral
+    // proof). The matching `let m: i64 = xs[1]` and `let r: i32 = p.y` stay
+    // clean in every mode. (HEXA_STATIC_TYPES_ARRAY_LOWER alone — STATIC off —
+    // stays 0: the inference arms gate on _types_static_on.)
+    let diags_s = _run_case("(s) static-types r9a — Index/Field READ inference into typed let (HEXA_STATIC_TYPES)", _build_case_static_types_r9a())
     let ns = _count_code(diags_s, "HX3011")
-    if env("HEXA_STATIC_TYPES") == "1" && env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1" {
+    if env("HEXA_STATIC_TYPES") == "1" {
         if ns != 2 {
-            println("  FAIL: case (s) both-flags-ON expected 2 HX3011 (n:string=xs[0] + q:string=p.x), got " + to_string(ns) + " (total=" + to_string(len(diags_s)) + ")")
+            println("  FAIL: case (s) HEXA_STATIC_TYPES=1 expected 2 HX3011 (n:string=xs[0] Index + q:string=p.x Field; F0 fold → array-lower under the single flag), got " + to_string(ns) + " (total=" + to_string(len(diags_s)) + ")")
             ok = false
         } else {
-            println("  ok: 2 HX3011 emitted (Index READ i64-elem + Field READ i32 vs string; matching m/r stay clean)")
-        }
-    } else if env("HEXA_STATIC_TYPES") == "1" {
-        if ns != 1 {
-            println("  FAIL: case (s) HEXA_STATIC_TYPES-only expected 1 HX3011 (q:string=p.x; Index rung needs ARRAY_LOWER), got " + to_string(ns) + " (total=" + to_string(len(diags_s)) + ")")
-            ok = false
-        } else {
-            println("  ok: 1 HX3011 emitted (Field READ only — Index READ stays conservative without ARRAY_LOWER)")
+            println("  ok: 2 HX3011 emitted (Index READ i64-elem + Field READ i32 vs string; F0 fold; matching m/r stay clean)")
         }
     } else {
         if ns != 0 {
@@ -1719,22 +1714,23 @@ fn main() {
     }
 
     // (t) static-types r9b — fn-return array-element REJECT + element-literal
-    // coercion no-FP. Both-flags-ON: exactly 1 HX3004 (`fn f() -> [i64] {
+    // coercion no-FP. After the F0 flag-fold HEXA_STATIC_TYPES=1 alone lowers
+    // the return type structurally: exactly 1 HX3004 (`fn f() -> [i64] {
     // return [1.5] }` — structural [f64] vs the lowered [i64] return, at the
     // EXISTING default-ON HX3004 site) while `fn g() -> [f32] { return [0.0]
-    // }` passes via the NEW per-element literal-coercion arm of
-    // _types_assignable — a count of 2 catches the flip-blocking FP exactly.
-    // Default build / either flag alone: 0 (ArrayLit infers the unknown
-    // sentinel and/or the annotation stays a string sentinel → tolerated —
-    // byteeq-neutral proof).
-    let diags_t = _run_case("(t) static-types r9b — return [1.5] vs [i64] REJECT + [0.0] vs [f32] coercion no-FP (HEXA_STATIC_TYPES+ARRAY_LOWER)", _build_case_static_types_r9b())
+    // }` passes via the per-element literal-coercion arm of _types_assignable.
+    // Default build: 0 (ArrayLit infers the unknown sentinel and/or the
+    // annotation stays a string sentinel → tolerated — byteeq-neutral proof).
+    // (ARRAY_LOWER alone — STATIC off — also 0: ArrayLit inference gates on
+    // _types_static_on.)
+    let diags_t = _run_case("(t) static-types r9b — return [1.5] vs [i64] REJECT + [0.0] vs [f32] coercion no-FP (HEXA_STATIC_TYPES)", _build_case_static_types_r9b())
     let nt = _count_code(diags_t, "HX3004")
-    if env("HEXA_STATIC_TYPES") == "1" && env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1" {
+    if env("HEXA_STATIC_TYPES") == "1" {
         if nt != 1 {
-            println("  FAIL: case (t) both-flags-ON expected 1 HX3004 (f: [1.5] vs [i64] REJECT; g: [0.0] vs [f32] coerces), got " + to_string(nt) + " (total=" + to_string(len(diags_t)) + ")")
+            println("  FAIL: case (t) HEXA_STATIC_TYPES=1 expected 1 HX3004 (f: [1.5] vs [i64] REJECT; g: [0.0] vs [f32] coerces; F0 fold → array-lower under the single flag), got " + to_string(nt) + " (total=" + to_string(len(diags_t)) + ")")
             ok = false
         } else {
-            println("  ok: 1 HX3004 emitted (return-position element REJECT; [0.0]→[f32] element coercion stays clean — no FP)")
+            println("  ok: 1 HX3004 emitted (return-position element REJECT; [0.0]→[f32] element coercion stays clean — no FP; F0 fold)")
         }
     } else {
         if nt != 0 {
@@ -1871,6 +1867,35 @@ fn main() {
             ok = false
         } else {
             println("  ok: 0 HX3017 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (x) static-types F0 flag-fold — array-lower now folds under the single
+    // HEXA_STATIC_TYPES flag (wall_a_endgame.md §B.3 F0). Re-uses the r9b
+    // return-element module: PRE-fold this REJECT required BOTH HEXA_STATIC
+    // _TYPES=1 AND HEXA_STATIC_TYPES_ARRAY_LOWER=1; POST-fold HEXA_STATIC_TYPES
+    // =1 ALONE lowers `[i64]` structurally so `fn f() -> [i64] { return [1.5]
+    // }` rejects at the default-ON HX3004 site (1 HX3004), with `fn g() ->
+    // [f32] { return [0.0] }` still coercing clean. This is the crisp proof
+    // that the two-flag AND collapsed to one flag. Default build → 0
+    // (byteeq-neutral). HEXA_STATIC_TYPES_ARRAY_LOWER stays a working alias:
+    // one deprecation cycle, additive fold (case q/s/t above also now fire
+    // under the single flag by the same fold).
+    let diags_x = _run_case("(x) static-types F0 — array-lower folds under HEXA_STATIC_TYPES alone", _build_case_static_types_r9b())
+    let nx = _count_code(diags_x, "HX3004")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if nx != 1 {
+            println("  FAIL: case (x) HEXA_STATIC_TYPES=1 (ALONE) expected 1 HX3004 (F0 fold: STATIC implies array-lower; return [1.5] vs [i64] REJECT), got " + to_string(nx) + " (total=" + to_string(len(diags_x)) + ")")
+            ok = false
+        } else {
+            println("  ok: 1 HX3004 emitted under HEXA_STATIC_TYPES alone — F0 flag-fold proven (no ARRAY_LOWER needed)")
+        }
+    } else {
+        if nx != 0 {
+            println("  FAIL: case (x) default build expected 0 HX3004 (byteeq-neutral), got " + to_string(nx) + " (total=" + to_string(len(diags_x)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3004 (default-OFF → byteeq-neutral)")
         }
     }
 

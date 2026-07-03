@@ -1219,7 +1219,15 @@ let mut _types_array_lower_on: bool = false
 
 fn _types_static_flags_hoist() {
     _types_static_on = env("HEXA_STATIC_TYPES") == "1"
-    _types_array_lower_on = env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1"
+    // static-types F0 flag-fold (wall_a_endgame.md §B.3 F0): HEXA_STATIC_TYPES
+    // IMPLIES array-lower. A default-ON flip of a two-flag AND is incoherent,
+    // so the r7-prep/r8/r9 array-lowering rungs fold under the single
+    // HEXA_STATIC_TYPES flag. HEXA_STATIC_TYPES_ARRAY_LOWER stays a still-
+    // working ALIAS for one deprecation cycle (additive fold, not a rename /
+    // delete). Byteeq-neutral on the DEFAULT path: both flags unset →
+    // _types_static_on=false → the disjunction is still false → the array-lower
+    // gates (963/2777/3080/3131) keep the byte-identical fallthrough.
+    _types_array_lower_on = _types_static_on || (env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1")
 }
 
 let mut _types_struct_names: [string] = []
