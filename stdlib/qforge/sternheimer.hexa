@@ -203,3 +203,189 @@ pub fn qforge_sternheimer(H_apply, eps_n: float, psi_n: [float],
 
     return SternResult { dpsi: dpsi, iters: iters, converged: conv, residual: residual }
 }
+
+// ── 블록 결과 묶음: nb 개 상태의 응답을 한꺼번에 반환 ─────────────────────────
+pub struct SternBlockResult {
+    dpsi: [float],       // ROW-MAJOR [nb,n] : dpsi[s*n + i] = state s 의 i-성분
+    iters: int,          // 블록 CG 가 돈 최대 반복수 (모든 상태 공통 루프)
+    all_converged: bool,
+    max_residual: float
+}
+
+// ── BLOCK Sternheimer (QFORGE-PERF round 2) ──────────────────────────────────
+//   nb 개 섭동 상태의 투영 CG 를 LOCKSTEP 으로 동시에 푼다. 매 반복에서 H 를
+//   nb 개 검색방향(P_c p_s)의 BLOCK 에 ONE GEMM (H[n,n]@P[n,nb]) 으로 적용 —
+//   기존 caller 의 `while s<nb { qforge_sternheimer(...) }` 루프(상태당 CG·반복당
+//   1× 스칼라 H-apply = 총 nb×iter 스칼라 apply)를 반복당 1× 블록 apply 로 접는다.
+//   GPU 경로(qforge_h_apply_forge_block, assembler.hexa)가 이 블록 GEMM 을 가속.
+//
+//   contract (generic, d4 — PwHam 이름 없음):
+//     H_block(p_flat[n*nb], nb) -> Y_flat[n*nb] : ROW-MAJOR [n,nb] 블록 H-apply.
+//        (p_flat[i*nb + s] = state s 검색방향의 i-성분 → Y[i*nb+s] = (H·p_s)[i])
+//     H_apply : 스칼라 v->H·v — 블록 경로 [] 폴백 + 최종 잔차 재계산용.
+//     eps[s], psi_states[s], dV_psi_flat[s*n+i] : 상태별 입력. occ_states 공통.
+//   수렴한 상태는 검색방향을 0 으로 두어 (그 GEMM 열은 0) 블록 루프 끝까지 안전.
+//   수학적으로 상태별 qforge_sternheimer 와 동일 — 승부는 FULL solve wall.
+pub fn qforge_sternheimer_block(H_apply, H_block, eps: [float],
+                                psi_states: [[float]], occ_states: [[float]],
+                                dV_psi_flat: [float], nb: int,
+                                n: int, tol: float, max_iter: int) -> SternBlockResult {
+    let m = occ_states.len()
+
+    // 상태별 b_s = − P_c (ΔV ψ_s) · r_s = b_s · p_s = r_s · x_s = 0.
+    let mut x = []      // [nb*n]
+    let mut r = []      // [nb*n]
+    let mut p = []      // [nb*n]
+    let mut rs_old = [] // [nb]
+    let mut bnorm = []  // [nb]
+    let mut done = []   // [nb] bool: RHS 가 비었거나 수렴
+    let mut t0 = 0
+    while t0 < nb * n { x.push(0.0) ; r.push(0.0) ; p.push(0.0) ; t0 = t0 + 1 }
+
+    let mut s = 0
+    while s < nb {
+        let mut dvp = []
+        let mut i = 0
+        while i < n { dvp.push(dV_psi_flat[s * n + i]) ; i = i + 1 }
+        let pcd = st_project_out(dvp, occ_states, m, n)
+        let mut bs = []
+        let mut i2 = 0
+        while i2 < n { bs.push(-pcd[i2]) ; i2 = i2 + 1 }
+        let bn = st_norm(bs, n)
+        bnorm.push(bn)
+        let isdone = bn < tol
+        done.push(isdone)
+        // r0=b0, p0=r0, x0=0.
+        let mut i3 = 0
+        while i3 < n {
+            r[s * n + i3] = bs[i3]
+            p[s * n + i3] = bs[i3]
+            i3 = i3 + 1
+        }
+        rs_old.push(st_dot(bs, bs, n))
+        s = s + 1
+    }
+
+    let mut iters = 0
+    while iters < max_iter {
+        // 모두 done 이면 종료.
+        let mut anyactive = false
+        let mut sc = 0
+        while sc < nb { if done[sc] == false { anyactive = true } sc = sc + 1 }
+        if anyactive == false { break }
+
+        // (a) 블록 P_c p_s 와 패킹 P[n,nb] (done 상태는 0 열).
+        let mut pcp = []   // [nb*n] : P_c p_s
+        let mut pflat = [] // [n*nb] row-major
+        let mut t = 0
+        while t < n * nb { pflat.push(0.0) ; t = t + 1 }
+        let mut sa = 0
+        while sa < nb {
+            if done[sa] {
+                let mut z = 0
+                while z < n { pcp.push(0.0) ; z = z + 1 }
+            } else {
+                let mut ps = []
+                let mut i = 0
+                while i < n { ps.push(p[sa * n + i]) ; i = i + 1 }
+                let pc = st_project_out(ps, occ_states, m, n)
+                let mut i2 = 0
+                while i2 < n { pcp.push(pc[i2]) ; pflat[i2 * nb + sa] = pc[i2] ; i2 = i2 + 1 }
+            }
+            sa = sa + 1
+        }
+
+        // (b) ONE block H-apply: Y[n,nb] = H·P[n,nb].  폴백 → 상태별 스칼라.
+        let yflat = H_block(pflat, nb)
+        let mut usescalar = false
+        if len(yflat) != n * nb { usescalar = true }
+
+        // (c) 상태별 ap2_s = P_c[(H−ε_s) P_c p_s], α_s, x_s/r_s 갱신.
+        let mut sb = 0
+        while sb < nb {
+            if done[sb] == false {
+                let mut pcs = []
+                let mut i = 0
+                while i < n { pcs.push(pcp[sb * n + i]) ; i = i + 1 }
+                // hp = H·(P_c p_s) : 블록 GEMM 열, 폴백 시 스칼라.
+                let mut hp = []
+                if usescalar {
+                    hp = H_apply(pcs)
+                } else {
+                    let mut i4 = 0
+                    while i4 < n { hp.push(yflat[i4 * nb + sb]) ; i4 = i4 + 1 }
+                }
+                let mut ap = []
+                let mut i5 = 0
+                while i5 < n { ap.push(hp[i5] - eps[sb] * pcs[i5]) ; i5 = i5 + 1 }
+                let ap2 = st_project_out(ap, occ_states, m, n)
+                let pAp = st_dot(pcs, ap2, n)
+                // 주: 스칼라 solver 는 dot(p, ap2); P_c p_s 대신 p_s 를 쓰지만 ap2 가
+                // 이미 P_c-사영돼 있어 dot(p,ap2)=dot(P_c p,ap2). 동일.
+                if pAp == 0.0 {
+                    done[sb] = true
+                } else {
+                    let alpha = rs_old[sb] / pAp
+                    let mut i6 = 0
+                    while i6 < n {
+                        x[sb * n + i6] = x[sb * n + i6] + alpha * p[sb * n + i6]
+                        r[sb * n + i6] = r[sb * n + i6] - alpha * ap2[i6]
+                        i6 = i6 + 1
+                    }
+                    // 잔차노름 + β + p 갱신.
+                    let mut rsq = 0.0
+                    let mut i7 = 0
+                    while i7 < n { rsq = rsq + r[sb*n+i7]*r[sb*n+i7] ; i7 = i7 + 1 }
+                    let rnorm = sqrt(rsq)
+                    if rnorm < tol {
+                        done[sb] = true
+                    } else {
+                        let beta = rsq / rs_old[sb]
+                        let mut i8 = 0
+                        while i8 < n { p[sb*n+i8] = r[sb*n+i8] + beta * p[sb*n+i8] ; i8 = i8 + 1 }
+                        rs_old[sb] = rsq
+                    }
+                }
+            }
+            sb = sb + 1
+        }
+        iters = iters + 1
+    }
+
+    // 최종: 상태별 P_c 사영 + 실제 잔차 재계산 (스칼라 solver 와 동일 식).
+    let mut dpsi_out = []
+    let mut tp = 0
+    while tp < nb * n { dpsi_out.push(0.0) ; tp = tp + 1 }
+    let mut max_res = 0.0
+    let mut allconv = true
+    let mut sf = 0
+    while sf < nb {
+        let mut xs = []
+        let mut i = 0
+        while i < n { xs.push(x[sf * n + i]) ; i = i + 1 }
+        let dps = st_project_out(xs, occ_states, m, n)
+        let hd = H_apply(dps)
+        let mut resv = []
+        let mut j = 0
+        while j < n { resv.push(hd[j] - eps[sf] * dps[j]) ; j = j + 1 }
+        let respc = st_project_out(resv, occ_states, m, n)
+        // b_s 재구성 (위에서 안 저장 → dV_psi 로 재계산).
+        let mut dvp = []
+        let mut k = 0
+        while k < n { dvp.push(dV_psi_flat[sf * n + k]) ; k = k + 1 }
+        let pcd = st_project_out(dvp, occ_states, m, n)
+        let mut diff = []
+        let mut q = 0
+        while q < n { diff.push(respc[q] - (-pcd[q])) ; q = q + 1 }
+        let resn = st_norm(diff, n)
+        if resn > max_res { max_res = resn }
+        let conv = bnorm[sf] < tol || resn < tol
+        if conv == false { allconv = false }
+        let mut w = 0
+        while w < n { dpsi_out[sf * n + w] = dps[w] ; w = w + 1 }
+        sf = sf + 1
+    }
+
+    return SternBlockResult { dpsi: dpsi_out, iters: iters,
+                              all_converged: allconv, max_residual: max_res }
+}

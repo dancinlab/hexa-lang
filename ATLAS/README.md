@@ -4606,6 +4606,22 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
      instead of a parse-reject. NO atlas write (fold = hexa verify g5 / PR only). selftest:
      compiler/drill/composition_test.hexa (superperfect/Mersenne G-gates) + identity_engine.hexa
      main CMP1–CMP5. engine: state/novel-dfs/composition_hunt.py (re-runnable, arg = N).
+
+  --- Erdős problem ledger #1: Erdős–Straus 4/n = 1/x+1/y+1/z ---
+
+  🟩 BOUNDED [2,100]: every integer n in [2,100] admits a positive-integer
+     witness (x,y,z) for 4/n = 1/x+1/y+1/z — verified exact-int (no float) via
+     the identity 4·x·y·z == n·(y·z+x·z+x·y), companion selftest E1–E6
+     (identity_engine_test.hexa). Composite n inherits from its prime factor
+     (spf reduction), so only primes carry the scan; full-range [2,100] holds.
+  🟥 OPEN (unchanged): the forall-n≥2 Erdős–Straus conjecture stays UNPROVEN —
+     this is ONLY the finite bounded-witness atom (ledger rule: open=🟥,
+     bounded=🟩). fns es_witness_at / verify_erdos_straus / es_first_counterexample
+     in compiler/atlas/identity_engine.hexa (0 new builtins, i64-safe to N~6.1e4
+     where P²~0.56n⁴<9.2e18). FOLLOW-ON: N=50000 (i64 limit) then N=10⁷ (bigint
+     rewrite) as pool sweeps. Refs: Wikipedia "Erdős–Straus" (verified n≤10¹⁷,
+     prime reduction), arXiv 2509.00128 (10¹⁸ frame). NO embedded.gen.hexa manual
+     write (fold = hexa verify g5 / PR only).
 ```
 
   --- Ralph 377 (2026-06-27): ORTHOGONAL PIVOT — additive/combinatorial number theory ---
