@@ -5728,22 +5728,72 @@ fn gen2_expr(node) {
         let r = gen2_expr(node.right)
         // Int arithmetic
         if op == "+" {
+            // Operator overloading (opt-in HEXA_OP_OVERLOAD, RFC operator-overload).
+            // When a struct type declares an `__add` impl method, dispatch `a + b`
+            // to it at runtime via hexa_is_type; otherwise emit the unchanged
+            // hexa_add path. Default OFF → byte-identical to the line below.
+            if _op_overload_enabled() {
+                let _ov = _op_overload_emit(_op_overload_method("+"), l, r, "hexa_add")
+                if _ov != "" { return _ov }
+            }
             return "hexa_add(" + l + ", " + r + ")"
         }
         // T23 fix: route -, *, /, % through runtime helpers (hexa_sub/
         // hexa_mul/hexa_div/hexa_mod) which inspect TAG_FLOAT and use .f
         // for float operands. The old .i-direct code produced garbage
         // arithmetic on floats (raw IEEE bit patterns as int64).
-        if op == "-" { return "hexa_sub(" + l + ", " + r + ")" }
-        if op == "*" { return "hexa_mul(" + l + ", " + r + ")" }
-        if op == "/" { return "hexa_div(" + l + ", " + r + ")" }
-        if op == "%" { return "hexa_mod(" + l + ", " + r + ")" }
+        // Operator overloading (opt-in HEXA_OP_OVERLOAD) — same guard the `+`
+        // arm above uses. Default OFF → each arm falls through to its verbatim
+        // runtime-helper return (byte-identical). Rust std::ops naming:
+        // Sub::sub/Mul::mul/Div::div/Rem::rem (library/core/src/ops/arith.rs).
+        if op == "-" {
+            if _op_overload_enabled() {
+                let _ov = _op_overload_emit(_op_overload_method("-"), l, r, "hexa_sub")
+                if _ov != "" { return _ov }
+            }
+            return "hexa_sub(" + l + ", " + r + ")"
+        }
+        if op == "*" {
+            if _op_overload_enabled() {
+                let _ov = _op_overload_emit(_op_overload_method("*"), l, r, "hexa_mul")
+                if _ov != "" { return _ov }
+            }
+            return "hexa_mul(" + l + ", " + r + ")"
+        }
+        if op == "/" {
+            if _op_overload_enabled() {
+                let _ov = _op_overload_emit(_op_overload_method("/"), l, r, "hexa_div")
+                if _ov != "" { return _ov }
+            }
+            return "hexa_div(" + l + ", " + r + ")"
+        }
+        if op == "%" {
+            if _op_overload_enabled() {
+                let _ov = _op_overload_emit(_op_overload_method("%"), l, r, "hexa_mod")
+                if _ov != "" { return _ov }
+            }
+            return "hexa_mod(" + l + ", " + r + ")"
+        }
         // Comparisons
-        if op == "==" { return "hexa_eq(" + l + ", " + r + ")" }
+        if op == "==" {
+            // PartialEq::eq → __eq (library/core/src/cmp.rs).
+            if _op_overload_enabled() {
+                let _ov = _op_overload_emit(_op_overload_method("=="), l, r, "hexa_eq")
+                if _ov != "" { return _ov }
+            }
+            return "hexa_eq(" + l + ", " + r + ")"
+        }
         if op == "!=" { return "hexa_bool(!hexa_truthy(hexa_eq(" + l + ", " + r + ")))" }
         // ROI-44: ordered comparisons via runtime helpers (replaces inline
         // GCC stmt-expr — ~15% generated C size reduction, better I-cache).
-        if op == "<" { return "hexa_cmp_lt(" + l + ", " + r + ")" }
+        if op == "<" {
+            // PartialOrd::lt → __lt (library/core/src/cmp.rs).
+            if _op_overload_enabled() {
+                let _ov = _op_overload_emit(_op_overload_method("<"), l, r, "hexa_cmp_lt")
+                if _ov != "" { return _ov }
+            }
+            return "hexa_cmp_lt(" + l + ", " + r + ")"
+        }
         if op == ">" { return "hexa_cmp_gt(" + l + ", " + r + ")" }
         if op == "<=" { return "hexa_cmp_le(" + l + ", " + r + ")" }
         if op == ">=" { return "hexa_cmp_ge(" + l + ", " + r + ")" }
@@ -8843,6 +8893,18 @@ fn gen2_expr(node) {
                 }
             }
         }
+        // Operator overloading (opt-in HEXA_OP_OVERLOAD) — Index read. Placed
+        // AFTER every native-array proven-read arm so struct receivers (which
+        // never match _is_known_intarr_name / _is_known_floatarr_name) fall
+        // through here. Rust std::ops::Index::index → __index
+        // (library/core/src/ops/index.rs). There is no binop `op` string at
+        // this site (the Index node is handled outside the BinaryOp block), so
+        // the method name is the literal "__index". Default OFF → byte-identical
+        // to the verbatim hexa_index_get return below.
+        if _op_overload_enabled() {
+            let _ov = _op_overload_emit("__index", gen2_expr(node.left), gen2_expr(node.right), "hexa_index_get")
+            if _ov != "" { return _ov }
+        }
         return "hexa_index_get(" + gen2_expr(node.left) + ", " + gen2_expr(node.right) + ")"
     }
 
@@ -10053,6 +10115,106 @@ fn _method_registry_lookup(name) {
         i = i + 1
     }
     return out
+}
+
+// ── Operator overloading (RFC operator-overload, opt-in) ─────────
+// GATED opt-in: HEXA_OP_OVERLOAD=1 (default OFF). When the flag is absent
+// EVERY binary-op codegen path is byte-for-byte UNCHANGED (the dispatch helper
+// is never consulted), so DEFAULT byteeq across all three targets is preserved.
+//
+// Design (reference-matched):
+//   Rust  std::ops::Add::add(self, rhs)   (library/core/src/ops/arith.rs)
+//   Swift static func + (lhs, rhs) -> Self (stdlib AdditiveArithmetic)
+// hexa surface: declare an ordinary method named `__add` in an `impl T { … }`
+// block — NO new keyword and NO new @attr (frozen-parser-safe). `a + b` then
+// lowers to `T__add(a, b)` when `a` is a runtime instance of a type T whose
+// impl block declares `__add`; any non-struct (int/float/string/array) operand
+// falls through to the existing `hexa_add` runtime path. Dispatch is RUNTIME
+// (via the already-shipping `hexa_is_type` substrate symbol) — no static type
+// inference and NO runtime.c edit (mirrors the P2-6 method-call dispatch at the
+// Call-on-Field site).
+//
+// Wired set: arithmetic `+`/`-`/`*`/`/`/`%` → `__add`/`__sub`/`__mul`/`__div`/
+// `__rem` (Rust std::ops::{Add,Sub,Mul,Div,Rem}), comparison `==`/`<` →
+// `__eq`/`__lt` (Rust std::cmp::{PartialEq,PartialOrd}), and index read `a[i]`
+// → `__index` (Rust std::ops::Index). Deferred follow-ups: `!=`/`>`/`<=`/`>=`
+// (ordered-cmp), compound-assign (`+=`…), and Index *write* (`a[i] = v` →
+// IndexMut). See state/rfc_operator_overload.md.
+fn _op_overload_enabled() {
+    return env("HEXA_OP_OVERLOAD") != ""
+}
+
+// Map a BinOp operator string to its overload method name, or "" when the
+// operator is not overloadable. Rust std::ops naming (add/sub/mul/div/rem).
+fn _op_overload_method(op) {
+    if op == "+" { return "__add" }
+    if op == "-" { return "__sub" }
+    if op == "*" { return "__mul" }
+    if op == "/" { return "__div" }
+    if op == "%" { return "__rem" }
+    // Comparison overloads (Rust std::cmp): PartialEq::eq → __eq
+    // (library/core/src/cmp.rs), PartialOrd::lt → __lt (same file).
+    if op == "==" { return "__eq" }
+    if op == "<" { return "__lt" }
+    return ""
+}
+
+// Pre-register every `impl T { … }` method into `_method_registry` BEFORE the
+// emit loop walks the AST, so operator-overload dispatch is independent of
+// whether the impl block precedes or follows the use site in source order.
+// Idempotent w.r.t. gen2_impl_block's own per-method push (the dispatch helper
+// dedups types), and a NO-OP unless the opt-in flag is set — so the DEFAULT
+// emit path never sees an extra registry entry. decreases nothing — pure scan.
+fn _op_overload_prescan(ast) {
+    if !_op_overload_enabled() { return }
+    let mut i = 0
+    while i < len(ast) {
+        if ast[i].kind == "ImplBlock" {
+            let _tn = ast[i].target
+            let _ms = ast[i].methods
+            let mut mi = 0
+            while mi < len(_ms) {
+                _method_registry.push([_ms[mi].name, _tn])
+                mi = mi + 1
+            }
+        }
+        i = i + 1
+    }
+}
+
+// Build the runtime-dispatched C expression for an overloaded binary operator.
+// `l`/`r` are the already-generated operand C-expressions; `fb_fn` is the
+// fallback runtime helper (e.g. "hexa_add"). Both operands are bound to single
+// temps so each side is evaluated exactly once (mirrors the P2-6 `__mr`
+// stmt-expr). Returns "" when no impl declares `method` (caller keeps its
+// existing fallback emission verbatim → byteeq when nothing overloads).
+fn _op_overload_emit(method, l, r, fb_fn) {
+    let _types = _method_registry_lookup(method)
+    if len(_types) == 0 { return "" }
+    // dedup type names (prescan + emit-time push can both register a type).
+    let mut _ut = []
+    let mut _ti = 0
+    while _ti < len(_types) {
+        let _t = _types[_ti]
+        let mut _seen = false
+        let mut _si = 0
+        while _si < len(_ut) {
+            if _ut[_si] == _t { _seen = true }
+            _si = _si + 1
+        }
+        if !_seen { _ut.push(_t) }
+        _ti = _ti + 1
+    }
+    // Innermost fallback uses the bound temps so the operands are evaluated
+    // once regardless of which arm fires.
+    let mut _chain = fb_fn + "(__ovl, __ovr)"
+    let mut _ci = len(_ut) - 1
+    while _ci >= 0 {
+        let _t = _ut[_ci]
+        _chain = "(hexa_is_type(__ovl, \"" + _t + "\") ? " + _t + "__" + method + "(__ovl, __ovr) : " + _chain + ")"
+        _ci = _ci - 1
+    }
+    return "({ HexaVal __ovl = " + l + "; HexaVal __ovr = " + r + "; " + _chain + "; })"
 }
 
 // Emit one C function per impl method using mangled name Type__method.
@@ -14012,6 +14174,9 @@ fn codegen_full(ast) {
     _lambda_def_parts = []
     _lambda_fwd_sigs = []
     _method_registry = []
+    // Operator overloading (opt-in): pre-register impl methods so `a + b`
+    // dispatch is source-order-independent. NO-OP unless HEXA_OP_OVERLOAD set.
+    _op_overload_prescan(ast)
     _known_fn_globals = []
     _known_nonlocal_names = []
     _known_set_init()
