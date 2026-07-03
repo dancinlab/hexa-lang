@@ -173,11 +173,25 @@
         "source": "tool/build_cuda_runtime"
       },
       {
+        "id": "RELEASE-CUDA-ASSET-SASS-ONLY-NO-PTX",
+        "state": "ossified",
+        "value": "The shipped hexa-linux-x86_64-cuda asset was built by release CI (GPU-less, SM=80) with `-gencode arch=compute_80,code=sm_80` ONLY — that embeds sm_80 SASS and NO PTX, so on any newer consumer GPU (RTX 5070 = sm_120) every kernel launch fails cudaErrorNoKernelImageForDevice SILENTLY (launches unchecked): cuda_available()==1, [OWN-GEMM-FIRED] banners print, but device buffers stay zero-filled → garbage results. Measured on summer v0.547.0 asset: bytegpt_devres_smoke argmax dev=0/host=46, max|Δ|=551; re-splicing the SAME v0.547.0 emitter source built with the PTX gencode added → PASS argmax 32==32==32, max|Δ|=2.5e-06. release.yml's comment always CLAIMED sm_80 PTX driver-JITs forward — the flag never embedded the PTX. Sibling of BUILD-CUDA-RUNTIME-CUDA-HOME-SM80-ZEROS (local-build variant of the same sm_80-on-sm_120 zeros class).",
+        "threshold": "Both nvcc calls (compile + -dlink) in tool/stage_resolve_runtime_a AND tool/build_cuda_runtime must carry `-gencode arch=compute_$SM,code=sm_$SM -gencode arch=compute_$SM,code=compute_$SM` (SASS + PTX). release.yml cuda job Verify step asserts `cuobjdump -lptx runtime_cuda.o` lists a .ptx image and fails the job otherwise — a gencode regression can never ship a silently-broken -cuda asset again. Consumer-side one-time JIT cost is cached (~/.nv/ComputeCache).",
+        "source": "tool/stage_resolve_runtime_a"
+      },
+      {
         "id": "CODEGEN-BOXED-SCALAR-SLOWPATH",
         "state": "in_flight",
         "value": "hexa native-emit(aprime_cc --emit=obj)의 일반 동적타입 scalar/array 경로가 gcc-O2 대비 measured 2.9~23× 느림(geomean 8.6×·aiden·reference-match·state/codegen-quality-probe-verdict.md). 커널별 ratio: k1_sum(scalar reduce) 2.86× · k5_fncall 4.41× · k2_collatz(branchy int) 12.53× · k4_branch(modulo) 12.73× · k3_arrmap(배열 map) 23.23×(최대). 어셈 root-cause=박싱 HexaVal 태그-디스패치 모델: scalar op마다 런타임 함수호출(hexa_add_slow/hexa_mul/hexa_mod, 타입태그 스택슬롯)·레지스터할당無·unboxed i64無·strength-reduction無. k3=원소당 7call(hexa_index_get/set bounds-check+box) vs gcc 0call(register pointer-walk+lea+magic-multiply). HEXA_INLINE_INT_BOX=1도 unbox 안됨(5-7 call/iter 잔존). 손튜닝 farr/GEMM은 별도 unboxed 경로=BLIS/cuBLAS parity(일반 유저코드는 거기로 안 내려감).",
         "threshold": "돌파레버=static-type-inference 기반 int/float scalar unboxing + native-array element access(farr unboxed 기계를 일반 scalar loop로 확장). 진행=codegen-unbox-breakthrough workflow(Map→Design→Plan→state/codegen-unboxing-campaign-plan.md)→최소프로토타입 opt-in HEXA_UNBOX_* default-OFF→런타임 ratio측정+byteeq3타깃 gen3≡gen4+출하smoke→pr-cycle. ⚠️고위험 substrate(codegen)·릴리스무결성 최상위·multi-session·OFF경로 byte-identical 필수. 종착=커널 ratio≈1(parity 도달) 또는 measured 천장.",
         "source": "self/codegen.hexa"
+      },
+      {
+        "id": "WALL-A-STATIC-TYPES-REJECT-LADDER",
+        "state": "in_flight",
+        "value": "정적타입 REJECT 사다리 r1~r6 land(literal→ident/call→decl-split→array→struct-field→struct-literal·전부 opt-in HEXA_STATIC_TYPES default-OFF·byteeq중립·HX3011 Rust E0308·삽입점 compiler/check/types.hexa _infer_expr)·r7+ generic/trait static-dispatch=measured 천장(dynamic 런타임 type-erasure 근본벽).",
+        "threshold": "r7+ 불가=_types_lower_type_ref:931-939 degraded sentinel(generic:/fn:/tuple: → args:[]/ret:[] 타입파라미터 소거)→concrete T 미보유→generic monomorphization·trait static-dispatch은 dynamic→static 런타임 재설계 필요(scope-local _infer_expr 鋼 아님). nested receiver(s.inner.x)도 同벽. SSOT=state/rfc_static_types_rust_ladder.md.",
+        "source": "compiler/check/types.hexa"
       },
       {
         "id": "bench-hexa-clm-step-hexa-1",
@@ -222,11 +236,88 @@
         "source": "stdlib/flame/forge_det.hexa"
       },
       {
-        "id": "readme-md-1",
+        "id": "identity-engine-hexa-1",
         "state": "pos-conv",
-        "value": "물리상수의 VALUE 를 완전수/약수함수 자유지수(P^k)로 맞추는 fit 은 Texas-sharpshooter 우연이다 — 목표 자릿수 하나(예 Λ~10^-122)는 어느 완전수든 어떤 정수 k 로 도달하고(P4=8128 k=31 이 P3=496 k=45 보다 더 근접), k 자체도 σ·τ−φ−1 등 복수 n6 표현으로 재현돼 고유강제가 안 된다. 진짜 '상수 발견'은 값-fit 이 아니라 구조적 필연(uniqueness 정리·차원-세기)이어야 한다: Λ 는 Lovelock k=0 항으로 모든 D≥1 에서 유일하게 항상 존재=반드시 들어가는 상수, D=4=τ(6) 에서 EOM 기여항 정확히 2=φ(6).",
-        "threshold": "재발조건=물리상수 값을 P^k/약수함수 자유지수로 맞춰 ⭐/🔵 승격 시도할 때. 해결=① 자유 파라미터(k) 독립강제 검증 ② 타 완전수 대조(모두 맞으면 우연) ③ 값 아닌 구조적 필연(정리·차원세기)로 재정향, 값은 🟨 자릿수-only 상한. hexa verify g5 게이트 통과 전 승격 금지.",
-        "source": "ATLAS/README.md"
+        "value": "identity_engine.hexa의 unguarded module-level selftest 'fn main'이 이 파일을 import하는 fresh 모듈의 entry main을 hijack(flatten이 dep main 먼저 emit→entry main drop). ✅RESOLVED(M2·PR pending): selftest main+gate를 compiler/atlas/identity_engine_test.hexa로 이동→identity_engine.hexa main-free→import 안전(grammar.hexa가 이제 직접 import·grammar_test 12/12 자기 main 실행 확인). LESSON=라이브러리 모듈에 module-level fn main 금지·selftest는 항상 companion _test.hexa로 분리.",
+        "threshold": "재발조건=라이브러리 .hexa에 module-level fn main을 두고 그걸 import하는 새 모듈의 자체 main이 안 돎 · 해결=selftest main을 companion <module>_test.hexa로 분리(module은 main-free 유지)·drill/ 관례",
+        "source": "compiler/atlas/identity_engine.hexa"
+      },
+      {
+        "id": "architecture-json-1",
+        "state": "pos-conv",
+        "value": "ARCHITECTURE.json blind write가 파일 훼손/거대diff 재발 (1차 #4135 UU conflict-marker blind-add · 2차 json.dump indent=1 재포맷→5369줄 diff 커밋 · 3차 2026-07-03 hexa-own-ladder 노드 삽입을 indent=1로 덤프→5.5k줄 재포맷, 커밋 전 이 레코드 열람으로 자체 적발·canonical 재저장으로 67줄 복원). 프로그램적 rewrite는 반드시 json.dumps(d,ensure_ascii=False,indent=2)+개행 canonical로 저장하고 git diff --stat으로 실변경 줄수만 남았는지 확인",
+        "threshold": "재발조건=ARCHITECTURE.json을 스크립트로 쓰면서 indent=2+trailing-newline canonical 미준수 또는 diff --stat 미확인 · 해결=수정 전 HEAD round-trip 동일성 확인+canonical 저장+diff --stat 실변경 확인 후 커밋",
+        "source": "ARCHITECTURE.json"
+      },
+      {
+        "id": "restore-frozen-seeds-1",
+        "state": "pos-conv",
+        "value": "FRAG-REGEN 블록이 같은 vehicle서 2연속 결함: ①#4426 착륙 전 OFF-중립 테스트의 git checkout -q . 가 uncommitted 편집을 wipe→머지커밋에 블록 유실 ②#4427 재착륙 spec의 signal_flock sentinel(hexa_signal_install)이 emitter 출력에 없는 심볼(실재=hexa_os_sig_install/hexa_os_flock_open)→항상 sentinel-miss. 두 결함 다 NO-OP-SAFE fallback(FROZEN 유지)이 실패를 조용히 삼켜 rc=0 GREEN으로 위장 — flag-ON 실측 census(nm -u)만이 진짜 검증이었다(#4428/#4429 dual-fix로 종결·ON floor=15 U WALL-only 수렴).",
+        "threshold": "재발조건: ①손편집 상태로 검증 스크립트가 git checkout/reset 류를 실행 ②sentinel/guard 상수를 실제 산출물에 grep 실재확인 없이 지정 ③NO-OP-SAFE fallback이 있는 경로를 rc=0만으로 done 처리. 해결: 편집은 검증 전 커밋 먼저·sentinel은 emitter 출력에 grep 확인 후 지정·fallback 있는 레버는 반드시 flag-ON 측정(심볼 drop 델타)으로 닫는다.",
+        "source": "tool/restore_frozen_seeds"
+      },
+      {
+        "id": "codegen-hexa-1",
+        "state": "pos-conv",
+        "value": "Field-AssignStmt codegen must recurse to the ROOT lvalue like Index-AssignStmt (RFC-037): obj.field=v lowered as gen2_expr(obj)=map_set(...) breaks when obj is a place (Index/Field) since gen2_expr(obj) is a map_get/index_get rvalue -> clang 'expression is not assignable'. _gen2_nested_field_assign_stmt walks the mixed Field/Index spine to the root Ident and rebuilds with nested map_set/index_set.",
+        "threshold": "Recurs if any AssignStmt/CompoundAssign lvalue whose object is a non-Ident place emits '<call(...)> = ' C. Regression: tmp_idxassign_smoke field-of-index / field-of-field cases must clang-compile + PASS (44/44).",
+        "source": "self/codegen.hexa"
+      },
+      {
+        "id": "ci-pick-runner-sh-1",
+        "state": "pos-conv",
+        "value": "darwin 잡 지연의 구조(2026-07-03 실측): picker 매칭이 status==online만 보고 busy를 안 봐(ci_pick_runner.sh jq_filter) ghost가 바빠도 전 darwin 잡이 ghost 1대·1잡 직렬로 수렴, mini는 ghost-offline시에만 쓰는 보험 체인. 여기에 (a)세션 머지 트레인(main 머지 5건)이 main-push 게이트 풀세트를 큐 앞에 쌓아 자기 PR 잡을 starve (b)DIRTY 해소 base-merge 재푸시마다 engine/게이트 잡 재-enqueue(큐 위치 리셋) (c)anima engine cold ~39min/잡이 곱해져 수 시간 대기. churn-race(runtime-cuda-emit-hexa-1)의 러너-큐 판.",
+        "threshold": "재발조건: 짧은 간격 다중 main 머지+PR CI 동시 대기, 또는 busy ghost에 darwin 잡 적체 중 idle darwin 러너 방치. 해결: ①머지 트레인은 PR CI가 소화될 간격으로(또는 PR 완주 후 일괄) ②DIRTY 재푸시는 대상 PR의 잡이 실행 직전이 아닐 때만 ③구조 레버(별도 결정 필요)=picker busy-aware 분산(mini heavy-build 금지 원칙과 충돌 검토)·main-push 게이트 superseded-cancel(이력 보존 설계와 트레이드오프).",
+        "source": "tool/ci_pick_runner.sh"
+      },
+      {
+        "id": "hexa-cc-c-1",
+        "state": "pos-conv",
+        "value": "Stale-installed hexa가 대형 소비자(anima engine)를 깨는 두 형태: ①pool 설치가 codegen 매핑보다 오래됨(v0.511 lever3 사례) ②러너가 Latest를 설치하는데 Latest 자체가 고착 — release finalize가 cuda-asset RED(v0.553~)로 막혀 Latest=v0.556 동결→canonical install.sh가 신선 호스트에 신형 runtime carrier(hexa_forge_dispatch_gelu_bwd/hexa_farr_packed_gemv_offset) 없는 hexa를 배포→ghost cold-compile 20 errors가 v0.552와 v0.556 둘 다에서 재현(2026-07-03). cloud CI는 Actions 캐시(warm ~/.hexa-cache)로만 살아있었음 = self-hosted 라우팅이 cold-compile을 강제하기 전까지 파손이 가려짐.",
+        "threshold": "'러너/pool이 X를 컴파일 못함'을 대상 결함으로 단정하기 전: ①같은 X가 소비자 CI서 green인지(green=stale install) ②Latest가 고착인지(release finalize RED 체인) 확인 — 고착이면 최신 verified tag 명시 설치(HEXA_VERSION=<tag> install.sh·v0.574.1이 ghost 해결)+릴리스 체인 unstick이 root fix. warm-cache로만 green인 소비자=가려진 파손이지 건강 아님.",
+        "source": "self/native/hexa_cc.c"
+      },
+      {
+        "id": "workflow-1",
+        "state": "pos-conv",
+        "value": "Workflow subagent(및 fable/agent)가 설계·검증 중 mini서 로컬 hexa 빌드(build/aprime_cc·build/hexat·hexa --emit/run/cc)를 spawn하면 각 프로세스 0.5~1.4GB RSS → swap 🔴(6GB+)로 mini가 메모리 크래시(mini=git/gh 전용·heavy build 금지 위반). 실측: zero-c reduction workflow 2개 동시 실행시 aprime_cc 2개(1.85GB)+hexat 2개(1.2GB)+claude 35프로세스 → swap 6.0G🔴.",
+        "threshold": "재발조건=swap🟡→🔴 상승 + ps에 build/aprime_cc나 build/hexat나 로컬 hexa 빌드 프로세스. 해결: (1)즉시 pkill -f 'aprime_cc'·pkill -f 'build/hexat'로 stray 정리 (2)workflow/agent 프롬프트에 '빌드·측정·hexa run/emit/cc는 반드시 summer/aiden(ssh)서·mini서 로컬 hexa 실행 금지' 명시(설계 agent는 git show/grep 소스읽기만·컴파일 검증은 pool ssh) (3)swap🔴일 때 추가 workflow launch 자제(heavy-on-pool·단일머신 부하금지)—러닝 완료로 메모리 해제 후 launch. 관련=memory feedback_run_heavy_on_aiden_summer_not_mini.",
+        "source": "Workflow"
+      },
+      {
+        "id": "language-surface-1",
+        "state": "pos-conv",
+        "value": "ARCHITECTURE census 노드는 captured-date 스냅샷이지 현행 보증이 아님 — 2026-06-27 language-surface census의 'typecheck stub·동적타입' 서술을 검증 없이 HEXA-OWN L2 설계 전제로 사용→오설계 등록(실제=Wall A static-types r1~r5 main 머지·HEXA_STATIC_TYPES opt-in·r6 브랜치 진행). 설계 전제로 census를 인용하기 전 git log/branch -a로 그 축의 현행을 재검증할 것 (stale-branch trap #3736과 동족)",
+        "threshold": "재발조건=ARCHITECTURE census/스냅샷 서술을 재검증 없이 새 설계·계획의 전제로 복사 · 해결=전제 축마다 git log origin/main -- <path> + git branch -a grep으로 현행 확인 후 인용, census 노드도 그 자리서 현행화",
+        "source": "language-surface"
+      },
+      {
+        "id": "stage-resolve-runtime-a-1",
+        "state": "pos-conv",
+        "value": "pool ssh 빌드가 선행 'git fetch origin main' 없이 'git checkout origin/main'만 하면 summer/aiden의 STALE origin/main ref를 빌드→방금 머지한 emitter 변경이 없어 보이고 nm 심볼이 안 빠져 verify-done false-negative. 실측: summer HEAD stale서 glob/fgets 게이트=0인데 origin/main엔 정상 존재(#4443+54줄/#4444+18줄).",
+        "threshold": "재발=pool 빌드서 방금 머지한 변경이 '없다'/nm 안바뀜. 판정=origin/main(git show)에 실재 확인+pool HEAD past 확인. stale=harness(fetch누락)·코드결함 아님→revert금지. 해결=pool 빌드는 'git fetch origin main && git checkout FETCH_HEAD' 필수·checkout만 금지.",
+        "source": "tool/stage_resolve_runtime_a"
+      },
+      {
+        "id": "workflow-2",
+        "state": "pos-conv",
+        "value": "다수 agent를 동시 fan-out하는 Workflow가 API 서버측 rate-limit(not usage limit) 걸리면 그 라운드 agent들이 통째로 실패(designs=[]·plan=null). 실측 2회: w7pvnqc6k(engine-gap+verify-plan 2/3 실패)·wrnddfh3h(qsort+strtod+synth 3/3 실패·subagent_tokens=0·2.8s fast-fail). rate-limit은 즉시 재launch해도 또 실패.",
+        "threshold": "재발=Workflow 결과 failures[]에 'Server is temporarily limiting requests·Rate limited'. 해결: (1)즉시 재launch 금지(backoff)—rate-limit 해소(수분~십수분) 후 재시도 (2)잘 스코프된 단일 설계는 Workflow 대신 직접 구현(코드 읽기+emitter 편집·git만·pool 불요)하거나 단일 fable 호출로 강등해 동시 agent 수↓ (3)ScheduleWakeup으로 지연 재시도. 관련=fanout-workflow(≥3만 Workflow)·[[workflow-1]].",
+        "source": "Workflow"
+      },
+      {
+        "id": "runtime-emit-full-hexa-2",
+        "state": "pos-conv",
+        "value": "#ifdef-gated emitted-C body의 /* */ 블록주석에 mid-line */가 있으면 C 블록주석을 조기종료→뒤 텍스트가 코드로 파싱돼 컴파일 실패. OFF(default)시 #if로 컴파일 제외돼 OFF byteeq/faithful/install-compile 전부 GREEN 통과→버그 은폐. flip(default-ON)이 그 body를 처음 컴파일할 때 노출. 실측: glob #4443 주석 'inline */?/literal matcher'의 */가 flip #4449서 runtime.c:13139 'undeclared literal/matcher/selection' 5-RED.",
+        "threshold": "재발=default-OFF gate를 default-ON flip시 install.sh runtime-compile(clang-18)/faithful가 'expected expression·undeclared identifier' RED인데 OFF선 GREEN이었음. 판정=gated body의 /* */ 블록주석에서 mid-line */ grep(줄주석 //의 */는 무해). 해결=주석 리워드(*/ 제거·star/question 등). 예방=default-OFF ON-body 저작시 /* */ 주석에 */·glob메타문자 금지, flip 前 gated region */ 스캔. OFF verification(byteeq/faithful/compile)은 #if-제외 코드를 검증 못하므로 ON body 정합성 보장 안함(=flip이 첫 실검증).",
+        "source": "self/runtime_emit_full.hexa"
+      },
+      {
+        "id": "regex-rt-hexa-1",
+        "state": "pos-conv",
+        "value": "regex native path(HEXA_REGEX_NATIVE)를 default-ON flip하면 undefined reference to rt_regex_* 링크실패: emitted runtime.c(runtime.a)가 rt_regex_*로 위임하나 rt_regex_*는 compiler closure(regex_rt.hexa via compiler/main.hexa import)에만 있고 runtime.a엔 미포함. runtime.a를 standalone 링크하는 소비자(consent-checker·faithful runtime-link·유저바이너리)는 rt_regex_* 미해결→ld fail(linux-arm64 #4451). default-OFF는 libc regex라 무해(rt_regex_* 미참조)·flip이 노출.",
+        "threshold": "재발=closure-import 심볼(rt_*)에 위임하는 runtime.c seam을 default-ON flip시 'undefined reference to rt_*' 링크에러(standalone runtime.a 링크서). 판정=OFF byteeq/faithful GREEN이나 flip이 링크RED. 해결=위임대상 심볼을 runtime.a 자체에 컴파일 포함(regex_rt.hexa+thompson+backtrack를 runtime 빌드 TU에 넣거나 .s seed화·glob/fgets/qsort는 runtime.c 내부 self-contained라 무관)·closure import만으론 standalone runtime.a 링크 부족. regex reduction은 gate MERGED default-OFF(#4445)이나 flip=이 wiring 선행. glob/fgets flip은 self-contained라 성공(#4449/#4450).",
+        "source": "stdlib/runtime/regex_rt.hexa"
       }
     ]
   },
@@ -292,7 +383,7 @@
             "detail": ""
           },
           {
-            "name": "libm transcendentals = **ELIMINATED from the default ship (2026-07-01, #4299-4318 + #4314 -lm removal, faithful-nobaseline 3-target GREEN)** — first full libc-family dropped: all math routed to native `_hx_*` (fdlibm/musl/hw-sqrtsd) + a weak native libm-compat layer provides the libm ABI so any raw call links with no `-lm`. **The shim syscall family is likewise ELIMINATED (2026-07-01, #4320-4328 svc-remainder front CLOSED, faithful-nobaseline 3-target GREEN)** — 8 syscalls (clock_gettime·getrusage·fcntl·mkdirat·pipe2·newfstatat·openat·ppoll) routed from libc to raw-svc (x86_64 `syscall` insn / arm64 `svc 0`, arm64 uses the `*at`/`2` variants; darwin keeps the libc delegate via `#else`). A further 8 fs/time syscalls (nanosleep·getcwd·unlink→unlinkat·fstat·stat→newfstatat·mkdir→mkdirat·rename→renameat) were routed libc→raw-svc this session (#4330-4336, per-PR nm-UND delta measured, faithful-nobaseline 3-target GREEN), closing the reducible fs/time syscall front. Genuine residual now = a **measured** runtime.a nm-UND floor of 60 (2026-07-01, HEAD b7db5085), of which 6 are hexa-own (rt_*_native, resolved at final link, not libc) → ~54 true libc, categorized: ~17 sanctioned FFI (network sockets accept/bind/connect/… + dlopen/dlsym), ~6 CRT bootstrap (__libc_calloc/__libc_free/_exit/atexit/environ/mallopt), ~8 stdio/dir (opendir/readdir/glob/mkstemp), ~3 own-algo (qsort/rand/strtod, separate campaign), ~7 process/ns (execve/setns/unshare/mount), ~13 reducible-remaining (getpid-family via codegen-wrapper, sigaddset/sigemptyset macros, memcpy/memset via Route C default-OFF, flock stub) + GPU FFI (CUDA) — so zero-`.c` remains an **open, attackable campaign** with a measured, categorized floor, not a policy that accepts C permanently.",
+            "name": "libm transcendentals = **ELIMINATED from the default ship (2026-07-01, #4299-4318 + #4314 -lm removal, faithful-nobaseline 3-target GREEN)** — first full libc-family dropped: all math routed to native `_hx_*` (fdlibm/musl/hw-sqrtsd) + a weak native libm-compat layer provides the libm ABI so any raw call links with no `-lm`. **The shim syscall family is likewise ELIMINATED (2026-07-01, #4320-4328 svc-remainder front CLOSED, faithful-nobaseline 3-target GREEN)** — 8 syscalls (clock_gettime·getrusage·fcntl·mkdirat·pipe2·newfstatat·openat·ppoll) routed from libc to raw-svc (x86_64 `syscall` insn / arm64 `svc 0`, arm64 uses the `*at`/`2` variants; darwin keeps the libc delegate via `#else`). A further 8 fs/time syscalls (nanosleep·getcwd·unlink→unlinkat·fstat·stat→newfstatat·mkdir→mkdirat·rename→renameat) were routed libc→raw-svc this session (#4330-4336, per-PR nm-UND delta measured, faithful-nobaseline 3-target GREEN), closing the reducible fs/time syscall front. Genuine residual = a **measured WALL-only floor** (2026-07-03, HEAD 654cbb5e + FRAG-REGEN sentinel-fix, summer clang-18): with every zero-c lever ON (HEXA_ZEROC_FRAG_REGEN=1 restore + -DHEXA_RT_SIGSYS_SVC -DHEXA_RT_DROP_MALLOPT -DHEXA_ZEROC_OWN_MKTEMP -DHEXA_ZEROC_RAND_NATIVE -DHEXA_ZEROC_PROC_SC0_RAW -DHEXA_ZEROC_SIGSET_NATIVE) the runtime.a nm-UND libc floor = **15 U, exactly the sanctioned WALL set**: __libc_calloc/__libc_free (transitive) · atexit/environ (CRT) · dlopen/dlsym/dlerror (FFI) · fgets (FILE*) · glob/globfree (fnmatch fidelity) · qsort (tie-order) · regcomp/regexec/regfree (ERE oracle) · strtod (IEEE oracle) — reducible remainder 0 (state/zeroc-floor-census-2026-07-03.md + state/zeroc-flip-measure-2026-07-03.txt 측정#2). All levers are default-OFF byte-neutral; the default-ON flip is gated on byteeq 3-target + faithful-nobaseline + install smoke GREEN. zero-`.c` is thus a **converged campaign at its measured WALL floor**, not a policy that accepts C permanently.",
             "role": "",
             "id": "overview-genuine-residual-is-only-libm-transcendentals-gpu-ffi-so-zer",
             "detail": ""
@@ -3968,36 +4059,94 @@
             "detail": "",
             "children": [
               {
-                "name": "📦 DEFERRED — the on-path native-seed floor is EXHAUSTED (valop 7-prim + 6 seed families default-ON, byteeq gen3≡gen4 3-target GREEN; see Self-host status). ",
+                "name": "🟢 file metric REACHED (direct + recursive `git ls-files self/**/*.c == ∅`, #4282/#4352/#4356) — remaining zero-c = the functional nm-UND libc floor of the emitted-C substrate (runtime.a), drained as a measured campaign.",
                 "role": "",
-                "id": "blocking-frontiers-self-host-zero-c-ls-self-c-deferred-the-on-path-native-seed-f",
+                "id": "zeroc-frontier-file-metric-reached",
                 "detail": ""
               },
               {
-                "name": "The only remaining lever to fully drop the C substrate is zero-c leg B = io.hexa whole-runtime flip (rt.c substrate replacement, RUNTIME-PORT M3) — an architecture migration with shipped-runtime regression risk, gated on its own risk budget + explicit start decision (self-host≠release ",
+                "name": "🟢 nm-UND floor drain CONVERGED at WALL-only (2026-07-03 measured, summer clang-18, HEAD 654cbb5e + FRAG-REGEN sentinel-fix): all-levers-ON floor = 15 U = exactly the sanctioned WALL set (__libc_calloc/__libc_free · atexit/environ · dlopen/dlsym/dlerror · fgets · glob/globfree · qsort · regcomp/regexec/regfree · strtod); reducible remainder 0. Evidence = state/zeroc-flip-measure-2026-07-03.txt 측정#2 + state/zeroc-floor-census-2026-07-03.md QA VERDICT.",
                 "role": "",
-                "id": "blocking-frontiers-self-host-zero-c-ls-self-c-the-only-remaining-lever-to-fully",
+                "id": "zeroc-frontier-floor-wall-only-converged",
                 "detail": ""
               },
               {
-                "name": "ABSOLUTE). ",
+                "name": "Mechanism: tool/restore_frozen_seeds FRAG-REGEN block (HEXA_ZEROC_FRAG_REGEN=1) synthesizes the 6 native fragments (mount·namespace·signal_flock·proc_fork·term_ffi·tensor_kernels) from their _emit.hexa SSOTs, shipping the native wiring (#4371/#4373/#4377/#4385/#4387/#4420/#4421/#4422); per-symbol micro-gates = HEXA_RT_SIGSYS_SVC(sysconf) · HEXA_RT_DROP_MALLOPT · HEXA_ZEROC_OWN_MKTEMP · HEXA_ZEROC_RAND_NATIVE · HEXA_ZEROC_PROC_SC0_RAW(getppid/setsid) · HEXA_ZEROC_SIGSET_NATIVE.",
                 "role": "",
-                "id": "blocking-frontiers-self-host-zero-c-ls-self-c-absolute",
+                "id": "zeroc-frontier-fragregen-mechanism",
                 "detail": ""
               },
               {
-                "name": "Residual besides leg B = irreducible-J (raw svc/syscall emit · ",
+                "name": "📦 DEFERRED — default-ON flip of the levers (bit-changing): gated on byteeq 3-target + faithful-nobaseline + install.sh smoke GREEN (release-integrity > self-host progress). Until then every lever is default-OFF byte-neutral.",
                 "role": "",
-                "id": "blocking-frontiers-self-host-zero-c-ls-self-c-residual-besides-leg-b-irreducible",
+                "id": "zeroc-frontier-flip-deferred-gates",
                 "detail": ""
               },
               {
-                "name": "libm · HexaVal struct · _start/CRT) + off-path-K (~84%, free/realloc/spawn/popen/async). print-fmt/fd-write census = @syscall irreducible (lateral relocation, not floor reduction). SSOT: memory `project_hexa_selfhost_floor_census` + `project_hexa_zeroc_breakthrough`.",
+                "name": "🧱 WALL residual (~15, each a separate campaign or honest-keep): strtod (IEEE oracle) · dlopen/dlsym/dlerror (FFI) · environ/atexit/__libc_calloc/__libc_free (CRT bootstrap) · fgets (FILE* layer) · glob/globfree (fnmatch fidelity, MEDIUM) · qsort (tie-order) · regcomp/regexec/regfree (ERE oracle). SSOT: state/zeroc-floor-census-2026-07-03.md + memory project_hexa_zeroc_floor_goal_state.",
                 "role": "",
-                "id": "blocking-frontiers-self-host-zero-c-ls-self-c-libm-hexaval-struct-start-crt-off",
+                "id": "zeroc-frontier-wall-residual",
                 "detail": ""
               }
             ]
+          },
+          {
+            "name": "bytegpt decode ≥1.0× PyTorch (gold) — LENGTH-QUALIFIED GOLD · next=flash-decoding attn",
+            "role": "",
+            "id": "blocking-frontiers-bytegpt-decode-gold",
+            "detail": "",
+            "children": [
+              {
+                "name": "MEASURED (2026-07-03, summer RTX5070, ByteGPT-303M h1129): gen=24 parity 1.002× torch · gen=240 0.734×. 잔여 벽 = attn context-scaling(torch per-token은 컨텍스트에 +2% flat, hexa는 +39% — warp-per-head 직렬 L-row 순회 vs fused SDPA). 상태 🔬OPEN: 미시도 레버 = flash-decoding 커널(split-KV over context + online combine) 별도 캠페인.",
+                "role": "",
+                "id": "blocking-frontiers-bytegpt-decode-gold-measured",
+                "detail": "",
+                "children": []
+              },
+              {
+                "name": "착지된 레버(전부 opt-in default-OFF, main): S2 fused f32 flash-attn(#4413) · r1 fexp HEXA_ATTN_F32EXP(attn 10.35×·eff-BW 30→310GB/s) · r3 u4 HEXA_ATTN_U4(bit-id) · r4 HEXA_GELU_F32ERF(+8.8-13.2%) · r7 HEXA_EPI_FUSE(유일 bit-identical) · skinny HEXA_SKINNY_SPLITK(M≤8 게이트) · #4416/#4418/#4419. anima측 배선(r6 fused-QKV·r7-epi-wire·S1 #2741)은 anima repo PR로 별도. 캠페인 SSOT=memory project_hexa_devres_p3_levers.md.",
+                "role": "",
+                "id": "blocking-frontiers-bytegpt-decode-gold-levers",
+                "detail": "",
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "CI substrate — runner routing (3-tier insurance chain)",
+        "role": "",
+        "id": "ci-substrate-runner-routing",
+        "detail": "",
+        "children": [
+          {
+            "name": "모든 self-hosted 잡은 dispatch pick-runner(tool/ci_pick_runner.sh + .github/actions/pick-runner)를 경유한다 — 정적 self-hosted 핀 0 (2026-07-03 전수 감사). 프로브 토큰 = secrets.RUNNER_PROBE_TOKEN || github.token (기본 GITHUB_TOKEN은 러너 목록 API 불가·블라인드 카나리아 ::warning 내장).",
+            "role": "",
+            "id": "ci-substrate-runner-routing-picker",
+            "detail": "",
+            "children": []
+          },
+          {
+            "name": "darwin 체인: ghost(selfhost-gen2fix, 전담) → mini(hexa-darwin-mini, ghost OFFLINE시에만 — 전용 라벨로 평시 로드밸런싱 차단) → macos-15(무료). linux 체인: aiden‖summer(hexa-build 2중화) → ubuntu-latest(무료). 유료 러너 참조 0 — GitHub 폴백은 무료 표준 러너만.",
+            "role": "",
+            "id": "ci-substrate-runner-routing-chains",
+            "detail": "",
+            "children": []
+          },
+          {
+            "name": "러너 프로비저닝 계약: 잡이 기대하는 툴체인(brew·ccache)은 러너 .env PATH(/opt/homebrew/bin)+호스트 설치로 제공 — launchd 서비스 기본 PATH엔 brew가 없어 13-15s exit127 RED가 난다(ghost·mini 모두 조치 완료, ccache 4.13.6).",
+            "role": "",
+            "id": "ci-substrate-runner-routing-provisioning",
+            "detail": "",
+            "children": []
+          },
+          {
+            "name": "required 게이트(selfhost-gates-summary)는 ubuntu 고정으로 self-hosted에 하드 의존하지 않는다. fork-PR은 eligible 가드로 무조건 클라우드(RCE). ghost는 단일 직렬 러너 — PR 폭주 시 큐잉(설계된 트레이드오프).",
+            "role": "",
+            "id": "ci-substrate-runner-routing-guards",
+            "detail": "",
+            "children": []
           }
         ]
       },
@@ -4017,7 +4166,7 @@
                 "name": "Compiler driver",
                 "role": "",
                 "id": "component-map-table-component-path-role-compiler-driver",
-                "detail": "Path: `compiler/main.hexa` · Role: Entry point: arg parse, atlas load, S0–S8 dispatch, codegen routing, emit/link orchestration"
+                "detail": "Path: `compiler/main.hexa` · Role: Entry point: arg parse, atlas load, S0–S8 dispatch, codegen routing, emit/link orchestration · HEXA_CG_PROFILE=1 = per-phase stderr rows across the FULL pipeline (lex→emit_asm; frontend marks 2026-07-03, ~99.9% wall coverage; env unset = silent no-op)"
               },
               {
                 "name": "Lex (S0)",
@@ -4119,7 +4268,7 @@
                 "name": "Codegen (LIR)",
                 "role": "",
                 "id": "component-map-table-component-path-role-codegen-lir",
-                "detail": "Path: `compiler/codegen/{arm64_darwin,x86_64_linux,thumbv7em_eabihf,nvptx_target}.hexa` · Role: MIR → LIR, target-specific regalloc + instruction selection"
+                "detail": "Path: `compiler/codegen/{arm64_darwin,x86_64_linux,thumbv7em_eabihf,nvptx_target}.hexa` · Role: MIR → LIR, target-specific regalloc + instruction selection · per-operand regalloc 조회는 O(1) id2idx 직접배열 (x86_64 #3712 · arm64 패리티 포트, byteeq-neutral)"
               },
               {
                 "name": "Emit (asm/object)",
@@ -4450,13 +4599,13 @@
             "detail": ""
           },
           {
-            "name": "The framing premise reshapes the whole table: hexa is DYNAMICALLY TYPED — types resolve at runtime via a {tag,payload} value, every fn is auto-polymorphic, and `compiler/parse/parser.hexa:1811-1818` confirms typecheck/codegen ERASE generics (Box<Int>·Box<Str> share one MIR shape) with ",
+            "name": "The framing premise: hexa is dynamically typed BY DEFAULT ({tag,payload} runtime values · generics erased at MIR), but a STATIC-TYPES MIGRATION is underway (Wall A: opt-in HEXA_STATIC_TYPES=1 REJECT ladder r1–r5 in main #4094→#4107 · r6 on feat/static-types-rust-r6 · Rust-target; plus const-generics+trait-bounds #4063 · type-alias #4064 · associated/higher-kinded-types branches). ",
             "role": "",
             "id": "language-surface-the-framing-premise-reshapes-the-whole-table-hexa-is-dynamic",
             "detail": ""
           },
           {
-            "name": "`compiler/check/types.hexa:1-40` a typecheck stub. ",
+            "name": "`compiler/check/types.hexa` is a ~3.6k-LOC opt-in static checker (HX3011 let-mismatch et al.), no longer a stub. ",
             "role": "",
             "id": "language-surface-compiler-check-types-hexa-1-40-a-typecheck-stub",
             "detail": ""
@@ -5228,6 +5377,62 @@
         ]
       },
       {
+        "name": "HEXA-OWN — Rust-class 메모리안전 사다리 (opt-in · 설계 SSOT)",
+        "role": "roadmap",
+        "id": "hexa-own-ladder",
+        "detail": "",
+        "children": [
+          {
+            "name": "목표: zero-runtime-GC 유지한 채 컴파일타임 메모리안전을 단계 도입 — Rust의 결론(제로 런타임 자동해제)을 hexa 관례(opt-in 레버·byteeq 게이트·arena 기판)로 오른다. no-LLVM 무관(전부 프론트엔드).",
+            "role": "",
+            "id": "hexa-own-ladder-goal",
+            "detail": ""
+          },
+          {
+            "name": "공통 원칙: 어노테이션/키워드 미사용 코드는 출력 bit-identical → 각 단 머지는 byteeq 3-target GREEN으로 무해 증명 · 검사기는 warning 먼저→error 승격 별도 PR · self-host 마이그레이션 강제 없음(새 모듈부터 opt-in·컴파일러 자신은 마지막·gen3≡gen4 불가침).",
+            "role": "",
+            "id": "hexa-own-ladder-principles",
+            "detail": ""
+          },
+          {
+            "name": "L1 defer + @own drop — census(wrk4s86e9) 판정: defer는 이미 gen2 C-transpile(self/lexer.hexa:39·parser.hexa:4749·codegen.hexa fn-exit LIFO drain, 무사용 zero-emission 기설계)과 interp에 존재 · M1의 유일한 갭=native aprime 경로(compiler/) → 성격=in-repo reference-match 패리티 포트(oracle=gen2: fn-exit LIFO·reached-flag at-most-once·throw는 drain 안 탐). 계획서 SSOT=state/hexa-own/M1_defer_wiring.md (Step0 특성화→PARSER-1 contextual carrier→HIR 문자열 태그→MIR 단일-exit epilogue(count==0=완전 무변경)→codegen 무수정 검증→3실행기 selftest→HX0xxx 진단).",
+            "role": "",
+            "id": "hexa-own-ladder-l1-defer",
+            "detail": ""
+          },
+          {
+            "name": "L2 move/affine own-lint = 소유권 이동 후 사용(double-free·use-after-move) 컴파일타임 검출 — lifetime 추론 없음. 설계 전제: 진행중인 Wall A static-types 캠페인(compiler/check/types.hexa · HEXA_STATIC_TYPES=1 opt-in REJECT 사다리 r1~r5 main·r6 브랜치·Rust-target) 위에 탄다 — @own은 정적 타입 한정자로, own-lint는 Wall A와 같은 opt-in 검사 패스로 통합(별도 dataflow 전용 설계 아님).",
+            "role": "",
+            "id": "hexa-own-ladder-l2-affine",
+            "detail": ""
+          },
+          {
+            "name": "L2.5 region/arena escape 검사 = 기존 arena-bump 기판+@no_arena 위 Cyclone식 region 태그 — arena 수명 밖 포인터 유출(반환·전역 저장)을 컴파일 에러로.",
+            "role": "",
+            "id": "hexa-own-ladder-l25-region",
+            "detail": ""
+          },
+          {
+            "name": "L3 full borrow checker(&/&mut·NLL) = rustc MIR borrowck reference-match — go/no-go는 L1~L2.5가 못 잡은 실전 결함 클래스 실측 후 결정(측정 없는 착수 금지).",
+            "role": "",
+            "id": "hexa-own-ladder-l3-borrow",
+            "detail": ""
+          },
+          {
+            "name": "마일스톤: M1 defer native-패리티 포트(신규 TokenKind/ExprKind/런타임심볼 3금지 — carrier 관용구·기존 MIR kind만·frozen blob 보존) → M2 @own 스코프-엔드 drop → M3 own-lint(warning·codegen 무변경) → M4 error 승격+double-free/UAF selftest군+anima scratch 재현 → M5 region escape → M6 borrow go/no-go. 각 단 독립 머지·어디서 멈춰도 완결.",
+            "role": "",
+            "id": "hexa-own-ladder-milestones",
+            "detail": ""
+          },
+          {
+            "name": "검증 게이트: 단마다 ① 미사용 byteeq 3-target GREEN ② 해당 결함클래스 selftest(companion _test.hexa 관례) ③ 두 백엔드(release_build+aprime_cc) 모두 · 에러코드=기존 static-type 대역(HX3011 인접) own-check 코드로 편입(신규 HX9xxx 대역 발명 금지).",
+            "role": "",
+            "id": "hexa-own-ladder-gates",
+            "detail": ""
+          }
+        ]
+      },
+      {
         "name": "Verify gate (g5)",
         "role": "",
         "id": "verify-gate",
@@ -5295,7 +5500,7 @@
         "name": "Atlas — math-map + novelhunt campaign",
         "role": "",
         "id": "atlas",
-        "detail": "거시(정수론) ↔ 양자(격자·모듈러형식·CFT·QEC) 수학 지도. 사람층 원장=atlas/README.md + atlas/hypotheses/H-*.md, 기계 SSOT=compiler/atlas/embedded.gen.hexa(@F verdict atom). 적재는 항상 양층(verify is ambient · CLAUDE.md)."
+        "detail": "거시(정수론) ↔ 양자(격자·모듈러형식·CFT·QEC) 수학 지도. 사람층 원장=ATLAS/README.md + ATLAS/hypotheses/H-*.md, 기계 SSOT=compiler/atlas/embedded.gen.hexa(@F verdict atom). 적재는 항상 양층(verify is ambient · CLAUDE.md). 외부 open-problem 타깃 레저 = Erdős problem corpus(status SSOT=erdosproblems.com · ~1217문제/~45% solved · 2026-07), Millennium 7이 아님 — finite-witness(반례탐색·bounded verify·extremal) 표면이 exact-int 엔진과 정합·맵 기존 노드(Egyptian fractions·divisor·covering) 중첩. 규율: open=🟥·bounded=🟩 [2,N] only·⭐=증명만·per-problem .md 금지 (ATLAS/CLAUDE.md 'Erdős problem ledger' 절)."
       },
       {
         "name": "Discovery engine — NEXUS (drill / kick)",
@@ -5433,7 +5638,7 @@
                 "name": "fatal HX8004) + ⓒ `hexa verify` g5 게이트. 🔵/🟢 verify PASS 시 atom 이 compiler/atlas/embedded.gen.hexa 로 자동 fold (별도 register ceremony 없음). 빌드불가(mini) 노드는 state/novel-dfs/*_fold.py 로 @F atom PR-fold. 사람층(atlas/README.md) + 기계층(embedded.gen.hexa) 항상 양층. ",
                 "role": "",
                 "id": "discovery-engine-n-fatal-hx8004-hexa-verify-g5-verify-pass-atom-compiler-atlas",
-                "detail": ""
+                "detail": " NOVEL-CLOSURE 신뢰성 하드닝(2026-07-02·fable-eval 유래): ⓐ congruence 클로저 기저를 3-base(5/7/11) 하드코딩에서 canonical Ramanujan-Watson 타워 전체(모든 {5,7,11}-smooth m·24δ≡1)의 sub-progression 검사로 일반화 — p(50n+49)≡0 mod25(a≠m) 류 자명 하위진행이 verified-novel로 새던 오탐 봉쇄(conjecture.hexa). ⓑ congruence 파서가 α·n 계수틀에서 n 뒤 잔여문자(n^2 등)를 silent-drop하던 mis-parse를 unparseable로 차단(진술≠검증 c2 위반 제거). ⓒ drill PCF/additive 스크린의 하드코딩 novel:0 텔레메트리(탐색 없이 매 라운드 방송) 제거 → scope=rediscovery-sanity로 정직화. ⓓ stdlib/discovery/saddle_escape fail-loud(len-mismatch·NaN/inf→empty). 회귀=conjecture_test 33/33·saddle_escape_test 6/6."
               },
               {
                 "name": "numerology/lattice-fit/미증명 conjecture 의 🔵 승격 금지.",
@@ -5488,6 +5693,13 @@
                 "detail": ""
               }
             ]
+          },
+          {
+            "name": "novel-생성 설계 로드맵 — OUROBOROS-novel (Fable 2026-07-02 · README 유래)",
+            "role": "",
+            "id": "discovery-engine-novel-design-roadmap",
+            "detail": "측정된 novel=0(결정적 순열 생성기+검증필터) 상태를 벗어나 실제 novel을 만들기 위한 설계 SSOT. 근거=archive-nexus README(Blowup→Contract→Emerge→Singularity→Absorb 5-phase + OUROBOROS 자기참조). 설계 전문=state/fable-eval-discovery-2026-07-02/NEXUS_novel_design_fable.md. 핵심 재정의(c2): README의 '이전 사이클이 표현 못한 primitive'를 exact-int로 번역=**size-k 유계 비표현성** (크기≤k의 어떤 기존 항도 [2,64]에서 h와 같은 값-지문을 갖지 않음·지문테이블 조회로 결정가능·절대 비표현성 아님, k 명기). README E4 emergence 데모는 자기반례(가산닫힘=집합↑ 표현력0)→구조성장 데모로 강등. 5-phase→파일 매핑: Blowup=grammar.hexa 항 열거기(렌즈×primitive 격자·verified 1-심볼 이웃 우선)·Contract=identity_engine exact-int 3단 깔때기·Emerge=emerge.hexa 교체(생성자 5종: sol-indicator·합성심볼화·Dirichlet합성곱·iterate궤도·congruence-witness + 비표현성 게이트)·Singularity=ouroboros.hexa(서로 다른 프레임 ≥2 verified + null-model + 재실행 byte-eq 잠금)·Absorb=P_{t+1}=P_t∪{h}·W 정수-EMA α=1/6·atlas 무기록. 3-클래스 판별기: (α)순열=지문∈FP_k → 폐기·(β)재발견=지문∈KNOWN → L1카운터·(γ)genuine=verified∧∉KNOWN∧∉FP_k → 승격경로. 신뢰근거=스크램블-오라클 null-model(γ-rate≠0이면 판별기 반증)+재발견 새니티(superperfect/Mersenne/Ramanujan=반드시 β)+Texas-sharpshooter 불변식(프레임·N 스윕前 고정). 검증 연동: 엔진내부=identity_engine exact-int만·라벨 항상 BOUNDED-UNIQUE[2,N]/UNIVERSAL[2,N]·∀n UNPROVEN·N단계 [2,64]→2·10^4→10^6·승격=γ 생존만 hexa verify g5→🔵 fold(embedded.gen.hexa·PR경로만)·LLM은 hexa loop --dfs 밖 호출 금지(프레임/생성자만 제안). falsifiable: H1(absorb-ON/OFF 2-arm Δ=0이면 OUROBOROS 반증→병목=Emerge 생성자)·H2(γ 1개가 10^6+null-model+KNOWN미스+g5 문헌대조 생존). 실패-모드 진단표로 병목 특정. 보증범위=novel 존재가 아니라 '부재 시 그 위치가 측정으로 특정됨'. 채택/기각: 5-phase·3 meta-loop 채택 / E4데모·ρ→1/3 Banach수렴·1.39M discoveries 집계방식 기각(n=6 중심화·과장 금지). 제약: no-LLVM·byte-det·신규builtin 0(frozen 151c52c8)·drill=바이너리 verb라 byteeq 3-target GREEN 후 머지·빌드 pool(aiden/summer). 8-마일스톤(파일·게이트): M1 grammar.hexa 항 열거기+FP_k(seed 2회 byte-eq)·M2 identity_engine fingerprint()/expressible_at()(고전합성=표현가능)·M3 known_catalog.gen.hexa(재발견 100% β)·M4 emerge.hexa 교체(E4형 FP충돌 기각)·M5 ouroboros+drill 배선(H1 2-arm 측정)·M6 nullmodel_test.hexa(null γ=0)·M7 conjecture.hexa LLM=프레임제안만·M8 캠페인 실행(γ 생존→g5 fold PR). 순서근거=M1-M3 판별기 인프라(없으면 발견=순열과 구별불가)→M4-M5 5-phase 실질→M6 반증장치→M7-M8 공격. 각 단계 독립머지·정직 종착. ✅M1 LANDED(compiler/drill/grammar.hexa BLOWUP 항 열거기+FP_k 지문테이블 2^61-1 롤링해시·grammar_test 12/12 PASS·자체포함 _gram_af 인라인=identity_engine unguarded main flattener-trap 회피). ✅M2 LANDED(identity_engine ie_* 핑거프린트 API 통합+grammar thin 래퍼·_gram_af 미러 은퇴·근본해결=selftest main→identity_engine_test.hexa 이동으로 import-hijack flattener-trap 제거·grammar_test 12/12 지문 M1 바이트동일+identity_engine_test F1-F6 PASS+conjecture_test 회귀 그린). ✅M3 LANDED(compiler/atlas/known_catalog.gen.hexa KNOWN 샤드: atlas @F 순수-basis 곱 항등식 58개[embedded.gen.hexa SSOT·tool/known_catalog_gen.sh 생성·수치상수/물리 @F=어휘밖 배제] + 고전시퀀스/합성 지문 10개[partition·fib·lucas·bell·catalan·중심이항·삼각·오각 mod-P + σ∘σ·φ∘φ·n²=FP_k내부라 제외]·kc_classify α/β/γ·동결 ie_* 커널 공유. known_catalog_test 16/16 PASS[summer v0.574.1]: 항등식 β58/58·시퀀스 β10/10·negctrlsuperperfect/Mersenne σ∘σ+Ramanujan partition→β·σ∘σ&partition ∉FP_k·FP_k항→α·out-of-well size-3→γ. 재발견 β 100%·α/γ오분류 0·byte-neutral 미배선·신규builtin 0).",
+            "children": []
           }
         ]
       }

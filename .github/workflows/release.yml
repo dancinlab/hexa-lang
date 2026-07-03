@@ -96,18 +96,50 @@ jobs:
               exit 1
           fi
           cat "$GITHUB_OUTPUT"
+
+  # ── dispatch — darwin runner picker (free · always available) ──────────────
+  # Emits the darwin release job's `runs-on`: ghost-selfhost (arm64) when ONLINE,
+  # else the free GitHub-hosted macos-15. Motivation: the GitHub-hosted macos
+  # queue backlogged 16h+ (release run 28575565949's darwin job sat queued while
+  # ghost idled), stalling the all-3-green Latest flip. Release fires on tag-push
+  # / workflow_dispatch only (never a fork PR), so `eligible` is always 1 here;
+  # the same-repo guard is kept verbatim for 1:1 parity with the gate pickers.
+  # Mach-O emit is deterministic (gen3≡gen4) so ghost vs macos-15 is byte-neutral
+  # — proven by the byteeq gate before stable; the min-OS baseline note below
+  # applies to whichever darwin host builds (ghost is also macOS 15-class).
+  dispatch:
+    name: dispatch (pick runner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      darwin_label: ${{ steps.darwin.outputs.label }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: darwin
+        uses: ./.github/actions/pick-runner
+        with:
+          kind: darwin
+          eligible: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
+          # administration:read PAT (self-hosted runners list needs it; the
+          # default github.token CANNOT carry that scope → empty list → blind
+          # fallback). Absent secret → `|| github.token` = today's harmless
+          # macos-15 fallback; present → routing goes live. See PR/root-cause.
+          token: ${{ secrets.RUNNER_PROBE_TOKEN || github.token }}
+
   # ── macOS arm64 (Apple Silicon) ────────────────────────────
   release-macos-arm64:
     name: release (darwin-arm64)
-    needs: setup
-    # Blacksmith fast native Apple-Silicon runner. Pinned to macos-15 (NOT -26):
-    # macos-latest was macOS 15 (Sequoia) with no MACOSX_DEPLOYMENT_TARGET set, so
-    # the shipped Mach-O min-OS baseline rides the builder SDK — staying on the 15
-    # SDK keeps that baseline unchanged (macos-26 = newer SDK = higher min-OS floor
-    # = compat regression, same hazard as bumping the x86_64 glibc floor). Mach-O
-    # emit is deterministic (gen3≡gen4), so faster bare-metal host is byte-neutral
-    # — verified by the byteeq gate (PR CI · Blacksmith) before trusting stable.
-    runs-on: macos-15
+    needs: [setup, dispatch]
+    # ghost-selfhost when online, else GitHub-hosted macos-15 (via `dispatch`).
+    # Pinned baseline note: macos-15 (NOT -26) — macos-latest was macOS 15
+    # (Sequoia) with no MACOSX_DEPLOYMENT_TARGET set, so the shipped Mach-O
+    # min-OS baseline rides the builder SDK; staying on the 15 SDK keeps that
+    # baseline unchanged (macos-26 = newer SDK = higher min-OS floor = compat
+    # regression, same hazard as bumping the x86_64 glibc floor). ghost is a
+    # macOS 15-class Apple-Silicon host, so the baseline stays put on it too.
+    # Mach-O emit is deterministic (gen3≡gen4), so a faster bare-metal host is
+    # byte-neutral — verified by the byteeq gate (PR CI · Blacksmith) before stable.
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.darwin_label) }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
@@ -686,7 +718,13 @@ jobs:
           # sub-packages mapped to the nonexistent `cuda-cublas-12-6` →
           # "E: Unable to locate package" (Jimver issue #371). cuBLAS therefore
           # goes through `non-cuda-sub-packages` (no prefix → libcublas-12-6).
-          sub-packages: '["nvcc", "cudart", "cudart-dev"]'
+          # `cuobjdump` ships in its own sub-package (cuda-cuobjdump-12-6), NOT in
+          # nvcc — without it the PTX-embed Verify assertion (#4404) dies with
+          # `cuobjdump: command not found` → the whole cuda job RED → NO cuda
+          # asset uploaded (installer silently falls back to the CPU asset on GPU
+          # hosts). The fail-loud guard worked as designed — it refused to pass
+          # unverified — but the tool it verifies WITH must be installed.
+          sub-packages: '["nvcc", "cudart", "cudart-dev", "cuobjdump"]'
           non-cuda-sub-packages: '["libcublas", "libcublas-dev"]'
 
       - name: Probe CUDA toolkit (build-only — no GPU on CI)
@@ -824,6 +862,36 @@ jobs:
             exit 1
           fi
           echo "✓ hexa driver binary is libcuda-free (runs on GPU-less + GPU hosts; consumer link adds cuBLAS)"
+          # PTX-EMBED ASSERTION (sm_80-SASS-only ship defect, 2026-07-02): the
+          # builder compiles SM=80 but consumer GPUs are newer (RTX 5070 = sm_120),
+          # so the fatbin MUST carry PTX for the driver to JIT forward. SASS-only
+          # objects load fine and cuda_available()==1, but EVERY kernel launch
+          # fails cudaErrorNoKernelImageForDevice silently → zero-filled device
+          # results (measured: bytegpt_devres_smoke argmax dev=0 max|Δ|=551 on the
+          # v0.547.0 asset; PASS after re-splicing the same source built with
+          # `-gencode arch=compute_80,code=compute_80` added). Fail loud here so a
+          # gencode regression can never ship a silently-broken -cuda asset again.
+          tmpx="$(mktemp -d)"
+          ( cd "$tmpx" && ar x "$OLDPWD/$RA" runtime_cuda.o )
+          # Resolve cuobjdump: toolkit bin → PATH → find under the toolkit root
+          # (Jimver layouts vary: /usr/local/cuda-12.6/bin vs targets/x86_64-linux).
+          # If it is genuinely absent the assertion below fails LOUD with this
+          # message — never skip the PTX check (the check exists because a missing
+          # verify let the SASS-only asset ship silently in the first place).
+          CUOBJDUMP="${CUDA_PATH:-/usr/local/cuda}/bin/cuobjdump"
+          [ -x "$CUOBJDUMP" ] || CUOBJDUMP="$(command -v cuobjdump || true)"
+          [ -n "$CUOBJDUMP" ] && [ -x "$CUOBJDUMP" ] || CUOBJDUMP="$(find "${CUDA_PATH:-/usr/local/cuda}" /usr/local/cuda* -maxdepth 4 -name cuobjdump -type f -perm -u+x 2>/dev/null | head -1)"
+          if [ -z "$CUOBJDUMP" ]; then
+            echo "✗ cuobjdump not found (install the 'cuobjdump' toolkit sub-package) — cannot verify PTX embed; refusing to ship unverified" >&2
+            exit 1
+          fi
+          if "$CUOBJDUMP" -lptx "$tmpx/runtime_cuda.o" | grep -q '\.ptx'; then
+            echo "✓ runtime_cuda.o embeds PTX (driver JIT-forward to any consumer GPU arch)"
+          else
+            echo "✗ runtime_cuda.o has NO PTX — SASS-only fatbin silently no-ops on newer GPU archs (gencode must include code=compute_\$SM)" >&2
+            "$CUOBJDUMP" -lelf "$tmpx/runtime_cuda.o" || true
+            exit 1
+          fi
 
       - name: Upload to GitHub Release (supplementary asset)
         uses: softprops/action-gh-release@v2

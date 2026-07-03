@@ -307,8 +307,13 @@ fn emit_tensor_kernels_c() -> str {
             "    HexaTensorStub* t = (HexaTensorStub*)(uintptr_t)HX_INT_U(v);\n" +
             "    int64_t n = t->rows * t->cols;\n" +
             "    for (int64_t i = 0; i < n; i++) {\n" +
+            "#if defined(HEXA_ZEROC_RAND_NATIVE) || (defined(__linux__) && !defined(HEXA_ZEROC_RAND_NATIVE_OFF))\n" +
+            "        double u = (hxlcl_rand()+1.0)/(2147483648.0);\n" +
+            "        double w = (hxlcl_rand()+1.0)/(2147483648.0);\n" +
+            "#else\n" +
             "        double u = (rand()+1.0)/(RAND_MAX+1.0);\n" +
             "        double w = (rand()+1.0)/(RAND_MAX+1.0);\n" +
+            "#endif\n" +
             "        t->data[i] = (float)(_hx_sqrt(-2.0*hxlcl_log(u)) * _hx_cos(6.28318530718*w));\n" +
             "    }\n" +
             "    return v;\n" +
