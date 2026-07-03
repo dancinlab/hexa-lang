@@ -2059,6 +2059,10 @@ HexaVal hexa_hadamard(HexaVal a, HexaVal b); /* runtime.c:11015 */
 HexaVal hexa_host_ffi_call(HexaVal fn_ptr, HexaVal args_arr, HexaVal float_mask, HexaVal ret_kind); /* runtime.c:2275 */
 HexaVal hexa_host_ffi_open(HexaVal lib_name); /* runtime.c:2230 */
 HexaVal hexa_host_ffi_sym(HexaVal handle, HexaVal symbol); /* runtime.c:2239 */
+/* zero-c #29 S1: de-staticized (was static in runtime.c) so the partitioned
+   runtime_ffi_dyn.c (hexa_host_ffi_open/sym) can call it across the TU boundary,
+   while runtime.a-body hexa_host_ffi_call/_6 keep using it. */
+HexaVal hexa_host_ffi_unwrap(HexaVal v);
 HexaVal hexa_is_error(HexaVal v); /* runtime.c:4661 */
 HexaVal hexa_json_decode(HexaVal s);  /* runtime.c:10832 */
 HexaVal hexa_json_encode(HexaVal v);  /* runtime.c:10943 */
