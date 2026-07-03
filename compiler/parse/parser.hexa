@@ -1489,9 +1489,14 @@ fn parse_return_expr() -> Expr {
     let kw = peek()
     advance()
     let mut kids = []
-    // return may be value-less; in practice we always emit a child here so
-    // resolve doesn't have to special-case empty-return.
-    if !check_kind(TokenKind::RBrace) && !check_kind(TokenKind::Semicolon) && !at_eof() {
+    // return may be value-less (kids stays empty before `}`/`;`/EOF).
+    // The value must START on the same line as the keyword — gen2's lexer
+    // emits Newline tokens and parse_return treats one as bare-return
+    // (self/lexer.hexa:250-252 · self/parser.hexa:1794-1806); this lexer
+    // drops newlines, so match that rule via span.line on the next token.
+    // Without it a bare `return` swallowed the NEXT LINE's ident-led stmt
+    // as its value (state/hexa-own/step0_verdict.md, HX2001 on `defer`).
+    if !check_kind(TokenKind::RBrace) && !check_kind(TokenKind::Semicolon) && !at_eof() && peek().span.line == kw.span.line {
         kids.push(parse_expr())
     }
     return Expr {

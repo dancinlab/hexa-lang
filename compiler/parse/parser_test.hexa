@@ -142,6 +142,21 @@ fn case_missing_close_brace() {
 // underlying type lands in `return_type`. The alias is then used in a fn
 // signature + arithmetic — type resolution makes `Celsius`/`MyInt` behave as
 // their underlying primitive so no spurious HX3001 in the later check passes.
+// Bare-return same-line rule (state/hexa-own/step0_verdict.md): a value-less
+// `return` followed on the NEXT line by an ident-led statement must NOT
+// swallow that statement as its value — gen2's Newline rule, matched here
+// via span.line. Positive controls: a value that STARTS on the keyword's
+// line may continue across lines (multi-line binop / open call paren).
+fn case_bare_return_nextline() {
+    let src = "fn a() {\n    return\n    defer { g() }\n}\nfn b() {\n    return\n    g()\n}\nfn c() {\n    return\n    let x = 1\n}"
+    dump_module("case j: bare return + next-line stmt (0-child Return, sibling parses)", src)
+}
+
+fn case_valued_return_multiline() {
+    let src = "fn a() -> i64 {\n    return 1 +\n        2\n}\nfn b() -> i64 {\n    return g(\n        3)\n}"
+    dump_module("case k: valued return spanning lines (value starts same-line)", src)
+}
+
 fn case_type_alias() {
     let src = "type MyInt = i64\npub type Celsius = f64\ntype Box<T> = i64\ntype Temp = Celsius\nfn warm(t: Celsius) -> Celsius { return t * 1.8 + 32.0 }\nfn idx(n: MyInt) -> MyInt { return n + 1 }"
     println("── case j: type alias (decl + generic + chain + use) ──")
@@ -178,6 +193,8 @@ case_for_loop()
 case_assignment()
 case_missing_open_brace()
 case_missing_close_brace()
+case_bare_return_nextline()
+case_valued_return_multiline()
 case_type_alias()
 println("══════════════════════════════════════════════")
 println("  done.")
