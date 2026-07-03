@@ -13,7 +13,10 @@
 # repo = $0 on either) and deadlock-proof.
 #
 # USAGE (inside a ubuntu-latest dispatch job, GH_TOKEN exported):
-#   bash tool/ci_pick_runner.sh <kind>
+#   bash tool/ci_pick_runner.sh <kind> [primary_only]
+#            primary_only=1 → skip the alt/insurance legs entirely (slot-bound
+#            jobs: byteeq-real needs ghost's provisioned gen3 slot — an idle
+#            insurance runner without the slot only manufactures exit-2 REDs)
 #     kind = linux  → emits linux_label  (self-hosted hexa-build, else fallback)
 #            darwin → emits darwin_label (ghost selfhost-gen2fix, else macos-15)
 #
@@ -35,6 +38,7 @@
 set -uo pipefail
 
 kind="${1:-}"
+primary_only="${2:-0}"
 case "$kind" in
   linux)
     fallback='"ubuntu-latest"'
@@ -144,7 +148,10 @@ fi
 
 # ② alt online + idle (darwin insurance runner: mini) — busy-aware spillover so
 # an idle mini takes the job instead of queueing behind a busy ghost.
-if [ "${alt_idle_matches:-0}" -ge 1 ] 2>/dev/null; then
+# primary_only=1 (slot-bound jobs) skips both alt legs: the insurance runner
+# has no gen3 slot, so routing there converts "queue behind ghost" into a
+# false RED (measured: #4469 byteeq-real exit-2 ×2 on mini-selfhost, 2026-07-03).
+if [ "$primary_only" != "1" ] && [ "${alt_idle_matches:-0}" -ge 1 ] 2>/dev/null; then
   echo "::notice::primary busy/offline; $alt_idle_matches online+idle insurance runner(s) match [$alt_want_labels] → self-hosted (mini)"
   emit "$alt_sh_label"
   exit 0
@@ -158,7 +165,7 @@ if [ "${online_matches:-0}" -ge 1 ] 2>/dev/null; then
 fi
 
 # ④ alt online (busy)
-if [ "${alt_matches:-0}" -ge 1 ] 2>/dev/null; then
+if [ "$primary_only" != "1" ] && [ "${alt_matches:-0}" -ge 1 ] 2>/dev/null; then
   echo "::notice::primary offline; $alt_matches online (busy) insurance runner(s) match [$alt_want_labels] → self-hosted (mini, will queue)"
   emit "$alt_sh_label"
   exit 0

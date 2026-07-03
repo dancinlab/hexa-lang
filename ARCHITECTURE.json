@@ -245,8 +245,8 @@
       {
         "id": "architecture-json-1",
         "state": "pos-conv",
-        "value": "ARCHITECTURE.json blind write가 파일 훼손/거대diff 재발 (1차 #4135 UU conflict-marker blind-add · 2차 json.dump indent=1 재포맷→5369줄 diff 커밋 · 3차 2026-07-03 hexa-own-ladder 노드 삽입을 indent=1로 덤프→5.5k줄 재포맷, 커밋 전 이 레코드 열람으로 자체 적발·canonical 재저장으로 67줄 복원). 프로그램적 rewrite는 반드시 json.dumps(d,ensure_ascii=False,indent=2)+개행 canonical로 저장하고 git diff --stat으로 실변경 줄수만 남았는지 확인",
-        "threshold": "재발조건=ARCHITECTURE.json을 스크립트로 쓰면서 indent=2+trailing-newline canonical 미준수 또는 diff --stat 미확인 · 해결=수정 전 HEAD round-trip 동일성 확인+canonical 저장+diff --stat 실변경 확인 후 커밋",
+        "value": "ARCHITECTURE.json blind write가 파일 훼손/거대diff 재발 (1차 #4135 UU blind-add · 2차 jsonl · 3차 indent=1 덤프·자체적발 · 4차 2026-07-03 anima: sidecar convergence add 자체가 indent=2 고정 직렬화로 indent=1 파일 전체 재포맷 13k줄 — 도구 라이터가 원인·diff --stat 검사로 적발 후 indent 복원 커밋으로 상쇄)",
+        "threshold": "재발조건: ARCHITECTURE.json 프로그램 write 시(sidecar convergence add 포함·타 repo일수록 주의). 해결: 기존 파일 indent 감지→동일 스타일 재직렬화→diff --stat로 레코드-only 확인 후 커밋. 근본fix 후보=sidecar 라이터 indent 자동감지(follow-on)",
         "source": "ARCHITECTURE.json"
       },
       {
@@ -320,11 +320,11 @@
         "source": "stdlib/runtime/regex_rt.hexa"
       },
       {
-        "id": "install-sh-1",
+        "id": "reap-1",
         "state": "pos-conv",
-        "value": "install-relative 앵커(bin/self·bin/stdlib)는 심링크가 불변식 — 실디렉토리 잔재가 앉으면 BSD ln -sfn이 교체 대신 내부 중첩링크를 만들어 fresh_install이 성공으로 위장한 채 리졸버가 stale 트리를 영구 해석(ghost 5주+ · anima engine 0/6 RED · gelu 미선언). 잔재-그림자 클래스=wrong-repo silent-staleness 가드 동족",
-        "threshold": "재발조건: 설치 앵커에 non-symlink 존재. 해결: install.sh가 non-symlink 앵커 선제 rm -rf 후 ln -sfn (fix/install-anchor-remnant). 진단신호: <anchor>/<anchor> 중첩 심링크 존재 = 이 병리 확정",
-        "source": "install.sh"
+        "value": "CONFLICTING PR를 수동 리프레시할 때, worktree의 로컬 PR 브랜치가 자기 리모트 카운터파트보다 뒤처져 있을 수 있다(이전 세션/reap이 그 브랜치 리모트에 이미 push함). 실측 2026-07-03 #4409: worktree tip이 origin/<branch>보다 behind 23인데 그 위에서 바로 origin/main을 머지→ARCHITECTURE 충돌 수동해소까지 마쳤으나 push가 non-fast-forward로 거부(엉뚱한 base). 게다가 리모트 tip 자체도 과거 main만 머지한 상태라 현재 main과 재충돌. stage-resolve-runtime-a-1(pool checkout-without-fetch)과 다른 메커니즘=로컬 worktree가 자기 브랜치 리모트보다 뒤처짐.",
+        "threshold": "재발조건=worktree에서 CONFLICTING PR 브랜치에 origin/main을 머지하기 전에 그 브랜치의 리모트 tip과 동기화 안 함(git status -sb의 behind-N 무시). 해결: 머지 전 반드시 (1)git fetch origin <branch> (2)git status -sb로 behind-count 확인 (3)hard-reset을 origin/<branch>로 정렬(reset-ok 사유 명시) 후 origin/main 재머지. 캐논=sidecar reap이 이 순서를 내장하므로 가능하면 수동 대신 reap 사용; reap이 doc충돌로 abort하면 위 3스텝을 손으로.",
+        "source": "tool/reap"
       }
     ]
   },
@@ -512,7 +512,7 @@
                 ]
               },
               {
-                "name": "✅ **Full native `hexa build` end-to-end** (done 2026-06-15) — `hexa build <src> -o OUT` now produces a native executable with **zero clang / zero system ld**: the `hx-selfhost-cli` launcher's new `build` route (native-first + delegate-fallback, mirroring the `run` route #3325) runs `gen3 ",
+                "name": "✅ **Full native `hexa build` end-to-end** (done 2026-06-15) — `hexa build <src> -o OUT` now produces a native executable with **zero clang / zero system ld**: the `hx-selfhost-cli` launcher's new `build` route (native-first + delegate-fallback, mirroring the `run` route #3325) runs `gen3 native --emit=obj 경로는 Linux-x86_64 호스트 게이트(2026-07-03: darwin은 emit 완주 후 crt 프로브 폐기 = 24min/24m30s 낭비 실측 → 폴백 직행) + HEXA_CG_PROFILE=1 시 캡처 출력(_ne·bout) stderr forwarding. ",
                 "role": "",
                 "id": "self-host-status-remaining-residuals-tracked-not-silent-full-native-hexa-build-e",
                 "detail": "",
@@ -1032,7 +1032,7 @@
                         "detail": ""
                       },
                       {
-                        "name": "release.yml, miscompile-zero-gate, determinism-gate). ",
+                        "name": "release.yml, miscompile-zero-gate, determinism-gate). finalize=softprops make_latest + 명시 gh release edit --latest 검증 스텝(2026-07-03: update 경로 make_latest 미실효로 Latest 7일 v0.588 고착 → 소비자 stale 설치 재발 방지). ",
                         "role": "",
                         "id": "self-host-status-remaining-residuals-tracked-not-silent-runtime-c-floor-reducibl-39",
                         "detail": ""
