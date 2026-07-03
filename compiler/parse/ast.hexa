@@ -177,6 +177,25 @@ pub fn ast_is_match_guard(e: Expr) -> bool {
     }
 }
 
+// ── defer carrier (HEXA-OWN M1: native-path `defer` port) ──────────
+//
+// A `defer <expr>` / `defer <block>` statement stores its body as a
+// Block-kind Expr carrier with text "__defer__" and children
+// [body_block]. Reusing an existing ExprKind + a `text` marker avoids a
+// new enum variant and the ~92-site exhaustive-`match ExprKind` churn —
+// the same no-new-variant idiom as ast_is_match_guard above. The carrier
+// is produced only by parse_defer_expr (parser.hexa) and consumed only by
+// the defer arm in ast_to_hir.hexa `_lower_expr` (→ HExpr kind "defer").
+// Programs without `defer` never build the carrier, so this is purely
+// additive.
+pub fn ast_is_defer(e: Expr) -> bool {
+    if e.text != "__defer__" { return false }
+    return match e.kind {
+        ExprKind::Block -> true,
+        _ -> false
+    }
+}
+
 // C11 helper.
 fn _ast_is_string_lit(k: ExprKind) -> bool {
     return match k {

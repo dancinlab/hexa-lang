@@ -1,0 +1,18 @@
+[batched-measure] cuda_available = 1
+[batched-measure] loaded vocab=256 d=1024 nlay=24 nh=16 block=512
+
+=== (1) CORRECTNESS — batched vs N-sequential ===
+[OWN-GEMM-FIRED] _hx_k_gemm DEVICE path (no cuBLAS)
+[EAGER-DEVGLUE-FIRED] _hx_k_gelu device CUDA-erf GELU (separate launch, P1B-a' device-resident eager ref)
+[correctness N=2] batched-vs-sequential per-frag argmax = 24/24   worst max|Δ| = 3.197442310920451e-14   => PASS
+[correctness N=4] batched-vs-sequential per-frag argmax = 48/48   worst max|Δ| = 4.263256414560601e-14   => PASS
+
+=== (2) THROUGHPUT — median of 3, in-harness single-stream baseline ===
+[baseline single-stream _bg_kv_step_dev] samples(ms/step)=17.29166666666667,17.29166666666667,17.29166666666667  median ms/tok=17.29166666666667
+[throughput N=1] median ms/step=16.79166666666667  per-frag ms/tok=16.79166666666667  speedup-vs-single(17.29166666666667)=1.0297766749379653x  vs-P2rec(70.56)=4.202084367245657x
+[throughput N=4] median ms/step=23.208333333333333  per-frag ms/tok=5.802083333333333  speedup-vs-single(17.29166666666667)=2.9802513464991026x  vs-P2rec(70.56)=12.161149012567327x
+[throughput N=8] median ms/step=27.583333333333333  per-frag ms/tok=3.4479166666666665  speedup-vs-single(17.29166666666667)=5.015105740181269x  vs-P2rec(70.56)=20.46453172205438x
+[throughput N=16] median ms/step=35.208333333333339  per-frag ms/tok=2.2005208333333335  speedup-vs-single(17.29166666666667)=7.8579881656804735x  vs-P2rec(70.56)=32.06513609467456x
+[throughput N=32] median ms/step=57.125  per-frag ms/tok=1.78515625  speedup-vs-single(17.29166666666667)=9.686360320933625x  vs-P2rec(70.56)=39.52595185995624x
+
+bytegpt_batched_decode_measure: DONE

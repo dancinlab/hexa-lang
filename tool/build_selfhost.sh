@@ -83,6 +83,11 @@ mark() { [ -n "$MARK" ] && echo "$*" > "$MARK"; }
 log()  { echo "[build_selfhost] $*"; }
 fail() { log "FATAL: $*"; mark "EXIT=1 STAGE=$1 NOTE=$2 HEAD=$HEAD_SHA"; exit 1; }
 
+# Host-conditional clang flags: `-arch arm64` and -D_DARWIN_C_SOURCE are Darwin-only —
+# on Linux clang errors `unsupported option '-arch'` (pool-host FATAL at the seed stage).
+HOST_ARCH=""; HOST_EXTRA=""
+if [ "$(uname -s)" = "Darwin" ]; then HOST_ARCH="-arch arm64"; HOST_EXTRA="-D_DARWIN_C_SOURCE"; fi
+
 # Atlas embed override: an EMPTY dir disables the embedded atlas array-literal
 # (which the transpile path hangs O(n^2) on); the self-emit doesn't need it.
 NOATLAS="$WORK/noatlas"; mkdir -p "$NOATLAS"
@@ -151,8 +156,13 @@ if [ ! -x build/hexat ]; then
     # (___hexa_last_error, ___hexa_fn_arena_*, ___hx_to_double, …), so self/runtime.c
     # MUST be in the same link (+ -lm for libm trig). Omitting it left a from-scratch
     # build failing `Undefined symbols … ___hexa_last_error` — fixed OP-129.
-    clang -O2 -arch arm64 -std=gnu11 -D_GNU_SOURCE -D_DARWIN_C_SOURCE -Wno-trigraphs \
-        -I self -I . self/native/hexa_cc.c self/runtime.c -o build/hexat -lm \
+    # zero-c #29 own-_start flip (default-OFF byte-neutral): HEXA_ZEROC_OWN_START=1 compiles the
+    # runtime scaffold (payload #ifdef) AND links -nostartfiles so the shipped hexat uses its own
+    # _start (drops __libc_start_main/_start from the binary nm-u). Unset -> both empty -> identical.
+    _zc_own_def=""; _zc_own_link=""
+    if [ "${HEXA_ZEROC_OWN_START:-0}" = "1" ]; then _zc_own_def="-DHEXA_ZEROC_OWN_START"; _zc_own_link="-nostartfiles"; fi
+    clang -O2 $HOST_ARCH -std=gnu11 -D_GNU_SOURCE $HOST_EXTRA $_zc_own_def -Wno-trigraphs \
+        -I self -I . self/native/hexa_cc.c self/runtime.c -o build/hexat -lm $_zc_own_link \
         2>&1 | grep -iE 'error:|undefined' | head -5
     [ -x build/hexat ] || fail seed hexat-build
 fi
@@ -186,7 +196,7 @@ log "stage0: aprime_cc OK ($(stat -f%z "$WORK/aprime_cc" 2>/dev/null || echo ?) 
 # ── stage: runtime object (self/runtime.c) ───────────────────────────────────
 log "runtime: clang self/runtime.c -> rt.o"
 EXTRA=""; [ "$(uname -s)" = "Darwin" ] && EXTRA="-D_DARWIN_C_SOURCE"
-clang -c -O2 -arch arm64 -std=gnu11 -D_GNU_SOURCE $EXTRA -Wno-trigraphs \
+clang -c -O2 $HOST_ARCH -std=gnu11 -D_GNU_SOURCE $EXTRA -Wno-trigraphs \
     -I self -I . self/runtime.c -o "$WORK/rt.o" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
 [ -s "$WORK/rt.o" ] || fail runtime rt.o
 
@@ -232,7 +242,7 @@ sed -E -e 's/hexa_call1\(sha256_hex,[ ]*([^)]*)\)/hexa_sha256(\1)/g' \
        -e 's/hexa_call1\(list_dir,[ ]*[^)]*\)/hexa_array_new()/g' \
        "$WORK/ld.c" > "$WORK/ld-post.c"
 sed -i.bak 's|#include "runtime.h"|#include "runtime.c"|' "$WORK/ld-post.c"; rm -f "$WORK/ld-post.c.bak"
-clang -Oz -arch arm64 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs $EXTRA \
+clang -Oz $HOST_ARCH -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs $EXTRA \
     -I self -I . "$WORK/ld-post.c" -o "$WORK/hexa_ld" -lm 2>&1 | grep -iE 'error:|undefined' | head -5
 [ -x "$WORK/hexa_ld" ] || fail linker hexa_ld-clang
 log "linker: hexa_ld OK ($(stat -f%z "$WORK/hexa_ld" 2>/dev/null || echo ?) B)"

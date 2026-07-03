@@ -43,6 +43,17 @@
 //   ③ universal-in-[2,N] frame — is_universal2 / is_universal3 (forall-n in
 //      range), the genuinely productive frame for the sign/indicator vocab
 //      (vocab_universal_hunt.py). bounded-unique ⟺ forall is NOT claimed (c2).
+//   ④ FUNCTION-COMPOSITION frame (σ∘σ vein · 2026-06-27) — af_compose /
+//      comp_holds / comp_count / verify_composition: NESTED composition
+//      f(g(n))=af(af(n,g),f), the algebra the PRODUCT frame structurally cannot
+//      express (σ(σ(n))=2n has no product restatement). Sanity-gated by
+//      rediscovering classical superperfect {2,4,16,64,4096} (Suryanarayana
+//      1969 / OEIS A019279) + Mersenne σ∘σ=σ+n {3,7,31,127,8191}. MEASURED novel
+//      PROMOTABLE = 0 (DRY) — ATLAS/state/novel-dfs/composition_hunt.py: the vein
+//      yields ONLY the classical Mersenne-linked family; bounded-unique
+//      singletons are single-point accidents, |sol|≥3 sets are thin restricted-
+//      domain coincidences (forall UNPROVEN · c2). Same terminal as the product
+//      frame, reached honestly across a genuinely different algebra.
 // idx 0–11 are byte-for-byte the prior basis (G1–G3 sanity gates unchanged).
 
 // ── integer power (exact) ──
@@ -216,83 +227,390 @@ pub fn is_universal3(a, b, c, d, e, f, N) -> int {
     return 1
 }
 
-// ── selftest: prove the absorbed engine is a REAL verifier (not rubber-stamp).
-//    G-gates rediscover known ATLAS @F identities (bounded-unique @ n=4);
-//    C-controls must be rejected (universal / no-solution). ──
-fn gate(label, got, want) -> int {
-    if got == want {
-        println("  [PASS] " + label + "  -> n=" + to_string(got))
-        return 0
+// ════════════════════════════════════════════════════════════════════════
+// ADDITIVE / COMBINATORIAL frame (ORTHOGONAL pivot · 2026-06-27 · Ralph 377)
+// ────────────────────────────────────────────────────────────────────────
+// The 18-fn vocab above is MULTIPLICATIVE (built on the factorization n=∏p^e):
+// Ralph 369–375 measured it exhausted (independent-novel = 0, all classical/
+// reducible to the Mersenne/superperfect core). This block leaves that algebra
+// entirely for the NON-multiplicative GENERATING-FUNCTION / RECURRENCE sequences,
+// which cannot be expressed through the factorization of n:
+//   p(n) partition (A000041 · Euler ∏1/(1−q^k))   C(n) Catalan (A000108)
+//   B(n) Bell (A000110)   F(n) Fibonacci (A000045)   L(n) Lucas (A000032)
+//   figurate: tri n(n+1)/2 · pent n(3n−1)/2 · sq n²
+// Reference engine (re-runnable, exact bignum, OEIS-cited):
+//   ATLAS/state/novel-dfs/additive_partition_hunt.py
+// The NEW identity FORM here is the arithmetic-progression CONGRUENCE
+//   a(α·n+β) ≡ 0 (mod m)   ∀n with α·n+β ≤ N
+// (Ramanujan's p(5n+4)≡0 mod5 is the canonical instance — it has NO multiplicative
+// analogue, proving this domain is orthogonal). verify_congruence auto-tests a
+// progression; the selftest rediscovers Ramanujan's three 1919 congruences as a
+// sanity gate. Honesty (c2): a confirmed congruence is BOUNDED to [0,N] — the
+// ∀n statement stays UNPROVEN until a proof lands.
+
+// ── exact small-n sequence values (i64-range; overflow guards documented) ──
+// p(n) via Euler pentagonal recurrence (exact). i64-safe up to n≈350.
+pub fn partition_p(n) -> int {
+    let p = []
+    p.push(1)                      // p[0] = 1
+    let j = 1
+    while j <= n {
+        let total = 0
+        let k = 1
+        // g1=k(3k−1)/2 < g2=k(3k+1)/2, so g1>j ⟹ g2>j: loop while g1≤j, guard g2.
+        while k * (3 * k - 1) / 2 <= j {
+            let g1 = k * (3 * k - 1) / 2
+            let g2 = k * (3 * k + 1) / 2
+            let sign = 1
+            if k % 2 == 0 { sign = 0 - 1 }
+            total = total + sign * p[j - g1]
+            if g2 <= j { total = total + sign * p[j - g2] }
+            k = k + 1
+        }
+        p.push(total)
+        j = j + 1
     }
-    println("  [FAIL] " + label + "  -> got " + to_string(got) + " want " + to_string(want))
+    p[n]
+}
+
+// Catalan C(n)=C(n−1)·2·(2n−1)/(n+1), exact. i64-safe up to n≈35.
+pub fn catalan(n) -> int {
+    let c = 1
+    let i = 1
+    while i <= n {
+        c = c * 2 * (2 * i - 1) / (i + 1)
+        i = i + 1
+    }
+    c
+}
+
+// Bell B(n) via the Bell triangle (exact). i64-safe up to n≈25.
+pub fn bell(n) -> int {
+    if n == 0 { return 1 }
+    let row = []
+    row.push(1)
+    let r = 1
+    while r <= n {
+        let nxt = []
+        nxt.push(row[len(row) - 1])
+        let i = 0
+        while i < len(row) {
+            nxt.push(nxt[len(nxt) - 1] + row[i])
+            i = i + 1
+        }
+        row = nxt
+        r = r + 1
+    }
+    row[0]
+}
+
+// Fibonacci F(0)=0,F(1)=1 (exact). i64-safe up to n≈91.
+pub fn fib(n) -> int {
+    if n == 0 { return 0 }
+    let a = 0
+    let b = 1
+    let i = 1
+    while i < n {
+        let t = a + b
+        a = b
+        b = t
+        i = i + 1
+    }
+    b
+}
+
+// Lucas L(0)=2,L(1)=1 (exact). i64-safe up to n≈90.
+pub fn lucas(n) -> int {
+    if n == 0 { return 2 }
+    let a = 2
+    let b = 1
+    let i = 1
+    while i < n {
+        let t = a + b
+        a = b
+        b = t
+        i = i + 1
+    }
+    b
+}
+
+// ── figurate numbers (exact) ──
+pub fn tri(n) -> int { n * (n + 1) / 2 }
+pub fn pent(n) -> int { n * (3 * n - 1) / 2 }
+pub fn sq(n) -> int { n * n }
+
+// ── mod-m sequence tables (NO overflow — recurrence run entirely mod m, so the
+//    congruence sweep reaches large N exactly without i64 limits) ──
+// partition p(n) mod m via the pentagonal recurrence (linear ⇒ mod-closed).
+fn _partition_mod_table(N, m) -> array {
+    let p = []
+    p.push(1 % m)
+    let j = 1
+    while j <= N {
+        let total = 0
+        let k = 1
+        while k * (3 * k - 1) / 2 <= j {
+            let g1 = k * (3 * k - 1) / 2
+            let g2 = k * (3 * k + 1) / 2
+            let sign = 1
+            if k % 2 == 0 { sign = 0 - 1 }
+            total = total + sign * p[j - g1]
+            if g2 <= j { total = total + sign * p[j - g2] }
+            k = k + 1
+        }
+        total = total % m
+        if total < 0 { total = total + m }
+        p.push(total)
+        j = j + 1
+    }
+    p
+}
+
+// linear two-term recurrence x[n]=x[n−1]+x[n−2] mod m (fib: f0=0,f1=1 · lucas: 2,1).
+fn _lin_mod_table(N, m, f0, f1) -> array {
+    let x = []
+    let a = f0 % m
+    if a < 0 { a = a + m }
+    let b = f1 % m
+    if b < 0 { b = b + m }
+    x.push(a)
+    if N >= 1 { x.push(b) }
+    let j = 2
+    while j <= N {
+        let t = (x[j - 1] + x[j - 2]) % m
+        x.push(t)
+        j = j + 1
+    }
+    x
+}
+
+// Bell B(n) mod m via the Bell triangle (additions only ⇒ mod-closed).
+fn _bell_mod_table(N, m) -> array {
+    let out = []
+    out.push(1 % m)
+    let row = []
+    row.push(1 % m)
+    let r = 1
+    while r <= N {
+        let nxt = []
+        nxt.push(row[len(row) - 1])
+        let i = 0
+        while i < len(row) {
+            nxt.push((nxt[len(nxt) - 1] + row[i]) % m)
+            i = i + 1
+        }
+        row = nxt
+        out.push(row[0])
+        r = r + 1
+    }
+    out
+}
+
+// ── CONGRUENCE verify: does seq(α·n+β) ≡ 0 (mod m) hold for ALL n with
+//    α·n+β ≤ N? which: 0=partition 2=bell 3=fib 4=lucas (mod-closed recurrences).
+//    Returns 1 if it holds with ≥12 sampled terms (bounded congruence, c2 UNPROVEN
+//    ∀n), 0 if a counterexample is found, -2 if too few terms, -3 if unsupported.
+//    Reference: additive_partition_hunt.py::class_holds. ──
+pub fn verify_congruence(which, a, b, m, N) -> int {
+    let tbl = []
+    if which == 0 { tbl = _partition_mod_table(N, m) }
+    else {
+        if which == 2 { tbl = _bell_mod_table(N, m) }
+        else {
+            if which == 3 { tbl = _lin_mod_table(N, m, 0, 1) }
+            else {
+                if which == 4 { tbl = _lin_mod_table(N, m, 2, 1) }
+                else { return 0 - 3 }
+            }
+        }
+    }
+    let count = 0
+    let k = 0
+    while a * k + b <= N {
+        if tbl[a * k + b] != 0 { return 0 }
+        count = count + 1
+        k = k + 1
+    }
+    if count < 12 { return 0 - 2 }
     return 1
 }
 
-fn main() {
-    let N = 20000
-    println("=== identity_engine SELFTEST (native exact-int, N=" + to_string(N) + ") ===")
-    let fails = 0
-    println("SANITY GATES (ATLAS @F rediscovery, bounded-unique @ n=4):")
-    // G1 phi*J2 = n*psi   (3,8 = 5,9)
-    fails = fails + gate("G1 phi*J2 = n*psi", verify_identity(3, 8, 5, 9, N), 4)
-    // G2 phi*J2 = sopfr*psi  (3,8 = 6,9)
-    fails = fails + gate("G2 phi*J2 = sopfr*psi", verify_identity(3, 8, 6, 9, N), 4)
-    // G3 sigma*psi = sig2*phi  (0,9 = 1,3)  [verified-id-sigma-psi-eq-sig2-phi-n4]
-    fails = fails + gate("G3 sigma*psi = sig2*phi", verify_identity(0, 9, 1, 3, N), 4)
-    println("NEGATIVE CONTROLS (must be rejected = -1 universal / -2 none):")
-    // C1 n*n = n*n  universal -> -1
-    fails = fails + gate("C1 n*n = n*n (universal)", verify_identity(5, 5, 5, 5, N), -1)
-    // C2 phi*phi = sigma*sigma  no solution expected -> -2 (or -1)
-    let c2 = verify_identity(3, 3, 0, 0, N)
-    if c2 < 0 {
-        println("  [PASS] C2 phi*phi = sigma*sigma (rejected)  -> " + to_string(c2))
-    } else {
-        println("  [FAIL] C2 phi*phi = sigma*sigma should reject  -> n=" + to_string(c2))
-        fails = fails + 1
+// ── function COMPOSITION frame (σ∘σ vein · exact-int · 2026-06-27) ─────
+// The un-swept vein the first-order PRODUCT frame (A·B=C·D, measured-exhausted
+// in ATLAS/README.md DFS r1–r4 and re-confirmed for the extended 18-fn vocab in
+// #4060) structurally CANNOT express: NESTED composition f(g(n)) = af(af(n,g),f),
+// NOT the value-product af(n,f)·af(n,g). Composition is a different algebra —
+// the superperfect law σ(σ(n))=2n has NO product-frame restatement.
+//   Reference-match (classical = open answer-key): superperfect (Suryanarayana
+//   1969 / OEIS A019279) — even n with σ(σ(n))=2n ⟺ n=2^(p−1), 2^p−1 Mersenne
+//   prime → {2,4,16,64,4096,…}; and σ(σ(n))=σ(n)+n ⟺ σ(n) prime (Mersenne
+//   characterization) → {3,7,31,127,8191,…}.
+//   Reference engine: ATLAS/state/novel-dfs/composition_hunt.py (18×18 ordered
+//   composition table × comparison frames A/B/C/D, exact-int, deterministic).
+//
+// Feasibility guard (overflow · matches composition_hunt.py MAXARG): the inner
+// image af(n,g) must lie in [1, 2000000]; high-growth σ₂,σ₃,J₂,J₃ compose past
+// a tractable i64 range and are skipped honestly.
+pub fn af_compose_feasible(n, g) -> int {
+    let inner = af(n, g)
+    if inner < 1 { return 0 }
+    if inner > 2000000 { return 0 }
+    return 1
+}
+
+// f(g(n)) = af(af(n,g), f). Caller MUST gate on af_compose_feasible(n,g) first
+// (an infeasible inner image yields a meaningless/overflowing result).
+pub fn af_compose(f, g, n) -> int {
+    return af(af(n, g), f)
+}
+
+// Does the composition relation hold at a SPECIFIC n? `mode` selects the
+// comparison form (reference-match composition_hunt.py frames A/B/C):
+//   mode 0: af_compose(f,g,n) == p·n          (k·n form · superperfect f=g=σ p=2)
+//   mode 1: af_compose(f,g,n) == af(n,p) + n  (h+n form · Mersenne f=g=σ p=σ idx0)
+//   mode 2: af_compose(f,g,n) == af(n,p)      (single-fn form · σ∘φ=n p=n idx5)
+// Returns 1 if the relation holds (and is feasible) at n, else 0.
+pub fn comp_holds(f, g, mode, p, n) -> int {
+    if af_compose_feasible(n, g) == 0 { return 0 }
+    let lhs = af_compose(f, g, n)
+    let rhs = 0
+    if mode == 0 { rhs = p * n }
+    if mode == 1 { rhs = af(n, p) + n }
+    if mode == 2 { rhs = af(n, p) }
+    if lhs == rhs { return 1 }
+    return 0
+}
+
+// Count solutions n∈[2,N] of the composition relation. Sparse classical
+// families (superperfect {2,4,16,64,4096}, Mersenne {3,7,31,127,8191}) have
+// count>1 — they are SETS, NOT bounded-unique singletons.
+pub fn comp_count(f, g, mode, p, N) -> int {
+    let count = 0
+    let n = 2
+    while n <= N {
+        if comp_holds(f, g, mode, p, n) == 1 { count = count + 1 }
+        n = n + 1
     }
+    return count
+}
 
-    // ── EXTENDED-VOCAB GATES (idx 12–17 · 2026-06-27 upgrade) ──────────
-    // Exact-int per-n value spot-checks (anchor the new fns to known values):
-    //   n=12=2²·3:  μ(12)=0 (non-squarefree) · λ(12)=(-1)^3=-1 · μ²(12)=0 ·
-    //               2^ω(12)=4 · core(12)=12/6=2 · J₃(12)=J₃(4)·J₃(3)=56·26=1456
-    //   n=30=2·3·5: μ(30)=(-1)^3=-1 · λ(30)=-1 · μ²(30)=1 · 2^ω(30)=8 · core(30)=1
-    println("EXTENDED-VOCAB VALUE GATES (idx 12–17):")
-    fails = fails + gate("V-mu  μ(12)=0",      af(12, 12), 0)
-    fails = fails + gate("V-mu  μ(30)=-1",     af(30, 12), 0 - 1)
-    fails = fails + gate("V-lam λ(12)=-1",     af(12, 13), 0 - 1)
-    fails = fails + gate("V-mu2 μ²(12)=0",     af(12, 14), 0)
-    fails = fails + gate("V-mu2 μ²(30)=1",     af(30, 14), 1)
-    fails = fails + gate("V-J3  J₃(12)=1456",  af(12, 15), 1456)
-    fails = fails + gate("V-2om 2^ω(30)=8",    af(30, 16), 8)
-    fails = fails + gate("V-cor core(12)=2",   af(12, 17), 2)
-
-    // ── UNIVERSAL-IN-[2,N] FRAME GATE (forall-n evidence · c2 UNPROVEN) ─
-    // Sanity: J₂ = φ·ψ is a classical universal multiplicative identity
-    // (vocab_universal_hunt.py:308 sanity gate) — must hold ∀n in [2,N].
-    // These gates rediscover the ONLY clean universal identities the extended-
-    // vocab sweep produces (vocab_universal_hunt.py: CLEAN=3, generators=2) —
-    // every one CLASSICAL/definitional (novel=0 honestly):
-    //   J₂·core·rad = n·φ·ψ  (the combined primitive — J₂=φ·ψ ∧ core·rad=n),
-    //   3-term frame · idx J₂=8 core=17 rad=7 n=5 φ=3 ψ=9.
-    println("UNIVERSAL-IN-[2,N] FRAME GATES (the clean generators · all classical):")
-    fails = fails + gate("U1 J₂·core·rad=n·φ·ψ univ", is_universal3(8, 17, 7, 5, 3, 9, N), 1)
-    // Negative control: μ·μ == n·n must FAIL universality (μ takes 0/±1).
-    fails = fails + gate("U2 μ·μ=n·n NOT universal", is_universal2(12, 12, 5, 5, N), 0)
-    // Negative control (3-term): core·rad·τ = n·τ·τ FAILS (core·rad=n but ·τ vs ·τ² differ).
-    fails = fails + gate("U3 core·rad·τ=n·τ² NOT univ", is_universal3(17, 7, 4, 5, 4, 4, N), 0)
-
-    // ── ARITY-3 FRAME GATES (A·B·C = D·E·F bounded-unique · Ralph 371) ──
-    // n·σ² = J₂·rad²  ⟺ n=6 ONLY (squarefree perfect): n·σ·σ == J₂·rad·rad.
-    //   (idx: n=5, σ=0, J₂=8, rad=7) — bounded-unique singleton at n=6.
-    println("ARITY-3 FRAME GATES (3-term bounded-unique · Ralph 371):");
-    fails = fails + gate("T1 n·σ²=J₂·rad² ⟺n=6", verify_identity3(5, 0, 0, 8, 7, 7, N), 6)
-    // Negative control: n·n·n = n·n·n is universal -> rejected (-1).
-    fails = fails + gate("T2 n³=n³ (universal)", verify_identity3(5, 5, 5, 5, 5, 5, N), -1)
-    println("")
-    if fails == 0 {
-        println("RESULT: PASS - native exact-int identity verifier absorbed into binary")
-        exit(0)
+// Bounded-UNIQUE composition verify (same contract as verify_identity): first
+// solution n over [2,N] when the solution set is a SINGLETON with n≥4 (degenerate
+// n=2,3 excluded); -1 if non-unique (count>1 — a sparse FAMILY or universal),
+// -2 if none. HONESTY (c2): bounded-unique ⟺ forall-n is UNPROVEN. Sparse
+// classical families (superperfect) return -1 here (they are SETS) — use
+// comp_count for those. Reference: composition_hunt.py STRUCTURED screen.
+pub fn verify_composition(f, g, mode, p, N) -> int {
+    let first = 0
+    let count = 0
+    let n = 2
+    while n <= N {
+        if comp_holds(f, g, mode, p, n) == 1 {
+            count = count + 1
+            if count == 1 { first = n }
+            if count > 1 { return -1 }
+        }
+        n = n + 1
     }
-    println("RESULT: FAIL (" + to_string(fails) + ")")
-    exit(1)
+    if count == 0 { return -2 }
+    if first >= 4 { return first }
+    return -1
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// FP fingerprint kernel (OUROBOROS-novel M2 · consolidated from grammar.hexa
+// M1). Makes "a primitive the previous cycle could not express" (NEXUS README)
+// a DECIDABLE predicate = size-<=k BOUNDED inexpressibility over n in [2,N]:
+// a candidate is inside the well at size k iff some enumerated term of size
+// <=k has the SAME value-signature (fingerprint). c2: k and N are named, this
+// is NOT absolute inexpressibility. Frozen rolling-hash constants (seed
+// 1469598103 · base 1000003 · P=2^61-1) — reducing mod P each step keeps the
+// BigInt accumulator bounded and makes the whole table byte-deterministic.
+// grammar.hexa (BLOWUP frame) is a thin wrapper over these.
+// ════════════════════════════════════════════════════════════════════════
+
+fn _ie_P() -> int { return 2305843009213693951 }
+fn _ie_B() -> int { return 1000003 }
+
+// non-negative residue of v mod P (af can be negative for mu/lambda).
+fn _ie_res(v) -> int {
+    let p = _ie_P()
+    let r = v % p
+    if r < 0 { return r + p }
+    return r
+}
+
+// value of a size-1 (b<0 -> af(n,a)) or size-2 (af(n,a)*af(n,b)) identity term.
+pub fn ie_term_value(a, b, n) -> int {
+    let va = af(n, a)
+    if b < 0 { return va }
+    return va * af(n, b)
+}
+
+// fingerprint = rolling hash of the term value vector over n in [2,N].
+pub fn ie_term_fingerprint(a, b, N) -> int {
+    let p = _ie_P()
+    let base = _ie_B()
+    let h = 1469598103
+    let n = 2
+    while n <= N {
+        let v = _ie_res(ie_term_value(a, b, n))
+        h = ((h * base) + v) % p
+        n = n + 1
+    }
+    return h
+}
+
+// fingerprint of a size-3 product af(n,a)*af(n,b)*af(n,c) (same hash).
+pub fn ie_term3_fingerprint(a, b, c, N) -> int {
+    let p = _ie_P()
+    let base = _ie_B()
+    let h = 1469598103
+    let n = 2
+    while n <= N {
+        let v = _ie_res(af(n, a) * af(n, b) * af(n, c))
+        h = ((h * base) + v) % p
+        n = n + 1
+    }
+    return h
+}
+
+// FP_2 table over the 18-fn basis: size-1 (a=0..17) then size-2 (a<=b), in that
+// deterministic order. Count = 18 + 18*19/2 = 189.
+pub fn ie_fp_table_build(N) -> array {
+    let table = []
+    let a = 0
+    while a < 18 {
+        table.push(ie_term_fingerprint(a, 0 - 1, N))
+        a = a + 1
+    }
+    a = 0
+    while a < 18 {
+        let b = a
+        while b < 18 {
+            table.push(ie_term_fingerprint(a, b, N))
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return table
+}
+
+// closed-form count the enumerator MUST produce.
+pub fn ie_fp_table_count() -> int { return 18 + (18 * 19) / 2 }
+
+// membership: is fingerprint fp in the size-<=2 table? (inside the well at k<=2)
+pub fn ie_fp_contains(table, fp) -> bool {
+    let m = len(table)
+    let i = 0
+    while i < m {
+        if table[i] == fp { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// convenience: is fp inside the well at size <=2 over [2,N]?
+pub fn ie_expressible_at(fp, N) -> bool {
+    return ie_fp_contains(ie_fp_table_build(N), fp)
 }

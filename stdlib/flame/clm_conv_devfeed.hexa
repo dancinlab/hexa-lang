@@ -34,6 +34,17 @@
 //  small fire after lever (a)+(b) are locally green.
 //
 //  sibling: clm_conv_gpu.hexa (un-batched forge) · clm_conv_batched.hexa (lever b).
+//
+//  #4204 HEXA_DET safety-pin (GPU device-feed byte-eq oracle): the forge runtime
+//  default flipped to own-native NON-deterministic fast kernels (atomic split-K
+//  GEMM/GEMV, atomic-scatter col2im, atomic embedding grad-accum) — training gets
+//  the fast benefit. The col2im/grad-accum device kernels this oracle asserts
+//  byte-eq against are now atomic-by-DEFAULT, so the max|Δ|=0 reference-match ONLY
+//  holds on the DET path. When running the GPU device-feed leg on a CUDA pod
+//  (summer BuildStage), the launcher MUST export HEXA_DET=1 so _forge_det_on()
+//  selects the fixed-order / non-atomic kernels (the bit-identical reference).
+//  Without HEXA_DET=1 the atomic default re-orders the fp accumulation and the
+//  byte-eq bar legitimately goes non-zero (that is the fast path, NOT a defect).
 // ════════════════════════════════════════════════════════════════════════════
 
 use "stdlib/flame/tensor_lib"

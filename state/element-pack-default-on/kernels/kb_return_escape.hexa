@@ -1,0 +1,16 @@
+// Kb — ESCAPE via return. xs flows into `return xs`, a non-whitelisted use ->
+// escape scan MUST void -> BOXED. The receiver ys is a call-result (not an
+// array_lit) so it is not packed either. OFF==ON expected.
+fn build(n: i64) -> [i64] {
+    let mut xs: [i64] = []
+    let mut i = 0
+    while i < n {
+        xs.push(i * 3)
+        i = i + 1
+    }
+    return xs
+}
+fn main() {
+    let ys = build(64)
+    println(ys[0] + ys[63])
+}
