@@ -130,6 +130,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX0015",
+        title: "throw requires a value",
+        severity: Severity::Error,
+        stage: "S0",
+        template: "`throw` requires a value expression starting on the same line, found {found}",
+        explain: "Throw-parity with the gen2 reference frontend: gen2's parse_throw_stmt (self/parser.hexa parse_throw_stmt) calls parse_expr UNCONDITIONALLY, so a throw value is required — and gen2's lexer emits Newline tokens (suppressed only inside parens/brackets), so a value that does not start on the keyword's line hits gen2's unknown-token arm ('unexpected token Newline'), the same error class as a bare `throw` before a closing brace, a semicolon, or EOF. The native lexer drops newlines, so the parser mirrors the rule via token span lines and emits this diagnostic WITHOUT consuming the offending token: consuming it (the parse_primary placeholder-Ident fallthrough) would swallow a structural brace/semicolon and desync the enclosing block into a shifted HX0012 cascade. Recovery: the cursor stays on the offending token, which is either an existing resync point or the start of the next sibling statement. A value that STARTS on the keyword's line may still span lines (open call paren / multi-line binop). Note `return` is different by design: a bare `return` is VALID in both frontends (gen2 Newline/Eof/RBrace guard), while a bare `throw` is an error in both.",
+        fix_it_kind: FixItKind::Insert
+    },
+    DiagSpec {
         code: "HX1042",
         title: "atlas node not found",
         severity: Severity::Error,
