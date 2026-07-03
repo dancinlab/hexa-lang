@@ -121,6 +121,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::Replace
     },
     DiagSpec {
+        code: "HX0014",
+        title: "defer in unsupported position",
+        severity: Severity::Error,
+        stage: "S0",
+        template: "`defer` body cannot be used here (found {found}) — use `defer <expr>` or `defer <block>`; assignment bodies and closure bodies are not deferable",
+        explain: "HEXA-OWN M1 — `defer` registers a scope-exit action that drains at fn exit in LIFO order (at-most-once per lexical defer, drain-time variable values; gen2 reference semantics, self/parser.hexa parse_defer_stmt + self/codegen.hexa __fn_exit). Two shapes are rejected: (1) an assignment body such as `defer x = 1` — the reference gen2 grammar rejects it, and the native expr body parses via parse_logical_or precisely so an Eq-family token after the body surfaces here instead of being silently absorbed by parse_assignment; (2) `defer` inside a closure body — a closure is a separate call frame and the M1 lowering scopes defer to top-level fn bodies. Wrap the assignment in a block if the intent really is a deferred store; move a closure-body defer into the enclosing fn.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX1042",
         title: "atlas node not found",
         severity: Severity::Error,
