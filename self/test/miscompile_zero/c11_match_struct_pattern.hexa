@@ -1,0 +1,31 @@
+// c11_match_struct_pattern.hexa — miscompile class: match struct-destructure
+// patterns. `Point { x, y }` binds each named field via a hexa_map_get extract
+// on the scrutinee; the field-rename form (`x: a`) and the guarded struct arm
+// exercise the struct_pattern + guard branch interaction. A mis-lowered field
+// extract or a mis-targeted guard branch would corrupt the printed values or
+// surface as ENCODE-MISS. Added with the match-struct-pattern feature
+// (compiler/parse/parser.hexa::parse_struct_pattern → HIR "struct_pattern").
+
+struct Point {
+    x: int,
+    y: int
+}
+
+fn sum_pt(p: Point) -> int {
+    return match p {
+        Point { x, y } -> x + y
+    }
+}
+
+fn cmp_pt(p: Point) -> string {
+    return match p {
+        Point { x, y } if x > y -> "gt",
+        Point { x: a, y: b } if a == b -> "eq",
+        _ -> "lt"
+    }
+}
+
+for i in 1..6 {
+    let p = Point { x: i, y: 6 - i }
+    println(i, sum_pt(p), cmp_pt(p))
+}
