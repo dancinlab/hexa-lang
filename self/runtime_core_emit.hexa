@@ -7628,7 +7628,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "static void hexa_stream_bounded(FILE* fp, pid_t writer_pid, HexaVal on_line) {\n"
     buf = buf + "    int fd = fileno(fp);\n"
     buf = buf + "    if (fd < 0) {\n"
-    buf = buf + "#ifndef HEXA_RT_STREAM_NATIVE_READ\n"
+    buf = buf + "#if !defined(HEXA_RT_STREAM_NATIVE_READ) && (!defined(__linux__) || defined(HEXA_RT_STREAM_NATIVE_READ_OFF))\n"
     buf = buf + "        char b[4096];\n"
     buf = buf + "        while (fgets(b, sizeof(b), fp)) hexa_call1(on_line, hexa_str(b));\n"
     buf = buf + "#else\n"
