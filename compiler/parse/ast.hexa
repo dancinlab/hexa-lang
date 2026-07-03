@@ -157,6 +157,45 @@ pub struct Module {
     imports: [string]
 }
 
+// ── Match-arm pattern guards (RFC: pattern guards + exhaustiveness) ──
+//
+// A guarded arm `pattern if cond -> body` (Rust `match x { n if n>0 => … }`,
+// cite The Rust Reference §"Match guards") stores its pattern as an If-kind
+// Expr carrier with text "match_guard" and children [inner_pattern,
+// guard_expr]. Reusing an existing ExprKind + a `text` marker avoids a new
+// enum variant and the ~92-site exhaustive-`match ExprKind` churn — the same
+// no-new-variant idiom the range BinOp uses (parser.hexa:582). The carrier is
+// produced only by parse_match_expr and consumed only by the match-arm loops
+// in bind.hexa / types.hexa / ast_to_hir.hexa plus the HIR "match_guard"
+// lowering in hir_to_mir.hexa. Unguarded arms are byte-identical to before
+// (the wrapper never appears), so this is purely additive.
+pub fn ast_is_match_guard(e: Expr) -> bool {
+    if e.text != "match_guard" { return false }
+    return match e.kind {
+        ExprKind::If -> true,
+        _ -> false
+    }
+}
+
+// ── defer carrier (HEXA-OWN M1: native-path `defer` port) ──────────
+//
+// A `defer <expr>` / `defer <block>` statement stores its body as a
+// Block-kind Expr carrier with text "__defer__" and children
+// [body_block]. Reusing an existing ExprKind + a `text` marker avoids a
+// new enum variant and the ~92-site exhaustive-`match ExprKind` churn —
+// the same no-new-variant idiom as ast_is_match_guard above. The carrier
+// is produced only by parse_defer_expr (parser.hexa) and consumed only by
+// the defer arm in ast_to_hir.hexa `_lower_expr` (→ HExpr kind "defer").
+// Programs without `defer` never build the carrier, so this is purely
+// additive.
+pub fn ast_is_defer(e: Expr) -> bool {
+    if e.text != "__defer__" { return false }
+    return match e.kind {
+        ExprKind::Block -> true,
+        _ -> false
+    }
+}
+
 // C11 helper.
 fn _ast_is_string_lit(k: ExprKind) -> bool {
     return match k {
@@ -204,6 +243,36 @@ pub fn item_is_parse_only(it: Item) -> bool {
                 }
             }
         }
+        i = i + 1
+    }
+    return false
+}
+
+// ── Type aliases (`type Name = Underlying`, Rust/Go semantics) ─────
+//
+// A `type` alias declaration (`type Celsius = f64`, cite The Rust Reference
+// §"Type aliases" — `type Kilometers = i32;` / The Go Programming Language
+// Specification §"Alias declarations" — `type nodeList = []*Node`) is parsed
+// into an `ItemKind::Let` carrier marked with a bare `__type_alias`
+// annotation. The carrier reuses the Let slots — `name` = alias name,
+// `return_type` = the underlying `TypeRef` — and ALSO carries
+// `@phase("parse_only")` so the resolve / bind / type-check body passes skip
+// it exactly like the embedded atlas-node literals (no value binding, no
+// codegen global). The types pass reads the `__type_alias` carriers up front
+// to build the alias→underlying substitution table (so `Celsius` lowers to
+// `f64` everywhere a TypeRef is resolved), and ast_to_hir drops the carrier
+// so it emits nothing — a pure parse+resolve substitution, byte-identical for
+// any program that declares no aliases.
+//
+// Reusing `ItemKind::Let` (rather than a new `ItemKind::TypeAlias` variant)
+// keeps every exhaustive `match ItemKind` site untouched and lets the frozen
+// bootstrap parser compile this source unchanged: no new keyword/token is
+// introduced — `type` is detected as an `Ident` leader at item position,
+// mirroring the `extern fn` (`_peek_is_extern_kw`) idiom.
+pub fn item_is_type_alias(it: Item) -> bool {
+    let mut i = 0
+    while i < len(it.annotations) {
+        if it.annotations[i].name == "__type_alias" { return true }
         i = i + 1
     }
     return false

@@ -88,6 +88,42 @@ pub fn qforge_gaussian_delta(x: float, sigma: float) -> float {
     return exp(-0.5 * z * z) / (sigma * _ELPH_SQRT2PI)
 }
 
+// ── QE degauss → QFORGE σ convention bridge (the 1:1 matched-σ mapping) ──────
+//
+// QFORGE's δ_σ above uses the STANDARD normalized Gaussian exp(−x²/2σ²)/(σ√2π)
+// (variance σ²). Quantum ESPRESSO's el-ph Fermi-surface double-delta (elphon.f90
+// :1058-1062) is, per electron δ,
+//
+//     exp(−(E_F−ε)² / degauss²) / (degauss·√π)            (variance degauss²/2)
+//
+// (the product double-delta there is exp(−((E_F−ε_k)²+(E_F−ε_{k+q})²)/degauss²)
+//  / degauss² / π, which factors into two of the above since (√π)² = π).
+//
+// The two normalized Gaussians are IDENTICAL — same δ(0), same tails, both
+// integrate to 1 — exactly when their variances match:  σ² = degauss²/2, i.e.
+//
+//     σ_QFORGE = degauss_QE / √2          (SAME energy unit)
+//
+// This is a pure convention re-label, NOT a tuning knob (d6): feeding QE's
+// degauss directly as QFORGE's σ would mis-scale the FS double-delta by a √2 in
+// width — the artifact the "effective σ≈0.0206 Ry projection" papered over. Use
+// this bridge to drive a QFORGE el-ph λ(σ) sweep at QE-MATCHED broadenings.
+//
+// Unit note: QE degauss is conventionally in Ry; QFORGE band energies / σ are in
+// Hartree. Convert with degauss_Ha = degauss_Ry · 0.5 BEFORE this bridge, e.g.
+//   σ_QF_Ha = qforge_qe_degauss_to_sigma(degauss_Ry · 0.5).
+pub fn qforge_qe_degauss_to_sigma(degauss: float) -> float {
+    if degauss <= 0.0 { return 0.0 }
+    return degauss / 1.41421356237309504880   // /√2
+}
+
+// Inverse bridge: QFORGE σ → the QE degauss that produces the identical δ_σ
+// (σ·√2). Lets a QFORGE run REPORT the QE-equivalent broadening it sat at.
+pub fn qforge_sigma_to_qe_degauss(sigma: float) -> float {
+    if sigma <= 0.0 { return 0.0 }
+    return sigma * 1.41421356237309504880    // ·√2
+}
+
 // ── The Eliashberg spectral-function assembler (BZ double-delta sum) ─────────
 //
 // Assemble α²F(ω) on `omega_grid` from a flat list of (k, q, ν) BZ samples.

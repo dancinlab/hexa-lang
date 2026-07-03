@@ -30,15 +30,18 @@
 // here (and bump the doc table above).
 fn _rhs_call(name: string, t: float, y: float, params: array) -> float {
     if name == "exp_decay" {
+        if len(params) < 1 { return 0.0 }   // missing params → 0 stall-sentinel (not OOB)
         let k = params[0]
         return 0.0 - k * y
     }
     if name == "logistic" {
+        if len(params) < 2 { return 0.0 }   // logistic needs [r, K]
         let r = params[0]
         let K = params[1]
         return r * y * (1.0 - y / K)
     }
     if name == "saddle" {
+        if len(params) < 1 { return 0.0 }
         let p = params[0]
         return p - y * y
     }
@@ -210,9 +213,13 @@ pub fn ode_rk45_adaptive(f_name: string, y0: float, t0: float, t1: float,
             if factor < 0.1 { factor = 0.1 }
             h = h * factor
             if h < h_min {
-                // Forced acceptance to avoid hang; mark with h sentinel.
+                // Forced acceptance to avoid a hang. y_new was computed with the
+                // (larger) rejected h, but we only advance by h_min — recompute the
+                // state at h_min so y stays consistent with t. The prior code applied
+                // a full-h increment over an h_min step → corrupted trajectory.
+                let rf = _dp45_step(f_name, t, y, h_min, params)
                 t = t + h_min
-                y = y_new
+                y = rf[0]
                 out.push([t, y, h_min])
                 h = h_min
             }

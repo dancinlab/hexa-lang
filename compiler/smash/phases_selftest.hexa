@@ -1,0 +1,207 @@
+// HEXA Native Compiler — smash 9-phase selftest harness.
+//
+// @version 0.1.0
+// @capabilities []
+//
+// Exercises every ported phase body (P1..P9) end-to-end via `hexa run`,
+// printing per-phase yields so the real generator is observably live (not
+// green-by-stub). Mirrors the smash() pipeline in smash.hexa but inlined
+// here so the selftest carries its own `fn main` without importing
+// smash.hexa (which has its own main).
+//
+// Run:  hexa run compiler/smash/phases_selftest.hexa   → exit 0 = PASS.
+//
+// NB (stale-install gotcha, measured 2026-06-26 on aiden): `hexa run` /
+// `hexa build` flatten the `use` graph through the COMPILED module_loader,
+// which resolves `compiler/...` against the *installed* source tree
+// ($HEXA_INSTALL_DIR → ~/.hx/src). If that tree is older than this checkout
+// (e.g. a pre-port `phases.hexa @version 0.1.0`), the selftest silently
+// grades against the STALE engine and the n=6 numbers collapse (P4 ~42,
+// 0 evolved) — NOT a codegen/transpile bug. Re-install (install.sh) or sync
+// ~/.hx/src to the current tree before running. With a current tree the
+// real R3 engine grades live: P2 6-evolved, P4 ~437, P9 ~185, proximity exact.
+//
+// Catalog/diagnostic strings: ENGLISH ONLY.
+
+use "compiler/smash/candidate"
+use "compiler/smash/phases"
+use "compiler/atlas/n6_axes.gen"
+
+fn _count_ctype(cands: [DiscoveryCandidate], ctype: string) -> i64 {
+    let mut n = 0
+    let mut i = 0
+    while i < len(cands) {
+        if cands[i].ctype == ctype { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+fn _count_axioms(cands: [DiscoveryCandidate]) -> i64 {
+    let mut n = 0
+    let mut i = 0
+    while i < len(cands) {
+        if cands[i].axiom { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+fn _run_seed(seed: string, depth: i64) -> i64 {
+    println("=== smash 9-phase selftest — seed=\"" + seed + "\" depth=" + to_string(depth) + " ===")
+    let mut fails = 0
+
+    // P1
+    let norm = p1_normalize_seed(seed)
+    println("[P1] normalize    -> \"" + norm + "\"")
+    if len(norm) == 0 { fails = fails + 1; println("  [FAIL] P1 empty") }
+
+    // seed-derived attractor lattice (free search target set)
+    let attr = seed_attractors(norm)
+    println("[attr] lattice    -> " + to_string(len(attr)) + " seed attractors (a0="
+            + to_string(attr[0]) + ")")
+
+    // P2 — ouroboros evolution (seed-derived axiom pool + distinctness survival)
+    let axioms = p2_evolve(norm, attr)
+    let p2_ax = _count_axioms(axioms)
+    let p2_evo = _count_ctype(axioms, "evolve")
+    println("[P2] evolve       -> " + to_string(len(axioms)) + " candidates ("
+            + to_string(p2_ax) + " axioms, " + to_string(p2_evo) + " evolved)")
+    if len(axioms) < 7 { fails = fails + 1; println("  [FAIL] P2 pool < 7") }
+
+    // P3 — singularity detection (closure + compression)
+    let sings = p3_singularities(axioms, attr)
+    println("[P3] singularity  -> " + to_string(len(sings)) + " nodes (closure summary incl.)")
+    if len(sings) == 0 { fails = fails + 1; println("  [FAIL] P3 no summary") }
+
+    // P4 — 7-type corollary generation
+    let cor = p4_corollaries(axioms, attr)
+    println("[P4] corollary    -> " + to_string(len(cor)) + " total")
+    println("       ded="    + to_string(_count_ctype(cor, "deduction"))
+            + " xfer="       + to_string(_count_ctype(cor, "transfer"))
+            + " sym="        + to_string(_count_ctype(cor, "symbreak"))
+            + " bif="        + to_string(_count_ctype(cor, "bifurc"))
+            + " proj="       + to_string(_count_ctype(cor, "projection"))
+            + " dual="       + to_string(_count_ctype(cor, "dual"))
+            + " comp="       + to_string(_count_ctype(cor, "compose")))
+    if len(cor) == 0 { fails = fails + 1; println("  [FAIL] P4 no corollaries") }
+
+    // P5 — 5-lens telescope consensus boost
+    let tele = p5_telescope(cor, attr)
+    println("[P5] telescope    -> " + to_string(len(tele)) + " boosted")
+    if len(tele) != len(cor) { fails = fails + 1; println("  [FAIL] P5 count drift") }
+
+    // P6 — attractor-resonance graph filter (seed-derived attractor lattice)
+    let graph = p6_attractor_filter(tele, attr)
+    println("[P6] graph filter -> " + to_string(len(graph)) + " attractor-resonant nodes")
+
+    // atlas cross-check — runtime read of the binary-embedded atlas: classify
+    // each surviving graph node as known (already an atlas node) vs novel.
+    let xc = p6_atlas_crosscheck(graph)
+    println("[atlas] n6_axes=" + to_string(n6_axes_count()) + " (binary-embedded) "
+            + "· cross-checked " + to_string(len(graph)) + " candidates -> "
+            + to_string(xc[0]) + " known / " + to_string(xc[1]) + " novel")
+
+    // P7 — closure-based recursive growth
+    let grown = p7_recursive_growth(axioms, tele, depth, attr)
+    println("[P7] recursive    -> " + to_string(len(grown)) + " grown @depth=" + to_string(depth))
+
+    // build union set (like smash())
+    let mut all: [DiscoveryCandidate] = []
+    let mut a = 0
+    while a < len(axioms) { all.push(axioms[a]); a = a + 1 }
+    a = 0
+    while a < len(sings) { all.push(sings[a]); a = a + 1 }
+    a = 0
+    while a < len(cor) { all.push(cor[a]); a = a + 1 }
+    a = 0
+    while a < len(tele) { all.push(tele[a]); a = a + 1 }
+    a = 0
+    while a < len(grown) { all.push(grown[a]); a = a + 1 }
+
+    // P8 — wave propagation + interference
+    let wave = p8_wave_propagate(graph, attr)
+    println("[P8] wave         -> " + to_string(len(wave)) + " propagated/labeled")
+
+    // P9 — meta-closure self-referential fixed point
+    let meta = p9_meta_dfs(all, depth, attr)
+    println("[P9] meta-closure -> " + to_string(len(meta)) + " closed [10**]")
+
+    a = 0
+    while a < len(wave) { all.push(wave[a]); a = a + 1 }
+    a = 0
+    while a < len(meta) { all.push(meta[a]); a = a + 1 }
+    println("[union] total candidates = " + to_string(len(all)))
+    println("")
+    return fails
+}
+
+// attractor-filter sanity, exercised through the public p6 graph filter — a
+// clean integration check of the grading core (attr_distance over a passed-in
+// lattice). Given an explicit attractor set {6, 12, 24}, probe values ON the
+// lattice (6/12/24) must be retained, an off-lattice probe (13.371234)
+// rejected. The lattice is a plain argument — no n=6 semantics.
+fn _mk(value: f64) -> DiscoveryCandidate {
+    return mk_derived("probe_" + to_string(value), "deduction",
+                      "probe=" + to_string(value), 0.9, value, "selftest")
+}
+
+fn _attractor_filter_ok() -> bool {
+    let lattice = [6.0, 12.0, 24.0]
+    let mut probes: [DiscoveryCandidate] = []
+    probes.push(_mk(6.0))
+    probes.push(_mk(12.0))
+    probes.push(_mk(24.0))
+    probes.push(_mk(13.371234))
+    let kept = p6_attractor_filter(probes, lattice)
+    // expect exactly the 3 on-lattice points retained
+    return len(kept) == 3
+}
+
+// FREE SEARCH proof: two different seeds must project to different attractor
+// lattices (and hence different P2 pools / candidates) — i.e. the engine no
+// longer collapses onto a fixed set regardless of seed.
+fn _free_search_distinct_ok() -> bool {
+    let a = seed_attractors("rhythm and harmony in jazz")
+    let b = seed_attractors("mycelial networks in forests")
+    if len(a) == 0 || len(b) == 0 { return false }
+    // primary signatures must differ, AND not collapse onto n=6 constants.
+    if _f64_eqish(a[0], b[0]) { return false }
+    if _f64_eqish(a[0], 6.0) || _f64_eqish(a[0], 12.0) { return false }
+    if _f64_eqish(b[0], 6.0) || _f64_eqish(b[0], 12.0) { return false }
+    return true
+}
+
+fn _f64_eqish(x: f64, y: f64) -> bool {
+    let d = x - y
+    if d < 0.0 { return (0.0 - d) < 0.000001 }
+    return d < 0.000001
+}
+
+fn main() {
+    let mut fails = 0
+    fails = fails + _run_seed("rhythm and harmony in jazz", 3)
+    fails = fails + _run_seed("12", 2)
+    fails = fails + _run_seed("mycelial networks in forests", 3)
+
+    if !_attractor_filter_ok() {
+        fails = fails + 1
+        println("  [FAIL] attractor filter (p6) did not retain exactly 3 on-lattice probes")
+    } else {
+        println("[attr] filter retained exactly the 3 on-lattice probes (6/12/24)")
+    }
+
+    if !_free_search_distinct_ok() {
+        fails = fails + 1
+        println("  [FAIL] free-search: two seeds did not project to distinct non-n6 lattices")
+    } else {
+        println("[free] two distinct seeds -> distinct, non-n6 attractor signatures")
+    }
+
+    if fails == 0 {
+        println("=== smash phases native: PASS (P1..P9 live, seed-derived free search) ===")
+        exit(0)
+    }
+    println("=== smash phases native: FAIL (" + to_string(fails) + ") ===")
+    exit(1)
+}

@@ -42,9 +42,18 @@ fn main() {
     let screened = if len(av) > 4 { to_int(av[4]) != 0 } else { true }
     let scr_beta = if len(av) > 5 { to_float(av[5]) } else { 0.3 }
     let scr_md   = if len(av) > 6 { to_int(av[6]) } else { 5 }
-    let scr_maxit = 6
+    // arg 7: max screening SCF passes (Dyson fixed-point iterations). Default 6 was the
+    // historical setting; the Dyson-sc convergence lane sweeps this (the metallic
+    // Anderson fixed point needs >>6 Krylov steps to drain ‖fp_res‖ on n=645).
+    let scr_maxit = if len(av) > 7 { to_int(av[7]) } else { 6 }
+    // arg 8: EXPLICIT FS double-delta σ_el (Hartree) — the QE-matched-σ lever.
+    //   ≤0 (default) keeps the legacy Einstein-default 0.05 Ha (the prior 4.137
+    //   run). To sit on QE's λ(σ) curve at QE degauss=d Ry, pass
+    //     σ_el = qforge_qe_degauss_to_sigma(d·0.5)  (Ry→Ha ·0.5, /√2 convention).
+    //   Examples: d=0.015→0.005303 · d=0.020→0.007071 · d=0.025→0.008839 Ha.
+    let sigma_el = if len(av) > 8 { to_float(av[8]) } else { -1.0 }
 
-    println("=== QFORGE MIGRATION GATE — converged-CaH6 full-BZ λ cross-val (d6 VERBATIM) v3-SCREENED ===")
+    println("=== QFORGE MIGRATION GATE — converged-CaH6 full-BZ λ cross-val (d6 VERBATIM) v4-MATCHED-σ ===")
     println("deck=" + deck_dir + "  npw_cap=" + to_string(npw_cap)
             + " (0=full ecut shell)  q-mesh=" + to_string(nq) + "³ MP")
     println("vertex=" + (if screened { "SCREENED (Dyson ε⁻¹, Anderson β="
@@ -56,8 +65,17 @@ fn main() {
     //   SCREENED el-ph vertex: ΔV_scr = ε⁻¹·ΔV_bare via the Anderson-damped Dyson
     //   fixed point (the @L5 named breakthrough, screening_anderson.hexa, d2).
     let sigma = 0.02
-    let fe = qforge_pw_frontend_phonons_scr(deck_dir, npw_cap, 1, sigma, nq,
-                                            screened, scr_beta, scr_md, scr_maxit)
+    let qe_deg = if sigma_el > 0.0 { qforge_sigma_to_qe_degauss(sigma_el) } else { -1.0 }
+    if sigma_el > 0.0 {
+        println("[matched-σ] FS double-delta σ_el=" + to_string(sigma_el)
+                + " Ha  ⇔  QE degauss=" + to_string(qe_deg) + " Ha = "
+                + to_string(qe_deg * 2.0) + " Ry  (σ=d/√2 convention)")
+    } else {
+        println("[matched-σ] σ_el = deck default 0.05 Ha (legacy 4.137 baseline)")
+    }
+    let fe = qforge_pw_frontend_phonons_scr_sig(deck_dir, npw_cap, 1, sigma, nq,
+                                            screened, scr_beta, scr_md, scr_maxit,
+                                            sigma_el)
     if !fe.ok {
         println("DEFER — front-end failed: " + fe.error)
         println("=== DONE (DEFER) ===")
@@ -69,6 +87,17 @@ fn main() {
     println("[front-end] ecutwfc=" + to_string(fe.geom.ecutwfc) + " Ry  e_band="
             + to_string(fe.e_band) + " Ha")
     println("[front-end] deck.name=" + fe.deck.name)
+    // R2 FS-sampling diagnostic — bisected metallic E_F + bands straddling it.
+    println("[R2-FS] nbra=" + to_string(fe.deck.nbra) + " e_fermi(bisected)="
+            + to_string(fe.deck.e_fermi) + " Ha · sigma_el=" + to_string(fe.deck.sigma_el) + " Ha")
+    let mut _bi = 0
+    while _bi < len(fe.deck.eps_bra) {
+        let _tag = if _bi < fe.deck.nocc { "occ" } else { "CON" }
+        println("[R2-FS]   band[" + to_string(_bi) + "]=" + to_string(fe.deck.eps_bra[_bi])
+                + " (" + _tag + ") ε−E_F=" + to_string(fe.deck.eps_bra[_bi] - fe.deck.e_fermi)
+                + " |ε−E_F|/σ=" + to_string(_abs(fe.deck.eps_bra[_bi] - fe.deck.e_fermi) / fe.deck.sigma_el))
+        _bi = _bi + 1
+    }
     println("[front-end] note: " + fe.note)
 
     // ── qforge_run end-to-end: SCF→DFPT→elph→a2f→λ→Tc on the PRODUCTION deck ──
@@ -92,7 +121,18 @@ fn main() {
 
     // ── THE λ VERDICT (VERBATIM) ──
     let lam = res.lambda
-    let rel = (lam - QE_LAMBDA) / QE_LAMBDA
+    // matched-σ QE reference: QE's own 4×4×4 λ(σ) ladder (verdict JSON
+    // results_by_broadening) — 0.015→4.376 · 0.020→4.193 · 0.025→3.717 Ry.
+    // When the run is at an explicit σ_el, compare to the QE λ at the SAME
+    // QE-equivalent degauss (the true matched-σ rel-ε, not the tight-σ 4.376).
+    let qe_ref = if sigma_el > 0.0 {
+        let dry = qe_deg * 2.0                        // QE degauss in Ry
+        if _abs(dry - 0.015) < 0.001 { 4.376 }
+        else { if _abs(dry - 0.020) < 0.001 { 4.193 }
+        else { if _abs(dry - 0.025) < 0.001 { 3.717 }
+        else { QE_LAMBDA } } }
+    } else { QE_LAMBDA }
+    let rel = (lam - qe_ref) / qe_ref
     let arel = _abs(rel)
     println("")
     println("════════════════════ λ VERDICT (d6 VERBATIM — NOT tuned) ════════════════════")
@@ -103,7 +143,11 @@ fn main() {
             + to_string(scr_beta) + " m=" + to_string(scr_md) + ")" } else { "BARE |g|²" }))
     println("BARE baseline λ    = 4.13647  (prior converged run #2768, rel-ε=5.47%)")
     println("QFORGE λ (this run)= " + to_string(lam))
-    println("QE answer-key λ    = " + to_string(QE_LAMBDA) + "  (CaH6 gate anchor, QE cross-val)")
+    if sigma_el > 0.0 {
+        println("QE MATCHED-σ ref λ = " + to_string(qe_ref) + "  (QE 4×4×4 λ at degauss="
+                + to_string(qe_deg * 2.0) + " Ry — true matched-σ, NOT tight 4.376)")
+    }
+    println("QE answer-key λ    = " + to_string(QE_LAMBDA) + "  (CaH6 gate anchor σ=0.015 Ry)")
     println("rel-ε              = " + to_string(arel) + "  (" + to_string(arel * 100.0) + " %)")
     println("Δλ vs 4.137 baseline = " + to_string(lam - 4.13647))
     println("QFORGE ω_log       = " + to_string(res.omega_log) + " K")

@@ -102,7 +102,7 @@ pub fn verlet_step(particles: array, dt: float) -> array {
     let mut i = 0
     while i < n {
         let p = particles[i]
-        let inv_m = 1.0 / p.mass
+        let inv_m = if p.mass > 0.0 { 1.0 / p.mass } else { 0.0 }   // massless site → no kick (frozen)
         let vx_half = p.vx + half_dt * p.fx * inv_m
         let vy_half = p.vy + half_dt * p.fy * inv_m
         let vz_half = p.vz + half_dt * p.fz * inv_m
@@ -134,7 +134,7 @@ pub fn verlet_finish_step(particles: array, dt: float) -> array {
     let mut i = 0
     while i < n {
         let p = particles[i]
-        let inv_m = 1.0 / p.mass
+        let inv_m = if p.mass > 0.0 { 1.0 / p.mass } else { 0.0 }   // massless site → no kick (frozen)
         let vx_new = p.vx + half_dt * p.fx * inv_m
         let vy_new = p.vy + half_dt * p.fy * inv_m
         let vz_new = p.vz + half_dt * p.fz * inv_m

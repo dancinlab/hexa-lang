@@ -18,9 +18,19 @@
 #                   linked, glibc-independent `hexa-linux-x86_64-musl.tar.gz`
 #                   asset. Unset = auto-detect (use musl on a musl host or when
 #                   the host glibc is older than the build floor). darwin/arm64
-#                   are unaffected. The musl asset is an `edge` supplementary
-#                   target, so on stable tags the installer falls back to the
-#                   dynamic glibc asset automatically.
+#                   are unaffected. The musl asset is a SUPPLEMENTARY target
+#                   shipped alongside the per-target tarball; if it is absent the
+#                   installer falls back to the dynamic glibc asset automatically.
+#   HEXA_CUDA       linux-x86_64 only: install the cuBLAS-enabled
+#                   `hexa-linux-x86_64-cuda.tar.gz` asset (GPU-accelerated GEMM
+#                   via the CUDA-folded runtime.a → cuda_available()=1, anima
+#                   #2386). =1 forces it; =0 forces the CPU glibc asset. UNSET =
+#                   AUTO: prefer cuda when the host has an NVIDIA GPU (nvidia-smi)
+#                   AND a resolvable cuBLAS/cudart runtime (so a GPU consumer's
+#                   install lands cuda_available()=1 without opt-in — #3701). The
+#                   cuda asset is SUPPLEMENTARY, so on a release where it is
+#                   absent the installer falls back to the CPU glibc asset
+#                   automatically. Takes precedence over HEXA_MUSL when both apply.
 
 set -eu
 
@@ -57,24 +67,81 @@ need_cmd() {
 
 # Decide whether the linux-x86_64 install should prefer the statically-linked,
 # glibc-independent `-musl` asset over the dynamic glibc tarball. This is the
-# consumer-side half of the static-musl edge target (release.yml
+# consumer-side half of the static-musl supplementary target (release.yml
 # release-linux-x86_64-musl): a dynamic glibc binary dies with
 # `GLIBC_2.xx not found` on a host whose glibc is older than the build floor
 # (ubuntu-22.04 → glibc 2.35) or on a pure-musl host (Alpine) that has no glibc
 # at all. The static-musl ELF runs on any of them.
 #
-# Scope: linux-x86_64 ONLY (the only target with a musl asset). Returns 0
-# (prefer musl) / 1 (keep glibc). ADDITIVE — the glibc path is the default and
-# is only overridden on an explicit opt-in or a positively-detected need, so
-# normal modern-glibc x86_64 installs are unchanged.
+# Scope: linux-x86_64 AND linux-arm64 (both targets ship a musl asset; the arm64
+# musl asset landed in ING #2 r2). Returns 0 (prefer musl) / 1 (keep glibc).
+# ADDITIVE — the glibc path is the default and is only overridden on an explicit
+# opt-in or a positively-detected need, so normal modern-glibc installs are
+# unchanged on either arch.
 #
 #   HEXA_MUSL=1  → force musl ; HEXA_MUSL=0 → force glibc (escape hatch).
 #   auto (unset) → musl when the host is musl-based OR glibc < MUSL_GLIBC_FLOOR.
+# Decide whether the linux-x86_64 install should pull the cuBLAS-enabled `-cuda`
+# asset (release.yml release-linux-x86_64-cuda). The cuda binary links cuBLAS so a
+# consumer `hexa build`/`run` program gets GPU-accelerated GEMM (cuda_available()
+# == 1 — anima #2386); the default CPU glibc asset reports cuda_available() == 0.
+#
+# Selection (linux-x86_64 ONLY — the only target with a cuda asset):
+#   HEXA_CUDA=1  → force cuda (explicit opt-in, unchanged).
+#   HEXA_CUDA=0  → force CPU glibc (explicit opt-out / escape hatch).
+#   unset (auto) → AUTO-PREFER cuda when the host BOTH (a) has an NVIDIA GPU
+#                  (`nvidia-smi -L` lists ≥1 device) AND (b) has the cuBLAS/cudart
+#                  runtime libs resolvable (ldconfig or the usual CUDA lib dirs).
+#                  Requiring BOTH avoids shipping a cuBLAS-linked binary that
+#                  would fail to load libcudart on a GPU host without the CUDA
+#                  runtime installed — in that case we keep the CPU asset. This is
+#                  the consumer half of #3701 (a GPU consumer's `install.sh hexa`
+#                  now lands cuda_available()=1 without needing HEXA_CUDA=1).
+#
+# Returns 0 (prefer cuda) / 1 (keep default). The cuda asset is SUPPLEMENTARY,
+# so a release install where the asset is absent falls back to the CPU glibc
+# tarball (the generic asset fallback in install_hexa) — the auto-prefer never
+# hard-fails an install.
+_has_nvidia_gpu() {
+    command -v nvidia-smi >/dev/null 2>&1 || return 1
+    # `nvidia-smi -L` lists one line per GPU ("GPU 0: ..."). Empty / error → none.
+    nvidia-smi -L 2>/dev/null | grep -q '^GPU ' || return 1
+    return 0
+}
+_has_cuda_runtime() {
+    # cuBLAS/cudart resolvable via the dynamic loader cache or a standard CUDA
+    # install dir. The cuda binary links -lcudart -lcublas, so without these it
+    # would fail to start — keep the CPU asset in that case.
+    if command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q 'libcudart\.so'; then
+        return 0
+    fi
+    for d in /usr/local/cuda/lib64 /usr/local/cuda/targets/x86_64-linux/lib \
+             /usr/lib/x86_64-linux-gnu /usr/lib64; do
+        [ -e "$d"/libcudart.so* ] 2>/dev/null && return 0
+    done
+    return 1
+}
+prefer_cuda() {
+    [ "$(detect_target)" = "linux-x86_64" ] || return 1
+    case "${HEXA_CUDA:-}" in
+        1) return 0 ;;   # explicit opt-in
+        0) return 1 ;;   # explicit opt-out
+    esac
+    # auto: GPU present AND cuda runtime libs resolvable → prefer cuda.
+    if _has_nvidia_gpu && _has_cuda_runtime; then
+        return 0
+    fi
+    return 1
+}
+
 MUSL_GLIBC_FLOOR_MAJOR=2
 MUSL_GLIBC_FLOOR_MINOR=34
 prefer_musl() {
-    # Only linux-x86_64 has a musl asset.
-    [ "$(detect_target)" = "linux-x86_64" ] || return 1
+    # Only the linux targets have a musl asset (x86_64 + arm64).
+    case "$(detect_target)" in
+        linux-x86_64|linux-arm64) ;;
+        *) return 1 ;;
+    esac
 
     # Explicit override wins.
     case "${HEXA_MUSL:-}" in
@@ -115,11 +182,22 @@ install_hexa() {
     base="https://github.com/${HEXA_REPO}/releases"
 
     # Asset selection. Default = the per-target tarball (`hexa-${target}`). On
-    # linux-x86_64, prefer the static-musl asset when the host needs it (old or
-    # absent glibc) or it is forced via HEXA_MUSL — see prefer_musl(). The musl
-    # tarball's inner dir is `hexa-linux-x86_64-musl/`, matching the asset name.
+    # the linux targets (x86_64 + arm64), prefer the static-musl asset when the
+    # host needs it (old or absent glibc) or it is forced via HEXA_MUSL — see
+    # prefer_musl(). The musl tarball's inner dir is `hexa-${target}-musl/`,
+    # matching the asset name.
     asset="hexa-${target}"
-    if prefer_musl; then
+    if prefer_cuda; then
+        # HEXA_CUDA=1 opt-in (linux-x86_64): cuBLAS-enabled asset. Takes precedence
+        # over musl (a CUDA host is glibc + has an NVIDIA GPU; the cuda asset is a
+        # dynamic glibc binary, not static-musl).
+        asset="hexa-${target}-cuda"
+        if [ "${HEXA_CUDA:-}" = "1" ]; then
+            dim "  HEXA_CUDA=1 → preferring cuBLAS-enabled asset (GPU-accelerated)"
+        else
+            dim "  NVIDIA GPU + cuda runtime detected → preferring cuBLAS-enabled asset (cuda_available=1; HEXA_CUDA=0 to opt out)"
+        fi
+    elif prefer_musl; then
         asset="hexa-${target}-musl"
         dim "  glibc-independent host → preferring static-musl asset"
     fi
@@ -137,12 +215,12 @@ install_hexa() {
 
     dim "  fetching $url"
     if ! curl -fsSL "$url" -o "$tmp/hexa.tar.gz"; then
-        # The musl asset is an `edge` supplementary target; on stable tags it
-        # does not exist. Fall back to the dynamic glibc asset rather than fail
-        # — this keeps a forced/auto-musl request working on a stable channel
+        # The musl AND cuda assets are SUPPLEMENTARY targets; a release may not
+        # carry them. Fall back to the default glibc asset rather than fail —
+        # this keeps a forced/auto-musl or HEXA_CUDA=1 request working
         # (it just lands the glibc binary, which is what shipped before).
         if [ "$asset" != "hexa-${target}" ]; then
-            dim "  ⚠ ${asset}.tar.gz not found (musl asset is edge-only) → glibc asset"
+            dim "  ⚠ ${asset}.tar.gz not found (musl/cuda assets are supplementary) → glibc asset"
             asset="hexa-${target}"
             url="$(_asset_url "$asset")"
             dim "  fetching $url"
@@ -173,11 +251,53 @@ install_hexa() {
     # When invoked through PATH, argv[0]="hexa" has no slash and resolution
     # falls back to cwd — wrong. Install the native binary under a private
     # name and place a thin shim at $HX_BIN/hexa that exec's it with an
-    # absolute argv[0]. Mirrors the source-tree `hexa` → `hexa.real` shim.
-    install -m 0755 "$src/hexa" "$HX_BIN/hexa.real"
+    # absolute argv[0].
+    #
+    # Canonical on-disk name = `hexad` (AMFI burning-matcher treadmill
+    # terminal: hexadrv → hexa.real → hxv2 → hexad · cli_wrappers.hexa:38,
+    # tool/bin/build.hexa:119). The shim (cli_wrappers.hexa SSOT) resolves
+    # `hexad` FIRST and `exec -a hexa` it, so the on-disk name AMFI's burning
+    # matcher sees is the un-burnt `hexad`. The shim below execs `hexad`
+    # DIRECTLY (matching cli_wrappers.hexa SSOT + the dev-build path), so
+    # `hexad` is the single canonical surface every layer keys on.
+    #
+    # `hexad` is the FLIP SENTINEL too (tool/promote_selfhost.sh): an unflipped
+    # install has `hexad` as a plain REAL FILE — required BOTH for the AMFI
+    # escape (AMFI evaluates the resolved real-file name; a symlink would
+    # re-expose a burnt name) AND so `[ -L hexad ]` flip-detection reports a
+    # fresh install as "NOT flipped". A tier2 default-flip backs the real file
+    # up to `hexad.pre-selfhost.<ts>` and replaces `hexad` with a symlink →
+    # `hx-selfhost-cli`; AMFI escape survives the flip because the symlink
+    # RESOLVES to the un-burnt `hx-selfhost-cli` real-file name. `--revert`
+    # restores the backup real file, returning the shipped surface.
+    #
+    # `hexa.real` and `hxv2` are retired-name compat symlinks → `hexad`. Every
+    # legacy consumer of those PATHs (firmware fixtures, glibc preflight,
+    # module_loader check) keeps resolving losslessly through the symlink.
+    install -m 0755 "$src/hexa" "$HX_BIN/hexad"
+    # retired-name compat symlinks (relative target — install dir relocatable).
+    ln -sf hexad "$HX_BIN/hexa.real"
+    ln -sf hexad "$HX_BIN/hxv2"
+    # standalone-rtlink: the shim exports HEXA_PREBUILT_RUNTIME at the persisted
+    # native-seed runtime.a ($HX_BIN/build/runtime.a, dropped by install_src's
+    # stage_resolve_runtime_a step) so a consumer `hexa build`/`run` in a FRESH
+    # shell links that archive — without it the shipped binary compiles a
+    # content-hash runtime.<sha>.o from `clang -c runtime.c` which, after the
+    # emitter-regen declared rt_{array,map}_*_native extern, can no longer
+    # resolve those symbols (undefined reference at the app link). This is the
+    # ONLY channel that reaches the CURRENTLY-shipped binary (its
+    # resolve_prebuilt_runtime() already honors the env var; the env-free
+    # <hxroot>/build/runtime.a fallback only lands in a future binary). Guards:
+    # respect a user-set HEXA_PREBUILT_RUNTIME (do not override), and only export
+    # when the archive actually exists (install_src may have failed / been skipped
+    # — then fall through to the legacy content-hash path with the unpatched
+    # frozen seed, no regression).
     cat > "$HX_BIN/hexa" <<EOF
 #!/bin/bash
-exec "$HX_BIN/hexa.real" "\$@"
+if [ -z "\${HEXA_PREBUILT_RUNTIME:-}" ] && [ -f "$HX_BIN/build/runtime.a" ]; then
+    export HEXA_PREBUILT_RUNTIME="$HX_BIN/build/runtime.a"
+fi
+exec "$HX_BIN/hexad" "\$@"
 EOF
     chmod 0755 "$HX_BIN/hexa"
     # Copy build/ verbatim so any sidecar binary the release ships
@@ -186,6 +306,41 @@ EOF
         mkdir -p "$HX_BIN/build"
         cp -R "$src/build/." "$HX_BIN/build/"
         chmod -R u+rwX,go+rX "$HX_BIN/build"
+    fi
+    # Place the shipped precompile cache at the install dir. The tarball carries
+    # release/precompile/hexa_run.<key> (stage_precompile_package), and the
+    # compiler's _precompile_lookup probes <install_dir>/release/precompile/ — but
+    # nothing placed it here, so the shipped cache never reached consumers and
+    # every `hexa run <shipped-script>` (and `hexa cloud` via cmd_run) re-forked
+    # clang. release/precompile/ is .gitignore'd, so the install_src clone can NOT
+    # deliver it either — the tarball is the ONLY channel. Keys are
+    # sha256(source)[:16] + "_" + version, so a stale entry can never be served
+    # (source/version change → cache miss → recompile); placing it is purely a
+    # cold-start speedup with no staleness risk.
+    if [ -d "$src/release/precompile" ]; then
+        mkdir -p "$HX_BIN/release/precompile"
+        cp -R "$src/release/precompile/." "$HX_BIN/release/precompile/"
+        chmod -R u+rwX,go+rX "$HX_BIN/release/precompile"
+    fi
+    # Purge any stale standalone sub-binaries from a prior LOCAL build. `hexa
+    # cloud` / `hexa sim-universe` prefer an install-dir bin/hexa-<sub> binary
+    # over the source/version-keyed cmd_run path — and that standalone binary is
+    # NOT shipped or refreshed by the release, so a once-built one (e.g. a 6/5
+    # bin/hexa-cloud that predates a merged source fix) silently shadows every
+    # later change (ING #66/#67 — `--offer` ignored). Removing it forces dispatch
+    # through cmd_run, which is source-hash + version keyed and therefore can
+    # never go stale. A fresh standalone built from current source is fine; this
+    # only removes the unrefreshed shadow.
+    rm -f "$HX_BIN/bin/hexa-cloud" "$HX_BIN/bin/hexa-sim-universe" 2>/dev/null || true
+    # #3723 fix — mark a cuda-runtime install so a consumer `hexa run/build` auto-links
+    # cudart/cublas WITHOUT needing HEXA_CUDA=1 on every invocation. The cuda asset's
+    # runtime.a (runtime_cuda.o) references cudaLaunchKernel/cublas; main.hexa
+    # os_clang_ldflags reads $HX_HOME/.cuda-runtime and adds -lcudart -lcublas when
+    # present. Idempotent: a CPU/musl (re)install REMOVES the marker (no stale cuda link).
+    if [ "${asset##*-}" = "cuda" ]; then
+        : > "$HX_HOME/.cuda-runtime" 2>/dev/null || true
+    else
+        rm -f "$HX_HOME/.cuda-runtime" 2>/dev/null || true
     fi
     # macOS — defeat the two kill vectors a DOWNLOADED binary hits that a
     # local build does not:
@@ -200,14 +355,16 @@ EOF
     #       fallback (quarantine already stripped).
     # A Developer-ID-notarized release tarball makes both harmless no-ops.
     if [ "$(uname -s)" = "Darwin" ]; then
-        xattr -dr com.apple.quarantine "$HX_BIN/hexa.real" "$HX_BIN/build" 2>/dev/null || true
+        # Operate on the real file (hexad), not the hexa.real/hxv2 symlinks —
+        # codesign/xattr must sign the Mach-O, not a symlink.
+        xattr -dr com.apple.quarantine "$HX_BIN/hexad" "$HX_BIN/build" 2>/dev/null || true
         if command -v codesign >/dev/null 2>&1; then
             _sid="${HEXA_CODESIGN_IDENTITY:-}"
             if [ -z "$_sid" ] && command -v security >/dev/null 2>&1; then
                 _sid="$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/[0-9]+\)/{print $2; exit}')"
             fi
             [ -n "$_sid" ] || _sid="-"
-            codesign --force --sign "$_sid" --identifier hexad "$HX_BIN/hexa.real" 2>/dev/null || true
+            codesign --force --sign "$_sid" --identifier hexad "$HX_BIN/hexad" 2>/dev/null || true
             if [ "$_sid" = "-" ]; then
                 dim "  codesign: ad-hoc (set HEXA_CODESIGN_IDENTITY=<cert> for a stable identity)"
             else
@@ -216,17 +373,21 @@ EOF
         fi
     fi
 
-    # selfhost persistence — the `install … hexa.real` above overwrites hexa.real
-    # with the shipped C-transpile dispatch binary, silently reverting a tier2
-    # native default-flip (tool/promote_selfhost.sh install --default). If the
-    # native default was promoted (marker present) and the self-host slot + CLI
-    # shim survived this reinstall, re-apply the flip so the native compile
-    # surface stays the default. Reversible via `promote_selfhost.sh --revert`
-    # (clears the marker). codesign above already signed the real binary.
+    # selfhost persistence — the `install …` line above resets hexad to a
+    # fresh copy of the canonical (C-transpile) binary, silently reverting a
+    # tier2 native default-flip (tool/promote_selfhost.sh install --default).
+    # If the native default was promoted (marker present) and the self-host
+    # slot + CLI shim survived this reinstall, re-apply the flip so the native
+    # compile surface stays the default. The flip mv's the real hexad file to a
+    # backup and symlinks hexad → hx-selfhost-cli (the unique `[ -L hexad ]`
+    # state promote_selfhost.sh keys on). codesign above already signed the
+    # real hexad before this flip; a `--revert` restores the backup file and
+    # the shipped surface returns. The hexa.real/hxv2 compat symlinks → hexad
+    # follow the flip transparently (they resolve to whatever hexad points at).
     if [ -f "$HX_HOME/.selfhost-default" ] && [ -x "$HX_BIN/hx-selfhost-cli" ] \
        && [ -x "$HX_HOME/self/native/selfhost/gen3" ]; then
-        mv "$HX_BIN/hexa.real" "$HX_BIN/hexa.real.pre-selfhost.$(date +%Y%m%d-%H%M%S)"
-        ln -sf "$HX_BIN/hx-selfhost-cli" "$HX_BIN/hexa.real"
+        mv "$HX_BIN/hexad" "$HX_BIN/hexad.pre-selfhost.$(date +%Y%m%d-%H%M%S)"
+        ln -sf "$HX_BIN/hx-selfhost-cli" "$HX_BIN/hexad"
         green "  ✓ selfhost-default marker → re-applied native tier2 flip"
     fi
     # glibc preflight (Linux only) — the prebuilt binary is built on ubuntu-22.04
@@ -235,7 +396,7 @@ EOF
     # "GLIBC_2.xx not found" dynamic-loader error — surface a clear, actionable
     # message instead so the failure is understandable (not a silent crash).
     if [ "$(uname -s)" = "Linux" ]; then
-        if ! "$HX_BIN/hexa.real" --version >/dev/null 2>"$tmp/glibc.err"; then
+        if ! "$HX_BIN/hexad" --version >/dev/null 2>"$tmp/glibc.err"; then
             if grep -q "GLIBC_" "$tmp/glibc.err" 2>/dev/null; then
                 red "  ✗ hexa cannot run on this host's glibc:"
                 red "    $(grep -m1 GLIBC_ "$tmp/glibc.err")"
@@ -247,7 +408,7 @@ EOF
                 return 1
             fi
             # non-glibc failure (e.g. missing lib) — show it but don't hard-fail the install
-            dim "  (note: hexa.real --version exited nonzero: $(head -1 "$tmp/glibc.err" 2>/dev/null))"
+            dim "  (note: hexad --version exited nonzero: $(head -1 "$tmp/glibc.err" 2>/dev/null))"
         fi
     fi
     green "  ✓ $HX_BIN/hexa"
@@ -262,12 +423,12 @@ install_src() {
     # fresh `hexa build` of any `use "stdlib/..."` program fails.
     #
     # Fix (works TODAY, no new release needed): shallow-clone the hexa-lang
-    # source into $HX_SRC, then symlink the support trees next to the hexa.real
+    # source into $HX_SRC, then symlink the support trees next to the hexad
     # binary so the compiler's install-relative discovery resolves them:
     #   $HX_BIN/stdlib -> $HX_SRC/stdlib   (ml_stdlib_install_candidates: <inst>/stdlib)
     #   $HX_BIN/self   -> $HX_SRC/self     (<inst>/self/stdlib  AND  hexa cc's
     #                                       <inst>/self/native/hexa_cc.c)
-    # install_dir_from_argv0() realpath-resolves hexa.real to $HX_BIN, so these
+    # install_dir_from_argv0() realpath-resolves hexad to $HX_BIN, so these
     # land exactly where the resolver looks.
     bold "▸ installing hexa source (stdlib/ + self/)"
     local repo_url
@@ -282,9 +443,27 @@ install_src() {
 
     if [ -d "$HX_SRC/.git" ]; then
         dim "  updating existing source at $HX_SRC"
-        git -C "$HX_SRC" fetch --depth 1 origin "$HEXA_BRANCH" >/dev/null 2>&1 || true
-        git -C "$HX_SRC" checkout -q "$HEXA_BRANCH" >/dev/null 2>&1 || true
-        git -C "$HX_SRC" reset --hard "origin/$HEXA_BRANCH" >/dev/null 2>&1 || true
+        # Pin origin to the hexa-lang repo BEFORE fetching, then re-clone if the
+        # update fails. Guards the wrong-repo silent-staleness class: if $HX_SRC was
+        # previously cloned from a DIFFERENT repo (observed on a pool host whose
+        # origin pointed at dancinlab/anima), the `|| true`-swallowed fetch/reset
+        # would otherwise track THAT repo's main → self/ symlinked to a foreign tree
+        # → user `hexa build` fails with confusing 'undeclared identifier' errors
+        # that re-running install could never cure (the binary updates but self/
+        # stays stale). set-url forces the correct source; a still-failing update
+        # falls back to a fresh clone so a corrupt/foreign tree can never persist.
+        git -C "$HX_SRC" remote set-url origin "$repo_url" >/dev/null 2>&1 || true
+        if git -C "$HX_SRC" fetch --depth 1 origin "$HEXA_BRANCH" >/dev/null 2>&1 \
+           && git -C "$HX_SRC" reset --hard FETCH_HEAD >/dev/null 2>&1; then
+            :
+        else
+            dim "  update failed — re-cloning fresh from $repo_url"
+            rm -rf "$HX_SRC"
+            if ! git clone --depth 1 --branch "$HEXA_BRANCH" "$repo_url" "$HX_SRC" >/dev/null 2>&1; then
+                red "  ✗ git clone failed: $repo_url ($HEXA_BRANCH)"
+                return 1
+            fi
+        fi
     else
         dim "  cloning $repo_url (branch: $HEXA_BRANCH, shallow)"
         rm -rf "$HX_SRC"
@@ -335,6 +514,69 @@ install_src() {
         return 1
     fi
 
+    # standalone-rtlink: resolve build/runtime.a via stage_resolve_runtime_a so
+    # the installed toolchain links the SAME native-seed-bearing runtime archive
+    # the release/CI path builds — NOT just the surgically-patched frozen seed.
+    #
+    # WHY: restore_frozen_seeds above leaves a STALE frozen runtime_core.c. The
+    # release pipeline instead runs stage_resolve_runtime_a, which (1) regenerates
+    # runtime_core.c from its emitter SSOT and (2) assembles the arch-matched
+    # native rt_{array,map}_*_native bodies from self/native/{array,map}_core_*.s
+    # into runtime.a. The regenerated runtime_core.c declares those native symbols
+    # `extern` UNCONDITIONALLY (#3629), so a plain `clang -c runtime.c` link can no
+    # longer resolve them — only the runtime.a that ar's the assembled native
+    # objects can. Running the canonical tool HERE (cwd=$HX_SRC, the same recipe
+    # build_aprime.sh Stage 0b uses) closes the install↔release gap: the consumer
+    # link picks up runtime.a via resolve_prebuilt_runtime()'s env-free fallback
+    # (main.hexa: <hxroot>/build/runtime.a), so rt_*_native resolve with 0
+    # residual-undefined. NON-FATAL: on failure we leave the surgically-patched
+    # frozen seed (status quo) and warn — the legacy C #else element bodies in the
+    # frozen runtime_core.c still satisfy the link, so no regression.
+    bold "▸ resolving native runtime.a (stage_resolve_runtime_a — release parity)"
+    _rtlink_ok=0
+    # ING-82 guard — do NOT overwrite a cuda asset's cuBLAS-linked runtime.a with a
+    # CPU rebuild. The cuda tarball ships build/runtime.a containing runtime_cuda.o
+    # (cudart/cublas refs + the native rt_*_native seeds), already copied verbatim to
+    # $HX_BIN/build/runtime.a by install_hexa. stage_resolve_runtime_a below rebuilds a
+    # CPU-only runtime.a (no -DHEXA_CUDA, no runtime_cuda.o) and `cp`s it OVER that one,
+    # so a `HEXA_CUDA=1` install lands cuda_available()=0 (the original ING #82 bug — the
+    # asset was fine, the install clobbered it). The shipped cuBLAS runtime.a already has
+    # the native rt_*_native seeds (built by the same release recipe), so it satisfies the
+    # consumer link without a rebuild. Skip stage_resolve_runtime_a entirely for cuda.
+    # Detect "cuda install" via the $HX_HOME/.cuda-runtime marker install_hexa drops for a
+    # cuda asset (line ~317) — install-local + always in scope (the $asset var is set in a
+    # different function and unreliable under `set -u`/dash).
+    if [ -f "$HX_HOME/.cuda-runtime" ] && [ -f "$HX_BIN/build/runtime.a" ]; then
+        # Mirror the cuBLAS archive into $HX_SRC/build/ too so the pre-warm build
+        # (HEXA_LANG=$HX_SRC) links it instead of content-hash-compiling a CPU
+        # runtime.c — keeping the warmed object cuda-consistent with the shim.
+        mkdir -p "$HX_SRC/build"
+        cp -f "$HX_BIN/build/runtime.a" "$HX_SRC/build/runtime.a" 2>/dev/null || true
+        green "  ✓ cuda asset — keeping tarball's cuBLAS runtime.a (skip CPU stage_resolve overwrite)"
+        _rtlink_ok=1
+    elif [ -x "$HX_SRC/tool/stage_resolve_runtime_a" ]; then
+        if ( cd "$HX_SRC" \
+             && CC="${CC:-clang}" \
+                CFLAGS_COMMON="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}" \
+                bash tool/stage_resolve_runtime_a >/dev/null 2>&1 ) \
+            && [ -f "$HX_SRC/build/runtime.a" ]; then
+            # Mirror the archive next to the driver dir ($HX_BIN) too: a consumer
+            # `hexa build` with HEXA_LANG unset resolves hxroot via argv0 ->
+            # $HX_BIN, and resolve_prebuilt_runtime() looks for <hxroot>/build/
+            # runtime.a. The pre-warm build below sets HEXA_LANG=$HX_SRC so it
+            # finds the $HX_SRC copy; real consumer builds find the $HX_BIN copy.
+            mkdir -p "$HX_BIN/build"
+            cp -f "$HX_SRC/build/runtime.a" "$HX_BIN/build/runtime.a" 2>/dev/null || true
+            _rtlink_ok=1
+            green "  ✓ $HX_SRC/build/runtime.a + $HX_BIN/build/runtime.a (native rt_*_native linked)"
+        else
+            red "  ⚠ stage_resolve_runtime_a failed — falling back to surgically-patched frozen seed."
+            red "    (legacy C #else element bodies still satisfy the link; no regression.)"
+        fi
+    else
+        dim "  ⚠ stage_resolve_runtime_a missing — using surgically-patched frozen seed (status quo)"
+    fi
+
     # The `hexa build` flatten step (resolve_module_loader_compiled in
     # self/main.hexa) needs a COMPILED module_loader binary at
     # <install>/build/hexa_module_loader. It is .gitignored, so the clone
@@ -343,8 +585,8 @@ install_src() {
     # module_loader. Build it now from the fresh source so end-to-end
     # `hexa build` works on this install without a new release.
     bold "▸ building module_loader (hexa build flatten helper)"
-    if [ ! -x "$HX_BIN/hexa.real" ]; then
-        red "  ✗ hexa.real missing — cannot build module_loader"
+    if [ ! -x "$HX_BIN/hexad" ]; then
+        red "  ✗ hexad missing — cannot build module_loader"
         return 1
     fi
     mkdir -p "$HX_BIN/build"
@@ -481,6 +723,22 @@ update_path_hint() {
         echo "  add this to your shell rc file:"
         echo '    export PATH="$HOME/.hx/bin:$PATH"   # bash/zsh'
         echo '    fish_add_path "$HOME/.hx/bin"        # fish'
+    fi
+
+    # ── ING #80: system-wide PATH for login / non-interactive shells ──────────
+    # The per-user rc above is read ONLY by INTERACTIVE shells. Cloud pods launch
+    # `hexa run` from detached / non-interactive shells (setsid · nohup · the
+    # `bash -c` one-liner emitted by `hexa cloud nohup/fire`), which never source
+    # ~/.bashrc → a bare `hexa` is "command not found" and the job dies silently.
+    # /etc/profile.d/hexa.sh is sourced by LOGIN shells (`bash -lc`), so a
+    # login-shell launch finds hexa on PATH (cloud-side complement: have
+    # `cloud exec/nohup` run the remote command via a login shell). Best-effort:
+    # written only when /etc/profile.d is writable (e.g. root on a pod); an
+    # unprivileged user silently keeps the per-user rc above.
+    if [ -d /etc/profile.d ] && [ -w /etc/profile.d ] && [ ! -f /etc/profile.d/hexa.sh ]; then
+        if printf '# hexa-lang (ING #80) — PATH for login/non-interactive shells\nexport PATH="$HOME/.hx/bin:$PATH"\n' > /etc/profile.d/hexa.sh 2>/dev/null; then
+            green "  ✓ system PATH: /etc/profile.d/hexa.sh (login shells)"
+        fi
     fi
 }
 

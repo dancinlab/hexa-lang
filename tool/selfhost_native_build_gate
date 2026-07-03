@@ -32,6 +32,22 @@ set -u
 SLOT="${SLOT:-$HOME/.hx/self/native/selfhost}"
 HEXA="${HEXA:-hexa}"
 
+# Driver resolution — the Actions runner env does not load the login-shell
+# PATH, so a self-hosted runner that HOLDS the slot can still lack `hexa` on
+# PATH (measured: ghost-selfhost, PR #4409 — 7/7 instant "produced no
+# executable" in <0.1s = command-not-found, while the same corpus builds fine
+# over ssh). A missing driver is the same SETUP/INFRA class as a missing slot,
+# never a native-build regression: fall back to the canonical install path,
+# else exit 2 (CI remaps to neutral).
+if ! command -v "$HEXA" >/dev/null 2>&1; then
+    if [ -x "$HOME/.hx/bin/hexa" ]; then
+        HEXA="$HOME/.hx/bin/hexa"
+    else
+        echo "selfhost_native_build_gate: NEUTRAL — driver \`$HEXA\` not on PATH and no $HOME/.hx/bin/hexa (no driver to run the corpus)" >&2
+        exit 2
+    fi
+fi
+
 for f in gen3 hexa_ld rt.o; do
     if [ ! -e "$SLOT/$f" ]; then
         echo "selfhost_native_build_gate: NEUTRAL — slot missing $SLOT/$f (no promoted self-host slot)" >&2
@@ -43,7 +59,13 @@ WORK="$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/snbg.$$")"; mkdir -p "$WO
 trap 'rm -rf "$WORK"' EXIT
 
 # corpus: (name | source | expected-stdout)
-names=(arith string loop userfn cond array)
+#   `var` exercises the mutable-let sugar `var x = …` (≡ `let mut x = …`). A
+#   regression here (the C-transpile emitting a leaked `var;` + dropping the
+#   declaration so `x` is undeclared) silently broke every consumer `hexa
+#   build`/`run`/`--c-only` of any program with a mutable local — see
+#   CHANGELOG fix(parser): contextual `var` decl. The case mutates the binding
+#   (`x = x + 1`) so a dropped declaration fails the build, not just the parse.
+names=(arith string loop userfn cond array var)
 srcs=(
   'fn main(){ let a=30; let b=12; print(to_string(a+b)); exit(0) }'
   'fn main(){ print("he"+"llo"); exit(0) }'
@@ -51,8 +73,9 @@ srcs=(
   'fn add(a:Int,b:Int)->Int{ return a+b } fn main(){ print(to_string(add(40,2))); exit(0) }'
   'fn main(){ let x=7; if x>5 { print("big") } else { print("small") }; exit(0) }'
   'fn main(){ let a=[10,20,30]; print(to_string(a[0]+a[2])); exit(0) }'
+  'fn main(){ var x=41; x=x+1; print(to_string(x-1)); exit(0) }'
 )
-exps=(42 hello 15 42 big 40)
+exps=(42 hello 15 42 big 40 41)
 
 pass=0; fail=0
 i=0

@@ -93,6 +93,39 @@ let mut generic_fn_all_param_bounds = []
 let mut tparam_names = []
 let mut tparam_bound = []
 
+// ─────────────────────────────────────────────────────────────
+// C5: const generics + where-clause / trait-bound ENFORCEMENT
+//   (lane ① const-generics — opt-in, check-only, byteeq-neutral)
+//
+// reference (faithful-match cites):
+//   • rustc const generics — struct Buf<const N: usize> { … };
+//     a const generic param is instantiated with a *value* not a *type*
+//     (RFC 2000 min_const_generics). rustc rejects `Buf<int>` ("expected
+//     a const but found a type") and `Box<5>` (the inverse).
+//   • rustc trait bounds / where-clauses — `fn max_of<T: Ord>(…)` and the
+//     desugaring `fn f<T>(…) where T: Ord` are equivalent; the compiler
+//     proves `T: Ord` at every instantiation against the in-scope impls
+//     (rustc_trait_selection — "the trait `Ord` is not implemented for
+//     `f64`"). f64 implements PartialOrd but NOT Ord — we reproduce that.
+//
+// Polarity / release integrity: this is enforcement-only. Default mode
+// emits a *warning* (non-fatal, mirrors HX4001 domain-hint severity); the
+// opt-in `tc_strict_bounds` flag (production: env HEXA_STRICT_BOUNDS=1)
+// promotes the same diagnostic to a fatal error. A bound is stored in the
+// existing per-param bound slot (sentinel "const" marks a const generic),
+// so no new parallel arrays ripple through the type_check() reset.
+// ─────────────────────────────────────────────────────────────
+
+// Opt-in strictness — production reads env("HEXA_STRICT_BOUNDS") == "1".
+let mut tc_strict_bounds = false
+
+// Trait-impl registry: parallel arrays (concrete type → trait it implements).
+let mut trait_impl_types = []
+let mut trait_impl_traits = []
+
+// Const-generic sentinel stored in the bound slot.
+let TC_CONST_BOUND = "const"
+
 // --- Core functions ---
 
 fn tc_error(msg) {
@@ -247,6 +280,126 @@ fn tc_warn(msg) {
 
 fn tc_warn_at(name, msg) {
     tc_errors.push(TypeError { message: "[warn] " + msg, name: name })
+}
+
+// --- C5: trait-impl registry + bound enforcement ---
+
+// Record that concrete `type_name` satisfies trait `trait_name`.
+fn tc_register_impl(type_name, trait_name) {
+    trait_impl_types.push(type_name)
+    trait_impl_traits.push(trait_name)
+}
+
+// rustc-faithful builtin impls (std-lib bounds). f64 is PartialOrd/PartialEq
+// but NOT Ord/Eq (NaN), exactly as rustc; String is Ord/Eq/Clone/Display but
+// not Num/Copy; bool/int are the totally-ordered Copy primitives.
+fn tc_register_builtin_impls() {
+    tc_register_impl("int", "Ord")
+    tc_register_impl("int", "Eq")
+    tc_register_impl("int", "PartialOrd")
+    tc_register_impl("int", "PartialEq")
+    tc_register_impl("int", "Num")
+    tc_register_impl("int", "Clone")
+    tc_register_impl("int", "Copy")
+    tc_register_impl("int", "Display")
+    tc_register_impl("float", "PartialOrd")
+    tc_register_impl("float", "PartialEq")
+    tc_register_impl("float", "Num")
+    tc_register_impl("float", "Clone")
+    tc_register_impl("float", "Copy")
+    tc_register_impl("float", "Display")
+    tc_register_impl("string", "Ord")
+    tc_register_impl("string", "Eq")
+    tc_register_impl("string", "PartialOrd")
+    tc_register_impl("string", "PartialEq")
+    tc_register_impl("string", "Clone")
+    tc_register_impl("string", "Display")
+    tc_register_impl("bool", "Ord")
+    tc_register_impl("bool", "Eq")
+    tc_register_impl("bool", "PartialOrd")
+    tc_register_impl("bool", "PartialEq")
+    tc_register_impl("bool", "Clone")
+    tc_register_impl("bool", "Copy")
+}
+
+fn tc_type_implements(type_name, trait_name) {
+    let mut i = 0
+    while i < len(trait_impl_types) {
+        if trait_impl_types[i] == type_name && trait_impl_traits[i] == trait_name {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// A bound slot may carry multiple traits joined with '+' (rustc `T: Ord + Clone`
+// and the desugared where-clause both land here). Emit one diagnostic per
+// unsatisfied trait. Severity follows tc_strict_bounds (warn by default, error
+// when opt-in HEXA_STRICT_BOUNDS is set).
+fn tc_check_bound_satisfied(owner, param_pos, type_name, bound) {
+    if bound == "" { return }
+    if bound == TC_CONST_BOUND { return }
+    // Only enforce against *concrete* known types — a type param staying
+    // generic (e.g. nested generics) is proven at its own instantiation.
+    if tc_is_type_param(type_name) { return }
+    if !tc_is_concrete_type(type_name) { return }
+    let traits = bound.split("+")
+    let mut t = 0
+    while t < len(traits) {
+        let trait_name = traits[t]
+        if trait_name != "" && !tc_type_implements(type_name, trait_name) {
+            let msg = "the trait '" + trait_name + "' is not implemented for '" + type_name + "' (required by " + owner + " type param #" + to_string(param_pos) + ")"
+            if tc_strict_bounds {
+                tc_error(msg)
+            } else {
+                tc_warn(msg)
+            }
+        }
+        t = t + 1
+    }
+}
+
+fn tc_is_concrete_type(name) {
+    if name == "int" { return true }
+    if name == "float" { return true }
+    if name == "bool" { return true }
+    if name == "string" { return true }
+    if name == "char" { return true }
+    if tc_lookup_struct(name) != -1 { return true }
+    if tc_lookup_enum(name) != -1 { return true }
+    return false
+}
+
+// where-clause desugaring (rustc): `<T, U> where T: Ord` ≡ `<T: Ord, U>`.
+// Merge a list of where-clause nodes (name=param, value=trait) into a fresh
+// tparam list, OR-ing each clause's trait onto the matching param's bound
+// (joined with '+' so multiple clauses on one param accumulate). Returns the
+// tparams unchanged when there are no where-clauses.
+fn tc_merge_where(tparams, wheres) {
+    if wheres == "" { return tparams }
+    if len(wheres) == 0 { return tparams }
+    let mut out = []
+    let mut i = 0
+    while i < len(tparams) {
+        let tp = tparams[i]
+        let mut merged_bound = tp.value
+        let mut w = 0
+        while w < len(wheres) {
+            let wc = wheres[w]
+            if wc.name == tp.name && wc.value != "" {
+                if merged_bound == "" || merged_bound == TC_CONST_BOUND {
+                    merged_bound = wc.value
+                } else {
+                    merged_bound = merged_bound + "+" + wc.value
+                }
+            }
+            w = w + 1
+        }
+        out.push(type_param_node(tp.name, merged_bound))
+        i = i + 1
+    }
+    return out
 }
 
 // --- C4: Generic registration/lookup ---
@@ -449,8 +602,18 @@ fn tc_validate_type_args(struct_name, type_args) {
     let mut i = 0
     while i < actual {
         let bound = bounds[i]
-        if bound != "" {
-            let arg_name = type_args[i].name
+        let arg = type_args[i]
+        let arg_is_const = arg.kind == "ConstArg"
+        if bound == TC_CONST_BOUND {
+            // C5: a const generic param wants a *value*, not a type.
+            if !arg_is_const {
+                tc_error("const generic param #" + to_string(i) + " of '" + struct_name + "' expects a const value, but a type '" + arg.name + "' was given")
+            }
+        } else if arg_is_const {
+            // C5: a type param must NOT be given a const value.
+            tc_error("type param #" + to_string(i) + " of '" + struct_name + "' expects a type, but a const value '" + arg.value + "' was given")
+        } else if bound != "" {
+            let arg_name = arg.name
             let arg_type = tc_lookup(arg_name)
             if arg_type == "" && !tc_is_type_param(arg_name) {
                 let at = annotation_to_type(arg_name)
@@ -458,6 +621,8 @@ fn tc_validate_type_args(struct_name, type_args) {
                     tc_error("Unknown type '" + arg_name + "' used as type argument for '" + struct_name + "'")
                 }
             }
+            // C5: prove the bound against the concrete instantiation type.
+            tc_check_bound_satisfied(struct_name, i, arg.name, bound)
         }
         i = i + 1
     }
@@ -693,7 +858,8 @@ fn tc_check_stmt(node) {
     }
     if k == "FnDecl" {
         let arity = len(node.params)
-        let fn_tparams = node.items
+        let fn_tparams0 = node.items
+        let fn_tparams = tc_merge_where(fn_tparams0, node.variants)
         let has_tparams = fn_tparams != "" && len(fn_tparams) > 0
         if has_tparams {
             tc_register_generic_fn(node.name, fn_tparams)
@@ -728,9 +894,9 @@ fn tc_check_stmt(node) {
     if k == "StructDecl" {
         let fc = len(node.fields)
         tc_register_struct(node.name, fc)
-        let st_tparams = node.items
-        if st_tparams != "" && len(st_tparams) > 0 {
-            tc_register_generic_struct(node.name, st_tparams)
+        let st_tparams0 = node.items
+        if st_tparams0 != "" && len(st_tparams0) > 0 {
+            tc_register_generic_struct(node.name, tc_merge_where(st_tparams0, node.variants))
         }
         let mut fi = 0
         while fi < fc {
@@ -832,9 +998,9 @@ fn tc_first_pass(stmts) {
         if s.kind == "FnDecl" {
             tc_register_fn(s.name, len(s.params), annotation_to_type(s.ret_type))
             tc_define(s.name, "fn")
-            let fp_tparams = s.items
-            if fp_tparams != "" && len(fp_tparams) > 0 {
-                tc_register_generic_fn(s.name, fp_tparams)
+            let fp_tparams0 = s.items
+            if fp_tparams0 != "" && len(fp_tparams0) > 0 {
+                tc_register_generic_fn(s.name, tc_merge_where(fp_tparams0, s.variants))
             }
         }
         if s.kind == "StructDecl" {
@@ -845,9 +1011,9 @@ fn tc_first_pass(stmts) {
                 tc_register_struct_field(s.fields[fi].name, s.fields[fi].value)
                 fi = fi + 1
             }
-            let sp_tparams = s.items
-            if sp_tparams != "" && len(sp_tparams) > 0 {
-                tc_register_generic_struct(s.name, sp_tparams)
+            let sp_tparams0 = s.items
+            if sp_tparams0 != "" && len(sp_tparams0) > 0 {
+                tc_register_generic_struct(s.name, tc_merge_where(sp_tparams0, s.variants))
             }
             tc_define(s.name, "type")
         }
@@ -900,7 +1066,10 @@ fn type_check(stmts) {
     generic_fn_all_param_bounds = []
     tparam_names = []
     tparam_bound = []
+    trait_impl_types = []
+    trait_impl_traits = []
     tc_register_builtins()
+    tc_register_builtin_impls()
     tc_first_pass(stmts)
     tc_check_stmts(stmts)
     return tc_errors
@@ -1030,6 +1199,33 @@ fn param_node(name, typ) {
 
 fn type_param_node(name, bound) {
     return mk("TypeParam", name, bound, "", "", "", "", "", "", "", "", "", "", "")
+}
+
+// C5: a const generic param — `struct Buf<const N>`. The bound slot carries
+// the sentinel TC_CONST_BOUND ("const") so registration/enforcement treat it
+// as value-kinded, not type-kinded (rustc min_const_generics).
+fn const_param_node(name) {
+    return mk("TypeParam", name, TC_CONST_BOUND, "", "", "", "", "", "", "", "", "", "", "")
+}
+
+// C5: a const argument at instantiation — `Buf<8>`. kind "ConstArg", value=int.
+fn const_arg_node(value) {
+    return mk("ConstArg", "", value, "", "", "", "", "", "", "", "", "", "", "")
+}
+
+// C5: one where-clause atom — `where T: Ord` (name=param, value=trait).
+fn where_node(param, trait_name) {
+    return mk("WhereClause", param, trait_name, "", "", "", "", "", "", "", "", "", "", "")
+}
+
+// C5: generic struct decl carrying a where-clause list (variants slot).
+fn struct_decl_where(name, tparams, fields, wheres) {
+    return mk("StructDecl", name, "", "", "", "", "", "", "", fields, tparams, wheres, "", "")
+}
+
+// C5: generic fn decl carrying a where-clause list (variants slot).
+fn fn_decl_generic_where(name, tparams, params, body, ret, wheres) {
+    return mk("FnDecl", name, "", "", "", "", params, body, "", "", tparams, wheres, "", ret)
 }
 
 fn field_node(obj, fname) {
@@ -1379,6 +1575,161 @@ let gpa = tc_get_generic_fn_params("fa")
 let gpb = tc_get_generic_fn_params("fb")
 let t34_ok = len(gpa) == 1 && gpa[0] == "T" && len(gpb) == 1 && gpb[0] == "t"
 check("T34 — T and t are different type params", t34_ok)
+
+// ═══════════════════════════════════════════════════════════
+//  C5: const generics + where-clause / trait-bound enforcement
+//  reference: rustc min_const_generics + rustc trait selection.
+// ═══════════════════════════════════════════════════════════
+
+// ── T35: const generic struct registers with the const sentinel ──
+
+let tp35 = [const_param_node("N")]
+let sf35 = [struct_field_node("cap", "int")]
+let sd35 = struct_decl_generic("Buf", tp35, sf35)
+let e35 = type_check([sd35])
+check("T35 — struct Buf<const N> accepted", len(e35) == 0)
+check("T35 — Buf has 1 (const) type param", tc_lookup_generic_struct_param_count("Buf") == 1)
+let b35 = tc_get_generic_struct_bounds("Buf")
+check("T35 — const param bound = 'const' sentinel", len(b35) == 1 && b35[0] == "const")
+
+// ── T36: const generic instantiated with a value `Buf<8>` accepted ──
+
+let ca36 = [const_arg_node("8")]
+let fi36 = [field_init_node("cap", lit("IntLit", "8"))]
+let si36 = struct_init_generic("Buf", ca36, fi36)
+let e36 = type_check([sd35, let_stmt("b", si36)])
+check("T36 — Buf<8> (const value) accepted", !type_errors_has(e36, "expects a const value"))
+
+// ── T37: const generic given a TYPE `Buf<int>` rejected ──────
+
+let ta37 = [type_param_node("int", "")]
+let fi37 = [field_init_node("cap", lit("IntLit", "0"))]
+let si37 = struct_init_generic("Buf", ta37, fi37)
+let e37 = type_check([sd35, let_stmt("b", si37)])
+check("T37 — Buf<int> rejected (const param wants a value)", type_errors_has(e37, "expects a const value"))
+
+// ── T38: type param given a const VALUE `Box<5>` rejected ────
+
+let ca38 = [const_arg_node("5")]
+let fi38 = [field_init_node("value", lit("IntLit", "5"))]
+let si38 = struct_init_generic("Box", ca38, fi38)
+let e38 = type_check([sd1, let_stmt("b", si38)])
+check("T38 — Box<5> rejected (type param wants a type)", type_errors_has(e38, "expects a type"))
+
+// ── T39: satisfied trait bound `NumBox<int>` → no diagnostic ──
+
+let ta39 = [type_param_node("int", "")]
+let fi39 = [field_init_node("data", lit("IntLit", "1"))]
+let si39 = struct_init_generic("NumBox", ta39, fi39)
+let e39 = type_check([sd10, let_stmt("n", si39)])
+check("T39 — NumBox<int> satisfies Num (no bound diagnostic)", !type_errors_has(e39, "not implemented"))
+
+// ── T40: violated trait bound `NumBox<string>` → WARNING ─────
+
+let ta40 = [type_param_node("string", "")]
+let fi40 = [field_init_node("data", lit("StringLit", "x"))]
+let si40 = struct_init_generic("NumBox", ta40, fi40)
+let e40 = type_check([sd10, let_stmt("n", si40)])
+check("T40 — NumBox<string> violates Num (diagnostic emitted)", type_errors_has(e40, "the trait 'Num' is not implemented for 'string'"))
+check("T40 — default severity is warning (non-fatal)", type_warnings_count(e40) > 0)
+
+// ── T41: rustc-faithful — f64 is PartialOrd but NOT Ord ──────
+
+let tp41 = [type_param_node("T", "Ord")]
+let sf41 = [struct_field_node("x", "T")]
+let sd41 = struct_decl_generic("OrdBox", tp41, sf41)
+let ta41 = [type_param_node("float", "")]
+let fi41 = [field_init_node("x", lit("FloatLit", "1.0"))]
+let si41 = struct_init_generic("OrdBox", ta41, fi41)
+let e41 = type_check([sd41, let_stmt("o", si41)])
+check("T41 — OrdBox<float> warns (f64 is not Ord, only PartialOrd)", type_errors_has(e41, "the trait 'Ord' is not implemented for 'float'"))
+
+let ta41b = [type_param_node("int", "")]
+let fi41b = [field_init_node("x", lit("IntLit", "1"))]
+let si41b = struct_init_generic("OrdBox", ta41b, fi41b)
+let e41b = type_check([sd41, let_stmt("o", si41b)])
+check("T41 — OrdBox<int> ok (int is Ord)", !type_errors_has(e41b, "not implemented"))
+
+let ta41c = [type_param_node("string", "")]
+let fi41c = [field_init_node("x", lit("StringLit", "s"))]
+let si41c = struct_init_generic("OrdBox", ta41c, fi41c)
+let e41c = type_check([sd41, let_stmt("o", si41c)])
+check("T41 — OrdBox<string> ok (string is Ord)", !type_errors_has(e41c, "not implemented"))
+
+// ── T42: opt-in strict mode promotes the warning to a fatal error ──
+
+tc_strict_bounds = true
+let e42 = type_check([sd41, let_stmt("o", si41)])
+check("T42 — HEXA_STRICT_BOUNDS makes the bound violation a hard error", type_errors_has(e42, "the trait 'Ord' is not implemented for 'float'"))
+check("T42 — strict-mode violation is NOT a warning", type_warnings_count(e42) == 0)
+tc_strict_bounds = false
+
+// ── T43: where-clause desugars to an inline bound ────────────
+
+let tp43 = [type_param_node("T", ""), type_param_node("U", "")]
+let wc43 = [where_node("T", "Ord")]
+let sf43 = [struct_field_node("a", "T"), struct_field_node("b", "U")]
+let sd43 = struct_decl_where("PairW", tp43, sf43, wc43)
+let e43 = type_check([sd43])
+check("T43 — struct PairW<T,U> where T: Ord accepted", len(e43) == 0)
+let b43 = tc_get_generic_struct_bounds("PairW")
+check("T43 — where-clause merged: T bound = 'Ord', U bound = ''", len(b43) == 2 && b43[0] == "Ord" && b43[1] == "")
+
+let ta43 = [type_param_node("float", ""), type_param_node("int", "")]
+let fi43 = [field_init_node("a", lit("FloatLit", "1.0")), field_init_node("b", lit("IntLit", "2"))]
+let si43 = struct_init_generic("PairW", ta43, fi43)
+let e43v = type_check([sd43, let_stmt("p", si43)])
+check("T43 — PairW<float,int> warns (where T: Ord unmet by f64)", type_errors_has(e43v, "the trait 'Ord' is not implemented for 'float'"))
+
+let ta43b = [type_param_node("string", ""), type_param_node("int", "")]
+let fi43b = [field_init_node("a", lit("StringLit", "s")), field_init_node("b", lit("IntLit", "2"))]
+let si43b = struct_init_generic("PairW", ta43b, fi43b)
+let e43ok = type_check([sd43, let_stmt("p", si43b)])
+check("T43 — PairW<string,int> ok (string is Ord)", !type_errors_has(e43ok, "not implemented"))
+
+// ── T44: multiple where-clauses on one param accumulate (T: Ord+Num) ──
+
+let tp44 = [type_param_node("T", "")]
+let wc44 = [where_node("T", "Ord"), where_node("T", "Num")]
+let sf44 = [struct_field_node("v", "T")]
+let sd44 = struct_decl_where("MB", tp44, sf44, wc44)
+let e44 = type_check([sd44])
+let b44 = tc_get_generic_struct_bounds("MB")
+check("T44 — two where-clauses merge into 'Ord+Num'", len(b44) == 1 && b44[0] == "Ord+Num")
+
+let ta44 = [type_param_node("string", "")]
+let fi44 = [field_init_node("v", lit("StringLit", "s"))]
+let si44 = struct_init_generic("MB", ta44, fi44)
+let e44v = type_check([sd44, let_stmt("m", si44)])
+check("T44 — MB<string>: Ord satisfied, Num NOT — one diagnostic for Num", type_errors_has(e44v, "the trait 'Num' is not implemented for 'string'") && !type_errors_has(e44v, "the trait 'Ord' is not implemented for 'string'"))
+
+let ta44b = [type_param_node("int", "")]
+let fi44b = [field_init_node("v", lit("IntLit", "1"))]
+let si44b = struct_init_generic("MB", ta44b, fi44b)
+let e44ok = type_check([sd44, let_stmt("m", si44b)])
+check("T44 — MB<int> ok (int is Ord and Num)", !type_errors_has(e44ok, "not implemented"))
+
+// ── T45: const + type params mixed `Arr<T, const N>` ─────────
+
+let tp45 = [type_param_node("T", ""), const_param_node("N")]
+let sf45 = [struct_field_node("first", "T")]
+let sd45 = struct_decl_generic("Arr", tp45, sf45)
+let ta45 = [type_param_node("int", ""), const_arg_node("4")]
+let fi45 = [field_init_node("first", lit("IntLit", "0"))]
+let si45 = struct_init_generic("Arr", ta45, fi45)
+let e45 = type_check([sd45, let_stmt("a", si45)])
+check("T45 — Arr<int, 4> accepted (type + const slots correct)", !type_errors_has(e45, "expects") && !type_errors_has(e45, "not implemented"))
+
+let ta45b = [type_param_node("int", ""), type_param_node("string", "")]
+let si45b = struct_init_generic("Arr", ta45b, fi45)
+let e45b = type_check([sd45, let_stmt("a", si45b)])
+check("T45 — Arr<int, string> rejected (const slot N given a type)", type_errors_has(e45b, "expects a const value"))
+
+// ── T46: inline bound regression — `NumBox<T: Num>` with int still ok ──
+
+let e46 = type_check([sd10])
+let b46 = tc_get_generic_struct_bounds("NumBox")
+check("T46 — inline bound still parsed: NumBox bound = 'Num'", len(b46) == 1 && b46[0] == "Num")
 
 // ── Summary ──────────────────────────────────────────────────
 

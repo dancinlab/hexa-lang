@@ -1,0 +1,197 @@
+// @ci_gate — deterministic · pure analytic anchors (no fixture I/O required)
+//
+// soc_selftest.hexa — the SPIN-ORBIT COUPLING (H_SOC = ξ L·S) g5 gate (work#28 2/3).
+//
+// Verifies stdlib/qforge/soc on top of stage-1 spinors (noncollinear.hexa). SOC is
+// the term QE turns on with lspinorb=.true.; its hallmark observable is the
+// j=l±½ band splitting (e.g. the p_{3/2}–p_{1/2} split that gives ~Δ_SOC). The gate
+// pins that splitting to its EXACT analytic value and the ξ→0 reduction to stage-1.
+//
+//   (A) ξ→0 REDUCTION — qforge_h_psi_spinor_soc with every ξ=0 reproduces the
+//       stage-1 qforge_h_psi_spinor bit-for-bit on a random spinor (max|Δ|=0).   🔵
+//   (B) L·S OPERATOR algebra — the |l,m,σ⟩ L·S matrix is (i) Hermitian/symmetric,
+//       (ii) traceless, and (iii) for l=1,2 its eigenvalues are EXACTLY the j-split
+//       {+½l (×2(l+1)), −½(l+1) (×2l)} — the QE fcoef/spinor j-projection.        🟢
+//   (C) SOC BAND SPLITTING (the lspinorb observable) — a single l=1 (p) projector
+//       of strength ξ embedded in a 2n spinor H splits a degenerate p-level into
+//       p_{3/2} (shift +½ξ, 4-fold) and p_{1/2} (shift −ξ, 2-fold). We measure the
+//       6 shifted eigenvalues vs the no-SOC level and match the j-split to ~1e-10. 🟢
+//   (D) spinor() Clebsch-Gordan — QE upflib/spinor.f90 normalization: each
+//       spin-angle state |l,j,m⟩ is unit-normalized, |spinor(↑)|²+|spinor(↓)|² == 1
+//       per (j,m); and summing that over the (2l+1) m-labels of a fixed j == 2l+1. 🟢
+//
+// Run:  hexa run --no-sentinel stdlib/qforge/soc_selftest.hexa
+// PASS: "qforge_soc_selftest PASS".
+use "stdlib/qforge/soc"
+use "stdlib/qforge/noncollinear"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+
+// a trivial real diagonal kinetic op for the spinor (level energy e0 on every site).
+let mut E0 = 0.0
+let mut TN = 0
+fn t_apply(v: [float]) -> [float] {
+    let mut o: [float] = []
+    let mut i = 0
+    while i < TN { o.push(E0 * v[i]) ; i = i + 1 }
+    return o
+}
+
+// zero NcPotential of size n.
+fn zero_pot(n: int) -> NcPotential {
+    let mut v: [float] = [] ; let mut bx: [float] = []
+    let mut by: [float] = [] ; let mut bz: [float] = []
+    let mut i = 0
+    while i < n { v.push(0.0) ; bx.push(0.0) ; by.push(0.0) ; bz.push(0.0) ; i = i + 1 }
+    return NcPotential { v: v, bx: bx, by: by, bz: bz, n: n }
+}
+
+// eigenvalue multiplicity counter: how many evals within eps of `target`.
+fn count_near(evals: [float], target: float, eps: float) -> int {
+    let mut c = 0
+    let mut i = 0
+    while i < len(evals) { if _abs(evals[i] - target) < eps { c = c + 1 } ; i = i + 1 }
+    return c
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ══ (A) ξ→0 REDUCTION ══════════════════════════════════════════════════════
+    let n = 5
+    TN = n ; E0 = 0.7
+    let pot = zero_pot(n)
+    // a non-trivial random-ish spinor.
+    let mut ur: [float] = [] ; let mut ui: [float] = []
+    let mut dr: [float] = [] ; let mut di: [float] = []
+    let mut i = 0
+    while i < n {
+        let f = to_float(i + 1)
+        ur.push(0.3 * f) ; ui.push(-0.1 * f) ; dr.push(0.2 * f) ; di.push(0.4 * f)
+        i = i + 1
+    }
+    let psi = Spinor { up_re: ur, up_im: ui, dn_re: dr, dn_im: di, n: n }
+    // l=1 shell with ξ=0 (3 m-channels × n beta amplitudes).
+    let mut beta0: [float] = []
+    let mut bi = 0
+    while bi < 3 * n {
+        beta0.push(0.5 + 0.1 * to_float(bi))     // arbitrary nonzero projector
+        bi = bi + 1
+    }
+    let sh0 = SocShell { l: 1, xi: 0.0, beta: beta0, n: n }
+    let base = qforge_h_psi_spinor(t_apply, pot, psi)
+    let withsoc = qforge_h_psi_spinor_soc(t_apply, pot, [sh0], psi)
+    let mut maxd = 0.0
+    i = 0
+    while i < n {
+        let d1 = _abs(base.up_re[i] - withsoc.up_re[i]) ; if d1 > maxd { maxd = d1 }
+        let d2 = _abs(base.up_im[i] - withsoc.up_im[i]) ; if d2 > maxd { maxd = d2 }
+        let d3 = _abs(base.dn_re[i] - withsoc.dn_re[i]) ; if d3 > maxd { maxd = d3 }
+        let d4 = _abs(base.dn_im[i] - withsoc.dn_im[i]) ; if d4 > maxd { maxd = d4 }
+        i = i + 1
+    }
+    fails = fails + _ck_close("(A) ξ=0 reduces to stage-1 (max|Δ|)", maxd, 0.0, 1.0e-15)
+
+    // ══ (B) L·S OPERATOR algebra ═══════════════════════════════════════════════
+    let mut lcheck = 1
+    while lcheck <= 2 {
+        let nm = 2 * lcheck + 1
+        let d = 2 * nm
+        let M = qforge_soc_ls_matrix(lcheck)
+        // (i) symmetric, (ii) traceless.
+        let mut sym = true ; let mut tr = 0.0
+        let mut a = 0
+        while a < d {
+            tr = tr + M[a * d + a]
+            let mut b = 0
+            while b < d { if _abs(M[a * d + b] - M[b * d + a]) > 1.0e-14 { sym = false } ; b = b + 1 }
+            a = a + 1
+        }
+        fails = fails + _ck_true("(B) L·S symmetric (l=" + to_string(lcheck) + ")", sym)
+        fails = fails + _ck_close("(B) L·S traceless (l=" + to_string(lcheck) + ")", tr, 0.0, 1.0e-13)
+        // (iii) eigenvalues = j-split. Diagonalize via qforge_eigh_complex (Aim=0).
+        let mut zim: [float] = []
+        let mut zz = 0
+        while zz < d * d { zim.push(0.0) ; zz = zz + 1 }
+        let eg = qforge_eigh_complex(M, zim, d, d)
+        let evals = eg[0]
+        let lf = to_float(lcheck)
+        let lo = -0.5 * (lf + 1.0)        // j=l−½ eigenvalue
+        let hi = 0.5 * lf                 // j=l+½ eigenvalue
+        // lowest is lo (more negative since −½(l+1) < +½l for l≥0).
+        let nlo = count_near(evals, lo, 1.0e-9)
+        let nhi = count_near(evals, hi, 1.0e-9)
+        fails = fails + _ck_close("(B) j=l−½ eig (l=" + to_string(lcheck) + ")", evals[0], lo, 1.0e-9)
+        fails = fails + _ck_close("(B) j=l+½ eig (l=" + to_string(lcheck) + ")", evals[d-1], hi, 1.0e-9)
+        fails = fails + _ck_true("(B) j=l−½ mult==2l (l=" + to_string(lcheck) + ")", nlo == 2 * lcheck)
+        fails = fails + _ck_true("(B) j=l+½ mult==2(l+1) (l=" + to_string(lcheck) + ")", nhi == 2 * (lcheck + 1))
+        lcheck = lcheck + 1
+    }
+
+    // ══ (C) SOC BAND SPLITTING — the lspinorb observable ═══════════════════════
+    // A single grid point (n=1) carrying ONE p-shell projector. The spinor H is the
+    // pure SOC operator (T = level e0·I), so its 2n=2 ... — to expose the full 6-fold
+    // p-manifold we must let the projector live in a space large enough to host the
+    // 2(2l+1)=6 spin-angle states. We use n = 2l+1 = 3 sites with beta = identity
+    // per m-channel: beta[(m)*n + i] = δ(m,i). Then ⟨β_lm|ψ^σ⟩ picks site m, and the
+    // 2n=6 spinor H == E0·I + ξ·(L·S) exactly → eigenvalues E0 + {j-split}.
+    let l = 1
+    let np = 2 * l + 1          // = 3 sites
+    TN = np ; E0 = 2.5
+    let xi = 0.4
+    // identity projector: beta[(m)*np + i] = 1 if i==m else 0.
+    let mut betaI: [float] = []
+    let mut mm = 0
+    while mm < np {
+        let mut ii = 0
+        while ii < np { if ii == mm { betaI.push(1.0) } else { betaI.push(0.0) } ; ii = ii + 1 }
+        mm = mm + 1
+    }
+    let shP = SocShell { l: l, xi: xi, beta: betaI, n: np }
+    let potP = zero_pot(np)
+    let AB = qforge_build_spinor_h_soc(t_apply, potP, [shP], np)
+    let eg2 = qforge_eigh_complex(AB[0], AB[1], 2 * np, 2 * np)
+    let ev = eg2[0]
+    // expected: E0 + (−ξ)  ×2  (p_{1/2}) ,  E0 + (+½ξ) ×4 (p_{3/2}).
+    let e_half = E0 - 1.0 * xi          // j=1/2: −½(l+1)ξ = −1·ξ
+    let e_3half = E0 + 0.5 * xi         // j=3/2: +½l ξ = +0.5·ξ
+    fails = fails + _ck_close("(C) p_{1/2} level == E0−ξ", ev[0], e_half, 1.0e-9)
+    fails = fails + _ck_close("(C) p_{3/2} level == E0+½ξ", ev[2 * np - 1], e_3half, 1.0e-9)
+    fails = fails + _ck_true("(C) p_{1/2} 2-fold", count_near(ev, e_half, 1.0e-9) == 2)
+    fails = fails + _ck_true("(C) p_{3/2} 4-fold", count_near(ev, e_3half, 1.0e-9) == 4)
+    // Δ_SOC = p_{3/2} − p_{1/2} = 1.5 ξ (the measurable spin-orbit splitting).
+    fails = fails + _ck_close("(C) Δ_SOC == 1.5ξ (p split)", e_3half - e_half, 1.5 * xi, 1.0e-12)
+
+    // ══ (D) spinor() Clebsch-Gordan normalization ══════════════════════════════
+    // QE upflib/spinor.f90: each spin-angle state |l,j,m⟩ is unit-normalized over
+    // its two spin components, |spinor(↑)|²+|spinor(↓)|² == 1 per (j,m); and the sum
+    // of that over the (2l+1) m-labels of a fixed j == 2l+1.
+    let lc = 1
+    let tjp = 2 * lc + 1       // j=l+½
+    let tjm = 2 * lc - 1       // j=l−½
+    let mut norm_ok = true
+    let mut sum_p = 0.0
+    let mut mlab = -lc
+    while mlab <= lc {
+        // j=l+½ state is valid for all m∈[−l,l]; per-(j,m) unit normalization.
+        let up_p = qforge_spinor_cg(lc, tjp, mlab, 1)
+        let dn_p = qforge_spinor_cg(lc, tjp, mlab, 2)
+        let s = up_p * up_p + dn_p * dn_p
+        if _abs(s - 1.0) > 1.0e-12 { norm_ok = false }
+        sum_p = sum_p + s
+        mlab = mlab + 1
+    }
+    fails = fails + _ck_true("(D) spinor per-(j,m) unit norm |↑|²+|↓|²==1", norm_ok)
+    fails = fails + _ck_close("(D) Σ_m (|↑|²+|↓|²) j=l+½ == 2l+1", sum_p, to_float(2 * lc + 1), 1.0e-12)
+
+    if fails == 0 { println("qforge_soc_selftest PASS") }
+    else { println("qforge_soc_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

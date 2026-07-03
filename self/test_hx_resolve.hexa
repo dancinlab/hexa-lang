@@ -1,0 +1,206 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  self/test_hx_resolve.hexa — MVS dependency resolver selftest
+//
+//  Exercises stdlib/hx/resolve.hexa (Go Minimal Version Selection) over four
+//  canonical in-memory require graphs. Every expected build list is hand-derived
+//  from the Go MVS definition (https://go.dev/ref/mod#minimal-version-selection,
+//  research.swtch.com/vgo-mvs Algorithm 1):
+//
+//    1. linear chain  — root→A→B→C, single version each: every node selected.
+//    2. diamond       — two paths require C at different minimums; the build
+//                       list selects the MAX of the two required minimums.
+//    3. conflict      — two paths impose disjoint constraints on C (one caps
+//                       <2.0.0, the other demands >=2.0.0): the selected max
+//                       violates a constraint ⇒ "conflict" error. (Plus an
+//                       "unresolved" sub-check: a constraint with no satisfying
+//                       version in the available set.)
+//    4. idempotent    — re-resolving the same graph yields a byte-identical
+//                       lockfile (determinism), and the rendered lockfile
+//                       round-trips through lockfile_parse.
+//
+//  Run:    hexa run self/test_hx_resolve.hexa
+//  Expect: "ALL PASS — N/N".
+//
+//  NOTE: this is a self/test_*.hexa standalone program — it is NOT imported by
+//  self/main.hexa, so it (and stdlib/hx/resolve + its semver/lockfile imports)
+//  stays byte-eq-NEUTRAL (cf. stdlib/CLAUDE.md byteeq-neutrality convention).
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/hx/resolve"
+use "stdlib/hx/lockfile"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check_true(name: string, cond: bool) {
+    if cond {
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+fn check_str(name: string, got: string, expected: string) {
+    if got == expected {
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: '" + expected + "', got: '" + got + "'")
+        fail_count = fail_count + 1
+    }
+}
+
+fn check_int(name: string, got: int, expected: int) {
+    if got == expected {
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + to_string(expected) + ", got: " + to_string(got))
+        fail_count = fail_count + 1
+    }
+}
+
+// True iff `hay` contains `needle` (substring scan).
+fn contains_sub(hay: string, needle: string) -> bool {
+    let ln = len(needle)
+    if ln == 0 { return true }
+    let lh = len(hay)
+    if ln > lh { return false }
+    let mut i = 0
+    while i < lh - ln + 1 {
+        if hay.substring(i, i + ln) == needle { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Render a build list as "name@version,name@version,..." for compact asserts.
+fn build_str(build: [LockEntry]) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(build) {
+        if i > 0 { out = out + "," }
+        out = out + build[i].name + "@" + build[i].version
+        i = i + 1
+    }
+    return out
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  hx MVS resolver — selftest")
+println("═══════════════════════════════════════════════════════")
+
+// ── Case 1: linear chain ────────────────────────────────────────────────────
+// root → A 1.0.0 ; A 1.0.0 → B 1.0.0 ; B 1.0.0 → C 1.0.0 ; C 1.0.0 → ∅
+// Expected build list (sorted by name): A@1.0.0, B@1.0.0, C@1.0.0
+println("")
+println("--- 1. linear chain ---")
+let reg1 = [
+    resolve_module("A", "1.0.0", [ resolve_req("B", "1.0.0") ]),
+    resolve_module("B", "1.0.0", [ resolve_req("C", "1.0.0") ]),
+    resolve_module("C", "1.0.0", [])
+]
+let root1 = [ resolve_req("A", "1.0.0") ]
+let r1 = mvs_resolve(root1, reg1)
+check_true("linear ok", r1.ok)
+check_int("linear count", len(r1.build), 3)
+check_str("linear build list", build_str(r1.build), "A@1.0.0,B@1.0.0,C@1.0.0")
+
+// ── Case 2: diamond (max of required minimums) ──────────────────────────────
+// root → A 1.0.0, B 1.0.0 ; A 1.0.0 → C 1.0.0 ; B 1.0.0 → C 1.1.0
+// available C = {1.0.0, 1.1.0}. MVS: C min via A = 1.0.0, via B = 1.1.0 →
+// select MAX = 1.1.0. Expected: A@1.0.0, B@1.0.0, C@1.1.0
+println("")
+println("--- 2. diamond ---")
+let reg2 = [
+    resolve_module("A", "1.0.0", [ resolve_req("C", "1.0.0") ]),
+    resolve_module("B", "1.0.0", [ resolve_req("C", "1.1.0") ]),
+    resolve_module("C", "1.0.0", []),
+    resolve_module("C", "1.1.0", [])
+]
+let root2 = [ resolve_req("A", "1.0.0"), resolve_req("B", "1.0.0") ]
+let r2 = mvs_resolve(root2, reg2)
+check_true("diamond ok", r2.ok)
+check_int("diamond count", len(r2.build), 3)
+check_str("diamond build list", build_str(r2.build), "A@1.0.0,B@1.0.0,C@1.1.0")
+// the whole point: C is the MAX of the two required minimums, not 1.0.0.
+check_str("diamond C selected = max", r2.build[2].version, "1.1.0")
+
+// ── Case 3a: conflict (disjoint constraints, empty intersection) ────────────
+// root → A 1.0.0, B 1.0.0 ; A 1.0.0 → C ^1.0.0 (>=1.0.0 <2.0.0) ;
+// B 1.0.0 → C >=2.0.0. available C = {1.0.0, 2.0.0}.
+// MVS minimums: A imposes lowest-sat(^1.0.0) = 1.0.0 ; B imposes
+// lowest-sat(>=2.0.0) = 2.0.0 → select MAX = 2.0.0. GATE: 2.0.0 must satisfy
+// A's ^1.0.0 → FALSE (caret 1.x caps <2.0.0) ⇒ conflict error.
+println("")
+println("--- 3a. conflict ---")
+let reg3 = [
+    resolve_module("A", "1.0.0", [ resolve_req("C", "^1.0.0") ]),
+    resolve_module("B", "1.0.0", [ resolve_req("C", ">=2.0.0") ]),
+    resolve_module("C", "1.0.0", []),
+    resolve_module("C", "2.0.0", [])
+]
+let root3 = [ resolve_req("A", "1.0.0"), resolve_req("B", "1.0.0") ]
+let r3 = mvs_resolve(root3, reg3)
+check_true("conflict is error", !r3.ok)
+check_int("conflict build empty", len(r3.build), 0)
+check_true("conflict mentions kind", contains_sub(r3.error, "conflict"))
+check_true("conflict names C@2.0.0", contains_sub(r3.error, "C@2.0.0"))
+check_true("conflict cites ^1.0.0", contains_sub(r3.error, "^1.0.0"))
+
+// ── Case 3b: unresolved (no satisfying version available) ───────────────────
+// root → C >=5.0.0 ; available C = {1.0.0, 2.0.0} → no version satisfies.
+println("")
+println("--- 3b. unresolved ---")
+let reg3b = [
+    resolve_module("C", "1.0.0", []),
+    resolve_module("C", "2.0.0", [])
+]
+let root3b = [ resolve_req("C", ">=5.0.0") ]
+let r3b = mvs_resolve(root3b, reg3b)
+check_true("unresolved is error", !r3b.ok)
+check_true("unresolved mentions kind", contains_sub(r3b.error, "unresolved"))
+check_true("unresolved names C", contains_sub(r3b.error, "C"))
+
+// ── Case 4: idempotent (deterministic, lockfile round-trip) ─────────────────
+// Re-resolve the diamond twice; the rendered lockfile must be byte-identical
+// (determinism), and parsing it back must recover the 3 entries.
+println("")
+println("--- 4. idempotent ---")
+let reg4 = [
+    resolve_module("A", "1.0.0", [ resolve_req("C", "1.0.0") ]),
+    resolve_module("B", "1.0.0", [ resolve_req("C", "1.1.0") ]),
+    resolve_module("C", "1.0.0", []),
+    resolve_module("C", "1.1.0", [])
+]
+let root4 = [ resolve_req("A", "1.0.0"), resolve_req("B", "1.0.0") ]
+let r4a = mvs_resolve(root4, reg4)
+let r4b = mvs_resolve(root4, reg4)
+check_true("idempotent both ok", r4a.ok && r4b.ok)
+
+let lock1 = lockfile_render(r4a.build)
+let lock2 = lockfile_render(r4b.build)
+check_true("idempotent lockfiles byte-identical", lock1 == lock2)
+check_str("idempotent stable build list", build_str(r4b.build), "A@1.0.0,B@1.0.0,C@1.1.0")
+
+// round-trip: render → parse → 3 entries with the same selection.
+let parsed = lockfile_parse(lock1)
+check_int("lockfile round-trip count", len(parsed), 3)
+let rt0 = if len(parsed) > 0 { parsed[0].name + "@" + parsed[0].version } else { "" }
+let rt1 = if len(parsed) > 1 { parsed[1].name + "@" + parsed[1].version } else { "" }
+let rt2 = if len(parsed) > 2 { parsed[2].name + "@" + parsed[2].version } else { "" }
+check_str("round-trip[0]", rt0, "A@1.0.0")
+check_str("round-trip[1]", rt1, "B@1.0.0")
+check_str("round-trip[2]", rt2, "C@1.1.0")
+
+// ── summary ─────────────────────────────────────────────────────────────────
+println("")
+println("═══════════════════════════════════════════════════════")
+let total = pass_count + fail_count
+println("  hx MVS resolver: " + to_string(pass_count) + " PASS / " +
+        to_string(fail_count) + " FAIL / " + to_string(total) + " total")
+if fail_count == 0 {
+    println("  ALL PASS — " + to_string(pass_count) + "/" + to_string(total))
+} else {
+    println("  SOME TESTS FAILED")
+}
+println("═══════════════════════════════════════════════════════")

@@ -1,0 +1,91 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  test_real_spawn.hexa — oracle for the real OS-thread spawn opt-in (slice ②).
+//
+//  feat/real-thread-spawn · RFC state/rfc_real_concurrency_optin.md §c.
+//
+//  TWO sections, both encode the SAME invariant the spawn+join path must hold:
+//
+//    in a partition-sum where each worker produces an INDEPENDENT partial (no
+//    shared-mutable split-work), the joined total is order-insensitive, so it is
+//    the SAME under the synchronous default backend and under real OS threads.
+//
+//  (1) PURE ORACLE — always runs, DEFAULT-BUILD-SAFE. References no runtime
+//      thread globals; pure hexa arithmetic. Locks in the reference total.
+//
+//  (2) REAL spawn+join — runs only when `env("HEXA_THREADS") != ""` (the same
+//      opt-in probe as self/atomic_ops.hexa `atomic_real_enabled`). It calls the
+//      `thread_spawn` / `thread_join` runtime fn-globals (native/thread.c). In a
+//      DEFAULT build those route through the SYNCHRONOUS `hxlcl_pthread_*` shims
+//      (worker runs inline on spawn, join returns the cached result); in a
+//      `-DHEXA_THREADS` build they map 1:1 onto real `pthread_create`/
+//      `pthread_join` and the two workers run on real OS threads. Either way the
+//      joined total must equal the oracle. This section is gated (not run in the
+//      ordinary byteeq CI) to keep the default test pass deterministic and the
+//      runtime object byte-identical — exactly the deferral test_real_atomic.hexa
+//      uses for its threaded integration.
+// ═══════════════════════════════════════════════════════════════════════════
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, actual, expected) {
+    if to_string(actual) == to_string(expected) {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + to_string(expected) + ", got: " + to_string(actual))
+        fail_count = fail_count + 1
+    }
+}
+
+// Sum of `count` consecutive integers starting at `start` (start .. start+count-1).
+fn range_sum(start, count) {
+    let mut s = 0
+    let mut i = 0
+    while i < count {
+        s = s + (start + i)
+        i = i + 1
+    }
+    return s
+}
+
+// Worker entry: one HexaVal arg (the partition base), returns an INDEPENDENT
+// partial sum of 50 ints. No shared mutation → order-insensitive → identical
+// total whether run inline (default) or on a real OS thread (-DHEXA_THREADS).
+fn worker(start) {
+    return range_sum(start, 50)
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  HEXA real-spawn partition-sum oracle")
+println("═══════════════════════════════════════════════════════")
+
+// ── (1) PURE ORACLE — the reference total the threaded path must reproduce ──
+// sum 1..100 split into [1..50] + [51..100].
+let oracle_lo    = worker(1)    // 1275
+let oracle_hi    = worker(51)   // 3775
+let oracle_total = oracle_lo + oracle_hi
+check("partition lo (1..50)", oracle_lo, 1275)
+check("partition hi (51..100)", oracle_hi, 3775)
+check("oracle total == sum 1..100", oracle_total, 5050)
+check("oracle total == range_sum(1,100)", oracle_total, range_sum(1, 100))
+
+// ── (2) REAL spawn+join — opt-in (HEXA_THREADS env set) ─────────────────────
+// Default test run skips this so the byteeq CI pass stays deterministic; the
+// -DHEXA_THREADS CI lane sets HEXA_THREADS and exercises real OS threads.
+if env("HEXA_THREADS") != "" {
+    println("--- real spawn+join (HEXA_THREADS opt-in) ---")
+    let t_lo = thread_spawn(worker, 1)    // spawn worker(1)  → 1275
+    let t_hi = thread_spawn(worker, 51)   // spawn worker(51) → 3775
+    let r_lo = thread_join(t_lo)          // join → partial total
+    let r_hi = thread_join(t_hi)
+    let spawn_total = r_lo + r_hi
+    check("2-thread spawn+join total == oracle", spawn_total, oracle_total)
+} else {
+    println("--- real spawn+join SKIPPED (set HEXA_THREADS to run; needs -DHEXA_THREADS for real OS threads) ---")
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  passed: " + to_string(pass_count) + "  failed: " + to_string(fail_count))
+println("═══════════════════════════════════════════════════════")
+if fail_count > 0 { exit(1) }

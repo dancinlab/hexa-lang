@@ -145,8 +145,11 @@ pub fn rl_f1f2_records_root() -> string {
 pub fn rl_load_by_path(path_arg: string) -> [string] {
     let root = rl_exports_root()
     let canon = rl_canon(path_arg)
-    // invariant (a): canon must be under root (string hasPrefix, like Swift).
-    if !rl_starts_with(canon, root) {
+    // invariant (a): canon must be under root. A raw string prefix test lets a
+    // SIBLING dir escape the sandbox — "/repo/exports-secret" starts_with
+    // "/repo/exports" — so require an exact match OR a path-separator boundary
+    // (mirrors os.path.commonpath). Prevents the exports↔exports-secret traversal.
+    if !(canon == root || rl_starts_with(canon, root + "/")) {
         return ["outside", canon]
     }
     let q = rl_shq(canon)

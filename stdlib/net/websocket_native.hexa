@@ -64,6 +64,19 @@ pub fn ws_supports_native(url: string) -> bool {
 //
 // Returns a map {"ok": bool, "host": string, "port": int, "path": string,
 // "error": string}. Default port 80 when omitted. Path defaults to "/".
+// all-ASCII-digits guard: to_int() throws on a non-numeric port, so a malformed
+// port must be rejected BEFORE the call rather than hard-crashing the parser.
+fn _ws_all_digits(s) {
+    if len(s) == 0 { return false }
+    let mut i = 0
+    while i < len(s) {
+        let cb = ord(s.substring(i, i + 1))
+        if cb < 48 || cb > 57 { return false }
+        i = i + 1
+    }
+    return true
+}
+
 fn _ws_url_parse(url: string) {
     let r = #{}
     r["ok"] = false
@@ -78,13 +91,20 @@ fn _ws_url_parse(url: string) {
     // Strip scheme.
     let rest = url.substring(5, len(url))
     // Split authority / path at first '/'.
+    // authority ends at the FIRST of '/', '?', '#'. The prior code split only on
+    // '/', so "ws://host:8080?room=1" (query, no path) folded "8080?room=1" into
+    // the port field → to_int crash / wrong port. Terminate the authority early;
+    // the path (with any trailing query/fragment) still begins at the first '/'.
     let slash = rest.index_of("/")
-    let mut authority = rest
+    let mut authEnd = len(rest)
+    if slash >= 0 { authEnd = slash }
+    let qi = rest.index_of("?")
+    if qi >= 0 && qi < authEnd { authEnd = qi }
+    let hi = rest.index_of("#")
+    if hi >= 0 && hi < authEnd { authEnd = hi }
+    let mut authority = rest.substring(0, authEnd)
     let mut path = "/"
-    if slash >= 0 {
-        authority = rest.substring(0, slash)
-        path = rest.substring(slash, len(rest))
-    }
+    if slash >= 0 { path = rest.substring(slash, len(rest)) }
     if len(path) == 0 { path = "/" }
     // Split host : port.
     //
@@ -108,16 +128,20 @@ fn _ws_url_parse(url: string) {
         let after = authority.substring(rb + 1, len(authority))
         if len(after) > 0 && after.substring(0, 1) == ":" {
             let port_str = after.substring(1, len(after))
-            let p = to_int(port_str)
-            if p > 0 { r["port"] = p }
+            if _ws_all_digits(port_str) {
+                let p = to_int(port_str)
+                if p > 0 { r["port"] = p }
+            }
         }
     } else {
         let colon = authority.index_of(":")
         if colon >= 0 {
             r["host"] = authority.substring(0, colon)
             let port_str = authority.substring(colon + 1, len(authority))
-            let p = to_int(port_str)
-            if p > 0 { r["port"] = p }
+            if _ws_all_digits(port_str) {
+                let p = to_int(port_str)
+                if p > 0 { r["port"] = p }
+            }
         } else {
             r["host"] = authority
             r["port"] = 80

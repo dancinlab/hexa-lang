@@ -69,11 +69,29 @@ fn main() {
     _check("unknown Foo: exact gpu_name=Foo", _seq(vast_gpu_predicate("Foo"), "gpu_name=Foo"), 1)
     _check("unknown Foo: no ~ operator", _has(vast_gpu_predicate("Foo"), "~"), 0)
 
+    // (4b) bare COUNT (digit-only) -> num_gpus>=N, NOT gpu_name=N.
+    // Regression: `cloud rent vast --gpu 1` built `gpu_name=1` → vast returned
+    // [] ("no matching offers") with the pool full; a digit value is a count.
+    _check("count 1: num_gpus>=1", _seq(vast_gpu_predicate("1"), "num_gpus>=1"), 1)
+    _check("count 1: no gpu_name", _has(vast_gpu_predicate("1"), "gpu_name"), 0)
+    _check("count 8: num_gpus>=8", _seq(vast_gpu_predicate("8"), "num_gpus>=8"), 1)
+
     // (5) other known families resolve to in[] lists too.
     _check("A100: in[] list", _has(vast_gpu_predicate("A100"), "gpu_name in ["), 1)
     _check("A100: includes SXM4 variant", _has(vast_gpu_predicate("A100"), "A100_SXM4"), 1)
     _check("H200: in[] list", _has(vast_gpu_predicate("H200"), "gpu_name in ["), 1)
     _check("B200: in[] list (single SKU)", _has(vast_gpu_predicate("B200"), "gpu_name in ["), 1)
+
+    // (6) CPU selector (ING #30-vast) -> num_gpus=0, NOT gpu_name=cpu.
+    // MEASURED on live vast: the hexa default filter surfaced 64 offers, ALL
+    // num_gpus>0 (zero CPU); the CPU pool appears ONLY with num_gpus=0. The old
+    // path searched gpu_name=cpu (a GPU named "cpu") → 0 offers → silent fail.
+    _check("cpu: num_gpus=0", _seq(vast_gpu_predicate("cpu"), "num_gpus=0"), 1)
+    _check("cpu: NOT gpu_name", _has(vast_gpu_predicate("cpu"), "gpu_name"), 0)
+    _check("CPU upper: num_gpus=0", _seq(vast_gpu_predicate("CPU"), "num_gpus=0"), 1)
+    _check("none: num_gpus=0", _seq(vast_gpu_predicate("none"), "num_gpus=0"), 1)
+    _check("None upper: num_gpus=0", _seq(vast_gpu_predicate("None"), "num_gpus=0"), 1)
+    _check("' cpu ' trimmed: num_gpus=0", _seq(vast_gpu_predicate("  cpu  "), "num_gpus=0"), 1)
 
     println("vast_gpu_predicate_test PASS")
 }

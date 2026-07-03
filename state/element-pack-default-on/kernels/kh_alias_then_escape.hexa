@@ -1,0 +1,17 @@
+// Kh — ALIAS then ESCAPE (chained transitivity). ys aliases xs, then ys escapes
+// into useit(). The coherence pass must propagate: ys boxed (escape) -> xs boxed
+// (alias) -> storage boxed — the WHOLE alias set falls back to boxed, so neither
+// xs nor ys can stay packed while read boxed in the callee. OFF==ON expected.
+// (= (5+6) + 7 = 18)
+fn useit(a: [i64]) -> i64 {
+    return a[0] + a[1]
+}
+fn main() {
+    let mut xs: [i64] = []
+    xs.push(5)
+    xs.push(6)
+    xs.push(7)
+    let ys = xs
+    let r = useit(ys)
+    println(r + xs[2])
+}

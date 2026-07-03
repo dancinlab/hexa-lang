@@ -1582,13 +1582,28 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
     //      addend=-4 (CALL imm32 reads `target - (next_insn_pc)`
     //      and the linker formula `S + A - P` gives that when
     //      S=symbol_value, A=-4, P=imm32_offset).
+    // #3712 — name→symtab-index memo cache shared by the CALL + data reloc
+    // passes. Deep functions (the 7000-`+` runtime_cuda_emit emits thousands
+    // of `call hexa_add` placeholders) drove _find_elf_sym_by_name — an
+    // O(symbols) linear scan — once PER pending reloc → O(relocs·symbols), the
+    // dominant emit cost once the #3709 deep-spine fix let the file reach emit.
+    // A name resolves DETERMINISTICALLY (a defined sym is stable; an undef
+    // pushed once is found at the same index forever after), so memoizing the
+    // first resolution per distinct name is byte-IDENTICAL. Distinct callee
+    // names are few (~tens), so the cache scan is ~O(distinct) ≪ O(symbols).
+    let mut _symc_names: [string] = []
+    let mut _symc_idx:   [Int]    = []
     let np = len(pending_offsets)
     let mut pi = 0
     while pi < np {
         let call_off = pending_offsets[pi]
         let name     = pending_names[pi]
-        // Find an already-defined symbol with this name.
-        let mut idx = _find_elf_sym_by_name(obj.symbols, obj.strtab, name)
+        // Cached resolution first; fall back to the symtab scan on a miss.
+        let mut idx = _symc_lookup(_symc_names, _symc_idx, name)
+        let was_cached = idx >= 0
+        if idx < 0 {
+            idx = _find_elf_sym_by_name(obj.symbols, obj.strtab, name)
+        }
         if idx < 0 {
             // Push an undef extern entry. Index 0 of ELF symtab is
             // reserved (STN_UNDEF); the serializer prepends it, so
@@ -1604,6 +1619,12 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
                 type_:       0,    // STT_NOTYPE
             })
             idx = len(obj.symbols) - 1
+        }
+        // Memoize on a MISS only (so the cache holds one entry per distinct
+        // name — pushing on hits too would re-grow it to O(N)).
+        if !was_cached {
+            _symc_names.push(name)
+            _symc_idx.push(idx)
         }
         // The reloc's `r_offset` points at the imm32 field of the
         // CALL placeholder, i.e. call_off + 1.
@@ -1644,7 +1665,12 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
     while dpi < nd {
         let disp_off = data_offsets[dpi]
         let name     = data_names[dpi]
-        let mut idx = _find_elf_sym_by_name(obj.symbols, obj.strtab, name)
+        // Same #3712 memo cache as the CALL pass (shared across both passes).
+        let mut idx = _symc_lookup(_symc_names, _symc_idx, name)
+        let was_cached = idx >= 0
+        if idx < 0 {
+            idx = _find_elf_sym_by_name(obj.symbols, obj.strtab, name)
+        }
         if idx < 0 {
             // Unknown data target (no `.LCstrN`/`g<id>` def) → undef
             // extern. Keeps the .o well-formed; the linker resolves it.
@@ -1659,6 +1685,10 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
             })
             idx = len(obj.symbols) - 1
         }
+        if !was_cached {
+            _symc_names.push(name)
+            _symc_idx.push(idx)
+        }
         obj.relocs.push(ElfRel {
             offset:  disp_off,
             sym_idx: idx,
@@ -1672,6 +1702,22 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
 
 // Walk `obj.symbols`, compare each name (read out of strtab via
 // `name_offset`) to `name`. Returns -1 if no match.
+// #3712 — distinct-name resolution cache (parallel arrays, one entry per
+// distinct callee/data name). Returns the memoized symtab index or -1 on miss.
+// O(distinct) per probe; distinct names are few even when relocs number in the
+// thousands, so this collapses the per-reloc _find_elf_sym_by_name O(symbols)
+// scan to ~O(1) amortized. Byte-eq NEUTRAL: returns the same index the scan
+// would (memoized from its first result).
+fn _symc_lookup(names: [string], idxs: [Int], name: string) -> Int {
+    let n = len(names)
+    let mut i = 0
+    while i < n {
+        if names[i] == name { return idxs[i] }
+        i = i + 1
+    }
+    return -1
+}
+
 fn _find_elf_sym_by_name(symbols: [ElfSym], strtab: [Int], name: string) -> Int {
     let nl = len(name)
     let ns = len(symbols)

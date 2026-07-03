@@ -3,12 +3,14 @@
 // @version 0.1.0
 // @capabilities [fs_read, fs_write, env_read, stdout]
 //
-// Covers the surface-on-skip behavior (feat/drill-surface-on-skip):
-// when NO verifier is installed (verdict == "skip"), drill emits the
-// top-N ranked discovery candidates as ⚪ proposals instead of silently
-// pooling them into the overlay. Asserts:
+// Covers the proposal-surfacing behavior (feat/drill-surface-on-skip):
+// when NO external verifier is installed, drill emits the top-N ranked
+// discovery candidates as ⚪ proposals instead of silently pooling them
+// into the overlay. (The native default verifier — _native_identity_sweep,
+// #4015 — produces a "continue"/"pass" verdict on this same path; surfacing
+// fires whenever verifier_cmd=="" so the proposals still show.) Asserts:
 //
-//   1. A skip-path discovery run surfaces N > 0 ⚪ proposals.
+//   1. A no-external-verifier discovery run surfaces N > 0 ⚪ proposals.
 //   2. `--top N` is honored — exactly N proposals emitted when the round
 //      yields ≥ N candidates (default count vs an explicit override).
 //   3. The tier label on every surfaced row is `proposal` (to-validate)
@@ -57,7 +59,8 @@ fn main() {
 
     let seed = "Lithium magnesium hydride Li2MgH16 superconductor candidate ambient"
     // Drive the real CLI. --fresh ignores any checkpoint; no --verifier-cmd
-    // → verdict == "skip" → surface path engaged. We pin --top explicitly.
+    // → native default verifier runs + surface path engaged (verifier_cmd=="").
+    // We pin --top explicitly.
     let base = "HOME='" + scratch + "' hexa drill --seed '" + seed
         + "' --rounds 1 --depth-smash 2 --depth-free 2 --fresh --quiet"
 

@@ -622,12 +622,30 @@ pub fn pack_lir_arm64_elf(lm: LModule) -> ElfArm64Obj {
     //   3. Emit a CALL26 reloc at the BL word offset, addend 0
     //      (AArch64 CALL26 is `(S + A - P) >> 2`; A=0 reproduces the
     //      canonical `bl` displacement).
+    // #3712 — name→symtab-index memo cache shared by the BL (CALL26) + page
+    // (ADRP/ADD) reloc passes, EXACTLY mirroring elf_x86_64.hexa:1594-1700.
+    // Deep functions emit thousands of bubbled placeholders; the raw
+    // _find_elf_sym_by_name is an O(symbols) linear scan run once PER pending
+    // reloc → O(relocs·symbols). A name resolves DETERMINISTICALLY (a defined
+    // sym is stable; an undef pushed once is found at the same index forever
+    // after), so memoizing the first resolution per distinct name is
+    // byte-IDENTICAL. Memoize on a MISS only — pushing on hits too would
+    // re-grow the cache to O(N); -1 is never stored (the push-undef fallback
+    // always resolves to a real index first). Distinct names are few (~tens),
+    // so the cache scan is ~O(distinct) ≪ O(symbols).
+    let mut _symc_names: [string] = []
+    let mut _symc_idx:   [Int]    = []
     let np = len(pending_offsets)
     let mut pi = 0
     while pi < np {
         let bl_off = pending_offsets[pi]
         let name   = pending_names[pi]
-        let mut idx = _find_elf_sym_by_name(obj.symbols, obj.strtab, name)
+        // Cached resolution first; fall back to the symtab scan on a miss.
+        let mut idx = _symc_lookup(_symc_names, _symc_idx, name)
+        let was_cached = idx >= 0
+        if idx < 0 {
+            idx = _find_elf_sym_by_name(obj.symbols, obj.strtab, name)
+        }
         if idx < 0 {
             let strx = _ew_str(obj.strtab, name)
             obj.symbols.push(ElfSym {
@@ -639,6 +657,11 @@ pub fn pack_lir_arm64_elf(lm: LModule) -> ElfArm64Obj {
                 type_:       0,    // STT_NOTYPE
             })
             idx = len(obj.symbols) - 1
+        }
+        // Memoize on a MISS only (one entry per distinct name).
+        if !was_cached {
+            _symc_names.push(name)
+            _symc_idx.push(idx)
         }
         obj.relocs.push(ElfRel {
             offset:  bl_off,
@@ -674,7 +697,12 @@ pub fn pack_lir_arm64_elf(lm: LModule) -> ElfArm64Obj {
         let pg_off = page_offsets[gi2]
         let name   = page_names[gi2]
         let kind   = page_kinds[gi2]
-        let mut idx = _find_elf_sym_by_name(obj.symbols, obj.strtab, name)
+        // Same #3712 memo cache as the BL pass (shared across both passes).
+        let mut idx = _symc_lookup(_symc_names, _symc_idx, name)
+        let was_cached = idx >= 0
+        if idx < 0 {
+            idx = _find_elf_sym_by_name(obj.symbols, obj.strtab, name)
+        }
         if idx < 0 {
             // Unknown page target (no `.LCstrN`/`g<id>` def) → undef
             // extern. Keeps the .o well-formed; the linker resolves it.
@@ -688,6 +716,10 @@ pub fn pack_lir_arm64_elf(lm: LModule) -> ElfArm64Obj {
                 type_:       0,    // STT_NOTYPE
             })
             idx = len(obj.symbols) - 1
+        }
+        if !was_cached {
+            _symc_names.push(name)
+            _symc_idx.push(idx)
         }
         obj.relocs.push(ElfRel {
             offset:  pg_off,

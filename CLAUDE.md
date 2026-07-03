@@ -1,124 +1,86 @@
 # hexa-lang
 
-Native compiler for the `.hexa` language with an embedded theorem **atlas** and the `hx`
-package manager. No LLVM anywhere: source is lowered through the compiler's own IR to native
-objects (ELF64 / Mach-O arm64) and linked with `hexa_ld` — a byte-identical self-host fixpoint
-(`gen3 ≡ gen4`), default for `--emit`. Two C pieces still remain: a C-transpile fallback
-delegate for some full `hexa build`/`run` flows, and the ~5.5k-LOC C runtime substrate (the
-libc/syscall bootstrap floor, generated from `.hexa` emitters) — the floor RUNTIME-PORT is
-still shrinking (M3 open), an irreducible-bootstrap assessment, **not** a permanence policy. See
-[ARCHITECTURE.json](ARCHITECTURE.json) → Self-host status for the honest accounting (사람용 뷰어 `architecture.html`, `python3 serve.py`). Every
-formula-bearing function must cite an atlas law (`@cite(L[id])`), carry an active `@verify`, or
-declare a `@grace` — otherwise the build refuses to emit a binary (stage S8, fatal `HX8004`).
-The full architecture SSOT is [ARCHITECTURE.json](ARCHITECTURE.json) (JSON 트리 — 사람은 `architecture.html` 뷰어로 봄, `python3 serve.py`); this file is the single governance SSOT (md 단일화 — `project.tape`·`ARCHITECTURE.md` retired). **Domains** are folded into ARCHITECTURE.json → `domains` section (final-form registry: `@goal` + status + remaining); the per-domain `*.md` snapshots, `*.log.md`/`*.tape` step-logs, and `DOMAINS.tape` roster are **retired** (2026-06-17) — ARCHITECTURE.json is now the sole domain record, milestone history lives in CHANGELOG.md + git.
+## Project
+Native `.hexa` compiler with an embedded theorem **atlas** + `hx` package manager. **No LLVM anywhere**: source→own-IR→native, linked by `hexa_ld` — byte-identical self-host fixpoint (`gen3 ≡ gen4`). `self/*.c` floor → **∅ REACHED** (tracked `git ls-files self/**/*.c == ∅`, #4356 cuda + #4352 timegm emitter-graduation); the ~5.5k-LOC emitted-C substrate is now a **reducible** RUNTIME-PORT target (never an irreducible floor) whose authoritative nm-UND libc floor is exposed per-CI (advisory dump in `nobaseline-gate.yml`, #4360). Reduction runs as measured tracks: fortify `__*_chk` dropped via `-D_FORTIFY_SOURCE=0` (#4361) · perf-neutral syscall leaves routed to raw-svc (getpid #4358 · setpgid #4364) · compiler-synth `memcpy/memset` — a reference-matched glibc-style overlapping-load-dispatch native body **measures 1.3–2.0× faster than libc for the small-copy (struct) regime + parity at large** (summer, clang-18; the naive-byte-loop "perf-wall" is FALSIFIED), so the `-fno-builtin-memcpy` flip is a measured-viable next round gated on byteeq 3-target + real-workload perf, not a permanent wall. Every formula-bearing fn must cite an atlas law (`@cite`)/`@verify`/`@grace`, else the build refuses to emit (`HX8004`). Domain tracking is retired.
 
-## Structure
+Governed by the vendored `.harness-engine` (`hardcore`) via `.claude/settings.json` hooks (no-op when absent): single-doc discipline, L0 lockdown, `.hexa` changelog gate, protected branches. `hexa verify` = g5 gate.
 
+
+## Tree
 ```
 hexa-lang/
-├─ compiler/        — the compiler: S0–S8 strict-lint gate + HIR/MIR/LIR lowering + native emit
-│  ├─ lex/          — S0 lexer (.hexa → tokens)
-│  ├─ parse/        — S0 parser (tokens → AST)
-│  ├─ check/        — S1–S8 stages (resolve · bind · types · units · equational · citation)
-│  ├─ atlas/        — embedded atlas (embedded.gen.hexa rodata) + static index + fold/merge
-│  ├─ lower/        — AST → HIR → MIR (SSA) lowering
-│  ├─ optimize/     — const-fold · DCE · inline (opt-level 0–3)
-│  ├─ codegen/      — MIR → LIR per target (arm64-darwin · x86_64-linux · thumbv7em · nvptx)
-│  ├─ emit/         — LIR → asm / direct Mach-O / ELF object serialization
-│  ├─ diag/         — diagnostic catalog (HX0001–HX8004) + renderers
-│  └─ main.hexa     — compiler driver entry point
-├─ stdlib/          — runtime + domain modules (io · math · crypto · codec · bio · chem · flame · forge)
-├─ self/            — self-hosting bootstrap (compiler written in .hexa that builds itself)
-├─ tool/            — hx package manager (hx.hexa) · atlas CLI (atlas_cli.hexa) · linker (hexa_ld.hexa)
-├─ bin/             — CLI front-end shims (hexa-run · hexa-fast · hexa-commit · hexa-push)
-├─ ATLAS/           — `README.md` 단일 원장 = 수학 지도 (발견 엔진 · 거시↔양자) · 구 TECS-L/·atlas/(소문자) retired
-├─ spec/            — language + format specification
-├─ tests/, test/    — smoke · core-invariant · regression suites
-├─ bench/           — performance benchmarks
-├─ docs/            — supplementary documentation + logo
-├─ ARCHITECTURE.json — architecture SSOT (JSON 트리, update in place) + architecture.html 뷰어 + serve.py
-├─ CHANGELOG.md     — append-only history / decisions
-├─ CLAUDE.md        — governance SSOT (this file — directives below)
-└─ .harness-engine/ — vendored harness (submodule); gate engine behind .claude hooks
+├─ compiler/ — parser·own-IR·codegen + atlas/embedded.gen.hexa (machine SSOT)
+├─ stdlib/   — .hexa stdlib (flame/forge GPU, math/libm)
+├─ self/     — self-host seeds + hxlcl_* libc floor (→ ∅)
+├─ ATLAS/    — theorem ledger (README.md, hypotheses/)
+└─ ARCHITECTURE.json — deep structure SSOT (viewer `python3 serve.py`)
 ```
+Governance → rules below · history → CHANGELOG.jsonl.
 
-## Governance
+## Performance gold standard
+- do: **Go · Rust · PyTorch = reference-match gold standard**: perf **≥ Rust**, ML throughput **≥ PyTorch(+cuBLAS)**, by measurement not LLM.
+- do: open-source ref → read source, match 1:1 + surface/idiom (no bespoke wrapper/shim); then hexa axes.
+- dont: **no-LLVM + byte-exact are non-negotiable** — never adopt LLVM, never ship a non-canonical surface; "LLVM-free so slow is OK" forbidden.
 
-This file is the single governance SSOT (md 단일화) — edit directives here, keep them concise:
+## Release integrity — absolute top guardrail
+- do: self-host proceeds **only if it doesn't break the used release**, else defer — **release integrity > self-host progress**.
+- do: merge codegen/runtime only after **byteeq 3-target GREEN + shipping smoke**; bit-identical ungated, bit-changing behind opt-in toggles; then sync pool hosts.
+- do: one channel = **`stable`** (`edge`·`test` retired), verified via Blacksmith byteeq + pool builds; `finalize` flips Latest on 3/3.
+- dont: never merge changes breaking the user-facing path (shipping binaries·`build`/`run`·stdlib·C-fallback) for a self-host gate.
+- dont: **never promote on "only x86 green"** — require all-3-target GREEN + install.sh consumer smoke GREEN.
 
-- **diff-guard** — a subagent diffs guarded files (`git diff <baseline>...HEAD`) before staging
-  (`.githooks/pre-commit`).
-- **wipe-guard** — do not commit >50-line deletions in `stdlib`/`runtime`/`codegen`/`rt`
-  without a scoped subject or a `WIPE-OK:` trailer.
-- **atlas fold** — fold atlas nodes only into `compiler/atlas/embedded.gen.hexa` via
-  branch → commit → PR (never elsewhere).
-- **ATLAS math-map** — 발견 엔진(수론·물리·우주·생명)의 사람용 원장은 `ATLAS/README.md`
-  **단일 SSOT** (n=6 축0 출발 · 거시↔양자 수학 지도 · 구 `TECS-L/` 에서 개명 2026-06-18).
-  지도는 README.md 에 **점진적으로 그려나간다** (one-shot 아님 · 검증된 노드/다리를 계속
-  채움). 검증 atom 의 기계 SSOT 는 `compiler/atlas/embedded.gen.hexa`, history 는 CHANGELOG +
-  git. **수학 DFS 는 `hexa loop --dfs` 로 진행** (external-LLM 단일 surface · 예산캡 + verify
-  게이트 · ad-hoc 스크립트 금지), 결과는 `ATLAS/README.md` 연대기 + `ATLAS/CLAUDE.md` 에 기록.
-  **retired**: 구 `atlas/`(소문자) 폴더 · `TECS-L/` 명칭 · TECS-L 다문서(`TECS-L.md`·
-  `TECS-L.log.md`·`n6.md`·`docs/`·`millennium/`·`.verdicts/`) · `.tape` 원장(CLAIMS 등).
-  **n=6 은 지도 중심이 아니라 노드 1개** (lattice-as-tool · 외부 영역 anchor 금지) ·
-  미판독·미검증·lattice-fit·미증명 conjecture 는 🔵 승격 금지(c2).
-- **verify is ambient** — a successful `🔵`/`🟢` `hexa verify` auto-folds the verified atom
-  into the atlas; verify is the single canonical surface — no separate `atlas register` ceremony.
-- **domain audits** — land as `hexa verify --<axis> <domain>` subcommands (one CLI surface,
-  no new top-level verbs).
-- **stdlib trig = libm** — signal/math modules use native libm trig (`cos`/`sin`/…), never
-  hand-rolled Taylor series (codegen-fragile).
-- **external LLM** — invoke external LLMs only via `hexa loop --dfs` (budget cap + verify gate).
-- **HF namespace** — all HuggingFace uploads/Collections live under the `dancinlab` org.
-- **L0 edits** — editing a lockdown file (see `harness.config.json` → `lockdown.files`)
-  requires updating `CHANGELOG.md` in the same change.
-- **release → pool 동기화** — 신규 릴리스(`vX.Y.Z` 태그 발행) 직후 pool 공유 호스트
-  (`aiden`·`summer`)에도 그 릴리스를 `install.sh` 로 세팅(동기화)한다 —
-  `harness pool on <host> 'curl -fsSL https://raw.githubusercontent.com/dancinlab/hexa-lang/<tag>/install.sh | sh'`.
-  pool 의 빌드·byteeq·measure 가 stale 바이너리/시드를 물지 않도록(자기복제 측정 신뢰성·c2),
-  릴리스마다 공유자원을 최신 prebuilt 로 맞춘다.
-- **self-host ≠ release 회귀** — self-hosting 완성(byteeq `gen3≡gen4`·measure·RT-NATIVE·zero-C)
-  작업은 **절대 실제 사용 릴리스를 망가뜨리지 않는 선에서** 진행한다. 출하 바이너리(`hexa`/`hexa.real`)·
-  `hexa build`/`run`·stdlib·C-transpile fallback 등 **사용자 사용 경로를 깨는 변경은 금지** — 셀프호스트
-  게이트(native arena·#else drop·substrate 바이트감소 등)를 위해 릴리스를 회귀시키지 않는다. **릴리스
-  무결성 > self-host 진척**: 회귀 위험이 있으면 릴리스 그린을 먼저 보장한 뒤 진행하고(코드젠/런타임
-  변경은 byteeq + 출하 smoke 통과 확인 후 머지), 위험하면 self-host 진척을 미룬다.
-- **릴리스 채널 규율 (edge=실험 · stable=승격)** — self-host 진척(byteeq·measure·RT-NATIVE·zero-C·
-  static-musl 등 실험적 변경)은 `main` push → **edge prerelease**(`HEXA_VERSION=edge` 로 설치)로 상시
-  흘린다. 소비자 기본 경로(`install.sh` → 최신 stable `vX.Y.Z`)는 **3타깃(x86_64-linux·arm64-linux·
-  darwin-arm64) 릴리스 잡 전부 GREEN + install.sh 소비자 스모크(`hexa --version` + hello/exit42 run)
-  GREEN** 일 때만 새 stable 태그로 승격한다. **"x86 만 green" 은 승격 불가**(v0.241.0 arm64 asset 미발행
-  회귀 교훈 — 한 타깃 그린이 전체 그린 아님). 즉 실험은 edge 에서 검증·soak, stable 은 전타깃 green
-  승격 — 이것이 [self-host ≠ release 회귀]의 운영 방식이다(소비자=stale-but-stable, 실험=edge).
-  **기계적 강제**: `release.yml` 의 각 플랫폼 잡(x86_64·arm64·darwin)은 asset 을 **prerelease 로만**
-  업로드하고 Latest 를 마킹하지 않는다 — `finalize` 잡(`needs:` 3타깃 전부)이 3/3 성공 시에만 태그를
-  stable Latest 로 flip 한다. 한 타깃이라도 실패하면 finalize 가 skip 돼 릴리스가 prerelease 로 남고
-  `install.sh` 의 stable 해석이 그 부분(2/3) 릴리스를 건너뛴다(v0.241.0/.1 2/3-Latest 사고 차단).
+## Implementation discipline — implement-to-the-wall · reference-first
+- do: push every impl/fix **to the wall (🧱)** — name the next round; stop only at 🏁 or a **measured** wall; prove walls with **captured numbers**, not LLM-judgment.
+- do: **parity is a start** — beyond-parity via hexa levers (byte-eq determinism · no-LLVM emit · fusion · device-residency), by measurement.
+- dont: no diagnose-then-STOP (punt) · symptom patches · shadow guards · filler rounds · **black-box tuning-constant sweeps**.
+- dont: fusing ≠ gain (fuse only memory-bound epilogues); byte-eq determinism is not an overtake lever.
 
-## Harness
+## HEXA-UNBOX — "unboxing" (runtime-speed campaign trigger)
+- do: on cue **"unboxing"**, strip the boxed-HexaVal 16B/kernel tax; **measure-first** (isolated, not back-to-back).
+- do: merge a lever default-OFF (byte-neutral); flip default-ON only after regular-CI byteeq 3-target+nvptx GREEN.
+- dont: tune-to-green · enshrine a contaminated ratio as ceiling · aliasing miscompile · merge an unmeasured lever.
 
-This repo is governed by the vendored [dancinlab/harness](https://github.com/dancinlab/harness)
-engine, pinned as the `.harness-engine` git submodule and wired through `.claude/settings.json`
-hooks (guarded: each hook is a no-op when the submodule binary is absent). Config lives in
-`harness.config.json` (profile `hardcore`, stack `hexa`). The harness enforces single-document
-discipline (architecture SSOT + append-only log + quickref pointers), L0 lockdown reminders,
-the changelog gate for `.hexa` changes, and protected branches (`main`, `master`).
+## QA — continuous verification · verify-done always-on
+- do: close each fix in one loop **measure→root-cause→verify→merge** with **captured output**; codegen/runtime → byte-eq across 3-target, all configs.
+- do: continuous QA loop; report falsified/negative results; build/measure on the pool (mini = git/gh).
+- dont: unverified "done" · one-config/one-target-green merge · per-op tests alone · enshrine an artifact/forge-bench time as ceiling · tune-to-green.
+- dont: a stale-pool-hexat measurement (→ slow CPU fallback) · `hexa cc --regen` workaround · a release cut for one bench · retired `HEXA_VERSION=test`.
 
-Run the engine:
+## native-canonical-default — polarity
+- do: default path is **always hexa-native/own/canonical**; external deps (cuBLAS·vendor·legacy) are **opt-in-flag-only** (`HEXA_USE_CUBLAS`).
+- do: if native-default costs perf, **keep polarity** but expose the fast path opt-in; slower ≠ broken.
+- do: **⚠️ determinism axis is the sole polarity exception** — fast non-det default, det opt-in (`HEXA_DET`); own/vendor polarity stays invariant.
+- do: **the whole DX surface (pkg/lib·install·GPU·env) is a native-canonical install path** per `pip`/`cargo`/`npm` canon (packaging layer, distinct from kernel polarity).
+- do: canonical install/update must auto-produce `cuda_available()=1` on a CUDA host (hand-build/workaround = packaging defect).
+- do: stdlib math defaults to native libm trig; hand-rolled kernels allowed for self-host/accuracy.
+- do: cross-target `hxlcl_*` native-emit = **codegen C-ABI** (Route C, default-OFF), not hand-assembled byte arrays.
+- dont: **never invert polarity** (native behind a flag · `HEXA_NO_CUBLAS`) — flag-on = "enable a constraint/external-dep"; **never leave the DX surface non-canonical**.
 
-```sh
-git submodule update --init --recursive          # activate (hooks no-op until present)
-.harness-engine/bin/harness <cmd>                 # via wrapper
-```
+## flame/forge determinism — API primary + env escape-hatch · fast-nondet DEFAULT
+- do: **fast non-det DEFAULT** own-native atomic kernels (cuBLAS-TC via `HEXA_USE_CUBLAS`); det OPT-IN = fixed-order non-atomic, byte-exact.
+- do: **det = API primary + env escape-hatch**: `set_deterministic()`/`is_deterministic()` + `HEXA_DET=1`, **API > env**; eval/verdict/decode call it directly.
+- do: GPU det axis ≠ the selfhost-determinism-gate.
+- dont: bypass the safety-pin · promote cuBLAS to fast-default · miss CI det enforcement · revert to det default · promote env above API precedence.
 
-### Quick reference
+## Atlas · verification
+- do: atlas ledger SSOT = **`ATLAS/README.md`** (incremental); layers = human README + **machine SSOT** `compiler/atlas/embedded.gen.hexa` — loading updates both.
+- do: on `🔵`/`🟢` `hexa verify` the atom **auto-folds** into embedded.gen.hexa (branch→PR only).
+- do: run math DFS **via `hexa loop --dfs`** only (budget cap + verify gate); land domain audits via `hexa verify --<axis>`.
+- dont: update only the human layer (omitting embedded.gen.hexa) · promote an unread/unverified/lattice-fit conjecture to 🔵 · treat **n=6 as the center**.
+- dont: never call the external LLM outside `hexa loop --dfs`; never revive retired remnants (lowercase `atlas/` · `TECS-L/` · `.tape` ledgers).
 
-| Command | Purpose |
-|---------|---------|
-| `harness docs check` | single-doc discipline: architecture SSOT + log + quickref pointers |
-| `harness lint` | staged-L0 + freshness + convergence gate |
-| `harness verify` | run configured verification (`hexa verify`) |
-| `harness audit` | 6-axis self-scorecard |
-| `harness gc` | broken markdown links in guides |
-| `hexa verify` | g5 gate: S6 equational + S8 citation + atlas reverify/auto-fold |
-| `hx commit` / `hx push` | SSOT-attested git wrappers (re-run lint gate) |
+## git · L0 · lockstep
+- do: before a guard-file change a subagent diffs vs baseline; an L0-lockdown-file edit updates `CHANGELOG.jsonl` same change.
+- do: on a `hexa` release/CLI update, **lockstep-update** `hexa --help`·`hexa gpu` same change (repos trust `hexa gpu` as GPU-status SSOT).
+- do: keep HuggingFace uploads under the `dancinlab` org.
+- dont: never commit a >50-line deletion from `stdlib`/`runtime`/`codegen`/`rt` without a scoped subject or `WIPE-OK:` trailer.
+
+## CI · self-hosted runners
+- do: **cloud CI = Blacksmith** 3-target runs all PR gates; if the local SSH pool is down, verify via **a PR**.
+- do: heavy faithful/byteeq builds → **self-hosted runners** (`ghost`·`aiden`·`summer`); arm64/darwin/ephemeral stay on cloud (no arm64 self-hosted host).
+- do: public-repo fork-PRs run on self-hosted only after maintainer approval (RCE).
+- dont: **never let the required gate (`selfhost-gates-summary`) depend on an offline/unverified runner** — promote a job only after measuring it green.
+
+## Governance baseline — everything but no-LLVM allowed (user standing)
+- do: **the sole inviolable = no-LLVM** (source→IR→native→`hexa_ld`); every other technique is allowed (hand-rolled kernels · new keywords/builtins · frozen re-baseline · setjmp/va_list ABI).
+- dont: never break no-LLVM (via an LLVM backend/IR); no unverified merge skipping the 4 disciplines (release-integrity·byteeq-3-target·reference-match·git-safety).

@@ -268,12 +268,13 @@ fn load_pretrained_weights(path, all_layer_bufs, embed_buf, lm_head_buf, d_model
         let mut s = 0
         while s < 9 {
             let tname = prefix + suffixes[s]
+            // boxing-unbox r2: hexaw_tensor → farr32 handle; size via hexaw_count.
             let data = hexaw_tensor(hxw, tname)
-            let cnt = len(data)
+            let cnt = hexaw_count(hxw, tname)
             if cnt > 0 {
                 let mut j = 0
                 while j < cnt {
-                    write_f32(bufs[s], j * 4, data[j])
+                    write_f32(bufs[s], j * 4, farr32_get(data, j))
                     j = j + 1
                 }
             } else {
@@ -286,24 +287,26 @@ fn load_pretrained_weights(path, all_layer_bufs, embed_buf, lm_head_buf, d_model
 
     // Embedding
     let embed_data = hexaw_tensor(hxw, "embed")
-    if len(embed_data) > 0 {
+    let embed_cnt = hexaw_count(hxw, "embed")
+    if embed_cnt > 0 {
         let mut i = 0
-        while i < len(embed_data) {
-            write_f32(embed_buf, i * 4, embed_data[i])
+        while i < embed_cnt {
+            write_f32(embed_buf, i * 4, farr32_get(embed_data, i))
             i = i + 1
         }
-        println("[weight_init] embed loaded (" + str(len(embed_data)) + " params)")
+        println("[weight_init] embed loaded (" + str(embed_cnt) + " params)")
     }
 
     // LM head
     let lmh_data = hexaw_tensor(hxw, "lm_head")
-    if len(lmh_data) > 0 {
+    let lmh_cnt = hexaw_count(hxw, "lm_head")
+    if lmh_cnt > 0 {
         let mut i = 0
-        while i < len(lmh_data) {
-            write_f32(lm_head_buf, i * 4, lmh_data[i])
+        while i < lmh_cnt {
+            write_f32(lm_head_buf, i * 4, farr32_get(lmh_data, i))
             i = i + 1
         }
-        println("[weight_init] lm_head loaded (" + str(len(lmh_data)) + " params)")
+        println("[weight_init] lm_head loaded (" + str(lmh_cnt) + " params)")
     }
 
     println("[weight_init] pretrained load complete")

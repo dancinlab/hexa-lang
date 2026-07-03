@@ -32,6 +32,7 @@ fn _stdlib_help() {
     println("  stdlib                       Catalog table (default = list)")
     println("  stdlib list                  Same")
     println("  stdlib list --json           JSON dump (name, kind, purpose)")
+    println("  stdlib list --tree           Catalog + 1-level drill into each dir's modules")
     println("  stdlib find <pat>            Search fn names (default substring; --regex for grep -E)")
     println("  stdlib show <fn>             Print signature, file:line, doc, callers for a fn")
     println("  stdlib help | --help | -h")
@@ -320,6 +321,49 @@ fn _list_table(root: string) {
     }
     println("")
     println(to_string(shown) + " entries")
+}
+
+// Like _list_table but drills ONE level into each dir entry, listing its
+// direct *.hexa modules (tests excluded) indented underneath. Surfaces
+// sub-modules (e.g. math/codes.hexa) that the flat top-level table folds
+// into a single `math/  dir` row.
+fn _list_tree(root: string) {
+    let dirs = _dir_set(root)
+    let entries = list_dir(root)
+    println("hexa stdlib — catalog tree (root: " + root + ", 1-level)")
+    println("")
+    let mut shown = 0
+    let mut i = 0
+    while i < len(entries) {
+        let nm = entries[i]
+        i = i + 1
+        if nm.substring(0, 1) == "." { continue }
+        let kind = _kind_of(dirs, nm)
+        let purpose = _compact(_purpose_of(root, nm, kind), 60)
+        let label = if kind == "dir" { nm + "/" } else { nm }
+        println(_pad(label, 30) + "  " + _pad(kind, 7) + "  " + purpose)
+        shown = shown + 1
+        if kind == "dir" {
+            let sub_root = root + "/" + nm
+            let sub_dirs = _dir_set(sub_root)
+            let kids = list_dir(sub_root)
+            let mut j = 0
+            while j < len(kids) {
+                let kn = kids[j]
+                j = j + 1
+                if kn.substring(0, 1) == "." { continue }
+                if kn.ends_with("_test.hexa") { continue }
+                let kkind = _kind_of(sub_dirs, kn)
+                if kkind == "module" {
+                    let kp = _compact(_purpose_of(sub_root, kn, kkind), 54)
+                    println("    " + _pad(kn, 26) + "  " + kp)
+                    shown = shown + 1
+                }
+            }
+        }
+    }
+    println("")
+    println(to_string(shown) + " entries (tree)")
 }
 
 // Repo root = parent dir of <stdlib_root>. Used by `find`/`show` to scan
@@ -740,6 +784,10 @@ fn main() {
         i = i + 1
     }
     if start < 0 { start = 1 }
+    // Skip a leading "--" separator (present when invoked via
+    // `hexa run stdlib/stdlib_cli.hexa -- <sub> ...`); the builtin path
+    // never includes it, so this is harmless there.
+    if start < n && argv[start] == "--" { start = start + 1 }
 
     let mut sub = ""
     if start < n { sub = argv[start] }
@@ -759,17 +807,19 @@ fn main() {
         exit(2)
     }
 
-    // Default verb = list. `list` may take `--json`.
+    // Default verb = list. `list` may take `--json` or `--tree`.
     let mut json = false
+    let mut tree = false
     let mut k = start
     if sub == "list" { k = start + 1 }
     while k < n {
         if argv[k] == "--json" { json = true }
+        if argv[k] == "--tree" { tree = true }
         k = k + 1
     }
 
     if sub == "" || sub == "list" {
-        if json { _list_json(root) } else { _list_table(root) }
+        if json { _list_json(root) } else if tree { _list_tree(root) } else { _list_table(root) }
         return
     }
 

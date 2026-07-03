@@ -1,0 +1,36 @@
+// stdlib/runtime/hxlcl_va_fp_smoke.hexa — RFC061 §M8 varargs-ABI (literal-∅ feature B)
+// r1 SSE-class proof-of-leaf. A minimal SysV AMD64 VARIADIC function that consumes
+// DOUBLE (SSE-class) varargs, self-emitted natively (no frozen runtime.c va_list) via
+// the __builtin_va_arg_fp intrinsic.
+//
+// This is the smallest body that exercises the whole r1 SSE surface:
+//   • the prologue XMM register-save spill (8 xmm arg regs → reg_save_area FP half),
+//   • __builtin_va_start (fp_offset = 48 = first saved XMM),
+//   • __builtin_va_arg_fp SSE class — BOTH the register path (fp_offset <= 175 →
+//     reg_save_area + fp_offset, 16-byte stride) and the overflow/stack path
+//     (fp_offset > 175 → overflow_arg_area, 8-byte stride), and
+//   • __builtin_va_end (SysV no-op).
+//
+// C signature (the link contract the harness uses):
+//   double hxlcl_va_fp_smoke(long n, ...);  // returns the sum of the n double varargs
+//
+// Kept in its OWN file (not hxlcl_core.hexa): the va prologue is only correct under
+// HEXA_VA_INTRINSICS=1, and hxlcl_core.hexa is compiled by the Route C smokes WITHOUT
+// that env. Isolation keeps those byteeq-neutral.
+//
+// IN-BODY DISCIPLINE (the hxlcl_core un-nested rule): every intrinsic writes exactly
+// ONE `let`/assignment; the loop counter uses the raw-payload INT leaves
+// (__hx_payload_lt / __hx_payload_add), and the accumulator uses the raw-payload
+// FLOAT leaf (__hx_payload_fadd, IEEE-754 bits in a GP reg).
+pub fn hxlcl_va_fp_smoke(n: HexaVal) -> float {
+    let ap = __builtin_va_start(1)            // 1 named INT param (n) → gp_offset = 8
+    let mut acc = 0.0                          // TAG_FLOAT accumulator
+    let mut i = 0
+    while __hx_payload_lt(i, n) {
+        let d = __builtin_va_arg_fp(ap)        // next SSE-class (double) vararg
+        acc = __hx_payload_fadd(acc, d)
+        i = __hx_payload_add(i, 1)
+    }
+    let _e = __builtin_va_end(ap)             // SysV no-op
+    return acc
+}

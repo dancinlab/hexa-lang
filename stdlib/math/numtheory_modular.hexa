@@ -1,0 +1,303 @@
+// HEXA Standard Library — modular/multiplicative: sigma_k · Ramanujan tau · partition p(n) · divisor convolution · Eisenstein · lattice theta
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Exact big-integer modular-forms / lattice number-theory primitives that
+// bridge the macro (divisor sums, partitions) and quantum (theta series,
+// Eisenstein coefficients) sides of the atlas math-map. Every value here is
+// an exact integer recurrence — no floats, no Taylor series — so the results
+// are byte-deterministic across targets.
+//
+// novelhunt verified the following identities in Python (exact int) and they
+// are re-asserted in numtheory_modular_test.hexa:
+//   r_{E8}(2n) = 240·σ_3(n)                         (E8 theta / Eisenstein E4)
+//   σ_7(n)     = σ_3(n) + 120·Σ σ_3(m)σ_3(n−m)      (Glaisher σ_7 convolution)
+//   τ(n)       = [q^n] q∏(1−q^m)^24                 (Ramanujan delta)
+//   p(n)       via Euler's pentagonal-number recurrence
+//
+// Reuses stdlib/core/math.hexa: sigma (σ_1), sigma_3 (σ_3), gcd. We add ONLY
+// the primitives not already there.
+//
+// Surface:
+//   pub fn sigma_k(n, k) -> int               — Σ_{d|n} d^k (general)
+//   pub fn ramanujan_tau(n) -> int            — [q^n] Δ
+//   pub fn partition_p(n) -> int              — unrestricted partitions p(n)
+//   pub fn divisor_convolution(k1, k2, n)     — Σ_{m=1}^{n-1} σ_{k1}(m)σ_{k2}(n-m)
+//   pub fn eisenstein_coeff(k, n) -> int      — [q^n] E_k
+//   pub fn lattice_theta(gram, two_n, box)    — r_L(2n) by bounded brute force
+//
+// @cite classical number theory: Hardy & Wright, "An Introduction to the
+//   Theory of Numbers"; Conway & Sloane, "Sphere Packings, Lattices and
+//   Groups" (E8 theta = E4 Eisenstein series, r_{E8}(2n)=240σ_3(n)).
+// All formula-bearing fns here are exact integer recurrences; their known
+// values are verified in numtheory_modular_test.hexa (g5 exact-int oracle),
+// so no atlas L[*] binding is required at S8.
+
+import "stdlib/core/math.hexa"
+
+// sigma_k(n, k) = Σ_{d|n} d^k — general divisor power-sum (OEIS A001157 k=2,
+// A001158 k=3, ...). k=1 reduces to core sigma(); k=3 to core sigma_3(). We
+// keep the general form here so σ_5/σ_7/σ_9/σ_11/σ_13 are all reachable.
+// @cite Hardy & Wright §16.7 (sum-of-divisors functions σ_k).
+pub fn sigma_k(n, k) -> int {
+    let sum = 0
+    let i = 1
+    while i <= n {
+        if n % i == 0 {
+            // i^k by repeated multiplication (exact, no pow float path).
+            let term = 1
+            let e = 0
+            while e < k {
+                term = term * i
+                e = e + 1
+            }
+            sum = sum + term
+        }
+        i = i + 1
+    }
+    sum
+}
+
+// divisor_convolution(k1, k2, n) = Σ_{m=1}^{n-1} σ_{k1}(m)·σ_{k2}(n-m).
+// The Cauchy product of two divisor-sum generating functions; appears in the
+// classical Eisenstein-series multiplication identities (e.g. Glaisher's
+// σ_7 = σ_3 + 120·(σ_3 ⋆ σ_3)). Empty sum (n<2) is 0.
+// @cite Glaisher 1885; Apostol, "Modular Functions and Dirichlet Series in
+//   Number Theory" §6 (Eisenstein series products).
+pub fn divisor_convolution(k1, k2, n) -> int {
+    let sum = 0
+    let m = 1
+    while m < n {
+        sum = sum + sigma_k(m, k1) * sigma_k(n - m, k2)
+        m = m + 1
+    }
+    sum
+}
+
+// partition_p(n) = number of unrestricted partitions of n (OEIS A000041),
+// via Euler's pentagonal-number theorem recurrence:
+//   p(n) = Σ_{k≥1} (−1)^{k+1} [ p(n − g_k) + p(n − g'_k) ]
+// where g_k = k(3k−1)/2 and g'_k = k(3k+1)/2 are the generalized pentagonal
+// numbers. p(0)=1, p(negative)=0. O(n·√n) exact integer DP.
+// @cite Euler, pentagonal-number theorem; Hardy & Wright §19.
+pub fn partition_p(n) -> int {
+    if n < 0 { return 0 }
+    // p[0..n]
+    let p = []
+    let init = 0
+    while init <= n {
+        p.push(0)
+        init = init + 1
+    }
+    p[0] = 1
+    let i = 1
+    while i <= n {
+        let total = 0
+        let k = 1
+        // generalized pentagonal numbers grow ~3k²/2; stop once g_k > i.
+        let stop = false
+        while !stop {
+            let g1 = k * (3 * k - 1) / 2
+            let g2 = k * (3 * k + 1) / 2
+            if g1 > i {
+                stop = true
+            } else {
+                // sign = (−1)^{k+1}: +1 for odd k, −1 for even k.
+                let sign = 1
+                if k % 2 == 0 { sign = -1 }
+                total = total + sign * p[i - g1]
+                if g2 <= i {
+                    total = total + sign * p[i - g2]
+                }
+                k = k + 1
+            }
+        }
+        p[i] = total
+        i = i + 1
+    }
+    p[n]
+}
+
+// ramanujan_tau(n) = [q^n] Δ(q), Δ = q·∏_{m≥1}(1−q^m)^24 (OEIS A000594).
+// Computed exactly by expanding the product as a truncated power series up to
+// degree n. Δ = q·E(q)^24 where E(q) = ∏(1−q^m); we build E(q) to degree
+// n−1 (since Δ carries a leading q), raise it to the 24th power by repeated
+// truncated polynomial multiplication, and read the (n−1)-th coefficient.
+// τ(1)=1, τ(2)=−24, τ(3)=252, τ(4)=−1472, τ(5)=4830, τ(6)=−6048.
+// @cite Ramanujan 1916; Hardy & Wright §20 (the τ-function).
+pub fn ramanujan_tau(n) -> int {
+    if n < 1 { return 0 }
+    // We need coefficients of q∏(1−q^m)^24 at q^n, i.e. coefficient of
+    // q^{n-1} in ∏(1−q^m)^24. Work to degree d = n−1.
+    let d = n - 1
+    // euler[j] = [q^j] ∏_{m≥1}(1−q^m), Euler function, built incrementally.
+    // Start with the polynomial 1 (degree-0).
+    let euler = []
+    let z = 0
+    while z <= d {
+        if z == 0 { euler.push(1) } else { euler.push(0) }
+        z = z + 1
+    }
+    // Multiply in (1 − q^m) for m = 1..d.
+    let m = 1
+    while m <= d {
+        // (poly) * (1 − q^m): subtract a shifted-by-m copy. Iterate high→low
+        // so the in-place update reads un-mutated lower coefficients.
+        let j = d
+        while j >= m {
+            euler[j] = euler[j] - euler[j - m]
+            j = j - 1
+        }
+        m = m + 1
+    }
+    // Raise euler(q) to the 24th power, truncated at degree d, by repeated
+    // truncated polynomial multiplication.
+    let acc = euler
+    let pw = 1
+    while pw < 24 {
+        acc = _poly_mul_trunc(acc, euler, d)
+        pw = pw + 1
+    }
+    acc[d]
+}
+
+// _poly_mul_trunc(a, b, d) — multiply two coefficient arrays, truncating the
+// result at degree d (inclusive). Exact integer arithmetic.
+fn _poly_mul_trunc(a, b, d) -> array {
+    let out = []
+    let z = 0
+    while z <= d {
+        out.push(0)
+        z = z + 1
+    }
+    let i = 0
+    while i <= d {
+        if i < len(a) {
+            let ai = a[i]
+            if ai != 0 {
+                let j = 0
+                while i + j <= d {
+                    if j < len(b) {
+                        out[i + j] = out[i + j] + ai * b[j]
+                    }
+                    j = j + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    out
+}
+
+// eisenstein_coeff(k, n) = [q^n] E_k(q), the normalized Eisenstein series of
+// weight k (constant term 1). Standard forms:
+//   E_4  = 1 + 240·Σ σ_3(n) q^n
+//   E_6  = 1 − 504·Σ σ_5(n) q^n
+//   E_8  = 1 + 480·Σ σ_7(n) q^n
+//   E_10 = 1 − 264·Σ σ_9(n) q^n
+//   E_12 = 1 + (65520/691)·Σ σ_11(n) q^n   (NOT integer — rejected below)
+//   E_14 = 1 − 24·Σ σ_13(n) q^n
+// General: E_k = 1 − (2k/B_k)·Σ σ_{k-1}(n) q^n. We hardcode the integer
+// coefficient c_k for the weights whose c_k IS an integer (4,6,8,10,14) and
+// return the n=0 constant 1 / n≥1 coefficient c_k·σ_{k-1}(n). Weight 12 has
+// a non-integer leading coefficient (Bernoulli B_12 = −691/2730) so we
+// reject it to keep this function exact-integer.
+// @cite Serre, "A Course in Arithmetic" VII §4 (Eisenstein series E_k).
+pub fn eisenstein_coeff(k, n) -> int {
+    if n == 0 { return 1 }
+    if n < 0 { return 0 }
+    // c_k = −2k / B_k (the divisor-sum coefficient), integer for these k.
+    let c = 0
+    if k == 4 {
+        c = 240
+    } else if k == 6 {
+        c = -504
+    } else if k == 8 {
+        c = 480
+    } else if k == 10 {
+        c = -264
+    } else if k == 14 {
+        c = -24
+    } else {
+        // Weight 12 (non-integer 65520/691) and unsupported weights: 0.
+        return 0
+    }
+    c * sigma_k(n, k - 1)
+}
+
+// lattice_theta(gram, two_n, box) = r_L(2n) — the number of integer vectors
+// x ∈ Z^d with x^T·G·x = two_n, enumerated by brute force over the box
+// [−box, box]^d. `gram` is the integer Gram matrix flattened ROW-MAJOR into a
+// 1-D array of length d·d; the dimension d is inferred as isqrt(len(gram)).
+// Best on the standard integer lattices Z^d (identity Gram): r_{Z^4}(2)=24,
+// r_{Z^8}(2)=112 (Jacobi sum-of-squares), both at box=1. NOTE: the full E8
+// root count r_{E8}(2)=240 is NOT box-1-enumerable — in any integer Gram basis
+// the 128 half-integer E8 roots force minimal-vector coordinates far beyond
+// ±1 (the Cartan basis needs box≥6 → 13^8 points), so r_{E8}(2)=240 is best
+// obtained via eisenstein_coeff(4, n) = 240·σ_3(n) instead. Cost (2·box+1)^d.
+// @cite Conway & Sloane, "Sphere Packings, Lattices and Groups" §4 (theta
+//   series of a lattice, r_L(m) = #{x : Q(x)=m}).
+pub fn lattice_theta(gram, two_n, box) -> int {
+    let total = len(gram)
+    // Infer d = sqrt(total).
+    let d = 0
+    while (d + 1) * (d + 1) <= total {
+        d = d + 1
+    }
+    if d * d != total { return -1 }   // not a square Gram matrix
+    if d == 0 { return 0 }
+    // Odometer over the d-dimensional box [−box, box]^d.
+    let x = []
+    let z = 0
+    while z < d {
+        x.push(0 - box)
+        z = z + 1
+    }
+    let count = 0
+    let span = 2 * box + 1
+    // Total number of grid points = span^d.
+    let totalpts = 1
+    let e = 0
+    while e < d {
+        totalpts = totalpts * span
+        e = e + 1
+    }
+    let p = 0
+    while p < totalpts {
+        // Quadratic form Q(x) = Σ_i Σ_j x_i·G[i][j]·x_j.
+        let q = 0
+        let i = 0
+        while i < d {
+            let xi = x[i]
+            if xi != 0 {
+                let j = 0
+                while j < d {
+                    let g = gram[i * d + j]
+                    if g != 0 {
+                        q = q + xi * g * x[j]
+                    }
+                    j = j + 1
+                }
+            }
+            i = i + 1
+        }
+        if q == two_n { count = count + 1 }
+        // Increment the odometer (least-significant digit = x[0]).
+        let carry = 1
+        let k = 0
+        while carry == 1 {
+            if k >= d { carry = 0 } else {
+                x[k] = x[k] + 1
+                if x[k] > box {
+                    x[k] = 0 - box
+                    k = k + 1
+                } else {
+                    carry = 0
+                }
+            }
+        }
+        p = p + 1
+    }
+    count
+}

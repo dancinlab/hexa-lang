@@ -1,0 +1,14 @@
+# Canonical fresh-from-main confirmation
+# compiler: build/lx8664/cc_native (ELF64 x86-64) built fresh from origin/main
+# HEAD=6ed33ac64 (element-pack ebfd40b77 #4114 included) via tool/build_native_linux_x86_64
+# stage5 smoke PASS (stdout=hi rc=7)
+KERNEL             PACKED    OFF_OUT        ON_OUT         VERDICT
+k0_positive        PACKED    4544;rc=0;     4544;rc=0;     PASS
+ka_arg_escape      PACKED    4096;rc=0;     4095;rc=0;     DIVERGE
+kb_return_escape   PACKED    189;rc=0;      189;rc=0;      PASS
+kc_alias           PACKED    2126;rc=0;     <value>999064;rc=0; DIVERGE
+kd_global          boxed     315;rc=0;      315;rc=0;      PASS
+ke_untyped         boxed     6;rc=0;        6;rc=0;        PASS
+kf_reassign        PACKED    70;rc=0;       70;rc=0;       PASS
+---
+ESCAPE_STRESS=DIVERGENCE_FOUND  (CONFIRMED on canonical fresh-from-main binary)

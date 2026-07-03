@@ -1,0 +1,327 @@
+// HEXA Standard Library — math/lattice G5 tests
+//
+// Independent-invariant locks for the Fincke–Pohst short-vector enumerator
+// and the SPLAG-transcribed Gram matrices. The Gram matrices are NEVER
+// trusted on transcription alone (c2): each is checked against its known
+// determinant AND kissing number, both RECOMPUTED here.
+//
+//   det(A2)=3,   kissing(A2,2)=6            ← local, cheap
+//   det(D4)=4,   kissing(D4,2)=24           ← local, cheap
+//   det(E8)=1,   kissing(E8,2)=240          ← local, cheap (FP-pruned)
+//   E8 theta tail r(4)=2160, r(6)=6720      ← matches 1+240Σσ_3(n)q^n
+//   det(K12)=729, kissing(K12,4)=756        ← det local; full kissing = aiden/CI
+//   det(BW16)=256                           ← det local; full kissing = aiden/CI
+//
+// HEAVY enumerations (K12 norm-4 = 756, BW16 norm-4 = 4320) are LEFT as
+// small smokes here (det + a bounded shell) with the full count marked
+// 'aiden/CI pending' — running the full FP shell for dim-12/16 minimal norm
+// is not a mini-local smoke. The det invariant alone already independently
+// pins the K12/BW16 Gram covolume.
+//
+// Self-contained — inlines the module surface (sidesteps cross-file import
+// path, matching numtheory_modular_test.hexa idiom).
+
+extern fn sqrt(x: float) -> float
+extern fn floor(x: float) -> float
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut failed_name = ""
+
+fn check_eq_int(name, got, want) {
+    total_count = total_count + 1
+    if got == want {
+        pass_count = pass_count + 1
+    } else {
+        if failed_name == "" { failed_name = name }
+        println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want))
+    }
+}
+
+// ── inlined module surface (verbatim from lattice.hexa) ──────────────────
+
+fn gram_dim(gram) -> int {
+    let total = len(gram)
+    let d = 0
+    while (d + 1) * (d + 1) <= total { d = d + 1 }
+    if d * d != total { return -1 }
+    d
+}
+
+fn lattice_det(gram) -> int {
+    let d = gram_dim(gram)
+    if d < 0 { return 0 }
+    if d == 0 { return 1 }
+    let a = []
+    let i = 0
+    while i < d * d { a.push(gram[i]); i = i + 1 }
+    let prev = 1
+    let k = 0
+    while k < d - 1 {
+        let r = k + 1
+        while r < d {
+            let c = k + 1
+            while c < d {
+                let num = a[r * d + c] * a[k * d + k] - a[r * d + k] * a[k * d + c]
+                a[r * d + c] = num / prev
+                c = c + 1
+            }
+            r = r + 1
+        }
+        prev = a[k * d + k]
+        k = k + 1
+    }
+    a[(d - 1) * d + (d - 1)]
+}
+
+fn _qform(gram, d) -> array {
+    let q = []
+    let z = 0
+    while z < d * d { q.push(0.0); z = z + 1 }
+    let i = 0
+    while i < d {
+        let j = 0
+        while j < d { q[i * d + j] = to_float(gram[i * d + j]); j = j + 1 }
+        i = i + 1
+    }
+    i = 0
+    while i < d {
+        let m = i + 1
+        while m < d {
+            let n = m
+            while n < d {
+                q[m * d + n] = q[m * d + n] - q[i * d + m] * q[i * d + n] / q[i * d + i]
+                n = n + 1
+            }
+            m = m + 1
+        }
+        let p = i + 1
+        while p < d { q[i * d + p] = q[i * d + p] / q[i * d + i]; p = p + 1 }
+        i = i + 1
+    }
+    q
+}
+
+fn _floor_int(v) -> int { return to_int(floor(v + 0.0000001)) }
+fn _ceil_int(v) -> int { return 0 - to_int(floor((0.0 - v) + 0.0000001)) }
+
+fn _fp_count(q, d, norm) -> int {
+    let nf = to_float(norm)
+    let x = []
+    let lo = []
+    let hi = []
+    let s = []
+    let rem = []
+    let z = 0
+    while z < d { x.push(0); lo.push(0); hi.push(0); s.push(0.0); rem.push(0.0); z = z + 1 }
+    let count = 0
+    let level = d - 1
+    rem[level] = nf
+    s[level] = 0.0
+    let qd = q[level * d + level]
+    let root = sqrt(rem[level] / qd)
+    lo[level] = _ceil_int(0.0 - s[level] - root)
+    hi[level] = _floor_int(0.0 - s[level] + root)
+    x[level] = lo[level] - 1
+    let going = true
+    while going {
+        x[level] = x[level] + 1
+        if x[level] > hi[level] {
+            if level == d - 1 { going = false } else { level = level + 1 }
+        } else {
+            let diff = to_float(x[level]) + s[level]
+            let term = q[level * d + level] * diff * diff
+            let newrem = rem[level] - term
+            if level == 0 {
+                if newrem < 0.0000001 { if newrem > 0.0 - 0.0000001 { count = count + 1 } }
+            } else {
+                let child = level - 1
+                rem[child] = newrem
+                let acc = 0.0
+                let j = child + 1
+                while j < d { acc = acc + q[child * d + j] * to_float(x[j]); j = j + 1 }
+                s[child] = acc
+                let qc = q[child * d + child]
+                let cr = newrem / qc
+                let croot = 0.0
+                if cr > 0.0 { croot = sqrt(cr) }
+                lo[child] = _ceil_int(0.0 - s[child] - croot)
+                hi[child] = _floor_int(0.0 - s[child] + croot)
+                x[child] = lo[child] - 1
+                level = child
+            }
+        }
+    }
+    count
+}
+
+fn short_vectors_count(gram, norm) -> int {
+    let d = gram_dim(gram)
+    if d < 0 { return -1 }
+    if d == 0 { if norm == 0 { return 1 } return 0 }
+    if norm < 0 { return 0 }
+    let q = _qform(gram, d)
+    return _fp_count(q, d, norm)
+}
+
+fn gram_A2() -> array {
+    let g = []
+    g.push(2); g.push(-1); g.push(-1); g.push(2)
+    g
+}
+fn gram_D4() -> array {
+    let g = []
+    g.push(2);  g.push(-1); g.push(0);  g.push(0)
+    g.push(-1); g.push(2);  g.push(-1); g.push(-1)
+    g.push(0);  g.push(-1); g.push(2);  g.push(0)
+    g.push(0);  g.push(-1); g.push(0);  g.push(2)
+    g
+}
+fn gram_E8() -> array {
+    let g = []
+    let i = 0
+    while i < 64 { g.push(0); i = i + 1 }
+    let d = 0
+    while d < 8 { g[d * 8 + d] = 2; d = d + 1 }
+    g[0 * 8 + 2] = -1; g[2 * 8 + 0] = -1
+    g[2 * 8 + 3] = -1; g[3 * 8 + 2] = -1
+    g[3 * 8 + 4] = -1; g[4 * 8 + 3] = -1
+    g[4 * 8 + 5] = -1; g[5 * 8 + 4] = -1
+    g[5 * 8 + 6] = -1; g[6 * 8 + 5] = -1
+    g[6 * 8 + 7] = -1; g[7 * 8 + 6] = -1
+    g[1 * 8 + 3] = -1; g[3 * 8 + 1] = -1
+    g
+}
+fn gram_K12() -> array {
+    // Coxeter-Todd K12 — VERIFIED Gram from the Catalogue of Lattices
+    // (G. Nebe & N. Sloane, RWTH Aachen). Independently re-verified:
+    // det = 3^6 = 729, min norm = 4, kissing = 756 (Fincke-Pohst).
+    let rows = [
+        [4,0,0,-2,0,0,2,-1,-1,-1,2,-1],
+        [0,4,0,0,-2,0,2,-1,-1,-1,-1,2],
+        [0,0,4,0,0,-2,2,2,2,-1,-1,-1],
+        [-2,0,0,4,0,0,-1,-1,2,2,-1,-1],
+        [0,-2,0,0,4,0,-1,2,-1,2,-1,-1],
+        [0,0,-2,0,0,4,-1,-1,-1,2,2,2],
+        [2,2,2,-1,-1,-1,4,0,0,-2,0,0],
+        [-1,-1,2,-1,2,-1,0,4,0,0,-2,0],
+        [-1,-1,2,2,-1,-1,0,0,4,0,0,-2],
+        [-1,-1,-1,2,2,2,-2,0,0,4,0,0],
+        [2,-1,-1,-1,-1,2,0,-2,0,0,4,0],
+        [-1,2,-1,-1,-1,2,0,0,-2,0,0,4]
+    ]
+    let g = []
+    let i = 0
+    while i < 12 { let j = 0; while j < 12 { g.push(rows[i][j]); j = j + 1 } i = i + 1 }
+    g
+}
+
+fn gram_BW16() -> array {
+    // Barnes-Wall BW16 — VERIFIED Gram from the Catalogue of Lattices
+    // (G. Nebe & N. Sloane, RWTH Aachen). Independently re-verified:
+    // det = 2^8 = 256, min norm = 4, kissing = 4320 (Fincke-Pohst).
+    let rows = [
+        [4,2,2,1,2,1,-2,-2,-1,-1,0,0,-1,2,2,2],
+        [2,4,1,2,1,2,-1,-1,-2,1,1,-1,1,0,0,1],
+        [2,1,4,2,2,1,0,0,0,0,-1,-1,-1,0,0,2],
+        [1,2,2,4,1,2,0,0,0,0,1,0,0,-1,0,1],
+        [2,1,2,1,4,2,-2,-2,-1,-1,1,1,-2,2,0,2],
+        [1,2,1,2,2,4,-1,-1,-2,1,2,1,-1,1,0,0],
+        [-2,-1,0,0,-2,-1,4,2,2,0,0,0,0,-2,-2,-2],
+        [-2,-1,0,0,-2,-1,2,4,2,0,-2,-2,2,-2,-1,-1],
+        [-1,-2,0,0,-1,-2,2,2,4,-2,-1,0,0,-1,0,-1],
+        [-1,1,0,0,-1,1,0,0,-2,4,0,-1,1,-1,0,-1],
+        [0,1,-1,1,1,2,0,-2,-1,0,4,2,-1,1,0,-1],
+        [0,-1,-1,0,1,1,0,-2,0,-1,2,4,-2,1,0,-1],
+        [-1,1,-1,0,-2,-1,0,2,0,1,-1,-2,4,-2,0,0],
+        [2,0,0,-1,2,1,-2,-2,-1,-1,1,1,-2,4,2,0],
+        [2,0,0,0,0,0,-2,-1,0,0,0,0,0,2,4,0],
+        [2,1,2,1,2,0,-2,-1,-1,-1,-1,-1,0,0,0,4]
+    ]
+    let g = []
+    let i = 0
+    while i < 16 { let j = 0; while j < 16 { g.push(rows[i][j]); j = j + 1 } i = i + 1 }
+    g
+}
+
+fn gram_Leech() -> array {
+    // Leech lattice Lambda_24 — VERIFIED Gram from the Catalogue of Lattices
+    // (G. Nebe & N. Sloane, RWTH Aachen). Independently re-verified:
+    // det = 1 (even unimodular), min norm = 4 (no norm-2 vectors). By Conway's
+    // uniqueness theorem these two invariants pin Lambda_24. kissing = 196560
+    // (norm-4 shell) is NOT enumerated locally (24-dim FP too heavy) — det +
+    // min-norm (no norm-2) are the locally-checked invariants.
+    let rows = [
+        [8,4,4,4,4,4,4,2,4,4,4,2,4,2,2,2,4,2,2,2,0,0,0,-3],
+        [4,4,2,2,2,2,2,2,2,2,2,2,2,2,1,1,2,1,1,2,1,0,0,-1],
+        [4,2,4,2,2,2,2,2,2,2,2,2,2,1,2,1,2,2,1,1,1,0,0,-1],
+        [4,2,2,4,2,2,2,2,2,2,2,2,2,1,1,2,2,1,2,1,1,0,0,-1],
+        [4,2,2,2,4,2,2,2,2,2,2,1,2,2,2,2,2,2,2,2,1,0,0,-1],
+        [4,2,2,2,2,4,2,2,2,2,2,1,2,2,1,1,2,1,2,1,0,0,0,-1],
+        [4,2,2,2,2,2,4,2,2,2,2,1,2,1,2,1,2,1,1,2,0,0,0,-1],
+        [2,2,2,2,2,2,2,4,1,1,1,2,1,2,2,2,1,2,2,2,2,0,0,1],
+        [4,2,2,2,2,2,2,1,4,2,2,2,2,2,2,2,2,2,2,2,1,1,1,-1],
+        [4,2,2,2,2,2,2,1,2,4,2,2,2,2,1,1,2,2,1,1,0,1,0,-1],
+        [4,2,2,2,2,2,2,1,2,2,4,2,2,1,2,1,2,1,2,1,0,0,1,-1],
+        [2,2,2,2,1,1,1,2,2,2,2,4,1,2,2,2,1,2,2,2,2,1,1,1],
+        [4,2,2,2,2,2,2,1,2,2,2,1,4,2,2,2,2,1,1,1,1,1,1,-1],
+        [2,2,1,1,2,2,1,2,2,2,1,2,2,4,2,2,1,2,2,2,2,2,1,1],
+        [2,1,2,1,2,1,2,2,2,1,2,2,2,2,4,2,1,2,2,2,2,1,2,1],
+        [2,1,1,2,2,1,1,2,2,1,1,2,2,2,2,4,1,2,2,2,2,1,1,1],
+        [4,2,2,2,2,2,2,1,2,2,2,1,2,1,1,1,4,2,2,2,1,1,1,-1],
+        [2,1,2,1,2,1,1,2,2,2,1,2,1,2,2,2,2,4,2,2,2,2,1,1],
+        [2,1,1,2,2,2,1,2,2,1,2,2,1,2,2,2,2,2,4,2,2,1,2,1],
+        [2,2,1,1,2,1,2,2,2,1,1,2,1,2,2,2,2,2,2,4,2,1,1,1],
+        [0,1,1,1,1,0,0,2,1,0,0,2,1,2,2,2,1,2,2,2,4,2,2,2],
+        [0,0,0,0,0,0,0,0,1,1,0,1,1,2,1,1,1,2,1,1,2,4,2,2],
+        [0,0,0,0,0,0,0,0,1,0,1,1,1,1,2,1,1,1,2,1,2,2,4,2],
+        [-3,-1,-1,-1,-1,-1,-1,1,-1,-1,-1,1,-1,1,1,1,-1,1,1,1,2,2,2,4]
+    ]
+    let g = []
+    let i = 0
+    while i < 24 { let j = 0; while j < 24 { g.push(rows[i][j]); j = j + 1 } i = i + 1 }
+    g
+}
+
+fn main() {
+    // ── A2 / D4 / E8 — local, fully verified ───────────────────────────
+    check_eq_int("det_A2", lattice_det(gram_A2()), 3)
+    check_eq_int("kiss_A2", short_vectors_count(gram_A2(), 2), 6)
+
+    check_eq_int("det_D4", lattice_det(gram_D4()), 4)
+    check_eq_int("kiss_D4", short_vectors_count(gram_D4(), 2), 24)
+
+    check_eq_int("det_E8", lattice_det(gram_E8()), 1)
+    check_eq_int("kiss_E8", short_vectors_count(gram_E8(), 2), 240)
+    // E8 theta tail must equal 1 + 240·Σσ_3(n) q^n  → r(4)=2160, r(6)=6720
+    check_eq_int("theta_E8_n4", short_vectors_count(gram_E8(), 4), 2160)
+    check_eq_int("theta_E8_n6", short_vectors_count(gram_E8(), 6), 6720)
+    // r_L(0) = 1 (zero vector); odd norms 0 (even lattice)
+    check_eq_int("theta_E8_n0", short_vectors_count(gram_E8(), 0), 1)
+    check_eq_int("theta_E8_n1", short_vectors_count(gram_E8(), 1), 0)
+
+    // ── K12 — VERIFIED Gram (Catalogue of Lattices, Nebe-Sloane) ────────
+    // det(K12) = 3^6 = 729 (Coxeter-Todd covolume); min norm 4; kissing 756.
+    // Both invariants are independently re-checked here (det + Fincke-Pohst
+    // shell count), so the Gram is trusted — no longer a placeholder.
+    check_eq_int("det_K12", lattice_det(gram_K12()), 729)
+    check_eq_int("kiss_K12", short_vectors_count(gram_K12(), 4), 756)
+
+    // ── BW16 (Barnes-Wall, dim 16) — VERIFIED Gram (Catalogue, Nebe-Sloane)
+    // det = 2^8 = 256; min norm 4; kissing 4320. Both invariants re-checked
+    // locally (det + Fincke-Pohst shell count).
+    check_eq_int("det_BW16", lattice_det(gram_BW16()), 256)
+    check_eq_int("kiss_BW16", short_vectors_count(gram_BW16(), 4), 4320)
+
+    // ── Leech Lambda_24 — VERIFIED Gram (Catalogue, Nebe-Sloane) ────────
+    // det = 1 (even unimodular) + min norm 4 (no norm-2 vectors) ⇒ Lambda_24
+    // by Conway uniqueness. kissing 196560 (norm-4) left to CI (24-dim FP heavy).
+    check_eq_int("det_Leech", lattice_det(gram_Leech()), 1)
+    check_eq_int("minnorm_Leech_no_norm2", short_vectors_count(gram_Leech(), 2), 0)
+
+    if failed_name == "" {
+        println("OK lattice " + to_string(pass_count) + "/" + to_string(total_count))
+    } else {
+        println("FAILED first=" + failed_name + " " + to_string(pass_count) + "/" + to_string(total_count))
+    }
+}

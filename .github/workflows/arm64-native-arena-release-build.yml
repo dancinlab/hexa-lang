@@ -1,0 +1,167 @@
+name: arm64-native-arena-release-build
+
+# RT-NATIVE measure-8 r1 — prove the FULL release_build path on linux-arm64 with
+# the native arm64 arena seed ENABLED (HEXA_RT_ALLOC_NATIVE_ARM64=1).
+#
+# Why this is distinct from arm64-native-arena-run.yml: that workflow RUN-proved
+# the seed via build_aprime's `exit(6*7)==42` smoke (rt_init → hexa_arena_new_block
+# → sys_mmap). That smoke is NARROW — it only proves sys_mmap returns a valid base.
+# It does NOT exercise the #3597 SIGSEGV site, which was in the FULL self-host
+# transpile: stage-0 `hexa_v2 self/module_loader.hexa` crashed in
+# hxlcl_memcpy <- hexa_struct_pack_map <- type_check (heavy arena traffic through
+# the transpiler). #3597 explicitly deferred re-activation until "seed fixed +
+# RUN-proven"; the seed is now fixed (#3615, Linux svc #0 / x8 / mmap=222) and the
+# narrow smoke passes, but the FULL release_build path under the native arm64 arena
+# has NOT been exercised. This workflow closes exactly that gap.
+#
+# GREEN here = linux-arm64 can join the x86_64/darwin native-arena regime (flip the
+# stage_resolve default + drop the C #else body). RED here = STOP, keep the C arena
+# fallback (invariant: no #3597 regression). Throwaway diagnostic; deleted before
+# the flip lands as stable.
+
+on:
+  push:
+    branches:
+      - "rt-native/measure8-r1-arena-default"
+  workflow_dispatch:
+
+concurrency:
+  # Cancel a SUPERSEDED run only on PR re-push (a newer PR run replaces it and
+  # supplies the fresh required check); push/dispatch runs always complete so
+  # main's required-gate history stays intact. Frees runner minutes + shortens
+  # the PR queue on rapid re-pushes. Byteeq-inert (cancels stale work; never
+  # changes a build's inputs/outputs).
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  release-build-native-arena:
+    name: full release_build on aarch64 with native arm64 arena (HEXA_RT_ALLOC_NATIVE_ARM64=1)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: deps
+        shell: bash
+        run: |
+          set -x
+          sudo apt-get update -y
+          sudo apt-get install -y clang gcc binutils gdb python3 || true
+          uname -m; cc --version || true
+
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
+      # Gate the committed arm64-linux seed = Linux ABI (defence-in-depth: the
+      # full build would mis-syscall on a stale XNU seed, so fail fast + loud here).
+      - name: Gate committed seed = Linux syscall ABI
+        shell: bash
+        run: |
+          set -x
+          SEED=self/native/alloc_syscall_arm64-linux.s
+          if grep -q "svc #0x80" "$SEED"; then
+            echo "FAIL: committed arm64-linux seed still carries XNU svc #0x80 (stale pre-#3615 seed)" >&2; exit 1
+          fi
+          grep -q "x8 = syscall num" "$SEED" || { echo "FAIL: no Linux x8 syscall-num staging in seed" >&2; exit 1; }
+          grep -q "__hx_target_os: 0 = linux" "$SEED" || { echo "FAIL: seed target_os not linux(0)" >&2; exit 1; }
+          echo "SEED-ABI-GATE PASS (Linux svc #0 / x8 / target_os=0, no XNU)"
+
+      # The decisive test: run the FULL tool/release_build with the native arm64
+      # arena ENABLED. release_build → stage_resolve_runtime_a sees
+      # HEXA_RT_ALLOC_NATIVE_ARM64=1, assembles alloc_syscall_native.o, ar's it into
+      # runtime.a with -DHEXA_RT_ALLOC_NATIVE=1 (C #else dropped). Then Stage 0/1/2
+      # builds ./hexa, including the stage-0 `hexa_v2 self/module_loader.hexa`
+      # transpile that SIGSEGV'd in #3597. exit 0 here = the native arm64 arena
+      # survives the real release path.
+      - name: Build — full release_build (TARGET=linux-arm64, native arena ON)
+        id: relbuild
+        shell: bash
+        env:
+          TARGET: linux-arm64
+          CC: gcc
+          LIBS: "-lm -ldl"
+          GH_TOKEN: ${{ github.token }}
+          HEXA_SEED_CONVERGE: "1"
+          HEXA_RT_ALLOC_NATIVE_ARM64: "1"
+          HEXA_CCACHE: "1"
+        run: |
+          set -x
+          set +e
+          bash tool/release_build 2>&1 | tee /tmp/rb.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "release_build rc = $rc"
+          echo "=== native arena path taken? (expect ALLOC-RB native arena log, NOT 'staying on C arena') ==="
+          grep -nE "RT-NATIVE ALLOC-RB" /tmp/rb.log || true
+          if grep -q "staying on C arena" /tmp/rb.log; then
+            echo "FAIL: release_build did NOT enable the native arm64 arena (gate not honored)" >&2
+            exit 1
+          fi
+          grep -q "native arena path" /tmp/rb.log || { echo "FAIL: no 'native arena path' log — arena .o not built" >&2; exit 1; }
+          if [ "$rc" -ne 0 ]; then
+            echo "RELEASE-BUILD FAILED under native arm64 arena (rc=$rc) — likely #3597 regression. STOP." >&2
+            echo "=== tail ==="; tail -60 /tmp/rb.log
+            exit 1
+          fi
+          echo "RELEASE-BUILD PASS — ./hexa built on aarch64 with native arm64 arena (no #3597 SIGSEGV)"
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
+
+      # ./hexa --version (built binary executes — proves link-clean + boots).
+      - name: ./hexa --version (built binary boots under native arm64 arena)
+        shell: bash
+        run: |
+          set -x
+          HEXA=""
+          for h in ./hexa build/hexa dist/linux-arm64/hexa; do
+            if [ -x "$h" ]; then HEXA="$h"; break; fi
+          done
+          echo "HEXA = ${HEXA:-<none>}"
+          [ -n "$HEXA" ] || { echo "FAIL: no ./hexa produced by release_build" >&2; exit 1; }
+          "$HEXA" --version
+          echo "HEXA-BOOT PASS — release_build ./hexa boots under native arm64 arena"
+
+      # Direct native-arena RUN proof: build_aprime links ALL native seeds (arena +
+      # array + map) and runs its built-in `exit(6*7)==42` smoke. This exercises
+      # rt_init → hexa_arena_new_block → sys_mmap (the #3597 SIGSEGV site) WITHOUT
+      # the `hexa run` C-transpile path, which links a cached runtime.<sha>.o that
+      # lacks the array/map seed objects (orthogonal pre-existing gap #3610/#3611,
+      # NOT an arena failure). release_build PASS above is the full-path proof; this
+      # is the targeted RUN re-confirm.
+      - name: RUN re-confirm — build_aprime native-arena exit42 smoke
+        shell: bash
+        env:
+          CC: gcc
+          LIBS: "-lm -ldl"
+          HEXA_RT_ALLOC_NATIVE: "1"
+          HEXA_RT_ALLOC_NATIVE_ARM64: "1"
+        run: |
+          set -x
+          rm -f build/alloc_syscall_native.o
+          HEXAT=""
+          for h in build/hexat self/native/hexat dist/linux-arm64/hexat dist/linux-aarch64/hexat; do
+            if [ -x "$h" ]; then HEXAT="$h"; break; fi
+          done
+          echo "HEXAT = ${HEXAT:-<none, build_aprime will self-locate>}"
+          set +e
+          if [ -n "$HEXAT" ]; then
+            bash tool/build_aprime.sh -o build/aprime_cc -v "$HEXAT" 2>&1 | tee /tmp/ap.log
+          else
+            bash tool/build_aprime.sh -o build/aprime_cc 2>&1 | tee /tmp/ap.log
+          fi
+          set -e
+          echo "=== assembled native arena .o uses Linux syscall trap? ==="
+          objdump -d build/alloc_syscall_native.o 2>/dev/null | grep -iE "\bsvc\b" | head -5 || true
+          if grep -q "smoke: exit(42)==42 PASS" /tmp/ap.log; then
+            echo "NATIVE-ARM64-ARENA RUN-PASS (aprime exit42 — sys_mmap valid, no SIGSEGV)"
+            exit 0
+          fi
+          echo "NATIVE-ARM64-ARENA smoke did NOT pass" >&2
+          tail -40 /tmp/ap.log || true
+          exit 1

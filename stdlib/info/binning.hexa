@@ -33,6 +33,7 @@ pub fn bin_values_minmax(values: int, n: int, n_bins: int) -> int {
     let range = mx - mn
     if range < 1.19209290e-7 { return bins }
 
+    if n_bins <= 0 { return bins }   // 0 bins → range/n_bins divide-by-zero
     let bw = range / n_bins
     let mut j = 0
     while j < n {

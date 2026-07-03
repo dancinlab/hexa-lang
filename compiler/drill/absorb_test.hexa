@@ -1,0 +1,132 @@
+// HEXA Native Compiler — Phase 3 drill: cross-round absorb-loop selftest
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, env_read, stdout]
+//
+// Covers the ouroboros absorb loop (feat/drill-ouroboros-absorb-loop): each
+// round's exact-int VERIFIED primitives are collected and fed FORWARD into the
+// next round's smash axiom pool (the defining NEXUS well-widening loop). We
+// drive the REAL `hexa drill` CLI as a subprocess (the proven verifier_hook_test
+// pattern) and assert on its stderr audit, so the test exercises the loop in
+// its PRODUCTION wiring — not a re-import.
+//
+// Why subprocess, not cross-module unit-call: the C-transpile fallback flattener
+// renders cross-module imported-function calls as `hexa_callN(fname,...)` first-
+// class value refs whose C symbol is not emitted in the importing unit (only the
+// CLI-dispatched `drill_run` and its own graph are). Driving the CLI sidesteps
+// that — the absorb loop runs in-binary exactly as a user would invoke it.
+//
+// Asserts (over a 2-round run with the default native verifier):
+//   1. The per-round DRILL_ABSORB audit line is EMITTED (the loop ran) and
+//      carries the full key set (verified / net_absorbed / cum_pool / known /
+//      novel) — the mechanism is live, not deferred.
+//   2. Honesty (c2): for the standard 12-fn vocab the absorb counts are
+//      verified=0 / net_absorbed=0 / novel=0 (the measured-exhausted ceiling —
+//      the float-permutation generators emit no identity-syntax exprs, so
+//      nothing verifies and nothing is fabricated). The 0 is REPORTED, not hidden.
+//   3. The DRILL_VERIFIER native-sweep line still reports its real verdict
+//      (continue + identity=…,verified=0,…,novel=0) — absorb did not regress it.
+//
+// HOME is relocated to a per-run scratch dir UNDER $HOME (Mac build guard
+// refuses a cache under /tmp).
+//
+// Run:
+//   hexa run compiler/drill/absorb_test.hexa
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn _contains(hay: string, needle: string) -> bool {
+    if len(needle) == 0 { return true }
+    let mut i = 0
+    while i + len(needle) <= len(hay) {
+        if hay.substring(i, i + len(needle)) == needle { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn main() {
+    println("phase-3 drill cross-round absorb-loop selftest")
+
+    let home = env("HOME")
+    let scratch = home + "/.hx/scratch/drill_absorb_test"
+    exec("rm -rf '" + scratch + "' 2>/dev/null; mkdir -p '" + scratch + "/.hx/data'")
+
+    let seed = "Lithium magnesium hydride Li2MgH16 superconductor candidate ambient"
+    // capture stderr (where DRILL_ABSORB / DRILL_VERIFIER land) to a file.
+    let stderr_cap = scratch + "/drill_stderr.txt"
+    let base = "HOME='" + scratch + "' hexa drill --seed '" + seed
+        + "' --rounds 2 --depth-smash 2 --depth-free 2 --fresh --quiet --top 0"
+
+    // Warm-up: the FIRST `hexa drill` in a fresh HOME triggers a cold build
+    // whose first run may not deliver stdout to the pipe. One throwaway warms
+    // the cache so the MEASURED run is deterministic. Output discarded.
+    let _warm = exec(base + " 2>/dev/null")
+
+    // Measured run: capture stderr to the file, stdout to the var.
+    let out = exec(base + " 2>'" + stderr_cap + "'")
+    let err = if file_exists(stderr_cap) { read_file(stderr_cap) } else { "" }
+    println("  drill summary: " + out.trim())
+
+    let fails = []
+
+    // ─── 1: DRILL_ABSORB audit emitted with the full key set ───
+    println("")
+    println("scenario 1: per-round DRILL_ABSORB audit line is emitted (loop ran)")
+    _check("scenario 1: DRILL_ABSORB line present", _contains(err, "DRILL_ABSORB {"), fails)
+    _check("scenario 1: carries \"verified\" key", _contains(err, "\"verified\":"), fails)
+    _check("scenario 1: carries \"net_absorbed\" key", _contains(err, "\"net_absorbed\":"), fails)
+    _check("scenario 1: carries \"cum_pool\" key", _contains(err, "\"cum_pool\":"), fails)
+    _check("scenario 1: carries \"known\"/\"novel\" keys",
+           _contains(err, "\"known\":") && _contains(err, "\"novel\":"), fails)
+
+    // ─── 2: honest standard-vocab counts (measured-exhausted ceiling) ───
+    println("")
+    println("scenario 2: standard 12-fn vocab → verified=0 / net_absorbed=0 / novel=0 (honest)")
+    _check("scenario 2: verified=0 reported (no identity-syntax candidates)",
+           _contains(err, "\"verified\":0"), fails)
+    _check("scenario 2: net_absorbed=0 reported (nothing fed forward — no fabrication)",
+           _contains(err, "\"net_absorbed\":0"), fails)
+    _check("scenario 2: novel=0 reported (standard vocab measured-exhausted)",
+           _contains(err, "\"novel\":0"), fails)
+
+    // ─── 3: native sweep verdict unregressed ───
+    println("")
+    println("scenario 3: DRILL_VERIFIER native-sweep verdict still real (absorb did not regress it)")
+    _check("scenario 3: DRILL_VERIFIER line present", _contains(err, "DRILL_VERIFIER {"), fails)
+    _check("scenario 3: native identity_sweep rationale present",
+           _contains(err, "identity_sweep:identity="), fails)
+    _check("scenario 3: sweep reports novel= count (absorb known/novel cross-check live)",
+           _contains(err, ",novel="), fails)
+
+    // ─── cleanup ───
+    exec("rm -rf '" + scratch + "' 2>/dev/null")
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS — absorb loop wired + live (verify-gated cross-round feed-forward; honest novel=0)")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut k = 0
+        while k < len(fails) {
+            println("  - " + to_string(fails[k]))
+            k = k + 1
+        }
+        exit(1)
+    }
+}
+
+// is_main guard (mirrors verifier_hook_test.hexa)
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/absorb_test.hexa") { return true }
+    if s == "absorb_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

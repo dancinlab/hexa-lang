@@ -1,0 +1,122 @@
+#!hexa strict
+// rtcore_eqtruthy_emit.hexa
+//   B9.C (.c-text · #1850 pattern) — rtcore_eqtruthy.c source emitter.
+//
+// zero-c RFC061 floor-attack (B) eqtruthy native seed (hexa_truthy).
+//
+// Emits rtcore_eqtruthy.c VERBATIM. The hexa build regenerates the .c from
+// this emitter before compiling, so the emitter becomes the SSOT and the .c
+// becomes a build artifact. Byte-identity ⇒ identical .o ⇒ PERF UNCHANGED.
+//
+// Un-escapable hexat-free by tool/regen_rtcore_eqtruthy_c.sh (awk \n/\t/\"/\\).
+//
+// Invocation:  hexa-run rtcore_eqtruthy_emit.hexa <output-path>
+// Default output path (if argv missing): "rtcore_eqtruthy.c" in cwd.
+
+let MODULE_NAME = "rtcore_eqtruthy_emit"
+
+fn _flush_rtcore_eqtruthy(out_path: str, buf: str) {
+    let _ = exec("cat >> \"" + out_path + "\" <<'GEN_rtcore_eqtruthy_EOF'\n" + buf + "GEN_rtcore_eqtruthy_EOF")
+}
+
+fn emit_rtcore_eqtruthy_to(out_path: str) {
+    let _ = exec("printf '' > \"" + out_path + "\"")
+    let mut buf = ""
+    buf = buf + "// self/native/rtcore_eqtruthy.c — zero-c RFC061 floor-attack (B) EQTRUTHY SEED.\n"
+    buf = buf + "//\n"
+    buf = buf + "// Supplies the seed-portable runtime_core.c symbol hexa_truthy from the\n"
+    buf = buf + "// \"eqtruthy\" cluster (the value-truthiness tag switch). runtime_core.c externs\n"
+    buf = buf + "// it away under HEXA_RT_CORE_EQTRUTHY_NATIVE; compiled to a SEPARATE .o\n"
+    buf = buf + "// (build/rtcore_eqtruthy_native.o) and linked when HEXA_ZEROC_RT_CORE_EQTRUTHY=1,\n"
+    buf = buf + "// so the build LINKS this body from a standalone object instead of compiling\n"
+    buf = buf + "// the inline #else body in runtime_core.c. byte-faithful to the runtime_core.c\n"
+    buf = buf + "// #else arm by construction (same C, same callees resolved from the rest of the\n"
+    buf = buf + "// link). Default build (flag unset) is byte-IDENTICAL.\n"
+    buf = buf + "//\n"
+    buf = buf + "// SEED-PORTABILITY (the r5 rule): every callee AND referenced global is\n"
+    buf = buf + "// external-linkage or a macro — hmap_find / hexa_fnv1a_str / rt_truthy_native\n"
+    buf = buf + "// are public extern T; HX_TAG/HX_BOOL/HX_INT/HX_FLOAT/HX_STR/HX_ARR_LEN/\n"
+    buf = buf + "// HX_MAP_TBL/HX_MAP_LEN/HX_VS are macros; TAG_* are runtime.h enum values.\n"
+    buf = buf + "// (hexa_eq stays inline — it touches the file-local statics _hexa_enum_display\n"
+    buf = buf + "// and hxlcl_strcmp; hexa_array_contains is already in the collection-mutate\n"
+    buf = buf + "// cluster.) The seed therefore links cleanly as a standalone object.\n"
+    buf = buf + "//\n"
+    buf = buf + "// GENERATED-FAITHFUL: the hexa_truthy body below is the VERBATIM runtime_core.c\n"
+    buf = buf + "// #else arm. Any change to the inline body must be mirrored here — gate-1\n"
+    buf = buf + "// byte-identity is the contract.\n"
+    buf = buf + "\n"
+    buf = buf + "#include <stdint.h>\n"
+    buf = buf + "\n"
+    buf = buf + "// ── macros runtime_core.c defines but runtime.h does not (byte-identical SSOT) ──\n"
+    buf = buf + "#ifndef HX_ARR_LEN\n"
+    buf = buf + "#define HX_ARR_LEN(v)   ((v).arr_ptr->len)\n"
+    buf = buf + "#endif\n"
+    buf = buf + "#ifndef HX_MAP_LEN\n"
+    buf = buf + "#define HX_MAP_LEN(v)   ((v).map_ptr->len)\n"
+    buf = buf + "#endif\n"
+    buf = buf + "\n"
+    buf = buf + "// ── extern protos for the public callees (T symbols resolved from the link) ──\n"
+    buf = buf + "extern int hmap_find(HexaMapTable* t, const char* k, uint32_t h);\n"
+    buf = buf + "extern uint32_t hexa_fnv1a_str(const char* s);\n"
+    buf = buf + "\n"
+    buf = buf + "// ── ported body (byte-identical to runtime_core.c #else arm) ──────────────────\n"
+    buf = buf + "int hexa_truthy(HexaVal v) {\n"
+    buf = buf + "    switch (HX_TAG(v)) {\n"
+    buf = buf + "#ifdef HEXA_RT_VALOP_NATIVE\n"
+    buf = buf + "        // sh-val-core: the 4 SCALAR tags delegate to the native seed\n"
+    buf = buf + "        // (rt_truthy_native, self/native/valop_core_*.s — tag-read + raw\n"
+    buf = buf + "        // payload/float compare, no runtime re-entry). The seed returns a\n"
+    buf = buf + "        // TAG_BOOL HexaVal whose payload is 0/1; read it back with HX_BOOL\n"
+    buf = buf + "        // (NOT hexa_truthy — that would recurse). Byte-faithful to the C\n"
+    buf = buf + "        // arms below (incl. NaN→truthy via !(v<=0 && v>=0)). The non-scalar\n"
+    buf = buf + "        // tags (STR/ARRAY/MAP/VALSTRUCT) stay C — runtime re-entry.\n"
+    buf = buf + "        case TAG_BOOL:\n"
+    buf = buf + "        case TAG_INT:\n"
+    buf = buf + "        case TAG_FLOAT:\n"
+    buf = buf + "        case TAG_VOID: {\n"
+    buf = buf + "            extern HexaVal rt_truthy_native(HexaVal v);\n"
+    buf = buf + "            return HX_BOOL(rt_truthy_native(v));\n"
+    buf = buf + "        }\n"
+    buf = buf + "#else\n"
+    buf = buf + "        case TAG_BOOL: return HX_BOOL(v);\n"
+    buf = buf + "        case TAG_INT: return HX_INT(v) != 0;\n"
+    buf = buf + "        // 2026-04-20 silent-fallback audit: TAG_FLOAT was falling through\n"
+    buf = buf + "        // to `default: return 1`, so `if 0.0 { ... }` evaluated truthy.\n"
+    buf = buf + "        // Match TAG_INT semantics — zero is falsy. NaN is truthy (non-zero).\n"
+    buf = buf + "        case TAG_FLOAT: return HX_FLOAT(v) != 0.0;\n"
+    buf = buf + "        case TAG_VOID: return 0;\n"
+    buf = buf + "#endif\n"
+    buf = buf + "        case TAG_STR: return HX_STR(v) != NULL && HX_STR(v)[0] != 0;\n"
+    buf = buf + "        // RFC r16 (PROBE r16): empty collection is FALSY, consistent with\n"
+    buf = buf + "        // `if 0` / `if 0.0` / `if \"\"`. Non-empty stays truthy. Closes the\n"
+    buf = buf + "        // last `default: return 1` fall-through gap (same class of bug as the\n"
+    buf = buf + "        // 2026-04-20 TAG_FLOAT 0.0 audit above).\n"
+    buf = buf + "        case TAG_ARRAY: return HX_ARR_LEN(v) > 0;\n"
+    buf = buf + "        // TAG_MAP: empty anonymous map `#{}` is falsy. A struct instance is a\n"
+    buf = buf + "        // TAG_MAP carrying a \"__type__\" carrier field (hexa_struct_pack_map),\n"
+    buf = buf + "        // so it always has len >= 1 and stays truthy — RFC §4/Q2: struct\n"
+    buf = buf + "        // existence != empty collection. The explicit __type__ guard keeps\n"
+    buf = buf + "        // structs truthy regardless of user field count.\n"
+    buf = buf + "        case TAG_MAP:\n"
+    buf = buf + "            if (HX_MAP_TBL(v) == NULL) return 0;\n"
+    buf = buf + "            if (hmap_find(HX_MAP_TBL(v), \"__type__\", hexa_fnv1a_str(\"__type__\")) >= 0) return 1;\n"
+    buf = buf + "            return HX_MAP_LEN(v) > 0;\n"
+    buf = buf + "        // rt 32-G: TAG_VALSTRUCT truthy iff .vs pointer non-null.\n"
+    buf = buf + "        case TAG_VALSTRUCT: return HX_VS(v) != NULL;\n"
+    buf = buf + "        default: return 1;\n"
+    buf = buf + "    }\n"
+    buf = buf + "}\n"
+    if buf.len() > 0 { _flush_rtcore_eqtruthy(out_path, buf) }
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[rtcore_eqtruthy_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[rtcore_eqtruthy_emit] wrote " + out_path)
+    exit(0)
+}
+
+fn main() {
+    let out = if args().len() > 1 { args()[1] } else { "rtcore_eqtruthy.c" }
+    emit_rtcore_eqtruthy_to(out)
+}

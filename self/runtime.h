@@ -69,6 +69,12 @@ typedef struct HexaMapTable {
     int          len;
     int          order_cap;
     int          from_arena;
+#ifndef HEXA_IC_STRUCTID_OFF
+    /* fleet-lab b r2 (default-ON, opt-OUT via -DHEXA_IC_STRUCTID_OFF): per-table
+     * JSC StructureID. MUST stay last + identically gated in runtime_core.c so the
+     * opt-OUT layout is byte-identical across the .h / generated .c ABI. */
+    uint32_t     struct_id;
+#endif
 } HexaMapTable;
 
 typedef struct HexaArr { HexaVal* items; int64_t len; int64_t cap; }    HexaArr; /* 64-bit len/cap: a >=4GB read_file_bytes buffer must not wrap (MUST match runtime_core.c) */
@@ -140,6 +146,12 @@ typedef struct HexaIC {
     int      idx;
     uint64_t hits;
     uint64_t misses;
+#ifndef HEXA_IC_STRUCTID_OFF
+    /* fleet-lab b r2 (default-ON, opt-OUT via -DHEXA_IC_STRUCTID_OFF): cached JSC
+     * StructureID for the single-int IC fast path. MUST mirror runtime_core.c's
+     * HexaIC, identically gated. */
+    uint32_t struct_id;
+#endif
 } HexaIC;
 
 /* arithmetic / conversion
@@ -170,6 +182,23 @@ typedef struct HexaIC {
  * remain header-only — no new C symbols. */
 #ifndef HX_VS
 #define HX_VS(v)         ((v).vs)
+#endif
+
+/* STRUCTURAL-1 Phase A: HexaVal CONSTRUCTOR macros (struct-literal residue).
+ * IDENTITY-mapped to the current 16B tagged union (mirror of the SSOT block in
+ * runtime_hexaval_abi.h / the runtime_core.c inline block) so the NaN-boxing
+ * typedef flip is a single-spot edit. Also the def the @bitfield setter codegen
+ * (self/codegen.hexa) emits HX_MAKE_INT against into user.c. */
+#ifndef HX_MAKE_INT
+#define HX_MAKE_INT(v)   ((HexaVal){.tag=TAG_INT, .i=(v)})
+#define HX_MAKE_FLOAT(v) ((HexaVal){.tag=TAG_FLOAT, .f=(v)})
+#define HX_MAKE_BOOL(v)  ((HexaVal){.tag=TAG_BOOL, .b=(v)})
+#define HX_MAKE_VOID()   ((HexaVal){.tag=TAG_VOID})
+#define HX_MAKE_STR(v)   ((HexaVal){.tag=TAG_STR, .s=(v)})
+#define HX_MAKE_ENUM(v)  ((HexaVal){.tag=TAG_ENUM, .s=(v)})
+/* Tag-only constructor for declare-then-populate values (descriptor/scalar field
+ * set afterward via HX_SET_*). Generalizes HX_MAKE_VOID to any tag. */
+#define HX_MAKE_TAG(t)   ((HexaVal){.tag=(t)})
 #endif
 
 /* Step 3 cycle 100 — pointer-eq inline builtins for hexa_eq TAG_VALSTRUCT
@@ -205,6 +234,16 @@ static inline HexaVal __map_ptr_eq(HexaVal a, HexaVal b) {
 #define HX_SET_CLO_PTR(v, p)   ((v).clo_ptr->fn_ptr = (p))
 #define HX_SET_CLO_ARITY(v, n) ((v).clo_ptr->arity = (n))
 #define HX_SET_CLO_ENV(v, p)   ((v).clo_ptr->env_box = (p))
+/* STRUCTURAL-1 Phase A: raw descriptor-POINTER read accessors (read siblings of
+ * the HX_SET_*_PTR writers above) — return the union pointer slot itself (no
+ * deref) for casting/null-check/compare. The flip decodes the NaN-boxed pointer
+ * here in one spot. */
+#ifndef HX_ARR_PTR
+#define HX_ARR_PTR(v)   ((v).arr_ptr)
+#define HX_MAP_PTR(v)   ((v).map_ptr)
+#define HX_FN_PTR_D(v)  ((v).fn_ptr_d)
+#define HX_CLO_PTR_D(v) ((v).clo_ptr)
+#endif
 
 HexaVal hexa_add_slow(HexaVal a, HexaVal b);          /* runtime.c:4731 (was static) */
 double  __hx_to_double(HexaVal v);                    /* runtime.c:1242 (was `static inline`) */
@@ -274,6 +313,7 @@ HexaVal rt_path_exists(HexaVal path);                 /* runtime_core.c — stat
 HexaVal rt_read_lines(HexaVal path);                  /* runtime.c:4921 — defined but header-decl was missing → implicit-decl error in transpiled user.c */
 HexaVal rt_read_bytes_at(HexaVal path, HexaVal offset, HexaVal nbytes); /* runtime_core.c:6849 — ditto */
 HexaVal rt_read_f32_at(HexaVal path, HexaVal byte_off, HexaVal n_floats); /* runtime_core.c — native ranged f32→farr reader (no boxed-byte intermediate; 1B+ load-once mounts) */
+HexaVal rt_read_f32_array_at(HexaVal path, HexaVal byte_off, HexaVal n_floats); /* runtime_core.c — native-FP32 ranged f32→farr32 reader (4 B/elem, RSS≈raw; 1x vs read_f32_at's 2x f64 farr) */
 
 /* process / shell */
 HexaVal hexa_exec(HexaVal cmd);                       /* runtime.c:4153 */
@@ -713,6 +753,29 @@ HexaVal hexa_channel_recv(HexaVal ch_val, HexaVal timeout_ms_val);     /* native
 HexaVal hexa_channel_close(HexaVal ch_val);     /* native/thread.c:219 */
 HexaVal hexa_now_ms(void);     /* native/thread.c:236 */
 HexaVal hexa_thread_spawn(HexaVal fn_val, HexaVal arg_val);     /* native/thread.c:81 */
+/* TAG_FN shim carrier globals (native/thread.c — _hexa_init_thread_fn_shims).
+ * These are the bare-ident bridges hexa source calls (`thread_spawn(fn,arg)`,
+ * `thread_join(t)`, …); user.c references them as extern HexaVal carriers, same
+ * pattern as the hx_pipe_* / hx_setenv fn-pointer carriers above. Unconditional
+ * (the thread.c definitions are outside the HEXA_THREADS guard). */
+extern HexaVal thread_spawn;                                                       /* native/thread.c:383 (fn-pointer carrier) */
+extern HexaVal thread_join;                                                        /* native/thread.c:384 */
+extern HexaVal thread_channel_new;                                                 /* native/thread.c:385 */
+extern HexaVal thread_channel_send;                                                /* native/thread.c:386 */
+extern HexaVal thread_channel_recv;                                                /* native/thread.c:387 */
+extern HexaVal thread_channel_close;                                               /* native/thread.c:388 */
+extern HexaVal sleep_ms;                                                           /* native/thread.c:389 */
+extern HexaVal now_ms;                                                             /* native/thread.c:390 */
+#if defined(HEXA_THREADS)
+/* Real-atomic carrier globals — defined only in the -DHEXA_THREADS build
+ * (thread.c globals live inside the same HEXA_THREADS guard). */
+extern HexaVal atomic_cell_new;                                                    /* native/thread.c:364 (fn-pointer carrier) */
+extern HexaVal atomic_cell_load;                                                   /* native/thread.c:365 */
+extern HexaVal atomic_cell_store;                                                  /* native/thread.c:366 */
+extern HexaVal atomic_cell_add;                                                    /* native/thread.c:367 */
+extern HexaVal atomic_cell_sub;                                                    /* native/thread.c:368 */
+extern HexaVal atomic_cell_cas;                                                    /* native/thread.c:369 */
+#endif /* HEXA_THREADS */
 
 /* native/wait.c */
 HexaVal hexa_proc_wait(HexaVal pid_v, HexaVal flags_v);     /* native/wait.c:21 */
@@ -744,6 +807,23 @@ extern uint64_t g_hexa_ic_hits;
 extern int      g_hexa_ic_stats_enabled;
 HexaVal         hexa_map_get_ic_slow(HexaVal m, const char* key, HexaIC* ic);
 
+#ifndef HEXA_IC_STRUCTID_OFF
+/* fleet-lab b r2 (default-ON, opt-OUT via -DHEXA_IC_STRUCTID_OFF): JSC StructureID
+ * single-int IC fast path — mirrors runtime_core_emit.hexa. The 2-word (order_keys ptr + len)
+ * shape check collapses to a single uint32 struct_id compare (the JSC
+ * get_by_id idiom: cmp $id,(struct_id); jnz slow). MUST stay identical to the
+ * runtime_core.c macro so the precompiled-runtime.o ABI path matches. */
+#define hexa_map_get_ic(M, KEY, IC) \
+    ({ HexaVal __ic_m = (M); HexaIC* __ic = (IC); \
+       HexaMapTable* __ic_t = HX_MAP_TBL(__ic_m); \
+       (__ic_t \
+        && __ic_t->struct_id == __ic->struct_id \
+        && __ic->idx < __ic_t->len) \
+           ? (g_hexa_ic_stats_enabled > 0 \
+              ? (__ic->hits++, g_hexa_ic_hits++, __ic_t->order_vals[__ic->idx]) \
+              : __ic_t->order_vals[__ic->idx]) \
+           : hexa_map_get_ic_slow(__ic_m, (KEY), __ic); })
+#else
 #define hexa_map_get_ic(M, KEY, IC) \
     ({ HexaVal __ic_m = (M); HexaIC* __ic = (IC); \
        (HX_MAP_TBL(__ic_m) \
@@ -754,6 +834,7 @@ HexaVal         hexa_map_get_ic_slow(HexaVal m, const char* key, HexaIC* ic);
               ? (__ic->hits++, g_hexa_ic_hits++, HX_MAP_TBL(__ic_m)->order_vals[__ic->idx]) \
               : HX_MAP_TBL(__ic_m)->order_vals[__ic->idx]) \
            : hexa_map_get_ic_slow(__ic_m, (KEY), __ic); })
+#endif
 
 /* misc */
 HexaVal hexa_exit(HexaVal code);                        /* runtime.c:7518 */
@@ -1215,6 +1296,13 @@ HexaVal hexa_forge_dispatch_gelu(HexaVal in_v, HexaVal out_v,
                                   HexaVal n_v);                              /* runtime.c — fusion L3 glue */
 HexaVal forge_dispatch_gelu(HexaVal in_v, HexaVal out_v,
                              HexaVal n_v);                                    /* runtime.c — fusion L3 glue seam */
+/* P1a (device-resident decode) — forge_dispatch_layernorm(x, g, b, out, R, C,
+ * eps) -> int rc (0 ok / -1 host fallback). Row-wise LayerNorm mirroring host
+ * _bg_layernorm (population var, dt_sqrt, γ/β affine); keeps OUT DEVICE-RESIDENT
+ * via _hx_cuda_farr_layernorm_rows_gpu. no-CUDA → -1 → host _bg_layernorm. */
+HexaVal hexa_forge_dispatch_layernorm(HexaVal x_v, HexaVal g_v, HexaVal b_v,
+                                      HexaVal out_v, HexaVal r_v, HexaVal c_v,
+                                      HexaVal eps_v);                          /* runtime.c — P1a device LN */
 /* HEXA-FUSION L3-b — dual GELU fused (the 2 expert-conv activations
  * eo0->ex0, eo1->ex1) in ONE device launch. 5 args; calls _hx_cuda_farr_gelu2_gpu.
  * byte-eq == two separate forge_dispatch_gelu (same erf-based cdf per input). */
@@ -1523,6 +1611,24 @@ HexaVal forge_dispatch_stdp_pair(HexaVal W_v, HexaVal tr_pre_v,
                                  HexaVal out_v, HexaVal A_plus_v,
                                  HexaVal A_minus_v, HexaVal w_max_v);      /* runtime.c — flame STDP GPU seam */
 
+/* ── #4214 forge determinism API — torch.use_deterministic_algorithms() ref-match ──
+ * PRIMARY surface for in-process det control. hexa callers use extern fn:
+ *   extern fn hexa_forge_set_deterministic(on: int)
+ *   extern fn hexa_forge_is_deterministic() -> int
+ * CUDA build: bodies in runtime_cuda.c (_hx_forge_det_mode process-global).
+ * Non-CUDA build: inline no-op stubs (det mode irrelevant; no GPU kernels).
+ * API takes precedence over HEXA_DET env (env = escape-hatch for shell/CI). */
+#ifdef HEXA_CUDA
+void hexa_forge_set_deterministic(int on);   /* runtime_cuda.c — #4214 */
+int  hexa_forge_is_deterministic(void);      /* runtime_cuda.c — #4214 */
+#else
+static inline void hexa_forge_set_deterministic(int on) { (void)on; }
+static inline int  hexa_forge_is_deterministic(void) {
+    const char* v = getenv("HEXA_DET");
+    return (v && v[0] && v[0] != '0') ? 1 : 0;
+}
+#endif
+
 /* ── safetensors mmap-backed zero-copy load (RFC 025) ──────────────
  * codegen.hexa lowers safetensors_mmap_* builtins to direct
  * `hexa_safetensors_mmap_*` calls (1-arg: open/header/data_offset/
@@ -1667,6 +1773,8 @@ HexaVal hexa_farr_matmul_gpu(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
  * external so the committed codegen's fallback path resolves cleanly. */
 extern HexaVal cuda_available;                                         /* runtime.c — RFC 040 fn carrier */
 extern HexaVal cuda_device_count;                                      /* runtime.c — RFC 040 fn carrier */
+extern HexaVal set_deterministic;                                      /* runtime.c — #4214 forge-det carrier (mirror cuda_available) */
+extern HexaVal is_deterministic;                                       /* runtime.c — #4214 forge-det carrier (mirror cuda_available) */
 extern HexaVal farr_to_device;                                         /* runtime.c — RFC 040 fn carrier */
 extern HexaVal farr_to_host;                                           /* runtime.c — RFC 040 fn carrier */
 extern HexaVal farr_pin;                                               /* runtime.c — RFC 040 fn carrier */
@@ -1770,6 +1878,44 @@ HexaVal farr_rmsnorm_mh_gpu(HexaVal x_v, HexaVal g_v, HexaVal y_v,
 HexaVal farr_attn_dt_fwd_gpu(HexaVal q_v, HexaVal k_v, HexaVal v_v,
                              HexaVal p_v, HexaVal ctx_v, HexaVal T_v,
                              HexaVal nh_v, HexaVal nkv_v, HexaVal hd_v);       /* runtime.c — mk2-C4 (9-arg bare) */
+HexaVal farr_attn_dt_decode_gpu(HexaVal q_v, HexaVal k_v, HexaVal v_v,
+                                HexaVal s_v, HexaVal ctx_v, HexaVal Lrows_v,
+                                HexaVal nh_v, HexaVal nkv_v, HexaVal hd_v);    /* runtime.c — P2 single-query KV-decode (9-arg bare) */
+HexaVal farr_attn_dt_decode_batch_gpu(HexaVal q_v, HexaVal k_v, HexaVal v_v,
+                                      HexaVal s_v, HexaVal ctx_v, HexaVal N_v,
+                                      HexaVal Lrows_v, HexaVal cap_v,
+                                      HexaVal nh_v, HexaVal nkv_v,
+                                      HexaVal hd_v);                          /* runtime.c — lever3 batched KV-decode (11-arg bare) */
+/* S1 FP32-e2e decode (#21 gold, opt-in HEXA_DECODE_FP32) — bare carriers.
+ * NOTE: the ≤4-arity ops carry trailing reserved args (r*_v, pass 0) so their
+ * arity is ≥5 — the transpiler's indirect-call path tops out at hexa_call4, so
+ * a bare ≤4-arg carrier would route through hexa_callN (boxed-callable dispatch)
+ * instead of a direct C call. ≥5 args forces the direct call. */
+HexaVal farr_mark_f32(HexaVal id_v, HexaVal n_v,
+                      HexaVal r1_v, HexaVal r2_v, HexaVal r3_v);             /* runtime.c — alloc+zero f32 mirror */
+HexaVal farr_to_f32(HexaVal id_v, HexaVal n_v,
+                    HexaVal r1_v, HexaVal r2_v, HexaVal r3_v);              /* runtime.c — cast d_buf→d_f32 */
+HexaVal farr_to_f64(HexaVal id_v, HexaVal n_v,
+                    HexaVal r1_v, HexaVal r2_v, HexaVal r3_v);              /* runtime.c — cast d_f32→host f64 */
+HexaVal farr_matmul_f32_gpu(HexaVal a_v, HexaVal M_v, HexaVal K_v,
+                            HexaVal w_v, HexaVal N_v, HexaVal out_v);        /* runtime.c — cast-free f32 own-GEMM */
+HexaVal farr_layernorm_f32_gpu(HexaVal x_v, HexaVal g_v, HexaVal b_v,
+                               HexaVal out_v, HexaVal r_v, HexaVal c_v,
+                               HexaVal eps_v);                              /* runtime.c — f32 layernorm rows */
+HexaVal farr_resid_layernorm_f32_gpu(HexaVal h_v, HexaVal add_v, HexaVal g_v,
+                                     HexaVal b_v, HexaVal y_v, HexaVal r_v,
+                                     HexaVal c_v, HexaVal eps_v);           /* runtime.c — r7 fused resid+LN */
+HexaVal farr_gelu_f32_gpu(HexaVal in_v, HexaVal out_v, HexaVal n_v,
+                          HexaVal r1_v, HexaVal r2_v);                       /* runtime.c — f32 gelu */
+HexaVal farr_residual_add_f32_gpu(HexaVal a_v, HexaVal b_v,
+                                  HexaVal out_v, HexaVal n_v, HexaVal r1_v); /* runtime.c — f32 residual add */
+HexaVal farr_copy_slice_f32_gpu(HexaVal src_v, HexaVal soff_v, HexaVal dst_v,
+                                HexaVal doff_v, HexaVal n_v);                /* runtime.c — f32 D2D KV append */
+HexaVal farr_attn_dt_decode_batch_f32_gpu(HexaVal q_v, HexaVal k_v, HexaVal v_v,
+                                          HexaVal s_v, HexaVal ctx_v, HexaVal N_v,
+                                          HexaVal Lrows_v, HexaVal cap_v,
+                                          HexaVal nh_v, HexaVal nkv_v,
+                                          HexaVal hd_v);                     /* runtime.c — f32 batched decode attn (f64-roundtrip island) */
 HexaVal farr_attn_dt_bwd_gpu(HexaVal q_v, HexaVal k_v, HexaVal v_v,
                              HexaVal p_v, HexaVal dctx_v, HexaVal dq_v,
                              HexaVal dk_v, HexaVal dv_v, HexaVal T_v,

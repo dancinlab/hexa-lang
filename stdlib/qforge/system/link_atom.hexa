@@ -61,6 +61,7 @@ pub fn link_cap_position(r_q: [float], r_h: [float], g: float) -> [float] {
 // Placement ratio from explicit bond lengths: g = d_QL / d_QH. The desired cap
 // bond length d_QL (e.g. C—H 1.09 Å) over the live host distance d_QH.
 pub fn link_cap_ratio(d_ql: float, d_qh: float) -> float {
+    if d_qh <= 0.0 { return 0.0 }   // coincident host distance → /d_qh Inf
     return d_ql / d_qh
 }
 

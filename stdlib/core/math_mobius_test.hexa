@@ -1,0 +1,70 @@
+// HEXA Standard Library — core/math Möbius μ(n) G5 test
+//
+// Exercises mobius(n) = μ(n) (OEIS A008683) exposed by
+// stdlib/core/math.hexa:
+//   μ(1)=1; μ(n)=0 if n has a squared prime factor;
+//   else μ(n)=(−1)^k where k = #distinct prime factors.
+//
+// Known values cross-checked against OEIS A008683.
+//
+// Self-contained — inline the module surface (matches the
+// math_numtheory_test.hexa idiom; sidesteps cross-file import path).
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut failed_name = ""
+
+fn check_eq_int(name, got, want) {
+    total_count = total_count + 1
+    if got == want {
+        pass_count = pass_count + 1
+    } else {
+        if failed_name == "" { failed_name = name }
+        println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want))
+    }
+}
+
+// ── inlined module surface (verbatim from stdlib/core/math.hexa) ────────
+
+fn mobius_t(n) -> int {
+    if n == 1 { return 1 }
+    let count = 0
+    let x = n
+    let d = 2
+    while d * d <= x {
+        if x % d == 0 {
+            x = x / d
+            if x % d == 0 { return 0 }
+            count = count + 1
+        }
+        d = d + 1
+    }
+    if x > 1 { count = count + 1 }
+    if count % 2 == 0 { 1 } else { -1 }
+}
+
+fn main() {
+    // ── μ known values — OEIS A008683 ────────────────────────────────
+    check_eq_int("mu(1)", mobius_t(1), 1)        // empty product
+    check_eq_int("mu(2)", mobius_t(2), -1)       // 1 prime
+    check_eq_int("mu(3)", mobius_t(3), -1)       // 1 prime
+    check_eq_int("mu(4)", mobius_t(4), 0)        // 2^2 squared factor
+    check_eq_int("mu(5)", mobius_t(5), -1)       // 1 prime
+    check_eq_int("mu(6)", mobius_t(6), 1)        // 2·3 → 2 distinct
+    check_eq_int("mu(8)", mobius_t(8), 0)        // 2^3 squared factor
+    check_eq_int("mu(9)", mobius_t(9), 0)        // 3^2 squared factor
+    check_eq_int("mu(10)", mobius_t(10), 1)      // 2·5 → 2 distinct
+    check_eq_int("mu(12)", mobius_t(12), 0)      // 2^2·3 squared factor
+    check_eq_int("mu(30)", mobius_t(30), -1)     // 2·3·5 → 3 distinct
+    check_eq_int("mu(105)", mobius_t(105), -1)   // 3·5·7 → 3 distinct
+    check_eq_int("mu(210)", mobius_t(210), 1)    // 2·3·5·7 → 4 distinct
+    check_eq_int("mu(2310)", mobius_t(2310), -1) // 2·3·5·7·11 → 5 distinct
+    check_eq_int("mu(49)", mobius_t(49), 0)      // 7^2 squared factor
+    check_eq_int("mu(50)", mobius_t(50), 0)      // 2·5^2 squared factor
+
+    println("PASS " + to_string(pass_count) + "/" + to_string(total_count))
+    if failed_name != "" {
+        println("first fail: " + failed_name)
+        exit(1)
+    }
+}
