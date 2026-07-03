@@ -1067,6 +1067,45 @@ for k in ["math", "sci", "eng"] {
 check("map accumulate", total, 270)
 
 // =====================================================================
+// SECTION 21: @own param annotation (HEXA-OWN L2 r2b two-backend parity)
+// =====================================================================
+// Inline `@own` on a fn param must PARSE under gen2 (self/parser.hexa
+// p_absorb_param_annotations) so the surface is not native-frontend-only.
+// Runtime behavior must be UNCHANGED — the marker is a fn-level carrier
+// consumed only by the native HEXA_OWN_LINT=1 HX3012 lint; gen2 attaches
+// "own|<pname>" to FnDecl.annotations and otherwise ignores it.
+println("")
+println("--- 21. @own param annotation ---")
+
+// First-param position, typed.
+fn own_first_param(@own xs: [int]) {
+    let mut s = 0
+    for v in xs {
+        s = s + v
+    }
+    return s
+}
+check("@own first param parses+runs", own_first_param([1, 2, 3]), 6)
+
+// Comma-tail position, mixed with a plain param.
+fn own_tail_param(a, @own b: [int]) {
+    return a + len(b)
+}
+check("@own comma-tail param parses+runs", own_tail_param(10, [1, 2]), 12)
+
+// Untyped @own param (type annotation is optional in param grammar).
+fn own_untyped(@own m) {
+    return m * 2
+}
+check("@own untyped param parses+runs", own_untyped(21), 42)
+
+// Both params annotated.
+fn own_both(@own a: [int], @own b: [int]) {
+    return len(a) * 10 + len(b)
+}
+check("@own on both params", own_both([7], [8, 9]), 12)
+
+// =====================================================================
 // SUMMARY
 // =====================================================================
 println("")
