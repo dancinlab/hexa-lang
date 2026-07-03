@@ -1299,6 +1299,119 @@ fn _own_lint_has_own_ann(e: Expr) -> bool {
     return false
 }
 
+// ── HEXA-OWN L2.5 r1 — arena-escape lint registry (HX3013) ───────
+//
+// Opt-in (`HEXA_ARENA_ESCAPE_LINT=1`), warning-band. Targets the escape
+// hole the fn-arena runtime EXPLICITLY does not cover (self/runtime_core.c
+// :3432 "env escape unheapified"): `__hexa_fn_arena_return` heapifies only
+// the RETURN value, and `hexa_array_push` heapifies push-into-outer-array —
+// but a fn-local arena-allocated composite STORED INTO A MODULE GLOBAL is
+// never heapified, so the global dangles after the fn's `scope_pop`. Rule B
+// (native aprime frontend, check-side only — zero codegen/runtime change):
+// warn when a fn-local `let` whose RHS is a composite literal (array /
+// struct literal → arena-allocated on the default arena path) is later
+// assigned to a module-level `let` global via a bare-ident RHS.
+//
+// Discipline mirrors the L2 own-lint registry above (recipe-mandated):
+//   * population is FLAG-GATED at every call site — the default build
+//     pushes nothing (structurally zero-cost, byteeq-neutral);
+//   * per-FN lifetime for the local arrays (reset next to _own_lint_reset
+//     in type_check's per-fn loop); per-MODULE lifetime for the globals
+//     list (reset+populated up front in type_check);
+//   * SEPARATE parallel arrays — never share _own_lint_* state (L2/L2.5
+//     must not cross-contaminate), never encode state via benv redefines
+//     (_types_env_lookup is first-hit-wins);
+//   * emission-only at the check site (no state mutation on emit): a
+//     scratch re-infer pass discards its sink, so no span-dedup is needed.
+let mut _arena_esc_names: [string] = []     // fn-local composite-lit `let`s
+let mut _arena_esc_def_lines: [i64] = []    // their decl lines (diag arg)
+let mut _arena_esc_locals: [string] = []    // ALL fn-local let names (shadow guard)
+let mut _arena_esc_globals: [string] = []   // module-level let item names
+
+fn _arena_esc_reset() {
+    _arena_esc_names = []
+    _arena_esc_def_lines = []
+    _arena_esc_locals = []
+}
+
+fn _arena_esc_globals_reset() {
+    _arena_esc_globals = []
+}
+
+// Newest-entry-wins scan (from the END), mirroring _own_lint_find.
+fn _arena_esc_find(name: string) -> i64 {
+    let mut i = len(_arena_esc_names) - 1
+    while i >= 0 {
+        if _arena_esc_names[i] == name { return i }
+        i = i - 1
+    }
+    return 0 - 1
+}
+
+fn _arena_esc_name_in(list: [string], name: string) -> bool {
+    let mut i = 0
+    while i < len(list) {
+        if list[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Composite-literal predicate: an ArrayLit / StructLit RHS is allocated in
+// the enclosing fn's arena on the default path (hexa_val_arena_on). Full
+// exhaustive ExprKind match — the established predicate idiom of this file
+// (`_types_is_let` et al.). Known limitation (warning-band lint, commented
+// not guarded): a later same-named NON-composite `let` re-declaration does
+// not tombstone an earlier composite entry (newest-wins scan hits the
+// composite one) — acceptable false-positive surface for r1.
+fn _arena_esc_is_composite(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::ArrayLit -> true,
+        ExprKind::StructLit -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+// Registration for one block-statement `let` (called from the Block arm,
+// flag-gated at the call site): every let name enters the shadow-guard
+// list; a composite-literal RHS additionally enters the escape-candidate
+// registry with its decl line.
+fn _arena_esc_register_let(och: Expr) {
+    let nm = _types_let_name(och.text)
+    if len(nm) == 0 { return }
+    _arena_esc_locals.push(nm)
+    if len(och.children) > 0 && _arena_esc_is_composite(och.children[0].kind) {
+        _arena_esc_names.push(nm)
+        _arena_esc_def_lines.push(och.span.line)
+    }
+}
+
 // Wall A r5 — strip the `named:` prefix a struct-typed receiver's inferred /
 // recorded Type carries (`_types_lower_type_ref` lowers any non-primitive
 // named annotation `Point` to kind `named:Point`). Returns the bare struct
@@ -1609,6 +1722,21 @@ fn _emit_hx3012(name: string, def_line: i64, moved_line: i64, sp: Span, out: arr
     b = diag_arg(b, "name", name)
     b = diag_arg(b, "def_line", to_string(def_line))
     b = diag_arg(b, "moved_line", to_string(moved_line))
+    out.push(diag_emit(b))
+}
+
+// HX3013 — opt-in arena-escape lint (HEXA_ARENA_ESCAPE_LINT=1), HEXA-OWN
+// L2.5 r1 Rule B. Same warning-band contract as HX3012 (renders, never
+// aborts); only emitted under the flag, so the default diagnostic stream
+// is byte-identical (byteeq-neutral). Emission-only — no registry state
+// change here, so a scratch-sink re-infer discards cleanly (no dedup
+// needed, unlike _own_lint_touch's move-state push).
+fn _emit_hx3013(name: string, global: string, def_line: i64, sp: Span, out: array) {
+    let mut b = diag_new("HX3013")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "global", global)
+    b = diag_arg(b, "def_line", to_string(def_line))
     out.push(diag_emit(b))
 }
 
@@ -2118,6 +2246,20 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                     }
                 }
             }
+            // HEXA-OWN L2.5 r1 — track fn-local `let` bindings for the
+            // arena-escape lint: every name enters the shadow guard (an
+            // assignment to a same-named LOCAL must not warn), a composite-
+            // literal RHS (array/struct literal → fn-arena-allocated on the
+            // default path) additionally enters the escape-candidate
+            // registry. Same placement as the @own registration above
+            // (AFTER child inference → correct decl-before-use ordering);
+            // flag first (short-circuit) → default build byteeq-neutral.
+            if env("HEXA_ARENA_ESCAPE_LINT") == "1" {
+                let ach = e.children[i]
+                if _types_is_let(ach.kind) {
+                    _arena_esc_register_let(ach)
+                }
+            }
             i = i + 1
         }
         return last
@@ -2436,6 +2578,24 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // (short-circuit) → the default build is byteeq-neutral.
             if env("HEXA_OWN_LINT") == "1" && _types_is_ident(e.children[1].kind) {
                 _own_lint_touch(e.children[1], out)
+            }
+            // HEXA-OWN L2.5 r1 Rule B — arena-escape into a module global
+            // (HX3013). `g = x` where `g` is a module-level `let` item (and
+            // NOT shadowed by a fn-local let) and `x` is a fn-local binding
+            // whose RHS was a composite literal: the composite lives in the
+            // fn's arena, `__hexa_fn_arena_return` heapifies only the RETURN
+            // value (self/runtime_core.c:4605), so after scope_pop the
+            // global holds reclaimed arena memory — the runtime-admitted
+            // unheapified escape (runtime_core.c:3432). Warning-band, flag
+            // first (short-circuit) → default build byteeq-neutral.
+            if env("HEXA_ARENA_ESCAPE_LINT") == "1" && _types_is_ident(e.children[0].kind) && _types_is_ident(e.children[1].kind) {
+                let gnm = e.children[0].text
+                if _arena_esc_name_in(_arena_esc_globals, gnm) && !_arena_esc_name_in(_arena_esc_locals, gnm) {
+                    let ai = _arena_esc_find(e.children[1].text)
+                    if ai >= 0 {
+                        _emit_hx3013(e.children[1].text, gnm, _arena_esc_def_lines[ai], e.span, out)
+                    }
+                }
             }
         }
         return _types_t_unit()
@@ -3895,6 +4055,19 @@ pub fn type_check(module: Module) -> array {
         pass1 = pass1 + 1
     }
 
+    // HEXA-OWN L2.5 r1 — populate the per-MODULE arena-escape globals list
+    // (module-level `let` item names) from the let-index built above, BEFORE
+    // the fn-body walk consumes it at the assign site. Flag first (short-
+    // circuit) → the default build resets/pushes nothing (byteeq-neutral).
+    if env("HEXA_ARENA_ESCAPE_LINT") == "1" {
+        _arena_esc_globals_reset()
+        let mut gi = 0
+        while gi < len(let_idx) {
+            _arena_esc_globals.push(module.items[let_idx[gi]].name)
+            gi = gi + 1
+        }
+    }
+
     // Per-fn body check (the hot path).
     let mut fi = 0
     while fi < len(fn_idx) {
@@ -3919,6 +4092,14 @@ pub fn type_check(module: Module) -> array {
         // the default build (byteeq-neutral; the registry stays empty).
         if env("HEXA_OWN_LINT") == "1" {
             _own_lint_reset()
+        }
+        // HEXA-OWN L2.5 r1 — the arena-escape registry (composite-lit lets +
+        // fn-local shadow guard) is likewise PER-FN: reset before every body
+        // walk so fn A's locals never leak into fn B. Its own flag, its own
+        // arrays — L2 (HX3012) and L2.5 (HX3013) state never cross-
+        // contaminates. Flag first → default build byteeq-neutral.
+        if env("HEXA_ARENA_ESCAPE_LINT") == "1" {
+            _arena_esc_reset()
         }
         // Walk body — inner Returns validate against ctx.fn_return.
         let body_t = _infer_expr(it.body, local, ctx, out)
