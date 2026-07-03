@@ -454,6 +454,12 @@ pub let mut _lr_defer_ret_local = -1
 //   * scalars (Copy) are never registered; unknown-typed locals are not
 //     tracked (precision-first: false-negatives allowed, FPs not).
 pub let mut _bck_on = false        // HEXA_BORROWCK=1, read once per lower_hir
+// HEXA-OWN L4 Lane-B B0 — HEXA_BORROWCK_STRICT=1: same precise detection,
+// but the emitted HX3014 is escalated to Severity::Error (build-refusing)
+// in `_emit_hx3014`. STRICT implies ON (one flag for users). OFF (neither
+// env set) leaves this false and the escalation branch unreached → the
+// emitted binary is byte-identical (byteeq-neutral).
+pub let mut _bck_strict = false    // HEXA_BORROWCK_STRICT=1, read once per lower_hir
 pub let mut _bck_active = false    // per-fn gate; suspended in closure bodies
 pub let mut _bck_grp_ctr: i64 = 0  // fresh group-representative ids (per fn)
 // tracked-local registry (push-only; newest entry for a local id wins)
@@ -603,7 +609,18 @@ fn _emit_hx3014(rule: string, name: string, other: string, line: i64, sp: Span) 
     b = diag_arg(b, "name", name)
     b = diag_arg(b, "other", other)
     b = diag_arg(b, "line", to_string(line))
-    _lr_diag.push(diag_emit(b))
+    let mut d = diag_emit(b)
+    // HEXA-OWN L4 Lane-B B0 — under HEXA_BORROWCK_STRICT the SAME diagnostic
+    // instance (same code/span/args — detection precision unchanged) is
+    // escalated from the catalog Warning band to a build-refusing Error via
+    // the sanctioned caller-override path (builder.hexa:21-22). The drain
+    // fatal-gate (main.hexa `_has_errors`) then aborts before codegen. When
+    // STRICT is off this branch is unreached, so the diag stream and emitted
+    // binary are byte-identical (byteeq-neutral).
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
 }
 
 // The two rules — evaluated at every ident USE that resolves to a local
@@ -4826,6 +4843,11 @@ pub fn lower_hir(module: HModule) -> MModule {
     // (same idiom as `_arru_native_enabled`, but latched so repeated
     // env() lookups never appear on hot paths) + reset the @own map.
     _bck_on = env("HEXA_BORROWCK") == "1"
+    // HEXA-OWN L4 Lane-B B0 — STRICT escalation flag (fatal HX3014).
+    // STRICT implies ON: one user-facing flag, mirrored as an OR so a bare
+    // HEXA_BORROWCK_STRICT=1 enables the same detection then escalates it.
+    _bck_strict = env("HEXA_BORROWCK_STRICT") == "1"
+    _bck_on = _bck_on || _bck_strict
     _bck_active = false
     _bck_own_fns = []
     _bck_own_pidx = []

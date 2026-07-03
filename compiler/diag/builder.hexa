@@ -234,6 +234,27 @@ pub fn diag_related(b: DiagBuilder, code: string) -> DiagBuilder {
     }
 }
 
+// Caller-side severity override. Returns a copy of `d` with `severity`
+// replaced; every other field is preserved. This is the sanctioned
+// "severity may be overridden later by the caller" path (see the module
+// header, builder.hexa:21-22) — the catalog stays the default source of
+// truth, but a caller with policy context (e.g. HEXA-OWN L4 Lane-B B0
+// escalating HX3014 to Error under HEXA_BORROWCK_STRICT) can re-band a
+// single emitted instance without minting a new catalog code.
+pub fn diag_with_severity(d: Diagnostic, sev: Severity) -> Diagnostic {
+    return Diagnostic {
+        code: d.code,
+        severity: sev,
+        stage: d.stage,
+        span: d.span,
+        message: d.message,
+        note: d.note,
+        suggest: d.suggest,
+        fixit: d.fixit,
+        related: d.related
+    }
+}
+
 // Severity → catalog-ish title-case string, used by HX9000 inlining
 // (suppressed_severity_original arg keeps the ORIGINAL severity visible
 // even after @grace downgrades the build-fail to a Warning).

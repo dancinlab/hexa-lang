@@ -5,11 +5,18 @@
 //
 // Probe matrix for the MIR intra-block loan pass (HEXA_BORROWCK=1,
 // spec state/hexa-own/l3_m3_spec.md §4). Every source probe runs the
-// REAL pipeline — lex → parse → ast_to_hir lower → lower_hir — twice:
-// once with the flag ON (expected HX3014 count per probe) and once
-// with it OFF (expected 0 diagnostics of ANY code: byteeq-neutral
-// stream proof at the diag level; asm byte-identity is the pool/CI
-// byteeq gate's job).
+// REAL pipeline — lex → parse → ast_to_hir lower → lower_hir — across
+// three ambient-flag modes:
+//   * OFF (no flag)            → 0 diagnostics of ANY code (byteeq-
+//                                neutral stream proof at the diag level;
+//                                asm byte-identity is the pool/CI gate's job)
+//   * ON (HEXA_BORROWCK=1)      → expected HX3014 count per probe, Warning band
+//   * STRICT (HEXA_BORROWCK_STRICT=1) → HEXA-OWN L4 Lane-B B0: STRICT
+//                                implies ON, SAME HX3014 count per probe
+//                                (precision survives escalation), but every
+//                                emitted HX3014 is Error-band (build-refusing).
+//                                fp_arr_alias_read / fp_callarg stay 0 under
+//                                STRICT → 0 Error-band (FP-probe verdict holds).
 //
 //   hz_write_alias        `let b = a; b[0]=99; println(a[0])`   → ×1 (Rule 1)
 //   hz_write_alias_field  struct alias, `d.depth=…` then `c.depth` → ×1
@@ -43,6 +50,7 @@ import "../parse/ast.hexa"
 import "../ir/hir.hexa"
 import "../ir/mir.hexa"
 import "../lex/tokens.hexa"
+import "../diag/catalog.hexa"
 import "../atlas/static_index.hexa"
 import "../lower/ast_to_hir.hexa"
 import "../lower/hir_to_mir.hexa"
@@ -72,6 +80,21 @@ fn _count_code(diags: array, code: string) -> i64 {
     return n
 }
 
+// HEXA-OWN L4 Lane-B B0 — count Error-band diagnostics. Under
+// HEXA_BORROWCK_STRICT=1 every emitted HX3014 is re-banded to
+// Severity::Error (build-refusing); the STRICT legs assert this equals
+// the HX3014 count (escalation is severity-only — precision unchanged).
+fn _count_error_band(diags: array) -> i64 {
+    let mut i = 0
+    let mut n = 0
+    while i < len(diags) {
+        let d = diags[i]
+        if d.severity == Severity::Error { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
 fn _print_diags(diags: array) {
     let mut i = 0
     while i < len(diags) {
@@ -93,7 +116,11 @@ fn _print_diags(diags: array) {
 // OFF-mode: expect a fully empty diag stream (byte-neutral proof at
 // the diagnostic level).
 fn _run_probe(label: string, src: string, want_on: i64) -> bool {
-    let flag_on = env("HEXA_BORROWCK") == "1"
+    // STRICT implies ON (mirror of lower_hir's `_bck_on = _bck_on ||
+    // _bck_strict`): a bare HEXA_BORROWCK_STRICT=1 run enables the same
+    // detection, so flag_on must account for both env flags.
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
     let mut want = 0
     if flag_on { want = want_on }
     let mut ok = true
@@ -110,6 +137,16 @@ fn _run_probe(label: string, src: string, want_on: i64) -> bool {
     if other != 0 {
         println("  FAIL: stray non-HX3014 diagnostics = " + to_string(other))
         ok = false
+    }
+    // STRICT band: every emitted HX3014 must be Error-band (build-refusing),
+    // and precision must survive escalation — a want=0 probe (fp_arr_alias_
+    // read / fp_callarg) has zero HX3014 and therefore zero Error-band.
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
     }
     if ok { println("  ok: ×" + to_string(want)) }
     return ok
@@ -329,7 +366,8 @@ fn _build_tp_own_module() -> HModule {
 }
 
 fn _run_tp_own() -> bool {
-    let flag_on = env("HEXA_BORROWCK") == "1"
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
     let mut want = 0
     if flag_on { want = 1 }
     let mut ok = true
@@ -347,6 +385,13 @@ fn _run_tp_own() -> bool {
         println("  FAIL: stray non-HX3014 diagnostics")
         ok = false
     }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
     if len(mm.funcs) != 2 {
         println("  FAIL: expected 2 lowered fns, got " + to_string(len(mm.funcs)))
         ok = false
@@ -362,6 +407,7 @@ fn main() {
     println("  HEXA-OWN L3 M3 — intra-block loan pass (HX3014)")
     let mut mode = "OFF (byteeq-neutral sweep)"
     if env("HEXA_BORROWCK") == "1" { mode = "ON (HEXA_BORROWCK=1)" }
+    if env("HEXA_BORROWCK_STRICT") == "1" { mode = "STRICT (HEXA_BORROWCK_STRICT=1 — HX3014 fatal)" }
     println("  flag mode: " + mode)
     println("══════════════════════════════════════════════")
 
