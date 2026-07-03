@@ -55,23 +55,27 @@ emit_one() {
     # r3 (sh-str-scan): + rt_str_ends_with_native.
     local new; new="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?rt_str_ends_with_native' "$raw" || echo 0)"
     [ "$new" -ge 1 ] || { echo "[regen_str_core] ERROR: $triple emitted only $new/1 rt_str_ends_with_native" >&2; exit 1; }
+    # r4 (sh-str-scan): + rt_str_index_of_native + rt_str_contains_native (substring search).
+    local nio; nio="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?rt_str_index_of_native' "$raw" || echo 0)"
+    [ "$nio" -ge 1 ] || { echo "[regen_str_core] ERROR: $triple emitted only $nio/1 rt_str_index_of_native" >&2; exit 1; }
+    local nco; nco="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?rt_str_contains_native' "$raw" || echo 0)"
+    [ "$nco" -ge 1 ] || { echo "[regen_str_core] ERROR: $triple emitted only $nco/1 rt_str_contains_native" >&2; exit 1; }
     {
         printf '// %s — FROZEN BOOTSTRAP SEED (RT-NATIVE leg B M4 STR — sh-construct-str + sh-str-scan).\n' "$(basename "$out")"
         printf '// GENERATED: tool/regen_str_core_native_s.sh — aprime_cc _drv.hexa --emit=asm\n'
         printf '//   --target=%s -o %s stdlib/runtime/str_core.hexa.\n' "$triple" "$(basename "$out")"
         printf '//   Provides the str-core scan/compare prims (rt_str_eq_native +\n'
-        printf '//   rt_str_starts_with_native + rt_str_ends_with_native, str r2/r3 sh-str-scan)\n'
-        printf '//   as native raw-mem bodies (__hx_ptr_load8 NUL-stop byte walks, byte-faithful\n'
-        printf '//   to the C hxlcl_strcmp(...)==0 / hxlcl_strncmp(s,prefix,plen)==0 /\n'
-        printf '//   sfxlen<=slen && strcmp(s+slen-sfxlen,suffix)==0). These intrinsics are\n'
-        printf '//   gen2-native-only (the hexat C-transpile bootstrap cannot lower them),\n'
+        printf '//   rt_str_starts_with_native + rt_str_ends_with_native + rt_str_index_of_native\n'
+        printf '//   + rt_str_contains_native, str r2/r3/r4 sh-str-scan) as native raw-mem bodies\n'
+        printf '//   (__hx_ptr_load8 NUL-stop byte walks + naive O(n*m) substring search,\n'
+        printf '//   byte-faithful to the C hxlcl_strcmp/strncmp/strstr family). These intrinsics\n'
+        printf '//   are gen2-native-only (the hexat C-transpile bootstrap cannot lower them),\n'
         printf '//   so the bodies enter the shipped runtime.a ONLY via this seed — the rt_hi /\n'
         printf '//   array_core mechanism (resolve_native_str_core_seed).\n'
         printf '//   ABI: %s. External: NONE (fully self-contained).\n' "$abi"
-        printf '//   Lets stage_resolve_runtime_a define HEXA_RT_STR_EQ_NATIVE +\n'
-        printf '//   HEXA_RT_STR_STARTS_WITH_NATIVE + HEXA_RT_STR_ENDS_WITH_NATIVE + ar this .o\n'
-        printf '//   into runtime.a so hexa_str_eq / rt_str_starts_with / rt_str_ends_with\n'
-        printf '//   delegate to the native bodies.\n'
+        printf '//   Lets stage_resolve_runtime_a define HEXA_RT_STR_{EQ,STARTS_WITH,ENDS_WITH,\n'
+        printf '//   INDEX_OF,CONTAINS}_NATIVE + ar this .o into runtime.a so the matching\n'
+        printf '//   hexa_str_* / rt_str_* wrappers delegate to the native bodies.\n'
         sed -E -e 's#"[^"]*str_core\.hexa"#"stdlib/runtime/str_core.hexa"#g' \
                -e 's#^// source: .*str_core\.hexa#// source: stdlib/runtime/str_core.hexa#' "$raw"
     } > "$out"
@@ -86,10 +90,12 @@ emit_one() {
         local t; t="$( (nm "$o" 2>/dev/null || echo) | grep -cE ' T _?rt_str_eq_native')"
         local tsw; tsw="$( (nm "$o" 2>/dev/null || echo) | grep -cE ' T _?rt_str_starts_with_native')"
         local tew; tew="$( (nm "$o" 2>/dev/null || echo) | grep -cE ' T _?rt_str_ends_with_native')"
-        echo "[regen_str_core] $triple → $out (eq:$n/$t · starts_with:$nsw/$tsw · ends_with:$new/$tew globl/T)"
+        local tio; tio="$( (nm "$o" 2>/dev/null || echo) | grep -cE ' T _?rt_str_index_of_native')"
+        local tco; tco="$( (nm "$o" 2>/dev/null || echo) | grep -cE ' T _?rt_str_contains_native')"
+        echo "[regen_str_core] $triple → $out (eq:$n/$t · starts:$nsw/$tsw · ends:$new/$tew · index_of:$nio/$tio · contains:$nco/$tco globl/T)"
     else
         echo "[regen_str_core] WARN $triple: cross-assemble check skipped (no matching toolchain)" >&2
-        echo "[regen_str_core] $triple → $out (eq:$n · starts_with:$nsw · ends_with:$new globl)"
+        echo "[regen_str_core] $triple → $out (eq:$n · starts:$nsw · ends:$new · index_of:$nio · contains:$nco globl)"
     fi
 }
 

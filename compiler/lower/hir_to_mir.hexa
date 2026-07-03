@@ -3015,12 +3015,22 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                     if len(bind_name) > 0 {
                         let mut ctx_b = _fresh_local(ctx2, pc.typ, bind_name)
                         let dst_b = _lr_locals[len(_lr_locals) - 1]
+                        // Map-backed field extract — symmetric with the `field`
+                        // expr lowering (L2811): op="field", args=[scrut, key]
+                        // → codegen emits hexa_map_get(scrut, "<field>"). The
+                        // older `op="field."+name` form (with the name fused
+                        // into the op string) was retired when field access was
+                        // reshaped to a const_str key operand; it had no codegen
+                        // consumer, so this struct-pattern binder produced no
+                        // value until now (the pattern shape was unreachable
+                        // before parse_struct_pattern existed).
                         let mut a2: [Operand] = []
                         a2.push(scrut_op)
+                        a2.push(_const_str_op(field_text))
                         let s2 = Stmt {
                             kind: STMT_ASSIGN,
                             dst: dst_b,
-                            op: "field." + field_text,
+                            op: "field",
                             args: a2,
                             target_block: -1,
                             target_block_else: -1
