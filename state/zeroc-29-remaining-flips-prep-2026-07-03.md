@@ -166,3 +166,25 @@ PR-landing-blocked:
 - `/Users/mini/dancinlab/hexa-lang/self/runtime_core_hxlcl_shim_emit.hexa` (`:144/169/206` shim 게이트·`:535` `hxlcl_atof`·`:835-846` #4409 브랜치)
 - `/Users/mini/dancinlab/hexa-lang/tool/build_selfhost.sh` (`:163`)·`tool/stage_build_hexa` (`:37`)·`tool/stage_prebuild_hexat` (`:51`)
 - `/Users/mini/dancinlab/hexa-lang/self/main.hexa` (`:1422`·`:4445`)
+---
+
+## ⚠️ FALSIFIED (2026-07-03) — WALL-2 default-ON flip (#4489)
+
+WALL-2 free/calloc/realloc default-ON flip (stage_resolve_runtime_a :1901/:2055/:2102
+`:-0` → `:-1`) was pushed as #4489 and **FAILED**: `faithful-nobaseline (linux-x86_64)`
+RED in **21s** (too fast for a build = early resolver failure), while `linux-arm64` PASS
+(inert host-guard confirms the flip is x86-only). Root cause = the resolver's **no-binary
+FATAL** at `stage_resolve_runtime_a:1904-1906`: `if [ -z "$_rnfr_bin" ]; then ... RT-NATIVE-FREE
+FATAL: HEXA_RT_NATIVE_FREE=1 but no hexa/hexat binary found ... return 1`. With default-ON,
+the faithful-nobaseline job invokes the resolver at a stage where `hexat`/`hexa` is not on
+PATH → the FATAL fires and the build aborts. This is exactly the release-integrity hazard
+flagged pre-flip (a coherent-build assumption that FALSIFIED: faithful-nobaseline runs the
+resolver without a hexat binary present).
+
+**Reverted to default-OFF** (per the flip hard rule: any byteeq/faithful RED → immediate
+default-OFF revert). Mechanism stays merged (#4242/#4244), byte-neutral default-OFF.
+
+**Prerequisite for a future WALL-2 flip**: make the resolver's no-binary case GRACEFUL
+(retain the libc shim member, mirroring the non-x86 `IGNORED` path at :1930) instead of
+FATAL, so default-ON does not abort a build that lacks hexat. That resolver-hardening is a
+separate change gated on its own byteeq 3-target + faithful + install-smoke.
