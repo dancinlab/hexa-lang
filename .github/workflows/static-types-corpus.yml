@@ -135,7 +135,7 @@ jobs:
                 --emit=asm --target=x86_64-linux-gnu --error-format=short \
                 -o "$scratch/$base.s" "$f" > "$log" 2>&1 || true
             ran=$((ran + 1))
-            n="$(grep -o -E 'HX301[16]' "$log" | wc -l | tr -d ' ')"
+            n="$( (grep -o -E 'HX301[16]' "$log" || true) | wc -l | tr -d ' ')"
             total=$((total + n))
             if [ "$n" -gt 0 ]; then
               dirty_files=$((dirty_files + 1))
