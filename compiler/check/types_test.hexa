@@ -1141,6 +1141,51 @@ fn _build_case_static_types_r9d() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// static-types r11 — struct-literal MISSING-required-field warning
+// (HEXA_STATIC_TYPES=1, no ARRAY_LOWER dependency). The deliberate PAIR of
+// r9d: r9d REJECTs a PRESENT field the struct doesn't declare; r11 WARNs a
+// DECLARED field the literal OMITS (Rust E0063). One module, one warning +
+// two conservative controls:
+//   struct P { a: i64, b: i64 }
+//   fn f() {
+//       P { a: 1 }           // missing declared `b`   → HX3017 (×1)
+//       P { a: 1, b: 2 }     // all fields provided     → clean
+//       Nope { a: 1 }        // struct unknown to reg   → clean (silent)
+//   }
+// Under the flag exactly 1 HX3017 (the `P{ a: 1 }` omission of `b`); the
+// fully-initialised P and the registry-unknown Nope stay clean, and 0
+// HX3016/HX3011 proves no reject cross-fire (`a`/`b` exist, `1`/`2` coerce).
+// Default build → 0 (byteeq-neutral proof — no registry read, STUB walk
+// unchanged).
+fn _build_case_static_types_r11() -> Module {
+    let f = "case_static_r11.hexa"
+    // struct P { a: i64, b: i64 }
+    let mut sfields = []
+    sfields.push(_param("a", "i64", f, 1, 12))
+    sfields.push(_param("b", "i64", f, 1, 20))
+    let item_p = _struct_item("P", sfields, f, 1)
+    let mut kids = []
+    // P { a: 1 }        — provides only `a`, omits declared `b` → HX3017
+    let mut inits_missing = []
+    inits_missing.push(_field_init("a", _int_expr("1", f, 3, 12), f, 3, 9))
+    kids.push(_struct_lit_expr("P", inits_missing, f, 3, 5))
+    // P { a: 1, b: 2 }  — every declared field provided → clean
+    let mut inits_full = []
+    inits_full.push(_field_init("a", _int_expr("1", f, 4, 12), f, 4, 9))
+    inits_full.push(_field_init("b", _int_expr("2", f, 4, 18), f, 4, 15))
+    kids.push(_struct_lit_expr("P", inits_full, f, 4, 5))
+    // Nope { a: 1 }     — struct not in the registry → silent (unknown-fallback)
+    let mut inits_unk = []
+    inits_unk.push(_field_init("a", _int_expr("1", f, 5, 15), f, 5, 12))
+    kids.push(_struct_lit_expr("Nope", inits_unk, f, 5, 5))
+    let body = _block(kids, f, 2, 1)
+    let item_f = _fn_item("f", [], _empty_type_ref(), body, f, 2)
+    let mut items = []
+    items.push(item_p)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // HEXA-OWN L2 r1 — @own use-after-move lint (HEXA_OWN_LINT=1). A block-local
 // `@own let` binding is single-owner: its first bare-ident consumption (the
 // RHS of a later `let`, an assignment RHS, or a call argument) MOVES it; any
@@ -1799,6 +1844,33 @@ fn main() {
             ok = false
         } else {
             println("  ok: 0 HX3016 / 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (w) static-types r11 — struct-literal MISSING-required-field WARNING.
+    // Flag-ON (HEXA_STATIC_TYPES=1, no ARRAY_LOWER dependency): exactly 1
+    // HX3017 — `P{ a: 1 }` omits the declared field `b` (the NEW r11 missing-
+    // field arm); the fully-initialised `P{ a: 1, b: 2 }` and the registry-
+    // unknown `Nope{ a: 1 }` stay clean (conservative unknown-fallback), and 0
+    // HX3016/HX3011 proves no reject cross-fire. Default build: 0 (byteeq-
+    // neutral proof — the STUB walk is unchanged, no registry read).
+    let diags_w = _run_case("(w) static-types r11 — struct-literal missing required field WARN (HEXA_STATIC_TYPES)", _build_case_static_types_r11())
+    let nw3017 = _count_code(diags_w, "HX3017")
+    let nw3016 = _count_code(diags_w, "HX3016")
+    let nw3011 = _count_code(diags_w, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if nw3017 != 1 || nw3016 != 0 || nw3011 != 0 {
+            println("  FAIL: case (w) HEXA_STATIC_TYPES=1 expected 1 HX3017 (P missing `b`; full init + unknown-struct stay clean) + 0 HX3016 + 0 HX3011, got " + to_string(nw3017) + " HX3017 / " + to_string(nw3016) + " HX3016 / " + to_string(nw3011) + " HX3011 (total=" + to_string(len(diags_w)) + ")")
+            ok = false
+        } else {
+            println("  ok: 1 HX3017 emitted (missing field `b` on known struct P; full init + unknown struct stay clean)")
+        }
+    } else {
+        if nw3017 != 0 {
+            println("  FAIL: case (w) default build expected 0 HX3017 (byteeq-neutral), got " + to_string(nw3017) + " (total=" + to_string(len(diags_w)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3017 (default-OFF → byteeq-neutral)")
         }
     }
 
