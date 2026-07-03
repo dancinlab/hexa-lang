@@ -51,6 +51,27 @@ fn _named_type_ref(name: string) -> TypeRef {
     return TypeRef { kind: "named", name: name, args: [], span: _empty_span() }
 }
 
+// static-types r7-prep — parser-faithful bare `[elem]` array TypeRef
+// (parser.hexa:parse_type, runtime-gap r2c encoding): kind "generic",
+// name "Array:<elem>", element TypeRef carried in args[0].
+fn _generic_array_type_ref(elem: string) -> TypeRef {
+    let mut args = []
+    args.push(_named_type_ref(elem))
+    return TypeRef { kind: "generic", name: "Array:" + elem, args: args, span: _empty_span() }
+}
+
+// static-types r7-prep — Param with an array type annotation (`xs: [elem]`).
+// Mirrors `_param` but swaps the named TypeRef for the generic Array shape.
+fn _array_param(name: string, elem: string, file: string, line: i64, col: i64) -> Param {
+    let t = _generic_array_type_ref(elem)
+    return Param {
+        name: name,
+        typ: t,
+        typs: [t],  // RFC-074 Phase 2 — arity-1 default
+        span: _span(file, line, col, len(name))
+    }
+}
+
 fn _ident_expr(name: string, file: string, line: i64, col: i64) -> Expr {
     return Expr {
         kind: ExprKind::Ident,
@@ -795,6 +816,47 @@ fn _build_case_static_types_r6() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// static-types r7-prep — structured array lowering
+// (HEXA_STATIC_TYPES_ARRAY_LOWER=1). One module whose HX3003 contract is
+// IDENTICAL in both modes — the discriminating proof that the opt-in
+// lowering PRESERVES the element type (a naive kind-only "array" collapse
+// would drop the mismatch below to 0 flag-ON):
+//   fn g(xs: [i32]) {}
+//   fn h(ys: [f64]) { g(ys) }     // [f64] arg vs [i32] param → HX3003 (×1)
+//   fn k(zs: [i32]) { g(zs) }     // [i32] arg vs [i32] param → clean
+// Flag-OFF the mismatch REJECTs via the string sentinels
+// (`generic:Array:f64` ≠ `generic:Array:i32`); flag-ON via the structured
+// element recursion (`[f64]` ≠ `[i32]` in _types_equal). Both modes: exactly
+// 1 HX3003 — flag-OFF byte-neutrality AND flag-ON element preservation in
+// one self-adapting contract.
+fn _build_case_static_types_r7prep() -> Module {
+    let f = "case_static_r7prep.hexa"
+    // fn g(xs: [i32]) {}
+    let g_body = _block([], f, 1, 17)
+    let item_g = _fn_item("g", [_array_param("xs", "i32", f, 1, 6)], _empty_type_ref(), g_body, f, 1)
+    // fn h(ys: [f64]) { g(ys) }   — element mismatch
+    let mut bad_args = []
+    bad_args.push(_ident_expr("ys", f, 2, 21))
+    let bad_call = _call_expr(_ident_expr("g", f, 2, 19), bad_args, f, 2, 19)
+    let mut h_kids = []
+    h_kids.push(bad_call)
+    let h_body = _block(h_kids, f, 2, 17)
+    let item_h = _fn_item("h", [_array_param("ys", "f64", f, 2, 6)], _empty_type_ref(), h_body, f, 2)
+    // fn k(zs: [i32]) { g(zs) }   — element match (clean in both modes)
+    let mut good_args = []
+    good_args.push(_ident_expr("zs", f, 3, 21))
+    let good_call = _call_expr(_ident_expr("g", f, 3, 19), good_args, f, 3, 19)
+    let mut k_kids = []
+    k_kids.push(good_call)
+    let k_body = _block(k_kids, f, 3, 17)
+    let item_k = _fn_item("k", [_array_param("zs", "i32", f, 3, 6)], _empty_type_ref(), k_body, f, 3)
+    let mut items = []
+    items.push(item_g)
+    items.push(item_h)
+    items.push(item_k)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // HEXA-OWN L2 r1 — @own use-after-move lint (HEXA_OWN_LINT=1). A block-local
 // `@own let` binding is single-owner: its first bare-ident consumption (the
 // RHS of a later `let`, an assignment RHS, or a call argument) MOVES it; any
@@ -1111,6 +1173,28 @@ fn main() {
             ok = false
         } else {
             println("  ok: 0 HX3012 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (o) static-types r7-prep — structured array lowering
+    // (HEXA_STATIC_TYPES_ARRAY_LOWER). The contract is IDENTICAL in both
+    // modes — exactly 1 HX3003 (the `g(ys)` [f64]-vs-[i32] mismatch) and a
+    // clean matching `g(zs)`. Flag-OFF that proves the string-sentinel path
+    // is untouched (byteeq-neutral); flag-ON it proves the structured
+    // lowering PRESERVES the element type (a kind-only "array" collapse
+    // would yield 0 HX3003 and FAIL here). r4's element-fit contract, case
+    // (k) above, must hold unchanged under this flag too — it lowers via the
+    // kind:"named" annotation-text path, which this branch never touches.
+    let diags_o = _run_case("(o) static-types r7-prep — array element preserved across lowering (HEXA_STATIC_TYPES_ARRAY_LOWER)", _build_case_static_types_r7prep())
+    let no = _count_code(diags_o, "HX3003")
+    if no != 1 {
+        println("  FAIL: case (o) expected 1 HX3003 in BOTH modes (g(ys) [f64]≠[i32]; matching g(zs) clean), got " + to_string(no) + " (total=" + to_string(len(diags_o)) + ")")
+        ok = false
+    } else {
+        if env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1" {
+            println("  ok: 1 HX3003 emitted (structured lowering — [f64] ≠ [i32] element recursion; matching g(zs) stays clean)")
+        } else {
+            println("  ok: 1 HX3003 emitted (string sentinel — generic:Array:f64 ≠ generic:Array:i32; default-OFF path untouched)")
         }
     }
 
