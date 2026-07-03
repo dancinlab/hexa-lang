@@ -1,0 +1,403 @@
+// HEXA Native Compiler — OUROBOROS-novel M6: scramble-oracle null-model
+//
+// @version 0.1.0
+// @capabilities [stdout]
+//
+// Design SSOT §3: replace the primitive evaluator af() with a deterministic
+// seed-hash RANDOM function and re-run the SAME pipeline spine (verify →
+// KNOWN-contrast → tribunal). FALSIFICATION BAR: if the discriminator promotes
+// any scrambled candidate as genuine-novel (γ) after Bonferroni correction,
+// the α/β/γ discriminator is REFUTED (null γ-rate must be 0).
+//
+// HONESTY (c2):
+//  • γ here and in the pipeline is design-γ = verified ∧ ∉KNOWN ∧ ∉FP_k — the
+//    `verified` precondition lives in Phase-2/4, NOT inside kc_classify
+//    (membership-only). Wiring a null straight into kc_classify manufactures
+//    membership-γ without verification — gate F3 demonstrates that error.
+//  • A GLOBAL af-scramble also scrambles FP_k (oracle-derived, rebuilt each
+//    round), so every size-<=2 well-term stays α BY CONSTRUCTION (gate F2).
+//  • Raw coincidental singletons are the measured bounded-coincidence floor —
+//    the engine already classifies bounded-unique singletons as single-point
+//    accidents; the Texas-sharpshooter tribunal (own-scan rate 1/(N-1),
+//    Bonferroni over the TRUE multiplicity K'=496 — exactly the cells swept, see D12 rescale below) grades them "chance".
+//    A scan design with K/(N-1) < 0.01 would grade a lone chance hit
+//    "structural" and go RED — a real falsification channel, not a rubber-stamp.
+//  • γ (real pipeline) stays catalog-relative bounded[2,N] — NOT absolute
+//    novelty; final novel claims pass hexa verify g5 + human literature check.
+//  • Scope: this nulls the VERIFY+CLASSIFY spine. emerge2's G1-G5 generators
+//    are not re-run under scramble here (M6 merges before #4492; under a
+//    scramble their inputs — verified-law solution sets — are empty/chance by
+//    upstream construction). Their pre-registration invariant = fixed pub
+//    tables + M4 T-gates; this file's own invariant = exhaustive fixed grid
+//    (zero RNG in candidate selection) + byte-eq rerun (gate D1).
+//  • No atlas write · no new builtin (LCG = existing NR pair 1664525/1013904223,
+//    hash constants = frozen fp kernel 1469598103/1000003/2^61-1) ·
+//    byteeq-NEUTRAL companion (hexa run only, not in the drill binary).
+//  • D12 RESCALE (2026-07-04): the original pre-registration (full
+//    K=C(171,2)=14535 grid × NV=2000 × 2 sweeps ≈ 5.8e7 exact-int verify iters,
+//    each 4× af_rand of BigInt ops · hexa int = native BigInt #4161) is
+//    IMPRACTICAL for a companion selftest, which should run in seconds — the
+//    rescaled 2e5-iter version below measures 4.13s / 368 MB on aiden, so the
+//    full grid extrapolates to minutes (~290×). HONESTY (c2): an earlier
+//    "20 GB / >2 h" observation was traced to an UNRELATED stale-checkout
+//    runaway process on the pool host, NOT this test — the actual blocker for
+//    every failed run was a stale aiden checkout missing known_catalog.gen
+//    (module-not-found), so no clean large-scale run was ever measured; the
+//    rescale is a selftest-runtime choice, not a measured OOM wall.
+//    NEW pre-registration (D12, fixed BEFORE any rescaled run): sweep grid =
+//    the FIRST NPAIRS=32 pairs of the same fixed a<=b enumeration order
+//    ⇒ K' = C(32,2) = 496 cells × NV=200 × 2 sweeps ≈ 2e5 iters (~293× less).
+//    K' fed to Bonferroni = exactly the 496 cells swept; K'/(NV-1) = 2.49 >=
+//    0.05 so a lone chance singleton still grades "chance"; the falsification
+//    channel stays live (K'/(NV-1) < 0.01 — e.g. NPAIRS=2 at NV=200 — would
+//    grade a lone chance hit "structural" and go RED). Runtime recalibration,
+//    NOT tune-to-green: every N-gate keeps its ability to fail (N4 floor ~24
+//    analytically forced non-unique tuples at this scale).
+//
+// Run:
+//   hexa run compiler/drill/nullmodel_test.hexa      (pool: aiden)
+
+use "compiler/atlas/identity_engine"
+use "compiler/atlas/known_catalog.gen"
+
+// Bonferroni multiple-comparison correction + verdict, INLINED verbatim from
+// compiler/atlas/symbolic/texas_sharpshooter.hexa (bonferroni_p / verdict).
+// WHY inlined not imported: importing that module triggered a pathological cold
+// compile (>75min vs <7min for the identity_engine+known_catalog-only
+// emerge_test — texas_sharpshooter was the sole import delta). Both formulas
+// are trivial (correction = p·n capped 1.0 · thresholds 0.01/0.05), so this is
+// reference-faithful to the frozen kernel, not a re-implementation of logic.
+fn _nm_bonferroni_p(p: float, n_total: int) -> float {
+    let bp = p * to_float(n_total)
+    if bp > 1.0 { return 1.0 }
+    return bp
+}
+fn _nm_verdict(bonf_p: float) -> string {
+    if bonf_p < 0.01 { return "structural" }
+    if bonf_p < 0.05 { return "weak" }
+    return "chance"
+}
+
+// ── scramble oracle (INLINE: hexa has no fn-pointers, so the scrambled verify
+//    path re-implements the kernels 1:1 with af→af_rand — same reason
+//    additive_test.hexa inlines _verify_cong) ─────────────────────────────
+fn _nm_lcg(s: i64) -> i64 { return (s * 1664525 + 1013904223) & 0xffffffff }
+
+// Deterministic seed-hash random FUNCTION of (n, which) — NOT a stream: the
+// same (n, which) always yields the same value. Scale-profiled to real af's
+// growth classes so the null lives in the same collision regime (fair, not
+// rigged): sign / indicator / log / linear / quadratic / cubic.
+fn af_rand(n: i64, which: i64) -> i64 {
+    let mut s = (n * 1000003 + which + 1469598103) & 0xffffffff
+    s = _nm_lcg(s)
+    s = _nm_lcg(s)
+    s = _nm_lcg(s)
+    if which == 12 { return (s % 3) - 1 }                    // μ-slot: {-1,0,1}
+    if which == 13 { return (s % 3) - 1 }                    // λ-slot: {-1,0,1}
+    if which == 14 { return s % 2 }                          // μ²-slot: {0,1}
+    if which == 4 || which == 10 || which == 11 || which == 16 {
+        return 1 + (s % 16)                                  // τ,Ω,ω,2^ω: log-class
+    }
+    if which == 1 || which == 8 { return 1 + (s % (n * n)) }       // σ₂,J₂: ~n²
+    if which == 2 || which == 15 { return 1 + (s % (n * n * n)) }  // σ₃,J₃: ~n³
+    return 1 + (s % (4 * n))                                 // σ,φ,n,sopfr,rad,ψ,core: ~n
+}
+
+// 1:1 mirror of identity_engine.hexa::verify_identity (af → af_rand).
+// Returns first solution n (>=4) iff exactly one solution, -1 non-unique, -2 none.
+fn _nm_verify(a: i64, b: i64, c: i64, d: i64, N: i64) -> i64 {
+    let mut first = 0
+    let mut count = 0
+    let mut n = 2
+    while n <= N {
+        if af_rand(n, a) * af_rand(n, b) == af_rand(n, c) * af_rand(n, d) {
+            count = count + 1
+            if count == 1 { first = n }
+            if count > 1 { return -1 }
+        }
+        n = n + 1
+    }
+    if count == 0 { return -2 }
+    if first >= 4 { return first }
+    return -1
+}
+
+// 1:1 mirror of is_universal2 (af → af_rand).
+fn _nm_universal(a: i64, b: i64, c: i64, d: i64, N: i64) -> i64 {
+    let mut n = 2
+    while n <= N {
+        if af_rand(n, a) * af_rand(n, b) != af_rand(n, c) * af_rand(n, d) { return 0 }
+        n = n + 1
+    }
+    return 1
+}
+
+// 1:1 mirrors of the frozen fp kernel (ie_term_value / ie_term_fingerprint /
+// ie_fp_table_build / kc_identity_canon_fp) with af → af_rand. Constants are
+// the frozen pair (seed 1469598103 · base 1000003 · P=2^61-1) so scrambled and
+// real fingerprints live in the same space (comparable, never colliding).
+fn _nm_res(v: i64) -> i64 {
+    let p = 2305843009213693951
+    let mut r = v % p
+    if r < 0 { r = r + p }
+    return r
+}
+
+fn _nm_term_value(a: i64, b: i64, n: i64) -> i64 {
+    let va = af_rand(n, a)
+    if b < 0 { return va }
+    return va * af_rand(n, b)
+}
+
+fn _nm_term_fingerprint(a: i64, b: i64, N: i64) -> i64 {
+    let p = 2305843009213693951
+    let mut h = 1469598103
+    let mut n = 2
+    while n <= N {
+        let v = _nm_res(_nm_term_value(a, b, n))
+        h = ((h * 1000003) + v) % p
+        n = n + 1
+    }
+    return h
+}
+
+fn _nm_fp_table_build(N: i64) -> array {
+    let table = []
+    let mut a = 0
+    while a < 18 {
+        table.push(_nm_term_fingerprint(a, -1, N))
+        a = a + 1
+    }
+    a = 0
+    while a < 18 {
+        let mut b = a
+        while b < 18 {
+            table.push(_nm_term_fingerprint(a, b, N))
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return table
+}
+
+fn _nm_canon_fp(a: i64, b: i64, c: i64, d: i64, N: i64) -> i64 {
+    let fl = _nm_term_fingerprint(a, b, N)
+    let fr = _nm_term_fingerprint(c, d, N)
+    let mut lo = fl
+    let mut hi = fr
+    if fr < fl {
+        lo = fr
+        hi = fl
+    }
+    return ((lo * 1000003) + hi) % 2305843009213693951
+}
+
+// ── the null sweep — pre-registered exhaustive grid ─────────────────────
+// Candidate space (D12): the FIRST npairs=32 canonical pairs (a<=b) of the
+// fixed 18-fn enumeration order (row a=0 complete + (1,1)..(1,14), spanning all
+// six growth classes incl. the collision slots 12-14), sentences = pair-index
+// i<j (multiset-degenerate A·B=A·B excluded by i<j) ⇒ K' = C(32,2) = 496 swept
+// cells. Full grid C(171,2)=14535 × NV=2000 = measured wall (20 GB · >2 h,
+// aiden). Fixed prefix, zero RNG, zero data-dependent choice: the enumeration
+// prefix IS the pre-registration (design §3 sharpshooter guard).
+pub struct NullSweep {
+    k: int,          // pre-registered tuple count (14535)
+    nosol: int,      // -2: no solution in [2,N]
+    nonuniq: int,    // -1: count>1 or first<4 (collision mass — anti-rigging)
+    singles: int,    // verified bounded-unique singletons (coincidence floor)
+    univ: int,       // universal-in-[2,N] (impossible for a fair random oracle)
+    beta_hits: int,  // verified with scrambled canon-fp ∈ real KNOWN shard
+    gamma_cand: int, // verified ∧ ∉KNOWN — membership-γ candidates pre-tribunal
+    promoted: int,   // tribunal verdict "structural" — THE null γ-rate
+    sighash: int     // rolling hash of the (a,b,c,d,n) singleton list (D1 gate)
+}
+
+fn _nm_sweep(N: i64, Nw: i64, npairs: i64, known_canon: array) -> NullSweep {
+    let pa = []
+    let pb = []
+    let mut a = 0
+    while a < 18 {
+        let mut b = a
+        while b < 18 {
+            pa.push(a)
+            pb.push(b)
+            b = b + 1
+        }
+        a = a + 1
+    }
+    let np = npairs   // D12: pre-registered prefix of the fixed a<=b list (full list stays 171)
+    let kk = np * (np - 1) / 2
+    let P = 2305843009213693951
+    let mut nosol = 0
+    let mut nonuniq = 0
+    let mut singles = 0
+    let mut univ = 0
+    let mut beta_hits = 0
+    let mut gamma_cand = 0
+    let mut promoted = 0
+    let mut sighash = 1469598103
+    let mut i = 0
+    while i < np {
+        let mut j = i + 1
+        while j < np {
+            let u = _nm_universal(pa[i], pb[i], pa[j], pb[j], N)
+            if u == 1 {
+                // universal by chance: own-scan rate = (N-1)/(N-1) = 1.0
+                univ = univ + 1
+                gamma_cand = gamma_cand + 1
+                if _nm_verdict(_nm_bonferroni_p(1.0, kk)) == "structural" {
+                    promoted = promoted + 1
+                }
+            } else {
+                let v = _nm_verify(pa[i], pb[i], pa[j], pb[j], N)
+                if v == -2 { nosol = nosol + 1 }
+                if v == -1 { nonuniq = nonuniq + 1 }
+                if v >= 4 {
+                    singles = singles + 1
+                    sighash = ((sighash * 1000003) + pa[i]) % P
+                    sighash = ((sighash * 1000003) + pb[i]) % P
+                    sighash = ((sighash * 1000003) + pa[j]) % P
+                    sighash = ((sighash * 1000003) + pb[j]) % P
+                    sighash = ((sighash * 1000003) + v) % P
+                    // Phase-2③ KNOWN contrast, fingerprint-level: the scrambled
+                    // candidate's canon fp vs the REAL @F identity shard.
+                    let cf = _nm_canon_fp(pa[i], pb[i], pa[j], pb[j], Nw)
+                    let mut known = 0
+                    let mut t = 0
+                    while t < len(known_canon) {
+                        if known_canon[t] == cf { known = 1 }
+                        t = t + 1
+                    }
+                    if known == 1 {
+                        beta_hits = beta_hits + 1
+                    } else {
+                        gamma_cand = gamma_cand + 1
+                        // Texas-sharpshooter tribunal: a singleton's own-scan
+                        // chance rate is 1/(N-1), corrected over the K cells
+                        // actually swept. K/(N-1) >= 0.05 ⇒ honest "chance".
+                        let ps = 1.0 / to_float(N - 1)
+                        if _nm_verdict(_nm_bonferroni_p(ps, kk)) == "structural" {
+                            promoted = promoted + 1
+                        }
+                    }
+                }
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return NullSweep { k: kk, nosol: nosol, nonuniq: nonuniq, singles: singles,
+        univ: univ, beta_hits: beta_hits, gamma_cand: gamma_cand,
+        promoted: promoted, sighash: sighash }
+}
+
+fn _check(label: string, got: i64, want: i64, fails: array) {
+    if got == want { println("  PASS  " + label + "  -> " + to_string(got)) }
+    else { println("  FAIL  " + label + "  -> got " + to_string(got) + " want " + to_string(want)); fails.push(label) }
+}
+
+fn main() {
+    println("OUROBOROS-novel M6 — scramble-oracle null-model (design §3 · null γ-rate = 0)")
+    let fails = []
+    let NV = 200       // D12 re-registration (was 2000 = measured wall 20GB·>2h)
+    let NPAIRS = 32    // pair-prefix bound ⇒ K' = C(32,2) = 496 swept cells (D12)
+    let NW = 64        // fingerprint/classify window (M1/M3 convention)
+    let NP = 20000     // positive-control window (= identity_engine_test)
+
+    println("")
+    println("P-gates: REAL machinery fires (imported af/verify — null is not vacuously 0)")
+    _check("P1 φ·J₂=n·ψ bounded-unique @4",        verify_identity(3, 8, 5, 9, NP), 4, fails)
+    _check("P2 σ∘φ=2n bounded-unique @1209",        verify_composition(0, 3, 0, 2, NP), 1209, fails)
+    _check("P3a superperfect σ∘σ=2n |sol|=5",       comp_count(0, 0, 0, 2, NP), 5, fails)
+    _check("P3b Mersenne σ∘σ=σ+n |sol|=5",          comp_count(0, 0, 1, 0, NP), 5, fails)
+    _check("P4 J₂·core·rad=n·φ·ψ universal",        is_universal3(8, 17, 7, 5, 3, 9, NP), 1, fails)
+
+    println("")
+    println("A/B-gates: kc_classify sound under REAL af (before the null indicts it)")
+    let real_fp = ie_fp_table_build(NW)
+    _check("A1 σ (size-1 term) → α",                 kc_classify(ie_term_fingerprint(0, -1, NW), real_fp, NW), 0, fails)
+    _check("A2 σ·φ (size-2 term) → α",               kc_classify(ie_term_fingerprint(0, 3, NW), real_fp, NW), 0, fails)
+    _check("B1 σ∘σ → β (superperfect+Mersenne symbol)", kc_classify(kc_comp_fingerprint(0, 0, NW), real_fp, NW), 1, fails)
+    _check("B2 partition (Ramanujan seq) → β",       kc_classify(kc_seq_fingerprint(0, NW), real_fp, NW), 1, fails)
+    _check("B3 φ∘φ → β",                             kc_classify(kc_comp_fingerprint(3, 3, NW), real_fp, NW), 1, fails)
+    let mut b4 = 0
+    if kc_known_identity(3, 8, 5, 9, NW) { b4 = 1 }
+    _check("B4 φ·J₂=n·ψ ∈ KNOWN identity shard",     b4, 1, fails)
+
+    println("")
+    println("F-gates: FP_k self-consistency under a GLOBAL af-scramble")
+    let nm_fp = _nm_fp_table_build(NW)
+    _check("F1 scrambled FP_k closed-form count",    len(nm_fp), 189, fails)
+    _check("F2 scrambled σ·φ vs scrambled FP_k → α (well-term stays α by construction)",
+           kc_classify(_nm_term_fingerprint(0, 3, NW), nm_fp, NW), 0, fails)
+    _check("F3 scrambled σ·φ vs REAL FP_k → membership-γ (oracle MIXING fabricates γ — the Reading-A error; membership-γ without verified is not design-γ)",
+           kc_classify(_nm_term_fingerprint(0, 3, NW), real_fp, NW), 2, fails)
+
+    println("")
+    println("N-gates: the null sweep (scrambled verify → KNOWN → tribunal)")
+    // real KNOWN canon-fp shard at window NW (58 @F product identities)
+    let kt = kc_af_identity_tuples()
+    let known_canon = []
+    let mut q = 0
+    while q < len(kt) {
+        known_canon.push(kc_identity_canon_fp(kt[q], kt[q + 1], kt[q + 2], kt[q + 3], NW))
+        q = q + 4
+    }
+    let s = _nm_sweep(NV, NW, NPAIRS, known_canon)
+    println("  swept K=" + to_string(s.k) + " pre-registered tuples over [2," + to_string(NV) + "]")
+    println("  no-solution=" + to_string(s.nosol) + "  non-unique=" + to_string(s.nonuniq)
+        + "  singletons(coincidence floor)=" + to_string(s.singles)
+        + "  universal=" + to_string(s.univ))
+    println("  β(∈KNOWN)=" + to_string(s.beta_hits) + "  γ-candidates=" + to_string(s.gamma_cand)
+        + "  PROMOTED(structural)=" + to_string(s.promoted))
+    _check("N0 K' = C(32,2) closed-form (pre-registered pair prefix · D12)", s.k, 496, fails)
+    _check("N1 null γ-rate == 0 (tribunal-promoted — THE falsification bar)", s.promoted, 0, fails)
+    _check("N2 universal-by-chance == 0",            s.univ, 0, fails)
+    _check("N3 coincidence floor < 10% of K (fair, non-degenerate oracle)",
+           (if s.singles * 10 < s.k { 1 } else { 0 }), 1, fails)
+    _check("N4 collision mass >= 20 non-unique (analytic floor ~24 forced tuples at NV=200 · not rigged-to-0 by range inflation)",
+           (if s.nonuniq >= 20 { 1 } else { 0 }), 1, fails)
+    _check("N5 scrambled canon-fp never ∈ KNOWN",    s.beta_hits, 0, fails)
+
+    println("")
+    println("D-gate: deterministic byte-eq rerun (pre-registration invariant)")
+    let s2 = _nm_sweep(NV, NW, NPAIRS, known_canon)
+    let mut same = 0
+    if s2.singles == s.singles {
+        if s2.nonuniq == s.nonuniq {
+            if s2.gamma_cand == s.gamma_cand {
+                if s2.promoted == s.promoted {
+                    if s2.sighash == s.sighash { same = 1 }
+                }
+            }
+        }
+    }
+    _check("D1 identical rerun (all counts + singleton-list hash)", same, 1, fails)
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS — null γ-rate = 0: the discriminator does not promote chance as novel"
+            + " (raw coincidence floor=" + to_string(s.singles) + "/" + to_string(s.k)
+            + " graded chance by the tribunal · bounded[2," + to_string(NV) + "] · c2)")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut z = 0
+        while z < len(fails) {
+            println("  - " + to_string(fails[z]))
+            z = z + 1
+        }
+        exit(1)
+    }
+}
+
+// is_main guard (mirrors absorb_test.hexa / additive_test.hexa)
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/nullmodel_test.hexa") { return true }
+    if s == "nullmodel_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }
