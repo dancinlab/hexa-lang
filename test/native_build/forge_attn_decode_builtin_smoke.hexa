@@ -1,0 +1,39 @@
+// test/native_build/forge_attn_decode_builtin_smoke.hexa
+// P2 (device-resident decode) farr_attn_dt_decode_gpu — consumer-compile smoke.
+//
+// farr_attn_dt_decode_gpu(q, k, v, s, ctx, Lrows, nh, nkv, hd) -> int rc is a
+// 9-arg native runtime builtin: single-query KV-cache decode attention (ONE query
+// row q[nh*hd] attends over Lrows cached K/V rows; dt_sqrt scale + dt_exp softmax;
+// device-resident on CUDA, byte-eq CPU fallback _hx_farr_attn_dt_decode_cpu on
+// no-CUDA). It is the P2 sibling of the 9-arg farr_attn_dt_fwd_gpu and lowers via
+// the SAME seam: >4 args exceed the hexa_callN ceiling, so self/codegen.hexa's
+// call fallthrough emits the bare C symbol `farr_attn_dt_decode_gpu` (declared in
+// self/runtime.h, defined in the runtime_emit_full carrier) — NO forge_dispatch
+// arg-count binding to misplace (sidesteps the #4339 class entirely).
+//
+// WHY THIS SMOKE EXISTS: byteeq-neutral is NECESSARY but NOT SUFFICIENT for a new
+// GPU builtin to be functional — self/ never calls it, so gen3==gen4 reconverges
+// even if the runtime.h proto / carrier / bare-name lowering is broken (the
+// #4339 forge_dispatch_layernorm and #4285 set_deterministic latent-break class).
+// This smoke CALLS the builtin so the bare-name call MUST lower to a declared
+// symbol AND link every PR — a green-but-broken wiring can never ship again.
+// SSOT: convergence codegen-hexa-1.
+//
+// It asserts COMPILATION + LOWERING + LINK, not a numeric result: on a non-CUDA
+// build farr_attn_dt_decode_gpu runs the host CPU mirror (rc 0). Reaching the end
+// = PASS.
+fn main() {
+    let nh    = 2
+    let nkv   = 2
+    let hd    = 4
+    let d     = nh * hd
+    let Lrows = 3
+    let q   = farr_zeros(d)              // single query row [nh*hd]
+    let k   = farr_zeros(Lrows * d)      // K cache, Lrows live rows
+    let v   = farr_zeros(Lrows * d)      // V cache, Lrows live rows
+    let s   = farr_zeros(nh * Lrows)     // per-head score scratch
+    let ctx = farr_zeros(d)              // context out [nh*hd]
+    let rc = farr_attn_dt_decode_gpu(q, k, v, s, ctx, Lrows, nh, nkv, hd)
+    print("farr_attn_dt_decode_gpu compiled+lowered+ran: rc=") ; println(rc)
+    println("forge_attn_decode_builtin_smoke: PASS (device KV-decode attention builtin lowers to farr_attn_dt_decode_gpu + links)")
+}

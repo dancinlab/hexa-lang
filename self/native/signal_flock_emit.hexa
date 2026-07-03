@@ -68,10 +68,19 @@ fn emit_signal_flock_c() -> str {
             "#include <unistd.h>\n" +
             "#include <string.h>\n" +
             "#include <sys/file.h>   /* flock(2) */\n" +
+            "#include <sys/syscall.h>  /* SYS_flock — zero-c #29 Linux raw-svc */\n" +
             "#include <sys/types.h>\n" +
             "\n" +
             "#ifndef NSIG\n" +
             "#define NSIG 64\n" +
+            "#endif\n" +
+            "\n" +
+            "/* zero-c #29: hxlcl sigset bitops live in runtime.c (this file is #include'd into the\n" +
+            " * same TU). Independent frozen-seed lifecycles (PR#4280 lesson): when compiled against\n" +
+            " * a frozen runtime.c that predates the bitops, fall back to libc sigemptyset/sigaddset. */\n" +
+            "#ifndef HXLCL_SIGSET_BITOPS\n" +
+            "#define hxlcl_sigemptyset(s)   sigemptyset((s))\n" +
+            "#define hxlcl_sigaddset(s,n)   sigaddset((s), (n))\n" +
             "#endif\n" +
             "\n" +
             "/* Per-signal stored handler name. Written under normal program control\n" +
@@ -132,7 +141,7 @@ fn emit_signal_flock_c() -> str {
             "    memset(&act, 0, sizeof(act));\n" +
             "    act.sa_handler = __hexa_sig_trampoline;\n" +
             "    act.sa_flags = SA_RESTART;\n" +
-            "    sigemptyset(&act.sa_mask);\n" +
+            "    hxlcl_sigemptyset(&act.sa_mask);\n" +
             "    if (hxlcl_sigaction(sig, &act, NULL) < 0) return hexa_int(-errno);\n" +
             "    const char* name = HX_IS_STR(name_val) ? HX_STR(name_val) : \"\";\n" +
             "    size_t nlen = strlen(name);\n" +
@@ -150,7 +159,7 @@ fn emit_signal_flock_c() -> str {
             "    struct sigaction act;\n" +
             "    memset(&act, 0, sizeof(act));\n" +
             "    act.sa_handler = SIG_DFL;\n" +
-            "    sigemptyset(&act.sa_mask);\n" +
+            "    hxlcl_sigemptyset(&act.sa_mask);\n" +
             "    if (hxlcl_sigaction(sig, &act, NULL) < 0) return hexa_int(-errno);\n" +
             "    g_handler_names[sig][0] = '\\0';\n" +
             "    g_handler_set[sig] = 0;\n" +
@@ -203,13 +212,13 @@ fn emit_signal_flock_c() -> str {
             "static HexaVal _hexa_sig_mask_op(int which, HexaVal arr_val) {\n" +
             "    if (!HX_IS_ARRAY(arr_val)) return hexa_int(-EINVAL);\n" +
             "    sigset_t set;\n" +
-            "    sigemptyset(&set);\n" +
+            "    hxlcl_sigemptyset(&set);\n" +
             "    int64_t n = (int64_t)HX_ARR_LEN(arr_val);\n" +
             "    for (int64_t i = 0; i < n; i++) {\n" +
             "        HexaVal el = hexa_array_get(arr_val, i);\n" +
             "        if (!HX_IS_INT(el)) continue;\n" +
             "        int sig = (int)HX_INT(el);\n" +
-            "        if (sig > 0 && sig < NSIG) sigaddset(&set, sig);\n" +
+            "        if (sig > 0 && sig < NSIG) hxlcl_sigaddset(&set, sig);\n" +
             "    }\n" +
             "    if (hxlcl_sigprocmask(which, &set, NULL) < 0) return hexa_int(-errno);\n" +
             "    return hexa_int(0);\n" +
@@ -264,6 +273,11 @@ fn emit_signal_flock_c() -> str {
             "    // file's include — same semantics, errno-set on failure.\n" +
             "#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)\n" +
             "    if (_hxlcl_syscall2_cf(HXLCL_SYS_FLOCK, fd, op) < 0) {\n" +
+            "#elif defined(__linux__)\n" +
+            "    /* zero-c #29: Linux raw-svc via _hxlcl_lx_sc2 (runtime.c, existing) — SYS_flock\n" +
+            "     * x86_64=73 / arm64=32; blocking LOCK_EX preserved (kernel blocks); _hxlcl_lx_ret\n" +
+            "     * maps -errno -> -1+errno so the errno read below is valid. Drops the libc flock UND. */\n" +
+            "    if (_hxlcl_lx_sc2(SYS_flock, fd, op) < 0) {\n" +
             "#else\n" +
             "    if (flock(fd, op) < 0) {\n" +
             "#endif\n" +
@@ -281,6 +295,8 @@ fn emit_signal_flock_c() -> str {
             "    /* Best-effort unlock; close always runs. (arch gate as above) */\n" +
             "#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)\n" +
             "    (void)_hxlcl_syscall2_cf(HXLCL_SYS_FLOCK, fd, LOCK_UN);\n" +
+            "#elif defined(__linux__)\n" +
+            "    (void)_hxlcl_lx_sc2(SYS_flock, fd, LOCK_UN);  /* zero-c #29: Linux raw-svc */\n" +
             "#else\n" +
             "    (void)flock(fd, LOCK_UN);\n" +
             "#endif\n" +

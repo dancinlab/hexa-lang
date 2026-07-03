@@ -1,0 +1,20 @@
+HEAD=12224289
+=== step1: restore_frozen_seeds(frag 패치+runtime.c regen) ===
+restore rc=0
+frag #ifdef: self/native/term_ffi.c:3 self/native/proc_fork.c:1 self/native/tensor_kernels.c:1 
+runtime.c mkstemp/sysconf #ifdef: 2
+=== step2: build with -D macros ===
+build rc=0
+=== all-macros-ON nm -u floor ===
+ __libc_calloc __libc_free atexit dlerror dlopen dlsym environ fgets flock glob globfree mount qsort regcomp regexec regfree setns sigaddset sigemptyset strtod syscall umount2 unshare 
+총 U=75
+
+=== 측정#2 (2026-07-03 QA · HEAD=654cbb5e + sentinel-fix · summer clang-18) ===
+step1 OFF: restore rc=0 · FRAG-REGEN lines=0 (byte-neutral) · build rc=0 · runtime.a 1084020B · floor U(libc-only 필터 전)=44
+step2 ON(#4427 원본): signal_flock.c synth FAIL "sentinel-miss — kept FROZEN" (spec sentinel=hexa_signal_install ≠ emitter 실심볼 hexa_os_sig_install) → flock·sigaddset·sigemptyset 잔존 U
+step3 ON(sentinel-fix 후): 6/6 SYNTHESIZED (signal_flock.c 320줄 포함) · build rc=0 · runtime.a 1083948B
+=== ON floor (libc-only) = 15 U == census WALL 목록과 정확 일치 ===
+ __libc_calloc __libc_free atexit dlerror dlopen dlsym environ fgets glob globfree qsort regcomp regexec regfree strtod
+TARGET-15 전부 dropped ✅: flock mount umount2 unshare setns sigaddset getppid setsid sigemptyset syscall rand sysconf mallopt mkstemp mkdtemp
+매크로: -DHEXA_RT_SIGSYS_SVC -DHEXA_RT_DROP_MALLOPT -DHEXA_ZEROC_OWN_MKTEMP -DHEXA_ZEROC_RAND_NATIVE -DHEXA_ZEROC_PROC_SC0_RAW -DHEXA_ZEROC_SIGSET_NATIVE + HEXA_ZEROC_FRAG_REGEN=1(restore-시 env)
+→ reducible 잔여 = 0 · flag-ON floor = WALL-only 수렴 (flip은 byteeq 3타깃+faithful-nobaseline+smoke 후 별도)

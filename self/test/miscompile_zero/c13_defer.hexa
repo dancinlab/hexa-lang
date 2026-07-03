@@ -1,0 +1,46 @@
+// c13_defer.hexa — miscompile class: `defer` fn-exit LIFO drain (HEXA-OWN M1).
+// Exercises the native single-exit epilogue lowering: per-defer flag locals,
+// the `__defer_ret` carrier + rerouted returns (early + fall-through), the
+// reverse-order STMT_BR_COND drain chain in the exit block, loop at-most-once
+// registration, and conditional registration. A mis-lowered exit chain would
+// surface as wrong drain order, a skipped drain on early return, ENCODE-MISS,
+// or a spurious udf. Mirrors stdlib/lang/defer_test.hexa (the behavioral
+// selftest); this corpus copy is the codegen-shape gate.
+
+let mut dlog = ""
+
+fn mark(v: int) {
+    dlog = dlog + to_string(v) + ";"
+}
+
+fn t_lifo_early(flag: int) -> int {
+    defer mark(1)
+    defer mark(2)
+    if flag == 1 { return 100 }
+    defer mark(3)
+    return 200
+}
+
+fn t_loop_cond(flag: int) -> int {
+    let mut i = 0
+    while i < 3 {
+        defer mark(i)
+        i = i + 1
+    }
+    if flag == 1 {
+        defer { mark(10) }
+    }
+    return i
+}
+
+dlog = ""
+let a = t_lifo_early(1)
+println("early:", a, dlog)
+
+dlog = ""
+let b = t_lifo_early(0)
+println("late:", b, dlog)
+
+dlog = ""
+let c = t_loop_cond(1)
+println("loop:", c, dlog)
