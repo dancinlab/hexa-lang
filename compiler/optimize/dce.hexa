@@ -183,7 +183,8 @@ fn _dce_func(f: MFunc) -> MFunc {
         entry_block: f.entry_block,
         arena_root: f.arena_root,
         def_line: f.def_line,
-        gpu_kind: GPU_KIND_CPU
+        gpu_kind: GPU_KIND_CPU,
+        is_naked: false
     }
 }
 

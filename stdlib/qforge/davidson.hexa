@@ -64,6 +64,54 @@ fn dv_orthonormalize(basis: [[float]], m: int, w: [float], n: int) -> [float] {
 }
 
 // 투영 Hs = Vᵀ H V (m×m 평탄) + W[j]=H·basis[j] (잔차 계산 재사용) 반환.
+//
+// ── BLOCK H-apply seam (QFORGE-PERF round 2) ──────────────────────────────
+//   H_block(psi_flat, m) -> Y_flat : applies H to a BLOCK of m basis vectors in
+//   ONE call. psi_flat / Y_flat are ROW-MAJOR [n,m] (psi_flat[i*m + b] = basis
+//   vector b's i-th component). This folds the per-iteration `W = H·basis[j]`
+//   loop (m scalar GEMV) into ONE GEMM H[n,n]@Ψ[n,m] — the production seam that
+//   the GPU path (qforge_h_apply_forge_block, assembler.hexa) accelerates 74.9×.
+//   The block contract is generic (d4): the caller supplies the closure; the
+//   solver never names PwHam. The scalar entry point (qforge_davidson) wraps its
+//   own H_apply into a trivial scalar-block adapter, so there is ONE solver body
+//   and ONE project path — no per-instance dispatch.
+fn dv_project_block(H_block, basis: [[float]], m: int, n: int) -> [[float]] {
+    // Pack basis (m rows, each length n) into ROW-MAJOR Ψ[n,m].
+    let mut psi: [float] = []
+    let mut i = 0
+    while i < n {
+        let mut b = 0
+        while b < m { psi.push(basis[b][i]) ; b = b + 1 }
+        i = i + 1
+    }
+    // ONE block H-apply: Y[n,m] = H·Ψ (GEMM on GPU/CPU GEMM tier).
+    let yflat = H_block(psi, m)
+    if len(yflat) != n * m {
+        // block path failed (bad handle / shape) — signal caller to fall back.
+        return []
+    }
+    // Unpack Y[n,m] (row-major) back into W (m rows, each length n).
+    let mut W = []
+    let mut b2 = 0
+    while b2 < m {
+        let mut col: [float] = []
+        let mut i2 = 0
+        while i2 < n { col.push(yflat[i2 * m + b2]) ; i2 = i2 + 1 }
+        W.push(col)
+        b2 = b2 + 1
+    }
+    // Hs = Vᵀ W (m×m, row-major).
+    let mut Hs = []
+    let mut a = 0
+    while a < m {
+        let mut bb = 0
+        while bb < m { Hs.push(dv_dot(basis[a], W[bb], n)) ; bb = bb + 1 }
+        a = a + 1
+    }
+    return [Hs, W]
+}
+
+// Scalar fallback (and selftest path): m× scalar H_apply, identical math.
 fn dv_project(H_apply, basis: [[float]], m: int, n: int) -> [[float]] {
     let mut W = []
     let mut j = 0
@@ -79,9 +127,14 @@ fn dv_project(H_apply, basis: [[float]], m: int, n: int) -> [[float]] {
 }
 
 // ── Davidson 본체 ──────────────────────────────────────────────────────────
-// H_apply: v -> H·v (matrix-free) · diag: H 대각선 · n: 차원 · nbands: 원하는 최저 밴드 수.
-pub fn qforge_davidson(H_apply, diag: [float], n: int, nbands: int,
-                       tol: float, max_iter: int) -> DavidResult {
+// Shared body. `use_block`=true → per-iter projection via dv_project_block(H_block)
+// (ONE GEMM H[n,n]@Ψ[n,m]); false → m× scalar dv_project(H_apply). Both produce
+// IDENTICAL Hs/W (same FP64 Σ), so the eigensolve is bit-for-bit the same up to
+// the GEMM's FP-accumulation order — verified to tight tol end-to-end. If the
+// block path returns [] (bad GPU handle / shape) it transparently falls back to
+// the scalar path for that iteration (matrix-free contract preserved, d4).
+fn dv_run(H_apply, H_block, use_block: bool, diag: [float], n: int, nbands: int,
+          tol: float, max_iter: int) -> DavidResult {
     // 초기 기저 = diag 가 가장 작은 nbands 개 인덱스의 단위벡터(부분 선택정렬).
     let mut order = []
     let mut p = 0
@@ -114,7 +167,15 @@ pub fn qforge_davidson(H_apply, diag: [float], n: int, nbands: int,
     while iters < max_iter {
         iters = iters + 1
         // (1) 투영 + 작은 dense 대각화 (eigen.hexa 재사용, d19).
-        let pr = dv_project(H_apply, basis, m, n)
+        //   block path = ONE GEMM H[n,n]@Ψ[n,m]; falls back to scalar on [] (bad
+        //   handle / shape) so the matrix-free contract never breaks (d4).
+        let mut pr = []
+        if use_block {
+            pr = dv_project_block(H_block, basis, m, n)
+            if len(pr) == 0 { pr = dv_project(H_apply, basis, m, n) }
+        } else {
+            pr = dv_project(H_apply, basis, m, n)
+        }
         let Hs = pr[0]
         let W = pr[1]
         let eg = eigh(Hs, m)          // [vals desc, vecs rows]
@@ -197,4 +258,43 @@ pub fn qforge_davidson(H_apply, diag: [float], n: int, nbands: int,
         }
     }
     return DavidResult { evals: evals, evecs: evecs, iters: iters, converged: converged }
+}
+
+// ── Public entry: SCALAR matrix-free (unchanged contract, all legacy callers) ──
+// H_apply: v -> H·v · diag: H 대각선 · n · nbands · tol · max_iter.
+// Wraps H_apply into a scalar-block adapter so the SAME body (dv_run) runs — one
+// generic dispatch (d4). Behaviour is byte-identical to the pre-round-2 solver.
+pub fn qforge_davidson(H_apply, diag: [float], n: int, nbands: int,
+                       tol: float, max_iter: int) -> DavidResult {
+    // scalar-block adapter: unpack Ψ[n,m] columns → m× H_apply → repack Y[n,m].
+    let sblock = fn(psi_flat: [float], mm: int) -> [float] {
+        if len(psi_flat) != n * mm { return [] }
+        let mut y: [float] = []
+        let mut t = 0
+        while t < n * mm { y.push(0.0) ; t = t + 1 }
+        let mut b = 0
+        while b < mm {
+            let mut col: [float] = []
+            let mut i = 0
+            while i < n { col.push(psi_flat[i * mm + b]) ; i = i + 1 }
+            let hc = H_apply(col)
+            let mut i2 = 0
+            while i2 < n { y[i2 * mm + b] = hc[i2] ; i2 = i2 + 1 }
+            b = b + 1
+        }
+        return y
+    }
+    return dv_run(H_apply, sblock, false, diag, n, nbands, tol, max_iter)
+}
+
+// ── Public entry: BLOCK-wired (QFORGE-PERF round 2) ───────────────────────────
+// H_apply  : scalar v -> H·v (kept for the [] fallback path, matrix-free, d4).
+// H_block  : (psi_flat[n*m], m) -> Y_flat[n*m] — ROW-MAJOR block apply, ONE GEMM.
+//   Production callers build H_block from qforge_h_apply_forge_block(ham, …) so
+//   each Davidson iteration applies H to the whole basis block in ONE GPU GEMM
+//   (74.9× at n=2048,m=64). Mathematically identical to qforge_davidson; the win
+//   lands in the FULL eigensolve wall, not just the H-apply microbench.
+pub fn qforge_davidson_block(H_apply, H_block, diag: [float], n: int, nbands: int,
+                             tol: float, max_iter: int) -> DavidResult {
+    return dv_run(H_apply, H_block, true, diag, n, nbands, tol, max_iter)
 }

@@ -1,0 +1,33 @@
+== STEP0 defer characterization START ==
+C1: enter
+C1: body end
+C1: defer C (3rd registered, expr form)
+C1: defer B (2nd registered)
+C1: defer A (1st registered)
+-- after C1 --
+C2: enter flag=1
+C2: early return before defer
+C2: enter flag=0
+C2: body end
+C2: defer D (reached only when flag=0)
+-- after C2 --
+C3: enter
+C3: iter 0
+C3: iter 1
+C3: iter 2
+C3: loop done, i=3
+C3: loop defer fired, i=3
+-- after C3 --
+C4: enter
+C4: return at i=2 (loop defer below reached on i=0,1)
+C4: loop defer fired, i=2
+-- after C4 --
+C5: enter
+C5: returning now
+C5: defer E (reached, fires)
+-- after C5 --
+C6: enter
+C6: throwing
+C6: caught: C6-boom
+-- after C6 --
+== STEP0 defer characterization END ==

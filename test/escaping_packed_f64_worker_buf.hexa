@@ -1,0 +1,166 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  test/escaping_packed_f64_worker_buf.hexa — FLEET F64-mirror of the i64 lane.
+//
+//  The f64 analogue of test/escaping_packed_worker_buf.hexa. An ESCAPING typed-
+//  prim [f64] worker buffer is built, RETURNED (escapes via return) and PASSED to
+//  worker fns as a param of unknown packed-ness (escapes via call-arg + alias).
+//
+//  Under HEXA_PACK_ESCAPING the producer esc-mints a RAW contiguous HexaArrF64
+//  tagged TAG_ARRAY_F64 (hexa_arr_f64_new_esc + hexa_arr_f64_push_bits); the
+//  consumer fns read it via index / len / index-set, which route through
+//  hexa_arr_poly_get / _len / _set — the runtime discriminator now branches on
+//  BOTH TAG_ARRAY_I64 and TAG_ARRAY_F64. A double 8B == int64 8B stride so the
+//  layout-match invariant with HexaArr/HexaArrI64 holds; only the carried tag +
+//  the element reinterpret (bits↔double, TAG_FLOAT box) differ from the i64 path.
+//
+//  EXPECT (native backend, aiden):
+//    HEXA_PACK_ESCAPING unset → escape-scan voids the pack → BOXED 16B buffer
+//                               (correct; the boxed reader matches the boxed
+//                               mint). PASS.
+//    HEXA_PACK_ESCAPING=1     → producer esc-mints (TAG_ARRAY_F64), consumer
+//                               poly-reads → SOUND packed escaping f64 buffer.
+//                               PASS, IDENTICAL checksum (value parity: stride-8
+//                               double == boxed TAG_FLOAT).
+//  A miscompile (poly-route missing somewhere, or f64 bits walked as i64) would
+//  show as a checksum divergence or crash → release-integrity wall.
+//
+//  Run on aiden (mini cannot build):
+//    HEXA_PACK_ESCAPING=1 hexa run test/escaping_packed_f64_worker_buf.hexa
+//    HEXA_PACK_ESCAPING=  hexa run test/escaping_packed_f64_worker_buf.hexa   # control
+//  Escape boundary exercised via FUNCTION CALLS (produce return-escape + consume
+//  param-escape + alias-escape) — the same #4133 boundary as the i64 mirror — so
+//  it compiles under raw `aprime --emit` (no thread fn-globals). f32 is OUT OF
+//  SCOPE (farr32 4B-stride area; this lane is f64 only).
+//  BYTEEQ-NEUTRAL: NEW test file only; the codegen relax is default-OFF.
+// ═══════════════════════════════════════════════════════════════════════════
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, actual, expected) {
+    if to_string(actual) == to_string(expected) {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + to_string(expected) + ", got: " + to_string(actual))
+        fail_count = fail_count + 1
+    }
+}
+
+// ── CONSUMER: reads an ESCAPING [f64] received as a PARAM. The param's packed-
+// ness is unknown at the consumer → index/len route through hexa_arr_poly_get/_len
+// under HEXA_PACK_ESCAPING (runtime discriminates TAG_ARRAY_F64 vs boxed).
+fn consume_sum(xs: [f64]) -> f64 {
+    let mut acc = 0.0
+    let mut i = 0
+    let n = len(xs)
+    while i < n {
+        acc = acc + xs[i]
+        i = i + 1
+    }
+    return acc
+}
+
+// ── CONSUMER 2: index-set then re-read (exercises hexa_arr_poly_set + _get).
+fn consume_doubled(xs: [f64]) -> f64 {
+    let mut i = 0
+    let n = len(xs)
+    while i < n {
+        xs[i] = xs[i] * 2.0
+        i = i + 1
+    }
+    let mut acc = 0.0
+    let mut j = 0
+    while j < n {
+        acc = acc + xs[j]
+        j = j + 1
+    }
+    return acc
+}
+
+// ── PRODUCER: builds a typed-prim [f64] and RETURNS it (escapes via return).
+// Under HEXA_PACK_ESCAPING this esc-mints (hexa_arr_f64_new_esc, TAG_ARRAY_F64).
+fn produce_buf(base: f64) -> [f64] {
+    let mut buf: [f64] = []
+    let mut fi = 0.0
+    while fi < 400.0 {
+        buf.push(base + fi)
+        fi = fi + 1.0
+    }
+    return buf
+}
+
+// ── WORKER: produce an ESCAPING buffer then consume it across calls.
+fn worker(base: f64) -> f64 {
+    let buf = produce_buf(base)
+    let s1 = consume_sum(buf)        // escaping param read (poly_get/_len)
+    let s2 = consume_doubled(buf)    // escaping param read+write (poly_set/_get)
+    let mut nf = 0.0
+    let n = len(buf)
+    let mut ni = 0
+    while ni < n {
+        nf = nf + 1.0
+        ni = ni + 1
+    }
+    return s1 + s2 + nf
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  HEXA escaping packed f64 worker buffer — F64-mirror escape-relax")
+println("═══════════════════════════════════════════════════════")
+if env("HEXA_PACK_ESCAPING") == "1" {
+    println("  HEXA_PACK_ESCAPING=1 — TREATMENT: escaping f64 buffer esc-minted + poly-read")
+} else {
+    println("  HEXA_PACK_ESCAPING unset — CONTROL: boxed escaping f64 buffer")
+}
+
+let bases = [0.0, 1.0, 2.0, 3.0, 100.0, 101.0, 102.0, 103.0]
+
+// ── ORACLE (single-threaded reference): lock in per-worker checksums. This path
+// itself exercises the escape-relax (produce→consume across fn calls).
+let mut oracle: [f64] = []
+let mut total = 0.0
+let mut k = 0
+while k < len(bases) {
+    let w = worker(bases[k])
+    oracle.push(w)
+    total = total + w
+    k = k + 1
+}
+println("  single-thread escaping produce→consume total = " + to_string(total))
+check("oracle: 8 escaping f64 workers produced a value", len(oracle), 8)
+
+// Independent hand-computed expectation for base=0.0:
+//   buf = [0.0..399.0]; sum = 79800.0; doubled-sum = 159600.0; len = 400
+//   worker(0.0) = 79800.0 + 159600.0 + 400.0 = 239800.0
+check("worker(0.0) escaping checksum == hand value 239800", oracle[0], 239800.0)
+
+// ── ALIAS-ESCAPE stress: ONE buffer aliased + passed to MULTIPLE consumers ──
+// `let ys = buf` copies the descriptor (alias) — the #4133 straddle shape. Both
+// the handle AND the alias escape into consumer params. Under HEXA_PACK_ESCAPING
+// they are uniformly esc-tagged → both poly-read soundly (no boxed/packed straddle).
+fn alias_escape(base: f64) -> f64 {
+    let buf = produce_buf(base)
+    let ys = buf                     // alias (descriptor copy) — both escape
+    let a = consume_sum(buf)         // read via handle (param)
+    let b = consume_sum(ys)          // read via alias  (param) — must match a
+    return a + b
+}
+let mut amatch = 1
+let mut akk = 0
+while akk < len(bases) {
+    let av = alias_escape(bases[akk])
+    // a and b read the SAME buffer → av == 2 * consume_sum(buf). buf=[base..base+399]
+    let single = consume_sum(produce_buf(bases[akk]))
+    if av != single * 2.0 { amatch = 0 }
+    akk = akk + 1
+}
+check("alias-escape: handle and alias read identical (no straddle)", amatch, 1)
+
+println("")
+println("═══════════════════════════════════════════════════════")
+println("  RESULT: " + to_string(pass_count) + " passed, " + to_string(fail_count) + " failed")
+println("═══════════════════════════════════════════════════════")
+if fail_count > 0 {
+    exit(1)
+}

@@ -43,6 +43,24 @@ fn gga_apply(v: [float]) -> [float] {
     let _ = farr_free(res)
     return out
 }
+// BLOCK apply (GPU hot path twin of gga_apply): Y[n,m] = GGA_HFULL[n,n] · Ψ[n,m]
+// in ONE farr_matmul (cuBLAS Dgemm on a CUDA build — the 74.9×/14.6× block-GEMM
+// win; CPU GEMM tier element-eq on a no-GPU build). Mirrors the H_block contract
+// dv_project_block expects: row-major Ψ[n,m] flat in, row-major Y[n,m] flat out.
+// Returns [] on a shape mismatch so qforge_davidson_block falls back to scalar.
+fn gga_apply_block(psi_flat: [float], m: int) -> [float] {
+    let n = GGA_N
+    if len(psi_flat) != n * m { return [] }
+    let psi = farr_zeros(n * m)
+    let mut k = 0
+    while k < n * m { let _ = farr_set(psi, k, psi_flat[k]) ; k = k + 1 }
+    let res = farr_matmul(GGA_HFULL, n, n, psi, m)   // (n×n)·(n×m) → (n×m) farr
+    let mut out: [float] = []
+    k = 0
+    while k < n * m { out.push(farr_get(res, k)) ; k = k + 1 }
+    let _ = farr_free(res) ; let _ = farr_free(psi)
+    return out
+}
 fn gga_diag(hfull: int, n: int) -> [float] {
     let mut d: [float] = []
     let mut a = 0
@@ -128,10 +146,13 @@ pub fn qforge_scf_pw_gga_spin(kvec: [float], gvecs: [float], nspec: int,
         // V_scr^σ(ΔG) matrices → H_σ = bare + matrix → davidson
         qforge_vxc_local_matrix_farr(vsu, gvecs, millers, nx, ny, nz, sreh, simh, mgu_h)
         qforge_vxc_local_matrix_farr(vsd, gvecs, millers, nx, ny, nz, sreh, simh, mgd_h)
+        // BLOCK-GEMM diagonalize (GPU hot path): one cuBLAS Dgemm per Davidson
+        // iter over GGA_HFULL on a CUDA build; element-eq to the scalar matvec on
+        // a no-GPU build. gga_apply stays the parity reference + scalar fallback.
         gga_build_hfull(bare, mgu_h, n)
-        let dru = qforge_davidson(gga_apply, gga_diag(GGA_HFULL, n), n, nbands, 1.0e-10, 200)
+        let dru = qforge_davidson_block(gga_apply, gga_apply_block, gga_diag(GGA_HFULL, n), n, nbands, 1.0e-10, 200)
         gga_build_hfull(bare, mgd_h, n)
-        let drd = qforge_davidson(gga_apply, gga_diag(GGA_HFULL, n), n, nbands, 1.0e-10, 200)
+        let drd = qforge_davidson_block(gga_apply, gga_apply_block, gga_diag(GGA_HFULL, n), n, nbands, 1.0e-10, 200)
         evals_up = dru.evals ; evals_dn = drd.evals
 
         let occs = qforge_fermi_occupations_spin(evals_up, evals_dn, nelec, sigma)

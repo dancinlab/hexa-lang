@@ -1678,6 +1678,52 @@ fn _hir_lower_binop_spine_deep(e: Expr) -> bool {
     return false
 }
 
+// Struct-destructure pattern → HIR. The parser (parse_struct_pattern) emits a
+// StructLit-shaped AST node for a `Name { f, g: b }` arm pattern; here we
+// re-tag it as the HIR "struct_pattern" whose children are "field_lit" nodes
+// (text = field name, child = the binder ident). Each binder is defined into
+// `sc` so the arm body / guard resolve it. hir_to_mir's match arm consumes the
+// struct_pattern: an irrefutable shape-true branch + per-field `scrut.<field>`
+// extract into each binder. Shared by the unguarded and guarded arm paths.
+fn _lower_struct_pattern(pat: Expr, sc: LowerScope) -> LowerResult {
+    let mut new_sc = sc
+    let mut sp_kids: [HExpr] = []
+    let mut fi = 0
+    while fi < len(pat.children) {
+        let fch = pat.children[fi]
+        let mut bind_name = fch.text
+        if len(fch.children) > 0 && _hir_is_ident_kind(fch.children[0].kind) {
+            bind_name = fch.children[0].text
+        }
+        if len(bind_name) > 0 && bind_name != "_" {
+            new_sc = _define_in_scope(new_sc, bind_name, _hir_empty_type())
+        }
+        let mut ik: [HExpr] = []
+        let ih = _mk_hexpr("ident", fch.span, _hir_empty_type(), bind_name,
+                           ik, _empty_atlas_binding(), _hir_miss_def_id())
+        let mut fkw: [HExpr] = []
+        fkw.push(ih)
+        let fh = _mk_hexpr("field_lit", fch.span, _hir_empty_type(), fch.text,
+                           fkw, _empty_atlas_binding(), _hir_miss_def_id())
+        sp_kids.push(fh)
+        fi = fi + 1
+    }
+    let sph = _mk_hexpr("struct_pattern", pat.span, _hir_empty_type(), pat.text,
+                        sp_kids, _empty_atlas_binding(), _hir_miss_def_id())
+    return LowerResult { expr: sph, sc: new_sc }
+}
+
+// Lower a match-arm INNER pattern (the pattern under a guard, or any arm
+// pattern): a StructLit dispatches to the struct_pattern re-tag, everything
+// else takes the legacy generic `_lower_expr` (byte-identical for non-struct
+// patterns). Keeps the guarded + unguarded paths in lockstep.
+fn _lower_pattern_inner(inner: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
+    if _hir_is_struct_lit_kind(inner.kind) {
+        return _lower_struct_pattern(inner, sc)
+    }
+    return _lower_expr(inner, atlas, sc)
+}
+
 fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
     let k = e.kind
     let kind_tag = _expr_kind_tag(k)
@@ -1947,6 +1993,24 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
         return LowerResult { expr: h, sc: new_sc }
     }
 
+    // ── defer carrier (HEXA-OWN M1) — MUST precede the generic block
+    // case: the carrier is ExprKind::Block + text "__defer__" + children
+    // [body_block] (ast.hexa::ast_is_defer). Lowers to HExpr kind "defer"
+    // (string tag — no HIR enum change) with the lowered body block as its
+    // single child. The child IS a Block, so recursing through
+    // `_lower_expr` runs the generic block case below, which pushes/pops
+    // the LowerScope frame — identical scope threading to a plain block.
+    // hir_to_mir consumes the "defer" kind (flag registration + fn-exit
+    // LIFO drain); no other pass sees it.
+    if ast_is_defer(e) && len(e.children) == 1 {
+        let r = _lower_expr(e.children[0], atlas, sc)
+        let mut dkids: [HExpr] = []
+        dkids.push(r.expr)
+        let h = _mk_hexpr("defer", e.span, _hir_t_unit(), "",
+                          dkids, _empty_atlas_binding(), _hir_miss_def_id())
+        return LowerResult { expr: h, sc: r.sc }
+    }
+
     // ── block: type = last child's type, opens a scope frame ──
     if _hir_is_block_kind(k) {
         let mut new_sc = _push_frame(sc)
@@ -2076,7 +2140,14 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
                 if _hir_is_ident_kind(inner.kind) && len(inner.text) > 0 && inner.text != "_" {
                     arm_sc = _define_in_scope(arm_sc, inner.text, _hir_empty_type())
                 }
-                let ipr = _lower_expr(inner, atlas, arm_sc)
+                // A guarded struct-destructure pattern (`Point { x, y } if …`)
+                // re-tags its StructLit inner as the HIR struct_pattern and
+                // defines its binders BEFORE the guard is lowered, so the guard
+                // can read the field binders (mirrors the enum-payload guard).
+                // `_lower_pattern_inner` dispatches struct-lit → struct_pattern,
+                // everything else → the legacy generic lowering (byte-identical
+                // for non-struct inner patterns).
+                let ipr = _lower_pattern_inner(inner, atlas, arm_sc)
                 arm_sc = ipr.sc
                 let gpr = _lower_expr(guard, atlas, arm_sc)
                 arm_sc = gpr.sc
@@ -2087,6 +2158,30 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
                                    gkids, _empty_atlas_binding(), _hir_miss_def_id())
                 let br = _lower_expr(body, atlas, arm_sc)
                 kids.push(gh)
+                kids.push(br.expr)
+                arm_sc = br.sc
+                new_sc = _pop_frame(arm_sc)
+                if !have_first {
+                    first_body_t = br.expr.typ
+                    have_first = true
+                }
+                idx = idx + 2
+                continue
+            }
+            // Struct-destructure pattern `Name { f, g: b }` — the parser emits
+            // a StructLit-shaped node in arm position (parse_struct_pattern). A
+            // StructLit can only appear here as a pattern, so re-tag it as the
+            // HIR "struct_pattern" (consumed by hir_to_mir's match arm: a
+            // shape-true STMT_BR + per-field `scrut.<field>` extract into each
+            // binder). Each field child is `Ident(field, [Ident(binder)])`; we
+            // lift it to a HIR `field_lit` (text=field, child = HIR ident
+            // binder) and define the binder in the arm scope so the body
+            // resolves it. Unguarded non-struct arms take the legacy path.
+            if _hir_is_struct_lit_kind(pat.kind) {
+                let spr = _lower_struct_pattern(pat, arm_sc)
+                arm_sc = spr.sc
+                let br = _lower_expr(body, atlas, arm_sc)
+                kids.push(spr.expr)
                 kids.push(br.expr)
                 arm_sc = br.sc
                 new_sc = _pop_frame(arm_sc)

@@ -1,0 +1,179 @@
+// compiler/atlas/identity_engine_test.hexa — companion selftest for
+// identity_engine.hexa. The selftest `fn main` was MOVED here in M2 (OUROBOROS-
+// novel) so the module itself is main-free: an unguarded module-level `fn main`
+// hijacks the entry main of any fresh module that imports identity_engine (the
+// flatten keeps the dep's main, drops the importer's — convergence
+// identity-engine-hexa-1). Run via `hexa run compiler/atlas/identity_engine_test.hexa`.
+// Reproves the exact-int verifier (G/C/V/U/T/A/R/RC/CMP gates) + the M2 FP
+// fingerprint kernel (F1-F6).
+
+use "compiler/atlas/identity_engine"
+
+fn gate(label, got, want) -> int {
+    if got == want {
+        println("  [PASS] " + label + "  -> n=" + to_string(got))
+        return 0
+    }
+    println("  [FAIL] " + label + "  -> got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+
+fn main() {
+    let N = 20000
+    println("=== identity_engine SELFTEST (native exact-int, N=" + to_string(N) + ") ===")
+    let fails = 0
+    println("SANITY GATES (ATLAS @F rediscovery, bounded-unique @ n=4):")
+    // G1 phi*J2 = n*psi   (3,8 = 5,9)
+    fails = fails + gate("G1 phi*J2 = n*psi", verify_identity(3, 8, 5, 9, N), 4)
+    // G2 phi*J2 = sopfr*psi  (3,8 = 6,9)
+    fails = fails + gate("G2 phi*J2 = sopfr*psi", verify_identity(3, 8, 6, 9, N), 4)
+    // G3 sigma*psi = sig2*phi  (0,9 = 1,3)  [verified-id-sigma-psi-eq-sig2-phi-n4]
+    fails = fails + gate("G3 sigma*psi = sig2*phi", verify_identity(0, 9, 1, 3, N), 4)
+    println("NEGATIVE CONTROLS (must be rejected = -1 universal / -2 none):")
+    // C1 n*n = n*n  universal -> -1
+    fails = fails + gate("C1 n*n = n*n (universal)", verify_identity(5, 5, 5, 5, N), -1)
+    // C2 phi*phi = sigma*sigma  no solution expected -> -2 (or -1)
+    let c2 = verify_identity(3, 3, 0, 0, N)
+    if c2 < 0 {
+        println("  [PASS] C2 phi*phi = sigma*sigma (rejected)  -> " + to_string(c2))
+    } else {
+        println("  [FAIL] C2 phi*phi = sigma*sigma should reject  -> n=" + to_string(c2))
+        fails = fails + 1
+    }
+
+    // ── EXTENDED-VOCAB GATES (idx 12–17 · 2026-06-27 upgrade) ──────────
+    // Exact-int per-n value spot-checks (anchor the new fns to known values):
+    //   n=12=2²·3:  μ(12)=0 (non-squarefree) · λ(12)=(-1)^3=-1 · μ²(12)=0 ·
+    //               2^ω(12)=4 · core(12)=12/6=2 · J₃(12)=J₃(4)·J₃(3)=56·26=1456
+    //   n=30=2·3·5: μ(30)=(-1)^3=-1 · λ(30)=-1 · μ²(30)=1 · 2^ω(30)=8 · core(30)=1
+    println("EXTENDED-VOCAB VALUE GATES (idx 12–17):")
+    fails = fails + gate("V-mu  μ(12)=0",      af(12, 12), 0)
+    fails = fails + gate("V-mu  μ(30)=-1",     af(30, 12), 0 - 1)
+    fails = fails + gate("V-lam λ(12)=-1",     af(12, 13), 0 - 1)
+    fails = fails + gate("V-mu2 μ²(12)=0",     af(12, 14), 0)
+    fails = fails + gate("V-mu2 μ²(30)=1",     af(30, 14), 1)
+    fails = fails + gate("V-J3  J₃(12)=1456",  af(12, 15), 1456)
+    fails = fails + gate("V-2om 2^ω(30)=8",    af(30, 16), 8)
+    fails = fails + gate("V-cor core(12)=2",   af(12, 17), 2)
+
+    // ── UNIVERSAL-IN-[2,N] FRAME GATE (forall-n evidence · c2 UNPROVEN) ─
+    // Sanity: J₂ = φ·ψ is a classical universal multiplicative identity
+    // (vocab_universal_hunt.py:308 sanity gate) — must hold ∀n in [2,N].
+    // These gates rediscover the ONLY clean universal identities the extended-
+    // vocab sweep produces (vocab_universal_hunt.py: CLEAN=3, generators=2) —
+    // every one CLASSICAL/definitional (novel=0 honestly):
+    //   J₂·core·rad = n·φ·ψ  (the combined primitive — J₂=φ·ψ ∧ core·rad=n),
+    //   3-term frame · idx J₂=8 core=17 rad=7 n=5 φ=3 ψ=9.
+    println("UNIVERSAL-IN-[2,N] FRAME GATES (the clean generators · all classical):")
+    fails = fails + gate("U1 J₂·core·rad=n·φ·ψ univ", is_universal3(8, 17, 7, 5, 3, 9, N), 1)
+    // Negative control: μ·μ == n·n must FAIL universality (μ takes 0/±1).
+    fails = fails + gate("U2 μ·μ=n·n NOT universal", is_universal2(12, 12, 5, 5, N), 0)
+    // Negative control (3-term): core·rad·τ = n·τ·τ FAILS (core·rad=n but ·τ vs ·τ² differ).
+    fails = fails + gate("U3 core·rad·τ=n·τ² NOT univ", is_universal3(17, 7, 4, 5, 4, 4, N), 0)
+
+    // ── ARITY-3 FRAME GATES (A·B·C = D·E·F bounded-unique · Ralph 371) ──
+    // n·σ² = J₂·rad²  ⟺ n=6 ONLY (squarefree perfect): n·σ·σ == J₂·rad·rad.
+    //   (idx: n=5, σ=0, J₂=8, rad=7) — bounded-unique singleton at n=6.
+    println("ARITY-3 FRAME GATES (3-term bounded-unique · Ralph 371):");
+    fails = fails + gate("T1 n·σ²=J₂·rad² ⟺n=6", verify_identity3(5, 0, 0, 8, 7, 7, N), 6)
+    // Negative control: n·n·n = n·n·n is universal -> rejected (-1).
+    fails = fails + gate("T2 n³=n³ (universal)", verify_identity3(5, 5, 5, 5, 5, 5, N), -1)
+
+    // ── ADDITIVE / COMBINATORIAL FRAME GATES (orthogonal pivot · Ralph 377) ──
+    // Exact small-n VALUE gates (anchor the non-multiplicative sequences):
+    //   p(10)=42 · p(6)=11 (≠ p(2)·p(3)=6 — NOT multiplicative) · C(6)=132 ·
+    //   B(5)=52 · F(10)=55 · L(10)=123 · tri(6)=21 · pent(6)=51.
+    println("ADDITIVE VALUE GATES (non-multiplicative sequences, exact):")
+    fails = fails + gate("A-p  p(10)=42",   partition_p(10), 42)
+    fails = fails + gate("A-p  p(6)=11",    partition_p(6), 11)
+    fails = fails + gate("A-C  C(6)=132",   catalan(6), 132)
+    fails = fails + gate("A-B  B(5)=52",    bell(5), 52)
+    fails = fails + gate("A-F  F(10)=55",   fib(10), 55)
+    fails = fails + gate("A-L  L(10)=123",  lucas(10), 123)
+    fails = fails + gate("A-tri tri(6)=21", tri(6), 21)
+    fails = fails + gate("A-pen pent(6)=51",pent(6), 51)
+    // CONGRUENCE SANITY GATES — rediscover Ramanujan's three 1919 congruences
+    // (verify_congruence returns 1 = holds with ≥12 terms). These have NO
+    // multiplicative analogue → orthogonal-domain proof. NM = mod-m sweep depth.
+    let NM = 4000
+    println("RAMANUJAN CONGRUENCE GATES (rediscover 1919, bounded [0,N]·∀n UNPROVEN c2):")
+    fails = fails + gate("R1 p(5n+4)≡0 mod5",   verify_congruence(0, 5, 4, 5, NM), 1)
+    fails = fails + gate("R2 p(7n+5)≡0 mod7",   verify_congruence(0, 7, 5, 7, NM), 1)
+    fails = fails + gate("R3 p(11n+6)≡0 mod11", verify_congruence(0, 11, 6, 11, NM), 1)
+    // Negative controls: wrong residue / wrong modulus MUST be rejected (=0).
+    println("CONGRUENCE NEGATIVE CONTROLS (must reject = 0):")
+    fails = fails + gate("RC1 p(5n+3)≡0 mod5 reject", verify_congruence(0, 5, 3, 5, NM), 0)
+    fails = fails + gate("RC2 p(5n+4)≡0 mod7 reject", verify_congruence(0, 5, 4, 7, NM), 0)
+
+    // ── COMPOSITION FRAME GATES (σ∘σ vein · 2026-06-27) ─────────────────
+    // The composition algebra the product frame cannot express. Sanity-gate
+    // by REDISCOVERING the classical superperfect set {2,4,16,64,4096} and the
+    // Mersenne characterization {3,7,31,127,8191} — proving af_compose is a
+    // correct exact-int evaluator (not a rubber-stamp). idx: σ=0, φ=3, n=5.
+    // Reference: ATLAS/state/novel-dfs/composition_hunt.py (measured novel=0 DRY).
+    println("COMPOSITION FRAME GATES (σ∘σ vein · classical rediscovery · Suryanarayana 1969):")
+    // CMP1 superperfect membership: σ(σ(n))=2n holds at every superperfect n…
+    fails = fails + gate("CMP1 σ∘σ=2n @ 2  (superperfect)",  comp_holds(0, 0, 0, 2, 2), 1)
+    fails = fails + gate("CMP1 σ∘σ=2n @ 4",                  comp_holds(0, 0, 0, 2, 4), 1)
+    fails = fails + gate("CMP1 σ∘σ=2n @ 16",                 comp_holds(0, 0, 0, 2, 16), 1)
+    fails = fails + gate("CMP1 σ∘σ=2n @ 64",                 comp_holds(0, 0, 0, 2, 64), 1)
+    fails = fails + gate("CMP1 σ∘σ=2n @ 4096",               comp_holds(0, 0, 0, 2, 4096), 1)
+    // …and is REJECTED at a non-superperfect n (8 = 2³ is NOT superperfect).
+    fails = fails + gate("CMP1n σ∘σ=2n NOT @ 8",             comp_holds(0, 0, 0, 2, 8), 0)
+    // CMP2 superperfect set SIZE in [2,N] = exactly 5 (sparse family, NOT unique).
+    fails = fails + gate("CMP2 |σ∘σ=2n in[2,N]| = 5",        comp_count(0, 0, 0, 2, N), 5)
+    // CMP3 Mersenne characterization σ(σ(n))=σ(n)+n at the Mersenne indices.
+    fails = fails + gate("CMP3 σ∘σ=σ+n @ 7  (Mersenne)",     comp_holds(0, 0, 1, 0, 7), 1)
+    fails = fails + gate("CMP3 σ∘σ=σ+n @ 8191",              comp_holds(0, 0, 1, 0, 8191), 1)
+    fails = fails + gate("CMP3 |σ∘σ=σ+n in[2,N]| = 5",       comp_count(0, 0, 1, 0, N), 5)
+    // CMP4 σ(φ(n))=n classical (φ-fixed-σ): holds at 3,15,28,255,744 (sparse).
+    fails = fails + gate("CMP4 σ∘φ=n @ 15  (classical)",     comp_holds(0, 3, 2, 5, 15), 1)
+    // CMP5 bounded-UNIQUE composition singleton: σ(φ(n))=2n ⟺ n=1209 only in
+    // [2,N] (composition_hunt.py · the lone bounded-unique singleton survivor).
+    fails = fails + gate("CMP5 σ∘φ=2n ⟺ n=1209 (bnd-uniq)", verify_composition(0, 3, 0, 2, N), 1209)
+    // CMP-neg: σ∘σ=2n is a SET (count 5), so the bounded-UNIQUE verify rejects
+    // it as non-unique (-1) — honest: superperfect is a family, not a singleton.
+    fails = fails + gate("CMP-neg σ∘σ=2n non-unique → -1",   verify_composition(0, 0, 0, 2, N), -1)
+    // ── FP FINGERPRINT KERNEL GATES (OUROBOROS-novel M2 · consolidated from
+    //    grammar.hexa M1). Frozen rolling-hash constants (seed 1469598103 ·
+    //    base 1000003 · P=2^61-1): closed-form count, 2-build determinism,
+    //    in-well membership (sigma*phi), out-of-well (size-3 not in FP_2),
+    //    and an exact term-value anchor.
+    println("FP FINGERPRINT KERNEL GATES (M2 · FP_2 over [2,64]):")
+    let NF = 64
+    fails = fails + gate("F1 fp table count = 189", ie_fp_table_count(), 189)
+    let ft1 = ie_fp_table_build(NF)
+    let ft2 = ie_fp_table_build(NF)
+    fails = fails + gate("F2 table len == closed form", len(ft1), 189)
+    let same = 1
+    if len(ft1) != len(ft2) { same = 0 }
+    else {
+        let fi = 0
+        while fi < len(ft1) { if ft1[fi] != ft2[fi] { same = 0 } fi = fi + 1 }
+    }
+    fails = fails + gate("F3 two builds deterministic", same, 1)
+    let inw = 0
+    if ie_fp_contains(ft1, ie_term_fingerprint(0, 3, NF)) { inw = 1 }
+    fails = fails + gate("F4 sigma*phi in FP_2 (in-well)", inw, 1)
+    let outw = 0
+    if ie_expressible_at(ie_term3_fingerprint(5, 0, 3, NF), NF) { outw = 1 }
+    fails = fails + gate("F5 size-3 n*sigma*phi NOT in FP_2 (out-of-well)", outw, 0)
+    fails = fails + gate("F6 ie_term_value sigma(6)=12", ie_term_value(0, 0 - 1, 6), 12)
+    println("")
+    // ── Erdős–Straus bounded-witness gates (🟩 ledger atom · [2,N] finite) ──
+    //    forall n>=2 stays 🟥 OPEN — these only assert the finite [2,N] atom.
+    println("ERDOS-STRAUS BOUNDED-WITNESS GATES (4/n = 1/x+1/y+1/z over [2,N]):")
+    fails = fails + gate("E1 witness at n=2 (1,2,2)", es_witness_at(2), 1)
+    fails = fails + gate("E2 witness at n=3", es_witness_at(3), 1)
+    fails = fails + gate("E3 witness at n=5", es_witness_at(5), 1)
+    fails = fails + gate("E4 witness at prime n=101", es_witness_at(101), 1)
+    fails = fails + gate("E5 bounded [2,100] all have witness", verify_erdos_straus(100), 1)
+    fails = fails + gate("E6 no counterexample in [2,100]", es_first_counterexample(100), 0)
+    println("")
+    if fails == 0 {
+        println("RESULT: PASS - native exact-int identity verifier absorbed into binary")
+        exit(0)
+    }
+    println("RESULT: FAIL (" + to_string(fails) + ")")
+    exit(1)
+}

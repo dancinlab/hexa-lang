@@ -78,8 +78,16 @@ esac
 #   regen + SSOT reconcile + build runtime.a) -> stage_prebuild_hexat.
 # IDEMPOTENT: skip entirely when both artifacts are already fresh, so a
 # warm tree (or a re-run) is a no-op and the recipe stays byte-stable.
-if [ -x "$HEXA_V2" ] && [ -f self/runtime.c ]; then
-    echo "  [0/5] regen: SKIP — hexat + self/runtime.c already present (warm tree)"
+# #42416907 freshness guard: a warm $HEXA_V2 built BEFORE a compiler-source edit
+# (e.g. a lexer.hexa change) is STALE — it transpiles the current source with the
+# old rules (the "unbalanced regex literal / s) / at line 45516" failure = a pre-
+# RParen-value-ender hexat seen on summer+aiden warm trees). If ANY self/ or
+# compiler/lex .hexa is newer than the hexat seed, do NOT skip — rebuild it from
+# current source (byte-stable: the SSOT-regen produces a fresh, correct hexat).
+_apw_stale=""
+[ -x "$HEXA_V2" ] && _apw_stale="$(find self compiler/lex -name '*.hexa' -newer "$HEXA_V2" -print -quit 2>/dev/null || true)"
+if [ -x "$HEXA_V2" ] && [ -f self/runtime.c ] && [ -z "$_apw_stale" ]; then
+    echo "  [0/5] regen: SKIP — hexat + self/runtime.c already present (warm tree, hexat fresh)"
     # zero-c leg-B r2a — alloc multiple-definition wall (warm-tree stale .c).
     # STAGE-0 is skipped on a warm tree, so a STALE self/runtime_core.c (a
     # .gitignore'd GENERATED artifact left from a pre-#3583 emitter, where the C
@@ -365,7 +373,7 @@ fi
 # path per-prim even when a seed exists.
 STR_CORE_OBJ=""
 STR_DEF=""
-if [ "${HEXA_RT_STR_EQ_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-1}" != "0" ]; then
+if [ "${HEXA_RT_STR_EQ_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_INDEX_OF_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_CONTAINS_NATIVE:-1}" != "0" ]; then
     case "$(uname -sm 2>/dev/null)" in
         "Linux x86_64")                 STR_SEED="$REPO/self/native/str_core_x86_64.s" ;;
         "Linux aarch64"|"Linux arm64")  STR_SEED="$REPO/self/native/str_core_arm64-linux.s" ;;
@@ -381,6 +389,8 @@ if [ "${HEXA_RT_STR_EQ_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_STARTS_WITH_NATI
         [ "${HEXA_RT_STR_EQ_NATIVE:-1}" != "0" ] && STR_DEF="$STR_DEF -DHEXA_RT_STR_EQ_NATIVE=1"
         [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-1}" != "0" ] && STR_DEF="$STR_DEF -DHEXA_RT_STR_STARTS_WITH_NATIVE=1"
         [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-1}" != "0" ] && STR_DEF="$STR_DEF -DHEXA_RT_STR_ENDS_WITH_NATIVE=1"
+        [ "${HEXA_RT_STR_INDEX_OF_NATIVE:-1}" != "0" ] && STR_DEF="$STR_DEF -DHEXA_RT_STR_INDEX_OF_NATIVE=1"
+        [ "${HEXA_RT_STR_CONTAINS_NATIVE:-1}" != "0" ] && STR_DEF="$STR_DEF -DHEXA_RT_STR_CONTAINS_NATIVE=1"
         echo "  [3/5] RT-NATIVE STR: defs [$STR_DEF] — native string scan/compare path"
     else
         echo "  [3/5] RT-NATIVE STR: no seed for $(uname -m) — C strcmp/strncmp #else path (no-seed fallback)" >&2
@@ -427,6 +437,28 @@ if [ "${HEXA_ZEROC_RT_CORE_LEAF:-0}" != "0" ]; then
     RTCORE_LEAF_OBJ="$REPO/build/rtcore_leaf_native.o"
     RTCORE_LEAF_DEF="-DHEXA_RT_CORE_LEAF_NATIVE=1"
     echo "  [3/5] ZERO-C RT-CORE-LEAF: HEXA_ZEROC_RT_CORE_LEAF=1 — 10 HexaVal ctors linked from native seed .o"
+fi
+
+# -- HEXA_ZEROC_RT_CORE_STRARR_READ (str-leaf read cluster link de-risk, OPT-IN OFF) --
+# When HEXA_ZEROC_RT_CORE_STRARR_READ=1, the 2 pure str-leaf read fns
+# (hexa_str_char_code_at / hexa_str_byte_at) are linked from a native seed .o
+# (self/native/rtcore_strarr-read_emit.hexa SSOT) instead of compiling the inline
+# #else bodies. Default (flag unset) is byte-identical (the #ifndef guards keep the
+# inline bodies), so this is a byteeq-neutral drop de-risk toward the runtime_core.c flip.
+RTCORE_STRARR_READ_OBJ=""
+RTCORE_STRARR_READ_DEF=""
+if [ "${HEXA_ZEROC_RT_CORE_STRARR_READ:-0}" != "0" ]; then
+    # ALWAYS regen when the flag is on (idempotent · self-verifies 2/2 nm) — avoid the
+    # ossified `[ ! -f .o ]`-skip-stale-seed defect (convergence build-aprime-stale-native-seed-o:
+    # a warm-tree .o kept past a seed update links an old symbol set → undefined symbols).
+    CC="${CC:-clang}" ARCH_FLAG="$ARCH_FLAG" bash tool/regen_rtcore_strarr-read_native_o.sh "$REPO/build/rtcore_strarr-read_native.o" >&2 \
+        || { echo "build_aprime: HEXA_ZEROC_RT_CORE_STRARR_READ=1 but rtcore_strarr-read_native.o build failed" >&2; exit 1; }
+    if [ ! -f "$REPO/build/rtcore_strarr-read_native.o" ]; then
+        echo "build_aprime: HEXA_ZEROC_RT_CORE_STRARR_READ=1 but build/rtcore_strarr-read_native.o missing" >&2; exit 1
+    fi
+    RTCORE_STRARR_READ_OBJ="$REPO/build/rtcore_strarr-read_native.o"
+    RTCORE_STRARR_READ_DEF="-DHEXA_RT_CORE_STRARR_READ_NATIVE=1"
+    echo "  [3/5] ZERO-C RT-CORE-STRARR-READ: HEXA_ZEROC_RT_CORE_STRARR_READ=1 — 2 str-leaf read fns linked from native seed .o"
 fi
 
 # -- HEXA_ZEROC_RT_CORE_ARITH (leg-B r5 clean-6 + r6 +__raw_fmod arith link de-risk, OPT-IN OFF) --
@@ -763,11 +795,19 @@ mkdir -p "$(dirname "$OUT")"
 # -D_FORTIFY_SOURCE=0          : ___memcpy_chk etc fortified wrappers
 # -fno-stack-protector         : ___stack_chk_fail/_guard
 # These flags are link-equivalent — no source change required.
+# r28: resolve residual runtime externs (rt_str_split/rt_str_trim … — symbols
+# NOT in the inlined runtime.c nor the native seed .o's) via the prebuilt
+# build/runtime.a, appended LAST as a lazy archive (only undefined members
+# pulled → no multidef when a symbol is already defined by an earlier object;
+# same fix-class as #4125 build_native_linux_x86_64). Absent → omitted (the
+# pre-r28 link, byte-identical). Closes the arm64 aprime_cc faithful-gate link
+# fail (5/5 reliable: undefined reference rt_str_split/rt_str_trim).
+RT_A=""; [ -f "$REPO/build/runtime.a" ] && RT_A="$REPO/build/runtime.a"
 CL_ERR="$(clang -Oz $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
     -ffunction-sections -fdata-sections $DEAD_STRIP \
     -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen \
-    -D_FORTIFY_SOURCE=0 -fno-stack-protector $ALLOC_DEF $STR_DEF $PRINT_DEF $RTCORE_LEAF_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MATH2_DEF $RTCORE_VALOP_DISPATCH_DEF $RTCORE_MAP_QUERY_DISPATCH_DEF $RTCORE_MAP_QUERY_FOLD_DEF $RTCORE_COLLECTION_MUTATE_DEF $RTCORE_ATL_DEF $RTCORE_FS_RW_DEF $RTCORE_ACF_DEF $RTCORE_RUNTIME_MISC_DEF \
-    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $STR_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ $RTCORE_VALOP_DISPATCH_OBJ $RTCORE_MAP_QUERY_DISPATCH_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
+    -D_FORTIFY_SOURCE=0 -fno-stack-protector $ALLOC_DEF $STR_DEF $PRINT_DEF $RTCORE_LEAF_DEF $RTCORE_STRARR_READ_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MATH2_DEF $RTCORE_VALOP_DISPATCH_DEF $RTCORE_MAP_QUERY_DISPATCH_DEF $RTCORE_MAP_QUERY_FOLD_DEF $RTCORE_COLLECTION_MUTATE_DEF $RTCORE_ATL_DEF $RTCORE_FS_RW_DEF $RTCORE_ACF_DEF $RTCORE_RUNTIME_MISC_DEF \
+    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $STR_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_STRARR_READ_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ $RTCORE_VALOP_DISPATCH_OBJ $RTCORE_MAP_QUERY_DISPATCH_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ $RT_A -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
 # ZERO-C Z2a: restore the warm runtime_core.c artifact ONLY when runtime_hi_gen.c
 # still exists (legacy gated test). When the file is permanently gone (default
 # Z2a path) keep the `#include` removed — restoring it would make the stage-5
@@ -793,10 +833,10 @@ EXTRA_DEFS=""
 if [ "$(uname -s)" = "Darwin" ]; then
     EXTRA_DEFS="-D_DARWIN_C_SOURCE"
 fi
-clang -c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE $EXTRA_DEFS $ALLOC_DEF $RTCORE_LEAF_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MATH2_DEF $RTCORE_VALOP_DISPATCH_DEF $RTCORE_MAP_QUERY_DISPATCH_DEF $RTCORE_MAP_QUERY_FOLD_DEF $RTCORE_COLLECTION_MUTATE_DEF $RTCORE_ATL_DEF $RTCORE_FS_RW_DEF $RTCORE_ACF_DEF $RTCORE_RUNTIME_MISC_DEF -Wno-trigraphs -I self -I . \
+clang -c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE $EXTRA_DEFS $ALLOC_DEF $RTCORE_LEAF_DEF $RTCORE_STRARR_READ_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MATH2_DEF $RTCORE_VALOP_DISPATCH_DEF $RTCORE_MAP_QUERY_DISPATCH_DEF $RTCORE_MAP_QUERY_FOLD_DEF $RTCORE_COLLECTION_MUTATE_DEF $RTCORE_ATL_DEF $RTCORE_FS_RW_DEF $RTCORE_ACF_DEF $RTCORE_RUNTIME_MISC_DEF -Wno-trigraphs -I self -I . \
     self/runtime.c -o "$RTO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
 clang $ARCH_FLAG "$SMS" -c -o "$SMO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
-clang $ARCH_FLAG "$SMO" "$RTO" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ $RTCORE_VALOP_DISPATCH_OBJ $RTCORE_MAP_QUERY_DISPATCH_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
+clang $ARCH_FLAG "$SMO" "$RTO" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_STRARR_READ_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ $RTCORE_VALOP_DISPATCH_OBJ $RTCORE_MAP_QUERY_DISPATCH_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
 if [ ! -x "$SMB" ]; then
     echo "build_aprime: smoke link failed" >&2
     exit 2

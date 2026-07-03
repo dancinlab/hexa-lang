@@ -1,0 +1,42 @@
+// c12_naked_emit.hexa — miscompile class: @naked fn raw-asm emit (ING #29).
+// Exercises the @naked fn attribute codegen path (the SECOND building block for
+// the signal SA_RESTORER + setjmp/longjmp walls, after __hx_fn_addr #4264).
+// Verifies the rt_sigreturn trampoline body is emitted as raw machine code:
+//   mov rax, 15   ; syscall number for rt_sigreturn (x86_64 Linux)
+//   syscall       ; enter kernel — never returns
+// encoding = 48 c7 c0 0f 00 00 00 0f 05 (9 bytes, reference-match musl
+// __restore_rt / glibc restore_rt / Linux arch/x86/kernel/signal.c).
+// The probe itself cannot CALL the trampoline (rt_sigreturn never returns and
+// needs a real signal frame) — it is an EMIT-CORRECTNESS probe verified by
+// objdump on the emitted .o, NOT a runtime call. A mis-lowered @naked would
+// surface as an emitted prologue (push rbp / mov rbp,rsp / callee-save pushes)
+// polluting the trampoline body, or the epilogue appending a stray `ret`.
+//
+// This probe is NATIVE-BACKEND-ONLY — the release `hexa build`/`run` backends
+// (C-transpile) do not lower @naked. It runs under the native self-host backend
+// (aprime_cc / hexat -e). Added by ING #29 (@naked building block, 2026-06-30).
+//
+// NOTE: this file is the SOURCE-LEVEL declaration that the trampoline fn EXISTS
+// and is @naked. The actual byte-level verification is done via objdump on the
+// emitted object — see the run script + verdict capture. The runtime body here
+// is a harmless echo so the probe file itself compiles cleanly.
+
+@naked
+fn hx_sigreturn_trampoline() {
+    // rt_sigreturn trampoline — mov rax,15 ; syscall
+    // (never returns; the kernel restores the full saved context and resumes
+    // at the interrupted instruction). The @naked attribute makes the codegen
+    // emit ONLY this body with NO prologue/epilogue.
+    __hx_syscall0(15)
+    return
+}
+
+let tramp_addr = __hx_fn_addr(hx_sigreturn_trampoline)
+let tramp_tag = __hx_tag(tramp_addr)
+
+println("trampoline @naked fn present, raw addr tag (want 0=TAG_INT):", tramp_tag)
+if tramp_tag == 0 {
+    println("PASS: @naked fn emitted (objdump on .o verifies mov rax,15 ; syscall body)")
+} else {
+    println("FAIL: trampoline addr not raw — tag", tramp_tag)
+}
