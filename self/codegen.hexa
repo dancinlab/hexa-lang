@@ -2853,6 +2853,17 @@ fn _gen2_count_defers(stmts) {
                 j = j + 1
             }
         }
+        // If-as-expression: `if cond { ... }` in statement position parses as
+        // ExprStmt wrapping an if-expr whose then/else bodies live on the
+        // INNER node (s.left) — mirror _gen2_collect_lets_stmt's descent.
+        // Without this the decl pre-scan undercounts (t_cond: __defer_1
+        // emitted but never declared -> C compile error).
+        if k == "ExprStmt" && type_of(s.left) != "string" {
+            let e = s.left
+            if type_of(e.body) == "array" { n = n + _gen2_count_defers(e.body) }
+            if type_of(e.then_body) == "array" { n = n + _gen2_count_defers(e.then_body) }
+            if type_of(e.else_body) == "array" { n = n + _gen2_count_defers(e.else_body) }
+        }
     }
     return n
 }
