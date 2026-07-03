@@ -131,3 +131,14 @@ regex에 그대로 적용 가능하고, 콜드-스타트 제약(runtime.a는 컴
 | **PR-B (flip, default-ON)** | 리졸버 gate opt-IN→opt-OUT 1줄 · regex corpus 추가 · seed-드리프트 ADVISORY lint | byteeq 3-target + faithful-nobaseline ×3 (regcomp/regexec/regfree 소멸 캡처) + consent + install smoke + corpus GREEN |
 
 핵심 한 줄: **strtod가 이미 닦아 놓은 frozen-`.s`→`extra_obj`→`runtime.a` 고속도로를 그대로 타되, regex만의 신규 위험(공개 stdlib 모듈이 seed 안에 통째로 들어와 생기는 ~80개 전역 심볼)을 `.globl` 강등으로 6-심볼 계약으로 봉인한다.**
+---
+
+## rev2 (2026-07-03) — V1 벽 근본규명: `chr` bind allowlist 등록 갭 (계열 1 유효)
+
+V1 open-question("regex_rt @pure leaf 가정")은 **부분 반증**: leaf-purity 문제가 아니라 **tier-1 aprime의 builtin 2단 게이트 중 bind 1단 등록 갭**이 실체.
+- **측정**: fresh aprime(브랜치서 재빌드·smoke PASS)로도 `undefined name chr` ×5 → stale 배제, isolated `--emit=asm`이 `chr` 미bind가 근본.
+- **근본**: `chr`은 런타임 빌트인(`self/runtime.c:6164 hexa_chr_byte`·`ord`의 역). codegen 게이트는 이미 완비(`compiler/codegen/arm64_darwin.hexa:1730 _builtin_runtime_sym: chr→hexa_chr_byte`·x86_64 lane 공유). **bind 게이트만 빠짐**(`compiler/check/bind.hexa:1490 _bind_builtin_names()`에 ord/from_char_code는 있고 chr 없음). full closure가 통과한 건 gen2가 컴파일(gen2 binder+codegen이 chr 보유)했기 때문·tier-1 aprime은 chr을 bind한 적 없음(tier-1서 chr 호출=regex_rt #4445 신규뿐).
+- **fix = bind.hexa에 `"chr"` 1줄**(regex_rt/codegen/regen 전부 무변경). byteeq-neutral: `check/bind.hexa`는 gen2 closure(self/main.hexa)가 import 안 함(comment-only)→shipping 바이트 무변·gen3≡gen4 무영향·aprime만 재빌드(CI-fresh·frozen 없음). seed에 `U hexa_chr_byte` 1개 추가되나 runtime.a 내부 정의라 libc floor 기여 0.
+- 계열 A(chr→from_char_code)=REJECT(from_char_code도 builtin·의미 다름=codepoint vs raw-byte). 계열 2(C 직emit)=불채택 유지.
+- fallback(B′ 막히면)=계열 A′: 5 사이트를 `bytes_to_str_raw([c])`로(단 regex_rt=shipping closure라 full byteeq 재게이트 필요).
+- 규제 하드닝: regen `emit_one` stderr 보존(silent `>/dev/null` 이 chr 갭 은닉했음).

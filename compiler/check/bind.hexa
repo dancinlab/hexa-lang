@@ -1488,6 +1488,13 @@ fn _bind_builtin_names() -> [string] {
         "write_f32", "write_i32", "write_i64", "deref_f32", "deref_i32",
         "ptr_write_f32", "ptr_write_i32", "ptr_read_f32", "ptr_read_f64", "ptr_read_i32",
         "ord",
+        // zeroc #29 regex-seed regen — `chr(n)` raw-byte builtin (ord's inverse).
+        // Absent here, present in the 2nd gate: _builtin_runtime_sym maps
+        // chr -> hexa_chr_byte (arm64_darwin.hexa, shared by the x86_64 lane;
+        // runtime body self/runtime.c hexa_chr_byte, NUL-safe N&0xFF). Exposed by
+        // the isolated --emit=asm of stdlib/runtime/regex_rt.hexa (HX2001 x5) — the
+        // gen2 lineage always had it (self/codegen.hexa chr->hexa_chr_byte).
+        "chr",
         // RUNTIME.md step-3 잔여 #4 pointer-eq inline builtins (cycle 100,
         // 2026-05-22). `__vs_ptr_eq(a, b)` / `__map_ptr_eq(a, b)` lower to
         // a single inline `hexa_bool((HX_VS(a) == HX_VS(b)))` etc in

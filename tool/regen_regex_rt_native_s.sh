@@ -70,9 +70,18 @@ emit_one() {
     # If `use`-import auto-resolution makes regex_rt.hexa alone sufficient, the extra
     # positionals are idempotent; if aprime rejects duplicate positionals, fall back to
     # SRC_MAIN only (the resolver still gates on the 6-symbol SAFETY either way).
-    "$APRIME" "$TMP/_drv.hexa" --emit=asm --target="$triple" -o "$raw" \
-        "$SRC_MAIN" "$SRC_THOMPSON" "$SRC_BT" >/dev/null 2>&1 \
-      || "$APRIME" "$TMP/_drv.hexa" --emit=asm --target="$triple" -o "$raw" "$SRC_MAIN" >/dev/null 2>&1
+    # Preserve emit stderr so a real diagnostic (e.g. an HX2001 undefined-builtin
+    # from a bind allowlist gap) is LOUD, not swallowed — the silent `>/dev/null`
+    # double-fail hid the `chr` bind gap on the first cut. On double-fail, echo the
+    # captured diagnostics and abort.
+    if ! "$APRIME" "$TMP/_drv.hexa" --emit=asm --target="$triple" -o "$raw" \
+            "$SRC_MAIN" "$SRC_THOMPSON" "$SRC_BT" 2>"$TMP/emit.err"; then
+        "$APRIME" "$TMP/_drv.hexa" --emit=asm --target="$triple" -o "$raw" "$SRC_MAIN" 2>>"$TMP/emit.err" || {
+            echo "[regen_regex_rt] ERROR: $triple aprime --emit=asm failed (both multi-file and regex_rt-only):" >&2
+            sed 's/^/    /' "$TMP/emit.err" >&2
+            exit 1
+        }
+    fi
 
     # --- .globl DEMOTION post-pass: keep ONLY the 6 rt_regex_* .globl, drop the rest ---
     # A .globl line for a contract symbol is kept (branch to end); any other .globl line
