@@ -4403,7 +4403,16 @@ fn cmd_run_user_direct(file, extra_args) {
     // silent), proven via the flatten-faithful 361-corpus audit + 3-target
     // byteeq + shipping smoke. HEXA_RUN_NATIVE=1 is kept as a no-op accepted
     // synonym (still forces native) for back-compat with existing invocations.
-    let _run_native_on = env("HEXA_RUN_CTRANSPILE") != "1"
+    // Host gate (2026-07-03): the native --emit=obj path below is x86_64-linux
+    // ONLY end-to-end — the emit hardcodes --target=x86_64-linux-gnu and the ld
+    // link needs linux crt1.o + ld-linux. On any other host (darwin CI runners)
+    // the emit always COMPLETES and is then discarded at the crt probe → pure
+    // wasted wall. Measured on the anima engine gate (ghost, darwin-arm64):
+    // ~24min of a 24m30s cold was this doomed emit; the shipped binary came
+    // from the clang fallback anyway. Skipping straight to that fallback on
+    // non-linux-x86_64 hosts is outcome-identical minus the doomed compile.
+    let _run_native_host = exec("uname -sm 2>/dev/null").trim()
+    let _run_native_on = _run_native_host == "Linux x86_64" && env("HEXA_RUN_CTRANSPILE") != "1"
     if !file_exists(tmpbin) && _run_native_on {
         let _ncc = resolve_native_cc()
         let _nrt = resolve_prebuilt_runtime()
@@ -4433,6 +4442,11 @@ fn cmd_run_user_direct(file, extra_args) {
             }
             // 1) native object emit (no clang) — on the flattened source
             let _ne = if len(_nsrc) > 0 { exec("'" + _ncc + "' _drv.hexa --emit=obj --target=x86_64-linux-gnu -o '" + _nobj + "' '" + _nsrc + "' 2>&1") } else { "flatten-failed-skip-native" }
+            // Observability (2026-07-03): the emit's merged output carries the
+            // HEXA_CG_PROFILE per-pass rows; swallowing it on success made the
+            // instrumentation unreachable from CI (anima gate saw 0 rows over
+            // a 24m cold). Forward it when profiling is on.
+            if env("HEXA_CG_PROFILE") == "1" && len(_ne) > 0 { eprintln(_ne) }
             let _nobj_ok = exec("test -s '" + _nobj + "' && printf yes || printf no")
             if _nobj_ok == "yes" {
                 // 2) ld link (no clang): crt + runtime.a + libm/libc/pthread.
@@ -4494,6 +4508,10 @@ fn cmd_run_user_direct(file, extra_args) {
             let _ = exec("( " + bcmd + " ) > '" + _brc_log + "' 2>&1")
             if file_exists(_brc_log) {
                 bout = exec("cat '" + _brc_log + "' 2>/dev/null")
+                // Same observability rule as the native emit above: the inner
+                // build's captured output (hexat [1/2]/[2/2] + profile rows) is
+                // otherwise swallowed on success — forward under profiling.
+                if env("HEXA_CG_PROFILE") == "1" && len(bout) > 0 { eprintln(bout) }
                 exec("rm -f '" + _brc_log + "' 2>/dev/null")
             } else {
                 bout = exec(bcmd)
