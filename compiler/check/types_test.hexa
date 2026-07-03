@@ -167,6 +167,24 @@ fn _let_decl_expr(name: string, file: string, line: i64, col: i64) -> Expr {
     }
 }
 
+// HEXA-OWN L2 r1 — `@own let <name> = rhs`. Same shape as _let_expr plus a
+// bare `own` Annotation, mirroring what parse_stmt collects ahead of a
+// body-level let (parser.hexa parse_annotation → Expr.annotations).
+fn _own_let_expr(name: string, rhs: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut anns: [Annotation] = []
+    anns.push(Annotation { name: "own", args: [], span: _span(file, line, col, 4) })
+    let mut kids = []
+    kids.push(rhs)
+    return Expr {
+        kind: ExprKind::Let,
+        span: _span(file, line, col, 3),
+        text: name,
+        annotations: anns,
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
 // Wall A r3 — `lhs = rhs` assignment. children = [lhs, rhs] per the Assign
 // arm in types.hexa:_infer_expr.
 fn _assign_expr(lhs: Expr, rhs: Expr, file: string, line: i64, col: i64) -> Expr {
@@ -212,6 +230,36 @@ fn _field_expr(recv: Expr, field: string, file: string, line: i64, col: i64) -> 
         text: field,
         annotations: [],
         children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// Wall A r6 — one struct-literal field-init. The parser
+// (parser.hexa:1184 parse_struct_lit_after_name) builds each `name: value`
+// pair as an Ident node whose text = field NAME and children[0] = value expr.
+fn _field_init(field: string, value: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(value)
+    return Expr {
+        kind: ExprKind::Ident,
+        span: _span(file, line, col, len(field)),
+        text: field,
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// Wall A r6 — struct literal `Name { f0: v0, f1: v1 }`. text = struct NAME,
+// children = the field-init Ident nodes (parser.hexa:1204 shape the r6 arm in
+// types.hexa:_infer_expr reads).
+fn _struct_lit_expr(name: string, inits: [Expr], file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::StructLit,
+        span: _span(file, line, col, len(name)),
+        text: name,
+        annotations: [],
+        children: inits,
         atlas_ref: _empty_atlas_ref()
     }
 }
@@ -706,6 +754,86 @@ fn _build_case_static_types_r5() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// Wall A r6 — struct-literal field-init mismatch. The LAST scope-wireable
+// rung. The same `struct Point { x: i32, y: i32 }` registry r5 builds also
+// types a CONSTRUCTION site `Point{ x: <expr>, y: <expr> }`: each field-init
+// value is matched to the declared field type and a known-scalar mismatch is
+// REJECTed with HX3011 (Rust E0308 check_expr_struct_fields coercion). Two
+// REJECT shapes + one matching control:
+//   struct Point { x: i32, y: i32 }
+//   fn f() {
+//       let _p = Point { x: "s", y: 7 }   // x: string ≠ i32 → REJECT;
+//                                          // y: 7 int-lit coerces → clean
+//       let _q = Point { x: true }        // x: bool ≠ i32   → REJECT
+//   }
+// Under the flag exactly 2 HX3011 (x:"s" + x:true); the matching `y: 7` and
+// the default build (flag-off) emit zero — the byteeq-neutral proof. Extends
+// r5's field-place-assign contract to the struct-literal construction place.
+fn _build_case_static_types_r6() -> Module {
+    let f = "case_static_r6.hexa"
+    // struct Point { x: i32, y: i32 }
+    let mut sfields = []
+    sfields.push(_param("x", "i32", f, 1, 15))
+    sfields.push(_param("y", "i32", f, 1, 23))
+    let item_pt = _struct_item("Point", sfields, f, 1)
+    // fn f() { … }
+    let mut kids = []
+    // let _p = Point { x: "s", y: 7 }
+    let mut inits_p = []
+    inits_p.push(_field_init("x", _string_expr("s", f, 3, 25), f, 3, 22))
+    inits_p.push(_field_init("y", _int_expr("7", f, 3, 33), f, 3, 30))
+    kids.push(_struct_lit_expr("Point", inits_p, f, 3, 14))
+    // let _q = Point { x: true }
+    let mut inits_q = []
+    inits_q.push(_field_init("x", _bool_expr("true", f, 4, 25), f, 4, 22))
+    kids.push(_struct_lit_expr("Point", inits_q, f, 4, 14))
+    let body = _block(kids, f, 2, 1)
+    let item_f = _fn_item("f", [], _empty_type_ref(), body, f, 2)
+    let mut items = []
+    items.push(item_pt)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// HEXA-OWN L2 r1 — @own use-after-move lint (HEXA_OWN_LINT=1). A block-local
+// `@own let` binding is single-owner: its first bare-ident consumption (the
+// RHS of a later `let`, an assignment RHS, or a call argument) MOVES it; any
+// second use warns HX3012 (Rust E0382 shape, warning band — never aborts).
+// One module covers all four r1 contracts:
+//   fn main() {
+//       @own let x = 5        // register x (own, live)
+//       let a = x             // FIRST use = move           → clean
+//       let b = x             // SECOND use = use-after-move → HX3012 (×1)
+//       @own let p = 1        // independent own binding
+//       @own let q = 2        // independent own binding
+//       let c = p             // p's first (only) move       → clean
+//       let d = q             // q's first (only) move       → clean
+//   }                          //   (p moved must NOT cross-fire onto q)
+// Under the flag exactly 1 HX3012 (the `let b = x` site); use-before-move
+// (`let a = x`, `c = p`, `d = q`) never fires; two independent @own bindings
+// don't cross-fire. On the default build → 0 (byteeq-neutral proof).
+fn _build_case_own_lint() -> Module {
+    let f = "case_own_lint.hexa"
+    let mut kids = []
+    // @own let x = 5
+    kids.push(_own_let_expr("x", _int_expr("5", f, 2, 18), f, 2, 5))
+    // let a = x   → first move of x (clean)
+    kids.push(_let_expr("a", _ident_expr("x", f, 3, 13), f, 3, 5))
+    // let b = x   → use-after-move → HX3012
+    kids.push(_let_expr("b", _ident_expr("x", f, 4, 13), f, 4, 5))
+    // @own let p = 1 ; @own let q = 2
+    kids.push(_own_let_expr("p", _int_expr("1", f, 5, 18), f, 5, 5))
+    kids.push(_own_let_expr("q", _int_expr("2", f, 6, 18), f, 6, 5))
+    // let c = p ; let d = q   → one move each (clean, no cross-fire)
+    kids.push(_let_expr("c", _ident_expr("p", f, 7, 13), f, 7, 5))
+    kids.push(_let_expr("d", _ident_expr("q", f, 8, 13), f, 8, 5))
+    let body = _block(kids, f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // ── Driver ───────────────────────────────────────────────────
 
 fn _run_case(label: string, m: Module) -> array {
@@ -934,6 +1062,55 @@ fn main() {
             ok = false
         } else {
             println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (m) Wall A r6 — struct-literal field-init mismatch. Under the flag, with
+    // `struct Point { x: i32, y: i32 }`, a construction `Point { x: "s", y: 7 }`
+    // REJECTs the `x: "s"` (string ≠ i32) while `y: 7` coerces, and a second
+    // `Point { x: true }` REJECTs `x: true` (bool ≠ i32) → 2 HX3011 total. On
+    // the default build → 0 (byteeq-neutral). Extends (l)'s field-place-assign
+    // contract to the struct-literal construction place — the LAST scope-
+    // wireable rung (r7+ = generic/trait static-dispatch = measured ceiling).
+    let diags_m = _run_case("(m) static-types r6 — struct-literal field-init mismatch (HEXA_STATIC_TYPES)", _build_case_static_types_r6())
+    let nm = _count_code(diags_m, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if nm != 2 {
+            println("  FAIL: case (m) HEXA_STATIC_TYPES=1 expected 2 HX3011 (x:\"s\" + x:true), got " + to_string(nm) + " (total=" + to_string(len(diags_m)) + ")")
+            ok = false
+        } else {
+            println("  ok: 2 HX3011 emitted (Point{x:\"s\"} string + Point{x:true} bool; matching y:7 stays clean)")
+        }
+    } else {
+        if nm != 0 {
+            println("  FAIL: case (m) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nm) + " (total=" + to_string(len(diags_m)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (n) HEXA-OWN L2 r1 — @own use-after-move lint (HEXA_OWN_LINT). Under
+    // the flag, `@own let x = 5; let a = x; let b = x` warns HX3012 exactly
+    // ONCE (at `let b = x`): the first use is the move (clean), the second is
+    // the use-after-move. The two independent `@own` bindings p/q, each moved
+    // once, must NOT cross-fire. On the default build → 0 (byteeq-neutral).
+    // Same self-adapting contract as (h)-(m), on the NEW own-lint flag.
+    let diags_n = _run_case("(n) own-lint r1 — @own use-after-move (HEXA_OWN_LINT)", _build_case_own_lint())
+    let nn = _count_code(diags_n, "HX3012")
+    if env("HEXA_OWN_LINT") == "1" {
+        if nn != 1 {
+            println("  FAIL: case (n) HEXA_OWN_LINT=1 expected 1 HX3012 (let b = x), got " + to_string(nn) + " (total=" + to_string(len(diags_n)) + ")")
+            ok = false
+        } else {
+            println("  ok: 1 HX3012 emitted (move `let a = x` clean; use-after-move `let b = x` warns; p/q don't cross-fire)")
+        }
+    } else {
+        if nn != 0 {
+            println("  FAIL: case (n) default build expected 0 HX3012 (byteeq-neutral), got " + to_string(nn) + " (total=" + to_string(len(diags_n)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3012 (default-OFF → byteeq-neutral)")
         }
     }
 

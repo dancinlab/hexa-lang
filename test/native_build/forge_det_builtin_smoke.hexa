@@ -1,0 +1,28 @@
+// test/native_build/forge_det_builtin_smoke.hexa
+// #4214 forge determinism API — compile-smoke (latent-regression guard).
+//
+// set_deterministic(true/false) and is_deterministic() are first-class native
+// runtime builtins (carrier path · self/runtime_emit_full.hexa, registered like
+// cuda_available — NO import required, NO `extern fn`).
+//
+// WHY THIS SMOKE EXISTS: before the fix, the canonical surface declared
+// `extern fn hexa_forge_set_deterministic` in stdlib/flame/forge_det.hexa, which
+// made the hexat emit an FFI dlsym wrapper NAMED `hexa_forge_set_deterministic`
+// (HexaVal ABI). That collided with runtime.h's C-ABI `void hexa_forge_set_
+// deterministic(int)` → clang "conflicting types" → the determinism surface
+// NEVER compiled. No test exercised it, so the bug stayed latent. This smoke
+// compiles + runs the builtins every PR so the surface can never silently
+// regress to uncompilable again.
+//
+// It asserts COMPILATION + callability, not specific det values: on a non-CUDA
+// build set_deterministic is a no-op and is_deterministic() reflects HEXA_DET
+// env, so the returned ints are build-dependent. Reaching the end = PASS.
+fn main() {
+    set_deterministic(true)
+    let after_true = is_deterministic()
+    set_deterministic(false)
+    let after_false = is_deterministic()
+    print("forge_det builtins compiled+ran: is_det(after set true)=") ; print(after_true)
+    print("  is_det(after set false)=") ; println(after_false)
+    println("forge_det_builtin_smoke: PASS (canonical determinism surface compiles)")
+}

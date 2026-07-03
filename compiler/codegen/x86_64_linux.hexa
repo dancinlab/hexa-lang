@@ -276,7 +276,18 @@ pub struct X86RegMap {
     // the soundness firewall — a missed escape (a boxed-surface use reading the
     // packed buffer via the 16B-stride HexaArr layout) would be a miscompile, so
     // the scan is a CONSERVATIVE whitelist: any unrecognised use voids the proof.
-    local_packed_ok: [i64]
+    local_packed_ok: [i64],
+    // FLEET lane A2 (HEXA_PACK_ESCAPING) — id → 1 when this local is the STORAGE
+    // (array_lit dst T) of a typed-prim array binding that should esc-mint via
+    // hexa_arr_i64_new_esc (TAG_ARRAY_I64). Needed ONLY at the array_lit site
+    // because the empty-literal storage T carries type_id 0 (the typed handle X
+    // carries 101/102) — so the mint can't read the element kind off T directly.
+    // Index/len/push consumer sites key on the HANDLE's local_type (101/102) via
+    // _x86_operand_pack_esc and need no lattice. Built ONLY when
+    // `_pack_escaping_enabled()` → OFF leaves `[]`, never consulted → byteeq
+    // NEUTRAL. NO escape proof here (uniform-representation: ALL typed-prim
+    // arrays esc-mint + poly-read, so there is no packed/boxed straddle to void).
+    local_packed_esc_ok: [i64]
 }
 
 pub struct X86AllocResult {
@@ -658,7 +669,7 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
     // CONSUMER-side producer for the `local_type[]` regmap slot. Either gate ON
     // now builds the slot; OFF path (neither flag) keeps `[]` → byte-identical.
     let mut rm_local_type: [i64] = []
-    if _unbox_native_enabled() || _unbox_array_enabled() || _pack_array_enabled() {
+    if _unbox_native_enabled() || _unbox_array_enabled() || _pack_array_enabled() || _pack_escaping_enabled() {
         let lt_maxid = _x86_max_local_id(mf)
         let mut lj = 0
         while lj <= lt_maxid { rm_local_type.push(0); lj = lj + 1 }
@@ -873,7 +884,90 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
         }
     }
 
-    let map = X86RegMap { ids: map_ids, regs: map_regs, slots: map_slots, tag_base: tag_base, id2idx: rm_id2idx, local_type: rm_local_type, local_const_ok: rm_const_ok, local_const_val: rm_const_val, local_packed_ok: rm_packed_ok }
+    // ── FLEET lane A2 (HEXA_PACK_ESCAPING) — esc-mint storage lattice ────────
+    // Mark every array_lit STORAGE T whose typed handle X (`let X = T`, X type
+    // 101/102/103/104) is a typed-prim i64/i32/f64/f32 array, so the array_lit site
+    // can esc-mint instead of the boxed hexa_array_new:
+    //   101/102 (i64/i32) → hexa_arr_i64_new_esc → TAG_ARRAY_I64
+    //   103     (f64)     → hexa_arr_f64_new_esc → TAG_ARRAY_F64  (F64 mirror)
+    //   104     (f32)     → hexa_arr_f32_new_esc → TAG_ARRAY_F32  (LANE C, F32 mirror)
+    // The lattice now stores the ELEMENT type_id (101/102 collapse to 101 = the
+    // i64-class mint; 103 = the f64-class mint; 104 = the f32-class mint) so the
+    // mint site can dispatch on it — the empty-literal storage T carries type_id 0,
+    // so the kind must be propagated here from the typed handle X. f32 uses a
+    // DISTINCT HexaArrF32 (float[], 4B stride) but the 4B stride is internal to the
+    // data[] buffer — the descriptor + the poly-reader pair-model ABI are unchanged
+    // (the element is widened/narrowed double↔float at the C boundary), so f32 IS a
+    // homomorphic mirror at the codegen/ABI layer.
+    // A direct typed literal (`let xs = [1.0,2.0]` → X==T, T already 103) is also
+    // caught. NO escape proof — uniform representation (every typed-prim array is
+    // esc-tagged + poly-read) means there is no packed/boxed straddle.
+    // Built ONLY when `_pack_escaping_enabled()` → OFF leaves `[]` (byteeq).
+    let mut rm_packed_esc_ok: [i64] = []
+    if _pack_escaping_enabled() {
+        let pe_maxid = _x86_max_local_id(mf)
+        let mut pe0 = 0
+        while pe0 <= pe_maxid { rm_packed_esc_ok.push(0); pe0 = pe0 + 1 }
+        // Pass 1: collect array_lit dst ids (storage T candidates).
+        let mut pe_is_alit: [i64] = []
+        let mut pez = 0
+        while pez <= pe_maxid { pe_is_alit.push(0); pez = pez + 1 }
+        let mut peb = 0
+        while peb < len(mf.blocks) {
+            let peblk = mf.blocks[peb]
+            let mut pes = 0
+            while pes < len(peblk.stmts) {
+                let pest = peblk.stmts[pes]
+                if pest.kind == _STMT_ASSIGN && pest.op == "array_lit" {
+                    let ped = pest.dst.id
+                    if ped >= 0 && ped <= pe_maxid {
+                        pe_is_alit[ped] = 1
+                        // Direct typed literal storage is itself typed-prim → mint.
+                        // Store the i64-class mint marker (101) for 101/102, the
+                        // f64 marker (103) for 103, the f32 marker (104) for 104.
+                        let petd = rm_local_type[ped]
+                        if petd == 101 || petd == 102 { rm_packed_esc_ok[ped] = 101 }
+                        if petd == 103 { rm_packed_esc_ok[ped] = 103 }
+                        if petd == 104 { rm_packed_esc_ok[ped] = 104 }
+                    }
+                }
+                pes = pes + 1
+            }
+            peb = peb + 1
+        }
+        // Pass 2: a typed (101/102/103/104) `let X = T` where T is an array_lit
+        // storage propagates the typed element-kind back to T → esc-mint T with the kind.
+        let mut peb2 = 0
+        while peb2 < len(mf.blocks) {
+            let peblk2 = mf.blocks[peb2]
+            let mut pes2 = 0
+            while pes2 < len(peblk2.stmts) {
+                let pest2 = peblk2.stmts[pes2]
+                if pest2.kind == _STMT_ASSIGN && pest2.op == "let" && len(pest2.args) >= 1 &&
+                   pest2.args[0].kind == "local" {
+                    let pex = pest2.dst.id
+                    let pesrc = pest2.args[0].local_id
+                    let pext = if pex >= 0 && pex <= pe_maxid { rm_local_type[pex] } else { 0 }
+                    if (pext == 101 || pext == 102) && pesrc >= 0 && pesrc <= pe_maxid &&
+                       pe_is_alit[pesrc] == 1 {
+                        rm_packed_esc_ok[pesrc] = 101
+                    }
+                    if pext == 103 && pesrc >= 0 && pesrc <= pe_maxid &&
+                       pe_is_alit[pesrc] == 1 {
+                        rm_packed_esc_ok[pesrc] = 103
+                    }
+                    if pext == 104 && pesrc >= 0 && pesrc <= pe_maxid &&
+                       pe_is_alit[pesrc] == 1 {
+                        rm_packed_esc_ok[pesrc] = 104
+                    }
+                }
+                pes2 = pes2 + 1
+            }
+            peb2 = peb2 + 1
+        }
+    }
+
+    let map = X86RegMap { ids: map_ids, regs: map_regs, slots: map_slots, tag_base: tag_base, id2idx: rm_id2idx, local_type: rm_local_type, local_const_ok: rm_const_ok, local_const_val: rm_const_val, local_packed_ok: rm_packed_ok, local_packed_esc_ok: rm_packed_esc_ok }
     return X86AllocResult { map: map, frame_size: frame }
 }
 
@@ -978,6 +1072,36 @@ pub let mut _x86_buf: [LInstr] = []
 // mutated → the labels never appear → byte-eq NEUTRAL by construction.
 pub let mut _x86_arru_lbl: i64 = 0
 
+// RFC061 §M8 varargs-ABI (literal-∅ feature B, RUNG1) — SysV AMD64 va_list state.
+// These four module globals carry the per-function va_list frame layout from the
+// prologue (where the reg_save_area is reserved + the 6 GP arg regs are spilled)
+// to the `__builtin_va_start`/`__builtin_va_arg` STMT_CALL special-cases (which read
+// the SAME rbp-relative offsets). They are SET ONCE per function at the top of
+// `_x86_64_lower_func` and read only inside the va builtins. `_x86_va_active` is
+// `_x86_is_variadic(mf.name)`, which is HARD-GATED behind `env("HEXA_VA_INTRINSICS")
+// == "1"` AND a name whitelist → DEFAULT OFF for every fn → the prologue spill +
+// every va branch is dead → byte-eq NEUTRAL by construction (mirrors the
+// `_x86_arru_lbl`/`_unbox_array_enabled` and `_is_cabi`/HEXA_CABI_HXLCL discipline).
+// Reference-match: GCC 13.3.0 `-O0 -S` of `int f(int n, ...)` (captured component-by-
+// component) + System V AMD64 PSABI §3.5.7 "Variable Argument Lists" fig 3.34.
+pub let mut _x86_va_lbl: i64 = 0
+pub let mut _x86_va_active: bool = false
+// rbp-relative byte offset of reg_save_area[0] (the LOWEST address of the 48-byte
+// GP register save area; GP reg i lives at rbp + _x86_va_rsa_base + 8*i).
+pub let mut _x86_va_rsa_base: i64 = 0
+// rbp-relative byte offset of the 24-byte va_list struct (gp_offset @ +0, fp_offset
+// @ +4, overflow_arg_area @ +8, reg_save_area ptr @ +16).
+pub let mut _x86_va_list_base: i64 = 0
+// ING #29 literal-∅ (2026-06-30): `@naked` fn attribute — set per-fn by
+// `_x86_64_lower_func` from MFunc.is_naked. When true the prologue (push rbp /
+// mov rbp,rsp / callee-save / spill alloc) and BOTH epilogue emit sites (the
+// return-statement path + the fall-through safety epilogue) are SKIPPED, leaving
+// the fn body as raw asm (the body must terminate itself — e.g. a signal
+// trampoline ends in `syscall` which never returns). reference-match: GCC
+// __attribute__((naked)) / rustc #[naked] / zig callconv(.Naked). DEFAULT false
+// on every existing fn → byte-eq NEUTRAL (the guards are no-ops when false).
+pub let mut _x86_is_naked: bool = false
+
 // RFC061 Route C Wall 3-c — __hx_static_slot self-defined BSS accumulator.
 // Each distinct `slot_id` literal that a whitelisted Route C body addresses via
 // `__hx_static_slot(slot_id, size_bytes)` records its encoded `slot_<id>__sz<N>`
@@ -1017,6 +1141,161 @@ fn _x86_record_static_slot(slot_id: i64, size_bytes: i64) {
         i = i + 1
     }
     _x86_static_slots.push(prefix + to_string(size_bytes))
+}
+
+// ── RFC061 §M8 named-rodata-table accumulator (literal-∅ feature C) ───────────
+// The SIBLING of _x86_static_slots, but for PRE-INITIALIZED `.rodata` constant
+// tables (the data-leaf wall named at hxlcl_fmod/sin/cos: modern musl exp/log are
+// TABLE-driven — __exp_data.tab[256] / __log_data.tab[128] — needing a named-
+// rodata-double-array codegen mechanism). Each distinct `table_id` literal a
+// whitelisted Route C body addresses via `__hx_rodata_tab_ptr(table_id)` records
+// its id here ONCE (deduped); `codegen_x86_64_linux` decodes each into an
+// LSection appended to LModule.rodata so emit/asm defines a `.p2align 3`
+// `rotab_<id>:` symbol whose bytes are the table's LITTLE-ENDIAN doubles. The
+// table CONTENTS live in codegen source (`_x86_rodata_table_spec`, BE-uint64
+// hex verbatim from musl), so the hexa source is just the frozen-safe identifier
+// call `__hx_rodata_tab_ptr(id)` (no new keyword/@attr, no inter-fn HexaVal
+// literal args). ONLY ever appended-to inside the `__hx_rodata_tab_ptr` STMT_CALL
+// special-case → absent from every byteeq program and every DEFAULT-OFF build
+// (hxlcl_core.hexa is never imported by self/) → stays [] → rodata unchanged →
+// byte-eq NEUTRAL (the release-integrity invariant; same property as
+// _x86_static_slots).
+pub let mut _x86_rodata_tabs: [i64] = []
+
+fn _x86_record_rodata_tab(table_id: i64) {
+    let mut i = 0
+    while i < len(_x86_rodata_tabs) {
+        if _x86_rodata_tabs[i] == table_id { return }   // idempotent (deduped)
+        i = i + 1
+    }
+    _x86_rodata_tabs.push(table_id)
+}
+
+// Table CONTENTS registry — keyed by table_id. Returns a whitespace/comma-
+// separated list of BIG-ENDIAN uint64 hex tokens (the verbatim form musl's
+// exp_data.c / log_data.c ship). `_x86_u64hex_list_to_le_payload` converts each
+// to 8 LE bytes for the `.byte` rodata payload. An unknown id returns "" (empty
+// table → empty section). Authoritative table data is appended here as each
+// table-driven libm leaf (exp, log) lands.
+//   id 0 = PROBE: tab[0]=1.0 (0x3ff0…), tab[1]=2.0 (0x4000…) — the STEP-0
+//          end-to-end mechanism witness (codegen→asm→assemble→link→run).
+fn _x86_rodata_table_spec(table_id: i64) -> string {
+    if table_id == 0 {
+        return "3ff0000000000000 4000000000000000"
+    }
+    // id 1 = musl exp __exp_data.tab[256] (src/math/exp_data.c, EXP_TABLE_BITS=7
+    // N=128 → 256 uint64 entries, interleaved {tail_off, sbits_base} pairs).
+    // BIG-ENDIAN uint64 hex VERBATIM from musl (raw bit patterns; no float_to_bits).
+    // `_x86_u64hex_list_to_le_payload` converts each to 8 LE bytes for the
+    // rotab_1 `.byte` payload. Authoritative: git.musl-libc.org exp_data.c.
+    if table_id == 1 {
+            return "0 3ff0000000000000 3c9b3b4f1a88bf6e 3feff63da9fb3335 bc7160139cd8dc5d 3fefec9a3e778061 bc905e7a108766d1 3fefe315e86e7f85 "
+                 + "3c8cd2523567f613 3fefd9b0d3158574 bc8bce8023f98efa 3fefd06b29ddf6de 3c60f74e61e6c861 3fefc74518759bc8 3c90a3e45b33d399 3fefbe3ecac6f383 "
+                 + "3c979aa65d837b6d 3fefb5586cf9890f 3c8eb51a92fdeffc 3fefac922b7247f7 3c3ebe3d702f9cd1 3fefa3ec32d3d1a2 bc6a033489906e0b 3fef9b66affed31b "
+                 + "bc9556522a2fbd0e 3fef9301d0125b51 bc5080ef8c4eea55 3fef8abdc06c31cc bc91c923b9d5f416 3fef829aaea92de0 3c80d3e3e95c55af 3fef7a98c8a58e51 "
+                 + "bc801b15eaa59348 3fef72b83c7d517b bc8f1ff055de323d 3fef6af9388c8dea 3c8b898c3f1353bf 3fef635beb6fcb75 bc96d99c7611eb26 3fef5be084045cd4 "
+                 + "3c9aecf73e3a2f60 3fef54873168b9aa bc8fe782cb86389d 3fef4d5022fcd91d 3c8a6f4144a6c38d 3fef463b88628cd6 3c807a05b0e4047d 3fef3f49917ddc96 "
+                 + "3c968efde3a8a894 3fef387a6e756238 3c875e18f274487d 3fef31ce4fb2a63f 3c80472b981fe7f2 3fef2b4565e27cdd bc96b87b3f71085e 3fef24dfe1f56381 "
+                 + "3c82f7e16d09ab31 3fef1e9df51fdee1 bc3d219b1a6fbffa 3fef187fd0dad990 3c8b3782720c0ab4 3fef1285a6e4030b 3c6e149289cecb8f 3fef0cafa93e2f56 "
+                 + "3c834d754db0abb6 3fef06fe0a31b715 3c864201e2ac744c 3fef0170fc4cd831 3c8fdd395dd3f84a 3feefc08b26416ff bc86a3803b8e5b04 3feef6c55f929ff1 "
+                 + "bc924aedcc4b5068 3feef1a7373aa9cb bc9907f81b512d8e 3feeecae6d05d866 bc71d1e83e9436d2 3feee7db34e59ff7 bc991919b3ce1b15 3feee32dc313a8e5 "
+                 + "3c859f48a72a4c6d 3feedea64c123422 bc9312607a28698a 3feeda4504ac801c bc58a78f4817895b 3feed60a21f72e2a bc7c2c9b67499a1b 3feed1f5d950a897 "
+                 + "3c4363ed60c2ac11 3feece086061892d 3c9666093b0664ef 3feeca41ed1d0057 3c6ecce1daa10379 3feec6a2b5c13cd0 3c93ff8e3f0f1230 3feec32af0d7d3de "
+                 + "3c7690cebb7aafb0 3feebfdad5362a27 3c931dbdeb54e077 3feebcb299fddd0d bc8f94340071a38e 3feeb9b2769d2ca7 bc87deccdc93a349 3feeb6daa2cf6642 "
+                 + "bc78dec6bd0f385f 3feeb42b569d4f82 bc861246ec7b5cf6 3feeb1a4ca5d920f 3c93350518fdd78e 3feeaf4736b527da 3c7b98b72f8a9b05 3feead12d497c7fd "
+                 + "3c9063e1e21c5409 3feeab07dd485429 3c34c7855019c6ea 3feea9268a5946b7 3c9432e62b64c035 3feea76f15ad2148 bc8ce44a6199769f 3feea5e1b976dc09 "
+                 + "bc8c33c53bef4da8 3feea47eb03a5585 bc845378892be9ae 3feea34634ccc320 bc93cedd78565858 3feea23882552225 3c5710aa807e1964 3feea155d44ca973 "
+                 + "bc93b3efbf5e2228 3feea09e667f3bcd bc6a12ad8734b982 3feea012750bdabf bc6367efb86da9ee 3fee9fb23c651a2f bc80dc3d54e08851 3fee9f7df9519484 "
+                 + "bc781f647e5a3ecf 3fee9f75e8ec5f74 bc86ee4ac08b7db0 3fee9f9a48a58174 bc8619321e55e68a 3fee9feb564267c9 3c909ccb5e09d4d3 3feea0694fde5d3f "
+                 + "bc7b32dcb94da51d 3feea11473eb0187 3c94ecfd5467c06b 3feea1ed0130c132 3c65ebe1abd66c55 3feea2f336cf4e62 bc88a1c52fb3cf42 3feea427543e1a12 "
+                 + "bc9369b6f13b3734 3feea589994cce13 bc805e843a19ff1e 3feea71a4623c7ad bc94d450d872576e 3feea8d99b4492ed 3c90ad675b0e8a00 3feeaac7d98a6699 "
+                 + "3c8db72fc1f0eab4 3feeace5422aa0db bc65b6609cc5e7ff 3feeaf3216b5448c 3c7bf68359f35f44 3feeb1ae99157736 bc93091fa71e3d83 3feeb45b0b91ffc6 "
+                 + "bc5da9b88b6c1e29 3feeb737b0cdc5e5 bc6c23f97c90b959 3feeba44cbc8520f bc92434322f4f9aa 3feebd829fde4e50 bc85ca6cd7668e4b 3feec0f170ca07ba "
+                 + "3c71affc2b91ce27 3feec49182a3f090 3c6dd235e10a73bb 3feec86319e32323 bc87c50422622263 3feecc667b5de565 3c8b1c86e3e231d5 3feed09bec4a2d33 "
+                 + "bc91bbd1d3bcbb15 3feed503b23e255d 3c90cc319cee31d2 3feed99e1330b358 3c8469846e735ab3 3feede6b5579fdbf bc82dfcd978e9db4 3feee36bbfd3f37a "
+                 + "3c8c1a7792cb3387 3feee89f995ad3ad bc907b8f4ad1d9fa 3feeee07298db666 bc55c3d956dcaeba 3feef3a2b84f15fb bc90a40e3da6f640 3feef9728de5593a "
+                 + "bc68d6f438ad9334 3feeff76f2fb5e47 bc91eee26b588a35 3fef05b030a1064a 3c74ffd70a5fddcd 3fef0c1e904bc1d2 bc91bdfbfa9298ac 3fef12c25bd71e09 "
+                 + "3c736eae30af0cb3 3fef199bdd85529c 3c8ee3325c9ffd94 3fef20ab5fffd07a 3c84e08fd10959ac 3fef27f12e57d14b 3c63cdaf384e1a67 3fef2f6d9406e7b5 "
+                 + "3c676b2c6c921968 3fef3720dcef9069 bc808a1883ccb5d2 3fef3f0b555dc3fa bc8fad5d3ffffa6f 3fef472d4a07897c bc900dae3875a949 3fef4f87080d89f2 "
+                 + "3c74a385a63d07a7 3fef5818dcfba487 bc82919e2040220f 3fef60e316c98398 3c8e5a50d5c192ac 3fef69e603db3285 3c843a59ac016b4b 3fef7321f301b460 "
+                 + "bc82d52107b43e1f 3fef7c97337b9b5f bc892ab93b470dc9 3fef864614f5a129 3c74b604603a88d3 3fef902ee78b3ff6 3c83c5ec519d7271 3fef9a51fbc74c83 "
+                 + "bc8ff7128fd391f0 3fefa4afa2a490da bc8dae98e223747d 3fefaf482d8e67f1 3c8ec3bc41aa2008 3fefba1bee615a27 3c842b94c3a9eb32 3fefc52b376bba97 "
+                 + "3c8a64a931d185ee 3fefd0765b6e4540 bc8e37bae43be3ed 3fefdbfdad9cbe14 3c77893b4d91cd9d 3fefe7c1819e90d8 3c5305c14160cc89 3feff3c22b8f71f1 "
+    }
+    // id 2 = musl log __log_data (src/math/log_data.c, LOG_TABLE_BITS=7 N=128).
+    // Layout: tab[128]×{invc,logc}=256 doubles (byte 0..2047) THEN tab2[128]×
+    // {chi,clo}=256 doubles (byte 2048..4095) = 512 doubles. BIG-ENDIAN uint64 hex
+    // VERBATIM from musl (raw bit patterns; converted to LE bytes by
+    // _x86_u64hex_list_to_le_payload). hxlcl_log reads cells via byte offsets
+    // i*16{+0,+8} (tab) / i*16{+2048,+2056} (tab2). Authoritative: git.musl-libc.org
+    // log_data.c.
+    if table_id == 2 {
+            return "3ff734f0c3e0de9f bfd7cc7f79e69000 3ff713786a2ce91f bfd76feec20d0000 3ff6f26008fab5a0 bfd713e31351e000 3ff6d1a61f138c7d bfd6b85b38287800 "
+                 + "3ff6b1490bc5b4d1 bfd65d5590807800 3ff69147332f0cba bfd602d076180000 3ff6719f18224223 bfd5a8ca86909000 3ff6524f99a51ed9 bfd54f4356035000 "
+                 + "3ff63356aa8f24c4 bfd4f637c36b4000 3ff614b36b9ddc14 bfd49da7fda85000 3ff5f66452c65c4c bfd445923989a800 3ff5d867b5912c4f bfd3edf439b0b800 "
+                 + "3ff5babccb5b90de bfd396ce448f7000 3ff59d61f2d91a78 bfd3401e17bda000 3ff5805612465687 bfd2e9e2ef468000 3ff56397cee76bd3 bfd2941b3830e000 "
+                 + "3ff54725e2a77f93 bfd23ec58cda8800 3ff52aff42064583 bfd1e9e129279000 3ff50f22dbb2bddf bfd1956d2b48f800 3ff4f38f4734ded7 bfd141679ab9f800 "
+                 + "3ff4d843cfde2840 bfd0edd094ef9800 3ff4bd3ec078a3c8 bfd09aa518db1000 3ff4a27fc3e0258a bfd047e65263b800 3ff4880524d48434 bfcfeb224586f000 "
+                 + "3ff46dce1b192d0b bfcf474a7517b000 3ff453d9d3391854 bfcea4443d103000 3ff43a2744b4845a bfce020d44e9b000 3ff420b54115f8fb bfcd60a22977f000 "
+                 + "3ff40782da3ef4b1 bfccc00104959000 3ff3ee8f5d57fe8f bfcc202956891000 3ff3d5d9a00b4ce9 bfcb81178d811000 3ff3bd60c010c12b bfcae2c9ccd3d000 "
+                 + "3ff3a5242b75dab8 bfca45402e129000 3ff38d22cd9fd002 bfc9a877681df000 3ff3755bc5847a1c bfc90c6d69483000 3ff35dce49ad36e2 bfc87120a645c000 "
+                 + "3ff34679984dd440 bfc7d68fb4143000 3ff32f5cceffcb24 bfc73cb83c627000 3ff3187775a10d49 bfc6a39a9b376000 3ff301c8373e3990 bfc60b3154b7a000 "
+                 + "3ff2eb4ebb95f841 bfc5737d76243000 3ff2d50a0219a9d1 bfc4dc7b8fc23000 3ff2bef9a8b7fd2a bfc4462c51d20000 3ff2a91c7a0c1bab bfc3b08abc830000 "
+                 + "3ff293726014b530 bfc31b996b490000 3ff27dfa5757a1f5 bfc2875490a44000 3ff268b39b1d3bbf bfc1f3b9f879a000 3ff2539d838ff5bd bfc160c8252ca000 "
+                 + "3ff23eb7aac9083b bfc0ce7f57f72000 3ff22a012ba940b6 bfc03cdc49fea000 3ff2157996cc4132 bfbf57bdbc4b8000 3ff201201dd2fc9b bfbe370896404000 "
+                 + "3ff1ecf4494d480b bfbd17983ef94000 3ff1d8f5528f6569 bfbbf9674ed8a000 3ff1c52311577e7c bfbadc79202f6000 3ff1b17c74cb26e9 bfb9c0c3e7288000 "
+                 + "3ff19e010c2c1ab6 bfb8a646b372c000 3ff18ab07bb670bd bfb78d01b3ac0000 3ff1778a25efbcb6 bfb674f145380000 3ff1648d354c31da bfb55e0e6d878000 "
+                 + "3ff151b990275fdd bfb4485cdea1e000 3ff13f0ea432d24c bfb333d94d6aa000 3ff12c8b7210f9da bfb22079f8c56000 3ff11a3028ecb531 bfb10e4698622000 "
+                 + "3ff107fbda8434af bfaffa6c6ad20000 3ff0f5ee0f4e6bb3 bfadda8d4a774000 3ff0e4065d2a9fce bfabbcece4850000 3ff0d244632ca521 bfa9a1894012c000 "
+                 + "3ff0c0a77ce2981a bfa788583302c000 3ff0af2f83c636d1 bfa5715e67d68000 3ff09ddb98a01339 bfa35c8a49658000 3ff08cabaf52e7df bfa149e364154000 "
+                 + "3ff07b9f2f4e28fb bf9e72c082eb8000 3ff06ab58c358f19 bf9a55f152528000 3ff059eea5ecf92c bf963d62cf818000 3ff04949cdd12c90 bf9228fb8caa0000 "
+                 + "3ff038c6c6f0ada9 bf8c317b20f90000 3ff02865137932a9 bf8419355daa0000 3ff0182427ea7348 bf781203c2ec0000 3ff008040614b195 bf60040979240000 "
+                 + "3fefe01ff726fa1a 3f6feff384900000 3fefa11cc261ea74 3f87dc41353d0000 3fef6310b081992e 3f93cea3c4c28000 3fef25f63ceeadcd 3f9b9fc114890000 "
+                 + "3feee9c8039113e7 3fa1b0d8ce110000 3feeae8078cbb1ab 3fa58a5bd001c000 3fee741aa29d0c9b 3fa95c8340d88000 3fee3a91830a99b5 3fad276aef578000 "
+                 + "3fee01e009609a56 3fb07598e598c000 3fedca01e577bb98 3fb253f5e30d2000 3fed92f20b7c9103 3fb42edd8b380000 3fed5cac66fb5cce 3fb606598757c000 "
+                 + "3fed272caa5ede9d 3fb7da76356a0000 3fecf26e3e6b2ccd 3fb9ab434e1c6000 3fecbe6da2a77902 3fbb78c7bb0d6000 3fec8b266d37086d 3fbd431332e72000 "
+                 + "3fec5894bd5d5804 3fbf0a3171de6000 3fec26b533bb9f8c 3fc067152b914000 3febf583eeece73f 3fc147858292b000 3febc4fd75db96c1 3fc2266ecdca3000 "
+                 + "3feb951e0c864a28 3fc303d7a6c55000 3feb65e2c5ef3e2c 3fc3dfc33c331000 3feb374867c9888b 3fc4ba366b7a8000 3feb094b211d304a 3fc5933928d1f000 "
+                 + "3feadbe885f2ef7e 3fc66acd2418f000 3feaaf1d31603da2 3fc740f8ec669000 3fea82e63fd358a7 3fc815c0f51af000 3fea5740ef09738b 3fc8e92954f68000 "
+                 + "3fea2c2a90ab4b27 3fc9bb3602f84000 3fea01a01393f2d1 3fca8bed1c2c0000 3fe9d79f24db3c1b 3fcb5b515c01d000 3fe9ae2505c7b190 3fcc2967ccbcc000 "
+                 + "3fe9852ef297ce2f 3fccf635d5486000 3fe95cbaeea44b75 3fcdc1bd3446c000 3fe934c69de74838 3fce8c01b8cfe000 3fe90d4f2f6752e6 3fcf5509c0179000 "
+                 + "3fe8e6528effd79d 3fd00e6c121fb800 3fe8bfce9fcc007c 3fd071b80e93d000 3fe899c0dabec30e 3fd0d46b9e867000 3fe87427aa2317fb 3fd13687334bd000 "
+                 + "3fe84f00acb39a08 3fd1980d67234800 3fe82a49e8653e55 3fd1f8ffe0cc8000 3fe8060195f40260 3fd2595fd7636800 3fe7e22563e0a329 3fd2b9300914a800 "
+                 + "3fe7beb377dcb5ad 3fd3187210436000 3fe79baa679725c2 3fd377266dec1800 3fe77907f2170657 3fd3d54ffbaf3000 3fe756cadbd6130c 3fd432eee32fe000 "
+                 + "3fe61000014fb66b 3c7e026c91425b3c 3fe63000034db495 3c8dbfea48005d41 3fe650000d94d478 3c8e7fa786d6a5b7 3fe67000074e6fad 3c61fcea6b54254c "
+                 + "3fe68ffffedf0fae bc7c7e274c590efd 3fe6b0000763c5bc bc8ac16848dcda01 3fe6d0001e5cc1f6 3c833f1c9d499311 3fe6efffeb05f63e bc7e80041ae22d53 "
+                 + "3fe710000e869780 3c7bff6671097952 3fe72ffffc67e912 3c8c00e226bd8724 3fe74fffdf81116a bc6e02916ef101d2 3fe770000f679c90 bc67fc71cd549c74 "
+                 + "3fe78ffffa7ec835 3c81bec19ef50483 3fe7affffe20c2e6 bc707e1729cc6465 3fe7cfffed3fc900 bc808072087b8b1c 3fe7efffe9261a76 3c8dc0286d9df9ae "
+                 + "3fe81000049ca3e8 3c897fd251e54c33 3fe8300017932c8f bc8afee9b630f381 3fe850000633739c 3c89bfbf6b6535bc 3fe87000204289c6 bc8bbf65f3117b75 "
+                 + "3fe88fffebf57904 bc89006ea23dcb57 3fe8b00022bc04df bc7d00df38e04b0a 3fe8cfffe50c1b8a bc88007146ff9f05 3fe8effffc918e43 3c83817bd07a7038 "
+                 + "3fe910001efa5fc7 3c893e9176dfb403 3fe9300013467bb9 3c7f804e4b980276 3fe94fffe6ee076f bc8f7ef0d9ff622e 3fe96fffde3c12d1 bc7082aa962638ba "
+                 + "3fe98ffff4458a0d bc87801b9164a8ef 3fe9afffdd982e3e bc8740e08a5a9337 3fe9cfffed49fb66 3c3fce08c19be000 3fe9f00020f19c51 bc8a3faa27885b0a "
+                 + "3fea10001145b006 3c74ff489958da56 3fea300007bbf6fa 3c8cbeab8a2b6d18 3fea500010971d79 3c88fecadd787930 3fea70001df52e48 bc8f41763dd8abdb "
+                 + "3fea90001c593352 bc8ebf0284c27612 3feab0002a4f3e4b bc69fd043cff3f5f 3feacfffd7ae1ed1 bc823ee7129070b4 3feaefffee510478 3c6a063ee00edea3 "
+                 + "3feb0fffdb650d5b 3c5a06c8381f0ab9 3feb2ffffeaaca57 bc79011e74233c1d 3feb4fffd995badc bc79ff1068862a9f 3feb7000249e659c 3c8aff45d0864f3e "
+                 + "3feb8ffff9871640 3c7cfe7796c2c3f9 3febafffd204cb4f bc63ff27eef22bc4 3febcfffd2415c45 bc6cffb7ee3bea21 3febeffff86309df bc814103972e0b5c "
+                 + "3fec0fffe1b57653 3c8bc16494b76a19 3fec2ffff1fa57e3 bc64feef8d30c6ed 3fec4fffdcbfe424 bc843f68bcec4775 3fec6fffed54b9f7 3c847ea3f053e0ec "
+                 + "3fec8fffeb998fd5 3c7383068df992f1 3fecb0002125219a bc68fd8e64180e04 3feccfffdd94469c 3c8e7ebe1cc7ea72 3fecefffeafdc476 3c8ebe39ad9f88fe "
+                 + "3fed1000169af82b 3c757d91a8b95a71 3fed30000d0ff71d 3c89c1906970c7da 3fed4fffea790fc4 bc580e37c558fe0c 3fed70002edc87e5 bc7f80d64dc10f44 "
+                 + "3fed900021dc82aa bc747c8f94fd5c5c 3fedafffd86b0283 3c8c7f1dc521617e 3fedd000296c4739 3c88019eb2ffb153 3fedefffe54490f5 3c6e00d2c652cc89 "
+                 + "3fee0fffcdabf694 bc7f8340202d69d2 3fee2fffdb52c8dd 3c7b00c1ca1b0864 3fee4ffff24216ef 3c72ffa8b094ab51 3fee6fffe88a5e11 bc57f673b1efbe59 "
+                 + "3fee9000119eff0d bc84808d5e0bc801 3feeafffdfa51744 3c780006d54320b5 3feed0001a127fa1 bc5002f860565c92 3feef00007babcc4 bc8540445d35e611 "
+                 + "3fef0ffff57a8d02 bc4ffb3139ef9105 3fef30001ee58ac7 3c8a81acf2731155 3fef4ffff5823494 3c8a3f41d4d7c743 3fef6ffffca94c6b bc6202f41c987875 "
+                 + "3fef8fffe1f9c441 3c777dd1f477e74b 3fefafffd2e0e37e bc6f01199a7ca331 3fefd0001c77e49e 3c7181ee4bceacb1 3fefeffff7e0c331 bc6e05370170875a "
+                 + "3ff00ffff465606e bc8a7ead491c0ada 3ff02ffff3867a58 bc977f69c3fcb2e0 3ff04ffffdfc0d17 3c97bffe34cb945b 3ff0700003cd4d82 3c820083c0e456cb "
+                 + "3ff08ffff9f2cbe8 bc6dffdfbe37751a 3ff0b000010cda65 bc913f7faee626eb 3ff0d00001a4d338 3c807dfa79489ff7 3ff0effffadafdfd bc77040570d66bc0 "
+                 + "3ff110000bbafd96 3c8e80d4846d0b62 3ff12ffffae5f45d 3c9dbffa64fd36ef 3ff150000dd59ad9 3c9a0077701250ae 3ff170000f21559a 3c8dfdf9e2e3deee "
+                 + "3ff18ffffc275426 3c910030dc3b7273 3ff1b000123d3c59 3c997f7980030188 3ff1cffff8299eb7 bc65f932ab9f8c67 3ff1effff48ad400 3c937fbf9da75beb "
+                 + "3ff210000c8b86a4 3c9f806b91fd5b22 3ff2300003854303 3c93ffc2eb9fbf33 3ff24fffffbcf684 3c7601e77e2e2e72 3ff26ffff52921d9 3c7ffcbb767f0c61 "
+                 + "3ff2900014933a3c bc7202ca3c02412b 3ff2b00014556313 bc92808233f21f02 3ff2cfffebfe523b bc88ff7e384fdcf2 3ff2f0000bb8ad96 bc85ff51503041c5 "
+                 + "3ff30ffffb7ae2af bc810071885e289d 3ff32ffffeac5f7f bc91ff5d3fb7b715 3ff350000ca66756 3c957f82228b82bd 3ff3700011fbf721 3c8000bac40dd5cc "
+                 + "3ff38ffff9592fb9 bc943f9d2db2a751 3ff3b00004ddd242 3c857f6b707638e1 3ff3cffff5b2c957 3c7a023a10bf1231 3ff3efffeab0b418 3c987f6d66b152b0 "
+                 + "3ff410001532aff4 3c67f8375f198524 3ff4300017478b29 3c8301e672dc5143 3ff44fffe795b463 3c89ff69b8b2895a 3ff46fffe80475e0 bc95c0b19bc2f254 "
+                 + "3ff48fffef6fc1e7 3c9b4009f23a2a72 3ff4afffe5bea704 bc94ffb7bf0d7d45 3ff4d000171027de bc99c06471dc6a3d 3ff4f0000ff03ee2 3c977f890b85531c "
+                 + "3ff5100012dc4bd1 3c6004657166a436 3ff530001605277a bc96bfcece233209 3ff54fffecdb704c bc8902720505a1d7 3ff56fffef5f54a9 3c9bbfe60ec96412 "
+                 + "3ff5900017e61012 3c887ec581afef90 3ff5b00003c93e92 bc9f41080abf0cc0 3ff5d0001d4919bc bc98812afb254729 3ff5efffe7b87a89 bc947eb780ed6904 "
+    }
+    return ""
 }
 
 // Fresh, independent instruction buffer for a new function-lowering scope.
@@ -1216,7 +1495,7 @@ fn _x86_is_shift_l(op: string) -> bool   { return op == "shl" || op == "<<" }
 fn _x86_is_shift_r(op: string) -> bool   { return op == "shr" || op == ">>" }
 fn _x86_is_concat(op: string) -> bool    { return op == "concat" }
 
-// ── r5 HEXA_UNBOX_NATIVE — provably-int BinOp unboxing (default-OFF) ──────────
+// ── r5 HEXA_UNBOX_NATIVE — provably-int BinOp unboxing (default-ON) ───────────
 //
 // Baseline (state/codegen-quality-probe-verdict.md): the x86_64 native backend
 // routes EVERY scalar `+ - * < <= > >= ==` through a boxed tag-dispatch runtime
@@ -1229,9 +1508,12 @@ fn _x86_is_concat(op: string) -> bool    { return op == "concat" }
 // This gate lets a binop whose operands are PROVABLY monomorphic-int SKIP the
 // boxed dispatch and fall through to that existing native ALU path. Soundness
 // firewall (the miscompile hazard, project_hexa_flatten_globals_collision class):
-//   - Gate is env-opt-in, default-OFF. When unset, `_unbox_native_enabled()`
-//     returns false → every binop takes its UNCHANGED boxed branch → OFF-path
-//     emit is byte-identical by construction.
+//   - Gate is env opt-OUT, default-ON (HEXA_UNBOX_NATIVE=0 to disable). When set
+//     to "0", `_unbox_native_enabled()` returns false → every binop takes its
+//     UNCHANGED boxed branch → OFF-path emit is byte-identical by construction.
+//     Default-ON ships only after the regular 3-target byteeq gate proves
+//     gen3≡gen4 holds with the native ALU path live (#4163 precedent: element-
+//     pack 9.78× flipped default-ON via the same polarity once CI was GREEN).
 //   - Only `+ - *` arith and `< <= > >= ==` cmp qualify (NOT `/` `%`: those
 //     need the runtime div-by-zero throw — kept BOXED, r4 lesson).
 //   - An operand is provably-int ONLY when: a `const_int`/`const_bool` literal
@@ -1244,7 +1526,7 @@ fn _x86_is_concat(op: string) -> bool    { return op == "concat" }
 //     monomorphic int op (the runtime helper would take its int path anyway →
 //     same numeric result, verified by Gate-4 output-parity).
 fn _unbox_native_enabled() -> bool {
-    return env("HEXA_UNBOX_NATIVE") == "1"
+    return env("HEXA_UNBOX_NATIVE") != "0"
 }
 
 // Is operand `o` provably a raw i64 payload (no boxing/tag-dispatch needed)?
@@ -1327,7 +1609,7 @@ fn _x86_binop_div_const_ok(s: Stmt, rm: X86RegMap) -> bool {
     return true
 }
 
-// ── r2b HEXA_UNBOX_ARRAY_NATIVE — native array element load/store (default-OFF) ─
+// ── r2b HEXA_UNBOX_ARRAY_NATIVE — native array element load/store (default-ON) ──
 //
 // Baseline (state/codegen-quality-probe-verdict.md re-baseline #4049): EVERY
 // `arr[i]` / `arr[i]=v` on the x86_64 native backend routes through a boxed
@@ -1344,9 +1626,14 @@ fn _x86_binop_div_const_ok(s: Stmt, rm: X86RegMap) -> bool {
 // len@8, cap@16 }; element stride = sizeof(HexaVal)=16 → tag@+0 payload@+8).
 //
 // Soundness firewall (mirrors r5 _unbox_native exactly):
-//   - Gate is env-opt-in, default-OFF. When unset, `_unbox_array_enabled()`
-//     returns false → both index/index_set branches take their UNCHANGED boxed
-//     `call hexa_index_*` emit → OFF-path is byte-identical by construction.
+//   - Gate is env opt-OUT, default-ON (HEXA_UNBOX_ARRAY_NATIVE=0 to disable).
+//     When set to "0", `_unbox_array_enabled()` returns false → both index/
+//     index_set branches take their UNCHANGED boxed `call hexa_index_*` emit →
+//     OFF-path is byte-identical by construction. Default-ON ships only after the
+//     regular 3-target byteeq gate proves gen3≡gen4 holds with the native
+//     descriptor-walk live (#4163 precedent: element-pack flipped via same
+//     polarity once CI was GREEN). Boxed storage is unchanged — this is a native
+//     READ path only, so no array-aliasing escape hazard (cf. HEXA_PACK_ARRAY).
 //   - container must be a `local` whose MIR type_id ∈ {101,102,103,104} (a
 //     PROVABLY typed-prim array). A map / untyped array / struct / fn-return /
 //     global stays BOXED (the runtime dispatch handles those polymorphically).
@@ -1358,7 +1645,7 @@ fn _x86_binop_div_const_ok(s: Stmt, rm: X86RegMap) -> bool {
 //     (loaded from items[idx]+0) so a typed-prim load carries TAG_INT/TAG_FLOAT
 //     exactly as the runtime would return (Gate-4 output parity).
 fn _unbox_array_enabled() -> bool {
-    return env("HEXA_UNBOX_ARRAY_NATIVE") == "1"
+    return env("HEXA_UNBOX_ARRAY_NATIVE") != "0"
 }
 
 // HEXA_ARRU_DEBUG — emit a stderr provenance trace at each index/index_set site
@@ -1379,9 +1666,15 @@ fn _arru_debug_enabled() -> bool {
 // hexa_arr_i64_new/push/box, used today only by the gen2 C-transpile backend).
 //
 // Soundness firewall (mirrors r2c _unbox_array exactly, plus an ESCAPE proof):
-//   - env-opt-in, default-OFF. Unset → `_pack_array_enabled()` false → the
-//     local_packed_ok lattice stays `[]`, every packed branch is skipped, and
-//     the emit is byte-identical to origin (OFF-byteeq Gate-1).
+//   - DEFAULT-ON (native-canonical-default polarity), opt-OUT via
+//     `HEXA_PACK_ARRAY=0`. The 9.78× k3_arrmap fused lever (#4114) ships as the
+//     production default now that escape-soundness is closed (#4121 transitive
+//     alias-coherence fixpoint → escape-stress 9/9 OFF==ON bit-exact + PACK-ON
+//     full-compiler self-emit byte-identical determinism). `HEXA_PACK_ARRAY=0`
+//     restores the boxed 16B-stride r2c path (the legacy constraint), e.g. for a
+//     byte-eq diff against the pre-flip baseline. When OFF the local_packed_ok
+//     lattice stays `[]`, every packed branch is skipped, and the emit is
+//     byte-identical to the pre-flip origin.
 //   - the container must be a `local` PROVEN packed by the whole-function escape
 //     scan (built in the regmap builder): created by an `array_lit`, and used
 //     ONLY as the container of index / index_set / push / len. ANY other use
@@ -1390,7 +1683,75 @@ fn _arru_debug_enabled() -> bool {
 //   - currently i64/i32 element kinds only (type_id 101/102 → HexaArrI64). f64/
 //     f32 (103/104 → HexaArrF64) is a follow-on (needs the xmm push ABI).
 fn _pack_array_enabled() -> bool {
-    return env("HEXA_PACK_ARRAY") == "1"
+    // DEFAULT-ON: native-canonical-default polarity. Opt-OUT via HEXA_PACK_ARRAY=0
+    // (the legacy boxed 16B-stride path) — any other value (unset / "1") packs.
+    return env("HEXA_PACK_ARRAY") != "0"
+}
+
+// ── FLEET lane A2: escape-relax gate (HEXA_PACK_ESCAPING) ────────────────────
+// The runtime descriptor-discriminator (TAG_ARRAY_I64 + hexa_arr_poly_* — see
+// self/runtime_core_emit.hexa, PR #4140) lets an ESCAPING typed-prim [i64] be
+// stored RAW PACKED (stride-8, no tag) yet still read SOUNDLY by a worker fn
+// that received it as a param of unknown packed-ness: the poly readers branch
+// on HX_TAG==TAG_ARRAY_I64 at runtime (stride-8) else delegate to the boxed
+// hexa_array_get/_len/_push (stride-16). #4133 declared escape-relax an ABI
+// wall under the BOXED ABI; this gate is the productionization of the runtime
+// half that dissolves it. Reference: V8 elements-kind dispatch on the Map (not
+// the array header) — a polymorphic reader discriminates at runtime.
+//
+// SOUNDNESS — uniform representation, NO packed/boxed straddle:
+//   When ON, EVERY typed-prim array_lit mints via hexa_arr_i64_new_esc
+//   (→ TAG_ARRAY_I64) and EVERY typed-prim-array index/index_set/push/len
+//   routes through hexa_arr_poly_*. So under this mode there is exactly ONE
+//   representation for a typed-prim array (always esc-tagged), and the poly
+//   reader is correct for it. A param of unknown packed-ness reads via the same
+//   poly path, correct whether it arrived esc-tagged (this-TU producer) or
+//   boxed (a cross-mode producer compiled without the flag — poly delegates).
+//   The non-escaping rm_packed_ok lattice + alias-coherence fixpoint are NOT
+//   consulted in this mode (we never emit the inline stride-8 arrpk path that
+//   needs the static non-escape proof), so HEXA_PACK_ARRAY byteeq is untouched.
+//
+// REQUIRES the runtime to ship the poly readers (compiled with
+// -DHEXA_PACK_ESCAPING). Default-OFF (env unset) → every branch below is
+// skipped → emit is byte-identical to origin (Gate-1 OFF-byteeq).
+fn _pack_escaping_enabled() -> bool {
+    return env("HEXA_PACK_ESCAPING") != "0"
+}
+
+// Should op on operand `o` take the escaping-poly path? Gate ON + `o` is a
+// PROVABLY typed-prim array container (MIR type_id 101/102 → HexaArrI64, 103 →
+// HexaArrF64, 104 → HexaArrF32). The runtime poly readers (hexa_arr_poly_get/
+// _set/_push/_len) now branch on TAG_ARRAY_I64, TAG_ARRAY_F64 AND TAG_ARRAY_F32
+// at the SAME pair-model call ABI (boxed HexaVal in/out — the f32 element is
+// widened to a boxed double on get / narrowed from a boxed double on set/push, so
+// NO 4-byte element ever rides the poly call boundary; the 4B stride is internal
+// to HexaArrF32's float[] data, and HexaArrF32's descriptor is the same 24B
+// (ptr,len,cap) shape, so the anticipated 4B-stride layout WALL does NOT break the
+// pair-model ABI). A single consumer path covers i64/i32/f64/f32. Globals are a
+// separate id space → conservatively NOT proven (boxed). Mirrors
+// _x86_operand_is_packed's shape.
+fn _x86_operand_pack_esc(o: Operand, rm: X86RegMap) -> bool {
+    if !_pack_escaping_enabled() { return false }
+    if o.kind != "local" { return false }
+    let t = _x86_local_type(rm, o.local_id)
+    return t == 101 || t == 102 || t == 103 || t == 104
+}
+
+// id → which kind of esc-mint should this array_lit STORAGE take? O(1) probe of
+// the lattice the regmap builder fills (0 when the gate is OFF or not a mint):
+//   101 → i64-class mint (hexa_arr_i64_new_esc, TAG_ARRAY_I64; covers i64/i32)
+//   103 → f64 mint       (hexa_arr_f64_new_esc, TAG_ARRAY_F64)
+//   104 → f32 mint       (hexa_arr_f32_new_esc, TAG_ARRAY_F32)
+fn _x86_local_esc_mint_kind(rm: X86RegMap, id: i64) -> i64 {
+    if !_pack_escaping_enabled() { return 0 }
+    if id < 0 || id >= len(rm.local_packed_esc_ok) { return 0 }
+    return rm.local_packed_esc_ok[id]
+}
+
+// id → should this array_lit STORAGE esc-mint at all (either kind)? Convenience
+// boolean over _x86_local_esc_mint_kind.
+fn _x86_local_esc_mint(rm: X86RegMap, id: i64) -> bool {
+    return _x86_local_esc_mint_kind(rm, id) != 0
 }
 
 // element-pack FUSE gate — the precondition for the two RECON-1 (dead int
@@ -1770,6 +2131,28 @@ fn _x86_64_arg_reg_seq(idx: i64) -> string {
     return "rdi" // overflow → stack (TODO)
 }
 
+// Route C fp-ABI (xmm) — SysV AMD64 PSABI §3.2.3 SSE class. A `double` (or
+// `float`) argument is SSE-class and is passed in the NEXT available SSE
+// register xmm0..xmm7 (a SEPARATE counter from the INTEGER rdi/rsi/… seq); a
+// double return is SSE-class and comes back in xmm0. Reference-match:
+//   System V AMD64 ABI §3.2.3 "Parameter Passing" — classify SSE → "if there
+//   are SSE registers available, the next available is used" (xmm0..xmm7);
+//   return §3.2.3 — "the value is returned in %xmm0 (and %xmm1 for the second
+//   eightbyte of SSE-class aggregates)". Empirically cross-checked against
+//   `clang -O0 -S --target=x86_64-linux-gnu` of `double f(double x,double y)`:
+//   x in xmm0, y in xmm1, result returned in xmm0 (movsd/mulsd/addsd, retq).
+fn _x86_64_sse_arg_reg_seq(idx: i64) -> string {
+    if idx == 0 { return "xmm0" }
+    if idx == 1 { return "xmm1" }
+    if idx == 2 { return "xmm2" }
+    if idx == 3 { return "xmm3" }
+    if idx == 4 { return "xmm4" }
+    if idx == 5 { return "xmm5" }
+    if idx == 6 { return "xmm6" }
+    if idx == 7 { return "xmm7" }
+    return "xmm0" // >8 SSE args spill (not reached under the libm-leaf whitelist)
+}
+
 // RFC061 §M8 Route C — per-fn C-ABI (single-register) calling-convention gate.
 //
 // The canonical hexa ABI passes/returns every value as a 16-byte HexaVal
@@ -1816,13 +2199,25 @@ pub fn _is_cabi(fname: string) -> bool {
     // r7 composite — hxlcl_atoi is a NON-LEAF whose body is one inner C-ABI call
     // `bl hxlcl_atoll`. BOTH the outer fn and the inner callee are whitelisted so
     // the inner call (keyed on the callee name s.op at the call boundary) lowers
-    // single-register C-ABI and binds cross-object to the retained shim atoll.
+    // single-register C-ABI and binds cross-object to hxlcl_atoll. As of the
+    // PARSE-LEAF PROMOTION batch hxlcl_atoll is now a REAL self-emitted leaf (a
+    // base-10, no-endptr SIMPLIFICATION of hxlcl_strtoll; pure-compute byte-walk),
+    // so atoi's inner `bl hxlcl_atoll` binds to that emitted body intra-object
+    // (no longer the retained C shim).
     if fname == "hxlcl_atoi" { return true }
     if fname == "hxlcl_atoll" { return true }
     // r8 composite — hxlcl_strdup is a NON-LEAF: inline strlen+copy byte loops
     // plus one inner C-ABI call `bl hxlcl_malloc`. Whitelisting both binds the
     // inner alloc call C-ABI (size→rdi/x0, ptr←rax/x0) to the retained shim malloc.
     if fname == "hxlcl_strdup" { return true }
+    // DUP MIRROR — hxlcl_strndup. EXACT mirror of the r8 strdup composite: same
+    // inner C-ABI `bl hxlcl_malloc` + strlen-scan + copy + NUL-terminate byte
+    // loops, NO new codegen mechanism. The only difference is the scan loop is
+    // cap-bounded (`while(n<cap && s[n]) n++`) — a `__hx_payload_lt(n, cap)` guard
+    // already used throughout. Its inner callee hxlcl_malloc is the SAME symbol
+    // whitelisted just below (shared with strdup/calloc/realloc — not re-listed).
+    // Byte-faithful to the frozen 0-libc floor self/runtime.c:481 (hxlcl_strndup).
+    if fname == "hxlcl_strndup" { return true }
     // r9 composite — hxlcl_calloc is a NON-LEAF: inner C-ABI `bl hxlcl_malloc`
     // (pattern ON-path-confirmed by strdup) + a `__hx_ptr_store8` zero loop
     // (confirmed by memset). Whitelisting both binds the inner alloc call C-ABI.
@@ -1915,6 +2310,15 @@ pub fn _is_cabi(fname: string) -> bool {
     // __errno_location, so no new whitelist entry beyond the two fns themselves.
     if fname == "hxlcl_time" { return true }
     if fname == "hxlcl_poll" { return true }
+    // ING#29 ∅−7 — hxlcl_signal (signal(3) → rt_sigaction · sa_restorer WIRED). NON-LEAF:
+    // heap-scratch k_sigaction struct via hxlcl_malloc + __hx_ptr_store64/load64
+    // (pipe/time precedent) + __hx_syscall6(rt_sigaction, sig, act, oldact, 8) + the close
+    // errno epilogue's already-whitelisted __errno_location. 2 HexaVal args (signum, handler
+    // raw-ptr) → single-register C-ABI (rdi/rsi); returns old handler raw ptr in rax. The
+    // x86_64 sa_restorer field is wired via __hx_fn_addr(_hx_rt_sigreturn_trampoline) — the
+    // @naked trampoline fn (mov rax,15 ; syscall) whose raw .text addr is stored at offset 16
+    // + SA_RESTORER flag set (reference-match glibc/musl). DEFAULT-OFF (HEXA_RT_NATIVE_SIGNAL).
+    if fname == "hxlcl_signal" { return true }
     // batch F search family — strchr / strstr. Pure byte-scan LEAVES (no syscall,
     // no float, no inner call, no errno): each walks the input with __hx_ptr_load8
     // ZERO-EXTENDED reads and returns a raw char* (the match position) or NULL(0)
@@ -1924,6 +2328,17 @@ pub fn _is_cabi(fname: string) -> bool {
     // self/runtime.c rt_strchr / rt_strstr. No arm64 call-shape divergence.
     if fname == "hxlcl_strchr" { return true }
     if fname == "hxlcl_strstr" { return true }
+    // PURE-LEAF MIRROR batch — strrchr / memmove / bzero. NO new codegen mechanism:
+    // each is a byte-faithful mirror of an already-wired Route C leaf (strchr /
+    // memcpy / memset) — pure-payload byte ops, no syscall/errno/float/inner-call.
+    // strrchr returns the LAST match pointer (raw char*); memmove is memcpy + an
+    // overlap-direction branch (backward copy when dst>src), returning dst raw;
+    // bzero is memset(s,0,n) (void → unused result reg). Cross-target-identical
+    // (no NR, no arm64 call-shape divergence). Byte-faithful to the frozen 0-libc
+    // floor bodies self/runtime.c rt_strrchr:422 / rt_memmove:627 / hxlcl_bzero:575.
+    if fname == "hxlcl_strrchr" { return true }
+    if fname == "hxlcl_memmove" { return true }
+    if fname == "hxlcl_bzero" { return true }
     // batch G PARSE: hxlcl_strtoll — string→long long parse leaf with a
     // NULL-gated `char** endptr` out-param write (__hx_ptr_store64 to the
     // caller's pointer, the copy-family caller-write class widened to 64-bit,
@@ -1931,6 +2346,14 @@ pub fn _is_cabi(fname: string) -> bool {
     // cross-target-identical (no NR, no arm64 call-shape divergence). Byte-
     // faithful to the frozen 0-libc floor self/runtime.c:513 (hxlcl_strtoll).
     if fname == "hxlcl_strtoll" { return true }
+    // PARSE MIRROR — hxlcl_strtoull. EXACT mirror of hxlcl_strtoll (same parse
+    // leaf class, same NULL-gated `char** endptr` store64 out-param): no new
+    // codegen mechanism. The only differences from strtoll are (a) no '-' sign
+    // negate (strtoull skips a leading '+' but never negates) and (b) the result
+    // is the raw unsigned accumulation `n`. Pure compute → cross-target-identical
+    // (no NR, no arm64 call-shape divergence). Byte-faithful to the frozen 0-libc
+    // floor self/runtime.c:542 (hxlcl_strtoull).
+    if fname == "hxlcl_strtoull" { return true }
     // batch I — clock_gettime + execve (clean syscall leaves continuing the close
     // errno-store discipline). clock_gettime = getrusage's out-ptr shape (caller's
     // timespec*; uniform 2-arg on Linux, NR x86_64=228/arm64=113; darwin has NO trap
@@ -2014,7 +2437,259 @@ pub fn _is_cabi(fname: string) -> bool {
     if fname == "hxlcl_popen_remember" { return true }
     if fname == "hxlcl_popen_forget" { return true }
     if fname == "hxlcl_child_exit_nr" { return true }
+    // EXEC family TAIL — hxlcl_execvp. The native PATH-search wrapper over execve: if
+    // `file` contains a '/', exec it directly; else split $PATH on ':' and try each
+    // dir+'/'+file via execve until one succeeds (execve returns ONLY on failure). A
+    // PURE COMPOSITION over the already-whitelisted leaves — `bl hxlcl_getenv` (Wall
+    // 2-b, #4243 — fetch "PATH"), `bl hxlcl_strlen` (the file length), `bl hxlcl_execve`
+    // (batch I leaf), `bl hxlcl_malloc` (the candidate-path HEAP scratch replacing the
+    // frozen `char buf[1024]` stack local — the popen/fputc heap-scratch precedent, no
+    // in-body stack-alloc intrinsic on this campaign), and `__hx_environ_ptr`+ONE
+    // __hx_ptr_load64 to pass `environ` to execve (the getenv #4243 precedent). The
+    // '/'-scan and the dir-by-dir path-join are raw __hx_ptr_load8/store8 byte loops
+    // (the strchr/strstr class). NO new intrinsic, NO new provider — every inner `bl`
+    // resolves at link by the rest of runtime.a. Reference-matched to musl
+    // src/process/execvp.c (the same has-slash → direct / else $PATH-split-and-try
+    // structure; musl's __execvpe ENOENT/EACCES bookkeeping is simplified to "try next
+    // on any failure" exactly as the frozen 0-libc floor body does,
+    // self/runtime_emit_full.hexa:2963-2986). Cross-target-identical (no NR; execve
+    // carries the per-target NR internally).
+    if fname == "hxlcl_execvp" { return true }
+    // CTYPE family — isalnum/isalpha. The FIRST register-only pure-compute leaves:
+    // the arg is an `int c` VALUE, so the body does ZERO memory access (no
+    // __hx_ptr_load8) — only raw-payload range comparisons — and returns 0/1 in the
+    // single C-ABI result register. No syscall/errno/inner-call/float; cross-target-
+    // identical. Byte-faithful to the frozen rt_isalnum/rt_isalpha bodies
+    // (self/runtime_emit_full.hexa:2265-2278).
+    if fname == "hxlcl_isalnum" { return true }
+    if fname == "hxlcl_isalpha" { return true }
+    // ALLOC RESIDUE — free. The frozen 0-libc floor's NO-OP free (bump arena never
+    // reclaims; floor body is literally `(void)p;`, self/runtime_core_hxlcl_shim.c:104).
+    // Self-emitting it drops one more shim dependency with zero new mechanism (touch
+    // the raw p payload, return). The sibling hxlcl_malloc stays the RETAINED extern —
+    // it routes to libc malloc / the live arena (genuinely arena-coupled, NOT a
+    // pure-compute leaf).
+    if fname == "hxlcl_free" { return true }
+    // PURE-COMPUTE MIRROR batch 4 — the clean-mirror class endgame. inet_pton is a
+    // dotted-quad PARSE LEAF (byte-scan + caller 4-byte write, the strchr/strncpy
+    // class) with its frozen `unsigned char b[4]` local restructured into a single
+    // i64 register pack (validate-all-then-write contract preserved, NO scratch /
+    // malloc). setvbuf + darwin_check_fd_set_overflow are register-only NO-OP leaves
+    // (`return 0`, the hxlcl_free/fflush class). All three: no syscall/float/inner-
+    // call/varargs → cross-target-identical, byte-faithful to the frozen 0-libc floor
+    // (self/runtime_emit_full.hexa:2905 / :1247 / :2060). This EXHAUSTS the clean
+    // pure-compute mirror class; the only theoretical remainders (strerror = const
+    // char* raw-pointer RETURN shape; gmtime_r = static rodata mdays[12] table) need
+    // a NEW codegen mechanism, not a 1:1 mirror — everything else is wall-class
+    // (varargs printf, float atof/cos/sin/exp/log/fmod, syscall/socket/pty/signal
+    // svc-remainder, pthread, setjmp/longjmp, naked-asm chkstk/fd_overflow, mach).
+    if fname == "hxlcl_inet_pton" { return true }
+    if fname == "hxlcl_setvbuf" { return true }
+    if fname == "hxlcl_darwin_check_fd_set_overflow" { return true }
+    // fp-ABI (xmm) RUNG 1 — the FIRST Route C symbol with SSE-class (`double`)
+    // params + return. The TERMINAL "[float XMM-ABI]" wall named in
+    // stdlib/runtime/hxlcl_core.hexa:2188 — Route C lowered every prior symbol's
+    // boundary in GP INTEGER registers only (rdi/rsi/… + rax); a `double f(double)`
+    // libc-floor leaf (the whole libm family sin/cos/exp/log/fmod) needs the SysV
+    // SSE class (args xmm0..7, return xmm0, PSABI §3.2.3). hxlcl_fp_addmul is a
+    // SYNTHETIC `double f(double x, double y) = x*y + x` leaf (body uses the
+    // existing __hx_payload_fmul/fadd intrinsics, which already movq GP↔xmm), the
+    // smallest possible exerciser of the new SSE-class boundary lowering. SEE
+    // `_cabi_sse_arg` / `_cabi_sse_ret` for the per-fn SSE classification. The
+    // libm leaves (hxlcl_fmod fdlibm port etc.) follow on the SAME mechanism.
+    // default-OFF byteeq-neutral (HEXA_CABI_HXLCL unset → empty whitelist).
+    if fname == "hxlcl_fp_addmul" { return true }
+    // fp-ABI MIXED-ABI leaf — hxlcl_atof (`double atof(const char *s)`). The FIRST
+    // Route C symbol with a MIXED SysV ABI: INTEGER-class string param (rdi/GP) +
+    // SSE-class double return (xmm0). Proves the per-arg/per-return SSE classifier
+    // (_cabi_sse_arg(idx=0)=FALSE → string GP; _cabi_sse_ret=TRUE → double xmm0).
+    // Body = stdlib/runtime/hxlcl_core.hexa::hxlcl_atof (1:1 port of the frozen 0-libc
+    // floor #else parse, self/runtime_emit_full.hexa:2299-2337; lenient ws+sign+int+
+    // .frac+eE, == musl atof=strtod(s,0) on the finite-decimal domain). The byte-scan
+    // is raw-int payload ops; digit→double via __hx_payload_i2f; accumulation via
+    // __hx_payload_fmul/fadd/fdiv (exp/log/fmod precedent). ON (HEXA_CABI_HXLCL=1)
+    // hxlcl_atof replaces the libc-shim atof member (shim drops via -DHEXA_RT_NATIVE_ATOF).
+    // x86_64-linux only (arm64 fp-ABI = later rung; _cabi_is_fp excludes it). default-OFF
+    // byteeq-neutral.
+    if fname == "hxlcl_atof" { return true }
+    // fp-ABI libm-leaf RUNG 2 — hxlcl_fmod is the FIRST REAL libc-floor libm symbol
+    // native-emitted via the fp-ABI (xmm) Route C path. `double hxlcl_fmod(double x,
+    // double y)` — both args SSE-class (xmm0/xmm1), return SSE-class (xmm0). Body =
+    // a 1:1 musl src/math/fmod.c port (libm-free, 0-ULP) in stdlib/runtime/
+    // hxlcl_core.hexa, using the __hx_payload_and/or/shl/shr bit intrinsics on the
+    // raw IEEE-754 payload word (the ingress lands the xmm bits in the GP home).
+    // ON (HEXA_CABI_HXLCL=1) it replaces the libc-shim fmod() member (shim drops it
+    // via -DHEXA_LIBM_NATIVE_FMOD); default-OFF byteeq-neutral.
+    if fname == "hxlcl_fmod" { return true }
+    // fp-ABI libm-leaf RUNG 3 — hxlcl_sin (`double sin(double)`). A 1:1 musl
+    // src/math/{sin,__sin,__cos,__rem_pio2}.c port (small + medium reduction paths,
+    // libm-free) in stdlib/runtime/hxlcl_core.hexa, with the __sin/__cos kernels
+    // INLINED into the single self-contained body (no inner SSE-class call boundary —
+    // avoids passing HexaVal-typed literal args across an fn boundary). ON
+    // (HEXA_CABI_HXLCL=1) hxlcl_sin replaces the libc-shim sin() member (shim drops
+    // via -DHEXA_RT_NATIVE_SIN). default-OFF byteeq-neutral.
+    if fname == "hxlcl_sin" { return true }
+    // fp-ABI libm-leaf RUNG 4 — hxlcl_cos (`double cos(double)`). SHARES hxlcl_sin's
+    // EXACT musl __rem_pio2 reduction + inlined __sin/__cos kernels; only the tiny/
+    // |x|<pi/4 special cases (cos(tiny)=1.0, |x|<pi/4 → __cos) and the n&3 dispatch
+    // table differ (musl cos.c: 0→cos 1→-sin 2→-cos 3→sin). No new intrinsic, no new
+    // mechanism (the f2i/i2f intrinsics sin added already cover it). ON
+    // (HEXA_CABI_HXLCL=1) hxlcl_cos replaces the libc-shim cos() member (shim drops
+    // via -DHEXA_RT_NATIVE_COS). default-OFF byteeq-neutral. (exp/log do NOT follow on
+    // this mechanism — modern musl exp/log are TABLE-driven: __exp_data.tab[256] /
+    // __log_data.tab[128] rodata lookup tables need a new named-rodata-array codegen
+    // mechanism = the same data-leaf wall as sin's deferred __rem_pio2_large table.)
+    if fname == "hxlcl_cos" { return true }
+    // §M8 named-rodata-table PROBE — `double hxlcl_rotab_probe(void)` (no args,
+    // SSE return). STEP-0 witness for the table-driven libm mechanism that exp
+    // needs. default-OFF byteeq-neutral (never imported by self/).
+    if fname == "hxlcl_rotab_probe" { return true }
+    // fp-ABI libm-leaf RUNG 5 — hxlcl_exp (`double exp(double)`). The FIRST
+    // TABLE-DRIVEN libm leaf: a 1:1 musl src/math/exp.c port (N=128, POLY_ORDER=5)
+    // reading the 256-entry __exp_data.tab via the §M8 named-rodata-table
+    // mechanism (rotab_1 / __hx_rodata_tab_ptr(1)). Replaces the libc-shim exp()
+    // member (shim drops via -DHEXA_RT_NATIVE_EXP). default-OFF byteeq-neutral.
+    if fname == "hxlcl_exp" { return true }
+    // fp-ABI libm-leaf RUNG 6 — hxlcl_log (`double log(double)`). The SECOND
+    // TABLE-DRIVEN libm leaf and the LAST clean libm shim symbol: a 1:1 musl
+    // src/math/log.c port (LOG_TABLE_BITS=7 N=128, NON-FMA path) reading the 512-
+    // double __log_data (tab[128]+tab2[128]) via the §M8 named-rodata-table
+    // mechanism (rotab_2 / __hx_rodata_tab_ptr(2)). Replaces the libc-shim log()
+    // member (shim drops via -DHEXA_RT_NATIVE_LOG). default-OFF byteeq-neutral.
+    if fname == "hxlcl_log" { return true }
     return false
+}
+
+// Route C fp-ABI (xmm) — per-fn SSE-class CLASSIFICATION (PSABI §3.2.3). Keyed
+// on the whitelisted symbol NAME (mirroring `_is_cabi`'s frozen-safe name-key
+// discipline — no new @attr/keyword the frozen 151c52c8 parser would reject, and
+// no dependence on MIR type_id propagation through the frozen-built aprime). For
+// a marked double-signature symbol it reports which ARGUMENT positions are
+// SSE-class (→ passed/received in the next xmm reg via `_x86_64_sse_arg_reg_seq`)
+// and whether the RETURN is SSE-class (→ xmm0). Anything not listed stays
+// INTEGER-class (the unchanged GP rdi/rsi/… + rax path) — so an empty whitelist
+// (HEXA_CABI_HXLCL off) makes both return false for every fn ⇒ byte-identical.
+//
+// hxlcl_fp_addmul(x: double, y: double) -> double : args 0,1 SSE; return SSE.
+fn _cabi_sse_arg(fname: string, idx: i64) -> bool {
+    if fname == "hxlcl_fp_addmul" {
+        if idx == 0 { return true }
+        if idx == 1 { return true }
+        return false
+    }
+    // hxlcl_atof(s: const char*) -> double : arg 0 is INTEGER class (string in
+    // rdi/GP, NOT SSE) — the MIXED-ABI case — return is SSE. So _cabi_sse_arg returns
+    // FALSE for every index (the string never goes to an xmm reg); only the return is
+    // SSE (handled by _cabi_sse_ret below).
+    if fname == "hxlcl_atof" {
+        return false
+    }
+    // hxlcl_fmod(x: double, y: double) -> double : args 0,1 SSE; return SSE.
+    if fname == "hxlcl_fmod" {
+        if idx == 0 { return true }
+        if idx == 1 { return true }
+        return false
+    }
+    // hxlcl_sin(x: double) -> double : arg 0 SSE; return SSE. (kernels inlined → no
+    // multi-arg kernel signatures here.)
+    if fname == "hxlcl_sin" {
+        if idx == 0 { return true }
+        return false
+    }
+    // hxlcl_cos(x: double) -> double : arg 0 SSE; return SSE. (kernels inlined, like sin.)
+    if fname == "hxlcl_cos" {
+        if idx == 0 { return true }
+        return false
+    }
+    // hxlcl_rotab_probe() -> double : NO args (SSE return only).
+    if fname == "hxlcl_rotab_probe" {
+        return false
+    }
+    // hxlcl_exp(x: double) -> double : arg 0 SSE; return SSE.
+    if fname == "hxlcl_exp" {
+        if idx == 0 { return true }
+        return false
+    }
+    // hxlcl_log(x: double) -> double : arg 0 SSE; return SSE.
+    if fname == "hxlcl_log" {
+        if idx == 0 { return true }
+        return false
+    }
+    return false
+}
+fn _cabi_sse_ret(fname: string) -> bool {
+    if fname == "hxlcl_fp_addmul" { return true }
+    if fname == "hxlcl_atof" { return true }     // double return (xmm0), string arg GP
+    if fname == "hxlcl_fmod" { return true }
+    if fname == "hxlcl_sin" { return true }
+    if fname == "hxlcl_cos" { return true }
+    if fname == "hxlcl_rotab_probe" { return true }
+    if fname == "hxlcl_exp" { return true }
+    if fname == "hxlcl_log" { return true }
+    return false
+}
+// fp-ABI symbols carry SSE-class params/return. The x86_64 backend lowers them
+// (PSABI §3.2.3 xmm); the arm64 backend's AAPCS64 NEON/v0-v7 fp-ABI is the NEXT
+// rung (not yet implemented), so arm64 codegen excludes these from its Route C
+// path (treats them as ordinary PAIR-MODEL fns) to avoid a WRONG GP-register
+// emit of a double leaf. Shared helper so both backends agree on the set.
+pub fn _cabi_is_fp(fname: string) -> bool {
+    if fname == "hxlcl_fp_addmul" { return true }
+    if fname == "hxlcl_atof" { return true }     // SSE-class return → x86 fp-ABI; arm64 excluded
+    if fname == "hxlcl_fmod" { return true }
+    if fname == "hxlcl_sin" { return true }
+    if fname == "hxlcl_cos" { return true }
+    if fname == "hxlcl_rotab_probe" { return true }
+    if fname == "hxlcl_exp" { return true }
+    if fname == "hxlcl_log" { return true }
+    return false
+}
+
+// RFC061 §M8 varargs-ABI (literal-∅ feature B) — variadic-function gate.
+// A whitelisted name is a SysV AMD64 variadic function: its prologue reserves a
+// 176-byte register-save area (48 GP + 128 XMM), spills the 6 GP arg registers
+// (rdi,rsi,rdx,rcx,r8,r9) AND the 8 XMM arg registers (xmm0..xmm7) into it, and
+// reserves a 24-byte va_list struct, so the in-body `__builtin_va_start`/
+// `__builtin_va_arg` (integer class) / `__builtin_va_arg_fp` (SSE class) intrinsics
+// can walk the unnamed arguments per PSABI §3.5.7. A variadic fn is ALSO C-ABI for
+// its NAMED params (single-register ingress) — `_x86_64_lower_func` folds this into
+// `_x86_cabi`, so no separate `_is_cabi` entry is needed. HARD-GATED:
+// `env("HEXA_VA_INTRINSICS") != "1"` → false for EVERY fn → prologue + va branches
+// dead → byte-eq NEUTRAL (mirrors `_is_cabi`/HEXA_CABI_HXLCL). x86_64-linux; integer
+// + SSE class (r1). The PoC symbols `hxlcl_va_smoke` (int) + `hxlcl_va_fp_smoke`
+// (double) prove the leaves. arm64 AAPCS64 va_arg = the next rung.
+pub fn _x86_is_variadic(fname: string) -> bool {
+    if env("HEXA_VA_INTRINSICS") != "1" { return false }
+    if fname == "hxlcl_va_smoke" { return true }
+    // r1 SSE-class PoC — `double hxlcl_va_fp_smoke(long n, ...)` proves the FP-class
+    // va_arg leaf (the prologue XMM reg-save spill + __builtin_va_arg_fp walk).
+    if fname == "hxlcl_va_fp_smoke" { return true }
+    // RUNG2 forwarding PoC — `long hxlcl_va_fwd_smoke(long n, ...)` va_starts then forwards
+    // &va_list into a non-variadic inner walker (proves va_list-as-parameter, the printf
+    // family shape). Only the OUTER fn needs the variadic prologue; the inner walker does not.
+    if fname == "hxlcl_va_fwd_smoke" { return true }
+    return false
+}
+
+// A variadic fn whose RETURN is SSE-class (`double`/`float`) returns its value in
+// xmm0 (PSABI §3.2.3), NOT rax — the same split as a non-variadic Route C leaf
+// (_cabi_sse_ret). Keyed on the variadic whitelist: only `hxlcl_va_fp_smoke` (the
+// r1 SSE PoC) has a double return; `hxlcl_va_smoke` is integer-return (rax). Gated
+// by `_x86_is_variadic` callers ⇒ default-OFF byte-eq NEUTRAL.
+pub fn _x86_va_ret_is_fp(fname: string) -> bool {
+    if fname == "hxlcl_va_fp_smoke" { return true }
+    return false
+}
+
+// Size-annotated rbp-relative memory operand `<sz> ptr [rbp ± N]`, rendered VERBATIM
+// (carried as a label, like the established `qword ptr [r10]` form in __hx_ptr_store64).
+// The string EXACTLY mirrors `_fmt_mem`'s Intel `[rbp + N]` / `[rbp - N]` spelling, so
+// the system assembler reads an ordinary sized memory access. x86_64-linux only (no
+// darwin "_" mangle on a non-symbol literal). Used by the va builtins for the 32-bit
+// gp_offset/fp_offset fields (PSABI packs both into the first 8 bytes of va_list).
+fn _x86_va_memsz(sz: string, base: string, off: i64) -> LOperand {
+    if off >= 0 { return _x86_op_label(sz + " ptr [" + base + " + " + to_string(off) + "]") }
+    return _x86_op_label(sz + " ptr [" + base + " - " + to_string(0 - off) + "]")
 }
 
 // ── SELFHOST-NEXT x86_64: HexaVal 16-byte SysV register-pair ABI ─────
@@ -2431,6 +3106,55 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             // instead of the boxed 16B-stride HexaArr. The descriptor rides the
             // SAME TAG_ARRAY/arr_ptr slot (layout-match) so the downstream `let`
             // copy + len() are unchanged. i64/i32 only (TAG_INT elements).
+            // FLEET lane A2 — escaping-packed mint (HEXA_PACK_ESCAPING): build a
+            // RAW contiguous HexaArrI64 tagged TAG_ARRAY_I64 (hexa_arr_i64_new_esc)
+            // so a worker that receives this array as a param of unknown packed-ness
+            // discriminates it at runtime via hexa_arr_poly_*. Same storage/ABI as
+            // hexa_arr_i64_new (cap→rdi, returns rax:rdx) — ONLY the carried tag
+            // differs. Takes priority over the non-escaping packed mint when ON.
+            if _pack_escaping_enabled() && _x86_local_esc_mint(rm, s.dst.id) {
+                // F64/F32 mirror — dispatch the mint symbol on the element kind the
+                // lattice propagated (101 = i64-class → hexa_arr_i64_*; 103 = f64
+                // → hexa_arr_f64_*; 104 = f32 → hexa_arr_f32_*). The f64/f32 push
+                // helpers (hexa_arr_f64_push_bits / hexa_arr_f32_push_bits) BOTH
+                // take the element as int64 BITS — the EXACT same all-GPR ABI as
+                // hexa_arr_i64_push (rdi:rsi=descriptor, rdx=payload word), and
+                // _x86_hv_payload already lands a const_float's f64 IEEE-754 bits in
+                // rdx, so the mint loop body is byte-shape-identical to i64 — only
+                // the two call targets + the carried tag differ (no xmm at mint).
+                // For f32 the f64→f32 narrowing happens INSIDE hexa_arr_f32_push,
+                // so the 4-byte stride never touches the mint-site ABI.
+                let emk = _x86_local_esc_mint_kind(rm, s.dst.id)
+                let new_sym = if emk == 104 { "hexa_arr_f32_new_esc" } else { if emk == 103 { "hexa_arr_f64_new_esc" } else { "hexa_arr_i64_new_esc" } }
+                let push_sym = if emk == 104 { "hexa_arr_f32_push_bits" } else { if emk == 103 { "hexa_arr_f64_push_bits" } else { "hexa_arr_i64_push" } }
+                let mut ecap = len(s.args)
+                if ecap < 1 { ecap = 1 }
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rdi"), _x86_op_imm(ecap),
+                                 "arresc new: cap"))
+                _x86_buf.push(_x86_instr1("call", _x86_op_label(new_sym),
+                                 "arresc new: escaping packed typed-prim storage (TAG_ARRAY_I64/F64/F32)"))
+                _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                                 "arresc new: capture descriptor"))
+                _x86_store_tag_reg(rm, s.dst.id, "rax")
+                let mut ei = 0
+                while ei < len(s.args) {
+                    // i64: hexa_arr_i64_push(HexaVal v, int64_t x). f64:
+                    // hexa_arr_f64_push_bits(HexaVal v, int64_t bits). Both v →
+                    // rdi:rsi, payload word → rdx (all-GPR).
+                    _x86_hv_payload(s.args[ei], st, rm, "rdx", opts)
+                    _x86_tag_resolve_local(rm, s.dst.id, "rdi")
+                    _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), dst,
+                                     "arresc push: descriptor"))
+                    _x86_buf.push(_x86_instr1("call", _x86_op_label(push_sym),
+                                     "arresc push: raw elem " + to_string(ei)))
+                    _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                                     "arresc push: recapture descriptor"))
+                    _x86_store_tag_reg(rm, s.dst.id, "rax")
+                    ei = ei + 1
+                }
+                _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+                return
+            }
             if _pack_array_enabled() && _x86_local_is_packed(rm, s.dst.id) {
                 let mut pcap = len(s.args)
                 if pcap < 1 { pcap = 1 }
@@ -2604,6 +3328,97 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
         // — fn_ptr → rdi, arity (C int) → esi, env HexaVal pair → rdx:rcx;
         // returns the TAG_CLOSURE HexaVal in rax:rdx. fn_ptr = address of the
         // lifted lambda symbol via RIP-relative lea. Mirrors arm64_darwin.hexa.
+        // fn-ref-as-value: hir_to_mir lowers a bare top-level-fn ident used in
+        // value position to STMT_ASSIGN op="fn_ref" with args = [name_str,
+        // arity_int]. Runtime ABI: hexa_fn_new(void* fn_ptr, int arity) →
+        // fn_ptr in rdi, arity (C int) in esi; returns the TAG_FN HexaVal in
+        // rax:rdx. fn_ptr = address of the user fn symbol via RIP-relative lea.
+        // TAG_FN (not TAG_CLOSURE) so the runtime call dispatch does NOT prepend
+        // an env — a plain fn `worker(start)` takes its arg directly. Mirrors
+        // the C-transpile hexa_fn_new auto-wrap.
+        if s.op == "fn_ref" && len(s.args) >= 2 {
+            let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+            let fn_sym = s.args[0].str_val
+            let fn_arity = s.args[1].int_val
+            // rdi = &<fn_sym> (RIP-relative address-of).
+            _x86_buf.push(_x86_instr2("lea", _x86_op_reg("rdi"),
+                             _x86_op_label("[rip+" + fn_sym + "]"),
+                             "fn_ref: fn-ptr"))
+            // esi = arity (C int).
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("esi"),
+                             _x86_op_imm(fn_arity), "fn_ref: arity"))
+            _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_fn_new_native"),
+                             "fn_ref: build TAG_FN"))
+            _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                             "fn_ref: capture fn payload"))
+            _x86_store_tag_reg(rm, s.dst.id, "rax")
+            _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+            return
+        }
+        // ING #29 literal-∅ (2026-06-30): `__hx_fn_addr(name)` — the raw-unboxed-fn-ptr
+        // sibling of `fn_ref`. hir_to_mir lowers `__hx_fn_addr(worker)` to STMT_ASSIGN
+        // op="__hx_fn_addr" args=[name_str] (the SAME stmt kind as fn_ref). THIS special-
+        // case emits ONLY the pc-relative address-of the .text symbol `name` via
+        // `lea rax, [rip+name]` (R_X86_64_PC32, the EXACT same relocation `fn_ref` uses
+        // above) and SKIPS the `hexa_fn_new_native` boxing call. rax holds the raw .text
+        // pointer, stored as a TAG_INT HexaVal (tag=0, payload=fn ptr). reference-match:
+        // C `&fn` / GCC `&&label` / rustc fn-ptr / zig `@intFromPtr(fn)`. Prerequisite
+        // building block for SA_RESTORER (signal) + setjmp/longjmp (naked-asm) walls.
+        // NOTE: this handler lives in the _STMT_ASSIGN block (NOT _STMT_CALL) because
+        // hir_to_mir emits it as STMT_ASSIGN, matching fn_ref — a prior copy in the
+        // _STMT_CALL block was unreachable (the stmt never matched that kind), causing
+        // silent fallthrough to default call lowering (string-ptr mis-emit). ADD-only.
+        if s.op == "__hx_fn_addr" && len(s.args) >= 1 {
+            if s.args[0].kind == "const_str" {
+                let fn_sym = s.args[0].str_val
+                _x86_buf.push(_x86_instr2("lea", _x86_op_reg("rax"),
+                                 _x86_op_label("[rip+" + fn_sym + "]"),
+                                 "__hx_fn_addr: rax = &" + fn_sym + " (raw .text fn ptr, pc-rel)"))
+                if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "rax", 0) }
+                return
+            }
+        }
+        // carrier call: invoke a runtime TAG_FN/TAG_CLOSURE carrier DATA global
+        // (thread_spawn, …). hir_to_mir lowers `thread_spawn(worker, 1)` to
+        // STMT_ASSIGN op="carrier_call" args=[carrier_name_str, a1, …]. ABI:
+        // hexa_callN_native(HexaVal carrier, HexaVal a1, …) — carrier pair →
+        // rdi:rsi, a1 → rdx:rcx, a2 → r8:r9 (≤2 call args here — the thread/
+        // atomic carriers are all ≤2-arg). The carrier is loaded from its BSS
+        // global: tag = [rip+carrier+0], payload = [rip+carrier+8]. Box the call
+        // args FIRST (they clobber the arg regs), THEN load the carrier into
+        // pair0 so it survives. Returns the HexaVal in rax:rdx.
+        if s.op == "carrier_call" && len(s.args) >= 1 {
+            let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+            let carrier = s.args[0].str_val
+            let ncall = len(s.args) - 1     // number of real call args
+            // box call args into pairs 1.. (skip args[0] = carrier name)
+            let mut ci = 1
+            while ci < len(s.args) {
+                let lo = _x86_hv_pair_lo(ci)   // pair index == ci (carrier is pair0)
+                let hi = _x86_hv_pair_hi(ci)
+                _x86_hv_box_arg(s.args[ci], st, rm, lo, hi, opts)
+                ci = ci + 1
+            }
+            // carrier HexaVal → pair0 (rdi=tag, rsi=payload), from the global.
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rdi"),
+                             _x86_op_label("[rip+" + carrier + "]"),
+                             "carrier_call: tag = " + carrier + "[0]"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rsi"),
+                             _x86_op_label("[rip+" + carrier + "+8]"),
+                             "carrier_call: payload = " + carrier + "[8]"))
+            let mut dispatch = "hexa_call0_native"
+            if ncall == 1 { dispatch = "hexa_call1_native" }
+            if ncall == 2 { dispatch = "hexa_call2_native" }
+            if ncall == 3 { dispatch = "hexa_call3_native" }
+            if ncall == 4 { dispatch = "hexa_call4_native" }
+            _x86_buf.push(_x86_instr1("call", _x86_op_label(dispatch),
+                             "carrier_call: dispatch " + carrier))
+            _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                             "carrier_call: capture result payload"))
+            _x86_store_tag_reg(rm, s.dst.id, "rax")
+            _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+            return
+        }
         if s.op == "closure_new" && len(s.args) >= 3 {
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
             let lam_sym = s.args[1].str_val
@@ -2637,6 +3452,24 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                          " gate_ok=" + to_string(if _x86_index_unbox_ok(s, rm) { 1 } else { 0 }))
             }
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+            // FLEET lane A2 — escaping-poly index (HEXA_PACK_ESCAPING): a typed-prim
+            // array operand of unknown packed-ness (e.g. a worker param) routes
+            // through hexa_arr_poly_get, which branches on HX_TAG==TAG_ARRAY_I64 at
+            // RUNTIME (stride-8 raw) else delegates to the boxed hexa_array_get
+            // (stride-16). Sound for BOTH inputs. ABI: v → rdi:rsi pair, raw idx →
+            // rdx; returns the element HexaVal pair rax:rdx. Takes priority over the
+            // static packed/arru paths when ON.
+            if _x86_operand_pack_esc(s.args[0], rm) {
+                _x86_hv_box_arg(s.args[0], st, rm, "rdi", "rsi", opts)  // descriptor pair
+                _x86_hv_payload(s.args[1], st, rm, "rdx", opts)         // raw idx → rdx
+                _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_arr_poly_get"),
+                                 "index: hexa_arr_poly_get (runtime discriminate)"))
+                _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                                 "index: capture poly element payload"))
+                _x86_store_tag_reg(rm, s.dst.id, "rax")
+                _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+                return
+            }
             // element-pack — PROVEN packed container + provably-int idx → RAW
             // stride-8 load (no tag slot). OOB → hexa_arr_i64_box (bounds throw +
             // boxed return). Takes precedence over the r2c boxed-stride arru_get.
@@ -2728,6 +3561,28 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                          " idx.kind=" + s.args[1].kind +
                          " idx.provint=" + to_string(_ipi) +
                          " gate_ok=" + to_string(if _x86_index_unbox_ok(s, rm) { 1 } else { 0 }))
+            }
+            // FLEET lane A2 — escaping-poly index_set (HEXA_PACK_ESCAPING): a
+            // typed-prim array operand of unknown packed-ness routes through
+            // hexa_arr_poly_set (TAG_ARRAY_I64 → raw stride-8 store; else boxed
+            // hexa_index_set). ABI: v → rdi:rsi pair, raw idx → rdx, item → rcx:r8
+            // pair. Returns the descriptor in rax:rdx → store back so a copied
+            // handle stays coherent (the in-place store also mutates aliases).
+            if _x86_operand_pack_esc(s.args[0], rm) {
+                _x86_hv_box_arg(s.args[0], st, rm, "rdi", "rsi", opts)  // descriptor pair
+                _x86_hv_payload(s.args[1], st, rm, "rdx", opts)         // raw idx → rdx
+                _x86_hv_box_arg(s.args[2], st, rm, "rcx", "r8", opts)   // value pair
+                _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_arr_poly_set"),
+                                 "index_set: hexa_arr_poly_set (runtime discriminate)"))
+                let econt = s.args[0]
+                if econt.kind == "local" {
+                    _x86_buf.push(_x86_instr2("mov", _x86_op_reg(_x86_dst_reg(rm, econt.local_id)),
+                                     _x86_op_reg("rdx"),
+                                     "index_set: store-back poly descriptor"))
+                    _x86_store_tag_reg(rm, econt.local_id, "rax")
+                    _x86_emit_dst_writeback(rm, econt.local_id, 0)
+                }
+                return
             }
             // element-pack — PROVEN packed container + provably-int idx → RAW
             // stride-8 store (no tag slot). OOB → hexa_arr_i64_box (bounds throw).
@@ -3275,15 +4130,21 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
         }
         // UNLOCK-2b ext: signed-i64 relational payload compares → bool.
         // setl/setg/setle/setge (signed cond codes, matching arm64 lt/gt/le/ge).
+        // UNSIGNED variants (libm-leaf fdlibm fmod: raw 64-bit bit-word magnitude
+        // compares where the high bit is data, not a sign) use setb/setbe (CF) —
+        // __hx_payload_ult/ule. arm64 mirrors with lo/ls (unsigned) cond codes.
         if (s.op == "__hx_payload_lt" || s.op == "__hx_payload_gt"
             || s.op == "__hx_payload_le" || s.op == "__hx_payload_ge"
-            || s.op == "__hx_payload_eq" || s.op == "__hx_payload_ne") && len(s.args) >= 2 {
+            || s.op == "__hx_payload_eq" || s.op == "__hx_payload_ne"
+            || s.op == "__hx_payload_ult" || s.op == "__hx_payload_ule") && len(s.args) >= 2 {
             let mut _scc = "setl"
             if s.op == "__hx_payload_gt" { _scc = "setg" }
             if s.op == "__hx_payload_le" { _scc = "setle" }
             if s.op == "__hx_payload_ge" { _scc = "setge" }
             if s.op == "__hx_payload_eq" { _scc = "sete" }
             if s.op == "__hx_payload_ne" { _scc = "setne" }
+            if s.op == "__hx_payload_ult" { _scc = "setb" }  // unsigned <  (CF=1)
+            if s.op == "__hx_payload_ule" { _scc = "setbe" } // unsigned <= (CF=1|ZF=1)
             // Load b→r11 before a→r10 (nested-intrinsic clobber fix — see the
             // arithmetic block); cmp r10,r11 reg assignment is unchanged.
             _x86_hv_payload(s.args[1], st, rm, "r11", opts)
@@ -3304,12 +4165,13 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
         // add/sub/imul into r10 (a.pl), then box as TAG_INT.
         if (s.op == "__hx_payload_add" || s.op == "__hx_payload_sub"
             || s.op == "__hx_payload_mul" || s.op == "__hx_payload_and"
-            || s.op == "__hx_payload_xor") && len(s.args) >= 2 {
+            || s.op == "__hx_payload_xor" || s.op == "__hx_payload_or") && len(s.args) >= 2 {
             let mut _aop = "add"
             if s.op == "__hx_payload_sub" { _aop = "sub" }
             if s.op == "__hx_payload_mul" { _aop = "imul" }
             if s.op == "__hx_payload_and" { _aop = "and" }
             if s.op == "__hx_payload_xor" { _aop = "xor" }
+            if s.op == "__hx_payload_or"  { _aop = "or"  }
             // Load b→r11 BEFORE a→r10: a spilled operand resolves through r10
             // (_x86_op_resolve line ~574), so loading b LAST would clobber a's
             // value already in r10. Loading b first (r10 free) then a→r10 avoids
@@ -3320,6 +4182,37 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             _x86_hv_payload(s.args[0], st, rm, "r10", opts)
             _x86_buf.push(_x86_instr2(_aop, _x86_op_reg("r10"), _x86_op_reg("r11"),
                              s.op + ": r10 = a.pl " + _aop + " b.pl"))
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 0) }
+            return
+        }
+        // payload-shift-leaf: LOGICAL shifts on the raw 64-bit payload word —
+        // `__hx_payload_shl(v,n)` = v << n (shl) / `__hx_payload_shr(v,n)` = v >> n
+        // LOGICAL/UNSIGNED (shr, NOT the BinOp `>>` which is arithmetic `sar`).
+        // The libm-leaf fdlibm fmod port treats a `double`'s payload AS its raw
+        // IEEE-754 bit pattern (the SSE-class Route C ingress lands the xmm bits in
+        // the GP payload home), so its high/low word splits (`u >> 32`), exponent
+        // extract (`hx >> 20`), sign-bit (`>> 31`) and ilogb realign (`<< 11`) need
+        // a ZERO-FILL right shift — a negative double's bit-63 must NOT sign-extend.
+        // x86 variable shift count must be in CL (mirrors the BinOp shift block).
+        // Reference-match: musl src/math/fmod.c uses C unsigned `>>` (logical).
+        if (s.op == "__hx_payload_shl" || s.op == "__hx_payload_shr")
+            && len(s.args) >= 2 {
+            // Resolve BOTH operands into the disjoint scratch pair r11(count),
+            // r10(value) FIRST — exactly like the arith block — so neither
+            // operand is loaded directly into a pool-allocatable register (rcx is
+            // pool-allocatable; loading the count straight into rcx during operand
+            // resolve could clobber a value whose home IS rcx). THEN copy the
+            // count r11→rcx for the cl-based variable shift. b first (count→r11),
+            // a second (value→r10): a spilled value resolves through r10, so this
+            // order avoids the nested-intrinsic clobber.
+            _x86_hv_payload(s.args[1], st, rm, "r11", opts)  // count → r11
+            _x86_hv_payload(s.args[0], st, rm, "r10", opts)  // value → r10
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rcx"), _x86_op_reg("r11"),
+                             s.op + ": shift count → rcx (cl)"))
+            let mut _sm = "shl"
+            if s.op == "__hx_payload_shr" { _sm = "shr" } // LOGICAL right (zero-fill)
+            _x86_buf.push(_x86_instr2(_sm, _x86_op_reg("r10"), _x86_op_reg("cl"),
+                             s.op + ": r10 = v.pl " + _sm + " cl"))
             if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 0) }
             return
         }
@@ -3443,6 +4336,32 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                              "__hx_to_double: tag == TAG_FLOAT?"))
             _x86_buf.push(_x86_instr2("cmove", _x86_op_reg("r10"), _x86_op_reg("r11"),
                              "__hx_to_double: if FLOAT keep original bits"))
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 1) }
+            return
+        }
+        // libm-leaf (musl sin argument reduction) — FLOAT↔INT conversion intrinsics.
+        // __hx_payload_f2i(v): reinterpret v's payload word as a double, TRUNCATE
+        // toward zero into a signed i64 (cvttsd2si) — the `(int32_t)fn` round-to-int
+        // step after the `fn = x*invpio2 + toint - toint` toint trick (fn is already
+        // integral, so truncation is exact). __hx_payload_i2f(v): convert v's signed
+        // int payload to a double (cvtsi2sd). Distinct from __hx_to_double (a TAGGED
+        // int-or-float coercion that keeps already-double bits via cmove) — these take
+        // a RAW payload word and do an unconditional SSE convert. ADD-only.
+        if s.op == "__hx_payload_f2i" && len(s.args) >= 1 {
+            _x86_hv_payload(s.args[0], st, rm, "r10", opts)  // r10 = double bits
+            _x86_buf.push(_x86_instr2("movq", _x86_op_reg("xmm0"), _x86_op_reg("r10"),
+                             "__hx_payload_f2i: xmm0 = v.f bits"))
+            _x86_buf.push(_x86_instr2("cvttsd2si", _x86_op_reg("r10"), _x86_op_reg("xmm0"),
+                             "__hx_payload_f2i: r10 = (i64)trunc(v.f)"))
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 0) }
+            return
+        }
+        if s.op == "__hx_payload_i2f" && len(s.args) >= 1 {
+            _x86_hv_payload(s.args[0], st, rm, "r10", opts)  // r10 = int payload
+            _x86_buf.push(_x86_instr2("cvtsi2sd", _x86_op_reg("xmm0"), _x86_op_reg("r10"),
+                             "__hx_payload_i2f: xmm0 = (double)v.i"))
+            _x86_buf.push(_x86_instr2("movq", _x86_op_reg("r10"), _x86_op_reg("xmm0"),
+                             "__hx_payload_i2f: r10 = converted bits"))
             if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 1) }
             return
         }
@@ -3675,6 +4594,212 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                 return
             }
         }
+        // RFC061 §M8 named-rodata-table (literal-∅ feature C): `__hx_rodata_tab_ptr(
+        // table_id)` — DEFINE a PRE-INITIALIZED `.rodata` constant table named
+        // `rotab_<id>` (contents = `_x86_rodata_table_spec(id)`, LE doubles) and
+        // RETURN its address via `lea rax, [rip+rotab_<id>]` (R_X86_64_PC32 pc-rel,
+        // exactly like __hx_static_slot — but the data is initialized rodata, not a
+        // zero .data slot). The const_int `table_id` makes the symbol name
+        // deterministic at emit; the table is recorded ONCE into _x86_rodata_tabs,
+        // which codegen_x86_64_linux decodes into an LSection appended to
+        // LModule.rodata → emit/asm emits the `.byte`-payload table. Callers read
+        // cells via __hx_ptr_load64(ptr, byte_off). This is the table-driven libm
+        // mechanism (musl exp __exp_data.tab[256]); frozen-safe (identifier call,
+        // no new keyword/@attr). Empty on the byteeq path → byte-eq NEUTRAL.
+        if s.op == "__hx_rodata_tab_ptr" && len(s.args) >= 1 {
+            if s.args[0].kind == "const_int" {
+                let tid = s.args[0].int_val
+                _x86_record_rodata_tab(tid)
+                let rsym = "rotab_" + to_string(tid)
+                _x86_buf.push(_x86_instr2("lea", _x86_op_reg("rax"),
+                                 _x86_op_label("[rip+" + rsym + "]"),
+                                 "__hx_rodata_tab_ptr: rax = &" + rsym + " (.rodata table, pc-rel)"))
+                if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "rax", 0) }
+                return
+            }
+        }
+        // ING #29 literal-∅ (2026-06-30): `__hx_fn_addr(name)` — the raw-unboxed-fn-ptr
+        // sibling of `fn_ref`. MOVED to the _STMT_ASSIGN block (next to fn_ref) — this
+        // _STMT_CALL copy was UNREACHABLE because hir_to_mir emits __hx_fn_addr as
+        // STMT_ASSIGN, not STMT_CALL, so the stmt never entered this kind block (the
+        // silent-mis-emit root cause). Kept as a guard comment for future readers; the
+        // live handler is in the _STMT_ASSIGN block above.
+        // ── RFC061 §M8 varargs-ABI (literal-∅ feature B, RUNG1) ─────────────────────
+        // SysV AMD64 va_list intrinsics, integer class only. The prologue has already
+        // spilled the 6 GP arg regs into the reg_save_area at [rbp+_x86_va_rsa_base] and
+        // reserved the 24-byte va_list at [rbp+_x86_va_list_base]. Reference-match: GCC
+        // 13.3.0 `-O0 -S` of `int f(int n, ...)` (captured component-by-component) +
+        // System V AMD64 PSABI §3.5.7 "Variable Argument Lists" fig 3.34. DCE-never-drops
+        // (STMT_CALL); fires only under HEXA_VA_INTRINSICS=1 → byte-eq NEUTRAL default.
+        //
+        // `__builtin_va_start(num_named)` — initialise the va_list. num_named is a const_
+        // int = the count of NAMED integer params (gp_offset = num_named*8 skips them).
+        // Matches GCC's `movl $8,gp_off; movl $48,fp_off; lea 16(rbp)→ovf; lea rsa→rsa`.
+        // Returns the va_list POINTER (boxed TAG_INT) so the source binds it as `ap`.
+        if s.op == "__builtin_va_start" {
+            let vln = _x86_va_list_base
+            let vrn = _x86_va_rsa_base
+            let mut named = 0
+            if len(s.args) >= 1 && s.args[0].kind == "const_int" { named = s.args[0].int_val }
+            // gp_offset (u32) = named*8
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_imm(named * 8),
+                             "va_start: gp_offset = num_named*8"))
+            _x86_buf.push(_x86_instr2("mov", _x86_va_memsz("dword", "rbp", vln + 0),
+                             _x86_op_reg("r11d"), "va_start: va_list.gp_offset"))
+            // fp_offset (u32) = 48 + num_named_sse*16 (r1: XMM ARE saved → first unnamed
+            // SSE vararg lives at reg_save_area + 48; GCC inits `movl $48,fp_off` for a
+            // fn with 0 named FP params, exactly matching PSABI §3.5.7). The r1 whitelist
+            // has no named FP params (count n is integer-class), so the base 48 is exact.
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_imm(48),
+                             "va_start: fp_offset = 48 (no named SSE params)"))
+            _x86_buf.push(_x86_instr2("mov", _x86_va_memsz("dword", "rbp", vln + 4),
+                             _x86_op_reg("r11d"), "va_start: va_list.fp_offset"))
+            // overflow_arg_area = rbp + 16 (first stack vararg, above saved rbp + ret)
+            _x86_buf.push(_x86_instr2("lea", _x86_op_reg("r11"), _x86_op_mem("rbp", 16),
+                             "va_start: &overflow_arg_area = rbp+16"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_mem("rbp", vln + 8),
+                             _x86_op_reg("r11"), "va_start: va_list.overflow_arg_area"))
+            // reg_save_area = rbp + _x86_va_rsa_base
+            _x86_buf.push(_x86_instr2("lea", _x86_op_reg("r11"), _x86_op_mem("rbp", vrn),
+                             "va_start: &reg_save_area"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_mem("rbp", vln + 16),
+                             _x86_op_reg("r11"), "va_start: va_list.reg_save_area"))
+            // result = &va_list
+            _x86_buf.push(_x86_instr2("lea", _x86_op_reg("r11"), _x86_op_mem("rbp", vln),
+                             "va_start: result = &va_list"))
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r11", 0) }
+            return
+        }
+        // `__builtin_va_arg(ap)` — fetch the next INTEGER-class vararg (8 bytes). ap is
+        // the va_list pointer (payload). Exact PSABI §3.5.7 integer path, byte-for-byte
+        // the GCC sequence: if gp_offset < 48 read reg_save_area[gp_offset] & bump
+        // gp_offset by 8, else read overflow_arg_area & bump it by 8. (RUNG1: integer
+        // class only — a struct/FP va_arg is the honest next rung.)
+        if s.op == "__builtin_va_arg" {
+            let vn = _x86_va_lbl
+            _x86_va_lbl = _x86_va_lbl + 1
+            let ovf = ".Lvaarg_ovf" + to_string(vn)
+            let done = ".Lvaarg_done" + to_string(vn)
+            _x86_hv_payload(s.args[0], st, rm, "r10", opts)   // r10 = &va_list
+            // eax = gp_offset (u32); cmp 47; ja overflow  (matches GCC `cmpl $47; ja`)
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("eax"),
+                             _x86_va_memsz("dword", "r10", 0), "va_arg: eax = gp_offset"))
+            _x86_buf.push(_x86_instr2("cmp", _x86_op_reg("eax"), _x86_op_imm(47),
+                             "va_arg: gp_offset vs 47"))
+            _x86_buf.push(_x86_instr1("ja", _x86_op_label(ovf),
+                             "va_arg: gp_offset >= 48 → overflow"))
+            // reg path: rax(=gp_offset, zero-ext) + reg_save_area → addr in r11
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("eax"), _x86_op_reg("eax"),
+                             "va_arg: zero-extend gp_offset into rax"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r10", 16),
+                             "va_arg: r11 = reg_save_area"))
+            _x86_buf.push(_x86_instr2("add", _x86_op_reg("r11"), _x86_op_reg("rax"),
+                             "va_arg: addr = reg_save_area + gp_offset"))
+            // gp_offset += 8 (store back)
+            _x86_buf.push(_x86_instr2("add", _x86_op_reg("eax"), _x86_op_imm(8),
+                             "va_arg: gp_offset + 8"))
+            _x86_buf.push(_x86_instr2("mov", _x86_va_memsz("dword", "r10", 0),
+                             _x86_op_reg("eax"), "va_arg: store gp_offset back"))
+            _x86_buf.push(_x86_instr1("jmp", _x86_op_label(done), "va_arg: → load"))
+            // overflow path: addr = overflow_arg_area; overflow_arg_area += 8
+            _x86_buf.push(_x86_instr0("label", ovf))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r10", 8),
+                             "va_arg: r11 = overflow_arg_area"))
+            _x86_buf.push(_x86_instr2("lea", _x86_op_reg("rax"), _x86_op_mem("r11", 8),
+                             "va_arg: overflow + 8"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_mem("r10", 8), _x86_op_reg("rax"),
+                             "va_arg: store overflow_arg_area back"))
+            // load the value (8 bytes) and box as TAG_INT leaf
+            _x86_buf.push(_x86_instr0("label", done))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r11", 0),
+                             "va_arg: value = *(long*)addr"))
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r11", 0) }
+            return
+        }
+        // `__builtin_va_arg_fp(ap)` — fetch the next SSE-class (double/float) vararg per
+        // PSABI §3.5.7 fig 3.34. The FP-class sibling of `__builtin_va_arg`: same control
+        // structure, but it walks `fp_offset` (va_list+4, the 32-bit field GCC packs into
+        // the SECOND half of the first eightbyte) over the 128-byte XMM register-save
+        // area (16-byte stride, base 48) and the 8-byte overflow path. Reference-match:
+        // GCC 13.3.0 `-O0 -S` of `double f(int n, ...)` `va_arg(ap, double)`:
+        //   movl fp_offset,%eax ; cmpl $175,%eax ; ja ovf
+        //   reg: rax=reg_save_area ; edx=fp_offset(zero-ext) ; add rdx,rax ; fp_offset+=16
+        //   ovf: rax=overflow_arg_area ; ovf+=8
+        //   movsd (rax),xmm0
+        // — exactly the cmp $175 / 16-byte-reg-stride / 8-byte-overflow sequence captured
+        // above. The loaded value's raw IEEE-754 BITS go into a GP reg (mov, not movsd —
+        // identical bytes, and the float intrinsics already operate on bits in a GP reg
+        // via movq), boxed as a TAG_FLOAT(1) leaf — mirroring the SSE param ingress which
+        // stamps TAG_FLOAT after movq'ing xmm→gp. fires only under HEXA_VA_INTRINSICS=1.
+        if s.op == "__builtin_va_arg_fp" {
+            let vfn = _x86_va_lbl
+            _x86_va_lbl = _x86_va_lbl + 1
+            let fovf = ".Lvaargfp_ovf" + to_string(vfn)
+            let fdone = ".Lvaargfp_done" + to_string(vfn)
+            _x86_hv_payload(s.args[0], st, rm, "r10", opts)   // r10 = &va_list
+            // eax = fp_offset (u32, va_list+4); cmp 175; ja overflow  (GCC `cmpl $175`)
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("eax"),
+                             _x86_va_memsz("dword", "r10", 4), "va_arg_fp: eax = fp_offset"))
+            _x86_buf.push(_x86_instr2("cmp", _x86_op_reg("eax"), _x86_op_imm(175),
+                             "va_arg_fp: fp_offset vs 175 (= 176-1, last 1-eightbyte SSE slot)"))
+            _x86_buf.push(_x86_instr1("ja", _x86_op_label(fovf),
+                             "va_arg_fp: fp_offset > 175 → overflow"))
+            // reg path: addr = reg_save_area + fp_offset (fp_offset already includes the
+            // 48-byte GP base; XMM_i sits at reg_save_area+48+16*i). 16-byte stride.
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("eax"), _x86_op_reg("eax"),
+                             "va_arg_fp: zero-extend fp_offset into rax"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r10", 16),
+                             "va_arg_fp: r11 = reg_save_area"))
+            _x86_buf.push(_x86_instr2("add", _x86_op_reg("r11"), _x86_op_reg("rax"),
+                             "va_arg_fp: addr = reg_save_area + fp_offset"))
+            // fp_offset += 16 (store back) — SSE slot stride per PSABI §3.5.7
+            _x86_buf.push(_x86_instr2("add", _x86_op_reg("eax"), _x86_op_imm(16),
+                             "va_arg_fp: fp_offset + 16"))
+            _x86_buf.push(_x86_instr2("mov", _x86_va_memsz("dword", "r10", 4),
+                             _x86_op_reg("eax"), "va_arg_fp: store fp_offset back"))
+            _x86_buf.push(_x86_instr1("jmp", _x86_op_label(fdone), "va_arg_fp: → load"))
+            // overflow path: addr = overflow_arg_area; overflow_arg_area += 8 (one
+            // eightbyte on the stack, NOT 16 — a stacked double occupies 8 bytes).
+            _x86_buf.push(_x86_instr0("label", fovf))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r10", 8),
+                             "va_arg_fp: r11 = overflow_arg_area"))
+            _x86_buf.push(_x86_instr2("lea", _x86_op_reg("rax"), _x86_op_mem("r11", 8),
+                             "va_arg_fp: overflow + 8"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_mem("r10", 8), _x86_op_reg("rax"),
+                             "va_arg_fp: store overflow_arg_area back"))
+            // load the raw 8 IEEE-754 bytes and box as TAG_FLOAT(1) leaf
+            _x86_buf.push(_x86_instr0("label", fdone))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r11", 0),
+                             "va_arg_fp: value bits = *(double*)addr"))
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r11", 1) }
+            return
+        }
+        // `__builtin_va_end(ap)` — SysV no-op (the va_list lives in the frame, nothing
+        // to release). Box 0 if a dst is present so the value-position is well-defined.
+        if s.op == "__builtin_va_end" {
+            _x86_buf.push(_x86_instr0("nop", "va_end: SysV no-op"))
+            if s.dst.id >= 0 {
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_imm(0),
+                                 "va_end: result = 0"))
+                _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r11", 0)
+            }
+            return
+        }
+        // `__builtin_va_copy(dst_ap, src_ap)` — copy the 24-byte va_list (3 qwords).
+        if s.op == "__builtin_va_copy" && len(s.args) >= 2 {
+            _x86_hv_payload(s.args[0], st, rm, "r10", opts)   // r10 = dst va_list*
+            _x86_hv_payload(s.args[1], st, rm, "r11", opts)   // r11 = src va_list*
+            let mut _vc = 0
+            while _vc < 24 {
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rax"), _x86_op_mem("r11", _vc),
+                                 "va_copy: load src qword"))
+                _x86_buf.push(_x86_instr2("mov", _x86_op_mem("r10", _vc), _x86_op_reg("rax"),
+                                 "va_copy: store dst qword"))
+                _vc = _vc + 8
+            }
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 0) }
+            return
+        }
         // UNLOCK-10: `__hx_ptr_store64(ptr, off, val)` — write 64-bit `val` to
         // raw address ptr+off. Returns ptr (chainable). r10=ptr, r11=off,
         // rsi=val; add; mov qword ptr [addr], val; result = original ptr.
@@ -3772,6 +4897,25 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
         // — would corrupt the contiguous int64 buffer). The descriptor is mutated
         // in place (data realloc'd inside), so the discarded call-ret temp is fine;
         // recapture anyway for an `let a = xs.push(v)` expression use.
+        // FLEET lane A2 — escaping-poly push (HEXA_PACK_ESCAPING): a typed-prim
+        // array operand of unknown packed-ness routes through hexa_arr_poly_push
+        // (TAG_ARRAY_I64 → raw stride-8 grow; else boxed hexa_array_push). ABI:
+        // v → rdi:rsi pair, item → rdx:rcx pair; returns the (possibly realloc'd)
+        // descriptor in rax:rdx → recapture so the handle stays valid.
+        if _pack_escaping_enabled() && s.op == "push" && len(s.args) >= 2 &&
+           _x86_operand_pack_esc(s.args[0], rm) {
+            _x86_hv_box_arg(s.args[0], st, rm, "rdi", "rsi", opts) // descriptor pair
+            _x86_hv_box_arg(s.args[1], st, rm, "rdx", "rcx", opts) // item pair
+            _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_arr_poly_push"),
+                             "push: hexa_arr_poly_push (runtime discriminate)"))
+            if s.dst.id >= 0 {
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg(_x86_dst_reg(rm, s.dst.id)),
+                                 _x86_op_reg("rdx"), "push: recapture poly descriptor"))
+                _x86_store_tag_reg(rm, s.dst.id, "rax")
+                _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+            }
+            return
+        }
         if _pack_array_enabled() && s.op == "push" && len(s.args) >= 2 &&
            _x86_operand_is_packed(s.args[0], rm) {
             _x86_hv_box_arg(s.args[0], st, rm, "rdi", "rsi", opts) // descriptor pair
@@ -3786,7 +4930,16 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             }
             return
         }
-        let target = _builtin_runtime_sym(s.op)
+        let mut target = _builtin_runtime_sym(s.op)
+        // FLEET lane A2 — escaping-poly len (HEXA_PACK_ESCAPING): `len(xs)` on a
+        // typed-prim array of unknown packed-ness routes to hexa_arr_poly_len,
+        // which branches on HX_TAG==TAG_ARRAY_I64 (raw ->len) else delegates to
+        // hexa_len (boxed). IDENTICAL ABI to hexa_len (one HexaVal pair in, raw
+        // int64 in rax) so only the call target changes — the existing single-arg
+        // pass + TAG_INT ret-box (_builtin_ret_box("len")) are unaffected.
+        if s.op == "len" && len(s.args) >= 1 && _x86_operand_pack_esc(s.args[0], rm) {
+            target = "hexa_arr_poly_len"
+        }
         let is_builtin = target != s.op
 
         if is_builtin {
@@ -3885,10 +5038,24 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             // reached by the strlen 1-symbol PoC — C calls hxlcl_strlen and the
             // leaf calls nothing — but completes the mechanism for the scale
             // round; gated empty-whitelist-off so byteeq-neutral.)
+            // SysV §3.2.3: SSE-class args go in xmm0..7, INTEGER-class in
+            // rdi/rsi/… — SEPARATE counters. For the integer-only whitelist no arg
+            // is SSE ⇒ _cabi_call_gp == ci ⇒ byte-identical to the prior form.
             let mut ci = 0
+            let mut _cabi_call_gp = 0
+            let mut _cabi_call_sse = 0
             while ci < arg_n {
-                if ci < 6 {
-                    _x86_hv_payload(s.args[ci], st, rm, _x86_64_arg_reg_seq(ci), opts)
+                if _cabi_sse_arg(target, ci) {
+                    // SSE-class arg — load the IEEE-754 payload bits into a GP
+                    // scratch (r10), then movq into the next xmm arg register.
+                    let _sse_reg = _x86_64_sse_arg_reg_seq(_cabi_call_sse)
+                    _cabi_call_sse = _cabi_call_sse + 1
+                    _x86_hv_payload(s.args[ci], st, rm, "r10", opts)
+                    _x86_buf.push(_x86_instr2("movq", _x86_op_reg(_sse_reg),
+                                     _x86_op_reg("r10"), "cabi fp arg: gp→xmm"))
+                } else if _cabi_call_gp < 6 {
+                    _x86_hv_payload(s.args[ci], st, rm, _x86_64_arg_reg_seq(_cabi_call_gp), opts)
+                    _cabi_call_gp = _cabi_call_gp + 1
                 }
                 ci = ci + 1
             }
@@ -3896,11 +5063,19 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 {
                 let dst_name = _x86_dst_reg(rm, s.dst.id)
                 let dst = _x86_op_reg(dst_name)
-                if dst.reg.name != "rax" {
-                    _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
-                        "cabi: unbox call result (rax)"))
+                if _cabi_sse_ret(target) {
+                    // SSE-class return — result in xmm0; movq the bits to the GP dst
+                    // home and stamp TAG_FLOAT(1).
+                    _x86_buf.push(_x86_instr2("movq", dst, _x86_op_reg("xmm0"),
+                        "cabi fp: unbox call result (xmm0→gp)"))
+                    _x86_store_tag_imm(rm, s.dst.id, 1)
+                } else {
+                    if dst.reg.name != "rax" {
+                        _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
+                            "cabi: unbox call result (rax)"))
+                    }
+                    _x86_store_tag_imm(rm, s.dst.id, 0)
                 }
-                _x86_store_tag_imm(rm, s.dst.id, 0)
                 _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
             }
             return
@@ -4051,7 +5226,21 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             _x86_emit_zero_ret_pair(fname == "main")
         }
         if len(s.args) >= 1 {
-            if _is_cabi(fname) {
+            if (_is_cabi(fname) && _cabi_sse_ret(fname))
+                || (_x86_va_active && _x86_va_ret_is_fp(fname)) {
+                // Route C / variadic fp-ABI return — an SSE-class (`double`) fn returns
+                // its value in xmm0 (PSABI §3.2.3), NOT rax. The payload eightbyte
+                // holds the IEEE-754 bits; load it into a GP scratch (r10) then movq
+                // into xmm0. Must run BEFORE frame teardown (reads spill slots). A
+                // variadic double-returning leaf (hxlcl_va_fp_smoke) takes this path so
+                // a C caller reads the result in xmm0, not the leftover-in-rax word.
+                _x86_hv_payload(s.args[0], st, rm, "r10", opts)
+                _x86_buf.push(_x86_instr2("movq", _x86_op_reg("xmm0"),
+                                 _x86_op_reg("r10"), "cabi fp return: gp→xmm0"))
+            } else if _is_cabi(fname) || _x86_va_active {
+                // A variadic fn (RUNG1, _x86_va_active) returns C-ABI single-register
+                // too (its named/return contract is raw C-ABI, like a Route C leaf).
+                // Folded in so the C caller reads the value in rax, not the PAIR tag.
                 // Route C C-ABI return — a raw C-ABI fn returns its value in a
                 // SINGLE register (rax). Load just the payload eightbyte (the
                 // raw int/pointer); the HexaVal tag is dropped (the C caller
@@ -4068,7 +5257,12 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                 _x86_hv_box_arg(s.args[0], st, rm, "rax", "rdx", opts)
             }
         }
-        _x86_emit_epilogue(spill_frame)
+        // ING #29 literal-∅: @naked fn — NO compiler-generated epilogue (the body
+        // is raw asm; e.g. a signal trampoline ends in `syscall` which never
+        // returns). reference-match: GCC __attribute__((naked)).
+        if !_x86_is_naked {
+            _x86_emit_epilogue(spill_frame)
+        }
         return
     }
     if s.kind == _STMT_BR {
@@ -4124,15 +5318,24 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
     }
     if s.kind == "try_setjmp" {
         // jmp_buf slot at [rsp + slot*256] (bottom of frame). lea &jbuf →
-        // rdi, call libc setjmp; on nonzero return (longjmp-resumed) jump
-        // to catch (target_block_else); on first call (0) push jbuf onto the
-        // runtime try-stack then jump into the try body (target_block).
+        // rdi, call native musl hxlcl_setjmp; on nonzero return (longjmp-
+        // resumed) jump to catch (target_block_else); on first call (0) push
+        // jbuf onto the runtime try-stack then jump into the try body.
+        // RFC061 §M8 re-baseline (ING#29 ∅−8): the linux-x86_64 try-block SAVE
+        // now calls the hexa-native musl-layout `hxlcl_setjmp` (64-B jmp_buf:
+        // [0]=rbx [8]=rbp [16]=r12 [24]=r13 [32]=r14 [40]=r15 [48]=rsp [56]=rip,
+        // no glibc PTR_MANGLE), byte-id to musl src/setjmp/x86_64/setjmp.S. It
+        // is PAIRED with the native musl `hxlcl_longjmp` RESTORE baked into the
+        // re-baselined frozen runtime (self/runtime.c, x86_64 branch). Both
+        // halves are musl-layout-consistent — replaces the prior glibc `call
+        // setjmp` + glibc-longjmp pair (gen3≡gen4 reconverged 3-target). The
+        // 256-B slot is kept (musl writes 64 B; the extra is unused headroom).
         let _off = try_slot_idx * 256
         _x86_buf.push(_x86_instr2("lea", _x86_op_reg("rdi"),
                          _x86_op_mem("rsp", _off),
                          "try_setjmp: &jbuf[" + to_string(try_slot_idx) + "]"))
-        _x86_buf.push(_x86_instr1("call", _x86_op_label("setjmp"),
-                         "try_setjmp: call libc setjmp (hxlcl_setjmp is a macro on x86_64)"))
+        _x86_buf.push(_x86_instr1("call", _x86_op_label("hxlcl_setjmp"),
+                         "try_setjmp: call native musl hxlcl_setjmp (64-B jmp_buf)"))
         _x86_buf.push(_x86_instr2("test", _x86_op_reg("eax"), _x86_op_reg("eax"),
                          "try_setjmp: setjmp rc"))
         let _catch_lab = _x86_64_block_label(modhash, fname, s.target_block_else)
@@ -4193,9 +5396,41 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
     // bottom-of-frame at [rsp + slot*256], below the rbp-relative spill slots.
     let _try_cnt = _x86_count_try_setjmp(mf)
     let _try_buf_bytes = _try_cnt * 256
-    let spill_frame = alloc.frame_size + _try_buf_bytes
+    // RFC061 §M8 varargs-ABI (r1) — reserve the SysV va_list frame for a variadic
+    // fn: a 176-byte reg_save_area (48 GP + 128 XMM, PSABI §3.5.7 fig 3.34) + 24-byte
+    // va_list struct = 200, rounded to 208 (16B mult, alignment-preserving). Reference-
+    // match: GCC 13.3.0 spills `%rsi..%r9` at -168..-136(%rbp) and `%xmm0..%xmm7` via
+    // movaps at -128..-16(%rbp) → reg_save_area = 176 bytes, with XMM_i @ rsa+48+16*i.
+    // Wedged BETWEEN the regalloc spill slots (rbp-relative, logical [0, frame_size)) and
+    // the try jmp_bufs (rsp-relative, bottom), so it aliases neither. _x86_va_active/
+    // _x86_va_rsa_base/_x86_va_list_base carry the layout to the va builtins. NON-variadic
+    // (default) → va_block 0 → byte-eq NEUTRAL.
+    _x86_va_active = _x86_is_variadic(mf.name)
+    // ING #29 literal-∅ (2026-06-30): `@naked` — propagate MFunc.is_naked to the
+    // per-fn global so the prologue/epilogue guards + the return-statement path
+    // read it. Reset every fn (same discipline as _x86_va_active above).
+    _x86_is_naked = mf.is_naked
+    let mut _va_block = 0
+    if _x86_va_active { _va_block = 208 }
+    let spill_frame = alloc.frame_size + _va_block + _try_buf_bytes
+    if _x86_va_active {
+        // reg_save_area[0] (lowest addr) just above the try bufs; GP reg i @ +8*i,
+        // XMM reg i @ +48+16*i (PSABI §3.5.7). va_list struct sits at rsa+176.
+        _x86_va_rsa_base = 0 - (_X86_CALLEE_SAVE_BYTES + alloc.frame_size + _va_block)
+        _x86_va_list_base = _x86_va_rsa_base + 176
+    } else {
+        _x86_va_rsa_base = 0
+        _x86_va_list_base = 0
+    }
 
     // Prologue
+    // ING #29 literal-∅ (2026-06-30): @naked SKIPS the entire prologue+epilogue
+    // (reference-match: GCC __attribute__((naked)) / rustc #[naked] — the body
+    // is raw asm with no compiler-generated frame setup/teardown). The naked
+    // body must terminate itself (a signal trampoline ends in `syscall` which
+    // never returns; a setjmp restorer emits its own `ret`). DEFAULT false on
+    // every existing fn → the guard is a no-op → byte-eq NEUTRAL.
+    if !_x86_is_naked {
     _x86_buf.push(_x86_instr1("push", _x86_op_reg("rbp"), "prologue: save rbp"))
     _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rbp"), _x86_op_reg("rsp"), "prologue: set rbp"))
     // PAIR-MODEL — preserve the callee-saved allocation pool (rbx/r12-r15) for
@@ -4217,6 +5452,42 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
                             "prologue: alloc spill frame"))
     }
 
+    // RFC061 §M8 varargs-ABI (r1) — spill the 6 GP arg registers into the
+    // reg_save_area BEFORE any param ingress clobbers them (PSABI §3.5.7; matches GCC
+    // 13.3.0's `movq %rsi,-168(%rbp) … %r9,-136(%rbp)` reg-save block). GP reg i
+    // (rdi,rsi,rdx,rcx,r8,r9) → reg_save_area[i] = [rbp + _x86_va_rsa_base + 8*i].
+    // Named params are skipped at va_start via gp_offset; storing all 6 (incl. the
+    // named rdi) is PSABI-faithful and harmless.
+    if _x86_va_active {
+        let mut _vgi = 0
+        while _vgi < 6 {
+            _x86_buf.push(_x86_instr2("mov",
+                _x86_op_mem("rbp", _x86_va_rsa_base + _vgi * 8),
+                _x86_op_reg(_x86_64_arg_reg_seq(_vgi)),
+                "va prologue: spill GP arg reg → reg_save_area[" + to_string(_vgi) + "]"))
+            _vgi = _vgi + 1
+        }
+        // r1 SSE-class — spill the 8 XMM arg registers into the FP half of the reg_save_
+        // area (PSABI §3.5.7; GCC 13.3.0 spills `movaps %xmm0,-128(%rbp) … %xmm7,-16(%rbp)`
+        // i.e. XMM_i @ reg_save_area + 48 + 16*i, immediately after the 48-byte GP block).
+        // A `double` vararg occupies only the LOW eightbyte of its 16-byte slot, which the
+        // FP va_arg reads back with `movsd (addr)` — so spilling the low 8 bytes via
+        // `movq [mem], xmmN` (the same xmm↔gp/mem mnemonic the fp-ABI Route C ingress
+        // already emits) is value-faithful for the double/float class (no movaps needed:
+        // the high eightbyte is never consumed by a 1-eightbyte SSE va_arg). The xmm regs
+        // carry the unnamed FP varargs; named FP params (none under the r1 whitelist) would
+        // be skipped at va_start via fp_offset just like the GP half.
+        let mut _vfi = 0
+        while _vfi < 8 {
+            _x86_buf.push(_x86_instr2("movq",
+                _x86_op_mem("rbp", _x86_va_rsa_base + 48 + _vfi * 16),
+                _x86_op_reg(_x86_64_sse_arg_reg_seq(_vfi)),
+                "va prologue: spill XMM arg reg → reg_save_area FP[" + to_string(_vfi) + "]"))
+            _vfi = _vfi + 1
+        }
+    }
+    } // end `if !_x86_is_naked` (prologue) — ING #29 @naked skips frame setup
+
     // PAIR-MODEL ingress — each HexaVal param arrives as a 16-byte SysV
     // register PAIR: param0 → rdi:rsi, param1 → rdx:rcx, param2 → r8:r9
     // (tag = lo, payload = hi). Only THREE pairs fit in the six integer-arg
@@ -4230,17 +5501,47 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
     // TAG goes into the param's parallel tag-slot so it survives into any
     // downstream tag-dispatching runtime call.
     let mut p = 0
-    let _x86_cabi = _is_cabi(mf.name)
+    // A variadic fn (RUNG1) is C-ABI for its NAMED params too — they arrive in single
+    // arg registers (rdi,rsi,…), exactly like a Route C leaf — so fold _x86_va_active
+    // into the C-ABI ingress branch. (_x86_va_active is false on the default path.)
+    let _x86_cabi = _is_cabi(mf.name) || _x86_va_active
+    // Route C fp-ABI — SysV §3.2.3 keeps SEPARATE INTEGER and SSE arg counters.
+    // `_x86_cabi_gp` counts INTEGER-class params consumed so far (rdi/rsi/…);
+    // `_x86_cabi_sse` counts SSE-class params (xmm0/xmm1/…). For the integer-only
+    // whitelist (incl. variadic named params) the SSE counter never advances ⇒
+    // gp == p ⇒ byte-identical to the prior `_x86_64_arg_reg_seq(p)` form.
+    let mut _x86_cabi_gp = 0
+    let mut _x86_cabi_sse = 0
     while p < len(mf.params) {
         let pid = mf.params[p].id
-        if _x86_cabi && p < 6 {
+        if _x86_cabi && _cabi_sse_arg(mf.name, p) {
+            // Route C fp-ABI ingress — param p is SSE-class: it arrives RAW in the
+            // next SSE register xmm0..xmm7 (NOT a GP reg, NOT a pair). The body's
+            // float intrinsics (__hx_payload_fmul/fadd) operate on the IEEE-754
+            // BITS held in a GP reg (movq GP↔xmm internally), so move the incoming
+            // xmm bits into the param's GP home and stamp TAG_FLOAT(1).
+            let sse_reg = _x86_64_sse_arg_reg_seq(_x86_cabi_sse)
+            _x86_cabi_sse = _x86_cabi_sse + 1
+            _x86_store_tag_imm(rm, pid, 1)   // TAG_FLOAT
+            if _x86_is_spilled(rm, pid) {
+                // movq the xmm bits into r11 (disjoint scratch), then spill.
+                _x86_buf.push(_x86_instr2("movq", _x86_op_reg("r11"),
+                                    _x86_op_reg(sse_reg), "cabi fp ingress: xmm→gp"))
+                _x86_store_spill(rm, pid, "r11")
+            } else {
+                let dst_name = _x86_reg_lookup(rm, pid)
+                _x86_buf.push(_x86_instr2("movq", _x86_op_reg(dst_name),
+                                    _x86_op_reg(sse_reg), "cabi fp ingress param payload (xmm→gp)"))
+            }
+        } else if _x86_cabi && _x86_cabi_gp < 6 {
             // Route C C-ABI ingress — param p arrives RAW in ONE SysV INTEGER
             // arg register (rdi,rsi,rdx,rcx,r8,r9), not a {tag,payload} pair.
             // Store TAG_INT(0) into the tag-slot (imm via r11 — disjoint from
             // every arg reg) and the raw word as the payload home, mirroring the
             // pair path's payload handling. (libc-floor leaves have ≤6 params, so
             // the >6 stack case never arises under the whitelist.)
-            let pay_reg = _x86_64_arg_reg_seq(p)
+            let pay_reg = _x86_64_arg_reg_seq(_x86_cabi_gp)
+            _x86_cabi_gp = _x86_cabi_gp + 1
             _x86_store_tag_imm(rm, pid, 0)
             if _x86_is_spilled(rm, pid) {
                 _x86_store_spill(rm, pid, pay_reg)
@@ -4322,8 +5623,13 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
     // r15/r25 — fall-through (no explicit return reached): main → tag 0 (so a
     // top-level program exits 0, not stale rax), every other fn → TAG_VOID so
     // a void-returning fn's result reads type_of == "void".
-    _x86_emit_zero_ret_pair(mf.name == "main")
-    _x86_emit_epilogue(spill_frame)
+    // ING #29 literal-∅: @naked fn — NO fall-through epilogue either (the body
+    // is raw asm that must terminate itself; a stray zero-ret-pair + ret would
+    // corrupt the trampoline). DEFAULT false → unchanged on every existing fn.
+    if !_x86_is_naked {
+        _x86_emit_zero_ret_pair(mf.name == "main")
+        _x86_emit_epilogue(spill_frame)
+    }
 
     return LFunc {
         name: mf.name,
@@ -4405,6 +5711,69 @@ fn _x86_byte_to_hex(b: i64) -> string {
     let hi = b / 16
     let lo = b - hi * 16
     return _x86_hex_nibble(hi) + _x86_hex_nibble(lo)
+}
+
+// ── RFC061 §M8 named-rodata-table (literal-∅ feature C — exp/log table data) ──
+// Convert a 16-hex-digit BIG-ENDIAN uint64 token (the form musl's exp_data.c /
+// log_data.c ships, e.g. "3ff0000000000000") into a 16-hex-digit LITTLE-ENDIAN
+// byte string ("000000000000f03f") suitable for the LSection `.byte` payload —
+// i.e. the exact 8 bytes a `.quad 0x3ff0000000000000` would assemble to on a
+// little-endian x86_64 target. Pure char-pair reversal (no integer parse — the
+// frozen-built compiler has no 64-bit hex-string→i64 path; byte-reversal of the
+// hex text is value-faithful and stage0-portable). Tokens shorter than 16 hex
+// digits are LEFT-zero-padded first (a uint64 with leading-zero nibbles).
+fn _x86_u64hex_to_le_hex(tok: string) -> string {
+    let cs = tok.chars()
+    let n = len(cs)
+    // left-pad to 16 hex digits
+    let mut padded = ""
+    let mut p = n
+    while p < 16 {
+        padded = padded + "0"
+        p = p + 1
+    }
+    let mut k = 0
+    while k < n {
+        padded = padded + cs[k]
+        k = k + 1
+    }
+    // reverse byte-pairs: bytes are at [0,1][2,3]…[14,15]; LE order is
+    // [14,15][12,13]…[0,1].
+    let pc = padded.chars()
+    let mut out = ""
+    let mut bi = 7
+    while bi >= 0 {
+        out = out + pc[bi * 2] + pc[bi * 2 + 1]
+        bi = bi - 1
+    }
+    return out
+}
+
+// Encode a whitespace-separated list of BIG-ENDIAN uint64 hex tokens into the
+// concatenated LITTLE-ENDIAN byte-hex payload for one rodata table. Each token
+// becomes 8 LE bytes (16 hex chars). Whitespace / commas separate tokens.
+fn _x86_u64hex_list_to_le_payload(spec: string) -> string {
+    let cs = spec.chars()
+    let n = len(cs)
+    let mut out = ""
+    let mut tok = ""
+    let mut i = 0
+    while i < n {
+        let c = cs[i]
+        if c == " " || c == "\n" || c == "\t" || c == "," || c == "\r" {
+            if len(tok) > 0 {
+                out = out + _x86_u64hex_to_le_hex(tok)
+                tok = ""
+            }
+        } else {
+            tok = tok + c
+        }
+        i = i + 1
+    }
+    if len(tok) > 0 {
+        out = out + _x86_u64hex_to_le_hex(tok)
+    }
+    return out
 }
 
 fn _x86_ascii_code(ch: string) -> i64 {
@@ -4564,6 +5933,10 @@ pub fn codegen_x86_64_linux(module: MModule, opts: CodegenOptions) -> LModule {
     // lowering (it is module-scope mutable, so a prior module's slots must not
     // leak). On the byteeq path no body calls __hx_static_slot → stays [].
     _x86_static_slots = []
+    // §M8 feature C: reset the named-rodata-table accumulator for THIS module too
+    // (module-scope mutable; prior-module tables must not leak). Stays [] on the
+    // byteeq path → rodata unchanged → byte-eq NEUTRAL.
+    _x86_rodata_tabs = []
     let mut funcs = []
     let mut i = 0
     while i < len(module.funcs) {
@@ -4590,11 +5963,28 @@ pub fn codegen_x86_64_linux(module: MModule, opts: CodegenOptions) -> LModule {
         gnames.push(_x86_static_slots[si])
         si = si + 1
     }
+    // §M8 feature C: build the rodata list = string-table sections PLUS one
+    // `.rodata` LSection per referenced named table (`rotab_<id>`), aligned 8
+    // (.p2align 3) with the LE-double payload. Empty `_x86_rodata_tabs` on the
+    // byteeq path → identical to the bare `_x86_strtab_to_rodata(st)` → byte-eq
+    // NEUTRAL.
+    let mut rodata_secs = _x86_strtab_to_rodata(st)
+    let mut ti = 0
+    while ti < len(_x86_rodata_tabs) {
+        let tid = _x86_rodata_tabs[ti]
+        let payload = _x86_u64hex_list_to_le_payload(_x86_rodata_table_spec(tid))
+        rodata_secs.push(LSection {
+            name: "rotab_" + to_string(tid),
+            bytes: payload,
+            align: 3
+        })
+        ti = ti + 1
+    }
     return LModule {
         file: module.file,
         target: "x86_64-linux-gnu",
         funcs: funcs,
-        rodata: _x86_strtab_to_rodata(st),
+        rodata: rodata_secs,
         bss: [],
         globals: gnames,
         floats: []

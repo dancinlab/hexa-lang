@@ -264,6 +264,11 @@ fn _cj_parse_congruence(expr: string) -> array {
     }
     let ni = anpart.index_of("n")
     if ni < 0 { return empty }
+    // reject any residual after 'n' (e.g. "5n^2", "5n3"): the coefficient frame is
+    // strictly α·n, so 'n' must be the LAST char of the coefficient part. Without
+    // this, "p(5n^2+4)=0 mod5" silently mis-parsed as "p(5n+4)=0 mod5" — a TRUE
+    // statement labelled onto a DIFFERENT claim (c2 violation via parser leniency).
+    if ni + 1 != len(anpart) { return empty }
     let alpha_str = anpart.substring(0, ni)
     let mut alpha = 1
     if len(alpha_str) > 0 { alpha = _cj_parse_int(alpha_str) }
@@ -352,13 +357,34 @@ fn _cj_subprog(w: int, a: int, b: int, m: int, w0: int, a0: int, b0: int, m0: in
     return true
 }
 
-// C1 for the congruence frame: does the candidate reduce to a base Ramanujan
-// congruence (same modulus sub-progression)? Then it is a re-statement, not novel.
+// canonical Ramanujan-Watson residue at modulus m: the unique δ in [0,m) with
+// 24·δ ≡ 1 (mod m). Exists iff gcd(24,m)=1 — true for every {5,7,11}-smooth m
+// (5·7·11 all coprime to 24). Returns -1 when no such δ exists.
+fn _cj_watson_delta(m: int) -> int {
+    let mut d = 0
+    while d < m {
+        if (24 * d) % m == 1 { return d }
+        d = d + 1
+    }
+    return 0 - 1
+}
+
+// C1 for the congruence frame: does the candidate reduce to a KNOWN Ramanujan-
+// Watson congruence (same-modulus sub-progression)? Then it is a re-statement, not
+// novel. Generalized (2026-07-02) from the 3 hardcoded base congruences (m=5/7/11)
+// to the FULL canonical tower: for every {5,7,11}-smooth m, the canonical
+// p(m·n+δ) ≡ 0 (mod m) (24δ≡1) is classical, so a candidate that is an
+// arithmetic SUB-PROGRESSION of it is classical too. This closes the measured
+// false-positive where p(50n+49) ≡ 0 (mod 25) — a trivial sub-progression of
+// Watson's p(25n+24) with a=50≠m=25 — slipped BOTH the 3-base table and the
+// canonical a==m check and was mislabelled `verified-novel`.
 fn _cj_congruence_reduces_known(which: int, a: int, b: int, m: int) -> bool {
-    if _cj_subprog(which, a, b, m, 0, 5, 4, 5) { return true }
-    if _cj_subprog(which, a, b, m, 0, 7, 5, 7) { return true }
-    if _cj_subprog(which, a, b, m, 0, 11, 6, 11) { return true }
-    return false
+    if which != 0 { return false }
+    if m < 5 { return false }
+    if _cj_smooth_5_7_11(m) == false { return false }
+    let delta = _cj_watson_delta(m)
+    if delta < 0 { return false }
+    return _cj_subprog(which, a, b, m, 0, m, delta, m)
 }
 
 // is m composed ONLY of the primes {5,7,11}? (the Ramanujan-Watson prime tower)
@@ -423,8 +449,10 @@ fn _cj_class_composition(first_n: int) -> string {
 // modulus, not a C1 sub-progression of a base Ramanujan congruence). ──
 fn _cj_class_congruence(which: int, a: int, b: int, m: int) -> string {
     if which != 0 { return "C5-RECURRENCE-PERIODIC" }
-    if _cj_congruence_reduces_known(which, a, b, m) { return "C1-ASSOC-CHAIN" }
+    // canonical p(m·n+δ) form first (distinct honest label), then any same-modulus
+    // sub-progression of the tower. Both are classical ⇒ demote to verified-known.
     if _cj_is_ramanujan_watson(which, a, b, m) { return "C1-WATSON-TOWER" }
+    if _cj_congruence_reduces_known(which, a, b, m) { return "C1-ASSOC-CHAIN" }
     return "SURVIVOR"
 }
 

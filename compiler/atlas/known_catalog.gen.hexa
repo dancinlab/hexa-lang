@@ -1,0 +1,361 @@
+// AUTO-GENERATED (identity shard) — do not hand-edit the kc_af_identity_tuples
+// block below; regenerate via `sh tool/known_catalog_gen.sh`. The sequence /
+// composition shard (kc_seq_*) is hand-authored (SSOT = the design doc list) and
+// preserved verbatim across regeneration.
+//
+// compiler/atlas/known_catalog.gen.hexa — OUROBOROS-novel M3 KNOWN catalog shard
+// (ARCHITECTURE discovery-engine-novel-design-roadmap · state/fable-eval-
+// discovery-2026-07-02/NEXUS_novel_design_fable.md §2-P2 ⓒ / §3 classifier).
+//
+// PURPOSE. The 3-class discriminator (design §3) needs a round-INDEPENDENT
+// catalog of what is ALREADY KNOWN, so a drill/emerge candidate is sorted:
+//   (α) permutation      — fingerprint ∈ FP_k(G_t)  (inside the current well)
+//   (β) rediscovery      — fingerprint ∈ KNOWN       (a known law / named seq)
+//   (γ) genuine-novel    — ∉ KNOWN ∧ ∉ FP_k          (candidate for g5 fold)
+// KNOWN here = (1) the atlas @F PRODUCT-identity shard (statement fingerprints)
+// + (2) a classical-sequence / composition-symbol shard (sequence fingerprints).
+// The M3 gate (known_catalog_test.hexa): every EXISTING rediscovery classifies
+// as (β) — 100% — with ZERO (α)/(γ) misclassification.
+//
+// SSOT of the identity shard = compiler/atlas/embedded.gen.hexa (the folded @F
+// ledger · embedded.gen.hexa itself is NOT modified). tool/known_catalog_gen.sh
+// extracts the PURE-BASIS product identities A*B=C*D whose four tokens are all in
+// the 18-fn af() basis (compiler/atlas/identity_engine.hexa) — exactly the sub-
+// space the drill BLOWUP enumerator (compiler/drill/grammar.hexa) can reach.
+// Numeric-constant point-value @F (e.g. "n*12 = n*sigma", "sopfr*100 = phi*tau")
+// and the physics/constant @F (sigma(220)=504, bessel_j1(1.0)=…) are OUTSIDE the
+// basis-product enumerator's vocabulary and cannot be re-derived by it — they are
+// excluded by construction, not by omission. 58 pure-basis identities result.
+//
+// c2 HONESTY. A fingerprint is a value-signature over n∈[2,N]; membership proves
+// value-vector equality over that bounded window, NOT a ∀n identity. The catalog
+// covers "known to THIS shard" — a (γ) verdict means "outside this catalog", not
+// "outside mathematics" (final novelty needs the g5 human-literature gate · §3).
+// Shares the frozen rolling-hash kernel with identity_engine.hexa's ie_* (seed
+// 1469598103 · base 1000003 · P=2^61-1) so KNOWN fingerprints live in the SAME
+// space as the FP_k table and are directly comparable. `int` is native BigInt
+// (#4161), so the accumulator and exact sequence recurrences never overflow;
+// the mod-P recurrences below give fingerprints IDENTICAL to the true-value ones
+// (the hash only ever consumes v mod P) while staying bounded regardless.
+// No new builtin — pure composition of af()/af_compose() and integer recurrences.
+
+use "compiler/atlas/identity_engine"
+
+fn _kc_P() -> int { return 2305843009213693951 }
+fn _kc_B() -> int { return 1000003 }
+fn _kc_seed() -> int { return 1469598103 }
+
+// ── (1) atlas @F PRODUCT-identity shard ─────────────────────────────────────
+// Flat [a,b,c,d, a,b,c,d, …] index tuples for the identity A*B=C*D, af() basis
+// indices. GENERATED — see header. Do not hand-edit.
+pub fn kc_af_identity_tuples() -> array {
+    return [
+    5, 8, 9, 9,   // n*J2 = psi*psi
+    5, 5, 7, 9,   // n*n = rad*psi
+    5, 6, 8, 11,   // n*sopfr = J2*om
+    5, 6, 9, 10,   // n*sopfr = psi*Om
+    3, 8, 5, 9,   // phi*J2 = n*psi
+    3, 8, 6, 9,   // phi*J2 = sopfr*psi
+    3, 8, 4, 9,   // phi*J2 = tau*psi
+    3, 5, 9, 11,   // phi*n = psi*om
+    3, 5, 6, 9,   // phi*n = sopfr*psi
+    3, 5, 4, 9,   // phi*n = tau*psi
+    3, 10, 5, 7,   // phi*Om = n*rad
+    3, 10, 7, 11,   // phi*Om = rad*om
+    3, 10, 7, 7,   // phi*Om = rad*rad
+    3, 10, 6, 7,   // phi*Om = sopfr*rad
+    3, 3, 7, 10,   // phi*phi = rad*Om
+    3, 3, 6, 11,   // phi*phi = sopfr*om
+    3, 3, 4, 5,   // phi*phi = tau*n
+    3, 3, 4, 7,   // phi*phi = tau*rad
+    3, 3, 4, 6,   // phi*phi = tau*sopfr
+    3, 9, 5, 6,   // phi*psi = n*sopfr
+    3, 9, 4, 7,   // phi*psi = tau*rad
+    3, 9, 4, 6,   // phi*psi = tau*sopfr
+    3, 4, 7, 7,   // phi*tau = rad*rad
+    7, 9, 8, 11,   // rad*psi = J2*om
+    0, 8, 1, 5,   // sigma*J2 = sig2*n
+    0, 8, 1, 6,   // sigma*J2 = sig2*sopfr
+    0, 10, 5, 6,   // sigma*Om = n*sopfr
+    0, 11, 3, 7,   // sigma*om = phi*rad
+    0, 10, 3, 7,   // sigma*Om = phi*rad
+    0, 11, 6, 7,   // sigma*om = sopfr*rad
+    0, 11, 4, 5,   // sigma*om = tau*n
+    0, 10, 4, 7,   // sigma*Om = tau*rad
+    0, 3, 4, 5,   // sigma*phi = tau*n
+    0, 3, 4, 7,   // sigma*phi = tau*rad
+    0, 9, 1, 10,   // sigma*psi = sig2*Om
+    0, 9, 1, 3,   // sigma*psi = sig2*phi
+    0, 9, 1, 7,   // sigma*psi = sig2*rad
+    0, 7, 5, 5,   // sigma*rad = n*n
+    0, 6, 3, 3,   // sigma*sopfr = phi*phi
+    0, 4, 3, 5,   // sigma*tau = phi*n
+    0, 4, 1, 11,   // sigma*tau = sig2*om
+    6, 10, 9, 11,   // sopfr*Om = psi*om
+    6, 10, 7, 7,   // sopfr*Om = rad*rad
+    6, 9, 8, 10,   // sopfr*psi = J2*Om
+    6, 7, 9, 11,   // sopfr*rad = psi*om
+    6, 6, 9, 10,   // sopfr*sopfr = psi*Om
+    6, 6, 7, 9,   // sopfr*sopfr = rad*psi
+    4, 5, 8, 11,   // tau*n = J2*om
+    4, 5, 9, 11,   // tau*n = psi*om
+    4, 10, 7, 7,   // tau*Om = rad*rad
+    4, 9, 5, 5,   // tau*psi = n*n
+    4, 9, 5, 6,   // tau*psi = n*sopfr
+    4, 7, 10, 10,   // tau*rad = Om*Om
+    4, 7, 9, 10,   // tau*rad = psi*Om
+    4, 6, 8, 11,   // tau*sopfr = J2*om
+    4, 6, 5, 11,   // tau*sopfr = n*om
+    4, 6, 9, 10,   // tau*sopfr = psi*Om
+    4, 4, 5, 10   // tau*tau = n*Om
+    ]
+}
+
+pub fn kc_af_identity_count() -> int { return len(kc_af_identity_tuples()) / 4 }
+
+// Canonical statement fingerprint of the identity af(a)*af(b) = af(c)*af(d):
+// invariant under A↔B swap (the term product commutes ⇒ ie_term_fingerprint is
+// already order-free in its pair) AND under side swap (min/max of the two side
+// fingerprints, combined by one more rolling-hash step). So permutations of the
+// same relation collapse to one fingerprint.
+pub fn kc_identity_canon_fp(a, b, c, d, N) -> int {
+    let fl = ie_term_fingerprint(a, b, N)
+    let fr = ie_term_fingerprint(c, d, N)
+    let lo = fl
+    let hi = fr
+    if fr < fl { lo = fr  hi = fl }
+    let p = _kc_P()
+    return ((lo * _kc_B()) + hi) % p
+}
+
+// Is A*B=C*D already an atlas @F product identity? (statement-level β test)
+pub fn kc_known_identity(a, b, c, d, N) -> bool {
+    let want = kc_identity_canon_fp(a, b, c, d, N)
+    let t = kc_af_identity_tuples()
+    let i = 0
+    while i < len(t) {
+        if kc_identity_canon_fp(t[i], t[i + 1], t[i + 2], t[i + 3], N) == want {
+            return true
+        }
+        i = i + 4
+    }
+    return false
+}
+
+// ── (2) classical-sequence / composition-symbol shard ───────────────────────
+// Sequences the multiplicative product grammar structurally CANNOT express
+// (generating-function / recurrence / nested-composition families). Each is a
+// KNOWN named symbol, so a candidate primitive whose value-signature matches one
+// is a (β) rediscovery. kind ids:
+//   0 partition p(n) A000041   1 Fibonacci A000045   2 Lucas A000032
+//   3 Bell A000110             4 Catalan A000108     5 central binomial C(2n,n) A000984
+//   6 triangular A000217       7 pentagonal A000326
+// (n²=A000290 is DELIBERATELY omitted — it is the size-2 product n·n, already in
+//  FP_k, i.e. INSIDE the well, so it must classify (α) not (β).)
+// All tables run mod P via mod-closed recurrences (no i64 assumption needed).
+
+// partition p(j) mod P via Euler's pentagonal recurrence.
+fn _kc_partition_table(N) -> array {
+    let p = _kc_P()
+    let out = []
+    out.push(1 % p)
+    let j = 1
+    while j <= N {
+        let total = 0
+        let k = 1
+        while k * (3 * k - 1) / 2 <= j {
+            let g1 = k * (3 * k - 1) / 2
+            let g2 = k * (3 * k + 1) / 2
+            let sign = 1
+            if k % 2 == 0 { sign = 0 - 1 }
+            total = total + sign * out[j - g1]
+            if g2 <= j { total = total + sign * out[j - g2] }
+            k = k + 1
+        }
+        total = total % p
+        if total < 0 { total = total + p }
+        out.push(total)
+        j = j + 1
+    }
+    return out
+}
+
+// linear two-term recurrence x[j]=x[j-1]+x[j-2] mod P (fib 0,1 · lucas 2,1).
+fn _kc_lin_table(N, f0, f1) -> array {
+    let p = _kc_P()
+    let x = []
+    x.push(f0 % p)
+    if N >= 1 { x.push(f1 % p) }
+    let j = 2
+    while j <= N {
+        x.push((x[j - 1] + x[j - 2]) % p)
+        j = j + 1
+    }
+    return x
+}
+
+// Bell B(j) mod P via the Bell triangle (additions only ⇒ mod-closed).
+fn _kc_bell_table(N) -> array {
+    let p = _kc_P()
+    let out = []
+    out.push(1 % p)
+    let row = []
+    row.push(1 % p)
+    let r = 1
+    while r <= N {
+        let nxt = []
+        nxt.push(row[len(row) - 1])
+        let i = 0
+        while i < len(row) {
+            nxt.push((nxt[len(nxt) - 1] + row[i]) % p)
+            i = i + 1
+        }
+        row = nxt
+        out.push(row[0])
+        r = r + 1
+    }
+    return out
+}
+
+// Catalan C(j) mod P via the convolution recurrence C(j)=Σ C(i)C(j-1-i).
+fn _kc_catalan_table(N) -> array {
+    let p = _kc_P()
+    let c = []
+    c.push(1 % p)
+    let j = 1
+    while j <= N {
+        let total = 0
+        let i = 0
+        while i < j {
+            total = (total + c[i] * c[j - 1 - i]) % p
+            i = i + 1
+        }
+        c.push(total)
+        j = j + 1
+    }
+    return c
+}
+
+// central binomial C(2j,j) mod P via Pascal's triangle (additions ⇒ mod-closed).
+fn _kc_centbinom_table(N) -> array {
+    let p = _kc_P()
+    let out = []
+    out.push(1 % p)                 // C(0,0)=1
+    let prev = []
+    prev.push(1 % p)                // row 0
+    let r = 1
+    while r <= 2 * N {
+        let cur = []
+        cur.push(1 % p)
+        let k = 1
+        while k < r {
+            cur.push((prev[k - 1] + prev[k]) % p)
+            k = k + 1
+        }
+        cur.push(1 % p)
+        if r % 2 == 0 { out.push(cur[r / 2]) }
+        prev = cur
+        r = r + 1
+    }
+    return out
+}
+
+// figurate polynomials mod P (kind 6 triangular · 7 pentagonal).
+fn _kc_poly_table(N, kind) -> array {
+    let p = _kc_P()
+    let out = []
+    let j = 0
+    while j <= N {
+        let v = 0
+        if kind == 6 { v = j * (j + 1) / 2 }
+        if kind == 7 { v = j * (3 * j - 1) / 2 }
+        v = v % p
+        if v < 0 { v = v + p }
+        out.push(v)
+        j = j + 1
+    }
+    return out
+}
+
+// rolling hash of a mod-P value table over j∈[2,N] — identical kernel to
+// identity_engine.hexa::ie_term_fingerprint, so KNOWN & FP_k fingerprints match.
+fn _kc_hash_table(tbl, N) -> int {
+    let p = _kc_P()
+    let base = _kc_B()
+    let h = _kc_seed()
+    let n = 2
+    while n <= N {
+        let v = tbl[n] % p
+        if v < 0 { v = v + p }
+        h = ((h * base) + v) % p
+        n = n + 1
+    }
+    return h
+}
+
+pub fn kc_seq_fingerprint(kind, N) -> int {
+    let tbl = []
+    if kind == 0 { tbl = _kc_partition_table(N) }
+    if kind == 1 { tbl = _kc_lin_table(N, 0, 1) }
+    if kind == 2 { tbl = _kc_lin_table(N, 2, 1) }
+    if kind == 3 { tbl = _kc_bell_table(N) }
+    if kind == 4 { tbl = _kc_catalan_table(N) }
+    if kind == 5 { tbl = _kc_centbinom_table(N) }
+    if kind == 6 { tbl = _kc_poly_table(N, 6) }
+    if kind == 7 { tbl = _kc_poly_table(N, 7) }
+    return _kc_hash_table(tbl, N)
+}
+
+// fingerprint of the nested-composition symbol f∘g = af(af(n,g),f) over n∈[2,N]
+// (the algebra the product frame cannot express — σ∘σ is the superperfect/
+// Mersenne vein). Feasibility-guarded (identity_engine af_compose_feasible).
+pub fn kc_comp_fingerprint(f, g, N) -> int {
+    let p = _kc_P()
+    let base = _kc_B()
+    let h = _kc_seed()
+    let n = 2
+    while n <= N {
+        let v = 0
+        if af_compose_feasible(n, g) == 1 {
+            v = af_compose(f, g, n) % p
+            if v < 0 { v = v + p }
+        }
+        h = ((h * base) + v) % p
+        n = n + 1
+    }
+    return h
+}
+
+// full KNOWN sequence/composition catalog at window N: 8 classical sequences +
+// σ∘σ and φ∘φ nested-composition symbols.
+pub fn kc_seq_catalog(N) -> array {
+    let out = []
+    let k = 0
+    while k < 8 {
+        out.push(kc_seq_fingerprint(k, N))
+        k = k + 1
+    }
+    out.push(kc_comp_fingerprint(0, 0, N))   // σ∘σ (superperfect / Mersenne vein)
+    out.push(kc_comp_fingerprint(3, 3, N))   // φ∘φ
+    return out
+}
+
+pub fn kc_seq_contains(fp, N) -> bool {
+    let cat = kc_seq_catalog(N)
+    let i = 0
+    while i < len(cat) {
+        if cat[i] == fp { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ── 3-class discriminator (design §3) ───────────────────────────────────────
+// fp_table = ie_fp_table_build(N) (the current grammar well FP_k). Precedence
+// α → β → γ: inside-well beats known-name beats genuine-novel.
+//   returns 0 = (α) permutation · 1 = (β) rediscovery · 2 = (γ) genuine-novel
+pub fn kc_classify(fp, fp_table, N) -> int {
+    if ie_fp_contains(fp_table, fp) { return 0 }
+    if kc_seq_contains(fp, N) { return 1 }
+    return 2
+}

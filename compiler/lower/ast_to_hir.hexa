@@ -1935,6 +1935,24 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
         return LowerResult { expr: h, sc: new_sc }
     }
 
+    // ── defer carrier (HEXA-OWN M1) — MUST precede the generic block
+    // case: the carrier is ExprKind::Block + text "__defer__" + children
+    // [body_block] (ast.hexa::ast_is_defer). Lowers to HExpr kind "defer"
+    // (string tag — no HIR enum change) with the lowered body block as its
+    // single child. The child IS a Block, so recursing through
+    // `_lower_expr` runs the generic block case below, which pushes/pops
+    // the LowerScope frame — identical scope threading to a plain block.
+    // hir_to_mir consumes the "defer" kind (flag registration + fn-exit
+    // LIFO drain); no other pass sees it.
+    if ast_is_defer(e) && len(e.children) == 1 {
+        let r = _lower_expr(e.children[0], atlas, sc)
+        let mut dkids: [HExpr] = []
+        dkids.push(r.expr)
+        let h = _mk_hexpr("defer", e.span, _hir_t_unit(), "",
+                          dkids, _empty_atlas_binding(), _hir_miss_def_id())
+        return LowerResult { expr: h, sc: r.sc }
+    }
+
     // ── block: type = last child's type, opens a scope frame ──
     if _hir_is_block_kind(k) {
         let mut new_sc = _push_frame(sc)
