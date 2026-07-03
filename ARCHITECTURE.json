@@ -4166,7 +4166,7 @@
                 "name": "Compiler driver",
                 "role": "",
                 "id": "component-map-table-component-path-role-compiler-driver",
-                "detail": "Path: `compiler/main.hexa` · Role: Entry point: arg parse, atlas load, S0–S8 dispatch, codegen routing, emit/link orchestration"
+                "detail": "Path: `compiler/main.hexa` · Role: Entry point: arg parse, atlas load, S0–S8 dispatch, codegen routing, emit/link orchestration · HEXA_CG_PROFILE=1 = per-phase stderr rows across the FULL pipeline (lex→emit_asm; frontend marks 2026-07-03, ~99.9% wall coverage; env unset = silent no-op)"
               },
               {
                 "name": "Lex (S0)",
@@ -4541,6 +4541,12 @@
                     "detail": ""
                   }
                 ]
+              },
+              {
+                "name": "Per-module compile gate",
+                "role": "",
+                "id": "component-map-table-component-path-role-per-module-compile-gate",
+                "detail": "Path: `tool/compile_gate.py` (+`compile_gate_selftest.py`) · Role: design-D closure-delta compile gate — changed module alone `hexa build --c-only` + clang -fsyntax-only vs generated sibling interface skeleton (runtime.h hexa_callN boxing asymmetry encoded); NON-BYPASSABLE escalation to whole-closure `hexa build` on interface delta/misparse/infra/stale-anchor; never invokes `hexa run`, run-binary cache untouched (byteeq/determinism gates unaffected). Measured on real 23-file closure: 10.06s full → 1.54s worst-case module gate; selftest 16/16"
               }
             ]
           }

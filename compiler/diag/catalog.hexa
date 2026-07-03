@@ -607,5 +607,14 @@ pub let CATALOG: [DiagSpec] = [
         template: "the trait `{trait}` is not implemented for `{type}` (required by `{owner}`)",
         explain: "The strict-mode (`HEXA_STRICT_BOUNDS=1`) escalation of HX3008: a generic trait bound is provably unsatisfied at an instantiation site and the user has opted into fatal bound checking. See HX3008 for the bound-satisfaction model (rustc-faithful builtin impls; The Rust Reference §\"Where clauses\"). Emitted only under the opt-in const-generics pass; the default build is byte-identical.",
         fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3011",
+        title: "higher-kinded type parameter arity mismatch",
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "type parameter `{param}` is used at conflicting kind-arities ({first_arity} vs {second_arity}) in `{owner}`",
+        explain: "The opt-in higher-kinded-types pass (`HEXA_HKT=1`) checks kind-arity consistency: within one signature a declared type parameter must be used at a single kind. A parameter applied as `F<A>` is a unary type constructor (Haskell kind `*->*`, Scala `F[_]`); the same `F` may not also appear applied to a different number of arguments (`F<A,B>`) nor bare in a proper-type slot (kind `*`). This reproduces the core of Haskell kind inference (Haskell 2010 Report §4.1.1 — `f a` requires `f :: k->*` and `a :: k`; a mismatch is reported as \"Expected kind X, but has kind Y\") and Scala type-constructor polymorphism (Moors et al., \"Generics of a Higher Kind\", OOPSLA'08). CEILING (honest): this is ONLY the kind-arity fragment — full HKT (Functor/Monad typeclass polymorphism, instance resolution, type-level constructor application/`fmap` dispatch) is NOT implementable here, the same reason Rust RFC 1598 declines full `F: *->*` and offers generic associated types as a substitute: hexa has no trait/typeclass/instance registry, `class`/`instance`/kind-annotation syntax would violate the frozen seed, and the dynamic {tag,payload} runtime erases all generics to one monomorphic MIR (zero runtime realization). Default severity is a non-fatal warning; emitted only under the opt-in pass, so the default build is byte-identical.",
+        fix_it_kind: FixItKind::None
     }
 ]
