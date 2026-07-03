@@ -125,7 +125,7 @@ DECISION
     (HX4001 strict-lint object-write + rt_array_*_native self-host link gap), both
     orthogonal to element-pack. Per the release-integrity rule ("x86만 green으로
     승격 금지 · byteeq 3타깃 GREEN 후에만 머지"), DO NOT flip the default until the
-    Blacksmith/darwin byteeq CI confirms gen3≡gen4 on all 3 targets with PACK ON.
+    the github-hosted/darwin byteeq CI confirms gen3≡gen4 on all 3 targets with PACK ON.
     Flip points when that gate is GREEN:
       compiler/codegen/x86_64_linux.hexa  _pack_array_enabled() L1307
         return env("HEXA_PACK_ARRAY") == "1"   →  != "0"   (default-true)
