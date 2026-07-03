@@ -318,7 +318,7 @@ jobs:
             nm -u "$RT" 2>/dev/null | awk '{print $2}' | sort -u \
               | grep -vE '^(_hx_|__hexa|__hx_|__blk_|rt_|hexa_|_hexa|hxlcl_|_GLOBAL)' \
               | grep -vE 'cuda|fatbin' \
-              | grep -vE '^(accept|bind|connect|listen|socket|recv|recvfrom|send|sendto|setsockopt|getsockopt|getaddrinfo|freeaddrinfo|gai_strerror|dlopen|dlsym|dlclose|dlerror|dladdr)' \
+              | grep -vE '^(accept|bind|connect|listen|socket|recv|recvfrom|send|sendto|setsockopt|getsockopt|getaddrinfo|freeaddrinfo|gai_strerror)' \
               | grep -vE '^(__libc_|_exit|atexit|environ|mallopt|__cxa|__errno_location|__stack_chk|__assert)' \
               | grep -vE '^(execve|execvp|setns|unshare|mount|umount2?|posix_spawn|opendir|readdir|closedir|glob|globfree|mkstemp|mkdtemp)' \
               | grep -vE '^(qsort|rand|srand|strtod|strtof|strtold)' \
@@ -328,6 +328,22 @@ jobs:
           else
             echo "(no runtime.a found — nm-UND dump skipped)"
           fi
+
+      - name: zero-c #29 S1 — runtime.a dl* nm-UND ∅ (HARD GATE · Linux)
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        run: |
+          # S1 FFI floor-partition: dlopen/dlsym/dlerror moved into runtime_ffi_dyn.o
+          # (compiled but NOT ar'd into canonical runtime.a), so the archive must carry
+          # ZERO dl* nm-UND. Unfiltered hard assertion — the flip is the first real test
+          # (OFF-verification cannot validate this; see convergence runtime-emit-full-hexa-2).
+          RT="$(find build . -name runtime.a 2>/dev/null | head -1)"
+          if [ ! -f "$RT" ]; then echo "(no runtime.a — S1 dl* gate skipped)"; exit 0; fi
+          HITS="$(nm -u "$RT" 2>/dev/null | awk '{print $2}' | sort -u | grep -E '^dl(open|sym|error|close|addr)$' || true)"
+          if [ -n "$HITS" ]; then
+            echo "❌ S1 FAIL — canonical runtime.a still carries dl* nm-UND:"; echo "$HITS"; exit 1
+          fi
+          echo "✅ S1 GREEN — runtime.a nm-UND dl* = ∅ (unfiltered) — $RT"
 
       - name: ccache stats
         if: always()
