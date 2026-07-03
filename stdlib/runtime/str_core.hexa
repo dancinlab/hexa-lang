@@ -163,3 +163,81 @@ pub fn rt_str_ends_with_native(s: HexaVal, suffix: HexaVal) -> bool {
     }
     return true                                       // all sfxlen tail bytes matched (empty suffix → true)
 }
+
+// rt_str_index_of_native (str r4 — sh-str-scan): byte offset of the FIRST
+// occurrence of `sub` within `s`, or -1 — byte-faithful to the C body's
+// `p = hxlcl_strstr(HX_STR(s), HX_STR(sub)); p ? p - HX_STR(s) : -1`. Returns an
+// int (the C wrapper hexa_str_index_of bridges it to int64 at the ABI). This is
+// the FIRST nested prim in the lane — eq/starts/ends are single walks, but a
+// substring search is the naive O(n·m) double loop: for each candidate start i in
+// [0, slen-sublen], match sub[0..sublen) against s[i..i+sublen); the first full
+// match wins. The empty-needle case returns 0 (strstr(s,"")==s → offset 0).
+//
+// LENGTHS measured via NUL-stop walks (no HX_STRLEN macro). The outer-loop bound
+// uses __hx_payload_lt over (slen-sublen); an inner mismatch breaks to the next i
+// via a matched-count compare (NO early `break` keyword — the inner loop runs to
+// sublen or to the first mismatch tracked by `ok`). All raw-int leaf intrinsics
+// (add/sub/lt/eq/ne), un-nested 1-op-per-temp (NESTING-SEGV guard), pure read NO
+// alloc. The C wrapper keeps the TAG_STR guards.
+pub fn rt_str_index_of_native(s: HexaVal, sub: HexaVal) -> int {
+    let ps = __hx_payload_add(s, 0)                  // char* of haystack
+    let pn = __hx_payload_add(sub, 0)                // char* of needle
+    // measure slen
+    let mut slen = 0
+    let mut cs = __hx_ptr_load8(ps, 0)
+    while __hx_payload_ne(cs, 0) {
+        slen = __hx_payload_add(slen, 1)
+        cs = __hx_ptr_load8(ps, slen)
+    }
+    // measure sublen
+    let mut sublen = 0
+    let mut cn = __hx_ptr_load8(pn, 0)
+    while __hx_payload_ne(cn, 0) {
+        sublen = __hx_payload_add(sublen, 1)
+        cn = __hx_ptr_load8(pn, sublen)
+    }
+    // empty needle → offset 0 (matches strstr(s,"") == s)
+    if __hx_payload_eq(sublen, 0) { return 0 }
+    // needle longer than haystack → no match (last_start would be negative)
+    if __hx_payload_lt(slen, sublen) { return -1 }
+    // last candidate start = slen - sublen; iterate i in [0, last_start]
+    let last_start = __hx_payload_sub(slen, sublen)
+    let mut i = 0
+    // loop while i <= last_start  ⇔  i < last_start + 1
+    let bound = __hx_payload_add(last_start, 1)
+    while __hx_payload_lt(i, bound) {
+        // inner: count matching bytes from i; full match when matched == sublen
+        let mut matched = 0
+        let mut more = 1                              // 1 while still matching + not yet full
+        while __hx_payload_eq(more, 1) {
+            if __hx_payload_eq(matched, sublen) {
+                more = 0                              // full needle matched
+            } else {
+                let hidx = __hx_payload_add(i, matched)
+                let hb = __hx_ptr_load8(ps, hidx)
+                let nb = __hx_ptr_load8(pn, matched)
+                if __hx_payload_ne(hb, nb) {
+                    more = 0                          // mismatch → stop inner (partial)
+                } else {
+                    matched = __hx_payload_add(matched, 1)
+                }
+            }
+        }
+        if __hx_payload_eq(matched, sublen) { return i }   // full match at i
+        i = __hx_payload_add(i, 1)
+    }
+    return -1                                          // no start position matched
+}
+
+// rt_str_contains_native (str r4 — sh-str-scan): true when `sub` occurs anywhere
+// in `s` — byte-faithful to the C body's `hxlcl_strstr(s, sub) != NULL`. Thin
+// bool view over the index_of search (contains ⇔ index_of >= 0). The empty needle
+// is contained in any string (index_of returns 0). The C wrapper keeps the
+// TAG_STR guards; this body delegates to the same naive search.
+pub fn rt_str_contains_native(s: HexaVal, sub: HexaVal) -> bool {
+    let idx = rt_str_index_of_native(s, sub)
+    // found ⇔ idx != -1 (index_of returns -1 ONLY for "not present"; any real
+    // offset incl. 0 means present). Avoid signed-lt on a sentinel — plain ne.
+    let r = __hx_payload_ne(idx, -1)
+    return r
+}
