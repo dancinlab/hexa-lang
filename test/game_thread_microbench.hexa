@@ -1,0 +1,258 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  test/game_thread_microbench.hexa — BASELINE game-frame multithread micro-bench
+//
+//  feat/game-thread-microbench · RFC state/rfc_game_thread_perf.md
+//
+//  ── MEASURE-FIRST (blind-optimize 금지) ────────────────────────────────────
+//  This is a *baseline numbers* harness ONLY. It does NOT add a thread-pool, a
+//  job-system, or a lock-free queue — those land in a SEPARATE PR and ONLY once
+//  THESE captured numbers point at the bottleneck. The current concurrency
+//  primitives it measures are exactly:
+//    · stdlib/thread_real.hexa  — thread_start/thread_wait = pthread 1:1 spawn/join,
+//                                  chan_new/send/recv/close = mutex+condvar channel
+//    · stdlib/atomic_real.hexa  — atomic_cell/get/set/fetch_add/CAS = C11 seq-cst
+//  There is no pool / job-system / lock-free queue yet (that is the WHOLE point
+//  of measuring before building one).
+//
+//  ── HOW IT IS BUILT / RUN (opt-in, byteeq-neutral) ─────────────────────────
+//  Lanes (c) atomic and the real-parallel side of (a)/(d) reference the
+//  `-DHEXA_THREADS`-gated runtime fn-globals (atomic_cell_*, and the real
+//  pthread/condvar backing thread_spawn/thread_channel_*). Build & run this on a
+//  pool/CI host with the real-threads runtime:
+//
+//      HEXA_THREADS=1  hexa  test/game_thread_microbench.hexa      # real OS threads
+//
+//  In a DEFAULT (no -DHEXA_THREADS) runtime the thread/channel shims run
+//  SYNCHRONOUSLY (worker runs inline on spawn, join returns the cached result,
+//  channel is an unlocked queue) and the atomic_cell_* globals do not link — so
+//  this file is an OPT-IN artifact run by the pool/CI threads lane, NOT part of
+//  the self-host set and NOT imported by anything under self/. The default build
+//  path and the byteeq gen3≡gen4 fixpoint are therefore untouched.
+//
+//  ── WHAT EACH LANE MEASURES ────────────────────────────────────────────────
+//    (a) spawn/join overhead  — N× (thread_spawn→thread_join) roundtrip, prints
+//        µs/thread → the per-thread cost a naive "spawn a worker every frame"
+//        design would pay (the number a future pool must beat).
+//    (b) channel throughput   — M× send→recv ping-pong on one mutex+condvar
+//        channel, prints msg/s.
+//    (c) atomic contention    — K threads hammering fetch_add on ONE atomic_cell,
+//        prints ops/s + scaling across K∈{1,2,4,8} and verifies the contended
+//        total == K·T (correctness under the race).
+//    (d) N-thread scale       — fixed total work split across p∈{1,2,4,8} threads,
+//        prints wall-time, speedup vs p=1, and efficiency vs ideal-linear.
+//    (e) boxed vs raw          — same arithmetic loop accumulating into a raw int
+//        scalar vs routed through a boxed array element, prints the ratio (a
+//        boxing-overhead proxy; thread arg-passing also boxes every HexaVal).
+//
+//  Timing uses clock() — on the native runtime hexa_clock() = CLOCK_MONOTONIC
+//  (wall-clock, runtime.c:3867), which is what the speedup lane needs. NOTE: on
+//  the C-transpile fallback path build_c.hexa maps clock()→clock()/CLOCKS_PER_SEC
+//  (CPU time), so the (c)/(d) parallel numbers are only meaningful on the native
+//  -DHEXA_THREADS build (where real OS threads + monotonic wall-clock coexist).
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── tunables (kept modest so a CI lane finishes in a couple of seconds) ──────
+let SPAWN_N        = 2000        // (a) spawn/join roundtrips
+let CHAN_M         = 100000      // (b) channel ping-pong messages
+let ATOMIC_ITERS   = 1000000     // (c) fetch_add per worker
+let SCALE_WORK     = 40000000    // (d) total busy-loop iterations to partition
+let BOX_N          = 2000000     // (e) boxed-vs-raw loop length
+
+// ── tiny print helpers ──────────────────────────────────────────────────────
+fn line() {
+    println("───────────────────────────────────────────────────────")
+}
+
+// throughput = count / seconds, guarded against a zero/negative dt (clock
+// resolution). Returns a float ops-per-second.
+fn per_sec(count: int, dt: float) -> float {
+    if dt <= 0.0 { return 0.0 }
+    return to_float(count) / dt
+}
+
+// ── workers ──────────────────────────────────────────────────────────────────
+
+// Cheap "do nothing measurable" worker — isolates pure spawn/join overhead.
+fn noop_worker(arg) {
+    return arg
+}
+
+// CPU-bound busy loop of `niter` integer ops into a raw int accumulator. Used by
+// the scale lane: spawning p copies of busy_worker(W/p) keeps TOTAL work fixed,
+// so wall-time should fall ~p× if the spawn/join path actually parallelizes.
+fn busy_worker(niter) {
+    let mut s = 0
+    let mut i = 0
+    while i < niter {
+        s = s + (i * 3 + 1)
+        i = i + 1
+    }
+    return s
+}
+
+// Shared cell id for the atomic-contention lane (set before spawning workers).
+let mut SHARED_CELL = 0
+
+// Each contention worker hammers fetch_add on the ONE shared atomic_cell.
+fn atomic_worker(arg) {
+    let mut i = 0
+    while i < ATOMIC_ITERS {
+        let _ = atomic_cell_add(SHARED_CELL, 1)
+        i = i + 1
+    }
+    return 0
+}
+
+// raw-scalar accumulate (unboxed int stays in a register under HEXA_UNBOX_NATIVE).
+fn raw_accumulate(n: int) -> int {
+    let mut s = 0
+    let mut i = 0
+    while i < n {
+        s = s + (i * 2 + 7)
+        i = i + 1
+    }
+    return s
+}
+
+// boxed accumulate — every value round-trips through a boxed array element
+// (HexaVal box on push + unbox on index), the boxing-overhead proxy.
+fn boxed_accumulate(n: int) -> int {
+    let buf = []
+    let mut i = 0
+    while i < n {
+        buf.push(i * 2 + 7)
+        i = i + 1
+    }
+    let mut s = 0
+    let mut j = 0
+    while j < n {
+        s = s + buf[j]
+        j = j + 1
+    }
+    return s
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  HEXA game-frame multithread micro-bench (BASELINE)")
+println("  measure-first · opt-in HEXA_THREADS · byteeq-neutral")
+println("═══════════════════════════════════════════════════════")
+if env("HEXA_THREADS") == "" {
+    println("NOTE: HEXA_THREADS env not set — if this runtime was built WITHOUT")
+    println("      -DHEXA_THREADS the thread/channel shims run SYNCHRONOUSLY")
+    println("      (no real parallelism) and the atomic lane will not link.")
+    println("      Numbers below are still a valid serial baseline.")
+}
+
+// ── (a) spawn/join overhead ─────────────────────────────────────────────────
+line()
+println("[a] spawn/join overhead — " + to_string(SPAWN_N) + " roundtrips")
+let a0 = clock()
+let mut a_acc = 0
+let mut a_i = 0
+while a_i < SPAWN_N {
+    let tid = thread_spawn(noop_worker, a_i)
+    let r = thread_join(tid)
+    a_acc = a_acc + to_int(r)
+    a_i = a_i + 1
+}
+let a_dt = clock() - a0
+let a_us_per = (a_dt * 1000000.0) / to_float(SPAWN_N)
+println("    total: " + to_string(a_dt) + " s   per-thread: " + to_string(a_us_per) + " µs")
+println("    (per-frame spawn budget proxy: this × workers-per-frame)")
+
+// ── (b) channel throughput (ping-pong) ──────────────────────────────────────
+line()
+println("[b] channel throughput — " + to_string(CHAN_M) + " send→recv ping-pong")
+let ch = thread_channel_new()
+let b0 = clock()
+let mut b_ok = 0
+let mut b_i = 0
+while b_i < CHAN_M {
+    let _s = thread_channel_send(ch, b_i)
+    let v = thread_channel_recv(ch, -1)
+    b_ok = b_ok + to_int(v)
+    b_i = b_i + 1
+}
+let b_dt = clock() - b0
+let _c = thread_channel_close(ch)
+println("    total: " + to_string(b_dt) + " s   throughput: " + to_string(per_sec(CHAN_M, b_dt)) + " msg/s")
+
+// ── (c) atomic contention + scaling K∈{1,2,4,8} ─────────────────────────────
+line()
+println("[c] atomic contention — K threads × " + to_string(ATOMIC_ITERS) + " fetch_add on one cell")
+let mut ks = [1, 2, 4, 8]
+let mut ki = 0
+while ki < len(ks) {
+    let k = ks[ki]
+    SHARED_CELL = atomic_cell_new(0)
+    let c0 = clock()
+    // spawn k workers, collect handles, then join (real contention under -DHEXA_THREADS)
+    let mut handles = []
+    let mut s_i = 0
+    while s_i < k {
+        handles.push(thread_spawn(atomic_worker, s_i))
+        s_i = s_i + 1
+    }
+    let mut j_i = 0
+    while j_i < k {
+        let _r = thread_join(handles[j_i])
+        j_i = j_i + 1
+    }
+    let c_dt = clock() - c0
+    let total = atomic_cell_load(SHARED_CELL)
+    let expect = k * ATOMIC_ITERS
+    let ok = total == expect
+    let ops = k * ATOMIC_ITERS
+    println("    K=" + to_string(k) + "  " + to_string(c_dt) + " s   " + to_string(per_sec(ops, c_dt)) + " ops/s   sum_ok=" + to_string(ok))
+    ki = ki + 1
+}
+
+// ── (d) N-thread scale — fixed total work, speedup vs p=1 ────────────────────
+line()
+println("[d] N-thread scale — fixed " + to_string(SCALE_WORK) + " busy ops split p ways")
+let mut ps = [1, 2, 4, 8]
+let mut pi = 0
+let mut base_dt = 0.0
+while pi < len(ps) {
+    let p = ps[pi]
+    let per = SCALE_WORK / p
+    let d0 = clock()
+    let mut dhandles = []
+    let mut d_i = 0
+    while d_i < p {
+        dhandles.push(thread_spawn(busy_worker, per))
+        d_i = d_i + 1
+    }
+    let mut dsum = 0
+    let mut dj = 0
+    while dj < p {
+        dsum = dsum + to_int(thread_join(dhandles[dj]))
+        dj = dj + 1
+    }
+    let d_dt = clock() - d0
+    if p == 1 { base_dt = d_dt }
+    let speedup = if d_dt > 0.0 { base_dt / d_dt } else { 0.0 }
+    let eff = speedup / to_float(p)
+    println("    p=" + to_string(p) + "  " + to_string(d_dt) + " s   speedup=" + to_string(speedup) + "×   efficiency=" + to_string(eff) + " (ideal 1.0)")
+    pi = pi + 1
+}
+
+// ── (e) boxed vs raw (boxing-overhead proxy) ────────────────────────────────
+line()
+println("[e] boxed vs raw — " + to_string(BOX_N) + " accumulate ops")
+let e0 = clock()
+let raw_r = raw_accumulate(BOX_N)
+let raw_dt = clock() - e0
+let e1 = clock()
+let box_r = boxed_accumulate(BOX_N)
+let box_dt = clock() - e1
+let box_ratio = if raw_dt > 0.0 { box_dt / raw_dt } else { 0.0 }
+println("    raw-scalar : " + to_string(raw_dt) + " s  (chk " + to_string(raw_r) + ")")
+println("    boxed-array: " + to_string(box_dt) + " s  (chk " + to_string(box_r) + ")")
+println("    boxed/raw  : " + to_string(box_ratio) + "× slower (boxing overhead proxy)")
+
+line()
+println("baseline captured. NEXT (separate PR, only if a lane is the bottleneck):")
+println("  r2 = attribute the dominant cost (spawn vs channel vs atomic vs box)")
+println("  r3 = TARGETED fix (e.g. thread-pool ONLY if [a] dominates frame budget)")
+println("═══════════════════════════════════════════════════════")

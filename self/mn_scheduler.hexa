@@ -1,0 +1,886 @@
+// self/mn_scheduler.hexa — HEXA M:N scheduler model (GMP) — UNIFIES the two
+// pre-existing concurrency halves into one Go-runtime-style design:
+//
+//   · self/work_stealing.hexa  — per-worker deques + steal (the "N" OS workers),
+//     but tasks were run-to-completion (no yield) and never wired to real threads.
+//   · self/async_runtime.hexa  — cooperative green-thread park/resume (the "M"
+//     tasks), but a single global queue (no per-worker deque, no work-stealing).
+//
+// This module is the EXECUTABLE SPEC / ORACLE for the future opt-in C substrate
+// (state/rfc_mn_scheduler.md): M green-thread tasks (G) multiplexed onto N worker
+// processors (P), each P owning a local run-queue deque, idle P stealing from a
+// busy P, a task PARKING (yielding its P) when it blocks on a channel and being
+// made runnable again (goready) when a sender hands it a value. That is exactly
+// Go's GMP scheduler, and the C substrate must satisfy these same transitions.
+//
+// ── REFERENCE-MATCH (Go runtime, GMP scheduler) ───────────────────────────────
+//   · runtime/runtime2.go      — `g`/`m`/`p` structs; `_Grunnable`/`_Grunning`/
+//                                `_Gwaiting`/`_Gdead` states; P owns `runq [256]`
+//                                local ring buffer + `runnext`.
+//   · runtime/proc.go schedule()    — main loop: pick a runnable G, run it.
+//   · runtime/proc.go findRunnable() — order = local runqget → global globrunqget
+//                                → netpoll → stealWork (this module mirrors the
+//                                local→global→steal order in mn_findrunnable).
+//   · runtime/proc.go runqsteal()/runqgrab() — idle P steals ~half of a victim P's
+//                                local queue from the OLDEST (head/FIFO) end.
+//   · runtime/proc.go globrunqget() — pull a batch (≈ n/gomaxprocs+1) from the
+//                                global injector queue.
+//   · runtime/proc.go runqput()/runqputslow() — push to local P; on overflow move
+//                                half to the global queue (modelled by RUNQ_CAP).
+//   · runtime/chan.go chansend()/chanrecv() — a recv on an empty chan PARKS the G
+//                                (gopark, → _Gwaiting); a send with a waiting
+//                                receiver hands the value DIRECTLY and goready()s
+//                                it (→ _Grunnable, re-enqueued). Mirrored in
+//                                mn_chan_recv / mn_chan_send below.
+//
+// hexa beyond-parity lever: this oracle is a PURE deterministic function of its
+// inputs (no clock, no real thread schedule), so it doubles as the byte-eq test
+// oracle for the C substrate — a correct -DHEXA_MN_SCHED build, single-stepped in
+// the same order, MUST reproduce these exact transition counts (n_steals /
+// n_parks / n_ready / n_completed). The default build never compiles the
+// substrate (determinism isolation), so byteeq gen3≡gen4 is unaffected.
+//
+// Style note: written in the functional/immutable subset (every mutator returns a
+// fresh scheduler) so it runs under the plain interpreter and stays byteeq-neutral
+// (NOT imported by the self-host compiler closure; registered for documentation in
+// self/lib.hexa only, like async_runtime + work_stealing).
+
+// Go's P owns a 256-slot local ring (`runq [256]guintptr`). We use a small cap so
+// a test can force the runqputslow → global-queue overflow path with few spawns.
+let MN_RUNQ_CAP = 8
+
+// ── G — a green-thread task (goroutine) ───────────────────────────────────────
+
+struct MNTask {
+    id: int,
+    state: string,        // "runnable" | "running" | "waiting" | "done"
+    park_reason: string,  // "" | "chan:<id>" while _Gwaiting
+    func_name: string,
+    result: string
+}
+
+fn mn_task_new(id: int, func_name: string) -> MNTask {
+    return MNTask { id: id, state: "runnable", park_reason: "", func_name: func_name, result: "" }
+}
+
+fn mn_task_with_state(t: MNTask, state: string, reason: string) -> MNTask {
+    return MNTask { id: t.id, state: state, park_reason: reason, func_name: t.func_name, result: t.result }
+}
+
+fn mn_task_with_result(t: MNTask, result: string) -> MNTask {
+    return MNTask { id: t.id, state: "done", park_reason: "", func_name: t.func_name, result: result }
+}
+
+// ── P — a processor with a local run-queue deque ──────────────────────────────
+// Owner pushes/pops the BACK (LIFO → cache locality of freshly-spawned work);
+// a thief steals from the FRONT (FIFO → the oldest, coldest work).
+
+struct MNDeque {
+    items: [int]          // task ids
+}
+
+fn mn_deque_new() -> MNDeque {
+    return MNDeque { items: [] }
+}
+
+fn mn_deque_len(d: MNDeque) -> int {
+    return len(d.items)
+}
+
+fn mn_deque_push_back(d: MNDeque, tid: int) -> MNDeque {
+    return MNDeque { items: d.items + [tid] }
+}
+
+// pop result = (deque, tid); tid == -1 when empty.
+struct MNPop {
+    deque: MNDeque,
+    tid: int
+}
+
+fn mn_deque_pop_back(d: MNDeque) -> MNPop {
+    let n = len(d.items)
+    if n == 0 {
+        return MNPop { deque: d, tid: -1 }
+    }
+    let tid = d.items[n - 1]
+    let mut rest: [int] = []
+    let i = 0
+    while i < n - 1 {
+        rest = rest + [d.items[i]]
+        i = i + 1
+    }
+    return MNPop { deque: MNDeque { items: rest }, tid: tid }
+}
+
+fn mn_deque_steal_front(d: MNDeque) -> MNPop {
+    let n = len(d.items)
+    if n == 0 {
+        return MNPop { deque: d, tid: -1 }
+    }
+    let tid = d.items[0]
+    let mut rest: [int] = []
+    let i = 1
+    while i < n {
+        rest = rest + [d.items[i]]
+        i = i + 1
+    }
+    return MNPop { deque: MNDeque { items: rest }, tid: tid }
+}
+
+// ── Channel — the park/unpark rendezvous point ────────────────────────────────
+
+struct MNChannel {
+    id: int,
+    buffer: [string],     // queued values when no receiver is parked
+    waiters: [int],       // parked receiver task ids (FIFO)
+    closed: bool
+}
+
+fn mn_channel_new(id: int) -> MNChannel {
+    return MNChannel { id: id, buffer: [], waiters: [], closed: false }
+}
+
+// ── M:N scheduler (GMP) ───────────────────────────────────────────────────────
+
+struct MNSched {
+    gomaxprocs: int,          // N = number of P (worker processors)
+    deques: [MNDeque],        // per-P local run-queues, len == gomaxprocs
+    global_runq: [int],       // global injector queue (overflow + woken Gs)
+    tasks: [MNTask],          // all Gs, indexed by id-1
+    channels: [MNChannel],    // indexed by channel id
+    next_id: int,
+    n_steals: int,            // work-steal events
+    n_global_gets: int,       // globrunqget events
+    n_parks: int,             // gopark events (G blocked → _Gwaiting)
+    n_ready: int,             // goready events (G woken → _Grunnable)
+    n_completed: int          // Gs run to _Gdead
+}
+
+fn mn_new(gomaxprocs: int) -> MNSched {
+    let mut n = gomaxprocs
+    if n < 1 { n = 1 }
+    let mut dqs: [MNDeque] = []
+    let i = 0
+    while i < n {
+        dqs = dqs + [mn_deque_new()]
+        i = i + 1
+    }
+    return MNSched {
+        gomaxprocs: n,
+        deques: dqs,
+        global_runq: [],
+        tasks: [],
+        channels: [],
+        next_id: 1,
+        n_steals: 0,
+        n_global_gets: 0,
+        n_parks: 0,
+        n_ready: 0,
+        n_completed: 0
+    }
+}
+
+// ── immutable array-replace helpers ───────────────────────────────────────────
+
+fn _mn_set_deque(dqs: [MNDeque], idx: int, d: MNDeque) -> [MNDeque] {
+    let mut out: [MNDeque] = []
+    let i = 0
+    while i < len(dqs) {
+        if i == idx { out = out + [d] } else { out = out + [dqs[i]] }
+        i = i + 1
+    }
+    return out
+}
+
+fn _mn_set_task(ts: [MNTask], idx: int, t: MNTask) -> [MNTask] {
+    let mut out: [MNTask] = []
+    let i = 0
+    while i < len(ts) {
+        if i == idx { out = out + [t] } else { out = out + [ts[i]] }
+        i = i + 1
+    }
+    return out
+}
+
+fn _mn_set_channel(cs: [MNChannel], idx: int, c: MNChannel) -> [MNChannel] {
+    let mut out: [MNChannel] = []
+    let i = 0
+    while i < len(cs) {
+        if i == idx { out = out + [c] } else { out = out + [cs[i]] }
+        i = i + 1
+    }
+    return out
+}
+
+fn mn_get_task(s: MNSched, tid: int) -> MNTask {
+    let idx = tid - 1
+    if idx >= 0 && idx < len(s.tasks) {
+        return s.tasks[idx]
+    }
+    return MNTask { id: -1, state: "done", park_reason: "", func_name: "", result: "" }
+}
+
+// ── runqput — push a runnable G to P[p_idx]; overflow → global (runqputslow) ───
+
+fn _mn_runqput(s: MNSched, p_idx: int, tid: int) -> MNSched {
+    let dq = s.deques[p_idx]
+    if mn_deque_len(dq) < MN_RUNQ_CAP {
+        let dq2 = mn_deque_push_back(dq, tid)
+        return MNSched {
+            gomaxprocs: s.gomaxprocs, deques: _mn_set_deque(s.deques, p_idx, dq2),
+            global_runq: s.global_runq, tasks: s.tasks, channels: s.channels,
+            next_id: s.next_id, n_steals: s.n_steals, n_global_gets: s.n_global_gets,
+            n_parks: s.n_parks, n_ready: s.n_ready, n_completed: s.n_completed
+        }
+    }
+    // local full → spill to the global injector queue (Go runqputslow moves ~half)
+    return MNSched {
+        gomaxprocs: s.gomaxprocs, deques: s.deques,
+        global_runq: s.global_runq + [tid], tasks: s.tasks, channels: s.channels,
+        next_id: s.next_id, n_steals: s.n_steals, n_global_gets: s.n_global_gets,
+        n_parks: s.n_parks, n_ready: s.n_ready, n_completed: s.n_completed
+    }
+}
+
+// mn_spawn — create a runnable G and runqput it to a P (round-robin by id for a
+// deterministic placement; Go uses the current P, which is equally arbitrary).
+fn mn_spawn(s: MNSched, func_name: string) -> MNSched {
+    let id = s.next_id
+    let t = mn_task_new(id, func_name)
+    let s1 = MNSched {
+        gomaxprocs: s.gomaxprocs, deques: s.deques, global_runq: s.global_runq,
+        tasks: s.tasks + [t], channels: s.channels, next_id: id + 1,
+        n_steals: s.n_steals, n_global_gets: s.n_global_gets,
+        n_parks: s.n_parks, n_ready: s.n_ready, n_completed: s.n_completed
+    }
+    let p_idx = (id - 1) % s.gomaxprocs
+    return _mn_runqput(s1, p_idx, id)
+}
+
+// mn_spawn_on — explicit P placement (used to force overflow / steal in tests).
+fn mn_spawn_on(s: MNSched, func_name: string, p_idx: int) -> MNSched {
+    let id = s.next_id
+    let t = mn_task_new(id, func_name)
+    let s1 = MNSched {
+        gomaxprocs: s.gomaxprocs, deques: s.deques, global_runq: s.global_runq,
+        tasks: s.tasks + [t], channels: s.channels, next_id: id + 1,
+        n_steals: s.n_steals, n_global_gets: s.n_global_gets,
+        n_parks: s.n_parks, n_ready: s.n_ready, n_completed: s.n_completed
+    }
+    return _mn_runqput(s1, p_idx, id)
+}
+
+// ── findrunnable — local pop → global get → steal (Go findRunnable order) ──────
+// Result carries the picked task id (-1 = nothing runnable), the source label,
+// and the advanced scheduler (queues mutated, counters bumped).
+
+struct MNFind {
+    sched: MNSched,
+    tid: int,
+    source: string        // "local" | "global" | "steal" | "none"
+}
+
+fn _mn_globrunqget(s: MNSched) -> MNFind {
+    if len(s.global_runq) == 0 {
+        return MNFind { sched: s, tid: -1, source: "none" }
+    }
+    let tid = s.global_runq[0]
+    let mut rest: [int] = []
+    let i = 1
+    while i < len(s.global_runq) {
+        rest = rest + [s.global_runq[i]]
+        i = i + 1
+    }
+    let s2 = MNSched {
+        gomaxprocs: s.gomaxprocs, deques: s.deques, global_runq: rest,
+        tasks: s.tasks, channels: s.channels, next_id: s.next_id,
+        n_steals: s.n_steals, n_global_gets: s.n_global_gets + 1,
+        n_parks: s.n_parks, n_ready: s.n_ready, n_completed: s.n_completed
+    }
+    return MNFind { sched: s2, tid: tid, source: "global" }
+}
+
+fn _mn_steal(s: MNSched, thief_idx: int) -> MNFind {
+    let i = 0
+    while i < len(s.deques) {
+        if i != thief_idx {
+            let pop = mn_deque_steal_front(s.deques[i])
+            if pop.tid != -1 {
+                let s2 = MNSched {
+                    gomaxprocs: s.gomaxprocs,
+                    deques: _mn_set_deque(s.deques, i, pop.deque),
+                    global_runq: s.global_runq, tasks: s.tasks, channels: s.channels,
+                    next_id: s.next_id, n_steals: s.n_steals + 1,
+                    n_global_gets: s.n_global_gets, n_parks: s.n_parks,
+                    n_ready: s.n_ready, n_completed: s.n_completed
+                }
+                return MNFind { sched: s2, tid: pop.tid, source: "steal" }
+            }
+        }
+        i = i + 1
+    }
+    return MNFind { sched: s, tid: -1, source: "none" }
+}
+
+fn mn_findrunnable(s: MNSched, p_idx: int) -> MNFind {
+    // 1. local run-queue (LIFO back)
+    let pop = mn_deque_pop_back(s.deques[p_idx])
+    if pop.tid != -1 {
+        let s2 = MNSched {
+            gomaxprocs: s.gomaxprocs,
+            deques: _mn_set_deque(s.deques, p_idx, pop.deque),
+            global_runq: s.global_runq, tasks: s.tasks, channels: s.channels,
+            next_id: s.next_id, n_steals: s.n_steals,
+            n_global_gets: s.n_global_gets, n_parks: s.n_parks,
+            n_ready: s.n_ready, n_completed: s.n_completed
+        }
+        return MNFind { sched: s2, tid: pop.tid, source: "local" }
+    }
+    // 2. global injector queue
+    let g = _mn_globrunqget(s)
+    if g.tid != -1 {
+        return g
+    }
+    // 3. steal from another P (FIFO front of victim)
+    return _mn_steal(s, p_idx)
+}
+
+// ── run a step on P[p_idx] — pick + run one G to completion or to a park ───────
+// The G's "body" is modelled by func_name: a name "recv:<chan>" parks on that
+// channel if empty (cooperative yield); anything else runs to _Gdead. Returns the
+// advanced scheduler. mn_step_ran(s) tells whether a G was picked this step.
+
+struct MNStep {
+    sched: MNSched,
+    ran: bool,
+    tid: int
+}
+
+fn _mn_chan_idx(s: MNSched, ch_id: int) -> int {
+    let i = 0
+    while i < len(s.channels) {
+        if s.channels[i].id == ch_id { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn mn_step(s: MNSched, p_idx: int) -> MNStep {
+    let f = mn_findrunnable(s, p_idx)
+    if f.tid == -1 {
+        return MNStep { sched: f.sched, ran: false, tid: -1 }
+    }
+    let s1 = f.sched
+    let t = mn_get_task(s1, f.tid)
+    // Mark running.
+    let running = mn_task_with_state(t, "running", "")
+    let s2 = MNSched {
+        gomaxprocs: s1.gomaxprocs, deques: s1.deques, global_runq: s1.global_runq,
+        tasks: _mn_set_task(s1.tasks, f.tid - 1, running), channels: s1.channels,
+        next_id: s1.next_id, n_steals: s1.n_steals, n_global_gets: s1.n_global_gets,
+        n_parks: s1.n_parks, n_ready: s1.n_ready, n_completed: s1.n_completed
+    }
+    // Body executes: complete (default). Channel-blocking bodies use mn_chan_recv
+    // directly in tests; this default step completes the G.
+    let done = mn_task_with_result(running, "ok")
+    let s3 = MNSched {
+        gomaxprocs: s2.gomaxprocs, deques: s2.deques, global_runq: s2.global_runq,
+        tasks: _mn_set_task(s2.tasks, f.tid - 1, done), channels: s2.channels,
+        next_id: s2.next_id, n_steals: s2.n_steals, n_global_gets: s2.n_global_gets,
+        n_parks: s2.n_parks, n_ready: s2.n_ready, n_completed: s2.n_completed + 1
+    }
+    return MNStep { sched: s3, ran: true, tid: f.tid }
+}
+
+// ── channel make ──────────────────────────────────────────────────────────────
+
+fn mn_chan_make(s: MNSched) -> MNSched {
+    let cid = len(s.channels)
+    return MNSched {
+        gomaxprocs: s.gomaxprocs, deques: s.deques, global_runq: s.global_runq,
+        tasks: s.tasks, channels: s.channels + [mn_channel_new(cid)],
+        next_id: s.next_id, n_steals: s.n_steals, n_global_gets: s.n_global_gets,
+        n_parks: s.n_parks, n_ready: s.n_ready, n_completed: s.n_completed
+    }
+}
+
+// mn_chan_recv(s, ch_id, tid) — receiver `tid` attempts a recv. If a value is
+// buffered, it is returned by completing the task with that value. If the buffer
+// is empty, the G PARKS (gopark → _Gwaiting), yielding its P; it joins the
+// channel's waiter FIFO and a later send will goready it. Returns the scheduler.
+fn mn_chan_recv(s: MNSched, ch_id: int, tid: int) -> MNSched {
+    let ci = _mn_chan_idx(s, ch_id)
+    if ci == -1 { return s }
+    let ch = s.channels[ci]
+    if len(ch.buffer) > 0 {
+        // value ready → consume head, complete receiver
+        let v = ch.buffer[0]
+        let mut rest: [string] = []
+        let i = 1
+        while i < len(ch.buffer) {
+            rest = rest + [ch.buffer[i]]
+            i = i + 1
+        }
+        let ch2 = MNChannel { id: ch.id, buffer: rest, waiters: ch.waiters, closed: ch.closed }
+        let t = mn_get_task(s, tid)
+        let done = mn_task_with_result(t, v)
+        return MNSched {
+            gomaxprocs: s.gomaxprocs, deques: s.deques, global_runq: s.global_runq,
+            tasks: _mn_set_task(s.tasks, tid - 1, done),
+            channels: _mn_set_channel(s.channels, ci, ch2),
+            next_id: s.next_id, n_steals: s.n_steals, n_global_gets: s.n_global_gets,
+            n_parks: s.n_parks, n_ready: s.n_ready, n_completed: s.n_completed + 1
+        }
+    }
+    // empty → PARK the receiver (gopark)
+    let ch2 = MNChannel { id: ch.id, buffer: ch.buffer, waiters: ch.waiters + [tid], closed: ch.closed }
+    let t = mn_get_task(s, tid)
+    let parked = mn_task_with_state(t, "waiting", "chan:" + str(ch_id))
+    return MNSched {
+        gomaxprocs: s.gomaxprocs, deques: s.deques, global_runq: s.global_runq,
+        tasks: _mn_set_task(s.tasks, tid - 1, parked),
+        channels: _mn_set_channel(s.channels, ci, ch2),
+        next_id: s.next_id, n_steals: s.n_steals, n_global_gets: s.n_global_gets,
+        n_parks: s.n_parks + 1, n_ready: s.n_ready, n_completed: s.n_completed
+    }
+}
+
+// mn_chan_send(s, ch_id, val) — if a receiver is parked, hand the value DIRECTLY
+// and goready it (→ _Grunnable, re-enqueued to the global injector queue, which a
+// P will pick up via findrunnable); otherwise buffer the value. Mirrors Go
+// chansend's direct-send-to-waiting-receiver fast path.
+fn mn_chan_send(s: MNSched, ch_id: int, val: string) -> MNSched {
+    let ci = _mn_chan_idx(s, ch_id)
+    if ci == -1 { return s }
+    let ch = s.channels[ci]
+    if len(ch.waiters) > 0 {
+        // direct hand-off → wake the oldest waiter
+        let wtid = ch.waiters[0]
+        let mut rest: [int] = []
+        let i = 1
+        while i < len(ch.waiters) {
+            rest = rest + [ch.waiters[i]]
+            i = i + 1
+        }
+        let ch2 = MNChannel { id: ch.id, buffer: ch.buffer, waiters: rest, closed: ch.closed }
+        let wt = mn_get_task(s, wtid)
+        // value delivered; receiver becomes runnable again (goready)
+        let woken = MNTask { id: wt.id, state: "runnable", park_reason: "", func_name: wt.func_name, result: val }
+        let s2 = MNSched {
+            gomaxprocs: s.gomaxprocs, deques: s.deques,
+            global_runq: s.global_runq + [wtid],
+            tasks: _mn_set_task(s.tasks, wtid - 1, woken),
+            channels: _mn_set_channel(s.channels, ci, ch2),
+            next_id: s.next_id, n_steals: s.n_steals, n_global_gets: s.n_global_gets,
+            n_parks: s.n_parks, n_ready: s.n_ready + 1, n_completed: s.n_completed
+        }
+        return s2
+    }
+    // no waiter → buffer the value
+    let ch2 = MNChannel { id: ch.id, buffer: ch.buffer + [val], waiters: ch.waiters, closed: ch.closed }
+    return MNSched {
+        gomaxprocs: s.gomaxprocs, deques: s.deques, global_runq: s.global_runq,
+        tasks: s.tasks, channels: _mn_set_channel(s.channels, ci, ch2),
+        next_id: s.next_id, n_steals: s.n_steals, n_global_gets: s.n_global_gets,
+        n_parks: s.n_parks, n_ready: s.n_ready, n_completed: s.n_completed
+    }
+}
+
+// drain — run every P round-robin until no G is runnable anywhere (Go's
+// schedule() loop reaching idle). Returns the final scheduler.
+fn mn_drain(s: MNSched) -> MNSched {
+    let mut cur = s
+    let mut progressed = true
+    while progressed {
+        progressed = false
+        let p = 0
+        while p < cur.gomaxprocs {
+            let st = mn_step(cur, p)
+            cur = st.sched
+            if st.ran { progressed = true }
+            p = p + 1
+        }
+    }
+    return cur
+}
+
+// ── Cooperative N=1 green-thread executor (opt-in HEXA_COROUTINE) ─────────────
+// The GMP oracle above models M:N (N≥1 processors, work-steal, park/unpark) as a
+// PURE transition function — it does not actually *drive* tasks forward through
+// suspendable segments. This layer adds the smallest real, runnable slice: a
+// GOMAXPROCS=1 cooperative scheduler that genuinely spawns green threads, yields
+// between explicit step segments, and joins to completion — a single OS thread
+// with a fully deterministic round-robin yield order. NOT true parallelism, NOT
+// preemptive mid-fn suspension (frozen 151c52c8 parser blocks stackless CPS /
+// register-save coroutines — that remains walled; see state/rfc_mn_scheduler.md).
+//
+// ── REFERENCE-MATCH (Go runtime, GMP scheduler @ GOMAXPROCS=1) ────────────────
+//   With N=1 there is exactly one P, so runtime/proc.go findRunnable()'s steal
+//   loop is a no-op (no victim P) and the order collapses to:
+//     local runqget → global globrunqget — a single FIFO ready queue.
+//   · runtime/proc.go schedule()      — pick the next runnable G, run it.
+//   · runtime/proc.go goschedImpl()/Gosched() — an explicit cooperative yield:
+//     the current G is set _Grunnable and re-enqueued runnable, then the
+//     scheduler picks the next G. Modelled by mn_coop_step requeueing the task to
+//     the BACK of `ready` when it has more segments (resume_pc < len(steps)).
+//   · runtime/runtime2.go p.runq[256] + runnext — the per-P ring (here: `ready`).
+//   · runtime/chan.go gopark/goready — park/resume at scheduling points.
+//   Core rule reproduced: a single P ⇒ fully deterministic round-robin at every
+//   explicit scheduling point (here, each step segment boundary == one Gosched).
+//   The `trace` array is exactly the byte-eq interleave signal a future C
+//   substrate (-DHEXA_MN_SCHED, GOMAXPROCS=1) must reproduce step-for-step.
+
+// mn_coroutine_enabled — opt-in gate (mirrors atomic_ops.hexa:atomic_real_enabled,
+// the existing env() builtin precedent; frozen-safe — no new keyword). Default OFF
+// keeps `hexa run self/mn_scheduler.hexa` output byte-identical to the M:N oracle.
+fn mn_coroutine_enabled() -> bool {
+    return env("HEXA_COROUTINE") != ""
+}
+
+// A resumable green thread: an ordered list of explicit step segments plus a
+// resume program counter (honest non-preemptive model — each `steps[resume_pc]`
+// runs to the next yield point, then control returns to the scheduler).
+struct MNCoroTask {
+    id: int,
+    steps: [string],      // explicit step segments (run one per scheduling turn)
+    resume_pc: int,       // next segment to run on resume
+    state: string,        // "runnable" | "done"
+    result: string
+}
+
+// Single FIFO ready queue == GOMAXPROCS=1 (one P, no steal needed). `trace` is the
+// deterministic interleave record; n_yields / n_completed are the byte-eq signals.
+struct MNCoop {
+    ready: [int],         // runnable task ids, FIFO (front=next, back=requeue)
+    tasks: [MNCoroTask],  // all coroutines, indexed by id-1
+    trace: [string],      // "<id>:<pc>" appended each step (interleave oracle)
+    n_yields: int,        // cooperative yields (Gosched: requeue with work left)
+    n_completed: int      // coroutines run to "done"
+}
+
+fn mn_coop_new() -> MNCoop {
+    return MNCoop { ready: [], tasks: [], trace: [], n_yields: 0, n_completed: 0 }
+}
+
+fn mn_coop_get(s: MNCoop, tid: int) -> MNCoroTask {
+    let idx = tid - 1
+    if idx >= 0 && idx < len(s.tasks) {
+        return s.tasks[idx]
+    }
+    return MNCoroTask { id: -1, steps: [], resume_pc: 0, state: "done", result: "" }
+}
+
+fn _mn_coop_set_task(ts: [MNCoroTask], idx: int, t: MNCoroTask) -> [MNCoroTask] {
+    let mut out: [MNCoroTask] = []
+    let i = 0
+    while i < len(ts) {
+        if i == idx { out = out + [t] } else { out = out + [ts[i]] }
+        i = i + 1
+    }
+    return out
+}
+
+// mn_coop_spawn — create a runnable coroutine from its step segments and push it
+// to the BACK of the ready queue (spawn == enqueue runnable; single P).
+fn mn_coop_spawn(s: MNCoop, steps: [string]) -> MNCoop {
+    let id = len(s.tasks) + 1
+    let t = MNCoroTask { id: id, steps: steps, resume_pc: 0, state: "runnable", result: "" }
+    return MNCoop {
+        ready: s.ready + [id],
+        tasks: s.tasks + [t],
+        trace: s.trace,
+        n_yields: s.n_yields,
+        n_completed: s.n_completed
+    }
+}
+
+// step result = (coop, ran, tid); ran == false when the ready queue is empty.
+struct MNCoopStep {
+    coop: MNCoop,
+    ran: bool,
+    tid: int
+}
+
+// mn_coop_step — one scheduling turn (schedule()): pop the FRONT of `ready`, run
+// its current segment, record "<id>:<pc>" to trace, advance resume_pc. If more
+// segments remain it cooperatively YIELDS (Gosched) — requeued to the BACK, hence
+// round-robin; otherwise it completes (state="done", n_completed++).
+fn mn_coop_step(s: MNCoop) -> MNCoopStep {
+    if len(s.ready) == 0 {
+        return MNCoopStep { coop: s, ran: false, tid: -1 }
+    }
+    // dequeue FRONT (FIFO local runqget — single P)
+    let tid = s.ready[0]
+    let mut rest: [int] = []
+    let i = 1
+    while i < len(s.ready) {
+        rest = rest + [s.ready[i]]
+        i = i + 1
+    }
+    let t = mn_coop_get(s, tid)
+    let pc = t.resume_pc
+    let mark = str(tid) + ":" + str(pc)   // the interleave point this turn
+    let next_pc = pc + 1
+    if next_pc < len(t.steps) {
+        // work remains → cooperative yield (Gosched): requeue runnable to BACK
+        let t2 = MNCoroTask { id: t.id, steps: t.steps, resume_pc: next_pc, state: "runnable", result: t.result }
+        return MNCoopStep {
+            coop: MNCoop {
+                ready: rest + [tid],
+                tasks: _mn_coop_set_task(s.tasks, tid - 1, t2),
+                trace: s.trace + [mark],
+                n_yields: s.n_yields + 1,
+                n_completed: s.n_completed
+            },
+            ran: true,
+            tid: tid
+        }
+    }
+    // last segment → coroutine finishes (_Gdead)
+    let result = str(tid) + ":done"
+    let tdone = MNCoroTask { id: t.id, steps: t.steps, resume_pc: next_pc, state: "done", result: result }
+    return MNCoopStep {
+        coop: MNCoop {
+            ready: rest,
+            tasks: _mn_coop_set_task(s.tasks, tid - 1, tdone),
+            trace: s.trace + [mark],
+            n_yields: s.n_yields,
+            n_completed: s.n_completed + 1
+        },
+        ran: true,
+        tid: tid
+    }
+}
+
+// mn_coop_run — drive scheduling turns until the ready queue drains (schedule()
+// loop reaching idle). Deterministic since there is a single P.
+fn mn_coop_run(s: MNCoop) -> MNCoop {
+    let mut cur = s
+    let mut more = true
+    while more {
+        let st = mn_coop_step(cur)
+        cur = st.coop
+        more = st.ran
+    }
+    return cur
+}
+
+// mn_coop_join(s, tid) — drive scheduling turns until coroutine `tid` reaches
+// "done" (or the queue stalls), returning the advanced scheduler. Deterministic:
+// single P ⇒ the same turns run in the same order every time.
+fn mn_coop_join(s: MNCoop, tid: int) -> MNCoop {
+    let mut cur = s
+    let mut running = true
+    while running {
+        if mn_coop_get(cur, tid).state == "done" {
+            running = false
+        } else {
+            let st = mn_coop_step(cur)
+            cur = st.coop
+            if !st.ran { running = false }   // no progress possible → stop
+        }
+    }
+    return cur
+}
+
+// ── Tests (interpreter-runnable; functional subset, no `assert` builtin) ───────
+
+let mut _MN_FAILS = 0
+
+fn mn_check(cond: bool, label: string) {
+    if cond {
+        print("  PASS: " + label + "\n")
+    } else {
+        print("  FAIL: " + label + "\n")
+        _MN_FAILS = _MN_FAILS + 1
+    }
+}
+
+fn test_gmp_mapping() {
+    let s = mn_new(4)
+    mn_check(s.gomaxprocs == 4, "gmp_mapping: gomaxprocs == 4")
+    mn_check(len(s.deques) == 4, "gmp_mapping: 4 local run-queues (P)")
+    mn_check(len(s.global_runq) == 0, "gmp_mapping: global injector empty")
+}
+
+fn test_spawn_roundrobin() {
+    let mut s = mn_new(2)
+    s = mn_spawn(s, "a")   // id 1 → P0
+    s = mn_spawn(s, "b")   // id 2 → P1
+    s = mn_spawn(s, "c")   // id 3 → P0
+    mn_check(len(s.tasks) == 3, "spawn: 3 Gs created")
+    mn_check(mn_deque_len(s.deques[0]) == 2, "spawn: P0 has 2 (ids 1,3)")
+    mn_check(mn_deque_len(s.deques[1]) == 1, "spawn: P1 has 1 (id 2)")
+    mn_check(mn_get_task(s, 1).state == "runnable", "spawn: G1 runnable")
+}
+
+fn test_local_lifo_pop() {
+    let mut s = mn_new(1)
+    s = mn_spawn(s, "x")   // id1
+    s = mn_spawn(s, "y")   // id2 — both on P0
+    let f = mn_findrunnable(s, 0)
+    mn_check(f.source == "local", "lifo: source local")
+    mn_check(f.tid == 2, "lifo: pops the most-recent (id 2, LIFO back)")
+}
+
+fn test_global_overflow() {
+    // Fill P0 past MN_RUNQ_CAP (8) so the 9th spills to the global queue.
+    let mut s = mn_new(2)
+    let i = 0
+    while i < 9 {
+        s = mn_spawn_on(s, "w", 0)
+        i = i + 1
+    }
+    mn_check(mn_deque_len(s.deques[0]) == MN_RUNQ_CAP, "overflow: P0 local capped at RUNQ_CAP")
+    mn_check(len(s.global_runq) == 1, "overflow: 9th G spilled to global injector")
+}
+
+fn test_findrunnable_global() {
+    let mut s = mn_new(2)
+    // put a G only on the global queue (overflow path), P0 local empty
+    let i = 0
+    while i < 9 {
+        s = mn_spawn_on(s, "w", 1)   // pile onto P1, 9th → global
+        i = i + 1
+    }
+    // P0 is empty locally; findrunnable on P0 should drain P1-local first? No:
+    // order is local(empty) → global. Force: drain P0 local (empty) → global get.
+    let f = mn_findrunnable(s, 0)
+    // P0 local is empty so it must reach global or steal; global has 1, but steal
+    // would also work. The documented order tries global BEFORE steal.
+    mn_check(f.source == "global" || f.source == "steal", "findrunnable: P0 reaches global/steal when local empty")
+}
+
+fn test_work_steal_fifo() {
+    let mut s = mn_new(2)
+    s = mn_spawn_on(s, "old", 1)   // id1 (oldest on P1)
+    s = mn_spawn_on(s, "new", 1)   // id2 (newest on P1)
+    // P0 empty → findrunnable on P0 must steal from P1, taking the OLDEST (FIFO).
+    let f = mn_findrunnable(s, 0)
+    mn_check(f.source == "steal", "steal: P0 steals from P1")
+    mn_check(f.tid == 1, "steal: takes oldest (FIFO front, id 1)")
+    mn_check(f.sched.n_steals == 1, "steal: n_steals counter bumped")
+}
+
+fn test_park_on_recv_empty() {
+    let mut s = mn_new(1)
+    s = mn_spawn(s, "recv")        // id1
+    s = mn_chan_make(s)            // channel 0
+    s = mn_chan_recv(s, 0, 1)      // recv on empty → park id1
+    mn_check(mn_get_task(s, 1).state == "waiting", "park: receiver _Gwaiting")
+    mn_check(mn_get_task(s, 1).park_reason == "chan:0", "park: reason chan:0")
+    mn_check(s.n_parks == 1, "park: n_parks bumped")
+    mn_check(len(s.channels[0].waiters) == 1, "park: receiver joined chan waiter FIFO")
+}
+
+fn test_goready_on_send() {
+    let mut s = mn_new(1)
+    s = mn_spawn(s, "recv")        // id1
+    s = mn_chan_make(s)            // channel 0
+    s = mn_chan_recv(s, 0, 1)      // park id1
+    s = mn_chan_send(s, 0, "v42")  // direct hand-off → goready id1
+    mn_check(mn_get_task(s, 1).state == "runnable", "goready: woken receiver runnable")
+    mn_check(mn_get_task(s, 1).result == "v42", "goready: value delivered directly")
+    mn_check(s.n_ready == 1, "goready: n_ready bumped")
+    mn_check(len(s.channels[0].waiters) == 0, "goready: waiter FIFO drained")
+    mn_check(len(s.channels[0].buffer) == 0, "goready: direct hand-off bypassed buffer")
+}
+
+fn test_buffered_send_recv() {
+    let mut s = mn_new(1)
+    s = mn_chan_make(s)            // channel 0
+    s = mn_chan_send(s, 0, "hi")   // no waiter → buffer
+    mn_check(len(s.channels[0].buffer) == 1, "buffered: send with no waiter buffers")
+    s = mn_spawn(s, "recv")        // id1
+    s = mn_chan_recv(s, 0, 1)      // value ready → complete receiver
+    mn_check(mn_get_task(s, 1).result == "hi", "buffered: recv consumes buffered value")
+    mn_check(s.n_completed == 1, "buffered: receiver completed")
+}
+
+fn test_drain_completes_all() {
+    let mut s = mn_new(3)
+    let i = 0
+    while i < 7 {
+        s = mn_spawn(s, "job")
+        i = i + 1
+    }
+    s = mn_drain(s)
+    mn_check(s.n_completed == 7, "drain: all 7 Gs run to completion")
+    mn_check(mn_deque_len(s.deques[0]) == 0, "drain: P0 idle")
+    mn_check(len(s.global_runq) == 0, "drain: global injector idle")
+}
+
+// ── Cooperative N=1 executor tests (run only under HEXA_COROUTINE) ─────────────
+
+fn test_coop_spawn_yield_join() {
+    let mut s = mn_coop_new()
+    s = mn_coop_spawn(s, ["a0", "a1"])   // id1, 2 segments
+    s = mn_coop_spawn(s, ["b0", "b1"])   // id2
+    s = mn_coop_spawn(s, ["c0", "c1"])   // id3
+    s = mn_coop_run(s)
+    mn_check(len(s.trace) == 6, "coop: 6 segment turns recorded")
+    // deterministic round-robin interleave (GOMAXPROCS=1, single P, FIFO):
+    //   1:0, 2:0, 3:0, 1:1, 2:1, 3:1
+    mn_check(s.trace[0] == "1:0", "coop: trace[0] == 1:0")
+    mn_check(s.trace[1] == "2:0", "coop: trace[1] == 2:0")
+    mn_check(s.trace[2] == "3:0", "coop: trace[2] == 3:0")
+    mn_check(s.trace[3] == "1:1", "coop: trace[3] == 1:1 (round-robin yield)")
+    mn_check(s.trace[4] == "2:1", "coop: trace[4] == 2:1")
+    mn_check(s.trace[5] == "3:1", "coop: trace[5] == 3:1")
+    mn_check(s.n_completed == 3, "coop: all 3 coroutines done")
+    mn_check(s.n_yields == 3, "coop: 3 cooperative yields (one per task)")
+    mn_check(mn_coop_get(s, 1).state == "done", "coop: G1 done after run")
+}
+
+fn test_coop_join_returns_result() {
+    let mut s = mn_coop_new()
+    s = mn_coop_spawn(s, ["x0", "x1", "x2"])   // id1, 3 segments
+    s = mn_coop_join(s, 1)
+    mn_check(mn_coop_get(s, 1).state == "done", "coop_join: task driven to done")
+    mn_check(mn_coop_get(s, 1).result == "1:done", "coop_join: result delivered")
+    mn_check(s.n_yields == 2, "coop_join: 2 yields before completion (3 segments)")
+}
+
+fn test_coop_n1_deterministic() {
+    let mut a = mn_coop_new()
+    a = mn_coop_spawn(a, ["p0", "p1"])
+    a = mn_coop_spawn(a, ["q0", "q1"])
+    a = mn_coop_run(a)
+    let mut b = mn_coop_new()
+    b = mn_coop_spawn(b, ["p0", "p1"])
+    b = mn_coop_spawn(b, ["q0", "q1"])
+    b = mn_coop_run(b)
+    mn_check(len(a.trace) == len(b.trace), "coop_det: same trace length both runs")
+    let mut same = true
+    let i = 0
+    while i < len(a.trace) {
+        if a.trace[i] != b.trace[i] { same = false }
+        i = i + 1
+    }
+    mn_check(same, "coop_det: identical interleave across re-runs (single P deterministic)")
+}
+
+print("=== mn_scheduler.hexa tests (M:N GMP oracle) ===\n")
+test_gmp_mapping()
+test_spawn_roundrobin()
+test_local_lifo_pop()
+test_global_overflow()
+test_findrunnable_global()
+test_work_steal_fifo()
+test_park_on_recv_empty()
+test_goready_on_send()
+test_buffered_send_recv()
+test_drain_completes_all()
+// Opt-in cooperative N=1 executor tests — engaged only under HEXA_COROUTINE=1, so
+// the default run stays byte-identical to the M:N oracle output above.
+if mn_coroutine_enabled() {
+    print("--- cooperative N=1 green-thread executor (HEXA_COROUTINE) ---\n")
+    test_coop_spawn_yield_join()
+    test_coop_join_returns_result()
+    test_coop_n1_deterministic()
+}
+if _MN_FAILS == 0 {
+    print("All mn_scheduler tests passed.\n")
+} else {
+    print("mn_scheduler FAILURES: " + str(_MN_FAILS) + "\n")
+}

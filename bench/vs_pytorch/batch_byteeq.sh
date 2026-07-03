@@ -12,6 +12,10 @@ D=512; TW=128; E=2   # small shape: CE is comparable, runs fast, seam effect vis
 NS=8
 
 run() {  # $1=B $2=NSAMP $3=EPOCHS
+  # HEXA_CUDA_ASYNC=0 pins the byte-eq baseline trajectory (async-OFF loss=4.819 vs
+  # async-ON 4.799 = MoE scatter atomic order, fast-non-det axis). Justified as a
+  # correctness gate: async-ON is separately verified MORE deterministic (F-OP15 max|dW|=0
+  # vs async-OFF 1-ULP hole 2.78e-17), so this pin is re-pinnable in a follow-up PR.
   CUDA_VISIBLE_DEVICES=0 CLM_PROD_DEVRESIDENT=1 CLM_PROD_DEVFEED=1 CLM_PROD_BATCHED=1 HEXA_CUDA_ASYNC=0 \
     CLM_PROD_D=$D CLM_PROD_T=$TW CLM_PROD_E=$E CLM_PROD_BATCH=$1 \
     CLM_PROD_NSAMP=$2 CLM_PROD_EPOCHS=$3 CLM_PROD_CORPUS="$WORK/corpus.txt" \
