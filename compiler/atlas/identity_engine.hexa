@@ -614,3 +614,63 @@ pub fn ie_fp_contains(table, fp) -> bool {
 pub fn ie_expressible_at(fp, N) -> bool {
     return ie_fp_contains(ie_fp_table_build(N), fp)
 }
+
+// ── Erdős–Straus ledger target (bounded-witness · 🟩) ─────────────────────
+// 4/n = 1/x + 1/y + 1/z — does a positive-integer solution exist at a single n?
+// exact-int only (no float): bounded x-scan + exact divisor test of the residual
+// 2-term unit fraction. x range = ceil((n+1)/4)..floor(3n/4) (standard ES bound:
+// the largest unit fraction 1/x satisfies 4/(3n) < 1/x <= 4/n). For each x the
+// residual num/P = (4x-n)/(n*x) must split as 1/y+1/z, i.e. (num*y-P)(num*z-P)=P^2
+// with P=n*x — scan divisors d|P^2 (d<=P), y=(d+P)/num and z=(P^2/d+P)/num must be
+// positive integers. i64-SAFE while P^2 ~ 0.56*n^4 < 9.2e18, i.e. n <= ~6.1e4.
+// Returns 1 if a witness exists at n, else 0.  @capabilities [pure]
+pub fn es_witness_at(n) -> int {
+    let xlo = (n + 4) / 4            // == ceil((n+1)/4) for n>=2 (integer)
+    let xhi = (3 * n) / 4
+    let x = xlo
+    while x <= xhi {
+        let num = 4 * x - n          // residual numerator: (4x-n)/(n*x)
+        if num > 0 {
+            let P = n * x
+            let PP = P * P
+            let d = 1
+            while d * d <= PP {
+                if PP % d == 0 {
+                    if (d + P) % num == 0 {
+                        let e = PP / d           // paired divisor
+                        if (e + P) % num == 0 {
+                            return 1             // witness (x,y,z) exists
+                        }
+                    }
+                }
+                d = d + 1
+            }
+        }
+        x = x + 1
+    }
+    return 0
+}
+
+// Erdős–Straus BOUNDED verify over [2,N]. Only primes are scanned — a composite
+// n = p*(n/p) inherits a witness from its prime factor p (4/n = 4/(p*(n/p)) scale),
+// so the full-range statement is preserved by scanning primes only (spf(n)==n).
+// Returns 1 if EVERY n in [2,N] has a witness, else the first counterexample
+// encoded as -n. c2-honest: the forall-n>=2 conjecture stays 🟥 UNPROVEN; this is
+// only the finite [2,N] bounded-witness atom. i64-safe to N ~ 6.1e4 (see above).
+pub fn verify_erdos_straus(N) -> int {
+    let n = 2
+    while n <= N {
+        if spf(n) == n {                 // spf(n)==n <=> n prime  (identity_engine.hexa spf)
+            if es_witness_at(n) == 0 { return 0 - n }  // -n encodes first counterexample
+        }
+        n = n + 1
+    }
+    return 1
+}
+
+// companion diagnostic: first n in [2,N] with NO witness (0 if all pass).
+pub fn es_first_counterexample(N) -> int {
+    let v = verify_erdos_straus(N)
+    if v == 1 { return 0 }
+    return 0 - v                          // decode the -n signal
+}

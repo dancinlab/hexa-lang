@@ -1,0 +1,121 @@
+// ═══════════════════════════════════════════════════════════════════
+//  test_match_struct_pattern.hexa — match struct-destructure patterns
+//
+//  Reference: The Rust Reference, "Struct patterns" —
+//    match p { Point { x, y } => …, Point { x: a, y: b } => … }
+//  A path followed by `{ field, field: binder, … }` in pattern position
+//  destructures the scrutinee, binding each named field (shorthand `x`
+//  binds `x`; `x: a` renames the binding to `a`). Struct patterns are
+//  irrefutable (a struct has a single shape), so a sole struct arm always
+//  matches; guards (`Point { x, y } if x > y`) refine it. The syntax reuses
+//  the existing struct-literal field shape (no new keyword) and is parsed in
+//  compiler/parse/parser.hexa::parse_struct_pattern, lowered in
+//  compiler/lower/{ast_to_hir,hir_to_mir}.hexa (HIR kind "struct_pattern" →
+//  per-field hexa_map_get into each binder).
+//
+//  NOTE: this exercises the NEW parser/lowering — it requires a hexa
+//  compiler built from this branch. The stale local oracle (~/.hx/bin)
+//  predates struct patterns and cannot run it; verification is via the
+//  pool / CI byteeq build.
+//
+//  Expected stdout:
+//    sum_pt=7
+//    rename_pt=304
+//    just_x=9
+//    label=score#95
+//    cmp(3,1)=gt
+//    cmp(2,2)=eq
+//    cmp(1,4)=lt
+//    nested=110
+//    ALL-PASS
+// ═══════════════════════════════════════════════════════════════════
+
+struct Point {
+    x: i64,
+    y: i64
+}
+
+struct Tagged {
+    tag: string,
+    n: i64
+}
+
+// Shorthand destructure — binds `x` and `y` to the field values.
+fn sum_pt(p: Point) -> i64 {
+    return match p {
+        Point { x, y } -> x + y
+    }
+}
+
+// Field-rename destructure — `x: a` binds the `x` field to `a`.
+fn rename_pt(p: Point) -> i64 {
+    return match p {
+        Point { x: a, y: b } -> a * 100 + b
+    }
+}
+
+// Partial binding — list only the field(s) we need.
+fn just_x(p: Point) -> i64 {
+    return match p {
+        Point { x } -> x
+    }
+}
+
+// String field destructure.
+fn label(t: Tagged) -> string {
+    return match t {
+        Tagged { tag, n } -> tag + "#" + to_string(n)
+    }
+}
+
+// Guarded struct patterns — the guard reads the field binders; a failed
+// guard falls through to the next arm, ending at an irrefutable wildcard.
+fn cmp_pt(p: Point) -> string {
+    return match p {
+        Point { x, y } if x > y -> "gt",
+        Point { x, y } if x == y -> "eq",
+        _ -> "lt"
+    }
+}
+
+// Struct pattern whose binders feed a further expression (not just returned).
+fn nested(p: Point) -> i64 {
+    return match p {
+        Point { x, y } -> {
+            let s = x + y
+            s * 10
+        }
+    }
+}
+
+fn expect_s(label_s: string, got: string, want: string, acc: [i64]) {
+    println(label_s + "=" + got)
+    if got != want { acc[0] = 1 }
+}
+
+fn expect_i(label_s: string, got: i64, want: i64, acc: [i64]) {
+    println(label_s + "=" + to_string(got))
+    if got != want { acc[0] = 1 }
+}
+
+fn main() {
+    let mut acc = [0]
+
+    expect_i("sum_pt", sum_pt(Point { x: 3, y: 4 }), 7, acc)
+    expect_i("rename_pt", rename_pt(Point { x: 3, y: 4 }), 304, acc)
+    expect_i("just_x", just_x(Point { x: 9, y: 2 }), 9, acc)
+
+    expect_s("label", label(Tagged { tag: "score", n: 95 }), "score#95", acc)
+
+    expect_s("cmp(3,1)", cmp_pt(Point { x: 3, y: 1 }), "gt", acc)
+    expect_s("cmp(2,2)", cmp_pt(Point { x: 2, y: 2 }), "eq", acc)
+    expect_s("cmp(1,4)", cmp_pt(Point { x: 1, y: 4 }), "lt", acc)
+
+    expect_i("nested", nested(Point { x: 4, y: 7 }), 110, acc)
+
+    if acc[0] == 0 {
+        println("ALL-PASS")
+    } else {
+        println("FAIL")
+    }
+}
