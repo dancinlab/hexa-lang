@@ -3124,7 +3124,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "reboot" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "fire-shards" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "alive" || t == "probe" || t == "copy-to" || t == "copy-from" || t == "bootstrap" || t == "orphans" || t == "reconcile" || t == "reap" || t == "idle-reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "api" || t == "provider-cli" || t == "dft-run" || t == "dft-fanout" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "reboot" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "fire-shards" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "alive" || t == "probe" || t == "copy-to" || t == "copy-from" || t == "bootstrap" || t == "orphans" || t == "reconcile" || t == "reap" || t == "idle-reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "api" || t == "provider-cli" || t == "dft-run" || t == "dft-fanout" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "ls" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -3283,6 +3283,14 @@ fn main() {
         let id = av[si + 1]
         let provider = _flag_val(av, si + 2, "--provider", "vast")
         exit(_cloud_reboot(id, provider))
+    }
+    if sub == "ls" {
+        // Typo guidance (git/cargo convention): `ls` is NOT a verb — point
+        // at the canonical `list` and exit nonzero instead of dumping the
+        // whole _cloud_help wall (the pre-guard behavior, which buried the
+        // one-word answer). NOT a silent alias: scripts must say `list`.
+        eprintln("[cloud] unknown verb 'ls' — did you mean `list`? Run `hexa cloud list` (alias: status) to show live pods.")
+        exit(2)
     }
     if sub == "list" || sub == "status" {
         // List live pods (read-only, $-free). Bare → both providers;
