@@ -32,6 +32,14 @@ if [ -n "$__hexa_bin" ] && [ -x "$__hexa_bin" ] && [ -f tool/no_hardcode_lint.he
   fi
 fi
 
+# stdlib malformed-input guard-convention lint — ADVISORY (warn, never blocks).
+# Flags newly-added `arr[0]` / `/ divisor` sites with no empty/zero guard in the
+# same fn (the QA bug class, #3943..#3963; census state/guard_class_census.py).
+# Heuristic → warn only, so it informs without gating on false positives.
+if [ -n "$__hexa_bin" ] && [ -x "$__hexa_bin" ] && [ -f tool/stdlib_guard_lint.hexa ]; then
+  "$__hexa_bin" run tool/stdlib_guard_lint.hexa --changed --mode=warn 2>/dev/null || true
+fi
+
 # Paths we guard (matched against `git diff --cached`)
 GUARD_GLOBS=(
   'stdlib/runtime/'

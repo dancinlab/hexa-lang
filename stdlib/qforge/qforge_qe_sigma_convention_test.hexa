@@ -1,0 +1,128 @@
+// @ci_gate — pure · deterministic
+//
+// qforge_qe_sigma_convention_test.hexa — pins the QE↔QFORGE Fermi-surface
+// double-delta σ CONVENTION bridge to machine precision (the 1:1 matched-σ
+// correctness gate, R1 of the QE-parity lane).
+//
+// THE CLAIM (elph.hexa qforge_qe_degauss_to_sigma):
+//   QFORGE δ_σ(x)   = exp(−x²/2σ²)/(σ√2π)              [variance σ²]
+//   QE per-δ(x;d)   = exp(−x²/d²)/(d√π)                [variance d²/2]
+//     (QE elphon.f90:1058-1062 product = exp(−(x²+y²)/d²)/d²/π = two of the above)
+//   These two NORMALIZED Gaussians are IDENTICAL iff σ = d/√2.
+//
+// This test asserts, for a ladder of QE degauss values, that
+//   qforge_gaussian_delta(x, qforge_qe_degauss_to_sigma(d))  ==  qe_delta(x, d)
+// for several x (incl. x=0), to rel-ε ≤ 1e-12 — so the σ re-label is EXACT, not
+// a fit (d6). Also round-trips the inverse bridge (σ→degauss→σ).
+//
+// Run:  hexa run stdlib/qforge/qforge_qe_sigma_convention_test.hexa
+// PASS: prints "qforge_qe_sigma_convention_test PASS".
+
+use "stdlib/qforge/elph"
+
+let _PI: float = 3.14159265358979323846
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _sqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    let mut i = 0
+    while i < 60 { g = 0.5 * (g + x / g) ; i = i + 1 }
+    return g
+}
+
+fn _rel(a: float, b: float) -> float {
+    let d = _abs(a - b)
+    let m = if _abs(b) > 1e-30 { _abs(b) } else { 1.0 }
+    return d / m
+}
+
+// QE's per-electron δ, verbatim convention: exp(−x²/d²)/(d√π).
+fn qe_delta(x: float, d: float) -> float {
+    if d <= 0.0 { return 0.0 }
+    let z = x / d
+    return exp(-z * z) / (d * _sqrt(_PI))
+}
+
+fn main() {
+    let mut fails = 0
+    let sqrt2 = _sqrt(2.0)
+
+    // ── (1) convention identity across a degauss ladder × x samples ──────────
+    println("── QE degauss → QFORGE σ = d/√2 : δ identity (≤1e-12) ──")
+    let degs: [float] = [0.005, 0.010, 0.015, 0.020, 0.025, 0.030, 0.050]
+    let xs: [float]   = [0.0, 0.003, 0.007, 0.012, 0.020, 0.035]
+    let mut di = 0
+    while di < len(degs) {
+        let d = degs[di]
+        let s = qforge_qe_degauss_to_sigma(d)
+        // bridge sanity: s must equal d/√2
+        let srel = _rel(s, d / sqrt2)
+        if srel > 1e-12 {
+            println("FAIL bridge σ(d=" + to_string(d) + ")=" + to_string(s)
+                    + " ≠ d/√2 (rel=" + to_string(srel) + ")")
+            fails = fails + 1
+        }
+        let mut xi = 0
+        while xi < len(xs) {
+            let x = xs[xi]
+            let qf = qforge_gaussian_delta(x, s)
+            let qe = qe_delta(x, d)
+            let r = _rel(qf, qe)
+            if r > 1e-12 {
+                println("FAIL d=" + to_string(d) + " x=" + to_string(x)
+                        + " QFORGE δ=" + to_string(qf) + " QE δ=" + to_string(qe)
+                        + " rel=" + to_string(r))
+                fails = fails + 1
+            }
+            xi = xi + 1
+        }
+        di = di + 1
+    }
+    if fails == 0 {
+        println("PASS δ_σ(x, d/√2) == QE δ(x; d) for " + to_string(len(degs))
+                + " degauss × " + to_string(len(xs)) + " x — EXACT (≤1e-12)")
+    }
+
+    // ── (2) inverse round-trip: σ → degauss → σ ──────────────────────────────
+    println("── inverse bridge round-trip σ→degauss→σ ──")
+    let mut ri = 0
+    let sigs: [float] = [0.005, 0.0106, 0.0141, 0.0177]
+    while ri < len(sigs) {
+        let s0 = sigs[ri]
+        let d = qforge_sigma_to_qe_degauss(s0)       // ·√2
+        let s1 = qforge_qe_degauss_to_sigma(d)       // /√2
+        let r = _rel(s1, s0)
+        if r > 1e-12 {
+            println("FAIL round-trip σ=" + to_string(s0) + " → " + to_string(s1)
+                    + " (rel=" + to_string(r) + ")")
+            fails = fails + 1
+        }
+        ri = ri + 1
+    }
+    if fails == 0 {
+        println("PASS inverse bridge round-trips to ≤1e-12")
+    }
+
+    // ── (3) the QE-equivalent σ_el (Ha) for the answer-key ladder (report) ───
+    // QE degauss in Ry → Ha (·0.5) → QFORGE σ_el (/√2). These are the exact
+    // QFORGE σ_el values a matched-σ CaH6 run must use to sit on QE's λ(σ) curve.
+    println("── matched-σ table: QE degauss(Ry) → QFORGE σ_el(Ha) ──")
+    let ladder: [float] = [0.015, 0.020, 0.025]
+    let mut li = 0
+    while li < len(ladder) {
+        let dry = ladder[li]
+        let dha = dry * 0.5
+        let sel = qforge_qe_degauss_to_sigma(dha)
+        println("   QE degauss=" + to_string(dry) + " Ry  →  σ_el="
+                + to_string(sel) + " Ha  (= " + to_string(dha) + " Ha /√2)")
+        li = li + 1
+    }
+
+    if fails == 0 {
+        println("qforge_qe_sigma_convention_test PASS")
+    } else {
+        println("qforge_qe_sigma_convention_test FAIL (" + to_string(fails) + ")")
+    }
+}

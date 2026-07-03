@@ -1,0 +1,26 @@
+import "core/engine_cli.hexa"
+fn main() {
+    let n = 4
+    let steps = 64
+    let mut pass = 0
+    let mut fail = 0
+    let b = phasefield_run(phasefield_new(7, n), steps)
+    let d = phasefield_run(phasefield_new_desync(7, n), steps)
+    let br = phasefield_coherence(b)
+    let dr = phasefield_coherence(d)
+    println("synced R=" + to_string(br) + "  desync R=" + to_string(dr))
+    if (br >= 0.70) && ((br - dr) >= 0.20) { pass = pass + 1  println("case166 BIND PASS") } else { fail = fail + 1  println("case166 BIND FAIL") }
+    if dr <= 0.65 { pass = pass + 1  println("case167 DESYNC PASS") } else { fail = fail + 1  println("case167 DESYNC FAIL") }
+    let b2 = phasefield_run(phasefield_new(7, n), steps)
+    if phasefield_coherence(b2) == br { pass = pass + 1  println("case168 DET PASS") } else { fail = fail + 1  println("case168 DET FAIL") }
+    // multi-seed robustness sanity (not a gate, info)
+    let mut si = 3
+    while si < 12 {
+        let bb = phasefield_run(phasefield_new(si, n), steps)
+        let dd = phasefield_run(phasefield_new_desync(si, n), steps)
+        println("seed " + to_string(si) + ": synced R=" + to_string(phasefield_coherence(bb)) + " desync R=" + to_string(phasefield_coherence(dd)))
+        si = si + 1
+    }
+    println("--- pf lane: " + to_string(pass) + " pass / " + to_string(fail) + " fail ---")
+    if fail > 0 { exit(1) }
+}

@@ -1,0 +1,168 @@
+// @ci_gate — pure · network-free · deterministic
+// stdlib/cloud/runpod_cpu_disk_test.hexa — ING #30 regression gate.
+//
+// Two RunPod rent bugs are bound here against the PURE body/command builders
+// (no network — the builders are factored out of the create functions exactly
+// so this can capture + assert the constructed request strings, c2):
+//
+//   ① `--disk GiB` was IGNORED on runpod (containerDiskInGb hardcoded 80).
+//      Now `disk_gb` threads through both the GPU GraphQL body
+//      (_runpod_gpu_gql_body) and the CPU REST body (_runpod_cpu_rest_body).
+//   ② No CPU-only path: `--gpu cpu` now routes to the REST v1 CPU API
+//      (computeType:CPU + cpuFlavorIds). runpod_is_cpu_selector picks the path;
+//      _runpod_cpu_rest_body builds the verified REST body
+//      (https://docs.runpod.io/api-reference/pods/POST/pods).
+//
+// Run:  hexa run stdlib/cloud/runpod_cpu_disk_test.hexa
+// PASS: exits 0, prints "runpod_cpu_disk_test PASS".
+
+use "stdlib/cloud/runpod"
+
+fn main() {
+    let mut fails = 0
+    let img = "runpod/pytorch:test"
+    let pk = "ssh-ed25519 AAAATESTKEY user@host"
+    let nm = "@demiurge/qforge"
+
+    // ── ① --disk wiring on the GPU GraphQL body ──────────────────────
+    // disk_gb=200 → containerDiskInGb:200 (was always 80).
+    let gql_disk = _runpod_gpu_gql_body("NVIDIA A100 80GB PCIe", img, pk, nm, 50, 200)
+    println("--- GPU GraphQL body (disk=200, vol=50) ---")
+    println(gql_disk)
+    if !gql_disk.contains("containerDiskInGb:200") {
+        println("FAIL gpu-disk-wired: missing containerDiskInGb:200")
+        fails = fails + 1
+    }
+    if !gql_disk.contains("volumeInGb:50") {
+        println("FAIL gpu-vol-wired: missing volumeInGb:50")
+        fails = fails + 1
+    }
+    if !gql_disk.contains("gpuTypeId:\\\"NVIDIA A100 80GB PCIe\\\"") {
+        println("FAIL gpu-typeid: missing gpuTypeId")
+        fails = fails + 1
+    }
+    if gql_disk.contains("containerDiskInGb:80") {
+        println("FAIL gpu-no-hardcoded-80: stale containerDiskInGb:80 present")
+        fails = fails + 1
+    }
+
+    // disk default sentinel: a real create with disk_gb<=0 clamps to 80 (the
+    // builder takes the already-defaulted value) — assert that default form.
+    let gql_def = _runpod_gpu_gql_body("NVIDIA A100 80GB PCIe", img, pk, nm, 50, 80)
+    if !gql_def.contains("containerDiskInGb:80") {
+        println("FAIL gpu-disk-default-80: missing containerDiskInGb:80")
+        fails = fails + 1
+    }
+
+    // ── ② CPU selector routing ───────────────────────────────────────
+    if runpod_is_cpu_selector("cpu") != 1 { println("FAIL sel-cpu"); fails = fails + 1 }
+    if runpod_is_cpu_selector("CPU") != 1 { println("FAIL sel-CPU-upper"); fails = fails + 1 }
+    if runpod_is_cpu_selector("none") != 1 { println("FAIL sel-none"); fails = fails + 1 }
+    if runpod_is_cpu_selector("") != 1 { println("FAIL sel-empty"); fails = fails + 1 }
+    if runpod_is_cpu_selector("  ") != 1 { println("FAIL sel-blank"); fails = fails + 1 }
+    if runpod_is_cpu_selector("NVIDIA A100 80GB PCIe") != 0 { println("FAIL sel-gpu"); fails = fails + 1 }
+    if runpod_is_cpu_selector("H100") != 0 { println("FAIL sel-h100"); fails = fails + 1 }
+
+    // ── ② CPU REST body (default flavors + --disk wiring) ────────────
+    let cpu_def = _runpod_cpu_rest_body(img, pk, nm, 40, 120, 8, "")
+    println("--- CPU REST body (default flavors, vcpu=8, disk=120, vol=40) ---")
+    println(cpu_def)
+    if !cpu_def.contains("\"computeType\":\"CPU\"") {
+        println("FAIL cpu-computetype"); fails = fails + 1
+    }
+    // edge-proven: SECURE cloud is perpetually "no instances"; COMMUNITY has the
+    // wide CPU stock. The CPU REST body MUST request cloudType=COMMUNITY.
+    if !cpu_def.contains("\"cloudType\":\"COMMUNITY\"") {
+        println("FAIL cpu-cloudtype-community"); fails = fails + 1
+    }
+    if !cpu_def.contains("\"vcpuCount\":8") {
+        println("FAIL cpu-vcpu"); fails = fails + 1
+    }
+    if !cpu_def.contains("\"containerDiskInGb\":120") {
+        println("FAIL cpu-disk-wired"); fails = fails + 1
+    }
+    if !cpu_def.contains("\"volumeInGb\":40") {
+        println("FAIL cpu-vol-wired"); fails = fails + 1
+    }
+    if !cpu_def.contains("\"cpuFlavorPriority\":\"availability\"") {
+        println("FAIL cpu-flavor-priority"); fails = fails + 1
+    }
+    if !cpu_def.contains("\"cpuFlavorIds\":[\"cpu3c\",\"cpu3g\",\"cpu5c\",\"cpu5g\"]") {
+        println("FAIL cpu-default-flavors"); fails = fails + 1
+    }
+    if !cpu_def.contains("\"env\":{\"PUBLIC_KEY\":\"ssh-ed25519 AAAATESTKEY user@host\"}") {
+        println("FAIL cpu-env-object"); fails = fails + 1
+    }
+    if !cpu_def.contains("\"ports\":[\"22/tcp\"]") {
+        println("FAIL cpu-ports"); fails = fails + 1
+    }
+    if !cpu_def.contains("\"volumeMountPath\":\"/workspace\"") {
+        println("FAIL cpu-mount"); fails = fails + 1
+    }
+    // CPU body must NOT carry the GPU GraphQL shape.
+    if cpu_def.contains("gpuCount") {
+        println("FAIL cpu-no-gpucount: GPU field leaked into CPU body"); fails = fails + 1
+    }
+    if cpu_def.contains("gpuTypeId") {
+        println("FAIL cpu-no-gputypeid: GPU field leaked into CPU body"); fails = fails + 1
+    }
+
+    // ── ② CPU REST body (custom flavor list + bigger vcpu) ───────────
+    let cpu_cust = _runpod_cpu_rest_body(img, pk, nm, 0, 80, 16, "cpu5c, cpu5g")
+    if !cpu_cust.contains("\"cpuFlavorIds\":[\"cpu5c\",\"cpu5g\"]") {
+        println("FAIL cpu-custom-flavors"); fails = fails + 1
+    }
+    if !cpu_cust.contains("\"vcpuCount\":16") {
+        println("FAIL cpu-custom-vcpu"); fails = fails + 1
+    }
+
+    // ── ③ GAP-1 cap+routing via the PURE RESOLVER (ING #31, edge-proven) ──
+    // _runpod_cpu_resolve_body applies the CPU sizing RULES that the raw body
+    // builder does NOT: containerDiskInGb HARD-CAP ≤20, --disk → volumeInGb.
+    // Big disk request (vol=600 from the CLI routing of --disk 600) must land in
+    // volumeInGb and clamp the container disk to 20.
+    let cpu_big = _runpod_cpu_resolve_body(img, pk, nm, 600, 600, 4, "")
+    println("--- CPU resolve body (disk routed: vol=600, raw disk=600) ---")
+    println(cpu_big)
+    if !cpu_big.contains("\"volumeInGb\":600") {
+        println("FAIL cpu-disk-routed-to-volume: --disk 600 must size volumeInGb"); fails = fails + 1
+    }
+    if !cpu_big.contains("\"containerDiskInGb\":20") {
+        println("FAIL cpu-container-capped-20: containerDiskInGb must clamp to ≤20"); fails = fails + 1
+    }
+    if cpu_big.contains("\"containerDiskInGb\":600") {
+        println("FAIL cpu-container-not-600: an oversize container disk would make RunPod refuse create"); fails = fails + 1
+    }
+    if !cpu_big.contains("\"cloudType\":\"COMMUNITY\"") {
+        println("FAIL cpu-resolve-community"); fails = fails + 1
+    }
+    // Bare --disk with NO explicit volume (vol=0, disk=300) → volume falls back
+    // to the disk size; container still ≤20.
+    let cpu_bare = _runpod_cpu_resolve_body(img, pk, nm, 0, 300, 4, "")
+    if !cpu_bare.contains("\"volumeInGb\":300") {
+        println("FAIL cpu-bare-disk-to-volume: vol<=0 must fall back to disk_gb"); fails = fails + 1
+    }
+    if !cpu_bare.contains("\"containerDiskInGb\":20") {
+        println("FAIL cpu-bare-container-20"); fails = fails + 1
+    }
+    // Defaults: no disk, no volume, no vcpu → vol 0, container 20, vcpu 4.
+    let cpu_dflt = _runpod_cpu_resolve_body(img, pk, nm, 0, 0, 0, "")
+    if !cpu_dflt.contains("\"containerDiskInGb\":20") {
+        println("FAIL cpu-default-container-20"); fails = fails + 1
+    }
+    if !cpu_dflt.contains("\"vcpuCount\":4") {
+        println("FAIL cpu-default-vcpu-4"); fails = fails + 1
+    }
+    // A small (≤20) disk passes through to BOTH container and volume fallback.
+    let cpu_small = _runpod_cpu_resolve_body(img, pk, nm, 0, 15, 2, "")
+    if !cpu_small.contains("\"containerDiskInGb\":15") {
+        println("FAIL cpu-small-disk-passthrough: a ≤20 disk keeps its value"); fails = fails + 1
+    }
+
+    if fails == 0 {
+        println("runpod_cpu_disk_test PASS")
+        exit(0)
+    }
+    println("runpod_cpu_disk_test FAIL: " + to_string(fails) + " assertion(s)")
+    exit(1)
+}

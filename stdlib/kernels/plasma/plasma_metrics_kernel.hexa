@@ -218,6 +218,7 @@ pub fn coulomb_log_ei_high_T(t_e_ev: float, n_e_m3: float, z: float) -> float {
     // physical assumption; the value is not consumed by the formula in
     // this regime (intentional — matches NRL eq. as written).
     let _z = z   // accept-but-not-consumed at high-T regime
+    if t_e_ev <= 0.0 || n_e_m3 <= 0.0 { return 0.0 }   // T_e≤0 → /0; n_e≤0 → log domain
     let n_e_cm3 = n_e_m3 * 1.0e-6
     return 24.0 - log(sqrt(n_e_cm3) / t_e_ev)
 }

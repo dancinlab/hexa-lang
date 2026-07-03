@@ -29,6 +29,7 @@ use "stdlib/flame/tensor_lib"
 // chunk c spans [chunk_start(c), chunk_start(c+1)). When S is not a multiple
 // of N the first (S % N) chunks get one extra element (boundary case).
 pub fn ring_chunk_start(S: int, N: int, c: int) -> int {
+    if N <= 0 { return 0 }   // 0 ranks → S/N divide-by-zero
     let base = S / N
     let rem = S % N
     // each of the first `rem` chunks is (base+1); the rest are `base`.

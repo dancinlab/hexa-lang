@@ -29,26 +29,34 @@ pub fn json_str_field_last(body, key) {
     while i + nlen <= bn {
         if body.substring(i, i + nlen) == needle {
             let mut j = i + nlen
-            // skip to ':'
+            // KEY-position guard: a key is followed (after only whitespace) by ':'.
+            // A match that is a VALUE — e.g. needle "verdict" inside
+            // {"label":"verdict","status":"PASS"} — is followed by ',' or '}', so
+            // is_key stays false and it is correctly skipped. (The prior "skip
+            // arbitrary chars to the next ':'" matched value occurrences too.)
+            let mut is_key = false
             while j < bn {
                 let c = body.substring(j, j + 1)
-                if c == ":" { j = j + 1; break }
-                j = j + 1
-            }
-            // skip whitespace, expect opening '"'
-            let mut found_quote = false
-            while j < bn {
-                let c = body.substring(j, j + 1)
-                if c == "\"" { j = j + 1; found_quote = true; break }
+                if c == ":" { j = j + 1; is_key = true; break }
                 if c != " " { if c != "\t" { if c != "\n" { break } } }
                 j = j + 1
             }
-            if found_quote {
-                let start = j
+            if is_key {
+                // skip whitespace, expect opening '"'
+                let mut found_quote = false
                 while j < bn {
                     let c = body.substring(j, j + 1)
-                    if c == "\"" { last_val = body.substring(start, j); break }
+                    if c == "\"" { j = j + 1; found_quote = true; break }
+                    if c != " " { if c != "\t" { if c != "\n" { break } } }
                     j = j + 1
+                }
+                if found_quote {
+                    let start = j
+                    while j < bn {
+                        let c = body.substring(j, j + 1)
+                        if c == "\"" { last_val = body.substring(start, j); break }
+                        j = j + 1
+                    }
                 }
             }
             i = i + nlen

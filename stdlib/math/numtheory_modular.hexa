@@ -1,4 +1,4 @@
-// HEXA Standard Library — math/numtheory_modular
+// HEXA Standard Library — modular/multiplicative: sigma_k · Ramanujan tau · partition p(n) · divisor convolution · Eisenstein · lattice theta
 //
 // @version 0.1.0
 // @capabilities [pure]

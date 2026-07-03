@@ -1,0 +1,129 @@
+// stdlib/runtime/fs_write_core.hexa — RT-NATIVE leg B FS-R1 write-half.
+//
+// The hexa-source bodies for the LOW-LEVEL filesystem WRITE primitives
+// (truncating write + append) that runtime_core.c kept C-side (fopen/fwrite)
+// until this round. The FS write twin of the array-core READ-half
+// (stdlib/runtime/array_core.hexa) and the alloc-arena seed.
+//
+// SELF-CONTAINED (c1 — no `use`): fs.hexa `use`s self::rt::syscall +
+// self::rt::alloc, so flattening it for a frozen seed would re-export the whole
+// syscall + arena symbol set (122 globals) that the alloc seed ALREADY owns →
+// multiple-definition at the runtime.a ar. So the write prims live in THIS
+// standalone file with ZERO external `.globl` (the array_core model: the only
+// callable surfaces are the leaf intrinsics __hx_syscall6 / __hx_target_os /
+// __hx_target_arch, which codegen lowers inline — no symbol is emitted). The
+// per-target syscall numbers + open flags are inlined here (a frozen subset of
+// self/rt/syscall.hexa) rather than imported, keeping the seed dependency-free.
+//
+// CONTRACT: raw int args — path_cstr is a NUL-terminated C-string pointer, buf
+// is a byte-buffer pointer, len is the byte count. NO HexaVal unboxing in the
+// native body (the seed needs no runtime ABI), so the C runtime wrapper
+// (runtime_core_emit.hexa rt_write_bytes / rt_write_bytes_append, #ifdef
+// HEXA_RT_FS_NATIVE) extracts HX_STR(path) + the byte buffer and calls these —
+// mirroring how hexa_array_get C-wraps the bounds guard and delegates the
+// in-bounds element read to rt_array_get_native.
+//
+// O_WRONLY|O_CREAT|O_TRUNC + 0644 == the C `fopen(path,"wb")` semantics
+// (create-or-truncate for writing) that rt_write_bytes ships; O_APPEND mirrors
+// `fopen(path,"ab")` — so the native path is behaviour-identical to the
+// retained C `#else`. Returns bytes written (>=0) on success, the failing
+// syscall's negative -errno on open/write error.
+//
+// These bodies use the gen2-native-only leaf intrinsics (__hx_syscall6 etc.)
+// the hexat C-transpile bootstrap cannot lower, so they enter the shipped
+// runtime.a ONLY via the frozen self/native/fs_core_*.s seed ar'd by
+// stage_resolve_runtime_a::resolve_native_fs_core_seed.
+
+// ── leaf-intrinsic syscall shim (frozen subset of self/rt/syscall.hexa) ──
+//
+// __hx_syscall6(num, a..f) / __hx_target_os() / __hx_target_arch() are shipping
+// codegen leaf intrinsics — lowered inline (x86_64 `syscall` / arm64 `svc`), no
+// emitted symbol. Inlined here so the seed has no external dependency.
+@pure fn _fsw_is_linux() -> bool { return __hx_target_os() == 0 }
+@pure fn _fsw_is_arm64() -> bool { return __hx_target_arch() == 1 }
+
+@inline fn _fsw_sc3(n: int, a: int, b: int, c: int) -> int { return __hx_syscall6(n, a, b, c, 0, 0, 0) }
+@inline fn _fsw_sc1(n: int, a: int) -> int { return __hx_syscall6(n, a, 0, 0, 0, 0, 0) }
+
+// Linux syscall numbers (x86_64 + aarch64 unified for read/write/open/close).
+@pure fn _FSW_LINUX_WRITE() -> int { return 1 }
+@pure fn _FSW_LINUX_OPEN()  -> int { return 2 }
+@pure fn _FSW_LINUX_CLOSE() -> int { return 3 }
+// Darwin BSD-layer numbers (OR 0x2000000).
+@pure fn _FSW_DARWIN_WRITE() -> int { return 33554436 }  // 0x2000004
+@pure fn _FSW_DARWIN_OPEN()  -> int { return 33554437 }  // 0x2000005
+@pure fn _FSW_DARWIN_CLOSE() -> int { return 33554438 }  // 0x2000006
+
+// POSIX open flags — O_WRONLY is shared (1); O_CREAT/O_TRUNC/O_APPEND diverge.
+@pure fn _FSW_O_WRONLY() -> int { return 1 }
+@pure fn _FSW_O_CREAT_LINUX()  -> int { return 64 }    // 0x40
+@pure fn _FSW_O_TRUNC_LINUX()  -> int { return 512 }   // 0x200
+@pure fn _FSW_O_APPEND_LINUX() -> int { return 1024 }  // 0x400
+@pure fn _FSW_O_CREAT_DARWIN() -> int { return 512 }   // 0x200
+@pure fn _FSW_O_TRUNC_DARWIN() -> int { return 1024 }  // 0x400
+@pure fn _FSW_O_APPEND_DARWIN()-> int { return 8 }     // 0x008
+
+fn _fsw_open(path_cstr: int, flags: int, mode: int) -> int {
+    if _fsw_is_linux() { return _fsw_sc3(_FSW_LINUX_OPEN(), path_cstr, flags, mode) }
+    return _fsw_sc3(_FSW_DARWIN_OPEN(), path_cstr, flags, mode)
+}
+fn _fsw_write(fd: int, buf: int, len: int) -> int {
+    if _fsw_is_linux() { return _fsw_sc3(_FSW_LINUX_WRITE(), fd, buf, len) }
+    return _fsw_sc3(_FSW_DARWIN_WRITE(), fd, buf, len)
+}
+fn _fsw_close(fd: int) -> int {
+    if _fsw_is_linux() { return _fsw_sc1(_FSW_LINUX_CLOSE(), fd) }
+    return _fsw_sc1(_FSW_DARWIN_CLOSE(), fd)
+}
+
+// ── write-half native bodies ───────────────────────────────────────
+
+// fs_write_all_native: open(O_WRONLY|O_CREAT|O_TRUNC, 0644) → write whole
+// buffer (loop on partial writes) → close. == fopen(path,"wb")+fwrite.
+fn fs_write_all_native(path_cstr: int, buf: int, len: int) -> int {
+    let mut flags = _FSW_O_WRONLY()
+    if _fsw_is_linux() {
+        flags = flags + _FSW_O_CREAT_LINUX() + _FSW_O_TRUNC_LINUX()
+    } else {
+        flags = flags + _FSW_O_CREAT_DARWIN() + _FSW_O_TRUNC_DARWIN()
+    }
+    let fd = _fsw_open(path_cstr, flags, 420)   // 420 = 0644 (rw-r--r--)
+    if fd < 0 { return fd }
+    let mut written = 0
+    while written < len {
+        let n = _fsw_write(fd, buf + written, len - written)
+        if n <= 0 {
+            _fsw_close(fd)
+            if n < 0 { return n }
+            return written
+        }
+        written = written + n
+    }
+    _fsw_close(fd)
+    return written
+}
+
+// fs_append_all_native: open(O_WRONLY|O_CREAT|O_APPEND, 0644) → write whole
+// buffer → close. == fopen(path,"ab")+fwrite.
+fn fs_append_all_native(path_cstr: int, buf: int, len: int) -> int {
+    let mut flags = _FSW_O_WRONLY()
+    if _fsw_is_linux() {
+        flags = flags + _FSW_O_CREAT_LINUX() + _FSW_O_APPEND_LINUX()
+    } else {
+        flags = flags + _FSW_O_CREAT_DARWIN() + _FSW_O_APPEND_DARWIN()
+    }
+    let fd = _fsw_open(path_cstr, flags, 420)   // 0644
+    if fd < 0 { return fd }
+    let mut written = 0
+    while written < len {
+        let n = _fsw_write(fd, buf + written, len - written)
+        if n <= 0 {
+            _fsw_close(fd)
+            if n < 0 { return n }
+            return written
+        }
+        written = written + n
+    }
+    _fsw_close(fd)
+    return written
+}

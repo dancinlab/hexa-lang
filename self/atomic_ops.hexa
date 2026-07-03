@@ -124,3 +124,31 @@ fn is_atomic_builtin(name: string) -> bool {
     if name == "atomic_sub" { return true }
     return false
 }
+
+// ── Opt-in REAL hardware atomics (feat/real-concurrency-optin) ──────────────
+//
+// The AtomicValue layer above is a single-threaded VALUE-SEMANTICS simulation:
+// every op returns a NEW immutable struct, so it has no addressable shared
+// memory cell and therefore cannot carry true hardware-atomic semantics. That
+// is correct and byte-deterministic for the default single-threaded build and
+// stays the default — see state/rfc_real_concurrency_optin.md.
+//
+// Real hardware atomics require an ADDRESSABLE cell. The substrate for that
+// lives in the C runtime (self/native/thread_emit.hexa -> thread.c), behind
+// `#if defined(HEXA_THREADS)`: a slot table of `_Atomic int64_t` cells driven
+// by C11/GCC `__atomic_*` builtins (seq-cst), exposed to hexa as the
+// `atomic_cell_new / _load / _store / _add / _sub / _cas` runtime globals. The
+// thin hexa wrappers over those globals live in `stdlib/atomic_real.hexa`,
+// which is ONLY linkable in a `-DHEXA_THREADS` build (it references the gated
+// globals) and is NOT imported by any default closure — so default user builds
+// never see an undefined symbol and the runtime object stays byte-identical.
+//
+// `atomic_real_enabled()` is the runtime opt-in probe (env `HEXA_THREADS`).
+// It is pure hexa (no C-global reference) so it is safe to compile anywhere;
+// callers gate which API they reach for. In a single-threaded run the real
+// fetch_add/cas return the SAME results as the sim (the test oracle in
+// self/test_real_atomic.hexa); the win is only observable under real OS
+// threads, which is the follow-on spawn slice (RFC §c, design-only here).
+fn atomic_real_enabled() -> bool {
+    return env("HEXA_THREADS") != ""
+}

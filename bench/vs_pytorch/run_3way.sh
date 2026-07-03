@@ -60,8 +60,10 @@ PY
 # steps = nbatch * epochs; we set NSAMP/EPOCHS so steps ~= STEPS and time the wall.
 # Flame's clm_prod prints "[M5-BATCH] ... steps=N" — we parse it for exact count.
 flame_run() {
+  # async follows CLM_PROD_DEVRESIDENT=1 (production fast path, +9% win r5: 159->143ms).
+  # HEXA_CUDA_ASYNC=0 was a historical race-cure (#3932, now fixed) that masked the measured win.
+  # async-ON is also MORE deterministic (F-OP15 max|dW|=0 vs async-OFF 1-ULP hole 2.78e-17).
   CUDA_VISIBLE_DEVICES=0 CLM_PROD_DEVRESIDENT=1 CLM_PROD_DEVFEED=1 CLM_PROD_BATCHED=1 \
-    HEXA_CUDA_ASYNC=0 \
     CLM_PROD_D=$D CLM_PROD_T=$T CLM_PROD_E=$E CLM_PROD_BATCH=$BATCH \
     CLM_PROD_NSAMP=$FLAME_NSAMP CLM_PROD_EPOCHS=$FLAME_EPOCHS \
     CLM_PROD_CORPUS="$WORK/corpus.txt" \

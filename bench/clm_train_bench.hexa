@@ -76,24 +76,46 @@ fn lcg_randn() -> float {
     return sqrt(-2.0 * log(u1)) * cos(6.2831853 * u2)
 }
 
-// ── Init raw f32 buffer with small random values ────────────────
-fn init_random_f32(n: int, scale: float) -> int {
-    let ptr = alloc_raw(n * 4)
+// ── Buffer initialisers (fill-in-place, NOT alloc-and-return) ───
+//
+// BENCH-CLM-TRAIN-SEGFAULT root-cause (2026-06-19):
+// `alloc_raw` (→ hexa_ptr_alloc → hexa_arena_alloc) bump-allocates from the
+// SAME runtime arena that the default-ON val-arena (HEXA_VAL_ARENA, runtime_
+// core_emit.hexa) scope-rewinds on every function return. A helper that
+// `alloc_raw`s a buffer and RETURNS the pointer hits __hexa_fn_arena_return,
+// which short-circuits primitive tags (the raw ptr is a TAG_INT) and pops the
+// scope — rewinding the arena and FREEING the just-allocated region. The next
+// call re-bumps from the same watermark, so EVERY init_* call returned the
+// identical pointer; all buffers aliased, targets[] got clobbered by logits[]
+// writes, and the CE loss read logits_ptr[row_off + garbage_t*4] ~3.7 GB OOB →
+// SIGSEGV. (Confirmed: HEXA_VAL_ARENA=0 makes alloc_raw return distinct ptrs and
+// the bench passes; minimal repro = 4× alloc_raw all returning the same address.)
+//
+// Fix (harness-side, release-safe — the runtime val-arena ↔ raw-pointer
+// aliasing is a separate runtime-core lane): allocate every buffer INLINE in
+// run_bench_scale (one scope, rewound only when run_bench_scale itself returns,
+// long after every use) and pass the live pointer to a void fill_* helper. No
+// helper returns a raw alloc_raw pointer across a val-arena scope boundary, so
+// nothing is rewound out from under us — and the bench no longer depends on
+// HEXA_VAL_ARENA being off.
+fn fill_random_f32(ptr: int, n: int, scale: float) {
     let mut i = 0
     while i < n {
         write_f32(ptr, i * 4, lcg_randn() * scale)
         i = i + 1
     }
-    return ptr
 }
 
-fn init_zeros_f32(n: int) -> int {
-    return alloc_raw(n * 4)
+fn fill_zeros_f32(ptr: int, n: int) {
+    let mut i = 0
+    while i < n {
+        write_f32(ptr, i * 4, 0.0)
+        i = i + 1
+    }
 }
 
-// ── Init random targets (int32 in [0, V)) ──────────────────────
-fn init_random_targets(S: int, V: int) -> int {
-    let ptr = alloc_raw(S * 4)
+// ── Fill random targets (int32 in [0, V)) ──────────────────────
+fn fill_random_targets(ptr: int, S: int, V: int) {
     let mut i = 0
     while i < S {
         _rng_state = (_rng_state * 1103515245 + 12345) % 2147483647
@@ -101,7 +123,6 @@ fn init_random_targets(S: int, V: int) -> int {
         write_i32(ptr, i * 4, t)
         i = i + 1
     }
-    return ptr
 }
 
 // ── CE loss fused (inline to avoid import) ──────────────────────
@@ -226,26 +247,39 @@ fn run_bench_scale(cfg: ScaleConfig) {
     let iters = cfg.ITERS
 
     // ── Allocate weights (only LM head LoRA for benchmark) ──────
+    // All buffers are allocated INLINE here (see fill_* note above): the raw
+    // alloc_raw pointers must never cross a function-return val-arena scope
+    // boundary, or the default-ON val-arena rewinds the arena and aliases them.
     let n_ulm = D * R
     let n_vlm = R * V
-    let U_lmh = init_random_f32(n_ulm, 0.02)
-    let V_lmh = init_random_f32(n_vlm, 0.02)
+    let U_lmh = alloc_raw(n_ulm * 4)
+    let V_lmh = alloc_raw(n_vlm * 4)
+    fill_random_f32(U_lmh, n_ulm, 0.02)
+    fill_random_f32(V_lmh, n_vlm, 0.02)
 
     // ── Optimizer state for V_lmh ───────────────────────────────
-    let m_vlm = init_zeros_f32(n_vlm)
-    let v_vlm = init_zeros_f32(n_vlm)
+    let m_vlm = alloc_raw(n_vlm * 4)
+    let v_vlm = alloc_raw(n_vlm * 4)
+    fill_zeros_f32(m_vlm, n_vlm)
+    fill_zeros_f32(v_vlm, n_vlm)
 
     // ── Input and targets ───────────────────────────────────────
-    let input_ptr = init_random_f32(S * D, 0.1)
-    let targets_ptr = init_random_targets(S, V)
+    let input_ptr = alloc_raw(S * D * 4)
+    let targets_ptr = alloc_raw(S * 4)
+    fill_random_f32(input_ptr, S * D, 0.1)
+    fill_random_targets(targets_ptr, S, V)
 
     // ── Scratch buffers ─────────────────────────────────────────
-    let scratch_sr = init_zeros_f32(S * R)
-    let logits_ptr = init_zeros_f32(S * V)
-    let dlogits_ptr = init_zeros_f32(S * V)
+    let scratch_sr = alloc_raw(S * R * 4)
+    let logits_ptr = alloc_raw(S * V * 4)
+    let dlogits_ptr = alloc_raw(S * V * 4)
+    fill_zeros_f32(scratch_sr, S * R)
+    fill_zeros_f32(logits_ptr, S * V)
+    fill_zeros_f32(dlogits_ptr, S * V)
 
     // ── Gradient buffer for V_lmh ───────────────────────────────
-    let grad_vlm = init_zeros_f32(n_vlm)
+    let grad_vlm = alloc_raw(n_vlm * 4)
+    fill_zeros_f32(grad_vlm, n_vlm)
 
     // ── Warmup (1 step, discard) ────────────────────────────────
     lora_forward(input_ptr, U_lmh, V_lmh, S, D, R, V, scratch_sr, logits_ptr)
@@ -381,3 +415,4 @@ run_bench_scale(medium)
 
 println("")
 println("=== Done ===")
+

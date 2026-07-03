@@ -172,6 +172,8 @@ pub fn max_energy_transfer_mev(ke_mev: float, m_mev: float,
 pub fn bethe_bloch_dedx(ke_mev: float, mp_mev: float, zp_charge: int,
                         target_z: int, target_a: float,
                         target_i_ev: float, me_mev: float) -> [float] {
+    // target_a≤0 → Z/A divide-by-zero; target_i_ev≤0 → I² divisor 0 / log domain.
+    if target_a <= 0.0 || target_i_ev <= 0.0 { return [] }
     let kin = relativistic_kinematics(ke_mev, mp_mev)
     let gamma = kin[0]
     let beta2 = kin[1]

@@ -19,6 +19,7 @@
 
 @pure
 pub fn tls13_ee_extensions_length(body: [int]) -> int {
+    if len(body) < 2 { return 0 }   // truncated EncryptedExtensions (<2 bytes) → no uint16 length
     return ((body[0] & 0xFF) << 8) | (body[1] & 0xFF)
 }
 

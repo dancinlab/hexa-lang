@@ -208,10 +208,11 @@ let mut g_lora_active     = nil
 // ── bf16 weight pack helpers ───────────────────────────────────────
 
 fn alm_pack_bf16(f32_data, numel) {
+    // boxing-unbox r2: f32_data is a farr32 handle (4 B/elem). Index via farr32_get.
     let f32_buf = alloc_raw(numel * 4)
     let mut i = 0
     while i < numel {
-        write_f32(f32_buf, i * 4, f32_data[i])
+        write_f32(f32_buf, i * 4, farr32_get(f32_data, i))
         i = i + 1
     }
     let bf16_buf = bf16_pack(f32_buf, numel)
@@ -220,10 +221,11 @@ fn alm_pack_bf16(f32_data, numel) {
 }
 
 fn alm_pack_f32(f32_data, numel) {
+    // r2: farr32 handle in. Index via farr32_get.
     let buf = alloc_raw(numel * 4)
     let mut i = 0
     while i < numel {
-        write_f32(buf, i * 4, f32_data[i])
+        write_f32(buf, i * 4, farr32_get(f32_data, i))
         i = i + 1
     }
     return buf

@@ -160,6 +160,7 @@ pub fn qforge_chip_scf_real_band_min(a: float, mmax: int, k: float,
 pub fn qforge_chip_scf_real_hd_chain(a: float, mmax: int,
                                      vscr_g0: float, vbragg: float, nsite: int) -> [float] {
     // self-consistent band: ε₀(Γ) and ε₀(zone boundary) of the lowest band.
+    if a <= 0.0 { return [] }   // lattice length a≤0 → π/a Inf
     let kbz = _pi_r6() / a
     let eps_d = qforge_chip_scf_real_band_min(a, mmax, 0.0, vscr_g0, vbragg)      // Γ
     let eps_bz = qforge_chip_scf_real_band_min(a, mmax, kbz, vscr_g0, vbragg)     // π/a

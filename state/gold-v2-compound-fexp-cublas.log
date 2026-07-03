@@ -1,0 +1,23 @@
+[f32-measure] cuda_available = 1
+[f32-measure] loaded vocab=256 d=1024 nlay=24 nh=16 block=512
+[f32-measure] weights cast to f32 mirror (hoisted, once)
+
+=== (1) CORRECTNESS — f32-e2e vs FP64 batched (argmax-faithful) ===
+[FP32-E2E-FIRED] farr_matmul_f32_gpu own mma.sync m16n8k8, no d2f/f2d cast (S1 #21 gold, opt-in)
+[FP32-E2E-CUBLAS-FIRED] cublasGemmEx COMPUTE_32F_FAST_TF32 on f32 decode matmul (B-probe GEMM ceiling)
+[ATTN-FLASH-F32-FIRED] fused warp-per-head online-softmax f32 flash-decode (S2 wall#2, no roundtrip/OOM)
+[ATTN-FLASH-F32EXP-FIRED] fp32 __expf online softmax (RANK-1 gold-v2, opt-in HEXA_ATTN_F32EXP)
+[OWN-GEMM-FIRED] _hx_k_gemm DEVICE path (no cuBLAS)
+[EAGER-DEVGLUE-FIRED] _hx_k_gelu device CUDA-erf GELU (separate launch, P1B-a' device-resident eager ref)
+[f32-correctness N=2] f32-vs-FP64 per-frag argmax = 23/24   worst max|Δ| = 0.03112823206130244   => FAIL@701
+[f32-correctness N=4] f32-vs-FP64 per-frag argmax = 46/48   worst max|Δ| = 0.03112823206130244   => FAIL@3
+
+=== (2) THROUGHPUT — median of 3, FP64 single-stream baseline ===
+[f32 baseline FP64 single-stream] samples(ms/step)=17.25,17.25,17.25  median ms/tok=17.25
+[f32-throughput N=1] median ms/step=3.875  per-frag ms/tok=3.875  speedup-vs-FP64single(17.25)=4.451612903225806x
+[f32-throughput N=4] median ms/step=4.958333333333333  per-frag ms/tok=1.2395833333333333  speedup-vs-FP64single(17.25)=13.915966386554624x
+[f32-throughput N=8] median ms/step=5.583333333333333  per-frag ms/tok=0.6979166666666666  speedup-vs-FP64single(17.25)=24.716417910447763x
+[f32-throughput N=16] median ms/step=7.0  per-frag ms/tok=0.4375  speedup-vs-FP64single(17.25)=39.42857142857143x
+[f32-throughput N=32] median ms/step=9.791666666666666  per-frag ms/tok=0.3059895833333333  speedup-vs-FP64single(17.25)=56.374468085106386x
+
+decode_f32_measure: DONE

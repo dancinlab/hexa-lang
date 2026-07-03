@@ -266,6 +266,157 @@ fn ml_parse_import_alias(line) {
 // `pub fn`/`pub let`/`pub const`/`pub struct`/`pub enum` decls. Returns
 // a flat string list. Used by ml_apply_alias_prefix to also rewrite
 // intra-module references after prefixing the declarations.
+// ── ING #33 (#10/#11 class): top-level global collision mangle ──────
+//
+// MEASURED root cause (summer linux clang-18, minimal 2-module repro):
+// the flatten emits each module's top-level `let`/`const` globals verbatim.
+// codegen lowers a module-level `let CONFIG = …` (self/codegen.hexa:1374) /
+// `const CONFIG = …` (:1318) to a bare `HexaVal CONFIG;` tentative def. When
+// two transitively-`use`d modules each declare a top-level `CONFIG`, the
+// single flattened TU contains two `HexaVal CONFIG;` tentative defs for ONE
+// C symbol — the two modules' globals SILENTLY ALIAS into one storage slot
+// (last initializer wins). The shipping `hexa build`/`run` path (this
+// module_loader flatten) had NO global-collision pass — only `pub`-alias
+// prefixing (ml_apply_alias_prefix) and `fn main` neutralization — so
+// `get_a()`/`get_b()` both read the same CONFIG (repro: prints `a=2 b=2`,
+// must be `a=1 b=2`). NB: because both tentative defs land in the SAME TU,
+// -fno-common does NOT error (tentative defs of one symbol are legal within
+// a TU) — the bug is a silent wrong-answer, not a link failure, so a
+// -fcommon band-aid would be both wrong AND ineffective. Fix = the same
+// collision-gated per-file name-mangle that tool/flatten_imports.hexa uses
+// for fn/struct/enum, extended to top-level globals: detect names that
+// appear as a top-level global in 2+ files, then rename only those to
+// `<FileBase>__name` at both decl- and reference-sites, per file. Names
+// that occur once (the common case, incl. a genuinely-shared single-def
+// `pub let`) are left byte-identical.
+
+// Scan one module source for top-level (first-column) `let`/`const` global
+// declaration names, INCLUDING an optional `pub ` and `let mut`. Used for
+// cross-module collision detection only.
+fn ml_scan_global_names(src) {
+    let mut out = []
+    let lines = ml_split_lines(src)
+    let n = len(lines)
+    let mut i = 0
+    while i < n {
+        let line = lines[i]
+        // top-level = no leading whitespace (first column).
+        let indented = ml_starts_with(line, " ") || ml_starts_with(line, "\t")
+        if !indented {
+            let t = ml_trim_left(line)
+            if !ml_starts_with(t, "//") {
+                // strip optional leading `pub `
+                let body = if ml_starts_with(t, "pub ") { t.substring(4, len(t)) } else { t }
+                let mut rest = ""
+                if ml_starts_with(body, "let ") {
+                    let lr = ml_trim_left(body.substring(4, len(body)))
+                    rest = if ml_starts_with(lr, "mut ") { lr.substring(4, len(lr)) } else { lr }
+                } else if ml_starts_with(body, "const ") {
+                    rest = ml_trim_left(body.substring(6, len(body)))
+                }
+                if len(rest) > 0 {
+                    let rn = len(rest)
+                    let mut j = 0
+                    while j < rn {
+                        let c = rest[j]
+                        let alpha = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
+                        let dgt   = c >= '0' && c <= '9'
+                        if !alpha && !dgt { break }
+                        j = j + 1
+                    }
+                    if j > 0 { out.push(rest.substring(0, j)) }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn ml_ends_with_dot_hexa(s) {
+    let n = len(s)
+    if n < 5 { return false }
+    return s.substring(n - 5, n) == ".hexa"
+}
+
+// true for generated sources (`*.gen.hexa`) — skipped from the global
+// collision scan/mangle (unique auto-emitted idents · multi-MB churn).
+fn ml_ends_with_dot_hexa_gen(s) {
+    let n = len(s)
+    if n < 9 { return false }
+    return s.substring(n - 9, n) == ".gen.hexa"
+}
+
+// `<FileBase>__` mangle prefix from a path. First char upper-cased so the
+// hexa parser never reads `let foo {` as a struct-literal (same quirk
+// tool/flatten_imports.hexa:fl_mangle_prefix avoids).
+fn ml_global_mangle_prefix(path) {
+    let UP = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    // basename without extension
+    let n = len(path)
+    let mut slash = -1
+    let mut i = 0
+    while i < n {
+        if path[i] == '/' { slash = i }
+        i = i + 1
+    }
+    let mut base = path.substring(slash + 1, n)
+    if ml_ends_with_dot_hexa(base) {
+        base = base.substring(0, len(base) - 5)
+    }
+    let bn = len(base)
+    if bn == 0 { return "Mod__" }
+    let first = base.substring(0, 1)
+    let rest = base.substring(1, bn)
+    let o = ord(first)
+    let mut upper = first
+    if o >= 97 && o <= 122 {
+        let idx = o - 97
+        upper = UP.substring(idx, idx + 1)
+    }
+    return upper + rest + "__"
+}
+
+// Word-boundary rename of `name` → `prefix+name` at decl- and ref-sites in
+// `src`. Mirrors ml_apply_alias_prefix's lhs/rhs-delimiter sandwich so we
+// never rewrite a substring of a longer identifier (e.g. `CONFIG` inside
+// `CONFIG_MAX`).
+fn ml_word_mangle_global(src, name, prefix) {
+    if len(name) == 0 { return src }
+    if src.index_of(name) < 0 { return src }
+    let repl_name = prefix + name
+    let mut lhs_set = []
+    lhs_set.push(" ") lhs_set.push("\n") lhs_set.push("\t")
+    lhs_set.push("(") lhs_set.push(",") lhs_set.push("=")
+    lhs_set.push("[") lhs_set.push("{") lhs_set.push(";")
+    lhs_set.push("!") lhs_set.push("+") lhs_set.push("-")
+    lhs_set.push("*") lhs_set.push("/") lhs_set.push("<")
+    lhs_set.push(">") lhs_set.push("&") lhs_set.push("|")
+    lhs_set.push(":") lhs_set.push("?")
+    let mut rhs_set = []
+    rhs_set.push("(") rhs_set.push(" ") rhs_set.push("\n") rhs_set.push("\t")
+    rhs_set.push(")") rhs_set.push(",") rhs_set.push(";")
+    rhs_set.push("[") rhs_set.push("]") rhs_set.push("=")
+    rhs_set.push(".") rhs_set.push("+") rhs_set.push("-")
+    rhs_set.push("*") rhs_set.push("/") rhs_set.push("<")
+    rhs_set.push(">") rhs_set.push("}") rhs_set.push(":")
+    let mut s = src
+    let mut li = 0
+    while li < len(lhs_set) {
+        let lhs = lhs_set[li]
+        let mut ri = 0
+        while ri < len(rhs_set) {
+            let rhs = rhs_set[ri]
+            let needle = lhs + name + rhs
+            let r      = lhs + repl_name + rhs
+            s = s.replace(needle, r)
+            ri = ri + 1
+        }
+        li = li + 1
+    }
+    return s
+}
+
 fn ml_collect_pub_names(src) {
     let mut out = []
     let lines = ml_split_lines(src)
@@ -622,20 +773,36 @@ fn ml_resolve_project_root(imp) {
         let v = ml_try_path_variants(cand)
         if len(v) > 0 { return v }
     }
+    // Working-tree precedence (2026-06-27) — try the BARE cwd-relative path
+    // BEFORE the install-dir snapshot. When `hexa run compiler/<x>/y.hexa` is
+    // invoked from a repo checkout, the developer's WORKING TREE (cwd) is the
+    // authoritative source for repo-relative `use "compiler/…"` imports —
+    // matching cargo/go/python project-tree semantics (the canonical-DX
+    // expectation). Previously the install-dir snapshot (~/.hx) was probed
+    // first, so a STALE install shadowed fresh working-tree edits: e.g. a
+    // `~/.hx` tree built before #4091 lacks identity_engine::verify_composition,
+    // so drill.hexa (read fresh from cwd, carrying the verify_composition call)
+    // hit "call to undeclared function 'verify_composition'" at clang — the
+    // documented stale-snapshot trap (the entry file resolves cwd-fresh but its
+    // imports resolved install-stale, a split-brain flatten). cwd-first closes
+    // that split: both the entry and its imports come from one tree.
+    let v2 = ml_try_path_variants(imp)
+    if len(v2) > 0 { return v2 }
     // Phase3 foundation — install-relative fallback for repo-root paths like
     // `compiler/<x>/static_index`. When HEXA_LANG isn't exported (cron /
-    // launchd / subagent / sibling-cwd smoke harnesses), env_hexa_install_dir
-    // is derived from argv[0] (~/.hx/bin/hexa or repo /hexa.real) and gives
-    // us the same repo root that HEXA_LANG would. Mirrors the install-relative
-    // probe already used by ml_resolve_stdlib for `stdlib/*` paths.
+    // launchd / subagent / sibling-cwd smoke harnesses) AND the bare cwd path
+    // above does not exist (out-of-repo cwd), env_hexa_install_dir — derived
+    // from argv[0] (~/.hx/bin/hexa or repo /hexa.real) — gives the same repo
+    // root HEXA_LANG would. Mirrors the install-relative probe ml_resolve_stdlib
+    // uses for `stdlib/*`. byteeq-neutral: every build/self-host path exports
+    // HEXA_LANG (tool/build_hexac · build_hexa_cli · verify_hexa_cc_regen …),
+    // which returns above before this reorder is ever reached.
     let inst = env_hexa_install_dir()
     if len(inst) > 0 {
         let cand_inst = ml_join_path(inst, imp)
         let vi = ml_try_path_variants(cand_inst)
         if len(vi) > 0 { return vi }
     }
-    let v2 = ml_try_path_variants(imp)
-    if len(v2) > 0 { return v2 }
     return ""
 }
 
@@ -1288,6 +1455,45 @@ fn load_module(path) {
     hdr.push("\n// order:  topo (leaves-first)\n\n")
     flat_parts.push(hdr.join(""))
 
+    // ── ING #33: phase-1 — detect top-level globals that collide across
+    // files. A name is "collided" iff it is declared as a top-level
+    // `let`/`const` global in 2+ distinct files. Only collided names are
+    // mangled in phase-2 (the emit loop); single-occurrence globals (incl.
+    // a genuinely-shared single-def `pub let`) stay byte-identical, so the
+    // no-collision common case is unperturbed. *.gen.hexa files use
+    // auto-emitted unique idents (atlas/embed tables) — skip them from the
+    // scan to avoid O(N) substring churn on multi-MB generated sources.
+    let mut g_seen_hs = ml_hset_new()
+    let mut g_collided_hs = ml_hset_new()
+    let mut g_collided_parts = []
+    let mut gi = 0
+    while gi < m {
+        let gf = g_order_parts[gi]
+        if !ml_ends_with_dot_hexa_gen(gf) {
+            let gsrc = read_file(gf)
+            let gnames = ml_scan_global_names(gsrc)
+            let gn = len(gnames)
+            let mut gj = 0
+            while gj < gn {
+                let nm = gnames[gj]
+                if ml_hset_has(g_seen_hs, nm) {
+                    if !ml_hset_has(g_collided_hs, nm) {
+                        g_collided_hs = ml_hset_add(g_collided_hs, nm)
+                        g_collided_parts.push(nm)
+                    }
+                } else {
+                    g_seen_hs = ml_hset_add(g_seen_hs, nm)
+                }
+                gj = gj + 1
+            }
+        }
+        gi = gi + 1
+    }
+    let g_collided_count = len(g_collided_parts)
+    if g_collided_count > 0 {
+        eprintln("[module_loader] collided top-level globals mangled: " + g_collided_parts.join("|"))
+    }
+
     let mut ei = 0
     while ei < m {
         let f = g_order_parts[ei]
@@ -1309,6 +1515,28 @@ fn load_module(path) {
                 body = _inert + body.substring(8, len(body))
             }
             body = body.replace("\nfn main(", "\n" + _inert)
+        }
+        // ── ING #33: phase-2 — mangle collided top-level globals in this
+        // file's body to `<FileBase>__name` (decl- and ref-sites). Gated on
+        // g_collided_count so non-colliding builds skip the pass entirely
+        // (byte-identical to pre-fix output). *.gen.hexa skipped (see phase-1).
+        if g_collided_count > 0 && !ml_ends_with_dot_hexa_gen(f) {
+            let mfx = ml_global_mangle_prefix(f)
+            let mdecls = ml_scan_global_names(body)
+            let mdn = len(mdecls)
+            let mut mdi = 0
+            // only mangle names this file actually declares AND that collide,
+            // so file A's reference to a *non-collided* global is untouched and
+            // a collided name is prefixed with the DECLARING file's base.
+            let mut applied_hs = ml_hset_new()
+            while mdi < mdn {
+                let nm = mdecls[mdi]
+                if ml_hset_has(g_collided_hs, nm) && !ml_hset_has(applied_hs, nm) {
+                    applied_hs = ml_hset_add(applied_hs, nm)
+                    body = ml_word_mangle_global(body, nm, mfx)
+                }
+                mdi = mdi + 1
+            }
         }
         // RFC-016 P1 (I1-IMPORT-ALIAS) emit-phase transformations:
         //   (1) caller-side: rewrite this file's `<alias>.<sym>` references

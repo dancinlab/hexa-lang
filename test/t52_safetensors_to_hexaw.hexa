@@ -111,20 +111,22 @@ must("shape[0] == [3]", len(hxw.shapes[0]) == 1 && hxw.shapes[0][0] == 3)
 must("shape[1] == [2,2]", len(hxw.shapes[1]) == 2 && hxw.shapes[1][0] == 2 && hxw.shapes[1][1] == 2)
 
 // ── 5. Values (f32 round-trip must be bit-exact) ────────
+//  boxing-unbox r2: datas[i] is a farr32 handle; index via farr32_get,
+//  size via hexaw_count.
 let t0 = hxw.datas[0]
-must("t0 len 3", len(t0) == 3)
-must("t0[0] == 1.0", t0[0] == 1.0)
-must("t0[1] == -2.0", t0[1] == -2.0)
-must("t0[2] == 0.5", t0[2] == 0.5)
+must("t0 len 3", hexaw_count(hxw, "t0") == 3)
+must("t0[0] == 1.0", farr32_get(t0, 0) == 1.0)
+must("t0[1] == -2.0", farr32_get(t0, 1) == -2.0)
+must("t0[2] == 0.5", farr32_get(t0, 2) == 0.5)
 
 // ── 6. BF16 round-trip — bit-exact for values representable
 //       in bf16 mantissa (all whole floats below 256). ──
 let t1 = hxw.datas[1]
-must("t1 len 4", len(t1) == 4)
-must("t1[0] == 1.0", t1[0] == 1.0)
-must("t1[1] == 2.0", t1[1] == 2.0)
-must("t1[2] == 3.0", t1[2] == 3.0)
-must("t1[3] == 4.0", t1[3] == 4.0)
+must("t1 len 4", hexaw_count(hxw, "t1") == 4)
+must("t1[0] == 1.0", farr32_get(t1, 0) == 1.0)
+must("t1[1] == 2.0", farr32_get(t1, 1) == 2.0)
+must("t1[2] == 3.0", farr32_get(t1, 2) == 3.0)
+must("t1[3] == 4.0", farr32_get(t1, 3) == 4.0)
 
 // ── 7. Magic byte sanity on file ────────────────────────
 let magic_bytes = read_file_bytes(hxw_path)
@@ -139,6 +141,6 @@ hexaw_save(legacy, ["leg"], [[2]], [[7.25, -3.5]])
 let lrec = hexaw_load(legacy)
 must("legacy 1 tensor", len(lrec.names) == 1)
 must("legacy name", lrec.names[0] == "leg")
-must("legacy values", lrec.datas[0][0] == 7.25 && lrec.datas[0][1] == -3.5)
+must("legacy values", farr32_get(lrec.datas[0], 0) == 7.25 && farr32_get(lrec.datas[0], 1) == -3.5)
 
 if ok { println("PASS t52_safetensors_to_hexaw") } else { println("FAIL t52_safetensors_to_hexaw") }

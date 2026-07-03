@@ -1,0 +1,361 @@
+self_test_miscompile_class_m10_if_body_fold_reassign	A_PASS		rc=0
+self_test_miscompile_class_m11_match_arm_fold_reassign	B_EMIT		HX0012
+self_test_miscompile_class_m1_hex_literal	B_EMIT		
+self_test_miscompile_class_m2_fn_body_aliasing	A_PASS		rc=0
+self_test_miscompile_class_m3_string_compare	C_DIFFER		nrc=72 crc=0
+self_test_miscompile_class_m4_two_reg_value_abi	A_PASS		rc=0
+self_test_miscompile_class_m5_linker_reloc_kinds	A_PASS		rc=0
+self_test_miscompile_class_m6_index_slice_charcode	A_PASS		rc=0
+self_test_miscompile_class_m7_struct_ctor_fields	A_PASS		rc=0
+self_test_miscompile_class_m8_comptime_fold_loop_reassign	A_PASS		rc=0
+self_test_miscompile_class_m9_while_cond_fold_reassign	A_PASS		rc=0
+self_test_miscompile_zero_c10_try_catch	A_PASS		rc=0
+self_test_miscompile_zero_c1_hex_literal	A_PASS		rc=0
+self_test_miscompile_zero_c2_stack_locals	A_PASS		rc=0
+self_test_miscompile_zero_c3_struct_ctor	A_PASS		rc=0
+self_test_miscompile_zero_c4_f64_literal	A_PASS		rc=0
+self_test_miscompile_zero_c5_multi_fn_alias	A_PASS		rc=0
+self_test_miscompile_zero_c6_closures	A_PASS		rc=0
+self_test_miscompile_zero_c7_recursion_arrays	A_PASS		rc=0
+self_test_miscompile_zero_c8_string_methods	A_PASS		rc=0
+self_test_miscompile_zero_c9_match_control	A_PASS		rc=0
+self_test_miscompile_zero_g1_hex_corpus	A_PASS		rc=0
+self_test_miscompile_zero_g2_stp_ldp_corpus	A_PASS		rc=0
+self_test_test_attr_mandatory	B_EMIT	IMPORT	HX2001
+self_test_test_module_gate	C_DIFFER	IMPORT	nrc=1 crc=0
+self_test_test_tape_grammar	C_DIFFER	IMPORT	nrc=1 crc=0
+test_atlas_aliases_smoke	B_LD	IMPORT	/tmp/r22aud2/test_atlas_aliases_smoke.flat.hexa:587:(.text+0x509e): un
+test_atlas_atom_meta_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+test_atlas_cycle_append_smoke	B_EMIT	IMPORT	HX2001
+test_atlas_doctrine_smoke	B_LD	IMPORT	/tmp/r22aud2/test_atlas_doctrine_smoke.flat.hexa:587:(.text+0x509e): u
+test_atlas_materials_limits_smoke	B_LD	IMPORT	/tmp/r22aud2/test_atlas_materials_limits_smoke.flat.hexa:587:(.text+0x
+test_atlas_n6_axes_smoke	B_LD	IMPORT	/tmp/r22aud2/test_atlas_n6_axes_smoke.flat.hexa:587:(.text+0x509e): un
+test_atlas_real_limits_smoke	B_LD	IMPORT	/tmp/r22aud2/test_atlas_real_limits_smoke.flat.hexa:587:(.text+0x509e)
+test_atlas_tecsl_verify_smoke	B_EMIT	IMPORT	HX2006
+test_atlas_verify_smoke	B_EMIT	IMPORT	HX2006
+test_atlas_wave3_smoke	B_LD	IMPORT	/tmp/r22aud2/test_atlas_wave3_smoke.flat.hexa:587:(.text+0x509e): unde
+test_auto_t59_testgen_fixture_prop_tests	C_DIFFER		nrc=139 crc=1
+test_calc_cli_smoke	C_DIFFER	IMPORT	nrc=1 crc=0
+test_catalan_combinatorial_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+test_congruence_chain_engine_smoke	C_DIFFER	IMPORT	nrc=1 crc=0
+test_convergence_cluster_smoke	C_DIFFER	IMPORT	nrc=1 crc=0
+test_deck_gen_smoke	B_EMIT	IMPORT	HX2001
+test_deck_orchestration_selftest	B_EMIT	IMPORT	HX2001
+test_deck_rtsc_bytecompat	B_EMIT	IMPORT	HX2001
+test_deck_validate_gate_selftest	B_EMIT	IMPORT	HX2001
+test_dft_fanout_plan_selftest	A_PASS		rc=0
+test_divisor_field_theory_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+test_doc_test_own	B_LD	IMPORT	/tmp/r22aud2/test_doc_test_own.flat.hexa:576:(.text+0x7b08): undefined
+test_doc_verify_n6arch	B_LD	IMPORT	/tmp/r22aud2/test_doc_verify_n6arch.flat.hexa:576:(.text+0x7b08): unde
+test_egyptian_fraction_smoke	A_PASS	IMPORT	rc=0
+test_factorial_structure_smoke	A_PASS	IMPORT	rc=0
+test_fixtures_annot_sample	B_EMIT		HX2001
+test_fixtures_bubble_n8	C_DIFFER		nrc=139 crc=1
+test_fixtures_bubble_n8.rewritten	C_DIFFER		nrc=139 crc=1
+test_fixtures_bubble_n8_swaphelper	C_DIFFER		nrc=139 crc=1
+test_fixtures_bubble_n8_swaphelper.rewritten	C_DIFFER		nrc=139 crc=1
+test_fixtures_exec_eq_int_lint_fail_direct_eq_zero	A_PASS		rc=0
+test_fixtures_exec_eq_int_lint_fail_direct_neq_zero	B_LD		(.text+0x1b): undefined reference to `main'
+test_fixtures_exec_eq_int_lint_fail_inverse	A_PASS		rc=0
+test_fixtures_exec_eq_int_lint_fail_let_bound	B_LD		(.text+0x1b): undefined reference to `main'
+test_fixtures_exec_eq_int_lint_pass_proper_api	B_LD		/tmp/legb-r22-3488050/test/fixtures/exec_eq_int_lint/pass_proper_api.h
+test_fixtures_exec_eq_int_lint_pass_string_capture	A_PASS		rc=0
+test_fixtures_exec_eq_int_lint_pass_string_compare	A_PASS		rc=0
+test_fixtures_run_bubble_rewrite_test	B_LD		/tmp/legb-r22-3488050/test/fixtures/run_bubble_rewrite_test.hexa:14:(.
+test_flame_ag_derive_test	B_EMIT	IMPORT	HX2001
+test_flame_ag_extract_sd11_compile_test	B_EMIT	IMPORT	HX2001
+test_flame_ag_extract_sd12_compile_test	B_EMIT	IMPORT	HX2001
+test_flame_ag_extract_sd13_compile_test	B_EMIT	IMPORT	HX2001
+test_flame_ag_extract_sd14_compile_test	B_EMIT	IMPORT	HX2001
+test_flame_ag_extract_test	B_EMIT	IMPORT	HX2001
+test_ftl_n6_constants_smoke	C_DIFFER	IMPORT	nrc=1 crc=0
+test_ftl_tribunal_smoke	A_PASS	IMPORT	rc=0
+test_generator_finder_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+test_hashset_smoke	B_EMIT	IMPORT	HX2001
+test_iit4_approx_phi_smoke	B_EMIT	IMPORT	HX2001
+test_linux_hexat_trim_repro	C_DIFFER		nrc=5 crc=0
+test_lora_cuda_equiv_test_emit	B_LD		/tmp/legb-r22-3488050/test/lora_cuda_equiv_test_emit.hexa:277:(.text+0
+test_mult_order_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+test_n6_lattice_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+test_n6_uniqueness_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+test_native_build_cov_bitwise	A_PASS		rc=0
+test_native_build_cov_exec_wrap	B_EMIT		HX2001
+test_native_build_emit_hexa_cstring_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_cuda_available_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_cuda_device_count_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_deref_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_exit_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_math_abs_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_math_ceil_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_math_floor_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_math_max_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_math_min_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_math_round_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_math_sqrt_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_mono_ns_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_ptr_addr_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_ptr_alloc_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_ptr_free_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_ptr_null_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_ptr_offset_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_ptr_read_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_ptr_write_native_o	A_PASS		rc=0
+test_native_build_emit_hexa_val_ctors_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_accept_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_access_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_atoi_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_bind_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_chdir_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_chmod_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_chown_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_close_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_connect_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_dup2_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_dup_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_execve_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_exit_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_fcntl_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_free_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_fstat_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_fsync_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_getegid_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_geteuid_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_getgid_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_getpid_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_getppid_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_getuid_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_ioctl_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_kill_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_lchown_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_listen_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_lseek_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_memcmp_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_memcpy_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_memmove_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_memset_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_mkdir_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_mmap_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_munmap_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_poll_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_read_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_recv_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_recvmsg_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_rmdir_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_select_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_send_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_sendmsg_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_setsockopt_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_socket_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_stat_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_strcat_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_strchr_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_strcmp_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_strcpy_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_strdup_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_strlen_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_strncmp_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_strncpy_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_strndup_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_strrchr_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_truncate_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_unlink_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_waitpid_o	A_PASS		rc=0
+test_native_build_emit_hxlcl_write_o	A_PASS		rc=0
+test_native_build_emit_rt_fs_append_atomic_classd_o	A_PASS		rc=0
+test_native_build_emit_rt_fs_rotate_if_over_classd_o	A_PASS		rc=0
+test_native_build_emit_rt_fs_stat_classd_o	A_PASS		rc=0
+test_native_build_emit_rt_isalnum_classd_o	A_PASS		rc=0
+test_native_build_emit_rt_isalpha_classd_o	A_PASS		rc=0
+test_native_build_emit_rt_net_fail_classd_o	A_PASS		rc=0
+test_native_build_emit_rt_net_zero_classd_o	A_PASS		rc=0
+test_native_build_emit_rt_posix_ok_classd_o	A_PASS		rc=0
+test_native_build_emit_rt_pthread_create_policy_classd_o	A_PASS		rc=0
+test_native_build_emit_rt_pthread_noop_classd_o	A_PASS		rc=0
+test_native_build_poc_arena_bundle_emit	A_PASS		rc=0
+test_native_build_poc_arena_reloc_emit	A_PASS		rc=0
+test_native_build_poc_classb_branch26_emit	A_PASS		rc=0
+test_native_build_poc_macho_v3_branch26	A_PASS		rc=0
+test_native_build_poc_multi_sym_emit	A_PASS		rc=0
+test_native_build_poc_rt_exit_caller_emit	B_LD		/tmp/legb-r22-3488050/test/native_build/poc_rt_exit_caller_emit.hexa:5
+test_native_build_poc_rt_exit_drive	C_DIFFER		nrc=1 crc=1
+test_native_build_poc_rt_exit_obj_emit	A_PASS		rc=0
+test_native_build_smoke_exit_42	A_PASS		rc=42
+test_native_map_signed_zero_smoke	B_EMIT		
+test_nstate_calculator_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+test_nuclear_r4_anchor_smoke	A_PASS	IMPORT	rc=0
+test_op143_sort_stable	B_EMIT	IMPORT	HX2006
+test_op145_let_reassign_loop	A_PASS		rc=0
+test_pascal_perfect_smoke	A_PASS	IMPORT	rc=0
+test_perfect_number_engine_smoke	C_DIFFER	IMPORT	nrc=1 crc=0
+test_physics_constant_engine_smoke	C_DIFFER	IMPORT	nrc=1 crc=0
+test_platonic_solids_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+test_prime_pair_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+test_qa_l3_arena_valueops	B_EMIT		HX2001
+test_reachability_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+test_regress_dict_keys_let_bind	A_PASS		rc=0
+test_regression	B_EMIT	IMPORT	HX2001
+test_regression_ai_err_self_test	B_LD	IMPORT	/tmp/r22aud2/test_regression_ai_err_self_test.flat.hexa:258:(.text+0x2
+test_regression_anima_bug1_3float_return	C_DIFFER		nrc=139 crc=1
+test_regression_anima_bug3_driver	A_PASS	IMPORT	rc=0
+test_regression_anima_bug3_mod_a	B_LD	IMPORT	(.text+0x1b): undefined reference to `main'
+test_regression_anima_bug3_mod_b	B_LD	IMPORT	(.text+0x1b): undefined reference to `main'
+test_regression_anima_bug3_mod_c	A_PASS		rc=0
+test_regression_anima_bug4_struct_list_alias	A_PASS		rc=0
+test_regression_anima_bug6_if_block_println	A_PASS		rc=0
+test_regression_codegen_array_struct_longstr_oom	A_PASS		rc=0
+test_regression_eprint_builtin	B_LD		/tmp/legb-r22-3488050/test/regression/eprint_builtin.hexa:27:(.text+0x
+test_regression_eq_ref_array_map	A_PASS		rc=0
+test_regression_farr_adamw_step_inplace_byte_eq	B_EMIT		HX2001
+test_regression_farr_ce_seed_byte_eq	B_EMIT		HX2001
+test_regression_farr_packed_gemv_offset_byte_eq	B_EMIT		HX2001
+test_regression_farr_softmax_rows_byte_eq	B_EMIT		HX2001
+test_regression_ffi_boundary_cstring	A_PASS		rc=0
+test_regression_fix6_reserved_param_guard	B_EMIT		HX0011
+test_regression_lint_a4_array_param_mutation	A_PASS		rc=0
+test_regression_lint_a8_env_personal_path	A_PASS		rc=0
+test_regression_map_has_method	B_LD		/tmp/legb-r22-3488050/test/regression/map_has_method.hexa:13:(.text+0x
+test_regression_math_macro_userfn_collision	A_PASS		rc=0
+test_regression_parse_pub_crate_top_level	B_EMIT		HX2001
+test_regression_parser_resume_empty_lhs	B_EMIT		HX2001
+test_regression_reserved_keyword_guard	C_DIFFER		nrc=0 crc=1
+test_regression_reserved_keyword_tier2_guard	C_DIFFER		nrc=0 crc=1
+test_regression_roadmap_with_unlock	B_LD		/tmp/legb-r22-3488050/test/regression/roadmap_with_unlock.hexa:33:(.te
+test_regression_silent_fallback_eprint	C_DIFFER		nrc=0 crc=0
+test_regression_truthy_float_zero	B_EMIT		HX3001
+test_regression_type_of_fn	A_PASS		rc=0
+test_repo_taxonomy_audit_smoke	C_DIFFER	IMPORT	nrc=137 crc=0
+test_rfc036_phi_rs_smoke	B_EMIT		HX2001
+test_runner_arithmetic_test	B_LD		(.text+0x1b): undefined reference to `main'
+test_runner_bitop_surface_test	B_LD		(.text+0x1b): undefined reference to `main'
+test_runner_bitwise_test	B_LD		(.text+0x1b): undefined reference to `main'
+test_runner_builtins_test	B_LD		(.text+0x1b): undefined reference to `main'
+test_runner_comparison_test	B_LD		(.text+0x1b): undefined reference to `main'
+test_runner_control_flow_test	B_LD		(.text+0x1b): undefined reference to `main'
+test_runner_expr_kinds2_test	B_LD		(.text+0x1b): undefined reference to `main'
+test_runner_expr_kinds_test	B_LD		(.text+0x1b): undefined reference to `main'
+test_runner_ffi_methodcall_test	B_LD		(.text+0x1b): undefined reference to `main'
+test_runner_logical_test	B_LD		/tmp/legb-r22-3488050/test/runner/logical_test.hexa:25:(.text+0x186): 
+test_runner_sample_test	B_LD		(.text+0x1b): undefined reference to `main'
+test_runtime_arrays_test	B_EMIT		HX2001
+test_runtime_case_transform_multibyte_op142_test	B_EMIT		HX2001
+test_runtime_io_test	B_LD		(.text+0x1b): undefined reference to `main'
+test_runtime_math_test	B_LD		(.text+0x1b): undefined reference to `main'
+test_runtime_strings_test	B_LD		(.text+0x1b): undefined reference to `main'
+test_sigma_phi_tau_uniqueness_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+test_static_index_lazy_poc_smoke	A_PASS	IMPORT	rc=0
+test_symmetric_group_s6_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+test_t33_mut_arena	A_PASS		rc=0
+test_t33_repro_minimal	A_PASS		rc=0
+test_t34_net_listen_smoke	C_DIFFER		nrc=139 crc=0
+test_t35_hxqwen14b_abi_smoke	B_LD		/tmp/legb-r22-3488050/test/t35_hxqwen14b_abi_smoke.hexa:25:(.text+0x13
+test_t36_serve_alm_smoke	B_EMIT	IMPORT	HX2001
+test_t37_attr_pub_fn	A_PASS		rc=0
+test_t37_hxqwen14b_day2_smoke	B_LD		/tmp/legb-r22-3488050/test/t37_hxqwen14b_day2_smoke.hexa:31:(.text+0x1
+test_t38_nanbox_smoke	C_DIFFER		nrc=0 crc=0
+test_t38_test_attr	B_LD		(.text+0x1b): undefined reference to `main'
+test_t39_resource_attrs	A_PASS		rc=0
+test_t40_evolution_attrs	A_PASS		rc=0
+test_t41_recovery_attrs	A_PASS		rc=0
+test_t42_for_in_range	A_PASS		rc=0
+test_t43_closures_hof	B_LD		/tmp/legb-r22-3488050/test/t43_closures_hof.hexa:5:(.text+0xf4b): unde
+test_t44_array_methods	B_LD		/tmp/legb-r22-3488050/test/t44_array_methods.hexa:5:(.text+0x6e9): und
+test_t45_string_methods	B_LD		/tmp/legb-r22-3488050/test/t45_string_methods.hexa:4:(.text+0xa4a): un
+test_t45b_string_methods_utf8	B_EMIT		HX2001
+test_t46_dict_ops	B_EMIT		HX2001
+test_t47_let_mut_zero	A_PASS		rc=0
+test_t48_val_arena	A_PASS		rc=0
+test_t48_write_bytes_binary	B_LD		/tmp/legb-r22-3488050/test/t48_write_bytes_binary.hexa:13:(.text+0x172
+test_t49_runtime_string_pure	B_EMIT		HX2001
+test_t50_arena_pure	A_PASS		rc=0
+test_t51_limit_singleton	A_PASS		rc=0
+test_t52_safetensors_to_hexaw	B_EMIT	IMPORT	HX2001
+test_t53_qwen_bpe	B_EMIT	IMPORT	HX2001
+test_t54_lora_to_hexaw	B_EMIT	IMPORT	HX2001
+test_t54_qwen_bpe_multibyte_roundtrip	B_EMIT	IMPORT	HX2001
+test_t55_hexaw_farr32_rss	B_EMIT	IMPORT	HX2001
+test_t55_literal_ban	A_PASS		rc=0
+test_t56_brace_lock	A_PASS		rc=0
+test_t56_read_f32_array_at_rss	B_EMIT	IMPORT	HX2001
+test_t56b_rss_boxed	B_LD		/tmp/legb-r22-3488050/test/t56b_rss_boxed.hexa:17:(.text+0x9d): undefi
+test_t56b_rss_farr32	B_EMIT		HX2001
+test_t57_scope_strict	A_PASS		rc=0
+test_t58_on2_concat	A_PASS		rc=0
+test_t59_geometry2d_pure	C_DIFFER		nrc=0 crc=1
+test_t59_testgen_fixture	A_PASS		rc=0
+test_t60_bubble_fixture	A_PASS		rc=0
+test_t60_regex_mini_pure	C_DIFFER		nrc=1 crc=1
+test_t61_profile_fixture	A_PASS		rc=0
+test_t62_lazy_attr	C_DIFFER		nrc=0 crc=0
+test_t62_lazy_attr_bad_arg	B_LD		(.text+0x1b): undefined reference to `main'
+test_t62_lazy_attr_bad_ossify	B_LD		(.text+0x1b): undefined reference to `main'
+test_t_batch22_print_fmt_pure	A_PASS		rc=0
+test_t_batch23_datetime_pure	A_PASS		rc=0
+test_t_cert_bucket_split	A_PASS	IMPORT	rc=0
+test_t_cert_roundtrip	A_PASS	IMPORT	rc=0
+test_t_cmd_url_args_passthrough	A_PASS		rc=1
+test_t_exec_env_reproducible	B_EMIT		HX1101
+test_t_ffi_marshal_skeleton	C_DIFFER	IMPORT	nrc=0 crc=0
+test_t_float_mod_codegen	B_EMIT		HX2001
+test_t_macro_depth_default	C_DIFFER		nrc=0 crc=0
+test_t_macro_depth_override	C_DIFFER		nrc=0 crc=0
+test_t_macro_depth_valid	C_DIFFER		nrc=0 crc=0
+test_t_multiarch_cpu_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+test_t_op124_float_negate_constfold	B_LD		/tmp/legb-r22-3488050/test/t_op124_float_negate_constfold.hexa:31:(.te
+test_t_op124_multiline_arith_continuation	A_PASS		rc=0
+test_t_parser_lt_generic_disambig	A_PASS		rc=0
+test_t_parser_macro_invocation	B_EMIT		HX2001
+test_t_parser_select_attr	B_EMIT		HX2001
+test_t_range_precedence	A_PASS		rc=0
+test_t_select_dispatch_parse	B_LD	IMPORT	/tmp/r22aud2/test_t_select_dispatch_parse.flat.hexa:89:(.text+0x111c):
+test_t_statusline_4panel	A_PASS		rc=0
+test_t_typealias_occurs_check	C_DIFFER		nrc=137 crc=0
+test_test_auto_marker	A_PASS		rc=0
+test_test_drill_classify	B_LD		/tmp/legb-r22-3488050/test/test_drill_classify.hexa:11:(.text+0x19): u
+test_test_native_multi_calls	B_EMIT		HX0012
+test_test_phi_extractor_ffi	B_EMIT		HX2001
+test_texas_sharpshooter_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+test_three_root_theorem_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+test_unshadow4_bench_fold	A_PASS		rc=0
+test_unshadow4_corpus_hit	A_PASS		rc=0
+test_unshadow4_corpus_nohit	A_PASS		rc=0
+test_vortex_math_verifier_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+tests_bootstrap_stage_2_smoke	A_PASS		rc=0
+tests_bootstrap_stage_3_fixed_point	A_PASS		rc=0
+tests_firmware_blink	C_DIFFER	IMPORT	nrc=0 crc=2
+tests_firmware_blink_test	C_DIFFER	IMPORT	nrc=1 crc=1
+tests_firmware_zero	A_PASS		rc=0
+tests_firmware_zero_test	C_DIFFER	IMPORT	nrc=1 crc=1
+tests_integration_14_cache_verb_test	A_PASS		rc=77
+tests_loop_dfs_test	B_EMIT	IMPORT	HX2001
+tests_m0_array	A_PASS		rc=0
+tests_m0_concat	B_LD		(.text+0x1b): undefined reference to `main'
+tests_m0_concat_test	C_DIFFER	IMPORT	nrc=1 crc=1
+tests_m0_hello	A_PASS		rc=0
+tests_m0_loop	B_LD		(.text+0x1b): undefined reference to `main'
+tests_m0_loop_test	C_DIFFER	IMPORT	nrc=1 crc=1
+tests_m0_many_args	B_EMIT		HX3003
+tests_m0_many_args_test	C_DIFFER	IMPORT	nrc=1 crc=1
+tests_m0_match	A_PASS		rc=0
+tests_m0_multi_file_test_runner	C_DIFFER	IMPORT	nrc=0 crc=1
+tests_m0_multi_module_collision_lib_a	B_LD		(.text+0x1b): undefined reference to `main'
+tests_m0_multi_module_collision_lib_b	B_LD		(.text+0x1b): undefined reference to `main'
+tests_m0_multi_module_collision_main	A_PASS	IMPORT	rc=0
+tests_m0_multi_module_collision_multi_module_test	A_PASS		rc=137
+tests_m0_regalloc	B_EMIT		HX3001
+tests_m0_regalloc_test	C_DIFFER	IMPORT	nrc=1 crc=137
+tests_m0_run_m0	C_DIFFER		nrc=137 crc=137
+tests_m0_struct_nested	A_PASS		rc=0
+tests_m_cache_gc_test	A_PASS		rc=0
+tests_m_cache_import_closure_test	C_DIFFER		nrc=0 crc=0
+tests_m_daemon_r1_test	B_LD		/tmp/legb-r22-3488050/tests/m_daemon_r1_test.hexa:78:(.text+0xe65): un
+tests_m_daemon_r2_test	B_LD		/tmp/legb-r22-3488050/tests/m_daemon_r2_test.hexa:109:(.text+0x14e7): 
+tests_m_daemon_r3_test	B_LD		/tmp/legb-r22-3488050/tests/m_daemon_r3_test.hexa:92:(.text+0x957): un
+tests_m_daemon_r4_atlas_flush_test	B_LD		/tmp/legb-r22-3488050/tests/m_daemon_r4_atlas_flush_test.hexa:109:(.te
+tests_m_daemon_r4_codegen_test	B_EMIT		HX2001
+tests_m_precompile_hit_test	B_EMIT		HX2001
+tests_m_sleep_ms_test	C_DIFFER		nrc=139 crc=0
+tests_m_version_str_consistency_test	B_EMIT		HX3004
+tests_qa_iofs_l1	B_LD		/tmp/legb-r22-3488050/tests/qa_iofs_l1.hexa:47:(.text+0xc74): undefine
+tests_qa_litarr_repro	A_PASS		rc=0
+tests_runtime_h_smoke_byte_diff	C_DIFFER		nrc=0 crc=0
+tests_runtime_h_smoke_emit	B_LD		/tmp/legb-r22-3488050/tests/runtime_h_smoke_emit.hexa:102:(.text+0x11d

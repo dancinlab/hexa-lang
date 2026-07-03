@@ -1,0 +1,241 @@
+// HEXA Standard Library — qforge/soc
+//
+// QFORGE work#28 stage 2/3 — SPIN-ORBIT COUPLING (SOC), the H_SOC = ξ(r) L·S term.
+//
+// Stage 1 (noncollinear.hexa) gave 2-component spinors + the 2×2 LOCAL Pauli
+// potential V·I + B·σ. SOC is the term that ties the spin direction to the LATTICE
+// (the orbital frame), so the total energy depends on the magnetization ANGLE — it
+// is the physical origin of magneto-crystalline anisotropy (MAE, stage 3). SOC is a
+// NONLOCAL, ATOM-CENTRED operator: for each atom and each angular-momentum shell l
+// with a (fully-relativistic) projector |β_lm⟩ and SOC strength ξ_l,
+//   H_SOC = Σ_atoms Σ_l ξ_l Σ_{m m', σ σ'} |β_lm⟩ ⟨l m σ| L·S |l m' σ'⟩ ⟨β_lm'|
+// with the angular-momentum operator L·S = L_z S_z + ½(L_+ S_− + L_− S_+) acting in
+// the |l,m,spin⟩ basis. The diagonal-in-j eigenvalues are
+//   L·S |l, j=l+½⟩ = +½ l ξ ,   L·S |l, j=l−½⟩ = −½(l+1) ξ
+// (from L·S = ½(J²−L²−S²) = ½[j(j+1)−l(l+1)−¾]).
+//
+// ── reference (c23: Quantum ESPRESSO is the answer key) ───────────────────────
+//   QE upflib/spinor.f90  — spinor(l,j,m,spin): spin-angle Clebsch-Gordan coeffs
+//        denom = 1/(2l+1);   j=l+½: up=√[(l+m+1)·denom], dn=√[(l−m)·denom];
+//                            j=l−½: up=√[(l−m+1)·denom], dn=−√[(l+m)·denom].
+//   QE upflib/uspp.f90 fcoef(ih,jh,is1,is2,nt) — the spin-angle SOC coupling,
+//        fcoef^{σσ'}_{m m'} = Σ_{m_j} spinor(l,j,m,σ) · spinor(l,j,m',σ') summed
+//        over the j-channels, weighting the radial D coefficient D_j.
+//   QE PW/src/add_vuspsi.f90 add_vuspsi_nc — applies the 2×2-in-spin nonlocal
+//        D-matrix deeq_nc(ih,jh,na,ijs), ijs=1..4 = (↑↑, ↑↓, ↓↑, ↓↓) blocks:
+//          ps(ikb,1) += deeq_nc(.,.,.,1)·becp(.,1) + deeq_nc(.,.,.,2)·becp(.,2)
+//          ps(ikb,2) += deeq_nc(.,.,.,3)·becp(.,1) + deeq_nc(.,.,.,4)·becp(.,2)
+//        (becp = ⟨β|ψ⟩ projector overlaps per spin; ps then × |β⟩ → hpsi).
+//
+// This module builds the 2×2-in-spin L·S D-matrix from the canonical angular
+// L·S operator (verified against the j-split eigenvalues), and applies it as a
+// spinor nonlocal projector that merges into the stage-1 local h_psi.
+use "stdlib/qforge/noncollinear"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ── a SOC atomic projector: an l-shell on one atom with strength ξ ────────────
+//   l: orbital angular momentum (1=p, 2=d, …).
+//   xi: SOC radial strength ξ_l (Ry). ξ→0 ⇒ no SOC (stage-1 reduction).
+//   beta: the (real) radial projector amplitudes over the n grid/PW points, one
+//     length-n vector PER m-channel (2l+1 of them), row-major: beta[(m+l)*n + i].
+//     ⟨β_lm|ψ⟩ overlaps are formed against these.
+pub struct SocShell {
+    l:    int,
+    xi:   float,
+    beta: [float],      // (2l+1) × n, row m=(−l..l) offset (m+l)
+    n:    int
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ANGULAR L·S MATRIX in the |l, m, spin⟩ basis  (the heart of SOC)
+// ════════════════════════════════════════════════════════════════════════════
+// Basis order: (m=−l..l) ⊗ (spin ↑,↓); dimension 2(2l+1). L·S is HERMITIAN.
+//   L·S = L_z S_z + ½(L_+ S_− + L_− S_+).
+//   In |m,σ⟩ with ħ=1, S_z=±½, L_z=m:
+//     ⟨m,↑|L_z S_z|m,↑⟩ = +½ m ;  ⟨m,↓|L_z S_z|m,↓⟩ = −½ m
+//   The ladder term couples |m,↑⟩ ↔ |m+1,↓⟩:
+//     ½ L_+ S_−  takes |m,↑⟩·(½) ... but S_− on ↑ → ↓, L_+ on m → m+1:
+//     ⟨m+1,↓| ½ L_+ S_− |m,↑⟩ = ½ · √[l(l+1) − m(m+1)]    (S_−|↑⟩ amplitude 1)
+//   and its Hermitian conjugate ⟨m,↑| ½ L_− S_+ |m+1,↓⟩ = same value.
+// Returns the real symmetric matrix flat, dimension d=2(2l+1), row-major.
+//   index(m_idx, spin) = m_idx*2 + spin   (m_idx = m+l ∈ 0..2l, spin 0=↑ 1=↓)
+pub fn qforge_soc_ls_matrix(l: int) -> [float] {
+    let nm = 2 * l + 1
+    let d = 2 * nm
+    let mut M: [float] = []
+    let mut z = 0
+    while z < d * d { M.push(0.0) ; z = z + 1 }
+    let lf = to_float(l)
+    let mut mi = 0
+    while mi < nm {
+        let m = to_float(mi - l)               // actual m = mi − l
+        // diagonal L_z S_z: |m,↑⟩ → +½m ; |m,↓⟩ → −½m
+        let iup = mi * 2 + 0
+        let idn = mi * 2 + 1
+        M[iup * d + iup] = 0.5 * m
+        M[idn * d + idn] = -0.5 * m
+        // ladder coupling |m,↑⟩ ↔ |m+1,↓⟩ (only if m+1 ≤ l)
+        if mi + 1 < nm {
+            let lp = sqrt(lf * (lf + 1.0) - m * (m + 1.0))   // L_+ amplitude
+            let amp = 0.5 * lp
+            let jdn = (mi + 1) * 2 + 1          // |m+1,↓⟩
+            M[iup * d + jdn] = amp             // ⟨m+1,↓|·|m,↑⟩
+            M[jdn * d + iup] = amp             // hermitian conjugate
+        }
+        mi = mi + 1
+    }
+    return M
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// SPINOR Clebsch-Gordan coefficient (QE upflib/spinor.f90)
+// ════════════════════════════════════════════════════════════════════════════
+//   spinor(l, jj, m, spin): jj = j (=l±½), m here is the integer m_l label used by
+//   QE; spin 1=up 2=down. Returns the spin-angle coefficient. Used to VERIFY the
+//   L·S split (the fcoef construction) — the j-projected L·S eigenvalues must match.
+pub fn qforge_spinor_cg(l: int, twice_j: int, m: int, spin: int) -> float {
+    // twice_j = 2j ∈ {2l+1 (j=l+½), 2l−1 (j=l−½)}.
+    let lf = to_float(l)
+    let denom = 1.0 / (2.0 * lf + 1.0)
+    let mf = to_float(m)
+    if twice_j == 2 * l + 1 {
+        // j = l + ½
+        if spin == 1 { return sqrt((lf + mf + 1.0) * denom) }
+        return sqrt((lf - mf) * denom)
+    }
+    // j = l − ½  (valid for m ≥ −l+1; else 0)
+    if m < -l + 1 { return 0.0 }
+    if spin == 1 { return sqrt((lf - mf + 1.0) * denom) }
+    return -1.0 * sqrt((lf + mf) * denom)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// APPLY the SOC nonlocal projector to a spinor (QE add_vuspsi_nc structure)
+// ════════════════════════════════════════════════════════════════════════════
+// For one SocShell: form the projector overlaps c^σ_m = ⟨β_lm|ψ^σ⟩ (complex, per
+// spin), apply the 2×2-in-spin angular D = ξ·(L·S) in the (m,σ) basis, then
+// scatter back ξ·Σ |β_lm⟩ D c. This is the matrix-free contribution ADDED to the
+// stage-1 local h_psi.  Returns the SOC increment as a Spinor (to be summed).
+pub fn qforge_soc_apply_shell(sh: SocShell, psi: Spinor) -> Spinor {
+    let n = sh.n
+    let l = sh.l
+    let nm = 2 * l + 1
+    let d = 2 * nm
+    let LS = qforge_soc_ls_matrix(l)
+
+    // (1) overlaps c[(m_idx)*2 + spin] = ⟨β_lm|ψ^spin⟩  (β real ⇒ conj = β).
+    //   complex: cr + i ci. ψ^σ component is (up_re/up_im) or (dn_re/dn_im).
+    let mut cr: [float] = [] ; let mut ci: [float] = []
+    let mut k = 0
+    while k < d { cr.push(0.0) ; ci.push(0.0) ; k = k + 1 }
+    let mut mi = 0
+    while mi < nm {
+        let bo = mi * n
+        let mut sur = 0.0 ; let mut sui = 0.0
+        let mut sdr = 0.0 ; let mut sdi = 0.0
+        let mut i = 0
+        while i < n {
+            let bv = sh.beta[bo + i]
+            sur = sur + bv * psi.up_re[i] ; sui = sui + bv * psi.up_im[i]
+            sdr = sdr + bv * psi.dn_re[i] ; sdi = sdi + bv * psi.dn_im[i]
+            i = i + 1
+        }
+        cr[mi * 2 + 0] = sur ; ci[mi * 2 + 0] = sui
+        cr[mi * 2 + 1] = sdr ; ci[mi * 2 + 1] = sdi
+        mi = mi + 1
+    }
+
+    // (2) apply D = ξ·(L·S) (real symmetric) in the (m,σ) basis: e = D·c.
+    let mut er: [float] = [] ; let mut ei: [float] = []
+    let mut a = 0
+    while a < d {
+        let mut sr = 0.0 ; let mut si = 0.0
+        let mut b = 0
+        while b < d {
+            let w = sh.xi * LS[a * d + b]
+            sr = sr + w * cr[b] ; si = si + w * ci[b]
+            b = b + 1
+        }
+        er.push(sr) ; ei.push(si)
+        a = a + 1
+    }
+
+    // (3) scatter back Σ_m |β_lm⟩ e^σ_m → SOC increment spinor.
+    let mut our: [float] = [] ; let mut oui: [float] = []
+    let mut odr: [float] = [] ; let mut odi: [float] = []
+    let mut z = 0
+    while z < n { our.push(0.0) ; oui.push(0.0) ; odr.push(0.0) ; odi.push(0.0) ; z = z + 1 }
+    mi = 0
+    while mi < nm {
+        let bo = mi * n
+        let eur = er[mi * 2 + 0] ; let eui = ei[mi * 2 + 0]
+        let edr = er[mi * 2 + 1] ; let edi = ei[mi * 2 + 1]
+        let mut i = 0
+        while i < n {
+            let bv = sh.beta[bo + i]
+            our[i] = our[i] + bv * eur ; oui[i] = oui[i] + bv * eui
+            odr[i] = odr[i] + bv * edr ; odi[i] = odi[i] + bv * edi
+            i = i + 1
+        }
+        mi = mi + 1
+    }
+    return Spinor { up_re: our, up_im: oui, dn_re: odr, dn_im: odi, n: n }
+}
+
+// ── full SOC h_psi: stage-1 local h_psi  +  Σ_shells SOC projector ────────────
+//   Drop-in replacement for qforge_h_psi_spinor that also adds H_SOC. shells = the
+//   atomic SOC projectors. ξ=0 in every shell ⇒ EXACTLY stage-1 (the reduction pin).
+pub fn qforge_h_psi_spinor_soc(T_apply, pot: NcPotential, shells: [SocShell],
+                               psi: Spinor) -> Spinor {
+    let base = qforge_h_psi_spinor(T_apply, pot, psi)
+    let n = psi.n
+    let mut our = base.up_re ; let mut oui = base.up_im
+    let mut odr = base.dn_re ; let mut odi = base.dn_im
+    let ns = len(shells)
+    let mut s = 0
+    while s < ns {
+        let inc = qforge_soc_apply_shell(shells[s], psi)
+        let mut i = 0
+        while i < n {
+            our[i] = our[i] + inc.up_re[i] ; oui[i] = oui[i] + inc.up_im[i]
+            odr[i] = odr[i] + inc.dn_re[i] ; odi[i] = odi[i] + inc.dn_im[i]
+            i = i + 1
+        }
+        s = s + 1
+    }
+    return Spinor { up_re: our, up_im: oui, dn_re: odr, dn_im: odi, n: n }
+}
+
+// ── build the dense 2n×2n complex spinor H including SOC (for eigh_complex) ────
+//   Like noncollinear.qforge_build_spinor_h but adds the SOC shells. Probes the 2n
+//   unit spinors and reads off columns. Returns [Are, Aim] for qforge_eigh_complex.
+pub fn qforge_build_spinor_h_soc(T_apply, pot: NcPotential, shells: [SocShell],
+                                 n: int) -> [[float]] {
+    let d = 2 * n
+    let mut Are: [float] = [] ; let mut Aim: [float] = []
+    let mut z = 0
+    while z < d * d { Are.push(0.0) ; Aim.push(0.0) ; z = z + 1 }
+    let mut c = 0
+    while c < d {
+        let mut ur: [float] = [] ; let mut ui: [float] = []
+        let mut dr: [float] = [] ; let mut di: [float] = []
+        let mut t = 0
+        while t < n {
+            let upv = if c < n && t == c { 1.0 } else { 0.0 }
+            let dnv = if c >= n && t == (c - n) { 1.0 } else { 0.0 }
+            ur.push(upv) ; ui.push(0.0) ; dr.push(dnv) ; di.push(0.0)
+            t = t + 1
+        }
+        let e = Spinor { up_re: ur, up_im: ui, dn_re: dr, dn_im: di, n: n }
+        let h = qforge_h_psi_spinor_soc(T_apply, pot, shells, e)
+        let mut rr = 0
+        while rr < n {
+            Are[rr * d + c] = h.up_re[rr] ; Aim[rr * d + c] = h.up_im[rr]
+            Are[(n + rr) * d + c] = h.dn_re[rr] ; Aim[(n + rr) * d + c] = h.dn_im[rr]
+            rr = rr + 1
+        }
+        c = c + 1
+    }
+    return [Are, Aim]
+}

@@ -304,3 +304,173 @@ fn clock_monotonic() -> int {
     if target_is_linux() { return CLOCK_MONOTONIC_LINUX() }
     return CLOCK_MONOTONIC_DARWIN()
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// Socket family — socket / bind / listen / accept / connect /
+//                 send / recv / setsockopt  (zero-c r36, ING #29)
+// ═══════════════════════════════════════════════════════════════════
+//
+// These are the leg-B (whole-runtime-in-.hexa) portable wrappers for the
+// BSD socket calls that net.c/std::net needs, mirroring the fork/execve/
+// wait4 process-control template above exactly (same _scN dispatch, same
+// per-target NR routing). They let the self-contained `self/rt/*.hexa`
+// runtime issue socket syscalls directly instead of calling through the
+// host libc `socket()/bind()/…`, the same way `self/rt/proc.hexa` already
+// does fork/exec via sys_fork()/sys_execve().
+//
+// NUMBER SOURCES:
+//   Linux x86_64  : socket=41 connect=42 accept=43 bind=49 listen=50
+//                   sendto=44 recvfrom=45 setsockopt=54   (arch/x86/…/syscall_64.tbl)
+//   Linux aarch64 : socket=198 bind=200 connect=203 accept=202 listen=201
+//                   sendto=206 recvfrom=207 setsockopt=208 (asm-generic unified)
+//   Darwin (arm64): BSD numbers OR'd with the 0x2000000 unix-class flag,
+//                   matching self/runtime.c's HXLCL_SYS_* table —
+//                   socket 97 connect 98 accept 30 bind 104 listen 106
+//                   setsockopt 105 recvfrom 29 sendto 133.
+//
+// send/recv are implemented over sendto/recvfrom with NULL sockaddr (= the
+// connected-socket send/recv), exactly as runtime.c's hxlcl_send/hxlcl_recv
+// route to SENDTO/RECVFROM with a 0 addr — Darwin has no plain send/recv
+// BSD syscall, so this is the only portable form.
+//
+// ⚠ DARWIN-ARM64 ERRNO WALL (measured, not assumed): on Darwin the kernel
+// signals a syscall error by SETTING PSTATE.C (carry), leaving the POSITIVE
+// errno in x0 — it does NOT return -errno the way Linux does. The
+// `__hx_syscall6` intrinsic these wrappers route through returns ONLY the
+// raw x0 value; it cannot read the carry flag, and its C-transpile lowering
+// (self/codegen.hexa __hx_syscall6, even under HEXA_RT_SYSCALL_NATIVE) falls
+// back to libc `syscall()` on every non-x86_64 arch. The generic codegen
+// path (self/codegen/syscall.hexa emit_darwin_errno_fix / csneg x0,x0,x0,CC)
+// that WOULD normalize carry→ -errno is NOT wired into the __hx_syscall6
+// lowering. So on Darwin arm64 a failing socket call returns a small
+// POSITIVE value indistinguishable from a valid fd/byte-count. These
+// wrappers are therefore correct on LINUX (both arches) only; on Darwin the
+// shipping path keeps using self/runtime.c's `_hxlcl_syscall*_cf` (which
+// reads the carry flag via inline asm). Unblocking Darwin here needs a
+// carry-flag-aware intrinsic (e.g. __hx_syscall6_cf) — a codegen change,
+// out of scope for this additive-wrapper round. Mirrors the pre-existing
+// Darwin gaps in sys_pipe()/sys_dup2() above.
+
+@pure fn SYS_LINUX_X86_SOCKET()     -> int { return 41 }
+@pure fn SYS_LINUX_X86_CONNECT()    -> int { return 42 }
+@pure fn SYS_LINUX_X86_ACCEPT()     -> int { return 43 }
+@pure fn SYS_LINUX_X86_SENDTO()     -> int { return 44 }
+@pure fn SYS_LINUX_X86_RECVFROM()   -> int { return 45 }
+@pure fn SYS_LINUX_X86_BIND()       -> int { return 49 }
+@pure fn SYS_LINUX_X86_LISTEN()     -> int { return 50 }
+@pure fn SYS_LINUX_X86_SETSOCKOPT() -> int { return 54 }
+
+@pure fn SYS_LINUX_ARM64_SOCKET()     -> int { return 198 }
+@pure fn SYS_LINUX_ARM64_BIND()       -> int { return 200 }
+@pure fn SYS_LINUX_ARM64_LISTEN()     -> int { return 201 }
+@pure fn SYS_LINUX_ARM64_ACCEPT()     -> int { return 202 }
+@pure fn SYS_LINUX_ARM64_CONNECT()    -> int { return 203 }
+@pure fn SYS_LINUX_ARM64_SENDTO()     -> int { return 206 }
+@pure fn SYS_LINUX_ARM64_RECVFROM()   -> int { return 207 }
+@pure fn SYS_LINUX_ARM64_SETSOCKOPT() -> int { return 208 }
+
+@pure fn SYS_DARWIN_SOCKET()     -> int { return 33554529 }  // 0x2000061 (97)
+@pure fn SYS_DARWIN_CONNECT()    -> int { return 33554530 }  // 0x2000062 (98)
+@pure fn SYS_DARWIN_ACCEPT()     -> int { return 33554462 }  // 0x200001e (30)
+@pure fn SYS_DARWIN_BIND()       -> int { return 33554536 }  // 0x2000068 (104)
+@pure fn SYS_DARWIN_LISTEN()     -> int { return 33554538 }  // 0x200006a (106)
+@pure fn SYS_DARWIN_SETSOCKOPT() -> int { return 33554537 }  // 0x2000069 (105)
+@pure fn SYS_DARWIN_RECVFROM()   -> int { return 33554461 }  // 0x200001d (29)
+@pure fn SYS_DARWIN_SENDTO()     -> int { return 33554565 }  // 0x2000085 (133)
+
+// socket(domain, type, protocol) -> fd / -errno
+fn sys_socket(domain: int, kind: int, proto: int) -> int {
+    if target_is_linux() {
+        if target_is_arm64() { return _sc3(SYS_LINUX_ARM64_SOCKET(), domain, kind, proto) }
+        return _sc3(SYS_LINUX_X86_SOCKET(), domain, kind, proto)
+    }
+    return _sc3(SYS_DARWIN_SOCKET(), domain, kind, proto)
+}
+
+// bind(fd, sockaddr_ptr, addrlen) -> 0 / -errno
+fn sys_bind(fd: int, addr_ptr: int, addrlen: int) -> int {
+    if target_is_linux() {
+        if target_is_arm64() { return _sc3(SYS_LINUX_ARM64_BIND(), fd, addr_ptr, addrlen) }
+        return _sc3(SYS_LINUX_X86_BIND(), fd, addr_ptr, addrlen)
+    }
+    return _sc3(SYS_DARWIN_BIND(), fd, addr_ptr, addrlen)
+}
+
+// listen(fd, backlog) -> 0 / -errno
+fn sys_listen(fd: int, backlog: int) -> int {
+    if target_is_linux() {
+        if target_is_arm64() { return _sc2(SYS_LINUX_ARM64_LISTEN(), fd, backlog) }
+        return _sc2(SYS_LINUX_X86_LISTEN(), fd, backlog)
+    }
+    return _sc2(SYS_DARWIN_LISTEN(), fd, backlog)
+}
+
+// accept(fd, sockaddr_ptr, addrlen_ptr) -> new fd / -errno.
+// addr_ptr / addrlen_ptr may be 0 (= don't return the peer address).
+fn sys_accept(fd: int, addr_ptr: int, addrlen_ptr: int) -> int {
+    if target_is_linux() {
+        if target_is_arm64() { return _sc3(SYS_LINUX_ARM64_ACCEPT(), fd, addr_ptr, addrlen_ptr) }
+        return _sc3(SYS_LINUX_X86_ACCEPT(), fd, addr_ptr, addrlen_ptr)
+    }
+    return _sc3(SYS_DARWIN_ACCEPT(), fd, addr_ptr, addrlen_ptr)
+}
+
+// connect(fd, sockaddr_ptr, addrlen) -> 0 / -errno
+fn sys_connect(fd: int, addr_ptr: int, addrlen: int) -> int {
+    if target_is_linux() {
+        if target_is_arm64() { return _sc3(SYS_LINUX_ARM64_CONNECT(), fd, addr_ptr, addrlen) }
+        return _sc3(SYS_LINUX_X86_CONNECT(), fd, addr_ptr, addrlen)
+    }
+    return _sc3(SYS_DARWIN_CONNECT(), fd, addr_ptr, addrlen)
+}
+
+// send(fd, buf, len, flags) -> bytes sent / -errno.
+// Routed through sendto(fd, buf, len, flags, NULL, 0) = send on a connected
+// socket (Darwin has no plain send syscall; matches runtime.c hxlcl_send).
+fn sys_send(fd: int, buf: int, len: int, flags: int) -> int {
+    if target_is_linux() {
+        if target_is_arm64() { return _sc6(SYS_LINUX_ARM64_SENDTO(), fd, buf, len, flags, 0, 0) }
+        return _sc6(SYS_LINUX_X86_SENDTO(), fd, buf, len, flags, 0, 0)
+    }
+    return _sc6(SYS_DARWIN_SENDTO(), fd, buf, len, flags, 0, 0)
+}
+
+// recv(fd, buf, len, flags) -> bytes received / 0 (peer closed) / -errno.
+// Routed through recvfrom(fd, buf, len, flags, NULL, NULL) (matches
+// runtime.c hxlcl_recv).
+fn sys_recv(fd: int, buf: int, len: int, flags: int) -> int {
+    if target_is_linux() {
+        if target_is_arm64() { return _sc6(SYS_LINUX_ARM64_RECVFROM(), fd, buf, len, flags, 0, 0) }
+        return _sc6(SYS_LINUX_X86_RECVFROM(), fd, buf, len, flags, 0, 0)
+    }
+    return _sc6(SYS_DARWIN_RECVFROM(), fd, buf, len, flags, 0, 0)
+}
+
+// setsockopt(fd, level, optname, optval_ptr, optlen) -> 0 / -errno.
+// 5-arg call padded to syscall6 (6th unused = 0), matching runtime.c.
+fn sys_setsockopt(fd: int, level: int, optname: int, optval_ptr: int, optlen: int) -> int {
+    if target_is_linux() {
+        if target_is_arm64() { return _sc6(SYS_LINUX_ARM64_SETSOCKOPT(), fd, level, optname, optval_ptr, optlen, 0) }
+        return _sc6(SYS_LINUX_X86_SETSOCKOPT(), fd, level, optname, optval_ptr, optlen, 0)
+    }
+    return _sc6(SYS_DARWIN_SETSOCKOPT(), fd, level, optname, optval_ptr, optlen, 0)
+}
+
+// ── Socket-family constants (POSIX shared subset) ──────────────────
+@pure fn AF_INET()      -> int { return 2 }
+@pure fn SOCK_STREAM()  -> int { return 1 }
+@pure fn SOCK_DGRAM()   -> int { return 2 }
+// SOL_SOCKET diverges: Linux=1, Darwin=0xffff.
+@pure fn SOL_SOCKET_LINUX()  -> int { return 1 }
+@pure fn SOL_SOCKET_DARWIN() -> int { return 65535 }
+fn sol_socket() -> int {
+    if target_is_linux() { return SOL_SOCKET_LINUX() }
+    return SOL_SOCKET_DARWIN()
+}
+// SO_REUSEADDR diverges: Linux=2, Darwin=0x0004.
+@pure fn SO_REUSEADDR_LINUX()  -> int { return 2 }
+@pure fn SO_REUSEADDR_DARWIN() -> int { return 4 }
+fn so_reuseaddr() -> int {
+    if target_is_linux() { return SO_REUSEADDR_LINUX() }
+    return SO_REUSEADDR_DARWIN()
+}

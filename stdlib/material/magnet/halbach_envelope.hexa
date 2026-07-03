@@ -89,6 +89,7 @@ let PI: float = 3.14159265358979323846
 // array: factor = sin(k·π/N) / (k·π/N).  k = 1 is the working fundamental.
 // (n_seg, k) → dimensionless attenuation factor
 fn halbach_envelope(n_seg: float, k: float) -> float {
+    if n_seg <= 0.0 { return 0.0 }   // n_seg≤0 → k·π/n_seg = Inf → sin(Inf)/Inf = NaN
     let x = k * PI / n_seg
     if abs_f(x) < 1.0e-30 { return 1.0 }     // sinc(0) = 1 (continuous limit)
     return sin_pure(x) / x
@@ -99,6 +100,7 @@ fn halbach_envelope(n_seg: float, k: float) -> float {
 // (B_r, r_in, r_out, n_seg) → B  (same unit as B_r)
 fn halbach_field_ratio(b_r: float, r_in: float,
                        r_out: float, n_seg: float) -> float {
+    if r_out <= 0.0 || r_out <= r_in { return 0.0 }   // degenerate/ill-ordered bore → div-by-zero / unphysical
     let bore = b_r * (1.0 - r_in / r_out)
     return bore * halbach_envelope(n_seg, 1.0)
 }

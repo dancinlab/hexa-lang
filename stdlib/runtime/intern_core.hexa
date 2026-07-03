@@ -1,0 +1,100 @@
+// stdlib/runtime/intern_core.hexa — RT-NATIVE-ZEROC M4 intern-core READ-half.
+//
+// The hexa-source raw-mem body for the string-INTERN table LOOKUP primitive
+// (hexa_intern's find-existing-canonical-pointer probe). The intern table is a
+// DISTINCT open-addressing hash-set (HexaInternTable: char** buckets + uint32_t*
+// hashes) from the HexaMap the map lane owns (map_core.hexa) — the intern probe
+// walks a `char**` bucket array (stride 8) with a parallel uint32_t hash array
+// (stride 4), returning the canonical interned pointer on hit. This is the
+// intern twin of map_core.hexa::rt_map_get_native, NOT a re-skin of it: the map
+// probe walks HexaMapSlot{key,hash,order} (stride 16) inside a HexaMap; this
+// walks two separate flat arrays passed straight from the C wrapper.
+//
+// ALL arithmetic / bitwise / comparison uses the raw-int leaf intrinsics, NOT
+// the plain hexa `+ * & ^ == != <` operators — those lower to HexaVal runtime
+// helpers (hexa_add_slow / hexa_band / hexa_eq) which misinterpret the raw int64
+// words passed here from C (measured in map_core: plain `16 & 0xFFFFFFFF` = 0,
+// probe SIGSEGV). The raw-int leaves used: __hx_payload_add/sub/mul (signed i64
+// arith) · __hx_payload_and (mask) · __hx_payload_lt/eq (cmp → bool, work in
+// if/while conditions) · __hx_ptr_load64/load8 (raw deref) · __hx_make_val.
+//
+// NESTING: each __hx_payload_* / __hx_ptr_* call writes EXACTLY ONE `let` — NO
+// nested intrinsic args. The native-codegen nested-intrinsic clobber (r10/r11 /
+// x1/x3 scratch reuse, #3503) corrupts the outer op when an intrinsic is a
+// direct arg to another. Un-nested = one op per temp, exactly like map_core's
+// straight-line form.
+//
+// LAYOUT (locked by HexaInternTable in runtime_core_emit.hexa):
+//   typedef struct { char** buckets; uint32_t* hashes; int cap; int count; }
+//   The C wrapper passes the three table fields + precomputed hash + the C
+//   string pointer, each BOXED as a TAG_INT HexaVal (hexa fns receive every
+//   param as a 16-byte HexaVal, so a bare `int` param mis-aligns the call ABI):
+//     bucketsp : char**     (base of the bucket pointer array)
+//     hashesp  : uint32_t*  (base of the parallel hash array)
+//     cap      : int        (power-of-2 capacity; mask = cap - 1)
+//     h        : uint32_t   (precomputed hexa_fnv1a(s, slen) — intern's own
+//                            length-taking hash; NOT map's NUL-terminated
+//                            hexa_fnv1a_str, so the C wrapper computes it)
+//     keyp     : char*      (the candidate NUL-terminated string)
+//   The hash array element is a 32-bit word; __hx_ptr_load64 reads 8 bytes so we
+//   mask to the low 32 bits (the high 32 belong to the NEXT slot's hash on
+//   little-endian; the mask keeps only this slot's hash, byte-identical to the C
+//   `__hexa_intern.hashes[idx] == h` u32 compare).
+
+// rt_intern_strcmp0_native: 0 when the two NUL-terminated C strings are equal,
+// else 1 (sign-irrelevant — the C probe only tests == 0). Raw byte walk, the
+// intern twin of map_core's rt_map_strcmp0_native (kept intern-local so this
+// seed has no cross-file symbol dependency on the map seed).
+fn rt_intern_strcmp0_native(a: HexaVal, b: HexaVal) -> int {
+    let mut j = 0
+    let mut ca = __hx_ptr_load8(a, 0)
+    let mut cb = __hx_ptr_load8(b, 0)
+    while __hx_payload_eq(ca, cb) {
+        if __hx_payload_eq(ca, 0) { return 0 }           // both ended, equal
+        j = __hx_payload_add(j, 1)
+        ca = __hx_ptr_load8(a, j)
+        cb = __hx_ptr_load8(b, j)
+    }
+    return 1                                              // mismatch
+}
+
+// rt_intern_find_native: open-addressing probe identical to hexa_intern's lookup
+// loop, returning the matched canonical bucket pointer (as a raw int64 payload,
+// re-stamped TAG_INT via __hx_make_val) or 0 on miss (empty slot reached). The C
+// wrapper keeps the length cap, lazy-init, the insert/grow (the WRITE half), and
+// the stats — it delegates ONLY the alloc-free find probe, mirroring map-r3's
+// rt_map_get_native delegation. Returning 0 lets the C wrapper distinguish "found
+// canonical p" (insert skipped) from "not present" (insert taken).
+//
+// Probe is bounded by `cap` steps: the C `while buckets[idx] != NULL` terminates
+// at an empty slot, and INTERN_LOAD_MAX=75% guarantees one exists; the explicit
+// step bound is the same safety net rt_map_get_native uses.
+pub fn rt_intern_find_native(bucketsp: HexaVal, hashesp: HexaVal, cap: HexaVal, h: HexaVal, keyp: HexaVal) -> HexaVal {
+    let buckets = __hx_payload_add(bucketsp, 0)          // char** base
+    let hashes = __hx_payload_add(hashesp, 0)            // uint32_t* base
+    let ht_cap = __hx_payload_add(cap, 0)                // int cap
+    let hv = __hx_payload_and(h, 4294967295)             // low 32b of passed hash
+    let mask = __hx_payload_sub(ht_cap, 1)
+    let mut idx = __hx_payload_and(hv, mask)
+    let mut steps = 0
+    while __hx_payload_lt(steps, ht_cap) {
+        let boff = __hx_payload_mul(idx, 8)              // buckets[idx], ptr stride 8
+        let slot_ptr = __hx_payload_add(buckets, boff)
+        let canon = __hx_ptr_load64(slot_ptr, 0)         // buckets[idx] (char*)
+        if __hx_payload_eq(canon, 0) { return __hx_make_val(0, 0) }  // empty → not present
+        let hoff = __hx_payload_mul(idx, 4)              // hashes[idx], u32 stride 4
+        let haddr = __hx_payload_add(hashes, hoff)
+        let hraw = __hx_ptr_load64(haddr, 0)             // read 8B, mask to this slot's u32
+        let slot_hash = __hx_payload_and(hraw, 4294967295)
+        if __hx_payload_eq(slot_hash, hv) {
+            let cmp = rt_intern_strcmp0_native(canon, keyp)
+            if __hx_payload_eq(cmp, 0) {
+                return __hx_make_val(0, canon)           // hit → canonical pointer (TAG_INT box)
+            }
+        }
+        let nxt = __hx_payload_add(idx, 1)
+        idx = __hx_payload_and(nxt, mask)
+        steps = __hx_payload_add(steps, 1)
+    }
+    return __hx_make_val(0, 0)                            // not found (safety net)
+}

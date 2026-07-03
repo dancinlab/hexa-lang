@@ -110,7 +110,16 @@ pub fn range(start, end) {
 pub fn sort(arr) {
     let n = len(arr)
     if n <= 1 { return arr }
-    let result = arr
+    // `let result = arr` would ALIAS the caller's array (arrays are reference
+    // types), so the in-place insertion stores below would corrupt the input —
+    // contradicting the cited Python `sorted` contract (returns a NEW list).
+    // Copy first (same push idiom as reverse_arr) so only the copy is mutated.
+    let result = []
+    let c = 0
+    while c < n {
+        result.push(arr[c])
+        c = c + 1
+    }
     let i = 1
     while i < n {
         let key = result[i]

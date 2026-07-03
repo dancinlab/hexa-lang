@@ -369,7 +369,7 @@ pub fn pods_local_print_table(filter_pending: bool) -> int {
 //                reverse, vanishing real pods we just couldn't see).
 //
 // Returns 0.
-pub fn pods_local_print_table_live(filter_pending: bool, provider_ok: int, alive_ids, show_all: int) -> int {
+pub fn pods_local_print_table_live(filter_pending: bool, runpod_ok: int, vast_ok: int, alive_ids, show_all: int) -> int {
     let root = _pl_load()
     let pods = json_object_get_object(root, "pods")
     let jobs = json_object_get_object(root, "jobs")
@@ -380,9 +380,17 @@ pub fn pods_local_print_table_live(filter_pending: bool, provider_ok: int, alive
     if len(ts_raw) == 0 { ts = "—" }
     let mut suffix = ""
     if filter_pending { suffix = "  (active = verdict=PENDING)" }
+    // Merged liveness for the header only; per-row GONE judgement gates on the
+    // OWNING provider's flag below (a degraded provider must not GONE its pods).
+    let mut any_ok = 0
+    if runpod_ok == 1 || vast_ok == 1 { any_ok = 1 }
     let mut src = "PROVIDER-API liveness (runpod myself.pods + vast)"
-    if provider_ok == 0 {
+    if any_ok == 0 {
         src = "PROVIDER UNREACHABLE — liveness UNKNOWN, showing all (NOT confirmed alive)"
+    } else if runpod_ok == 0 {
+        src = "PROVIDER-API liveness — vast only (runpod degraded → its pods UNVERIFIED, not GONE)"
+    } else if vast_ok == 0 {
+        src = "PROVIDER-API liveness — runpod only (vast degraded → its pods UNVERIFIED, not GONE)"
     }
     println("cloud pods (" + src + " · ./ING.jsonl meta · last_updated " + ts + ")" + suffix)
 
@@ -406,7 +414,19 @@ pub fn pods_local_print_table_live(filter_pending: bool, provider_ok: int, alive
         if has_pod == 1 {
             if _pl_str_in(alive_ids, p) == 1 { in_alive = 1 }
         }
-        let st = pods_local_job_live_state(has_pod, in_alive, provider_ok)
+        // Gate GONE on the OWNING provider's authority, not the merged flag:
+        // a runpod pod is only GONE if runpod ANSWERED (runpod_ok==1) and the
+        // pod is absent; if runpod degraded it is UNKNOWN, never GONE (g63).
+        // Pods with no/unknown provider field fall back to "any provider
+        // answered" (legacy back-compat — no behavior change for old rows).
+        let mut row_ok = any_ok
+        if has_pod == 1 {
+            let pod_entry = json_object_get(pods, p)
+            let prov = json_object_get_str(pod_entry, "provider", "")
+            if prov == "runpod" { row_ok = runpod_ok }
+            else if prov == "vast" { row_ok = vast_ok }
+        }
+        let st = pods_local_job_live_state(has_pod, in_alive, row_ok)
         let mut vis = 1
         if filter_pending && v != "PENDING" { vis = 0 }
         // Default view DROPS provider-confirmed-GONE phantoms; --all keeps them.

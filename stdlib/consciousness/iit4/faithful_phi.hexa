@@ -105,6 +105,7 @@ fn _iit4_bin_values(values: int, n: int, n_bins: int) -> int {
     // all-identical guard — Rust f32::EPSILON literal.
     if range < 1.19209290e-7 { return bins }
 
+    if n_bins <= 0 { return bins }   // 0 bins → range/n_bins divide-by-zero
     let bw = range / n_bins
     let mut j = 0
     while j < n {

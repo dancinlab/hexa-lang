@@ -94,8 +94,13 @@ pub fn l2_normalize(v: array, d: int) -> array {
 pub fn cosine_distance(a: array, b: array, d: int) -> float {
     let na = l2_norm(a, d)
     let nb = l2_norm(b, d)
+    // only a GENUINELY zero vector (norm == 0) is undefined. The prior
+    // `na*nb < 1e-12` test also tripped on two small-but-nonzero PARALLEL vectors
+    // (true cosine distance ≈ 0), mis-reporting them as orthogonal (1.0). Guard the
+    // exact-zero norms (and a product underflow) instead of a magnitude threshold.
+    if na <= 0.0 || nb <= 0.0 { return 1.0 }
     let denom = na * nb
-    if denom < 0.000000000001 { return 1.0 }
+    if denom <= 0.0 { return 1.0 }
     let mut dot = 0.0
     let mut i = 0
     while i < d {
