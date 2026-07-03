@@ -1,0 +1,163 @@
+// HEXA Native Compiler — drill: FUNCTION-COMPOSITION selftest (σ∘σ vein)
+//
+// @version 0.1.0
+// @capabilities [stdout]
+//
+// G-gate for the composition frame added to compiler/atlas/identity_engine.hexa
+// (af_compose / comp_holds / comp_count / verify_composition · 2026-06-27). The
+// canonical selftest that exercises the REAL engine functions lives in
+// identity_engine.hexa::main (CMP1–CMP5). This standalone test re-proves the
+// CLASSICAL composition rediscovery from an INDEPENDENT, self-contained σ/φ
+// kernel (no cross-module import — the C-transpile fallback flattener drops
+// imported pub-fn symbols, see absorb_test.hexa), so a regression in either the
+// engine OR this kernel surfaces as a divergence.
+//
+// What it falsifies (reference-match · classical = open answer-key):
+//   • superperfect (Suryanarayana 1969 / OEIS A019279): σ(σ(n))=2n holds at
+//     {2,4,16,64,4096} (= 2^(p−1), 2^p−1 Mersenne prime) and NOWHERE else in
+//     [2,N] — exactly 5 solutions, a SPARSE FAMILY (not a bounded-unique point).
+//   • Mersenne characterization: σ(σ(n))=σ(n)+n at {3,7,31,127,8191}.
+//   • σ(φ(n))=2n is bounded-UNIQUE: n=1209 only (the lone singleton survivor).
+// HONESTY (c2): these are bounded-evidence over [2,N]; the composition sweep
+// (ATLAS/state/novel-dfs/composition_hunt.py) measured novel PROMOTABLE laws = 0
+// (DRY) — every structured composition identity is classical/Mersenne-linked.
+//
+// Run:  hexa run compiler/drill/composition_test.hexa
+
+// ── self-contained exact-int kernel (σ, φ via trial-division factorization) ──
+fn cipow(base, e) -> int {
+    let r = 1
+    let i = 0
+    while i < e { r = r * base; i = i + 1 }
+    r
+}
+
+fn cspf(m) -> int {
+    if m % 2 == 0 { return 2 }
+    let p = 3
+    while p * p <= m {
+        if m % p == 0 { return p }
+        p = p + 2
+    }
+    m
+}
+
+// σ(n) = sum of divisors (exact, multiplicative per-prime)
+fn csigma(n) -> int {
+    if n <= 1 { return n }
+    let m = n
+    let s = 1
+    while m > 1 {
+        let p = cspf(m)
+        let e = 0
+        while m % p == 0 { m = m / p; e = e + 1 }
+        s = s * ((cipow(p, e + 1) - 1) / (p - 1))
+    }
+    s
+}
+
+// φ(n) = Euler totient (exact, multiplicative per-prime)
+fn cphi(n) -> int {
+    if n <= 1 { return n }
+    let m = n
+    let r = 1
+    while m > 1 {
+        let p = cspf(m)
+        let e = 0
+        while m % p == 0 { m = m / p; e = e + 1 }
+        r = r * (cipow(p, e - 1) * (p - 1))
+    }
+    r
+}
+
+// σ(σ(n)) with the same inner-image feasibility cap as the engine.
+fn sigma_sigma(n) -> int {
+    let inner = csigma(n)
+    if inner < 1 || inner > 2000000 { return 0 - 1 }
+    return csigma(inner)
+}
+
+// σ(φ(n)) likewise.
+fn sigma_phi(n) -> int {
+    let inner = cphi(n)
+    if inner < 1 || inner > 2000000 { return 0 - 1 }
+    return csigma(inner)
+}
+
+fn gate(label, got, want, fails) -> int {
+    if got == want {
+        println("  PASS  " + label + "  -> " + to_string(got))
+        return 0
+    }
+    println("  FAIL  " + label + "  -> got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+
+fn main() {
+    let N = 20000
+    println("=== composition_test (σ∘σ vein · self-contained exact-int · N=" + to_string(N) + ") ===")
+    let fails = 0
+
+    // G1 — superperfect membership: σ(σ(n))=2n at every superperfect n.
+    println("G1 superperfect σ∘σ(n)=2n hits {2,4,16,64,4096} (Suryanarayana 1969):")
+    let mut sp_hits = 0
+    let sps: [i64] = [2, 4, 16, 64, 4096]
+    let i = 0
+    while i < len(sps) {
+        let n = sps[i]
+        if sigma_sigma(n) == 2 * n { sp_hits = sp_hits + 1 }
+        i = i + 1
+    }
+    fails = fails + gate("G1 superperfect 5/5 members hit", sp_hits, 5, fails)
+
+    // G2 — superperfect is a SPARSE FAMILY of size exactly 5 in [2,N] (NOT a
+    // bounded-unique singleton): count solutions and reject any extra n.
+    let cnt = 0
+    let n = 2
+    while n <= N {
+        if sigma_sigma(n) == 2 * n { cnt = cnt + 1 }
+        n = n + 1
+    }
+    fails = fails + gate("G2 |σ∘σ=2n in [2,N]| = 5 (sparse set)", cnt, 5, fails)
+
+    // G3 — NOT a superperfect: 8 = 2³ must be rejected (control).
+    let g3 = 0
+    if sigma_sigma(8) == 2 * 8 { g3 = 1 }
+    fails = fails + gate("G3 σ∘σ=2n NOT @ 8 (control)", g3, 0, fails)
+
+    // G4 — Mersenne characterization σ(σ(n))=σ(n)+n at {3,7,31,127,8191}.
+    println("G4 Mersenne σ∘σ(n)=σ(n)+n hits {3,7,31,127,8191}:")
+    let me_hits = 0
+    let mer: [i64] = [3, 7, 31, 127, 8191]
+    let j = 0
+    while j < len(mer) {
+        let m = mer[j]
+        if sigma_sigma(m) == csigma(m) + m { me_hits = me_hits + 1 }
+        j = j + 1
+    }
+    fails = fails + gate("G4 Mersenne 5/5 members hit", me_hits, 5, fails)
+
+    // G5 — σ(φ(n))=2n is bounded-UNIQUE: n=1209 only in [2,N].
+    let uniq_first = 0
+    let uniq_count = 0
+    let k = 2
+    while k <= N {
+        if sigma_phi(k) == 2 * k {
+            uniq_count = uniq_count + 1
+            if uniq_count == 1 { uniq_first = k }
+        }
+        k = k + 1
+    }
+    fails = fails + gate("G5 σ∘φ=2n bounded-unique n=1209", uniq_first, 1209, fails)
+    fails = fails + gate("G5 σ∘φ=2n singleton (count=1)", uniq_count, 1, fails)
+
+    println("")
+    if fails == 0 {
+        println("RESULT: PASS - composition frame (superperfect/Mersenne) rediscovered exact-int")
+        println("VERDICT: novel PROMOTABLE composition laws = 0 (DRY) — classical-only, see")
+        println("         ATLAS/state/novel-dfs/composition_hunt.py (forall UNPROVEN · c2)")
+        exit(0)
+    }
+    println("RESULT: FAIL (" + to_string(fails) + ")")
+    exit(1)
+}

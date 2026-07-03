@@ -59,7 +59,15 @@ fn emit_namespace_c() -> str {
             "HexaVal hexa_unshare(HexaVal flags_v) {\n" +
             "#ifdef __linux__\n" +
             "    if (!HX_IS_INT(flags_v)) return hexa_int((int64_t)-EINVAL);\n" +
-            "    if (unshare((int)HX_INT(flags_v)) < 0) return hexa_int((int64_t)-errno);\n" +
+            "    // zero-c #29: raw unshare via _hxlcl_lx_sc1 (runtime.c Linux layer). musl x86_64=272 / arm64=97.\n" +
+            "#if defined(__x86_64__)\n" +
+            "    long _un = _hxlcl_lx_sc1(272, (long)(int)HX_INT(flags_v));\n" +
+            "#elif defined(__aarch64__)\n" +
+            "    long _un = _hxlcl_lx_sc1(97, (long)(int)HX_INT(flags_v));\n" +
+            "#else\n" +
+            "    long _un = unshare((int)HX_INT(flags_v));\n" +
+            "#endif\n" +
+            "    if (_un < 0) return hexa_int((int64_t)-errno);\n" +
             "    return hexa_int(0);\n" +
             "#else\n" +
             "    (void)flags_v;\n" +
@@ -70,7 +78,15 @@ fn emit_namespace_c() -> str {
             "HexaVal hexa_setns(HexaVal fd_v, HexaVal nstype_v) {\n" +
             "#ifdef __linux__\n" +
             "    if (!HX_IS_INT(fd_v) || !HX_IS_INT(nstype_v)) return hexa_int((int64_t)-EINVAL);\n" +
-            "    if (setns((int)HX_INT(fd_v), (int)HX_INT(nstype_v)) < 0) return hexa_int((int64_t)-errno);\n" +
+            "    // zero-c #29: raw setns via _hxlcl_lx_sc2. musl x86_64=308 / arm64=268.\n" +
+            "#if defined(__x86_64__)\n" +
+            "    long _sn = _hxlcl_lx_sc2(308, (long)(int)HX_INT(fd_v), (long)(int)HX_INT(nstype_v));\n" +
+            "#elif defined(__aarch64__)\n" +
+            "    long _sn = _hxlcl_lx_sc2(268, (long)(int)HX_INT(fd_v), (long)(int)HX_INT(nstype_v));\n" +
+            "#else\n" +
+            "    long _sn = setns((int)HX_INT(fd_v), (int)HX_INT(nstype_v));\n" +
+            "#endif\n" +
+            "    if (_sn < 0) return hexa_int((int64_t)-errno);\n" +
             "    return hexa_int(0);\n" +
             "#else\n" +
             "    (void)fd_v; (void)nstype_v;\n" +
@@ -81,7 +97,12 @@ fn emit_namespace_c() -> str {
             "HexaVal hexa_pivot_root(HexaVal new_root_v, HexaVal put_old_v) {\n" +
             "#ifdef __linux__\n" +
             "    if (!HX_IS_STR(new_root_v) || !HX_IS_STR(put_old_v)) return hexa_int((int64_t)-EINVAL);\n" +
-            "    long r = syscall(SYS_pivot_root, HX_STR(new_root_v), HX_STR(put_old_v));\n" +
+            "    /* zero-c #29: raw-svc via _hxlcl_lx_sc2 (runtime.c Linux layer) instead of the\n" +
+            "     * libc syscall() varargs trampoline — glibc has no pivot_root wrapper. SYS_pivot_root\n" +
+            "     * resolves to the arch NR (x86_64=155 / arm64=41); _hxlcl_lx_sc2 dispatches syscall/svc\n" +
+            "     * per-arch and _hxlcl_lx_ret maps -errno -> -1+errno, so the r<0 check below is unchanged.\n" +
+            "     * Precedent: renameat2/mkdirat inline svc. Drops the sole libc syscall() UND. */\n" +
+            "    long r = _hxlcl_lx_sc2((long)SYS_pivot_root, (long)HX_STR(new_root_v), (long)HX_STR(put_old_v));\n" +
             "    if (r < 0) return hexa_int((int64_t)-errno);\n" +
             "    return hexa_int(0);\n" +
             "#else\n" +

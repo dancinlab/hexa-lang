@@ -1,0 +1,73 @@
+// compiler/drill/grammar_test.hexa — selftest for M1 (grammar.hexa).
+// Proves the BLOWUP term enumerator + FP_k fingerprint table are
+// (1) deterministic (byte-eq across two builds), (2) enumerate the closed-form
+// term count, (3) place the terms of a KNOWN identity in the table, and
+// (4) give a decidable in-well / out-of-well verdict via fingerprint membership.
+// Runs via `hexa run compiler/drill/grammar_test.hexa`.
+
+use "compiler/drill/grammar"
+use "stdlib/io"
+
+fn gram_gate(label: string, cond: bool) -> int {
+    if cond { println("  [PASS] " + label); return 0 }
+    println("  [FAIL] " + label); return 1
+}
+
+fn main() {
+    let mut f = 0
+    let N = 64
+
+    // (1) determinism — two independent builds must be identical element-wise.
+    let t1 = gram_fp_table_build(N)
+    let t2 = gram_fp_table_build(N)
+    f = f + gram_gate("table len == closed-form count",
+                 len(t1) == gram_fp_table_count())
+    let mut ident = true
+    if len(t1) != len(t2) { ident = false }
+    else {
+        let mut i = 0
+        while i < len(t1) { if t1[i] != t2[i] { ident = false } i = i + 1 }
+    }
+    f = f + gram_gate("two builds byte-eq (deterministic)", ident)
+    // closed form for the 18-fn basis: 18 + 18*19/2 = 18 + 171 = 189.
+    f = f + gram_gate("count == 189 (18 singles + 171 pairs)",
+                 gram_fp_table_count() == 189)
+
+    // (2) the enumerator reproduces a term's fingerprint independent of the
+    // table build (a single term recomputed matches the table membership).
+    // sigma*phi (0,3) and n*tau (5,4) are the two sides of the classical
+    // sigma*phi = tau*n relation (holds only at n=1,6 — bounded, not a law).
+    let fp_sphi = gram_term_fingerprint(0, 3, N)   // sigma*phi
+    let fp_ntau = gram_term_fingerprint(5, 4, N)   // n*tau
+    f = f + gram_gate("sigma*phi fingerprint in table", gram_fp_contains(t1, fp_sphi))
+    f = f + gram_gate("n*tau fingerprint in table",     gram_fp_contains(t1, fp_ntau))
+
+    // (3) commutativity of the product term: phi*sigma (3,0) == sigma*phi (0,3)
+    // must share the fingerprint (same value vector) — the enumerator's a<=b
+    // canonical order is therefore not lossy for membership.
+    let fp_phis = gram_term_fingerprint(3, 0, N)
+    f = f + gram_gate("phi*sigma == sigma*phi fingerprint", fp_phis == fp_sphi)
+
+    // (4) decidable out-of-well: a size-3 product n*sigma*phi (5,0,3) has a
+    // value-signature no size-<=2 term matches → NOT in FP_2. This is exactly
+    // the inexpressibility gate M4 will use to admit a candidate as out-of-well.
+    let h3 = gram_term3_fingerprint(5, 0, 3, N)   // n * sigma * phi (size 3)
+    f = f + gram_gate("size-3 term NOT in FP_2 (out-of-well)",
+                 gram_fp_contains(t1, h3) == false)
+
+    // (5) a single-symbol term (size 1) is in the table (sigma alone).
+    let fp_sig = gram_term_fingerprint(0, 0 - 1, N)
+    f = f + gram_gate("single sigma in table", gram_fp_contains(t1, fp_sig))
+
+    // (6) inlined _gram_af faithfulness — known number-theory values at n=6
+    // (sigma(6)=12 · phi(6)=2 · tau(6)=4) cross-check the exact-int mirror.
+    f = f + gram_gate("af faithful: sigma(6)=12", gram_term_value(0, 0 - 1, 6) == 12)
+    f = f + gram_gate("af faithful: phi(6)=2",    gram_term_value(3, 0 - 1, 6) == 2)
+    f = f + gram_gate("af faithful: tau(6)=4",    gram_term_value(4, 0 - 1, 6) == 4)
+    // and mu(6)=+1 (squarefree, even omega) — checks the signed extended vocab.
+    f = f + gram_gate("af faithful: mu(6)=1",     gram_term_value(12, 0 - 1, 6) == 1)
+
+    println("")
+    if f == 0 { println("grammar M1: ALL PASS"); exit(0) }
+    println("grammar M1: " + to_string(f) + " FAIL"); exit(1)
+}

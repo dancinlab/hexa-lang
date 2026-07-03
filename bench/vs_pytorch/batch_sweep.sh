@@ -23,8 +23,9 @@ echo
 # Run the trainer for a given (B, NSAMP, EPOCHS); echoes the M5-BATCH steps line.
 # CLM_PROD_BATCH=B concatenates B distinct windows into M=B*Tw per step.
 flame_run() {  # $1=B $2=NSAMP $3=EPOCHS  -> stdout flame log
+  # async follows CLM_PROD_DEVRESIDENT=1 (production fast path, +9% win r5).
+  # HEXA_CUDA_ASYNC=0 was removed (masked the real throughput, see run_3way.sh).
   CUDA_VISIBLE_DEVICES=0 CLM_PROD_DEVRESIDENT=1 CLM_PROD_DEVFEED=1 CLM_PROD_BATCHED=1 \
-    HEXA_CUDA_ASYNC=0 \
     CLM_PROD_D=$D CLM_PROD_T=$TW CLM_PROD_E=$E CLM_PROD_BATCH=$1 \
     CLM_PROD_NSAMP=$2 CLM_PROD_EPOCHS=$3 \
     CLM_PROD_CORPUS="$WORK/corpus.txt" \
