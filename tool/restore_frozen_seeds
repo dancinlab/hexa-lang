@@ -184,7 +184,7 @@ fi
 # ON: synth to mktemp, per-frag SENTINEL grep, cmp-skip no-op, and on awk-fail/empty/sentinel-miss
 # KEEP the restored frozen .c (NO-OP-SAFE, same shape as the runtime.c synth). Flip default-ON only
 # after the ghost cmp gate (GATE A 6/6 awk==hexa-run) + byteeq 3-target + faithful GREEN.
-if [ "${HEXA_ZEROC_FRAG_REGEN:-0}" = "1" ]; then
+if [ "${HEXA_ZEROC_FRAG_REGEN:-1}" = "1" ]; then
   _FRAG_SPEC='
 mount|self/native/mount_emit.hexa|native/mount.c
 namespace|self/native/namespace_emit.hexa|CLONE_NEWNS
@@ -411,7 +411,7 @@ fi
 if [ -f "$_tk" ] && ! grep -q 'HEXA_ZEROC_RAND_NATIVE' "$_tk"; then
   awk '
     /double u = \(rand\(\)\+1\.0\)\/\(RAND_MAX\+1\.0\);/ && !done {
-      print "#ifdef HEXA_ZEROC_RAND_NATIVE"
+      print "#if defined(HEXA_ZEROC_RAND_NATIVE) || (defined(__linux__) && !defined(HEXA_ZEROC_RAND_NATIVE_OFF))"
       print "        double u = (hxlcl_rand()+1.0)/(2147483648.0);"
       print "        double w = (hxlcl_rand()+1.0)/(2147483648.0);"
       print "#else"
