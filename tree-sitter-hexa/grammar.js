@@ -61,6 +61,7 @@ module.exports = grammar({
       'fn', 'let', 'mut', 'const', 'static', 'type', 'struct',
       'enum', 'trait', 'impl',
       // other
+      'defer',
       'mod', 'use', 'pub', 'crate', 'own', 'borrow', 'move', 'drop',
       'spawn', 'channel', 'select', 'atomic', 'effect', 'handle',
       'resume', 'import', 'as', 'in', 'and', 'or', 'not', 'self',

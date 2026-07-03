@@ -131,6 +131,13 @@ pub fn bt_needs_backtrack(pat: string) -> bool {
                 if q == 61 || q == 33 || q == 60 { return true }   // = ! <  → lookaround
             }
         }
+        // FIX-A (zero-c #29): a `{n,m}` counted-repeat quantifier — thompson's
+        // linear core has no interval parser (a{2,3} would mis-parse as literal
+        // 'a' + literal '{2,3}'), so route `{`+digit patterns to the backtrack VM
+        // (which parses intervals, _bt_parse_repeat). Guard on a following digit
+        // so a literal `{` (not a quantifier) stays on Thompson — matching glibc
+        // ERE, which treats a non-quantifier `{` as a literal.
+        if c == 123 && i + 1 < n && pat.byte_at(i + 1) >= 48 && pat.byte_at(i + 1) <= 57 { return true }
         i = i + 1
     }
     return false
@@ -847,4 +854,28 @@ pub fn bt_find_all(prog: BtProg, s: string) -> [[int]] {
         }
     }
     return out
+}
+
+// Leftmost (greedy-first) search that begins scanning at absolute index `from`
+// (the backtrack-engine analog of regexec on `s + off`). Returns [] (None) or
+// [start, end) (Some) with ABSOLUTE indices into `s`. Used by the from-offset
+// findall/split/replace loops in stdlib/runtime/regex_rt.hexa so a `{n,m}`
+// interval pattern (routed to this engine by bt_needs_backtrack) still iterates
+// correctly. `from > 0` implies REG_NOTBOL: because scanning starts past index 0,
+// a `^`-anchor cannot fire at the scan start, matching regexec's REG_NOTBOL.
+@pure
+pub fn bt_search_from(prog: BtProg, s: string, from: int) -> [int] {
+    prog.st[0] = 0
+    if !prog.ok { return [] }
+    let n = byte_len(s)
+    let ctr = [0, prog.max_steps, 0]
+    let mut start = from
+    while start <= n {
+        let caps = _bt_fill(2 * (prog.ngroups + 1), -1)
+        let r = _bt_run(prog, caps, ctr, [prog.root], s, start, n)
+        if ctr[2] == 1 { prog.st[0] = 1; return [] }
+        if r >= 0 { return [start, r] }
+        start = start + 1
+    }
+    return []
 }

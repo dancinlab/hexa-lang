@@ -1,0 +1,156 @@
+F-RT-NATIVE-SETJMP-ROUTEC-WALL — setjmp/longjmp native-emit (Route C drop): 🧱 STRUCTURAL WALL
+@state-ok  (RT-NATIVE decision verdict — co-located with F-RT-NATIVE-Z4-SETJMP-DECISION.txt, the
+            established home for this campaign's zeroc-breakthrough decision files)
+date: 2026-06-30   domain: RT-NATIVE   campaign: RFC061 §M8 Route C (drop libc-shim member)
+SSOT: project_hexa_rfc061_hxlcl_crosstarget_abi_wall · convergence runtime-core-hxlcl-shim-c-1
+
+This is the Route-C native-emit re-examination of the symbol pair the 2026-06-16
+F-RT-NATIVE-Z4-SETJMP-DECISION honest-kept under the *literal-∅* lens. Re-opened to ask
+"can we drop the linux-x86_64 libc-shim member for setjmp/longjmp like the strlen/memcpy/
+syscall leaves?" Census verdict: NO — structural wall, NOT (a) GP-clean droppable nor (b)
+HexaVal-coupled. The wall is a JMP_BUF LAYOUT MISMATCH that splits the save/restore pair
+across two ABIs.
+
+CENSUS (signature):
+  shim:1047  int  hxlcl_setjmp(void *buf)            — single ptr arg, int return  → GP-clean sig
+  shim:1048  void hxlcl_longjmp(void *buf, int val)  — ptr+int args, void return    → GP-clean sig
+  Both signatures are raw C-ABI (no HexaVal {tag,payload} touch). The BODIES are naked-asm
+  (callee-saved GPR/FPR + sp + ret-addr saved into jmp_buf). reference = musl
+  src/setjmp/x86_64/{setjmp.S,longjmp.S} (8 slots / 64 B) · src/setjmp/aarch64/{…}.s.
+  An ELF native-emit pair ALREADY EXISTS (test/native_build/emit_hxlcl_setjmp_elf_o.hexa, 43+43
+  .text bytes, byte-id to clang-assembled musl) + a passing matched-pair roundtrip
+  (tool/verify_hxlcl_setjmp_roundtrip.sh, test/native_build/hxlcl_setjmp_roundtrip.c).
+
+WHY 🧱 (structural — not GP-coupling, not investment-poor):
+  The drop is blocked because the SAVE and the RESTORE live in two different places that use
+  two incompatible jmp_buf layouts, and only the RESTORE goes through hxlcl_longjmp:
+
+  1. LINUX TRY-BLOCK SAVE IS INLINE LIBC setjmp, NOT hxlcl_setjmp.
+     compiler/codegen/x86_64_linux.hexa:5254 emits `call setjmp` directly at every try-block,
+     with the comment "call libc setjmp (hxlcl_setjmp is a macro on x86_64)". The slot is a
+     GLIBC-sized 256-B frame slot (x86_64_linux.hexa:5250 `try_slot_idx*256`; :3028-3029
+     "glibc jmp_buf is 200 B"). So the saved buffer is a GLIBC __jmp_buf_tag (200 B incl
+     __saved_mask, rip/rsp PTR_MANGLE-scrambled).
+
+  2. hxlcl_longjmp THEN RESTORES THAT GLIBC BUFFER.
+     hexa_throw → hxlcl_longjmp(&__jb, val) where &__jb is the glibc-setjmp-populated slot.
+     Replacing hxlcl_longjmp with the musl-layout native .o (8 slots: rbx/rbp/r12-r15/rsp/rip,
+     64 B, NO PTR_MANGLE) would read garbage from the wrong offsets and a mangled rip → SEGV.
+     This is the EXACT failure the frozen emitter records:
+       self/runtime_emit_full.hexa:2075-2077 — "an earlier __builtin_longjmp attempt segfaulted
+       because it expects a __builtin_setjmp buffer (incompatible layout). hxlcl_setjmp mirrors
+       as a libc-setjmp macro …; the linux codegen path itself uses libc setjmp directly."
+
+  3. hxlcl_setjmp IS NOT AN EXTERNALLY-LINKABLE SYMBOL ON LINUX.
+     shim:1039 + runtime_emit_full.hexa:2081 — `#define hxlcl_setjmp(buf) setjmp(*(jmp_buf*)buf)`
+     (a CALL-SITE MACRO) + a `static` hxlcl_longjmp. Neither is a strong global in runtime.o, so
+     there is NO shim MEMBER to drop and NO symbol for an emitted .o to override. The existing
+     `int hxlcl_setjmp(void*){…}` at shim:1047 is only compiled `#ifndef __APPLE__` AND only in
+     the multi-object include-drop build; in the DEFAULT single-TU build the macro form wins.
+
+  ⇒ To make the native musl pair correct on linux you must ALSO change the production codegen
+     SAVE (x86_64_linux.hexa:5254 `call setjmp` → `call hxlcl_setjmp` + shrink the 256-B slot to
+     the 64-B musl frame). That edits the `.text` of EVERY compiled program containing a
+     try-block → BYTEEQ-BREAKING across the frozen self-host fixpoint, and x86_64_linux.hexa is
+     ON the frozen compile path. That is a release-integrity hard line, not a default-OFF leaf.
+
+  This is categorically UNLIKE the dropped pure-leaf family (strlen/memcpy/memset/strcmp/…,
+  atof/clock_gettime/pipe/popen/pclose): those are pure functions whose .o fully replaces a
+  self-contained shim member with NO codegen call-site change. setjmp/longjmp is a SAVE/RESTORE
+  PAIR split across codegen (save) + runtime (restore) with a shared ABI contract — you cannot
+  swap one half without rewriting the other half in the frozen-path codegen.
+
+ASYMMETRY (why darwin is fine, linux is not):
+  arm64-darwin ALREADY uses a real global symbol pair: codegen arm64_darwin.hexa:3854 emits
+  `bl hxlcl_setjmp`, and the frozen runtime.c defines `_hxlcl_setjmp`/`_hxlcl_longjmp` as naked
+  arm64 asm (matched 192-B/14-slot jmp_buf, save AND restore both native). darwin's exception
+  substrate is therefore ALREADY non-libc (asm, extractable to .s) — no Route-C work needed and
+  none possible to "drop" (it is the floor's own asm). The wall is linux-x86_64-specific.
+
+DROP-RESIDUAL IMPACT: 0. Because linux hxlcl_setjmp is a macro + hxlcl_longjmp is static, there
+is no externally-linkable shim MEMBER for this pair on linux. shim member count is UNCHANGED by
+any setjmp action (∅ distance −0). Even a hypothetical byteeq-breaking codegen rewrite would
+trade the libc-setjmp inline call for a libc-longjmp-free path but still rests on the same
+freestanding-floor class as libm (the prior Z4 honest-keep rationale stands).
+
+DECISION: 🧱 HONEST-KEEP (Route-C native-emit closed-negative). Distinct from the 2026-06-16
+literal-∅ Z4 decision: this verdict closes the *drop-the-shim-member* angle specifically. The
+emitter + roundtrip artifacts remain as proven-correct CODE (matched-pair, byte-id to musl) but
+are intentionally NOT wired into a stage_resolve gate, because wiring only the restore half is
+incorrect (mixed glibc-save/musl-restore = SEGV) and wiring both halves requires a
+byteeq-breaking edit to frozen-path codegen — outside this task's hard constraints (DEFAULT
+byteeq 3-target byte-id; frozen 151c52c8 unchanged; no production try-block .text change).
+
+REOPEN CONDITIONS: (a) hexa codegen gains an opaque/abstract jmp_buf so the SAVE site can route
+through a hexa-owned layout matching hxlcl_setjmp (then save+restore are co-owned and the pair
+can be dropped together byteeq-safely under a default-OFF codegen flag); OR (b) a frozen
+re-baseline that flips the linux try-block save to `call hxlcl_setjmp` + musl 64-B slot,
+re-pinning the fixpoint sha; OR (c) the linux codegen migrates exceptions off setjmp/longjmp
+entirely (table-based unwinding), at which point setjmp/longjmp leave the floor.
+
+═══════════════════════════════════════════════════════════════════════════════
+MEASURED ADDENDUM (2026-06-30 · ING#29 ∅−8 setjmp/longjmp · branch ing29-setjmp-naked)
+═══════════════════════════════════════════════════════════════════════════════
+The 2026-06-30 census above was reading-based ("intentionally NOT wired into a
+gate"). This addendum ACTUALLY ATTEMPTS the conversion and CAPTURES the wall with
+exit codes — implement-to-the-wall, not re-declaration. Tool committed alongside:
+  tool/measure_setjmp_roundtrip.sh  (M1/M2/M3, isolated reversed-order, exit-code
+  captured — no LLM self-judge). Host: aiden x86_64 Linux 6.17 · cc 13.3.0.
+  native musl pair = build/poc/hxlcl_setjmp_elf.o (688 B, byte-id to musl
+  src/setjmp/x86_64/{setjmp,longjmp}.S via test/native_build/emit_hxlcl_setjmp_elf_o.hexa).
+
+MEASUREMENTS (captured exit codes):
+  M(1)=0   (PASS)  native musl pair IN ISOLATION: setjmp→longjmp(buf,42) returns 42,
+                   longjmp(buf,0) coerces to 1. The native-emit (#4218) capability is
+                   SOUND — @naked/native-emit is NOT the wall.
+  M(2)=139 (SEGV)  glibc-layout SAVE  +  musl-layout RESTORE  → crash.
+  M(3)=139 (SEGV)  musl-layout SAVE   +  glibc-layout RESTORE → crash.  ← THE FLAG-ON PATH.
+                   M(3) executes the EXACT two production functions at the save/restore
+                   seam: the real native-musl hxlcl_setjmp .o (what a flag-ON codegen
+                   `call hxlcl_setjmp` binds) + the verbatim glibc-longjmp body the
+                   FROZEN runtime's hexa_throw runs (self/runtime_emit_full.hexa:~2083,
+                   `longjmp(*(jmp_buf*)buf, val?val:1)`). Both layout-mismatch directions
+                   SEGV — glibc PTR_MANGLE (XOR-with-TLS-guard) on rsp/rip vs musl raw.
+
+THE ATTEMPTED CONVERSION (the exact 1-line codegen gate, default-OFF):
+  compiler/codegen/x86_64_linux.hexa, try_setjmp SAVE emission (base a31452e19 ~L5308):
+    - _x86_buf.push(_x86_instr1("call", _x86_op_label("setjmp"), …))
+    + let _sj_sym = if env("HEXA_NATIVE_SETJMP") == "1" { "hxlcl_setjmp" } else { "setjmp" }
+    + _x86_buf.push(_x86_instr1("call", _x86_op_label(_sj_sym), …))
+  Applied + restored cleanly on aiden (diff confirmed). NOT committed — see disposition.
+
+REFINEMENT OF THE CENSUS (corrects "byteeq-breaking edit" framing):
+  The SAVE-side flip CAN be made byteeq-NEUTRAL when gated default-OFF: with
+  HEXA_NATIVE_SETJMP unset, _sj_sym=="setjmp" → the SAME value flows to the SAME
+  _x86_instr1("call", …); the 3rd arg is a codegen ANNOTATION (not emitted into the
+  object). DEFAULT .text is byte-identical by construction (same argument as every
+  other default-OFF gate in this file: HEXA_UNBOX_NATIVE / HEXA_VA_INTRINSICS / …).
+  So the wall is NOT "the SAVE-side flip is inherently byteeq-breaking." The wall is:
+
+  ▸ THE RESTORE SIDE IS UNREACHABLE FROM A PER-PROGRAM CODEGEN FLAG.
+    HEXA_NATIVE_SETJMP is read at user-program codegen time and can only change the
+    SAVE half. The RESTORE half is hexa_throw → `static`/macro-bound glibc longjmp
+    BAKED INTO the prebuilt/FROZEN runtime.a (self/runtime_emit_full.hexa:~2082,
+    `static void __attribute__((noinline,noreturn)) hxlcl_longjmp(...){longjmp(...);}`).
+    A `static` call inside the runtime TU is NOT interposable by an externally-linked
+    native-musl hxlcl_longjmp.o, and the per-compile flag has no channel into the
+    prebuilt runtime. Flipping ONLY the reachable (SAVE) half therefore produces
+    musl-SAVE + glibc-RESTORE = M(3) = SEGV. Confirmed measured.
+
+  Full-program try{throw}catch run under a flag-ON CURRENT-MAIN hexat was NOT obtained:
+  stock release hexa (v0.466.0) cannot transpile the diverged current-main compiler
+  source (stale-hexat caveat: hxlcl_fmod/__raw_add_f undeclared), and build/aprime_cc
+  is a specialized driver, not a general CLI. A gated current-main cc_native rebuild
+  is the only full-program path — deferred as redundant: M(3) already executes the
+  precise production save/restore functions at the binding seam (same crash a wrapped
+  try/catch would re-produce).
+
+DISPOSITION: 🧱 HONEST-KEEP, NOW MEASURED. Codegen left PRISTINE (the crash-only
+  default-OFF gate is a footgun, not a shippable building block — unlike signal #4268
+  whose trampoline WORKED). Committed = the measure scaffold + this addendum. Reopen
+  conditions (a)/(b)/(c) above UNCHANGED; condition (b) — a frozen re-baseline flipping
+  BOTH the linux try-block SAVE (`call hxlcl_setjmp`) AND the frozen-runtime RESTORE
+  (`hxlcl_longjmp` → native musl) together, re-pinning the 151c52c8 fixpoint — is the
+  real unlock. ∅ shim-member delta on linux: −0 (hxlcl_setjmp = `#define` macro,
+  hxlcl_longjmp = `static`; neither is an externally-linkable shim member). darwin +
+  arm64-linux already fully native (no glibc; codegen already emits `bl hxlcl_setjmp`).

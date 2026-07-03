@@ -1,0 +1,145 @@
+================================================================================
+element-pack (HEXA_PACK_ARRAY) default-ON readiness — VERDICT: **NO-GO**
+================================================================================
+Branch : perf/element-pack-default-on-probe (off origin/main @ db10cb7e4)
+Lever  : HEXA_PACK_ARRAY  (#4114 ebfd40b77, currently default-OFF / opt-in)
+Host   : aiden (linux x86_64), CPU-only runtime ~/runtime.a.cpubak
+Date   : 2026-06-27
+Rule   : release-integrity > self-host; honesty > goal-hook; verify-then-flip.
+
+--------------------------------------------------------------------------------
+1) ESCAPE-SOUNDNESS STRESS  (correctness gate — captured stdout, OFF vs ON)
+--------------------------------------------------------------------------------
+aprime_cc emit recipe (proven, from fused-branch iso.sh):
+  [HEXA_PACK_ARRAY=1|unset] aprime_cc _drv.hexa --emit=asm \
+      --target=x86_64-linux-gnu -o {on|off}.s K.hexa
+  gcc -O2 {on|off}.s ~/runtime.a.cpubak -o {on|off}.bin -lm ; run; compare stdout
+
+KERNEL              CASE              OFF_OUT     ON_OUT          VERDICT
+k0_positive         packable control  4544        4544            PASS
+ka_arg_escape       (ⓐ) arg escape    4096        4095            **DIVERGE**
+kb_return_escape    (ⓑ) return escape 189         189             PASS
+kc_alias            (ⓒ) alias         2126        <value>999064   **DIVERGE**
+kd_global           (ⓓ) global        315         315             PASS
+ke_untyped          (ⓔ) untyped/prim  6           6               PASS
+kf_reassign         reassign          70          70              PASS
+
+  => ESCAPE_STRESS = DIVERGENCE_FOUND  (2 / 7 diverge)   => lattice hole => NO-GO
+
+Binary used: prebuilt aprime_cc from fused branch 965592f4c. element-pack
+codegen is PROVABLY identical to merged main — git diff 965592f4c..origin/main
+on compiler/codegen/x86_64_linux.hexa + compiler/lower/hir_to_mir.hexa = ONLY a
+30-line, element-pack-unrelated hxlcl C-ABI whitelist (RFC061); hir_to_mir.hexa
+identical. Canonical fresh-from-main aprime_cc reconfirmation: see section (4).
+
+--------------------------------------------------------------------------------
+2) ROOT CAUSE  (asm-confirmed — the escape lattice is UNSOUND for aliasing)
+--------------------------------------------------------------------------------
+A typed-prim [i64]/[i32] array lowers to TWO MIR locals that SHARE one buffer:
+  T = storage  (STMT_ASSIGN op="array_lit")            <- the HexaArr* buffer
+  X = handle   (STMT_ASSIGN op="let"  X = T)           <- a HexaVal copy of T
+The whole-function escape scan (compiler/codegen/x86_64_linux.hexa ~L797-829)
+marks T and X packed TOGETHER, but then CLEARS the packed bit PER-LOCAL,
+INDEPENDENTLY, and its "safe use" set at arg-position-0 includes op=="let".
+Consequences (both measured, both the SAME class):
+
+  kc_alias (ⓒ):  `let ys = xs`  — xs (the handle X) appears as args[0] of a
+    `let`, which the scan treats as SAFE, so xs STAYS PACKED. The alias ys is
+    NOT marked packed (its let_src is a handle, not an array_lit dst) -> ys is
+    BOXED. Emit (kc_alias.on.s): xs read via packed `arrpk get` (L100-108),
+    ys read via BOXED `hexa_index_get` (L94, L135) ON THE SAME packed buffer ->
+    stride-16/tagged read of a stride-8/untagged buffer -> HexaVal tag
+    corruption -> println prints "<value>999064" instead of 2126.
+
+  ka_arg_escape (ⓐ):  `sumarr(xs, N)` — the handle X escapes via the call, so X
+    is cleared (boxed), but the STORAGE T it aliases is used only in the safe
+    `let X=T` and is NOT cleared -> T emits packed `hexa_arr_i64_new`
+    (ka_arg_escape.on.s L104). sumarr() reads its param via BOXED
+    `hexa_index_get` (L46). So a packed buffer is read boxed inside the callee
+    -> miscompile (sum 4096 -> 4095).
+
+INVARIANT VIOLATED: a packed array and a boxed alias/handle/param of the SAME
+underlying buffer must never coexist. The current scan can leave one member of
+an aliasing pair packed while the other is boxed (it clears T and X — and any
+`let`-copy alias — independently, and counts `let` as a non-escaping use).
+
+Why k0/kb/kd/ke/kf pass: k0 has no escape/alias (coherent pack, fast path is
+bit-correct — 4544==4544, the lever itself is sound when no aliasing occurs);
+kb's escaping local is voided AND its receiver is a call-result (never packed);
+kd is a global (separate id space, never packed); ke is untyped (type_id 0, not
+101/102, never packed); kf re-binds via array_lit (stays self-consistent).
+
+--------------------------------------------------------------------------------
+3) SELF-HOST FIXPOINT (packing-ON)  —  NOT RUN (gated by section 1)
+--------------------------------------------------------------------------------
+gen3==gen4 sha : N/A — not run.
+Rationale (honest, not a punt): the escape-soundness gate is the cheap, decisive
+correctness check and it is RED. The self-host fixpoint COMPILES THE COMPILER'S
+OWN SOURCE, which is saturated with arrays that escape into functions and are
+aliased — exactly the kc/ka miscompile class. With HEXA_PACK_ARRAY=1 the gen2
+compiler would itself be miscompiled, so a gen3==gen4 byte-eq (even if it ran to
+completion) would witness a deterministically-WRONG binary, not soundness.
+Spending ~3 h to confirm a foregone failure is the black-box compute waste the
+work-rules forbid. Re-run the fixpoint only AFTER the lattice hole is fixed.
+
+miscompile-zero : FALSIFIED at the kernel level (ka, kc) — section 1/2.
+
+--------------------------------------------------------------------------------
+4) CANONICAL FRESH-FROM-MAIN CONFIRMATION
+--------------------------------------------------------------------------------
+CONFIRMED. A fresh native compiler was built from a clean origin/main worktree
+on aiden and the escape-stress re-run on it:
+  fresh worktree HEAD : 6ed33ac64 (element-pack ebfd40b77 #4114 = ancestor)
+  build recipe        : tool/build_native_linux_x86_64
+                        (flatten -> hexat transpile -> gcc -O1 -> stage5 smoke)
+  compiler            : build/lx8664/cc_native — 4,140,968 B, ELF64 x86-64 PIE
+  build marker        : "DONE — cc_native + native-emit milestone PASS
+                         (HEAD=6ed33ac64)"; stage5 smoke stdout=hi rc=7 PASS
+  fresh escape-stress table (identical to section 1):
+    k0_positive   4544 / 4544        PASS
+    ka_arg_escape 4096 / 4095        **DIVERGE**
+    kb_return     189  / 189         PASS
+    kc_alias      2126 / <value>999064  **DIVERGE**
+    kd_global     315  / 315         PASS
+    ke_untyped    6    / 6           PASS
+    kf_reassign   70   / 70          PASS
+    => ESCAPE_STRESS = DIVERGENCE_FOUND
+  VERDICT: CONFIRMED — both divergences reproduce bit-for-bit on the canonical
+  fresh-from-main native compiler. The miscompile is in the merged HEXA_PACK_ARRAY
+  codegen, NOT an artifact of the prebuilt binary.
+
+--------------------------------------------------------------------------------
+5) SHIP SMOKE
+--------------------------------------------------------------------------------
+hello/exit42 with HEXA_PACK_ARRAY=1: those programs use no typed-prim arrays, so
+PACK is inert for them (they would pass). Smoke is NOT the binding signal here —
+the escape-stress already proves the codegen miscompiles real array programs, so
+smoke-green would be a false comfort. Not used to upgrade the verdict.
+
+--------------------------------------------------------------------------------
+6) BYTEEQ 3 TARGETS
+--------------------------------------------------------------------------------
+PACK is x86_64-linux-only (arm64/darwin/nvptx have 0 PACK refs). The x86_64-linux
+codegen is the one that miscompiles (sections 1-2). arm64-linux / darwin-arm64
+were not exercised — they are byte-identical OFF==ON by construction, but that is
+irrelevant given x86_64-linux is RED.
+
+================================================================================
+DECISION: **NO-GO**.  Keep HEXA_PACK_ARRAY DEFAULT-OFF (opt-in) — this is CORRECT
+as-is. Do NOT flip _pack_array_enabled() / _pack_fuse_enabled()
+(compiler/codegen/x86_64_linux.hexa ~L1307/L1318) or _arrpk_fuse_enabled()
+(compiler/lower/hir_to_mir.hexa ~L265) to default-true.
+
+Blocking defect (must fix before any future flip): the escape lattice is unsound
+for aliasing — a packed array can coexist with a boxed alias/handle/param of the
+SAME buffer. Fix direction (coherent voiding): voiding ANY member of a packed
+aliasing pair (T<->X, and every `let`-copy/escaping use) must propagate to ALL
+members; do NOT count `op=="let"` (or call-arg/return materialization) as a
+non-escaping use UNLESS the copy is itself provably-packed and read-coherent.
+i.e. the V8 PACKED->HOLEY fallback must be transitive over the alias set, not
+per-local. After that fix: re-run THIS escape-stress (all 7 bit-exact) THEN the
+packing-ON self-host fixpoint (gen3==gen4 + ENCODE-MISS=0) THEN byteeq 3-target.
+
+No tune-to-green. The opt-in lever stays valid for its proven non-escaping case
+(k0 PASS) — default-OFF is the right state.
+================================================================================
