@@ -1,0 +1,452 @@
+// HEXA Native Compiler — PCF multi-constant discovery-engine sweep selftest
+//
+// @version 0.1.0
+// @capabilities [stdout]
+//
+// MULTI-CONSTANT extension of compiler/drill/pcf_test.hexa: the PCF (polynomial continued
+// fraction) detector is exercised against MORE THAN ONE catalogued constant — both zeta(2)
+// and zeta(3) — each carried by a NATIVE integer constant-engine (no float / Taylor; the
+// codegen-fragile path is forbidden by CLAUDE.md). Reference PCFs (van der Poorten 1979,
+// "A proof that Euler missed", Apery's irrationality proofs):
+//   * zeta(3):  a(n) = -n^6 ,  b(n) = 34n^3 + 51n^2 + 27n + 5 ,  b0 = 0  ->  6/zeta(3).
+//   * zeta(2):  a(n) =  n^4 ,  b(n) = 11n^2 + 11n + 3 ,          b0 = 3  ->  5/zeta(2).
+// (vdP ζ(2) coefficients cross-checked numerically: convergent p/q -> 3.0396355092701333 =
+//  5 / 1.6449340668482264 = 5/ζ(2). reference-match below.)
+//
+// NATIVE CONSTANT ENGINE (the new piece vs pcf_test.hexa): instead of hard-coding the digit
+// string of the constant, each constant is recomputed by an ACCELERATED Apery-type series
+// summed EXACTLY in BigInt fixed-point (value * 10^(D+guard), truncated long division):
+//   * zeta(2) = 3   * sum_{n>=1}  1 / (n^2  * C(2n,n))           (all-positive)
+//       term ratio  T_n = T_{n-1} * (n-1)^2 / ( n * 2 * (2n-1) ) ,  T_1 = 1/2.
+//   * zeta(3) = 5/2 * sum_{n>=1} (-1)^(n-1) / (n^3 * C(2n,n))    (alternating)
+//       term ratio  U_n = U_{n-1} * (n-1)^3 / ( n^2 * 2 * (2n-1) ) , U_1 = 1/2.
+// Both fixed-point sums reproduce the catalogued digits EXACTLY at D=40:
+//   floor(ζ(2)*10^40) = 16449340668482264364724151666460251892189
+//   floor(ζ(3)*10^40) = 12020569031595942853997381615114499907649
+// (reference: ζ(2)=1.6449340668482264365..., ζ(3)=1.2020569031595942854...)
+//
+// Detection: the PCF convergent p_K/q_K (BigInt recurrence) is tested against the Mobius
+// relation  A + B*c + C*L + D*c*L ~= 0  (L=p/q) by exact BigInt cross-mult, |V|*10^guard <
+// q*CDEN. Each constant family asserts its TRUE relation detected AND wrong scales rejected.
+//
+// Asserts (multi-const detector sweep):
+//   ZETA3 (Apery):  (6,0,0,-1) detected ; (1,0,0,-1)/(5,0,0,-1) rejected.
+//   ZETA2 (vdP):    (5,0,0,-1) detected ; (1,0,0,-1)/(6,0,0,-1) rejected.
+//   CONST-ENGINE gate: native series == catalogued floor digits (40-digit reference-match).
+//   Honesty (c2): novel = 0 (BOTH families are CATALOGUED — Apery/vdP, already-proven). A
+//       detected relation is BOUNDED numeric (finite q, CDEN) -> the for-all-n CF identity
+//       stays UNPROVEN by this engine (Apery's/vdP's ARE proven; novel survivors would not be).
+//
+// Run:  hexa run compiler/drill/pcf_multiconst_test.hexa
+
+// ═══════════════ inlined BigInt (base-10000 limb array, signed) ═══════════════
+fn _BASE() -> int { 10000 }
+fn _nlimb(a) -> int { a.len() - 1 }
+fn _norm(a) -> array {
+    let n = a.len()
+    let hi = n - 1
+    while hi >= 1 {
+        if a[hi] != 0 { break }
+        hi = hi - 1
+    }
+    if hi == 0 {
+        let z = []
+        z.push(0)
+        return z
+    }
+    let out = []
+    out.push(a[0])
+    let i = 1
+    while i <= hi { out.push(a[i]); i = i + 1 }
+    out
+}
+fn bi_from(x) -> array {
+    let out = []
+    if x == 0 { out.push(0); return out }
+    let sign = 1
+    let v = x
+    if v < 0 { sign = 0 - 1; v = 0 - v }
+    out.push(sign)
+    let base = _BASE()
+    while v > 0 { out.push(v % base); v = v / base }
+    out
+}
+fn _cmp_mag(a, b) -> int {
+    let na = _nlimb(a)
+    let nb = _nlimb(b)
+    if na < nb { return 0 - 1 }
+    if na > nb { return 1 }
+    let i = na
+    while i >= 1 {
+        if a[i] < b[i] { return 0 - 1 }
+        if a[i] > b[i] { return 1 }
+        i = i - 1
+    }
+    0
+}
+fn bi_cmp(a, b) -> int {
+    let sa = a[0]
+    let sb = b[0]
+    if sa < sb { return 0 - 1 }
+    if sa > sb { return 1 }
+    if sa == 0 { return 0 }
+    let m = _cmp_mag(a, b)
+    if sa > 0 { return m }
+    0 - m
+}
+fn _add_mag(a, b) -> array {
+    let base = _BASE()
+    let na = _nlimb(a)
+    let nb = _nlimb(b)
+    let n = na
+    if nb > n { n = nb }
+    let out = []
+    out.push(1)
+    let carry = 0
+    let i = 1
+    while i <= n {
+        let da = 0
+        if i <= na { da = a[i] }
+        let db = 0
+        if i <= nb { db = b[i] }
+        let s = da + db + carry
+        out.push(s % base)
+        carry = s / base
+        i = i + 1
+    }
+    if carry > 0 { out.push(carry) }
+    _norm(out)
+}
+fn _sub_mag(a, b) -> array {
+    let base = _BASE()
+    let na = _nlimb(a)
+    let nb = _nlimb(b)
+    let out = []
+    out.push(1)
+    let br = 0
+    let i = 1
+    while i <= na {
+        let da = a[i]
+        let db = 0
+        if i <= nb { db = b[i] }
+        let s = da - db - br
+        if s < 0 { s = s + base; br = 1 } else { br = 0 }
+        out.push(s)
+        i = i + 1
+    }
+    _norm(out)
+}
+fn bi_neg(a) -> array {
+    let out = []
+    out.push(0 - a[0])
+    let i = 1
+    while i < a.len() { out.push(a[i]); i = i + 1 }
+    out
+}
+fn bi_add(a, b) -> array {
+    let sa = a[0]
+    let sb = b[0]
+    if sa == 0 { return b }
+    if sb == 0 { return a }
+    if sa == sb {
+        let m = _add_mag(a, b)
+        m[0] = sa
+        return _norm(m)
+    }
+    let c = _cmp_mag(a, b)
+    if c == 0 { let z = []; z.push(0); return z }
+    if c > 0 {
+        let m = _sub_mag(a, b)
+        m[0] = sa
+        return _norm(m)
+    }
+    let m2 = _sub_mag(b, a)
+    m2[0] = sb
+    _norm(m2)
+}
+fn bi_mul(a, b) -> array {
+    let sa = a[0]
+    let sb = b[0]
+    if sa == 0 { return a }
+    if sb == 0 { return b }
+    let base = _BASE()
+    let na = _nlimb(a)
+    let nb = _nlimb(b)
+    let res = []
+    let k = 0
+    while k < na + nb { res.push(0); k = k + 1 }
+    let i = 1
+    while i <= na {
+        let carry = 0
+        let j = 1
+        while j <= nb {
+            let idx = i + j - 2
+            let cur = res[idx] + a[i] * b[j] + carry
+            res[idx] = cur % base
+            carry = cur / base
+            j = j + 1
+        }
+        let idx2 = i + nb - 1
+        while carry > 0 {
+            let cur2 = res[idx2] + carry
+            res[idx2] = cur2 % base
+            carry = cur2 / base
+            idx2 = idx2 + 1
+        }
+        i = i + 1
+    }
+    let out = []
+    out.push(sa * sb)
+    let m = 0
+    while m < res.len() { out.push(res[m]); m = m + 1 }
+    _norm(out)
+}
+// multiply BigInt by a small NON-NEGATIVE i64 m (m*BASE fits in i64) — for series term ratio.
+fn bi_mul_small(a, m) -> array {
+    if a[0] == 0 { return a }
+    if m == 0 { let z = []; z.push(0); return z }
+    let base = _BASE()
+    let out = []
+    out.push(a[0])
+    let carry = 0
+    let i = 1
+    while i < a.len() {
+        let cur = a[i] * m + carry
+        out.push(cur % base)
+        carry = cur / base
+        i = i + 1
+    }
+    while carry > 0 { out.push(carry % base); carry = carry / base }
+    _norm(out)
+}
+// floor-divide a NON-NEGATIVE BigInt by a small positive i64 d (d < BASE, single-limb long div).
+fn bi_div_small(a, d) -> array {
+    if a[0] == 0 { return a }
+    let base = _BASE()
+    let na = _nlimb(a)
+    let out = []
+    out.push(a[0])
+    let k = 0
+    while k < na { out.push(0); k = k + 1 }
+    let rem = 0
+    let i = na
+    while i >= 1 {
+        let cur = rem * base + a[i]
+        out[i] = cur / d
+        rem = cur % d
+        i = i - 1
+    }
+    _norm(out)
+}
+fn bi_ndigits(a) -> int {
+    if a[0] == 0 { return 1 }
+    let na = _nlimb(a)
+    let top = a[na]
+    let topd = 0
+    let v = top
+    while v > 0 { v = v / 10; topd = topd + 1 }
+    topd + 4 * (na - 1)
+}
+fn bi_abs(a) -> array {
+    if a[0] < 0 { return bi_neg(a) }
+    a
+}
+
+// ═══════════════ native constant engine (Apery-type accelerated series, BigInt fixed-point) ═══════════════
+// floor-divide a NON-NEGATIVE BigInt by 10^e (repeated single-limb /10).
+fn _bi_div_pow10(a, e) -> array {
+    let r = a
+    let i = 0
+    while i < e {
+        r = bi_div_small(r, 10)
+        i = i + 1
+    }
+    r
+}
+// 10^e as BigInt
+fn _bigten(e) -> array {
+    let ten = bi_from(10)
+    let r = bi_from(1)
+    let i = 0
+    while i < e { r = bi_mul(r, ten); i = i + 1 }
+    r
+}
+// floor(zeta(2) * 10^dd) via  zeta(2) = 3 * sum_{n>=1} 1/(n^2 C(2n,n)),
+//   T_1 = 1/2 ,  T_n = T_{n-1} * (n-1)^2 / ( n * 2 * (2n-1) )  (all-positive, truncate-floor).
+fn _zeta2_series(dd) -> array {
+    let guard = 15
+    let scale = _bigten(dd + guard)
+    // T_1 = scale / 2
+    let t = bi_div_small(scale, 2)
+    let acc = bi_div_small(scale, 2)
+    let n = 2
+    while true {
+        // multiply (n-1)^2, divide n, 2, (2n-1)
+        t = bi_mul_small(t, n - 1)
+        t = bi_mul_small(t, n - 1)
+        t = bi_div_small(t, n)
+        t = bi_div_small(t, 2)
+        t = bi_div_small(t, 2 * n - 1)
+        if t[0] == 0 { break }
+        acc = bi_add(acc, t)
+        n = n + 1
+    }
+    let scaled = bi_mul_small(acc, 3)
+    _bi_div_pow10(scaled, guard)
+}
+// floor(zeta(3) * 10^dd) via  zeta(3) = 5/2 * sum_{n>=1} (-1)^(n-1) /(n^3 C(2n,n)),
+//   U_1 = 1/2 ,  U_n = U_{n-1} * (n-1)^3 / ( n^2 * 2 * (2n-1) )  (alternating signed sum).
+fn _zeta3_series(dd) -> array {
+    let guard = 18
+    let scale = _bigten(dd + guard)
+    let u = bi_div_small(scale, 2)
+    let acc = bi_div_small(scale, 2)   // n=1, sign (+)
+    let n = 2
+    while true {
+        u = bi_mul_small(u, n - 1)
+        u = bi_mul_small(u, n - 1)
+        u = bi_mul_small(u, n - 1)
+        u = bi_div_small(u, n)
+        u = bi_div_small(u, n)
+        u = bi_div_small(u, 2)
+        u = bi_div_small(u, 2 * n - 1)
+        if u[0] == 0 { break }
+        // sign = (-1)^(n-1): positive when n is odd
+        if n % 2 == 1 {
+            acc = bi_add(acc, u)
+        } else {
+            acc = bi_add(acc, bi_neg(u))
+        }
+        n = n + 1
+    }
+    let scaled = bi_mul_small(acc, 5)
+    let half = bi_div_small(scaled, 2)
+    _bi_div_pow10(half, guard)
+}
+
+// ═══════════════ PCF over BigInt ═══════════════
+// integer polynomial coef[0]+coef[1]*n+... evaluated at i64 n -> i64 (fits for our ranges)
+fn _polyval(coef, n) -> int {
+    let r = 0
+    let i = coef.len() - 1
+    while i >= 0 { r = r * n + coef[i]; i = i - 1 }
+    r
+}
+// PCF convergent p_K/q_K via BigInt recurrence; returns [pBig, qBig]
+fn _pcf_pq(acoef, bcoef, kk) -> array {
+    let p0 = bi_from(1)
+    let p1 = bi_from(_polyval(bcoef, 0))
+    let q0 = bi_from(0)
+    let q1 = bi_from(1)
+    let n = 1
+    while n <= kk {
+        let an = bi_from(_polyval(acoef, n))
+        let bn = bi_from(_polyval(bcoef, n))
+        let np = bi_add(bi_mul(bn, p1), bi_mul(an, p0))
+        let nq = bi_add(bi_mul(bn, q1), bi_mul(an, q0))
+        p0 = p1
+        p1 = np
+        q0 = q1
+        q1 = nq
+        n = n + 1
+    }
+    let out = []
+    out.push(p1)
+    out.push(q1)
+    out
+}
+// Mobius relation test (BigInt): V = A*q*CDEN + B*q*CNUM + C*p*CDEN + D*p*CNUM,
+//   holds iff |V|*10^guard < q*CDEN. aa..dd are small i64.
+fn _mobius_holds(p, q, cnum, cden, aa, bb, cc, dd, guard) -> int {
+    let t1 = bi_mul(bi_from(aa), bi_mul(q, cden))
+    let t2 = bi_mul(bi_from(bb), bi_mul(q, cnum))
+    let t3 = bi_mul(bi_from(cc), bi_mul(p, cden))
+    let t4 = bi_mul(bi_from(dd), bi_mul(p, cnum))
+    let v = bi_add(bi_add(t1, t2), bi_add(t3, t4))
+    let lhs = bi_mul(bi_abs(v), _bigten(guard))
+    let rhs = bi_mul(q, cden)
+    if bi_cmp(lhs, rhs) < 0 { return 1 }
+    0
+}
+
+fn _gate(label, got, want) -> int {
+    if got == want {
+        println("  [PASS] " + label + "  -> " + to_string(got))
+        return 0
+    }
+    println("  [FAIL] " + label + "  -> got " + to_string(got) + " want " + to_string(want))
+    1
+}
+
+fn main() {
+    let dd = 40
+    let cden = _bigten(dd)
+    println("=== pcf_multiconst SELFTEST (native BigInt const-engine, no float, D=" + to_string(dd) + ") ===")
+    let fails = 0
+
+    // ── native constant engine: recompute floor(c*10^40) and check vs catalogued digits ──
+    // zeta(2) = 1.6449340668482264365504592...; floor(*10^40) catalogued reference digits:
+    let z2num = _zeta2_series(dd)
+    let z2frac = [6,4,4,9,3,4,0,6,6,8,4,8,2,2,6,4,3,6,4,7,2,4,1,5,1,6,6,6,4,6,0,2,5,1,8,9,2,1,8,9]
+    let z2ref = _rat_from_digits(1, z2frac)
+    // zeta(3) = 1.2020569031595942853997381...; floor(*10^40) catalogued reference digits:
+    let z3num = _zeta3_series(dd)
+    let z3frac = [2,0,2,0,5,6,9,0,3,1,5,9,5,9,4,2,8,5,3,9,9,7,3,8,1,6,1,5,1,1,4,4,9,9,9,0,7,6,4,9]
+    let z3ref = _rat_from_digits(1, z3frac)
+    println("CONST-ENGINE GATE (native Apery-type series == catalogued floor(c*10^40)):")
+    fails = fails + _gate("Z2 native series == zeta(2) digits", _bi_eq(z2num, z2ref), 1)
+    fails = fails + _gate("Z3 native series == zeta(3) digits", _bi_eq(z3num, z3ref), 1)
+    println("  z2num ndigits=" + to_string(bi_ndigits(z2num)) + "  z3num ndigits=" + to_string(bi_ndigits(z3num)))
+
+    // ── ZETA3 family: Apery PCF a=-n^6, b=34n^3+51n^2+27n+5 -> 6/zeta(3) ──
+    let a3 = [0,0,0,0,0,0, 0 - 1]
+    let b3 = [5,27,51,34]
+    let pq3 = _pcf_pq(a3, b3, 70)
+    let p3 = pq3[0]
+    let q3 = pq3[1]
+    println("ZETA3 family (PCF a=-n^6 b=34n^3+51n^2+27n+5, vs native zeta(3)):")
+    println("  convergent: p ndig=" + to_string(bi_ndigits(p3)) + " q ndig=" + to_string(bi_ndigits(q3)))
+    fails = fails + _gate("Z3-E  L=6/zeta(3)  (6,0,0,-1) detect", _mobius_holds(p3, q3, z3num, cden, 6, 0, 0, 0 - 1, 20), 1)
+    fails = fails + _gate("Z3-N1 L=1/zeta(3)  (1,0,0,-1) reject", _mobius_holds(p3, q3, z3num, cden, 1, 0, 0, 0 - 1, 20), 0)
+    fails = fails + _gate("Z3-N2 L=5/zeta(3)  (5,0,0,-1) reject", _mobius_holds(p3, q3, z3num, cden, 5, 0, 0, 0 - 1, 20), 0)
+
+    // ── ZETA2 family: vdP PCF a=n^4, b=11n^2+11n+3 -> 5/zeta(2) ──
+    let a2 = [0,0,0,0, 1]
+    let b2 = [3,11,11]
+    let pq2 = _pcf_pq(a2, b2, 70)
+    let p2 = pq2[0]
+    let q2 = pq2[1]
+    println("ZETA2 family (PCF a=n^4 b=11n^2+11n+3, vs native zeta(2)):")
+    println("  convergent: p ndig=" + to_string(bi_ndigits(p2)) + " q ndig=" + to_string(bi_ndigits(q2)))
+    fails = fails + _gate("Z2-E  L=5/zeta(2)  (5,0,0,-1) detect", _mobius_holds(p2, q2, z2num, cden, 5, 0, 0, 0 - 1, 20), 1)
+    fails = fails + _gate("Z2-N1 L=1/zeta(2)  (1,0,0,-1) reject", _mobius_holds(p2, q2, z2num, cden, 1, 0, 0, 0 - 1, 20), 0)
+    fails = fails + _gate("Z2-N2 L=6/zeta(2)  (6,0,0,-1) reject", _mobius_holds(p2, q2, z2num, cden, 6, 0, 0, 0 - 1, 20), 0)
+
+    println("")
+    if fails == 0 {
+        println("=== ALL GATES PASS (multi-const native PCF detector validated) ===")
+        println("families detected: ZETA3 (Apery 6/zeta(3)) + ZETA2 (vdP 5/zeta(2))")
+        println("novel = 0: BOTH families are CATALOGUED (Apery / van der Poorten 1979, already proven).")
+        println("c2: every detected relation is BOUNDED (finite q, CDEN=10^" + to_string(dd) + ") -> the for-all-n")
+        println("    CF identity is UNPROVEN by this engine (these classics ARE proven; novel survivors would not be).")
+    } else {
+        println("=== " + to_string(fails) + " GATE(S) FAILED ===")
+    }
+}
+
+// build BigInt from leading int-part digit + fractional digit array (value = c*10^D as int).
+fn _rat_from_digits(intpart, frac) -> array {
+    let ten = bi_from(10)
+    let v = bi_from(intpart)
+    let i = 0
+    while i < frac.len() {
+        v = bi_add(bi_mul(v, ten), bi_from(frac[i]))
+        i = i + 1
+    }
+    v
+}
+// exact-equal predicate -> int 1/0 (avoids bool in the int-gate path).
+fn _bi_eq(a, b) -> int {
+    if bi_cmp(a, b) == 0 { return 1 }
+    0
+}

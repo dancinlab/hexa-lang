@@ -75,6 +75,18 @@ export CFLAGS_COMMON="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigrap
 #   · frozen 151c52c8: self/runtime*.c are gitignored regen artifacts; tracked diff ∅.
 # Override per build with HEXA_RT_MULTIOBJ=0 to revert to the single-TU archive.
 export HEXA_RT_MULTIOBJ="${HEXA_RT_MULTIOBJ:-1}"
+# ── SHIP-DEFAULT seed-convergence (GCC/rustc downstream-rebuild discipline) ────
+# Default HEXA_SEED_CONVERGE=1 so the SHARED ship entry point always reconciles
+# the bootstrap build/hexat (edge-prebuilt OR frozen-seed-built) to the CURRENT
+# self/codegen.hexa before packaging — the cold-start seed stays frozen, every
+# downstream stage is rebuilt from current source. Closes the RFC061 §M8 ∅−8
+# setjmp/longjmp ship-gate (a frozen-seed hexat emits glibc-setjmp SAVE → SEGV
+# against the native-musl RESTORE; regen rebakes current codegen → rc=0). The
+# release.yml jobs already pass =1 (now redundant but harmless); the faithful-
+# nobaseline gate passes =0 to keep reproducing its edge baseline byte-for-byte
+# (convergence is a deterministic fixpoint, so the two stay equivalent for every
+# faithful assertion). Override per build with HEXA_SEED_CONVERGE=0.
+export HEXA_SEED_CONVERGE="${HEXA_SEED_CONVERGE:-1}"
 # GH_TOKEN flows to the sub-stages' `gh release download`. Required only in the
 # seeds-removed (edge-pull) branch; harmless no-op while seeds are present.
 export GH_TOKEN="${GH_TOKEN:-}"

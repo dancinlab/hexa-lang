@@ -1,0 +1,12 @@
+KERNEL             PACKED    OFF_OUT        ON_OUT         VERDICT 
+k0_positive        PACKED    4544;rc=0;     4544;rc=0;     PASS    
+ka_arg_escape      boxed     4096;rc=0;     4096;rc=0;     PASS    
+kb_return_escape   boxed     189;rc=0;      189;rc=0;      PASS    
+kc_alias           boxed     2126;rc=0;     2126;rc=0;     PASS    
+kd_global          boxed     315;rc=0;      315;rc=0;      PASS    
+ke_untyped         boxed     6;rc=0;        6;rc=0;        PASS    
+kf_reassign        boxed     70;rc=0;       70;rc=0;       PASS    
+kg_direct_alias    boxed     100;rc=0;      100;rc=0;      PASS    
+kh_alias_then_escape boxed     18;rc=0;       18;rc=0;       PASS    
+---
+ESCAPE_STRESS=ALL_BIT_EXACT

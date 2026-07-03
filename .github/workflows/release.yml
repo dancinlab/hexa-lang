@@ -24,9 +24,15 @@ name: release
 # two workflows independent (per bootstrap.yml's INDEPENDENCE clause).
 
 on:
+  # Tag push (`v*`) ONLY — the rolling `test` prerelease channel (main push →
+  # force-moved `test` tag) is RETIRED (2026-06-30), same as the older `edge`
+  # channel before it. There is no longer any branch-push trigger: every release
+  # is a real `vX.Y.Z` tag (or a workflow_dispatch rebuild of one). Experimental
+  # self-host changes (byteeq · measure · RT-NATIVE · zero-C · static-musl) are
+  # verified via PR CI (Blacksmith 3-target byteeq) + pool builds, NOT a
+  # standing rolling prerelease.
   push:
     tags: ['v*']
-    branches: [main]      # → rolling `test` prerelease (install via HEXA_VERSION=test)
   workflow_dispatch:
     inputs:
       tag:
@@ -34,31 +40,26 @@ on:
         required: true
 
 permissions:
-  contents: write  # gh release upload + test tag force-move
+  contents: write  # gh release upload
 
-# Tag push (v*) keeps every run — distinct group per tag, no cancellation.
-# Main push only ever needs the latest commit's test build; cancel any
-# older in-flight test run when a newer main push lands.
-# autotag-dispatched stable releases arrive as workflow_dispatch on the `main`
-# ref (github.ref=refs/heads/main) — WITHOUT the input-tag key below they all
-# collapsed into the single `release-refs/heads/main` group AND were cancelled
-# by every newer main push / dispatch (cancel-in-progress=branch), so no stable
-# release ever finalized (Latest stuck). Key a workflow_dispatch by its target
-# TAG (per-tag group, never cancelled) and only cancel real main `push` test
-# builds — so each stable tag's 3-target build runs to finalize.
+# Every run is now a tag release (push `v*` or workflow_dispatch of a tag) —
+# each distinct version gets its own group and NEVER cancels, so a tag's
+# 3-target build always runs to finalize. (The old rolling-`test` channel
+# cancelled older in-flight main-push builds; with `test` retired there is no
+# branch push to cancel, so cancel-in-progress is unconditionally false.)
 concurrency:
-  # Normalize the key to the version (ref_name strips refs/tags/ & refs/heads/)
-  # so a tag-push (refs/tags/vX) and a workflow_dispatch (inputs.tag=vX) of the
-  # SAME release land in ONE group and dedup, instead of running in parallel and
-  # storming the runner pool (the v0.314.x cancel-storm). Branch push → main.
+  # Normalize the key to the version (ref_name strips refs/tags/) so a tag-push
+  # (refs/tags/vX) and a workflow_dispatch (inputs.tag=vX) of the SAME release
+  # land in ONE group and dedup, instead of running in parallel and storming the
+  # runner pool (the v0.314.x cancel-storm).
   group: release-${{ github.event.inputs.tag || github.ref_name }}
-  cancel-in-progress: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
+  cancel-in-progress: false
 
 env:
   CFLAGS_COMMON: "-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs"
 
 jobs:
-  # ── Setup — decide release tag + force-move `test` on main push ────
+  # ── Setup — decide release tag (always a real `vX.Y.Z` tag now) ────
   setup:
     name: setup
     runs-on: ubuntu-24.04
@@ -80,6 +81,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Only two trigger paths remain (the rolling `test` branch-push path is
+          # retired): a workflow_dispatch carrying inputs.tag, or a `v*` tag push.
+          # Both resolve to a real release tag with is_tag=true; the old
+          # `else → release_tag=test` rolling-prerelease branch is gone.
           if [ -n "${{ github.event.inputs.tag }}" ]; then
               echo "release_tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
               echo "is_tag=true" >> "$GITHUB_OUTPUT"
@@ -87,34 +92,54 @@ jobs:
               echo "release_tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
               echo "is_tag=true" >> "$GITHUB_OUTPUT"
           else
-              echo "release_tag=test" >> "$GITHUB_OUTPUT"
-              echo "is_tag=false" >> "$GITHUB_OUTPUT"
+              echo "::error::release.yml fired without a tag (ref_type=${{ github.ref_type }}) — the rolling test channel is retired; releases require a v* tag or a workflow_dispatch tag input." >&2
+              exit 1
           fi
           cat "$GITHUB_OUTPUT"
 
-      # softprops/action-gh-release@v2 will create-or-update the release
-      # at the named tag, but it does NOT move an existing tag to a new
-      # commit. For `test` (rolling), force-move the git tag here so the
-      # release's commit and the tag's commit stay in lock-step.
-      - name: Force-move `test` tag (main push only)
-        if: steps.c.outputs.is_tag != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          git tag -f test "${{ github.sha }}"
-          git push origin -f test
+  # ── dispatch — darwin runner picker (free · always available) ──────────────
+  # Emits the darwin release job's `runs-on`: ghost-selfhost (arm64) when ONLINE,
+  # else the free GitHub-hosted macos-15. Motivation: the GitHub-hosted macos
+  # queue backlogged 16h+ (release run 28575565949's darwin job sat queued while
+  # ghost idled), stalling the all-3-green Latest flip. Release fires on tag-push
+  # / workflow_dispatch only (never a fork PR), so `eligible` is always 1 here;
+  # the same-repo guard is kept verbatim for 1:1 parity with the gate pickers.
+  # Mach-O emit is deterministic (gen3≡gen4) so ghost vs macos-15 is byte-neutral
+  # — proven by the byteeq gate before stable; the min-OS baseline note below
+  # applies to whichever darwin host builds (ghost is also macOS 15-class).
+  dispatch:
+    name: dispatch (pick runner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      darwin_label: ${{ steps.darwin.outputs.label }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: darwin
+        uses: ./.github/actions/pick-runner
+        with:
+          kind: darwin
+          eligible: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
+          # administration:read PAT (self-hosted runners list needs it; the
+          # default github.token CANNOT carry that scope → empty list → blind
+          # fallback). Absent secret → `|| github.token` = today's harmless
+          # macos-15 fallback; present → routing goes live. See PR/root-cause.
+          token: ${{ secrets.RUNNER_PROBE_TOKEN || github.token }}
+
   # ── macOS arm64 (Apple Silicon) ────────────────────────────
   release-macos-arm64:
     name: release (darwin-arm64)
-    needs: setup
-    # Blacksmith fast native Apple-Silicon runner. Pinned to macos-15 (NOT -26):
-    # macos-latest was macOS 15 (Sequoia) with no MACOSX_DEPLOYMENT_TARGET set, so
-    # the shipped Mach-O min-OS baseline rides the builder SDK — staying on the 15
-    # SDK keeps that baseline unchanged (macos-26 = newer SDK = higher min-OS floor
-    # = compat regression, same hazard as bumping the x86_64 glibc floor). Mach-O
-    # emit is deterministic (gen3≡gen4), so faster bare-metal host is byte-neutral
-    # — verified on the test prerelease byteeq before trusting stable.
-    runs-on: macos-15
+    needs: [setup, dispatch]
+    # ghost-selfhost when online, else GitHub-hosted macos-15 (via `dispatch`).
+    # Pinned baseline note: macos-15 (NOT -26) — macos-latest was macOS 15
+    # (Sequoia) with no MACOSX_DEPLOYMENT_TARGET set, so the shipped Mach-O
+    # min-OS baseline rides the builder SDK; staying on the 15 SDK keeps that
+    # baseline unchanged (macos-26 = newer SDK = higher min-OS floor = compat
+    # regression, same hazard as bumping the x86_64 glibc floor). ghost is a
+    # macOS 15-class Apple-Silicon host, so the baseline stays put on it too.
+    # Mach-O emit is deterministic (gen3≡gen4), so a faster bare-metal host is
+    # byte-neutral — verified by the byteeq gate (PR CI · Blacksmith) before stable.
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.darwin_label) }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
@@ -141,18 +166,18 @@ jobs:
           CC: clang
           LIBS: ""
           GH_TOKEN: ${{ github.token }}
-          # ── N5 seed-convergence SHIP-BY-DEFAULT (test-roll only) ──────────
+          # ── N5 seed-convergence SHIP-BY-DEFAULT (release build) ───────────
           # Converge the bootstrap seed (self/native/hexa_cc.c) to its fixpoint
-          # DURING the test roll so the shipped build/hexat already lowers the
-          # forge OFF-CUDA 4-arg dispatches (clm_prod) correctly — every
+          # during the release build so the shipped build/hexat already lowers
+          # the forge OFF-CUDA 4-arg dispatches (clm_prod) correctly — every
           # downstream `hx install` build inherits the converged hexat via the
-          # test tarball, with NO per-user HEXA_SEED_CONVERGE=1 opt-in. Scoped
-          # to the release test-build ONLY (NOT the shared tool/release_build,
-          # NOT the faithful-nobaseline gate, which both keep the default OFF):
-          # the gate test-pulls the CURRENT test (no-op prebuild) + runs the
-          # determinism oracles, so convergence — a deterministic fixpoint —
-          # flows through faithful unchanged. The converged test ships on the
-          # NEXT roll after this merges.
+          # release tarball, with NO per-user HEXA_SEED_CONVERGE=1 opt-in. Scoped
+          # to the release build ONLY (NOT the shared tool/release_build, NOT the
+          # faithful-nobaseline gate, which both keep the default OFF): the gate
+          # pulls the CURRENT release (no-op prebuild) + runs the determinism
+          # oracles, so convergence — a deterministic fixpoint — flows through
+          # faithful unchanged. (Was scoped to the rolling test-roll before the
+          # test channel was retired; now applies to every tag release build.)
           HEXA_SEED_CONVERGE: "1"
           HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
           HEXA_CCACHE: "1"
@@ -297,9 +322,9 @@ jobs:
           CC: gcc
           LIBS: "-lm -ldl"
           GH_TOKEN: ${{ github.token }}
-          # N5 seed-convergence SHIP-BY-DEFAULT (test-roll only) — see the
-          # darwin-arm64 job for the full rationale. Scoped to the release
-          # test-build; the shared release_build + faithful gate stay default-OFF.
+          # N5 seed-convergence SHIP-BY-DEFAULT (release build) — see the
+          # darwin-arm64 job for the full rationale. Scoped to the release build;
+          # the shared release_build + faithful gate stay default-OFF.
           HEXA_SEED_CONVERGE: "1"
           HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
           HEXA_CCACHE: "1"
@@ -369,9 +394,9 @@ jobs:
           CC: gcc
           LIBS: "-lm -ldl"
           GH_TOKEN: ${{ github.token }}
-          # N5 seed-convergence SHIP-BY-DEFAULT (test-roll only) — see the
-          # darwin-arm64 job for the full rationale. Scoped to the release
-          # test-build; the shared release_build + faithful gate stay default-OFF.
+          # N5 seed-convergence SHIP-BY-DEFAULT (release build) — see the
+          # darwin-arm64 job for the full rationale. Scoped to the release build;
+          # the shared release_build + faithful gate stay default-OFF.
           HEXA_SEED_CONVERGE: "1"
           HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
           HEXA_CCACHE: "1"
@@ -408,7 +433,7 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
 
-  # ── Linux x86_64 STATIC-MUSL (ING #2 — test-only supplementary asset) ──────
+  # ── Linux x86_64 STATIC-MUSL (ING #2 — supplementary asset) ──────
   # A glibc-FREE single static ELF so consumers (anima/…) install on ANY pod OS
   # regardless of the host glibc floor (no more `GLIBC_2.xx not found` on old/musl
   # pods). Built with x86_64-linux-musl-gcc + `-static`, runtime linked from SOURCE
@@ -417,13 +442,13 @@ jobs:
   # musl-portable; glibc-byteeq-inert). PROVEN on pool/aiden: full ./hexa driver →
   # 2.5MB statically-linked ELF, `ldd` = "not a dynamic executable", `--version` OK.
   #
-  # SUPPLEMENTARY + EDGE-FIRST: this job is NOT in `finalize`'s needs list, so it
+  # SUPPLEMENTARY:this job is NOT in `finalize`'s needs list, so it
   # NEVER gates the stable 3-green promotion — it ships an EXTRA prerelease asset
   # `hexa-linux-x86_64-musl.tar.gz` alongside the existing 3 targets. The existing
   # glibc `hexa-linux-x86_64.tar.gz` is UNCHANGED (additive target, not a replace).
   # install.sh's static-musl preference is a separate change (see ING #2 notes).
   release-linux-x86_64-musl:
-    name: release (linux-x86_64-musl · static · test)
+    name: release (linux-x86_64-musl · static)
     needs: setup
     runs-on: ubuntu-22.04
     timeout-minutes: 30
@@ -511,7 +536,7 @@ jobs:
             exit 1
           fi
 
-      - name: Upload to GitHub Release (supplementary test asset)
+      - name: Upload to GitHub Release (supplementary asset)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.setup.outputs.release_tag }}
@@ -522,7 +547,7 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
 
-  # ── Linux arm64 STATIC-MUSL (ING #2 r2 — test-only supplementary asset) ────
+  # ── Linux arm64 STATIC-MUSL (ING #2 r2 — supplementary asset) ────
   # The arm64 half of the static-musl target. release-linux-arm64 above runs on
   # ubuntu-24.04-arm (glibc 2.39) and DEFERS the arm64 glibc-floor problem here:
   # arm64 cloud pods on glibc < 2.39 die with `GLIBC_2.xx not found` on the
@@ -537,12 +562,12 @@ jobs:
   # unset → each stage compiles self/runtime.c, musl-portable via the ING #2
   # post-restore header-hoist patch in tool/restore_frozen_seeds; glibc-byteeq-inert).
   #
-  # SUPPLEMENTARY + EDGE-FIRST: NOT in `finalize`'s needs list, so it NEVER gates
+  # SUPPLEMENTARY:NOT in `finalize`'s needs list, so it NEVER gates
   # the stable 3-green promotion — it ships an EXTRA prerelease asset
   # `hexa-linux-arm64-musl.tar.gz` alongside the existing targets. The dynamic
   # glibc `hexa-linux-arm64.tar.gz` is UNCHANGED (additive target, not a replace).
   release-linux-arm64-musl:
-    name: release (linux-arm64-musl · static · test)
+    name: release (linux-arm64-musl · static)
     needs: setup
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
@@ -628,7 +653,7 @@ jobs:
             exit 1
           fi
 
-      - name: Upload to GitHub Release (supplementary test asset)
+      - name: Upload to GitHub Release (supplementary asset)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.setup.outputs.release_tag }}
@@ -639,7 +664,7 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
 
-  # ── Linux x86_64 CUDA (ing-cuda-release — test-only supplementary asset) ──────
+  # ── Linux x86_64 CUDA (ing-cuda-release — supplementary asset) ──────
   # A cuBLAS-enabled hexa so consumers (anima #2386) install a prebuilt GPU build
   # instead of a CPU-only one (the shipped install.sh hexa reports
   # cuda_available()==0 — #3674).
@@ -663,14 +688,14 @@ jobs:
   # verdict + cuda_available()==1 was proven on the pool host aiden (RTX 5070) in
   # #3680 — aiden is the GPU-verify authority. CI here = build + archive + upload.
   #
-  # SUPPLEMENTARY + EDGE-FIRST: NOT in `finalize`'s needs list, so it NEVER gates
+  # SUPPLEMENTARY:NOT in `finalize`'s needs list, so it NEVER gates
   # the stable 3-green promotion — it ships an EXTRA prerelease asset
   # `hexa-linux-x86_64-cuda.tar.gz` alongside the 3 default targets. The default
   # glibc `hexa-linux-x86_64.tar.gz` is UNCHANGED (additive; self-host ≠ release
   # ABSOLUTE). install.sh selects this asset only on HEXA_CUDA=1 opt-in (never
   # auto-prefers it — cuBLAS dep + GPU assumption).
   release-linux-x86_64-cuda:
-    name: release (linux-x86_64-cuda · cuBLAS · test)
+    name: release (linux-x86_64-cuda · cuBLAS)
     needs: setup
     runs-on: ubuntu-22.04
     timeout-minutes: 35
@@ -693,7 +718,13 @@ jobs:
           # sub-packages mapped to the nonexistent `cuda-cublas-12-6` →
           # "E: Unable to locate package" (Jimver issue #371). cuBLAS therefore
           # goes through `non-cuda-sub-packages` (no prefix → libcublas-12-6).
-          sub-packages: '["nvcc", "cudart", "cudart-dev"]'
+          # `cuobjdump` ships in its own sub-package (cuda-cuobjdump-12-6), NOT in
+          # nvcc — without it the PTX-embed Verify assertion (#4404) dies with
+          # `cuobjdump: command not found` → the whole cuda job RED → NO cuda
+          # asset uploaded (installer silently falls back to the CPU asset on GPU
+          # hosts). The fail-loud guard worked as designed — it refused to pass
+          # unverified — but the tool it verifies WITH must be installed.
+          sub-packages: '["nvcc", "cudart", "cudart-dev", "cuobjdump"]'
           non-cuda-sub-packages: '["libcublas", "libcublas-dev"]'
 
       - name: Probe CUDA toolkit (build-only — no GPU on CI)
@@ -740,8 +771,9 @@ jobs:
       # nvcc compile failed → resolve_cuda_runtime_seed non-fatally unset HEXA_CUDA
       # → build/runtime.cuda.a was never produced → the consumer runtime.a shipped
       # the CPU archive (no device objects) → the Verify step failed → the whole
-      # rolling test prerelease had not published (the channel rotted at 2026-05-23). HEXA_PREBUILT_RUNTIME
-      # unset → runtime.a(s) built fresh.
+      # release had not published (back when this lane fed the rolling prerelease,
+      # the channel rotted at 2026-05-23). HEXA_PREBUILT_RUNTIME unset → runtime.a(s)
+      # built fresh.
       # Free CI accelerator: ccache the per-TU gcc compiles (byteeq-safe —
       # HEXA_CCACHE only reroutes the compile through the cache, never the
       # link/emit bytes; the nvcc device compiles are NOT cached, only the C TUs).
@@ -830,8 +862,38 @@ jobs:
             exit 1
           fi
           echo "✓ hexa driver binary is libcuda-free (runs on GPU-less + GPU hosts; consumer link adds cuBLAS)"
+          # PTX-EMBED ASSERTION (sm_80-SASS-only ship defect, 2026-07-02): the
+          # builder compiles SM=80 but consumer GPUs are newer (RTX 5070 = sm_120),
+          # so the fatbin MUST carry PTX for the driver to JIT forward. SASS-only
+          # objects load fine and cuda_available()==1, but EVERY kernel launch
+          # fails cudaErrorNoKernelImageForDevice silently → zero-filled device
+          # results (measured: bytegpt_devres_smoke argmax dev=0 max|Δ|=551 on the
+          # v0.547.0 asset; PASS after re-splicing the same source built with
+          # `-gencode arch=compute_80,code=compute_80` added). Fail loud here so a
+          # gencode regression can never ship a silently-broken -cuda asset again.
+          tmpx="$(mktemp -d)"
+          ( cd "$tmpx" && ar x "$OLDPWD/$RA" runtime_cuda.o )
+          # Resolve cuobjdump: toolkit bin → PATH → find under the toolkit root
+          # (Jimver layouts vary: /usr/local/cuda-12.6/bin vs targets/x86_64-linux).
+          # If it is genuinely absent the assertion below fails LOUD with this
+          # message — never skip the PTX check (the check exists because a missing
+          # verify let the SASS-only asset ship silently in the first place).
+          CUOBJDUMP="${CUDA_PATH:-/usr/local/cuda}/bin/cuobjdump"
+          [ -x "$CUOBJDUMP" ] || CUOBJDUMP="$(command -v cuobjdump || true)"
+          [ -n "$CUOBJDUMP" ] && [ -x "$CUOBJDUMP" ] || CUOBJDUMP="$(find "${CUDA_PATH:-/usr/local/cuda}" /usr/local/cuda* -maxdepth 4 -name cuobjdump -type f -perm -u+x 2>/dev/null | head -1)"
+          if [ -z "$CUOBJDUMP" ]; then
+            echo "✗ cuobjdump not found (install the 'cuobjdump' toolkit sub-package) — cannot verify PTX embed; refusing to ship unverified" >&2
+            exit 1
+          fi
+          if "$CUOBJDUMP" -lptx "$tmpx/runtime_cuda.o" | grep -q '\.ptx'; then
+            echo "✓ runtime_cuda.o embeds PTX (driver JIT-forward to any consumer GPU arch)"
+          else
+            echo "✗ runtime_cuda.o has NO PTX — SASS-only fatbin silently no-ops on newer GPU archs (gencode must include code=compute_\$SM)" >&2
+            "$CUOBJDUMP" -lelf "$tmpx/runtime_cuda.o" || true
+            exit 1
+          fi
 
-      - name: Upload to GitHub Release (supplementary test asset)
+      - name: Upload to GitHub Release (supplementary asset)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.setup.outputs.release_tag }}
@@ -848,8 +910,9 @@ jobs:
   # then is the release flipped from prerelease → stable + marked Latest. This
   # is the mechanical enforcement of the [릴리스 채널 규율] rule in CLAUDE.md:
   # stable ships only when x86_64 · arm64 · darwin are ALL green (3/3 assets).
-  # Test (branch push, is_tag != true) stays a rolling prerelease — finalize is
-  # gated off — so `HEXA_VERSION=test` consumers keep getting every main push.
+  # (The `is_tag == 'true'` guard below is now always satisfied — every trigger
+  # is a tag since the rolling `test` branch-push channel was retired — but is
+  # kept as a defensive assertion.)
   finalize:
     name: finalize (all-3-green → stable Latest)
     # Depend on EVERY upload job (incl. the supplementary musl/cuda lanes) so

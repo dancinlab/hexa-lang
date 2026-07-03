@@ -41,6 +41,20 @@
 set -euo pipefail
 : "${CC:?CC must be set}"
 LIBS="${LIBS:-}"
+# own-start #29: runtime.a on this link may CARRY own _start (stage_resolve_runtime_a folds it in
+# under HEXA_ZEROC_OWN_START=1). Drop crt1 _start (-nostartfiles) to avoid a duplicate _start at the
+# build/hexat link — THIS was the dup-_start site that RED'd faithful-nobaseline before the #4408 revert
+# (the #4403 gate was reverted with the flip). Re-added here DEFAULT-OFF byte-neutral so the link
+# coverage is complete; the default-ON flip is a SEPARATE PR gated on faithful-nobaseline 3-target GREEN.
+# Both _r7_cc_compile_link call sites end in $LIBS, so this single mutation covers cold + seed-converge.
+# linux x86_64/arm64 ONLY (darwin = Mach-O LC_MAIN); env=0 force-overrides OFF. Mirrors stage_build_hexa C0.
+if [ "${HEXA_ZEROC_OWN_START:-0}" = "1" ] && [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
+    _zc_arch="$(uname -m 2>/dev/null)"
+    if [ "$_zc_arch" = "x86_64" ] || [ "$_zc_arch" = "aarch64" ] || [ "$_zc_arch" = "arm64" ]; then
+        LIBS="$LIBS -nostartfiles"
+        echo "stage_prebuild_hexat: HEXA_ZEROC_OWN_START=1 (linux/$_zc_arch) — -nostartfiles on hexat link (own _start from runtime.a)"
+    fi
+fi
 CFLAGS="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
 # -fbracket-depth is clang-only (deeply-nested generated C); gcc rejects it.
 case "$CC" in *clang*) CFLAGS="$CFLAGS -fbracket-depth=4096";; esac
@@ -66,6 +80,14 @@ RA="${HEXA_PREBUILT_RUNTIME:-$ROOT/build/runtime.a}"
 HEXAT="$ROOT/build/hexat"
 CC_SRC="$ROOT/self/native/hexa_cc.c"
 mkdir -p build
+
+# Tracks whether the bootstrap build/hexat was cp'd from a prior edge tarball
+# (BOOT_FROM_EDGE=1) vs built here from the frozen/present hexa_cc.c seed (0).
+# An edge-prebuilt hexat is a PRIOR-generation transpiler that may PRE-DATE the
+# current self/codegen.hexa (e.g. the RFC061 §M8 setjmp/longjmp re-baseline) —
+# so the regen-to-fixpoint below reconciles EITHER acquisition path to the
+# current source before this hexat is shipped/used.
+BOOT_FROM_EDGE=0
 
 # ── OPT-IN: ccache the INTERMEDIATE amalgam compile (release-safe, default OFF) ─
 # HEXA_CCACHE=1 SPLITS the big `hexa_cc.c` compile (compile `-c` -> .o, then link)
@@ -121,10 +143,11 @@ if [ ! -f "$CC_SRC" ]; then
       cp "$PRIOR_HEXAT" "$HEXAT"
       chmod +x "$HEXAT"
       test -x "$HEXAT"
-      echo "[stage_prebuild_hexat] build/hexat from edge = $(wc -c < "$HEXAT") bytes"
-      exit 0
+      echo "[stage_prebuild_hexat] build/hexat from edge = $(wc -c < "$HEXAT") bytes (bootstrap; reconciled to current source by the regen below when HEXA_SEED_CONVERGE=1)"
+      BOOT_FROM_EDGE=1
+    else
+      echo "[stage_prebuild_hexat] prior edge tarball ($ASSET) has NO build/hexat — frozen-seed fallback" >&2
     fi
-    echo "[stage_prebuild_hexat] prior edge tarball ($ASSET) has NO build/hexat — frozen-seed fallback" >&2
   else
     echo "[stage_prebuild_hexat] edge download failed ($(head -1 /tmp/hexat_dl.err 2>/dev/null)) — frozen-seed fallback" >&2
   fi
@@ -132,21 +155,28 @@ if [ ! -f "$CC_SRC" ]; then
   # the working tree from 7906951c0^, then fall through to the source build.
   # stage_resolve_runtime_a (Stage 0b, runs first) usually restores these
   # already; this makes stage_prebuild_hexat self-sufficient regardless of order.
-  echo "[stage_prebuild_hexat] restoring frozen seeds (7906951c0^) to build hexat from source"
-  if ! bash tool/restore_frozen_seeds || [ ! -f "$CC_SRC" ]; then
-    echo "[stage_prebuild_hexat] FATAL: frozen-seed restore did not produce $CC_SRC" >&2
-    exit 1
+  # Skipped when an edge-prebuilt hexat was already obtained above.
+  if [ "$BOOT_FROM_EDGE" = "0" ]; then
+    echo "[stage_prebuild_hexat] restoring frozen seeds (7906951c0^) to build hexat from source"
+    if ! bash tool/restore_frozen_seeds || [ ! -f "$CC_SRC" ]; then
+      echo "[stage_prebuild_hexat] FATAL: frozen-seed restore did not produce $CC_SRC" >&2
+      exit 1
+    fi
   fi
 fi
-if [ ! -f "$RA" ]; then
-  echo "[stage_prebuild_hexat] FATAL: runtime.a missing at $RA (run Stage 0b first)" >&2
-  exit 1
-fi
 
-echo "[stage_prebuild_hexat] building build/hexat from hexa_cc.c + runtime.a"
-_r7_cc_compile_link "-I $ROOT -I $ROOT/self" "$CFLAGS_BOOTSTRAP" "$CC_SRC" "$HEXAT" "$RA"
-test -x "$HEXAT"
-echo "[stage_prebuild_hexat] build/hexat = $(wc -c < "$HEXAT") bytes"
+# Build the bootstrap build/hexat from the (frozen-restored or already-present)
+# seed — UNLESS an edge-prebuilt hexat was already cp'd above.
+if [ "$BOOT_FROM_EDGE" = "0" ]; then
+  if [ ! -f "$RA" ]; then
+    echo "[stage_prebuild_hexat] FATAL: runtime.a missing at $RA (run Stage 0b first)" >&2
+    exit 1
+  fi
+  echo "[stage_prebuild_hexat] building build/hexat from hexa_cc.c + runtime.a"
+  _r7_cc_compile_link "-I $ROOT -I $ROOT/self" "$CFLAGS_BOOTSTRAP" "$CC_SRC" "$HEXAT" "$RA"
+  test -x "$HEXAT"
+  echo "[stage_prebuild_hexat] build/hexat = $(wc -c < "$HEXAT") bytes"
+fi
 
 # ── N5 seed-convergence — promote self/codegen.hexa source fixes into the seed ─
 # WHY (the forge OFF-CUDA 4-arg wall · b65ebe51 / OP-37 residual): the seed
@@ -168,18 +198,39 @@ echo "[stage_prebuild_hexat] build/hexat = $(wc -c < "$HEXAT") bytes"
 # a warm/already-converged tree regens to a byte-identical seed → 0 iterations, no
 # byte change.
 #
-# OPT-IN (default OFF) via HEXA_SEED_CONVERGE=1. It must NOT run on the normal
-# prebuild / faithful-nobaseline path: the loop MUTATES the committed seed
-# ($CC_SRC) + rebuilds hexat mid-build, which breaks the "seeds removed, edge-pull"
-# faithful contract (the build must reproduce the edge baseline byte-for-byte;
-# darwin-arm64 faithful-nobaseline regressed when this ran by default). The
-# correct integration is to converge ONCE at edge-roll time so the shipped seed is
-# already converged and every downstream build (incl. faithful) reproduces it —
-# that release-engineering wiring is the tracked residual
-# (.verdicts/compiler-selfhost-fixpoint/F-N5-SEED-CONVERGE-FORGE-4ARG-WALL.txt).
-# Until then this is available opt-in for a local build that needs clm_prod
-# OFF-CUDA to compile (the forge 4-arg wall).
-if [ "${HEXA_SEED_CONVERGE:-0}" = "1" ]; then
+# ── SHIP-PATH DEFAULT (release_build sets HEXA_SEED_CONVERGE=1) ───────────────
+# Keyed on HEXA_SEED_CONVERGE; the shared tool/release_build defaults it to 1 so
+# EVERY ship build reconciles the bootstrap hexat (edge-prebuilt OR frozen-seed-
+# built) to the CURRENT self/codegen.hexa before it is packaged — the GCC/rustc
+# "downstream stages are rebuilt from current source, only the cold-start seed is
+# frozen" discipline. This is what closes the RFC061 §M8 ∅−8 setjmp/longjmp
+# re-baseline ship-gate: the frozen seed (pinned 7906951c0^, 2026-05-29) PRE-DATES
+# the native-musl `hxlcl_setjmp` codegen, so a hexat built straight from it emits
+# the glibc-setjmp SAVE which, paired with the native-musl `hxlcl_longjmp` RESTORE
+# in the re-baselined runtime.a, SEGVs (rc=139) on `hexa build` try/catch. Regen
+# rebakes the current codegen into the seed → the shipped hexat emits native musl
+# SAVE → rc=0 (measured aiden linux-x86_64).
+#
+# DIRECT callers of this script (build_native_*, cross_build_*) do NOT set
+# HEXA_SEED_CONVERGE → default OFF here → byte-for-byte unchanged. The faithful-
+# nobaseline gate explicitly sets HEXA_SEED_CONVERGE=0 to KEEP reproducing its
+# edge baseline byte-for-byte (the loop mutates $CC_SRC + rebuilds hexat mid-build;
+# darwin-arm64 faithful regressed when this ran there) — convergence is a
+# deterministic fixpoint, so release-converged ≡ faithful-unconverged for every
+# downstream assertion (./hexa runs + the dt_exp/dt_erf fold oracles).
+#
+# GRACEFUL: if the regen transpile fails the loop KEEPS the bootstrap hexat (break,
+# no hard-fail) so a converge hiccup never ships nothing — worst case = the prior
+# bootstrap hexat (today's behaviour). Needs runtime.a to rebuild the hexat from a
+# converged seed; skipped with a warning when absent.
+if [ "${HEXA_SEED_CONVERGE:-0}" = "1" ] && [ ! -f "$RA" ]; then
+  echo "[stage_prebuild_hexat] seed-converge requested but runtime.a absent ($RA) — skipping regen, keeping bootstrap hexat" >&2
+fi
+if [ "${HEXA_SEED_CONVERGE:-0}" = "1" ] && [ -f "$RA" ]; then
+  # $CC_SRC may not exist yet on the edge-prebuilt path (only build/hexat was
+  # cp'd) — the first regen pass below writes it. Ensure its dir exists so the
+  # install `cp` cannot fail under `set -e`.
+  mkdir -p "$(dirname "$CC_SRC")"
   CONV_TMP="$(mktemp -d)"; trap 'rm -rf "$CONV_TMP"' EXIT
   i=0; max=4
   while [ "$i" -lt "$max" ]; do
