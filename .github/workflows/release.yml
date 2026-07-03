@@ -944,3 +944,18 @@ jobs:
           make_latest: true
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
+
+      # softprops make_latest 는 기존 릴리즈 UPDATE 경로에서 실효하지 않을 수 있다
+      # — 실측 2026-07-03: v0.592.0 finalize success 인데 consumer Latest 가 v0.588
+      # 에 7일 고착(install.sh 전 소비자가 stale/broken 툴체인 설치). 명시 edit 로
+      # 마커를 확정하고 검증까지 한다(불일치면 잡 FAIL = 조용한 고착 재발 방지).
+      - name: Verify Latest marker (explicit fallback)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.setup.outputs.release_tag }}"
+          gh release edit "$TAG" -R "${{ github.repository }}" --latest
+          got="$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)"
+          [ "$got" = "$TAG" ] || { echo "::error::Latest marker is $got, expected $TAG — promotion did not take"; exit 1; }
+          echo "Latest marker confirmed: $got"
