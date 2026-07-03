@@ -350,7 +350,7 @@ pub let CATALOG: [DiagSpec] = [
         severity: Severity::Error,
         stage: "S3",
         template: "mismatched types: expected `{expected}`, found `{actual}`",
-        explain: "Opt-in static type check (`HEXA_STATIC_TYPES=1`). A local binding, assignment, or struct-literal field-init declared (or its place has) an explicit annotation `T` whose primitive type provably differs from the initialiser's inferred type — e.g. `let x: i32 = \"s\"` or `let ok: bool = 1`. This is the Rust E0308 'mismatched types' rule brought to LOCAL (in-fn-body) positions: a string/bool/char literal never coerces to a numeric annotation, and an integer literal never coerces to `bool`. The default build does NOT emit this (the flag is off → diagnostic stream byte-identical to today); under the flag it is a FATAL error (REJECT, not advisory warning), so the build aborts before codegen. Coverage is a scope-local rung set (all KNOWN-scalar-primitive vs KNOWN-scalar-primitive only): r1 scalar-literal RHS on a typed `let`; r2 ident/call RHS on a typed `let`; r3 ident-LHS re-assignment; r4 array-element assign `a[i] = …`; r5 struct-field assign `s.field = …`; r6 struct-literal field-init `Point{ x: … }` (the last scope-wireable rung). Generic/trait static-dispatch and nested receivers (`s.inner.x`) are a measured ceiling — the `_infer_expr` scope cannot reach them (dynamic runtime type-erasure). Fix: change the value to match the annotation, or the annotation to match the value. The integer-literal/float-literal coercions Rust allows (`let x: i32 = 5`, `let y: f64 = 1.5`) still type-check.",
+        explain: "Opt-in static type check (`HEXA_STATIC_TYPES=1`). A local binding, assignment, or struct-literal field-init declared (or its place has) an explicit annotation `T` whose primitive type provably differs from the initialiser's inferred type — e.g. `let x: i32 = \"s\"` or `let ok: bool = 1`. This is the Rust E0308 'mismatched types' rule brought to LOCAL (in-fn-body) positions: a string/bool/char literal never coerces to a numeric annotation, and an integer literal never coerces to `bool`. The default build does NOT emit this (the flag is off → diagnostic stream byte-identical to today); under the flag it is a FATAL error (REJECT, not advisory warning), so the build aborts before codegen. Coverage is a scope-local rung set (all KNOWN-scalar-primitive vs KNOWN-scalar-primitive only): r1 scalar-literal RHS on a typed `let`; r2 ident/call RHS on a typed `let`; r3 ident-LHS re-assignment; r4 array-element assign `a[i] = …`; r5 struct-field assign `s.field = …`; r6 struct-literal field-init `Point{ x: … }`; r8b param/module-let array-base index-assign (with `HEXA_STATIC_TYPES_ARRAY_LOWER=1`); r9a Index/Field READ inference feeding the let/assign rungs (Index needs ARRAY_LOWER); r9c match literal-pattern vs scrutinee. Array element types flow structurally under `HEXA_STATIC_TYPES_ARRAY_LOWER=1` (r7-prep/r8/r9b), feeding the default-ON HX3003/HX3004 sites; struct-literal field EXISTENCE is HX3014 (r9d). Generic/trait static-dispatch and nested receivers (`s.inner.x`) are a measured ceiling — the `_infer_expr` scope cannot reach them (dynamic runtime type-erasure). Fix: change the value to match the annotation, or the annotation to match the value. The integer-literal/float-literal coercions Rust allows (`let x: i32 = 5`, `let y: f64 = 1.5`) still type-check.",
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
@@ -627,7 +627,13 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
-        code: "HX3011",
+        // Renumbered from HX3011 (static-types F0 pre-flip hygiene): the code
+        // was double-booked with the "mismatched types" Error spec above —
+        // `_catalog_lookup`-style first-match consumers and `hexa explain`
+        // can only surface ONE spec per code, and a default-ON flip of the
+        // static-types REJECT must own HX3011 unambiguously. Opt-in pass
+        // (HEXA_HKT=1) → renumbering changes no default-build output.
+        code: "HX3015",
         title: "higher-kinded type parameter arity mismatch",
         severity: Severity::Warning,
         stage: "S3",

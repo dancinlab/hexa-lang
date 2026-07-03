@@ -4128,7 +4128,9 @@ fn _hkt_walk_typeref(tr: TypeRef, decls: [string], obs_names: array, obs_arity: 
 // TypeRefs are every param type + the return type; for struct items they are the
 // field types (`it.params[].typ`). A declared param observed with ≥2 distinct
 // arities is a kind mismatch (e.g. `F<A>` vs `F<A,B>`, or higher-kinded `F` used
-// bare in a proper-type slot) → emit HX3011.
+// bare in a proper-type slot) → emit HX3015 (renumbered from HX3011, which it
+// double-booked with the static-types "mismatched types" Error — F0 pre-flip
+// hygiene; opt-in pass, so the default diagnostic stream is unchanged).
 fn _hkt_check_item(it: Item, out: array) {
     let decls = _hkt_collect_params(it)
     if len(decls) == 0 { return }
@@ -4155,7 +4157,7 @@ fn _hkt_check_item(it: Item, out: array) {
             o = o + 1
         }
         if min_ar != -1 && min_ar != max_ar {
-            let mut b = diag_new("HX3011")
+            let mut b = diag_new("HX3015")
             b = diag_span(b, it.span)
             b = diag_arg(b, "param", pname)
             b = diag_arg(b, "owner", it.name)
