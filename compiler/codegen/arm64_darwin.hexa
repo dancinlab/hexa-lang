@@ -1144,7 +1144,47 @@ pub struct ArmStrTab {
     // parsed f64 back through `to_string`).
     fkeys: [f64],
     flabels: [string],
-    ftexts: [string]
+    ftexts: [string],
+    // PERF #4454-class (2026-07-03): 64-bucket FNV-1a hash index over
+    // `keys` — same mechanism as self/codegen.hexa's
+    // _strlit_idx_keys/_strlit_idx_ids (65b7d871e). _arm64_strtab_lookup
+    // used to LINEAR-SCAN `keys` once per const_str operand, O(distinct²)
+    // across a module. The index is LOOKUP-ONLY acceleration:
+    // `keys`/`labels` stay the emission SSOT in first-occurrence order
+    // (.LCstrN numbering unchanged) — emitted asm is byte-identical.
+    // idx_keys[b]: keys whose _arm64_strtab_hash() == b
+    // idx_labels[b]: parallel ".LCstrN" label for each
+    idx_keys: [[string]],
+    idx_labels: [[string]]
+}
+
+// FNV-1a 32-bit fold over the literal, reduced to 64 buckets. The
+// `% 4294967296` keeps h inside 32 bits so the i64 multiply never
+// overflows (h < 2^32 ⇒ h * 16777619 < 2^57). Index-only — the hash
+// never reaches emitted output.
+fn _arm64_strtab_hash(s: string) -> i64 {
+    let mut h: i64 = 2166136261
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        h = (h ^ s.char_code_at(i)) * 16777619
+        h = h % 4294967296
+        i = i + 1
+    }
+    let mut b = h % 64
+    if b < 0 { b = b + 64 }
+    return b
+}
+
+fn _arm64_strtab_empty_buckets() -> [[string]] {
+    let mut bs: [[string]] = []
+    let mut i = 0
+    while i < 64 {
+        let empty: [string] = []
+        bs.push(empty)
+        i = i + 1
+    }
+    return bs
 }
 
 fn _arm64_float_lookup(st: ArmStrTab, v: f64) -> string {
@@ -1172,12 +1212,33 @@ fn _arm64_float_intern(st: ArmStrTab, v: f64, text: string) -> ArmStrTab {
     ft.push(text.substring(0, len(text)))
     return ArmStrTab {
         keys: st.keys, labels: st.labels,
-        fkeys: fk, flabels: fl, ftexts: ft
+        fkeys: fk, flabels: fl, ftexts: ft,
+        idx_keys: st.idx_keys, idx_labels: st.idx_labels
     }
 }
 
 
 fn _arm64_strtab_lookup(st: ArmStrTab, s: string) -> string {
+    // PERF #4454-class: bucket lookup replaces the full-table linear scan
+    // when the hash index is primed (see idx_keys on the struct). Same
+    // hit/miss result as the scan — buckets partition `keys` exactly.
+    if len(st.idx_keys) == 64 {
+        let b = _arm64_strtab_hash(s)
+        let bucket = st.idx_keys[b]
+        let blabels = st.idx_labels[b]
+        let mut bi = 0
+        while bi < len(bucket) {
+            if bucket[bi] == s {
+                // F6 P0b — forced copy (see below).
+                let lab = blabels[bi]
+                return lab.substring(0, len(lab))
+            }
+            bi = bi + 1
+        }
+        return ""
+    }
+    // Un-indexed strtab (e.g. the empty _arm64_op_for_operand fallback) —
+    // keep the legacy linear scan.
     let mut i = 0
     while i < len(st.keys) {
         if st.keys[i] == s {
@@ -1224,7 +1285,7 @@ fn _arm64_op_for_operand_st(o: Operand, st: ArmStrTab) -> LOperand {
 // flow through unchanged (label = literal string), which only
 // matters for modules that never produce a const_str operand.
 fn _arm64_op_for_operand(o: Operand) -> LOperand {
-    let st = ArmStrTab { keys: [], labels: [], fkeys: [], flabels: [], ftexts: [] }
+    let st = ArmStrTab { keys: [], labels: [], fkeys: [], flabels: [], ftexts: [], idx_keys: [], idx_labels: [] }
     return _arm64_op_for_operand_st(o, st)
 }
 
@@ -4447,17 +4508,42 @@ fn _collect_strs_from_stmt(st: ArmStrTab, s: Stmt) -> ArmStrTab {
             if len(_arm64_strtab_lookup(out, o.str_val)) == 0 {
                 let mut keys = out.keys
                 let mut labs = out.labels
+                // PERF #4454-class: prime the 64-bucket hash index lazily
+                // (covers strtabs constructed before the index existed —
+                // rebuild is a one-time O(existing) fold).
+                let mut ik = out.idx_keys
+                let mut il = out.idx_labels
+                if len(ik) != 64 {
+                    ik = _arm64_strtab_empty_buckets()
+                    il = _arm64_strtab_empty_buckets()
+                    let mut ri = 0
+                    while ri < len(keys) {
+                        let rb = _arm64_strtab_hash(keys[ri])
+                        ik[rb] = ik[rb].push(keys[ri])
+                        il[rb] = il[rb].push(labs[ri])
+                        ri = ri + 1
+                    }
+                }
                 let n = len(keys)
                 // F6 P0a — forced copy: o.str_val is the MFunc operand's
                 // string handle; st outlives every streaming iteration, so
                 // it must own its keys independently of any MFunc.
                 // PLAN-stage3-footprint-F6.md.
-                keys.push(o.str_val.substring(0, len(o.str_val)))
-                labs.push(".LCstr" + to_string(n))
+                let key = o.str_val.substring(0, len(o.str_val))
+                let lab = ".LCstr" + to_string(n)
+                keys.push(key)
+                labs.push(lab)
+                // Index the same handles — bucket entries share the strtab's
+                // lifetime, and .LCstrN numbering is untouched (emission
+                // still walks `keys`/`labels` in first-occurrence order).
+                let b = _arm64_strtab_hash(key)
+                ik[b] = ik[b].push(key)
+                il[b] = il[b].push(lab)
                 out = ArmStrTab {
                     keys: keys, labels: labs,
                     fkeys: out.fkeys, flabels: out.flabels,
-                    ftexts: out.ftexts
+                    ftexts: out.ftexts,
+                    idx_keys: ik, idx_labels: il
                 }
             }
         }
@@ -4494,7 +4580,7 @@ fn _arm_strtab_collect_fn(st: ArmStrTab, f: MFunc) -> ArmStrTab {
 // Whole-module strtab — the non-streaming path. Now a thin fold over
 // _arm_strtab_collect_fn so both paths share one collector (no drift).
 fn _build_arm_strtab(module: MModule) -> ArmStrTab {
-    let mut st = ArmStrTab { keys: [], labels: [], fkeys: [], flabels: [], ftexts: [] }
+    let mut st = ArmStrTab { keys: [], labels: [], fkeys: [], flabels: [], ftexts: [], idx_keys: [], idx_labels: [] }
     let mut fi = 0
     while fi < len(module.funcs) {
         st = _arm_strtab_collect_fn(st, module.funcs[fi])
@@ -4658,14 +4744,17 @@ fn _str_to_hex_bytes(s: string) -> string {
     // → asm path) lost them through this pool. Use `s.bytes()` which
     // returns per-byte i64 entries (raw 0..255), preserving UTF-8.
     let bs = s.bytes()
-    let mut out = ""
+    // PERF #4454-class: parts+join instead of `out = out + hex` per byte —
+    // the '+' re-copied the whole accumulator each iteration, O(L²) per
+    // literal. join("") is a single length-summed alloc; output identical.
+    let mut parts: [string] = []
     let mut i = 0
     while i < len(bs) {
-        out = out + _byte_to_hex(bs[i])
+        parts.push(_byte_to_hex(bs[i]))
         i = i + 1
     }
-    out = out + "00" // NUL terminator
-    return out
+    parts.push("00") // NUL terminator
+    return parts.join("")
 }
 
 fn _strtab_to_rodata(st: ArmStrTab) -> [LSection] {

@@ -245,8 +245,8 @@
       {
         "id": "architecture-json-1",
         "state": "pos-conv",
-        "value": "ARCHITECTURE.json blind write가 파일 훼손/거대diff 재발 (1차 #4135 UU conflict-marker blind-add · 2차 json.dump indent=1 재포맷→5369줄 diff 커밋 · 3차 2026-07-03 hexa-own-ladder 노드 삽입을 indent=1로 덤프→5.5k줄 재포맷, 커밋 전 이 레코드 열람으로 자체 적발·canonical 재저장으로 67줄 복원). 프로그램적 rewrite는 반드시 json.dumps(d,ensure_ascii=False,indent=2)+개행 canonical로 저장하고 git diff --stat으로 실변경 줄수만 남았는지 확인",
-        "threshold": "재발조건=ARCHITECTURE.json을 스크립트로 쓰면서 indent=2+trailing-newline canonical 미준수 또는 diff --stat 미확인 · 해결=수정 전 HEAD round-trip 동일성 확인+canonical 저장+diff --stat 실변경 확인 후 커밋",
+        "value": "ARCHITECTURE.json blind write가 파일 훼손/거대diff 재발 (1차 #4135 UU blind-add · 2차 jsonl · 3차 indent=1 덤프·자체적발 · 4차 2026-07-03 anima: sidecar convergence add 자체가 indent=2 고정 직렬화로 indent=1 파일 전체 재포맷 13k줄 — 도구 라이터가 원인·diff --stat 검사로 적발 후 indent 복원 커밋으로 상쇄)",
+        "threshold": "재발조건: ARCHITECTURE.json 프로그램 write 시(sidecar convergence add 포함·타 repo일수록 주의). 해결: 기존 파일 indent 감지→동일 스타일 재직렬화→diff --stat로 레코드-only 확인 후 커밋. 근본fix 후보=sidecar 라이터 indent 자동감지(follow-on)",
         "source": "ARCHITECTURE.json"
       },
       {
@@ -318,6 +318,13 @@
         "value": "regex native path(HEXA_REGEX_NATIVE)를 default-ON flip하면 undefined reference to rt_regex_* 링크실패: emitted runtime.c(runtime.a)가 rt_regex_*로 위임하나 rt_regex_*는 compiler closure(regex_rt.hexa via compiler/main.hexa import)에만 있고 runtime.a엔 미포함. runtime.a를 standalone 링크하는 소비자(consent-checker·faithful runtime-link·유저바이너리)는 rt_regex_* 미해결→ld fail(linux-arm64 #4451). default-OFF는 libc regex라 무해(rt_regex_* 미참조)·flip이 노출.",
         "threshold": "재발=closure-import 심볼(rt_*)에 위임하는 runtime.c seam을 default-ON flip시 'undefined reference to rt_*' 링크에러(standalone runtime.a 링크서). 판정=OFF byteeq/faithful GREEN이나 flip이 링크RED. 해결=위임대상 심볼을 runtime.a 자체에 컴파일 포함(regex_rt.hexa+thompson+backtrack를 runtime 빌드 TU에 넣거나 .s seed화·glob/fgets/qsort는 runtime.c 내부 self-contained라 무관)·closure import만으론 standalone runtime.a 링크 부족. regex reduction은 gate MERGED default-OFF(#4445)이나 flip=이 wiring 선행. glob/fgets flip은 self-contained라 성공(#4449/#4450).",
         "source": "stdlib/runtime/regex_rt.hexa"
+      },
+      {
+        "id": "reap-1",
+        "state": "pos-conv",
+        "value": "CONFLICTING PR를 수동 리프레시할 때, worktree의 로컬 PR 브랜치가 자기 리모트 카운터파트보다 뒤처져 있을 수 있다(이전 세션/reap이 그 브랜치 리모트에 이미 push함). 실측 2026-07-03 #4409: worktree tip이 origin/<branch>보다 behind 23인데 그 위에서 바로 origin/main을 머지→ARCHITECTURE 충돌 수동해소까지 마쳤으나 push가 non-fast-forward로 거부(엉뚱한 base). 게다가 리모트 tip 자체도 과거 main만 머지한 상태라 현재 main과 재충돌. stage-resolve-runtime-a-1(pool checkout-without-fetch)과 다른 메커니즘=로컬 worktree가 자기 브랜치 리모트보다 뒤처짐.",
+        "threshold": "재발조건=worktree에서 CONFLICTING PR 브랜치에 origin/main을 머지하기 전에 그 브랜치의 리모트 tip과 동기화 안 함(git status -sb의 behind-N 무시). 해결: 머지 전 반드시 (1)git fetch origin <branch> (2)git status -sb로 behind-count 확인 (3)hard-reset을 origin/<branch>로 정렬(reset-ok 사유 명시) 후 origin/main 재머지. 캐논=sidecar reap이 이 순서를 내장하므로 가능하면 수동 대신 reap 사용; reap이 doc충돌로 abort하면 위 3스텝을 손으로.",
+        "source": "tool/reap"
       }
     ]
   },
@@ -505,7 +512,7 @@
                 ]
               },
               {
-                "name": "✅ **Full native `hexa build` end-to-end** (done 2026-06-15) — `hexa build <src> -o OUT` now produces a native executable with **zero clang / zero system ld**: the `hx-selfhost-cli` launcher's new `build` route (native-first + delegate-fallback, mirroring the `run` route #3325) runs `gen3 ",
+                "name": "✅ **Full native `hexa build` end-to-end** (done 2026-06-15) — `hexa build <src> -o OUT` now produces a native executable with **zero clang / zero system ld**: the `hx-selfhost-cli` launcher's new `build` route (native-first + delegate-fallback, mirroring the `run` route #3325) runs `gen3 native --emit=obj 경로는 Linux-x86_64 호스트 게이트(2026-07-03: darwin은 emit 완주 후 crt 프로브 폐기 = 24min/24m30s 낭비 실측 → 폴백 직행) + HEXA_CG_PROFILE=1 시 캡처 출력(_ne·bout) stderr forwarding. ",
                 "role": "",
                 "id": "self-host-status-remaining-residuals-tracked-not-silent-full-native-hexa-build-e",
                 "detail": "",
@@ -1025,7 +1032,7 @@
                         "detail": ""
                       },
                       {
-                        "name": "release.yml, miscompile-zero-gate, determinism-gate). ",
+                        "name": "release.yml, miscompile-zero-gate, determinism-gate). finalize=softprops make_latest + 명시 gh release edit --latest 검증 스텝(2026-07-03: update 경로 make_latest 미실효로 Latest 7일 v0.588 고착 → 소비자 stale 설치 재발 방지). ",
                         "role": "",
                         "id": "self-host-status-remaining-residuals-tracked-not-silent-runtime-c-floor-reducibl-39",
                         "detail": ""
@@ -4142,7 +4149,7 @@
             "children": []
           },
           {
-            "name": "required 게이트(selfhost-gates-summary)는 ubuntu 고정으로 self-hosted에 하드 의존하지 않는다. fork-PR은 eligible 가드로 무조건 클라우드(RCE). ghost는 단일 직렬 러너 — PR 폭주 시 큐잉(설계된 트레이드오프).",
+            "name": "required 게이트(selfhost-gates-summary)는 ubuntu 고정으로 self-hosted에 하드 의존하지 않는다. fork-PR은 eligible 가드로 무조건 클라우드(RCE). ghost는 단일 직렬 러너 — PR 폭주 시 큐잉(설계된 트레이드오프). cancel 정책: 전 워크플로 main push run 무취소(PR-only supersede 취소) — 직렬 darwin 러너에서 무거운 게이트 완주 보장(byteeq-real·gates-required 정렬 완료).",
             "role": "",
             "id": "ci-substrate-runner-routing-guards",
             "detail": "",
@@ -4268,7 +4275,7 @@
                 "name": "Codegen (LIR)",
                 "role": "",
                 "id": "component-map-table-component-path-role-codegen-lir",
-                "detail": "Path: `compiler/codegen/{arm64_darwin,x86_64_linux,thumbv7em_eabihf,nvptx_target}.hexa` · Role: MIR → LIR, target-specific regalloc + instruction selection · per-operand regalloc 조회는 O(1) id2idx 직접배열 (x86_64 #3712 · arm64 패리티 포트, byteeq-neutral)"
+                "detail": "Path: `compiler/codegen/{arm64_darwin,x86_64_linux,thumbv7em_eabihf,nvptx_target}.hexa` · Role: MIR → LIR, target-specific regalloc + instruction selection · per-operand 조회 O(1): regalloc id2idx 직접배열(#3712·arm64 포트) + strtab 64-bucket FNV-1a 해시인덱스(#4454 계열·양 백엔드·byteeq-neutral)"
               },
               {
                 "name": "Emit (asm/object)",
@@ -5401,7 +5408,7 @@
             "detail": ""
           },
           {
-            "name": "L1 defer + @own drop — census(wrk4s86e9) 판정: defer는 이미 gen2 C-transpile(self/lexer.hexa:39·parser.hexa:4749·codegen.hexa fn-exit LIFO drain, 무사용 zero-emission 기설계)과 interp에 존재 · M1의 유일한 갭=native aprime 경로(compiler/) → 성격=in-repo reference-match 패리티 포트(oracle=gen2: fn-exit LIFO·reached-flag at-most-once·throw는 drain 안 탐). 계획서 SSOT=state/hexa-own/M1_defer_wiring.md (Step0 특성화→PARSER-1 contextual carrier→HIR 문자열 태그→MIR 단일-exit epilogue(count==0=완전 무변경)→codegen 무수정 검증→3실행기 selftest→HX0xxx 진단).",
+            "name": "L1 defer — ✅ MERGED(#4446 · squash c7c1832c4): native aprime 패리티 포트 착지, byteeq 3-target(gen3≡gen4+byteeq-real+faithful darwin/linux-x86_64/linux-arm64)+miscompile-zero+determinism ALL-GREEN으로 무사용 bit-identity CI 증명. 구현=contextual Ident 게이트(compiler/parse/parser.hexa parse_defer_expr·Q4 화이트리스트·assignment-body HX0014 거부)+Block carrier(text __defer__)+HIR kind defer+MIR 단일-exit epilogue(count==0=완전 무변경·신규 runtime 심볼 0)+selftest 2면(stdlib/lang/defer_test.hexa @ci_gate·self/test/miscompile_zero/c13_defer.hexa)+tree-sitter 키워드. oracle=gen2(fn-exit LIFO·at-most-once·throw no-drain 문서화). Step0 실측 QA 완료(aiden·state/hexa-own/step0_verdict.md=SSOT): 확증 5/6(LIFO·reached-flag·loop at-most-once drain-time·return-drain·throw-우회)·FRESHRUN==GEN2==SHIPRUN. 실측 divergence 2건 = ① C4(루프-carried defer를 return이 앞지름): native 발화(규범 일치) vs gen2 미발화 → 처분(b) gen2 결함 분류·후속=gen2 emitted-C 검사→self/codegen.hexa fix(byteeq-민감 별도 PR)+defer_test C4 게이트 ② native 파서 bare-return이 다음 줄 ident-선두 문장을 return값으로 삼킴(HX2001·gen2는 정상) → M1 후속 수정감. 계획서=state/hexa-own/M1_defer_wiring.md.",
             "role": "",
             "id": "hexa-own-ladder-l1-defer",
             "detail": ""
