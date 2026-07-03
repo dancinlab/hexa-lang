@@ -4142,7 +4142,7 @@
             "children": []
           },
           {
-            "name": "required 게이트(selfhost-gates-summary)는 ubuntu 고정으로 self-hosted에 하드 의존하지 않는다. fork-PR은 eligible 가드로 무조건 클라우드(RCE). ghost는 단일 직렬 러너 — PR 폭주 시 큐잉(설계된 트레이드오프).",
+            "name": "required 게이트(selfhost-gates-summary)는 ubuntu 고정으로 self-hosted에 하드 의존하지 않는다. fork-PR은 eligible 가드로 무조건 클라우드(RCE). ghost는 단일 직렬 러너 — PR 폭주 시 큐잉(설계된 트레이드오프). cancel 정책: 전 워크플로 main push run 무취소(PR-only supersede 취소) — 직렬 darwin 러너에서 무거운 게이트 완주 보장(byteeq-real·gates-required 정렬 완료).",
             "role": "",
             "id": "ci-substrate-runner-routing-guards",
             "detail": "",
@@ -4268,7 +4268,7 @@
                 "name": "Codegen (LIR)",
                 "role": "",
                 "id": "component-map-table-component-path-role-codegen-lir",
-                "detail": "Path: `compiler/codegen/{arm64_darwin,x86_64_linux,thumbv7em_eabihf,nvptx_target}.hexa` · Role: MIR → LIR, target-specific regalloc + instruction selection · per-operand regalloc 조회는 O(1) id2idx 직접배열 (x86_64 #3712 · arm64 패리티 포트, byteeq-neutral)"
+                "detail": "Path: `compiler/codegen/{arm64_darwin,x86_64_linux,thumbv7em_eabihf,nvptx_target}.hexa` · Role: MIR → LIR, target-specific regalloc + instruction selection · per-operand 조회 O(1): regalloc id2idx 직접배열(#3712·arm64 포트) + strtab 64-bucket FNV-1a 해시인덱스(#4454 계열·양 백엔드·byteeq-neutral)"
               },
               {
                 "name": "Emit (asm/object)",
@@ -4541,6 +4541,12 @@
                     "detail": ""
                   }
                 ]
+              },
+              {
+                "name": "Per-module compile gate",
+                "role": "",
+                "id": "component-map-table-component-path-role-per-module-compile-gate",
+                "detail": "Path: `tool/compile_gate.py` (+`compile_gate_selftest.py`) · Role: design-D closure-delta compile gate — changed module alone `hexa build --c-only` + clang -fsyntax-only vs generated sibling interface skeleton (runtime.h hexa_callN boxing asymmetry encoded); NON-BYPASSABLE escalation to whole-closure `hexa build` on interface delta/misparse/infra/stale-anchor; never invokes `hexa run`, run-binary cache untouched (byteeq/determinism gates unaffected). Measured on real 23-file closure: 10.06s full → 1.54s worst-case module gate; selftest 16/16"
               }
             ]
           }
@@ -5395,7 +5401,7 @@
             "detail": ""
           },
           {
-            "name": "L1 defer + @own drop — census(wrk4s86e9) 판정: defer는 이미 gen2 C-transpile(self/lexer.hexa:39·parser.hexa:4749·codegen.hexa fn-exit LIFO drain, 무사용 zero-emission 기설계)과 interp에 존재 · M1의 유일한 갭=native aprime 경로(compiler/) → 성격=in-repo reference-match 패리티 포트(oracle=gen2: fn-exit LIFO·reached-flag at-most-once·throw는 drain 안 탐). 계획서 SSOT=state/hexa-own/M1_defer_wiring.md (Step0 특성화→PARSER-1 contextual carrier→HIR 문자열 태그→MIR 단일-exit epilogue(count==0=완전 무변경)→codegen 무수정 검증→3실행기 selftest→HX0xxx 진단).",
+            "name": "L1 defer — ✅ MERGED(#4446 · squash c7c1832c4): native aprime 패리티 포트 착지, byteeq 3-target(gen3≡gen4+byteeq-real+faithful darwin/linux-x86_64/linux-arm64)+miscompile-zero+determinism ALL-GREEN으로 무사용 bit-identity CI 증명. 구현=contextual Ident 게이트(compiler/parse/parser.hexa parse_defer_expr·Q4 화이트리스트·assignment-body HX0014 거부)+Block carrier(text __defer__)+HIR kind defer+MIR 단일-exit epilogue(count==0=완전 무변경·신규 runtime 심볼 0)+selftest 2면(stdlib/lang/defer_test.hexa @ci_gate·self/test/miscompile_zero/c13_defer.hexa)+tree-sitter 키워드. oracle=gen2(fn-exit LIFO·at-most-once·throw no-drain 문서화). Step0 실측 QA 완료(aiden·state/hexa-own/step0_verdict.md=SSOT): 확증 5/6(LIFO·reached-flag·loop at-most-once drain-time·return-drain·throw-우회)·FRESHRUN==GEN2==SHIPRUN. 실측 divergence 2건 = ① C4(루프-carried defer를 return이 앞지름): native 발화(규범 일치) vs gen2 미발화 → 처분(b) gen2 결함 분류·후속=gen2 emitted-C 검사→self/codegen.hexa fix(byteeq-민감 별도 PR)+defer_test C4 게이트 ② native 파서 bare-return이 다음 줄 ident-선두 문장을 return값으로 삼킴(HX2001·gen2는 정상) → M1 후속 수정감. 계획서=state/hexa-own/M1_defer_wiring.md.",
             "role": "",
             "id": "hexa-own-ladder-l1-defer",
             "detail": ""
