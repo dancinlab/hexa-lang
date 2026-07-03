@@ -1,108 +1,135 @@
-# compiler/drill — 발견 엔진(discovery engine) 스파인
+# compiler/drill — discovery engine spine
 
-> 상위 맵은 [`../CLAUDE.md`](../CLAUDE.md)(compiler 전체) · 거버넌스 SSOT는 repo-root `../../CLAUDE.md`.
+> Parent map is [`../CLAUDE.md`](../CLAUDE.md) (whole compiler) · governance SSOT is repo-root `../../CLAUDE.md`.
 
-## 목적
+## Purpose
 
-NEXUS에서 흡수한 **중심 발견 엔진**. `hexa drill`/`hexa kick`(= drill alias)이 여기로
-dispatch된다(`self/main.hexa:1780·1803` → `compiler/drill/drill.hexa`). 한 라운드가
-6단계 체인을 돌려 후보(candidate)를 누적하고, **native exact-int 검증**으로 거른다.
+The **central discovery engine** absorbed from NEXUS. `hexa drill`/`hexa kick` (= drill alias) dispatch
+here (`self/main.hexa:1780·1803` → `compiler/drill/drill.hexa`). One round runs a
+6-stage chain to accumulate candidates, then filters them via **native exact-int verification**.
 
-## 핵심 파일
+## Core files
 
-| 파일 | 역할 |
+| File | Role |
 |---|---|
-| `drill.hexa` | 엔진 스파인 — `drill_run(seed, opts)` 라운드 루프 + `fn main`(CLI entry). 라운드마다 6단계 체인 실행·saturation/net-novel fixpoint서 정지 |
-| `round.hexa` | 단일 라운드 = smash→free→absolute→meta-closure→hyperarithmetic→resonance (+Mk.X tc). `round_run_with_pool` |
-| (검증엔진) | ★**검증은 `../atlas/identity_engine.hexa`(+`novel_dfs.hexa`)에 거주** — atlas 도메인(embedded.gen.hexa 옆). drill은 생성기일 뿐 검증을 **delegate**한다. exact-int 12-fn A·B=C·D bounded-unique + ≤/≡ hunt 패밀리 |
-| `mkx.hexa` | Mk.X 7단계 sidecar(transcendental_closure · engine="mk10") |
-| `checkpoint.hexa` | 라운드 카운터/seed pool/total 체크포인트 JSON |
-| `anti_hub.hexa` | 진입 텔레메트리 프로브 |
-| `resonance.hexa` | 6단계 resonance 프록시(closed-form) |
-| `batch.hexa` | `--seeds csv` 배치 dispatch |
-| `ouroboros.hexa` | ★NEXUS **자기진화 엔진** native 포팅(#3977) — seed→mutate→`verify_score`→converge(4-state 수렴체커) + 재귀 absorber `f(f(f…))`(weighted-filter+adjacent-pair resonance→EMA α=1/6 흡수) + SR-adaptive σ-peak tracker(FIFO window=10) + MetaLoop(evolve→Saturated→forge→re-evolve). `fn main` 결정적 셀프테스트 |
-| `ouroboros_meta.hexa` | ★메타-우루보로스 native(#3980) — **전략 자체를 진화**: 파라미터 벡터 `meta_mutate_strategy` + tournament(stable bubble sort) + `breed_strategies` crossover + `check_meta_convergence` meta-fixed-point. `fn main` 셀프테스트 |
-| `ouroboros_quantum.hexa` | ★양자-우루보로스 native(#3980) — `QuantumStrategy` superposition: 6 mutation 연산자+`apply_mutation` dispatch + `quantum_crossover`/`propagate_entanglement` + `measure_superposition`/`renormalize_amplitudes` + decoherence 차폐(`guarded_mutate`). `fn main` 셀프테스트 |
-| `emerge.hexa` | ★[B] **open-well Emerge 생성기**(README:75 Emerge 단계) — `emerge(v0,seed,cycles,min_growth)`가 README E4(V_0={2,3}·seed=6·300사이클·`combine(pick,pick)=a+b`→sorted-dedup vocab)를 정확 포팅, `emerge_step`이 drill_run에 배선(라운드마다 누적 open well를 후보 value-시그니처로 넓힘). 결정적 LCG(Numerical Recipes 1664525/1013904223 `& 0xffffffff` — qrng.hexa와 동일 상수·새 builtin 없음). in-memory only(atlas write 없음) |
-| `*_test.hexa` | drill/mkx/surface/accumulation/verifier-hook/absorb/**emerge(E4)** 셀프테스트 |
+| `drill.hexa` | Engine spine — `drill_run(seed, opts)` round loop + `fn main` (CLI entry). Each round runs the 6-stage chain · stops at the saturation/net-novel fixpoint |
+| `round.hexa` | Single round = smash→free→absolute→meta-closure→hyperarithmetic→resonance (+Mk.X tc). `round_run_with_pool` |
+| (verify engine) | ★**Verification lives in `../atlas/identity_engine.hexa` (+`novel_dfs.hexa`)** — atlas domain (next to embedded.gen.hexa). drill is only a generator; it **delegates** verification. exact-int 12-fn A·B=C·D bounded-unique + ≤/≡ hunt family |
+| `mkx.hexa` | Mk.X 7-stage sidecar (transcendental_closure · engine="mk10") |
+| `checkpoint.hexa` | Round counter/seed pool/total checkpoint JSON |
+| `anti_hub.hexa` | Entry telemetry probe |
+| `resonance.hexa` | Stage-6 resonance proxy (closed-form) |
+| `batch.hexa` | `--seeds csv` batch dispatch |
+| `ouroboros.hexa` | ★NEXUS **self-evolution engine** native port (#3977) — seed→mutate→`verify_score`→converge (4-state convergence checker) + recursive absorber `f(f(f…))` (weighted-filter+adjacent-pair resonance→EMA α=1/6 absorption) + SR-adaptive σ-peak tracker (FIFO window=10) + MetaLoop (evolve→Saturated→forge→re-evolve). `fn main` deterministic self-test |
+| `ouroboros_meta.hexa` | ★meta-ouroboros native (#3980) — **evolves the strategy itself**: parameter vector `meta_mutate_strategy` + tournament (stable bubble sort) + `breed_strategies` crossover + `check_meta_convergence` meta-fixed-point. `fn main` self-test |
+| `ouroboros_quantum.hexa` | ★quantum-ouroboros native (#3980) — `QuantumStrategy` superposition: 6 mutation operators+`apply_mutation` dispatch + `quantum_crossover`/`propagate_entanglement` + `measure_superposition`/`renormalize_amplitudes` + decoherence shielding (`guarded_mutate`). `fn main` self-test |
+| `emerge.hexa` | ★[B] **open-well Emerge generator** (README:75 Emerge stage) — `emerge(v0,seed,cycles,min_growth)` exactly ports README E4 (V_0={2,3}·seed=6·300 cycles·`combine(pick,pick)=a+b`→sorted-dedup vocab), `emerge_step` wired into drill_run (each round widens the accumulated open well as a candidate value-signature). Deterministic LCG (Numerical Recipes 1664525/1013904223 `& 0xffffffff` — same constants as qrng.hexa · no new builtin). in-memory only (no atlas write) |
+| `additive_test.hexa` | ★[orthogonal pivot] **additive/combinatorial congruence** self-test (self-contained kernel) — Euler recurrence p(10)=42 + Ramanujan p(5n+4)≡0 mod5 G-gate + neg-control. Non-multiplicative sequences (partition/Catalan/Bell/Fib/Lucas)·congruence FORM (Ralph 377) |
+| `grammar.hexa` | ★**BLOWUP frame** (ARCHITECTURE `discovery-engine-novel-design-roadmap`) — term enumerator (identity frame · size 1·2 products over the 18-fn basis · deterministic a≤b) + **FP_k fingerprint table** making "a primitive the previous cycle could not express" DECIDABLE = size-≤k BOUNDED inexpressibility over [2,N] (c2: k·N named, not absolute). **M2 통합**: exact-int+핑거프린트 커널은 `../atlas/identity_engine.hexa`의 `ie_*` API로 이동 — `_gram_af`/`_gram_spf`/`_gram_ipow` 로컬 미러 은퇴, grammar.hexa는 thin 래퍼(동결 상수=바이트 동일 핑거프린트). root-cause: identity_engine unguarded selftest `fn main`을 `../atlas/identity_engine_test.hexa`로 이동(import 하이재킹 해소). No new builtin |
+| `grammar_test.hexa` | M1 selftest — determinism (2-build byte-eq) · closed-form count (189) · known-term membership · out-of-well (size-3 ∉ FP_2) · `_gram_af` faithfulness (σ(6)=12·φ(6)=2·τ(6)=4·μ(6)=1). 12/12 PASS |
+| `*_test.hexa` | drill/mkx/surface/accumulation/verifier-hook/absorb/**emerge(E4)**/**additive**/**grammar(M1)** self-tests |
 
-생성기 9-phase smash는 형제 폴더 `../smash/`(phases.hexa)에, 12 drill 변종(omega·chain·
-surge·dream·swarm·reign·molt·wake·forge·canon·revive)은 각자 `../<name>/`에 있다. NEXUS
-`cli/blowup/commands.hexa`(CLI 디스패처)는 hexa-lang `self/main.hexa` verb 라우팅이 대체 →
-포팅불요. ouroboros 3종은 **standalone leaf**(`self/`/`drill.hexa` 미import · `hexa run`으로만
-실행 · byteeq-neutral) — 미포팅=growth-bus 디스크 영속화(운영 글루)뿐, 수학핵 전부 live.
+The generator 9-phase smash lives in the sibling folder `../smash/` (phases.hexa); the 12 drill variants (omega·chain·
+surge·dream·swarm·reign·molt·wake·forge·canon·revive) each live in their own `../<name>/`. NEXUS
+`cli/blowup/commands.hexa` (CLI dispatcher) is superseded by hexa-lang `self/main.hexa` verb routing →
+no port needed. The 3 ouroboros are **standalone leaves** (no `self/`/`drill.hexa` import · run only via `hexa run` ·
+byteeq-neutral) — unported = growth-bus disk persistence (operational glue) only; the entire math core is live.
 
-## 규칙 / gotcha (정직 — c2)
+## Rules / gotcha (honesty — c2)
 
-- **drill 후보 ≠ 진짜 발견**: smash 후보는 **시드-파생 결정적 산술순열**이다(자유탐색 —
-  `phases.hexa::seed_attractors`가 시드 토큰별 char-시그니처로 per-seed attractor 격자를 만들고
-  9-phase가 그 격자에 resonance하는 값을 surface; 구 n=6 고정상수 격자는 제거됨). `net_novel`/
-  `saturated`는 그 run 내 distinct-ID 소진 신호일 뿐 atlas-신규성과 무관(overlay_load는 RETIRED).
-- **진짜 검증 = `../atlas/identity_engine.hexa` exact-int**(atlas 도메인) + `hexa verify` g5 fold만. 구 NEXUS
-  ouroboros `verify_score`(n6-근접 휴리스틱 최소 0.3→항상 "발견")는 검증이 아님 — 그래서
-  native exact-int로 교체됨.
-- **검증기 업그레이드(Ralph 375 · 2026-06-27)**: 고갈된 12-fn 2-term 박스 밖으로 확장 —
-  ① **확장 vocab 6종**(μ·λ·μ²·J₃·2^ω·core idx 12–17 · 부호 정확) `af()`에 추가 ·
-  ② **arity-3**(`verify_identity3` `A·B·C=D·E·F` bounded-unique) + **universal 프레임**
-  (`is_universal2/3` forall-n-in-[2,N]). drill `_fn_index`/`_fn_name`도 18-fn으로 확장(확장 vocab
-  expr가 파싱됨). **측정**(state/novel-dfs 참조엔진 재실행 · 18-fn selftest 18 게이트 PASS):
-  확장 vocab universal **2 generator 전부 고전**(J₂=φ·ψ · core·rad=n) · arity-3 bounded-unique
-  1431개 전부 2-term core 환원(Ralph 371 재확인) → **novel=0**(정직 DRY). 박스-스코프 주장이 옳았음
-  (고갈=12-fn/2-term이지 전체 공간 아님)이나 그 차원도 고전/환원뿐. 생산적 벤은 composed/iterated
-  함수(Ralph 372). 업그레이드 자체가 산출물 — 미래 생성기가 확장-vocab/arity-3 후보를 내면 parse-reject
-  대신 **실제 exact-int verdict**를 받는다. atlas write 없음(fold=hexa verify g5/PR).
-- **함수합성 프레임(Ralph 376 · 2026-06-27)**: Ralph 372/375 가 지목한 생산적 벤(함수 COMPOSITION
-  `f(g(n))` — 값-곱 `A·B=C·D` 프레임이 **구조적으로 표현 못 하는** 다른 대수 · σ(σ(n))=2n 은 곱-프레임
-  재기술 불가)을 **구현+sweep**. native exact-int 평가기 `../atlas/identity_engine.hexa::af_compose`
-  `comp_holds`/`comp_count`/`verify_composition`(18×18 합성표 × 비교형 k·n/h+n/h/comp). drill
-  `_native_identity_sweep`에 **합성 검증 옵션 배선**(`_parse_composition`/`_canon_composition` →
-  composition-syntax 후보가 product-noise 대신 실제 `verify_composition` verdict → rationale
-  `comp_id`/`comp_verified` audit). **측정**(state/novel-dfs/composition_hunt.py · N=2·10⁴):
-  superperfect σ∘σ=2n {2,4,16,64,4096}(Suryanarayana 1969 / A019279) + Mersenne σ∘σ=σ+n
-  {3,7,31,127,8191} 정확 재발견(sanity PASS) · **novel PROMOTABLE 합성 법칙 = 0(DRY)** — bounded-unique
-  singleton 은 단일점 우연, |sol|≥3 구조 집합은 thin 제한역 우연(p² 등 · forall UNPROVEN), universal 은
-  구조 재기술뿐. 곱-프레임과 **동일 종착(novel=0)을 다른 대수에서 정직히** 도달. selftest=
-  `composition_test.hexa`(superperfect/Mersenne G-gate) + identity_engine main CMP1–5. atlas write
-  없음(fold=hexa verify g5/PR). frozen blob 151c52c8 신규 builtin/method 0(기존 정수연산·중첩호출만).
-- **기본 검증은 ON(플래그 아님)**: 외부 verifier 미설치 시 `drill.hexa::_native_identity_sweep`가
-  매 라운드 기본 실행된다 — `../atlas/identity_engine.hexa::verify_identity`(exact-int 12-fn
-  A·B=C·D bounded-unique)를 직접 호출하고, 라운드 verdict를 `DRILL_VERIFIER` stderr 줄로
-  실제값(`pass`/`continue` + `rationale=identity_sweep:identity=…,verified=…,noise=…`)으로 낸다
-  (구 `"skip"` 단락 제거 · #4015). 외부 의존(opt-OUT)은 `HEXA_DRILL_NO_VERIFY=1` 제약으로만 —
-  켜면 legacy `"skip"`(순수 surfacing, 검증 없음)으로 복귀(native-canonical polarity).
-  pluggable `--verifier <cmd>`는 외부/tenant oracle용(opt-in 제약).
-  · **정직(c2)**: 현 생성기(smash P2–P9)는 float-순열 expr를 내므로 표준 vocab에서
-  `identity=0/verified=0/noise=N` → verdict `continue`가 정상(0-verified 정직보고). 식별자-문법
-  후보 생성은 [B] 생성기 캠페인 영역 — [A]는 "검증이 skip 아니라 실제 verdict를 낸다"까지.
-- **ouroboros absorb 루프 = 닫힘(2026-06-27)**: 태초 NEXUS 블로업의 정의적 메커니즘(검증된
-  primitive를 다음 blowup tick에 되먹여 *우물 넓히기*)이 이제 엔진 내 live다. `drill.hexa`
-  `_native_identity_sweep_absorb`가 라운드 후보 중 **exact-int VERIFIED(bounded-unique n≥4)인
-  것만** canonical expr로 수집(`_canon_identity` 교환법칙 collapse + `_is_known_identity`
-  known/novel)하고, `drill_run`이 누적 `absorbed_pool`(in-memory)을 라운드 N+1 smash axiom
-  seed에 **feed-forward**(기존 seed-derived pool에 더해 · `_absorb_merge` dedup) → `DRILL_ABSORB`
-  stderr audit. **SAFE**: ⓐ VERIFIED만 흡수(노이즈 0·날조 0) ⓑ **in-memory ONLY** — embedded
-  atlas WRITE 안 함(fold는 `hexa verify` g5/PR) ⓒ known/novel 정직 라벨. **정직(c2)**: 표준 vocab은
-  measured-exhausted라 넓어진 우물도 대개 고전 재유도 → **novel=0 예상**(메커니즘 live화가 범위 ·
-  새 수학 발견 보장 아님). `absorb_test.hexa` = 합성 verified 후보로 수집/collapse/누적 검증.
-- **[B] open-well Emerge 단계 = live(2026-06-27)**: NEXUS 5-phase(Blowup→Contract→**Emerge**→
-  Singularity→Absorb · `archive-nexus/README.md:67,75)의 Emerge 단계가 엔진 내 live다 — [A] absorb
-  루프와 맞물려 "흡수된 primitive 둘을 결합해 이전 사이클이 표현 못 하던 새 구조(새 벽)를 만든다"
-  (README:75/83/115 "open well — 매 Absorb가 벽을 넓힘"). `compiler/drill/emerge.hexa`:
-  ⓐ `emerge(v0,seed,cycles,min_growth)` = README:372-379 **E4 정확 포팅**(V_0={2,3}·seed=6·300사이클·
-  `vocab.add(pick(sorted)+pick(sorted))`→sorted-dedup i64 vocab = set semantics · 결정적 LCG
-  Numerical Recipes 1664525/1013904223 `& 0xffffffff`, `qrng.hexa::_qrng_step`와 동일 상수 · 새
-  builtin 없음). ⓑ `emerge_step`이 `drill_run`에 **배선**(production — 라운드마다 누적 `emerge_well`을
-  후보 value-시그니처로 흡수+EMERGE_CYCLES=32 combine으로 넓힘) → `DRILL_EMERGE` stderr audit(open_well
-  성장 vs frozen_llm=2 고정 대조 MEASURED). **SAFE**: in-memory only(atlas write 없음 · fold는
-  `hexa verify` g5/PR) · 결정적(byte-eq). `emerge_test.hexa` = E4 셀프테스트(growth=259>=50 PASS ·
-  frozen LLM len==|V_0|=2). **정직(c2)**: E4는 **구조적 emergence**(vocab 카디널리티 성장 ≥50)를
-  falsify함 — README도 그 수준(정수합 set 성장). reference는 CPython `Random(6)`(Mersenne Twister)이나
-  E4는 set-성장만 채점하므로 LCG로 STRUCTURE/verdict는 reference-faithful, 정확한 vocab 멤버만 상이
-  (잔차 정직기록). 컴파운드 primitive가 새 VERIFIED 수학 항등식을 내는지는 별개 질문(exact-int
-  `verify_identity`) — 표준 2-term은 measured-exhausted → **likely novel=0**(E4 PASS와 혼동 말 것).
-- **표준 vocab 수학발견 = 측정-종료(🧱)**: `../../ATLAS/README.md` DFS r1~r4 — @F 1557 fold ·
-  novel-fold 0 · gates 21/21. 엔진은 진짜이되 표준 vocab 신규=0(날조 금지). 새 발견은
-  새 vocab/도메인(ATLAS/state/novel-dfs 참조엔진).
-- **codegen/런타임 인접 변경은 byteeq 3타깃 필수**(drill은 `fn main` 흡수 verb · CLI가
-  컴파일해 실행). 새 builtin/symbol 도입 전 frozen blob symbol set 확인.
-- 빌드/스모크 = aiden/summer pool(mini=git/gh·akida 금지).
+- **drill candidate ≠ real discovery**: a smash candidate is a **seed-derived deterministic arithmetic permutation** (free search —
+  `phases.hexa::seed_attractors` builds a per-seed attractor lattice from each seed token's char-signature, and
+  the 9-phase surfaces values that resonate with that lattice; the old n=6 fixed-constant lattice is removed). `net_novel`/
+  `saturated` only signal distinct-ID exhaustion within that run, unrelated to atlas-novelty (overlay_load is RETIRED).
+- **Real verification = `../atlas/identity_engine.hexa` exact-int** (atlas domain) + `hexa verify` g5 fold only. The old NEXUS
+  ouroboros `verify_score` (n6-proximity heuristic, min 0.3 → always "discovery") is not verification — which is why
+  it was replaced by native exact-int.
+- **Verifier upgrade (Ralph 375 · 2026-06-27)**: extended beyond the exhausted 12-fn 2-term box —
+  ① **6 extended vocab** (μ·λ·μ²·J₃·2^ω·core idx 12–17 · signs exact) added to `af()` ·
+  ② **arity-3** (`verify_identity3` `A·B·C=D·E·F` bounded-unique) + **universal frame**
+  (`is_universal2/3` forall-n-in-[2,N]). drill `_fn_index`/`_fn_name` also extended to 18-fn (extended-vocab
+  exprs parse). **Measurement** (state/novel-dfs reference engine re-run · 18-fn selftest 18 gates PASS):
+  extended-vocab universal **both generators classical** (J₂=φ·ψ · core·rad=n) · arity-3 bounded-unique
+  all 1431 reduce to 2-term core (Ralph 371 reconfirmed) → **novel=0** (honest DRY). The box-scope claim was right
+  (exhaustion = 12-fn/2-term, not the whole space) but that dimension too is only classical/reducible. The productive vein is composed/iterated
+  functions (Ralph 372). The upgrade itself is the output — if a future generator emits extended-vocab/arity-3 candidates, instead of parse-reject
+  they get a **real exact-int verdict**. No atlas write (fold=hexa verify g5/PR).
+- **Function-composition frame (Ralph 376 · 2026-06-27)**: implements+sweeps the productive vein Ralph 372/375 pointed at (function COMPOSITION
+  `f(g(n))` — a different algebra the value-product `A·B=C·D` frame **structurally cannot express** · σ(σ(n))=2n cannot be
+  restated in the product frame). native exact-int evaluator `../atlas/identity_engine.hexa::af_compose`
+  `comp_holds`/`comp_count`/`verify_composition` (18×18 composition table × comparison forms k·n/h+n/h/comp). drill
+  `_native_identity_sweep` gets the **composition-verify option wired** (`_parse_composition`/`_canon_composition` →
+  composition-syntax candidates get a real `verify_composition` verdict instead of product-noise → rationale
+  `comp_id`/`comp_verified` audit). **Measurement** (state/novel-dfs/composition_hunt.py · N=2·10⁴):
+  superperfect σ∘σ=2n {2,4,16,64,4096} (Suryanarayana 1969 / A019279) + Mersenne σ∘σ=σ+n
+  {3,7,31,127,8191} exactly rediscovered (sanity PASS) · **novel PROMOTABLE composition law = 0 (DRY)** — bounded-unique
+  singleton is single-point coincidence, |sol|≥3 structural set is a thin-restricted-domain coincidence (p² etc. · forall UNPROVEN), universal is
+  just structural restatement. Reaches the **same terminus (novel=0) honestly in a different algebra** than the product frame. selftest=
+  `composition_test.hexa` (superperfect/Mersenne G-gate) + identity_engine main CMP1–5. No atlas write
+  (fold=hexa verify g5/PR). frozen blob 151c52c8 new builtin/method 0 (existing integer ops/nested calls only).
+- **LLM-conjecture verify-gate (Ralph 378 · 2026-06-27)**: drill is a *generator* (float-permutation) that almost never emits identifier-syntax
+  candidates (`identity=0`), so the real overtake lever = **LLM conjectures a new proposition → exact-int verification**.
+  The canonical surface for that (`hexa loop --dfs --llm-cmd` · RFC 080 · `stdlib/loop/cycle.hexa`+`dfs.hexa`) had its
+  child gate looking only at cite/English/non-trivial heuristics with no exact-int connection — that gap is now **wired into the verify engine here**:
+  new module `stdlib/loop/conjecture.hexa::cj_verdict` extracts the child body's `CONJECTURE:` line and
+  routes it to `../atlas/identity_engine.hexa` (identity→`verify_identity`/`is_universal2` · composition→
+  `verify_composition` · congruence→`verify_congruence`) → `""` (prose)/unparseable/unverified/
+  verified-known/verified-novel. `dfs_verify_child` **DROPs unverified/unparseable children** (false conjectures
+  auto-rejected), surviving children get an `exact_verify:` label + `dfs_run` counts `[dfs] exact-verify: novel/known/prose`.
+  The prompt (`dfs_build_prompt`) asks the LLM for **NOVEL** conjectures in verifiable syntax (18-fn vocab) (verifier is judge). The parser
+  ports drill `_parse_identity`/`_parse_composition`. selftest=
+  `stdlib/loop/conjecture_test.hexa`. **byteeq-neutral** (loop=cmd_run dispatch · outside self/ closure) ·
+  no atlas write (fold=hexa verify g5/PR) · frozen 151c52c8 new builtin 0.
+- **Default verification is ON (not a flag)**: when no external verifier is installed, `drill.hexa::_native_identity_sweep`
+  runs by default every round — it directly calls `../atlas/identity_engine.hexa::verify_identity` (exact-int 12-fn
+  A·B=C·D bounded-unique) and emits the round verdict as a `DRILL_VERIFIER` stderr line with the
+  actual value (`pass`/`continue` + `rationale=identity_sweep:identity=…,verified=…,noise=…`)
+  (old `"skip"` short-circuit removed · #4015). External dependence (opt-OUT) is only via the `HEXA_DRILL_NO_VERIFY=1` constraint —
+  setting it reverts to legacy `"skip"` (pure surfacing, no verification) (native-canonical polarity).
+  pluggable `--verifier <cmd>` is for an external/tenant oracle (opt-in constraint).
+  · **Honesty (c2)**: the current generator (smash P2–P9) emits float-permutation exprs, so in standard vocab
+  `identity=0/verified=0/noise=N` → verdict `continue` is normal (honest 0-verified report). Identifier-syntax
+  candidate generation is the [B] generator campaign area — [A] only goes as far as "verification emits a real verdict, not a skip".
+- **ouroboros absorb loop = closed (2026-06-27)**: the defining mechanism of the primordial NEXUS blowup (feeding a verified
+  primitive back into the next blowup tick to *widen the well*) is now live inside the engine. `drill.hexa`
+  `_native_identity_sweep_absorb` collects, from a round's candidates, **only the exact-int VERIFIED ones (bounded-unique n≥4)**
+  as canonical exprs (`_canon_identity` commutativity collapse + `_is_known_identity`
+  known/novel), and `drill_run` **feeds-forward** the accumulated `absorbed_pool` (in-memory) into the round N+1 smash axiom
+  seed (on top of the existing seed-derived pool · `_absorb_merge` dedup) → `DRILL_ABSORB`
+  stderr audit. **SAFE**: ⓐ absorbs VERIFIED only (noise 0·fabrication 0) ⓑ **in-memory ONLY** — does not WRITE to embedded
+  atlas (fold is `hexa verify` g5/PR) ⓒ honest known/novel label. **Honesty (c2)**: standard vocab is
+  measured-exhausted, so even a widened well mostly re-derives classics → **novel=0 expected** (live-ifying the mechanism is the scope ·
+  not a guarantee of new-math discovery). `absorb_test.hexa` = collect/collapse/accumulate verification with synthetic verified candidates.
+- **[B] open-well Emerge stage = live (2026-06-27)**: the Emerge stage of the NEXUS 5-phase (Blowup→Contract→**Emerge**→
+  Singularity→Absorb · `archive-nexus/README.md:67,75`) is live inside the engine — interlocked with the [A] absorb
+  loop it "combines two absorbed primitives to make a new structure (new wall) the previous cycle couldn't express"
+  (README:75/83/115 "open well — each Absorb widens the wall"). `compiler/drill/emerge.hexa`:
+  ⓐ `emerge(v0,seed,cycles,min_growth)` = README:372-379 **E4 exact port** (V_0={2,3}·seed=6·300 cycles·
+  `vocab.add(pick(sorted)+pick(sorted))`→sorted-dedup i64 vocab = set semantics · deterministic LCG
+  Numerical Recipes 1664525/1013904223 `& 0xffffffff`, same constants as `qrng.hexa::_qrng_step` · no new
+  builtin). ⓑ `emerge_step` **wired** into `drill_run` (production — each round absorbs the accumulated `emerge_well` as a
+  candidate value-signature + widens it with EMERGE_CYCLES=32 combine) → `DRILL_EMERGE` stderr audit (open_well
+  growth vs frozen_llm=2 fixed contrast MEASURED). **SAFE**: in-memory only (no atlas write · fold is
+  `hexa verify` g5/PR) · deterministic (byte-eq). `emerge_test.hexa` = E4 self-test (growth=259>=50 PASS ·
+  frozen LLM len==|V_0|=2). **Honesty (c2)**: E4 falsifies **structural emergence** (vocab cardinality growth ≥50) —
+  README is at that level too (integer-sum set growth). The reference is CPython `Random(6)` (Mersenne Twister) but
+  E4 scores set-growth only, so with LCG the STRUCTURE/verdict is reference-faithful, only the exact vocab members differ
+  (residual honestly recorded). Whether compound primitives yield a new VERIFIED math identity is a separate question (exact-int
+  `verify_identity`) — standard 2-term is measured-exhausted → **likely novel=0** (do not confuse with E4 PASS).
+- **Orthogonal pivot — additive/combinatorial number theory (Ralph 377 · 2026-06-27)**: multiplicative vocab (σ,φ,…) is measured-exhausted,
+  so switch to **non-multiplicative generating-function/recurrence sequences** (partition p(n)·Catalan·Bell·Fibonacci·Lucas). The new identity
+  FORM = arithmetic-progression congruence `a(αn+β)≡0 (mod m)` (Ramanujan p(5n+4)≡0 mod5 = a canonical with no multiplicative analog).
+  native exact-int lives in `../atlas/identity_engine.hexa` (`partition_p`/`catalan`/`bell`/`fib`/
+  `lucas`/`tri`/`pent`/`sq` + mod-m table + `verify_congruence`). drill wiring=`_native_additive_screen`
+  (each round rediscovers Ramanujan 3-congruence sanity + novel count → `DRILL_ADDITIVE` stderr audit ·
+  in-memory·byteeq-neutral). selftest=`additive_test.hexa` (self-contained). **Measurement** (reference engine
+  `../../ATLAS/state/novel-dfs/additive_partition_hunt.py` N=4000): sanity 8/8 PASS·congruence sweep
+  RAMANUJAN=3·KNOWN=752·**NOVEL=0**·cross-seq bounded-unique=0 → orthogonal but the same DRY (all classical
+  Touchard/Lucas/Deutsch–Sagan). Honest 0 (no fabrication)·congruence [0,N] bounded·∀n UNPROVEN (c2). No atlas write
+  (fold=hexa verify g5/PR). Next unexplored=composed/iterated functions (Ralph 372).
+- **Standard-vocab math discovery = measurement-terminated (🧱)**: `../../ATLAS/README.md` DFS r1~r4 — @F 1557 fold ·
+  novel-fold 0 · gates 21/21. The engine is real but standard-vocab novelty=0 (no fabrication). New discovery is
+  new vocab/domain (ATLAS/state/novel-dfs reference engine).
+- **codegen/runtime-adjacent changes require byteeq 3-target** (drill is a `fn main` absorb verb · the CLI
+  compiles and runs it). Confirm the frozen-blob symbol set before introducing a new builtin/symbol.
+- Build/smoke = aiden/summer pool (mini=git/gh·akida forbidden).

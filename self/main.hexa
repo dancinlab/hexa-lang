@@ -1411,7 +1411,21 @@ fn os_clang_cflags() {
 }
 fn os_clang_ldflags() {
     let mut base = " -lpthread"
-    if exec("uname 2>/dev/null | tr -d ' \\n\\t'") == "Linux" { base = " -lm -lpthread" }
+    if exec("uname 2>/dev/null | tr -d ' \\n\\t'") == "Linux" {
+        base = " -lpthread"  // zero-c #29: runtime is libm-free (flag-off runtime.a nm-UND libm = ∅, #4299-4313) — drop -lm
+        // own-start #29 PR-B (C1/C2): -nostartfiles when the scaffold-bearing runtime.a is on the link.
+        // #4395 makes runtime.a CARRY own _start/_hx_start_c/_hx_run_init_array (self/runtime.c #ifdef
+        // HEXA_ZEROC_OWN_START) when built with HEXA_ZEROC_OWN_START=1; without -nostartfiles the clang
+        // link ALSO pulls glibc crt1.o _start -> duplicate _start. Append to `base` BEFORE the musl/cuda/
+        // default returns so it propagates through all of them. Linux x86_64/arm64 only (darwin = Mach-O
+        // LC_MAIN, never entered here). Default-OFF byte-neutral (env unset -> base unchanged).
+        if env_var("HEXA_ZEROC_OWN_START") == "1" {
+            let _zc_arch = exec("uname -m 2>/dev/null | tr -d ' \\n\\t'")
+            if _zc_arch == "x86_64" || _zc_arch == "aarch64" || _zc_arch == "arm64" {
+                base = base + " -nostartfiles"
+            }
+        }
+    }
     // HEXA_STATIC_DEPS=1 — see os_clang_cflags: a `-static` musl link has no
     // glibc shared OpenSSL/libsodium to satisfy these, and the cflags side
     // already dropped the -DHEXA_HAS_* defines, so skip the link flags too.
@@ -1705,12 +1719,13 @@ fn cmd_cc() {
     }
     let mut cmd = ""
     if uname == "Linux" {
-        // os_clang_ldflags() (not bare -lm): the transpiler-bootstrap link consumes
+        // os_clang_ldflags() (not a bare flag set): the transpiler-bootstrap link consumes
         // the SAME prebuilt runtime.a (rt_o) as the user-binary link, so when that
         // archive is the CUDA build its runtime_cuda*.o cuda symbols need -lcudart/
-        // -lcudadevrt here too — a bare -lm left them undefined and the hexat rebuild
-        // died (summer pool 2026-06-27). os_clang_ldflags()'s Linux base is "-lm
-        // -lpthread" so this is a strict superset on the CPU default (cuda_on=false →
+        // -lcudadevrt here too — a bare link left them undefined and the hexat rebuild
+        // died (summer pool 2026-06-27). os_clang_ldflags()'s Linux base is "-lpthread"
+        // (zero-c #29: -lm dropped — runtime is libm-free, flag-off runtime.a nm-UND
+        // libm = ∅) so this is a strict superset on the CPU default (cuda_on=false →
         // identical cuda-free link), plus the libsodium/openssl flags the runtime.a
         // may reference — consistent with the user-binary link sites.
         cmd = host_cc() + " -O2 -D_GNU_SOURCE -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexat'" + os_clang_ldflags() + " 2>&1"
@@ -3668,7 +3683,7 @@ fn cmd_build(src, out, c_only, target, shared) {
         let mut ldf_target = ""
         if target.starts_with("linux-") {
             cf_target = "-D_GNU_SOURCE "
-            ldf_target = " -lm"
+            ldf_target = ""  // zero-c #29: runtime libm-free — drop -lm (cross zig-cc)
         }
         compile = "zig cc -O2 -target " + zt + static_f + " " + cf_target + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " '" + __runtime_c + "' -o '" + tmp + "'" + ldf_target + " 2>&1"
     }
@@ -4407,7 +4422,14 @@ fn cmd_run_user_direct(file, extra_args) {
                 let _crt = exec("for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do if [ -f $d/crt1.o ]; then printf %s $d; break; fi; done")
                 let _dl = exec("for f in /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-x86-64.so.2; do if [ -e $f ]; then printf %s $f; break; fi; done")
                 if len(_crt) > 0 && len(_dl) > 0 {
-                    let _lnk = "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _crt + "/crt1.o' '" + _crt + "/crti.o' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lm -lpthread --end-group '" + _crt + "/crtn.o' -L'" + _crt + "' -o '" + _nbin + "' 2>&1"
+                    // own-start #29 PR-B (C3): crt-drop when runtime.a carries own _start (#4390/#4395,
+                    // HEXA_ZEROC_OWN_START=1). Omitting crt1/crti/crtn stops glibc's _start from linking
+                    // so runtime.a's own _start/_hx_run_init_array is used; -lc -lpthread stay in the
+                    // --start-group so libc still resolves. This block is x86_64-hardcoded (arm64 never
+                    // reaches here). Default-OFF byte-neutral: else-branch char-identical to today.
+                    // Loud-fail-safe: a failed ld link falls through to the clang path below.
+                    let _zc_own = env_var("HEXA_ZEROC_OWN_START") == "1"
+                    let _lnk = if _zc_own { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread --end-group -L'" + _crt + "' -o '" + _nbin + "' 2>&1" } else { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _crt + "/crt1.o' '" + _crt + "/crti.o' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread --end-group '" + _crt + "/crtn.o' -L'" + _crt + "' -o '" + _nbin + "' 2>&1" }
                     let _lr = exec(_lnk)
                     let _nbin_ok = exec("test -x '" + _nbin + "' && printf yes || printf no")
                     if _nbin_ok == "yes" {
@@ -5704,6 +5726,16 @@ fn cmd_gpu_status() {
     } else {
         println("  HEXA_TF32_FASTMODE=(unset) → FP64 is the default dtype (deterministic)")
     }
+    // #4214 forge det API + HEXA_DET env (torch ref-match: API 1st, env escape-hatch).
+    // fast non-det is DEFAULT (torch.use_deterministic_algorithms analogue).
+    let f_det = env_var("HEXA_DET")
+    if len(f_det) > 0 && f_det != "0" {
+        println("  HEXA_DET=" + f_det + "         → deterministic mode ON via env (non-atomic own kernels; eval/verdict safety-pin)")
+    } else {
+        println("  HEXA_DET=(unset)    → fast non-det DEFAULT (atomic split-K own kernels; training mode)")
+    }
+    println("  API: set_deterministic(true/false) — in-process 1st-class surface (torch.use_deterministic_algorithms ref-match)")
+    println("       HEXA_DET env = escape-hatch for shell/CI (CUBLAS_WORKSPACE_CONFIG analogue)")
     println("")
     println("3-LAYER LEGEND  (static — doctrine; kept fresh via CLAUDE.md lockstep)")
     println("  flame      native trainer (hexa-native CLMConvMoE; device-resident, byte-exact)")

@@ -1,0 +1,37 @@
+// stdlib/flame/forge_det.hexa — forge determinism API
+// #4214 canonical upgrade: torch.use_deterministic_algorithms() reference-match.
+//
+// PRIMARY surface (1st-class, torch ref-match):
+//   set_deterministic(true/false)  — in-process call, overrides env
+//   is_deterministic() -> bool     — query effective det mode
+//
+// ESCAPE-HATCH (shell/CI/legacy, CUBLAS_WORKSPACE_CONFIG analogue):
+//   HEXA_DET=1 env var — read when API was never called in-process
+//
+// Precedence: API (hexa_forge_set_deterministic) > env (HEXA_DET).
+// Default (no API call + env unset) = fast non-det (training default).
+//
+// Eval/verdict/decode safety-pin: those entry points call
+// set_deterministic(true) directly instead of exporting HEXA_DET,
+// solving the in-process eval caveat (hexa setenv absence irrelevant).
+//
+// torch ref: torch.use_deterministic_algorithms(True/False)
+//   torch source: torch/csrc/autograd/python_variable.cpp + aten/src/ATen/Context.cpp
+//   torch env fallback: CUBLAS_WORKSPACE_CONFIG (low-level knob, not 1st-class)
+
+// NATIVE BUILTINS (no import required) — `set_deterministic`/`is_deterministic`
+// are now first-class runtime builtins, registered like `cuda_available`
+// (carrier + HexaVal-ABI impl in self/runtime_emit_full.hexa, bridging the C-ABI
+// hexa_forge_set_deterministic in runtime_cuda.c / runtime.h). Call them directly
+// anywhere — no `import "stdlib/flame/forge_det.hexa"` needed:
+//
+//   set_deterministic(true)    // det mode ON  (fixed-order non-atomic · byte-exact)
+//   set_deterministic(false)   // det mode OFF (fast atomic kernels · training default)
+//   is_deterministic()         // -> int (1 if det active via API or HEXA_DET env)
+//
+// WHY BUILTINS, not an `extern fn` here: declaring `extern fn
+// hexa_forge_set_deterministic` made the hexat emit an FFI dlsym wrapper named
+// `hexa_forge_set_deterministic` (HexaVal ABI), which collided with runtime.h's
+// C-ABI `void hexa_forge_set_deterministic(int)` → clang "conflicting types"
+// (the canonical surface never compiled). The carrier/builtin path avoids the
+// name collision entirely. This file is now documentation only.

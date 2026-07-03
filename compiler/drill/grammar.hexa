@@ -1,0 +1,64 @@
+// compiler/drill/grammar.hexa — BLOWUP frame of the OUROBOROS-novel design
+// (ARCHITECTURE discovery-engine-novel-design-roadmap · state/fable-eval-
+// discovery-2026-07-02/NEXUS_novel_design_fable.md).
+//
+// The BLOWUP phase's term enumerator + FP_k fingerprint table make "a primitive
+// the previous cycle could not express" (NEXUS README §Not an LLM) a DECIDABLE
+// predicate: a candidate is inside the well at size k iff some enumerated term
+// of size <=k has the SAME value-signature over n in [2,N].
+//
+// Scope: the IDENTITY frame — a term is a product of function symbols, size 1
+// (a single fn) or size 2 (a pair A*B), over the 18-fn exact-int basis of
+// `../atlas/identity_engine.hexa::af()`. Composition (f(g(n))) and congruence
+// (a(αn+β)≡0 mod m) frames are later milestones and slot in beside these.
+//
+// M2 consolidation: the exact-int + fingerprint KERNEL now lives in
+// `../atlas/identity_engine.hexa` as the `ie_*` API (ie_term_value /
+// ie_term_fingerprint / ie_term3_fingerprint / ie_fp_table_build /
+// ie_fp_table_count / ie_fp_contains / ie_expressible_at). The M1 local mirror
+// (`_gram_af`/`_gram_spf`/`_gram_ipow`) is RETIRED; grammar.hexa is now a thin
+// BLOWUP-frame wrapper delegating to `ie_*`. The rolling-hash constants are
+// frozen, so fingerprints stay byte-identical to M1 (grammar_test is the oracle).
+// The M1 flattener-trap (identity_engine's unguarded selftest main hijacking an
+// importer's entry main) is root-caused in M2 by moving that main to
+// `../atlas/identity_engine_test.hexa`, so importing identity_engine is safe now.
+//
+// c2 honesty: the fingerprint proves size-<=k BOUNDED inexpressibility over
+// [2,N] (a value-signature collision test), NOT absolute inexpressibility — the
+// k and N are part of the claim and are logged, never dropped.
+
+use "compiler/atlas/identity_engine"
+
+// ── 18-fn basis (index -> canonical name · mirrors drill.hexa::_fn_index and
+//    identity_engine af() indices 0..17) ──
+pub fn gram_vocab_size() -> int { return 18 }
+
+pub fn gram_fn_name(i: int) -> string {
+    if i == 0  { return "sigma" }
+    if i == 1  { return "sigma2" }
+    if i == 2  { return "sigma3" }
+    if i == 3  { return "phi" }
+    if i == 4  { return "tau" }
+    if i == 5  { return "n" }
+    if i == 6  { return "sopfr" }
+    if i == 7  { return "rad" }
+    if i == 8  { return "J2" }
+    if i == 9  { return "psi" }
+    if i == 10 { return "Omega" }
+    if i == 11 { return "omega" }
+    if i == 12 { return "mu" }
+    if i == 13 { return "lambda" }
+    if i == 14 { return "mu2" }
+    if i == 15 { return "J3" }
+    if i == 16 { return "tw_omega" }
+    if i == 17 { return "core" }
+    return "?"
+}
+
+// ── BLOWUP-frame surface (thin wrappers over identity_engine's ie_* kernel) ──
+pub fn gram_term_value(a: int, b: int, n: int) -> int { return ie_term_value(a, b, n) }
+pub fn gram_term_fingerprint(a: int, b: int, N: int) -> int { return ie_term_fingerprint(a, b, N) }
+pub fn gram_term3_fingerprint(a: int, b: int, c: int, N: int) -> int { return ie_term3_fingerprint(a, b, c, N) }
+pub fn gram_fp_table_build(N: int) -> array { return ie_fp_table_build(N) }
+pub fn gram_fp_table_count() -> int { return ie_fp_table_count() }
+pub fn gram_fp_contains(table: array, fp: int) -> bool { return ie_fp_contains(table, fp) }

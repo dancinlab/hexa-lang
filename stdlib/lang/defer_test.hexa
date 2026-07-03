@@ -1,0 +1,154 @@
+// @ci_gate — pure · network-free · deterministic
+// stdlib/lang/defer_test.hexa — HEXA-OWN M1 `defer` selftest.
+//
+// Semantics under test (gen2 reference, self/parser.hexa parse_defer_stmt +
+// self/codegen.hexa __fn_exit flags — the native aprime lowering mirrors it):
+//   * fn-exit LIFO drain (Go-style placement, single exit epilogue)
+//   * reached-flag registration: at-most-once, incl. loop bodies (differs
+//     from Go's once-per-iteration — documented divergence)
+//   * drain-time variable values (no registration-time capture — differs
+//     from Go's argument capture — documented divergence)
+//   * a defer textually after `return` never registers
+//   * conditional registration follows the executed path
+//
+// NOTE: this file exercises NEW syntax — it parses/passes only on builds
+// that carry the M1 defer port on BOTH backends (gen2 already does).
+// Run: hexa run stdlib/lang/defer_test.hexa
+
+let mut dlog = ""
+let mut fails = 0
+
+fn gate(label: string, got: string, want: string) {
+    if got == want {
+        println("  [PASS] " + label + " -> " + got)
+    } else {
+        println("  [FAIL] " + label + " -> got '" + got + "' want '" + want + "'")
+        fails = fails + 1
+    }
+}
+
+fn mark(v: int) {
+    dlog = dlog + to_string(v) + ";"
+}
+
+// normal fall-through: body runs, then the defer drains at fn exit.
+fn t_fallthrough() -> int {
+    defer mark(1)
+    mark(0)
+    return 7
+}
+
+// early-return and late-return both route through the same exit drain.
+fn t_early(flag: int) -> int {
+    defer mark(5)
+    if flag == 1 { return 100 }
+    return 200
+}
+
+// three defers drain in LIFO (reverse-registration) order.
+fn t_lifo() -> int {
+    defer mark(1)
+    defer mark(2)
+    defer mark(3)
+    return 0
+}
+
+// a defer registered inside a nested block drains at FN exit,
+// not at block exit.
+fn t_nested() -> int {
+    {
+        defer mark(7)
+    }
+    mark(1)
+    return 0
+}
+
+// a defer textually after `return` is never reached → never registered.
+fn t_after_return() -> int {
+    defer mark(1)
+    return 0
+    defer mark(99)
+}
+
+// loop defer: registered at-most-once (reached-flag), and the body reads
+// the DRAIN-TIME value of `i` (== 3 after the loop), not the value at
+// registration time.
+fn t_loop() -> int {
+    let mut i = 0
+    while i < 3 {
+        defer mark(i)
+        i = i + 1
+    }
+    return 0
+}
+
+// conditional registration: only the executed path's defer drains.
+fn t_cond(flag: int) -> int {
+    if flag == 1 {
+        defer mark(10)
+    }
+    defer mark(20)
+    return 0
+}
+
+// block-form body.
+fn t_block_form() -> int {
+    defer {
+        mark(8)
+        mark(9)
+    }
+    return 0
+}
+
+fn main() {
+    println("=== defer SELFTEST (HEXA-OWN M1 · gen2-parity semantics) ===")
+
+    dlog = ""
+    let r1 = t_fallthrough()
+    gate("normal fall-through drains after body", dlog, "0;1;")
+    gate("fall-through return value intact", to_string(r1), "7")
+
+    dlog = ""
+    let r2 = t_early(1)
+    gate("early-return drains", dlog, "5;")
+    gate("early-return value intact", to_string(r2), "100")
+
+    dlog = ""
+    let r3 = t_early(0)
+    gate("late-return drains", dlog, "5;")
+    gate("late-return value intact", to_string(r3), "200")
+
+    dlog = ""
+    t_lifo()
+    gate("LIFO drain order (3 defers)", dlog, "3;2;1;")
+
+    dlog = ""
+    t_nested()
+    gate("nested-block defer drains at fn exit", dlog, "1;7;")
+
+    dlog = ""
+    t_after_return()
+    gate("defer after return never registers", dlog, "1;")
+
+    dlog = ""
+    t_loop()
+    gate("loop defer at-most-once + drain-time value", dlog, "3;")
+
+    dlog = ""
+    t_cond(0)
+    gate("conditional defer skipped on untaken branch", dlog, "20;")
+
+    dlog = ""
+    t_cond(1)
+    gate("conditional defer drains LIFO on taken branch", dlog, "20;10;")
+
+    dlog = ""
+    t_block_form()
+    gate("block-form defer body drains in order", dlog, "8;9;")
+
+    if fails == 0 {
+        println("defer selftest: ALL PASS")
+    } else {
+        println("defer selftest: " + to_string(fails) + " FAILED")
+    }
+}
