@@ -16502,6 +16502,19 @@ fn emit_runtime_ffi_dyn_to(out_path: str) {
     fbuf = fbuf + "#include <dlfcn.h>\n"
     fbuf = fbuf + "#include \"runtime.h\"\n"
     fbuf = fbuf + "\n"
+    // The moved FFI helpers call the hxlcl_* libc-floor natives, which are `static` in
+    // runtime.c (internal linkage — not visible across this TU boundary). This TU is the
+    // opt-in vendor-FFI surface (already libc-linked via dlopen), NOT part of the canonical
+    // runtime.a, so mapping them to libc here is polarity-safe and keeps the moved code
+    // byte-identical. The canonical runtime.a keeps its own hxlcl_* natives.
+    fbuf = fbuf + "#define hxlcl_getenv  getenv\n"
+    fbuf = fbuf + "#define hxlcl_memcpy  memcpy\n"
+    fbuf = fbuf + "#define hxlcl_strcmp  strcmp\n"
+    fbuf = fbuf + "#define hxlcl_strlen  strlen\n"
+    fbuf = fbuf + "#define hxlcl_strncmp strncmp\n"
+    fbuf = fbuf + "#define hxlcl_strrchr strrchr\n"
+    fbuf = fbuf + "#define hxlcl_strstr  strstr\n"
+    fbuf = fbuf + "\n"
     fbuf = fbuf + "// ── Extern FFI: dlopen / dlsym / dispatch ───────────────\n"
     fbuf = fbuf + "\n"
     fbuf = fbuf + "// Resolve a library path for dlopen.\n"
