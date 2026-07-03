@@ -267,7 +267,7 @@ pub fn test_es_bounded_ledger() -> int {
 
 - **mini = git/gh/read·write only** (`../CLAUDE.md` · 피드백 "run heavy on aiden/summer not mini"). heavy build/byteeq/verify 는 **aiden/summer/ghost**.
 - 로컬 `~/.hx/bin/hexa` 는 stale oracle 위험 → pool gen2_fix 빌드 사용(피드백 "local hexa stale oracle").
-- pool SSH 다운 시 **PR 경유 Blacksmith 3-target** 로 검증(`../CLAUDE.md` "cloud CI = Blacksmith").
+- pool SSH 다운 시 **PR 경유 github-hosted 3-target CI** 로 검증(`../CLAUDE.md` "cloud CI = github-hosted"; Blacksmith 는 #4016 revert 로 폐기).
 
 ---
 

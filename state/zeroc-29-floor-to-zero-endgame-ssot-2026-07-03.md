@@ -4,7 +4,7 @@
 3-lane census(LANE1 reduction-lever · LANE2 residual nm-UND class · LANE3 dependency/gate) 를 **하나의 실행 시퀀스**로 통합.
 선행 3 audit 과 정합 — `zeroc-29-goal-terminal-verdict`(진짜 바닥 판정) · `zeroc-29-terminal-front-reduction`(FLIP-6/7 게이트) · `zeroc-29-dlopen-wall-breakthrough`(S1/S2/S3 옵션표) 를 대체하지 않고 **execution-order 로 합성**.
 
-**정직 스코프**: ∅ 판정축 = **Linux ELF canonical `runtime.a` nm-UND**(Blacksmith faithful-nobaseline CI). 로컬/ad-hoc pool `runtime.a` nm 은 FALSE-CLEAN 또는 over-count(census L17/L21) — 권위 수치는 CI 만. darwin = ∅-축 밖(dyld/XNU truly-static Mach-O 거부, `hexa_ld.hexa:56-57`).
+**정직 스코프**: ∅ 판정축 = **Linux ELF canonical `runtime.a` nm-UND**(github-hosted faithful-nobaseline CI). 로컬/ad-hoc pool `runtime.a` nm 은 FALSE-CLEAN 또는 over-count(census L17/L21) — 권위 수치는 CI 만. darwin = ∅-축 밖(dyld/XNU truly-static Mach-O 거부, `hexa_ld.hexa:56-57`).
 
 ---
 
@@ -140,7 +140,7 @@ unfiltered nm -u runtime.a  ─→  { network-FFI · CRT-startup · exec-family 
 ```
 그 밖의 census-60 전원 — dl*(S1), glob/fgets/regex/qsort/rand/strtod/mkstemp, WALL-2 calloc/free/realloc, atexit/environ, ns-syscall, sigset/flock — 은 **REDUCIBLE**(landed-ON 또는 flip 대기). darwin dl* 는 OS-mandated ABI(syscall 등가)로 ∅-축 밖 — Linux ELF canonical 만 판정축.
 
-**과대주장 금지 라인**: "floor→0" 는 마케팅 표현 · 실제 도달 바닥은 **sanctioned-floor(network+CRT+exec)**, `∅` 는 CUDA/net/CRT/exec 를 sanctioned 로 명시 제외한 *reducible-floor* 축에서만 성립. 잔여 count 는 summer single-config 관측 · arm64/darwin nm 독립 미측정(goal-state 🟡) — 권위치는 Blacksmith faithful-nobaseline CI.
+**과대주장 금지 라인**: "floor→0" 는 마케팅 표현 · 실제 도달 바닥은 **sanctioned-floor(network+CRT+exec)**, `∅` 는 CUDA/net/CRT/exec 를 sanctioned 로 명시 제외한 *reducible-floor* 축에서만 성립. 잔여 count 는 summer single-config 관측 · arm64/darwin nm 독립 미측정(goal-state 🟡) — 권위치는 github-hosted faithful-nobaseline CI.
 
 ---
 
