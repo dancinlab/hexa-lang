@@ -952,7 +952,43 @@ resolve_native_alloc_syscall_seed() {
 # by the job's own post-build cuda_available probe, not a silent CPU ship).
 resolve_cuda_runtime_seed() {
     [ "${HEXA_CUDA:-0}" = "1" ] || return 0   # opt-in only
-    local SM="${SM:-120}"
+    # ── DEVICE-ARCH AUTO-RESOLVE (2026-06-22 sm_120 enablement) ───────────────
+    # Root cause #2 (forge-sm120-rtx5070): the bare /usr/local/cuda symlink may
+    # point at an OLD toolkit (e.g. CUDA 12.0, max sm_90) that cannot emit SASS
+    # for a newer device (RTX 5070 = Blackwell sm_120). The arch knob (SM) was
+    # already correct; the wrong default CUDA_HOME silently produced a wrong-arch
+    # (or fallback) build. Auto-derive BOTH from the live device when the caller
+    # did NOT pin them — EXPLICIT env CUDA_HOME / SM are always authoritative.
+    #   - SM: if unset, read nvidia-smi compute_cap (e.g. "12.0" -> "120").
+    #   - CUDA_HOME: if unset, pick the NEWEST /usr/local/cuda-<ver> whose nvcc
+    #     advertises sm_<SM> in `--list-gpu-arch`; else fall back to the symlink.
+    # All steps are best-effort + non-fatal (missing nvidia-smi/globs just keep
+    # the prior defaults), so non-CUDA / pinned builds are byte-unchanged.
+    local SM="${SM:-}"
+    if [ -z "$SM" ] && command -v nvidia-smi >/dev/null 2>&1; then
+        local _cc
+        _cc="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' .')"
+        if printf '%s' "$_cc" | grep -qE '^[0-9]+$'; then
+            SM="$_cc"
+            echo "[stage_resolve_runtime_a] CUDA-R0: auto-SM=$SM from nvidia-smi compute_cap" >&2
+        fi
+    fi
+    SM="${SM:-120}"
+    if [ -z "${CUDA_HOME:-}" ]; then
+        # Prefer the newest versioned toolkit that can emit sm_$SM.
+        local _best="" _cand _nvcc
+        for _cand in $(ls -d /usr/local/cuda-* 2>/dev/null | sort -Vr); do
+            _nvcc="$_cand/bin/nvcc"
+            [ -x "$_nvcc" ] || continue
+            if "$_nvcc" --list-gpu-arch 2>/dev/null | grep -qx "sm_$SM"; then
+                _best="$_cand"; break
+            fi
+        done
+        if [ -n "$_best" ]; then
+            export CUDA_HOME="$_best"
+            echo "[stage_resolve_runtime_a] CUDA-R0: auto-CUDA_HOME=$CUDA_HOME (newest toolkit emitting sm_$SM)" >&2
+        fi
+    fi
     local CUDA_HOME_D="${CUDA_HOME:-/usr/local/cuda}"
     local CINC="$CUDA_HOME_D/targets/x86_64-linux/include"
     [ -d "$CINC" ] || CINC="$CUDA_HOME_D/include"
