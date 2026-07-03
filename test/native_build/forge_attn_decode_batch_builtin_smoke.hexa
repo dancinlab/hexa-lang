@@ -1,0 +1,44 @@
+// test/native_build/forge_attn_decode_batch_builtin_smoke.hexa
+// lever3 (#21 P2 launch-bound amortizer) farr_attn_dt_decode_batch_gpu —
+// consumer-compile smoke.
+//
+// farr_attn_dt_decode_batch_gpu(q, k, v, s, ctx, N, Lrows, cap, nh, nkv, hd)
+// -> int rc is an 11-arg native runtime builtin: N INDEPENDENT single-query
+// KV-cache decode attentions in ONE call (each seq's Q[nh*hd] query attends
+// over Lrows live rows of its own cap-strided K/V slab; dt_sqrt scale + dt_exp
+// softmax; device-resident on CUDA, byte-eq CPU fallback
+// _hx_farr_attn_dt_decode_batch_cpu on no-CUDA). It is the batched sibling of
+// the 9-arg farr_attn_dt_decode_gpu and lowers via the SAME seam: >4 args
+// exceed the hexa_callN ceiling, so self/codegen.hexa's call fallthrough emits
+// the bare C symbol `farr_attn_dt_decode_batch_gpu` (declared in self/runtime.h,
+// defined in the runtime_emit_full carrier) — NO forge_dispatch arg-count
+// binding to misplace (sidesteps the #4339 class entirely).
+//
+// WHY THIS SMOKE EXISTS: byteeq-neutral is NECESSARY but NOT SUFFICIENT for a
+// new GPU builtin to be functional — self/ never calls it, so gen3==gen4
+// reconverges even if the runtime.h proto / carrier / bare-name lowering is
+// broken (the #4339 forge_dispatch_layernorm and #4285 set_deterministic
+// latent-break class). This smoke CALLS the builtin so the bare-name call MUST
+// lower to a declared symbol AND link every PR. SSOT: convergence codegen-hexa-1.
+//
+// It asserts COMPILATION + LOWERING + LINK, not a numeric result: on a non-CUDA
+// build farr_attn_dt_decode_batch_gpu runs the host CPU mirror (rc 0). Reaching
+// the end = PASS. N=2, cap==Lrows so each seq slab is exactly contiguous (the
+// byte-eq-to-single-decode configuration).
+fn main() {
+    let N     = 2
+    let nh    = 2
+    let nkv   = 2
+    let hd    = 4
+    let d     = nh * hd
+    let Lrows = 3
+    let cap   = 3
+    let q   = farr_zeros(N * d)              // N query rows [N, nh*hd]
+    let k   = farr_zeros(N * cap * d)        // N K caches, cap rows each
+    let v   = farr_zeros(N * cap * d)        // N V caches, cap rows each
+    let s   = farr_zeros(N * nh * Lrows)     // per-seq per-head score scratch
+    let ctx = farr_zeros(N * d)              // context out [N, nh*hd]
+    let rc = farr_attn_dt_decode_batch_gpu(q, k, v, s, ctx, N, Lrows, cap, nh, nkv, hd)
+    print("farr_attn_dt_decode_batch_gpu compiled+lowered+ran: rc=") ; println(rc)
+    println("forge_attn_decode_batch_builtin_smoke: PASS (batched KV-decode attention builtin lowers to farr_attn_dt_decode_batch_gpu + links)")
+}

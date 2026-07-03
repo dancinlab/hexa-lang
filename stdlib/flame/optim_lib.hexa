@@ -24,9 +24,41 @@
 
 use "stdlib/flame/flame_math"
 
+// ── r4 device-residency seam (mirrors _conv1d_dev_on in conv_lib) ──
+// On a CUDA host (cuda_available()==1) the elementwise AdamW routes onto the
+// forge DEVICE kernel forge_dispatch_adamw -> _hx_cuda_farr_adamw_step_inplace_gpu
+// (byte-eq to the host oracle — AdamW is PURELY elementwise over the flat param
+// index, no cross-element reduction, so each W[i]/m[i]/v[i] update is bit-identical
+// whether computed on host or device; the bias-correction c1/c2 are computed the
+// SAME per-step repeated-mul way as the CPU oracle). W/m/v stay device-resident
+// (the kernel's _h2d is a §6.1 no-op when the operand is already FARR_DEVICE), so
+// the per-step D2H(W)->host-scalar-loop->H2D(W) roundtrip that dominated step
+// memcpy (nsys #4258: memcpy 50% of API time) collapses to one device launch. rc 0
+// = applied on device; -1 (no-CUDA / GPU fail) falls through to the proven host
+// adamw_step. cuda_available()==0 (CPU-only / byteeq build) -> host path UNCHANGED,
+// byte-identical to the pre-lever reference. optim_lib is byteeq-neutral (self/
+// does not import it), so this edit cannot move the gen3≡gen4 self-host fixpoint.
+//
+// COHERENCE (consumers, not this fn): a caller whose forward consumes a DERIVED
+// weight cache (clm_prod DEVRESIDENT int4 fake-quant) must NOT reach this device
+// seam — device adamw updates the fp master in place while the forward reads a
+// stale quantized cache -> weights freeze (measured flat ~4.80). Such callers
+// route to the host adamw_step builtin directly (see clm_prod._adam). opt_adamw_step
+// itself owns no cache, so the device path is correct here. F-RFC043-OPTIM-EQ
+// still holds: device == host oracle byte-eq, so the trajectory inheritance from
+// ag_adamw_step / RFC 034 is preserved.
+fn _opt_adamw_dev_on() -> int { return cuda_available() }
+
 pub fn opt_adamw_step(W: int, gW: int, m: int, v: int, n: int,
                      lr: float, b1: float, b2: float, eps: float,
                      wd: float, t: int) {
+    // r4: on-device AdamW when CUDA is available (byte-exact elementwise; the
+    // host roundtrip that owned step memcpy disappears). Falls through to host on
+    // no-CUDA / GPU failure (byte-eq reference, unchanged).
+    if _opt_adamw_dev_on() == 1 {
+        let rc = forge_dispatch_adamw(W, gW, m, v, n, lr, b1, b2, eps, wd, t)
+        if rc == 0 { return }
+    }
     adamw_step(W, gW, m, v, n, lr, b1, b2, eps, wd, t)
 }
 

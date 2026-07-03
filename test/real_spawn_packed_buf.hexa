@@ -1,0 +1,131 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  test/real_spawn_packed_buf.hexa — FLEET lane A3 end-to-end oracle.
+//
+//  THE A end-to-end: a hexa SOURCE that directly spawns N OS threads, each of
+//  which builds + consumes an ESCAPING packed [i64] buffer (HEXA_PACK_ESCAPING),
+//  then joins. This is the real-thread 4P+4C variant the A2 probe
+//  (test/escaping_packed_worker_buf.hexa) named as a follow-on once aprime/the
+//  native backend resolves the `thread_spawn`/`thread_join` runtime fn-globals.
+//
+//  Two halves, both encode the SAME order-insensitive partition invariant:
+//
+//    (1) ORACLE — always runs, DEFAULT-BUILD-SAFE. Single-thread produce→consume
+//        across fn calls (the exact #4133 escape boundary). No thread globals.
+//        Locks in the per-worker escaping checksums + total.
+//
+//    (2) REAL spawn+join — runs only when env("HEXA_THREADS") != "" (the same
+//        opt-in probe as test_real_spawn.hexa / atomic_ops.hexa). It calls the
+//        `thread_spawn` / `thread_join` runtime fn-globals (native/thread.c).
+//        Each worker INDEPENDENTLY produces an escaping packed [i64] buffer and
+//        returns its checksum; the joined total must equal the oracle total.
+//        Default build → synchronous hxlcl_pthread_* shims (worker inline).
+//        -DHEXA_THREADS build → real pthread_create/pthread_join, 4 OS threads.
+//
+//  REQUIRES (the A3 fix): thread_spawn/thread_join must be fwd-declared in
+//  self/runtime.h so aprime's S1 name resolution + the C-transpile path can
+//  reference the carrier globals. Before the fix this file fails to compile
+//  (HX2001 unresolved `thread_spawn` under aprime / undeclared `thread_spawn`
+//  under C-transpile). After the fix it compiles; with HEXA_THREADS set the
+//  4P+4C real-thread path runs and the joined total matches the oracle.
+//
+//  Run on aiden (mini cannot build):
+//    HEXA_PACK_ESCAPING=1 HEXA_THREADS=1 hexa run test/real_spawn_packed_buf.hexa
+//    HEXA_PACK_ESCAPING=1                hexa run test/real_spawn_packed_buf.hexa  # oracle only
+//  BYTEEQ-NEUTRAL: NEW test file only; runtime.h gains DECLARATIONS (no code).
+// ═══════════════════════════════════════════════════════════════════════════
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, actual, expected) {
+    if to_string(actual) == to_string(expected) {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + to_string(expected) + ", got: " + to_string(actual))
+        fail_count = fail_count + 1
+    }
+}
+
+// ── CONSUMER: reads an ESCAPING [i64] received as a PARAM (poly_get/_len).
+fn consume_sum(xs: [i64]) -> i64 {
+    let mut acc = 0
+    let mut i = 0
+    let n = len(xs)
+    while i < n {
+        acc = acc + xs[i]
+        i = i + 1
+    }
+    return acc
+}
+
+// ── PRODUCER: builds a typed-prim [i64] and RETURNS it (escapes via return).
+// Under HEXA_PACK_ESCAPING this esc-mints (hexa_arr_i64_new_esc, TAG_ARRAY_I64).
+fn produce_buf(base: i64) -> [i64] {
+    let mut buf: [i64] = []
+    let mut i = 0
+    while i < 400 {
+        buf.push(base + i)
+        i = i + 1
+    }
+    return buf
+}
+
+// ── WORKER (one HexaVal arg = partition base; returns an INDEPENDENT checksum).
+// Produces an escaping packed buffer then consumes it (escape via return AND
+// via consume_sum's param) — the full #4133 boundary, now on a real OS thread.
+fn worker(base) {
+    let buf = produce_buf(base)
+    let s1 = consume_sum(buf)
+    return s1 + len(buf)
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  HEXA real-spawn + escaping packed [i64] — A3 end-to-end")
+println("═══════════════════════════════════════════════════════")
+if env("HEXA_PACK_ESCAPING") == "1" {
+    println("  HEXA_PACK_ESCAPING=1 — escaping buffers esc-minted + poly-read")
+} else {
+    println("  HEXA_PACK_ESCAPING unset — boxed escaping buffers")
+}
+
+let bases = [0, 1, 2, 3]
+
+// ── (1) ORACLE — single-thread reference total the threaded path must match ──
+let mut oracle_total = 0
+let mut k = 0
+while k < len(bases) {
+    oracle_total = oracle_total + worker(bases[k])
+    k = k + 1
+}
+println("  single-thread escaping produce→consume total = " + to_string(oracle_total))
+// Hand value base=0: buf=[0..399]; sum=79800; len=400 → 80200.
+check("worker(0) escaping checksum == hand value 80200", worker(0), 80200)
+
+// ── (2) REAL spawn+join — opt-in (HEXA_THREADS env set) ─────────────────────
+if env("HEXA_THREADS") != "" {
+    println("--- real 4P+4C spawn+join (HEXA_THREADS opt-in) ---")
+    // 4 producers: spawn one worker per partition base, each on a real OS thread
+    // under -DHEXA_THREADS (else synchronous shim). Each owns its escaping buffer.
+    let t0 = thread_spawn(worker, 0)
+    let t1 = thread_spawn(worker, 1)
+    let t2 = thread_spawn(worker, 2)
+    let t3 = thread_spawn(worker, 3)
+    // 4 consumers: join each thread's INDEPENDENT escaping-buffer checksum.
+    let r0 = thread_join(t0)
+    let r1 = thread_join(t1)
+    let r2 = thread_join(t2)
+    let r3 = thread_join(t3)
+    let spawn_total = r0 + r1 + r2 + r3
+    check("4P+4C spawn+join escaping total == oracle", spawn_total, oracle_total)
+} else {
+    println("--- real spawn+join SKIPPED (set HEXA_THREADS to run) ---")
+}
+
+println("")
+println("═══════════════════════════════════════════════════════")
+println("  RESULT: " + to_string(pass_count) + " passed, " + to_string(fail_count) + " failed")
+println("═══════════════════════════════════════════════════════")
+if fail_count > 0 {
+    exit(1)
+}

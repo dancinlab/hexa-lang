@@ -19,24 +19,41 @@
 // deterministic; the domain eigenvector/gradient extraction is NOT here.
 // R4: this proposes a CANDIDATE escape step only -- it asserts no stability,
 // Tc, or half-life claim; absorbed=false semantics are unaffected.
-// TODO: (1) optional in-kernel normalization helper (needs sqrt import);
-//       (2) self-test sentinel per stdlib convention;
-//       (3) atlas register once a closed-form verify path exists (cf. #1126).
+// No @cite/@grace: the body carries no atlas-L reference and no @verify/@law, so
+// the S8 citation gate (HX8004) does not bind a plain displacement axpy (cf.
+// stdlib/runtime/hxlcl_core.hexa:485 "NO formula -> no @cite/@grace").
+// Deferred (domain-caller scope, not this kernel): an in-kernel normalization
+// helper (needs sqrt import) + atlas registration once a closed-form verify path
+// exists (cf. #1126). Self-test: stdlib/discovery/saddle_escape_test.hexa.
+
+// finite (not NaN, not +/-inf) test — no imports: NaN fails x==x; inf fails
+// x-x==0 (inf-inf = NaN). Guards a malformed direction/step from silently
+// producing an all-NaN "escape" that would poison downstream vc-relax / half-life.
+fn _se_finite(x: float) -> bool {
+    if x != x { return false }
+    if x - x != 0.0 { return false }
+    return true
+}
 
 // saddle_escape -- step point x[] along instability direction v[] by magnitude
 // delta, returning the displaced point x'[]. Caller supplies v as the
-// (optionally pre-normalized) direction. If len(v) != len(x), returns x
-// unchanged (no escape proposed -- malformed direction).
+// (optionally pre-normalized) direction.
+//
+// FAIL-LOUD contract: on a malformed input (len(v) != len(x), non-finite delta,
+// or any non-finite v[i]) it returns the EMPTY array [] — a signal distinct from
+// every valid displacement (which has len == len(x) >= 1). The prior behaviour
+// (return x unchanged on mismatch) was indistinguishable from a valid delta=0
+// zero-step, so a caller funnel could re-propose the same point forever (a
+// no-progress filler loop). An empty return lets the caller detect + halt.
 pub fn saddle_escape(x: array, v: array, delta: float) -> array {
     let n = len(x)
+    let empty: array = []
+    if len(v) != n { return empty }
+    if _se_finite(delta) == false { return empty }
     let mut out = []
-    if len(v) != n {
-        let mut j = 0
-        while j < n { out.push(x[j]); j = j + 1 }
-        return out
-    }
     let mut i = 0
     while i < n {
+        if _se_finite(v[i]) == false { return empty }
         out.push(x[i] + delta * v[i])
         i = i + 1
     }

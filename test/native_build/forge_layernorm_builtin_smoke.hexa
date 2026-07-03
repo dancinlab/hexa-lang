@@ -1,0 +1,35 @@
+// test/native_build/forge_layernorm_builtin_smoke.hexa
+// P1a (#4339 / #4339-fix) forge_dispatch_layernorm — consumer-compile smoke.
+//
+// forge_dispatch_layernorm(x, g, b, out, R, C, eps) -> int rc is a 7-arg native
+// runtime builtin (device-resident row-wise LayerNorm mirroring host
+// _bg_layernorm; no-CUDA build -> -1 -> host fallback). It lowers via
+// self/codegen.hexa gen2_expr to the C symbol `hexa_forge_dispatch_layernorm`
+// (declared in self/runtime.h).
+//
+// WHY THIS SMOKE EXISTS: #4339 shipped the codegen binding INSIDE the
+// `len(node.args) == 3` block, but the builtin takes SEVEN args — so the binding
+// was unreachable and any real call fell through to an undeclared generic
+// `forge_dispatch_layernorm(...)` C symbol -> consumer clang "undefined
+// function" at link. The byteeq gate PASSED on it (self/ never calls the new
+// builtin -> inert -> gen3==gen4 reconverges), so the break stayed latent until
+// an actual consumer (the device-resident decode forward) tried to compile.
+// Same CLASS as forge_det_builtin_smoke (#4285): byteeq-neutral is NECESSARY but
+// NOT SUFFICIENT for a builtin to be functional. This smoke CALLS the builtin so
+// it must lower to the correct symbol AND link every PR — a
+// green-but-broken binding can never ship again. SSOT: convergence codegen-hexa-1.
+//
+// It asserts COMPILATION + LOWERING + LINK, not a numeric result: on a non-CUDA
+// build hexa_forge_dispatch_layernorm returns -1 (host fallback), so rc is
+// build-dependent. Reaching the end = PASS.
+fn main() {
+    let R = 2
+    let C = 4
+    let x   = farr_zeros(R * C)
+    let g   = farr_zeros(C)
+    let b   = farr_zeros(C)
+    let out = farr_zeros(R * C)
+    let rc = forge_dispatch_layernorm(x, g, b, out, R, C, 0.00001)
+    print("forge_dispatch_layernorm compiled+lowered+ran: rc=") ; println(rc)
+    println("forge_layernorm_builtin_smoke: PASS (device layernorm builtin lowers to hexa_forge_dispatch_layernorm + links)")
+}
