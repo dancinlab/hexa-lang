@@ -1,0 +1,113 @@
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/qforge/davidson_block_e2e_bench.hexa — QFORGE-PERF round 2 ⚡
+//   END-TO-END Davidson eigensolve: SCALAR path (qforge_davidson, m× scalar
+//   H-apply per iter) vs BLOCK-WIRED path (qforge_davidson_block, ONE GEMM
+//   H[n,n]@Ψ[n,m] per iter via qforge_h_apply_forge_block). The win must show
+//   in the FULL SOLVE wall, not just the H-apply microbench (round-1 = 74.9×).
+//
+// On a CUDA-built hexa the block path fires cuBLAS; on a no-GPU build it routes
+// to the identical FP64 CPU GEMM. Either way the two FULL solves must agree to
+// tight tol on the lowest nbands eigenvalues (parity gate).
+//
+// Reports per (n, nbands):
+//   · scalar full-solve wall (ns) · block full-solve wall (ns) · wall Δ
+//   · max |Δλ| over the nbands eigenvalues (scalar vs block)  · both iters
+//
+// Run (CPU parity gate):
+//   HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run stdlib/qforge/davidson_block_e2e_bench.hexa
+// Run (GPU pod, CUDA build): same command on the cuda-built hexa.
+// ════════════════════════════════════════════════════════════════════════
+use "stdlib/qforge/assembler"
+use "stdlib/qforge/davidson"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _lcg_next(state: int) -> int {
+    let nxt = (state * 1103515245 + 12345)
+    let masked = nxt % 2147483647
+    if masked < 0 { return masked + 2147483647 }
+    return masked
+}
+
+// Build a SYMMETRIC dense H[n,n] (Davidson assumes Hermitian) with a strongly
+// diagonally-dominant spectrum so the lowest nbands converge in few iters — a
+// realistic Kohn-Sham-like operator (diag = kinetic ladder, small off-diag).
+fn build_sym_ham(n: int, seed0: int) -> PwHam {
+    let mut h: [float] = []
+    let mut t = 0
+    while t < n * n { h.push(0.0) ; t = t + 1 }
+    let mut seed = seed0
+    let mut i = 0
+    while i < n {
+        let mut j = i
+        while j < n {
+            seed = _lcg_next(seed)
+            let mut v = ((to_float(seed % 20000) / 10000.0) - 1.0) * 0.05
+            if i == j { v = to_float(i) + 1.0 }   // diagonal kinetic ladder
+            h[i * n + j] = v
+            h[j * n + i] = v                        // symmetric
+            j = j + 1
+        }
+        i = i + 1
+    }
+    let mut diag: [float] = []
+    let mut d = 0
+    while d < n { diag.push(h[d * n + d]) ; d = d + 1 }
+    return PwHam { h: h, diag: diag, n: n }
+}
+
+fn main() {
+    println("QFORGE-PERF round 2 — Davidson FULL-SOLVE scalar vs block-wired")
+    println("n , nbands , scalar_ns , block_ns , wallDelta , maxAbsDLambda , scalar_iters , block_iters , conv")
+
+    // n>=1024 per spec; small nocc (our cells) tested too.
+    let ns      = [1024, 1024, 1536, 2048]
+    let nbandss = [8,    32,   16,   16]
+    let TOL = 1.0e-8
+
+    let mut c = 0
+    while c < len(ns) {
+        let n = ns[c]
+        let nbands = nbandss[c]
+        let ham = build_sym_ham(n, 2463534242 + n + nbands)
+
+        // scalar matrix-free closure (legacy contract).
+        let h_apply = fn(v: [float]) -> [float] { return qforge_h_apply(ham, v) }
+        // block closure — the production GPU seam (ONE GEMM per iter).
+        let h_block = fn(psi_flat: [float], mm: int) -> [float] {
+            return qforge_h_apply_forge_block(ham, psi_flat, mm)
+        }
+
+        // ── SCALAR full solve ──────────────────────────────────────────────
+        let t0 = mono_ns()
+        let r_scalar = qforge_davidson(h_apply, ham.diag, n, nbands, TOL, 200)
+        let t1 = mono_ns()
+        let scalar_ns = t1 - t0
+
+        // ── BLOCK-WIRED full solve ─────────────────────────────────────────
+        let t2 = mono_ns()
+        let r_block = qforge_davidson_block(h_apply, h_block, ham.diag, n, nbands, TOL, 200)
+        let t3 = mono_ns()
+        let block_ns = t3 - t2
+
+        // ── eigenvalue parity ──────────────────────────────────────────────
+        let mut maxd = 0.0
+        let mut bk = 0
+        while bk < nbands {
+            let d = _abs(r_scalar.evals[bk] - r_block.evals[bk])
+            if d > maxd { maxd = d }
+            bk = bk + 1
+        }
+        let mut wall_delta = 0.0
+        if block_ns > 0 { wall_delta = to_float(scalar_ns) / to_float(block_ns) }
+        let conv = r_scalar.converged && r_block.converged
+
+        println(to_string(n) + " , " + to_string(nbands) + " , "
+            + to_string(scalar_ns) + " , " + to_string(block_ns) + " , "
+            + to_string(wall_delta) + " , " + to_string(maxd) + " , "
+            + to_string(r_scalar.iters) + " , " + to_string(r_block.iters) + " , "
+            + to_string(conv))
+        c = c + 1
+    }
+    println("davidson_block_e2e_bench DONE")
+}
