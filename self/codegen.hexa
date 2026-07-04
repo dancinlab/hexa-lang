@@ -8226,6 +8226,20 @@ fn gen2_expr(node) {
                 if name == "forge_dispatch_embedding_bwd_scatter" {
                     return "hexa_forge_dispatch_embedding_bwd_scatter(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
                 }
+                // HEXA-FUSION L3 (LLM-path glue half): forge_dispatch_rmsnorm(
+                // x, g, y, xn, inv, d) -> int rc. Reproduces nn_lib.hexa
+                // nn_rmsnorm_fwd EXACTLY: ms = Σ_i x_i·x_i (SEQUENTIAL), ms/=d,
+                // inv = 1/_nn_sqrt(ms+1e-6) with _nn_sqrt = libm sqrt (correctly-
+                // rounded IEEE-754 op, NOT dt_sqrt/Newton — so device sqrt() is
+                // bit-identical), then xn_j = x_j·inv, y_j = g_j·xn_j. The ms
+                // reduction accumulates SEQUENTIALLY under ONE thread (NO tree
+                // re-assoc, NO atomics) and every mul feeding an add uses
+                // __dmul_rn/__dadd_rn to defeat nvcc FMA contraction (host is
+                // FP_CONTRACT OFF) → bit-exact (max|Δ|=0). Keeps Y/XN/INV DEVICE-
+                // RESIDENT. no-CUDA → -1 → host nn_rmsnorm_fwd (byte-eq).
+                if name == "forge_dispatch_rmsnorm" {
+                    return "hexa_forge_dispatch_rmsnorm(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
+                }
                 // feat/primitive-float-array — single-qubit gate kernel.
                 if name == "farr_apply_single" {
                     return "hexa_farr_apply_single(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
@@ -8342,6 +8356,20 @@ fn gen2_expr(node) {
                 // RESIDENT. no-CUDA → -1 → host nn_moe_router_bwd (byte-eq).
                 if name == "forge_dispatch_moe_router_bwd" {
                     return "hexa_forge_dispatch_moe_router_bwd(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ", " + arg_strs[7] + ")"
+                }
+                // HEXA-FUSION L3 (LLM-path BWD glue half): forge_dispatch_rmsnorm_bwd(
+                // x, g, xn, inv, dy, dx, dg, d) -> int rc. `inv` is a SCALAR float
+                // (the saved forward reciprocal-rms, passed by value, __hx_to_double).
+                // Reproduces nn_lib.hexa nn_rmsnorm_bwd EXACTLY (closed vjp):
+                // dxn_i=dy_i·g_i; dg_i=dy_i·xn_i; dot=Σ_k dxn_k·x_k (SEQUENTIAL);
+                // inv3=inv·inv·inv; scale=(inv3/d)·dot; dx_i=inv·dxn_i − scale·x_i.
+                // The dot reduction accumulates SEQUENTIALLY under ONE thread (NO
+                // tree re-assoc, NO atomics); the dot mul-add and the dx mul−mul
+                // use __dmul_rn/__dadd_rn (host FP_CONTRACT OFF → no FMA fuse) →
+                // bit-exact (max|Δ|=0). NO sqrt/exp on this path. Keeps DX/DG
+                // DEVICE-RESIDENT. no-CUDA → -1 → host nn_rmsnorm_bwd (byte-eq).
+                if name == "forge_dispatch_rmsnorm_bwd" {
+                    return "hexa_forge_dispatch_rmsnorm_bwd(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ", " + arg_strs[7] + ")"
                 }
                 // flame spiking RFC — STDP pair-based GPU dispatch
                 // (archive/patches/flame-stdp-pair-gpu-kernel.md).
