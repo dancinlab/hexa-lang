@@ -1549,9 +1549,14 @@ fn parse_return_expr() -> Expr {
     let kw = peek()
     advance()
     let mut kids = []
-    // return may be value-less; in practice we always emit a child here so
-    // resolve doesn't have to special-case empty-return.
-    if !check_kind(TokenKind::RBrace) && !check_kind(TokenKind::Semicolon) && !at_eof() {
+    // return may be value-less (kids stays empty before `}`/`;`/EOF).
+    // The value must START on the same line as the keyword — gen2's lexer
+    // emits Newline tokens and parse_return treats one as bare-return
+    // (self/lexer.hexa:250-252 · self/parser.hexa:1794-1806); this lexer
+    // drops newlines, so match that rule via span.line on the next token.
+    // Without it a bare `return` swallowed the NEXT LINE's ident-led stmt
+    // as its value (state/hexa-own/step0_verdict.md, HX2001 on `defer`).
+    if !check_kind(TokenKind::RBrace) && !check_kind(TokenKind::Semicolon) && !at_eof() && peek().span.line == kw.span.line {
         kids.push(parse_expr())
     }
     return Expr {
@@ -1635,11 +1640,38 @@ fn parse_try_expr() -> Expr {
 
 // throw EXPR — mirrors self/hexa_full.hexa::parse_throw_stmt (ThrowStmt).
 // children = [value_expr]; text unused.
+//
+// Throw-parity (gen2 reference, VERIFIED by reading): gen2 parse_throw_stmt
+// (self/parser.hexa:4380-4383) calls parse_expr UNCONDITIONALLY — a throw
+// value is REQUIRED. And because gen2's lexer emits Newline tokens
+// (suppressed only inside ()/[]), a value that does not START on the
+// keyword's line hits gen2 parse_primary's unknown-token arm ("unexpected
+// token Newline") exactly like a bare `throw` before `}`/`;`/EOF. So
+// gen2's rule = the throw value must start on the SAME LINE as `throw`;
+// anything else is a parse error. (This differs from `return`, where gen2
+// treats Newline/Eof/RBrace as a VALID bare return — see parse_return_expr.)
+//
+// This lexer drops newlines, so mirror the rule via span.line and diagnose
+// HX0015 here instead of letting parse_expr run on empty input: the
+// unrecognized-token fallthrough of parse_primary CONSUMES the offending
+// token as a placeholder Ident, which for `}`/`;` desyncs the enclosing
+// block and shifts the eventual HX0012 onto an innocent later token.
+// Emitting here WITHOUT consuming keeps recovery exact — `}`/`;`/Eof are
+// already _skip_to_resync sync points, and a next-line token is the start
+// of the sibling statement the block loop should parse next (hence no
+// _skip_to_resync call, unlike the HX0011/HX0012 sites: the cursor is
+// already at a safe boundary and resync could eat the sibling statement).
+// Downstream tolerates the 0-child Throw (HEXA_IGNORE_ERRORS runs):
+// hir_to_mir lowers it to the hexa_throw("error") sentinel.
 fn parse_throw_expr() -> Expr {
     let kw = peek()
     advance() // consume 'throw'
     let mut kids = []
-    if !check_kind(TokenKind::RBrace) && !check_kind(TokenKind::Semicolon) && !at_eof() {
+    if check_kind(TokenKind::RBrace) || check_kind(TokenKind::Semicolon) || at_eof()
+       || peek().span.line != kw.span.line {
+        let t = peek()
+        _push_parse_diag("HX0015", t.span, tag_of(t.kind))
+    } else {
         kids.push(parse_expr())
     }
     return Expr {
