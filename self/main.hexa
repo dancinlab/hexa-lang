@@ -1583,6 +1583,17 @@ fn strict_fp_cflags(c_file) {
     return "-ffp-contract=off -fno-fast-math -fno-associative-math -fno-reciprocal-math -fsignaling-nans "
 }
 
+// zero-c #29 PR-2: link the partitioned FFI TU (build/runtime_ffi_dyn.o) into a PROGRAM
+// only when codegen marked it HEXA_FFI_DYN_TU: 1 (a surviving vendor extern or an
+// interpreter host_ffi dispatch). Non-FFI programs get "" → byte-identical to the pre-S1
+// link. Drivers (hexat/hexa) link runtime_ffi_dyn.o unconditionally (they run the
+// dynamic-FFI interpreter) — that stays in _ffi_dyn_obj call sites. Mirrors strict_fp_cflags.
+fn ffi_dyn_objs(c_file, selfdir) {
+    let probe = exec("grep -q 'HEXA_FFI_DYN_TU: 1' '" + c_file + "' 2>/dev/null && printf yes || printf no")
+    if probe != "yes" { return "" }
+    return _ffi_dyn_obj(selfdir)
+}
+
 // #12 leftover (3) — wilson-needs-hexa-build-out-of-tree: `hexa cc` /
 // `hexa cc --regen` resolved `self/native/hexa_cc.c`, the SSOT modules and
 // the `-I` paths *relative to cwd*, so invoking from outside the repo failed
@@ -1601,6 +1612,20 @@ fn resolve_hxroot() {
     if file_exists("./self/native/hexa_cc.c") { return "." }
     // Last resort: keep cwd-relative behavior (will fail loudly downstream).
     return "."
+}
+
+// zero-c #29 S1 — FFI floor-partition: the dlopen/dlsym/host_ffi_* TU now lives in
+// self/runtime_ffi_dyn.c (compiled to runtime_ffi_dyn.o, NOT ar'd into runtime.a) so the
+// canonical runtime.a carries no dl* nm-UND. Any binary that uses FFI — every driver
+// (hexat/hexa run the dynamic-FFI interpreter) and every @link program — must link this
+// .o. Compile-if-needed and return the quoted path (leading space) or "" if source absent.
+fn _ffi_dyn_obj(selfdir: str) -> str {
+    let src = selfdir + "/runtime_ffi_dyn.c"
+    if !file_exists(src) { return "" }
+    let obj = selfdir + "/runtime_ffi_dyn.o"
+    let _ = exec(host_cc() + " -O2 -D_GNU_SOURCE -I '" + selfdir + "' -c '" + src + "' -o '" + obj + "' 2>&1")
+    if !file_exists(obj) { return "" }
+    return " '" + obj + "'"
 }
 
 // .c-graduation Phase-3 driver fix (2026-05-29): resolve the runtime link
@@ -1729,12 +1754,12 @@ fn cmd_cc() {
         // reverts zero-c #29's false "libm-free" claim) so this is a strict superset on the CPU default (cuda_on=false →
         // identical cuda-free link), plus the libsodium/openssl flags the runtime.a
         // may reference — consistent with the user-binary link sites.
-        cmd = host_cc() + " -O2 -D_GNU_SOURCE -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexat'" + os_clang_ldflags() + " 2>&1"
+        cmd = host_cc() + " -O2 -D_GNU_SOURCE -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "'" + _ffi_dyn_obj(__hxroot + "/self") + " -o '" + __hxroot + "/build/hexat'" + os_clang_ldflags() + " 2>&1"
     } else {
         // macOS (Darwin) — libSystem 이 libm 자동 포함, _GNU_SOURCE 무의미.
         // 단, `-I self` 는 runtime.h 경로 해석에 반드시 필요. os_clang_ldflags() 로
         // user-binary 링크와 동일 플래그(예: cuda runtime.a 시 cudart) 적용.
-        cmd = host_cc() + " -O2 -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexat'" + os_clang_ldflags() + " 2>&1"
+        cmd = host_cc() + " -O2 -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "'" + _ffi_dyn_obj(__hxroot + "/self") + " -o '" + __hxroot + "/build/hexat'" + os_clang_ldflags() + " 2>&1"
     }
     println("  " + cmd)
     let r = exec(cmd)
@@ -2268,7 +2293,7 @@ fn cmd_regen_cc() {
                 return
             }
         }
-        let cc_link = host_cc() + " -O2 /tmp/hexa_cc.new.o '" + __hxroot + "/self/runtime.o' -o /tmp/hexat.new" + os_clang_ldflags() + " 2>&1 | head -40"
+        let cc_link = host_cc() + " -O2 /tmp/hexa_cc.new.o '" + __hxroot + "/self/runtime.o'" + _ffi_dyn_obj(__hxroot + "/self") + " -o /tmp/hexat.new" + os_clang_ldflags() + " 2>&1 | head -40"
         println("  " + cc_link)
         let cc_link_out = exec(cc_link)
         if len(cc_link_out) > 0 { println(cc_link_out) }
@@ -3663,7 +3688,11 @@ fn cmd_build(src, out, c_only, target, shared) {
         // gemm-omp r1: opt-in `-fopenmp` at the final link too, so libgomp/libomp
         // is pulled when the runtime object carries OpenMP (HEXA_OMP=1 + probe).
         // "" when OMP off → link command byte-identical to the prior default ship.
-        compile = host_cc() + " -O2 " + omp_cflags() + _shared_cflags + os_clang_cflags() + _strict + cc_deep_nest_cflags() + "-I '" + __self_dir + "' " + c_file + " " + _rt_input + " -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
+        // zero-c #29 S1: link the partitioned FFI TU (dl* moved out of runtime.a) so any
+        // @link program AND the compiler-as-program (interpreter host_ffi_*) resolves. PR-1
+        // links it unconditionally (byteeq-neutral: gen .o bytes unchanged); PR-2 will gate
+        // it on a surviving vendor extern (HEXA_FFI_DYN_TU marker).
+        compile = host_cc() + " -O2 " + omp_cflags() + _shared_cflags + os_clang_cflags() + _strict + cc_deep_nest_cflags() + "-I '" + __self_dir + "' " + c_file + " " + _rt_input + ffi_dyn_objs(c_file, __self_dir) + " -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
     } else {
         let zt = target_zig_triple(target)
         if len(zt) == 0 {

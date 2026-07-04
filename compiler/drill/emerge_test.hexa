@@ -40,7 +40,13 @@
 // Run:
 //   hexa run compiler/drill/emerge_test.hexa
 
+// emerge2 (M4) gates T1..T18 are appended below the E4 section: function-symbol
+// synthesis + bounded-inexpressibility α/β/γ discriminator (kc_classify wiring).
+// See emerge.hexa emerge2 banner + state/ouroboros-m4/emerge2_spec_fable.md.
+
 use "compiler/drill/emerge"
+use "compiler/atlas/identity_engine"
+use "compiler/atlas/known_catalog.gen"
 
 fn _check(label: string, ok: bool, fails: array) {
     if ok { println("  PASS  " + label) }
@@ -96,11 +102,127 @@ fn main() {
            r2.growth == r.growth, fails)
     _check("re-run vocab_size identical", r2.vocab_size == r.vocab_size, fails)
 
+    // ══════════════════════════════════════════════════════════════════════
+    // emerge2 (M4) — function-symbol synthesis + α/β/γ discriminator
+    // ══════════════════════════════════════════════════════════════════════
+    println("")
+    println("emerge2 (M4): bounded-inexpressibility α/β/γ discriminator")
+
+    // ─── T1/T2: ie_vec_fingerprint ≡ ie_term_fingerprint (helper equivalence) ───
+    let t1vals = []
+    let mut t1n = 2
+    while t1n <= 64 {
+        t1vals.push(ie_term_value(3, 8, t1n))   // φ·J₂
+        t1n = t1n + 1
+    }
+    _check("T1 ie_vec_fingerprint == ie_term_fingerprint (phi*J2)",
+           ie_vec_fingerprint(t1vals, 2, 64) == ie_term_fingerprint(3, 8, 64), fails)
+
+    let t2vals = []
+    let mut t2n = 2
+    while t2n <= 64 {
+        t2vals.push(ie_term_value(12, 0 - 1, t2n))   // μ (sign fold)
+        t2n = t2n + 1
+    }
+    _check("T2 ie_vec_fingerprint == ie_term_fingerprint (mu size-1 · sign fold)",
+           ie_vec_fingerprint(t2vals, 2, 64) == ie_term_fingerprint(12, 0 - 1, 64), fails)
+
+    // ─── T3/T4: divisor enumerator (net-new, via spf) ───
+    let t3d = e2_divisors(12)
+    let mut t3sum = 0
+    let mut t3i = 0
+    while t3i < len(t3d) {
+        t3sum = t3sum + to_int(to_string(t3d[t3i]))
+        t3i = t3i + 1
+    }
+    _check("T3 divisors(12): len==6 & sum==28 (=sigma(12))", len(t3d) == 6 && t3sum == 28, fails)
+    _check("T4 divisors(1): len==1", len(e2_divisors(1)) == 1, fails)
+
+    // ─── T5/T6: Dirichlet convolution valuewise (Mobius inversion) ───
+    let mut t5ok = true
+    let mut t5n = 2
+    while t5n <= 64 {
+        if e2_dirichlet_val(12, 5, t5n) != af(t5n, 3) { t5ok = false }
+        t5n = t5n + 1
+    }
+    _check("T5 mu*Id == phi valuewise [2,64] (Mobius inversion)", t5ok, fails)
+    let mut t6ok = true
+    let mut t6n = 2
+    while t6n <= 64 {
+        if e2_dirichlet_val(0, 12, t6n) != t6n { t6ok = false }
+        t6n = t6n + 1
+    }
+    _check("T6 sigma*mu == Id valuewise [2,64]", t6ok, fails)
+
+    // ─── T7/T8/T9: iterate · fix-steps · congruence-witness values ───
+    _check("T7 iterate sigma^2(2)==4", e2_iterate_val(0, 2, 2) == 4, fails)
+    _check("T8 phi fix-steps: (2)->1 & (8)->3",
+           e2_fix_steps(3, 2, 64) == 1 && e2_fix_steps(3, 8, 64) == 3, fails)
+    _check("T9 witness p(14)/5==27 (BigInt-exact)", e2_witness_val(0, 5, 4, 5, 2) == 27, fails)
+
+    // ─── T10: G1 solution-set enumeration ───
+    let t10sp = e2_solutions(0, 0, 0, 2, 8192)      // superperfect σ∘σ=2n
+    let t10ms = e2_solutions(0, 0, 1, 0, 8192)      // Mersenne σ∘σ=σ+n
+    _check("T10a superperfect |sol|==5 & max==4096",
+           len(t10sp) == 5 && to_int(to_string(t10sp[4])) == 4096, fails)
+    _check("T10b Mersenne |sol|==5 & max==8191",
+           len(t10ms) == 5 && to_int(to_string(t10ms[4])) == 8191, fails)
+
+    // ─── T11/T12: (a)(b) β-controls — compositions classify β ───
+    let t11fpt = ie_fp_table_build(64)
+    _check("T11 (a) sigma-o-sigma classifies beta",
+           kc_classify(kc_comp_fingerprint(0, 0, 64), t11fpt, 64) == 1, fails)
+    _check("T12 (b) phi-o-phi classifies beta",
+           kc_classify(kc_comp_fingerprint(3, 3, 64), t11fpt, 64) == 1, fails)
+
+    // ─── T13/T14: (c) demoted-E4 regression — within-well recombination → α ───
+    _check("T13 (c1) within-well size-2 product classifies alpha (E4-regression)",
+           kc_classify(ie_term_fingerprint(5, 9, 64), t11fpt, 64) == 0, fails)
+    _check("T14 (c2) Mobius collapse fp-exact: mu*Id==phi & sigma*mu==Id",
+           e2_fp_dirichlet(12, 5, 64) == ie_term_fingerprint(3, 0 - 1, 64) &&
+           e2_fp_dirichlet(0, 12, 64) == ie_term_fingerprint(5, 0 - 1, 64), fails)
+
+    // ─── T15/T16: step totals + class distribution ───
+    let er = emerge2_step(1, [], 64)
+    println("  emerge2 distribution: alpha=" + to_string(er.alpha)
+        + " beta=" + to_string(er.beta) + " gamma=" + to_string(er.gamma)
+        + " (n_cands=" + to_string(er.n_cands) + " · fp_k=" + to_string(er.fp_size) + ")")
+    _check("T15 n_cands==19 & alpha+beta+gamma==19",
+           er.n_cands == 19 && er.alpha + er.beta + er.gamma == 19, fails)
+    _check("T16a beta==2 (exactly the two G2 composition controls)", er.beta == 2, fails)
+    _check("T16b alpha>=2 (>= the two G3 Mobius-collapse controls)", er.alpha >= 2, fails)
+    _check("T16c (d) gamma>=2 (>= the two G1 solution-indicator sequences)", er.gamma >= 2, fails)
+
+    // ─── T17: determinism (in-process; CI 2-build byte-eq is the cross gate) ───
+    let er2 = emerge2_step(1, [], 64)
+    let mut t17fps = (er2.n_cands == er.n_cands)
+    let mut t17i = 0
+    while t17i < er.n_cands {
+        if to_int(to_string(er2.fps[t17i])) != to_int(to_string(er.fps[t17i])) { t17fps = false }
+        t17i = t17i + 1
+    }
+    _check("T17 determinism: 2 runs identical alpha/beta/gamma & fps",
+           er2.alpha == er.alpha && er2.beta == er.beta && er2.gamma == er.gamma && t17fps, fails)
+
+    // ─── T18: per-candidate array integrity ───
+    let mut t18ok = (len(er.labels) == er.n_cands
+                     && len(er.classes) == er.n_cands
+                     && len(er.fps) == er.n_cands)
+    let mut t18i = 0
+    while t18i < er.n_cands {
+        let cc = to_int(to_string(er.classes[t18i]))
+        if cc < 0 { t18ok = false }
+        if cc > 2 { t18ok = false }
+        t18i = t18i + 1
+    }
+    _check("T18 parallel arrays len==n_cands & every class in {0,1,2}", t18ok, fails)
+
     println("")
     if len(fails) == 0 {
         println("RESULT: PASS — E4 open-well emergence reproduced (growth="
             + to_string(r.growth) + " >= 50 · frozen LLM fixed at |V_0|="
-            + to_string(r.v0_size) + ")")
+            + to_string(r.v0_size) + ") + emerge2 alpha/beta/gamma discriminator "
+            + to_string(18) + " gates")
         exit(0)
     } else {
         println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
