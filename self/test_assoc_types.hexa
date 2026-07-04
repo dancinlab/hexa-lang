@@ -1,0 +1,222 @@
+// =====================================================================
+//  test_assoc_types.hexa — associated-types (trait/impl) check reference
+//
+//  Standalone reference-style fixture for the opt-in HEXA_ASSOC_TYPES=1
+//  check-only pass (compiler/check/types.hexa `_assoc_check_module`). It
+//  reimplements the SAME three Rust associated-type rules (The Rust
+//  Reference §"Associated types") in plain dynamic hexa so the expected
+//  R1/R2/R3 diagnostics are executable-documented and CI-verifiable on a
+//  build host (mini does not build). The production pass decodes the
+//  parser's `__assoc` carriers; this fixture exercises the decision logic
+//  the pass implements, independent of the env gate.
+//
+//    R1 — every associated type declared by the trait MUST be bound in
+//         each impl (rustc E0046)                            → HX3022
+//    R2 — an impl may NOT bind an associated type the trait does not
+//         declare (rustc E0437)                              → HX3020
+//    R3 — a slot bound (`type Item: Display;`) must be satisfied by the
+//         bound concrete type                                → HX3008/9
+//
+//  Run: ./hexa self/test_assoc_types.hexa
+// =====================================================================
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name)
+        fail_count = fail_count + 1
+    }
+}
+
+// rustc-faithful builtin trait-impl table (subset mirrored from
+// _cg_type_implements: int family is Ord/Eq, float family is only
+// PartialOrd/PartialEq — the NaN total-order hole).
+fn type_implements(t, tr) {
+    if t == "int" || t == "i32" || t == "i64" || t == "u32" || t == "u64" {
+        return tr == "Ord" || tr == "Eq" || tr == "PartialOrd" || tr == "PartialEq"
+            || tr == "Num" || tr == "Clone" || tr == "Copy" || tr == "Display"
+    }
+    if t == "float" || t == "f32" || t == "f64" {
+        return tr == "PartialOrd" || tr == "PartialEq" || tr == "Num"
+            || tr == "Clone" || tr == "Copy" || tr == "Display"
+    }
+    if t == "string" || t == "str" {
+        return tr == "Ord" || tr == "Eq" || tr == "PartialOrd" || tr == "PartialEq"
+            || tr == "Clone" || tr == "Display"
+    }
+    return false
+}
+
+fn is_enforceable(t) {
+    return t == "int" || t == "i32" || t == "i64" || t == "u32" || t == "u64"
+        || t == "float" || t == "f32" || t == "f64"
+        || t == "string" || t == "str" || t == "bool" || t == "char"
+}
+
+fn contains(xs, v) {
+    let mut i = 0
+    while i < len(xs) {
+        if xs[i] == v { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn index_of(xs, v) {
+    let mut i = 0
+    while i < len(xs) {
+        if xs[i] == v { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn split_plus(s) {
+    let chars = s.chars()
+    let n = len(chars)
+    let mut out = []
+    let mut cur = ""
+    let mut i = 0
+    while i < n {
+        if chars[i] == '+' {
+            out.push(cur)
+            cur = ""
+        } else {
+            cur = cur + to_string(chars[i])
+        }
+        i = i + 1
+    }
+    if len(cur) > 0 { out.push(cur) }
+    return out
+}
+
+// Mirror of `_assoc_check_module`: returns the list of diagnostic codes
+// emitted for one impl checked against one trait declaration.
+//   decl_names/decl_bounds : the trait's declared associated types + bounds
+//   bind_names/bind_types  : the impl's `type X = Concrete;` bindings
+fn assoc_check(decl_names, decl_bounds, bind_names, bind_types) {
+    let mut codes = []
+    // R1 — declared slot left unbound.
+    let mut d = 0
+    while d < len(decl_names) {
+        if !contains(bind_names, decl_names[d]) {
+            codes.push("HX3022")
+        }
+        d = d + 1
+    }
+    // R2 + R3 — surplus binding / bound violation.
+    let mut b = 0
+    while b < len(bind_names) {
+        let di = index_of(decl_names, bind_names[b])
+        if di < 0 {
+            codes.push("HX3020")
+        } else {
+            let bound = decl_bounds[di]
+            let bt = bind_types[b]
+            if len(bound) > 0 && is_enforceable(bt) {
+                let traits = split_plus(bound)
+                let mut t = 0
+                while t < len(traits) {
+                    let tr = traits[t]
+                    if len(tr) > 0 && !type_implements(bt, tr) {
+                        codes.push("HX3008")
+                    }
+                    t = t + 1
+                }
+            }
+        }
+        b = b + 1
+    }
+    return codes
+}
+
+fn count_code(codes, code) {
+    let mut c = 0
+    let mut i = 0
+    while i < len(codes) {
+        if codes[i] == code { c = c + 1 }
+        i = i + 1
+    }
+    return c
+}
+
+println("=====================================================")
+println("  HEXA associated-types (trait/impl) check reference")
+println("=====================================================")
+println("")
+
+// ── 0. PASS — full, correct binding ──
+// trait Iterator { type Item; }  impl Iterator for Counter { type Item = u32; }
+println("--- 0. correct binding (no diagnostics) ---")
+let c0 = assoc_check(["Item"], [""], ["Item"], ["u32"])
+check("clean impl emits 0 diagnostics", len(c0) == 0)
+
+// ── 1. R1 — missing binding → HX3022 ──
+// trait Iterator { type Item; type Idx; }  impl … { type Item = u32; }   (Idx unbound)
+println("")
+println("--- 1. R1 missing associated-type binding ---")
+let c1 = assoc_check(["Item", "Idx"], ["", ""], ["Item"], ["u32"])
+check("R1 emits 1 HX3022", count_code(c1, "HX3022") == 1)
+check("R1 emits no HX3020", count_code(c1, "HX3020") == 0)
+
+// ── 2. R2 — unknown binding → HX3020 ──
+// trait Iterator { type Item; }  impl … { type Item = u32; type Bogus = int; }
+println("")
+println("--- 2. R2 unknown associated-type binding ---")
+let c2 = assoc_check(["Item"], [""], ["Item", "Bogus"], ["u32", "int"])
+check("R2 emits 1 HX3020", count_code(c2, "HX3020") == 1)
+check("R2 emits no HX3022", count_code(c2, "HX3022") == 0)
+
+// ── 3. R3 — bound satisfied (int: Ord) → no diagnostic ──
+// trait Keyed { type Key: Ord; }  impl … { type Key = int; }
+println("")
+println("--- 3. R3 bound satisfied (int: Ord) ---")
+let c3 = assoc_check(["Key"], ["Ord"], ["Key"], ["int"])
+check("R3 satisfied emits 0 diagnostics", len(c3) == 0)
+
+// ── 4. R3 — bound violated (f64: Ord is the NaN hole) → HX3008 ──
+// trait Keyed { type Key: Ord; }  impl … { type Key = f64; }
+println("")
+println("--- 4. R3 bound violated (f64 is not Ord) ---")
+let c4 = assoc_check(["Key"], ["Ord"], ["Key"], ["f64"])
+check("R3 violated emits 1 HX3008", count_code(c4, "HX3008") == 1)
+check("f64 is PartialOrd (no violation for PartialOrd)", type_implements("f64", "PartialOrd"))
+check("f64 is NOT Ord (NaN total-order hole)", !type_implements("f64", "Ord"))
+
+// ── 5. R3 — multi-trait bound, one unmet (f64: Ord+Num) → 1 HX3008 ──
+println("")
+println("--- 5. R3 multi-trait bound, one unmet ---")
+let c5 = assoc_check(["Key"], ["Ord+Num"], ["Key"], ["f64"])
+check("R3 Ord+Num on f64 emits exactly 1 HX3008 (Num holds)", count_code(c5, "HX3008") == 1)
+
+// ── 6. combined — missing + unknown + violated together ──
+// trait T { type A; type B: Ord; }  impl … { type B = f64; type C = int; }
+//   A unbound (R1), B=f64 violates Ord (R3), C unknown (R2)
+println("")
+println("--- 6. combined R1+R2+R3 ---")
+let c6 = assoc_check(["A", "B"], ["", "Ord"], ["B", "C"], ["f64", "int"])
+check("combined emits 1 HX3022 (A missing)", count_code(c6, "HX3022") == 1)
+check("combined emits 1 HX3020 (C unknown)", count_code(c6, "HX3020") == 1)
+check("combined emits 1 HX3008 (f64 not Ord)", count_code(c6, "HX3008") == 1)
+
+// ── 7. conservative — non-primitive concrete stays silent on R3 ──
+// trait Keyed { type Key: Ord; }  impl … { type Key = MyStruct; }
+//   MyStruct is not an enforceable primitive → no false R3 violation
+println("")
+println("--- 7. conservative: non-primitive concrete, no false R3 ---")
+let c7 = assoc_check(["Key"], ["Ord"], ["Key"], ["MyStruct"])
+check("non-primitive concrete emits 0 diagnostics", len(c7) == 0)
+
+// -- Summary --
+println("")
+println("=====================================================")
+println("  assoc-types tests: " + to_string(pass_count) + " PASS, " + to_string(fail_count) + " FAIL")
+println("=====================================================")
+if fail_count > 0 {
+    println("SOME TESTS FAILED")
+}
