@@ -1977,14 +1977,15 @@ build_runtime_a_from_source() {
         # old whole-module live emit — NO objcopy isolate is needed), $CC -c →
         # build/hxlcl_free_native.o, then add -DHEXA_RT_NATIVE_FREE + the member (the ld -r
         # multidef gate S5 still validates). TRI-STATE HEXA_RT_NATIVE_FREE:
-        #   0    = off (DEFAULT · block skipped · shim.o + archive byte-identical = neutral)
-        #   auto = graceful (the flip (e) sets this default): a missing/bad/unassemblable seed
+        #   0    = off (opt-out · block skipped · shim.o + archive byte-identical = neutral)
+        #   auto = graceful (DEFAULT · the flip (e) #4548→this PR sets this default): a
+        #          missing/bad/unassemblable seed
         #          keeps the libc-shim free member + a loud WARN and the build CONTINUES — the
         #          fallback is the NORMAL libc free, never a broken one, and a non-adopted flip
         #          is observable as `free` still UND in the nobaseline nm-UND dump (#4360).
         #   1    = strict: a missing/bad seed is FATAL (measurement / verify scripts).
         # convergence stage-resolve-runtime-a-2.
-        _rnfr_mode="${HEXA_RT_NATIVE_FREE:-0}"
+        _rnfr_mode="${HEXA_RT_NATIVE_FREE:-auto}"
         if [ "$_rnfr_mode" != "0" ]; then
             _rnfr_tgt="${TARGET:-}"; _rnfr_tgt="${_rnfr_tgt%-musl}"; _rnfr_tgt="${_rnfr_tgt%-cuda}"
             [ -z "$_rnfr_tgt" ] && case "$(uname -sm 2>/dev/null)" in
