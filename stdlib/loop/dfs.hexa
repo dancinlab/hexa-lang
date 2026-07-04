@@ -297,6 +297,17 @@ pub fn dfs_build_prompt(parent: Candidate, view: AtlasView, beam: int) -> string
           + "  (e.g. an Ono-style p(A*n+B)=0 mod L, large composite A, prime L>11). If\n"
           + "  you cannot state one IN the grammar, output NO child rather than a known\n"
           + "  tower congruence — honesty over volume (the verifier disposes either way).\n"
+          + "FRAME PROPOSAL (M7 · instead of a ground CONJECTURE inside the exhausted ring):\n"
+          + "  you may instead propose AT MOST ONE child whose claim line is a GENERATOR —\n"
+          + "  a bounded FAMILY the enumerator sweeps and the exact-int verifier judges:\n"
+          + "    GENERATOR: prod3 <t>*<t>*<t> = <t>*<t>*<t>\n"
+          + "  where each <t> is a vocab fn or the wildcard ? (1 or 2 ? slots). The\n"
+          + "  3-factor product form is NOT expressible as a ground CONJECTURE (which is\n"
+          + "  strictly 2-factor), so it WIDENS the search space. Every enumerated relation\n"
+          + "  is judged over n in [2,20000]; a family that yields nothing verified is\n"
+          + "  DROPPED (generator-dry). Prefer slots mixing the sign/indicator vocab\n"
+          + "  (mu lam mu2) with the size vocab (n sigma phi psi) — the unswept corner.\n"
+          + "  A child has EITHER one CONJECTURE line OR one GENERATOR line, never both.\n"
           + "- Output nothing except the child blocks.\n"
     return p
 }
@@ -477,6 +488,12 @@ pub fn dfs_verify_child(cand: Candidate, view: AtlasView) -> string {
     let cv = cj_verdict(cand.proposed)                          // exact-int gate
     if cv == "unparseable" { return "conjecture-unparseable" }
     if cv == "unverified" { return "conjecture-unverified" }
+    if cv == "" {                                               // no ground claim → maybe an M7 FRAME proposal
+        let gv = cj_generator_verdict(cand.proposed)
+        if gv == "unparseable" { return "generator-unparseable" }
+        if gv == "generator-dry" { return "generator-dry" }     // DROP → llm_drops.jsonl = the M7 DROP-rate capture
+        // generator-known / generator-novel / "" (no GENERATOR line) fall through as survivors
+    }
     return ""
 }
 
@@ -845,6 +862,10 @@ pub fn dfs_run(seeds: array, view: AtlasView, cycle_no: int,
     let mut n_verified_novel = 0   // 🟩 exact-int confirmed AND un-catalogued
     let mut n_verified_known = 0   // exact-int confirmed AND classical (G1-3 / Ramanujan / σ∘φ=2n / universal)
     let mut n_prose = 0            // no machine-checkable claim (prose hypothesis)
+    // M7 — GENERATOR frame proposals (bounded family enumerated + exact-int judged).
+    let mut n_gen_novel = 0        // 🟩 family yields ≥1 irreducible universal-3 survivor
+    let mut n_gen_known = 0        // family confirmed but all reducible/singleton (re-derivation)
+    let mut n_gen_seen = 0         // generator children this run (N_GEN_PER_RUN budget = 8)
 
     let frontier_max = beam * 4   // MVP breadth cap (true best-first = follow-up)
 
@@ -913,19 +934,38 @@ pub fn dfs_run(seeds: array, view: AtlasView, cycle_no: int,
                 // dfs_verify_child already rejected unverified/unparseable, so this
                 // is "" / verified-known / verified-novel).
                 let cv = cj_verdict(child.proposed)
+                let mut vlabel = cv
+                let mut do_absorb = true
                 if cv == "verified-novel" { n_verified_novel = n_verified_novel + 1 }
                 else if cv == "verified-known" { n_verified_known = n_verified_known + 1 }
-                else { n_prose = n_prose + 1 }
+                else {
+                    // cv=="" — M7: a GENERATOR frame child, or genuine prose.
+                    let gv = cj_generator_verdict(child.proposed)
+                    if gv == "generator-novel" || gv == "generator-known" {
+                        n_gen_seen = n_gen_seen + 1
+                        if n_gen_seen > 8 {                        // N_GEN_PER_RUN budget
+                            _dfs_drop_log(parent.slug, child.slug, "generator-budget")
+                            continue
+                        }
+                        vlabel = gv + " [" + cj_generator_report(child.proposed) + "]"
+                        if gv == "generator-novel" { n_gen_novel = n_gen_novel + 1 }
+                        else {
+                            n_gen_known = n_gen_known + 1
+                            do_absorb = false   // Phase L: only generator-novel carries a finding to the PR
+                        }
+                    } else { n_prose = n_prose + 1 }
+                }
                 // NOVEL-CLOSURE provenance (PR #4120) — append the closure class
                 // tag (SURVIVOR = genuine novel candidate · C1-C4 = demoted false-
                 // positive class) so the PR reviewer sees WHY a relation is/ isn't
                 // novel. Empty for prose / classical-known (nothing to classify).
-                let mut vlabel = cv
-                let cls = cj_closure_class(child.proposed)
-                if len(cls) > 0 { vlabel = cv + " [closure:" + cls + "]" }
+                if cv != "" {
+                    let cls = cj_closure_class(child.proposed)
+                    if len(cls) > 0 { vlabel = cv + " [closure:" + cls + "]" }
+                }
                 _dfs_emit_child(parent.slug, child, depth + 1, vlabel)
                 _dfs_chain_append(cycle_no, parent.slug, child.slug, child.family, depth + 1, call_cost)
-                absorbed.push(child)   // Phase L — batch for end-of-run absorption PR (replaces Phase K overlay write)
+                if do_absorb { absorbed.push(child) }   // Phase L — end-of-run absorption PR (generator-known excluded)
                 _g_dfs_session_absorbed.push(child)   // Phase M — also accumulate session-wide for --target-absorb batched PR
                 emitted = emitted + 1
                 // fire_needed at depth>0 defers (axis 5.iv) — not carried.
@@ -964,8 +1004,10 @@ pub fn dfs_run(seeds: array, view: AtlasView, cycle_no: int,
     // genuinely new); known = exact-int confirmed classical; prose = no claim.
     println("  [dfs] exact-verify: novel=" + to_string(n_verified_novel)
           + " known=" + to_string(n_verified_known)
+          + " gen-novel=" + to_string(n_gen_novel)
+          + " gen-known=" + to_string(n_gen_known)
           + " prose=" + to_string(n_prose)
-          + "  (novel = 🟩 bounded-unique/congruence · UNPROVEN ∀n · c2)")
+          + "  (novel = 🟩 bounded-unique/congruence · gen-* = M7 frame family · UNPROVEN ∀n · c2)")
     println("  [dfs] done: depth_reached=" + to_string(depth)
           + " calls=" + to_string(calls)
           + " cost_usd_est=" + to_string(cost)

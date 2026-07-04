@@ -420,6 +420,423 @@ pub let mut _lr_defer_next = 0
 pub let mut _lr_defer_exit_block = -1
 pub let mut _lr_defer_ret_local = -1
 
+// ── HEXA-OWN L3 M3 — MIR intra-block loan pass (HEXA_BORROWCK=1) ─────
+//
+// Opt-in (`HEXA_BORROWCK=1`), warning-band (HX3014, never fatal), byte-
+// neutral OFF: the pass only OBSERVES the lowering — it never emits
+// stmts/locals and adds no field to Stmt — so the flag-off MIR (and the
+// emitted binary) is byte-identical to a build without this block.
+// Population of every registry below is gated on `_bck_active` at the
+// hook sites (flag is the FIRST `&&` operand), mirroring the L2
+// `_own_lint_*` discipline in compiler/check/types.hexa.
+//
+// Shape (spec state/hexa-own/l3_m3_spec.md):
+//   * tracked-local registry — parallel arrays, push-only, newest-entry-
+//     wins scan from the END (the proven `_own_lint_find` idiom; no new
+//     struct → frozen-seed-safe). A tracked local belongs to an alias
+//     GROUP (fresh counter id); `let b = a` joins b to group(a)
+//     (handle-copy edge); `b = x` re-points b (edge-kill: shadow entry
+//     with a fresh group).
+//   * per-group WRITE / MOVE event logs — a write-through-handle
+//     (field_set / index_set / mutating method receiver) or an @own
+//     call-arg move pushes an event keyed by group + CURRENT BLOCK id.
+//   * the two rules run at the ident-use hook (`_bck_check_use`), both
+//     intra-block only (event.block == ctx.cur_block; every if/while/
+//     match/for splits blocks, so scope = straight-line code):
+//       Rule 1 — shared-XOR-mut: use through name N′ while the group has
+//         a recorded WRITE through a DIFFERENT name in the same block.
+//       Rule 2 — use-after-move: any use of a group with a recorded MOVE
+//         (call into an `@own` param) in the same block.
+//   * move classification is @own-driven (polarity inversion vs #4088's
+//     every-arg-moves): an arg is a move IFF the resolved callee's param
+//     is declared `@own`; unknown callees/externs/indirect are READs.
+//     With zero corpus @own adoption Rule 2 is inert by construction.
+//   * scalars (Copy) are never registered; unknown-typed locals are not
+//     tracked (precision-first: false-negatives allowed, FPs not).
+//
+// L3 M4 — cross-block NLL liveness (same HEXA_BORROWCK=1 flag):
+//   * every tracked ident USE is additionally recorded (name, group
+//     snapshot, block, span); at the END of _lower_fn — when every CFG
+//     edge (if/else joins, while/for back-edges, break/continue
+//     sentinel patches, defer epilogue, try/catch) is materialized in
+//     Block.preds/succs — `_bck_nll_check` runs an event-reachability
+//     fixed-point over Block.preds and re-evaluates both rules at each
+//     use against every write/move event whose block REACHES the use's
+//     block through ≥1 CFG edge. Joins (write in a branch, read after)
+//     and loop back-edges (loop-carried alias: a body block reaches
+//     itself through the cycle) are now caught; same-block ordering
+//     stays with the interleaved intra-block rules above, so a
+//     straight-line use BEFORE a write still never fires.
+//   * convergence guard: hard sweep cap = blocks*4 + 8, loud bail
+//     (cross-block results dropped for that fn, intra-block kept).
+//   * granularity is unchanged: whole-local, no place projections
+//     (documented ceiling); path-insensitive (a write on one branch
+//     arms the join — advisory-band tolerance like whole-local).
+//   * cost: flag OFF ⇒ zero work (no events, no pass); flag ON ⇒
+//     O(events × blocks × sweeps) per fn with an early-out when the fn
+//     recorded no write/move event — cheap enough to stay under the
+//     unified HEXA_BORROWCK flag (no separate HEXA_BORROWCK_NLL).
+pub let mut _bck_on = false        // HEXA_BORROWCK=1, read once per lower_hir
+pub let mut _bck_active = false    // per-fn gate; suspended in closure bodies
+pub let mut _bck_grp_ctr: i64 = 0  // fresh group-representative ids (per fn)
+// tracked-local registry (push-only; newest entry for a local id wins)
+pub let mut _bck_local_ids: [i64] = []
+pub let mut _bck_groups: [i64] = []
+pub let mut _bck_names: [string] = []
+pub let mut _bck_decl_lines: [i64] = []
+pub let mut _bck_decl_cols: [i64] = []
+// per-group WRITE events (push-only; newest event for a group wins)
+pub let mut _bck_w_grps: [i64] = []
+pub let mut _bck_w_names: [string] = []
+pub let mut _bck_w_lines: [i64] = []
+pub let mut _bck_w_blocks: [i64] = []
+// per-group MOVE events (call into an @own param)
+pub let mut _bck_m_grps: [i64] = []
+pub let mut _bck_m_callees: [string] = []
+pub let mut _bck_m_lines: [i64] = []
+pub let mut _bck_m_blocks: [i64] = []
+// emitted-site dedup (same-line/col suppression, cloned from _own_lint_touch)
+pub let mut _bck_e_lines: [i64] = []
+pub let mut _bck_e_cols: [i64] = []
+// M4 — tracked USE events (group snapshot at use time) for the
+// end-of-fn cross-block pass; span kept whole so the cross-block emit
+// anchors at the exact use site.
+pub let mut _bck_u_grps: [i64] = []
+pub let mut _bck_u_names: [string] = []
+pub let mut _bck_u_blocks: [i64] = []
+pub let mut _bck_u_spans: [Span] = []
+// @own-param pre-pass map (module lifetime): paired rows fn-name/param-idx,
+// built in lower_hir from fn-item `Annotation{name:"own", args:[pname]}`
+// positioned via the sibling `param_names` annotation (ast_to_hir carries
+// ALL item annotations through — zero new plumbing).
+pub let mut _bck_own_fns: [string] = []
+pub let mut _bck_own_pidx: [i64] = []
+
+fn _bck_reset_fn() {
+    _bck_grp_ctr = 0
+    _bck_local_ids = []
+    _bck_groups = []
+    _bck_names = []
+    _bck_decl_lines = []
+    _bck_decl_cols = []
+    _bck_w_grps = []
+    _bck_w_names = []
+    _bck_w_lines = []
+    _bck_w_blocks = []
+    _bck_m_grps = []
+    _bck_m_callees = []
+    _bck_m_lines = []
+    _bck_m_blocks = []
+    _bck_e_lines = []
+    _bck_e_cols = []
+    _bck_u_grps = []
+    _bck_u_names = []
+    _bck_u_blocks = []
+    _bck_u_spans = []
+}
+
+fn _bck_new_group() -> i64 {
+    _bck_grp_ctr = _bck_grp_ctr + 1
+    return _bck_grp_ctr
+}
+
+// Newest-entry-wins scans (from the END) — `_own_lint_find` idiom.
+fn _bck_find_local(id: i64) -> i64 {
+    let mut i = len(_bck_local_ids) - 1
+    while i >= 0 {
+        if _bck_local_ids[i] == id { return i }
+        i = i - 1
+    }
+    return 0 - 1
+}
+
+fn _bck_find_write(grp: i64) -> i64 {
+    let mut i = len(_bck_w_grps) - 1
+    while i >= 0 {
+        if _bck_w_grps[i] == grp { return i }
+        i = i - 1
+    }
+    return 0 - 1
+}
+
+fn _bck_find_move(grp: i64) -> i64 {
+    let mut i = len(_bck_m_grps) - 1
+    while i >= 0 {
+        if _bck_m_grps[i] == grp { return i }
+        i = i - 1
+    }
+    return 0 - 1
+}
+
+fn _bck_track(local_id: i64, name: string, grp: i64, sp: Span) {
+    _bck_local_ids.push(local_id)
+    _bck_groups.push(grp)
+    _bck_names.push(name)
+    _bck_decl_lines.push(sp.line)
+    _bck_decl_cols.push(sp.col)
+}
+
+// Loan-eligible (aggregate/reference-value) HIR type kinds: arrays,
+// struct literals ("struct:<Name>" / "struct"), declared named types
+// ("named:<Name>"). Scalars are Copy (never registered); `string` is
+// excluded (no mutating method exists — all str builtins return new
+// values); unknown "?"/""/"generic:*" kinds are NOT tracked (the HIR
+// type-fallback holes become documented false-negatives, never FPs).
+fn _bck_is_aggregate_kind(tk: string) -> bool {
+    if tk == "array" { return true }
+    if tk == "struct" { return true }
+    if len(tk) >= 7 && tk.substring(0, 7) == "struct:" { return true }
+    if len(tk) >= 6 && tk.substring(0, 6) == "named:" { return true }
+    return false
+}
+
+// Is param `idx` of top-level fn `fn_name` declared `@own`?
+fn _bck_own_param(fn_name: string, idx: i64) -> bool {
+    let mut i = 0
+    while i < len(_bck_own_fns) {
+        if _bck_own_fns[i] == fn_name && _bck_own_pidx[i] == idx { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Record a WRITE through a tracked local handle (field_set / index_set /
+// mutating method receiver). Untracked handles are ignored.
+fn _bck_note_write(local_id: i64, name: string, blk: i64, sp: Span) {
+    let ti = _bck_find_local(local_id)
+    if ti < 0 { return }
+    _bck_w_grps.push(_bck_groups[ti])
+    _bck_w_names.push(name)
+    _bck_w_lines.push(sp.line)
+    _bck_w_blocks.push(blk)
+}
+
+// Record a MOVE of a tracked local (bare-ident arg into an @own param).
+fn _bck_note_move(local_id: i64, callee: string, blk: i64, sp: Span) {
+    let ti = _bck_find_local(local_id)
+    if ti < 0 { return }
+    _bck_m_grps.push(_bck_groups[ti])
+    _bck_m_callees.push(callee)
+    _bck_m_lines.push(sp.line)
+    _bck_m_blocks.push(blk)
+}
+
+// HX3014 emit with same-site dedup (one warning per source line/col —
+// Rule 1 and Rule 2 firing on the same use site collapse to the first).
+fn _emit_hx3014(rule: string, name: string, other: string, line: i64, sp: Span) {
+    let mut di = 0
+    while di < len(_bck_e_lines) {
+        if _bck_e_lines[di] == sp.line && _bck_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_e_lines.push(sp.line)
+    _bck_e_cols.push(sp.col)
+    let mut b = diag_new("HX3014")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "rule", rule)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "other", other)
+    b = diag_arg(b, "line", to_string(line))
+    _lr_diag.push(diag_emit(b))
+}
+
+// The two rules — evaluated at every ident USE that resolves to a local
+// (the single funnel: field/index reads, binop and call args, and the
+// base of every write all lower their idents through the ident arm).
+fn _bck_check_use(name: string, local_id: i64, blk: i64, sp: Span) {
+    let ti = _bck_find_local(local_id)
+    if ti < 0 { return }
+    let grp = _bck_groups[ti]
+    // Rule 1 — shared-XOR-mut (the M0 discriminator): a use through this
+    // name while the group holds a WRITE through a DIFFERENT name in the
+    // same block. Benign read-only aliasing never fires (no write event).
+    let wi = _bck_find_write(grp)
+    if wi >= 0 {
+        if _bck_w_blocks[wi] == blk && _bck_w_names[wi] != name {
+            _emit_hx3014("aliased write", name, _bck_w_names[wi], _bck_w_lines[wi], sp)
+        }
+    }
+    // Rule 2 — use-after-move, intra-block (inert until @own params land).
+    let mi = _bck_find_move(grp)
+    if mi >= 0 {
+        if _bck_m_blocks[mi] == blk {
+            _emit_hx3014("use after move", name, _bck_m_callees[mi], _bck_m_lines[mi], sp)
+        }
+    }
+    // M4 — record the use (group snapshot at use time) for the
+    // end-of-fn cross-block pass. `.push` heapifies the Span.
+    _bck_u_grps.push(grp)
+    _bck_u_names.push(name)
+    _bck_u_blocks.push(blk)
+    _bck_u_spans.push(sp)
+}
+
+// ── HEXA-OWN L3 M4 — cross-block NLL liveness fixed-point ────────────
+// Runs ONCE at the end of _lower_fn (guarded by `_bck_active`; flag OFF
+// ⇒ never called and every registry is empty anyway), when the fn's
+// FULL CFG is materialized in `_lr_blocks` (if/else joins, while/for
+// back-edges, break/continue sentinel patches, defer epilogue,
+// try/catch — all wired through _add_edge by then).
+//
+// Dataflow: for every recorded write/move EVENT e, compute the set of
+// blocks its source block reaches through ≥1 CFG edge —
+//     reach[b][e] = 1  ⇔  ∃ pred p of b with (p == block(e) ∨ reach[p][e])
+// iterated to fixpoint over Block.preds (loop back-edges converge: a
+// loop body reaches ITSELF through the cycle, which is exactly the
+// loop-carried-alias case). Then both loan rules are re-evaluated at
+// every recorded USE against the events reaching its block:
+//   Rule 1 — a use through name N while a WRITE through a DIFFERENT
+//     name of the same group reaches the use's block ⇒ HX3014.
+//   Rule 2 — any use of a group with a reaching MOVE ⇒ HX3014.
+// Same-block ordering is NOT re-checked here (path length ≥1 only) —
+// the interleaved intra-block rules already handled it order-aware, so
+// a straight-line use before a write stays silent; emit dedup
+// (line/col) collapses any intra+cross double-hit at one site.
+//
+// Convergence guard: hard sweep cap = blocks*4 + 8. A non-converging
+// fixed-point (cannot happen for a monotone bitset over a finite CFG,
+// but guard loudly anyway) drops the CROSS-BLOCK results for this fn
+// only — intra-block diagnostics already emitted are kept.
+fn _bck_nll_check() {
+    let nw = len(_bck_w_grps)
+    let ne = nw + len(_bck_m_grps)
+    if ne == 0 { return }
+    let nu = len(_bck_u_grps)
+    if nu == 0 { return }
+    let nb = len(_lr_blocks)
+    if nb == 0 { return }
+    // block id → _lr_blocks index map (ids are per-fn monotonic, but
+    // map defensively — _add_edge itself searches by id, never index).
+    let mut max_id = 0
+    let mut bi = 0
+    while bi < nb {
+        if _lr_blocks[bi].id > max_id { max_id = _lr_blocks[bi].id }
+        bi = bi + 1
+    }
+    let mut id2ix: [i64] = []
+    let mut k = 0
+    while k <= max_id {
+        id2ix.push(0 - 1)
+        k = k + 1
+    }
+    bi = 0
+    while bi < nb {
+        let bid = _lr_blocks[bi].id
+        if bid >= 0 { id2ix[bid] = bi }
+        bi = bi + 1
+    }
+    // per-event source block INDEX (write events first, then moves).
+    let mut ev_bix: [i64] = []
+    let mut e = 0
+    while e < nw {
+        let mut wix = 0 - 1
+        if _bck_w_blocks[e] >= 0 && _bck_w_blocks[e] <= max_id {
+            wix = id2ix[_bck_w_blocks[e]]
+        }
+        ev_bix.push(wix)
+        e = e + 1
+    }
+    e = 0
+    while e < len(_bck_m_grps) {
+        let mut mix = 0 - 1
+        if _bck_m_blocks[e] >= 0 && _bck_m_blocks[e] <= max_id {
+            mix = id2ix[_bck_m_blocks[e]]
+        }
+        ev_bix.push(mix)
+        e = e + 1
+    }
+    // reach bitmatrix, flat [block-index × event-index], all zero.
+    let mut reach: [i64] = []
+    let mut z = 0
+    while z < nb * ne {
+        reach.push(0)
+        z = z + 1
+    }
+    // fixed-point sweeps over Block.preds.
+    let cap = nb * 4 + 8
+    let mut iter = 0
+    let mut changed = true
+    while changed {
+        if iter >= cap {
+            println("borrowck M4 BAIL: NLL fixed-point exceeded "
+                    + to_string(cap) + " sweeps (blocks=" + to_string(nb)
+                    + ", events=" + to_string(ne)
+                    + ") — cross-block loan results dropped for this fn")
+            return
+        }
+        changed = false
+        bi = 0
+        while bi < nb {
+            let preds = _lr_blocks[bi].preds
+            let mut pi = 0
+            while pi < len(preds) {
+                let pid = preds[pi]
+                let mut pix = 0 - 1
+                if pid >= 0 && pid <= max_id { pix = id2ix[pid] }
+                if pix >= 0 {
+                    e = 0
+                    while e < ne {
+                        if reach[bi * ne + e] == 0 {
+                            if ev_bix[e] == pix || reach[pix * ne + e] == 1 {
+                                reach[bi * ne + e] = 1
+                                changed = true
+                            }
+                        }
+                        e = e + 1
+                    }
+                }
+                pi = pi + 1
+            }
+            bi = bi + 1
+        }
+        iter = iter + 1
+    }
+    // rule evaluation at every recorded use.
+    let mut u = 0
+    while u < nu {
+        let ub = _bck_u_blocks[u]
+        let mut uix = 0 - 1
+        if ub >= 0 && ub <= max_id { uix = id2ix[ub] }
+        if uix >= 0 {
+            e = 0
+            while e < ne {
+                if reach[uix * ne + e] == 1 {
+                    if e < nw {
+                        if _bck_w_grps[e] == _bck_u_grps[u]
+                            && _bck_w_names[e] != _bck_u_names[u] {
+                            _emit_hx3014("aliased write", _bck_u_names[u],
+                                         _bck_w_names[e], _bck_w_lines[e],
+                                         _bck_u_spans[u])
+                        }
+                    } else {
+                        if _bck_m_grps[e - nw] == _bck_u_grps[u] {
+                            _emit_hx3014("use after move", _bck_u_names[u],
+                                         _bck_m_callees[e - nw],
+                                         _bck_m_lines[e - nw],
+                                         _bck_u_spans[u])
+                        }
+                    }
+                }
+                e = e + 1
+            }
+        }
+        u = u + 1
+    }
+}
+
+// Receiver-mutating method whitelist — the WRITE classifier (§1C of the
+// spec, inverse of a read whitelist under the default-read polarity).
+// Complete against codegen's `_builtin_runtime_sym` dispatch today:
+// push/pop/truncate (hexa_array_*) + set (hexa_map_set_v). Extend in
+// lockstep with that table.
+fn _bck_is_mutating_method(op: string) -> bool {
+    if op == "push" { return true }
+    if op == "pop" { return true }
+    if op == "truncate" { return true }
+    if op == "set" { return true }
+    return false
+}
+
 // arity (param count) of a top-level fn name, or -1 if not a known fn.
 fn _lr_fn_ref_arity(name: string) -> i64 {
     let mut i = 0
@@ -1155,6 +1572,13 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         }
         let id = _mir_lookup(ctx, e.text)
         if id >= 0 {
+            // HEXA-OWN L3 M3 — the single READ/use funnel: every ident
+            // use (field/index base, call/binop arg, …) resolves here
+            // with `e.span` in hand; evaluate both loan rules. No-op
+            // (flag-off `_bck_active` false) on the default path.
+            if _bck_active {
+                _bck_check_use(e.text, id, ctx.cur_block, e.span)
+            }
             return _value(ctx, _local_op(id))
         }
         // Fall back to module-level global before HX1101: a `let mut g`
@@ -1699,6 +2123,11 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             ictx = _push_stmt(ictx, isr)
             return _value(ictx, _local_op(idst.id))
         }
+        // HEXA-OWN L3 M3 — method-receiver capture for the mutator-write
+        // classifier below (recorded AFTER the STMT_CALL is emitted).
+        let mut _bk_is_method = false
+        let mut _bk_recv_name = ""
+        let mut _bk_recv_local: i64 = 0 - 1
         if len(e.children) > 0 {
             let callee = e.children[0]
             callee_text = callee.text
@@ -1714,6 +2143,12 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 let rr = _lower_hexpr(ctx_r, callee.children[0])
                 ctx_r = rr.ctx
                 arg_ops.push(rr.operand)
+                _bk_is_method = true
+                if _bck_active && callee.children[0].kind == "ident"
+                    && rr.operand.kind == "local" {
+                    _bk_recv_name = callee.children[0].text
+                    _bk_recv_local = rr.operand.local_id
+                }
             }
         }
         let mut i = 1
@@ -1721,6 +2156,20 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             let r = _lower_hexpr(ctx_r, e.children[i])
             ctx_r = r.ctx
             arg_ops.push(r.operand)
+            // HEXA-OWN L3 M3 — @own-driven move classification (Rule 2
+            // signal): a bare-ident arg into a resolved callee whose
+            // corresponding param is declared `@own` is a MOVE; every
+            // other call arg is a READ (polarity inversion vs #4088's
+            // every-arg-moves — kills the fp_callarg FP shape). Method
+            // calls are skipped (receiver-first shifts positions and
+            // method names never carry @own params).
+            if _bck_active && !_bk_is_method && e.children[i].kind == "ident"
+                && r.operand.kind == "local" {
+                if _bck_own_param(callee_text, i - 1) {
+                    _bck_note_move(r.operand.local_id, callee_text,
+                                   ctx_r.cur_block, e.children[i].span)
+                }
+            }
             i = i + 1
         }
         // RFC 071 P5++ — `gpu_matmul(c, a, b, M, N, K)` builtin synthesis.
@@ -1863,6 +2312,16 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             target_block_else: -1
         }
         ctx2 = _push_stmt(ctx2, s)
+        // HEXA-OWN L3 M3 — a receiver-mutating method (`a.push(x)` etc,
+        // whitelist verified against codegen's `_builtin_runtime_sym`)
+        // is a WRITE through the receiver handle: arm Rule 1 for later
+        // uses of the group through a different alias name.
+        if _bck_active && _bk_is_method && _bk_recv_local >= 0 {
+            if _bck_is_mutating_method(callee_text) {
+                _bck_note_write(_bk_recv_local, _bk_recv_name,
+                                ctx2.cur_block, e.span)
+            }
+        }
         return _value(ctx2, _local_op(dst.id))
     }
 
@@ -2092,6 +2551,26 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         }
         ctx2 = _push_stmt(ctx2, s)
         if len(nm) > 0 { ctx2 = _bind(ctx2, nm, dst.id) }
+        // HEXA-OWN L3 M3 — loan registration at the binding site:
+        //   * `let a = [..]` / `let c = S{..}` → new tracked ROOT (fresh
+        //     group). Composite literals are the only aggregate births
+        //     whose reference identity is certain; scalars/strings and
+        //     unknown-typed RHS are never registered (precision-first).
+        //   * `let b = a` where `a` is already tracked → HANDLE-COPY
+        //     edge: b joins group(a). A fresh local id makes shadowing
+        //     naturally safe (newest-entry-wins lookup).
+        if _bck_active && len(nm) > 0 && len(e.children) > 0 {
+            let _bk_rhs = e.children[0]
+            if _bk_rhs.kind == "array_lit" || _bk_rhs.kind == "struct_lit" {
+                _bck_track(dst.id, nm, _bck_new_group(), e.span)
+            }
+            if _bk_rhs.kind == "ident" && rhs_op.kind == "local" {
+                let _bk_si = _bck_find_local(rhs_op.local_id)
+                if _bk_si >= 0 {
+                    _bck_track(dst.id, nm, _bck_groups[_bk_si], e.span)
+                }
+            }
+        }
         return _no_value(ctx2)
     }
 
@@ -2146,6 +2625,16 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 target_block_else: -1
             }
             let fctx = _push_stmt(frr.ctx, fs)
+            // HEXA-OWN L3 M3 — `obj.f = v` is a WRITE through the base
+            // handle (structs are map-backed reference values). Whole-
+            // local granularity: no place projections in Operand, so a
+            // write to `x.a` arms Rule 1 for reads of `x.b` too
+            // (documented advisory-band tolerance).
+            if _bck_active && lhs.children[0].kind == "ident"
+                && fbr.operand.kind == "local" {
+                _bck_note_write(fbr.operand.local_id, lhs.children[0].text,
+                                fctx.cur_block, e.span)
+            }
             return _no_value(fctx)
         }
         if lhs.kind == "index" && len(lhs.children) >= 2 {
@@ -2165,6 +2654,14 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 target_block_else: -1
             }
             let ctx_s = _push_stmt(rr2.ctx, s)
+            // HEXA-OWN L3 M3 — `a[i] = v` / `m[k] = v` is a WRITE through
+            // the container handle: arm Rule 1 for later same-block uses
+            // of the group through a different alias name.
+            if _bck_active && lhs.children[0].kind == "ident"
+                && br.operand.kind == "local" {
+                _bck_note_write(br.operand.local_id, lhs.children[0].text,
+                                ctx_s.cur_block, e.span)
+            }
             return _no_value(ctx_s)
         }
         let rr = _lower_hexpr(ctx, e.children[1])
@@ -2221,6 +2718,35 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         ctx2 = _push_stmt(ctx2, s)
         if !did_reuse && !is_global && len(lhs.text) > 0 {
             ctx2 = _rebind(ctx2, lhs.text, dst.id)
+        }
+        // HEXA-OWN L3 M3 — ident re-assign `b = x` is a BINDING-level
+        // event (not a write through the handle): EDGE-KILL + RE-POINT.
+        // b's local leaves its old alias group; if the RHS is a bare
+        // tracked aggregate ident it joins that group, if it is a fresh
+        // composite literal it roots a new group, otherwise a tracked b
+        // detaches into a fresh singleton group (push-only shadow entry;
+        // newest-entry-wins makes the re-point effective).
+        if _bck_active && !is_global && len(lhs.text) > 0 && lhs.kind == "ident" {
+            let mut _bk_joined = false
+            let _bk_rhs2 = e.children[1]
+            if _bk_rhs2.kind == "ident" && rr.operand.kind == "local" {
+                let _bk_si2 = _bck_find_local(rr.operand.local_id)
+                if _bk_si2 >= 0 {
+                    _bck_track(dst.id, lhs.text, _bck_groups[_bk_si2], e.span)
+                    _bk_joined = true
+                }
+            }
+            if !_bk_joined {
+                if _bk_rhs2.kind == "array_lit" || _bk_rhs2.kind == "struct_lit" {
+                    _bck_track(dst.id, lhs.text, _bck_new_group(), e.span)
+                    _bk_joined = true
+                }
+            }
+            if !_bk_joined {
+                if _bck_find_local(dst.id) >= 0 {
+                    _bck_track(dst.id, lhs.text, _bck_new_group(), e.span)
+                }
+            }
         }
         return _no_value(ctx2)
     }
@@ -3452,6 +3978,12 @@ fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
     // enclosing fn has no defers — byte-identity preserved.
     let _lr_saved_defer_active = _lr_defer_active
     _lr_defer_active = false
+    // HEXA-OWN L3 M3 — suspend the loan pass for the lambda body: the
+    // closure lowers with a FRESH local-id space (ids restart at 0), so
+    // the enclosing fn's tracked ids would false-match closure locals.
+    // Same save/restore discipline as `_lr_defer_active` above.
+    let _bck_saved_active = _bck_active
+    _bck_active = false
     let mut lctx = _new_lower_ctx()
     lctx = _new_block(lctx)
     let lam_entry = _lr_blocks[len(_lr_blocks) - 1].id
@@ -3539,6 +4071,7 @@ fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
     // restore the enclosing fn's accumulators before lowering the site.
     _lr_ctx_restore(_lr_saved_arrays)
     _lr_defer_active = _lr_saved_defer_active
+    _bck_active = _bck_saved_active
 
     // ── 2. lower the closure SITE in the enclosing ctx ───────
     // env array: hexa_array_new() then push each captured value, in the
@@ -4154,6 +4687,37 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
         ann_i = ann_i + 1
     }
 
+    // HEXA-OWN L3 M3 — per-fn loan-registry reset (alongside the
+    // _lr_ctx_clear discipline above) + register `@own` AGGREGATE params
+    // as tracked roots. Param names come from the same `param_names`
+    // annotation walked above; the @own positions from the lower_hir
+    // pre-pass map. Scalar @own params are never registered (Copy skip).
+    // Flag OFF → `_bck_active` stays false and nothing below runs.
+    _bck_active = false
+    if _bck_on {
+        _bck_active = true
+        _bck_reset_fn()
+        let mut _bk_ai = 0
+        while _bk_ai < len(it.annotations) {
+            let _bk_a = it.annotations[_bk_ai]
+            if _bk_a.name == "param_names" {
+                let mut _bk_q = 0
+                while _bk_q < len(_bk_a.args) && _bk_q < len(params) {
+                    let _bk_pn = _bk_a.args[_bk_q].text
+                    if len(_bk_pn) > 0 && _bck_own_param(it.name, _bk_q) {
+                        if _bk_q < len(it.sig_params)
+                            && _bck_is_aggregate_kind(it.sig_params[_bk_q].kind) {
+                            _bck_track(params[_bk_q].id, _bk_pn,
+                                       _bck_new_group(), it.span)
+                        }
+                    }
+                    _bk_q = _bk_q + 1
+                }
+            }
+            _bk_ai = _bk_ai + 1
+        }
+    }
+
     // HEXA-OWN M1 — defer pre-scan (mirrors _gen2_count_defers gating,
     // self/codegen.hexa:2737-2738 "zero-cost when absent"). COUNT==0 →
     // the module defer state is reset to inert and NOTHING below emits:
@@ -4426,6 +4990,12 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
             __fn_name = __fn_name + "$$g"
         }
     }
+    // HEXA-OWN L3 M4 — cross-block NLL liveness pass, AFTER the whole
+    // body (incl. defer epilogue) is lowered so every CFG edge is in
+    // Block.preds/succs. Flag OFF ⇒ `_bck_active` false ⇒ zero work.
+    if _bck_active {
+        _bck_nll_check()
+    }
     return MFunc {
         name: __fn_name,
         params: params,
@@ -4451,6 +5021,13 @@ pub fn lower_hir(module: HModule) -> MModule {
     // state across runs (same discipline as `_lr_diag`).
     _lr_lambdas = []
     _lr_lambda_ctr = 0
+    // HEXA-OWN L3 M3 — read the opt-in flag ONCE per lower_hir entry
+    // (same idiom as `_arru_native_enabled`, but latched so repeated
+    // env() lookups never appear on hot paths) + reset the @own map.
+    _bck_on = env("HEXA_BORROWCK") == "1"
+    _bck_active = false
+    _bck_own_fns = []
+    _bck_own_pidx = []
     // Two-pass: collect all module-level globals first so every fn body
     // can resolve any global by name regardless of textual order
     // (parser may put `fn main` before or after a `let mut g = …`).
@@ -4502,6 +5079,39 @@ pub fn lower_hir(module: HModule) -> MModule {
             if !_is_ext {
                 _lr_fn_ref_names.push(fit.name.substring(0, len(fit.name)))
                 _lr_fn_ref_arities.push(len(fit.sig_params))
+            }
+            // HEXA-OWN L3 M3 — @own-param pre-pass (Rule 2 signal
+            // source): for each fn-item `Annotation{name:"own",
+            // args:[pname]}` map pname → position via the sibling
+            // `param_names` annotation and record (fn, idx). With zero
+            // @own adoption on main this map stays empty and Rule 2 is
+            // inert — no code change needed when the @own-param carrier
+            // (#4470 stack) lands.
+            if _bck_on {
+                let mut _bk_oi = 0
+                while _bk_oi < len(fit.annotations) {
+                    let _bk_oa = fit.annotations[_bk_oi]
+                    if _bk_oa.name == "own" && len(_bk_oa.args) >= 1 {
+                        let _bk_pname = _bk_oa.args[0].text
+                        let mut _bk_pi = 0
+                        while _bk_pi < len(fit.annotations) {
+                            let _bk_pa = fit.annotations[_bk_pi]
+                            if _bk_pa.name == "param_names" {
+                                let mut _bk_qq = 0
+                                while _bk_qq < len(_bk_pa.args) {
+                                    if _bk_pa.args[_bk_qq].text == _bk_pname {
+                                        _bck_own_fns.push(fit.name.substring(0, len(fit.name)))
+                                        _bck_own_pidx.push(_bk_qq)
+                                        break
+                                    }
+                                    _bk_qq = _bk_qq + 1
+                                }
+                            }
+                            _bk_pi = _bk_pi + 1
+                        }
+                    }
+                    _bk_oi = _bk_oi + 1
+                }
             }
         }
         fpp = fpp + 1

@@ -84,7 +84,14 @@ jobs:
       - id: darwin
         uses: ./.github/actions/pick-runner
         with:
-          kind: darwin
+          # darwin-any = slot-FREE class: faithful-nobaseline + advisory smokes
+          # are self-contained (shared release_build + in-repo gates, run fine on
+          # macos-15 cloud) so they route to ANY idle darwin runner (ghost OR
+          # mini). The busy path emits the common label so a queued job is no
+          # longer snapshot-pinned to 3 busy ghost runners while 6 mini idle
+          # (measured starvation 2026-07-04). Slot-DEPENDENT byteeq-real keeps
+          # kind=darwin + primary-only=1 (needs ghost's gen3 slot). ci-pick-runner-sh-1.
+          kind: darwin-any
           # self-hosted only for same-repo events; fork PRs → GitHub-hosted.
           eligible: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
           # administration:read PAT (self-hosted runners list needs it; the
@@ -318,16 +325,32 @@ jobs:
             nm -u "$RT" 2>/dev/null | awk '{print $2}' | sort -u \
               | grep -vE '^(_hx_|__hexa|__hx_|__blk_|rt_|hexa_|_hexa|hxlcl_|_GLOBAL)' \
               | grep -vE 'cuda|fatbin' \
-              | grep -vE '^(accept|bind|connect|listen|socket|recv|recvfrom|send|sendto|setsockopt|getsockopt|getaddrinfo|freeaddrinfo|gai_strerror|dlopen|dlsym|dlclose|dlerror|dladdr)' \
+              | grep -vE '^(accept|bind|connect|listen|socket|recv|recvfrom|send|sendto|setsockopt|getsockopt|getaddrinfo|freeaddrinfo|gai_strerror)' \
               | grep -vE '^(__libc_|_exit|atexit|environ|mallopt|__cxa|__errno_location|__stack_chk|__assert)' \
               | grep -vE '^(execve|execvp|setns|unshare|mount|umount2?|posix_spawn|opendir|readdir|closedir|glob|globfree|mkstemp|mkdtemp)' \
-              | grep -vE '^(qsort|rand|srand|strtod|strtof|strtold)' \
+              | grep -vE '^(rand|srand|strtod|strtof|strtold)' \
               | tr '\n' ' '
             echo ""
             echo "=== RFC061 nm-UND TOTAL undefined: $(nm -u "$RT" 2>/dev/null | awk '{print $2}' | sort -u | wc -l) ==="
           else
             echo "(no runtime.a found — nm-UND dump skipped)"
           fi
+
+      - name: zero-c #29 S1 — runtime.a dl* nm-UND ∅ (HARD GATE · Linux)
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        run: |
+          # S1 FFI floor-partition: dlopen/dlsym/dlerror moved into runtime_ffi_dyn.o
+          # (compiled but NOT ar'd into canonical runtime.a), so the archive must carry
+          # ZERO dl* nm-UND. Unfiltered hard assertion — the flip is the first real test
+          # (OFF-verification cannot validate this; see convergence runtime-emit-full-hexa-2).
+          RT="$(find build . -name runtime.a 2>/dev/null | head -1)"
+          if [ ! -f "$RT" ]; then echo "(no runtime.a — S1 dl* gate skipped)"; exit 0; fi
+          HITS="$(nm -u "$RT" 2>/dev/null | awk '{print $2}' | sort -u | grep -E '^dl(open|sym|error|close|addr)$' || true)"
+          if [ -n "$HITS" ]; then
+            echo "❌ S1 FAIL — canonical runtime.a still carries dl* nm-UND:"; echo "$HITS"; exit 1
+          fi
+          echo "✅ S1 GREEN — runtime.a nm-UND dl* = ∅ (unfiltered) — $RT"
 
       - name: ccache stats
         if: always()

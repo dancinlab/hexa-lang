@@ -590,6 +590,16 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
     // that liveness model is ever changed to non-uniform intervals, the
     // self-host byteeq gate (gen3≡gen4 + faithful, exercised on the WHOLE
     // compiler) breaks immediately — so this cannot silently miscompile.
+    // try/catch fix (M7-adjacent · native setjmp correctness) — hxlcl_longjmp
+    // restores rbx/rbp/r12-r15 to their hxlcl_setjmp-time values, so a value
+    // homed in the callee-saved pool and WRITTEN inside a try body is rolled
+    // back when the catch runs (payload reverts; the frame tag-slot does NOT →
+    // a torn {tag,payload}). Whole-fn liveness makes every value live across
+    // every try_setjmp, so a try-containing fn must be ALL-SPILL (memory homes
+    // survive longjmp). Fns without try/catch keep the pool → byte-identical
+    // emit. Next round (🧱) = setjmp-aware real liveness (spill only the
+    // across-setjmp values), which needs the whole-fn liveness model replaced.
+    let _sj_all_spill = _x86_count_try_setjmp(mf) > 0
     let mut s = 0
     while s < len(order) {
         let cur = order[s]
@@ -601,7 +611,7 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
             continue
         }
 
-        if len(pool) > 0 {
+        if len(pool) > 0 && !_sj_all_spill {
             let r = pool[0]
             let mut np: [string] = []
             let mut tt = 1
