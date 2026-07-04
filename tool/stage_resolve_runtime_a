@@ -1970,10 +1970,14 @@ build_runtime_a_from_source() {
         # hxlcl_free lands in it. `objcopy --keep-global-symbol=hxlcl_free` ISOLATES the
         # staged member so the whole-module routec.o's sibling C-ABI defs stay served by
         # the shim and the ld -r multidef gate (S5) sees exactly one new strong def. The
-        # shim drops free via -DHEXA_RT_NATIVE_FREE (#ifndef in shim.c). DEFAULT (unset)
-        # adds NO -D and NO member → shim.o + archive byte-identical (release-integrity
-        # invariant). x86_64-linux ONLY (same host gate as the libm + strstr/strtoll).
-        if [ "${HEXA_RT_NATIVE_FREE:-0}" = "1" ]; then
+        # shim drops free via -DHEXA_RT_NATIVE_FREE (#ifndef in shim.c). POLARITY (zeroc #29:
+        # native default-ON, opt-OUT via HEXA_RT_NATIVE_FREE=0 — native-canonical polarity):
+        # the native no-op free ships by default → free drops from the runtime.a nm-UND floor
+        # (225→224); set HEXA_RT_NATIVE_FREE=0 to retain the libc-shim free member (opt-OUT →
+        # NO -D, NO member → shim.o + archive byte-identical to the libc baseline). Eligible on
+        # all 3 non-fp hosts (x86_64-linux · arm64-linux · darwin-arm64, host-gate #4543); on an
+        # ineligible host the path stays off gracefully and the libc-shim free member ships.
+        if [ "${HEXA_RT_NATIVE_FREE:-1}" != "0" ]; then
             # zeroc #29: non-fp Route-C leaves (free/calloc/realloc) are pointer/size-only
             # (no xmm fp-ABI) → the arm64 backend already lowers them (arm64_darwin.hexa
             # _is_cabi && !_cabi_is_fp; routec_cabi_smoke emits arm64-darwin). The old
