@@ -1,0 +1,101 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_prod_nn_rmsnorm_devseam_eq.hexa — LLM-path RMSNorm host-seam byte-eq ORACLE.
+//
+//  HEXA-0POD: 0-GPU (`hexa run`) oracle proving the NEW device-resident seams in
+//  stdlib/flame nn_lib (rmsnorm fwd/bwd) route through the forge_dispatch_rmsnorm*
+//  host body BYTE-EQ to the pure-host nn_rmsnorm_* reference loops. Off-CUDA the
+//  dispatcher takes the host fallback body (rc=0); on-CUDA it takes the device
+//  kernel — both are locked byte-eq to these host references (max|Δ|=0).
+//
+//  BIT-EXACT CONTRACT: the ms/dot reductions accumulate SEQUENTIALLY (one thread,
+//  ascending); the fwd inv uses libm sqrt (IEEE correctly-rounded, == device
+//  sqrt(double)); every mul-into-add uses __dmul_rn/__dadd_rn (host FP_CONTRACT
+//  OFF) → NO FMA fuse. `inv` in bwd is a SCALAR float passed by value.
+//
+//  F-RMSNORM-FWD-SEAM / F-RMSNORM-BWD-SEAM : dispatcher body == host nn_rmsnorm_*.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/nn_lib"
+
+fn _ab(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _md(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let d = _ab(t_get(a, i) - t_get(b, i)); if d > m { m = d }; i = i + 1 }
+    return m
+}
+fn _fill(a: int, n: int, seed: int) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        t_set(a, i, (to_float(s % 1000) - 500.0) * 0.01)
+        i = i + 1
+    }
+}
+
+fn main() {
+    println("clm_prod_nn_rmsnorm_devseam_eq — rmsnorm fwd/bwd device seam (host body) == host nn_rmsnorm_*")
+
+    let d = 257
+    let x = t_zeros(d)
+    let g = t_zeros(d)
+    _fill(x, d, 13)
+    _fill(g, d, 29)
+
+    // ── RMSNorm fwd ──
+    let y_h   = t_zeros(d)
+    let xn_h  = t_zeros(d)
+    let inv_h = t_zeros(1)
+    nn_rmsnorm_fwd(x, g, y_h, xn_h, inv_h, d)
+
+    let y_d   = t_zeros(d)
+    let xn_d  = t_zeros(d)
+    let inv_d = t_zeros(1)
+    let rcf = forge_dispatch_rmsnorm(x, g, y_d, xn_d, inv_d, d)
+
+    let df_y   = _md(y_h,   y_d,   d)
+    let df_xn  = _md(xn_h,  xn_d,  d)
+    let df_inv = _md(inv_h, inv_d, 1)
+    let mut df = df_y
+    if df_xn  > df { df = df_xn }
+    if df_inv > df { df = df_inv }
+
+    // ── RMSNorm bwd (inv is the saved fwd reciprocal-rms scalar) ──
+    let inv = t_get(inv_h, 0)
+    let dy = t_zeros(d)
+    _fill(dy, d, 47)
+
+    let dx_h = t_zeros(d)
+    let dg_h = t_zeros(d)
+    nn_rmsnorm_bwd(x, g, xn_h, inv, dy, dx_h, dg_h, d)
+
+    let dx_d = t_zeros(d)
+    let dg_d = t_zeros(d)
+    let rcb = forge_dispatch_rmsnorm_bwd(x, g, xn_h, inv, dy, dx_d, dg_d, d)
+
+    let db_x = _md(dx_h, dx_d, d)
+    let db_g = _md(dg_h, dg_d, d)
+    let mut db = db_x
+    if db_g > db { db = db_g }
+
+    if rcf != 0 || rcb != 0 {
+        println("  !! a dispatcher returned rc!=0 (host body not linked?)")
+        println("  rc rmsnorm_fwd=" + to_string(rcf) + " rmsnorm_bwd=" + to_string(rcb))
+    }
+    println("  rmsnorm fwd max|Δ| = " + to_string(df) + "   (y=" + to_string(df_y) + " xn=" + to_string(df_xn) + " inv=" + to_string(df_inv) + ")")
+    println("  rmsnorm bwd max|Δ| = " + to_string(db) + "   (dx=" + to_string(db_x) + " dg=" + to_string(db_g) + ")")
+
+    let mut worst = df
+    if db > worst { worst = db }
+    if df == 0.0 { println("F-RMSNORM-FWD-SEAM = 1") } else { println("F-RMSNORM-FWD-SEAM = 0") }
+    if db == 0.0 { println("F-RMSNORM-BWD-SEAM = 1") } else { println("F-RMSNORM-BWD-SEAM = 0") }
+
+    let ok = worst == 0.0 && rcf == 0 && rcb == 0
+    if ok {
+        println("PASS — rmsnorm fwd/bwd device seam (host body) == host nn_rmsnorm_*, byte-eq (max|Δ|=0)")
+    } else {
+        println("FAIL — max|Δ| = " + to_string(worst))
+    }
+}
