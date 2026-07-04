@@ -1,0 +1,20 @@
+// own-lint shipping-advisory e2e probe — HX3012 use-after-move.
+// Shape = the measured HX3012-firing case from the native own-lint
+// (compiler/check/types_test.hexa case (n), builder ~:815; census
+// state/hexa-own/ownlint_shipping_wiring.md §3 test plan).
+//
+// Manual e2e (pool: aiden/summer, branch-built hexa):
+//   positive : HEXA_OWN_LINT=1 hexa build self/test/test_own_lint_hx3012.hexa -o /tmp/own_probe
+//              → transcript contains exactly 1 HX3012 (use of moved value 'x',
+//                the `let b = x` site) · rc=0 · binary still produced and runs.
+//   flag-OFF : hexa build self/test/test_own_lint_hx3012.hexa -o /tmp/own_probe
+//              → 0 HX3012 · binary byte-identical to flag-ON's.
+//   negative : same file without @own, flag ON → 0 HX3012.
+//   degrade  : aprime_cc absent, flag ON → one "[own-lint] advisory
+//              unavailable" line, build continues, rc=0.
+fn main() {
+    @own let x = 5
+    let a = x
+    let b = x
+    print(b)
+}
