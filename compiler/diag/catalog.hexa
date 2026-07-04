@@ -430,6 +430,24 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3019",
+        title: "returning a borrow of a function-local value",
+        // Warning band (SSOT F4 warn-first), the PAIR of the HX3014 loan-pass
+        // family: the opt-in borrow checker (`HEXA_BORROWCK=1`) surfaces a
+        // returned reference to a value owned by the current function. Under
+        // `HEXA_BORROWCK_STRICT=1` the SAME diagnostic instance is re-banded to
+        // a build-refusing Error via the sanctioned caller override in
+        // `_bck_emit_ret_escape` (identical mechanism to HX3014). With the flag
+        // unset the loan pass is inert (`_bck_active` false), so neither this
+        // nor HX3014 is emitted and the diagnostic stream + emitted bytes are
+        // byte-identical — release integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "`{name}` returns a borrow of function-local `{origin}` (borrow created at line {borrow_line}) — the value is dropped at the end of the function",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN L5-E1) found a `return` whose value is a reference into a value OWNED by the current function — either directly (`return &x` / `return &mut x` over a non-global local or by-value parameter) or one hop through a ref binding (`let r = &x; …; return r`). This is Rust's E0515 ('cannot return reference to local variable / temporary value'; rustc_borrowck reports it when the returned region outlives the borrowed local's storage): the borrowed value's storage is reclaimed when the function returns, so the returned reference would dangle. The detection is conservative — a borrow of a module-level global is NOT flagged (its storage outlives the call), and a ref binding that is re-let or reassigned to a non-borrow RHS before the return is treated as detached (the loan is killed, newest-entry-per-name wins). Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical. Fix: return the value by move/copy instead of by borrow, or restructure so the borrowed value outlives the caller (e.g. accept an `&mut` out-param, or return an owned clone).",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
