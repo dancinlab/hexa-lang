@@ -721,6 +721,26 @@ fn _absorb_merge(pool: array, verified_exprs: array) -> AbsorbMerge {
     return AbsorbMerge { pool: out, net_absorbed: net }
 }
 
+// ── [M5] absorb feed-forward, extracted pure for the H1 toggle + selftest ──
+// Appends the cumulative verified-primitive pool onto the next round's seeds
+// when `enabled` (the H1 absorb-ON arm / native-canonical production default);
+// the OFF arm (HEXA_DRILL_NO_ABSORB=1) skips the push so round N+1's blowup
+// sees ONLY the seed-derived pool. The absorb pool itself is still computed +
+// audited identically in both arms — the toggle gates ONLY this feed, so the
+// DRILL_ABSORB rows stay arm-identical up to any real (feed-forward-driven)
+// divergence. In standard vocab absorbed_pool is [] every round (smash emits
+// no identity-syntax candidates), so both arms are byte-identical here — that
+// vacuous Δ=0 is the located-bottleneck result, not an H1 refutation (§5).
+fn _absorb_feed(seed_pool: array, absorbed_pool: array, enabled: bool) -> array {
+    if !enabled { return seed_pool }
+    let mut ap = 0
+    while ap < len(absorbed_pool) {
+        seed_pool.push(to_string(absorbed_pool[ap]))
+        ap = ap + 1
+    }
+    return seed_pool
+}
+
 // Emit the cross-round absorb audit row (stderr DRILL_ABSORB). `verified` =
 // verified exprs THIS round, `net` = newly absorbed into the cumulative pool,
 // `cum` = cumulative pool size carried into the NEXT round, known/novel split.
@@ -1489,11 +1509,17 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
         // repeats harmlessly, and the two streams are disjoint by construction:
         // seed_pool = float-permutation axioms, absorbed_pool = canonical
         // identity exprs).
-        let mut ap = 0
-        while ap < len(absorbed_pool) {
-            seed_pool.push(to_string(absorbed_pool[ap]))
-            ap = ap + 1
-        }
+        // [M5 H1 toggle] opt-OUT constraint, same polarity as
+        // HEXA_DRILL_NO_VERIFY (:686): unset/default = absorb-ON = pre-M5
+        // behavior IDENTICAL; =1 = the H1 absorb-OFF arm (feed-forward
+        // suppressed; the pool is still computed + DRILL_ABSORB still emitted
+        // above, only this push is gated). Vacuity contract (design SSOT §5):
+        // an ON-vs-OFF Δ=0 is an H1 REFUTATION only if some DRILL_ABSORB row
+        // shows verified>=1 at a round < R (feed-forward actually fired);
+        // otherwise it is UNTESTABLE (generator bottleneck = smash emits no
+        // identity-syntax candidates in standard vocab), never "H1 refuted".
+        seed_pool = _absorb_feed(seed_pool, absorbed_pool,
+                                 env("HEXA_DRILL_NO_ABSORB") != "1")
 
         // ── [B] Emerge step (open-well well-widening · README:75) ─────
         // After Absorb feeds verified primitives forward, the Emerge step
@@ -1507,6 +1533,20 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
         let es = emerge_step(emerge_well, round, rr.discoveries)
         emerge_well = es.vocab
         emerge_audit_emit(round, es.net_walls, es.vocab_size, 2)
+
+        // ── [M5] Emerge2 step (M4 5-generator fn-symbol synthesis) ────
+        // TELEMETRY ONLY. emerge2_step is INPUT-INDEPENDENT by design (fixed
+        // pre-registered G1–G5 candidate tables = Texas-sharpshooter guard):
+        // `round`/`rr.discoveries` are accepted for signature stability but do
+        // NOT influence generation, so this row emits the SAME alpha/beta/gamma
+        // every round (measured aiden v0.577.0: 2/2/15 @N=64). It is therefore
+        // NOT an H1 metric — absorb-ON vs OFF cannot move it by construction
+        // (H1 is measured on the DRILL_ABSORB trajectory instead, see the
+        // absorb toggle above). gamma = catalog-relative BOUNDED [2,N]
+        // inexpressibility (fp ∉ FP_2 ∪ KNOWN), NOT absolute novelty. In-memory
+        // only (no atlas write · fold stays hexa verify g5/PR).
+        let e2 = emerge2_step(round, rr.discoveries, 64)
+        emerge2_audit_emit(round, e2)
 
         // ── ADDITIVE / COMBINATORIAL screen (orthogonal pivot · Ralph 377) ──
         // Per-round delegate to the non-multiplicative congruence verifier:

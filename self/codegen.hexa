@@ -1019,8 +1019,8 @@ fn codegen(ast) {
     // M4: reset string literal dedup table
     // rt#32-SL: _strlit_def_parts module-array push removed — emit uses
     // deterministic _strlit_counter loop (mirror of fcf275f4 IC fix).
-    _strlit_keys = []
-    _strlit_ids = []
+    _strlit_keys = _hx_arr_heap_seed([])
+    _strlit_ids = _hx_arr_heap_seed([])
     _strlit_counter = 0
     _strlit_index_init()
     _destr_counter = 0
@@ -1047,6 +1047,7 @@ fn codegen(ast) {
     // a second compilation in the same process doesn't inherit the first.
     _gen2_tu_has_strict_fp = 0
     _gen2_current_fn_strict_fp = 0
+    _gen2_tu_has_vendor_ffi = 0
     let mut _gi = 0
     while _gi < len(ast) {
         let _gk = ast[_gi].kind
@@ -1233,6 +1234,11 @@ fn codegen(ast) {
             global_parts.push(ew.global)
             fwd_parts.push(ew.forward + "\n")
             fn_parts.push(ew.fn_code + "\n\n")
+            // zero-c #29 PR-2: a non-empty ew.init means native-route did NOT absorb this
+            // extern → a real hexa_ffi_dlsym(hexa_ffi_dlopen(..)) init line survives, so this
+            // program needs the partitioned-out runtime_ffi_dyn.o. (native-route survivors
+            // return init=="" at codegen.hexa's FFI-NATIVE-ROUTE.)
+            if ew.init != "" { _gen2_tu_has_vendor_ffi = 1 }
             init_parts.push(ew.init)
         } else if k == "StructDecl" {
             // T33-rebuild: emit a forward declaration so the generated
@@ -1504,6 +1510,15 @@ fn codegen(ast) {
         parts.push("/* HEXA_STRICT_FP_TU: 1 */\n")
     } else {
         parts.push("/* HEXA_STRICT_FP_TU: 0 */\n")
+    }
+    // zero-c #29 PR-2: emit both polarities so the driver detects "no vendor FFI" too.
+    // 1 = this program has a surviving vendor extern / interpreter host_ffi dispatch and
+    // must link build/runtime_ffi_dyn.o (dl* lives there post-S1); 0 = it does not, so the
+    // link stays runtime_ffi_dyn-free and byte-identical to the pre-S1 non-FFI program.
+    if _gen2_tu_has_vendor_ffi == 1 {
+        parts.push("/* HEXA_FFI_DYN_TU: 1 */\n")
+    } else {
+        parts.push("/* HEXA_FFI_DYN_TU: 0 */\n")
     }
     // T3 fix: emit `int main(int argc, char** argv)` + hexa_set_args(argc, argv)
     // 이전 구현은 `int main()` 으로 argv 를 받지 않아 args() 가 항상 빈 배열을
@@ -1889,6 +1904,94 @@ fn _gen2_arm_body_is_void(body) {
     return false
 }
 
+// ── HEXA-OWN L2.5 Rule A — @no_arena zero-arena-alloc contract ADVISORY scan ──
+// @no_arena promises the fn never touches the VAL arena: gen2_fn_decl skips
+// __hexa_fn_arena_enter/__hexa_fn_arena_return emission because these fns are
+// called from inside heapify/scope-pop (runtime scope rewind), where ANY
+// val-arena bump allocation corrupts the rewind — stdlib/runtime/numeric.hexa
+// (rt_eq_int/rt_cmp_le 🚫 markers) documents the corruption class (infinite
+// scope_pop re-entry → SIGSEGV). Composite LITERALS violate that promise on
+// the default arena-ON path (hexa_val_arena_on):
+//   Array/Tuple/TupleLit → hexa_array_new + hexa_array_push chain; the items
+//                          buffer is hexa_array_arena_alloc_items when arena on
+//   MapLit               → hexa_map_new + hexa_map_set; the HexaMapTable
+//                          slots/vals/order arrays are hexa_val_arena_calloc
+//   StructInit           → HexaValStruct via hexa_val_arena_calloc
+// String concat is deliberately NOT flagged: sanctioned @no_arena fns concat
+// strings (rt_cmp_* throw paths, rt_to_string_array/map) — the string arena is
+// a separate substrate with a heap-malloc fallback, distinct from the val-arena
+// scope stack the @no_arena contract protects.
+// ADVISORY ONLY, opt-in via HEXA_ARENA_ESCAPE_LINT=1 (the L2.5 lint flag, see
+// compiler/check/types.hexa Rule B / HX3013): the scan writes to stderr via
+// eprintln and NEVER pushes to chunks — emitted C is byte-identical flag-ON by
+// construction; flag-OFF the scan never runs (env gate is the FIRST && operand
+// at the gen2_fn_decl call site), so stderr is also byte-identical.
+// Scope: literal materialization forms only — positional struct-constructor
+// calls `Pt(…)`, method-call allocators (.push into fresh arrays), and string
+// concat are out of scope for r1. Nested FnDecl/Lambda bodies are skipped:
+// they emit as their OWN C functions (normally arena-wrapped) and do not run
+// inside this fn's @no_arena frame.
+let mut _noarena_arr_hits = 0
+let mut _noarena_map_hits = 0
+let mut _noarena_struct_hits = 0
+
+fn _noarena_scan_list(nodes) {
+    if type_of(nodes) != "array" { return 0 }
+    let mut i = 0
+    while i < len(nodes) {
+        _noarena_scan_node(nodes[i])
+        i = i + 1
+    }
+    return 0
+}
+
+fn _noarena_scan_node(node) {
+    // Empty AST slots are "" strings; literal payloads (IntLit.value) can be
+    // non-map scalars — positively gate on "map" (every parser node is a #{}
+    // full-template map, cf. _stmt_escapes_name's slot discipline).
+    if type_of(node) != "map" { return 0 }
+    let k = node.kind
+    // Nested fns/lambdas: own C fn, own arena frame — not this fn's contract.
+    if k == "FnDecl" || k == "Lambda" { return 0 }
+    if k == "Array" || k == "Tuple" || k == "TupleLit" { _noarena_arr_hits = _noarena_arr_hits + 1 }
+    if k == "MapLit" { _noarena_map_hits = _noarena_map_hits + 1 }
+    if k == "StructInit" { _noarena_struct_hits = _noarena_struct_hits + 1 }
+    _noarena_scan_node(node.left)
+    _noarena_scan_node(node.right)
+    _noarena_scan_node(node.value)
+    _noarena_scan_node(node.cond)
+    _noarena_scan_node(node.iter_expr)
+    _noarena_scan_list(node.items)
+    _noarena_scan_list(node.args)
+    _noarena_scan_list(node.fields)
+    _noarena_scan_list(node.then_body)
+    _noarena_scan_list(node.else_body)
+    _noarena_scan_list(node.body)
+    _noarena_scan_list(node.arms)
+    return 0
+}
+
+// Driver: reset counters, walk the @no_arena fn body, print one [warn] line
+// per violating shape (with site count). Mimics the existing gen2 warning
+// idiom (eprintln "[warn] …", cf. the fn-redefined / non-exhaustive-match
+// warns) — stderr only, never chunks.
+fn _gen2_noarena_lint_scan(node, fn_name) {
+    _noarena_arr_hits = 0
+    _noarena_map_hits = 0
+    _noarena_struct_hits = 0
+    _noarena_scan_list(node.body)
+    if _noarena_arr_hits > 0 {
+        eprintln("[warn] @no_arena fn `" + fn_name + "` contains " + to_string(_noarena_arr_hits) + " array/tuple literal site(s) — hexa_array_push items bump-allocate from the caller's val-arena frame; @no_arena promises zero arena touch (unsafe inside heapify/scope-pop) [HEXA_ARENA_ESCAPE_LINT]")
+    }
+    if _noarena_map_hits > 0 {
+        eprintln("[warn] @no_arena fn `" + fn_name + "` contains " + to_string(_noarena_map_hits) + " map literal site(s) — HexaMapTable slots/vals allocate via hexa_val_arena_calloc; @no_arena promises zero arena touch (unsafe inside heapify/scope-pop) [HEXA_ARENA_ESCAPE_LINT]")
+    }
+    if _noarena_struct_hits > 0 {
+        eprintln("[warn] @no_arena fn `" + fn_name + "` contains " + to_string(_noarena_struct_hits) + " struct literal site(s) — HexaValStruct allocates via hexa_val_arena_calloc; @no_arena promises zero arena touch (unsafe inside heapify/scope-pop) [HEXA_ARENA_ESCAPE_LINT]")
+    }
+    return 0
+}
+
 fn gen2_fn_decl(node) {
     let has_restrict = gen2_has_attr(node, "restrict")
     let has_flatten = gen2_has_attr(node, "flatten")
@@ -1954,6 +2057,9 @@ fn gen2_fn_decl(node) {
     // b2-fnref: expose the current fn's `let` names so the bare-Ident thunk
     // path never replaces a local var with a builtin/method thunk.
     _gen2_current_fn_lets = all_names
+    // try/catch: locals of a try-containing fn must be `volatile HexaVal` so a
+    // write inside a try body survives the longjmp (setjmp-across rollback).
+    _gen2_current_fn_has_try = _gen2_body_has_try(node.body)
     // closure mut-capture: pre-scan this fn body for `let mut` bindings that a
     // closure captures AND assigns to — box them into shared 1-element array
     // cells so mutation through the closure persists (canonical FnMut). Set
@@ -2015,7 +2121,7 @@ fn gen2_fn_decl(node) {
                 // as `HexaVal close = hexa_void();` (bare) while the
                 // assignment emits `u_close = peek();` (mangled), causing
                 // "undeclared identifier u_close" in clang.
-                hoists.push("    HexaVal " + _hexa_mangle_ident(nm) + " = hexa_void();\n")
+                hoists.push("    " + _gen2_local_decl_kw() + _hexa_mangle_ident(nm) + " = hexa_void();\n")
             }
         }
         ii = ii + 1
@@ -2083,6 +2189,13 @@ fn gen2_fn_decl(node) {
     } else {
         _gen2_arena_wrap = 1
         chunks.push("    __hexa_fn_arena_enter();\n")
+    }
+    // HEXA-OWN L2.5 Rule A — @no_arena contract ADVISORY scan (opt-in,
+    // default-OFF; env gate FIRST && operand). stderr-only: the scan never
+    // pushes to chunks, so emitted C is unchanged flag-ON and flag-OFF is
+    // byte-identical in both C and stderr. See _gen2_noarena_lint_scan.
+    if env("HEXA_ARENA_ESCAPE_LINT") == "1" && has_no_arena {
+        _gen2_noarena_lint_scan(node, _fn_name)
     }
     // Plan B Phase 3: defer/scope/spawn codegen entry.
     //   Save previous fn's state (enables nested FnDecl emission to
@@ -2788,6 +2901,12 @@ let mut _gen2_arena_wrap = 0
 //     the build driver (self/main.hexa) can inject IEEE-strict clang flags.
 let mut _gen2_current_fn_strict_fp = 0
 let mut _gen2_tu_has_strict_fp = 0
+// zero-c #29 S1/PR-2: sticky 1 once any fn in this TU has a surviving vendor extern
+// (an @link extern that native-route did NOT absorb → a real hexa_ffi_dlsym init line)
+// or an interpreter host_ffi dispatch. Feeds the `/* HEXA_FFI_DYN_TU */` marker so the
+// driver links build/runtime_ffi_dyn.o ONLY for programs that actually need dl* — the
+// S1 partition moved those symbols out of the canonical runtime.a. Mirrors _gen2_tu_has_strict_fp.
+let mut _gen2_tu_has_vendor_ffi = 0
 
 // Plan B Phase 3 — defer/scope/spawn codegen state (per-function).
 //
@@ -2816,6 +2935,31 @@ let mut _gen2_defer_flag_count = 0
 // by a nested return — state/hexa-own/step0_verdict.md.)
 let mut _gen2_defer_fn_total = 0
 
+// Drop/RAII auto-scope-exit (opt-in, default-OFF HEXA_DROP_RAII).
+//   `_drop_typed_structs`: list of struct TYPE NAMES that declare an
+//   `impl … { fn drop(self) }` (the Drop convention). Populated ONCE per
+//   transpile in codegen_full by scanning the AST for ImplBlock nodes whose
+//   `methods` contains a method named `drop`. Read (never written) on the
+//   gated auto-drop path only; left empty on the default build + every byteeq
+//   target (codegen_full skips the population when the env var is unset), so
+//   the generated C is byte-identical. Kept SEPARATE from `_method_registry`
+//   (which is source-order-sensitive and byteeq-load-bearing) so the auto-drop
+//   membership test is source-order-independent and never perturbs the registry.
+let mut _drop_typed_structs = []
+
+// _drop_typed_struct_has — membership test for `_drop_typed_structs`. Always
+// false on the default path (the list is empty unless HEXA_DROP_RAII is set
+// AND codegen_full populated it), so callers behind the env gate are no-ops
+// by construction when the feature is off.
+fn _drop_typed_struct_has(name) {
+    let mut i = 0
+    while i < len(_drop_typed_structs) {
+        if _drop_typed_structs[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
 // _gen2_count_defers — pre-scan the fn body to count DeferStmt nodes
 // so gen2_fn_decl can emit the right number of `__defer_N_active`
 // declarations at the top BEFORE body codegen assigns flag ids. The
@@ -2838,6 +2982,24 @@ fn _gen2_count_defers(stmts) {
         // Nested fn decls carry their own defer scope — skip.
         if k == "FnDecl" || k == "PureFnDecl" || k == "ExternFnDecl" { continue }
         if k == "DeferStmt" { n = n + 1 }
+        // Drop/RAII auto-scope-exit (opt-in, default-OFF HEXA_DROP_RAII):
+        // a `let r = T{…}` binding whose type T declares `fn drop(self)`
+        // registers a SYNTHETIC function-scope defer in the LetStmt arm
+        // (gen2_stmt) so the LIFO `__fn_exit` drain calls `T__drop(r)` at
+        // function exit in reverse declaration order (Rust §Destructors).
+        // The synthetic registration consumes one `__defer_N_active` flag id,
+        // so the count must include these lets — else gen2_fn_decl would
+        // emit too few `__defer_N_active` declarations and the registration's
+        // `__defer_N_active = 1;` would reference an undeclared C var.
+        // GATED: when HEXA_DROP_RAII is unset (default + all 3 byteeq targets
+        // + the gen3≡gen4 fixpoint) the count is unchanged → identical defer
+        // scaffold → byte-identical emit. `_drop_typed_structs` is also empty
+        // on that path so the membership test never matches.
+        if k == "LetStmt" && env("HEXA_DROP_RAII") != "" {
+            if type_of(s.left) != "string" && s.left.kind == "StructInit" {
+                if _drop_typed_struct_has(s.left.name) { n = n + 1 }
+            }
+        }
         // Recurse into every statement-array-shaped field. Not all
         // nodes carry these; type_of guards the no-op case.
         if type_of(s.body) == "array" { n = n + _gen2_count_defers(s.body) }
@@ -3369,7 +3531,7 @@ fn _gen2_stmt_inner(node, depth) {
             if _gen2_has_decl(node.name) {
                 return pad + _local_name + " = " + _cell + ";\n"
             }
-            return pad + "HexaVal " + _local_name + " = " + _cell + ";\n"
+            return pad + _gen2_local_decl_kw() + _local_name + " = " + _cell + ";\n"
         }
         // bt 72: if this name was hoisted (or matches a param), emit plain
         // assignment to avoid C "redefinition" errors from shadow semantics.
@@ -3391,9 +3553,49 @@ fn _gen2_stmt_inner(node, depth) {
             // Both bindings remain in scope for the rest of the block; the
             // temp is unused after the line but C-clean.
             let _tmp = "__hexa_letinit_" + node.name
-            return pad + "HexaVal " + _tmp + " = " + init + "; HexaVal " + _local_name + " = " + _tmp + ";\n"
+            return pad + _gen2_local_decl_kw() + _tmp + " = " + init + "; " + _gen2_local_decl_kw() + _local_name + " = " + _tmp + ";\n"
         }
-        return pad + "HexaVal " + _local_name + " = " + init + ";\n"
+        // Drop/RAII auto-scope-exit (opt-in, default-OFF HEXA_DROP_RAII).
+        // reference-match: Rust `Drop` (The Rust Reference §Destructors) —
+        // a value whose type implements Drop is dropped at scope exit in
+        // REVERSE declaration order, automatically (R1+R2). Here, a fresh
+        // `let r = T{…}` whose type T declares `fn drop(self)` registers a
+        // SYNTHETIC function-scope defer carrying the STATICALLY-known type T;
+        // the existing LIFO `__fn_exit` drain (gen2_fn_decl) then routes that
+        // synthetic DropStmt back through gen2_stmt, whose gated DropStmt
+        // branch emits a direct `T__drop(r)` call (order-independent of the
+        // source-order-sensitive `_method_registry`). Granularity is FUNCTION
+        // scope (coarser than Rust block scope — documented wall) and there is
+        // no move/use-after-drop tracking (an explicit `drop r` on the same
+        // binding double-drops — documented). GATED: when HEXA_DROP_RAII is
+        // unset (default + every byteeq target + gen3≡gen4) `_drop_typed_structs`
+        // is empty so the membership test never matches, no synthetic defer is
+        // registered, and the emitted let is byte-identical.
+        let mut _drop_suffix = ""
+        if env("HEXA_DROP_RAII") != "" {
+            if type_of(node.left) != "string" && node.left.kind == "StructInit" {
+                if _drop_typed_struct_has(node.left.name) {
+                    let _drop_flag = _gen2_defer_flag_count
+                    _gen2_defer_flag_count = _gen2_defer_flag_count + 1
+                    // Full-shaped synthetic DropStmt: `name` = the bound var,
+                    // `target` = the static struct type (the discriminator the
+                    // DropStmt branch uses to take the direct-emit auto path;
+                    // a user-written `drop x` carries target=="" → runtime
+                    // dispatch). Mirror the parser's DropStmt field set so any
+                    // downstream field access is total.
+                    let _syn_drop = #{
+                        "kind": "DropStmt", "name": node.name, "value": "", "op": "",
+                        "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+                        "params": "", "body": "", "args": "", "fields": "", "items": "",
+                        "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+                        "target": node.left.name, "trait_name": "", "methods": ""
+                    }
+                    _gen2_defer_bodies.push([_drop_flag, [_syn_drop]])
+                    _drop_suffix = pad + "__defer_" + to_string(_drop_flag) + "_active = 1;\n"
+                }
+            }
+        }
+        return pad + _gen2_local_decl_kw() + _local_name + " = " + init + ";\n" + _drop_suffix
     }
 
     if k == "ConstStmt" {
@@ -4183,6 +4385,78 @@ fn _gen2_stmt_inner(node, depth) {
     // demoted to `@optimize` attribute. @-prefixed attrs ride the existing
     // annotation channel and don't produce dedicated AST nodes.)
 
+    // ── Drop/RAII first slice (opt-in, default-OFF) — `drop x` → Drop::drop ──
+    //    SSOT: state/rfc_drop_raii.md. reference-match: Rust `Drop::drop`
+    //    (The Rust Reference §Destructors) · C++ RAII destructor (cppreference
+    //    "RAII"). In hexa's arena memory model the arena bulk-frees every
+    //    value at scope/frame exit, so a memory-reclaiming Drop is a no-op
+    //    (this is why DropStmt has emitted "" since v1). What Drop DOES buy —
+    //    exactly as in Rust's `impl Drop for File`/`MutexGuard` and C++
+    //    `fstream`/`lock_guard` — is DETERMINISTIC release of NON-memory
+    //    resources (file/socket fds, locks, GPU device buffers) at a precise
+    //    program point, orthogonal to the arena.
+    //
+    //    This slice lowers the EXISTING `drop x` keyword (no parser change —
+    //    frozen blob 151c52c8 untouched) to a runtime-type-dispatched call to
+    //    a user-defined `drop(self)` impl method, reusing the proven P2-6
+    //    method-dispatch idiom (hexa_is_type + Type__method, see ~L8296). It
+    //    is the explicit-`drop(x)` analogue (Rust's `core::mem::drop`), NOT
+    //    yet the auto-at-scope-exit insertion — that needs a local type
+    //    environment the gen2 C-transpile codegen does not carry (RFC §Wall).
+    //
+    //    BYTEEQ-SAFE BY CONSTRUCTION: gated behind HEXA_DROP_RAII. When the
+    //    env var is unset (the default + every byteeq target) this block does
+    //    NOT return — control falls through to the unchanged no-op below, so
+    //    the emitted C is byte-identical. The dispatch also no-ops (falls
+    //    through) when no type defines a `drop` method.
+    if k == "DropStmt" {
+        if env("HEXA_DROP_RAII") != "" {
+            // AUTO scope-exit drop (statically typed). A SYNTHETIC DropStmt
+            // registered by the LetStmt arm carries `target` = the known
+            // struct type (a user-written `drop x` always has target=="").
+            // Emit a direct `T__drop(__dropv)` call — no runtime type test,
+            // and ORDER-INDEPENDENT of `_method_registry` population (which is
+            // source-order-sensitive and byteeq-load-bearing). The receiver is
+            // referenced through gen2_expr on a full-shaped Ident node so name
+            // mangling / comptime folding match every other use site exactly.
+            if node.target != "" {
+                let _auto_recv = gen2_expr(#{
+                    "kind": "Ident", "name": node.name, "value": "", "op": "",
+                    "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+                    "params": "", "body": "", "args": "", "fields": "", "items": "",
+                    "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+                    "target": "", "trait_name": "", "methods": ""
+                })
+                return pad + "{ HexaVal __dropv = " + _auto_recv + "; " + node.target + "__drop(__dropv); }\n"
+            }
+            let _drop_types = _method_registry_lookup("drop")
+            if len(_drop_types) > 0 {
+                // Reference the dropped variable through gen2_expr on a full-
+                // shaped Ident node so name mangling / comptime folding match
+                // every other use site exactly.
+                let _drop_recv = gen2_expr(#{
+                    "kind": "Ident", "name": node.name, "value": "", "op": "",
+                    "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+                    "params": "", "body": "", "args": "", "fields": "", "items": "",
+                    "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+                    "target": "", "trait_name": "", "methods": ""
+                })
+                // Runtime type-dispatch chain: first matching Drop-impl type
+                // wins (single-eval via a C temp). Mirrors the P2-6 ternary
+                // dispatch but as a statement-position if/else-if chain.
+                let mut _drop_chain = []
+                let mut _dti = 0
+                while _dti < len(_drop_types) {
+                    let _dtn = _drop_types[_dti]
+                    let _dkw = if _dti == 0 { "if" } else { " else if" }
+                    _drop_chain.push(_dkw + " (hexa_is_type(__dropv, \"" + _dtn + "\")) { " + _dtn + "__drop(__dropv); }")
+                    _dti = _dti + 1
+                }
+                return pad + "{ HexaVal __dropv = " + _drop_recv + "; " + _drop_chain.join("") + " }\n"
+            }
+        }
+    }
+
     // ── Ownership-group statements → no-op (SPEC §11 v1).
     //    DropStmt · OwnStmt · BorrowStmt · MoveStmt are
     //    declarations of intent in the v1 arena memory model;
@@ -4949,6 +5223,51 @@ fn _gen2_fnref_method_arity(name) {
 // the script-body walk; over-broad inside lambdas (uses the enclosing fn's
 // lets) which is the safe direction (more idents left un-thunked).
 let mut _gen2_current_fn_lets = []
+
+// ── try/catch C-backend correctness (native setjmp) ─────────────────────────
+// On the gen2 C path a HexaVal local written inside a try{} body is a plain
+// non-volatile automatic across hxlcl_setjmp; C11 7.13.2.1p3 makes its value
+// INDETERMINATE on the longjmp (catch) path, and clang -O2 legally rolls it
+// back to the setjmp-time value (or tears the {tag,payload} halves). Measured
+// (ghost darwin-arm64): try{a=v;throw}catch{};return a → 0, must be v. Fix =
+// the C "volatile-across-setjmp" remedy: locals of a try-containing fn are
+// declared `volatile HexaVal`. Set per-fn in gen2_fn_decl; try-free fns emit
+// plain `HexaVal` → byte-identical outside the class.
+let mut _gen2_current_fn_has_try = false
+
+// recursive: does this stmt list contain a try/catch anywhere (incl. nested
+// bodies/arms)? Mirrors _gen2_collect_lets_stmt's traversal shape.
+fn _gen2_body_has_try(stmts) -> bool {
+    let mut i = 0
+    while i < len(stmts) {
+        let s = stmts[i]
+        let k = s.kind
+        if k == "TryCatchStmt" || k == "TryCatch" || k == "RecoverStmt" { return true }
+        if k == "IfStmt" || k == "If" {
+            if _gen2_body_has_try(s.then_body) { return true }
+            if _gen2_body_has_try(s.else_body) { return true }
+        }
+        if k == "WhileStmt" || k == "While" || k == "ForStmt" || k == "For" || k == "LoopStmt" {
+            if _gen2_body_has_try(s.body) { return true }
+        }
+        if k == "MatchStmt" || k == "Match" {
+            let mut ai = 0
+            while ai < len(s.arms) {
+                if _gen2_body_has_try(s.arms[ai].body) { return true }
+                ai = ai + 1
+            }
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// local-decl keyword: `volatile HexaVal ` inside a try-containing fn (so the
+// value survives the longjmp), else the plain `HexaVal `.
+fn _gen2_local_decl_kw() -> string {
+    if _gen2_current_fn_has_try { return "volatile HexaVal " }
+    return "HexaVal "
+}
 
 // ── Closure mutable-capture by reference (inbox:
 //    closure-mut-capture-by-value-snapshot) ──────────────────
@@ -6487,6 +6806,39 @@ fn gen2_expr(node) {
             // the IDENTICAL libc text (byte-neutral). Off the compiler self-compile
             // byteeq path (the compiler closure has 0 __hx_syscall6 call-sites; the
             // .s seeds use the native backend, not this C-transpile lowering).
+            // RFC inline-asm rung 1: `__hx_asm_nop()` → int HexaVal 0, with a real
+            // `nop` emitted inline. C-transpile mirror of the native x86/arm64
+            // `__hx_asm_nop` leaf (state/rfc_inline_asm.md) so gen2 / `hexa run`
+            // honour the intrinsic identically. ADD-only: the compiler never calls
+            // it → DEFAULT C output byte-identical. reference: Zig asm volatile("nop").
+            if name == "__hx_asm_nop" {
+                return "hexa_int(({ __asm__ volatile(\"nop\"); (long)0; }))"
+            }
+            // RFC inline-asm rung 2: `__hx_asm("<op>")` — generalized whitelisted
+            // named-opcode passthrough. C-transpile mirror of the native x86/arm64
+            // `__hx_asm` branch so gen2 / `hexa run` honour the intrinsic identically.
+            // The opcode is read from a COMPILE-TIME STRING LITERAL arg (StringLit
+            // `.value`; the literal-template rule of Rust `asm!`/GCC `__asm__`/Zig
+            // `asm`), whitelisted to {nop, pause, fence} and gated behind opt-in
+            // HEXA_INLINE_ASM. The C asm is target-conditional (#if __x86_64__) so the
+            // SAME source lowers to the right mnemonic on either host. DEFAULT (env
+            // unset) or a non-literal/unknown opcode → plain int 0 (no asm). ADD-only
+            // + env-gated: the compiler never calls __hx_asm → DEFAULT C byte-identical.
+            if name == "__hx_asm" {
+                if len(node.args) >= 1 && type_of(node.args[0]) != "string" && node.args[0].kind == "StringLit" && env("HEXA_INLINE_ASM") == "1" {
+                    let _asm_op = node.args[0].value
+                    if _asm_op == "nop" {
+                        return "hexa_int(({ __asm__ volatile(\"nop\"); (long)0; }))"
+                    }
+                    if _asm_op == "pause" {
+                        return "hexa_int(({\n#if defined(__x86_64__)\n __asm__ volatile(\"pause\");\n#else\n __asm__ volatile(\"yield\");\n#endif\n (long)0; }))"
+                    }
+                    if _asm_op == "fence" {
+                        return "hexa_int(({\n#if defined(__x86_64__)\n __asm__ volatile(\"mfence\":::\"memory\");\n#else\n __asm__ volatile(\"dmb ish\":::\"memory\");\n#endif\n (long)0; }))"
+                    }
+                }
+                return "hexa_int(0)"
+            }
             if name == "__hx_syscall0" {
                 if env("HEXA_RT_SYSCALL_NATIVE") != "" {
                     return "hexa_int(({ long __hx_scr;\n#if defined(__x86_64__)\n long __hx_scn=(long)HX_INT(" + gen2_expr(node.args[0]) + "); register long __hx_r10 __asm__(\"r10\")=0; register long __hx_r8 __asm__(\"r8\")=0; register long __hx_r9 __asm__(\"r9\")=0; __asm__ volatile(\"syscall\":\"=a\"(__hx_scr):\"0\"(__hx_scn),\"r\"(__hx_r10),\"r\"(__hx_r8),\"r\"(__hx_r9):\"rcx\",\"r11\",\"memory\");\n#else\n __hx_scr=syscall((long)HX_INT(" + gen2_expr(node.args[0]) + "));\n#endif\n __hx_scr; }))"
@@ -7052,6 +7404,8 @@ fn gen2_expr(node) {
             }
             // C2 Step 3: Dynamic FFI host dispatch (interpreter path)
             if name == "host_ffi_open" {
+                // zero-c #29 PR-2: interpreter dynamic-FFI dispatch → needs runtime_ffi_dyn.o.
+                _gen2_tu_has_vendor_ffi = 1
                 return "hexa_host_ffi_open(" + gen2_expr(node.args[0]) + ")"
             }
             if name == "host_ffi_sym" {
@@ -8108,6 +8462,20 @@ fn gen2_expr(node) {
                 if name == "forge_dispatch_embedding_bwd_scatter" {
                     return "hexa_forge_dispatch_embedding_bwd_scatter(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
                 }
+                // HEXA-FUSION L3 (LLM-path glue half): forge_dispatch_rmsnorm(
+                // x, g, y, xn, inv, d) -> int rc. Reproduces nn_lib.hexa
+                // nn_rmsnorm_fwd EXACTLY: ms = Σ_i x_i·x_i (SEQUENTIAL), ms/=d,
+                // inv = 1/_nn_sqrt(ms+1e-6) with _nn_sqrt = libm sqrt (correctly-
+                // rounded IEEE-754 op, NOT dt_sqrt/Newton — so device sqrt() is
+                // bit-identical), then xn_j = x_j·inv, y_j = g_j·xn_j. The ms
+                // reduction accumulates SEQUENTIALLY under ONE thread (NO tree
+                // re-assoc, NO atomics) and every mul feeding an add uses
+                // __dmul_rn/__dadd_rn to defeat nvcc FMA contraction (host is
+                // FP_CONTRACT OFF) → bit-exact (max|Δ|=0). Keeps Y/XN/INV DEVICE-
+                // RESIDENT. no-CUDA → -1 → host nn_rmsnorm_fwd (byte-eq).
+                if name == "forge_dispatch_rmsnorm" {
+                    return "hexa_forge_dispatch_rmsnorm(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
+                }
                 // feat/primitive-float-array — single-qubit gate kernel.
                 if name == "farr_apply_single" {
                     return "hexa_farr_apply_single(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
@@ -8225,6 +8593,20 @@ fn gen2_expr(node) {
                 if name == "forge_dispatch_moe_router_bwd" {
                     return "hexa_forge_dispatch_moe_router_bwd(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ", " + arg_strs[7] + ")"
                 }
+                // HEXA-FUSION L3 (LLM-path BWD glue half): forge_dispatch_rmsnorm_bwd(
+                // x, g, xn, inv, dy, dx, dg, d) -> int rc. `inv` is a SCALAR float
+                // (the saved forward reciprocal-rms, passed by value, __hx_to_double).
+                // Reproduces nn_lib.hexa nn_rmsnorm_bwd EXACTLY (closed vjp):
+                // dxn_i=dy_i·g_i; dg_i=dy_i·xn_i; dot=Σ_k dxn_k·x_k (SEQUENTIAL);
+                // inv3=inv·inv·inv; scale=(inv3/d)·dot; dx_i=inv·dxn_i − scale·x_i.
+                // The dot reduction accumulates SEQUENTIALLY under ONE thread (NO
+                // tree re-assoc, NO atomics); the dot mul-add and the dx mul−mul
+                // use __dmul_rn/__dadd_rn (host FP_CONTRACT OFF → no FMA fuse) →
+                // bit-exact (max|Δ|=0). NO sqrt/exp on this path. Keeps DX/DG
+                // DEVICE-RESIDENT. no-CUDA → -1 → host nn_rmsnorm_bwd (byte-eq).
+                if name == "forge_dispatch_rmsnorm_bwd" {
+                    return "hexa_forge_dispatch_rmsnorm_bwd(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ", " + arg_strs[7] + ")"
+                }
                 // flame spiking RFC — STDP pair-based GPU dispatch
                 // (archive/patches/flame-stdp-pair-gpu-kernel.md).
                 // forge_dispatch_stdp_pair(W, tr_pre, tr_post, spike, out,
@@ -8243,6 +8625,24 @@ fn gen2_expr(node) {
                 // farr_pauli_expectation loop in chemistry_vqe energy fns.
                 if name == "farr_pauli_expectation_batch" {
                     return "hexa_farr_pauli_expectation_batch("
+                        + arg_strs[0] + ", " + arg_strs[1] + ", "
+                        + arg_strs[2] + ", " + arg_strs[3] + ", "
+                        + arg_strs[4] + ", " + arg_strs[5] + ", "
+                        + arg_strs[6] + ", " + arg_strs[7] + ", "
+                        + arg_strs[8] + ")"
+                }
+                // HEXA-FUSION L3 (glue half): forge_dispatch_attn_core_fwd(Q, K,
+                // V, P_out, ctx_out, T, nh, nkv, hd) -> int rc. LLM-path GQA
+                // attention-core fwd (stdlib/flame/nn_lib.hexa nn_attn_core_fwd):
+                // per (hh,i) L=i+1 kvh=hh/(nh/nkv), scores=Σ_c Q·K·scale, causal
+                // softmax (e=dt_exp(s−m), device _hx_dt_exp_dev twin — the reason
+                // the FWD seam is no longer DEFERRED), ctx=Σ_j P·V. scale =
+                // 1/libm-sqrt(hd) (IEEE correctly-rounded == device sqrt). ONE
+                // thread SEQUENTIAL (NO tree/atomics), __dmul_rn/__dadd_rn defeat
+                // FMA → bit-exact (max|Δ|=0). Keeps P_out/ctx_out DEVICE-RESIDENT.
+                // no-CUDA → -1 → host loop.
+                if name == "forge_dispatch_attn_core_fwd" {
+                    return "hexa_forge_dispatch_attn_core_fwd("
                         + arg_strs[0] + ", " + arg_strs[1] + ", "
                         + arg_strs[2] + ", " + arg_strs[3] + ", "
                         + arg_strs[4] + ", " + arg_strs[5] + ", "
@@ -8382,6 +8782,28 @@ fn gen2_expr(node) {
                 // loss_scale). Returns 1 if applied, 0 if AMP-overflow skip.
                 if name == "adamw_step_mixed" {
                     return "hexa_adamw_step_mixed("
+                        + arg_strs[0] + ", " + arg_strs[1] + ", "
+                        + arg_strs[2] + ", " + arg_strs[3] + ", "
+                        + arg_strs[4] + ", " + arg_strs[5] + ", "
+                        + arg_strs[6] + ", " + arg_strs[7] + ", "
+                        + arg_strs[8] + ", " + arg_strs[9] + ", "
+                        + arg_strs[10] + ", " + arg_strs[11] + ")"
+                }
+                // HEXA-FUSION L3 (LLM-path ATTN BWD glue half):
+                // forge_dispatch_attn_core_bwd(Q, K, V, P, dctx, dQ, dK, dV, T,
+                // nh, nkv, hd) -> int rc. 12 farr-ids/ints (NO scalar-by-value).
+                // Reproduces nn_lib.hexa nn_attn_core_bwd EXACTLY (closed vjp):
+                // scale=1/sqrt(hd) [libm sqrt], dP_row[j]=Σ_c dctx·V (SEQUENTIAL),
+                // sdot=Σ_j P·dP_row, dV+=P·dctx, dS=P·(dP_row−sdot)·scale,
+                // dQ+=Σ_j dS·K, dK+=Σ_i dS·Q. The dV/dK cross-head accumulation is
+                // byte-eq ONLY in host (hh→i→j→c) order → the whole kernel runs on
+                // ONE thread (NO atomics/tree re-assoc); __dmul_rn/__dadd_rn/
+                // __dsub_rn defeat FMA (host FP_CONTRACT OFF) → max|Δ|=0. NO exp on
+                // the bwd path. dQ/dK/dV ACCUMULATE INTO (caller pre-zeros). no-CUDA
+                // → -1 → host nn_attn_core_bwd (byte-eq). (attn_core_FWD deferred —
+                // libm-exp softmax has no bit-exact device exp twin.)
+                if name == "forge_dispatch_attn_core_bwd" {
+                    return "hexa_forge_dispatch_attn_core_bwd("
                         + arg_strs[0] + ", " + arg_strs[1] + ", "
                         + arg_strs[2] + ", " + arg_strs[3] + ", "
                         + arg_strs[4] + ", " + arg_strs[5] + ", "
@@ -10361,13 +10783,33 @@ let mut _strlit_counter = 0
 let mut _strlit_idx_keys = []
 let mut _strlit_idx_ids = []
 
+// T33 (convergence codegen-hexa-2) heap-seed helper: force an array's items
+// buffer onto the malloc heap (positive cap) BEFORE any deep-mark push, so a
+// later arena rewind can never reuse/overwrite it. push_nostat never touches
+// the arena (runtime_core_emit.hexa:3261 — its grow is promote-to-heap /
+// realloc only); a dummy push + truncate(0) leaves len=0, cap=+8 (heap), and
+// hexa_array_push's arena entry needs cap<0 or cap==0 — a positive-cap array's
+// grows all take the realloc path, so arena re-entry is structurally impossible.
+// Without seeding, the first _strlit_dedup push happens under gen2_expr's live
+// scope mark (__hexa_val_mark_top>0) → the items buffer can land in the fn
+// arena → frame rewind lets a sibling bump-alloc reuse the slot → the __hexa_sl_
+// init emit reads a clobbered literal (darwin-arm64 miscompile-zero /
+// determinism / codegen-guard INTERMITTENT RED).
+fn _hx_arr_heap_seed(a) {
+    let mut r = a
+    r = r.push_nostat("")
+    r = r.truncate(0)
+    return r
+}
+
 fn _strlit_index_init() {
-    let mut ik = []
-    let mut iv = []
+    // Seed the outer bucket arrays EMPTY first (truncate would wipe filled buckets).
+    let mut ik = _hx_arr_heap_seed([])
+    let mut iv = _hx_arr_heap_seed([])
     let mut i = 0
     while i < 64 {
-        ik.push([])
-        iv.push([])
+        ik.push(_hx_arr_heap_seed([]))
+        iv.push(_hx_arr_heap_seed([]))
         i = i + 1
     }
     _strlit_idx_keys = ik
@@ -14195,6 +14637,34 @@ fn codegen_full(ast) {
     _lambda_def_parts = []
     _lambda_fwd_sigs = []
     _method_registry = []
+    // Drop/RAII auto-scope-exit (opt-in, default-OFF HEXA_DROP_RAII): record
+    // which struct types declare an `impl … { fn drop(self) }` so the LetStmt
+    // arm can register a synthetic scope-exit drop for `let r = T{…}` bindings.
+    // Scanning a SEPARATE set (not `_method_registry`) keeps this source-order-
+    // INDEPENDENT and never perturbs the byteeq-load-bearing registry. GATED:
+    // left empty on the default build + every byteeq target + the gen3≡gen4
+    // fixpoint (the env var is never exported there), so every gated reader is
+    // a no-op and the emitted C is byte-identical to the post-#4065 output.
+    _drop_typed_structs = []
+    if env("HEXA_DROP_RAII") != "" {
+        let mut _dti = 0
+        while _dti < len(ast) {
+            let _dtn = ast[_dti]
+            if type_of(_dtn) != "string" && _dtn.kind == "ImplBlock" && type_of(_dtn.methods) == "array" {
+                let mut _dmi = 0
+                while _dmi < len(_dtn.methods) {
+                    let _dm = _dtn.methods[_dmi]
+                    if type_of(_dm) != "string" && _dm.name == "drop" {
+                        if !_drop_typed_struct_has(_dtn.target) {
+                            _drop_typed_structs.push(_dtn.target)
+                        }
+                    }
+                    _dmi = _dmi + 1
+                }
+            }
+            _dti = _dti + 1
+        }
+    }
     // Operator overloading (opt-in): pre-register impl methods so `a + b`
     // dispatch is source-order-independent. NO-OP unless HEXA_OP_OVERLOAD set.
     _op_overload_prescan(ast)
@@ -14203,8 +14673,8 @@ fn codegen_full(ast) {
     _known_set_init()
     _ic_counter = 0
     // rt#32-SL: string literal dedup table reset — mirror codegen_c2's reset.
-    _strlit_keys = []
-    _strlit_ids = []
+    _strlit_keys = _hx_arr_heap_seed([])
+    _strlit_ids = _hx_arr_heap_seed([])
     _strlit_counter = 0
     _strlit_index_init()
     // b2-fnref: reset by-value builtin/method thunk set (mirror codegen_c2).
@@ -14441,6 +14911,11 @@ fn codegen_full(ast) {
             global_parts.push(ew.global)
             fwd_parts.push(ew.forward + "\n")
             fn_parts.push(ew.fn_code + "\n\n")
+            // zero-c #29 PR-2: a non-empty ew.init means native-route did NOT absorb this
+            // extern → a real hexa_ffi_dlsym(hexa_ffi_dlopen(..)) init line survives, so this
+            // program needs the partitioned-out runtime_ffi_dyn.o. (native-route survivors
+            // return init=="" at codegen.hexa's FFI-NATIVE-ROUTE.)
+            if ew.init != "" { _gen2_tu_has_vendor_ffi = 1 }
             init_parts.push(ew.init)
         } else if k == "StructDecl" {
             // T33-rebuild: emit a forward declaration so the generated
@@ -14614,7 +15089,7 @@ fn codegen_full(ast) {
     // runtime.c's own arm64-darwin/linux split). RECURRENCE-PRONE: any future
     // edit swapping the call site back to bare `setjmp` re-opens the defect.
     out_parts.push("#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)\n")
-    out_parts.push("int hxlcl_setjmp(void *buf) __asm__(\"_hxlcl_setjmp\");\n")
+    out_parts.push("int hxlcl_setjmp(void *buf) __asm__(\"_hxlcl_setjmp\") __attribute__((returns_twice));\n")
     out_parts.push("#elif defined(__x86_64__)\n")
     out_parts.push("// RFC061 §M8 ∅−8: x86_64-linux uses the NATIVE musl hxlcl_setjmp (real\n")
     out_parts.push("// global in runtime.o), matching the native musl hxlcl_longjmp the re-\n")
