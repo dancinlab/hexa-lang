@@ -1,0 +1,54 @@
+name: catalog-code-uniqueness
+
+# ── catalog HXxxxx diagnostic-code uniqueness gate (BLOCKING) ────────────────
+#
+# Fails a PR that leaves compiler/diag/catalog.hexa with any DUPLICATE
+# `code: "HXxxxx"` DiagSpec field. This is the durable root-cause fix for
+# convergence catalog-hexa-1: parallel opt-in-diagnostic PRs each pick "the
+# next free HX code" against their own branch-time main, so two that land close
+# together register two different diagnostics under the SAME code at different
+# lines. `git merge-tree` sees no textual overlap (conflict=0) and auto-merge
+# silently lands the duplicate; the byteeq gate cannot catch it because the
+# diagnostics are opt-in default-OFF (default emit stays byte-identical). A
+# dedicated uniqueness check is the only thing that structurally can.
+#
+# This is a REAL integrity check (a duplicate code is a defect), so it is
+# BLOCKING — no continue-on-error. It is scoped to ONLY the uniqueness check
+# (pure grep/sort, no build) so it cannot flake on anything unrelated, and it
+# runs on a FREE ubuntu runner in milliseconds. Local mirror + SSOT logic:
+# tool/check_catalog_unique.sh (same script the job invokes).
+
+on:
+  pull_request:
+    paths:
+      - 'compiler/diag/catalog.hexa'
+      - 'tool/check_catalog_unique.sh'
+      - '.github/workflows/catalog-code-uniqueness.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'compiler/diag/catalog.hexa'
+      - 'tool/check_catalog_unique.sh'
+      - '.github/workflows/catalog-code-uniqueness.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cancel a SUPERSEDED run only on PR re-push; push/dispatch runs always
+  # complete so main's history stays intact. Inert (cancels stale work only).
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  catalog-code-uniqueness:
+    name: no duplicate HXxxxx diagnostic code in catalog.hexa
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check — every DiagSpec code in catalog.hexa is unique
+        shell: bash
+        run: bash tool/check_catalog_unique.sh
