@@ -5000,10 +5000,10 @@
                 "detail": ""
               },
               {
-                "name": "Inline asm (`asm!`) — absent (extern fn + syscall emit exist).",
+                "name": "Inline asm (`asm!`) — RFC + rungs 1-2 LANDED (`state/rfc_inline_asm.md`).",
                 "role": "",
                 "id": "language-surface-tier-2-rust-only-gaps-go-also-lacks-lower-priority-inline-asm-a",
-                "detail": ""
+                "detail": "The release-safe surface has two forms, both dispatched in native codegen like the existing `__hx_syscall0`/`__hx_syscall6` raw-instruction intrinsics (no new keyword, no new @attr — frozen parser 151c52c8 untouched; `@asm` already parses at `self/parser.hexa:332` but only emits a GCC C-fragment for cortex-M, not native bytes): rung 1 = per-opcode family `__hx_asm_<mnemonic>` (ships `__hx_asm_nop()`); rung 2 = the GENERALIZED passthrough `__hx_asm(\"<op>\")` where the opcode is a COMPILE-TIME STRING LITERAL whitelisted to {nop, pause, fence} → per-target lowering (x86 nop/pause/mfence · arm64 nop/yield/`dmb ish`), gated behind opt-in `HEXA_INLINE_ASM` (default-OFF). Wired end-to-end across the syscall-precedent sites: bind whitelist (`compiler/check/bind.hexa`, `__hx_asm`), x86_64 emit (`compiler/codegen/x86_64_linux.hexa`) + encodings (`compiler/emit/elf_x86_64.hexa`: PAUSE=F3 90, MFENCE=0F AE F0), arm64 emit (`compiler/codegen/arm64_darwin.hexa`) + encodings (`compiler/emit/macho_arm64.hexa`: NOP=0xd503201f, YIELD=0xd503203f, DMB ish=0xd5033bbf, shared by the arm64-linux ELF backend), and the C-transpile mirror (`self/codegen.hexa`, target-conditional `__asm__ volatile`). ADD-only + env-gated — the compiler closure never calls `__hx_asm*` AND the default build leaves `HEXA_INLINE_ASM` unset, so DEFAULT emit is byte-identical and gen3≡gen4 holds (CI byteeq 3-target gated). stdlib registry contract (`asm_passthrough_intrinsic`/`asm_native_wired`) + interpreter test in `stdlib/firmware/asm.hexa`. reference-match: Rust `core::arch::asm!` literal-template rule, GCC `__asm__ volatile`, Zig `asm`. Ladder rung 3 = `rdtsc`/`mrs cntvct`; rung-4 WALL = true `asm!{\"text\"}` block (new parser block syntax → frozen-seed reflow + an in-tree mnemonic→bytes assembler, both forbidden under release-integrity today)."
               },
               {
                 "name": "Function overloading — absent ('later def ignored', codegen comment).",
