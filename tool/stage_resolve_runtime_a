@@ -2128,7 +2128,18 @@ build_runtime_a_from_source() {
         # shim.c). DEFAULT (unset) adds NO -D and NO member → shim.o + archive byte-
         # identical (release-integrity invariant). x86_64-linux ONLY.
         if [ "${HEXA_RT_NATIVE_CALLOC:-0}" = "1" ]; then
-            if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
+            # zeroc #29: non-fp Route-C leaves (free/calloc/realloc) are pointer/size-only
+            # (no xmm fp-ABI) → the arm64 backend already lowers them (arm64_darwin.hexa
+            # _is_cabi && !_cabi_is_fp; routec_cabi_smoke emits arm64-darwin). The old
+            # x86-only gate was a libm-template copy. Extend to all 3 non-fp hosts.
+            # convergence stage-resolve-runtime-a-2 (Fable b2xiwq4w3).
+            _rnca_target=""
+            case "$(uname -s) $(uname -m)" in
+                "Linux x86_64"|"Linux amd64")  _rnca_target="x86_64-linux-gnu" ;;
+                "Linux aarch64"|"Linux arm64") _rnca_target="arm64-linux-gnu" ;;
+                "Darwin arm64")                _rnca_target="arm64-apple-darwin" ;;
+            esac
+            if [ -n "$_rnca_target" ]; then
                 local _rnca_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
                 if [ -z "$_rnca_bin" ]; then
                     echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL: HEXA_RT_NATIVE_CALLOC=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
@@ -2140,23 +2151,33 @@ build_runtime_a_from_source() {
                 printf 'fn _rnca_unused() {}\n' > "$_rnca_drv"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC: emitting native Route C hxlcl_calloc .o via $_rnca_bin (HEXA_CABI_HXLCL=1, replacing libc-shim calloc member)…"
                 env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnca_bin" "$_rnca_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnca_s" stdlib/runtime/hxlcl_core.hexa \
+                    "$_rnca_bin" "$_rnca_drv" --emit=asm --target="$_rnca_target" -o "$_rnca_s" stdlib/runtime/hxlcl_core.hexa \
                     >"build/_rnca_calloc.log" 2>&1 \
                     || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL: calloc Route C asm emit failed — see build/_rnca_calloc.log" >&2; cat "build/_rnca_calloc.log" >&2; return 1; }
                 [ -s "$_rnca_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL: empty $_rnca_s" >&2; return 1; }
                 $CC $_mo_archflag -c "$_rnca_s" -o "$_rnca_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL: assemble $_rnca_s failed" >&2; return 1; }
+                # per-OS single-strong-def isolate (darwin = Mach-O _-prefix + no GNU objcopy).
+                # A cp fallback would keep the whole-module .o's sibling C-ABI strong defs →
+                # ld -r multidef bomb, so a missing isolate tool is a FATAL (not a silent pass).
+                _rnca_ksym="hxlcl_calloc"; [ "$(uname -s)" = "Darwin" ] && _rnca_ksym="_hxlcl_calloc"
                 if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_calloc "$_rnca_full" "$_rnca_o" \
+                    objcopy --keep-global-symbol="$_rnca_ksym" "$_rnca_full" "$_rnca_o" \
                         || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL: objcopy isolate calloc failed" >&2; return 1; }
+                elif command -v llvm-objcopy >/dev/null 2>&1; then
+                    llvm-objcopy --keep-global-symbol="$_rnca_ksym" "$_rnca_full" "$_rnca_o" \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL: llvm-objcopy isolate calloc failed" >&2; return 1; }
+                elif [ "$(uname -s)" = "Darwin" ]; then
+                    ld -r "$_rnca_full" -o "$_rnca_o" -exported_symbol "$_rnca_ksym" \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL: ld -r isolate calloc failed" >&2; return 1; }
                 else
-                    cp "$_rnca_full" "$_rnca_o"
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL: no isolate tool (objcopy/llvm-objcopy/ld -r) on $(uname -sm) — cp fallback = multidef bomb, refusing" >&2; return 1
                 fi
                 [ -f "$_rnca_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL: $_rnca_o not produced" >&2; return 1; }
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_CALLOC"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnca_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC: hxlcl_calloc → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_CALLOC (calloc dropped) — ld -r multidef gate validates"
             else
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC: HEXA_RT_NATIVE_CALLOC=1 IGNORED — fp-ABI xmm Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim calloc member" >&2
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC: HEXA_RT_NATIVE_CALLOC=1 IGNORED — non-fp Route C hosts = x86_64-linux·arm64-linux·darwin-arm64 (host=$(uname -sm) ineligible); retaining libc shim calloc member" >&2
             fi
         fi
         # ── RFC061 §M8 RT-NATIVE-REALLOC (Route C whole-module emit · COMPOSITE
@@ -2175,7 +2196,18 @@ build_runtime_a_from_source() {
         # NO member → shim.o + archive byte-identical (release-integrity invariant).
         # x86_64-linux ONLY.
         if [ "${HEXA_RT_NATIVE_REALLOC:-0}" = "1" ]; then
-            if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
+            # zeroc #29: non-fp Route-C leaves (free/calloc/realloc) are pointer/size-only
+            # (no xmm fp-ABI) → the arm64 backend already lowers them (arm64_darwin.hexa
+            # _is_cabi && !_cabi_is_fp; routec_cabi_smoke emits arm64-darwin). The old
+            # x86-only gate was a libm-template copy. Extend to all 3 non-fp hosts.
+            # convergence stage-resolve-runtime-a-2 (Fable b2xiwq4w3).
+            _rnre_target=""
+            case "$(uname -s) $(uname -m)" in
+                "Linux x86_64"|"Linux amd64")  _rnre_target="x86_64-linux-gnu" ;;
+                "Linux aarch64"|"Linux arm64") _rnre_target="arm64-linux-gnu" ;;
+                "Darwin arm64")                _rnre_target="arm64-apple-darwin" ;;
+            esac
+            if [ -n "$_rnre_target" ]; then
                 local _rnre_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
                 if [ -z "$_rnre_bin" ]; then
                     echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: HEXA_RT_NATIVE_REALLOC=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
@@ -2187,23 +2219,33 @@ build_runtime_a_from_source() {
                 printf 'fn _rnre_unused() {}\n' > "$_rnre_drv"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC: emitting native Route C hxlcl_realloc .o via $_rnre_bin (HEXA_CABI_HXLCL=1, replacing libc-shim realloc member)…"
                 env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnre_bin" "$_rnre_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnre_s" stdlib/runtime/hxlcl_core.hexa \
+                    "$_rnre_bin" "$_rnre_drv" --emit=asm --target="$_rnre_target" -o "$_rnre_s" stdlib/runtime/hxlcl_core.hexa \
                     >"build/_rnre_realloc.log" 2>&1 \
                     || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: realloc Route C asm emit failed — see build/_rnre_realloc.log" >&2; cat "build/_rnre_realloc.log" >&2; return 1; }
                 [ -s "$_rnre_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: empty $_rnre_s" >&2; return 1; }
                 $CC $_mo_archflag -c "$_rnre_s" -o "$_rnre_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: assemble $_rnre_s failed" >&2; return 1; }
+                # per-OS single-strong-def isolate (darwin = Mach-O _-prefix + no GNU objcopy).
+                # A cp fallback would keep the whole-module .o's sibling C-ABI strong defs →
+                # ld -r multidef bomb, so a missing isolate tool is a FATAL (not a silent pass).
+                _rnre_ksym="hxlcl_realloc"; [ "$(uname -s)" = "Darwin" ] && _rnre_ksym="_hxlcl_realloc"
                 if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_realloc "$_rnre_full" "$_rnre_o" \
+                    objcopy --keep-global-symbol="$_rnre_ksym" "$_rnre_full" "$_rnre_o" \
                         || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: objcopy isolate realloc failed" >&2; return 1; }
+                elif command -v llvm-objcopy >/dev/null 2>&1; then
+                    llvm-objcopy --keep-global-symbol="$_rnre_ksym" "$_rnre_full" "$_rnre_o" \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: llvm-objcopy isolate realloc failed" >&2; return 1; }
+                elif [ "$(uname -s)" = "Darwin" ]; then
+                    ld -r "$_rnre_full" -o "$_rnre_o" -exported_symbol "$_rnre_ksym" \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: ld -r isolate realloc failed" >&2; return 1; }
                 else
-                    cp "$_rnre_full" "$_rnre_o"
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: no isolate tool (objcopy/llvm-objcopy/ld -r) on $(uname -sm) — cp fallback = multidef bomb, refusing" >&2; return 1
                 fi
                 [ -f "$_rnre_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: $_rnre_o not produced" >&2; return 1; }
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_REALLOC"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnre_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC: hxlcl_realloc → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_REALLOC (realloc dropped) — ld -r multidef gate validates"
             else
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC: HEXA_RT_NATIVE_REALLOC=1 IGNORED — fp-ABI xmm Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim realloc member" >&2
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC: HEXA_RT_NATIVE_REALLOC=1 IGNORED — non-fp Route C hosts = x86_64-linux·arm64-linux·darwin-arm64 (host=$(uname -sm) ineligible); retaining libc shim realloc member" >&2
             fi
         fi
         # ── RFC061 §M8 RT-NATIVE-GETENV (Route C whole-module emit · non-libm leaf
