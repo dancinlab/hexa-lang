@@ -81,7 +81,7 @@ jobs:
   corpus-census:
     name: static-types corpus census (HX3011/HX3016/HX3017 · advisory)
     runs-on: ubuntu-latest      # FREE runner only — paid runners forbidden (#4016)
-    timeout-minutes: 25         # budget target <25 min: full corpus (~3.8k) + parallel fan; advisory so a timeout blocks nothing
+    timeout-minutes: 60         # full corpus (~3.8k files) + parallel fan MEASURED >25 min (run 28716733095 was killed mid-xargs at the 25-min cap, summary never reached → no census verdict); the one-time aprime build (~min) + ~3.8k sub-second-to-second front-end runs at nproc≈4 lands ~40 min, so 60 gives margin. Advisory (continue-on-error) so a timeout blocks nothing — but a timeout produces NO census data, which is why the cap must clear the real runtime.
     continue-on-error: true     # ADVISORY — never a required check
     steps:
       - name: Checkout
