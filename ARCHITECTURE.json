@@ -346,6 +346,20 @@
         "value": "catalog.hexa에 같은 code:\"HXxxxx\"가 둘(HX3019=return-borrow E0515 #4555 + assoc-types not-bound E0046)로 중복 배정 → 진단코드 충돌·release-integrity 결함(convergence catalog-hexa-1). #4562가 assoc not-bound을 HX3019→HX3022(E0046)로 renumber해 즉시 해소.",
         "threshold": "재발조건=신규 진단 추가 시 기존 code와 충돌하는지 사후검증 부재. 해결=catalog-code-uniqueness.yml(.github/workflows/ + tool/check_catalog_unique.sh)=BLOCKING CI 게이트로 catalog.hexa 내 중복 code:\"HXxxxx\" 거부(#4563·convergence catalog-hexa-1 root fix). 현행 네임스페이스=HX3019 E0515(return-borrow #4555)·HX3020 E0437(assoc surplus #4085)·HX3021 E0502(borrow-conflict PENDING #4557)·HX3022 E0046(assoc not-bound #4562). stack-landing-guard.yml과 나란히 서는 release-integrity 게이트.",
         "source": ".github/workflows/catalog-code-uniqueness.yml"
+      },
+      {
+        "id": "selfhost-byteeq-real-yml-1",
+        "state": "pos-conv",
+        "value": "느린 byteeq-real 게이트(~30min ghost darwin serial 큐·flake/requeue)가 병렬·스택 PR을 CI 도중 stale화: PR이 게이트 대기하는 사이 main이 sibling으로 전진→GitHub가 DIRTY/CONFLICTING 표기+admin merge 거부. 실코드충돌·HX충돌 아닌 순수 churn-race(merge-tree conflict-marker=0·catalog/CHANGELOG auto-resolve). mergeability 캐시 재계산 안 됨.",
+        "threshold": "재발=여러 PR 같은시간창 byteeq 대기 중 main 전진. 해결=owner refresh(격리 worktree merge origin/main→push·NO force·merge-tree로 code conflict 0 선확인). RED/BLOCKED 실충돌 오판 말 것(merge-tree+pre-conflict GREEN 확인). 다수 PR=단일 드레이너 순차소진+느린 byteeq PR 마지막.",
+        "source": ".github/workflows/selfhost-byteeq-real.yml"
+      },
+      {
+        "id": "selfhost-byteeq-real-yml-2",
+        "state": "pos-conv",
+        "value": "선택적 홀: byteeq-real은 self-hosted(ghost) flaky runner라 required-check 아님(gates-summary만 required·github-hosted). GitHub auto-merge가 required 충족 순간 발화→codegen/runtime PR이 byteeq-real GREEN verdict 없이 착지 가능(#4557 borrowck·byteeq run superseded-cancelled 채 auto-merge). byteeq-neutral opt-in default-OFF엔 무해(flag-gate 불변식+base byteeq-green으로 성립)나 BIT-CHANGING엔 release-integrity 위반.",
+        "threshold": "재발=compiler/runtime 파일 PR이 auto-merge enabled+byteeq-real 미완. 해결=(1)드레이너 규율=codegen/runtime-touching PR은 byteeq-real 완료GREEN 확인 후 머지(gates-summary만으로 auto-merge 금지·branch protection 의존 말 것). (2)byteeq-neutral opt-in은 flag-gate 불변식+sibling base-green 정당화+사후 main byteeq GREEN 검증. self-hosted flaky라 required 승격은 트레이드오프(전 PR 차단).",
+        "source": ".github/workflows/selfhost-byteeq-real.yml"
       }
     ]
   },
