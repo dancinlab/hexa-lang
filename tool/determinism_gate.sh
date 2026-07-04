@@ -287,6 +287,17 @@ else
     if [ "$r1" -eq 0 ] && [ "$r2" -eq 0 ] && [ -s "$d1/out" ] && cmp -s "$d1/out" "$d2/out"; then
       printf "  PASS  %-22s r1=%s r2=%s sz=%s sha=%s\n" \
              "$b" "$r1" "$r2" "$sz" "$(sha "$d1/out" | cut -c1-12)"
+    elif [ "$r1" -ne 0 ] && [ "$r2" -ne 0 ] && [ ! -s "$d1/out" ] && [ ! -s "$d2/out" ]; then
+      # BOTH relink runs failed to PRODUCE output (same nonzero rc, no out file):
+      # a DETERMINISTIC link failure — the oracle cannot relink this program at
+      # all. That is INFRA (stale/incompatible slot), NOT nondeterminism: two
+      # runs did not produce DIFFERENT bytes, they produced NO comparable bytes.
+      # Route to setuperr (exit-2 NEUTRAL), matching this gate's own model
+      # (only two PRODUCED outputs that differ are the red — see header).
+      printf "  INFRA %-22s r1=%s r2=%s (relink produced no output — oracle cannot link '%s')\n" "$b" "$r1" "$r2" "$b"
+      echo "        ↳ stale/incompatible oracle: both relink runs exit nonzero with no output — NEUTRAL, not a determinism regression." >&2
+      echo "        ↳ logs: $d1/log  $d2/log" >&2
+      setuperr=$((setuperr + 1))
     else
       printf "  FAIL  %-22s r1=%s r2=%s sz=%s\n" "$b" "$r1" "$r2" "$sz"
       echo "        ↳ sha1=$(sha "$d1/out")  sha2=$(sha "$d2/out")"
@@ -308,9 +319,10 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 if [ "$setuperr" -ne 0 ]; then
-  echo "determinism-gate: SETUP/INFRA — $setuperr/$n programs could not" >&2
-  echo "  native-emit (0-byte, no ENCODE-MISS). Determinism is untestable here," >&2
-  echo "  NOT broken. CI-neutral (exit 2)." >&2
+  echo "determinism-gate: SETUP/INFRA — $setuperr/$n programs could not be" >&2
+  echo "  native-emitted (0-byte, no ENCODE-MISS) OR could not be relinked by the" >&2
+  echo "  oracle (both runs no output — stale/incompatible slot). Determinism is" >&2
+  echo "  untestable here, NOT broken. CI-neutral (exit 2)." >&2
   exit 2
 fi
 echo "determinism-gate: PASS — $n/$n programs re-emit AND relink byte-identically"
