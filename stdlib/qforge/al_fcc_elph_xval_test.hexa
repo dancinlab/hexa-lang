@@ -1,4 +1,4 @@
-// NOT @ci_gate — 5-density BZ convergence sweep (mesh 4→12, 12³ q-mesh × 600-pt α²F histogram) ≈ 53s > the aggregate 30s/test wall (measured, build-independent iteration count). Heavy numeric integration, not a fast deterministic ci-gate test; run under a longer-budget pod. (infra-wall-noneval: compute-timeout quarantined from the curated cohort)
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
 //
 // al_fcc_elph_xval.hexa — QFORGE-NC COMPOSED el-ph PIPELINE validated END-TO-END
 // on fcc ALUMINUM against PUBLISHED literature values — FREE, native, NO QE, NO pod.
