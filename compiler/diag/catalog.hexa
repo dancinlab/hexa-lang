@@ -448,7 +448,7 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
-        code: "HX3020",
+        code: "HX3021",
         title: "conflicting borrow while a mutable borrow is live",
         // Warning band (SSOT F4 warn-first), the PAIR of the HX3019 loan-pass
         // family: the opt-in borrow checker (`HEXA_BORROWCK=1`) surfaces a

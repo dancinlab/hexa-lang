@@ -420,14 +420,14 @@ fn _run_ret_probe(label: string, src: string, want_on: i64) -> bool {
     return ok
 }
 
-// ── HEXA-OWN E2+E3 — borrow-conflict rule (HX3020, Rust E0502) ────
+// ── HEXA-OWN E2+E3 — borrow-conflict rule (HX3021, Rust E0502) ────
 //
 // The E2 loan registry (name → origin, mutability bit, live via
 // kill-on-reassign) is wired to E3's first conflict check: a NEW borrow
 // `&x` / `&mut x` over a function-local that already has a LIVE loan of the
 // same origin conflicts when the existing loan is `&mut` (any second borrow
 // illegal) OR the new borrow is `&mut` (mutable demands exclusivity). Two
-// shared borrows never conflict. ON → 1 HX3020 per hazard; OFF → empty
+// shared borrows never conflict. ON → 1 HX3021 per hazard; OFF → empty
 // stream (byteeq-neutral). Controls (both-shared, sequential-after-kill,
 // different-origin) stay at 0.
 
@@ -489,9 +489,9 @@ fn _src_fp_diff_origin() -> string {
     return s
 }
 
-// HX3020 probe runner — mirrors `_run_ret_probe`, keyed on the borrow-
+// HX3021 probe runner — mirrors `_run_ret_probe`, keyed on the borrow-
 // conflict code and asserting every OTHER code is 0 (probe hygiene). STRICT
-// re-bands HX3020 to Error, so the error-band count must equal the HX3020
+// re-bands HX3021 to Error, so the error-band count must equal the HX3021
 // count. OFF → want 0 (empty stream).
 fn _run_conflict_probe(label: string, src: string, want_on: i64) -> bool {
     let strict = env("HEXA_BORROWCK_STRICT") == "1"
@@ -500,17 +500,17 @@ fn _run_conflict_probe(label: string, src: string, want_on: i64) -> bool {
     if flag_on { want = want_on }
     let mut ok = true
     println("")
-    println("── " + label + " (expect HX3020 ×" + to_string(want) + ") ──")
+    println("── " + label + " (expect HX3021 ×" + to_string(want) + ") ──")
     let d = _compile_probe(label, src)
-    let n = _count_code(d, "HX3020")
+    let n = _count_code(d, "HX3021")
     let other = len(d) - n
     _print_diags(d)
     if n != want {
-        println("  FAIL: HX3020 = " + to_string(n) + ", want " + to_string(want))
+        println("  FAIL: HX3021 = " + to_string(n) + ", want " + to_string(want))
         ok = false
     }
     if other != 0 {
-        println("  FAIL: stray non-HX3020 diagnostics = " + to_string(other))
+        println("  FAIL: stray non-HX3021 diagnostics = " + to_string(other))
         ok = false
     }
     if strict {
@@ -776,7 +776,7 @@ fn main() {
         if !_run_ret_probe("fp_ref_no_escape", _src_fp_ref_no_escape(), 0) { ok = false }
         if !_run_ret_probe("fp_ret_global_ref", _src_fp_ret_global_ref(), 0) { ok = false }
         if !_run_ret_probe("fp_ref_killed", _src_fp_ref_killed(), 0) { ok = false }
-        // HEXA-OWN E2+E3 — borrow-conflict (HX3020, Rust E0502). Hazards → ×1
+        // HEXA-OWN E2+E3 — borrow-conflict (HX3021, Rust E0502). Hazards → ×1
         // ON, controls → 0. OFF sweep asserts a fully empty stream for all.
         if !_run_conflict_probe("hz_shared_while_mut", _src_hz_shared_while_mut(), 1) { ok = false }
         if !_run_conflict_probe("hz_mut_while_mut", _src_hz_mut_while_mut(), 1) { ok = false }

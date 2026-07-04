@@ -757,7 +757,7 @@ fn _bck_ref_find_conflict(origin: string, new_is_mut: bool) -> i64 {
     return 0 - 1
 }
 
-// HX3020 emit (borrow-conflict, Rust E0502) — same-site dedup + STRICT
+// HX3021 emit (borrow-conflict, Rust E0502) — same-site dedup + STRICT
 // escalation, cloned from `_bck_emit_ret_escape`. `name` is the new binding,
 // `origin` the twice-borrowed value, `new_mut` the new borrow's kind; `other`
 // / `other_mut` / `other_line` describe the existing live loan.
@@ -771,7 +771,7 @@ fn _bck_emit_borrow_conflict(name: string, origin: string, new_mut: bool,
     }
     _bck_e_lines.push(sp.line)
     _bck_e_cols.push(sp.col)
-    let mut b = diag_new("HX3020")
+    let mut b = diag_new("HX3021")
     b = diag_span(b, sp)
     b = diag_arg(b, "name", name)
     b = diag_arg(b, "origin", origin)
@@ -2987,7 +2987,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                         // HEXA-OWN E3 — first borrow-conflict rule (E0502).
                         // Scan for an existing LIVE loan of the SAME origin
                         // BEFORE registering this borrow (so it never matches
-                        // itself); emit HX3020 on a `&`-while-`&mut` or a
+                        // itself); emit HX3021 on a `&`-while-`&mut` or a
                         // second-`&mut` conflict. fp_two_shared (`&` then `&`)
                         // stays silent; fp_sequential relies on the assign-arm
                         // kill below having detached the earlier loan.
