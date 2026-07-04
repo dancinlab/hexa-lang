@@ -38,6 +38,19 @@ pub fn hir_to_mir_diags() -> array {
     return _lr_diag
 }
 
+// HEXA-OWN L4 A2 — WOULD-MOVE CENSUS registry (populated ONLY under
+// HEXA_BORROWCK_CENSUS=1). A countable in-process lane parallel to
+// `_lr_diag`: every recorded `let b = a` handle-copy pushes its
+// `[borrowck-census]` marker line here IN ADDITION to the stderr emit
+// (the pool greps stderr; a test greps this array). Reset per lower_hir
+// entry, but the reset + the pushes are both gated on `_bck_census`, so
+// the default path never touches it → byte-neutral.
+pub let mut _bck_census_lines: [string] = []
+
+pub fn bck_census_lines() -> [string] {
+    return _bck_census_lines
+}
+
 // ── RFC closure C2 — synthetic lambda accumulator ────────────
 // Closure-expressions (HExpr kind "closure") are lambda-lifted: each one
 // becomes a top-level synthetic MFunc named `__hexa_lambda_<N>`. The
@@ -477,6 +490,16 @@ pub let mut _lr_defer_ret_local = -1
 //     recorded no write/move event — cheap enough to stay under the
 //     unified HEXA_BORROWCK flag (no separate HEXA_BORROWCK_NLL).
 pub let mut _bck_on = false        // HEXA_BORROWCK=1, read once per lower_hir
+// HEXA-OWN L4 A2 — WOULD-MOVE CENSUS mode (HEXA_BORROWCK_CENSUS=1). Opt-in,
+// observe-only counting lane STACKED on the M3 loan pass: at every recorded
+// handle-copy edge (`let b = a`, bare-ident aggregate RHS) it emits a
+// greppable `[borrowck-census]` stderr line naming file:line:col + both
+// names — the MEASURED self-host/stdlib worklist for move-by-default (A3).
+// It changes NO semantics and does NOT touch the HX3014 hazard lane; census
+// implies `_bck_on` (the pass must run to see the edges). Default false →
+// the emit is never reached → binary + diag stream byte-identical (roadmap
+// A2 byteeq-neutral, gen3≡gen4).
+pub let mut _bck_census = false    // HEXA_BORROWCK_CENSUS=1, read once per lower_hir
 pub let mut _bck_active = false    // per-fn gate; suspended in closure bodies
 pub let mut _bck_grp_ctr: i64 = 0  // fresh group-representative ids (per fn)
 // tracked-local registry (push-only; newest entry for a local id wins)
@@ -2568,6 +2591,22 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 let _bk_si = _bck_find_local(rhs_op.local_id)
                 if _bk_si >= 0 {
                     _bck_track(dst.id, nm, _bck_groups[_bk_si], e.span)
+                    // HEXA-OWN L4 A2 — WOULD-MOVE CENSUS: this `let b = a`
+                    // over a tracked aggregate handle is exactly a site that
+                    // BECOMES A MOVE under move-by-default (A3). Emit one
+                    // greppable stderr line (marker `[borrowck-census]`) with
+                    // file:line:col + both names. Separate observe-only lane:
+                    // it never touches `_lr_diag`/HX3014, so the hazard stream
+                    // is unchanged. Gated on `_bck_census` (default false) →
+                    // unreachable on the default path → byte-neutral.
+                    if _bck_census {
+                        let _bk_cl = "[borrowck-census] would-move " + e.span.file
+                                     + ":" + to_string(e.span.line)
+                                     + ":" + to_string(e.span.col)
+                                     + " let " + nm + " = " + _bk_rhs.text
+                        eprintln(_bk_cl)
+                        _bck_census_lines.push(_bk_cl)
+                    }
                 }
             }
         }
@@ -5025,6 +5064,13 @@ pub fn lower_hir(module: HModule) -> MModule {
     // (same idiom as `_arru_native_enabled`, but latched so repeated
     // env() lookups never appear on hot paths) + reset the @own map.
     _bck_on = env("HEXA_BORROWCK") == "1"
+    // HEXA-OWN L4 A2 — WOULD-MOVE CENSUS: census implies the loan pass runs
+    // so it registers (and thus can report) every handle-copy edge. Default
+    // (neither env set) ⇒ both false ⇒ `_bck_on` false ⇒ `_bck_active` never
+    // arms ⇒ census emit unreachable ⇒ byte-neutral.
+    _bck_census = env("HEXA_BORROWCK_CENSUS") == "1"
+    _bck_on = _bck_on || _bck_census
+    if _bck_census { _bck_census_lines = [] }
     _bck_active = false
     _bck_own_fns = []
     _bck_own_pidx = []
