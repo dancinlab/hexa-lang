@@ -490,6 +490,12 @@ pub let mut _lr_defer_ret_local = -1
 //     recorded no write/move event — cheap enough to stay under the
 //     unified HEXA_BORROWCK flag (no separate HEXA_BORROWCK_NLL).
 pub let mut _bck_on = false        // HEXA_BORROWCK=1, read once per lower_hir
+// HEXA-OWN L4 Lane-B B0 — HEXA_BORROWCK_STRICT=1: same precise detection,
+// but the emitted HX3014 is escalated to Severity::Error (build-refusing)
+// in `_emit_hx3014`. STRICT implies ON (one flag for users). OFF (neither
+// env set) leaves this false and the escalation branch unreached → the
+// emitted binary is byte-identical (byteeq-neutral).
+pub let mut _bck_strict = false    // HEXA_BORROWCK_STRICT=1, read once per lower_hir
 // HEXA-OWN L4 A2 — WOULD-MOVE CENSUS mode (HEXA_BORROWCK_CENSUS=1). Opt-in,
 // observe-only counting lane STACKED on the M3 loan pass: at every recorded
 // handle-copy edge (`let b = a`, bare-ident aggregate RHS) it emits a
@@ -660,7 +666,18 @@ fn _emit_hx3014(rule: string, name: string, other: string, line: i64, sp: Span) 
     b = diag_arg(b, "name", name)
     b = diag_arg(b, "other", other)
     b = diag_arg(b, "line", to_string(line))
-    _lr_diag.push(diag_emit(b))
+    let mut d = diag_emit(b)
+    // HEXA-OWN L4 Lane-B B0 — under HEXA_BORROWCK_STRICT the SAME diagnostic
+    // instance (same code/span/args — detection precision unchanged) is
+    // escalated from the catalog Warning band to a build-refusing Error via
+    // the sanctioned caller-override path (builder.hexa:21-22). The drain
+    // fatal-gate (main.hexa `_has_errors`) then aborts before codegen. When
+    // STRICT is off this branch is unreached, so the diag stream and emitted
+    // binary are byte-identical (byteeq-neutral).
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
 }
 
 // The two rules — evaluated at every ident USE that resolves to a local
@@ -5234,6 +5251,11 @@ pub fn lower_hir(module: HModule) -> MModule {
     // (same idiom as `_arru_native_enabled`, but latched so repeated
     // env() lookups never appear on hot paths) + reset the @own map.
     _bck_on = env("HEXA_BORROWCK") == "1"
+    // HEXA-OWN L4 Lane-B B0 — STRICT escalation flag (fatal HX3014).
+    // STRICT implies ON: one user-facing flag, mirrored as an OR so a bare
+    // HEXA_BORROWCK_STRICT=1 enables the same detection then escalates it.
+    _bck_strict = env("HEXA_BORROWCK_STRICT") == "1"
+    _bck_on = _bck_on || _bck_strict
     // HEXA-OWN L4 A2 — WOULD-MOVE CENSUS: census implies the loan pass runs
     // so it registers (and thus can report) every handle-copy edge. Default
     // (neither env set) ⇒ both false ⇒ `_bck_on` false ⇒ `_bck_active` never
