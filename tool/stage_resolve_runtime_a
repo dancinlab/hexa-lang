@@ -2431,6 +2431,89 @@ build_runtime_a_from_source() {
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCHR WARN: $_rnst_err — FALLBACK-SHIM (retaining libc strchr member; strchr stays UND in the nm floor)" >&2
             fi
         fi
+        # ── RFC061 §M8 RT-NATIVE-STRDUP (frozen seed-consume · COMPOSITE non-libm leaf, PREREQ-a default OFF) ──
+        # hxlcl_strdup leaves the shim (free #4548 / calloc #4556 precedent). NOT a pure
+        # leaf — its native body (hxlcl_core.hexa) issues an inner C-ABI call chain
+        # (hxlcl_strlen + `bl hxlcl_malloc` for the len+1 buffer, then a byte copy). The
+        # inner malloc/strlen callees stay served by the shim (NO co-drop needed; they are
+        # undefined externs in the seed, resolved within runtime.a); only the strdup member
+        # drops. native body is BYTE-FAITHFUL to the BYTEID 0-libc floor arm, NOT to the
+        # shim's libc strdup delegate. The body enters runtime.a via a FROZEN SEED baked by
+        # tool/regen_hxlcl_strdup_native_s.sh (aprime_cc --emit=asm hxlcl_core.hexa + a
+        # .globl DEMOTION to a 1-symbol hxlcl_strdup contract), NOT a build-time LIVE
+        # emit. WHY the switch (root-cause #4489/#4545, mirror of the merged #4548 free /
+        # #4556 calloc fix): the live emit needed build/aprime_cc — the only binary that
+        # honours the `<runner>.hexa --emit=asm … SOURCE.hexa` argv — but aprime_cc needs
+        # runtime.a, so it cannot exist at Stage 0b. faithful CI then mis-resolved the emit
+        # binary to the CLI `hexa`, whose `.hexa`-first dispatch ran the driver in compat
+        # cmd_run and IGNORED `--emit=asm -o … hxlcl_core.hexa` → no .s → empty FATAL →
+        # faithful RED on all 3 targets. Baking the .s once on the pool and consuming it
+        # here removes the emit binary from the Stage-0b critical path (the #4535 regex /
+        # #4548 free / #4556 calloc pattern). Seed-consume MIRRORS RT-NATIVE-CALLOC: pick
+        # the arch seed, gate on `.globl == 1` (the demotion already isolates the single
+        # strong def, so — unlike the old whole-module live emit — NO objcopy isolate is
+        # needed), $CC -c → build/hxlcl_strdup_native.o, then add -DHEXA_RT_NATIVE_STRDUP +
+        # the member (the ld -r multidef gate S5 still validates). TRI-STATE
+        # HEXA_RT_NATIVE_STRDUP:
+        #   0    = off (DEFAULT · this is the PREREQ-a: byteeq-neutral · block skipped ·
+        #          shim.o + archive byte-identical = neutral). Seeds are NOT yet baked
+        #          (pending pool aprime_cc bake in the follow-up flip PR), so prereq-a lands
+        #          DEFAULT-OFF: nothing consumes the (absent) seed, the archive is unchanged.
+        #   auto = graceful (the flip PR will set this default once the 3 seeds land): a
+        #          missing/bad/unassemblable seed keeps the libc-shim strdup member + a loud
+        #          WARN and the build CONTINUES — the fallback is the NORMAL libc strdup,
+        #          never a broken one, and a non-adopted flip is observable as `strdup` still
+        #          UND in the nobaseline nm-UND dump (#4360).
+        #   1    = strict: a missing/bad seed is FATAL (measurement / verify scripts).
+        # The 3 seeds self/native/hxlcl_strdup_{x86_64,arm64-linux,arm64}.s are PENDING the
+        # pool aprime_cc bake (regen tool/regen_hxlcl_strdup_native_s.sh); until they land
+        # the resolver graceful-skips (auto/1 WARN; 0 no-op). convergence
+        # stage-resolve-runtime-a-2 · regen-hxlcl-strdup-native-s-sh-1.
+        _rnst_mode="${HEXA_RT_NATIVE_STRDUP:-0}"
+        if [ "$_rnst_mode" != "0" ]; then
+            _rnst_tgt="${TARGET:-}"; _rnst_tgt="${_rnst_tgt%-musl}"; _rnst_tgt="${_rnst_tgt%-cuda}"
+            [ -z "$_rnst_tgt" ] && case "$(uname -sm 2>/dev/null)" in
+                "Darwin arm64") _rnst_tgt="darwin-arm64" ;;
+                "Linux x86_64") _rnst_tgt="linux-x86_64" ;;
+                "Linux aarch64"|"Linux arm64") _rnst_tgt="linux-arm64" ;;
+            esac
+            case "$_rnst_tgt" in
+                darwin-arm64) _rnst_seed="self/native/hxlcl_strdup_arm64.s" ;;
+                linux-x86_64) _rnst_seed="self/native/hxlcl_strdup_x86_64.s" ;;
+                linux-arm64)  _rnst_seed="self/native/hxlcl_strdup_arm64-linux.s" ;;
+                *)            _rnst_seed="" ;;
+            esac
+            _rnst_err=""
+            if [ -z "$_rnst_seed" ] || [ ! -f "$_rnst_seed" ]; then
+                _rnst_err="no hxlcl_strdup seed for TARGET=$_rnst_tgt (regen tool/regen_hxlcl_strdup_native_s.sh — pending pool bake)"
+            else
+                # SAFETY: adopt only if the seed exports EXACTLY the 1 hxlcl_strdup contract
+                # symbol and nothing else global (a demotion-missed seed would risk a
+                # duplicate-symbol link against the shim's sibling hxlcl_* defs). `_?` = the
+                # Mach-O underscore. Both counts from `.globl` (toolchain-free).
+                _rnst_nc="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?hxlcl_strdup([[:space:]]|$)' "$_rnst_seed" 2>/dev/null || echo 0)"
+                _rnst_nt="$(grep -cE '^[[:space:]]*\.globl[[:space:]]' "$_rnst_seed" 2>/dev/null || echo 0)"
+                if [ "${_rnst_nc:-0}" -ne 1 ] || [ "${_rnst_nt:-0}" -ne 1 ]; then
+                    _rnst_err="seed $_rnst_seed exports $_rnst_nc/1 hxlcl_strdup (total globals $_rnst_nt, want 1 — demotion drift)"
+                else
+                    mkdir -p build
+                    _rnst_s="build/hxlcl_strdup_seed.s"; _rnst_o="build/hxlcl_strdup_native.o"
+                    grep -vE '^// ' "$_rnst_seed" > "$_rnst_s" 2>/dev/null || cp "$_rnst_seed" "$_rnst_s"
+                    if $CC $_mo_archflag -c "$_rnst_s" -o "$_rnst_o" 2>/dev/null; then
+                        _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_STRDUP"
+                        _mo_hxlcl_members="$_mo_hxlcl_members $_rnst_o"
+                        echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRDUP: hxlcl_strdup ← frozen seed $_rnst_seed (TARGET=$_rnst_tgt, 1-symbol contract); shim.o built with -DHEXA_RT_NATIVE_STRDUP (strdup dropped) — ld -r multidef gate validates"
+                    else
+                        _rnst_err="assemble of $_rnst_seed failed"
+                    fi
+                    rm -f "$_rnst_s"
+                fi
+            fi
+            if [ -n "$_rnst_err" ]; then
+                [ "$_rnst_mode" = "1" ] && { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRDUP FATAL (strict): $_rnst_err" >&2; return 1; }
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRDUP WARN: $_rnst_err — FALLBACK-SHIM (retaining libc strdup member; strdup stays UND in the nm floor)" >&2
+            fi
+        fi
         # ── RFC061 §M8 RT-NATIVE-REALLOC (frozen seed-consume · COMPOSITE non-libm leaf, default OFF) ──
         # hxlcl_realloc leaves the shim (free #4548 / calloc #4556 seed-consume precedent).
         # NOT a pure leaf — its native body (hxlcl_core.hexa:1249) issues an inner C-ABI
@@ -3278,5 +3361,6 @@ fi
 
 echo "stage_resolve_runtime_a: NO runtime.a available (no source, frozen-seed restore failed, no prior asset)" >&2
 exit 1
+
 
 
