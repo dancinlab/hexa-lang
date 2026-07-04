@@ -18,7 +18,7 @@
 .text
 .hidden hxlcl_strlen
     .p2align 4
-hxlcl_strlen:
+hxlcl_strlen__seeddead:
     .loc 1 40 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -108,7 +108,7 @@ hxlcl_strlen:
     ret # return
 .hidden hxlcl_memcpy
     .p2align 4
-hxlcl_memcpy:
+hxlcl_memcpy__seeddead:
     .loc 1 73 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -220,7 +220,7 @@ hxlcl_memcpy:
     ret # return
 .hidden hxlcl_memset
     .p2align 4
-hxlcl_memset:
+hxlcl_memset__seeddead:
     .loc 1 107 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -306,7 +306,7 @@ hxlcl_memset:
     ret # return
 .hidden hxlcl_memcmp
     .p2align 4
-hxlcl_memcmp:
+hxlcl_memcmp__seeddead:
     .loc 1 139 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -647,7 +647,7 @@ hxlcl_strcmp:
     ret # return
 .hidden hxlcl_strncmp
     .p2align 4
-hxlcl_strncmp:
+hxlcl_strncmp__seeddead:
     .loc 1 181 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -836,7 +836,7 @@ hxlcl_strncmp:
     ret # return
 .hidden hxlcl_strcpy
     .p2align 4
-hxlcl_strcpy:
+hxlcl_strcpy__seeddead:
     .loc 1 212 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -967,7 +967,7 @@ hxlcl_strcpy:
     ret # return
 .hidden hxlcl_strncpy
     .p2align 4
-hxlcl_strncpy:
+hxlcl_strncpy__seeddead:
     .loc 1 229 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -1182,7 +1182,7 @@ hxlcl_strncpy:
     ret # return
 .hidden hxlcl_strcat
     .p2align 4
-hxlcl_strcat:
+hxlcl_strcat__seeddead:
     .loc 1 262 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -1398,7 +1398,7 @@ hxlcl_strcat:
     ret # return
 .hidden hxlcl_strchr
     .p2align 4
-hxlcl_strchr:
+hxlcl_strchr__seeddead:
     .loc 1 304 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -1555,7 +1555,7 @@ hxlcl_strchr:
     ret # return
 .hidden hxlcl_strstr
     .p2align 4
-hxlcl_strstr:
+hxlcl_strstr__seeddead:
     .loc 1 330 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -1895,7 +1895,7 @@ hxlcl_strstr:
     ret # return
 .hidden hxlcl_strrchr
     .p2align 4
-hxlcl_strrchr:
+hxlcl_strrchr__seeddead:
     .loc 1 387 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -2076,7 +2076,7 @@ hxlcl_strrchr:
     ret # return
 .hidden hxlcl_memmove
     .p2align 4
-hxlcl_memmove:
+hxlcl_memmove__seeddead:
     .loc 1 416 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -2319,7 +2319,7 @@ hxlcl_memmove:
     ret # return
 .hidden hxlcl_bzero
     .p2align 4
-hxlcl_bzero:
+hxlcl_bzero__seeddead:
     .loc 1 452 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -2397,7 +2397,7 @@ hxlcl_bzero:
     ret # return
 .hidden hxlcl_getenv
     .p2align 4
-hxlcl_getenv:
+hxlcl_getenv__seeddead:
     .loc 1 489 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -2867,7 +2867,7 @@ hxlcl_getenv:
     ret # return
 .hidden hxlcl_setenv
     .p2align 4
-hxlcl_setenv:
+hxlcl_setenv__seeddead:
     .loc 1 576 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -3871,7 +3871,7 @@ hxlcl_setenv:
     ret # return
 .hidden hxlcl_strtoll
     .p2align 4
-hxlcl_strtoll:
+hxlcl_strtoll__seeddead:
     .loc 1 725 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -4918,7 +4918,7 @@ hxlcl_strtoll:
     ret # return
 .hidden hxlcl_strtoull
     .p2align 4
-hxlcl_strtoull:
+hxlcl_strtoull__seeddead:
     .loc 1 867 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -5889,7 +5889,7 @@ hxlcl_strtoull:
     ret # return
 .hidden hxlcl_atoll
     .p2align 4
-hxlcl_atoll:
+hxlcl_atoll__seeddead:
     .loc 1 1032 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -6370,7 +6370,7 @@ hxlcl_atoll:
     ret # return
 .hidden hxlcl_atoi
     .p2align 4
-hxlcl_atoi:
+hxlcl_atoi__seeddead:
     .loc 1 1096 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -6402,7 +6402,7 @@ hxlcl_atoi:
     ret # return
 .hidden hxlcl_strdup
     .p2align 4
-hxlcl_strdup:
+hxlcl_strdup__seeddead:
     .loc 1 1126 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -6587,7 +6587,7 @@ hxlcl_strdup:
     ret # return
 .hidden hxlcl_strndup
     .p2align 4
-hxlcl_strndup:
+hxlcl_strndup__seeddead:
     .loc 1 1166 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -6855,7 +6855,7 @@ hxlcl_strndup:
     ret # return
 .hidden hxlcl_calloc
     .p2align 4
-hxlcl_calloc:
+hxlcl_calloc__seeddead:
     .loc 1 1216 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -6950,7 +6950,7 @@ hxlcl_calloc:
     ret # return
 .hidden hxlcl_realloc
     .p2align 4
-hxlcl_realloc:
+hxlcl_realloc__seeddead:
     .loc 1 1249 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -7109,7 +7109,7 @@ hxlcl_realloc:
     ret # return
 .hidden hxlcl_getpid
     .p2align 4
-hxlcl_getpid:
+hxlcl_getpid__seeddead:
     .loc 1 1293 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -7182,7 +7182,7 @@ hxlcl_getpid:
     ret # return
 .hidden hxlcl_getuid
     .p2align 4
-hxlcl_getuid:
+hxlcl_getuid__seeddead:
     .loc 1 1317 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -7255,7 +7255,7 @@ hxlcl_getuid:
     ret # return
 .hidden hxlcl_getgid
     .p2align 4
-hxlcl_getgid:
+hxlcl_getgid__seeddead:
     .loc 1 1326 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -7328,7 +7328,7 @@ hxlcl_getgid:
     ret # return
 .hidden hxlcl_getppid
     .p2align 4
-hxlcl_getppid:
+hxlcl_getppid__seeddead:
     .loc 1 1335 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -7401,7 +7401,7 @@ hxlcl_getppid:
     ret # return
 .hidden hxlcl_geteuid
     .p2align 4
-hxlcl_geteuid:
+hxlcl_geteuid__seeddead:
     .loc 1 1344 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -7474,7 +7474,7 @@ hxlcl_geteuid:
     ret # return
 .hidden hxlcl_getegid
     .p2align 4
-hxlcl_getegid:
+hxlcl_getegid__seeddead:
     .loc 1 1353 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -7547,7 +7547,7 @@ hxlcl_getegid:
     ret # return
 .hidden hxlcl_close
     .p2align 4
-hxlcl_close:
+hxlcl_close__seeddead:
     .loc 1 1400 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -7708,7 +7708,7 @@ hxlcl_close:
     ret # return
 .hidden hxlcl_read
     .p2align 4
-hxlcl_read:
+hxlcl_read__seeddead:
     .loc 1 1439 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -7876,7 +7876,7 @@ hxlcl_read:
     ret # return
 .hidden hxlcl_lseek
     .p2align 4
-hxlcl_lseek:
+hxlcl_lseek__seeddead:
     .loc 1 1458 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -8044,7 +8044,7 @@ hxlcl_lseek:
     ret # return
 .hidden hxlcl_dup2
     .p2align 4
-hxlcl_dup2:
+hxlcl_dup2__seeddead:
     .loc 1 1493 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -8209,7 +8209,7 @@ hxlcl_dup2:
     ret # return
 .hidden hxlcl_mkdir
     .p2align 4
-hxlcl_mkdir:
+hxlcl_mkdir__seeddead:
     .loc 1 1516 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -8400,7 +8400,7 @@ hxlcl_mkdir:
     ret # return
 .hidden hxlcl_stat
     .p2align 4
-hxlcl_stat:
+hxlcl_stat__seeddead:
     .loc 1 1567 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -8591,7 +8591,7 @@ hxlcl_stat:
     ret # return
 .hidden hxlcl_waitpid
     .p2align 4
-hxlcl_waitpid:
+hxlcl_waitpid__seeddead:
     .loc 1 1593 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -8759,7 +8759,7 @@ hxlcl_waitpid:
     ret # return
 .hidden hxlcl_write
     .p2align 4
-hxlcl_write:
+hxlcl_write__seeddead:
     .loc 1 1653 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -8927,7 +8927,7 @@ hxlcl_write:
     ret # return
 .hidden hxlcl_fcntl
     .p2align 4
-hxlcl_fcntl:
+hxlcl_fcntl__seeddead:
     .loc 1 1672 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -9095,7 +9095,7 @@ hxlcl_fcntl:
     ret # return
 .hidden hxlcl_mmap
     .p2align 4
-hxlcl_mmap:
+hxlcl_mmap__seeddead:
     .loc 1 1694 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -9278,7 +9278,7 @@ hxlcl_mmap:
     ret # return
 .hidden hxlcl_open_sys
     .p2align 4
-hxlcl_open_sys:
+hxlcl_open_sys__seeddead:
     .loc 1 1770 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -9472,7 +9472,7 @@ hxlcl_open_sys:
     ret # return
 .hidden hxlcl_getrusage
     .p2align 4
-hxlcl_getrusage:
+hxlcl_getrusage__seeddead:
     .loc 1 1795 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -9637,7 +9637,7 @@ hxlcl_getrusage:
     ret # return
 .hidden hxlcl_pipe
     .p2align 4
-hxlcl_pipe:
+hxlcl_pipe__seeddead:
     .loc 1 1842 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -9933,7 +9933,7 @@ hxlcl_pipe:
     ret # return
 .hidden hxlcl_time
     .p2align 4
-hxlcl_time:
+hxlcl_time__seeddead:
     .loc 1 1935 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -10204,7 +10204,7 @@ hxlcl_time:
     ret # return
 .hidden hxlcl_poll
     .p2align 4
-hxlcl_poll:
+hxlcl_poll__seeddead:
     .loc 1 1996 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -10534,7 +10534,7 @@ hxlcl_poll:
     ret # return
 .hidden hxlcl_clock_gettime
     .p2align 4
-hxlcl_clock_gettime:
+hxlcl_clock_gettime__seeddead:
     .loc 1 2085 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -10770,7 +10770,7 @@ hxlcl_clock_gettime:
     ret # return
 .hidden hxlcl_execve
     .p2align 4
-hxlcl_execve:
+hxlcl_execve__seeddead:
     .loc 1 2120 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -10938,7 +10938,7 @@ hxlcl_execve:
     ret # return
 .hidden hxlcl_fork
     .p2align 4
-hxlcl_fork:
+hxlcl_fork__seeddead:
     .loc 1 2190 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -11245,7 +11245,7 @@ hxlcl_fork:
     ret # return
 .hidden hxlcl_fopen
     .p2align 4
-hxlcl_fopen:
+hxlcl_fopen__seeddead:
     .loc 1 2264 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -11900,7 +11900,7 @@ hxlcl_fopen:
     ret # return
 .hidden hxlcl_fclose
     .p2align 4
-hxlcl_fclose:
+hxlcl_fclose__seeddead:
     .loc 1 2335 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -12055,7 +12055,7 @@ hxlcl_fclose:
     ret # return
 .hidden hxlcl_fread
     .p2align 4
-hxlcl_fread:
+hxlcl_fread__seeddead:
     .loc 1 2351 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -12465,7 +12465,7 @@ hxlcl_fread:
     ret # return
 .hidden hxlcl_fwrite
     .p2align 4
-hxlcl_fwrite:
+hxlcl_fwrite__seeddead:
     .loc 1 2383 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -12875,7 +12875,7 @@ hxlcl_fwrite:
     ret # return
 .hidden hxlcl_ftell
     .p2align 4
-hxlcl_ftell:
+hxlcl_ftell__seeddead:
     .loc 1 2415 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -13007,7 +13007,7 @@ hxlcl_ftell:
     ret # return
 .hidden hxlcl_fseek
     .p2align 4
-hxlcl_fseek:
+hxlcl_fseek__seeddead:
     .loc 1 2427 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -13176,7 +13176,7 @@ hxlcl_fseek:
     ret # return
 .hidden hxlcl_fdopen
     .p2align 4
-hxlcl_fdopen:
+hxlcl_fdopen__seeddead:
     .loc 1 2441 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -13245,7 +13245,7 @@ hxlcl_fdopen:
     ret # return
 .hidden hxlcl_fputs
     .p2align 4
-hxlcl_fputs:
+hxlcl_fputs__seeddead:
     .loc 1 2500 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -13471,7 +13471,7 @@ hxlcl_fputs:
     ret # return
 .hidden hxlcl_fputc
     .p2align 4
-hxlcl_fputc:
+hxlcl_fputc__seeddead:
     .loc 1 2534 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -13669,7 +13669,7 @@ hxlcl_fputc:
     ret # return
 .hidden hxlcl_fflush
     .p2align 4
-hxlcl_fflush:
+hxlcl_fflush__seeddead:
     .loc 1 2561 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -13705,7 +13705,7 @@ hxlcl_fflush:
     ret # return
 .hidden hxlcl_popen_remember
     .p2align 4
-hxlcl_popen_remember:
+hxlcl_popen_remember__seeddead:
     .loc 1 2600 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -13892,7 +13892,7 @@ hxlcl_popen_remember:
     ret # return
 .hidden hxlcl_popen_forget
     .p2align 4
-hxlcl_popen_forget:
+hxlcl_popen_forget__seeddead:
     .loc 1 2620 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -14088,7 +14088,7 @@ hxlcl_popen_forget:
     ret # return
 .hidden hxlcl_popen
     .p2align 4
-hxlcl_popen:
+hxlcl_popen__seeddead:
     .loc 1 2642 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -14689,7 +14689,7 @@ hxlcl_popen:
     ret # return
 .hidden hxlcl_child_exit_nr
     .p2align 4
-hxlcl_child_exit_nr:
+hxlcl_child_exit_nr__seeddead:
     .loc 1 2707 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -14751,7 +14751,7 @@ hxlcl_child_exit_nr:
     ret # return
 .hidden hxlcl_pclose
     .p2align 4
-hxlcl_pclose:
+hxlcl_pclose__seeddead:
     .loc 1 2716 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -14992,7 +14992,7 @@ hxlcl_pclose:
     ret # return
 .hidden hxlcl_execvp
     .p2align 4
-hxlcl_execvp:
+hxlcl_execvp__seeddead:
     .loc 1 2790 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -15876,7 +15876,7 @@ hxlcl_execvp:
     ret # return
 .hidden hxlcl_isalnum
     .p2align 4
-hxlcl_isalnum:
+hxlcl_isalnum__seeddead:
     .loc 1 2906 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -16076,7 +16076,7 @@ hxlcl_isalnum:
     ret # return
 .hidden hxlcl_isalpha
     .p2align 4
-hxlcl_isalpha:
+hxlcl_isalpha__seeddead:
     .loc 1 2926 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -16224,7 +16224,7 @@ hxlcl_isalpha:
     ret # return
 .hidden hxlcl_free
     .p2align 4
-hxlcl_free:
+hxlcl_free__seeddead:
     .loc 1 2956 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -16260,7 +16260,7 @@ hxlcl_free:
     ret # return
 .hidden hxlcl_inet_pton
     .p2align 4
-hxlcl_inet_pton:
+hxlcl_inet_pton__seeddead:
     .loc 1 2982 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -16948,7 +16948,7 @@ hxlcl_inet_pton:
     ret # return
 .hidden hxlcl_setvbuf
     .p2align 4
-hxlcl_setvbuf:
+hxlcl_setvbuf__seeddead:
     .loc 1 3064 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -16984,7 +16984,7 @@ hxlcl_setvbuf:
     ret # return
 .hidden hxlcl_darwin_check_fd_set_overflow
     .p2align 4
-hxlcl_darwin_check_fd_set_overflow:
+hxlcl_darwin_check_fd_set_overflow__seeddead:
     .loc 1 3073 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -17017,7 +17017,7 @@ hxlcl_darwin_check_fd_set_overflow:
     ret # return
 .hidden hxlcl_atof
     .p2align 4
-hxlcl_atof:
+hxlcl_atof__seeddead:
     .loc 1 3106 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -18210,7 +18210,7 @@ hxlcl_atof:
     ret # return
 .hidden hxlcl_fp_addmul
     .p2align 4
-hxlcl_fp_addmul:
+hxlcl_fp_addmul__seeddead:
     .loc 1 3265 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -18267,7 +18267,7 @@ hxlcl_fp_addmul:
     ret # return
 .hidden hxlcl_fmod
     .p2align 4
-hxlcl_fmod:
+hxlcl_fmod__seeddead:
     .loc 1 3296 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -19412,7 +19412,7 @@ hxlcl_fmod:
     ret # return
 .hidden hxlcl_sin
     .p2align 4
-hxlcl_sin:
+hxlcl_sin__seeddead:
     .loc 1 3459 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -22727,7 +22727,7 @@ hxlcl_sin:
     ret # return
 .hidden hxlcl_cos
     .p2align 4
-hxlcl_cos:
+hxlcl_cos__seeddead:
     .loc 1 3804 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -25997,7 +25997,7 @@ hxlcl_cos:
     ret # return
 .hidden hxlcl_rotab_probe
     .p2align 4
-hxlcl_rotab_probe:
+hxlcl_rotab_probe__seeddead:
     .loc 1 4146 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -26066,7 +26066,7 @@ hxlcl_rotab_probe:
     ret # return
 .hidden hxlcl_exp
     .p2align 4
-hxlcl_exp:
+hxlcl_exp__seeddead:
     .loc 1 4176 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -27192,7 +27192,7 @@ hxlcl_exp:
     ret # return
 .hidden hxlcl_log
     .p2align 4
-hxlcl_log:
+hxlcl_log__seeddead:
     .loc 1 4352 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
@@ -28629,7 +28629,7 @@ _hx_rt_sigreturn_trampoline:
     xor edx, edx # value-less return: payload = 0
 .hidden hxlcl_signal
     .p2align 4
-hxlcl_signal:
+hxlcl_signal__seeddead:
     .loc 1 4537 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp

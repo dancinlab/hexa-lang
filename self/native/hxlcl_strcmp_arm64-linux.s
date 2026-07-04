@@ -17,7 +17,7 @@
 .text
 .hidden hxlcl_strlen
     .p2align 2
-hxlcl_strlen:
+hxlcl_strlen__seeddead:
     .loc 1 40 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -83,7 +83,7 @@ _L5211_hxlcl_strlen_bb3:
     ret // return
 .hidden hxlcl_memcpy
     .p2align 2
-hxlcl_memcpy:
+hxlcl_memcpy__seeddead:
     .loc 1 73 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -159,7 +159,7 @@ _L5211_hxlcl_memcpy_bb3:
     ret // return
 .hidden hxlcl_memset
     .p2align 2
-hxlcl_memset:
+hxlcl_memset__seeddead:
     .loc 1 107 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -219,7 +219,7 @@ _L5211_hxlcl_memset_bb3:
     ret // return
 .hidden hxlcl_memcmp
     .p2align 2
-hxlcl_memcmp:
+hxlcl_memcmp__seeddead:
     .loc 1 139 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -442,7 +442,7 @@ _L5211_hxlcl_strcmp_bb7:
     ret // return
 .hidden hxlcl_strncmp
     .p2align 2
-hxlcl_strncmp:
+hxlcl_strncmp__seeddead:
     .loc 1 181 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -566,7 +566,7 @@ _L5211_hxlcl_strncmp_bb7:
     ret // return
 .hidden hxlcl_strcpy
     .p2align 2
-hxlcl_strcpy:
+hxlcl_strcpy__seeddead:
     .loc 1 212 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -659,7 +659,7 @@ _L5211_hxlcl_strcpy_bb3:
     ret // return
 .hidden hxlcl_strncpy
     .p2align 2
-hxlcl_strncpy:
+hxlcl_strncpy__seeddead:
     .loc 1 229 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -811,7 +811,7 @@ _L5211_hxlcl_strncpy_bb10:
     ret // return
 .hidden hxlcl_strcat
     .p2align 2
-hxlcl_strcat:
+hxlcl_strcat__seeddead:
     .loc 1 262 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -962,7 +962,7 @@ _L5211_hxlcl_strcat_bb6:
     ret // return
 .hidden hxlcl_strchr
     .p2align 2
-hxlcl_strchr:
+hxlcl_strchr__seeddead:
     .loc 1 304 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -1067,7 +1067,7 @@ _L5211_hxlcl_strchr_bb7:
     ret // return
 .hidden hxlcl_strstr
     .p2align 2
-hxlcl_strstr:
+hxlcl_strstr__seeddead:
     .loc 1 330 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -1314,7 +1314,7 @@ _L5211_hxlcl_strstr_bb17:
     ret // return
 .hidden hxlcl_strrchr
     .p2align 2
-hxlcl_strrchr:
+hxlcl_strrchr__seeddead:
     .loc 1 387 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -1437,7 +1437,7 @@ _L5211_hxlcl_strrchr_bb9:
     ret // return
 .hidden hxlcl_memmove
     .p2align 2
-hxlcl_memmove:
+hxlcl_memmove__seeddead:
     .loc 1 416 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -1605,7 +1605,7 @@ _L5211_hxlcl_memmove_bb13:
     ret // return
 .hidden hxlcl_bzero
     .p2align 2
-hxlcl_bzero:
+hxlcl_bzero__seeddead:
     .loc 1 452 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -1665,7 +1665,7 @@ _L5211_hxlcl_bzero_bb3:
     ret // return
 .hidden hxlcl_getenv
     .p2align 2
-hxlcl_getenv:
+hxlcl_getenv__seeddead:
     .loc 1 489 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -2032,7 +2032,7 @@ _L5211_hxlcl_getenv_bb28:
     ret // return
 .hidden hxlcl_setenv
     .p2align 2
-hxlcl_setenv:
+hxlcl_setenv__seeddead:
     .loc 1 576 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -2928,7 +2928,7 @@ _L5211_hxlcl_setenv_bb44:
     ret // return
 .hidden hxlcl_strtoll
     .p2align 2
-hxlcl_strtoll:
+hxlcl_strtoll__seeddead:
     .loc 1 725 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -3874,7 +3874,7 @@ _L5211_hxlcl_strtoll_bb51:
     ret // return
 .hidden hxlcl_strtoull
     .p2align 2
-hxlcl_strtoull:
+hxlcl_strtoull__seeddead:
     .loc 1 867 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -4750,7 +4750,7 @@ _L5211_hxlcl_strtoull_bb46:
     ret // return
 .hidden hxlcl_atoll
     .p2align 2
-hxlcl_atoll:
+hxlcl_atoll__seeddead:
     .loc 1 1032 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -5141,7 +5141,7 @@ _L5211_hxlcl_atoll_bb21:
     ret // return
 .hidden hxlcl_atoi
     .p2align 2
-hxlcl_atoi:
+hxlcl_atoi__seeddead:
     .loc 1 1096 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -5159,7 +5159,7 @@ _L5211_hxlcl_atoi_bb0:
     ret // return
 .hidden hxlcl_strdup
     .p2align 2
-hxlcl_strdup:
+hxlcl_strdup__seeddead:
     .loc 1 1126 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -5290,7 +5290,7 @@ _L5211_hxlcl_strdup_bb6:
     ret // return
 .hidden hxlcl_strndup
     .p2align 2
-hxlcl_strndup:
+hxlcl_strndup__seeddead:
     .loc 1 1166 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -5482,7 +5482,7 @@ _L5211_hxlcl_strndup_bb14:
     ret // return
 .hidden hxlcl_calloc
     .p2align 2
-hxlcl_calloc:
+hxlcl_calloc__seeddead:
     .loc 1 1216 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -5546,7 +5546,7 @@ _L5211_hxlcl_calloc_bb3:
     ret // return
 .hidden hxlcl_realloc
     .p2align 2
-hxlcl_realloc:
+hxlcl_realloc__seeddead:
     .loc 1 1249 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -5652,7 +5652,7 @@ _L5211_hxlcl_realloc_bb5:
     ret // return
 .hidden hxlcl_getpid
     .p2align 2
-hxlcl_getpid:
+hxlcl_getpid__seeddead:
     .loc 1 1293 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -5704,7 +5704,7 @@ _L5211_hxlcl_getpid_bb5:
     ret // return
 .hidden hxlcl_getuid
     .p2align 2
-hxlcl_getuid:
+hxlcl_getuid__seeddead:
     .loc 1 1317 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -5756,7 +5756,7 @@ _L5211_hxlcl_getuid_bb5:
     ret // return
 .hidden hxlcl_getgid
     .p2align 2
-hxlcl_getgid:
+hxlcl_getgid__seeddead:
     .loc 1 1326 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -5808,7 +5808,7 @@ _L5211_hxlcl_getgid_bb5:
     ret // return
 .hidden hxlcl_getppid
     .p2align 2
-hxlcl_getppid:
+hxlcl_getppid__seeddead:
     .loc 1 1335 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -5860,7 +5860,7 @@ _L5211_hxlcl_getppid_bb5:
     ret // return
 .hidden hxlcl_geteuid
     .p2align 2
-hxlcl_geteuid:
+hxlcl_geteuid__seeddead:
     .loc 1 1344 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -5912,7 +5912,7 @@ _L5211_hxlcl_geteuid_bb5:
     ret // return
 .hidden hxlcl_getegid
     .p2align 2
-hxlcl_getegid:
+hxlcl_getegid__seeddead:
     .loc 1 1353 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -5964,7 +5964,7 @@ _L5211_hxlcl_getegid_bb5:
     ret // return
 .hidden hxlcl_close
     .p2align 2
-hxlcl_close:
+hxlcl_close__seeddead:
     .loc 1 1400 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -6099,7 +6099,7 @@ _L5211_hxlcl_close_bb9:
     ret // return
 .hidden hxlcl_read
     .p2align 2
-hxlcl_read:
+hxlcl_read__seeddead:
     .loc 1 1439 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -6236,7 +6236,7 @@ _L5211_hxlcl_read_bb9:
     ret // return
 .hidden hxlcl_lseek
     .p2align 2
-hxlcl_lseek:
+hxlcl_lseek__seeddead:
     .loc 1 1458 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -6373,7 +6373,7 @@ _L5211_hxlcl_lseek_bb9:
     ret // return
 .hidden hxlcl_dup2
     .p2align 2
-hxlcl_dup2:
+hxlcl_dup2__seeddead:
     .loc 1 1493 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -6509,7 +6509,7 @@ _L5211_hxlcl_dup2_bb9:
     ret // return
 .hidden hxlcl_mkdir
     .p2align 2
-hxlcl_mkdir:
+hxlcl_mkdir__seeddead:
     .loc 1 1516 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -6707,7 +6707,7 @@ _L5211_hxlcl_mkdir_bb10:
     ret // return
 .hidden hxlcl_stat
     .p2align 2
-hxlcl_stat:
+hxlcl_stat__seeddead:
     .loc 1 1567 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -6905,7 +6905,7 @@ _L5211_hxlcl_stat_bb10:
     ret // return
 .hidden hxlcl_waitpid
     .p2align 2
-hxlcl_waitpid:
+hxlcl_waitpid__seeddead:
     .loc 1 1593 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -7042,7 +7042,7 @@ _L5211_hxlcl_waitpid_bb9:
     ret // return
 .hidden hxlcl_write
     .p2align 2
-hxlcl_write:
+hxlcl_write__seeddead:
     .loc 1 1653 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -7179,7 +7179,7 @@ _L5211_hxlcl_write_bb9:
     ret // return
 .hidden hxlcl_fcntl
     .p2align 2
-hxlcl_fcntl:
+hxlcl_fcntl__seeddead:
     .loc 1 1672 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -7316,7 +7316,7 @@ _L5211_hxlcl_fcntl_bb9:
     ret // return
 .hidden hxlcl_mmap
     .p2align 2
-hxlcl_mmap:
+hxlcl_mmap__seeddead:
     .loc 1 1694 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -7456,7 +7456,7 @@ _L5211_hxlcl_mmap_bb9:
     ret // return
 .hidden hxlcl_open_sys
     .p2align 2
-hxlcl_open_sys:
+hxlcl_open_sys__seeddead:
     .loc 1 1770 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -7653,7 +7653,7 @@ _L5211_hxlcl_open_sys_bb10:
     ret // return
 .hidden hxlcl_getrusage
     .p2align 2
-hxlcl_getrusage:
+hxlcl_getrusage__seeddead:
     .loc 1 1795 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -7789,7 +7789,7 @@ _L5211_hxlcl_getrusage_bb9:
     ret // return
 .hidden hxlcl_pipe
     .p2align 2
-hxlcl_pipe:
+hxlcl_pipe__seeddead:
     .loc 1 1842 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -8074,7 +8074,7 @@ _L5211_hxlcl_pipe_bb9:
     ret // return
 .hidden hxlcl_time
     .p2align 2
-hxlcl_time:
+hxlcl_time__seeddead:
     .loc 1 1935 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -8336,7 +8336,7 @@ _L5211_hxlcl_time_bb10:
     ret // return
 .hidden hxlcl_poll
     .p2align 2
-hxlcl_poll:
+hxlcl_poll__seeddead:
     .loc 1 1996 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -8667,7 +8667,7 @@ _L5211_hxlcl_poll_bb13:
     ret // return
 .hidden hxlcl_clock_gettime
     .p2align 2
-hxlcl_clock_gettime:
+hxlcl_clock_gettime__seeddead:
     .loc 1 2085 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -8873,7 +8873,7 @@ _L5211_hxlcl_clock_gettime_bb8:
     ret // return
 .hidden hxlcl_execve
     .p2align 2
-hxlcl_execve:
+hxlcl_execve__seeddead:
     .loc 1 2120 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -9010,7 +9010,7 @@ _L5211_hxlcl_execve_bb9:
     ret // return
 .hidden hxlcl_fork
     .p2align 2
-hxlcl_fork:
+hxlcl_fork__seeddead:
     .loc 1 2190 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -9279,7 +9279,7 @@ _L5211_hxlcl_fork_bb10:
     ret // return
 .hidden hxlcl_fopen
     .p2align 2
-hxlcl_fopen:
+hxlcl_fopen__seeddead:
     .loc 1 2264 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -9851,7 +9851,7 @@ _L5211_hxlcl_fopen_bb31:
     ret // return
 .hidden hxlcl_fclose
     .p2align 2
-hxlcl_fclose:
+hxlcl_fclose__seeddead:
     .loc 1 2335 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -9962,7 +9962,7 @@ _L5211_hxlcl_fclose_bb6:
     ret // return
 .hidden hxlcl_fread
     .p2align 2
-hxlcl_fread:
+hxlcl_fread__seeddead:
     .loc 1 2351 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -10267,7 +10267,7 @@ _L5211_hxlcl_fread_bb16:
     ret // return
 .hidden hxlcl_fwrite
     .p2align 2
-hxlcl_fwrite:
+hxlcl_fwrite__seeddead:
     .loc 1 2383 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -10572,7 +10572,7 @@ _L5211_hxlcl_fwrite_bb16:
     ret // return
 .hidden hxlcl_ftell
     .p2align 2
-hxlcl_ftell:
+hxlcl_ftell__seeddead:
     .loc 1 2415 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -10672,7 +10672,7 @@ _L5211_hxlcl_ftell_bb4:
     ret // return
 .hidden hxlcl_fseek
     .p2align 2
-hxlcl_fseek:
+hxlcl_fseek__seeddead:
     .loc 1 2427 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -10794,7 +10794,7 @@ _L5211_hxlcl_fseek_bb6:
     ret // return
 .hidden hxlcl_fdopen
     .p2align 2
-hxlcl_fdopen:
+hxlcl_fdopen__seeddead:
     .loc 1 2441 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -10844,7 +10844,7 @@ _L5211_hxlcl_fdopen_bb2:
     ret // return
 .hidden hxlcl_fputs
     .p2align 2
-hxlcl_fputs:
+hxlcl_fputs__seeddead:
     .loc 1 2500 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -11004,7 +11004,7 @@ _L5211_hxlcl_fputs_bb7:
     ret // return
 .hidden hxlcl_fputc
     .p2align 2
-hxlcl_fputc:
+hxlcl_fputc__seeddead:
     .loc 1 2534 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -11142,7 +11142,7 @@ _L5211_hxlcl_fputc_bb4:
     ret // return
 .hidden hxlcl_fflush
     .p2align 2
-hxlcl_fflush:
+hxlcl_fflush__seeddead:
     .loc 1 2561 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -11165,7 +11165,7 @@ _L5211_hxlcl_fflush_bb0:
     ret // return
 .hidden hxlcl_popen_remember
     .p2align 2
-hxlcl_popen_remember:
+hxlcl_popen_remember__seeddead:
     .loc 1 2600 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -11297,7 +11297,7 @@ _L5211_hxlcl_popen_remember_bb5:
     ret // return
 .hidden hxlcl_popen_forget
     .p2align 2
-hxlcl_popen_forget:
+hxlcl_popen_forget__seeddead:
     .loc 1 2620 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -11435,7 +11435,7 @@ _L5211_hxlcl_popen_forget_bb5:
     ret // return
 .hidden hxlcl_popen
     .p2align 2
-hxlcl_popen:
+hxlcl_popen__seeddead:
     .loc 1 2642 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -11960,7 +11960,7 @@ _L5211_hxlcl_popen_bb12:
     ret // return
 .hidden hxlcl_child_exit_nr
     .p2align 2
-hxlcl_child_exit_nr:
+hxlcl_child_exit_nr__seeddead:
     .loc 1 2707 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -11999,7 +11999,7 @@ _L5211_hxlcl_child_exit_nr_bb4:
     ret // return
 .hidden hxlcl_pclose
     .p2align 2
-hxlcl_pclose:
+hxlcl_pclose__seeddead:
     .loc 1 2716 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -12167,7 +12167,7 @@ _L5211_hxlcl_pclose_bb6:
     ret // return
 .hidden hxlcl_execvp
     .p2align 2
-hxlcl_execvp:
+hxlcl_execvp__seeddead:
     .loc 1 2790 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -12968,7 +12968,7 @@ _L5211_hxlcl_execvp_bb32:
     ret // return
 .hidden hxlcl_isalnum
     .p2align 2
-hxlcl_isalnum:
+hxlcl_isalnum__seeddead:
     .loc 1 2906 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -13104,7 +13104,7 @@ _L5211_hxlcl_isalnum_bb2:
     ret // return
 .hidden hxlcl_isalpha
     .p2align 2
-hxlcl_isalpha:
+hxlcl_isalpha__seeddead:
     .loc 1 2926 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -13206,7 +13206,7 @@ _L5211_hxlcl_isalpha_bb2:
     ret // return
 .hidden hxlcl_free
     .p2align 2
-hxlcl_free:
+hxlcl_free__seeddead:
     .loc 1 2956 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -13228,7 +13228,7 @@ _L5211_hxlcl_free_bb0:
     ret // return
 .hidden hxlcl_inet_pton
     .p2align 2
-hxlcl_inet_pton:
+hxlcl_inet_pton__seeddead:
     .loc 1 2982 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -13803,7 +13803,7 @@ _L5211_hxlcl_inet_pton_bb22:
     ret // return
 .hidden hxlcl_setvbuf
     .p2align 2
-hxlcl_setvbuf:
+hxlcl_setvbuf__seeddead:
     .loc 1 3064 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -13824,7 +13824,7 @@ _L5211_hxlcl_setvbuf_bb0:
     ret // return
 .hidden hxlcl_darwin_check_fd_set_overflow
     .p2align 2
-hxlcl_darwin_check_fd_set_overflow:
+hxlcl_darwin_check_fd_set_overflow__seeddead:
     .loc 1 3073 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -13843,7 +13843,7 @@ _L5211_hxlcl_darwin_check_fd_set_overflow_bb0:
     ret // return
 .hidden hxlcl_atof
     .p2align 2
-hxlcl_atof:
+hxlcl_atof__seeddead:
     .loc 1 3106 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -14926,7 +14926,7 @@ _L5211_hxlcl_atof_bb48:
     ret // return
 .hidden hxlcl_fp_addmul
     .p2align 2
-hxlcl_fp_addmul:
+hxlcl_fp_addmul__seeddead:
     .loc 1 3265 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -14960,7 +14960,7 @@ _L5211_hxlcl_fp_addmul_bb0:
     ret // return
 .hidden hxlcl_fmod
     .p2align 2
-hxlcl_fmod:
+hxlcl_fmod__seeddead:
     .loc 1 3296 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -15962,7 +15962,7 @@ _L5211_hxlcl_fmod_bb35:
     ret // return
 .hidden hxlcl_sin
     .p2align 2
-hxlcl_sin:
+hxlcl_sin__seeddead:
     .loc 1 3459 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -19390,7 +19390,7 @@ _L5211_hxlcl_sin_bb66:
     ret // return
 .hidden hxlcl_cos
     .p2align 2
-hxlcl_cos:
+hxlcl_cos__seeddead:
     .loc 1 3804 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -22743,7 +22743,7 @@ _L5211_hxlcl_cos_bb70:
     ret // return
 .hidden hxlcl_rotab_probe
     .p2align 2
-hxlcl_rotab_probe:
+hxlcl_rotab_probe__seeddead:
     .loc 1 4146 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -22789,7 +22789,7 @@ _L5211_hxlcl_rotab_probe_bb0:
     ret // return
 .hidden hxlcl_exp
     .p2align 2
-hxlcl_exp:
+hxlcl_exp__seeddead:
     .loc 1 4176 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -23830,7 +23830,7 @@ _L5211_hxlcl_exp_bb20:
     ret // return
 .hidden hxlcl_log
     .p2align 2
-hxlcl_log:
+hxlcl_log__seeddead:
     .loc 1 4352 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
@@ -25207,7 +25207,7 @@ _L5211__hx_rt_sigreturn_trampoline_bb0:
     movz x1, #0 // ret void: payload 0
 .hidden hxlcl_signal
     .p2align 2
-hxlcl_signal:
+hxlcl_signal__seeddead:
     .loc 1 4537 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
