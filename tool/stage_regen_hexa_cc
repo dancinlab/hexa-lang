@@ -38,12 +38,26 @@ export HEXA_LANG="$PWD"
 export HEXA_MEM_UNLIMITED=1
 REGEN="self/native/hexa_cc.c.new"
 rm -f "$REGEN"
-if OUT="$REGEN" HEXA_V2="$edge_hexa" "$edge_hexa" cc --regen 2>/tmp/regen.err && [ -s "$REGEN" ]; then
+# Accept a regen ONLY if it is structurally whole, not merely non-empty. The
+# in-process `hexa cc --regen` has a documented silent-truncation to a ~259 B
+# skeleton (RFC086); a bare `[ -s ]` non-empty check passes that truncated file,
+# so it gets installed and the downstream clang dies 33k lines into a garbage
+# merge. Assert the four module init entry points + the codegen driver — if the
+# primary path yields a partial file it now FALLS THROUGH to the manual pipeline
+# (mktemp-isolated + self-validating), and only a genuinely broken regen FATALs.
+_regen_valid() {
+  [ -s "$1" ] || return 1
+  grep -q 'int _lexer_init(' "$1" && grep -q 'int _parser_init(' "$1" \
+    && grep -q 'int _type_checker_init(' "$1" && grep -q 'int _codegen_init(' "$1" \
+    && grep -q 'codegen_full' "$1"
+}
+if OUT="$REGEN" HEXA_V2="$edge_hexa" "$edge_hexa" cc --regen 2>/tmp/regen.err && _regen_valid "$REGEN"; then
   echo "[stage_regen_hexa_cc] regen via 'hexa cc --regen' OK"
-elif OUT="$PWD/$REGEN" HEXA_V2="$edge_hexa" bash tool/regen_cc_manual 2>/tmp/regen2.err && [ -s "$REGEN" ]; then
+elif OUT="$PWD/$REGEN" HEXA_V2="$edge_hexa" bash tool/regen_cc_manual 2>/tmp/regen2.err && _regen_valid "$REGEN"; then
   echo "[stage_regen_hexa_cc] regen via tool/regen_cc_manual OK"
 else
-  echo "[stage_regen_hexa_cc] FATAL: regen produced no hexa_cc.c" >&2
+  echo "[stage_regen_hexa_cc] FATAL: regen produced no structurally-valid hexa_cc.c" >&2
+  echo "  (need _lexer_init/_parser_init/_type_checker_init/_codegen_init + codegen_full)" >&2
   tail -3 /tmp/regen.err /tmp/regen2.err 2>/dev/null >&2 || true
   exit 1
 fi

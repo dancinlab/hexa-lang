@@ -63,6 +63,8 @@
 // Catalog/diagnostic strings: ENGLISH ONLY.
 
 use "compiler/smash/candidate"
+use "compiler/atlas/identity_engine"
+use "compiler/atlas/known_catalog.gen"
 
 // ── Deterministic LCG (no new builtin; pure i64 arithmetic) ───────────
 //
@@ -281,6 +283,335 @@ pub fn emerge_audit_emit(round: i64, net_walls: i64, vocab_size: i64, llm_size: 
     msg = msg + ",\"net_walls\":" + to_string(net_walls)
     msg = msg + ",\"open_well\":" + to_string(vocab_size)
     msg = msg + ",\"frozen_llm\":" + to_string(llm_size)
+    msg = msg + "}"
+    eprintln(msg)
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// emerge2 — M4 open-well FUNCTION-SYMBOL synthesis + α/β/γ discriminator
+// (OUROBOROS-novel · ARCHITECTURE discovery-engine-novel-design-roadmap ·
+//  state/fable-eval-discovery-2026-07-02/NEXUS_novel_design_fable.md §2-P3/§3).
+//
+// WHY emerge2 replaces the DECISIVE role of the E4 port above: the E4 demo
+// (`emerge`/`emerge_step`) grows a value-SET by integer addition
+// (vocab.add(pick+pick)) — the design SSOT §2-P3 DEMOTES this to a "structural
+// growth demo" because every new element is already expressible as `a+b`
+// (expressive power grows by 0). emerge2 instead SYNTHESIZES new function
+// symbols (5 generators) and gates each by BOUNDED INEXPRESSIBILITY: a
+// candidate's value-signature fingerprint (over n in [2,N], via the frozen
+// identity_engine kernel) is classified by known_catalog::kc_classify into
+//   α (0) = permutation — fp inside the size-≤k well FP_k (already expressible)
+//   β (1) = rediscovery — fp in the KNOWN sequence/composition catalog
+//   γ (2) = genuine-novel-CANDIDATE — outside both (∉FP_k ∧ ∉KNOWN)
+// The E4 fns above stay byte-identical (drill.hexa still calls emerge_step);
+// emerge2 is an ADDITIVE library. drill wiring (emerge2_step call +
+// DRILL_EMERGE2 row) is M5, a separate PR — so M4 is byteeq-trivial.
+//
+// HONESTY (c2): every fp/classification is BOUNDED at size-k (k=2) over [2,N]
+// (N=64) — the k and N are NAMED in the audit row and labels; "size-k bounded
+// inexpressibility", NEVER absolute. γ = "outside THIS catalog", NOT outside
+// mathematics: the built-in counterexample is G1's superperfect solution
+// sequence {2,4,16,64,4096} = OEIS A019279 — a γ here that the downstream g5
+// human-literature gate would (correctly) catch. γ is only a CANDIDATE for the
+// g5 fold path (hexa verify). No atlas write (in-memory only). No new builtin
+// vs frozen blob 151c52c8 (pure af/spf/comp_holds/verify_congruence/sequence
+// composition + integer arithmetic). No RNG — candidate tables are fixed in
+// code = Texas-sharpshooter pre-registration (design §3). The legacy E4 LCG
+// above is untouched.
+//
+// Fixed parameters (decided · design §M4): N=64 (fp window · matches the
+// [2,64] prescreen + known_catalog_test) · k=2 (ie_fp_table_build = 189
+// size-≤2 terms) · N_SOL=8192 (G1 solution scan — captures all 5 superperfect
+// + 5 Mersenne solutions) · M_IT=3 (iterate depth) · CAP_FIX=64 (fixed-point
+// step cap). Hash convention for undefined/infeasible/exhausted points: v=0
+// (exactly matching kc_comp_fingerprint's 0-fill — mandatory for cross-space
+// comparability).
+// ══════════════════════════════════════════════════════════════════════════
+
+// generic-array i64/BigInt read (mirrors _vocab_get above · the atlas idiom).
+fn _e2_get(a: array, i) -> int { return to_int(to_string(a[i])) }
+
+// within-run canonical-dup guard: has this fingerprint already been emitted
+// this call? (design §3 — a repeated fp is a permutation, class α). Linear
+// scan over <=19 candidates.
+fn _e2_seen_has(seen: array, fp) -> bool {
+    let n = len(seen)
+    let mut i = 0
+    while i < n {
+        if _e2_get(seen, i) == fp { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ── Divisor enumerator (net-new · via spf) ────────────────────────────────
+// All divisors of n (n>=1) via repeated-spf factorization. Generation order is
+// deterministic (spf ascending) but NOT sorted — every consumer is an exact-int
+// SUM over the divisor multiset (Dirichlet convolution), which commutes, so no
+// sort is needed.
+pub fn e2_divisors(n) -> array {
+    let divs = []
+    divs.push(1)
+    let mut m = n
+    while m > 1 {
+        let p = spf(m)
+        let mut e = 0
+        while m % p == 0 {
+            m = m / p
+            e = e + 1
+        }
+        let base_len = len(divs)
+        let mut pk = 1
+        let mut j = 1
+        while j <= e {
+            pk = pk * p
+            let mut i = 0
+            while i < base_len {
+                divs.push(_e2_get(divs, i) * pk)
+                i = i + 1
+            }
+            j = j + 1
+        }
+    }
+    return divs
+}
+
+// ── Generator value fns ───────────────────────────────────────────────────
+
+// G3 value: Dirichlet convolution (f*g)(n) = Σ_{d|n} af(d,f)·af(n/d,g).
+// Möbius inversion is the SAME operator with g (or f) = 12 (μ) — no separate fn.
+pub fn e2_dirichlet_val(f, g, n) -> int {
+    let divs = e2_divisors(n)
+    let mut total = 0
+    let mut i = 0
+    while i < len(divs) {
+        let d = _e2_get(divs, i)
+        total = total + af(d, f) * af(n / d, g)
+        i = i + 1
+    }
+    return total
+}
+
+// G4 value: f^m(n), each application gated by af_compose_feasible (image must
+// stay in [1,2e6]); infeasible step → 0 (honest 0-fill, matches kc convention).
+pub fn e2_iterate_val(f, m, n) -> int {
+    let mut x = n
+    let mut i = 0
+    while i < m {
+        if af_compose_feasible(x, f) == 0 { return 0 }
+        x = af(x, f)
+        i = i + 1
+    }
+    return x
+}
+
+// G4b value: #steps to reach a fixed point of f from n (aliquot-style), cap
+// steps; not reached within cap OR infeasible step → 0 (honest 0-fill).
+pub fn e2_fix_steps(f, n, cap) -> int {
+    let mut x = n
+    let mut steps = 0
+    while steps < cap {
+        if af_compose_feasible(x, f) == 0 { return 0 }
+        let nx = af(x, f)
+        if nx == x { return steps }
+        x = nx
+        steps = steps + 1
+    }
+    return 0
+}
+
+// G5 sequence accessor for verify_congruence's supported `which` ids.
+fn _e2_seq_at(which, j) -> int {
+    if which == 0 { return partition_p(j) }
+    if which == 2 { return bell(j) }
+    if which == 3 { return fib(j) }
+    return lucas(j)                       // which == 4
+}
+
+// G5 value: exact-divide witness of a verified congruence seq(a·n+b) ≡ 0 (mod m)
+// — the quotient seq(a·n+b)/m (integer certificate). Caller MUST have verified
+// the family first (emerge2_step guards with verify_congruence).
+pub fn e2_witness_val(which, a, b, m, n) -> int {
+    return _e2_seq_at(which, a * n + b) / m
+}
+
+// G1 support: all solutions n∈[2,nsol] of the composition relation
+// (comp_holds gates feasibility internally).
+pub fn e2_solutions(f, g, mode, p, nsol) -> array {
+    let sols = []
+    let mut n = 2
+    while n <= nsol {
+        if comp_holds(f, g, mode, p, n) == 1 { sols.push(n) }
+        n = n + 1
+    }
+    return sols
+}
+
+// ── Fingerprint builders (build the [2,N] value vector → ie_vec_fingerprint) ──
+
+// G1: solution-indicator sequence a_S(i) = i-th solution. Hash position
+// n∈[2,N] carries sols[n-2]; positions past the last solution carry 0 (0-fill).
+pub fn e2_fp_solseq(f, g, mode, p, nsol, N) -> int {
+    let sols = e2_solutions(f, g, mode, p, nsol)
+    let vals = []
+    let mut n = 2
+    while n <= N {
+        let mut v = 0
+        if n - 2 < len(sols) { v = _e2_get(sols, n - 2) }
+        vals.push(v)
+        n = n + 1
+    }
+    return ie_vec_fingerprint(vals, 2, N)
+}
+
+pub fn e2_fp_dirichlet(f, g, N) -> int {
+    let vals = []
+    let mut n = 2
+    while n <= N {
+        vals.push(e2_dirichlet_val(f, g, n))
+        n = n + 1
+    }
+    return ie_vec_fingerprint(vals, 2, N)
+}
+
+pub fn e2_fp_iterate(f, m, N) -> int {
+    let vals = []
+    let mut n = 2
+    while n <= N {
+        vals.push(e2_iterate_val(f, m, n))
+        n = n + 1
+    }
+    return ie_vec_fingerprint(vals, 2, N)
+}
+
+pub fn e2_fp_fixsteps(f, N) -> int {
+    let vals = []
+    let mut n = 2
+    while n <= N {
+        vals.push(e2_fix_steps(f, n, 64))
+        n = n + 1
+    }
+    return ie_vec_fingerprint(vals, 2, N)
+}
+
+pub fn e2_fp_witness(which, a, b, m, N) -> int {
+    let vals = []
+    let mut n = 2
+    while n <= N {
+        vals.push(e2_witness_val(which, a, b, m, n))
+        n = n + 1
+    }
+    return ie_vec_fingerprint(vals, 2, N)
+}
+
+// ── The step ──────────────────────────────────────────────────────────────
+pub struct Emerge2Result {
+    n_cands: i64,
+    alpha: i64,
+    beta: i64,
+    gamma: i64,
+    fp_size: i64,       // |FP_k| = ie_fp_table_count() = 189
+    k: i64,             // 2 (size-≤2 well)
+    nwin: i64,          // N (fingerprint window)
+    labels: array,      // per-candidate label strings (deterministic order)
+    classes: array,     // parallel: 0/1/2 per candidate
+    fps: array          // parallel: fingerprints
+}
+
+// One emerge2 round: synthesize the pre-registered candidate table, fingerprint
+// each, classify α/β/γ. `round` and `cands` are accepted for M5 signature
+// stability but do NOT influence candidate generation in M4 (fixed tables =
+// sharpshooter guard). Deterministic (no RNG · no clock). fp_table built once.
+pub fn emerge2_step(round: i64, cands: array, N: i64) -> Emerge2Result {
+    let fp_table = ie_fp_table_build(N)
+    let labels = []
+    let fps = []
+
+    // G1 sol-indicator (N_SOL=8192) — superperfect σ∘σ=2n · Mersenne σ∘σ=σ+n.
+    labels.push("g1:solseq:superperfect@8192")  fps.push(e2_fp_solseq(0, 0, 0, 2, 8192, N))
+    labels.push("g1:solseq:mersenne@8192")      fps.push(e2_fp_solseq(0, 0, 1, 0, 8192, N))
+    // G2 composition-symbol via kc_comp_fingerprint — (0,0)=σ∘σ β-control,
+    // (3,3)=φ∘φ β-control, then σ∘φ · φ∘σ · τ∘σ exploratory.
+    labels.push("g2:comp:sigma.sigma")  fps.push(kc_comp_fingerprint(0, 0, N))
+    labels.push("g2:comp:phi.phi")      fps.push(kc_comp_fingerprint(3, 3, N))
+    labels.push("g2:comp:sigma.phi")    fps.push(kc_comp_fingerprint(0, 3, N))
+    labels.push("g2:comp:phi.sigma")    fps.push(kc_comp_fingerprint(3, 0, N))
+    labels.push("g2:comp:tau.sigma")    fps.push(kc_comp_fingerprint(4, 0, N))
+    // G3 Dirichlet — (12,5)=μ∗Id=φ α-control, (0,12)=σ∗μ=Id α-control, then
+    // φ∗φ · τ∗τ · σ∗σ exploratory.
+    labels.push("g3:dir:mu.Id")     fps.push(e2_fp_dirichlet(12, 5, N))
+    labels.push("g3:dir:sigma.mu")  fps.push(e2_fp_dirichlet(0, 12, N))
+    labels.push("g3:dir:phi.phi")   fps.push(e2_fp_dirichlet(3, 3, N))
+    labels.push("g3:dir:tau.tau")   fps.push(e2_fp_dirichlet(4, 4, N))
+    labels.push("g3:dir:sigma.sigma") fps.push(e2_fp_dirichlet(0, 0, N))
+    // G4 iterate m=3 (σ³·φ³·τ³) + G4b φ-iteration fixed-point step count.
+    labels.push("g4:it3:sigma")  fps.push(e2_fp_iterate(0, 3, N))
+    labels.push("g4:it3:phi")    fps.push(e2_fp_iterate(3, 3, N))
+    labels.push("g4:it3:tau")    fps.push(e2_fp_iterate(4, 3, N))
+    labels.push("g4:fix:phi@cap64")  fps.push(e2_fp_fixsteps(3, N))
+    // G5 congruence-witness (Ramanujan p(a·n+b)/m) — each GUARDED by a full
+    // verify_congruence over the window; guard failure skips the candidate (the
+    // test's n_cands==19 assert then fails loudly = a real infra signal).
+    if verify_congruence(0, 5, 4, 5, 5 * N + 4) == 1 {
+        labels.push("g5:wit:p(5n+4)/5")   fps.push(e2_fp_witness(0, 5, 4, 5, N))
+    }
+    if verify_congruence(0, 7, 5, 7, 7 * N + 5) == 1 {
+        labels.push("g5:wit:p(7n+5)/7")   fps.push(e2_fp_witness(0, 7, 5, 7, N))
+    }
+    if verify_congruence(0, 11, 6, 11, 11 * N + 6) == 1 {
+        labels.push("g5:wit:p(11n+6)/11") fps.push(e2_fp_witness(0, 11, 6, 11, N))
+    }
+
+    // classify each candidate — within-run dup → α (permutation), else kc_classify.
+    let classes = []
+    let seen = []
+    let mut alpha = 0
+    let mut beta = 0
+    let mut gamma = 0
+    let mut i = 0
+    while i < len(fps) {
+        let fp = _e2_get(fps, i)
+        let mut cls = 0
+        if _e2_seen_has(seen, fp) {
+            cls = 0
+        } else {
+            seen.push(fp)
+            cls = kc_classify(fp, fp_table, N)
+        }
+        classes.push(cls)
+        if cls == 0 { alpha = alpha + 1 }
+        if cls == 1 { beta = beta + 1 }
+        if cls == 2 { gamma = gamma + 1 }
+        i = i + 1
+    }
+
+    return Emerge2Result {
+        n_cands: len(fps),
+        alpha: alpha,
+        beta: beta,
+        gamma: gamma,
+        fp_size: ie_fp_table_count(),
+        k: 2,
+        nwin: N,
+        labels: labels,
+        classes: classes,
+        fps: fps
+    }
+}
+
+// Per-round emerge2 audit row (stderr DRILL_EMERGE2). ASCII only · fixed key
+// order · no floats. scope string carries the honesty caveat inline.
+pub fn emerge2_audit_emit(round: i64, r: Emerge2Result) -> void {
+    let mut msg = "DRILL_EMERGE2 {"
+    msg = msg + "\"round\":" + to_string(round)
+    msg = msg + ",\"n_cands\":" + to_string(r.n_cands)
+    msg = msg + ",\"alpha\":" + to_string(r.alpha)
+    msg = msg + ",\"beta\":" + to_string(r.beta)
+    msg = msg + ",\"gamma\":" + to_string(r.gamma)
+    msg = msg + ",\"fp_k\":" + to_string(r.fp_size)
+    msg = msg + ",\"k\":" + to_string(r.k)
+    msg = msg + ",\"N\":" + to_string(r.nwin)
+    msg = msg + ",\"scope\":\"bounded[2,N] catalog-relative; gamma != absolute-novel\""
     msg = msg + "}"
     eprintln(msg)
 }
