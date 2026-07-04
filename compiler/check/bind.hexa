@@ -1284,6 +1284,24 @@ fn _bind_builtin_names() -> [string] {
         // 151c52c8-safe identifier-calls (compiler never emits them).
         "__hx_payload_f2i", "__hx_payload_i2f",
         "__hx_str_byte", "__hx_to_double", "__hx_arr_len", "__hx_syscall0", "__hx_syscall6", "__hx_ptr_store64", "__hx_ptr_load64", "__hx_ptr_store32", "__hx_ptr_load32", "__hx_ptr_store8", "__hx_ptr_load8",
+        // RFC inline-asm rung 1 (2026-06-27): `__hx_asm_nop()` — the first
+        // named-opcode inline-assembly intrinsic. 0-arg leaf that emits a literal
+        // `nop` (x86 0x90 / arm64 0xd503201f) inline and returns int HexaVal 0, so
+        // it composes as an ordinary expression. Extends the `__hx_syscall0` raw-
+        // instruction-emit path (state/rfc_inline_asm.md). ADD-only: the compiler
+        // never calls it -> DEFAULT emit byte-identical, gen3==gen4 preserved.
+        "__hx_asm_nop",
+        // RFC inline-asm rung 2 (2026-06-27): `__hx_asm("<op>")` — the generalized
+        // named-opcode passthrough. ONE intrinsic accepts a STRING-LITERAL opcode
+        // and lowers it through a fixed whitelist {nop, pause, fence} to the per-
+        // target instruction (x86: nop/pause/mfence · arm64: nop/yield/dmb ish),
+        // returning int HexaVal 0 so it composes as an ordinary expression. The
+        // literal-template rule mirrors Rust `asm!`/GCC `__asm__`/Zig `asm` (the
+        // instruction text is a compile-time literal, never a runtime value).
+        // 1 string arg, opt-in HEXA_INLINE_ASM (default-OFF). ADD-only + env-gated:
+        // the compiler never calls it -> DEFAULT emit byte-identical, gen3==gen4
+        // preserved. Generalizes `__hx_asm_nop` (which stays for back-compat).
+        "__hx_asm",
         // RFC061 Route C 2nd-return-register (2026-06-27): `__hx_syscall6_out2(
         // num, a0..a5, outptr)` issues ONE syscall and writes BOTH return
         // registers + the carry/error flag into a caller-supplied scratch:
@@ -1513,6 +1531,13 @@ fn _bind_builtin_names() -> [string] {
         "write_f32", "write_i32", "write_i64", "deref_f32", "deref_i32",
         "ptr_write_f32", "ptr_write_i32", "ptr_read_f32", "ptr_read_f64", "ptr_read_i32",
         "ord",
+        // zeroc #29 regex-seed regen — `chr(n)` raw-byte builtin (ord's inverse).
+        // Absent here, present in the 2nd gate: _builtin_runtime_sym maps
+        // chr -> hexa_chr_byte (arm64_darwin.hexa, shared by the x86_64 lane;
+        // runtime body self/runtime.c hexa_chr_byte, NUL-safe N&0xFF). Exposed by
+        // the isolated --emit=asm of stdlib/runtime/regex_rt.hexa (HX2001 x5) — the
+        // gen2 lineage always had it (self/codegen.hexa chr->hexa_chr_byte).
+        "chr",
         // RUNTIME.md step-3 잔여 #4 pointer-eq inline builtins (cycle 100,
         // 2026-05-22). `__vs_ptr_eq(a, b)` / `__map_ptr_eq(a, b)` lower to
         // a single inline `hexa_bool((HX_VS(a) == HX_VS(b)))` etc in

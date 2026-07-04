@@ -845,6 +845,12 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
         ipp = ipp + 1
     }
 
+    // try/catch fix (native setjmp correctness) — darwin hxlcl_longjmp restores
+    // the callee-saved pool (x19-x28); a value homed there and written inside a
+    // try body rolls back on the catch path (torn {tag,payload}). A try-
+    // containing fn goes ALL-SPILL (memory survives longjmp); try-free fns keep
+    // the pool → byte-identical. Mirrors x86_64_linux _sj_all_spill.
+    let _sj_all_spill = _arm64_count_try_setjmp(mf) > 0
     let mut s = 0
     while s < len(order) {
         let cur = order[s]
@@ -885,7 +891,7 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
             continue
         }
 
-        if len(pool) > 0 {
+        if len(pool) > 0 && !_sj_all_spill {
             let r = pool[0]
             let mut np: [string] = []
             let mut tt = 1
@@ -918,7 +924,7 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
                 victim_pos = victim_pos - 1
             }
 
-            if victim_pos >= 0 && iv.ends[active_idx[victim_pos]] > iv.ends[cur] {
+            if victim_pos >= 0 && iv.ends[active_idx[victim_pos]] > iv.ends[cur] && !_sj_all_spill {
                 let v = active_idx[victim_pos]
                 map_regs[cur] = map_regs[v]
                 map_slots[cur] = -1
@@ -3020,6 +3026,54 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              _arm64_op_reg("x0"), "__hx_syscall0: payload = result"))
             buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
                              _arm64_op_label("#0"), "__hx_syscall0: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // RFC inline-asm rung 1: `__hx_asm_nop()` → int HexaVal 0. The first named-
+        // opcode inline-assembly intrinsic — emits a literal `nop` (0xd503201f,
+        // encoded by macho_arm64.hexa, shared by the arm64-linux ELF backend) inline,
+        // then returns int 0 ({TAG_INT=x0:0, payload=x1:0}) so the call composes as
+        // an ordinary expression. 0-arg leaf, same shape as __hx_syscall0 minus the
+        // trap. ADD-only: the compiler never calls it → DEFAULT byte-identical.
+        // state/rfc_inline_asm.md. reference: Rust core::hint::spin_loop / Zig asm.
+        if s.op == "__hx_asm_nop" {
+            buf.push(_arm64_instr0("nop", "__hx_asm_nop: inline asm nop"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
+                             _arm64_op_label("#0"), "__hx_asm_nop: payload = 0"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_asm_nop: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // RFC inline-asm rung 2: `__hx_asm("<op>")` → int HexaVal 0, the generalized
+        // whitelisted named-opcode passthrough (mirror of the x86_64 branch). Opcode
+        // = COMPILE-TIME STRING LITERAL (const_str operand) — same literal-template
+        // rule as Rust `asm!`/GCC `__asm__`/Zig `asm`. The portable whitelist {nop,
+        // pause, fence} maps to the AArch64 hint/barrier {nop, yield, dmb ish}
+        // (encoded by macho_arm64.hexa, shared by the arm64-linux ELF backend),
+        // gated behind opt-in HEXA_INLINE_ASM. DEFAULT (env unset) or unknown/non-
+        // literal opcode → NO raw instruction, just the boxed int-0 no-op. ADD-only +
+        // env-gated: the compiler never calls __hx_asm → DEFAULT byte-identical.
+        // `fence`→`dmb #11` (CRm=ish=11; the numeric form keeps --emit=asm valid and
+        // is mangle-safe via the `#`-prefix carve-out in emit/asm.hexa _fmt_label).
+        if s.op == "__hx_asm" {
+            let mut _amnem = ""
+            if len(s.args) >= 1 && s.args[0].kind == "const_str" && env("HEXA_INLINE_ASM") == "1" {
+                let _aop = s.args[0].str_val
+                if _aop == "nop"   { _amnem = "nop" }
+                if _aop == "pause" { _amnem = "yield" }
+                if _aop == "fence" { _amnem = "dmb" }
+            }
+            if _amnem == "dmb" {
+                buf.push(_arm64_instr1("dmb", _arm64_op_label("#11"),
+                                 "__hx_asm fence: dmb ish (CRm=11)"))
+            } else if _amnem != "" {
+                buf.push(_arm64_instr0(_amnem, "__hx_asm: inline asm passthrough"))
+            }
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
+                             _arm64_op_label("#0"), "__hx_asm: payload = 0"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_asm: TAG_INT"))
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
