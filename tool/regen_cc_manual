@@ -2,7 +2,7 @@
 # tool/regen_cc_manual — RFC 086 P0 bypass: manual hexa_cc.c regen
 #
 # Replaces `hexa cc --regen` (cmd_regen_cc in self/main.hexa) for paths where
-# the in-process hexa-runtime exec chain silent-truncates /tmp/_cg.c to a
+# the in-process hexa-runtime exec chain silent-truncates $W/_cg.c to a
 # 259-byte skeleton. Direct shell invocation of the same hexa_v2 binary
 # reliably produces the full 940 KB transpile.
 #
@@ -33,6 +33,15 @@ OUT="${OUT:-$HEXA_LANG/self/native/hexa_cc.c.new}"
 SELF="$HEXA_LANG/self"
 TOOL="$HEXA_LANG/tool"
 
+# Per-run scratch dir. Previously the intermediate transpiles used FIXED paths
+# ($W/_lexer.c …); two concurrent regens on a persistent self-hosted runner
+# (e.g. a merge wave landing several PRs on the same darwin runner) then clobber
+# each other's $W/_cg.c, producing a partial/truncated awk-merge → a corrupt
+# hexa_cc.c that clang rejects deep inside the seed-converge. A per-run mktemp -d
+# isolates every invocation.
+W="$(mktemp -d "${TMPDIR:-/tmp}/hexa_regen.XXXXXX")"
+trap 'rm -rf "$W"' EXIT INT TERM
+
 if [ ! -x "$HEXA_V2" ]; then
     echo "error: hexa_v2 not found at $HEXA_V2" >&2
     exit 1
@@ -42,8 +51,8 @@ fi
 # Each invocation is independent (no in-process exec chain), so codegen.hexa
 # reliably produces ~940 KB output instead of a 259 B skeleton.
 echo "[1/5] transpiling 4 SSOT modules via direct shell"
-for spec in "lexer.hexa:/tmp/_lexer.c" "parser.hexa:/tmp/_parser.c" \
-            "type_checker.hexa:/tmp/_tc.c" "codegen.hexa:/tmp/_cg.c"; do
+for spec in "lexer.hexa:$W/_lexer.c" "parser.hexa:$W/_parser.c" \
+            "type_checker.hexa:$W/_tc.c" "codegen.hexa:$W/_cg.c"; do
     src="${spec%:*}"
     out="${spec##*:}"
     rm -f "$out"
@@ -58,10 +67,10 @@ done
 
 # ── Step 2/5: pass 1 merge (rename main() -> _MOD_init) ────────────────
 echo "[2/5] merge pass 1 — main() rename per module"
-for spec in "lexer:/tmp/_lexer.c:/tmp/_lexer.m.c" \
-            "parser:/tmp/_parser.c:/tmp/_parser.m.c" \
-            "type_checker:/tmp/_tc.c:/tmp/_tc.m.c" \
-            "codegen:/tmp/_cg.c:/tmp/_cg.m.c"; do
+for spec in "lexer:$W/_lexer.c:$W/_lexer.m.c" \
+            "parser:$W/_parser.c:$W/_parser.m.c" \
+            "type_checker:$W/_tc.c:$W/_tc.m.c" \
+            "codegen:$W/_cg.c:$W/_cg.m.c"; do
     mod="${spec%%:*}"; rest="${spec#*:}"
     in="${rest%:*}"; out="${rest##*:}"
     awk -v MOD="$mod" -f "$TOOL/regen_cc_merge.awk" "$in" > "$out"
@@ -69,20 +78,20 @@ done
 
 # ── Step 3/5: pass 2 dedup forward-decls (2-pass per module) ───────────
 echo "[3/5] merge pass 2 — dedup redundant forward-decls"
-for spec in "/tmp/_lexer.m.c:/tmp/_lexer.d.c" \
-            "/tmp/_parser.m.c:/tmp/_parser.d.c" \
-            "/tmp/_tc.m.c:/tmp/_tc.d.c" \
-            "/tmp/_cg.m.c:/tmp/_cg.d.c"; do
+for spec in "$W/_lexer.m.c:$W/_lexer.d.c" \
+            "$W/_parser.m.c:$W/_parser.d.c" \
+            "$W/_tc.m.c:$W/_tc.d.c" \
+            "$W/_cg.m.c:$W/_cg.d.c"; do
     in="${spec%:*}"; out="${spec##*:}"
     awk -f "$TOOL/regen_cc_dedup_fwd.awk" "$in" "$in" > "$out"
 done
 
 # ── Step 4/5: pass 3 per-module symbol prefix (string-literal-aware) ───
 echo "[4/5] merge pass 3 — per-module symbol prefix"
-for spec in "lexer:/tmp/_lexer.d.c:/tmp/_lexer.r.c" \
-            "parser:/tmp/_parser.d.c:/tmp/_parser.r.c" \
-            "type_checker:/tmp/_tc.d.c:/tmp/_tc.r.c" \
-            "codegen:/tmp/_cg.d.c:/tmp/_cg.r.c"; do
+for spec in "lexer:$W/_lexer.d.c:$W/_lexer.r.c" \
+            "parser:$W/_parser.d.c:$W/_parser.r.c" \
+            "type_checker:$W/_tc.d.c:$W/_tc.r.c" \
+            "codegen:$W/_cg.d.c:$W/_cg.r.c"; do
     mod="${spec%%:*}"; rest="${spec#*:}"
     in="${rest%:*}"; out="${rest##*:}"
     awk -v MOD="$mod" -f "$TOOL/regen_cc_rename.awk" "$in" > "$out"
@@ -93,8 +102,8 @@ echo "[5/5] assembling $OUT"
 {
     printf '// HEXA self-hosted compiler — regenerated via tool/regen_cc_manual\n'
     printf '#include "runtime.h"\n\n'
-    for spec in "lexer:/tmp/_lexer.r.c" "parser:/tmp/_parser.r.c" \
-                "type_checker:/tmp/_tc.r.c" "codegen:/tmp/_cg.r.c"; do
+    for spec in "lexer:$W/_lexer.r.c" "parser:$W/_parser.r.c" \
+                "type_checker:$W/_tc.r.c" "codegen:$W/_cg.r.c"; do
         mod="${spec%%:*}"; in="${spec##*:}"
         printf '\n// === %s ===\n\n' "$mod"
         cat "$in"
@@ -129,6 +138,18 @@ int main(int argc, char** argv) {
 }
 __MAIN_EOF__
 } > "$OUT"
+
+# Structure validity — reject a partial/corrupt merge before the caller installs
+# it as the seed. A clobbered intermediate can yield a non-empty-but-broken $OUT
+# (e.g. a module's init body leaking to file scope after a premature `}`); the
+# `[ -s "$OUT" ]` non-empty check the callers use does NOT catch that. Assert the
+# four module init entry points + the codegen driver are all present.
+for sym in '_lexer_init' '_parser_init' '_type_checker_init' '_codegen_init' 'codegen_full'; do
+    if ! grep -q "$sym" "$OUT"; then
+        echo "error: $OUT is missing '$sym' — partial/corrupt regen, refusing" >&2
+        exit 3
+    fi
+done
 
 bytes=$(wc -c < "$OUT")
 lines=$(wc -l < "$OUT")

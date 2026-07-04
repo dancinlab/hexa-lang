@@ -26,6 +26,11 @@
 //      nothing verifies and nothing is fabricated). The 0 is REPORTED, not hidden.
 //   3. The DRILL_VERIFIER native-sweep line still reports its real verdict
 //      (continue + identity=…,verified=0,…,novel=0) — absorb did not regress it.
+//   4. [M5] The HEXA_DRILL_NO_ABSORB=1 toggle (H1 absorb-OFF arm) still runs to
+//      completion and STILL emits DRILL_ABSORB/DRILL_VERIFIER (the toggle gates
+//      ONLY the feed-forward push, not the audit). In standard vocab both arms
+//      are byte-identical (absorbed_pool=[] → nothing to feed) — the vacuous
+//      Δ=0 is the located-bottleneck (Trap B, design SSOT §5), not a refutation.
 //
 // HOME is relocated to a per-run scratch dir UNDER $HOME (Mac build guard
 // refuses a cache under /tmp).
@@ -102,12 +107,33 @@ fn main() {
     _check("scenario 3: sweep reports novel= count (absorb known/novel cross-check live)",
            _contains(err, ",novel="), fails)
 
+    // ─── 4: [M5] HEXA_DRILL_NO_ABSORB toggle (H1 absorb-OFF arm) ───
+    // The toggle gates ONLY the feed-forward push (_absorb_feed enabled=false):
+    // the OFF arm must STILL run to completion and STILL emit DRILL_ABSORB /
+    // DRILL_VERIFIER identically (the audit is NOT gated). In standard 12-fn
+    // vocab absorbed_pool is [] every round, so ON and OFF are byte-identical
+    // here — that vacuous Δ=0 is the located-bottleneck (Trap B) documented in
+    // the design SSOT §5, NOT an H1 refutation. This exercises the OFF path in
+    // production wiring (drill.hexa has fn main → cannot be imported for a unit
+    // call · verifier_hook_test/absorb subprocess pattern).
+    println("")
+    println("scenario 4: HEXA_DRILL_NO_ABSORB=1 OFF arm still runs + audit not gated (Trap B vacuity)")
+    let stderr_off = scratch + "/drill_stderr_off.txt"
+    let _off = exec("HEXA_DRILL_NO_ABSORB=1 " + base + " 2>'" + stderr_off + "'")
+    let err_off = if file_exists(stderr_off) { read_file(stderr_off) } else { "" }
+    _check("scenario 4: OFF arm still emits DRILL_ABSORB (feed gated, audit not)",
+           _contains(err_off, "DRILL_ABSORB {"), fails)
+    _check("scenario 4: OFF arm still emits DRILL_VERIFIER (run completed)",
+           _contains(err_off, "DRILL_VERIFIER {"), fails)
+    _check("scenario 4: OFF arm verified=0 — arm-invariant in standard vocab (Trap B, honest)",
+           _contains(err_off, "\"verified\":0"), fails)
+
     // ─── cleanup ───
     exec("rm -rf '" + scratch + "' 2>/dev/null")
 
     println("")
     if len(fails) == 0 {
-        println("RESULT: PASS — absorb loop wired + live (verify-gated cross-round feed-forward; honest novel=0)")
+        println("RESULT: PASS — absorb loop wired + live (verify-gated cross-round feed-forward; honest novel=0) + M5 HEXA_DRILL_NO_ABSORB toggle (Trap B vacuity)")
         exit(0)
     } else {
         println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
