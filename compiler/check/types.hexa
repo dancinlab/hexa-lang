@@ -3790,6 +3790,17 @@ fn _check_match(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
 // build's diagnostic stream (release integrity). It is a warning (HX3006),
 // never fatal, and never affects emitted bytes — promotable to default once
 // the in-tree corpus is measured clean.
+//
+// Severity escalation — `HEXA_EXHAUSTIVE_FATAL=1`: a strict/CI build can opt
+// into Rust-grade exhaustiveness, where a non-exhaustive match is a HARD
+// ERROR (E0004 "non-exhaustive patterns"; rustc raises it via
+// `struct_span_code_err!(..., E0004, ...)` in
+// compiler/rustc_mir_build/src/thir/pattern/check_match.rs) rather than a
+// lint. Under this flag the analysis emits HX3018 (Severity::Error, S3)
+// instead of HX3006, so a missing variant aborts the build before codegen
+// (`_has_errors(diags)` in main.hexa → exit 1). The fatal flag implies the
+// check, so `HEXA_EXHAUSTIVE` need not also be set. With BOTH flags unset
+// the pass is a no-op and the default build stays byte-identical.
 
 struct ExhEnumReg {
     names: [string],
@@ -3902,7 +3913,7 @@ fn _exh_path_tail(t: string) -> string {
     return ""
 }
 
-fn _exh_analyze_match(e: Expr, reg: ExhEnumReg, out: array) {
+fn _exh_analyze_match(e: Expr, reg: ExhEnumReg, out: array, fatal: bool) {
     // children: [scrut, pat0, body0, pat1, body1, ...]
     let mut has_catchall = false
     let mut saw_enum = false
@@ -3948,7 +3959,11 @@ fn _exh_analyze_match(e: Expr, reg: ExhEnumReg, out: array) {
         j = j + 1
     }
     if n_missing > 0 {
-        let mut b = diag_new("HX3006")
+        // HEXA_EXHAUSTIVE_FATAL=1 escalates the same finding to a fatal
+        // error (HX3018, Severity::Error) — Rust E0004 semantics. Default
+        // opt-in (HEXA_EXHAUSTIVE=1) stays a non-fatal warning (HX3006).
+        let code = if fatal { "HX3018" } else { "HX3006" }
+        let mut b = diag_new(code)
         b = diag_span(b, e.span)
         b = diag_arg(b, "enum", enum_head)
         b = diag_arg(b, "missing", missing)
@@ -3956,19 +3971,24 @@ fn _exh_analyze_match(e: Expr, reg: ExhEnumReg, out: array) {
     }
 }
 
-fn _exh_walk(e: Expr, reg: ExhEnumReg, out: array) {
+fn _exh_walk(e: Expr, reg: ExhEnumReg, out: array, fatal: bool) {
     if _is_match_expr(e.kind) {
-        _exh_analyze_match(e, reg, out)
+        _exh_analyze_match(e, reg, out, fatal)
     }
     let mut i = 0
     while i < len(e.children) {
-        _exh_walk(e.children[i], reg, out)
+        _exh_walk(e.children[i], reg, out, fatal)
         i = i + 1
     }
 }
 
 fn _exh_check_module(module: Module, out: array) {
-    if env("HEXA_EXHAUSTIVE") != "1" { return }
+    // Two opt-in gates, both default-OFF so the default build is a no-op
+    // (byte-identical diagnostic stream + emitted bytes — release integrity):
+    //   HEXA_EXHAUSTIVE=1        → non-fatal warning (HX3006)
+    //   HEXA_EXHAUSTIVE_FATAL=1  → fatal error (HX3018), implies the check.
+    let fatal = env("HEXA_EXHAUSTIVE_FATAL") == "1"
+    if env("HEXA_EXHAUSTIVE") != "1" && !fatal { return }
     let reg = _exh_build_registry(module)
     let mut i = 0
     while i < len(module.items) {
@@ -3978,7 +3998,7 @@ fn _exh_check_module(module: Module, out: array) {
             continue
         }
         if _types_is_fn_item(it.kind) || _types_is_let_item(it.kind) {
-            _exh_walk(it.body, reg, out)
+            _exh_walk(it.body, reg, out, fatal)
         }
         i = i + 1
     }
