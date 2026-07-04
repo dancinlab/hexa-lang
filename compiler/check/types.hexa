@@ -1216,10 +1216,29 @@ fn _types_lookup_variant_payload_types(enum_name: string, variant_name: string) 
 // condition #5 "post env-hoist").
 let mut _types_static_on: bool = false
 let mut _types_array_lower_on: bool = false
+// static-types F4 warn-first two-step (wall_a_endgame.md §B.3 F4): the opt-in
+// static-types REJECTs (HX3011 let/assign/match-mismatch, HX3016 struct-field
+// existence) ship as a WARNING band under the plain HEXA_STATIC_TYPES=1 flag —
+// a default-ON flip with fatal errors would break the shipping path on any
+// latent true-positive. HEXA_STATIC_TYPES_STRICT=1 re-escalates them to the
+// build-refusing Error (REJECT), keeping the fatal path reachable so no
+// coverage is lost. Consulted ONLY at the HX3011/HX3016 emit sites, which are
+// themselves reached only under _types_static_on — so STRICT without STATIC is
+// an inert no-op (no diagnostic fires to re-severity).
+let mut _types_strict: bool = false
 
 fn _types_static_flags_hoist() {
     _types_static_on = env("HEXA_STATIC_TYPES") == "1"
-    _types_array_lower_on = env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1"
+    _types_strict = env("HEXA_STATIC_TYPES_STRICT") == "1"
+    // static-types F0 flag-fold (wall_a_endgame.md §B.3 F0): HEXA_STATIC_TYPES
+    // IMPLIES array-lower. A default-ON flip of a two-flag AND is incoherent,
+    // so the r7-prep/r8/r9 array-lowering rungs fold under the single
+    // HEXA_STATIC_TYPES flag. HEXA_STATIC_TYPES_ARRAY_LOWER stays a still-
+    // working ALIAS for one deprecation cycle (additive fold, not a rename /
+    // delete). Byteeq-neutral on the DEFAULT path: both flags unset →
+    // _types_static_on=false → the disjunction is still false → the array-lower
+    // gates (963/2777/3080/3131) keep the byte-identical fallthrough.
+    _types_array_lower_on = _types_static_on || (env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1")
 }
 
 let mut _types_struct_names: [string] = []
@@ -1300,6 +1319,51 @@ fn _types_struct_registry_has(struct_name: string) -> bool {
         si = si + 1
     }
     return false
+}
+
+// static-types r11 — does the struct literal `e` PROVIDE an init for `fname`?
+// Each provided field-init is an Ident child whose `text` is the field NAME
+// (parser.hexa parse_struct_lit_after_name). Used by the HX3017 missing-
+// required-field check to compute (declared − provided). Read only under the
+// opt-in flag (called from the flag-gated struct-lit arm) → default build
+// byte-identical.
+fn _types_struct_lit_provides(e: Expr, fname: string) -> bool {
+    let mut fi = 0
+    while fi < len(e.children) {
+        let finit = e.children[fi]
+        if _types_is_ident(finit.kind) && finit.text == fname { return true }
+        fi = fi + 1
+    }
+    return false
+}
+
+// static-types r11 — emit one HX3017 (Rust E0063 "missing field") per DECLARED
+// field of KNOWN struct `sname` that the literal `e` omits. The deliberate
+// PAIR of the r9d HX3016 existence reject: r9d catches a PRESENT field the
+// struct doesn't declare; this catches a DECLARED field the literal doesn't
+// provide. Caller gates on `_types_struct_registry_has(sname)` so an unknown
+// struct stays SILENT (conservative unknown-fallback, same as HX3016). The
+// diagnostic anchors on the struct-literal span (no node exists for an absent
+// field). WARNING band, not REJECT (SSOT F4 warn-first). Flag-gated caller →
+// default build byte-identical (byteeq-neutral).
+fn _types_emit_missing_required(sname: string, e: Expr, out: array) {
+    let mut si = 0
+    while si < len(_types_struct_names) {
+        if _types_struct_names[si] == sname {
+            let off = _types_struct_field_offsets[si]
+            let cnt = _types_struct_field_counts[si]
+            let mut fi = 0
+            while fi < cnt {
+                let dfn = _types_struct_field_names[off + fi]
+                if len(dfn) > 0 && !_types_struct_lit_provides(e, dfn) {
+                    _emit_hx3017(sname, dfn, e.span, out)
+                }
+                fi = fi + 1
+            }
+            return
+        }
+        si = si + 1
+    }
 }
 
 // ── HEXA-OWN L2 r1 — @own use-after-move lint registry ───────
@@ -1793,16 +1857,23 @@ fn _emit_hx3001(expected: Type, actual: Type, sp: Span, out: array) {
 
 // HX3011 — opt-in static-type let-mismatch (HEXA_STATIC_TYPES=1).
 // Rust E0308-faithful "mismatched types": a `let x: T = <literal>` whose
-// scalar-literal RHS provably disagrees with the declared scalar T. Error
-// severity (catalog.hexa) → main.hexa `_has_errors` aborts before codegen
-// (REJECT, not advisory warning). Only emitted under the flag, so the
-// default diagnostic stream is byte-identical (byteeq-neutral).
+// scalar-literal RHS provably disagrees with the declared scalar T. F4
+// warn-first two-step (wall_a_endgame.md §B.3 F4): WARNING band under the
+// plain flag (renders, never aborts) so a default-ON flip cannot break the
+// shipping path on a latent true-positive; HEXA_STATIC_TYPES_STRICT=1
+// re-escalates to Error → main.hexa `_has_errors` aborts before codegen
+// (REJECT). Only emitted under HEXA_STATIC_TYPES, so the default diagnostic
+// stream is byte-identical in BOTH bands (byteeq-neutral).
 fn _emit_hx3011(expected: Type, actual: Type, sp: Span, out: array) {
     let mut b = diag_new("HX3011")
     b = diag_span(b, sp)
     b = diag_arg(b, "expected", _type_display(expected))
     b = diag_arg(b, "actual", _type_display(actual))
-    out.push(diag_emit(b))
+    if _types_strict {
+        out.push(diag_emit(b))
+    } else {
+        out.push(diag_emit_sev(b, Severity::Warning))
+    }
 }
 
 // HX3012 — opt-in @own use-after-move lint (HEXA_OWN_LINT=1).
@@ -1837,11 +1908,33 @@ fn _emit_hx3013(name: string, global: string, def_line: i64, sp: Span, out: arra
 // HX3016 — opt-in struct-literal field-EXISTENCE reject (HEXA_STATIC_TYPES=1),
 // static-types r9d. Rust E0560-faithful "struct has no field named": a
 // field-init whose name misses the r5 registry for a struct the registry
-// KNOWS. Error severity (catalog.hexa) → REJECT, same abort contract as
-// HX3011. Only emitted under the flag, so the default diagnostic stream is
-// byte-identical (byteeq-neutral).
+// KNOWS. F4 warn-first two-step (wall_a_endgame.md §B.3 F4), the SAME band
+// policy as HX3011: WARNING under the plain flag, HEXA_STATIC_TYPES_STRICT=1
+// re-escalates to Error (REJECT) — the strict abort contract of HX3011. Only
+// emitted under HEXA_STATIC_TYPES, so the default diagnostic stream is
+// byte-identical in BOTH bands (byteeq-neutral).
 fn _emit_hx3014(sname: string, fname: string, sp: Span, out: array) {
     let mut b = diag_new("HX3016")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", sname)
+    b = diag_arg(b, "field", fname)
+    if _types_strict {
+        out.push(diag_emit(b))
+    } else {
+        out.push(diag_emit_sev(b, Severity::Warning))
+    }
+}
+
+// HX3017 — opt-in struct-literal MISSING-required-field warning
+// (HEXA_STATIC_TYPES=1), static-types r11. Rust E0063-faithful "missing
+// field in initializer": a field the struct DECLARES but the literal did NOT
+// provide, for a struct the r5/r9d registry KNOWS. Warning severity
+// (catalog.hexa) → NON-fatal band (SSOT F4 warn-first), the deliberate PAIR
+// of the r9d HX3016 existence REJECT (which fires on a PRESENT unknown
+// field). Only emitted under the flag → default diagnostic stream
+// byte-identical (byteeq-neutral).
+fn _emit_hx3017(sname: string, fname: string, sp: Span, out: array) {
+    let mut b = diag_new("HX3017")
     b = diag_span(b, sp)
     b = diag_arg(b, "name", sname)
     b = diag_arg(b, "field", fname)
@@ -2979,6 +3072,17 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                 let _t = _infer_expr(finit, env, ctx, out)
             }
             fi = fi + 1
+        }
+        // static-types r11 — MISSING-required-field WARNING (Rust E0063,
+        // HX3017), the PAIR of the r9d HX3016 existence reject above. The
+        // provided-field loop caught PRESENT fields the struct doesn't declare;
+        // this catches DECLARED fields the literal omits. Only for a struct
+        // KNOWN to the r5/r9d registry (unknown struct → SILENT, the same
+        // conservative unknown-fallback as HX3016). WARNING band, not REJECT
+        // (SSOT F4 warn-first) — the build still compiles. Same flag gate as
+        // the whole arm → default build byte-identical (byteeq-neutral).
+        if len(sname) > 0 && _types_struct_registry_has(sname) {
+            _types_emit_missing_required(sname, e, out)
         }
         return _types_empty_type()
     }
