@@ -1962,20 +1962,31 @@ fn _emit_hx3016(sname: string, fname: string, sp: Span, out: array) {
     }
 }
 
-// HX3017 — opt-in struct-literal MISSING-required-field warning
+// HX3017 — opt-in struct-literal MISSING-required-field diagnostic
 // (HEXA_STATIC_TYPES=1), static-types r11. Rust E0063-faithful "missing
 // field in initializer": a field the struct DECLARES but the literal did NOT
-// provide, for a struct the r5/r9d registry KNOWS. Warning severity
-// (catalog.hexa) → NON-fatal band (SSOT F4 warn-first), the deliberate PAIR
-// of the r9d HX3016 existence REJECT (which fires on a PRESENT unknown
-// field). Only emitted under the flag → default diagnostic stream
-// byte-identical (byteeq-neutral).
+// provide, for a struct the r5/r9d registry KNOWS. The deliberate PAIR of the
+// r9d HX3016 existence reject (which fires on a PRESENT unknown field). F4
+// warn-first two-step (wall_a_endgame.md §B.3 F4), the SAME band policy as
+// HX3011/HX3016: WARNING under the plain flag (renders, never aborts) so a
+// default-ON flip cannot break the shipping path on a latent true-positive;
+// HEXA_STATIC_TYPES_STRICT=1 re-escalates to Error → main.hexa `_has_errors`
+// aborts before codegen (REJECT). Because HX3017's catalog default severity is
+// Warning (HX3011/HX3016 default to Error), the two branches are mirrored: the
+// plain flag takes the catalog Warning via `diag_emit`, and STRICT overrides
+// to Error via `diag_emit_sev` — same `_types_strict` bool, same helper shape.
+// Only emitted under HEXA_STATIC_TYPES, so the default diagnostic stream is
+// byte-identical in BOTH bands (byteeq-neutral).
 fn _emit_hx3017(sname: string, fname: string, sp: Span, out: array) {
     let mut b = diag_new("HX3017")
     b = diag_span(b, sp)
     b = diag_arg(b, "name", sname)
     b = diag_arg(b, "field", fname)
-    out.push(diag_emit(b))
+    if _types_strict {
+        out.push(diag_emit_sev(b, Severity::Error))
+    } else {
+        out.push(diag_emit(b))
+    }
 }
 
 fn _emit_hx3002(name: string, expected: i64, actual: i64, sp: Span, out: array) {
