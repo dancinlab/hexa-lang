@@ -3,11 +3,11 @@
 #
 # PURPOSE
 #   The static-types flip gate needs one axis no prior flip had: corpus-clean =
-#   0 HX3011/HX3016 emissions over a representative tracked .hexa corpus with
+#   0 HX3011/HX3016/HX3017 emissions over the FULL tracked .hexa corpus with
 #   the flag ON (the checker REJECT-only changes which programs BUILD, not what
 #   accepted programs emit). This job compiles the corpus front-end with
 #   HEXA_STATIC_TYPES=1 (+HEXA_STATIC_TYPES_ARRAY_LOWER=1) and counts
-#   HX3011/HX3016 diagnostic emissions per file. 0 total = corpus-clean proof
+#   HX3011/HX3016/HX3017 diagnostic emissions per file. 0 total = corpus-clean proof
 #   for the flip PR; >0 = either a true positive (fix the corpus code as an
 #   ordinary PR first — the flip's value proof) or a checker false positive
 #   (flip-blocking, cf. §F0 r9b coercion).
@@ -21,8 +21,17 @@
 #   stack (#4457, HEXA_STATIC_TYPES_ARRAY_LOWER) is not yet merged. Both env
 #   flags are exported unconditionally: unknown env vars are inert, so when
 #   the stacked rungs land the same job simply exercises MORE checks with no
-#   workflow change. HX3016 is likewise grepped even though main emits only
-#   HX3011 today.
+#   workflow change. HX3016/HX3017 are likewise grepped even though main may
+#   emit only HX3011 today (HX3017 = r11 warn-band, forward-compatible).
+#
+# CORPUS (LANE B — full-corpus per-file sweep, wall_a_endgame §B.3 F1 / FLIP-1
+#   census protocol state/static-types/flip1_census_protocol.md)
+#   The prior sample was `find -maxdepth 1` (~69 files). This job now sweeps the
+#   FULL tracked corpus — `git ls-files 'compiler/**/*.hexa' 'stdlib/**/*.hexa'
+#   'self/**/*.hexa'` (~3,805: compiler 389 + stdlib 2,249 + self 1,167) — fanned
+#   out `xargs -P $(nproc)` so 3.8k front-end runs stay inside budget. LANE B is
+#   coverage-supporting/advisory (standalone-unparseable files false-clean via
+#   resolve-death; never false-DIRTY), so a warn here informs but does not gate.
 #
 # BUILD (cheapest correct path — mirrors grace_consent.yml / build_selfhost.sh)
 #   The typechecker lives in compiler/check/** and runs inside the driver
@@ -36,13 +45,23 @@
 #   (#4016 revert precedent).
 #
 # COST
-#   Target < 10 min: one aprime build (~minutes) + ~70 per-file front-end runs
-#   (sub-second to seconds each, 60 s timeout guard per file).
+#   Target < 25 min: one aprime build (~minutes) + FULL-corpus per-file front-end
+#   runs — ~3,805 tracked .hexa (compiler 389 + stdlib 2,249 + self 1,167), fanned
+#   out `xargs -P $(nproc)` (sub-second to seconds each, 60 s timeout guard per
+#   file). FREE ubuntu-latest only. Advisory, so a budget timeout blocks nothing.
 
 name: static-types-corpus
 
 on:
   pull_request:
+    # TRADEOFF: the census now sweeps the FULL corpus (compiler/** + stdlib/** +
+    # self/**), but the PR trigger is deliberately kept NARROW — only the checker
+    # source, stdlib, and this workflow. Adding 'self/**' / 'compiler/**' here
+    # would fire this advisory 3.8k-file job on far more PRs (self/ + all of
+    # compiler/ churn) for no gate value — it never blocks. The full-corpus data
+    # is harvested via workflow_dispatch (the FLIP-1 census run) and on the PRs
+    # that already touch the checker/stdlib. Widen only if drift monitoring on
+    # every self/ PR is wanted.
     paths:
       - 'compiler/check/**'
       - 'stdlib/**'
@@ -60,9 +79,9 @@ concurrency:
 
 jobs:
   corpus-census:
-    name: static-types corpus census (HX3011/HX3016 · advisory)
+    name: static-types corpus census (HX3011/HX3016/HX3017 · advisory)
     runs-on: ubuntu-latest      # FREE runner only — paid runners forbidden (#4016)
-    timeout-minutes: 15         # budget target <10 min; margin for a cold seed fetch
+    timeout-minutes: 60         # full corpus (~3.8k files) + parallel fan MEASURED >25 min (run 28716733095 was killed mid-xargs at the 25-min cap, summary never reached → no census verdict); the one-time aprime build (~min) + ~3.8k sub-second-to-second front-end runs at nproc≈4 lands ~40 min, so 60 gives margin. Advisory (continue-on-error) so a timeout blocks nothing — but a timeout produces NO census data, which is why the cap must clear the real runtime.
     continue-on-error: true     # ADVISORY — never a required check
     steps:
       - name: Checkout
@@ -91,7 +110,7 @@ jobs:
           if [ "$rc" -ne 0 ] || [ ! -x build/aprime_cc ]; then
             # Build infra failure is NOT a corpus verdict — report NEUTRAL, do
             # not fake a dirty/clean census. (Advisory job; exit 0 keeps the
-            # signal unambiguous: red = real HX3011/HX3016 emissions only.)
+            # signal unambiguous: red = real HX3011/HX3016/HX3017 emissions only.)
             echo "::warning::static-types-corpus NEUTRAL — aprime_cc build failed (rc=$rc); corpus census NOT run (infra, not a corpus verdict)."
             echo "built=0" >> "$GITHUB_OUTPUT"
             exit 0
@@ -99,7 +118,7 @@ jobs:
           echo "built=1" >> "$GITHUB_OUTPUT"
           echo "aprime_cc: $(wc -c < build/aprime_cc) bytes"
 
-      - name: Census — HEXA_STATIC_TYPES=1 over the corpus (count HX3011/HX3016)
+      - name: Census — HEXA_STATIC_TYPES=1 over the corpus (count HX3011/HX3016/HX3017)
         if: ${{ steps.build.outputs.built == '1' }}
         shell: bash
         env:
@@ -108,53 +127,94 @@ jobs:
           HEXA_STATIC_TYPES: '1'
           HEXA_STATIC_TYPES_ARRAY_LOWER: '1'
         run: |
+          # NB: -uo pipefail, NOT -e. A clean file greps 0 matches -> grep exits
+          # 1; under `set -e` + pipefail that 1 propagated and crashed the very
+          # first run (fixed 87bd65358). Every grep below stays guarded with
+          # `|| true`, and the summary block ALWAYS prints before any nonzero
+          # exit — a clean census must never crash the job.
           set -uo pipefail
-          # ── representative corpus: stdlib core + compiler/check (incl. tests) ──
-          corpus=()
-          while IFS= read -r f; do corpus+=("$f"); done \
-            < <(find compiler/check -maxdepth 1 -name '*.hexa' | sort)
-          while IFS= read -r f; do corpus+=("$f"); done \
-            < <(find stdlib -maxdepth 1 -name '*.hexa' | sort)
-          echo "corpus: ${#corpus[@]} files (compiler/check/*.hexa + stdlib/*.hexa top-level)"
 
           scratch="$(mktemp -d)"
+          mkdir -p "$scratch/logs" "$scratch/asm" "$scratch/counts"
+
+          # ── FULL tracked corpus (LANE B): compiler/** + stdlib/** + self/** ──
+          # Was `find -maxdepth 1` (~69-file sample); now the whole tracked tree
+          # (~3,805 files). Deterministic order (sort). git ls-files == tracked
+          # only (no build artifacts, no untracked scratch).
+          corpus_list="$scratch/corpus.txt"
+          git ls-files \
+              'compiler/**/*.hexa' \
+              'stdlib/**/*.hexa' \
+              'self/**/*.hexa' \
+            | sort > "$corpus_list"
+          n_corpus="$(wc -l < "$corpus_list" | tr -d ' ')"
+          echo "corpus: $n_corpus files (git ls-files compiler/**/*.hexa + stdlib/**/*.hexa + self/**/*.hexa)"
+
+          # ── per-file worker (fanned out below) ──────────────────────────────
+          # Each file runs the identical front-end command, greps its OWN log for
+          # HX3011/HX3016/HX3017, and writes its count to $scratch/counts/<hash>.
+          # Scratch names key on a PATH HASH (sha1), not basename: the full
+          # corpus spans dirs, so basenames now collide (e.g. many `mod.hexa`) —
+          # a basename-keyed .s/.log would clobber across the parallel fan.
+          # shellcheck disable=SC2329  # invoked indirectly via `bash -c` (export -f)
+          run_one() {
+            f="$1"
+            h="$(printf '%s' "$f" | sha1sum | cut -c1-16)"
+            log="$scratch/logs/$h.log"
+            # Front-end run: the driver renders ALL diagnostics (short format)
+            # before codegen and exits nonzero on errors — rc is irrelevant to
+            # the census, only the HX3011/HX3016/HX3017 emission count is.
+            # `_drv.hexa` is the positional driver-name shim (argv[1] slot), same
+            # contract as tool/codegen_perf_budget.sh / control_singletu.sh.
+            timeout 60 ./build/aprime_cc _drv.hexa \
+                --emit=asm --target=x86_64-linux-gnu --error-format=short \
+                -o "$scratch/asm/$h.s" "$f" > "$log" 2>&1 || true
+            n="$( (grep -o -E 'HX301[167]' "$log" || true) | wc -l | tr -d ' ')"
+            # <count>\t<path> — path has no tabs; hash is the count-file name.
+            printf '%s\t%s\n' "$n" "$f" > "$scratch/counts/$h"
+          }
+          export -f run_one
+          export scratch
+
+          # Parallel fan — 3,805 files serial would blow the budget. One file per
+          # invocation (-I{}), $(nproc)-wide. Workers are self-guarded (|| true),
+          # so a per-file timeout/crash never fails the fan.
+          nproc_n="$(nproc 2>/dev/null || echo 2)"
+          echo "fanning out over $nproc_n parallel workers…"
+          xargs -a "$corpus_list" -P "$nproc_n" -I{} \
+              bash -c 'run_one "$@"' _ {} || true
+
+          # ── aggregate ───────────────────────────────────────────────────────
           total=0
           dirty_files=0
           ran=0
           summary=""
-
-          for f in "${corpus[@]}"; do
-            base="$(basename "$f")"
-            log="$scratch/$base.log"
-            # Front-end run: the driver renders ALL diagnostics (short format)
-            # before codegen and exits nonzero on errors — rc is irrelevant to
-            # the census, only the HX3011/HX3016 emission count is. `_drv.hexa`
-            # is the positional driver-name shim (argv[1] slot), same contract
-            # as tool/codegen_perf_budget.sh / control_singletu.sh.
-            timeout 60 ./build/aprime_cc _drv.hexa \
-                --emit=asm --target=x86_64-linux-gnu --error-format=short \
-                -o "$scratch/$base.s" "$f" > "$log" 2>&1 || true
+          shopt -s nullglob
+          for cf in "$scratch"/counts/*; do
             ran=$((ran + 1))
-            n="$( (grep -o -E 'HX301[16]' "$log" || true) | wc -l | tr -d ' ')"
+            IFS=$'\t' read -r n f < "$cf" || true
+            # Defensive: a truncated/empty count file counts as 0, never crash.
+            case "$n" in ''|*[!0-9]*) n=0 ;; esac
             total=$((total + n))
             if [ "$n" -gt 0 ]; then
               dirty_files=$((dirty_files + 1))
               summary="$summary$f: $n%0A"
-              echo "::notice file=$f::static-types corpus: $n HX3011/HX3016 emission(s) with HEXA_STATIC_TYPES=1"
-              grep -E 'HX301[16]' "$log" | head -10 | sed "s|^|    $f: |"
+              echo "::notice file=$f::static-types corpus: $n HX3011/HX3016/HX3017 emission(s) with HEXA_STATIC_TYPES=1"
+              h="$(basename "$cf")"
+              (grep -E 'HX301[167]' "$scratch/logs/$h.log" || true) | head -10 | sed "s|^|    $f: |"
             fi
           done
 
           echo ""
           echo "════ static-types corpus census ════"
-          echo "files checked : $ran"
-          echo "dirty files   : $dirty_files"
-          echo "HX3011/HX3016 : $total"
+          echo "files checked        : $ran"
+          echo "dirty files          : $dirty_files"
+          echo "HX3011/HX3016/HX3017 : $total"
 
           if [ "$total" -eq 0 ]; then
-            echo "::notice::static-types corpus CLEAN — 0 HX3011/HX3016 over $ran files with HEXA_STATIC_TYPES=1 (+ARRAY_LOWER). Corpus-clean proof for the default-ON flip (wall_a_endgame.md §B F1)."
+            echo "::notice::static-types corpus CLEAN — 0 HX3011/HX3016/HX3017 over $ran files (full corpus) with HEXA_STATIC_TYPES=1 (+ARRAY_LOWER). Corpus-clean proof for the default-ON flip (wall_a_endgame.md §B F1)."
             exit 0
           fi
-          echo "::notice::static-types corpus DIRTY — $total HX3011/HX3016 emission(s) in $dirty_files/$ran files: %0A$summary(true positive -> fix the corpus code as an ordinary PR; false positive -> flip-blocking checker rung, cf. §F0 r9b)"
+          echo "::notice::static-types corpus DIRTY — $total HX3011/HX3016/HX3017 emission(s) in $dirty_files/$ran files: %0A$summary(true positive -> fix the corpus code as an ordinary PR; false positive -> flip-blocking checker rung, cf. §F0 r9b)"
           # Advisory red (continue-on-error keeps it non-blocking).
           exit 1
