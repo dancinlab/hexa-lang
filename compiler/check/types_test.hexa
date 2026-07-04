@@ -51,6 +51,27 @@ fn _named_type_ref(name: string) -> TypeRef {
     return TypeRef { kind: "named", name: name, args: [], span: _empty_span() }
 }
 
+// static-types r7-prep — parser-faithful bare `[elem]` array TypeRef
+// (parser.hexa:parse_type, runtime-gap r2c encoding): kind "generic",
+// name "Array:<elem>", element TypeRef carried in args[0].
+fn _generic_array_type_ref(elem: string) -> TypeRef {
+    let mut args = []
+    args.push(_named_type_ref(elem))
+    return TypeRef { kind: "generic", name: "Array:" + elem, args: args, span: _empty_span() }
+}
+
+// static-types r7-prep — Param with an array type annotation (`xs: [elem]`).
+// Mirrors `_param` but swaps the named TypeRef for the generic Array shape.
+fn _array_param(name: string, elem: string, file: string, line: i64, col: i64) -> Param {
+    let t = _generic_array_type_ref(elem)
+    return Param {
+        name: name,
+        typ: t,
+        typs: [t],  // RFC-074 Phase 2 — arity-1 default
+        span: _span(file, line, col, len(name))
+    }
+}
+
 fn _ident_expr(name: string, file: string, line: i64, col: i64) -> Expr {
     return Expr {
         kind: ExprKind::Ident,
@@ -69,6 +90,38 @@ fn _int_expr(text: string, file: string, line: i64, col: i64) -> Expr {
         text: text,
         annotations: [],
         children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// static-types r8 — float literal (`1.5`). Mirrors `_int_expr` with the
+// LiteralFloat kind so an array-literal element can infer f64.
+fn _float_expr(text: string, file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::LiteralFloat,
+        span: _span(file, line, col, len(text)),
+        text: text,
+        annotations: [],
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// static-types r8 — `[e0, e1, …]` array literal. children = elements
+// (ast.hexa:93), text empty, per the parser's ArrayLit shape.
+fn _array_lit_expr(elems: [Expr], file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    let mut i = 0
+    while i < len(elems) {
+        kids.push(elems[i])
+        i = i + 1
+    }
+    return Expr {
+        kind: ExprKind::ArrayLit,
+        span: _span(file, line, col, 1),
+        text: "",
+        annotations: [],
+        children: kids,
         atlas_ref: _empty_atlas_ref()
     }
 }
@@ -153,6 +206,150 @@ fn _let_expr(name: string, rhs: Expr, file: string, line: i64, col: i64) -> Expr
     }
 }
 
+// Wall A r3 — annotated `let x: T` with NO initializer (decl/init split).
+// Mirrors parse_let_expr's text encoding (`<name>|<typename>`) but leaves
+// children empty, the shape a bare `let x: i32` (no `= …`) produces.
+fn _let_decl_expr(name: string, file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Let,
+        span: _span(file, line, col, 3),
+        text: name,
+        annotations: [],
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// HEXA-OWN L2 r1 — `@own let <name> = rhs`. Same shape as _let_expr plus a
+// bare `own` Annotation, mirroring what parse_stmt collects ahead of a
+// body-level let (parser.hexa parse_annotation → Expr.annotations).
+fn _own_let_expr(name: string, rhs: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut anns: [Annotation] = []
+    anns.push(Annotation { name: "own", args: [], span: _span(file, line, col, 4) })
+    let mut kids = []
+    kids.push(rhs)
+    return Expr {
+        kind: ExprKind::Let,
+        span: _span(file, line, col, 3),
+        text: name,
+        annotations: anns,
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// Wall A r3 — `lhs = rhs` assignment. children = [lhs, rhs] per the Assign
+// arm in types.hexa:_infer_expr.
+fn _assign_expr(lhs: Expr, rhs: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(lhs)
+    kids.push(rhs)
+    return Expr {
+        kind: ExprKind::Assign,
+        span: _span(file, line, col, 1),
+        text: "",
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// Wall A r4 — `base[idx]` subscript. children = [base, idx] per the Index
+// node the parser builds (parser.hexa:753) and the assign arm in
+// types.hexa:_infer_expr reads (children[0]=base, children[1]=index).
+fn _index_expr(base: Expr, idx: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(base)
+    kids.push(idx)
+    return Expr {
+        kind: ExprKind::Index,
+        span: _span(file, line, col, 1),
+        text: "",
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// Wall A r5 — `recv.field` access. text = field name, children = [receiver]
+// per the Field node the parser builds (parser.hexa:715) and the assign arm
+// in types.hexa:_infer_expr reads (children[0]=receiver).
+fn _field_expr(recv: Expr, field: string, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(recv)
+    return Expr {
+        kind: ExprKind::Field,
+        span: _span(file, line, col, len(field)),
+        text: field,
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// Wall A r6 — one struct-literal field-init. The parser
+// (parser.hexa:1184 parse_struct_lit_after_name) builds each `name: value`
+// pair as an Ident node whose text = field NAME and children[0] = value expr.
+fn _field_init(field: string, value: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(value)
+    return Expr {
+        kind: ExprKind::Ident,
+        span: _span(file, line, col, len(field)),
+        text: field,
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// Wall A r6 — struct literal `Name { f0: v0, f1: v1 }`. text = struct NAME,
+// children = the field-init Ident nodes (parser.hexa:1204 shape the r6 arm in
+// types.hexa:_infer_expr reads).
+fn _struct_lit_expr(name: string, inits: [Expr], file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::StructLit,
+        span: _span(file, line, col, len(name)),
+        text: name,
+        annotations: [],
+        children: inits,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// static-types r9c — `match scrut { pat -> body, … }`. children =
+// [scrut, pat0, body0, pat1, body1, …] per the parser's Match shape
+// (the exact layout _check_match documents and walks).
+fn _match_expr(scrut: Expr, arms: [Expr], file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(scrut)
+    let mut i = 0
+    while i < len(arms) {
+        kids.push(arms[i])
+        i = i + 1
+    }
+    return Expr {
+        kind: ExprKind::Match,
+        span: _span(file, line, col, 5),
+        text: "",
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// static-types r9c — `_` wildcard pattern (ExprKind::Wildcard, no children).
+fn _wildcard_expr(file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Wildcard,
+        span: _span(file, line, col, 1),
+        text: "_",
+        annotations: [],
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
 fn _block(children: [Expr], file: string, line: i64, col: i64) -> Expr {
     return Expr {
         kind: ExprKind::Block,
@@ -229,6 +426,21 @@ fn _enum_item(name: string, variants: [Param], file: string, line: i64) -> Item 
     }
 }
 
+// Wall A r5 — struct item declaration (fields live in params[], same shape
+// `_types_struct_type` / `_types_register_struct_item_fields` read).
+fn _struct_item(name: string, fields: [Param], file: string, line: i64) -> Item {
+    return Item {
+        kind: ItemKind::Struct,
+        name: name,
+        span: _span(file, line, 1, len(name)),
+        annotations: [],
+        params: fields,
+        return_type: _empty_type_ref(),
+        body: _block([], file, line, 1),
+        is_pub: false
+    }
+}
+
 // RFC-074 Phase 2.1 — EnumPath expression: text="Enum::Variant",
 // children[] = payload args. Mirrors parser output shape so type_check
 // reaches the same code path it does for real source.
@@ -268,7 +480,7 @@ fn _match_expr(scrut: Expr, arms: [Expr], file: string, line: i64, col: i64) -> 
 // (h) — non-exhaustive enum match: enum Color{Red,Green,Blue} with a
 // `match c { Color::Red -> 0, Color::Green -> 1 }` (Blue uncovered, no
 // wildcard). Drives the exhaustiveness pass: default build emits nothing;
-// HEXA_EXHAUSTIVE=1 → HX3006 (warn); HEXA_EXHAUSTIVE_FATAL=1 → HX3011 (error).
+// HEXA_EXHAUSTIVE=1 → HX3006 (warn); HEXA_EXHAUSTIVE_FATAL=1 → HX3018 (error).
 fn _build_case_h() -> Module {
     let f = "exh_test.hexa"
     let mut variants = []
@@ -505,6 +717,759 @@ fn _build_case_g() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// Wall A r1 — opt-in static-type let-mismatch (HEXA_STATIC_TYPES=1).
+// fn main() { let x: i32 = "s"   let y: i32 = 5 }
+// The annotated-let text encoding is `<name>|<typename>` (parse_let_expr),
+// so `let x: i32` becomes text="x|i32" with the RHS as children[0]. The bad
+// binding (string literal vs i32) must trip HX3011 under the flag and be
+// silent by default; the matching binding (`let y: i32 = 5`, int-literal
+// coercion) is clean in both modes.
+fn _build_case_static_types() -> Module {
+    let f = "case_static.hexa"
+    let bad  = _let_expr("x|i32", _string_expr("s", f, 2, 18), f, 2, 5)
+    let good = _let_expr("y|i32", _int_expr("5", f, 3, 18), f, 3, 5)
+    let mut kids = []
+    kids.push(bad)
+    kids.push(good)
+    let body = _block(kids, f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// Wall A r2 — non-literal known-type RHS (ident / call) under the same
+// opt-in flag. Two REJECT shapes whose inferred scalar type provably
+// disagrees with the annotation (Rust E0308):
+//   fn g() -> i32 { return 0 }
+//   fn h(p: i32) { let b_ident: string = p }    // ident p : i32 ≠ string
+//   fn main() {
+//       let b_call: string = g()                // call g() : i32 ≠ string
+//       let ok:     i32    = g()                 // matches → stays clean
+//   }
+// Under the flag exactly 2 HX3011 (one ident-RHS + one call-RHS); the
+// matching `i32 = g()` and the default build (flag-off) emit zero — the
+// byteeq-neutral proof. Skips for unknown idents/unmodeled calls are
+// covered by the soundness gates and need no positive case here.
+fn _build_case_static_types_r2() -> Module {
+    let f = "case_static_r2.hexa"
+    // fn g() -> i32 { return 0 }
+    let mut g_kids = []
+    g_kids.push(_return_expr(_int_expr("0", f, 1, 20), f, 1, 13))
+    let g_body = _block(g_kids, f, 1, 11)
+    let item_g = _fn_item("g", [], _named_type_ref("i32"), g_body, f, 1)
+    // fn h(p: i32) { let b_ident: string = p }   — ident-RHS mismatch
+    let mut h_kids = []
+    h_kids.push(_let_expr("b_ident|string", _ident_expr("p", f, 2, 30), f, 2, 5))
+    let h_body = _block(h_kids, f, 2, 1)
+    let item_h = _fn_item("h", [_param("p", "i32", f, 2, 6)], _empty_type_ref(), h_body, f, 2)
+    // fn main() { let b_call: string = g();  let ok: i32 = g() }
+    let bad_call  = _call_expr(_ident_expr("g", f, 3, 25), [], f, 3, 25)
+    let good_call = _call_expr(_ident_expr("g", f, 4, 20), [], f, 4, 20)
+    let mut m_kids = []
+    m_kids.push(_let_expr("b_call|string", bad_call, f, 3, 5))
+    m_kids.push(_let_expr("ok|i32", good_call, f, 4, 5))
+    let m_body = _block(m_kids, f, 3, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), m_body, f, 3)
+    let mut items = []
+    items.push(item_g)
+    items.push(item_h)
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// Wall A r3 — decl/init split: a `let x: T` with NO initializer, then a
+// LATER `x = <expr>` assignment whose inferred scalar RHS provably disagrees
+// with the recorded declaration T (Rust E0308 check_expr_assign). Two REJECT
+// shapes + one matching control, all in one fn body so the block-scoped env
+// carries the declared types forward:
+//   fn main() {
+//       let x: i32                  // decl-only → record x : i32
+//       x = "s"                     // REJECT: string ≠ i32   → HX3011
+//       let y: string               // decl-only → record y : string
+//       y = 5                       // REJECT: i64 ≠ string    → HX3011
+//       let z: i32                  // decl-only → record z : i32
+//       z = 7                       // matches (int-lit coercion) → clean
+//   }
+// Under the flag exactly 2 HX3011; the matching `z = 7` and the default
+// build (flag-off) emit zero — the byteeq-neutral proof. Mirrors r1/r2's
+// self-adapting contract, extended to the assignment rung.
+fn _build_case_static_types_r3() -> Module {
+    let f = "case_static_r3.hexa"
+    let mut kids = []
+    // let x: i32   ;   x = "s"   → mismatch
+    kids.push(_let_decl_expr("x|i32", f, 2, 5))
+    kids.push(_assign_expr(_ident_expr("x", f, 3, 5), _string_expr("s", f, 3, 9), f, 3, 7))
+    // let y: string ;  y = 5     → mismatch
+    kids.push(_let_decl_expr("y|string", f, 4, 5))
+    kids.push(_assign_expr(_ident_expr("y", f, 5, 5), _int_expr("5", f, 5, 9), f, 5, 7))
+    // let z: i32   ;   z = 7     → matches (clean in both modes)
+    kids.push(_let_decl_expr("z|i32", f, 6, 5))
+    kids.push(_assign_expr(_ident_expr("z", f, 7, 5), _int_expr("7", f, 7, 9), f, 7, 7))
+    let body = _block(kids, f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// Wall A r4 — array element-fit assign. A `let a: [i32; N]` (decl-only, the
+// parser encodes the annotation as `Array:i32:4`) records its KNOWN-scalar
+// element type into the block-scoped env (key `[]a`); a later `a[i] = <expr>`
+// whose inferred scalar RHS provably disagrees with the element type REJECTs
+// with HX3011 (Rust E0308 check_expr_index place-coercion). Two REJECT shapes
+// + one matching control, all in one fn body so the block env carries the
+// recorded element type forward:
+//   fn main() {
+//       let a: [i32; 4]            // decl-only → record []a : i32
+//       a[0] = "s"                 // REJECT: string ≠ i32 element → HX3011
+//       let b: [string]           // unsized → record []b : string
+//       b[1] = 9                   // REJECT: i64 ≠ string element  → HX3011
+//       let c: [i32; 4]           // decl-only → record []c : i32
+//       c[2] = 7                   // matches (int-lit coercion)    → clean
+//   }
+// Under the flag exactly 2 HX3011; the matching `c[2] = 7` and the default
+// build (flag-off) emit zero — the byteeq-neutral proof. Extends r3's
+// self-adapting contract from the plain-ident assign to the index place.
+fn _build_case_static_types_r4() -> Module {
+    let f = "case_static_r4.hexa"
+    let mut kids = []
+    // let a: [i32; 4]   ;   a[0] = "s"   → element mismatch
+    kids.push(_let_decl_expr("a|Array:i32:4", f, 2, 5))
+    kids.push(_assign_expr(_index_expr(_ident_expr("a", f, 3, 5), _int_expr("0", f, 3, 7), f, 3, 6), _string_expr("s", f, 3, 12), f, 3, 10))
+    // let b: [string]   ;   b[1] = 9     → element mismatch (unsized)
+    kids.push(_let_decl_expr("b|Array:string", f, 4, 5))
+    kids.push(_assign_expr(_index_expr(_ident_expr("b", f, 5, 5), _int_expr("1", f, 5, 7), f, 5, 6), _int_expr("9", f, 5, 12), f, 5, 10))
+    // let c: [i32; 4]   ;   c[2] = 7     → matches (clean in both modes)
+    kids.push(_let_decl_expr("c|Array:i32:4", f, 6, 5))
+    kids.push(_assign_expr(_index_expr(_ident_expr("c", f, 7, 5), _int_expr("2", f, 7, 7), f, 7, 6), _int_expr("7", f, 7, 12), f, 7, 10))
+    let body = _block(kids, f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// Wall A r5 — struct field-type assign. A `struct Point { x: i32, y: i32 }`
+// records its field names + types into the side registry. A receiver of struct
+// type — a fn PARAM `p: Point` (carries `named:Point` via bind_params) OR a
+// block-local `let s: Point` (recorded under `{}s`) — lets a later
+// `recv.field = <expr>` recover `field`'s declared type and REJECT a scalar
+// mismatch with HX3011 (Rust E0308 check_field place-coercion). Three REJECT
+// shapes + one matching control:
+//   struct Point { x: i32, y: i32 }
+//   fn f(p: Point) {
+//       let s: Point          // block-local → record {}s : named:Point
+//       p.x = "s"             // REJECT: string ≠ i32 (param receiver)   → HX3011
+//       s.x = "z"             // REJECT: string ≠ i32 (block-local recv)  → HX3011
+//       p.y = 7               // matches (int-lit coercion)               → clean
+//   }
+// Under the flag exactly 2 HX3011; the matching `p.y = 7` and the default
+// build (flag-off) emit zero — the byteeq-neutral proof. Extends r4's element-
+// fit contract from the array place to the struct field place.
+fn _build_case_static_types_r5() -> Module {
+    let f = "case_static_r5.hexa"
+    // struct Point { x: i32, y: i32 }
+    let mut sfields = []
+    sfields.push(_param("x", "i32", f, 1, 15))
+    sfields.push(_param("y", "i32", f, 1, 23))
+    let item_pt = _struct_item("Point", sfields, f, 1)
+    // fn f(p: Point) { … }
+    let mut kids = []
+    kids.push(_let_decl_expr("s|Point", f, 3, 5))
+    // p.x = "s"   → string ≠ i32 (param receiver)
+    kids.push(_assign_expr(_field_expr(_ident_expr("p", f, 4, 5), "x", f, 4, 7), _string_expr("s", f, 4, 11), f, 4, 9))
+    // s.x = "z"   → string ≠ i32 (block-local receiver)
+    kids.push(_assign_expr(_field_expr(_ident_expr("s", f, 5, 5), "x", f, 5, 7), _string_expr("z", f, 5, 11), f, 5, 9))
+    // p.y = 7     → matches (int-lit coercion)
+    kids.push(_assign_expr(_field_expr(_ident_expr("p", f, 6, 5), "y", f, 6, 7), _int_expr("7", f, 6, 11), f, 6, 9))
+    let body = _block(kids, f, 2, 1)
+    let mut fparams = []
+    fparams.push(_param("p", "Point", f, 2, 6))
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), body, f, 2)
+    let mut items = []
+    items.push(item_pt)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// Wall A r6 — struct-literal field-init mismatch. The LAST scope-wireable
+// rung. The same `struct Point { x: i32, y: i32 }` registry r5 builds also
+// types a CONSTRUCTION site `Point{ x: <expr>, y: <expr> }`: each field-init
+// value is matched to the declared field type and a known-scalar mismatch is
+// REJECTed with HX3011 (Rust E0308 check_expr_struct_fields coercion). Two
+// REJECT shapes + one matching control:
+//   struct Point { x: i32, y: i32 }
+//   fn f() {
+//       let _p = Point { x: "s", y: 7 }   // x: string ≠ i32 → REJECT;
+//                                          // y: 7 int-lit coerces → clean
+//       let _q = Point { x: true }        // x: bool ≠ i32   → REJECT
+//   }
+// Under the flag exactly 2 HX3011 (x:"s" + x:true); the matching `y: 7` and
+// the default build (flag-off) emit zero — the byteeq-neutral proof. Extends
+// r5's field-place-assign contract to the struct-literal construction place.
+fn _build_case_static_types_r6() -> Module {
+    let f = "case_static_r6.hexa"
+    // struct Point { x: i32, y: i32 }
+    let mut sfields = []
+    sfields.push(_param("x", "i32", f, 1, 15))
+    sfields.push(_param("y", "i32", f, 1, 23))
+    let item_pt = _struct_item("Point", sfields, f, 1)
+    // fn f() { … }
+    let mut kids = []
+    // let _p = Point { x: "s", y: 7 }
+    let mut inits_p = []
+    inits_p.push(_field_init("x", _string_expr("s", f, 3, 25), f, 3, 22))
+    inits_p.push(_field_init("y", _int_expr("7", f, 3, 33), f, 3, 30))
+    kids.push(_struct_lit_expr("Point", inits_p, f, 3, 14))
+    // let _q = Point { x: true }
+    let mut inits_q = []
+    inits_q.push(_field_init("x", _bool_expr("true", f, 4, 25), f, 4, 22))
+    kids.push(_struct_lit_expr("Point", inits_q, f, 4, 14))
+    let body = _block(kids, f, 2, 1)
+    let item_f = _fn_item("f", [], _empty_type_ref(), body, f, 2)
+    let mut items = []
+    items.push(item_pt)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// static-types r7-prep — structured array lowering
+// (HEXA_STATIC_TYPES_ARRAY_LOWER=1). One module whose HX3003 contract is
+// IDENTICAL in both modes — the discriminating proof that the opt-in
+// lowering PRESERVES the element type (a naive kind-only "array" collapse
+// would drop the mismatch below to 0 flag-ON):
+//   fn g(xs: [i32]) {}
+//   fn h(ys: [f64]) { g(ys) }     // [f64] arg vs [i32] param → HX3003 (×1)
+//   fn k(zs: [i32]) { g(zs) }     // [i32] arg vs [i32] param → clean
+// Flag-OFF the mismatch REJECTs via the string sentinels
+// (`generic:Array:f64` ≠ `generic:Array:i32`); flag-ON via the structured
+// element recursion (`[f64]` ≠ `[i32]` in _types_equal). Both modes: exactly
+// 1 HX3003 — flag-OFF byte-neutrality AND flag-ON element preservation in
+// one self-adapting contract.
+fn _build_case_static_types_r7prep() -> Module {
+    let f = "case_static_r7prep.hexa"
+    // fn g(xs: [i32]) {}
+    let g_body = _block([], f, 1, 17)
+    let item_g = _fn_item("g", [_array_param("xs", "i32", f, 1, 6)], _empty_type_ref(), g_body, f, 1)
+    // fn h(ys: [f64]) { g(ys) }   — element mismatch
+    let mut bad_args = []
+    bad_args.push(_ident_expr("ys", f, 2, 21))
+    let bad_call = _call_expr(_ident_expr("g", f, 2, 19), bad_args, f, 2, 19)
+    let mut h_kids = []
+    h_kids.push(bad_call)
+    let h_body = _block(h_kids, f, 2, 17)
+    let item_h = _fn_item("h", [_array_param("ys", "f64", f, 2, 6)], _empty_type_ref(), h_body, f, 2)
+    // fn k(zs: [i32]) { g(zs) }   — element match (clean in both modes)
+    let mut good_args = []
+    good_args.push(_ident_expr("zs", f, 3, 21))
+    let good_call = _call_expr(_ident_expr("g", f, 3, 19), good_args, f, 3, 19)
+    let mut k_kids = []
+    k_kids.push(good_call)
+    let k_body = _block(k_kids, f, 3, 17)
+    let item_k = _fn_item("k", [_array_param("zs", "i32", f, 3, 6)], _empty_type_ref(), k_body, f, 3)
+    let mut items = []
+    items.push(item_g)
+    items.push(item_h)
+    items.push(item_k)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// static-types r8 — array-literal call-arg element REJECT + r8b param-base
+// index-assign fallback (HEXA_STATIC_TYPES=1 + HEXA_STATIC_TYPES_ARRAY_LOWER=1).
+// One module, four fns — two REJECT shapes + two matching controls:
+//   fn g(xs: [i64]) {}
+//   fn h() { g([1.5]) }            // ArrayLit [f64] arg vs [i64] param → HX3003 (×1)
+//   fn k() { g([1, 2]) }           // ArrayLit [i64] arg vs [i64] param → clean
+//   fn f(ws: [i64]) { ws[0] = "s" }  // r8b: param array base, string ≠ i64 → HX3011 (×1)
+//   fn p(vs: [i64]) { vs[1] = 7 }    // r8b: int-literal coerces           → clean
+// BOTH flags on: exactly 1 HX3003 (the structural ArrayLit inference feeds
+// the EXISTING default-ON call-arg check) + exactly 1 HX3011 (the r8b
+// re-infer of the param base recovers args[0]). Default build / either flag
+// alone: 0 of each — the ArrayLit still infers the unknown sentinel and the
+// r4 fallback stays gated (byteeq-neutral proof). Unlike case (o)'s
+// mode-IDENTICAL contract, this one is mode-DIFFERENT: literal args carry no
+// flag-OFF string sentinel, so only the structural path can reject them.
+fn _build_case_static_types_r8() -> Module {
+    let f = "case_static_r8.hexa"
+    // fn g(xs: [i64]) {}
+    let g_body = _block([], f, 1, 17)
+    let item_g = _fn_item("g", [_array_param("xs", "i64", f, 1, 6)], _empty_type_ref(), g_body, f, 1)
+    // fn h() { g([1.5]) }   — element mismatch ([f64] literal vs [i64] param)
+    let mut bad_elems = []
+    bad_elems.push(_float_expr("1.5", f, 2, 13))
+    let mut bad_args = []
+    bad_args.push(_array_lit_expr(bad_elems, f, 2, 12))
+    let bad_call = _call_expr(_ident_expr("g", f, 2, 10), bad_args, f, 2, 10)
+    let mut h_kids = []
+    h_kids.push(bad_call)
+    let h_body = _block(h_kids, f, 2, 8)
+    let item_h = _fn_item("h", [], _empty_type_ref(), h_body, f, 2)
+    // fn k() { g([1, 2]) }   — element match (clean in both modes)
+    let mut good_elems = []
+    good_elems.push(_int_expr("1", f, 3, 13))
+    good_elems.push(_int_expr("2", f, 3, 16))
+    let mut good_args = []
+    good_args.push(_array_lit_expr(good_elems, f, 3, 12))
+    let good_call = _call_expr(_ident_expr("g", f, 3, 10), good_args, f, 3, 10)
+    let mut k_kids = []
+    k_kids.push(good_call)
+    let k_body = _block(k_kids, f, 3, 8)
+    let item_k = _fn_item("k", [], _empty_type_ref(), k_body, f, 3)
+    // fn f(ws: [i64]) { ws[0] = "s" }   — r8b param-base element mismatch
+    let mut f_kids = []
+    f_kids.push(_assign_expr(_index_expr(_ident_expr("ws", f, 4, 19), _int_expr("0", f, 4, 22), f, 4, 21), _string_expr("s", f, 4, 27), f, 4, 25))
+    let f_body = _block(f_kids, f, 4, 17)
+    let item_f = _fn_item("f", [_array_param("ws", "i64", f, 4, 6)], _empty_type_ref(), f_body, f, 4)
+    // fn p(vs: [i64]) { vs[1] = 7 }     — r8b matching control (int-lit coercion)
+    let mut p_kids = []
+    p_kids.push(_assign_expr(_index_expr(_ident_expr("vs", f, 5, 19), _int_expr("1", f, 5, 22), f, 5, 21), _int_expr("7", f, 5, 27), f, 5, 25))
+    let p_body = _block(p_kids, f, 5, 17)
+    let item_p = _fn_item("p", [_array_param("vs", "i64", f, 5, 6)], _empty_type_ref(), p_body, f, 5)
+    let mut items = []
+    items.push(item_g)
+    items.push(item_h)
+    items.push(item_k)
+    items.push(item_f)
+    items.push(item_p)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// static-types r9a — Index/Field READ inference. Index READs need BOTH flags
+// (element types only exist under the r7-prep structured lowering); Field
+// READs need HEXA_STATIC_TYPES alone (the r5 side registry carries the
+// declared field type). Two REJECT shapes + two matching controls:
+//   struct Point { x: i32, y: i32 }
+//   fn f(xs: [i64], p: Point) {
+//       let n: string = xs[0]   // Index READ: i64 elem vs string → HX3011 (both flags)
+//       let m: i64    = xs[1]   // matching control                → clean
+//       let q: string = p.x     // Field READ: i32 vs string → HX3011 (HEXA_STATIC_TYPES)
+//       let r: i32    = p.y     // matching control            → clean
+//   }
+// The rung adds NO new diagnostic site — the recovered element/field type
+// feeds the EXISTING r2 let check (typed-let RHS soundness gates). Contract
+// is three-way self-adapting: both flags ON → 2 HX3011; HEXA_STATIC_TYPES
+// alone → 1 (only the Field rung fires; the Index base stays a string
+// sentinel); default build → 0 (byteeq-neutral proof).
+fn _build_case_static_types_r9a() -> Module {
+    let f = "case_static_r9a.hexa"
+    // struct Point { x: i32, y: i32 }
+    let mut sfields = []
+    sfields.push(_param("x", "i32", f, 1, 15))
+    sfields.push(_param("y", "i32", f, 1, 23))
+    let item_pt = _struct_item("Point", sfields, f, 1)
+    // fn f(xs: [i64], p: Point) { … }
+    let mut kids = []
+    // let n: string = xs[0]   — Index READ element mismatch
+    kids.push(_let_expr("n|string", _index_expr(_ident_expr("xs", f, 3, 21), _int_expr("0", f, 3, 24), f, 3, 23), f, 3, 5))
+    // let m: i64 = xs[1]      — Index READ matching control
+    kids.push(_let_expr("m|i64", _index_expr(_ident_expr("xs", f, 4, 18), _int_expr("1", f, 4, 21), f, 4, 20), f, 4, 5))
+    // let q: string = p.x     — Field READ mismatch
+    kids.push(_let_expr("q|string", _field_expr(_ident_expr("p", f, 5, 21), "x", f, 5, 23), f, 5, 5))
+    // let r: i32 = p.y        — Field READ matching control
+    kids.push(_let_expr("r|i32", _field_expr(_ident_expr("p", f, 6, 18), "y", f, 6, 20), f, 6, 5))
+    let body = _block(kids, f, 2, 1)
+    let mut fparams = []
+    fparams.push(_array_param("xs", "i64", f, 2, 6))
+    fparams.push(_param("p", "Point", f, 2, 17))
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), body, f, 2)
+    let mut items = []
+    items.push(item_pt)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// static-types r9b — fn-return array-element REJECT + element-literal
+// coercion no-FP (HEXA_STATIC_TYPES=1 + HEXA_STATIC_TYPES_ARRAY_LOWER=1).
+// One REJECT shape + one coercion control:
+//   fn f() -> [i64] { return [1.5] }   // [f64] literal vs [i64] ret → HX3004 (×1)
+//   fn g() -> [f32] { return [0.0] }   // element float-lit coerces  → clean (the
+//                                       // r9b _types_assignable arm; without it
+//                                       // this FALSE-fires — flip-blocking FP)
+// Both-flags-ON: exactly 1 HX3004 — the return annotation lowers structured
+// (r7-prep), `[1.5]` infers array[f64] (r8), and the EXISTING default-ON
+// HX3004 site rejects via `_types_assignable`; `[0.0]` vs [f32] passes the
+// NEW per-element literal-coercion arm. Default build / either flag alone:
+// 0 (the ArrayLit infers the unknown sentinel and/or the annotation stays a
+// string sentinel → tolerated — byteeq-neutral proof). A count of 2 here
+// catches the coercion-FP regression (g() rejecting) exactly.
+fn _build_case_static_types_r9b() -> Module {
+    let f = "case_static_r9b.hexa"
+    // fn f() -> [i64] { return [1.5] }   — element REJECT
+    let mut bad_elems = []
+    bad_elems.push(_float_expr("1.5", f, 1, 27))
+    let mut f_kids = []
+    f_kids.push(_return_expr(_array_lit_expr(bad_elems, f, 1, 26), f, 1, 19))
+    let f_body = _block(f_kids, f, 1, 17)
+    let item_f = _fn_item("f", [], _generic_array_type_ref("i64"), f_body, f, 1)
+    // fn g() -> [f32] { return [0.0] }   — element literal coercion (no-FP)
+    let mut ok_elems = []
+    ok_elems.push(_float_expr("0.0", f, 2, 27))
+    let mut g_kids = []
+    g_kids.push(_return_expr(_array_lit_expr(ok_elems, f, 2, 26), f, 2, 19))
+    let g_body = _block(g_kids, f, 2, 17)
+    let item_g = _fn_item("g", [], _generic_array_type_ref("f32"), g_body, f, 2)
+    let mut items = []
+    items.push(item_f)
+    items.push(item_g)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// static-types r9c — match literal-pattern vs scrutinee REJECT
+// (HEXA_STATIC_TYPES=1; no ARRAY_LOWER dependency — scalar rung).
+//   fn f(n: i64) {
+//       match n {
+//           "x" -> 1,   // string literal pattern vs i64 scrutinee → HX3011 (×1)
+//           7   -> 2,   // matching int-literal control            → clean
+//           _   -> 3    // wildcard = conservative skip class      → clean
+//       }
+//   }
+// All arm bodies are i64 so the default-ON HX3005 body-consistency site
+// stays silent in every mode — the case isolates the NEW pattern check.
+// Flag-ON → exactly 1 HX3011 (the "x" pattern); default build → 0
+// (byteeq-neutral proof — the discard-only pattern walk is unchanged).
+fn _build_case_static_types_r9c() -> Module {
+    let f = "case_static_r9c.hexa"
+    let mut arms = []
+    // "x" -> 1   — literal-pattern mismatch → HX3011
+    arms.push(_string_expr("x", f, 3, 9))
+    arms.push(_int_expr("1", f, 3, 16))
+    // 7 -> 2     — matching int-literal control → clean
+    arms.push(_int_expr("7", f, 4, 9))
+    arms.push(_int_expr("2", f, 4, 16))
+    // _ -> 3     — wildcard skip class → clean
+    arms.push(_wildcard_expr(f, 5, 9))
+    arms.push(_int_expr("3", f, 5, 16))
+    let m = _match_expr(_ident_expr("n", f, 2, 11), arms, f, 2, 5)
+    let mut kids = []
+    kids.push(m)
+    let body = _block(kids, f, 2, 1)
+    let mut fparams = []
+    fparams.push(_param("n", "i64", f, 1, 6))
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// static-types r9d — struct-literal field-EXISTENCE reject (HEXA_STATIC_TYPES=1,
+// no ARRAY_LOWER dependency). r6 deliberately scoped existence out, so a
+// typo'd field name silently skipped BOTH the existence and the type check.
+// One module, one REJECT + three conservative controls:
+//   struct Q { x: i64, y: i64 }
+//   fn f() {
+//       Q { x: 1, z: 2 }     // z: no such field           → HX3016 (×1)
+//       Q { y: 3 }           // subset init (E0063 scope)  → clean
+//       Nope { w: 1 }        // struct unknown to registry → clean (silent)
+//   }
+// Under the flag exactly 1 HX3016 (the `z` init; `x: 1` coerces, `z`'s value
+// is never type-compared) and 0 HX3011 (no type mismatch anywhere). Default
+// build → 0 (byteeq-neutral proof — the STUB walk is unchanged).
+fn _build_case_static_types_r9d() -> Module {
+    let f = "case_static_r9d.hexa"
+    // struct Q { x: i64, y: i64 }
+    let mut sfields = []
+    sfields.push(_param("x", "i64", f, 1, 12))
+    sfields.push(_param("y", "i64", f, 1, 20))
+    let item_q = _struct_item("Q", sfields, f, 1)
+    let mut kids = []
+    // Q { x: 1, z: 2 }   — `z` misses the registry for KNOWN struct Q → HX3016
+    let mut inits_bad = []
+    inits_bad.push(_field_init("x", _int_expr("1", f, 3, 12), f, 3, 9))
+    inits_bad.push(_field_init("z", _int_expr("2", f, 3, 18), f, 3, 15))
+    kids.push(_struct_lit_expr("Q", inits_bad, f, 3, 5))
+    // Q { y: 3 }         — subset init: existing field only → clean
+    let mut inits_sub = []
+    inits_sub.push(_field_init("y", _int_expr("3", f, 4, 12), f, 4, 9))
+    kids.push(_struct_lit_expr("Q", inits_sub, f, 4, 5))
+    // Nope { w: 1 }      — struct not in the registry → silent (unknown-fallback)
+    let mut inits_unk = []
+    inits_unk.push(_field_init("w", _int_expr("1", f, 5, 15), f, 5, 12))
+    kids.push(_struct_lit_expr("Nope", inits_unk, f, 5, 5))
+    let body = _block(kids, f, 2, 1)
+    let item_f = _fn_item("f", [], _empty_type_ref(), body, f, 2)
+    let mut items = []
+    items.push(item_q)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// static-types r11 — struct-literal MISSING-required-field warning
+// (HEXA_STATIC_TYPES=1, no ARRAY_LOWER dependency). The deliberate PAIR of
+// r9d: r9d REJECTs a PRESENT field the struct doesn't declare; r11 WARNs a
+// DECLARED field the literal OMITS (Rust E0063). One module, one warning +
+// two conservative controls:
+//   struct P { a: i64, b: i64 }
+//   fn f() {
+//       P { a: 1 }           // missing declared `b`   → HX3017 (×1)
+//       P { a: 1, b: 2 }     // all fields provided     → clean
+//       Nope { a: 1 }        // struct unknown to reg   → clean (silent)
+//   }
+// Under the flag exactly 1 HX3017 (the `P{ a: 1 }` omission of `b`); the
+// fully-initialised P and the registry-unknown Nope stay clean, and 0
+// HX3016/HX3011 proves no reject cross-fire (`a`/`b` exist, `1`/`2` coerce).
+// Default build → 0 (byteeq-neutral proof — no registry read, STUB walk
+// unchanged).
+fn _build_case_static_types_r11() -> Module {
+    let f = "case_static_r11.hexa"
+    // struct P { a: i64, b: i64 }
+    let mut sfields = []
+    sfields.push(_param("a", "i64", f, 1, 12))
+    sfields.push(_param("b", "i64", f, 1, 20))
+    let item_p = _struct_item("P", sfields, f, 1)
+    let mut kids = []
+    // P { a: 1 }        — provides only `a`, omits declared `b` → HX3017
+    let mut inits_missing = []
+    inits_missing.push(_field_init("a", _int_expr("1", f, 3, 12), f, 3, 9))
+    kids.push(_struct_lit_expr("P", inits_missing, f, 3, 5))
+    // P { a: 1, b: 2 }  — every declared field provided → clean
+    let mut inits_full = []
+    inits_full.push(_field_init("a", _int_expr("1", f, 4, 12), f, 4, 9))
+    inits_full.push(_field_init("b", _int_expr("2", f, 4, 18), f, 4, 15))
+    kids.push(_struct_lit_expr("P", inits_full, f, 4, 5))
+    // Nope { a: 1 }     — struct not in the registry → silent (unknown-fallback)
+    let mut inits_unk = []
+    inits_unk.push(_field_init("a", _int_expr("1", f, 5, 15), f, 5, 12))
+    kids.push(_struct_lit_expr("Nope", inits_unk, f, 5, 5))
+    let body = _block(kids, f, 2, 1)
+    let item_f = _fn_item("f", [], _empty_type_ref(), body, f, 2)
+    let mut items = []
+    items.push(item_p)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// HEXA-OWN L2 r1 — @own use-after-move lint (HEXA_OWN_LINT=1). A block-local
+// `@own let` binding is single-owner: its first bare-ident consumption (the
+// RHS of a later `let`, an assignment RHS, or a call argument) MOVES it; any
+// second use warns HX3012 (Rust E0382 shape, warning band — never aborts).
+// One module covers all four r1 contracts:
+//   fn main() {
+//       @own let x = 5        // register x (own, live)
+//       let a = x             // FIRST use = move           → clean
+//       let b = x             // SECOND use = use-after-move → HX3012 (×1)
+//       @own let p = 1        // independent own binding
+//       @own let q = 2        // independent own binding
+//       let c = p             // p's first (only) move       → clean
+//       let d = q             // q's first (only) move       → clean
+//   }                          //   (p moved must NOT cross-fire onto q)
+// Under the flag exactly 1 HX3012 (the `let b = x` site); use-before-move
+// (`let a = x`, `c = p`, `d = q`) never fires; two independent @own bindings
+// don't cross-fire. On the default build → 0 (byteeq-neutral proof).
+fn _build_case_own_lint() -> Module {
+    let f = "case_own_lint.hexa"
+    let mut kids = []
+    // @own let x = 5
+    kids.push(_own_let_expr("x", _int_expr("5", f, 2, 18), f, 2, 5))
+    // let a = x   → first move of x (clean)
+    kids.push(_let_expr("a", _ident_expr("x", f, 3, 13), f, 3, 5))
+    // let b = x   → use-after-move → HX3012
+    kids.push(_let_expr("b", _ident_expr("x", f, 4, 13), f, 4, 5))
+    // @own let p = 1 ; @own let q = 2
+    kids.push(_own_let_expr("p", _int_expr("1", f, 5, 18), f, 5, 5))
+    kids.push(_own_let_expr("q", _int_expr("2", f, 6, 18), f, 6, 5))
+    // let c = p ; let d = q   → one move each (clean, no cross-fire)
+    kids.push(_let_expr("c", _ident_expr("p", f, 7, 13), f, 7, 5))
+    kids.push(_let_expr("d", _ident_expr("q", f, 8, 13), f, 8, 5))
+    let body = _block(kids, f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// HEXA-OWN L2 r2 — @own use-after-move at RETURN position (HEXA_OWN_LINT=1).
+// A bare-ident `return x` is a MOVE site: returning an `@own` binding that
+// was already moved (here: consumed as a call argument) warns HX3012, and a
+// return that is the binding's FIRST use is a clean move (it registers the
+// move for any later use). Two fns cover both halves:
+//   fn f() {
+//       @own let x = 5        // register x (own, live)
+//       consume(x)            // FIRST use = move (call-arg)    → clean
+//       return x              // return AFTER move → HX3012 (×1)
+//   }
+//   fn g() {
+//       @own let r = 1        // independent own binding
+//       return r              // FIRST use = move at return     → clean
+//   }
+// Under the flag exactly 1 HX3012 (the `return x` site); g's first-use
+// return never fires, and the per-fn registry reset keeps f's moved state
+// out of g. On the default build → 0 (byteeq-neutral proof).
+fn _build_case_own_lint_r2() -> Module {
+    let f = "case_own_lint_r2.hexa"
+    // fn f() { @own let x = 5; consume(x); return x }
+    let mut kids_f = []
+    kids_f.push(_own_let_expr("x", _int_expr("5", f, 2, 18), f, 2, 5))
+    let mut args = []
+    args.push(_ident_expr("x", f, 3, 13))
+    kids_f.push(_call_expr(_ident_expr("consume", f, 3, 5), args, f, 3, 5))
+    kids_f.push(_return_expr(_ident_expr("x", f, 4, 12), f, 4, 5))
+    let body_f = _block(kids_f, f, 2, 1)
+    let item_f = _fn_item("f", [], _empty_type_ref(), body_f, f, 1)
+    // fn g() { @own let r = 1; return r }
+    let mut kids_g = []
+    kids_g.push(_own_let_expr("r", _int_expr("1", f, 7, 18), f, 7, 5))
+    kids_g.push(_return_expr(_ident_expr("r", f, 8, 12), f, 8, 5))
+    let body_g = _block(kids_g, f, 7, 1)
+    let item_g = _fn_item("g", [], _empty_type_ref(), body_g, f, 6)
+    let mut items = []
+    items.push(item_f)
+    items.push(item_g)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// HEXA-OWN L2 r2b — @own PARAM position + Copy-exemption (HEXA_OWN_LINT=1).
+// An `@own` param is registered into the own-lint registry at fn entry and
+// the body treats it affinely: the existing move sites mark it moved and a
+// later use warns HX3012. The parser carries inline `@own p: T` as a
+// fn-level Annotation{ name: "own", args: [LiteralString "p"] } — the
+// builder below attaches exactly that shape (same AST parse_param emits).
+// Copy-class scalar params (here: i64, per the #4088 Copy predicate) are
+// EXEMPT — never registered, so moving+reusing them stays silent.
+//   fn h(@own xs: string) {
+//       consume(xs)           // FIRST use = move (call-arg)   → clean
+//       let b = xs            // use-after-move                → HX3012 (×1)
+//   }
+//   fn k(@own n: i64) {
+//       consume(n)            // Copy-exempt: not tracked      → clean
+//       let c = n             // Copy-exempt: no warn          → clean
+//   }
+// Under the flag exactly 1 HX3012 (h's `let b = xs`); on the default build
+// → 0 (byteeq-neutral).
+fn _own_fn_item(name: string, own_pname: string, params: [Param], body: Expr, file: string, line: i64) -> Item {
+    let mut anns: [Annotation] = []
+    let mut oargs = []
+    oargs.push(_string_expr(own_pname, file, line, 1))
+    anns.push(Annotation { name: "own", args: oargs, span: _span(file, line, 1, 4) })
+    return Item {
+        kind: ItemKind::Fn,
+        name: name,
+        span: _span(file, line, 1, len(name)),
+        annotations: anns,
+        params: params,
+        return_type: _empty_type_ref(),
+        body: body,
+        is_pub: false
+    }
+}
+
+// HEXA-OWN L2.5 r1 — array literal `[e0, e1, …]`. children = elements
+// (parser shape per ast.hexa ExprKind::ArrayLit).
+fn _array_lit_expr(elems: [Expr], file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::ArrayLit,
+        span: _span(file, line, col, 1),
+        text: "",
+        annotations: [],
+        children: elems,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// HEXA-OWN L2.5 r1 — module-level `let <name> = rhs` item (ItemKind::Let;
+// body = RHS expr, unannotated return_type — the lint reads only names).
+fn _let_item(name: string, rhs: Expr, file: string, line: i64) -> Item {
+    return Item {
+        kind: ItemKind::Let,
+        name: name,
+        span: _span(file, line, 1, len(name)),
+        annotations: [],
+        params: [],
+        return_type: _empty_type_ref(),
+        body: rhs,
+        is_pub: false
+    }
+}
+
+fn _build_case_own_lint_r2b() -> Module {
+    let f = "case_own_lint_r2b.hexa"
+    // fn h(@own xs: string) { consume(xs); let b = xs }
+    let mut params_h = []
+    params_h.push(_param("xs", "string", f, 1, 9))
+    let mut kids_h = []
+    let mut args_h = []
+    args_h.push(_ident_expr("xs", f, 2, 13))
+    kids_h.push(_call_expr(_ident_expr("consume", f, 2, 5), args_h, f, 2, 5))
+    kids_h.push(_let_expr("b", _ident_expr("xs", f, 3, 13), f, 3, 5))
+    let body_h = _block(kids_h, f, 2, 1)
+    let item_h = _own_fn_item("h", "xs", params_h, body_h, f, 1)
+    // fn k(@own n: i64) { consume(n); let c = n }   — Copy-exempt
+    let mut params_k = []
+    params_k.push(_param("n", "i64", f, 6, 9))
+    let mut kids_k = []
+    let mut args_k = []
+    args_k.push(_ident_expr("n", f, 7, 13))
+    kids_k.push(_call_expr(_ident_expr("consume", f, 7, 5), args_k, f, 7, 5))
+    kids_k.push(_let_expr("c", _ident_expr("n", f, 8, 13), f, 8, 5))
+    let body_k = _block(kids_k, f, 7, 1)
+    let item_k = _own_fn_item("k", "n", params_k, body_k, f, 6)
+    let mut items = []
+    items.push(item_h)
+    items.push(item_k)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// HEXA-OWN L2.5 r1 — arena-escape lint (HEXA_ARENA_ESCAPE_LINT=1). A
+// fn-local `let` whose RHS is a composite literal is arena-allocated; only
+// the RETURN value is heapified by the fn-arena runtime, so assigning such
+// a binding to a module-level `let` global leaves the global dangling after
+// scope_pop → HX3013 (warning band). One module covers the r1 contracts:
+//   let g_sink = []              // module-level global (escape target)
+//   fn clean() {
+//       let b = [3]              // composite local
+//       let keep = b             // local-to-local: NOT an escape   → clean
+//       let g_sink = 5           // fn-local SHADOW of the global name
+//       g_sink = b               // assigns the shadow, not the global → clean
+//   }
+//   fn scalar_ok() {
+//       let s = 7                // NON-composite local
+//       g_sink = s               // global store of a scalar binding → clean
+//   }
+//   fn bad() {
+//       let a = [1, 2]           // composite local (arena-allocated)
+//       g_sink = a               // escapes into the module global → HX3013 (×1)
+//   }
+// bad() runs LAST: if the per-fn registry reset ever leaked clean()'s
+// `g_sink` shadow entry, bad()'s warn would be suppressed → the ×1 contract
+// also proves per-fn isolation. Under the flag exactly 1 HX3013; on the
+// default build → 0 (byteeq-neutral proof).
+fn _build_case_arena_escape() -> Module {
+    let f = "case_arena_escape.hexa"
+    // let g_sink = []
+    let item_g = _let_item("g_sink", _array_lit_expr([], f, 1, 14), f, 1)
+    // fn clean() { let b = [3]; let keep = b; let g_sink = 5; g_sink = b }
+    let mut kids_clean = []
+    let mut elems_b = []
+    elems_b.push(_int_expr("3", f, 4, 14))
+    kids_clean.push(_let_expr("b", _array_lit_expr(elems_b, f, 4, 13), f, 4, 5))
+    kids_clean.push(_let_expr("keep", _ident_expr("b", f, 5, 16), f, 5, 5))
+    kids_clean.push(_let_expr("g_sink", _int_expr("5", f, 6, 18), f, 6, 5))
+    kids_clean.push(_assign_expr(_ident_expr("g_sink", f, 7, 5), _ident_expr("b", f, 7, 14), f, 7, 12))
+    let body_clean = _block(kids_clean, f, 3, 1)
+    let item_clean = _fn_item("clean", [], _empty_type_ref(), body_clean, f, 3)
+    // fn scalar_ok() { let s = 7; g_sink = s }
+    let mut kids_scalar = []
+    kids_scalar.push(_let_expr("s", _int_expr("7", f, 11, 13), f, 11, 5))
+    kids_scalar.push(_assign_expr(_ident_expr("g_sink", f, 12, 5), _ident_expr("s", f, 12, 14), f, 12, 12))
+    let body_scalar = _block(kids_scalar, f, 10, 1)
+    let item_scalar = _fn_item("scalar_ok", [], _empty_type_ref(), body_scalar, f, 10)
+    // fn bad() { let a = [1, 2]; g_sink = a }
+    let mut kids_bad = []
+    let mut elems_a = []
+    elems_a.push(_int_expr("1", f, 16, 14))
+    elems_a.push(_int_expr("2", f, 16, 17))
+    kids_bad.push(_let_expr("a", _array_lit_expr(elems_a, f, 16, 13), f, 16, 5))
+    kids_bad.push(_assign_expr(_ident_expr("g_sink", f, 17, 5), _ident_expr("a", f, 17, 14), f, 17, 12))
+    let body_bad = _block(kids_bad, f, 15, 1)
+    let item_bad = _fn_item("bad", [], _empty_type_ref(), body_bad, f, 15)
+    let mut items = []
+    items.push(item_g)
+    items.push(item_clean)
+    items.push(item_scalar)
+    items.push(item_bad)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // ── Driver ───────────────────────────────────────────────────
 
 fn _run_case(label: string, m: Module) -> array {
@@ -537,6 +1502,22 @@ fn _count_code(diags: array, code: string) -> i64 {
     while i < len(diags) {
         let d = diags[i]
         if d.code == code { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+// Count diagnostics matching BOTH a code and a severity band ("error" /
+// "warning" / "note", via _sev_str). Used by the static-types F4 warn-first
+// two-step tests: the same HX3011/HX3016 diagnostic must land in the Warning
+// band under plain HEXA_STATIC_TYPES=1 and the Error band (REJECT) under
+// HEXA_STATIC_TYPES_STRICT=1 — a count alone cannot tell them apart.
+fn _count_code_sev(diags: array, code: string, sev: string) -> i64 {
+    let mut i = 0
+    let mut n = 0
+    while i < len(diags) {
+        let d = diags[i]
+        if d.code == code && _sev_str(d.severity) == sev { n = n + 1 }
         i = i + 1
     }
     return n
@@ -617,32 +1598,542 @@ fn main() {
         println("  ok: 2 HX2005 emitted (per-slot positional)")
     }
 
-    // (h) Exhaustiveness severity gating — env-adaptive contract:
-    //   both unset           → 0 HX3006 + 0 HX3011 (default byte-identity)
-    //   HEXA_EXHAUSTIVE=1     → 1 HX3006 (warn), 0 HX3011
-    //   HEXA_EXHAUSTIVE_FATAL=1 → 1 HX3011 (fatal error), 0 HX3006
-    let fatal_on = env("HEXA_EXHAUSTIVE_FATAL") == "1"
-    let warn_on = env("HEXA_EXHAUSTIVE") == "1"
-    let diags_h = _run_case("(h) exhaustiveness severity gate (Color missing Blue)", _build_case_h())
-    let h3006 = _count_code(diags_h, "HX3006")
-    let h3011 = _count_code(diags_h, "HX3011")
-    if fatal_on {
-        if h3011 != 1 || h3006 != 0 {
-            println("  FAIL: case (h) HEXA_EXHAUSTIVE_FATAL=1 expected 1 HX3011 + 0 HX3006, got " + to_string(h3011) + " HX3011 / " + to_string(h3006) + " HX3006")
+    // (h) Wall A r1 — opt-in static-type let-mismatch (HEXA_STATIC_TYPES).
+    // Self-adapting: under the flag a `let x:i32="s"` mismatch must REJECT
+    // with HX3011; on the default build it must be ABSENT (byteeq-neutral
+    // proof — zero new diagnostics when the flag is unset). The matching
+    // `let y:i32=5` binding never trips HX3011 in either mode.
+    let diags_h = _run_case("(h) static-types — let x:i32=\"s\" mismatch (HEXA_STATIC_TYPES)", _build_case_static_types())
+    let nh = _count_code(diags_h, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if nh != 1 {
+            println("  FAIL: case (h) HEXA_STATIC_TYPES=1 expected 1 HX3011, got " + to_string(nh) + " (total=" + to_string(len(diags_h)) + ")")
             ok = false
         } else {
-            println("  ok: 1 HX3011 (fatal) emitted under HEXA_EXHAUSTIVE_FATAL=1")
+            println("  ok: 1 HX3011 emitted (REJECT; matching `let y:i32=5` stays clean)")
+        }
+    } else {
+        if nh != 0 {
+            println("  FAIL: case (h) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nh) + " (total=" + to_string(len(diags_h)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (i) Wall A r2 — non-literal known-type RHS (ident / call). Under the
+    // flag, `let b_ident:string = p` (p:i32 param) AND `let b_call:string =
+    // g()` (g()->i32) each REJECT with HX3011 (2 total), while the matching
+    // `let ok:i32 = g()` stays clean. On the default build → 0 (byteeq-
+    // neutral). Same self-adapting contract as case (h), extended to the
+    // ident/call rung.
+    let diags_i = _run_case("(i) static-types r2 — ident/call known-type RHS mismatch (HEXA_STATIC_TYPES)", _build_case_static_types_r2())
+    let ni = _count_code(diags_i, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if ni != 2 {
+            println("  FAIL: case (i) HEXA_STATIC_TYPES=1 expected 2 HX3011 (ident+call), got " + to_string(ni) + " (total=" + to_string(len(diags_i)) + ")")
+            ok = false
+        } else {
+            println("  ok: 2 HX3011 emitted (ident p:i32 + call g()->i32 vs string; matching i32=g() stays clean)")
+        }
+    } else {
+        if ni != 0 {
+            println("  FAIL: case (i) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(ni) + " (total=" + to_string(len(diags_i)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (j) Wall A r3 — decl/init split. Under the flag, a decl-only `let x:i32`
+    // followed by `x = "s"` AND a `let y:string` followed by `y = 5` each
+    // REJECT with HX3011 (2 total), while the matching `let z:i32; z = 7`
+    // stays clean (int-literal coercion). On the default build → 0 (byteeq-
+    // neutral). Same self-adapting contract as (h)/(i), extended to the
+    // split-init assignment rung.
+    let diags_j = _run_case("(j) static-types r3 — decl/init-split assign mismatch (HEXA_STATIC_TYPES)", _build_case_static_types_r3())
+    let nj = _count_code(diags_j, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if nj != 2 {
+            println("  FAIL: case (j) HEXA_STATIC_TYPES=1 expected 2 HX3011 (x=\"s\" + y=5), got " + to_string(nj) + " (total=" + to_string(len(diags_j)) + ")")
+            ok = false
+        } else {
+            println("  ok: 2 HX3011 emitted (x:i32=\"s\" + y:string=5; matching z:i32=7 stays clean)")
+        }
+    } else {
+        if nj != 0 {
+            println("  FAIL: case (j) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nj) + " (total=" + to_string(len(diags_j)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (k) Wall A r4 — array element-fit assign. Under the flag, a decl-only
+    // `let a:[i32;4]` followed by `a[0] = "s"` AND a `let b:[string]` followed
+    // by `b[1] = 9` each REJECT with HX3011 (2 total), while the matching
+    // `let c:[i32;4]; c[2] = 7` stays clean (int-literal coercion). On the
+    // default build → 0 (byteeq-neutral). Extends (j)'s decl/init-split
+    // contract from the plain-ident assign to the array index place.
+    let diags_k = _run_case("(k) static-types r4 — array element-fit assign mismatch (HEXA_STATIC_TYPES)", _build_case_static_types_r4())
+    let nk = _count_code(diags_k, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if nk != 2 {
+            println("  FAIL: case (k) HEXA_STATIC_TYPES=1 expected 2 HX3011 (a[0]=\"s\" + b[1]=9), got " + to_string(nk) + " (total=" + to_string(len(diags_k)) + ")")
+            ok = false
+        } else {
+            println("  ok: 2 HX3011 emitted (a:[i32]=\"s\" + b:[string]=9; matching c:[i32][2]=7 stays clean)")
+        }
+    } else {
+        if nk != 0 {
+            println("  FAIL: case (k) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nk) + " (total=" + to_string(len(diags_k)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (l) Wall A r5 — struct field-type assign. Under the flag, with
+    // `struct Point { x: i32, y: i32 }`, a param receiver `p.x = "s"` AND a
+    // block-local receiver `s.x = "z"` each REJECT with HX3011 (2 total), while
+    // the matching `p.y = 7` stays clean (int-literal coercion). On the default
+    // build → 0 (byteeq-neutral). Extends (k)'s element-fit contract from the
+    // array place to the struct field place.
+    let diags_l = _run_case("(l) static-types r5 — struct field-type assign mismatch (HEXA_STATIC_TYPES)", _build_case_static_types_r5())
+    let nl = _count_code(diags_l, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if nl != 2 {
+            println("  FAIL: case (l) HEXA_STATIC_TYPES=1 expected 2 HX3011 (p.x=\"s\" + s.x=\"z\"), got " + to_string(nl) + " (total=" + to_string(len(diags_l)) + ")")
+            ok = false
+        } else {
+            println("  ok: 2 HX3011 emitted (p.x:i32=\"s\" param + s.x:i32=\"z\" block-local; matching p.y:i32=7 stays clean)")
+        }
+    } else {
+        if nl != 0 {
+            println("  FAIL: case (l) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nl) + " (total=" + to_string(len(diags_l)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (m) Wall A r6 — struct-literal field-init mismatch. Under the flag, with
+    // `struct Point { x: i32, y: i32 }`, a construction `Point { x: "s", y: 7 }`
+    // REJECTs the `x: "s"` (string ≠ i32) while `y: 7` coerces, and a second
+    // `Point { x: true }` REJECTs `x: true` (bool ≠ i32) → 2 HX3011 total. On
+    // the default build → 0 (byteeq-neutral). Extends (l)'s field-place-assign
+    // contract to the struct-literal construction place — the LAST scope-
+    // wireable rung (r7+ = generic/trait static-dispatch = measured ceiling).
+    let diags_m = _run_case("(m) static-types r6 — struct-literal field-init mismatch (HEXA_STATIC_TYPES)", _build_case_static_types_r6())
+    let nm = _count_code(diags_m, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if nm != 2 {
+            println("  FAIL: case (m) HEXA_STATIC_TYPES=1 expected 2 HX3011 (x:\"s\" + x:true), got " + to_string(nm) + " (total=" + to_string(len(diags_m)) + ")")
+            ok = false
+        } else {
+            println("  ok: 2 HX3011 emitted (Point{x:\"s\"} string + Point{x:true} bool; matching y:7 stays clean)")
+        }
+    } else {
+        if nm != 0 {
+            println("  FAIL: case (m) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nm) + " (total=" + to_string(len(diags_m)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (n) HEXA-OWN L2 r1 — @own use-after-move lint (HEXA_OWN_LINT). Under
+    // the flag, `@own let x = 5; let a = x; let b = x` warns HX3012 exactly
+    // ONCE (at `let b = x`): the first use is the move (clean), the second is
+    // the use-after-move. The two independent `@own` bindings p/q, each moved
+    // once, must NOT cross-fire. On the default build → 0 (byteeq-neutral).
+    // Same self-adapting contract as (h)-(m), on the NEW own-lint flag.
+    let diags_n = _run_case("(n) own-lint r1 — @own use-after-move (HEXA_OWN_LINT)", _build_case_own_lint())
+    let nn = _count_code(diags_n, "HX3012")
+    if env("HEXA_OWN_LINT") == "1" {
+        if nn != 1 {
+            println("  FAIL: case (n) HEXA_OWN_LINT=1 expected 1 HX3012 (let b = x), got " + to_string(nn) + " (total=" + to_string(len(diags_n)) + ")")
+            ok = false
+        } else {
+            println("  ok: 1 HX3012 emitted (move `let a = x` clean; use-after-move `let b = x` warns; p/q don't cross-fire)")
+        }
+    } else {
+        if nn != 0 {
+            println("  FAIL: case (n) default build expected 0 HX3012 (byteeq-neutral), got " + to_string(nn) + " (total=" + to_string(len(diags_n)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3012 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (o) static-types r7-prep — structured array lowering
+    // (HEXA_STATIC_TYPES_ARRAY_LOWER). The contract is IDENTICAL in both
+    // modes — exactly 1 HX3003 (the `g(ys)` [f64]-vs-[i32] mismatch) and a
+    // clean matching `g(zs)`. Flag-OFF that proves the string-sentinel path
+    // is untouched (byteeq-neutral); flag-ON it proves the structured
+    // lowering PRESERVES the element type (a kind-only "array" collapse
+    // would yield 0 HX3003 and FAIL here). r4's element-fit contract, case
+    // (k) above, must hold unchanged under this flag too — it lowers via the
+    // kind:"named" annotation-text path, which this branch never touches.
+    let diags_o = _run_case("(o) static-types r7-prep — array element preserved across lowering (HEXA_STATIC_TYPES_ARRAY_LOWER)", _build_case_static_types_r7prep())
+    let no = _count_code(diags_o, "HX3003")
+    if no != 1 {
+        println("  FAIL: case (o) expected 1 HX3003 in BOTH modes (g(ys) [f64]≠[i32]; matching g(zs) clean), got " + to_string(no) + " (total=" + to_string(len(diags_o)) + ")")
+        ok = false
+    } else {
+        if env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1" || env("HEXA_STATIC_TYPES") == "1" {
+            println("  ok: 1 HX3003 emitted (structured lowering — [f64] ≠ [i32] element recursion; matching g(zs) stays clean; F0 fold: STATIC implies array-lower)")
+        } else {
+            println("  ok: 1 HX3003 emitted (string sentinel — generic:Array:f64 ≠ generic:Array:i32; default-OFF path untouched)")
+        }
+    }
+
+    // (q) static-types r8 — array-literal call-arg element mismatch + r8b
+    // param-base index-assign. Letter (p) is reserved by the own-l2-r2 return
+    // rung (parallel PR). After the F0 flag-fold HEXA_STATIC_TYPES=1 alone
+    // supplies the array-lowering, so under the single flag: exactly
+    // 1 HX3003 (`g([1.5])` — structural ArrayLit inference [f64] vs the
+    // lowered [i64] param, rejected by the EXISTING call-arg check) and
+    // exactly 1 HX3011 (`ws[0] = "s"` — r8b re-infers the param base to
+    // recover the i64 element); the matching `g([1, 2])` and coercing
+    // `vs[1] = 7` stay clean. Default build: 0 of each (ArrayLit args carry no
+    // flag-OFF sentinel → byteeq-neutral proof). (ARRAY_LOWER alone — STATIC
+    // off — also 0: ArrayLit inference and r8b gate on _types_static_on.)
+    let diags_q = _run_case("(q) static-types r8 — array-literal call-arg element mismatch (HEXA_STATIC_TYPES)", _build_case_static_types_r8())
+    let nq3003 = _count_code(diags_q, "HX3003")
+    let nq3011 = _count_code(diags_q, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if nq3003 != 1 || nq3011 != 1 {
+            println("  FAIL: case (q) HEXA_STATIC_TYPES=1 expected 1 HX3003 (g([1.5])) + 1 HX3011 (ws[0]=\"s\"; F0 fold → array-lower under the single flag), got " + to_string(nq3003) + " HX3003 / " + to_string(nq3011) + " HX3011 (total=" + to_string(len(diags_q)) + ")")
+            ok = false
+        } else {
+            println("  ok: 1 HX3003 + 1 HX3011 emitted (matching g([1,2]) and coercing vs[1]=7 stay clean; F0 fold)")
+        }
+    } else {
+        if nq3003 != 0 || nq3011 != 0 {
+            println("  FAIL: case (q) flags-OFF expected 0 HX3003 + 0 HX3011 (byteeq-neutral), got " + to_string(nq3003) + " HX3003 / " + to_string(nq3011) + " HX3011 (total=" + to_string(len(diags_q)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3003 / 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (s) static-types r9a — Index/Field READ inference feeding the EXISTING
+    // r2 let check (letters o/p/q/r taken; p reserved by own-l2-r2). After the
+    // F0 flag-fold HEXA_STATIC_TYPES=1 IMPLIES array-lower, so the Index rung
+    // no longer needs a separate HEXA_STATIC_TYPES_ARRAY_LOWER=1: under the
+    // single flag → 2 HX3011 (`let n: string = xs[0]` Index-READ elem i64 +
+    // `let q: string = p.x` Field-READ i32); default build → 0 (byteeq-neutral
+    // proof). The matching `let m: i64 = xs[1]` and `let r: i32 = p.y` stay
+    // clean in every mode. (HEXA_STATIC_TYPES_ARRAY_LOWER alone — STATIC off —
+    // stays 0: the inference arms gate on _types_static_on.)
+    let diags_s = _run_case("(s) static-types r9a — Index/Field READ inference into typed let (HEXA_STATIC_TYPES)", _build_case_static_types_r9a())
+    let ns = _count_code(diags_s, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if ns != 2 {
+            println("  FAIL: case (s) HEXA_STATIC_TYPES=1 expected 2 HX3011 (n:string=xs[0] Index + q:string=p.x Field; F0 fold → array-lower under the single flag), got " + to_string(ns) + " (total=" + to_string(len(diags_s)) + ")")
+            ok = false
+        } else {
+            println("  ok: 2 HX3011 emitted (Index READ i64-elem + Field READ i32 vs string; F0 fold; matching m/r stay clean)")
+        }
+    } else {
+        if ns != 0 {
+            println("  FAIL: case (s) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(ns) + " (total=" + to_string(len(diags_s)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (t) static-types r9b — fn-return array-element REJECT + element-literal
+    // coercion no-FP. After the F0 flag-fold HEXA_STATIC_TYPES=1 alone lowers
+    // the return type structurally: exactly 1 HX3004 (`fn f() -> [i64] {
+    // return [1.5] }` — structural [f64] vs the lowered [i64] return, at the
+    // EXISTING default-ON HX3004 site) while `fn g() -> [f32] { return [0.0]
+    // }` passes via the per-element literal-coercion arm of _types_assignable.
+    // Default build: 0 (ArrayLit infers the unknown sentinel and/or the
+    // annotation stays a string sentinel → tolerated — byteeq-neutral proof).
+    // (ARRAY_LOWER alone — STATIC off — also 0: ArrayLit inference gates on
+    // _types_static_on.)
+    let diags_t = _run_case("(t) static-types r9b — return [1.5] vs [i64] REJECT + [0.0] vs [f32] coercion no-FP (HEXA_STATIC_TYPES)", _build_case_static_types_r9b())
+    let nt = _count_code(diags_t, "HX3004")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if nt != 1 {
+            println("  FAIL: case (t) HEXA_STATIC_TYPES=1 expected 1 HX3004 (f: [1.5] vs [i64] REJECT; g: [0.0] vs [f32] coerces; F0 fold → array-lower under the single flag), got " + to_string(nt) + " (total=" + to_string(len(diags_t)) + ")")
+            ok = false
+        } else {
+            println("  ok: 1 HX3004 emitted (return-position element REJECT; [0.0]→[f32] element coercion stays clean — no FP; F0 fold)")
+        }
+    } else {
+        if nt != 0 {
+            println("  FAIL: case (t) flags-OFF expected 0 HX3004 (byteeq-neutral), got " + to_string(nt) + " (total=" + to_string(len(diags_t)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3004 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (p) HEXA-OWN L2 r2 — @own use-after-move at RETURN position
+    // (HEXA_OWN_LINT). Under the flag, `@own let x = 5; consume(x);
+    // return x` warns HX3012 exactly ONCE (at `return x`): the call-arg is
+    // the move, the return is the use-after-move. g's first-use `return r`
+    // is a clean move (registers only). On the default build → 0
+    // (byteeq-neutral). Same self-adapting contract as (n).
+    let diags_o = _run_case("(p) own-lint r2 — @own moved then returned (HEXA_OWN_LINT)", _build_case_own_lint_r2())
+    let oo = _count_code(diags_o, "HX3012")
+    if env("HEXA_OWN_LINT") == "1" {
+        if oo != 1 {
+            println("  FAIL: case (p) HEXA_OWN_LINT=1 expected 1 HX3012 (return x), got " + to_string(oo) + " (total=" + to_string(len(diags_o)) + ")")
+            ok = false
+        } else {
+            println("  ok: 1 HX3012 emitted (call-arg move clean; `return x` after move warns; g's first-use return clean)")
+        }
+    } else {
+        if oo != 0 {
+            println("  FAIL: case (p) default build expected 0 HX3012 (byteeq-neutral), got " + to_string(oo) + " (total=" + to_string(len(diags_o)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3012 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (q) HEXA-OWN L2 r2b — @own PARAM position + Copy-exemption
+    // (HEXA_OWN_LINT). Under the flag, h's `@own xs: string` param moved as
+    // a call-arg then read again warns HX3012 exactly ONCE; k's
+    // `@own n: i64` param is Copy-class (per the #4088 predicate) → exempt
+    // from move tracking → moved-then-used stays silent. On the default
+    // build → 0 (byteeq-neutral). Same self-adapting contract as (n)/(p).
+    let diags_q = _run_case("(q) own-lint r2b — @own param moved then used; Copy-exempt i64 (HEXA_OWN_LINT)", _build_case_own_lint_r2b())
+    let qq = _count_code(diags_q, "HX3012")
+    if env("HEXA_OWN_LINT") == "1" {
+        if qq != 1 {
+            println("  FAIL: case (q) HEXA_OWN_LINT=1 expected 1 HX3012 (h: let b = xs), got " + to_string(qq) + " (total=" + to_string(len(diags_q)) + ")")
+            ok = false
+        } else {
+            println("  ok: 1 HX3012 emitted (@own string param tracked; @own i64 param Copy-exempt silent)")
+        }
+    } else {
+        if qq != 0 {
+            println("  FAIL: case (q) default build expected 0 HX3012 (byteeq-neutral), got " + to_string(qq) + " (total=" + to_string(len(diags_q)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3012 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (r) HEXA-OWN L2.5 r1 — arena-escape lint (HEXA_ARENA_ESCAPE_LINT).
+    // Under the flag, `let a = [1,2]; g_sink = a` (g_sink = module-level
+    // let) warns HX3013 exactly ONCE. The clean controls never fire: a
+    // local-to-local `let keep = b`, a store through a fn-local SHADOW of
+    // the global name, and a global store of a NON-composite binding
+    // (`g_sink = s`). bad() runs last, so the ×1 also proves the per-fn
+    // registry reset. On the default build → 0 (byteeq-neutral). Same
+    // self-adapting contract as (h)-(p), on the NEW arena-escape flag.
+    let diags_r = _run_case("(r) arena-escape L2.5 r1 — composite local stored into module global (HEXA_ARENA_ESCAPE_LINT)", _build_case_arena_escape())
+    let nr = _count_code(diags_r, "HX3013")
+    if env("HEXA_ARENA_ESCAPE_LINT") == "1" {
+        if nr != 1 {
+            println("  FAIL: case (r) HEXA_ARENA_ESCAPE_LINT=1 expected 1 HX3013 (g_sink = a), got " + to_string(nr) + " (total=" + to_string(len(diags_r)) + ")")
+            ok = false
+        } else {
+            println("  ok: 1 HX3013 emitted (escape `g_sink = a` warns; local move / shadowed store / scalar store stay clean)")
+        }
+    } else {
+        if nr != 0 {
+            println("  FAIL: case (r) default build expected 0 HX3013 (byteeq-neutral), got " + to_string(nr) + " (total=" + to_string(len(diags_r)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3013 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (u) static-types r9c — match literal-pattern vs scrutinee REJECT.
+    // Flag-ON (HEXA_STATIC_TYPES=1, no ARRAY_LOWER dependency): exactly 1
+    // HX3011 — the `"x"` string-literal pattern against the i64 scrutinee
+    // (the NEW _check_match arm); the matching `7` int-literal control and
+    // the `_` wildcard stay clean, and the uniform-i64 arm bodies keep the
+    // default-ON HX3005 site silent. Default build: 0 (byteeq-neutral
+    // proof — the discard-only pattern walk is unchanged).
+    let diags_u = _run_case("(u) static-types r9c — match \"x\" pattern vs i64 scrutinee REJECT (HEXA_STATIC_TYPES)", _build_case_static_types_r9c())
+    let nu = _count_code(diags_u, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if nu != 1 {
+            println("  FAIL: case (u) HEXA_STATIC_TYPES=1 expected 1 HX3011 (\"x\" pattern vs i64 scrutinee; 7 + _ stay clean), got " + to_string(nu) + " (total=" + to_string(len(diags_u)) + ")")
+            ok = false
+        } else {
+            println("  ok: 1 HX3011 emitted (string-literal pattern vs i64 scrutinee; matching literal + wildcard stay clean)")
+        }
+    } else {
+        if nu != 0 {
+            println("  FAIL: case (u) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nu) + " (total=" + to_string(len(diags_u)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (v) static-types r9d — struct-literal field-EXISTENCE reject + F4
+    // warn-first SEVERITY two-step. Flag-ON (HEXA_STATIC_TYPES=1, no ARRAY_
+    // LOWER dependency): exactly 1 HX3016 — `Q{ x: 1, z: 2 }` where `z` is not
+    // a field of the KNOWN struct Q (the r9d existence arm); the subset init
+    // `Q{ y: 3 }` and the registry-unknown `Nope{ w: 1 }` stay clean, and 0
+    // HX3011 proves no type-mismatch cross-fire. The COUNT is band-invariant;
+    // the F4 axis is SEVERITY: plain HEXA_STATIC_TYPES=1 → the HX3016 lands in
+    // the WARNING band (rc=0, non-fatal — the build still compiles), while
+    // HEXA_STATIC_TYPES_STRICT=1 re-escalates it to the ERROR band (rc≠0,
+    // REJECT). Default build: 0 (byteeq-neutral proof — the STUB walk is
+    // unchanged, no registry read).
+    let diags_v = _run_case("(v) static-types r9d — struct-literal unknown field name (F4 warn/strict severity) (HEXA_STATIC_TYPES)", _build_case_static_types_r9d())
+    let nv3014 = _count_code(diags_v, "HX3016")
+    let nv3011 = _count_code(diags_v, "HX3011")
+    let nv_warn = _count_code_sev(diags_v, "HX3016", "warning")
+    let nv_err = _count_code_sev(diags_v, "HX3016", "error")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if env("HEXA_STATIC_TYPES_STRICT") == "1" {
+            if nv3014 != 1 || nv3011 != 0 || nv_err != 1 {
+                println("  FAIL: case (v) STRICT expected 1 HX3016 as ERROR (REJECT) + 0 HX3011, got " + to_string(nv3014) + " HX3016 (" + to_string(nv_err) + " error/" + to_string(nv_warn) + " warn) / " + to_string(nv3011) + " HX3011 (total=" + to_string(len(diags_v)) + ")")
+                ok = false
+            } else {
+                println("  ok: 1 HX3016 as ERROR (HEXA_STATIC_TYPES_STRICT=1 → REJECT/rc≠0; F4 strict escalation)")
+            }
+        } else {
+            if nv3014 != 1 || nv3011 != 0 || nv_warn != 1 {
+                println("  FAIL: case (v) plain HEXA_STATIC_TYPES=1 expected 1 HX3016 as WARNING (non-fatal) + 0 HX3011, got " + to_string(nv3014) + " HX3016 (" + to_string(nv_err) + " error/" + to_string(nv_warn) + " warn) / " + to_string(nv3011) + " HX3011 (total=" + to_string(len(diags_v)) + ")")
+                ok = false
+            } else {
+                println("  ok: 1 HX3016 as WARNING (plain HEXA_STATIC_TYPES=1 → rc=0, non-fatal; F4 warn-first)")
+            }
+        }
+    } else {
+        if nv3014 != 0 || nv3011 != 0 {
+            println("  FAIL: case (v) default build expected 0 HX3016 + 0 HX3011 (byteeq-neutral), got " + to_string(nv3014) + " HX3016 / " + to_string(nv3011) + " HX3011 (total=" + to_string(len(diags_v)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3016 / 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (w) static-types r11 — struct-literal MISSING-required-field WARNING.
+    // Flag-ON (HEXA_STATIC_TYPES=1, no ARRAY_LOWER dependency): exactly 1
+    // HX3017 — `P{ a: 1 }` omits the declared field `b` (the NEW r11 missing-
+    // field arm); the fully-initialised `P{ a: 1, b: 2 }` and the registry-
+    // unknown `Nope{ a: 1 }` stay clean (conservative unknown-fallback), and 0
+    // HX3016/HX3011 proves no reject cross-fire. Default build: 0 (byteeq-
+    // neutral proof — the STUB walk is unchanged, no registry read).
+    let diags_w = _run_case("(w) static-types r11 — struct-literal missing required field WARN (HEXA_STATIC_TYPES)", _build_case_static_types_r11())
+    let nw3017 = _count_code(diags_w, "HX3017")
+    let nw3016 = _count_code(diags_w, "HX3016")
+    let nw3011 = _count_code(diags_w, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if nw3017 != 1 || nw3016 != 0 || nw3011 != 0 {
+            println("  FAIL: case (w) HEXA_STATIC_TYPES=1 expected 1 HX3017 (P missing `b`; full init + unknown-struct stay clean) + 0 HX3016 + 0 HX3011, got " + to_string(nw3017) + " HX3017 / " + to_string(nw3016) + " HX3016 / " + to_string(nw3011) + " HX3011 (total=" + to_string(len(diags_w)) + ")")
+            ok = false
+        } else {
+            println("  ok: 1 HX3017 emitted (missing field `b` on known struct P; full init + unknown struct stay clean)")
+        }
+    } else {
+        if nw3017 != 0 {
+            println("  FAIL: case (w) default build expected 0 HX3017 (byteeq-neutral), got " + to_string(nw3017) + " (total=" + to_string(len(diags_w)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3017 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (x) static-types F0 flag-fold — array-lower now folds under the single
+    // HEXA_STATIC_TYPES flag (wall_a_endgame.md §B.3 F0). Re-uses the r9b
+    // return-element module: PRE-fold this REJECT required BOTH HEXA_STATIC
+    // _TYPES=1 AND HEXA_STATIC_TYPES_ARRAY_LOWER=1; POST-fold HEXA_STATIC_TYPES
+    // =1 ALONE lowers `[i64]` structurally so `fn f() -> [i64] { return [1.5]
+    // }` rejects at the default-ON HX3004 site (1 HX3004), with `fn g() ->
+    // [f32] { return [0.0] }` still coercing clean. This is the crisp proof
+    // that the two-flag AND collapsed to one flag. Default build → 0
+    // (byteeq-neutral). HEXA_STATIC_TYPES_ARRAY_LOWER stays a working alias:
+    // one deprecation cycle, additive fold (case q/s/t above also now fire
+    // under the single flag by the same fold).
+    let diags_x = _run_case("(x) static-types F0 — array-lower folds under HEXA_STATIC_TYPES alone", _build_case_static_types_r9b())
+    let nx = _count_code(diags_x, "HX3004")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if nx != 1 {
+            println("  FAIL: case (x) HEXA_STATIC_TYPES=1 (ALONE) expected 1 HX3004 (F0 fold: STATIC implies array-lower; return [1.5] vs [i64] REJECT), got " + to_string(nx) + " (total=" + to_string(len(diags_x)) + ")")
+            ok = false
+        } else {
+            println("  ok: 1 HX3004 emitted under HEXA_STATIC_TYPES alone — F0 flag-fold proven (no ARRAY_LOWER needed)")
+        }
+    } else {
+        if nx != 0 {
+            println("  FAIL: case (x) default build expected 0 HX3004 (byteeq-neutral), got " + to_string(nx) + " (total=" + to_string(len(diags_x)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3004 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (y) static-types F4 warn-first — HX3011 SEVERITY two-step. Re-uses the
+    // r1 let-mismatch module (`let x: i32 = "s"` → 1 HX3011). The COUNT is
+    // band-invariant (case (h) already pins it); the F4 axis is SEVERITY:
+    // plain HEXA_STATIC_TYPES=1 → the HX3011 lands in the WARNING band (rc=0,
+    // non-fatal, the shipping path survives a latent true-positive), while
+    // HEXA_STATIC_TYPES_STRICT=1 re-escalates it to the ERROR band (rc≠0,
+    // REJECT — the fatal path stays reachable so no coverage is lost). Default
+    // build → 0 (byteeq-neutral).
+    let diags_y = _run_case("(y) static-types F4 — HX3011 warn-first severity two-step (HEXA_STATIC_TYPES[/_STRICT])", _build_case_static_types())
+    let ny = _count_code(diags_y, "HX3011")
+    let ny_warn = _count_code_sev(diags_y, "HX3011", "warning")
+    let ny_err = _count_code_sev(diags_y, "HX3011", "error")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if env("HEXA_STATIC_TYPES_STRICT") == "1" {
+            if ny != 1 || ny_err != 1 {
+                println("  FAIL: case (y) STRICT expected 1 HX3011 as ERROR (REJECT), got " + to_string(ny) + " HX3011 (" + to_string(ny_err) + " error/" + to_string(ny_warn) + " warn) (total=" + to_string(len(diags_y)) + ")")
+                ok = false
+            } else {
+                println("  ok: 1 HX3011 as ERROR (HEXA_STATIC_TYPES_STRICT=1 → REJECT/rc≠0; F4 strict escalation)")
+            }
+        } else {
+            if ny != 1 || ny_warn != 1 {
+                println("  FAIL: case (y) plain HEXA_STATIC_TYPES=1 expected 1 HX3011 as WARNING (non-fatal), got " + to_string(ny) + " HX3011 (" + to_string(ny_err) + " error/" + to_string(ny_warn) + " warn) (total=" + to_string(len(diags_y)) + ")")
+                ok = false
+            } else {
+                println("  ok: 1 HX3011 as WARNING (plain HEXA_STATIC_TYPES=1 → rc=0, non-fatal; F4 warn-first)")
+            }
+        }
+    } else {
+        if ny != 0 {
+            println("  FAIL: case (y) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(ny) + " (total=" + to_string(len(diags_y)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (z) Exhaustiveness severity gating — env-adaptive contract. Renumbered
+    // HX3011→HX3018 on merge: static-types "mismatched types" owns HX3011 on
+    // main, so the fatal non-exhaustive diag moved to the next free HX3018.
+    //   both unset            → 0 HX3006 + 0 HX3018 (default byte-identity)
+    //   HEXA_EXHAUSTIVE=1      → 1 HX3006 (warn), 0 HX3018
+    //   HEXA_EXHAUSTIVE_FATAL=1 → 1 HX3018 (fatal error), 0 HX3006
+    let fatal_on = env("HEXA_EXHAUSTIVE_FATAL") == "1"
+    let warn_on = env("HEXA_EXHAUSTIVE") == "1"
+    let diags_z = _run_case("(z) exhaustiveness severity gate (Color missing Blue)", _build_case_h())
+    let z3006 = _count_code(diags_z, "HX3006")
+    let z3018 = _count_code(diags_z, "HX3018")
+    if fatal_on {
+        if z3018 != 1 || z3006 != 0 {
+            println("  FAIL: case (z) HEXA_EXHAUSTIVE_FATAL=1 expected 1 HX3018 + 0 HX3006, got " + to_string(z3018) + " HX3018 / " + to_string(z3006) + " HX3006")
+            ok = false
+        } else {
+            println("  ok: 1 HX3018 (fatal) emitted under HEXA_EXHAUSTIVE_FATAL=1")
         }
     } else if warn_on {
-        if h3006 != 1 || h3011 != 0 {
-            println("  FAIL: case (h) HEXA_EXHAUSTIVE=1 expected 1 HX3006 + 0 HX3011, got " + to_string(h3006) + " HX3006 / " + to_string(h3011) + " HX3011")
+        if z3006 != 1 || z3018 != 0 {
+            println("  FAIL: case (z) HEXA_EXHAUSTIVE=1 expected 1 HX3006 + 0 HX3018, got " + to_string(z3006) + " HX3006 / " + to_string(z3018) + " HX3018")
             ok = false
         } else {
             println("  ok: 1 HX3006 (warn) emitted under HEXA_EXHAUSTIVE=1")
         }
     } else {
-        if h3006 != 0 || h3011 != 0 {
-            println("  FAIL: case (h) default build expected 0 HX3006 + 0 HX3011 (byte-identity), got " + to_string(h3006) + " HX3006 / " + to_string(h3011) + " HX3011")
+        if z3006 != 0 || z3018 != 0 {
+            println("  FAIL: case (z) default build expected 0 HX3006 + 0 HX3018 (byte-identity), got " + to_string(z3006) + " HX3006 / " + to_string(z3018) + " HX3018")
             ok = false
         } else {
             println("  ok: 0 exhaustiveness diags on default build (byte-identity preserved)")

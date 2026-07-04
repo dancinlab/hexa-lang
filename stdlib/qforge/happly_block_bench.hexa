@@ -1,0 +1,124 @@
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/qforge/happly_block_bench.hexa — QFORGE-PERF Lane A ⚡ batched H·Ψ
+//
+// Benches the FIX for the K1 "single GEMV not faster" wall: instead of applying
+// H one band at a time (m× qforge_h_apply_forge, m H2D copies of H), fold the
+// m applies into ONE GEMM H[n,n]@Ψ[n,m] via qforge_h_apply_forge_block — H is
+// transferred once, the math runs at GEMM intensity.
+//
+// On a CUDA-built hexa this fires one cuBLAS DGEMM; on a no-GPU build it routes
+// to the IDENTICAL FP64 CPU GEMM. EITHER way the block result must be element-eq
+// to m sequential scalar qforge_h_apply calls (byte-eq on CPU, FP-tol on GPU) —
+// that PARITY is the correctness gate this bench enforces.
+//
+// The GPU SPEEDUP itself is measured by the .cu twin (nvptx_happly_block_host.cu)
+// which times CPU / per-band GEMV / batched GEMM on the same fixture (the .hexa
+// runtime on a CPU build has no GPU to time). This driver proves the seam is
+// correct + reports the CPU walls so the GPU Δ has a denominator.
+//
+// Run (CPU, parity gate):
+//   HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run stdlib/qforge/happly_block_bench.hexa
+// ════════════════════════════════════════════════════════════════════════
+use "stdlib/qforge/assembler"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _lcg_next(state: int) -> int {
+    let nxt = (state * 1103515245 + 12345)
+    let masked = nxt % 2147483647
+    if masked < 0 { return masked + 2147483647 }
+    return masked
+}
+
+fn main() {
+    let ns = [256, 512, 1024]
+    let ms = [8, 32, 64]
+    println("QFORGE-PERF Lane A — batched H·Ψ (block) parity + wall bench")
+    println("n , m , scalar_ms(m matvec) , block_ms , maxAbsDiff(block vs scalar) , PARITY")
+
+    let mut all_pass = true
+    let mut ni = 0
+    while ni < len(ns) {
+        let n = ns[ni]
+        // ── synthetic symmetric H[n,n] ──
+        let mut h: [float] = []
+        let mut seed = 2463534242 + n
+        let mut z = 0
+        while z < n * n { h.push(0.0) ; z = z + 1 }
+        let mut a = 0
+        while a < n {
+            let mut b = a
+            while b < n {
+                seed = _lcg_next(seed)
+                let r = (to_float(seed % 20000) / 10000.0) - 1.0
+                h[a * n + b] = r
+                h[b * n + a] = r
+                b = b + 1
+            }
+            a = a + 1
+        }
+        let mut diag: [float] = []
+        let mut di = 0
+        while di < n { diag.push(h[di * n + di]) ; di = di + 1 }
+        let ham = PwHam { h: h, diag: diag, n: n }
+
+        let mut mi = 0
+        while mi < len(ms) {
+            let m = ms[mi]
+            // ── block Ψ[n,m] row-major: psi[i*m + b] ──
+            let mut psi: [float] = []
+            let mut k = 0
+            while k < n * m {
+                seed = _lcg_next(seed)
+                psi.push((to_float(seed % 20000) / 10000.0) - 1.0)
+                k = k + 1
+            }
+
+            // ── scalar: m sequential matvecs (engine reference) ──
+            let t0 = mono_ns()
+            let mut y_scalar: [float] = []
+            let mut zz = 0
+            while zz < n * m { y_scalar.push(0.0) ; zz = zz + 1 }
+            let mut b = 0
+            while b < m {
+                // extract band b column → v[n]
+                let mut v: [float] = []
+                let mut i = 0
+                while i < n { v.push(psi[i * m + b]) ; i = i + 1 }
+                let yb = qforge_h_apply(ham, v)
+                let mut i2 = 0
+                while i2 < n { y_scalar[i2 * m + b] = yb[i2] ; i2 = i2 + 1 }
+                b = b + 1
+            }
+            let t1 = mono_ns()
+            let scalar_ms = to_float(t1 - t0) / 1000000.0
+
+            // ── block: ONE batched apply (GEMM seam) ──
+            let t2 = mono_ns()
+            let y_block = qforge_h_apply_forge_block(ham, psi, m)
+            let t3 = mono_ns()
+            let block_ms = to_float(t3 - t2) / 1000000.0
+
+            // ── parity ──
+            let mut max_diff = 0.0
+            let mut ok = true
+            if len(y_block) != n * m { ok = false }
+            if ok {
+                let mut c = 0
+                while c < n * m {
+                    let d = _abs(y_scalar[c] - y_block[c])
+                    if d > max_diff { max_diff = d }
+                    c = c + 1
+                }
+            }
+            let parity = if ok && max_diff <= 0.000000001 { "PASS" } else { "FAIL" }
+            if parity == "FAIL" { all_pass = false }
+            println(to_string(n) + " , " + to_string(m) + " , " + to_string(scalar_ms)
+                + " , " + to_string(block_ms) + " , " + to_string(max_diff) + " , " + parity)
+            mi = mi + 1
+        }
+        ni = ni + 1
+    }
+    if all_pass { println("happly_block_bench DONE — ALL PARITY PASS") }
+    else { println("happly_block_bench DONE — PARITY FAIL") }
+}

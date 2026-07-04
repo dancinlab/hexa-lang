@@ -773,20 +773,36 @@ fn ml_resolve_project_root(imp) {
         let v = ml_try_path_variants(cand)
         if len(v) > 0 { return v }
     }
+    // Working-tree precedence (2026-06-27) — try the BARE cwd-relative path
+    // BEFORE the install-dir snapshot. When `hexa run compiler/<x>/y.hexa` is
+    // invoked from a repo checkout, the developer's WORKING TREE (cwd) is the
+    // authoritative source for repo-relative `use "compiler/…"` imports —
+    // matching cargo/go/python project-tree semantics (the canonical-DX
+    // expectation). Previously the install-dir snapshot (~/.hx) was probed
+    // first, so a STALE install shadowed fresh working-tree edits: e.g. a
+    // `~/.hx` tree built before #4091 lacks identity_engine::verify_composition,
+    // so drill.hexa (read fresh from cwd, carrying the verify_composition call)
+    // hit "call to undeclared function 'verify_composition'" at clang — the
+    // documented stale-snapshot trap (the entry file resolves cwd-fresh but its
+    // imports resolved install-stale, a split-brain flatten). cwd-first closes
+    // that split: both the entry and its imports come from one tree.
+    let v2 = ml_try_path_variants(imp)
+    if len(v2) > 0 { return v2 }
     // Phase3 foundation — install-relative fallback for repo-root paths like
     // `compiler/<x>/static_index`. When HEXA_LANG isn't exported (cron /
-    // launchd / subagent / sibling-cwd smoke harnesses), env_hexa_install_dir
-    // is derived from argv[0] (~/.hx/bin/hexa or repo /hexa.real) and gives
-    // us the same repo root that HEXA_LANG would. Mirrors the install-relative
-    // probe already used by ml_resolve_stdlib for `stdlib/*` paths.
+    // launchd / subagent / sibling-cwd smoke harnesses) AND the bare cwd path
+    // above does not exist (out-of-repo cwd), env_hexa_install_dir — derived
+    // from argv[0] (~/.hx/bin/hexa or repo /hexa.real) — gives the same repo
+    // root HEXA_LANG would. Mirrors the install-relative probe ml_resolve_stdlib
+    // uses for `stdlib/*`. byteeq-neutral: every build/self-host path exports
+    // HEXA_LANG (tool/build_hexac · build_hexa_cli · verify_hexa_cc_regen …),
+    // which returns above before this reorder is ever reached.
     let inst = env_hexa_install_dir()
     if len(inst) > 0 {
         let cand_inst = ml_join_path(inst, imp)
         let vi = ml_try_path_variants(cand_inst)
         if len(vi) > 0 { return vi }
     }
-    let v2 = ml_try_path_variants(imp)
-    if len(v2) > 0 { return v2 }
     return ""
 }
 

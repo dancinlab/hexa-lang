@@ -442,6 +442,71 @@ fn _is_known_identity(canon: string) -> bool {
     return false
 }
 
+// ── FUNCTION-COMPOSITION candidate screen (σ∘σ vein · 2026-06-27) ─────
+// The product-frame parse (`_parse_identity`, A*B=C*D) structurally cannot
+// express NESTED composition f(g(n)). This recognizes composition-syntax
+// candidates so a generator emitting them gets a REAL exact-int verdict from
+// identity_engine.hexa::verify_composition instead of being mis-binned as noise.
+// Syntax (unicode `∘` U+2218 as the composition operator — a single-char ASCII
+// `o` would collide with fn names containing 'o': sopfr, core, omega, tw_om):
+//   <fn> ∘ <fn> = <int>*n   (or "<int>n")  → mode 0 k·n   (superperfect = σ∘σ=2n)
+//   <fn> ∘ <fn> = <fn> + n                 → mode 1 h+n   (Mersenne = σ∘σ=σ+n)
+//   <fn> ∘ <fn> = <fn>                     → mode 2 h     (σ∘φ=n, φ∘σ=n classical)
+// Returns out-array [f, g, mode, p] (p=k for mode 0, p=h-index for mode 1/2),
+// else []. Deterministic, structure-driven (no float parse). HONESTY (c2): the
+// composition vein is measured DRY for promotable novel laws (novel=0 · see
+// ATLAS/state/novel-dfs/composition_hunt.py) — this wiring gives candidates a
+// real verdict; it does NOT fold (atlas write stays the hexa verify g5 / PR path).
+fn _parse_composition(expr: string) -> [i64] {
+    let empty: [i64] = []
+    let mut e = expr
+    e = e.replace(" ", "")
+    let sides = e.split("=")
+    if len(sides) != 2 { return empty }
+    let lhs = to_string(sides[0]).split("∘")
+    if len(lhs) != 2 { return empty }
+    let f = _fn_index(to_string(lhs[0]))
+    let g = _fn_index(to_string(lhs[1]))
+    if f < 0 || g < 0 { return empty }
+    let rhs = to_string(sides[1])
+    // mode 1: <fn>+n
+    let plus = rhs.split("+")
+    if len(plus) == 2 && to_string(plus[1]) == "n" {
+        let h1 = _fn_index(to_string(plus[0]))
+        if h1 < 0 { return empty }
+        let mut o1: [i64] = []
+        o1.push(f); o1.push(g); o1.push(1); o1.push(h1)
+        return o1
+    }
+    // mode 0: <int>*n  or  <int>n
+    let star = rhs.split("*")
+    let mut knum = ""
+    if len(star) == 2 && to_string(star[1]) == "n" {
+        knum = to_string(star[0])
+    } else {
+        let L = len(rhs)
+        if L >= 2 && rhs.substring(L - 1, L) == "n" { knum = rhs.substring(0, L - 1) }
+    }
+    if len(knum) > 0 {
+        let mut k = 0
+        let mut ok = true
+        try { k = to_int(knum) } catch ee { ok = false }
+        if ok {
+            let mut o0: [i64] = []
+            o0.push(f); o0.push(g); o0.push(0); o0.push(k)
+            return o0
+        }
+    }
+    // mode 2: <fn>
+    let h2 = _fn_index(rhs)
+    if h2 >= 0 {
+        let mut o2: [i64] = []
+        o2.push(f); o2.push(g); o2.push(2); o2.push(h2)
+        return o2
+    }
+    return empty
+}
+
 // One round's exact-int identity sweep, the cross-round-absorb form. In
 // addition to the VerifierVerdict counts it COLLECTS the canonical exprs of
 // every candidate that verified bounded-unique (n≥4) so the drill loop can
@@ -464,6 +529,12 @@ fn _native_identity_sweep_absorb(round: i64, cands: array) -> AbsorbSweep {
     let mut n_noise = 0
     let mut n_known = 0
     let mut n_novel = 0
+    // composition-frame counters (σ∘σ vein · 2026-06-27): candidates in
+    // composition syntax get a REAL verify_composition verdict, reported in the
+    // rationale alongside the product counts. NOT fed into the product absorb
+    // pool (a different algebra) — surfaced honestly, never folded.
+    let mut n_comp_id = 0
+    let mut n_comp_verified = 0
     let mut verified_exprs: array = []
     let mut i = 0
     while i < n {
@@ -490,7 +561,15 @@ fn _native_identity_sweep_absorb(round: i64, cands: array) -> AbsorbSweep {
                     }
                 }
             } else {
-                n_noise = n_noise + 1
+                // Not product syntax — try the COMPOSITION frame before noise.
+                let cidx = _parse_composition(c.expr)
+                if len(cidx) == 4 {
+                    n_comp_id = n_comp_id + 1
+                    let cr = verify_composition(cidx[0], cidx[1], cidx[2], cidx[3], N)
+                    if cr >= 4 { n_comp_verified = n_comp_verified + 1 }
+                } else {
+                    n_noise = n_noise + 1
+                }
             }
         }
         i = i + 1
@@ -502,6 +581,8 @@ fn _native_identity_sweep_absorb(round: i64, cands: array) -> AbsorbSweep {
         + ",noise=" + to_string(n_noise)
         + ",known=" + to_string(n_known)
         + ",novel=" + to_string(n_novel)
+        + ",comp_id=" + to_string(n_comp_id)
+        + ",comp_verified=" + to_string(n_comp_verified)
     let vv = VerifierVerdict { verdict: verdict, rationale: rationale, round: round }
     return AbsorbSweep {
         verdict: vv,
@@ -640,6 +721,26 @@ fn _absorb_merge(pool: array, verified_exprs: array) -> AbsorbMerge {
     return AbsorbMerge { pool: out, net_absorbed: net }
 }
 
+// ── [M5] absorb feed-forward, extracted pure for the H1 toggle + selftest ──
+// Appends the cumulative verified-primitive pool onto the next round's seeds
+// when `enabled` (the H1 absorb-ON arm / native-canonical production default);
+// the OFF arm (HEXA_DRILL_NO_ABSORB=1) skips the push so round N+1's blowup
+// sees ONLY the seed-derived pool. The absorb pool itself is still computed +
+// audited identically in both arms — the toggle gates ONLY this feed, so the
+// DRILL_ABSORB rows stay arm-identical up to any real (feed-forward-driven)
+// divergence. In standard vocab absorbed_pool is [] every round (smash emits
+// no identity-syntax candidates), so both arms are byte-identical here — that
+// vacuous Δ=0 is the located-bottleneck result, not an H1 refutation (§5).
+fn _absorb_feed(seed_pool: array, absorbed_pool: array, enabled: bool) -> array {
+    if !enabled { return seed_pool }
+    let mut ap = 0
+    while ap < len(absorbed_pool) {
+        seed_pool.push(to_string(absorbed_pool[ap]))
+        ap = ap + 1
+    }
+    return seed_pool
+}
+
 // Emit the cross-round absorb audit row (stderr DRILL_ABSORB). `verified` =
 // verified exprs THIS round, `net` = newly absorbed into the cumulative pool,
 // `cum` = cumulative pool size carried into the NEXT round, known/novel split.
@@ -652,6 +753,401 @@ fn _absorb_audit_emit(round: i64, verified: i64, net: i64, cum: i64,
     msg = msg + ",\"cum_pool\":" + to_string(cum)
     msg = msg + ",\"known\":" + to_string(known)
     msg = msg + ",\"novel\":" + to_string(novel)
+    msg = msg + "}"
+    eprintln(msg)
+}
+
+// ── ADDITIVE / COMBINATORIAL screen (orthogonal pivot · Ralph 377) ────
+// The identity verifier was pivoted out of the (measured-exhausted) MULTIPLICATIVE
+// vocab into the NON-multiplicative generating-function/recurrence sequences
+// (partition p(n), Catalan, Bell, Fibonacci, Lucas — identity_engine.hexa). The
+// new identity FORM is the arithmetic-progression CONGRUENCE p(α·n+β)≡0 (mod m).
+// This per-round screen (a) rediscovers Ramanujan's three 1919 congruences as a
+// live sanity gate (proof the additive frame is wired, not stubbed) and (b) reports
+// the MEASURED novel count for this domain. Reference engine:
+// ATLAS/state/novel-dfs/additive_partition_hunt.py (re-run: 8/8 gates PASS ·
+// Ramanujan 3 rediscovered · 752 known-structural · CONGRUENCE-NOVEL = 0 — the
+// additive space is DRY/classical, like the multiplicative).
+//
+// The partition mod-m kernel is INLINED here (self-contained — same exact-int source
+// as identity_engine.hexa::verify_congruence / drill/additive_test.hexa). Inlining
+// sidesteps the C-transpile fallback flattener trap (cross-module imported-function
+// definitions are not always emitted in the importing unit — the same documented
+// reason absorb_test.hexa drives the CLI as a subprocess), so `hexa run drill.hexa`
+// and the native self-host build both compile. SAFE: in-memory only (no atlas write ·
+// fold = hexa verify g5/PR), deterministic (byte-eq preserved). Honest (c2): each ≡
+// is BOUNDED to [0,N], ∀n UNPROVEN.
+
+// p(n) mod m via Euler's pentagonal recurrence (linear ⇒ mod-closed · no overflow).
+fn _drill_partition_mod(N: i64, m: i64) -> array {
+    let p = []
+    p.push(1 % m)
+    let mut j = 1
+    while j <= N {
+        let mut total = 0
+        let mut k = 1
+        while k * (3 * k - 1) / 2 <= j {
+            let g1 = k * (3 * k - 1) / 2
+            let g2 = k * (3 * k + 1) / 2
+            let mut sign = 1
+            if k % 2 == 0 { sign = 0 - 1 }
+            total = total + sign * p[j - g1]
+            if g2 <= j { total = total + sign * p[j - g2] }
+            k = k + 1
+        }
+        total = total % m
+        if total < 0 { total = total + m }
+        p.push(total)
+        j = j + 1
+    }
+    return p
+}
+
+// Does p(a·n+b) ≡ 0 (mod m) hold ∀n with a·n+b ≤ N (≥12 sampled terms)?
+fn _drill_partition_cong(tbl: array, a: i64, b: i64, N: i64) -> i64 {
+    let mut count = 0
+    let mut k = 0
+    while a * k + b <= N {
+        if tbl[a * k + b] != 0 { return 0 }
+        count = count + 1
+        k = k + 1
+    }
+    if count < 12 { return 0 - 2 }
+    return 1
+}
+
+// ── PCF (polynomial continued fraction) discovery screen — native BigInt ──────
+// The PCF axis (Ramanujan Machine, Raayoni et al. Nature 590 (2021) 67-73): a polynomial
+// CF can converge to a rational function of a transcendental constant c. Apery's CF
+// (van der Poorten 1979)  a(n)=-n^6, b(n)=34n^3+51n^2+27n+5  ->  6/zeta(3). The convergent
+// p_n/q_n and the high-precision constant exceed i64, so this screen carries them as native
+// BigInt (limb-array base 10000, signed) — same impl as stdlib/bigint.hexa, inlined here to
+// sidestep the cross-module flattener trap (cf _native_additive_screen self-containment).
+fn _drill_bi_norm(a) -> array {
+    let n = a.len()
+    let mut hi = n - 1
+    while hi >= 1 {
+        if a[hi] != 0 { break }
+        hi = hi - 1
+    }
+    if hi == 0 { let z = []; z.push(0); return z }
+    let out = []
+    out.push(a[0])
+    let mut i = 1
+    while i <= hi { out.push(a[i]); i = i + 1 }
+    out
+}
+fn _drill_bi_from(x) -> array {
+    let out = []
+    if x == 0 { out.push(0); return out }
+    let mut sign = 1
+    let mut v = x
+    if v < 0 { sign = 0 - 1; v = 0 - v }
+    out.push(sign)
+    while v > 0 { out.push(v % 10000); v = v / 10000 }
+    out
+}
+fn _drill_bi_cmpmag(a, b) -> i64 {
+    let na = a.len() - 1
+    let nb = b.len() - 1
+    if na < nb { return 0 - 1 }
+    if na > nb { return 1 }
+    let mut i = na
+    while i >= 1 {
+        if a[i] < b[i] { return 0 - 1 }
+        if a[i] > b[i] { return 1 }
+        i = i - 1
+    }
+    0
+}
+fn _drill_bi_cmp(a, b) -> i64 {
+    let sa = a[0]
+    let sb = b[0]
+    if sa < sb { return 0 - 1 }
+    if sa > sb { return 1 }
+    if sa == 0 { return 0 }
+    let m = _drill_bi_cmpmag(a, b)
+    if sa > 0 { return m }
+    0 - m
+}
+fn _drill_bi_addmag(a, b) -> array {
+    let na = a.len() - 1
+    let nb = b.len() - 1
+    let mut n = na
+    if nb > n { n = nb }
+    let out = []
+    out.push(1)
+    let mut carry = 0
+    let mut i = 1
+    while i <= n {
+        let mut da = 0
+        if i <= na { da = a[i] }
+        let mut db = 0
+        if i <= nb { db = b[i] }
+        let s = da + db + carry
+        out.push(s % 10000)
+        carry = s / 10000
+        i = i + 1
+    }
+    if carry > 0 { out.push(carry) }
+    _drill_bi_norm(out)
+}
+fn _drill_bi_submag(a, b) -> array {
+    let na = a.len() - 1
+    let nb = b.len() - 1
+    let out = []
+    out.push(1)
+    let mut br = 0
+    let mut i = 1
+    while i <= na {
+        let da = a[i]
+        let mut db = 0
+        if i <= nb { db = b[i] }
+        let mut s = da - db - br
+        if s < 0 { s = s + 10000; br = 1 } else { br = 0 }
+        out.push(s)
+        i = i + 1
+    }
+    _drill_bi_norm(out)
+}
+fn _drill_bi_neg(a) -> array {
+    let out = []
+    out.push(0 - a[0])
+    let mut i = 1
+    while i < a.len() { out.push(a[i]); i = i + 1 }
+    out
+}
+fn _drill_bi_add(a, b) -> array {
+    let sa = a[0]
+    let sb = b[0]
+    if sa == 0 { return b }
+    if sb == 0 { return a }
+    if sa == sb {
+        let m = _drill_bi_addmag(a, b)
+        m[0] = sa
+        return _drill_bi_norm(m)
+    }
+    let c = _drill_bi_cmpmag(a, b)
+    if c == 0 { let z = []; z.push(0); return z }
+    if c > 0 {
+        let m = _drill_bi_submag(a, b)
+        m[0] = sa
+        return _drill_bi_norm(m)
+    }
+    let m2 = _drill_bi_submag(b, a)
+    m2[0] = sb
+    _drill_bi_norm(m2)
+}
+fn _drill_bi_mul(a, b) -> array {
+    let sa = a[0]
+    let sb = b[0]
+    if sa == 0 { return a }
+    if sb == 0 { return b }
+    let na = a.len() - 1
+    let nb = b.len() - 1
+    let res = []
+    let mut k = 0
+    while k < na + nb { res.push(0); k = k + 1 }
+    let mut i = 1
+    while i <= na {
+        let mut carry = 0
+        let mut j = 1
+        while j <= nb {
+            let idx = i + j - 2
+            let cur = res[idx] + a[i] * b[j] + carry
+            res[idx] = cur % 10000
+            carry = cur / 10000
+            j = j + 1
+        }
+        let mut idx2 = i + nb - 1
+        while carry > 0 {
+            let cur2 = res[idx2] + carry
+            res[idx2] = cur2 % 10000
+            carry = cur2 / 10000
+            idx2 = idx2 + 1
+        }
+        i = i + 1
+    }
+    let out = []
+    out.push(sa * sb)
+    let mut m = 0
+    while m < res.len() { out.push(res[m]); m = m + 1 }
+    _drill_bi_norm(out)
+}
+fn _drill_bi_abs(a) -> array {
+    if a[0] < 0 { return _drill_bi_neg(a) }
+    a
+}
+fn _drill_polyval(coef, n) -> i64 {
+    let mut r = 0
+    let mut i = coef.len() - 1
+    while i >= 0 { r = r * n + coef[i]; i = i - 1 }
+    r
+}
+fn _drill_bigten(e) -> array {
+    let ten = _drill_bi_from(10)
+    let mut r = _drill_bi_from(1)
+    let mut i = 0
+    while i < e { r = _drill_bi_mul(r, ten); i = i + 1 }
+    r
+}
+fn _drill_rat_digits(intpart, frac) -> array {
+    let ten = _drill_bi_from(10)
+    let mut v = _drill_bi_from(intpart)
+    let mut i = 0
+    while i < frac.len() {
+        v = _drill_bi_add(_drill_bi_mul(v, ten), _drill_bi_from(frac[i]))
+        i = i + 1
+    }
+    v
+}
+// PCF convergent p_K/q_K via BigInt recurrence; returns [pBig, qBig]
+fn _drill_pcf_pq(acoef, bcoef, kk) -> array {
+    let mut p0 = _drill_bi_from(1)
+    let mut p1 = _drill_bi_from(_drill_polyval(bcoef, 0))
+    let mut q0 = _drill_bi_from(0)
+    let mut q1 = _drill_bi_from(1)
+    let mut n = 1
+    while n <= kk {
+        let an = _drill_bi_from(_drill_polyval(acoef, n))
+        let bn = _drill_bi_from(_drill_polyval(bcoef, n))
+        let np = _drill_bi_add(_drill_bi_mul(bn, p1), _drill_bi_mul(an, p0))
+        let nq = _drill_bi_add(_drill_bi_mul(bn, q1), _drill_bi_mul(an, q0))
+        p0 = p1
+        p1 = np
+        q0 = q1
+        q1 = nq
+        n = n + 1
+    }
+    let out = []
+    out.push(p1)
+    out.push(q1)
+    out
+}
+// Mobius relation A+B*c+C*L+D*c*L ~= 0 (L=p/q, c=cnum/cden) via exact BigInt cross-mult.
+fn _drill_mobius_holds(p, q, cnum, cden, aa, bb, cc, dd, guard) -> i64 {
+    let t1 = _drill_bi_mul(_drill_bi_from(aa), _drill_bi_mul(q, cden))
+    let t2 = _drill_bi_mul(_drill_bi_from(bb), _drill_bi_mul(q, cnum))
+    let t3 = _drill_bi_mul(_drill_bi_from(cc), _drill_bi_mul(p, cden))
+    let t4 = _drill_bi_mul(_drill_bi_from(dd), _drill_bi_mul(p, cnum))
+    let v = _drill_bi_add(_drill_bi_add(t1, t2), _drill_bi_add(t3, t4))
+    let lhs = _drill_bi_mul(_drill_bi_abs(v), _drill_bigten(guard))
+    let rhs = _drill_bi_mul(q, cden)
+    if _drill_bi_cmp(lhs, rhs) < 0 { return 1 }
+    0
+}
+
+// small-divisor division |a|/d (d positive i64, d*10000 < i64) -> [quotient BigInt, remainder i64].
+fn _drill_bi_divmod_small(a, d) -> array {
+    if a[0] == 0 {
+        let z = []
+        z.push(0)
+        let r0 = []
+        r0.push(z)
+        r0.push(0)
+        return r0
+    }
+    let na = a.len() - 1
+    let qbig = []
+    let mut rem = 0
+    let mut i = na
+    while i >= 1 {
+        let cur = rem * 10000 + a[i]
+        qbig.push(cur / d)
+        rem = cur % d
+        i = i - 1
+    }
+    let out = []
+    out.push(a[0])
+    let mut j = qbig.len() - 1
+    while j >= 0 {
+        out.push(qbig[j])
+        j = j - 1
+    }
+    let res = []
+    res.push(_drill_bi_norm(out))
+    res.push(rem)
+    res
+}
+fn _drill_bi_div_small(a, d) -> array {
+    let qr = _drill_bi_divmod_small(a, d)
+    qr[0]
+}
+// floor(zeta(3) * 10^dd) via Apery's accelerated series (van der Poorten 1979):
+//   zeta(3) = (5/2) sum_{n>=1} (-1)^(n-1) / (n^3 C(2n,n)) ; term ratio all small ints:
+//   T_n = T_{n-1} * (n-1)^3 / (2 n^2 (2n-1)) , T_1 = 1/2.  (no full BigInt division needed)
+fn _drill_zeta3_series(dd) -> array {
+    let mut running = _drill_bi_div_small(_drill_bigten(dd), 2)
+    let mut acc = _drill_bi_from(0)
+    let mut n = 1
+    let mut pos = 1
+    while running[0] != 0 {
+        if pos == 1 { acc = _drill_bi_add(acc, running) } else { acc = _drill_bi_add(acc, _drill_bi_neg(running)) }
+        let m = n * n * n
+        let np1 = n + 1
+        let dv = 2 * np1 * np1 * (2 * np1 - 1)
+        running = _drill_bi_div_small(_drill_bi_mul(running, _drill_bi_from(m)), dv)
+        if pos == 1 { pos = 0 } else { pos = 1 }
+        n = n + 1
+    }
+    _drill_bi_div_small(_drill_bi_mul(_drill_bi_from(5), acc), 2)
+}
+
+// Per-round PCF screen: rediscover Apery's zeta(3) CF (live sanity) + report the
+// MEASURED-dry novel count (DRILL_PCF stderr audit). byte-eq-neutral.
+fn _native_pcf_screen(round: i64) -> void {
+    let cden = _drill_bigten(40)
+    // zeta(3) ENGINE-COMPUTED (Apery accelerated series) — replaces the 40-digit hardcode.
+    // floor(zeta(3)*10^40) = zeta3_series(48) / 10^8 (exact; byte-identical to old z3frac).
+    let z3num = _drill_bi_div_small(_drill_zeta3_series(48), 100000000)
+    // Apery PCF a=-n^6, b=34n^3+51n^2+27n+5 -> 6/zeta(3)
+    let acoef = [0,0,0,0,0,0, 0 - 1]
+    let bcoef = [5,27,51,34]
+    let pq = _drill_pcf_pq(acoef, bcoef, 70)
+    let p = pq[0]
+    let q = pq[1]
+    let mut rediscovered = 0
+    // Apery relation L = 6/zeta(3) <=> (A,B,C,D)=(6,0,0,-1); negatives must reject.
+    if _drill_mobius_holds(p, q, z3num, cden, 6, 0, 0, 0 - 1, 20) == 1 {
+        if _drill_mobius_holds(p, q, z3num, cden, 1, 0, 0, 0 - 1, 20) == 0 {
+            if _drill_mobius_holds(p, q, z3num, cden, 5, 0, 0, 0 - 1, 20) == 0 {
+                rediscovered = 1
+            }
+        }
+    }
+    // This screen performs a FIXED rediscovery check only — it consumes no per-round
+    // candidate, so it can make NO novel measurement. Emitting a "novel":0 literal
+    // each round would be a false telemetry claim (c2). We report the rediscovery
+    // result honestly and mark the scope; the genuine PCF novel hunt (RM-scale /
+    // evolve-GA pool depth · state/novel-dfs + pool widesweep 73024@0) is OFF-path.
+    let mut msg = "DRILL_PCF {"
+    msg = msg + "\"round\":" + to_string(round)
+    msg = msg + ",\"frame\":\"continued_fraction\""
+    msg = msg + ",\"scope\":\"rediscovery-sanity\""
+    msg = msg + ",\"apery_rediscovered\":" + to_string(rediscovered)
+    msg = msg + "}"
+    eprintln(msg)
+}
+
+fn _native_additive_screen(round: i64) -> void {
+    let N = 4000
+    // Ramanujan 1919 sanity rediscovery (partition congruences, exact mod-m).
+    let t5 = _drill_partition_mod(N, 5)
+    let t7 = _drill_partition_mod(N, 7)
+    let t11 = _drill_partition_mod(N, 11)
+    let mut rediscovered = 0
+    if _drill_partition_cong(t5, 5, 4, N) == 1 { rediscovered = rediscovered + 1 }
+    if _drill_partition_cong(t7, 7, 5, N) == 1 { rediscovered = rediscovered + 1 }
+    if _drill_partition_cong(t11, 11, 6, N) == 1 { rediscovered = rediscovered + 1 }
+    // FIXED rediscovery check only — consumes no per-round candidate, so it can make
+    // NO novel measurement. A "novel":0 literal each round would be a false telemetry
+    // claim (c2). Report the rediscovery result + scope honestly; the genuine
+    // congruence novel hunt (Ono-class large-modulus · state/novel-dfs) is OFF-path.
+    let mut msg = "DRILL_ADDITIVE {"
+    msg = msg + "\"round\":" + to_string(round)
+    msg = msg + ",\"frame\":\"partition_congruence\""
+    msg = msg + ",\"scope\":\"rediscovery-sanity\""
+    msg = msg + ",\"ramanujan_rediscovered\":" + to_string(rediscovered)
     msg = msg + "}"
     eprintln(msg)
 }
@@ -1013,11 +1509,17 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
         // repeats harmlessly, and the two streams are disjoint by construction:
         // seed_pool = float-permutation axioms, absorbed_pool = canonical
         // identity exprs).
-        let mut ap = 0
-        while ap < len(absorbed_pool) {
-            seed_pool.push(to_string(absorbed_pool[ap]))
-            ap = ap + 1
-        }
+        // [M5 H1 toggle] opt-OUT constraint, same polarity as
+        // HEXA_DRILL_NO_VERIFY (:686): unset/default = absorb-ON = pre-M5
+        // behavior IDENTICAL; =1 = the H1 absorb-OFF arm (feed-forward
+        // suppressed; the pool is still computed + DRILL_ABSORB still emitted
+        // above, only this push is gated). Vacuity contract (design SSOT §5):
+        // an ON-vs-OFF Δ=0 is an H1 REFUTATION only if some DRILL_ABSORB row
+        // shows verified>=1 at a round < R (feed-forward actually fired);
+        // otherwise it is UNTESTABLE (generator bottleneck = smash emits no
+        // identity-syntax candidates in standard vocab), never "H1 refuted".
+        seed_pool = _absorb_feed(seed_pool, absorbed_pool,
+                                 env("HEXA_DRILL_NO_ABSORB") != "1")
 
         // ── [B] Emerge step (open-well well-widening · README:75) ─────
         // After Absorb feeds verified primitives forward, the Emerge step
@@ -1031,6 +1533,33 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
         let es = emerge_step(emerge_well, round, rr.discoveries)
         emerge_well = es.vocab
         emerge_audit_emit(round, es.net_walls, es.vocab_size, 2)
+
+        // ── [M5] Emerge2 step (M4 5-generator fn-symbol synthesis) ────
+        // TELEMETRY ONLY. emerge2_step is INPUT-INDEPENDENT by design (fixed
+        // pre-registered G1–G5 candidate tables = Texas-sharpshooter guard):
+        // `round`/`rr.discoveries` are accepted for signature stability but do
+        // NOT influence generation, so this row emits the SAME alpha/beta/gamma
+        // every round (measured aiden v0.577.0: 2/2/15 @N=64). It is therefore
+        // NOT an H1 metric — absorb-ON vs OFF cannot move it by construction
+        // (H1 is measured on the DRILL_ABSORB trajectory instead, see the
+        // absorb toggle above). gamma = catalog-relative BOUNDED [2,N]
+        // inexpressibility (fp ∉ FP_2 ∪ KNOWN), NOT absolute novelty. In-memory
+        // only (no atlas write · fold stays hexa verify g5/PR).
+        let e2 = emerge2_step(round, rr.discoveries, 64)
+        emerge2_audit_emit(round, e2)
+
+        // ── ADDITIVE / COMBINATORIAL screen (orthogonal pivot · Ralph 377) ──
+        // Per-round delegate to the non-multiplicative congruence verifier:
+        // rediscover Ramanujan's 1919 congruences (live sanity) + report the
+        // MEASURED-dry novel count (DRILL_ADDITIVE stderr audit). byte-eq-neutral.
+        _native_additive_screen(round)
+
+        // ── PCF (continued-fraction / constant) screen — native BigInt ──
+        // Per-round delegate to the PCF detector: rediscover Apery's zeta(3)
+        // CF (live sanity) + report the MEASURED-dry novel count (DRILL_PCF
+        // stderr audit). The ONE genuinely-open discovery frontier (Ramanujan
+        // Machine), now in-binary via native BigInt. byte-eq-neutral.
+        _native_pcf_screen(round)
 
         // ── surface proposals (no external oracle) ───────────────────
         // No EXTERNAL verifier installed (verifier_cmd == "" → native sweep

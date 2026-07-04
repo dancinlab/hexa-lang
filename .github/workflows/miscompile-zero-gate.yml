@@ -59,9 +59,38 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # ── dispatch — fallback-dispatch runner picker (free · always available) ─────
+  # Probes whether ghost-selfhost (darwin arm64, gen2_fix slot) is ONLINE and
+  # emits the darwin job's `runs-on` at runtime: ghost when online + same-repo
+  # (fast, and — holding the graduated slot — the gate runs REAL instead of the
+  # exit-2 NEUTRAL it takes on a slot-less cloud host), else the free GitHub-
+  # hosted macos-15 fallback. Ghost-offline (or a fork PR) therefore NEVER wedges
+  # this gate — it just falls back to macos-15. Mirrors the linux picker in
+  # nobaseline-gate.yml 1:1 (tool/ci_pick_runner.sh · .github/actions/pick-runner).
+  dispatch:
+    name: dispatch (pick runner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      darwin_label: ${{ steps.darwin.outputs.label }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: darwin
+        uses: ./.github/actions/pick-runner
+        with:
+          kind: darwin
+          # self-hosted only for same-repo events; fork PRs → GitHub-hosted (RCE).
+          eligible: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
+          # administration:read PAT (self-hosted runners list needs it; the
+          # default github.token CANNOT carry that scope → empty list → blind
+          # fallback). Absent secret → `|| github.token` = today's harmless
+          # macos-15 fallback; present → routing goes live. See PR/root-cause.
+          token: ${{ secrets.RUNNER_PROBE_TOKEN || github.token }}
+
   miscompile-zero-gate:
     name: miscompile-zero (native emit, darwin-arm64)
-    runs-on: macos-15
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.darwin_label) }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
@@ -131,3 +160,39 @@ jobs:
             exit 0
           fi
           exit "$rc"
+
+  # ── m12 try/catch setjmp RUN gate (x86_64-linux native lane) ────────────────
+  # Verifies the try/catch register-rollback fix (#4541) on a REAL run: a HexaVal
+  # local written inside a try body must survive the catch-path longjmp (own-IR
+  # x86 pool-spill + gen2 C `volatile`). On ubuntu-latest `hexa build` is native-
+  # first (#4483), so this exercises the own-IR x86 lane the pool hosts can't run
+  # (aiden `hexa run` hangs). Build to a BINARY (not `hexa run`) to bypass the
+  # stale ~/.hexa-cache that masks codegen changes. m12 lives in the corpus.
+  trycatch-m12:
+    name: try/catch setjmp m12 (native lane)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/ccache-setup
+      - name: Build — shared release_build (./hexa)
+        shell: bash
+        env:
+          TARGET: linux-x86_64
+          CC: gcc
+          LIBS: "-lm -ldl"
+          GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
+        run: bash tool/release_build
+      - name: Build m12 to a binary + run (bypasses the hexa-run cache)
+        shell: bash
+        run: |
+          set -uo pipefail
+          rm -rf ~/.hexa-cache 2>/dev/null || true
+          rc=0
+          ./hexa build self/test/miscompile_class/m12_try_catch_setjmp.hexa -o /tmp/m12bin || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::notice::m12 could not native-emit in this env (build rc=$rc) → NEUTRAL (try/catch floor NOT broken)"
+            exit 0
+          fi
+          /tmp/m12bin

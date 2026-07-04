@@ -1,0 +1,52 @@
+=== HEXA_UNBOX_NATIVE r6 measure (let-literal const-prop -> % M magic) — 2026-06-27T07:52:21Z — summer-B650M-K ===
+  SRC_SHA=c55cf81d  BASE_SHA=622d1b6f
+--- building baseline aprime_cc (origin/main) ---
+  baseline build RC=0
+--- locating CPU runtime.a ---
+  runtime.a = /home/summer/r6_native/src/build/runtime.a
+  kernels: k1(% M named const) + k4(% 3,% 5 lit) + k5(% D reassigned=soundness)
+--- Gate1 OFF byteeq (same-cwd: patched flag-OFF .o == baseline .o) ---
+  Gate1[k1] OFF-BYTEEQ=PASS sha=e48ff9cba5d26185
+  Gate1[k4] OFF-BYTEEQ=PASS sha=daef155097b81fd1
+  Gate1[k5] OFF-BYTEEQ=PASS sha=bd07b31af2f01def
+--- Gate2 lever (hexa_mod/div/add/mul/cmp + magic const, OFF vs ON) ---
+  [k1] off: hexa_mod=1 hexa_div=0 hexa_add=2 hexa_mul=1 hexa_cmp=1 magic_const=0
+  [k1] on: hexa_mod=0 hexa_div=0 hexa_add=0 hexa_mul=0 hexa_cmp=0 magic_const=1
+  [k4] off: hexa_mod=3 hexa_div=0 hexa_add=2 hexa_mul=0 hexa_cmp=1 magic_const=0
+  [k4] on: hexa_mod=0 hexa_div=0 hexa_add=0 hexa_mul=0 hexa_cmp=0 magic_const=0
+  [k5] off: hexa_mod=2 hexa_div=0 hexa_add=3 hexa_mul=0 hexa_cmp=1 magic_const=0
+  [k5] on: hexa_mod=1 hexa_div=0 hexa_add=0 hexa_mul=0 hexa_cmp=0 magic_const=0
+--- Gate6 magic reference-match (ON k1 asm — the r6 closer) ---
+  MAGIC PRESENT in ON k1 asm (== gcc/clang -O2 movabs imm) — const-prop FIRED
+    20:    mov rbx, 1000000007 # assign L0
+    44:    imul r10, 1009 # binop *
+    57:    mov r11, -8543223828751151131 # magicdiv: r11 = signed magic M (movabs imm64)
+    58:    imul r11 # magicdiv: rdx:rax = dividend * M (hi → rdx)
+    62:    sar rdx, 29 # magicdiv: rdx = t0 >> s (arithmetic)
+    64:    imul rax, rdx, 1000000007 # magicdiv: rax = quotient * d
+  --- objdump ON k1 (magicdiv window) ---
+      18:	48 c7 c3 07 ca 9a 3b 	mov    $0x3b9aca07,%rbx
+      85:	4d 69 d2 f1 03 00 00 	imul   $0x3f1,%r10,%r10
+      c4:	49 bb e5 8f a2 12 31 	movabs $0x89705f3112a28fe5,%r11
+      ce:	49 f7 eb             	imul   %r11
+      d7:	48 c1 e8 3f          	shr    $0x3f,%rax
+      db:	48 c1 fa 1d          	sar    $0x1d,%rdx
+      e2:	48 69 c2 07 ca 9a 3b 	imul   $0x3b9aca07,%rdx,%rax
+--- Gate3+4 runtime ratio + parity ---
+  [k1] off: output=840001701 median_cpu_s=1.3
+  [k1] on: output=840001701 median_cpu_s=0.44
+  [k1] Gate4 PARITY=OK (840001701)
+  [k1] Gate3 ratio ON/OFF = 0.338  (<1.0 speedup; r5b k1=0.426)
+  [k4] off: output=-66666664 median_cpu_s=0.79
+  [k4] on: output=-66666664 median_cpu_s=0.19
+  [k4] Gate4 PARITY=OK (-66666664)
+  [k4] Gate3 ratio ON/OFF = 0.241  (<1.0 speedup; r5b k1=0.426)
+  [k5] off: output=1 median_cpu_s=0.39
+  [k5] on: output=1 median_cpu_s=0.17
+  [k5] Gate4 PARITY=OK (1)
+  [k5] Gate3 ratio ON/OFF = 0.436  (<1.0 speedup; r5b k1=0.426)
+--- Gate5 ship smoke (HEXA_UNBOX_NATIVE=1) ---
+  version: hexa test
+  hello rc=0 out=hello
+  exit42 rc=42
+=== DONE — artifacts under /home/summer/r6_native ===

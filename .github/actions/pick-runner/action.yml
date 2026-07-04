@@ -8,7 +8,7 @@ description: >-
 
 inputs:
   kind:
-    description: 'linux | darwin — which pool to probe'
+    description: 'linux | darwin | darwin-any — which pool to probe (darwin-any = slot-free darwin class)'
     required: true
   eligible:
     description: >-
@@ -19,6 +19,13 @@ inputs:
   token:
     description: 'GitHub token for the runners API probe (github.token is enough)'
     required: true
+  primary-only:
+    description: >-
+      "1" to skip the alt/insurance runner legs — for jobs bound to state that
+      only the primary runner carries (e.g. byteeq-real needs ghost's gen3
+      slot; an idle insurance runner without it just manufactures exit-2 REDs).
+    required: false
+    default: '0' 
 
 outputs:
   label:
@@ -39,6 +46,6 @@ runs:
         set -uo pipefail
         # The shared picker writes `<kind>_label=<json>` to $GITHUB_OUTPUT; we
         # normalise it to this composite's single `label` output.
-        bash tool/ci_pick_runner.sh "${{ inputs.kind }}"
+        bash tool/ci_pick_runner.sh "${{ inputs.kind }}" "${{ inputs.primary-only }}"
         val="$(grep -E "^${{ inputs.kind }}_label=" "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)"
         echo "label=$val" >> "$GITHUB_OUTPUT"

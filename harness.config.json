@@ -15,7 +15,7 @@
       "self/bootstrap.hexa"
     ],
     "fromMarkdown": "CLAUDE.md",
-    "onEditReminder": "L0 file edited \u2014 update CHANGELOG + issue tracker in the same change."
+    "onEditReminder": "L0 file edited — update CHANGELOG + issue tracker in the same change."
   },
   "enforcementFile": ".harness/enforcement.json",
   "keywordsFile": ".harness/keywords.json",
@@ -33,6 +33,7 @@
     "freshnessFiles": [],
     "changelog": {
       "file": "CHANGELOG.jsonl",
+      "fragmentDir": "CHANGELOG.d",
       "triggerPattern": "\\.(hexa)$",
       "ignore": [
         "(^|/)(tests?|__tests__|spec)/",
@@ -43,6 +44,9 @@
     "protectedBranches": [
       "main",
       "master"
+    ],
+    "injectEnglishOnly": [
+      "CLAUDE.md"
     ]
   },
   "guides": [
@@ -62,6 +66,7 @@
       "README.en.md",
       "README.ko.md",
       "CHANGELOG.jsonl",
+      "CHANGELOG.d/",
       "ARCHITECTURE.json",
       "architecture.html",
       "serve.py",

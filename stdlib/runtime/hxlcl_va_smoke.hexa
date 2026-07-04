@@ -1,0 +1,33 @@
+// stdlib/runtime/hxlcl_va_smoke.hexa — RFC061 §M8 varargs-ABI (literal-∅ feature B)
+// RUNG1 proof-of-leaf. A minimal SysV AMD64 VARIADIC integer function, self-emitted
+// natively (no frozen runtime.c va_list) via the new __builtin_va_* intrinsics.
+//
+// This is the smallest body that exercises the whole RUNG1 surface:
+//   • the prologue reg_save_area spill (6 GP arg regs),
+//   • __builtin_va_start (gp_offset = num_named*8, overflow_arg_area, reg_save_area),
+//   • __builtin_va_arg integer class — BOTH the register path (gp_offset < 48) and
+//     the overflow/stack path (gp_offset >= 48), and
+//   • __builtin_va_end (SysV no-op).
+//
+// C signature (the link contract the harness uses):
+//   long hxlcl_va_smoke(long n, ...);   // returns the sum of the n integer varargs
+//
+// Kept in its OWN file (not hxlcl_core.hexa): the va prologue is only correct under
+// HEXA_VA_INTRINSICS=1, and hxlcl_core.hexa is compiled by the Route C smokes WITHOUT
+// that env. Isolation keeps those byteeq-neutral.
+//
+// IN-BODY DISCIPLINE (the hxlcl_core un-nested rule): every intrinsic writes exactly
+// ONE `let`/assignment; comparisons use the raw-payload leaf __hx_payload_lt (NOT a
+// bare `<`, which would lower to a HexaVal helper that misreads the raw word).
+pub fn hxlcl_va_smoke(n: HexaVal) -> int {
+    let ap = __builtin_va_start(1)            // 1 named param (n) → gp_offset = 8
+    let mut acc = 0
+    let mut i = 0
+    while __hx_payload_lt(i, n) {
+        let v = __builtin_va_arg(ap)          // next integer-class vararg (8 bytes)
+        acc = __hx_payload_add(acc, v)
+        i = __hx_payload_add(i, 1)
+    }
+    let _e = __builtin_va_end(ap)             // SysV no-op
+    return acc
+}
