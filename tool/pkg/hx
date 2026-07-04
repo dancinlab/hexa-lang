@@ -354,6 +354,7 @@ cmd_install() {
 #!/bin/bash
 # hx-generated shim for $pkg ($entry)
 export ${pkg_upper}_ROOT="\${${pkg_upper}_ROOT:-$dest}"
+export HEXA_LANG="\${HEXA_LANG:-$dest}"   # project_root for the module_loader: resolve core/·cli/ imports against the package root, not \$0's dir (a daemon entry that imports core/*.hexa fails otherwise)
 HEXA="\${HEXA:-}"
 if [ -z "\$HEXA" ]; then
   for c in "\$HOME/Dev/airgenome/nexus/shared/bin/hexa" "\$HOME/.hx/bin/hexa" "\$(command -v hexa 2>/dev/null)"; do
@@ -458,6 +459,7 @@ refresh_shim() {
 #!/bin/bash
 # hx-generated shim for $pkg ($entry)
 export ${pkg_upper}_ROOT="\${${pkg_upper}_ROOT:-$dest}"
+export HEXA_LANG="\${HEXA_LANG:-$dest}"   # project_root for the module_loader: resolve core/·cli/ imports against the package root, not \$0's dir (a daemon entry that imports core/*.hexa fails otherwise)
 HEXA="\${HEXA:-}"
 if [ -z "\$HEXA" ]; then
   for c in "\$HOME/Dev/airgenome/nexus/shared/bin/hexa" "\$HOME/.hx/bin/hexa" "\$(command -v hexa 2>/dev/null)"; do
