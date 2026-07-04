@@ -84,7 +84,14 @@ jobs:
       - id: darwin
         uses: ./.github/actions/pick-runner
         with:
-          kind: darwin
+          # darwin-any = slot-FREE class: faithful-nobaseline + advisory smokes
+          # are self-contained (shared release_build + in-repo gates, run fine on
+          # macos-15 cloud) so they route to ANY idle darwin runner (ghost OR
+          # mini). The busy path emits the common label so a queued job is no
+          # longer snapshot-pinned to 3 busy ghost runners while 6 mini idle
+          # (measured starvation 2026-07-04). Slot-DEPENDENT byteeq-real keeps
+          # kind=darwin + primary-only=1 (needs ghost's gen3 slot). ci-pick-runner-sh-1.
+          kind: darwin-any
           # self-hosted only for same-repo events; fork PRs → GitHub-hosted.
           eligible: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
           # administration:read PAT (self-hosted runners list needs it; the
@@ -321,7 +328,7 @@ jobs:
               | grep -vE '^(accept|bind|connect|listen|socket|recv|recvfrom|send|sendto|setsockopt|getsockopt|getaddrinfo|freeaddrinfo|gai_strerror)' \
               | grep -vE '^(__libc_|_exit|atexit|environ|mallopt|__cxa|__errno_location|__stack_chk|__assert)' \
               | grep -vE '^(execve|execvp|setns|unshare|mount|umount2?|posix_spawn|opendir|readdir|closedir|glob|globfree|mkstemp|mkdtemp)' \
-              | grep -vE '^(qsort|rand|srand|strtod|strtof|strtold)' \
+              | grep -vE '^(rand|srand|strtod|strtof|strtold)' \
               | tr '\n' ' '
             echo ""
             echo "=== RFC061 nm-UND TOTAL undefined: $(nm -u "$RT" 2>/dev/null | awk '{print $2}' | sort -u | wc -l) ==="

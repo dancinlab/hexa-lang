@@ -749,16 +749,17 @@ resolve_native_float_parse_hexinfnan_seed() {
 # at regen time (thompson/backtrack are public stdlib modules — see
 # tool/regen_regex_rt_native_s.sh), so it exports EXACTLY the 6 rt_regex_* contract syms.
 #
-# POLARITY (default-OFF, opt-IN — like STRTOD-TAIL): stays OFF unless HEXA_REGEX_NATIVE=1
-# is set explicitly. With it unset the emitter #ifdef block is dead → preprocessed
-# runtime.c is byte-identical to the libc-regex baseline (byteeq-NEUTRAL OFF). The
-# default-ON flip is a later 3-target gen3≡gen4 RECONVERGE-flip gated on Blacksmith
-# byteeq x86_64 + arm64-linux + darwin-arm64 GREEN + nobaseline-gate faithful (regcomp/
-# regexec/regfree drop capture) + install smoke + a regex-vs-host-libc corpus, never on
-# mini. On an unknown target / missing seed / assemble failure / demotion mismatch, the
-# path stays off and the C libc-regex #else ships (the no-seed fallback — #3583 lesson).
+# POLARITY (zeroc #29: native default-ON, opt-OUT via HEXA_REGEX_NATIVE=0 — native-canonical
+# polarity): the native Thompson-NFA regex path ships by default; set HEXA_REGEX_NATIVE=0 to
+# retain the libc regcomp/regexec/regfree #else baseline. With native ON the emitter #ifdef
+# block engages → the 6 rt_regex_* shims replace libc regex → regcomp/regexec/regfree drop
+# from the canonical runtime.a nm-UND floor. This is a 3-target gen3≡gen4 RECONVERGE-flip:
+# gated on PR-CI byteeq x86_64 + arm64-linux + darwin-arm64 GREEN + nobaseline-gate faithful
+# (regcomp/regexec/regfree drop capture) + install smoke + the regex-vs-host-libc corpus.
+# On an unknown target / missing seed / assemble failure / demotion mismatch, the path stays
+# off (seed export absent → :1359 lockstep OFF) and the C libc-regex #else ships (#3583 lesson).
 resolve_native_regex_rt_seed() {
-    [ "${HEXA_REGEX_NATIVE:-0}" = "1" ] || return 0                 # opt-IN only (default-OFF)
+    [ "${HEXA_REGEX_NATIVE:-1}" != "0" ] || return 0                # zeroc #29 FLIP: native default-ON; HEXA_REGEX_NATIVE=0 reverts to libc regcomp
     [ -f build/regex_rt_native.o ] && { export HEXA_REGEX_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"
