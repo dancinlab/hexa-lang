@@ -1,0 +1,38 @@
+// test/native_build/forge_attn_bwd_builtin_smoke.hexa
+// LLM-path forge_dispatch_attn_core_bwd — consumer-compile smoke.
+//
+// forge_dispatch_attn_core_bwd(Q, K, V, P, dctx, dQ, dK, dV, T, nh, nkv, hd)
+// -> int rc (12-arg; ALL farr-ids/ints, NO scalar-by-value) is a native runtime
+// builtin (device-resident GQA attention-core backward mirroring host
+// nn_attn_core_bwd; no-CUDA build -> -1 -> host fallback). It lowers via
+// self/codegen.hexa gen2_expr (len==12 block) to hexa_forge_dispatch_attn_core_bwd
+// (declared in self/runtime.h).
+//
+// WHY THIS SMOKE EXISTS: same CLASS as forge_layernorm_builtin_smoke (#4339) —
+// byteeq is NECESSARY but NOT SUFFICIENT (self/ never calls this -> inert ->
+// gen3==gen4 reconverges even if the binding is misplaced / the symbol is
+// undeclared). The layernorm #4339 failure mode was a binding in the WRONG len
+// block (unreachable → undeclared C symbol, green-but-broken). This smoke CALLS
+// the builtin so it MUST lower to the correct symbol from the len==12 block AND
+// link every PR. SSOT: convergence codegen-hexa-1.
+//
+// Asserts COMPILATION + LOWERING + LINK, not a numeric result: on a non-CUDA
+// build the dispatcher returns -1 (host fallback). Reaching the end = PASS.
+fn main() {
+    let T = 2
+    let nh = 2
+    let nkv = 1
+    let hd = 2
+    let d = nh * hd
+    let Q    = farr_zeros(T * nh * hd)
+    let K    = farr_zeros(T * nkv * hd)
+    let V    = farr_zeros(T * nkv * hd)
+    let P    = farr_zeros(nh * T * T)
+    let dctx = farr_zeros(T * d)
+    let dQ   = farr_zeros(T * nh * hd)
+    let dK   = farr_zeros(T * nkv * hd)
+    let dV   = farr_zeros(T * nkv * hd)
+    let rcb = forge_dispatch_attn_core_bwd(Q, K, V, P, dctx, dQ, dK, dV, T, nh, nkv, hd)
+    print("forge_dispatch_attn_core_bwd compiled+lowered+ran: rc=") ; println(rcb)
+    println("forge_attn_bwd_builtin_smoke: PASS (device attn_core_bwd builtin lowers to hexa_forge_dispatch_attn_core_bwd + link)")
+}
