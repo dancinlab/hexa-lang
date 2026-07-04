@@ -587,3 +587,233 @@ pub fn cj_closure_class(body: string) -> string {
     if _cj_is_known_identity(idx[0], idx[1], idx[2], idx[3]) { return "" }
     return _cj_class_identity(idx[0], idx[1], idx[2], idx[3], r)
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// M7 — LLM proposes a FRAME/GENERATOR (not a ground fact); the enumerator
+// sweeps it + exact-int judges. Design SSOT §4.2/§6. The LLM parameterizes a
+// CODE-FIXED bounded template (no eval/closures in hexa → no code injection);
+// its output NEVER becomes a γ directly — only enumerated relations that pass
+// verify_identity3 / is_universal3 (+ the C6-reducible closure) can carry a
+// "novel" label, and even then it is UNIVERSAL[2,N] · ∀n UNPROVEN · bounded
+// (final novelty = human g5/PR). No atlas write · frame table is code-fixed
+// (Texas-sharpshooter pre-registration) · per-run in-memory · byteeq-neutral
+// (stdlib/loop, cmd_run dispatch, outside self/ closure). v1 template = prod3
+// (3-factor product identity A*B*C=D*E*F) — syntactically inexpressible in the
+// 2-factor ground grammar, so it genuinely widens the ring; its verifiers
+// (verify_identity3/is_universal3) already exist on main → M4/M5-independent.
+// ════════════════════════════════════════════════════════════════════════
+
+// closed template dict (the pre-registered frame set · Texas guard).
+fn _cj_tpl_index(name: string) -> int {
+    if name.trim() == "prod3" { return 0 }
+    return 0 - 1
+}
+
+// GENERATOR: marker payload (mirror _cj_marker_value).
+fn _cj_gen_marker_value(line: string) -> string {
+    let markers = ["GENERATOR:", "Generator:", "generator:"]
+    let mn = len(markers)
+    let mut i = 0
+    while i < mn {
+        let m = to_string(markers[i])
+        if line.starts_with(m) { return line.substring(len(m), len(line)).trim() }
+        i = i + 1
+    }
+    return ""
+}
+
+// first GENERATOR line payload in the child body (mirror cj_extract).
+pub fn cj_gen_extract(body: string) -> string {
+    let lines = body.split("\n")
+    let n = len(lines)
+    let mut i = 0
+    while i < n {
+        let mut t = lines[i].trim()
+        if t.starts_with("- ") { t = t.substring(2, len(t)).trim() }
+        let v = _cj_gen_marker_value(t)
+        if len(v) > 0 { return v }
+        i = i + 1
+    }
+    return ""
+}
+
+// parse "prod3 <t>*<t>*<t> = <t>*<t>*<t>" → [tpl, s1..s6] (wildcard ? = -2),
+// [] on malformed. Each <t> ∈ 18-fn vocab or `?`; exactly 1..2 wildcards.
+fn _cj_parse_generator(expr: string) -> array {
+    let empty: array = []
+    let mut e = _cj_normalize(expr)
+    e = e.trim()
+    let sp = e.index_of(" ")
+    if sp < 0 { return empty }
+    let tpl = _cj_tpl_index(e.substring(0, sp))
+    if tpl < 0 { return empty }
+    let mut form = e.substring(sp, len(e)).trim()
+    form = form.replace(" ", "")
+    let sides = form.split("=")
+    if len(sides) != 2 { return empty }
+    let lhs = to_string(sides[0]).split("*")
+    let rhs = to_string(sides[1]).split("*")
+    if len(lhs) != 3 || len(rhs) != 3 { return empty }
+    let mut out: array = []
+    out.push(tpl)
+    let mut wc = 0
+    let mut i = 0
+    while i < 3 {
+        let tok = to_string(lhs[i]).trim()
+        if tok == "?" { out.push(0 - 2); wc = wc + 1 }
+        else {
+            let idx = _cj_fn_index(tok)
+            if idx < 0 { return empty }
+            out.push(idx)
+        }
+        i = i + 1
+    }
+    i = 0
+    while i < 3 {
+        let tok = to_string(rhs[i]).trim()
+        if tok == "?" { out.push(0 - 2); wc = wc + 1 }
+        else {
+            let idx = _cj_fn_index(tok)
+            if idx < 0 { return empty }
+            out.push(idx)
+        }
+        i = i + 1
+    }
+    if wc < 1 || wc > 2 { return empty }
+    return out
+}
+
+// pointwise product equality Π af(n,l[i]) == Π af(n,r[j]) over n∈[2,N].
+fn _cj_prod_eq(l: array, r: array, N: int) -> bool {
+    let mut n = 2
+    while n <= N {
+        let mut lv = 1
+        let mut i = 0
+        while i < len(l) { lv = lv * af(n, to_int(to_string(l[i])))  i = i + 1 }
+        let mut rv = 1
+        i = 0
+        while i < len(r) { rv = rv * af(n, to_int(to_string(r[i])))  i = i + 1 }
+        if lv != rv { return false }
+        n = n + 1
+    }
+    return true
+}
+
+// bit-mask subset of a 3-array (mask 1..6 = proper nonempty).
+fn _cj_subset(vals: array, mask: int) -> array {
+    let out: array = []
+    if mask % 2 == 1 { out.push(to_int(to_string(vals[0]))) }
+    if (mask / 2) % 2 == 1 { out.push(to_int(to_string(vals[1]))) }
+    if (mask / 4) % 2 == 1 { out.push(to_int(to_string(vals[2]))) }
+    return out
+}
+
+// C6-REDUCIBLE: A*B*C ≡ D*E*F decomposes into a proper sub-multiset split
+// S~T AND complement(lhs∖S)~(rhs∖T), BOTH pointwise over [2,N]. Catches a
+// universal-3 that is merely the product of two classical identities (e.g.
+// phi*psi*n = J2*core*rad = (phi*psi=J2)×(n=core*rad)). 6×6=36 split pairs;
+// both halves checked explicitly (zero-valued fns break implication).
+fn _cj_gen_reducible3(a: int, b: int, c: int, d: int, e: int, f: int, N: int) -> bool {
+    let lhs: array = []
+    lhs.push(a)  lhs.push(b)  lhs.push(c)
+    let rhs: array = []
+    rhs.push(d)  rhs.push(e)  rhs.push(f)
+    let mut sm = 1
+    while sm <= 6 {
+        let s = _cj_subset(lhs, sm)
+        let sc = _cj_subset(lhs, 7 - sm)
+        let mut tm = 1
+        while tm <= 6 {
+            if _cj_prod_eq(s, _cj_subset(rhs, tm), N) {
+                if _cj_prod_eq(sc, _cj_subset(rhs, 7 - tm), N) { return true }
+            }
+            tm = tm + 1
+        }
+        sm = sm + 1
+    }
+    return false
+}
+
+// deterministic enumerate+judge of a parsed generator (slots=[tpl,s1..s6],
+// wildcard=-2). Sweeps wildcards over the 18-fn vocab (idx ascending) → each
+// relation via verify_identity3 (singleton always demoted-known, C4 lineage) /
+// is_universal3 (+ C6). Returns [enum, held(=known+novel), known, novel].
+fn _cj_gen_sweep(slots: array) -> array {
+    let N = 20000
+    let base: array = []
+    let wpos: array = []
+    let mut i = 0
+    while i < 6 {
+        let v = to_int(to_string(slots[i + 1]))
+        base.push(v)
+        if v == 0 - 2 { wpos.push(i) }
+        i = i + 1
+    }
+    let w = len(wpos)
+    let p0 = to_int(to_string(wpos[0]))
+    let mut enumc = 0
+    let mut known = 0
+    let mut novel = 0
+    let mut x = 0
+    while x < 18 {
+        let ymax = if w == 2 { 18 } else { 1 }
+        let mut y = 0
+        while y < ymax {
+            let rel: array = []
+            let mut k = 0
+            while k < 6 { rel.push(to_int(to_string(base[k])))  k = k + 1 }
+            rel[p0] = x
+            if w == 2 { rel[to_int(to_string(wpos[1]))] = y }
+            let a = to_int(to_string(rel[0]))
+            let b = to_int(to_string(rel[1]))
+            let c = to_int(to_string(rel[2]))
+            let d = to_int(to_string(rel[3]))
+            let ee = to_int(to_string(rel[4]))
+            let ff = to_int(to_string(rel[5]))
+            enumc = enumc + 1
+            let r = verify_identity3(a, b, c, d, ee, ff, N)
+            if r >= 4 {
+                known = known + 1
+            } else {
+                if r == 0 - 1 {
+                    if is_universal3(a, b, c, d, ee, ff, N) == 1 {
+                        if _cj_gen_reducible3(a, b, c, d, ee, ff, N) { known = known + 1 }
+                        else { novel = novel + 1 }
+                    }
+                }
+            }
+            y = y + 1
+        }
+        x = x + 1
+    }
+    let out: array = []
+    out.push(enumc)
+    out.push(known + novel)
+    out.push(known)
+    out.push(novel)
+    return out
+}
+
+// M7 generator verdict: "" (no line) / unparseable / generator-dry /
+// generator-known / generator-novel. Sibling of cj_verdict for GENERATOR lines.
+pub fn cj_generator_verdict(body: string) -> string {
+    let raw = cj_gen_extract(body)
+    if len(raw) == 0 { return "" }
+    let slots = _cj_parse_generator(raw)
+    if len(slots) != 7 { return "unparseable" }
+    let res = _cj_gen_sweep(slots)
+    if to_int(to_string(res[3])) >= 1 { return "generator-novel" }
+    if to_int(to_string(res[2])) >= 1 { return "generator-known" }
+    return "generator-dry"
+}
+
+// M7 DROP-rate report line for the dfs harvest (design §6 M7 gate).
+pub fn cj_generator_report(body: string) -> string {
+    let raw = cj_gen_extract(body)
+    if len(raw) == 0 { return "" }
+    let slots = _cj_parse_generator(raw)
+    if len(slots) != 7 { return "" }
+    let res = _cj_gen_sweep(slots)
+    return "tpl=prod3 enum=" + to_string(res[0]) + " held=" + to_string(res[1])
+        + " known=" + to_string(res[2]) + " novel=" + to_string(res[3])
+}
