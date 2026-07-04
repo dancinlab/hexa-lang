@@ -1,0 +1,141 @@
+// ═══════════════════════════════════════════════════════════
+//  test_trait_dispatch.hexa — trait-dispatch conformance check
+//
+//  Exercises the `impl Trait for Type` conformance rule wired into
+//  self/type_checker.hexa (trait registry + tc_check_trait_conformance).
+//
+//  Reference rule (faithful-match):
+//    • Rust E0046 — "not all trait items implemented, missing: `area`".
+//    • Go — "X does not implement T (missing method M)".
+//    Canonical CHECK: a type must provide every NON-DEFAULT trait method
+//    (name match); default-bodied trait methods are optional.
+//
+//  Self-contained (hexa has no multi-file imports yet): the minimal trait
+//  registry + conformance logic is inlined here, byte-for-byte mirroring
+//  the type_checker.hexa additions, and asserted directly.
+//
+//  Run: ./hexa self/test_trait_dispatch.hexa
+// ═══════════════════════════════════════════════════════════
+
+// ── Trait registry (mirror of type_checker.hexa additions) ──
+let mut trait_names = []
+let mut trait_method_counts = []
+let mut trait_method_offsets = []
+let mut trait_all_method_names = []
+let mut trait_all_method_arities = []
+let mut trait_all_method_has_default = []
+
+// Diagnostic sink (stand-in for tc_errors / tc_error_at).
+let mut diags = []
+
+fn reg_trait(name, method_count) {
+    trait_names.push(name)
+    trait_method_counts.push(method_count)
+    trait_method_offsets.push(len(trait_all_method_names))
+}
+
+fn reg_trait_method(mname, arity, has_default) {
+    trait_all_method_names.push(mname)
+    trait_all_method_arities.push(arity)
+    trait_all_method_has_default.push(has_default)
+}
+
+// Faithful copy of tc_check_trait_conformance (type_checker.hexa).
+fn check_conformance(target, trait_name, method_names) {
+    let mut ti = 0
+    while ti < len(trait_names) {
+        if trait_names[ti] == trait_name {
+            let offset = trait_method_offsets[ti]
+            let count = trait_method_counts[ti]
+            let mut mi = 0
+            while mi < count {
+                if trait_all_method_has_default[offset + mi] == false {
+                    let req_name = trait_all_method_names[offset + mi]
+                    let mut found = false
+                    let mut ni = 0
+                    while ni < len(method_names) {
+                        if method_names[ni] == req_name { found = true }
+                        ni = ni + 1
+                    }
+                    if found == false {
+                        diags.push("type '" + target + "' does not implement trait '" + trait_name + "': missing method '" + req_name + "'")
+                    }
+                }
+                mi = mi + 1
+            }
+        }
+        ti = ti + 1
+    }
+}
+
+fn diags_has(sub) {
+    let mut i = 0
+    while i < len(diags) {
+        if diags[i].contains(sub) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ── Test harness ─────────────────────────────────────────────
+let mut test_pass = 0
+let mut test_fail = 0
+
+fn check(name, cond) {
+    if cond {
+        println("[PASS] " + name)
+        test_pass = test_pass + 1
+    } else {
+        println("[FAIL] " + name)
+        test_fail = test_fail + 1
+    }
+}
+
+println("=======================================================")
+println("  trait-dispatch conformance check")
+println("=======================================================")
+
+// trait Shape { fn area(self) -> f64; fn name(self) -> string { "shape" } }
+//   area  = REQUIRED (no default body)
+//   name  = OPTIONAL (default body)
+reg_trait("Shape", 2)
+reg_trait_method("area", 1, false)   // required
+reg_trait_method("name", 1, true)    // optional (default-bodied)
+
+// ── T1: impl Shape for Circle {} (missing area) → diagnostic ──
+diags = []
+check_conformance("Circle", "Shape", [])
+check("T1 — missing required method 'area' flagged (Rust E0046 / Go faithful)",
+    diags_has("does not implement trait 'Shape': missing method 'area'"))
+
+// ── T2: impl Shape for Square { fn area() } → no diagnostic ──
+diags = []
+check_conformance("Square", "Shape", ["area"])
+check("T2 — required method present → no diagnostic", len(diags) == 0)
+
+// ── T3: default-bodied 'name' omitted → still no diagnostic ──
+diags = []
+check_conformance("Tri", "Shape", ["area"])
+check("T3 — default-bodied method optional (omitting 'name' is OK)", len(diags) == 0)
+
+// ── T4: unknown trait → fail-open (no spurious diagnostic) ──
+diags = []
+check_conformance("Hexagon", "Drawable", [])
+check("T4 — impl of undeclared trait skipped silently", len(diags) == 0)
+
+// ── T5: providing extra (non-trait) methods is fine ──
+diags = []
+check_conformance("Penta", "Shape", ["area", "perimeter", "name"])
+check("T5 — extra methods alongside required → no diagnostic", len(diags) == 0)
+
+// ── Summary ──────────────────────────────────────────────────
+println("")
+println("=======================================================")
+println("  Results: " + to_string(test_pass) + " passed, " + to_string(test_fail) + " failed")
+println("=======================================================")
+
+if test_fail > 0 {
+    println("SOME TESTS FAILED!")
+} else {
+    println("ALL TESTS PASSED!")
+}

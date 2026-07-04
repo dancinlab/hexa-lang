@@ -173,6 +173,8 @@ state/*
 !state/hexa-own/
 !state/static-types/
 !state/rfc_advanced_typesystem.md
+!state/rfc_function_overloading.md
+!state/rfc_reseed_canonical_keywords.md
 !state/rfc_drop_raii.md
 !state/rfc_operator_overload.md
 !state/rfc_value_unbox_layout.md
@@ -180,6 +182,7 @@ state/*
 !state/x86_codegen_anima_eval/
 !state/rfc_thread_channel_e2e.md
 !state/rfc_mn_scheduler.md
+!state/ci-speedup/
 # Per-test regression state (markers/ holds timestamp-suffixed runtime artifacts)
 test/regression/*/state/
 

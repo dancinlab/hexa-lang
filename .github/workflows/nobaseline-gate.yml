@@ -18,6 +18,26 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # PR-only path filter — docs-class PRs (state/ · ATLAS/ · *.md ·
+    # ARCHITECTURE.json · CHANGELOG.jsonl) cannot affect this gate yet were
+    # measured occupying the 2-slot darwin pool ~6.5 min each (run 28651193685,
+    # docs-only PR#4453). The list covers every input the gate consumes:
+    # release_build/release_package read self/** + tool/stage_* and compile the
+    # self-host sources (compiler/**, stdlib/**); the OP fold/step gates read
+    # stdlib/** + test/**; $SEEDS includes test/native_build/**; the runner
+    # picker + ccache live under .github/actions/**. push:main stays UNFILTERED
+    # so every main SHA is still fully gated. Merge-safe by construction: the
+    # only branch-protection-required check is selfhost-gates-summary, which has
+    # no path filter — a skipped nobaseline run can never wedge a merge.
+    paths:
+      - 'compiler/**'
+      - 'self/**'
+      - 'stdlib/**'
+      - 'tool/**'
+      - 'test/**'
+      - 'install.sh'
+      - '.github/workflows/nobaseline-gate.yml'
+      - '.github/actions/**'
   workflow_dispatch:
 
 permissions:
@@ -740,8 +760,11 @@ jobs:
   # HEXA_CABI_HXLCL stays default-OFF (release_build never sets it).
   routec-cabi-smoke-linux-x86_64:
     name: Route C ON-path errno smoke (linux-x86_64, advisory)
-    needs: dispatch
-    runs-on: ${{ fromJSON(needs.dispatch.outputs.linux_label) }}
+    # HOSTED-PINNED (advisory): free ubuntu-latest cloud runner — measured on
+    # the pool this advisory job occupied summer 2m17s AHEAD of the required-
+    # path faithful job, which then queued 25m28s. Advisory work never takes a
+    # self-hosted slot.
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
