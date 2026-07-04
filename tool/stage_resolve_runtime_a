@@ -740,6 +740,65 @@ resolve_native_float_parse_hexinfnan_seed() {
     rm -f "$s_tmp"
 }
 
+# ── RT-NATIVE zero-c #29 REGEX (regex-flip wiring follow-on) — regex_rt seed → build/regex_rt_native.o ──
+# The regex twin of resolve_native_float_parse_hexinfnan_seed: assemble
+# build/regex_rt_native.o from the arch-matched frozen self/native/regex_rt_*.s seed and
+# enable the native regex path (HEXA_REGEX_NATIVE=1) so the emitted runtime.c
+# hexa_regex_* bodies delegate to the 6 rt_regex_* shims (Thompson NFA + backtrack VM)
+# instead of libc regcomp/regexec/regfree. The seed's OTHER globals were demoted to local
+# at regen time (thompson/backtrack are public stdlib modules — see
+# tool/regen_regex_rt_native_s.sh), so it exports EXACTLY the 6 rt_regex_* contract syms.
+#
+# POLARITY (zeroc #29: native default-ON, opt-OUT via HEXA_REGEX_NATIVE=0 — native-canonical
+# polarity): the native Thompson-NFA regex path ships by default; set HEXA_REGEX_NATIVE=0 to
+# retain the libc regcomp/regexec/regfree #else baseline. With native ON the emitter #ifdef
+# block engages → the 6 rt_regex_* shims replace libc regex → regcomp/regexec/regfree drop
+# from the canonical runtime.a nm-UND floor. This is a 3-target gen3≡gen4 RECONVERGE-flip:
+# gated on PR-CI byteeq x86_64 + arm64-linux + darwin-arm64 GREEN + nobaseline-gate faithful
+# (regcomp/regexec/regfree drop capture) + install smoke + the regex-vs-host-libc corpus.
+# On an unknown target / missing seed / assemble failure / demotion mismatch, the path stays
+# off (seed export absent → :1359 lockstep OFF) and the C libc-regex #else ships (#3583 lesson).
+resolve_native_regex_rt_seed() {
+    [ "${HEXA_REGEX_NATIVE:-1}" != "0" ] || return 0                # zeroc #29 FLIP: native default-ON; HEXA_REGEX_NATIVE=0 reverts to libc regcomp
+    [ -f build/regex_rt_native.o ] && { export HEXA_REGEX_NATIVE=1; return 0; }
+    local seed="" tgt="${TARGET:-}"
+    tgt="${tgt%-musl}"
+    tgt="${tgt%-cuda}"
+    [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
+        "Darwin arm64") tgt="darwin-arm64" ;;
+        "Linux x86_64") tgt="linux-x86_64" ;;
+        "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
+    esac
+    case "$tgt" in
+        darwin-arm64) seed="self/native/regex_rt_arm64.s" ;;
+        linux-x86_64) seed="self/native/regex_rt_x86_64.s" ;;
+        linux-arm64)  seed="self/native/regex_rt_arm64-linux.s" ;;
+        *)            seed="" ;;   # unknown → regex path stays off, C #else libc-regex fallback
+    esac
+    [ -n "$seed" ] && [ -f "$seed" ] || { echo "[stage_resolve_runtime_a] RT-NATIVE REGEX: no seed for TARGET=$tgt — regex path stays off (C libc regex)" >&2; return 0; }
+    mkdir -p build
+    # SAFETY: only adopt the native path if the seed exports EXACTLY the 6 rt_regex_*
+    # contract syms AND nothing else global (a demotion-missed seed would risk a
+    # duplicate-symbol link against a user program that imports thompson/backtrack). Both
+    # counts from `.globl` (toolchain-free).
+    local ncontract ntotal
+    ncontract="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?rt_regex_(match|match_full|search|findall|split|replace)([[:space:]]|$)' "$seed" 2>/dev/null || echo 0)"
+    ntotal="$(grep -cE '^[[:space:]]*\.globl[[:space:]]' "$seed" 2>/dev/null || echo 0)"
+    if [ "${ncontract:-0}" -ne 6 ] || [ "${ntotal:-0}" -ne 6 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE REGEX: seed $seed exports $ncontract/6 rt_regex_* (total globals $ntotal, want 6) — regex path stays off (C libc regex)" >&2
+        return 0
+    fi
+    local s_tmp="build/regex_rt_seed.s"
+    grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
+    if $CC -c "$s_tmp" -o build/regex_rt_native.o 2>/dev/null; then
+        export HEXA_REGEX_NATIVE=1
+        echo "[stage_resolve_runtime_a] RT-NATIVE REGEX: assembled build/regex_rt_native.o from $seed (TARGET=$tgt, 6 rt_regex_* syms) → native Thompson-NFA regex path"
+    else
+        echo "[stage_resolve_runtime_a] RT-NATIVE REGEX: WARN assemble of $seed failed — regex path stays off (C libc regex)" >&2
+    fi
+    rm -f "$s_tmp"
+}
+
 # ── RT-NATIVE leg B M4 NUM (sh-num-native lane) — num-core parse native seed → build/num_core_native.o ──
 # The num twin of resolve_native_str_core_seed: assemble build/num_core_native.o
 # from the arch-matched frozen self/native/num_core_*.s seed, and AUTO-ENABLE the
@@ -1286,6 +1345,22 @@ build_runtime_a_from_source() {
         rt_strtod_tail_def="-DHEXA_RT_STRTOD_TAIL_NATIVE=1"
         extra_obj="$extra_obj build/float_parse_hexinfnan_native.o"
         echo "[stage_resolve_runtime_a] RT-NATIVE STRTOD-TAIL: HEXA_RT_STRTOD_TAIL_NATIVE=1; ar'ing native float_parse_hexinfnan_native.o into runtime.a"
+    fi
+
+    # zero-c #29 REGEX (regex-flip wiring follow-on): when opt-IN active (HEXA_REGEX_NATIVE=1
+    # set by resolve_native_regex_rt_seed AND the seed .o built), define HEXA_REGEX_NATIVE for
+    # EVERY runtime.c compile site (single-TU + MULTIOBJ runtime.o/runtime_core.o + CUDA
+    # runtime_cuda_host.o — a missed CUDA site would skew runtime.cuda.a to the libc arm) and
+    # ar build/regex_rt_native.o into runtime.a so the 6 rt_regex_* shims resolve in a
+    # STANDALONE runtime.a link (consent-checker + faithful) — the exact gap that reverted the
+    # first flip (#4451, convergence regex-rt-hexa-1). Unset → def empty, extra_obj unchanged,
+    # runtime.a byte-identical to the libc-regex baseline (byteeq-NEUTRAL). Opt-IN via
+    # HEXA_REGEX_NATIVE=1 → the seed links and the emitter's native seams engage.
+    local rt_regex_def=""
+    if [ "${HEXA_REGEX_NATIVE:-0}" = "1" ] && [ -f build/regex_rt_native.o ]; then
+        rt_regex_def="-DHEXA_REGEX_NATIVE=1"
+        extra_obj="$extra_obj build/regex_rt_native.o"
+        echo "[stage_resolve_runtime_a] RT-NATIVE REGEX: HEXA_REGEX_NATIVE=1; ar'ing native regex_rt_native.o into runtime.a"
     fi
     # RT-NATIVE Route B (gated, opt-IN): native linked-block arena replaces the C
     # arena `#else` in runtime_core.c when HEXA_RT_ALLOC_NATIVE=1 + seed object built.
@@ -1883,51 +1958,75 @@ build_runtime_a_from_source() {
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRTOLL: HEXA_RT_NATIVE_STRTOLL=1 IGNORED — fp-ABI xmm Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim strtoll member" >&2
             fi
         fi
-        # ── RFC061 §M8 RT-NATIVE-FREE (Route C whole-module emit · non-libm leaf
-        #    RUNG 3, default OFF) ──
+        # ── RFC061 §M8 RT-NATIVE-FREE (frozen seed-consume · non-libm leaf, default OFF) ──
         # THIRD non-libm leaf to leave the shim (strstr #4240 / strtoll #4241). hxlcl_free
-        # is the PUREST self-contained leaf — the frozen 0-libc floor's no-op free (the
-        # hxlcl_malloc bump arena never reclaims), native body `(void)p; return p`: zero
-        # syscall, zero errno, zero inner C-ABI callee, zero extern-data. The native body
-        # is FAITHFUL to the frozen floor (no-op), NOT to this shim's libc-only free(p)
-        # delegate (which exists for the standalone-libc TU only). aprime/hexa with
-        # HEXA_CABI_HXLCL=1 Route-C-lowers hxlcl_core.hexa to one .o; the whitelisted
-        # hxlcl_free lands in it. `objcopy --keep-global-symbol=hxlcl_free` ISOLATES the
-        # staged member so the whole-module routec.o's sibling C-ABI defs stay served by
-        # the shim and the ld -r multidef gate (S5) sees exactly one new strong def. The
-        # shim drops free via -DHEXA_RT_NATIVE_FREE (#ifndef in shim.c). DEFAULT (unset)
-        # adds NO -D and NO member → shim.o + archive byte-identical (release-integrity
-        # invariant). x86_64-linux ONLY (same host gate as the libm + strstr/strtoll).
-        if [ "${HEXA_RT_NATIVE_FREE:-0}" = "1" ]; then
-            if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
-                local _rnfr_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
-                if [ -z "$_rnfr_bin" ]; then
-                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FREE FATAL: HEXA_RT_NATIVE_FREE=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
-                fi
-                local _rnfr_drv="build/_rnfr_drv.hexa"
-                local _rnfr_s="build/hxlcl_free_native.s"
-                local _rnfr_full="build/hxlcl_free_native_full.o"
-                local _rnfr_o="build/hxlcl_free_native.o"
-                printf 'fn _rnfr_unused() {}\n' > "$_rnfr_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FREE: emitting native Route C hxlcl_free .o via $_rnfr_bin (HEXA_CABI_HXLCL=1, replacing libc-shim free member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnfr_bin" "$_rnfr_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnfr_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnfr_free.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FREE FATAL: free Route C asm emit failed — see build/_rnfr_free.log" >&2; cat "build/_rnfr_free.log" >&2; return 1; }
-                [ -s "$_rnfr_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FREE FATAL: empty $_rnfr_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnfr_s" -o "$_rnfr_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FREE FATAL: assemble $_rnfr_s failed" >&2; return 1; }
-                if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_free "$_rnfr_full" "$_rnfr_o" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FREE FATAL: objcopy isolate free failed" >&2; return 1; }
-                else
-                    cp "$_rnfr_full" "$_rnfr_o"
-                fi
-                [ -f "$_rnfr_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FREE FATAL: $_rnfr_o not produced" >&2; return 1; }
-                _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_FREE"
-                _mo_hxlcl_members="$_mo_hxlcl_members $_rnfr_o"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FREE: hxlcl_free → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_FREE (free dropped) — ld -r multidef gate validates"
+        # is the PUREST self-contained leaf: the frozen 0-libc floor's no-op free (the
+        # hxlcl_malloc bump arena never reclaims), native body `(void)p; return`. The body
+        # enters runtime.a via a FROZEN SEED baked by tool/regen_hxlcl_free_native_s.sh
+        # (aprime_cc --emit=asm hxlcl_core.hexa + a .globl DEMOTION to a 1-symbol hxlcl_free
+        # contract), NOT a build-time LIVE emit. WHY the switch (root-cause #4489/#4545, Fable
+        # bmtd0lpxf): the live emit needed build/aprime_cc — the only binary that honours the
+        # `<runner>.hexa --emit=asm … SOURCE.hexa` argv — but aprime_cc needs runtime.a, so it
+        # cannot exist at Stage 0b. faithful CI then mis-resolved the emit binary to the CLI
+        # `hexa`, whose `.hexa`-first dispatch ran the driver in compat cmd_run and IGNORED
+        # `--emit=asm -o … hxlcl_core.hexa` → no .s → empty FATAL → faithful RED on all 3
+        # targets. Baking the .s once on the pool and consuming it here removes the emit
+        # binary from the Stage-0b critical path (the #4535 regex / alloc_syscall pattern).
+        # Seed-consume MIRRORS resolve_native_regex_rt_seed: pick the arch seed, gate on
+        # `.globl == 1` (the demotion already isolates the single strong def, so — unlike the
+        # old whole-module live emit — NO objcopy isolate is needed), $CC -c →
+        # build/hxlcl_free_native.o, then add -DHEXA_RT_NATIVE_FREE + the member (the ld -r
+        # multidef gate S5 still validates). TRI-STATE HEXA_RT_NATIVE_FREE:
+        #   0    = off (DEFAULT · block skipped · shim.o + archive byte-identical = neutral)
+        #   auto = graceful (the flip (e) sets this default): a missing/bad/unassemblable seed
+        #          keeps the libc-shim free member + a loud WARN and the build CONTINUES — the
+        #          fallback is the NORMAL libc free, never a broken one, and a non-adopted flip
+        #          is observable as `free` still UND in the nobaseline nm-UND dump (#4360).
+        #   1    = strict: a missing/bad seed is FATAL (measurement / verify scripts).
+        # convergence stage-resolve-runtime-a-2.
+        _rnfr_mode="${HEXA_RT_NATIVE_FREE:-0}"
+        if [ "$_rnfr_mode" != "0" ]; then
+            _rnfr_tgt="${TARGET:-}"; _rnfr_tgt="${_rnfr_tgt%-musl}"; _rnfr_tgt="${_rnfr_tgt%-cuda}"
+            [ -z "$_rnfr_tgt" ] && case "$(uname -sm 2>/dev/null)" in
+                "Darwin arm64") _rnfr_tgt="darwin-arm64" ;;
+                "Linux x86_64") _rnfr_tgt="linux-x86_64" ;;
+                "Linux aarch64"|"Linux arm64") _rnfr_tgt="linux-arm64" ;;
+            esac
+            case "$_rnfr_tgt" in
+                darwin-arm64) _rnfr_seed="self/native/hxlcl_free_arm64.s" ;;
+                linux-x86_64) _rnfr_seed="self/native/hxlcl_free_x86_64.s" ;;
+                linux-arm64)  _rnfr_seed="self/native/hxlcl_free_arm64-linux.s" ;;
+                *)            _rnfr_seed="" ;;
+            esac
+            _rnfr_err=""
+            if [ -z "$_rnfr_seed" ] || [ ! -f "$_rnfr_seed" ]; then
+                _rnfr_err="no hxlcl_free seed for TARGET=$_rnfr_tgt (regen tool/regen_hxlcl_free_native_s.sh)"
             else
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FREE: HEXA_RT_NATIVE_FREE=1 IGNORED — fp-ABI xmm Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim free member" >&2
+                # SAFETY: adopt only if the seed exports EXACTLY the 1 hxlcl_free contract
+                # symbol and nothing else global (a demotion-missed seed would risk a
+                # duplicate-symbol link against the shim's sibling hxlcl_* defs). `_?` = the
+                # Mach-O underscore. Both counts from `.globl` (toolchain-free).
+                _rnfr_nc="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?hxlcl_free([[:space:]]|$)' "$_rnfr_seed" 2>/dev/null || echo 0)"
+                _rnfr_nt="$(grep -cE '^[[:space:]]*\.globl[[:space:]]' "$_rnfr_seed" 2>/dev/null || echo 0)"
+                if [ "${_rnfr_nc:-0}" -ne 1 ] || [ "${_rnfr_nt:-0}" -ne 1 ]; then
+                    _rnfr_err="seed $_rnfr_seed exports $_rnfr_nc/1 hxlcl_free (total globals $_rnfr_nt, want 1 — demotion drift)"
+                else
+                    mkdir -p build
+                    _rnfr_s="build/hxlcl_free_seed.s"; _rnfr_o="build/hxlcl_free_native.o"
+                    grep -vE '^// ' "$_rnfr_seed" > "$_rnfr_s" 2>/dev/null || cp "$_rnfr_seed" "$_rnfr_s"
+                    if $CC $_mo_archflag -c "$_rnfr_s" -o "$_rnfr_o" 2>/dev/null; then
+                        _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_FREE"
+                        _mo_hxlcl_members="$_mo_hxlcl_members $_rnfr_o"
+                        echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FREE: hxlcl_free ← frozen seed $_rnfr_seed (TARGET=$_rnfr_tgt, 1-symbol contract); shim.o built with -DHEXA_RT_NATIVE_FREE (free dropped) — ld -r multidef gate validates"
+                    else
+                        _rnfr_err="assemble of $_rnfr_seed failed"
+                    fi
+                    rm -f "$_rnfr_s"
+                fi
+            fi
+            if [ -n "$_rnfr_err" ]; then
+                [ "$_rnfr_mode" = "1" ] && { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FREE FATAL (strict): $_rnfr_err" >&2; return 1; }
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FREE WARN: $_rnfr_err — FALLBACK-SHIM (retaining libc free member; free stays UND in the nm floor)" >&2
             fi
         fi
         # ── RFC061 §M8 RT-NATIVE-ATOF (fp-ABI xmm Route C · MIXED-ABI leaf, default OFF) ──
@@ -2053,7 +2152,18 @@ build_runtime_a_from_source() {
         # shim.c). DEFAULT (unset) adds NO -D and NO member → shim.o + archive byte-
         # identical (release-integrity invariant). x86_64-linux ONLY.
         if [ "${HEXA_RT_NATIVE_CALLOC:-0}" = "1" ]; then
-            if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
+            # zeroc #29: non-fp Route-C leaves (free/calloc/realloc) are pointer/size-only
+            # (no xmm fp-ABI) → the arm64 backend already lowers them (arm64_darwin.hexa
+            # _is_cabi && !_cabi_is_fp; routec_cabi_smoke emits arm64-darwin). The old
+            # x86-only gate was a libm-template copy. Extend to all 3 non-fp hosts.
+            # convergence stage-resolve-runtime-a-2 (Fable b2xiwq4w3).
+            _rnca_target=""
+            case "$(uname -s) $(uname -m)" in
+                "Linux x86_64"|"Linux amd64")  _rnca_target="x86_64-linux-gnu" ;;
+                "Linux aarch64"|"Linux arm64") _rnca_target="arm64-linux-gnu" ;;
+                "Darwin arm64")                _rnca_target="arm64-apple-darwin" ;;
+            esac
+            if [ -n "$_rnca_target" ]; then
                 local _rnca_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
                 if [ -z "$_rnca_bin" ]; then
                     echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL: HEXA_RT_NATIVE_CALLOC=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
@@ -2065,23 +2175,33 @@ build_runtime_a_from_source() {
                 printf 'fn _rnca_unused() {}\n' > "$_rnca_drv"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC: emitting native Route C hxlcl_calloc .o via $_rnca_bin (HEXA_CABI_HXLCL=1, replacing libc-shim calloc member)…"
                 env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnca_bin" "$_rnca_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnca_s" stdlib/runtime/hxlcl_core.hexa \
+                    "$_rnca_bin" "$_rnca_drv" --emit=asm --target="$_rnca_target" -o "$_rnca_s" stdlib/runtime/hxlcl_core.hexa \
                     >"build/_rnca_calloc.log" 2>&1 \
                     || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL: calloc Route C asm emit failed — see build/_rnca_calloc.log" >&2; cat "build/_rnca_calloc.log" >&2; return 1; }
                 [ -s "$_rnca_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL: empty $_rnca_s" >&2; return 1; }
                 $CC $_mo_archflag -c "$_rnca_s" -o "$_rnca_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL: assemble $_rnca_s failed" >&2; return 1; }
+                # per-OS single-strong-def isolate (darwin = Mach-O _-prefix + no GNU objcopy).
+                # A cp fallback would keep the whole-module .o's sibling C-ABI strong defs →
+                # ld -r multidef bomb, so a missing isolate tool is a FATAL (not a silent pass).
+                _rnca_ksym="hxlcl_calloc"; [ "$(uname -s)" = "Darwin" ] && _rnca_ksym="_hxlcl_calloc"
                 if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_calloc "$_rnca_full" "$_rnca_o" \
+                    objcopy --keep-global-symbol="$_rnca_ksym" "$_rnca_full" "$_rnca_o" \
                         || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL: objcopy isolate calloc failed" >&2; return 1; }
+                elif command -v llvm-objcopy >/dev/null 2>&1; then
+                    llvm-objcopy --keep-global-symbol="$_rnca_ksym" "$_rnca_full" "$_rnca_o" \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL: llvm-objcopy isolate calloc failed" >&2; return 1; }
+                elif [ "$(uname -s)" = "Darwin" ]; then
+                    ld -r "$_rnca_full" -o "$_rnca_o" -exported_symbol "$_rnca_ksym" \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL: ld -r isolate calloc failed" >&2; return 1; }
                 else
-                    cp "$_rnca_full" "$_rnca_o"
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL: no isolate tool (objcopy/llvm-objcopy/ld -r) on $(uname -sm) — cp fallback = multidef bomb, refusing" >&2; return 1
                 fi
                 [ -f "$_rnca_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL: $_rnca_o not produced" >&2; return 1; }
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_CALLOC"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnca_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC: hxlcl_calloc → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_CALLOC (calloc dropped) — ld -r multidef gate validates"
             else
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC: HEXA_RT_NATIVE_CALLOC=1 IGNORED — fp-ABI xmm Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim calloc member" >&2
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC: HEXA_RT_NATIVE_CALLOC=1 IGNORED — non-fp Route C hosts = x86_64-linux·arm64-linux·darwin-arm64 (host=$(uname -sm) ineligible); retaining libc shim calloc member" >&2
             fi
         fi
         # ── RFC061 §M8 RT-NATIVE-REALLOC (Route C whole-module emit · COMPOSITE
@@ -2100,7 +2220,18 @@ build_runtime_a_from_source() {
         # NO member → shim.o + archive byte-identical (release-integrity invariant).
         # x86_64-linux ONLY.
         if [ "${HEXA_RT_NATIVE_REALLOC:-0}" = "1" ]; then
-            if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
+            # zeroc #29: non-fp Route-C leaves (free/calloc/realloc) are pointer/size-only
+            # (no xmm fp-ABI) → the arm64 backend already lowers them (arm64_darwin.hexa
+            # _is_cabi && !_cabi_is_fp; routec_cabi_smoke emits arm64-darwin). The old
+            # x86-only gate was a libm-template copy. Extend to all 3 non-fp hosts.
+            # convergence stage-resolve-runtime-a-2 (Fable b2xiwq4w3).
+            _rnre_target=""
+            case "$(uname -s) $(uname -m)" in
+                "Linux x86_64"|"Linux amd64")  _rnre_target="x86_64-linux-gnu" ;;
+                "Linux aarch64"|"Linux arm64") _rnre_target="arm64-linux-gnu" ;;
+                "Darwin arm64")                _rnre_target="arm64-apple-darwin" ;;
+            esac
+            if [ -n "$_rnre_target" ]; then
                 local _rnre_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
                 if [ -z "$_rnre_bin" ]; then
                     echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: HEXA_RT_NATIVE_REALLOC=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
@@ -2112,23 +2243,33 @@ build_runtime_a_from_source() {
                 printf 'fn _rnre_unused() {}\n' > "$_rnre_drv"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC: emitting native Route C hxlcl_realloc .o via $_rnre_bin (HEXA_CABI_HXLCL=1, replacing libc-shim realloc member)…"
                 env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnre_bin" "$_rnre_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnre_s" stdlib/runtime/hxlcl_core.hexa \
+                    "$_rnre_bin" "$_rnre_drv" --emit=asm --target="$_rnre_target" -o "$_rnre_s" stdlib/runtime/hxlcl_core.hexa \
                     >"build/_rnre_realloc.log" 2>&1 \
                     || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: realloc Route C asm emit failed — see build/_rnre_realloc.log" >&2; cat "build/_rnre_realloc.log" >&2; return 1; }
                 [ -s "$_rnre_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: empty $_rnre_s" >&2; return 1; }
                 $CC $_mo_archflag -c "$_rnre_s" -o "$_rnre_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: assemble $_rnre_s failed" >&2; return 1; }
+                # per-OS single-strong-def isolate (darwin = Mach-O _-prefix + no GNU objcopy).
+                # A cp fallback would keep the whole-module .o's sibling C-ABI strong defs →
+                # ld -r multidef bomb, so a missing isolate tool is a FATAL (not a silent pass).
+                _rnre_ksym="hxlcl_realloc"; [ "$(uname -s)" = "Darwin" ] && _rnre_ksym="_hxlcl_realloc"
                 if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_realloc "$_rnre_full" "$_rnre_o" \
+                    objcopy --keep-global-symbol="$_rnre_ksym" "$_rnre_full" "$_rnre_o" \
                         || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: objcopy isolate realloc failed" >&2; return 1; }
+                elif command -v llvm-objcopy >/dev/null 2>&1; then
+                    llvm-objcopy --keep-global-symbol="$_rnre_ksym" "$_rnre_full" "$_rnre_o" \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: llvm-objcopy isolate realloc failed" >&2; return 1; }
+                elif [ "$(uname -s)" = "Darwin" ]; then
+                    ld -r "$_rnre_full" -o "$_rnre_o" -exported_symbol "$_rnre_ksym" \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: ld -r isolate realloc failed" >&2; return 1; }
                 else
-                    cp "$_rnre_full" "$_rnre_o"
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: no isolate tool (objcopy/llvm-objcopy/ld -r) on $(uname -sm) — cp fallback = multidef bomb, refusing" >&2; return 1
                 fi
                 [ -f "$_rnre_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: $_rnre_o not produced" >&2; return 1; }
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_REALLOC"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnre_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC: hxlcl_realloc → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_REALLOC (realloc dropped) — ld -r multidef gate validates"
             else
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC: HEXA_RT_NATIVE_REALLOC=1 IGNORED — fp-ABI xmm Route C is x86_64-linux-only (host=$(uname -sm)); retaining libc shim realloc member" >&2
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC: HEXA_RT_NATIVE_REALLOC=1 IGNORED — non-fp Route C hosts = x86_64-linux·arm64-linux·darwin-arm64 (host=$(uname -sm) ineligible); retaining libc shim realloc member" >&2
             fi
         fi
         # ── RFC061 §M8 RT-NATIVE-GETENV (Route C whole-module emit · non-libm leaf
@@ -2603,15 +2744,21 @@ build_runtime_a_from_source() {
         #      archive-internal resolution). NO HEXA_HAS_HEXA_RT_STDLIB (matches the
         #      default single-TU object; setting it would extern rt_log/… → multidef).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S2]: compile build/runtime.o (include-drop, HI-tier inline)…"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self -c self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self -c self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
         # (S3) runtime_core.o — standalone TU (sysheaders prelude), runtime_hi_gen.c
         #      KEPT (supplies the HI-tier rt_* C bodies). SAME seed -D set. NO
         #      HEXA_HAS_HEXA_RT_STDLIB (keeps those bodies inline, not externed).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S3]: compile build/runtime_core.o (standalone TU, runtime_hi_gen.c kept)…"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self -include self/runtime_core_sysheaders.h -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self -include self/runtime_core_sysheaders.h -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
         # (S4) hxlcl_shim.o — libc-delegate hxlcl_* sibling TU.
+        # own-start #29 coherence: $_zc_own_def MUST flow here too — without it the
+        # shim's hxlcl_atexit stays the glibc-atexit delegate (U atexit), and under
+        # the -nostartfiles ship link that pulls libc_nonshared.a(atexit.oS) whose
+        # __dso_handle (crtbegin) is absent → hexat/hexa link FATAL (measured aiden
+        # release_build @ main a372449a: "hidden symbol __dso_handle isn't defined").
+        # GATE-1 missed it because it ran the single-TU (non-MULTIOBJ) archive shape.
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S4]: compile build/hxlcl_shim.o…"
-        $CC -c -O2 $_mo_archflag -std=gnu11 -D_GNU_SOURCE $_mo_shim_def self/runtime_core_hxlcl_shim.c -o build/hxlcl_shim.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: hxlcl_shim.o compile failed" >&2; return 1; }
+        $CC -c -O2 $_mo_archflag -std=gnu11 -D_GNU_SOURCE $_mo_shim_def $_zc_own_def self/runtime_core_hxlcl_shim.c -o build/hxlcl_shim.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: hxlcl_shim.o compile failed" >&2; return 1; }
         # (S5) MULTIDEF SAFETY GATE — `ld -r` partial relocatable merge of all
         #      members. `ld -r` leaves undefined externs unresolved (the program-
         #      supplied compiler-side symbols are EXPECTED to be absent here, same as
@@ -2644,7 +2791,7 @@ build_runtime_a_from_source() {
             local _mo_cinc="$_mo_cuda_home/targets/x86_64-linux/include"
             [ -d "$_mo_cinc" ] || _mo_cinc="$_mo_cuda_home/include"
             echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA: build SEPARATE build/runtime.cuda.a (include-drop multi-object + cuda objects)"
-            $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
+            $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
             ar rcs build/runtime.cuda.a build/runtime_cuda_host.o build/runtime_core.o $_mo_hxlcl_members $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
             ls -la build/runtime.cuda.a
             local _mo_cseed _mo_cm
@@ -2657,10 +2804,14 @@ build_runtime_a_from_source() {
             done
             echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA: runtime.cuda.a member parity OK"
         fi
+        # zero-c #29 S1: FFI-dyn TU (dlopen/dlsym/host_ffi_*) compiled to .o but NOT ar'd
+        # into canonical runtime.a — keeps runtime.a nm-UND dl*-free; program/driver links
+        # pick up build/runtime_ffi_dyn.o. (state/zeroc-29-s1-ffi-floor-partition-spec)
+        [ -f "$ROOT/self/runtime_ffi_dyn.c" ] && $CC $CFLAGS -D_FORTIFY_SOURCE=0 -I self -c "$ROOT/self/runtime_ffi_dyn.c" -o build/runtime_ffi_dyn.o
         echo "$RA"
         return 0
     fi
-    $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -I self -c self/runtime.c -o build/runtime.o
+    $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -I self -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     if [ "${HEXA_CUDA:-0}" = "1" ] && [ -f build/runtime_cuda.o ] && [ -f build/runtime_cuda_dlink.o ]; then
@@ -2668,7 +2819,7 @@ build_runtime_a_from_source() {
         local _cinc="$_cuda_home/targets/x86_64-linux/include"
         [ -d "$_cinc" ] || _cinc="$_cuda_home/include"
         echo "[stage_resolve_runtime_a] CUDA-R1: building SEPARATE consumer archive build/runtime.cuda.a (runtime.c -DHEXA_CUDA -I$_cinc + runtime_cuda.o + runtime_cuda_dlink.o); toolchain keeps the CPU build/runtime.a (libcuda-free, GPU-less-host-runnable)"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_CUDA -I "$_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_CUDA -I "$_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o
         ar rcs build/runtime.cuda.a build/runtime_cuda_host.o $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
         ls -la build/runtime.cuda.a
         # ING-35 #2 — fail loudly if the CUDA archive dropped a native-core seed the
@@ -2687,6 +2838,8 @@ build_runtime_a_from_source() {
         done
         echo "[stage_resolve_runtime_a] CUDA-R1: runtime.cuda.a native-core parity OK ($(echo $extra_obj | wc -w) seed members present)"
     fi
+    # zero-c #29 S1: FFI-dyn TU compiled to .o (not ar'd) — see Case-B note above.
+    [ -f "$ROOT/self/runtime_ffi_dyn.c" ] && $CC $CFLAGS -D_FORTIFY_SOURCE=0 -I self -c "$ROOT/self/runtime_ffi_dyn.c" -o build/runtime_ffi_dyn.o
     echo "$RA"
 }
 
@@ -2801,6 +2954,14 @@ resolve_native_float_parse_exact_seed
 # strtod in __hexa_num_parse_float's NATIVE arm. Default-ON flip is a later 3-target
 # byteeq RECONVERGE-flip gated on the tail-corpus-vs-host-libc oracle (glibc+Apple).
 resolve_native_float_parse_hexinfnan_seed
+# RT-NATIVE REGEX (regex-flip wiring follow-on, default-OFF opt-IN): assemble the
+# arch-matched native regex_rt seed and enable HEXA_REGEX_NATIVE=1 ONLY when explicitly
+# requested (zero-c #29 regex flip). byteeq-NEUTRAL while OFF (emitter #ifdef block dead
+# → runtime.c byte-identical to the libc-regex baseline). ar's the 6 rt_regex_* shims
+# into runtime.a so they resolve in a STANDALONE link (consent-checker + faithful) —
+# closes the gap that reverted #4451 (convergence regex-rt-hexa-1). Default-ON flip is a
+# later 3-target byteeq RECONVERGE-flip gated on the regex-vs-host-libc corpus.
+resolve_native_regex_rt_seed
 # RT-NATIVE NUM (sh-num-native lane): assemble the arch-matched native num_core
 # seed (sets HEXA_RT_NUM_PARSE_INT_NATIVE=1 on all 3 production targets). Unknown
 # targets / missing seed keep the C strtoll string→int path.

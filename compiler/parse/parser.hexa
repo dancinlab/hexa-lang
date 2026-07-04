@@ -29,6 +29,15 @@ pub let mut p_tokens = []
 pub let mut p_pos = 0
 pub let mut p_file = ""
 pub let mut p_pending_annotations = []
+// HEXA-OWN L2 r2b — inline param-annotation carrier. `parse_param` absorbs
+// leading `@name(...)` annotations (`fn f(@own p: [i64])`) and converts each
+// `@own` into a fn-ITEM-level `Annotation{ name: "own", args:
+// [LiteralString <param-name>] }` staged here; `parse_fn_item` drains it into
+// `Item.annotations` after the param list closes. Same no-ripple idiom as the
+// `__cg` carriers — Param keeps NO annotations field, so zero AST/struct
+// churn across the 20+ Param construction sites. Reset before every param
+// list (fn + extern-fn) so a fn's own-params never leak into the next item.
+pub let mut p_param_own_anns: [Annotation] = []
 // Stage1 punch list Gap 5 + Gap 1 — parser-stage diagnostics. Filled by
 // the `expect_brace_*` helpers when a `{`/`}` is missing (HX0011/HX0012),
 // and when an import path resolves to a missing file (HX0010). Drained by
@@ -396,6 +405,31 @@ fn parse_type() -> TypeRef {
         }
         return TypeRef { kind: "named", name: pname, args: [], span: t.span }
     }
+    // `&T` / `&mut T` borrow type (HEXA-OWN L4 A1 — surface only). Rides the
+    // exact `*T` name-fold precedent above (:390-398): consume the leading
+    // `&` (and an optional `mut`, already a hard TokenKind::KwMut in type
+    // position) and fold the marker into the type-name string ("&T" / "&mut T")
+    // — zero new TokenKind, zero TypeRef schema change, no semantics. A1 is a
+    // PARSE-ONLY prep rung: the borrow marker is carried in the name so a later
+    // rung can read "shared", but there is NO borrow checking (Lane B) and NO
+    // move (A3) yet; the generic `named:` lowering treats it transparently
+    // exactly as `*T`. Purely additive — the corpus has no `&` in type
+    // position, so the emitted binary + diag stream stay byte-identical
+    // (gen3≡gen4).
+    if check_kind(TokenKind::Amp) {
+        advance()
+        let mut bmark = "&"
+        if check_kind(TokenKind::KwMut) {
+            advance()
+            bmark = "&mut "
+        }
+        let pointee = parse_type()
+        let mut bname = bmark
+        if len(pointee.name) > 0 {
+            bname = bmark + pointee.name
+        }
+        return TypeRef { kind: "named", name: bname, args: [], span: t.span }
+    }
     if check_kind(TokenKind::LBracket) {
         advance()
         let inner = parse_type()
@@ -699,6 +733,32 @@ fn parse_unary() -> Expr {
             atlas_ref: empty_atlas()
         }
     }
+    // `&x` / `&mut x` borrow-of expression (HEXA-OWN L4 A1 — surface only).
+    // Mirrors the Minus/Bang/Tilde prefix arm above: `&` at expression START
+    // is currently a parse error (binary Amp needs a left operand, consumed in
+    // parse_bitwise AFTER its left), so this arm is purely additive — the
+    // binary `a & b` path is UNTOUCHED. Reuse ExprKind::UnOp with text "&" /
+    // "&mut" (dispatch-on-text, like "-"/"!"/"~"); NO new ExprKind, NO lowering
+    // — A3 move / Lane-B borrow-check are later rungs.
+    if check_kind(TokenKind::Amp) {
+        let op = advance()
+        let mut optext = "&"
+        if check_kind(TokenKind::KwMut) {
+            advance()
+            optext = "&mut"
+        }
+        let inner = parse_unary()
+        let mut kids = []
+        kids.push(inner)
+        return Expr {
+            kind: ExprKind::UnOp,
+            span: op.span,
+            text: optext,
+            annotations: [],
+            children: kids,
+            atlas_ref: empty_atlas()
+        }
+    }
     return parse_postfix()
 }
 
@@ -779,6 +839,28 @@ fn parse_postfix() -> Expr {
                 text: "as",
                 annotations: [],
                 children: as_kids,
+                atlas_ref: empty_atlas()
+            }
+        } else if check_kind(TokenKind::Question) && env("HEXA_TRY_OP") == "1" {
+            // Postfix `?` try-propagation operator (RFC r15-D2) — opt-in.
+            // Carrier = ExprKind::UnOp with text "?" (postfix unary), child =
+            // the receiver. Deliberately NOT ExprKind::Try (= `try { } catch e
+            // { }`, ast.hexa) so NO new ExprKind variant is introduced — this
+            // avoids editing the ~24 exhaustive `_hir_is_*` / `_expr_kind_tag`
+            // match tables in ast_to_hir.hexa. ast_to_hir special-cases the
+            // text=="?" UnOp into a distinct HExpr.kind="tryop" string, which
+            // hir_to_mir lowers to a success-tag discriminant + early-return.
+            // Default-OFF: the lexer never emits Question unless HEXA_TRY_OP is
+            // set, so this branch is dead on every byteeq build (gen3≡gen4).
+            let q_tok = advance()
+            let mut q_kids = []
+            q_kids.push_nostat(e)
+            e = Expr {
+                kind: ExprKind::UnOp,
+                span: q_tok.span,
+                text: "?",
+                annotations: [],
+                children: q_kids,
                 atlas_ref: empty_atlas()
             }
         } else {
@@ -1489,9 +1571,14 @@ fn parse_return_expr() -> Expr {
     let kw = peek()
     advance()
     let mut kids = []
-    // return may be value-less; in practice we always emit a child here so
-    // resolve doesn't have to special-case empty-return.
-    if !check_kind(TokenKind::RBrace) && !check_kind(TokenKind::Semicolon) && !at_eof() {
+    // return may be value-less (kids stays empty before `}`/`;`/EOF).
+    // The value must START on the same line as the keyword — gen2's lexer
+    // emits Newline tokens and parse_return treats one as bare-return
+    // (self/lexer.hexa:250-252 · self/parser.hexa:1794-1806); this lexer
+    // drops newlines, so match that rule via span.line on the next token.
+    // Without it a bare `return` swallowed the NEXT LINE's ident-led stmt
+    // as its value (state/hexa-own/step0_verdict.md, HX2001 on `defer`).
+    if !check_kind(TokenKind::RBrace) && !check_kind(TokenKind::Semicolon) && !at_eof() && peek().span.line == kw.span.line {
         kids.push(parse_expr())
     }
     return Expr {
@@ -1575,11 +1662,38 @@ fn parse_try_expr() -> Expr {
 
 // throw EXPR — mirrors self/hexa_full.hexa::parse_throw_stmt (ThrowStmt).
 // children = [value_expr]; text unused.
+//
+// Throw-parity (gen2 reference, VERIFIED by reading): gen2 parse_throw_stmt
+// (self/parser.hexa:4380-4383) calls parse_expr UNCONDITIONALLY — a throw
+// value is REQUIRED. And because gen2's lexer emits Newline tokens
+// (suppressed only inside ()/[]), a value that does not START on the
+// keyword's line hits gen2 parse_primary's unknown-token arm ("unexpected
+// token Newline") exactly like a bare `throw` before `}`/`;`/EOF. So
+// gen2's rule = the throw value must start on the SAME LINE as `throw`;
+// anything else is a parse error. (This differs from `return`, where gen2
+// treats Newline/Eof/RBrace as a VALID bare return — see parse_return_expr.)
+//
+// This lexer drops newlines, so mirror the rule via span.line and diagnose
+// HX0015 here instead of letting parse_expr run on empty input: the
+// unrecognized-token fallthrough of parse_primary CONSUMES the offending
+// token as a placeholder Ident, which for `}`/`;` desyncs the enclosing
+// block and shifts the eventual HX0012 onto an innocent later token.
+// Emitting here WITHOUT consuming keeps recovery exact — `}`/`;`/Eof are
+// already _skip_to_resync sync points, and a next-line token is the start
+// of the sibling statement the block loop should parse next (hence no
+// _skip_to_resync call, unlike the HX0011/HX0012 sites: the cursor is
+// already at a safe boundary and resync could eat the sibling statement).
+// Downstream tolerates the 0-child Throw (HEXA_IGNORE_ERRORS runs):
+// hir_to_mir lowers it to the hexa_throw("error") sentinel.
 fn parse_throw_expr() -> Expr {
     let kw = peek()
     advance() // consume 'throw'
     let mut kids = []
-    if !check_kind(TokenKind::RBrace) && !check_kind(TokenKind::Semicolon) && !at_eof() {
+    if check_kind(TokenKind::RBrace) || check_kind(TokenKind::Semicolon) || at_eof()
+       || peek().span.line != kw.span.line {
+        let t = peek()
+        _push_parse_diag("HX0015", t.span, tag_of(t.kind))
+    } else {
         kids.push(parse_expr())
     }
     return Expr {
@@ -2186,7 +2300,44 @@ fn _cg_capture_inst_args(sp: Span) -> [Expr] {
 // ── Top-level item parsers ────────────────────────────────────
 
 fn parse_param() -> Param {
+    // HEXA-OWN L2 r2b — SURFACE DECISION (documented, reversible): a param
+    // may carry inline annotations, `fn f(@own p: [i64])`. Previously an `@`
+    // here broke the parse (`expect(Ident)` fabricated an empty token and
+    // never advanced), so absorbing is purely additive — no existing corpus
+    // routes `@` through param position → default AST byte-identical.
+    // `@own` on a param means the fn BODY treats that binding affinely: the
+    // existing move sites (let-RHS · assign-RHS · call-arg · return) mark it
+    // moved, and a later use warns HX3012 (flag-gated in the type-check
+    // layer, warning-band, zero ABI/emission change). The annotation is
+    // re-attached as a fn-level `@own("p")` carrier (see p_param_own_anns)
+    // rather than a Param field — no-ripple `__cg` idiom. Non-`own` param
+    // annotations are absorbed and silently dropped, mirroring parse_stmt's
+    // non-let tolerance. NOTE (frontend drift, deliberate): the gen2 parser
+    // (self/parser.hexa parse_params) does not accept `@` in param position —
+    // inline `@own p: T` is aprime-only, like the HX3012 lint itself; the
+    // gen2-parseable spelling is the fn-level `@own("p")` form, which lands
+    // in the same Item.annotations shape.
+    let mut anns: [Annotation] = []
+    while check_kind(TokenKind::At) {
+        anns.push(parse_annotation())
+    }
     let name_tok = expect(TokenKind::Ident)
+    let mut ai = 0
+    while ai < len(anns) {
+        if anns[ai].name == "own" {
+            let mut oargs = []
+            oargs.push(Expr {
+                kind: ExprKind::LiteralString,
+                span: name_tok.span,
+                text: name_tok.text,
+                annotations: [],
+                children: [],
+                atlas_ref: empty_atlas()
+            })
+            p_param_own_anns.push(Annotation { name: "own", args: oargs, span: anns[ai].span })
+        }
+        ai = ai + 1
+    }
     eat(TokenKind::Colon)
     let ty = parse_type()
     // RFC-074 Phase 2 — Param.typs is the positional payload carrier.
@@ -2237,6 +2388,8 @@ fn parse_fn_item(is_pub: bool, anns: [Annotation]) -> Item {
         }
     }
     eat(TokenKind::LParen)
+    // HEXA-OWN L2 r2b — fresh carrier per param list (see p_param_own_anns).
+    p_param_own_anns = []
     let mut params = []
     if !check_kind(TokenKind::RParen) {
         params.push(parse_param())
@@ -2246,6 +2399,11 @@ fn parse_fn_item(is_pub: bool, anns: [Annotation]) -> Item {
             params.push(parse_param())
         }
     }
+    // Snapshot the inline-@own carriers BEFORE the body parse (the body
+    // never routes through parse_param today, but the snapshot keeps this
+    // robust against future nested-item surfaces).
+    let own_anns = p_param_own_anns
+    p_param_own_anns = []
     eat(TokenKind::RParen)
     let mut ret_ty = empty_type()
     if check_kind(TokenKind::Arrow) {
@@ -2258,6 +2416,11 @@ fn parse_fn_item(is_pub: bool, anns: [Annotation]) -> Item {
     while cgi < len(cg_anns) {
         final_anns.push(cg_anns[cgi])
         cgi = cgi + 1
+    }
+    let mut owi = 0
+    while owi < len(own_anns) {
+        final_anns.push(own_anns[owi])
+        owi = owi + 1
     }
     return Item {
         kind: ItemKind::Fn,
@@ -2476,6 +2639,10 @@ fn parse_extern_fn_item(is_pub: bool, anns: [Annotation]) -> Item {
     eat(TokenKind::KwFn)
     let name_tok = expect(TokenKind::Ident)
     eat(TokenKind::LParen)
+    // HEXA-OWN L2 r2b — reset + drop: an extern decl has no body, so an
+    // inline `@own` param carries no lintable meaning; clear the carrier so
+    // nothing leaks into a following fn item.
+    p_param_own_anns = []
     let mut params = []
     if !check_kind(TokenKind::RParen) {
         params.push(parse_param())

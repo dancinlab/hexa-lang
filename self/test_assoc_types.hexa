@@ -11,9 +11,9 @@
 //  the pass implements, independent of the env gate.
 //
 //    R1 — every associated type declared by the trait MUST be bound in
-//         each impl (rustc E0046)                            → HX3011
+//         each impl (rustc E0046)                            → HX3019
 //    R2 — an impl may NOT bind an associated type the trait does not
-//         declare (rustc E0437)                              → HX3012
+//         declare (rustc E0437)                              → HX3020
 //    R3 — a slot bound (`type Item: Display;`) must be satisfied by the
 //         bound concrete type                                → HX3008/9
 //
@@ -105,7 +105,7 @@ fn assoc_check(decl_names, decl_bounds, bind_names, bind_types) {
     let mut d = 0
     while d < len(decl_names) {
         if !contains(bind_names, decl_names[d]) {
-            codes.push("HX3011")
+            codes.push("HX3019")
         }
         d = d + 1
     }
@@ -114,7 +114,7 @@ fn assoc_check(decl_names, decl_bounds, bind_names, bind_types) {
     while b < len(bind_names) {
         let di = index_of(decl_names, bind_names[b])
         if di < 0 {
-            codes.push("HX3012")
+            codes.push("HX3020")
         } else {
             let bound = decl_bounds[di]
             let bt = bind_types[b]
@@ -156,21 +156,21 @@ println("--- 0. correct binding (no diagnostics) ---")
 let c0 = assoc_check(["Item"], [""], ["Item"], ["u32"])
 check("clean impl emits 0 diagnostics", len(c0) == 0)
 
-// ── 1. R1 — missing binding → HX3011 ──
+// ── 1. R1 — missing binding → HX3019 ──
 // trait Iterator { type Item; type Idx; }  impl … { type Item = u32; }   (Idx unbound)
 println("")
 println("--- 1. R1 missing associated-type binding ---")
 let c1 = assoc_check(["Item", "Idx"], ["", ""], ["Item"], ["u32"])
-check("R1 emits 1 HX3011", count_code(c1, "HX3011") == 1)
-check("R1 emits no HX3012", count_code(c1, "HX3012") == 0)
+check("R1 emits 1 HX3019", count_code(c1, "HX3019") == 1)
+check("R1 emits no HX3020", count_code(c1, "HX3020") == 0)
 
-// ── 2. R2 — unknown binding → HX3012 ──
+// ── 2. R2 — unknown binding → HX3020 ──
 // trait Iterator { type Item; }  impl … { type Item = u32; type Bogus = int; }
 println("")
 println("--- 2. R2 unknown associated-type binding ---")
 let c2 = assoc_check(["Item"], [""], ["Item", "Bogus"], ["u32", "int"])
-check("R2 emits 1 HX3012", count_code(c2, "HX3012") == 1)
-check("R2 emits no HX3011", count_code(c2, "HX3011") == 0)
+check("R2 emits 1 HX3020", count_code(c2, "HX3020") == 1)
+check("R2 emits no HX3019", count_code(c2, "HX3019") == 0)
 
 // ── 3. R3 — bound satisfied (int: Ord) → no diagnostic ──
 // trait Keyed { type Key: Ord; }  impl … { type Key = int; }
@@ -200,8 +200,8 @@ check("R3 Ord+Num on f64 emits exactly 1 HX3008 (Num holds)", count_code(c5, "HX
 println("")
 println("--- 6. combined R1+R2+R3 ---")
 let c6 = assoc_check(["A", "B"], ["", "Ord"], ["B", "C"], ["f64", "int"])
-check("combined emits 1 HX3011 (A missing)", count_code(c6, "HX3011") == 1)
-check("combined emits 1 HX3012 (C unknown)", count_code(c6, "HX3012") == 1)
+check("combined emits 1 HX3019 (A missing)", count_code(c6, "HX3019") == 1)
+check("combined emits 1 HX3020 (C unknown)", count_code(c6, "HX3020") == 1)
 check("combined emits 1 HX3008 (f64 not Ord)", count_code(c6, "HX3008") == 1)
 
 // ── 7. conservative — non-primitive concrete stays silent on R3 ──

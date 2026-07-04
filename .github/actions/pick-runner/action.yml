@@ -8,7 +8,7 @@ description: >-
 
 inputs:
   kind:
-    description: 'linux | darwin — which pool to probe'
+    description: 'linux | darwin | darwin-any — which pool to probe (darwin-any = slot-free darwin class)'
     required: true
   eligible:
     description: >-

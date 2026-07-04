@@ -1,0 +1,106 @@
+// ═══════════════════════════════════════════════════════════
+//  test_drop_raii.hexa — Drop trait / RAII first slice (opt-in)
+//  SSOT: state/rfc_drop_raii.md
+//
+//  Demonstrates the Drop-trait surface (an `impl` method named
+//  `drop(self)`) + the explicit `drop x` point. Uses ONLY existing
+//  keywords (struct/impl/drop) — no new syntax (frozen-parser-safe).
+//
+//  DEFAULT build (HEXA_DROP_RAII unset): `drop x` is a no-op (arena
+//  memory model), so this program runs and PASSES unchanged — the
+//  cleanup log stays empty. The codegen emit is byte-identical to the
+//  pre-slice compiler (the gated branch is unreachable).
+//
+//  OPT-IN build (HEXA_DROP_RAII=1): `drop res` lowers to a runtime
+//  type-dispatched Resource__drop(res), so the cleanup log records the
+//  released fd — deterministic resource release à la Rust Drop /
+//  C++ RAII, orthogonal to the arena.
+//
+//  AUTO scope-exit (HEXA_DROP_RAII=1, this extension): a `let r = T{…}`
+//  binding whose type T declares `fn drop(self)` is auto-dropped at
+//  function exit in REVERSE declaration order (Rust §Destructors R1) —
+//  no explicit `drop r` needed. Implemented as a synthetic function-scope
+//  defer riding the existing LIFO `__fn_exit` drain (statically typed
+//  `T__drop(r)` emit). In DEFAULT mode this is a no-op, so the auto-drop
+//  case below asserts the empty cleanup_log invariant and stays green on
+//  the shipped compiler; the flag-ON auto-drop is build-host verified.
+// ═══════════════════════════════════════════════════════════
+
+let mut cleanup_log = []
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, actual, expected) {
+    if to_string(actual) == to_string(expected) {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + to_string(expected) + ", got: " + to_string(actual))
+        fail_count = fail_count + 1
+    }
+}
+
+// A resource-owning value: the arena frees the struct, but the fd
+// inside it must be released explicitly (this is what Drop buys).
+struct Resource { fd: i64 }
+
+impl Resource {
+    // The Drop convention: an impl method named `drop` taking self.
+    fn drop(self) {
+        cleanup_log.push("released:" + to_string(self.fd))
+    }
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  HEXA Drop / RAII (opt-in slice) Tests")
+println("═══════════════════════════════════════════════════════")
+
+let r = Resource { fd: 7 }
+check("resource fd readable before drop", r.fd, 7)
+
+// Explicit Drop point. DEFAULT: no-op. HEXA_DROP_RAII=1: Resource__drop(r).
+drop r
+
+// In DEFAULT mode the cleanup_log is empty (drop = no-op). We assert the
+// DEFAULT-mode invariant here so the test is green on the shipped compiler;
+// the flag-ON behavior (cleanup_log == ["released:7"]) is verified on a
+// build host per RFC §7.
+check("default-mode: drop is a no-op (arena model)", len(cleanup_log), 0)
+
+// The Drop method is still a normal callable method (parses + dispatches),
+// independent of the `drop` keyword — exercise it directly to prove the
+// impl surface is real.
+let r2 = Resource { fd: 11 }
+r2.drop()
+check("explicit drop() method call runs", to_string(cleanup_log), to_string(["released:11"]))
+
+// ── AUTO scope-exit drop (extension) ──
+// A Drop-typed binding with NO explicit `drop` keyword. Under the opt-in
+// HEXA_DROP_RAII build the compiler synthesizes a function-scope defer so
+// auto_owned is dropped at function exit in reverse declaration order
+// (Rust §Destructors). In DEFAULT mode it is a pure no-op — so we assert
+// the function returns its value untouched and that NO auto-cleanup ran on
+// the shipped compiler (cleanup_log unchanged by the binding alone).
+fn make_owned(tag) {
+    let auto_owned = Resource { fd: tag }
+    // No `drop auto_owned` here — auto scope-exit drop (flag-ON) handles it.
+    return auto_owned.fd
+}
+
+let log_before_auto = to_string(cleanup_log)
+let owned_fd = make_owned(21)
+check("auto-owned binding value readable", owned_fd, 21)
+// DEFAULT mode: the scope-exit auto-drop is a no-op, so cleanup_log is
+// unchanged by the un-dropped binding. (flag-ON expectation:
+// cleanup_log gains "released:21" at make_owned exit — build-host verified.)
+check("default-mode: auto scope-exit drop is a no-op", to_string(cleanup_log), log_before_auto)
+
+println("═══════════════════════════════════════════════════════")
+let total = pass_count + fail_count
+println("  Results: " + to_string(pass_count) + " PASS / " + to_string(fail_count) + " FAIL / " + to_string(total) + " total")
+if fail_count == 0 {
+    println("  ALL DROP/RAII SLICE TESTS PASSED!")
+} else {
+    println("  SOME TESTS FAILED")
+}
+println("═══════════════════════════════════════════════════════")

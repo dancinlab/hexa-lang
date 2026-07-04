@@ -1410,9 +1410,9 @@ fn os_clang_cflags() {
     return base
 }
 fn os_clang_ldflags() {
-    let mut base = " -lpthread"
+    let mut base = " -lpthread -lm"
     if exec("uname 2>/dev/null | tr -d ' \\n\\t'") == "Linux" {
-        base = " -lpthread"  // zero-c #29: runtime is libm-free (flag-off runtime.a nm-UND libm = ∅, #4299-4313) — drop -lm
+        base = " -lpthread -lm"  // H_9111/H_9119: runtime.c special-fns (erf/erfc/tgamma/j0/j1 @6010-6014, gelu=erf/softmax) are UNCONDITIONAL bare libm — re-add -lm (reverts zero-c #29 libm-free claim; dlsym erf undefined on Ubuntu pods)
         // own-start #29 PR-B (C1/C2): -nostartfiles when the scaffold-bearing runtime.a is on the link.
         // #4395 makes runtime.a CARRY own _start/_hx_start_c/_hx_run_init_array (self/runtime.c #ifdef
         // HEXA_ZEROC_OWN_START) when built with HEXA_ZEROC_OWN_START=1; without -nostartfiles the clang
@@ -1472,33 +1472,60 @@ fn os_clang_ldflags() {
         }
     }
     if cuda_on {
-        // CUDA_HOME from env (release job sets it); else the standard toolkit root on
-        // a consumer GPU host (libcudart resolves from /usr/local/cuda/lib64).
-        let cuda_home = if env("CUDA_HOME") != "" { env("CUDA_HOME") } else { "/usr/local/cuda" }
         let mut cuda_l = ""
-        if cuda_home != "" {
-            // toolkit layout: $CUDA_HOME/targets/x86_64-linux/lib (preferred) or
-            // $CUDA_HOME/lib64 (classic). Probe for whichever holds libcudart.
-            let tgt_lib = cuda_home + "/targets/x86_64-linux/lib"
-            let lib64 = cuda_home + "/lib64"
-            let cuda_probe = exec("test -f '" + tgt_lib + "/libcudart.so' && printf '" + tgt_lib + "' || (test -f '" + lib64 + "/libcudart.so' && printf '" + lib64 + "' || printf '')")
-            // libcuda.so (the CUDA driver stub) ships ONLY in <lib>/stubs on a
-            // GPU-less build host (the real driver lib appears at run time on a GPU
-            // box). Without the stubs search path `-lcuda` fails the link with
-            // "ld: cannot find -lcuda" — #3696 added stubs to release_package's
-            // FINAL link but this self-compile (hexa run) cuda LIBS still omitted it.
-            if cuda_probe != "" { cuda_l = " -L" + cuda_probe.trim() + " -L" + cuda_probe.trim() + "/stubs" }
+        let mut cuda_rpath = ""
+        // ── pip-nvidia farm — a bare rent pod (vast/runpod) has NO toolkit; the only
+        // CUDA libs are SONAME-only pip wheels under site-packages. install.sh wires
+        // them into the hexa-owned symlink farm $HX_HOME/cuda-libs (bare .so linker
+        // names + one stable dir). Probe it FIRST. A toolkit host never has the farm
+        // (install.sh skips wiring when toolkit cudart resolves) → cuda_l stays ""
+        // → the CUDA_HOME branch below emits the exact link line as before (NEUTRAL).
+        // rpath: the farm is OFF the loader's default search path, so embed it — the
+        // linked binary must LOAD libcudart.so.12 with zero env exports (canonical DX).
+        let farm = hx_home + "/cuda-libs"
+        let farm_ok = exec("test -f '" + farm + "/libcudart.so' && printf 1 || printf 0").trim()
+        if farm_ok == "1" {
+            cuda_l = " -L" + farm
+            cuda_rpath = " -Wl,-rpath," + farm
+        }
+        if cuda_l == "" {
+            // CUDA_HOME from env (release job sets it); else the standard toolkit root on
+            // a consumer GPU host (libcudart resolves from /usr/local/cuda/lib64).
+            let cuda_home = if env("CUDA_HOME") != "" { env("CUDA_HOME") } else { "/usr/local/cuda" }
+            if cuda_home != "" {
+                // toolkit layout: $CUDA_HOME/targets/x86_64-linux/lib (preferred) or
+                // $CUDA_HOME/lib64 (classic). stubs holds the GPU-less libcuda.so stub.
+                let tgt_lib = cuda_home + "/targets/x86_64-linux/lib"
+                let lib64 = cuda_home + "/lib64"
+                let cuda_probe = exec("test -f '" + tgt_lib + "/libcudart.so' && printf '" + tgt_lib + "' || (test -f '" + lib64 + "/libcudart.so' && printf '" + lib64 + "' || printf '')")
+                if cuda_probe != "" { cuda_l = " -L" + cuda_probe.trim() + " -L" + cuda_probe.trim() + "/stubs" }
+            }
+        }
+        if cuda_l == "" {
+            // last-resort LIVE pip probe: a manually-installed cuda runtime.a on a bare
+            // pod that never ran install.sh (the runtime.a auto-detect above set cuda_on
+            // with no farm and no toolkit). Build the same farm lazily — idempotent,
+            // hexa-owned — then subsequent links take the farm path.
+            let _pyroots = exec("python3 -c 'import nvidia; print(chr(10).join(nvidia.__path__))' 2>/dev/null | tr '\n' ' '").trim()
+            let _roots = if _pyroots != "" { _pyroots } else { exec("ls -d /opt/conda/lib/python3*/site-packages/nvidia /usr/local/lib/python3*/dist-packages/nvidia /usr/lib/python3*/dist-packages/nvidia $HOME/.local/lib/python3*/site-packages/nvidia 2>/dev/null | tr '\n' ' '").trim() }
+            if _roots != "" {
+                let _ = exec("mkdir -p '" + farm + "'; for r in " + _roots + "; do for f in $r/*/lib/lib*.so* $r/*/lib/lib*.a; do [ -e $f ] || continue; b=$(basename $f); ln -sf $f '" + farm + "'/$b; case $b in *.so.*) ln -sf $f '" + farm + "'/${b%%.so.*}.so;; esac; done; done; true")
+                let _2 = exec("if [ ! -e '" + farm + "/libcuda.so' ]; then for c in $(ldconfig -p 2>/dev/null | sed -n 's/.*libcuda\\.so\\.1 .*=> //p' | head -1) /usr/lib/x86_64-linux-gnu/libcuda.so.1 /usr/lib64/libcuda.so.1; do [ -e $c ] && ln -sf $c '" + farm + "/libcuda.so' && break; done; fi; if [ ! -e '" + farm + "/libcuda.so' ]; then for r in " + _roots + "; do for s in $r/*/lib/stubs/libcuda.so; do [ -e $s ] && ln -sf $s '" + farm + "/libcuda.so'; done; done; fi; true")
+                let farm_ok2 = exec("test -f '" + farm + "/libcudart.so' && printf 1 || printf 0").trim()
+                if farm_ok2 == "1" {
+                    cuda_l = " -L" + farm
+                    cuda_rpath = " -Wl,-rpath," + farm
+                }
+            }
         }
         // cudadevrt is a STATIC archive shipped by the toolkit (device-runtime for
-        // the -dlink blob); cudart/cuda are the host-side shared libs always needed
-        // (cudaLaunchKernel / device alloc). cuBLAS is now an OPT-IN constraint
-        // (native-canonical-default): the forge runtime_cuda.o defaults to OWN
-        // kernels with ZERO undefined cublas* symbols, so -lcublas is dead weight by
-        // default — only HEXA_USE_CUBLAS=1 (the opt-in cuBLAS fast path, which emits
-        // cublas* call-sites) needs it. This keeps the consumer link cuBLAS-FREE by
-        // default (no libcublas DT_NEEDED), matching the cuBLAS-independent runtime.
+        // the -dlink blob); cudart/cuda are the host-side shared libs always needed.
+        // cuBLAS is OPT-IN (native-canonical-default): forge runtime_cuda.o defaults
+        // to OWN kernels with ZERO undefined cublas* symbols — only HEXA_USE_CUBLAS=1
+        // needs -lcublas. cuda_rpath appended LAST so the toolkit-host flag prefix is
+        // character-identical to before (cuda_rpath == "" there → NEUTRAL).
         let cublas_l = if env("HEXA_USE_CUBLAS") == "1" { " -lcublas" } else { "" }
-        return base + cuda_l + " -lcudart" + cublas_l + " -lcuda -lcudadevrt"
+        return base + cuda_l + " -lcudart" + cublas_l + " -lcuda -lcudadevrt" + cuda_rpath
     }
     // 2026-05-14: libsodium link flags (when found via pkg-config or brew).
     let probe = exec("pkg-config --libs libsodium 2>/dev/null")
@@ -1583,6 +1610,24 @@ fn strict_fp_cflags(c_file) {
     return "-ffp-contract=off -fno-fast-math -fno-associative-math -fno-reciprocal-math -fsignaling-nans "
 }
 
+// zero-c #29 PR-2: link the partitioned FFI TU (build/runtime_ffi_dyn.o) into a PROGRAM
+// only when codegen marked it HEXA_FFI_DYN_TU: 1 (a surviving vendor extern or an
+// interpreter host_ffi dispatch). Non-FFI programs get "" → byte-identical to the pre-S1
+// link. Drivers (hexat/hexa) link runtime_ffi_dyn.o unconditionally (they run the
+// dynamic-FFI interpreter) — that stays in _ffi_dyn_obj call sites. Mirrors strict_fp_cflags.
+fn ffi_dyn_objs(c_file, selfdir) {
+    // Link the partitioned FFI TU when the generated C either carries the codegen marker
+    // OR directly references an FFI runtime symbol. The marker alone was MISSED on some
+    // codegen paths (e.g. anima core/decode.hexa emits `hexa_ffi_dlsym` refs but no
+    // HEXA_FFI_DYN_TU marker → prebuilt-runtime.a link → `undefined reference to
+    // hexa_ffi_dlsym`). Detecting the symbols directly closes that gap. Non-FFI programs
+    // reference none → "" → byte-identical to the pre-S1 link (codegen never emits these
+    // names for non-FFI code; the c_file greps the transpiled user code, not #included headers).
+    let probe = exec("grep -qE 'HEXA_FFI_DYN_TU: 1|hexa_ffi_dlsym|hexa_ffi_dlopen|host_ffi_' '" + c_file + "' 2>/dev/null && printf yes || printf no")
+    if probe != "yes" { return "" }
+    return _ffi_dyn_obj(selfdir)
+}
+
 // #12 leftover (3) — wilson-needs-hexa-build-out-of-tree: `hexa cc` /
 // `hexa cc --regen` resolved `self/native/hexa_cc.c`, the SSOT modules and
 // the `-I` paths *relative to cwd*, so invoking from outside the repo failed
@@ -1601,6 +1646,20 @@ fn resolve_hxroot() {
     if file_exists("./self/native/hexa_cc.c") { return "." }
     // Last resort: keep cwd-relative behavior (will fail loudly downstream).
     return "."
+}
+
+// zero-c #29 S1 — FFI floor-partition: the dlopen/dlsym/host_ffi_* TU now lives in
+// self/runtime_ffi_dyn.c (compiled to runtime_ffi_dyn.o, NOT ar'd into runtime.a) so the
+// canonical runtime.a carries no dl* nm-UND. Any binary that uses FFI — every driver
+// (hexat/hexa run the dynamic-FFI interpreter) and every @link program — must link this
+// .o. Compile-if-needed and return the quoted path (leading space) or "" if source absent.
+fn _ffi_dyn_obj(selfdir: str) -> str {
+    let src = selfdir + "/runtime_ffi_dyn.c"
+    if !file_exists(src) { return "" }
+    let obj = selfdir + "/runtime_ffi_dyn.o"
+    let _ = exec(host_cc() + " -O2 -D_GNU_SOURCE -I '" + selfdir + "' -c '" + src + "' -o '" + obj + "' 2>&1")
+    if !file_exists(obj) { return "" }
+    return " '" + obj + "'"
 }
 
 // .c-graduation Phase-3 driver fix (2026-05-29): resolve the runtime link
@@ -1723,17 +1782,18 @@ fn cmd_cc() {
         // the SAME prebuilt runtime.a (rt_o) as the user-binary link, so when that
         // archive is the CUDA build its runtime_cuda*.o cuda symbols need -lcudart/
         // -lcudadevrt here too — a bare link left them undefined and the hexat rebuild
-        // died (summer pool 2026-06-27). os_clang_ldflags()'s Linux base is "-lpthread"
-        // (zero-c #29: -lm dropped — runtime is libm-free, flag-off runtime.a nm-UND
-        // libm = ∅) so this is a strict superset on the CPU default (cuda_on=false →
+        // died (summer pool 2026-06-27). os_clang_ldflags()'s Linux base is now
+        // "-lpthread -lm" (H_9111/H_9119: runtime.c has UNCONDITIONAL bare libm —
+        // erf/erfc/tgamma/j0/j1 @6010-6014, gelu=erf/softmax=exp — so -lm is required;
+        // reverts zero-c #29's false "libm-free" claim) so this is a strict superset on the CPU default (cuda_on=false →
         // identical cuda-free link), plus the libsodium/openssl flags the runtime.a
         // may reference — consistent with the user-binary link sites.
-        cmd = host_cc() + " -O2 -D_GNU_SOURCE -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexat'" + os_clang_ldflags() + " 2>&1"
+        cmd = host_cc() + " -O2 -D_GNU_SOURCE -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "'" + _ffi_dyn_obj(__hxroot + "/self") + " -o '" + __hxroot + "/build/hexat'" + os_clang_ldflags() + " 2>&1"
     } else {
         // macOS (Darwin) — libSystem 이 libm 자동 포함, _GNU_SOURCE 무의미.
         // 단, `-I self` 는 runtime.h 경로 해석에 반드시 필요. os_clang_ldflags() 로
         // user-binary 링크와 동일 플래그(예: cuda runtime.a 시 cudart) 적용.
-        cmd = host_cc() + " -O2 -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexat'" + os_clang_ldflags() + " 2>&1"
+        cmd = host_cc() + " -O2 -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "'" + _ffi_dyn_obj(__hxroot + "/self") + " -o '" + __hxroot + "/build/hexat'" + os_clang_ldflags() + " 2>&1"
     }
     println("  " + cmd)
     let r = exec(cmd)
@@ -2267,7 +2327,7 @@ fn cmd_regen_cc() {
                 return
             }
         }
-        let cc_link = host_cc() + " -O2 /tmp/hexa_cc.new.o '" + __hxroot + "/self/runtime.o' -o /tmp/hexat.new" + os_clang_ldflags() + " 2>&1 | head -40"
+        let cc_link = host_cc() + " -O2 /tmp/hexa_cc.new.o '" + __hxroot + "/self/runtime.o'" + _ffi_dyn_obj(__hxroot + "/self") + " -o /tmp/hexat.new" + os_clang_ldflags() + " 2>&1 | head -40"
         println("  " + cc_link)
         let cc_link_out = exec(cc_link)
         if len(cc_link_out) > 0 { println(cc_link_out) }
@@ -3145,6 +3205,40 @@ fn cmd_build(src, out, c_only, target, shared) {
             println("  [flat] warn: compiled module_loader not found — falling back to raw src")
         }
     }
+    // ─── HX3012 @own use-after-move lint — opt-in ADVISORY (HEXA_OWN_LINT=1) ──
+    // Vehicle (b), state/hexa-own/ownlint_shipping_wiring.md §2b/§3. The real
+    // own-lint lives only in the native frontend (compiler/check/types.hexa,
+    // itself gated on HEXA_OWN_LINT — the env var inherits into the child, so
+    // ONE flag both triggers this block and activates the lint registry). The
+    // gen2 ship path runs no own pass; under the flag we spawn one advisory
+    // aprime_cc compile of the flattened source (sits AFTER flatten so it sees
+    // __actual_src, BEFORE the backend select so it covers both C and native
+    // backends) and forward its merged diag stream (HX3012 + anything else
+    // aprime renders) on stderr. `--emit=obj` deliberately: it takes the
+    // empty_atlas_index() branch in compiler/main.hexa (skips the measured
+    // ~1.85GB full-atlas RSS); the .o itself is discarded — only diags matter.
+    // The `_drv.hexa` placeholder token is REQUIRED by aprime's
+    // _normalize_argv (see the native-backend stage-1 comment below).
+    // ADVISORY CONTRACT: never changes build rc, never blocks emission, never
+    // touches the produced artifact — aprime rc is deliberately ignored (it is
+    // measured rc=1 on gen2-valid shipping files, census §2b); a missing
+    // aprime_cc degrades to ONE loud line, NOT die_no_native_cc (a lint must
+    // never kill a build). Flag unset = this whole block is a single env()
+    // compare — default path byte-identical (byteeq 3-target gate = proof).
+    if env("HEXA_OWN_LINT") == "1" {
+        let __ol_cc = resolve_native_cc()
+        if len(__ol_cc) == 0 {
+            eprintln("  [own-lint] advisory unavailable: aprime_cc not found — build it: bash tool/build_aprime.sh -o build/aprime_cc (build continues)")
+        } else {
+            let __ol_obj = runtime_tmpname("hexa_own_lint") + ".o"
+            let __ol_out = exec("'" + __ol_cc + "' _drv.hexa --emit=obj -o '" + __ol_obj + "' '" + __actual_src + "' 2>&1")
+            if len(__ol_out) > 0 {
+                eprintln("  [own-lint] advisory diagnostics (aprime frontend · rc ignored · build continues):")
+                eprintln(__ol_out)
+            }
+            let _ = exec("rm -f '" + __ol_obj + "' 2>/dev/null")
+        }
+    }
     // ─── S5 native-codegen backend selector ────────────────────────────
     // HEXA_BACKEND=native → after the flatten step above, dispatch CODEGEN
     // to the native compiler (aprime_cc) instead of the hexat transpiler.
@@ -3662,7 +3756,11 @@ fn cmd_build(src, out, c_only, target, shared) {
         // gemm-omp r1: opt-in `-fopenmp` at the final link too, so libgomp/libomp
         // is pulled when the runtime object carries OpenMP (HEXA_OMP=1 + probe).
         // "" when OMP off → link command byte-identical to the prior default ship.
-        compile = host_cc() + " -O2 " + omp_cflags() + _shared_cflags + os_clang_cflags() + _strict + cc_deep_nest_cflags() + "-I '" + __self_dir + "' " + c_file + " " + _rt_input + " -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
+        // zero-c #29 S1: link the partitioned FFI TU (dl* moved out of runtime.a) so any
+        // @link program AND the compiler-as-program (interpreter host_ffi_*) resolves. PR-1
+        // links it unconditionally (byteeq-neutral: gen .o bytes unchanged); PR-2 will gate
+        // it on a surviving vendor extern (HEXA_FFI_DYN_TU marker).
+        compile = host_cc() + " -O2 " + omp_cflags() + _shared_cflags + os_clang_cflags() + _strict + cc_deep_nest_cflags() + "-I '" + __self_dir + "' " + c_file + " " + _rt_input + ffi_dyn_objs(c_file, __self_dir) + " -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
     } else {
         let zt = target_zig_triple(target)
         if len(zt) == 0 {
@@ -3683,7 +3781,7 @@ fn cmd_build(src, out, c_only, target, shared) {
         let mut ldf_target = ""
         if target.starts_with("linux-") {
             cf_target = "-D_GNU_SOURCE "
-            ldf_target = ""  // zero-c #29: runtime libm-free — drop -lm (cross zig-cc)
+            ldf_target = " -lm"  // H_9111/H_9119: runtime.c erf/erfc/tgamma/j0/j1 are unconditional bare libm — Linux cross targets need -lm (reverts zero-c #29 libm-free claim)
         }
         compile = "zig cc -O2 -target " + zt + static_f + " " + cf_target + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " '" + __runtime_c + "' -o '" + tmp + "'" + ldf_target + " 2>&1"
     }
@@ -4443,7 +4541,7 @@ fn cmd_run_user_direct(file, extra_args) {
                     // reaches here). Default-OFF byte-neutral: else-branch char-identical to today.
                     // Loud-fail-safe: a failed ld link falls through to the clang path below.
                     let _zc_own = env_var("HEXA_ZEROC_OWN_START") == "1"
-                    let _lnk = if _zc_own { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread --end-group -L'" + _crt + "' -o '" + _nbin + "' 2>&1" } else { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _crt + "/crt1.o' '" + _crt + "/crti.o' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread --end-group '" + _crt + "/crtn.o' -L'" + _crt + "' -o '" + _nbin + "' 2>&1" }
+                    let _lnk = if _zc_own { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread -lm --end-group -L'" + _crt + "' -o '" + _nbin + "' 2>&1" } else { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _crt + "/crt1.o' '" + _crt + "/crti.o' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread -lm --end-group '" + _crt + "/crtn.o' -L'" + _crt + "' -o '" + _nbin + "' 2>&1" }
                     let _lr = exec(_lnk)
                     let _nbin_ok = exec("test -x '" + _nbin + "' && printf yes || printf no")
                     if _nbin_ok == "yes" {
@@ -5709,8 +5807,24 @@ fn cmd_gpu_status() {
         println("          not compiled in). cuda_available()==1 needs the `-cuda` asset.")
         println("    ENABLE GPU: on a CUDA host run  HEXA_CUDA=1 sh install.sh")
         println("          (auto-installs the -cuda asset; install.sh prefer_cuda() also")
-        println("           auto-detects nvidia-smi+libcudart → cuda when HEXA_CUDA unset,")
-        println("           pip-install-torch style). Verify: hexa run 'fn main(){print(cuda_available())}' → 1")
+        println("           auto-detects nvidia-smi + libcudart [toolkit OR pip nvidia-cuda-")
+        println("           runtime-cu12 wheels] → cuda when HEXA_CUDA unset, pip-install-torch")
+        println("           style). Verify: hexa run 'fn main(){print(cuda_available())}' → 1")
+    }
+    // CUDA LIB SOURCE — where the -cuda link resolves cudart/cuda from (GPU-status
+    // SSOT: makes the bare-pod pip symlink farm diagnosable). farm > toolkit > none,
+    // mirroring os_clang_ldflags' probe order.
+    let hx_home_g = if env_var("HX_HOME") != "" { env_var("HX_HOME") } else { env_var("HOME") + "/.hx" }
+    let farm_g = hx_home_g + "/cuda-libs"
+    if exec("test -f '" + farm_g + "/libcudart.so' && printf 1 || printf 0").trim() == "1" {
+        println("  cuda libs:         pip farm " + farm_g + "  (bare rent pod — SONAME wheels symlinked + rpath)")
+    } else {
+        let ch = if env_var("CUDA_HOME") != "" { env_var("CUDA_HOME") } else { "/usr/local/cuda" }
+        if exec("test -e '" + ch + "/lib64/libcudart.so' -o -e '" + ch + "/targets/x86_64-linux/lib/libcudart.so' && printf 1 || printf 0").trim() == "1" {
+            println("  cuda libs:         toolkit " + ch)
+        } else {
+            println("  cuda libs:         (none resolved — CPU build, or a -cuda build needs a toolkit / pip nvidia-cuda-runtime-cu12)")
+        }
     }
     println("")
     println("OWN-KERNEL POLARITY  (native-canonical-default; cuBLAS = opt-in constraint)")

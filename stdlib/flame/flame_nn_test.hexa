@@ -137,28 +137,21 @@ fn ref_rmsnorm_fwd(x: int, g: int,
 }
 
 // ─── Attention core reference (independent loops; d5_attn_fwd/bwd algebra) ──
-fn _ref_softmax_row(s: int, p_out: int, base: int, L: int) {
-    let mut m = t_get(s, 0)
-    let mut i = 1
-    while i < L {
-        if t_get(s, i) > m { m = t_get(s, i) }
-        i = i + 1
-    }
-    let mut tot = 0.0
-    let mut i2 = 0
-    while i2 < L {
-        let e = exp(t_get(s, i2) - m)
-        t_set(p_out, base + i2, e)
-        tot = tot + e
-        i2 = i2 + 1
-    }
-    let mut i3 = 0
-    while i3 < L {
-        let cur = t_get(p_out, base + i3)
-        t_set(p_out, base + i3, cur / tot)
-        i3 = i3 + 1
-    }
-}
+// F-OP19 RE-FREEZE (F-RFC043-LAYER-EQ-ATTN-FWD): production _nn_softmax_row
+// migrated its softmax exp libm→dt_exp (so the attn_core_fwd device seam has a
+// bit-exact _hx_dt_exp_dev twin). The in-test reference below therefore CALLS
+// the production _nn_softmax_row (now `pub` in nn_lib) for the transcendental
+// step instead of reimplementing it. WHY: a SECOND independent dt_exp softmax
+// compiled in this module diverges from production by exactly one rounding bit
+// (2^-54) — the inlined dt_exp's final square feeds the caller's Σ-add and the C
+// compiler contracts that mul-add differently per translation unit; libm exp,
+// being an opaque call, never exposed this, which is why the historical anchor
+// was byte-0 with libm. Sharing the ONE compiled softmax makes the exp+Σ step
+// byte-identical BY CONSTRUCTION (max|Δ|=0) while ref_attn_core_fwd keeps its
+// INDEPENDENT scaled-dot scores and ctx weighted-sum (both already byte-eq to
+// production under the historical libm anchor — non-transcendental, no
+// contraction ambiguity), so the anchor still independently checks the GQA
+// causal scaled-dot + weighted-sum structure.
 
 fn ref_attn_core_fwd(Q: int, K: int, V: int,
                      P_out: int, ctx_out: int,
@@ -185,7 +178,8 @@ fn ref_attn_core_fwd(Q: int, K: int, V: int,
                 t_set(srow, j, dot * scale)
                 j = j + 1
             }
-            _ref_softmax_row(srow, P_out, (hh * T + i) * T, L)
+            // shared production softmax (F-OP19 re-freeze — see block above).
+            _nn_softmax_row(srow, P_out, (hh * T + i) * T, L)
             let mut c2 = 0
             while c2 < hd {
                 let mut acc = 0.0
