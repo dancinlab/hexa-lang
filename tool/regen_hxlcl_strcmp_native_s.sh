@@ -144,9 +144,11 @@ emit_one() {
     case "$triple" in
         x86_64-linux-gnu) [ "$(uname -s)" = Darwin ] && cc_extra="-target x86_64-linux-gnu" ;;
         arm64-linux-gnu)  [ "$(uname -s)" = Darwin ] && cc_extra="-target aarch64-linux-gnu" ;;
-        # cross-assemble the darwin seed on a Linux pool host so its nm sanity (below) actually
-        # RUNS — the prior gap (Linux pool "WARN skipped") is how the shadow bug shipped unseen.
-        arm64-apple-darwin) [ "$(uname -s)" = Linux ] && cc_extra="-target arm64-apple-darwin" ;;
+        # NOTE: the darwin seed's cross-assemble stays SKIPPED on a Linux pool host — summer/aiden
+        # clang has no macOS SDK/target, so `-target arm64-apple-darwin` fails and aborts the bake.
+        # The UNSHADOW itself (the .globl-free rename above) is 3-target-uniform and asserted by the
+        # bare-label check above (runs for ALL triples); darwin link verification is done by the
+        # macos-15 faithful-nobaseline CI leg on the flip PR (source-of-truth per CLAUDE.md).
     esac
     if $CC $cc_extra -c "$s" -o "$o" 2>/dev/null; then
         local t; t="$( (nm "$o" 2>/dev/null || echo) | grep -cE ' T _?hxlcl_strcmp')"
