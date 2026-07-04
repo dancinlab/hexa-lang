@@ -1,0 +1,107 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_prod_nn_attn_bwd_devseam_eq.hexa — LLM-path GQA attention-core BWD
+//  host-seam byte-eq ORACLE.
+//
+//  HEXA-0POD: 0-GPU (`hexa run`) oracle proving the NEW device-resident seam in
+//  stdlib/flame nn_lib (nn_attn_core_bwd) routes through the
+//  forge_dispatch_attn_core_bwd host body BYTE-EQ to the pure-host
+//  nn_attn_core_bwd reference loop. Off-CUDA the dispatcher takes the host
+//  fallback body (rc=0); on-CUDA it takes the single-thread device kernel —
+//  both are locked byte-eq to this host reference (max|Δ|=0).
+//
+//  BIT-EXACT CONTRACT: the dP_row/sdot reductions accumulate SEQUENTIALLY; the
+//  dV/dK cross-head accumulation runs in the host (hh→i→j→c) order under ONE
+//  thread (NO atomics, NO tree re-assoc); scale = 1/libm-sqrt(hd) (IEEE
+//  correctly-rounded, == device sqrt(double)); every mul-into-add/sub uses
+//  __dmul_rn/__dadd_rn/__dsub_rn (host FP_CONTRACT OFF) → NO FMA fuse. NO exp
+//  on the bwd path (the softmax Jacobian is closed in P).
+//
+//  ONLY the BWD seam is exercised — attn_core_FWD is DEFERRED because its
+//  softmax exp() binds to libm exp (bare builtin) and no device exp matches it
+//  bit-for-bit without moving the host softmax to dt_exp (that would break the
+//  frozen F-RFC043-LAYER-EQ-ATTN-FWD max|Δ|=0 anchor). P here is produced by the
+//  host nn_attn_core_fwd — a valid saved-forward softmax input for the bwd vjp.
+//
+//  F-ATTN-BWD-SEAM : dispatcher body == host nn_attn_core_bwd.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/nn_lib"
+
+fn _ab(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _md(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let d = _ab(t_get(a, i) - t_get(b, i)); if d > m { m = d }; i = i + 1 }
+    return m
+}
+fn _fill(a: int, n: int, seed: int) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        t_set(a, i, (to_float(s % 1000) - 500.0) * 0.01)
+        i = i + 1
+    }
+}
+
+fn main() {
+    println("clm_prod_nn_attn_bwd_devseam_eq — attn_core_bwd device seam (host body) == host nn_attn_core_bwd")
+
+    // GQA shape (n_rep = nh/nkv = 2). Deliberately non-square so kvh grouping,
+    // the causal L=i+1 triangle, and the d=nh*hd context stride are all exercised.
+    let T = 6
+    let nh = 4
+    let nkv = 2
+    let hd = 4
+    let d = nh * hd
+
+    let Q = t_zeros(T * nh * hd)
+    let K = t_zeros(T * nkv * hd)
+    let V = t_zeros(T * nkv * hd)
+    _fill(Q, T * nh * hd, 71)
+    _fill(K, T * nkv * hd, 72)
+    _fill(V, T * nkv * hd, 73)
+
+    // Saved forward softmax P (host fwd) — the bwd vjp's P input.
+    let P   = t_zeros(nh * T * T)
+    let ctx = t_zeros(T * d)
+    nn_attn_core_fwd(Q, K, V, P, ctx, T, nh, nkv, hd)
+
+    let dctx = t_zeros(T * d)
+    _fill(dctx, T * d, 999)
+
+    // ── host reference (env unset → host loop) ──
+    let dQ_h = t_zeros(T * nh * hd)
+    let dK_h = t_zeros(T * nkv * hd)
+    let dV_h = t_zeros(T * nkv * hd)
+    nn_attn_core_bwd(Q, K, V, P, dctx, dQ_h, dK_h, dV_h, T, nh, nkv, hd)
+
+    // ── dispatcher (off-CUDA host fallback body, or device kernel on-CUDA) ──
+    let dQ_d = t_zeros(T * nh * hd)
+    let dK_d = t_zeros(T * nkv * hd)
+    let dV_d = t_zeros(T * nkv * hd)
+    let rcb = forge_dispatch_attn_core_bwd(Q, K, V, P, dctx, dQ_d, dK_d, dV_d, T, nh, nkv, hd)
+
+    let db_Q = _md(dQ_h, dQ_d, T * nh * hd)
+    let db_K = _md(dK_h, dK_d, T * nkv * hd)
+    let db_V = _md(dV_h, dV_d, T * nkv * hd)
+    let mut db = db_Q
+    if db_K > db { db = db_K }
+    if db_V > db { db = db_V }
+
+    if rcb != 0 {
+        println("  !! dispatcher returned rc!=0 (host body not linked?)")
+        println("  rc attn_core_bwd=" + to_string(rcb))
+    }
+    println("  attn_core bwd max|Δ| = " + to_string(db) + "   (dQ=" + to_string(db_Q) + " dK=" + to_string(db_K) + " dV=" + to_string(db_V) + ")")
+
+    if db == 0.0 { println("F-ATTN-BWD-SEAM = 1") } else { println("F-ATTN-BWD-SEAM = 0") }
+
+    let ok = db == 0.0 && rcb == 0
+    if ok {
+        println("PASS — attn_core_bwd device seam (host body) == host nn_attn_core_bwd, byte-eq (max|Δ|=0)")
+    } else {
+        println("FAIL — max|Δ| = " + to_string(db))
+    }
+}

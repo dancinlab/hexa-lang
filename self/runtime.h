@@ -1489,6 +1489,36 @@ HexaVal forge_dispatch_rmsnorm_bwd(HexaVal x_v, HexaVal g_v, HexaVal xn_v,
                              HexaVal inv_v, HexaVal dy_v, HexaVal dx_v,
                              HexaVal dg_v, HexaVal d_v);                      /* runtime.c — fusion L3 bwd glue seam */
 
+/* HEXA-FUSION L3 (LLM-path ATTN BWD glue half) — device-resident GQA attention
+ * core backward. forge_dispatch_attn_core_bwd(Q, K, V, P, dctx, dQ, dK, dV,
+ * T, nh, nkv, hd) -> int rc (0 ok / -1 host). ALL 12 args are farr-ids/ints
+ * (NO scalar-by-value — scale is recomputed from hd inside). Reproduces
+ * nn_lib.hexa nn_attn_core_bwd EXACTLY (closed analytic vjp, d5_attn_bwd):
+ * per (hh,i) with L=i+1 and kvh=hh/(nh/nkv), scale=1/sqrt(hd) [libm sqrt =
+ * bare `sqrt` builtin, correctly-rounded IEEE-754 → device sqrt(double) is
+ * bit-identical], dP_row[j]=Σ_c dctx·V (SEQUENTIAL), sdot=Σ_j P·dP_row,
+ * dV[j,kvh,c]+=P·dctx (accum over heads), dS=P·(dP_row−sdot)·scale,
+ * dQ[i,hh,c]+=Σ_j dS·K, dK[j,kvh,c]+=Σ_i dS·Q. NO exp on the bwd path (the
+ * softmax Jacobian is closed in P). Every reduction accumulates SEQUENTIALLY
+ * in the host (hh→i→j→c) order under ONE thread (thread 0; NO tree re-assoc,
+ * NO atomics — dV/dK cross-head accumulation is byte-eq ONLY in that order);
+ * every mul feeding an add/sub uses __dmul_rn/__dadd_rn/__dsub_rn to defeat
+ * FMA contraction (host FP_CONTRACT OFF) → bit-exact (max|Δ|=0) via
+ * _hx_cuda_farr_attn_core_bwd_gpu. dQ/dK/dV ACCUMULATED INTO (caller pre-
+ * zeros). Gated behind HEXA_DEVRESIDENT_NN+CLM_PROD_DEVRESIDENT; no-CUDA →
+ * -1 → host nn_attn_core_bwd (byte-eq). NOTE: attn_core_FWD is DEFERRED — its
+ * softmax exp() binds to libm exp (bare builtin), which no device exp matches
+ * bit-for-bit; byte-eq fwd would require moving the host softmax to dt_exp,
+ * breaking the frozen F-RFC043-LAYER-EQ-ATTN-FWD max|Δ|=0 anchor. */
+HexaVal hexa_forge_dispatch_attn_core_bwd(HexaVal Q_v, HexaVal K_v, HexaVal V_v,
+                             HexaVal P_v, HexaVal dctx_v, HexaVal dQ_v,
+                             HexaVal dK_v, HexaVal dV_v, HexaVal T_v,
+                             HexaVal nh_v, HexaVal nkv_v, HexaVal hd_v);      /* runtime.c — fusion L3 attn bwd glue */
+HexaVal forge_dispatch_attn_core_bwd(HexaVal Q_v, HexaVal K_v, HexaVal V_v,
+                             HexaVal P_v, HexaVal dctx_v, HexaVal dQ_v,
+                             HexaVal dK_v, HexaVal dV_v, HexaVal T_v,
+                             HexaVal nh_v, HexaVal nkv_v, HexaVal hd_v);      /* runtime.c — fusion L3 attn bwd glue seam */
+
 /* HEXA-FUSION L3 (BWD glue half) — device-resident elementwise GELU backward.
  * forge_dispatch_gelu_bwd(g, da, dg, n) -> int rc (0 ok / -1 host). Reproduces
  * nn_lib.hexa nn_gelu_bwd: DG[i]=DA[i]·GELU'(G[i]), GELU'(x)=Φ(x)+x·φ(x) with the
