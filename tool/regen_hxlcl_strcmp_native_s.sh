@@ -89,7 +89,18 @@ emit_one() {
     # local → no ld -r duplicate. (Root: free seed #4554 darwin-arm64 multidef=49.)
     sed -E "/^[[:space:]]*\.globl[[:space:]]+_?${CONTRACT}([[:space:]]|\$)/b
             /^[[:space:]]*\.globl[[:space:]]/d
-            /^[[:space:]]*\.private_extern[[:space:]]/d" "$raw" > "$demoted"
+            /^[[:space:]]*\.private_extern[[:space:]]/d" "$raw" > "$demoted.pre"
+    # UNSHADOW (convergence zeroc-strleaf-flip-darwin-strlen-1): rename the demoted sibling
+    # DEFINITION labels (append __seeddead) so every intra-module `bl _hxlcl_X` stays a TRUE
+    # undefined external, resolved by the RETAINED ungated shim global (the free/calloc
+    # hxlcl_malloc proven path). A demoted-LOCAL def SHADOWS the shim provider on darwin ld
+    # → "Undefined symbols: _hxlcl_strlen in hxlcl_strcmp_native.o" (#4570/#4575 measured).
+    # Only column-0 def labels renamed; `bl` call sites, the contract label, and __L*_bb*
+    # internal labels are unchanged (they carry no leading `hxlcl_`). CONTRACT already includes
+    # the `hxlcl_` prefix, so the protect pattern is `^_?${CONTRACT}:` (NOT `_?hxlcl_${CONTRACT}`).
+    sed -E "/^_?${CONTRACT}:\$/b
+            s/^(_?hxlcl_[A-Za-z0-9_]+):\$/\1__seeddead:/" "$demoted.pre" > "$demoted"
+    rm -f "$demoted.pre"
 
     local kept total pext
     kept="$(grep -cE "^[[:space:]]*\.globl[[:space:]]+_?${CONTRACT}([[:space:]]|\$)" "$demoted" || echo 0)"
@@ -100,6 +111,12 @@ emit_one() {
     [ "$kept" -eq 1 ] || { echo "[regen_hxlcl_strcmp] ERROR: $triple kept $kept/1 hxlcl_strcmp global (raw emit missing the shim?)" >&2; exit 1; }
     [ "$total" -eq 1 ] || { echo "[regen_hxlcl_strcmp] ERROR: $triple demotion left $total globals (expected 1 — sed pattern drift)" >&2; exit 1; }
     [ "$pext" -eq 0 ] || { echo "[regen_hxlcl_strcmp] ERROR: $triple demotion left $pext .private_extern (Mach-O N_PEXT stays external → ld -r multidef)" >&2; exit 1; }
+    # UNSHADOW drift guard: after the rename EXACTLY one NON-__seeddead bare `_?hxlcl_*:` def
+    # label remains (the contract). Renamed siblings become `_hxlcl_X__seeddead:` (they still
+    # carry the hxlcl_ prefix, so they must be EXCLUDED from the count); any bare hxlcl_ def
+    # that is NOT the contract and NOT __seeddead = a sibling that would re-shadow the shim.
+    local bare; bare="$(grep -E '^_?hxlcl_[A-Za-z0-9_]+:$' "$demoted" | grep -vc '__seeddead:' || true)"
+    [ "${bare:-0}" -eq 1 ] || { echo "[regen_hxlcl_strcmp] ERROR: $triple unshadow left $bare non-__seeddead bare hxlcl_* def labels (want 1=contract — sibling would shadow the shim provider)" >&2; exit 1; }
 
     {
         printf '// %s — FROZEN BOOTSTRAP SEED (RT-NATIVE zero-c #29 — WALL-2 hxlcl_strcmp).\n' "$(basename "$out")"
@@ -127,6 +144,9 @@ emit_one() {
     case "$triple" in
         x86_64-linux-gnu) [ "$(uname -s)" = Darwin ] && cc_extra="-target x86_64-linux-gnu" ;;
         arm64-linux-gnu)  [ "$(uname -s)" = Darwin ] && cc_extra="-target aarch64-linux-gnu" ;;
+        # cross-assemble the darwin seed on a Linux pool host so its nm sanity (below) actually
+        # RUNS — the prior gap (Linux pool "WARN skipped") is how the shadow bug shipped unseen.
+        arm64-apple-darwin) [ "$(uname -s)" = Linux ] && cc_extra="-target arm64-apple-darwin" ;;
     esac
     if $CC $cc_extra -c "$s" -o "$o" 2>/dev/null; then
         local t; t="$( (nm "$o" 2>/dev/null || echo) | grep -cE ' T _?hxlcl_strcmp')"
