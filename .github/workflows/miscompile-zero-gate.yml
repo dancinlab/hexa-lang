@@ -178,8 +178,11 @@ jobs:
       - name: Build — shared release_build (./hexa)
         shell: bash
         env:
-          HEXA_CCACHE: "1"
+          TARGET: linux-x86_64
+          CC: gcc
+          LIBS: "-lm -ldl"
           GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
         run: bash tool/release_build
       - name: Build m12 to a binary + run (bypasses the hexa-run cache)
         shell: bash
