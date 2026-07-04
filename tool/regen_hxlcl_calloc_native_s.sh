@@ -79,14 +79,27 @@ emit_one() {
     # --- .globl DEMOTION post-pass: keep ONLY hxlcl_calloc .globl, drop the rest ---
     # `_?` matches the Mach-O underscore prefix. The kept label stays defined; every
     # other global is demoted to local (its `.globl` line deleted).
+    #
+    # Mach-O ALSO emits a `.private_extern _hxlcl_*` per function (N_PEXT). Dropping the
+    # `.globl` alone leaves those symbols EXTERNAL (private_extern still sets N_EXT), so a
+    # whole-module seed collides on `ld -r` (multidef: _hxlcl_atof/atoi/free/… all defined
+    # in both the seed and the shim). ELF has no `.private_extern` (arm64-linux/x86_64
+    # seeds carry 0), so this rule is a no-op there. Strip ALL `.private_extern` lines: the
+    # contract keeps its own `.globl` (a public external), every sibling becomes a true
+    # local → no ld -r duplicate. (Root: free seed #4554 darwin-arm64 multidef=49.)
     sed -E "/^[[:space:]]*\.globl[[:space:]]+_?${CONTRACT}([[:space:]]|\$)/b
-            /^[[:space:]]*\.globl[[:space:]]/d" "$raw" > "$demoted"
+            /^[[:space:]]*\.globl[[:space:]]/d
+            /^[[:space:]]*\.private_extern[[:space:]]/d" "$raw" > "$demoted"
 
-    local kept total
+    local kept total pext
     kept="$(grep -cE "^[[:space:]]*\.globl[[:space:]]+_?${CONTRACT}([[:space:]]|\$)" "$demoted" || echo 0)"
     total="$(grep -cE '^[[:space:]]*\.globl[[:space:]]' "$demoted" || echo 0)"
+    # `grep -c` prints "0" AND exits 1 when there are no matches → `|| true` keeps that "0"
+    # (a `|| echo 0` would append a SECOND "0" → integer-expression error on the 0 case).
+    pext="$(grep -cE '^[[:space:]]*\.private_extern[[:space:]]' "$demoted" || true)"
     [ "$kept" -eq 1 ] || { echo "[regen_hxlcl_calloc] ERROR: $triple kept $kept/1 hxlcl_calloc global (raw emit missing the shim?)" >&2; exit 1; }
     [ "$total" -eq 1 ] || { echo "[regen_hxlcl_calloc] ERROR: $triple demotion left $total globals (expected 1 — sed pattern drift)" >&2; exit 1; }
+    [ "$pext" -eq 0 ] || { echo "[regen_hxlcl_calloc] ERROR: $triple demotion left $pext .private_extern (Mach-O N_PEXT stays external → ld -r multidef)" >&2; exit 1; }
 
     {
         printf '// %s — FROZEN BOOTSTRAP SEED (RT-NATIVE zero-c #29 — WALL-2 hxlcl_calloc).\n' "$(basename "$out")"
