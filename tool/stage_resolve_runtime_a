@@ -1484,6 +1484,42 @@ build_runtime_a_from_source() {
         # it is a loud no-op (libc shim retained). DEFAULT (OFF) leaves the member set
         # == exactly `build/hxlcl_shim.o` and the shim -D empty → archive byte-identical.
         local _mo_shim_def="" _mo_hxlcl_members="build/hxlcl_shim.o"
+        # ── zero-c #29 SELFEMIT×RT-NATIVE CO-DROP registry (root-cause #4570→#4571) ──
+        # A symbol that a RT-NATIVE-<SYM> frozen seed will adopt must NOT ALSO get a
+        # SELFEMIT/MEMLEAF member — two archive members exporting the same global
+        # hxlcl_<sym> = S5 ld -r multidef (the shim -D drop can't help; it's member-
+        # vs-member, not member-vs-shim). free/calloc never hit it (absent from the
+        # SELFEMIT lists). This registry is resolved HERE (before the darwin SELFEMIT
+        # family loop + the ELF MEMLEAF loop below, which both run BEFORE the RT-NATIVE
+        # seed-consume blocks further down) so those loops can `continue` on a seed-
+        # claimed symbol. Keyed by symbol → EVERY current+future RT-NATIVE flip is
+        # covered by editing ONLY the `for _mo_rn_sym in …` list below.
+        # byteeq-neutral: default gates are OFF/auto-with-no-seed → registry empty →
+        # SELFEMIT loops unchanged → shim.o + archive byte-identical.
+        local _mo_rtnative_syms=" "
+        local _mo_rn_tgt="${TARGET:-}"; _mo_rn_tgt="${_mo_rn_tgt%-musl}"; _mo_rn_tgt="${_mo_rn_tgt%-cuda}"
+        [ -z "$_mo_rn_tgt" ] && case "$(uname -sm 2>/dev/null)" in
+            "Darwin arm64") _mo_rn_tgt="darwin-arm64" ;;
+            "Linux x86_64") _mo_rn_tgt="linux-x86_64" ;;
+            "Linux aarch64"|"Linux arm64") _mo_rn_tgt="linux-arm64" ;;
+        esac
+        local _mo_rn_suf=""; case "$_mo_rn_tgt" in
+            darwin-arm64) _mo_rn_suf="arm64" ;;
+            linux-x86_64) _mo_rn_suf="x86_64" ;;
+            linux-arm64)  _mo_rn_suf="arm64-linux" ;;
+        esac
+        # SEED-BACKED RT-NATIVE symbols that ALSO appear in a SELFEMIT/MEMLEAF list
+        # (the ONLY ones that can collide). Add a symbol here the same round its
+        # RT-NATIVE-<SYM> seed-consume block + seeds land.
+        local _mo_rn_sym _mo_rn_SYM _mo_rn_gate
+        for _mo_rn_sym in strcmp strncmp strchr strcpy strncpy strcat memcmp memcpy memset strlen strdup; do
+            _mo_rn_SYM=$(printf '%s' "$_mo_rn_sym" | tr 'a-z' 'A-Z')
+            eval "_mo_rn_gate=\${HEXA_RT_NATIVE_${_mo_rn_SYM}:-0}"
+            [ "$_mo_rn_gate" = "0" ] && continue
+            [ -n "$_mo_rn_suf" ] && [ -f "self/native/hxlcl_${_mo_rn_sym}_${_mo_rn_suf}.s" ] \
+                && _mo_rtnative_syms="${_mo_rtnative_syms}${_mo_rn_sym} "
+        done
+        [ "$_mo_rtnative_syms" != " " ] && echo "[stage_resolve_runtime_a] zero-c #29 CO-DROP: RT-NATIVE seed-claimed symbols =${_mo_rtnative_syms}— SELFEMIT/MEMLEAF will skip these (single-provider, no ld -r multidef)"
         if [ "${HEXA_RT_SELFEMIT:-0}" = "1" ]; then
             if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
                 local _se_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
@@ -1494,6 +1530,9 @@ build_runtime_a_from_source() {
                 # errno-bearing class-C svc wrappers vs pure leaves (declared so the
                 # provider is added iff at least one errno-bearing symbol is swapped).
                 for _se_sym in close read strlen memcpy memset memcmp strcmp strcpy strncmp strncpy strcat strchr lseek dup2 mkdir waitpid stat atoi strdup fcntl poll getrusage; do
+                    # zero-c #29 CO-DROP: a RT-NATIVE-<SYM> seed already provides this
+                    # global → skip so exactly ONE member exports hxlcl_<sym> (no S5 multidef).
+                    case "$_mo_rtnative_syms" in *" $_se_sym "*) echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT: skip $_se_sym — RT-NATIVE-$(printf '%s' "$_se_sym" | tr 'a-z' 'A-Z') seed owns hxlcl_$_se_sym (co-drop)"; continue ;; esac
                     _se_SYM=$(printf '%s' "$_se_sym" | tr 'a-z' 'A-Z')
                     _se_o="build/hxlcl_${_se_sym}_native.o"
                     echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT: emitting native hxlcl_${_se_sym} .o via $_se_bin (replacing libc-shim member)…"
@@ -1582,6 +1621,8 @@ build_runtime_a_from_source() {
                 _seml_SYM=$(printf '%s' "$_seml_sym" | tr 'a-z' 'A-Z')
                 eval "_seml_gate=\${HEXA_RT_SELFEMIT_${_seml_SYM}:-0}"
                 [ "$_seml_gate" = "1" ] || continue
+                # zero-c #29 CO-DROP: RT-NATIVE-<SYM> seed already provides this global → skip.
+                case "$_mo_rtnative_syms" in *" $_seml_sym "*) echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-MEMLEAF: skip $_seml_sym — RT-NATIVE-${_seml_SYM} seed owns hxlcl_$_seml_sym (co-drop)"; continue ;; esac
                 if [ -z "$_seml_arch" ]; then
                     echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-MEMLEAF FATAL: HEXA_RT_SELFEMIT_${_seml_SYM}=1 but unsupported linux arch '$(uname -m)' (want x86_64|aarch64)" >&2; return 1
                 fi
@@ -2230,6 +2271,73 @@ build_runtime_a_from_source() {
             if [ -n "$_rnss_err" ]; then
                 [ "$_rnss_mode" = "1" ] && { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRSTR FATAL (strict): $_rnss_err" >&2; return 1; }
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRSTR WARN: $_rnss_err — FALLBACK-SHIM (retaining libc strstr member; strstr stays UND in the nm floor)" >&2
+            fi
+        fi
+        # ── RFC061 §M8 RT-NATIVE-STRCHR (frozen-seed consume · PURE non-libm leaf) ──
+        # zero-c #29 flip. hxlcl_strchr is a self-contained byte-scan (no reloc/errno/
+        # external callee) — the exact PURE-leaf shape of RT-NATIVE-STRSTR, so it consumes
+        # a frozen seed the SAME way (pick the arch seed, gate on `.globl == 1` demotion
+        # contract, $CC -c → build/hxlcl_strchr_native.o, add -DHEXA_RT_NATIVE_STRCHR + the
+        # member; the ld -r multidef gate S5 validates). The shim drops its strchr def
+        # under EITHER HEXA_RT_SELFEMIT_STRCHR or HEXA_RT_NATIVE_STRCHR (co-drop guard in
+        # self/runtime_core_hxlcl_shim_emit.hexa) → exactly one provider. The CO-DROP
+        # registry above makes the SELFEMIT/MEMLEAF loops skip strchr when this seed is
+        # adopted, so member-vs-member multidef cannot arise.
+        # TRI-STATE HEXA_RT_NATIVE_STRCHR (DEFAULT = auto · this flip):
+        #   0    = off (opt-out · block skipped · shim.o + archive byte-identical = neutral)
+        #   auto = graceful (DEFAULT): a missing/bad/unassemblable seed keeps the libc-shim
+        #          strchr member + a loud WARN and the build CONTINUES — the fallback is the
+        #          NORMAL libc strchr, never a broken one, and a non-adopted flip is observable
+        #          as `strchr` still UND in the nobaseline nm-UND dump (#4360).
+        #   1    = strict: a missing/bad seed is FATAL (measurement / verify scripts).
+        # PREREQ (byteeq-neutral until seeds bake): the 3 seeds
+        # self/native/hxlcl_strchr_{x86_64,arm64-linux,arm64}.s are PENDING a pool aprime_cc
+        # bake — until they land, `auto` gracefully FALLBACK-SHIMs (byteeq path unchanged →
+        # shim.o + archive byte-identical). This DRAFT PR is gated on byteeq 3-target GREEN
+        # before the seeds land + default-ON takes real effect.
+        _rnch_mode="${HEXA_RT_NATIVE_STRCHR:-auto}"
+        if [ "$_rnch_mode" != "0" ]; then
+            _rnch_tgt="${TARGET:-}"; _rnch_tgt="${_rnch_tgt%-musl}"; _rnch_tgt="${_rnch_tgt%-cuda}"
+            [ -z "$_rnch_tgt" ] && case "$(uname -sm 2>/dev/null)" in
+                "Darwin arm64") _rnch_tgt="darwin-arm64" ;;
+                "Linux x86_64") _rnch_tgt="linux-x86_64" ;;
+                "Linux aarch64"|"Linux arm64") _rnch_tgt="linux-arm64" ;;
+            esac
+            case "$_rnch_tgt" in
+                darwin-arm64) _rnch_seed="self/native/hxlcl_strchr_arm64.s" ;;
+                linux-x86_64) _rnch_seed="self/native/hxlcl_strchr_x86_64.s" ;;
+                linux-arm64)  _rnch_seed="self/native/hxlcl_strchr_arm64-linux.s" ;;
+                *)            _rnch_seed="" ;;
+            esac
+            _rnch_err=""
+            if [ -z "$_rnch_seed" ] || [ ! -f "$_rnch_seed" ]; then
+                _rnch_err="no hxlcl_strchr seed for TARGET=$_rnch_tgt (regen tool/regen_hxlcl_strchr_native_s.sh — pending pool bake)"
+            else
+                # SAFETY: adopt only if the seed exports EXACTLY the 1 hxlcl_strchr contract
+                # symbol and nothing else global (a demotion-missed seed would risk a
+                # duplicate-symbol link against the shim's sibling hxlcl_* defs). `_?` = the
+                # Mach-O underscore. Both counts from `.globl` (toolchain-free).
+                _rnch_nc="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?hxlcl_strchr([[:space:]]|$)' "$_rnch_seed" 2>/dev/null || echo 0)"
+                _rnch_nt="$(grep -cE '^[[:space:]]*\.globl[[:space:]]' "$_rnch_seed" 2>/dev/null || echo 0)"
+                if [ "${_rnch_nc:-0}" -ne 1 ] || [ "${_rnch_nt:-0}" -ne 1 ]; then
+                    _rnch_err="seed $_rnch_seed exports $_rnch_nc/1 hxlcl_strchr (total globals $_rnch_nt, want 1 — demotion drift)"
+                else
+                    mkdir -p build
+                    _rnch_s="build/hxlcl_strchr_seed.s"; _rnch_o="build/hxlcl_strchr_native.o"
+                    grep -vE '^// ' "$_rnch_seed" > "$_rnch_s" 2>/dev/null || cp "$_rnch_seed" "$_rnch_s"
+                    if $CC $_mo_archflag -c "$_rnch_s" -o "$_rnch_o" 2>/dev/null; then
+                        _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_STRCHR"
+                        _mo_hxlcl_members="$_mo_hxlcl_members $_rnch_o"
+                        echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCHR: hxlcl_strchr ← frozen seed $_rnch_seed (TARGET=$_rnch_tgt, 1-symbol contract); shim.o built with -DHEXA_RT_NATIVE_STRCHR (strchr dropped) — ld -r multidef gate validates"
+                    else
+                        _rnch_err="assemble of $_rnch_seed failed"
+                    fi
+                    rm -f "$_rnch_s"
+                fi
+            fi
+            if [ -n "$_rnch_err" ]; then
+                [ "$_rnch_mode" = "1" ] && { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCHR FATAL (strict): $_rnch_err" >&2; return 1; }
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCHR WARN: $_rnch_err — FALLBACK-SHIM (retaining libc strchr member; strchr stays UND in the nm floor)" >&2
             fi
         fi
         # ── RFC061 §M8 RT-NATIVE-REALLOC (Route C whole-module emit · COMPOSITE

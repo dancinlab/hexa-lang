@@ -438,7 +438,11 @@ fn emit_runtime_core_hxlcl_shim_to(out_path: str) {
     buf = buf + " * (test/native_build/emit_hxlcl_strchr_o.hexa — verbatim rt_strchr scan, no\n"
     buf = buf + " * reloc/errno). DEFAULT (macro undefined) keeps the body below → shim.o\n"
     buf = buf + " * byte-identical. */\n"
-    buf = buf + "#ifndef HEXA_RT_SELFEMIT_STRCHR\n"
+    buf = buf + "/* zero-c #29 CO-DROP: a RT-NATIVE-STRCHR frozen-seed .o (staged by\n"
+    buf = buf + " * tool/stage_resolve_runtime_a) ALSO provides hxlcl_strchr — drop the shim def\n"
+    buf = buf + " * under EITHER macro so exactly one member exports it (no S5 ld -r multidef).\n"
+    buf = buf + " * DEFAULT (neither macro defined) keeps the body below → shim.o byte-identical. */\n"
+    buf = buf + "#if !defined(HEXA_RT_SELFEMIT_STRCHR) && !defined(HEXA_RT_NATIVE_STRCHR)\n"
     buf = buf + "#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT\n"
     if buf.len() > 65536 { _flush_runtime_core_hxlcl_shim(out_path, buf); buf = "" }
     buf = buf + "/* byte-identical to frozen self/runtime.c hxlcl_strchr (verbatim 0-libc floor body) */\n"
