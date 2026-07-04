@@ -874,6 +874,41 @@ fn _build_case_own_lint_r2() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// HEXA-OWN L2 r2b — @own PARAM position + Copy-exemption (HEXA_OWN_LINT=1).
+// An `@own` param is registered into the own-lint registry at fn entry and
+// the body treats it affinely: the existing move sites mark it moved and a
+// later use warns HX3012. The parser carries inline `@own p: T` as a
+// fn-level Annotation{ name: "own", args: [LiteralString "p"] } — the
+// builder below attaches exactly that shape (same AST parse_param emits).
+// Copy-class scalar params (here: i64, per the #4088 Copy predicate) are
+// EXEMPT — never registered, so moving+reusing them stays silent.
+//   fn h(@own xs: string) {
+//       consume(xs)           // FIRST use = move (call-arg)   → clean
+//       let b = xs            // use-after-move                → HX3012 (×1)
+//   }
+//   fn k(@own n: i64) {
+//       consume(n)            // Copy-exempt: not tracked      → clean
+//       let c = n             // Copy-exempt: no warn          → clean
+//   }
+// Under the flag exactly 1 HX3012 (h's `let b = xs`); on the default build
+// → 0 (byteeq-neutral).
+fn _own_fn_item(name: string, own_pname: string, params: [Param], body: Expr, file: string, line: i64) -> Item {
+    let mut anns: [Annotation] = []
+    let mut oargs = []
+    oargs.push(_string_expr(own_pname, file, line, 1))
+    anns.push(Annotation { name: "own", args: oargs, span: _span(file, line, 1, 4) })
+    return Item {
+        kind: ItemKind::Fn,
+        name: name,
+        span: _span(file, line, 1, len(name)),
+        annotations: anns,
+        params: params,
+        return_type: _empty_type_ref(),
+        body: body,
+        is_pub: false
+    }
+}
+
 // HEXA-OWN L2.5 r1 — array literal `[e0, e1, …]`. children = elements
 // (parser shape per ast.hexa ExprKind::ArrayLit).
 fn _array_lit_expr(elems: [Expr], file: string, line: i64, col: i64) -> Expr {
@@ -900,6 +935,34 @@ fn _let_item(name: string, rhs: Expr, file: string, line: i64) -> Item {
         body: rhs,
         is_pub: false
     }
+}
+
+fn _build_case_own_lint_r2b() -> Module {
+    let f = "case_own_lint_r2b.hexa"
+    // fn h(@own xs: string) { consume(xs); let b = xs }
+    let mut params_h = []
+    params_h.push(_param("xs", "string", f, 1, 9))
+    let mut kids_h = []
+    let mut args_h = []
+    args_h.push(_ident_expr("xs", f, 2, 13))
+    kids_h.push(_call_expr(_ident_expr("consume", f, 2, 5), args_h, f, 2, 5))
+    kids_h.push(_let_expr("b", _ident_expr("xs", f, 3, 13), f, 3, 5))
+    let body_h = _block(kids_h, f, 2, 1)
+    let item_h = _own_fn_item("h", "xs", params_h, body_h, f, 1)
+    // fn k(@own n: i64) { consume(n); let c = n }   — Copy-exempt
+    let mut params_k = []
+    params_k.push(_param("n", "i64", f, 6, 9))
+    let mut kids_k = []
+    let mut args_k = []
+    args_k.push(_ident_expr("n", f, 7, 13))
+    kids_k.push(_call_expr(_ident_expr("consume", f, 7, 5), args_k, f, 7, 5))
+    kids_k.push(_let_expr("c", _ident_expr("n", f, 8, 13), f, 8, 5))
+    let body_k = _block(kids_k, f, 7, 1)
+    let item_k = _own_fn_item("k", "n", params_k, body_k, f, 6)
+    let mut items = []
+    items.push(item_h)
+    items.push(item_k)
+    return Module { file: f, items: items, imports: [] }
 }
 
 // HEXA-OWN L2.5 r1 — arena-escape lint (HEXA_ARENA_ESCAPE_LINT=1). A
@@ -1267,6 +1330,30 @@ fn main() {
         }
     }
 
+    // (q) HEXA-OWN L2 r2b — @own PARAM position + Copy-exemption
+    // (HEXA_OWN_LINT). Under the flag, h's `@own xs: string` param moved as
+    // a call-arg then read again warns HX3012 exactly ONCE; k's
+    // `@own n: i64` param is Copy-class (per the #4088 predicate) → exempt
+    // from move tracking → moved-then-used stays silent. On the default
+    // build → 0 (byteeq-neutral). Same self-adapting contract as (n)/(p).
+    let diags_q = _run_case("(q) own-lint r2b — @own param moved then used; Copy-exempt i64 (HEXA_OWN_LINT)", _build_case_own_lint_r2b())
+    let qq = _count_code(diags_q, "HX3012")
+    if env("HEXA_OWN_LINT") == "1" {
+        if qq != 1 {
+            println("  FAIL: case (q) HEXA_OWN_LINT=1 expected 1 HX3012 (h: let b = xs), got " + to_string(qq) + " (total=" + to_string(len(diags_q)) + ")")
+            ok = false
+        } else {
+            println("  ok: 1 HX3012 emitted (@own string param tracked; @own i64 param Copy-exempt silent)")
+        }
+    } else {
+        if qq != 0 {
+            println("  FAIL: case (q) default build expected 0 HX3012 (byteeq-neutral), got " + to_string(qq) + " (total=" + to_string(len(diags_q)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3012 (default-OFF → byteeq-neutral)")
+        }
+    }
+
     // (r) HEXA-OWN L2.5 r1 — arena-escape lint (HEXA_ARENA_ESCAPE_LINT).
     // Under the flag, `let a = [1,2]; g_sink = a` (g_sink = module-level
     // let) warns HX3013 exactly ONCE. The clean controls never fire: a
@@ -1275,7 +1362,6 @@ fn main() {
     // (`g_sink = s`). bad() runs last, so the ×1 also proves the per-fn
     // registry reset. On the default build → 0 (byteeq-neutral). Same
     // self-adapting contract as (h)-(p), on the NEW arena-escape flag.
-    // (Letters (o)/(q) are claimed by the static-types r7-prep/r8 rounds.)
     let diags_r = _run_case("(r) arena-escape L2.5 r1 — composite local stored into module global (HEXA_ARENA_ESCAPE_LINT)", _build_case_arena_escape())
     let nr = _count_code(diags_r, "HX3013")
     if env("HEXA_ARENA_ESCAPE_LINT") == "1" {

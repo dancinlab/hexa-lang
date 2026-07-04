@@ -1211,8 +1211,10 @@ fn _types_lookup_struct_field_typename(struct_name: string, field_name: string) 
 // ── HEXA-OWN L2 r1 — @own use-after-move lint registry ───────
 //
 // Opt-in (`HEXA_OWN_LINT=1`), warning-band, per-FN side registry for
-// block-local `@own let` bindings (single-owner discipline, Rust move
-// semantics as a LINT — no codegen/MIR change, no drop insertion).
+// block-local `@own let` bindings and — r2b — `@own` fn PARAMS
+// (single-owner discipline, Rust move semantics as a LINT — no
+// codegen/MIR change, no drop insertion). Copy-class scalars are exempt
+// (see _own_lint_name_is_copy below).
 // Parallel-array shape mirrors the r5 struct field registry above, with
 // TWO deliberate deviations, both recipe-mandated:
 //   * population is FLAG-GATED (r5 populates unconditionally; own-lint
@@ -1285,6 +1287,41 @@ fn _own_lint_touch(use_node: Expr, out: array) {
         return
     }
     _emit_hx3012(use_node.text, _own_lint_def_lines[idx], _own_lint_move_lines[idx], use_node.span, out)
+}
+
+// ── HEXA-OWN L2 r2b — Copy-class exemption ──
+// Adapted (not cherry-picked) from the preserved PR #4088 `feat/borrow-checker`
+// branch's `_type_is_copy` predicate + `_borrow_name_is_copy` table: a binding
+// whose declared type is a Copy-class SCALAR (integers signed/unsigned, floats,
+// bool, char, unit) is duplicated on assignment / by-value passing, so
+// use-after-move can never apply — it is EXEMPT from move tracking. The
+// exemption is applied as a REGISTER-SKIP (the binding never enters the
+// registry) because every registration site already sits under an
+// `env("HEXA_OWN_LINT") == "1"` gate — flag-OFF stays byte-identical with no
+// extra guard. Aggregates (string, named structs, arrays, tuples, generics,
+// fn types) keep move semantics. Type aliases resolve first so
+// `type Celsius = f64` is Copy (same as #4088).
+fn _own_lint_name_is_copy(name: string) -> bool {
+    if len(name) == 0 { return false }
+    let n = _types_resolve_alias_name(name)
+    if len(n) == 0 { return false }
+    if n == "i8" || n == "i16" || n == "i32" || n == "i64" || n == "Int" || n == "int" { return true }
+    if n == "u8" || n == "u16" || n == "u32" || n == "u64" { return true }
+    if n == "f16" || n == "bf16" || n == "f32" || n == "f64" || n == "Float" || n == "float" || n == "Real" { return true }
+    if n == "bool" || n == "Bool" { return true }
+    if n == "char" || n == "Char" { return true }
+    if n == "unit" || n == "Unit" || n == "()" || n == "void" || n == "Void" { return true }
+    return false
+}
+
+// TypeRef flavor for PARAM position (params carry a full TypeRef, unlike
+// lets whose annotation is the `|<name>` text suffix). Every non-`named`
+// shape (array / tuple / generic / fn) is move-semantic; an empty TypeRef
+// (no annotation) is unknown → NOT Copy → conservatively move-tracked.
+fn _own_lint_typeref_is_copy(tr: TypeRef) -> bool {
+    if len(tr.kind) == 0 { return false }
+    if tr.kind != "named" { return false }
+    return _own_lint_name_is_copy(tr.name)
 }
 
 // Does this (let) Expr carry a bare `@own` annotation? The parser already
@@ -2241,7 +2278,12 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                 let och = e.children[i]
                 if _types_is_let(och.kind) && _own_lint_has_own_ann(och) {
                     let onm = _types_let_name(och.text)
-                    if len(onm) > 0 {
+                    // r2b Copy-exemption (adapted from #4088): an `@own let`
+                    // with an explicit Copy-class scalar annotation
+                    // (`@own let n: i64 = …`) is never move-tracked —
+                    // register-skip. A bare (unannotated) let has no type
+                    // evidence and stays conservatively tracked.
+                    if len(onm) > 0 && !_own_lint_name_is_copy(_types_let_type_text(och.text)) {
                         _own_lint_register(onm, och.span)
                     }
                 }
@@ -4092,6 +4134,34 @@ pub fn type_check(module: Module) -> array {
         // the default build (byteeq-neutral; the registry stays empty).
         if env("HEXA_OWN_LINT") == "1" {
             _own_lint_reset()
+            // HEXA-OWN L2 r2b — PARAM position: an `@own` param is treated
+            // AFFINELY by the fn body — registration here (fn entry, after
+            // the reset, before the body walk) is all it takes: the existing
+            // move sites (let-RHS · assign-RHS · call-arg · return) then
+            // mark it moved and a later use warns HX3012. The parser carries
+            // inline `@own p: T` as a fn-level Annotation
+            // { name: "own", args: [LiteralString "p"] } (parse_param →
+            // p_param_own_anns → Item.annotations); a hand-written fn-level
+            // `@own("p")` lands in the identical shape, so both spellings
+            // are honored. Copy-class params (scalars, per the #4088
+            // predicate) are exempt — never registered. Non-matching names
+            // are silently ignored (warning-band lint, not a checker).
+            let mut oai = 0
+            while oai < len(it.annotations) {
+                let oa = it.annotations[oai]
+                if oa.name == "own" && len(oa.args) > 0 && _types_is_lit_string(oa.args[0].kind) {
+                    let opn = oa.args[0].text
+                    let mut opi = 0
+                    while opi < len(it.params) {
+                        let op = it.params[opi]
+                        if op.name == opn && !_own_lint_typeref_is_copy(op.typ) {
+                            _own_lint_register(op.name, op.span)
+                        }
+                        opi = opi + 1
+                    }
+                }
+                oai = oai + 1
+            }
         }
         // HEXA-OWN L2.5 r1 — the arena-escape registry (composite-lit lets +
         // fn-local shadow guard) is likewise PER-FN: reset before every body
