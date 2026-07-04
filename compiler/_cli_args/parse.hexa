@@ -119,11 +119,14 @@ pub fn cli_parse_int(s: string, def: i64) -> i64 {
         i = 1
     }
     if i >= n { return def }
+    let digits = "0123456789"
     let mut v: i64 = 0
     while i < n {
-        let c = s.substring(i, i + 1)
-        let d = to_int(c)
-        if to_string(d) != c { return def }
+        // digit membership via index (0-9 for a digit char, -1 otherwise) —
+        // NOT to_int(c): the to_int builtin THROWS on a non-numeric string
+        // ("to_int: not an integer") rather than returning a sentinel.
+        let d = digits.index_of(s.substring(i, i + 1))
+        if d < 0 { return def }
         v = v * 10 + d
         i = i + 1
     }
