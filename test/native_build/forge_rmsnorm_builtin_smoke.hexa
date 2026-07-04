@@ -1,0 +1,35 @@
+// test/native_build/forge_rmsnorm_builtin_smoke.hexa
+// LLM-path forge_dispatch_rmsnorm / _bwd — consumer-compile smoke.
+//
+// forge_dispatch_rmsnorm(x, g, y, xn, inv, d) -> int rc (6-arg) and
+// forge_dispatch_rmsnorm_bwd(x, g, xn, inv, dy, dx, dg, d) -> int rc (8-arg,
+// inv is a SCALAR float) are native runtime builtins (device-resident RMSNorm
+// fwd/bwd mirroring host nn_rmsnorm_fwd/_bwd; no-CUDA build -> -1 -> host
+// fallback). They lower via self/codegen.hexa gen2_expr (len==6 / len==8 blocks)
+// to hexa_forge_dispatch_rmsnorm / _bwd (declared in self/runtime.h).
+//
+// WHY THIS SMOKE EXISTS: same CLASS as forge_layernorm_builtin_smoke (#4339) —
+// byteeq is NECESSARY but NOT SUFFICIENT (self/ never calls these -> inert ->
+// gen3==gen4 reconverges even if the binding is misplaced / the symbol is
+// undeclared). This smoke CALLS both so they MUST lower to the correct symbol
+// AND link every PR — a green-but-broken binding can never ship. SSOT:
+// convergence codegen-hexa-1.
+//
+// Asserts COMPILATION + LOWERING + LINK, not a numeric result: on a non-CUDA
+// build the dispatchers return -1 (host fallback). Reaching the end = PASS.
+fn main() {
+    let d = 4
+    let x   = farr_zeros(d)
+    let g   = farr_zeros(d)
+    let y   = farr_zeros(d)
+    let xn  = farr_zeros(d)
+    let inv = farr_zeros(1)
+    let rcf = forge_dispatch_rmsnorm(x, g, y, xn, inv, d)
+    print("forge_dispatch_rmsnorm compiled+lowered+ran: rc=") ; println(rcf)
+    let dy = farr_zeros(d)
+    let dx = farr_zeros(d)
+    let dg = farr_zeros(d)
+    let rcb = forge_dispatch_rmsnorm_bwd(x, g, xn, 1.0, dy, dx, dg, d)
+    print("forge_dispatch_rmsnorm_bwd compiled+lowered+ran: rc=") ; println(rcb)
+    println("forge_rmsnorm_builtin_smoke: PASS (device rmsnorm fwd+bwd builtins lower to hexa_forge_dispatch_rmsnorm(_bwd) + link)")
+}

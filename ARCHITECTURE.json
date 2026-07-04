@@ -266,8 +266,8 @@
       {
         "id": "ci-pick-runner-sh-1",
         "state": "pos-conv",
-        "value": "darwin 잡 지연의 구조(2026-07-03 실측): picker 매칭이 status==online만 보고 busy를 안 봐(ci_pick_runner.sh jq_filter) ghost가 바빠도 전 darwin 잡이 ghost 1대·1잡 직렬로 수렴, mini는 ghost-offline시에만 쓰는 보험 체인. 여기에 (a)세션 머지 트레인(main 머지 5건)이 main-push 게이트 풀세트를 큐 앞에 쌓아 자기 PR 잡을 starve (b)DIRTY 해소 base-merge 재푸시마다 engine/게이트 잡 재-enqueue(큐 위치 리셋) (c)anima engine cold ~39min/잡이 곱해져 수 시간 대기. churn-race(runtime-cuda-emit-hexa-1)의 러너-큐 판.",
-        "threshold": "재발조건: 짧은 간격 다중 main 머지+PR CI 동시 대기, 또는 busy ghost에 darwin 잡 적체 중 idle darwin 러너 방치. 해결: ①머지 트레인은 PR CI가 소화될 간격으로(또는 PR 완주 후 일괄) ②DIRTY 재푸시는 대상 PR의 잡이 실행 직전이 아닐 때만 ③구조 레버(별도 결정 필요)=picker busy-aware 분산(mini heavy-build 금지 원칙과 충돌 검토)·main-push 게이트 superseded-cancel(이력 보존 설계와 트레이드오프).",
+        "value": "darwin 잡 지연의 구조(2026-07-03~04 실측): picker 매칭이 status==online만 보고 busy 무시(jq_filter)→ghost 바빠도 전 darwin 잡이 ghost 직렬 수렴, mini는 ghost-offline시에만 쓰는 보험. churn-race(runtime-cuda-emit-hexa-1)의 러너-큐 판. ★RESOLUTION 2단(#4539→#4544): (1) #4539 busy-aware 분산(darwin-any=busy시 common label emit)은 snapshot-pin을 완화했으나 dispatch 단일-순간 스냅샷 한계 잔존. (2) #4544 근본해소=slot-free+machine-independent 잡(faithful-nobaseline·advisory smoke: 어느 darwin 호스트서든 동일 byte)은 self-hosted 슬롯 불필요→runs-on: macos-15 클라우드 직결로 self-hosted 경쟁서 완전 제거(linux-arm64 ubuntu-24.04-arm 미러). 실측 근거=ghost×3 busy+mini×6 idle+14 queued. slot-DEPENDENT selfhost-byteeq-real만 ghost gen3 슬롯 유지. ★교훈=slot-free CI 잡의 self-hosted picker 간접경유는 안티패턴; 무료 클라우드 러너(public repo 무제한·무큐)로 직결이 정답.",
+        "threshold": "재발조건: slot-free/machine-independent CI 잡을 혼잡한 self-hosted picker에 간접경유(darwin_label 등)로 태우면 큐 starvation 재발. 해결: slot-free 잡은 무료 클라우드 러너(macos-15/ubuntu-*-arm) runs-on 직결(picker 없음); slot-DEPENDENT 잡만 self-hosted picker. 슬롯 필요여부로 라우팅 분기(kind=darwin picker=슬롯필요만).",
         "source": "tool/ci_pick_runner.sh"
       },
       {

@@ -150,6 +150,16 @@ pub fn nn_linear_bwd(x: int, W: int, dy: int,
 pub fn nn_rmsnorm_fwd(x: int, g: int,
                       y_out: int, xn_out: int, inv_out: int,
                       d: int) {
+    // HEXA-FUSION L3 (LLM-path glue half) device-resident seam →
+    // _hx_cuda_farr_rmsnorm_fwd_gpu (single-block: thread 0 SEQUENTIAL ms
+    // reduction + libm-sqrt inv, then grid-stride xn/y writes; __dmul_rn/
+    // __dadd_rn defeat FMA contraction → bit-exact). Keeps Y/XN/INV DEVICE-
+    // RESIDENT. Same env gate; OFF / no-CUDA → rc=-1 → the host loop below
+    // UNCHANGED (byte-eq, proven by clm_prod_nn_rmsnorm_devseam_eq).
+    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_rmsnorm(x, g, y_out, xn_out, inv_out, d)
+        if rc == 0 { return }
+    }
     let eps = 0.000001
     let mut ms = 0.0
     let mut i = 0
@@ -752,6 +762,18 @@ pub fn nn_lm_head_bwd(temb: int, zT: int, dl: int,
 // Caller allocates dx_out, dg_out (d-len each).
 pub fn nn_rmsnorm_bwd(x: int, g: int, xn: int, inv: float, dy: int,
                       dx_out: int, dg_out: int, d: int) {
+    // HEXA-FUSION L3 (LLM-path BWD glue half) device-resident seam →
+    // _hx_cuda_farr_rmsnorm_bwd_gpu. `inv` is a SCALAR float (saved fwd
+    // reciprocal-rms) passed BY VALUE — the dispatcher unpacks it with
+    // __hx_to_double, no farr wrapping (the extra-arg convention). Single-
+    // block: thread 0 SEQUENTIAL dot reduction → scale, grid-stride dg/dx
+    // writes; __dmul_rn/__dadd_rn/__dsub_rn defeat FMA contraction → bit-
+    // exact. Keeps DX/DG DEVICE-RESIDENT. Same env gate; OFF / no-CUDA →
+    // rc=-1 → the host loop below UNCHANGED (byte-eq).
+    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_rmsnorm_bwd(x, g, xn, inv, dy, dx_out, dg_out, d)
+        if rc == 0 { return }
+    }
     // pass 1: dxn (held implicit in dx_out as scratch; we overwrite below)
     // for clarity we compute dxn into a stack-free pattern by recomputing.
     let mut dot = 0.0

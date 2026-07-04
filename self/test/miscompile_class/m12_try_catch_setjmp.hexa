@@ -57,6 +57,35 @@ fn t5_torn(k: i64) -> i64 {            // torn tag/payload: str over int, then t
     return len(v)                       // expect 5 — pre-fix: tag=STR + stale int payload
 }
 
+// ── Defect B: try-stack leak on EARLY EXIT from a try body ──────────────────
+// STMT_TRY_POP is emitted only on the fall-through path; a `return`/`break`/
+// `continue` inside try must ALSO pop the jmp_buf, else it dangles on the try
+// stack and the NEXT throw longjmps into a dead frame (misdirect / crash). The
+// gen2 C path is guarded by `cleanup(__hexa_try_cleanup)`; this measures the
+// native own-IR lane (which lacks that mechanism) via the CI m12 gate.
+fn ret_in_try(v: i64) -> i64 {
+    try { return v } catch e { return 0 - 1 }   // return inside try — must pop the jbuf
+}
+
+fn t6_early_return_leak(v: i64) -> i64 {
+    let a = ret_in_try(v)                        // leaves a dangling jbuf if the pop is missed
+    let mut r = 0
+    try { let _x = boom(1) } catch e { r = 99 }  // this throw MUST hit this handler, not the dead one
+    return r + a                                 // expect 99 + v
+}
+
+fn t7_break_in_try() -> i64 {
+    let mut acc = 0
+    let mut i = 0
+    while i < 4 {
+        try { acc = acc + 1  if i == 1 { break } } catch e { }
+        i = i + 1
+    }
+    let mut r = 0
+    try { let _x = boom(1) } catch e { r = 5 }   // post-break throw must be caught here
+    return acc + r                               // expect 2 + 5 = 7
+}
+
 fn main() {
     if t1_normal(7) != 7        { println("FAIL t1 normal-path assign");       exit(41) }
     if t3_catch(3) != 0 - 5     { println("FAIL t3a catch path");              exit(43) }
@@ -64,5 +93,7 @@ fn main() {
     if t2_rollback(7) != 7      { println("FAIL t2 setjmp register rollback"); exit(42) }
     if t4_nested(1) != 1111     { println("FAIL t4 nested rollback");          exit(45) }
     if t5_torn(7) != 5          { println("FAIL t5 torn tag/payload");         exit(46) }
+    if t6_early_return_leak(7) != 106 { println("FAIL t6 return-in-try leak");  exit(47) }
+    if t7_break_in_try() != 7   { println("FAIL t7 break-in-try leak");        exit(48) }
     println("m12 try/catch setjmp: PASS")
 }
