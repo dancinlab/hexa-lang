@@ -42,6 +42,10 @@ on:
       - 'tool/determinism_gate.sh'
       - 'tool/hexa_ld.hexa'
       - '.github/workflows/determinism-gate.yml'
+      - 'tool/stage_resolve_runtime_a'
+      - 'tool/release_build'
+      - 'tool/stage_build_hexa'
+      - 'tool/stage_prebuild_hexat'
       - 'compiler/**'
       - 'self/**'
   pull_request:
@@ -50,6 +54,10 @@ on:
       - 'tool/determinism_gate.sh'
       - 'tool/hexa_ld.hexa'
       - '.github/workflows/determinism-gate.yml'
+      - 'tool/stage_resolve_runtime_a'
+      - 'tool/release_build'
+      - 'tool/stage_build_hexa'
+      - 'tool/stage_prebuild_hexat'
       - 'compiler/**'
       - 'self/**'
   workflow_dispatch:

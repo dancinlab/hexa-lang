@@ -1,0 +1,149 @@
+name: stdlib-selftest-gate
+
+# ── stdlib @ci_gate selftest aggregate — ADVISORY gate ───────────────────────
+#
+# PURPOSE
+#   Actually RUN the curated `@ci_gate` stdlib selftests in CI. Before this
+#   workflow, tool/stdlib_selftest_aggregate.hexa was a never-run local tool,
+#   so @ci_gate-marked tests (e.g. stdlib/lang/defer_test.hexa) were never
+#   compiled/executed on PRs — a t_cond-shaped compile error in defer_test
+#   shipped undetected until PR #4467. A compile error in a test file is
+#   classified ERROR by the aggregator and fails the job under --strict.
+#
+# WHAT IT DOES
+#   1. Builds the native `./hexa` driver via the SAME shared release path the
+#      other gates use (tool/release_build, linux-x86_64, ccache-accelerated).
+#   2. Runs, from the repo root (discovery is cwd-relative):
+#        HEXA_BIN=./hexa ./hexa run tool/stdlib_selftest_aggregate.hexa \
+#          --ci-gate --strict
+#      --ci-gate keeps only *_test.hexa/test_*.hexa files carrying `@ci_gate`
+#      in their first 10 lines (curated network-free deterministic subset);
+#      --strict exits 1 on any FAIL/TIMEOUT/ERROR (--ci-gate already implies
+#      strict — both flags kept for self-documenting intent).
+#   3. Uploads the state/stdlib_selftest_*.jsonl side-file for triage.
+#
+# ADVISORY ONLY — this workflow is NOT a required branch-protection check and
+# is NOT referenced by selfhost-gates-required.yml (the single always-on
+# required aggregator, deliberately untouched). Promotion to required happens
+# only after a measured green week, and only UNFILTERED (a path-filtered
+# required check deadlocks PRs that don't touch the paths).
+#
+# Linux is mandatory: the aggregator spawns GNU `timeout 30 <hexa> <file>`
+# (tool/stdlib_selftest_aggregate.hexa run_one), absent on macOS by default.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'stdlib/**'
+      - 'self/stdlib/**'
+      - 'compiler/**'
+      - 'self/**'
+      - 'tool/stdlib_selftest_aggregate.hexa'
+      - '.github/workflows/stdlib-selftest-gate.yml'
+  pull_request:
+    paths:
+      - 'stdlib/**'
+      - 'self/stdlib/**'
+      - 'compiler/**'
+      - 'self/**'
+      - 'tool/stdlib_selftest_aggregate.hexa'
+      - '.github/workflows/stdlib-selftest-gate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cancel a SUPERSEDED run only on PR re-push (a newer PR run replaces it and
+  # supplies the fresh check); push/dispatch runs always complete so main's
+  # gate history stays intact. Frees runner minutes + shortens the PR queue on
+  # rapid re-pushes. Byteeq-inert (cancels stale work; never changes a build's
+  # inputs/outputs).
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ── dispatch — fallback-dispatch runner picker (free · always available) ───
+  # Probes whether a self-hosted linux pool runner (aiden/summer, hexa-build
+  # slot) is ONLINE and emits the linux job's `runs-on` at runtime: the pool
+  # label-array when online + same-repo, else the free GitHub-hosted
+  # ubuntu-latest fallback. Pool-offline (or a fork PR) therefore NEVER wedges
+  # this gate — it just falls back. Mirrors the picker in determinism-gate.yml
+  # / nobaseline-gate.yml 1:1 (tool/ci_pick_runner.sh · .github/actions/pick-runner).
+  dispatch:
+    name: dispatch (pick runner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      linux_label: ${{ steps.linux.outputs.label }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: linux
+        uses: ./.github/actions/pick-runner
+        with:
+          kind: linux
+          # self-hosted only for same-repo events; fork PRs → GitHub-hosted (RCE).
+          eligible: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
+          # administration:read PAT (self-hosted runners list needs it; the
+          # default github.token CANNOT carry that scope → empty list → blind
+          # fallback). Absent secret → `|| github.token` = harmless
+          # ubuntu-latest fallback; present → routing goes live.
+          token: ${{ secrets.RUNNER_PROBE_TOKEN || github.token }}
+
+  stdlib-selftest:
+    name: stdlib selftest (@ci_gate aggregate, linux-x86_64)
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.linux_label) }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
+      - name: Build — shared release_build (native ./hexa driver)
+        shell: bash
+        env:
+          TARGET: linux-x86_64
+          CC: clang
+          LIBS: ""
+          GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
+        run: bash tool/release_build
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
+
+      - name: Sanity — ./hexa runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./hexa --version
+
+      # ── Gate invocation ──────────────────────────────────────────────────
+      # Must run from the repo root: discovery is cwd-relative
+      # (`find stdlib self/stdlib`), and the jsonl side-file is written to
+      # state/. HEXA_BIN=./hexa pins the per-test spawn to the binary built
+      # above (PATH `hexa` does not exist on cloud runners; pool ~/.hx
+      # binaries can be stale). --ci-gate implies --strict; both flags kept
+      # deliberately (self-documenting intent — do not "fix" the redundancy).
+      - name: Gate — @ci_gate stdlib selftests must all PASS
+        shell: bash
+        env:
+          HEXA_BIN: ./hexa
+        run: |
+          set -euo pipefail
+          ./hexa run tool/stdlib_selftest_aggregate.hexa --ci-gate --strict
+
+      - name: Upload per-file results (jsonl)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stdlib-selftest-jsonl
+          path: state/stdlib_selftest_*.jsonl
+          if-no-files-found: ignore
