@@ -694,6 +694,30 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        // Renumbered from HX3011 on merge with origin/main: static-types
+        // "mismatched types" (Error) now owns HX3011 and own-lint
+        // "use of moved value" owns HX3012 above — a code is single-booked
+        // (first-match `_catalog_lookup` / `hexa explain` surface ONE spec
+        // per code). The opt-in associated-types pass takes the next-free
+        // HX3019/HX3020; renumbering changes no default-build output.
+        code: "HX3019",
+        title: "associated type not bound in impl",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "associated type `{assoc}` declared by the trait is not bound in impl `{owner}`",
+        explain: "An `impl` of a trait must bind every associated type the trait declares (`trait Iterator { type Item; }` requires `impl Iterator for Counter { type Item = u32; }`); rustc raises E0046 \"not all trait items implemented\" for the missing slot (The Rust Reference §\"Associated types\"). The associated-types pass (opt-in `HEXA_ASSOC_TYPES=1`) decodes the synthetic `__assoc` annotation the parser capture attaches to `trait`/`impl` carriers, builds a trait→[associated type] registry, and reports each declared slot left unbound by the impl. Emitted only under the opt-in associated-types pass; the default build is byte-identical.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3020",
+        title: "unknown associated type in impl",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "`{assoc}` is not an associated type declared by the trait (in impl `{owner}`)",
+        explain: "An `impl` may only bind associated types the trait actually declares; binding a name the trait does not declare is rustc E0437 \"type `X` is not a member of trait `T`\" (The Rust Reference §\"Associated types\"). The associated-types pass (opt-in `HEXA_ASSOC_TYPES=1`) cross-checks each `type X = …;` binding in the impl against the trait's declared associated-type set and reports the surplus binding. A declared binding whose concrete type fails a slot bound (`type Item: Display;`) instead surfaces via HX3008/HX3009. Emitted only under the opt-in associated-types pass; the default build is byte-identical.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         // Renumbered from HX3011 (static-types F0 pre-flip hygiene): the code
         // was double-booked with the "mismatched types" Error spec above —
         // `_catalog_lookup`-style first-match consumers and `hexa explain`

@@ -31,6 +31,10 @@ on:
       - 'tool/ci_pick_runner.sh'
       - '.github/actions/pick-runner/**'
       - '.github/workflows/selfhost-byteeq-real.yml'
+      - 'tool/stage_resolve_runtime_a'
+      - 'tool/release_build'
+      - 'tool/stage_build_hexa'
+      - 'tool/stage_prebuild_hexat'
   push:
     branches: [main]
     paths:
@@ -41,6 +45,10 @@ on:
       - 'tool/ci_pick_runner.sh'
       - '.github/actions/pick-runner/**'
       - '.github/workflows/selfhost-byteeq-real.yml'
+      - 'tool/stage_resolve_runtime_a'
+      - 'tool/release_build'
+      - 'tool/stage_build_hexa'
+      - 'tool/stage_prebuild_hexat'
   workflow_dispatch:
 
 permissions:
