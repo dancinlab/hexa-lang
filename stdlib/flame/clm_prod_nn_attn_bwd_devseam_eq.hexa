@@ -16,11 +16,11 @@
 //  __dmul_rn/__dadd_rn/__dsub_rn (host FP_CONTRACT OFF) → NO FMA fuse. NO exp
 //  on the bwd path (the softmax Jacobian is closed in P).
 //
-//  ONLY the BWD seam is exercised — attn_core_FWD is DEFERRED because its
-//  softmax exp() binds to libm exp (bare builtin) and no device exp matches it
-//  bit-for-bit without moving the host softmax to dt_exp (that would break the
-//  frozen F-RFC043-LAYER-EQ-ATTN-FWD max|Δ|=0 anchor). P here is produced by the
-//  host nn_attn_core_fwd — a valid saved-forward softmax input for the bwd vjp.
+//  This oracle exercises the BWD seam. The FWD seam is now WIRED too — see the
+//  sibling clm_prod_nn_attn_fwd_devseam_eq (the host softmax migrated libm exp →
+//  dt_exp per F-OP19, matched by the device _hx_dt_exp_dev twin). P here is
+//  produced by the host nn_attn_core_fwd — a valid saved-forward softmax input
+//  for the bwd vjp.
 //
 //  F-ATTN-BWD-SEAM : dispatcher body == host nn_attn_core_bwd.
 // ════════════════════════════════════════════════════════════════════════════
