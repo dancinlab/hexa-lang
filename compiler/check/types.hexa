@@ -4243,7 +4243,7 @@ fn _cg_check_module(module: Module, out: array) {
 // (parser.hexa `parse_assoc_trait_item` / `parse_assoc_impl_item`) and proves
 // the three Rust associated-type rules (The Rust Reference §"Associated types"):
 //   * R1 — every associated type declared by the trait MUST be bound in each
-//     impl (rustc E0046 "not all trait items implemented") → HX3019.
+//     impl (rustc E0046 "not all trait items implemented") → HX3022.
 //   * R2 — an impl may NOT bind an associated type the trait does not declare
 //     (rustc E0437 "type X is not a member of trait T") → HX3020.
 //   * R3 — an associated type may carry bounds (`type Item: Display;`) the bound
@@ -4402,7 +4402,7 @@ fn _assoc_check_module(module: Module, out: array) {
                 b = b + 1
             }
             if !found {
-                let mut db = diag_new("HX3019")
+                let mut db = diag_new("HX3022")
                 db = diag_span(db, it.span)
                 db = diag_arg(db, "owner", owner)
                 db = diag_arg(db, "assoc", decl_name)
@@ -4995,7 +4995,7 @@ pub fn type_check(module: Module) -> array {
     // structural slot to the exhaustiveness pass above.
     _cg_check_module(module, out)
 
-    // Associated types — trait/impl binding enforcement (HX3019/3020 + HX3008/9).
+    // Associated types — trait/impl binding enforcement (HX3022/3020 + HX3008/9).
     // Opt-in (HEXA_ASSOC_TYPES=1); no-op on the default build. Same check-only,
     // diagnostics-only structural slot as the const-generics pass above.
     _assoc_check_module(module, out)
