@@ -290,6 +290,22 @@ pub fn nn_attn_core_fwd(Q: int, K: int, V: int,
 pub fn nn_attn_core_bwd(Q: int, K: int, V: int, P: int, dctx: int,
                         dQ_out: int, dK_out: int, dV_out: int,
                         T: int, nh: int, nkv: int, hd: int) {
+    // HEXA-FUSION L3 (LLM-path ATTN BWD glue half) device-resident seam →
+    // _hx_cuda_farr_attn_core_bwd_gpu (ONE thread replays the host hh→i→j→c
+    // loop nest: SEQUENTIAL dP_row/sdot recompute + libm-sqrt scale, dV/dK
+    // accumulate in host order; __dmul_rn/__dadd_rn/__dsub_rn defeat FMA →
+    // bit-exact). NO exp on this path. dQ/dK/dV ACCUMULATE INTO the caller-
+    // zeroed buffers, kept DEVICE-RESIDENT. Same env gate; OFF / no-CUDA →
+    // rc=-1 → the host loop below UNCHANGED (byte-eq, proven by
+    // clm_prod_nn_attn_bwd_devseam_eq). NOTE the FWD softmax seam is DEFERRED:
+    // its exp() binds to libm exp (bare builtin), which no device exp matches
+    // bit-for-bit without moving the host softmax to dt_exp (would break the
+    // frozen F-RFC043-LAYER-EQ-ATTN-FWD max|Δ|=0 anchor).
+    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_attn_core_bwd(Q, K, V, P, dctx,
+                                              dQ_out, dK_out, dV_out, T, nh, nkv, hd)
+        if rc == 0 { return }
+    }
     let n_rep = nh / nkv
     let d = nh * hd
     let scale = 1.0 / sqrt(to_float(hd))
