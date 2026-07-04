@@ -162,6 +162,53 @@ if [ -f "$_RT_EMIT" ]; then
   fi
   rm -f "$_rttmp"
 fi
+# ── zero-c #29 S1 — FFI floor-partition: SOURCE runtime_ffi_dyn.c from its emitter SSOT ─
+# The dlopen/dlsym/host_ffi_* TU lives in runtime_emit_full.hexa under the `fbuf` buffer var
+# (so the runtime.c awk above skips it). This parallel awk un-escapes those `fbuf` lines into
+# self/runtime_ffi_dyn.c — the FFI TU that program/driver links pick up so the canonical
+# runtime.a carries no dl* nm-UND (state/zeroc-29-s1-ffi-floor-partition-spec-2026-07-03.md).
+_FFI_DYN="self/runtime_ffi_dyn.c"
+if [ -f "$_RT_EMIT" ]; then
+  _ffitmp="$(mktemp -t regen_runtime_ffi_dyn_c.XXXXXX)" || _ffitmp=""
+  if [ -n "$_ffitmp" ] && awk '
+      BEGIN { saw = 0 }
+      {
+        line = $0
+        pfx = "    fbuf = fbuf + \""
+        if (substr(line, 1, length(pfx)) != pfx) next
+        body = substr(line, length(pfx) + 1)
+        if (substr(body, length(body), 1) != "\"") next
+        body = substr(body, 1, length(body) - 1)
+        saw = 1
+        out = ""; n = length(body); i = 1
+        while (i <= n) {
+          c = substr(body, i, 1)
+          if (c == "\\" && i < n) {
+            d = substr(body, i+1, 1)
+            if (d == "n")  { out = out "\n"; i += 2; continue }
+            if (d == "t")  { out = out "\t"; i += 2; continue }
+            if (d == "\"") { out = out "\""; i += 2; continue }
+            if (d == "\\") { out = out "\\"; i += 2; continue }
+            out = out "\\"; i += 1; continue
+          }
+          out = out c; i += 1
+        }
+        printf "%s", out
+      }
+      END { if (!saw) exit 3 }
+    ' "$_RT_EMIT" > "$_ffitmp" 2>/dev/null \
+     && [ -s "$_ffitmp" ] && grep -q 'hexa_ffi_dlopen' "$_ffitmp"; then
+    if ! cmp -s "$_ffitmp" "$_FFI_DYN"; then
+      cp -f "$_ffitmp" "$_FFI_DYN"
+      echo "[restore_frozen_seeds] zero-c #29 S1: runtime_ffi_dyn.c SYNTHESIZED from emitter SSOT (fbuf awk un-escape, $(wc -l < "$_FFI_DYN") lines)"
+    else
+      echo "[restore_frozen_seeds] zero-c #29 S1: runtime_ffi_dyn.c already byte-identical to emitter SSOT — no-op"
+    fi
+  else
+    echo "[restore_frozen_seeds] zero-c #29 S1: FFI-dyn emitter synth unavailable — runtime_ffi_dyn.c NOT regenerated" >&2
+  fi
+  rm -f "$_ffitmp"
+fi
 # ── zero-c FRAG-REGEN (ING #29) — SOURCE the 6 native-fragment .c from emitter SSOTs ─
 # Generalizes the runtime.c M3 block above to the six self/native/<X>.c fragments that
 # have a .hexa string-emitter SSOT: mount · namespace · signal_flock · proc_fork · term_ffi
