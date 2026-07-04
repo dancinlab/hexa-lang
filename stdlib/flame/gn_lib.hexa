@@ -39,6 +39,17 @@ fn _gn_sqrt(x: float) -> float {
 pub fn nn_groupnorm_fwd(x: int, gamma: int, beta: int,
                         y_out: int, mean_out: int, inv_out: int, xhat_out: int,
                         T: int, C: int, G: int) {
+    // HEXA-FUSION L3 (glue half) device-resident seam → forge_dispatch_groupnorm
+    // (_hx_cuda_farr_groupnorm_gpu, runtime.h:1329). gamma/beta are contiguous [C]
+    // here (zero offset) so pass DIRECTLY — no slice temp (cf. nn_groupnorm_fwd_off).
+    // Byte-eq (max|Δ|=0): the kernel replays the SAME sequential per-group reduction
+    // and Newton-Raphson _gn_sqrt as the host loop below (runtime.h:1319-1324). Same
+    // env gate as nn_embedding_fwd / the _off sibling; OFF / no-CUDA → rc=-1 → the
+    // host loop below UNCHANGED (byte-eq reference, clm_prod_gn_gelu_hostdispatch_eq).
+    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_groupnorm(x, gamma, beta, y_out, mean_out, inv_out, xhat_out, T, C, G)
+        if rc == 0 { return }
+    }
     let eps = 0.00001
     let cg = C / G
     let m = to_float(cg * T)
@@ -184,6 +195,17 @@ pub fn nn_groupnorm_fwd_off(x: int, gamma: int, goff: int, beta: int, boff: int,
 pub fn nn_groupnorm_bwd(xhat: int, inv: int, gamma: int, dy: int,
                         dgamma_out: int, dbeta_out: int, dX_out: int,
                         T: int, C: int, G: int) {
+    // HEXA-FUSION L3 (BWD glue half) device-resident seam → forge_dispatch_groupnorm_bwd
+    // (_hx_cuda_farr_groupnorm_bwd_gpu, runtime.h:1484). gamma is contiguous [C] and the
+    // grads write at offset 0 here (zero offset) so pass DIRECTLY — no slice / copy-back
+    // (cf. nn_groupnorm_bwd_off). Byte-eq (max|Δ|=0): the kernel replays the SAME
+    // sequential per-channel + per-group reductions as the host loop (runtime.h:1472-1479).
+    // Same env gate as nn_embedding_fwd / the _off sibling; OFF / no-CUDA → rc=-1 → the
+    // host loop below UNCHANGED (byte-eq reference).
+    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_groupnorm_bwd(xhat, inv, gamma, dy, dgamma_out, dbeta_out, dX_out, T, C, G)
+        if rc == 0 { return }
+    }
     let cg = C / G
     let m = to_float(cg * T)
     // dgamma, dbeta (per channel)
