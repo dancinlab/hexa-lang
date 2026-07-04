@@ -8443,6 +8443,24 @@ fn gen2_expr(node) {
                         + arg_strs[6] + ", " + arg_strs[7] + ", "
                         + arg_strs[8] + ")"
                 }
+                // HEXA-FUSION L3 (glue half): forge_dispatch_attn_core_fwd(Q, K,
+                // V, P_out, ctx_out, T, nh, nkv, hd) -> int rc. LLM-path GQA
+                // attention-core fwd (stdlib/flame/nn_lib.hexa nn_attn_core_fwd):
+                // per (hh,i) L=i+1 kvh=hh/(nh/nkv), scores=Σ_c Q·K·scale, causal
+                // softmax (e=dt_exp(s−m), device _hx_dt_exp_dev twin — the reason
+                // the FWD seam is no longer DEFERRED), ctx=Σ_j P·V. scale =
+                // 1/libm-sqrt(hd) (IEEE correctly-rounded == device sqrt). ONE
+                // thread SEQUENTIAL (NO tree/atomics), __dmul_rn/__dadd_rn defeat
+                // FMA → bit-exact (max|Δ|=0). Keeps P_out/ctx_out DEVICE-RESIDENT.
+                // no-CUDA → -1 → host loop.
+                if name == "forge_dispatch_attn_core_fwd" {
+                    return "hexa_forge_dispatch_attn_core_fwd("
+                        + arg_strs[0] + ", " + arg_strs[1] + ", "
+                        + arg_strs[2] + ", " + arg_strs[3] + ", "
+                        + arg_strs[4] + ", " + arg_strs[5] + ", "
+                        + arg_strs[6] + ", " + arg_strs[7] + ", "
+                        + arg_strs[8] + ")"
+                }
             }
             if len(node.args) == 10 {
                 // HEXA-FUSION L3 (glue half): forge_dispatch_groupnorm(x, gamma,
