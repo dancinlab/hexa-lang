@@ -90,7 +90,10 @@ emit_one() {
     local kept total pext
     kept="$(grep -cE "^[[:space:]]*\.globl[[:space:]]+_?${CONTRACT}([[:space:]]|\$)" "$demoted" || echo 0)"
     total="$(grep -cE '^[[:space:]]*\.globl[[:space:]]' "$demoted" || echo 0)"
-    pext="$(grep -cE '^[[:space:]]*\.private_extern[[:space:]]' "$demoted" || echo 0)"
+    # NOTE: `grep -c` prints "0" AND exits 1 when there are no matches, so `|| echo 0`
+    # (the kept/total idiom, safe there because those counts are always >=1) would append
+    # a SECOND "0" here → "0\n0" → `[ -eq ]` integer error. Use `|| true` to keep grep's own "0".
+    pext="$(grep -cE '^[[:space:]]*\.private_extern[[:space:]]' "$demoted" || true)"
     [ "$kept" -eq 1 ] || { echo "[regen_hxlcl_free] ERROR: $triple kept $kept/1 hxlcl_free global (raw emit missing the shim?)" >&2; exit 1; }
     [ "$total" -eq 1 ] || { echo "[regen_hxlcl_free] ERROR: $triple demotion left $total globals (expected 1 — sed pattern drift)" >&2; exit 1; }
     [ "$pext" -eq 0 ] || { echo "[regen_hxlcl_free] ERROR: $triple demotion left $pext .private_extern (Mach-O N_PEXT stays external → ld -r multidef)" >&2; exit 1; }
