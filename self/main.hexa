@@ -1616,7 +1616,14 @@ fn strict_fp_cflags(c_file) {
 // link. Drivers (hexat/hexa) link runtime_ffi_dyn.o unconditionally (they run the
 // dynamic-FFI interpreter) — that stays in _ffi_dyn_obj call sites. Mirrors strict_fp_cflags.
 fn ffi_dyn_objs(c_file, selfdir) {
-    let probe = exec("grep -q 'HEXA_FFI_DYN_TU: 1' '" + c_file + "' 2>/dev/null && printf yes || printf no")
+    // Link the partitioned FFI TU when the generated C either carries the codegen marker
+    // OR directly references an FFI runtime symbol. The marker alone was MISSED on some
+    // codegen paths (e.g. anima core/decode.hexa emits `hexa_ffi_dlsym` refs but no
+    // HEXA_FFI_DYN_TU marker → prebuilt-runtime.a link → `undefined reference to
+    // hexa_ffi_dlsym`). Detecting the symbols directly closes that gap. Non-FFI programs
+    // reference none → "" → byte-identical to the pre-S1 link (codegen never emits these
+    // names for non-FFI code; the c_file greps the transpiled user code, not #included headers).
+    let probe = exec("grep -qE 'HEXA_FFI_DYN_TU: 1|hexa_ffi_dlsym|hexa_ffi_dlopen|host_ffi_' '" + c_file + "' 2>/dev/null && printf yes || printf no")
     if probe != "yes" { return "" }
     return _ffi_dyn_obj(selfdir)
 }
