@@ -189,8 +189,8 @@
       {
         "id": "WALL-A-STATIC-TYPES-REJECT-LADDER",
         "state": "in_flight",
-        "value": "정적타입 REJECT 사다리 r1~r6 land(literal→ident/call→decl-split→array→struct-field→struct-literal·전부 opt-in HEXA_STATIC_TYPES default-OFF·byteeq중립·HX3011 Rust E0308·삽입점 compiler/check/types.hexa _infer_expr)·r7+ generic/trait static-dispatch=measured 천장(dynamic 런타임 type-erasure 근본벽).",
-        "threshold": "r7+ 불가=_types_lower_type_ref:931-939 degraded sentinel(generic:/fn:/tuple: → args:[]/ret:[] 타입파라미터 소거)→concrete T 미보유→generic monomorphization·trait static-dispatch은 dynamic→static 런타임 재설계 필요(scope-local _infer_expr 鋼 아님). nested receiver(s.inner.x)도 同벽. SSOT=state/rfc_static_types_rust_ladder.md.",
+        "value": "정적타입 REJECT 사다리 현행(main·2026-07-05): r1~r11+F0/F3/F4 전부 착지·catalog HX3011~HX3018. r1~r6(literal→ident/call→decl-split→array→struct-field→struct-literal)·r7prep(array-lower)·r8(ArrayLit call-arg)·r9a/b(Index/Field READ 추론)·r9c(match literal-pattern)·r9d(struct-field 존재 HX3016 E0560)·r11(missing-field HX3017 E0063)·exhaustiveness(HX3018)·F0(flag-fold STATIC⊇ARRAY_LOWER)·F3(env-hoist once-per-type_check)·F4(warn-first two-step: HEXA_STATIC_TYPES=warn/_STRICT=fatal REJECT). 전부 opt-in default-OFF byteeq중립·삽입점 compiler/check/types.hexa _infer_expr·HX3011=Rust E0308. ★phantom-merge 사고(#4476~#4518 down-stack)로 r8~F4 유령머지→#4538 재착지 복구. ★H0 dead-arm hygiene ✅main(#4559: _infer_expr raw-env 재읽기 twin 3개 제거·phantom-merge dead-arm 소거·byteeq중립) · HX3019 dedup ✅main(#4562: 두 진단이 HX3019 공유→assoc not-bound E0046을 HX3019→HX3022 renumber·release-integrity) · 전-코퍼스 census CI ✅main(#4560 static-types-corpus.yml advisory: find→git-ls-files 3813 files+HX3017+xargs 병렬+timeout 60min). HX코드 네임스페이스 현행(main SSOT)=HX3019 E0515(return-borrow #4555)·HX3020 E0437(assoc surplus #4085)·HX3021 E0502(borrow-conflict PENDING #4557)·HX3022 E0046(assoc not-bound #4562).",
+        "threshold": "next segment=FLIP-1(default-ON flip-prep·census-gated): 전-코퍼스 census CI ✅main(#4560)로 인프라 착지→GO/NO-GO는 그 run verdict(callers=0 확인+byteeq gen3≡gen4 warn-band)에 대기. 대안(b)=새 REJECT(fn-arg arity/type·binop type·if/else 통일·return vs decl). r7+ generic/trait static-dispatch=여전히 measured 천장(_types_lower_type_ref degraded sentinel→concrete T 미보유·dynamic→static 재설계 필요). SSOT 트리=hexa-own-ladder(메모리)·이 레코드=static-types 사다리 로드맵. ING=활성 포인터만(#42416992/#42417214).",
         "source": "compiler/check/types.hexa"
       },
       {
@@ -339,6 +339,27 @@
         "value": "static-types r8~r11+F0/F3/F4 타워를 스택 PR 체인으로 올리며 각 PR base를 main이 아닌 부모 feature 브랜치로 둠 → 각 PR이 down-stack 머지되어 GitHub MERGED 배지는 '부모 흡수'만 의미하는데 tip→main PR이 한 번도 안 열려 root(#4457 r7prep) 이후 +688줄(HX3015~17 포함) 전체가 좌초. 5개 PR(#4476·#4495·#4498·#4515·#4518)이 초록 배지를 단 채 콘텐츠 main 전무 = release-integrity 유령머지가 수 라운드 지속. 검증=git log origin/main -S HX3017/_types_static_flags_hoist EMPTY. 복구=r11-e0063 타워를 squash-onto-clean으로 main 재착지(byteeq-real 3-target 게이트).",
         "threshold": "재발조건=머지된 head SHA가 main ancestor인지 사후검증 부재 + MERGED배지=실착지 착시. 해결=stack-landing-guard.yml(base≠main 머지 시 PR 경고+ledger issue 기록·main push마다 merge-base --is-ancestor 재조정·전량 착지 시 auto-close). 스택 root 착지 시 base 브랜치 즉시 삭제 관행이 GitHub 자동 retarget을 발동시켜 보강.",
         "source": ".github/workflows/stack-landing-guard.yml"
+      },
+      {
+        "id": "catalog-code-uniqueness-yml-1",
+        "state": "pos-conv",
+        "value": "catalog.hexa에 같은 code:\"HXxxxx\"가 둘(HX3019=return-borrow E0515 #4555 + assoc-types not-bound E0046)로 중복 배정 → 진단코드 충돌·release-integrity 결함(convergence catalog-hexa-1). #4562가 assoc not-bound을 HX3019→HX3022(E0046)로 renumber해 즉시 해소.",
+        "threshold": "재발조건=신규 진단 추가 시 기존 code와 충돌하는지 사후검증 부재. 해결=catalog-code-uniqueness.yml(.github/workflows/ + tool/check_catalog_unique.sh)=BLOCKING CI 게이트로 catalog.hexa 내 중복 code:\"HXxxxx\" 거부(#4563·convergence catalog-hexa-1 root fix). 현행 네임스페이스=HX3019 E0515(return-borrow #4555)·HX3020 E0437(assoc surplus #4085)·HX3021 E0502(borrow-conflict PENDING #4557)·HX3022 E0046(assoc not-bound #4562). stack-landing-guard.yml과 나란히 서는 release-integrity 게이트.",
+        "source": ".github/workflows/catalog-code-uniqueness.yml"
+      },
+      {
+        "id": "selfhost-byteeq-real-yml-1",
+        "state": "pos-conv",
+        "value": "느린 byteeq-real 게이트(~30min ghost darwin serial 큐·flake/requeue)가 병렬·스택 PR을 CI 도중 stale화: PR이 게이트 대기하는 사이 main이 sibling으로 전진→GitHub가 DIRTY/CONFLICTING 표기+admin merge 거부. 실코드충돌·HX충돌 아닌 순수 churn-race(merge-tree conflict-marker=0·catalog/CHANGELOG auto-resolve). mergeability 캐시 재계산 안 됨.",
+        "threshold": "재발=여러 PR 같은시간창 byteeq 대기 중 main 전진. 해결=owner refresh(격리 worktree merge origin/main→push·NO force·merge-tree로 code conflict 0 선확인). RED/BLOCKED 실충돌 오판 말 것(merge-tree+pre-conflict GREEN 확인). 다수 PR=단일 드레이너 순차소진+느린 byteeq PR 마지막.",
+        "source": ".github/workflows/selfhost-byteeq-real.yml"
+      },
+      {
+        "id": "selfhost-byteeq-real-yml-2",
+        "state": "pos-conv",
+        "value": "선택적 홀: byteeq-real은 self-hosted(ghost) flaky runner라 required-check 아님(gates-summary만 required·github-hosted). GitHub auto-merge가 required 충족 순간 발화→codegen/runtime PR이 byteeq-real GREEN verdict 없이 착지 가능(#4557 borrowck·byteeq run superseded-cancelled 채 auto-merge). byteeq-neutral opt-in default-OFF엔 무해(flag-gate 불변식+base byteeq-green으로 성립)나 BIT-CHANGING엔 release-integrity 위반.",
+        "threshold": "재발=compiler/runtime 파일 PR이 auto-merge enabled+byteeq-real 미완. 해결=(1)드레이너 규율=codegen/runtime-touching PR은 byteeq-real 완료GREEN 확인 후 머지(gates-summary만으로 auto-merge 금지·branch protection 의존 말 것). (2)byteeq-neutral opt-in은 flag-gate 불변식+sibling base-green 정당화+사후 main byteeq GREEN 검증. self-hosted flaky라 required 승격은 트레이드오프(전 PR 차단).",
+        "source": ".github/workflows/selfhost-byteeq-real.yml"
       }
     ]
   },
@@ -5444,6 +5465,14 @@
             "role": "",
             "id": "hexa-own-ladder-l3-borrow",
             "detail": ""
+          },
+          {
+            "id": "hexa-own-ladder-l4-borrow-surface",
+            "name": "L4 borrow surface &T/&mut T — ✅ MERGED(#4517 borrow surface 양파서 · #4520 A2 would-move census · #4521 B0 STRICT fatal HX3014). 플래그 HEXA_BORROWCK(+_NLL cross-block liveness ·_CENSUS ·_STRICT). L3 NLL 위에 &T/&mut T 대여표면+STRICT 승격 착지. 다음 착지: L5 dangling return-ref HX3019=Rust E0515 ✅main(#4555) · borrow-conflict HX3021=Rust E0502(& while &mut)=E2+E3 byteeq-gated #4557(구현됨·미배선). 삽입점 hir_to_mir.hexa _bck_* + builder.hexa _emit_hx3014."
+          },
+          {
+            "id": "hexa-own-ladder-l5-borrow-conflict",
+            "name": "L5 borrow-conflict E2+E3 — 구현됨·미배선(byteeq-gated #4557 branch, main 미착지): loan registry + 동시대여 충돌 REJECT HX3021=Rust E0502(& while &mut). 플래그 HEXA_BORROWCK. L4 &T/&mut T 표면 위 loan 등록부에서 겹치는 mutable 대여를 탐지. 형제 착지=L5 dangling return-ref HX3019=E0515 ✅main(#4555). HX코드=HX3021 E0502(PENDING #4557)·HX3019 E0515(#4555 착지). 삽입점 hir_to_mir.hexa _bck_* loan registry."
           },
           {
             "name": "L4 default-ownership (Rust move-by-default · semantics A) — 사용자 지시(2026-07-04): @own opt-in이 아니라 **기본 소유권**. 정직 crux: bump-arena는 scope 중 free 안 함→borrow 위반이 use-after-free 불가→enforcement=correctness lint until PREREQ-X(비-arena free-tree HEXA_STREAM_RECLAIM allocator default). 2-lane 사다리→flip. 로드맵 SSOT=state/hexa-own/default_own_roadmap.md(#4516 MERGED).",
