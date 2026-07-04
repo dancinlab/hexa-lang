@@ -1,14 +1,16 @@
-// hxlcl_free_x86_64.s — FROZEN BOOTSTRAP SEED (RT-NATIVE zero-c #29 — WALL-2 hxlcl_free).
-// GENERATED: tool/regen_hxlcl_free_native_s.sh — aprime_cc _drv.hexa --emit=asm
-//   --target=x86_64-linux-gnu -o hxlcl_free_x86_64.s hxlcl_core.hexa, then a .globl DEMOTION post-pass
-//   keeping ONLY the hxlcl_free shim global.
-//   Provides hxlcl_free (native Route-C body, no libc free) that
-//   stage_resolve_runtime_a ar's into runtime.a under HEXA_RT_NATIVE_FREE,
-//   replacing the libc-shim free member so `free` drops from the nm-UND floor.
+// hxlcl_calloc_x86_64.s — FROZEN BOOTSTRAP SEED (RT-NATIVE zero-c #29 — WALL-2 hxlcl_calloc).
+// GENERATED: tool/regen_hxlcl_calloc_native_s.sh — aprime_cc _drv.hexa --emit=asm
+//   --target=x86_64-linux-gnu -o hxlcl_calloc_x86_64.s hxlcl_core.hexa, then a .globl DEMOTION post-pass
+//   keeping ONLY the hxlcl_calloc shim global.
+//   Provides hxlcl_calloc (native Route-C body: total=nmemb*size; p=hxlcl_malloc(total);
+//   zero-fill p) that stage_resolve_runtime_a ar's into runtime.a under
+//   HEXA_RT_NATIVE_CALLOC, replacing the libc-shim calloc member so `calloc`
+//   drops from the nm-UND floor. The inner hxlcl_malloc callee stays served by
+//   the shim (undefined extern here, resolved within runtime.a — NO co-drop).
 //   Baked as a seed (not live-emitted) because the emit contract needs
 //   build/aprime_cc, which cannot exist at Stage 0b (#4489/#4545 root).
 //   Every other hxlcl_* global is demoted to local (1-symbol contract).
-//   ABI: ELF, hxlcl_free no underscore. External: hexa string/value runtime (resolved within runtime.a).
+//   ABI: ELF, hxlcl_calloc no underscore. External: hexa string/value runtime + hxlcl_malloc (resolved within runtime.a).
 # hexa-lang emit pass — target=x86_64-linux-gnu
 # source: stdlib/runtime/hxlcl_core.hexa
 .intel_syntax noprefix
@@ -6850,6 +6852,7 @@ hxlcl_strndup:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
+.globl hxlcl_calloc
 .hidden hxlcl_calloc
     .p2align 4
 hxlcl_calloc:
@@ -16219,7 +16222,6 @@ hxlcl_isalpha:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.globl hxlcl_free
 .hidden hxlcl_free
     .p2align 4
 hxlcl_free:

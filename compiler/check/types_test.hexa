@@ -2013,23 +2013,40 @@ fn main() {
         }
     }
 
-    // (w) static-types r11 — struct-literal MISSING-required-field WARNING.
-    // Flag-ON (HEXA_STATIC_TYPES=1, no ARRAY_LOWER dependency): exactly 1
-    // HX3017 — `P{ a: 1 }` omits the declared field `b` (the NEW r11 missing-
-    // field arm); the fully-initialised `P{ a: 1, b: 2 }` and the registry-
-    // unknown `Nope{ a: 1 }` stay clean (conservative unknown-fallback), and 0
-    // HX3016/HX3011 proves no reject cross-fire. Default build: 0 (byteeq-
-    // neutral proof — the STUB walk is unchanged, no registry read).
-    let diags_w = _run_case("(w) static-types r11 — struct-literal missing required field WARN (HEXA_STATIC_TYPES)", _build_case_static_types_r11())
+    // (w) static-types r11 — struct-literal MISSING-required-field + F5-prep F4
+    // warn-first SEVERITY two-step. Flag-ON (HEXA_STATIC_TYPES=1, no ARRAY_LOWER
+    // dependency): exactly 1 HX3017 — `P{ a: 1 }` omits the declared field `b`
+    // (the r11 missing-field arm); the fully-initialised `P{ a: 1, b: 2 }` and
+    // the registry-unknown `Nope{ a: 1 }` stay clean (conservative unknown-
+    // fallback), and 0 HX3016/HX3011 proves no reject cross-fire. The COUNT is
+    // band-invariant; the F4 axis is SEVERITY: plain HEXA_STATIC_TYPES=1 → the
+    // HX3017 lands in the WARNING band (rc=0, non-fatal — the build still
+    // compiles; catalog default), while HEXA_STATIC_TYPES_STRICT=1 re-escalates
+    // it to the ERROR band (rc≠0, REJECT) via the `_emit_hx3017` severity
+    // override — the same F4 strict-split contract as HX3011/HX3016. Default
+    // build: 0 (byteeq-neutral proof — the STUB walk is unchanged, no registry
+    // read).
+    let diags_w = _run_case("(w) static-types r11 — struct-literal missing required field (F4 warn/strict severity) (HEXA_STATIC_TYPES)", _build_case_static_types_r11())
     let nw3017 = _count_code(diags_w, "HX3017")
     let nw3016 = _count_code(diags_w, "HX3016")
     let nw3011 = _count_code(diags_w, "HX3011")
+    let nw_warn = _count_code_sev(diags_w, "HX3017", "warning")
+    let nw_err = _count_code_sev(diags_w, "HX3017", "error")
     if env("HEXA_STATIC_TYPES") == "1" {
-        if nw3017 != 1 || nw3016 != 0 || nw3011 != 0 {
-            println("  FAIL: case (w) HEXA_STATIC_TYPES=1 expected 1 HX3017 (P missing `b`; full init + unknown-struct stay clean) + 0 HX3016 + 0 HX3011, got " + to_string(nw3017) + " HX3017 / " + to_string(nw3016) + " HX3016 / " + to_string(nw3011) + " HX3011 (total=" + to_string(len(diags_w)) + ")")
-            ok = false
+        if env("HEXA_STATIC_TYPES_STRICT") == "1" {
+            if nw3017 != 1 || nw3016 != 0 || nw3011 != 0 || nw_err != 1 || nw_warn != 0 {
+                println("  FAIL: case (w) STRICT expected 1 HX3017 as ERROR (REJECT) + 0 HX3016 + 0 HX3011, got " + to_string(nw3017) + " HX3017 (" + to_string(nw_err) + " error/" + to_string(nw_warn) + " warn) / " + to_string(nw3016) + " HX3016 / " + to_string(nw3011) + " HX3011 (total=" + to_string(len(diags_w)) + ")")
+                ok = false
+            } else {
+                println("  ok: 1 HX3017 as ERROR (HEXA_STATIC_TYPES_STRICT=1 → REJECT/rc≠0; F4 strict escalation)")
+            }
         } else {
-            println("  ok: 1 HX3017 emitted (missing field `b` on known struct P; full init + unknown struct stay clean)")
+            if nw3017 != 1 || nw3016 != 0 || nw3011 != 0 || nw_warn != 1 || nw_err != 0 {
+                println("  FAIL: case (w) plain HEXA_STATIC_TYPES=1 expected 1 HX3017 as WARNING (non-fatal) + 0 HX3016 + 0 HX3011, got " + to_string(nw3017) + " HX3017 (" + to_string(nw_err) + " error/" + to_string(nw_warn) + " warn) / " + to_string(nw3016) + " HX3016 / " + to_string(nw3011) + " HX3011 (total=" + to_string(len(diags_w)) + ")")
+                ok = false
+            } else {
+                println("  ok: 1 HX3017 as WARNING (plain HEXA_STATIC_TYPES=1 → rc=0, non-fatal; F4 warn-first)")
+            }
         }
     } else {
         if nw3017 != 0 {

@@ -37,6 +37,10 @@ on:
       - 'self/test/miscompile_zero/**'
       - 'tool/selfhost_codegen_guard.sh'
       - '.github/workflows/selfhost-codegen-guard.yml'
+      - 'tool/stage_resolve_runtime_a'
+      - 'tool/release_build'
+      - 'tool/stage_build_hexa'
+      - 'tool/stage_prebuild_hexat'
       - 'compiler/**'
       - 'self/**'
   pull_request:
@@ -44,6 +48,10 @@ on:
       - 'self/test/miscompile_zero/**'
       - 'tool/selfhost_codegen_guard.sh'
       - '.github/workflows/selfhost-codegen-guard.yml'
+      - 'tool/stage_resolve_runtime_a'
+      - 'tool/release_build'
+      - 'tool/stage_build_hexa'
+      - 'tool/stage_prebuild_hexat'
       - 'compiler/**'
       - 'self/**'
   workflow_dispatch:
