@@ -1047,6 +1047,7 @@ fn codegen(ast) {
     // a second compilation in the same process doesn't inherit the first.
     _gen2_tu_has_strict_fp = 0
     _gen2_current_fn_strict_fp = 0
+    _gen2_tu_has_vendor_ffi = 0
     let mut _gi = 0
     while _gi < len(ast) {
         let _gk = ast[_gi].kind
@@ -1233,6 +1234,11 @@ fn codegen(ast) {
             global_parts.push(ew.global)
             fwd_parts.push(ew.forward + "\n")
             fn_parts.push(ew.fn_code + "\n\n")
+            // zero-c #29 PR-2: a non-empty ew.init means native-route did NOT absorb this
+            // extern → a real hexa_ffi_dlsym(hexa_ffi_dlopen(..)) init line survives, so this
+            // program needs the partitioned-out runtime_ffi_dyn.o. (native-route survivors
+            // return init=="" at codegen.hexa's FFI-NATIVE-ROUTE.)
+            if ew.init != "" { _gen2_tu_has_vendor_ffi = 1 }
             init_parts.push(ew.init)
         } else if k == "StructDecl" {
             // T33-rebuild: emit a forward declaration so the generated
@@ -1504,6 +1510,15 @@ fn codegen(ast) {
         parts.push("/* HEXA_STRICT_FP_TU: 1 */\n")
     } else {
         parts.push("/* HEXA_STRICT_FP_TU: 0 */\n")
+    }
+    // zero-c #29 PR-2: emit both polarities so the driver detects "no vendor FFI" too.
+    // 1 = this program has a surviving vendor extern / interpreter host_ffi dispatch and
+    // must link build/runtime_ffi_dyn.o (dl* lives there post-S1); 0 = it does not, so the
+    // link stays runtime_ffi_dyn-free and byte-identical to the pre-S1 non-FFI program.
+    if _gen2_tu_has_vendor_ffi == 1 {
+        parts.push("/* HEXA_FFI_DYN_TU: 1 */\n")
+    } else {
+        parts.push("/* HEXA_FFI_DYN_TU: 0 */\n")
     }
     // T3 fix: emit `int main(int argc, char** argv)` + hexa_set_args(argc, argv)
     // 이전 구현은 `int main()` 으로 argv 를 받지 않아 args() 가 항상 빈 배열을
@@ -2883,6 +2898,12 @@ let mut _gen2_arena_wrap = 0
 //     the build driver (self/main.hexa) can inject IEEE-strict clang flags.
 let mut _gen2_current_fn_strict_fp = 0
 let mut _gen2_tu_has_strict_fp = 0
+// zero-c #29 S1/PR-2: sticky 1 once any fn in this TU has a surviving vendor extern
+// (an @link extern that native-route did NOT absorb → a real hexa_ffi_dlsym init line)
+// or an interpreter host_ffi dispatch. Feeds the `/* HEXA_FFI_DYN_TU */` marker so the
+// driver links build/runtime_ffi_dyn.o ONLY for programs that actually need dl* — the
+// S1 partition moved those symbols out of the canonical runtime.a. Mirrors _gen2_tu_has_strict_fp.
+let mut _gen2_tu_has_vendor_ffi = 0
 
 // Plan B Phase 3 — defer/scope/spawn codegen state (per-function).
 //
@@ -7147,6 +7168,8 @@ fn gen2_expr(node) {
             }
             // C2 Step 3: Dynamic FFI host dispatch (interpreter path)
             if name == "host_ffi_open" {
+                // zero-c #29 PR-2: interpreter dynamic-FFI dispatch → needs runtime_ffi_dyn.o.
+                _gen2_tu_has_vendor_ffi = 1
                 return "hexa_host_ffi_open(" + gen2_expr(node.args[0]) + ")"
             }
             if name == "host_ffi_sym" {
@@ -14536,6 +14559,11 @@ fn codegen_full(ast) {
             global_parts.push(ew.global)
             fwd_parts.push(ew.forward + "\n")
             fn_parts.push(ew.fn_code + "\n\n")
+            // zero-c #29 PR-2: a non-empty ew.init means native-route did NOT absorb this
+            // extern → a real hexa_ffi_dlsym(hexa_ffi_dlopen(..)) init line survives, so this
+            // program needs the partitioned-out runtime_ffi_dyn.o. (native-route survivors
+            // return init=="" at codegen.hexa's FFI-NATIVE-ROUTE.)
+            if ew.init != "" { _gen2_tu_has_vendor_ffi = 1 }
             init_parts.push(ew.init)
         } else if k == "StructDecl" {
             // T33-rebuild: emit a forward declaration so the generated
