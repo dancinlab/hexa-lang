@@ -845,6 +845,12 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
         ipp = ipp + 1
     }
 
+    // try/catch fix (native setjmp correctness) — darwin hxlcl_longjmp restores
+    // the callee-saved pool (x19-x28); a value homed there and written inside a
+    // try body rolls back on the catch path (torn {tag,payload}). A try-
+    // containing fn goes ALL-SPILL (memory survives longjmp); try-free fns keep
+    // the pool → byte-identical. Mirrors x86_64_linux _sj_all_spill.
+    let _sj_all_spill = _arm64_count_try_setjmp(mf) > 0
     let mut s = 0
     while s < len(order) {
         let cur = order[s]
@@ -885,7 +891,7 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
             continue
         }
 
-        if len(pool) > 0 {
+        if len(pool) > 0 && !_sj_all_spill {
             let r = pool[0]
             let mut np: [string] = []
             let mut tt = 1
@@ -918,7 +924,7 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
                 victim_pos = victim_pos - 1
             }
 
-            if victim_pos >= 0 && iv.ends[active_idx[victim_pos]] > iv.ends[cur] {
+            if victim_pos >= 0 && iv.ends[active_idx[victim_pos]] > iv.ends[cur] && !_sj_all_spill {
                 let v = active_idx[victim_pos]
                 map_regs[cur] = map_regs[v]
                 map_slots[cur] = -1

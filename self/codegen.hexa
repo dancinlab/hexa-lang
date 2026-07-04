@@ -2057,6 +2057,9 @@ fn gen2_fn_decl(node) {
     // b2-fnref: expose the current fn's `let` names so the bare-Ident thunk
     // path never replaces a local var with a builtin/method thunk.
     _gen2_current_fn_lets = all_names
+    // try/catch: locals of a try-containing fn must be `volatile HexaVal` so a
+    // write inside a try body survives the longjmp (setjmp-across rollback).
+    _gen2_current_fn_has_try = _gen2_body_has_try(node.body)
     // closure mut-capture: pre-scan this fn body for `let mut` bindings that a
     // closure captures AND assigns to — box them into shared 1-element array
     // cells so mutation through the closure persists (canonical FnMut). Set
@@ -2118,7 +2121,7 @@ fn gen2_fn_decl(node) {
                 // as `HexaVal close = hexa_void();` (bare) while the
                 // assignment emits `u_close = peek();` (mangled), causing
                 // "undeclared identifier u_close" in clang.
-                hoists.push("    HexaVal " + _hexa_mangle_ident(nm) + " = hexa_void();\n")
+                hoists.push("    " + _gen2_local_decl_kw() + _hexa_mangle_ident(nm) + " = hexa_void();\n")
             }
         }
         ii = ii + 1
@@ -3485,7 +3488,7 @@ fn _gen2_stmt_inner(node, depth) {
             if _gen2_has_decl(node.name) {
                 return pad + _local_name + " = " + _cell + ";\n"
             }
-            return pad + "HexaVal " + _local_name + " = " + _cell + ";\n"
+            return pad + _gen2_local_decl_kw() + _local_name + " = " + _cell + ";\n"
         }
         // bt 72: if this name was hoisted (or matches a param), emit plain
         // assignment to avoid C "redefinition" errors from shadow semantics.
@@ -3507,9 +3510,9 @@ fn _gen2_stmt_inner(node, depth) {
             // Both bindings remain in scope for the rest of the block; the
             // temp is unused after the line but C-clean.
             let _tmp = "__hexa_letinit_" + node.name
-            return pad + "HexaVal " + _tmp + " = " + init + "; HexaVal " + _local_name + " = " + _tmp + ";\n"
+            return pad + _gen2_local_decl_kw() + _tmp + " = " + init + "; " + _gen2_local_decl_kw() + _local_name + " = " + _tmp + ";\n"
         }
-        return pad + "HexaVal " + _local_name + " = " + init + ";\n"
+        return pad + _gen2_local_decl_kw() + _local_name + " = " + init + ";\n"
     }
 
     if k == "ConstStmt" {
@@ -5065,6 +5068,51 @@ fn _gen2_fnref_method_arity(name) {
 // the script-body walk; over-broad inside lambdas (uses the enclosing fn's
 // lets) which is the safe direction (more idents left un-thunked).
 let mut _gen2_current_fn_lets = []
+
+// ── try/catch C-backend correctness (native setjmp) ─────────────────────────
+// On the gen2 C path a HexaVal local written inside a try{} body is a plain
+// non-volatile automatic across hxlcl_setjmp; C11 7.13.2.1p3 makes its value
+// INDETERMINATE on the longjmp (catch) path, and clang -O2 legally rolls it
+// back to the setjmp-time value (or tears the {tag,payload} halves). Measured
+// (ghost darwin-arm64): try{a=v;throw}catch{};return a → 0, must be v. Fix =
+// the C "volatile-across-setjmp" remedy: locals of a try-containing fn are
+// declared `volatile HexaVal`. Set per-fn in gen2_fn_decl; try-free fns emit
+// plain `HexaVal` → byte-identical outside the class.
+let mut _gen2_current_fn_has_try = false
+
+// recursive: does this stmt list contain a try/catch anywhere (incl. nested
+// bodies/arms)? Mirrors _gen2_collect_lets_stmt's traversal shape.
+fn _gen2_body_has_try(stmts) -> bool {
+    let mut i = 0
+    while i < len(stmts) {
+        let s = stmts[i]
+        let k = s.kind
+        if k == "TryCatchStmt" || k == "TryCatch" || k == "RecoverStmt" { return true }
+        if k == "IfStmt" || k == "If" {
+            if _gen2_body_has_try(s.then_body) { return true }
+            if _gen2_body_has_try(s.else_body) { return true }
+        }
+        if k == "WhileStmt" || k == "While" || k == "ForStmt" || k == "For" || k == "LoopStmt" {
+            if _gen2_body_has_try(s.body) { return true }
+        }
+        if k == "MatchStmt" || k == "Match" {
+            let mut ai = 0
+            while ai < len(s.arms) {
+                if _gen2_body_has_try(s.arms[ai].body) { return true }
+                ai = ai + 1
+            }
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// local-decl keyword: `volatile HexaVal ` inside a try-containing fn (so the
+// value survives the longjmp), else the plain `HexaVal `.
+fn _gen2_local_decl_kw() -> string {
+    if _gen2_current_fn_has_try { return "volatile HexaVal " }
+    return "HexaVal "
+}
 
 // ── Closure mutable-capture by reference (inbox:
 //    closure-mut-capture-by-value-snapshot) ──────────────────
@@ -14757,7 +14805,7 @@ fn codegen_full(ast) {
     // runtime.c's own arm64-darwin/linux split). RECURRENCE-PRONE: any future
     // edit swapping the call site back to bare `setjmp` re-opens the defect.
     out_parts.push("#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)\n")
-    out_parts.push("int hxlcl_setjmp(void *buf) __asm__(\"_hxlcl_setjmp\");\n")
+    out_parts.push("int hxlcl_setjmp(void *buf) __asm__(\"_hxlcl_setjmp\") __attribute__((returns_twice));\n")
     out_parts.push("#elif defined(__x86_64__)\n")
     out_parts.push("// RFC061 §M8 ∅−8: x86_64-linux uses the NATIVE musl hxlcl_setjmp (real\n")
     out_parts.push("// global in runtime.o), matching the native musl hxlcl_longjmp the re-\n")
