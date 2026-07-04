@@ -100,11 +100,35 @@ pub fn cli_positional(args: array, idx: i64, def: string) -> string {
 // hexa builtin parse_int returns 0 on failure (and silently for empty);
 // we distinguish "" (use def) from a parseable integer. Negative ints
 // supported via parse_int.
+// cli_parse_int — strict string → i64 with default fallback. Pure digit-scan
+// (optional sign + digits); "" or ANY non-numeric input returns `def`.
+// Deliberately NO try/catch and NO whole-string to_int: the to_int builtin
+// (hexa_to_int) never throws — it returns 0 for garbage — so the old try/catch
+// was DEAD CODE that (a) mapped typos to 0 instead of `def` and (b) was the
+// only exception construct on the absorbed-verb CLI path, which miscompiled on
+// the native own-IR backend → `drill --top 0` / `--rounds 1` silently fell back
+// to the defaults 8/10 (2026-07-04 M5 H1 "hang" = rounds 2-10 grinding, Fable).
 pub fn cli_parse_int(s: string, def: i64) -> i64 {
-    if len(s) == 0 { return def }
-    let mut n: i64 = def
-    try { n = to_int(s) } catch e { n = def }
-    return n
+    let n = len(s)
+    if n == 0 { return def }
+    let mut i: i64 = 0
+    let mut neg = false
+    let first = s.substring(0, 1)
+    if first == "-" || first == "+" {
+        if first == "-" { neg = true }
+        i = 1
+    }
+    if i >= n { return def }
+    let mut v: i64 = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        let d = to_int(c)
+        if to_string(d) != c { return def }
+        v = v * 10 + d
+        i = i + 1
+    }
+    if neg { return 0 - v }
+    return v
 }
 
 // cli_parse_bool — accept the usual truthy/falsy forms; default-fallback
