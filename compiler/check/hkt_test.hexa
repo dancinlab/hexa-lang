@@ -9,8 +9,8 @@
 //
 //  Cases (faithful fragment of Haskell kind-arity unification):
 //    ① PASS  — fn map<F,A,B>(x: F<A>, f: A) -> F<B>   : F consistently arity 1
-//    ② FAIL  — fn bad<F,A,B>(x: F<A>, y: F<A,B>)      : F arity 1 vs 2 → HX3011
-//    ③ FAIL  — fn mix<F,A>(x: F<A>, y: F)             : F arity 1 vs 0 → HX3011
+//    ② FAIL  — fn bad<F,A,B>(x: F<A>, y: F<A,B>)      : F arity 1 vs 2 → HX3015
+//    ③ FAIL  — fn mix<F,A>(x: F<A>, y: F)             : F arity 1 vs 0 → HX3015
 //    ④ PASS  — fn id<T>(x: T) -> T                     : T proper type, no HKT
 //    ⑤ PASS  — fn nest<F,A>(x: F<F<A>>) -> A           : F consistently arity 1
 //
@@ -133,12 +133,12 @@ fn main() {
     let it1 = _hfn("map", ["F", "A", "B"], p1, _hgen1("F", _hnamed("B")))
     let mut o1 = []
     _hkt_check_item(it1, o1)
-    let n1 = _hcount(o1, "HX3011")
+    let n1 = _hcount(o1, "HX3015")
     if n1 != 0 {
-        println("  FAIL ①: expected 0 HX3011, got " + to_string(n1))
+        println("  FAIL ①: expected 0 HX3015, got " + to_string(n1))
         ok = false
     } else {
-        println("  ok ①: F<A>/F<B> consistent kind *->* → 0 HX3011")
+        println("  ok ①: F<A>/F<B> consistent kind *->* → 0 HX3015")
     }
 
     // ② FAIL: fn bad<F,A,B>(x: F<A>, y: F<A,B>) — F applied at arity 1 then 2.
@@ -148,12 +148,12 @@ fn main() {
     let it2 = _hfn("bad", ["F", "A", "B"], p2, _hempty_ty())
     let mut o2 = []
     _hkt_check_item(it2, o2)
-    let n2 = _hcount(o2, "HX3011")
+    let n2 = _hcount(o2, "HX3015")
     if n2 != 1 {
-        println("  FAIL ②: expected 1 HX3011 (F arity 1 vs 2), got " + to_string(n2))
+        println("  FAIL ②: expected 1 HX3015 (F arity 1 vs 2), got " + to_string(n2))
         ok = false
     } else {
-        println("  ok ②: F<A> vs F<A,B> → 1 HX3011")
+        println("  ok ②: F<A> vs F<A,B> → 1 HX3015")
     }
 
     // ③ FAIL: fn mix<F,A>(x: F<A>, y: F) — F constructor used bare in a proper-type slot.
@@ -163,12 +163,12 @@ fn main() {
     let it3 = _hfn("mix", ["F", "A"], p3, _hempty_ty())
     let mut o3 = []
     _hkt_check_item(it3, o3)
-    let n3 = _hcount(o3, "HX3011")
+    let n3 = _hcount(o3, "HX3015")
     if n3 != 1 {
-        println("  FAIL ③: expected 1 HX3011 (F arity 1 vs 0), got " + to_string(n3))
+        println("  FAIL ③: expected 1 HX3015 (F arity 1 vs 0), got " + to_string(n3))
         ok = false
     } else {
-        println("  ok ③: F<A> vs bare F → 1 HX3011")
+        println("  ok ③: F<A> vs bare F → 1 HX3015")
     }
 
     // ④ PASS: fn id<T>(x: T) -> T — T is a proper type, never applied.
@@ -177,12 +177,12 @@ fn main() {
     let it4 = _hfn("id", ["T"], p4, _hnamed("T"))
     let mut o4 = []
     _hkt_check_item(it4, o4)
-    let n4 = _hcount(o4, "HX3011")
+    let n4 = _hcount(o4, "HX3015")
     if n4 != 0 {
-        println("  FAIL ④: expected 0 HX3011, got " + to_string(n4))
+        println("  FAIL ④: expected 0 HX3015, got " + to_string(n4))
         ok = false
     } else {
-        println("  ok ④: proper-type T → 0 HX3011")
+        println("  ok ④: proper-type T → 0 HX3015")
     }
 
     // ⑤ PASS: fn nest<F,A>(x: F<F<A>>) -> A — nested application, F always arity 1.
@@ -191,12 +191,12 @@ fn main() {
     let it5 = _hfn("nest", ["F", "A"], p5, _hnamed("A"))
     let mut o5 = []
     _hkt_check_item(it5, o5)
-    let n5 = _hcount(o5, "HX3011")
+    let n5 = _hcount(o5, "HX3015")
     if n5 != 0 {
-        println("  FAIL ⑤: expected 0 HX3011, got " + to_string(n5))
+        println("  FAIL ⑤: expected 0 HX3015, got " + to_string(n5))
         ok = false
     } else {
-        println("  ok ⑤: nested F<F<A>> consistent arity 1 → 0 HX3011")
+        println("  ok ⑤: nested F<F<A>> consistent arity 1 → 0 HX3015")
     }
 
     println("")
