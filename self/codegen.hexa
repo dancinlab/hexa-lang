@@ -1019,8 +1019,8 @@ fn codegen(ast) {
     // M4: reset string literal dedup table
     // rt#32-SL: _strlit_def_parts module-array push removed — emit uses
     // deterministic _strlit_counter loop (mirror of fcf275f4 IC fix).
-    _strlit_keys = []
-    _strlit_ids = []
+    _strlit_keys = _hx_arr_heap_seed([])
+    _strlit_ids = _hx_arr_heap_seed([])
     _strlit_counter = 0
     _strlit_index_init()
     _destr_counter = 0
@@ -10479,13 +10479,33 @@ let mut _strlit_counter = 0
 let mut _strlit_idx_keys = []
 let mut _strlit_idx_ids = []
 
+// T33 (convergence codegen-hexa-2) heap-seed helper: force an array's items
+// buffer onto the malloc heap (positive cap) BEFORE any deep-mark push, so a
+// later arena rewind can never reuse/overwrite it. push_nostat never touches
+// the arena (runtime_core_emit.hexa:3261 — its grow is promote-to-heap /
+// realloc only); a dummy push + truncate(0) leaves len=0, cap=+8 (heap), and
+// hexa_array_push's arena entry needs cap<0 or cap==0 — a positive-cap array's
+// grows all take the realloc path, so arena re-entry is structurally impossible.
+// Without seeding, the first _strlit_dedup push happens under gen2_expr's live
+// scope mark (__hexa_val_mark_top>0) → the items buffer can land in the fn
+// arena → frame rewind lets a sibling bump-alloc reuse the slot → the __hexa_sl_
+// init emit reads a clobbered literal (darwin-arm64 miscompile-zero /
+// determinism / codegen-guard INTERMITTENT RED).
+fn _hx_arr_heap_seed(a) {
+    let mut r = a
+    r = r.push_nostat("")
+    r = r.truncate(0)
+    return r
+}
+
 fn _strlit_index_init() {
-    let mut ik = []
-    let mut iv = []
+    // Seed the outer bucket arrays EMPTY first (truncate would wipe filled buckets).
+    let mut ik = _hx_arr_heap_seed([])
+    let mut iv = _hx_arr_heap_seed([])
     let mut i = 0
     while i < 64 {
-        ik.push([])
-        iv.push([])
+        ik.push(_hx_arr_heap_seed([]))
+        iv.push(_hx_arr_heap_seed([]))
         i = i + 1
     }
     _strlit_idx_keys = ik
@@ -14321,8 +14341,8 @@ fn codegen_full(ast) {
     _known_set_init()
     _ic_counter = 0
     // rt#32-SL: string literal dedup table reset — mirror codegen_c2's reset.
-    _strlit_keys = []
-    _strlit_ids = []
+    _strlit_keys = _hx_arr_heap_seed([])
+    _strlit_ids = _hx_arr_heap_seed([])
     _strlit_counter = 0
     _strlit_index_init()
     // b2-fnref: reset by-value builtin/method thunk set (mirror codegen_c2).
