@@ -108,7 +108,78 @@ _has_nvidia_gpu() {
     nvidia-smi -L 2>/dev/null | grep -q '^GPU ' || return 1
     return 0
 }
-_has_cuda_runtime() {
+# ── pip-nvidia wiring (bare rent pod: no toolkit, CUDA libs only in pip wheels) ──
+# Wheels ship SONAME-only libs (libcudart.so.12 — no bare .so linker name) under
+# <site-packages>/nvidia/*/lib and are never in the ldconfig cache. Resolve them
+# into a hexa-owned symlink farm $HX_HOME/cuda-libs providing bare linker names
+# + one stable -L/-rpath dir — the user's python env is never mutated.
+_pip_nvidia_roots() {
+    # primary: the live interpreter resolves venv/conda/user/system site in one
+    # shot. nvidia is a PEP-420 namespace pkg → __path__ (never __file__). No
+    # network, no `pip show` (slow / pip may be absent); sub-100ms, cannot hang.
+    for py in python3 python; do
+        command -v "$py" >/dev/null 2>&1 || continue
+        "$py" -c 'import nvidia; print("\n".join(nvidia.__path__))' 2>/dev/null && return 0
+        break    # interpreter present but no nvidia pkg → try the glob fallback
+    done
+    # fallback (python absent / exotic install): bounded glob, standard roots.
+    for r in "${VIRTUAL_ENV:-/nonexistent}"/lib/python3*/site-packages/nvidia \
+             /opt/conda/lib/python3*/site-packages/nvidia \
+             /usr/local/lib/python3*/dist-packages/nvidia \
+             /usr/lib/python3*/dist-packages/nvidia \
+             "$HOME"/.local/lib/python3*/site-packages/nvidia; do
+        [ -d "$r" ] && printf '%s\n' "$r"
+    done
+    return 0
+}
+_wire_pip_cuda_libs() {
+    farm="$HX_HOME/cuda-libs"
+    roots="$(_pip_nvidia_roots)"
+    rm -rf "$farm" 2>/dev/null || true          # idempotent: rebuilt from scratch
+    [ -n "$roots" ] || return 1
+    mkdir -p "$farm" || return 1
+    # Symlink every wheel lib (SONAME name + bare linker name). Glob expansion is
+    # sorted → deterministic; ln -sf ascending → the highest .so.N wins the bare name.
+    printf '%s\n' "$roots" | while IFS= read -r root; do
+        for f in "$root"/*/lib/lib*.so* "$root"/*/lib/lib*.a; do
+            [ -e "$f" ] || continue
+            b="${f##*/}"
+            ln -sf "$f" "$farm/$b"
+            case "$b" in
+                *.so.*) ln -sf "$f" "$farm/${b%%.so.*}.so" ;;
+            esac
+        done
+    done
+    # -lcuda linker name: prefer the REAL driver lib (present whenever nvidia-smi
+    # is), else the wheel's lib/stubs/libcuda.so (link-only stub — fine for -lcuda;
+    # the loader binds the real driver at run time via its SONAME libcuda.so.1).
+    if [ ! -e "$farm/libcuda.so" ]; then
+        for c in $(ldconfig -p 2>/dev/null | sed -n 's/.*libcuda\.so\.1 .*=> //p' | head -1) \
+                 /usr/lib/x86_64-linux-gnu/libcuda.so.1 /usr/lib64/libcuda.so.1; do
+            [ -e "$c" ] || continue
+            ln -sf "$c" "$farm/libcuda.so"
+            ln -sf "$c" "$farm/libcuda.so.1"
+            break
+        done
+    fi
+    if [ ! -e "$farm/libcuda.so" ]; then
+        printf '%s\n' "$roots" | while IFS= read -r root; do
+            for s in "$root"/*/lib/stubs/libcuda.so; do
+                [ -e "$s" ] && [ ! -e "$farm/libcuda.so" ] && ln -sf "$s" "$farm/libcuda.so"
+            done
+        done
+    fi
+    # gate on the one lib the link always needs; report the rest loudly.
+    if [ ! -e "$farm/libcudart.so" ]; then
+        rm -rf "$farm" 2>/dev/null || true
+        return 1
+    fi
+    for need in libcuda.so libcudadevrt.a; do
+        [ -e "$farm/$need" ] || red "  ⚠ cuda-libs: $need unresolved — cuda link may fail (check nvidia driver / nvidia-cuda-runtime-cu12 wheel)"
+    done
+    return 0
+}
+_has_toolkit_cudart() {
     # cuBLAS/cudart resolvable via the dynamic loader cache or a standard CUDA
     # install dir. The cuda binary links -lcudart -lcublas, so without these it
     # would fail to start — keep the CPU asset in that case.
@@ -120,6 +191,18 @@ _has_cuda_runtime() {
         [ -e "$d"/libcudart.so* ] 2>/dev/null && return 0
     done
     return 1
+}
+_has_pip_cudart() {
+    for r in $(_pip_nvidia_roots); do
+        for f in "$r"/*/lib/libcudart.so*; do
+            [ -e "$f" ] && return 0
+        done
+    done
+    return 1
+}
+_has_cuda_runtime() {
+    # union: a toolkit OR pip-wheel cudart makes the -cuda asset resolvable.
+    _has_toolkit_cudart || _has_pip_cudart
 }
 prefer_cuda() {
     [ "$(detect_target)" = "linux-x86_64" ] || return 1
@@ -339,8 +422,19 @@ EOF
     # present. Idempotent: a CPU/musl (re)install REMOVES the marker (no stale cuda link).
     if [ "${asset##*-}" = "cuda" ]; then
         : > "$HX_HOME/.cuda-runtime" 2>/dev/null || true
+        # bare-pod pip wiring: ONLY when no toolkit cudart resolves — a toolkit host
+        # takes today's exact path (no farm → os_clang_ldflags CUDA_HOME branch →
+        # byte-identical link line). The farm's existence IS the record.
+        if _has_toolkit_cudart; then
+            rm -rf "$HX_HOME/cuda-libs" 2>/dev/null || true
+        elif _wire_pip_cuda_libs; then
+            dim "  pip-nvidia libs wired → $HX_HOME/cuda-libs (bare .so linker names + rpath dir)"
+        else
+            red "  ⚠ cuda asset installed but no resolvable libcudart (toolkit or pip nvidia-cuda-runtime-cu12) — cuda link will fail"
+        fi
     else
         rm -f "$HX_HOME/.cuda-runtime" 2>/dev/null || true
+        rm -rf "$HX_HOME/cuda-libs" 2>/dev/null || true
     fi
     # macOS — defeat the two kill vectors a DOWNLOADED binary hits that a
     # local build does not:
@@ -478,8 +572,22 @@ install_src() {
         return 1
     fi
 
-    # Wire the install-relative discovery anchors. ln -sfn: replace any stale
-    # link/dir atomically without descending into it.
+    # Wire the install-relative discovery anchors.
+    # ⚠️ `ln -sfn` does NOT replace a REAL directory: BSD/macOS ln silently
+    # creates the link INSIDE it (observed 2026-07-03 on ghost: a May-27
+    # real-dir ~/.hx/bin/self — an 884-file pre-symlink-layout source remnant —
+    # shadowed the fresh $HX_SRC/self for 5+ weeks; every fresh_install
+    # "succeeded" (nested self/self symlink) while the compiler's
+    # install-relative resolver kept reading the stale runtime.h with zero
+    # forge-gelu decls → anima engine gate 0/6 lifetime red, clang
+    # implicit-declaration). Clear any non-symlink remnant first so the anchor
+    # is ALWAYS the symlink and a re-install can never be silently stale.
+    for anchor in stdlib self; do
+        if [ -e "$HX_BIN/$anchor" ] && [ ! -L "$HX_BIN/$anchor" ]; then
+            dim "  clearing non-symlink remnant at $HX_BIN/$anchor (pre-symlink install layout)"
+            rm -rf "${HX_BIN:?}/$anchor"
+        fi
+    done
     ln -sfn "$HX_SRC/stdlib" "$HX_BIN/stdlib"
     ln -sfn "$HX_SRC/self"   "$HX_BIN/self"
     green "  ✓ $HX_SRC (stdlib/ + self/ linked into $HX_BIN)"
