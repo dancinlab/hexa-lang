@@ -1,0 +1,68 @@
+// m12_try_catch_setjmp.hexa — CLASS: native try/catch vs regalloc across hxlcl_setjmp.
+// hxlcl_longjmp restores the callee-saved pool (x86 rbx/r12-r15 · arm64 x19-x28);
+// a local homed there and WRITTEN inside a try{} body was rolled back to its
+// setjmp-time value on the catch path (payload reverts; the frame tag-slot does
+// NOT → a torn {tag,payload}). PRIMITIVE: an assignment executed inside a try
+// body BEFORE a throw must survive into the catch (memory home, not a rolled-
+// back register). Values route through fn params (not literals) so comptime-
+// fold cannot mask the class (m8 lesson). to_int never throws (rt_to_int →
+// parse_int returns 0 on failure), so the thrower is an explicit user fn.
+// exit 0 = floor held. Fix: try-containing fns go all-spill (_sj_all_spill).
+
+fn boom(v: i64) -> i64 {
+    if v > 0 { throw "boom" }
+    return v
+}
+
+fn t1_normal(v: i64) -> i64 {          // try-assign, no throw
+    let mut n = 0
+    try { n = v } catch e { n = 1 }
+    return n                            // expect v
+}
+
+fn t2_rollback(v: i64) -> i64 {        // assignment BEFORE throw must stick
+    let mut a = 0
+    try {
+        a = v
+        let _x = boom(1)
+    } catch e { }
+    return a                            // expect v — pre-fix: 0 (pool-reg rollback)
+}
+
+fn t3_catch(v: i64) -> i64 {           // throw across a fn-call boundary
+    let mut n = 0
+    try { n = boom(v) } catch e { n = 0 - 5 }
+    return n                            // v>0 → -5 ; v<=0 → v
+}
+
+fn t4_nested(v: i64) -> i64 {          // nested try
+    let mut acc = 0
+    try {
+        acc = v
+        try {
+            acc = acc + 10
+            let _y = boom(1)
+        } catch e { acc = acc + 100 }
+        acc = acc + 1000
+    } catch e { acc = acc + 10000 }
+    return acc                          // expect 1111 — pre-fix: 1101
+}
+
+fn t5_torn(k: i64) -> i64 {            // torn tag/payload: str over int, then throw
+    let mut v = k
+    try {
+        v = "boom" + to_string(k)
+        let _z = boom(1)
+    } catch e { }
+    return len(v)                       // expect 5 — pre-fix: tag=STR + stale int payload
+}
+
+fn main() {
+    if t1_normal(7) != 7        { println("FAIL t1 normal-path assign");       exit(41) }
+    if t3_catch(3) != 0 - 5     { println("FAIL t3a catch path");              exit(43) }
+    if t3_catch(0 - 3) != 0 - 3 { println("FAIL t3b no-throw callee");         exit(44) }
+    if t2_rollback(7) != 7      { println("FAIL t2 setjmp register rollback"); exit(42) }
+    if t4_nested(1) != 1111     { println("FAIL t4 nested rollback");          exit(45) }
+    if t5_torn(7) != 5          { println("FAIL t5 torn tag/payload");         exit(46) }
+    println("m12 try/catch setjmp: PASS")
+}
