@@ -143,6 +143,26 @@ let mut enum_all_variant_names = []
 // RFC-020 A2: parallel array — payload type name per variant, "" for no payload
 let mut enum_all_variant_payload_types = []
 
+// ── Trait registry (trait-dispatch conformance check) ────────
+// Parallel arrays mirroring the enum registry shape. Each TraitDecl
+// registers its name + a flat span of its method signatures. The
+// conformance check (ImplBlock arm) consults these to verify that an
+// `impl Trait for Type` block provides every REQUIRED (non-default-body)
+// trait method. Reference rule (Rust E0046 "not all trait items
+// implemented" / Go "X does not implement T (missing method M)"): a type
+// must provide every trait method that lacks a default body; methods with
+// a default body are optional. Populated in tc_first_pass, reset in
+// type_check(). Read-only at codegen time (this pass is opt-in under
+// HEXA_TYPECHECK and never touches the emit path → byteeq-neutral).
+let mut trait_names = []
+let mut trait_method_counts = []
+let mut trait_method_offsets = []
+let mut trait_all_method_names = []
+// parallel to trait_all_method_names: parameter arity (incl. self) and
+// whether the trait method carried a default body (true = optional).
+let mut trait_all_method_arities = []
+let mut trait_all_method_has_default = []
+
 // ── TypeAlias registry (Girard-soundness patch, 2026-04-20) ──
 // Parallel arrays: each alias records name, resolved rhs annotation string,
 // and a universe level (0 = value/base type, 1 = type-level, 2 = kind).
@@ -424,6 +444,57 @@ fn tc_register_enum_variant(vname) {
 fn tc_register_enum_variant_payload(vname, ptype) {
     enum_all_variant_names.push(vname)
     enum_all_variant_payload_types.push(ptype)
+}
+
+// ── Trait registry helpers (mirror tc_register_enum/_variant) ──
+fn tc_register_trait(name, method_count) {
+    trait_names.push(name)
+    trait_method_counts.push(method_count)
+    trait_method_offsets.push(len(trait_all_method_names))
+}
+
+// Register one trait method signature. `arity` = param count (incl. self),
+// `has_default` = true when the trait declared a default body (→ optional).
+fn tc_register_trait_method(mname, arity, has_default) {
+    trait_all_method_names.push(mname)
+    trait_all_method_arities.push(arity)
+    trait_all_method_has_default.push(has_default)
+}
+
+// Conformance check for `impl Trait for Type { ... }` (Rust E0046 / Go
+// "missing method" faithful). For every REQUIRED (no-default-body) method
+// of the named trait, scan the impl block's own methods for a name match;
+// emit a tc_error_at on the impl target when a required method is absent.
+// A trait that was never declared (forward / external) is skipped silently
+// (fail-open — no spurious diagnostic). Default-bodied trait methods are
+// optional and never flagged.
+fn tc_check_trait_conformance(node) {
+    let mut ti = 0
+    while ti < len(trait_names) {
+        if trait_names[ti] == node.trait_name {
+            let offset = trait_method_offsets[ti]
+            let count = trait_method_counts[ti]
+            let mut mi = 0
+            while mi < count {
+                if trait_all_method_has_default[offset + mi] == false {
+                    let req_name = trait_all_method_names[offset + mi]
+                    let mut found = false
+                    let mut ni = 0
+                    while ni < len(node.methods) {
+                        if node.methods[ni].name == req_name {
+                            found = true
+                        }
+                        ni = ni + 1
+                    }
+                    if found == false {
+                        tc_error_at(node.target, "type '" + node.target + "' does not implement trait '" + node.trait_name + "': missing method '" + req_name + "'")
+                    }
+                }
+                mi = mi + 1
+            }
+        }
+        ti = ti + 1
+    }
 }
 
 // RFC-020 A2: look up the payload type for `enum_name::variant_name`.
@@ -1581,6 +1652,13 @@ fn tc_check_stmt(node) {
     }
 
     if k == "ImplBlock" {
+        // Trait conformance (Rust E0046 / Go missing-method faithful):
+        // when this is a `impl Trait for Type` block, verify every required
+        // trait method is present. A bare `impl Type { ... }` (no trait)
+        // sets trait_name == "" and is skipped.
+        if node.trait_name != "" {
+            tc_check_trait_conformance(node)
+        }
         tc_push_scope()
         let mut i = 0
         while i < len(node.methods) {
@@ -1758,6 +1836,20 @@ fn tc_first_pass(stmts) {
             tc_define(s.name, "type")
         }
         if s.kind == "TraitDecl" {
+            // Register the trait's method signatures so the ImplBlock
+            // conformance check can verify required-method coverage.
+            tc_register_trait(s.name, len(s.methods))
+            let mut tmi = 0
+            while tmi < len(s.methods) {
+                let tm = s.methods[tmi]
+                // A non-empty body array marks a default-bodied (optional)
+                // method; "" / empty array → required. Mirrors the
+                // `vnode.items != "" && len(...) > 0` idiom used above.
+                let mut tm_has_default = false
+                if tm.body != "" && len(tm.body) > 0 { tm_has_default = true }
+                tc_register_trait_method(tm.name, len(tm.params), tm_has_default)
+                tmi = tmi + 1
+            }
             tc_define(s.name, "type")
         }
         if s.kind == "TypeAlias" {
@@ -1805,6 +1897,13 @@ fn type_check(stmts) {
     enum_variant_offsets = []
     enum_all_variant_names = []
     enum_all_variant_payload_types = []
+    // Trait registry reset (sibling of enum/struct/alias resets)
+    trait_names = []
+    trait_method_counts = []
+    trait_method_offsets = []
+    trait_all_method_names = []
+    trait_all_method_arities = []
+    trait_all_method_has_default = []
     // Girard-soundness alias registry reset
     alias_names = []
     alias_bodies = []
