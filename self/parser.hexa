@@ -350,6 +350,12 @@ fn _p_is_known_attr(name) {
     if name == "sibling_call" { return true }
     if name == "partial" { return true }
     if name == "unsafe" { return true }
+    // @own — ownership/move lint marker (native frontend HX3012, opt-in
+    // HEXA_OWN_LINT=1 · cmd_build advisory). Registered so the shipping
+    // parser stops warning "unknown attribute @own"; the generic
+    // fall-through below already records it into p_pending_attrs →
+    // LetStmt.op unchanged.
+    if name == "own" { return true }
     // Data-layout / domain hints (ai_native_pass attr_has set).
     if name == "soa" { return true }
     if name == "cow" { return true }
@@ -611,6 +617,22 @@ fn p_reserved_id_hint_tier2(k) {
 @pure
 fn p_reserved_tier2_enabled() {
     let v = env("HEXA_RESERVED_TIER2")
+    if v == "1" { return true }
+    if v == "true" { return true }
+    return false
+}
+
+// Opt-in switch for the postfix `?` try-propagation operator (RFC r15-D2).
+// Default-OFF: existing self-host bootstrap (self/main.hexa uses no `?`) and
+// every shipped program is byte-identical when `HEXA_TRY_OP` is unset, so the
+// operator is an opt-in language constraint (native-canonical-default polarity:
+// the feature is the opt-in, the absence of it is the canonical default). Set
+// `HEXA_TRY_OP=1` to enable `expr?` in both the self/ (gen2) and native
+// (compiler/*) pipelines. Mirrors `p_reserved_tier2_enabled` (HEXA_RESERVED_TIER2)
+// and the native `env("HEXA_MONOMORPHIZE")` gate at hir_to_mir.hexa.
+@pure
+fn p_try_op_enabled() {
+    let v = env("HEXA_TRY_OP")
     if v == "1" { return true }
     if v == "true" { return true }
     return false
@@ -2264,9 +2286,20 @@ fn parse_type_annotation() {
         // generic args). Without this branch, `-> &'a str` cascaded
         // ~6 errors per occurrence.
         p_advance() // consume '&'
-        if p_peek_kind() == "Mut" { p_advance() }
+        // HEXA-OWN L4 A1 — fold the borrow marker into the type-name string
+        // (mirror of native compiler/parse/parser.hexa parse_type `&T`/`&mut T`
+        // fold, itself riding the `*T` precedent at :2270-2272). Was: dropped
+        // the `&`/`mut` and returned the bare inner type; now carries `&` /
+        // `&mut ` so BOTH parsers agree (closes a latent two-backend divergence).
+        // Surface-only (no borrow check / no move); byteeq-neutral — the corpus
+        // has no `&` in type position so this arm stays dead at gen3/gen4.
+        let mut _bmark = "&"
+        if p_peek_kind() == "Mut" {
+            p_advance()
+            _bmark = "&mut "
+        }
         p_skip_lifetime_label()
-        base = parse_type_annotation()
+        base = _bmark + parse_type_annotation()
     } else if p_peek_kind() == "Star" {
         p_advance() // consume '*'
         base = "*" + p_expect_ident()
@@ -3474,6 +3507,29 @@ fn parse_unary() {
             "expr": operand
         }
     }
+    // HEXA-OWN L4 A1 — `&x` / `&mut x` borrow-of prefix (surface only). Mirror
+    // of native parser.hexa parse_unary `&` arm + the sibling Not/Minus/BitNot
+    // arm above (:3441). `&` at expression START is otherwise a parse error
+    // (binary BitAnd :3202 consumes its operator only after a left operand), so
+    // this is purely additive — the binary `a & b` path is UNTOUCHED. UnaryOp
+    // op "&" / "&mut", operand via parse_power like the other prefixes; no new
+    // node kind, no semantics.
+    if k == "BitAnd" {
+        p_advance() // consume '&'
+        let mut _op = "&"
+        if p_peek_kind() == "Mut" {
+            p_advance()
+            _op = "&mut"
+        }
+        let operand = parse_power()
+        return #{
+            "kind": "UnaryOp", "name": "", "value": "", "op": _op,
+            "left": operand, "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": "", "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+    }
     // G37: typeof operator — typeof x returns "int", "str", etc.
     if k == "Typeof" {
         p_advance()
@@ -3693,8 +3749,14 @@ fn parse_postfix() {
                 "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
                 "target": "", "trait_name": "", "methods": ""
             }
-        } else if k == "Question" {
+        } else if k == "Question" && p_try_op_enabled() {
             // PROBE r15-D2 (2026-05-24): postfix `?` try-propagation operator.
+            // Gated default-OFF (HEXA_TRY_OP) — when unset the `Question` token
+            // is left unconsumed in expression position (the feature is opt-in;
+            // self/main.hexa never uses `?` so the self-host fixpoint is
+            // byte-identical either way). `?.` optional-chaining (QuestionDot →
+            // OptField, the arm above) and the `T?` type-suffix
+            // (parse_type_annotation) are SEPARATE tokens/paths and stay live.
             // `expr?` → Try{left=expr}. On success (Ok/Some tag at index 0)
             // unwraps the payload; on failure (Err/None) the enclosing fn
             // returns the value unchanged (identity re-wrap — hexa is

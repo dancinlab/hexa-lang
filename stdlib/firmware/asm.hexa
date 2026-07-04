@@ -74,6 +74,52 @@ fn asm_balloon_check(source_text: str, threshold: int) -> int {
     return 1
 }
 
+// ── RFC inline-asm: native-emit intrinsic registry ────────────────────────
+// The release-safe inline-asm surface (state/rfc_inline_asm.md) has TWO forms:
+//   rung 1  named-opcode family  `__hx_asm_<mnemonic>`  (e.g. `__hx_asm_nop()`)
+//   rung 2  generalized passthrough  `__hx_asm("<op>")`  (one intrinsic, opcode
+//           is a compile-time STRING LITERAL, whitelisted {nop, pause, fence})
+// Both dispatch in native codegen exactly like `__hx_syscall0` and are gated
+// behind opt-in HEXA_INLINE_ASM (default-OFF). This registry is the SSOT contract
+// mapping a portable mnemonic to its codegen surface and tracking which rung each
+// mnemonic is wired at. (Pure string production — no codegen-side glue, mirrors
+// the G-F4 firmware-asm discipline above.)
+
+// CLEAN-ROOM: portable mnemonic → the rung-1 `__hx_asm_<m>` per-opcode intrinsic
+// name. "" = not a recognised inline-asm mnemonic. (rung 1 ships only `nop`; the
+// rest are reserved per-opcode names — the WIRED surface for them is the rung-2
+// `__hx_asm("<op>")` passthrough below.)
+fn asm_native_intrinsic(mnemonic: str) -> str {
+    if mnemonic == "nop"   { return "__hx_asm_nop"   }
+    if mnemonic == "pause" { return "__hx_asm_pause" }  // rung 2 (x86 PAUSE / arm64 YIELD)
+    if mnemonic == "fence" { return "__hx_asm_fence" }  // rung 2 (x86 MFENCE / arm64 DMB)
+    if mnemonic == "rdtsc" { return "__hx_asm_rdtsc" }  // rung 3 (x86 RDTSC / arm64 MRS CNTVCT)
+    return ""
+}
+
+// CLEAN-ROOM: rung-2 SSOT — does this mnemonic lower through the generalized
+// `__hx_asm("<op>")` passthrough? Returns the single intrinsic name "__hx_asm"
+// for every whitelisted opcode, "" otherwise. The whitelist is the portable set
+// the per-target codegen knows how to encode: x86 {nop, pause, mfence} / arm64
+// {nop, yield, dmb ish}. reference: Rust `asm!` literal-template rule.
+fn asm_passthrough_intrinsic(mnemonic: str) -> str {
+    if mnemonic == "nop"   { return "__hx_asm" }
+    if mnemonic == "pause" { return "__hx_asm" }
+    if mnemonic == "fence" { return "__hx_asm" }
+    return ""
+}
+
+// CLEAN-ROOM: is this mnemonic WIRED in native codegen today? rung 2 wires the
+// portable whitelist {nop, pause, fence} end-to-end (bind + x86 + arm64 + C-
+// transpile + both byte-encoders), each reachable via `__hx_asm("<op>")`. `rdtsc`
+// is a reserved name with a documented ladder but not yet emitted (rung 3).
+fn asm_native_wired(mnemonic: str) -> int {
+    if mnemonic == "nop"   { return 1 }
+    if mnemonic == "pause" { return 1 }
+    if mnemonic == "fence" { return 1 }
+    return 0
+}
+
 fn main() {
     let mut fails = 0
     let mut total = 0
@@ -119,6 +165,54 @@ fn main() {
     let w2 = asm_emit_block("wfi", ["memory"])
     let w3 = asm_emit_block("wfi", ["memory"])
     if w2 != w3 { println("FAIL T7 byte_stable"); fails = fails + 1 }
+
+    // RFC inline-asm rung 1: native-intrinsic registry contract.
+    total = total + 1
+    if asm_native_intrinsic("nop") != "__hx_asm_nop" {
+        println("FAIL T8 nop_intrinsic"); fails = fails + 1
+    }
+    if asm_native_intrinsic("pause") != "__hx_asm_pause" {
+        println("FAIL T8b pause_intrinsic"); fails = fails + 1
+    }
+    if asm_native_intrinsic("z80halt") != "" {
+        println("FAIL T8c unknown_intrinsic"); fails = fails + 1
+    }
+
+    total = total + 1
+    // rung 2 wires the portable whitelist {nop, pause, fence}; rdtsc stays reserved.
+    if asm_native_wired("nop") != 1 { println("FAIL T9 nop_wired"); fails = fails + 1 }
+    if asm_native_wired("pause") != 1 { println("FAIL T9b pause_wired"); fails = fails + 1 }
+    if asm_native_wired("fence") != 1 { println("FAIL T9c fence_wired"); fails = fails + 1 }
+    if asm_native_wired("rdtsc") != 0 { println("FAIL T9d rdtsc_unwired"); fails = fails + 1 }
+
+    total = total + 1
+    // RFC inline-asm rung 2: the generalized `__hx_asm("<op>")` passthrough is the
+    // WIRED surface for every whitelisted opcode — a single intrinsic name.
+    if asm_passthrough_intrinsic("nop") != "__hx_asm" {
+        println("FAIL T10 nop_passthrough"); fails = fails + 1
+    }
+    if asm_passthrough_intrinsic("pause") != "__hx_asm" {
+        println("FAIL T10b pause_passthrough"); fails = fails + 1
+    }
+    if asm_passthrough_intrinsic("fence") != "__hx_asm" {
+        println("FAIL T10c fence_passthrough"); fails = fails + 1
+    }
+    if asm_passthrough_intrinsic("z80halt") != "" {
+        println("FAIL T10d unknown_passthrough"); fails = fails + 1
+    }
+
+    total = total + 1
+    // contract closure: every WIRED mnemonic must resolve through the rung-2
+    // passthrough (the surface codegen actually emits today).
+    if asm_native_wired("nop") == 1 && asm_passthrough_intrinsic("nop") == "" {
+        println("FAIL T11 nop_wired_implies_passthrough"); fails = fails + 1
+    }
+    if asm_native_wired("pause") == 1 && asm_passthrough_intrinsic("pause") == "" {
+        println("FAIL T11b pause_wired_implies_passthrough"); fails = fails + 1
+    }
+    if asm_native_wired("fence") == 1 && asm_passthrough_intrinsic("fence") == "" {
+        println("FAIL T11c fence_wired_implies_passthrough"); fails = fails + 1
+    }
 
     if fails > 0 {
         println("asm selftest: " + str(total - fails) + "/" + str(total) + " — FAIL")

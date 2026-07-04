@@ -556,6 +556,19 @@ pub fn lex(source: string, file: string) -> [Token] {
                 tokens.push(mk_tok(TokenKind::Tilde, "~", mk_span(file, line, start_col, 1)))
                 pos = pos + 1
                 col = col + 1
+            } else if ch == '?' && env("HEXA_TRY_OP") == "1" {
+                // Postfix `?` try-propagation operator (RFC r15-D2) — opt-in.
+                // Gated on HEXA_TRY_OP so the DEFAULT native build leaves `?`
+                // EXACTLY as today: with the flag unset this branch's guard is
+                // false, so a `?` char falls through to the unknown-char `else`
+                // below (one-char Ident → checker HX0001), which is byte-for-byte
+                // the pre-existing behavior. The self-host corpus contains no `?`
+                // token, so env() is never even called during a byteeq build →
+                // gen3≡gen4 fixpoint untouched. (A future optional-chaining `?.`
+                // would lex as a distinct QuestionDot before reaching here.)
+                tokens.push(mk_tok(TokenKind::Question, "?", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
             } else {
                 // unknown char — emit as one-char Ident so the parser can resync.
                 // The checker will lift this to HX0001 (unexpected character).

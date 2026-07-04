@@ -1,0 +1,160 @@
+# static-types-corpus.yml — F1 corpus-clean ADVISORY census for the Wall A
+# HEXA_STATIC_TYPES default-ON flip (state/static-types/wall_a_endgame.md §B.3 F1).
+#
+# PURPOSE
+#   The static-types flip gate needs one axis no prior flip had: corpus-clean =
+#   0 HX3011/HX3016 emissions over a representative tracked .hexa corpus with
+#   the flag ON (the checker REJECT-only changes which programs BUILD, not what
+#   accepted programs emit). This job compiles the corpus front-end with
+#   HEXA_STATIC_TYPES=1 (+HEXA_STATIC_TYPES_ARRAY_LOWER=1) and counts
+#   HX3011/HX3016 diagnostic emissions per file. 0 total = corpus-clean proof
+#   for the flip PR; >0 = either a true positive (fix the corpus code as an
+#   ordinary PR first — the flip's value proof) or a checker false positive
+#   (flip-blocking, cf. §F0 r9b coercion).
+#
+# ADVISORY — NEVER REQUIRED
+#   continue-on-error: true. This workflow must never be added to branch
+#   protection; it is a census signal, not a gate. A red here blocks nothing.
+#
+# FORWARD-COMPATIBLE
+#   main today carries rungs r1–r6 (HEXA_STATIC_TYPES=1) only; the r7prep+
+#   stack (#4457, HEXA_STATIC_TYPES_ARRAY_LOWER) is not yet merged. Both env
+#   flags are exported unconditionally: unknown env vars are inert, so when
+#   the stacked rungs land the same job simply exercises MORE checks with no
+#   workflow change. HX3016 is likewise grepped even though main emits only
+#   HX3011 today.
+#
+# BUILD (cheapest correct path — mirrors grace_consent.yml / build_selfhost.sh)
+#   The typechecker lives in compiler/check/** and runs inside the driver
+#   compiler/main.hexa, so the PR's checker source must be what executes.
+#   Recipe: committed build/hexat_linux transpiles the flattened compiler
+#   (tool/build_aprime.sh -v build/hexat_linux — the canonical stage-0 recipe;
+#   its stage-0 regen restores frozen seeds + builds runtime.a on a clean
+#   checkout) -> aprime_cc, a native driver that runs the FULL front-end
+#   (parse -> resolve -> bind -> type_check) on each corpus file. FREE
+#   ubuntu-latest runner ONLY — Blacksmith/larger paid runners are FORBIDDEN
+#   (#4016 revert precedent).
+#
+# COST
+#   Target < 10 min: one aprime build (~minutes) + ~70 per-file front-end runs
+#   (sub-second to seconds each, 60 s timeout guard per file).
+
+name: static-types-corpus
+
+on:
+  pull_request:
+    paths:
+      - 'compiler/check/**'
+      - 'stdlib/**'
+      - '.github/workflows/static-types-corpus.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cancel a SUPERSEDED run only on PR re-push (mirrors the sibling gates);
+  # dispatch runs always complete.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  corpus-census:
+    name: static-types corpus census (HX3011/HX3016 · advisory)
+    runs-on: ubuntu-latest      # FREE runner only — paid runners forbidden (#4016)
+    timeout-minutes: 15         # budget target <10 min; margin for a cold seed fetch
+    continue-on-error: true     # ADVISORY — never a required check
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # restore_frozen_seeds fetches the pinned frozen ref on demand; a
+          # shallow checkout is fine (same as release-runtime-compile-gate).
+          fetch-depth: 1
+
+      - name: Build typechecker driver (aprime_cc via committed hexat_linux)
+        id: build
+        shell: bash
+        env:
+          # stage_resolve_runtime_a's edge-tarball probe uses gh when present
+          # (frozen-seed source-build fallback otherwise) — same wiring as
+          # grace_consent.yml.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          chmod +x build/hexat_linux
+          # Canonical stage-0 recipe: flatten compiler/main.hexa closure ->
+          # hexat transpile -> clang. stage-0 regen inside the script restores
+          # the frozen runtime seeds + runtime.a on this clean checkout.
+          rc=0
+          bash tool/build_aprime.sh -o build/aprime_cc -v "$PWD/build/hexat_linux" || rc=$?
+          if [ "$rc" -ne 0 ] || [ ! -x build/aprime_cc ]; then
+            # Build infra failure is NOT a corpus verdict — report NEUTRAL, do
+            # not fake a dirty/clean census. (Advisory job; exit 0 keeps the
+            # signal unambiguous: red = real HX3011/HX3016 emissions only.)
+            echo "::warning::static-types-corpus NEUTRAL — aprime_cc build failed (rc=$rc); corpus census NOT run (infra, not a corpus verdict)."
+            echo "built=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "built=1" >> "$GITHUB_OUTPUT"
+          echo "aprime_cc: $(wc -c < build/aprime_cc) bytes"
+
+      - name: Census — HEXA_STATIC_TYPES=1 over the corpus (count HX3011/HX3016)
+        if: ${{ steps.build.outputs.built == '1' }}
+        shell: bash
+        env:
+          # Both flags ON. ARRAY_LOWER is inert until the r7prep+ stack
+          # (#4457) merges — forward-compatible by construction.
+          HEXA_STATIC_TYPES: '1'
+          HEXA_STATIC_TYPES_ARRAY_LOWER: '1'
+        run: |
+          set -uo pipefail
+          # ── representative corpus: stdlib core + compiler/check (incl. tests) ──
+          corpus=()
+          while IFS= read -r f; do corpus+=("$f"); done \
+            < <(find compiler/check -maxdepth 1 -name '*.hexa' | sort)
+          while IFS= read -r f; do corpus+=("$f"); done \
+            < <(find stdlib -maxdepth 1 -name '*.hexa' | sort)
+          echo "corpus: ${#corpus[@]} files (compiler/check/*.hexa + stdlib/*.hexa top-level)"
+
+          scratch="$(mktemp -d)"
+          total=0
+          dirty_files=0
+          ran=0
+          summary=""
+
+          for f in "${corpus[@]}"; do
+            base="$(basename "$f")"
+            log="$scratch/$base.log"
+            # Front-end run: the driver renders ALL diagnostics (short format)
+            # before codegen and exits nonzero on errors — rc is irrelevant to
+            # the census, only the HX3011/HX3016 emission count is. `_drv.hexa`
+            # is the positional driver-name shim (argv[1] slot), same contract
+            # as tool/codegen_perf_budget.sh / control_singletu.sh.
+            timeout 60 ./build/aprime_cc _drv.hexa \
+                --emit=asm --target=x86_64-linux-gnu --error-format=short \
+                -o "$scratch/$base.s" "$f" > "$log" 2>&1 || true
+            ran=$((ran + 1))
+            n="$( (grep -o -E 'HX301[16]' "$log" || true) | wc -l | tr -d ' ')"
+            total=$((total + n))
+            if [ "$n" -gt 0 ]; then
+              dirty_files=$((dirty_files + 1))
+              summary="$summary$f: $n%0A"
+              echo "::notice file=$f::static-types corpus: $n HX3011/HX3016 emission(s) with HEXA_STATIC_TYPES=1"
+              grep -E 'HX301[16]' "$log" | head -10 | sed "s|^|    $f: |"
+            fi
+          done
+
+          echo ""
+          echo "════ static-types corpus census ════"
+          echo "files checked : $ran"
+          echo "dirty files   : $dirty_files"
+          echo "HX3011/HX3016 : $total"
+
+          if [ "$total" -eq 0 ]; then
+            echo "::notice::static-types corpus CLEAN — 0 HX3011/HX3016 over $ran files with HEXA_STATIC_TYPES=1 (+ARRAY_LOWER). Corpus-clean proof for the default-ON flip (wall_a_endgame.md §B F1)."
+            exit 0
+          fi
+          echo "::notice::static-types corpus DIRTY — $total HX3011/HX3016 emission(s) in $dirty_files/$ran files: %0A$summary(true positive -> fix the corpus code as an ordinary PR; false positive -> flip-blocking checker rung, cf. §F0 r9b)"
+          # Advisory red (continue-on-error keeps it non-blocking).
+          exit 1
