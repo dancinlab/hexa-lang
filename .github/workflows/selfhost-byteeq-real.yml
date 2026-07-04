@@ -9,8 +9,12 @@
 # OFFLINE (or a fork PR) we fall back to the free GitHub-hosted macos-15, where
 # the gate runs in exit-2-NEUTRAL mode (no gen3 slot → byte-eq untestable, NOT
 # broken) instead of sitting pending forever. The dispatch job also emits an
-# `is_selfhosted` flag so the exit-2 REMAP is correct on each: on ghost exit-2 =
-# a real slot-missing FAILURE; on the macos-15 fallback exit-2 = expected NEUTRAL.
+# `is_selfhosted` flag so the exit-2 ANNOTATION is correct on each: exit-2 is
+# NEUTRAL (exit 0) on BOTH runners — untestable is never a FAIL — but on ghost
+# it surfaces as a loud ::warning:: (the slot is supposed to be provisioned
+# there; its absence is a runner-provisioning gap, not a PR regression —
+# false-FAIL precedent: run 28668473232 redded unrelated PR #4492). Only a
+# REAL divergence (exit-1: gen3≠gen4 / non-determinism) fails, on either runner.
 #
 # SAFETY: PATH-FILTERED (only compiler-relevant changes) and NOT a required
 # status check. The required floor is the always-on ubuntu `selfhost-gates-summary`
@@ -79,8 +83,9 @@ jobs:
     runs-on: ${{ fromJSON(needs.dispatch.outputs.darwin_label) }}
     timeout-minutes: 90
     env:
-      # 'true' on ghost (gen3 slot present → exit-2 is a real failure); 'false'
-      # on the macos-15 fallback (no slot → exit-2 is the expected NEUTRAL).
+      # 'true' on ghost (slot expected → exit-2 gets a loud ::warning::); 'false'
+      # on the macos-15 fallback (no slot → exit-2 is the expected ::notice::).
+      # Exit-2 is NEUTRAL on both — only exit-1 (real divergence) fails.
       IS_SELFHOSTED: ${{ needs.dispatch.outputs.is_selfhosted }}
     steps:
       - uses: actions/checkout@v6
@@ -93,9 +98,11 @@ jobs:
           bash tool/selfhost_byteeq_gate.sh || rc=$?
           if [ "$rc" -eq 2 ]; then
             if [ "${IS_SELFHOSTED}" = "true" ]; then
-              # Slot is supposed to be present on ghost → exit-2 is a real regression.
-              echo "::error::byte-eq exit-2 on the slot runner — gen3 slot missing at \$HX_HOME/self/native/selfhost"
-              exit 1
+              # Slot is supposed to be present on ghost — surface the provisioning
+              # gap LOUDLY, but exit-2 means untestable NOT broken: never fail an
+              # unrelated PR for runner state (false-FAIL precedent: run 28668473232).
+              echo "::warning::byte-eq exit-2 on the slot runner (ghost) — gen3 slot missing at \$HX_HOME/self/native/selfhost. Runner provisioning gap: re-warm the ghost slot. NEUTRAL, not a byte-eq verdict."
+              exit 0
             fi
             # GitHub-hosted fallback: no gen3 slot, byte-eq untestable NOT broken.
             echo "::notice::byte-eq exit-2 on GitHub-hosted fallback (no gen3 slot) → NEUTRAL"
@@ -111,8 +118,8 @@ jobs:
           bash tool/determinism_gate.sh || rc=$?
           if [ "$rc" -eq 2 ]; then
             if [ "${IS_SELFHOSTED}" = "true" ]; then
-              echo "::error::determinism exit-2 on the slot runner — gen3 slot missing"
-              exit 1
+              echo "::warning::determinism exit-2 on the slot runner (ghost) — gen3 slot missing. Runner provisioning gap: re-warm the ghost slot. NEUTRAL, not a determinism verdict."
+              exit 0
             fi
             echo "::notice::determinism exit-2 on GitHub-hosted fallback (no gen3 slot) → NEUTRAL"
             exit 0

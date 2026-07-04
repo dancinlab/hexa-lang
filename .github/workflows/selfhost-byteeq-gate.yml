@@ -157,6 +157,38 @@ jobs:
           # CPU mirror (rc 0); reaching PASS = bare-name lowering + carrier link.
           # SSOT: convergence codegen-hexa-1.
           ./hexa run test/native_build/forge_attn_decode_batch_builtin_smoke.hexa
+          # LLM-path forge_dispatch_rmsnorm(_bwd) consumer-compile smoke — the
+          # 6-arg fwd + 8-arg bwd device-RMSNorm builtins MUST lower (len==6 /
+          # len==8 codegen blocks) to hexa_forge_dispatch_rmsnorm(_bwd) + link.
+          # Same latent-break class as forge_layernorm (#4339): byteeq passes
+          # (self/ never calls them -> inert) even if a binding is misplaced /
+          # the proto is broken. This CALLS both so a green-but-broken wiring
+          # can never ship. Non-CUDA build -> rc -1 (host fallback); reaching
+          # PASS = both lower + link. SSOT: convergence codegen-hexa-1.
+          ./hexa run test/native_build/forge_rmsnorm_builtin_smoke.hexa
+          # LLM-path forge_dispatch_attn_core_bwd consumer-compile smoke — the
+          # 12-arg device GQA attention-core BWD builtin MUST lower (len==12
+          # codegen block) to hexa_forge_dispatch_attn_core_bwd + link. Same
+          # latent-break class as forge_layernorm (#4339): byteeq passes (self/
+          # never calls it -> inert) even if the binding sits in the wrong len
+          # block (unreachable → undeclared C symbol). This CALLS it so a green-
+          # but-broken wiring can never ship. Non-CUDA build -> rc -1 (host
+          # fallback); reaching PASS = lower + link. SSOT: convergence
+          # codegen-hexa-1.
+          ./hexa run test/native_build/forge_attn_bwd_builtin_smoke.hexa
+          # LLM-path forge_dispatch_attn_core_fwd consumer-compile smoke — the
+          # 9-arg device GQA attention-core FWD builtin MUST lower (len==9
+          # codegen block, which ALSO holds farr_pauli_expectation_batch — a
+          # misplaced binding there would silently miss) to
+          # hexa_forge_dispatch_attn_core_fwd + link. Same latent-break class as
+          # forge_layernorm (#4339): byteeq passes (self/ never calls it ->
+          # inert) even if the binding sits in the wrong len block (unreachable →
+          # undeclared C symbol). This CALLS it so a green-but-broken wiring can
+          # never ship. The FWD seam is now WIRED (host softmax migrated libm exp
+          # → dt_exp; device _hx_dt_exp_dev twin is bit-exact). Non-CUDA build ->
+          # rc -1 (host fallback); reaching PASS = lower + link. SSOT:
+          # convergence codegen-hexa-1.
+          ./hexa run test/native_build/forge_attn_fwd_builtin_smoke.hexa
 
       # ── Gate invocation ──────────────────────────────────────────────────
       # Same root cause as miscompile-zero-gate / determinism-gate: the released
