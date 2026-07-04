@@ -1454,6 +1454,41 @@ HexaVal hexa_forge_dispatch_embedding(HexaVal ids_v, HexaVal table_v,
 HexaVal forge_dispatch_embedding(HexaVal ids_v, HexaVal table_v,
                              HexaVal out_v, HexaVal t_v, HexaVal d_v);        /* runtime.c — fusion L3 glue seam */
 
+/* HEXA-FUSION L3 (LLM-path glue half) — device-resident RMSNorm forward.
+ * forge_dispatch_rmsnorm(x, g, y, xn, inv, d) -> int rc (0 ok / -1 host).
+ * Reproduces nn_lib.hexa nn_rmsnorm_fwd: ms=Σ_i x_i·x_i (SEQUENTIAL), ms/=d,
+ * inv=1/_nn_sqrt(ms+1e-6), y_j=g_j·(xn_j), xn_j=x_j·inv. _nn_sqrt is libm
+ * sqrt — the IEEE-754 correctly-rounded op (NOT dt_sqrt/Newton) → device
+ * sqrt(double) is bit-identical; every mul feeding an add uses __dmul_rn/
+ * __dadd_rn to defeat FMA contraction (host FP_CONTRACT OFF) → bit-exact
+ * (max|Δ|=0) via _hx_cuda_farr_rmsnorm_fwd_gpu. Keeps Y/XN/INV DEVICE-
+ * RESIDENT. Gated behind HEXA_DEVRESIDENT_NN+CLM_PROD_DEVRESIDENT; no-CUDA
+ * → -1 → host nn_rmsnorm_fwd (byte-eq). */
+HexaVal hexa_forge_dispatch_rmsnorm(HexaVal x_v, HexaVal g_v, HexaVal y_v,
+                             HexaVal xn_v, HexaVal inv_v, HexaVal d_v);       /* runtime.c — fusion L3 glue */
+HexaVal forge_dispatch_rmsnorm(HexaVal x_v, HexaVal g_v, HexaVal y_v,
+                             HexaVal xn_v, HexaVal inv_v, HexaVal d_v);       /* runtime.c — fusion L3 glue seam */
+
+/* HEXA-FUSION L3 (LLM-path BWD glue half) — device-resident RMSNorm backward.
+ * forge_dispatch_rmsnorm_bwd(x, g, xn, inv, dy, dx, dg, d) -> int rc (0 ok /
+ * -1 host). NOTE `inv_v` is a SCALAR float (the saved fwd reciprocal-rms,
+ * __hx_to_double), NOT a farr — the extra-arg convention like the
+ * embedding_bwd_scatter V-derivation twin. Reproduces nn_lib.hexa
+ * nn_rmsnorm_bwd (closed vjp): dxn_i=dy_i·g_i, dg_i=dy_i·xn_i,
+ * dot=Σ_k dxn_k·x_k (SEQUENTIAL), inv3=inv·inv·inv, scale=(inv3/d)·dot,
+ * dx_i=inv·dxn_i − scale·x_i. The dot reduction accumulates SEQUENTIALLY
+ * under ONE thread (NO tree re-assoc, NO atomics); the mul-add and the
+ * dx mul−mul use __dmul_rn/__dadd_rn (host FP_CONTRACT OFF) → bit-exact
+ * (max|Δ|=0) via _hx_cuda_farr_rmsnorm_bwd_gpu. NO sqrt/exp here. Keeps
+ * DX/DG DEVICE-RESIDENT. Gated behind HEXA_DEVRESIDENT_NN+CLM_PROD_
+ * DEVRESIDENT; no-CUDA → -1 → host nn_rmsnorm_bwd (byte-eq). */
+HexaVal hexa_forge_dispatch_rmsnorm_bwd(HexaVal x_v, HexaVal g_v, HexaVal xn_v,
+                             HexaVal inv_v, HexaVal dy_v, HexaVal dx_v,
+                             HexaVal dg_v, HexaVal d_v);                      /* runtime.c — fusion L3 bwd glue */
+HexaVal forge_dispatch_rmsnorm_bwd(HexaVal x_v, HexaVal g_v, HexaVal xn_v,
+                             HexaVal inv_v, HexaVal dy_v, HexaVal dx_v,
+                             HexaVal dg_v, HexaVal d_v);                      /* runtime.c — fusion L3 bwd glue seam */
+
 /* HEXA-FUSION L3 (BWD glue half) — device-resident elementwise GELU backward.
  * forge_dispatch_gelu_bwd(g, da, dg, n) -> int rc (0 ok / -1 host). Reproduces
  * nn_lib.hexa nn_gelu_bwd: DG[i]=DA[i]·GELU'(G[i]), GELU'(x)=Φ(x)+x·φ(x) with the

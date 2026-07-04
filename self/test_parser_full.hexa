@@ -904,6 +904,25 @@ let mut tc10 = 0
 try { tc10 = safe_fn() } catch e { tc10 = -1 }
 check("try safe fn", tc10, 42)
 
+// Throw-parity twin (native compiler/parse/parser_test.hexa case n): the
+// throw value must START on the keyword's line but may CONTINUE across
+// lines — this lexer suppresses Newline inside ()/[] and the native
+// frontend only line-checks the FIRST post-throw token, so BOTH frontends
+// accept this shape. The negative shapes — bare `throw` before `}` and
+// `throw` + next-line value — are parse ERRORS in BOTH frontends (here
+// parse_throw_stmt calls parse_expr unconditionally and parse_primary
+// rejects RBrace/Newline as "unexpected token"; natively HX0015), so they
+// cannot appear in this must-parse corpus — which is itself the proof that
+// no gen2-clean source relies on them.
+let mut tc11 = 0
+try {
+    throw to_string(
+        "multi-line valued throw")
+} catch e {
+    tc11 = 1
+}
+check("multi-line valued throw caught", tc11, 1)
+
 // =====================================================================
 // SECTION 17: Scoping (5 tests)
 // =====================================================================

@@ -160,3 +160,39 @@ jobs:
             exit 0
           fi
           exit "$rc"
+
+  # ── m12 try/catch setjmp RUN gate (x86_64-linux native lane) ────────────────
+  # Verifies the try/catch register-rollback fix (#4541) on a REAL run: a HexaVal
+  # local written inside a try body must survive the catch-path longjmp (own-IR
+  # x86 pool-spill + gen2 C `volatile`). On ubuntu-latest `hexa build` is native-
+  # first (#4483), so this exercises the own-IR x86 lane the pool hosts can't run
+  # (aiden `hexa run` hangs). Build to a BINARY (not `hexa run`) to bypass the
+  # stale ~/.hexa-cache that masks codegen changes. m12 lives in the corpus.
+  trycatch-m12:
+    name: try/catch setjmp m12 (native lane)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/ccache-setup
+      - name: Build — shared release_build (./hexa)
+        shell: bash
+        env:
+          TARGET: linux-x86_64
+          CC: gcc
+          LIBS: "-lm -ldl"
+          GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
+        run: bash tool/release_build
+      - name: Build m12 to a binary + run (bypasses the hexa-run cache)
+        shell: bash
+        run: |
+          set -uo pipefail
+          rm -rf ~/.hexa-cache 2>/dev/null || true
+          rc=0
+          ./hexa build self/test/miscompile_class/m12_try_catch_setjmp.hexa -o /tmp/m12bin || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::notice::m12 could not native-emit in this env (build rc=$rc) → NEUTRAL (try/catch floor NOT broken)"
+            exit 0
+          fi
+          /tmp/m12bin

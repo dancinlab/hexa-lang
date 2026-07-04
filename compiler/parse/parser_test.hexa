@@ -142,6 +142,56 @@ fn case_missing_close_brace() {
 // underlying type lands in `return_type`. The alias is then used in a fn
 // signature + arithmetic — type resolution makes `Celsius`/`MyInt` behave as
 // their underlying primitive so no spurious HX3001 in the later check passes.
+// Bare-return same-line rule (state/hexa-own/step0_verdict.md): a value-less
+// `return` followed on the NEXT line by an ident-led statement must NOT
+// swallow that statement as its value — gen2's Newline rule, matched here
+// via span.line. Positive controls: a value that STARTS on the keyword's
+// line may continue across lines (multi-line binop / open call paren).
+fn case_bare_return_nextline() {
+    let src = "fn a() {\n    return\n    defer { g() }\n}\nfn b() {\n    return\n    g()\n}\nfn c() {\n    return\n    let x = 1\n}"
+    dump_module("case j: bare return + next-line stmt (0-child Return, sibling parses)", src)
+}
+
+fn case_valued_return_multiline() {
+    let src = "fn a() -> i64 {\n    return 1 +\n        2\n}\nfn b() -> i64 {\n    return g(\n        3)\n}"
+    dump_module("case k: valued return spanning lines (value starts same-line)", src)
+}
+
+// Throw-parity rule (gen2 self/parser.hexa:4380-4383): parse_throw_stmt calls
+// parse_expr UNCONDITIONALLY, so a throw value is REQUIRED — and gen2's lexer
+// emits Newline tokens, so a value that does not START on the keyword's line
+// is "unexpected token Newline" (gen2 parse_primary unknown-token arm), the
+// same error class as a bare `throw` before `}`/`;`/EOF. Native mirrors both
+// via span.line + HX0015, emitted WITHOUT consuming the offending token so
+// the enclosing block stays in sync and the next-line statement parses as a
+// SIBLING (not as the throw's value — the pre-fix guard silently accepted a
+// 0-child Throw AND would have swallowed a next-line value, both divergent).
+
+fn case_bare_throw_diag() {
+    // Bare throw before `}` — expect 1× HX0015, brace intact (no HX0012
+    // cascade), and the following top-level item still parses (items == 2).
+    let src = "fn a() {\n    throw\n}\nfn after() -> i64 { return 1 }"
+    dump_module("case l: bare throw before } (HX0015, no brace desync)", src)
+}
+
+fn case_throw_nextline_value() {
+    // Next-line value — gen2 rejects this ("unexpected token Newline");
+    // native mirrors with HX0015 and `g()` parses as the sibling statement,
+    // NOT as the throw value. Expect exactly 1× HX0015, items == 1.
+    let src = "fn a() {\n    throw\n    g()\n}"
+    dump_module("case m: throw + next-line value (HX0015, sibling parses)", src)
+}
+
+fn case_valued_throw_multiline() {
+    // Positive controls: the value STARTS on the keyword's line and may
+    // continue across lines (open call paren — gen2 suppresses Newline
+    // inside parens, native only checks the FIRST post-throw token).
+    // Expect parse_diags == 0. Twin snippet lives in the gen2 corpus
+    // (self/test_parser_full.hexa) proving both frontends accept it.
+    let src = "fn a() {\n    throw \"boom\"\n}\nfn b() {\n    throw make_err(\n        3)\n}"
+    dump_module("case n: valued throw (same-line start, multi-line ok)", src)
+}
+
 fn case_type_alias() {
     let src = "type MyInt = i64\npub type Celsius = f64\ntype Box<T> = i64\ntype Temp = Celsius\nfn warm(t: Celsius) -> Celsius { return t * 1.8 + 32.0 }\nfn idx(n: MyInt) -> MyInt { return n + 1 }"
     println("── case j: type alias (decl + generic + chain + use) ──")
@@ -236,6 +286,11 @@ case_for_loop()
 case_assignment()
 case_missing_open_brace()
 case_missing_close_brace()
+case_bare_return_nextline()
+case_valued_return_multiline()
+case_bare_throw_diag()
+case_throw_nextline_value()
+case_valued_throw_multiline()
 case_type_alias()
 case_borrow_surface()
 println("══════════════════════════════════════════════")

@@ -157,6 +157,15 @@ jobs:
           # CPU mirror (rc 0); reaching PASS = bare-name lowering + carrier link.
           # SSOT: convergence codegen-hexa-1.
           ./hexa run test/native_build/forge_attn_decode_batch_builtin_smoke.hexa
+          # LLM-path forge_dispatch_rmsnorm(_bwd) consumer-compile smoke — the
+          # 6-arg fwd + 8-arg bwd device-RMSNorm builtins MUST lower (len==6 /
+          # len==8 codegen blocks) to hexa_forge_dispatch_rmsnorm(_bwd) + link.
+          # Same latent-break class as forge_layernorm (#4339): byteeq passes
+          # (self/ never calls them -> inert) even if a binding is misplaced /
+          # the proto is broken. This CALLS both so a green-but-broken wiring
+          # can never ship. Non-CUDA build -> rc -1 (host fallback); reaching
+          # PASS = both lower + link. SSOT: convergence codegen-hexa-1.
+          ./hexa run test/native_build/forge_rmsnorm_builtin_smoke.hexa
 
       # ── Gate invocation ──────────────────────────────────────────────────
       # Same root cause as miscompile-zero-gate / determinism-gate: the released
