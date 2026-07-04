@@ -924,7 +924,7 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
                 victim_pos = victim_pos - 1
             }
 
-            if victim_pos >= 0 && iv.ends[active_idx[victim_pos]] > iv.ends[cur] {
+            if victim_pos >= 0 && iv.ends[active_idx[victim_pos]] > iv.ends[cur] && !_sj_all_spill {
                 let v = active_idx[victim_pos]
                 map_regs[cur] = map_regs[v]
                 map_slots[cur] = -1
