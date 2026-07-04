@@ -591,7 +591,10 @@ pub fn nn_embedding_fwd(ids: int, table: int, X_out: int, T: int, d: int) {
     // (one-thread-per-output-cell gather), keeps X_out DEVICE-RESIDENT so the first
     // trunk conv GEMM H2D-skips it. Same env gate; OFF / no-CUDA → rc=-1 → the host
     // gather loop below UNCHANGED (byte-eq, proven by clm_prod_embed_scatter_eq).
-    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+    // H_9119: device seam default-ON on a CUDA host (byte-eq gather, clm_prod_embed_scatter_eq),
+    // mirroring _nn_gelu_dev_on's cuda_available() migration — was env-gated (host by default) so
+    // training embedding stayed on CPU even with cuda_available()=1. Legacy env still forces it.
+    if cuda_available() == 1 || (env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "") {
         let rc = forge_dispatch_embedding(ids, table, X_out, T, d)
         if rc == 0 { return }
     }
@@ -619,7 +622,9 @@ pub fn nn_embedding_bwd_scatter(dX: int, ids: int, dtable_inout: int,
     // has no V (callers must not change), so derive V = len(dtable)/d — dtable is
     // [V·d] by construction. Same env gate; OFF / no-CUDA → rc=-1 → the host
     // scatter loop below UNCHANGED (byte-eq, proven by clm_prod_embed_scatter_eq).
-    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+    // H_9119: device seam default-ON on a CUDA host (bit-exact scatter, no atomics), mirroring the
+    // fwd migration; legacy env still forces it.
+    if cuda_available() == 1 || (env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "") {
         let v = farr_len(dtable_inout) / d
         let rc = forge_dispatch_embedding_bwd_scatter(dX, ids, dtable_inout, T, d, v)
         if rc == 0 { return }

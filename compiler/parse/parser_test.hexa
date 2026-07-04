@@ -165,6 +165,64 @@ fn case_type_alias() {
     println("  parse_diags=" + to_string(len(diags)) + " (expect 0)")
 }
 
+// HEXA-OWN L4 A1 — borrow surface (syntax only). Verifies that `&T`/`&mut T`
+// parse in type position (folded into TypeRef.name like `*T`), `&x`/`&mut x`
+// parse in expr position to an ExprKind::UnOp with text "&"/"&mut", and — the
+// load-bearing regression — that binary bitwise-and `a & b` STILL parses as a
+// BinOp (NOT a prefix UnOp), proving the change is additive / byteeq-neutral.
+
+fn expr_kind_str(k: ExprKind) -> string {
+    return match k {
+        ExprKind::UnOp -> "UnOp",
+        ExprKind::BinOp -> "BinOp",
+        _ -> "_"
+    }
+}
+
+fn count_amp(e: Expr, want_kind: string, want_text: string) -> i64 {
+    let mut c = 0
+    if expr_kind_str(e.kind) == want_kind && e.text == want_text {
+        c = c + 1
+    }
+    let mut i = 0
+    while i < len(e.children) {
+        c = c + count_amp(e.children[i], want_kind, want_text)
+        i = i + 1
+    }
+    return c
+}
+
+fn case_borrow_surface() {
+    println("── case k: A1 borrow surface (&T / &x / a & b) ──")
+    // Type position — `&T` / `&mut T` fold into the TypeRef name string.
+    let ts = "fn f(p: &i64, q: &mut i64) -> &mut i64 { return q }"
+    let tm = parse(lex(ts, "<inline>"), "<inline>")
+    let itf = tm.items[0]
+    println("  param0.typ=" + itf.params[0].typ.name + " (expect &i64)")
+    println("  param1.typ=" + itf.params[1].typ.name + " (expect &mut i64)")
+    println("  ret.typ=" + itf.return_type.name + " (expect &mut i64)")
+    let td = parse_diags()
+    println("  type parse_diags=" + to_string(len(td)) + " (expect 0)")
+
+    // Expr position — prefix `&x` and `&mut x` → UnOp text "&" / "&mut".
+    let es = "fn g(x: i64) -> i64 { let r = &x; let s = &mut x; return 0 }"
+    let em = parse(lex(es, "<inline>"), "<inline>")
+    let itg = em.items[0]
+    println("  UnOp \"&\"=" + to_string(count_amp(itg.body, "UnOp", "&")) + " (expect 1)")
+    println("  UnOp \"&mut\"=" + to_string(count_amp(itg.body, "UnOp", "&mut")) + " (expect 1)")
+    let ed = parse_diags()
+    println("  expr parse_diags=" + to_string(len(ed)) + " (expect 0)")
+
+    // Regression — binary bitwise-and stays a BinOp, no prefix UnOp leaks.
+    let bs = "fn h(a: i64, b: i64) -> i64 { return a & b }"
+    let bm = parse(lex(bs, "<inline>"), "<inline>")
+    let ith = bm.items[0]
+    println("  BinOp \"&\"=" + to_string(count_amp(ith.body, "BinOp", "&")) + " (expect 1)")
+    println("  prefix UnOp \"&\"=" + to_string(count_amp(ith.body, "UnOp", "&")) + " (expect 0)")
+    let bd = parse_diags()
+    println("  bitand parse_diags=" + to_string(len(bd)) + " (expect 0)")
+}
+
 println("══════════════════════════════════════════════")
 println("  HEXA Compiler — Parser Smoke Test (A1)")
 println("══════════════════════════════════════════════")
@@ -179,5 +237,6 @@ case_assignment()
 case_missing_open_brace()
 case_missing_close_brace()
 case_type_alias()
+case_borrow_surface()
 println("══════════════════════════════════════════════")
 println("  done.")
