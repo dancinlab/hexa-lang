@@ -717,9 +717,13 @@ pub let CATALOG: [DiagSpec] = [
         // "mismatched types" (Error) now owns HX3011 and own-lint
         // "use of moved value" owns HX3012 above — a code is single-booked
         // (first-match `_catalog_lookup` / `hexa explain` surface ONE spec
-        // per code). The opt-in associated-types pass takes the next-free
-        // HX3019/HX3020; renumbering changes no default-build output.
-        code: "HX3019",
+        // per code). Further renumbered HX3019→HX3022 to resolve a collision
+        // with the return-borrow-escape E0515 diagnostic (#4555) that also
+        // landed on HX3019; the assoc-types "surplus" E0437 keeps HX3020 and
+        // HX3021 is reserved for the in-flight borrow-conflict E0502, so this
+        // slot moves to the next-free HX3022. The Rust E-code (E0046) is
+        // unchanged; renumbering changes no default-build output.
+        code: "HX3022",
         title: "associated type not bound in impl",
         severity: Severity::Error,
         stage: "S3",
