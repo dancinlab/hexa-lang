@@ -1950,7 +1950,19 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
         }
         let mut t = _hir_empty_type()
         if len(kids) > 0 { t = kids[0].typ }
-        let h = _mk_hexpr(kind_tag, e.span, t, e.text,
+        // RFC r15-D2 — postfix `?` try-propagation operator. The parser
+        // (parse_postfix, gated HEXA_TRY_OP) carries `expr?` as an
+        // ExprKind::UnOp with text "?" so NO new ExprKind variant is needed
+        // (avoids editing the exhaustive `_hir_is_*`/`_expr_kind_tag` tables).
+        // Re-tag it here to a DISTINCT HExpr.kind string "tryop" (HExpr.kind is
+        // a free string) so hir_to_mir targets the success-tag discriminant +
+        // Err/None early-return lowering, leaving ordinary unary `-`/`!` (which
+        // keep kind_tag "unop") untouched. Default-OFF: the parser only ever
+        // builds a "?" UnOp when HEXA_TRY_OP is set, so this re-tag is dead on
+        // every byteeq build (gen3≡gen4 fixpoint untouched).
+        let mut khk = kind_tag
+        if e.text == "?" && env("HEXA_TRY_OP") == "1" { khk = "tryop" }
+        let h = _mk_hexpr(khk, e.span, t, e.text,
                           kids, _empty_atlas_binding(), _hir_miss_def_id())
         return LowerResult { expr: h, sc: new_sc }
     }

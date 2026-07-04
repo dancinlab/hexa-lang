@@ -1,0 +1,56 @@
+// M0 honest-next — @own FP-probe: does M3+M4 (HEXA_BORROWCK) reproduce #4088's
+// ~950-FP shape? Reference-matched to l3_m0_measurement.md probe matrix.
+// Non-@own probes only (real parse path; @own-param Rule 2 = hand-built HIR in
+// borrowck_test). Diagnostics fire at check time.
+// Expected under HEXA_BORROWCK=1:
+//   p_fp_callarg          → 0  (#4088 FP #1: foo(a) non-@own param = READ)
+//   p_fp_arr_alias_read   → 0  (#4088 FP #2: benign read-only aliasing)
+//   p_hz_write_alias      → 1  (TRUE hazard, Rule 1 discriminator)
+//   p_fp_write_same_name  → 0  (no alias, single name)
+//   p_fp_copy_int         → 0  (Copy control)
+
+fn foo(x: [int]) -> int {
+    return x[0]
+}
+
+// #4088 FP #1 — call arg into a non-@own param, then read the same array.
+fn p_fp_callarg() -> int {
+    let a = [1, 2, 3]
+    let r = foo(a)
+    return a[0] + r
+}
+
+// #4088 FP #2 — read-only aliasing (let b = a; read through both).
+fn p_fp_arr_alias_read() -> int {
+    let a = [1, 2, 3]
+    let b = a
+    return a[0] + b[1]
+}
+
+// TRUE hazard (Rule 1) — write through one alias, then read through the other.
+fn p_hz_write_alias() -> int {
+    let a = [1, 2, 3]
+    let b = a
+    b[0] = 99
+    return a[0]
+}
+
+// No alias — single name write then read.
+fn p_fp_write_same_name() -> int {
+    let a = [1, 2, 3]
+    a[0] = 1
+    return a[0]
+}
+
+// Copy control — ints are values, no handle to alias.
+fn p_fp_copy_int() -> int {
+    let x = 5
+    let a = x
+    let b = x
+    return a + b
+}
+
+fn main() {
+    let s = p_fp_callarg() + p_fp_arr_alias_read() + p_hz_write_alias() + p_fp_write_same_name() + p_fp_copy_int()
+    println("probes done")
+}
