@@ -339,7 +339,15 @@ fn _re_run(nodes: [[int]], classes: [[int]], conts: [int], s: string, si: int, n
         // → run the child + a fresh guard for the next iteration.
         if si == rec[2] { return _re_run(nodes, classes, rest, s, si, n) }
         let guard = _re_star_guard(nodes, rec[1], si)
-        return _re_run(nodes, classes, _re_cons(rec[1], _re_cons(guard, rest)), s, si, n)
+        // Greedy-then-fallback (mirror of the kind-3 STAR ENTRY above): try one
+        // more child iteration; if it (and the trailing pattern) can't complete,
+        // STOP the star HERE and match `rest` at the current position. Without
+        // this fallback a greedy `*`/`+` that consumed ≥1 char is forced to keep
+        // matching the child until it fails, so no trailing pattern (or the
+        // `$`/EOL appended by regex_full_match_native) can ever match.
+        let more = _re_run(nodes, classes, _re_cons(rec[1], _re_cons(guard, rest)), s, si, n)
+        if more >= 0 { return more }
+        return _re_run(nodes, classes, rest, s, si, n)
     }
     return -1
 }
