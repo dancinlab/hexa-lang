@@ -30,7 +30,7 @@ hxlcl_strlen:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 88], r11 # store tag L0
     mov rbx, rdi # cabi ingress param payload
-.L7ff7_hxlcl_strlen_bb0:
+.L5211_hxlcl_strlen_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -54,8 +54,8 @@ hxlcl_strlen:
     mov r11, [rbp - 120] # tag L4 from tag-slot
     mov [rbp - 128], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
-    jmp .L7ff7_hxlcl_strlen_bb1 # branch
-.L7ff7_hxlcl_strlen_bb1:
+    jmp .L5211_hxlcl_strlen_bb1 # branch
+.L5211_hxlcl_strlen_bb1:
     mov r11, 0 # hv payload
     mov r10, [rbp - 56] # reload L5 from spill slot
     mov r10, r10 # hv payload
@@ -67,9 +67,9 @@ hxlcl_strlen:
     mov [rbp - 64], r10 # spill L6 to slot
     mov r10, [rbp - 64] # reload L6 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strlen_bb3 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strlen_bb2 # jump -> then
-.L7ff7_hxlcl_strlen_bb2:
+    jz .L5211_hxlcl_strlen_bb3 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strlen_bb2 # jump -> then
+.L5211_hxlcl_strlen_bb2:
     mov r11, 1 # hv payload
     mov r10, r14 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -92,8 +92,8 @@ hxlcl_strlen:
     mov r11, [rbp - 152] # tag L8 from tag-slot
     mov [rbp - 128], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
-    jmp .L7ff7_hxlcl_strlen_bb1 # branch
-.L7ff7_hxlcl_strlen_bb3:
+    jmp .L5211_hxlcl_strlen_bb1 # branch
+.L5211_hxlcl_strlen_bb3:
     mov rax, r14 # hv payload
     add rsp, 112 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -126,7 +126,7 @@ hxlcl_memcpy:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 136], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_memcpy_bb0:
+.L5211_hxlcl_memcpy_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -151,8 +151,8 @@ hxlcl_memcpy:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 176], r11 # store tag L7
     mov [rbp - 72], r10 # spill L7 to slot
-    jmp .L7ff7_hxlcl_memcpy_bb1 # branch
-.L7ff7_hxlcl_memcpy_bb1:
+    jmp .L5211_hxlcl_memcpy_bb1 # branch
+.L5211_hxlcl_memcpy_bb1:
     mov r11, r13 # hv payload
     mov r10, [rbp - 72] # reload L7 from spill slot
     mov r10, r10 # hv payload
@@ -164,9 +164,9 @@ hxlcl_memcpy:
     mov [rbp - 80], r10 # spill L8 to slot
     mov r10, [rbp - 80] # reload L8 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_memcpy_bb3 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_memcpy_bb2 # jump -> then
-.L7ff7_hxlcl_memcpy_bb2:
+    jz .L5211_hxlcl_memcpy_bb3 # jump-if-zero -> else
+    jmp .L5211_hxlcl_memcpy_bb2 # jump -> then
+.L5211_hxlcl_memcpy_bb2:
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 72] # reload L7 from spill slot
@@ -204,8 +204,8 @@ hxlcl_memcpy:
     mov r11, [rbp - 216] # tag L12 from tag-slot
     mov [rbp - 176], r11 # store tag L7
     mov [rbp - 72], r10 # spill L7 to slot
-    jmp .L7ff7_hxlcl_memcpy_bb1 # branch
-.L7ff7_hxlcl_memcpy_bb3:
+    jmp .L5211_hxlcl_memcpy_bb1 # branch
+.L5211_hxlcl_memcpy_bb3:
     mov rax, r15 # hv payload
     add rsp, 176 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -238,7 +238,7 @@ hxlcl_memset:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 104], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_memset_bb0:
+.L5211_hxlcl_memset_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -252,8 +252,8 @@ hxlcl_memset:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 128], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
-    jmp .L7ff7_hxlcl_memset_bb1 # branch
-.L7ff7_hxlcl_memset_bb1:
+    jmp .L5211_hxlcl_memset_bb1 # branch
+.L5211_hxlcl_memset_bb1:
     mov r11, r13 # hv payload
     mov r10, [rbp - 56] # reload L5 from spill slot
     mov r10, r10 # hv payload
@@ -265,9 +265,9 @@ hxlcl_memset:
     mov [rbp - 64], r10 # spill L6 to slot
     mov r10, [rbp - 64] # reload L6 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_memset_bb3 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_memset_bb2 # jump -> then
-.L7ff7_hxlcl_memset_bb2:
+    jz .L5211_hxlcl_memset_bb3 # jump-if-zero -> else
+    jmp .L5211_hxlcl_memset_bb2 # jump -> then
+.L5211_hxlcl_memset_bb2:
     mov r10, r15 # hv payload
     mov r11, [rbp - 56] # reload L5 from spill slot
     mov r11, r11 # hv payload
@@ -290,8 +290,8 @@ hxlcl_memset:
     mov r11, [rbp - 152] # tag L8 from tag-slot
     mov [rbp - 128], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
-    jmp .L7ff7_hxlcl_memset_bb1 # branch
-.L7ff7_hxlcl_memset_bb3:
+    jmp .L5211_hxlcl_memset_bb1 # branch
+.L5211_hxlcl_memset_bb3:
     mov rax, r15 # hv payload
     add rsp, 112 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -324,7 +324,7 @@ hxlcl_memcmp:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 176], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_memcmp_bb0:
+.L5211_hxlcl_memcmp_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -349,8 +349,8 @@ hxlcl_memcmp:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 216], r11 # store tag L7
     mov [rbp - 72], r10 # spill L7 to slot
-    jmp .L7ff7_hxlcl_memcmp_bb1 # branch
-.L7ff7_hxlcl_memcmp_bb1:
+    jmp .L5211_hxlcl_memcmp_bb1 # branch
+.L5211_hxlcl_memcmp_bb1:
     mov r11, r13 # hv payload
     mov r10, [rbp - 72] # reload L7 from spill slot
     mov r10, r10 # hv payload
@@ -362,9 +362,9 @@ hxlcl_memcmp:
     mov [rbp - 80], r10 # spill L8 to slot
     mov r10, [rbp - 80] # reload L8 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_memcmp_bb3 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_memcmp_bb2 # jump -> then
-.L7ff7_hxlcl_memcmp_bb2:
+    jz .L5211_hxlcl_memcmp_bb3 # jump-if-zero -> else
+    jmp .L5211_hxlcl_memcmp_bb2 # jump -> then
+.L5211_hxlcl_memcmp_bb2:
     mov r10, r15 # hv payload
     mov r11, [rbp - 72] # reload L7 from spill slot
     mov r11, r11 # hv payload
@@ -416,9 +416,9 @@ hxlcl_memcmp:
     mov [rbp - 136], r10 # spill L15 to slot
     mov r10, [rbp - 136] # reload L15 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_memcmp_bb5 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_memcmp_bb4 # jump -> then
-.L7ff7_hxlcl_memcmp_bb3:
+    jz .L5211_hxlcl_memcmp_bb5 # jump-if-zero -> else
+    jmp .L5211_hxlcl_memcmp_bb4 # jump -> then
+.L5211_hxlcl_memcmp_bb3:
     mov rax, 0 # hv payload
     add rsp, 256 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -429,7 +429,7 @@ hxlcl_memcmp:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_memcmp_bb4:
+.L5211_hxlcl_memcmp_bb4:
     mov rax, [rbp - 128] # reload L14 from spill slot
     mov rax, rax # hv payload
     add rsp, 256 # epilogue: free spill frame
@@ -441,7 +441,7 @@ hxlcl_memcmp:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_memcmp_bb5:
+.L5211_hxlcl_memcmp_bb5:
     mov r11, 1 # hv payload
     mov r10, [rbp - 72] # reload L7 from spill slot
     mov r10, r10 # hv payload
@@ -454,7 +454,7 @@ hxlcl_memcmp:
     mov r11, [rbp - 296] # tag L17 from tag-slot
     mov [rbp - 216], r11 # store tag L7
     mov [rbp - 72], r10 # spill L7 to slot
-    jmp .L7ff7_hxlcl_memcmp_bb1 # branch
+    jmp .L5211_hxlcl_memcmp_bb1 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 256 # epilogue: free spill frame
@@ -485,7 +485,7 @@ hxlcl_strcmp:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 168], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_strcmp_bb0:
+.L5211_hxlcl_strcmp_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -509,13 +509,13 @@ hxlcl_strcmp:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 208], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
-    jmp .L7ff7_hxlcl_strcmp_bb1 # branch
-.L7ff7_hxlcl_strcmp_bb1:
+    jmp .L5211_hxlcl_strcmp_bb1 # branch
+.L5211_hxlcl_strcmp_bb1:
     mov r10, 1 # materialize test cond to reg
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strcmp_bb3 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strcmp_bb2 # jump -> then
-.L7ff7_hxlcl_strcmp_bb2:
+    jz .L5211_hxlcl_strcmp_bb3 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strcmp_bb2 # jump -> then
+.L5211_hxlcl_strcmp_bb2:
     mov r10, r14 # hv payload
     mov r11, [rbp - 64] # reload L6 from spill slot
     mov r11, r11 # hv payload
@@ -567,9 +567,9 @@ hxlcl_strcmp:
     mov [rbp - 120], r10 # spill L13 to slot
     mov r10, [rbp - 120] # reload L13 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strcmp_bb5 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strcmp_bb4 # jump -> then
-.L7ff7_hxlcl_strcmp_bb3:
+    jz .L5211_hxlcl_strcmp_bb5 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strcmp_bb4 # jump -> then
+.L5211_hxlcl_strcmp_bb3:
     mov rax, 0 # hv payload
     add rsp, 256 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -580,7 +580,7 @@ hxlcl_strcmp:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_strcmp_bb4:
+.L5211_hxlcl_strcmp_bb4:
     mov rax, [rbp - 112] # reload L12 from spill slot
     mov rax, rax # hv payload
     add rsp, 256 # epilogue: free spill frame
@@ -592,7 +592,7 @@ hxlcl_strcmp:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_strcmp_bb5:
+.L5211_hxlcl_strcmp_bb5:
     mov r10, [rbp - 80] # reload L8 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -604,9 +604,9 @@ hxlcl_strcmp:
     mov [rbp - 136], r10 # spill L15 to slot
     mov r10, [rbp - 136] # reload L15 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strcmp_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strcmp_bb6 # jump -> then
-.L7ff7_hxlcl_strcmp_bb6:
+    jz .L5211_hxlcl_strcmp_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strcmp_bb6 # jump -> then
+.L5211_hxlcl_strcmp_bb6:
     mov rax, 0 # hv payload
     add rsp, 256 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -617,7 +617,7 @@ hxlcl_strcmp:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_strcmp_bb7:
+.L5211_hxlcl_strcmp_bb7:
     mov r11, 1 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -630,7 +630,7 @@ hxlcl_strcmp:
     mov r11, [rbp - 296] # tag L17 from tag-slot
     mov [rbp - 208], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
-    jmp .L7ff7_hxlcl_strcmp_bb1 # branch
+    jmp .L5211_hxlcl_strcmp_bb1 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 256 # epilogue: free spill frame
@@ -664,7 +664,7 @@ hxlcl_strncmp:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 192], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_strncmp_bb0:
+.L5211_hxlcl_strncmp_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -689,8 +689,8 @@ hxlcl_strncmp:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 232], r11 # store tag L7
     mov [rbp - 72], r10 # spill L7 to slot
-    jmp .L7ff7_hxlcl_strncmp_bb1 # branch
-.L7ff7_hxlcl_strncmp_bb1:
+    jmp .L5211_hxlcl_strncmp_bb1 # branch
+.L5211_hxlcl_strncmp_bb1:
     mov r11, r13 # hv payload
     mov r10, [rbp - 72] # reload L7 from spill slot
     mov r10, r10 # hv payload
@@ -702,9 +702,9 @@ hxlcl_strncmp:
     mov [rbp - 80], r10 # spill L8 to slot
     mov r10, [rbp - 80] # reload L8 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strncmp_bb3 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strncmp_bb2 # jump -> then
-.L7ff7_hxlcl_strncmp_bb2:
+    jz .L5211_hxlcl_strncmp_bb3 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strncmp_bb2 # jump -> then
+.L5211_hxlcl_strncmp_bb2:
     mov r10, r15 # hv payload
     mov r11, [rbp - 72] # reload L7 from spill slot
     mov r11, r11 # hv payload
@@ -756,9 +756,9 @@ hxlcl_strncmp:
     mov [rbp - 136], r10 # spill L15 to slot
     mov r10, [rbp - 136] # reload L15 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strncmp_bb5 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strncmp_bb4 # jump -> then
-.L7ff7_hxlcl_strncmp_bb3:
+    jz .L5211_hxlcl_strncmp_bb5 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strncmp_bb4 # jump -> then
+.L5211_hxlcl_strncmp_bb3:
     mov rax, 0 # hv payload
     add rsp, 288 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -769,7 +769,7 @@ hxlcl_strncmp:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_strncmp_bb4:
+.L5211_hxlcl_strncmp_bb4:
     mov rax, [rbp - 128] # reload L14 from spill slot
     mov rax, rax # hv payload
     add rsp, 288 # epilogue: free spill frame
@@ -781,7 +781,7 @@ hxlcl_strncmp:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_strncmp_bb5:
+.L5211_hxlcl_strncmp_bb5:
     mov r10, [rbp - 96] # reload L10 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -793,9 +793,9 @@ hxlcl_strncmp:
     mov [rbp - 152], r10 # spill L17 to slot
     mov r10, [rbp - 152] # reload L17 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strncmp_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strncmp_bb6 # jump -> then
-.L7ff7_hxlcl_strncmp_bb6:
+    jz .L5211_hxlcl_strncmp_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strncmp_bb6 # jump -> then
+.L5211_hxlcl_strncmp_bb6:
     mov rax, 0 # hv payload
     add rsp, 288 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -806,7 +806,7 @@ hxlcl_strncmp:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_strncmp_bb7:
+.L5211_hxlcl_strncmp_bb7:
     mov r11, 1 # hv payload
     mov r10, [rbp - 72] # reload L7 from spill slot
     mov r10, r10 # hv payload
@@ -819,7 +819,7 @@ hxlcl_strncmp:
     mov r11, [rbp - 328] # tag L19 from tag-slot
     mov [rbp - 232], r11 # store tag L7
     mov [rbp - 72], r10 # spill L7 to slot
-    jmp .L7ff7_hxlcl_strncmp_bb1 # branch
+    jmp .L5211_hxlcl_strncmp_bb1 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 288 # epilogue: free spill frame
@@ -850,7 +850,7 @@ hxlcl_strcpy:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 136], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_strcpy_bb0:
+.L5211_hxlcl_strcpy_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -887,8 +887,8 @@ hxlcl_strcpy:
     mov r11, [rbp - 184] # tag L7 from tag-slot
     mov [rbp - 192], r11 # store tag L8
     mov [rbp - 80], r10 # spill L8 to slot
-    jmp .L7ff7_hxlcl_strcpy_bb1 # branch
-.L7ff7_hxlcl_strcpy_bb1:
+    jmp .L5211_hxlcl_strcpy_bb1 # branch
+.L5211_hxlcl_strcpy_bb1:
     mov r11, 0 # hv payload
     mov r10, [rbp - 80] # reload L8 from spill slot
     mov r10, r10 # hv payload
@@ -900,9 +900,9 @@ hxlcl_strcpy:
     mov [rbp - 88], r10 # spill L9 to slot
     mov r10, [rbp - 88] # reload L9 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strcpy_bb3 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strcpy_bb2 # jump -> then
-.L7ff7_hxlcl_strcpy_bb2:
+    jz .L5211_hxlcl_strcpy_bb3 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strcpy_bb2 # jump -> then
+.L5211_hxlcl_strcpy_bb2:
     mov r10, r14 # hv payload
     mov r11, [rbp - 64] # reload L6 from spill slot
     mov r11, r11 # hv payload
@@ -940,8 +940,8 @@ hxlcl_strcpy:
     mov r11, [rbp - 224] # tag L12 from tag-slot
     mov [rbp - 192], r11 # store tag L8
     mov [rbp - 80], r10 # spill L8 to slot
-    jmp .L7ff7_hxlcl_strcpy_bb1 # branch
-.L7ff7_hxlcl_strcpy_bb3:
+    jmp .L5211_hxlcl_strcpy_bb1 # branch
+.L5211_hxlcl_strcpy_bb3:
     mov r10, r14 # hv payload
     mov r11, [rbp - 64] # reload L6 from spill slot
     mov r11, r11 # hv payload
@@ -984,7 +984,7 @@ hxlcl_strncpy:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 216], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_strncpy_bb0:
+.L5211_hxlcl_strncpy_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -1026,8 +1026,8 @@ hxlcl_strncpy:
     mov r11, [rbp - 272] # tag L9 from tag-slot
     mov [rbp - 280], r11 # store tag L10
     mov [rbp - 96], r10 # spill L10 to slot
-    jmp .L7ff7_hxlcl_strncpy_bb1 # branch
-.L7ff7_hxlcl_strncpy_bb1:
+    jmp .L5211_hxlcl_strncpy_bb1 # branch
+.L5211_hxlcl_strncpy_bb1:
     mov r11, r13 # hv payload
     mov r10, [rbp - 72] # reload L7 from spill slot
     mov r10, r10 # hv payload
@@ -1039,9 +1039,9 @@ hxlcl_strncpy:
     mov [rbp - 104], r10 # spill L11 to slot
     mov r10, [rbp - 104] # reload L11 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strncpy_bb3 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strncpy_bb2 # jump -> then
-.L7ff7_hxlcl_strncpy_bb2:
+    jz .L5211_hxlcl_strncpy_bb3 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strncpy_bb2 # jump -> then
+.L5211_hxlcl_strncpy_bb2:
     mov r10, [rbp - 96] # reload L10 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -1053,16 +1053,16 @@ hxlcl_strncpy:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strncpy_bb5 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strncpy_bb4 # jump -> then
-.L7ff7_hxlcl_strncpy_bb3:
+    jz .L5211_hxlcl_strncpy_bb5 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strncpy_bb4 # jump -> then
+.L5211_hxlcl_strncpy_bb3:
     mov r11, [rbp - 80] # reload L8 from spill slot
     mov r10, r11 # assign L19
     mov r11, [rbp - 264] # tag L8 from tag-slot
     mov [rbp - 352], r11 # store tag L19
     mov [rbp - 168], r10 # spill L19 to slot
-    jmp .L7ff7_hxlcl_strncpy_bb8 # branch
-.L7ff7_hxlcl_strncpy_bb4:
+    jmp .L5211_hxlcl_strncpy_bb8 # branch
+.L5211_hxlcl_strncpy_bb4:
     mov r11, [rbp - 72] # reload L7 from spill slot
     mov r10, r11 # assign L8
     mov r11, 0 # tag L7 = TAG_INT (i64-local, fused)
@@ -1072,8 +1072,8 @@ hxlcl_strncpy:
     mov r11, [rbp - 216] # tag L2 from tag-slot
     mov [rbp - 256], r11 # store tag L7
     mov [rbp - 72], r10 # spill L7 to slot
-    jmp .L7ff7_hxlcl_strncpy_bb5 # branch
-.L7ff7_hxlcl_strncpy_bb5:
+    jmp .L5211_hxlcl_strncpy_bb5 # branch
+.L5211_hxlcl_strncpy_bb5:
     mov r11, r13 # hv payload
     mov r10, [rbp - 72] # reload L7 from spill slot
     mov r10, r10 # hv payload
@@ -1085,9 +1085,9 @@ hxlcl_strncpy:
     mov [rbp - 128], r10 # spill L14 to slot
     mov r10, [rbp - 128] # reload L14 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strncpy_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strncpy_bb6 # jump -> then
-.L7ff7_hxlcl_strncpy_bb6:
+    jz .L5211_hxlcl_strncpy_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strncpy_bb6 # jump -> then
+.L5211_hxlcl_strncpy_bb6:
     mov r10, r15 # hv payload
     mov r11, [rbp - 72] # reload L7 from spill slot
     mov r11, r11 # hv payload
@@ -1125,10 +1125,10 @@ hxlcl_strncpy:
     mov r11, [rbp - 344] # tag L18 from tag-slot
     mov [rbp - 280], r11 # store tag L10
     mov [rbp - 96], r10 # spill L10 to slot
-    jmp .L7ff7_hxlcl_strncpy_bb7 # branch
-.L7ff7_hxlcl_strncpy_bb7:
-    jmp .L7ff7_hxlcl_strncpy_bb1 # branch
-.L7ff7_hxlcl_strncpy_bb8:
+    jmp .L5211_hxlcl_strncpy_bb7 # branch
+.L5211_hxlcl_strncpy_bb7:
+    jmp .L5211_hxlcl_strncpy_bb1 # branch
+.L5211_hxlcl_strncpy_bb8:
     mov r11, r13 # hv payload
     mov r10, [rbp - 168] # reload L19 from spill slot
     mov r10, r10 # hv payload
@@ -1140,9 +1140,9 @@ hxlcl_strncpy:
     mov [rbp - 176], r10 # spill L20 to slot
     mov r10, [rbp - 176] # reload L20 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strncpy_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strncpy_bb9 # jump -> then
-.L7ff7_hxlcl_strncpy_bb9:
+    jz .L5211_hxlcl_strncpy_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strncpy_bb9 # jump -> then
+.L5211_hxlcl_strncpy_bb9:
     mov r10, r15 # hv payload
     mov r11, [rbp - 168] # reload L19 from spill slot
     mov r11, r11 # hv payload
@@ -1165,8 +1165,8 @@ hxlcl_strncpy:
     mov r11, [rbp - 376] # tag L22 from tag-slot
     mov [rbp - 352], r11 # store tag L19
     mov [rbp - 168], r10 # spill L19 to slot
-    jmp .L7ff7_hxlcl_strncpy_bb8 # branch
-.L7ff7_hxlcl_strncpy_bb10:
+    jmp .L5211_hxlcl_strncpy_bb8 # branch
+.L5211_hxlcl_strncpy_bb10:
     mov rax, r15 # hv payload
     add rsp, 336 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1196,7 +1196,7 @@ hxlcl_strcat:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 216], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_strcat_bb0:
+.L5211_hxlcl_strcat_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -1232,8 +1232,8 @@ hxlcl_strcat:
     mov r11, [rbp - 264] # tag L7 from tag-slot
     mov [rbp - 272], r11 # store tag L8
     mov [rbp - 80], r10 # spill L8 to slot
-    jmp .L7ff7_hxlcl_strcat_bb1 # branch
-.L7ff7_hxlcl_strcat_bb1:
+    jmp .L5211_hxlcl_strcat_bb1 # branch
+.L5211_hxlcl_strcat_bb1:
     mov r11, 0 # hv payload
     mov r10, [rbp - 80] # reload L8 from spill slot
     mov r10, r10 # hv payload
@@ -1245,9 +1245,9 @@ hxlcl_strcat:
     mov [rbp - 88], r10 # spill L9 to slot
     mov r10, [rbp - 88] # reload L9 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strcat_bb3 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strcat_bb2 # jump -> then
-.L7ff7_hxlcl_strcat_bb2:
+    jz .L5211_hxlcl_strcat_bb3 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strcat_bb2 # jump -> then
+.L5211_hxlcl_strcat_bb2:
     mov r11, 1 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -1273,8 +1273,8 @@ hxlcl_strcat:
     mov r11, [rbp - 296] # tag L11 from tag-slot
     mov [rbp - 272], r11 # store tag L8
     mov [rbp - 80], r10 # spill L8 to slot
-    jmp .L7ff7_hxlcl_strcat_bb1 # branch
-.L7ff7_hxlcl_strcat_bb3:
+    jmp .L5211_hxlcl_strcat_bb1 # branch
+.L5211_hxlcl_strcat_bb3:
     mov r10, 0 # assign L12
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 304], r11 # store tag L12
@@ -1292,8 +1292,8 @@ hxlcl_strcat:
     mov r11, [rbp - 312] # tag L13 from tag-slot
     mov [rbp - 320], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
-    jmp .L7ff7_hxlcl_strcat_bb4 # branch
-.L7ff7_hxlcl_strcat_bb4:
+    jmp .L5211_hxlcl_strcat_bb4 # branch
+.L5211_hxlcl_strcat_bb4:
     mov r11, 0 # hv payload
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
@@ -1305,9 +1305,9 @@ hxlcl_strcat:
     mov [rbp - 136], r10 # spill L15 to slot
     mov r10, [rbp - 136] # reload L15 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strcat_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strcat_bb5 # jump -> then
-.L7ff7_hxlcl_strcat_bb5:
+    jz .L5211_hxlcl_strcat_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strcat_bb5 # jump -> then
+.L5211_hxlcl_strcat_bb5:
     mov r11, [rbp - 112] # reload L12 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
@@ -1358,8 +1358,8 @@ hxlcl_strcat:
     mov r11, [rbp - 368] # tag L20 from tag-slot
     mov [rbp - 320], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
-    jmp .L7ff7_hxlcl_strcat_bb4 # branch
-.L7ff7_hxlcl_strcat_bb6:
+    jmp .L5211_hxlcl_strcat_bb4 # branch
+.L5211_hxlcl_strcat_bb6:
     mov r11, [rbp - 112] # reload L12 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
@@ -1412,7 +1412,7 @@ hxlcl_strchr:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 144], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_strchr_bb0:
+.L5211_hxlcl_strchr_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -1436,13 +1436,13 @@ hxlcl_strchr:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 184], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
-    jmp .L7ff7_hxlcl_strchr_bb1 # branch
-.L7ff7_hxlcl_strchr_bb1:
+    jmp .L5211_hxlcl_strchr_bb1 # branch
+.L5211_hxlcl_strchr_bb1:
     mov r10, 1 # materialize test cond to reg
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strchr_bb3 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strchr_bb2 # jump -> then
-.L7ff7_hxlcl_strchr_bb2:
+    jz .L5211_hxlcl_strchr_bb3 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strchr_bb2 # jump -> then
+.L5211_hxlcl_strchr_bb2:
     mov r10, r14 # hv payload
     mov r11, [rbp - 64] # reload L6 from spill slot
     mov r11, r11 # hv payload
@@ -1468,9 +1468,9 @@ hxlcl_strchr:
     mov [rbp - 88], r10 # spill L9 to slot
     mov r10, [rbp - 88] # reload L9 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strchr_bb5 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strchr_bb4 # jump -> then
-.L7ff7_hxlcl_strchr_bb3:
+    jz .L5211_hxlcl_strchr_bb5 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strchr_bb4 # jump -> then
+.L5211_hxlcl_strchr_bb3:
     mov rax, 0 # hv payload
     add rsp, 208 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1481,7 +1481,7 @@ hxlcl_strchr:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_strchr_bb4:
+.L5211_hxlcl_strchr_bb4:
     mov r11, [rbp - 64] # reload L6 from spill slot
     mov r11, r11 # hv payload
     mov r10, r14 # hv payload
@@ -1500,7 +1500,7 @@ hxlcl_strchr:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_strchr_bb5:
+.L5211_hxlcl_strchr_bb5:
     mov r10, [rbp - 80] # reload L8 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -1512,9 +1512,9 @@ hxlcl_strchr:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strchr_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strchr_bb6 # jump -> then
-.L7ff7_hxlcl_strchr_bb6:
+    jz .L5211_hxlcl_strchr_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strchr_bb6 # jump -> then
+.L5211_hxlcl_strchr_bb6:
     mov rax, 0 # hv payload
     add rsp, 208 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1525,7 +1525,7 @@ hxlcl_strchr:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_strchr_bb7:
+.L5211_hxlcl_strchr_bb7:
     mov r11, 1 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -1538,7 +1538,7 @@ hxlcl_strchr:
     mov r11, [rbp - 248] # tag L14 from tag-slot
     mov [rbp - 184], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
-    jmp .L7ff7_hxlcl_strchr_bb1 # branch
+    jmp .L5211_hxlcl_strchr_bb1 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 208 # epilogue: free spill frame
@@ -1569,7 +1569,7 @@ hxlcl_strstr:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 312], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_strstr_bb0:
+.L5211_hxlcl_strstr_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -1613,9 +1613,9 @@ hxlcl_strstr:
     mov [rbp - 80], r10 # spill L8 to slot
     mov r10, [rbp - 80] # reload L8 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strstr_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strstr_bb1 # jump -> then
-.L7ff7_hxlcl_strstr_bb1:
+    jz .L5211_hxlcl_strstr_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strstr_bb1 # jump -> then
+.L5211_hxlcl_strstr_bb1:
     mov rax, r14 # hv payload
     add rsp, 544 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1626,7 +1626,7 @@ hxlcl_strstr:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_strstr_bb2:
+.L5211_hxlcl_strstr_bb2:
     mov r10, 0 # assign L10
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 384], r11 # store tag L10
@@ -1643,8 +1643,8 @@ hxlcl_strstr:
     mov r11, [rbp - 392] # tag L11 from tag-slot
     mov [rbp - 400], r11 # store tag L12
     mov [rbp - 112], r10 # spill L12 to slot
-    jmp .L7ff7_hxlcl_strstr_bb3 # branch
-.L7ff7_hxlcl_strstr_bb3:
+    jmp .L5211_hxlcl_strstr_bb3 # branch
+.L5211_hxlcl_strstr_bb3:
     mov r11, 0 # hv payload
     mov r10, [rbp - 112] # reload L12 from spill slot
     mov r10, r10 # hv payload
@@ -1656,9 +1656,9 @@ hxlcl_strstr:
     mov [rbp - 120], r10 # spill L13 to slot
     mov r10, [rbp - 120] # reload L13 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strstr_bb5 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strstr_bb4 # jump -> then
-.L7ff7_hxlcl_strstr_bb4:
+    jz .L5211_hxlcl_strstr_bb5 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strstr_bb4 # jump -> then
+.L5211_hxlcl_strstr_bb4:
     mov r10, 0 # assign L14
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 416], r11 # store tag L14
@@ -1680,8 +1680,8 @@ hxlcl_strstr:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 440], r11 # store tag L17
     mov [rbp - 152], r10 # spill L17 to slot
-    jmp .L7ff7_hxlcl_strstr_bb6 # branch
-.L7ff7_hxlcl_strstr_bb5:
+    jmp .L5211_hxlcl_strstr_bb6 # branch
+.L5211_hxlcl_strstr_bb5:
     mov rax, 0 # hv payload
     add rsp, 544 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1692,7 +1692,7 @@ hxlcl_strstr:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_strstr_bb6:
+.L5211_hxlcl_strstr_bb6:
     mov r11, 0 # hv payload
     mov r10, [rbp - 152] # reload L17 from spill slot
     mov r10, r10 # hv payload
@@ -1704,9 +1704,9 @@ hxlcl_strstr:
     mov [rbp - 160], r10 # spill L18 to slot
     mov r10, [rbp - 160] # reload L18 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strstr_bb8 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strstr_bb7 # jump -> then
-.L7ff7_hxlcl_strstr_bb7:
+    jz .L5211_hxlcl_strstr_bb8 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strstr_bb7 # jump -> then
+.L5211_hxlcl_strstr_bb7:
     mov r10, [rbp - 144] # reload L16 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -1718,9 +1718,9 @@ hxlcl_strstr:
     mov [rbp - 168], r10 # spill L19 to slot
     mov r10, [rbp - 168] # reload L19 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strstr_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strstr_bb9 # jump -> then
-.L7ff7_hxlcl_strstr_bb8:
+    jz .L5211_hxlcl_strstr_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strstr_bb9 # jump -> then
+.L5211_hxlcl_strstr_bb8:
     mov r10, [rbp - 144] # reload L16 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -1732,15 +1732,15 @@ hxlcl_strstr:
     mov [rbp - 264], r10 # spill L31 to slot
     mov r10, [rbp - 264] # reload L31 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strstr_bb17 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strstr_bb16 # jump -> then
-.L7ff7_hxlcl_strstr_bb9:
+    jz .L5211_hxlcl_strstr_bb17 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strstr_bb16 # jump -> then
+.L5211_hxlcl_strstr_bb9:
     mov r10, 0 # assign L17
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 440], r11 # store tag L17
     mov [rbp - 152], r10 # spill L17 to slot
-    jmp .L7ff7_hxlcl_strstr_bb10 # branch
-.L7ff7_hxlcl_strstr_bb10:
+    jmp .L5211_hxlcl_strstr_bb10 # branch
+.L5211_hxlcl_strstr_bb10:
     mov r11, 0 # hv payload
     mov r10, [rbp - 152] # reload L17 from spill slot
     mov r10, r10 # hv payload
@@ -1752,9 +1752,9 @@ hxlcl_strstr:
     mov [rbp - 184], r10 # spill L21 to slot
     mov r10, [rbp - 184] # reload L21 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strstr_bb12 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strstr_bb11 # jump -> then
-.L7ff7_hxlcl_strstr_bb11:
+    jz .L5211_hxlcl_strstr_bb12 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strstr_bb11 # jump -> then
+.L5211_hxlcl_strstr_bb11:
     mov r11, [rbp - 128] # reload L14 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 96] # reload L10 from spill slot
@@ -1793,17 +1793,17 @@ hxlcl_strstr:
     mov [rbp - 232], r10 # spill L27 to slot
     mov r10, [rbp - 232] # reload L27 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strstr_bb14 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strstr_bb13 # jump -> then
-.L7ff7_hxlcl_strstr_bb12:
-    jmp .L7ff7_hxlcl_strstr_bb6 # branch
-.L7ff7_hxlcl_strstr_bb13:
+    jz .L5211_hxlcl_strstr_bb14 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strstr_bb13 # jump -> then
+.L5211_hxlcl_strstr_bb12:
+    jmp .L5211_hxlcl_strstr_bb6 # branch
+.L5211_hxlcl_strstr_bb13:
     mov r10, 0 # assign L17
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 440], r11 # store tag L17
     mov [rbp - 152], r10 # spill L17 to slot
-    jmp .L7ff7_hxlcl_strstr_bb15 # branch
-.L7ff7_hxlcl_strstr_bb14:
+    jmp .L5211_hxlcl_strstr_bb15 # branch
+.L5211_hxlcl_strstr_bb14:
     mov r11, 1 # hv payload
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
@@ -1830,10 +1830,10 @@ hxlcl_strstr:
     mov r11, [rbp - 544] # tag L30 from tag-slot
     mov [rbp - 432], r11 # store tag L16
     mov [rbp - 144], r10 # spill L16 to slot
-    jmp .L7ff7_hxlcl_strstr_bb15 # branch
-.L7ff7_hxlcl_strstr_bb15:
-    jmp .L7ff7_hxlcl_strstr_bb12 # branch
-.L7ff7_hxlcl_strstr_bb16:
+    jmp .L5211_hxlcl_strstr_bb15 # branch
+.L5211_hxlcl_strstr_bb15:
+    jmp .L5211_hxlcl_strstr_bb12 # branch
+.L5211_hxlcl_strstr_bb16:
     mov r11, [rbp - 96] # reload L10 from spill slot
     mov r11, r11 # hv payload
     mov r10, r14 # hv payload
@@ -1852,7 +1852,7 @@ hxlcl_strstr:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_strstr_bb17:
+.L5211_hxlcl_strstr_bb17:
     mov r11, 1 # hv payload
     mov r10, [rbp - 96] # reload L10 from spill slot
     mov r10, r10 # hv payload
@@ -1878,7 +1878,7 @@ hxlcl_strstr:
     mov r11, [rbp - 584] # tag L35 from tag-slot
     mov [rbp - 400], r11 # store tag L12
     mov [rbp - 112], r10 # spill L12 to slot
-    jmp .L7ff7_hxlcl_strstr_bb3 # branch
+    jmp .L5211_hxlcl_strstr_bb3 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 544 # epilogue: free spill frame
@@ -1909,7 +1909,7 @@ hxlcl_strrchr:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 168], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_strrchr_bb0:
+.L5211_hxlcl_strrchr_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -1927,9 +1927,9 @@ hxlcl_strrchr:
     mov r11, 2 # materialize tag imm 2
     mov [rbp - 192], r11 # store tag L4
     test r15, r15 # br_cond test
-    jz .L7ff7_hxlcl_strrchr_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strrchr_bb1 # jump -> then
-.L7ff7_hxlcl_strrchr_bb1:
+    jz .L5211_hxlcl_strrchr_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strrchr_bb1 # jump -> then
+.L5211_hxlcl_strrchr_bb1:
     mov rax, 0 # hv payload
     add rsp, 256 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1940,7 +1940,7 @@ hxlcl_strrchr:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_strrchr_bb2:
+.L5211_hxlcl_strrchr_bb2:
     mov r11, 255 # hv payload
     mov r10, r12 # hv payload
     and r10, r11 # __hx_payload_and: r10 = a.pl and b.pl
@@ -1960,13 +1960,13 @@ hxlcl_strrchr:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 232], r11 # store tag L9
     mov [rbp - 88], r10 # spill L9 to slot
-    jmp .L7ff7_hxlcl_strrchr_bb3 # branch
-.L7ff7_hxlcl_strrchr_bb3:
+    jmp .L5211_hxlcl_strrchr_bb3 # branch
+.L5211_hxlcl_strrchr_bb3:
     mov r10, 1 # materialize test cond to reg
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strrchr_bb5 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strrchr_bb4 # jump -> then
-.L7ff7_hxlcl_strrchr_bb4:
+    jz .L5211_hxlcl_strrchr_bb5 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strrchr_bb4 # jump -> then
+.L5211_hxlcl_strrchr_bb4:
     mov r10, r14 # hv payload
     mov r11, [rbp - 88] # reload L9 from spill slot
     mov r11, r11 # hv payload
@@ -1992,9 +1992,9 @@ hxlcl_strrchr:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strrchr_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strrchr_bb6 # jump -> then
-.L7ff7_hxlcl_strrchr_bb5:
+    jz .L5211_hxlcl_strrchr_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strrchr_bb6 # jump -> then
+.L5211_hxlcl_strrchr_bb5:
     mov rax, [rbp - 80] # reload L8 from spill slot
     mov rax, rax # hv payload
     add rsp, 256 # epilogue: free spill frame
@@ -2006,7 +2006,7 @@ hxlcl_strrchr:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_strrchr_bb6:
+.L5211_hxlcl_strrchr_bb6:
     mov r11, [rbp - 88] # reload L9 from spill slot
     mov r11, r11 # hv payload
     mov r10, r14 # hv payload
@@ -2019,8 +2019,8 @@ hxlcl_strrchr:
     mov r11, [rbp - 272] # tag L14 from tag-slot
     mov [rbp - 224], r11 # store tag L8
     mov [rbp - 80], r10 # spill L8 to slot
-    jmp .L7ff7_hxlcl_strrchr_bb7 # branch
-.L7ff7_hxlcl_strrchr_bb7:
+    jmp .L5211_hxlcl_strrchr_bb7 # branch
+.L5211_hxlcl_strrchr_bb7:
     mov r10, [rbp - 104] # reload L11 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -2032,9 +2032,9 @@ hxlcl_strrchr:
     mov [rbp - 136], r10 # spill L15 to slot
     mov r10, [rbp - 136] # reload L15 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strrchr_bb9 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strrchr_bb8 # jump -> then
-.L7ff7_hxlcl_strrchr_bb8:
+    jz .L5211_hxlcl_strrchr_bb9 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strrchr_bb8 # jump -> then
+.L5211_hxlcl_strrchr_bb8:
     mov rax, [rbp - 80] # reload L8 from spill slot
     mov rax, rax # hv payload
     add rsp, 256 # epilogue: free spill frame
@@ -2046,7 +2046,7 @@ hxlcl_strrchr:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_strrchr_bb9:
+.L5211_hxlcl_strrchr_bb9:
     mov r11, 1 # hv payload
     mov r10, [rbp - 88] # reload L9 from spill slot
     mov r10, r10 # hv payload
@@ -2059,7 +2059,7 @@ hxlcl_strrchr:
     mov r11, [rbp - 296] # tag L17 from tag-slot
     mov [rbp - 232], r11 # store tag L9
     mov [rbp - 88], r10 # spill L9 to slot
-    jmp .L7ff7_hxlcl_strrchr_bb3 # branch
+    jmp .L5211_hxlcl_strrchr_bb3 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 256 # epilogue: free spill frame
@@ -2093,7 +2093,7 @@ hxlcl_memmove:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 240], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_memmove_bb0:
+.L5211_hxlcl_memmove_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -2125,9 +2125,9 @@ hxlcl_memmove:
     mov [rbp - 72], r10 # spill L7 to slot
     mov r10, [rbp - 72] # reload L7 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_memmove_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_memmove_bb1 # jump -> then
-.L7ff7_hxlcl_memmove_bb1:
+    jz .L5211_hxlcl_memmove_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_memmove_bb1 # jump -> then
+.L5211_hxlcl_memmove_bb1:
     mov rax, r15 # hv payload
     add rsp, 384 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -2138,7 +2138,7 @@ hxlcl_memmove:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_memmove_bb2:
+.L5211_hxlcl_memmove_bb2:
     mov r10, r13 # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -2149,9 +2149,9 @@ hxlcl_memmove:
     mov [rbp - 88], r10 # spill L9 to slot
     mov r10, [rbp - 88] # reload L9 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_memmove_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_memmove_bb3 # jump -> then
-.L7ff7_hxlcl_memmove_bb3:
+    jz .L5211_hxlcl_memmove_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_memmove_bb3 # jump -> then
+.L5211_hxlcl_memmove_bb3:
     mov rax, r15 # hv payload
     add rsp, 384 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -2162,7 +2162,7 @@ hxlcl_memmove:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_memmove_bb4:
+.L5211_hxlcl_memmove_bb4:
     mov r11, [rbp - 64] # reload L6 from spill slot
     mov r11, r11 # hv payload
     mov r10, r15 # hv payload
@@ -2174,21 +2174,21 @@ hxlcl_memmove:
     mov [rbp - 104], r10 # spill L11 to slot
     mov r10, [rbp - 104] # reload L11 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_memmove_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_memmove_bb5 # jump -> then
-.L7ff7_hxlcl_memmove_bb5:
+    jz .L5211_hxlcl_memmove_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_memmove_bb5 # jump -> then
+.L5211_hxlcl_memmove_bb5:
     mov r10, 0 # assign L13
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 328], r11 # store tag L13
     mov [rbp - 120], r10 # spill L13 to slot
-    jmp .L7ff7_hxlcl_memmove_bb7 # branch
-.L7ff7_hxlcl_memmove_bb6:
+    jmp .L5211_hxlcl_memmove_bb7 # branch
+.L5211_hxlcl_memmove_bb6:
     mov r10, r13 # assign L19
     mov r11, [rbp - 240] # tag L2 from tag-slot
     mov [rbp - 376], r11 # store tag L19
     mov [rbp - 168], r10 # spill L19 to slot
-    jmp .L7ff7_hxlcl_memmove_bb10 # branch
-.L7ff7_hxlcl_memmove_bb7:
+    jmp .L5211_hxlcl_memmove_bb10 # branch
+.L5211_hxlcl_memmove_bb7:
     mov r11, r13 # hv payload
     mov r10, [rbp - 120] # reload L13 from spill slot
     mov r10, r10 # hv payload
@@ -2200,9 +2200,9 @@ hxlcl_memmove:
     mov [rbp - 128], r10 # spill L14 to slot
     mov r10, [rbp - 128] # reload L14 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_memmove_bb9 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_memmove_bb8 # jump -> then
-.L7ff7_hxlcl_memmove_bb8:
+    jz .L5211_hxlcl_memmove_bb9 # jump-if-zero -> else
+    jmp .L5211_hxlcl_memmove_bb8 # jump -> then
+.L5211_hxlcl_memmove_bb8:
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 120] # reload L13 from spill slot
@@ -2240,10 +2240,10 @@ hxlcl_memmove:
     mov r11, [rbp - 368] # tag L18 from tag-slot
     mov [rbp - 328], r11 # store tag L13
     mov [rbp - 120], r10 # spill L13 to slot
-    jmp .L7ff7_hxlcl_memmove_bb7 # branch
-.L7ff7_hxlcl_memmove_bb9:
-    jmp .L7ff7_hxlcl_memmove_bb13 # branch
-.L7ff7_hxlcl_memmove_bb10:
+    jmp .L5211_hxlcl_memmove_bb7 # branch
+.L5211_hxlcl_memmove_bb9:
+    jmp .L5211_hxlcl_memmove_bb13 # branch
+.L5211_hxlcl_memmove_bb10:
     mov r11, 0 # hv payload
     mov r10, [rbp - 168] # reload L19 from spill slot
     mov r10, r10 # hv payload
@@ -2255,9 +2255,9 @@ hxlcl_memmove:
     mov [rbp - 176], r10 # spill L20 to slot
     mov r10, [rbp - 176] # reload L20 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_memmove_bb12 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_memmove_bb11 # jump -> then
-.L7ff7_hxlcl_memmove_bb11:
+    jz .L5211_hxlcl_memmove_bb12 # jump-if-zero -> else
+    jmp .L5211_hxlcl_memmove_bb11 # jump -> then
+.L5211_hxlcl_memmove_bb11:
     mov r11, 1 # hv payload
     mov r10, [rbp - 168] # reload L19 from spill slot
     mov r10, r10 # hv payload
@@ -2300,10 +2300,10 @@ hxlcl_memmove:
     mov r11, [rbp - 400] # tag L22 from tag-slot
     mov [rbp - 376], r11 # store tag L19
     mov [rbp - 168], r10 # spill L19 to slot
-    jmp .L7ff7_hxlcl_memmove_bb10 # branch
-.L7ff7_hxlcl_memmove_bb12:
-    jmp .L7ff7_hxlcl_memmove_bb13 # branch
-.L7ff7_hxlcl_memmove_bb13:
+    jmp .L5211_hxlcl_memmove_bb10 # branch
+.L5211_hxlcl_memmove_bb12:
+    jmp .L5211_hxlcl_memmove_bb13 # branch
+.L5211_hxlcl_memmove_bb13:
     mov rax, r15 # hv payload
     add rsp, 384 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -2333,7 +2333,7 @@ hxlcl_bzero:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 88], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_bzero_bb0:
+.L5211_hxlcl_bzero_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -2346,8 +2346,8 @@ hxlcl_bzero:
     mov r15, 0 # assign L4
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 112], r11 # store tag L4
-    jmp .L7ff7_hxlcl_bzero_bb1 # branch
-.L7ff7_hxlcl_bzero_bb1:
+    jmp .L5211_hxlcl_bzero_bb1 # branch
+.L5211_hxlcl_bzero_bb1:
     mov r11, r12 # hv payload
     mov r10, r15 # hv payload
     cmp r10, r11 # __hx_payload_lt: cmp payloads
@@ -2358,9 +2358,9 @@ hxlcl_bzero:
     mov [rbp - 56], r10 # spill L5 to slot
     mov r10, [rbp - 56] # reload L5 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_bzero_bb3 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_bzero_bb2 # jump -> then
-.L7ff7_hxlcl_bzero_bb2:
+    jz .L5211_hxlcl_bzero_bb3 # jump-if-zero -> else
+    jmp .L5211_hxlcl_bzero_bb2 # jump -> then
+.L5211_hxlcl_bzero_bb2:
     mov r10, r14 # hv payload
     mov r11, r15 # hv payload
     mov rsi, 0 # hv payload
@@ -2380,8 +2380,8 @@ hxlcl_bzero:
     mov r15, r10 # assign L4
     mov r11, [rbp - 136] # tag L7 from tag-slot
     mov [rbp - 112], r11 # store tag L4
-    jmp .L7ff7_hxlcl_bzero_bb1 # branch
-.L7ff7_hxlcl_bzero_bb3:
+    jmp .L5211_hxlcl_bzero_bb1 # branch
+.L5211_hxlcl_bzero_bb3:
     mov rax, 0 # hv payload
     add rsp, 96 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -2408,7 +2408,7 @@ hxlcl_getenv:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 408], r11 # store tag L0
     mov rbx, rdi # cabi ingress param payload
-.L7ff7_hxlcl_getenv_bb0:
+.L5211_hxlcl_getenv_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -2426,9 +2426,9 @@ hxlcl_getenv:
     mov r11, 2 # materialize tag imm 2
     mov [rbp - 432], r11 # store tag L3
     test r14, r14 # br_cond test
-    jz .L7ff7_hxlcl_getenv_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getenv_bb1 # jump -> then
-.L7ff7_hxlcl_getenv_bb1:
+    jz .L5211_hxlcl_getenv_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getenv_bb1 # jump -> then
+.L5211_hxlcl_getenv_bb1:
     mov rax, 0 # hv payload
     add rsp, 752 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -2439,7 +2439,7 @@ hxlcl_getenv:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_getenv_bb2:
+.L5211_hxlcl_getenv_bb2:
     mov r10, 0 # assign L5
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 448], r11 # store tag L5
@@ -2456,8 +2456,8 @@ hxlcl_getenv:
     mov r11, [rbp - 456] # tag L6 from tag-slot
     mov [rbp - 464], r11 # store tag L7
     mov [rbp - 72], r10 # spill L7 to slot
-    jmp .L7ff7_hxlcl_getenv_bb3 # branch
-.L7ff7_hxlcl_getenv_bb3:
+    jmp .L5211_hxlcl_getenv_bb3 # branch
+.L5211_hxlcl_getenv_bb3:
     mov r11, 0 # hv payload
     mov r10, [rbp - 72] # reload L7 from spill slot
     mov r10, r10 # hv payload
@@ -2469,9 +2469,9 @@ hxlcl_getenv:
     mov [rbp - 80], r10 # spill L8 to slot
     mov r10, [rbp - 80] # reload L8 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_getenv_bb5 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getenv_bb4 # jump -> then
-.L7ff7_hxlcl_getenv_bb4:
+    jz .L5211_hxlcl_getenv_bb5 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getenv_bb4 # jump -> then
+.L5211_hxlcl_getenv_bb4:
     mov r11, 1 # hv payload
     mov r10, [rbp - 56] # reload L5 from spill slot
     mov r10, r10 # hv payload
@@ -2497,8 +2497,8 @@ hxlcl_getenv:
     mov r11, [rbp - 488] # tag L10 from tag-slot
     mov [rbp - 464], r11 # store tag L7
     mov [rbp - 72], r10 # spill L7 to slot
-    jmp .L7ff7_hxlcl_getenv_bb3 # branch
-.L7ff7_hxlcl_getenv_bb5:
+    jmp .L5211_hxlcl_getenv_bb3 # branch
+.L5211_hxlcl_getenv_bb5:
     mov rax, [rip+environ@GOTPCREL] # __hx_environ_ptr: rax = &environ (GOT) [reloc=R_X86_64_GOTPCREL]
     mov r10, rax # leaf: payload → dst L11
     mov r11, 0 # materialize tag imm 0
@@ -2533,9 +2533,9 @@ hxlcl_getenv:
     mov [rbp - 136], r10 # spill L15 to slot
     mov r10, [rbp - 136] # reload L15 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_getenv_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getenv_bb6 # jump -> then
-.L7ff7_hxlcl_getenv_bb6:
+    jz .L5211_hxlcl_getenv_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getenv_bb6 # jump -> then
+.L5211_hxlcl_getenv_bb6:
     mov rax, 0 # hv payload
     add rsp, 752 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -2546,7 +2546,7 @@ hxlcl_getenv:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_getenv_bb7:
+.L5211_hxlcl_getenv_bb7:
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -2560,8 +2560,8 @@ hxlcl_getenv:
     mov r11, [rbp - 544] # tag L17 from tag-slot
     mov [rbp - 552], r11 # store tag L18
     mov [rbp - 160], r10 # spill L18 to slot
-    jmp .L7ff7_hxlcl_getenv_bb8 # branch
-.L7ff7_hxlcl_getenv_bb8:
+    jmp .L5211_hxlcl_getenv_bb8 # branch
+.L5211_hxlcl_getenv_bb8:
     mov r11, 0 # hv payload
     mov r10, [rbp - 160] # reload L18 from spill slot
     mov r10, r10 # hv payload
@@ -2573,9 +2573,9 @@ hxlcl_getenv:
     mov [rbp - 168], r10 # spill L19 to slot
     mov r10, [rbp - 168] # reload L19 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_getenv_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getenv_bb9 # jump -> then
-.L7ff7_hxlcl_getenv_bb9:
+    jz .L5211_hxlcl_getenv_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getenv_bb9 # jump -> then
+.L5211_hxlcl_getenv_bb9:
     mov r10, 0 # assign L20
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 568], r11 # store tag L20
@@ -2584,8 +2584,8 @@ hxlcl_getenv:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 576], r11 # store tag L21
     mov [rbp - 184], r10 # spill L21 to slot
-    jmp .L7ff7_hxlcl_getenv_bb11 # branch
-.L7ff7_hxlcl_getenv_bb10:
+    jmp .L5211_hxlcl_getenv_bb11 # branch
+.L5211_hxlcl_getenv_bb10:
     mov rax, 0 # hv payload
     add rsp, 752 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -2596,7 +2596,7 @@ hxlcl_getenv:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_getenv_bb11:
+.L5211_hxlcl_getenv_bb11:
     mov r11, 0 # hv payload
     mov r10, [rbp - 184] # reload L21 from spill slot
     mov r10, r10 # hv payload
@@ -2608,9 +2608,9 @@ hxlcl_getenv:
     mov [rbp - 192], r10 # spill L22 to slot
     mov r10, [rbp - 192] # reload L22 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_getenv_bb13 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getenv_bb12 # jump -> then
-.L7ff7_hxlcl_getenv_bb12:
+    jz .L5211_hxlcl_getenv_bb13 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getenv_bb12 # jump -> then
+.L5211_hxlcl_getenv_bb12:
     mov r11, [rbp - 56] # reload L5 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 176] # reload L20 from spill slot
@@ -2623,9 +2623,9 @@ hxlcl_getenv:
     mov [rbp - 200], r10 # spill L23 to slot
     mov r10, [rbp - 200] # reload L23 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_getenv_bb15 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getenv_bb14 # jump -> then
-.L7ff7_hxlcl_getenv_bb13:
+    jz .L5211_hxlcl_getenv_bb15 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getenv_bb14 # jump -> then
+.L5211_hxlcl_getenv_bb13:
     mov r10, [rbp - 176] # reload L20 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 56] # reload L5 from spill slot
@@ -2638,15 +2638,15 @@ hxlcl_getenv:
     mov [rbp - 320], r10 # spill L38 to slot
     mov r10, [rbp - 320] # reload L38 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_getenv_bb26 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getenv_bb25 # jump -> then
-.L7ff7_hxlcl_getenv_bb14:
+    jz .L5211_hxlcl_getenv_bb26 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getenv_bb25 # jump -> then
+.L5211_hxlcl_getenv_bb14:
     mov r10, 0 # assign L21
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 576], r11 # store tag L21
     mov [rbp - 184], r10 # spill L21 to slot
-    jmp .L7ff7_hxlcl_getenv_bb15 # branch
-.L7ff7_hxlcl_getenv_bb15:
+    jmp .L5211_hxlcl_getenv_bb15 # branch
+.L5211_hxlcl_getenv_bb15:
     mov r11, 0 # hv payload
     mov r10, [rbp - 184] # reload L21 from spill slot
     mov r10, r10 # hv payload
@@ -2658,9 +2658,9 @@ hxlcl_getenv:
     mov [rbp - 216], r10 # spill L25 to slot
     mov r10, [rbp - 216] # reload L25 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_getenv_bb17 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getenv_bb16 # jump -> then
-.L7ff7_hxlcl_getenv_bb16:
+    jz .L5211_hxlcl_getenv_bb17 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getenv_bb16 # jump -> then
+.L5211_hxlcl_getenv_bb16:
     mov r10, [rbp - 160] # reload L18 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 176] # reload L20 from spill slot
@@ -2686,17 +2686,17 @@ hxlcl_getenv:
     mov [rbp - 248], r10 # spill L29 to slot
     mov r10, [rbp - 248] # reload L29 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_getenv_bb19 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getenv_bb18 # jump -> then
-.L7ff7_hxlcl_getenv_bb17:
-    jmp .L7ff7_hxlcl_getenv_bb11 # branch
-.L7ff7_hxlcl_getenv_bb18:
+    jz .L5211_hxlcl_getenv_bb19 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getenv_bb18 # jump -> then
+.L5211_hxlcl_getenv_bb17:
+    jmp .L5211_hxlcl_getenv_bb11 # branch
+.L5211_hxlcl_getenv_bb18:
     mov r10, 0 # assign L21
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 576], r11 # store tag L21
     mov [rbp - 184], r10 # spill L21 to slot
-    jmp .L7ff7_hxlcl_getenv_bb19 # branch
-.L7ff7_hxlcl_getenv_bb19:
+    jmp .L5211_hxlcl_getenv_bb19 # branch
+.L5211_hxlcl_getenv_bb19:
     mov r11, 0 # hv payload
     mov r10, [rbp - 184] # reload L21 from spill slot
     mov r10, r10 # hv payload
@@ -2708,9 +2708,9 @@ hxlcl_getenv:
     mov [rbp - 264], r10 # spill L31 to slot
     mov r10, [rbp - 264] # reload L31 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_getenv_bb21 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getenv_bb20 # jump -> then
-.L7ff7_hxlcl_getenv_bb20:
+    jz .L5211_hxlcl_getenv_bb21 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getenv_bb20 # jump -> then
+.L5211_hxlcl_getenv_bb20:
     mov r10, r13 # hv payload
     mov r11, [rbp - 176] # reload L20 from spill slot
     mov r11, r11 # hv payload
@@ -2736,17 +2736,17 @@ hxlcl_getenv:
     mov [rbp - 296], r10 # spill L35 to slot
     mov r10, [rbp - 296] # reload L35 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_getenv_bb23 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getenv_bb22 # jump -> then
-.L7ff7_hxlcl_getenv_bb21:
-    jmp .L7ff7_hxlcl_getenv_bb17 # branch
-.L7ff7_hxlcl_getenv_bb22:
+    jz .L5211_hxlcl_getenv_bb23 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getenv_bb22 # jump -> then
+.L5211_hxlcl_getenv_bb21:
+    jmp .L5211_hxlcl_getenv_bb17 # branch
+.L5211_hxlcl_getenv_bb22:
     mov r10, 0 # assign L21
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 576], r11 # store tag L21
     mov [rbp - 184], r10 # spill L21 to slot
-    jmp .L7ff7_hxlcl_getenv_bb24 # branch
-.L7ff7_hxlcl_getenv_bb23:
+    jmp .L5211_hxlcl_getenv_bb24 # branch
+.L5211_hxlcl_getenv_bb23:
     mov r11, 1 # hv payload
     mov r10, [rbp - 176] # reload L20 from spill slot
     mov r10, r10 # hv payload
@@ -2759,10 +2759,10 @@ hxlcl_getenv:
     mov r11, [rbp - 704] # tag L37 from tag-slot
     mov [rbp - 568], r11 # store tag L20
     mov [rbp - 176], r10 # spill L20 to slot
-    jmp .L7ff7_hxlcl_getenv_bb24 # branch
-.L7ff7_hxlcl_getenv_bb24:
-    jmp .L7ff7_hxlcl_getenv_bb21 # branch
-.L7ff7_hxlcl_getenv_bb25:
+    jmp .L5211_hxlcl_getenv_bb24 # branch
+.L5211_hxlcl_getenv_bb24:
+    jmp .L5211_hxlcl_getenv_bb21 # branch
+.L5211_hxlcl_getenv_bb25:
     mov r10, [rbp - 160] # reload L18 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 56] # reload L5 from spill slot
@@ -2788,9 +2788,9 @@ hxlcl_getenv:
     mov [rbp - 352], r10 # spill L42 to slot
     mov r10, [rbp - 352] # reload L42 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_getenv_bb28 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getenv_bb27 # jump -> then
-.L7ff7_hxlcl_getenv_bb26:
+    jz .L5211_hxlcl_getenv_bb28 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getenv_bb27 # jump -> then
+.L5211_hxlcl_getenv_bb26:
     mov r11, 8 # hv payload
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
@@ -2816,8 +2816,8 @@ hxlcl_getenv:
     mov r11, [rbp - 792] # tag L48 from tag-slot
     mov [rbp - 552], r11 # store tag L18
     mov [rbp - 160], r10 # spill L18 to slot
-    jmp .L7ff7_hxlcl_getenv_bb8 # branch
-.L7ff7_hxlcl_getenv_bb27:
+    jmp .L5211_hxlcl_getenv_bb8 # branch
+.L5211_hxlcl_getenv_bb27:
     mov r11, [rbp - 56] # reload L5 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 160] # reload L18 from spill slot
@@ -2849,8 +2849,8 @@ hxlcl_getenv:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_getenv_bb28:
-    jmp .L7ff7_hxlcl_getenv_bb26 # branch
+.L5211_hxlcl_getenv_bb28:
+    jmp .L5211_hxlcl_getenv_bb26 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 752 # epilogue: free spill frame
@@ -2884,7 +2884,7 @@ hxlcl_setenv:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 944], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_setenv_bb0:
+.L5211_hxlcl_setenv_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -2915,9 +2915,9 @@ hxlcl_setenv:
     mov [rbp - 72], r10 # spill L7 to slot
     mov r10, [rbp - 72] # reload L7 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_setenv_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_setenv_bb1 # jump -> then
-.L7ff7_hxlcl_setenv_bb1:
+    jz .L5211_hxlcl_setenv_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_setenv_bb1 # jump -> then
+.L5211_hxlcl_setenv_bb1:
     mov r11, 1 # hv payload
     mov r10, 0 # hv payload
     sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
@@ -2935,7 +2935,7 @@ hxlcl_setenv:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_setenv_bb2:
+.L5211_hxlcl_setenv_bb2:
     mov r10, 0 # assign L10
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1008], r11 # store tag L10
@@ -2952,8 +2952,8 @@ hxlcl_setenv:
     mov r11, [rbp - 1016] # tag L11 from tag-slot
     mov [rbp - 1024], r11 # store tag L12
     mov [rbp - 112], r10 # spill L12 to slot
-    jmp .L7ff7_hxlcl_setenv_bb3 # branch
-.L7ff7_hxlcl_setenv_bb3:
+    jmp .L5211_hxlcl_setenv_bb3 # branch
+.L5211_hxlcl_setenv_bb3:
     mov r11, 0 # hv payload
     mov r10, [rbp - 112] # reload L12 from spill slot
     mov r10, r10 # hv payload
@@ -2965,9 +2965,9 @@ hxlcl_setenv:
     mov [rbp - 120], r10 # spill L13 to slot
     mov r10, [rbp - 120] # reload L13 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_setenv_bb5 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_setenv_bb4 # jump -> then
-.L7ff7_hxlcl_setenv_bb4:
+    jz .L5211_hxlcl_setenv_bb5 # jump-if-zero -> else
+    jmp .L5211_hxlcl_setenv_bb4 # jump -> then
+.L5211_hxlcl_setenv_bb4:
     mov r11, 1 # hv payload
     mov r10, [rbp - 96] # reload L10 from spill slot
     mov r10, r10 # hv payload
@@ -2993,8 +2993,8 @@ hxlcl_setenv:
     mov r11, [rbp - 1048] # tag L15 from tag-slot
     mov [rbp - 1024], r11 # store tag L12
     mov [rbp - 112], r10 # spill L12 to slot
-    jmp .L7ff7_hxlcl_setenv_bb3 # branch
-.L7ff7_hxlcl_setenv_bb5:
+    jmp .L5211_hxlcl_setenv_bb3 # branch
+.L5211_hxlcl_setenv_bb5:
     mov r10, [rbp - 96] # reload L10 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -3006,9 +3006,9 @@ hxlcl_setenv:
     mov [rbp - 144], r10 # spill L16 to slot
     mov r10, [rbp - 144] # reload L16 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_setenv_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_setenv_bb6 # jump -> then
-.L7ff7_hxlcl_setenv_bb6:
+    jz .L5211_hxlcl_setenv_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_setenv_bb6 # jump -> then
+.L5211_hxlcl_setenv_bb6:
     mov r11, 1 # hv payload
     mov r10, 0 # hv payload
     sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
@@ -3026,7 +3026,7 @@ hxlcl_setenv:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_setenv_bb7:
+.L5211_hxlcl_setenv_bb7:
     mov r10, 0 # assign L19
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1080], r11 # store tag L19
@@ -3044,8 +3044,8 @@ hxlcl_setenv:
     mov r11, [rbp - 1088] # tag L20 from tag-slot
     mov [rbp - 1096], r11 # store tag L21
     mov [rbp - 184], r10 # spill L21 to slot
-    jmp .L7ff7_hxlcl_setenv_bb8 # branch
-.L7ff7_hxlcl_setenv_bb8:
+    jmp .L5211_hxlcl_setenv_bb8 # branch
+.L5211_hxlcl_setenv_bb8:
     mov r11, 0 # hv payload
     mov r10, [rbp - 184] # reload L21 from spill slot
     mov r10, r10 # hv payload
@@ -3057,9 +3057,9 @@ hxlcl_setenv:
     mov [rbp - 192], r10 # spill L22 to slot
     mov r10, [rbp - 192] # reload L22 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_setenv_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_setenv_bb9 # jump -> then
-.L7ff7_hxlcl_setenv_bb9:
+    jz .L5211_hxlcl_setenv_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_setenv_bb9 # jump -> then
+.L5211_hxlcl_setenv_bb9:
     mov r11, 1 # hv payload
     mov r10, [rbp - 168] # reload L19 from spill slot
     mov r10, r10 # hv payload
@@ -3086,8 +3086,8 @@ hxlcl_setenv:
     mov r11, [rbp - 1120] # tag L24 from tag-slot
     mov [rbp - 1096], r11 # store tag L21
     mov [rbp - 184], r10 # spill L21 to slot
-    jmp .L7ff7_hxlcl_setenv_bb8 # branch
-.L7ff7_hxlcl_setenv_bb10:
+    jmp .L5211_hxlcl_setenv_bb8 # branch
+.L5211_hxlcl_setenv_bb10:
     mov r11, [rbp - 168] # reload L19 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 96] # reload L10 from spill slot
@@ -3129,8 +3129,8 @@ hxlcl_setenv:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1176], r11 # store tag L31
     mov [rbp - 264], r10 # spill L31 to slot
-    jmp .L7ff7_hxlcl_setenv_bb11 # branch
-.L7ff7_hxlcl_setenv_bb11:
+    jmp .L5211_hxlcl_setenv_bb11 # branch
+.L5211_hxlcl_setenv_bb11:
     mov r11, [rbp - 96] # reload L10 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 264] # reload L31 from spill slot
@@ -3143,9 +3143,9 @@ hxlcl_setenv:
     mov [rbp - 272], r10 # spill L32 to slot
     mov r10, [rbp - 272] # reload L32 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_setenv_bb13 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_setenv_bb12 # jump -> then
-.L7ff7_hxlcl_setenv_bb12:
+    jz .L5211_hxlcl_setenv_bb13 # jump-if-zero -> else
+    jmp .L5211_hxlcl_setenv_bb12 # jump -> then
+.L5211_hxlcl_setenv_bb12:
     mov r10, r15 # hv payload
     mov r11, [rbp - 264] # reload L31 from spill slot
     mov r11, r11 # hv payload
@@ -3184,8 +3184,8 @@ hxlcl_setenv:
     mov r11, [rbp - 1216] # tag L36 from tag-slot
     mov [rbp - 1176], r11 # store tag L31
     mov [rbp - 264], r10 # spill L31 to slot
-    jmp .L7ff7_hxlcl_setenv_bb11 # branch
-.L7ff7_hxlcl_setenv_bb13:
+    jmp .L5211_hxlcl_setenv_bb11 # branch
+.L5211_hxlcl_setenv_bb13:
     mov r10, [rbp - 256] # reload L30 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 96] # reload L10 from spill slot
@@ -3214,8 +3214,8 @@ hxlcl_setenv:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1248], r11 # store tag L40
     mov [rbp - 336], r10 # spill L40 to slot
-    jmp .L7ff7_hxlcl_setenv_bb14 # branch
-.L7ff7_hxlcl_setenv_bb14:
+    jmp .L5211_hxlcl_setenv_bb14 # branch
+.L5211_hxlcl_setenv_bb14:
     mov r11, [rbp - 168] # reload L19 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 336] # reload L40 from spill slot
@@ -3228,9 +3228,9 @@ hxlcl_setenv:
     mov [rbp - 344], r10 # spill L41 to slot
     mov r10, [rbp - 344] # reload L41 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_setenv_bb16 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_setenv_bb15 # jump -> then
-.L7ff7_hxlcl_setenv_bb15:
+    jz .L5211_hxlcl_setenv_bb16 # jump-if-zero -> else
+    jmp .L5211_hxlcl_setenv_bb15 # jump -> then
+.L5211_hxlcl_setenv_bb15:
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 336] # reload L40 from spill slot
@@ -3283,8 +3283,8 @@ hxlcl_setenv:
     mov r11, [rbp - 1304] # tag L47 from tag-slot
     mov [rbp - 1248], r11 # store tag L40
     mov [rbp - 336], r10 # spill L40 to slot
-    jmp .L7ff7_hxlcl_setenv_bb14 # branch
-.L7ff7_hxlcl_setenv_bb16:
+    jmp .L5211_hxlcl_setenv_bb14 # branch
+.L5211_hxlcl_setenv_bb16:
     mov r11, 1 # hv payload
     mov r10, [rbp - 224] # reload L26 from spill slot
     mov r10, r10 # hv payload
@@ -3347,9 +3347,9 @@ hxlcl_setenv:
     mov [rbp - 464], r10 # spill L56 to slot
     mov r10, [rbp - 464] # reload L56 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_setenv_bb18 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_setenv_bb17 # jump -> then
-.L7ff7_hxlcl_setenv_bb17:
+    jz .L5211_hxlcl_setenv_bb18 # jump-if-zero -> else
+    jmp .L5211_hxlcl_setenv_bb17 # jump -> then
+.L5211_hxlcl_setenv_bb17:
     mov r11, 0 # hv payload
     mov r10, [rbp - 448] # reload L54 from spill slot
     mov r10, r10 # hv payload
@@ -3375,8 +3375,8 @@ hxlcl_setenv:
     mov r11, [rbp - 1408] # tag L60 from tag-slot
     mov [rbp - 1416], r11 # store tag L61
     mov [rbp - 504], r10 # spill L61 to slot
-    jmp .L7ff7_hxlcl_setenv_bb19 # branch
-.L7ff7_hxlcl_setenv_bb18:
+    jmp .L5211_hxlcl_setenv_bb19 # branch
+.L5211_hxlcl_setenv_bb18:
     mov r11, 2 # hv payload
     mov r10, [rbp - 456] # reload L55 from spill slot
     mov r10, r10 # hv payload
@@ -3417,8 +3417,8 @@ hxlcl_setenv:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1720], r11 # store tag L99
     mov [rbp - 808], r10 # spill L99 to slot
-    jmp .L7ff7_hxlcl_setenv_bb42 # branch
-.L7ff7_hxlcl_setenv_bb19:
+    jmp .L5211_hxlcl_setenv_bb42 # branch
+.L5211_hxlcl_setenv_bb19:
     mov r11, 0 # hv payload
     mov r10, [rbp - 504] # reload L61 from spill slot
     mov r10, r10 # hv payload
@@ -3430,9 +3430,9 @@ hxlcl_setenv:
     mov [rbp - 512], r10 # spill L62 to slot
     mov r10, [rbp - 512] # reload L62 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_setenv_bb21 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_setenv_bb20 # jump -> then
-.L7ff7_hxlcl_setenv_bb20:
+    jz .L5211_hxlcl_setenv_bb21 # jump-if-zero -> else
+    jmp .L5211_hxlcl_setenv_bb20 # jump -> then
+.L5211_hxlcl_setenv_bb20:
     mov r10, 0 # assign L63
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1432], r11 # store tag L63
@@ -3441,10 +3441,10 @@ hxlcl_setenv:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1440], r11 # store tag L64
     mov [rbp - 528], r10 # spill L64 to slot
-    jmp .L7ff7_hxlcl_setenv_bb22 # branch
-.L7ff7_hxlcl_setenv_bb21:
-    jmp .L7ff7_hxlcl_setenv_bb18 # branch
-.L7ff7_hxlcl_setenv_bb22:
+    jmp .L5211_hxlcl_setenv_bb22 # branch
+.L5211_hxlcl_setenv_bb21:
+    jmp .L5211_hxlcl_setenv_bb18 # branch
+.L5211_hxlcl_setenv_bb22:
     mov r11, 0 # hv payload
     mov r10, [rbp - 528] # reload L64 from spill slot
     mov r10, r10 # hv payload
@@ -3456,9 +3456,9 @@ hxlcl_setenv:
     mov [rbp - 536], r10 # spill L65 to slot
     mov r10, [rbp - 536] # reload L65 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_setenv_bb24 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_setenv_bb23 # jump -> then
-.L7ff7_hxlcl_setenv_bb23:
+    jz .L5211_hxlcl_setenv_bb24 # jump-if-zero -> else
+    jmp .L5211_hxlcl_setenv_bb23 # jump -> then
+.L5211_hxlcl_setenv_bb23:
     mov r11, [rbp - 96] # reload L10 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 520] # reload L63 from spill slot
@@ -3471,9 +3471,9 @@ hxlcl_setenv:
     mov [rbp - 544], r10 # spill L66 to slot
     mov r10, [rbp - 544] # reload L66 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_setenv_bb26 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_setenv_bb25 # jump -> then
-.L7ff7_hxlcl_setenv_bb24:
+    jz .L5211_hxlcl_setenv_bb26 # jump-if-zero -> else
+    jmp .L5211_hxlcl_setenv_bb25 # jump -> then
+.L5211_hxlcl_setenv_bb24:
     mov r10, [rbp - 520] # reload L63 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 96] # reload L10 from spill slot
@@ -3486,15 +3486,15 @@ hxlcl_setenv:
     mov [rbp - 664], r10 # spill L81 to slot
     mov r10, [rbp - 664] # reload L81 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_setenv_bb37 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_setenv_bb36 # jump -> then
-.L7ff7_hxlcl_setenv_bb25:
+    jz .L5211_hxlcl_setenv_bb37 # jump-if-zero -> else
+    jmp .L5211_hxlcl_setenv_bb36 # jump -> then
+.L5211_hxlcl_setenv_bb25:
     mov r10, 0 # assign L64
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1440], r11 # store tag L64
     mov [rbp - 528], r10 # spill L64 to slot
-    jmp .L7ff7_hxlcl_setenv_bb26 # branch
-.L7ff7_hxlcl_setenv_bb26:
+    jmp .L5211_hxlcl_setenv_bb26 # branch
+.L5211_hxlcl_setenv_bb26:
     mov r11, 0 # hv payload
     mov r10, [rbp - 528] # reload L64 from spill slot
     mov r10, r10 # hv payload
@@ -3506,9 +3506,9 @@ hxlcl_setenv:
     mov [rbp - 560], r10 # spill L68 to slot
     mov r10, [rbp - 560] # reload L68 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_setenv_bb28 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_setenv_bb27 # jump -> then
-.L7ff7_hxlcl_setenv_bb27:
+    jz .L5211_hxlcl_setenv_bb28 # jump-if-zero -> else
+    jmp .L5211_hxlcl_setenv_bb27 # jump -> then
+.L5211_hxlcl_setenv_bb27:
     mov r10, [rbp - 504] # reload L61 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 520] # reload L63 from spill slot
@@ -3534,17 +3534,17 @@ hxlcl_setenv:
     mov [rbp - 592], r10 # spill L72 to slot
     mov r10, [rbp - 592] # reload L72 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_setenv_bb30 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_setenv_bb29 # jump -> then
-.L7ff7_hxlcl_setenv_bb28:
-    jmp .L7ff7_hxlcl_setenv_bb22 # branch
-.L7ff7_hxlcl_setenv_bb29:
+    jz .L5211_hxlcl_setenv_bb30 # jump-if-zero -> else
+    jmp .L5211_hxlcl_setenv_bb29 # jump -> then
+.L5211_hxlcl_setenv_bb28:
+    jmp .L5211_hxlcl_setenv_bb22 # branch
+.L5211_hxlcl_setenv_bb29:
     mov r10, 0 # assign L64
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1440], r11 # store tag L64
     mov [rbp - 528], r10 # spill L64 to slot
-    jmp .L7ff7_hxlcl_setenv_bb30 # branch
-.L7ff7_hxlcl_setenv_bb30:
+    jmp .L5211_hxlcl_setenv_bb30 # branch
+.L5211_hxlcl_setenv_bb30:
     mov r11, 0 # hv payload
     mov r10, [rbp - 528] # reload L64 from spill slot
     mov r10, r10 # hv payload
@@ -3556,9 +3556,9 @@ hxlcl_setenv:
     mov [rbp - 608], r10 # spill L74 to slot
     mov r10, [rbp - 608] # reload L74 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_setenv_bb32 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_setenv_bb31 # jump -> then
-.L7ff7_hxlcl_setenv_bb31:
+    jz .L5211_hxlcl_setenv_bb32 # jump-if-zero -> else
+    jmp .L5211_hxlcl_setenv_bb31 # jump -> then
+.L5211_hxlcl_setenv_bb31:
     mov r10, r15 # hv payload
     mov r11, [rbp - 520] # reload L63 from spill slot
     mov r11, r11 # hv payload
@@ -3584,17 +3584,17 @@ hxlcl_setenv:
     mov [rbp - 640], r10 # spill L78 to slot
     mov r10, [rbp - 640] # reload L78 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_setenv_bb34 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_setenv_bb33 # jump -> then
-.L7ff7_hxlcl_setenv_bb32:
-    jmp .L7ff7_hxlcl_setenv_bb28 # branch
-.L7ff7_hxlcl_setenv_bb33:
+    jz .L5211_hxlcl_setenv_bb34 # jump-if-zero -> else
+    jmp .L5211_hxlcl_setenv_bb33 # jump -> then
+.L5211_hxlcl_setenv_bb32:
+    jmp .L5211_hxlcl_setenv_bb28 # branch
+.L5211_hxlcl_setenv_bb33:
     mov r10, 0 # assign L64
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1440], r11 # store tag L64
     mov [rbp - 528], r10 # spill L64 to slot
-    jmp .L7ff7_hxlcl_setenv_bb35 # branch
-.L7ff7_hxlcl_setenv_bb34:
+    jmp .L5211_hxlcl_setenv_bb35 # branch
+.L5211_hxlcl_setenv_bb34:
     mov r11, 1 # hv payload
     mov r10, [rbp - 520] # reload L63 from spill slot
     mov r10, r10 # hv payload
@@ -3607,10 +3607,10 @@ hxlcl_setenv:
     mov r11, [rbp - 1568] # tag L80 from tag-slot
     mov [rbp - 1432], r11 # store tag L63
     mov [rbp - 520], r10 # spill L63 to slot
-    jmp .L7ff7_hxlcl_setenv_bb35 # branch
-.L7ff7_hxlcl_setenv_bb35:
-    jmp .L7ff7_hxlcl_setenv_bb32 # branch
-.L7ff7_hxlcl_setenv_bb36:
+    jmp .L5211_hxlcl_setenv_bb35 # branch
+.L5211_hxlcl_setenv_bb35:
+    jmp .L5211_hxlcl_setenv_bb32 # branch
+.L5211_hxlcl_setenv_bb36:
     mov r10, [rbp - 504] # reload L61 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 96] # reload L10 from spill slot
@@ -3636,9 +3636,9 @@ hxlcl_setenv:
     mov [rbp - 696], r10 # spill L85 to slot
     mov r10, [rbp - 696] # reload L85 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_setenv_bb39 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_setenv_bb38 # jump -> then
-.L7ff7_hxlcl_setenv_bb37:
+    jz .L5211_hxlcl_setenv_bb39 # jump-if-zero -> else
+    jmp .L5211_hxlcl_setenv_bb38 # jump -> then
+.L5211_hxlcl_setenv_bb37:
     mov r11, 1 # hv payload
     mov r10, [rbp - 456] # reload L55 from spill slot
     mov r10, r10 # hv payload
@@ -3676,8 +3676,8 @@ hxlcl_setenv:
     mov r11, [rbp - 1664] # tag L92 from tag-slot
     mov [rbp - 1416], r11 # store tag L61
     mov [rbp - 504], r10 # spill L61 to slot
-    jmp .L7ff7_hxlcl_setenv_bb19 # branch
-.L7ff7_hxlcl_setenv_bb38:
+    jmp .L5211_hxlcl_setenv_bb19 # branch
+.L5211_hxlcl_setenv_bb38:
     mov r10, r13 # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -3688,11 +3688,11 @@ hxlcl_setenv:
     mov [rbp - 712], r10 # spill L87 to slot
     mov r10, [rbp - 712] # reload L87 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_setenv_bb41 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_setenv_bb40 # jump -> then
-.L7ff7_hxlcl_setenv_bb39:
-    jmp .L7ff7_hxlcl_setenv_bb37 # branch
-.L7ff7_hxlcl_setenv_bb40:
+    jz .L5211_hxlcl_setenv_bb41 # jump-if-zero -> else
+    jmp .L5211_hxlcl_setenv_bb40 # jump -> then
+.L5211_hxlcl_setenv_bb39:
+    jmp .L5211_hxlcl_setenv_bb37 # branch
+.L5211_hxlcl_setenv_bb40:
     mov rax, 0 # hv payload
     add rsp, 1792 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3703,7 +3703,7 @@ hxlcl_setenv:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_setenv_bb41:
+.L5211_hxlcl_setenv_bb41:
     mov r10, [rbp - 488] # reload L59 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -3726,7 +3726,7 @@ hxlcl_setenv:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_setenv_bb42:
+.L5211_hxlcl_setenv_bb42:
     mov r11, [rbp - 456] # reload L55 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 808] # reload L99 from spill slot
@@ -3739,9 +3739,9 @@ hxlcl_setenv:
     mov [rbp - 816], r10 # spill L100 to slot
     mov r10, [rbp - 816] # reload L100 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_setenv_bb44 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_setenv_bb43 # jump -> then
-.L7ff7_hxlcl_setenv_bb43:
+    jz .L5211_hxlcl_setenv_bb44 # jump-if-zero -> else
+    jmp .L5211_hxlcl_setenv_bb43 # jump -> then
+.L5211_hxlcl_setenv_bb43:
     mov r11, 8 # hv payload
     mov r10, [rbp - 808] # reload L99 from spill slot
     mov r10, r10 # hv payload
@@ -3793,8 +3793,8 @@ hxlcl_setenv:
     mov r11, [rbp - 1776] # tag L106 from tag-slot
     mov [rbp - 1720], r11 # store tag L99
     mov [rbp - 808], r10 # spill L99 to slot
-    jmp .L7ff7_hxlcl_setenv_bb42 # branch
-.L7ff7_hxlcl_setenv_bb44:
+    jmp .L5211_hxlcl_setenv_bb42 # branch
+.L5211_hxlcl_setenv_bb44:
     mov r11, 8 # hv payload
     mov r10, [rbp - 456] # reload L55 from spill slot
     mov r10, r10 # hv payload
@@ -3888,7 +3888,7 @@ hxlcl_strtoll:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 1040], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_strtoll_bb0:
+.L5211_hxlcl_strtoll_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -3919,9 +3919,9 @@ hxlcl_strtoll:
     mov [rbp - 72], r10 # spill L7 to slot
     mov r10, [rbp - 72] # reload L7 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb1 # jump -> then
-.L7ff7_hxlcl_strtoll_bb1:
+    jz .L5211_hxlcl_strtoll_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb1 # jump -> then
+.L5211_hxlcl_strtoll_bb1:
     mov r11, 0 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -3933,9 +3933,9 @@ hxlcl_strtoll:
     mov [rbp - 88], r10 # spill L9 to slot
     mov r10, [rbp - 88] # reload L9 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb3 # jump -> then
-.L7ff7_hxlcl_strtoll_bb2:
+    jz .L5211_hxlcl_strtoll_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb3 # jump -> then
+.L5211_hxlcl_strtoll_bb2:
     mov r11, 0 # hv payload
     mov r10, r13 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -3968,8 +3968,8 @@ hxlcl_strtoll:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1160], r11 # store tag L17
     mov [rbp - 152], r10 # spill L17 to slot
-    jmp .L7ff7_hxlcl_strtoll_bb5 # branch
-.L7ff7_hxlcl_strtoll_bb3:
+    jmp .L5211_hxlcl_strtoll_bb5 # branch
+.L5211_hxlcl_strtoll_bb3:
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -3981,8 +3981,8 @@ hxlcl_strtoll:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 1112], r11 # store tag L11
     mov [rbp - 104], r10 # spill L11 to slot
-    jmp .L7ff7_hxlcl_strtoll_bb4 # branch
-.L7ff7_hxlcl_strtoll_bb4:
+    jmp .L5211_hxlcl_strtoll_bb4 # branch
+.L5211_hxlcl_strtoll_bb4:
     mov rax, 0 # hv payload
     add rsp, 1984 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3993,7 +3993,7 @@ hxlcl_strtoll:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_strtoll_bb5:
+.L5211_hxlcl_strtoll_bb5:
     mov r11, 0 # hv payload
     mov r10, [rbp - 152] # reload L17 from spill slot
     mov r10, r10 # hv payload
@@ -4005,9 +4005,9 @@ hxlcl_strtoll:
     mov [rbp - 160], r10 # spill L18 to slot
     mov r10, [rbp - 160] # reload L18 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb6 # jump -> then
-.L7ff7_hxlcl_strtoll_bb6:
+    jz .L5211_hxlcl_strtoll_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb6 # jump -> then
+.L5211_hxlcl_strtoll_bb6:
     mov r10, [rbp - 144] # reload L16 from spill slot
     mov r10, r10 # hv payload
     mov r11, 32 # hv payload
@@ -4087,9 +4087,9 @@ hxlcl_strtoll:
     mov [rbp - 248], r10 # spill L29 to slot
     mov r10, [rbp - 248] # reload L29 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb9 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb8 # jump -> then
-.L7ff7_hxlcl_strtoll_bb7:
+    jz .L5211_hxlcl_strtoll_bb9 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb8 # jump -> then
+.L5211_hxlcl_strtoll_bb7:
     mov r10, r15 # hv payload
     mov r11, [rbp - 128] # reload L14 from spill slot
     mov r11, r11 # hv payload
@@ -4118,9 +4118,9 @@ hxlcl_strtoll:
     mov [rbp - 304], r10 # spill L36 to slot
     mov r10, [rbp - 304] # reload L36 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb12 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb11 # jump -> then
-.L7ff7_hxlcl_strtoll_bb8:
+    jz .L5211_hxlcl_strtoll_bb12 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb11 # jump -> then
+.L5211_hxlcl_strtoll_bb8:
     mov r11, 1 # hv payload
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
@@ -4146,16 +4146,16 @@ hxlcl_strtoll:
     mov r11, [rbp - 1280] # tag L32 from tag-slot
     mov [rbp - 1152], r11 # store tag L16
     mov [rbp - 144], r10 # spill L16 to slot
-    jmp .L7ff7_hxlcl_strtoll_bb10 # branch
-.L7ff7_hxlcl_strtoll_bb9:
+    jmp .L5211_hxlcl_strtoll_bb10 # branch
+.L5211_hxlcl_strtoll_bb9:
     mov r10, 0 # assign L17
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1160], r11 # store tag L17
     mov [rbp - 152], r10 # spill L17 to slot
-    jmp .L7ff7_hxlcl_strtoll_bb10 # branch
-.L7ff7_hxlcl_strtoll_bb10:
-    jmp .L7ff7_hxlcl_strtoll_bb5 # branch
-.L7ff7_hxlcl_strtoll_bb11:
+    jmp .L5211_hxlcl_strtoll_bb10 # branch
+.L5211_hxlcl_strtoll_bb10:
+    jmp .L5211_hxlcl_strtoll_bb5 # branch
+.L5211_hxlcl_strtoll_bb11:
     mov r10, 1 # assign L35
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1304], r11 # store tag L35
@@ -4172,8 +4172,8 @@ hxlcl_strtoll:
     mov r11, [rbp - 1328] # tag L38 from tag-slot
     mov [rbp - 1136], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
-    jmp .L7ff7_hxlcl_strtoll_bb15 # branch
-.L7ff7_hxlcl_strtoll_bb12:
+    jmp .L5211_hxlcl_strtoll_bb15 # branch
+.L5211_hxlcl_strtoll_bb12:
     mov r10, [rbp - 288] # reload L34 from spill slot
     mov r10, r10 # hv payload
     mov r11, 43 # hv payload
@@ -4185,9 +4185,9 @@ hxlcl_strtoll:
     mov [rbp - 328], r10 # spill L39 to slot
     mov r10, [rbp - 328] # reload L39 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb14 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb13 # jump -> then
-.L7ff7_hxlcl_strtoll_bb13:
+    jz .L5211_hxlcl_strtoll_bb14 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb13 # jump -> then
+.L5211_hxlcl_strtoll_bb13:
     mov r11, 1 # hv payload
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
@@ -4200,10 +4200,10 @@ hxlcl_strtoll:
     mov r11, [rbp - 1352] # tag L41 from tag-slot
     mov [rbp - 1136], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
-    jmp .L7ff7_hxlcl_strtoll_bb14 # branch
-.L7ff7_hxlcl_strtoll_bb14:
-    jmp .L7ff7_hxlcl_strtoll_bb15 # branch
-.L7ff7_hxlcl_strtoll_bb15:
+    jmp .L5211_hxlcl_strtoll_bb14 # branch
+.L5211_hxlcl_strtoll_bb14:
+    jmp .L5211_hxlcl_strtoll_bb15 # branch
+.L5211_hxlcl_strtoll_bb15:
     mov r11, 1 # hv payload
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
@@ -4308,9 +4308,9 @@ hxlcl_strtoll:
     mov [rbp - 464], r10 # spill L56 to slot
     mov r10, [rbp - 464] # reload L56 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb17 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb16 # jump -> then
-.L7ff7_hxlcl_strtoll_bb16:
+    jz .L5211_hxlcl_strtoll_bb17 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb16 # jump -> then
+.L5211_hxlcl_strtoll_bb16:
     mov r11, 0 # hv payload
     mov r10, [rbp - 408] # reload L49 from spill slot
     mov r10, r10 # hv payload
@@ -4322,9 +4322,9 @@ hxlcl_strtoll:
     mov [rbp - 480], r10 # spill L58 to slot
     mov r10, [rbp - 480] # reload L58 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb19 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb18 # jump -> then
-.L7ff7_hxlcl_strtoll_bb17:
+    jz .L5211_hxlcl_strtoll_bb19 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb18 # jump -> then
+.L5211_hxlcl_strtoll_bb17:
     mov r10, [rbp - 120] # reload L13 from spill slot
     mov r10, r10 # hv payload
     mov r11, 16 # hv payload
@@ -4336,9 +4336,9 @@ hxlcl_strtoll:
     mov [rbp - 528], r10 # spill L64 to slot
     mov r10, [rbp - 528] # reload L64 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb25 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb24 # jump -> then
-.L7ff7_hxlcl_strtoll_bb18:
+    jz .L5211_hxlcl_strtoll_bb25 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb24 # jump -> then
+.L5211_hxlcl_strtoll_bb18:
     mov r11, 0 # hv payload
     mov r10, [rbp - 456] # reload L55 from spill slot
     mov r10, r10 # hv payload
@@ -4350,15 +4350,15 @@ hxlcl_strtoll:
     mov [rbp - 496], r10 # spill L60 to slot
     mov r10, [rbp - 496] # reload L60 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb21 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb20 # jump -> then
-.L7ff7_hxlcl_strtoll_bb19:
+    jz .L5211_hxlcl_strtoll_bb21 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb20 # jump -> then
+.L5211_hxlcl_strtoll_bb19:
     mov r10, 10 # assign L13
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1128], r11 # store tag L13
     mov [rbp - 120], r10 # spill L13 to slot
-    jmp .L7ff7_hxlcl_strtoll_bb23 # branch
-.L7ff7_hxlcl_strtoll_bb20:
+    jmp .L5211_hxlcl_strtoll_bb23 # branch
+.L5211_hxlcl_strtoll_bb20:
     mov r10, 16 # assign L13
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1128], r11 # store tag L13
@@ -4375,8 +4375,8 @@ hxlcl_strtoll:
     mov r11, [rbp - 1520] # tag L62 from tag-slot
     mov [rbp - 1136], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
-    jmp .L7ff7_hxlcl_strtoll_bb22 # branch
-.L7ff7_hxlcl_strtoll_bb21:
+    jmp .L5211_hxlcl_strtoll_bb22 # branch
+.L5211_hxlcl_strtoll_bb21:
     mov r10, 8 # assign L13
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1128], r11 # store tag L13
@@ -4393,12 +4393,12 @@ hxlcl_strtoll:
     mov r11, [rbp - 1528] # tag L63 from tag-slot
     mov [rbp - 1136], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
-    jmp .L7ff7_hxlcl_strtoll_bb22 # branch
-.L7ff7_hxlcl_strtoll_bb22:
-    jmp .L7ff7_hxlcl_strtoll_bb23 # branch
-.L7ff7_hxlcl_strtoll_bb23:
-    jmp .L7ff7_hxlcl_strtoll_bb30 # branch
-.L7ff7_hxlcl_strtoll_bb24:
+    jmp .L5211_hxlcl_strtoll_bb22 # branch
+.L5211_hxlcl_strtoll_bb22:
+    jmp .L5211_hxlcl_strtoll_bb23 # branch
+.L5211_hxlcl_strtoll_bb23:
+    jmp .L5211_hxlcl_strtoll_bb30 # branch
+.L5211_hxlcl_strtoll_bb24:
     mov r11, 0 # hv payload
     mov r10, [rbp - 408] # reload L49 from spill slot
     mov r10, r10 # hv payload
@@ -4410,11 +4410,11 @@ hxlcl_strtoll:
     mov [rbp - 544], r10 # spill L66 to slot
     mov r10, [rbp - 544] # reload L66 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb27 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb26 # jump -> then
-.L7ff7_hxlcl_strtoll_bb25:
-    jmp .L7ff7_hxlcl_strtoll_bb30 # branch
-.L7ff7_hxlcl_strtoll_bb26:
+    jz .L5211_hxlcl_strtoll_bb27 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb26 # jump -> then
+.L5211_hxlcl_strtoll_bb25:
+    jmp .L5211_hxlcl_strtoll_bb30 # branch
+.L5211_hxlcl_strtoll_bb26:
     mov r11, 0 # hv payload
     mov r10, [rbp - 456] # reload L55 from spill slot
     mov r10, r10 # hv payload
@@ -4426,11 +4426,11 @@ hxlcl_strtoll:
     mov [rbp - 560], r10 # spill L68 to slot
     mov r10, [rbp - 560] # reload L68 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb29 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb28 # jump -> then
-.L7ff7_hxlcl_strtoll_bb27:
-    jmp .L7ff7_hxlcl_strtoll_bb25 # branch
-.L7ff7_hxlcl_strtoll_bb28:
+    jz .L5211_hxlcl_strtoll_bb29 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb28 # jump -> then
+.L5211_hxlcl_strtoll_bb27:
+    jmp .L5211_hxlcl_strtoll_bb25 # branch
+.L5211_hxlcl_strtoll_bb28:
     mov r11, 2 # hv payload
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
@@ -4443,10 +4443,10 @@ hxlcl_strtoll:
     mov r11, [rbp - 1584] # tag L70 from tag-slot
     mov [rbp - 1136], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
-    jmp .L7ff7_hxlcl_strtoll_bb29 # branch
-.L7ff7_hxlcl_strtoll_bb29:
-    jmp .L7ff7_hxlcl_strtoll_bb27 # branch
-.L7ff7_hxlcl_strtoll_bb30:
+    jmp .L5211_hxlcl_strtoll_bb29 # branch
+.L5211_hxlcl_strtoll_bb29:
+    jmp .L5211_hxlcl_strtoll_bb27 # branch
+.L5211_hxlcl_strtoll_bb30:
     mov r10, 0 # assign L71
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1592], r11 # store tag L71
@@ -4455,8 +4455,8 @@ hxlcl_strtoll:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1600], r11 # store tag L72
     mov [rbp - 592], r10 # spill L72 to slot
-    jmp .L7ff7_hxlcl_strtoll_bb31 # branch
-.L7ff7_hxlcl_strtoll_bb31:
+    jmp .L5211_hxlcl_strtoll_bb31 # branch
+.L5211_hxlcl_strtoll_bb31:
     mov r11, 0 # hv payload
     mov r10, [rbp - 592] # reload L72 from spill slot
     mov r10, r10 # hv payload
@@ -4468,9 +4468,9 @@ hxlcl_strtoll:
     mov [rbp - 600], r10 # spill L73 to slot
     mov r10, [rbp - 600] # reload L73 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb33 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb32 # jump -> then
-.L7ff7_hxlcl_strtoll_bb32:
+    jz .L5211_hxlcl_strtoll_bb33 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb32 # jump -> then
+.L5211_hxlcl_strtoll_bb32:
     mov r10, r15 # hv payload
     mov r11, [rbp - 128] # reload L14 from spill slot
     mov r11, r11 # hv payload
@@ -4544,9 +4544,9 @@ hxlcl_strtoll:
     mov [rbp - 688], r10 # spill L84 to slot
     mov r10, [rbp - 688] # reload L84 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb35 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb34 # jump -> then
-.L7ff7_hxlcl_strtoll_bb33:
+    jz .L5211_hxlcl_strtoll_bb35 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb34 # jump -> then
+.L5211_hxlcl_strtoll_bb33:
     mov r11, [rbp - 128] # reload L14 from spill slot
     mov r11, r11 # hv payload
     mov r10, r15 # hv payload
@@ -4570,9 +4570,9 @@ hxlcl_strtoll:
     mov [rbp - 968], r10 # spill L119 to slot
     mov r10, [rbp - 968] # reload L119 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb49 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb48 # jump -> then
-.L7ff7_hxlcl_strtoll_bb34:
+    jz .L5211_hxlcl_strtoll_bb49 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb48 # jump -> then
+.L5211_hxlcl_strtoll_bb34:
     mov r10, 1 # assign L76
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1632], r11 # store tag L76
@@ -4589,8 +4589,8 @@ hxlcl_strtoll:
     mov r11, [rbp - 1712] # tag L86 from tag-slot
     mov [rbp - 1640], r11 # store tag L77
     mov [rbp - 632], r10 # spill L77 to slot
-    jmp .L7ff7_hxlcl_strtoll_bb41 # branch
-.L7ff7_hxlcl_strtoll_bb35:
+    jmp .L5211_hxlcl_strtoll_bb41 # branch
+.L5211_hxlcl_strtoll_bb35:
     mov r11, 97 # hv payload
     mov r10, [rbp - 616] # reload L75 from spill slot
     mov r10, r10 # hv payload
@@ -4643,9 +4643,9 @@ hxlcl_strtoll:
     mov [rbp - 760], r10 # spill L93 to slot
     mov r10, [rbp - 760] # reload L93 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb37 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb36 # jump -> then
-.L7ff7_hxlcl_strtoll_bb36:
+    jz .L5211_hxlcl_strtoll_bb37 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb36 # jump -> then
+.L5211_hxlcl_strtoll_bb36:
     mov r10, 1 # assign L76
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1632], r11 # store tag L76
@@ -4674,8 +4674,8 @@ hxlcl_strtoll:
     mov r11, [rbp - 1800] # tag L97 from tag-slot
     mov [rbp - 1640], r11 # store tag L77
     mov [rbp - 632], r10 # spill L77 to slot
-    jmp .L7ff7_hxlcl_strtoll_bb40 # branch
-.L7ff7_hxlcl_strtoll_bb37:
+    jmp .L5211_hxlcl_strtoll_bb40 # branch
+.L5211_hxlcl_strtoll_bb37:
     mov r11, 65 # hv payload
     mov r10, [rbp - 616] # reload L75 from spill slot
     mov r10, r10 # hv payload
@@ -4728,9 +4728,9 @@ hxlcl_strtoll:
     mov [rbp - 848], r10 # spill L104 to slot
     mov r10, [rbp - 848] # reload L104 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb39 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb38 # jump -> then
-.L7ff7_hxlcl_strtoll_bb38:
+    jz .L5211_hxlcl_strtoll_bb39 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb38 # jump -> then
+.L5211_hxlcl_strtoll_bb38:
     mov r10, 1 # assign L76
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1632], r11 # store tag L76
@@ -4759,12 +4759,12 @@ hxlcl_strtoll:
     mov r11, [rbp - 1888] # tag L108 from tag-slot
     mov [rbp - 1640], r11 # store tag L77
     mov [rbp - 632], r10 # spill L77 to slot
-    jmp .L7ff7_hxlcl_strtoll_bb39 # branch
-.L7ff7_hxlcl_strtoll_bb39:
-    jmp .L7ff7_hxlcl_strtoll_bb40 # branch
-.L7ff7_hxlcl_strtoll_bb40:
-    jmp .L7ff7_hxlcl_strtoll_bb41 # branch
-.L7ff7_hxlcl_strtoll_bb41:
+    jmp .L5211_hxlcl_strtoll_bb39 # branch
+.L5211_hxlcl_strtoll_bb39:
+    jmp .L5211_hxlcl_strtoll_bb40 # branch
+.L5211_hxlcl_strtoll_bb40:
+    jmp .L5211_hxlcl_strtoll_bb41 # branch
+.L5211_hxlcl_strtoll_bb41:
     mov r10, [rbp - 624] # reload L76 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -4776,15 +4776,15 @@ hxlcl_strtoll:
     mov [rbp - 888], r10 # spill L109 to slot
     mov r10, [rbp - 888] # reload L109 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb43 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb42 # jump -> then
-.L7ff7_hxlcl_strtoll_bb42:
+    jz .L5211_hxlcl_strtoll_bb43 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb42 # jump -> then
+.L5211_hxlcl_strtoll_bb42:
     mov r10, 0 # assign L72
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1600], r11 # store tag L72
     mov [rbp - 592], r10 # spill L72 to slot
-    jmp .L7ff7_hxlcl_strtoll_bb47 # branch
-.L7ff7_hxlcl_strtoll_bb43:
+    jmp .L5211_hxlcl_strtoll_bb47 # branch
+.L5211_hxlcl_strtoll_bb43:
     mov r11, [rbp - 120] # reload L13 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 632] # reload L77 from spill slot
@@ -4797,15 +4797,15 @@ hxlcl_strtoll:
     mov [rbp - 904], r10 # spill L111 to slot
     mov r10, [rbp - 904] # reload L111 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb45 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb44 # jump -> then
-.L7ff7_hxlcl_strtoll_bb44:
+    jz .L5211_hxlcl_strtoll_bb45 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb44 # jump -> then
+.L5211_hxlcl_strtoll_bb44:
     mov r10, 0 # assign L72
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1600], r11 # store tag L72
     mov [rbp - 592], r10 # spill L72 to slot
-    jmp .L7ff7_hxlcl_strtoll_bb46 # branch
-.L7ff7_hxlcl_strtoll_bb45:
+    jmp .L5211_hxlcl_strtoll_bb46 # branch
+.L5211_hxlcl_strtoll_bb45:
     mov r11, [rbp - 120] # reload L13 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 584] # reload L71 from spill slot
@@ -4844,12 +4844,12 @@ hxlcl_strtoll:
     mov r11, [rbp - 1952] # tag L116 from tag-slot
     mov [rbp - 1136], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
-    jmp .L7ff7_hxlcl_strtoll_bb46 # branch
-.L7ff7_hxlcl_strtoll_bb46:
-    jmp .L7ff7_hxlcl_strtoll_bb47 # branch
-.L7ff7_hxlcl_strtoll_bb47:
-    jmp .L7ff7_hxlcl_strtoll_bb31 # branch
-.L7ff7_hxlcl_strtoll_bb48:
+    jmp .L5211_hxlcl_strtoll_bb46 # branch
+.L5211_hxlcl_strtoll_bb46:
+    jmp .L5211_hxlcl_strtoll_bb47 # branch
+.L5211_hxlcl_strtoll_bb47:
+    jmp .L5211_hxlcl_strtoll_bb31 # branch
+.L5211_hxlcl_strtoll_bb48:
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -4862,8 +4862,8 @@ hxlcl_strtoll:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 1992], r11 # store tag L121
     mov [rbp - 984], r10 # spill L121 to slot
-    jmp .L7ff7_hxlcl_strtoll_bb49 # branch
-.L7ff7_hxlcl_strtoll_bb49:
+    jmp .L5211_hxlcl_strtoll_bb49 # branch
+.L5211_hxlcl_strtoll_bb49:
     mov r11, 0 # hv payload
     mov r10, [rbp - 296] # reload L35 from spill slot
     mov r10, r10 # hv payload
@@ -4875,9 +4875,9 @@ hxlcl_strtoll:
     mov [rbp - 992], r10 # spill L122 to slot
     mov r10, [rbp - 992] # reload L122 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoll_bb51 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoll_bb50 # jump -> then
-.L7ff7_hxlcl_strtoll_bb50:
+    jz .L5211_hxlcl_strtoll_bb51 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb50 # jump -> then
+.L5211_hxlcl_strtoll_bb50:
     mov r11, [rbp - 584] # reload L71 from spill slot
     mov r11, r11 # hv payload
     mov r10, 0 # hv payload
@@ -4901,7 +4901,7 @@ hxlcl_strtoll:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_strtoll_bb51:
+.L5211_hxlcl_strtoll_bb51:
     mov rax, [rbp - 584] # reload L71 from spill slot
     mov rax, rax # hv payload
     add rsp, 1984 # epilogue: free spill frame
@@ -4935,7 +4935,7 @@ hxlcl_strtoull:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 976], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_strtoull_bb0:
+.L5211_hxlcl_strtoull_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -4966,9 +4966,9 @@ hxlcl_strtoull:
     mov [rbp - 72], r10 # spill L7 to slot
     mov r10, [rbp - 72] # reload L7 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoull_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoull_bb1 # jump -> then
-.L7ff7_hxlcl_strtoull_bb1:
+    jz .L5211_hxlcl_strtoull_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoull_bb1 # jump -> then
+.L5211_hxlcl_strtoull_bb1:
     mov r11, 0 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -4980,9 +4980,9 @@ hxlcl_strtoull:
     mov [rbp - 88], r10 # spill L9 to slot
     mov r10, [rbp - 88] # reload L9 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoull_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoull_bb3 # jump -> then
-.L7ff7_hxlcl_strtoull_bb2:
+    jz .L5211_hxlcl_strtoull_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoull_bb3 # jump -> then
+.L5211_hxlcl_strtoull_bb2:
     mov r11, 0 # hv payload
     mov r10, r13 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -5015,8 +5015,8 @@ hxlcl_strtoull:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1096], r11 # store tag L17
     mov [rbp - 152], r10 # spill L17 to slot
-    jmp .L7ff7_hxlcl_strtoull_bb5 # branch
-.L7ff7_hxlcl_strtoull_bb3:
+    jmp .L5211_hxlcl_strtoull_bb5 # branch
+.L5211_hxlcl_strtoull_bb3:
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -5028,8 +5028,8 @@ hxlcl_strtoull:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 1048], r11 # store tag L11
     mov [rbp - 104], r10 # spill L11 to slot
-    jmp .L7ff7_hxlcl_strtoull_bb4 # branch
-.L7ff7_hxlcl_strtoull_bb4:
+    jmp .L5211_hxlcl_strtoull_bb4 # branch
+.L5211_hxlcl_strtoull_bb4:
     mov rax, 0 # hv payload
     add rsp, 1856 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -5040,7 +5040,7 @@ hxlcl_strtoull:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_strtoull_bb5:
+.L5211_hxlcl_strtoull_bb5:
     mov r11, 0 # hv payload
     mov r10, [rbp - 152] # reload L17 from spill slot
     mov r10, r10 # hv payload
@@ -5052,9 +5052,9 @@ hxlcl_strtoull:
     mov [rbp - 160], r10 # spill L18 to slot
     mov r10, [rbp - 160] # reload L18 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoull_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoull_bb6 # jump -> then
-.L7ff7_hxlcl_strtoull_bb6:
+    jz .L5211_hxlcl_strtoull_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoull_bb6 # jump -> then
+.L5211_hxlcl_strtoull_bb6:
     mov r10, [rbp - 144] # reload L16 from spill slot
     mov r10, r10 # hv payload
     mov r11, 32 # hv payload
@@ -5134,9 +5134,9 @@ hxlcl_strtoull:
     mov [rbp - 248], r10 # spill L29 to slot
     mov r10, [rbp - 248] # reload L29 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoull_bb9 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoull_bb8 # jump -> then
-.L7ff7_hxlcl_strtoull_bb7:
+    jz .L5211_hxlcl_strtoull_bb9 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoull_bb8 # jump -> then
+.L5211_hxlcl_strtoull_bb7:
     mov r10, r15 # hv payload
     mov r11, [rbp - 128] # reload L14 from spill slot
     mov r11, r11 # hv payload
@@ -5161,9 +5161,9 @@ hxlcl_strtoull:
     mov [rbp - 296], r10 # spill L35 to slot
     mov r10, [rbp - 296] # reload L35 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoull_bb12 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoull_bb11 # jump -> then
-.L7ff7_hxlcl_strtoull_bb8:
+    jz .L5211_hxlcl_strtoull_bb12 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoull_bb11 # jump -> then
+.L5211_hxlcl_strtoull_bb8:
     mov r11, 1 # hv payload
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
@@ -5189,16 +5189,16 @@ hxlcl_strtoull:
     mov r11, [rbp - 1216] # tag L32 from tag-slot
     mov [rbp - 1088], r11 # store tag L16
     mov [rbp - 144], r10 # spill L16 to slot
-    jmp .L7ff7_hxlcl_strtoull_bb10 # branch
-.L7ff7_hxlcl_strtoull_bb9:
+    jmp .L5211_hxlcl_strtoull_bb10 # branch
+.L5211_hxlcl_strtoull_bb9:
     mov r10, 0 # assign L17
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1096], r11 # store tag L17
     mov [rbp - 152], r10 # spill L17 to slot
-    jmp .L7ff7_hxlcl_strtoull_bb10 # branch
-.L7ff7_hxlcl_strtoull_bb10:
-    jmp .L7ff7_hxlcl_strtoull_bb5 # branch
-.L7ff7_hxlcl_strtoull_bb11:
+    jmp .L5211_hxlcl_strtoull_bb10 # branch
+.L5211_hxlcl_strtoull_bb10:
+    jmp .L5211_hxlcl_strtoull_bb5 # branch
+.L5211_hxlcl_strtoull_bb11:
     mov r11, 1 # hv payload
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
@@ -5211,8 +5211,8 @@ hxlcl_strtoull:
     mov r11, [rbp - 1256] # tag L37 from tag-slot
     mov [rbp - 1072], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
-    jmp .L7ff7_hxlcl_strtoull_bb12 # branch
-.L7ff7_hxlcl_strtoull_bb12:
+    jmp .L5211_hxlcl_strtoull_bb12 # branch
+.L5211_hxlcl_strtoull_bb12:
     mov r11, 1 # hv payload
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
@@ -5317,9 +5317,9 @@ hxlcl_strtoull:
     mov [rbp - 432], r10 # spill L52 to slot
     mov r10, [rbp - 432] # reload L52 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoull_bb14 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoull_bb13 # jump -> then
-.L7ff7_hxlcl_strtoull_bb13:
+    jz .L5211_hxlcl_strtoull_bb14 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoull_bb13 # jump -> then
+.L5211_hxlcl_strtoull_bb13:
     mov r11, 0 # hv payload
     mov r10, [rbp - 376] # reload L45 from spill slot
     mov r10, r10 # hv payload
@@ -5331,9 +5331,9 @@ hxlcl_strtoull:
     mov [rbp - 448], r10 # spill L54 to slot
     mov r10, [rbp - 448] # reload L54 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoull_bb16 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoull_bb15 # jump -> then
-.L7ff7_hxlcl_strtoull_bb14:
+    jz .L5211_hxlcl_strtoull_bb16 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoull_bb15 # jump -> then
+.L5211_hxlcl_strtoull_bb14:
     mov r10, [rbp - 120] # reload L13 from spill slot
     mov r10, r10 # hv payload
     mov r11, 16 # hv payload
@@ -5345,9 +5345,9 @@ hxlcl_strtoull:
     mov [rbp - 496], r10 # spill L60 to slot
     mov r10, [rbp - 496] # reload L60 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoull_bb22 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoull_bb21 # jump -> then
-.L7ff7_hxlcl_strtoull_bb15:
+    jz .L5211_hxlcl_strtoull_bb22 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoull_bb21 # jump -> then
+.L5211_hxlcl_strtoull_bb15:
     mov r11, 0 # hv payload
     mov r10, [rbp - 424] # reload L51 from spill slot
     mov r10, r10 # hv payload
@@ -5359,15 +5359,15 @@ hxlcl_strtoull:
     mov [rbp - 464], r10 # spill L56 to slot
     mov r10, [rbp - 464] # reload L56 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoull_bb18 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoull_bb17 # jump -> then
-.L7ff7_hxlcl_strtoull_bb16:
+    jz .L5211_hxlcl_strtoull_bb18 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoull_bb17 # jump -> then
+.L5211_hxlcl_strtoull_bb16:
     mov r10, 10 # assign L13
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1064], r11 # store tag L13
     mov [rbp - 120], r10 # spill L13 to slot
-    jmp .L7ff7_hxlcl_strtoull_bb20 # branch
-.L7ff7_hxlcl_strtoull_bb17:
+    jmp .L5211_hxlcl_strtoull_bb20 # branch
+.L5211_hxlcl_strtoull_bb17:
     mov r10, 16 # assign L13
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1064], r11 # store tag L13
@@ -5384,8 +5384,8 @@ hxlcl_strtoull:
     mov r11, [rbp - 1424] # tag L58 from tag-slot
     mov [rbp - 1072], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
-    jmp .L7ff7_hxlcl_strtoull_bb19 # branch
-.L7ff7_hxlcl_strtoull_bb18:
+    jmp .L5211_hxlcl_strtoull_bb19 # branch
+.L5211_hxlcl_strtoull_bb18:
     mov r10, 8 # assign L13
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1064], r11 # store tag L13
@@ -5402,12 +5402,12 @@ hxlcl_strtoull:
     mov r11, [rbp - 1432] # tag L59 from tag-slot
     mov [rbp - 1072], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
-    jmp .L7ff7_hxlcl_strtoull_bb19 # branch
-.L7ff7_hxlcl_strtoull_bb19:
-    jmp .L7ff7_hxlcl_strtoull_bb20 # branch
-.L7ff7_hxlcl_strtoull_bb20:
-    jmp .L7ff7_hxlcl_strtoull_bb27 # branch
-.L7ff7_hxlcl_strtoull_bb21:
+    jmp .L5211_hxlcl_strtoull_bb19 # branch
+.L5211_hxlcl_strtoull_bb19:
+    jmp .L5211_hxlcl_strtoull_bb20 # branch
+.L5211_hxlcl_strtoull_bb20:
+    jmp .L5211_hxlcl_strtoull_bb27 # branch
+.L5211_hxlcl_strtoull_bb21:
     mov r11, 0 # hv payload
     mov r10, [rbp - 376] # reload L45 from spill slot
     mov r10, r10 # hv payload
@@ -5419,11 +5419,11 @@ hxlcl_strtoull:
     mov [rbp - 512], r10 # spill L62 to slot
     mov r10, [rbp - 512] # reload L62 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoull_bb24 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoull_bb23 # jump -> then
-.L7ff7_hxlcl_strtoull_bb22:
-    jmp .L7ff7_hxlcl_strtoull_bb27 # branch
-.L7ff7_hxlcl_strtoull_bb23:
+    jz .L5211_hxlcl_strtoull_bb24 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoull_bb23 # jump -> then
+.L5211_hxlcl_strtoull_bb22:
+    jmp .L5211_hxlcl_strtoull_bb27 # branch
+.L5211_hxlcl_strtoull_bb23:
     mov r11, 0 # hv payload
     mov r10, [rbp - 424] # reload L51 from spill slot
     mov r10, r10 # hv payload
@@ -5435,11 +5435,11 @@ hxlcl_strtoull:
     mov [rbp - 528], r10 # spill L64 to slot
     mov r10, [rbp - 528] # reload L64 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoull_bb26 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoull_bb25 # jump -> then
-.L7ff7_hxlcl_strtoull_bb24:
-    jmp .L7ff7_hxlcl_strtoull_bb22 # branch
-.L7ff7_hxlcl_strtoull_bb25:
+    jz .L5211_hxlcl_strtoull_bb26 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoull_bb25 # jump -> then
+.L5211_hxlcl_strtoull_bb24:
+    jmp .L5211_hxlcl_strtoull_bb22 # branch
+.L5211_hxlcl_strtoull_bb25:
     mov r11, 2 # hv payload
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
@@ -5452,10 +5452,10 @@ hxlcl_strtoull:
     mov r11, [rbp - 1488] # tag L66 from tag-slot
     mov [rbp - 1072], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
-    jmp .L7ff7_hxlcl_strtoull_bb26 # branch
-.L7ff7_hxlcl_strtoull_bb26:
-    jmp .L7ff7_hxlcl_strtoull_bb24 # branch
-.L7ff7_hxlcl_strtoull_bb27:
+    jmp .L5211_hxlcl_strtoull_bb26 # branch
+.L5211_hxlcl_strtoull_bb26:
+    jmp .L5211_hxlcl_strtoull_bb24 # branch
+.L5211_hxlcl_strtoull_bb27:
     mov r10, 0 # assign L67
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1496], r11 # store tag L67
@@ -5464,8 +5464,8 @@ hxlcl_strtoull:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1504], r11 # store tag L68
     mov [rbp - 560], r10 # spill L68 to slot
-    jmp .L7ff7_hxlcl_strtoull_bb28 # branch
-.L7ff7_hxlcl_strtoull_bb28:
+    jmp .L5211_hxlcl_strtoull_bb28 # branch
+.L5211_hxlcl_strtoull_bb28:
     mov r11, 0 # hv payload
     mov r10, [rbp - 560] # reload L68 from spill slot
     mov r10, r10 # hv payload
@@ -5477,9 +5477,9 @@ hxlcl_strtoull:
     mov [rbp - 568], r10 # spill L69 to slot
     mov r10, [rbp - 568] # reload L69 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoull_bb30 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoull_bb29 # jump -> then
-.L7ff7_hxlcl_strtoull_bb29:
+    jz .L5211_hxlcl_strtoull_bb30 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoull_bb29 # jump -> then
+.L5211_hxlcl_strtoull_bb29:
     mov r10, r15 # hv payload
     mov r11, [rbp - 128] # reload L14 from spill slot
     mov r11, r11 # hv payload
@@ -5553,9 +5553,9 @@ hxlcl_strtoull:
     mov [rbp - 656], r10 # spill L80 to slot
     mov r10, [rbp - 656] # reload L80 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoull_bb32 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoull_bb31 # jump -> then
-.L7ff7_hxlcl_strtoull_bb30:
+    jz .L5211_hxlcl_strtoull_bb32 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoull_bb31 # jump -> then
+.L5211_hxlcl_strtoull_bb30:
     mov r11, [rbp - 128] # reload L14 from spill slot
     mov r11, r11 # hv payload
     mov r10, r15 # hv payload
@@ -5579,9 +5579,9 @@ hxlcl_strtoull:
     mov [rbp - 936], r10 # spill L115 to slot
     mov r10, [rbp - 936] # reload L115 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoull_bb46 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoull_bb45 # jump -> then
-.L7ff7_hxlcl_strtoull_bb31:
+    jz .L5211_hxlcl_strtoull_bb46 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoull_bb45 # jump -> then
+.L5211_hxlcl_strtoull_bb31:
     mov r10, 1 # assign L72
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1536], r11 # store tag L72
@@ -5598,8 +5598,8 @@ hxlcl_strtoull:
     mov r11, [rbp - 1616] # tag L82 from tag-slot
     mov [rbp - 1544], r11 # store tag L73
     mov [rbp - 600], r10 # spill L73 to slot
-    jmp .L7ff7_hxlcl_strtoull_bb38 # branch
-.L7ff7_hxlcl_strtoull_bb32:
+    jmp .L5211_hxlcl_strtoull_bb38 # branch
+.L5211_hxlcl_strtoull_bb32:
     mov r11, 97 # hv payload
     mov r10, [rbp - 584] # reload L71 from spill slot
     mov r10, r10 # hv payload
@@ -5652,9 +5652,9 @@ hxlcl_strtoull:
     mov [rbp - 728], r10 # spill L89 to slot
     mov r10, [rbp - 728] # reload L89 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoull_bb34 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoull_bb33 # jump -> then
-.L7ff7_hxlcl_strtoull_bb33:
+    jz .L5211_hxlcl_strtoull_bb34 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoull_bb33 # jump -> then
+.L5211_hxlcl_strtoull_bb33:
     mov r10, 1 # assign L72
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1536], r11 # store tag L72
@@ -5683,8 +5683,8 @@ hxlcl_strtoull:
     mov r11, [rbp - 1704] # tag L93 from tag-slot
     mov [rbp - 1544], r11 # store tag L73
     mov [rbp - 600], r10 # spill L73 to slot
-    jmp .L7ff7_hxlcl_strtoull_bb37 # branch
-.L7ff7_hxlcl_strtoull_bb34:
+    jmp .L5211_hxlcl_strtoull_bb37 # branch
+.L5211_hxlcl_strtoull_bb34:
     mov r11, 65 # hv payload
     mov r10, [rbp - 584] # reload L71 from spill slot
     mov r10, r10 # hv payload
@@ -5737,9 +5737,9 @@ hxlcl_strtoull:
     mov [rbp - 816], r10 # spill L100 to slot
     mov r10, [rbp - 816] # reload L100 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoull_bb36 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoull_bb35 # jump -> then
-.L7ff7_hxlcl_strtoull_bb35:
+    jz .L5211_hxlcl_strtoull_bb36 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoull_bb35 # jump -> then
+.L5211_hxlcl_strtoull_bb35:
     mov r10, 1 # assign L72
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1536], r11 # store tag L72
@@ -5768,12 +5768,12 @@ hxlcl_strtoull:
     mov r11, [rbp - 1792] # tag L104 from tag-slot
     mov [rbp - 1544], r11 # store tag L73
     mov [rbp - 600], r10 # spill L73 to slot
-    jmp .L7ff7_hxlcl_strtoull_bb36 # branch
-.L7ff7_hxlcl_strtoull_bb36:
-    jmp .L7ff7_hxlcl_strtoull_bb37 # branch
-.L7ff7_hxlcl_strtoull_bb37:
-    jmp .L7ff7_hxlcl_strtoull_bb38 # branch
-.L7ff7_hxlcl_strtoull_bb38:
+    jmp .L5211_hxlcl_strtoull_bb36 # branch
+.L5211_hxlcl_strtoull_bb36:
+    jmp .L5211_hxlcl_strtoull_bb37 # branch
+.L5211_hxlcl_strtoull_bb37:
+    jmp .L5211_hxlcl_strtoull_bb38 # branch
+.L5211_hxlcl_strtoull_bb38:
     mov r10, [rbp - 592] # reload L72 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -5785,15 +5785,15 @@ hxlcl_strtoull:
     mov [rbp - 856], r10 # spill L105 to slot
     mov r10, [rbp - 856] # reload L105 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoull_bb40 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoull_bb39 # jump -> then
-.L7ff7_hxlcl_strtoull_bb39:
+    jz .L5211_hxlcl_strtoull_bb40 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoull_bb39 # jump -> then
+.L5211_hxlcl_strtoull_bb39:
     mov r10, 0 # assign L68
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1504], r11 # store tag L68
     mov [rbp - 560], r10 # spill L68 to slot
-    jmp .L7ff7_hxlcl_strtoull_bb44 # branch
-.L7ff7_hxlcl_strtoull_bb40:
+    jmp .L5211_hxlcl_strtoull_bb44 # branch
+.L5211_hxlcl_strtoull_bb40:
     mov r11, [rbp - 120] # reload L13 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 600] # reload L73 from spill slot
@@ -5806,15 +5806,15 @@ hxlcl_strtoull:
     mov [rbp - 872], r10 # spill L107 to slot
     mov r10, [rbp - 872] # reload L107 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strtoull_bb42 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strtoull_bb41 # jump -> then
-.L7ff7_hxlcl_strtoull_bb41:
+    jz .L5211_hxlcl_strtoull_bb42 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoull_bb41 # jump -> then
+.L5211_hxlcl_strtoull_bb41:
     mov r10, 0 # assign L68
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1504], r11 # store tag L68
     mov [rbp - 560], r10 # spill L68 to slot
-    jmp .L7ff7_hxlcl_strtoull_bb43 # branch
-.L7ff7_hxlcl_strtoull_bb42:
+    jmp .L5211_hxlcl_strtoull_bb43 # branch
+.L5211_hxlcl_strtoull_bb42:
     mov r11, [rbp - 120] # reload L13 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 552] # reload L67 from spill slot
@@ -5853,12 +5853,12 @@ hxlcl_strtoull:
     mov r11, [rbp - 1856] # tag L112 from tag-slot
     mov [rbp - 1072], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
-    jmp .L7ff7_hxlcl_strtoull_bb43 # branch
-.L7ff7_hxlcl_strtoull_bb43:
-    jmp .L7ff7_hxlcl_strtoull_bb44 # branch
-.L7ff7_hxlcl_strtoull_bb44:
-    jmp .L7ff7_hxlcl_strtoull_bb28 # branch
-.L7ff7_hxlcl_strtoull_bb45:
+    jmp .L5211_hxlcl_strtoull_bb43 # branch
+.L5211_hxlcl_strtoull_bb43:
+    jmp .L5211_hxlcl_strtoull_bb44 # branch
+.L5211_hxlcl_strtoull_bb44:
+    jmp .L5211_hxlcl_strtoull_bb28 # branch
+.L5211_hxlcl_strtoull_bb45:
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -5871,8 +5871,8 @@ hxlcl_strtoull:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 1896], r11 # store tag L117
     mov [rbp - 952], r10 # spill L117 to slot
-    jmp .L7ff7_hxlcl_strtoull_bb46 # branch
-.L7ff7_hxlcl_strtoull_bb46:
+    jmp .L5211_hxlcl_strtoull_bb46 # branch
+.L5211_hxlcl_strtoull_bb46:
     mov rax, [rbp - 552] # reload L67 from spill slot
     mov rax, rax # hv payload
     add rsp, 1856 # epilogue: free spill frame
@@ -5900,7 +5900,7 @@ hxlcl_atoll:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 464], r11 # store tag L0
     mov rbx, rdi # cabi ingress param payload
-.L7ff7_hxlcl_atoll_bb0:
+.L5211_hxlcl_atoll_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -5918,9 +5918,9 @@ hxlcl_atoll:
     mov r11, 2 # materialize tag imm 2
     mov [rbp - 488], r11 # store tag L3
     test r14, r14 # br_cond test
-    jz .L7ff7_hxlcl_atoll_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atoll_bb1 # jump -> then
-.L7ff7_hxlcl_atoll_bb1:
+    jz .L5211_hxlcl_atoll_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atoll_bb1 # jump -> then
+.L5211_hxlcl_atoll_bb1:
     mov rax, 0 # hv payload
     add rsp, 864 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -5931,7 +5931,7 @@ hxlcl_atoll:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_atoll_bb2:
+.L5211_hxlcl_atoll_bb2:
     mov r10, 0 # assign L5
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 504], r11 # store tag L5
@@ -5953,8 +5953,8 @@ hxlcl_atoll:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 528], r11 # store tag L8
     mov [rbp - 80], r10 # spill L8 to slot
-    jmp .L7ff7_hxlcl_atoll_bb3 # branch
-.L7ff7_hxlcl_atoll_bb3:
+    jmp .L5211_hxlcl_atoll_bb3 # branch
+.L5211_hxlcl_atoll_bb3:
     mov r11, 0 # hv payload
     mov r10, [rbp - 80] # reload L8 from spill slot
     mov r10, r10 # hv payload
@@ -5966,9 +5966,9 @@ hxlcl_atoll:
     mov [rbp - 88], r10 # spill L9 to slot
     mov r10, [rbp - 88] # reload L9 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atoll_bb5 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atoll_bb4 # jump -> then
-.L7ff7_hxlcl_atoll_bb4:
+    jz .L5211_hxlcl_atoll_bb5 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atoll_bb4 # jump -> then
+.L5211_hxlcl_atoll_bb4:
     mov r10, [rbp - 72] # reload L7 from spill slot
     mov r10, r10 # hv payload
     mov r11, 32 # hv payload
@@ -6048,9 +6048,9 @@ hxlcl_atoll:
     mov [rbp - 176], r10 # spill L20 to slot
     mov r10, [rbp - 176] # reload L20 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atoll_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atoll_bb6 # jump -> then
-.L7ff7_hxlcl_atoll_bb5:
+    jz .L5211_hxlcl_atoll_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atoll_bb6 # jump -> then
+.L5211_hxlcl_atoll_bb5:
     mov r10, r13 # hv payload
     mov r11, [rbp - 56] # reload L5 from spill slot
     mov r11, r11 # hv payload
@@ -6079,9 +6079,9 @@ hxlcl_atoll:
     mov [rbp - 232], r10 # spill L27 to slot
     mov r10, [rbp - 232] # reload L27 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atoll_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atoll_bb9 # jump -> then
-.L7ff7_hxlcl_atoll_bb6:
+    jz .L5211_hxlcl_atoll_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atoll_bb9 # jump -> then
+.L5211_hxlcl_atoll_bb6:
     mov r11, 1 # hv payload
     mov r10, [rbp - 56] # reload L5 from spill slot
     mov r10, r10 # hv payload
@@ -6107,16 +6107,16 @@ hxlcl_atoll:
     mov r11, [rbp - 648] # tag L23 from tag-slot
     mov [rbp - 520], r11 # store tag L7
     mov [rbp - 72], r10 # spill L7 to slot
-    jmp .L7ff7_hxlcl_atoll_bb8 # branch
-.L7ff7_hxlcl_atoll_bb7:
+    jmp .L5211_hxlcl_atoll_bb8 # branch
+.L5211_hxlcl_atoll_bb7:
     mov r10, 0 # assign L8
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 528], r11 # store tag L8
     mov [rbp - 80], r10 # spill L8 to slot
-    jmp .L7ff7_hxlcl_atoll_bb8 # branch
-.L7ff7_hxlcl_atoll_bb8:
-    jmp .L7ff7_hxlcl_atoll_bb3 # branch
-.L7ff7_hxlcl_atoll_bb9:
+    jmp .L5211_hxlcl_atoll_bb8 # branch
+.L5211_hxlcl_atoll_bb8:
+    jmp .L5211_hxlcl_atoll_bb3 # branch
+.L5211_hxlcl_atoll_bb9:
     mov r10, 1 # assign L26
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 672], r11 # store tag L26
@@ -6133,8 +6133,8 @@ hxlcl_atoll:
     mov r11, [rbp - 696] # tag L29 from tag-slot
     mov [rbp - 504], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
-    jmp .L7ff7_hxlcl_atoll_bb13 # branch
-.L7ff7_hxlcl_atoll_bb10:
+    jmp .L5211_hxlcl_atoll_bb13 # branch
+.L5211_hxlcl_atoll_bb10:
     mov r10, [rbp - 216] # reload L25 from spill slot
     mov r10, r10 # hv payload
     mov r11, 43 # hv payload
@@ -6146,9 +6146,9 @@ hxlcl_atoll:
     mov [rbp - 256], r10 # spill L30 to slot
     mov r10, [rbp - 256] # reload L30 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atoll_bb12 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atoll_bb11 # jump -> then
-.L7ff7_hxlcl_atoll_bb11:
+    jz .L5211_hxlcl_atoll_bb12 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atoll_bb11 # jump -> then
+.L5211_hxlcl_atoll_bb11:
     mov r11, 1 # hv payload
     mov r10, [rbp - 56] # reload L5 from spill slot
     mov r10, r10 # hv payload
@@ -6161,10 +6161,10 @@ hxlcl_atoll:
     mov r11, [rbp - 720] # tag L32 from tag-slot
     mov [rbp - 504], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
-    jmp .L7ff7_hxlcl_atoll_bb12 # branch
-.L7ff7_hxlcl_atoll_bb12:
-    jmp .L7ff7_hxlcl_atoll_bb13 # branch
-.L7ff7_hxlcl_atoll_bb13:
+    jmp .L5211_hxlcl_atoll_bb12 # branch
+.L5211_hxlcl_atoll_bb12:
+    jmp .L5211_hxlcl_atoll_bb13 # branch
+.L5211_hxlcl_atoll_bb13:
     mov r10, 0 # assign L33
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 728], r11 # store tag L33
@@ -6173,8 +6173,8 @@ hxlcl_atoll:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 736], r11 # store tag L34
     mov [rbp - 288], r10 # spill L34 to slot
-    jmp .L7ff7_hxlcl_atoll_bb14 # branch
-.L7ff7_hxlcl_atoll_bb14:
+    jmp .L5211_hxlcl_atoll_bb14 # branch
+.L5211_hxlcl_atoll_bb14:
     mov r11, 0 # hv payload
     mov r10, [rbp - 288] # reload L34 from spill slot
     mov r10, r10 # hv payload
@@ -6186,9 +6186,9 @@ hxlcl_atoll:
     mov [rbp - 296], r10 # spill L35 to slot
     mov r10, [rbp - 296] # reload L35 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atoll_bb16 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atoll_bb15 # jump -> then
-.L7ff7_hxlcl_atoll_bb15:
+    jz .L5211_hxlcl_atoll_bb16 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atoll_bb15 # jump -> then
+.L5211_hxlcl_atoll_bb15:
     mov r10, r13 # hv payload
     mov r11, [rbp - 56] # reload L5 from spill slot
     mov r11, r11 # hv payload
@@ -6254,9 +6254,9 @@ hxlcl_atoll:
     mov [rbp - 368], r10 # spill L44 to slot
     mov r10, [rbp - 368] # reload L44 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atoll_bb18 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atoll_bb17 # jump -> then
-.L7ff7_hxlcl_atoll_bb16:
+    jz .L5211_hxlcl_atoll_bb18 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atoll_bb17 # jump -> then
+.L5211_hxlcl_atoll_bb16:
     mov r11, 0 # hv payload
     mov r10, [rbp - 224] # reload L26 from spill slot
     mov r10, r10 # hv payload
@@ -6268,15 +6268,15 @@ hxlcl_atoll:
     mov [rbp - 432], r10 # spill L52 to slot
     mov r10, [rbp - 432] # reload L52 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atoll_bb21 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atoll_bb20 # jump -> then
-.L7ff7_hxlcl_atoll_bb17:
+    jz .L5211_hxlcl_atoll_bb21 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atoll_bb20 # jump -> then
+.L5211_hxlcl_atoll_bb17:
     mov r10, 0 # assign L34
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 736], r11 # store tag L34
     mov [rbp - 288], r10 # spill L34 to slot
-    jmp .L7ff7_hxlcl_atoll_bb19 # branch
-.L7ff7_hxlcl_atoll_bb18:
+    jmp .L5211_hxlcl_atoll_bb19 # branch
+.L5211_hxlcl_atoll_bb18:
     mov r11, 48 # hv payload
     mov r10, [rbp - 312] # reload L37 from spill slot
     mov r10, r10 # hv payload
@@ -6326,10 +6326,10 @@ hxlcl_atoll:
     mov r11, [rbp - 872] # tag L51 from tag-slot
     mov [rbp - 504], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
-    jmp .L7ff7_hxlcl_atoll_bb19 # branch
-.L7ff7_hxlcl_atoll_bb19:
-    jmp .L7ff7_hxlcl_atoll_bb14 # branch
-.L7ff7_hxlcl_atoll_bb20:
+    jmp .L5211_hxlcl_atoll_bb19 # branch
+.L5211_hxlcl_atoll_bb19:
+    jmp .L5211_hxlcl_atoll_bb14 # branch
+.L5211_hxlcl_atoll_bb20:
     mov r11, [rbp - 280] # reload L33 from spill slot
     mov r11, r11 # hv payload
     mov r10, 0 # hv payload
@@ -6353,7 +6353,7 @@ hxlcl_atoll:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_atoll_bb21:
+.L5211_hxlcl_atoll_bb21:
     mov rax, [rbp - 280] # reload L33 from spill slot
     mov rax, rax # hv payload
     add rsp, 864 # epilogue: free spill frame
@@ -6381,7 +6381,7 @@ hxlcl_atoi:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 56], r11 # store tag L0
     mov rbx, rdi # cabi ingress param payload
-.L7ff7_hxlcl_atoi_bb0:
+.L5211_hxlcl_atoi_bb0:
     mov rdi, rbx # hv payload
     call hxlcl_atoll # cabi call hxlcl_atoll
     mov r12, rax # cabi: unbox call result (rax)
@@ -6413,7 +6413,7 @@ hxlcl_strdup:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 176], r11 # store tag L0
     mov rbx, rdi # cabi ingress param payload
-.L7ff7_hxlcl_strdup_bb0:
+.L5211_hxlcl_strdup_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -6437,8 +6437,8 @@ hxlcl_strdup:
     mov r11, [rbp - 208] # tag L4 from tag-slot
     mov [rbp - 216], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
-    jmp .L7ff7_hxlcl_strdup_bb1 # branch
-.L7ff7_hxlcl_strdup_bb1:
+    jmp .L5211_hxlcl_strdup_bb1 # branch
+.L5211_hxlcl_strdup_bb1:
     mov r11, 0 # hv payload
     mov r10, [rbp - 56] # reload L5 from spill slot
     mov r10, r10 # hv payload
@@ -6450,9 +6450,9 @@ hxlcl_strdup:
     mov [rbp - 64], r10 # spill L6 to slot
     mov r10, [rbp - 64] # reload L6 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strdup_bb3 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strdup_bb2 # jump -> then
-.L7ff7_hxlcl_strdup_bb2:
+    jz .L5211_hxlcl_strdup_bb3 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strdup_bb2 # jump -> then
+.L5211_hxlcl_strdup_bb2:
     mov r11, 1 # hv payload
     mov r10, r14 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -6475,8 +6475,8 @@ hxlcl_strdup:
     mov r11, [rbp - 240] # tag L8 from tag-slot
     mov [rbp - 216], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
-    jmp .L7ff7_hxlcl_strdup_bb1 # branch
-.L7ff7_hxlcl_strdup_bb3:
+    jmp .L5211_hxlcl_strdup_bb1 # branch
+.L5211_hxlcl_strdup_bb3:
     mov r11, 1 # hv payload
     mov r10, r14 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -6504,8 +6504,8 @@ hxlcl_strdup:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 280], r11 # store tag L13
     mov [rbp - 120], r10 # spill L13 to slot
-    jmp .L7ff7_hxlcl_strdup_bb4 # branch
-.L7ff7_hxlcl_strdup_bb4:
+    jmp .L5211_hxlcl_strdup_bb4 # branch
+.L5211_hxlcl_strdup_bb4:
     mov r11, r14 # hv payload
     mov r10, [rbp - 120] # reload L13 from spill slot
     mov r10, r10 # hv payload
@@ -6517,9 +6517,9 @@ hxlcl_strdup:
     mov [rbp - 128], r10 # spill L14 to slot
     mov r10, [rbp - 128] # reload L14 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strdup_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strdup_bb5 # jump -> then
-.L7ff7_hxlcl_strdup_bb5:
+    jz .L5211_hxlcl_strdup_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strdup_bb5 # jump -> then
+.L5211_hxlcl_strdup_bb5:
     mov r10, r13 # hv payload
     mov r11, [rbp - 120] # reload L13 from spill slot
     mov r11, r11 # hv payload
@@ -6558,8 +6558,8 @@ hxlcl_strdup:
     mov r11, [rbp - 320] # tag L18 from tag-slot
     mov [rbp - 280], r11 # store tag L13
     mov [rbp - 120], r10 # spill L13 to slot
-    jmp .L7ff7_hxlcl_strdup_bb4 # branch
-.L7ff7_hxlcl_strdup_bb6:
+    jmp .L5211_hxlcl_strdup_bb4 # branch
+.L5211_hxlcl_strdup_bb6:
     mov r10, [rbp - 112] # reload L12 from spill slot
     mov r10, r10 # hv payload
     mov r11, r14 # hv payload
@@ -6601,7 +6601,7 @@ hxlcl_strndup:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 256], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_strndup_bb0:
+.L5211_hxlcl_strndup_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -6619,9 +6619,9 @@ hxlcl_strndup:
     mov r11, 2 # materialize tag imm 2
     mov [rbp - 280], r11 # store tag L4
     test r15, r15 # br_cond test
-    jz .L7ff7_hxlcl_strndup_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strndup_bb1 # jump -> then
-.L7ff7_hxlcl_strndup_bb1:
+    jz .L5211_hxlcl_strndup_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strndup_bb1 # jump -> then
+.L5211_hxlcl_strndup_bb1:
     mov rax, 0 # hv payload
     add rsp, 432 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -6632,7 +6632,7 @@ hxlcl_strndup:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_strndup_bb2:
+.L5211_hxlcl_strndup_bb2:
     mov r10, 0 # assign L6
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 296], r11 # store tag L6
@@ -6641,8 +6641,8 @@ hxlcl_strndup:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 304], r11 # store tag L7
     mov [rbp - 72], r10 # spill L7 to slot
-    jmp .L7ff7_hxlcl_strndup_bb3 # branch
-.L7ff7_hxlcl_strndup_bb3:
+    jmp .L5211_hxlcl_strndup_bb3 # branch
+.L5211_hxlcl_strndup_bb3:
     mov r11, 0 # hv payload
     mov r10, [rbp - 72] # reload L7 from spill slot
     mov r10, r10 # hv payload
@@ -6654,9 +6654,9 @@ hxlcl_strndup:
     mov [rbp - 80], r10 # spill L8 to slot
     mov r10, [rbp - 80] # reload L8 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strndup_bb5 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strndup_bb4 # jump -> then
-.L7ff7_hxlcl_strndup_bb4:
+    jz .L5211_hxlcl_strndup_bb5 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strndup_bb4 # jump -> then
+.L5211_hxlcl_strndup_bb4:
     mov r11, r12 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -6682,9 +6682,9 @@ hxlcl_strndup:
     mov [rbp - 104], r10 # spill L11 to slot
     mov r10, [rbp - 104] # reload L11 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strndup_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strndup_bb6 # jump -> then
-.L7ff7_hxlcl_strndup_bb5:
+    jz .L5211_hxlcl_strndup_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strndup_bb6 # jump -> then
+.L5211_hxlcl_strndup_bb5:
     mov r11, 1 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -6713,14 +6713,14 @@ hxlcl_strndup:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 424], r11 # store tag L22
     mov [rbp - 192], r10 # spill L22 to slot
-    jmp .L7ff7_hxlcl_strndup_bb12 # branch
-.L7ff7_hxlcl_strndup_bb6:
+    jmp .L5211_hxlcl_strndup_bb12 # branch
+.L5211_hxlcl_strndup_bb6:
     mov r10, 0 # assign L7
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 304], r11 # store tag L7
     mov [rbp - 72], r10 # spill L7 to slot
-    jmp .L7ff7_hxlcl_strndup_bb11 # branch
-.L7ff7_hxlcl_strndup_bb7:
+    jmp .L5211_hxlcl_strndup_bb11 # branch
+.L5211_hxlcl_strndup_bb7:
     mov r10, r14 # hv payload
     mov r11, [rbp - 64] # reload L6 from spill slot
     mov r11, r11 # hv payload
@@ -6745,15 +6745,15 @@ hxlcl_strndup:
     mov [rbp - 136], r10 # spill L15 to slot
     mov r10, [rbp - 136] # reload L15 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strndup_bb9 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strndup_bb8 # jump -> then
-.L7ff7_hxlcl_strndup_bb8:
+    jz .L5211_hxlcl_strndup_bb9 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strndup_bb8 # jump -> then
+.L5211_hxlcl_strndup_bb8:
     mov r10, 0 # assign L7
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 304], r11 # store tag L7
     mov [rbp - 72], r10 # spill L7 to slot
-    jmp .L7ff7_hxlcl_strndup_bb10 # branch
-.L7ff7_hxlcl_strndup_bb9:
+    jmp .L5211_hxlcl_strndup_bb10 # branch
+.L5211_hxlcl_strndup_bb9:
     mov r11, 1 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -6766,12 +6766,12 @@ hxlcl_strndup:
     mov r11, [rbp - 384] # tag L17 from tag-slot
     mov [rbp - 296], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
-    jmp .L7ff7_hxlcl_strndup_bb10 # branch
-.L7ff7_hxlcl_strndup_bb10:
-    jmp .L7ff7_hxlcl_strndup_bb11 # branch
-.L7ff7_hxlcl_strndup_bb11:
-    jmp .L7ff7_hxlcl_strndup_bb3 # branch
-.L7ff7_hxlcl_strndup_bb12:
+    jmp .L5211_hxlcl_strndup_bb10 # branch
+.L5211_hxlcl_strndup_bb10:
+    jmp .L5211_hxlcl_strndup_bb11 # branch
+.L5211_hxlcl_strndup_bb11:
+    jmp .L5211_hxlcl_strndup_bb3 # branch
+.L5211_hxlcl_strndup_bb12:
     mov r11, [rbp - 64] # reload L6 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 192] # reload L22 from spill slot
@@ -6784,9 +6784,9 @@ hxlcl_strndup:
     mov [rbp - 200], r10 # spill L23 to slot
     mov r10, [rbp - 200] # reload L23 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_strndup_bb14 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_strndup_bb13 # jump -> then
-.L7ff7_hxlcl_strndup_bb13:
+    jz .L5211_hxlcl_strndup_bb14 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strndup_bb13 # jump -> then
+.L5211_hxlcl_strndup_bb13:
     mov r10, r14 # hv payload
     mov r11, [rbp - 192] # reload L22 from spill slot
     mov r11, r11 # hv payload
@@ -6825,8 +6825,8 @@ hxlcl_strndup:
     mov r11, [rbp - 464] # tag L27 from tag-slot
     mov [rbp - 424], r11 # store tag L22
     mov [rbp - 192], r10 # spill L22 to slot
-    jmp .L7ff7_hxlcl_strndup_bb12 # branch
-.L7ff7_hxlcl_strndup_bb14:
+    jmp .L5211_hxlcl_strndup_bb12 # branch
+.L5211_hxlcl_strndup_bb14:
     mov r10, [rbp - 184] # reload L21 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 64] # reload L6 from spill slot
@@ -6869,7 +6869,7 @@ hxlcl_calloc:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 104], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_calloc_bb0:
+.L5211_hxlcl_calloc_bb0:
     mov r11, r12 # hv payload
     mov r10, rbx # hv payload
     imul r10, r11 # __hx_payload_mul: r10 = a.pl imul b.pl
@@ -6892,8 +6892,8 @@ hxlcl_calloc:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 144], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
-    jmp .L7ff7_hxlcl_calloc_bb1 # branch
-.L7ff7_hxlcl_calloc_bb1:
+    jmp .L5211_hxlcl_calloc_bb1 # branch
+.L5211_hxlcl_calloc_bb1:
     mov r11, r14 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -6905,9 +6905,9 @@ hxlcl_calloc:
     mov [rbp - 72], r10 # spill L7 to slot
     mov r10, [rbp - 72] # reload L7 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_calloc_bb3 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_calloc_bb2 # jump -> then
-.L7ff7_hxlcl_calloc_bb2:
+    jz .L5211_hxlcl_calloc_bb3 # jump-if-zero -> else
+    jmp .L5211_hxlcl_calloc_bb2 # jump -> then
+.L5211_hxlcl_calloc_bb2:
     mov r10, [rbp - 56] # reload L5 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 64] # reload L6 from spill slot
@@ -6932,8 +6932,8 @@ hxlcl_calloc:
     mov r11, [rbp - 168] # tag L9 from tag-slot
     mov [rbp - 144], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
-    jmp .L7ff7_hxlcl_calloc_bb1 # branch
-.L7ff7_hxlcl_calloc_bb3:
+    jmp .L5211_hxlcl_calloc_bb1 # branch
+.L5211_hxlcl_calloc_bb3:
     mov rax, [rbp - 56] # reload L5 from spill slot
     mov rax, rax # hv payload
     add rsp, 128 # epilogue: free spill frame
@@ -6964,7 +6964,7 @@ hxlcl_realloc:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 176], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_realloc_bb0:
+.L5211_hxlcl_realloc_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -7022,22 +7022,22 @@ hxlcl_realloc:
     mov [rbp - 104], r10 # spill L11 to slot
     mov r10, [rbp - 104] # reload L11 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_realloc_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_realloc_bb1 # jump -> then
-.L7ff7_hxlcl_realloc_bb1:
+    jz .L5211_hxlcl_realloc_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_realloc_bb1 # jump -> then
+.L5211_hxlcl_realloc_bb1:
     mov r11, [rbp - 88] # reload L9 from spill slot
     mov r10, r11 # assign L10
     mov r11, [rbp - 240] # tag L9 from tag-slot
     mov [rbp - 248], r11 # store tag L10
     mov [rbp - 96], r10 # spill L10 to slot
-    jmp .L7ff7_hxlcl_realloc_bb2 # branch
-.L7ff7_hxlcl_realloc_bb2:
+    jmp .L5211_hxlcl_realloc_bb2 # branch
+.L5211_hxlcl_realloc_bb2:
     mov r10, 0 # assign L13
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 272], r11 # store tag L13
     mov [rbp - 120], r10 # spill L13 to slot
-    jmp .L7ff7_hxlcl_realloc_bb3 # branch
-.L7ff7_hxlcl_realloc_bb3:
+    jmp .L5211_hxlcl_realloc_bb3 # branch
+.L5211_hxlcl_realloc_bb3:
     mov r11, [rbp - 96] # reload L10 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 120] # reload L13 from spill slot
@@ -7050,9 +7050,9 @@ hxlcl_realloc:
     mov [rbp - 128], r10 # spill L14 to slot
     mov r10, [rbp - 128] # reload L14 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_realloc_bb5 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_realloc_bb4 # jump -> then
-.L7ff7_hxlcl_realloc_bb4:
+    jz .L5211_hxlcl_realloc_bb5 # jump-if-zero -> else
+    jmp .L5211_hxlcl_realloc_bb4 # jump -> then
+.L5211_hxlcl_realloc_bb4:
     mov r10, r14 # hv payload
     mov r11, [rbp - 120] # reload L13 from spill slot
     mov r11, r11 # hv payload
@@ -7091,8 +7091,8 @@ hxlcl_realloc:
     mov r11, [rbp - 312] # tag L18 from tag-slot
     mov [rbp - 272], r11 # store tag L13
     mov [rbp - 120], r10 # spill L13 to slot
-    jmp .L7ff7_hxlcl_realloc_bb3 # branch
-.L7ff7_hxlcl_realloc_bb5:
+    jmp .L5211_hxlcl_realloc_bb3 # branch
+.L5211_hxlcl_realloc_bb5:
     mov rax, [rbp - 56] # reload L5 from spill slot
     mov rax, rax # hv payload
     add rsp, 272 # epilogue: free spill frame
@@ -7117,7 +7117,7 @@ hxlcl_getpid:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 64 # prologue: alloc spill frame
-.L7ff7_hxlcl_getpid_bb0:
+.L5211_hxlcl_getpid_bb0:
     mov rbx, 20 # assign L0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 64], r11 # store tag L0
@@ -7126,17 +7126,17 @@ hxlcl_getpid:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 72], r11 # store tag L1
     test r12, r12 # br_cond test
-    jz .L7ff7_hxlcl_getpid_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getpid_bb1 # jump -> then
-.L7ff7_hxlcl_getpid_bb1:
+    jz .L5211_hxlcl_getpid_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getpid_bb1 # jump -> then
+.L5211_hxlcl_getpid_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r14, r10 # leaf: payload → dst L3
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 88], r11 # store tag L3
     test r14, r14 # br_cond test
-    jz .L7ff7_hxlcl_getpid_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getpid_bb3 # jump -> then
-.L7ff7_hxlcl_getpid_bb2:
+    jz .L5211_hxlcl_getpid_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getpid_bb3 # jump -> then
+.L5211_hxlcl_getpid_bb2:
     mov rax, rbx # hv payload
     syscall # __hx_syscall0: Linux syscall
     mov r10, rax # __hx_syscall0: r10 = result
@@ -7154,18 +7154,18 @@ hxlcl_getpid:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_getpid_bb3:
+.L5211_hxlcl_getpid_bb3:
     mov rbx, 39 # assign L0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 64], r11 # store tag L0
-    jmp .L7ff7_hxlcl_getpid_bb5 # branch
-.L7ff7_hxlcl_getpid_bb4:
+    jmp .L5211_hxlcl_getpid_bb5 # branch
+.L5211_hxlcl_getpid_bb4:
     mov rbx, 172 # assign L0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 64], r11 # store tag L0
-    jmp .L7ff7_hxlcl_getpid_bb5 # branch
-.L7ff7_hxlcl_getpid_bb5:
-    jmp .L7ff7_hxlcl_getpid_bb2 # branch
+    jmp .L5211_hxlcl_getpid_bb5 # branch
+.L5211_hxlcl_getpid_bb5:
+    jmp .L5211_hxlcl_getpid_bb2 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 64 # epilogue: free spill frame
@@ -7190,7 +7190,7 @@ hxlcl_getuid:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 64 # prologue: alloc spill frame
-.L7ff7_hxlcl_getuid_bb0:
+.L5211_hxlcl_getuid_bb0:
     mov rbx, 24 # assign L0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 64], r11 # store tag L0
@@ -7199,17 +7199,17 @@ hxlcl_getuid:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 72], r11 # store tag L1
     test r12, r12 # br_cond test
-    jz .L7ff7_hxlcl_getuid_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getuid_bb1 # jump -> then
-.L7ff7_hxlcl_getuid_bb1:
+    jz .L5211_hxlcl_getuid_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getuid_bb1 # jump -> then
+.L5211_hxlcl_getuid_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r14, r10 # leaf: payload → dst L3
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 88], r11 # store tag L3
     test r14, r14 # br_cond test
-    jz .L7ff7_hxlcl_getuid_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getuid_bb3 # jump -> then
-.L7ff7_hxlcl_getuid_bb2:
+    jz .L5211_hxlcl_getuid_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getuid_bb3 # jump -> then
+.L5211_hxlcl_getuid_bb2:
     mov rax, rbx # hv payload
     syscall # __hx_syscall0: Linux syscall
     mov r10, rax # __hx_syscall0: r10 = result
@@ -7227,18 +7227,18 @@ hxlcl_getuid:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_getuid_bb3:
+.L5211_hxlcl_getuid_bb3:
     mov rbx, 102 # assign L0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 64], r11 # store tag L0
-    jmp .L7ff7_hxlcl_getuid_bb5 # branch
-.L7ff7_hxlcl_getuid_bb4:
+    jmp .L5211_hxlcl_getuid_bb5 # branch
+.L5211_hxlcl_getuid_bb4:
     mov rbx, 174 # assign L0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 64], r11 # store tag L0
-    jmp .L7ff7_hxlcl_getuid_bb5 # branch
-.L7ff7_hxlcl_getuid_bb5:
-    jmp .L7ff7_hxlcl_getuid_bb2 # branch
+    jmp .L5211_hxlcl_getuid_bb5 # branch
+.L5211_hxlcl_getuid_bb5:
+    jmp .L5211_hxlcl_getuid_bb2 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 64 # epilogue: free spill frame
@@ -7263,7 +7263,7 @@ hxlcl_getgid:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 64 # prologue: alloc spill frame
-.L7ff7_hxlcl_getgid_bb0:
+.L5211_hxlcl_getgid_bb0:
     mov rbx, 47 # assign L0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 64], r11 # store tag L0
@@ -7272,17 +7272,17 @@ hxlcl_getgid:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 72], r11 # store tag L1
     test r12, r12 # br_cond test
-    jz .L7ff7_hxlcl_getgid_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getgid_bb1 # jump -> then
-.L7ff7_hxlcl_getgid_bb1:
+    jz .L5211_hxlcl_getgid_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getgid_bb1 # jump -> then
+.L5211_hxlcl_getgid_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r14, r10 # leaf: payload → dst L3
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 88], r11 # store tag L3
     test r14, r14 # br_cond test
-    jz .L7ff7_hxlcl_getgid_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getgid_bb3 # jump -> then
-.L7ff7_hxlcl_getgid_bb2:
+    jz .L5211_hxlcl_getgid_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getgid_bb3 # jump -> then
+.L5211_hxlcl_getgid_bb2:
     mov rax, rbx # hv payload
     syscall # __hx_syscall0: Linux syscall
     mov r10, rax # __hx_syscall0: r10 = result
@@ -7300,18 +7300,18 @@ hxlcl_getgid:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_getgid_bb3:
+.L5211_hxlcl_getgid_bb3:
     mov rbx, 104 # assign L0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 64], r11 # store tag L0
-    jmp .L7ff7_hxlcl_getgid_bb5 # branch
-.L7ff7_hxlcl_getgid_bb4:
+    jmp .L5211_hxlcl_getgid_bb5 # branch
+.L5211_hxlcl_getgid_bb4:
     mov rbx, 176 # assign L0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 64], r11 # store tag L0
-    jmp .L7ff7_hxlcl_getgid_bb5 # branch
-.L7ff7_hxlcl_getgid_bb5:
-    jmp .L7ff7_hxlcl_getgid_bb2 # branch
+    jmp .L5211_hxlcl_getgid_bb5 # branch
+.L5211_hxlcl_getgid_bb5:
+    jmp .L5211_hxlcl_getgid_bb2 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 64 # epilogue: free spill frame
@@ -7336,7 +7336,7 @@ hxlcl_getppid:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 64 # prologue: alloc spill frame
-.L7ff7_hxlcl_getppid_bb0:
+.L5211_hxlcl_getppid_bb0:
     mov rbx, 39 # assign L0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 64], r11 # store tag L0
@@ -7345,17 +7345,17 @@ hxlcl_getppid:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 72], r11 # store tag L1
     test r12, r12 # br_cond test
-    jz .L7ff7_hxlcl_getppid_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getppid_bb1 # jump -> then
-.L7ff7_hxlcl_getppid_bb1:
+    jz .L5211_hxlcl_getppid_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getppid_bb1 # jump -> then
+.L5211_hxlcl_getppid_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r14, r10 # leaf: payload → dst L3
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 88], r11 # store tag L3
     test r14, r14 # br_cond test
-    jz .L7ff7_hxlcl_getppid_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getppid_bb3 # jump -> then
-.L7ff7_hxlcl_getppid_bb2:
+    jz .L5211_hxlcl_getppid_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getppid_bb3 # jump -> then
+.L5211_hxlcl_getppid_bb2:
     mov rax, rbx # hv payload
     syscall # __hx_syscall0: Linux syscall
     mov r10, rax # __hx_syscall0: r10 = result
@@ -7373,18 +7373,18 @@ hxlcl_getppid:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_getppid_bb3:
+.L5211_hxlcl_getppid_bb3:
     mov rbx, 110 # assign L0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 64], r11 # store tag L0
-    jmp .L7ff7_hxlcl_getppid_bb5 # branch
-.L7ff7_hxlcl_getppid_bb4:
+    jmp .L5211_hxlcl_getppid_bb5 # branch
+.L5211_hxlcl_getppid_bb4:
     mov rbx, 173 # assign L0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 64], r11 # store tag L0
-    jmp .L7ff7_hxlcl_getppid_bb5 # branch
-.L7ff7_hxlcl_getppid_bb5:
-    jmp .L7ff7_hxlcl_getppid_bb2 # branch
+    jmp .L5211_hxlcl_getppid_bb5 # branch
+.L5211_hxlcl_getppid_bb5:
+    jmp .L5211_hxlcl_getppid_bb2 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 64 # epilogue: free spill frame
@@ -7409,7 +7409,7 @@ hxlcl_geteuid:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 64 # prologue: alloc spill frame
-.L7ff7_hxlcl_geteuid_bb0:
+.L5211_hxlcl_geteuid_bb0:
     mov rbx, 25 # assign L0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 64], r11 # store tag L0
@@ -7418,17 +7418,17 @@ hxlcl_geteuid:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 72], r11 # store tag L1
     test r12, r12 # br_cond test
-    jz .L7ff7_hxlcl_geteuid_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_geteuid_bb1 # jump -> then
-.L7ff7_hxlcl_geteuid_bb1:
+    jz .L5211_hxlcl_geteuid_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_geteuid_bb1 # jump -> then
+.L5211_hxlcl_geteuid_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r14, r10 # leaf: payload → dst L3
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 88], r11 # store tag L3
     test r14, r14 # br_cond test
-    jz .L7ff7_hxlcl_geteuid_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_geteuid_bb3 # jump -> then
-.L7ff7_hxlcl_geteuid_bb2:
+    jz .L5211_hxlcl_geteuid_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_geteuid_bb3 # jump -> then
+.L5211_hxlcl_geteuid_bb2:
     mov rax, rbx # hv payload
     syscall # __hx_syscall0: Linux syscall
     mov r10, rax # __hx_syscall0: r10 = result
@@ -7446,18 +7446,18 @@ hxlcl_geteuid:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_geteuid_bb3:
+.L5211_hxlcl_geteuid_bb3:
     mov rbx, 107 # assign L0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 64], r11 # store tag L0
-    jmp .L7ff7_hxlcl_geteuid_bb5 # branch
-.L7ff7_hxlcl_geteuid_bb4:
+    jmp .L5211_hxlcl_geteuid_bb5 # branch
+.L5211_hxlcl_geteuid_bb4:
     mov rbx, 175 # assign L0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 64], r11 # store tag L0
-    jmp .L7ff7_hxlcl_geteuid_bb5 # branch
-.L7ff7_hxlcl_geteuid_bb5:
-    jmp .L7ff7_hxlcl_geteuid_bb2 # branch
+    jmp .L5211_hxlcl_geteuid_bb5 # branch
+.L5211_hxlcl_geteuid_bb5:
+    jmp .L5211_hxlcl_geteuid_bb2 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 64 # epilogue: free spill frame
@@ -7482,7 +7482,7 @@ hxlcl_getegid:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 64 # prologue: alloc spill frame
-.L7ff7_hxlcl_getegid_bb0:
+.L5211_hxlcl_getegid_bb0:
     mov rbx, 43 # assign L0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 64], r11 # store tag L0
@@ -7491,17 +7491,17 @@ hxlcl_getegid:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 72], r11 # store tag L1
     test r12, r12 # br_cond test
-    jz .L7ff7_hxlcl_getegid_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getegid_bb1 # jump -> then
-.L7ff7_hxlcl_getegid_bb1:
+    jz .L5211_hxlcl_getegid_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getegid_bb1 # jump -> then
+.L5211_hxlcl_getegid_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r14, r10 # leaf: payload → dst L3
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 88], r11 # store tag L3
     test r14, r14 # br_cond test
-    jz .L7ff7_hxlcl_getegid_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getegid_bb3 # jump -> then
-.L7ff7_hxlcl_getegid_bb2:
+    jz .L5211_hxlcl_getegid_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getegid_bb3 # jump -> then
+.L5211_hxlcl_getegid_bb2:
     mov rax, rbx # hv payload
     syscall # __hx_syscall0: Linux syscall
     mov r10, rax # __hx_syscall0: r10 = result
@@ -7519,18 +7519,18 @@ hxlcl_getegid:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_getegid_bb3:
+.L5211_hxlcl_getegid_bb3:
     mov rbx, 108 # assign L0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 64], r11 # store tag L0
-    jmp .L7ff7_hxlcl_getegid_bb5 # branch
-.L7ff7_hxlcl_getegid_bb4:
+    jmp .L5211_hxlcl_getegid_bb5 # branch
+.L5211_hxlcl_getegid_bb4:
     mov rbx, 177 # assign L0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 64], r11 # store tag L0
-    jmp .L7ff7_hxlcl_getegid_bb5 # branch
-.L7ff7_hxlcl_getegid_bb5:
-    jmp .L7ff7_hxlcl_getegid_bb2 # branch
+    jmp .L5211_hxlcl_getegid_bb5 # branch
+.L5211_hxlcl_getegid_bb5:
+    jmp .L5211_hxlcl_getegid_bb2 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 64 # epilogue: free spill frame
@@ -7558,7 +7558,7 @@ hxlcl_close:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 168], r11 # store tag L0
     mov rbx, rdi # cabi ingress param payload
-.L7ff7_hxlcl_close_bb0:
+.L5211_hxlcl_close_bb0:
     mov r12, 6 # assign L1
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 176], r11 # store tag L1
@@ -7567,17 +7567,17 @@ hxlcl_close:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 184], r11 # store tag L2
     test r13, r13 # br_cond test
-    jz .L7ff7_hxlcl_close_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_close_bb1 # jump -> then
-.L7ff7_hxlcl_close_bb1:
+    jz .L5211_hxlcl_close_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_close_bb1 # jump -> then
+.L5211_hxlcl_close_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r15, r10 # leaf: payload → dst L4
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 200], r11 # store tag L4
     test r15, r15 # br_cond test
-    jz .L7ff7_hxlcl_close_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_close_bb3 # jump -> then
-.L7ff7_hxlcl_close_bb2:
+    jz .L5211_hxlcl_close_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_close_bb3 # jump -> then
+.L5211_hxlcl_close_bb2:
     mov rdi, rbx # hv payload
     mov rsi, 0 # hv payload
     mov rdx, 0 # hv payload
@@ -7621,30 +7621,30 @@ hxlcl_close:
     mov [rbp - 96], r10 # spill L10 to slot
     mov r10, [rbp - 96] # reload L10 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_close_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_close_bb6 # jump -> then
-.L7ff7_hxlcl_close_bb3:
+    jz .L5211_hxlcl_close_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_close_bb6 # jump -> then
+.L5211_hxlcl_close_bb3:
     mov r12, 3 # assign L1
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 176], r11 # store tag L1
-    jmp .L7ff7_hxlcl_close_bb5 # branch
-.L7ff7_hxlcl_close_bb4:
+    jmp .L5211_hxlcl_close_bb5 # branch
+.L5211_hxlcl_close_bb4:
     mov r12, 57 # assign L1
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 176], r11 # store tag L1
-    jmp .L7ff7_hxlcl_close_bb5 # branch
-.L7ff7_hxlcl_close_bb5:
-    jmp .L7ff7_hxlcl_close_bb2 # branch
-.L7ff7_hxlcl_close_bb6:
+    jmp .L5211_hxlcl_close_bb5 # branch
+.L5211_hxlcl_close_bb5:
+    jmp .L5211_hxlcl_close_bb2 # branch
+.L5211_hxlcl_close_bb6:
     mov r10, 1 # target_is_linux: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 264], r11 # store tag L12
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_close_bb9 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_close_bb8 # jump -> then
-.L7ff7_hxlcl_close_bb7:
+    jz .L5211_hxlcl_close_bb9 # jump-if-zero -> else
+    jmp .L5211_hxlcl_close_bb8 # jump -> then
+.L5211_hxlcl_close_bb7:
     mov rax, [rbp - 72] # reload L7 from spill slot
     mov rax, rax # hv payload
     add rsp, 272 # epilogue: free spill frame
@@ -7656,7 +7656,7 @@ hxlcl_close:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_close_bb8:
+.L5211_hxlcl_close_bb8:
     call __errno_location # cabi call __errno_location
     mov r10, rax # cabi: unbox call result (rax)
     mov r11, 0 # materialize tag imm 0
@@ -7691,8 +7691,8 @@ hxlcl_close:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 312], r11 # store tag L18
     mov [rbp - 160], r10 # spill L18 to slot
-    jmp .L7ff7_hxlcl_close_bb9 # branch
-.L7ff7_hxlcl_close_bb9:
+    jmp .L5211_hxlcl_close_bb9 # branch
+.L5211_hxlcl_close_bb9:
     mov rax, -1 # hv payload
     add rsp, 272 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -7725,7 +7725,7 @@ hxlcl_read:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 200], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_read_bb0:
+.L5211_hxlcl_read_bb0:
     mov r14, 3 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 208], r11 # store tag L3
@@ -7734,18 +7734,18 @@ hxlcl_read:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 216], r11 # store tag L4
     test r15, r15 # br_cond test
-    jz .L7ff7_hxlcl_read_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_read_bb1 # jump -> then
-.L7ff7_hxlcl_read_bb1:
+    jz .L5211_hxlcl_read_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_read_bb1 # jump -> then
+.L5211_hxlcl_read_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 232], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
     mov r10, [rbp - 64] # reload L6 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_read_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_read_bb3 # jump -> then
-.L7ff7_hxlcl_read_bb2:
+    jz .L5211_hxlcl_read_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_read_bb3 # jump -> then
+.L5211_hxlcl_read_bb2:
     mov rdi, rbx # hv payload
     mov rsi, r12 # hv payload
     mov rdx, r13 # hv payload
@@ -7789,30 +7789,30 @@ hxlcl_read:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_read_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_read_bb6 # jump -> then
-.L7ff7_hxlcl_read_bb3:
+    jz .L5211_hxlcl_read_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_read_bb6 # jump -> then
+.L5211_hxlcl_read_bb3:
     mov r14, 0 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 208], r11 # store tag L3
-    jmp .L7ff7_hxlcl_read_bb5 # branch
-.L7ff7_hxlcl_read_bb4:
+    jmp .L5211_hxlcl_read_bb5 # branch
+.L5211_hxlcl_read_bb4:
     mov r14, 63 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 208], r11 # store tag L3
-    jmp .L7ff7_hxlcl_read_bb5 # branch
-.L7ff7_hxlcl_read_bb5:
-    jmp .L7ff7_hxlcl_read_bb2 # branch
-.L7ff7_hxlcl_read_bb6:
+    jmp .L5211_hxlcl_read_bb5 # branch
+.L5211_hxlcl_read_bb5:
+    jmp .L5211_hxlcl_read_bb2 # branch
+.L5211_hxlcl_read_bb6:
     mov r10, 1 # target_is_linux: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 296], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
     mov r10, [rbp - 128] # reload L14 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_read_bb9 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_read_bb8 # jump -> then
-.L7ff7_hxlcl_read_bb7:
+    jz .L5211_hxlcl_read_bb9 # jump-if-zero -> else
+    jmp .L5211_hxlcl_read_bb8 # jump -> then
+.L5211_hxlcl_read_bb7:
     mov rax, [rbp - 88] # reload L9 from spill slot
     mov rax, rax # hv payload
     add rsp, 304 # epilogue: free spill frame
@@ -7824,7 +7824,7 @@ hxlcl_read:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_read_bb8:
+.L5211_hxlcl_read_bb8:
     call __errno_location # cabi call __errno_location
     mov r10, rax # cabi: unbox call result (rax)
     mov r11, 0 # materialize tag imm 0
@@ -7859,8 +7859,8 @@ hxlcl_read:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 344], r11 # store tag L20
     mov [rbp - 176], r10 # spill L20 to slot
-    jmp .L7ff7_hxlcl_read_bb9 # branch
-.L7ff7_hxlcl_read_bb9:
+    jmp .L5211_hxlcl_read_bb9 # branch
+.L5211_hxlcl_read_bb9:
     mov rax, -1 # hv payload
     add rsp, 304 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -7893,7 +7893,7 @@ hxlcl_lseek:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 200], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_lseek_bb0:
+.L5211_hxlcl_lseek_bb0:
     mov r14, 199 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 208], r11 # store tag L3
@@ -7902,18 +7902,18 @@ hxlcl_lseek:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 216], r11 # store tag L4
     test r15, r15 # br_cond test
-    jz .L7ff7_hxlcl_lseek_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_lseek_bb1 # jump -> then
-.L7ff7_hxlcl_lseek_bb1:
+    jz .L5211_hxlcl_lseek_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_lseek_bb1 # jump -> then
+.L5211_hxlcl_lseek_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 232], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
     mov r10, [rbp - 64] # reload L6 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_lseek_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_lseek_bb3 # jump -> then
-.L7ff7_hxlcl_lseek_bb2:
+    jz .L5211_hxlcl_lseek_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_lseek_bb3 # jump -> then
+.L5211_hxlcl_lseek_bb2:
     mov rdi, rbx # hv payload
     mov rsi, r12 # hv payload
     mov rdx, r13 # hv payload
@@ -7957,30 +7957,30 @@ hxlcl_lseek:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_lseek_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_lseek_bb6 # jump -> then
-.L7ff7_hxlcl_lseek_bb3:
+    jz .L5211_hxlcl_lseek_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_lseek_bb6 # jump -> then
+.L5211_hxlcl_lseek_bb3:
     mov r14, 8 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 208], r11 # store tag L3
-    jmp .L7ff7_hxlcl_lseek_bb5 # branch
-.L7ff7_hxlcl_lseek_bb4:
+    jmp .L5211_hxlcl_lseek_bb5 # branch
+.L5211_hxlcl_lseek_bb4:
     mov r14, 62 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 208], r11 # store tag L3
-    jmp .L7ff7_hxlcl_lseek_bb5 # branch
-.L7ff7_hxlcl_lseek_bb5:
-    jmp .L7ff7_hxlcl_lseek_bb2 # branch
-.L7ff7_hxlcl_lseek_bb6:
+    jmp .L5211_hxlcl_lseek_bb5 # branch
+.L5211_hxlcl_lseek_bb5:
+    jmp .L5211_hxlcl_lseek_bb2 # branch
+.L5211_hxlcl_lseek_bb6:
     mov r10, 1 # target_is_linux: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 296], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
     mov r10, [rbp - 128] # reload L14 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_lseek_bb9 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_lseek_bb8 # jump -> then
-.L7ff7_hxlcl_lseek_bb7:
+    jz .L5211_hxlcl_lseek_bb9 # jump-if-zero -> else
+    jmp .L5211_hxlcl_lseek_bb8 # jump -> then
+.L5211_hxlcl_lseek_bb7:
     mov rax, [rbp - 88] # reload L9 from spill slot
     mov rax, rax # hv payload
     add rsp, 304 # epilogue: free spill frame
@@ -7992,7 +7992,7 @@ hxlcl_lseek:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_lseek_bb8:
+.L5211_hxlcl_lseek_bb8:
     call __errno_location # cabi call __errno_location
     mov r10, rax # cabi: unbox call result (rax)
     mov r11, 0 # materialize tag imm 0
@@ -8027,8 +8027,8 @@ hxlcl_lseek:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 344], r11 # store tag L20
     mov [rbp - 176], r10 # spill L20 to slot
-    jmp .L7ff7_hxlcl_lseek_bb9 # branch
-.L7ff7_hxlcl_lseek_bb9:
+    jmp .L5211_hxlcl_lseek_bb9 # branch
+.L5211_hxlcl_lseek_bb9:
     mov rax, -1 # hv payload
     add rsp, 304 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -8058,7 +8058,7 @@ hxlcl_dup2:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 184], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_dup2_bb0:
+.L5211_hxlcl_dup2_bb0:
     mov r13, 90 # assign L2
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 192], r11 # store tag L2
@@ -8067,18 +8067,18 @@ hxlcl_dup2:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 200], r11 # store tag L3
     test r14, r14 # br_cond test
-    jz .L7ff7_hxlcl_dup2_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_dup2_bb1 # jump -> then
-.L7ff7_hxlcl_dup2_bb1:
+    jz .L5211_hxlcl_dup2_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_dup2_bb1 # jump -> then
+.L5211_hxlcl_dup2_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 216], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
     mov r10, [rbp - 56] # reload L5 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_dup2_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_dup2_bb3 # jump -> then
-.L7ff7_hxlcl_dup2_bb2:
+    jz .L5211_hxlcl_dup2_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_dup2_bb3 # jump -> then
+.L5211_hxlcl_dup2_bb2:
     mov rdi, rbx # hv payload
     mov rsi, r12 # hv payload
     mov rdx, 0 # hv payload
@@ -8122,30 +8122,30 @@ hxlcl_dup2:
     mov [rbp - 104], r10 # spill L11 to slot
     mov r10, [rbp - 104] # reload L11 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_dup2_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_dup2_bb6 # jump -> then
-.L7ff7_hxlcl_dup2_bb3:
+    jz .L5211_hxlcl_dup2_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_dup2_bb6 # jump -> then
+.L5211_hxlcl_dup2_bb3:
     mov r13, 33 # assign L2
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 192], r11 # store tag L2
-    jmp .L7ff7_hxlcl_dup2_bb5 # branch
-.L7ff7_hxlcl_dup2_bb4:
+    jmp .L5211_hxlcl_dup2_bb5 # branch
+.L5211_hxlcl_dup2_bb4:
     mov r13, 24 # assign L2
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 192], r11 # store tag L2
-    jmp .L7ff7_hxlcl_dup2_bb5 # branch
-.L7ff7_hxlcl_dup2_bb5:
-    jmp .L7ff7_hxlcl_dup2_bb2 # branch
-.L7ff7_hxlcl_dup2_bb6:
+    jmp .L5211_hxlcl_dup2_bb5 # branch
+.L5211_hxlcl_dup2_bb5:
+    jmp .L5211_hxlcl_dup2_bb2 # branch
+.L5211_hxlcl_dup2_bb6:
     mov r10, 1 # target_is_linux: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 280], r11 # store tag L13
     mov [rbp - 120], r10 # spill L13 to slot
     mov r10, [rbp - 120] # reload L13 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_dup2_bb9 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_dup2_bb8 # jump -> then
-.L7ff7_hxlcl_dup2_bb7:
+    jz .L5211_hxlcl_dup2_bb9 # jump-if-zero -> else
+    jmp .L5211_hxlcl_dup2_bb8 # jump -> then
+.L5211_hxlcl_dup2_bb7:
     mov rax, [rbp - 80] # reload L8 from spill slot
     mov rax, rax # hv payload
     add rsp, 288 # epilogue: free spill frame
@@ -8157,7 +8157,7 @@ hxlcl_dup2:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_dup2_bb8:
+.L5211_hxlcl_dup2_bb8:
     call __errno_location # cabi call __errno_location
     mov r10, rax # cabi: unbox call result (rax)
     mov r11, 0 # materialize tag imm 0
@@ -8192,8 +8192,8 @@ hxlcl_dup2:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 328], r11 # store tag L19
     mov [rbp - 168], r10 # spill L19 to slot
-    jmp .L7ff7_hxlcl_dup2_bb9 # branch
-.L7ff7_hxlcl_dup2_bb9:
+    jmp .L5211_hxlcl_dup2_bb9 # branch
+.L5211_hxlcl_dup2_bb9:
     mov rax, -1 # hv payload
     add rsp, 288 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -8223,7 +8223,7 @@ hxlcl_mkdir:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 192], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_mkdir_bb0:
+.L5211_hxlcl_mkdir_bb0:
     mov r13, 0 # assign L2
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 200], r11 # store tag L2
@@ -8232,18 +8232,18 @@ hxlcl_mkdir:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 208], r11 # store tag L3
     test r14, r14 # br_cond test
-    jz .L7ff7_hxlcl_mkdir_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_mkdir_bb1 # jump -> then
-.L7ff7_hxlcl_mkdir_bb1:
+    jz .L5211_hxlcl_mkdir_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_mkdir_bb1 # jump -> then
+.L5211_hxlcl_mkdir_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 224], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
     mov r10, [rbp - 56] # reload L5 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_mkdir_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_mkdir_bb3 # jump -> then
-.L7ff7_hxlcl_mkdir_bb2:
+    jz .L5211_hxlcl_mkdir_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_mkdir_bb3 # jump -> then
+.L5211_hxlcl_mkdir_bb2:
     mov rdi, rbx # hv payload
     mov rsi, r12 # hv payload
     mov rdx, 0 # hv payload
@@ -8261,8 +8261,8 @@ hxlcl_mkdir:
     mov r13, r10 # assign L2
     mov r11, [rbp - 256] # tag L9 from tag-slot
     mov [rbp - 200], r11 # store tag L2
-    jmp .L7ff7_hxlcl_mkdir_bb6 # branch
-.L7ff7_hxlcl_mkdir_bb3:
+    jmp .L5211_hxlcl_mkdir_bb6 # branch
+.L5211_hxlcl_mkdir_bb3:
     mov rdi, rbx # hv payload
     mov rsi, r12 # hv payload
     mov rdx, 0 # hv payload
@@ -8280,8 +8280,8 @@ hxlcl_mkdir:
     mov r13, r10 # assign L2
     mov r11, [rbp - 240] # tag L7 from tag-slot
     mov [rbp - 200], r11 # store tag L2
-    jmp .L7ff7_hxlcl_mkdir_bb5 # branch
-.L7ff7_hxlcl_mkdir_bb4:
+    jmp .L5211_hxlcl_mkdir_bb5 # branch
+.L5211_hxlcl_mkdir_bb4:
     mov rdi, -100 # hv payload
     mov rsi, rbx # hv payload
     mov rdx, r12 # hv payload
@@ -8299,10 +8299,10 @@ hxlcl_mkdir:
     mov r13, r10 # assign L2
     mov r11, [rbp - 248] # tag L8 from tag-slot
     mov [rbp - 200], r11 # store tag L2
-    jmp .L7ff7_hxlcl_mkdir_bb5 # branch
-.L7ff7_hxlcl_mkdir_bb5:
-    jmp .L7ff7_hxlcl_mkdir_bb6 # branch
-.L7ff7_hxlcl_mkdir_bb6:
+    jmp .L5211_hxlcl_mkdir_bb5 # branch
+.L5211_hxlcl_mkdir_bb5:
+    jmp .L5211_hxlcl_mkdir_bb6 # branch
+.L5211_hxlcl_mkdir_bb6:
     mov r11, 0 # hv payload
     mov r10, r13 # hv payload
     cmp r10, r11 # __hx_payload_lt: cmp payloads
@@ -8327,18 +8327,18 @@ hxlcl_mkdir:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_mkdir_bb8 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_mkdir_bb7 # jump -> then
-.L7ff7_hxlcl_mkdir_bb7:
+    jz .L5211_hxlcl_mkdir_bb8 # jump-if-zero -> else
+    jmp .L5211_hxlcl_mkdir_bb7 # jump -> then
+.L5211_hxlcl_mkdir_bb7:
     mov r10, 1 # target_is_linux: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 296], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
     mov r10, [rbp - 128] # reload L14 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_mkdir_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_mkdir_bb9 # jump -> then
-.L7ff7_hxlcl_mkdir_bb8:
+    jz .L5211_hxlcl_mkdir_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_mkdir_bb9 # jump -> then
+.L5211_hxlcl_mkdir_bb8:
     mov rax, r13 # hv payload
     add rsp, 304 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -8349,7 +8349,7 @@ hxlcl_mkdir:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_mkdir_bb9:
+.L5211_hxlcl_mkdir_bb9:
     call __errno_location # cabi call __errno_location
     mov r10, rax # cabi: unbox call result (rax)
     mov r11, 0 # materialize tag imm 0
@@ -8383,8 +8383,8 @@ hxlcl_mkdir:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 344], r11 # store tag L20
     mov [rbp - 176], r10 # spill L20 to slot
-    jmp .L7ff7_hxlcl_mkdir_bb10 # branch
-.L7ff7_hxlcl_mkdir_bb10:
+    jmp .L5211_hxlcl_mkdir_bb10 # branch
+.L5211_hxlcl_mkdir_bb10:
     mov rax, -1 # hv payload
     add rsp, 304 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -8414,7 +8414,7 @@ hxlcl_stat:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 192], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_stat_bb0:
+.L5211_hxlcl_stat_bb0:
     mov r13, 0 # assign L2
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 200], r11 # store tag L2
@@ -8423,18 +8423,18 @@ hxlcl_stat:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 208], r11 # store tag L3
     test r14, r14 # br_cond test
-    jz .L7ff7_hxlcl_stat_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_stat_bb1 # jump -> then
-.L7ff7_hxlcl_stat_bb1:
+    jz .L5211_hxlcl_stat_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_stat_bb1 # jump -> then
+.L5211_hxlcl_stat_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 224], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
     mov r10, [rbp - 56] # reload L5 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_stat_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_stat_bb3 # jump -> then
-.L7ff7_hxlcl_stat_bb2:
+    jz .L5211_hxlcl_stat_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_stat_bb3 # jump -> then
+.L5211_hxlcl_stat_bb2:
     mov rdi, rbx # hv payload
     mov rsi, r12 # hv payload
     mov rdx, 0 # hv payload
@@ -8452,8 +8452,8 @@ hxlcl_stat:
     mov r13, r10 # assign L2
     mov r11, [rbp - 256] # tag L9 from tag-slot
     mov [rbp - 200], r11 # store tag L2
-    jmp .L7ff7_hxlcl_stat_bb6 # branch
-.L7ff7_hxlcl_stat_bb3:
+    jmp .L5211_hxlcl_stat_bb6 # branch
+.L5211_hxlcl_stat_bb3:
     mov rdi, rbx # hv payload
     mov rsi, r12 # hv payload
     mov rdx, 0 # hv payload
@@ -8471,8 +8471,8 @@ hxlcl_stat:
     mov r13, r10 # assign L2
     mov r11, [rbp - 240] # tag L7 from tag-slot
     mov [rbp - 200], r11 # store tag L2
-    jmp .L7ff7_hxlcl_stat_bb5 # branch
-.L7ff7_hxlcl_stat_bb4:
+    jmp .L5211_hxlcl_stat_bb5 # branch
+.L5211_hxlcl_stat_bb4:
     mov rdi, -100 # hv payload
     mov rsi, rbx # hv payload
     mov rdx, r12 # hv payload
@@ -8490,10 +8490,10 @@ hxlcl_stat:
     mov r13, r10 # assign L2
     mov r11, [rbp - 248] # tag L8 from tag-slot
     mov [rbp - 200], r11 # store tag L2
-    jmp .L7ff7_hxlcl_stat_bb5 # branch
-.L7ff7_hxlcl_stat_bb5:
-    jmp .L7ff7_hxlcl_stat_bb6 # branch
-.L7ff7_hxlcl_stat_bb6:
+    jmp .L5211_hxlcl_stat_bb5 # branch
+.L5211_hxlcl_stat_bb5:
+    jmp .L5211_hxlcl_stat_bb6 # branch
+.L5211_hxlcl_stat_bb6:
     mov r11, 0 # hv payload
     mov r10, r13 # hv payload
     cmp r10, r11 # __hx_payload_lt: cmp payloads
@@ -8518,18 +8518,18 @@ hxlcl_stat:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_stat_bb8 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_stat_bb7 # jump -> then
-.L7ff7_hxlcl_stat_bb7:
+    jz .L5211_hxlcl_stat_bb8 # jump-if-zero -> else
+    jmp .L5211_hxlcl_stat_bb7 # jump -> then
+.L5211_hxlcl_stat_bb7:
     mov r10, 1 # target_is_linux: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 296], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
     mov r10, [rbp - 128] # reload L14 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_stat_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_stat_bb9 # jump -> then
-.L7ff7_hxlcl_stat_bb8:
+    jz .L5211_hxlcl_stat_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_stat_bb9 # jump -> then
+.L5211_hxlcl_stat_bb8:
     mov rax, r13 # hv payload
     add rsp, 304 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -8540,7 +8540,7 @@ hxlcl_stat:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_stat_bb9:
+.L5211_hxlcl_stat_bb9:
     call __errno_location # cabi call __errno_location
     mov r10, rax # cabi: unbox call result (rax)
     mov r11, 0 # materialize tag imm 0
@@ -8574,8 +8574,8 @@ hxlcl_stat:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 344], r11 # store tag L20
     mov [rbp - 176], r10 # spill L20 to slot
-    jmp .L7ff7_hxlcl_stat_bb10 # branch
-.L7ff7_hxlcl_stat_bb10:
+    jmp .L5211_hxlcl_stat_bb10 # branch
+.L5211_hxlcl_stat_bb10:
     mov rax, -1 # hv payload
     add rsp, 304 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -8608,7 +8608,7 @@ hxlcl_waitpid:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 200], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_waitpid_bb0:
+.L5211_hxlcl_waitpid_bb0:
     mov r14, 7 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 208], r11 # store tag L3
@@ -8617,18 +8617,18 @@ hxlcl_waitpid:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 216], r11 # store tag L4
     test r15, r15 # br_cond test
-    jz .L7ff7_hxlcl_waitpid_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_waitpid_bb1 # jump -> then
-.L7ff7_hxlcl_waitpid_bb1:
+    jz .L5211_hxlcl_waitpid_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_waitpid_bb1 # jump -> then
+.L5211_hxlcl_waitpid_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 232], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
     mov r10, [rbp - 64] # reload L6 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_waitpid_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_waitpid_bb3 # jump -> then
-.L7ff7_hxlcl_waitpid_bb2:
+    jz .L5211_hxlcl_waitpid_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_waitpid_bb3 # jump -> then
+.L5211_hxlcl_waitpid_bb2:
     mov rdi, rbx # hv payload
     mov rsi, r12 # hv payload
     mov rdx, r13 # hv payload
@@ -8672,30 +8672,30 @@ hxlcl_waitpid:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_waitpid_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_waitpid_bb6 # jump -> then
-.L7ff7_hxlcl_waitpid_bb3:
+    jz .L5211_hxlcl_waitpid_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_waitpid_bb6 # jump -> then
+.L5211_hxlcl_waitpid_bb3:
     mov r14, 61 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 208], r11 # store tag L3
-    jmp .L7ff7_hxlcl_waitpid_bb5 # branch
-.L7ff7_hxlcl_waitpid_bb4:
+    jmp .L5211_hxlcl_waitpid_bb5 # branch
+.L5211_hxlcl_waitpid_bb4:
     mov r14, 260 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 208], r11 # store tag L3
-    jmp .L7ff7_hxlcl_waitpid_bb5 # branch
-.L7ff7_hxlcl_waitpid_bb5:
-    jmp .L7ff7_hxlcl_waitpid_bb2 # branch
-.L7ff7_hxlcl_waitpid_bb6:
+    jmp .L5211_hxlcl_waitpid_bb5 # branch
+.L5211_hxlcl_waitpid_bb5:
+    jmp .L5211_hxlcl_waitpid_bb2 # branch
+.L5211_hxlcl_waitpid_bb6:
     mov r10, 1 # target_is_linux: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 296], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
     mov r10, [rbp - 128] # reload L14 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_waitpid_bb9 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_waitpid_bb8 # jump -> then
-.L7ff7_hxlcl_waitpid_bb7:
+    jz .L5211_hxlcl_waitpid_bb9 # jump-if-zero -> else
+    jmp .L5211_hxlcl_waitpid_bb8 # jump -> then
+.L5211_hxlcl_waitpid_bb7:
     mov rax, [rbp - 88] # reload L9 from spill slot
     mov rax, rax # hv payload
     add rsp, 304 # epilogue: free spill frame
@@ -8707,7 +8707,7 @@ hxlcl_waitpid:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_waitpid_bb8:
+.L5211_hxlcl_waitpid_bb8:
     call __errno_location # cabi call __errno_location
     mov r10, rax # cabi: unbox call result (rax)
     mov r11, 0 # materialize tag imm 0
@@ -8742,8 +8742,8 @@ hxlcl_waitpid:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 344], r11 # store tag L20
     mov [rbp - 176], r10 # spill L20 to slot
-    jmp .L7ff7_hxlcl_waitpid_bb9 # branch
-.L7ff7_hxlcl_waitpid_bb9:
+    jmp .L5211_hxlcl_waitpid_bb9 # branch
+.L5211_hxlcl_waitpid_bb9:
     mov rax, -1 # hv payload
     add rsp, 304 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -8776,7 +8776,7 @@ hxlcl_write:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 200], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_write_bb0:
+.L5211_hxlcl_write_bb0:
     mov r14, 4 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 208], r11 # store tag L3
@@ -8785,18 +8785,18 @@ hxlcl_write:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 216], r11 # store tag L4
     test r15, r15 # br_cond test
-    jz .L7ff7_hxlcl_write_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_write_bb1 # jump -> then
-.L7ff7_hxlcl_write_bb1:
+    jz .L5211_hxlcl_write_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_write_bb1 # jump -> then
+.L5211_hxlcl_write_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 232], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
     mov r10, [rbp - 64] # reload L6 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_write_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_write_bb3 # jump -> then
-.L7ff7_hxlcl_write_bb2:
+    jz .L5211_hxlcl_write_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_write_bb3 # jump -> then
+.L5211_hxlcl_write_bb2:
     mov rdi, rbx # hv payload
     mov rsi, r12 # hv payload
     mov rdx, r13 # hv payload
@@ -8840,30 +8840,30 @@ hxlcl_write:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_write_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_write_bb6 # jump -> then
-.L7ff7_hxlcl_write_bb3:
+    jz .L5211_hxlcl_write_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_write_bb6 # jump -> then
+.L5211_hxlcl_write_bb3:
     mov r14, 1 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 208], r11 # store tag L3
-    jmp .L7ff7_hxlcl_write_bb5 # branch
-.L7ff7_hxlcl_write_bb4:
+    jmp .L5211_hxlcl_write_bb5 # branch
+.L5211_hxlcl_write_bb4:
     mov r14, 64 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 208], r11 # store tag L3
-    jmp .L7ff7_hxlcl_write_bb5 # branch
-.L7ff7_hxlcl_write_bb5:
-    jmp .L7ff7_hxlcl_write_bb2 # branch
-.L7ff7_hxlcl_write_bb6:
+    jmp .L5211_hxlcl_write_bb5 # branch
+.L5211_hxlcl_write_bb5:
+    jmp .L5211_hxlcl_write_bb2 # branch
+.L5211_hxlcl_write_bb6:
     mov r10, 1 # target_is_linux: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 296], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
     mov r10, [rbp - 128] # reload L14 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_write_bb9 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_write_bb8 # jump -> then
-.L7ff7_hxlcl_write_bb7:
+    jz .L5211_hxlcl_write_bb9 # jump-if-zero -> else
+    jmp .L5211_hxlcl_write_bb8 # jump -> then
+.L5211_hxlcl_write_bb7:
     mov rax, [rbp - 88] # reload L9 from spill slot
     mov rax, rax # hv payload
     add rsp, 304 # epilogue: free spill frame
@@ -8875,7 +8875,7 @@ hxlcl_write:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_write_bb8:
+.L5211_hxlcl_write_bb8:
     call __errno_location # cabi call __errno_location
     mov r10, rax # cabi: unbox call result (rax)
     mov r11, 0 # materialize tag imm 0
@@ -8910,8 +8910,8 @@ hxlcl_write:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 344], r11 # store tag L20
     mov [rbp - 176], r10 # spill L20 to slot
-    jmp .L7ff7_hxlcl_write_bb9 # branch
-.L7ff7_hxlcl_write_bb9:
+    jmp .L5211_hxlcl_write_bb9 # branch
+.L5211_hxlcl_write_bb9:
     mov rax, -1 # hv payload
     add rsp, 304 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -8944,7 +8944,7 @@ hxlcl_fcntl:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 200], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_fcntl_bb0:
+.L5211_hxlcl_fcntl_bb0:
     mov r14, 92 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 208], r11 # store tag L3
@@ -8953,18 +8953,18 @@ hxlcl_fcntl:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 216], r11 # store tag L4
     test r15, r15 # br_cond test
-    jz .L7ff7_hxlcl_fcntl_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fcntl_bb1 # jump -> then
-.L7ff7_hxlcl_fcntl_bb1:
+    jz .L5211_hxlcl_fcntl_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fcntl_bb1 # jump -> then
+.L5211_hxlcl_fcntl_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 232], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
     mov r10, [rbp - 64] # reload L6 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fcntl_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fcntl_bb3 # jump -> then
-.L7ff7_hxlcl_fcntl_bb2:
+    jz .L5211_hxlcl_fcntl_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fcntl_bb3 # jump -> then
+.L5211_hxlcl_fcntl_bb2:
     mov rdi, rbx # hv payload
     mov rsi, r12 # hv payload
     mov rdx, r13 # hv payload
@@ -9008,30 +9008,30 @@ hxlcl_fcntl:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fcntl_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fcntl_bb6 # jump -> then
-.L7ff7_hxlcl_fcntl_bb3:
+    jz .L5211_hxlcl_fcntl_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fcntl_bb6 # jump -> then
+.L5211_hxlcl_fcntl_bb3:
     mov r14, 72 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 208], r11 # store tag L3
-    jmp .L7ff7_hxlcl_fcntl_bb5 # branch
-.L7ff7_hxlcl_fcntl_bb4:
+    jmp .L5211_hxlcl_fcntl_bb5 # branch
+.L5211_hxlcl_fcntl_bb4:
     mov r14, 25 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 208], r11 # store tag L3
-    jmp .L7ff7_hxlcl_fcntl_bb5 # branch
-.L7ff7_hxlcl_fcntl_bb5:
-    jmp .L7ff7_hxlcl_fcntl_bb2 # branch
-.L7ff7_hxlcl_fcntl_bb6:
+    jmp .L5211_hxlcl_fcntl_bb5 # branch
+.L5211_hxlcl_fcntl_bb5:
+    jmp .L5211_hxlcl_fcntl_bb2 # branch
+.L5211_hxlcl_fcntl_bb6:
     mov r10, 1 # target_is_linux: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 296], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
     mov r10, [rbp - 128] # reload L14 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fcntl_bb9 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fcntl_bb8 # jump -> then
-.L7ff7_hxlcl_fcntl_bb7:
+    jz .L5211_hxlcl_fcntl_bb9 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fcntl_bb8 # jump -> then
+.L5211_hxlcl_fcntl_bb7:
     mov rax, [rbp - 88] # reload L9 from spill slot
     mov rax, rax # hv payload
     add rsp, 304 # epilogue: free spill frame
@@ -9043,7 +9043,7 @@ hxlcl_fcntl:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fcntl_bb8:
+.L5211_hxlcl_fcntl_bb8:
     call __errno_location # cabi call __errno_location
     mov r10, rax # cabi: unbox call result (rax)
     mov r11, 0 # materialize tag imm 0
@@ -9078,8 +9078,8 @@ hxlcl_fcntl:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 344], r11 # store tag L20
     mov [rbp - 176], r10 # spill L20 to slot
-    jmp .L7ff7_hxlcl_fcntl_bb9 # branch
-.L7ff7_hxlcl_fcntl_bb9:
+    jmp .L5211_hxlcl_fcntl_bb9 # branch
+.L5211_hxlcl_fcntl_bb9:
     mov rax, -1 # hv payload
     add rsp, 304 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -9121,7 +9121,7 @@ hxlcl_mmap:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 248], r11 # store tag L5
     mov [rbp - 56], r9 # spill L5 to slot
-.L7ff7_hxlcl_mmap_bb0:
+.L5211_hxlcl_mmap_bb0:
     mov r10, 197 # assign L6
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 256], r11 # store tag L6
@@ -9132,18 +9132,18 @@ hxlcl_mmap:
     mov [rbp - 72], r10 # spill L7 to slot
     mov r10, [rbp - 72] # reload L7 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_mmap_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_mmap_bb1 # jump -> then
-.L7ff7_hxlcl_mmap_bb1:
+    jz .L5211_hxlcl_mmap_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_mmap_bb1 # jump -> then
+.L5211_hxlcl_mmap_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 280], r11 # store tag L9
     mov [rbp - 88], r10 # spill L9 to slot
     mov r10, [rbp - 88] # reload L9 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_mmap_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_mmap_bb3 # jump -> then
-.L7ff7_hxlcl_mmap_bb2:
+    jz .L5211_hxlcl_mmap_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_mmap_bb3 # jump -> then
+.L5211_hxlcl_mmap_bb2:
     mov rdi, rbx # hv payload
     mov rsi, r12 # hv payload
     mov rdx, r13 # hv payload
@@ -9189,32 +9189,32 @@ hxlcl_mmap:
     mov [rbp - 136], r10 # spill L15 to slot
     mov r10, [rbp - 136] # reload L15 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_mmap_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_mmap_bb6 # jump -> then
-.L7ff7_hxlcl_mmap_bb3:
+    jz .L5211_hxlcl_mmap_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_mmap_bb6 # jump -> then
+.L5211_hxlcl_mmap_bb3:
     mov r10, 9 # assign L6
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 256], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
-    jmp .L7ff7_hxlcl_mmap_bb5 # branch
-.L7ff7_hxlcl_mmap_bb4:
+    jmp .L5211_hxlcl_mmap_bb5 # branch
+.L5211_hxlcl_mmap_bb4:
     mov r10, 222 # assign L6
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 256], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
-    jmp .L7ff7_hxlcl_mmap_bb5 # branch
-.L7ff7_hxlcl_mmap_bb5:
-    jmp .L7ff7_hxlcl_mmap_bb2 # branch
-.L7ff7_hxlcl_mmap_bb6:
+    jmp .L5211_hxlcl_mmap_bb5 # branch
+.L5211_hxlcl_mmap_bb5:
+    jmp .L5211_hxlcl_mmap_bb2 # branch
+.L5211_hxlcl_mmap_bb6:
     mov r10, 1 # target_is_linux: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 344], r11 # store tag L17
     mov [rbp - 152], r10 # spill L17 to slot
     mov r10, [rbp - 152] # reload L17 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_mmap_bb9 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_mmap_bb8 # jump -> then
-.L7ff7_hxlcl_mmap_bb7:
+    jz .L5211_hxlcl_mmap_bb9 # jump-if-zero -> else
+    jmp .L5211_hxlcl_mmap_bb8 # jump -> then
+.L5211_hxlcl_mmap_bb7:
     mov rax, [rbp - 112] # reload L12 from spill slot
     mov rax, rax # hv payload
     add rsp, 352 # epilogue: free spill frame
@@ -9226,7 +9226,7 @@ hxlcl_mmap:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_mmap_bb8:
+.L5211_hxlcl_mmap_bb8:
     call __errno_location # cabi call __errno_location
     mov r10, rax # cabi: unbox call result (rax)
     mov r11, 0 # materialize tag imm 0
@@ -9261,8 +9261,8 @@ hxlcl_mmap:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 392], r11 # store tag L23
     mov [rbp - 200], r10 # spill L23 to slot
-    jmp .L7ff7_hxlcl_mmap_bb9 # branch
-.L7ff7_hxlcl_mmap_bb9:
+    jmp .L5211_hxlcl_mmap_bb9 # branch
+.L5211_hxlcl_mmap_bb9:
     mov rax, -1 # hv payload
     add rsp, 352 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -9295,7 +9295,7 @@ hxlcl_open_sys:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 208], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_open_sys_bb0:
+.L5211_hxlcl_open_sys_bb0:
     mov r14, 0 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 216], r11 # store tag L3
@@ -9304,18 +9304,18 @@ hxlcl_open_sys:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 224], r11 # store tag L4
     test r15, r15 # br_cond test
-    jz .L7ff7_hxlcl_open_sys_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_open_sys_bb1 # jump -> then
-.L7ff7_hxlcl_open_sys_bb1:
+    jz .L5211_hxlcl_open_sys_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_open_sys_bb1 # jump -> then
+.L5211_hxlcl_open_sys_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 240], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
     mov r10, [rbp - 64] # reload L6 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_open_sys_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_open_sys_bb3 # jump -> then
-.L7ff7_hxlcl_open_sys_bb2:
+    jz .L5211_hxlcl_open_sys_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_open_sys_bb3 # jump -> then
+.L5211_hxlcl_open_sys_bb2:
     mov rdi, rbx # hv payload
     mov rsi, r12 # hv payload
     mov rdx, r13 # hv payload
@@ -9333,8 +9333,8 @@ hxlcl_open_sys:
     mov r14, r10 # assign L3
     mov r11, [rbp - 272] # tag L10 from tag-slot
     mov [rbp - 216], r11 # store tag L3
-    jmp .L7ff7_hxlcl_open_sys_bb6 # branch
-.L7ff7_hxlcl_open_sys_bb3:
+    jmp .L5211_hxlcl_open_sys_bb6 # branch
+.L5211_hxlcl_open_sys_bb3:
     mov rdi, rbx # hv payload
     mov rsi, r12 # hv payload
     mov rdx, r13 # hv payload
@@ -9352,8 +9352,8 @@ hxlcl_open_sys:
     mov r14, r10 # assign L3
     mov r11, [rbp - 256] # tag L8 from tag-slot
     mov [rbp - 216], r11 # store tag L3
-    jmp .L7ff7_hxlcl_open_sys_bb5 # branch
-.L7ff7_hxlcl_open_sys_bb4:
+    jmp .L5211_hxlcl_open_sys_bb5 # branch
+.L5211_hxlcl_open_sys_bb4:
     mov rdi, -100 # hv payload
     mov rsi, rbx # hv payload
     mov rdx, r12 # hv payload
@@ -9371,10 +9371,10 @@ hxlcl_open_sys:
     mov r14, r10 # assign L3
     mov r11, [rbp - 264] # tag L9 from tag-slot
     mov [rbp - 216], r11 # store tag L3
-    jmp .L7ff7_hxlcl_open_sys_bb5 # branch
-.L7ff7_hxlcl_open_sys_bb5:
-    jmp .L7ff7_hxlcl_open_sys_bb6 # branch
-.L7ff7_hxlcl_open_sys_bb6:
+    jmp .L5211_hxlcl_open_sys_bb5 # branch
+.L5211_hxlcl_open_sys_bb5:
+    jmp .L5211_hxlcl_open_sys_bb6 # branch
+.L5211_hxlcl_open_sys_bb6:
     mov r11, 0 # hv payload
     mov r10, r14 # hv payload
     cmp r10, r11 # __hx_payload_lt: cmp payloads
@@ -9399,18 +9399,18 @@ hxlcl_open_sys:
     mov [rbp - 120], r10 # spill L13 to slot
     mov r10, [rbp - 120] # reload L13 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_open_sys_bb8 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_open_sys_bb7 # jump -> then
-.L7ff7_hxlcl_open_sys_bb7:
+    jz .L5211_hxlcl_open_sys_bb8 # jump-if-zero -> else
+    jmp .L5211_hxlcl_open_sys_bb7 # jump -> then
+.L5211_hxlcl_open_sys_bb7:
     mov r10, 1 # target_is_linux: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 312], r11 # store tag L15
     mov [rbp - 136], r10 # spill L15 to slot
     mov r10, [rbp - 136] # reload L15 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_open_sys_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_open_sys_bb9 # jump -> then
-.L7ff7_hxlcl_open_sys_bb8:
+    jz .L5211_hxlcl_open_sys_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_open_sys_bb9 # jump -> then
+.L5211_hxlcl_open_sys_bb8:
     mov rax, r14 # hv payload
     add rsp, 320 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -9421,7 +9421,7 @@ hxlcl_open_sys:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_open_sys_bb9:
+.L5211_hxlcl_open_sys_bb9:
     call __errno_location # cabi call __errno_location
     mov r10, rax # cabi: unbox call result (rax)
     mov r11, 0 # materialize tag imm 0
@@ -9455,8 +9455,8 @@ hxlcl_open_sys:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 360], r11 # store tag L21
     mov [rbp - 184], r10 # spill L21 to slot
-    jmp .L7ff7_hxlcl_open_sys_bb10 # branch
-.L7ff7_hxlcl_open_sys_bb10:
+    jmp .L5211_hxlcl_open_sys_bb10 # branch
+.L5211_hxlcl_open_sys_bb10:
     mov rax, -1 # hv payload
     add rsp, 320 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -9486,7 +9486,7 @@ hxlcl_getrusage:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 184], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_getrusage_bb0:
+.L5211_hxlcl_getrusage_bb0:
     mov r13, 117 # assign L2
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 192], r11 # store tag L2
@@ -9495,18 +9495,18 @@ hxlcl_getrusage:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 200], r11 # store tag L3
     test r14, r14 # br_cond test
-    jz .L7ff7_hxlcl_getrusage_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getrusage_bb1 # jump -> then
-.L7ff7_hxlcl_getrusage_bb1:
+    jz .L5211_hxlcl_getrusage_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getrusage_bb1 # jump -> then
+.L5211_hxlcl_getrusage_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 216], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
     mov r10, [rbp - 56] # reload L5 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_getrusage_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getrusage_bb3 # jump -> then
-.L7ff7_hxlcl_getrusage_bb2:
+    jz .L5211_hxlcl_getrusage_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getrusage_bb3 # jump -> then
+.L5211_hxlcl_getrusage_bb2:
     mov rdi, rbx # hv payload
     mov rsi, r12 # hv payload
     mov rdx, 0 # hv payload
@@ -9550,30 +9550,30 @@ hxlcl_getrusage:
     mov [rbp - 104], r10 # spill L11 to slot
     mov r10, [rbp - 104] # reload L11 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_getrusage_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getrusage_bb6 # jump -> then
-.L7ff7_hxlcl_getrusage_bb3:
+    jz .L5211_hxlcl_getrusage_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getrusage_bb6 # jump -> then
+.L5211_hxlcl_getrusage_bb3:
     mov r13, 98 # assign L2
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 192], r11 # store tag L2
-    jmp .L7ff7_hxlcl_getrusage_bb5 # branch
-.L7ff7_hxlcl_getrusage_bb4:
+    jmp .L5211_hxlcl_getrusage_bb5 # branch
+.L5211_hxlcl_getrusage_bb4:
     mov r13, 165 # assign L2
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 192], r11 # store tag L2
-    jmp .L7ff7_hxlcl_getrusage_bb5 # branch
-.L7ff7_hxlcl_getrusage_bb5:
-    jmp .L7ff7_hxlcl_getrusage_bb2 # branch
-.L7ff7_hxlcl_getrusage_bb6:
+    jmp .L5211_hxlcl_getrusage_bb5 # branch
+.L5211_hxlcl_getrusage_bb5:
+    jmp .L5211_hxlcl_getrusage_bb2 # branch
+.L5211_hxlcl_getrusage_bb6:
     mov r10, 1 # target_is_linux: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 280], r11 # store tag L13
     mov [rbp - 120], r10 # spill L13 to slot
     mov r10, [rbp - 120] # reload L13 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_getrusage_bb9 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_getrusage_bb8 # jump -> then
-.L7ff7_hxlcl_getrusage_bb7:
+    jz .L5211_hxlcl_getrusage_bb9 # jump-if-zero -> else
+    jmp .L5211_hxlcl_getrusage_bb8 # jump -> then
+.L5211_hxlcl_getrusage_bb7:
     mov rax, [rbp - 80] # reload L8 from spill slot
     mov rax, rax # hv payload
     add rsp, 288 # epilogue: free spill frame
@@ -9585,7 +9585,7 @@ hxlcl_getrusage:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_getrusage_bb8:
+.L5211_hxlcl_getrusage_bb8:
     call __errno_location # cabi call __errno_location
     mov r10, rax # cabi: unbox call result (rax)
     mov r11, 0 # materialize tag imm 0
@@ -9620,8 +9620,8 @@ hxlcl_getrusage:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 328], r11 # store tag L19
     mov [rbp - 168], r10 # spill L19 to slot
-    jmp .L7ff7_hxlcl_getrusage_bb9 # branch
-.L7ff7_hxlcl_getrusage_bb9:
+    jmp .L5211_hxlcl_getrusage_bb9 # branch
+.L5211_hxlcl_getrusage_bb9:
     mov rax, -1 # hv payload
     add rsp, 288 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -9648,15 +9648,15 @@ hxlcl_pipe:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 272], r11 # store tag L0
     mov rbx, rdi # cabi ingress param payload
-.L7ff7_hxlcl_pipe_bb0:
+.L5211_hxlcl_pipe_bb0:
     mov r10, 1 # target_is_linux: 1 = true
     mov r12, r10 # leaf: payload → dst L1
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 280], r11 # store tag L1
     test r12, r12 # br_cond test
-    jz .L7ff7_hxlcl_pipe_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_pipe_bb1 # jump -> then
-.L7ff7_hxlcl_pipe_bb1:
+    jz .L5211_hxlcl_pipe_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_pipe_bb1 # jump -> then
+.L5211_hxlcl_pipe_bb1:
     mov r14, 0 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 296], r11 # store tag L3
@@ -9665,9 +9665,9 @@ hxlcl_pipe:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 304], r11 # store tag L4
     test r15, r15 # br_cond test
-    jz .L7ff7_hxlcl_pipe_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_pipe_bb3 # jump -> then
-.L7ff7_hxlcl_pipe_bb2:
+    jz .L5211_hxlcl_pipe_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_pipe_bb3 # jump -> then
+.L5211_hxlcl_pipe_bb2:
     mov r11, 24 # hv payload
     mov r10, 0 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -9738,9 +9738,9 @@ hxlcl_pipe:
     mov [rbp - 208], r10 # spill L24 to slot
     mov r10, [rbp - 208] # reload L24 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_pipe_bb9 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_pipe_bb8 # jump -> then
-.L7ff7_hxlcl_pipe_bb3:
+    jz .L5211_hxlcl_pipe_bb9 # jump-if-zero -> else
+    jmp .L5211_hxlcl_pipe_bb8 # jump -> then
+.L5211_hxlcl_pipe_bb3:
     mov rdi, rbx # hv payload
     mov rsi, 0 # hv payload
     mov rdx, 0 # hv payload
@@ -9758,8 +9758,8 @@ hxlcl_pipe:
     mov r14, r10 # assign L3
     mov r11, [rbp - 320] # tag L6 from tag-slot
     mov [rbp - 296], r11 # store tag L3
-    jmp .L7ff7_hxlcl_pipe_bb5 # branch
-.L7ff7_hxlcl_pipe_bb4:
+    jmp .L5211_hxlcl_pipe_bb5 # branch
+.L5211_hxlcl_pipe_bb4:
     mov rdi, rbx # hv payload
     mov rsi, 0 # hv payload
     mov rdx, 0 # hv payload
@@ -9777,8 +9777,8 @@ hxlcl_pipe:
     mov r14, r10 # assign L3
     mov r11, [rbp - 328] # tag L7 from tag-slot
     mov [rbp - 296], r11 # store tag L3
-    jmp .L7ff7_hxlcl_pipe_bb5 # branch
-.L7ff7_hxlcl_pipe_bb5:
+    jmp .L5211_hxlcl_pipe_bb5 # branch
+.L5211_hxlcl_pipe_bb5:
     mov r11, 0 # hv payload
     mov r10, r14 # hv payload
     cmp r10, r11 # __hx_payload_lt: cmp payloads
@@ -9803,9 +9803,9 @@ hxlcl_pipe:
     mov [rbp - 96], r10 # spill L10 to slot
     mov r10, [rbp - 96] # reload L10 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_pipe_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_pipe_bb6 # jump -> then
-.L7ff7_hxlcl_pipe_bb6:
+    jz .L5211_hxlcl_pipe_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_pipe_bb6 # jump -> then
+.L5211_hxlcl_pipe_bb6:
     call __errno_location # cabi call __errno_location
     mov r10, rax # cabi: unbox call result (rax)
     mov r11, 0 # materialize tag imm 0
@@ -9849,7 +9849,7 @@ hxlcl_pipe:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_pipe_bb7:
+.L5211_hxlcl_pipe_bb7:
     mov rax, r14 # hv payload
     add rsp, 480 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -9860,7 +9860,7 @@ hxlcl_pipe:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_pipe_bb8:
+.L5211_hxlcl_pipe_bb8:
     mov rax, -1 # hv payload
     add rsp, 480 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -9871,7 +9871,7 @@ hxlcl_pipe:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_pipe_bb9:
+.L5211_hxlcl_pipe_bb9:
     mov r10, [rbp - 176] # reload L20 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -9944,7 +9944,7 @@ hxlcl_time:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 272], r11 # store tag L0
     mov rbx, rdi # cabi ingress param payload
-.L7ff7_hxlcl_time_bb0:
+.L5211_hxlcl_time_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -9959,18 +9959,18 @@ hxlcl_time:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 296], r11 # store tag L3
     test r14, r14 # br_cond test
-    jz .L7ff7_hxlcl_time_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_time_bb1 # jump -> then
-.L7ff7_hxlcl_time_bb1:
+    jz .L5211_hxlcl_time_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_time_bb1 # jump -> then
+.L5211_hxlcl_time_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 312], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
     mov r10, [rbp - 56] # reload L5 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_time_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_time_bb3 # jump -> then
-.L7ff7_hxlcl_time_bb2:
+    jz .L5211_hxlcl_time_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_time_bb3 # jump -> then
+.L5211_hxlcl_time_bb2:
     mov r11, 16 # hv payload
     mov r10, 0 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -10031,9 +10031,9 @@ hxlcl_time:
     mov [rbp - 248], r10 # spill L29 to slot
     mov r10, [rbp - 248] # reload L29 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_time_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_time_bb9 # jump -> then
-.L7ff7_hxlcl_time_bb3:
+    jz .L5211_hxlcl_time_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_time_bb9 # jump -> then
+.L5211_hxlcl_time_bb3:
     mov rdi, 0 # hv payload
     mov rsi, 0 # hv payload
     mov rdx, 0 # hv payload
@@ -10062,9 +10062,9 @@ hxlcl_time:
     mov [rbp - 88], r10 # spill L9 to slot
     mov r10, [rbp - 88] # reload L9 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_time_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_time_bb5 # jump -> then
-.L7ff7_hxlcl_time_bb4:
+    jz .L5211_hxlcl_time_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_time_bb5 # jump -> then
+.L5211_hxlcl_time_bb4:
     mov r11, 16 # hv payload
     mov r10, 0 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -10125,9 +10125,9 @@ hxlcl_time:
     mov [rbp - 168], r10 # spill L19 to slot
     mov r10, [rbp - 168] # reload L19 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_time_bb8 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_time_bb7 # jump -> then
-.L7ff7_hxlcl_time_bb5:
+    jz .L5211_hxlcl_time_bb8 # jump-if-zero -> else
+    jmp .L5211_hxlcl_time_bb7 # jump -> then
+.L5211_hxlcl_time_bb5:
     mov r10, r13 # hv payload
     mov r11, 0 # hv payload
     mov rsi, [rbp - 80] # reload L8 from spill slot
@@ -10138,8 +10138,8 @@ hxlcl_time:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 360], r11 # store tag L11
     mov [rbp - 104], r10 # spill L11 to slot
-    jmp .L7ff7_hxlcl_time_bb6 # branch
-.L7ff7_hxlcl_time_bb6:
+    jmp .L5211_hxlcl_time_bb6 # branch
+.L5211_hxlcl_time_bb6:
     mov rax, [rbp - 80] # reload L8 from spill slot
     mov rax, rax # hv payload
     add rsp, 480 # epilogue: free spill frame
@@ -10151,7 +10151,7 @@ hxlcl_time:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_time_bb7:
+.L5211_hxlcl_time_bb7:
     mov r10, r13 # hv payload
     mov r11, 0 # hv payload
     mov rsi, [rbp - 160] # reload L18 from spill slot
@@ -10162,8 +10162,8 @@ hxlcl_time:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 440], r11 # store tag L21
     mov [rbp - 184], r10 # spill L21 to slot
-    jmp .L7ff7_hxlcl_time_bb8 # branch
-.L7ff7_hxlcl_time_bb8:
+    jmp .L5211_hxlcl_time_bb8 # branch
+.L5211_hxlcl_time_bb8:
     mov rax, [rbp - 160] # reload L18 from spill slot
     mov rax, rax # hv payload
     add rsp, 480 # epilogue: free spill frame
@@ -10175,7 +10175,7 @@ hxlcl_time:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_time_bb9:
+.L5211_hxlcl_time_bb9:
     mov r10, r13 # hv payload
     mov r11, 0 # hv payload
     mov rsi, [rbp - 240] # reload L28 from spill slot
@@ -10186,8 +10186,8 @@ hxlcl_time:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 520], r11 # store tag L31
     mov [rbp - 264], r10 # spill L31 to slot
-    jmp .L7ff7_hxlcl_time_bb10 # branch
-.L7ff7_hxlcl_time_bb10:
+    jmp .L5211_hxlcl_time_bb10 # branch
+.L5211_hxlcl_time_bb10:
     mov rax, [rbp - 240] # reload L28 from spill slot
     mov rax, rax # hv payload
     add rsp, 480 # epilogue: free spill frame
@@ -10221,7 +10221,7 @@ hxlcl_poll:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 344], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_poll_bb0:
+.L5211_hxlcl_poll_bb0:
     mov r14, 0 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 352], r11 # store tag L3
@@ -10230,18 +10230,18 @@ hxlcl_poll:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 360], r11 # store tag L4
     test r15, r15 # br_cond test
-    jz .L7ff7_hxlcl_poll_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_poll_bb1 # jump -> then
-.L7ff7_hxlcl_poll_bb1:
+    jz .L5211_hxlcl_poll_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_poll_bb1 # jump -> then
+.L5211_hxlcl_poll_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 376], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
     mov r10, [rbp - 64] # reload L6 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_poll_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_poll_bb3 # jump -> then
-.L7ff7_hxlcl_poll_bb2:
+    jz .L5211_hxlcl_poll_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_poll_bb3 # jump -> then
+.L5211_hxlcl_poll_bb2:
     mov rdi, rbx # hv payload
     mov rsi, r12 # hv payload
     mov rdx, r13 # hv payload
@@ -10259,8 +10259,8 @@ hxlcl_poll:
     mov r14, r10 # assign L3
     mov r11, [rbp - 544] # tag L27 from tag-slot
     mov [rbp - 352], r11 # store tag L3
-    jmp .L7ff7_hxlcl_poll_bb9 # branch
-.L7ff7_hxlcl_poll_bb3:
+    jmp .L5211_hxlcl_poll_bb9 # branch
+.L5211_hxlcl_poll_bb3:
     mov rdi, rbx # hv payload
     mov rsi, r12 # hv payload
     mov rdx, r13 # hv payload
@@ -10278,8 +10278,8 @@ hxlcl_poll:
     mov r14, r10 # assign L3
     mov r11, [rbp - 392] # tag L8 from tag-slot
     mov [rbp - 352], r11 # store tag L3
-    jmp .L7ff7_hxlcl_poll_bb8 # branch
-.L7ff7_hxlcl_poll_bb4:
+    jmp .L5211_hxlcl_poll_bb8 # branch
+.L5211_hxlcl_poll_bb4:
     mov r11, 0 # hv payload
     mov r10, r13 # hv payload
     cmp r10, r11 # __hx_payload_lt: cmp payloads
@@ -10304,9 +10304,9 @@ hxlcl_poll:
     mov [rbp - 104], r10 # spill L11 to slot
     mov r10, [rbp - 104] # reload L11 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_poll_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_poll_bb5 # jump -> then
-.L7ff7_hxlcl_poll_bb5:
+    jz .L5211_hxlcl_poll_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_poll_bb5 # jump -> then
+.L5211_hxlcl_poll_bb5:
     mov rdi, rbx # hv payload
     mov rsi, r12 # hv payload
     mov rdx, 0 # hv payload
@@ -10324,8 +10324,8 @@ hxlcl_poll:
     mov r14, r10 # assign L3
     mov r11, [rbp - 432] # tag L13 from tag-slot
     mov [rbp - 352], r11 # store tag L3
-    jmp .L7ff7_hxlcl_poll_bb7 # branch
-.L7ff7_hxlcl_poll_bb6:
+    jmp .L5211_hxlcl_poll_bb7 # branch
+.L5211_hxlcl_poll_bb6:
     mov r11, 16 # hv payload
     mov r10, 0 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -10431,12 +10431,12 @@ hxlcl_poll:
     mov r14, r10 # assign L3
     mov r11, [rbp - 536] # tag L26 from tag-slot
     mov [rbp - 352], r11 # store tag L3
-    jmp .L7ff7_hxlcl_poll_bb7 # branch
-.L7ff7_hxlcl_poll_bb7:
-    jmp .L7ff7_hxlcl_poll_bb8 # branch
-.L7ff7_hxlcl_poll_bb8:
-    jmp .L7ff7_hxlcl_poll_bb9 # branch
-.L7ff7_hxlcl_poll_bb9:
+    jmp .L5211_hxlcl_poll_bb7 # branch
+.L5211_hxlcl_poll_bb7:
+    jmp .L5211_hxlcl_poll_bb8 # branch
+.L5211_hxlcl_poll_bb8:
+    jmp .L5211_hxlcl_poll_bb9 # branch
+.L5211_hxlcl_poll_bb9:
     mov r11, 0 # hv payload
     mov r10, r14 # hv payload
     cmp r10, r11 # __hx_payload_lt: cmp payloads
@@ -10461,18 +10461,18 @@ hxlcl_poll:
     mov [rbp - 256], r10 # spill L30 to slot
     mov r10, [rbp - 256] # reload L30 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_poll_bb11 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_poll_bb10 # jump -> then
-.L7ff7_hxlcl_poll_bb10:
+    jz .L5211_hxlcl_poll_bb11 # jump-if-zero -> else
+    jmp .L5211_hxlcl_poll_bb10 # jump -> then
+.L5211_hxlcl_poll_bb10:
     mov r10, 1 # target_is_linux: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 584], r11 # store tag L32
     mov [rbp - 272], r10 # spill L32 to slot
     mov r10, [rbp - 272] # reload L32 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_poll_bb13 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_poll_bb12 # jump -> then
-.L7ff7_hxlcl_poll_bb11:
+    jz .L5211_hxlcl_poll_bb13 # jump-if-zero -> else
+    jmp .L5211_hxlcl_poll_bb12 # jump -> then
+.L5211_hxlcl_poll_bb11:
     mov rax, r14 # hv payload
     add rsp, 592 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -10483,7 +10483,7 @@ hxlcl_poll:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_poll_bb12:
+.L5211_hxlcl_poll_bb12:
     call __errno_location # cabi call __errno_location
     mov r10, rax # cabi: unbox call result (rax)
     mov r11, 0 # materialize tag imm 0
@@ -10517,8 +10517,8 @@ hxlcl_poll:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 632], r11 # store tag L38
     mov [rbp - 320], r10 # spill L38 to slot
-    jmp .L7ff7_hxlcl_poll_bb13 # branch
-.L7ff7_hxlcl_poll_bb13:
+    jmp .L5211_hxlcl_poll_bb13 # branch
+.L5211_hxlcl_poll_bb13:
     mov rax, -1 # hv payload
     add rsp, 592 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -10548,15 +10548,15 @@ hxlcl_clock_gettime:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 248], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_clock_gettime_bb0:
+.L5211_hxlcl_clock_gettime_bb0:
     mov r10, 1 # target_is_linux: 1 = true
     mov r13, r10 # leaf: payload → dst L2
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 256], r11 # store tag L2
     test r13, r13 # br_cond test
-    jz .L7ff7_hxlcl_clock_gettime_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_clock_gettime_bb1 # jump -> then
-.L7ff7_hxlcl_clock_gettime_bb1:
+    jz .L5211_hxlcl_clock_gettime_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_clock_gettime_bb1 # jump -> then
+.L5211_hxlcl_clock_gettime_bb1:
     mov r15, 113 # assign L4
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 272], r11 # store tag L4
@@ -10566,9 +10566,9 @@ hxlcl_clock_gettime:
     mov [rbp - 56], r10 # spill L5 to slot
     mov r10, [rbp - 56] # reload L5 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_clock_gettime_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_clock_gettime_bb3 # jump -> then
-.L7ff7_hxlcl_clock_gettime_bb2:
+    jz .L5211_hxlcl_clock_gettime_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_clock_gettime_bb3 # jump -> then
+.L5211_hxlcl_clock_gettime_bb2:
     mov r11, 0 # hv payload
     mov r10, r12 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -10591,14 +10591,14 @@ hxlcl_clock_gettime:
     mov [rbp - 176], r10 # spill L20 to slot
     mov r10, [rbp - 176] # reload L20 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_clock_gettime_bb8 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_clock_gettime_bb7 # jump -> then
-.L7ff7_hxlcl_clock_gettime_bb3:
+    jz .L5211_hxlcl_clock_gettime_bb8 # jump-if-zero -> else
+    jmp .L5211_hxlcl_clock_gettime_bb7 # jump -> then
+.L5211_hxlcl_clock_gettime_bb3:
     mov r15, 228 # assign L4
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 272], r11 # store tag L4
-    jmp .L7ff7_hxlcl_clock_gettime_bb4 # branch
-.L7ff7_hxlcl_clock_gettime_bb4:
+    jmp .L5211_hxlcl_clock_gettime_bb4 # branch
+.L5211_hxlcl_clock_gettime_bb4:
     mov rdi, rbx # hv payload
     mov rsi, r12 # hv payload
     mov rdx, 0 # hv payload
@@ -10642,9 +10642,9 @@ hxlcl_clock_gettime:
     mov [rbp - 104], r10 # spill L11 to slot
     mov r10, [rbp - 104] # reload L11 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_clock_gettime_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_clock_gettime_bb5 # jump -> then
-.L7ff7_hxlcl_clock_gettime_bb5:
+    jz .L5211_hxlcl_clock_gettime_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_clock_gettime_bb5 # jump -> then
+.L5211_hxlcl_clock_gettime_bb5:
     call __errno_location # cabi call __errno_location
     mov r10, rax # cabi: unbox call result (rax)
     mov r11, 0 # materialize tag imm 0
@@ -10689,7 +10689,7 @@ hxlcl_clock_gettime:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_clock_gettime_bb6:
+.L5211_hxlcl_clock_gettime_bb6:
     mov rax, [rbp - 80] # reload L8 from spill slot
     mov rax, rax # hv payload
     add rsp, 416 # epilogue: free spill frame
@@ -10701,7 +10701,7 @@ hxlcl_clock_gettime:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_clock_gettime_bb7:
+.L5211_hxlcl_clock_gettime_bb7:
     mov rdi, [rbp - 168] # reload L19 from spill slot
     mov rdi, rdi # hv payload
     mov rsi, 0 # hv payload
@@ -10753,8 +10753,8 @@ hxlcl_clock_gettime:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 456], r11 # store tag L27
     mov [rbp - 232], r10 # spill L27 to slot
-    jmp .L7ff7_hxlcl_clock_gettime_bb8 # branch
-.L7ff7_hxlcl_clock_gettime_bb8:
+    jmp .L5211_hxlcl_clock_gettime_bb8 # branch
+.L5211_hxlcl_clock_gettime_bb8:
     mov rax, 0 # hv payload
     add rsp, 416 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -10787,7 +10787,7 @@ hxlcl_execve:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 200], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_execve_bb0:
+.L5211_hxlcl_execve_bb0:
     mov r14, 59 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 208], r11 # store tag L3
@@ -10796,18 +10796,18 @@ hxlcl_execve:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 216], r11 # store tag L4
     test r15, r15 # br_cond test
-    jz .L7ff7_hxlcl_execve_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_execve_bb1 # jump -> then
-.L7ff7_hxlcl_execve_bb1:
+    jz .L5211_hxlcl_execve_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_execve_bb1 # jump -> then
+.L5211_hxlcl_execve_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 232], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
     mov r10, [rbp - 64] # reload L6 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_execve_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_execve_bb3 # jump -> then
-.L7ff7_hxlcl_execve_bb2:
+    jz .L5211_hxlcl_execve_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_execve_bb3 # jump -> then
+.L5211_hxlcl_execve_bb2:
     mov rdi, rbx # hv payload
     mov rsi, r12 # hv payload
     mov rdx, r13 # hv payload
@@ -10851,30 +10851,30 @@ hxlcl_execve:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_execve_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_execve_bb6 # jump -> then
-.L7ff7_hxlcl_execve_bb3:
+    jz .L5211_hxlcl_execve_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_execve_bb6 # jump -> then
+.L5211_hxlcl_execve_bb3:
     mov r14, 59 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 208], r11 # store tag L3
-    jmp .L7ff7_hxlcl_execve_bb5 # branch
-.L7ff7_hxlcl_execve_bb4:
+    jmp .L5211_hxlcl_execve_bb5 # branch
+.L5211_hxlcl_execve_bb4:
     mov r14, 221 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 208], r11 # store tag L3
-    jmp .L7ff7_hxlcl_execve_bb5 # branch
-.L7ff7_hxlcl_execve_bb5:
-    jmp .L7ff7_hxlcl_execve_bb2 # branch
-.L7ff7_hxlcl_execve_bb6:
+    jmp .L5211_hxlcl_execve_bb5 # branch
+.L5211_hxlcl_execve_bb5:
+    jmp .L5211_hxlcl_execve_bb2 # branch
+.L5211_hxlcl_execve_bb6:
     mov r10, 1 # target_is_linux: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 296], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
     mov r10, [rbp - 128] # reload L14 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_execve_bb9 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_execve_bb8 # jump -> then
-.L7ff7_hxlcl_execve_bb7:
+    jz .L5211_hxlcl_execve_bb9 # jump-if-zero -> else
+    jmp .L5211_hxlcl_execve_bb8 # jump -> then
+.L5211_hxlcl_execve_bb7:
     mov rax, [rbp - 88] # reload L9 from spill slot
     mov rax, rax # hv payload
     add rsp, 304 # epilogue: free spill frame
@@ -10886,7 +10886,7 @@ hxlcl_execve:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_execve_bb8:
+.L5211_hxlcl_execve_bb8:
     call __errno_location # cabi call __errno_location
     mov r10, rax # cabi: unbox call result (rax)
     mov r11, 0 # materialize tag imm 0
@@ -10921,8 +10921,8 @@ hxlcl_execve:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 344], r11 # store tag L20
     mov [rbp - 176], r10 # spill L20 to slot
-    jmp .L7ff7_hxlcl_execve_bb9 # branch
-.L7ff7_hxlcl_execve_bb9:
+    jmp .L5211_hxlcl_execve_bb9 # branch
+.L5211_hxlcl_execve_bb9:
     mov rax, -1 # hv payload
     add rsp, 304 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -10946,15 +10946,15 @@ hxlcl_fork:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 512 # prologue: alloc spill frame
-.L7ff7_hxlcl_fork_bb0:
+.L5211_hxlcl_fork_bb0:
     mov r10, 1 # target_is_linux: 1 = true
     mov rbx, r10 # leaf: payload → dst L0
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 288], r11 # store tag L0
     test rbx, rbx # br_cond test
-    jz .L7ff7_hxlcl_fork_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fork_bb1 # jump -> then
-.L7ff7_hxlcl_fork_bb1:
+    jz .L5211_hxlcl_fork_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fork_bb1 # jump -> then
+.L5211_hxlcl_fork_bb1:
     mov r13, 220 # assign L2
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 304], r11 # store tag L2
@@ -10966,9 +10966,9 @@ hxlcl_fork:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 320], r11 # store tag L4
     test r15, r15 # br_cond test
-    jz .L7ff7_hxlcl_fork_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fork_bb3 # jump -> then
-.L7ff7_hxlcl_fork_bb2:
+    jz .L5211_hxlcl_fork_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fork_bb3 # jump -> then
+.L5211_hxlcl_fork_bb2:
     mov r11, 24 # hv payload
     mov r10, 0 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -11039,17 +11039,17 @@ hxlcl_fork:
     mov [rbp - 208], r10 # spill L24 to slot
     mov r10, [rbp - 208] # reload L24 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fork_bb8 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fork_bb7 # jump -> then
-.L7ff7_hxlcl_fork_bb3:
+    jz .L5211_hxlcl_fork_bb8 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fork_bb7 # jump -> then
+.L5211_hxlcl_fork_bb3:
     mov r13, 57 # assign L2
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 304], r11 # store tag L2
     mov r14, 0 # assign L3
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 312], r11 # store tag L3
-    jmp .L7ff7_hxlcl_fork_bb4 # branch
-.L7ff7_hxlcl_fork_bb4:
+    jmp .L5211_hxlcl_fork_bb4 # branch
+.L5211_hxlcl_fork_bb4:
     mov rdi, r14 # hv payload
     mov rsi, 0 # hv payload
     mov rdx, 0 # hv payload
@@ -11093,9 +11093,9 @@ hxlcl_fork:
     mov [rbp - 96], r10 # spill L10 to slot
     mov r10, [rbp - 96] # reload L10 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fork_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fork_bb5 # jump -> then
-.L7ff7_hxlcl_fork_bb5:
+    jz .L5211_hxlcl_fork_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fork_bb5 # jump -> then
+.L5211_hxlcl_fork_bb5:
     call __errno_location # cabi call __errno_location
     mov r10, rax # cabi: unbox call result (rax)
     mov r11, 0 # materialize tag imm 0
@@ -11140,7 +11140,7 @@ hxlcl_fork:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fork_bb6:
+.L5211_hxlcl_fork_bb6:
     mov rax, [rbp - 72] # reload L7 from spill slot
     mov rax, rax # hv payload
     add rsp, 512 # epilogue: free spill frame
@@ -11152,7 +11152,7 @@ hxlcl_fork:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fork_bb7:
+.L5211_hxlcl_fork_bb7:
     mov rax, -1 # hv payload
     add rsp, 512 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -11163,7 +11163,7 @@ hxlcl_fork:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fork_bb8:
+.L5211_hxlcl_fork_bb8:
     mov r10, [rbp - 176] # reload L20 from spill slot
     mov r10, r10 # hv payload
     mov r11, 8 # hv payload
@@ -11202,9 +11202,9 @@ hxlcl_fork:
     mov [rbp - 256], r10 # spill L30 to slot
     mov r10, [rbp - 256] # reload L30 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fork_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fork_bb9 # jump -> then
-.L7ff7_hxlcl_fork_bb9:
+    jz .L5211_hxlcl_fork_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fork_bb9 # jump -> then
+.L5211_hxlcl_fork_bb9:
     mov rax, 0 # hv payload
     add rsp, 512 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -11215,7 +11215,7 @@ hxlcl_fork:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fork_bb10:
+.L5211_hxlcl_fork_bb10:
     mov r10, [rbp - 176] # reload L20 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -11259,7 +11259,7 @@ hxlcl_fopen:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 648], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_fopen_bb0:
+.L5211_hxlcl_fopen_bb0:
     mov r10, rbx # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -11278,9 +11278,9 @@ hxlcl_fopen:
     mov r11, 2 # materialize tag imm 2
     mov [rbp - 672], r11 # store tag L4
     test r15, r15 # br_cond test
-    jz .L7ff7_hxlcl_fopen_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fopen_bb1 # jump -> then
-.L7ff7_hxlcl_fopen_bb1:
+    jz .L5211_hxlcl_fopen_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fopen_bb1 # jump -> then
+.L5211_hxlcl_fopen_bb1:
     mov rax, 0 # hv payload
     add rsp, 1216 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -11291,7 +11291,7 @@ hxlcl_fopen:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fopen_bb2:
+.L5211_hxlcl_fopen_bb2:
     mov r10, r12 # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -11316,9 +11316,9 @@ hxlcl_fopen:
     mov [rbp - 80], r10 # spill L8 to slot
     mov r10, [rbp - 80] # reload L8 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fopen_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fopen_bb3 # jump -> then
-.L7ff7_hxlcl_fopen_bb3:
+    jz .L5211_hxlcl_fopen_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fopen_bb3 # jump -> then
+.L5211_hxlcl_fopen_bb3:
     mov rax, 0 # hv payload
     add rsp, 1216 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -11329,7 +11329,7 @@ hxlcl_fopen:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fopen_bb4:
+.L5211_hxlcl_fopen_bb4:
     mov r10, 512 # assign L10
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 720], r11 # store tag L10
@@ -11348,9 +11348,9 @@ hxlcl_fopen:
     mov [rbp - 120], r10 # spill L13 to slot
     mov r10, [rbp - 120] # reload L13 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fopen_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fopen_bb5 # jump -> then
-.L7ff7_hxlcl_fopen_bb5:
+    jz .L5211_hxlcl_fopen_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fopen_bb5 # jump -> then
+.L5211_hxlcl_fopen_bb5:
     mov r10, 64 # assign L10
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 720], r11 # store tag L10
@@ -11363,8 +11363,8 @@ hxlcl_fopen:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 736], r11 # store tag L12
     mov [rbp - 112], r10 # spill L12 to slot
-    jmp .L7ff7_hxlcl_fopen_bb6 # branch
-.L7ff7_hxlcl_fopen_bb6:
+    jmp .L5211_hxlcl_fopen_bb6 # branch
+.L5211_hxlcl_fopen_bb6:
     mov r10, r12 # hv payload
     mov r11, 0 # hv payload
     add r10, r11 # __hx_ptr_load8: addr = ptr + off
@@ -11418,15 +11418,15 @@ hxlcl_fopen:
     mov [rbp - 192], r10 # spill L22 to slot
     mov r10, [rbp - 192] # reload L22 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fopen_bb8 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fopen_bb7 # jump -> then
-.L7ff7_hxlcl_fopen_bb7:
+    jz .L5211_hxlcl_fopen_bb8 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fopen_bb7 # jump -> then
+.L5211_hxlcl_fopen_bb7:
     mov r10, 1 # assign L19
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 792], r11 # store tag L19
     mov [rbp - 168], r10 # spill L19 to slot
-    jmp .L7ff7_hxlcl_fopen_bb13 # branch
-.L7ff7_hxlcl_fopen_bb8:
+    jmp .L5211_hxlcl_fopen_bb13 # branch
+.L5211_hxlcl_fopen_bb8:
     mov r11, 0 # hv payload
     mov r10, [rbp - 160] # reload L18 from spill slot
     mov r10, r10 # hv payload
@@ -11452,9 +11452,9 @@ hxlcl_fopen:
     mov [rbp - 224], r10 # spill L26 to slot
     mov r10, [rbp - 224] # reload L26 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fopen_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fopen_bb9 # jump -> then
-.L7ff7_hxlcl_fopen_bb9:
+    jz .L5211_hxlcl_fopen_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fopen_bb9 # jump -> then
+.L5211_hxlcl_fopen_bb9:
     mov r10, r12 # hv payload
     mov r11, 2 # hv payload
     add r10, r11 # __hx_ptr_load8: addr = ptr + off
@@ -11492,19 +11492,19 @@ hxlcl_fopen:
     mov [rbp - 272], r10 # spill L32 to slot
     mov r10, [rbp - 272] # reload L32 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fopen_bb12 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fopen_bb11 # jump -> then
-.L7ff7_hxlcl_fopen_bb10:
-    jmp .L7ff7_hxlcl_fopen_bb13 # branch
-.L7ff7_hxlcl_fopen_bb11:
+    jz .L5211_hxlcl_fopen_bb12 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fopen_bb11 # jump -> then
+.L5211_hxlcl_fopen_bb10:
+    jmp .L5211_hxlcl_fopen_bb13 # branch
+.L5211_hxlcl_fopen_bb11:
     mov r10, 1 # assign L19
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 792], r11 # store tag L19
     mov [rbp - 168], r10 # spill L19 to slot
-    jmp .L7ff7_hxlcl_fopen_bb12 # branch
-.L7ff7_hxlcl_fopen_bb12:
-    jmp .L7ff7_hxlcl_fopen_bb10 # branch
-.L7ff7_hxlcl_fopen_bb13:
+    jmp .L5211_hxlcl_fopen_bb12 # branch
+.L5211_hxlcl_fopen_bb12:
+    jmp .L5211_hxlcl_fopen_bb10 # branch
+.L5211_hxlcl_fopen_bb13:
     mov r10, 0 # assign L34
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 912], r11 # store tag L34
@@ -11538,9 +11538,9 @@ hxlcl_fopen:
     mov [rbp - 320], r10 # spill L38 to slot
     mov r10, [rbp - 320] # reload L38 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fopen_bb15 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fopen_bb14 # jump -> then
-.L7ff7_hxlcl_fopen_bb14:
+    jz .L5211_hxlcl_fopen_bb15 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fopen_bb14 # jump -> then
+.L5211_hxlcl_fopen_bb14:
     mov r10, 0 # assign L34
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 912], r11 # store tag L34
@@ -11556,9 +11556,9 @@ hxlcl_fopen:
     mov [rbp - 336], r10 # spill L40 to slot
     mov r10, [rbp - 336] # reload L40 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fopen_bb17 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fopen_bb16 # jump -> then
-.L7ff7_hxlcl_fopen_bb15:
+    jz .L5211_hxlcl_fopen_bb17 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fopen_bb16 # jump -> then
+.L5211_hxlcl_fopen_bb15:
     mov r10, [rbp - 144] # reload L16 from spill slot
     mov r10, r10 # hv payload
     mov r11, 119 # hv payload
@@ -11584,21 +11584,21 @@ hxlcl_fopen:
     mov [rbp - 368], r10 # spill L44 to slot
     mov r10, [rbp - 368] # reload L44 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fopen_bb19 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fopen_bb18 # jump -> then
-.L7ff7_hxlcl_fopen_bb16:
+    jz .L5211_hxlcl_fopen_bb19 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fopen_bb18 # jump -> then
+.L5211_hxlcl_fopen_bb16:
     mov r10, 2 # assign L34
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 912], r11 # store tag L34
     mov [rbp - 288], r10 # spill L34 to slot
-    jmp .L7ff7_hxlcl_fopen_bb17 # branch
-.L7ff7_hxlcl_fopen_bb17:
+    jmp .L5211_hxlcl_fopen_bb17 # branch
+.L5211_hxlcl_fopen_bb17:
     mov r10, 1 # assign L35
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 920], r11 # store tag L35
     mov [rbp - 296], r10 # spill L35 to slot
-    jmp .L7ff7_hxlcl_fopen_bb15 # branch
-.L7ff7_hxlcl_fopen_bb18:
+    jmp .L5211_hxlcl_fopen_bb15 # branch
+.L5211_hxlcl_fopen_bb18:
     mov r11, [rbp - 104] # reload L11 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 96] # reload L10 from spill slot
@@ -11627,9 +11627,9 @@ hxlcl_fopen:
     mov [rbp - 408], r10 # spill L49 to slot
     mov r10, [rbp - 408] # reload L49 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fopen_bb21 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fopen_bb20 # jump -> then
-.L7ff7_hxlcl_fopen_bb19:
+    jz .L5211_hxlcl_fopen_bb21 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fopen_bb20 # jump -> then
+.L5211_hxlcl_fopen_bb19:
     mov r10, [rbp - 144] # reload L16 from spill slot
     mov r10, r10 # hv payload
     mov r11, 97 # hv payload
@@ -11655,15 +11655,15 @@ hxlcl_fopen:
     mov [rbp - 448], r10 # spill L54 to slot
     mov r10, [rbp - 448] # reload L54 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fopen_bb23 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fopen_bb22 # jump -> then
-.L7ff7_hxlcl_fopen_bb20:
+    jz .L5211_hxlcl_fopen_bb23 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fopen_bb22 # jump -> then
+.L5211_hxlcl_fopen_bb20:
     mov r10, 2 # assign L48
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1024], r11 # store tag L48
     mov [rbp - 400], r10 # spill L48 to slot
-    jmp .L7ff7_hxlcl_fopen_bb21 # branch
-.L7ff7_hxlcl_fopen_bb21:
+    jmp .L5211_hxlcl_fopen_bb21 # branch
+.L5211_hxlcl_fopen_bb21:
     mov r11, [rbp - 392] # reload L47 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 400] # reload L48 from spill slot
@@ -11681,8 +11681,8 @@ hxlcl_fopen:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 920], r11 # store tag L35
     mov [rbp - 296], r10 # spill L35 to slot
-    jmp .L7ff7_hxlcl_fopen_bb19 # branch
-.L7ff7_hxlcl_fopen_bb22:
+    jmp .L5211_hxlcl_fopen_bb19 # branch
+.L5211_hxlcl_fopen_bb22:
     mov r11, [rbp - 112] # reload L12 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 96] # reload L10 from spill slot
@@ -11711,9 +11711,9 @@ hxlcl_fopen:
     mov [rbp - 488], r10 # spill L59 to slot
     mov r10, [rbp - 488] # reload L59 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fopen_bb25 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fopen_bb24 # jump -> then
-.L7ff7_hxlcl_fopen_bb23:
+    jz .L5211_hxlcl_fopen_bb25 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fopen_bb24 # jump -> then
+.L5211_hxlcl_fopen_bb23:
     mov r10, [rbp - 296] # reload L35 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -11739,15 +11739,15 @@ hxlcl_fopen:
     mov [rbp - 528], r10 # spill L64 to slot
     mov r10, [rbp - 528] # reload L64 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fopen_bb27 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fopen_bb26 # jump -> then
-.L7ff7_hxlcl_fopen_bb24:
+    jz .L5211_hxlcl_fopen_bb27 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fopen_bb26 # jump -> then
+.L5211_hxlcl_fopen_bb24:
     mov r10, 2 # assign L58
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1104], r11 # store tag L58
     mov [rbp - 480], r10 # spill L58 to slot
-    jmp .L7ff7_hxlcl_fopen_bb25 # branch
-.L7ff7_hxlcl_fopen_bb25:
+    jmp .L5211_hxlcl_fopen_bb25 # branch
+.L5211_hxlcl_fopen_bb25:
     mov r11, [rbp - 472] # reload L57 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 480] # reload L58 from spill slot
@@ -11765,8 +11765,8 @@ hxlcl_fopen:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 920], r11 # store tag L35
     mov [rbp - 296], r10 # spill L35 to slot
-    jmp .L7ff7_hxlcl_fopen_bb23 # branch
-.L7ff7_hxlcl_fopen_bb26:
+    jmp .L5211_hxlcl_fopen_bb23 # branch
+.L5211_hxlcl_fopen_bb26:
     mov rax, 0 # hv payload
     add rsp, 1216 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -11777,7 +11777,7 @@ hxlcl_fopen:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fopen_bb27:
+.L5211_hxlcl_fopen_bb27:
     mov r11, 420 # hv payload
     mov r10, 0 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -11824,9 +11824,9 @@ hxlcl_fopen:
     mov [rbp - 584], r10 # spill L71 to slot
     mov r10, [rbp - 584] # reload L71 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fopen_bb29 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fopen_bb28 # jump -> then
-.L7ff7_hxlcl_fopen_bb28:
+    jz .L5211_hxlcl_fopen_bb29 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fopen_bb28 # jump -> then
+.L5211_hxlcl_fopen_bb28:
     mov rax, 0 # hv payload
     add rsp, 1216 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -11837,7 +11837,7 @@ hxlcl_fopen:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fopen_bb29:
+.L5211_hxlcl_fopen_bb29:
     mov r11, 2 # hv payload
     mov r10, [rbp - 560] # reload L68 from spill slot
     mov r10, r10 # hv payload
@@ -11863,9 +11863,9 @@ hxlcl_fopen:
     mov [rbp - 616], r10 # spill L75 to slot
     mov r10, [rbp - 616] # reload L75 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fopen_bb31 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fopen_bb30 # jump -> then
-.L7ff7_hxlcl_fopen_bb30:
+    jz .L5211_hxlcl_fopen_bb31 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fopen_bb30 # jump -> then
+.L5211_hxlcl_fopen_bb30:
     mov rax, 0 # hv payload
     add rsp, 1216 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -11876,7 +11876,7 @@ hxlcl_fopen:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fopen_bb31:
+.L5211_hxlcl_fopen_bb31:
     mov r11, 1 # hv payload
     mov r10, [rbp - 560] # reload L68 from spill slot
     mov r10, r10 # hv payload
@@ -11911,7 +11911,7 @@ hxlcl_fclose:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 144], r11 # store tag L0
     mov rbx, rdi # cabi ingress param payload
-.L7ff7_hxlcl_fclose_bb0:
+.L5211_hxlcl_fclose_bb0:
     mov r10, rbx # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -11930,9 +11930,9 @@ hxlcl_fclose:
     mov r11, 2 # materialize tag imm 2
     mov [rbp - 168], r11 # store tag L3
     test r14, r14 # br_cond test
-    jz .L7ff7_hxlcl_fclose_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fclose_bb1 # jump -> then
-.L7ff7_hxlcl_fclose_bb1:
+    jz .L5211_hxlcl_fclose_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fclose_bb1 # jump -> then
+.L5211_hxlcl_fclose_bb1:
     mov rax, -1 # hv payload
     add rsp, 224 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -11943,7 +11943,7 @@ hxlcl_fclose:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fclose_bb2:
+.L5211_hxlcl_fclose_bb2:
     mov r11, 4096 # hv payload
     mov r10, rbx # hv payload
     cmp r10, r11 # __hx_payload_ge: cmp payloads
@@ -11968,9 +11968,9 @@ hxlcl_fclose:
     mov [rbp - 72], r10 # spill L7 to slot
     mov r10, [rbp - 72] # reload L7 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fclose_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fclose_bb3 # jump -> then
-.L7ff7_hxlcl_fclose_bb3:
+    jz .L5211_hxlcl_fclose_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fclose_bb3 # jump -> then
+.L5211_hxlcl_fclose_bb3:
     mov rax, 0 # hv payload
     add rsp, 224 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -11981,7 +11981,7 @@ hxlcl_fclose:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fclose_bb4:
+.L5211_hxlcl_fclose_bb4:
     mov r11, 1 # hv payload
     mov r10, rbx # hv payload
     sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
@@ -12018,9 +12018,9 @@ hxlcl_fclose:
     mov [rbp - 120], r10 # spill L13 to slot
     mov r10, [rbp - 120] # reload L13 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fclose_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fclose_bb5 # jump -> then
-.L7ff7_hxlcl_fclose_bb5:
+    jz .L5211_hxlcl_fclose_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fclose_bb5 # jump -> then
+.L5211_hxlcl_fclose_bb5:
     mov rax, 0 # hv payload
     add rsp, 224 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -12031,7 +12031,7 @@ hxlcl_fclose:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fclose_bb6:
+.L5211_hxlcl_fclose_bb6:
     mov rdi, [rbp - 96] # reload L10 from spill slot
     mov rdi, rdi # hv payload
     call hxlcl_close # cabi call hxlcl_close
@@ -12075,7 +12075,7 @@ hxlcl_fread:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 400], r11 # store tag L3
     mov r14, rcx # cabi ingress param payload
-.L7ff7_hxlcl_fread_bb0:
+.L5211_hxlcl_fread_bb0:
     mov r10, rbx # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -12098,9 +12098,9 @@ hxlcl_fread:
     mov [rbp - 64], r10 # spill L6 to slot
     mov r10, [rbp - 64] # reload L6 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fread_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fread_bb1 # jump -> then
-.L7ff7_hxlcl_fread_bb1:
+    jz .L5211_hxlcl_fread_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fread_bb1 # jump -> then
+.L5211_hxlcl_fread_bb1:
     mov rax, 0 # hv payload
     add rsp, 688 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -12111,7 +12111,7 @@ hxlcl_fread:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fread_bb2:
+.L5211_hxlcl_fread_bb2:
     mov r10, r12 # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -12136,9 +12136,9 @@ hxlcl_fread:
     mov [rbp - 96], r10 # spill L10 to slot
     mov r10, [rbp - 96] # reload L10 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fread_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fread_bb3 # jump -> then
-.L7ff7_hxlcl_fread_bb3:
+    jz .L5211_hxlcl_fread_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fread_bb3 # jump -> then
+.L5211_hxlcl_fread_bb3:
     mov rax, 0 # hv payload
     add rsp, 688 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -12149,7 +12149,7 @@ hxlcl_fread:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fread_bb4:
+.L5211_hxlcl_fread_bb4:
     mov r10, r13 # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -12174,9 +12174,9 @@ hxlcl_fread:
     mov [rbp - 128], r10 # spill L14 to slot
     mov r10, [rbp - 128] # reload L14 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fread_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fread_bb5 # jump -> then
-.L7ff7_hxlcl_fread_bb5:
+    jz .L5211_hxlcl_fread_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fread_bb5 # jump -> then
+.L5211_hxlcl_fread_bb5:
     mov rax, 0 # hv payload
     add rsp, 688 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -12187,7 +12187,7 @@ hxlcl_fread:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fread_bb6:
+.L5211_hxlcl_fread_bb6:
     mov r10, r14 # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -12212,9 +12212,9 @@ hxlcl_fread:
     mov [rbp - 160], r10 # spill L18 to slot
     mov r10, [rbp - 160] # reload L18 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fread_bb8 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fread_bb7 # jump -> then
-.L7ff7_hxlcl_fread_bb7:
+    jz .L5211_hxlcl_fread_bb8 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fread_bb7 # jump -> then
+.L5211_hxlcl_fread_bb7:
     mov rax, 0 # hv payload
     add rsp, 688 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -12225,7 +12225,7 @@ hxlcl_fread:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fread_bb8:
+.L5211_hxlcl_fread_bb8:
     mov r11, 4096 # hv payload
     mov r10, r14 # hv payload
     cmp r10, r11 # __hx_payload_ge: cmp payloads
@@ -12250,9 +12250,9 @@ hxlcl_fread:
     mov [rbp - 192], r10 # spill L22 to slot
     mov r10, [rbp - 192] # reload L22 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fread_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fread_bb9 # jump -> then
-.L7ff7_hxlcl_fread_bb9:
+    jz .L5211_hxlcl_fread_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fread_bb9 # jump -> then
+.L5211_hxlcl_fread_bb9:
     mov rax, 0 # hv payload
     add rsp, 688 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -12263,7 +12263,7 @@ hxlcl_fread:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fread_bb10:
+.L5211_hxlcl_fread_bb10:
     mov r11, 1 # hv payload
     mov r10, r14 # hv payload
     sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
@@ -12305,8 +12305,8 @@ hxlcl_fread:
     mov r11, [rbp - 608] # tag L29 from tag-slot
     mov [rbp - 616], r11 # store tag L30
     mov [rbp - 256], r10 # spill L30 to slot
-    jmp .L7ff7_hxlcl_fread_bb11 # branch
-.L7ff7_hxlcl_fread_bb11:
+    jmp .L5211_hxlcl_fread_bb11 # branch
+.L5211_hxlcl_fread_bb11:
     mov r11, 0 # hv payload
     mov r10, [rbp - 256] # reload L30 from spill slot
     mov r10, r10 # hv payload
@@ -12318,9 +12318,9 @@ hxlcl_fread:
     mov [rbp - 264], r10 # spill L31 to slot
     mov r10, [rbp - 264] # reload L31 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fread_bb13 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fread_bb12 # jump -> then
-.L7ff7_hxlcl_fread_bb12:
+    jz .L5211_hxlcl_fread_bb13 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fread_bb12 # jump -> then
+.L5211_hxlcl_fread_bb12:
     mov r11, [rbp - 240] # reload L28 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 232] # reload L27 from spill slot
@@ -12387,9 +12387,9 @@ hxlcl_fread:
     mov [rbp - 336], r10 # spill L40 to slot
     mov r10, [rbp - 336] # reload L40 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fread_bb15 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fread_bb14 # jump -> then
-.L7ff7_hxlcl_fread_bb13:
+    jz .L5211_hxlcl_fread_bb15 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fread_bb14 # jump -> then
+.L5211_hxlcl_fread_bb13:
     mov r11, r12 # hv payload
     mov r10, [rbp - 240] # reload L28 from spill slot
     mov r10, r10 # hv payload
@@ -12411,13 +12411,13 @@ hxlcl_fread:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fread_bb14:
+.L5211_hxlcl_fread_bb14:
     mov r10, 0 # assign L30
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 616], r11 # store tag L30
     mov [rbp - 256], r10 # spill L30 to slot
-    jmp .L7ff7_hxlcl_fread_bb16 # branch
-.L7ff7_hxlcl_fread_bb15:
+    jmp .L5211_hxlcl_fread_bb16 # branch
+.L5211_hxlcl_fread_bb15:
     mov r11, [rbp - 312] # reload L37 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 240] # reload L28 from spill slot
@@ -12446,9 +12446,9 @@ hxlcl_fread:
     mov r11, [rbp - 720] # tag L43 from tag-slot
     mov [rbp - 616], r11 # store tag L30
     mov [rbp - 256], r10 # spill L30 to slot
-    jmp .L7ff7_hxlcl_fread_bb16 # branch
-.L7ff7_hxlcl_fread_bb16:
-    jmp .L7ff7_hxlcl_fread_bb11 # branch
+    jmp .L5211_hxlcl_fread_bb16 # branch
+.L5211_hxlcl_fread_bb16:
+    jmp .L5211_hxlcl_fread_bb11 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 688 # epilogue: free spill frame
@@ -12485,7 +12485,7 @@ hxlcl_fwrite:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 400], r11 # store tag L3
     mov r14, rcx # cabi ingress param payload
-.L7ff7_hxlcl_fwrite_bb0:
+.L5211_hxlcl_fwrite_bb0:
     mov r10, rbx # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -12508,9 +12508,9 @@ hxlcl_fwrite:
     mov [rbp - 64], r10 # spill L6 to slot
     mov r10, [rbp - 64] # reload L6 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fwrite_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fwrite_bb1 # jump -> then
-.L7ff7_hxlcl_fwrite_bb1:
+    jz .L5211_hxlcl_fwrite_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fwrite_bb1 # jump -> then
+.L5211_hxlcl_fwrite_bb1:
     mov rax, 0 # hv payload
     add rsp, 688 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -12521,7 +12521,7 @@ hxlcl_fwrite:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fwrite_bb2:
+.L5211_hxlcl_fwrite_bb2:
     mov r10, r12 # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -12546,9 +12546,9 @@ hxlcl_fwrite:
     mov [rbp - 96], r10 # spill L10 to slot
     mov r10, [rbp - 96] # reload L10 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fwrite_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fwrite_bb3 # jump -> then
-.L7ff7_hxlcl_fwrite_bb3:
+    jz .L5211_hxlcl_fwrite_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fwrite_bb3 # jump -> then
+.L5211_hxlcl_fwrite_bb3:
     mov rax, 0 # hv payload
     add rsp, 688 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -12559,7 +12559,7 @@ hxlcl_fwrite:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fwrite_bb4:
+.L5211_hxlcl_fwrite_bb4:
     mov r10, r13 # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -12584,9 +12584,9 @@ hxlcl_fwrite:
     mov [rbp - 128], r10 # spill L14 to slot
     mov r10, [rbp - 128] # reload L14 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fwrite_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fwrite_bb5 # jump -> then
-.L7ff7_hxlcl_fwrite_bb5:
+    jz .L5211_hxlcl_fwrite_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fwrite_bb5 # jump -> then
+.L5211_hxlcl_fwrite_bb5:
     mov rax, 0 # hv payload
     add rsp, 688 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -12597,7 +12597,7 @@ hxlcl_fwrite:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fwrite_bb6:
+.L5211_hxlcl_fwrite_bb6:
     mov r10, r14 # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -12622,9 +12622,9 @@ hxlcl_fwrite:
     mov [rbp - 160], r10 # spill L18 to slot
     mov r10, [rbp - 160] # reload L18 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fwrite_bb8 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fwrite_bb7 # jump -> then
-.L7ff7_hxlcl_fwrite_bb7:
+    jz .L5211_hxlcl_fwrite_bb8 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fwrite_bb7 # jump -> then
+.L5211_hxlcl_fwrite_bb7:
     mov rax, 0 # hv payload
     add rsp, 688 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -12635,7 +12635,7 @@ hxlcl_fwrite:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fwrite_bb8:
+.L5211_hxlcl_fwrite_bb8:
     mov r11, 4096 # hv payload
     mov r10, r14 # hv payload
     cmp r10, r11 # __hx_payload_ge: cmp payloads
@@ -12660,9 +12660,9 @@ hxlcl_fwrite:
     mov [rbp - 192], r10 # spill L22 to slot
     mov r10, [rbp - 192] # reload L22 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fwrite_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fwrite_bb9 # jump -> then
-.L7ff7_hxlcl_fwrite_bb9:
+    jz .L5211_hxlcl_fwrite_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fwrite_bb9 # jump -> then
+.L5211_hxlcl_fwrite_bb9:
     mov rax, 0 # hv payload
     add rsp, 688 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -12673,7 +12673,7 @@ hxlcl_fwrite:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fwrite_bb10:
+.L5211_hxlcl_fwrite_bb10:
     mov r11, 1 # hv payload
     mov r10, r14 # hv payload
     sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
@@ -12715,8 +12715,8 @@ hxlcl_fwrite:
     mov r11, [rbp - 608] # tag L29 from tag-slot
     mov [rbp - 616], r11 # store tag L30
     mov [rbp - 256], r10 # spill L30 to slot
-    jmp .L7ff7_hxlcl_fwrite_bb11 # branch
-.L7ff7_hxlcl_fwrite_bb11:
+    jmp .L5211_hxlcl_fwrite_bb11 # branch
+.L5211_hxlcl_fwrite_bb11:
     mov r11, 0 # hv payload
     mov r10, [rbp - 256] # reload L30 from spill slot
     mov r10, r10 # hv payload
@@ -12728,9 +12728,9 @@ hxlcl_fwrite:
     mov [rbp - 264], r10 # spill L31 to slot
     mov r10, [rbp - 264] # reload L31 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fwrite_bb13 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fwrite_bb12 # jump -> then
-.L7ff7_hxlcl_fwrite_bb12:
+    jz .L5211_hxlcl_fwrite_bb13 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fwrite_bb12 # jump -> then
+.L5211_hxlcl_fwrite_bb12:
     mov r11, [rbp - 240] # reload L28 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 232] # reload L27 from spill slot
@@ -12797,9 +12797,9 @@ hxlcl_fwrite:
     mov [rbp - 336], r10 # spill L40 to slot
     mov r10, [rbp - 336] # reload L40 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fwrite_bb15 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fwrite_bb14 # jump -> then
-.L7ff7_hxlcl_fwrite_bb13:
+    jz .L5211_hxlcl_fwrite_bb15 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fwrite_bb14 # jump -> then
+.L5211_hxlcl_fwrite_bb13:
     mov r11, r12 # hv payload
     mov r10, [rbp - 240] # reload L28 from spill slot
     mov r10, r10 # hv payload
@@ -12821,13 +12821,13 @@ hxlcl_fwrite:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fwrite_bb14:
+.L5211_hxlcl_fwrite_bb14:
     mov r10, 0 # assign L30
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 616], r11 # store tag L30
     mov [rbp - 256], r10 # spill L30 to slot
-    jmp .L7ff7_hxlcl_fwrite_bb16 # branch
-.L7ff7_hxlcl_fwrite_bb15:
+    jmp .L5211_hxlcl_fwrite_bb16 # branch
+.L5211_hxlcl_fwrite_bb15:
     mov r11, [rbp - 312] # reload L37 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 240] # reload L28 from spill slot
@@ -12856,9 +12856,9 @@ hxlcl_fwrite:
     mov r11, [rbp - 720] # tag L43 from tag-slot
     mov [rbp - 616], r11 # store tag L30
     mov [rbp - 256], r10 # spill L30 to slot
-    jmp .L7ff7_hxlcl_fwrite_bb16 # branch
-.L7ff7_hxlcl_fwrite_bb16:
-    jmp .L7ff7_hxlcl_fwrite_bb11 # branch
+    jmp .L5211_hxlcl_fwrite_bb16 # branch
+.L5211_hxlcl_fwrite_bb16:
+    jmp .L5211_hxlcl_fwrite_bb11 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 688 # epilogue: free spill frame
@@ -12886,7 +12886,7 @@ hxlcl_ftell:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 128], r11 # store tag L0
     mov rbx, rdi # cabi ingress param payload
-.L7ff7_hxlcl_ftell_bb0:
+.L5211_hxlcl_ftell_bb0:
     mov r10, rbx # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -12905,9 +12905,9 @@ hxlcl_ftell:
     mov r11, 2 # materialize tag imm 2
     mov [rbp - 152], r11 # store tag L3
     test r14, r14 # br_cond test
-    jz .L7ff7_hxlcl_ftell_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_ftell_bb1 # jump -> then
-.L7ff7_hxlcl_ftell_bb1:
+    jz .L5211_hxlcl_ftell_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_ftell_bb1 # jump -> then
+.L5211_hxlcl_ftell_bb1:
     mov rax, -1 # hv payload
     add rsp, 192 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -12918,7 +12918,7 @@ hxlcl_ftell:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_ftell_bb2:
+.L5211_hxlcl_ftell_bb2:
     mov r11, 4096 # hv payload
     mov r10, rbx # hv payload
     cmp r10, r11 # __hx_payload_ge: cmp payloads
@@ -12943,9 +12943,9 @@ hxlcl_ftell:
     mov [rbp - 72], r10 # spill L7 to slot
     mov r10, [rbp - 72] # reload L7 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_ftell_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_ftell_bb3 # jump -> then
-.L7ff7_hxlcl_ftell_bb3:
+    jz .L5211_hxlcl_ftell_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_ftell_bb3 # jump -> then
+.L5211_hxlcl_ftell_bb3:
     mov rax, -1 # hv payload
     add rsp, 192 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -12956,7 +12956,7 @@ hxlcl_ftell:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_ftell_bb4:
+.L5211_hxlcl_ftell_bb4:
     mov r11, 1 # hv payload
     mov r10, rbx # hv payload
     sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
@@ -13024,7 +13024,7 @@ hxlcl_fseek:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 184], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_fseek_bb0:
+.L5211_hxlcl_fseek_bb0:
     mov r10, rbx # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -13045,9 +13045,9 @@ hxlcl_fseek:
     mov [rbp - 56], r10 # spill L5 to slot
     mov r10, [rbp - 56] # reload L5 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fseek_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fseek_bb1 # jump -> then
-.L7ff7_hxlcl_fseek_bb1:
+    jz .L5211_hxlcl_fseek_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fseek_bb1 # jump -> then
+.L5211_hxlcl_fseek_bb1:
     mov rax, -1 # hv payload
     add rsp, 272 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -13058,7 +13058,7 @@ hxlcl_fseek:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fseek_bb2:
+.L5211_hxlcl_fseek_bb2:
     mov r11, 4096 # hv payload
     mov r10, rbx # hv payload
     cmp r10, r11 # __hx_payload_ge: cmp payloads
@@ -13083,9 +13083,9 @@ hxlcl_fseek:
     mov [rbp - 88], r10 # spill L9 to slot
     mov r10, [rbp - 88] # reload L9 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fseek_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fseek_bb3 # jump -> then
-.L7ff7_hxlcl_fseek_bb3:
+    jz .L5211_hxlcl_fseek_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fseek_bb3 # jump -> then
+.L5211_hxlcl_fseek_bb3:
     mov rax, -1 # hv payload
     add rsp, 272 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -13096,7 +13096,7 @@ hxlcl_fseek:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fseek_bb4:
+.L5211_hxlcl_fseek_bb4:
     mov r11, 1 # hv payload
     mov r10, rbx # hv payload
     sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
@@ -13147,9 +13147,9 @@ hxlcl_fseek:
     mov [rbp - 152], r10 # spill L17 to slot
     mov r10, [rbp - 152] # reload L17 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fseek_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fseek_bb5 # jump -> then
-.L7ff7_hxlcl_fseek_bb5:
+    jz .L5211_hxlcl_fseek_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fseek_bb5 # jump -> then
+.L5211_hxlcl_fseek_bb5:
     mov rax, -1 # hv payload
     add rsp, 272 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -13160,7 +13160,7 @@ hxlcl_fseek:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fseek_bb6:
+.L5211_hxlcl_fseek_bb6:
     mov rax, 0 # hv payload
     add rsp, 272 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -13190,7 +13190,7 @@ hxlcl_fdopen:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 80], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_fdopen_bb0:
+.L5211_hxlcl_fdopen_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     cmp r10, r11 # __hx_payload_lt: cmp payloads
@@ -13209,9 +13209,9 @@ hxlcl_fdopen:
     mov r11, 2 # materialize tag imm 2
     mov [rbp - 104], r11 # store tag L4
     test r15, r15 # br_cond test
-    jz .L7ff7_hxlcl_fdopen_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fdopen_bb1 # jump -> then
-.L7ff7_hxlcl_fdopen_bb1:
+    jz .L5211_hxlcl_fdopen_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fdopen_bb1 # jump -> then
+.L5211_hxlcl_fdopen_bb1:
     mov rax, 0 # hv payload
     add rsp, 80 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -13222,7 +13222,7 @@ hxlcl_fdopen:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fdopen_bb2:
+.L5211_hxlcl_fdopen_bb2:
     mov r11, 1 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -13259,7 +13259,7 @@ hxlcl_fputs:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 240], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_fputs_bb0:
+.L5211_hxlcl_fputs_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -13303,9 +13303,9 @@ hxlcl_fputs:
     mov [rbp - 80], r10 # spill L8 to slot
     mov r10, [rbp - 80] # reload L8 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fputs_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fputs_bb1 # jump -> then
-.L7ff7_hxlcl_fputs_bb1:
+    jz .L5211_hxlcl_fputs_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fputs_bb1 # jump -> then
+.L5211_hxlcl_fputs_bb1:
     mov r11, 1 # hv payload
     mov r10, 0 # hv payload
     sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
@@ -13323,7 +13323,7 @@ hxlcl_fputs:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fputs_bb2:
+.L5211_hxlcl_fputs_bb2:
     mov r10, 1 # assign L11
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 320], r11 # store tag L11
@@ -13377,15 +13377,15 @@ hxlcl_fputs:
     mov [rbp - 160], r10 # spill L18 to slot
     mov r10, [rbp - 160] # reload L18 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fputs_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fputs_bb3 # jump -> then
-.L7ff7_hxlcl_fputs_bb3:
+    jz .L5211_hxlcl_fputs_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fputs_bb3 # jump -> then
+.L5211_hxlcl_fputs_bb3:
     mov r10, 2 # assign L11
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 320], r11 # store tag L11
     mov [rbp - 104], r10 # spill L11 to slot
-    jmp .L7ff7_hxlcl_fputs_bb4 # branch
-.L7ff7_hxlcl_fputs_bb4:
+    jmp .L5211_hxlcl_fputs_bb4 # branch
+.L5211_hxlcl_fputs_bb4:
     mov r10, 0 # assign L20
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 392], r11 # store tag L20
@@ -13402,8 +13402,8 @@ hxlcl_fputs:
     mov r11, [rbp - 400] # tag L21 from tag-slot
     mov [rbp - 408], r11 # store tag L22
     mov [rbp - 192], r10 # spill L22 to slot
-    jmp .L7ff7_hxlcl_fputs_bb5 # branch
-.L7ff7_hxlcl_fputs_bb5:
+    jmp .L5211_hxlcl_fputs_bb5 # branch
+.L5211_hxlcl_fputs_bb5:
     mov r11, 0 # hv payload
     mov r10, [rbp - 192] # reload L22 from spill slot
     mov r10, r10 # hv payload
@@ -13415,9 +13415,9 @@ hxlcl_fputs:
     mov [rbp - 200], r10 # spill L23 to slot
     mov r10, [rbp - 200] # reload L23 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fputs_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fputs_bb6 # jump -> then
-.L7ff7_hxlcl_fputs_bb6:
+    jz .L5211_hxlcl_fputs_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fputs_bb6 # jump -> then
+.L5211_hxlcl_fputs_bb6:
     mov r11, 1 # hv payload
     mov r10, [rbp - 176] # reload L20 from spill slot
     mov r10, r10 # hv payload
@@ -13443,8 +13443,8 @@ hxlcl_fputs:
     mov r11, [rbp - 432] # tag L25 from tag-slot
     mov [rbp - 408], r11 # store tag L22
     mov [rbp - 192], r10 # spill L22 to slot
-    jmp .L7ff7_hxlcl_fputs_bb5 # branch
-.L7ff7_hxlcl_fputs_bb7:
+    jmp .L5211_hxlcl_fputs_bb5 # branch
+.L5211_hxlcl_fputs_bb7:
     mov rdi, [rbp - 104] # reload L11 from spill slot
     mov rdi, rdi # hv payload
     mov rsi, r14 # hv payload
@@ -13485,7 +13485,7 @@ hxlcl_fputc:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 232], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_fputc_bb0:
+.L5211_hxlcl_fputc_bb0:
     mov r11, 0 # hv payload
     mov r10, r12 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -13546,14 +13546,14 @@ hxlcl_fputc:
     mov [rbp - 104], r10 # spill L11 to slot
     mov r10, [rbp - 104] # reload L11 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fputc_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fputc_bb1 # jump -> then
-.L7ff7_hxlcl_fputc_bb1:
+    jz .L5211_hxlcl_fputc_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fputc_bb1 # jump -> then
+.L5211_hxlcl_fputc_bb1:
     mov r15, 2 # assign L4
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 256], r11 # store tag L4
-    jmp .L7ff7_hxlcl_fputc_bb2 # branch
-.L7ff7_hxlcl_fputc_bb2:
+    jmp .L5211_hxlcl_fputc_bb2 # branch
+.L5211_hxlcl_fputc_bb2:
     mov r11, 255 # hv payload
     mov r10, rbx # hv payload
     and r10, r11 # __hx_payload_and: r10 = a.pl and b.pl
@@ -13626,9 +13626,9 @@ hxlcl_fputc:
     mov [rbp - 192], r10 # spill L22 to slot
     mov r10, [rbp - 192] # reload L22 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fputc_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fputc_bb3 # jump -> then
-.L7ff7_hxlcl_fputc_bb3:
+    jz .L5211_hxlcl_fputc_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fputc_bb3 # jump -> then
+.L5211_hxlcl_fputc_bb3:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -13646,7 +13646,7 @@ hxlcl_fputc:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fputc_bb4:
+.L5211_hxlcl_fputc_bb4:
     mov r11, 1 # hv payload
     mov r10, 0 # hv payload
     sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
@@ -13680,7 +13680,7 @@ hxlcl_fflush:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 56], r11 # store tag L0
     mov rbx, rdi # cabi ingress param payload
-.L7ff7_hxlcl_fflush_bb0:
+.L5211_hxlcl_fflush_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -13719,7 +13719,7 @@ hxlcl_popen_remember:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 192], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_popen_remember_bb0:
+.L5211_hxlcl_popen_remember_bb0:
     lea rax, [rip+slot_900] # __hx_static_slot: rax = &slot_900 (self-static .data, pc-rel)
     mov r13, rax # leaf: payload → dst L2
     mov r11, 0 # materialize tag imm 0
@@ -13752,8 +13752,8 @@ hxlcl_popen_remember:
     mov r11, [rbp - 240] # tag L7 from tag-slot
     mov [rbp - 248], r11 # store tag L8
     mov [rbp - 80], r10 # spill L8 to slot
-    jmp .L7ff7_hxlcl_popen_remember_bb1 # branch
-.L7ff7_hxlcl_popen_remember_bb1:
+    jmp .L5211_hxlcl_popen_remember_bb1 # branch
+.L5211_hxlcl_popen_remember_bb1:
     mov r11, [rbp - 80] # reload L8 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
@@ -13766,9 +13766,9 @@ hxlcl_popen_remember:
     mov [rbp - 88], r10 # spill L9 to slot
     mov r10, [rbp - 88] # reload L9 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_popen_remember_bb3 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_popen_remember_bb2 # jump -> then
-.L7ff7_hxlcl_popen_remember_bb2:
+    jz .L5211_hxlcl_popen_remember_bb3 # jump-if-zero -> else
+    jmp .L5211_hxlcl_popen_remember_bb2 # jump -> then
+.L5211_hxlcl_popen_remember_bb2:
     mov r11, 16 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -13805,9 +13805,9 @@ hxlcl_popen_remember:
     mov [rbp - 128], r10 # spill L14 to slot
     mov r10, [rbp - 128] # reload L14 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_popen_remember_bb5 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_popen_remember_bb4 # jump -> then
-.L7ff7_hxlcl_popen_remember_bb3:
+    jz .L5211_hxlcl_popen_remember_bb5 # jump-if-zero -> else
+    jmp .L5211_hxlcl_popen_remember_bb4 # jump -> then
+.L5211_hxlcl_popen_remember_bb3:
     mov rax, -1 # hv payload
     add rsp, 304 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -13818,7 +13818,7 @@ hxlcl_popen_remember:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_popen_remember_bb4:
+.L5211_hxlcl_popen_remember_bb4:
     mov r10, r14 # hv payload
     mov r11, [rbp - 104] # reload L11 from spill slot
     mov r11, r11 # hv payload
@@ -13862,7 +13862,7 @@ hxlcl_popen_remember:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_popen_remember_bb5:
+.L5211_hxlcl_popen_remember_bb5:
     mov r11, 1 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -13875,7 +13875,7 @@ hxlcl_popen_remember:
     mov r11, [rbp - 344] # tag L20 from tag-slot
     mov [rbp - 232], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
-    jmp .L7ff7_hxlcl_popen_remember_bb1 # branch
+    jmp .L5211_hxlcl_popen_remember_bb1 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 304 # epilogue: free spill frame
@@ -13903,7 +13903,7 @@ hxlcl_popen_forget:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 192], r11 # store tag L0
     mov rbx, rdi # cabi ingress param payload
-.L7ff7_hxlcl_popen_forget_bb0:
+.L5211_hxlcl_popen_forget_bb0:
     lea rax, [rip+slot_900] # __hx_static_slot: rax = &slot_900 (self-static .data, pc-rel)
     mov r12, rax # leaf: payload → dst L1
     mov r11, 0 # materialize tag imm 0
@@ -13935,8 +13935,8 @@ hxlcl_popen_forget:
     mov r11, [rbp - 240] # tag L6 from tag-slot
     mov [rbp - 248], r11 # store tag L7
     mov [rbp - 72], r10 # spill L7 to slot
-    jmp .L7ff7_hxlcl_popen_forget_bb1 # branch
-.L7ff7_hxlcl_popen_forget_bb1:
+    jmp .L5211_hxlcl_popen_forget_bb1 # branch
+.L5211_hxlcl_popen_forget_bb1:
     mov r11, [rbp - 72] # reload L7 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 56] # reload L5 from spill slot
@@ -13949,9 +13949,9 @@ hxlcl_popen_forget:
     mov [rbp - 80], r10 # spill L8 to slot
     mov r10, [rbp - 80] # reload L8 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_popen_forget_bb3 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_popen_forget_bb2 # jump -> then
-.L7ff7_hxlcl_popen_forget_bb2:
+    jz .L5211_hxlcl_popen_forget_bb3 # jump-if-zero -> else
+    jmp .L5211_hxlcl_popen_forget_bb2 # jump -> then
+.L5211_hxlcl_popen_forget_bb2:
     mov r11, 16 # hv payload
     mov r10, [rbp - 56] # reload L5 from spill slot
     mov r10, r10 # hv payload
@@ -13988,9 +13988,9 @@ hxlcl_popen_forget:
     mov [rbp - 120], r10 # spill L13 to slot
     mov r10, [rbp - 120] # reload L13 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_popen_forget_bb5 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_popen_forget_bb4 # jump -> then
-.L7ff7_hxlcl_popen_forget_bb3:
+    jz .L5211_hxlcl_popen_forget_bb5 # jump-if-zero -> else
+    jmp .L5211_hxlcl_popen_forget_bb4 # jump -> then
+.L5211_hxlcl_popen_forget_bb3:
     mov rax, -1 # hv payload
     add rsp, 320 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -14001,7 +14001,7 @@ hxlcl_popen_forget:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_popen_forget_bb4:
+.L5211_hxlcl_popen_forget_bb4:
     mov r11, 8 # hv payload
     mov r10, [rbp - 96] # reload L10 from spill slot
     mov r10, r10 # hv payload
@@ -14058,7 +14058,7 @@ hxlcl_popen_forget:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_popen_forget_bb5:
+.L5211_hxlcl_popen_forget_bb5:
     mov r11, 1 # hv payload
     mov r10, [rbp - 56] # reload L5 from spill slot
     mov r10, r10 # hv payload
@@ -14071,7 +14071,7 @@ hxlcl_popen_forget:
     mov r11, [rbp - 360] # tag L21 from tag-slot
     mov [rbp - 232], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
-    jmp .L7ff7_hxlcl_popen_forget_bb1 # branch
+    jmp .L5211_hxlcl_popen_forget_bb1 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 320 # epilogue: free spill frame
@@ -14102,7 +14102,7 @@ hxlcl_popen:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 656], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_popen_bb0:
+.L5211_hxlcl_popen_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -14120,9 +14120,9 @@ hxlcl_popen:
     mov r11, 2 # materialize tag imm 2
     mov [rbp - 680], r11 # store tag L4
     test r15, r15 # br_cond test
-    jz .L7ff7_hxlcl_popen_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_popen_bb1 # jump -> then
-.L7ff7_hxlcl_popen_bb1:
+    jz .L5211_hxlcl_popen_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_popen_bb1 # jump -> then
+.L5211_hxlcl_popen_bb1:
     mov rax, 0 # hv payload
     add rsp, 1232 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -14133,7 +14133,7 @@ hxlcl_popen:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_popen_bb2:
+.L5211_hxlcl_popen_bb2:
     mov r11, 0 # hv payload
     mov r10, r12 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -14156,9 +14156,9 @@ hxlcl_popen:
     mov [rbp - 80], r10 # spill L8 to slot
     mov r10, [rbp - 80] # reload L8 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_popen_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_popen_bb3 # jump -> then
-.L7ff7_hxlcl_popen_bb3:
+    jz .L5211_hxlcl_popen_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_popen_bb3 # jump -> then
+.L5211_hxlcl_popen_bb3:
     mov rax, 0 # hv payload
     add rsp, 1232 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -14169,7 +14169,7 @@ hxlcl_popen:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_popen_bb4:
+.L5211_hxlcl_popen_bb4:
     mov r10, [rbp - 72] # reload L7 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -14194,9 +14194,9 @@ hxlcl_popen:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_popen_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_popen_bb5 # jump -> then
-.L7ff7_hxlcl_popen_bb5:
+    jz .L5211_hxlcl_popen_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_popen_bb5 # jump -> then
+.L5211_hxlcl_popen_bb5:
     mov rax, 0 # hv payload
     add rsp, 1232 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -14207,7 +14207,7 @@ hxlcl_popen:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_popen_bb6:
+.L5211_hxlcl_popen_bb6:
     mov r11, 2 # hv payload
     mov r10, 0 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -14266,9 +14266,9 @@ hxlcl_popen:
     mov [rbp - 192], r10 # spill L22 to slot
     mov r10, [rbp - 192] # reload L22 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_popen_bb8 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_popen_bb7 # jump -> then
-.L7ff7_hxlcl_popen_bb7:
+    jz .L5211_hxlcl_popen_bb8 # jump-if-zero -> else
+    jmp .L5211_hxlcl_popen_bb7 # jump -> then
+.L5211_hxlcl_popen_bb7:
     mov rax, 0 # hv payload
     add rsp, 1232 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -14279,7 +14279,7 @@ hxlcl_popen:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_popen_bb8:
+.L5211_hxlcl_popen_bb8:
     mov r10, [rbp - 168] # reload L19 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -14341,9 +14341,9 @@ hxlcl_popen:
     mov [rbp - 272], r10 # spill L32 to slot
     mov r10, [rbp - 272] # reload L32 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_popen_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_popen_bb9 # jump -> then
-.L7ff7_hxlcl_popen_bb9:
+    jz .L5211_hxlcl_popen_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_popen_bb9 # jump -> then
+.L5211_hxlcl_popen_bb9:
     mov rdi, [rbp - 216] # reload L25 from spill slot
     mov rdi, rdi # hv payload
     call hxlcl_close # cabi call hxlcl_close
@@ -14378,7 +14378,7 @@ hxlcl_popen:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_popen_bb10:
+.L5211_hxlcl_popen_bb10:
     mov r10, [rbp - 248] # reload L29 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -14404,9 +14404,9 @@ hxlcl_popen:
     mov [rbp - 336], r10 # spill L40 to slot
     mov r10, [rbp - 336] # reload L40 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_popen_bb12 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_popen_bb11 # jump -> then
-.L7ff7_hxlcl_popen_bb11:
+    jz .L5211_hxlcl_popen_bb12 # jump-if-zero -> else
+    jmp .L5211_hxlcl_popen_bb11 # jump -> then
+.L5211_hxlcl_popen_bb11:
     mov r11, 1 # hv payload
     mov r10, 0 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -14638,7 +14638,7 @@ hxlcl_popen:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_popen_bb12:
+.L5211_hxlcl_popen_bb12:
     mov rdi, [rbp - 232] # reload L27 from spill slot
     mov rdi, rdi # hv payload
     call hxlcl_close # cabi call hxlcl_close
@@ -14697,23 +14697,23 @@ hxlcl_child_exit_nr:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 32 # prologue: alloc spill frame
-.L7ff7_hxlcl_child_exit_nr_bb0:
+.L5211_hxlcl_child_exit_nr_bb0:
     mov r10, 1 # target_is_linux: 1 = true
     mov rbx, r10 # leaf: payload → dst L0
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 56], r11 # store tag L0
     test rbx, rbx # br_cond test
-    jz .L7ff7_hxlcl_child_exit_nr_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_child_exit_nr_bb1 # jump -> then
-.L7ff7_hxlcl_child_exit_nr_bb1:
+    jz .L5211_hxlcl_child_exit_nr_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_child_exit_nr_bb1 # jump -> then
+.L5211_hxlcl_child_exit_nr_bb1:
     mov r10, 1 # target_is_x86_64: 1 = true
     mov r13, r10 # leaf: payload → dst L2
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 72], r11 # store tag L2
     test r13, r13 # br_cond test
-    jz .L7ff7_hxlcl_child_exit_nr_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_child_exit_nr_bb3 # jump -> then
-.L7ff7_hxlcl_child_exit_nr_bb2:
+    jz .L5211_hxlcl_child_exit_nr_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_child_exit_nr_bb3 # jump -> then
+.L5211_hxlcl_child_exit_nr_bb2:
     mov rax, 1 # hv payload
     add rsp, 32 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -14724,7 +14724,7 @@ hxlcl_child_exit_nr:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_child_exit_nr_bb3:
+.L5211_hxlcl_child_exit_nr_bb3:
     mov rax, 60 # hv payload
     add rsp, 32 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -14735,7 +14735,7 @@ hxlcl_child_exit_nr:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_child_exit_nr_bb4:
+.L5211_hxlcl_child_exit_nr_bb4:
     mov rax, 93 # hv payload
     add rsp, 32 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -14762,7 +14762,7 @@ hxlcl_pclose:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 248], r11 # store tag L0
     mov rbx, rdi # cabi ingress param payload
-.L7ff7_hxlcl_pclose_bb0:
+.L5211_hxlcl_pclose_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -14780,9 +14780,9 @@ hxlcl_pclose:
     mov r11, 2 # materialize tag imm 2
     mov [rbp - 272], r11 # store tag L3
     test r14, r14 # br_cond test
-    jz .L7ff7_hxlcl_pclose_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_pclose_bb1 # jump -> then
-.L7ff7_hxlcl_pclose_bb1:
+    jz .L5211_hxlcl_pclose_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_pclose_bb1 # jump -> then
+.L5211_hxlcl_pclose_bb1:
     mov rax, -1 # hv payload
     add rsp, 432 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -14793,7 +14793,7 @@ hxlcl_pclose:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_pclose_bb2:
+.L5211_hxlcl_pclose_bb2:
     mov r11, 1 # hv payload
     mov r10, r13 # hv payload
     sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
@@ -14830,9 +14830,9 @@ hxlcl_pclose:
     mov [rbp - 88], r10 # spill L9 to slot
     mov r10, [rbp - 88] # reload L9 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_pclose_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_pclose_bb3 # jump -> then
-.L7ff7_hxlcl_pclose_bb3:
+    jz .L5211_hxlcl_pclose_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_pclose_bb3 # jump -> then
+.L5211_hxlcl_pclose_bb3:
     mov rax, -1 # hv payload
     add rsp, 432 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -14843,7 +14843,7 @@ hxlcl_pclose:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_pclose_bb4:
+.L5211_hxlcl_pclose_bb4:
     mov rdi, [rbp - 64] # reload L6 from spill slot
     mov rdi, rdi # hv payload
     call hxlcl_popen_forget # cabi call hxlcl_popen_forget
@@ -14893,9 +14893,9 @@ hxlcl_pclose:
     mov [rbp - 152], r10 # spill L17 to slot
     mov r10, [rbp - 152] # reload L17 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_pclose_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_pclose_bb5 # jump -> then
-.L7ff7_hxlcl_pclose_bb5:
+    jz .L5211_hxlcl_pclose_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_pclose_bb5 # jump -> then
+.L5211_hxlcl_pclose_bb5:
     mov rax, -1 # hv payload
     add rsp, 432 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -14906,7 +14906,7 @@ hxlcl_pclose:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_pclose_bb6:
+.L5211_hxlcl_pclose_bb6:
     mov r11, 4 # hv payload
     mov r10, 0 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -15006,7 +15006,7 @@ hxlcl_execvp:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 856], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_execvp_bb0:
+.L5211_hxlcl_execvp_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -15057,8 +15057,8 @@ hxlcl_execvp:
     mov r11, [rbp - 928] # tag L10 from tag-slot
     mov [rbp - 936], r11 # store tag L11
     mov [rbp - 104], r10 # spill L11 to slot
-    jmp .L7ff7_hxlcl_execvp_bb1 # branch
-.L7ff7_hxlcl_execvp_bb1:
+    jmp .L5211_hxlcl_execvp_bb1 # branch
+.L5211_hxlcl_execvp_bb1:
     mov r11, 0 # hv payload
     mov r10, [rbp - 104] # reload L11 from spill slot
     mov r10, r10 # hv payload
@@ -15070,9 +15070,9 @@ hxlcl_execvp:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_execvp_bb3 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_execvp_bb2 # jump -> then
-.L7ff7_hxlcl_execvp_bb2:
+    jz .L5211_hxlcl_execvp_bb3 # jump-if-zero -> else
+    jmp .L5211_hxlcl_execvp_bb2 # jump -> then
+.L5211_hxlcl_execvp_bb2:
     mov r10, [rbp - 104] # reload L11 from spill slot
     mov r10, r10 # hv payload
     mov r11, 47 # hv payload
@@ -15098,9 +15098,9 @@ hxlcl_execvp:
     mov [rbp - 136], r10 # spill L15 to slot
     mov r10, [rbp - 136] # reload L15 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_execvp_bb5 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_execvp_bb4 # jump -> then
-.L7ff7_hxlcl_execvp_bb3:
+    jz .L5211_hxlcl_execvp_bb5 # jump-if-zero -> else
+    jmp .L5211_hxlcl_execvp_bb4 # jump -> then
+.L5211_hxlcl_execvp_bb3:
     mov r11, 0 # hv payload
     mov r10, [rbp - 80] # reload L8 from spill slot
     mov r10, r10 # hv payload
@@ -15112,9 +15112,9 @@ hxlcl_execvp:
     mov [rbp - 168], r10 # spill L19 to slot
     mov r10, [rbp - 168] # reload L19 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_execvp_bb8 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_execvp_bb7 # jump -> then
-.L7ff7_hxlcl_execvp_bb4:
+    jz .L5211_hxlcl_execvp_bb8 # jump-if-zero -> else
+    jmp .L5211_hxlcl_execvp_bb7 # jump -> then
+.L5211_hxlcl_execvp_bb4:
     mov r10, 1 # assign L8
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 912], r11 # store tag L8
@@ -15123,8 +15123,8 @@ hxlcl_execvp:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 936], r11 # store tag L11
     mov [rbp - 104], r10 # spill L11 to slot
-    jmp .L7ff7_hxlcl_execvp_bb6 # branch
-.L7ff7_hxlcl_execvp_bb5:
+    jmp .L5211_hxlcl_execvp_bb6 # branch
+.L5211_hxlcl_execvp_bb5:
     mov r11, 1 # hv payload
     mov r10, [rbp - 88] # reload L9 from spill slot
     mov r10, r10 # hv payload
@@ -15150,10 +15150,10 @@ hxlcl_execvp:
     mov r11, [rbp - 992] # tag L18 from tag-slot
     mov [rbp - 936], r11 # store tag L11
     mov [rbp - 104], r10 # spill L11 to slot
-    jmp .L7ff7_hxlcl_execvp_bb6 # branch
-.L7ff7_hxlcl_execvp_bb6:
-    jmp .L7ff7_hxlcl_execvp_bb1 # branch
-.L7ff7_hxlcl_execvp_bb7:
+    jmp .L5211_hxlcl_execvp_bb6 # branch
+.L5211_hxlcl_execvp_bb6:
+    jmp .L5211_hxlcl_execvp_bb1 # branch
+.L5211_hxlcl_execvp_bb7:
     mov rdi, r14 # hv payload
     mov rsi, r12 # hv payload
     mov rdx, [rbp - 72] # reload L7 from spill slot
@@ -15174,7 +15174,7 @@ hxlcl_execvp:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_execvp_bb8:
+.L5211_hxlcl_execvp_bb8:
     mov r11, 0 # hv payload
     lea r10, [rip+.LCstr2] # hv payload: &str .LCstr2
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -15223,9 +15223,9 @@ hxlcl_execvp:
     mov [rbp - 240], r10 # spill L28 to slot
     mov r10, [rbp - 240] # reload L28 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_execvp_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_execvp_bb9 # jump -> then
-.L7ff7_hxlcl_execvp_bb9:
+    jz .L5211_hxlcl_execvp_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_execvp_bb9 # jump -> then
+.L5211_hxlcl_execvp_bb9:
     mov r11, 0 # hv payload
     lea r10, [rip+.LCstr3] # hv payload: &str .LCstr3
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -15237,8 +15237,8 @@ hxlcl_execvp:
     mov r11, [rbp - 1088] # tag L30 from tag-slot
     mov [rbp - 1048], r11 # store tag L25
     mov [rbp - 216], r10 # spill L25 to slot
-    jmp .L7ff7_hxlcl_execvp_bb13 # branch
-.L7ff7_hxlcl_execvp_bb10:
+    jmp .L5211_hxlcl_execvp_bb13 # branch
+.L5211_hxlcl_execvp_bb10:
     mov r10, [rbp - 216] # reload L25 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -15277,9 +15277,9 @@ hxlcl_execvp:
     mov [rbp - 296], r10 # spill L35 to slot
     mov r10, [rbp - 296] # reload L35 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_execvp_bb12 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_execvp_bb11 # jump -> then
-.L7ff7_hxlcl_execvp_bb11:
+    jz .L5211_hxlcl_execvp_bb12 # jump-if-zero -> else
+    jmp .L5211_hxlcl_execvp_bb11 # jump -> then
+.L5211_hxlcl_execvp_bb11:
     mov r11, 0 # hv payload
     lea r10, [rip+.LCstr3] # hv payload: &str .LCstr3
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -15291,10 +15291,10 @@ hxlcl_execvp:
     mov r11, [rbp - 1144] # tag L37 from tag-slot
     mov [rbp - 1048], r11 # store tag L25
     mov [rbp - 216], r10 # spill L25 to slot
-    jmp .L7ff7_hxlcl_execvp_bb12 # branch
-.L7ff7_hxlcl_execvp_bb12:
-    jmp .L7ff7_hxlcl_execvp_bb13 # branch
-.L7ff7_hxlcl_execvp_bb13:
+    jmp .L5211_hxlcl_execvp_bb12 # branch
+.L5211_hxlcl_execvp_bb12:
+    jmp .L5211_hxlcl_execvp_bb13 # branch
+.L5211_hxlcl_execvp_bb13:
     mov rdi, rbx # hv payload
     call hxlcl_strlen # cabi call hxlcl_strlen
     mov r10, rax # cabi: unbox call result (rax)
@@ -15354,8 +15354,8 @@ hxlcl_execvp:
     mov r11, [rbp - 1216] # tag L46 from tag-slot
     mov [rbp - 1224], r11 # store tag L47
     mov [rbp - 392], r10 # spill L47 to slot
-    jmp .L7ff7_hxlcl_execvp_bb14 # branch
-.L7ff7_hxlcl_execvp_bb14:
+    jmp .L5211_hxlcl_execvp_bb14 # branch
+.L5211_hxlcl_execvp_bb14:
     mov r11, 0 # hv payload
     mov r10, [rbp - 392] # reload L47 from spill slot
     mov r10, r10 # hv payload
@@ -15367,9 +15367,9 @@ hxlcl_execvp:
     mov [rbp - 400], r10 # spill L48 to slot
     mov r10, [rbp - 400] # reload L48 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_execvp_bb16 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_execvp_bb15 # jump -> then
-.L7ff7_hxlcl_execvp_bb15:
+    jz .L5211_hxlcl_execvp_bb16 # jump-if-zero -> else
+    jmp .L5211_hxlcl_execvp_bb15 # jump -> then
+.L5211_hxlcl_execvp_bb15:
     mov r10, 0 # assign L49
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1240], r11 # store tag L49
@@ -15391,8 +15391,8 @@ hxlcl_execvp:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1264], r11 # store tag L52
     mov [rbp - 432], r10 # spill L52 to slot
-    jmp .L7ff7_hxlcl_execvp_bb17 # branch
-.L7ff7_hxlcl_execvp_bb16:
+    jmp .L5211_hxlcl_execvp_bb17 # branch
+.L5211_hxlcl_execvp_bb16:
     mov rax, -1 # hv payload
     add rsp, 1632 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -15403,7 +15403,7 @@ hxlcl_execvp:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_execvp_bb17:
+.L5211_hxlcl_execvp_bb17:
     mov r11, 0 # hv payload
     mov r10, [rbp - 432] # reload L52 from spill slot
     mov r10, r10 # hv payload
@@ -15415,9 +15415,9 @@ hxlcl_execvp:
     mov [rbp - 440], r10 # spill L53 to slot
     mov r10, [rbp - 440] # reload L53 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_execvp_bb19 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_execvp_bb18 # jump -> then
-.L7ff7_hxlcl_execvp_bb18:
+    jz .L5211_hxlcl_execvp_bb19 # jump-if-zero -> else
+    jmp .L5211_hxlcl_execvp_bb18 # jump -> then
+.L5211_hxlcl_execvp_bb18:
     mov r10, [rbp - 424] # reload L51 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -15470,9 +15470,9 @@ hxlcl_execvp:
     mov [rbp - 496], r10 # spill L60 to slot
     mov r10, [rbp - 496] # reload L60 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_execvp_bb21 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_execvp_bb20 # jump -> then
-.L7ff7_hxlcl_execvp_bb19:
+    jz .L5211_hxlcl_execvp_bb21 # jump-if-zero -> else
+    jmp .L5211_hxlcl_execvp_bb20 # jump -> then
+.L5211_hxlcl_execvp_bb19:
     mov r11, 1 # hv payload
     mov r10, [rbp - 408] # reload L49 from spill slot
     mov r10, r10 # hv payload
@@ -15535,15 +15535,15 @@ hxlcl_execvp:
     mov [rbp - 592], r10 # spill L72 to slot
     mov r10, [rbp - 592] # reload L72 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_execvp_bb24 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_execvp_bb23 # jump -> then
-.L7ff7_hxlcl_execvp_bb20:
+    jz .L5211_hxlcl_execvp_bb24 # jump-if-zero -> else
+    jmp .L5211_hxlcl_execvp_bb23 # jump -> then
+.L5211_hxlcl_execvp_bb20:
     mov r10, 0 # assign L52
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1264], r11 # store tag L52
     mov [rbp - 432], r10 # spill L52 to slot
-    jmp .L7ff7_hxlcl_execvp_bb22 # branch
-.L7ff7_hxlcl_execvp_bb21:
+    jmp .L5211_hxlcl_execvp_bb22 # branch
+.L5211_hxlcl_execvp_bb21:
     mov r11, 1 # hv payload
     mov r10, [rbp - 408] # reload L49 from spill slot
     mov r10, r10 # hv payload
@@ -15570,10 +15570,10 @@ hxlcl_execvp:
     mov r11, [rbp - 1352] # tag L63 from tag-slot
     mov [rbp - 1256], r11 # store tag L51
     mov [rbp - 424], r10 # spill L51 to slot
-    jmp .L7ff7_hxlcl_execvp_bb22 # branch
-.L7ff7_hxlcl_execvp_bb22:
-    jmp .L7ff7_hxlcl_execvp_bb17 # branch
-.L7ff7_hxlcl_execvp_bb23:
+    jmp .L5211_hxlcl_execvp_bb22 # branch
+.L5211_hxlcl_execvp_bb22:
+    jmp .L5211_hxlcl_execvp_bb17 # branch
+.L5211_hxlcl_execvp_bb23:
     mov r10, 0 # assign L74
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1440], r11 # store tag L74
@@ -15582,8 +15582,8 @@ hxlcl_execvp:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1448], r11 # store tag L75
     mov [rbp - 616], r10 # spill L75 to slot
-    jmp .L7ff7_hxlcl_execvp_bb25 # branch
-.L7ff7_hxlcl_execvp_bb24:
+    jmp .L5211_hxlcl_execvp_bb25 # branch
+.L5211_hxlcl_execvp_bb24:
     mov r11, [rbp - 408] # reload L49 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 376] # reload L45 from spill slot
@@ -15635,9 +15635,9 @@ hxlcl_execvp:
     mov [rbp - 816], r10 # spill L100 to slot
     mov r10, [rbp - 816] # reload L100 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_execvp_bb32 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_execvp_bb31 # jump -> then
-.L7ff7_hxlcl_execvp_bb25:
+    jz .L5211_hxlcl_execvp_bb32 # jump-if-zero -> else
+    jmp .L5211_hxlcl_execvp_bb31 # jump -> then
+.L5211_hxlcl_execvp_bb25:
     mov r11, [rbp - 408] # reload L49 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 616] # reload L75 from spill slot
@@ -15650,9 +15650,9 @@ hxlcl_execvp:
     mov [rbp - 624], r10 # spill L76 to slot
     mov r10, [rbp - 624] # reload L76 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_execvp_bb27 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_execvp_bb26 # jump -> then
-.L7ff7_hxlcl_execvp_bb26:
+    jz .L5211_hxlcl_execvp_bb27 # jump-if-zero -> else
+    jmp .L5211_hxlcl_execvp_bb26 # jump -> then
+.L5211_hxlcl_execvp_bb26:
     mov r10, [rbp - 376] # reload L45 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 616] # reload L75 from spill slot
@@ -15704,8 +15704,8 @@ hxlcl_execvp:
     mov r11, [rbp - 1496] # tag L81 from tag-slot
     mov [rbp - 1448], r11 # store tag L75
     mov [rbp - 616], r10 # spill L75 to slot
-    jmp .L7ff7_hxlcl_execvp_bb25 # branch
-.L7ff7_hxlcl_execvp_bb27:
+    jmp .L5211_hxlcl_execvp_bb25 # branch
+.L5211_hxlcl_execvp_bb27:
     mov r10, [rbp - 360] # reload L43 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 608] # reload L74 from spill slot
@@ -15746,8 +15746,8 @@ hxlcl_execvp:
     mov r11, [rbp - 1528] # tag L85 from tag-slot
     mov [rbp - 1536], r11 # store tag L86
     mov [rbp - 704], r10 # spill L86 to slot
-    jmp .L7ff7_hxlcl_execvp_bb28 # branch
-.L7ff7_hxlcl_execvp_bb28:
+    jmp .L5211_hxlcl_execvp_bb28 # branch
+.L5211_hxlcl_execvp_bb28:
     mov r11, [rbp - 704] # reload L86 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 688] # reload L84 from spill slot
@@ -15760,9 +15760,9 @@ hxlcl_execvp:
     mov [rbp - 712], r10 # spill L87 to slot
     mov r10, [rbp - 712] # reload L87 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_execvp_bb30 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_execvp_bb29 # jump -> then
-.L7ff7_hxlcl_execvp_bb29:
+    jz .L5211_hxlcl_execvp_bb30 # jump-if-zero -> else
+    jmp .L5211_hxlcl_execvp_bb29 # jump -> then
+.L5211_hxlcl_execvp_bb29:
     mov r10, r14 # hv payload
     mov r11, [rbp - 688] # reload L84 from spill slot
     mov r11, r11 # hv payload
@@ -15813,8 +15813,8 @@ hxlcl_execvp:
     mov r11, [rbp - 1584] # tag L92 from tag-slot
     mov [rbp - 1520], r11 # store tag L84
     mov [rbp - 688], r10 # spill L84 to slot
-    jmp .L7ff7_hxlcl_execvp_bb28 # branch
-.L7ff7_hxlcl_execvp_bb30:
+    jmp .L5211_hxlcl_execvp_bb28 # branch
+.L5211_hxlcl_execvp_bb30:
     mov rdi, [rbp - 360] # reload L43 from spill slot
     mov rdi, rdi # hv payload
     mov rsi, r12 # hv payload
@@ -15830,8 +15830,8 @@ hxlcl_execvp:
     mov r11, 0 # tag L93 = TAG_INT (i64-local, fused)
     mov [rbp - 1600], r11 # store tag L94
     mov [rbp - 768], r10 # spill L94 to slot
-    jmp .L7ff7_hxlcl_execvp_bb24 # branch
-.L7ff7_hxlcl_execvp_bb31:
+    jmp .L5211_hxlcl_execvp_bb24 # branch
+.L5211_hxlcl_execvp_bb31:
     mov r11, 1 # hv payload
     mov r10, [rbp - 376] # reload L45 from spill slot
     mov r10, r10 # hv payload
@@ -15844,8 +15844,8 @@ hxlcl_execvp:
     mov r11, [rbp - 1664] # tag L102 from tag-slot
     mov [rbp - 1208], r11 # store tag L45
     mov [rbp - 376], r10 # spill L45 to slot
-    jmp .L7ff7_hxlcl_execvp_bb32 # branch
-.L7ff7_hxlcl_execvp_bb32:
+    jmp .L5211_hxlcl_execvp_bb32 # branch
+.L5211_hxlcl_execvp_bb32:
     mov r10, [rbp - 376] # reload L45 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -15859,7 +15859,7 @@ hxlcl_execvp:
     mov r11, [rbp - 1672] # tag L103 from tag-slot
     mov [rbp - 1224], r11 # store tag L47
     mov [rbp - 392], r10 # spill L47 to slot
-    jmp .L7ff7_hxlcl_execvp_bb14 # branch
+    jmp .L5211_hxlcl_execvp_bb14 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 1632 # epilogue: free spill frame
@@ -15887,7 +15887,7 @@ hxlcl_isalnum:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 232], r11 # store tag L0
     mov rbx, rdi # cabi ingress param payload
-.L7ff7_hxlcl_isalnum_bb0:
+.L5211_hxlcl_isalnum_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -16047,9 +16047,9 @@ hxlcl_isalnum:
     mov [rbp - 216], r10 # spill L25 to slot
     mov r10, [rbp - 216] # reload L25 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_isalnum_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_isalnum_bb1 # jump -> then
-.L7ff7_hxlcl_isalnum_bb1:
+    jz .L5211_hxlcl_isalnum_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_isalnum_bb1 # jump -> then
+.L5211_hxlcl_isalnum_bb1:
     mov rax, 1 # hv payload
     add rsp, 400 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -16060,7 +16060,7 @@ hxlcl_isalnum:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_isalnum_bb2:
+.L5211_hxlcl_isalnum_bb2:
     mov rax, 0 # hv payload
     add rsp, 400 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -16087,7 +16087,7 @@ hxlcl_isalpha:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 168], r11 # store tag L0
     mov rbx, rdi # cabi ingress param payload
-.L7ff7_hxlcl_isalpha_bb0:
+.L5211_hxlcl_isalpha_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -16195,9 +16195,9 @@ hxlcl_isalpha:
     mov [rbp - 152], r10 # spill L17 to slot
     mov r10, [rbp - 152] # reload L17 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_isalpha_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_isalpha_bb1 # jump -> then
-.L7ff7_hxlcl_isalpha_bb1:
+    jz .L5211_hxlcl_isalpha_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_isalpha_bb1 # jump -> then
+.L5211_hxlcl_isalpha_bb1:
     mov rax, 1 # hv payload
     add rsp, 272 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -16208,7 +16208,7 @@ hxlcl_isalpha:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_isalpha_bb2:
+.L5211_hxlcl_isalpha_bb2:
     mov rax, 0 # hv payload
     add rsp, 272 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -16236,7 +16236,7 @@ hxlcl_free:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 56], r11 # store tag L0
     mov rbx, rdi # cabi ingress param payload
-.L7ff7_hxlcl_free_bb0:
+.L5211_hxlcl_free_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -16278,7 +16278,7 @@ hxlcl_inet_pton:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 696], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_inet_pton_bb0:
+.L5211_hxlcl_inet_pton_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -16298,9 +16298,9 @@ hxlcl_inet_pton:
     mov [rbp - 56], r10 # spill L5 to slot
     mov r10, [rbp - 56] # reload L5 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_inet_pton_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_inet_pton_bb1 # jump -> then
-.L7ff7_hxlcl_inet_pton_bb1:
+    jz .L5211_hxlcl_inet_pton_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_inet_pton_bb1 # jump -> then
+.L5211_hxlcl_inet_pton_bb1:
     mov rax, -1 # hv payload
     add rsp, 1296 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -16311,7 +16311,7 @@ hxlcl_inet_pton:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_inet_pton_bb2:
+.L5211_hxlcl_inet_pton_bb2:
     mov r11, 0 # hv payload
     mov r10, r12 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -16362,8 +16362,8 @@ hxlcl_inet_pton:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 816], r11 # store tag L17
     mov [rbp - 152], r10 # spill L17 to slot
-    jmp .L7ff7_hxlcl_inet_pton_bb3 # branch
-.L7ff7_hxlcl_inet_pton_bb3:
+    jmp .L5211_hxlcl_inet_pton_bb3 # branch
+.L5211_hxlcl_inet_pton_bb3:
     mov r10, [rbp - 152] # reload L17 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -16375,9 +16375,9 @@ hxlcl_inet_pton:
     mov [rbp - 160], r10 # spill L18 to slot
     mov r10, [rbp - 160] # reload L18 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_inet_pton_bb5 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_inet_pton_bb4 # jump -> then
-.L7ff7_hxlcl_inet_pton_bb4:
+    jz .L5211_hxlcl_inet_pton_bb5 # jump-if-zero -> else
+    jmp .L5211_hxlcl_inet_pton_bb4 # jump -> then
+.L5211_hxlcl_inet_pton_bb4:
     mov r10, [rbp - 80] # reload L8 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 104] # reload L11 from spill slot
@@ -16456,9 +16456,9 @@ hxlcl_inet_pton:
     mov [rbp - 240], r10 # spill L28 to slot
     mov r10, [rbp - 240] # reload L28 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_inet_pton_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_inet_pton_bb6 # jump -> then
-.L7ff7_hxlcl_inet_pton_bb5:
+    jz .L5211_hxlcl_inet_pton_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_inet_pton_bb6 # jump -> then
+.L5211_hxlcl_inet_pton_bb5:
     mov r10, [rbp - 144] # reload L16 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -16470,9 +16470,9 @@ hxlcl_inet_pton:
     mov [rbp - 504], r10 # spill L61 to slot
     mov r10, [rbp - 504] # reload L61 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_inet_pton_bb20 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_inet_pton_bb19 # jump -> then
-.L7ff7_hxlcl_inet_pton_bb6:
+    jz .L5211_hxlcl_inet_pton_bb20 # jump-if-zero -> else
+    jmp .L5211_hxlcl_inet_pton_bb19 # jump -> then
+.L5211_hxlcl_inet_pton_bb6:
     mov r11, 48 # hv payload
     mov r10, [rbp - 176] # reload L20 from spill slot
     mov r10, r10 # hv payload
@@ -16539,9 +16539,9 @@ hxlcl_inet_pton:
     mov [rbp - 312], r10 # spill L37 to slot
     mov r10, [rbp - 312] # reload L37 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_inet_pton_bb9 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_inet_pton_bb8 # jump -> then
-.L7ff7_hxlcl_inet_pton_bb7:
+    jz .L5211_hxlcl_inet_pton_bb9 # jump-if-zero -> else
+    jmp .L5211_hxlcl_inet_pton_bb8 # jump -> then
+.L5211_hxlcl_inet_pton_bb7:
     mov r10, [rbp - 176] # reload L20 from spill slot
     mov r10, r10 # hv payload
     mov r11, 46 # hv payload
@@ -16594,9 +16594,9 @@ hxlcl_inet_pton:
     mov [rbp - 376], r10 # spill L45 to slot
     mov r10, [rbp - 376] # reload L45 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_inet_pton_bb11 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_inet_pton_bb10 # jump -> then
-.L7ff7_hxlcl_inet_pton_bb8:
+    jz .L5211_hxlcl_inet_pton_bb11 # jump-if-zero -> else
+    jmp .L5211_hxlcl_inet_pton_bb10 # jump -> then
+.L5211_hxlcl_inet_pton_bb8:
     mov r10, 0 # assign L16
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 808], r11 # store tag L16
@@ -16605,10 +16605,10 @@ hxlcl_inet_pton:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 816], r11 # store tag L17
     mov [rbp - 152], r10 # spill L17 to slot
-    jmp .L7ff7_hxlcl_inet_pton_bb9 # branch
-.L7ff7_hxlcl_inet_pton_bb9:
-    jmp .L7ff7_hxlcl_inet_pton_bb18 # branch
-.L7ff7_hxlcl_inet_pton_bb10:
+    jmp .L5211_hxlcl_inet_pton_bb9 # branch
+.L5211_hxlcl_inet_pton_bb9:
+    jmp .L5211_hxlcl_inet_pton_bb18 # branch
+.L5211_hxlcl_inet_pton_bb10:
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -16661,9 +16661,9 @@ hxlcl_inet_pton:
     mov [rbp - 440], r10 # spill L53 to slot
     mov r10, [rbp - 440] # reload L53 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_inet_pton_bb13 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_inet_pton_bb12 # jump -> then
-.L7ff7_hxlcl_inet_pton_bb11:
+    jz .L5211_hxlcl_inet_pton_bb13 # jump-if-zero -> else
+    jmp .L5211_hxlcl_inet_pton_bb12 # jump -> then
+.L5211_hxlcl_inet_pton_bb11:
     mov r10, 0 # assign L16
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 808], r11 # store tag L16
@@ -16672,8 +16672,8 @@ hxlcl_inet_pton:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 816], r11 # store tag L17
     mov [rbp - 152], r10 # spill L17 to slot
-    jmp .L7ff7_hxlcl_inet_pton_bb17 # branch
-.L7ff7_hxlcl_inet_pton_bb12:
+    jmp .L5211_hxlcl_inet_pton_bb17 # branch
+.L5211_hxlcl_inet_pton_bb12:
     mov r10, 0 # assign L16
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 808], r11 # store tag L16
@@ -16682,8 +16682,8 @@ hxlcl_inet_pton:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 816], r11 # store tag L17
     mov [rbp - 152], r10 # spill L17 to slot
-    jmp .L7ff7_hxlcl_inet_pton_bb16 # branch
-.L7ff7_hxlcl_inet_pton_bb13:
+    jmp .L5211_hxlcl_inet_pton_bb16 # branch
+.L5211_hxlcl_inet_pton_bb13:
     mov r11, 256 # hv payload
     mov r10, [rbp - 136] # reload L15 from spill slot
     mov r10, r10 # hv payload
@@ -16740,23 +16740,23 @@ hxlcl_inet_pton:
     mov [rbp - 488], r10 # spill L59 to slot
     mov r10, [rbp - 488] # reload L59 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_inet_pton_bb15 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_inet_pton_bb14 # jump -> then
-.L7ff7_hxlcl_inet_pton_bb14:
+    jz .L5211_hxlcl_inet_pton_bb15 # jump-if-zero -> else
+    jmp .L5211_hxlcl_inet_pton_bb14 # jump -> then
+.L5211_hxlcl_inet_pton_bb14:
     mov r10, 1 # assign L17
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 816], r11 # store tag L17
     mov [rbp - 152], r10 # spill L17 to slot
-    jmp .L7ff7_hxlcl_inet_pton_bb15 # branch
-.L7ff7_hxlcl_inet_pton_bb15:
-    jmp .L7ff7_hxlcl_inet_pton_bb16 # branch
-.L7ff7_hxlcl_inet_pton_bb16:
-    jmp .L7ff7_hxlcl_inet_pton_bb17 # branch
-.L7ff7_hxlcl_inet_pton_bb17:
-    jmp .L7ff7_hxlcl_inet_pton_bb18 # branch
-.L7ff7_hxlcl_inet_pton_bb18:
-    jmp .L7ff7_hxlcl_inet_pton_bb3 # branch
-.L7ff7_hxlcl_inet_pton_bb19:
+    jmp .L5211_hxlcl_inet_pton_bb15 # branch
+.L5211_hxlcl_inet_pton_bb15:
+    jmp .L5211_hxlcl_inet_pton_bb16 # branch
+.L5211_hxlcl_inet_pton_bb16:
+    jmp .L5211_hxlcl_inet_pton_bb17 # branch
+.L5211_hxlcl_inet_pton_bb17:
+    jmp .L5211_hxlcl_inet_pton_bb18 # branch
+.L5211_hxlcl_inet_pton_bb18:
+    jmp .L5211_hxlcl_inet_pton_bb3 # branch
+.L5211_hxlcl_inet_pton_bb19:
     mov rax, 0 # hv payload
     add rsp, 1296 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -16767,7 +16767,7 @@ hxlcl_inet_pton:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_inet_pton_bb20:
+.L5211_hxlcl_inet_pton_bb20:
     mov r11, 4 # hv payload
     mov r10, [rbp - 112] # reload L12 from spill slot
     mov r10, r10 # hv payload
@@ -16779,9 +16779,9 @@ hxlcl_inet_pton:
     mov [rbp - 520], r10 # spill L63 to slot
     mov r10, [rbp - 520] # reload L63 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_inet_pton_bb22 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_inet_pton_bb21 # jump -> then
-.L7ff7_hxlcl_inet_pton_bb21:
+    jz .L5211_hxlcl_inet_pton_bb22 # jump-if-zero -> else
+    jmp .L5211_hxlcl_inet_pton_bb21 # jump -> then
+.L5211_hxlcl_inet_pton_bb21:
     mov rax, 0 # hv payload
     add rsp, 1296 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -16792,7 +16792,7 @@ hxlcl_inet_pton:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_inet_pton_bb22:
+.L5211_hxlcl_inet_pton_bb22:
     mov r11, 16777216 # hv payload
     mov r10, [rbp - 136] # reload L15 from spill slot
     mov r10, r10 # hv payload
@@ -16969,7 +16969,7 @@ hxlcl_setvbuf:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 80], r11 # store tag L3
     mov r14, rcx # cabi ingress param payload
-.L7ff7_hxlcl_setvbuf_bb0:
+.L5211_hxlcl_setvbuf_bb0:
     mov rax, 0 # hv payload
     add rsp, 32 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -17002,7 +17002,7 @@ hxlcl_darwin_check_fd_set_overflow:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 72], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
-.L7ff7_hxlcl_darwin_check_fd_set_overflow_bb0:
+.L5211_hxlcl_darwin_check_fd_set_overflow_bb0:
     mov rax, 0 # hv payload
     add rsp, 32 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -17029,7 +17029,7 @@ hxlcl_atof:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 1136], r11 # store tag L0
     mov rbx, rdi # cabi ingress param payload
-.L7ff7_hxlcl_atof_bb0:
+.L5211_hxlcl_atof_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -17047,9 +17047,9 @@ hxlcl_atof:
     mov r11, 2 # materialize tag imm 2
     mov [rbp - 1160], r11 # store tag L3
     test r14, r14 # br_cond test
-    jz .L7ff7_hxlcl_atof_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atof_bb1 # jump -> then
-.L7ff7_hxlcl_atof_bb1:
+    jz .L5211_hxlcl_atof_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atof_bb1 # jump -> then
+.L5211_hxlcl_atof_bb1:
     mov r10, 0 # hv payload
     movq xmm0, r10 # cabi fp return: gp→xmm0
     add rsp, 2208 # epilogue: free spill frame
@@ -17061,7 +17061,7 @@ hxlcl_atof:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_atof_bb2:
+.L5211_hxlcl_atof_bb2:
     mov r10, 0 # assign L5
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1176], r11 # store tag L5
@@ -17083,8 +17083,8 @@ hxlcl_atof:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1200], r11 # store tag L8
     mov [rbp - 80], r10 # spill L8 to slot
-    jmp .L7ff7_hxlcl_atof_bb3 # branch
-.L7ff7_hxlcl_atof_bb3:
+    jmp .L5211_hxlcl_atof_bb3 # branch
+.L5211_hxlcl_atof_bb3:
     mov r11, 0 # hv payload
     mov r10, [rbp - 80] # reload L8 from spill slot
     mov r10, r10 # hv payload
@@ -17096,9 +17096,9 @@ hxlcl_atof:
     mov [rbp - 88], r10 # spill L9 to slot
     mov r10, [rbp - 88] # reload L9 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atof_bb5 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atof_bb4 # jump -> then
-.L7ff7_hxlcl_atof_bb4:
+    jz .L5211_hxlcl_atof_bb5 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atof_bb4 # jump -> then
+.L5211_hxlcl_atof_bb4:
     mov r10, [rbp - 72] # reload L7 from spill slot
     mov r10, r10 # hv payload
     mov r11, 32 # hv payload
@@ -17178,9 +17178,9 @@ hxlcl_atof:
     mov [rbp - 176], r10 # spill L20 to slot
     mov r10, [rbp - 176] # reload L20 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atof_bb7 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atof_bb6 # jump -> then
-.L7ff7_hxlcl_atof_bb5:
+    jz .L5211_hxlcl_atof_bb7 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atof_bb6 # jump -> then
+.L5211_hxlcl_atof_bb5:
     mov r10, r13 # hv payload
     mov r11, [rbp - 56] # reload L5 from spill slot
     mov r11, r11 # hv payload
@@ -17209,9 +17209,9 @@ hxlcl_atof:
     mov [rbp - 232], r10 # spill L27 to slot
     mov r10, [rbp - 232] # reload L27 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atof_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atof_bb9 # jump -> then
-.L7ff7_hxlcl_atof_bb6:
+    jz .L5211_hxlcl_atof_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atof_bb9 # jump -> then
+.L5211_hxlcl_atof_bb6:
     mov r11, 1 # hv payload
     mov r10, [rbp - 56] # reload L5 from spill slot
     mov r10, r10 # hv payload
@@ -17237,16 +17237,16 @@ hxlcl_atof:
     mov r11, [rbp - 1320] # tag L23 from tag-slot
     mov [rbp - 1192], r11 # store tag L7
     mov [rbp - 72], r10 # spill L7 to slot
-    jmp .L7ff7_hxlcl_atof_bb8 # branch
-.L7ff7_hxlcl_atof_bb7:
+    jmp .L5211_hxlcl_atof_bb8 # branch
+.L5211_hxlcl_atof_bb7:
     mov r10, 0 # assign L8
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1200], r11 # store tag L8
     mov [rbp - 80], r10 # spill L8 to slot
-    jmp .L7ff7_hxlcl_atof_bb8 # branch
-.L7ff7_hxlcl_atof_bb8:
-    jmp .L7ff7_hxlcl_atof_bb3 # branch
-.L7ff7_hxlcl_atof_bb9:
+    jmp .L5211_hxlcl_atof_bb8 # branch
+.L5211_hxlcl_atof_bb8:
+    jmp .L5211_hxlcl_atof_bb3 # branch
+.L5211_hxlcl_atof_bb9:
     mov r10, 1 # assign L26
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1344], r11 # store tag L26
@@ -17263,8 +17263,8 @@ hxlcl_atof:
     mov r11, [rbp - 1368] # tag L29 from tag-slot
     mov [rbp - 1176], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
-    jmp .L7ff7_hxlcl_atof_bb13 # branch
-.L7ff7_hxlcl_atof_bb10:
+    jmp .L5211_hxlcl_atof_bb13 # branch
+.L5211_hxlcl_atof_bb10:
     mov r10, [rbp - 216] # reload L25 from spill slot
     mov r10, r10 # hv payload
     mov r11, 43 # hv payload
@@ -17276,9 +17276,9 @@ hxlcl_atof:
     mov [rbp - 256], r10 # spill L30 to slot
     mov r10, [rbp - 256] # reload L30 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atof_bb12 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atof_bb11 # jump -> then
-.L7ff7_hxlcl_atof_bb11:
+    jz .L5211_hxlcl_atof_bb12 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atof_bb11 # jump -> then
+.L5211_hxlcl_atof_bb11:
     mov r11, 1 # hv payload
     mov r10, [rbp - 56] # reload L5 from spill slot
     mov r10, r10 # hv payload
@@ -17291,10 +17291,10 @@ hxlcl_atof:
     mov r11, [rbp - 1392] # tag L32 from tag-slot
     mov [rbp - 1176], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
-    jmp .L7ff7_hxlcl_atof_bb12 # branch
-.L7ff7_hxlcl_atof_bb12:
-    jmp .L7ff7_hxlcl_atof_bb13 # branch
-.L7ff7_hxlcl_atof_bb13:
+    jmp .L5211_hxlcl_atof_bb12 # branch
+.L5211_hxlcl_atof_bb12:
+    jmp .L5211_hxlcl_atof_bb13 # branch
+.L5211_hxlcl_atof_bb13:
     mov r10, 0 # hv payload
     cvtsi2sd xmm0, r10 # __hx_payload_i2f: xmm0 = (double)v.i
     movq r10, xmm0 # __hx_payload_i2f: r10 = converted bits
@@ -17310,8 +17310,8 @@ hxlcl_atof:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1416], r11 # store tag L35
     mov [rbp - 296], r10 # spill L35 to slot
-    jmp .L7ff7_hxlcl_atof_bb14 # branch
-.L7ff7_hxlcl_atof_bb14:
+    jmp .L5211_hxlcl_atof_bb14 # branch
+.L5211_hxlcl_atof_bb14:
     mov r11, 0 # hv payload
     mov r10, [rbp - 296] # reload L35 from spill slot
     mov r10, r10 # hv payload
@@ -17323,9 +17323,9 @@ hxlcl_atof:
     mov [rbp - 304], r10 # spill L36 to slot
     mov r10, [rbp - 304] # reload L36 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atof_bb16 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atof_bb15 # jump -> then
-.L7ff7_hxlcl_atof_bb15:
+    jz .L5211_hxlcl_atof_bb16 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atof_bb15 # jump -> then
+.L5211_hxlcl_atof_bb15:
     mov r10, r13 # hv payload
     mov r11, [rbp - 56] # reload L5 from spill slot
     mov r11, r11 # hv payload
@@ -17391,9 +17391,9 @@ hxlcl_atof:
     mov [rbp - 376], r10 # spill L45 to slot
     mov r10, [rbp - 376] # reload L45 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atof_bb18 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atof_bb17 # jump -> then
-.L7ff7_hxlcl_atof_bb16:
+    jz .L5211_hxlcl_atof_bb18 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atof_bb17 # jump -> then
+.L5211_hxlcl_atof_bb16:
     mov r10, r13 # hv payload
     mov r11, [rbp - 56] # reload L5 from spill slot
     mov r11, r11 # hv payload
@@ -17418,15 +17418,15 @@ hxlcl_atof:
     mov [rbp - 472], r10 # spill L57 to slot
     mov r10, [rbp - 472] # reload L57 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atof_bb21 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atof_bb20 # jump -> then
-.L7ff7_hxlcl_atof_bb17:
+    jz .L5211_hxlcl_atof_bb21 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atof_bb20 # jump -> then
+.L5211_hxlcl_atof_bb17:
     mov r10, 0 # assign L35
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1416], r11 # store tag L35
     mov [rbp - 296], r10 # spill L35 to slot
-    jmp .L7ff7_hxlcl_atof_bb19 # branch
-.L7ff7_hxlcl_atof_bb18:
+    jmp .L5211_hxlcl_atof_bb19 # branch
+.L5211_hxlcl_atof_bb18:
     mov r11, 48 # hv payload
     mov r10, [rbp - 320] # reload L38 from spill slot
     mov r10, r10 # hv payload
@@ -17494,10 +17494,10 @@ hxlcl_atof:
     mov r11, [rbp - 1568] # tag L54 from tag-slot
     mov [rbp - 1176], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
-    jmp .L7ff7_hxlcl_atof_bb19 # branch
-.L7ff7_hxlcl_atof_bb19:
-    jmp .L7ff7_hxlcl_atof_bb14 # branch
-.L7ff7_hxlcl_atof_bb20:
+    jmp .L5211_hxlcl_atof_bb19 # branch
+.L5211_hxlcl_atof_bb19:
+    jmp .L5211_hxlcl_atof_bb14 # branch
+.L5211_hxlcl_atof_bb20:
     mov r11, 1 # hv payload
     mov r10, [rbp - 56] # reload L5 from spill slot
     mov r10, r10 # hv payload
@@ -17540,8 +17540,8 @@ hxlcl_atof:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1648], r11 # store tag L64
     mov [rbp - 528], r10 # spill L64 to slot
-    jmp .L7ff7_hxlcl_atof_bb22 # branch
-.L7ff7_hxlcl_atof_bb21:
+    jmp .L5211_hxlcl_atof_bb22 # branch
+.L5211_hxlcl_atof_bb21:
     mov r10, r13 # hv payload
     mov r11, [rbp - 56] # reload L5 from spill slot
     mov r11, r11 # hv payload
@@ -17607,9 +17607,9 @@ hxlcl_atof:
     mov [rbp - 760], r10 # spill L93 to slot
     mov r10, [rbp - 760] # reload L93 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atof_bb29 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atof_bb28 # jump -> then
-.L7ff7_hxlcl_atof_bb22:
+    jz .L5211_hxlcl_atof_bb29 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atof_bb28 # jump -> then
+.L5211_hxlcl_atof_bb22:
     mov r11, 0 # hv payload
     mov r10, [rbp - 528] # reload L64 from spill slot
     mov r10, r10 # hv payload
@@ -17621,9 +17621,9 @@ hxlcl_atof:
     mov [rbp - 536], r10 # spill L65 to slot
     mov r10, [rbp - 536] # reload L65 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atof_bb24 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atof_bb23 # jump -> then
-.L7ff7_hxlcl_atof_bb23:
+    jz .L5211_hxlcl_atof_bb24 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atof_bb23 # jump -> then
+.L5211_hxlcl_atof_bb23:
     mov r10, r13 # hv payload
     mov r11, [rbp - 56] # reload L5 from spill slot
     mov r11, r11 # hv payload
@@ -17689,17 +17689,17 @@ hxlcl_atof:
     mov [rbp - 608], r10 # spill L74 to slot
     mov r10, [rbp - 608] # reload L74 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atof_bb26 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atof_bb25 # jump -> then
-.L7ff7_hxlcl_atof_bb24:
-    jmp .L7ff7_hxlcl_atof_bb21 # branch
-.L7ff7_hxlcl_atof_bb25:
+    jz .L5211_hxlcl_atof_bb26 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atof_bb25 # jump -> then
+.L5211_hxlcl_atof_bb24:
+    jmp .L5211_hxlcl_atof_bb21 # branch
+.L5211_hxlcl_atof_bb25:
     mov r10, 0 # assign L64
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1648], r11 # store tag L64
     mov [rbp - 528], r10 # spill L64 to slot
-    jmp .L7ff7_hxlcl_atof_bb27 # branch
-.L7ff7_hxlcl_atof_bb26:
+    jmp .L5211_hxlcl_atof_bb27 # branch
+.L5211_hxlcl_atof_bb26:
     mov r11, 48 # hv payload
     mov r10, [rbp - 552] # reload L67 from spill slot
     mov r10, r10 # hv payload
@@ -17783,10 +17783,10 @@ hxlcl_atof:
     mov r11, [rbp - 1808] # tag L84 from tag-slot
     mov [rbp - 1176], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
-    jmp .L7ff7_hxlcl_atof_bb27 # branch
-.L7ff7_hxlcl_atof_bb27:
-    jmp .L7ff7_hxlcl_atof_bb22 # branch
-.L7ff7_hxlcl_atof_bb28:
+    jmp .L5211_hxlcl_atof_bb27 # branch
+.L5211_hxlcl_atof_bb27:
+    jmp .L5211_hxlcl_atof_bb22 # branch
+.L5211_hxlcl_atof_bb28:
     mov r11, 1 # hv payload
     mov r10, [rbp - 56] # reload L5 from spill slot
     mov r10, r10 # hv payload
@@ -17827,9 +17827,9 @@ hxlcl_atof:
     mov [rbp - 808], r10 # spill L99 to slot
     mov r10, [rbp - 808] # reload L99 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atof_bb31 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atof_bb30 # jump -> then
-.L7ff7_hxlcl_atof_bb29:
+    jz .L5211_hxlcl_atof_bb31 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atof_bb30 # jump -> then
+.L5211_hxlcl_atof_bb29:
     mov r11, 0 # hv payload
     mov r10, [rbp - 224] # reload L26 from spill slot
     mov r10, r10 # hv payload
@@ -17841,9 +17841,9 @@ hxlcl_atof:
     mov [rbp - 1088], r10 # spill L134 to slot
     mov r10, [rbp - 1088] # reload L134 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atof_bb48 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atof_bb47 # jump -> then
-.L7ff7_hxlcl_atof_bb30:
+    jz .L5211_hxlcl_atof_bb48 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atof_bb47 # jump -> then
+.L5211_hxlcl_atof_bb30:
     mov r10, 1 # assign L98
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1920], r11 # store tag L98
@@ -17860,8 +17860,8 @@ hxlcl_atof:
     mov r11, [rbp - 1944] # tag L101 from tag-slot
     mov [rbp - 1176], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
-    jmp .L7ff7_hxlcl_atof_bb34 # branch
-.L7ff7_hxlcl_atof_bb31:
+    jmp .L5211_hxlcl_atof_bb34 # branch
+.L5211_hxlcl_atof_bb31:
     mov r10, [rbp - 792] # reload L97 from spill slot
     mov r10, r10 # hv payload
     mov r11, 43 # hv payload
@@ -17873,9 +17873,9 @@ hxlcl_atof:
     mov [rbp - 832], r10 # spill L102 to slot
     mov r10, [rbp - 832] # reload L102 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atof_bb33 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atof_bb32 # jump -> then
-.L7ff7_hxlcl_atof_bb32:
+    jz .L5211_hxlcl_atof_bb33 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atof_bb32 # jump -> then
+.L5211_hxlcl_atof_bb32:
     mov r11, 1 # hv payload
     mov r10, [rbp - 56] # reload L5 from spill slot
     mov r10, r10 # hv payload
@@ -17888,10 +17888,10 @@ hxlcl_atof:
     mov r11, [rbp - 1968] # tag L104 from tag-slot
     mov [rbp - 1176], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
-    jmp .L7ff7_hxlcl_atof_bb33 # branch
-.L7ff7_hxlcl_atof_bb33:
-    jmp .L7ff7_hxlcl_atof_bb34 # branch
-.L7ff7_hxlcl_atof_bb34:
+    jmp .L5211_hxlcl_atof_bb33 # branch
+.L5211_hxlcl_atof_bb33:
+    jmp .L5211_hxlcl_atof_bb34 # branch
+.L5211_hxlcl_atof_bb34:
     mov r10, 0 # assign L105
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1976], r11 # store tag L105
@@ -17900,8 +17900,8 @@ hxlcl_atof:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1984], r11 # store tag L106
     mov [rbp - 864], r10 # spill L106 to slot
-    jmp .L7ff7_hxlcl_atof_bb35 # branch
-.L7ff7_hxlcl_atof_bb35:
+    jmp .L5211_hxlcl_atof_bb35 # branch
+.L5211_hxlcl_atof_bb35:
     mov r11, 0 # hv payload
     mov r10, [rbp - 864] # reload L106 from spill slot
     mov r10, r10 # hv payload
@@ -17913,9 +17913,9 @@ hxlcl_atof:
     mov [rbp - 872], r10 # spill L107 to slot
     mov r10, [rbp - 872] # reload L107 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atof_bb37 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atof_bb36 # jump -> then
-.L7ff7_hxlcl_atof_bb36:
+    jz .L5211_hxlcl_atof_bb37 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atof_bb36 # jump -> then
+.L5211_hxlcl_atof_bb36:
     mov r10, r13 # hv payload
     mov r11, [rbp - 56] # reload L5 from spill slot
     mov r11, r11 # hv payload
@@ -17981,9 +17981,9 @@ hxlcl_atof:
     mov [rbp - 944], r10 # spill L116 to slot
     mov r10, [rbp - 944] # reload L116 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atof_bb39 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atof_bb38 # jump -> then
-.L7ff7_hxlcl_atof_bb37:
+    jz .L5211_hxlcl_atof_bb39 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atof_bb38 # jump -> then
+.L5211_hxlcl_atof_bb37:
     mov r10, 1 # hv payload
     cvtsi2sd xmm0, r10 # __hx_payload_i2f: xmm0 = (double)v.i
     movq r10, xmm0 # __hx_payload_i2f: r10 = converted bits
@@ -17999,14 +17999,14 @@ hxlcl_atof:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 2144], r11 # store tag L126
     mov [rbp - 1024], r10 # spill L126 to slot
-    jmp .L7ff7_hxlcl_atof_bb41 # branch
-.L7ff7_hxlcl_atof_bb38:
+    jmp .L5211_hxlcl_atof_bb41 # branch
+.L5211_hxlcl_atof_bb38:
     mov r10, 0 # assign L106
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1984], r11 # store tag L106
     mov [rbp - 864], r10 # spill L106 to slot
-    jmp .L7ff7_hxlcl_atof_bb40 # branch
-.L7ff7_hxlcl_atof_bb39:
+    jmp .L5211_hxlcl_atof_bb40 # branch
+.L5211_hxlcl_atof_bb39:
     mov r11, 48 # hv payload
     mov r10, [rbp - 888] # reload L109 from spill slot
     mov r10, r10 # hv payload
@@ -18056,10 +18056,10 @@ hxlcl_atof:
     mov r11, [rbp - 2120] # tag L123 from tag-slot
     mov [rbp - 1176], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
-    jmp .L7ff7_hxlcl_atof_bb40 # branch
-.L7ff7_hxlcl_atof_bb40:
-    jmp .L7ff7_hxlcl_atof_bb35 # branch
-.L7ff7_hxlcl_atof_bb41:
+    jmp .L5211_hxlcl_atof_bb40 # branch
+.L5211_hxlcl_atof_bb40:
+    jmp .L5211_hxlcl_atof_bb35 # branch
+.L5211_hxlcl_atof_bb41:
     mov r11, [rbp - 856] # reload L105 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 1024] # reload L126 from spill slot
@@ -18072,9 +18072,9 @@ hxlcl_atof:
     mov [rbp - 1032], r10 # spill L127 to slot
     mov r10, [rbp - 1032] # reload L127 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atof_bb43 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atof_bb42 # jump -> then
-.L7ff7_hxlcl_atof_bb42:
+    jz .L5211_hxlcl_atof_bb43 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atof_bb42 # jump -> then
+.L5211_hxlcl_atof_bb42:
     mov r10, [rbp - 1016] # reload L125 from spill slot
     mov r10, r10 # hv payload
     mov r11, 4621819117588971520 # hv payload
@@ -18102,8 +18102,8 @@ hxlcl_atof:
     mov r11, [rbp - 2168] # tag L129 from tag-slot
     mov [rbp - 2144], r11 # store tag L126
     mov [rbp - 1024], r10 # spill L126 to slot
-    jmp .L7ff7_hxlcl_atof_bb41 # branch
-.L7ff7_hxlcl_atof_bb43:
+    jmp .L5211_hxlcl_atof_bb41 # branch
+.L5211_hxlcl_atof_bb43:
     mov r11, 0 # hv payload
     mov r10, [rbp - 800] # reload L98 from spill slot
     mov r10, r10 # hv payload
@@ -18115,9 +18115,9 @@ hxlcl_atof:
     mov [rbp - 1056], r10 # spill L130 to slot
     mov r10, [rbp - 1056] # reload L130 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_atof_bb45 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_atof_bb44 # jump -> then
-.L7ff7_hxlcl_atof_bb44:
+    jz .L5211_hxlcl_atof_bb45 # jump-if-zero -> else
+    jmp .L5211_hxlcl_atof_bb44 # jump -> then
+.L5211_hxlcl_atof_bb44:
     mov r10, [rbp - 288] # reload L34 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 1016] # reload L125 from spill slot
@@ -18134,8 +18134,8 @@ hxlcl_atof:
     mov r11, [rbp - 2192] # tag L132 from tag-slot
     mov [rbp - 1408], r11 # store tag L34
     mov [rbp - 288], r10 # spill L34 to slot
-    jmp .L7ff7_hxlcl_atof_bb46 # branch
-.L7ff7_hxlcl_atof_bb45:
+    jmp .L5211_hxlcl_atof_bb46 # branch
+.L5211_hxlcl_atof_bb45:
     mov r10, [rbp - 288] # reload L34 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 1016] # reload L125 from spill slot
@@ -18152,10 +18152,10 @@ hxlcl_atof:
     mov r11, [rbp - 2200] # tag L133 from tag-slot
     mov [rbp - 1408], r11 # store tag L34
     mov [rbp - 288], r10 # spill L34 to slot
-    jmp .L7ff7_hxlcl_atof_bb46 # branch
-.L7ff7_hxlcl_atof_bb46:
-    jmp .L7ff7_hxlcl_atof_bb29 # branch
-.L7ff7_hxlcl_atof_bb47:
+    jmp .L5211_hxlcl_atof_bb46 # branch
+.L5211_hxlcl_atof_bb46:
+    jmp .L5211_hxlcl_atof_bb29 # branch
+.L5211_hxlcl_atof_bb47:
     mov r11, 63 # hv payload
     mov r10, 1 # hv payload
     mov rcx, r11 # __hx_payload_shl: shift count → rcx (cl)
@@ -18193,7 +18193,7 @@ hxlcl_atof:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_atof_bb48:
+.L5211_hxlcl_atof_bb48:
     mov r10, [rbp - 288] # reload L34 from spill slot
     mov r10, r10 # hv payload
     movq xmm0, r10 # cabi fp return: gp→xmm0
@@ -18225,7 +18225,7 @@ hxlcl_fp_addmul:
     mov r11, 1 # materialize tag imm 1
     mov [rbp - 72], r11 # store tag L1
     movq r12, xmm1 # cabi fp ingress param payload (xmm→gp)
-.L7ff7_hxlcl_fp_addmul_bb0:
+.L5211_hxlcl_fp_addmul_bb0:
     mov r10, rbx # hv payload
     mov r11, r12 # hv payload
     movq xmm0, r10 # __hx_payload_fmul: xmm0 = a.f bits
@@ -18282,7 +18282,7 @@ hxlcl_fmod:
     mov r11, 1 # materialize tag imm 1
     mov [rbp - 1120], r11 # store tag L1
     movq r12, xmm1 # cabi fp ingress param payload (xmm→gp)
-.L7ff7_hxlcl_fmod_bb0:
+.L5211_hxlcl_fmod_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -18494,9 +18494,9 @@ hxlcl_fmod:
     mov [rbp - 288], r10 # spill L34 to slot
     mov r10, [rbp - 288] # reload L34 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fmod_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fmod_bb1 # jump -> then
-.L7ff7_hxlcl_fmod_bb1:
+    jz .L5211_hxlcl_fmod_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fmod_bb1 # jump -> then
+.L5211_hxlcl_fmod_bb1:
     mov r10, rbx # hv payload
     mov r11, r12 # hv payload
     movq xmm0, r10 # __hx_payload_fmul: xmm0 = a.f bits
@@ -18539,7 +18539,7 @@ hxlcl_fmod:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fmod_bb2:
+.L5211_hxlcl_fmod_bb2:
     mov r11, 1 # hv payload
     mov r10, r14 # hv payload
     mov rcx, r11 # __hx_payload_shl: shift count → rcx (cl)
@@ -18593,9 +18593,9 @@ hxlcl_fmod:
     mov [rbp - 384], r10 # spill L46 to slot
     mov r10, [rbp - 384] # reload L46 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fmod_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fmod_bb3 # jump -> then
-.L7ff7_hxlcl_fmod_bb3:
+    jz .L5211_hxlcl_fmod_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fmod_bb3 # jump -> then
+.L5211_hxlcl_fmod_bb3:
     mov r11, 0 # hv payload
     mov r10, [rbp - 376] # reload L45 from spill slot
     mov r10, r10 # hv payload
@@ -18607,9 +18607,9 @@ hxlcl_fmod:
     mov [rbp - 400], r10 # spill L48 to slot
     mov r10, [rbp - 400] # reload L48 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fmod_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fmod_bb5 # jump -> then
-.L7ff7_hxlcl_fmod_bb4:
+    jz .L5211_hxlcl_fmod_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fmod_bb5 # jump -> then
+.L5211_hxlcl_fmod_bb4:
     mov r10, [rbp - 88] # reload L9 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -18621,9 +18621,9 @@ hxlcl_fmod:
     mov [rbp - 432], r10 # spill L52 to slot
     mov r10, [rbp - 432] # reload L52 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fmod_bb8 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fmod_bb7 # jump -> then
-.L7ff7_hxlcl_fmod_bb5:
+    jz .L5211_hxlcl_fmod_bb8 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fmod_bb7 # jump -> then
+.L5211_hxlcl_fmod_bb5:
     mov r10, 0 # hv payload
     mov r11, rbx # hv payload
     movq xmm0, r10 # __hx_payload_fmul: xmm0 = a.f bits
@@ -18650,7 +18650,7 @@ hxlcl_fmod:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fmod_bb6:
+.L5211_hxlcl_fmod_bb6:
     mov r10, r14 # hv payload
     movq xmm0, r10 # cabi fp return: gp→xmm0
     add rsp, 2160 # epilogue: free spill frame
@@ -18662,7 +18662,7 @@ hxlcl_fmod:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fmod_bb7:
+.L5211_hxlcl_fmod_bb7:
     mov r11, 12 # hv payload
     mov r10, r14 # hv payload
     mov rcx, r11 # __hx_payload_shl: shift count → rcx (cl)
@@ -18688,8 +18688,8 @@ hxlcl_fmod:
     mov r11, [rbp - 1560] # tag L56 from tag-slot
     mov [rbp - 1568], r11 # store tag L57
     mov [rbp - 472], r10 # spill L57 to slot
-    jmp .L7ff7_hxlcl_fmod_bb9 # branch
-.L7ff7_hxlcl_fmod_bb8:
+    jmp .L5211_hxlcl_fmod_bb9 # branch
+.L5211_hxlcl_fmod_bb8:
     mov r11, 4503599627370495 # hv payload
     mov r10, r14 # hv payload
     and r10, r11 # __hx_payload_and: r10 = a.pl and b.pl
@@ -18724,8 +18724,8 @@ hxlcl_fmod:
     mov r14, r10 # assign L3
     mov r11, [rbp - 1680] # tag L71 from tag-slot
     mov [rbp - 1136], r11 # store tag L3
-    jmp .L7ff7_hxlcl_fmod_bb12 # branch
-.L7ff7_hxlcl_fmod_bb9:
+    jmp .L5211_hxlcl_fmod_bb12 # branch
+.L5211_hxlcl_fmod_bb9:
     mov r10, [rbp - 472] # reload L57 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -18737,9 +18737,9 @@ hxlcl_fmod:
     mov [rbp - 480], r10 # spill L58 to slot
     mov r10, [rbp - 480] # reload L58 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fmod_bb11 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fmod_bb10 # jump -> then
-.L7ff7_hxlcl_fmod_bb10:
+    jz .L5211_hxlcl_fmod_bb11 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fmod_bb10 # jump -> then
+.L5211_hxlcl_fmod_bb10:
     mov r11, 1 # hv payload
     mov r10, [rbp - 88] # reload L9 from spill slot
     mov r10, r10 # hv payload
@@ -18778,8 +18778,8 @@ hxlcl_fmod:
     mov r11, [rbp - 1600] # tag L61 from tag-slot
     mov [rbp - 1568], r11 # store tag L57
     mov [rbp - 472], r10 # spill L57 to slot
-    jmp .L7ff7_hxlcl_fmod_bb9 # branch
-.L7ff7_hxlcl_fmod_bb11:
+    jmp .L5211_hxlcl_fmod_bb9 # branch
+.L5211_hxlcl_fmod_bb11:
     mov r11, [rbp - 88] # reload L9 from spill slot
     mov r11, r11 # hv payload
     mov r10, 0 # hv payload
@@ -18816,8 +18816,8 @@ hxlcl_fmod:
     mov r14, r10 # assign L3
     mov r11, [rbp - 1640] # tag L66 from tag-slot
     mov [rbp - 1136], r11 # store tag L3
-    jmp .L7ff7_hxlcl_fmod_bb12 # branch
-.L7ff7_hxlcl_fmod_bb12:
+    jmp .L5211_hxlcl_fmod_bb12 # branch
+.L5211_hxlcl_fmod_bb12:
     mov r10, [rbp - 120] # reload L13 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -18829,9 +18829,9 @@ hxlcl_fmod:
     mov [rbp - 592], r10 # spill L72 to slot
     mov r10, [rbp - 592] # reload L72 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fmod_bb14 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fmod_bb13 # jump -> then
-.L7ff7_hxlcl_fmod_bb13:
+    jz .L5211_hxlcl_fmod_bb14 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fmod_bb13 # jump -> then
+.L5211_hxlcl_fmod_bb13:
     mov r11, 12 # hv payload
     mov r10, [rbp - 56] # reload L5 from spill slot
     mov r10, r10 # hv payload
@@ -18858,8 +18858,8 @@ hxlcl_fmod:
     mov r11, [rbp - 1720] # tag L76 from tag-slot
     mov [rbp - 1728], r11 # store tag L77
     mov [rbp - 632], r10 # spill L77 to slot
-    jmp .L7ff7_hxlcl_fmod_bb15 # branch
-.L7ff7_hxlcl_fmod_bb14:
+    jmp .L5211_hxlcl_fmod_bb15 # branch
+.L5211_hxlcl_fmod_bb14:
     mov r11, 4503599627370495 # hv payload
     mov r10, [rbp - 56] # reload L5 from spill slot
     mov r10, r10 # hv payload
@@ -18896,8 +18896,8 @@ hxlcl_fmod:
     mov r11, [rbp - 1840] # tag L91 from tag-slot
     mov [rbp - 1152], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
-    jmp .L7ff7_hxlcl_fmod_bb18 # branch
-.L7ff7_hxlcl_fmod_bb15:
+    jmp .L5211_hxlcl_fmod_bb18 # branch
+.L5211_hxlcl_fmod_bb15:
     mov r10, [rbp - 632] # reload L77 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -18909,9 +18909,9 @@ hxlcl_fmod:
     mov [rbp - 640], r10 # spill L78 to slot
     mov r10, [rbp - 640] # reload L78 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fmod_bb17 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fmod_bb16 # jump -> then
-.L7ff7_hxlcl_fmod_bb16:
+    jz .L5211_hxlcl_fmod_bb17 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fmod_bb16 # jump -> then
+.L5211_hxlcl_fmod_bb16:
     mov r11, 1 # hv payload
     mov r10, [rbp - 120] # reload L13 from spill slot
     mov r10, r10 # hv payload
@@ -18950,8 +18950,8 @@ hxlcl_fmod:
     mov r11, [rbp - 1760] # tag L81 from tag-slot
     mov [rbp - 1728], r11 # store tag L77
     mov [rbp - 632], r10 # spill L77 to slot
-    jmp .L7ff7_hxlcl_fmod_bb15 # branch
-.L7ff7_hxlcl_fmod_bb17:
+    jmp .L5211_hxlcl_fmod_bb15 # branch
+.L5211_hxlcl_fmod_bb17:
     mov r11, [rbp - 120] # reload L13 from spill slot
     mov r11, r11 # hv payload
     mov r10, 0 # hv payload
@@ -18990,10 +18990,10 @@ hxlcl_fmod:
     mov r11, [rbp - 1800] # tag L86 from tag-slot
     mov [rbp - 1152], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
-    jmp .L7ff7_hxlcl_fmod_bb18 # branch
-.L7ff7_hxlcl_fmod_bb18:
-    jmp .L7ff7_hxlcl_fmod_bb19 # branch
-.L7ff7_hxlcl_fmod_bb19:
+    jmp .L5211_hxlcl_fmod_bb18 # branch
+.L5211_hxlcl_fmod_bb18:
+    jmp .L5211_hxlcl_fmod_bb19 # branch
+.L5211_hxlcl_fmod_bb19:
     mov r11, [rbp - 88] # reload L9 from spill slot
     mov r11, r11 # hv payload
     mov r10, [rbp - 120] # reload L13 from spill slot
@@ -19006,9 +19006,9 @@ hxlcl_fmod:
     mov [rbp - 752], r10 # spill L92 to slot
     mov r10, [rbp - 752] # reload L92 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fmod_bb21 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fmod_bb20 # jump -> then
-.L7ff7_hxlcl_fmod_bb20:
+    jz .L5211_hxlcl_fmod_bb21 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fmod_bb20 # jump -> then
+.L5211_hxlcl_fmod_bb20:
     mov r11, [rbp - 56] # reload L5 from spill slot
     mov r11, r11 # hv payload
     mov r10, r14 # hv payload
@@ -19045,9 +19045,9 @@ hxlcl_fmod:
     mov [rbp - 792], r10 # spill L97 to slot
     mov r10, [rbp - 792] # reload L97 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fmod_bb23 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fmod_bb22 # jump -> then
-.L7ff7_hxlcl_fmod_bb21:
+    jz .L5211_hxlcl_fmod_bb23 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fmod_bb22 # jump -> then
+.L5211_hxlcl_fmod_bb21:
     mov r11, [rbp - 56] # reload L5 from spill slot
     mov r11, r11 # hv payload
     mov r10, r14 # hv payload
@@ -19084,9 +19084,9 @@ hxlcl_fmod:
     mov [rbp - 896], r10 # spill L110 to slot
     mov r10, [rbp - 896] # reload L110 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fmod_bb27 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fmod_bb26 # jump -> then
-.L7ff7_hxlcl_fmod_bb22:
+    jz .L5211_hxlcl_fmod_bb27 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fmod_bb26 # jump -> then
+.L5211_hxlcl_fmod_bb22:
     mov r10, [rbp - 768] # reload L94 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -19098,9 +19098,9 @@ hxlcl_fmod:
     mov [rbp - 808], r10 # spill L99 to slot
     mov r10, [rbp - 808] # reload L99 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fmod_bb25 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fmod_bb24 # jump -> then
-.L7ff7_hxlcl_fmod_bb23:
+    jz .L5211_hxlcl_fmod_bb25 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fmod_bb24 # jump -> then
+.L5211_hxlcl_fmod_bb23:
     mov r11, 1 # hv payload
     mov r10, r14 # hv payload
     mov rcx, r11 # __hx_payload_shl: shift count → rcx (cl)
@@ -19124,8 +19124,8 @@ hxlcl_fmod:
     mov r11, [rbp - 1952] # tag L105 from tag-slot
     mov [rbp - 1184], r11 # store tag L9
     mov [rbp - 88], r10 # spill L9 to slot
-    jmp .L7ff7_hxlcl_fmod_bb19 # branch
-.L7ff7_hxlcl_fmod_bb24:
+    jmp .L5211_hxlcl_fmod_bb19 # branch
+.L5211_hxlcl_fmod_bb24:
     mov r10, 0 # hv payload
     mov r11, rbx # hv payload
     movq xmm0, r10 # __hx_payload_fmul: xmm0 = a.f bits
@@ -19152,7 +19152,7 @@ hxlcl_fmod:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fmod_bb25:
+.L5211_hxlcl_fmod_bb25:
     mov r11, 0 # hv payload
     mov r10, [rbp - 768] # reload L94 from spill slot
     mov r10, r10 # hv payload
@@ -19164,8 +19164,8 @@ hxlcl_fmod:
     mov r14, r10 # assign L3
     mov r11, [rbp - 1936] # tag L103 from tag-slot
     mov [rbp - 1136], r11 # store tag L3
-    jmp .L7ff7_hxlcl_fmod_bb23 # branch
-.L7ff7_hxlcl_fmod_bb26:
+    jmp .L5211_hxlcl_fmod_bb23 # branch
+.L5211_hxlcl_fmod_bb26:
     mov r10, [rbp - 872] # reload L107 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -19177,9 +19177,9 @@ hxlcl_fmod:
     mov [rbp - 912], r10 # spill L112 to slot
     mov r10, [rbp - 912] # reload L112 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fmod_bb29 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fmod_bb28 # jump -> then
-.L7ff7_hxlcl_fmod_bb27:
+    jz .L5211_hxlcl_fmod_bb29 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fmod_bb28 # jump -> then
+.L5211_hxlcl_fmod_bb27:
     mov r11, 52 # hv payload
     mov r10, r14 # hv payload
     mov rcx, r11 # __hx_payload_shr: shift count → rcx (cl)
@@ -19192,8 +19192,8 @@ hxlcl_fmod:
     mov r11, [rbp - 2048] # tag L117 from tag-slot
     mov [rbp - 2056], r11 # store tag L118
     mov [rbp - 960], r10 # spill L118 to slot
-    jmp .L7ff7_hxlcl_fmod_bb30 # branch
-.L7ff7_hxlcl_fmod_bb28:
+    jmp .L5211_hxlcl_fmod_bb30 # branch
+.L5211_hxlcl_fmod_bb28:
     mov r10, 0 # hv payload
     mov r11, rbx # hv payload
     movq xmm0, r10 # __hx_payload_fmul: xmm0 = a.f bits
@@ -19220,7 +19220,7 @@ hxlcl_fmod:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_fmod_bb29:
+.L5211_hxlcl_fmod_bb29:
     mov r11, 0 # hv payload
     mov r10, [rbp - 872] # reload L107 from spill slot
     mov r10, r10 # hv payload
@@ -19232,8 +19232,8 @@ hxlcl_fmod:
     mov r14, r10 # assign L3
     mov r11, [rbp - 2040] # tag L116 from tag-slot
     mov [rbp - 1136], r11 # store tag L3
-    jmp .L7ff7_hxlcl_fmod_bb27 # branch
-.L7ff7_hxlcl_fmod_bb30:
+    jmp .L5211_hxlcl_fmod_bb27 # branch
+.L5211_hxlcl_fmod_bb30:
     mov r10, [rbp - 960] # reload L118 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -19245,9 +19245,9 @@ hxlcl_fmod:
     mov [rbp - 968], r10 # spill L119 to slot
     mov r10, [rbp - 968] # reload L119 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fmod_bb32 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fmod_bb31 # jump -> then
-.L7ff7_hxlcl_fmod_bb31:
+    jz .L5211_hxlcl_fmod_bb32 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fmod_bb31 # jump -> then
+.L5211_hxlcl_fmod_bb31:
     mov r11, 1 # hv payload
     mov r10, r14 # hv payload
     mov rcx, r11 # __hx_payload_shl: shift count → rcx (cl)
@@ -19283,8 +19283,8 @@ hxlcl_fmod:
     mov r11, [rbp - 2088] # tag L122 from tag-slot
     mov [rbp - 2056], r11 # store tag L118
     mov [rbp - 960], r10 # spill L118 to slot
-    jmp .L7ff7_hxlcl_fmod_bb30 # branch
-.L7ff7_hxlcl_fmod_bb32:
+    jmp .L5211_hxlcl_fmod_bb30 # branch
+.L5211_hxlcl_fmod_bb32:
     mov r11, [rbp - 88] # reload L9 from spill slot
     mov r11, r11 # hv payload
     mov r10, 0 # hv payload
@@ -19296,9 +19296,9 @@ hxlcl_fmod:
     mov [rbp - 1000], r10 # spill L123 to slot
     mov r10, [rbp - 1000] # reload L123 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_fmod_bb34 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_fmod_bb33 # jump -> then
-.L7ff7_hxlcl_fmod_bb33:
+    jz .L5211_hxlcl_fmod_bb34 # jump-if-zero -> else
+    jmp .L5211_hxlcl_fmod_bb33 # jump -> then
+.L5211_hxlcl_fmod_bb33:
     mov r11, 4503599627370496 # hv payload
     mov r10, r14 # hv payload
     sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
@@ -19333,8 +19333,8 @@ hxlcl_fmod:
     mov r14, r10 # assign L3
     mov r11, [rbp - 2136] # tag L128 from tag-slot
     mov [rbp - 1136], r11 # store tag L3
-    jmp .L7ff7_hxlcl_fmod_bb35 # branch
-.L7ff7_hxlcl_fmod_bb34:
+    jmp .L5211_hxlcl_fmod_bb35 # branch
+.L5211_hxlcl_fmod_bb34:
     mov r11, [rbp - 88] # reload L9 from spill slot
     mov r11, r11 # hv payload
     mov r10, 0 # hv payload
@@ -19371,8 +19371,8 @@ hxlcl_fmod:
     mov r14, r10 # assign L3
     mov r11, [rbp - 2176] # tag L133 from tag-slot
     mov [rbp - 1136], r11 # store tag L3
-    jmp .L7ff7_hxlcl_fmod_bb35 # branch
-.L7ff7_hxlcl_fmod_bb35:
+    jmp .L5211_hxlcl_fmod_bb35 # branch
+.L5211_hxlcl_fmod_bb35:
     mov r11, 63 # hv payload
     mov r10, [rbp - 136] # reload L15 from spill slot
     mov r10, r10 # hv payload
@@ -19424,7 +19424,7 @@ hxlcl_sin:
     mov r11, 1 # materialize tag imm 1
     mov [rbp - 3048], r11 # store tag L0
     movq rbx, xmm0 # cabi fp ingress param payload (xmm→gp)
-.L7ff7_hxlcl_sin_bb0:
+.L5211_hxlcl_sin_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -19466,9 +19466,9 @@ hxlcl_sin:
     mov [rbp - 72], r10 # spill L7 to slot
     mov r10, [rbp - 72] # reload L7 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb1 # jump -> then
-.L7ff7_hxlcl_sin_bb1:
+    jz .L5211_hxlcl_sin_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb1 # jump -> then
+.L5211_hxlcl_sin_bb1:
     mov r10, r13 # hv payload
     movq xmm0, r10 # cabi fp return: gp→xmm0
     add rsp, 6032 # epilogue: free spill frame
@@ -19480,7 +19480,7 @@ hxlcl_sin:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_sin_bb2:
+.L5211_hxlcl_sin_bb2:
     mov r11, [rbp - 64] # reload L6 from spill slot
     mov r11, r11 # hv payload
     mov r10, 2146435072 # hv payload
@@ -19492,9 +19492,9 @@ hxlcl_sin:
     mov [rbp - 88], r10 # spill L9 to slot
     mov r10, [rbp - 88] # reload L9 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb3 # jump -> then
-.L7ff7_hxlcl_sin_bb3:
+    jz .L5211_hxlcl_sin_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb3 # jump -> then
+.L5211_hxlcl_sin_bb3:
     mov r10, rbx # hv payload
     mov r11, rbx # hv payload
     movq xmm0, r10 # __hx_payload_fsub: xmm0 = a.f bits
@@ -19521,7 +19521,7 @@ hxlcl_sin:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_sin_bb4:
+.L5211_hxlcl_sin_bb4:
     mov r11, 63 # hv payload
     mov r10, r13 # hv payload
     mov rcx, r11 # __hx_payload_shr: shift count → rcx (cl)
@@ -19628,9 +19628,9 @@ hxlcl_sin:
     mov [rbp - 248], r10 # spill L29 to slot
     mov r10, [rbp - 248] # reload L29 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb5 # jump -> then
-.L7ff7_hxlcl_sin_bb5:
+    jz .L5211_hxlcl_sin_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb5 # jump -> then
+.L5211_hxlcl_sin_bb5:
     mov r11, 0 # hv payload
     mov r10, r13 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -19654,8 +19654,8 @@ hxlcl_sin:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3176], r11 # store tag L16
     mov [rbp - 144], r10 # spill L16 to slot
-    jmp .L7ff7_hxlcl_sin_bb6 # branch
-.L7ff7_hxlcl_sin_bb6:
+    jmp .L5211_hxlcl_sin_bb6 # branch
+.L5211_hxlcl_sin_bb6:
     mov r11, 1048575 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -19693,9 +19693,9 @@ hxlcl_sin:
     mov [rbp - 304], r10 # spill L36 to slot
     mov r10, [rbp - 304] # reload L36 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb8 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb7 # jump -> then
-.L7ff7_hxlcl_sin_bb7:
+    jz .L5211_hxlcl_sin_bb8 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb7 # jump -> then
+.L5211_hxlcl_sin_bb7:
     mov r11, 1073928572 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -19748,9 +19748,9 @@ hxlcl_sin:
     mov [rbp - 368], r10 # spill L44 to slot
     mov r10, [rbp - 368] # reload L44 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb9 # jump -> then
-.L7ff7_hxlcl_sin_bb8:
+    jz .L5211_hxlcl_sin_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb9 # jump -> then
+.L5211_hxlcl_sin_bb8:
     mov r10, [rbp - 144] # reload L16 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -19762,9 +19762,9 @@ hxlcl_sin:
     mov [rbp - 544], r10 # spill L66 to slot
     mov r10, [rbp - 544] # reload L66 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb15 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb14 # jump -> then
-.L7ff7_hxlcl_sin_bb9:
+    jz .L5211_hxlcl_sin_bb15 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb14 # jump -> then
+.L5211_hxlcl_sin_bb9:
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -19776,11 +19776,11 @@ hxlcl_sin:
     mov [rbp - 384], r10 # spill L46 to slot
     mov r10, [rbp - 384] # reload L46 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb12 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb11 # jump -> then
-.L7ff7_hxlcl_sin_bb10:
-    jmp .L7ff7_hxlcl_sin_bb8 # branch
-.L7ff7_hxlcl_sin_bb11:
+    jz .L5211_hxlcl_sin_bb12 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb11 # jump -> then
+.L5211_hxlcl_sin_bb10:
+    jmp .L5211_hxlcl_sin_bb8 # branch
+.L5211_hxlcl_sin_bb11:
     mov r10, rbx # hv payload
     mov r11, 4609753056924401664 # hv payload
     movq xmm0, r10 # __hx_payload_fsub: xmm0 = a.f bits
@@ -19869,8 +19869,8 @@ hxlcl_sin:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3168], r11 # store tag L15
     mov [rbp - 136], r10 # spill L15 to slot
-    jmp .L7ff7_hxlcl_sin_bb13 # branch
-.L7ff7_hxlcl_sin_bb12:
+    jmp .L5211_hxlcl_sin_bb13 # branch
+.L5211_hxlcl_sin_bb12:
     mov r10, rbx # hv payload
     mov r11, 4609753056924401664 # hv payload
     movq xmm0, r10 # __hx_payload_fadd: xmm0 = a.f bits
@@ -19959,8 +19959,8 @@ hxlcl_sin:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3168], r11 # store tag L15
     mov [rbp - 136], r10 # spill L15 to slot
-    jmp .L7ff7_hxlcl_sin_bb13 # branch
-.L7ff7_hxlcl_sin_bb13:
+    jmp .L5211_hxlcl_sin_bb13 # branch
+.L5211_hxlcl_sin_bb13:
     mov r10, 1 # assign L21
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3216], r11 # store tag L21
@@ -19969,8 +19969,8 @@ hxlcl_sin:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3176], r11 # store tag L16
     mov [rbp - 144], r10 # spill L16 to slot
-    jmp .L7ff7_hxlcl_sin_bb10 # branch
-.L7ff7_hxlcl_sin_bb14:
+    jmp .L5211_hxlcl_sin_bb10 # branch
+.L5211_hxlcl_sin_bb14:
     mov r11, 1074752122 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -20050,9 +20050,9 @@ hxlcl_sin:
     mov [rbp - 640], r10 # spill L78 to slot
     mov r10, [rbp - 640] # reload L78 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb17 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb16 # jump -> then
-.L7ff7_hxlcl_sin_bb15:
+    jz .L5211_hxlcl_sin_bb17 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb16 # jump -> then
+.L5211_hxlcl_sin_bb15:
     mov r10, [rbp - 144] # reload L16 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -20064,9 +20064,9 @@ hxlcl_sin:
     mov [rbp - 816], r10 # spill L100 to slot
     mov r10, [rbp - 816] # reload L100 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb22 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb21 # jump -> then
-.L7ff7_hxlcl_sin_bb16:
+    jz .L5211_hxlcl_sin_bb22 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb21 # jump -> then
+.L5211_hxlcl_sin_bb16:
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -20078,11 +20078,11 @@ hxlcl_sin:
     mov [rbp - 656], r10 # spill L80 to slot
     mov r10, [rbp - 656] # reload L80 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb19 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb18 # jump -> then
-.L7ff7_hxlcl_sin_bb17:
-    jmp .L7ff7_hxlcl_sin_bb15 # branch
-.L7ff7_hxlcl_sin_bb18:
+    jz .L5211_hxlcl_sin_bb19 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb18 # jump -> then
+.L5211_hxlcl_sin_bb17:
+    jmp .L5211_hxlcl_sin_bb15 # branch
+.L5211_hxlcl_sin_bb18:
     mov r10, rbx # hv payload
     mov r11, 4614256656551772160 # hv payload
     movq xmm0, r10 # __hx_payload_fsub: xmm0 = a.f bits
@@ -20171,8 +20171,8 @@ hxlcl_sin:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3168], r11 # store tag L15
     mov [rbp - 136], r10 # spill L15 to slot
-    jmp .L7ff7_hxlcl_sin_bb20 # branch
-.L7ff7_hxlcl_sin_bb19:
+    jmp .L5211_hxlcl_sin_bb20 # branch
+.L5211_hxlcl_sin_bb19:
     mov r10, rbx # hv payload
     mov r11, 4614256656551772160 # hv payload
     movq xmm0, r10 # __hx_payload_fadd: xmm0 = a.f bits
@@ -20261,8 +20261,8 @@ hxlcl_sin:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3168], r11 # store tag L15
     mov [rbp - 136], r10 # spill L15 to slot
-    jmp .L7ff7_hxlcl_sin_bb20 # branch
-.L7ff7_hxlcl_sin_bb20:
+    jmp .L5211_hxlcl_sin_bb20 # branch
+.L5211_hxlcl_sin_bb20:
     mov r10, 1 # assign L21
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3216], r11 # store tag L21
@@ -20271,8 +20271,8 @@ hxlcl_sin:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3176], r11 # store tag L16
     mov [rbp - 144], r10 # spill L16 to slot
-    jmp .L7ff7_hxlcl_sin_bb17 # branch
-.L7ff7_hxlcl_sin_bb21:
+    jmp .L5211_hxlcl_sin_bb17 # branch
+.L5211_hxlcl_sin_bb21:
     mov r11, 1075183036 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -20366,9 +20366,9 @@ hxlcl_sin:
     mov [rbp - 928], r10 # spill L114 to slot
     mov r10, [rbp - 928] # reload L114 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb24 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb23 # jump -> then
-.L7ff7_hxlcl_sin_bb22:
+    jz .L5211_hxlcl_sin_bb24 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb23 # jump -> then
+.L5211_hxlcl_sin_bb22:
     mov r10, [rbp - 144] # reload L16 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -20380,9 +20380,9 @@ hxlcl_sin:
     mov [rbp - 1104], r10 # spill L136 to slot
     mov r10, [rbp - 1104] # reload L136 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb29 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb28 # jump -> then
-.L7ff7_hxlcl_sin_bb23:
+    jz .L5211_hxlcl_sin_bb29 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb28 # jump -> then
+.L5211_hxlcl_sin_bb23:
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -20394,11 +20394,11 @@ hxlcl_sin:
     mov [rbp - 944], r10 # spill L116 to slot
     mov r10, [rbp - 944] # reload L116 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb26 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb25 # jump -> then
-.L7ff7_hxlcl_sin_bb24:
-    jmp .L7ff7_hxlcl_sin_bb22 # branch
-.L7ff7_hxlcl_sin_bb25:
+    jz .L5211_hxlcl_sin_bb26 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb25 # jump -> then
+.L5211_hxlcl_sin_bb24:
+    jmp .L5211_hxlcl_sin_bb22 # branch
+.L5211_hxlcl_sin_bb25:
     mov r10, rbx # hv payload
     mov r11, 4616991696741203968 # hv payload
     movq xmm0, r10 # __hx_payload_fsub: xmm0 = a.f bits
@@ -20487,8 +20487,8 @@ hxlcl_sin:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3168], r11 # store tag L15
     mov [rbp - 136], r10 # spill L15 to slot
-    jmp .L7ff7_hxlcl_sin_bb27 # branch
-.L7ff7_hxlcl_sin_bb26:
+    jmp .L5211_hxlcl_sin_bb27 # branch
+.L5211_hxlcl_sin_bb26:
     mov r10, rbx # hv payload
     mov r11, 4616991696741203968 # hv payload
     movq xmm0, r10 # __hx_payload_fadd: xmm0 = a.f bits
@@ -20577,8 +20577,8 @@ hxlcl_sin:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3168], r11 # store tag L15
     mov [rbp - 136], r10 # spill L15 to slot
-    jmp .L7ff7_hxlcl_sin_bb27 # branch
-.L7ff7_hxlcl_sin_bb27:
+    jmp .L5211_hxlcl_sin_bb27 # branch
+.L5211_hxlcl_sin_bb27:
     mov r10, 1 # assign L21
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3216], r11 # store tag L21
@@ -20587,8 +20587,8 @@ hxlcl_sin:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3176], r11 # store tag L16
     mov [rbp - 144], r10 # spill L16 to slot
-    jmp .L7ff7_hxlcl_sin_bb24 # branch
-.L7ff7_hxlcl_sin_bb28:
+    jmp .L5211_hxlcl_sin_bb24 # branch
+.L5211_hxlcl_sin_bb28:
     mov r11, 1075594811 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -20682,9 +20682,9 @@ hxlcl_sin:
     mov [rbp - 1216], r10 # spill L150 to slot
     mov r10, [rbp - 1216] # reload L150 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb31 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb30 # jump -> then
-.L7ff7_hxlcl_sin_bb29:
+    jz .L5211_hxlcl_sin_bb31 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb30 # jump -> then
+.L5211_hxlcl_sin_bb29:
     mov r10, [rbp - 144] # reload L16 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -20696,9 +20696,9 @@ hxlcl_sin:
     mov [rbp - 1392], r10 # spill L172 to slot
     mov r10, [rbp - 1392] # reload L172 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb36 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb35 # jump -> then
-.L7ff7_hxlcl_sin_bb30:
+    jz .L5211_hxlcl_sin_bb36 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb35 # jump -> then
+.L5211_hxlcl_sin_bb30:
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -20710,11 +20710,11 @@ hxlcl_sin:
     mov [rbp - 1232], r10 # spill L152 to slot
     mov r10, [rbp - 1232] # reload L152 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb33 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb32 # jump -> then
-.L7ff7_hxlcl_sin_bb31:
-    jmp .L7ff7_hxlcl_sin_bb29 # branch
-.L7ff7_hxlcl_sin_bb32:
+    jz .L5211_hxlcl_sin_bb33 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb32 # jump -> then
+.L5211_hxlcl_sin_bb31:
+    jmp .L5211_hxlcl_sin_bb29 # branch
+.L5211_hxlcl_sin_bb32:
     mov r10, rbx # hv payload
     mov r11, 4618760256179142656 # hv payload
     movq xmm0, r10 # __hx_payload_fsub: xmm0 = a.f bits
@@ -20803,8 +20803,8 @@ hxlcl_sin:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3168], r11 # store tag L15
     mov [rbp - 136], r10 # spill L15 to slot
-    jmp .L7ff7_hxlcl_sin_bb34 # branch
-.L7ff7_hxlcl_sin_bb33:
+    jmp .L5211_hxlcl_sin_bb34 # branch
+.L5211_hxlcl_sin_bb33:
     mov r10, rbx # hv payload
     mov r11, 4618760256179142656 # hv payload
     movq xmm0, r10 # __hx_payload_fadd: xmm0 = a.f bits
@@ -20893,8 +20893,8 @@ hxlcl_sin:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3168], r11 # store tag L15
     mov [rbp - 136], r10 # spill L15 to slot
-    jmp .L7ff7_hxlcl_sin_bb34 # branch
-.L7ff7_hxlcl_sin_bb34:
+    jmp .L5211_hxlcl_sin_bb34 # branch
+.L5211_hxlcl_sin_bb34:
     mov r10, 1 # assign L21
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3216], r11 # store tag L21
@@ -20903,8 +20903,8 @@ hxlcl_sin:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3176], r11 # store tag L16
     mov [rbp - 144], r10 # spill L16 to slot
-    jmp .L7ff7_hxlcl_sin_bb31 # branch
-.L7ff7_hxlcl_sin_bb35:
+    jmp .L5211_hxlcl_sin_bb31 # branch
+.L5211_hxlcl_sin_bb35:
     mov r11, 1094263291 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -20916,9 +20916,9 @@ hxlcl_sin:
     mov [rbp - 1408], r10 # spill L174 to slot
     mov r10, [rbp - 1408] # reload L174 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb38 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb37 # jump -> then
-.L7ff7_hxlcl_sin_bb36:
+    jz .L5211_hxlcl_sin_bb38 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb37 # jump -> then
+.L5211_hxlcl_sin_bb36:
     mov r10, [rbp - 144] # reload L16 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -20930,9 +20930,9 @@ hxlcl_sin:
     mov [rbp - 2056], r10 # spill L255 to slot
     mov r10, [rbp - 2056] # reload L255 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb49 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb48 # jump -> then
-.L7ff7_hxlcl_sin_bb37:
+    jz .L5211_hxlcl_sin_bb49 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb48 # jump -> then
+.L5211_hxlcl_sin_bb37:
     mov r10, rbx # hv payload
     mov r11, 4603909380684499075 # hv payload
     movq xmm0, r10 # __hx_payload_fmul: xmm0 = a.f bits
@@ -21063,11 +21063,11 @@ hxlcl_sin:
     mov [rbp - 1520], r10 # spill L188 to slot
     mov r10, [rbp - 1520] # reload L188 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb40 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb39 # jump -> then
-.L7ff7_hxlcl_sin_bb38:
-    jmp .L7ff7_hxlcl_sin_bb36 # branch
-.L7ff7_hxlcl_sin_bb39:
+    jz .L5211_hxlcl_sin_bb40 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb39 # jump -> then
+.L5211_hxlcl_sin_bb38:
+    jmp .L5211_hxlcl_sin_bb36 # branch
+.L5211_hxlcl_sin_bb39:
     mov r11, 1 # hv payload
     mov r10, [rbp - 136] # reload L15 from spill slot
     mov r10, r10 # hv payload
@@ -21140,8 +21140,8 @@ hxlcl_sin:
     mov r11, [rbp - 4608] # tag L195 from tag-slot
     mov [rbp - 3264], r11 # store tag L27
     mov [rbp - 232], r10 # spill L27 to slot
-    jmp .L7ff7_hxlcl_sin_bb43 # branch
-.L7ff7_hxlcl_sin_bb40:
+    jmp .L5211_hxlcl_sin_bb43 # branch
+.L5211_hxlcl_sin_bb40:
     mov r10, [rbp - 1512] # reload L187 from spill slot
     mov r10, r10 # hv payload
     mov r11, 4605249457297304856 # hv payload
@@ -21155,9 +21155,9 @@ hxlcl_sin:
     mov [rbp - 1584], r10 # spill L196 to slot
     mov r10, [rbp - 1584] # reload L196 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb42 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb41 # jump -> then
-.L7ff7_hxlcl_sin_bb41:
+    jz .L5211_hxlcl_sin_bb42 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb41 # jump -> then
+.L5211_hxlcl_sin_bb41:
     mov r11, 1 # hv payload
     mov r10, [rbp - 136] # reload L15 from spill slot
     mov r10, r10 # hv payload
@@ -21230,10 +21230,10 @@ hxlcl_sin:
     mov r11, [rbp - 4672] # tag L203 from tag-slot
     mov [rbp - 3264], r11 # store tag L27
     mov [rbp - 232], r10 # spill L27 to slot
-    jmp .L7ff7_hxlcl_sin_bb42 # branch
-.L7ff7_hxlcl_sin_bb42:
-    jmp .L7ff7_hxlcl_sin_bb43 # branch
-.L7ff7_hxlcl_sin_bb43:
+    jmp .L5211_hxlcl_sin_bb42 # branch
+.L5211_hxlcl_sin_bb42:
+    jmp .L5211_hxlcl_sin_bb43 # branch
+.L5211_hxlcl_sin_bb43:
     mov r10, [rbp - 216] # reload L25 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 232] # reload L27 from spill slot
@@ -21324,9 +21324,9 @@ hxlcl_sin:
     mov [rbp - 1728], r10 # spill L214 to slot
     mov r10, [rbp - 1728] # reload L214 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb45 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb44 # jump -> then
-.L7ff7_hxlcl_sin_bb44:
+    jz .L5211_hxlcl_sin_bb45 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb44 # jump -> then
+.L5211_hxlcl_sin_bb44:
     mov r11, 0 # hv payload
     mov r10, [rbp - 216] # reload L25 from spill slot
     mov r10, r10 # hv payload
@@ -21510,9 +21510,9 @@ hxlcl_sin:
     mov [rbp - 1896], r10 # spill L235 to slot
     mov r10, [rbp - 1896] # reload L235 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb47 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb46 # jump -> then
-.L7ff7_hxlcl_sin_bb45:
+    jz .L5211_hxlcl_sin_bb47 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb46 # jump -> then
+.L5211_hxlcl_sin_bb45:
     mov r10, [rbp - 216] # reload L25 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 176] # reload L20 from spill slot
@@ -21577,8 +21577,8 @@ hxlcl_sin:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3176], r11 # store tag L16
     mov [rbp - 144], r10 # spill L16 to slot
-    jmp .L7ff7_hxlcl_sin_bb38 # branch
-.L7ff7_hxlcl_sin_bb46:
+    jmp .L5211_hxlcl_sin_bb38 # branch
+.L5211_hxlcl_sin_bb46:
     mov r11, 0 # hv payload
     mov r10, [rbp - 216] # reload L25 from spill slot
     mov r10, r10 # hv payload
@@ -21701,10 +21701,10 @@ hxlcl_sin:
     mov r11, [rbp - 5032] # tag L248 from tag-slot
     mov [rbp - 3208], r11 # store tag L20
     mov [rbp - 176], r10 # spill L20 to slot
-    jmp .L7ff7_hxlcl_sin_bb47 # branch
-.L7ff7_hxlcl_sin_bb47:
-    jmp .L7ff7_hxlcl_sin_bb45 # branch
-.L7ff7_hxlcl_sin_bb48:
+    jmp .L5211_hxlcl_sin_bb47 # branch
+.L5211_hxlcl_sin_bb47:
+    jmp .L5211_hxlcl_sin_bb45 # branch
+.L5211_hxlcl_sin_bb48:
     mov r10, rbx # hv payload
     mov r11, rbx # hv payload
     movq xmm0, r10 # __hx_payload_fsub: xmm0 = a.f bits
@@ -21731,7 +21731,7 @@ hxlcl_sin:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_sin_bb49:
+.L5211_hxlcl_sin_bb49:
     mov r11, 3 # hv payload
     mov r10, [rbp - 136] # reload L15 from spill slot
     mov r10, r10 # hv payload
@@ -21763,15 +21763,15 @@ hxlcl_sin:
     mov [rbp - 2120], r10 # spill L263 to slot
     mov r10, [rbp - 2120] # reload L263 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb51 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb50 # jump -> then
-.L7ff7_hxlcl_sin_bb50:
+    jz .L5211_hxlcl_sin_bb51 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb50 # jump -> then
+.L5211_hxlcl_sin_bb50:
     mov r10, 1 # assign L261
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 5136], r11 # store tag L261
     mov [rbp - 2104], r10 # spill L261 to slot
-    jmp .L7ff7_hxlcl_sin_bb51 # branch
-.L7ff7_hxlcl_sin_bb51:
+    jmp .L5211_hxlcl_sin_bb51 # branch
+.L5211_hxlcl_sin_bb51:
     mov r10, [rbp - 2096] # reload L260 from spill slot
     mov r10, r10 # hv payload
     mov r11, 2 # hv payload
@@ -21783,15 +21783,15 @@ hxlcl_sin:
     mov [rbp - 2136], r10 # spill L265 to slot
     mov r10, [rbp - 2136] # reload L265 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb53 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb52 # jump -> then
-.L7ff7_hxlcl_sin_bb52:
+    jz .L5211_hxlcl_sin_bb53 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb52 # jump -> then
+.L5211_hxlcl_sin_bb52:
     mov r10, 1 # assign L262
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 5144], r11 # store tag L262
     mov [rbp - 2112], r10 # spill L262 to slot
-    jmp .L7ff7_hxlcl_sin_bb53 # branch
-.L7ff7_hxlcl_sin_bb53:
+    jmp .L5211_hxlcl_sin_bb53 # branch
+.L5211_hxlcl_sin_bb53:
     mov r10, [rbp - 2096] # reload L260 from spill slot
     mov r10, r10 # hv payload
     mov r11, 3 # hv payload
@@ -21803,9 +21803,9 @@ hxlcl_sin:
     mov [rbp - 2152], r10 # spill L267 to slot
     mov r10, [rbp - 2152] # reload L267 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb55 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb54 # jump -> then
-.L7ff7_hxlcl_sin_bb54:
+    jz .L5211_hxlcl_sin_bb55 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb54 # jump -> then
+.L5211_hxlcl_sin_bb54:
     mov r10, 1 # assign L261
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 5136], r11 # store tag L261
@@ -21814,8 +21814,8 @@ hxlcl_sin:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 5144], r11 # store tag L262
     mov [rbp - 2112], r10 # spill L262 to slot
-    jmp .L7ff7_hxlcl_sin_bb55 # branch
-.L7ff7_hxlcl_sin_bb55:
+    jmp .L5211_hxlcl_sin_bb55 # branch
+.L5211_hxlcl_sin_bb55:
     mov r10, rbx # hv payload
     mov r11, rbx # hv payload
     movq xmm0, r10 # __hx_payload_fsub: xmm0 = a.f bits
@@ -21841,9 +21841,9 @@ hxlcl_sin:
     mov [rbp - 2184], r10 # spill L271 to slot
     mov r10, [rbp - 2184] # reload L271 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb57 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb56 # jump -> then
-.L7ff7_hxlcl_sin_bb56:
+    jz .L5211_hxlcl_sin_bb57 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb56 # jump -> then
+.L5211_hxlcl_sin_bb56:
     mov r10, [rbp - 160] # reload L18 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 160] # reload L18 from spill slot
@@ -22042,9 +22042,9 @@ hxlcl_sin:
     mov [rbp - 2392], r10 # spill L297 to slot
     mov r10, [rbp - 2392] # reload L297 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb59 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb58 # jump -> then
-.L7ff7_hxlcl_sin_bb57:
+    jz .L5211_hxlcl_sin_bb59 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb58 # jump -> then
+.L5211_hxlcl_sin_bb57:
     mov r10, rbx # hv payload
     mov r11, rbx # hv payload
     movq xmm0, r10 # __hx_payload_fsub: xmm0 = a.f bits
@@ -22070,9 +22070,9 @@ hxlcl_sin:
     mov [rbp - 2600], r10 # spill L323 to slot
     mov r10, [rbp - 2600] # reload L323 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb62 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb61 # jump -> then
-.L7ff7_hxlcl_sin_bb58:
+    jz .L5211_hxlcl_sin_bb62 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb61 # jump -> then
+.L5211_hxlcl_sin_bb58:
     mov r10, [rbp - 2208] # reload L274 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 2368] # reload L294 from spill slot
@@ -22136,8 +22136,8 @@ hxlcl_sin:
     mov r11, [rbp - 5488] # tag L305 from tag-slot
     mov [rbp - 5208], r11 # store tag L270
     mov [rbp - 2176], r10 # spill L270 to slot
-    jmp .L7ff7_hxlcl_sin_bb60 # branch
-.L7ff7_hxlcl_sin_bb59:
+    jmp .L5211_hxlcl_sin_bb60 # branch
+.L5211_hxlcl_sin_bb59:
     mov r10, 4602678819172646912 # hv payload
     mov r11, [rbp - 176] # reload L20 from spill slot
     mov r11, r11 # hv payload
@@ -22264,10 +22264,10 @@ hxlcl_sin:
     mov r11, [rbp - 5608] # tag L320 from tag-slot
     mov [rbp - 5208], r11 # store tag L270
     mov [rbp - 2176], r10 # spill L270 to slot
-    jmp .L7ff7_hxlcl_sin_bb60 # branch
-.L7ff7_hxlcl_sin_bb60:
-    jmp .L7ff7_hxlcl_sin_bb57 # branch
-.L7ff7_hxlcl_sin_bb61:
+    jmp .L5211_hxlcl_sin_bb60 # branch
+.L5211_hxlcl_sin_bb60:
+    jmp .L5211_hxlcl_sin_bb57 # branch
+.L5211_hxlcl_sin_bb61:
     mov r10, [rbp - 160] # reload L18 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 160] # reload L18 from spill slot
@@ -22627,8 +22627,8 @@ hxlcl_sin:
     mov r11, [rbp - 6000] # tag L369 from tag-slot
     mov [rbp - 5624], r11 # store tag L322
     mov [rbp - 2592], r10 # spill L322 to slot
-    jmp .L7ff7_hxlcl_sin_bb62 # branch
-.L7ff7_hxlcl_sin_bb62:
+    jmp .L5211_hxlcl_sin_bb62 # branch
+.L5211_hxlcl_sin_bb62:
     mov r11, 0 # hv payload
     mov r10, [rbp - 2176] # reload L270 from spill slot
     mov r10, r10 # hv payload
@@ -22652,9 +22652,9 @@ hxlcl_sin:
     mov [rbp - 2992], r10 # spill L372 to slot
     mov r10, [rbp - 2992] # reload L372 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb64 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb63 # jump -> then
-.L7ff7_hxlcl_sin_bb63:
+    jz .L5211_hxlcl_sin_bb64 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb63 # jump -> then
+.L5211_hxlcl_sin_bb63:
     mov r11, 0 # hv payload
     mov r10, [rbp - 2592] # reload L322 from spill slot
     mov r10, r10 # hv payload
@@ -22667,8 +22667,8 @@ hxlcl_sin:
     mov r11, [rbp - 6040] # tag L374 from tag-slot
     mov [rbp - 6016], r11 # store tag L371
     mov [rbp - 2984], r10 # spill L371 to slot
-    jmp .L7ff7_hxlcl_sin_bb64 # branch
-.L7ff7_hxlcl_sin_bb64:
+    jmp .L5211_hxlcl_sin_bb64 # branch
+.L5211_hxlcl_sin_bb64:
     mov r10, [rbp - 2112] # reload L262 from spill slot
     mov r10, r10 # hv payload
     mov r11, 1 # hv payload
@@ -22680,9 +22680,9 @@ hxlcl_sin:
     mov [rbp - 3016], r10 # spill L375 to slot
     mov r10, [rbp - 3016] # reload L375 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_sin_bb66 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_sin_bb65 # jump -> then
-.L7ff7_hxlcl_sin_bb65:
+    jz .L5211_hxlcl_sin_bb66 # jump-if-zero -> else
+    jmp .L5211_hxlcl_sin_bb65 # jump -> then
+.L5211_hxlcl_sin_bb65:
     mov r10, 0 # hv payload
     mov r11, [rbp - 2984] # reload L371 from spill slot
     mov r11, r11 # hv payload
@@ -22710,7 +22710,7 @@ hxlcl_sin:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_sin_bb66:
+.L5211_hxlcl_sin_bb66:
     mov r10, [rbp - 2984] # reload L371 from spill slot
     mov r10, r10 # hv payload
     movq xmm0, r10 # cabi fp return: gp→xmm0
@@ -22739,7 +22739,7 @@ hxlcl_cos:
     mov r11, 1 # materialize tag imm 1
     mov [rbp - 2984], r11 # store tag L0
     movq rbx, xmm0 # cabi fp ingress param payload (xmm→gp)
-.L7ff7_hxlcl_cos_bb0:
+.L5211_hxlcl_cos_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -22884,9 +22884,9 @@ hxlcl_cos:
     mov [rbp - 216], r10 # spill L25 to slot
     mov r10, [rbp - 216] # reload L25 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb1 # jump -> then
-.L7ff7_hxlcl_cos_bb1:
+    jz .L5211_hxlcl_cos_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb1 # jump -> then
+.L5211_hxlcl_cos_bb1:
     mov r11, 1044905630 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -22898,9 +22898,9 @@ hxlcl_cos:
     mov [rbp - 232], r10 # spill L27 to slot
     mov r10, [rbp - 232] # reload L27 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb3 # jump -> then
-.L7ff7_hxlcl_cos_bb2:
+    jz .L5211_hxlcl_cos_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb3 # jump -> then
+.L5211_hxlcl_cos_bb2:
     mov r10, [rbp - 96] # reload L10 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -22912,9 +22912,9 @@ hxlcl_cos:
     mov [rbp - 272], r10 # spill L32 to slot
     mov r10, [rbp - 272] # reload L32 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb5 # jump -> then
-.L7ff7_hxlcl_cos_bb3:
+    jz .L5211_hxlcl_cos_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb5 # jump -> then
+.L5211_hxlcl_cos_bb3:
     mov r10, 1 # hv payload
     cvtsi2sd xmm0, r10 # __hx_payload_i2f: xmm0 = (double)v.i
     movq r10, xmm0 # __hx_payload_i2f: r10 = converted bits
@@ -22938,7 +22938,7 @@ hxlcl_cos:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_cos_bb4:
+.L5211_hxlcl_cos_bb4:
     mov r11, 0 # hv payload
     mov r10, r13 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -22962,8 +22962,8 @@ hxlcl_cos:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3064], r11 # store tag L10
     mov [rbp - 96], r10 # spill L10 to slot
-    jmp .L7ff7_hxlcl_cos_bb2 # branch
-.L7ff7_hxlcl_cos_bb5:
+    jmp .L5211_hxlcl_cos_bb2 # branch
+.L5211_hxlcl_cos_bb5:
     mov r11, [rbp - 64] # reload L6 from spill slot
     mov r11, r11 # hv payload
     mov r10, 2146435072 # hv payload
@@ -22975,9 +22975,9 @@ hxlcl_cos:
     mov [rbp - 288], r10 # spill L34 to slot
     mov r10, [rbp - 288] # reload L34 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb8 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb7 # jump -> then
-.L7ff7_hxlcl_cos_bb6:
+    jz .L5211_hxlcl_cos_bb8 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb7 # jump -> then
+.L5211_hxlcl_cos_bb6:
     mov r11, 1048575 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -23083,9 +23083,9 @@ hxlcl_cos:
     mov [rbp - 432], r10 # spill L52 to slot
     mov r10, [rbp - 432] # reload L52 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb9 # jump -> then
-.L7ff7_hxlcl_cos_bb7:
+    jz .L5211_hxlcl_cos_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb9 # jump -> then
+.L5211_hxlcl_cos_bb7:
     mov r10, rbx # hv payload
     mov r11, rbx # hv payload
     movq xmm0, r10 # __hx_payload_fsub: xmm0 = a.f bits
@@ -23112,9 +23112,9 @@ hxlcl_cos:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_cos_bb8:
-    jmp .L7ff7_hxlcl_cos_bb6 # branch
-.L7ff7_hxlcl_cos_bb9:
+.L5211_hxlcl_cos_bb8:
+    jmp .L5211_hxlcl_cos_bb6 # branch
+.L5211_hxlcl_cos_bb9:
     mov r11, 1073928572 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -23153,9 +23153,9 @@ hxlcl_cos:
     mov [rbp - 480], r10 # spill L58 to slot
     mov r10, [rbp - 480] # reload L58 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb12 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb11 # jump -> then
-.L7ff7_hxlcl_cos_bb10:
+    jz .L5211_hxlcl_cos_bb12 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb11 # jump -> then
+.L5211_hxlcl_cos_bb10:
     mov r10, [rbp - 96] # reload L10 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -23167,9 +23167,9 @@ hxlcl_cos:
     mov [rbp - 656], r10 # spill L80 to slot
     mov r10, [rbp - 656] # reload L80 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb17 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb16 # jump -> then
-.L7ff7_hxlcl_cos_bb11:
+    jz .L5211_hxlcl_cos_bb17 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb16 # jump -> then
+.L5211_hxlcl_cos_bb11:
     mov r10, [rbp - 80] # reload L8 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -23181,11 +23181,11 @@ hxlcl_cos:
     mov [rbp - 496], r10 # spill L60 to slot
     mov r10, [rbp - 496] # reload L60 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb14 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb13 # jump -> then
-.L7ff7_hxlcl_cos_bb12:
-    jmp .L7ff7_hxlcl_cos_bb10 # branch
-.L7ff7_hxlcl_cos_bb13:
+    jz .L5211_hxlcl_cos_bb14 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb13 # jump -> then
+.L5211_hxlcl_cos_bb12:
+    jmp .L5211_hxlcl_cos_bb10 # branch
+.L5211_hxlcl_cos_bb13:
     mov r10, rbx # hv payload
     mov r11, 4609753056924401664 # hv payload
     movq xmm0, r10 # __hx_payload_fsub: xmm0 = a.f bits
@@ -23274,8 +23274,8 @@ hxlcl_cos:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3056], r11 # store tag L9
     mov [rbp - 88], r10 # spill L9 to slot
-    jmp .L7ff7_hxlcl_cos_bb15 # branch
-.L7ff7_hxlcl_cos_bb14:
+    jmp .L5211_hxlcl_cos_bb15 # branch
+.L5211_hxlcl_cos_bb14:
     mov r10, rbx # hv payload
     mov r11, 4609753056924401664 # hv payload
     movq xmm0, r10 # __hx_payload_fadd: xmm0 = a.f bits
@@ -23364,8 +23364,8 @@ hxlcl_cos:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3056], r11 # store tag L9
     mov [rbp - 88], r10 # spill L9 to slot
-    jmp .L7ff7_hxlcl_cos_bb15 # branch
-.L7ff7_hxlcl_cos_bb15:
+    jmp .L5211_hxlcl_cos_bb15 # branch
+.L5211_hxlcl_cos_bb15:
     mov r10, 1 # assign L15
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3104], r11 # store tag L15
@@ -23374,8 +23374,8 @@ hxlcl_cos:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3064], r11 # store tag L10
     mov [rbp - 96], r10 # spill L10 to slot
-    jmp .L7ff7_hxlcl_cos_bb12 # branch
-.L7ff7_hxlcl_cos_bb16:
+    jmp .L5211_hxlcl_cos_bb12 # branch
+.L5211_hxlcl_cos_bb16:
     mov r11, 1074752122 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -23414,9 +23414,9 @@ hxlcl_cos:
     mov [rbp - 704], r10 # spill L86 to slot
     mov r10, [rbp - 704] # reload L86 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb19 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb18 # jump -> then
-.L7ff7_hxlcl_cos_bb17:
+    jz .L5211_hxlcl_cos_bb19 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb18 # jump -> then
+.L5211_hxlcl_cos_bb17:
     mov r10, [rbp - 96] # reload L10 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -23428,9 +23428,9 @@ hxlcl_cos:
     mov [rbp - 880], r10 # spill L108 to slot
     mov r10, [rbp - 880] # reload L108 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb24 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb23 # jump -> then
-.L7ff7_hxlcl_cos_bb18:
+    jz .L5211_hxlcl_cos_bb24 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb23 # jump -> then
+.L5211_hxlcl_cos_bb18:
     mov r10, [rbp - 80] # reload L8 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -23442,11 +23442,11 @@ hxlcl_cos:
     mov [rbp - 720], r10 # spill L88 to slot
     mov r10, [rbp - 720] # reload L88 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb21 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb20 # jump -> then
-.L7ff7_hxlcl_cos_bb19:
-    jmp .L7ff7_hxlcl_cos_bb17 # branch
-.L7ff7_hxlcl_cos_bb20:
+    jz .L5211_hxlcl_cos_bb21 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb20 # jump -> then
+.L5211_hxlcl_cos_bb19:
+    jmp .L5211_hxlcl_cos_bb17 # branch
+.L5211_hxlcl_cos_bb20:
     mov r10, rbx # hv payload
     mov r11, 4614256656551772160 # hv payload
     movq xmm0, r10 # __hx_payload_fsub: xmm0 = a.f bits
@@ -23535,8 +23535,8 @@ hxlcl_cos:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3056], r11 # store tag L9
     mov [rbp - 88], r10 # spill L9 to slot
-    jmp .L7ff7_hxlcl_cos_bb22 # branch
-.L7ff7_hxlcl_cos_bb21:
+    jmp .L5211_hxlcl_cos_bb22 # branch
+.L5211_hxlcl_cos_bb21:
     mov r10, rbx # hv payload
     mov r11, 4614256656551772160 # hv payload
     movq xmm0, r10 # __hx_payload_fadd: xmm0 = a.f bits
@@ -23625,8 +23625,8 @@ hxlcl_cos:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3056], r11 # store tag L9
     mov [rbp - 88], r10 # spill L9 to slot
-    jmp .L7ff7_hxlcl_cos_bb22 # branch
-.L7ff7_hxlcl_cos_bb22:
+    jmp .L5211_hxlcl_cos_bb22 # branch
+.L5211_hxlcl_cos_bb22:
     mov r10, 1 # assign L15
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3104], r11 # store tag L15
@@ -23635,8 +23635,8 @@ hxlcl_cos:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3064], r11 # store tag L10
     mov [rbp - 96], r10 # spill L10 to slot
-    jmp .L7ff7_hxlcl_cos_bb19 # branch
-.L7ff7_hxlcl_cos_bb23:
+    jmp .L5211_hxlcl_cos_bb19 # branch
+.L5211_hxlcl_cos_bb23:
     mov r11, 1075183036 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -23675,9 +23675,9 @@ hxlcl_cos:
     mov [rbp - 928], r10 # spill L114 to slot
     mov r10, [rbp - 928] # reload L114 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb26 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb25 # jump -> then
-.L7ff7_hxlcl_cos_bb24:
+    jz .L5211_hxlcl_cos_bb26 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb25 # jump -> then
+.L5211_hxlcl_cos_bb24:
     mov r10, [rbp - 96] # reload L10 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -23689,9 +23689,9 @@ hxlcl_cos:
     mov [rbp - 1104], r10 # spill L136 to slot
     mov r10, [rbp - 1104] # reload L136 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb31 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb30 # jump -> then
-.L7ff7_hxlcl_cos_bb25:
+    jz .L5211_hxlcl_cos_bb31 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb30 # jump -> then
+.L5211_hxlcl_cos_bb25:
     mov r10, [rbp - 80] # reload L8 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -23703,11 +23703,11 @@ hxlcl_cos:
     mov [rbp - 944], r10 # spill L116 to slot
     mov r10, [rbp - 944] # reload L116 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb28 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb27 # jump -> then
-.L7ff7_hxlcl_cos_bb26:
-    jmp .L7ff7_hxlcl_cos_bb24 # branch
-.L7ff7_hxlcl_cos_bb27:
+    jz .L5211_hxlcl_cos_bb28 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb27 # jump -> then
+.L5211_hxlcl_cos_bb26:
+    jmp .L5211_hxlcl_cos_bb24 # branch
+.L5211_hxlcl_cos_bb27:
     mov r10, rbx # hv payload
     mov r11, 4616991696741203968 # hv payload
     movq xmm0, r10 # __hx_payload_fsub: xmm0 = a.f bits
@@ -23796,8 +23796,8 @@ hxlcl_cos:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3056], r11 # store tag L9
     mov [rbp - 88], r10 # spill L9 to slot
-    jmp .L7ff7_hxlcl_cos_bb29 # branch
-.L7ff7_hxlcl_cos_bb28:
+    jmp .L5211_hxlcl_cos_bb29 # branch
+.L5211_hxlcl_cos_bb28:
     mov r10, rbx # hv payload
     mov r11, 4616991696741203968 # hv payload
     movq xmm0, r10 # __hx_payload_fadd: xmm0 = a.f bits
@@ -23886,8 +23886,8 @@ hxlcl_cos:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3056], r11 # store tag L9
     mov [rbp - 88], r10 # spill L9 to slot
-    jmp .L7ff7_hxlcl_cos_bb29 # branch
-.L7ff7_hxlcl_cos_bb29:
+    jmp .L5211_hxlcl_cos_bb29 # branch
+.L5211_hxlcl_cos_bb29:
     mov r10, 1 # assign L15
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3104], r11 # store tag L15
@@ -23896,8 +23896,8 @@ hxlcl_cos:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3064], r11 # store tag L10
     mov [rbp - 96], r10 # spill L10 to slot
-    jmp .L7ff7_hxlcl_cos_bb26 # branch
-.L7ff7_hxlcl_cos_bb30:
+    jmp .L5211_hxlcl_cos_bb26 # branch
+.L5211_hxlcl_cos_bb30:
     mov r11, 1075594811 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -23936,9 +23936,9 @@ hxlcl_cos:
     mov [rbp - 1152], r10 # spill L142 to slot
     mov r10, [rbp - 1152] # reload L142 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb33 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb32 # jump -> then
-.L7ff7_hxlcl_cos_bb31:
+    jz .L5211_hxlcl_cos_bb33 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb32 # jump -> then
+.L5211_hxlcl_cos_bb31:
     mov r10, [rbp - 96] # reload L10 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -23950,9 +23950,9 @@ hxlcl_cos:
     mov [rbp - 1328], r10 # spill L164 to slot
     mov r10, [rbp - 1328] # reload L164 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb38 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb37 # jump -> then
-.L7ff7_hxlcl_cos_bb32:
+    jz .L5211_hxlcl_cos_bb38 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb37 # jump -> then
+.L5211_hxlcl_cos_bb32:
     mov r10, [rbp - 80] # reload L8 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -23964,11 +23964,11 @@ hxlcl_cos:
     mov [rbp - 1168], r10 # spill L144 to slot
     mov r10, [rbp - 1168] # reload L144 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb35 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb34 # jump -> then
-.L7ff7_hxlcl_cos_bb33:
-    jmp .L7ff7_hxlcl_cos_bb31 # branch
-.L7ff7_hxlcl_cos_bb34:
+    jz .L5211_hxlcl_cos_bb35 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb34 # jump -> then
+.L5211_hxlcl_cos_bb33:
+    jmp .L5211_hxlcl_cos_bb31 # branch
+.L5211_hxlcl_cos_bb34:
     mov r10, rbx # hv payload
     mov r11, 4618760256179142656 # hv payload
     movq xmm0, r10 # __hx_payload_fsub: xmm0 = a.f bits
@@ -24057,8 +24057,8 @@ hxlcl_cos:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3056], r11 # store tag L9
     mov [rbp - 88], r10 # spill L9 to slot
-    jmp .L7ff7_hxlcl_cos_bb36 # branch
-.L7ff7_hxlcl_cos_bb35:
+    jmp .L5211_hxlcl_cos_bb36 # branch
+.L5211_hxlcl_cos_bb35:
     mov r10, rbx # hv payload
     mov r11, 4618760256179142656 # hv payload
     movq xmm0, r10 # __hx_payload_fadd: xmm0 = a.f bits
@@ -24147,8 +24147,8 @@ hxlcl_cos:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3056], r11 # store tag L9
     mov [rbp - 88], r10 # spill L9 to slot
-    jmp .L7ff7_hxlcl_cos_bb36 # branch
-.L7ff7_hxlcl_cos_bb36:
+    jmp .L5211_hxlcl_cos_bb36 # branch
+.L5211_hxlcl_cos_bb36:
     mov r10, 1 # assign L15
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3104], r11 # store tag L15
@@ -24157,8 +24157,8 @@ hxlcl_cos:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3064], r11 # store tag L10
     mov [rbp - 96], r10 # spill L10 to slot
-    jmp .L7ff7_hxlcl_cos_bb33 # branch
-.L7ff7_hxlcl_cos_bb37:
+    jmp .L5211_hxlcl_cos_bb33 # branch
+.L5211_hxlcl_cos_bb37:
     mov r11, 1094263291 # hv payload
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
@@ -24170,9 +24170,9 @@ hxlcl_cos:
     mov [rbp - 1344], r10 # spill L166 to slot
     mov r10, [rbp - 1344] # reload L166 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb40 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb39 # jump -> then
-.L7ff7_hxlcl_cos_bb38:
+    jz .L5211_hxlcl_cos_bb40 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb39 # jump -> then
+.L5211_hxlcl_cos_bb38:
     mov r10, [rbp - 96] # reload L10 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -24184,9 +24184,9 @@ hxlcl_cos:
     mov [rbp - 1992], r10 # spill L247 to slot
     mov r10, [rbp - 1992] # reload L247 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb51 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb50 # jump -> then
-.L7ff7_hxlcl_cos_bb39:
+    jz .L5211_hxlcl_cos_bb51 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb50 # jump -> then
+.L5211_hxlcl_cos_bb39:
     mov r10, rbx # hv payload
     mov r11, 4603909380684499075 # hv payload
     movq xmm0, r10 # __hx_payload_fmul: xmm0 = a.f bits
@@ -24317,11 +24317,11 @@ hxlcl_cos:
     mov [rbp - 1456], r10 # spill L180 to slot
     mov r10, [rbp - 1456] # reload L180 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb42 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb41 # jump -> then
-.L7ff7_hxlcl_cos_bb40:
-    jmp .L7ff7_hxlcl_cos_bb38 # branch
-.L7ff7_hxlcl_cos_bb41:
+    jz .L5211_hxlcl_cos_bb42 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb41 # jump -> then
+.L5211_hxlcl_cos_bb40:
+    jmp .L5211_hxlcl_cos_bb38 # branch
+.L5211_hxlcl_cos_bb41:
     mov r11, 1 # hv payload
     mov r10, [rbp - 88] # reload L9 from spill slot
     mov r10, r10 # hv payload
@@ -24394,8 +24394,8 @@ hxlcl_cos:
     mov r11, [rbp - 4480] # tag L187 from tag-slot
     mov [rbp - 3152], r11 # store tag L21
     mov [rbp - 184], r10 # spill L21 to slot
-    jmp .L7ff7_hxlcl_cos_bb45 # branch
-.L7ff7_hxlcl_cos_bb42:
+    jmp .L5211_hxlcl_cos_bb45 # branch
+.L5211_hxlcl_cos_bb42:
     mov r10, [rbp - 1448] # reload L179 from spill slot
     mov r10, r10 # hv payload
     mov r11, 4605249457297304856 # hv payload
@@ -24409,9 +24409,9 @@ hxlcl_cos:
     mov [rbp - 1520], r10 # spill L188 to slot
     mov r10, [rbp - 1520] # reload L188 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb44 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb43 # jump -> then
-.L7ff7_hxlcl_cos_bb43:
+    jz .L5211_hxlcl_cos_bb44 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb43 # jump -> then
+.L5211_hxlcl_cos_bb43:
     mov r11, 1 # hv payload
     mov r10, [rbp - 88] # reload L9 from spill slot
     mov r10, r10 # hv payload
@@ -24484,10 +24484,10 @@ hxlcl_cos:
     mov r11, [rbp - 4544] # tag L195 from tag-slot
     mov [rbp - 3152], r11 # store tag L21
     mov [rbp - 184], r10 # spill L21 to slot
-    jmp .L7ff7_hxlcl_cos_bb44 # branch
-.L7ff7_hxlcl_cos_bb44:
-    jmp .L7ff7_hxlcl_cos_bb45 # branch
-.L7ff7_hxlcl_cos_bb45:
+    jmp .L5211_hxlcl_cos_bb44 # branch
+.L5211_hxlcl_cos_bb44:
+    jmp .L5211_hxlcl_cos_bb45 # branch
+.L5211_hxlcl_cos_bb45:
     mov r10, [rbp - 168] # reload L19 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 184] # reload L21 from spill slot
@@ -24578,9 +24578,9 @@ hxlcl_cos:
     mov [rbp - 1664], r10 # spill L206 to slot
     mov r10, [rbp - 1664] # reload L206 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb47 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb46 # jump -> then
-.L7ff7_hxlcl_cos_bb46:
+    jz .L5211_hxlcl_cos_bb47 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb46 # jump -> then
+.L5211_hxlcl_cos_bb46:
     mov r11, 0 # hv payload
     mov r10, [rbp - 168] # reload L19 from spill slot
     mov r10, r10 # hv payload
@@ -24764,9 +24764,9 @@ hxlcl_cos:
     mov [rbp - 1832], r10 # spill L227 to slot
     mov r10, [rbp - 1832] # reload L227 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb49 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb48 # jump -> then
-.L7ff7_hxlcl_cos_bb47:
+    jz .L5211_hxlcl_cos_bb49 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb48 # jump -> then
+.L5211_hxlcl_cos_bb47:
     mov r10, [rbp - 168] # reload L19 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 128] # reload L14 from spill slot
@@ -24831,8 +24831,8 @@ hxlcl_cos:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3064], r11 # store tag L10
     mov [rbp - 96], r10 # spill L10 to slot
-    jmp .L7ff7_hxlcl_cos_bb40 # branch
-.L7ff7_hxlcl_cos_bb48:
+    jmp .L5211_hxlcl_cos_bb40 # branch
+.L5211_hxlcl_cos_bb48:
     mov r11, 0 # hv payload
     mov r10, [rbp - 168] # reload L19 from spill slot
     mov r10, r10 # hv payload
@@ -24955,10 +24955,10 @@ hxlcl_cos:
     mov r11, [rbp - 4904] # tag L240 from tag-slot
     mov [rbp - 3096], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
-    jmp .L7ff7_hxlcl_cos_bb49 # branch
-.L7ff7_hxlcl_cos_bb49:
-    jmp .L7ff7_hxlcl_cos_bb47 # branch
-.L7ff7_hxlcl_cos_bb50:
+    jmp .L5211_hxlcl_cos_bb49 # branch
+.L5211_hxlcl_cos_bb49:
+    jmp .L5211_hxlcl_cos_bb47 # branch
+.L5211_hxlcl_cos_bb50:
     mov r10, rbx # hv payload
     mov r11, rbx # hv payload
     movq xmm0, r10 # __hx_payload_fsub: xmm0 = a.f bits
@@ -24985,7 +24985,7 @@ hxlcl_cos:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_cos_bb51:
+.L5211_hxlcl_cos_bb51:
     mov r11, 3 # hv payload
     mov r10, [rbp - 88] # reload L9 from spill slot
     mov r10, r10 # hv payload
@@ -25009,15 +25009,15 @@ hxlcl_cos:
     mov [rbp - 2040], r10 # spill L253 to slot
     mov r10, [rbp - 2040] # reload L253 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb53 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb52 # jump -> then
-.L7ff7_hxlcl_cos_bb52:
+    jz .L5211_hxlcl_cos_bb53 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb52 # jump -> then
+.L5211_hxlcl_cos_bb52:
     mov r10, 1 # assign L23
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3168], r11 # store tag L23
     mov [rbp - 200], r10 # spill L23 to slot
-    jmp .L7ff7_hxlcl_cos_bb53 # branch
-.L7ff7_hxlcl_cos_bb53:
+    jmp .L5211_hxlcl_cos_bb53 # branch
+.L5211_hxlcl_cos_bb53:
     mov r10, [rbp - 2032] # reload L252 from spill slot
     mov r10, r10 # hv payload
     mov r11, 1 # hv payload
@@ -25029,9 +25029,9 @@ hxlcl_cos:
     mov [rbp - 2056], r10 # spill L255 to slot
     mov r10, [rbp - 2056] # reload L255 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb55 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb54 # jump -> then
-.L7ff7_hxlcl_cos_bb54:
+    jz .L5211_hxlcl_cos_bb55 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb54 # jump -> then
+.L5211_hxlcl_cos_bb54:
     mov r10, 0 # assign L23
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3168], r11 # store tag L23
@@ -25040,8 +25040,8 @@ hxlcl_cos:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3176], r11 # store tag L24
     mov [rbp - 208], r10 # spill L24 to slot
-    jmp .L7ff7_hxlcl_cos_bb55 # branch
-.L7ff7_hxlcl_cos_bb55:
+    jmp .L5211_hxlcl_cos_bb55 # branch
+.L5211_hxlcl_cos_bb55:
     mov r10, [rbp - 2032] # reload L252 from spill slot
     mov r10, r10 # hv payload
     mov r11, 2 # hv payload
@@ -25053,9 +25053,9 @@ hxlcl_cos:
     mov [rbp - 2072], r10 # spill L257 to slot
     mov r10, [rbp - 2072] # reload L257 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb57 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb56 # jump -> then
-.L7ff7_hxlcl_cos_bb56:
+    jz .L5211_hxlcl_cos_bb57 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb56 # jump -> then
+.L5211_hxlcl_cos_bb56:
     mov r10, 1 # assign L23
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3168], r11 # store tag L23
@@ -25064,8 +25064,8 @@ hxlcl_cos:
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3176], r11 # store tag L24
     mov [rbp - 208], r10 # spill L24 to slot
-    jmp .L7ff7_hxlcl_cos_bb57 # branch
-.L7ff7_hxlcl_cos_bb57:
+    jmp .L5211_hxlcl_cos_bb57 # branch
+.L5211_hxlcl_cos_bb57:
     mov r10, [rbp - 2032] # reload L252 from spill slot
     mov r10, r10 # hv payload
     mov r11, 3 # hv payload
@@ -25077,15 +25077,15 @@ hxlcl_cos:
     mov [rbp - 2088], r10 # spill L259 to slot
     mov r10, [rbp - 2088] # reload L259 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb59 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb58 # jump -> then
-.L7ff7_hxlcl_cos_bb58:
+    jz .L5211_hxlcl_cos_bb59 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb58 # jump -> then
+.L5211_hxlcl_cos_bb58:
     mov r10, 0 # assign L23
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 3168], r11 # store tag L23
     mov [rbp - 200], r10 # spill L23 to slot
-    jmp .L7ff7_hxlcl_cos_bb59 # branch
-.L7ff7_hxlcl_cos_bb59:
+    jmp .L5211_hxlcl_cos_bb59 # branch
+.L5211_hxlcl_cos_bb59:
     mov r10, rbx # hv payload
     mov r11, rbx # hv payload
     movq xmm0, r10 # __hx_payload_fsub: xmm0 = a.f bits
@@ -25111,9 +25111,9 @@ hxlcl_cos:
     mov [rbp - 2120], r10 # spill L263 to slot
     mov r10, [rbp - 2120] # reload L263 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb61 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb60 # jump -> then
-.L7ff7_hxlcl_cos_bb60:
+    jz .L5211_hxlcl_cos_bb61 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb60 # jump -> then
+.L5211_hxlcl_cos_bb60:
     mov r10, [rbp - 112] # reload L12 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 112] # reload L12 from spill slot
@@ -25312,9 +25312,9 @@ hxlcl_cos:
     mov [rbp - 2328], r10 # spill L289 to slot
     mov r10, [rbp - 2328] # reload L289 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb63 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb62 # jump -> then
-.L7ff7_hxlcl_cos_bb61:
+    jz .L5211_hxlcl_cos_bb63 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb62 # jump -> then
+.L5211_hxlcl_cos_bb61:
     mov r10, rbx # hv payload
     mov r11, rbx # hv payload
     movq xmm0, r10 # __hx_payload_fsub: xmm0 = a.f bits
@@ -25340,9 +25340,9 @@ hxlcl_cos:
     mov [rbp - 2536], r10 # spill L315 to slot
     mov r10, [rbp - 2536] # reload L315 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb66 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb65 # jump -> then
-.L7ff7_hxlcl_cos_bb62:
+    jz .L5211_hxlcl_cos_bb66 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb65 # jump -> then
+.L5211_hxlcl_cos_bb62:
     mov r10, [rbp - 2144] # reload L266 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 2304] # reload L286 from spill slot
@@ -25406,8 +25406,8 @@ hxlcl_cos:
     mov r11, [rbp - 5360] # tag L297 from tag-slot
     mov [rbp - 5080], r11 # store tag L262
     mov [rbp - 2112], r10 # spill L262 to slot
-    jmp .L7ff7_hxlcl_cos_bb64 # branch
-.L7ff7_hxlcl_cos_bb63:
+    jmp .L5211_hxlcl_cos_bb64 # branch
+.L5211_hxlcl_cos_bb63:
     mov r10, 4602678819172646912 # hv payload
     mov r11, [rbp - 128] # reload L14 from spill slot
     mov r11, r11 # hv payload
@@ -25534,10 +25534,10 @@ hxlcl_cos:
     mov r11, [rbp - 5480] # tag L312 from tag-slot
     mov [rbp - 5080], r11 # store tag L262
     mov [rbp - 2112], r10 # spill L262 to slot
-    jmp .L7ff7_hxlcl_cos_bb64 # branch
-.L7ff7_hxlcl_cos_bb64:
-    jmp .L7ff7_hxlcl_cos_bb61 # branch
-.L7ff7_hxlcl_cos_bb65:
+    jmp .L5211_hxlcl_cos_bb64 # branch
+.L5211_hxlcl_cos_bb64:
+    jmp .L5211_hxlcl_cos_bb61 # branch
+.L5211_hxlcl_cos_bb65:
     mov r10, [rbp - 112] # reload L12 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 112] # reload L12 from spill slot
@@ -25897,8 +25897,8 @@ hxlcl_cos:
     mov r11, [rbp - 5872] # tag L361 from tag-slot
     mov [rbp - 5496], r11 # store tag L314
     mov [rbp - 2528], r10 # spill L314 to slot
-    jmp .L7ff7_hxlcl_cos_bb66 # branch
-.L7ff7_hxlcl_cos_bb66:
+    jmp .L5211_hxlcl_cos_bb66 # branch
+.L5211_hxlcl_cos_bb66:
     mov r11, 0 # hv payload
     mov r10, [rbp - 2112] # reload L262 from spill slot
     mov r10, r10 # hv payload
@@ -25922,9 +25922,9 @@ hxlcl_cos:
     mov [rbp - 2928], r10 # spill L364 to slot
     mov r10, [rbp - 2928] # reload L364 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb68 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb67 # jump -> then
-.L7ff7_hxlcl_cos_bb67:
+    jz .L5211_hxlcl_cos_bb68 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb67 # jump -> then
+.L5211_hxlcl_cos_bb67:
     mov r11, 0 # hv payload
     mov r10, [rbp - 2528] # reload L314 from spill slot
     mov r10, r10 # hv payload
@@ -25937,8 +25937,8 @@ hxlcl_cos:
     mov r11, [rbp - 5912] # tag L366 from tag-slot
     mov [rbp - 5888], r11 # store tag L363
     mov [rbp - 2920], r10 # spill L363 to slot
-    jmp .L7ff7_hxlcl_cos_bb68 # branch
-.L7ff7_hxlcl_cos_bb68:
+    jmp .L5211_hxlcl_cos_bb68 # branch
+.L5211_hxlcl_cos_bb68:
     mov r10, [rbp - 208] # reload L24 from spill slot
     mov r10, r10 # hv payload
     mov r11, 1 # hv payload
@@ -25950,9 +25950,9 @@ hxlcl_cos:
     mov [rbp - 2952], r10 # spill L367 to slot
     mov r10, [rbp - 2952] # reload L367 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_cos_bb70 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_cos_bb69 # jump -> then
-.L7ff7_hxlcl_cos_bb69:
+    jz .L5211_hxlcl_cos_bb70 # jump-if-zero -> else
+    jmp .L5211_hxlcl_cos_bb69 # jump -> then
+.L5211_hxlcl_cos_bb69:
     mov r10, 0 # hv payload
     mov r11, [rbp - 2920] # reload L363 from spill slot
     mov r11, r11 # hv payload
@@ -25980,7 +25980,7 @@ hxlcl_cos:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_cos_bb70:
+.L5211_hxlcl_cos_bb70:
     mov r10, [rbp - 2920] # reload L363 from spill slot
     mov r10, r10 # hv payload
     movq xmm0, r10 # cabi fp return: gp→xmm0
@@ -26006,7 +26006,7 @@ hxlcl_rotab_probe:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 96 # prologue: alloc spill frame
-.L7ff7_hxlcl_rotab_probe_bb0:
+.L5211_hxlcl_rotab_probe_bb0:
     lea rax, [rip+rotab_0] # __hx_rodata_tab_ptr: rax = &rotab_0 (.rodata table, pc-rel)
     mov rbx, rax # leaf: payload → dst L0
     mov r11, 0 # materialize tag imm 0
@@ -26078,7 +26078,7 @@ hxlcl_exp:
     mov r11, 1 # materialize tag imm 1
     mov [rbp - 1152], r11 # store tag L0
     movq rbx, xmm0 # cabi fp ingress param payload (xmm→gp)
-.L7ff7_hxlcl_exp_bb0:
+.L5211_hxlcl_exp_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -26155,9 +26155,9 @@ hxlcl_exp:
     mov [rbp - 120], r10 # spill L13 to slot
     mov r10, [rbp - 120] # reload L13 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_exp_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_exp_bb1 # jump -> then
-.L7ff7_hxlcl_exp_bb1:
+    jz .L5211_hxlcl_exp_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_exp_bb1 # jump -> then
+.L5211_hxlcl_exp_bb1:
     mov r11, [rbp - 112] # reload L12 from spill slot
     mov r11, r11 # hv payload
     mov r10, 2147483648 # hv payload
@@ -26169,9 +26169,9 @@ hxlcl_exp:
     mov [rbp - 136], r10 # spill L15 to slot
     mov r10, [rbp - 136] # reload L15 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_exp_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_exp_bb3 # jump -> then
-.L7ff7_hxlcl_exp_bb2:
+    jz .L5211_hxlcl_exp_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_exp_bb3 # jump -> then
+.L5211_hxlcl_exp_bb2:
     mov r10, 4640701337412797182 # hv payload
     mov r11, rbx # hv payload
     movq xmm0, r10 # __hx_payload_fmul: xmm0 = a.f bits
@@ -26644,9 +26644,9 @@ hxlcl_exp:
     mov [rbp - 808], r10 # spill L99 to slot
     mov r10, [rbp - 808] # reload L99 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_exp_bb14 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_exp_bb13 # jump -> then
-.L7ff7_hxlcl_exp_bb3:
+    jz .L5211_hxlcl_exp_bb14 # jump-if-zero -> else
+    jmp .L5211_hxlcl_exp_bb13 # jump -> then
+.L5211_hxlcl_exp_bb3:
     mov r10, 1 # hv payload
     cvtsi2sd xmm0, r10 # __hx_payload_i2f: xmm0 = (double)v.i
     movq r10, xmm0 # __hx_payload_i2f: r10 = converted bits
@@ -26685,7 +26685,7 @@ hxlcl_exp:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_exp_bb4:
+.L5211_hxlcl_exp_bb4:
     mov r11, [rbp - 64] # reload L6 from spill slot
     mov r11, r11 # hv payload
     mov r10, 1033 # hv payload
@@ -26697,9 +26697,9 @@ hxlcl_exp:
     mov [rbp - 184], r10 # spill L21 to slot
     mov r10, [rbp - 184] # reload L21 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_exp_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_exp_bb5 # jump -> then
-.L7ff7_hxlcl_exp_bb5:
+    jz .L5211_hxlcl_exp_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_exp_bb5 # jump -> then
+.L5211_hxlcl_exp_bb5:
     mov r10, r13 # hv payload
     mov r11, -4503599627370496 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -26710,15 +26710,15 @@ hxlcl_exp:
     mov [rbp - 200], r10 # spill L23 to slot
     mov r10, [rbp - 200] # reload L23 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_exp_bb8 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_exp_bb7 # jump -> then
-.L7ff7_hxlcl_exp_bb6:
+    jz .L5211_hxlcl_exp_bb8 # jump-if-zero -> else
+    jmp .L5211_hxlcl_exp_bb7 # jump -> then
+.L5211_hxlcl_exp_bb6:
     mov r10, 0 # assign L8
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 1216], r11 # store tag L8
     mov [rbp - 80], r10 # spill L8 to slot
-    jmp .L7ff7_hxlcl_exp_bb2 # branch
-.L7ff7_hxlcl_exp_bb7:
+    jmp .L5211_hxlcl_exp_bb2 # branch
+.L5211_hxlcl_exp_bb7:
     mov r10, 0 # hv payload
     movq xmm0, r10 # cabi fp return: gp→xmm0
     add rsp, 2240 # epilogue: free spill frame
@@ -26730,7 +26730,7 @@ hxlcl_exp:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_exp_bb8:
+.L5211_hxlcl_exp_bb8:
     mov r11, [rbp - 64] # reload L6 from spill slot
     mov r11, r11 # hv payload
     mov r10, 2047 # hv payload
@@ -26742,9 +26742,9 @@ hxlcl_exp:
     mov [rbp - 216], r10 # spill L25 to slot
     mov r10, [rbp - 216] # reload L25 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_exp_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_exp_bb9 # jump -> then
-.L7ff7_hxlcl_exp_bb9:
+    jz .L5211_hxlcl_exp_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_exp_bb9 # jump -> then
+.L5211_hxlcl_exp_bb9:
     mov r10, 1 # hv payload
     cvtsi2sd xmm0, r10 # __hx_payload_i2f: xmm0 = (double)v.i
     movq r10, xmm0 # __hx_payload_i2f: r10 = converted bits
@@ -26783,7 +26783,7 @@ hxlcl_exp:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_exp_bb10:
+.L5211_hxlcl_exp_bb10:
     mov r11, 63 # hv payload
     mov r10, r13 # hv payload
     mov rcx, r11 # __hx_payload_shr: shift count → rcx (cl)
@@ -26807,9 +26807,9 @@ hxlcl_exp:
     mov [rbp - 280], r10 # spill L33 to slot
     mov r10, [rbp - 280] # reload L33 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_exp_bb12 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_exp_bb11 # jump -> then
-.L7ff7_hxlcl_exp_bb11:
+    jz .L5211_hxlcl_exp_bb12 # jump-if-zero -> else
+    jmp .L5211_hxlcl_exp_bb11 # jump -> then
+.L5211_hxlcl_exp_bb11:
     mov r10, 0 # hv payload
     movq xmm0, r10 # cabi fp return: gp→xmm0
     add rsp, 2240 # epilogue: free spill frame
@@ -26821,7 +26821,7 @@ hxlcl_exp:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_exp_bb12:
+.L5211_hxlcl_exp_bb12:
     mov r10, 9218868437227405312 # hv payload
     movq xmm0, r10 # cabi fp return: gp→xmm0
     add rsp, 2240 # epilogue: free spill frame
@@ -26833,7 +26833,7 @@ hxlcl_exp:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_exp_bb13:
+.L5211_hxlcl_exp_bb13:
     mov r11, 2147483648 # hv payload
     mov r10, [rbp - 336] # reload L40 from spill slot
     mov r10, r10 # hv payload
@@ -26857,9 +26857,9 @@ hxlcl_exp:
     mov [rbp - 840], r10 # spill L103 to slot
     mov r10, [rbp - 840] # reload L103 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_exp_bb16 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_exp_bb15 # jump -> then
-.L7ff7_hxlcl_exp_bb14:
+    jz .L5211_hxlcl_exp_bb16 # jump-if-zero -> else
+    jmp .L5211_hxlcl_exp_bb15 # jump -> then
+.L5211_hxlcl_exp_bb14:
     mov r10, [rbp - 784] # reload L96 from spill slot
     mov r10, r10 # hv payload
     movq xmm0, r10 # cabi fp return: gp→xmm0
@@ -26872,7 +26872,7 @@ hxlcl_exp:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_exp_bb15:
+.L5211_hxlcl_exp_bb15:
     mov r11, 4544132024016830464 # hv payload
     mov r10, [rbp - 560] # reload L68 from spill slot
     mov r10, r10 # hv payload
@@ -26944,8 +26944,8 @@ hxlcl_exp:
     mov r11, [rbp - 2056] # tag L113 from tag-slot
     mov [rbp - 1920], r11 # store tag L96
     mov [rbp - 784], r10 # spill L96 to slot
-    jmp .L7ff7_hxlcl_exp_bb16 # branch
-.L7ff7_hxlcl_exp_bb16:
+    jmp .L5211_hxlcl_exp_bb16 # branch
+.L5211_hxlcl_exp_bb16:
     mov r11, 0 # hv payload
     mov r10, [rbp - 832] # reload L102 from spill slot
     mov r10, r10 # hv payload
@@ -26957,9 +26957,9 @@ hxlcl_exp:
     mov [rbp - 928], r10 # spill L114 to slot
     mov r10, [rbp - 928] # reload L114 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_exp_bb18 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_exp_bb17 # jump -> then
-.L7ff7_hxlcl_exp_bb17:
+    jz .L5211_hxlcl_exp_bb18 # jump-if-zero -> else
+    jmp .L5211_hxlcl_exp_bb17 # jump -> then
+.L5211_hxlcl_exp_bb17:
     mov r11, 4602678819172646912 # hv payload
     mov r10, [rbp - 560] # reload L68 from spill slot
     mov r10, r10 # hv payload
@@ -27029,11 +27029,11 @@ hxlcl_exp:
     mov [rbp - 1008], r10 # spill L124 to slot
     mov r10, [rbp - 1008] # reload L124 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_exp_bb20 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_exp_bb19 # jump -> then
-.L7ff7_hxlcl_exp_bb18:
-    jmp .L7ff7_hxlcl_exp_bb14 # branch
-.L7ff7_hxlcl_exp_bb19:
+    jz .L5211_hxlcl_exp_bb20 # jump-if-zero -> else
+    jmp .L5211_hxlcl_exp_bb19 # jump -> then
+.L5211_hxlcl_exp_bb18:
+    jmp .L5211_hxlcl_exp_bb14 # branch
+.L5211_hxlcl_exp_bb19:
     mov r10, [rbp - 968] # reload L119 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 1000] # reload L123 from spill slot
@@ -27159,8 +27159,8 @@ hxlcl_exp:
     mov r11, [rbp - 2272] # tag L140 from tag-slot
     mov [rbp - 2136], r11 # store tag L123
     mov [rbp - 1000], r10 # spill L123 to slot
-    jmp .L7ff7_hxlcl_exp_bb20 # branch
-.L7ff7_hxlcl_exp_bb20:
+    jmp .L5211_hxlcl_exp_bb20 # branch
+.L5211_hxlcl_exp_bb20:
     mov r10, 4503599627370496 # hv payload
     mov r11, [rbp - 1000] # reload L123 from spill slot
     mov r11, r11 # hv payload
@@ -27176,7 +27176,7 @@ hxlcl_exp:
     mov r11, [rbp - 2280] # tag L141 from tag-slot
     mov [rbp - 1920], r11 # store tag L96
     mov [rbp - 784], r10 # spill L96 to slot
-    jmp .L7ff7_hxlcl_exp_bb18 # branch
+    jmp .L5211_hxlcl_exp_bb18 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 2240 # epilogue: free spill frame
@@ -27204,7 +27204,7 @@ hxlcl_log:
     mov r11, 1 # materialize tag imm 1
     mov [rbp - 1384], r11 # store tag L0
     movq rbx, xmm0 # cabi fp ingress param payload (xmm→gp)
-.L7ff7_hxlcl_log_bb0:
+.L5211_hxlcl_log_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -27246,9 +27246,9 @@ hxlcl_log:
     mov [rbp - 72], r10 # spill L7 to slot
     mov r10, [rbp - 72] # reload L7 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_log_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_log_bb1 # jump -> then
-.L7ff7_hxlcl_log_bb1:
+    jz .L5211_hxlcl_log_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_log_bb1 # jump -> then
+.L5211_hxlcl_log_bb1:
     mov r10, r13 # hv payload
     mov r11, 4607182418800017408 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -27259,9 +27259,9 @@ hxlcl_log:
     mov [rbp - 88], r10 # spill L9 to slot
     mov r10, [rbp - 88] # reload L9 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_log_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_log_bb3 # jump -> then
-.L7ff7_hxlcl_log_bb2:
+    jz .L5211_hxlcl_log_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_log_bb3 # jump -> then
+.L5211_hxlcl_log_bb2:
     mov r11, 16 # hv payload
     mov r10, r15 # hv payload
     sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
@@ -27284,9 +27284,9 @@ hxlcl_log:
     mov [rbp - 600], r10 # spill L73 to slot
     mov r10, [rbp - 600] # reload L73 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_log_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_log_bb5 # jump -> then
-.L7ff7_hxlcl_log_bb3:
+    jz .L5211_hxlcl_log_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_log_bb5 # jump -> then
+.L5211_hxlcl_log_bb3:
     mov r10, 0 # hv payload
     movq xmm0, r10 # cabi fp return: gp→xmm0
     add rsp, 2704 # epilogue: free spill frame
@@ -27298,7 +27298,7 @@ hxlcl_log:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_log_bb4:
+.L5211_hxlcl_log_bb4:
     mov r10, rbx # hv payload
     mov r11, 4607182418800017408 # hv payload
     movq xmm0, r10 # __hx_payload_fsub: xmm0 = a.f bits
@@ -27828,7 +27828,7 @@ hxlcl_log:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_log_bb5:
+.L5211_hxlcl_log_bb5:
     mov r11, 1 # hv payload
     mov r10, r13 # hv payload
     mov rcx, r11 # __hx_payload_shl: shift count → rcx (cl)
@@ -27852,9 +27852,9 @@ hxlcl_log:
     mov [rbp - 632], r10 # spill L77 to slot
     mov r10, [rbp - 632] # reload L77 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_log_bb8 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_log_bb7 # jump -> then
-.L7ff7_hxlcl_log_bb6:
+    jz .L5211_hxlcl_log_bb8 # jump-if-zero -> else
+    jmp .L5211_hxlcl_log_bb7 # jump -> then
+.L5211_hxlcl_log_bb6:
     mov r11, 4604367669032910848 # hv payload
     mov r10, r13 # hv payload
     sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
@@ -27922,9 +27922,9 @@ hxlcl_log:
     mov [rbp - 880], r10 # spill L108 to slot
     mov r10, [rbp - 880] # reload L108 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_log_bb16 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_log_bb15 # jump -> then
-.L7ff7_hxlcl_log_bb7:
+    jz .L5211_hxlcl_log_bb16 # jump-if-zero -> else
+    jmp .L5211_hxlcl_log_bb15 # jump -> then
+.L5211_hxlcl_log_bb7:
     mov r10, -4503599627370496 # hv payload
     movq xmm0, r10 # cabi fp return: gp→xmm0
     add rsp, 2704 # epilogue: free spill frame
@@ -27936,7 +27936,7 @@ hxlcl_log:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_log_bb8:
+.L5211_hxlcl_log_bb8:
     mov r10, r13 # hv payload
     mov r11, 9218868437227405312 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -27947,9 +27947,9 @@ hxlcl_log:
     mov [rbp - 648], r10 # spill L79 to slot
     mov r10, [rbp - 648] # reload L79 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_log_bb10 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_log_bb9 # jump -> then
-.L7ff7_hxlcl_log_bb9:
+    jz .L5211_hxlcl_log_bb10 # jump-if-zero -> else
+    jmp .L5211_hxlcl_log_bb9 # jump -> then
+.L5211_hxlcl_log_bb9:
     mov r10, rbx # hv payload
     movq xmm0, r10 # cabi fp return: gp→xmm0
     add rsp, 2704 # epilogue: free spill frame
@@ -27961,7 +27961,7 @@ hxlcl_log:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_log_bb10:
+.L5211_hxlcl_log_bb10:
     mov r11, 32768 # hv payload
     mov r10, r15 # hv payload
     and r10, r11 # __hx_payload_and: r10 = a.pl and b.pl
@@ -27995,9 +27995,9 @@ hxlcl_log:
     mov [rbp - 696], r10 # spill L85 to slot
     mov r10, [rbp - 696] # reload L85 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_log_bb12 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_log_bb11 # jump -> then
-.L7ff7_hxlcl_log_bb11:
+    jz .L5211_hxlcl_log_bb12 # jump-if-zero -> else
+    jmp .L5211_hxlcl_log_bb11 # jump -> then
+.L5211_hxlcl_log_bb11:
     mov r10, rbx # hv payload
     mov r11, rbx # hv payload
     movq xmm0, r10 # __hx_payload_fsub: xmm0 = a.f bits
@@ -28035,7 +28035,7 @@ hxlcl_log:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_log_bb12:
+.L5211_hxlcl_log_bb12:
     mov r10, [rbp - 688] # reload L84 from spill slot
     mov r10, r10 # hv payload
     mov r11, 32752 # hv payload
@@ -28047,9 +28047,9 @@ hxlcl_log:
     mov [rbp - 736], r10 # spill L90 to slot
     mov r10, [rbp - 736] # reload L90 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_log_bb14 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_log_bb13 # jump -> then
-.L7ff7_hxlcl_log_bb13:
+    jz .L5211_hxlcl_log_bb14 # jump-if-zero -> else
+    jmp .L5211_hxlcl_log_bb13 # jump -> then
+.L5211_hxlcl_log_bb13:
     mov r10, rbx # hv payload
     mov r11, rbx # hv payload
     movq xmm0, r10 # __hx_payload_fsub: xmm0 = a.f bits
@@ -28087,7 +28087,7 @@ hxlcl_log:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_log_bb14:
+.L5211_hxlcl_log_bb14:
     mov r10, rbx # hv payload
     mov r11, 4841369599423283200 # hv payload
     movq xmm0, r10 # __hx_payload_fmul: xmm0 = a.f bits
@@ -28120,8 +28120,8 @@ hxlcl_log:
     mov r13, r10 # assign L2
     mov r11, [rbp - 2168] # tag L98 from tag-slot
     mov [rbp - 1400], r11 # store tag L2
-    jmp .L7ff7_hxlcl_log_bb6 # branch
-.L7ff7_hxlcl_log_bb15:
+    jmp .L5211_hxlcl_log_bb6 # branch
+.L5211_hxlcl_log_bb15:
     mov r11, 4096 # hv payload
     mov r10, [rbp - 856] # reload L105 from spill slot
     mov r10, r10 # hv payload
@@ -28134,8 +28134,8 @@ hxlcl_log:
     mov r11, [rbp - 2264] # tag L110 from tag-slot
     mov [rbp - 2240], r11 # store tag L107
     mov [rbp - 872], r10 # spill L107 to slot
-    jmp .L7ff7_hxlcl_log_bb16 # branch
-.L7ff7_hxlcl_log_bb16:
+    jmp .L5211_hxlcl_log_bb16 # branch
+.L5211_hxlcl_log_bb16:
     mov r11, -4503599627370496 # hv payload
     mov r10, [rbp - 816] # reload L100 from spill slot
     mov r10, r10 # hv payload
@@ -28616,7 +28616,7 @@ hxlcl_log:
     .p2align 4
 _hx_rt_sigreturn_trampoline:
     .loc 1 4532 0
-.L7ff7__hx_rt_sigreturn_trampoline_bb0:
+.L5211__hx_rt_sigreturn_trampoline_bb0:
     mov rax, 15 # hv payload
     syscall # __hx_syscall0: Linux syscall
     mov r10, rax # __hx_syscall0: r10 = result
@@ -28644,7 +28644,7 @@ hxlcl_signal:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 368], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
-.L7ff7_hxlcl_signal_bb0:
+.L5211_hxlcl_signal_bb0:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -28709,9 +28709,9 @@ hxlcl_signal:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_signal_bb2 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_signal_bb1 # jump -> then
-.L7ff7_hxlcl_signal_bb1:
+    jz .L5211_hxlcl_signal_bb2 # jump-if-zero -> else
+    jmp .L5211_hxlcl_signal_bb1 # jump -> then
+.L5211_hxlcl_signal_bb1:
     mov r11, 67108864 # hv payload
     mov r10, [rbp - 104] # reload L11 from spill slot
     mov r10, r10 # hv payload
@@ -28746,8 +28746,8 @@ hxlcl_signal:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 496], r11 # store tag L17
     mov [rbp - 152], r10 # spill L17 to slot
-    jmp .L7ff7_hxlcl_signal_bb2 # branch
-.L7ff7_hxlcl_signal_bb2:
+    jmp .L5211_hxlcl_signal_bb2 # branch
+.L5211_hxlcl_signal_bb2:
     mov r10, [rbp - 88] # reload L9 from spill slot
     mov r10, r10 # hv payload
     mov r11, 8 # hv payload
@@ -28804,15 +28804,15 @@ hxlcl_signal:
     mov [rbp - 208], r10 # spill L24 to slot
     mov r10, [rbp - 208] # reload L24 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_signal_bb4 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_signal_bb3 # jump -> then
-.L7ff7_hxlcl_signal_bb3:
+    jz .L5211_hxlcl_signal_bb4 # jump-if-zero -> else
+    jmp .L5211_hxlcl_signal_bb3 # jump -> then
+.L5211_hxlcl_signal_bb3:
     mov r10, 13 # assign L23
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 544], r11 # store tag L23
     mov [rbp - 200], r10 # spill L23 to slot
-    jmp .L7ff7_hxlcl_signal_bb4 # branch
-.L7ff7_hxlcl_signal_bb4:
+    jmp .L5211_hxlcl_signal_bb4 # branch
+.L5211_hxlcl_signal_bb4:
     mov r11, 8 # hv payload
     mov r10, 0 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -28871,18 +28871,18 @@ hxlcl_signal:
     mov [rbp - 272], r10 # spill L32 to slot
     mov r10, [rbp - 272] # reload L32 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_signal_bb6 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_signal_bb5 # jump -> then
-.L7ff7_hxlcl_signal_bb5:
+    jz .L5211_hxlcl_signal_bb6 # jump-if-zero -> else
+    jmp .L5211_hxlcl_signal_bb5 # jump -> then
+.L5211_hxlcl_signal_bb5:
     mov r10, 1 # target_is_linux: 1 = true
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 632], r11 # store tag L34
     mov [rbp - 288], r10 # spill L34 to slot
     mov r10, [rbp - 288] # reload L34 from spill slot
     test r10, r10 # br_cond test
-    jz .L7ff7_hxlcl_signal_bb8 # jump-if-zero -> else
-    jmp .L7ff7_hxlcl_signal_bb7 # jump -> then
-.L7ff7_hxlcl_signal_bb6:
+    jz .L5211_hxlcl_signal_bb8 # jump-if-zero -> else
+    jmp .L5211_hxlcl_signal_bb7 # jump -> then
+.L5211_hxlcl_signal_bb6:
     mov r10, [rbp - 184] # reload L21 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -28907,7 +28907,7 @@ hxlcl_signal:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L7ff7_hxlcl_signal_bb7:
+.L5211_hxlcl_signal_bb7:
     call __errno_location # cabi call __errno_location
     mov r10, rax # cabi: unbox call result (rax)
     mov r11, 0 # materialize tag imm 0
@@ -28942,8 +28942,8 @@ hxlcl_signal:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 680], r11 # store tag L40
     mov [rbp - 336], r10 # spill L40 to slot
-    jmp .L7ff7_hxlcl_signal_bb8 # branch
-.L7ff7_hxlcl_signal_bb8:
+    jmp .L5211_hxlcl_signal_bb8 # branch
+.L5211_hxlcl_signal_bb8:
     mov rax, -1 # hv payload
     add rsp, 656 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
