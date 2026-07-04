@@ -408,6 +408,28 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3018",
+        title: "non-exhaustive match (fatal)",
+        // Error, not Warning: this is the SAME usefulness analysis as
+        // HX3006, escalated to a build-breaking error under the opt-in
+        // `HEXA_EXHAUSTIVE_FATAL=1` gate (default-OFF). With both gates
+        // unset the default build emits neither HX3006 nor HX3018, so the
+        // diagnostic stream AND emitted bytes are byte-identical to before
+        // — release integrity first. This mirrors Rust, where a non-
+        // exhaustive match is a hard error (E0004 "non-exhaustive
+        // patterns"), not a lint: rustc's `report_non_exhaustive_match`
+        // raises it via `struct_span_code_err!(..., E0004, ...)` in
+        // compiler/rustc_mir_build/src/thir/pattern/check_match.rs, so a
+        // program with an uncovered variant fails to compile. Selecting
+        // HEXA_EXHAUSTIVE_FATAL=1 opts a strict/CI build into that same
+        // Rust-grade guarantee while keeping the default build untouched.
+        severity: Severity::Error,
+        stage: "S3",
+        template: "non-exhaustive match on enum `{enum}`: missing variant(s) {missing}; add the arm(s) or a `_` wildcard",
+        explain: "A `match` over an enum must cover every variant. This is the fatal form of the non-exhaustiveness diagnostic (see HX3006 for the underlying Maranget 2007 usefulness analysis): under `HEXA_EXHAUSTIVE_FATAL=1` an uncovered variant aborts the build before codegen instead of merely warning, matching Rust's E0004 hard-error semantics. The default build (both HEXA_EXHAUSTIVE and HEXA_EXHAUSTIVE_FATAL unset) emits neither HX3006 nor HX3018, so opting in changes nothing for unaffected builds. Fix: add the missing variant arms, or a final `_ -> …` wildcard if the omission is intentional.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,

@@ -1,0 +1,203 @@
+// ═══════════════════════════════════════════════════════════
+//  test_question_op.hexa — postfix `?` error/optional propagation
+//  Covers the RFC r15-D2 acceptance probe set + regression gates:
+//    `expr?`  desugars (parser → Try node, codegen.hexa:5309) to
+//      success tag (Ok / Some) → unwrap payload (index 1)
+//      any other tag (Err / None) → early-return the receiver
+//                                    UNCHANGED from the enclosing fn
+//  Reference: Rust `?` operator (std::ops::Try / RFC 0243 · RFC 1859).
+//    hexa diverges from Rust on two axes (dynamic-typed lane):
+//      (1) NO `From::from(e)` error conversion — identity re-wrap (RFC §3.4)
+//      (2) NO enclosing-fn return-type check — runtime tag test (RFC §3.3)
+//    Beyond-parity hexa lever: a SINGLE success discriminant treats
+//    `Ok` and `Some` as success, so Result and Option lanes share one
+//    desugar (no compile-time lane split — RFC §3.1 / Q1).
+//  Spec: docs/rfc/rfc_drafts/r15-d2-question-operator.md §4.2
+//
+//  OPT-IN (default-OFF):  the `?` operator is gated behind HEXA_TRY_OP in BOTH
+//  pipelines — run this suite with the flag set:
+//      HEXA_TRY_OP=1 hexa run self/test_question_op.hexa
+//  With HEXA_TRY_OP unset the postfix `?` arm (self/parser.hexa
+//  p_try_op_enabled) is inert, so the self-host bootstrap and every shipped
+//  program are byte-identical (self/main.hexa uses no `?`). The NATIVE
+//  (compiler/*) pipeline mirrors the same gate end-to-end — Question token
+//  (compiler/lex/tokens.hexa), `?` lex (compiler/lex/lexer.hexa), parse_postfix
+//  UnOp("?") carrier (compiler/parse/parser.hexa), ast_to_hir re-tag to
+//  HExpr.kind "tryop" (compiler/lower/ast_to_hir.hexa), and the success-tag
+//  discriminant + Err/None early-return lowering (compiler/lower/hir_to_mir.hexa).
+//  Native-emit smoke: tool/test_question_op_emit.sh (asserts flag-off ≡
+//  byte-identical + the F-D2 acceptance cases under --emit, on a build host).
+// ═══════════════════════════════════════════════════════════
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, actual, expected) {
+    if to_string(actual) == to_string(expected) {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + to_string(expected) + ", got: " + to_string(actual))
+        fail_count = fail_count + 1
+    }
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  HEXA `?` error-propagation operator tests")
+println("═══════════════════════════════════════════════════════")
+
+// ═══════════════════════════════════════════════════════════
+//  1. RFC acceptance probes F-D2-1 .. F-D2-4 (statement position)
+// ═══════════════════════════════════════════════════════════
+
+println("")
+println("--- 1. Ok / Err / Some / None propagation (F-D2-1..4) ---")
+
+// F-D2-1: Ok unwrap, success path reached, re-wrapped.
+fn f_ok() {
+    let v = Ok(7)?
+    return Ok(v)
+}
+check("F-D2-1 Ok(7)? unwraps payload", f_ok(), "[Ok, 7]")
+
+// F-D2-2 (load-bearing): Err early-returns the WHOLE fn unchanged.
+// If desugar is broken this yields `[Ok, ...]` → falsify.
+fn f_err() {
+    let v = Err("boom")?
+    return Ok(v)            // ← unreachable on Err
+}
+check("F-D2-2 Err(boom)? early-returns identity", f_err(), "[Err, boom]")
+
+// F-D2-3: Some unwrap (Option lane shares the success discriminant).
+fn f_some() {
+    let v = Some(9)?
+    return Some(v)
+}
+check("F-D2-3 Some(9)? unwraps payload", f_some(), "[Some, 9]")
+
+// F-D2-4: None early-returns the receiver unchanged.
+fn f_none() {
+    let v = None?
+    return Some(0)          // ← unreachable on None
+}
+check("F-D2-4 None? early-returns None", f_none(), "None")
+
+// ═══════════════════════════════════════════════════════════
+//  2. Expression-position hoist (Case B / F-D2-5)
+//     `g(expr?)` — the `?` is lowered as if hoisted before the call,
+//     so failure early-returns the enclosing fn, not just the arg.
+// ═══════════════════════════════════════════════════════════
+
+println("")
+println("--- 2. Expression-position hoist (Case B) ---")
+
+fn g(x) { return x + 1 }
+
+fn expr_pos_ok() {
+    let r = g(Ok(5)?)          // Ok(5)? → 5, g(5) = 6
+    return Ok(r)
+}
+check("Case B success g(Ok(5)?)", expr_pos_ok(), "[Ok, 6]")
+
+fn expr_pos_err() {
+    let r = g(Err("stop")?)    // Err inside the call early-returns the fn
+    return Ok(r)               // ← unreachable
+}
+check("Case B failure inside call early-returns", expr_pos_err(), "[Err, stop]")
+
+// ═══════════════════════════════════════════════════════════
+//  3. Chained `?` — ergonomic pipeline (the headline win)
+//     parse → validate, no nested match / and_then plumbing.
+// ═══════════════════════════════════════════════════════════
+
+println("")
+println("--- 3. Chained `?` pipeline ---")
+
+fn parse_pos(x) {
+    if x > 0 { return Ok(x) }
+    return Err("not positive")
+}
+fn halve_even(x) {
+    if x % 2 == 0 { return Ok(x / 2) }
+    return Err("not even")
+}
+
+fn pipeline(n) {
+    let a = parse_pos(n)?      // unwrap or early-return Err("not positive")
+    let b = halve_even(a)?     // unwrap or early-return Err("not even")
+    return Ok(b)
+}
+check("pipeline 8 → Ok(4)", pipeline(8), "[Ok, 4]")
+check("pipeline -2 → Err first stage", pipeline(-2), "[Err, not positive]")
+check("pipeline 7 → Err second stage", pipeline(7), "[Err, not even]")
+
+// ═══════════════════════════════════════════════════════════
+//  4. Short-circuit ordering — first failing `?` wins, the rest
+//     of the body (incl. later `?`) never evaluates.
+// ═══════════════════════════════════════════════════════════
+
+println("")
+println("--- 4. Short-circuit ordering ---")
+
+fn two_step(a, b) {
+    let x = a?
+    let y = b?
+    return Ok(x + y)
+}
+check("two_step(Ok,Ok) both unwrap", two_step(Ok(3), Ok(4)), "[Ok, 7]")
+check("two_step(Err,Ok) first short-circuits", two_step(Err("e1"), Ok(4)), "[Err, e1]")
+check("two_step(Ok,Err) second propagates", two_step(Ok(3), Err("e2")), "[Err, e2]")
+
+// ═══════════════════════════════════════════════════════════
+//  5. Nested payload (RFC Q3) — `Ok([..])?` unwraps the inner
+//     array; the success test keys on tag@0, not payload shape.
+// ═══════════════════════════════════════════════════════════
+
+println("")
+println("--- 5. Nested / non-scalar payload ---")
+
+fn arr_payload() {
+    let v = Ok([1, 2, 3])?
+    return Ok(v)
+}
+check("Ok([1,2,3])? unwraps array payload", arr_payload(), "[Ok, [1, 2, 3]]")
+
+// Mixed lane: `?` treats Some as a success tag too.
+fn mixed_tag() {
+    let x = Some(5)?
+    return Ok(x + 1)
+}
+check("Some(5)? treated as success", mixed_tag(), "[Ok, 6]")
+
+// ═══════════════════════════════════════════════════════════
+//  6. Regression gates — the OTHER `?`-token consumers must be
+//     untouched by the postfix Try arm (RFC §3.6 disambiguation).
+// ═══════════════════════════════════════════════════════════
+
+println("")
+println("--- 6. Regression: T? suffix and ?. chaining ---")
+
+// F-D2-R1: `T?` optional type suffix still parses (parse_type_annotation).
+fn typed(x: int?) { return x }
+check("R1 T? type suffix unaffected", typed(3), 3)
+
+// F-D2-R2: `?.` optional chaining (QuestionDot) still works (OptField).
+struct Box { v: int }
+fn make_box() { return Box { v: 42 } }
+let bx = make_box()
+check("R2 ?. optional chaining unaffected", bx?.v, 42)
+
+// ═══════════════════════════════════════════════════════════
+//  SUMMARY
+// ═══════════════════════════════════════════════════════════
+
+println("")
+println("═══════════════════════════════════════════════════════")
+let total_tests = pass_count + fail_count
+println("  Results: " + to_string(pass_count) + " PASS / " + to_string(fail_count) + " FAIL / " + to_string(total_tests) + " total")
+if fail_count == 0 {
+    println("  ALL `?` OPERATOR TESTS PASSED!")
+} else {
+    println("  SOME TESTS FAILED")
+}
+println("═══════════════════════════════════════════════════════")

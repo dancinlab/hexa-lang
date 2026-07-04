@@ -38,6 +38,19 @@ pub fn hir_to_mir_diags() -> array {
     return _lr_diag
 }
 
+// HEXA-OWN L4 A2 — WOULD-MOVE CENSUS registry (populated ONLY under
+// HEXA_BORROWCK_CENSUS=1). A countable in-process lane parallel to
+// `_lr_diag`: every recorded `let b = a` handle-copy pushes its
+// `[borrowck-census]` marker line here IN ADDITION to the stderr emit
+// (the pool greps stderr; a test greps this array). Reset per lower_hir
+// entry, but the reset + the pushes are both gated on `_bck_census`, so
+// the default path never touches it → byte-neutral.
+pub let mut _bck_census_lines: [string] = []
+
+pub fn bck_census_lines() -> [string] {
+    return _bck_census_lines
+}
+
 // ── RFC closure C2 — synthetic lambda accumulator ────────────
 // Closure-expressions (HExpr kind "closure") are lambda-lifted: each one
 // becomes a top-level synthetic MFunc named `__hexa_lambda_<N>`. The
@@ -483,6 +496,16 @@ pub let mut _bck_on = false        // HEXA_BORROWCK=1, read once per lower_hir
 // env set) leaves this false and the escalation branch unreached → the
 // emitted binary is byte-identical (byteeq-neutral).
 pub let mut _bck_strict = false    // HEXA_BORROWCK_STRICT=1, read once per lower_hir
+// HEXA-OWN L4 A2 — WOULD-MOVE CENSUS mode (HEXA_BORROWCK_CENSUS=1). Opt-in,
+// observe-only counting lane STACKED on the M3 loan pass: at every recorded
+// handle-copy edge (`let b = a`, bare-ident aggregate RHS) it emits a
+// greppable `[borrowck-census]` stderr line naming file:line:col + both
+// names — the MEASURED self-host/stdlib worklist for move-by-default (A3).
+// It changes NO semantics and does NOT touch the HX3014 hazard lane; census
+// implies `_bck_on` (the pass must run to see the edges). Default false →
+// the emit is never reached → binary + diag stream byte-identical (roadmap
+// A2 byteeq-neutral, gen3≡gen4).
+pub let mut _bck_census = false    // HEXA_BORROWCK_CENSUS=1, read once per lower_hir
 pub let mut _bck_active = false    // per-fn gate; suspended in closure bodies
 pub let mut _bck_grp_ctr: i64 = 0  // fresh group-representative ids (per fn)
 // tracked-local registry (push-only; newest entry for a local id wins)
@@ -1422,6 +1445,7 @@ fn _is_known_hexpr_kind(k: string) -> bool {
     if k == "field_lit" { return true }
     if k == "try" { return true }
     if k == "throw" { return true }
+    if k == "tryop" { return true }   // RFC r15-D2 postfix `?` (opt-in HEXA_TRY_OP)
     if k == "closure" { return true }
     if k == "defer" { return true }
     return false
@@ -2399,6 +2423,175 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _no_value(ctx2)
     }
 
+    // ── tryop → postfix `?` try-propagation (RFC r15-D2) ───────
+    // `expr?` arrives as HExpr.kind "tryop" (ast_to_hir re-tag of the
+    // ExprKind::UnOp text="?" carrier; both the parser arm and the re-tag are
+    // gated HEXA_TRY_OP, default-OFF). Desugars to a success-tag discriminant
+    // over the NATIVE map-backed enum value `{ "__tag": hash, "__p0": payload }`
+    // (the exact shape the enum_path constructor emits, L~2790 — `Enum::Variant`
+    // syntax; the tag is `_path_hash(<full path text>)`):
+    //   tag@"__tag" ∈ SUCCESS  →  value = payload@"__p0"  (unwrap)
+    //   any other tag          →  RETURN the receiver UNCHANGED (identity
+    //                             re-wrap; hexa is dynamically typed — no Rust
+    //                             `From::from`, RFC §3.4).
+    // SUCCESS keys on the canonical success-variant spellings. Because the
+    // native enum tag hashes the FULL path text (no runtime variant-name
+    // suffix is recoverable from the hash), the set is the canonical Result/
+    // Option success variants in both their qualified native form
+    // (`Result::Ok`, `Option::Some`) and their bare self/-pipeline parity form
+    // (`Ok`, `Some`, which the gen2 array model uses). A user-named result enum
+    // (`Either::Ok`, …) would extend this set or await a variant-name-suffix
+    // tag scheme — recorded honestly, not forced. A SINGLE success discriminant
+    // unifies the Result(Ok/Err) and Option(Some/None) lanes (RFC §3.1 / Q1).
+    // Reference: Rust `?` (std::ops::Try, RFC 0243 / RFC 1859) and Swift `try?`;
+    // hexa diverges on the no-`From` / no-return-type-check axes (RFC §3.3-§3.4).
+    // CFG mirrors the match enum_path tag-test chain (L~2250) + the `&&`/`||`
+    // short-circuit join (L~990): a linear chain of tag compares, each branching
+    // to the shared success block on a hit or to the next compare on a miss; the
+    // final miss falls to a fail block that STMT_RETURNs the receiver; a join
+    // block (allocated LAST → highest id → the natural continuation) carries the
+    // unwrapped payload. Expression-position `g(expr?)` hoists for free — the
+    // early-return blocks are emitted before the enclosing call finishes because
+    // the returned ctx.cur_block is the join (success-continuation) block. Emits
+    // ONLY pre-existing MIR op shapes (field / "==" binop / BR_COND / BR /
+    // RETURN / plain copy), so NO codegen-backend change for x86_64 or arm64.
+    // Default-OFF: k is never "tryop" on a byteeq build, so this branch is dead
+    // (gen3≡gen4 untouched).
+    if k == "tryop" && env("HEXA_TRY_OP") == "1" {
+        if len(e.children) < 1 { return _no_value(ctx) }
+        // (1) evaluate the receiver into a stable temp (referenced ≥3×).
+        let recv_r = _lower_hexpr(ctx, e.children[0])
+        let mut ctx2 = _fresh_local(recv_r.ctx, e.typ, "tryop_recv")
+        let recv_l = _lr_locals[len(_lr_locals) - 1]
+        let mut copy_args: [Operand] = []
+        copy_args.push(recv_r.operand)
+        let copy_s = Stmt {
+            kind: STMT_ASSIGN,
+            dst: recv_l,
+            op: "tryop_recv",
+            args: copy_args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, copy_s)
+        let recv_op = _local_op(recv_l.id)
+        // (2) tag = field(recv, "__tag")  (op="field" → hexa_map_get).
+        ctx2 = _fresh_local(ctx2, e.typ, "tryop_tag")
+        let tag_l = _lr_locals[len(_lr_locals) - 1]
+        let mut tag_args: [Operand] = []
+        tag_args.push(recv_op)
+        tag_args.push(_const_str_op("__tag"))
+        let tag_s = Stmt {
+            kind: STMT_ASSIGN,
+            dst: tag_l,
+            op: "field",
+            args: tag_args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, tag_s)
+        let tag_op = _local_op(tag_l.id)
+        // (3) canonical success-variant tag hashes (qualified + bare parity).
+        let succ_hashes = [
+            _path_hash("Result::Ok"), _path_hash("Option::Some"),
+            _path_hash("Ok"),         _path_hash("Some")
+        ]
+        // allocate success + fail blocks first; the per-tag test blocks are
+        // created inside the chain loop; the join block is allocated LAST so it
+        // owns the highest id (natural fall-through continuation after `?`).
+        ctx2 = _new_block(ctx2)
+        let succ_id = _lr_blocks[len(_lr_blocks) - 1].id
+        ctx2 = _new_block(ctx2)
+        let fail_id = _lr_blocks[len(_lr_blocks) - 1].id
+        // result local carries the unwrapped payload through to the join.
+        ctx2 = _fresh_local(ctx2, e.typ, "tryop_val")
+        let val_l = _lr_locals[len(_lr_locals) - 1]
+        // (4) tag-test chain. The FIRST test runs in the current (entry) block;
+        // each subsequent test runs in a fresh block reached on the prior miss.
+        let mut test_id = ctx2.cur_block
+        let mut hi = 0
+        while hi < len(succ_hashes) {
+            ctx2 = _fresh_local(ctx2, e.typ, "tryop_is_succ")
+            let eq_l = _lr_locals[len(_lr_locals) - 1]
+            let mut eq_args: [Operand] = []
+            eq_args.push(tag_op)
+            eq_args.push(_const_int_op(succ_hashes[hi]))
+            let eq_s = Stmt {
+                kind: STMT_BINOP,
+                dst: eq_l,
+                op: "==",
+                args: eq_args,
+                target_block: -1,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, test_id, eq_s)
+            // miss target: next test block, or the fail block on the last tag.
+            let mut next_id = fail_id
+            if hi + 1 < len(succ_hashes) {
+                ctx2 = _new_block(ctx2)
+                next_id = _lr_blocks[len(_lr_blocks) - 1].id
+            }
+            let mut br_args: [Operand] = []
+            br_args.push(_local_op(eq_l.id))
+            let br_s = Stmt {
+                kind: STMT_BR_COND,
+                dst: _miss_local(),
+                op: "",
+                args: br_args,
+                target_block: succ_id,
+                target_block_else: next_id
+            }
+            ctx2 = _push_stmt_to(ctx2, test_id, br_s)
+            ctx2 = _add_edge(ctx2, test_id, succ_id)
+            ctx2 = _add_edge(ctx2, test_id, next_id)
+            test_id = next_id
+            hi = hi + 1
+        }
+        // (5) join block — allocated LAST (highest id, natural continuation).
+        ctx2 = _new_block(ctx2)
+        let join_id = _lr_blocks[len(_lr_blocks) - 1].id
+        // (6) success block: val = field(recv, "__p0"); BR → join.
+        ctx2 = _set_cur_block(ctx2, succ_id)
+        let mut pay_args: [Operand] = []
+        pay_args.push(recv_op)
+        pay_args.push(_const_str_op("__p0"))
+        let pay_s = Stmt {
+            kind: STMT_ASSIGN,
+            dst: val_l,
+            op: "field",
+            args: pay_args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt_to(ctx2, succ_id, pay_s)
+        let succ_br = Stmt {
+            kind: STMT_BR,
+            dst: _miss_local(),
+            op: "",
+            args: [],
+            target_block: join_id,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt_to(ctx2, succ_id, succ_br)
+        ctx2 = _add_edge(ctx2, succ_id, join_id)
+        // (7) fail block: RETURN the receiver UNCHANGED (Err/None propagation).
+        ctx2 = _set_cur_block(ctx2, fail_id)
+        let mut ret_args: [Operand] = []
+        ret_args.push(recv_op)
+        let ret_s = Stmt {
+            kind: STMT_RETURN,
+            dst: _miss_local(),
+            op: "",
+            args: ret_args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt_to(ctx2, fail_id, ret_s)
+        // (8) continue in the join block; expression value = unwrapped payload.
+        ctx2 = _set_cur_block(ctx2, join_id)
+        return _value(ctx2, _local_op(val_l.id))
+    }
+
     // ── defer (HEXA-OWN M1) — registration site ────────────
     // Emits ONLY `__defer_flag_<slot> = 1` (reached-flag registration:
     // at-most-once, incl. loop bodies — gen2 semantics, unlike Go's
@@ -2585,6 +2778,22 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 let _bk_si = _bck_find_local(rhs_op.local_id)
                 if _bk_si >= 0 {
                     _bck_track(dst.id, nm, _bck_groups[_bk_si], e.span)
+                    // HEXA-OWN L4 A2 — WOULD-MOVE CENSUS: this `let b = a`
+                    // over a tracked aggregate handle is exactly a site that
+                    // BECOMES A MOVE under move-by-default (A3). Emit one
+                    // greppable stderr line (marker `[borrowck-census]`) with
+                    // file:line:col + both names. Separate observe-only lane:
+                    // it never touches `_lr_diag`/HX3014, so the hazard stream
+                    // is unchanged. Gated on `_bck_census` (default false) →
+                    // unreachable on the default path → byte-neutral.
+                    if _bck_census {
+                        let _bk_cl = "[borrowck-census] would-move " + e.span.file
+                                     + ":" + to_string(e.span.line)
+                                     + ":" + to_string(e.span.col)
+                                     + " let " + nm + " = " + _bk_rhs.text
+                        eprintln(_bk_cl)
+                        _bck_census_lines.push(_bk_cl)
+                    }
                 }
             }
         }
@@ -5047,6 +5256,13 @@ pub fn lower_hir(module: HModule) -> MModule {
     // HEXA_BORROWCK_STRICT=1 enables the same detection then escalates it.
     _bck_strict = env("HEXA_BORROWCK_STRICT") == "1"
     _bck_on = _bck_on || _bck_strict
+    // HEXA-OWN L4 A2 — WOULD-MOVE CENSUS: census implies the loan pass runs
+    // so it registers (and thus can report) every handle-copy edge. Default
+    // (neither env set) ⇒ both false ⇒ `_bck_on` false ⇒ `_bck_active` never
+    // arms ⇒ census emit unreachable ⇒ byte-neutral.
+    _bck_census = env("HEXA_BORROWCK_CENSUS") == "1"
+    _bck_on = _bck_on || _bck_census
+    if _bck_census { _bck_census_lines = [] }
     _bck_active = false
     _bck_own_fns = []
     _bck_own_pidx = []
