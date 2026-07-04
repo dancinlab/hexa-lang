@@ -171,6 +171,7 @@ state/*
 # Tracked SSOT docs that live under state/ (negate the blanket above)
 !state/merge_order.md
 !state/hexa-own/
+!state/static-types/
 !state/rfc_advanced_typesystem.md
 !state/rfc_drop_raii.md
 !state/rfc_operator_overload.md
@@ -307,6 +308,7 @@ self/native/thread.c
 self/native/timegm_native.c
 self/native/wait.c
 self/runtime.c
+self/runtime_ffi_dyn.c
 self/runtime_core.c
 self/runtime_hi_gen.c
 # RFC 061 ∅ r13 — runtime_hi_seed.c is the GENERATED artifact of the .hexa SSOT

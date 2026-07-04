@@ -162,6 +162,53 @@ if [ -f "$_RT_EMIT" ]; then
   fi
   rm -f "$_rttmp"
 fi
+# ── zero-c #29 S1 — FFI floor-partition: SOURCE runtime_ffi_dyn.c from its emitter SSOT ─
+# The dlopen/dlsym/host_ffi_* TU lives in runtime_emit_full.hexa under the `fbuf` buffer var
+# (so the runtime.c awk above skips it). This parallel awk un-escapes those `fbuf` lines into
+# self/runtime_ffi_dyn.c — the FFI TU that program/driver links pick up so the canonical
+# runtime.a carries no dl* nm-UND (state/zeroc-29-s1-ffi-floor-partition-spec-2026-07-03.md).
+_FFI_DYN="self/runtime_ffi_dyn.c"
+if [ -f "$_RT_EMIT" ]; then
+  _ffitmp="$(mktemp -t regen_runtime_ffi_dyn_c.XXXXXX)" || _ffitmp=""
+  if [ -n "$_ffitmp" ] && awk '
+      BEGIN { saw = 0 }
+      {
+        line = $0
+        pfx = "    fbuf = fbuf + \""
+        if (substr(line, 1, length(pfx)) != pfx) next
+        body = substr(line, length(pfx) + 1)
+        if (substr(body, length(body), 1) != "\"") next
+        body = substr(body, 1, length(body) - 1)
+        saw = 1
+        out = ""; n = length(body); i = 1
+        while (i <= n) {
+          c = substr(body, i, 1)
+          if (c == "\\" && i < n) {
+            d = substr(body, i+1, 1)
+            if (d == "n")  { out = out "\n"; i += 2; continue }
+            if (d == "t")  { out = out "\t"; i += 2; continue }
+            if (d == "\"") { out = out "\""; i += 2; continue }
+            if (d == "\\") { out = out "\\"; i += 2; continue }
+            out = out "\\"; i += 1; continue
+          }
+          out = out c; i += 1
+        }
+        printf "%s", out
+      }
+      END { if (!saw) exit 3 }
+    ' "$_RT_EMIT" > "$_ffitmp" 2>/dev/null \
+     && [ -s "$_ffitmp" ] && grep -q 'hexa_ffi_dlopen' "$_ffitmp"; then
+    if ! cmp -s "$_ffitmp" "$_FFI_DYN"; then
+      cp -f "$_ffitmp" "$_FFI_DYN"
+      echo "[restore_frozen_seeds] zero-c #29 S1: runtime_ffi_dyn.c SYNTHESIZED from emitter SSOT (fbuf awk un-escape, $(wc -l < "$_FFI_DYN") lines)"
+    else
+      echo "[restore_frozen_seeds] zero-c #29 S1: runtime_ffi_dyn.c already byte-identical to emitter SSOT — no-op"
+    fi
+  else
+    echo "[restore_frozen_seeds] zero-c #29 S1: FFI-dyn emitter synth unavailable — runtime_ffi_dyn.c NOT regenerated" >&2
+  fi
+  rm -f "$_ffitmp"
+fi
 # ── zero-c FRAG-REGEN (ING #29) — SOURCE the 6 native-fragment .c from emitter SSOTs ─
 # Generalizes the runtime.c M3 block above to the six self/native/<X>.c fragments that
 # have a .hexa string-emitter SSOT: mount · namespace · signal_flock · proc_fork · term_ffi
@@ -2421,6 +2468,99 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_embedding(HexaVal ids_v, HexaVa
 HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_embedding(HexaVal ids_v, HexaVal table_v,
                                  HexaVal out_v, HexaVal t_v, HexaVal d_v) {
     return hexa_forge_dispatch_embedding(ids_v, table_v, out_v, t_v, d_v);
+}
+
+/* rmsnorm(x, g, y_out, xn_out, inv_out, d) -> int rc. LLM-path RMSNorm fwd.
+ * byte-eq twin of nn_lib.hexa nn_rmsnorm_fwd: ms=Σ x·x (SEQUENTIAL), ms/=d,
+ * inv=1/sqrt(ms+1e-6) [libm sqrt = _nn_sqrt, correctly-rounded], xn=x·inv,
+ * y=g·xn. FP_CONTRACT OFF (pragma at top of this OP-37 block) → the ms
+ * reduction matches the flame host loop; device kernel matches via
+ * __dmul_rn/__dadd_rn + sqrt(). */
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_rmsnorm(HexaVal x_v, HexaVal g_v,
+                                   HexaVal y_v, HexaVal xn_v, HexaVal inv_v, HexaVal d_v) {
+    int64_t x = hexa_as_num(x_v), g = hexa_as_num(g_v), y = hexa_as_num(y_v);
+    int64_t xn = hexa_as_num(xn_v), invo = hexa_as_num(inv_v), d = hexa_as_num(d_v);
+    if (d <= 0 || !_OP37_FA(x, d) || !_OP37_FA(g, d) || !_OP37_FA(y, d) ||
+        !_OP37_FA(xn, d) || !_OP37_FA(invo, 1))             return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_rmsnorm_fwd_gpu(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_rmsnorm_fwd_gpu(x, g, y, xn, invo, d);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
+    double* X   = _hx_farr_table[x].buf;
+    double* G   = _hx_farr_table[g].buf;
+    double* Y   = _hx_farr_table[y].buf;
+    double* XN  = _hx_farr_table[xn].buf;
+    double* INV = _hx_farr_table[invo].buf;
+    const double eps = 0.000001;
+    double ms = 0.0;
+    for (int64_t i = 0; i < d; i++) { double xi = X[i]; ms = ms + xi * xi; }
+    ms = ms / (double)d;
+    double inv = 1.0 / sqrt(ms + eps);
+    INV[0] = inv;
+    for (int64_t j = 0; j < d; j++) {
+        double xnj = X[j] * inv;
+        XN[j] = xnj;
+        Y[j]  = G[j] * xnj;
+    }
+    return hexa_int(0);
+}
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_rmsnorm(HexaVal x_v, HexaVal g_v,
+                                   HexaVal y_v, HexaVal xn_v, HexaVal inv_v, HexaVal d_v) {
+    return hexa_forge_dispatch_rmsnorm(x_v, g_v, y_v, xn_v, inv_v, d_v);
+}
+
+/* rmsnorm_bwd(x, g, xn, inv, dy, dx_out, dg_out, d) -> int rc. LLM-path RMSNorm
+ * bwd (closed vjp). `inv` is a SCALAR float (saved fwd reciprocal-rms) unpacked
+ * with __hx_to_double — NOT a farr handle. byte-eq twin of nn_lib.hexa
+ * nn_rmsnorm_bwd: dxn_i=dy_i·g_i, dg_i=dy_i·xn_i, dot=Σ dxn·x (SEQUENTIAL),
+ * inv3=inv³, scale=(inv3/d)·dot, dx_i=inv·dxn_i − scale·x_i. NO sqrt/exp.
+ * FP_CONTRACT OFF (pragma above) pins the host rounding the device kernel
+ * matches via __dmul_rn/__dadd_rn. */
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_rmsnorm_bwd(HexaVal x_v, HexaVal g_v,
+                                   HexaVal xn_v, HexaVal inv_v, HexaVal dy_v,
+                                   HexaVal dx_v, HexaVal dg_v, HexaVal d_v) {
+    int64_t x = hexa_as_num(x_v), g = hexa_as_num(g_v), xn = hexa_as_num(xn_v);
+    int64_t dy = hexa_as_num(dy_v), dx = hexa_as_num(dx_v), dg = hexa_as_num(dg_v);
+    int64_t d = hexa_as_num(d_v);
+    double inv = __hx_to_double(inv_v);
+    if (d <= 0 || !_OP37_FA(x, d) || !_OP37_FA(g, d) || !_OP37_FA(xn, d) ||
+        !_OP37_FA(dy, d) || !_OP37_FA(dx, d) || !_OP37_FA(dg, d))
+        return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_rmsnorm_bwd_gpu(int64_t, int64_t, int64_t, double,
+                                                 int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_rmsnorm_bwd_gpu(x, g, xn, inv, dy, dx, dg, d);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
+    double* X  = _hx_farr_table[x].buf;
+    double* G  = _hx_farr_table[g].buf;
+    double* XN = _hx_farr_table[xn].buf;
+    double* DY = _hx_farr_table[dy].buf;
+    double* DX = _hx_farr_table[dx].buf;
+    double* DG = _hx_farr_table[dg].buf;
+    double dot = 0.0;
+    for (int64_t i = 0; i < d; i++) {
+        double dxn_i = DY[i] * G[i];
+        DG[i] = DY[i] * XN[i];
+        dot = dot + dxn_i * X[i];
+    }
+    double inv3  = inv * inv * inv;
+    double scale = (inv3 / (double)d) * dot;
+    for (int64_t j = 0; j < d; j++) {
+        double dxn_j = DY[j] * G[j];
+        DX[j] = inv * dxn_j - scale * X[j];
+    }
+    return hexa_int(0);
+}
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_rmsnorm_bwd(HexaVal x_v, HexaVal g_v,
+                                   HexaVal xn_v, HexaVal inv_v, HexaVal dy_v,
+                                   HexaVal dx_v, HexaVal dg_v, HexaVal d_v) {
+    return hexa_forge_dispatch_rmsnorm_bwd(x_v, g_v, xn_v, inv_v, dy_v, dx_v, dg_v, d_v);
 }
 
 /* groupnorm(x, gamma, beta, y, mean, inv, xhat, T, C, G) -> int rc.

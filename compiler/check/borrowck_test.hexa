@@ -1,0 +1,436 @@
+// HEXA Native Compiler — HEXA-OWN L3 M3+M4 loan-pass smoke test (HX3014)
+//
+// @version 0.2.0
+// @capabilities [pure]
+//
+// Probe matrix for the MIR loan pass (HEXA_BORROWCK=1, intra-block M3
+// spec state/hexa-own/l3_m3_spec.md §4 + cross-block NLL liveness M4).
+// Every source probe runs the REAL pipeline — lex → parse → ast_to_hir
+// lower → lower_hir — twice: once with the flag ON (expected HX3014
+// count per probe) and once with it OFF (expected 0 diagnostics of ANY
+// code: byteeq-neutral stream proof at the diag level; asm
+// byte-identity is the pool/CI byteeq gate's job).
+//
+//   hz_write_alias        `let b = a; b[0]=99; println(a[0])`   → ×1 (Rule 1)
+//   hz_write_alias_field  struct alias, `d.depth=…` then `c.depth` → ×1
+//   hz_push_alias         `let b = a; b.push(2); len(a)`        → ×1
+//   fp_arr_alias_read     `let b = a; println(a[0]+b[1])`       → 0 (M0 FP #2)
+//   fp_callarg            `foo(a)` then `a[0]`, param not @own  → 0 (M0 FP #1)
+//   fp_copy_int           scalar copy chain                     → 0 (Copy skip)
+//   fp_write_same_name    `a[0]=1; println(a[0])`, no alias     → 0 (XOR ≥2 names)
+//   fp_repoint            `b = [9]` detaches b before the write → 0 (edge-kill)
+//   xb_write_in_branch    write inside `if`, read after join    → ×1 (M4: was the
+//                         documented M3 ceiling — cross-block now caught)
+//   xb_loop_carried       write via alias inside `while`, read of the
+//                         other name earlier in the SAME body block → ×1
+//                         (M4: body reaches itself via the back-edge)
+//   fp_benign_join        write to a NON-aliased array in a branch +
+//                         read-only alias pair across the join    → 0
+//                         (M4 control: reach without group match = silent)
+//   tp_own_param_move     hand-built HIR `@own` param + `g(a); a[0]` → ×1 (Rule 2)
+//
+// The hz_write_alias / fp_arr_alias_read PAIR is the M0-motivated
+// discriminator: identical alias shape, the only difference is the
+// write — M0 measured the pre-M3 lint as unable to tell them apart.
+// The xb_write_in_branch / fp_benign_join PAIR is the M4 analogue:
+// both cross a join; only the one whose reaching write hits the SAME
+// alias group through a different name warns.
+//
+// tp_own_param_move is hand-built HIR (mir_test.hexa convention)
+// because the inline `@own` param parser carrier (#4470/#4485 stack)
+// is not on main yet — the HItem annotation shape used here
+// (Annotation{name:"own", args:[pname]} + sibling param_names) is
+// byte-for-byte what that stack's ast_to_hir hands to lower_hir, so
+// Rule 2's mechanism is proven now; the source-level probe goes green
+// when the stack lands.
+//
+// Run:
+//   hexa run compiler/check/borrowck_test.hexa
+
+import "../lex/lexer.hexa"
+import "../parse/parser.hexa"
+import "../parse/ast.hexa"
+import "../ir/hir.hexa"
+import "../ir/mir.hexa"
+import "../lex/tokens.hexa"
+import "../atlas/static_index.hexa"
+import "../lower/ast_to_hir.hexa"
+import "../lower/hir_to_mir.hexa"
+
+// ── pipeline driver ──────────────────────────────────────────
+
+fn _compile_probe(name: string, src: string) -> array {
+    let file = name + ".hexa"
+    let toks = lex(src, file)
+    let m = parse(toks, file)
+    let hm = lower(m, empty_atlas_index())
+    let mm = lower_hir(hm)
+    if len(mm.funcs) == 0 {
+        println("  WARN: probe " + name + " lowered 0 fns")
+    }
+    return hir_to_mir_diags()
+}
+
+fn _count_code(diags: array, code: string) -> i64 {
+    let mut i = 0
+    let mut n = 0
+    while i < len(diags) {
+        let d = diags[i]
+        if d.code == code { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+fn _print_diags(diags: array) {
+    let mut i = 0
+    while i < len(diags) {
+        let d = diags[i]
+        let sp = d.span
+        println("      [" + to_string(i) + "] " + d.code + " @ "
+                + sp.file + ":" + to_string(sp.line) + ":" + to_string(sp.col)
+                + " — " + d.message)
+        i = i + 1
+    }
+}
+
+// Expectations branch on the AMBIENT flag (types_test convention —
+// `setenv` does not feed `env()` in the stage0 runtime, so the flag
+// must be set on the PROCESS: run this test twice, once plain =
+// flag-OFF sweep, once under HEXA_BORROWCK=1).
+// ON-mode: expect `want` HX3014 and zero other codes (probe hygiene —
+// a stray HX1101 would mean the probe is not exercising the pass).
+// OFF-mode: expect a fully empty diag stream (byte-neutral proof at
+// the diagnostic level).
+fn _run_probe(label: string, src: string, want_on: i64) -> bool {
+    let flag_on = env("HEXA_BORROWCK") == "1"
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3014 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3014")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3014 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3014 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
+// ── source probes ────────────────────────────────────────────
+
+fn _src_hz_write_alias() -> string {
+    let mut s = "fn hz() {\n"
+    s = s + "    let a = [1, 2]\n"
+    s = s + "    let b = a\n"
+    s = s + "    b[0] = 99\n"
+    s = s + "    println(a[0])\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_hz_write_alias_field() -> string {
+    let mut s = "struct Ctx { depth: i64 }\n"
+    s = s + "fn hzf() {\n"
+    s = s + "    let c = Ctx { depth: 1 }\n"
+    s = s + "    let d = c\n"
+    s = s + "    d.depth = 5\n"
+    s = s + "    println(c.depth)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_hz_push_alias() -> string {
+    let mut s = "fn hzp() {\n"
+    s = s + "    let a = [1]\n"
+    s = s + "    let b = a\n"
+    s = s + "    b.push(2)\n"
+    s = s + "    println(len(a))\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_arr_alias_read() -> string {
+    let mut s = "fn fpr() {\n"
+    s = s + "    let a = [1, 2]\n"
+    s = s + "    let b = a\n"
+    s = s + "    println(a[0] + b[1])\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_callarg() -> string {
+    let mut s = "fn foo(xs: [i64]) -> i64 { return len(xs) }\n"
+    s = s + "fn fpc() {\n"
+    s = s + "    let a = [1, 2]\n"
+    s = s + "    let n = foo(a)\n"
+    s = s + "    println(a[0])\n"
+    s = s + "    println(n)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_copy_int() -> string {
+    let mut s = "fn fpi() {\n"
+    s = s + "    let x = 5\n"
+    s = s + "    let mut y = x\n"
+    s = s + "    y = 7\n"
+    s = s + "    println(x + y)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_write_same_name() -> string {
+    let mut s = "fn fps() {\n"
+    s = s + "    let a = [1, 2]\n"
+    s = s + "    a[0] = 1\n"
+    s = s + "    println(a[0])\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_repoint() -> string {
+    // `b = [9]` re-points b to a fresh group BEFORE the write, so the
+    // write through b no longer aliases a → reads of a stay silent.
+    let mut s = "fn fpp() {\n"
+    s = s + "    let a = [1, 2]\n"
+    s = s + "    let mut b = a\n"
+    s = s + "    b = [9]\n"
+    s = s + "    b[0] = 3\n"
+    s = s + "    println(a[0])\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_xb_write_in_branch() -> string {
+    // M4's discriminating probe (was the documented M3 intra-block
+    // ceiling, pinned at 0): the write lives in the `if`'s then-block,
+    // the read in the join block — the then-block REACHES the join
+    // through the CFG edge, so the cross-block fixed-point now warns.
+    let mut s = "fn xbb(c: bool) {\n"
+    s = s + "    let a = [1]\n"
+    s = s + "    let b = a\n"
+    s = s + "    if c { b[0] = 1 }\n"
+    s = s + "    println(a[0])\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_xb_loop_carried() -> string {
+    // M4 loop-carried alias: the read of `a` textually PRECEDES the
+    // write through `b` in the same while-body block, so the
+    // order-aware intra-block rule stays silent — but the body block
+    // reaches itself through the loop back-edge (body → header →
+    // body), so iteration N's read observes iteration N-1's write.
+    let mut s = "fn xbl() {\n"
+    s = s + "    let a = [1, 2]\n"
+    s = s + "    let b = a\n"
+    s = s + "    let mut i = 0\n"
+    s = s + "    while i < 2 {\n"
+    s = s + "        println(a[0])\n"
+    s = s + "        b[0] = 7\n"
+    s = s + "        i = i + 1\n"
+    s = s + "    }\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_benign_join() -> string {
+    // M4 no-FP control: a real write event (through `z`) reaches the
+    // join, and a read-only alias pair (`a`/`b`) crosses the same join
+    // — but the reaching write's group never matches the alias pair's
+    // group, so the cross-block pass must stay silent.
+    let mut s = "fn fpj(c: bool) {\n"
+    s = s + "    let a = [1, 2]\n"
+    s = s + "    let b = a\n"
+    s = s + "    let z = [5]\n"
+    s = s + "    if c {\n"
+    s = s + "        z[0] = 9\n"
+    s = s + "        println(b[0])\n"
+    s = s + "    }\n"
+    s = s + "    println(a[0])\n"
+    s = s + "}\n"
+    return s
+}
+
+// ── tp_own_param_move: hand-built HIR (Rule 2 mechanism proof) ──
+
+fn _tsp(line: i64) -> Span {
+    return Span { file: "tp_own.hexa", line: line, col: 1, len: 1 }
+}
+
+fn _t_kind(k: string) -> Type {
+    return Type {
+        kind: k, def: DefId { module: "", index: -1 },
+        args: [], ret: [], domain: "", unit: ""
+    }
+}
+
+fn _t_arr_i64() -> Type {
+    let mut a: [Type] = []
+    a.push(_t_kind("i64"))
+    return Type {
+        kind: "array", def: DefId { module: "", index: -1 },
+        args: a, ret: [], domain: "", unit: ""
+    }
+}
+
+fn _hx(kind: string, text: string, kids: [HExpr], line: i64) -> HExpr {
+    return HExpr {
+        kind: kind, span: _tsp(line), typ: _t_kind("?"), text: text,
+        children: kids,
+        atlas: AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" },
+        def: DefId { module: "", index: -1 },
+        annotations: []
+    }
+}
+
+fn _hx_int(v: string, line: i64) -> HExpr {
+    let mut e = _hx("literal_int", v, [], line)
+    return HExpr {
+        kind: e.kind, span: e.span, typ: _t_kind("i64"), text: e.text,
+        children: e.children, atlas: e.atlas, def: e.def, annotations: e.annotations
+    }
+}
+
+fn _ast_ident_arg(name: string) -> Expr {
+    return Expr {
+        kind: ExprKind::Ident, span: _tsp(1), text: name,
+        annotations: [], children: [],
+        atlas_ref: AtlasRef { kind: "", id: "", span: _tsp(1) }
+    }
+}
+
+fn _ann1(name: string, argname: string) -> Annotation {
+    let mut args: [Expr] = []
+    args.push(_ast_ident_arg(argname))
+    return Annotation { name: name, args: args, span: _tsp(1) }
+}
+
+fn _hitem_fn(name: string, anns: [Annotation], sigp: [Type], body: HExpr) -> HItem {
+    return HItem {
+        kind: "ITEM_FN", def: DefId { module: "", index: -1 },
+        name: name, span: _tsp(1), annotations: anns,
+        sig_params: sigp, sig_return: _t_kind("unit"), body: body,
+        is_pub: false, discoverable: false, proof_hash: "", verifier_version: ""
+    }
+}
+
+// module:
+//   fn g(@own p: [i64]) {}            (annotations: own(p) + param_names(p))
+//   fn tp_caller() {
+//       let a = [1]
+//       g(a)                          → MOVE (own-param index 0)
+//       let n = a[0]                  → use after move → HX3014 ×1
+//   }
+fn _build_tp_own_module() -> HModule {
+    // fn g — empty body, @own aggregate param p.
+    let mut g_anns: [Annotation] = []
+    g_anns.push(_ann1("own", "p"))
+    g_anns.push(_ann1("param_names", "p"))
+    let mut g_sigp: [Type] = []
+    g_sigp.push(_t_arr_i64())
+    let g_body = _hx("block", "", [], 1)
+    let item_g = _hitem_fn("g", g_anns, g_sigp, g_body)
+
+    // fn tp_caller
+    let mut arr_kids: [HExpr] = []
+    arr_kids.push(_hx_int("1", 2))
+    let mut let_a_kids: [HExpr] = []
+    let_a_kids.push(_hx("array_lit", "", arr_kids, 2))
+    let let_a = _hx("let", "a", let_a_kids, 2)
+
+    let mut call_kids: [HExpr] = []
+    call_kids.push(_hx("ident", "g", [], 3))
+    call_kids.push(_hx("ident", "a", [], 3))
+    let call_g = _hx("call", "", call_kids, 3)
+
+    let mut idx_kids: [HExpr] = []
+    idx_kids.push(_hx("ident", "a", [], 4))
+    idx_kids.push(_hx_int("0", 4))
+    let mut let_n_kids: [HExpr] = []
+    let_n_kids.push(_hx("index", "", idx_kids, 4))
+    let let_n = _hx("let", "n", let_n_kids, 4)
+
+    let mut body_kids: [HExpr] = []
+    body_kids.push(let_a)
+    body_kids.push(call_g)
+    body_kids.push(let_n)
+    let body = _hx("block", "", body_kids, 2)
+    let mut caller_anns: [Annotation] = []
+    let item_c = _hitem_fn("tp_caller", caller_anns, [], body)
+
+    let mut items: [HItem] = []
+    items.push(item_g)
+    items.push(item_c)
+    return HModule { file: "tp_own.hexa", items: items }
+}
+
+fn _run_tp_own() -> bool {
+    let flag_on = env("HEXA_BORROWCK") == "1"
+    let mut want = 0
+    if flag_on { want = 1 }
+    let mut ok = true
+    println("")
+    println("── tp_own_param_move (hand-built HIR, expect HX3014 ×" + to_string(want) + " Rule 2) ──")
+    let mm = lower_hir(_build_tp_own_module())
+    let d = hir_to_mir_diags()
+    let n = _count_code(d, "HX3014")
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3014 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if len(d) - n != 0 {
+        println("  FAIL: stray non-HX3014 diagnostics")
+        ok = false
+    }
+    if len(mm.funcs) != 2 {
+        println("  FAIL: expected 2 lowered fns, got " + to_string(len(mm.funcs)))
+        ok = false
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
+// ── driver ───────────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  HEXA-OWN L3 M3+M4 — loan pass + NLL liveness (HX3014)")
+    let mut mode = "OFF (byteeq-neutral sweep)"
+    if env("HEXA_BORROWCK") == "1" { mode = "ON (HEXA_BORROWCK=1)" }
+    println("  flag mode: " + mode)
+    println("══════════════════════════════════════════════")
+
+    let mut ok = true
+
+    if !_run_probe("hz_write_alias", _src_hz_write_alias(), 1) { ok = false }
+    if !_run_probe("hz_write_alias_field", _src_hz_write_alias_field(), 1) { ok = false }
+    if !_run_probe("hz_push_alias", _src_hz_push_alias(), 1) { ok = false }
+    if !_run_probe("fp_arr_alias_read", _src_fp_arr_alias_read(), 0) { ok = false }
+    if !_run_probe("fp_callarg", _src_fp_callarg(), 0) { ok = false }
+    if !_run_probe("fp_copy_int", _src_fp_copy_int(), 0) { ok = false }
+    if !_run_probe("fp_write_same_name", _src_fp_write_same_name(), 0) { ok = false }
+    if !_run_probe("fp_repoint", _src_fp_repoint(), 0) { ok = false }
+    if !_run_probe("xb_write_in_branch", _src_xb_write_in_branch(), 1) { ok = false }
+    if !_run_probe("xb_loop_carried", _src_xb_loop_carried(), 1) { ok = false }
+    if !_run_probe("fp_benign_join", _src_fp_benign_join(), 0) { ok = false }
+    if !_run_tp_own() { ok = false }
+
+    println("")
+    if ok {
+        println("ALL PASS — M3 discriminator + M4 cross-block liveness hold")
+    } else {
+        println("FAILURES — see above")
+        exit(1)
+    }
+}
