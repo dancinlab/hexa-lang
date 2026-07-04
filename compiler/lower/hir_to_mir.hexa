@@ -453,6 +453,29 @@ pub let mut _lr_defer_ret_local = -1
 //     With zero corpus @own adoption Rule 2 is inert by construction.
 //   * scalars (Copy) are never registered; unknown-typed locals are not
 //     tracked (precision-first: false-negatives allowed, FPs not).
+//
+// L3 M4 — cross-block NLL liveness (same HEXA_BORROWCK=1 flag):
+//   * every tracked ident USE is additionally recorded (name, group
+//     snapshot, block, span); at the END of _lower_fn — when every CFG
+//     edge (if/else joins, while/for back-edges, break/continue
+//     sentinel patches, defer epilogue, try/catch) is materialized in
+//     Block.preds/succs — `_bck_nll_check` runs an event-reachability
+//     fixed-point over Block.preds and re-evaluates both rules at each
+//     use against every write/move event whose block REACHES the use's
+//     block through ≥1 CFG edge. Joins (write in a branch, read after)
+//     and loop back-edges (loop-carried alias: a body block reaches
+//     itself through the cycle) are now caught; same-block ordering
+//     stays with the interleaved intra-block rules above, so a
+//     straight-line use BEFORE a write still never fires.
+//   * convergence guard: hard sweep cap = blocks*4 + 8, loud bail
+//     (cross-block results dropped for that fn, intra-block kept).
+//   * granularity is unchanged: whole-local, no place projections
+//     (documented ceiling); path-insensitive (a write on one branch
+//     arms the join — advisory-band tolerance like whole-local).
+//   * cost: flag OFF ⇒ zero work (no events, no pass); flag ON ⇒
+//     O(events × blocks × sweeps) per fn with an early-out when the fn
+//     recorded no write/move event — cheap enough to stay under the
+//     unified HEXA_BORROWCK flag (no separate HEXA_BORROWCK_NLL).
 pub let mut _bck_on = false        // HEXA_BORROWCK=1, read once per lower_hir
 // HEXA-OWN L4 Lane-B B0 — HEXA_BORROWCK_STRICT=1: same precise detection,
 // but the emitted HX3014 is escalated to Severity::Error (build-refusing)
@@ -481,6 +504,13 @@ pub let mut _bck_m_blocks: [i64] = []
 // emitted-site dedup (same-line/col suppression, cloned from _own_lint_touch)
 pub let mut _bck_e_lines: [i64] = []
 pub let mut _bck_e_cols: [i64] = []
+// M4 — tracked USE events (group snapshot at use time) for the
+// end-of-fn cross-block pass; span kept whole so the cross-block emit
+// anchors at the exact use site.
+pub let mut _bck_u_grps: [i64] = []
+pub let mut _bck_u_names: [string] = []
+pub let mut _bck_u_blocks: [i64] = []
+pub let mut _bck_u_spans: [Span] = []
 // @own-param pre-pass map (module lifetime): paired rows fn-name/param-idx,
 // built in lower_hir from fn-item `Annotation{name:"own", args:[pname]}`
 // positioned via the sibling `param_names` annotation (ast_to_hir carries
@@ -505,6 +535,10 @@ fn _bck_reset_fn() {
     _bck_m_blocks = []
     _bck_e_lines = []
     _bck_e_cols = []
+    _bck_u_grps = []
+    _bck_u_names = []
+    _bck_u_blocks = []
+    _bck_u_spans = []
 }
 
 fn _bck_new_group() -> i64 {
@@ -645,6 +679,165 @@ fn _bck_check_use(name: string, local_id: i64, blk: i64, sp: Span) {
         if _bck_m_blocks[mi] == blk {
             _emit_hx3014("use after move", name, _bck_m_callees[mi], _bck_m_lines[mi], sp)
         }
+    }
+    // M4 — record the use (group snapshot at use time) for the
+    // end-of-fn cross-block pass. `.push` heapifies the Span.
+    _bck_u_grps.push(grp)
+    _bck_u_names.push(name)
+    _bck_u_blocks.push(blk)
+    _bck_u_spans.push(sp)
+}
+
+// ── HEXA-OWN L3 M4 — cross-block NLL liveness fixed-point ────────────
+// Runs ONCE at the end of _lower_fn (guarded by `_bck_active`; flag OFF
+// ⇒ never called and every registry is empty anyway), when the fn's
+// FULL CFG is materialized in `_lr_blocks` (if/else joins, while/for
+// back-edges, break/continue sentinel patches, defer epilogue,
+// try/catch — all wired through _add_edge by then).
+//
+// Dataflow: for every recorded write/move EVENT e, compute the set of
+// blocks its source block reaches through ≥1 CFG edge —
+//     reach[b][e] = 1  ⇔  ∃ pred p of b with (p == block(e) ∨ reach[p][e])
+// iterated to fixpoint over Block.preds (loop back-edges converge: a
+// loop body reaches ITSELF through the cycle, which is exactly the
+// loop-carried-alias case). Then both loan rules are re-evaluated at
+// every recorded USE against the events reaching its block:
+//   Rule 1 — a use through name N while a WRITE through a DIFFERENT
+//     name of the same group reaches the use's block ⇒ HX3014.
+//   Rule 2 — any use of a group with a reaching MOVE ⇒ HX3014.
+// Same-block ordering is NOT re-checked here (path length ≥1 only) —
+// the interleaved intra-block rules already handled it order-aware, so
+// a straight-line use before a write stays silent; emit dedup
+// (line/col) collapses any intra+cross double-hit at one site.
+//
+// Convergence guard: hard sweep cap = blocks*4 + 8. A non-converging
+// fixed-point (cannot happen for a monotone bitset over a finite CFG,
+// but guard loudly anyway) drops the CROSS-BLOCK results for this fn
+// only — intra-block diagnostics already emitted are kept.
+fn _bck_nll_check() {
+    let nw = len(_bck_w_grps)
+    let ne = nw + len(_bck_m_grps)
+    if ne == 0 { return }
+    let nu = len(_bck_u_grps)
+    if nu == 0 { return }
+    let nb = len(_lr_blocks)
+    if nb == 0 { return }
+    // block id → _lr_blocks index map (ids are per-fn monotonic, but
+    // map defensively — _add_edge itself searches by id, never index).
+    let mut max_id = 0
+    let mut bi = 0
+    while bi < nb {
+        if _lr_blocks[bi].id > max_id { max_id = _lr_blocks[bi].id }
+        bi = bi + 1
+    }
+    let mut id2ix: [i64] = []
+    let mut k = 0
+    while k <= max_id {
+        id2ix.push(0 - 1)
+        k = k + 1
+    }
+    bi = 0
+    while bi < nb {
+        let bid = _lr_blocks[bi].id
+        if bid >= 0 { id2ix[bid] = bi }
+        bi = bi + 1
+    }
+    // per-event source block INDEX (write events first, then moves).
+    let mut ev_bix: [i64] = []
+    let mut e = 0
+    while e < nw {
+        let mut wix = 0 - 1
+        if _bck_w_blocks[e] >= 0 && _bck_w_blocks[e] <= max_id {
+            wix = id2ix[_bck_w_blocks[e]]
+        }
+        ev_bix.push(wix)
+        e = e + 1
+    }
+    e = 0
+    while e < len(_bck_m_grps) {
+        let mut mix = 0 - 1
+        if _bck_m_blocks[e] >= 0 && _bck_m_blocks[e] <= max_id {
+            mix = id2ix[_bck_m_blocks[e]]
+        }
+        ev_bix.push(mix)
+        e = e + 1
+    }
+    // reach bitmatrix, flat [block-index × event-index], all zero.
+    let mut reach: [i64] = []
+    let mut z = 0
+    while z < nb * ne {
+        reach.push(0)
+        z = z + 1
+    }
+    // fixed-point sweeps over Block.preds.
+    let cap = nb * 4 + 8
+    let mut iter = 0
+    let mut changed = true
+    while changed {
+        if iter >= cap {
+            println("borrowck M4 BAIL: NLL fixed-point exceeded "
+                    + to_string(cap) + " sweeps (blocks=" + to_string(nb)
+                    + ", events=" + to_string(ne)
+                    + ") — cross-block loan results dropped for this fn")
+            return
+        }
+        changed = false
+        bi = 0
+        while bi < nb {
+            let preds = _lr_blocks[bi].preds
+            let mut pi = 0
+            while pi < len(preds) {
+                let pid = preds[pi]
+                let mut pix = 0 - 1
+                if pid >= 0 && pid <= max_id { pix = id2ix[pid] }
+                if pix >= 0 {
+                    e = 0
+                    while e < ne {
+                        if reach[bi * ne + e] == 0 {
+                            if ev_bix[e] == pix || reach[pix * ne + e] == 1 {
+                                reach[bi * ne + e] = 1
+                                changed = true
+                            }
+                        }
+                        e = e + 1
+                    }
+                }
+                pi = pi + 1
+            }
+            bi = bi + 1
+        }
+        iter = iter + 1
+    }
+    // rule evaluation at every recorded use.
+    let mut u = 0
+    while u < nu {
+        let ub = _bck_u_blocks[u]
+        let mut uix = 0 - 1
+        if ub >= 0 && ub <= max_id { uix = id2ix[ub] }
+        if uix >= 0 {
+            e = 0
+            while e < ne {
+                if reach[uix * ne + e] == 1 {
+                    if e < nw {
+                        if _bck_w_grps[e] == _bck_u_grps[u]
+                            && _bck_w_names[e] != _bck_u_names[u] {
+                            _emit_hx3014("aliased write", _bck_u_names[u],
+                                         _bck_w_names[e], _bck_w_lines[e],
+                                         _bck_u_spans[u])
+                        }
+                    } else {
+                        if _bck_m_grps[e - nw] == _bck_u_grps[u] {
+                            _emit_hx3014("use after move", _bck_u_names[u],
+                                         _bck_m_callees[e - nw],
+                                         _bck_m_lines[e - nw],
+                                         _bck_u_spans[u])
+                        }
+                    }
+                }
+                e = e + 1
+            }
+        }
+        u = u + 1
     }
 }
 
@@ -4813,6 +5006,12 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
         if env("HEXA_MONOMORPHIZE") == "1" {
             __fn_name = __fn_name + "$$g"
         }
+    }
+    // HEXA-OWN L3 M4 — cross-block NLL liveness pass, AFTER the whole
+    // body (incl. defer epilogue) is lowered so every CFG edge is in
+    // Block.preds/succs. Flag OFF ⇒ `_bck_active` false ⇒ zero work.
+    if _bck_active {
+        _bck_nll_check()
     }
     return MFunc {
         name: __fn_name,

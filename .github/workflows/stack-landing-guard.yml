@@ -1,0 +1,142 @@
+# stack-landing-guard — recurrence guard for the static-types phantom-merge incident.
+#
+# ROOT CAUSE (see ARCHITECTURE.json convergence STACK-LANDING-GUARD): a tower of
+# stacked PRs (static-types r8..r11 + F0/F3/F4) each had base = a parent FEATURE
+# branch, not main. Each merged DOWN-STACK into its parent → every PR got a green
+# MERGED badge while its content NEVER reached main (HX3015..HX3017 absent from
+# main history for several rounds). There was no check that a merged head SHA is
+# actually an ancestor of main.
+#
+# DESIGN (non-blocking · content-reachability, not base-block — a down-stack merge
+# is a legitimate step of a stack; the failure was that the tip→main PR never
+# opened). Two jobs:
+#   A. on a PR merged with base != default branch → comment on the PR ("merged into
+#      <base>, NOT yet on main") and record PR#/base/head-SHA into a single tracking
+#      issue ("stacked-merge ledger").
+#   B. on every push to main → for each ledger row, `git merge-base --is-ancestor`
+#      the head SHA against main; check off reached rows; close the ledger issue
+#      once every row has landed.
+# This targets the exact moment content strands, breaks the MERGED-badge illusion
+# on the PR itself, and keeps strandings visible until they land. It is advisory —
+# it is NOT wired into the required `selfhost-gates-summary` gate.
+name: stack-landing-guard
+
+on:
+  pull_request_target:
+    types: [closed, opened]
+  push:
+    branches: [main]
+
+permissions:
+  issues: write
+  pull-requests: write
+  contents: read
+
+concurrency:
+  group: stack-landing-guard-${{ github.event_name }}
+  cancel-in-progress: false
+
+env:
+  LEDGER_TITLE: "stacked-merge ledger — PRs merged down-stack, not yet on main"
+  LEDGER_LABEL: stacked-merge-ledger
+
+jobs:
+  # A. A PR closed with base != main and merged → strand warning + ledger append.
+  #    A PR opened with base != main → informational nudge (stack needs a tip→main PR).
+  on-pr:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate PR base vs default branch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const def = context.payload.repository.default_branch; // "main"
+            const base = pr.base.ref;
+            if (base === def) return; // base=main → nothing to track
+            const action = context.payload.action;
+            const label = process.env.LEDGER_LABEL;
+            const title = process.env.LEDGER_TITLE;
+
+            if (action === 'opened') {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: pr.number,
+                body: `ℹ️ **Stacked PR** — base is \`${base}\`, not \`${def}\`. Landing this merges into \`${base}\`, **not into \`${def}\`**. Make sure a tip→\`${def}\` PR exists (or retarget once the parent lands) so the stack actually reaches \`${def}\`. (stack-landing-guard)`
+              });
+              return;
+            }
+
+            // action === 'closed'
+            if (!pr.merged) return;
+            const head = pr.head.sha;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: pr.number,
+              body: `⚠️ Merged into \`${base}\`, **not \`${def}\`** — this content is NOT on \`${def}\` yet. It only lands when \`${base}\` (and every branch above it) reaches \`${def}\`. Tracked in the stacked-merge ledger. (stack-landing-guard)`
+            });
+
+            // Upsert the single tracking issue and append a row for this PR.
+            const q = `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open label:${label} in:title "stacked-merge ledger"`;
+            const found = await github.rest.search.issuesAndPullRequests({ q });
+            let issue = found.data.items[0];
+            const row = `- [ ] #${pr.number} · base \`${base}\` · head \`${head}\``;
+            if (!issue) {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo, title,
+                labels: [label],
+                body: `PRs merged into a non-\`${def}\` base. Each row is a stranded head SHA; the push-to-\`${def}\` job checks each off once it becomes an ancestor of \`${def}\`. Auto-closes when all rows land.\n\n${row}\n`
+              });
+            } else if (!issue.body.includes(`head \`${head}\``)) {
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: issue.number,
+                body: `${issue.body}\n${row}`
+              });
+            }
+
+  # B. On every push to main → check off ledger rows whose head SHA is now an
+  #    ancestor of main; close the ledger when all rows have landed.
+  on-main-push:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reconcile ledger against main
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { execSync } = require('child_process');
+            const label = process.env.LEDGER_LABEL;
+            const q = `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open label:${label} in:title "stacked-merge ledger"`;
+            const found = await github.rest.search.issuesAndPullRequests({ q });
+            const issue = found.data.items[0];
+            if (!issue) return;
+
+            const isAncestor = (sha) => {
+              try { execSync(`git merge-base --is-ancestor ${sha} origin/main`, { stdio: 'ignore' }); return true; }
+              catch { return false; }
+            };
+            const lines = issue.body.split('\n');
+            let changed = false;
+            const out = lines.map((ln) => {
+              const m = ln.match(/^- \[ \] .*head `([0-9a-f]{7,40})`/);
+              if (m && isAncestor(m[1])) { changed = true; return ln.replace('- [ ]', '- [x]'); }
+              return ln;
+            });
+            if (changed) {
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: issue.number,
+                body: out.join('\n')
+              });
+            }
+            const remaining = out.some((ln) => /^- \[ \] /.test(ln));
+            if (!remaining) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: issue.number,
+                body: `✅ All stranded rows have landed on main. Closing. (stack-landing-guard)`
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: issue.number, state: 'closed'
+              });
+            }
