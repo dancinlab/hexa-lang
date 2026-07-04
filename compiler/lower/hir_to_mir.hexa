@@ -540,6 +540,17 @@ pub let mut _bck_u_spans: [Span] = []
 // ALL item annotations through — zero new plumbing).
 pub let mut _bck_own_fns: [string] = []
 pub let mut _bck_own_pidx: [i64] = []
+// HEXA-OWN L5-E1 — ref-binding registry (push-only; newest entry per NAME
+// wins via `_bck_find_ref` END-scan, the same idiom as _bck_find_local).
+// Records `let r = &x` / `let r = &mut x` borrows of a NON-global ident so
+// the `return` arm can flag a returned borrow of a function-local value
+// (HX3019, Rust E0515). A KILL row (origin "") records a re-let / reassign
+// that repoints the name to a non-borrow RHS, detaching the loan. Reset
+// per-fn in `_bck_reset_fn`; population is gated on `_bck_active` so the
+// flag-OFF diag stream stays byte-identical.
+pub let mut _bck_ref_names: [string] = []
+pub let mut _bck_ref_origins: [string] = []
+pub let mut _bck_ref_lines: [i64] = []
 
 fn _bck_reset_fn() {
     _bck_grp_ctr = 0
@@ -562,6 +573,9 @@ fn _bck_reset_fn() {
     _bck_u_names = []
     _bck_u_blocks = []
     _bck_u_spans = []
+    _bck_ref_names = []
+    _bck_ref_origins = []
+    _bck_ref_lines = []
 }
 
 fn _bck_new_group() -> i64 {
@@ -674,6 +688,60 @@ fn _emit_hx3014(rule: string, name: string, other: string, line: i64, sp: Span) 
     // fatal-gate (main.hexa `_has_errors`) then aborts before codegen. When
     // STRICT is off this branch is unreached, so the diag stream and emitted
     // binary are byte-identical (byteeq-neutral).
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
+}
+
+// ── HEXA-OWN L5-E1 — ref-binding registry ops (newest-per-name wins) ──
+// `_bck_find_ref` mirrors `_bck_find_local`: an END-scan so a later KILL
+// or re-track for the same name shadows the earlier row.
+fn _bck_find_ref(name: string) -> i64 {
+    let mut i = len(_bck_ref_names) - 1
+    while i >= 0 {
+        if _bck_ref_names[i] == name { return i }
+        i = i - 1
+    }
+    return 0 - 1
+}
+
+// Record `let name = &origin` (origin is a non-global function-local ident).
+fn _bck_ref_track(name: string, origin: string, line: i64) {
+    _bck_ref_names.push(name)
+    _bck_ref_origins.push(origin)
+    _bck_ref_lines.push(line)
+}
+
+// Record a KILL for `name` — a re-let / reassign detached the loan. The
+// empty origin makes the `return` END-scan treat the name as non-escaping.
+fn _bck_ref_kill(name: string) {
+    _bck_ref_names.push(name)
+    _bck_ref_origins.push("")
+    _bck_ref_lines.push(0)
+}
+
+// HX3019 emit (return-borrow-escape) — same-site dedup + STRICT escalation,
+// cloned from `_emit_hx3014`. `name` is the returned binding, `origin` the
+// function-local value it borrows, `borrow_line` where the loan was created.
+fn _bck_emit_ret_escape(name: string, origin: string, borrow_line: i64, sp: Span) {
+    let mut di = 0
+    while di < len(_bck_e_lines) {
+        if _bck_e_lines[di] == sp.line && _bck_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_e_lines.push(sp.line)
+    _bck_e_cols.push(sp.col)
+    let mut b = diag_new("HX3019")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "origin", origin)
+    b = diag_arg(b, "borrow_line", to_string(borrow_line))
+    let mut d = diag_emit(b)
+    // STRICT (HEXA_BORROWCK_STRICT) re-bands the SAME diagnostic instance to
+    // a build-refusing Error via the sanctioned caller override — identical
+    // to the HX3014 escalation. OFF-strict leaves the catalog Warning band,
+    // and the flag-OFF path never reaches here (byteeq-neutral).
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
@@ -2375,6 +2443,35 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             ctx2 = r.ctx
             args.push(r.operand)
         }
+        // HEXA-OWN L5-E1 — return-borrow-escape (HX3019, Rust E0515). Inspect
+        // the HIR return VALUE before the defer reroute below (both paths flow
+        // through here). Two forms flag a returned borrow of a function-local:
+        //   * DIRECT — `return &x` / `return &mut x` over a NON-global ident.
+        //   * 1-HOP  — `return r` where `r` is a live ref binding in the
+        //              registry (origin != "" via the newest-per-name scan).
+        // Diag-push only (no MIR/codegen change); gated on `_bck_active` so the
+        // flag-OFF diag stream is byte-identical.
+        if _bck_active && len(e.children) > 0 {
+            let _bk_rv = e.children[0]
+            if _bk_rv.kind == "unop"
+                && (_bk_rv.text == "&" || _bk_rv.text == "&mut")
+                && len(_bk_rv.children) > 0 {
+                let _bk_inner = _bk_rv.children[0]
+                if _bk_inner.kind == "ident"
+                    && _mir_lookup_global(ctx2, _bk_inner.text) < 0 {
+                    _bck_emit_ret_escape(_bk_inner.text, _bk_inner.text,
+                                         e.span.line, e.span)
+                }
+            } else {
+                if _bk_rv.kind == "ident" {
+                    let _bk_ri = _bck_find_ref(_bk_rv.text)
+                    if _bk_ri >= 0 && len(_bck_ref_origins[_bk_ri]) > 0 {
+                        _bck_emit_ret_escape(_bk_rv.text, _bck_ref_origins[_bk_ri],
+                                             _bck_ref_lines[_bk_ri], e.span)
+                    }
+                }
+            }
+        }
         // HEXA-OWN M1 — fn-exit single-exit epilogue (Q2). When the
         // enclosing fn registered any defer, a `return` reroutes:
         // `__defer_ret = value` (bare return keeps the void init) +
@@ -2797,6 +2894,31 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 }
             }
         }
+        // HEXA-OWN L5-E1 — ref-binding registry at the let site. `let r = &x`
+        // / `let r = &mut x` over a NON-global ident registers a loan so a
+        // later `return r` (1-hop) can flag the escape. A re-let of a name
+        // that was previously a live ref binding, with a RHS that is NOT such
+        // a borrow, KILLS the loan (fp_ref_killed control). Gated on
+        // `_bck_active` → flag-OFF path never touches the registry.
+        if _bck_active && len(nm) > 0 {
+            let mut _bk_is_ref = false
+            if len(e.children) > 0 {
+                let _bk_rhs_ref = e.children[0]
+                if _bk_rhs_ref.kind == "unop"
+                    && (_bk_rhs_ref.text == "&" || _bk_rhs_ref.text == "&mut")
+                    && len(_bk_rhs_ref.children) > 0 {
+                    let _bk_refinner = _bk_rhs_ref.children[0]
+                    if _bk_refinner.kind == "ident"
+                        && _mir_lookup_global(ctx2, _bk_refinner.text) < 0 {
+                        _bck_ref_track(nm, _bk_refinner.text, e.span.line)
+                        _bk_is_ref = true
+                    }
+                }
+            }
+            if !_bk_is_ref && _bck_find_ref(nm) >= 0 {
+                _bck_ref_kill(nm)
+            }
+        }
         return _no_value(ctx2)
     }
 
@@ -2973,6 +3095,21 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                     _bck_track(dst.id, lhs.text, _bck_new_group(), e.span)
                 }
             }
+        }
+        // HEXA-OWN L5-E1 — reassigning a name that was a live ref binding to
+        // an RHS that is NOT a borrow detaches the loan (fp_ref_killed): push
+        // a KILL so the `return` END-scan sees origin "" and stays silent.
+        // A `r = &z` reassignment keeps the loan (conservatively still an
+        // escape of a local); only the non-borrow case kills.
+        if _bck_active && !is_global && len(lhs.text) > 0 && lhs.kind == "ident"
+            && _bck_find_ref(lhs.text) >= 0 {
+            let _bk_rhs_kill = e.children[1]
+            let mut _bk_still_ref = false
+            if _bk_rhs_kill.kind == "unop"
+                && (_bk_rhs_kill.text == "&" || _bk_rhs_kill.text == "&mut") {
+                _bk_still_ref = true
+            }
+            if !_bk_still_ref { _bck_ref_kill(lhs.text) }
         }
         return _no_value(ctx2)
     }
