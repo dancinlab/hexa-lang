@@ -174,8 +174,18 @@ pub fn qforge_a2f_from_elph_impl(eps_k: [float], eps_kq: [float], g2: [float],
             let wq = omega_qnu[i]
             let mut j = 0
             while j < ng {
-                a2f[j] = a2f[j] + wgt * qforge_gaussian_delta(omega_grid[j] - wq,
-                                                              sigma_ph)
+                // Window the deposit to |ω-ω_qν| ≤ 30·σ_ph. Beyond that the
+                // normalized Gaussian is < e^-450 (exactly 0.0 in double), so
+                // skipping it is numerically a no-op for well-formed inputs —
+                // but it also avoids evaluating exp() in the extreme-argument
+                // band where a native libm exp can return garbage instead of an
+                // underflow-to-zero, which was collapsing α²F/λ to a non-finite
+                // sentinel on ill-conditioned (Einstein/SI-magnitude) samples.
+                let z = (omega_grid[j] - wq) / sigma_ph
+                if z * z <= 900.0 {
+                    a2f[j] = a2f[j] + wgt * qforge_gaussian_delta(omega_grid[j] - wq,
+                                                                  sigma_ph)
+                }
                 j = j + 1
             }
         }
