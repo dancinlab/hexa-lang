@@ -523,6 +523,12 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     //
     // NOP — 0x90 (1 B). Single-byte no-op for padding / alignment.
     if op == "NOP" { return [0x90] }
+    // PAUSE — F3 90 (2 B). Spin-loop hint (RFC inline-asm rung 2 `__hx_asm("pause")`).
+    // Additive/dead by default (no existing emit uses `pause`) → byteeq-safe.
+    if op == "PAUSE" { return [0xf3, 0x90] }
+    // MFENCE — 0F AE F0 (3 B). Full memory barrier (RFC inline-asm rung 2
+    // `__hx_asm("fence")`). Additive/dead by default → byteeq-safe.
+    if op == "MFENCE" { return [0x0f, 0xae, 0xf0] }
     // CQO — 48 99 (REX.W + 99). Sign-extend RAX into RDX:RAX (idiv
     // setup for signed-division).
     if op == "CQO" { return [0x48, 0x99] }
@@ -1258,6 +1264,8 @@ fn _lir_op_uppercase_x86(op: string, ops: [LOperand]) -> string {
     if op == "ret"     { return "RET" }
     if op == "syscall" { return "SYSCALL" }
     if op == "nop"     { return "NOP" }
+    if op == "pause"   { return "PAUSE" }   // RFC inline-asm rung 2 (__hx_asm)
+    if op == "mfence"  { return "MFENCE" }  // RFC inline-asm rung 2 (__hx_asm)
     if op == "cqo"     { return "CQO" }
     // `push` / `pop` are intentionally NOT here — they're width-
     // dispatched below by reg operand so `push rbp` → PUSH64 (cycle 30)
