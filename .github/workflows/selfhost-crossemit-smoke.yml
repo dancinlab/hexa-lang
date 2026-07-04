@@ -46,6 +46,10 @@ on:
       - 'compiler/test/elf_x86_64_data.hexa'
       - 'tool/selfhost_crossemit_smoke.sh'
       - '.github/workflows/selfhost-crossemit-smoke.yml'
+      - 'tool/stage_resolve_runtime_a'
+      - 'tool/release_build'
+      - 'tool/stage_build_hexa'
+      - 'tool/stage_prebuild_hexat'
   pull_request:
     paths:
       - 'compiler/emit/elf_arm64.hexa'
@@ -56,6 +60,10 @@ on:
       - 'compiler/test/elf_x86_64_data.hexa'
       - 'tool/selfhost_crossemit_smoke.sh'
       - '.github/workflows/selfhost-crossemit-smoke.yml'
+      - 'tool/stage_resolve_runtime_a'
+      - 'tool/release_build'
+      - 'tool/stage_build_hexa'
+      - 'tool/stage_prebuild_hexat'
   workflow_dispatch:
 
 permissions:
