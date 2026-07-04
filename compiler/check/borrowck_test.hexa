@@ -420,6 +420,110 @@ fn _run_ret_probe(label: string, src: string, want_on: i64) -> bool {
     return ok
 }
 
+// ── HEXA-OWN E2+E3 — borrow-conflict rule (HX3020, Rust E0502) ────
+//
+// The E2 loan registry (name → origin, mutability bit, live via
+// kill-on-reassign) is wired to E3's first conflict check: a NEW borrow
+// `&x` / `&mut x` over a function-local that already has a LIVE loan of the
+// same origin conflicts when the existing loan is `&mut` (any second borrow
+// illegal) OR the new borrow is `&mut` (mutable demands exclusivity). Two
+// shared borrows never conflict. ON → 1 HX3020 per hazard; OFF → empty
+// stream (byteeq-neutral). Controls (both-shared, sequential-after-kill,
+// different-origin) stay at 0.
+
+fn _src_hz_shared_while_mut() -> string {
+    // `&x` while `&mut x` is live → E0502 (shared-while-mut).
+    let mut s = "fn hsm() {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    let m = &mut x\n"
+    s = s + "    let s = &x\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_hz_mut_while_mut() -> string {
+    // A second `&mut x` while the first `&mut x` is live → E0502.
+    let mut s = "fn hmm() {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    let a = &mut x\n"
+    s = s + "    let b = &mut x\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_two_shared() -> string {
+    // `&x` then `&x` — two shared borrows never conflict → silent.
+    let mut s = "fn fts() {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    let a = &x\n"
+    s = s + "    let b = &x\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_sequential() -> string {
+    // The first `&mut x` loan is killed by `a = 0` before the second
+    // borrow — no live loan overlaps, so the reborrow is fine → silent.
+    let mut s = "fn fseq() {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    let mut a = &mut x\n"
+    s = s + "    a = 0\n"
+    s = s + "    let b = &mut x\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_diff_origin() -> string {
+    // Borrows of DIFFERENT origins never alias → silent.
+    let mut s = "fn fdo() {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    let mut y = 5\n"
+    s = s + "    let a = &mut x\n"
+    s = s + "    let b = &mut y\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HX3020 probe runner — mirrors `_run_ret_probe`, keyed on the borrow-
+// conflict code and asserting every OTHER code is 0 (probe hygiene). STRICT
+// re-bands HX3020 to Error, so the error-band count must equal the HX3020
+// count. OFF → want 0 (empty stream).
+fn _run_conflict_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3020 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3020")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3020 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3020 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
 // ── tp_own_param_move: hand-built HIR (Rule 2 mechanism proof) ──
 
 fn _tsp(line: i64) -> Span {
@@ -672,6 +776,13 @@ fn main() {
         if !_run_ret_probe("fp_ref_no_escape", _src_fp_ref_no_escape(), 0) { ok = false }
         if !_run_ret_probe("fp_ret_global_ref", _src_fp_ret_global_ref(), 0) { ok = false }
         if !_run_ret_probe("fp_ref_killed", _src_fp_ref_killed(), 0) { ok = false }
+        // HEXA-OWN E2+E3 — borrow-conflict (HX3020, Rust E0502). Hazards → ×1
+        // ON, controls → 0. OFF sweep asserts a fully empty stream for all.
+        if !_run_conflict_probe("hz_shared_while_mut", _src_hz_shared_while_mut(), 1) { ok = false }
+        if !_run_conflict_probe("hz_mut_while_mut", _src_hz_mut_while_mut(), 1) { ok = false }
+        if !_run_conflict_probe("fp_two_shared", _src_fp_two_shared(), 0) { ok = false }
+        if !_run_conflict_probe("fp_sequential", _src_fp_sequential(), 0) { ok = false }
+        if !_run_conflict_probe("fp_diff_origin", _src_fp_diff_origin(), 0) { ok = false }
         if !_run_tp_own() { ok = false }
         // census lane must be silent whenever HEXA_BORROWCK_CENSUS is unset
         // (byteeq-neutral proof at the census-count level).
