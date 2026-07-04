@@ -1950,7 +1950,7 @@ fn _emit_hx3013(name: string, global: string, def_line: i64, sp: Span, out: arra
 // re-escalates to Error (REJECT) — the strict abort contract of HX3011. Only
 // emitted under HEXA_STATIC_TYPES, so the default diagnostic stream is
 // byte-identical in BOTH bands (byteeq-neutral).
-fn _emit_hx3014(sname: string, fname: string, sp: Span, out: array) {
+fn _emit_hx3016(sname: string, fname: string, sp: Span, out: array) {
     let mut b = diag_new("HX3016")
     b = diag_span(b, sp)
     b = diag_arg(b, "name", sname)
@@ -3106,7 +3106,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                         // follow-on, not r9d scope. Same flag gate as the
                         // whole arm → default build byte-identical.
                         if !lk.found && _types_struct_registry_has(sname) {
-                            _emit_hx3014(sname, finit.text, finit.span, out)
+                            _emit_hx3016(sname, finit.text, finit.span, out)
                         }
                     }
                 }
