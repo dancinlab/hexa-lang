@@ -174,6 +174,8 @@ state/*
 !state/static-types/
 !state/rfc_advanced_typesystem.md
 !state/rfc_function_overloading.md
+!state/rfc_reseed_canonical_keywords.md
+!state/rfc_drop_raii.md
 !state/rfc_operator_overload.md
 !state/rfc_value_unbox_layout.md
 !state/rfc_thread_fnglobal_fwddecl.md

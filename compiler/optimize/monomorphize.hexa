@@ -57,6 +57,47 @@ import "../ir/mir.hexa"
 
 pub let MONO_TEMPLATE_MARK: string = "$$g"
 
+// ── Lane ① — generic *struct* template marker ─────────────────
+// Generic structs (`@specialize struct Box<T>`) constructed via the call
+// form `Box<Int>(5)` lower to a STMT_CALL whose `op` is the struct's base
+// name (parser.hexa parses `Foo<T>(…)` as an ExprKind::Call; the native
+// pipeline erases the `<T>` so Box<Int> and Box<Str> share one MIR shape).
+// A struct constructor template is recognised by the DISTINCT sentinel
+// suffix MONO_STRUCT_TEMPLATE_MARK ("$$gs") so the fn marker ("$$g") and
+// the struct marker never collide ("$$gs" does not end in "$$g": the last
+// three bytes are "$gs"). Once the struct's base name is in `bases`, the
+// per-call-site specialization reuses the SAME proven call-rewrite +
+// clone+mangle machinery as the function lane (a generic-struct
+// construction is, at the MIR call layer, indistinguishable from a generic
+// function call — one unified deterministic pass specializes both in a
+// single byteeq fixpoint, the hexa beyond-parity lever vs rustc's two
+// separate MonoItem::Fn / MonoItem::Struct collector arms).
+// Reference: rustc monomorphizes a generic struct by collecting each
+// distinct `Instance` of its type and giving each a mangled symbol
+// (rustc_monomorphize::collector → MonoItem); zig instantiates the struct
+// per comptime-type; swift emits a specialized metadata record per
+// concrete generic argument.
+pub let MONO_STRUCT_TEMPLATE_MARK: string = "$$gs"
+
+// ── Lane ② — NESTED generic struct (`Box(Pair(5,6))`) ─────────
+// A generic struct whose argument is ANOTHER generic-struct INSTANCE.
+// `Box(Pair(5,6))` lowers to two STMT_CALLs in SSA order: the inner
+// `Pair(5,6)` writes a local, then `Box(<that local>)`. The single-level
+// `_mono_tag_of` sees arg[0] of the Box call as a `local` (not a const) and
+// returns "dyn", parking the outer construction on the erased path — the
+// nested wall. Lane ② threads a per-function PRODUCER MAP (`dst.id →
+// instance name`) through the forward scan: when the inner Pair construction
+// resolves to "Pair$int", that is recorded; the outer Box call then resolves
+// its local operand to "Pair$int" and retargets `Box`→`Box$Pair$int`. Both
+// `Pair$int` and `Box$Pair$int` land in `wanted`; Pass-2 longest-prefix
+// base-recovery resolves `Box$Pair$int`→`Box`. This whole lane is sub-gated
+// by env("HEXA_MONO_GENERIC_STRUCT")=="1" (read once in monomorphize()),
+// default-OFF, so the lane-① single-level path is byte-identical when unset.
+// Mirrors rustc_monomorphize::collector's transitive worklist (instantiating
+// `Box<Pair<i32>>` enqueues `Pair<i32>` first, one mangled MonoItem each,
+// dedup per Instance). HONEST R3 limit: only the direct construct→call form
+// is mapped — copy-through / phi-merged inner producers fall back to "dyn".
+
 // ── Name helpers ──────────────────────────────────────────────
 
 fn _mono_is_template(name: string) -> bool {
@@ -74,6 +115,28 @@ fn _mono_base_name(name: string) -> string {
     return name.substring(0, n - m)
 }
 
+// Lane ① — struct-template predicate + base extractor. Disjoint from the
+// function predicate above: a "$$gs"-suffixed name is never matched by
+// `_mono_is_template` (its trailing three bytes are "$gs", not "$$g"), and
+// a "$$g"-suffixed function name is never matched here (its trailing four
+// bytes are e.g. "d$$g", not "$$gs"). So adding struct collection below is
+// inert on any module that carries only function templates — the function
+// lane stays byte-identical.
+fn _mono_is_struct_template(name: string) -> bool {
+    let n = len(name)
+    let m = len(MONO_STRUCT_TEMPLATE_MARK)
+    if n < m { return false }
+    return name.substring(n - m, n) == MONO_STRUCT_TEMPLATE_MARK
+}
+
+fn _mono_base_name_struct(name: string) -> string {
+    let n = len(name)
+    let m = len(MONO_STRUCT_TEMPLATE_MARK)
+    if n < m { return name }
+    if name.substring(n - m, n) != MONO_STRUCT_TEMPLATE_MARK { return name }
+    return name.substring(0, n - m)
+}
+
 fn _mono_mangle(base: string, tag: string) -> string {
     return base + "$" + tag
 }
@@ -88,6 +151,38 @@ fn _mono_tag_of(arg: Operand) -> string {
     return "dyn"
 }
 
+// ── Lane ② — NESTED generic-struct tag inference ──────────────
+// `_mono_tag_of` only recovers a concrete tag from a CONST operand, so a
+// generic struct constructed from ANOTHER generic-struct instance —
+// `Box(Pair(5,6))` — left arg[0] (a `local` holding the inner Pair value)
+// as "dyn", parking the outer construction on the erased path. That local
+// IS the nested wall. This sibling resolves the local case by looking the
+// operand's producing SSA local up in a per-function producer map
+// (`prod_ids[i] → prod_names[i]`, built incrementally as the forward stmt
+// scan resolves each inner construction to its instance name), returning
+// the INNER instance name (e.g. "Pair$int") as the nested type tag. The
+// non-nested (const / unknown) path is byte-identical to `_mono_tag_of` —
+// `Box(5)` still resolves to "int" exactly as before — so the single-level
+// $$gs lane stays bit-for-bit unchanged.
+//
+// Reference (rustc): rustc_monomorphize::collector is a worklist fixpoint —
+// instantiating `Box<Pair<i32>>` transitively enqueues `Pair<i32>` first,
+// and each fully-substituted distinct `Instance` becomes one mangled
+// MonoItem (dedup per Instance). The producer map is the hexa analog of
+// that transitivity for the surviving construct→call form: the inner
+// instance is "collected" (recorded) before the outer call consults it,
+// guaranteed by inner-construction-precedes-outer SSA order.
+fn _mono_tag_of_n(arg: Operand, prod_ids: [i64], prod_names: [string]) -> string {
+    if arg.kind == "const_int" { return "int" }
+    if arg.kind == "const_str" { return "str" }
+    if arg.kind == "const_float" { return "f64" }
+    if arg.kind == "local" {
+        let idx = _mono_int_find(prod_ids, arg.local_id)
+        if idx >= 0 { return prod_names[idx] }
+    }
+    return "dyn"
+}
+
 // ── Template + instance bookkeeping ───────────────────────────
 
 fn _mono_collect_templates(funcs: [MFunc]) -> [string] {
@@ -97,6 +192,13 @@ fn _mono_collect_templates(funcs: [MFunc]) -> [string] {
     while i < len(funcs) {
         if _mono_is_template(funcs[i].name) {
             bases.push(_mono_base_name(funcs[i].name))
+        }
+        // Lane ① — also collect generic-struct constructor templates. This
+        // branch fires only on a "$$gs"-marked name, which no default
+        // lowering emits today, so a function-only / non-generic module
+        // yields an identical `bases` list (function lane byte-identical).
+        if _mono_is_struct_template(funcs[i].name) {
+            bases.push(_mono_base_name_struct(funcs[i].name))
         }
         i = i + 1
     }
@@ -112,12 +214,36 @@ fn _mono_str_in(xs: [string], v: string) -> bool {
     return false
 }
 
+// Lane ② — parallel-array index lookup backing the per-function producer
+// map (`prod_ids[i] → prod_names[i]`). Mirrors the `_mono_str_in` shape;
+// returns the index of the first SSA local id equal to `v`, or -1. Pure.
+fn _mono_int_find(ids: [i64], v: i64) -> i64 {
+    let mut i = 0
+    while i < len(ids) {
+        if ids[i] == v { return i }
+        i = i + 1
+    }
+    return -1
+}
+
 fn _mono_find_template(funcs: [MFunc], base: string) -> i64 {
+    // Function templates are looked up first under the "$$g" marker (so the
+    // function lane resolves to the exact same template index as before —
+    // byte-identical). A base that has no "$$g" template falls through to
+    // the lane-① "$$gs" struct-constructor marker. The two marker spaces are
+    // disjoint per base (a generic name is either a fn or a struct), so this
+    // ordering never mis-resolves.
     let marked = base + MONO_TEMPLATE_MARK
     let mut i = 0
     while i < len(funcs) {
         if funcs[i].name == marked { return i }
         i = i + 1
+    }
+    let marked_s = base + MONO_STRUCT_TEMPLATE_MARK
+    let mut j = 0
+    while j < len(funcs) {
+        if funcs[j].name == marked_s { return j }
+        j = j + 1
     }
     return -1
 }
@@ -156,22 +282,55 @@ fn _mono_call_instance(s: Stmt, bases: [string]) -> string {
     return _mono_mangle(s.op, tag)
 }
 
+// Lane ② — nested-aware variant. When `nested` is false this delegates to
+// the single-level `_mono_call_instance` VERBATIM, so the #4058 $$gs path
+// (and the fn $$g path) stay byte-identical under the default (flag-unset)
+// build — the entire lane ② machinery is inert. When `nested` is true the
+// arg[0] tag is inferred with `_mono_tag_of_n`, which additionally resolves
+// a `local` operand to the inner instance it was produced by, so
+// `Box(Pair(5,6))` retargets `Box`→`Box$Pair$int` (the tag is the producer
+// instance name "Pair$int"). A nested call whose inner producer is unknown
+// (copy-through / phi-merged, not directly construct→call) still yields
+// "dyn" → erased path, the honest R3 limitation.
+fn _mono_call_instance_n(s: Stmt, bases: [string], prod_ids: [i64], prod_names: [string], nested: bool) -> string {
+    if !nested { return _mono_call_instance(s, bases) }
+    if s.kind != STMT_CALL { return "" }
+    if !_mono_str_in(bases, s.op) { return "" }
+    if len(s.args) == 0 { return "" }
+    let tag = _mono_tag_of_n(s.args[0], prod_ids, prod_names)
+    if tag == "dyn" { return "" }
+    return _mono_mangle(s.op, tag)
+}
+
 // Scan every function body and return the deterministic, deduped list of
 // instance names the module needs (first-request order). Returns a FRESH
 // array — avoids any reliance on by-reference parameter mutation.
-fn _mono_scan_wanted(funcs: [MFunc], bases: [string]) -> [string] {
+fn _mono_scan_wanted(funcs: [MFunc], bases: [string], nested: bool) -> [string] {
     let mut wanted: [string] = []
     let mut fi = 0
     while fi < len(funcs) {
         let mf = funcs[fi]
+        // Lane ② — per-FUNCTION producer map (reset at each fn entry): the
+        // SSA local id a construction wrote → the instance name it resolved
+        // to. Built incrementally in the SAME forward stmt order the rewrite
+        // uses, so the wanted-set and the retarget agree on every nested tag.
+        // Stays empty when `nested` is false (pushes are flag-gated), so the
+        // single-level scan is byte-identical to #4058.
+        let mut prod_ids: [i64] = []
+        let mut prod_names: [string] = []
         let mut bi = 0
         while bi < len(mf.blocks) {
             let b = mf.blocks[bi]
             let mut si = 0
             while si < len(b.stmts) {
-                let inst = _mono_call_instance(b.stmts[si], bases)
+                let st = b.stmts[si]
+                let inst = _mono_call_instance_n(st, bases, prod_ids, prod_names, nested)
                 if inst != "" {
                     if !_mono_str_in(wanted, inst) { wanted.push(inst) }
+                    if nested {
+                        prod_ids.push(st.dst.id)
+                        prod_names.push(inst)
+                    }
                 }
                 si = si + 1
             }
@@ -185,8 +344,14 @@ fn _mono_scan_wanted(funcs: [MFunc], bases: [string]) -> [string] {
 // ── Call-site rewrite within one function body ────────────────
 // Returns a fresh MFunc whose STMT_CALLs to a template base are retargeted
 // to the per-arg-type instance. Pure: decisions match _mono_scan_wanted.
-fn _mono_rewrite_calls(mf: MFunc, bases: [string]) -> MFunc {
+fn _mono_rewrite_calls(mf: MFunc, bases: [string], nested: bool) -> MFunc {
     let mut new_blocks: [Block] = []
+    // Lane ② — the SAME per-function producer map as `_mono_scan_wanted`,
+    // built structurally identically (same forward order, same gate, keyed
+    // by the ORIGINAL stmt `dst.id`) so the retargeted `op` set exactly
+    // matches the wanted-set the scan produced. Empty when `nested` is false.
+    let mut prod_ids: [i64] = []
+    let mut prod_names: [string] = []
     let mut bi = 0
     while bi < len(mf.blocks) {
         let b = mf.blocks[bi]
@@ -195,7 +360,7 @@ fn _mono_rewrite_calls(mf: MFunc, bases: [string]) -> MFunc {
         while si < len(b.stmts) {
             let s = b.stmts[si]
             let mut out = s
-            let inst = _mono_call_instance(s, bases)
+            let inst = _mono_call_instance_n(s, bases, prod_ids, prod_names, nested)
             if inst != "" {
                 out = Stmt {
                     kind: s.kind,
@@ -204,6 +369,10 @@ fn _mono_rewrite_calls(mf: MFunc, bases: [string]) -> MFunc {
                     args: s.args,
                     target_block: s.target_block,
                     target_block_else: s.target_block_else
+                }
+                if nested {
+                    prod_ids.push(s.dst.id)
+                    prod_names.push(inst)
                 }
             }
             new_stmts.push(out)
@@ -225,6 +394,13 @@ fn _mono_rewrite_calls(mf: MFunc, bases: [string]) -> MFunc {
     // are unaffected by this rename.
     let mut out_name = mf.name
     if _mono_is_template(out_name) { out_name = _mono_base_name(out_name) }
+    // Lane ① — strip the struct-constructor marker the same way, so a
+    // generic struct's template survives under its BASE name as the
+    // type-erased constructor fallback for `dyn` construction sites and
+    // "$$gs" never reaches codegen. Mirrors rustc/swift, where the
+    // specialized struct instances coexist with the unspecialized generic
+    // definition. `else if` keeps the function branch byte-identical.
+    else { if _mono_is_struct_template(out_name) { out_name = _mono_base_name_struct(out_name) } }
     return MFunc {
         name: out_name,
         params: mf.params,
@@ -247,14 +423,25 @@ pub fn monomorphize(module: MModule) -> MModule {
     // perturbed, even with HEXA_MONOMORPHIZE=1.
     if len(bases) == 0 { return module }
 
+    // Lane ② sub-gate — NESTED generic-struct tag inference (`Box(Pair(...))`)
+    // is additionally opt-in behind HEXA_MONO_GENERIC_STRUCT=1, read once
+    // here (this entry is only reached when the pass already runs under
+    // HEXA_MONOMORPHIZE=1 — see compiler/main.hexa). Default-OFF: when unset,
+    // `_nested` is false and every lane-② helper collapses to its #4058
+    // single-level behavior (producer maps stay empty, `_mono_tag_of_n`'s
+    // local case is never taken), so the $$g fn lane and $$gs struct lane
+    // are bit-for-bit unchanged. Self-host/release builds never set either
+    // env, so the gen3≡gen4 byteeq fixpoint is preserved on all 3 targets.
+    let _nested = env("HEXA_MONO_GENERIC_STRUCT") == "1"
+
     // Pass 0: collect the deduped set of wanted instances (pure scan).
-    let wanted = _mono_scan_wanted(module.funcs, bases)
+    let wanted = _mono_scan_wanted(module.funcs, bases, _nested)
 
     // Pass 1: rewrite every function's call sites to the instance names.
     let mut rewritten: [MFunc] = []
     let mut i = 0
     while i < len(module.funcs) {
-        rewritten.push(_mono_rewrite_calls(module.funcs[i], bases))
+        rewritten.push(_mono_rewrite_calls(module.funcs[i], bases, _nested))
         i = i + 1
     }
 

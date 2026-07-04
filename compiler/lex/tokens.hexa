@@ -104,7 +104,14 @@ pub enum TokenKind {
 
     // Terminals
     Newline,
-    Eof
+    Eof,
+
+    // Postfix `?` try-propagation operator (RFC r15-D2) — opt-in
+    // (HEXA_TRY_OP, default-OFF). APPENDED LAST on purpose: every
+    // existing variant keeps its source-order ordinal, so the
+    // self-host byteeq fixpoint (gen3≡gen4) is untouched and the
+    // native lexer never emits this token unless the flag is set.
+    Question
 }
 
 // ── Token ─────────────────────────────────────────────────────

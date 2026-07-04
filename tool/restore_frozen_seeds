@@ -2563,6 +2563,192 @@ HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_rmsnorm_bwd(HexaVal x_v, HexaVal g_v
     return hexa_forge_dispatch_rmsnorm_bwd(x_v, g_v, xn_v, inv_v, dy_v, dx_v, dg_v, d_v);
 }
 
+/* attn_core_fwd(Q, K, V, P_out, ctx_out, T, nh, nkv, hd) -> int rc. LLM-path
+ * GQA attention-core fwd. ALL 9 args are farr handles/ints — NO scalar-by-value.
+ * byte-eq twin of nn_lib.hexa nn_attn_core_fwd VERBATIM: n_rep=nh/nkv, d=nh*hd,
+ * scale=1/sqrt(hd) [libm sqrt = the bare `sqrt` builtin, correctly-rounded].
+ * Per (hh,i), L=i+1, kvh=hh/n_rep: scores[j]=Σ_c Q·K·scale (SEQUENTIAL scratch),
+ * causal softmax (subtract row-max, e=_op19b_dt_exp(s−m), renormalise by Σe),
+ * ctx[i,hh,c]=Σ_j P·V. The softmax exp calls _op19b_dt_exp — the host C dt_exp
+ * twin (defined once above, byte-identical to flame_math dt_exp) — EXACTLY as
+ * the ce_grad twin does, NOT libm `exp`, NOT _op18_moe_exp. FP_CONTRACT OFF
+ * (pragma at top of this block) pins the host rounding the device kernel matches
+ * via __dmul_rn/__dadd_rn. P_out/ctx_out are WRITTEN (caller pre-zeros; the
+ * causal j>i region stays zero). */
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_attn_core_fwd(HexaVal Q_v, HexaVal K_v,
+                                   HexaVal V_v, HexaVal P_out_v, HexaVal ctx_out_v,
+                                   HexaVal T_v, HexaVal nh_v, HexaVal nkv_v, HexaVal hd_v) {
+    int64_t Q = hexa_as_num(Q_v), K = hexa_as_num(K_v), V = hexa_as_num(V_v);
+    int64_t P = hexa_as_num(P_out_v), ctx = hexa_as_num(ctx_out_v);
+    int64_t T = hexa_as_num(T_v), nh = hexa_as_num(nh_v);
+    int64_t nkv = hexa_as_num(nkv_v), hd = hexa_as_num(hd_v);
+    if (T <= 0 || nh <= 0 || nkv <= 0 || hd <= 0 || (nh % nkv) != 0)
+        return hexa_int(-1);
+    int64_t d = nh * hd;
+    if (!_OP37_FA(Q, T * nh * hd) || !_OP37_FA(K, T * nkv * hd) ||
+        !_OP37_FA(V, T * nkv * hd) || !_OP37_FA(P, nh * T * T) ||
+        !_OP37_FA(ctx, T * d))
+        return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_attn_core_fwd_gpu(int64_t, int64_t, int64_t, int64_t,
+                                                   int64_t, int64_t, int64_t, int64_t,
+                                                   int64_t);
+        int grc = _hx_cuda_farr_attn_core_fwd_gpu(Q, K, V, P, ctx,
+                                                  T, nh, nkv, hd);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
+    double* QB   = _hx_farr_table[Q].buf;
+    double* KB   = _hx_farr_table[K].buf;
+    double* VB   = _hx_farr_table[V].buf;
+    double* PB   = _hx_farr_table[P].buf;
+    double* CTX  = _hx_farr_table[ctx].buf;
+    int64_t n_rep = nh / nkv;
+    double  scale = 1.0 / sqrt((double)hd);
+    double* srow = (double*)malloc((size_t)T * sizeof(double));
+    if (!srow) return hexa_int(-1);
+    for (int64_t hh = 0; hh < nh; hh++) {
+        int64_t kvh = hh / n_rep;
+        for (int64_t i = 0; i < T; i++) {
+            int64_t L = i + 1;
+            for (int64_t j = 0; j < L; j++) {
+                double dot = 0.0;
+                for (int64_t c = 0; c < hd; c++) {
+                    dot = dot + QB[(i * nh + hh) * hd + c]
+                              * KB[(j * nkv + kvh) * hd + c];
+                }
+                srow[j] = dot * scale;
+            }
+            /* causal softmax over srow[0..L] → P[(hh*T+i)*T + 0..L]. */
+            double m = srow[0];
+            for (int64_t i1 = 1; i1 < L; i1++) { if (srow[i1] > m) m = srow[i1]; }
+            double tot = 0.0;
+            int64_t base = (hh * T + i) * T;
+            for (int64_t i2 = 0; i2 < L; i2++) {
+                double e = _op19b_dt_exp(srow[i2] - m);
+                PB[base + i2] = e;
+                tot = tot + e;
+            }
+            for (int64_t i3 = 0; i3 < L; i3++) {
+                PB[base + i3] = PB[base + i3] / tot;
+            }
+            for (int64_t c2 = 0; c2 < hd; c2++) {
+                double acc = 0.0;
+                for (int64_t jj = 0; jj < L; jj++) {
+                    acc = acc + PB[base + jj]
+                              * VB[(jj * nkv + kvh) * hd + c2];
+                }
+                CTX[i * d + hh * hd + c2] = acc;
+            }
+        }
+    }
+    free(srow);
+    return hexa_int(0);
+}
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_attn_core_fwd(HexaVal Q_v, HexaVal K_v,
+                                   HexaVal V_v, HexaVal P_out_v, HexaVal ctx_out_v,
+                                   HexaVal T_v, HexaVal nh_v, HexaVal nkv_v, HexaVal hd_v) {
+    return hexa_forge_dispatch_attn_core_fwd(Q_v, K_v, V_v, P_out_v, ctx_out_v,
+                                             T_v, nh_v, nkv_v, hd_v);
+}
+
+/* attn_core_bwd(Q, K, V, P, dctx, dQ_out, dK_out, dV_out, T, nh, nkv, hd) ->
+ * int rc. LLM-path GQA attention-core bwd (closed vjp, d5_attn_bwd). ALL 12
+ * args are farr handles/ints — NO scalar-by-value. byte-eq twin of nn_lib.hexa
+ * nn_attn_core_bwd VERBATIM: n_rep=nh/nkv, d=nh*hd, scale=1/sqrt(hd) [libm
+ * sqrt = the bare `sqrt` builtin, correctly-rounded]. Per (hh,i), L=i+1,
+ * kvh=hh/n_rep: dP_row[j]=Σ_c dctx·V (SEQUENTIAL scratch), sdot=Σ_j P·dP_row,
+ * dV[j,kvh,c]+=P·dctx, dS=P·(dP_row−sdot)·scale, dQ[i,hh,c]+=Σ_j dS·K,
+ * dK[j,kvh,c]+=Σ_i dS·Q. NO exp/transcendental. FP_CONTRACT OFF (pragma at
+ * top of this block) pins the host rounding the device kernel matches via
+ * __dmul_rn/__dadd_rn/__dsub_rn. dQ/dK/dV ACCUMULATED INTO (caller pre-zeros).
+ * The (hh,i) accumulation order into dV/dK is load-bearing for byte-eq. */
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_attn_core_bwd(HexaVal Q_v, HexaVal K_v,
+                                   HexaVal V_v, HexaVal P_v, HexaVal dctx_v,
+                                   HexaVal dQ_v, HexaVal dK_v, HexaVal dV_v,
+                                   HexaVal T_v, HexaVal nh_v, HexaVal nkv_v, HexaVal hd_v) {
+    int64_t Q = hexa_as_num(Q_v), K = hexa_as_num(K_v), V = hexa_as_num(V_v);
+    int64_t P = hexa_as_num(P_v), dctx = hexa_as_num(dctx_v);
+    int64_t dQ = hexa_as_num(dQ_v), dK = hexa_as_num(dK_v), dV = hexa_as_num(dV_v);
+    int64_t T = hexa_as_num(T_v), nh = hexa_as_num(nh_v);
+    int64_t nkv = hexa_as_num(nkv_v), hd = hexa_as_num(hd_v);
+    if (T <= 0 || nh <= 0 || nkv <= 0 || hd <= 0 || (nh % nkv) != 0)
+        return hexa_int(-1);
+    int64_t d = nh * hd;
+    if (!_OP37_FA(Q, T * nh * hd) || !_OP37_FA(K, T * nkv * hd) ||
+        !_OP37_FA(V, T * nkv * hd) || !_OP37_FA(P, nh * T * T) ||
+        !_OP37_FA(dctx, T * d) || !_OP37_FA(dQ, T * nh * hd) ||
+        !_OP37_FA(dK, T * nkv * hd) || !_OP37_FA(dV, T * nkv * hd))
+        return hexa_int(-1);
+#ifdef HEXA_CUDA
+    {
+        extern int _hx_cuda_farr_attn_core_bwd_gpu(int64_t, int64_t, int64_t, int64_t,
+                                                   int64_t, int64_t, int64_t, int64_t,
+                                                   int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_attn_core_bwd_gpu(Q, K, V, P, dctx, dQ, dK, dV,
+                                                  T, nh, nkv, hd);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
+    double* QB    = _hx_farr_table[Q].buf;
+    double* KB    = _hx_farr_table[K].buf;
+    double* VB    = _hx_farr_table[V].buf;
+    double* PB    = _hx_farr_table[P].buf;
+    double* DCTX  = _hx_farr_table[dctx].buf;
+    double* DQ    = _hx_farr_table[dQ].buf;
+    double* DK    = _hx_farr_table[dK].buf;
+    double* DV    = _hx_farr_table[dV].buf;
+    int64_t n_rep = nh / nkv;
+    double  scale = 1.0 / sqrt((double)hd);
+    double* dP_row = (double*)malloc((size_t)T * sizeof(double));
+    if (!dP_row) return hexa_int(-1);
+    for (int64_t hh = 0; hh < nh; hh++) {
+        int64_t kvh = hh / n_rep;
+        for (int64_t i = 0; i < T; i++) {
+            int64_t L = i + 1;
+            for (int64_t j = 0; j < L; j++) {
+                double acc = 0.0;
+                for (int64_t c = 0; c < hd; c++) {
+                    acc = acc + DCTX[i * d + hh * hd + c]
+                              * VB[(j * nkv + kvh) * hd + c];
+                }
+                dP_row[j] = acc;
+            }
+            double sdot = 0.0;
+            for (int64_t j2 = 0; j2 < L; j2++) {
+                sdot = sdot + PB[(hh * T + i) * T + j2] * dP_row[j2];
+            }
+            for (int64_t j3 = 0; j3 < L; j3++) {
+                double pij = PB[(hh * T + i) * T + j3];
+                for (int64_t c = 0; c < hd; c++) {
+                    int64_t dv_idx = (j3 * nkv + kvh) * hd + c;
+                    DV[dv_idx] = DV[dv_idx] + pij * DCTX[i * d + hh * hd + c];
+                }
+            }
+            for (int64_t j4 = 0; j4 < L; j4++) {
+                double dS = PB[(hh * T + i) * T + j4]
+                          * (dP_row[j4] - sdot) * scale;
+                for (int64_t c2 = 0; c2 < hd; c2++) {
+                    int64_t dq_idx = (i * nh + hh) * hd + c2;
+                    int64_t dk_idx = (j4 * nkv + kvh) * hd + c2;
+                    DQ[dq_idx] = DQ[dq_idx] + dS * KB[(j4 * nkv + kvh) * hd + c2];
+                    DK[dk_idx] = DK[dk_idx] + dS * QB[(i * nh + hh) * hd + c2];
+                }
+            }
+        }
+    }
+    free(dP_row);
+    return hexa_int(0);
+}
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_attn_core_bwd(HexaVal Q_v, HexaVal K_v,
+                                   HexaVal V_v, HexaVal P_v, HexaVal dctx_v,
+                                   HexaVal dQ_v, HexaVal dK_v, HexaVal dV_v,
+                                   HexaVal T_v, HexaVal nh_v, HexaVal nkv_v, HexaVal hd_v) {
+    return hexa_forge_dispatch_attn_core_bwd(Q_v, K_v, V_v, P_v, dctx_v,
+                                             dQ_v, dK_v, dV_v, T_v, nh_v, nkv_v, hd_v);
+}
+
 /* groupnorm(x, gamma, beta, y, mean, inv, xhat, T, C, G) -> int rc.
  * EXACTLY the OP-18 groupnorm_gelu body MINUS the final GELU (and the `a`
  * out buffer): two-pass mean/var (t-outer, c-inner), eps=1e-5, 40-iter

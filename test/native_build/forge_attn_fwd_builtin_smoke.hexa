@@ -1,0 +1,39 @@
+// test/native_build/forge_attn_fwd_builtin_smoke.hexa
+// LLM-path forge_dispatch_attn_core_fwd — consumer-compile smoke.
+//
+// forge_dispatch_attn_core_fwd(Q, K, V, P_out, ctx_out, T, nh, nkv, hd)
+// -> int rc (9-arg; ALL farr-ids/ints, NO scalar-by-value) is a native runtime
+// builtin (device-resident GQA attention-core forward mirroring host
+// nn_attn_core_fwd, softmax exp = dt_exp / device _hx_dt_exp_dev twin; no-CUDA
+// build -> -1 -> host fallback). It lowers via self/codegen.hexa gen2_expr
+// (len==9 block) to hexa_forge_dispatch_attn_core_fwd (declared in
+// self/runtime.h).
+//
+// WHY THIS SMOKE EXISTS: same CLASS as forge_attn_bwd_builtin_smoke / forge_
+// layernorm_builtin_smoke (#4339) — byteeq is NECESSARY but NOT SUFFICIENT
+// (self/ never calls this -> inert -> gen3==gen4 reconverges even if the binding
+// is misplaced / the symbol is undeclared). The layernorm #4339 failure mode was
+// a binding in the WRONG len block (unreachable → undeclared C symbol, green-but-
+// broken). CRITICALLY the len==9 block already held ONE clause
+// (farr_pauli_expectation_batch, RFC-037) so a fwd binding placed anywhere else
+// would silently miss. This smoke CALLS the builtin so it MUST lower to the
+// correct symbol from the len==9 block AND link every PR. SSOT: convergence
+// codegen-hexa-1.
+//
+// Asserts COMPILATION + LOWERING + LINK, not a numeric result: on a non-CUDA
+// build the dispatcher returns -1 (host fallback). Reaching the end = PASS.
+fn main() {
+    let T = 2
+    let nh = 2
+    let nkv = 1
+    let hd = 2
+    let d = nh * hd
+    let Q       = farr_zeros(T * nh * hd)
+    let K       = farr_zeros(T * nkv * hd)
+    let V       = farr_zeros(T * nkv * hd)
+    let P_out   = farr_zeros(nh * T * T)
+    let ctx_out = farr_zeros(T * d)
+    let rcf = forge_dispatch_attn_core_fwd(Q, K, V, P_out, ctx_out, T, nh, nkv, hd)
+    print("forge_dispatch_attn_core_fwd compiled+lowered+ran: rc=") ; println(rcf)
+    println("forge_attn_fwd_builtin_smoke: PASS (device attn_core_fwd builtin lowers to hexa_forge_dispatch_attn_core_fwd + link)")
+}

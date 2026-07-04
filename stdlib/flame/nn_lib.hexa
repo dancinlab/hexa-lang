@@ -198,7 +198,13 @@ pub fn nn_rmsnorm_fwd(x: int, g: int,
 // scale = 1/sqrt(hd) baked into scores.  GQA grouping: kvh = hh / n_rep
 // where n_rep = nh / nkv.
 
-fn _nn_softmax_row(s: int, p_out: int, base: int, L: int) {
+// `pub` (F-OP19 re-freeze): the flame_nn_test F-RFC043-LAYER-EQ-ATTN-FWD anchor
+// CALLS this exact softmax as its reference transcendental step. Sharing the ONE
+// compiled softmax keeps at_fwd_P == 0.0 by construction — a second independent
+// dt_exp softmax diverges by 2^-54 (inlined dt_exp's final square feeds the Σ-add
+// and the C compiler contracts that mul-add differently per TU). See the RE-FREEZE
+// block above ref_attn_core_fwd in flame_nn_test.hexa.
+pub fn _nn_softmax_row(s: int, p_out: int, base: int, L: int) {
     // s : input scores farr (L-len); p_out : output farr; base : offset
     // in p_out to write to. Numerically-stable: subtract max.
     // Uses farr_get/farr_set with explicit indexing (no separate temp farr).
@@ -211,7 +217,14 @@ fn _nn_softmax_row(s: int, p_out: int, base: int, L: int) {
     let mut tot = 0.0
     let mut i2 = 0
     while i2 < L {
-        let e = exp(farr_get(s, i2) - m)
+        // F-OP19 move (mirrors clm_prod _ce_grad / nn_ce_loss_allpos softmax):
+        // libm exp diverges 1 ULP arm64-macos vs x86-linux, so it cannot be
+        // matched bit-for-bit by any device exp. dt_exp (flame_math, 12-term
+        // scaled-Taylor / range-halving) is byte-identical on ALL arch/OS and
+        // has an exact device twin (_hx_dt_exp_dev) → the attn_core_fwd softmax
+        // seam becomes byte-eq. scale stays on libm sqrt (IEEE correctly-rounded
+        // == device sqrt(double)).
+        let e = dt_exp(farr_get(s, i2) - m)
         // stash e into p_out[base + i2] (we'll renormalize in pass 2).
         let _ = farr_set(p_out, base + i2, e)
         tot = tot + e
@@ -231,6 +244,23 @@ fn _nn_softmax_row(s: int, p_out: int, base: int, L: int) {
 pub fn nn_attn_core_fwd(Q: int, K: int, V: int,
                         P_out: int, ctx_out: int,
                         T: int, nh: int, nkv: int, hd: int) {
+    // HEXA-FUSION L3 (LLM-path ATTN FWD glue half) device-resident seam →
+    // _hx_cuda_farr_attn_core_fwd_gpu (ONE thread replays the host hh→i→j→c
+    // loop nest: scores dot·scale → causal softmax → ctx weighted-sum, all
+    // SEQUENTIAL). The softmax exp is _hx_dt_exp_dev = the device twin of the
+    // dt_exp the host _nn_softmax_row now uses (F-OP19), so the FWD seam is
+    // byte-eq (previously DEFERRED because the host softmax bound libm exp);
+    // scale = libm sqrt (bit-identical); __dmul_rn/__dadd_rn defeat FMA (host
+    // FP_CONTRACT OFF) → max|Δ|=0. P_out/ctx_out kept DEVICE-RESIDENT. Same env
+    // gate; OFF / no-CUDA → rc=-1 → the host loop below UNCHANGED (byte-eq,
+    // proven by clm_prod_nn_attn_fwd_devseam_eq). The frozen
+    // F-RFC043-LAYER-EQ-ATTN-FWD max|Δ|=0 anchor stays green: its in-test
+    // reference now CALLS the shared production _nn_softmax_row (below, `pub`) for
+    // the exp step, so the transcendental is byte-identical by construction.
+    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_attn_core_fwd(Q, K, V, P_out, ctx_out, T, nh, nkv, hd)
+        if rc == 0 { return }
+    }
     let n_rep = nh / nkv
     let d = nh * hd
     let scale = 1.0 / sqrt(to_float(hd))
@@ -290,6 +320,22 @@ pub fn nn_attn_core_fwd(Q: int, K: int, V: int,
 pub fn nn_attn_core_bwd(Q: int, K: int, V: int, P: int, dctx: int,
                         dQ_out: int, dK_out: int, dV_out: int,
                         T: int, nh: int, nkv: int, hd: int) {
+    // HEXA-FUSION L3 (LLM-path ATTN BWD glue half) device-resident seam →
+    // _hx_cuda_farr_attn_core_bwd_gpu (ONE thread replays the host hh→i→j→c
+    // loop nest: SEQUENTIAL dP_row/sdot recompute + libm-sqrt scale, dV/dK
+    // accumulate in host order; __dmul_rn/__dadd_rn/__dsub_rn defeat FMA →
+    // bit-exact). NO exp on this path. dQ/dK/dV ACCUMULATE INTO the caller-
+    // zeroed buffers, kept DEVICE-RESIDENT. Same env gate; OFF / no-CUDA →
+    // rc=-1 → the host loop below UNCHANGED (byte-eq, proven by
+    // clm_prod_nn_attn_bwd_devseam_eq). NOTE the FWD softmax seam is now WIRED
+    // (see nn_attn_core_fwd): its host softmax migrated libm exp → dt_exp
+    // (F-OP19), matched by the device _hx_dt_exp_dev twin, so both fwd and bwd
+    // attention-core seams are byte-eq.
+    if env("HEXA_DEVRESIDENT_NN") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_attn_core_bwd(Q, K, V, P, dctx,
+                                              dQ_out, dK_out, dV_out, T, nh, nkv, hd)
+        if rc == 0 { return }
+    }
     let n_rep = nh / nkv
     let d = nh * hd
     let scale = 1.0 / sqrt(to_float(hd))
