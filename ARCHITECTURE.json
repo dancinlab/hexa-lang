@@ -325,6 +325,13 @@
         "value": "CONFLICTING PR를 수동 리프레시할 때, worktree의 로컬 PR 브랜치가 자기 리모트 카운터파트보다 뒤처져 있을 수 있다(이전 세션/reap이 그 브랜치 리모트에 이미 push함). 실측 2026-07-03 #4409: worktree tip이 origin/<branch>보다 behind 23인데 그 위에서 바로 origin/main을 머지→ARCHITECTURE 충돌 수동해소까지 마쳤으나 push가 non-fast-forward로 거부(엉뚱한 base). 게다가 리모트 tip 자체도 과거 main만 머지한 상태라 현재 main과 재충돌. stage-resolve-runtime-a-1(pool checkout-without-fetch)과 다른 메커니즘=로컬 worktree가 자기 브랜치 리모트보다 뒤처짐.",
         "threshold": "재발조건=worktree에서 CONFLICTING PR 브랜치에 origin/main을 머지하기 전에 그 브랜치의 리모트 tip과 동기화 안 함(git status -sb의 behind-N 무시). 해결: 머지 전 반드시 (1)git fetch origin <branch> (2)git status -sb로 behind-count 확인 (3)hard-reset을 origin/<branch>로 정렬(reset-ok 사유 명시) 후 origin/main 재머지. 캐논=sidecar reap이 이 순서를 내장하므로 가능하면 수동 대신 reap 사용; reap이 doc충돌로 abort하면 위 3스텝을 손으로.",
         "source": "tool/reap"
+      },
+      {
+        "id": "stack-landing-guard-yml-1",
+        "state": "pos-conv",
+        "value": "static-types r8~r11+F0/F3/F4 타워를 스택 PR 체인으로 올리며 각 PR base를 main이 아닌 부모 feature 브랜치로 둠 → 각 PR이 down-stack 머지되어 GitHub MERGED 배지는 '부모 흡수'만 의미하는데 tip→main PR이 한 번도 안 열려 root(#4457 r7prep) 이후 +688줄(HX3015~17 포함) 전체가 좌초. 5개 PR(#4476·#4495·#4498·#4515·#4518)이 초록 배지를 단 채 콘텐츠 main 전무 = release-integrity 유령머지가 수 라운드 지속. 검증=git log origin/main -S HX3017/_types_static_flags_hoist EMPTY. 복구=r11-e0063 타워를 squash-onto-clean으로 main 재착지(byteeq-real 3-target 게이트).",
+        "threshold": "재발조건=머지된 head SHA가 main ancestor인지 사후검증 부재 + MERGED배지=실착지 착시. 해결=stack-landing-guard.yml(base≠main 머지 시 PR 경고+ledger issue 기록·main push마다 merge-base --is-ancestor 재조정·전량 착지 시 auto-close). 스택 root 착지 시 base 브랜치 즉시 삭제 관행이 GitHub 자동 retarget을 발동시켜 보강.",
+        "source": ".github/workflows/stack-landing-guard.yml"
       }
     ]
   },
