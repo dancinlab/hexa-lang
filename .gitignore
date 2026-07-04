@@ -173,7 +173,6 @@ state/*
 !state/hexa-own/
 !state/static-types/
 !state/rfc_advanced_typesystem.md
-!state/rfc_function_overloading.md
 !state/rfc_reseed_canonical_keywords.md
 !state/rfc_drop_raii.md
 !state/rfc_operator_overload.md
