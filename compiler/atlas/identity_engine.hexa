@@ -115,9 +115,27 @@ pub fn af(n, which) -> int {
             m = m / p
             e = e + 1
         }
-        sig = sig * ((ipow(p, e + 1) - 1) / (p - 1))
-        sig2 = sig2 * ((ipow(p, 2 * (e + 1)) - 1) / (ipow(p, 2) - 1))
-        sig3 = sig3 * ((ipow(p, 3 * (e + 1)) - 1) / (ipow(p, 3) - 1))
+        // σ_k(p^e) = Σ_{i=0}^e p^{ki} via Horner (t = t·p^k + 1, e iterations) —
+        // overflow-safe: never forms the closed-form's p^{k(e+1)} intermediate,
+        // which wrapped i64 (p^6 ≥ 2^63 for p ≥ 1627) and corrupted σ2/σ3 values
+        // for any n with a prime factor ≥ 1627. Identical to the closed form
+        // wherever it did not overflow. #M7 Fable root-cause (identity_engine).
+        let pk1 = p
+        let pk2 = p * p
+        let pk3 = pk2 * p
+        let mut g1 = 1
+        let mut g2 = 1
+        let mut g3 = 1
+        let mut gi = 0
+        while gi < e {
+            g1 = g1 * pk1 + 1
+            g2 = g2 * pk2 + 1
+            g3 = g3 * pk3 + 1
+            gi = gi + 1
+        }
+        sig = sig * g1
+        sig2 = sig2 * g2
+        sig3 = sig3 * g3
         tau = tau * (e + 1)
         phi = phi * (ipow(p, e - 1) * (p - 1))
         psi = psi * (ipow(p, e - 1) * (p + 1))
@@ -157,6 +175,89 @@ pub fn af(n, which) -> int {
     return n / rad                                        // 17=core = n/rad
 }
 
+// ── i64 overflow-safe product guards (M7 · wrapping-int honesty) ──────────
+// hexa int is a WRAPPING i64: a 3-factor af product can exceed 2^63 and wrap
+// (measured: n²·J₃(n) at n=16384 = 7·2^67 ≡ 0 mod 2^64 — a wrapped side
+// spuriously equalled another wrapped side and minted a FAKE bounded-unique
+// singleton). Each n is now classified: neither side overflows → exact
+// compare; exactly ONE side overflows → exact MISMATCH (its true magnitude
+// exceeds 2^63-1 while the other side is a representable i64 = magnitude
+// separation, a proof); BOTH overflow → untestable → the n is skipped AND the
+// verdict is tainted (a singleton/universal claim over [2,N] is refused: -1/0,
+// since a hidden match could live at a skipped n). Precedent: MAXARG skip.
+fn _i64_min() -> int { return (0 - 9223372036854775807) - 1 }
+
+// does x*y overflow i64? Exact quotient check; the idiv-trap edge
+// (INT64_MIN / -1) is excluded by handling x or y == -1 before dividing.
+fn _mul_ovf(x, y) -> int {
+    if x == 0 { return 0 }
+    if y == 0 { return 0 }
+    if x == 0 - 1 {
+        if y == _i64_min() { return 1 }
+        return 0
+    }
+    if y == 0 - 1 {
+        if x == _i64_min() { return 1 }
+        return 0
+    }
+    let p = x * y
+    if p / x != y { return 1 }
+    return 0
+}
+
+// does u*v*w overflow i64? A zero factor is EXACT (wrapped product = 0 = true
+// product). Flagged ⇒ true product unrepresentable OR exactly INT64_MIN (the
+// lone conservative edge: +2^63 prefix × -1) — the verifiers guard that edge.
+fn _prod3_ovf(u, v, w) -> int {
+    if u == 0 { return 0 }
+    if v == 0 { return 0 }
+    if w == 0 { return 0 }
+    if _mul_ovf(u, v) == 1 { return 1 }
+    if _mul_ovf(u * v, w) == 1 { return 1 }
+    return 0
+}
+
+// per-n verdict for A·B·C vs D·E·F: 1=exact match · 0=exact mismatch (incl.
+// one-side-overflow magnitude refutation) · -1=untestable (both sides overflow).
+fn _cmp3_at(n, a, b, c, d, e, f) -> int {
+    let l1 = af(n, a)
+    let l2 = af(n, b)
+    let l3 = af(n, c)
+    let r1 = af(n, d)
+    let r2 = af(n, e)
+    let r3 = af(n, f)
+    let lo = _prod3_ovf(l1, l2, l3)
+    let ro = _prod3_ovf(r1, r2, r3)
+    if lo == 1 && ro == 1 { return 0 - 1 }
+    if lo == 1 {
+        if r1 * r2 * r3 == _i64_min() { return 0 - 1 }
+        return 0
+    }
+    if ro == 1 {
+        if l1 * l2 * l3 == _i64_min() { return 0 - 1 }
+        return 0
+    }
+    if l1 * l2 * l3 == r1 * r2 * r3 { return 1 }
+    return 0
+}
+
+// per-n verdict for A·B vs C·D. _mul_ovf is EXACT for a single multiply, so a
+// flagged side is truly unrepresentable — one-side overflow is a certain
+// mismatch (no INT64_MIN guard needed at arity 2).
+fn _cmp2_at(n, a, b, c, d) -> int {
+    let l1 = af(n, a)
+    let l2 = af(n, b)
+    let r1 = af(n, c)
+    let r2 = af(n, d)
+    let lo = _mul_ovf(l1, l2)
+    let ro = _mul_ovf(r1, r2)
+    if lo == 1 && ro == 1 { return 0 - 1 }
+    if lo == 1 { return 0 }
+    if ro == 1 { return 0 }
+    if l1 * l2 == r1 * r2 { return 1 }
+    return 0
+}
+
 // ── exact-int identity verify: first solution n of af(a)·af(b)==af(c)·af(d)
 //    over [2,N], plus a count cap. bounded-unique ⟺ exactly one solution ≥4. ──
 // Returns: first solution n (0 if none) when solution count==1 and n>=4,
@@ -164,9 +265,12 @@ pub fn af(n, which) -> int {
 pub fn verify_identity(a, b, c, d, N) -> int {
     let first = 0
     let count = 0
+    let skipped = 0
     let n = 2
     while n <= N {
-        if af(n, a) * af(n, b) == af(n, c) * af(n, d) {
+        let v = _cmp2_at(n, a, b, c, d)
+        if v < 0 { skipped = skipped + 1 }
+        if v == 1 {
             count = count + 1
             if count == 1 { first = n }
             if count > 1 { return -1 }
@@ -174,6 +278,7 @@ pub fn verify_identity(a, b, c, d, N) -> int {
         n = n + 1
     }
     if count == 0 { return -2 }
+    if skipped > 0 { return -1 }        // uniqueness untestable (some n overflow-tainted)
     if first >= 4 { return first }
     return -1
 }
@@ -187,9 +292,12 @@ pub fn verify_identity(a, b, c, d, N) -> int {
 pub fn verify_identity3(a, b, c, d, e, f, N) -> int {
     let first = 0
     let count = 0
+    let skipped = 0
     let n = 2
     while n <= N {
-        if af(n, a) * af(n, b) * af(n, c) == af(n, d) * af(n, e) * af(n, f) {
+        let v = _cmp3_at(n, a, b, c, d, e, f)
+        if v < 0 { skipped = skipped + 1 }
+        if v == 1 {
             count = count + 1
             if count == 1 { first = n }
             if count > 1 { return -1 }
@@ -197,6 +305,7 @@ pub fn verify_identity3(a, b, c, d, e, f, N) -> int {
         n = n + 1
     }
     if count == 0 { return -2 }
+    if skipped > 0 { return -1 }        // uniqueness untestable (some n overflow-tainted)
     if first >= 4 { return first }
     return -1
 }
@@ -210,7 +319,9 @@ pub fn verify_identity3(a, b, c, d, e, f, N) -> int {
 pub fn is_universal2(a, b, c, d, N) -> int {
     let n = 2
     while n <= N {
-        if af(n, a) * af(n, b) != af(n, c) * af(n, d) { return 0 }
+        // 0 = exact refutation · -1 = untestable (both sides overflow):
+        // either way universal-in-[2,N] cannot be certified.
+        if _cmp2_at(n, a, b, c, d) != 1 { return 0 }
         n = n + 1
     }
     return 1
@@ -221,7 +332,9 @@ pub fn is_universal2(a, b, c, d, N) -> int {
 pub fn is_universal3(a, b, c, d, e, f, N) -> int {
     let n = 2
     while n <= N {
-        if af(n, a) * af(n, b) * af(n, c) != af(n, d) * af(n, e) * af(n, f) { return 0 }
+        // 0 = exact refutation · -1 = untestable (both overflow): neither
+        // certifies universal-in-[2,N] (a c2 mislabel to return 1 on skips).
+        if _cmp3_at(n, a, b, c, d, e, f) != 1 { return 0 }
         n = n + 1
     }
     return 1
@@ -569,6 +682,32 @@ pub fn ie_term3_fingerprint(a, b, c, N) -> int {
     let n = 2
     while n <= N {
         let v = _ie_res(af(n, a) * af(n, b) * af(n, c))
+        h = ((h * base) + v) % p
+        n = n + 1
+    }
+    return h
+}
+
+// Fold a caller-supplied value vector into the frozen rolling hash — the SAME
+// kernel as ie_term_fingerprint (seed 1469598103 · base 1000003 · P=2^61-1 ·
+// _ie_res sign-fold), so the OUROBOROS-novel Emerge generators (emerge.hexa
+// emerge2) can fingerprint NET-NEW value sequences (Dirichlet convolution ·
+// iterate/orbit · congruence-witness · solution-indicator) in the SAME space
+// as FP_k and the KNOWN catalog WITHOUT re-implementing the hash (a 1-line
+// drift would silently degrade every kc_classify to always-gamma). vals[i] is
+// the value at n = lo+i; the fold runs n = lo..hi inclusive (callers use
+// lo=2, hi=N). Values may be any exact int (negative or >= P) — _ie_res folds
+// them. The to_int(to_string(.)) generic-array read is exact for native BigInt
+// (#4161), so witness quotients beyond i64 round-trip exactly.
+// Equivalence (gate T1 in emerge_test): for a size-2 term the vals-vector fold
+// reproduces ie_term_fingerprint byte-for-byte by construction.
+pub fn ie_vec_fingerprint(vals: array, lo, hi) -> int {
+    let p = _ie_P()
+    let base = _ie_B()
+    let h = 1469598103
+    let n = lo
+    while n <= hi {
+        let v = _ie_res(to_int(to_string(vals[n - lo])))
         h = ((h * base) + v) % p
         n = n + 1
     }

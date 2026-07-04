@@ -55,11 +55,35 @@ case "$kind" in
     alt_want_labels='self-hosted macOS ARM64 hexa-darwin-mini'
     alt_sh_label='["self-hosted","macOS","ARM64","hexa-darwin-mini"]'
     ;;
+  darwin-any)
+    # SLOT-FREE darwin class (faithful-nobaseline + advisory smokes): fully
+    # self-contained jobs (checkout → shared release_build → in-repo gates) that
+    # already run correctly on the macos-15 cloud fallback — they need NO
+    # $HX_HOME gen3 slot. Primary stays ghost (idle-preferred: the daily-driver
+    # mini is untouched while ghost has a free runner); the busy path emits the
+    # COMMON label set BOTH classes carry, so when nothing is idle GitHub itself
+    # assigns to whichever darwin runner frees first — the dispatch snapshot can
+    # no longer pin a queued job to 3 busy ghost runners while 6 mini runners sit
+    # idle (measured starvation 2026-07-04, PR #4535 faithful queued for hours).
+    # Slot-DEPENDENT jobs (selfhost-byteeq-real: ghost's graduated gen3 slot at
+    # $HX_HOME/self/native/selfhost) MUST keep kind=darwin (+ primary_only=1).
+    fallback='"macos-15"'
+    want_labels='self-hosted macOS ARM64 selfhost-gen2fix'
+    sh_label='["self-hosted","macOS","ARM64","selfhost-gen2fix"]'
+    alt_want_labels='self-hosted macOS ARM64'
+    alt_sh_label='["self-hosted","macOS","ARM64"]'
+    busy_label='["self-hosted","macOS","ARM64"]'   # busy → common class, no snapshot pin
+    ;;
   *)
-    echo "::error::ci_pick_runner: unknown kind '$kind' (want linux|darwin)" >&2
+    echo "::error::ci_pick_runner: unknown kind '$kind' (want linux|darwin|darwin-any)" >&2
     exit 2
     ;;
 esac
+
+# kinds without an explicit busy_label queue on the primary label (today's
+# behavior). darwin-any sets it to the COMMON class so a queued slot-free job
+# is not snapshot-pinned to busy ghost while idle mini runners sit unused.
+busy_label="${busy_label:-$sh_label}"
 
 emit() {  # emit <json-label> ; also echoes a human notice
   local val="$1"
@@ -157,10 +181,13 @@ if [ "$primary_only" != "1" ] && [ "${alt_idle_matches:-0}" -ge 1 ] 2>/dev/null;
   exit 0
 fi
 
-# ③ primary online (busy) — queue on the primary (today's behavior preserved)
+# ③ primary online (busy) — slot kinds queue on the primary (today's behavior);
+#    darwin-any emits the COMMON class (busy_label) so the queued slot-free job
+#    is taken by whichever darwin runner (ghost OR mini) frees first — no
+#    snapshot-pin to busy ghost while idle mini runners sit unused.
 if [ "${online_matches:-0}" -ge 1 ] 2>/dev/null; then
-  echo "::notice::$online_matches online (busy) self-hosted runner(s) match [$want_labels] → self-hosted (will queue)"
-  emit "$sh_label"
+  echo "::notice::$online_matches online (busy) self-hosted runner(s) match [$want_labels] → self-hosted (will queue on $busy_label)"
+  emit "$busy_label"
   exit 0
 fi
 
