@@ -1851,7 +1851,7 @@ build_runtime_a_from_source() {
         #   1    = strict: a missing/bad seed is FATAL (measurement / verify scripts).
         # Seeds self/native/hxlcl_strcmp_{x86_64,arm64-linux,arm64}.s baked by the pool.
         # convergence stage-resolve-runtime-a-2 · regen-hxlcl-free-native-s-sh-1.
-        _rnsc_mode="${HEXA_RT_NATIVE_STRCMP:-0}"
+        _rnsc_mode="${HEXA_RT_NATIVE_STRCMP:-auto}"
         if [ "$_rnsc_mode" != "0" ]; then
             _rnsc_tgt="${TARGET:-}"; _rnsc_tgt="${_rnsc_tgt%-musl}"; _rnsc_tgt="${_rnsc_tgt%-cuda}"
             [ -z "$_rnsc_tgt" ] && case "$(uname -sm 2>/dev/null)" in
