@@ -1,15 +1,15 @@
-// HEXA Native Compiler — HEXA-OWN L3 M3 loan-pass smoke test (HX3014)
+// HEXA Native Compiler — HEXA-OWN L3 M3+M4 loan-pass smoke test (HX3014)
 //
-// @version 0.1.0
+// @version 0.2.0
 // @capabilities [pure]
 //
-// Probe matrix for the MIR intra-block loan pass (HEXA_BORROWCK=1,
-// spec state/hexa-own/l3_m3_spec.md §4). Every source probe runs the
-// REAL pipeline — lex → parse → ast_to_hir lower → lower_hir — twice:
-// once with the flag ON (expected HX3014 count per probe) and once
-// with it OFF (expected 0 diagnostics of ANY code: byteeq-neutral
-// stream proof at the diag level; asm byte-identity is the pool/CI
-// byteeq gate's job).
+// Probe matrix for the MIR loan pass (HEXA_BORROWCK=1, intra-block M3
+// spec state/hexa-own/l3_m3_spec.md §4 + cross-block NLL liveness M4).
+// Every source probe runs the REAL pipeline — lex → parse → ast_to_hir
+// lower → lower_hir — twice: once with the flag ON (expected HX3014
+// count per probe) and once with it OFF (expected 0 diagnostics of ANY
+// code: byteeq-neutral stream proof at the diag level; asm
+// byte-identity is the pool/CI byteeq gate's job).
 //
 //   hz_write_alias        `let b = a; b[0]=99; println(a[0])`   → ×1 (Rule 1)
 //   hz_write_alias_field  struct alias, `d.depth=…` then `c.depth` → ×1
@@ -19,12 +19,22 @@
 //   fp_copy_int           scalar copy chain                     → 0 (Copy skip)
 //   fp_write_same_name    `a[0]=1; println(a[0])`, no alias     → 0 (XOR ≥2 names)
 //   fp_repoint            `b = [9]` detaches b before the write → 0 (edge-kill)
-//   xb_write_in_branch    write inside `if`, read after         → 0 (M4 ceiling, documented)
+//   xb_write_in_branch    write inside `if`, read after join    → ×1 (M4: was the
+//                         documented M3 ceiling — cross-block now caught)
+//   xb_loop_carried       write via alias inside `while`, read of the
+//                         other name earlier in the SAME body block → ×1
+//                         (M4: body reaches itself via the back-edge)
+//   fp_benign_join        write to a NON-aliased array in a branch +
+//                         read-only alias pair across the join    → 0
+//                         (M4 control: reach without group match = silent)
 //   tp_own_param_move     hand-built HIR `@own` param + `g(a); a[0]` → ×1 (Rule 2)
 //
 // The hz_write_alias / fp_arr_alias_read PAIR is the M0-motivated
 // discriminator: identical alias shape, the only difference is the
 // write — M0 measured the pre-M3 lint as unable to tell them apart.
+// The xb_write_in_branch / fp_benign_join PAIR is the M4 analogue:
+// both cross a join; only the one whose reaching write hits the SAME
+// alias group through a different name warns.
 //
 // tp_own_param_move is hand-built HIR (mir_test.hexa convention)
 // because the inline `@own` param parser carrier (#4470/#4485 stack)
@@ -201,15 +211,51 @@ fn _src_fp_repoint() -> string {
 }
 
 fn _src_xb_write_in_branch() -> string {
-    // Intra-block ceiling (documented, spec §5.3): the write lives in
-    // the `if`'s then-block, the read in the join block → different
-    // block ids → invisible BY DESIGN. This is M4's (backward liveness
-    // over Block.preds/succs) discriminating probe, pinned here as a
-    // measured negative.
+    // M4's discriminating probe (was the documented M3 intra-block
+    // ceiling, pinned at 0): the write lives in the `if`'s then-block,
+    // the read in the join block — the then-block REACHES the join
+    // through the CFG edge, so the cross-block fixed-point now warns.
     let mut s = "fn xbb(c: bool) {\n"
     s = s + "    let a = [1]\n"
     s = s + "    let b = a\n"
     s = s + "    if c { b[0] = 1 }\n"
+    s = s + "    println(a[0])\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_xb_loop_carried() -> string {
+    // M4 loop-carried alias: the read of `a` textually PRECEDES the
+    // write through `b` in the same while-body block, so the
+    // order-aware intra-block rule stays silent — but the body block
+    // reaches itself through the loop back-edge (body → header →
+    // body), so iteration N's read observes iteration N-1's write.
+    let mut s = "fn xbl() {\n"
+    s = s + "    let a = [1, 2]\n"
+    s = s + "    let b = a\n"
+    s = s + "    let mut i = 0\n"
+    s = s + "    while i < 2 {\n"
+    s = s + "        println(a[0])\n"
+    s = s + "        b[0] = 7\n"
+    s = s + "        i = i + 1\n"
+    s = s + "    }\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_benign_join() -> string {
+    // M4 no-FP control: a real write event (through `z`) reaches the
+    // join, and a read-only alias pair (`a`/`b`) crosses the same join
+    // — but the reaching write's group never matches the alias pair's
+    // group, so the cross-block pass must stay silent.
+    let mut s = "fn fpj(c: bool) {\n"
+    s = s + "    let a = [1, 2]\n"
+    s = s + "    let b = a\n"
+    s = s + "    let z = [5]\n"
+    s = s + "    if c {\n"
+    s = s + "        z[0] = 9\n"
+    s = s + "        println(b[0])\n"
+    s = s + "    }\n"
     s = s + "    println(a[0])\n"
     s = s + "}\n"
     return s
@@ -359,7 +405,7 @@ fn _run_tp_own() -> bool {
 
 fn main() {
     println("══════════════════════════════════════════════")
-    println("  HEXA-OWN L3 M3 — intra-block loan pass (HX3014)")
+    println("  HEXA-OWN L3 M3+M4 — loan pass + NLL liveness (HX3014)")
     let mut mode = "OFF (byteeq-neutral sweep)"
     if env("HEXA_BORROWCK") == "1" { mode = "ON (HEXA_BORROWCK=1)" }
     println("  flag mode: " + mode)
@@ -375,12 +421,14 @@ fn main() {
     if !_run_probe("fp_copy_int", _src_fp_copy_int(), 0) { ok = false }
     if !_run_probe("fp_write_same_name", _src_fp_write_same_name(), 0) { ok = false }
     if !_run_probe("fp_repoint", _src_fp_repoint(), 0) { ok = false }
-    if !_run_probe("xb_write_in_branch", _src_xb_write_in_branch(), 0) { ok = false }
+    if !_run_probe("xb_write_in_branch", _src_xb_write_in_branch(), 1) { ok = false }
+    if !_run_probe("xb_loop_carried", _src_xb_loop_carried(), 1) { ok = false }
+    if !_run_probe("fp_benign_join", _src_fp_benign_join(), 0) { ok = false }
     if !_run_tp_own() { ok = false }
 
     println("")
     if ok {
-        println("ALL PASS — M3 discriminator holds (write-alias warns, read-alias silent)")
+        println("ALL PASS — M3 discriminator + M4 cross-block liveness hold")
     } else {
         println("FAILURES — see above")
         exit(1)
