@@ -448,6 +448,25 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3021",
+        title: "conflicting borrow while a mutable borrow is live",
+        // Warning band (SSOT F4 warn-first), the PAIR of the HX3019 loan-pass
+        // family: the opt-in borrow checker (`HEXA_BORROWCK=1`) surfaces a
+        // second concurrent borrow of a value that already has a live mutable
+        // loan (or a new mutable borrow while any loan is live). Under
+        // `HEXA_BORROWCK_STRICT=1` the SAME diagnostic instance is re-banded to
+        // a build-refusing Error via the sanctioned caller override in
+        // `_bck_emit_borrow_conflict` (identical mechanism to HX3014/HX3019).
+        // With the flag unset the loan pass is inert (`_bck_active` false), so
+        // nothing is emitted and the diagnostic stream + emitted bytes are
+        // byte-identical — release integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "cannot borrow `{origin}` as {new_kind} for `{name}` because it is also borrowed as {other_kind} by `{other}` at line {other_line}",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN E2+E3) found a second live borrow of a value that is already borrowed incompatibly. hexa uses the same aliasing-XOR-mutation model as Rust: a value may have EITHER any number of shared (`&`) borrows OR exactly one mutable (`&mut`) borrow live at once, never both. This is Rust's E0502 ('cannot borrow X as _ because it is also borrowed as mutable'; rustc_borrowck reports it when two conflicting loans overlap in scope). The E2 loan registry records each `let r = &x` / `let r = &mut x` over a non-global function-local as a loan (name → origin, mutability bit, live via kill-on-reassign); at a NEW borrow of the same origin E3 scans for a conflicting LIVE loan and fires when the existing loan is `&mut` (any second borrow is illegal) OR the new borrow is `&mut` (a mutable borrow demands exclusivity). Two shared borrows (`&` while `&`) never conflict. The detection is conservative / flow-insensitive within a scope: only same-fn live loans count, a loan reassigned to a non-borrow RHS is killed (newest-entry-per-name wins), and borrows created through a call argument, a struct field / array element, or a closure are NOT tracked (precision-first — quiet false-negatives over loud false-positives). Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical. Fix: end the first borrow before starting the second (borrows end at last use under NLL), or take a single borrow of the right mutability and thread it through instead of aliasing.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,

@@ -5212,7 +5212,7 @@
                     "detail": ""
                   },
                   {
-                    "name": "(2) `dyn Trait` fat-pointer vtable — only runtime-tag dispatch is expressible (PR#4086, HEXA_TRAIT_DISPATCH); ",
+                    "name": "(2) `dyn Trait` fat-pointer vtable — only runtime-tag dispatch is expressible (PR#4086, HEXA_TRAIT_DISPATCH — reverted #4572: broke hexat seed-converge, re-land pending); ",
                     "role": "",
                     "id": "language-surface-design-walls-measured-ceilings-intentional-identity-trade-wall-3",
                     "detail": ""
@@ -5224,7 +5224,7 @@
                     "detail": ""
                   },
                   {
-                    "name": "(4) type-based function overloading — types unknown at compile time → arity-mangle / runtime-tag dispatch only (PR#4066); (5) value-dependent const generics — check-only validation (PR#4063, HEXA_CONST_GENERICS); ",
+                    "name": "(4) type-based function overloading — types unknown at compile time → arity-mangle / runtime-tag dispatch only (PR#4066 — reverted #4572: broke hexat seed-converge, re-land pending); (5) value-dependent const generics — check-only validation (PR#4063, HEXA_CONST_GENERICS); ",
                     "role": "",
                     "id": "language-surface-design-walls-measured-ceilings-intentional-identity-trade-wall-5",
                     "detail": ""

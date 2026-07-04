@@ -551,6 +551,12 @@ pub let mut _bck_own_pidx: [i64] = []
 pub let mut _bck_ref_names: [string] = []
 pub let mut _bck_ref_origins: [string] = []
 pub let mut _bck_ref_lines: [i64] = []
+// HEXA-OWN E2 — loan-registry mutability bit (parallel to the arrays
+// above): true for a `&mut x` borrow, false for a shared `&x`. Turns the
+// ref registry into a minimal loan model (name → origin, mut-bit, live via
+// kill-on-reassign) that E3's borrow-conflict rule (Rust E0502) reads. A
+// KILL row carries `false` (unused — the empty origin already excludes it).
+pub let mut _bck_ref_mut: [bool] = []
 
 fn _bck_reset_fn() {
     _bck_grp_ctr = 0
@@ -576,6 +582,7 @@ fn _bck_reset_fn() {
     _bck_ref_names = []
     _bck_ref_origins = []
     _bck_ref_lines = []
+    _bck_ref_mut = []
 }
 
 fn _bck_new_group() -> i64 {
@@ -707,18 +714,84 @@ fn _bck_find_ref(name: string) -> i64 {
 }
 
 // Record `let name = &origin` (origin is a non-global function-local ident).
-fn _bck_ref_track(name: string, origin: string, line: i64) {
+// `is_mut` is the E2 loan mutability bit (true for `&mut`, false for `&`).
+fn _bck_ref_track(name: string, origin: string, line: i64, is_mut: bool) {
     _bck_ref_names.push(name)
     _bck_ref_origins.push(origin)
     _bck_ref_lines.push(line)
+    _bck_ref_mut.push(is_mut)
 }
 
 // Record a KILL for `name` — a re-let / reassign detached the loan. The
-// empty origin makes the `return` END-scan treat the name as non-escaping.
+// empty origin makes the `return` END-scan (and the E3 conflict scan)
+// treat the name as non-escaping / non-live; the mut bit is irrelevant.
 fn _bck_ref_kill(name: string) {
     _bck_ref_names.push(name)
     _bck_ref_origins.push("")
     _bck_ref_lines.push(0)
+    _bck_ref_mut.push(false)
+}
+
+// ── HEXA-OWN E3 — first borrow-conflict rule (Rust E0502) ────────────
+// Scan the loan registry for an EXISTING LIVE loan of `origin` that
+// conflicts with a NEW borrow (`new_is_mut`). A loan row is LIVE iff it is
+// the newest entry for its name (the END-scan / newest-per-name-wins idiom,
+// so a re-let or a kill shadows it) AND its origin is non-empty (a KILL row
+// has origin ""). The conflict (E0502 "cannot borrow X as _ because it is
+// also borrowed as mutable") fires when the existing loan is `&mut` (any
+// second borrow is illegal) OR the new borrow is `&mut` (a mutable borrow
+// demands exclusivity). Two shared borrows (`&` while `&`) never conflict.
+// Returns the conflicting row index, or -1. Intra-scope / flow-insensitive-
+// conservative: only same-fn live loans count (kills, and every borrow
+// created through a call arg / field / index / closure, are conservative
+// skips = documented false-negatives).
+fn _bck_ref_find_conflict(origin: string, new_is_mut: bool) -> i64 {
+    let mut i = len(_bck_ref_names) - 1
+    while i >= 0 {
+        if len(_bck_ref_origins[i]) > 0 && _bck_ref_origins[i] == origin
+            && _bck_find_ref(_bck_ref_names[i]) == i {
+            if _bck_ref_mut[i] || new_is_mut { return i }
+        }
+        i = i - 1
+    }
+    return 0 - 1
+}
+
+// HX3021 emit (borrow-conflict, Rust E0502) — same-site dedup + STRICT
+// escalation, cloned from `_bck_emit_ret_escape`. `name` is the new binding,
+// `origin` the twice-borrowed value, `new_mut` the new borrow's kind; `other`
+// / `other_mut` / `other_line` describe the existing live loan.
+fn _bck_emit_borrow_conflict(name: string, origin: string, new_mut: bool,
+                             other: string, other_mut: bool, other_line: i64,
+                             sp: Span) {
+    let mut di = 0
+    while di < len(_bck_e_lines) {
+        if _bck_e_lines[di] == sp.line && _bck_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_e_lines.push(sp.line)
+    _bck_e_cols.push(sp.col)
+    let mut b = diag_new("HX3021")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "origin", origin)
+    let mut _nk = "immutable"
+    if new_mut { _nk = "mutable" }
+    b = diag_arg(b, "new_kind", _nk)
+    b = diag_arg(b, "other", other)
+    let mut _ok = "immutable"
+    if other_mut { _ok = "mutable" }
+    b = diag_arg(b, "other_kind", _ok)
+    b = diag_arg(b, "other_line", to_string(other_line))
+    let mut d = diag_emit(b)
+    // STRICT (HEXA_BORROWCK_STRICT) re-bands the SAME diagnostic instance to a
+    // build-refusing Error via the sanctioned caller override — identical to
+    // the HX3014/HX3019 escalation. OFF-strict keeps the catalog Warning band,
+    // and the flag-OFF path never reaches here (byteeq-neutral).
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
 }
 
 // HX3019 emit (return-borrow-escape) — same-site dedup + STRICT escalation,
@@ -2910,7 +2983,24 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                     let _bk_refinner = _bk_rhs_ref.children[0]
                     if _bk_refinner.kind == "ident"
                         && _mir_lookup_global(ctx2, _bk_refinner.text) < 0 {
-                        _bck_ref_track(nm, _bk_refinner.text, e.span.line)
+                        let _bk_new_mut = _bk_rhs_ref.text == "&mut"
+                        // HEXA-OWN E3 — first borrow-conflict rule (E0502).
+                        // Scan for an existing LIVE loan of the SAME origin
+                        // BEFORE registering this borrow (so it never matches
+                        // itself); emit HX3021 on a `&`-while-`&mut` or a
+                        // second-`&mut` conflict. fp_two_shared (`&` then `&`)
+                        // stays silent; fp_sequential relies on the assign-arm
+                        // kill below having detached the earlier loan.
+                        let _bk_cfi = _bck_ref_find_conflict(_bk_refinner.text,
+                                                             _bk_new_mut)
+                        if _bk_cfi >= 0 {
+                            _bck_emit_borrow_conflict(nm, _bk_refinner.text,
+                                _bk_new_mut, _bck_ref_names[_bk_cfi],
+                                _bck_ref_mut[_bk_cfi], _bck_ref_lines[_bk_cfi],
+                                e.span)
+                        }
+                        _bck_ref_track(nm, _bk_refinner.text, e.span.line,
+                                       _bk_new_mut)
                         _bk_is_ref = true
                     }
                 }
@@ -3101,6 +3191,12 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // a KILL so the `return` END-scan sees origin "" and stays silent.
         // A `r = &z` reassignment keeps the loan (conservatively still an
         // escape of a local); only the non-borrow case kills.
+        // HEXA-OWN E3 note: the borrow-conflict scan (E0502) reads this
+        // registry at the LET arm, and the KILL pushed here is exactly what
+        // makes fp_sequential (`let a=&mut x; a=0; let b=&mut x`) silent — the
+        // reassigned loan is no longer live when `b` is borrowed. A `r = &z`
+        // re-borrow created HERE is a conservative E3 skip (no new-loan
+        // conflict check on the assign arm) = documented false-negative.
         if _bck_active && !is_global && len(lhs.text) > 0 && lhs.kind == "ident"
             && _bck_find_ref(lhs.text) >= 0 {
             let _bk_rhs_kill = e.children[1]
