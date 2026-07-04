@@ -9229,7 +9229,17 @@ fn gen2_expr(node) {
             // check chain so struct receivers dispatch to Type__method while
             // array/string/map receivers fall through to the builtin path
             // below. Uses GCC statement-expressions for single-eval of obj.
-            let user_types = _method_registry_lookup(method)
+            let mut user_types = _method_registry_lookup(method)
+            // Opt-in trait-scoped dispatch (HEXA_TRAIT_DISPATCH, default OFF):
+            // narrow candidates to types that implement this method via a
+            // trait (Go itab faithful). Gate OFF → user_types untouched →
+            // byte-identical emit of the existing tag→method ternary chain.
+            if _trait_dispatch_enabled && len(user_types) > 0 {
+                let trait_types = _method_registry_lookup_trait(method)
+                if len(trait_types) > 0 {
+                    user_types = trait_types
+                }
+            }
             if len(user_types) > 0 {
                 // Build arg list (user methods take obj as first param)
                 let mut u_args = []
@@ -10892,10 +10902,23 @@ fn gen2_arm_value(body) {
 // ═══════════════════════════════════════════════════════════
 
 // ── Method registry for ImplBlock (P2-6 struct method dispatch) ──
-// Entries are [method_name, type_name] pairs. Populated during ImplBlock
-// codegen, consumed by Call-on-Field codegen to emit runtime-dispatched
-// mangled calls (Type__method) guarded by hexa_is_type().
+// Entries are [method_name, type_name, trait_name] triples. Populated during
+// ImplBlock codegen, consumed by Call-on-Field codegen to emit runtime-
+// dispatched mangled calls (Type__method) guarded by hexa_is_type(). The
+// third slot records the trait an `impl Trait for Type` block implements
+// ("" for a bare `impl Type { ... }`); it feeds the opt-in trait-scoped
+// dispatch narrowing below.
 let mut _method_registry = []
+
+// Opt-in trait-dispatch gate (HEXA_TRAIT_DISPATCH). Default false →
+// byte-identical emit (the existing runtime tag→method ternary chain at the
+// Call-on-Field site is emitted verbatim). When the env is set, the dispatch
+// site narrows candidate receiver types to those whose ImplBlock declared a
+// trait (Go itab-style: only concrete types that implement the interface are
+// dispatch candidates). Read once per codegen_full() run, mirroring the
+// env() idiom of HEXA_RT_NATIVE_DROP / HEXA_USE_RUNTIME_C. Module-level
+// default false guarantees byteeq-neutrality on any path that never sets it.
+let mut _trait_dispatch_enabled = false
 
 // Current impl target while emitting methods of an `impl T { ... }` block.
 // gen2_impl_block sets this before walking each method body and restores
@@ -10909,6 +10932,23 @@ fn _method_registry_lookup(name) {
     while i < len(_method_registry) {
         let e = _method_registry[i]
         if e[0] == name {
+            out.push(e[1])
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Trait-scoped variant of _method_registry_lookup: returns only the receiver
+// types that provide `name` via a trait impl (registry slot e[2] != "").
+// Consumed by the opt-in HEXA_TRAIT_DISPATCH narrowing at the Call-on-Field
+// dispatch site. Never called when the gate is off → no emit-path effect.
+fn _method_registry_lookup_trait(name) {
+    let mut out = []
+    let mut i = 0
+    while i < len(_method_registry) {
+        let e = _method_registry[i]
+        if e[0] == name && len(e) > 2 && e[2] != "" {
             out.push(e[1])
         }
         i = i + 1
@@ -11033,8 +11073,10 @@ fn gen2_impl_block(node) {
     while mi < len(methods) {
         let m = methods[mi]
         let mangled = type_n + "__" + m.name
-        // Register method for dispatch
-        _method_registry.push([m.name, type_n])
+        // Register method for dispatch. Third slot = the trait this impl
+        // block implements ("" for a bare `impl Type`); consumed by the
+        // opt-in trait-scoped dispatch narrowing (HEXA_TRAIT_DISPATCH).
+        _method_registry.push([m.name, type_n, node.trait_name])
         // Build param list (self + extras)
         let mut params = []
         let mut pi = 0
@@ -14997,6 +15039,11 @@ fn codegen_full(ast) {
     _lambda_def_parts = []
     _lambda_fwd_sigs = []
     _method_registry = []
+    // Opt-in trait-scoped dispatch gate. Read once per emit; default OFF
+    // (unset/empty) → byte-identical output (existing tag→method chain).
+    // Mirrors the env() idiom of HEXA_RT_NATIVE_DROP / HEXA_USE_RUNTIME_C.
+    _trait_dispatch_enabled = false
+    if env("HEXA_TRAIT_DISPATCH") != "" { _trait_dispatch_enabled = true }
     // Drop/RAII auto-scope-exit (opt-in, default-OFF HEXA_DROP_RAII): record
     // which struct types declare an `impl … { fn drop(self) }` so the LetStmt
     // arm can register a synthetic scope-exit drop for `let r = T{…}` bindings.
