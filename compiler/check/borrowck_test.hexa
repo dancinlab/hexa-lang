@@ -298,6 +298,128 @@ fn _src_fp_benign_join() -> string {
     return s
 }
 
+// ── HEXA-OWN L5-E1 — return-borrow-escape (HX3019, Rust E0515) ────
+//
+// The loan pass (HEXA_BORROWCK=1) flags a `return` whose value is a
+// reference into a value OWNED by the current function — directly
+// (`return &x`) or one hop through a ref binding (`let r = &x; return r`).
+// ON → 1 HX3019 per hazard probe; OFF → empty stream (byteeq-neutral).
+// Controls stay at 0: a value return, an unreturned borrow, a borrow of a
+// module global (its storage outlives the call), and a killed ref binding.
+
+fn _src_hz_ret_ref_direct() -> string {
+    // Direct `return &x` over a function-local → HX3019.
+    let mut s = "fn rrd() -> &i64 {\n"
+    s = s + "    let x = 5\n"
+    s = s + "    return &x\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_hz_ret_refmut_direct() -> string {
+    // Direct `return &mut x` over a function-local → HX3019.
+    let mut s = "fn rrm() -> &mut i64 {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    return &mut x\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_hz_ret_ref_onehop() -> string {
+    // 1-hop: `let r = &x` registers the loan; `return r` flags it.
+    let mut s = "fn rro() -> &i64 {\n"
+    s = s + "    let x = 5\n"
+    s = s + "    let r = &x\n"
+    s = s + "    return r\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_hz_ret_ref_param() -> string {
+    // A by-value parameter is owned by the callee, so `return &x` over it
+    // is E0515 too (non-global ident) → HX3019.
+    let mut s = "fn rrp(x: i64) -> &i64 {\n"
+    s = s + "    return &x\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_ret_value() -> string {
+    // Returning the value by move/copy — not a borrow → silent.
+    let mut s = "fn frv() -> i64 {\n"
+    s = s + "    let x = 5\n"
+    s = s + "    return x\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_ref_no_escape() -> string {
+    // A borrow that never leaves the function → silent (no return of `r`).
+    let mut s = "fn frn() -> i64 {\n"
+    s = s + "    let x = 5\n"
+    s = s + "    let r = &x\n"
+    s = s + "    return x\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_ret_global_ref() -> string {
+    // Borrow of a module-level global — its storage outlives the call, so
+    // the conservative check excludes it (is_global exclusion) → silent.
+    let mut s = "let g = 0\n"
+    s = s + "fn frg() -> &i64 {\n"
+    s = s + "    return &g\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_ref_killed() -> string {
+    // The ref binding is reassigned to a non-borrow RHS before the return,
+    // killing the loan (newest-per-name wins) → silent.
+    let mut s = "fn frk() -> i64 {\n"
+    s = s + "    let x = 5\n"
+    s = s + "    let mut r = &x\n"
+    s = s + "    r = 7\n"
+    s = s + "    return r\n"
+    s = s + "}\n"
+    return s
+}
+
+// HX3019 probe runner — mirrors `_run_probe` but keys on HX3019 (the
+// return-borrow code) and asserts every OTHER code is 0 (probe hygiene).
+// STRICT re-bands HX3019 to Error, so the error-band count must equal the
+// HX3019 count (escalation is severity-only). OFF → want 0 (empty stream).
+fn _run_ret_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3019 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3019")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3019 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3019 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
 // ── tp_own_param_move: hand-built HIR (Rule 2 mechanism proof) ──
 
 fn _tsp(line: i64) -> Span {
@@ -540,6 +662,16 @@ fn main() {
         if !_run_probe("xb_write_in_branch", _src_xb_write_in_branch(), 1) { ok = false }
         if !_run_probe("xb_loop_carried", _src_xb_loop_carried(), 1) { ok = false }
         if !_run_probe("fp_benign_join", _src_fp_benign_join(), 0) { ok = false }
+        // HEXA-OWN L5-E1 — return-borrow-escape (HX3019). Hazards → ×1 ON,
+        // controls → 0. OFF sweep asserts a fully empty stream for all.
+        if !_run_ret_probe("hz_ret_ref_direct", _src_hz_ret_ref_direct(), 1) { ok = false }
+        if !_run_ret_probe("hz_ret_refmut_direct", _src_hz_ret_refmut_direct(), 1) { ok = false }
+        if !_run_ret_probe("hz_ret_ref_onehop", _src_hz_ret_ref_onehop(), 1) { ok = false }
+        if !_run_ret_probe("hz_ret_ref_param", _src_hz_ret_ref_param(), 1) { ok = false }
+        if !_run_ret_probe("fp_ret_value", _src_fp_ret_value(), 0) { ok = false }
+        if !_run_ret_probe("fp_ref_no_escape", _src_fp_ref_no_escape(), 0) { ok = false }
+        if !_run_ret_probe("fp_ret_global_ref", _src_fp_ret_global_ref(), 0) { ok = false }
+        if !_run_ret_probe("fp_ref_killed", _src_fp_ref_killed(), 0) { ok = false }
         if !_run_tp_own() { ok = false }
         // census lane must be silent whenever HEXA_BORROWCK_CENSUS is unset
         // (byteeq-neutral proof at the census-count level).

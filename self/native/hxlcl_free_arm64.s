@@ -13,7 +13,6 @@
 ; source: stdlib/runtime/hxlcl_core.hexa
 .file 1 "stdlib/runtime/hxlcl_core.hexa"
 .section __TEXT,__text,regular,pure_instructions
-.private_extern _hxlcl_strlen
     .p2align 2
 _hxlcl_strlen:
     .loc 1 40 0
@@ -22,7 +21,7 @@ _hxlcl_strlen:
     sub sp, sp, #144 ; sp adj
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x0, [sp, #0] ; cabi ingress param 0
-__L7ff7_hxlcl_strlen_bb0:
+__L5211_hxlcl_strlen_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -43,8 +42,8 @@ __L7ff7_hxlcl_strlen_bb0:
     stp x0, x1, [sp, #64] ; hv store L4
     ldp x0, x1, [sp, #64] ; hv load L4
     stp x0, x1, [sp, #80] ; hv store L5
-    b __L7ff7_hxlcl_strlen_bb1 ; branch
-__L7ff7_hxlcl_strlen_bb1:
+    b __L5211_hxlcl_strlen_bb1 ; branch
+__L5211_hxlcl_strlen_bb1:
     ldp x0, x1, [sp, #80] ; hv load L5
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -53,9 +52,9 @@ __L7ff7_hxlcl_strlen_bb1:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #96] ; hv store L6
     ldp x0, x1, [sp, #96] ; hv load L6
-    cbz x1, __L7ff7_hxlcl_strlen_bb3 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strlen_bb2 ; branch -> then
-__L7ff7_hxlcl_strlen_bb2:
+    cbz x1, __L5211_hxlcl_strlen_bb3 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strlen_bb2 ; branch -> then
+__L5211_hxlcl_strlen_bb2:
     ldp x0, x1, [sp, #48] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -72,13 +71,12 @@ __L7ff7_hxlcl_strlen_bb2:
     stp x0, x1, [sp, #128] ; hv store L8
     ldp x0, x1, [sp, #128] ; hv load L8
     stp x0, x1, [sp, #80] ; hv store L5
-    b __L7ff7_hxlcl_strlen_bb1 ; branch
-__L7ff7_hxlcl_strlen_bb3:
+    b __L5211_hxlcl_strlen_bb1 ; branch
+__L5211_hxlcl_strlen_bb3:
     ldp x9, x0, [sp, #48] ; hv load L3
     add sp, sp, #144 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_memcpy
     .p2align 2
 _hxlcl_memcpy:
     .loc 1 73 0
@@ -91,7 +89,7 @@ _hxlcl_memcpy:
     stp x9, x1, [sp, #16] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #32] ; cabi ingress param 2
-__L7ff7_hxlcl_memcpy_bb0:
+__L5211_hxlcl_memcpy_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -111,8 +109,8 @@ __L7ff7_hxlcl_memcpy_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #112] ; hv store L7
-    b __L7ff7_hxlcl_memcpy_bb1 ; branch
-__L7ff7_hxlcl_memcpy_bb1:
+    b __L5211_hxlcl_memcpy_bb1 ; branch
+__L5211_hxlcl_memcpy_bb1:
     ldp x0, x1, [sp, #112] ; hv load L7
     ldp x2, x3, [sp, #32] ; hv load L2
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -120,9 +118,9 @@ __L7ff7_hxlcl_memcpy_bb1:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #128] ; hv store L8
     ldp x0, x1, [sp, #128] ; hv load L8
-    cbz x1, __L7ff7_hxlcl_memcpy_bb3 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_memcpy_bb2 ; branch -> then
-__L7ff7_hxlcl_memcpy_bb2:
+    cbz x1, __L5211_hxlcl_memcpy_bb3 ; br_cond: !payload -> else
+    b __L5211_hxlcl_memcpy_bb2 ; branch -> then
+__L5211_hxlcl_memcpy_bb2:
     ldp x0, x1, [sp, #96] ; hv load L6
     ldp x2, x3, [sp, #112] ; hv load L7
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -147,13 +145,12 @@ __L7ff7_hxlcl_memcpy_bb2:
     stp x0, x1, [sp, #192] ; hv store L12
     ldp x0, x1, [sp, #192] ; hv load L12
     stp x0, x1, [sp, #112] ; hv store L7
-    b __L7ff7_hxlcl_memcpy_bb1 ; branch
-__L7ff7_hxlcl_memcpy_bb3:
+    b __L5211_hxlcl_memcpy_bb1 ; branch
+__L5211_hxlcl_memcpy_bb3:
     ldp x9, x0, [sp, #64] ; hv load L4
     add sp, sp, #208 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_memset
     .p2align 2
 _hxlcl_memset:
     .loc 1 107 0
@@ -166,7 +163,7 @@ _hxlcl_memset:
     stp x9, x1, [sp, #16] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #32] ; cabi ingress param 2
-__L7ff7_hxlcl_memset_bb0:
+__L5211_hxlcl_memset_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -178,8 +175,8 @@ __L7ff7_hxlcl_memset_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #80] ; hv store L5
-    b __L7ff7_hxlcl_memset_bb1 ; branch
-__L7ff7_hxlcl_memset_bb1:
+    b __L5211_hxlcl_memset_bb1 ; branch
+__L5211_hxlcl_memset_bb1:
     ldp x0, x1, [sp, #80] ; hv load L5
     ldp x2, x3, [sp, #32] ; hv load L2
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -187,9 +184,9 @@ __L7ff7_hxlcl_memset_bb1:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #96] ; hv store L6
     ldp x0, x1, [sp, #96] ; hv load L6
-    cbz x1, __L7ff7_hxlcl_memset_bb3 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_memset_bb2 ; branch -> then
-__L7ff7_hxlcl_memset_bb2:
+    cbz x1, __L5211_hxlcl_memset_bb3 ; br_cond: !payload -> else
+    b __L5211_hxlcl_memset_bb2 ; branch -> then
+__L5211_hxlcl_memset_bb2:
     ldp x0, x1, [sp, #64] ; hv load L4
     ldp x2, x3, [sp, #80] ; hv load L5
     ldp x4, x5, [sp, #16] ; hv load L1
@@ -206,13 +203,12 @@ __L7ff7_hxlcl_memset_bb2:
     stp x0, x1, [sp, #128] ; hv store L8
     ldp x0, x1, [sp, #128] ; hv load L8
     stp x0, x1, [sp, #80] ; hv store L5
-    b __L7ff7_hxlcl_memset_bb1 ; branch
-__L7ff7_hxlcl_memset_bb3:
+    b __L5211_hxlcl_memset_bb1 ; branch
+__L5211_hxlcl_memset_bb3:
     ldp x9, x0, [sp, #64] ; hv load L4
     add sp, sp, #144 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_memcmp
     .p2align 2
 _hxlcl_memcmp:
     .loc 1 139 0
@@ -225,7 +221,7 @@ _hxlcl_memcmp:
     stp x9, x1, [sp, #16] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #32] ; cabi ingress param 2
-__L7ff7_hxlcl_memcmp_bb0:
+__L5211_hxlcl_memcmp_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -245,8 +241,8 @@ __L7ff7_hxlcl_memcmp_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #112] ; hv store L7
-    b __L7ff7_hxlcl_memcmp_bb1 ; branch
-__L7ff7_hxlcl_memcmp_bb1:
+    b __L5211_hxlcl_memcmp_bb1 ; branch
+__L5211_hxlcl_memcmp_bb1:
     ldp x0, x1, [sp, #112] ; hv load L7
     ldp x2, x3, [sp, #32] ; hv load L2
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -254,9 +250,9 @@ __L7ff7_hxlcl_memcmp_bb1:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #128] ; hv store L8
     ldp x0, x1, [sp, #128] ; hv load L8
-    cbz x1, __L7ff7_hxlcl_memcmp_bb3 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_memcmp_bb2 ; branch -> then
-__L7ff7_hxlcl_memcmp_bb2:
+    cbz x1, __L5211_hxlcl_memcmp_bb3 ; br_cond: !payload -> else
+    b __L5211_hxlcl_memcmp_bb2 ; branch -> then
+__L5211_hxlcl_memcmp_bb2:
     ldp x0, x1, [sp, #64] ; hv load L4
     ldp x2, x3, [sp, #112] ; hv load L7
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -288,20 +284,20 @@ __L7ff7_hxlcl_memcmp_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #240] ; hv store L15
     ldp x0, x1, [sp, #240] ; hv load L15
-    cbz x1, __L7ff7_hxlcl_memcmp_bb5 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_memcmp_bb4 ; branch -> then
-__L7ff7_hxlcl_memcmp_bb3:
+    cbz x1, __L5211_hxlcl_memcmp_bb5 ; br_cond: !payload -> else
+    b __L5211_hxlcl_memcmp_bb4 ; branch -> then
+__L5211_hxlcl_memcmp_bb3:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #288 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_memcmp_bb4:
+__L5211_hxlcl_memcmp_bb4:
     ldp x9, x0, [sp, #224] ; hv load L14
     add sp, sp, #288 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_memcmp_bb5:
+__L5211_hxlcl_memcmp_bb5:
     ldp x0, x1, [sp, #112] ; hv load L7
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -310,13 +306,12 @@ __L7ff7_hxlcl_memcmp_bb5:
     stp x0, x1, [sp, #272] ; hv store L17
     ldp x0, x1, [sp, #272] ; hv load L17
     stp x0, x1, [sp, #112] ; hv store L7
-    b __L7ff7_hxlcl_memcmp_bb1 ; branch
+    b __L5211_hxlcl_memcmp_bb1 ; branch
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
     add sp, sp, #288 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_strcmp
     .p2align 2
 _hxlcl_strcmp:
     .loc 1 159 0
@@ -327,7 +322,7 @@ _hxlcl_strcmp:
     stp x9, x0, [sp, #0] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #16] ; cabi ingress param 1
-__L7ff7_hxlcl_strcmp_bb0:
+__L5211_hxlcl_strcmp_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -347,13 +342,13 @@ __L7ff7_hxlcl_strcmp_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L6
-    b __L7ff7_hxlcl_strcmp_bb1 ; branch
-__L7ff7_hxlcl_strcmp_bb1:
+    b __L5211_hxlcl_strcmp_bb1 ; branch
+__L5211_hxlcl_strcmp_bb1:
     movz x0, #2 ; hv const_bool: TAG_BOOL
     movz x1, #1 ; hv const_bool payload
-    cbz x1, __L7ff7_hxlcl_strcmp_bb3 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strcmp_bb2 ; branch -> then
-__L7ff7_hxlcl_strcmp_bb2:
+    cbz x1, __L5211_hxlcl_strcmp_bb3 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strcmp_bb2 ; branch -> then
+__L5211_hxlcl_strcmp_bb2:
     ldp x0, x1, [sp, #48] ; hv load L3
     ldp x2, x3, [sp, #96] ; hv load L6
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -385,20 +380,20 @@ __L7ff7_hxlcl_strcmp_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #208] ; hv store L13
     ldp x0, x1, [sp, #208] ; hv load L13
-    cbz x1, __L7ff7_hxlcl_strcmp_bb5 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strcmp_bb4 ; branch -> then
-__L7ff7_hxlcl_strcmp_bb3:
+    cbz x1, __L5211_hxlcl_strcmp_bb5 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strcmp_bb4 ; branch -> then
+__L5211_hxlcl_strcmp_bb3:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #288 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_strcmp_bb4:
+__L5211_hxlcl_strcmp_bb4:
     ldp x9, x0, [sp, #192] ; hv load L12
     add sp, sp, #288 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_strcmp_bb5:
+__L5211_hxlcl_strcmp_bb5:
     ldp x0, x1, [sp, #128] ; hv load L8
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -407,15 +402,15 @@ __L7ff7_hxlcl_strcmp_bb5:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #240] ; hv store L15
     ldp x0, x1, [sp, #240] ; hv load L15
-    cbz x1, __L7ff7_hxlcl_strcmp_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strcmp_bb6 ; branch -> then
-__L7ff7_hxlcl_strcmp_bb6:
+    cbz x1, __L5211_hxlcl_strcmp_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strcmp_bb6 ; branch -> then
+__L5211_hxlcl_strcmp_bb6:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #288 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_strcmp_bb7:
+__L5211_hxlcl_strcmp_bb7:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -424,13 +419,12 @@ __L7ff7_hxlcl_strcmp_bb7:
     stp x0, x1, [sp, #272] ; hv store L17
     ldp x0, x1, [sp, #272] ; hv load L17
     stp x0, x1, [sp, #96] ; hv store L6
-    b __L7ff7_hxlcl_strcmp_bb1 ; branch
+    b __L5211_hxlcl_strcmp_bb1 ; branch
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
     add sp, sp, #288 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_strncmp
     .p2align 2
 _hxlcl_strncmp:
     .loc 1 181 0
@@ -443,7 +437,7 @@ _hxlcl_strncmp:
     stp x9, x1, [sp, #16] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #32] ; cabi ingress param 2
-__L7ff7_hxlcl_strncmp_bb0:
+__L5211_hxlcl_strncmp_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -463,8 +457,8 @@ __L7ff7_hxlcl_strncmp_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #112] ; hv store L7
-    b __L7ff7_hxlcl_strncmp_bb1 ; branch
-__L7ff7_hxlcl_strncmp_bb1:
+    b __L5211_hxlcl_strncmp_bb1 ; branch
+__L5211_hxlcl_strncmp_bb1:
     ldp x0, x1, [sp, #112] ; hv load L7
     ldp x2, x3, [sp, #32] ; hv load L2
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -472,9 +466,9 @@ __L7ff7_hxlcl_strncmp_bb1:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #128] ; hv store L8
     ldp x0, x1, [sp, #128] ; hv load L8
-    cbz x1, __L7ff7_hxlcl_strncmp_bb3 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strncmp_bb2 ; branch -> then
-__L7ff7_hxlcl_strncmp_bb2:
+    cbz x1, __L5211_hxlcl_strncmp_bb3 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strncmp_bb2 ; branch -> then
+__L5211_hxlcl_strncmp_bb2:
     ldp x0, x1, [sp, #64] ; hv load L4
     ldp x2, x3, [sp, #112] ; hv load L7
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -506,20 +500,20 @@ __L7ff7_hxlcl_strncmp_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #240] ; hv store L15
     ldp x0, x1, [sp, #240] ; hv load L15
-    cbz x1, __L7ff7_hxlcl_strncmp_bb5 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strncmp_bb4 ; branch -> then
-__L7ff7_hxlcl_strncmp_bb3:
+    cbz x1, __L5211_hxlcl_strncmp_bb5 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strncmp_bb4 ; branch -> then
+__L5211_hxlcl_strncmp_bb3:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #320 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_strncmp_bb4:
+__L5211_hxlcl_strncmp_bb4:
     ldp x9, x0, [sp, #224] ; hv load L14
     add sp, sp, #320 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_strncmp_bb5:
+__L5211_hxlcl_strncmp_bb5:
     ldp x0, x1, [sp, #160] ; hv load L10
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -528,15 +522,15 @@ __L7ff7_hxlcl_strncmp_bb5:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #272] ; hv store L17
     ldp x0, x1, [sp, #272] ; hv load L17
-    cbz x1, __L7ff7_hxlcl_strncmp_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strncmp_bb6 ; branch -> then
-__L7ff7_hxlcl_strncmp_bb6:
+    cbz x1, __L5211_hxlcl_strncmp_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strncmp_bb6 ; branch -> then
+__L5211_hxlcl_strncmp_bb6:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #320 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_strncmp_bb7:
+__L5211_hxlcl_strncmp_bb7:
     ldp x0, x1, [sp, #112] ; hv load L7
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -545,13 +539,12 @@ __L7ff7_hxlcl_strncmp_bb7:
     stp x0, x1, [sp, #304] ; hv store L19
     ldp x0, x1, [sp, #304] ; hv load L19
     stp x0, x1, [sp, #112] ; hv store L7
-    b __L7ff7_hxlcl_strncmp_bb1 ; branch
+    b __L5211_hxlcl_strncmp_bb1 ; branch
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
     add sp, sp, #320 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_strcpy
     .p2align 2
 _hxlcl_strcpy:
     .loc 1 212 0
@@ -562,7 +555,7 @@ _hxlcl_strcpy:
     stp x9, x0, [sp, #0] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #16] ; cabi ingress param 1
-__L7ff7_hxlcl_strcpy_bb0:
+__L5211_hxlcl_strcpy_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -591,8 +584,8 @@ __L7ff7_hxlcl_strcpy_bb0:
     stp x0, x1, [sp, #112] ; hv store L7
     ldp x0, x1, [sp, #112] ; hv load L7
     stp x0, x1, [sp, #128] ; hv store L8
-    b __L7ff7_hxlcl_strcpy_bb1 ; branch
-__L7ff7_hxlcl_strcpy_bb1:
+    b __L5211_hxlcl_strcpy_bb1 ; branch
+__L5211_hxlcl_strcpy_bb1:
     ldp x0, x1, [sp, #128] ; hv load L8
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -601,9 +594,9 @@ __L7ff7_hxlcl_strcpy_bb1:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #144] ; hv store L9
     ldp x0, x1, [sp, #144] ; hv load L9
-    cbz x1, __L7ff7_hxlcl_strcpy_bb3 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strcpy_bb2 ; branch -> then
-__L7ff7_hxlcl_strcpy_bb2:
+    cbz x1, __L5211_hxlcl_strcpy_bb3 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strcpy_bb2 ; branch -> then
+__L5211_hxlcl_strcpy_bb2:
     ldp x0, x1, [sp, #48] ; hv load L3
     ldp x2, x3, [sp, #96] ; hv load L6
     ldp x4, x5, [sp, #128] ; hv load L8
@@ -628,8 +621,8 @@ __L7ff7_hxlcl_strcpy_bb2:
     stp x0, x1, [sp, #192] ; hv store L12
     ldp x0, x1, [sp, #192] ; hv load L12
     stp x0, x1, [sp, #128] ; hv store L8
-    b __L7ff7_hxlcl_strcpy_bb1 ; branch
-__L7ff7_hxlcl_strcpy_bb3:
+    b __L5211_hxlcl_strcpy_bb1 ; branch
+__L5211_hxlcl_strcpy_bb3:
     ldp x0, x1, [sp, #48] ; hv load L3
     ldp x2, x3, [sp, #96] ; hv load L6
     movz x4, #0 ; hv const_int: TAG_INT
@@ -643,7 +636,6 @@ __L7ff7_hxlcl_strcpy_bb3:
     add sp, sp, #224 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_strncpy
     .p2align 2
 _hxlcl_strncpy:
     .loc 1 229 0
@@ -656,7 +648,7 @@ _hxlcl_strncpy:
     stp x9, x1, [sp, #16] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #32] ; cabi ingress param 2
-__L7ff7_hxlcl_strncpy_bb0:
+__L5211_hxlcl_strncpy_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -687,8 +679,8 @@ __L7ff7_hxlcl_strncpy_bb0:
     stp x0, x1, [sp, #144] ; hv store L9
     ldp x0, x1, [sp, #144] ; hv load L9
     stp x0, x1, [sp, #160] ; hv store L10
-    b __L7ff7_hxlcl_strncpy_bb1 ; branch
-__L7ff7_hxlcl_strncpy_bb1:
+    b __L5211_hxlcl_strncpy_bb1 ; branch
+__L5211_hxlcl_strncpy_bb1:
     ldp x0, x1, [sp, #112] ; hv load L7
     ldp x2, x3, [sp, #32] ; hv load L2
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -696,9 +688,9 @@ __L7ff7_hxlcl_strncpy_bb1:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #176] ; hv store L11
     ldp x0, x1, [sp, #176] ; hv load L11
-    cbz x1, __L7ff7_hxlcl_strncpy_bb3 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strncpy_bb2 ; branch -> then
-__L7ff7_hxlcl_strncpy_bb2:
+    cbz x1, __L5211_hxlcl_strncpy_bb3 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strncpy_bb2 ; branch -> then
+__L5211_hxlcl_strncpy_bb2:
     ldp x0, x1, [sp, #160] ; hv load L10
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -707,19 +699,19 @@ __L7ff7_hxlcl_strncpy_bb2:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #192] ; hv store L12
     ldp x0, x1, [sp, #192] ; hv load L12
-    cbz x1, __L7ff7_hxlcl_strncpy_bb5 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strncpy_bb4 ; branch -> then
-__L7ff7_hxlcl_strncpy_bb3:
+    cbz x1, __L5211_hxlcl_strncpy_bb5 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strncpy_bb4 ; branch -> then
+__L5211_hxlcl_strncpy_bb3:
     ldp x0, x1, [sp, #128] ; hv load L8
     stp x0, x1, [sp, #304] ; hv store L19
-    b __L7ff7_hxlcl_strncpy_bb8 ; branch
-__L7ff7_hxlcl_strncpy_bb4:
+    b __L5211_hxlcl_strncpy_bb8 ; branch
+__L5211_hxlcl_strncpy_bb4:
     ldp x0, x1, [sp, #112] ; hv load L7
     stp x0, x1, [sp, #128] ; hv store L8
     ldp x0, x1, [sp, #32] ; hv load L2
     stp x0, x1, [sp, #112] ; hv store L7
-    b __L7ff7_hxlcl_strncpy_bb5 ; branch
-__L7ff7_hxlcl_strncpy_bb5:
+    b __L5211_hxlcl_strncpy_bb5 ; branch
+__L5211_hxlcl_strncpy_bb5:
     ldp x0, x1, [sp, #112] ; hv load L7
     ldp x2, x3, [sp, #32] ; hv load L2
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -727,9 +719,9 @@ __L7ff7_hxlcl_strncpy_bb5:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #224] ; hv store L14
     ldp x0, x1, [sp, #224] ; hv load L14
-    cbz x1, __L7ff7_hxlcl_strncpy_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strncpy_bb6 ; branch -> then
-__L7ff7_hxlcl_strncpy_bb6:
+    cbz x1, __L5211_hxlcl_strncpy_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strncpy_bb6 ; branch -> then
+__L5211_hxlcl_strncpy_bb6:
     ldp x0, x1, [sp, #64] ; hv load L4
     ldp x2, x3, [sp, #112] ; hv load L7
     ldp x4, x5, [sp, #160] ; hv load L10
@@ -754,10 +746,10 @@ __L7ff7_hxlcl_strncpy_bb6:
     stp x0, x1, [sp, #288] ; hv store L18
     ldp x0, x1, [sp, #288] ; hv load L18
     stp x0, x1, [sp, #160] ; hv store L10
-    b __L7ff7_hxlcl_strncpy_bb7 ; branch
-__L7ff7_hxlcl_strncpy_bb7:
-    b __L7ff7_hxlcl_strncpy_bb1 ; branch
-__L7ff7_hxlcl_strncpy_bb8:
+    b __L5211_hxlcl_strncpy_bb7 ; branch
+__L5211_hxlcl_strncpy_bb7:
+    b __L5211_hxlcl_strncpy_bb1 ; branch
+__L5211_hxlcl_strncpy_bb8:
     ldp x0, x1, [sp, #304] ; hv load L19
     ldp x2, x3, [sp, #32] ; hv load L2
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -765,9 +757,9 @@ __L7ff7_hxlcl_strncpy_bb8:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #320] ; hv store L20
     ldp x0, x1, [sp, #320] ; hv load L20
-    cbz x1, __L7ff7_hxlcl_strncpy_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strncpy_bb9 ; branch -> then
-__L7ff7_hxlcl_strncpy_bb9:
+    cbz x1, __L5211_hxlcl_strncpy_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strncpy_bb9 ; branch -> then
+__L5211_hxlcl_strncpy_bb9:
     ldp x0, x1, [sp, #64] ; hv load L4
     ldp x2, x3, [sp, #304] ; hv load L19
     movz x4, #0 ; hv const_int: TAG_INT
@@ -785,13 +777,12 @@ __L7ff7_hxlcl_strncpy_bb9:
     stp x0, x1, [sp, #352] ; hv store L22
     ldp x0, x1, [sp, #352] ; hv load L22
     stp x0, x1, [sp, #304] ; hv store L19
-    b __L7ff7_hxlcl_strncpy_bb8 ; branch
-__L7ff7_hxlcl_strncpy_bb10:
+    b __L5211_hxlcl_strncpy_bb8 ; branch
+__L5211_hxlcl_strncpy_bb10:
     ldp x9, x0, [sp, #64] ; hv load L4
     add sp, sp, #368 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_strcat
     .p2align 2
 _hxlcl_strcat:
     .loc 1 262 0
@@ -802,7 +793,7 @@ _hxlcl_strcat:
     stp x9, x0, [sp, #0] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #16] ; cabi ingress param 1
-__L7ff7_hxlcl_strcat_bb0:
+__L5211_hxlcl_strcat_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -831,8 +822,8 @@ __L7ff7_hxlcl_strcat_bb0:
     stp x0, x1, [sp, #112] ; hv store L7
     ldp x0, x1, [sp, #112] ; hv load L7
     stp x0, x1, [sp, #128] ; hv store L8
-    b __L7ff7_hxlcl_strcat_bb1 ; branch
-__L7ff7_hxlcl_strcat_bb1:
+    b __L5211_hxlcl_strcat_bb1 ; branch
+__L5211_hxlcl_strcat_bb1:
     ldp x0, x1, [sp, #128] ; hv load L8
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -841,9 +832,9 @@ __L7ff7_hxlcl_strcat_bb1:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #144] ; hv store L9
     ldp x0, x1, [sp, #144] ; hv load L9
-    cbz x1, __L7ff7_hxlcl_strcat_bb3 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strcat_bb2 ; branch -> then
-__L7ff7_hxlcl_strcat_bb2:
+    cbz x1, __L5211_hxlcl_strcat_bb3 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strcat_bb2 ; branch -> then
+__L5211_hxlcl_strcat_bb2:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -860,8 +851,8 @@ __L7ff7_hxlcl_strcat_bb2:
     stp x0, x1, [sp, #176] ; hv store L11
     ldp x0, x1, [sp, #176] ; hv load L11
     stp x0, x1, [sp, #128] ; hv store L8
-    b __L7ff7_hxlcl_strcat_bb1 ; branch
-__L7ff7_hxlcl_strcat_bb3:
+    b __L5211_hxlcl_strcat_bb1 ; branch
+__L5211_hxlcl_strcat_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #192] ; hv store L12
@@ -874,8 +865,8 @@ __L7ff7_hxlcl_strcat_bb3:
     stp x0, x1, [sp, #208] ; hv store L13
     ldp x0, x1, [sp, #208] ; hv load L13
     stp x0, x1, [sp, #224] ; hv store L14
-    b __L7ff7_hxlcl_strcat_bb4 ; branch
-__L7ff7_hxlcl_strcat_bb4:
+    b __L5211_hxlcl_strcat_bb4 ; branch
+__L5211_hxlcl_strcat_bb4:
     ldp x0, x1, [sp, #224] ; hv load L14
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -884,9 +875,9 @@ __L7ff7_hxlcl_strcat_bb4:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #240] ; hv store L15
     ldp x0, x1, [sp, #240] ; hv load L15
-    cbz x1, __L7ff7_hxlcl_strcat_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strcat_bb5 ; branch -> then
-__L7ff7_hxlcl_strcat_bb5:
+    cbz x1, __L5211_hxlcl_strcat_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strcat_bb5 ; branch -> then
+__L5211_hxlcl_strcat_bb5:
     ldp x0, x1, [sp, #96] ; hv load L6
     ldp x2, x3, [sp, #192] ; hv load L12
     add x1, x1, x3 ; __hx_payload_add: x1 = a.pl add b.pl
@@ -918,8 +909,8 @@ __L7ff7_hxlcl_strcat_bb5:
     stp x0, x1, [sp, #320] ; hv store L20
     ldp x0, x1, [sp, #320] ; hv load L20
     stp x0, x1, [sp, #224] ; hv store L14
-    b __L7ff7_hxlcl_strcat_bb4 ; branch
-__L7ff7_hxlcl_strcat_bb6:
+    b __L5211_hxlcl_strcat_bb4 ; branch
+__L5211_hxlcl_strcat_bb6:
     ldp x0, x1, [sp, #96] ; hv load L6
     ldp x2, x3, [sp, #192] ; hv load L12
     add x1, x1, x3 ; __hx_payload_add: x1 = a.pl add b.pl
@@ -940,7 +931,6 @@ __L7ff7_hxlcl_strcat_bb6:
     add sp, sp, #384 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_strchr
     .p2align 2
 _hxlcl_strchr:
     .loc 1 304 0
@@ -951,7 +941,7 @@ _hxlcl_strchr:
     stp x9, x0, [sp, #0] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #16] ; cabi ingress param 1
-__L7ff7_hxlcl_strchr_bb0:
+__L5211_hxlcl_strchr_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -971,13 +961,13 @@ __L7ff7_hxlcl_strchr_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L6
-    b __L7ff7_hxlcl_strchr_bb1 ; branch
-__L7ff7_hxlcl_strchr_bb1:
+    b __L5211_hxlcl_strchr_bb1 ; branch
+__L5211_hxlcl_strchr_bb1:
     movz x0, #2 ; hv const_bool: TAG_BOOL
     movz x1, #1 ; hv const_bool payload
-    cbz x1, __L7ff7_hxlcl_strchr_bb3 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strchr_bb2 ; branch -> then
-__L7ff7_hxlcl_strchr_bb2:
+    cbz x1, __L5211_hxlcl_strchr_bb3 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strchr_bb2 ; branch -> then
+__L5211_hxlcl_strchr_bb2:
     ldp x0, x1, [sp, #48] ; hv load L3
     ldp x2, x3, [sp, #96] ; hv load L6
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -993,15 +983,15 @@ __L7ff7_hxlcl_strchr_bb2:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #144] ; hv store L9
     ldp x0, x1, [sp, #144] ; hv load L9
-    cbz x1, __L7ff7_hxlcl_strchr_bb5 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strchr_bb4 ; branch -> then
-__L7ff7_hxlcl_strchr_bb3:
+    cbz x1, __L5211_hxlcl_strchr_bb5 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strchr_bb4 ; branch -> then
+__L5211_hxlcl_strchr_bb3:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #240 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_strchr_bb4:
+__L5211_hxlcl_strchr_bb4:
     ldp x0, x1, [sp, #48] ; hv load L3
     ldp x2, x3, [sp, #96] ; hv load L6
     add x1, x1, x3 ; __hx_payload_add: x1 = a.pl add b.pl
@@ -1011,7 +1001,7 @@ __L7ff7_hxlcl_strchr_bb4:
     add sp, sp, #240 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_strchr_bb5:
+__L5211_hxlcl_strchr_bb5:
     ldp x0, x1, [sp, #128] ; hv load L8
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1020,15 +1010,15 @@ __L7ff7_hxlcl_strchr_bb5:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #192] ; hv store L12
     ldp x0, x1, [sp, #192] ; hv load L12
-    cbz x1, __L7ff7_hxlcl_strchr_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strchr_bb6 ; branch -> then
-__L7ff7_hxlcl_strchr_bb6:
+    cbz x1, __L5211_hxlcl_strchr_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strchr_bb6 ; branch -> then
+__L5211_hxlcl_strchr_bb6:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #240 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_strchr_bb7:
+__L5211_hxlcl_strchr_bb7:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -1037,13 +1027,12 @@ __L7ff7_hxlcl_strchr_bb7:
     stp x0, x1, [sp, #224] ; hv store L14
     ldp x0, x1, [sp, #224] ; hv load L14
     stp x0, x1, [sp, #96] ; hv store L6
-    b __L7ff7_hxlcl_strchr_bb1 ; branch
+    b __L5211_hxlcl_strchr_bb1 ; branch
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
     add sp, sp, #240 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_strstr
     .p2align 2
 _hxlcl_strstr:
     .loc 1 330 0
@@ -1054,7 +1043,7 @@ _hxlcl_strstr:
     stp x9, x0, [sp, #0] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #16] ; cabi ingress param 1
-__L7ff7_hxlcl_strstr_bb0:
+__L5211_hxlcl_strstr_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1088,14 +1077,14 @@ __L7ff7_hxlcl_strstr_bb0:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #128] ; hv store L8
     ldp x0, x1, [sp, #128] ; hv load L8
-    cbz x1, __L7ff7_hxlcl_strstr_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strstr_bb1 ; branch -> then
-__L7ff7_hxlcl_strstr_bb1:
+    cbz x1, __L5211_hxlcl_strstr_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strstr_bb1 ; branch -> then
+__L5211_hxlcl_strstr_bb1:
     ldp x9, x0, [sp, #48] ; hv load L3
     add sp, sp, #576 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_strstr_bb2:
+__L5211_hxlcl_strstr_bb2:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #160] ; hv store L10
@@ -1108,8 +1097,8 @@ __L7ff7_hxlcl_strstr_bb2:
     stp x0, x1, [sp, #176] ; hv store L11
     ldp x0, x1, [sp, #176] ; hv load L11
     stp x0, x1, [sp, #192] ; hv store L12
-    b __L7ff7_hxlcl_strstr_bb3 ; branch
-__L7ff7_hxlcl_strstr_bb3:
+    b __L5211_hxlcl_strstr_bb3 ; branch
+__L5211_hxlcl_strstr_bb3:
     ldp x0, x1, [sp, #192] ; hv load L12
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1118,9 +1107,9 @@ __L7ff7_hxlcl_strstr_bb3:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #208] ; hv store L13
     ldp x0, x1, [sp, #208] ; hv load L13
-    cbz x1, __L7ff7_hxlcl_strstr_bb5 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strstr_bb4 ; branch -> then
-__L7ff7_hxlcl_strstr_bb4:
+    cbz x1, __L5211_hxlcl_strstr_bb5 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strstr_bb4 ; branch -> then
+__L5211_hxlcl_strstr_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #224] ; hv store L14
@@ -1136,14 +1125,14 @@ __L7ff7_hxlcl_strstr_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #272] ; hv store L17
-    b __L7ff7_hxlcl_strstr_bb6 ; branch
-__L7ff7_hxlcl_strstr_bb5:
+    b __L5211_hxlcl_strstr_bb6 ; branch
+__L5211_hxlcl_strstr_bb5:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #576 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_strstr_bb6:
+__L5211_hxlcl_strstr_bb6:
     ldp x0, x1, [sp, #272] ; hv load L17
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1152,9 +1141,9 @@ __L7ff7_hxlcl_strstr_bb6:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #288] ; hv store L18
     ldp x0, x1, [sp, #288] ; hv load L18
-    cbz x1, __L7ff7_hxlcl_strstr_bb8 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strstr_bb7 ; branch -> then
-__L7ff7_hxlcl_strstr_bb7:
+    cbz x1, __L5211_hxlcl_strstr_bb8 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strstr_bb7 ; branch -> then
+__L5211_hxlcl_strstr_bb7:
     ldp x0, x1, [sp, #256] ; hv load L16
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1163,9 +1152,9 @@ __L7ff7_hxlcl_strstr_bb7:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #304] ; hv store L19
     ldp x0, x1, [sp, #304] ; hv load L19
-    cbz x1, __L7ff7_hxlcl_strstr_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strstr_bb9 ; branch -> then
-__L7ff7_hxlcl_strstr_bb8:
+    cbz x1, __L5211_hxlcl_strstr_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strstr_bb9 ; branch -> then
+__L5211_hxlcl_strstr_bb8:
     ldp x0, x1, [sp, #256] ; hv load L16
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1174,14 +1163,14 @@ __L7ff7_hxlcl_strstr_bb8:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #496] ; hv store L31
     ldp x0, x1, [sp, #496] ; hv load L31
-    cbz x1, __L7ff7_hxlcl_strstr_bb17 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strstr_bb16 ; branch -> then
-__L7ff7_hxlcl_strstr_bb9:
+    cbz x1, __L5211_hxlcl_strstr_bb17 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strstr_bb16 ; branch -> then
+__L5211_hxlcl_strstr_bb9:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #272] ; hv store L17
-    b __L7ff7_hxlcl_strstr_bb10 ; branch
-__L7ff7_hxlcl_strstr_bb10:
+    b __L5211_hxlcl_strstr_bb10 ; branch
+__L5211_hxlcl_strstr_bb10:
     ldp x0, x1, [sp, #272] ; hv load L17
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1190,9 +1179,9 @@ __L7ff7_hxlcl_strstr_bb10:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #336] ; hv store L21
     ldp x0, x1, [sp, #336] ; hv load L21
-    cbz x1, __L7ff7_hxlcl_strstr_bb12 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strstr_bb11 ; branch -> then
-__L7ff7_hxlcl_strstr_bb11:
+    cbz x1, __L5211_hxlcl_strstr_bb12 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strstr_bb11 ; branch -> then
+__L5211_hxlcl_strstr_bb11:
     ldp x0, x1, [sp, #160] ; hv load L10
     ldp x2, x3, [sp, #224] ; hv load L14
     add x1, x1, x3 ; __hx_payload_add: x1 = a.pl add b.pl
@@ -1215,16 +1204,16 @@ __L7ff7_hxlcl_strstr_bb11:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #432] ; hv store L27
     ldp x0, x1, [sp, #432] ; hv load L27
-    cbz x1, __L7ff7_hxlcl_strstr_bb14 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strstr_bb13 ; branch -> then
-__L7ff7_hxlcl_strstr_bb12:
-    b __L7ff7_hxlcl_strstr_bb6 ; branch
-__L7ff7_hxlcl_strstr_bb13:
+    cbz x1, __L5211_hxlcl_strstr_bb14 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strstr_bb13 ; branch -> then
+__L5211_hxlcl_strstr_bb12:
+    b __L5211_hxlcl_strstr_bb6 ; branch
+__L5211_hxlcl_strstr_bb13:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #272] ; hv store L17
-    b __L7ff7_hxlcl_strstr_bb15 ; branch
-__L7ff7_hxlcl_strstr_bb14:
+    b __L5211_hxlcl_strstr_bb15 ; branch
+__L5211_hxlcl_strstr_bb14:
     ldp x0, x1, [sp, #224] ; hv load L14
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -1241,10 +1230,10 @@ __L7ff7_hxlcl_strstr_bb14:
     stp x0, x1, [sp, #480] ; hv store L30
     ldp x0, x1, [sp, #480] ; hv load L30
     stp x0, x1, [sp, #256] ; hv store L16
-    b __L7ff7_hxlcl_strstr_bb15 ; branch
-__L7ff7_hxlcl_strstr_bb15:
-    b __L7ff7_hxlcl_strstr_bb12 ; branch
-__L7ff7_hxlcl_strstr_bb16:
+    b __L5211_hxlcl_strstr_bb15 ; branch
+__L5211_hxlcl_strstr_bb15:
+    b __L5211_hxlcl_strstr_bb12 ; branch
+__L5211_hxlcl_strstr_bb16:
     ldp x0, x1, [sp, #48] ; hv load L3
     ldp x2, x3, [sp, #160] ; hv load L10
     add x1, x1, x3 ; __hx_payload_add: x1 = a.pl add b.pl
@@ -1256,7 +1245,7 @@ __L7ff7_hxlcl_strstr_bb16:
     add sp, sp, #576 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_strstr_bb17:
+__L5211_hxlcl_strstr_bb17:
     ldp x0, x1, [sp, #160] ; hv load L10
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -1277,13 +1266,12 @@ __L7ff7_hxlcl_strstr_bb17:
     add x15, sp, #560 ; hv frame base
     ldp x0, x1, [x15] ; hv load L35
     stp x0, x1, [sp, #192] ; hv store L12
-    b __L7ff7_hxlcl_strstr_bb3 ; branch
+    b __L5211_hxlcl_strstr_bb3 ; branch
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
     add sp, sp, #576 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_strrchr
     .p2align 2
 _hxlcl_strrchr:
     .loc 1 387 0
@@ -1294,7 +1282,7 @@ _hxlcl_strrchr:
     stp x9, x0, [sp, #0] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #16] ; cabi ingress param 1
-__L7ff7_hxlcl_strrchr_bb0:
+__L5211_hxlcl_strrchr_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1311,15 +1299,15 @@ __L7ff7_hxlcl_strrchr_bb0:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #64] ; hv store L4
     ldp x0, x1, [sp, #64] ; hv load L4
-    cbz x1, __L7ff7_hxlcl_strrchr_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strrchr_bb1 ; branch -> then
-__L7ff7_hxlcl_strrchr_bb1:
+    cbz x1, __L5211_hxlcl_strrchr_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strrchr_bb1 ; branch -> then
+__L5211_hxlcl_strrchr_bb1:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #288 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_strrchr_bb2:
+__L5211_hxlcl_strrchr_bb2:
     ldp x0, x1, [sp, #16] ; hv load L1
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #255 ; hv const_int val
@@ -1334,13 +1322,13 @@ __L7ff7_hxlcl_strrchr_bb2:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #144] ; hv store L9
-    b __L7ff7_hxlcl_strrchr_bb3 ; branch
-__L7ff7_hxlcl_strrchr_bb3:
+    b __L5211_hxlcl_strrchr_bb3 ; branch
+__L5211_hxlcl_strrchr_bb3:
     movz x0, #2 ; hv const_bool: TAG_BOOL
     movz x1, #1 ; hv const_bool payload
-    cbz x1, __L7ff7_hxlcl_strrchr_bb5 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strrchr_bb4 ; branch -> then
-__L7ff7_hxlcl_strrchr_bb4:
+    cbz x1, __L5211_hxlcl_strrchr_bb5 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strrchr_bb4 ; branch -> then
+__L5211_hxlcl_strrchr_bb4:
     ldp x0, x1, [sp, #48] ; hv load L3
     ldp x2, x3, [sp, #144] ; hv load L9
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -1356,14 +1344,14 @@ __L7ff7_hxlcl_strrchr_bb4:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #192] ; hv store L12
     ldp x0, x1, [sp, #192] ; hv load L12
-    cbz x1, __L7ff7_hxlcl_strrchr_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strrchr_bb6 ; branch -> then
-__L7ff7_hxlcl_strrchr_bb5:
+    cbz x1, __L5211_hxlcl_strrchr_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strrchr_bb6 ; branch -> then
+__L5211_hxlcl_strrchr_bb5:
     ldp x9, x0, [sp, #128] ; hv load L8
     add sp, sp, #288 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_strrchr_bb6:
+__L5211_hxlcl_strrchr_bb6:
     ldp x0, x1, [sp, #48] ; hv load L3
     ldp x2, x3, [sp, #144] ; hv load L9
     add x1, x1, x3 ; __hx_payload_add: x1 = a.pl add b.pl
@@ -1371,8 +1359,8 @@ __L7ff7_hxlcl_strrchr_bb6:
     stp x0, x1, [sp, #224] ; hv store L14
     ldp x0, x1, [sp, #224] ; hv load L14
     stp x0, x1, [sp, #128] ; hv store L8
-    b __L7ff7_hxlcl_strrchr_bb7 ; branch
-__L7ff7_hxlcl_strrchr_bb7:
+    b __L5211_hxlcl_strrchr_bb7 ; branch
+__L5211_hxlcl_strrchr_bb7:
     ldp x0, x1, [sp, #176] ; hv load L11
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1381,14 +1369,14 @@ __L7ff7_hxlcl_strrchr_bb7:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #240] ; hv store L15
     ldp x0, x1, [sp, #240] ; hv load L15
-    cbz x1, __L7ff7_hxlcl_strrchr_bb9 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strrchr_bb8 ; branch -> then
-__L7ff7_hxlcl_strrchr_bb8:
+    cbz x1, __L5211_hxlcl_strrchr_bb9 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strrchr_bb8 ; branch -> then
+__L5211_hxlcl_strrchr_bb8:
     ldp x9, x0, [sp, #128] ; hv load L8
     add sp, sp, #288 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_strrchr_bb9:
+__L5211_hxlcl_strrchr_bb9:
     ldp x0, x1, [sp, #144] ; hv load L9
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -1397,13 +1385,12 @@ __L7ff7_hxlcl_strrchr_bb9:
     stp x0, x1, [sp, #272] ; hv store L17
     ldp x0, x1, [sp, #272] ; hv load L17
     stp x0, x1, [sp, #144] ; hv store L9
-    b __L7ff7_hxlcl_strrchr_bb3 ; branch
+    b __L5211_hxlcl_strrchr_bb3 ; branch
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
     add sp, sp, #288 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_memmove
     .p2align 2
 _hxlcl_memmove:
     .loc 1 416 0
@@ -1416,7 +1403,7 @@ _hxlcl_memmove:
     stp x9, x1, [sp, #16] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #32] ; cabi ingress param 2
-__L7ff7_hxlcl_memmove_bb0:
+__L5211_hxlcl_memmove_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1440,14 +1427,14 @@ __L7ff7_hxlcl_memmove_bb0:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #112] ; hv store L7
     ldp x0, x1, [sp, #112] ; hv load L7
-    cbz x1, __L7ff7_hxlcl_memmove_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_memmove_bb1 ; branch -> then
-__L7ff7_hxlcl_memmove_bb1:
+    cbz x1, __L5211_hxlcl_memmove_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_memmove_bb1 ; branch -> then
+__L5211_hxlcl_memmove_bb1:
     ldp x9, x0, [sp, #64] ; hv load L4
     add sp, sp, #416 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_memmove_bb2:
+__L5211_hxlcl_memmove_bb2:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1456,14 +1443,14 @@ __L7ff7_hxlcl_memmove_bb2:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #144] ; hv store L9
     ldp x0, x1, [sp, #144] ; hv load L9
-    cbz x1, __L7ff7_hxlcl_memmove_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_memmove_bb3 ; branch -> then
-__L7ff7_hxlcl_memmove_bb3:
+    cbz x1, __L5211_hxlcl_memmove_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_memmove_bb3 ; branch -> then
+__L5211_hxlcl_memmove_bb3:
     ldp x9, x0, [sp, #64] ; hv load L4
     add sp, sp, #416 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_memmove_bb4:
+__L5211_hxlcl_memmove_bb4:
     ldp x0, x1, [sp, #64] ; hv load L4
     ldp x2, x3, [sp, #96] ; hv load L6
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -1471,18 +1458,18 @@ __L7ff7_hxlcl_memmove_bb4:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #176] ; hv store L11
     ldp x0, x1, [sp, #176] ; hv load L11
-    cbz x1, __L7ff7_hxlcl_memmove_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_memmove_bb5 ; branch -> then
-__L7ff7_hxlcl_memmove_bb5:
+    cbz x1, __L5211_hxlcl_memmove_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_memmove_bb5 ; branch -> then
+__L5211_hxlcl_memmove_bb5:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #208] ; hv store L13
-    b __L7ff7_hxlcl_memmove_bb7 ; branch
-__L7ff7_hxlcl_memmove_bb6:
+    b __L5211_hxlcl_memmove_bb7 ; branch
+__L5211_hxlcl_memmove_bb6:
     ldp x0, x1, [sp, #32] ; hv load L2
     stp x0, x1, [sp, #304] ; hv store L19
-    b __L7ff7_hxlcl_memmove_bb10 ; branch
-__L7ff7_hxlcl_memmove_bb7:
+    b __L5211_hxlcl_memmove_bb10 ; branch
+__L5211_hxlcl_memmove_bb7:
     ldp x0, x1, [sp, #208] ; hv load L13
     ldp x2, x3, [sp, #32] ; hv load L2
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -1490,9 +1477,9 @@ __L7ff7_hxlcl_memmove_bb7:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #224] ; hv store L14
     ldp x0, x1, [sp, #224] ; hv load L14
-    cbz x1, __L7ff7_hxlcl_memmove_bb9 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_memmove_bb8 ; branch -> then
-__L7ff7_hxlcl_memmove_bb8:
+    cbz x1, __L5211_hxlcl_memmove_bb9 ; br_cond: !payload -> else
+    b __L5211_hxlcl_memmove_bb8 ; branch -> then
+__L5211_hxlcl_memmove_bb8:
     ldp x0, x1, [sp, #96] ; hv load L6
     ldp x2, x3, [sp, #208] ; hv load L13
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -1517,10 +1504,10 @@ __L7ff7_hxlcl_memmove_bb8:
     stp x0, x1, [sp, #288] ; hv store L18
     ldp x0, x1, [sp, #288] ; hv load L18
     stp x0, x1, [sp, #208] ; hv store L13
-    b __L7ff7_hxlcl_memmove_bb7 ; branch
-__L7ff7_hxlcl_memmove_bb9:
-    b __L7ff7_hxlcl_memmove_bb13 ; branch
-__L7ff7_hxlcl_memmove_bb10:
+    b __L5211_hxlcl_memmove_bb7 ; branch
+__L5211_hxlcl_memmove_bb9:
+    b __L5211_hxlcl_memmove_bb13 ; branch
+__L5211_hxlcl_memmove_bb10:
     ldp x0, x1, [sp, #304] ; hv load L19
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1529,9 +1516,9 @@ __L7ff7_hxlcl_memmove_bb10:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #320] ; hv store L20
     ldp x0, x1, [sp, #320] ; hv load L20
-    cbz x1, __L7ff7_hxlcl_memmove_bb12 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_memmove_bb11 ; branch -> then
-__L7ff7_hxlcl_memmove_bb11:
+    cbz x1, __L5211_hxlcl_memmove_bb12 ; br_cond: !payload -> else
+    b __L5211_hxlcl_memmove_bb11 ; branch -> then
+__L5211_hxlcl_memmove_bb11:
     ldp x0, x1, [sp, #304] ; hv load L19
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -1558,15 +1545,14 @@ __L7ff7_hxlcl_memmove_bb11:
     stp x0, x1, [sp, #400] ; hv store L25
     ldp x0, x1, [sp, #352] ; hv load L22
     stp x0, x1, [sp, #304] ; hv store L19
-    b __L7ff7_hxlcl_memmove_bb10 ; branch
-__L7ff7_hxlcl_memmove_bb12:
-    b __L7ff7_hxlcl_memmove_bb13 ; branch
-__L7ff7_hxlcl_memmove_bb13:
+    b __L5211_hxlcl_memmove_bb10 ; branch
+__L5211_hxlcl_memmove_bb12:
+    b __L5211_hxlcl_memmove_bb13 ; branch
+__L5211_hxlcl_memmove_bb13:
     ldp x9, x0, [sp, #64] ; hv load L4
     add sp, sp, #416 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_bzero
     .p2align 2
 _hxlcl_bzero:
     .loc 1 452 0
@@ -1577,7 +1563,7 @@ _hxlcl_bzero:
     stp x9, x0, [sp, #0] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #16] ; cabi ingress param 1
-__L7ff7_hxlcl_bzero_bb0:
+__L5211_hxlcl_bzero_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1589,8 +1575,8 @@ __L7ff7_hxlcl_bzero_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #64] ; hv store L4
-    b __L7ff7_hxlcl_bzero_bb1 ; branch
-__L7ff7_hxlcl_bzero_bb1:
+    b __L5211_hxlcl_bzero_bb1 ; branch
+__L5211_hxlcl_bzero_bb1:
     ldp x0, x1, [sp, #64] ; hv load L4
     ldp x2, x3, [sp, #16] ; hv load L1
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -1598,9 +1584,9 @@ __L7ff7_hxlcl_bzero_bb1:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #80] ; hv store L5
     ldp x0, x1, [sp, #80] ; hv load L5
-    cbz x1, __L7ff7_hxlcl_bzero_bb3 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_bzero_bb2 ; branch -> then
-__L7ff7_hxlcl_bzero_bb2:
+    cbz x1, __L5211_hxlcl_bzero_bb3 ; br_cond: !payload -> else
+    b __L5211_hxlcl_bzero_bb2 ; branch -> then
+__L5211_hxlcl_bzero_bb2:
     ldp x0, x1, [sp, #48] ; hv load L3
     ldp x2, x3, [sp, #64] ; hv load L4
     movz x4, #0 ; hv const_int: TAG_INT
@@ -1618,14 +1604,13 @@ __L7ff7_hxlcl_bzero_bb2:
     stp x0, x1, [sp, #112] ; hv store L7
     ldp x0, x1, [sp, #112] ; hv load L7
     stp x0, x1, [sp, #64] ; hv store L4
-    b __L7ff7_hxlcl_bzero_bb1 ; branch
-__L7ff7_hxlcl_bzero_bb3:
+    b __L5211_hxlcl_bzero_bb1 ; branch
+__L5211_hxlcl_bzero_bb3:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #128 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_getenv
     .p2align 2
 _hxlcl_getenv:
     .loc 1 489 0
@@ -1634,7 +1619,7 @@ _hxlcl_getenv:
     sub sp, sp, #784 ; sp adj
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x0, [sp, #0] ; cabi ingress param 0
-__L7ff7_hxlcl_getenv_bb0:
+__L5211_hxlcl_getenv_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1651,15 +1636,15 @@ __L7ff7_hxlcl_getenv_bb0:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #48] ; hv store L3
     ldp x0, x1, [sp, #48] ; hv load L3
-    cbz x1, __L7ff7_hxlcl_getenv_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getenv_bb1 ; branch -> then
-__L7ff7_hxlcl_getenv_bb1:
+    cbz x1, __L5211_hxlcl_getenv_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getenv_bb1 ; branch -> then
+__L5211_hxlcl_getenv_bb1:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #784 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_getenv_bb2:
+__L5211_hxlcl_getenv_bb2:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #80] ; hv store L5
@@ -1672,8 +1657,8 @@ __L7ff7_hxlcl_getenv_bb2:
     stp x0, x1, [sp, #96] ; hv store L6
     ldp x0, x1, [sp, #96] ; hv load L6
     stp x0, x1, [sp, #112] ; hv store L7
-    b __L7ff7_hxlcl_getenv_bb3 ; branch
-__L7ff7_hxlcl_getenv_bb3:
+    b __L5211_hxlcl_getenv_bb3 ; branch
+__L5211_hxlcl_getenv_bb3:
     ldp x0, x1, [sp, #112] ; hv load L7
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1682,9 +1667,9 @@ __L7ff7_hxlcl_getenv_bb3:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #128] ; hv store L8
     ldp x0, x1, [sp, #128] ; hv load L8
-    cbz x1, __L7ff7_hxlcl_getenv_bb5 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getenv_bb4 ; branch -> then
-__L7ff7_hxlcl_getenv_bb4:
+    cbz x1, __L5211_hxlcl_getenv_bb5 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getenv_bb4 ; branch -> then
+__L5211_hxlcl_getenv_bb4:
     ldp x0, x1, [sp, #80] ; hv load L5
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -1701,8 +1686,8 @@ __L7ff7_hxlcl_getenv_bb4:
     stp x0, x1, [sp, #160] ; hv store L10
     ldp x0, x1, [sp, #160] ; hv load L10
     stp x0, x1, [sp, #112] ; hv store L7
-    b __L7ff7_hxlcl_getenv_bb3 ; branch
-__L7ff7_hxlcl_getenv_bb5:
+    b __L5211_hxlcl_getenv_bb3 ; branch
+__L5211_hxlcl_getenv_bb5:
     adrp x1, _environ@GOTPAGE ; __hx_environ_ptr: &environ GOT page [reloc=R_AARCH64_ADR_GOT_PAGE]
     ldr x1, [x1, _environ@GOTPAGEOFF] ; __hx_environ_ptr: x1 = &environ [reloc=R_AARCH64_LD64_GOT_LO12_NC]
     movz x0, #0 ; __hx_environ_ptr: TAG_INT
@@ -1726,15 +1711,15 @@ __L7ff7_hxlcl_getenv_bb5:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #240] ; hv store L15
     ldp x0, x1, [sp, #240] ; hv load L15
-    cbz x1, __L7ff7_hxlcl_getenv_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getenv_bb6 ; branch -> then
-__L7ff7_hxlcl_getenv_bb6:
+    cbz x1, __L5211_hxlcl_getenv_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getenv_bb6 ; branch -> then
+__L5211_hxlcl_getenv_bb6:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #784 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_getenv_bb7:
+__L5211_hxlcl_getenv_bb7:
     ldp x0, x1, [sp, #224] ; hv load L14
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1744,8 +1729,8 @@ __L7ff7_hxlcl_getenv_bb7:
     stp x0, x1, [sp, #272] ; hv store L17
     ldp x0, x1, [sp, #272] ; hv load L17
     stp x0, x1, [sp, #288] ; hv store L18
-    b __L7ff7_hxlcl_getenv_bb8 ; branch
-__L7ff7_hxlcl_getenv_bb8:
+    b __L5211_hxlcl_getenv_bb8 ; branch
+__L5211_hxlcl_getenv_bb8:
     ldp x0, x1, [sp, #288] ; hv load L18
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1754,23 +1739,23 @@ __L7ff7_hxlcl_getenv_bb8:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #304] ; hv store L19
     ldp x0, x1, [sp, #304] ; hv load L19
-    cbz x1, __L7ff7_hxlcl_getenv_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getenv_bb9 ; branch -> then
-__L7ff7_hxlcl_getenv_bb9:
+    cbz x1, __L5211_hxlcl_getenv_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getenv_bb9 ; branch -> then
+__L5211_hxlcl_getenv_bb9:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #320] ; hv store L20
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #336] ; hv store L21
-    b __L7ff7_hxlcl_getenv_bb11 ; branch
-__L7ff7_hxlcl_getenv_bb10:
+    b __L5211_hxlcl_getenv_bb11 ; branch
+__L5211_hxlcl_getenv_bb10:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #784 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_getenv_bb11:
+__L5211_hxlcl_getenv_bb11:
     ldp x0, x1, [sp, #336] ; hv load L21
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1779,9 +1764,9 @@ __L7ff7_hxlcl_getenv_bb11:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #352] ; hv store L22
     ldp x0, x1, [sp, #352] ; hv load L22
-    cbz x1, __L7ff7_hxlcl_getenv_bb13 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getenv_bb12 ; branch -> then
-__L7ff7_hxlcl_getenv_bb12:
+    cbz x1, __L5211_hxlcl_getenv_bb13 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getenv_bb12 ; branch -> then
+__L5211_hxlcl_getenv_bb12:
     ldp x0, x1, [sp, #320] ; hv load L20
     ldp x2, x3, [sp, #80] ; hv load L5
     cmp x1, x3 ; __hx_payload_ge: cmp payloads
@@ -1789,9 +1774,9 @@ __L7ff7_hxlcl_getenv_bb12:
     bl _hexa_bool ; __hx_payload_ge: box bool
     stp x0, x1, [sp, #368] ; hv store L23
     ldp x0, x1, [sp, #368] ; hv load L23
-    cbz x1, __L7ff7_hxlcl_getenv_bb15 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getenv_bb14 ; branch -> then
-__L7ff7_hxlcl_getenv_bb13:
+    cbz x1, __L5211_hxlcl_getenv_bb15 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getenv_bb14 ; branch -> then
+__L5211_hxlcl_getenv_bb13:
     ldp x0, x1, [sp, #320] ; hv load L20
     ldp x2, x3, [sp, #80] ; hv load L5
     cmp x1, x3 ; __hx_payload_eq: cmp payloads
@@ -1801,14 +1786,14 @@ __L7ff7_hxlcl_getenv_bb13:
     stp x0, x1, [x15] ; hv store L38
     add x15, sp, #608 ; hv frame base
     ldp x0, x1, [x15] ; hv load L38
-    cbz x1, __L7ff7_hxlcl_getenv_bb26 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getenv_bb25 ; branch -> then
-__L7ff7_hxlcl_getenv_bb14:
+    cbz x1, __L5211_hxlcl_getenv_bb26 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getenv_bb25 ; branch -> then
+__L5211_hxlcl_getenv_bb14:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #336] ; hv store L21
-    b __L7ff7_hxlcl_getenv_bb15 ; branch
-__L7ff7_hxlcl_getenv_bb15:
+    b __L5211_hxlcl_getenv_bb15 ; branch
+__L5211_hxlcl_getenv_bb15:
     ldp x0, x1, [sp, #336] ; hv load L21
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1817,9 +1802,9 @@ __L7ff7_hxlcl_getenv_bb15:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #400] ; hv store L25
     ldp x0, x1, [sp, #400] ; hv load L25
-    cbz x1, __L7ff7_hxlcl_getenv_bb17 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getenv_bb16 ; branch -> then
-__L7ff7_hxlcl_getenv_bb16:
+    cbz x1, __L5211_hxlcl_getenv_bb17 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getenv_bb16 ; branch -> then
+__L5211_hxlcl_getenv_bb16:
     ldp x0, x1, [sp, #288] ; hv load L18
     ldp x2, x3, [sp, #320] ; hv load L20
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -1836,16 +1821,16 @@ __L7ff7_hxlcl_getenv_bb16:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #464] ; hv store L29
     ldp x0, x1, [sp, #464] ; hv load L29
-    cbz x1, __L7ff7_hxlcl_getenv_bb19 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getenv_bb18 ; branch -> then
-__L7ff7_hxlcl_getenv_bb17:
-    b __L7ff7_hxlcl_getenv_bb11 ; branch
-__L7ff7_hxlcl_getenv_bb18:
+    cbz x1, __L5211_hxlcl_getenv_bb19 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getenv_bb18 ; branch -> then
+__L5211_hxlcl_getenv_bb17:
+    b __L5211_hxlcl_getenv_bb11 ; branch
+__L5211_hxlcl_getenv_bb18:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #336] ; hv store L21
-    b __L7ff7_hxlcl_getenv_bb19 ; branch
-__L7ff7_hxlcl_getenv_bb19:
+    b __L5211_hxlcl_getenv_bb19 ; branch
+__L5211_hxlcl_getenv_bb19:
     ldp x0, x1, [sp, #336] ; hv load L21
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -1854,9 +1839,9 @@ __L7ff7_hxlcl_getenv_bb19:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #496] ; hv store L31
     ldp x0, x1, [sp, #496] ; hv load L31
-    cbz x1, __L7ff7_hxlcl_getenv_bb21 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getenv_bb20 ; branch -> then
-__L7ff7_hxlcl_getenv_bb20:
+    cbz x1, __L5211_hxlcl_getenv_bb21 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getenv_bb20 ; branch -> then
+__L5211_hxlcl_getenv_bb20:
     ldp x0, x1, [sp, #32] ; hv load L2
     ldp x2, x3, [sp, #320] ; hv load L20
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -1878,16 +1863,16 @@ __L7ff7_hxlcl_getenv_bb20:
     stp x0, x1, [x15] ; hv store L35
     add x15, sp, #560 ; hv frame base
     ldp x0, x1, [x15] ; hv load L35
-    cbz x1, __L7ff7_hxlcl_getenv_bb23 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getenv_bb22 ; branch -> then
-__L7ff7_hxlcl_getenv_bb21:
-    b __L7ff7_hxlcl_getenv_bb17 ; branch
-__L7ff7_hxlcl_getenv_bb22:
+    cbz x1, __L5211_hxlcl_getenv_bb23 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getenv_bb22 ; branch -> then
+__L5211_hxlcl_getenv_bb21:
+    b __L5211_hxlcl_getenv_bb17 ; branch
+__L5211_hxlcl_getenv_bb22:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #336] ; hv store L21
-    b __L7ff7_hxlcl_getenv_bb24 ; branch
-__L7ff7_hxlcl_getenv_bb23:
+    b __L5211_hxlcl_getenv_bb24 ; branch
+__L5211_hxlcl_getenv_bb23:
     ldp x0, x1, [sp, #320] ; hv load L20
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -1898,10 +1883,10 @@ __L7ff7_hxlcl_getenv_bb23:
     add x15, sp, #592 ; hv frame base
     ldp x0, x1, [x15] ; hv load L37
     stp x0, x1, [sp, #320] ; hv store L20
-    b __L7ff7_hxlcl_getenv_bb24 ; branch
-__L7ff7_hxlcl_getenv_bb24:
-    b __L7ff7_hxlcl_getenv_bb21 ; branch
-__L7ff7_hxlcl_getenv_bb25:
+    b __L5211_hxlcl_getenv_bb24 ; branch
+__L5211_hxlcl_getenv_bb24:
+    b __L5211_hxlcl_getenv_bb21 ; branch
+__L5211_hxlcl_getenv_bb25:
     ldp x0, x1, [sp, #288] ; hv load L18
     ldp x2, x3, [sp, #80] ; hv load L5
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -1924,9 +1909,9 @@ __L7ff7_hxlcl_getenv_bb25:
     stp x0, x1, [x15] ; hv store L42
     add x15, sp, #672 ; hv frame base
     ldp x0, x1, [x15] ; hv load L42
-    cbz x1, __L7ff7_hxlcl_getenv_bb28 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getenv_bb27 ; branch -> then
-__L7ff7_hxlcl_getenv_bb26:
+    cbz x1, __L5211_hxlcl_getenv_bb28 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getenv_bb27 ; branch -> then
+__L5211_hxlcl_getenv_bb26:
     ldp x0, x1, [sp, #224] ; hv load L14
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #8 ; hv const_int val
@@ -1948,8 +1933,8 @@ __L7ff7_hxlcl_getenv_bb26:
     add x15, sp, #768 ; hv frame base
     ldp x0, x1, [x15] ; hv load L48
     stp x0, x1, [sp, #288] ; hv store L18
-    b __L7ff7_hxlcl_getenv_bb8 ; branch
-__L7ff7_hxlcl_getenv_bb27:
+    b __L5211_hxlcl_getenv_bb8 ; branch
+__L5211_hxlcl_getenv_bb27:
     ldp x0, x1, [sp, #288] ; hv load L18
     ldp x2, x3, [sp, #80] ; hv load L5
     add x1, x1, x3 ; __hx_payload_add: x1 = a.pl add b.pl
@@ -1973,14 +1958,13 @@ __L7ff7_hxlcl_getenv_bb27:
     add sp, sp, #784 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_getenv_bb28:
-    b __L7ff7_hxlcl_getenv_bb26 ; branch
+__L5211_hxlcl_getenv_bb28:
+    b __L5211_hxlcl_getenv_bb26 ; branch
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
     add sp, sp, #784 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_setenv
     .p2align 2
 _hxlcl_setenv:
     .loc 1 576 0
@@ -1993,7 +1977,7 @@ _hxlcl_setenv:
     stp x9, x1, [sp, #16] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #32] ; cabi ingress param 2
-__L7ff7_hxlcl_setenv_bb0:
+__L5211_hxlcl_setenv_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -2018,9 +2002,9 @@ __L7ff7_hxlcl_setenv_bb0:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #112] ; hv store L7
     ldp x0, x1, [sp, #112] ; hv load L7
-    cbz x1, __L7ff7_hxlcl_setenv_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_setenv_bb1 ; branch -> then
-__L7ff7_hxlcl_setenv_bb1:
+    cbz x1, __L5211_hxlcl_setenv_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_setenv_bb1 ; branch -> then
+__L5211_hxlcl_setenv_bb1:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     movz x2, #0 ; hv const_int: TAG_INT
@@ -2032,7 +2016,7 @@ __L7ff7_hxlcl_setenv_bb1:
     add sp, sp, #1824 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_setenv_bb2:
+__L5211_hxlcl_setenv_bb2:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #160] ; hv store L10
@@ -2045,8 +2029,8 @@ __L7ff7_hxlcl_setenv_bb2:
     stp x0, x1, [sp, #176] ; hv store L11
     ldp x0, x1, [sp, #176] ; hv load L11
     stp x0, x1, [sp, #192] ; hv store L12
-    b __L7ff7_hxlcl_setenv_bb3 ; branch
-__L7ff7_hxlcl_setenv_bb3:
+    b __L5211_hxlcl_setenv_bb3 ; branch
+__L5211_hxlcl_setenv_bb3:
     ldp x0, x1, [sp, #192] ; hv load L12
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -2055,9 +2039,9 @@ __L7ff7_hxlcl_setenv_bb3:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #208] ; hv store L13
     ldp x0, x1, [sp, #208] ; hv load L13
-    cbz x1, __L7ff7_hxlcl_setenv_bb5 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_setenv_bb4 ; branch -> then
-__L7ff7_hxlcl_setenv_bb4:
+    cbz x1, __L5211_hxlcl_setenv_bb5 ; br_cond: !payload -> else
+    b __L5211_hxlcl_setenv_bb4 ; branch -> then
+__L5211_hxlcl_setenv_bb4:
     ldp x0, x1, [sp, #160] ; hv load L10
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -2074,8 +2058,8 @@ __L7ff7_hxlcl_setenv_bb4:
     stp x0, x1, [sp, #240] ; hv store L15
     ldp x0, x1, [sp, #240] ; hv load L15
     stp x0, x1, [sp, #192] ; hv store L12
-    b __L7ff7_hxlcl_setenv_bb3 ; branch
-__L7ff7_hxlcl_setenv_bb5:
+    b __L5211_hxlcl_setenv_bb3 ; branch
+__L5211_hxlcl_setenv_bb5:
     ldp x0, x1, [sp, #160] ; hv load L10
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -2084,9 +2068,9 @@ __L7ff7_hxlcl_setenv_bb5:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #256] ; hv store L16
     ldp x0, x1, [sp, #256] ; hv load L16
-    cbz x1, __L7ff7_hxlcl_setenv_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_setenv_bb6 ; branch -> then
-__L7ff7_hxlcl_setenv_bb6:
+    cbz x1, __L5211_hxlcl_setenv_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_setenv_bb6 ; branch -> then
+__L5211_hxlcl_setenv_bb6:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     movz x2, #0 ; hv const_int: TAG_INT
@@ -2098,7 +2082,7 @@ __L7ff7_hxlcl_setenv_bb6:
     add sp, sp, #1824 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_setenv_bb7:
+__L5211_hxlcl_setenv_bb7:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #304] ; hv store L19
@@ -2111,8 +2095,8 @@ __L7ff7_hxlcl_setenv_bb7:
     stp x0, x1, [sp, #320] ; hv store L20
     ldp x0, x1, [sp, #320] ; hv load L20
     stp x0, x1, [sp, #336] ; hv store L21
-    b __L7ff7_hxlcl_setenv_bb8 ; branch
-__L7ff7_hxlcl_setenv_bb8:
+    b __L5211_hxlcl_setenv_bb8 ; branch
+__L5211_hxlcl_setenv_bb8:
     ldp x0, x1, [sp, #336] ; hv load L21
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -2121,9 +2105,9 @@ __L7ff7_hxlcl_setenv_bb8:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #352] ; hv store L22
     ldp x0, x1, [sp, #352] ; hv load L22
-    cbz x1, __L7ff7_hxlcl_setenv_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_setenv_bb9 ; branch -> then
-__L7ff7_hxlcl_setenv_bb9:
+    cbz x1, __L5211_hxlcl_setenv_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_setenv_bb9 ; branch -> then
+__L5211_hxlcl_setenv_bb9:
     ldp x0, x1, [sp, #304] ; hv load L19
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -2140,8 +2124,8 @@ __L7ff7_hxlcl_setenv_bb9:
     stp x0, x1, [sp, #384] ; hv store L24
     ldp x0, x1, [sp, #384] ; hv load L24
     stp x0, x1, [sp, #336] ; hv store L21
-    b __L7ff7_hxlcl_setenv_bb8 ; branch
-__L7ff7_hxlcl_setenv_bb10:
+    b __L5211_hxlcl_setenv_bb8 ; branch
+__L5211_hxlcl_setenv_bb10:
     ldp x0, x1, [sp, #160] ; hv load L10
     ldp x2, x3, [sp, #304] ; hv load L19
     add x1, x1, x3 ; __hx_payload_add: x1 = a.pl add b.pl
@@ -2166,8 +2150,8 @@ __L7ff7_hxlcl_setenv_bb10:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #496] ; hv store L31
-    b __L7ff7_hxlcl_setenv_bb11 ; branch
-__L7ff7_hxlcl_setenv_bb11:
+    b __L5211_hxlcl_setenv_bb11 ; branch
+__L5211_hxlcl_setenv_bb11:
     ldp x0, x1, [sp, #496] ; hv load L31
     ldp x2, x3, [sp, #160] ; hv load L10
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -2177,9 +2161,9 @@ __L7ff7_hxlcl_setenv_bb11:
     stp x0, x1, [x15] ; hv store L32
     add x15, sp, #512 ; hv frame base
     ldp x0, x1, [x15] ; hv load L32
-    cbz x1, __L7ff7_hxlcl_setenv_bb13 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_setenv_bb12 ; branch -> then
-__L7ff7_hxlcl_setenv_bb12:
+    cbz x1, __L5211_hxlcl_setenv_bb13 ; br_cond: !payload -> else
+    b __L5211_hxlcl_setenv_bb12 ; branch -> then
+__L5211_hxlcl_setenv_bb12:
     ldp x0, x1, [sp, #64] ; hv load L4
     ldp x2, x3, [sp, #496] ; hv load L31
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -2211,8 +2195,8 @@ __L7ff7_hxlcl_setenv_bb12:
     add x15, sp, #576 ; hv frame base
     ldp x0, x1, [x15] ; hv load L36
     stp x0, x1, [sp, #496] ; hv store L31
-    b __L7ff7_hxlcl_setenv_bb11 ; branch
-__L7ff7_hxlcl_setenv_bb13:
+    b __L5211_hxlcl_setenv_bb11 ; branch
+__L5211_hxlcl_setenv_bb13:
     ldp x0, x1, [sp, #480] ; hv load L30
     ldp x2, x3, [sp, #160] ; hv load L10
     movz x4, #0 ; hv const_int: TAG_INT
@@ -2238,8 +2222,8 @@ __L7ff7_hxlcl_setenv_bb13:
     movz x1, #0 ; hv const_int val
     add x15, sp, #640 ; hv frame base
     stp x0, x1, [x15] ; hv store L40
-    b __L7ff7_hxlcl_setenv_bb14 ; branch
-__L7ff7_hxlcl_setenv_bb14:
+    b __L5211_hxlcl_setenv_bb14 ; branch
+__L5211_hxlcl_setenv_bb14:
     add x15, sp, #640 ; hv frame base
     ldp x0, x1, [x15] ; hv load L40
     ldp x2, x3, [sp, #304] ; hv load L19
@@ -2250,9 +2234,9 @@ __L7ff7_hxlcl_setenv_bb14:
     stp x0, x1, [x15] ; hv store L41
     add x15, sp, #656 ; hv frame base
     ldp x0, x1, [x15] ; hv load L41
-    cbz x1, __L7ff7_hxlcl_setenv_bb16 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_setenv_bb15 ; branch -> then
-__L7ff7_hxlcl_setenv_bb15:
+    cbz x1, __L5211_hxlcl_setenv_bb16 ; br_cond: !payload -> else
+    b __L5211_hxlcl_setenv_bb15 ; branch -> then
+__L5211_hxlcl_setenv_bb15:
     ldp x0, x1, [sp, #96] ; hv load L6
     add x15, sp, #640 ; hv frame base
     ldp x2, x3, [x15] ; hv load L40
@@ -2300,8 +2284,8 @@ __L7ff7_hxlcl_setenv_bb15:
     ldp x0, x1, [x15] ; hv load L47
     add x15, sp, #640 ; hv frame base
     stp x0, x1, [x15] ; hv store L40
-    b __L7ff7_hxlcl_setenv_bb14 ; branch
-__L7ff7_hxlcl_setenv_bb16:
+    b __L5211_hxlcl_setenv_bb14 ; branch
+__L5211_hxlcl_setenv_bb16:
     ldp x0, x1, [sp, #416] ; hv load L26
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -2361,9 +2345,9 @@ __L7ff7_hxlcl_setenv_bb16:
     stp x0, x1, [x15] ; hv store L56
     add x15, sp, #896 ; hv frame base
     ldp x0, x1, [x15] ; hv load L56
-    cbz x1, __L7ff7_hxlcl_setenv_bb18 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_setenv_bb17 ; branch -> then
-__L7ff7_hxlcl_setenv_bb17:
+    cbz x1, __L5211_hxlcl_setenv_bb18 ; br_cond: !payload -> else
+    b __L5211_hxlcl_setenv_bb17 ; branch -> then
+__L5211_hxlcl_setenv_bb17:
     add x15, sp, #864 ; hv frame base
     ldp x0, x1, [x15] ; hv load L54
     movz x2, #0 ; hv const_int: TAG_INT
@@ -2389,8 +2373,8 @@ __L7ff7_hxlcl_setenv_bb17:
     ldp x0, x1, [x15] ; hv load L60
     add x15, sp, #976 ; hv frame base
     stp x0, x1, [x15] ; hv store L61
-    b __L7ff7_hxlcl_setenv_bb19 ; branch
-__L7ff7_hxlcl_setenv_bb18:
+    b __L5211_hxlcl_setenv_bb19 ; branch
+__L5211_hxlcl_setenv_bb18:
     add x15, sp, #880 ; hv frame base
     ldp x0, x1, [x15] ; hv load L55
     movz x2, #0 ; hv const_int: TAG_INT
@@ -2429,8 +2413,8 @@ __L7ff7_hxlcl_setenv_bb18:
     movz x1, #0 ; hv const_int val
     add x15, sp, #1584 ; hv frame base
     stp x0, x1, [x15] ; hv store L99
-    b __L7ff7_hxlcl_setenv_bb42 ; branch
-__L7ff7_hxlcl_setenv_bb19:
+    b __L5211_hxlcl_setenv_bb42 ; branch
+__L5211_hxlcl_setenv_bb19:
     add x15, sp, #976 ; hv frame base
     ldp x0, x1, [x15] ; hv load L61
     movz x2, #0 ; hv const_int: TAG_INT
@@ -2442,9 +2426,9 @@ __L7ff7_hxlcl_setenv_bb19:
     stp x0, x1, [x15] ; hv store L62
     add x15, sp, #992 ; hv frame base
     ldp x0, x1, [x15] ; hv load L62
-    cbz x1, __L7ff7_hxlcl_setenv_bb21 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_setenv_bb20 ; branch -> then
-__L7ff7_hxlcl_setenv_bb20:
+    cbz x1, __L5211_hxlcl_setenv_bb21 ; br_cond: !payload -> else
+    b __L5211_hxlcl_setenv_bb20 ; branch -> then
+__L5211_hxlcl_setenv_bb20:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #1008 ; hv frame base
@@ -2453,10 +2437,10 @@ __L7ff7_hxlcl_setenv_bb20:
     movz x1, #1 ; hv const_int val
     add x15, sp, #1024 ; hv frame base
     stp x0, x1, [x15] ; hv store L64
-    b __L7ff7_hxlcl_setenv_bb22 ; branch
-__L7ff7_hxlcl_setenv_bb21:
-    b __L7ff7_hxlcl_setenv_bb18 ; branch
-__L7ff7_hxlcl_setenv_bb22:
+    b __L5211_hxlcl_setenv_bb22 ; branch
+__L5211_hxlcl_setenv_bb21:
+    b __L5211_hxlcl_setenv_bb18 ; branch
+__L5211_hxlcl_setenv_bb22:
     add x15, sp, #1024 ; hv frame base
     ldp x0, x1, [x15] ; hv load L64
     movz x2, #0 ; hv const_int: TAG_INT
@@ -2468,9 +2452,9 @@ __L7ff7_hxlcl_setenv_bb22:
     stp x0, x1, [x15] ; hv store L65
     add x15, sp, #1040 ; hv frame base
     ldp x0, x1, [x15] ; hv load L65
-    cbz x1, __L7ff7_hxlcl_setenv_bb24 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_setenv_bb23 ; branch -> then
-__L7ff7_hxlcl_setenv_bb23:
+    cbz x1, __L5211_hxlcl_setenv_bb24 ; br_cond: !payload -> else
+    b __L5211_hxlcl_setenv_bb23 ; branch -> then
+__L5211_hxlcl_setenv_bb23:
     add x15, sp, #1008 ; hv frame base
     ldp x0, x1, [x15] ; hv load L63
     ldp x2, x3, [sp, #160] ; hv load L10
@@ -2481,9 +2465,9 @@ __L7ff7_hxlcl_setenv_bb23:
     stp x0, x1, [x15] ; hv store L66
     add x15, sp, #1056 ; hv frame base
     ldp x0, x1, [x15] ; hv load L66
-    cbz x1, __L7ff7_hxlcl_setenv_bb26 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_setenv_bb25 ; branch -> then
-__L7ff7_hxlcl_setenv_bb24:
+    cbz x1, __L5211_hxlcl_setenv_bb26 ; br_cond: !payload -> else
+    b __L5211_hxlcl_setenv_bb25 ; branch -> then
+__L5211_hxlcl_setenv_bb24:
     add x15, sp, #1008 ; hv frame base
     ldp x0, x1, [x15] ; hv load L63
     ldp x2, x3, [sp, #160] ; hv load L10
@@ -2494,15 +2478,15 @@ __L7ff7_hxlcl_setenv_bb24:
     stp x0, x1, [x15] ; hv store L81
     add x15, sp, #1296 ; hv frame base
     ldp x0, x1, [x15] ; hv load L81
-    cbz x1, __L7ff7_hxlcl_setenv_bb37 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_setenv_bb36 ; branch -> then
-__L7ff7_hxlcl_setenv_bb25:
+    cbz x1, __L5211_hxlcl_setenv_bb37 ; br_cond: !payload -> else
+    b __L5211_hxlcl_setenv_bb36 ; branch -> then
+__L5211_hxlcl_setenv_bb25:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #1024 ; hv frame base
     stp x0, x1, [x15] ; hv store L64
-    b __L7ff7_hxlcl_setenv_bb26 ; branch
-__L7ff7_hxlcl_setenv_bb26:
+    b __L5211_hxlcl_setenv_bb26 ; branch
+__L5211_hxlcl_setenv_bb26:
     add x15, sp, #1024 ; hv frame base
     ldp x0, x1, [x15] ; hv load L64
     movz x2, #0 ; hv const_int: TAG_INT
@@ -2514,9 +2498,9 @@ __L7ff7_hxlcl_setenv_bb26:
     stp x0, x1, [x15] ; hv store L68
     add x15, sp, #1088 ; hv frame base
     ldp x0, x1, [x15] ; hv load L68
-    cbz x1, __L7ff7_hxlcl_setenv_bb28 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_setenv_bb27 ; branch -> then
-__L7ff7_hxlcl_setenv_bb27:
+    cbz x1, __L5211_hxlcl_setenv_bb28 ; br_cond: !payload -> else
+    b __L5211_hxlcl_setenv_bb27 ; branch -> then
+__L5211_hxlcl_setenv_bb27:
     add x15, sp, #976 ; hv frame base
     ldp x0, x1, [x15] ; hv load L61
     add x15, sp, #1008 ; hv frame base
@@ -2541,17 +2525,17 @@ __L7ff7_hxlcl_setenv_bb27:
     stp x0, x1, [x15] ; hv store L72
     add x15, sp, #1152 ; hv frame base
     ldp x0, x1, [x15] ; hv load L72
-    cbz x1, __L7ff7_hxlcl_setenv_bb30 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_setenv_bb29 ; branch -> then
-__L7ff7_hxlcl_setenv_bb28:
-    b __L7ff7_hxlcl_setenv_bb22 ; branch
-__L7ff7_hxlcl_setenv_bb29:
+    cbz x1, __L5211_hxlcl_setenv_bb30 ; br_cond: !payload -> else
+    b __L5211_hxlcl_setenv_bb29 ; branch -> then
+__L5211_hxlcl_setenv_bb28:
+    b __L5211_hxlcl_setenv_bb22 ; branch
+__L5211_hxlcl_setenv_bb29:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #1024 ; hv frame base
     stp x0, x1, [x15] ; hv store L64
-    b __L7ff7_hxlcl_setenv_bb30 ; branch
-__L7ff7_hxlcl_setenv_bb30:
+    b __L5211_hxlcl_setenv_bb30 ; branch
+__L5211_hxlcl_setenv_bb30:
     add x15, sp, #1024 ; hv frame base
     ldp x0, x1, [x15] ; hv load L64
     movz x2, #0 ; hv const_int: TAG_INT
@@ -2563,9 +2547,9 @@ __L7ff7_hxlcl_setenv_bb30:
     stp x0, x1, [x15] ; hv store L74
     add x15, sp, #1184 ; hv frame base
     ldp x0, x1, [x15] ; hv load L74
-    cbz x1, __L7ff7_hxlcl_setenv_bb32 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_setenv_bb31 ; branch -> then
-__L7ff7_hxlcl_setenv_bb31:
+    cbz x1, __L5211_hxlcl_setenv_bb32 ; br_cond: !payload -> else
+    b __L5211_hxlcl_setenv_bb31 ; branch -> then
+__L5211_hxlcl_setenv_bb31:
     ldp x0, x1, [sp, #64] ; hv load L4
     add x15, sp, #1008 ; hv frame base
     ldp x2, x3, [x15] ; hv load L63
@@ -2589,17 +2573,17 @@ __L7ff7_hxlcl_setenv_bb31:
     stp x0, x1, [x15] ; hv store L78
     add x15, sp, #1248 ; hv frame base
     ldp x0, x1, [x15] ; hv load L78
-    cbz x1, __L7ff7_hxlcl_setenv_bb34 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_setenv_bb33 ; branch -> then
-__L7ff7_hxlcl_setenv_bb32:
-    b __L7ff7_hxlcl_setenv_bb28 ; branch
-__L7ff7_hxlcl_setenv_bb33:
+    cbz x1, __L5211_hxlcl_setenv_bb34 ; br_cond: !payload -> else
+    b __L5211_hxlcl_setenv_bb33 ; branch -> then
+__L5211_hxlcl_setenv_bb32:
+    b __L5211_hxlcl_setenv_bb28 ; branch
+__L5211_hxlcl_setenv_bb33:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #1024 ; hv frame base
     stp x0, x1, [x15] ; hv store L64
-    b __L7ff7_hxlcl_setenv_bb35 ; branch
-__L7ff7_hxlcl_setenv_bb34:
+    b __L5211_hxlcl_setenv_bb35 ; branch
+__L5211_hxlcl_setenv_bb34:
     add x15, sp, #1008 ; hv frame base
     ldp x0, x1, [x15] ; hv load L63
     movz x2, #0 ; hv const_int: TAG_INT
@@ -2612,10 +2596,10 @@ __L7ff7_hxlcl_setenv_bb34:
     ldp x0, x1, [x15] ; hv load L80
     add x15, sp, #1008 ; hv frame base
     stp x0, x1, [x15] ; hv store L63
-    b __L7ff7_hxlcl_setenv_bb35 ; branch
-__L7ff7_hxlcl_setenv_bb35:
-    b __L7ff7_hxlcl_setenv_bb32 ; branch
-__L7ff7_hxlcl_setenv_bb36:
+    b __L5211_hxlcl_setenv_bb35 ; branch
+__L5211_hxlcl_setenv_bb35:
+    b __L5211_hxlcl_setenv_bb32 ; branch
+__L5211_hxlcl_setenv_bb36:
     add x15, sp, #976 ; hv frame base
     ldp x0, x1, [x15] ; hv load L61
     ldp x2, x3, [sp, #160] ; hv load L10
@@ -2639,9 +2623,9 @@ __L7ff7_hxlcl_setenv_bb36:
     stp x0, x1, [x15] ; hv store L85
     add x15, sp, #1360 ; hv frame base
     ldp x0, x1, [x15] ; hv load L85
-    cbz x1, __L7ff7_hxlcl_setenv_bb39 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_setenv_bb38 ; branch -> then
-__L7ff7_hxlcl_setenv_bb37:
+    cbz x1, __L5211_hxlcl_setenv_bb39 ; br_cond: !payload -> else
+    b __L5211_hxlcl_setenv_bb38 ; branch -> then
+__L5211_hxlcl_setenv_bb37:
     add x15, sp, #880 ; hv frame base
     ldp x0, x1, [x15] ; hv load L55
     movz x2, #0 ; hv const_int: TAG_INT
@@ -2679,8 +2663,8 @@ __L7ff7_hxlcl_setenv_bb37:
     ldp x0, x1, [x15] ; hv load L92
     add x15, sp, #976 ; hv frame base
     stp x0, x1, [x15] ; hv store L61
-    b __L7ff7_hxlcl_setenv_bb19 ; branch
-__L7ff7_hxlcl_setenv_bb38:
+    b __L5211_hxlcl_setenv_bb19 ; branch
+__L5211_hxlcl_setenv_bb38:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -2691,17 +2675,17 @@ __L7ff7_hxlcl_setenv_bb38:
     stp x0, x1, [x15] ; hv store L87
     add x15, sp, #1392 ; hv frame base
     ldp x0, x1, [x15] ; hv load L87
-    cbz x1, __L7ff7_hxlcl_setenv_bb41 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_setenv_bb40 ; branch -> then
-__L7ff7_hxlcl_setenv_bb39:
-    b __L7ff7_hxlcl_setenv_bb37 ; branch
-__L7ff7_hxlcl_setenv_bb40:
+    cbz x1, __L5211_hxlcl_setenv_bb41 ; br_cond: !payload -> else
+    b __L5211_hxlcl_setenv_bb40 ; branch -> then
+__L5211_hxlcl_setenv_bb39:
+    b __L5211_hxlcl_setenv_bb37 ; branch
+__L5211_hxlcl_setenv_bb40:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #1824 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_setenv_bb41:
+__L5211_hxlcl_setenv_bb41:
     add x15, sp, #944 ; hv frame base
     ldp x0, x1, [x15] ; hv load L59
     movz x2, #0 ; hv const_int: TAG_INT
@@ -2720,7 +2704,7 @@ __L7ff7_hxlcl_setenv_bb41:
     add sp, sp, #1824 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_setenv_bb42:
+__L5211_hxlcl_setenv_bb42:
     add x15, sp, #1584 ; hv frame base
     ldp x0, x1, [x15] ; hv load L99
     add x15, sp, #880 ; hv frame base
@@ -2732,9 +2716,9 @@ __L7ff7_hxlcl_setenv_bb42:
     stp x0, x1, [x15] ; hv store L100
     add x15, sp, #1600 ; hv frame base
     ldp x0, x1, [x15] ; hv load L100
-    cbz x1, __L7ff7_hxlcl_setenv_bb44 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_setenv_bb43 ; branch -> then
-__L7ff7_hxlcl_setenv_bb43:
+    cbz x1, __L5211_hxlcl_setenv_bb44 ; br_cond: !payload -> else
+    b __L5211_hxlcl_setenv_bb43 ; branch -> then
+__L5211_hxlcl_setenv_bb43:
     add x15, sp, #1584 ; hv frame base
     ldp x0, x1, [x15] ; hv load L99
     movz x2, #0 ; hv const_int: TAG_INT
@@ -2786,8 +2770,8 @@ __L7ff7_hxlcl_setenv_bb43:
     ldp x0, x1, [x15] ; hv load L106
     add x15, sp, #1584 ; hv frame base
     stp x0, x1, [x15] ; hv store L99
-    b __L7ff7_hxlcl_setenv_bb42 ; branch
-__L7ff7_hxlcl_setenv_bb44:
+    b __L5211_hxlcl_setenv_bb42 ; branch
+__L5211_hxlcl_setenv_bb44:
     add x15, sp, #880 ; hv frame base
     ldp x0, x1, [x15] ; hv load L55
     movz x2, #0 ; hv const_int: TAG_INT
@@ -2858,7 +2842,6 @@ __L7ff7_hxlcl_setenv_bb44:
     add sp, sp, #1824 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_strtoll
     .p2align 2
 _hxlcl_strtoll:
     .loc 1 725 0
@@ -2871,7 +2854,7 @@ _hxlcl_strtoll:
     stp x9, x1, [sp, #16] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #32] ; cabi ingress param 2
-__L7ff7_hxlcl_strtoll_bb0:
+__L5211_hxlcl_strtoll_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -2896,9 +2879,9 @@ __L7ff7_hxlcl_strtoll_bb0:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #112] ; hv store L7
     ldp x0, x1, [sp, #112] ; hv load L7
-    cbz x1, __L7ff7_hxlcl_strtoll_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb1 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb1:
+    cbz x1, __L5211_hxlcl_strtoll_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb1 ; branch -> then
+__L5211_hxlcl_strtoll_bb1:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -2907,9 +2890,9 @@ __L7ff7_hxlcl_strtoll_bb1:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #144] ; hv store L9
     ldp x0, x1, [sp, #144] ; hv load L9
-    cbz x1, __L7ff7_hxlcl_strtoll_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb3 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb2:
+    cbz x1, __L5211_hxlcl_strtoll_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb3 ; branch -> then
+__L5211_hxlcl_strtoll_bb2:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -2932,8 +2915,8 @@ __L7ff7_hxlcl_strtoll_bb2:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #272] ; hv store L17
-    b __L7ff7_hxlcl_strtoll_bb5 ; branch
-__L7ff7_hxlcl_strtoll_bb3:
+    b __L5211_hxlcl_strtoll_bb5 ; branch
+__L5211_hxlcl_strtoll_bb3:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -2944,14 +2927,14 @@ __L7ff7_hxlcl_strtoll_bb3:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x0, #0 ; __hx_ptr_store64: TAG_INT
     stp x0, x1, [sp, #176] ; hv store L11
-    b __L7ff7_hxlcl_strtoll_bb4 ; branch
-__L7ff7_hxlcl_strtoll_bb4:
+    b __L5211_hxlcl_strtoll_bb4 ; branch
+__L5211_hxlcl_strtoll_bb4:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #2016 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_strtoll_bb5:
+__L5211_hxlcl_strtoll_bb5:
     ldp x0, x1, [sp, #272] ; hv load L17
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -2960,9 +2943,9 @@ __L7ff7_hxlcl_strtoll_bb5:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #288] ; hv store L18
     ldp x0, x1, [sp, #288] ; hv load L18
-    cbz x1, __L7ff7_hxlcl_strtoll_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb6 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb6:
+    cbz x1, __L5211_hxlcl_strtoll_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb6 ; branch -> then
+__L5211_hxlcl_strtoll_bb6:
     ldp x0, x1, [sp, #256] ; hv load L16
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #32 ; hv const_int val
@@ -3012,9 +2995,9 @@ __L7ff7_hxlcl_strtoll_bb6:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #464] ; hv store L29
     ldp x0, x1, [sp, #464] ; hv load L29
-    cbz x1, __L7ff7_hxlcl_strtoll_bb9 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb8 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb7:
+    cbz x1, __L5211_hxlcl_strtoll_bb9 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb8 ; branch -> then
+__L5211_hxlcl_strtoll_bb7:
     ldp x0, x1, [sp, #64] ; hv load L4
     ldp x2, x3, [sp, #224] ; hv load L14
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -3041,9 +3024,9 @@ __L7ff7_hxlcl_strtoll_bb7:
     stp x0, x1, [x15] ; hv store L36
     add x15, sp, #576 ; hv frame base
     ldp x0, x1, [x15] ; hv load L36
-    cbz x1, __L7ff7_hxlcl_strtoll_bb12 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb11 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb8:
+    cbz x1, __L5211_hxlcl_strtoll_bb12 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb11 ; branch -> then
+__L5211_hxlcl_strtoll_bb8:
     ldp x0, x1, [sp, #224] ; hv load L14
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -3062,15 +3045,15 @@ __L7ff7_hxlcl_strtoll_bb8:
     add x15, sp, #512 ; hv frame base
     ldp x0, x1, [x15] ; hv load L32
     stp x0, x1, [sp, #256] ; hv store L16
-    b __L7ff7_hxlcl_strtoll_bb10 ; branch
-__L7ff7_hxlcl_strtoll_bb9:
+    b __L5211_hxlcl_strtoll_bb10 ; branch
+__L5211_hxlcl_strtoll_bb9:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #272] ; hv store L17
-    b __L7ff7_hxlcl_strtoll_bb10 ; branch
-__L7ff7_hxlcl_strtoll_bb10:
-    b __L7ff7_hxlcl_strtoll_bb5 ; branch
-__L7ff7_hxlcl_strtoll_bb11:
+    b __L5211_hxlcl_strtoll_bb10 ; branch
+__L5211_hxlcl_strtoll_bb10:
+    b __L5211_hxlcl_strtoll_bb5 ; branch
+__L5211_hxlcl_strtoll_bb11:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     add x15, sp, #560 ; hv frame base
@@ -3085,8 +3068,8 @@ __L7ff7_hxlcl_strtoll_bb11:
     add x15, sp, #608 ; hv frame base
     ldp x0, x1, [x15] ; hv load L38
     stp x0, x1, [sp, #224] ; hv store L14
-    b __L7ff7_hxlcl_strtoll_bb15 ; branch
-__L7ff7_hxlcl_strtoll_bb12:
+    b __L5211_hxlcl_strtoll_bb15 ; branch
+__L5211_hxlcl_strtoll_bb12:
     add x15, sp, #544 ; hv frame base
     ldp x0, x1, [x15] ; hv load L34
     movz x2, #0 ; hv const_int: TAG_INT
@@ -3098,9 +3081,9 @@ __L7ff7_hxlcl_strtoll_bb12:
     stp x0, x1, [x15] ; hv store L39
     add x15, sp, #624 ; hv frame base
     ldp x0, x1, [x15] ; hv load L39
-    cbz x1, __L7ff7_hxlcl_strtoll_bb14 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb13 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb13:
+    cbz x1, __L5211_hxlcl_strtoll_bb14 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb13 ; branch -> then
+__L5211_hxlcl_strtoll_bb13:
     ldp x0, x1, [sp, #224] ; hv load L14
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -3111,10 +3094,10 @@ __L7ff7_hxlcl_strtoll_bb13:
     add x15, sp, #656 ; hv frame base
     ldp x0, x1, [x15] ; hv load L41
     stp x0, x1, [sp, #224] ; hv store L14
-    b __L7ff7_hxlcl_strtoll_bb14 ; branch
-__L7ff7_hxlcl_strtoll_bb14:
-    b __L7ff7_hxlcl_strtoll_bb15 ; branch
-__L7ff7_hxlcl_strtoll_bb15:
+    b __L5211_hxlcl_strtoll_bb14 ; branch
+__L5211_hxlcl_strtoll_bb14:
+    b __L5211_hxlcl_strtoll_bb15 ; branch
+__L5211_hxlcl_strtoll_bb15:
     ldp x0, x1, [sp, #224] ; hv load L14
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -3210,9 +3193,9 @@ __L7ff7_hxlcl_strtoll_bb15:
     stp x0, x1, [x15] ; hv store L56
     add x15, sp, #896 ; hv frame base
     ldp x0, x1, [x15] ; hv load L56
-    cbz x1, __L7ff7_hxlcl_strtoll_bb17 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb16 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb16:
+    cbz x1, __L5211_hxlcl_strtoll_bb17 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb16 ; branch -> then
+__L5211_hxlcl_strtoll_bb16:
     add x15, sp, #784 ; hv frame base
     ldp x0, x1, [x15] ; hv load L49
     movz x2, #0 ; hv const_int: TAG_INT
@@ -3224,9 +3207,9 @@ __L7ff7_hxlcl_strtoll_bb16:
     stp x0, x1, [x15] ; hv store L58
     add x15, sp, #928 ; hv frame base
     ldp x0, x1, [x15] ; hv load L58
-    cbz x1, __L7ff7_hxlcl_strtoll_bb19 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb18 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb17:
+    cbz x1, __L5211_hxlcl_strtoll_bb19 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb18 ; branch -> then
+__L5211_hxlcl_strtoll_bb17:
     ldp x0, x1, [sp, #208] ; hv load L13
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #16 ; hv const_int val
@@ -3237,9 +3220,9 @@ __L7ff7_hxlcl_strtoll_bb17:
     stp x0, x1, [x15] ; hv store L64
     add x15, sp, #1024 ; hv frame base
     ldp x0, x1, [x15] ; hv load L64
-    cbz x1, __L7ff7_hxlcl_strtoll_bb25 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb24 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb18:
+    cbz x1, __L5211_hxlcl_strtoll_bb25 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb24 ; branch -> then
+__L5211_hxlcl_strtoll_bb18:
     add x15, sp, #880 ; hv frame base
     ldp x0, x1, [x15] ; hv load L55
     movz x2, #0 ; hv const_int: TAG_INT
@@ -3251,14 +3234,14 @@ __L7ff7_hxlcl_strtoll_bb18:
     stp x0, x1, [x15] ; hv store L60
     add x15, sp, #960 ; hv frame base
     ldp x0, x1, [x15] ; hv load L60
-    cbz x1, __L7ff7_hxlcl_strtoll_bb21 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb20 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb19:
+    cbz x1, __L5211_hxlcl_strtoll_bb21 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb20 ; branch -> then
+__L5211_hxlcl_strtoll_bb19:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #10 ; hv const_int val
     stp x0, x1, [sp, #208] ; hv store L13
-    b __L7ff7_hxlcl_strtoll_bb23 ; branch
-__L7ff7_hxlcl_strtoll_bb20:
+    b __L5211_hxlcl_strtoll_bb23 ; branch
+__L5211_hxlcl_strtoll_bb20:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #16 ; hv const_int val
     stp x0, x1, [sp, #208] ; hv store L13
@@ -3272,8 +3255,8 @@ __L7ff7_hxlcl_strtoll_bb20:
     add x15, sp, #992 ; hv frame base
     ldp x0, x1, [x15] ; hv load L62
     stp x0, x1, [sp, #224] ; hv store L14
-    b __L7ff7_hxlcl_strtoll_bb22 ; branch
-__L7ff7_hxlcl_strtoll_bb21:
+    b __L5211_hxlcl_strtoll_bb22 ; branch
+__L5211_hxlcl_strtoll_bb21:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #8 ; hv const_int val
     stp x0, x1, [sp, #208] ; hv store L13
@@ -3287,12 +3270,12 @@ __L7ff7_hxlcl_strtoll_bb21:
     add x15, sp, #1008 ; hv frame base
     ldp x0, x1, [x15] ; hv load L63
     stp x0, x1, [sp, #224] ; hv store L14
-    b __L7ff7_hxlcl_strtoll_bb22 ; branch
-__L7ff7_hxlcl_strtoll_bb22:
-    b __L7ff7_hxlcl_strtoll_bb23 ; branch
-__L7ff7_hxlcl_strtoll_bb23:
-    b __L7ff7_hxlcl_strtoll_bb30 ; branch
-__L7ff7_hxlcl_strtoll_bb24:
+    b __L5211_hxlcl_strtoll_bb22 ; branch
+__L5211_hxlcl_strtoll_bb22:
+    b __L5211_hxlcl_strtoll_bb23 ; branch
+__L5211_hxlcl_strtoll_bb23:
+    b __L5211_hxlcl_strtoll_bb30 ; branch
+__L5211_hxlcl_strtoll_bb24:
     add x15, sp, #784 ; hv frame base
     ldp x0, x1, [x15] ; hv load L49
     movz x2, #0 ; hv const_int: TAG_INT
@@ -3304,11 +3287,11 @@ __L7ff7_hxlcl_strtoll_bb24:
     stp x0, x1, [x15] ; hv store L66
     add x15, sp, #1056 ; hv frame base
     ldp x0, x1, [x15] ; hv load L66
-    cbz x1, __L7ff7_hxlcl_strtoll_bb27 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb26 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb25:
-    b __L7ff7_hxlcl_strtoll_bb30 ; branch
-__L7ff7_hxlcl_strtoll_bb26:
+    cbz x1, __L5211_hxlcl_strtoll_bb27 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb26 ; branch -> then
+__L5211_hxlcl_strtoll_bb25:
+    b __L5211_hxlcl_strtoll_bb30 ; branch
+__L5211_hxlcl_strtoll_bb26:
     add x15, sp, #880 ; hv frame base
     ldp x0, x1, [x15] ; hv load L55
     movz x2, #0 ; hv const_int: TAG_INT
@@ -3320,11 +3303,11 @@ __L7ff7_hxlcl_strtoll_bb26:
     stp x0, x1, [x15] ; hv store L68
     add x15, sp, #1088 ; hv frame base
     ldp x0, x1, [x15] ; hv load L68
-    cbz x1, __L7ff7_hxlcl_strtoll_bb29 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb28 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb27:
-    b __L7ff7_hxlcl_strtoll_bb25 ; branch
-__L7ff7_hxlcl_strtoll_bb28:
+    cbz x1, __L5211_hxlcl_strtoll_bb29 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb28 ; branch -> then
+__L5211_hxlcl_strtoll_bb27:
+    b __L5211_hxlcl_strtoll_bb25 ; branch
+__L5211_hxlcl_strtoll_bb28:
     ldp x0, x1, [sp, #224] ; hv load L14
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #2 ; hv const_int val
@@ -3335,10 +3318,10 @@ __L7ff7_hxlcl_strtoll_bb28:
     add x15, sp, #1120 ; hv frame base
     ldp x0, x1, [x15] ; hv load L70
     stp x0, x1, [sp, #224] ; hv store L14
-    b __L7ff7_hxlcl_strtoll_bb29 ; branch
-__L7ff7_hxlcl_strtoll_bb29:
-    b __L7ff7_hxlcl_strtoll_bb27 ; branch
-__L7ff7_hxlcl_strtoll_bb30:
+    b __L5211_hxlcl_strtoll_bb29 ; branch
+__L5211_hxlcl_strtoll_bb29:
+    b __L5211_hxlcl_strtoll_bb27 ; branch
+__L5211_hxlcl_strtoll_bb30:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #1136 ; hv frame base
@@ -3347,8 +3330,8 @@ __L7ff7_hxlcl_strtoll_bb30:
     movz x1, #1 ; hv const_int val
     add x15, sp, #1152 ; hv frame base
     stp x0, x1, [x15] ; hv store L72
-    b __L7ff7_hxlcl_strtoll_bb31 ; branch
-__L7ff7_hxlcl_strtoll_bb31:
+    b __L5211_hxlcl_strtoll_bb31 ; branch
+__L5211_hxlcl_strtoll_bb31:
     add x15, sp, #1152 ; hv frame base
     ldp x0, x1, [x15] ; hv load L72
     movz x2, #0 ; hv const_int: TAG_INT
@@ -3360,9 +3343,9 @@ __L7ff7_hxlcl_strtoll_bb31:
     stp x0, x1, [x15] ; hv store L73
     add x15, sp, #1168 ; hv frame base
     ldp x0, x1, [x15] ; hv load L73
-    cbz x1, __L7ff7_hxlcl_strtoll_bb33 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb32 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb32:
+    cbz x1, __L5211_hxlcl_strtoll_bb33 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb32 ; branch -> then
+__L5211_hxlcl_strtoll_bb32:
     ldp x0, x1, [sp, #64] ; hv load L4
     ldp x2, x3, [sp, #224] ; hv load L14
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -3431,9 +3414,9 @@ __L7ff7_hxlcl_strtoll_bb32:
     stp x0, x1, [x15] ; hv store L84
     add x15, sp, #1344 ; hv frame base
     ldp x0, x1, [x15] ; hv load L84
-    cbz x1, __L7ff7_hxlcl_strtoll_bb35 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb34 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb33:
+    cbz x1, __L5211_hxlcl_strtoll_bb35 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb34 ; branch -> then
+__L5211_hxlcl_strtoll_bb33:
     ldp x0, x1, [sp, #64] ; hv load L4
     ldp x2, x3, [sp, #224] ; hv load L14
     add x1, x1, x3 ; __hx_payload_add: x1 = a.pl add b.pl
@@ -3454,9 +3437,9 @@ __L7ff7_hxlcl_strtoll_bb33:
     stp x0, x1, [x15] ; hv store L119
     add x15, sp, #1904 ; hv frame base
     ldp x0, x1, [x15] ; hv load L119
-    cbz x1, __L7ff7_hxlcl_strtoll_bb49 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb48 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb34:
+    cbz x1, __L5211_hxlcl_strtoll_bb49 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb48 ; branch -> then
+__L5211_hxlcl_strtoll_bb34:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     add x15, sp, #1216 ; hv frame base
@@ -3473,8 +3456,8 @@ __L7ff7_hxlcl_strtoll_bb34:
     ldp x0, x1, [x15] ; hv load L86
     add x15, sp, #1232 ; hv frame base
     stp x0, x1, [x15] ; hv store L77
-    b __L7ff7_hxlcl_strtoll_bb41 ; branch
-__L7ff7_hxlcl_strtoll_bb35:
+    b __L5211_hxlcl_strtoll_bb41 ; branch
+__L5211_hxlcl_strtoll_bb35:
     add x15, sp, #1200 ; hv frame base
     ldp x0, x1, [x15] ; hv load L75
     movz x2, #0 ; hv const_int: TAG_INT
@@ -3524,9 +3507,9 @@ __L7ff7_hxlcl_strtoll_bb35:
     stp x0, x1, [x15] ; hv store L93
     add x15, sp, #1488 ; hv frame base
     ldp x0, x1, [x15] ; hv load L93
-    cbz x1, __L7ff7_hxlcl_strtoll_bb37 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb36 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb36:
+    cbz x1, __L5211_hxlcl_strtoll_bb37 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb36 ; branch -> then
+__L5211_hxlcl_strtoll_bb36:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     add x15, sp, #1216 ; hv frame base
@@ -3555,8 +3538,8 @@ __L7ff7_hxlcl_strtoll_bb36:
     ldp x0, x1, [x15] ; hv load L97
     add x15, sp, #1232 ; hv frame base
     stp x0, x1, [x15] ; hv store L77
-    b __L7ff7_hxlcl_strtoll_bb40 ; branch
-__L7ff7_hxlcl_strtoll_bb37:
+    b __L5211_hxlcl_strtoll_bb40 ; branch
+__L5211_hxlcl_strtoll_bb37:
     add x15, sp, #1200 ; hv frame base
     ldp x0, x1, [x15] ; hv load L75
     movz x2, #0 ; hv const_int: TAG_INT
@@ -3606,9 +3589,9 @@ __L7ff7_hxlcl_strtoll_bb37:
     stp x0, x1, [x15] ; hv store L104
     add x15, sp, #1664 ; hv frame base
     ldp x0, x1, [x15] ; hv load L104
-    cbz x1, __L7ff7_hxlcl_strtoll_bb39 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb38 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb38:
+    cbz x1, __L5211_hxlcl_strtoll_bb39 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb38 ; branch -> then
+__L5211_hxlcl_strtoll_bb38:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     add x15, sp, #1216 ; hv frame base
@@ -3637,12 +3620,12 @@ __L7ff7_hxlcl_strtoll_bb38:
     ldp x0, x1, [x15] ; hv load L108
     add x15, sp, #1232 ; hv frame base
     stp x0, x1, [x15] ; hv store L77
-    b __L7ff7_hxlcl_strtoll_bb39 ; branch
-__L7ff7_hxlcl_strtoll_bb39:
-    b __L7ff7_hxlcl_strtoll_bb40 ; branch
-__L7ff7_hxlcl_strtoll_bb40:
-    b __L7ff7_hxlcl_strtoll_bb41 ; branch
-__L7ff7_hxlcl_strtoll_bb41:
+    b __L5211_hxlcl_strtoll_bb39 ; branch
+__L5211_hxlcl_strtoll_bb39:
+    b __L5211_hxlcl_strtoll_bb40 ; branch
+__L5211_hxlcl_strtoll_bb40:
+    b __L5211_hxlcl_strtoll_bb41 ; branch
+__L5211_hxlcl_strtoll_bb41:
     add x15, sp, #1216 ; hv frame base
     ldp x0, x1, [x15] ; hv load L76
     movz x2, #0 ; hv const_int: TAG_INT
@@ -3654,15 +3637,15 @@ __L7ff7_hxlcl_strtoll_bb41:
     stp x0, x1, [x15] ; hv store L109
     add x15, sp, #1744 ; hv frame base
     ldp x0, x1, [x15] ; hv load L109
-    cbz x1, __L7ff7_hxlcl_strtoll_bb43 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb42 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb42:
+    cbz x1, __L5211_hxlcl_strtoll_bb43 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb42 ; branch -> then
+__L5211_hxlcl_strtoll_bb42:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #1152 ; hv frame base
     stp x0, x1, [x15] ; hv store L72
-    b __L7ff7_hxlcl_strtoll_bb47 ; branch
-__L7ff7_hxlcl_strtoll_bb43:
+    b __L5211_hxlcl_strtoll_bb47 ; branch
+__L5211_hxlcl_strtoll_bb43:
     add x15, sp, #1232 ; hv frame base
     ldp x0, x1, [x15] ; hv load L77
     ldp x2, x3, [sp, #208] ; hv load L13
@@ -3673,15 +3656,15 @@ __L7ff7_hxlcl_strtoll_bb43:
     stp x0, x1, [x15] ; hv store L111
     add x15, sp, #1776 ; hv frame base
     ldp x0, x1, [x15] ; hv load L111
-    cbz x1, __L7ff7_hxlcl_strtoll_bb45 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb44 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb44:
+    cbz x1, __L5211_hxlcl_strtoll_bb45 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb44 ; branch -> then
+__L5211_hxlcl_strtoll_bb44:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #1152 ; hv frame base
     stp x0, x1, [x15] ; hv store L72
-    b __L7ff7_hxlcl_strtoll_bb46 ; branch
-__L7ff7_hxlcl_strtoll_bb45:
+    b __L5211_hxlcl_strtoll_bb46 ; branch
+__L5211_hxlcl_strtoll_bb45:
     add x15, sp, #1136 ; hv frame base
     ldp x0, x1, [x15] ; hv load L71
     ldp x2, x3, [sp, #208] ; hv load L13
@@ -3715,12 +3698,12 @@ __L7ff7_hxlcl_strtoll_bb45:
     add x15, sp, #1856 ; hv frame base
     ldp x0, x1, [x15] ; hv load L116
     stp x0, x1, [sp, #224] ; hv store L14
-    b __L7ff7_hxlcl_strtoll_bb46 ; branch
-__L7ff7_hxlcl_strtoll_bb46:
-    b __L7ff7_hxlcl_strtoll_bb47 ; branch
-__L7ff7_hxlcl_strtoll_bb47:
-    b __L7ff7_hxlcl_strtoll_bb31 ; branch
-__L7ff7_hxlcl_strtoll_bb48:
+    b __L5211_hxlcl_strtoll_bb46 ; branch
+__L5211_hxlcl_strtoll_bb46:
+    b __L5211_hxlcl_strtoll_bb47 ; branch
+__L5211_hxlcl_strtoll_bb47:
+    b __L5211_hxlcl_strtoll_bb31 ; branch
+__L5211_hxlcl_strtoll_bb48:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -3733,8 +3716,8 @@ __L7ff7_hxlcl_strtoll_bb48:
     movz x0, #0 ; __hx_ptr_store64: TAG_INT
     add x15, sp, #1936 ; hv frame base
     stp x0, x1, [x15] ; hv store L121
-    b __L7ff7_hxlcl_strtoll_bb49 ; branch
-__L7ff7_hxlcl_strtoll_bb49:
+    b __L5211_hxlcl_strtoll_bb49 ; branch
+__L5211_hxlcl_strtoll_bb49:
     add x15, sp, #560 ; hv frame base
     ldp x0, x1, [x15] ; hv load L35
     movz x2, #0 ; hv const_int: TAG_INT
@@ -3746,9 +3729,9 @@ __L7ff7_hxlcl_strtoll_bb49:
     stp x0, x1, [x15] ; hv store L122
     add x15, sp, #1952 ; hv frame base
     ldp x0, x1, [x15] ; hv load L122
-    cbz x1, __L7ff7_hxlcl_strtoll_bb51 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoll_bb50 ; branch -> then
-__L7ff7_hxlcl_strtoll_bb50:
+    cbz x1, __L5211_hxlcl_strtoll_bb51 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoll_bb50 ; branch -> then
+__L5211_hxlcl_strtoll_bb50:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #1136 ; hv frame base
@@ -3766,13 +3749,12 @@ __L7ff7_hxlcl_strtoll_bb50:
     add sp, sp, #2016 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_strtoll_bb51:
+__L5211_hxlcl_strtoll_bb51:
     add x15, sp, #1136 ; hv frame base
     ldp x9, x0, [x15] ; hv load L71
     add sp, sp, #2016 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_strtoull
     .p2align 2
 _hxlcl_strtoull:
     .loc 1 867 0
@@ -3785,7 +3767,7 @@ _hxlcl_strtoull:
     stp x9, x1, [sp, #16] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #32] ; cabi ingress param 2
-__L7ff7_hxlcl_strtoull_bb0:
+__L5211_hxlcl_strtoull_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -3810,9 +3792,9 @@ __L7ff7_hxlcl_strtoull_bb0:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #112] ; hv store L7
     ldp x0, x1, [sp, #112] ; hv load L7
-    cbz x1, __L7ff7_hxlcl_strtoull_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoull_bb1 ; branch -> then
-__L7ff7_hxlcl_strtoull_bb1:
+    cbz x1, __L5211_hxlcl_strtoull_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoull_bb1 ; branch -> then
+__L5211_hxlcl_strtoull_bb1:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -3821,9 +3803,9 @@ __L7ff7_hxlcl_strtoull_bb1:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #144] ; hv store L9
     ldp x0, x1, [sp, #144] ; hv load L9
-    cbz x1, __L7ff7_hxlcl_strtoull_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoull_bb3 ; branch -> then
-__L7ff7_hxlcl_strtoull_bb2:
+    cbz x1, __L5211_hxlcl_strtoull_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoull_bb3 ; branch -> then
+__L5211_hxlcl_strtoull_bb2:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -3846,8 +3828,8 @@ __L7ff7_hxlcl_strtoull_bb2:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #272] ; hv store L17
-    b __L7ff7_hxlcl_strtoull_bb5 ; branch
-__L7ff7_hxlcl_strtoull_bb3:
+    b __L5211_hxlcl_strtoull_bb5 ; branch
+__L5211_hxlcl_strtoull_bb3:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -3858,14 +3840,14 @@ __L7ff7_hxlcl_strtoull_bb3:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x0, #0 ; __hx_ptr_store64: TAG_INT
     stp x0, x1, [sp, #176] ; hv store L11
-    b __L7ff7_hxlcl_strtoull_bb4 ; branch
-__L7ff7_hxlcl_strtoull_bb4:
+    b __L5211_hxlcl_strtoull_bb4 ; branch
+__L5211_hxlcl_strtoull_bb4:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #1888 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_strtoull_bb5:
+__L5211_hxlcl_strtoull_bb5:
     ldp x0, x1, [sp, #272] ; hv load L17
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -3874,9 +3856,9 @@ __L7ff7_hxlcl_strtoull_bb5:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #288] ; hv store L18
     ldp x0, x1, [sp, #288] ; hv load L18
-    cbz x1, __L7ff7_hxlcl_strtoull_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoull_bb6 ; branch -> then
-__L7ff7_hxlcl_strtoull_bb6:
+    cbz x1, __L5211_hxlcl_strtoull_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoull_bb6 ; branch -> then
+__L5211_hxlcl_strtoull_bb6:
     ldp x0, x1, [sp, #256] ; hv load L16
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #32 ; hv const_int val
@@ -3926,9 +3908,9 @@ __L7ff7_hxlcl_strtoull_bb6:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #464] ; hv store L29
     ldp x0, x1, [sp, #464] ; hv load L29
-    cbz x1, __L7ff7_hxlcl_strtoull_bb9 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoull_bb8 ; branch -> then
-__L7ff7_hxlcl_strtoull_bb7:
+    cbz x1, __L5211_hxlcl_strtoull_bb9 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoull_bb8 ; branch -> then
+__L5211_hxlcl_strtoull_bb7:
     ldp x0, x1, [sp, #64] ; hv load L4
     ldp x2, x3, [sp, #224] ; hv load L14
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -3951,9 +3933,9 @@ __L7ff7_hxlcl_strtoull_bb7:
     stp x0, x1, [x15] ; hv store L35
     add x15, sp, #560 ; hv frame base
     ldp x0, x1, [x15] ; hv load L35
-    cbz x1, __L7ff7_hxlcl_strtoull_bb12 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoull_bb11 ; branch -> then
-__L7ff7_hxlcl_strtoull_bb8:
+    cbz x1, __L5211_hxlcl_strtoull_bb12 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoull_bb11 ; branch -> then
+__L5211_hxlcl_strtoull_bb8:
     ldp x0, x1, [sp, #224] ; hv load L14
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -3972,15 +3954,15 @@ __L7ff7_hxlcl_strtoull_bb8:
     add x15, sp, #512 ; hv frame base
     ldp x0, x1, [x15] ; hv load L32
     stp x0, x1, [sp, #256] ; hv store L16
-    b __L7ff7_hxlcl_strtoull_bb10 ; branch
-__L7ff7_hxlcl_strtoull_bb9:
+    b __L5211_hxlcl_strtoull_bb10 ; branch
+__L5211_hxlcl_strtoull_bb9:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #272] ; hv store L17
-    b __L7ff7_hxlcl_strtoull_bb10 ; branch
-__L7ff7_hxlcl_strtoull_bb10:
-    b __L7ff7_hxlcl_strtoull_bb5 ; branch
-__L7ff7_hxlcl_strtoull_bb11:
+    b __L5211_hxlcl_strtoull_bb10 ; branch
+__L5211_hxlcl_strtoull_bb10:
+    b __L5211_hxlcl_strtoull_bb5 ; branch
+__L5211_hxlcl_strtoull_bb11:
     ldp x0, x1, [sp, #224] ; hv load L14
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -3991,8 +3973,8 @@ __L7ff7_hxlcl_strtoull_bb11:
     add x15, sp, #592 ; hv frame base
     ldp x0, x1, [x15] ; hv load L37
     stp x0, x1, [sp, #224] ; hv store L14
-    b __L7ff7_hxlcl_strtoull_bb12 ; branch
-__L7ff7_hxlcl_strtoull_bb12:
+    b __L5211_hxlcl_strtoull_bb12 ; branch
+__L5211_hxlcl_strtoull_bb12:
     ldp x0, x1, [sp, #224] ; hv load L14
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -4088,9 +4070,9 @@ __L7ff7_hxlcl_strtoull_bb12:
     stp x0, x1, [x15] ; hv store L52
     add x15, sp, #832 ; hv frame base
     ldp x0, x1, [x15] ; hv load L52
-    cbz x1, __L7ff7_hxlcl_strtoull_bb14 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoull_bb13 ; branch -> then
-__L7ff7_hxlcl_strtoull_bb13:
+    cbz x1, __L5211_hxlcl_strtoull_bb14 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoull_bb13 ; branch -> then
+__L5211_hxlcl_strtoull_bb13:
     add x15, sp, #720 ; hv frame base
     ldp x0, x1, [x15] ; hv load L45
     movz x2, #0 ; hv const_int: TAG_INT
@@ -4102,9 +4084,9 @@ __L7ff7_hxlcl_strtoull_bb13:
     stp x0, x1, [x15] ; hv store L54
     add x15, sp, #864 ; hv frame base
     ldp x0, x1, [x15] ; hv load L54
-    cbz x1, __L7ff7_hxlcl_strtoull_bb16 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoull_bb15 ; branch -> then
-__L7ff7_hxlcl_strtoull_bb14:
+    cbz x1, __L5211_hxlcl_strtoull_bb16 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoull_bb15 ; branch -> then
+__L5211_hxlcl_strtoull_bb14:
     ldp x0, x1, [sp, #208] ; hv load L13
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #16 ; hv const_int val
@@ -4115,9 +4097,9 @@ __L7ff7_hxlcl_strtoull_bb14:
     stp x0, x1, [x15] ; hv store L60
     add x15, sp, #960 ; hv frame base
     ldp x0, x1, [x15] ; hv load L60
-    cbz x1, __L7ff7_hxlcl_strtoull_bb22 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoull_bb21 ; branch -> then
-__L7ff7_hxlcl_strtoull_bb15:
+    cbz x1, __L5211_hxlcl_strtoull_bb22 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoull_bb21 ; branch -> then
+__L5211_hxlcl_strtoull_bb15:
     add x15, sp, #816 ; hv frame base
     ldp x0, x1, [x15] ; hv load L51
     movz x2, #0 ; hv const_int: TAG_INT
@@ -4129,14 +4111,14 @@ __L7ff7_hxlcl_strtoull_bb15:
     stp x0, x1, [x15] ; hv store L56
     add x15, sp, #896 ; hv frame base
     ldp x0, x1, [x15] ; hv load L56
-    cbz x1, __L7ff7_hxlcl_strtoull_bb18 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoull_bb17 ; branch -> then
-__L7ff7_hxlcl_strtoull_bb16:
+    cbz x1, __L5211_hxlcl_strtoull_bb18 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoull_bb17 ; branch -> then
+__L5211_hxlcl_strtoull_bb16:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #10 ; hv const_int val
     stp x0, x1, [sp, #208] ; hv store L13
-    b __L7ff7_hxlcl_strtoull_bb20 ; branch
-__L7ff7_hxlcl_strtoull_bb17:
+    b __L5211_hxlcl_strtoull_bb20 ; branch
+__L5211_hxlcl_strtoull_bb17:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #16 ; hv const_int val
     stp x0, x1, [sp, #208] ; hv store L13
@@ -4150,8 +4132,8 @@ __L7ff7_hxlcl_strtoull_bb17:
     add x15, sp, #928 ; hv frame base
     ldp x0, x1, [x15] ; hv load L58
     stp x0, x1, [sp, #224] ; hv store L14
-    b __L7ff7_hxlcl_strtoull_bb19 ; branch
-__L7ff7_hxlcl_strtoull_bb18:
+    b __L5211_hxlcl_strtoull_bb19 ; branch
+__L5211_hxlcl_strtoull_bb18:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #8 ; hv const_int val
     stp x0, x1, [sp, #208] ; hv store L13
@@ -4165,12 +4147,12 @@ __L7ff7_hxlcl_strtoull_bb18:
     add x15, sp, #944 ; hv frame base
     ldp x0, x1, [x15] ; hv load L59
     stp x0, x1, [sp, #224] ; hv store L14
-    b __L7ff7_hxlcl_strtoull_bb19 ; branch
-__L7ff7_hxlcl_strtoull_bb19:
-    b __L7ff7_hxlcl_strtoull_bb20 ; branch
-__L7ff7_hxlcl_strtoull_bb20:
-    b __L7ff7_hxlcl_strtoull_bb27 ; branch
-__L7ff7_hxlcl_strtoull_bb21:
+    b __L5211_hxlcl_strtoull_bb19 ; branch
+__L5211_hxlcl_strtoull_bb19:
+    b __L5211_hxlcl_strtoull_bb20 ; branch
+__L5211_hxlcl_strtoull_bb20:
+    b __L5211_hxlcl_strtoull_bb27 ; branch
+__L5211_hxlcl_strtoull_bb21:
     add x15, sp, #720 ; hv frame base
     ldp x0, x1, [x15] ; hv load L45
     movz x2, #0 ; hv const_int: TAG_INT
@@ -4182,11 +4164,11 @@ __L7ff7_hxlcl_strtoull_bb21:
     stp x0, x1, [x15] ; hv store L62
     add x15, sp, #992 ; hv frame base
     ldp x0, x1, [x15] ; hv load L62
-    cbz x1, __L7ff7_hxlcl_strtoull_bb24 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoull_bb23 ; branch -> then
-__L7ff7_hxlcl_strtoull_bb22:
-    b __L7ff7_hxlcl_strtoull_bb27 ; branch
-__L7ff7_hxlcl_strtoull_bb23:
+    cbz x1, __L5211_hxlcl_strtoull_bb24 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoull_bb23 ; branch -> then
+__L5211_hxlcl_strtoull_bb22:
+    b __L5211_hxlcl_strtoull_bb27 ; branch
+__L5211_hxlcl_strtoull_bb23:
     add x15, sp, #816 ; hv frame base
     ldp x0, x1, [x15] ; hv load L51
     movz x2, #0 ; hv const_int: TAG_INT
@@ -4198,11 +4180,11 @@ __L7ff7_hxlcl_strtoull_bb23:
     stp x0, x1, [x15] ; hv store L64
     add x15, sp, #1024 ; hv frame base
     ldp x0, x1, [x15] ; hv load L64
-    cbz x1, __L7ff7_hxlcl_strtoull_bb26 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoull_bb25 ; branch -> then
-__L7ff7_hxlcl_strtoull_bb24:
-    b __L7ff7_hxlcl_strtoull_bb22 ; branch
-__L7ff7_hxlcl_strtoull_bb25:
+    cbz x1, __L5211_hxlcl_strtoull_bb26 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoull_bb25 ; branch -> then
+__L5211_hxlcl_strtoull_bb24:
+    b __L5211_hxlcl_strtoull_bb22 ; branch
+__L5211_hxlcl_strtoull_bb25:
     ldp x0, x1, [sp, #224] ; hv load L14
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #2 ; hv const_int val
@@ -4213,10 +4195,10 @@ __L7ff7_hxlcl_strtoull_bb25:
     add x15, sp, #1056 ; hv frame base
     ldp x0, x1, [x15] ; hv load L66
     stp x0, x1, [sp, #224] ; hv store L14
-    b __L7ff7_hxlcl_strtoull_bb26 ; branch
-__L7ff7_hxlcl_strtoull_bb26:
-    b __L7ff7_hxlcl_strtoull_bb24 ; branch
-__L7ff7_hxlcl_strtoull_bb27:
+    b __L5211_hxlcl_strtoull_bb26 ; branch
+__L5211_hxlcl_strtoull_bb26:
+    b __L5211_hxlcl_strtoull_bb24 ; branch
+__L5211_hxlcl_strtoull_bb27:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #1072 ; hv frame base
@@ -4225,8 +4207,8 @@ __L7ff7_hxlcl_strtoull_bb27:
     movz x1, #1 ; hv const_int val
     add x15, sp, #1088 ; hv frame base
     stp x0, x1, [x15] ; hv store L68
-    b __L7ff7_hxlcl_strtoull_bb28 ; branch
-__L7ff7_hxlcl_strtoull_bb28:
+    b __L5211_hxlcl_strtoull_bb28 ; branch
+__L5211_hxlcl_strtoull_bb28:
     add x15, sp, #1088 ; hv frame base
     ldp x0, x1, [x15] ; hv load L68
     movz x2, #0 ; hv const_int: TAG_INT
@@ -4238,9 +4220,9 @@ __L7ff7_hxlcl_strtoull_bb28:
     stp x0, x1, [x15] ; hv store L69
     add x15, sp, #1104 ; hv frame base
     ldp x0, x1, [x15] ; hv load L69
-    cbz x1, __L7ff7_hxlcl_strtoull_bb30 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoull_bb29 ; branch -> then
-__L7ff7_hxlcl_strtoull_bb29:
+    cbz x1, __L5211_hxlcl_strtoull_bb30 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoull_bb29 ; branch -> then
+__L5211_hxlcl_strtoull_bb29:
     ldp x0, x1, [sp, #64] ; hv load L4
     ldp x2, x3, [sp, #224] ; hv load L14
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -4309,9 +4291,9 @@ __L7ff7_hxlcl_strtoull_bb29:
     stp x0, x1, [x15] ; hv store L80
     add x15, sp, #1280 ; hv frame base
     ldp x0, x1, [x15] ; hv load L80
-    cbz x1, __L7ff7_hxlcl_strtoull_bb32 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoull_bb31 ; branch -> then
-__L7ff7_hxlcl_strtoull_bb30:
+    cbz x1, __L5211_hxlcl_strtoull_bb32 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoull_bb31 ; branch -> then
+__L5211_hxlcl_strtoull_bb30:
     ldp x0, x1, [sp, #64] ; hv load L4
     ldp x2, x3, [sp, #224] ; hv load L14
     add x1, x1, x3 ; __hx_payload_add: x1 = a.pl add b.pl
@@ -4332,9 +4314,9 @@ __L7ff7_hxlcl_strtoull_bb30:
     stp x0, x1, [x15] ; hv store L115
     add x15, sp, #1840 ; hv frame base
     ldp x0, x1, [x15] ; hv load L115
-    cbz x1, __L7ff7_hxlcl_strtoull_bb46 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoull_bb45 ; branch -> then
-__L7ff7_hxlcl_strtoull_bb31:
+    cbz x1, __L5211_hxlcl_strtoull_bb46 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoull_bb45 ; branch -> then
+__L5211_hxlcl_strtoull_bb31:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     add x15, sp, #1152 ; hv frame base
@@ -4351,8 +4333,8 @@ __L7ff7_hxlcl_strtoull_bb31:
     ldp x0, x1, [x15] ; hv load L82
     add x15, sp, #1168 ; hv frame base
     stp x0, x1, [x15] ; hv store L73
-    b __L7ff7_hxlcl_strtoull_bb38 ; branch
-__L7ff7_hxlcl_strtoull_bb32:
+    b __L5211_hxlcl_strtoull_bb38 ; branch
+__L5211_hxlcl_strtoull_bb32:
     add x15, sp, #1136 ; hv frame base
     ldp x0, x1, [x15] ; hv load L71
     movz x2, #0 ; hv const_int: TAG_INT
@@ -4402,9 +4384,9 @@ __L7ff7_hxlcl_strtoull_bb32:
     stp x0, x1, [x15] ; hv store L89
     add x15, sp, #1424 ; hv frame base
     ldp x0, x1, [x15] ; hv load L89
-    cbz x1, __L7ff7_hxlcl_strtoull_bb34 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoull_bb33 ; branch -> then
-__L7ff7_hxlcl_strtoull_bb33:
+    cbz x1, __L5211_hxlcl_strtoull_bb34 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoull_bb33 ; branch -> then
+__L5211_hxlcl_strtoull_bb33:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     add x15, sp, #1152 ; hv frame base
@@ -4433,8 +4415,8 @@ __L7ff7_hxlcl_strtoull_bb33:
     ldp x0, x1, [x15] ; hv load L93
     add x15, sp, #1168 ; hv frame base
     stp x0, x1, [x15] ; hv store L73
-    b __L7ff7_hxlcl_strtoull_bb37 ; branch
-__L7ff7_hxlcl_strtoull_bb34:
+    b __L5211_hxlcl_strtoull_bb37 ; branch
+__L5211_hxlcl_strtoull_bb34:
     add x15, sp, #1136 ; hv frame base
     ldp x0, x1, [x15] ; hv load L71
     movz x2, #0 ; hv const_int: TAG_INT
@@ -4484,9 +4466,9 @@ __L7ff7_hxlcl_strtoull_bb34:
     stp x0, x1, [x15] ; hv store L100
     add x15, sp, #1600 ; hv frame base
     ldp x0, x1, [x15] ; hv load L100
-    cbz x1, __L7ff7_hxlcl_strtoull_bb36 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoull_bb35 ; branch -> then
-__L7ff7_hxlcl_strtoull_bb35:
+    cbz x1, __L5211_hxlcl_strtoull_bb36 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoull_bb35 ; branch -> then
+__L5211_hxlcl_strtoull_bb35:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     add x15, sp, #1152 ; hv frame base
@@ -4515,12 +4497,12 @@ __L7ff7_hxlcl_strtoull_bb35:
     ldp x0, x1, [x15] ; hv load L104
     add x15, sp, #1168 ; hv frame base
     stp x0, x1, [x15] ; hv store L73
-    b __L7ff7_hxlcl_strtoull_bb36 ; branch
-__L7ff7_hxlcl_strtoull_bb36:
-    b __L7ff7_hxlcl_strtoull_bb37 ; branch
-__L7ff7_hxlcl_strtoull_bb37:
-    b __L7ff7_hxlcl_strtoull_bb38 ; branch
-__L7ff7_hxlcl_strtoull_bb38:
+    b __L5211_hxlcl_strtoull_bb36 ; branch
+__L5211_hxlcl_strtoull_bb36:
+    b __L5211_hxlcl_strtoull_bb37 ; branch
+__L5211_hxlcl_strtoull_bb37:
+    b __L5211_hxlcl_strtoull_bb38 ; branch
+__L5211_hxlcl_strtoull_bb38:
     add x15, sp, #1152 ; hv frame base
     ldp x0, x1, [x15] ; hv load L72
     movz x2, #0 ; hv const_int: TAG_INT
@@ -4532,15 +4514,15 @@ __L7ff7_hxlcl_strtoull_bb38:
     stp x0, x1, [x15] ; hv store L105
     add x15, sp, #1680 ; hv frame base
     ldp x0, x1, [x15] ; hv load L105
-    cbz x1, __L7ff7_hxlcl_strtoull_bb40 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoull_bb39 ; branch -> then
-__L7ff7_hxlcl_strtoull_bb39:
+    cbz x1, __L5211_hxlcl_strtoull_bb40 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoull_bb39 ; branch -> then
+__L5211_hxlcl_strtoull_bb39:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #1088 ; hv frame base
     stp x0, x1, [x15] ; hv store L68
-    b __L7ff7_hxlcl_strtoull_bb44 ; branch
-__L7ff7_hxlcl_strtoull_bb40:
+    b __L5211_hxlcl_strtoull_bb44 ; branch
+__L5211_hxlcl_strtoull_bb40:
     add x15, sp, #1168 ; hv frame base
     ldp x0, x1, [x15] ; hv load L73
     ldp x2, x3, [sp, #208] ; hv load L13
@@ -4551,15 +4533,15 @@ __L7ff7_hxlcl_strtoull_bb40:
     stp x0, x1, [x15] ; hv store L107
     add x15, sp, #1712 ; hv frame base
     ldp x0, x1, [x15] ; hv load L107
-    cbz x1, __L7ff7_hxlcl_strtoull_bb42 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strtoull_bb41 ; branch -> then
-__L7ff7_hxlcl_strtoull_bb41:
+    cbz x1, __L5211_hxlcl_strtoull_bb42 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strtoull_bb41 ; branch -> then
+__L5211_hxlcl_strtoull_bb41:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #1088 ; hv frame base
     stp x0, x1, [x15] ; hv store L68
-    b __L7ff7_hxlcl_strtoull_bb43 ; branch
-__L7ff7_hxlcl_strtoull_bb42:
+    b __L5211_hxlcl_strtoull_bb43 ; branch
+__L5211_hxlcl_strtoull_bb42:
     add x15, sp, #1072 ; hv frame base
     ldp x0, x1, [x15] ; hv load L67
     ldp x2, x3, [sp, #208] ; hv load L13
@@ -4593,12 +4575,12 @@ __L7ff7_hxlcl_strtoull_bb42:
     add x15, sp, #1792 ; hv frame base
     ldp x0, x1, [x15] ; hv load L112
     stp x0, x1, [sp, #224] ; hv store L14
-    b __L7ff7_hxlcl_strtoull_bb43 ; branch
-__L7ff7_hxlcl_strtoull_bb43:
-    b __L7ff7_hxlcl_strtoull_bb44 ; branch
-__L7ff7_hxlcl_strtoull_bb44:
-    b __L7ff7_hxlcl_strtoull_bb28 ; branch
-__L7ff7_hxlcl_strtoull_bb45:
+    b __L5211_hxlcl_strtoull_bb43 ; branch
+__L5211_hxlcl_strtoull_bb43:
+    b __L5211_hxlcl_strtoull_bb44 ; branch
+__L5211_hxlcl_strtoull_bb44:
+    b __L5211_hxlcl_strtoull_bb28 ; branch
+__L5211_hxlcl_strtoull_bb45:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -4611,14 +4593,13 @@ __L7ff7_hxlcl_strtoull_bb45:
     movz x0, #0 ; __hx_ptr_store64: TAG_INT
     add x15, sp, #1872 ; hv frame base
     stp x0, x1, [x15] ; hv store L117
-    b __L7ff7_hxlcl_strtoull_bb46 ; branch
-__L7ff7_hxlcl_strtoull_bb46:
+    b __L5211_hxlcl_strtoull_bb46 ; branch
+__L5211_hxlcl_strtoull_bb46:
     add x15, sp, #1072 ; hv frame base
     ldp x9, x0, [x15] ; hv load L67
     add sp, sp, #1888 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_atoll
     .p2align 2
 _hxlcl_atoll:
     .loc 1 1032 0
@@ -4627,7 +4608,7 @@ _hxlcl_atoll:
     sub sp, sp, #896 ; sp adj
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x0, [sp, #0] ; cabi ingress param 0
-__L7ff7_hxlcl_atoll_bb0:
+__L5211_hxlcl_atoll_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -4644,15 +4625,15 @@ __L7ff7_hxlcl_atoll_bb0:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #48] ; hv store L3
     ldp x0, x1, [sp, #48] ; hv load L3
-    cbz x1, __L7ff7_hxlcl_atoll_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atoll_bb1 ; branch -> then
-__L7ff7_hxlcl_atoll_bb1:
+    cbz x1, __L5211_hxlcl_atoll_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atoll_bb1 ; branch -> then
+__L5211_hxlcl_atoll_bb1:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #896 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_atoll_bb2:
+__L5211_hxlcl_atoll_bb2:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #80] ; hv store L5
@@ -4667,8 +4648,8 @@ __L7ff7_hxlcl_atoll_bb2:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #128] ; hv store L8
-    b __L7ff7_hxlcl_atoll_bb3 ; branch
-__L7ff7_hxlcl_atoll_bb3:
+    b __L5211_hxlcl_atoll_bb3 ; branch
+__L5211_hxlcl_atoll_bb3:
     ldp x0, x1, [sp, #128] ; hv load L8
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -4677,9 +4658,9 @@ __L7ff7_hxlcl_atoll_bb3:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #144] ; hv store L9
     ldp x0, x1, [sp, #144] ; hv load L9
-    cbz x1, __L7ff7_hxlcl_atoll_bb5 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atoll_bb4 ; branch -> then
-__L7ff7_hxlcl_atoll_bb4:
+    cbz x1, __L5211_hxlcl_atoll_bb5 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atoll_bb4 ; branch -> then
+__L5211_hxlcl_atoll_bb4:
     ldp x0, x1, [sp, #112] ; hv load L7
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #32 ; hv const_int val
@@ -4729,9 +4710,9 @@ __L7ff7_hxlcl_atoll_bb4:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #320] ; hv store L20
     ldp x0, x1, [sp, #320] ; hv load L20
-    cbz x1, __L7ff7_hxlcl_atoll_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atoll_bb6 ; branch -> then
-__L7ff7_hxlcl_atoll_bb5:
+    cbz x1, __L5211_hxlcl_atoll_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atoll_bb6 ; branch -> then
+__L5211_hxlcl_atoll_bb5:
     ldp x0, x1, [sp, #32] ; hv load L2
     ldp x2, x3, [sp, #80] ; hv load L5
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -4751,9 +4732,9 @@ __L7ff7_hxlcl_atoll_bb5:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #432] ; hv store L27
     ldp x0, x1, [sp, #432] ; hv load L27
-    cbz x1, __L7ff7_hxlcl_atoll_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atoll_bb9 ; branch -> then
-__L7ff7_hxlcl_atoll_bb6:
+    cbz x1, __L5211_hxlcl_atoll_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atoll_bb9 ; branch -> then
+__L5211_hxlcl_atoll_bb6:
     ldp x0, x1, [sp, #80] ; hv load L5
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -4770,15 +4751,15 @@ __L7ff7_hxlcl_atoll_bb6:
     stp x0, x1, [sp, #368] ; hv store L23
     ldp x0, x1, [sp, #368] ; hv load L23
     stp x0, x1, [sp, #112] ; hv store L7
-    b __L7ff7_hxlcl_atoll_bb8 ; branch
-__L7ff7_hxlcl_atoll_bb7:
+    b __L5211_hxlcl_atoll_bb8 ; branch
+__L5211_hxlcl_atoll_bb7:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #128] ; hv store L8
-    b __L7ff7_hxlcl_atoll_bb8 ; branch
-__L7ff7_hxlcl_atoll_bb8:
-    b __L7ff7_hxlcl_atoll_bb3 ; branch
-__L7ff7_hxlcl_atoll_bb9:
+    b __L5211_hxlcl_atoll_bb8 ; branch
+__L5211_hxlcl_atoll_bb8:
+    b __L5211_hxlcl_atoll_bb3 ; branch
+__L5211_hxlcl_atoll_bb9:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #416] ; hv store L26
@@ -4790,8 +4771,8 @@ __L7ff7_hxlcl_atoll_bb9:
     stp x0, x1, [sp, #464] ; hv store L29
     ldp x0, x1, [sp, #464] ; hv load L29
     stp x0, x1, [sp, #80] ; hv store L5
-    b __L7ff7_hxlcl_atoll_bb13 ; branch
-__L7ff7_hxlcl_atoll_bb10:
+    b __L5211_hxlcl_atoll_bb13 ; branch
+__L5211_hxlcl_atoll_bb10:
     ldp x0, x1, [sp, #400] ; hv load L25
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #43 ; hv const_int val
@@ -4800,9 +4781,9 @@ __L7ff7_hxlcl_atoll_bb10:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #480] ; hv store L30
     ldp x0, x1, [sp, #480] ; hv load L30
-    cbz x1, __L7ff7_hxlcl_atoll_bb12 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atoll_bb11 ; branch -> then
-__L7ff7_hxlcl_atoll_bb11:
+    cbz x1, __L5211_hxlcl_atoll_bb12 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atoll_bb11 ; branch -> then
+__L5211_hxlcl_atoll_bb11:
     ldp x0, x1, [sp, #80] ; hv load L5
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -4813,10 +4794,10 @@ __L7ff7_hxlcl_atoll_bb11:
     add x15, sp, #512 ; hv frame base
     ldp x0, x1, [x15] ; hv load L32
     stp x0, x1, [sp, #80] ; hv store L5
-    b __L7ff7_hxlcl_atoll_bb12 ; branch
-__L7ff7_hxlcl_atoll_bb12:
-    b __L7ff7_hxlcl_atoll_bb13 ; branch
-__L7ff7_hxlcl_atoll_bb13:
+    b __L5211_hxlcl_atoll_bb12 ; branch
+__L5211_hxlcl_atoll_bb12:
+    b __L5211_hxlcl_atoll_bb13 ; branch
+__L5211_hxlcl_atoll_bb13:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #528 ; hv frame base
@@ -4825,8 +4806,8 @@ __L7ff7_hxlcl_atoll_bb13:
     movz x1, #1 ; hv const_int val
     add x15, sp, #544 ; hv frame base
     stp x0, x1, [x15] ; hv store L34
-    b __L7ff7_hxlcl_atoll_bb14 ; branch
-__L7ff7_hxlcl_atoll_bb14:
+    b __L5211_hxlcl_atoll_bb14 ; branch
+__L5211_hxlcl_atoll_bb14:
     add x15, sp, #544 ; hv frame base
     ldp x0, x1, [x15] ; hv load L34
     movz x2, #0 ; hv const_int: TAG_INT
@@ -4838,9 +4819,9 @@ __L7ff7_hxlcl_atoll_bb14:
     stp x0, x1, [x15] ; hv store L35
     add x15, sp, #560 ; hv frame base
     ldp x0, x1, [x15] ; hv load L35
-    cbz x1, __L7ff7_hxlcl_atoll_bb16 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atoll_bb15 ; branch -> then
-__L7ff7_hxlcl_atoll_bb15:
+    cbz x1, __L5211_hxlcl_atoll_bb16 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atoll_bb15 ; branch -> then
+__L5211_hxlcl_atoll_bb15:
     ldp x0, x1, [sp, #32] ; hv load L2
     ldp x2, x3, [sp, #80] ; hv load L5
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -4901,9 +4882,9 @@ __L7ff7_hxlcl_atoll_bb15:
     stp x0, x1, [x15] ; hv store L44
     add x15, sp, #704 ; hv frame base
     ldp x0, x1, [x15] ; hv load L44
-    cbz x1, __L7ff7_hxlcl_atoll_bb18 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atoll_bb17 ; branch -> then
-__L7ff7_hxlcl_atoll_bb16:
+    cbz x1, __L5211_hxlcl_atoll_bb18 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atoll_bb17 ; branch -> then
+__L5211_hxlcl_atoll_bb16:
     ldp x0, x1, [sp, #416] ; hv load L26
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -4914,15 +4895,15 @@ __L7ff7_hxlcl_atoll_bb16:
     stp x0, x1, [x15] ; hv store L52
     add x15, sp, #832 ; hv frame base
     ldp x0, x1, [x15] ; hv load L52
-    cbz x1, __L7ff7_hxlcl_atoll_bb21 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atoll_bb20 ; branch -> then
-__L7ff7_hxlcl_atoll_bb17:
+    cbz x1, __L5211_hxlcl_atoll_bb21 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atoll_bb20 ; branch -> then
+__L5211_hxlcl_atoll_bb17:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #544 ; hv frame base
     stp x0, x1, [x15] ; hv store L34
-    b __L7ff7_hxlcl_atoll_bb19 ; branch
-__L7ff7_hxlcl_atoll_bb18:
+    b __L5211_hxlcl_atoll_bb19 ; branch
+__L5211_hxlcl_atoll_bb18:
     add x15, sp, #592 ; hv frame base
     ldp x0, x1, [x15] ; hv load L37
     movz x2, #0 ; hv const_int: TAG_INT
@@ -4969,10 +4950,10 @@ __L7ff7_hxlcl_atoll_bb18:
     add x15, sp, #816 ; hv frame base
     ldp x0, x1, [x15] ; hv load L51
     stp x0, x1, [sp, #80] ; hv store L5
-    b __L7ff7_hxlcl_atoll_bb19 ; branch
-__L7ff7_hxlcl_atoll_bb19:
-    b __L7ff7_hxlcl_atoll_bb14 ; branch
-__L7ff7_hxlcl_atoll_bb20:
+    b __L5211_hxlcl_atoll_bb19 ; branch
+__L5211_hxlcl_atoll_bb19:
+    b __L5211_hxlcl_atoll_bb14 ; branch
+__L5211_hxlcl_atoll_bb20:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #528 ; hv frame base
@@ -4990,13 +4971,12 @@ __L7ff7_hxlcl_atoll_bb20:
     add sp, sp, #896 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_atoll_bb21:
+__L5211_hxlcl_atoll_bb21:
     add x15, sp, #528 ; hv frame base
     ldp x9, x0, [x15] ; hv load L33
     add sp, sp, #896 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_atoi
     .p2align 2
 _hxlcl_atoi:
     .loc 1 1096 0
@@ -5005,7 +4985,7 @@ _hxlcl_atoi:
     sub sp, sp, #32 ; sp adj
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x0, [sp, #0] ; cabi ingress param 0
-__L7ff7_hxlcl_atoi_bb0:
+__L5211_hxlcl_atoi_bb0:
     ldp x9, x0, [sp, #0] ; hv load L0
     bl _hxlcl_atoll ; cabi call hxlcl_atoll
     movz x9, #0 ; cabi ret tag = TAG_INT
@@ -5014,7 +4994,6 @@ __L7ff7_hxlcl_atoi_bb0:
     add sp, sp, #32 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_strdup
     .p2align 2
 _hxlcl_strdup:
     .loc 1 1126 0
@@ -5023,7 +5002,7 @@ _hxlcl_strdup:
     sub sp, sp, #320 ; sp adj
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x0, [sp, #0] ; cabi ingress param 0
-__L7ff7_hxlcl_strdup_bb0:
+__L5211_hxlcl_strdup_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -5044,8 +5023,8 @@ __L7ff7_hxlcl_strdup_bb0:
     stp x0, x1, [sp, #64] ; hv store L4
     ldp x0, x1, [sp, #64] ; hv load L4
     stp x0, x1, [sp, #80] ; hv store L5
-    b __L7ff7_hxlcl_strdup_bb1 ; branch
-__L7ff7_hxlcl_strdup_bb1:
+    b __L5211_hxlcl_strdup_bb1 ; branch
+__L5211_hxlcl_strdup_bb1:
     ldp x0, x1, [sp, #80] ; hv load L5
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -5054,9 +5033,9 @@ __L7ff7_hxlcl_strdup_bb1:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #96] ; hv store L6
     ldp x0, x1, [sp, #96] ; hv load L6
-    cbz x1, __L7ff7_hxlcl_strdup_bb3 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strdup_bb2 ; branch -> then
-__L7ff7_hxlcl_strdup_bb2:
+    cbz x1, __L5211_hxlcl_strdup_bb3 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strdup_bb2 ; branch -> then
+__L5211_hxlcl_strdup_bb2:
     ldp x0, x1, [sp, #48] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -5073,8 +5052,8 @@ __L7ff7_hxlcl_strdup_bb2:
     stp x0, x1, [sp, #128] ; hv store L8
     ldp x0, x1, [sp, #128] ; hv load L8
     stp x0, x1, [sp, #80] ; hv store L5
-    b __L7ff7_hxlcl_strdup_bb1 ; branch
-__L7ff7_hxlcl_strdup_bb3:
+    b __L5211_hxlcl_strdup_bb1 ; branch
+__L5211_hxlcl_strdup_bb3:
     ldp x0, x1, [sp, #48] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -5092,8 +5071,8 @@ __L7ff7_hxlcl_strdup_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #208] ; hv store L13
-    b __L7ff7_hxlcl_strdup_bb4 ; branch
-__L7ff7_hxlcl_strdup_bb4:
+    b __L5211_hxlcl_strdup_bb4 ; branch
+__L5211_hxlcl_strdup_bb4:
     ldp x0, x1, [sp, #208] ; hv load L13
     ldp x2, x3, [sp, #48] ; hv load L3
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -5101,9 +5080,9 @@ __L7ff7_hxlcl_strdup_bb4:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #224] ; hv store L14
     ldp x0, x1, [sp, #224] ; hv load L14
-    cbz x1, __L7ff7_hxlcl_strdup_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strdup_bb5 ; branch -> then
-__L7ff7_hxlcl_strdup_bb5:
+    cbz x1, __L5211_hxlcl_strdup_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strdup_bb5 ; branch -> then
+__L5211_hxlcl_strdup_bb5:
     ldp x0, x1, [sp, #32] ; hv load L2
     ldp x2, x3, [sp, #208] ; hv load L13
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -5128,8 +5107,8 @@ __L7ff7_hxlcl_strdup_bb5:
     stp x0, x1, [sp, #288] ; hv store L18
     ldp x0, x1, [sp, #288] ; hv load L18
     stp x0, x1, [sp, #208] ; hv store L13
-    b __L7ff7_hxlcl_strdup_bb4 ; branch
-__L7ff7_hxlcl_strdup_bb6:
+    b __L5211_hxlcl_strdup_bb4 ; branch
+__L5211_hxlcl_strdup_bb6:
     ldp x0, x1, [sp, #192] ; hv load L12
     ldp x2, x3, [sp, #48] ; hv load L3
     movz x4, #0 ; hv const_int: TAG_INT
@@ -5143,7 +5122,6 @@ __L7ff7_hxlcl_strdup_bb6:
     add sp, sp, #320 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_strndup
     .p2align 2
 _hxlcl_strndup:
     .loc 1 1166 0
@@ -5154,7 +5132,7 @@ _hxlcl_strndup:
     stp x9, x0, [sp, #0] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #16] ; cabi ingress param 1
-__L7ff7_hxlcl_strndup_bb0:
+__L5211_hxlcl_strndup_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -5171,23 +5149,23 @@ __L7ff7_hxlcl_strndup_bb0:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #64] ; hv store L4
     ldp x0, x1, [sp, #64] ; hv load L4
-    cbz x1, __L7ff7_hxlcl_strndup_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strndup_bb1 ; branch -> then
-__L7ff7_hxlcl_strndup_bb1:
+    cbz x1, __L5211_hxlcl_strndup_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strndup_bb1 ; branch -> then
+__L5211_hxlcl_strndup_bb1:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #464 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_strndup_bb2:
+__L5211_hxlcl_strndup_bb2:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L6
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #112] ; hv store L7
-    b __L7ff7_hxlcl_strndup_bb3 ; branch
-__L7ff7_hxlcl_strndup_bb3:
+    b __L5211_hxlcl_strndup_bb3 ; branch
+__L5211_hxlcl_strndup_bb3:
     ldp x0, x1, [sp, #112] ; hv load L7
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -5196,9 +5174,9 @@ __L7ff7_hxlcl_strndup_bb3:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #128] ; hv store L8
     ldp x0, x1, [sp, #128] ; hv load L8
-    cbz x1, __L7ff7_hxlcl_strndup_bb5 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strndup_bb4 ; branch -> then
-__L7ff7_hxlcl_strndup_bb4:
+    cbz x1, __L5211_hxlcl_strndup_bb5 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strndup_bb4 ; branch -> then
+__L5211_hxlcl_strndup_bb4:
     ldp x0, x1, [sp, #96] ; hv load L6
     ldp x2, x3, [sp, #16] ; hv load L1
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -5215,9 +5193,9 @@ __L7ff7_hxlcl_strndup_bb4:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #176] ; hv store L11
     ldp x0, x1, [sp, #176] ; hv load L11
-    cbz x1, __L7ff7_hxlcl_strndup_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strndup_bb6 ; branch -> then
-__L7ff7_hxlcl_strndup_bb5:
+    cbz x1, __L5211_hxlcl_strndup_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strndup_bb6 ; branch -> then
+__L5211_hxlcl_strndup_bb5:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -5235,13 +5213,13 @@ __L7ff7_hxlcl_strndup_bb5:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #352] ; hv store L22
-    b __L7ff7_hxlcl_strndup_bb12 ; branch
-__L7ff7_hxlcl_strndup_bb6:
+    b __L5211_hxlcl_strndup_bb12 ; branch
+__L5211_hxlcl_strndup_bb6:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #112] ; hv store L7
-    b __L7ff7_hxlcl_strndup_bb11 ; branch
-__L7ff7_hxlcl_strndup_bb7:
+    b __L5211_hxlcl_strndup_bb11 ; branch
+__L5211_hxlcl_strndup_bb7:
     ldp x0, x1, [sp, #48] ; hv load L3
     ldp x2, x3, [sp, #96] ; hv load L6
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -5258,14 +5236,14 @@ __L7ff7_hxlcl_strndup_bb7:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #240] ; hv store L15
     ldp x0, x1, [sp, #240] ; hv load L15
-    cbz x1, __L7ff7_hxlcl_strndup_bb9 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strndup_bb8 ; branch -> then
-__L7ff7_hxlcl_strndup_bb8:
+    cbz x1, __L5211_hxlcl_strndup_bb9 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strndup_bb8 ; branch -> then
+__L5211_hxlcl_strndup_bb8:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #112] ; hv store L7
-    b __L7ff7_hxlcl_strndup_bb10 ; branch
-__L7ff7_hxlcl_strndup_bb9:
+    b __L5211_hxlcl_strndup_bb10 ; branch
+__L5211_hxlcl_strndup_bb9:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -5274,12 +5252,12 @@ __L7ff7_hxlcl_strndup_bb9:
     stp x0, x1, [sp, #272] ; hv store L17
     ldp x0, x1, [sp, #272] ; hv load L17
     stp x0, x1, [sp, #96] ; hv store L6
-    b __L7ff7_hxlcl_strndup_bb10 ; branch
-__L7ff7_hxlcl_strndup_bb10:
-    b __L7ff7_hxlcl_strndup_bb11 ; branch
-__L7ff7_hxlcl_strndup_bb11:
-    b __L7ff7_hxlcl_strndup_bb3 ; branch
-__L7ff7_hxlcl_strndup_bb12:
+    b __L5211_hxlcl_strndup_bb10 ; branch
+__L5211_hxlcl_strndup_bb10:
+    b __L5211_hxlcl_strndup_bb11 ; branch
+__L5211_hxlcl_strndup_bb11:
+    b __L5211_hxlcl_strndup_bb3 ; branch
+__L5211_hxlcl_strndup_bb12:
     ldp x0, x1, [sp, #352] ; hv load L22
     ldp x2, x3, [sp, #96] ; hv load L6
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -5287,9 +5265,9 @@ __L7ff7_hxlcl_strndup_bb12:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #368] ; hv store L23
     ldp x0, x1, [sp, #368] ; hv load L23
-    cbz x1, __L7ff7_hxlcl_strndup_bb14 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_strndup_bb13 ; branch -> then
-__L7ff7_hxlcl_strndup_bb13:
+    cbz x1, __L5211_hxlcl_strndup_bb14 ; br_cond: !payload -> else
+    b __L5211_hxlcl_strndup_bb13 ; branch -> then
+__L5211_hxlcl_strndup_bb13:
     ldp x0, x1, [sp, #48] ; hv load L3
     ldp x2, x3, [sp, #352] ; hv load L22
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -5314,8 +5292,8 @@ __L7ff7_hxlcl_strndup_bb13:
     stp x0, x1, [sp, #432] ; hv store L27
     ldp x0, x1, [sp, #432] ; hv load L27
     stp x0, x1, [sp, #352] ; hv store L22
-    b __L7ff7_hxlcl_strndup_bb12 ; branch
-__L7ff7_hxlcl_strndup_bb14:
+    b __L5211_hxlcl_strndup_bb12 ; branch
+__L5211_hxlcl_strndup_bb14:
     ldp x0, x1, [sp, #336] ; hv load L21
     ldp x2, x3, [sp, #96] ; hv load L6
     movz x4, #0 ; hv const_int: TAG_INT
@@ -5329,7 +5307,6 @@ __L7ff7_hxlcl_strndup_bb14:
     add sp, sp, #464 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_calloc
     .p2align 2
 _hxlcl_calloc:
     .loc 1 1216 0
@@ -5340,7 +5317,7 @@ _hxlcl_calloc:
     stp x9, x0, [sp, #0] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #16] ; cabi ingress param 1
-__L7ff7_hxlcl_calloc_bb0:
+__L5211_hxlcl_calloc_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     ldp x2, x3, [sp, #16] ; hv load L1
     mul x1, x1, x3 ; __hx_payload_mul: x1 = a.pl mul b.pl
@@ -5357,8 +5334,8 @@ __L7ff7_hxlcl_calloc_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L6
-    b __L7ff7_hxlcl_calloc_bb1 ; branch
-__L7ff7_hxlcl_calloc_bb1:
+    b __L5211_hxlcl_calloc_bb1 ; branch
+__L5211_hxlcl_calloc_bb1:
     ldp x0, x1, [sp, #96] ; hv load L6
     ldp x2, x3, [sp, #48] ; hv load L3
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -5366,9 +5343,9 @@ __L7ff7_hxlcl_calloc_bb1:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #112] ; hv store L7
     ldp x0, x1, [sp, #112] ; hv load L7
-    cbz x1, __L7ff7_hxlcl_calloc_bb3 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_calloc_bb2 ; branch -> then
-__L7ff7_hxlcl_calloc_bb2:
+    cbz x1, __L5211_hxlcl_calloc_bb3 ; br_cond: !payload -> else
+    b __L5211_hxlcl_calloc_bb2 ; branch -> then
+__L5211_hxlcl_calloc_bb2:
     ldp x0, x1, [sp, #80] ; hv load L5
     ldp x2, x3, [sp, #96] ; hv load L6
     movz x4, #0 ; hv const_int: TAG_INT
@@ -5386,13 +5363,12 @@ __L7ff7_hxlcl_calloc_bb2:
     stp x0, x1, [sp, #144] ; hv store L9
     ldp x0, x1, [sp, #144] ; hv load L9
     stp x0, x1, [sp, #96] ; hv store L6
-    b __L7ff7_hxlcl_calloc_bb1 ; branch
-__L7ff7_hxlcl_calloc_bb3:
+    b __L5211_hxlcl_calloc_bb1 ; branch
+__L5211_hxlcl_calloc_bb3:
     ldp x9, x0, [sp, #80] ; hv load L5
     add sp, sp, #160 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_realloc
     .p2align 2
 _hxlcl_realloc:
     .loc 1 1249 0
@@ -5403,7 +5379,7 @@ _hxlcl_realloc:
     stp x9, x0, [sp, #0] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #16] ; cabi ingress param 1
-__L7ff7_hxlcl_realloc_bb0:
+__L5211_hxlcl_realloc_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -5444,18 +5420,18 @@ __L7ff7_hxlcl_realloc_bb0:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #176] ; hv store L11
     ldp x0, x1, [sp, #176] ; hv load L11
-    cbz x1, __L7ff7_hxlcl_realloc_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_realloc_bb1 ; branch -> then
-__L7ff7_hxlcl_realloc_bb1:
+    cbz x1, __L5211_hxlcl_realloc_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_realloc_bb1 ; branch -> then
+__L5211_hxlcl_realloc_bb1:
     ldp x0, x1, [sp, #144] ; hv load L9
     stp x0, x1, [sp, #160] ; hv store L10
-    b __L7ff7_hxlcl_realloc_bb2 ; branch
-__L7ff7_hxlcl_realloc_bb2:
+    b __L5211_hxlcl_realloc_bb2 ; branch
+__L5211_hxlcl_realloc_bb2:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #208] ; hv store L13
-    b __L7ff7_hxlcl_realloc_bb3 ; branch
-__L7ff7_hxlcl_realloc_bb3:
+    b __L5211_hxlcl_realloc_bb3 ; branch
+__L5211_hxlcl_realloc_bb3:
     ldp x0, x1, [sp, #208] ; hv load L13
     ldp x2, x3, [sp, #160] ; hv load L10
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -5463,9 +5439,9 @@ __L7ff7_hxlcl_realloc_bb3:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #224] ; hv store L14
     ldp x0, x1, [sp, #224] ; hv load L14
-    cbz x1, __L7ff7_hxlcl_realloc_bb5 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_realloc_bb4 ; branch -> then
-__L7ff7_hxlcl_realloc_bb4:
+    cbz x1, __L5211_hxlcl_realloc_bb5 ; br_cond: !payload -> else
+    b __L5211_hxlcl_realloc_bb4 ; branch -> then
+__L5211_hxlcl_realloc_bb4:
     ldp x0, x1, [sp, #48] ; hv load L3
     ldp x2, x3, [sp, #208] ; hv load L13
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -5490,20 +5466,19 @@ __L7ff7_hxlcl_realloc_bb4:
     stp x0, x1, [sp, #288] ; hv store L18
     ldp x0, x1, [sp, #288] ; hv load L18
     stp x0, x1, [sp, #208] ; hv store L13
-    b __L7ff7_hxlcl_realloc_bb3 ; branch
-__L7ff7_hxlcl_realloc_bb5:
+    b __L5211_hxlcl_realloc_bb3 ; branch
+__L5211_hxlcl_realloc_bb5:
     ldp x9, x0, [sp, #80] ; hv load L5
     add sp, sp, #304 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_getpid
     .p2align 2
 _hxlcl_getpid:
     .loc 1 1293 0
     stp x29, x30, [sp, #-16]! ; prologue: save fp/lr
     mov x29, sp ; prologue: set fp
     sub sp, sp, #96 ; sp adj
-__L7ff7_hxlcl_getpid_bb0:
+__L5211_hxlcl_getpid_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #20 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L0
@@ -5511,16 +5486,16 @@ __L7ff7_hxlcl_getpid_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #16] ; hv store L1
     ldp x0, x1, [sp, #16] ; hv load L1
-    cbz x1, __L7ff7_hxlcl_getpid_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getpid_bb1 ; branch -> then
-__L7ff7_hxlcl_getpid_bb1:
+    cbz x1, __L5211_hxlcl_getpid_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getpid_bb1 ; branch -> then
+__L5211_hxlcl_getpid_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #48] ; hv store L3
     ldp x0, x1, [sp, #48] ; hv load L3
-    cbz x1, __L7ff7_hxlcl_getpid_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getpid_bb3 ; branch -> then
-__L7ff7_hxlcl_getpid_bb2:
+    cbz x1, __L5211_hxlcl_getpid_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getpid_bb3 ; branch -> then
+__L5211_hxlcl_getpid_bb2:
     ldp x0, x1, [sp, #0] ; hv load L0
     mov x16, x1 ; __hx_syscall0: x16 = syscall num
     svc #0x80 ; __hx_syscall0: syscall trap
@@ -5531,31 +5506,30 @@ __L7ff7_hxlcl_getpid_bb2:
     add sp, sp, #96 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_getpid_bb3:
+__L5211_hxlcl_getpid_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #39 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L0
-    b __L7ff7_hxlcl_getpid_bb5 ; branch
-__L7ff7_hxlcl_getpid_bb4:
+    b __L5211_hxlcl_getpid_bb5 ; branch
+__L5211_hxlcl_getpid_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #172 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L0
-    b __L7ff7_hxlcl_getpid_bb5 ; branch
-__L7ff7_hxlcl_getpid_bb5:
-    b __L7ff7_hxlcl_getpid_bb2 ; branch
+    b __L5211_hxlcl_getpid_bb5 ; branch
+__L5211_hxlcl_getpid_bb5:
+    b __L5211_hxlcl_getpid_bb2 ; branch
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
     add sp, sp, #96 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_getuid
     .p2align 2
 _hxlcl_getuid:
     .loc 1 1317 0
     stp x29, x30, [sp, #-16]! ; prologue: save fp/lr
     mov x29, sp ; prologue: set fp
     sub sp, sp, #96 ; sp adj
-__L7ff7_hxlcl_getuid_bb0:
+__L5211_hxlcl_getuid_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #24 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L0
@@ -5563,16 +5537,16 @@ __L7ff7_hxlcl_getuid_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #16] ; hv store L1
     ldp x0, x1, [sp, #16] ; hv load L1
-    cbz x1, __L7ff7_hxlcl_getuid_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getuid_bb1 ; branch -> then
-__L7ff7_hxlcl_getuid_bb1:
+    cbz x1, __L5211_hxlcl_getuid_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getuid_bb1 ; branch -> then
+__L5211_hxlcl_getuid_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #48] ; hv store L3
     ldp x0, x1, [sp, #48] ; hv load L3
-    cbz x1, __L7ff7_hxlcl_getuid_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getuid_bb3 ; branch -> then
-__L7ff7_hxlcl_getuid_bb2:
+    cbz x1, __L5211_hxlcl_getuid_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getuid_bb3 ; branch -> then
+__L5211_hxlcl_getuid_bb2:
     ldp x0, x1, [sp, #0] ; hv load L0
     mov x16, x1 ; __hx_syscall0: x16 = syscall num
     svc #0x80 ; __hx_syscall0: syscall trap
@@ -5583,31 +5557,30 @@ __L7ff7_hxlcl_getuid_bb2:
     add sp, sp, #96 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_getuid_bb3:
+__L5211_hxlcl_getuid_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #102 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L0
-    b __L7ff7_hxlcl_getuid_bb5 ; branch
-__L7ff7_hxlcl_getuid_bb4:
+    b __L5211_hxlcl_getuid_bb5 ; branch
+__L5211_hxlcl_getuid_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #174 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L0
-    b __L7ff7_hxlcl_getuid_bb5 ; branch
-__L7ff7_hxlcl_getuid_bb5:
-    b __L7ff7_hxlcl_getuid_bb2 ; branch
+    b __L5211_hxlcl_getuid_bb5 ; branch
+__L5211_hxlcl_getuid_bb5:
+    b __L5211_hxlcl_getuid_bb2 ; branch
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
     add sp, sp, #96 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_getgid
     .p2align 2
 _hxlcl_getgid:
     .loc 1 1326 0
     stp x29, x30, [sp, #-16]! ; prologue: save fp/lr
     mov x29, sp ; prologue: set fp
     sub sp, sp, #96 ; sp adj
-__L7ff7_hxlcl_getgid_bb0:
+__L5211_hxlcl_getgid_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #47 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L0
@@ -5615,16 +5588,16 @@ __L7ff7_hxlcl_getgid_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #16] ; hv store L1
     ldp x0, x1, [sp, #16] ; hv load L1
-    cbz x1, __L7ff7_hxlcl_getgid_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getgid_bb1 ; branch -> then
-__L7ff7_hxlcl_getgid_bb1:
+    cbz x1, __L5211_hxlcl_getgid_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getgid_bb1 ; branch -> then
+__L5211_hxlcl_getgid_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #48] ; hv store L3
     ldp x0, x1, [sp, #48] ; hv load L3
-    cbz x1, __L7ff7_hxlcl_getgid_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getgid_bb3 ; branch -> then
-__L7ff7_hxlcl_getgid_bb2:
+    cbz x1, __L5211_hxlcl_getgid_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getgid_bb3 ; branch -> then
+__L5211_hxlcl_getgid_bb2:
     ldp x0, x1, [sp, #0] ; hv load L0
     mov x16, x1 ; __hx_syscall0: x16 = syscall num
     svc #0x80 ; __hx_syscall0: syscall trap
@@ -5635,31 +5608,30 @@ __L7ff7_hxlcl_getgid_bb2:
     add sp, sp, #96 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_getgid_bb3:
+__L5211_hxlcl_getgid_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #104 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L0
-    b __L7ff7_hxlcl_getgid_bb5 ; branch
-__L7ff7_hxlcl_getgid_bb4:
+    b __L5211_hxlcl_getgid_bb5 ; branch
+__L5211_hxlcl_getgid_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #176 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L0
-    b __L7ff7_hxlcl_getgid_bb5 ; branch
-__L7ff7_hxlcl_getgid_bb5:
-    b __L7ff7_hxlcl_getgid_bb2 ; branch
+    b __L5211_hxlcl_getgid_bb5 ; branch
+__L5211_hxlcl_getgid_bb5:
+    b __L5211_hxlcl_getgid_bb2 ; branch
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
     add sp, sp, #96 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_getppid
     .p2align 2
 _hxlcl_getppid:
     .loc 1 1335 0
     stp x29, x30, [sp, #-16]! ; prologue: save fp/lr
     mov x29, sp ; prologue: set fp
     sub sp, sp, #96 ; sp adj
-__L7ff7_hxlcl_getppid_bb0:
+__L5211_hxlcl_getppid_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #39 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L0
@@ -5667,16 +5639,16 @@ __L7ff7_hxlcl_getppid_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #16] ; hv store L1
     ldp x0, x1, [sp, #16] ; hv load L1
-    cbz x1, __L7ff7_hxlcl_getppid_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getppid_bb1 ; branch -> then
-__L7ff7_hxlcl_getppid_bb1:
+    cbz x1, __L5211_hxlcl_getppid_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getppid_bb1 ; branch -> then
+__L5211_hxlcl_getppid_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #48] ; hv store L3
     ldp x0, x1, [sp, #48] ; hv load L3
-    cbz x1, __L7ff7_hxlcl_getppid_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getppid_bb3 ; branch -> then
-__L7ff7_hxlcl_getppid_bb2:
+    cbz x1, __L5211_hxlcl_getppid_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getppid_bb3 ; branch -> then
+__L5211_hxlcl_getppid_bb2:
     ldp x0, x1, [sp, #0] ; hv load L0
     mov x16, x1 ; __hx_syscall0: x16 = syscall num
     svc #0x80 ; __hx_syscall0: syscall trap
@@ -5687,31 +5659,30 @@ __L7ff7_hxlcl_getppid_bb2:
     add sp, sp, #96 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_getppid_bb3:
+__L5211_hxlcl_getppid_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #110 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L0
-    b __L7ff7_hxlcl_getppid_bb5 ; branch
-__L7ff7_hxlcl_getppid_bb4:
+    b __L5211_hxlcl_getppid_bb5 ; branch
+__L5211_hxlcl_getppid_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #173 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L0
-    b __L7ff7_hxlcl_getppid_bb5 ; branch
-__L7ff7_hxlcl_getppid_bb5:
-    b __L7ff7_hxlcl_getppid_bb2 ; branch
+    b __L5211_hxlcl_getppid_bb5 ; branch
+__L5211_hxlcl_getppid_bb5:
+    b __L5211_hxlcl_getppid_bb2 ; branch
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
     add sp, sp, #96 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_geteuid
     .p2align 2
 _hxlcl_geteuid:
     .loc 1 1344 0
     stp x29, x30, [sp, #-16]! ; prologue: save fp/lr
     mov x29, sp ; prologue: set fp
     sub sp, sp, #96 ; sp adj
-__L7ff7_hxlcl_geteuid_bb0:
+__L5211_hxlcl_geteuid_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #25 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L0
@@ -5719,16 +5690,16 @@ __L7ff7_hxlcl_geteuid_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #16] ; hv store L1
     ldp x0, x1, [sp, #16] ; hv load L1
-    cbz x1, __L7ff7_hxlcl_geteuid_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_geteuid_bb1 ; branch -> then
-__L7ff7_hxlcl_geteuid_bb1:
+    cbz x1, __L5211_hxlcl_geteuid_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_geteuid_bb1 ; branch -> then
+__L5211_hxlcl_geteuid_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #48] ; hv store L3
     ldp x0, x1, [sp, #48] ; hv load L3
-    cbz x1, __L7ff7_hxlcl_geteuid_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_geteuid_bb3 ; branch -> then
-__L7ff7_hxlcl_geteuid_bb2:
+    cbz x1, __L5211_hxlcl_geteuid_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_geteuid_bb3 ; branch -> then
+__L5211_hxlcl_geteuid_bb2:
     ldp x0, x1, [sp, #0] ; hv load L0
     mov x16, x1 ; __hx_syscall0: x16 = syscall num
     svc #0x80 ; __hx_syscall0: syscall trap
@@ -5739,31 +5710,30 @@ __L7ff7_hxlcl_geteuid_bb2:
     add sp, sp, #96 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_geteuid_bb3:
+__L5211_hxlcl_geteuid_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #107 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L0
-    b __L7ff7_hxlcl_geteuid_bb5 ; branch
-__L7ff7_hxlcl_geteuid_bb4:
+    b __L5211_hxlcl_geteuid_bb5 ; branch
+__L5211_hxlcl_geteuid_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #175 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L0
-    b __L7ff7_hxlcl_geteuid_bb5 ; branch
-__L7ff7_hxlcl_geteuid_bb5:
-    b __L7ff7_hxlcl_geteuid_bb2 ; branch
+    b __L5211_hxlcl_geteuid_bb5 ; branch
+__L5211_hxlcl_geteuid_bb5:
+    b __L5211_hxlcl_geteuid_bb2 ; branch
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
     add sp, sp, #96 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_getegid
     .p2align 2
 _hxlcl_getegid:
     .loc 1 1353 0
     stp x29, x30, [sp, #-16]! ; prologue: save fp/lr
     mov x29, sp ; prologue: set fp
     sub sp, sp, #96 ; sp adj
-__L7ff7_hxlcl_getegid_bb0:
+__L5211_hxlcl_getegid_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #43 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L0
@@ -5771,16 +5741,16 @@ __L7ff7_hxlcl_getegid_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #16] ; hv store L1
     ldp x0, x1, [sp, #16] ; hv load L1
-    cbz x1, __L7ff7_hxlcl_getegid_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getegid_bb1 ; branch -> then
-__L7ff7_hxlcl_getegid_bb1:
+    cbz x1, __L5211_hxlcl_getegid_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getegid_bb1 ; branch -> then
+__L5211_hxlcl_getegid_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #48] ; hv store L3
     ldp x0, x1, [sp, #48] ; hv load L3
-    cbz x1, __L7ff7_hxlcl_getegid_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getegid_bb3 ; branch -> then
-__L7ff7_hxlcl_getegid_bb2:
+    cbz x1, __L5211_hxlcl_getegid_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getegid_bb3 ; branch -> then
+__L5211_hxlcl_getegid_bb2:
     ldp x0, x1, [sp, #0] ; hv load L0
     mov x16, x1 ; __hx_syscall0: x16 = syscall num
     svc #0x80 ; __hx_syscall0: syscall trap
@@ -5791,24 +5761,23 @@ __L7ff7_hxlcl_getegid_bb2:
     add sp, sp, #96 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_getegid_bb3:
+__L5211_hxlcl_getegid_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #108 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L0
-    b __L7ff7_hxlcl_getegid_bb5 ; branch
-__L7ff7_hxlcl_getegid_bb4:
+    b __L5211_hxlcl_getegid_bb5 ; branch
+__L5211_hxlcl_getegid_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #177 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L0
-    b __L7ff7_hxlcl_getegid_bb5 ; branch
-__L7ff7_hxlcl_getegid_bb5:
-    b __L7ff7_hxlcl_getegid_bb2 ; branch
+    b __L5211_hxlcl_getegid_bb5 ; branch
+__L5211_hxlcl_getegid_bb5:
+    b __L5211_hxlcl_getegid_bb2 ; branch
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
     add sp, sp, #96 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_close
     .p2align 2
 _hxlcl_close:
     .loc 1 1400 0
@@ -5817,7 +5786,7 @@ _hxlcl_close:
     sub sp, sp, #352 ; sp adj
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x0, [sp, #48] ; cabi ingress param 0
-__L7ff7_hxlcl_close_bb0:
+__L5211_hxlcl_close_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #6 ; hv const_int val
     stp x0, x1, [sp, #64] ; hv store L1
@@ -5825,16 +5794,16 @@ __L7ff7_hxlcl_close_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #80] ; hv store L2
     ldp x0, x1, [sp, #80] ; hv load L2
-    cbz x1, __L7ff7_hxlcl_close_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_close_bb1 ; branch -> then
-__L7ff7_hxlcl_close_bb1:
+    cbz x1, __L5211_hxlcl_close_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_close_bb1 ; branch -> then
+__L5211_hxlcl_close_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #112] ; hv store L4
     ldp x0, x1, [sp, #112] ; hv load L4
-    cbz x1, __L7ff7_hxlcl_close_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_close_bb3 ; branch -> then
-__L7ff7_hxlcl_close_bb2:
+    cbz x1, __L5211_hxlcl_close_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_close_bb3 ; branch -> then
+__L5211_hxlcl_close_bb2:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     movz x7, #0 ; hv const_int: TAG_INT
@@ -5883,33 +5852,33 @@ __L7ff7_hxlcl_close_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #208] ; hv store L10
     ldp x0, x1, [sp, #208] ; hv load L10
-    cbz x1, __L7ff7_hxlcl_close_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_close_bb6 ; branch -> then
-__L7ff7_hxlcl_close_bb3:
+    cbz x1, __L5211_hxlcl_close_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_close_bb6 ; branch -> then
+__L5211_hxlcl_close_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #3 ; hv const_int val
     stp x0, x1, [sp, #64] ; hv store L1
-    b __L7ff7_hxlcl_close_bb5 ; branch
-__L7ff7_hxlcl_close_bb4:
+    b __L5211_hxlcl_close_bb5 ; branch
+__L5211_hxlcl_close_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #57 ; hv const_int val
     stp x0, x1, [sp, #64] ; hv store L1
-    b __L7ff7_hxlcl_close_bb5 ; branch
-__L7ff7_hxlcl_close_bb5:
-    b __L7ff7_hxlcl_close_bb2 ; branch
-__L7ff7_hxlcl_close_bb6:
+    b __L5211_hxlcl_close_bb5 ; branch
+__L5211_hxlcl_close_bb5:
+    b __L5211_hxlcl_close_bb2 ; branch
+__L5211_hxlcl_close_bb6:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #240] ; hv store L12
     ldp x0, x1, [sp, #240] ; hv load L12
-    cbz x1, __L7ff7_hxlcl_close_bb9 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_close_bb8 ; branch -> then
-__L7ff7_hxlcl_close_bb7:
+    cbz x1, __L5211_hxlcl_close_bb9 ; br_cond: !payload -> else
+    b __L5211_hxlcl_close_bb8 ; branch -> then
+__L5211_hxlcl_close_bb7:
     ldp x9, x0, [sp, #160] ; hv load L7
     add sp, sp, #352 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_close_bb8:
+__L5211_hxlcl_close_bb8:
     bl ___errno_location ; cabi call __errno_location
     movz x9, #0 ; cabi ret tag = TAG_INT
     stp x9, x0, [sp, #272] ; hv store L14
@@ -5932,15 +5901,14 @@ __L7ff7_hxlcl_close_bb8:
     ldp x0, x1, [sp, #288] ; hv load L15
     movz x0, #0 ; __hx_ptr_store32: TAG_INT
     stp x0, x1, [sp, #336] ; hv store L18
-    b __L7ff7_hxlcl_close_bb9 ; branch
-__L7ff7_hxlcl_close_bb9:
+    b __L5211_hxlcl_close_bb9 ; branch
+__L5211_hxlcl_close_bb9:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #352 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_read
     .p2align 2
 _hxlcl_read:
     .loc 1 1439 0
@@ -5953,7 +5921,7 @@ _hxlcl_read:
     stp x9, x1, [sp, #64] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #80] ; cabi ingress param 2
-__L7ff7_hxlcl_read_bb0:
+__L5211_hxlcl_read_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #3 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
@@ -5961,16 +5929,16 @@ __L7ff7_hxlcl_read_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #112] ; hv store L4
     ldp x0, x1, [sp, #112] ; hv load L4
-    cbz x1, __L7ff7_hxlcl_read_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_read_bb1 ; branch -> then
-__L7ff7_hxlcl_read_bb1:
+    cbz x1, __L5211_hxlcl_read_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_read_bb1 ; branch -> then
+__L5211_hxlcl_read_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #144] ; hv store L6
     ldp x0, x1, [sp, #144] ; hv load L6
-    cbz x1, __L7ff7_hxlcl_read_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_read_bb3 ; branch -> then
-__L7ff7_hxlcl_read_bb2:
+    cbz x1, __L5211_hxlcl_read_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_read_bb3 ; branch -> then
+__L5211_hxlcl_read_bb2:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     ldp x7, x8, [sp, #64] ; hv load L1
@@ -6017,33 +5985,33 @@ __L7ff7_hxlcl_read_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #240] ; hv store L12
     ldp x0, x1, [sp, #240] ; hv load L12
-    cbz x1, __L7ff7_hxlcl_read_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_read_bb6 ; branch -> then
-__L7ff7_hxlcl_read_bb3:
+    cbz x1, __L5211_hxlcl_read_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_read_bb6 ; branch -> then
+__L5211_hxlcl_read_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
-    b __L7ff7_hxlcl_read_bb5 ; branch
-__L7ff7_hxlcl_read_bb4:
+    b __L5211_hxlcl_read_bb5 ; branch
+__L5211_hxlcl_read_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #63 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
-    b __L7ff7_hxlcl_read_bb5 ; branch
-__L7ff7_hxlcl_read_bb5:
-    b __L7ff7_hxlcl_read_bb2 ; branch
-__L7ff7_hxlcl_read_bb6:
+    b __L5211_hxlcl_read_bb5 ; branch
+__L5211_hxlcl_read_bb5:
+    b __L5211_hxlcl_read_bb2 ; branch
+__L5211_hxlcl_read_bb6:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #272] ; hv store L14
     ldp x0, x1, [sp, #272] ; hv load L14
-    cbz x1, __L7ff7_hxlcl_read_bb9 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_read_bb8 ; branch -> then
-__L7ff7_hxlcl_read_bb7:
+    cbz x1, __L5211_hxlcl_read_bb9 ; br_cond: !payload -> else
+    b __L5211_hxlcl_read_bb8 ; branch -> then
+__L5211_hxlcl_read_bb7:
     ldp x9, x0, [sp, #192] ; hv load L9
     add sp, sp, #384 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_read_bb8:
+__L5211_hxlcl_read_bb8:
     bl ___errno_location ; cabi call __errno_location
     movz x9, #0 ; cabi ret tag = TAG_INT
     stp x9, x0, [sp, #304] ; hv store L16
@@ -6066,15 +6034,14 @@ __L7ff7_hxlcl_read_bb8:
     ldp x0, x1, [sp, #320] ; hv load L17
     movz x0, #0 ; __hx_ptr_store32: TAG_INT
     stp x0, x1, [sp, #368] ; hv store L20
-    b __L7ff7_hxlcl_read_bb9 ; branch
-__L7ff7_hxlcl_read_bb9:
+    b __L5211_hxlcl_read_bb9 ; branch
+__L5211_hxlcl_read_bb9:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #384 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_lseek
     .p2align 2
 _hxlcl_lseek:
     .loc 1 1458 0
@@ -6087,7 +6054,7 @@ _hxlcl_lseek:
     stp x9, x1, [sp, #64] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #80] ; cabi ingress param 2
-__L7ff7_hxlcl_lseek_bb0:
+__L5211_hxlcl_lseek_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #199 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
@@ -6095,16 +6062,16 @@ __L7ff7_hxlcl_lseek_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #112] ; hv store L4
     ldp x0, x1, [sp, #112] ; hv load L4
-    cbz x1, __L7ff7_hxlcl_lseek_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_lseek_bb1 ; branch -> then
-__L7ff7_hxlcl_lseek_bb1:
+    cbz x1, __L5211_hxlcl_lseek_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_lseek_bb1 ; branch -> then
+__L5211_hxlcl_lseek_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #144] ; hv store L6
     ldp x0, x1, [sp, #144] ; hv load L6
-    cbz x1, __L7ff7_hxlcl_lseek_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_lseek_bb3 ; branch -> then
-__L7ff7_hxlcl_lseek_bb2:
+    cbz x1, __L5211_hxlcl_lseek_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_lseek_bb3 ; branch -> then
+__L5211_hxlcl_lseek_bb2:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     ldp x7, x8, [sp, #64] ; hv load L1
@@ -6151,33 +6118,33 @@ __L7ff7_hxlcl_lseek_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #240] ; hv store L12
     ldp x0, x1, [sp, #240] ; hv load L12
-    cbz x1, __L7ff7_hxlcl_lseek_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_lseek_bb6 ; branch -> then
-__L7ff7_hxlcl_lseek_bb3:
+    cbz x1, __L5211_hxlcl_lseek_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_lseek_bb6 ; branch -> then
+__L5211_hxlcl_lseek_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #8 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
-    b __L7ff7_hxlcl_lseek_bb5 ; branch
-__L7ff7_hxlcl_lseek_bb4:
+    b __L5211_hxlcl_lseek_bb5 ; branch
+__L5211_hxlcl_lseek_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #62 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
-    b __L7ff7_hxlcl_lseek_bb5 ; branch
-__L7ff7_hxlcl_lseek_bb5:
-    b __L7ff7_hxlcl_lseek_bb2 ; branch
-__L7ff7_hxlcl_lseek_bb6:
+    b __L5211_hxlcl_lseek_bb5 ; branch
+__L5211_hxlcl_lseek_bb5:
+    b __L5211_hxlcl_lseek_bb2 ; branch
+__L5211_hxlcl_lseek_bb6:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #272] ; hv store L14
     ldp x0, x1, [sp, #272] ; hv load L14
-    cbz x1, __L7ff7_hxlcl_lseek_bb9 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_lseek_bb8 ; branch -> then
-__L7ff7_hxlcl_lseek_bb7:
+    cbz x1, __L5211_hxlcl_lseek_bb9 ; br_cond: !payload -> else
+    b __L5211_hxlcl_lseek_bb8 ; branch -> then
+__L5211_hxlcl_lseek_bb7:
     ldp x9, x0, [sp, #192] ; hv load L9
     add sp, sp, #384 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_lseek_bb8:
+__L5211_hxlcl_lseek_bb8:
     bl ___errno_location ; cabi call __errno_location
     movz x9, #0 ; cabi ret tag = TAG_INT
     stp x9, x0, [sp, #304] ; hv store L16
@@ -6200,15 +6167,14 @@ __L7ff7_hxlcl_lseek_bb8:
     ldp x0, x1, [sp, #320] ; hv load L17
     movz x0, #0 ; __hx_ptr_store32: TAG_INT
     stp x0, x1, [sp, #368] ; hv store L20
-    b __L7ff7_hxlcl_lseek_bb9 ; branch
-__L7ff7_hxlcl_lseek_bb9:
+    b __L5211_hxlcl_lseek_bb9 ; branch
+__L5211_hxlcl_lseek_bb9:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #384 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_dup2
     .p2align 2
 _hxlcl_dup2:
     .loc 1 1493 0
@@ -6219,7 +6185,7 @@ _hxlcl_dup2:
     stp x9, x0, [sp, #48] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #64] ; cabi ingress param 1
-__L7ff7_hxlcl_dup2_bb0:
+__L5211_hxlcl_dup2_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #90 ; hv const_int val
     stp x0, x1, [sp, #80] ; hv store L2
@@ -6227,16 +6193,16 @@ __L7ff7_hxlcl_dup2_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #96] ; hv store L3
     ldp x0, x1, [sp, #96] ; hv load L3
-    cbz x1, __L7ff7_hxlcl_dup2_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_dup2_bb1 ; branch -> then
-__L7ff7_hxlcl_dup2_bb1:
+    cbz x1, __L5211_hxlcl_dup2_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_dup2_bb1 ; branch -> then
+__L5211_hxlcl_dup2_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #128] ; hv store L5
     ldp x0, x1, [sp, #128] ; hv load L5
-    cbz x1, __L7ff7_hxlcl_dup2_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_dup2_bb3 ; branch -> then
-__L7ff7_hxlcl_dup2_bb2:
+    cbz x1, __L5211_hxlcl_dup2_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_dup2_bb3 ; branch -> then
+__L5211_hxlcl_dup2_bb2:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     ldp x7, x8, [sp, #64] ; hv load L1
@@ -6284,33 +6250,33 @@ __L7ff7_hxlcl_dup2_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #224] ; hv store L11
     ldp x0, x1, [sp, #224] ; hv load L11
-    cbz x1, __L7ff7_hxlcl_dup2_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_dup2_bb6 ; branch -> then
-__L7ff7_hxlcl_dup2_bb3:
+    cbz x1, __L5211_hxlcl_dup2_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_dup2_bb6 ; branch -> then
+__L5211_hxlcl_dup2_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #33 ; hv const_int val
     stp x0, x1, [sp, #80] ; hv store L2
-    b __L7ff7_hxlcl_dup2_bb5 ; branch
-__L7ff7_hxlcl_dup2_bb4:
+    b __L5211_hxlcl_dup2_bb5 ; branch
+__L5211_hxlcl_dup2_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #24 ; hv const_int val
     stp x0, x1, [sp, #80] ; hv store L2
-    b __L7ff7_hxlcl_dup2_bb5 ; branch
-__L7ff7_hxlcl_dup2_bb5:
-    b __L7ff7_hxlcl_dup2_bb2 ; branch
-__L7ff7_hxlcl_dup2_bb6:
+    b __L5211_hxlcl_dup2_bb5 ; branch
+__L5211_hxlcl_dup2_bb5:
+    b __L5211_hxlcl_dup2_bb2 ; branch
+__L5211_hxlcl_dup2_bb6:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #256] ; hv store L13
     ldp x0, x1, [sp, #256] ; hv load L13
-    cbz x1, __L7ff7_hxlcl_dup2_bb9 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_dup2_bb8 ; branch -> then
-__L7ff7_hxlcl_dup2_bb7:
+    cbz x1, __L5211_hxlcl_dup2_bb9 ; br_cond: !payload -> else
+    b __L5211_hxlcl_dup2_bb8 ; branch -> then
+__L5211_hxlcl_dup2_bb7:
     ldp x9, x0, [sp, #176] ; hv load L8
     add sp, sp, #368 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_dup2_bb8:
+__L5211_hxlcl_dup2_bb8:
     bl ___errno_location ; cabi call __errno_location
     movz x9, #0 ; cabi ret tag = TAG_INT
     stp x9, x0, [sp, #288] ; hv store L15
@@ -6333,15 +6299,14 @@ __L7ff7_hxlcl_dup2_bb8:
     ldp x0, x1, [sp, #304] ; hv load L16
     movz x0, #0 ; __hx_ptr_store32: TAG_INT
     stp x0, x1, [sp, #352] ; hv store L19
-    b __L7ff7_hxlcl_dup2_bb9 ; branch
-__L7ff7_hxlcl_dup2_bb9:
+    b __L5211_hxlcl_dup2_bb9 ; branch
+__L5211_hxlcl_dup2_bb9:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #368 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_mkdir
     .p2align 2
 _hxlcl_mkdir:
     .loc 1 1516 0
@@ -6352,7 +6317,7 @@ _hxlcl_mkdir:
     stp x9, x0, [sp, #48] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #64] ; cabi ingress param 1
-__L7ff7_hxlcl_mkdir_bb0:
+__L5211_hxlcl_mkdir_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #80] ; hv store L2
@@ -6360,16 +6325,16 @@ __L7ff7_hxlcl_mkdir_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #96] ; hv store L3
     ldp x0, x1, [sp, #96] ; hv load L3
-    cbz x1, __L7ff7_hxlcl_mkdir_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_mkdir_bb1 ; branch -> then
-__L7ff7_hxlcl_mkdir_bb1:
+    cbz x1, __L5211_hxlcl_mkdir_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_mkdir_bb1 ; branch -> then
+__L5211_hxlcl_mkdir_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #128] ; hv store L5
     ldp x0, x1, [sp, #128] ; hv load L5
-    cbz x1, __L7ff7_hxlcl_mkdir_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_mkdir_bb3 ; branch -> then
-__L7ff7_hxlcl_mkdir_bb2:
+    cbz x1, __L5211_hxlcl_mkdir_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_mkdir_bb3 ; branch -> then
+__L5211_hxlcl_mkdir_bb2:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     ldp x7, x8, [sp, #64] ; hv load L1
@@ -6401,8 +6366,8 @@ __L7ff7_hxlcl_mkdir_bb2:
     stp x0, x1, [sp, #192] ; hv store L9
     ldp x0, x1, [sp, #192] ; hv load L9
     stp x0, x1, [sp, #80] ; hv store L2
-    b __L7ff7_hxlcl_mkdir_bb6 ; branch
-__L7ff7_hxlcl_mkdir_bb3:
+    b __L5211_hxlcl_mkdir_bb6 ; branch
+__L5211_hxlcl_mkdir_bb3:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     ldp x7, x8, [sp, #64] ; hv load L1
@@ -6434,8 +6399,8 @@ __L7ff7_hxlcl_mkdir_bb3:
     stp x0, x1, [sp, #160] ; hv store L7
     ldp x0, x1, [sp, #160] ; hv load L7
     stp x0, x1, [sp, #80] ; hv store L2
-    b __L7ff7_hxlcl_mkdir_bb5 ; branch
-__L7ff7_hxlcl_mkdir_bb4:
+    b __L5211_hxlcl_mkdir_bb5 ; branch
+__L5211_hxlcl_mkdir_bb4:
     movz x7, #0 ; hv const_int: TAG_INT
     movz x8, #99 ; imm 0-15
     mvn x8, x8 ; hv const_int: negate
@@ -6468,10 +6433,10 @@ __L7ff7_hxlcl_mkdir_bb4:
     stp x0, x1, [sp, #176] ; hv store L8
     ldp x0, x1, [sp, #176] ; hv load L8
     stp x0, x1, [sp, #80] ; hv store L2
-    b __L7ff7_hxlcl_mkdir_bb5 ; branch
-__L7ff7_hxlcl_mkdir_bb5:
-    b __L7ff7_hxlcl_mkdir_bb6 ; branch
-__L7ff7_hxlcl_mkdir_bb6:
+    b __L5211_hxlcl_mkdir_bb5 ; branch
+__L5211_hxlcl_mkdir_bb5:
+    b __L5211_hxlcl_mkdir_bb6 ; branch
+__L5211_hxlcl_mkdir_bb6:
     ldp x0, x1, [sp, #80] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -6489,21 +6454,21 @@ __L7ff7_hxlcl_mkdir_bb6:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #240] ; hv store L12
     ldp x0, x1, [sp, #240] ; hv load L12
-    cbz x1, __L7ff7_hxlcl_mkdir_bb8 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_mkdir_bb7 ; branch -> then
-__L7ff7_hxlcl_mkdir_bb7:
+    cbz x1, __L5211_hxlcl_mkdir_bb8 ; br_cond: !payload -> else
+    b __L5211_hxlcl_mkdir_bb7 ; branch -> then
+__L5211_hxlcl_mkdir_bb7:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #272] ; hv store L14
     ldp x0, x1, [sp, #272] ; hv load L14
-    cbz x1, __L7ff7_hxlcl_mkdir_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_mkdir_bb9 ; branch -> then
-__L7ff7_hxlcl_mkdir_bb8:
+    cbz x1, __L5211_hxlcl_mkdir_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_mkdir_bb9 ; branch -> then
+__L5211_hxlcl_mkdir_bb8:
     ldp x9, x0, [sp, #80] ; hv load L2
     add sp, sp, #384 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_mkdir_bb9:
+__L5211_hxlcl_mkdir_bb9:
     bl ___errno_location ; cabi call __errno_location
     movz x9, #0 ; cabi ret tag = TAG_INT
     stp x9, x0, [sp, #304] ; hv store L16
@@ -6526,15 +6491,14 @@ __L7ff7_hxlcl_mkdir_bb9:
     ldp x0, x1, [sp, #320] ; hv load L17
     movz x0, #0 ; __hx_ptr_store32: TAG_INT
     stp x0, x1, [sp, #368] ; hv store L20
-    b __L7ff7_hxlcl_mkdir_bb10 ; branch
-__L7ff7_hxlcl_mkdir_bb10:
+    b __L5211_hxlcl_mkdir_bb10 ; branch
+__L5211_hxlcl_mkdir_bb10:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #384 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_stat
     .p2align 2
 _hxlcl_stat:
     .loc 1 1567 0
@@ -6545,7 +6509,7 @@ _hxlcl_stat:
     stp x9, x0, [sp, #48] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #64] ; cabi ingress param 1
-__L7ff7_hxlcl_stat_bb0:
+__L5211_hxlcl_stat_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #80] ; hv store L2
@@ -6553,16 +6517,16 @@ __L7ff7_hxlcl_stat_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #96] ; hv store L3
     ldp x0, x1, [sp, #96] ; hv load L3
-    cbz x1, __L7ff7_hxlcl_stat_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_stat_bb1 ; branch -> then
-__L7ff7_hxlcl_stat_bb1:
+    cbz x1, __L5211_hxlcl_stat_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_stat_bb1 ; branch -> then
+__L5211_hxlcl_stat_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #128] ; hv store L5
     ldp x0, x1, [sp, #128] ; hv load L5
-    cbz x1, __L7ff7_hxlcl_stat_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_stat_bb3 ; branch -> then
-__L7ff7_hxlcl_stat_bb2:
+    cbz x1, __L5211_hxlcl_stat_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_stat_bb3 ; branch -> then
+__L5211_hxlcl_stat_bb2:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     ldp x7, x8, [sp, #64] ; hv load L1
@@ -6594,8 +6558,8 @@ __L7ff7_hxlcl_stat_bb2:
     stp x0, x1, [sp, #192] ; hv store L9
     ldp x0, x1, [sp, #192] ; hv load L9
     stp x0, x1, [sp, #80] ; hv store L2
-    b __L7ff7_hxlcl_stat_bb6 ; branch
-__L7ff7_hxlcl_stat_bb3:
+    b __L5211_hxlcl_stat_bb6 ; branch
+__L5211_hxlcl_stat_bb3:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     ldp x7, x8, [sp, #64] ; hv load L1
@@ -6627,8 +6591,8 @@ __L7ff7_hxlcl_stat_bb3:
     stp x0, x1, [sp, #160] ; hv store L7
     ldp x0, x1, [sp, #160] ; hv load L7
     stp x0, x1, [sp, #80] ; hv store L2
-    b __L7ff7_hxlcl_stat_bb5 ; branch
-__L7ff7_hxlcl_stat_bb4:
+    b __L5211_hxlcl_stat_bb5 ; branch
+__L5211_hxlcl_stat_bb4:
     movz x7, #0 ; hv const_int: TAG_INT
     movz x8, #99 ; imm 0-15
     mvn x8, x8 ; hv const_int: negate
@@ -6661,10 +6625,10 @@ __L7ff7_hxlcl_stat_bb4:
     stp x0, x1, [sp, #176] ; hv store L8
     ldp x0, x1, [sp, #176] ; hv load L8
     stp x0, x1, [sp, #80] ; hv store L2
-    b __L7ff7_hxlcl_stat_bb5 ; branch
-__L7ff7_hxlcl_stat_bb5:
-    b __L7ff7_hxlcl_stat_bb6 ; branch
-__L7ff7_hxlcl_stat_bb6:
+    b __L5211_hxlcl_stat_bb5 ; branch
+__L5211_hxlcl_stat_bb5:
+    b __L5211_hxlcl_stat_bb6 ; branch
+__L5211_hxlcl_stat_bb6:
     ldp x0, x1, [sp, #80] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -6682,21 +6646,21 @@ __L7ff7_hxlcl_stat_bb6:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #240] ; hv store L12
     ldp x0, x1, [sp, #240] ; hv load L12
-    cbz x1, __L7ff7_hxlcl_stat_bb8 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_stat_bb7 ; branch -> then
-__L7ff7_hxlcl_stat_bb7:
+    cbz x1, __L5211_hxlcl_stat_bb8 ; br_cond: !payload -> else
+    b __L5211_hxlcl_stat_bb7 ; branch -> then
+__L5211_hxlcl_stat_bb7:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #272] ; hv store L14
     ldp x0, x1, [sp, #272] ; hv load L14
-    cbz x1, __L7ff7_hxlcl_stat_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_stat_bb9 ; branch -> then
-__L7ff7_hxlcl_stat_bb8:
+    cbz x1, __L5211_hxlcl_stat_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_stat_bb9 ; branch -> then
+__L5211_hxlcl_stat_bb8:
     ldp x9, x0, [sp, #80] ; hv load L2
     add sp, sp, #384 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_stat_bb9:
+__L5211_hxlcl_stat_bb9:
     bl ___errno_location ; cabi call __errno_location
     movz x9, #0 ; cabi ret tag = TAG_INT
     stp x9, x0, [sp, #304] ; hv store L16
@@ -6719,15 +6683,14 @@ __L7ff7_hxlcl_stat_bb9:
     ldp x0, x1, [sp, #320] ; hv load L17
     movz x0, #0 ; __hx_ptr_store32: TAG_INT
     stp x0, x1, [sp, #368] ; hv store L20
-    b __L7ff7_hxlcl_stat_bb10 ; branch
-__L7ff7_hxlcl_stat_bb10:
+    b __L5211_hxlcl_stat_bb10 ; branch
+__L5211_hxlcl_stat_bb10:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #384 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_waitpid
     .p2align 2
 _hxlcl_waitpid:
     .loc 1 1593 0
@@ -6740,7 +6703,7 @@ _hxlcl_waitpid:
     stp x9, x1, [sp, #64] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #80] ; cabi ingress param 2
-__L7ff7_hxlcl_waitpid_bb0:
+__L5211_hxlcl_waitpid_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #7 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
@@ -6748,16 +6711,16 @@ __L7ff7_hxlcl_waitpid_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #112] ; hv store L4
     ldp x0, x1, [sp, #112] ; hv load L4
-    cbz x1, __L7ff7_hxlcl_waitpid_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_waitpid_bb1 ; branch -> then
-__L7ff7_hxlcl_waitpid_bb1:
+    cbz x1, __L5211_hxlcl_waitpid_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_waitpid_bb1 ; branch -> then
+__L5211_hxlcl_waitpid_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #144] ; hv store L6
     ldp x0, x1, [sp, #144] ; hv load L6
-    cbz x1, __L7ff7_hxlcl_waitpid_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_waitpid_bb3 ; branch -> then
-__L7ff7_hxlcl_waitpid_bb2:
+    cbz x1, __L5211_hxlcl_waitpid_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_waitpid_bb3 ; branch -> then
+__L5211_hxlcl_waitpid_bb2:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     ldp x7, x8, [sp, #64] ; hv load L1
@@ -6804,33 +6767,33 @@ __L7ff7_hxlcl_waitpid_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #240] ; hv store L12
     ldp x0, x1, [sp, #240] ; hv load L12
-    cbz x1, __L7ff7_hxlcl_waitpid_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_waitpid_bb6 ; branch -> then
-__L7ff7_hxlcl_waitpid_bb3:
+    cbz x1, __L5211_hxlcl_waitpid_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_waitpid_bb6 ; branch -> then
+__L5211_hxlcl_waitpid_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #61 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
-    b __L7ff7_hxlcl_waitpid_bb5 ; branch
-__L7ff7_hxlcl_waitpid_bb4:
+    b __L5211_hxlcl_waitpid_bb5 ; branch
+__L5211_hxlcl_waitpid_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #260 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
-    b __L7ff7_hxlcl_waitpid_bb5 ; branch
-__L7ff7_hxlcl_waitpid_bb5:
-    b __L7ff7_hxlcl_waitpid_bb2 ; branch
-__L7ff7_hxlcl_waitpid_bb6:
+    b __L5211_hxlcl_waitpid_bb5 ; branch
+__L5211_hxlcl_waitpid_bb5:
+    b __L5211_hxlcl_waitpid_bb2 ; branch
+__L5211_hxlcl_waitpid_bb6:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #272] ; hv store L14
     ldp x0, x1, [sp, #272] ; hv load L14
-    cbz x1, __L7ff7_hxlcl_waitpid_bb9 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_waitpid_bb8 ; branch -> then
-__L7ff7_hxlcl_waitpid_bb7:
+    cbz x1, __L5211_hxlcl_waitpid_bb9 ; br_cond: !payload -> else
+    b __L5211_hxlcl_waitpid_bb8 ; branch -> then
+__L5211_hxlcl_waitpid_bb7:
     ldp x9, x0, [sp, #192] ; hv load L9
     add sp, sp, #384 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_waitpid_bb8:
+__L5211_hxlcl_waitpid_bb8:
     bl ___errno_location ; cabi call __errno_location
     movz x9, #0 ; cabi ret tag = TAG_INT
     stp x9, x0, [sp, #304] ; hv store L16
@@ -6853,15 +6816,14 @@ __L7ff7_hxlcl_waitpid_bb8:
     ldp x0, x1, [sp, #320] ; hv load L17
     movz x0, #0 ; __hx_ptr_store32: TAG_INT
     stp x0, x1, [sp, #368] ; hv store L20
-    b __L7ff7_hxlcl_waitpid_bb9 ; branch
-__L7ff7_hxlcl_waitpid_bb9:
+    b __L5211_hxlcl_waitpid_bb9 ; branch
+__L5211_hxlcl_waitpid_bb9:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #384 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_write
     .p2align 2
 _hxlcl_write:
     .loc 1 1653 0
@@ -6874,7 +6836,7 @@ _hxlcl_write:
     stp x9, x1, [sp, #64] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #80] ; cabi ingress param 2
-__L7ff7_hxlcl_write_bb0:
+__L5211_hxlcl_write_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #4 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
@@ -6882,16 +6844,16 @@ __L7ff7_hxlcl_write_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #112] ; hv store L4
     ldp x0, x1, [sp, #112] ; hv load L4
-    cbz x1, __L7ff7_hxlcl_write_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_write_bb1 ; branch -> then
-__L7ff7_hxlcl_write_bb1:
+    cbz x1, __L5211_hxlcl_write_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_write_bb1 ; branch -> then
+__L5211_hxlcl_write_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #144] ; hv store L6
     ldp x0, x1, [sp, #144] ; hv load L6
-    cbz x1, __L7ff7_hxlcl_write_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_write_bb3 ; branch -> then
-__L7ff7_hxlcl_write_bb2:
+    cbz x1, __L5211_hxlcl_write_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_write_bb3 ; branch -> then
+__L5211_hxlcl_write_bb2:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     ldp x7, x8, [sp, #64] ; hv load L1
@@ -6938,33 +6900,33 @@ __L7ff7_hxlcl_write_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #240] ; hv store L12
     ldp x0, x1, [sp, #240] ; hv load L12
-    cbz x1, __L7ff7_hxlcl_write_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_write_bb6 ; branch -> then
-__L7ff7_hxlcl_write_bb3:
+    cbz x1, __L5211_hxlcl_write_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_write_bb6 ; branch -> then
+__L5211_hxlcl_write_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
-    b __L7ff7_hxlcl_write_bb5 ; branch
-__L7ff7_hxlcl_write_bb4:
+    b __L5211_hxlcl_write_bb5 ; branch
+__L5211_hxlcl_write_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #64 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
-    b __L7ff7_hxlcl_write_bb5 ; branch
-__L7ff7_hxlcl_write_bb5:
-    b __L7ff7_hxlcl_write_bb2 ; branch
-__L7ff7_hxlcl_write_bb6:
+    b __L5211_hxlcl_write_bb5 ; branch
+__L5211_hxlcl_write_bb5:
+    b __L5211_hxlcl_write_bb2 ; branch
+__L5211_hxlcl_write_bb6:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #272] ; hv store L14
     ldp x0, x1, [sp, #272] ; hv load L14
-    cbz x1, __L7ff7_hxlcl_write_bb9 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_write_bb8 ; branch -> then
-__L7ff7_hxlcl_write_bb7:
+    cbz x1, __L5211_hxlcl_write_bb9 ; br_cond: !payload -> else
+    b __L5211_hxlcl_write_bb8 ; branch -> then
+__L5211_hxlcl_write_bb7:
     ldp x9, x0, [sp, #192] ; hv load L9
     add sp, sp, #384 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_write_bb8:
+__L5211_hxlcl_write_bb8:
     bl ___errno_location ; cabi call __errno_location
     movz x9, #0 ; cabi ret tag = TAG_INT
     stp x9, x0, [sp, #304] ; hv store L16
@@ -6987,15 +6949,14 @@ __L7ff7_hxlcl_write_bb8:
     ldp x0, x1, [sp, #320] ; hv load L17
     movz x0, #0 ; __hx_ptr_store32: TAG_INT
     stp x0, x1, [sp, #368] ; hv store L20
-    b __L7ff7_hxlcl_write_bb9 ; branch
-__L7ff7_hxlcl_write_bb9:
+    b __L5211_hxlcl_write_bb9 ; branch
+__L5211_hxlcl_write_bb9:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #384 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_fcntl
     .p2align 2
 _hxlcl_fcntl:
     .loc 1 1672 0
@@ -7008,7 +6969,7 @@ _hxlcl_fcntl:
     stp x9, x1, [sp, #64] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #80] ; cabi ingress param 2
-__L7ff7_hxlcl_fcntl_bb0:
+__L5211_hxlcl_fcntl_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #92 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
@@ -7016,16 +6977,16 @@ __L7ff7_hxlcl_fcntl_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #112] ; hv store L4
     ldp x0, x1, [sp, #112] ; hv load L4
-    cbz x1, __L7ff7_hxlcl_fcntl_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fcntl_bb1 ; branch -> then
-__L7ff7_hxlcl_fcntl_bb1:
+    cbz x1, __L5211_hxlcl_fcntl_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fcntl_bb1 ; branch -> then
+__L5211_hxlcl_fcntl_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #144] ; hv store L6
     ldp x0, x1, [sp, #144] ; hv load L6
-    cbz x1, __L7ff7_hxlcl_fcntl_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fcntl_bb3 ; branch -> then
-__L7ff7_hxlcl_fcntl_bb2:
+    cbz x1, __L5211_hxlcl_fcntl_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fcntl_bb3 ; branch -> then
+__L5211_hxlcl_fcntl_bb2:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     ldp x7, x8, [sp, #64] ; hv load L1
@@ -7072,33 +7033,33 @@ __L7ff7_hxlcl_fcntl_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #240] ; hv store L12
     ldp x0, x1, [sp, #240] ; hv load L12
-    cbz x1, __L7ff7_hxlcl_fcntl_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fcntl_bb6 ; branch -> then
-__L7ff7_hxlcl_fcntl_bb3:
+    cbz x1, __L5211_hxlcl_fcntl_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fcntl_bb6 ; branch -> then
+__L5211_hxlcl_fcntl_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #72 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
-    b __L7ff7_hxlcl_fcntl_bb5 ; branch
-__L7ff7_hxlcl_fcntl_bb4:
+    b __L5211_hxlcl_fcntl_bb5 ; branch
+__L5211_hxlcl_fcntl_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #25 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
-    b __L7ff7_hxlcl_fcntl_bb5 ; branch
-__L7ff7_hxlcl_fcntl_bb5:
-    b __L7ff7_hxlcl_fcntl_bb2 ; branch
-__L7ff7_hxlcl_fcntl_bb6:
+    b __L5211_hxlcl_fcntl_bb5 ; branch
+__L5211_hxlcl_fcntl_bb5:
+    b __L5211_hxlcl_fcntl_bb2 ; branch
+__L5211_hxlcl_fcntl_bb6:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #272] ; hv store L14
     ldp x0, x1, [sp, #272] ; hv load L14
-    cbz x1, __L7ff7_hxlcl_fcntl_bb9 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fcntl_bb8 ; branch -> then
-__L7ff7_hxlcl_fcntl_bb7:
+    cbz x1, __L5211_hxlcl_fcntl_bb9 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fcntl_bb8 ; branch -> then
+__L5211_hxlcl_fcntl_bb7:
     ldp x9, x0, [sp, #192] ; hv load L9
     add sp, sp, #384 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fcntl_bb8:
+__L5211_hxlcl_fcntl_bb8:
     bl ___errno_location ; cabi call __errno_location
     movz x9, #0 ; cabi ret tag = TAG_INT
     stp x9, x0, [sp, #304] ; hv store L16
@@ -7121,15 +7082,14 @@ __L7ff7_hxlcl_fcntl_bb8:
     ldp x0, x1, [sp, #320] ; hv load L17
     movz x0, #0 ; __hx_ptr_store32: TAG_INT
     stp x0, x1, [sp, #368] ; hv store L20
-    b __L7ff7_hxlcl_fcntl_bb9 ; branch
-__L7ff7_hxlcl_fcntl_bb9:
+    b __L5211_hxlcl_fcntl_bb9 ; branch
+__L5211_hxlcl_fcntl_bb9:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #384 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_mmap
     .p2align 2
 _hxlcl_mmap:
     .loc 1 1694 0
@@ -7148,7 +7108,7 @@ _hxlcl_mmap:
     stp x9, x4, [sp, #112] ; cabi ingress param 4
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x5, [sp, #128] ; cabi ingress param 5
-__L7ff7_hxlcl_mmap_bb0:
+__L5211_hxlcl_mmap_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #197 ; hv const_int val
     stp x0, x1, [sp, #144] ; hv store L6
@@ -7156,16 +7116,16 @@ __L7ff7_hxlcl_mmap_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #160] ; hv store L7
     ldp x0, x1, [sp, #160] ; hv load L7
-    cbz x1, __L7ff7_hxlcl_mmap_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_mmap_bb1 ; branch -> then
-__L7ff7_hxlcl_mmap_bb1:
+    cbz x1, __L5211_hxlcl_mmap_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_mmap_bb1 ; branch -> then
+__L5211_hxlcl_mmap_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #192] ; hv store L9
     ldp x0, x1, [sp, #192] ; hv load L9
-    cbz x1, __L7ff7_hxlcl_mmap_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_mmap_bb3 ; branch -> then
-__L7ff7_hxlcl_mmap_bb2:
+    cbz x1, __L5211_hxlcl_mmap_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_mmap_bb3 ; branch -> then
+__L5211_hxlcl_mmap_bb2:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     ldp x7, x8, [sp, #64] ; hv load L1
@@ -7209,33 +7169,33 @@ __L7ff7_hxlcl_mmap_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #288] ; hv store L15
     ldp x0, x1, [sp, #288] ; hv load L15
-    cbz x1, __L7ff7_hxlcl_mmap_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_mmap_bb6 ; branch -> then
-__L7ff7_hxlcl_mmap_bb3:
+    cbz x1, __L5211_hxlcl_mmap_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_mmap_bb6 ; branch -> then
+__L5211_hxlcl_mmap_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #9 ; hv const_int val
     stp x0, x1, [sp, #144] ; hv store L6
-    b __L7ff7_hxlcl_mmap_bb5 ; branch
-__L7ff7_hxlcl_mmap_bb4:
+    b __L5211_hxlcl_mmap_bb5 ; branch
+__L5211_hxlcl_mmap_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #222 ; hv const_int val
     stp x0, x1, [sp, #144] ; hv store L6
-    b __L7ff7_hxlcl_mmap_bb5 ; branch
-__L7ff7_hxlcl_mmap_bb5:
-    b __L7ff7_hxlcl_mmap_bb2 ; branch
-__L7ff7_hxlcl_mmap_bb6:
+    b __L5211_hxlcl_mmap_bb5 ; branch
+__L5211_hxlcl_mmap_bb5:
+    b __L5211_hxlcl_mmap_bb2 ; branch
+__L5211_hxlcl_mmap_bb6:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #320] ; hv store L17
     ldp x0, x1, [sp, #320] ; hv load L17
-    cbz x1, __L7ff7_hxlcl_mmap_bb9 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_mmap_bb8 ; branch -> then
-__L7ff7_hxlcl_mmap_bb7:
+    cbz x1, __L5211_hxlcl_mmap_bb9 ; br_cond: !payload -> else
+    b __L5211_hxlcl_mmap_bb8 ; branch -> then
+__L5211_hxlcl_mmap_bb7:
     ldp x9, x0, [sp, #240] ; hv load L12
     add sp, sp, #432 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_mmap_bb8:
+__L5211_hxlcl_mmap_bb8:
     bl ___errno_location ; cabi call __errno_location
     movz x9, #0 ; cabi ret tag = TAG_INT
     stp x9, x0, [sp, #352] ; hv store L19
@@ -7258,15 +7218,14 @@ __L7ff7_hxlcl_mmap_bb8:
     ldp x0, x1, [sp, #368] ; hv load L20
     movz x0, #0 ; __hx_ptr_store32: TAG_INT
     stp x0, x1, [sp, #416] ; hv store L23
-    b __L7ff7_hxlcl_mmap_bb9 ; branch
-__L7ff7_hxlcl_mmap_bb9:
+    b __L5211_hxlcl_mmap_bb9 ; branch
+__L5211_hxlcl_mmap_bb9:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #432 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_open_sys
     .p2align 2
 _hxlcl_open_sys:
     .loc 1 1770 0
@@ -7279,7 +7238,7 @@ _hxlcl_open_sys:
     stp x9, x1, [sp, #64] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #80] ; cabi ingress param 2
-__L7ff7_hxlcl_open_sys_bb0:
+__L5211_hxlcl_open_sys_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
@@ -7287,16 +7246,16 @@ __L7ff7_hxlcl_open_sys_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #112] ; hv store L4
     ldp x0, x1, [sp, #112] ; hv load L4
-    cbz x1, __L7ff7_hxlcl_open_sys_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_open_sys_bb1 ; branch -> then
-__L7ff7_hxlcl_open_sys_bb1:
+    cbz x1, __L5211_hxlcl_open_sys_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_open_sys_bb1 ; branch -> then
+__L5211_hxlcl_open_sys_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #144] ; hv store L6
     ldp x0, x1, [sp, #144] ; hv load L6
-    cbz x1, __L7ff7_hxlcl_open_sys_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_open_sys_bb3 ; branch -> then
-__L7ff7_hxlcl_open_sys_bb2:
+    cbz x1, __L5211_hxlcl_open_sys_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_open_sys_bb3 ; branch -> then
+__L5211_hxlcl_open_sys_bb2:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     ldp x7, x8, [sp, #64] ; hv load L1
@@ -7327,8 +7286,8 @@ __L7ff7_hxlcl_open_sys_bb2:
     stp x0, x1, [sp, #208] ; hv store L10
     ldp x0, x1, [sp, #208] ; hv load L10
     stp x0, x1, [sp, #96] ; hv store L3
-    b __L7ff7_hxlcl_open_sys_bb6 ; branch
-__L7ff7_hxlcl_open_sys_bb3:
+    b __L5211_hxlcl_open_sys_bb6 ; branch
+__L5211_hxlcl_open_sys_bb3:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     ldp x7, x8, [sp, #64] ; hv load L1
@@ -7359,8 +7318,8 @@ __L7ff7_hxlcl_open_sys_bb3:
     stp x0, x1, [sp, #176] ; hv store L8
     ldp x0, x1, [sp, #176] ; hv load L8
     stp x0, x1, [sp, #96] ; hv store L3
-    b __L7ff7_hxlcl_open_sys_bb5 ; branch
-__L7ff7_hxlcl_open_sys_bb4:
+    b __L5211_hxlcl_open_sys_bb5 ; branch
+__L5211_hxlcl_open_sys_bb4:
     movz x7, #0 ; hv const_int: TAG_INT
     movz x8, #99 ; imm 0-15
     mvn x8, x8 ; hv const_int: negate
@@ -7392,10 +7351,10 @@ __L7ff7_hxlcl_open_sys_bb4:
     stp x0, x1, [sp, #192] ; hv store L9
     ldp x0, x1, [sp, #192] ; hv load L9
     stp x0, x1, [sp, #96] ; hv store L3
-    b __L7ff7_hxlcl_open_sys_bb5 ; branch
-__L7ff7_hxlcl_open_sys_bb5:
-    b __L7ff7_hxlcl_open_sys_bb6 ; branch
-__L7ff7_hxlcl_open_sys_bb6:
+    b __L5211_hxlcl_open_sys_bb5 ; branch
+__L5211_hxlcl_open_sys_bb5:
+    b __L5211_hxlcl_open_sys_bb6 ; branch
+__L5211_hxlcl_open_sys_bb6:
     ldp x0, x1, [sp, #96] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -7413,21 +7372,21 @@ __L7ff7_hxlcl_open_sys_bb6:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #256] ; hv store L13
     ldp x0, x1, [sp, #256] ; hv load L13
-    cbz x1, __L7ff7_hxlcl_open_sys_bb8 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_open_sys_bb7 ; branch -> then
-__L7ff7_hxlcl_open_sys_bb7:
+    cbz x1, __L5211_hxlcl_open_sys_bb8 ; br_cond: !payload -> else
+    b __L5211_hxlcl_open_sys_bb7 ; branch -> then
+__L5211_hxlcl_open_sys_bb7:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #288] ; hv store L15
     ldp x0, x1, [sp, #288] ; hv load L15
-    cbz x1, __L7ff7_hxlcl_open_sys_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_open_sys_bb9 ; branch -> then
-__L7ff7_hxlcl_open_sys_bb8:
+    cbz x1, __L5211_hxlcl_open_sys_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_open_sys_bb9 ; branch -> then
+__L5211_hxlcl_open_sys_bb8:
     ldp x9, x0, [sp, #96] ; hv load L3
     add sp, sp, #400 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_open_sys_bb9:
+__L5211_hxlcl_open_sys_bb9:
     bl ___errno_location ; cabi call __errno_location
     movz x9, #0 ; cabi ret tag = TAG_INT
     stp x9, x0, [sp, #320] ; hv store L17
@@ -7450,15 +7409,14 @@ __L7ff7_hxlcl_open_sys_bb9:
     ldp x0, x1, [sp, #336] ; hv load L18
     movz x0, #0 ; __hx_ptr_store32: TAG_INT
     stp x0, x1, [sp, #384] ; hv store L21
-    b __L7ff7_hxlcl_open_sys_bb10 ; branch
-__L7ff7_hxlcl_open_sys_bb10:
+    b __L5211_hxlcl_open_sys_bb10 ; branch
+__L5211_hxlcl_open_sys_bb10:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #400 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_getrusage
     .p2align 2
 _hxlcl_getrusage:
     .loc 1 1795 0
@@ -7469,7 +7427,7 @@ _hxlcl_getrusage:
     stp x9, x0, [sp, #48] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #64] ; cabi ingress param 1
-__L7ff7_hxlcl_getrusage_bb0:
+__L5211_hxlcl_getrusage_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #117 ; hv const_int val
     stp x0, x1, [sp, #80] ; hv store L2
@@ -7477,16 +7435,16 @@ __L7ff7_hxlcl_getrusage_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #96] ; hv store L3
     ldp x0, x1, [sp, #96] ; hv load L3
-    cbz x1, __L7ff7_hxlcl_getrusage_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getrusage_bb1 ; branch -> then
-__L7ff7_hxlcl_getrusage_bb1:
+    cbz x1, __L5211_hxlcl_getrusage_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getrusage_bb1 ; branch -> then
+__L5211_hxlcl_getrusage_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #128] ; hv store L5
     ldp x0, x1, [sp, #128] ; hv load L5
-    cbz x1, __L7ff7_hxlcl_getrusage_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getrusage_bb3 ; branch -> then
-__L7ff7_hxlcl_getrusage_bb2:
+    cbz x1, __L5211_hxlcl_getrusage_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getrusage_bb3 ; branch -> then
+__L5211_hxlcl_getrusage_bb2:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     ldp x7, x8, [sp, #64] ; hv load L1
@@ -7534,33 +7492,33 @@ __L7ff7_hxlcl_getrusage_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #224] ; hv store L11
     ldp x0, x1, [sp, #224] ; hv load L11
-    cbz x1, __L7ff7_hxlcl_getrusage_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getrusage_bb6 ; branch -> then
-__L7ff7_hxlcl_getrusage_bb3:
+    cbz x1, __L5211_hxlcl_getrusage_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getrusage_bb6 ; branch -> then
+__L5211_hxlcl_getrusage_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #98 ; hv const_int val
     stp x0, x1, [sp, #80] ; hv store L2
-    b __L7ff7_hxlcl_getrusage_bb5 ; branch
-__L7ff7_hxlcl_getrusage_bb4:
+    b __L5211_hxlcl_getrusage_bb5 ; branch
+__L5211_hxlcl_getrusage_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #165 ; hv const_int val
     stp x0, x1, [sp, #80] ; hv store L2
-    b __L7ff7_hxlcl_getrusage_bb5 ; branch
-__L7ff7_hxlcl_getrusage_bb5:
-    b __L7ff7_hxlcl_getrusage_bb2 ; branch
-__L7ff7_hxlcl_getrusage_bb6:
+    b __L5211_hxlcl_getrusage_bb5 ; branch
+__L5211_hxlcl_getrusage_bb5:
+    b __L5211_hxlcl_getrusage_bb2 ; branch
+__L5211_hxlcl_getrusage_bb6:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #256] ; hv store L13
     ldp x0, x1, [sp, #256] ; hv load L13
-    cbz x1, __L7ff7_hxlcl_getrusage_bb9 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_getrusage_bb8 ; branch -> then
-__L7ff7_hxlcl_getrusage_bb7:
+    cbz x1, __L5211_hxlcl_getrusage_bb9 ; br_cond: !payload -> else
+    b __L5211_hxlcl_getrusage_bb8 ; branch -> then
+__L5211_hxlcl_getrusage_bb7:
     ldp x9, x0, [sp, #176] ; hv load L8
     add sp, sp, #368 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_getrusage_bb8:
+__L5211_hxlcl_getrusage_bb8:
     bl ___errno_location ; cabi call __errno_location
     movz x9, #0 ; cabi ret tag = TAG_INT
     stp x9, x0, [sp, #288] ; hv store L15
@@ -7583,15 +7541,14 @@ __L7ff7_hxlcl_getrusage_bb8:
     ldp x0, x1, [sp, #304] ; hv load L16
     movz x0, #0 ; __hx_ptr_store32: TAG_INT
     stp x0, x1, [sp, #352] ; hv store L19
-    b __L7ff7_hxlcl_getrusage_bb9 ; branch
-__L7ff7_hxlcl_getrusage_bb9:
+    b __L5211_hxlcl_getrusage_bb9 ; branch
+__L5211_hxlcl_getrusage_bb9:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #368 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_pipe
     .p2align 2
 _hxlcl_pipe:
     .loc 1 1842 0
@@ -7600,14 +7557,14 @@ _hxlcl_pipe:
     sub sp, sp, #576 ; sp adj
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x0, [sp, #64] ; cabi ingress param 0
-__L7ff7_hxlcl_pipe_bb0:
+__L5211_hxlcl_pipe_bb0:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #80] ; hv store L1
     ldp x0, x1, [sp, #80] ; hv load L1
-    cbz x1, __L7ff7_hxlcl_pipe_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_pipe_bb1 ; branch -> then
-__L7ff7_hxlcl_pipe_bb1:
+    cbz x1, __L5211_hxlcl_pipe_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_pipe_bb1 ; branch -> then
+__L5211_hxlcl_pipe_bb1:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #112] ; hv store L3
@@ -7615,9 +7572,9 @@ __L7ff7_hxlcl_pipe_bb1:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #128] ; hv store L4
     ldp x0, x1, [sp, #128] ; hv load L4
-    cbz x1, __L7ff7_hxlcl_pipe_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_pipe_bb3 ; branch -> then
-__L7ff7_hxlcl_pipe_bb2:
+    cbz x1, __L5211_hxlcl_pipe_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_pipe_bb3 ; branch -> then
+__L5211_hxlcl_pipe_bb2:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     movz x2, #0 ; hv const_int: TAG_INT
@@ -7691,9 +7648,9 @@ __L7ff7_hxlcl_pipe_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #448] ; hv store L24
     ldp x0, x1, [sp, #448] ; hv load L24
-    cbz x1, __L7ff7_hxlcl_pipe_bb9 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_pipe_bb8 ; branch -> then
-__L7ff7_hxlcl_pipe_bb3:
+    cbz x1, __L5211_hxlcl_pipe_bb9 ; br_cond: !payload -> else
+    b __L5211_hxlcl_pipe_bb8 ; branch -> then
+__L5211_hxlcl_pipe_bb3:
     ldp x7, x8, [sp, #64] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     movz x7, #0 ; hv const_int: TAG_INT
@@ -7726,8 +7683,8 @@ __L7ff7_hxlcl_pipe_bb3:
     stp x0, x1, [sp, #160] ; hv store L6
     ldp x0, x1, [sp, #160] ; hv load L6
     stp x0, x1, [sp, #112] ; hv store L3
-    b __L7ff7_hxlcl_pipe_bb5 ; branch
-__L7ff7_hxlcl_pipe_bb4:
+    b __L5211_hxlcl_pipe_bb5 ; branch
+__L5211_hxlcl_pipe_bb4:
     ldp x7, x8, [sp, #64] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     movz x7, #0 ; hv const_int: TAG_INT
@@ -7760,8 +7717,8 @@ __L7ff7_hxlcl_pipe_bb4:
     stp x0, x1, [sp, #176] ; hv store L7
     ldp x0, x1, [sp, #176] ; hv load L7
     stp x0, x1, [sp, #112] ; hv store L3
-    b __L7ff7_hxlcl_pipe_bb5 ; branch
-__L7ff7_hxlcl_pipe_bb5:
+    b __L5211_hxlcl_pipe_bb5 ; branch
+__L5211_hxlcl_pipe_bb5:
     ldp x0, x1, [sp, #112] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -7779,9 +7736,9 @@ __L7ff7_hxlcl_pipe_bb5:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #224] ; hv store L10
     ldp x0, x1, [sp, #224] ; hv load L10
-    cbz x1, __L7ff7_hxlcl_pipe_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_pipe_bb6 ; branch -> then
-__L7ff7_hxlcl_pipe_bb6:
+    cbz x1, __L5211_hxlcl_pipe_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_pipe_bb6 ; branch -> then
+__L5211_hxlcl_pipe_bb6:
     bl ___errno_location ; cabi call __errno_location
     movz x9, #0 ; cabi ret tag = TAG_INT
     stp x9, x0, [sp, #256] ; hv store L12
@@ -7810,19 +7767,19 @@ __L7ff7_hxlcl_pipe_bb6:
     add sp, sp, #576 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_pipe_bb7:
+__L5211_hxlcl_pipe_bb7:
     ldp x9, x0, [sp, #112] ; hv load L3
     add sp, sp, #576 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_pipe_bb8:
+__L5211_hxlcl_pipe_bb8:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #576 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_pipe_bb9:
+__L5211_hxlcl_pipe_bb9:
     ldp x0, x1, [sp, #384] ; hv load L20
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -7870,7 +7827,6 @@ __L7ff7_hxlcl_pipe_bb9:
     add sp, sp, #576 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_time
     .p2align 2
 _hxlcl_time:
     .loc 1 1935 0
@@ -7879,7 +7835,7 @@ _hxlcl_time:
     sub sp, sp, #560 ; sp adj
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x0, [sp, #48] ; cabi ingress param 0
-__L7ff7_hxlcl_time_bb0:
+__L5211_hxlcl_time_bb0:
     ldp x0, x1, [sp, #48] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -7892,16 +7848,16 @@ __L7ff7_hxlcl_time_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #96] ; hv store L3
     ldp x0, x1, [sp, #96] ; hv load L3
-    cbz x1, __L7ff7_hxlcl_time_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_time_bb1 ; branch -> then
-__L7ff7_hxlcl_time_bb1:
+    cbz x1, __L5211_hxlcl_time_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_time_bb1 ; branch -> then
+__L5211_hxlcl_time_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #128] ; hv store L5
     ldp x0, x1, [sp, #128] ; hv load L5
-    cbz x1, __L7ff7_hxlcl_time_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_time_bb3 ; branch -> then
-__L7ff7_hxlcl_time_bb2:
+    cbz x1, __L5211_hxlcl_time_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_time_bb3 ; branch -> then
+__L5211_hxlcl_time_bb2:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     movz x2, #0 ; hv const_int: TAG_INT
@@ -7966,9 +7922,9 @@ __L7ff7_hxlcl_time_bb2:
     stp x0, x1, [x15] ; hv store L29
     add x15, sp, #512 ; hv frame base
     ldp x0, x1, [x15] ; hv load L29
-    cbz x1, __L7ff7_hxlcl_time_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_time_bb9 ; branch -> then
-__L7ff7_hxlcl_time_bb3:
+    cbz x1, __L5211_hxlcl_time_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_time_bb9 ; branch -> then
+__L5211_hxlcl_time_bb3:
     movz x7, #0 ; hv const_int: TAG_INT
     movz x8, #0 ; hv const_int val
     mov x9, x8 ; __hx_syscall6: stage arg
@@ -8010,9 +7966,9 @@ __L7ff7_hxlcl_time_bb3:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #192] ; hv store L9
     ldp x0, x1, [sp, #192] ; hv load L9
-    cbz x1, __L7ff7_hxlcl_time_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_time_bb5 ; branch -> then
-__L7ff7_hxlcl_time_bb4:
+    cbz x1, __L5211_hxlcl_time_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_time_bb5 ; branch -> then
+__L5211_hxlcl_time_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     movz x2, #0 ; hv const_int: TAG_INT
@@ -8075,9 +8031,9 @@ __L7ff7_hxlcl_time_bb4:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #352] ; hv store L19
     ldp x0, x1, [sp, #352] ; hv load L19
-    cbz x1, __L7ff7_hxlcl_time_bb8 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_time_bb7 ; branch -> then
-__L7ff7_hxlcl_time_bb5:
+    cbz x1, __L5211_hxlcl_time_bb8 ; br_cond: !payload -> else
+    b __L5211_hxlcl_time_bb7 ; branch -> then
+__L5211_hxlcl_time_bb5:
     ldp x0, x1, [sp, #80] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -8087,13 +8043,13 @@ __L7ff7_hxlcl_time_bb5:
     ldp x0, x1, [sp, #80] ; hv load L2
     movz x0, #0 ; __hx_ptr_store32: TAG_INT
     stp x0, x1, [sp, #224] ; hv store L11
-    b __L7ff7_hxlcl_time_bb6 ; branch
-__L7ff7_hxlcl_time_bb6:
+    b __L5211_hxlcl_time_bb6 ; branch
+__L5211_hxlcl_time_bb6:
     ldp x9, x0, [sp, #176] ; hv load L8
     add sp, sp, #560 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_time_bb7:
+__L5211_hxlcl_time_bb7:
     ldp x0, x1, [sp, #80] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -8103,13 +8059,13 @@ __L7ff7_hxlcl_time_bb7:
     ldp x0, x1, [sp, #80] ; hv load L2
     movz x0, #0 ; __hx_ptr_store32: TAG_INT
     stp x0, x1, [sp, #384] ; hv store L21
-    b __L7ff7_hxlcl_time_bb8 ; branch
-__L7ff7_hxlcl_time_bb8:
+    b __L5211_hxlcl_time_bb8 ; branch
+__L5211_hxlcl_time_bb8:
     ldp x9, x0, [sp, #336] ; hv load L18
     add sp, sp, #560 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_time_bb9:
+__L5211_hxlcl_time_bb9:
     ldp x0, x1, [sp, #80] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -8120,13 +8076,12 @@ __L7ff7_hxlcl_time_bb9:
     movz x0, #0 ; __hx_ptr_store32: TAG_INT
     add x15, sp, #544 ; hv frame base
     stp x0, x1, [x15] ; hv store L31
-    b __L7ff7_hxlcl_time_bb10 ; branch
-__L7ff7_hxlcl_time_bb10:
+    b __L5211_hxlcl_time_bb10 ; branch
+__L5211_hxlcl_time_bb10:
     ldp x9, x0, [sp, #496] ; hv load L28
     add sp, sp, #560 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_poll
     .p2align 2
 _hxlcl_poll:
     .loc 1 1996 0
@@ -8139,7 +8094,7 @@ _hxlcl_poll:
     stp x9, x1, [sp, #64] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #80] ; cabi ingress param 2
-__L7ff7_hxlcl_poll_bb0:
+__L5211_hxlcl_poll_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
@@ -8147,16 +8102,16 @@ __L7ff7_hxlcl_poll_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #112] ; hv store L4
     ldp x0, x1, [sp, #112] ; hv load L4
-    cbz x1, __L7ff7_hxlcl_poll_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_poll_bb1 ; branch -> then
-__L7ff7_hxlcl_poll_bb1:
+    cbz x1, __L5211_hxlcl_poll_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_poll_bb1 ; branch -> then
+__L5211_hxlcl_poll_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #144] ; hv store L6
     ldp x0, x1, [sp, #144] ; hv load L6
-    cbz x1, __L7ff7_hxlcl_poll_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_poll_bb3 ; branch -> then
-__L7ff7_hxlcl_poll_bb2:
+    cbz x1, __L5211_hxlcl_poll_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_poll_bb3 ; branch -> then
+__L5211_hxlcl_poll_bb2:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     ldp x7, x8, [sp, #64] ; hv load L1
@@ -8187,8 +8142,8 @@ __L7ff7_hxlcl_poll_bb2:
     stp x0, x1, [sp, #480] ; hv store L27
     ldp x0, x1, [sp, #480] ; hv load L27
     stp x0, x1, [sp, #96] ; hv store L3
-    b __L7ff7_hxlcl_poll_bb9 ; branch
-__L7ff7_hxlcl_poll_bb3:
+    b __L5211_hxlcl_poll_bb9 ; branch
+__L5211_hxlcl_poll_bb3:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     ldp x7, x8, [sp, #64] ; hv load L1
@@ -8219,8 +8174,8 @@ __L7ff7_hxlcl_poll_bb3:
     stp x0, x1, [sp, #176] ; hv store L8
     ldp x0, x1, [sp, #176] ; hv load L8
     stp x0, x1, [sp, #96] ; hv store L3
-    b __L7ff7_hxlcl_poll_bb8 ; branch
-__L7ff7_hxlcl_poll_bb4:
+    b __L5211_hxlcl_poll_bb8 ; branch
+__L5211_hxlcl_poll_bb4:
     ldp x0, x1, [sp, #80] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -8238,9 +8193,9 @@ __L7ff7_hxlcl_poll_bb4:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #224] ; hv store L11
     ldp x0, x1, [sp, #224] ; hv load L11
-    cbz x1, __L7ff7_hxlcl_poll_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_poll_bb5 ; branch -> then
-__L7ff7_hxlcl_poll_bb5:
+    cbz x1, __L5211_hxlcl_poll_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_poll_bb5 ; branch -> then
+__L5211_hxlcl_poll_bb5:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     ldp x7, x8, [sp, #64] ; hv load L1
@@ -8272,8 +8227,8 @@ __L7ff7_hxlcl_poll_bb5:
     stp x0, x1, [sp, #256] ; hv store L13
     ldp x0, x1, [sp, #256] ; hv load L13
     stp x0, x1, [sp, #96] ; hv store L3
-    b __L7ff7_hxlcl_poll_bb7 ; branch
-__L7ff7_hxlcl_poll_bb6:
+    b __L5211_hxlcl_poll_bb7 ; branch
+__L5211_hxlcl_poll_bb6:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     movz x2, #0 ; hv const_int: TAG_INT
@@ -8365,12 +8320,12 @@ __L7ff7_hxlcl_poll_bb6:
     stp x0, x1, [sp, #464] ; hv store L26
     ldp x0, x1, [sp, #464] ; hv load L26
     stp x0, x1, [sp, #96] ; hv store L3
-    b __L7ff7_hxlcl_poll_bb7 ; branch
-__L7ff7_hxlcl_poll_bb7:
-    b __L7ff7_hxlcl_poll_bb8 ; branch
-__L7ff7_hxlcl_poll_bb8:
-    b __L7ff7_hxlcl_poll_bb9 ; branch
-__L7ff7_hxlcl_poll_bb9:
+    b __L5211_hxlcl_poll_bb7 ; branch
+__L5211_hxlcl_poll_bb7:
+    b __L5211_hxlcl_poll_bb8 ; branch
+__L5211_hxlcl_poll_bb8:
+    b __L5211_hxlcl_poll_bb9 ; branch
+__L5211_hxlcl_poll_bb9:
     ldp x0, x1, [sp, #96] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -8392,23 +8347,23 @@ __L7ff7_hxlcl_poll_bb9:
     stp x0, x1, [x15] ; hv store L30
     add x15, sp, #528 ; hv frame base
     ldp x0, x1, [x15] ; hv load L30
-    cbz x1, __L7ff7_hxlcl_poll_bb11 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_poll_bb10 ; branch -> then
-__L7ff7_hxlcl_poll_bb10:
+    cbz x1, __L5211_hxlcl_poll_bb11 ; br_cond: !payload -> else
+    b __L5211_hxlcl_poll_bb10 ; branch -> then
+__L5211_hxlcl_poll_bb10:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     add x15, sp, #560 ; hv frame base
     stp x0, x1, [x15] ; hv store L32
     add x15, sp, #560 ; hv frame base
     ldp x0, x1, [x15] ; hv load L32
-    cbz x1, __L7ff7_hxlcl_poll_bb13 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_poll_bb12 ; branch -> then
-__L7ff7_hxlcl_poll_bb11:
+    cbz x1, __L5211_hxlcl_poll_bb13 ; br_cond: !payload -> else
+    b __L5211_hxlcl_poll_bb12 ; branch -> then
+__L5211_hxlcl_poll_bb11:
     ldp x9, x0, [sp, #96] ; hv load L3
     add sp, sp, #672 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_poll_bb12:
+__L5211_hxlcl_poll_bb12:
     bl ___errno_location ; cabi call __errno_location
     movz x9, #0 ; cabi ret tag = TAG_INT
     add x15, sp, #592 ; hv frame base
@@ -8441,15 +8396,14 @@ __L7ff7_hxlcl_poll_bb12:
     movz x0, #0 ; __hx_ptr_store32: TAG_INT
     add x15, sp, #656 ; hv frame base
     stp x0, x1, [x15] ; hv store L38
-    b __L7ff7_hxlcl_poll_bb13 ; branch
-__L7ff7_hxlcl_poll_bb13:
+    b __L5211_hxlcl_poll_bb13 ; branch
+__L5211_hxlcl_poll_bb13:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #672 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_clock_gettime
     .p2align 2
 _hxlcl_clock_gettime:
     .loc 1 2085 0
@@ -8460,14 +8414,14 @@ _hxlcl_clock_gettime:
     stp x9, x0, [sp, #48] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #64] ; cabi ingress param 1
-__L7ff7_hxlcl_clock_gettime_bb0:
+__L5211_hxlcl_clock_gettime_bb0:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #80] ; hv store L2
     ldp x0, x1, [sp, #80] ; hv load L2
-    cbz x1, __L7ff7_hxlcl_clock_gettime_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_clock_gettime_bb1 ; branch -> then
-__L7ff7_hxlcl_clock_gettime_bb1:
+    cbz x1, __L5211_hxlcl_clock_gettime_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_clock_gettime_bb1 ; branch -> then
+__L5211_hxlcl_clock_gettime_bb1:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #113 ; hv const_int val
     stp x0, x1, [sp, #112] ; hv store L4
@@ -8475,9 +8429,9 @@ __L7ff7_hxlcl_clock_gettime_bb1:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #128] ; hv store L5
     ldp x0, x1, [sp, #128] ; hv load L5
-    cbz x1, __L7ff7_hxlcl_clock_gettime_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_clock_gettime_bb3 ; branch -> then
-__L7ff7_hxlcl_clock_gettime_bb2:
+    cbz x1, __L5211_hxlcl_clock_gettime_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_clock_gettime_bb3 ; branch -> then
+__L5211_hxlcl_clock_gettime_bb2:
     ldp x0, x1, [sp, #64] ; hv load L1
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -8494,14 +8448,14 @@ __L7ff7_hxlcl_clock_gettime_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #368] ; hv store L20
     ldp x0, x1, [sp, #368] ; hv load L20
-    cbz x1, __L7ff7_hxlcl_clock_gettime_bb8 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_clock_gettime_bb7 ; branch -> then
-__L7ff7_hxlcl_clock_gettime_bb3:
+    cbz x1, __L5211_hxlcl_clock_gettime_bb8 ; br_cond: !payload -> else
+    b __L5211_hxlcl_clock_gettime_bb7 ; branch -> then
+__L5211_hxlcl_clock_gettime_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #228 ; hv const_int val
     stp x0, x1, [sp, #112] ; hv store L4
-    b __L7ff7_hxlcl_clock_gettime_bb4 ; branch
-__L7ff7_hxlcl_clock_gettime_bb4:
+    b __L5211_hxlcl_clock_gettime_bb4 ; branch
+__L5211_hxlcl_clock_gettime_bb4:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     ldp x7, x8, [sp, #64] ; hv load L1
@@ -8549,9 +8503,9 @@ __L7ff7_hxlcl_clock_gettime_bb4:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #224] ; hv store L11
     ldp x0, x1, [sp, #224] ; hv load L11
-    cbz x1, __L7ff7_hxlcl_clock_gettime_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_clock_gettime_bb5 ; branch -> then
-__L7ff7_hxlcl_clock_gettime_bb5:
+    cbz x1, __L5211_hxlcl_clock_gettime_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_clock_gettime_bb5 ; branch -> then
+__L5211_hxlcl_clock_gettime_bb5:
     bl ___errno_location ; cabi call __errno_location
     movz x9, #0 ; cabi ret tag = TAG_INT
     stp x9, x0, [sp, #256] ; hv store L13
@@ -8580,12 +8534,12 @@ __L7ff7_hxlcl_clock_gettime_bb5:
     add sp, sp, #496 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_clock_gettime_bb6:
+__L5211_hxlcl_clock_gettime_bb6:
     ldp x9, x0, [sp, #176] ; hv load L8
     add sp, sp, #496 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_clock_gettime_bb7:
+__L5211_hxlcl_clock_gettime_bb7:
     ldp x7, x8, [sp, #352] ; hv load L19
     mov x9, x8 ; __hx_syscall6: stage arg
     movz x7, #0 ; hv const_int: TAG_INT
@@ -8643,14 +8597,13 @@ __L7ff7_hxlcl_clock_gettime_bb7:
     ldp x0, x1, [sp, #352] ; hv load L19
     movz x0, #0 ; __hx_ptr_store64: TAG_INT
     stp x0, x1, [sp, #480] ; hv store L27
-    b __L7ff7_hxlcl_clock_gettime_bb8 ; branch
-__L7ff7_hxlcl_clock_gettime_bb8:
+    b __L5211_hxlcl_clock_gettime_bb8 ; branch
+__L5211_hxlcl_clock_gettime_bb8:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #496 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_execve
     .p2align 2
 _hxlcl_execve:
     .loc 1 2120 0
@@ -8663,7 +8616,7 @@ _hxlcl_execve:
     stp x9, x1, [sp, #64] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #80] ; cabi ingress param 2
-__L7ff7_hxlcl_execve_bb0:
+__L5211_hxlcl_execve_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #59 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
@@ -8671,16 +8624,16 @@ __L7ff7_hxlcl_execve_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #112] ; hv store L4
     ldp x0, x1, [sp, #112] ; hv load L4
-    cbz x1, __L7ff7_hxlcl_execve_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_execve_bb1 ; branch -> then
-__L7ff7_hxlcl_execve_bb1:
+    cbz x1, __L5211_hxlcl_execve_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_execve_bb1 ; branch -> then
+__L5211_hxlcl_execve_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #144] ; hv store L6
     ldp x0, x1, [sp, #144] ; hv load L6
-    cbz x1, __L7ff7_hxlcl_execve_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_execve_bb3 ; branch -> then
-__L7ff7_hxlcl_execve_bb2:
+    cbz x1, __L5211_hxlcl_execve_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_execve_bb3 ; branch -> then
+__L5211_hxlcl_execve_bb2:
     ldp x7, x8, [sp, #48] ; hv load L0
     mov x9, x8 ; __hx_syscall6: stage arg
     ldp x7, x8, [sp, #64] ; hv load L1
@@ -8727,33 +8680,33 @@ __L7ff7_hxlcl_execve_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #240] ; hv store L12
     ldp x0, x1, [sp, #240] ; hv load L12
-    cbz x1, __L7ff7_hxlcl_execve_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_execve_bb6 ; branch -> then
-__L7ff7_hxlcl_execve_bb3:
+    cbz x1, __L5211_hxlcl_execve_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_execve_bb6 ; branch -> then
+__L5211_hxlcl_execve_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #59 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
-    b __L7ff7_hxlcl_execve_bb5 ; branch
-__L7ff7_hxlcl_execve_bb4:
+    b __L5211_hxlcl_execve_bb5 ; branch
+__L5211_hxlcl_execve_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #221 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L3
-    b __L7ff7_hxlcl_execve_bb5 ; branch
-__L7ff7_hxlcl_execve_bb5:
-    b __L7ff7_hxlcl_execve_bb2 ; branch
-__L7ff7_hxlcl_execve_bb6:
+    b __L5211_hxlcl_execve_bb5 ; branch
+__L5211_hxlcl_execve_bb5:
+    b __L5211_hxlcl_execve_bb2 ; branch
+__L5211_hxlcl_execve_bb6:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #272] ; hv store L14
     ldp x0, x1, [sp, #272] ; hv load L14
-    cbz x1, __L7ff7_hxlcl_execve_bb9 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_execve_bb8 ; branch -> then
-__L7ff7_hxlcl_execve_bb7:
+    cbz x1, __L5211_hxlcl_execve_bb9 ; br_cond: !payload -> else
+    b __L5211_hxlcl_execve_bb8 ; branch -> then
+__L5211_hxlcl_execve_bb7:
     ldp x9, x0, [sp, #192] ; hv load L9
     add sp, sp, #384 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_execve_bb8:
+__L5211_hxlcl_execve_bb8:
     bl ___errno_location ; cabi call __errno_location
     movz x9, #0 ; cabi ret tag = TAG_INT
     stp x9, x0, [sp, #304] ; hv store L16
@@ -8776,29 +8729,28 @@ __L7ff7_hxlcl_execve_bb8:
     ldp x0, x1, [sp, #320] ; hv load L17
     movz x0, #0 ; __hx_ptr_store32: TAG_INT
     stp x0, x1, [sp, #368] ; hv store L20
-    b __L7ff7_hxlcl_execve_bb9 ; branch
-__L7ff7_hxlcl_execve_bb9:
+    b __L5211_hxlcl_execve_bb9 ; branch
+__L5211_hxlcl_execve_bb9:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #384 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_fork
     .p2align 2
 _hxlcl_fork:
     .loc 1 2190 0
     stp x29, x30, [sp, #-16]! ; prologue: save fp/lr
     mov x29, sp ; prologue: set fp
     sub sp, sp, #608 ; sp adj
-__L7ff7_hxlcl_fork_bb0:
+__L5211_hxlcl_fork_bb0:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #64] ; hv store L0
     ldp x0, x1, [sp, #64] ; hv load L0
-    cbz x1, __L7ff7_hxlcl_fork_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fork_bb1 ; branch -> then
-__L7ff7_hxlcl_fork_bb1:
+    cbz x1, __L5211_hxlcl_fork_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fork_bb1 ; branch -> then
+__L5211_hxlcl_fork_bb1:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #220 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L2
@@ -8809,9 +8761,9 @@ __L7ff7_hxlcl_fork_bb1:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #128] ; hv store L4
     ldp x0, x1, [sp, #128] ; hv load L4
-    cbz x1, __L7ff7_hxlcl_fork_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fork_bb3 ; branch -> then
-__L7ff7_hxlcl_fork_bb2:
+    cbz x1, __L5211_hxlcl_fork_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fork_bb3 ; branch -> then
+__L5211_hxlcl_fork_bb2:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     movz x2, #0 ; hv const_int: TAG_INT
@@ -8885,17 +8837,17 @@ __L7ff7_hxlcl_fork_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #448] ; hv store L24
     ldp x0, x1, [sp, #448] ; hv load L24
-    cbz x1, __L7ff7_hxlcl_fork_bb8 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fork_bb7 ; branch -> then
-__L7ff7_hxlcl_fork_bb3:
+    cbz x1, __L5211_hxlcl_fork_bb8 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fork_bb7 ; branch -> then
+__L5211_hxlcl_fork_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #57 ; hv const_int val
     stp x0, x1, [sp, #96] ; hv store L2
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #112] ; hv store L3
-    b __L7ff7_hxlcl_fork_bb4 ; branch
-__L7ff7_hxlcl_fork_bb4:
+    b __L5211_hxlcl_fork_bb4 ; branch
+__L5211_hxlcl_fork_bb4:
     ldp x7, x8, [sp, #112] ; hv load L3
     mov x9, x8 ; __hx_syscall6: stage arg
     movz x7, #0 ; hv const_int: TAG_INT
@@ -8944,9 +8896,9 @@ __L7ff7_hxlcl_fork_bb4:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #224] ; hv store L10
     ldp x0, x1, [sp, #224] ; hv load L10
-    cbz x1, __L7ff7_hxlcl_fork_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fork_bb5 ; branch -> then
-__L7ff7_hxlcl_fork_bb5:
+    cbz x1, __L5211_hxlcl_fork_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fork_bb5 ; branch -> then
+__L5211_hxlcl_fork_bb5:
     bl ___errno_location ; cabi call __errno_location
     movz x9, #0 ; cabi ret tag = TAG_INT
     stp x9, x0, [sp, #256] ; hv store L12
@@ -8975,19 +8927,19 @@ __L7ff7_hxlcl_fork_bb5:
     add sp, sp, #608 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fork_bb6:
+__L5211_hxlcl_fork_bb6:
     ldp x9, x0, [sp, #176] ; hv load L7
     add sp, sp, #608 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fork_bb7:
+__L5211_hxlcl_fork_bb7:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #608 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fork_bb8:
+__L5211_hxlcl_fork_bb8:
     ldp x0, x1, [sp, #384] ; hv load L20
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #8 ; hv const_int val
@@ -9020,15 +8972,15 @@ __L7ff7_hxlcl_fork_bb8:
     stp x0, x1, [x15] ; hv store L30
     add x15, sp, #544 ; hv frame base
     ldp x0, x1, [x15] ; hv load L30
-    cbz x1, __L7ff7_hxlcl_fork_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fork_bb9 ; branch -> then
-__L7ff7_hxlcl_fork_bb9:
+    cbz x1, __L5211_hxlcl_fork_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fork_bb9 ; branch -> then
+__L5211_hxlcl_fork_bb9:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #608 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fork_bb10:
+__L5211_hxlcl_fork_bb10:
     ldp x0, x1, [sp, #384] ; hv load L20
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -9046,7 +8998,6 @@ __L7ff7_hxlcl_fork_bb10:
     add sp, sp, #608 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_fopen
     .p2align 2
 _hxlcl_fopen:
     .loc 1 2264 0
@@ -9057,7 +9008,7 @@ _hxlcl_fopen:
     stp x9, x0, [sp, #0] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #16] ; cabi ingress param 1
-__L7ff7_hxlcl_fopen_bb0:
+__L5211_hxlcl_fopen_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -9075,15 +9026,15 @@ __L7ff7_hxlcl_fopen_bb0:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #64] ; hv store L4
     ldp x0, x1, [sp, #64] ; hv load L4
-    cbz x1, __L7ff7_hxlcl_fopen_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fopen_bb1 ; branch -> then
-__L7ff7_hxlcl_fopen_bb1:
+    cbz x1, __L5211_hxlcl_fopen_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fopen_bb1 ; branch -> then
+__L5211_hxlcl_fopen_bb1:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #1248 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fopen_bb2:
+__L5211_hxlcl_fopen_bb2:
     ldp x0, x1, [sp, #16] ; hv load L1
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -9101,15 +9052,15 @@ __L7ff7_hxlcl_fopen_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #128] ; hv store L8
     ldp x0, x1, [sp, #128] ; hv load L8
-    cbz x1, __L7ff7_hxlcl_fopen_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fopen_bb3 ; branch -> then
-__L7ff7_hxlcl_fopen_bb3:
+    cbz x1, __L5211_hxlcl_fopen_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fopen_bb3 ; branch -> then
+__L5211_hxlcl_fopen_bb3:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #1248 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fopen_bb4:
+__L5211_hxlcl_fopen_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #512 ; hv const_int val
     stp x0, x1, [sp, #160] ; hv store L10
@@ -9123,9 +9074,9 @@ __L7ff7_hxlcl_fopen_bb4:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #208] ; hv store L13
     ldp x0, x1, [sp, #208] ; hv load L13
-    cbz x1, __L7ff7_hxlcl_fopen_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fopen_bb5 ; branch -> then
-__L7ff7_hxlcl_fopen_bb5:
+    cbz x1, __L5211_hxlcl_fopen_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fopen_bb5 ; branch -> then
+__L5211_hxlcl_fopen_bb5:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #64 ; hv const_int val
     stp x0, x1, [sp, #160] ; hv store L10
@@ -9135,8 +9086,8 @@ __L7ff7_hxlcl_fopen_bb5:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1024 ; hv const_int val
     stp x0, x1, [sp, #192] ; hv store L12
-    b __L7ff7_hxlcl_fopen_bb6 ; branch
-__L7ff7_hxlcl_fopen_bb6:
+    b __L5211_hxlcl_fopen_bb6 ; branch
+__L5211_hxlcl_fopen_bb6:
     ldp x0, x1, [sp, #16] ; hv load L1
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -9175,14 +9126,14 @@ __L7ff7_hxlcl_fopen_bb6:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #352] ; hv store L22
     ldp x0, x1, [sp, #352] ; hv load L22
-    cbz x1, __L7ff7_hxlcl_fopen_bb8 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fopen_bb7 ; branch -> then
-__L7ff7_hxlcl_fopen_bb7:
+    cbz x1, __L5211_hxlcl_fopen_bb8 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fopen_bb7 ; branch -> then
+__L5211_hxlcl_fopen_bb7:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #304] ; hv store L19
-    b __L7ff7_hxlcl_fopen_bb13 ; branch
-__L7ff7_hxlcl_fopen_bb8:
+    b __L5211_hxlcl_fopen_bb13 ; branch
+__L5211_hxlcl_fopen_bb8:
     ldp x0, x1, [sp, #288] ; hv load L18
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -9200,9 +9151,9 @@ __L7ff7_hxlcl_fopen_bb8:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #416] ; hv store L26
     ldp x0, x1, [sp, #416] ; hv load L26
-    cbz x1, __L7ff7_hxlcl_fopen_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fopen_bb9 ; branch -> then
-__L7ff7_hxlcl_fopen_bb9:
+    cbz x1, __L5211_hxlcl_fopen_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fopen_bb9 ; branch -> then
+__L5211_hxlcl_fopen_bb9:
     ldp x0, x1, [sp, #16] ; hv load L1
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #2 ; hv const_int val
@@ -9231,18 +9182,18 @@ __L7ff7_hxlcl_fopen_bb9:
     stp x0, x1, [x15] ; hv store L32
     add x15, sp, #512 ; hv frame base
     ldp x0, x1, [x15] ; hv load L32
-    cbz x1, __L7ff7_hxlcl_fopen_bb12 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fopen_bb11 ; branch -> then
-__L7ff7_hxlcl_fopen_bb10:
-    b __L7ff7_hxlcl_fopen_bb13 ; branch
-__L7ff7_hxlcl_fopen_bb11:
+    cbz x1, __L5211_hxlcl_fopen_bb12 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fopen_bb11 ; branch -> then
+__L5211_hxlcl_fopen_bb10:
+    b __L5211_hxlcl_fopen_bb13 ; branch
+__L5211_hxlcl_fopen_bb11:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #304] ; hv store L19
-    b __L7ff7_hxlcl_fopen_bb12 ; branch
-__L7ff7_hxlcl_fopen_bb12:
-    b __L7ff7_hxlcl_fopen_bb10 ; branch
-__L7ff7_hxlcl_fopen_bb13:
+    b __L5211_hxlcl_fopen_bb12 ; branch
+__L5211_hxlcl_fopen_bb12:
+    b __L5211_hxlcl_fopen_bb10 ; branch
+__L5211_hxlcl_fopen_bb13:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #544 ; hv frame base
@@ -9274,9 +9225,9 @@ __L7ff7_hxlcl_fopen_bb13:
     stp x0, x1, [x15] ; hv store L38
     add x15, sp, #608 ; hv frame base
     ldp x0, x1, [x15] ; hv load L38
-    cbz x1, __L7ff7_hxlcl_fopen_bb15 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fopen_bb14 ; branch -> then
-__L7ff7_hxlcl_fopen_bb14:
+    cbz x1, __L5211_hxlcl_fopen_bb15 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fopen_bb14 ; branch -> then
+__L5211_hxlcl_fopen_bb14:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #544 ; hv frame base
@@ -9291,9 +9242,9 @@ __L7ff7_hxlcl_fopen_bb14:
     stp x0, x1, [x15] ; hv store L40
     add x15, sp, #640 ; hv frame base
     ldp x0, x1, [x15] ; hv load L40
-    cbz x1, __L7ff7_hxlcl_fopen_bb17 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fopen_bb16 ; branch -> then
-__L7ff7_hxlcl_fopen_bb15:
+    cbz x1, __L5211_hxlcl_fopen_bb17 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fopen_bb16 ; branch -> then
+__L5211_hxlcl_fopen_bb15:
     ldp x0, x1, [sp, #256] ; hv load L16
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #119 ; hv const_int val
@@ -9317,21 +9268,21 @@ __L7ff7_hxlcl_fopen_bb15:
     stp x0, x1, [x15] ; hv store L44
     add x15, sp, #704 ; hv frame base
     ldp x0, x1, [x15] ; hv load L44
-    cbz x1, __L7ff7_hxlcl_fopen_bb19 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fopen_bb18 ; branch -> then
-__L7ff7_hxlcl_fopen_bb16:
+    cbz x1, __L5211_hxlcl_fopen_bb19 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fopen_bb18 ; branch -> then
+__L5211_hxlcl_fopen_bb16:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #2 ; hv const_int val
     add x15, sp, #544 ; hv frame base
     stp x0, x1, [x15] ; hv store L34
-    b __L7ff7_hxlcl_fopen_bb17 ; branch
-__L7ff7_hxlcl_fopen_bb17:
+    b __L5211_hxlcl_fopen_bb17 ; branch
+__L5211_hxlcl_fopen_bb17:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     add x15, sp, #560 ; hv frame base
     stp x0, x1, [x15] ; hv store L35
-    b __L7ff7_hxlcl_fopen_bb15 ; branch
-__L7ff7_hxlcl_fopen_bb18:
+    b __L5211_hxlcl_fopen_bb15 ; branch
+__L5211_hxlcl_fopen_bb18:
     ldp x0, x1, [sp, #160] ; hv load L10
     ldp x2, x3, [sp, #176] ; hv load L11
     add x1, x1, x3 ; __hx_payload_add: x1 = a.pl add b.pl
@@ -9356,9 +9307,9 @@ __L7ff7_hxlcl_fopen_bb18:
     stp x0, x1, [x15] ; hv store L49
     add x15, sp, #784 ; hv frame base
     ldp x0, x1, [x15] ; hv load L49
-    cbz x1, __L7ff7_hxlcl_fopen_bb21 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fopen_bb20 ; branch -> then
-__L7ff7_hxlcl_fopen_bb19:
+    cbz x1, __L5211_hxlcl_fopen_bb21 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fopen_bb20 ; branch -> then
+__L5211_hxlcl_fopen_bb19:
     ldp x0, x1, [sp, #256] ; hv load L16
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #97 ; hv const_int val
@@ -9382,15 +9333,15 @@ __L7ff7_hxlcl_fopen_bb19:
     stp x0, x1, [x15] ; hv store L54
     add x15, sp, #864 ; hv frame base
     ldp x0, x1, [x15] ; hv load L54
-    cbz x1, __L7ff7_hxlcl_fopen_bb23 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fopen_bb22 ; branch -> then
-__L7ff7_hxlcl_fopen_bb20:
+    cbz x1, __L5211_hxlcl_fopen_bb23 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fopen_bb22 ; branch -> then
+__L5211_hxlcl_fopen_bb20:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #2 ; hv const_int val
     add x15, sp, #768 ; hv frame base
     stp x0, x1, [x15] ; hv store L48
-    b __L7ff7_hxlcl_fopen_bb21 ; branch
-__L7ff7_hxlcl_fopen_bb21:
+    b __L5211_hxlcl_fopen_bb21 ; branch
+__L5211_hxlcl_fopen_bb21:
     add x15, sp, #768 ; hv frame base
     ldp x0, x1, [x15] ; hv load L48
     add x15, sp, #752 ; hv frame base
@@ -9407,8 +9358,8 @@ __L7ff7_hxlcl_fopen_bb21:
     movz x1, #1 ; hv const_int val
     add x15, sp, #560 ; hv frame base
     stp x0, x1, [x15] ; hv store L35
-    b __L7ff7_hxlcl_fopen_bb19 ; branch
-__L7ff7_hxlcl_fopen_bb22:
+    b __L5211_hxlcl_fopen_bb19 ; branch
+__L5211_hxlcl_fopen_bb22:
     ldp x0, x1, [sp, #160] ; hv load L10
     ldp x2, x3, [sp, #192] ; hv load L12
     add x1, x1, x3 ; __hx_payload_add: x1 = a.pl add b.pl
@@ -9433,9 +9384,9 @@ __L7ff7_hxlcl_fopen_bb22:
     stp x0, x1, [x15] ; hv store L59
     add x15, sp, #944 ; hv frame base
     ldp x0, x1, [x15] ; hv load L59
-    cbz x1, __L7ff7_hxlcl_fopen_bb25 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fopen_bb24 ; branch -> then
-__L7ff7_hxlcl_fopen_bb23:
+    cbz x1, __L5211_hxlcl_fopen_bb25 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fopen_bb24 ; branch -> then
+__L5211_hxlcl_fopen_bb23:
     add x15, sp, #560 ; hv frame base
     ldp x0, x1, [x15] ; hv load L35
     movz x2, #0 ; hv const_int: TAG_INT
@@ -9460,15 +9411,15 @@ __L7ff7_hxlcl_fopen_bb23:
     stp x0, x1, [x15] ; hv store L64
     add x15, sp, #1024 ; hv frame base
     ldp x0, x1, [x15] ; hv load L64
-    cbz x1, __L7ff7_hxlcl_fopen_bb27 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fopen_bb26 ; branch -> then
-__L7ff7_hxlcl_fopen_bb24:
+    cbz x1, __L5211_hxlcl_fopen_bb27 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fopen_bb26 ; branch -> then
+__L5211_hxlcl_fopen_bb24:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #2 ; hv const_int val
     add x15, sp, #928 ; hv frame base
     stp x0, x1, [x15] ; hv store L58
-    b __L7ff7_hxlcl_fopen_bb25 ; branch
-__L7ff7_hxlcl_fopen_bb25:
+    b __L5211_hxlcl_fopen_bb25 ; branch
+__L5211_hxlcl_fopen_bb25:
     add x15, sp, #928 ; hv frame base
     ldp x0, x1, [x15] ; hv load L58
     add x15, sp, #912 ; hv frame base
@@ -9485,14 +9436,14 @@ __L7ff7_hxlcl_fopen_bb25:
     movz x1, #1 ; hv const_int val
     add x15, sp, #560 ; hv frame base
     stp x0, x1, [x15] ; hv store L35
-    b __L7ff7_hxlcl_fopen_bb23 ; branch
-__L7ff7_hxlcl_fopen_bb26:
+    b __L5211_hxlcl_fopen_bb23 ; branch
+__L5211_hxlcl_fopen_bb26:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #1248 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fopen_bb27:
+__L5211_hxlcl_fopen_bb27:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     movz x2, #0 ; hv const_int: TAG_INT
@@ -9538,15 +9489,15 @@ __L7ff7_hxlcl_fopen_bb27:
     stp x0, x1, [x15] ; hv store L71
     add x15, sp, #1136 ; hv frame base
     ldp x0, x1, [x15] ; hv load L71
-    cbz x1, __L7ff7_hxlcl_fopen_bb29 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fopen_bb28 ; branch -> then
-__L7ff7_hxlcl_fopen_bb28:
+    cbz x1, __L5211_hxlcl_fopen_bb29 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fopen_bb28 ; branch -> then
+__L5211_hxlcl_fopen_bb28:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #1248 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fopen_bb29:
+__L5211_hxlcl_fopen_bb29:
     add x15, sp, #1088 ; hv frame base
     ldp x0, x1, [x15] ; hv load L68
     movz x2, #0 ; hv const_int: TAG_INT
@@ -9571,15 +9522,15 @@ __L7ff7_hxlcl_fopen_bb29:
     stp x0, x1, [x15] ; hv store L75
     add x15, sp, #1200 ; hv frame base
     ldp x0, x1, [x15] ; hv load L75
-    cbz x1, __L7ff7_hxlcl_fopen_bb31 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fopen_bb30 ; branch -> then
-__L7ff7_hxlcl_fopen_bb30:
+    cbz x1, __L5211_hxlcl_fopen_bb31 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fopen_bb30 ; branch -> then
+__L5211_hxlcl_fopen_bb30:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #1248 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fopen_bb31:
+__L5211_hxlcl_fopen_bb31:
     add x15, sp, #1088 ; hv frame base
     ldp x0, x1, [x15] ; hv load L68
     movz x2, #0 ; hv const_int: TAG_INT
@@ -9593,7 +9544,6 @@ __L7ff7_hxlcl_fopen_bb31:
     add sp, sp, #1248 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_fclose
     .p2align 2
 _hxlcl_fclose:
     .loc 1 2335 0
@@ -9602,7 +9552,7 @@ _hxlcl_fclose:
     sub sp, sp, #256 ; sp adj
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x0, [sp, #0] ; cabi ingress param 0
-__L7ff7_hxlcl_fclose_bb0:
+__L5211_hxlcl_fclose_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -9620,16 +9570,16 @@ __L7ff7_hxlcl_fclose_bb0:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #48] ; hv store L3
     ldp x0, x1, [sp, #48] ; hv load L3
-    cbz x1, __L7ff7_hxlcl_fclose_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fclose_bb1 ; branch -> then
-__L7ff7_hxlcl_fclose_bb1:
+    cbz x1, __L5211_hxlcl_fclose_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fclose_bb1 ; branch -> then
+__L5211_hxlcl_fclose_bb1:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #256 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fclose_bb2:
+__L5211_hxlcl_fclose_bb2:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #4096 ; hv const_int val
@@ -9647,15 +9597,15 @@ __L7ff7_hxlcl_fclose_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #112] ; hv store L7
     ldp x0, x1, [sp, #112] ; hv load L7
-    cbz x1, __L7ff7_hxlcl_fclose_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fclose_bb3 ; branch -> then
-__L7ff7_hxlcl_fclose_bb3:
+    cbz x1, __L5211_hxlcl_fclose_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fclose_bb3 ; branch -> then
+__L5211_hxlcl_fclose_bb3:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #256 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fclose_bb4:
+__L5211_hxlcl_fclose_bb4:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -9681,15 +9631,15 @@ __L7ff7_hxlcl_fclose_bb4:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #208] ; hv store L13
     ldp x0, x1, [sp, #208] ; hv load L13
-    cbz x1, __L7ff7_hxlcl_fclose_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fclose_bb5 ; branch -> then
-__L7ff7_hxlcl_fclose_bb5:
+    cbz x1, __L5211_hxlcl_fclose_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fclose_bb5 ; branch -> then
+__L5211_hxlcl_fclose_bb5:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #256 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fclose_bb6:
+__L5211_hxlcl_fclose_bb6:
     ldp x9, x0, [sp, #160] ; hv load L10
     bl _hxlcl_close ; cabi call hxlcl_close
     movz x9, #0 ; cabi ret tag = TAG_INT
@@ -9698,7 +9648,6 @@ __L7ff7_hxlcl_fclose_bb6:
     add sp, sp, #256 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_fread
     .p2align 2
 _hxlcl_fread:
     .loc 1 2351 0
@@ -9713,7 +9662,7 @@ _hxlcl_fread:
     stp x9, x2, [sp, #32] ; cabi ingress param 2
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x3, [sp, #48] ; cabi ingress param 3
-__L7ff7_hxlcl_fread_bb0:
+__L5211_hxlcl_fread_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -9731,15 +9680,15 @@ __L7ff7_hxlcl_fread_bb0:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #96] ; hv store L6
     ldp x0, x1, [sp, #96] ; hv load L6
-    cbz x1, __L7ff7_hxlcl_fread_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fread_bb1 ; branch -> then
-__L7ff7_hxlcl_fread_bb1:
+    cbz x1, __L5211_hxlcl_fread_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fread_bb1 ; branch -> then
+__L5211_hxlcl_fread_bb1:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #720 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fread_bb2:
+__L5211_hxlcl_fread_bb2:
     ldp x0, x1, [sp, #16] ; hv load L1
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -9757,15 +9706,15 @@ __L7ff7_hxlcl_fread_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #160] ; hv store L10
     ldp x0, x1, [sp, #160] ; hv load L10
-    cbz x1, __L7ff7_hxlcl_fread_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fread_bb3 ; branch -> then
-__L7ff7_hxlcl_fread_bb3:
+    cbz x1, __L5211_hxlcl_fread_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fread_bb3 ; branch -> then
+__L5211_hxlcl_fread_bb3:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #720 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fread_bb4:
+__L5211_hxlcl_fread_bb4:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -9783,15 +9732,15 @@ __L7ff7_hxlcl_fread_bb4:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #224] ; hv store L14
     ldp x0, x1, [sp, #224] ; hv load L14
-    cbz x1, __L7ff7_hxlcl_fread_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fread_bb5 ; branch -> then
-__L7ff7_hxlcl_fread_bb5:
+    cbz x1, __L5211_hxlcl_fread_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fread_bb5 ; branch -> then
+__L5211_hxlcl_fread_bb5:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #720 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fread_bb6:
+__L5211_hxlcl_fread_bb6:
     ldp x0, x1, [sp, #48] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -9809,15 +9758,15 @@ __L7ff7_hxlcl_fread_bb6:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #288] ; hv store L18
     ldp x0, x1, [sp, #288] ; hv load L18
-    cbz x1, __L7ff7_hxlcl_fread_bb8 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fread_bb7 ; branch -> then
-__L7ff7_hxlcl_fread_bb7:
+    cbz x1, __L5211_hxlcl_fread_bb8 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fread_bb7 ; branch -> then
+__L5211_hxlcl_fread_bb7:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #720 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fread_bb8:
+__L5211_hxlcl_fread_bb8:
     ldp x0, x1, [sp, #48] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #4096 ; hv const_int val
@@ -9835,15 +9784,15 @@ __L7ff7_hxlcl_fread_bb8:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #352] ; hv store L22
     ldp x0, x1, [sp, #352] ; hv load L22
-    cbz x1, __L7ff7_hxlcl_fread_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fread_bb9 ; branch -> then
-__L7ff7_hxlcl_fread_bb9:
+    cbz x1, __L5211_hxlcl_fread_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fread_bb9 ; branch -> then
+__L5211_hxlcl_fread_bb9:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #720 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fread_bb10:
+__L5211_hxlcl_fread_bb10:
     ldp x0, x1, [sp, #48] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -9870,8 +9819,8 @@ __L7ff7_hxlcl_fread_bb10:
     stp x0, x1, [sp, #464] ; hv store L29
     ldp x0, x1, [sp, #464] ; hv load L29
     stp x0, x1, [sp, #480] ; hv store L30
-    b __L7ff7_hxlcl_fread_bb11 ; branch
-__L7ff7_hxlcl_fread_bb11:
+    b __L5211_hxlcl_fread_bb11 ; branch
+__L5211_hxlcl_fread_bb11:
     ldp x0, x1, [sp, #480] ; hv load L30
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -9880,9 +9829,9 @@ __L7ff7_hxlcl_fread_bb11:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #496] ; hv store L31
     ldp x0, x1, [sp, #496] ; hv load L31
-    cbz x1, __L7ff7_hxlcl_fread_bb13 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fread_bb12 ; branch -> then
-__L7ff7_hxlcl_fread_bb12:
+    cbz x1, __L5211_hxlcl_fread_bb13 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fread_bb12 ; branch -> then
+__L5211_hxlcl_fread_bb12:
     ldp x0, x1, [sp, #432] ; hv load L27
     ldp x2, x3, [sp, #448] ; hv load L28
     sub x1, x1, x3 ; __hx_payload_sub: x1 = a.pl sub b.pl
@@ -9940,9 +9889,9 @@ __L7ff7_hxlcl_fread_bb12:
     stp x0, x1, [x15] ; hv store L40
     add x15, sp, #640 ; hv frame base
     ldp x0, x1, [x15] ; hv load L40
-    cbz x1, __L7ff7_hxlcl_fread_bb15 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fread_bb14 ; branch -> then
-__L7ff7_hxlcl_fread_bb13:
+    cbz x1, __L5211_hxlcl_fread_bb15 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fread_bb14 ; branch -> then
+__L5211_hxlcl_fread_bb13:
     ldp x0, x1, [sp, #448] ; hv load L28
     ldp x2, x3, [sp, #16] ; hv load L1
     sdiv x1, x1, x3 ; __hx_payload_div: x1 = a.pl / b.pl (trunc)
@@ -9954,12 +9903,12 @@ __L7ff7_hxlcl_fread_bb13:
     add sp, sp, #720 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fread_bb14:
+__L5211_hxlcl_fread_bb14:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #480] ; hv store L30
-    b __L7ff7_hxlcl_fread_bb16 ; branch
-__L7ff7_hxlcl_fread_bb15:
+    b __L5211_hxlcl_fread_bb16 ; branch
+__L5211_hxlcl_fread_bb15:
     ldp x0, x1, [sp, #448] ; hv load L28
     add x15, sp, #592 ; hv frame base
     ldp x2, x3, [x15] ; hv load L37
@@ -9980,15 +9929,14 @@ __L7ff7_hxlcl_fread_bb15:
     add x15, sp, #688 ; hv frame base
     ldp x0, x1, [x15] ; hv load L43
     stp x0, x1, [sp, #480] ; hv store L30
-    b __L7ff7_hxlcl_fread_bb16 ; branch
-__L7ff7_hxlcl_fread_bb16:
-    b __L7ff7_hxlcl_fread_bb11 ; branch
+    b __L5211_hxlcl_fread_bb16 ; branch
+__L5211_hxlcl_fread_bb16:
+    b __L5211_hxlcl_fread_bb11 ; branch
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
     add sp, sp, #720 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_fwrite
     .p2align 2
 _hxlcl_fwrite:
     .loc 1 2383 0
@@ -10003,7 +9951,7 @@ _hxlcl_fwrite:
     stp x9, x2, [sp, #32] ; cabi ingress param 2
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x3, [sp, #48] ; cabi ingress param 3
-__L7ff7_hxlcl_fwrite_bb0:
+__L5211_hxlcl_fwrite_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -10021,15 +9969,15 @@ __L7ff7_hxlcl_fwrite_bb0:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #96] ; hv store L6
     ldp x0, x1, [sp, #96] ; hv load L6
-    cbz x1, __L7ff7_hxlcl_fwrite_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fwrite_bb1 ; branch -> then
-__L7ff7_hxlcl_fwrite_bb1:
+    cbz x1, __L5211_hxlcl_fwrite_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fwrite_bb1 ; branch -> then
+__L5211_hxlcl_fwrite_bb1:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #720 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fwrite_bb2:
+__L5211_hxlcl_fwrite_bb2:
     ldp x0, x1, [sp, #16] ; hv load L1
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -10047,15 +9995,15 @@ __L7ff7_hxlcl_fwrite_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #160] ; hv store L10
     ldp x0, x1, [sp, #160] ; hv load L10
-    cbz x1, __L7ff7_hxlcl_fwrite_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fwrite_bb3 ; branch -> then
-__L7ff7_hxlcl_fwrite_bb3:
+    cbz x1, __L5211_hxlcl_fwrite_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fwrite_bb3 ; branch -> then
+__L5211_hxlcl_fwrite_bb3:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #720 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fwrite_bb4:
+__L5211_hxlcl_fwrite_bb4:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -10073,15 +10021,15 @@ __L7ff7_hxlcl_fwrite_bb4:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #224] ; hv store L14
     ldp x0, x1, [sp, #224] ; hv load L14
-    cbz x1, __L7ff7_hxlcl_fwrite_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fwrite_bb5 ; branch -> then
-__L7ff7_hxlcl_fwrite_bb5:
+    cbz x1, __L5211_hxlcl_fwrite_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fwrite_bb5 ; branch -> then
+__L5211_hxlcl_fwrite_bb5:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #720 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fwrite_bb6:
+__L5211_hxlcl_fwrite_bb6:
     ldp x0, x1, [sp, #48] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -10099,15 +10047,15 @@ __L7ff7_hxlcl_fwrite_bb6:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #288] ; hv store L18
     ldp x0, x1, [sp, #288] ; hv load L18
-    cbz x1, __L7ff7_hxlcl_fwrite_bb8 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fwrite_bb7 ; branch -> then
-__L7ff7_hxlcl_fwrite_bb7:
+    cbz x1, __L5211_hxlcl_fwrite_bb8 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fwrite_bb7 ; branch -> then
+__L5211_hxlcl_fwrite_bb7:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #720 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fwrite_bb8:
+__L5211_hxlcl_fwrite_bb8:
     ldp x0, x1, [sp, #48] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #4096 ; hv const_int val
@@ -10125,15 +10073,15 @@ __L7ff7_hxlcl_fwrite_bb8:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #352] ; hv store L22
     ldp x0, x1, [sp, #352] ; hv load L22
-    cbz x1, __L7ff7_hxlcl_fwrite_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fwrite_bb9 ; branch -> then
-__L7ff7_hxlcl_fwrite_bb9:
+    cbz x1, __L5211_hxlcl_fwrite_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fwrite_bb9 ; branch -> then
+__L5211_hxlcl_fwrite_bb9:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #720 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fwrite_bb10:
+__L5211_hxlcl_fwrite_bb10:
     ldp x0, x1, [sp, #48] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -10160,8 +10108,8 @@ __L7ff7_hxlcl_fwrite_bb10:
     stp x0, x1, [sp, #464] ; hv store L29
     ldp x0, x1, [sp, #464] ; hv load L29
     stp x0, x1, [sp, #480] ; hv store L30
-    b __L7ff7_hxlcl_fwrite_bb11 ; branch
-__L7ff7_hxlcl_fwrite_bb11:
+    b __L5211_hxlcl_fwrite_bb11 ; branch
+__L5211_hxlcl_fwrite_bb11:
     ldp x0, x1, [sp, #480] ; hv load L30
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -10170,9 +10118,9 @@ __L7ff7_hxlcl_fwrite_bb11:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #496] ; hv store L31
     ldp x0, x1, [sp, #496] ; hv load L31
-    cbz x1, __L7ff7_hxlcl_fwrite_bb13 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fwrite_bb12 ; branch -> then
-__L7ff7_hxlcl_fwrite_bb12:
+    cbz x1, __L5211_hxlcl_fwrite_bb13 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fwrite_bb12 ; branch -> then
+__L5211_hxlcl_fwrite_bb12:
     ldp x0, x1, [sp, #432] ; hv load L27
     ldp x2, x3, [sp, #448] ; hv load L28
     sub x1, x1, x3 ; __hx_payload_sub: x1 = a.pl sub b.pl
@@ -10230,9 +10178,9 @@ __L7ff7_hxlcl_fwrite_bb12:
     stp x0, x1, [x15] ; hv store L40
     add x15, sp, #640 ; hv frame base
     ldp x0, x1, [x15] ; hv load L40
-    cbz x1, __L7ff7_hxlcl_fwrite_bb15 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fwrite_bb14 ; branch -> then
-__L7ff7_hxlcl_fwrite_bb13:
+    cbz x1, __L5211_hxlcl_fwrite_bb15 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fwrite_bb14 ; branch -> then
+__L5211_hxlcl_fwrite_bb13:
     ldp x0, x1, [sp, #448] ; hv load L28
     ldp x2, x3, [sp, #16] ; hv load L1
     sdiv x1, x1, x3 ; __hx_payload_div: x1 = a.pl / b.pl (trunc)
@@ -10244,12 +10192,12 @@ __L7ff7_hxlcl_fwrite_bb13:
     add sp, sp, #720 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fwrite_bb14:
+__L5211_hxlcl_fwrite_bb14:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #480] ; hv store L30
-    b __L7ff7_hxlcl_fwrite_bb16 ; branch
-__L7ff7_hxlcl_fwrite_bb15:
+    b __L5211_hxlcl_fwrite_bb16 ; branch
+__L5211_hxlcl_fwrite_bb15:
     ldp x0, x1, [sp, #448] ; hv load L28
     add x15, sp, #592 ; hv frame base
     ldp x2, x3, [x15] ; hv load L37
@@ -10270,15 +10218,14 @@ __L7ff7_hxlcl_fwrite_bb15:
     add x15, sp, #688 ; hv frame base
     ldp x0, x1, [x15] ; hv load L43
     stp x0, x1, [sp, #480] ; hv store L30
-    b __L7ff7_hxlcl_fwrite_bb16 ; branch
-__L7ff7_hxlcl_fwrite_bb16:
-    b __L7ff7_hxlcl_fwrite_bb11 ; branch
+    b __L5211_hxlcl_fwrite_bb16 ; branch
+__L5211_hxlcl_fwrite_bb16:
+    b __L5211_hxlcl_fwrite_bb11 ; branch
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
     add sp, sp, #720 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_ftell
     .p2align 2
 _hxlcl_ftell:
     .loc 1 2415 0
@@ -10287,7 +10234,7 @@ _hxlcl_ftell:
     sub sp, sp, #224 ; sp adj
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x0, [sp, #0] ; cabi ingress param 0
-__L7ff7_hxlcl_ftell_bb0:
+__L5211_hxlcl_ftell_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -10305,16 +10252,16 @@ __L7ff7_hxlcl_ftell_bb0:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #48] ; hv store L3
     ldp x0, x1, [sp, #48] ; hv load L3
-    cbz x1, __L7ff7_hxlcl_ftell_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_ftell_bb1 ; branch -> then
-__L7ff7_hxlcl_ftell_bb1:
+    cbz x1, __L5211_hxlcl_ftell_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_ftell_bb1 ; branch -> then
+__L5211_hxlcl_ftell_bb1:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #224 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_ftell_bb2:
+__L5211_hxlcl_ftell_bb2:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #4096 ; hv const_int val
@@ -10332,16 +10279,16 @@ __L7ff7_hxlcl_ftell_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #112] ; hv store L7
     ldp x0, x1, [sp, #112] ; hv load L7
-    cbz x1, __L7ff7_hxlcl_ftell_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_ftell_bb3 ; branch -> then
-__L7ff7_hxlcl_ftell_bb3:
+    cbz x1, __L5211_hxlcl_ftell_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_ftell_bb3 ; branch -> then
+__L5211_hxlcl_ftell_bb3:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #224 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_ftell_bb4:
+__L5211_hxlcl_ftell_bb4:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -10374,7 +10321,6 @@ __L7ff7_hxlcl_ftell_bb4:
     add sp, sp, #224 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_fseek
     .p2align 2
 _hxlcl_fseek:
     .loc 1 2427 0
@@ -10387,7 +10333,7 @@ _hxlcl_fseek:
     stp x9, x1, [sp, #16] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #32] ; cabi ingress param 2
-__L7ff7_hxlcl_fseek_bb0:
+__L5211_hxlcl_fseek_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -10405,16 +10351,16 @@ __L7ff7_hxlcl_fseek_bb0:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #80] ; hv store L5
     ldp x0, x1, [sp, #80] ; hv load L5
-    cbz x1, __L7ff7_hxlcl_fseek_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fseek_bb1 ; branch -> then
-__L7ff7_hxlcl_fseek_bb1:
+    cbz x1, __L5211_hxlcl_fseek_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fseek_bb1 ; branch -> then
+__L5211_hxlcl_fseek_bb1:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #304 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fseek_bb2:
+__L5211_hxlcl_fseek_bb2:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #4096 ; hv const_int val
@@ -10432,16 +10378,16 @@ __L7ff7_hxlcl_fseek_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #144] ; hv store L9
     ldp x0, x1, [sp, #144] ; hv load L9
-    cbz x1, __L7ff7_hxlcl_fseek_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fseek_bb3 ; branch -> then
-__L7ff7_hxlcl_fseek_bb3:
+    cbz x1, __L5211_hxlcl_fseek_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fseek_bb3 ; branch -> then
+__L5211_hxlcl_fseek_bb3:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #304 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fseek_bb4:
+__L5211_hxlcl_fseek_bb4:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -10475,22 +10421,21 @@ __L7ff7_hxlcl_fseek_bb4:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #272] ; hv store L17
     ldp x0, x1, [sp, #272] ; hv load L17
-    cbz x1, __L7ff7_hxlcl_fseek_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fseek_bb5 ; branch -> then
-__L7ff7_hxlcl_fseek_bb5:
+    cbz x1, __L5211_hxlcl_fseek_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fseek_bb5 ; branch -> then
+__L5211_hxlcl_fseek_bb5:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #304 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fseek_bb6:
+__L5211_hxlcl_fseek_bb6:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #304 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_fdopen
     .p2align 2
 _hxlcl_fdopen:
     .loc 1 2441 0
@@ -10501,7 +10446,7 @@ _hxlcl_fdopen:
     stp x9, x0, [sp, #0] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #16] ; cabi ingress param 1
-__L7ff7_hxlcl_fdopen_bb0:
+__L5211_hxlcl_fdopen_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -10519,15 +10464,15 @@ __L7ff7_hxlcl_fdopen_bb0:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #64] ; hv store L4
     ldp x0, x1, [sp, #64] ; hv load L4
-    cbz x1, __L7ff7_hxlcl_fdopen_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fdopen_bb1 ; branch -> then
-__L7ff7_hxlcl_fdopen_bb1:
+    cbz x1, __L5211_hxlcl_fdopen_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fdopen_bb1 ; branch -> then
+__L5211_hxlcl_fdopen_bb1:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #112 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fdopen_bb2:
+__L5211_hxlcl_fdopen_bb2:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -10538,7 +10483,6 @@ __L7ff7_hxlcl_fdopen_bb2:
     add sp, sp, #112 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_fputs
     .p2align 2
 _hxlcl_fputs:
     .loc 1 2500 0
@@ -10549,7 +10493,7 @@ _hxlcl_fputs:
     stp x9, x0, [sp, #0] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #16] ; cabi ingress param 1
-__L7ff7_hxlcl_fputs_bb0:
+__L5211_hxlcl_fputs_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -10583,9 +10527,9 @@ __L7ff7_hxlcl_fputs_bb0:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #128] ; hv store L8
     ldp x0, x1, [sp, #128] ; hv load L8
-    cbz x1, __L7ff7_hxlcl_fputs_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fputs_bb1 ; branch -> then
-__L7ff7_hxlcl_fputs_bb1:
+    cbz x1, __L5211_hxlcl_fputs_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fputs_bb1 ; branch -> then
+__L5211_hxlcl_fputs_bb1:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     movz x2, #0 ; hv const_int: TAG_INT
@@ -10597,7 +10541,7 @@ __L7ff7_hxlcl_fputs_bb1:
     add sp, sp, #432 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fputs_bb2:
+__L5211_hxlcl_fputs_bb2:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #176] ; hv store L11
@@ -10632,14 +10576,14 @@ __L7ff7_hxlcl_fputs_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #288] ; hv store L18
     ldp x0, x1, [sp, #288] ; hv load L18
-    cbz x1, __L7ff7_hxlcl_fputs_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fputs_bb3 ; branch -> then
-__L7ff7_hxlcl_fputs_bb3:
+    cbz x1, __L5211_hxlcl_fputs_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fputs_bb3 ; branch -> then
+__L5211_hxlcl_fputs_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #2 ; hv const_int val
     stp x0, x1, [sp, #176] ; hv store L11
-    b __L7ff7_hxlcl_fputs_bb4 ; branch
-__L7ff7_hxlcl_fputs_bb4:
+    b __L5211_hxlcl_fputs_bb4 ; branch
+__L5211_hxlcl_fputs_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #320] ; hv store L20
@@ -10652,8 +10596,8 @@ __L7ff7_hxlcl_fputs_bb4:
     stp x0, x1, [sp, #336] ; hv store L21
     ldp x0, x1, [sp, #336] ; hv load L21
     stp x0, x1, [sp, #352] ; hv store L22
-    b __L7ff7_hxlcl_fputs_bb5 ; branch
-__L7ff7_hxlcl_fputs_bb5:
+    b __L5211_hxlcl_fputs_bb5 ; branch
+__L5211_hxlcl_fputs_bb5:
     ldp x0, x1, [sp, #352] ; hv load L22
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -10662,9 +10606,9 @@ __L7ff7_hxlcl_fputs_bb5:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #368] ; hv store L23
     ldp x0, x1, [sp, #368] ; hv load L23
-    cbz x1, __L7ff7_hxlcl_fputs_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fputs_bb6 ; branch -> then
-__L7ff7_hxlcl_fputs_bb6:
+    cbz x1, __L5211_hxlcl_fputs_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fputs_bb6 ; branch -> then
+__L5211_hxlcl_fputs_bb6:
     ldp x0, x1, [sp, #320] ; hv load L20
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -10681,8 +10625,8 @@ __L7ff7_hxlcl_fputs_bb6:
     stp x0, x1, [sp, #400] ; hv store L25
     ldp x0, x1, [sp, #400] ; hv load L25
     stp x0, x1, [sp, #352] ; hv store L22
-    b __L7ff7_hxlcl_fputs_bb5 ; branch
-__L7ff7_hxlcl_fputs_bb7:
+    b __L5211_hxlcl_fputs_bb5 ; branch
+__L5211_hxlcl_fputs_bb7:
     ldp x9, x0, [sp, #176] ; hv load L11
     ldp x9, x1, [sp, #48] ; hv load L3
     ldp x9, x2, [sp, #320] ; hv load L20
@@ -10693,7 +10637,6 @@ __L7ff7_hxlcl_fputs_bb7:
     add sp, sp, #432 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_fputc
     .p2align 2
 _hxlcl_fputc:
     .loc 1 2534 0
@@ -10704,7 +10647,7 @@ _hxlcl_fputc:
     stp x9, x0, [sp, #0] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #16] ; cabi ingress param 1
-__L7ff7_hxlcl_fputc_bb0:
+__L5211_hxlcl_fputc_bb0:
     ldp x0, x1, [sp, #16] ; hv load L1
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -10747,14 +10690,14 @@ __L7ff7_hxlcl_fputc_bb0:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #176] ; hv store L11
     ldp x0, x1, [sp, #176] ; hv load L11
-    cbz x1, __L7ff7_hxlcl_fputc_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fputc_bb1 ; branch -> then
-__L7ff7_hxlcl_fputc_bb1:
+    cbz x1, __L5211_hxlcl_fputc_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fputc_bb1 ; branch -> then
+__L5211_hxlcl_fputc_bb1:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #2 ; hv const_int val
     stp x0, x1, [sp, #64] ; hv store L4
-    b __L7ff7_hxlcl_fputc_bb2 ; branch
-__L7ff7_hxlcl_fputc_bb2:
+    b __L5211_hxlcl_fputc_bb2 ; branch
+__L5211_hxlcl_fputc_bb2:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #255 ; hv const_int val
@@ -10803,9 +10746,9 @@ __L7ff7_hxlcl_fputc_bb2:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #352] ; hv store L22
     ldp x0, x1, [sp, #352] ; hv load L22
-    cbz x1, __L7ff7_hxlcl_fputc_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fputc_bb3 ; branch -> then
-__L7ff7_hxlcl_fputc_bb3:
+    cbz x1, __L5211_hxlcl_fputc_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fputc_bb3 ; branch -> then
+__L5211_hxlcl_fputc_bb3:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -10816,7 +10759,7 @@ __L7ff7_hxlcl_fputc_bb3:
     add sp, sp, #416 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fputc_bb4:
+__L5211_hxlcl_fputc_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     movz x2, #0 ; hv const_int: TAG_INT
@@ -10828,7 +10771,6 @@ __L7ff7_hxlcl_fputc_bb4:
     add sp, sp, #416 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_fflush
     .p2align 2
 _hxlcl_fflush:
     .loc 1 2561 0
@@ -10837,7 +10779,7 @@ _hxlcl_fflush:
     sub sp, sp, #48 ; sp adj
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x0, [sp, #0] ; cabi ingress param 0
-__L7ff7_hxlcl_fflush_bb0:
+__L5211_hxlcl_fflush_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -10851,7 +10793,6 @@ __L7ff7_hxlcl_fflush_bb0:
     add sp, sp, #48 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_popen_remember
     .p2align 2
 _hxlcl_popen_remember:
     .loc 1 2600 0
@@ -10862,7 +10803,7 @@ _hxlcl_popen_remember:
     stp x9, x0, [sp, #0] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #16] ; cabi ingress param 1
-__L7ff7_hxlcl_popen_remember_bb0:
+__L5211_hxlcl_popen_remember_bb0:
     adrp x1, _slot_900@PAGE ; __hx_static_slot: &slot_900 page (self-static)
     add x1, x1, _slot_900@PAGEOFF ; __hx_static_slot: x1 = &slot_900
     movz x0, #0 ; __hx_static_slot: TAG_INT
@@ -10889,8 +10830,8 @@ __L7ff7_hxlcl_popen_remember_bb0:
     stp x0, x1, [sp, #112] ; hv store L7
     ldp x0, x1, [sp, #112] ; hv load L7
     stp x0, x1, [sp, #128] ; hv store L8
-    b __L7ff7_hxlcl_popen_remember_bb1 ; branch
-__L7ff7_hxlcl_popen_remember_bb1:
+    b __L5211_hxlcl_popen_remember_bb1 ; branch
+__L5211_hxlcl_popen_remember_bb1:
     ldp x0, x1, [sp, #96] ; hv load L6
     ldp x2, x3, [sp, #128] ; hv load L8
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -10898,9 +10839,9 @@ __L7ff7_hxlcl_popen_remember_bb1:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #144] ; hv store L9
     ldp x0, x1, [sp, #144] ; hv load L9
-    cbz x1, __L7ff7_hxlcl_popen_remember_bb3 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_popen_remember_bb2 ; branch -> then
-__L7ff7_hxlcl_popen_remember_bb2:
+    cbz x1, __L5211_hxlcl_popen_remember_bb3 ; br_cond: !payload -> else
+    b __L5211_hxlcl_popen_remember_bb2 ; branch -> then
+__L5211_hxlcl_popen_remember_bb2:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #16 ; hv const_int val
@@ -10925,16 +10866,16 @@ __L7ff7_hxlcl_popen_remember_bb2:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #224] ; hv store L14
     ldp x0, x1, [sp, #224] ; hv load L14
-    cbz x1, __L7ff7_hxlcl_popen_remember_bb5 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_popen_remember_bb4 ; branch -> then
-__L7ff7_hxlcl_popen_remember_bb3:
+    cbz x1, __L5211_hxlcl_popen_remember_bb5 ; br_cond: !payload -> else
+    b __L5211_hxlcl_popen_remember_bb4 ; branch -> then
+__L5211_hxlcl_popen_remember_bb3:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #336 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_popen_remember_bb4:
+__L5211_hxlcl_popen_remember_bb4:
     ldp x0, x1, [sp, #48] ; hv load L3
     ldp x2, x3, [sp, #176] ; hv load L11
     ldp x4, x5, [sp, #80] ; hv load L5
@@ -10966,7 +10907,7 @@ __L7ff7_hxlcl_popen_remember_bb4:
     add sp, sp, #336 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_popen_remember_bb5:
+__L5211_hxlcl_popen_remember_bb5:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -10975,13 +10916,12 @@ __L7ff7_hxlcl_popen_remember_bb5:
     stp x0, x1, [sp, #320] ; hv store L20
     ldp x0, x1, [sp, #320] ; hv load L20
     stp x0, x1, [sp, #96] ; hv store L6
-    b __L7ff7_hxlcl_popen_remember_bb1 ; branch
+    b __L5211_hxlcl_popen_remember_bb1 ; branch
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
     add sp, sp, #336 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_popen_forget
     .p2align 2
 _hxlcl_popen_forget:
     .loc 1 2620 0
@@ -10990,7 +10930,7 @@ _hxlcl_popen_forget:
     sub sp, sp, #352 ; sp adj
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x0, [sp, #0] ; cabi ingress param 0
-__L7ff7_hxlcl_popen_forget_bb0:
+__L5211_hxlcl_popen_forget_bb0:
     adrp x1, _slot_900@PAGE ; __hx_static_slot: &slot_900 page (self-static)
     add x1, x1, _slot_900@PAGEOFF ; __hx_static_slot: x1 = &slot_900
     movz x0, #0 ; __hx_static_slot: TAG_INT
@@ -11017,8 +10957,8 @@ __L7ff7_hxlcl_popen_forget_bb0:
     stp x0, x1, [sp, #96] ; hv store L6
     ldp x0, x1, [sp, #96] ; hv load L6
     stp x0, x1, [sp, #112] ; hv store L7
-    b __L7ff7_hxlcl_popen_forget_bb1 ; branch
-__L7ff7_hxlcl_popen_forget_bb1:
+    b __L5211_hxlcl_popen_forget_bb1 ; branch
+__L5211_hxlcl_popen_forget_bb1:
     ldp x0, x1, [sp, #80] ; hv load L5
     ldp x2, x3, [sp, #112] ; hv load L7
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -11026,9 +10966,9 @@ __L7ff7_hxlcl_popen_forget_bb1:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #128] ; hv store L8
     ldp x0, x1, [sp, #128] ; hv load L8
-    cbz x1, __L7ff7_hxlcl_popen_forget_bb3 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_popen_forget_bb2 ; branch -> then
-__L7ff7_hxlcl_popen_forget_bb2:
+    cbz x1, __L5211_hxlcl_popen_forget_bb3 ; br_cond: !payload -> else
+    b __L5211_hxlcl_popen_forget_bb2 ; branch -> then
+__L5211_hxlcl_popen_forget_bb2:
     ldp x0, x1, [sp, #80] ; hv load L5
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #16 ; hv const_int val
@@ -11052,16 +10992,16 @@ __L7ff7_hxlcl_popen_forget_bb2:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #208] ; hv store L13
     ldp x0, x1, [sp, #208] ; hv load L13
-    cbz x1, __L7ff7_hxlcl_popen_forget_bb5 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_popen_forget_bb4 ; branch -> then
-__L7ff7_hxlcl_popen_forget_bb3:
+    cbz x1, __L5211_hxlcl_popen_forget_bb5 ; br_cond: !payload -> else
+    b __L5211_hxlcl_popen_forget_bb4 ; branch -> then
+__L5211_hxlcl_popen_forget_bb3:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #352 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_popen_forget_bb4:
+__L5211_hxlcl_popen_forget_bb4:
     ldp x0, x1, [sp, #160] ; hv load L10
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #8 ; hv const_int val
@@ -11102,7 +11042,7 @@ __L7ff7_hxlcl_popen_forget_bb4:
     add sp, sp, #352 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_popen_forget_bb5:
+__L5211_hxlcl_popen_forget_bb5:
     ldp x0, x1, [sp, #80] ; hv load L5
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -11111,13 +11051,12 @@ __L7ff7_hxlcl_popen_forget_bb5:
     stp x0, x1, [sp, #336] ; hv store L21
     ldp x0, x1, [sp, #336] ; hv load L21
     stp x0, x1, [sp, #80] ; hv store L5
-    b __L7ff7_hxlcl_popen_forget_bb1 ; branch
+    b __L5211_hxlcl_popen_forget_bb1 ; branch
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
     add sp, sp, #352 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_popen
     .p2align 2
 _hxlcl_popen:
     .loc 1 2642 0
@@ -11128,7 +11067,7 @@ _hxlcl_popen:
     stp x9, x0, [sp, #48] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #64] ; cabi ingress param 1
-__L7ff7_hxlcl_popen_bb0:
+__L5211_hxlcl_popen_bb0:
     ldp x0, x1, [sp, #48] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -11145,15 +11084,15 @@ __L7ff7_hxlcl_popen_bb0:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #112] ; hv store L4
     ldp x0, x1, [sp, #112] ; hv load L4
-    cbz x1, __L7ff7_hxlcl_popen_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_popen_bb1 ; branch -> then
-__L7ff7_hxlcl_popen_bb1:
+    cbz x1, __L5211_hxlcl_popen_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_popen_bb1 ; branch -> then
+__L5211_hxlcl_popen_bb1:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #1312 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_popen_bb2:
+__L5211_hxlcl_popen_bb2:
     ldp x0, x1, [sp, #64] ; hv load L1
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -11170,15 +11109,15 @@ __L7ff7_hxlcl_popen_bb2:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #176] ; hv store L8
     ldp x0, x1, [sp, #176] ; hv load L8
-    cbz x1, __L7ff7_hxlcl_popen_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_popen_bb3 ; branch -> then
-__L7ff7_hxlcl_popen_bb3:
+    cbz x1, __L5211_hxlcl_popen_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_popen_bb3 ; branch -> then
+__L5211_hxlcl_popen_bb3:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #1312 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_popen_bb4:
+__L5211_hxlcl_popen_bb4:
     ldp x0, x1, [sp, #160] ; hv load L7
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -11196,15 +11135,15 @@ __L7ff7_hxlcl_popen_bb4:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #240] ; hv store L12
     ldp x0, x1, [sp, #240] ; hv load L12
-    cbz x1, __L7ff7_hxlcl_popen_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_popen_bb5 ; branch -> then
-__L7ff7_hxlcl_popen_bb5:
+    cbz x1, __L5211_hxlcl_popen_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_popen_bb5 ; branch -> then
+__L5211_hxlcl_popen_bb5:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #1312 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_popen_bb6:
+__L5211_hxlcl_popen_bb6:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     movz x2, #0 ; hv const_int: TAG_INT
@@ -11242,15 +11181,15 @@ __L7ff7_hxlcl_popen_bb6:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #400] ; hv store L22
     ldp x0, x1, [sp, #400] ; hv load L22
-    cbz x1, __L7ff7_hxlcl_popen_bb8 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_popen_bb7 ; branch -> then
-__L7ff7_hxlcl_popen_bb7:
+    cbz x1, __L5211_hxlcl_popen_bb8 ; br_cond: !payload -> else
+    b __L5211_hxlcl_popen_bb7 ; branch -> then
+__L5211_hxlcl_popen_bb7:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #1312 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_popen_bb8:
+__L5211_hxlcl_popen_bb8:
     ldp x0, x1, [sp, #352] ; hv load L19
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -11299,9 +11238,9 @@ __L7ff7_hxlcl_popen_bb8:
     stp x0, x1, [x15] ; hv store L32
     add x15, sp, #560 ; hv frame base
     ldp x0, x1, [x15] ; hv load L32
-    cbz x1, __L7ff7_hxlcl_popen_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_popen_bb9 ; branch -> then
-__L7ff7_hxlcl_popen_bb9:
+    cbz x1, __L5211_hxlcl_popen_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_popen_bb9 ; branch -> then
+__L5211_hxlcl_popen_bb9:
     ldp x9, x0, [sp, #448] ; hv load L25
     bl _hxlcl_close ; cabi call hxlcl_close
     movz x9, #0 ; cabi ret tag = TAG_INT
@@ -11325,7 +11264,7 @@ __L7ff7_hxlcl_popen_bb9:
     add sp, sp, #1312 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_popen_bb10:
+__L5211_hxlcl_popen_bb10:
     add x15, sp, #512 ; hv frame base
     ldp x0, x1, [x15] ; hv load L29
     movz x2, #0 ; hv const_int: TAG_INT
@@ -11350,9 +11289,9 @@ __L7ff7_hxlcl_popen_bb10:
     stp x0, x1, [x15] ; hv store L40
     add x15, sp, #688 ; hv frame base
     ldp x0, x1, [x15] ; hv load L40
-    cbz x1, __L7ff7_hxlcl_popen_bb12 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_popen_bb11 ; branch -> then
-__L7ff7_hxlcl_popen_bb11:
+    cbz x1, __L5211_hxlcl_popen_bb12 ; br_cond: !payload -> else
+    b __L5211_hxlcl_popen_bb11 ; branch -> then
+__L5211_hxlcl_popen_bb11:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     movz x2, #0 ; hv const_int: TAG_INT
@@ -11601,7 +11540,7 @@ __L7ff7_hxlcl_popen_bb11:
     add sp, sp, #1312 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_popen_bb12:
+__L5211_hxlcl_popen_bb12:
     ldp x9, x0, [sp, #480] ; hv load L27
     bl _hxlcl_close ; cabi call hxlcl_close
     movz x9, #0 ; cabi ret tag = TAG_INT
@@ -11633,46 +11572,44 @@ __L7ff7_hxlcl_popen_bb12:
     add sp, sp, #1312 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_child_exit_nr
     .p2align 2
 _hxlcl_child_exit_nr:
     .loc 1 2707 0
     stp x29, x30, [sp, #-16]! ; prologue: save fp/lr
     mov x29, sp ; prologue: set fp
     sub sp, sp, #64 ; sp adj
-__L7ff7_hxlcl_child_exit_nr_bb0:
+__L5211_hxlcl_child_exit_nr_bb0:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #0] ; hv store L0
     ldp x0, x1, [sp, #0] ; hv load L0
-    cbz x1, __L7ff7_hxlcl_child_exit_nr_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_child_exit_nr_bb1 ; branch -> then
-__L7ff7_hxlcl_child_exit_nr_bb1:
+    cbz x1, __L5211_hxlcl_child_exit_nr_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_child_exit_nr_bb1 ; branch -> then
+__L5211_hxlcl_child_exit_nr_bb1:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #32] ; hv store L2
     ldp x0, x1, [sp, #32] ; hv load L2
-    cbz x1, __L7ff7_hxlcl_child_exit_nr_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_child_exit_nr_bb3 ; branch -> then
-__L7ff7_hxlcl_child_exit_nr_bb2:
+    cbz x1, __L5211_hxlcl_child_exit_nr_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_child_exit_nr_bb3 ; branch -> then
+__L5211_hxlcl_child_exit_nr_bb2:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #1 ; hv const_int val
     add sp, sp, #64 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_child_exit_nr_bb3:
+__L5211_hxlcl_child_exit_nr_bb3:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #60 ; hv const_int val
     add sp, sp, #64 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_child_exit_nr_bb4:
+__L5211_hxlcl_child_exit_nr_bb4:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #93 ; hv const_int val
     add sp, sp, #64 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_pclose
     .p2align 2
 _hxlcl_pclose:
     .loc 1 2716 0
@@ -11681,7 +11618,7 @@ _hxlcl_pclose:
     sub sp, sp, #464 ; sp adj
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x0, [sp, #0] ; cabi ingress param 0
-__L7ff7_hxlcl_pclose_bb0:
+__L5211_hxlcl_pclose_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -11698,16 +11635,16 @@ __L7ff7_hxlcl_pclose_bb0:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #48] ; hv store L3
     ldp x0, x1, [sp, #48] ; hv load L3
-    cbz x1, __L7ff7_hxlcl_pclose_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_pclose_bb1 ; branch -> then
-__L7ff7_hxlcl_pclose_bb1:
+    cbz x1, __L5211_hxlcl_pclose_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_pclose_bb1 ; branch -> then
+__L5211_hxlcl_pclose_bb1:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #464 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_pclose_bb2:
+__L5211_hxlcl_pclose_bb2:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -11733,16 +11670,16 @@ __L7ff7_hxlcl_pclose_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #144] ; hv store L9
     ldp x0, x1, [sp, #144] ; hv load L9
-    cbz x1, __L7ff7_hxlcl_pclose_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_pclose_bb3 ; branch -> then
-__L7ff7_hxlcl_pclose_bb3:
+    cbz x1, __L5211_hxlcl_pclose_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_pclose_bb3 ; branch -> then
+__L5211_hxlcl_pclose_bb3:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #464 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_pclose_bb4:
+__L5211_hxlcl_pclose_bb4:
     ldp x9, x0, [sp, #96] ; hv load L6
     bl _hxlcl_popen_forget ; cabi call hxlcl_popen_forget
     movz x9, #0 ; cabi ret tag = TAG_INT
@@ -11772,16 +11709,16 @@ __L7ff7_hxlcl_pclose_bb4:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #272] ; hv store L17
     ldp x0, x1, [sp, #272] ; hv load L17
-    cbz x1, __L7ff7_hxlcl_pclose_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_pclose_bb5 ; branch -> then
-__L7ff7_hxlcl_pclose_bb5:
+    cbz x1, __L5211_hxlcl_pclose_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_pclose_bb5 ; branch -> then
+__L5211_hxlcl_pclose_bb5:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #464 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_pclose_bb6:
+__L5211_hxlcl_pclose_bb6:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     movz x2, #0 ; hv const_int: TAG_INT
@@ -11835,7 +11772,6 @@ __L7ff7_hxlcl_pclose_bb6:
     add sp, sp, #464 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_execvp
     .p2align 2
 _hxlcl_execvp:
     .loc 1 2790 0
@@ -11846,7 +11782,7 @@ _hxlcl_execvp:
     stp x9, x0, [sp, #0] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #16] ; cabi ingress param 1
-__L7ff7_hxlcl_execvp_bb0:
+__L5211_hxlcl_execvp_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -11885,8 +11821,8 @@ __L7ff7_hxlcl_execvp_bb0:
     stp x0, x1, [sp, #160] ; hv store L10
     ldp x0, x1, [sp, #160] ; hv load L10
     stp x0, x1, [sp, #176] ; hv store L11
-    b __L7ff7_hxlcl_execvp_bb1 ; branch
-__L7ff7_hxlcl_execvp_bb1:
+    b __L5211_hxlcl_execvp_bb1 ; branch
+__L5211_hxlcl_execvp_bb1:
     ldp x0, x1, [sp, #176] ; hv load L11
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -11895,9 +11831,9 @@ __L7ff7_hxlcl_execvp_bb1:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #192] ; hv store L12
     ldp x0, x1, [sp, #192] ; hv load L12
-    cbz x1, __L7ff7_hxlcl_execvp_bb3 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_execvp_bb2 ; branch -> then
-__L7ff7_hxlcl_execvp_bb2:
+    cbz x1, __L5211_hxlcl_execvp_bb3 ; br_cond: !payload -> else
+    b __L5211_hxlcl_execvp_bb2 ; branch -> then
+__L5211_hxlcl_execvp_bb2:
     ldp x0, x1, [sp, #176] ; hv load L11
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #47 ; hv const_int val
@@ -11915,9 +11851,9 @@ __L7ff7_hxlcl_execvp_bb2:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #240] ; hv store L15
     ldp x0, x1, [sp, #240] ; hv load L15
-    cbz x1, __L7ff7_hxlcl_execvp_bb5 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_execvp_bb4 ; branch -> then
-__L7ff7_hxlcl_execvp_bb3:
+    cbz x1, __L5211_hxlcl_execvp_bb5 ; br_cond: !payload -> else
+    b __L5211_hxlcl_execvp_bb4 ; branch -> then
+__L5211_hxlcl_execvp_bb3:
     ldp x0, x1, [sp, #128] ; hv load L8
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -11926,17 +11862,17 @@ __L7ff7_hxlcl_execvp_bb3:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #304] ; hv store L19
     ldp x0, x1, [sp, #304] ; hv load L19
-    cbz x1, __L7ff7_hxlcl_execvp_bb8 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_execvp_bb7 ; branch -> then
-__L7ff7_hxlcl_execvp_bb4:
+    cbz x1, __L5211_hxlcl_execvp_bb8 ; br_cond: !payload -> else
+    b __L5211_hxlcl_execvp_bb7 ; branch -> then
+__L5211_hxlcl_execvp_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #128] ; hv store L8
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #176] ; hv store L11
-    b __L7ff7_hxlcl_execvp_bb6 ; branch
-__L7ff7_hxlcl_execvp_bb5:
+    b __L5211_hxlcl_execvp_bb6 ; branch
+__L5211_hxlcl_execvp_bb5:
     ldp x0, x1, [sp, #144] ; hv load L9
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -11953,10 +11889,10 @@ __L7ff7_hxlcl_execvp_bb5:
     stp x0, x1, [sp, #288] ; hv store L18
     ldp x0, x1, [sp, #288] ; hv load L18
     stp x0, x1, [sp, #176] ; hv store L11
-    b __L7ff7_hxlcl_execvp_bb6 ; branch
-__L7ff7_hxlcl_execvp_bb6:
-    b __L7ff7_hxlcl_execvp_bb1 ; branch
-__L7ff7_hxlcl_execvp_bb7:
+    b __L5211_hxlcl_execvp_bb6 ; branch
+__L5211_hxlcl_execvp_bb6:
+    b __L5211_hxlcl_execvp_bb1 ; branch
+__L5211_hxlcl_execvp_bb7:
     ldp x9, x0, [sp, #48] ; hv load L3
     ldp x9, x1, [sp, #16] ; hv load L1
     ldp x9, x2, [sp, #112] ; hv load L7
@@ -11967,7 +11903,7 @@ __L7ff7_hxlcl_execvp_bb7:
     add sp, sp, #1664 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_execvp_bb8:
+__L5211_hxlcl_execvp_bb8:
     movz x0, #3 ; hv const_str: TAG_STR
     adrp x1, .LCstr2@PAGE ; hv str ptr page
     add x1, x1, .LCstr2@PAGEOFF ; hv str ptr off
@@ -12001,9 +11937,9 @@ __L7ff7_hxlcl_execvp_bb8:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #448] ; hv store L28
     ldp x0, x1, [sp, #448] ; hv load L28
-    cbz x1, __L7ff7_hxlcl_execvp_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_execvp_bb9 ; branch -> then
-__L7ff7_hxlcl_execvp_bb9:
+    cbz x1, __L5211_hxlcl_execvp_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_execvp_bb9 ; branch -> then
+__L5211_hxlcl_execvp_bb9:
     movz x0, #3 ; hv const_str: TAG_STR
     adrp x1, .LCstr3@PAGE ; hv str ptr page
     add x1, x1, .LCstr3@PAGEOFF ; hv str ptr off
@@ -12014,8 +11950,8 @@ __L7ff7_hxlcl_execvp_bb9:
     stp x0, x1, [sp, #480] ; hv store L30
     ldp x0, x1, [sp, #480] ; hv load L30
     stp x0, x1, [sp, #400] ; hv store L25
-    b __L7ff7_hxlcl_execvp_bb13 ; branch
-__L7ff7_hxlcl_execvp_bb10:
+    b __L5211_hxlcl_execvp_bb13 ; branch
+__L5211_hxlcl_execvp_bb10:
     ldp x0, x1, [sp, #400] ; hv load L25
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -12050,9 +11986,9 @@ __L7ff7_hxlcl_execvp_bb10:
     stp x0, x1, [x15] ; hv store L35
     add x15, sp, #560 ; hv frame base
     ldp x0, x1, [x15] ; hv load L35
-    cbz x1, __L7ff7_hxlcl_execvp_bb12 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_execvp_bb11 ; branch -> then
-__L7ff7_hxlcl_execvp_bb11:
+    cbz x1, __L5211_hxlcl_execvp_bb12 ; br_cond: !payload -> else
+    b __L5211_hxlcl_execvp_bb11 ; branch -> then
+__L5211_hxlcl_execvp_bb11:
     movz x0, #3 ; hv const_str: TAG_STR
     adrp x1, .LCstr3@PAGE ; hv str ptr page
     add x1, x1, .LCstr3@PAGEOFF ; hv str ptr off
@@ -12065,10 +12001,10 @@ __L7ff7_hxlcl_execvp_bb11:
     add x15, sp, #592 ; hv frame base
     ldp x0, x1, [x15] ; hv load L37
     stp x0, x1, [sp, #400] ; hv store L25
-    b __L7ff7_hxlcl_execvp_bb12 ; branch
-__L7ff7_hxlcl_execvp_bb12:
-    b __L7ff7_hxlcl_execvp_bb13 ; branch
-__L7ff7_hxlcl_execvp_bb13:
+    b __L5211_hxlcl_execvp_bb12 ; branch
+__L5211_hxlcl_execvp_bb12:
+    b __L5211_hxlcl_execvp_bb13 ; branch
+__L5211_hxlcl_execvp_bb13:
     ldp x9, x0, [sp, #0] ; hv load L0
     bl _hxlcl_strlen ; cabi call hxlcl_strlen
     movz x9, #0 ; cabi ret tag = TAG_INT
@@ -12124,8 +12060,8 @@ __L7ff7_hxlcl_execvp_bb13:
     ldp x0, x1, [x15] ; hv load L46
     add x15, sp, #752 ; hv frame base
     stp x0, x1, [x15] ; hv store L47
-    b __L7ff7_hxlcl_execvp_bb14 ; branch
-__L7ff7_hxlcl_execvp_bb14:
+    b __L5211_hxlcl_execvp_bb14 ; branch
+__L5211_hxlcl_execvp_bb14:
     add x15, sp, #752 ; hv frame base
     ldp x0, x1, [x15] ; hv load L47
     movz x2, #0 ; hv const_int: TAG_INT
@@ -12137,9 +12073,9 @@ __L7ff7_hxlcl_execvp_bb14:
     stp x0, x1, [x15] ; hv store L48
     add x15, sp, #768 ; hv frame base
     ldp x0, x1, [x15] ; hv load L48
-    cbz x1, __L7ff7_hxlcl_execvp_bb16 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_execvp_bb15 ; branch -> then
-__L7ff7_hxlcl_execvp_bb15:
+    cbz x1, __L5211_hxlcl_execvp_bb16 ; br_cond: !payload -> else
+    b __L5211_hxlcl_execvp_bb15 ; branch -> then
+__L5211_hxlcl_execvp_bb15:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #784 ; hv frame base
@@ -12161,15 +12097,15 @@ __L7ff7_hxlcl_execvp_bb15:
     movz x1, #1 ; hv const_int val
     add x15, sp, #832 ; hv frame base
     stp x0, x1, [x15] ; hv store L52
-    b __L7ff7_hxlcl_execvp_bb17 ; branch
-__L7ff7_hxlcl_execvp_bb16:
+    b __L5211_hxlcl_execvp_bb17 ; branch
+__L5211_hxlcl_execvp_bb16:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #1664 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_execvp_bb17:
+__L5211_hxlcl_execvp_bb17:
     add x15, sp, #832 ; hv frame base
     ldp x0, x1, [x15] ; hv load L52
     movz x2, #0 ; hv const_int: TAG_INT
@@ -12181,9 +12117,9 @@ __L7ff7_hxlcl_execvp_bb17:
     stp x0, x1, [x15] ; hv store L53
     add x15, sp, #848 ; hv frame base
     ldp x0, x1, [x15] ; hv load L53
-    cbz x1, __L7ff7_hxlcl_execvp_bb19 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_execvp_bb18 ; branch -> then
-__L7ff7_hxlcl_execvp_bb18:
+    cbz x1, __L5211_hxlcl_execvp_bb19 ; br_cond: !payload -> else
+    b __L5211_hxlcl_execvp_bb18 ; branch -> then
+__L5211_hxlcl_execvp_bb18:
     add x15, sp, #816 ; hv frame base
     ldp x0, x1, [x15] ; hv load L51
     movz x2, #0 ; hv const_int: TAG_INT
@@ -12233,9 +12169,9 @@ __L7ff7_hxlcl_execvp_bb18:
     stp x0, x1, [x15] ; hv store L60
     add x15, sp, #960 ; hv frame base
     ldp x0, x1, [x15] ; hv load L60
-    cbz x1, __L7ff7_hxlcl_execvp_bb21 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_execvp_bb20 ; branch -> then
-__L7ff7_hxlcl_execvp_bb19:
+    cbz x1, __L5211_hxlcl_execvp_bb21 ; br_cond: !payload -> else
+    b __L5211_hxlcl_execvp_bb20 ; branch -> then
+__L5211_hxlcl_execvp_bb19:
     add x15, sp, #784 ; hv frame base
     ldp x0, x1, [x15] ; hv load L49
     movz x2, #0 ; hv const_int: TAG_INT
@@ -12296,15 +12232,15 @@ __L7ff7_hxlcl_execvp_bb19:
     stp x0, x1, [x15] ; hv store L72
     add x15, sp, #1152 ; hv frame base
     ldp x0, x1, [x15] ; hv load L72
-    cbz x1, __L7ff7_hxlcl_execvp_bb24 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_execvp_bb23 ; branch -> then
-__L7ff7_hxlcl_execvp_bb20:
+    cbz x1, __L5211_hxlcl_execvp_bb24 ; br_cond: !payload -> else
+    b __L5211_hxlcl_execvp_bb23 ; branch -> then
+__L5211_hxlcl_execvp_bb20:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #832 ; hv frame base
     stp x0, x1, [x15] ; hv store L52
-    b __L7ff7_hxlcl_execvp_bb22 ; branch
-__L7ff7_hxlcl_execvp_bb21:
+    b __L5211_hxlcl_execvp_bb22 ; branch
+__L5211_hxlcl_execvp_bb21:
     add x15, sp, #784 ; hv frame base
     ldp x0, x1, [x15] ; hv load L49
     movz x2, #0 ; hv const_int: TAG_INT
@@ -12330,10 +12266,10 @@ __L7ff7_hxlcl_execvp_bb21:
     ldp x0, x1, [x15] ; hv load L63
     add x15, sp, #816 ; hv frame base
     stp x0, x1, [x15] ; hv store L51
-    b __L7ff7_hxlcl_execvp_bb22 ; branch
-__L7ff7_hxlcl_execvp_bb22:
-    b __L7ff7_hxlcl_execvp_bb17 ; branch
-__L7ff7_hxlcl_execvp_bb23:
+    b __L5211_hxlcl_execvp_bb22 ; branch
+__L5211_hxlcl_execvp_bb22:
+    b __L5211_hxlcl_execvp_bb17 ; branch
+__L5211_hxlcl_execvp_bb23:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #1184 ; hv frame base
@@ -12342,8 +12278,8 @@ __L7ff7_hxlcl_execvp_bb23:
     movz x1, #0 ; hv const_int val
     add x15, sp, #1200 ; hv frame base
     stp x0, x1, [x15] ; hv store L75
-    b __L7ff7_hxlcl_execvp_bb25 ; branch
-__L7ff7_hxlcl_execvp_bb24:
+    b __L5211_hxlcl_execvp_bb25 ; branch
+__L5211_hxlcl_execvp_bb24:
     add x15, sp, #720 ; hv frame base
     ldp x0, x1, [x15] ; hv load L45
     add x15, sp, #784 ; hv frame base
@@ -12393,9 +12329,9 @@ __L7ff7_hxlcl_execvp_bb24:
     stp x0, x1, [x15] ; hv store L100
     add x15, sp, #1600 ; hv frame base
     ldp x0, x1, [x15] ; hv load L100
-    cbz x1, __L7ff7_hxlcl_execvp_bb32 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_execvp_bb31 ; branch -> then
-__L7ff7_hxlcl_execvp_bb25:
+    cbz x1, __L5211_hxlcl_execvp_bb32 ; br_cond: !payload -> else
+    b __L5211_hxlcl_execvp_bb31 ; branch -> then
+__L5211_hxlcl_execvp_bb25:
     add x15, sp, #1200 ; hv frame base
     ldp x0, x1, [x15] ; hv load L75
     add x15, sp, #784 ; hv frame base
@@ -12407,9 +12343,9 @@ __L7ff7_hxlcl_execvp_bb25:
     stp x0, x1, [x15] ; hv store L76
     add x15, sp, #1216 ; hv frame base
     ldp x0, x1, [x15] ; hv load L76
-    cbz x1, __L7ff7_hxlcl_execvp_bb27 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_execvp_bb26 ; branch -> then
-__L7ff7_hxlcl_execvp_bb26:
+    cbz x1, __L5211_hxlcl_execvp_bb27 ; br_cond: !payload -> else
+    b __L5211_hxlcl_execvp_bb26 ; branch -> then
+__L5211_hxlcl_execvp_bb26:
     add x15, sp, #720 ; hv frame base
     ldp x0, x1, [x15] ; hv load L45
     add x15, sp, #1200 ; hv frame base
@@ -12460,8 +12396,8 @@ __L7ff7_hxlcl_execvp_bb26:
     ldp x0, x1, [x15] ; hv load L81
     add x15, sp, #1200 ; hv frame base
     stp x0, x1, [x15] ; hv store L75
-    b __L7ff7_hxlcl_execvp_bb25 ; branch
-__L7ff7_hxlcl_execvp_bb27:
+    b __L5211_hxlcl_execvp_bb25 ; branch
+__L5211_hxlcl_execvp_bb27:
     add x15, sp, #688 ; hv frame base
     ldp x0, x1, [x15] ; hv load L43
     add x15, sp, #1184 ; hv frame base
@@ -12503,8 +12439,8 @@ __L7ff7_hxlcl_execvp_bb27:
     ldp x0, x1, [x15] ; hv load L85
     add x15, sp, #1376 ; hv frame base
     stp x0, x1, [x15] ; hv store L86
-    b __L7ff7_hxlcl_execvp_bb28 ; branch
-__L7ff7_hxlcl_execvp_bb28:
+    b __L5211_hxlcl_execvp_bb28 ; branch
+__L5211_hxlcl_execvp_bb28:
     add x15, sp, #1344 ; hv frame base
     ldp x0, x1, [x15] ; hv load L84
     add x15, sp, #1376 ; hv frame base
@@ -12516,9 +12452,9 @@ __L7ff7_hxlcl_execvp_bb28:
     stp x0, x1, [x15] ; hv store L87
     add x15, sp, #1392 ; hv frame base
     ldp x0, x1, [x15] ; hv load L87
-    cbz x1, __L7ff7_hxlcl_execvp_bb30 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_execvp_bb29 ; branch -> then
-__L7ff7_hxlcl_execvp_bb29:
+    cbz x1, __L5211_hxlcl_execvp_bb30 ; br_cond: !payload -> else
+    b __L5211_hxlcl_execvp_bb29 ; branch -> then
+__L5211_hxlcl_execvp_bb29:
     ldp x0, x1, [sp, #48] ; hv load L3
     add x15, sp, #1344 ; hv frame base
     ldp x2, x3, [x15] ; hv load L84
@@ -12568,8 +12504,8 @@ __L7ff7_hxlcl_execvp_bb29:
     ldp x0, x1, [x15] ; hv load L92
     add x15, sp, #1344 ; hv frame base
     stp x0, x1, [x15] ; hv store L84
-    b __L7ff7_hxlcl_execvp_bb28 ; branch
-__L7ff7_hxlcl_execvp_bb30:
+    b __L5211_hxlcl_execvp_bb28 ; branch
+__L5211_hxlcl_execvp_bb30:
     add x15, sp, #688 ; hv frame base
     ldp x9, x0, [x15] ; hv load L43
     ldp x9, x1, [sp, #16] ; hv load L1
@@ -12582,8 +12518,8 @@ __L7ff7_hxlcl_execvp_bb30:
     ldp x0, x1, [x15] ; hv load L93
     add x15, sp, #1504 ; hv frame base
     stp x0, x1, [x15] ; hv store L94
-    b __L7ff7_hxlcl_execvp_bb24 ; branch
-__L7ff7_hxlcl_execvp_bb31:
+    b __L5211_hxlcl_execvp_bb24 ; branch
+__L5211_hxlcl_execvp_bb31:
     add x15, sp, #720 ; hv frame base
     ldp x0, x1, [x15] ; hv load L45
     movz x2, #0 ; hv const_int: TAG_INT
@@ -12596,8 +12532,8 @@ __L7ff7_hxlcl_execvp_bb31:
     ldp x0, x1, [x15] ; hv load L102
     add x15, sp, #720 ; hv frame base
     stp x0, x1, [x15] ; hv store L45
-    b __L7ff7_hxlcl_execvp_bb32 ; branch
-__L7ff7_hxlcl_execvp_bb32:
+    b __L5211_hxlcl_execvp_bb32 ; branch
+__L5211_hxlcl_execvp_bb32:
     add x15, sp, #720 ; hv frame base
     ldp x0, x1, [x15] ; hv load L45
     movz x2, #0 ; hv const_int: TAG_INT
@@ -12611,13 +12547,12 @@ __L7ff7_hxlcl_execvp_bb32:
     ldp x0, x1, [x15] ; hv load L103
     add x15, sp, #752 ; hv frame base
     stp x0, x1, [x15] ; hv store L47
-    b __L7ff7_hxlcl_execvp_bb14 ; branch
+    b __L5211_hxlcl_execvp_bb14 ; branch
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
     add sp, sp, #1664 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_isalnum
     .p2align 2
 _hxlcl_isalnum:
     .loc 1 2906 0
@@ -12626,7 +12561,7 @@ _hxlcl_isalnum:
     sub sp, sp, #432 ; sp adj
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x0, [sp, #0] ; cabi ingress param 0
-__L7ff7_hxlcl_isalnum_bb0:
+__L5211_hxlcl_isalnum_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -12732,21 +12667,20 @@ __L7ff7_hxlcl_isalnum_bb0:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #400] ; hv store L25
     ldp x0, x1, [sp, #400] ; hv load L25
-    cbz x1, __L7ff7_hxlcl_isalnum_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_isalnum_bb1 ; branch -> then
-__L7ff7_hxlcl_isalnum_bb1:
+    cbz x1, __L5211_hxlcl_isalnum_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_isalnum_bb1 ; branch -> then
+__L5211_hxlcl_isalnum_bb1:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #1 ; hv const_int val
     add sp, sp, #432 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_isalnum_bb2:
+__L5211_hxlcl_isalnum_bb2:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #432 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_isalpha
     .p2align 2
 _hxlcl_isalpha:
     .loc 1 2926 0
@@ -12755,7 +12689,7 @@ _hxlcl_isalpha:
     sub sp, sp, #304 ; sp adj
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x0, [sp, #0] ; cabi ingress param 0
-__L7ff7_hxlcl_isalpha_bb0:
+__L5211_hxlcl_isalpha_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -12829,22 +12763,21 @@ __L7ff7_hxlcl_isalpha_bb0:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #272] ; hv store L17
     ldp x0, x1, [sp, #272] ; hv load L17
-    cbz x1, __L7ff7_hxlcl_isalpha_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_isalpha_bb1 ; branch -> then
-__L7ff7_hxlcl_isalpha_bb1:
+    cbz x1, __L5211_hxlcl_isalpha_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_isalpha_bb1 ; branch -> then
+__L5211_hxlcl_isalpha_bb1:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #1 ; hv const_int val
     add sp, sp, #304 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_isalpha_bb2:
+__L5211_hxlcl_isalpha_bb2:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #304 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
 .globl _hxlcl_free
-.private_extern _hxlcl_free
     .p2align 2
 _hxlcl_free:
     .loc 1 2956 0
@@ -12853,7 +12786,7 @@ _hxlcl_free:
     sub sp, sp, #48 ; sp adj
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x0, [sp, #0] ; cabi ingress param 0
-__L7ff7_hxlcl_free_bb0:
+__L5211_hxlcl_free_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -12866,7 +12799,6 @@ __L7ff7_hxlcl_free_bb0:
     add sp, sp, #48 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_inet_pton
     .p2align 2
 _hxlcl_inet_pton:
     .loc 1 2982 0
@@ -12879,7 +12811,7 @@ _hxlcl_inet_pton:
     stp x9, x1, [sp, #16] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #32] ; cabi ingress param 2
-__L7ff7_hxlcl_inet_pton_bb0:
+__L5211_hxlcl_inet_pton_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -12896,16 +12828,16 @@ __L7ff7_hxlcl_inet_pton_bb0:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #80] ; hv store L5
     ldp x0, x1, [sp, #80] ; hv load L5
-    cbz x1, __L7ff7_hxlcl_inet_pton_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_inet_pton_bb1 ; branch -> then
-__L7ff7_hxlcl_inet_pton_bb1:
+    cbz x1, __L5211_hxlcl_inet_pton_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_inet_pton_bb1 ; branch -> then
+__L5211_hxlcl_inet_pton_bb1:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
     add sp, sp, #1328 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_inet_pton_bb2:
+__L5211_hxlcl_inet_pton_bb2:
     ldp x0, x1, [sp, #16] ; hv load L1
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -12943,8 +12875,8 @@ __L7ff7_hxlcl_inet_pton_bb2:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #272] ; hv store L17
-    b __L7ff7_hxlcl_inet_pton_bb3 ; branch
-__L7ff7_hxlcl_inet_pton_bb3:
+    b __L5211_hxlcl_inet_pton_bb3 ; branch
+__L5211_hxlcl_inet_pton_bb3:
     ldp x0, x1, [sp, #272] ; hv load L17
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -12953,9 +12885,9 @@ __L7ff7_hxlcl_inet_pton_bb3:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #288] ; hv store L18
     ldp x0, x1, [sp, #288] ; hv load L18
-    cbz x1, __L7ff7_hxlcl_inet_pton_bb5 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_inet_pton_bb4 ; branch -> then
-__L7ff7_hxlcl_inet_pton_bb4:
+    cbz x1, __L5211_hxlcl_inet_pton_bb5 ; br_cond: !payload -> else
+    b __L5211_hxlcl_inet_pton_bb4 ; branch -> then
+__L5211_hxlcl_inet_pton_bb4:
     ldp x0, x1, [sp, #128] ; hv load L8
     ldp x2, x3, [sp, #176] ; hv load L11
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -13005,9 +12937,9 @@ __L7ff7_hxlcl_inet_pton_bb4:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #448] ; hv store L28
     ldp x0, x1, [sp, #448] ; hv load L28
-    cbz x1, __L7ff7_hxlcl_inet_pton_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_inet_pton_bb6 ; branch -> then
-__L7ff7_hxlcl_inet_pton_bb5:
+    cbz x1, __L5211_hxlcl_inet_pton_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_inet_pton_bb6 ; branch -> then
+__L5211_hxlcl_inet_pton_bb5:
     ldp x0, x1, [sp, #256] ; hv load L16
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -13018,9 +12950,9 @@ __L7ff7_hxlcl_inet_pton_bb5:
     stp x0, x1, [x15] ; hv store L61
     add x15, sp, #976 ; hv frame base
     ldp x0, x1, [x15] ; hv load L61
-    cbz x1, __L7ff7_hxlcl_inet_pton_bb20 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_inet_pton_bb19 ; branch -> then
-__L7ff7_hxlcl_inet_pton_bb6:
+    cbz x1, __L5211_hxlcl_inet_pton_bb20 ; br_cond: !payload -> else
+    b __L5211_hxlcl_inet_pton_bb19 ; branch -> then
+__L5211_hxlcl_inet_pton_bb6:
     ldp x0, x1, [sp, #320] ; hv load L20
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #48 ; hv const_int val
@@ -13076,9 +13008,9 @@ __L7ff7_hxlcl_inet_pton_bb6:
     stp x0, x1, [x15] ; hv store L37
     add x15, sp, #592 ; hv frame base
     ldp x0, x1, [x15] ; hv load L37
-    cbz x1, __L7ff7_hxlcl_inet_pton_bb9 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_inet_pton_bb8 ; branch -> then
-__L7ff7_hxlcl_inet_pton_bb7:
+    cbz x1, __L5211_hxlcl_inet_pton_bb9 ; br_cond: !payload -> else
+    b __L5211_hxlcl_inet_pton_bb8 ; branch -> then
+__L5211_hxlcl_inet_pton_bb7:
     ldp x0, x1, [sp, #320] ; hv load L20
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #46 ; hv const_int val
@@ -13126,19 +13058,19 @@ __L7ff7_hxlcl_inet_pton_bb7:
     stp x0, x1, [x15] ; hv store L45
     add x15, sp, #720 ; hv frame base
     ldp x0, x1, [x15] ; hv load L45
-    cbz x1, __L7ff7_hxlcl_inet_pton_bb11 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_inet_pton_bb10 ; branch -> then
-__L7ff7_hxlcl_inet_pton_bb8:
+    cbz x1, __L5211_hxlcl_inet_pton_bb11 ; br_cond: !payload -> else
+    b __L5211_hxlcl_inet_pton_bb10 ; branch -> then
+__L5211_hxlcl_inet_pton_bb8:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #256] ; hv store L16
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #272] ; hv store L17
-    b __L7ff7_hxlcl_inet_pton_bb9 ; branch
-__L7ff7_hxlcl_inet_pton_bb9:
-    b __L7ff7_hxlcl_inet_pton_bb18 ; branch
-__L7ff7_hxlcl_inet_pton_bb10:
+    b __L5211_hxlcl_inet_pton_bb9 ; branch
+__L5211_hxlcl_inet_pton_bb9:
+    b __L5211_hxlcl_inet_pton_bb18 ; branch
+__L5211_hxlcl_inet_pton_bb10:
     ldp x0, x1, [sp, #224] ; hv load L14
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -13186,25 +13118,25 @@ __L7ff7_hxlcl_inet_pton_bb10:
     stp x0, x1, [x15] ; hv store L53
     add x15, sp, #848 ; hv frame base
     ldp x0, x1, [x15] ; hv load L53
-    cbz x1, __L7ff7_hxlcl_inet_pton_bb13 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_inet_pton_bb12 ; branch -> then
-__L7ff7_hxlcl_inet_pton_bb11:
+    cbz x1, __L5211_hxlcl_inet_pton_bb13 ; br_cond: !payload -> else
+    b __L5211_hxlcl_inet_pton_bb12 ; branch -> then
+__L5211_hxlcl_inet_pton_bb11:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #256] ; hv store L16
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #272] ; hv store L17
-    b __L7ff7_hxlcl_inet_pton_bb17 ; branch
-__L7ff7_hxlcl_inet_pton_bb12:
+    b __L5211_hxlcl_inet_pton_bb17 ; branch
+__L5211_hxlcl_inet_pton_bb12:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #256] ; hv store L16
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #272] ; hv store L17
-    b __L7ff7_hxlcl_inet_pton_bb16 ; branch
-__L7ff7_hxlcl_inet_pton_bb13:
+    b __L5211_hxlcl_inet_pton_bb16 ; branch
+__L5211_hxlcl_inet_pton_bb13:
     ldp x0, x1, [sp, #240] ; hv load L15
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #256 ; hv const_int val
@@ -13253,28 +13185,28 @@ __L7ff7_hxlcl_inet_pton_bb13:
     stp x0, x1, [x15] ; hv store L59
     add x15, sp, #944 ; hv frame base
     ldp x0, x1, [x15] ; hv load L59
-    cbz x1, __L7ff7_hxlcl_inet_pton_bb15 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_inet_pton_bb14 ; branch -> then
-__L7ff7_hxlcl_inet_pton_bb14:
+    cbz x1, __L5211_hxlcl_inet_pton_bb15 ; br_cond: !payload -> else
+    b __L5211_hxlcl_inet_pton_bb14 ; branch -> then
+__L5211_hxlcl_inet_pton_bb14:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #272] ; hv store L17
-    b __L7ff7_hxlcl_inet_pton_bb15 ; branch
-__L7ff7_hxlcl_inet_pton_bb15:
-    b __L7ff7_hxlcl_inet_pton_bb16 ; branch
-__L7ff7_hxlcl_inet_pton_bb16:
-    b __L7ff7_hxlcl_inet_pton_bb17 ; branch
-__L7ff7_hxlcl_inet_pton_bb17:
-    b __L7ff7_hxlcl_inet_pton_bb18 ; branch
-__L7ff7_hxlcl_inet_pton_bb18:
-    b __L7ff7_hxlcl_inet_pton_bb3 ; branch
-__L7ff7_hxlcl_inet_pton_bb19:
+    b __L5211_hxlcl_inet_pton_bb15 ; branch
+__L5211_hxlcl_inet_pton_bb15:
+    b __L5211_hxlcl_inet_pton_bb16 ; branch
+__L5211_hxlcl_inet_pton_bb16:
+    b __L5211_hxlcl_inet_pton_bb17 ; branch
+__L5211_hxlcl_inet_pton_bb17:
+    b __L5211_hxlcl_inet_pton_bb18 ; branch
+__L5211_hxlcl_inet_pton_bb18:
+    b __L5211_hxlcl_inet_pton_bb3 ; branch
+__L5211_hxlcl_inet_pton_bb19:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #1328 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_inet_pton_bb20:
+__L5211_hxlcl_inet_pton_bb20:
     ldp x0, x1, [sp, #192] ; hv load L12
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #4 ; hv const_int val
@@ -13285,15 +13217,15 @@ __L7ff7_hxlcl_inet_pton_bb20:
     stp x0, x1, [x15] ; hv store L63
     add x15, sp, #1008 ; hv frame base
     ldp x0, x1, [x15] ; hv load L63
-    cbz x1, __L7ff7_hxlcl_inet_pton_bb22 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_inet_pton_bb21 ; branch -> then
-__L7ff7_hxlcl_inet_pton_bb21:
+    cbz x1, __L5211_hxlcl_inet_pton_bb22 ; br_cond: !payload -> else
+    b __L5211_hxlcl_inet_pton_bb21 ; branch -> then
+__L5211_hxlcl_inet_pton_bb21:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #1328 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_inet_pton_bb22:
+__L5211_hxlcl_inet_pton_bb22:
     ldp x0, x1, [sp, #240] ; hv load L15
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; imm 0-15
@@ -13425,7 +13357,6 @@ __L7ff7_hxlcl_inet_pton_bb22:
     add sp, sp, #1328 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_setvbuf
     .p2align 2
 _hxlcl_setvbuf:
     .loc 1 3064 0
@@ -13440,13 +13371,12 @@ _hxlcl_setvbuf:
     stp x9, x2, [sp, #32] ; cabi ingress param 2
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x3, [sp, #48] ; cabi ingress param 3
-__L7ff7_hxlcl_setvbuf_bb0:
+__L5211_hxlcl_setvbuf_bb0:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #64 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_darwin_check_fd_set_overflow
     .p2align 2
 _hxlcl_darwin_check_fd_set_overflow:
     .loc 1 3073 0
@@ -13459,13 +13389,12 @@ _hxlcl_darwin_check_fd_set_overflow:
     stp x9, x1, [sp, #16] ; cabi ingress param 1
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x2, [sp, #32] ; cabi ingress param 2
-__L7ff7_hxlcl_darwin_check_fd_set_overflow_bb0:
+__L5211_hxlcl_darwin_check_fd_set_overflow_bb0:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; hv const_int val
     add sp, sp, #48 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_atof
     .p2align 2
 _hxlcl_atof:
     .loc 1 3106 0
@@ -13473,7 +13402,7 @@ _hxlcl_atof:
     mov x29, sp ; prologue: set fp
     sub sp, sp, #2240 ; sp adj
     stp x0, x1, [sp, #0] ; ingress param 0
-__L7ff7_hxlcl_atof_bb0:
+__L5211_hxlcl_atof_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -13490,15 +13419,15 @@ __L7ff7_hxlcl_atof_bb0:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #48] ; hv store L3
     ldp x0, x1, [sp, #48] ; hv load L3
-    cbz x1, __L7ff7_hxlcl_atof_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atof_bb1 ; branch -> then
-__L7ff7_hxlcl_atof_bb1:
+    cbz x1, __L5211_hxlcl_atof_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atof_bb1 ; branch -> then
+__L5211_hxlcl_atof_bb1:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add sp, sp, #2240 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_atof_bb2:
+__L5211_hxlcl_atof_bb2:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #80] ; hv store L5
@@ -13513,8 +13442,8 @@ __L7ff7_hxlcl_atof_bb2:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #128] ; hv store L8
-    b __L7ff7_hxlcl_atof_bb3 ; branch
-__L7ff7_hxlcl_atof_bb3:
+    b __L5211_hxlcl_atof_bb3 ; branch
+__L5211_hxlcl_atof_bb3:
     ldp x0, x1, [sp, #128] ; hv load L8
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -13523,9 +13452,9 @@ __L7ff7_hxlcl_atof_bb3:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #144] ; hv store L9
     ldp x0, x1, [sp, #144] ; hv load L9
-    cbz x1, __L7ff7_hxlcl_atof_bb5 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atof_bb4 ; branch -> then
-__L7ff7_hxlcl_atof_bb4:
+    cbz x1, __L5211_hxlcl_atof_bb5 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atof_bb4 ; branch -> then
+__L5211_hxlcl_atof_bb4:
     ldp x0, x1, [sp, #112] ; hv load L7
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #32 ; hv const_int val
@@ -13575,9 +13504,9 @@ __L7ff7_hxlcl_atof_bb4:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #320] ; hv store L20
     ldp x0, x1, [sp, #320] ; hv load L20
-    cbz x1, __L7ff7_hxlcl_atof_bb7 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atof_bb6 ; branch -> then
-__L7ff7_hxlcl_atof_bb5:
+    cbz x1, __L5211_hxlcl_atof_bb7 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atof_bb6 ; branch -> then
+__L5211_hxlcl_atof_bb5:
     ldp x0, x1, [sp, #32] ; hv load L2
     ldp x2, x3, [sp, #80] ; hv load L5
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -13597,9 +13526,9 @@ __L7ff7_hxlcl_atof_bb5:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #432] ; hv store L27
     ldp x0, x1, [sp, #432] ; hv load L27
-    cbz x1, __L7ff7_hxlcl_atof_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atof_bb9 ; branch -> then
-__L7ff7_hxlcl_atof_bb6:
+    cbz x1, __L5211_hxlcl_atof_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atof_bb9 ; branch -> then
+__L5211_hxlcl_atof_bb6:
     ldp x0, x1, [sp, #80] ; hv load L5
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -13616,15 +13545,15 @@ __L7ff7_hxlcl_atof_bb6:
     stp x0, x1, [sp, #368] ; hv store L23
     ldp x0, x1, [sp, #368] ; hv load L23
     stp x0, x1, [sp, #112] ; hv store L7
-    b __L7ff7_hxlcl_atof_bb8 ; branch
-__L7ff7_hxlcl_atof_bb7:
+    b __L5211_hxlcl_atof_bb8 ; branch
+__L5211_hxlcl_atof_bb7:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #128] ; hv store L8
-    b __L7ff7_hxlcl_atof_bb8 ; branch
-__L7ff7_hxlcl_atof_bb8:
-    b __L7ff7_hxlcl_atof_bb3 ; branch
-__L7ff7_hxlcl_atof_bb9:
+    b __L5211_hxlcl_atof_bb8 ; branch
+__L5211_hxlcl_atof_bb8:
+    b __L5211_hxlcl_atof_bb3 ; branch
+__L5211_hxlcl_atof_bb9:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #416] ; hv store L26
@@ -13636,8 +13565,8 @@ __L7ff7_hxlcl_atof_bb9:
     stp x0, x1, [sp, #464] ; hv store L29
     ldp x0, x1, [sp, #464] ; hv load L29
     stp x0, x1, [sp, #80] ; hv store L5
-    b __L7ff7_hxlcl_atof_bb13 ; branch
-__L7ff7_hxlcl_atof_bb10:
+    b __L5211_hxlcl_atof_bb13 ; branch
+__L5211_hxlcl_atof_bb10:
     ldp x0, x1, [sp, #400] ; hv load L25
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #43 ; hv const_int val
@@ -13646,9 +13575,9 @@ __L7ff7_hxlcl_atof_bb10:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #480] ; hv store L30
     ldp x0, x1, [sp, #480] ; hv load L30
-    cbz x1, __L7ff7_hxlcl_atof_bb12 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atof_bb11 ; branch -> then
-__L7ff7_hxlcl_atof_bb11:
+    cbz x1, __L5211_hxlcl_atof_bb12 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atof_bb11 ; branch -> then
+__L5211_hxlcl_atof_bb11:
     ldp x0, x1, [sp, #80] ; hv load L5
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -13659,10 +13588,10 @@ __L7ff7_hxlcl_atof_bb11:
     add x15, sp, #512 ; hv frame base
     ldp x0, x1, [x15] ; hv load L32
     stp x0, x1, [sp, #80] ; hv store L5
-    b __L7ff7_hxlcl_atof_bb12 ; branch
-__L7ff7_hxlcl_atof_bb12:
-    b __L7ff7_hxlcl_atof_bb13 ; branch
-__L7ff7_hxlcl_atof_bb13:
+    b __L5211_hxlcl_atof_bb12 ; branch
+__L5211_hxlcl_atof_bb12:
+    b __L5211_hxlcl_atof_bb13 ; branch
+__L5211_hxlcl_atof_bb13:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     scvtf d0, x1 ; __hx_payload_i2f: d0 = (double)v.i
@@ -13678,8 +13607,8 @@ __L7ff7_hxlcl_atof_bb13:
     movz x1, #1 ; hv const_int val
     add x15, sp, #560 ; hv frame base
     stp x0, x1, [x15] ; hv store L35
-    b __L7ff7_hxlcl_atof_bb14 ; branch
-__L7ff7_hxlcl_atof_bb14:
+    b __L5211_hxlcl_atof_bb14 ; branch
+__L5211_hxlcl_atof_bb14:
     add x15, sp, #560 ; hv frame base
     ldp x0, x1, [x15] ; hv load L35
     movz x2, #0 ; hv const_int: TAG_INT
@@ -13691,9 +13620,9 @@ __L7ff7_hxlcl_atof_bb14:
     stp x0, x1, [x15] ; hv store L36
     add x15, sp, #576 ; hv frame base
     ldp x0, x1, [x15] ; hv load L36
-    cbz x1, __L7ff7_hxlcl_atof_bb16 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atof_bb15 ; branch -> then
-__L7ff7_hxlcl_atof_bb15:
+    cbz x1, __L5211_hxlcl_atof_bb16 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atof_bb15 ; branch -> then
+__L5211_hxlcl_atof_bb15:
     ldp x0, x1, [sp, #32] ; hv load L2
     ldp x2, x3, [sp, #80] ; hv load L5
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -13754,9 +13683,9 @@ __L7ff7_hxlcl_atof_bb15:
     stp x0, x1, [x15] ; hv store L45
     add x15, sp, #720 ; hv frame base
     ldp x0, x1, [x15] ; hv load L45
-    cbz x1, __L7ff7_hxlcl_atof_bb18 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atof_bb17 ; branch -> then
-__L7ff7_hxlcl_atof_bb16:
+    cbz x1, __L5211_hxlcl_atof_bb18 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atof_bb17 ; branch -> then
+__L5211_hxlcl_atof_bb16:
     ldp x0, x1, [sp, #32] ; hv load L2
     ldp x2, x3, [sp, #80] ; hv load L5
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -13779,15 +13708,15 @@ __L7ff7_hxlcl_atof_bb16:
     stp x0, x1, [x15] ; hv store L57
     add x15, sp, #912 ; hv frame base
     ldp x0, x1, [x15] ; hv load L57
-    cbz x1, __L7ff7_hxlcl_atof_bb21 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atof_bb20 ; branch -> then
-__L7ff7_hxlcl_atof_bb17:
+    cbz x1, __L5211_hxlcl_atof_bb21 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atof_bb20 ; branch -> then
+__L5211_hxlcl_atof_bb17:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #560 ; hv frame base
     stp x0, x1, [x15] ; hv store L35
-    b __L7ff7_hxlcl_atof_bb19 ; branch
-__L7ff7_hxlcl_atof_bb18:
+    b __L5211_hxlcl_atof_bb19 ; branch
+__L5211_hxlcl_atof_bb18:
     add x15, sp, #608 ; hv frame base
     ldp x0, x1, [x15] ; hv load L38
     movz x2, #0 ; hv const_int: TAG_INT
@@ -13853,10 +13782,10 @@ __L7ff7_hxlcl_atof_bb18:
     add x15, sp, #864 ; hv frame base
     ldp x0, x1, [x15] ; hv load L54
     stp x0, x1, [sp, #80] ; hv store L5
-    b __L7ff7_hxlcl_atof_bb19 ; branch
-__L7ff7_hxlcl_atof_bb19:
-    b __L7ff7_hxlcl_atof_bb14 ; branch
-__L7ff7_hxlcl_atof_bb20:
+    b __L5211_hxlcl_atof_bb19 ; branch
+__L5211_hxlcl_atof_bb19:
+    b __L5211_hxlcl_atof_bb14 ; branch
+__L5211_hxlcl_atof_bb20:
     ldp x0, x1, [sp, #80] ; hv load L5
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -13899,8 +13828,8 @@ __L7ff7_hxlcl_atof_bb20:
     movz x1, #1 ; hv const_int val
     add x15, sp, #1024 ; hv frame base
     stp x0, x1, [x15] ; hv store L64
-    b __L7ff7_hxlcl_atof_bb22 ; branch
-__L7ff7_hxlcl_atof_bb21:
+    b __L5211_hxlcl_atof_bb22 ; branch
+__L5211_hxlcl_atof_bb21:
     ldp x0, x1, [sp, #32] ; hv load L2
     ldp x2, x3, [sp, #80] ; hv load L5
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -13961,9 +13890,9 @@ __L7ff7_hxlcl_atof_bb21:
     stp x0, x1, [x15] ; hv store L93
     add x15, sp, #1488 ; hv frame base
     ldp x0, x1, [x15] ; hv load L93
-    cbz x1, __L7ff7_hxlcl_atof_bb29 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atof_bb28 ; branch -> then
-__L7ff7_hxlcl_atof_bb22:
+    cbz x1, __L5211_hxlcl_atof_bb29 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atof_bb28 ; branch -> then
+__L5211_hxlcl_atof_bb22:
     add x15, sp, #1024 ; hv frame base
     ldp x0, x1, [x15] ; hv load L64
     movz x2, #0 ; hv const_int: TAG_INT
@@ -13975,9 +13904,9 @@ __L7ff7_hxlcl_atof_bb22:
     stp x0, x1, [x15] ; hv store L65
     add x15, sp, #1040 ; hv frame base
     ldp x0, x1, [x15] ; hv load L65
-    cbz x1, __L7ff7_hxlcl_atof_bb24 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atof_bb23 ; branch -> then
-__L7ff7_hxlcl_atof_bb23:
+    cbz x1, __L5211_hxlcl_atof_bb24 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atof_bb23 ; branch -> then
+__L5211_hxlcl_atof_bb23:
     ldp x0, x1, [sp, #32] ; hv load L2
     ldp x2, x3, [sp, #80] ; hv load L5
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -14038,17 +13967,17 @@ __L7ff7_hxlcl_atof_bb23:
     stp x0, x1, [x15] ; hv store L74
     add x15, sp, #1184 ; hv frame base
     ldp x0, x1, [x15] ; hv load L74
-    cbz x1, __L7ff7_hxlcl_atof_bb26 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atof_bb25 ; branch -> then
-__L7ff7_hxlcl_atof_bb24:
-    b __L7ff7_hxlcl_atof_bb21 ; branch
-__L7ff7_hxlcl_atof_bb25:
+    cbz x1, __L5211_hxlcl_atof_bb26 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atof_bb25 ; branch -> then
+__L5211_hxlcl_atof_bb24:
+    b __L5211_hxlcl_atof_bb21 ; branch
+__L5211_hxlcl_atof_bb25:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #1024 ; hv frame base
     stp x0, x1, [x15] ; hv store L64
-    b __L7ff7_hxlcl_atof_bb27 ; branch
-__L7ff7_hxlcl_atof_bb26:
+    b __L5211_hxlcl_atof_bb27 ; branch
+__L5211_hxlcl_atof_bb26:
     add x15, sp, #1072 ; hv frame base
     ldp x0, x1, [x15] ; hv load L67
     movz x2, #0 ; hv const_int: TAG_INT
@@ -14129,10 +14058,10 @@ __L7ff7_hxlcl_atof_bb26:
     add x15, sp, #1344 ; hv frame base
     ldp x0, x1, [x15] ; hv load L84
     stp x0, x1, [sp, #80] ; hv store L5
-    b __L7ff7_hxlcl_atof_bb27 ; branch
-__L7ff7_hxlcl_atof_bb27:
-    b __L7ff7_hxlcl_atof_bb22 ; branch
-__L7ff7_hxlcl_atof_bb28:
+    b __L5211_hxlcl_atof_bb27 ; branch
+__L5211_hxlcl_atof_bb27:
+    b __L5211_hxlcl_atof_bb22 ; branch
+__L5211_hxlcl_atof_bb28:
     ldp x0, x1, [sp, #80] ; hv load L5
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -14169,9 +14098,9 @@ __L7ff7_hxlcl_atof_bb28:
     stp x0, x1, [x15] ; hv store L99
     add x15, sp, #1584 ; hv frame base
     ldp x0, x1, [x15] ; hv load L99
-    cbz x1, __L7ff7_hxlcl_atof_bb31 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atof_bb30 ; branch -> then
-__L7ff7_hxlcl_atof_bb29:
+    cbz x1, __L5211_hxlcl_atof_bb31 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atof_bb30 ; branch -> then
+__L5211_hxlcl_atof_bb29:
     ldp x0, x1, [sp, #416] ; hv load L26
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -14182,9 +14111,9 @@ __L7ff7_hxlcl_atof_bb29:
     stp x0, x1, [x15] ; hv store L134
     add x15, sp, #2144 ; hv frame base
     ldp x0, x1, [x15] ; hv load L134
-    cbz x1, __L7ff7_hxlcl_atof_bb48 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atof_bb47 ; branch -> then
-__L7ff7_hxlcl_atof_bb30:
+    cbz x1, __L5211_hxlcl_atof_bb48 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atof_bb47 ; branch -> then
+__L5211_hxlcl_atof_bb30:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     add x15, sp, #1568 ; hv frame base
@@ -14199,8 +14128,8 @@ __L7ff7_hxlcl_atof_bb30:
     add x15, sp, #1616 ; hv frame base
     ldp x0, x1, [x15] ; hv load L101
     stp x0, x1, [sp, #80] ; hv store L5
-    b __L7ff7_hxlcl_atof_bb34 ; branch
-__L7ff7_hxlcl_atof_bb31:
+    b __L5211_hxlcl_atof_bb34 ; branch
+__L5211_hxlcl_atof_bb31:
     add x15, sp, #1552 ; hv frame base
     ldp x0, x1, [x15] ; hv load L97
     movz x2, #0 ; hv const_int: TAG_INT
@@ -14212,9 +14141,9 @@ __L7ff7_hxlcl_atof_bb31:
     stp x0, x1, [x15] ; hv store L102
     add x15, sp, #1632 ; hv frame base
     ldp x0, x1, [x15] ; hv load L102
-    cbz x1, __L7ff7_hxlcl_atof_bb33 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atof_bb32 ; branch -> then
-__L7ff7_hxlcl_atof_bb32:
+    cbz x1, __L5211_hxlcl_atof_bb33 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atof_bb32 ; branch -> then
+__L5211_hxlcl_atof_bb32:
     ldp x0, x1, [sp, #80] ; hv load L5
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -14225,10 +14154,10 @@ __L7ff7_hxlcl_atof_bb32:
     add x15, sp, #1664 ; hv frame base
     ldp x0, x1, [x15] ; hv load L104
     stp x0, x1, [sp, #80] ; hv store L5
-    b __L7ff7_hxlcl_atof_bb33 ; branch
-__L7ff7_hxlcl_atof_bb33:
-    b __L7ff7_hxlcl_atof_bb34 ; branch
-__L7ff7_hxlcl_atof_bb34:
+    b __L5211_hxlcl_atof_bb33 ; branch
+__L5211_hxlcl_atof_bb33:
+    b __L5211_hxlcl_atof_bb34 ; branch
+__L5211_hxlcl_atof_bb34:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #1680 ; hv frame base
@@ -14237,8 +14166,8 @@ __L7ff7_hxlcl_atof_bb34:
     movz x1, #1 ; hv const_int val
     add x15, sp, #1696 ; hv frame base
     stp x0, x1, [x15] ; hv store L106
-    b __L7ff7_hxlcl_atof_bb35 ; branch
-__L7ff7_hxlcl_atof_bb35:
+    b __L5211_hxlcl_atof_bb35 ; branch
+__L5211_hxlcl_atof_bb35:
     add x15, sp, #1696 ; hv frame base
     ldp x0, x1, [x15] ; hv load L106
     movz x2, #0 ; hv const_int: TAG_INT
@@ -14250,9 +14179,9 @@ __L7ff7_hxlcl_atof_bb35:
     stp x0, x1, [x15] ; hv store L107
     add x15, sp, #1712 ; hv frame base
     ldp x0, x1, [x15] ; hv load L107
-    cbz x1, __L7ff7_hxlcl_atof_bb37 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atof_bb36 ; branch -> then
-__L7ff7_hxlcl_atof_bb36:
+    cbz x1, __L5211_hxlcl_atof_bb37 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atof_bb36 ; branch -> then
+__L5211_hxlcl_atof_bb36:
     ldp x0, x1, [sp, #32] ; hv load L2
     ldp x2, x3, [sp, #80] ; hv load L5
     add x1, x1, x3 ; __hx_ptr_load8: addr = ptr + off
@@ -14313,9 +14242,9 @@ __L7ff7_hxlcl_atof_bb36:
     stp x0, x1, [x15] ; hv store L116
     add x15, sp, #1856 ; hv frame base
     ldp x0, x1, [x15] ; hv load L116
-    cbz x1, __L7ff7_hxlcl_atof_bb39 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atof_bb38 ; branch -> then
-__L7ff7_hxlcl_atof_bb37:
+    cbz x1, __L5211_hxlcl_atof_bb39 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atof_bb38 ; branch -> then
+__L5211_hxlcl_atof_bb37:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     scvtf d0, x1 ; __hx_payload_i2f: d0 = (double)v.i
@@ -14331,14 +14260,14 @@ __L7ff7_hxlcl_atof_bb37:
     movz x1, #0 ; hv const_int val
     add x15, sp, #2016 ; hv frame base
     stp x0, x1, [x15] ; hv store L126
-    b __L7ff7_hxlcl_atof_bb41 ; branch
-__L7ff7_hxlcl_atof_bb38:
+    b __L5211_hxlcl_atof_bb41 ; branch
+__L5211_hxlcl_atof_bb38:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add x15, sp, #1696 ; hv frame base
     stp x0, x1, [x15] ; hv store L106
-    b __L7ff7_hxlcl_atof_bb40 ; branch
-__L7ff7_hxlcl_atof_bb39:
+    b __L5211_hxlcl_atof_bb40 ; branch
+__L5211_hxlcl_atof_bb39:
     add x15, sp, #1744 ; hv frame base
     ldp x0, x1, [x15] ; hv load L109
     movz x2, #0 ; hv const_int: TAG_INT
@@ -14385,10 +14314,10 @@ __L7ff7_hxlcl_atof_bb39:
     add x15, sp, #1968 ; hv frame base
     ldp x0, x1, [x15] ; hv load L123
     stp x0, x1, [sp, #80] ; hv store L5
-    b __L7ff7_hxlcl_atof_bb40 ; branch
-__L7ff7_hxlcl_atof_bb40:
-    b __L7ff7_hxlcl_atof_bb35 ; branch
-__L7ff7_hxlcl_atof_bb41:
+    b __L5211_hxlcl_atof_bb40 ; branch
+__L5211_hxlcl_atof_bb40:
+    b __L5211_hxlcl_atof_bb35 ; branch
+__L5211_hxlcl_atof_bb41:
     add x15, sp, #2016 ; hv frame base
     ldp x0, x1, [x15] ; hv load L126
     add x15, sp, #1680 ; hv frame base
@@ -14400,9 +14329,9 @@ __L7ff7_hxlcl_atof_bb41:
     stp x0, x1, [x15] ; hv store L127
     add x15, sp, #2032 ; hv frame base
     ldp x0, x1, [x15] ; hv load L127
-    cbz x1, __L7ff7_hxlcl_atof_bb43 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atof_bb42 ; branch -> then
-__L7ff7_hxlcl_atof_bb42:
+    cbz x1, __L5211_hxlcl_atof_bb43 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atof_bb42 ; branch -> then
+__L5211_hxlcl_atof_bb42:
     add x15, sp, #2000 ; hv frame base
     ldp x0, x1, [x15] ; hv load L125
     movz x2, #1 ; hv const_float: TAG_FLOAT
@@ -14432,8 +14361,8 @@ __L7ff7_hxlcl_atof_bb42:
     ldp x0, x1, [x15] ; hv load L129
     add x15, sp, #2016 ; hv frame base
     stp x0, x1, [x15] ; hv store L126
-    b __L7ff7_hxlcl_atof_bb41 ; branch
-__L7ff7_hxlcl_atof_bb43:
+    b __L5211_hxlcl_atof_bb41 ; branch
+__L5211_hxlcl_atof_bb43:
     add x15, sp, #1568 ; hv frame base
     ldp x0, x1, [x15] ; hv load L98
     movz x2, #0 ; hv const_int: TAG_INT
@@ -14445,9 +14374,9 @@ __L7ff7_hxlcl_atof_bb43:
     stp x0, x1, [x15] ; hv store L130
     add x15, sp, #2080 ; hv frame base
     ldp x0, x1, [x15] ; hv load L130
-    cbz x1, __L7ff7_hxlcl_atof_bb45 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_atof_bb44 ; branch -> then
-__L7ff7_hxlcl_atof_bb44:
+    cbz x1, __L5211_hxlcl_atof_bb45 ; br_cond: !payload -> else
+    b __L5211_hxlcl_atof_bb44 ; branch -> then
+__L5211_hxlcl_atof_bb44:
     add x15, sp, #544 ; hv frame base
     ldp x0, x1, [x15] ; hv load L34
     add x15, sp, #2000 ; hv frame base
@@ -14463,8 +14392,8 @@ __L7ff7_hxlcl_atof_bb44:
     ldp x0, x1, [x15] ; hv load L132
     add x15, sp, #544 ; hv frame base
     stp x0, x1, [x15] ; hv store L34
-    b __L7ff7_hxlcl_atof_bb46 ; branch
-__L7ff7_hxlcl_atof_bb45:
+    b __L5211_hxlcl_atof_bb46 ; branch
+__L5211_hxlcl_atof_bb45:
     add x15, sp, #544 ; hv frame base
     ldp x0, x1, [x15] ; hv load L34
     add x15, sp, #2000 ; hv frame base
@@ -14480,10 +14409,10 @@ __L7ff7_hxlcl_atof_bb45:
     ldp x0, x1, [x15] ; hv load L133
     add x15, sp, #544 ; hv frame base
     stp x0, x1, [x15] ; hv store L34
-    b __L7ff7_hxlcl_atof_bb46 ; branch
-__L7ff7_hxlcl_atof_bb46:
-    b __L7ff7_hxlcl_atof_bb29 ; branch
-__L7ff7_hxlcl_atof_bb47:
+    b __L5211_hxlcl_atof_bb46 ; branch
+__L5211_hxlcl_atof_bb46:
+    b __L5211_hxlcl_atof_bb29 ; branch
+__L5211_hxlcl_atof_bb47:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     movz x2, #0 ; hv const_int: TAG_INT
@@ -14513,13 +14442,12 @@ __L7ff7_hxlcl_atof_bb47:
     add sp, sp, #2240 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_atof_bb48:
+__L5211_hxlcl_atof_bb48:
     add x15, sp, #544 ; hv frame base
     ldp x0, x1, [x15] ; hv load L34
     add sp, sp, #2240 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_fp_addmul
     .p2align 2
 _hxlcl_fp_addmul:
     .loc 1 3265 0
@@ -14528,7 +14456,7 @@ _hxlcl_fp_addmul:
     sub sp, sp, #96 ; sp adj
     stp x0, x1, [sp, #0] ; ingress param 0
     stp x2, x3, [sp, #16] ; ingress param 1
-__L7ff7_hxlcl_fp_addmul_bb0:
+__L5211_hxlcl_fp_addmul_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     ldp x2, x3, [sp, #16] ; hv load L1
     fmov d0, x1 ; __hx_payload_fmul: d0 = a.f
@@ -14553,7 +14481,6 @@ __L7ff7_hxlcl_fp_addmul_bb0:
     add sp, sp, #96 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_fmod
     .p2align 2
 _hxlcl_fmod:
     .loc 1 3296 0
@@ -14562,7 +14489,7 @@ _hxlcl_fmod:
     sub sp, sp, #2192 ; sp adj
     stp x0, x1, [sp, #0] ; ingress param 0
     stp x2, x3, [sp, #16] ; ingress param 1
-__L7ff7_hxlcl_fmod_bb0:
+__L5211_hxlcl_fmod_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -14709,9 +14636,9 @@ __L7ff7_hxlcl_fmod_bb0:
     stp x0, x1, [x15] ; hv store L34
     add x15, sp, #544 ; hv frame base
     ldp x0, x1, [x15] ; hv load L34
-    cbz x1, __L7ff7_hxlcl_fmod_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fmod_bb1 ; branch -> then
-__L7ff7_hxlcl_fmod_bb1:
+    cbz x1, __L5211_hxlcl_fmod_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fmod_bb1 ; branch -> then
+__L5211_hxlcl_fmod_bb1:
     ldp x0, x1, [sp, #0] ; hv load L0
     ldp x2, x3, [sp, #16] ; hv load L1
     fmov d0, x1 ; __hx_payload_fmul: d0 = a.f
@@ -14745,7 +14672,7 @@ __L7ff7_hxlcl_fmod_bb1:
     add sp, sp, #2192 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fmod_bb2:
+__L5211_hxlcl_fmod_bb2:
     ldp x0, x1, [sp, #48] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -14792,9 +14719,9 @@ __L7ff7_hxlcl_fmod_bb2:
     stp x0, x1, [x15] ; hv store L46
     add x15, sp, #736 ; hv frame base
     ldp x0, x1, [x15] ; hv load L46
-    cbz x1, __L7ff7_hxlcl_fmod_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fmod_bb3 ; branch -> then
-__L7ff7_hxlcl_fmod_bb3:
+    cbz x1, __L5211_hxlcl_fmod_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fmod_bb3 ; branch -> then
+__L5211_hxlcl_fmod_bb3:
     add x15, sp, #720 ; hv frame base
     ldp x0, x1, [x15] ; hv load L45
     movz x2, #0 ; hv const_int: TAG_INT
@@ -14806,9 +14733,9 @@ __L7ff7_hxlcl_fmod_bb3:
     stp x0, x1, [x15] ; hv store L48
     add x15, sp, #768 ; hv frame base
     ldp x0, x1, [x15] ; hv load L48
-    cbz x1, __L7ff7_hxlcl_fmod_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fmod_bb5 ; branch -> then
-__L7ff7_hxlcl_fmod_bb4:
+    cbz x1, __L5211_hxlcl_fmod_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fmod_bb5 ; branch -> then
+__L5211_hxlcl_fmod_bb4:
     ldp x0, x1, [sp, #144] ; hv load L9
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -14819,9 +14746,9 @@ __L7ff7_hxlcl_fmod_bb4:
     stp x0, x1, [x15] ; hv store L52
     add x15, sp, #832 ; hv frame base
     ldp x0, x1, [x15] ; hv load L52
-    cbz x1, __L7ff7_hxlcl_fmod_bb8 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fmod_bb7 ; branch -> then
-__L7ff7_hxlcl_fmod_bb5:
+    cbz x1, __L5211_hxlcl_fmod_bb8 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fmod_bb7 ; branch -> then
+__L5211_hxlcl_fmod_bb5:
     movz x0, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt2@PAGE ; hv float pool page
     add x14, x14, .LCflt2@PAGEOFF ; hv float pool off
@@ -14843,12 +14770,12 @@ __L7ff7_hxlcl_fmod_bb5:
     add sp, sp, #2192 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fmod_bb6:
+__L5211_hxlcl_fmod_bb6:
     ldp x0, x1, [sp, #48] ; hv load L3
     add sp, sp, #2192 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fmod_bb7:
+__L5211_hxlcl_fmod_bb7:
     ldp x0, x1, [sp, #48] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #12 ; hv const_int val
@@ -14872,8 +14799,8 @@ __L7ff7_hxlcl_fmod_bb7:
     ldp x0, x1, [x15] ; hv load L56
     add x15, sp, #912 ; hv frame base
     stp x0, x1, [x15] ; hv store L57
-    b __L7ff7_hxlcl_fmod_bb9 ; branch
-__L7ff7_hxlcl_fmod_bb8:
+    b __L5211_hxlcl_fmod_bb9 ; branch
+__L5211_hxlcl_fmod_bb8:
     ldp x0, x1, [sp, #48] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #65535 ; imm 0-15
@@ -14912,8 +14839,8 @@ __L7ff7_hxlcl_fmod_bb8:
     add x15, sp, #1136 ; hv frame base
     ldp x0, x1, [x15] ; hv load L71
     stp x0, x1, [sp, #48] ; hv store L3
-    b __L7ff7_hxlcl_fmod_bb12 ; branch
-__L7ff7_hxlcl_fmod_bb9:
+    b __L5211_hxlcl_fmod_bb12 ; branch
+__L5211_hxlcl_fmod_bb9:
     add x15, sp, #912 ; hv frame base
     ldp x0, x1, [x15] ; hv load L57
     movz x2, #0 ; hv const_int: TAG_INT
@@ -14925,9 +14852,9 @@ __L7ff7_hxlcl_fmod_bb9:
     stp x0, x1, [x15] ; hv store L58
     add x15, sp, #928 ; hv frame base
     ldp x0, x1, [x15] ; hv load L58
-    cbz x1, __L7ff7_hxlcl_fmod_bb11 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fmod_bb10 ; branch -> then
-__L7ff7_hxlcl_fmod_bb10:
+    cbz x1, __L5211_hxlcl_fmod_bb11 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fmod_bb10 ; branch -> then
+__L5211_hxlcl_fmod_bb10:
     ldp x0, x1, [sp, #144] ; hv load L9
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -14962,8 +14889,8 @@ __L7ff7_hxlcl_fmod_bb10:
     ldp x0, x1, [x15] ; hv load L61
     add x15, sp, #912 ; hv frame base
     stp x0, x1, [x15] ; hv store L57
-    b __L7ff7_hxlcl_fmod_bb9 ; branch
-__L7ff7_hxlcl_fmod_bb11:
+    b __L5211_hxlcl_fmod_bb9 ; branch
+__L5211_hxlcl_fmod_bb11:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     ldp x2, x3, [sp, #144] ; hv load L9
@@ -14997,8 +14924,8 @@ __L7ff7_hxlcl_fmod_bb11:
     add x15, sp, #1056 ; hv frame base
     ldp x0, x1, [x15] ; hv load L66
     stp x0, x1, [sp, #48] ; hv store L3
-    b __L7ff7_hxlcl_fmod_bb12 ; branch
-__L7ff7_hxlcl_fmod_bb12:
+    b __L5211_hxlcl_fmod_bb12 ; branch
+__L5211_hxlcl_fmod_bb12:
     ldp x0, x1, [sp, #208] ; hv load L13
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -15009,9 +14936,9 @@ __L7ff7_hxlcl_fmod_bb12:
     stp x0, x1, [x15] ; hv store L72
     add x15, sp, #1152 ; hv frame base
     ldp x0, x1, [x15] ; hv load L72
-    cbz x1, __L7ff7_hxlcl_fmod_bb14 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fmod_bb13 ; branch -> then
-__L7ff7_hxlcl_fmod_bb13:
+    cbz x1, __L5211_hxlcl_fmod_bb14 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fmod_bb13 ; branch -> then
+__L5211_hxlcl_fmod_bb13:
     ldp x0, x1, [sp, #80] ; hv load L5
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #12 ; hv const_int val
@@ -15035,8 +14962,8 @@ __L7ff7_hxlcl_fmod_bb13:
     ldp x0, x1, [x15] ; hv load L76
     add x15, sp, #1232 ; hv frame base
     stp x0, x1, [x15] ; hv store L77
-    b __L7ff7_hxlcl_fmod_bb15 ; branch
-__L7ff7_hxlcl_fmod_bb14:
+    b __L5211_hxlcl_fmod_bb15 ; branch
+__L5211_hxlcl_fmod_bb14:
     ldp x0, x1, [sp, #80] ; hv load L5
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #65535 ; imm 0-15
@@ -15075,8 +15002,8 @@ __L7ff7_hxlcl_fmod_bb14:
     add x15, sp, #1456 ; hv frame base
     ldp x0, x1, [x15] ; hv load L91
     stp x0, x1, [sp, #80] ; hv store L5
-    b __L7ff7_hxlcl_fmod_bb18 ; branch
-__L7ff7_hxlcl_fmod_bb15:
+    b __L5211_hxlcl_fmod_bb18 ; branch
+__L5211_hxlcl_fmod_bb15:
     add x15, sp, #1232 ; hv frame base
     ldp x0, x1, [x15] ; hv load L77
     movz x2, #0 ; hv const_int: TAG_INT
@@ -15088,9 +15015,9 @@ __L7ff7_hxlcl_fmod_bb15:
     stp x0, x1, [x15] ; hv store L78
     add x15, sp, #1248 ; hv frame base
     ldp x0, x1, [x15] ; hv load L78
-    cbz x1, __L7ff7_hxlcl_fmod_bb17 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fmod_bb16 ; branch -> then
-__L7ff7_hxlcl_fmod_bb16:
+    cbz x1, __L5211_hxlcl_fmod_bb17 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fmod_bb16 ; branch -> then
+__L5211_hxlcl_fmod_bb16:
     ldp x0, x1, [sp, #208] ; hv load L13
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -15125,8 +15052,8 @@ __L7ff7_hxlcl_fmod_bb16:
     ldp x0, x1, [x15] ; hv load L81
     add x15, sp, #1232 ; hv frame base
     stp x0, x1, [x15] ; hv store L77
-    b __L7ff7_hxlcl_fmod_bb15 ; branch
-__L7ff7_hxlcl_fmod_bb17:
+    b __L5211_hxlcl_fmod_bb15 ; branch
+__L5211_hxlcl_fmod_bb17:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     ldp x2, x3, [sp, #208] ; hv load L13
@@ -15160,10 +15087,10 @@ __L7ff7_hxlcl_fmod_bb17:
     add x15, sp, #1376 ; hv frame base
     ldp x0, x1, [x15] ; hv load L86
     stp x0, x1, [sp, #80] ; hv store L5
-    b __L7ff7_hxlcl_fmod_bb18 ; branch
-__L7ff7_hxlcl_fmod_bb18:
-    b __L7ff7_hxlcl_fmod_bb19 ; branch
-__L7ff7_hxlcl_fmod_bb19:
+    b __L5211_hxlcl_fmod_bb18 ; branch
+__L5211_hxlcl_fmod_bb18:
+    b __L5211_hxlcl_fmod_bb19 ; branch
+__L5211_hxlcl_fmod_bb19:
     ldp x0, x1, [sp, #208] ; hv load L13
     ldp x2, x3, [sp, #144] ; hv load L9
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -15173,9 +15100,9 @@ __L7ff7_hxlcl_fmod_bb19:
     stp x0, x1, [x15] ; hv store L92
     add x15, sp, #1472 ; hv frame base
     ldp x0, x1, [x15] ; hv load L92
-    cbz x1, __L7ff7_hxlcl_fmod_bb21 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fmod_bb20 ; branch -> then
-__L7ff7_hxlcl_fmod_bb20:
+    cbz x1, __L5211_hxlcl_fmod_bb21 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fmod_bb20 ; branch -> then
+__L5211_hxlcl_fmod_bb20:
     ldp x0, x1, [sp, #48] ; hv load L3
     ldp x2, x3, [sp, #80] ; hv load L5
     sub x1, x1, x3 ; __hx_payload_sub: x1 = a.pl sub b.pl
@@ -15209,9 +15136,9 @@ __L7ff7_hxlcl_fmod_bb20:
     stp x0, x1, [x15] ; hv store L97
     add x15, sp, #1552 ; hv frame base
     ldp x0, x1, [x15] ; hv load L97
-    cbz x1, __L7ff7_hxlcl_fmod_bb23 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fmod_bb22 ; branch -> then
-__L7ff7_hxlcl_fmod_bb21:
+    cbz x1, __L5211_hxlcl_fmod_bb23 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fmod_bb22 ; branch -> then
+__L5211_hxlcl_fmod_bb21:
     ldp x0, x1, [sp, #48] ; hv load L3
     ldp x2, x3, [sp, #80] ; hv load L5
     sub x1, x1, x3 ; __hx_payload_sub: x1 = a.pl sub b.pl
@@ -15245,9 +15172,9 @@ __L7ff7_hxlcl_fmod_bb21:
     stp x0, x1, [x15] ; hv store L110
     add x15, sp, #1760 ; hv frame base
     ldp x0, x1, [x15] ; hv load L110
-    cbz x1, __L7ff7_hxlcl_fmod_bb27 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fmod_bb26 ; branch -> then
-__L7ff7_hxlcl_fmod_bb22:
+    cbz x1, __L5211_hxlcl_fmod_bb27 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fmod_bb26 ; branch -> then
+__L5211_hxlcl_fmod_bb22:
     add x15, sp, #1504 ; hv frame base
     ldp x0, x1, [x15] ; hv load L94
     movz x2, #0 ; hv const_int: TAG_INT
@@ -15259,9 +15186,9 @@ __L7ff7_hxlcl_fmod_bb22:
     stp x0, x1, [x15] ; hv store L99
     add x15, sp, #1584 ; hv frame base
     ldp x0, x1, [x15] ; hv load L99
-    cbz x1, __L7ff7_hxlcl_fmod_bb25 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fmod_bb24 ; branch -> then
-__L7ff7_hxlcl_fmod_bb23:
+    cbz x1, __L5211_hxlcl_fmod_bb25 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fmod_bb24 ; branch -> then
+__L5211_hxlcl_fmod_bb23:
     ldp x0, x1, [sp, #48] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -15282,8 +15209,8 @@ __L7ff7_hxlcl_fmod_bb23:
     add x15, sp, #1680 ; hv frame base
     ldp x0, x1, [x15] ; hv load L105
     stp x0, x1, [sp, #144] ; hv store L9
-    b __L7ff7_hxlcl_fmod_bb19 ; branch
-__L7ff7_hxlcl_fmod_bb24:
+    b __L5211_hxlcl_fmod_bb19 ; branch
+__L5211_hxlcl_fmod_bb24:
     movz x0, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt2@PAGE ; hv float pool page
     add x14, x14, .LCflt2@PAGEOFF ; hv float pool off
@@ -15305,7 +15232,7 @@ __L7ff7_hxlcl_fmod_bb24:
     add sp, sp, #2192 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fmod_bb25:
+__L5211_hxlcl_fmod_bb25:
     add x15, sp, #1504 ; hv frame base
     ldp x0, x1, [x15] ; hv load L94
     movz x2, #0 ; hv const_int: TAG_INT
@@ -15317,8 +15244,8 @@ __L7ff7_hxlcl_fmod_bb25:
     add x15, sp, #1648 ; hv frame base
     ldp x0, x1, [x15] ; hv load L103
     stp x0, x1, [sp, #48] ; hv store L3
-    b __L7ff7_hxlcl_fmod_bb23 ; branch
-__L7ff7_hxlcl_fmod_bb26:
+    b __L5211_hxlcl_fmod_bb23 ; branch
+__L5211_hxlcl_fmod_bb26:
     add x15, sp, #1712 ; hv frame base
     ldp x0, x1, [x15] ; hv load L107
     movz x2, #0 ; hv const_int: TAG_INT
@@ -15330,9 +15257,9 @@ __L7ff7_hxlcl_fmod_bb26:
     stp x0, x1, [x15] ; hv store L112
     add x15, sp, #1792 ; hv frame base
     ldp x0, x1, [x15] ; hv load L112
-    cbz x1, __L7ff7_hxlcl_fmod_bb29 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fmod_bb28 ; branch -> then
-__L7ff7_hxlcl_fmod_bb27:
+    cbz x1, __L5211_hxlcl_fmod_bb29 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fmod_bb28 ; branch -> then
+__L5211_hxlcl_fmod_bb27:
     ldp x0, x1, [sp, #48] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #52 ; hv const_int val
@@ -15344,8 +15271,8 @@ __L7ff7_hxlcl_fmod_bb27:
     ldp x0, x1, [x15] ; hv load L117
     add x15, sp, #1888 ; hv frame base
     stp x0, x1, [x15] ; hv store L118
-    b __L7ff7_hxlcl_fmod_bb30 ; branch
-__L7ff7_hxlcl_fmod_bb28:
+    b __L5211_hxlcl_fmod_bb30 ; branch
+__L5211_hxlcl_fmod_bb28:
     movz x0, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt2@PAGE ; hv float pool page
     add x14, x14, .LCflt2@PAGEOFF ; hv float pool off
@@ -15367,7 +15294,7 @@ __L7ff7_hxlcl_fmod_bb28:
     add sp, sp, #2192 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_fmod_bb29:
+__L5211_hxlcl_fmod_bb29:
     add x15, sp, #1712 ; hv frame base
     ldp x0, x1, [x15] ; hv load L107
     movz x2, #0 ; hv const_int: TAG_INT
@@ -15379,8 +15306,8 @@ __L7ff7_hxlcl_fmod_bb29:
     add x15, sp, #1856 ; hv frame base
     ldp x0, x1, [x15] ; hv load L116
     stp x0, x1, [sp, #48] ; hv store L3
-    b __L7ff7_hxlcl_fmod_bb27 ; branch
-__L7ff7_hxlcl_fmod_bb30:
+    b __L5211_hxlcl_fmod_bb27 ; branch
+__L5211_hxlcl_fmod_bb30:
     add x15, sp, #1888 ; hv frame base
     ldp x0, x1, [x15] ; hv load L118
     movz x2, #0 ; hv const_int: TAG_INT
@@ -15392,9 +15319,9 @@ __L7ff7_hxlcl_fmod_bb30:
     stp x0, x1, [x15] ; hv store L119
     add x15, sp, #1904 ; hv frame base
     ldp x0, x1, [x15] ; hv load L119
-    cbz x1, __L7ff7_hxlcl_fmod_bb32 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fmod_bb31 ; branch -> then
-__L7ff7_hxlcl_fmod_bb31:
+    cbz x1, __L5211_hxlcl_fmod_bb32 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fmod_bb31 ; branch -> then
+__L5211_hxlcl_fmod_bb31:
     ldp x0, x1, [sp, #48] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -15426,8 +15353,8 @@ __L7ff7_hxlcl_fmod_bb31:
     ldp x0, x1, [x15] ; hv load L122
     add x15, sp, #1888 ; hv frame base
     stp x0, x1, [x15] ; hv store L118
-    b __L7ff7_hxlcl_fmod_bb30 ; branch
-__L7ff7_hxlcl_fmod_bb32:
+    b __L5211_hxlcl_fmod_bb30 ; branch
+__L5211_hxlcl_fmod_bb32:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     ldp x2, x3, [sp, #144] ; hv load L9
@@ -15438,9 +15365,9 @@ __L7ff7_hxlcl_fmod_bb32:
     stp x0, x1, [x15] ; hv store L123
     add x15, sp, #1968 ; hv frame base
     ldp x0, x1, [x15] ; hv load L123
-    cbz x1, __L7ff7_hxlcl_fmod_bb34 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_fmod_bb33 ; branch -> then
-__L7ff7_hxlcl_fmod_bb33:
+    cbz x1, __L5211_hxlcl_fmod_bb34 ; br_cond: !payload -> else
+    b __L5211_hxlcl_fmod_bb33 ; branch -> then
+__L5211_hxlcl_fmod_bb33:
     ldp x0, x1, [sp, #48] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; imm 0-15
@@ -15473,8 +15400,8 @@ __L7ff7_hxlcl_fmod_bb33:
     add x15, sp, #2048 ; hv frame base
     ldp x0, x1, [x15] ; hv load L128
     stp x0, x1, [sp, #48] ; hv store L3
-    b __L7ff7_hxlcl_fmod_bb35 ; branch
-__L7ff7_hxlcl_fmod_bb34:
+    b __L5211_hxlcl_fmod_bb35 ; branch
+__L5211_hxlcl_fmod_bb34:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     ldp x2, x3, [sp, #144] ; hv load L9
@@ -15508,8 +15435,8 @@ __L7ff7_hxlcl_fmod_bb34:
     add x15, sp, #2128 ; hv frame base
     ldp x0, x1, [x15] ; hv load L133
     stp x0, x1, [sp, #48] ; hv store L3
-    b __L7ff7_hxlcl_fmod_bb35 ; branch
-__L7ff7_hxlcl_fmod_bb35:
+    b __L5211_hxlcl_fmod_bb35 ; branch
+__L5211_hxlcl_fmod_bb35:
     ldp x0, x1, [sp, #240] ; hv load L15
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #63 ; hv const_int val
@@ -15535,7 +15462,6 @@ __L7ff7_hxlcl_fmod_bb35:
     add sp, sp, #2192 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_sin
     .p2align 2
 _hxlcl_sin:
     .loc 1 3459 0
@@ -15544,7 +15470,7 @@ _hxlcl_sin:
     movz x15, #6064 ; imm 0-15
     sub sp, sp, x15 ; sp adj (big frame)
     stp x0, x1, [sp, #0] ; ingress param 0
-__L7ff7_hxlcl_sin_bb0:
+__L5211_hxlcl_sin_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -15579,15 +15505,15 @@ __L7ff7_hxlcl_sin_bb0:
     bl _hexa_bool ; __hx_payload_ult: box bool
     stp x0, x1, [sp, #112] ; hv store L7
     ldp x0, x1, [sp, #112] ; hv load L7
-    cbz x1, __L7ff7_hxlcl_sin_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb1 ; branch -> then
-__L7ff7_hxlcl_sin_bb1:
+    cbz x1, __L5211_hxlcl_sin_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb1 ; branch -> then
+__L5211_hxlcl_sin_bb1:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x15, #6064 ; imm 0-15
     add sp, sp, x15 ; sp adj (big frame)
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_sin_bb2:
+__L5211_hxlcl_sin_bb2:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; imm 0-15
     movk x1, #32752, lsl #16 ; imm 16-31
@@ -15597,9 +15523,9 @@ __L7ff7_hxlcl_sin_bb2:
     bl _hexa_bool ; __hx_payload_ule: box bool
     stp x0, x1, [sp, #144] ; hv store L9
     ldp x0, x1, [sp, #144] ; hv load L9
-    cbz x1, __L7ff7_hxlcl_sin_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb3 ; branch -> then
-__L7ff7_hxlcl_sin_bb3:
+    cbz x1, __L5211_hxlcl_sin_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb3 ; branch -> then
+__L5211_hxlcl_sin_bb3:
     ldp x0, x1, [sp, #0] ; hv load L0
     ldp x2, x3, [sp, #0] ; hv load L0
     fmov d0, x1 ; __hx_payload_fsub: d0 = a.f
@@ -15615,7 +15541,7 @@ __L7ff7_hxlcl_sin_bb3:
     add sp, sp, x15 ; sp adj (big frame)
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_sin_bb4:
+__L5211_hxlcl_sin_bb4:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #63 ; hv const_int val
@@ -15693,9 +15619,9 @@ __L7ff7_hxlcl_sin_bb4:
     bl _hexa_bool ; __hx_payload_ule: box bool
     stp x0, x1, [sp, #464] ; hv store L29
     ldp x0, x1, [sp, #464] ; hv load L29
-    cbz x1, __L7ff7_hxlcl_sin_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb5 ; branch -> then
-__L7ff7_hxlcl_sin_bb5:
+    cbz x1, __L5211_hxlcl_sin_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb5 ; branch -> then
+__L5211_hxlcl_sin_bb5:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -15713,8 +15639,8 @@ __L7ff7_hxlcl_sin_bb5:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #256] ; hv store L16
-    b __L7ff7_hxlcl_sin_bb6 ; branch
-__L7ff7_hxlcl_sin_bb6:
+    b __L5211_hxlcl_sin_bb6 ; branch
+__L5211_hxlcl_sin_bb6:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #65535 ; imm 0-15
@@ -15751,9 +15677,9 @@ __L7ff7_hxlcl_sin_bb6:
     stp x0, x1, [x15] ; hv store L36
     add x15, sp, #576 ; hv frame base
     ldp x0, x1, [x15] ; hv load L36
-    cbz x1, __L7ff7_hxlcl_sin_bb8 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb7 ; branch -> then
-__L7ff7_hxlcl_sin_bb7:
+    cbz x1, __L5211_hxlcl_sin_bb8 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb7 ; branch -> then
+__L5211_hxlcl_sin_bb7:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #55676 ; imm 0-15
@@ -15803,9 +15729,9 @@ __L7ff7_hxlcl_sin_bb7:
     stp x0, x1, [x15] ; hv store L44
     add x15, sp, #704 ; hv frame base
     ldp x0, x1, [x15] ; hv load L44
-    cbz x1, __L7ff7_hxlcl_sin_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb9 ; branch -> then
-__L7ff7_hxlcl_sin_bb8:
+    cbz x1, __L5211_hxlcl_sin_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb9 ; branch -> then
+__L5211_hxlcl_sin_bb8:
     ldp x0, x1, [sp, #256] ; hv load L16
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -15816,9 +15742,9 @@ __L7ff7_hxlcl_sin_bb8:
     stp x0, x1, [x15] ; hv store L66
     add x15, sp, #1056 ; hv frame base
     ldp x0, x1, [x15] ; hv load L66
-    cbz x1, __L7ff7_hxlcl_sin_bb15 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb14 ; branch -> then
-__L7ff7_hxlcl_sin_bb9:
+    cbz x1, __L5211_hxlcl_sin_bb15 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb14 ; branch -> then
+__L5211_hxlcl_sin_bb9:
     ldp x0, x1, [sp, #224] ; hv load L14
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -15829,11 +15755,11 @@ __L7ff7_hxlcl_sin_bb9:
     stp x0, x1, [x15] ; hv store L46
     add x15, sp, #736 ; hv frame base
     ldp x0, x1, [x15] ; hv load L46
-    cbz x1, __L7ff7_hxlcl_sin_bb12 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb11 ; branch -> then
-__L7ff7_hxlcl_sin_bb10:
-    b __L7ff7_hxlcl_sin_bb8 ; branch
-__L7ff7_hxlcl_sin_bb11:
+    cbz x1, __L5211_hxlcl_sin_bb12 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb11 ; branch -> then
+__L5211_hxlcl_sin_bb10:
+    b __L5211_hxlcl_sin_bb8 ; branch
+__L5211_hxlcl_sin_bb11:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt3@PAGE ; hv float pool page
@@ -15921,8 +15847,8 @@ __L7ff7_hxlcl_sin_bb11:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #240] ; hv store L15
-    b __L7ff7_hxlcl_sin_bb13 ; branch
-__L7ff7_hxlcl_sin_bb12:
+    b __L5211_hxlcl_sin_bb13 ; branch
+__L5211_hxlcl_sin_bb12:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt3@PAGE ; hv float pool page
@@ -16011,16 +15937,16 @@ __L7ff7_hxlcl_sin_bb12:
     movz x1, #0 ; imm 0-15
     mvn x1, x1 ; hv const_int: negate
     stp x0, x1, [sp, #240] ; hv store L15
-    b __L7ff7_hxlcl_sin_bb13 ; branch
-__L7ff7_hxlcl_sin_bb13:
+    b __L5211_hxlcl_sin_bb13 ; branch
+__L5211_hxlcl_sin_bb13:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #336] ; hv store L21
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #256] ; hv store L16
-    b __L7ff7_hxlcl_sin_bb10 ; branch
-__L7ff7_hxlcl_sin_bb14:
+    b __L5211_hxlcl_sin_bb10 ; branch
+__L5211_hxlcl_sin_bb14:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #27258 ; imm 0-15
@@ -16095,9 +16021,9 @@ __L7ff7_hxlcl_sin_bb14:
     stp x0, x1, [x15] ; hv store L78
     add x15, sp, #1248 ; hv frame base
     ldp x0, x1, [x15] ; hv load L78
-    cbz x1, __L7ff7_hxlcl_sin_bb17 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb16 ; branch -> then
-__L7ff7_hxlcl_sin_bb15:
+    cbz x1, __L5211_hxlcl_sin_bb17 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb16 ; branch -> then
+__L5211_hxlcl_sin_bb15:
     ldp x0, x1, [sp, #256] ; hv load L16
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -16108,9 +16034,9 @@ __L7ff7_hxlcl_sin_bb15:
     stp x0, x1, [x15] ; hv store L100
     add x15, sp, #1600 ; hv frame base
     ldp x0, x1, [x15] ; hv load L100
-    cbz x1, __L7ff7_hxlcl_sin_bb22 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb21 ; branch -> then
-__L7ff7_hxlcl_sin_bb16:
+    cbz x1, __L5211_hxlcl_sin_bb22 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb21 ; branch -> then
+__L5211_hxlcl_sin_bb16:
     ldp x0, x1, [sp, #224] ; hv load L14
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -16121,11 +16047,11 @@ __L7ff7_hxlcl_sin_bb16:
     stp x0, x1, [x15] ; hv store L80
     add x15, sp, #1280 ; hv frame base
     ldp x0, x1, [x15] ; hv load L80
-    cbz x1, __L7ff7_hxlcl_sin_bb19 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb18 ; branch -> then
-__L7ff7_hxlcl_sin_bb17:
-    b __L7ff7_hxlcl_sin_bb15 ; branch
-__L7ff7_hxlcl_sin_bb18:
+    cbz x1, __L5211_hxlcl_sin_bb19 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb18 ; branch -> then
+__L5211_hxlcl_sin_bb17:
+    b __L5211_hxlcl_sin_bb15 ; branch
+__L5211_hxlcl_sin_bb18:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt5@PAGE ; hv float pool page
@@ -16213,8 +16139,8 @@ __L7ff7_hxlcl_sin_bb18:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #2 ; hv const_int val
     stp x0, x1, [sp, #240] ; hv store L15
-    b __L7ff7_hxlcl_sin_bb20 ; branch
-__L7ff7_hxlcl_sin_bb19:
+    b __L5211_hxlcl_sin_bb20 ; branch
+__L5211_hxlcl_sin_bb19:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt5@PAGE ; hv float pool page
@@ -16303,16 +16229,16 @@ __L7ff7_hxlcl_sin_bb19:
     movz x1, #1 ; imm 0-15
     mvn x1, x1 ; hv const_int: negate
     stp x0, x1, [sp, #240] ; hv store L15
-    b __L7ff7_hxlcl_sin_bb20 ; branch
-__L7ff7_hxlcl_sin_bb20:
+    b __L5211_hxlcl_sin_bb20 ; branch
+__L5211_hxlcl_sin_bb20:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #336] ; hv store L21
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #256] ; hv store L16
-    b __L7ff7_hxlcl_sin_bb17 ; branch
-__L7ff7_hxlcl_sin_bb21:
+    b __L5211_hxlcl_sin_bb17 ; branch
+__L5211_hxlcl_sin_bb21:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #64956 ; imm 0-15
@@ -16400,9 +16326,9 @@ __L7ff7_hxlcl_sin_bb21:
     stp x0, x1, [x15] ; hv store L114
     add x15, sp, #1824 ; hv frame base
     ldp x0, x1, [x15] ; hv load L114
-    cbz x1, __L7ff7_hxlcl_sin_bb24 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb23 ; branch -> then
-__L7ff7_hxlcl_sin_bb22:
+    cbz x1, __L5211_hxlcl_sin_bb24 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb23 ; branch -> then
+__L5211_hxlcl_sin_bb22:
     ldp x0, x1, [sp, #256] ; hv load L16
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -16413,9 +16339,9 @@ __L7ff7_hxlcl_sin_bb22:
     stp x0, x1, [x15] ; hv store L136
     add x15, sp, #2176 ; hv frame base
     ldp x0, x1, [x15] ; hv load L136
-    cbz x1, __L7ff7_hxlcl_sin_bb29 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb28 ; branch -> then
-__L7ff7_hxlcl_sin_bb23:
+    cbz x1, __L5211_hxlcl_sin_bb29 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb28 ; branch -> then
+__L5211_hxlcl_sin_bb23:
     ldp x0, x1, [sp, #224] ; hv load L14
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -16426,11 +16352,11 @@ __L7ff7_hxlcl_sin_bb23:
     stp x0, x1, [x15] ; hv store L116
     add x15, sp, #1856 ; hv frame base
     ldp x0, x1, [x15] ; hv load L116
-    cbz x1, __L7ff7_hxlcl_sin_bb26 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb25 ; branch -> then
-__L7ff7_hxlcl_sin_bb24:
-    b __L7ff7_hxlcl_sin_bb22 ; branch
-__L7ff7_hxlcl_sin_bb25:
+    cbz x1, __L5211_hxlcl_sin_bb26 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb25 ; branch -> then
+__L5211_hxlcl_sin_bb24:
+    b __L5211_hxlcl_sin_bb22 ; branch
+__L5211_hxlcl_sin_bb25:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt7@PAGE ; hv float pool page
@@ -16518,8 +16444,8 @@ __L7ff7_hxlcl_sin_bb25:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #3 ; hv const_int val
     stp x0, x1, [sp, #240] ; hv store L15
-    b __L7ff7_hxlcl_sin_bb27 ; branch
-__L7ff7_hxlcl_sin_bb26:
+    b __L5211_hxlcl_sin_bb27 ; branch
+__L5211_hxlcl_sin_bb26:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt7@PAGE ; hv float pool page
@@ -16608,16 +16534,16 @@ __L7ff7_hxlcl_sin_bb26:
     movz x1, #2 ; imm 0-15
     mvn x1, x1 ; hv const_int: negate
     stp x0, x1, [sp, #240] ; hv store L15
-    b __L7ff7_hxlcl_sin_bb27 ; branch
-__L7ff7_hxlcl_sin_bb27:
+    b __L5211_hxlcl_sin_bb27 ; branch
+__L5211_hxlcl_sin_bb27:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #336] ; hv store L21
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #256] ; hv store L16
-    b __L7ff7_hxlcl_sin_bb24 ; branch
-__L7ff7_hxlcl_sin_bb28:
+    b __L5211_hxlcl_sin_bb24 ; branch
+__L5211_hxlcl_sin_bb28:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #17979 ; imm 0-15
@@ -16705,9 +16631,9 @@ __L7ff7_hxlcl_sin_bb28:
     stp x0, x1, [x15] ; hv store L150
     add x15, sp, #2400 ; hv frame base
     ldp x0, x1, [x15] ; hv load L150
-    cbz x1, __L7ff7_hxlcl_sin_bb31 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb30 ; branch -> then
-__L7ff7_hxlcl_sin_bb29:
+    cbz x1, __L5211_hxlcl_sin_bb31 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb30 ; branch -> then
+__L5211_hxlcl_sin_bb29:
     ldp x0, x1, [sp, #256] ; hv load L16
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -16718,9 +16644,9 @@ __L7ff7_hxlcl_sin_bb29:
     stp x0, x1, [x15] ; hv store L172
     add x15, sp, #2752 ; hv frame base
     ldp x0, x1, [x15] ; hv load L172
-    cbz x1, __L7ff7_hxlcl_sin_bb36 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb35 ; branch -> then
-__L7ff7_hxlcl_sin_bb30:
+    cbz x1, __L5211_hxlcl_sin_bb36 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb35 ; branch -> then
+__L5211_hxlcl_sin_bb30:
     ldp x0, x1, [sp, #224] ; hv load L14
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -16731,11 +16657,11 @@ __L7ff7_hxlcl_sin_bb30:
     stp x0, x1, [x15] ; hv store L152
     add x15, sp, #2432 ; hv frame base
     ldp x0, x1, [x15] ; hv load L152
-    cbz x1, __L7ff7_hxlcl_sin_bb33 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb32 ; branch -> then
-__L7ff7_hxlcl_sin_bb31:
-    b __L7ff7_hxlcl_sin_bb29 ; branch
-__L7ff7_hxlcl_sin_bb32:
+    cbz x1, __L5211_hxlcl_sin_bb33 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb32 ; branch -> then
+__L5211_hxlcl_sin_bb31:
+    b __L5211_hxlcl_sin_bb29 ; branch
+__L5211_hxlcl_sin_bb32:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt9@PAGE ; hv float pool page
@@ -16823,8 +16749,8 @@ __L7ff7_hxlcl_sin_bb32:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #4 ; hv const_int val
     stp x0, x1, [sp, #240] ; hv store L15
-    b __L7ff7_hxlcl_sin_bb34 ; branch
-__L7ff7_hxlcl_sin_bb33:
+    b __L5211_hxlcl_sin_bb34 ; branch
+__L5211_hxlcl_sin_bb33:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt9@PAGE ; hv float pool page
@@ -16913,16 +16839,16 @@ __L7ff7_hxlcl_sin_bb33:
     movz x1, #3 ; imm 0-15
     mvn x1, x1 ; hv const_int: negate
     stp x0, x1, [sp, #240] ; hv store L15
-    b __L7ff7_hxlcl_sin_bb34 ; branch
-__L7ff7_hxlcl_sin_bb34:
+    b __L5211_hxlcl_sin_bb34 ; branch
+__L5211_hxlcl_sin_bb34:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #336] ; hv store L21
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #256] ; hv store L16
-    b __L7ff7_hxlcl_sin_bb31 ; branch
-__L7ff7_hxlcl_sin_bb35:
+    b __L5211_hxlcl_sin_bb31 ; branch
+__L5211_hxlcl_sin_bb35:
     ldp x0, x1, [sp, #96] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #8699 ; imm 0-15
@@ -16934,9 +16860,9 @@ __L7ff7_hxlcl_sin_bb35:
     stp x0, x1, [x15] ; hv store L174
     add x15, sp, #2784 ; hv frame base
     ldp x0, x1, [x15] ; hv load L174
-    cbz x1, __L7ff7_hxlcl_sin_bb38 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb37 ; branch -> then
-__L7ff7_hxlcl_sin_bb36:
+    cbz x1, __L5211_hxlcl_sin_bb38 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb37 ; branch -> then
+__L5211_hxlcl_sin_bb36:
     ldp x0, x1, [sp, #256] ; hv load L16
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -16947,9 +16873,9 @@ __L7ff7_hxlcl_sin_bb36:
     stp x0, x1, [x15] ; hv store L255
     add x15, sp, #4080 ; hv frame base
     ldp x0, x1, [x15] ; hv load L255
-    cbz x1, __L7ff7_hxlcl_sin_bb49 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb48 ; branch -> then
-__L7ff7_hxlcl_sin_bb37:
+    cbz x1, __L5211_hxlcl_sin_bb49 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb48 ; branch -> then
+__L5211_hxlcl_sin_bb37:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt11@PAGE ; hv float pool page
@@ -17080,11 +17006,11 @@ __L7ff7_hxlcl_sin_bb37:
     stp x0, x1, [x15] ; hv store L188
     add x15, sp, #3008 ; hv frame base
     ldp x0, x1, [x15] ; hv load L188
-    cbz x1, __L7ff7_hxlcl_sin_bb40 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb39 ; branch -> then
-__L7ff7_hxlcl_sin_bb38:
-    b __L7ff7_hxlcl_sin_bb36 ; branch
-__L7ff7_hxlcl_sin_bb39:
+    cbz x1, __L5211_hxlcl_sin_bb40 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb39 ; branch -> then
+__L5211_hxlcl_sin_bb38:
+    b __L5211_hxlcl_sin_bb36 ; branch
+__L5211_hxlcl_sin_bb39:
     ldp x0, x1, [sp, #240] ; hv load L15
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -17154,8 +17080,8 @@ __L7ff7_hxlcl_sin_bb39:
     add x15, sp, #3120 ; hv frame base
     ldp x0, x1, [x15] ; hv load L195
     stp x0, x1, [sp, #432] ; hv store L27
-    b __L7ff7_hxlcl_sin_bb43 ; branch
-__L7ff7_hxlcl_sin_bb40:
+    b __L5211_hxlcl_sin_bb43 ; branch
+__L5211_hxlcl_sin_bb40:
     add x15, sp, #2992 ; hv frame base
     ldp x0, x1, [x15] ; hv load L187
     movz x2, #1 ; hv const_float: TAG_FLOAT
@@ -17171,9 +17097,9 @@ __L7ff7_hxlcl_sin_bb40:
     stp x0, x1, [x15] ; hv store L196
     add x15, sp, #3136 ; hv frame base
     ldp x0, x1, [x15] ; hv load L196
-    cbz x1, __L7ff7_hxlcl_sin_bb42 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb41 ; branch -> then
-__L7ff7_hxlcl_sin_bb41:
+    cbz x1, __L5211_hxlcl_sin_bb42 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb41 ; branch -> then
+__L5211_hxlcl_sin_bb41:
     ldp x0, x1, [sp, #240] ; hv load L15
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -17243,10 +17169,10 @@ __L7ff7_hxlcl_sin_bb41:
     add x15, sp, #3248 ; hv frame base
     ldp x0, x1, [x15] ; hv load L203
     stp x0, x1, [sp, #432] ; hv store L27
-    b __L7ff7_hxlcl_sin_bb42 ; branch
-__L7ff7_hxlcl_sin_bb42:
-    b __L7ff7_hxlcl_sin_bb43 ; branch
-__L7ff7_hxlcl_sin_bb43:
+    b __L5211_hxlcl_sin_bb42 ; branch
+__L5211_hxlcl_sin_bb42:
+    b __L5211_hxlcl_sin_bb43 ; branch
+__L5211_hxlcl_sin_bb43:
     ldp x0, x1, [sp, #400] ; hv load L25
     ldp x2, x3, [sp, #432] ; hv load L27
     fmov d0, x1 ; __hx_payload_fsub: d0 = a.f
@@ -17326,9 +17252,9 @@ __L7ff7_hxlcl_sin_bb43:
     stp x0, x1, [x15] ; hv store L214
     add x15, sp, #3424 ; hv frame base
     ldp x0, x1, [x15] ; hv load L214
-    cbz x1, __L7ff7_hxlcl_sin_bb45 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb44 ; branch -> then
-__L7ff7_hxlcl_sin_bb44:
+    cbz x1, __L5211_hxlcl_sin_bb45 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb44 ; branch -> then
+__L5211_hxlcl_sin_bb44:
     ldp x0, x1, [sp, #400] ; hv load L25
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -17494,9 +17420,9 @@ __L7ff7_hxlcl_sin_bb44:
     stp x0, x1, [x15] ; hv store L235
     add x15, sp, #3760 ; hv frame base
     ldp x0, x1, [x15] ; hv load L235
-    cbz x1, __L7ff7_hxlcl_sin_bb47 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb46 ; branch -> then
-__L7ff7_hxlcl_sin_bb45:
+    cbz x1, __L5211_hxlcl_sin_bb47 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb46 ; branch -> then
+__L5211_hxlcl_sin_bb45:
     ldp x0, x1, [sp, #400] ; hv load L25
     ldp x2, x3, [sp, #320] ; hv load L20
     fmov d0, x1 ; __hx_payload_fsub: d0 = a.f
@@ -17551,8 +17477,8 @@ __L7ff7_hxlcl_sin_bb45:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #256] ; hv store L16
-    b __L7ff7_hxlcl_sin_bb38 ; branch
-__L7ff7_hxlcl_sin_bb46:
+    b __L5211_hxlcl_sin_bb38 ; branch
+__L5211_hxlcl_sin_bb46:
     ldp x0, x1, [sp, #400] ; hv load L25
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -17662,10 +17588,10 @@ __L7ff7_hxlcl_sin_bb46:
     add x15, sp, #3968 ; hv frame base
     ldp x0, x1, [x15] ; hv load L248
     stp x0, x1, [sp, #320] ; hv store L20
-    b __L7ff7_hxlcl_sin_bb47 ; branch
-__L7ff7_hxlcl_sin_bb47:
-    b __L7ff7_hxlcl_sin_bb45 ; branch
-__L7ff7_hxlcl_sin_bb48:
+    b __L5211_hxlcl_sin_bb47 ; branch
+__L5211_hxlcl_sin_bb47:
+    b __L5211_hxlcl_sin_bb45 ; branch
+__L5211_hxlcl_sin_bb48:
     ldp x0, x1, [sp, #0] ; hv load L0
     ldp x2, x3, [sp, #0] ; hv load L0
     fmov d0, x1 ; __hx_payload_fsub: d0 = a.f
@@ -17689,7 +17615,7 @@ __L7ff7_hxlcl_sin_bb48:
     add sp, sp, x15 ; sp adj (big frame)
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_sin_bb49:
+__L5211_hxlcl_sin_bb49:
     ldp x0, x1, [sp, #240] ; hv load L15
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #3 ; hv const_int val
@@ -17728,16 +17654,16 @@ __L7ff7_hxlcl_sin_bb49:
     movz x15, #4208 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L263
-    cbz x1, __L7ff7_hxlcl_sin_bb51 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb50 ; branch -> then
-__L7ff7_hxlcl_sin_bb50:
+    cbz x1, __L5211_hxlcl_sin_bb51 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb50 ; branch -> then
+__L5211_hxlcl_sin_bb50:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     movz x15, #4176 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     stp x0, x1, [x15] ; hv store L261
-    b __L7ff7_hxlcl_sin_bb51 ; branch
-__L7ff7_hxlcl_sin_bb51:
+    b __L5211_hxlcl_sin_bb51 ; branch
+__L5211_hxlcl_sin_bb51:
     movz x15, #4160 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L260
@@ -17752,16 +17678,16 @@ __L7ff7_hxlcl_sin_bb51:
     movz x15, #4240 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L265
-    cbz x1, __L7ff7_hxlcl_sin_bb53 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb52 ; branch -> then
-__L7ff7_hxlcl_sin_bb52:
+    cbz x1, __L5211_hxlcl_sin_bb53 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb52 ; branch -> then
+__L5211_hxlcl_sin_bb52:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     movz x15, #4192 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     stp x0, x1, [x15] ; hv store L262
-    b __L7ff7_hxlcl_sin_bb53 ; branch
-__L7ff7_hxlcl_sin_bb53:
+    b __L5211_hxlcl_sin_bb53 ; branch
+__L5211_hxlcl_sin_bb53:
     movz x15, #4160 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L260
@@ -17776,9 +17702,9 @@ __L7ff7_hxlcl_sin_bb53:
     movz x15, #4272 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L267
-    cbz x1, __L7ff7_hxlcl_sin_bb55 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb54 ; branch -> then
-__L7ff7_hxlcl_sin_bb54:
+    cbz x1, __L5211_hxlcl_sin_bb55 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb54 ; branch -> then
+__L5211_hxlcl_sin_bb54:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     movz x15, #4176 ; imm 0-15
@@ -17789,8 +17715,8 @@ __L7ff7_hxlcl_sin_bb54:
     movz x15, #4192 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     stp x0, x1, [x15] ; hv store L262
-    b __L7ff7_hxlcl_sin_bb55 ; branch
-__L7ff7_hxlcl_sin_bb55:
+    b __L5211_hxlcl_sin_bb55 ; branch
+__L5211_hxlcl_sin_bb55:
     ldp x0, x1, [sp, #0] ; hv load L0
     ldp x2, x3, [sp, #0] ; hv load L0
     fmov d0, x1 ; __hx_payload_fsub: d0 = a.f
@@ -17821,9 +17747,9 @@ __L7ff7_hxlcl_sin_bb55:
     movz x15, #4336 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L271
-    cbz x1, __L7ff7_hxlcl_sin_bb57 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb56 ; branch -> then
-__L7ff7_hxlcl_sin_bb56:
+    cbz x1, __L5211_hxlcl_sin_bb57 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb56 ; branch -> then
+__L5211_hxlcl_sin_bb56:
     ldp x0, x1, [sp, #288] ; hv load L18
     ldp x2, x3, [sp, #288] ; hv load L18
     fmov d0, x1 ; __hx_payload_fmul: d0 = a.f
@@ -18075,9 +18001,9 @@ __L7ff7_hxlcl_sin_bb56:
     movz x15, #4752 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L297
-    cbz x1, __L7ff7_hxlcl_sin_bb59 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb58 ; branch -> then
-__L7ff7_hxlcl_sin_bb57:
+    cbz x1, __L5211_hxlcl_sin_bb59 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb58 ; branch -> then
+__L5211_hxlcl_sin_bb57:
     ldp x0, x1, [sp, #0] ; hv load L0
     ldp x2, x3, [sp, #0] ; hv load L0
     fmov d0, x1 ; __hx_payload_fsub: d0 = a.f
@@ -18108,9 +18034,9 @@ __L7ff7_hxlcl_sin_bb57:
     movz x15, #5168 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L323
-    cbz x1, __L7ff7_hxlcl_sin_bb62 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb61 ; branch -> then
-__L7ff7_hxlcl_sin_bb58:
+    cbz x1, __L5211_hxlcl_sin_bb62 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb61 ; branch -> then
+__L5211_hxlcl_sin_bb58:
     movz x15, #4384 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L274
@@ -18190,8 +18116,8 @@ __L7ff7_hxlcl_sin_bb58:
     movz x15, #4320 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     stp x0, x1, [x15] ; hv store L270
-    b __L7ff7_hxlcl_sin_bb60 ; branch
-__L7ff7_hxlcl_sin_bb59:
+    b __L5211_hxlcl_sin_bb60 ; branch
+__L5211_hxlcl_sin_bb59:
     movz x0, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt26@PAGE ; hv float pool page
     add x14, x14, .LCflt26@PAGEOFF ; hv float pool off
@@ -18348,10 +18274,10 @@ __L7ff7_hxlcl_sin_bb59:
     movz x15, #4320 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     stp x0, x1, [x15] ; hv store L270
-    b __L7ff7_hxlcl_sin_bb60 ; branch
-__L7ff7_hxlcl_sin_bb60:
-    b __L7ff7_hxlcl_sin_bb57 ; branch
-__L7ff7_hxlcl_sin_bb61:
+    b __L5211_hxlcl_sin_bb60 ; branch
+__L5211_hxlcl_sin_bb60:
+    b __L5211_hxlcl_sin_bb57 ; branch
+__L5211_hxlcl_sin_bb61:
     ldp x0, x1, [sp, #288] ; hv load L18
     ldp x2, x3, [sp, #288] ; hv load L18
     fmov d0, x1 ; __hx_payload_fmul: d0 = a.f
@@ -18813,8 +18739,8 @@ __L7ff7_hxlcl_sin_bb61:
     movz x15, #5152 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     stp x0, x1, [x15] ; hv store L322
-    b __L7ff7_hxlcl_sin_bb62 ; branch
-__L7ff7_hxlcl_sin_bb62:
+    b __L5211_hxlcl_sin_bb62 ; branch
+__L5211_hxlcl_sin_bb62:
     movz x15, #4320 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L270
@@ -18845,9 +18771,9 @@ __L7ff7_hxlcl_sin_bb62:
     movz x15, #5952 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L372
-    cbz x1, __L7ff7_hxlcl_sin_bb64 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb63 ; branch -> then
-__L7ff7_hxlcl_sin_bb63:
+    cbz x1, __L5211_hxlcl_sin_bb64 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb63 ; branch -> then
+__L5211_hxlcl_sin_bb63:
     movz x15, #5152 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L322
@@ -18864,8 +18790,8 @@ __L7ff7_hxlcl_sin_bb63:
     movz x15, #5936 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     stp x0, x1, [x15] ; hv store L371
-    b __L7ff7_hxlcl_sin_bb64 ; branch
-__L7ff7_hxlcl_sin_bb64:
+    b __L5211_hxlcl_sin_bb64 ; branch
+__L5211_hxlcl_sin_bb64:
     movz x15, #4192 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L262
@@ -18880,9 +18806,9 @@ __L7ff7_hxlcl_sin_bb64:
     movz x15, #6000 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L375
-    cbz x1, __L7ff7_hxlcl_sin_bb66 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_sin_bb65 ; branch -> then
-__L7ff7_hxlcl_sin_bb65:
+    cbz x1, __L5211_hxlcl_sin_bb66 ; br_cond: !payload -> else
+    b __L5211_hxlcl_sin_bb65 ; branch -> then
+__L5211_hxlcl_sin_bb65:
     movz x0, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt2@PAGE ; hv float pool page
     add x14, x14, .LCflt2@PAGEOFF ; hv float pool off
@@ -18911,7 +18837,7 @@ __L7ff7_hxlcl_sin_bb65:
     add sp, sp, x15 ; sp adj (big frame)
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_sin_bb66:
+__L5211_hxlcl_sin_bb66:
     movz x15, #5936 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L371
@@ -18919,7 +18845,6 @@ __L7ff7_hxlcl_sin_bb66:
     add sp, sp, x15 ; sp adj (big frame)
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_cos
     .p2align 2
 _hxlcl_cos:
     .loc 1 3804 0
@@ -18928,7 +18853,7 @@ _hxlcl_cos:
     movz x15, #5936 ; imm 0-15
     sub sp, sp, x15 ; sp adj (big frame)
     stp x0, x1, [sp, #16] ; ingress param 0
-__L7ff7_hxlcl_cos_bb0:
+__L5211_hxlcl_cos_bb0:
     ldp x0, x1, [sp, #16] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -19037,9 +18962,9 @@ __L7ff7_hxlcl_cos_bb0:
     bl _hexa_bool ; __hx_payload_ule: box bool
     stp x0, x1, [sp, #400] ; hv store L25
     ldp x0, x1, [sp, #400] ; hv load L25
-    cbz x1, __L7ff7_hxlcl_cos_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb1 ; branch -> then
-__L7ff7_hxlcl_cos_bb1:
+    cbz x1, __L5211_hxlcl_cos_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb1 ; branch -> then
+__L5211_hxlcl_cos_bb1:
     ldp x0, x1, [sp, #112] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #65182 ; imm 0-15
@@ -19049,9 +18974,9 @@ __L7ff7_hxlcl_cos_bb1:
     bl _hexa_bool ; __hx_payload_ult: box bool
     stp x0, x1, [sp, #432] ; hv store L27
     ldp x0, x1, [sp, #432] ; hv load L27
-    cbz x1, __L7ff7_hxlcl_cos_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb3 ; branch -> then
-__L7ff7_hxlcl_cos_bb2:
+    cbz x1, __L5211_hxlcl_cos_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb3 ; branch -> then
+__L5211_hxlcl_cos_bb2:
     ldp x0, x1, [sp, #176] ; hv load L10
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -19062,9 +18987,9 @@ __L7ff7_hxlcl_cos_bb2:
     stp x0, x1, [x15] ; hv store L32
     add x15, sp, #512 ; hv frame base
     ldp x0, x1, [x15] ; hv load L32
-    cbz x1, __L7ff7_hxlcl_cos_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb5 ; branch -> then
-__L7ff7_hxlcl_cos_bb3:
+    cbz x1, __L5211_hxlcl_cos_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb5 ; branch -> then
+__L5211_hxlcl_cos_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     scvtf d0, x1 ; __hx_payload_i2f: d0 = (double)v.i
@@ -19078,7 +19003,7 @@ __L7ff7_hxlcl_cos_bb3:
     add sp, sp, x15 ; sp adj (big frame)
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_cos_bb4:
+__L5211_hxlcl_cos_bb4:
     ldp x0, x1, [sp, #48] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -19096,8 +19021,8 @@ __L7ff7_hxlcl_cos_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #176] ; hv store L10
-    b __L7ff7_hxlcl_cos_bb2 ; branch
-__L7ff7_hxlcl_cos_bb5:
+    b __L5211_hxlcl_cos_bb2 ; branch
+__L5211_hxlcl_cos_bb5:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; imm 0-15
     movk x1, #32752, lsl #16 ; imm 16-31
@@ -19109,9 +19034,9 @@ __L7ff7_hxlcl_cos_bb5:
     stp x0, x1, [x15] ; hv store L34
     add x15, sp, #544 ; hv frame base
     ldp x0, x1, [x15] ; hv load L34
-    cbz x1, __L7ff7_hxlcl_cos_bb8 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb7 ; branch -> then
-__L7ff7_hxlcl_cos_bb6:
+    cbz x1, __L5211_hxlcl_cos_bb8 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb7 ; branch -> then
+__L5211_hxlcl_cos_bb6:
     ldp x0, x1, [sp, #112] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #65535 ; imm 0-15
@@ -19211,9 +19136,9 @@ __L7ff7_hxlcl_cos_bb6:
     stp x0, x1, [x15] ; hv store L52
     add x15, sp, #832 ; hv frame base
     ldp x0, x1, [x15] ; hv load L52
-    cbz x1, __L7ff7_hxlcl_cos_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb9 ; branch -> then
-__L7ff7_hxlcl_cos_bb7:
+    cbz x1, __L5211_hxlcl_cos_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb9 ; branch -> then
+__L5211_hxlcl_cos_bb7:
     ldp x0, x1, [sp, #16] ; hv load L0
     ldp x2, x3, [sp, #16] ; hv load L0
     fmov d0, x1 ; __hx_payload_fsub: d0 = a.f
@@ -19233,9 +19158,9 @@ __L7ff7_hxlcl_cos_bb7:
     add sp, sp, x15 ; sp adj (big frame)
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_cos_bb8:
-    b __L7ff7_hxlcl_cos_bb6 ; branch
-__L7ff7_hxlcl_cos_bb9:
+__L5211_hxlcl_cos_bb8:
+    b __L5211_hxlcl_cos_bb6 ; branch
+__L5211_hxlcl_cos_bb9:
     ldp x0, x1, [sp, #112] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #55676 ; imm 0-15
@@ -19272,9 +19197,9 @@ __L7ff7_hxlcl_cos_bb9:
     stp x0, x1, [x15] ; hv store L58
     add x15, sp, #928 ; hv frame base
     ldp x0, x1, [x15] ; hv load L58
-    cbz x1, __L7ff7_hxlcl_cos_bb12 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb11 ; branch -> then
-__L7ff7_hxlcl_cos_bb10:
+    cbz x1, __L5211_hxlcl_cos_bb12 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb11 ; branch -> then
+__L5211_hxlcl_cos_bb10:
     ldp x0, x1, [sp, #176] ; hv load L10
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -19285,9 +19210,9 @@ __L7ff7_hxlcl_cos_bb10:
     stp x0, x1, [x15] ; hv store L80
     add x15, sp, #1280 ; hv frame base
     ldp x0, x1, [x15] ; hv load L80
-    cbz x1, __L7ff7_hxlcl_cos_bb17 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb16 ; branch -> then
-__L7ff7_hxlcl_cos_bb11:
+    cbz x1, __L5211_hxlcl_cos_bb17 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb16 ; branch -> then
+__L5211_hxlcl_cos_bb11:
     ldp x0, x1, [sp, #144] ; hv load L8
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -19298,11 +19223,11 @@ __L7ff7_hxlcl_cos_bb11:
     stp x0, x1, [x15] ; hv store L60
     add x15, sp, #960 ; hv frame base
     ldp x0, x1, [x15] ; hv load L60
-    cbz x1, __L7ff7_hxlcl_cos_bb14 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb13 ; branch -> then
-__L7ff7_hxlcl_cos_bb12:
-    b __L7ff7_hxlcl_cos_bb10 ; branch
-__L7ff7_hxlcl_cos_bb13:
+    cbz x1, __L5211_hxlcl_cos_bb14 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb13 ; branch -> then
+__L5211_hxlcl_cos_bb12:
+    b __L5211_hxlcl_cos_bb10 ; branch
+__L5211_hxlcl_cos_bb13:
     ldp x0, x1, [sp, #16] ; hv load L0
     movz x2, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt3@PAGE ; hv float pool page
@@ -19390,8 +19315,8 @@ __L7ff7_hxlcl_cos_bb13:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #160] ; hv store L9
-    b __L7ff7_hxlcl_cos_bb15 ; branch
-__L7ff7_hxlcl_cos_bb14:
+    b __L5211_hxlcl_cos_bb15 ; branch
+__L5211_hxlcl_cos_bb14:
     ldp x0, x1, [sp, #16] ; hv load L0
     movz x2, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt3@PAGE ; hv float pool page
@@ -19480,16 +19405,16 @@ __L7ff7_hxlcl_cos_bb14:
     movz x1, #0 ; imm 0-15
     mvn x1, x1 ; hv const_int: negate
     stp x0, x1, [sp, #160] ; hv store L9
-    b __L7ff7_hxlcl_cos_bb15 ; branch
-__L7ff7_hxlcl_cos_bb15:
+    b __L5211_hxlcl_cos_bb15 ; branch
+__L5211_hxlcl_cos_bb15:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #256] ; hv store L15
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #176] ; hv store L10
-    b __L7ff7_hxlcl_cos_bb12 ; branch
-__L7ff7_hxlcl_cos_bb16:
+    b __L5211_hxlcl_cos_bb12 ; branch
+__L5211_hxlcl_cos_bb16:
     ldp x0, x1, [sp, #112] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #27258 ; imm 0-15
@@ -19526,9 +19451,9 @@ __L7ff7_hxlcl_cos_bb16:
     stp x0, x1, [x15] ; hv store L86
     add x15, sp, #1376 ; hv frame base
     ldp x0, x1, [x15] ; hv load L86
-    cbz x1, __L7ff7_hxlcl_cos_bb19 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb18 ; branch -> then
-__L7ff7_hxlcl_cos_bb17:
+    cbz x1, __L5211_hxlcl_cos_bb19 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb18 ; branch -> then
+__L5211_hxlcl_cos_bb17:
     ldp x0, x1, [sp, #176] ; hv load L10
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -19539,9 +19464,9 @@ __L7ff7_hxlcl_cos_bb17:
     stp x0, x1, [x15] ; hv store L108
     add x15, sp, #1728 ; hv frame base
     ldp x0, x1, [x15] ; hv load L108
-    cbz x1, __L7ff7_hxlcl_cos_bb24 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb23 ; branch -> then
-__L7ff7_hxlcl_cos_bb18:
+    cbz x1, __L5211_hxlcl_cos_bb24 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb23 ; branch -> then
+__L5211_hxlcl_cos_bb18:
     ldp x0, x1, [sp, #144] ; hv load L8
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -19552,11 +19477,11 @@ __L7ff7_hxlcl_cos_bb18:
     stp x0, x1, [x15] ; hv store L88
     add x15, sp, #1408 ; hv frame base
     ldp x0, x1, [x15] ; hv load L88
-    cbz x1, __L7ff7_hxlcl_cos_bb21 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb20 ; branch -> then
-__L7ff7_hxlcl_cos_bb19:
-    b __L7ff7_hxlcl_cos_bb17 ; branch
-__L7ff7_hxlcl_cos_bb20:
+    cbz x1, __L5211_hxlcl_cos_bb21 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb20 ; branch -> then
+__L5211_hxlcl_cos_bb19:
+    b __L5211_hxlcl_cos_bb17 ; branch
+__L5211_hxlcl_cos_bb20:
     ldp x0, x1, [sp, #16] ; hv load L0
     movz x2, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt5@PAGE ; hv float pool page
@@ -19644,8 +19569,8 @@ __L7ff7_hxlcl_cos_bb20:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #2 ; hv const_int val
     stp x0, x1, [sp, #160] ; hv store L9
-    b __L7ff7_hxlcl_cos_bb22 ; branch
-__L7ff7_hxlcl_cos_bb21:
+    b __L5211_hxlcl_cos_bb22 ; branch
+__L5211_hxlcl_cos_bb21:
     ldp x0, x1, [sp, #16] ; hv load L0
     movz x2, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt5@PAGE ; hv float pool page
@@ -19734,16 +19659,16 @@ __L7ff7_hxlcl_cos_bb21:
     movz x1, #1 ; imm 0-15
     mvn x1, x1 ; hv const_int: negate
     stp x0, x1, [sp, #160] ; hv store L9
-    b __L7ff7_hxlcl_cos_bb22 ; branch
-__L7ff7_hxlcl_cos_bb22:
+    b __L5211_hxlcl_cos_bb22 ; branch
+__L5211_hxlcl_cos_bb22:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #256] ; hv store L15
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #176] ; hv store L10
-    b __L7ff7_hxlcl_cos_bb19 ; branch
-__L7ff7_hxlcl_cos_bb23:
+    b __L5211_hxlcl_cos_bb19 ; branch
+__L5211_hxlcl_cos_bb23:
     ldp x0, x1, [sp, #112] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #64956 ; imm 0-15
@@ -19780,9 +19705,9 @@ __L7ff7_hxlcl_cos_bb23:
     stp x0, x1, [x15] ; hv store L114
     add x15, sp, #1824 ; hv frame base
     ldp x0, x1, [x15] ; hv load L114
-    cbz x1, __L7ff7_hxlcl_cos_bb26 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb25 ; branch -> then
-__L7ff7_hxlcl_cos_bb24:
+    cbz x1, __L5211_hxlcl_cos_bb26 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb25 ; branch -> then
+__L5211_hxlcl_cos_bb24:
     ldp x0, x1, [sp, #176] ; hv load L10
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -19793,9 +19718,9 @@ __L7ff7_hxlcl_cos_bb24:
     stp x0, x1, [x15] ; hv store L136
     add x15, sp, #2176 ; hv frame base
     ldp x0, x1, [x15] ; hv load L136
-    cbz x1, __L7ff7_hxlcl_cos_bb31 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb30 ; branch -> then
-__L7ff7_hxlcl_cos_bb25:
+    cbz x1, __L5211_hxlcl_cos_bb31 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb30 ; branch -> then
+__L5211_hxlcl_cos_bb25:
     ldp x0, x1, [sp, #144] ; hv load L8
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -19806,11 +19731,11 @@ __L7ff7_hxlcl_cos_bb25:
     stp x0, x1, [x15] ; hv store L116
     add x15, sp, #1856 ; hv frame base
     ldp x0, x1, [x15] ; hv load L116
-    cbz x1, __L7ff7_hxlcl_cos_bb28 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb27 ; branch -> then
-__L7ff7_hxlcl_cos_bb26:
-    b __L7ff7_hxlcl_cos_bb24 ; branch
-__L7ff7_hxlcl_cos_bb27:
+    cbz x1, __L5211_hxlcl_cos_bb28 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb27 ; branch -> then
+__L5211_hxlcl_cos_bb26:
+    b __L5211_hxlcl_cos_bb24 ; branch
+__L5211_hxlcl_cos_bb27:
     ldp x0, x1, [sp, #16] ; hv load L0
     movz x2, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt7@PAGE ; hv float pool page
@@ -19898,8 +19823,8 @@ __L7ff7_hxlcl_cos_bb27:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #3 ; hv const_int val
     stp x0, x1, [sp, #160] ; hv store L9
-    b __L7ff7_hxlcl_cos_bb29 ; branch
-__L7ff7_hxlcl_cos_bb28:
+    b __L5211_hxlcl_cos_bb29 ; branch
+__L5211_hxlcl_cos_bb28:
     ldp x0, x1, [sp, #16] ; hv load L0
     movz x2, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt7@PAGE ; hv float pool page
@@ -19988,16 +19913,16 @@ __L7ff7_hxlcl_cos_bb28:
     movz x1, #2 ; imm 0-15
     mvn x1, x1 ; hv const_int: negate
     stp x0, x1, [sp, #160] ; hv store L9
-    b __L7ff7_hxlcl_cos_bb29 ; branch
-__L7ff7_hxlcl_cos_bb29:
+    b __L5211_hxlcl_cos_bb29 ; branch
+__L5211_hxlcl_cos_bb29:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #256] ; hv store L15
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #176] ; hv store L10
-    b __L7ff7_hxlcl_cos_bb26 ; branch
-__L7ff7_hxlcl_cos_bb30:
+    b __L5211_hxlcl_cos_bb26 ; branch
+__L5211_hxlcl_cos_bb30:
     ldp x0, x1, [sp, #112] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #17979 ; imm 0-15
@@ -20034,9 +19959,9 @@ __L7ff7_hxlcl_cos_bb30:
     stp x0, x1, [x15] ; hv store L142
     add x15, sp, #2272 ; hv frame base
     ldp x0, x1, [x15] ; hv load L142
-    cbz x1, __L7ff7_hxlcl_cos_bb33 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb32 ; branch -> then
-__L7ff7_hxlcl_cos_bb31:
+    cbz x1, __L5211_hxlcl_cos_bb33 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb32 ; branch -> then
+__L5211_hxlcl_cos_bb31:
     ldp x0, x1, [sp, #176] ; hv load L10
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -20047,9 +19972,9 @@ __L7ff7_hxlcl_cos_bb31:
     stp x0, x1, [x15] ; hv store L164
     add x15, sp, #2624 ; hv frame base
     ldp x0, x1, [x15] ; hv load L164
-    cbz x1, __L7ff7_hxlcl_cos_bb38 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb37 ; branch -> then
-__L7ff7_hxlcl_cos_bb32:
+    cbz x1, __L5211_hxlcl_cos_bb38 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb37 ; branch -> then
+__L5211_hxlcl_cos_bb32:
     ldp x0, x1, [sp, #144] ; hv load L8
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -20060,11 +19985,11 @@ __L7ff7_hxlcl_cos_bb32:
     stp x0, x1, [x15] ; hv store L144
     add x15, sp, #2304 ; hv frame base
     ldp x0, x1, [x15] ; hv load L144
-    cbz x1, __L7ff7_hxlcl_cos_bb35 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb34 ; branch -> then
-__L7ff7_hxlcl_cos_bb33:
-    b __L7ff7_hxlcl_cos_bb31 ; branch
-__L7ff7_hxlcl_cos_bb34:
+    cbz x1, __L5211_hxlcl_cos_bb35 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb34 ; branch -> then
+__L5211_hxlcl_cos_bb33:
+    b __L5211_hxlcl_cos_bb31 ; branch
+__L5211_hxlcl_cos_bb34:
     ldp x0, x1, [sp, #16] ; hv load L0
     movz x2, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt9@PAGE ; hv float pool page
@@ -20152,8 +20077,8 @@ __L7ff7_hxlcl_cos_bb34:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #4 ; hv const_int val
     stp x0, x1, [sp, #160] ; hv store L9
-    b __L7ff7_hxlcl_cos_bb36 ; branch
-__L7ff7_hxlcl_cos_bb35:
+    b __L5211_hxlcl_cos_bb36 ; branch
+__L5211_hxlcl_cos_bb35:
     ldp x0, x1, [sp, #16] ; hv load L0
     movz x2, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt9@PAGE ; hv float pool page
@@ -20242,16 +20167,16 @@ __L7ff7_hxlcl_cos_bb35:
     movz x1, #3 ; imm 0-15
     mvn x1, x1 ; hv const_int: negate
     stp x0, x1, [sp, #160] ; hv store L9
-    b __L7ff7_hxlcl_cos_bb36 ; branch
-__L7ff7_hxlcl_cos_bb36:
+    b __L5211_hxlcl_cos_bb36 ; branch
+__L5211_hxlcl_cos_bb36:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #256] ; hv store L15
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #176] ; hv store L10
-    b __L7ff7_hxlcl_cos_bb33 ; branch
-__L7ff7_hxlcl_cos_bb37:
+    b __L5211_hxlcl_cos_bb33 ; branch
+__L5211_hxlcl_cos_bb37:
     ldp x0, x1, [sp, #112] ; hv load L6
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #8699 ; imm 0-15
@@ -20263,9 +20188,9 @@ __L7ff7_hxlcl_cos_bb37:
     stp x0, x1, [x15] ; hv store L166
     add x15, sp, #2656 ; hv frame base
     ldp x0, x1, [x15] ; hv load L166
-    cbz x1, __L7ff7_hxlcl_cos_bb40 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb39 ; branch -> then
-__L7ff7_hxlcl_cos_bb38:
+    cbz x1, __L5211_hxlcl_cos_bb40 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb39 ; branch -> then
+__L5211_hxlcl_cos_bb38:
     ldp x0, x1, [sp, #176] ; hv load L10
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -20276,9 +20201,9 @@ __L7ff7_hxlcl_cos_bb38:
     stp x0, x1, [x15] ; hv store L247
     add x15, sp, #3952 ; hv frame base
     ldp x0, x1, [x15] ; hv load L247
-    cbz x1, __L7ff7_hxlcl_cos_bb51 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb50 ; branch -> then
-__L7ff7_hxlcl_cos_bb39:
+    cbz x1, __L5211_hxlcl_cos_bb51 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb50 ; branch -> then
+__L5211_hxlcl_cos_bb39:
     ldp x0, x1, [sp, #16] ; hv load L0
     movz x2, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt11@PAGE ; hv float pool page
@@ -20409,11 +20334,11 @@ __L7ff7_hxlcl_cos_bb39:
     stp x0, x1, [x15] ; hv store L180
     add x15, sp, #2880 ; hv frame base
     ldp x0, x1, [x15] ; hv load L180
-    cbz x1, __L7ff7_hxlcl_cos_bb42 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb41 ; branch -> then
-__L7ff7_hxlcl_cos_bb40:
-    b __L7ff7_hxlcl_cos_bb38 ; branch
-__L7ff7_hxlcl_cos_bb41:
+    cbz x1, __L5211_hxlcl_cos_bb42 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb41 ; branch -> then
+__L5211_hxlcl_cos_bb40:
+    b __L5211_hxlcl_cos_bb38 ; branch
+__L5211_hxlcl_cos_bb41:
     ldp x0, x1, [sp, #160] ; hv load L9
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -20483,8 +20408,8 @@ __L7ff7_hxlcl_cos_bb41:
     add x15, sp, #2992 ; hv frame base
     ldp x0, x1, [x15] ; hv load L187
     stp x0, x1, [sp, #352] ; hv store L21
-    b __L7ff7_hxlcl_cos_bb45 ; branch
-__L7ff7_hxlcl_cos_bb42:
+    b __L5211_hxlcl_cos_bb45 ; branch
+__L5211_hxlcl_cos_bb42:
     add x15, sp, #2864 ; hv frame base
     ldp x0, x1, [x15] ; hv load L179
     movz x2, #1 ; hv const_float: TAG_FLOAT
@@ -20500,9 +20425,9 @@ __L7ff7_hxlcl_cos_bb42:
     stp x0, x1, [x15] ; hv store L188
     add x15, sp, #3008 ; hv frame base
     ldp x0, x1, [x15] ; hv load L188
-    cbz x1, __L7ff7_hxlcl_cos_bb44 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb43 ; branch -> then
-__L7ff7_hxlcl_cos_bb43:
+    cbz x1, __L5211_hxlcl_cos_bb44 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb43 ; branch -> then
+__L5211_hxlcl_cos_bb43:
     ldp x0, x1, [sp, #160] ; hv load L9
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -20572,10 +20497,10 @@ __L7ff7_hxlcl_cos_bb43:
     add x15, sp, #3120 ; hv frame base
     ldp x0, x1, [x15] ; hv load L195
     stp x0, x1, [sp, #352] ; hv store L21
-    b __L7ff7_hxlcl_cos_bb44 ; branch
-__L7ff7_hxlcl_cos_bb44:
-    b __L7ff7_hxlcl_cos_bb45 ; branch
-__L7ff7_hxlcl_cos_bb45:
+    b __L5211_hxlcl_cos_bb44 ; branch
+__L5211_hxlcl_cos_bb44:
+    b __L5211_hxlcl_cos_bb45 ; branch
+__L5211_hxlcl_cos_bb45:
     ldp x0, x1, [sp, #320] ; hv load L19
     ldp x2, x3, [sp, #352] ; hv load L21
     fmov d0, x1 ; __hx_payload_fsub: d0 = a.f
@@ -20655,9 +20580,9 @@ __L7ff7_hxlcl_cos_bb45:
     stp x0, x1, [x15] ; hv store L206
     add x15, sp, #3296 ; hv frame base
     ldp x0, x1, [x15] ; hv load L206
-    cbz x1, __L7ff7_hxlcl_cos_bb47 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb46 ; branch -> then
-__L7ff7_hxlcl_cos_bb46:
+    cbz x1, __L5211_hxlcl_cos_bb47 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb46 ; branch -> then
+__L5211_hxlcl_cos_bb46:
     ldp x0, x1, [sp, #320] ; hv load L19
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -20823,9 +20748,9 @@ __L7ff7_hxlcl_cos_bb46:
     stp x0, x1, [x15] ; hv store L227
     add x15, sp, #3632 ; hv frame base
     ldp x0, x1, [x15] ; hv load L227
-    cbz x1, __L7ff7_hxlcl_cos_bb49 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb48 ; branch -> then
-__L7ff7_hxlcl_cos_bb47:
+    cbz x1, __L5211_hxlcl_cos_bb49 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb48 ; branch -> then
+__L5211_hxlcl_cos_bb47:
     ldp x0, x1, [sp, #320] ; hv load L19
     ldp x2, x3, [sp, #240] ; hv load L14
     fmov d0, x1 ; __hx_payload_fsub: d0 = a.f
@@ -20880,8 +20805,8 @@ __L7ff7_hxlcl_cos_bb47:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #176] ; hv store L10
-    b __L7ff7_hxlcl_cos_bb40 ; branch
-__L7ff7_hxlcl_cos_bb48:
+    b __L5211_hxlcl_cos_bb40 ; branch
+__L5211_hxlcl_cos_bb48:
     ldp x0, x1, [sp, #320] ; hv load L19
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -20991,10 +20916,10 @@ __L7ff7_hxlcl_cos_bb48:
     add x15, sp, #3840 ; hv frame base
     ldp x0, x1, [x15] ; hv load L240
     stp x0, x1, [sp, #240] ; hv store L14
-    b __L7ff7_hxlcl_cos_bb49 ; branch
-__L7ff7_hxlcl_cos_bb49:
-    b __L7ff7_hxlcl_cos_bb47 ; branch
-__L7ff7_hxlcl_cos_bb50:
+    b __L5211_hxlcl_cos_bb49 ; branch
+__L5211_hxlcl_cos_bb49:
+    b __L5211_hxlcl_cos_bb47 ; branch
+__L5211_hxlcl_cos_bb50:
     ldp x0, x1, [sp, #16] ; hv load L0
     ldp x2, x3, [sp, #16] ; hv load L0
     fmov d0, x1 ; __hx_payload_fsub: d0 = a.f
@@ -21014,7 +20939,7 @@ __L7ff7_hxlcl_cos_bb50:
     add sp, sp, x15 ; sp adj (big frame)
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_cos_bb51:
+__L5211_hxlcl_cos_bb51:
     ldp x0, x1, [sp, #160] ; hv load L9
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #3 ; hv const_int val
@@ -21037,14 +20962,14 @@ __L7ff7_hxlcl_cos_bb51:
     stp x0, x1, [x15] ; hv store L253
     add x15, sp, #4048 ; hv frame base
     ldp x0, x1, [x15] ; hv load L253
-    cbz x1, __L7ff7_hxlcl_cos_bb53 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb52 ; branch -> then
-__L7ff7_hxlcl_cos_bb52:
+    cbz x1, __L5211_hxlcl_cos_bb53 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb52 ; branch -> then
+__L5211_hxlcl_cos_bb52:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #384] ; hv store L23
-    b __L7ff7_hxlcl_cos_bb53 ; branch
-__L7ff7_hxlcl_cos_bb53:
+    b __L5211_hxlcl_cos_bb53 ; branch
+__L5211_hxlcl_cos_bb53:
     add x15, sp, #4032 ; hv frame base
     ldp x0, x1, [x15] ; hv load L252
     movz x2, #0 ; hv const_int: TAG_INT
@@ -21056,17 +20981,17 @@ __L7ff7_hxlcl_cos_bb53:
     stp x0, x1, [x15] ; hv store L255
     add x15, sp, #4080 ; hv frame base
     ldp x0, x1, [x15] ; hv load L255
-    cbz x1, __L7ff7_hxlcl_cos_bb55 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb54 ; branch -> then
-__L7ff7_hxlcl_cos_bb54:
+    cbz x1, __L5211_hxlcl_cos_bb55 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb54 ; branch -> then
+__L5211_hxlcl_cos_bb54:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #384] ; hv store L23
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L24
-    b __L7ff7_hxlcl_cos_bb55 ; branch
-__L7ff7_hxlcl_cos_bb55:
+    b __L5211_hxlcl_cos_bb55 ; branch
+__L5211_hxlcl_cos_bb55:
     add x15, sp, #4032 ; hv frame base
     ldp x0, x1, [x15] ; hv load L252
     movz x2, #0 ; hv const_int: TAG_INT
@@ -21080,17 +21005,17 @@ __L7ff7_hxlcl_cos_bb55:
     movz x15, #4112 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L257
-    cbz x1, __L7ff7_hxlcl_cos_bb57 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb56 ; branch -> then
-__L7ff7_hxlcl_cos_bb56:
+    cbz x1, __L5211_hxlcl_cos_bb57 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb56 ; branch -> then
+__L5211_hxlcl_cos_bb56:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #384] ; hv store L23
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     stp x0, x1, [sp, #0] ; hv store L24
-    b __L7ff7_hxlcl_cos_bb57 ; branch
-__L7ff7_hxlcl_cos_bb57:
+    b __L5211_hxlcl_cos_bb57 ; branch
+__L5211_hxlcl_cos_bb57:
     add x15, sp, #4032 ; hv frame base
     ldp x0, x1, [x15] ; hv load L252
     movz x2, #0 ; hv const_int: TAG_INT
@@ -21104,14 +21029,14 @@ __L7ff7_hxlcl_cos_bb57:
     movz x15, #4144 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L259
-    cbz x1, __L7ff7_hxlcl_cos_bb59 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb58 ; branch -> then
-__L7ff7_hxlcl_cos_bb58:
+    cbz x1, __L5211_hxlcl_cos_bb59 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb58 ; branch -> then
+__L5211_hxlcl_cos_bb58:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #384] ; hv store L23
-    b __L7ff7_hxlcl_cos_bb59 ; branch
-__L7ff7_hxlcl_cos_bb59:
+    b __L5211_hxlcl_cos_bb59 ; branch
+__L5211_hxlcl_cos_bb59:
     ldp x0, x1, [sp, #16] ; hv load L0
     ldp x2, x3, [sp, #16] ; hv load L0
     fmov d0, x1 ; __hx_payload_fsub: d0 = a.f
@@ -21140,9 +21065,9 @@ __L7ff7_hxlcl_cos_bb59:
     movz x15, #4208 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L263
-    cbz x1, __L7ff7_hxlcl_cos_bb61 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb60 ; branch -> then
-__L7ff7_hxlcl_cos_bb60:
+    cbz x1, __L5211_hxlcl_cos_bb61 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb60 ; branch -> then
+__L5211_hxlcl_cos_bb60:
     ldp x0, x1, [sp, #208] ; hv load L12
     ldp x2, x3, [sp, #208] ; hv load L12
     fmov d0, x1 ; __hx_payload_fmul: d0 = a.f
@@ -21394,9 +21319,9 @@ __L7ff7_hxlcl_cos_bb60:
     movz x15, #4624 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L289
-    cbz x1, __L7ff7_hxlcl_cos_bb63 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb62 ; branch -> then
-__L7ff7_hxlcl_cos_bb61:
+    cbz x1, __L5211_hxlcl_cos_bb63 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb62 ; branch -> then
+__L5211_hxlcl_cos_bb61:
     ldp x0, x1, [sp, #16] ; hv load L0
     ldp x2, x3, [sp, #16] ; hv load L0
     fmov d0, x1 ; __hx_payload_fsub: d0 = a.f
@@ -21425,9 +21350,9 @@ __L7ff7_hxlcl_cos_bb61:
     movz x15, #5040 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L315
-    cbz x1, __L7ff7_hxlcl_cos_bb66 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb65 ; branch -> then
-__L7ff7_hxlcl_cos_bb62:
+    cbz x1, __L5211_hxlcl_cos_bb66 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb65 ; branch -> then
+__L5211_hxlcl_cos_bb62:
     movz x15, #4256 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L266
@@ -21507,8 +21432,8 @@ __L7ff7_hxlcl_cos_bb62:
     movz x15, #4192 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     stp x0, x1, [x15] ; hv store L262
-    b __L7ff7_hxlcl_cos_bb64 ; branch
-__L7ff7_hxlcl_cos_bb63:
+    b __L5211_hxlcl_cos_bb64 ; branch
+__L5211_hxlcl_cos_bb63:
     movz x0, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt26@PAGE ; hv float pool page
     add x14, x14, .LCflt26@PAGEOFF ; hv float pool off
@@ -21665,10 +21590,10 @@ __L7ff7_hxlcl_cos_bb63:
     movz x15, #4192 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     stp x0, x1, [x15] ; hv store L262
-    b __L7ff7_hxlcl_cos_bb64 ; branch
-__L7ff7_hxlcl_cos_bb64:
-    b __L7ff7_hxlcl_cos_bb61 ; branch
-__L7ff7_hxlcl_cos_bb65:
+    b __L5211_hxlcl_cos_bb64 ; branch
+__L5211_hxlcl_cos_bb64:
+    b __L5211_hxlcl_cos_bb61 ; branch
+__L5211_hxlcl_cos_bb65:
     ldp x0, x1, [sp, #208] ; hv load L12
     ldp x2, x3, [sp, #208] ; hv load L12
     fmov d0, x1 ; __hx_payload_fmul: d0 = a.f
@@ -22130,8 +22055,8 @@ __L7ff7_hxlcl_cos_bb65:
     movz x15, #5024 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     stp x0, x1, [x15] ; hv store L314
-    b __L7ff7_hxlcl_cos_bb66 ; branch
-__L7ff7_hxlcl_cos_bb66:
+    b __L5211_hxlcl_cos_bb66 ; branch
+__L5211_hxlcl_cos_bb66:
     movz x15, #4192 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L262
@@ -22160,9 +22085,9 @@ __L7ff7_hxlcl_cos_bb66:
     movz x15, #5824 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L364
-    cbz x1, __L7ff7_hxlcl_cos_bb68 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb67 ; branch -> then
-__L7ff7_hxlcl_cos_bb67:
+    cbz x1, __L5211_hxlcl_cos_bb68 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb67 ; branch -> then
+__L5211_hxlcl_cos_bb67:
     movz x15, #5024 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L314
@@ -22179,8 +22104,8 @@ __L7ff7_hxlcl_cos_bb67:
     movz x15, #5808 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     stp x0, x1, [x15] ; hv store L363
-    b __L7ff7_hxlcl_cos_bb68 ; branch
-__L7ff7_hxlcl_cos_bb68:
+    b __L5211_hxlcl_cos_bb68 ; branch
+__L5211_hxlcl_cos_bb68:
     ldp x0, x1, [sp, #0] ; hv load L24
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -22193,9 +22118,9 @@ __L7ff7_hxlcl_cos_bb68:
     movz x15, #5872 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L367
-    cbz x1, __L7ff7_hxlcl_cos_bb70 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_cos_bb69 ; branch -> then
-__L7ff7_hxlcl_cos_bb69:
+    cbz x1, __L5211_hxlcl_cos_bb70 ; br_cond: !payload -> else
+    b __L5211_hxlcl_cos_bb69 ; branch -> then
+__L5211_hxlcl_cos_bb69:
     movz x0, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt2@PAGE ; hv float pool page
     add x14, x14, .LCflt2@PAGEOFF ; hv float pool off
@@ -22224,7 +22149,7 @@ __L7ff7_hxlcl_cos_bb69:
     add sp, sp, x15 ; sp adj (big frame)
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_cos_bb70:
+__L5211_hxlcl_cos_bb70:
     movz x15, #5808 ; imm 0-15
     add x15, sp, x15 ; hv frame base (big)
     ldp x0, x1, [x15] ; hv load L363
@@ -22232,14 +22157,13 @@ __L7ff7_hxlcl_cos_bb70:
     add sp, sp, x15 ; sp adj (big frame)
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_rotab_probe
     .p2align 2
 _hxlcl_rotab_probe:
     .loc 1 4146 0
     stp x29, x30, [sp, #-16]! ; prologue: save fp/lr
     mov x29, sp ; prologue: set fp
     sub sp, sp, #128 ; sp adj
-__L7ff7_hxlcl_rotab_probe_bb0:
+__L5211_hxlcl_rotab_probe_bb0:
     adrp x1, _rotab_0@PAGE ; __hx_rodata_tab_ptr: &rotab_0 page (.rodata table)
     add x1, x1, _rotab_0@PAGEOFF ; __hx_rodata_tab_ptr: x1 = &rotab_0
     movz x0, #0 ; __hx_rodata_tab_ptr: TAG_INT
@@ -22278,7 +22202,6 @@ __L7ff7_hxlcl_rotab_probe_bb0:
     add sp, sp, #128 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_exp
     .p2align 2
 _hxlcl_exp:
     .loc 1 4176 0
@@ -22286,7 +22209,7 @@ _hxlcl_exp:
     mov x29, sp ; prologue: set fp
     sub sp, sp, #2272 ; sp adj
     stp x0, x1, [sp, #0] ; ingress param 0
-__L7ff7_hxlcl_exp_bb0:
+__L5211_hxlcl_exp_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -22345,9 +22268,9 @@ __L7ff7_hxlcl_exp_bb0:
     bl _hexa_bool ; __hx_payload_ule: box bool
     stp x0, x1, [sp, #208] ; hv store L13
     ldp x0, x1, [sp, #208] ; hv load L13
-    cbz x1, __L7ff7_hxlcl_exp_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_exp_bb1 ; branch -> then
-__L7ff7_hxlcl_exp_bb1:
+    cbz x1, __L5211_hxlcl_exp_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_exp_bb1 ; branch -> then
+__L5211_hxlcl_exp_bb1:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; imm 0-15
     movk x1, #32768, lsl #16 ; imm 16-31
@@ -22357,9 +22280,9 @@ __L7ff7_hxlcl_exp_bb1:
     bl _hexa_bool ; __hx_payload_ule: box bool
     stp x0, x1, [sp, #240] ; hv store L15
     ldp x0, x1, [sp, #240] ; hv load L15
-    cbz x1, __L7ff7_hxlcl_exp_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_exp_bb3 ; branch -> then
-__L7ff7_hxlcl_exp_bb2:
+    cbz x1, __L5211_hxlcl_exp_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_exp_bb3 ; branch -> then
+__L5211_hxlcl_exp_bb2:
     movz x0, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt33@PAGE ; hv float pool page
     add x14, x14, .LCflt33@PAGEOFF ; hv float pool off
@@ -22830,9 +22753,9 @@ __L7ff7_hxlcl_exp_bb2:
     stp x0, x1, [x15] ; hv store L99
     add x15, sp, #1584 ; hv frame base
     ldp x0, x1, [x15] ; hv load L99
-    cbz x1, __L7ff7_hxlcl_exp_bb14 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_exp_bb13 ; branch -> then
-__L7ff7_hxlcl_exp_bb3:
+    cbz x1, __L5211_hxlcl_exp_bb14 ; br_cond: !payload -> else
+    b __L5211_hxlcl_exp_bb13 ; branch -> then
+__L5211_hxlcl_exp_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     scvtf d0, x1 ; __hx_payload_i2f: d0 = (double)v.i
@@ -22855,7 +22778,7 @@ __L7ff7_hxlcl_exp_bb3:
     add sp, sp, #2272 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_exp_bb4:
+__L5211_hxlcl_exp_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1033 ; hv const_int val
     ldp x2, x3, [sp, #96] ; hv load L6
@@ -22864,9 +22787,9 @@ __L7ff7_hxlcl_exp_bb4:
     bl _hexa_bool ; __hx_payload_ule: box bool
     stp x0, x1, [sp, #336] ; hv store L21
     ldp x0, x1, [sp, #336] ; hv load L21
-    cbz x1, __L7ff7_hxlcl_exp_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_exp_bb5 ; branch -> then
-__L7ff7_hxlcl_exp_bb5:
+    cbz x1, __L5211_hxlcl_exp_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_exp_bb5 ; branch -> then
+__L5211_hxlcl_exp_bb5:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #65535 ; imm 0-15
@@ -22879,20 +22802,20 @@ __L7ff7_hxlcl_exp_bb5:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #368] ; hv store L23
     ldp x0, x1, [sp, #368] ; hv load L23
-    cbz x1, __L7ff7_hxlcl_exp_bb8 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_exp_bb7 ; branch -> then
-__L7ff7_hxlcl_exp_bb6:
+    cbz x1, __L5211_hxlcl_exp_bb8 ; br_cond: !payload -> else
+    b __L5211_hxlcl_exp_bb7 ; branch -> then
+__L5211_hxlcl_exp_bb6:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #128] ; hv store L8
-    b __L7ff7_hxlcl_exp_bb2 ; branch
-__L7ff7_hxlcl_exp_bb7:
+    b __L5211_hxlcl_exp_bb2 ; branch
+__L5211_hxlcl_exp_bb7:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add sp, sp, #2272 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_exp_bb8:
+__L5211_hxlcl_exp_bb8:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #2047 ; hv const_int val
     ldp x2, x3, [sp, #96] ; hv load L6
@@ -22901,9 +22824,9 @@ __L7ff7_hxlcl_exp_bb8:
     bl _hexa_bool ; __hx_payload_ule: box bool
     stp x0, x1, [sp, #400] ; hv store L25
     ldp x0, x1, [sp, #400] ; hv load L25
-    cbz x1, __L7ff7_hxlcl_exp_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_exp_bb9 ; branch -> then
-__L7ff7_hxlcl_exp_bb9:
+    cbz x1, __L5211_hxlcl_exp_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_exp_bb9 ; branch -> then
+__L5211_hxlcl_exp_bb9:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #1 ; hv const_int val
     scvtf d0, x1 ; __hx_payload_i2f: d0 = (double)v.i
@@ -22926,7 +22849,7 @@ __L7ff7_hxlcl_exp_bb9:
     add sp, sp, #2272 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_exp_bb10:
+__L5211_hxlcl_exp_bb10:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #63 ; hv const_int val
@@ -22947,22 +22870,22 @@ __L7ff7_hxlcl_exp_bb10:
     stp x0, x1, [x15] ; hv store L33
     add x15, sp, #528 ; hv frame base
     ldp x0, x1, [x15] ; hv load L33
-    cbz x1, __L7ff7_hxlcl_exp_bb12 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_exp_bb11 ; branch -> then
-__L7ff7_hxlcl_exp_bb11:
+    cbz x1, __L5211_hxlcl_exp_bb12 ; br_cond: !payload -> else
+    b __L5211_hxlcl_exp_bb11 ; branch -> then
+__L5211_hxlcl_exp_bb11:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add sp, sp, #2272 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_exp_bb12:
+__L5211_hxlcl_exp_bb12:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; imm 0-15
     movk x1, #32752, lsl #48 ; imm 48-63
     add sp, sp, #2272 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_exp_bb13:
+__L5211_hxlcl_exp_bb13:
     add x15, sp, #640 ; hv frame base
     ldp x0, x1, [x15] ; hv load L40
     movz x2, #0 ; hv const_int: TAG_INT
@@ -22987,15 +22910,15 @@ __L7ff7_hxlcl_exp_bb13:
     stp x0, x1, [x15] ; hv store L103
     add x15, sp, #1648 ; hv frame base
     ldp x0, x1, [x15] ; hv load L103
-    cbz x1, __L7ff7_hxlcl_exp_bb16 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_exp_bb15 ; branch -> then
-__L7ff7_hxlcl_exp_bb14:
+    cbz x1, __L5211_hxlcl_exp_bb16 ; br_cond: !payload -> else
+    b __L5211_hxlcl_exp_bb15 ; branch -> then
+__L5211_hxlcl_exp_bb14:
     add x15, sp, #1536 ; hv frame base
     ldp x0, x1, [x15] ; hv load L96
     add sp, sp, #2272 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_exp_bb15:
+__L5211_hxlcl_exp_bb15:
     add x15, sp, #1088 ; hv frame base
     ldp x0, x1, [x15] ; hv load L68
     movz x2, #0 ; hv const_int: TAG_INT
@@ -23067,8 +22990,8 @@ __L7ff7_hxlcl_exp_bb15:
     ldp x0, x1, [x15] ; hv load L113
     add x15, sp, #1536 ; hv frame base
     stp x0, x1, [x15] ; hv store L96
-    b __L7ff7_hxlcl_exp_bb16 ; branch
-__L7ff7_hxlcl_exp_bb16:
+    b __L5211_hxlcl_exp_bb16 ; branch
+__L5211_hxlcl_exp_bb16:
     add x15, sp, #1632 ; hv frame base
     ldp x0, x1, [x15] ; hv load L102
     movz x2, #0 ; hv const_int: TAG_INT
@@ -23080,9 +23003,9 @@ __L7ff7_hxlcl_exp_bb16:
     stp x0, x1, [x15] ; hv store L114
     add x15, sp, #1824 ; hv frame base
     ldp x0, x1, [x15] ; hv load L114
-    cbz x1, __L7ff7_hxlcl_exp_bb18 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_exp_bb17 ; branch -> then
-__L7ff7_hxlcl_exp_bb17:
+    cbz x1, __L5211_hxlcl_exp_bb18 ; br_cond: !payload -> else
+    b __L5211_hxlcl_exp_bb17 ; branch -> then
+__L5211_hxlcl_exp_bb17:
     add x15, sp, #1088 ; hv frame base
     ldp x0, x1, [x15] ; hv load L68
     movz x2, #0 ; hv const_int: TAG_INT
@@ -23153,11 +23076,11 @@ __L7ff7_hxlcl_exp_bb17:
     stp x0, x1, [x15] ; hv store L124
     add x15, sp, #1984 ; hv frame base
     ldp x0, x1, [x15] ; hv load L124
-    cbz x1, __L7ff7_hxlcl_exp_bb20 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_exp_bb19 ; branch -> then
-__L7ff7_hxlcl_exp_bb18:
-    b __L7ff7_hxlcl_exp_bb14 ; branch
-__L7ff7_hxlcl_exp_bb19:
+    cbz x1, __L5211_hxlcl_exp_bb20 ; br_cond: !payload -> else
+    b __L5211_hxlcl_exp_bb19 ; branch -> then
+__L5211_hxlcl_exp_bb18:
+    b __L5211_hxlcl_exp_bb14 ; branch
+__L5211_hxlcl_exp_bb19:
     add x15, sp, #1904 ; hv frame base
     ldp x0, x1, [x15] ; hv load L119
     add x15, sp, #1968 ; hv frame base
@@ -23284,8 +23207,8 @@ __L7ff7_hxlcl_exp_bb19:
     ldp x0, x1, [x15] ; hv load L140
     add x15, sp, #1968 ; hv frame base
     stp x0, x1, [x15] ; hv store L123
-    b __L7ff7_hxlcl_exp_bb20 ; branch
-__L7ff7_hxlcl_exp_bb20:
+    b __L5211_hxlcl_exp_bb20 ; branch
+__L5211_hxlcl_exp_bb20:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; imm 0-15
     movk x1, #16, lsl #48 ; imm 48-63
@@ -23302,13 +23225,12 @@ __L7ff7_hxlcl_exp_bb20:
     ldp x0, x1, [x15] ; hv load L141
     add x15, sp, #1536 ; hv frame base
     stp x0, x1, [x15] ; hv store L96
-    b __L7ff7_hxlcl_exp_bb18 ; branch
+    b __L5211_hxlcl_exp_bb18 ; branch
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
     add sp, sp, #2272 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern _hxlcl_log
     .p2align 2
 _hxlcl_log:
     .loc 1 4352 0
@@ -23316,7 +23238,7 @@ _hxlcl_log:
     mov x29, sp ; prologue: set fp
     sub sp, sp, #2736 ; sp adj
     stp x0, x1, [sp, #0] ; ingress param 0
-__L7ff7_hxlcl_log_bb0:
+__L5211_hxlcl_log_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -23352,9 +23274,9 @@ __L7ff7_hxlcl_log_bb0:
     bl _hexa_bool ; __hx_payload_ult: box bool
     stp x0, x1, [sp, #112] ; hv store L7
     ldp x0, x1, [sp, #112] ; hv load L7
-    cbz x1, __L7ff7_hxlcl_log_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_log_bb1 ; branch -> then
-__L7ff7_hxlcl_log_bb1:
+    cbz x1, __L5211_hxlcl_log_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_log_bb1 ; branch -> then
+__L5211_hxlcl_log_bb1:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; imm 0-15
@@ -23364,9 +23286,9 @@ __L7ff7_hxlcl_log_bb1:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #144] ; hv store L9
     ldp x0, x1, [sp, #144] ; hv load L9
-    cbz x1, __L7ff7_hxlcl_log_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_log_bb3 ; branch -> then
-__L7ff7_hxlcl_log_bb2:
+    cbz x1, __L5211_hxlcl_log_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_log_bb3 ; branch -> then
+__L5211_hxlcl_log_bb2:
     ldp x0, x1, [sp, #64] ; hv load L4
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #16 ; hv const_int val
@@ -23389,15 +23311,15 @@ __L7ff7_hxlcl_log_bb2:
     stp x0, x1, [x15] ; hv store L73
     add x15, sp, #1168 ; hv frame base
     ldp x0, x1, [x15] ; hv load L73
-    cbz x1, __L7ff7_hxlcl_log_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_log_bb5 ; branch -> then
-__L7ff7_hxlcl_log_bb3:
+    cbz x1, __L5211_hxlcl_log_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_log_bb5 ; branch -> then
+__L5211_hxlcl_log_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     add sp, sp, #2736 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_log_bb4:
+__L5211_hxlcl_log_bb4:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #1 ; hv const_float: TAG_FLOAT
     adrp x14, .LCflt14@PAGE ; hv float pool page
@@ -23893,7 +23815,7 @@ __L7ff7_hxlcl_log_bb4:
     add sp, sp, #2736 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_log_bb5:
+__L5211_hxlcl_log_bb5:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -23916,9 +23838,9 @@ __L7ff7_hxlcl_log_bb5:
     stp x0, x1, [x15] ; hv store L77
     add x15, sp, #1232 ; hv frame base
     ldp x0, x1, [x15] ; hv load L77
-    cbz x1, __L7ff7_hxlcl_log_bb8 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_log_bb7 ; branch -> then
-__L7ff7_hxlcl_log_bb6:
+    cbz x1, __L5211_hxlcl_log_bb8 ; br_cond: !payload -> else
+    b __L5211_hxlcl_log_bb7 ; branch -> then
+__L5211_hxlcl_log_bb6:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; imm 0-15
@@ -23986,9 +23908,9 @@ __L7ff7_hxlcl_log_bb6:
     stp x0, x1, [x15] ; hv store L108
     add x15, sp, #1728 ; hv frame base
     ldp x0, x1, [x15] ; hv load L108
-    cbz x1, __L7ff7_hxlcl_log_bb16 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_log_bb15 ; branch -> then
-__L7ff7_hxlcl_log_bb7:
+    cbz x1, __L5211_hxlcl_log_bb16 ; br_cond: !payload -> else
+    b __L5211_hxlcl_log_bb15 ; branch -> then
+__L5211_hxlcl_log_bb7:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #65535 ; imm 0-15
     movk x1, #65535, lsl #16 ; imm 16-31
@@ -23998,7 +23920,7 @@ __L7ff7_hxlcl_log_bb7:
     add sp, sp, #2736 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_log_bb8:
+__L5211_hxlcl_log_bb8:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; imm 0-15
@@ -24010,14 +23932,14 @@ __L7ff7_hxlcl_log_bb8:
     stp x0, x1, [x15] ; hv store L79
     add x15, sp, #1264 ; hv frame base
     ldp x0, x1, [x15] ; hv load L79
-    cbz x1, __L7ff7_hxlcl_log_bb10 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_log_bb9 ; branch -> then
-__L7ff7_hxlcl_log_bb9:
+    cbz x1, __L5211_hxlcl_log_bb10 ; br_cond: !payload -> else
+    b __L5211_hxlcl_log_bb9 ; branch -> then
+__L5211_hxlcl_log_bb9:
     ldp x0, x1, [sp, #0] ; hv load L0
     add sp, sp, #2736 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_log_bb10:
+__L5211_hxlcl_log_bb10:
     ldp x0, x1, [sp, #64] ; hv load L4
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #32768 ; hv const_int val
@@ -24051,9 +23973,9 @@ __L7ff7_hxlcl_log_bb10:
     stp x0, x1, [x15] ; hv store L85
     add x15, sp, #1360 ; hv frame base
     ldp x0, x1, [x15] ; hv load L85
-    cbz x1, __L7ff7_hxlcl_log_bb12 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_log_bb11 ; branch -> then
-__L7ff7_hxlcl_log_bb11:
+    cbz x1, __L5211_hxlcl_log_bb12 ; br_cond: !payload -> else
+    b __L5211_hxlcl_log_bb11 ; branch -> then
+__L5211_hxlcl_log_bb11:
     ldp x0, x1, [sp, #0] ; hv load L0
     ldp x2, x3, [sp, #0] ; hv load L0
     fmov d0, x1 ; __hx_payload_fsub: d0 = a.f
@@ -24083,7 +24005,7 @@ __L7ff7_hxlcl_log_bb11:
     add sp, sp, #2736 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_log_bb12:
+__L5211_hxlcl_log_bb12:
     add x15, sp, #1344 ; hv frame base
     ldp x0, x1, [x15] ; hv load L84
     movz x2, #0 ; hv const_int: TAG_INT
@@ -24095,9 +24017,9 @@ __L7ff7_hxlcl_log_bb12:
     stp x0, x1, [x15] ; hv store L90
     add x15, sp, #1440 ; hv frame base
     ldp x0, x1, [x15] ; hv load L90
-    cbz x1, __L7ff7_hxlcl_log_bb14 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_log_bb13 ; branch -> then
-__L7ff7_hxlcl_log_bb13:
+    cbz x1, __L5211_hxlcl_log_bb14 ; br_cond: !payload -> else
+    b __L5211_hxlcl_log_bb13 ; branch -> then
+__L5211_hxlcl_log_bb13:
     ldp x0, x1, [sp, #0] ; hv load L0
     ldp x2, x3, [sp, #0] ; hv load L0
     fmov d0, x1 ; __hx_payload_fsub: d0 = a.f
@@ -24127,7 +24049,7 @@ __L7ff7_hxlcl_log_bb13:
     add sp, sp, #2736 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_log_bb14:
+__L5211_hxlcl_log_bb14:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; imm 0-15
@@ -24163,8 +24085,8 @@ __L7ff7_hxlcl_log_bb14:
     add x15, sp, #1568 ; hv frame base
     ldp x0, x1, [x15] ; hv load L98
     stp x0, x1, [sp, #32] ; hv store L2
-    b __L7ff7_hxlcl_log_bb6 ; branch
-__L7ff7_hxlcl_log_bb15:
+    b __L5211_hxlcl_log_bb6 ; branch
+__L5211_hxlcl_log_bb15:
     add x15, sp, #1680 ; hv frame base
     ldp x0, x1, [x15] ; hv load L105
     movz x2, #0 ; hv const_int: TAG_INT
@@ -24177,8 +24099,8 @@ __L7ff7_hxlcl_log_bb15:
     ldp x0, x1, [x15] ; hv load L110
     add x15, sp, #1712 ; hv frame base
     stp x0, x1, [x15] ; hv store L107
-    b __L7ff7_hxlcl_log_bb16 ; branch
-__L7ff7_hxlcl_log_bb16:
+    b __L5211_hxlcl_log_bb16 ; branch
+__L5211_hxlcl_log_bb16:
     add x15, sp, #1600 ; hv frame base
     ldp x0, x1, [x15] ; hv load L100
     movz x2, #0 ; hv const_int: TAG_INT
@@ -24663,11 +24585,10 @@ __L7ff7_hxlcl_log_bb16:
     add sp, sp, #2736 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-.private_extern __hx_rt_sigreturn_trampoline
     .p2align 2
 __hx_rt_sigreturn_trampoline:
     .loc 1 4532 0
-__L7ff7__hx_rt_sigreturn_trampoline_bb0:
+__L5211__hx_rt_sigreturn_trampoline_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #15 ; hv const_int val
     mov x16, x1 ; __hx_syscall0: x16 = syscall num
@@ -24677,7 +24598,6 @@ __L7ff7__hx_rt_sigreturn_trampoline_bb0:
     stp x0, x1, [sp, #0] ; hv store L0
     movz x0, #4 ; ret void: TAG_VOID
     movz x1, #0 ; ret void: payload 0
-.private_extern _hxlcl_signal
     .p2align 2
 _hxlcl_signal:
     .loc 1 4537 0
@@ -24688,7 +24608,7 @@ _hxlcl_signal:
     stp x9, x0, [sp, #48] ; cabi ingress param 0
     movz x9, #0 ; cabi ingress tag = TAG_INT
     stp x9, x1, [sp, #64] ; cabi ingress param 1
-__L7ff7_hxlcl_signal_bb0:
+__L5211_hxlcl_signal_bb0:
     ldp x0, x1, [sp, #48] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -24738,9 +24658,9 @@ __L7ff7_hxlcl_signal_bb0:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #240] ; hv store L12
     ldp x0, x1, [sp, #240] ; hv load L12
-    cbz x1, __L7ff7_hxlcl_signal_bb2 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_signal_bb1 ; branch -> then
-__L7ff7_hxlcl_signal_bb1:
+    cbz x1, __L5211_hxlcl_signal_bb2 ; br_cond: !payload -> else
+    b __L5211_hxlcl_signal_bb1 ; branch -> then
+__L5211_hxlcl_signal_bb1:
     ldp x0, x1, [sp, #224] ; hv load L11
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; imm 0-15
@@ -24766,8 +24686,8 @@ __L7ff7_hxlcl_signal_bb1:
     ldp x0, x1, [sp, #192] ; hv load L9
     movz x0, #0 ; __hx_ptr_store64: TAG_INT
     stp x0, x1, [sp, #320] ; hv store L17
-    b __L7ff7_hxlcl_signal_bb2 ; branch
-__L7ff7_hxlcl_signal_bb2:
+    b __L5211_hxlcl_signal_bb2 ; branch
+__L5211_hxlcl_signal_bb2:
     ldp x0, x1, [sp, #192] ; hv load L9
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #8 ; hv const_int val
@@ -24813,14 +24733,14 @@ __L7ff7_hxlcl_signal_bb2:
     movz x0, #0 ; target_is_*: TAG_INT
     stp x0, x1, [sp, #432] ; hv store L24
     ldp x0, x1, [sp, #432] ; hv load L24
-    cbz x1, __L7ff7_hxlcl_signal_bb4 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_signal_bb3 ; branch -> then
-__L7ff7_hxlcl_signal_bb3:
+    cbz x1, __L5211_hxlcl_signal_bb4 ; br_cond: !payload -> else
+    b __L5211_hxlcl_signal_bb3 ; branch -> then
+__L5211_hxlcl_signal_bb3:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #13 ; hv const_int val
     stp x0, x1, [sp, #416] ; hv store L23
-    b __L7ff7_hxlcl_signal_bb4 ; branch
-__L7ff7_hxlcl_signal_bb4:
+    b __L5211_hxlcl_signal_bb4 ; branch
+__L5211_hxlcl_signal_bb4:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     movz x2, #0 ; hv const_int: TAG_INT
@@ -24883,18 +24803,18 @@ __L7ff7_hxlcl_signal_bb4:
     stp x0, x1, [x15] ; hv store L32
     add x15, sp, #560 ; hv frame base
     ldp x0, x1, [x15] ; hv load L32
-    cbz x1, __L7ff7_hxlcl_signal_bb6 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_signal_bb5 ; branch -> then
-__L7ff7_hxlcl_signal_bb5:
+    cbz x1, __L5211_hxlcl_signal_bb6 ; br_cond: !payload -> else
+    b __L5211_hxlcl_signal_bb5 ; branch -> then
+__L5211_hxlcl_signal_bb5:
     movz x1, #0 ; target_is_*: 0 = false
     movz x0, #0 ; target_is_*: TAG_INT
     add x15, sp, #592 ; hv frame base
     stp x0, x1, [x15] ; hv store L34
     add x15, sp, #592 ; hv frame base
     ldp x0, x1, [x15] ; hv load L34
-    cbz x1, __L7ff7_hxlcl_signal_bb8 ; br_cond: !payload -> else
-    b __L7ff7_hxlcl_signal_bb7 ; branch -> then
-__L7ff7_hxlcl_signal_bb6:
+    cbz x1, __L5211_hxlcl_signal_bb8 ; br_cond: !payload -> else
+    b __L5211_hxlcl_signal_bb7 ; branch -> then
+__L5211_hxlcl_signal_bb6:
     ldp x0, x1, [sp, #384] ; hv load L21
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -24912,7 +24832,7 @@ __L7ff7_hxlcl_signal_bb6:
     add sp, sp, #736 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__L7ff7_hxlcl_signal_bb7:
+__L5211_hxlcl_signal_bb7:
     bl ___errno_location ; cabi call __errno_location
     movz x9, #0 ; cabi ret tag = TAG_INT
     add x15, sp, #624 ; hv frame base
@@ -24946,8 +24866,8 @@ __L7ff7_hxlcl_signal_bb7:
     movz x0, #0 ; __hx_ptr_store32: TAG_INT
     add x15, sp, #688 ; hv frame base
     stp x0, x1, [x15] ; hv store L40
-    b __L7ff7_hxlcl_signal_bb8 ; branch
-__L7ff7_hxlcl_signal_bb8:
+    b __L5211_hxlcl_signal_bb8 ; branch
+__L5211_hxlcl_signal_bb8:
     movz x9, #0 ; hv const_int: TAG_INT
     movz x0, #0 ; imm 0-15
     mvn x0, x0 ; hv const_int: negate
