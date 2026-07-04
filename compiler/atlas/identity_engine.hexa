@@ -115,9 +115,27 @@ pub fn af(n, which) -> int {
             m = m / p
             e = e + 1
         }
-        sig = sig * ((ipow(p, e + 1) - 1) / (p - 1))
-        sig2 = sig2 * ((ipow(p, 2 * (e + 1)) - 1) / (ipow(p, 2) - 1))
-        sig3 = sig3 * ((ipow(p, 3 * (e + 1)) - 1) / (ipow(p, 3) - 1))
+        // σ_k(p^e) = Σ_{i=0}^e p^{ki} via Horner (t = t·p^k + 1, e iterations) —
+        // overflow-safe: never forms the closed-form's p^{k(e+1)} intermediate,
+        // which wrapped i64 (p^6 ≥ 2^63 for p ≥ 1627) and corrupted σ2/σ3 values
+        // for any n with a prime factor ≥ 1627. Identical to the closed form
+        // wherever it did not overflow. #M7 Fable root-cause (identity_engine).
+        let pk1 = p
+        let pk2 = p * p
+        let pk3 = pk2 * p
+        let mut g1 = 1
+        let mut g2 = 1
+        let mut g3 = 1
+        let mut gi = 0
+        while gi < e {
+            g1 = g1 * pk1 + 1
+            g2 = g2 * pk2 + 1
+            g3 = g3 * pk3 + 1
+            gi = gi + 1
+        }
+        sig = sig * g1
+        sig2 = sig2 * g2
+        sig3 = sig3 * g3
         tau = tau * (e + 1)
         phi = phi * (ipow(p, e - 1) * (p - 1))
         psi = psi * (ipow(p, e - 1) * (p + 1))
@@ -569,6 +587,32 @@ pub fn ie_term3_fingerprint(a, b, c, N) -> int {
     let n = 2
     while n <= N {
         let v = _ie_res(af(n, a) * af(n, b) * af(n, c))
+        h = ((h * base) + v) % p
+        n = n + 1
+    }
+    return h
+}
+
+// Fold a caller-supplied value vector into the frozen rolling hash — the SAME
+// kernel as ie_term_fingerprint (seed 1469598103 · base 1000003 · P=2^61-1 ·
+// _ie_res sign-fold), so the OUROBOROS-novel Emerge generators (emerge.hexa
+// emerge2) can fingerprint NET-NEW value sequences (Dirichlet convolution ·
+// iterate/orbit · congruence-witness · solution-indicator) in the SAME space
+// as FP_k and the KNOWN catalog WITHOUT re-implementing the hash (a 1-line
+// drift would silently degrade every kc_classify to always-gamma). vals[i] is
+// the value at n = lo+i; the fold runs n = lo..hi inclusive (callers use
+// lo=2, hi=N). Values may be any exact int (negative or >= P) — _ie_res folds
+// them. The to_int(to_string(.)) generic-array read is exact for native BigInt
+// (#4161), so witness quotients beyond i64 round-trip exactly.
+// Equivalence (gate T1 in emerge_test): for a size-2 term the vals-vector fold
+// reproduces ie_term_fingerprint byte-for-byte by construction.
+pub fn ie_vec_fingerprint(vals: array, lo, hi) -> int {
+    let p = _ie_P()
+    let base = _ie_B()
+    let h = 1469598103
+    let n = lo
+    while n <= hi {
+        let v = _ie_res(to_int(to_string(vals[n - lo])))
         h = ((h * base) + v) % p
         n = n + 1
     }
