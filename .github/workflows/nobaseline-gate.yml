@@ -321,7 +321,7 @@ jobs:
               | grep -vE '^(accept|bind|connect|listen|socket|recv|recvfrom|send|sendto|setsockopt|getsockopt|getaddrinfo|freeaddrinfo|gai_strerror)' \
               | grep -vE '^(__libc_|_exit|atexit|environ|mallopt|__cxa|__errno_location|__stack_chk|__assert)' \
               | grep -vE '^(execve|execvp|setns|unshare|mount|umount2?|posix_spawn|opendir|readdir|closedir|glob|globfree|mkstemp|mkdtemp)' \
-              | grep -vE '^(qsort|rand|srand|strtod|strtof|strtold)' \
+              | grep -vE '^(rand|srand|strtod|strtof|strtold)' \
               | tr '\n' ' '
             echo ""
             echo "=== RFC061 nm-UND TOTAL undefined: $(nm -u "$RT" 2>/dev/null | awk '{print $2}' | sort -u | wc -l) ==="
