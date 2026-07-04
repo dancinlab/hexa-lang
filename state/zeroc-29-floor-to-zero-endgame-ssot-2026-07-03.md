@@ -14,14 +14,14 @@
 |---|---|---|---|---|---|
 | **glob** `HEXA_RT_GLOB_NATIVE` | ✅ | **linux ON** | ✅ glob·globfree drop | feat #4443 · flip #4449 | opt-in→flip 완료 |
 | **fgets** `HEXA_RT_STREAM_NATIVE_READ` | ✅ | **linux ON** | ✅ fgets drop | feat #4444 · flip #4450 | opt-in→flip 완료 |
-| **qsort** `HEXA_RT_ARRAY_SORT_NATIVE` | ✅ | **OFF** (`#ifdef`) | ❌ qsort 유지 | #4447 | bit-changing · 3-target |
+| **qsort** `HEXA_RT_ARRAY_SORT_NATIVE` | ✅ | **linux ON** (flip #4452) | ✅ qsort drop | feat #4447 · flip #4452 | flip 완료 |
 | **regex** `HEXA_REGEX_NATIVE` | ✅ | **OFF** (`#ifndef`) | ❌ regcomp/regexec/regfree 유지 | #4445 | bit-changing · 3-target |
 | **strtod-tail** `HEXA_RT_STRTOD_TAIL_NATIVE` | ✅ | **OFF** (`#ifdef`) | ❌ strtod U 유지 (finite 는 #4200 이후 native) | #4448 | bit-changing · 3-target |
 | **rand/srand** `HEXA_ZEROC_RAND_NATIVE` | ✅ | **linux ON** | ✅ rand·srand drop | #4441 | 완료 |
 | **mkstemp/mkdtemp** `HEXA_ZEROC_OWN_MKTEMP` | ✅ | **linux ON** | ✅ drop | #4441 | 완료 |
 | **ns-syscall** (getppid/setsid/mount/umount2/unshare/setns/flock/sigset) | ✅ | **ON** (FRAG-REGEN) | ✅ drop | #4428/#4430 | faithful 3/3 완료 |
-| **S1 dl\*** FFI floor-partition (`runtime_ffi_dyn` TU) | ❌ OPEN | n/a (byteeq-neutral · ungated) | ❌ dlopen/dlsym/dlerror 유지 | #4481 (UNSTABLE/MERGEABLE) | byteeq-neutral · 구조 |
-| **PR-2** codegen 조건부-링크 (`HEXA_FFI_DYN_TU`) | ❌ NOT STARTED | n/a (byteeq-neutral) | n/a | — (S1 뒤) | byteeq-neutral · 구조 |
+| **S1 dl\*** FFI floor-partition (`runtime_ffi_dyn` TU) | ✅ **MERGED** | n/a (byteeq-neutral · ungated) | ✅ dlopen/dlsym/dlerror 구조적 이탈(canonical runtime.a nm-UND 부재 확증 · CI run 28678730603) | #4481 | byteeq-neutral · 구조 완료 |
+| **PR-2** codegen 조건부-링크 (`HEXA_FFI_DYN_TU`) | ✅ **MERGED** | n/a (byteeq-neutral) | n/a (프로그램측 조건부-링크) | #4487 | byteeq-neutral · 구조 완료 |
 | **own-start** environ+atexit (FLIP-7) | ❌ OPEN | OFF (byte-neutral) | ❌ atexit·environ 유지 | #4409 (CONFLICTING) | bit-changing · 3-target + install-smoke |
 | **WALL-2 free** `HEXA_RT_NATIVE_FREE` | ✅ merged | **OFF** (`${…:-0}`) | ❌ __libc free 유지 | #4242 | byteeq-neutral 3-target + faithful DROP |
 | **WALL-2 calloc** `HEXA_RT_NATIVE_CALLOC` | ✅ merged | **OFF** | ❌ __libc calloc 유지 | #4244 | 동상 (FLIP-6) |
@@ -30,8 +30,8 @@
 | **S3** own loader `HEXA_OWN_DLOPEN` (RFC070 G7-C) | ❌ NONE | — | — | — (S1·G7-B 뒤) | default-OFF→falsifier(RFC070 §4.1)→byteeq 3-target→flip |
 
 **net: 현재 linux canonical `runtime.a` 에서 실제 drop 된 것** = glob·globfree·fgets·rand·srand·mkstemp·mkdtemp·ns-syscall군(getppid/setsid/mount/umount2/unshare/setns/flock/sigaddset/sigemptyset).
-**merged-but-OFF(flip 대기)** = qsort·regex×3·strtod-tail·free·calloc·realloc.
-**not-merged(open)** = dl*×3(#4481) · atexit/environ own-start(#4409, CONFLICTING).
+**merged-but-OFF(flip 대기)** = regex·strtod-tail·free·calloc·realloc. (qsort = flip #4452 완료로 linux ON.)
+**not-merged(open)** = atexit/environ own-start(#4409, CONFLICTING · rebase 선결). (dl*×3 = S1 #4481 MERGED로 구조적 이탈 완료 · PR-2 #4487 MERGED.)
 
 > ⚠️ 프롬프트 census 중 정정: qsort=**#4447**(≠#4452), regex=**#4445**(≠#4458). FLIP-6(WALL-2 default-ON linux flip) 는 **미실시** — #4242/#4244 는 메커니즘 merge 일 뿐 default-ON flip PR 은 없음. Route-C native body 는 x86_64-linux-only(`stage_resolve_runtime_a:1930` non-x86_64-linux 무시) = arm64/darwin fp-ABI 커버리지가 FLIP-6 블로커.
 
@@ -145,6 +145,8 @@ unfiltered nm -u runtime.a  ─→  { network-FFI · CRT-startup · exec-family 
 ---
 
 ## 4. 다음 3 액션 (#4481 착지 직후 즉시 우선순위)
+
+> **⟳ 2026-07-04 reconcile (self-host workflow wcwe457nb · CI run 28678730603)**: **PHASE A 완전 종료** — S1 #4481 + PR-2 #4487 MERGED(아래 우선1 = done). qsort flip #4452 착지(default-ON). dl* 소멸 실측 확증(canonical runtime.a nm-UND 부재). **최신 floor = nm-UND 228 total · reducible residual 60**. ★**mini(git/gh only) 즉시-landing 가능 = 0** — 잔여 reducible 전부 (a) pool-gated(byteeq 3-target · seed regen · faithful) 또는 (b) PR-landing-blocked. mini-authorable **보조** 3종: ① #4409 rebase(CONFLICTING 해소=git-only · merge는 pool) ② resolver no-binary GRACEFUL 하드닝(`stage_resolve_runtime_a` · WALL-2 레인 unblock · flip은 pool) ③ 본 SSOT stale-line 정정(이 커밋). 아래 우선1(PR-2)은 done이라 실질 다음 = 우선2/3의 pool flip 라운드(aiden/summer seed regen).
 
 | 우선 | 액션 | 게이트 | dep / 비고 |
 |---|---|---|---|
