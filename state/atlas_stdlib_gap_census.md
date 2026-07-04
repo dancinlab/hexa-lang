@@ -119,14 +119,40 @@ Taylor/Newton exp + 고정밀 ln(10) 상수)를 추가하면 렌즈 1(Brent–Mc
 reference: Brent–McMillan 1980 · arXiv:1610.01893 · MathWorld "Euler-Mascheroni Constant" · Vacca 1910
 (γ ln-free 급수) · OEIS A001620.
 
-## 최고가치 다음 구현 (① 완성도)
+## 🏁 캠페인 종결 — substrate 사다리 + 후속 + 신규상수 전부 closed (2026-06-28)
 
-**BigInt ln/exp substrate** — 위 잔여 초월 갭(γ·e·일반 ζ(s)·ψ)이 한 substrate(임의정밀 ln/exp)로
-묶인다. 정수 substrate(#4161/#4180)는 π·ζ(짝수+3/5/7)·Catalan·Bernoulli 를 이미 언락했고, 다음
-경계선은 **초월(ln/exp)** 이다:
-- AGM-기반 BigInt ln(Brent) 또는 고정밀 ln(2)·ln(10) 상수 + 정수 mantissa 스케일링.
-- 언락 즉시: γ(Brent–McMillan) · e 고정밀 · 일반 ζ(s) 짝/홀 통합 · digamma ψ.
-- 빠른 선행(정수-only 잔여) = **Möbius μ** 1-fn(core/math.hexa·byteeq 분류 후).
+GAP 테이블·후속·신규상수 캠페인이 모두 닫혔다. 위 "최고가치 다음 구현"으로 제시했던
+**BigInt ln/exp substrate 는 예상벽이었으나 #4186 에서 falsified·돌파**(atanh 고정소수점) —
+이후 사다리가 측정벽까지 진행됐다.
 
-reference-match: numpy/scipy/mpmath(특수함수) · OEIS(Bernoulli A027641/A027642 · γ A001620). 빌드/
-검증=pool(summer/aiden·mini=git/gh). 갭은 measured(grep census 재실행 가능).
+### 구현 완료 (전부 native BigInt·byteeq-neutral·summer reference-match)
+- **substrate 13-PR 사다리**: π · ζ(2~7) · 일반 ζ(s) · Catalan · Bernoulli · Möbius μ · γ(Euler–
+  Mascheroni·Brent–McMillan) · digamma ψ · ln/exp/sqrt/ln2 · full BigInt÷(Knuth Alg D) · gcd
+  (#4161→#4188). 레버 연쇄 = i64한계→BigInt→full÷/gcd→ln/exp/sqrt→γ→digamma/일반ζ.
+- **후속 특수함수 7종**(#4191/#4192/#4194): 실수-s ζ(s) · Bessel I₀/K₀ · lgamma/gamma ·
+  erf/erfc · polylog Li_s · beta B(a,b) · 하부 불완전감마 P(s,x). DLMF reference-first.
+- **신규상수 4종**(#4197·atlas 미등재 classical 초월상수): Lemniscate ϖ=Γ(1/4)²/2√(2π)(OEIS
+  A062539)·Gauss G=ϖ/π(A014549) = **18자리 닫힌형** / Khinchin K₀(A002210)·Mertens
+  M=γ+Σμ(k)lnζ(k)/k(A077761) = **~16자리**.
+
+### 측정벽 (정직 분류 · 억지 fudge 금지)
+- **K₀/M = ~16자리 정밀도 floor**: `ln_scaled` near-1 인자 상대정밀 한계 + 긴 급수(K₀ 74항·M
+  146항) 누적오차. dd=44≡dd=56(printed digits 동일)으로 **dd-독립 = guard-truncation 아님** 입증.
+  honest-next = atanh 가드자리↑(별도 substrate 개선 라운드).
+- **polylog 단위원 경계**(|z|=1·z≠1): 멱급수 1/k² 수렴 → 18자리에 ~10⁹항. 가속/reflection 미구현
+  honest-next(게이트 제외·결함 아님).
+- **Glaisher–Kinkelin A = ζ'(−1)**: ζ 도함수 substrate 부재 → 1상수만 열려 투자부족 측정벽.
+- **Feigenbaum δ/α · Conway · Madelung**: 단순 닫힌공식 부재(반복사상/결정격자합) = 별도 알고리즘
+  라운드.
+
+### atlas C-atom census ⓑ=∅ (읽기전용 measured)
+embedded.gen.hexa `kind:"C"` atom 5763개 = dev-process 로그(omega_cycle_* ~4000)+meta+정수
+divisor-arith+측정 물리상수(planck/boltzmann CODATA)뿐. **임의정밀 공식 있는데 미구현인 초월상수
+= ∅**. 정준 해석상수(π·e·ζ·γ·Catalan·Bernoulli)는 C atom 아닌 highprec native fn 거주.
+신규상수의 **atlas @F fold 등록은 별도 라운드**(`HEXA_ATLAS_EMBED` worktree + `hexa verify`
+인프라 필요 = byteeq-RELEVANT). 재현 grep = `grep 'kind: "C"' embedded.gen.hexa | grep -oE
+':: [a-z_-]+ '|sort|uniq -c`.
+
+reference-match: numpy/scipy/mpmath(특수함수) · DLMF · OEIS. 빌드/검증=pool(summer/aiden·
+mini=git/gh). SSOT = memory `project_hexa_native_bigint_substrate`. 갭은 measured(grep census
+재실행 가능).
