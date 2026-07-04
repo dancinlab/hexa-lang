@@ -2160,18 +2160,17 @@ build_runtime_a_from_source() {
         # — unlike the old whole-module live emit — NO objcopy isolate is needed), $CC -c
         # → build/hxlcl_calloc_native.o, then add -DHEXA_RT_NATIVE_CALLOC + the member
         # (the ld -r multidef gate S5 still validates). TRI-STATE HEXA_RT_NATIVE_CALLOC:
-        #   0    = off (DEFAULT · block skipped · shim.o + archive byte-identical = neutral)
-        #   auto = graceful (the flip sets this default): a missing/bad/unassemblable seed
-        #          keeps the libc-shim calloc member + a loud WARN and the build CONTINUES
-        #          — the fallback is the NORMAL libc calloc, never a broken one, and a
-        #          non-adopted flip is observable as `calloc` still UND in the nobaseline
-        #          nm-UND dump (#4360).
+        #   0    = off (opt-out · block skipped · shim.o + archive byte-identical = neutral)
+        #   auto = graceful (DEFAULT · the flip #4556 prereq-a → this PR sets this default): a
+        #          missing/bad/unassemblable seed keeps the libc-shim calloc member + a loud
+        #          WARN and the build CONTINUES — the fallback is the NORMAL libc calloc, never
+        #          a broken one, and a non-adopted flip is observable as `calloc` still UND in
+        #          the nobaseline nm-UND dump (#4360).
         #   1    = strict: a missing/bad seed is FATAL (measurement / verify scripts).
-        # NOTE (prereq-a): the 3 seeds self/native/hxlcl_calloc_{x86_64,arm64-linux,arm64}.s
-        # are PENDING a pool aprime_cc bake (heavy emit, pool-only). Until they land the
-        # seed-consume graceful-skips (default-OFF → byteeq-neutral; auto → FALLBACK-SHIM).
-        # convergence stage-resolve-runtime-a-2.
-        _rnca_mode="${HEXA_RT_NATIVE_CALLOC:-0}"
+        # The 3 seeds self/native/hxlcl_calloc_{x86_64,arm64-linux,arm64}.s landed in #4556
+        # (pool aprime_cc bake, all 3 verified .globl=1 .private_extern=0).
+        # convergence stage-resolve-runtime-a-2 · regen-hxlcl-free-native-s-sh-1.
+        _rnca_mode="${HEXA_RT_NATIVE_CALLOC:-auto}"
         if [ "$_rnca_mode" != "0" ]; then
             _rnca_tgt="${TARGET:-}"; _rnca_tgt="${_rnca_tgt%-musl}"; _rnca_tgt="${_rnca_tgt%-cuda}"
             [ -z "$_rnca_tgt" ] && case "$(uname -sm 2>/dev/null)" in
