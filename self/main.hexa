@@ -5807,8 +5807,24 @@ fn cmd_gpu_status() {
         println("          not compiled in). cuda_available()==1 needs the `-cuda` asset.")
         println("    ENABLE GPU: on a CUDA host run  HEXA_CUDA=1 sh install.sh")
         println("          (auto-installs the -cuda asset; install.sh prefer_cuda() also")
-        println("           auto-detects nvidia-smi+libcudart → cuda when HEXA_CUDA unset,")
-        println("           pip-install-torch style). Verify: hexa run 'fn main(){print(cuda_available())}' → 1")
+        println("           auto-detects nvidia-smi + libcudart [toolkit OR pip nvidia-cuda-")
+        println("           runtime-cu12 wheels] → cuda when HEXA_CUDA unset, pip-install-torch")
+        println("           style). Verify: hexa run 'fn main(){print(cuda_available())}' → 1")
+    }
+    // CUDA LIB SOURCE — where the -cuda link resolves cudart/cuda from (GPU-status
+    // SSOT: makes the bare-pod pip symlink farm diagnosable). farm > toolkit > none,
+    // mirroring os_clang_ldflags' probe order.
+    let hx_home_g = if env_var("HX_HOME") != "" { env_var("HX_HOME") } else { env_var("HOME") + "/.hx" }
+    let farm_g = hx_home_g + "/cuda-libs"
+    if exec("test -f '" + farm_g + "/libcudart.so' && printf 1 || printf 0").trim() == "1" {
+        println("  cuda libs:         pip farm " + farm_g + "  (bare rent pod — SONAME wheels symlinked + rpath)")
+    } else {
+        let ch = if env_var("CUDA_HOME") != "" { env_var("CUDA_HOME") } else { "/usr/local/cuda" }
+        if exec("test -e '" + ch + "/lib64/libcudart.so' -o -e '" + ch + "/targets/x86_64-linux/lib/libcudart.so' && printf 1 || printf 0").trim() == "1" {
+            println("  cuda libs:         toolkit " + ch)
+        } else {
+            println("  cuda libs:         (none resolved — CPU build, or a -cuda build needs a toolkit / pip nvidia-cuda-runtime-cu12)")
+        }
     }
     println("")
     println("OWN-KERNEL POLARITY  (native-canonical-default; cuBLAS = opt-in constraint)")
