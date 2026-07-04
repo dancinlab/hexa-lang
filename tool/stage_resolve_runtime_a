@@ -2232,72 +2232,88 @@ build_runtime_a_from_source() {
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRSTR WARN: $_rnss_err — FALLBACK-SHIM (retaining libc strstr member; strstr stays UND in the nm floor)" >&2
             fi
         fi
-        # ── RFC061 §M8 RT-NATIVE-REALLOC (Route C whole-module emit · COMPOSITE
-        #    non-libm leaf, default OFF) ──
-        # hxlcl_realloc leaves the shim (free #4242 precedent). NOT a pure leaf — its
-        # native body (hxlcl_core.hexa:1249) issues an inner C-ABI `bl hxlcl_malloc`
-        # (the RETAINED ungated shim provider, shim:101), a NEGATIVE-offset header read
-        # (p-16) and a byte copy. The inner malloc callee stays served by the shim (NO
-        # co-drop needed); only the realloc member drops. native body is BYTE-FAITHFUL
-        # to the BYTEID 0-libc floor arm (grow/shrink preserve min(n,old_n)), NOT to the
-        # shim's libc realloc delegate. `objcopy --keep-global-symbol=hxlcl_realloc`
-        # ISOLATES the staged member so the whole-module routec.o's sibling C-ABI defs
-        # (incl. its own hxlcl_malloc) stay served by the shim and the ld -r multidef
-        # gate (S5) sees exactly one new strong def. The shim drops realloc via
-        # -DHEXA_RT_NATIVE_REALLOC (#ifndef in shim.c). DEFAULT (unset) adds NO -D and
-        # NO member → shim.o + archive byte-identical (release-integrity invariant).
-        # x86_64-linux ONLY.
-        if [ "${HEXA_RT_NATIVE_REALLOC:-0}" = "1" ]; then
-            # zeroc #29: non-fp Route-C leaves (free/calloc/realloc) are pointer/size-only
-            # (no xmm fp-ABI) → the arm64 backend already lowers them (arm64_darwin.hexa
-            # _is_cabi && !_cabi_is_fp; routec_cabi_smoke emits arm64-darwin). The old
-            # x86-only gate was a libm-template copy. Extend to all 3 non-fp hosts.
-            # convergence stage-resolve-runtime-a-2 (Fable b2xiwq4w3).
-            _rnre_target=""
-            case "$(uname -s) $(uname -m)" in
-                "Linux x86_64"|"Linux amd64")  _rnre_target="x86_64-linux-gnu" ;;
-                "Linux aarch64"|"Linux arm64") _rnre_target="arm64-linux-gnu" ;;
-                "Darwin arm64")                _rnre_target="arm64-apple-darwin" ;;
+        # ── RFC061 §M8 RT-NATIVE-REALLOC (frozen seed-consume · COMPOSITE non-libm leaf, default OFF) ──
+        # hxlcl_realloc leaves the shim (free #4548 / calloc #4556 seed-consume precedent).
+        # NOT a pure leaf — its native body (hxlcl_core.hexa:1249) issues an inner C-ABI
+        # `bl hxlcl_malloc` (the RETAINED ungated shim provider, shim:101), a NEGATIVE-offset
+        # header read (p-16) and a byte copy. The inner malloc callee stays served by the shim
+        # (NO co-drop needed; it is an undefined extern in the seed, resolved within runtime.a);
+        # only the realloc member drops. native body is BYTE-FAITHFUL to the BYTEID 0-libc floor
+        # arm (grow/shrink preserve min(n,old_n)), NOT to the shim's libc realloc delegate. The
+        # body enters runtime.a via a FROZEN SEED baked by tool/regen_hxlcl_realloc_native_s.sh
+        # (aprime_cc --emit=asm hxlcl_core.hexa + a .globl DEMOTION to a 1-symbol hxlcl_realloc
+        # contract), NOT a build-time LIVE emit. WHY the switch (root-cause #4489/#4545, mirror
+        # of the merged #4548 free / #4556 calloc fix): the old live emit needed build/aprime_cc
+        # — the only binary that honours the `<runner>.hexa --emit=asm … SOURCE.hexa` argv — but
+        # aprime_cc needs runtime.a, so it cannot exist at Stage 0b. faithful CI then mis-resolved
+        # the emit binary to the CLI `hexa`, whose `.hexa`-first dispatch ran the driver in compat
+        # cmd_run and IGNORED `--emit=asm -o … hxlcl_core.hexa` → no .s → empty FATAL → faithful
+        # RED on all 3 targets. Baking the .s once on the pool and consuming it here removes the
+        # emit binary from the Stage-0b critical path (the #4535 regex / #4548 free / #4556 calloc
+        # pattern). Seed-consume MIRRORS RT-NATIVE-CALLOC (same composite inner-malloc class): pick
+        # the arch seed, gate on `.globl == 1` (the demotion already isolates the single strong def
+        # — the inner `bl hxlcl_malloc` is an UNDEFINED extern, NOT a `.globl` line, so it does not
+        # count; unlike the old whole-module live emit NO objcopy isolate is needed), $CC -c →
+        # build/hxlcl_realloc_native.o, then add -DHEXA_RT_NATIVE_REALLOC + the member (the ld -r
+        # multidef gate S5 still validates). TRI-STATE HEXA_RT_NATIVE_REALLOC:
+        #   0    = off (opt-out · block skipped · shim.o + archive byte-identical = neutral)
+        #   auto = graceful: a missing/bad/unassemblable seed keeps the libc-shim realloc member +
+        #          a loud WARN and the build CONTINUES — the fallback is the NORMAL libc realloc,
+        #          never a broken one, and a non-adopted flip is observable as `realloc` still UND
+        #          in the nobaseline nm-UND dump (#4360).
+        #   1    = strict: a missing/bad seed is FATAL (measurement / verify scripts).
+        # PREREQ-A (this PR, DEFAULT-OFF byteeq-neutral, zeroc #29 realloc F1 part2): the 3 seeds
+        # self/native/hxlcl_realloc_{x86_64,arm64-linux,arm64}.s are PENDING a pool aprime_cc bake
+        # — until they land, `auto` (and the DEFAULT `0`) gracefully FALLBACK-SHIMs (byteeq path
+        # unchanged). NOTE: the hxlcl_core.hexa hxlcl_realloc body gained !p/n==0/!np OOM guards in
+        # this same PR, so the pool bake must re-emit realloc (and the free/calloc/strcmp whole-
+        # module seeds that carry hxlcl_realloc as a demoted local) from the guarded body.
+        # convergence stage-resolve-runtime-a-2 · regen-hxlcl-free-native-s-sh-1.
+        _rnre_mode="${HEXA_RT_NATIVE_REALLOC:-0}"
+        if [ "$_rnre_mode" != "0" ]; then
+            _rnre_tgt="${TARGET:-}"; _rnre_tgt="${_rnre_tgt%-musl}"; _rnre_tgt="${_rnre_tgt%-cuda}"
+            [ -z "$_rnre_tgt" ] && case "$(uname -sm 2>/dev/null)" in
+                "Darwin arm64") _rnre_tgt="darwin-arm64" ;;
+                "Linux x86_64") _rnre_tgt="linux-x86_64" ;;
+                "Linux aarch64"|"Linux arm64") _rnre_tgt="linux-arm64" ;;
             esac
-            if [ -n "$_rnre_target" ]; then
-                local _rnre_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
-                if [ -z "$_rnre_bin" ]; then
-                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: HEXA_RT_NATIVE_REALLOC=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
-                fi
-                local _rnre_drv="build/_rnre_drv.hexa"
-                local _rnre_s="build/hxlcl_realloc_native.s"
-                local _rnre_full="build/hxlcl_realloc_native_full.o"
-                local _rnre_o="build/hxlcl_realloc_native.o"
-                printf 'fn _rnre_unused() {}\n' > "$_rnre_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC: emitting native Route C hxlcl_realloc .o via $_rnre_bin (HEXA_CABI_HXLCL=1, replacing libc-shim realloc member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnre_bin" "$_rnre_drv" --emit=asm --target="$_rnre_target" -o "$_rnre_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnre_realloc.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: realloc Route C asm emit failed — see build/_rnre_realloc.log" >&2; cat "build/_rnre_realloc.log" >&2; return 1; }
-                [ -s "$_rnre_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: empty $_rnre_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnre_s" -o "$_rnre_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: assemble $_rnre_s failed" >&2; return 1; }
-                # per-OS single-strong-def isolate (darwin = Mach-O _-prefix + no GNU objcopy).
-                # A cp fallback would keep the whole-module .o's sibling C-ABI strong defs →
-                # ld -r multidef bomb, so a missing isolate tool is a FATAL (not a silent pass).
-                _rnre_ksym="hxlcl_realloc"; [ "$(uname -s)" = "Darwin" ] && _rnre_ksym="_hxlcl_realloc"
-                if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol="$_rnre_ksym" "$_rnre_full" "$_rnre_o" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: objcopy isolate realloc failed" >&2; return 1; }
-                elif command -v llvm-objcopy >/dev/null 2>&1; then
-                    llvm-objcopy --keep-global-symbol="$_rnre_ksym" "$_rnre_full" "$_rnre_o" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: llvm-objcopy isolate realloc failed" >&2; return 1; }
-                elif [ "$(uname -s)" = "Darwin" ]; then
-                    ld -r "$_rnre_full" -o "$_rnre_o" -exported_symbol "$_rnre_ksym" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: ld -r isolate realloc failed" >&2; return 1; }
-                else
-                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: no isolate tool (objcopy/llvm-objcopy/ld -r) on $(uname -sm) — cp fallback = multidef bomb, refusing" >&2; return 1
-                fi
-                [ -f "$_rnre_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL: $_rnre_o not produced" >&2; return 1; }
-                _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_REALLOC"
-                _mo_hxlcl_members="$_mo_hxlcl_members $_rnre_o"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC: hxlcl_realloc → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_REALLOC (realloc dropped) — ld -r multidef gate validates"
+            case "$_rnre_tgt" in
+                darwin-arm64) _rnre_seed="self/native/hxlcl_realloc_arm64.s" ;;
+                linux-x86_64) _rnre_seed="self/native/hxlcl_realloc_x86_64.s" ;;
+                linux-arm64)  _rnre_seed="self/native/hxlcl_realloc_arm64-linux.s" ;;
+                *)            _rnre_seed="" ;;
+            esac
+            _rnre_err=""
+            if [ -z "$_rnre_seed" ] || [ ! -f "$_rnre_seed" ]; then
+                _rnre_err="no hxlcl_realloc seed for TARGET=$_rnre_tgt (regen tool/regen_hxlcl_realloc_native_s.sh — pending pool bake)"
             else
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC: HEXA_RT_NATIVE_REALLOC=1 IGNORED — non-fp Route C hosts = x86_64-linux·arm64-linux·darwin-arm64 (host=$(uname -sm) ineligible); retaining libc shim realloc member" >&2
+                # SAFETY: adopt only if the seed exports EXACTLY the 1 hxlcl_realloc contract
+                # symbol and nothing else global (a demotion-missed seed would risk a
+                # duplicate-symbol link against the shim's sibling hxlcl_* defs). The inner
+                # `bl hxlcl_malloc` is an UND extern (resolved within runtime.a by the retained
+                # shim provider), NOT a `.globl` def, so it does not inflate the total. `_?` =
+                # the Mach-O underscore. Both counts from `.globl` (toolchain-free).
+                _rnre_nc="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?hxlcl_realloc([[:space:]]|$)' "$_rnre_seed" 2>/dev/null || echo 0)"
+                _rnre_nt="$(grep -cE '^[[:space:]]*\.globl[[:space:]]' "$_rnre_seed" 2>/dev/null || echo 0)"
+                if [ "${_rnre_nc:-0}" -ne 1 ] || [ "${_rnre_nt:-0}" -ne 1 ]; then
+                    _rnre_err="seed $_rnre_seed exports $_rnre_nc/1 hxlcl_realloc (total globals $_rnre_nt, want 1 — demotion drift)"
+                else
+                    mkdir -p build
+                    _rnre_s="build/hxlcl_realloc_seed.s"; _rnre_o="build/hxlcl_realloc_native.o"
+                    grep -vE '^// ' "$_rnre_seed" > "$_rnre_s" 2>/dev/null || cp "$_rnre_seed" "$_rnre_s"
+                    if $CC $_mo_archflag -c "$_rnre_s" -o "$_rnre_o" 2>/dev/null; then
+                        _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_REALLOC"
+                        _mo_hxlcl_members="$_mo_hxlcl_members $_rnre_o"
+                        echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC: hxlcl_realloc ← frozen seed $_rnre_seed (TARGET=$_rnre_tgt, 1-symbol contract); shim.o built with -DHEXA_RT_NATIVE_REALLOC (realloc dropped) — ld -r multidef gate validates"
+                    else
+                        _rnre_err="assemble of $_rnre_seed failed"
+                    fi
+                    rm -f "$_rnre_s"
+                fi
+            fi
+            if [ -n "$_rnre_err" ]; then
+                [ "$_rnre_mode" = "1" ] && { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC FATAL (strict): $_rnre_err" >&2; return 1; }
+                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC WARN: $_rnre_err — FALLBACK-SHIM (retaining libc realloc member; realloc stays UND in the nm floor)" >&2
             fi
         fi
         # ── RFC061 §M8 RT-NATIVE-GETENV (Route C whole-module emit · non-libm leaf

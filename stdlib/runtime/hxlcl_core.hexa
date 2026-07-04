@@ -1246,9 +1246,24 @@ pub fn hxlcl_calloc(nmemb: HexaVal, size: HexaVal) -> int {
 // 16-byte header so the header read is meaningful (see tool/routec_cabi_smoke.sh).
 
 // hxlcl_realloc: grow/shrink `p` to `n` bytes, preserving min(n, old_n) content.
+// F1 part2 (zeroc #29): the three frozen-floor guards below (`if(!p) return
+// malloc(n); if(n==0) return 0; if(!np) return 0;`) were absent — an OOM
+// (np==0) would store to a NULL destination via the copy loop, and a NULL `p`
+// would read the size header at (NULL-16). Restored to byte-faithful parity with
+// the floor body (self/runtime.c hxlcl_realloc, comment :1240) so no defined
+// input path stores to NULL. Zero-cost on the hot grow path (all early returns).
 pub fn hxlcl_realloc(p: HexaVal, n: HexaVal) -> int {
     let pp = __hx_payload_add(p, 0)            // old buffer (payload word)
+    if __hx_payload_eq(pp, 0) {
+        return hxlcl_malloc(n)                 // !p → fresh alloc (floor: return malloc(n))
+    }
+    if __hx_payload_eq(n, 0) {
+        return 0                               // n==0 → NULL (floor: return 0)
+    }
     let np = hxlcl_malloc(n)                   // C-ABI bl → new raw ptr
+    if __hx_payload_eq(np, 0) {
+        return 0                               // OOM → NULL, never store to NULL (floor: if(!np) return 0)
+    }
     let neg_hdr = __hx_payload_sub(0, 16)      // -HXLCL_HDR_BYTES
     let old_n = __hx_ptr_load64(pp, neg_hdr)   // *(size_t*)(p - 16)
     let mut copy_n = n
