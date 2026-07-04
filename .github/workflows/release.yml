@@ -42,17 +42,25 @@ on:
 permissions:
   contents: write  # gh release upload
 
-# Every run is now a tag release (push `v*` or workflow_dispatch of a tag) —
-# each distinct version gets its own group and NEVER cancels, so a tag's
-# 3-target build always runs to finalize. (The old rolling-`test` channel
-# cancelled older in-flight main-push builds; with `test` retired there is no
-# branch push to cancel, so cancel-in-progress is unconditionally false.)
+# Every run is a tag release (push `v*` or workflow_dispatch of a tag).
+# KEEP-LATEST queue coalescing (CI-speedup lever 5): ONE global group means
+# GitHub holds at most one release IN-FLIGHT plus one PENDING — a newer tag's
+# queued run REPLACES an older still-queued one. Measured pathology this fixes:
+# 19 release runs in 14.1h all queue-competing for the single ghost darwin
+# slot — the darwin leg's median queue was 168.8 min (p90 230.7) for a 2.7 min
+# job, and those queued release runs also starved PR-gate darwin jobs.
+# Integrity invariants preserved:
+#   - cancel-in-progress: false → an IN-FLIGHT release is NEVER cancelled, so
+#     finalize's 3/3 Latest flip can never be interrupted mid-run.
+#   - Only queued-not-started runs coalesce, always toward the NEWEST tag, and
+#     the newest tag's run always survives → Latest stays monotonic and the
+#     consumed channel (stable Latest / newest v* tag) always gets its full
+#     3-target build. A superseded intermediate tag simply never builds assets.
+#   - A tag-push (refs/tags/vX) and a workflow_dispatch (inputs.tag=vX) of the
+#     same release still dedup (the single group subsumes the old per-version
+#     group that fixed the v0.314.x cancel-storm).
 concurrency:
-  # Normalize the key to the version (ref_name strips refs/tags/) so a tag-push
-  # (refs/tags/vX) and a workflow_dispatch (inputs.tag=vX) of the SAME release
-  # land in ONE group and dedup, instead of running in parallel and storming the
-  # runner pool (the v0.314.x cancel-storm).
-  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  group: release
   cancel-in-progress: false
 
 env:
