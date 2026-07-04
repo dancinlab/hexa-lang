@@ -189,8 +189,8 @@
       {
         "id": "WALL-A-STATIC-TYPES-REJECT-LADDER",
         "state": "in_flight",
-        "value": "정적타입 REJECT 사다리 r1~r6 land(literal→ident/call→decl-split→array→struct-field→struct-literal·전부 opt-in HEXA_STATIC_TYPES default-OFF·byteeq중립·HX3011 Rust E0308·삽입점 compiler/check/types.hexa _infer_expr)·r7+ generic/trait static-dispatch=measured 천장(dynamic 런타임 type-erasure 근본벽).",
-        "threshold": "r7+ 불가=_types_lower_type_ref:931-939 degraded sentinel(generic:/fn:/tuple: → args:[]/ret:[] 타입파라미터 소거)→concrete T 미보유→generic monomorphization·trait static-dispatch은 dynamic→static 런타임 재설계 필요(scope-local _infer_expr 鋼 아님). nested receiver(s.inner.x)도 同벽. SSOT=state/rfc_static_types_rust_ladder.md.",
+        "value": "정적타입 REJECT 사다리 현행(main·2026-07-05): r1~r11+F0/F3/F4 전부 착지·catalog HX3011~HX3018. r1~r6(literal→ident/call→decl-split→array→struct-field→struct-literal)·r7prep(array-lower)·r8(ArrayLit call-arg)·r9a/b(Index/Field READ 추론)·r9c(match literal-pattern)·r9d(struct-field 존재 HX3016 E0560)·r11(missing-field HX3017 E0063)·exhaustiveness(HX3018)·F0(flag-fold STATIC⊇ARRAY_LOWER)·F3(env-hoist once-per-type_check)·F4(warn-first two-step: HEXA_STATIC_TYPES=warn/_STRICT=fatal REJECT). 전부 opt-in default-OFF byteeq중립·삽입점 compiler/check/types.hexa _infer_expr·HX3011=Rust E0308. ★phantom-merge 사고(#4476~#4518 down-stack)로 r8~F4 유령머지→#4538 재착지 복구.",
+        "threshold": "next rung(Fable bbgibfj3e 설계중): (a)F5 default-ON flip-prep(census callers=0→byteeq gen3≡gen4서 warn-band STATIC-없이 켜기 마이그레이션) 또는 (b)새 REJECT(fn-arg arity/type·binop type·if/else 통일·return vs decl). r7+ generic/trait static-dispatch=여전히 measured 천장(_types_lower_type_ref degraded sentinel→concrete T 미보유·dynamic→static 재설계 필요). SSOT 트리=hexa-own-ladder(메모리)·이 레코드=static-types 사다리 로드맵. ING=활성 포인터만(#42416992/#42417214).",
         "source": "compiler/check/types.hexa"
       },
       {
@@ -5444,6 +5444,10 @@
             "role": "",
             "id": "hexa-own-ladder-l3-borrow",
             "detail": ""
+          },
+          {
+            "id": "hexa-own-ladder-l4-borrow-surface",
+            "name": "L4 borrow surface &T/&mut T — ✅ MERGED(#4517 borrow surface 양파서 · #4520 A2 would-move census · #4521 B0 STRICT fatal HX3014). 플래그 HEXA_BORROWCK(+_NLL cross-block liveness ·_CENSUS ·_STRICT). L3 NLL 위에 &T/&mut T 대여표면+STRICT 승격 착지. 다음(Fable bbgibfj3e 설계중)=동시 &mut 중복대여 REJECT(E0499)·& while &mut(E0502) 또는 L5 dangling return-ref(E0515). 삽입점 hir_to_mir.hexa _bck_* + builder.hexa _emit_hx3014."
           },
           {
             "name": "L4 default-ownership (Rust move-by-default · semantics A) — 사용자 지시(2026-07-04): @own opt-in이 아니라 **기본 소유권**. 정직 crux: bump-arena는 scope 중 free 안 함→borrow 위반이 use-after-free 불가→enforcement=correctness lint until PREREQ-X(비-arena free-tree HEXA_STREAM_RECLAIM allocator default). 2-lane 사다리→flip. 로드맵 SSOT=state/hexa-own/default_own_roadmap.md(#4516 MERGED).",
