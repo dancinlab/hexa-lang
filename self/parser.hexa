@@ -622,6 +622,22 @@ fn p_reserved_tier2_enabled() {
     return false
 }
 
+// Opt-in switch for the postfix `?` try-propagation operator (RFC r15-D2).
+// Default-OFF: existing self-host bootstrap (self/main.hexa uses no `?`) and
+// every shipped program is byte-identical when `HEXA_TRY_OP` is unset, so the
+// operator is an opt-in language constraint (native-canonical-default polarity:
+// the feature is the opt-in, the absence of it is the canonical default). Set
+// `HEXA_TRY_OP=1` to enable `expr?` in both the self/ (gen2) and native
+// (compiler/*) pipelines. Mirrors `p_reserved_tier2_enabled` (HEXA_RESERVED_TIER2)
+// and the native `env("HEXA_MONOMORPHIZE")` gate at hir_to_mir.hexa.
+@pure
+fn p_try_op_enabled() {
+    let v = env("HEXA_TRY_OP")
+    if v == "1" { return true }
+    if v == "true" { return true }
+    return false
+}
+
 // Contextual keyword helper — currently no kinds. All previously-contextual
 // keywords (guard Phase 1; generate Phase 3) have been demoted: `guard` to
 // plain `if !cond` sugar (removed entirely) and `generate` to the
@@ -3733,8 +3749,14 @@ fn parse_postfix() {
                 "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
                 "target": "", "trait_name": "", "methods": ""
             }
-        } else if k == "Question" {
+        } else if k == "Question" && p_try_op_enabled() {
             // PROBE r15-D2 (2026-05-24): postfix `?` try-propagation operator.
+            // Gated default-OFF (HEXA_TRY_OP) — when unset the `Question` token
+            // is left unconsumed in expression position (the feature is opt-in;
+            // self/main.hexa never uses `?` so the self-host fixpoint is
+            // byte-identical either way). `?.` optional-chaining (QuestionDot →
+            // OptField, the arm above) and the `T?` type-suffix
+            // (parse_type_annotation) are SEPARATE tokens/paths and stay live.
             // `expr?` → Try{left=expr}. On success (Ok/Some tag at index 0)
             // unwraps the payload; on failure (Err/None) the enclosing fn
             // returns the value unchanged (identity re-wrap — hexa is
