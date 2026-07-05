@@ -1522,10 +1522,18 @@ build_runtime_a_from_source() {
         # SEED-BACKED RT-NATIVE symbols that ALSO appear in a SELFEMIT/MEMLEAF list
         # (the ONLY ones that can collide). Add a symbol here the same round its
         # RT-NATIVE-<SYM> seed-consume block + seeds land.
-        local _mo_rn_sym _mo_rn_SYM _mo_rn_gate
-        for _mo_rn_sym in strcmp strncmp strchr strcpy strncpy strcat memcmp memcpy memset strlen strdup; do
+        # Each entry is <sym>:<default> — the DEFAULT MUST mirror the RT-NATIVE-<SYM>
+        # consuming block's default (convergence selfemit-smoke-4591-codrop-default-mismatch).
+        # A default-auto flip whose registry entry stays :-0 makes the registry read
+        # "unclaimed" while the block engages → the SELFEMIT loop double-emits the member →
+        # S5 ld -r multidef (silently swallowed → stale runtime.a). A flip PR MUST bump the
+        # <sym>:<default> pair here in the SAME change. (strcmp/strncmp/strchr/strdup are
+        # default-auto seed leaves; strstr is NOT in the SELFEMIT list so it needs no entry.)
+        local _mo_rn_sym _mo_rn_SYM _mo_rn_gate _mo_rn_def
+        for _mo_rn_sym in strcmp:auto strncmp:auto strchr:auto strdup:auto strcpy:0 strncpy:0 strcat:0 memcmp:0 memcpy:0 memset:0 strlen:0; do
+            _mo_rn_def="${_mo_rn_sym#*:}"; _mo_rn_sym="${_mo_rn_sym%%:*}"
             _mo_rn_SYM=$(printf '%s' "$_mo_rn_sym" | tr 'a-z' 'A-Z')
-            eval "_mo_rn_gate=\${HEXA_RT_NATIVE_${_mo_rn_SYM}:-0}"
+            eval "_mo_rn_gate=\${HEXA_RT_NATIVE_${_mo_rn_SYM}:-$_mo_rn_def}"
             [ "$_mo_rn_gate" = "0" ] && continue
             [ -n "$_mo_rn_suf" ] && [ -f "self/native/hxlcl_${_mo_rn_sym}_${_mo_rn_suf}.s" ] \
                 && _mo_rtnative_syms="${_mo_rtnative_syms}${_mo_rn_sym} "
@@ -3344,7 +3352,7 @@ resolve_cuda_runtime_seed
 
 if [ -f self/runtime.c ]; then
     echo "stage_resolve_runtime_a: seeds present — building runtime.a from source"
-    build_runtime_a_from_source
+    build_runtime_a_from_source || exit 1   # convergence selfemit-smoke-4591-codrop-default-mismatch: a Case-B FATAL (return 1) must NOT be swallowed (set -uo pipefail has no -e) into exit 0 + a stale runtime.a
     sync_runtime_a_to_installed_link
     exit 0
 fi
@@ -3371,7 +3379,7 @@ fi
 ASSET="${EDGE_ASSET:?EDGE_ASSET must be set when seeds are removed}"
 echo "stage_resolve_runtime_a: self/runtime.c ABSENT — restoring frozen seeds + regen runtime_core.c, then building from source"
 if bash tool/restore_frozen_seeds && [ -f self/runtime.c ]; then
-    build_runtime_a_from_source
+    build_runtime_a_from_source || exit 1   # convergence selfemit-smoke-4591-codrop-default-mismatch: a Case-B FATAL (return 1) must NOT be swallowed (set -uo pipefail has no -e) into exit 0 + a stale runtime.a
     sync_runtime_a_to_installed_link
     exit 0
 fi
