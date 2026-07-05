@@ -694,6 +694,37 @@ fn _build_case_coerce_arg() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (ah) segment(b) Rung B — actual-`unit` permissive guard on the return (2784),
+// assign (3024), and module-let (5073) sites. A `<expr>` that infers `unit` (an
+// unannotated-return call) must not fire HX3004/HX3001, mirroring call-arg/if-join.
+// Covers: fn v() unit · return v() (0 HX3004, guard) · bare `return` (1 HX3004,
+// E0069 control — must still fire) · g = v() (0 HX3001, guard) · module-let
+// W: i64 = v() (0 HX3001, guard). Expect exactly 1 HX3004 (bare only) + 0 HX3001.
+fn _build_case_actual_unit_guard() -> Module {
+    let f = "case_actual_unit.hexa"
+    // fn v() { }   — no return annotation → infers unit
+    let item_v = _fn_item("v", [], _empty_type_ref(), _block([], f, 1, 10), f, 1)
+    // fn f() -> i64 { return v() }   — return-expr unit → suppressed (0 HX3004)
+    let ret_call = _return_expr(_call_expr(_ident_expr("v", f, 2, 22), [], f, 2, 22), f, 2, 15)
+    let item_f = _fn_item("f", [], _named_type_ref("i64"), _block([ret_call], f, 2, 1), f, 2)
+    // fn h() -> i64 { return }   — bare return (no children) → HX3004 (E0069, fires)
+    let bare_ret = Expr { kind: ExprKind::Return, span: _span(f, 3, 15, 6), text: "", annotations: [], children: [], atlas_ref: _empty_atlas_ref() }
+    let item_h = _fn_item("h", [], _named_type_ref("i64"), _block([bare_ret], f, 3, 1), f, 3)
+    // fn a() { let g: i64 = 0  g = v() }   — assign unit → suppressed (0 HX3001)
+    let let_g = Expr { kind: ExprKind::Let, span: _span(f, 4, 5, 3), text: "g|i64", annotations: [], children: [_int_expr("0", f, 4, 18)], atlas_ref: _empty_atlas_ref() }
+    let asg = _assign_expr(_ident_expr("g", f, 5, 5), _call_expr(_ident_expr("v", f, 5, 9), [], f, 5, 9), f, 5, 7)
+    let item_a = _fn_item("a", [], _empty_type_ref(), _block([let_g, asg], f, 4, 1), f, 4)
+    // module let W: i64 = v()   — module-let unit → suppressed (0 HX3001)
+    let item_w = Item { kind: ItemKind::Let, name: "W", span: _span(f, 6, 1, 1), annotations: [], params: [], return_type: _named_type_ref("i64"), body: _call_expr(_ident_expr("v", f, 6, 12), [], f, 6, 12), is_pub: false }
+    let mut items = []
+    items.push(item_v)
+    items.push(item_f)
+    items.push(item_h)
+    items.push(item_a)
+    items.push(item_w)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // (d) FAIL HX3001: 1 + true — binop operand mismatch
 fn _build_case_d() -> Module {
     let f = "case_d.hexa"
@@ -2300,6 +2331,18 @@ fn main() {
         ok = false
     } else {
         println("  ok: 0 HX3005 (unit-inferring arm `v()` suppressed by unit-permissive guard) — if/else-join parity")
+    }
+
+    // (ah) segment(b) Rung B — actual-`unit` permissive guard (return/assign/module-let).
+    // return v() + g = v() + module-let W = v() suppressed; bare `return` still fires (E0069).
+    let diags_ah = _run_case("(ah) static-types segment(b) — actual-unit permissive guard (return/assign/module-let · bare-return preserved) (HX3004/HX3001)", _build_case_actual_unit_guard())
+    let nah_3004 = _count_code(diags_ah, "HX3004")
+    let nah_3001 = _count_code(diags_ah, "HX3001")
+    if nah_3004 != 1 || nah_3001 != 0 {
+        println("  FAIL: case (ah) expected 1 HX3004 (bare return only; return v() suppressed) + 0 HX3001 (assign/module-let v() suppressed), got " + to_string(nah_3004) + " HX3004 / " + to_string(nah_3001) + " HX3001 (total=" + to_string(len(diags_ah)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3004 (bare `return` fires E0069; `return v()` suppressed) + 0 HX3001 (assign/module-let unit suppressed) — actual-unit guard parity")
     }
 
     println("")
