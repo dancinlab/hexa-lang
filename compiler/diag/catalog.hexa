@@ -486,6 +486,24 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3027",
+        title: "cannot use a value while it is mutably borrowed",
+        // Warning band (SSOT F4 warn-first), the use-of-value rung of the E2
+        // loan-registry family: the opt-in borrow checker (`HEXA_BORROWCK=1`)
+        // surfaces a READ of a value while it has a LIVE `&mut` loan. Under
+        // `HEXA_BORROWCK_STRICT=1` the SAME diagnostic instance is re-banded to
+        // a build-refusing Error via the sanctioned caller override in
+        // `_bck_emit_use_while_mut` (identical mechanism to HX3014/HX3019/
+        // HX3021/HX3023). With the flag unset the loan pass is inert
+        // (`_bck_active` false), so nothing is emitted and the diagnostic stream
+        // + emitted bytes are byte-identical — release integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "cannot use `{origin}` because it is mutably borrowed by `{name}` at line {borrow_line}",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN L5-E5) found a USE (a read of the value) of `x` while a LIVE MUTABLE loan of `x` exists in the E2 registry — i.e. some binding `m` was mutably borrowed against `x` (`let m = &mut x`) earlier in the same function and has not been killed (by reassigning `m` to a non-borrow RHS) before this read. This is Rust's E0503 ('cannot use `x` because it was mutably borrowed'; rustc_borrowck reports it when a use of a place overlaps a live mutable loan of that place): a `&mut x` loan promises EXCLUSIVE access through `m`, so reading `x` directly through its own name while that promise is outstanding would observe a value the mutable borrower may be about to change. UNLIKE the write-through rule (E0506/HX3023, which invalidates BOTH `&` and `&mut` loans because any write breaks aliasing), E0503 keys on the MUTABILITY bit: a shared `&x` loan permits concurrent reads, so a use of `x` while only shared loans are live is SILENT — the rule fires only when `_bck_ref_mut` is set. The scan runs at the single ident READ funnel (`_bck_check_use`, HEXA-OWN L3 M3), before the aggregate-group early-return, so a scalar origin (`let mut x = 5`) is covered even though it is never group-tracked. A borrow RHS is EXEMPT: `let n = &mut x` reads `x` to take its ADDRESS (not to use its value), so a re-borrow of an already-`&mut`-loaned origin is reported by the borrow-conflict rule (E0502/HX3021) alone, never double-reported here (the `_bck_in_borrow_rhs` suppression). The detection is conservative / flow-insensitive within a scope (no NLL last-use yet): a loan stays LIVE from its `let` to the end of the function or until the binding is reassigned to a non-borrow, so `let m = &mut x; <m unused>; let y = x;` ALSO fires even though Rust NLL (last-use) would end `m`'s loan before the read — this is the documented flow-insensitive false-positive class, the SAME conservative-loud-over-quiet policy as E2/E3/E4. Only same-fn live loans count; borrows of module-level globals, through call args / struct fields / array elements / closures, and cross-function loans are NOT tracked (documented false-negatives). Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical. Fix: finish the mutable borrow before reading the value (end `m`'s last use, or reassign `m` to a non-borrow RHS before the read), or read through the borrow itself (`*m`) instead of the original name.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX3024",
         title: "cannot apply unary operator `-`",
         severity: Severity::Error,
