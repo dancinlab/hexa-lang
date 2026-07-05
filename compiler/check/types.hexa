@@ -3622,7 +3622,16 @@ fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         while k < arg_count {
             let want = callee_t.args[k]
             let got = arg_types[k]
-            if !_types_equal(want, got) {
+            // segment(b) HX3003 coercion-faithfulness: call-arg uses the SAME
+            // `_types_assignable` contract as let/assign/return (Rust E0308
+            // demand_coerce — passing an arg coerces exactly like a let-binding:
+            // int-lit→int-kind, float-lit→float-kind, HexaVal/any wildcard).
+            // `_types_assignable` is a strict SUPERSET of `_types_equal` (its
+            // first line returns true on equal), so this is loosening-only — no
+            // NEW reject is possible, only false-positives removed. This closes
+            // the last bare-`_types_equal` value-flow site (let/assign/return/
+            // if-join/field-init/match-scrutinee already use assignable).
+            if !_types_assignable(want, got, e.children[1 + k]) {
                 // Permissive on `unit`-typed actuals: the inferencer
                 // resolves an unannotated `fn f(x) { if … { return X }
                 // ; return Y }` to `unit` even when every path
