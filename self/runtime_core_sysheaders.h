@@ -113,4 +113,24 @@ void   hxlcl_backtrace_symbols_fd(void *const *buf, int sz, int fd);
 int    hxlcl_task_info(unsigned int target, unsigned int flavor, void *info_out, unsigned int *count);
 #endif /* HEXA_RTCORE_HXLCL_PROTOS */
 
+/* zeroc #29 mem-leaf caller-drop: route runtime_core.c's bare mem*() call sites through the
+ * shim's native hxlcl_mem* bodies so `memcpy`/`memset`/`memcmp` leave the runtime.a nm-UND
+ * floor. Mirrors runtime.c's own override block (runtime_emit_full.hexa ~2835); the standalone
+ * runtime_core TU had NO such block, which is exactly why memcpy survived every prior round.
+ * Placed AFTER all #includes above (<string.h> at :28) so its memcpy prototype is already
+ * parsed, NOT macro-expanded; runtime_core.c is a #include-FRAGMENT with no further libc
+ * includes, so nothing re-parses a mem* prototype after this. Function-like macros do not
+ * touch the `hxlcl_memcpy(` tokens. Opt-out to the libc path: -DHEXA_RT_MEM_LIBC. */
+#ifndef HEXA_RT_MEM_LIBC
+#ifndef memcpy
+#define memcpy(d,s,n)  hxlcl_memcpy((void *)(d), (const void *)(s), (size_t)(n))
+#endif
+#ifndef memset
+#define memset(p,c,n)  hxlcl_memset((void *)(p), (int)(c), (size_t)(n))
+#endif
+#ifndef memcmp
+#define memcmp(a,b,n)  hxlcl_memcmp((const void *)(a), (const void *)(b), (size_t)(n))
+#endif
+#endif /* !HEXA_RT_MEM_LIBC */
+
 #endif /* HEXA_RUNTIME_CORE_SYSHEADERS_H */
