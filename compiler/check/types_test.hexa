@@ -1326,6 +1326,33 @@ fn _build_case_hx3005_join_coerce() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (ag) segment(b) HX3005 match-join unit-permissive guard — an arm body that
+// infers `unit` (unannotated-return call) must not error, mirroring the if/else
+// join. `match c { 1 -> v(), _ -> 3 }` where `fn v()` has no return annotation
+// → first_t=unit → guard suppresses. Expect 0 HX3005 (pre-guard: 1).
+fn _build_case_hx3005_join_unit() -> Module {
+    let f = "case_hx3005_unit.hexa"
+    // fn v() { }   — no return annotation → infers unit
+    let mut vkids = []
+    let item_v = _fn_item("v", [], _empty_type_ref(), _block(vkids, f, 1, 10), f, 1)
+    // fn f(c: i64) { match c { 1 -> v(), _ -> 3 } }
+    let mut arms = []
+    arms.push(_int_expr("1", f, 4, 9))
+    arms.push(_call_expr(_ident_expr("v", f, 4, 14), [], f, 4, 14))
+    arms.push(_wildcard_expr(f, 5, 9))
+    arms.push(_int_expr("3", f, 5, 14))
+    let m = _match_expr(_ident_expr("c", f, 3, 11), arms, f, 3, 5)
+    let mut fkids = []
+    fkids.push(m)
+    let mut fparams = []
+    fparams.push(_param("c", "i64", f, 3, 6))
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), _block(fkids, f, 3, 1), f, 3)
+    let mut items = []
+    items.push(item_v)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // static-types r9d — struct-literal field-EXISTENCE reject (HEXA_STATIC_TYPES=1,
 // no ARRAY_LOWER dependency). r6 deliberately scoped existence out, so a
 // typo'd field name silently skipped BOTH the existence and the type check.
@@ -2262,6 +2289,17 @@ fn main() {
         ok = false
     } else {
         println("  ok: 1 HX3005 as ERROR (string arm reject; int-lit `3` coerces to i32) — match join E0308 demand_coerce faithfulness")
+    }
+
+    // (ag) segment(b) HX3005 match-join unit-permissive guard — arm body inferring
+    // `unit` (unannotated-return call) suppressed, mirroring the if/else join.
+    let diags_ag = _run_case("(ag) static-types segment(b) — match-join unit-permissive guard (unit arm suppressed) (HX3005)", _build_case_hx3005_join_unit())
+    let nag = _count_code(diags_ag, "HX3005")
+    if nag != 0 {
+        println("  FAIL: case (ag) expected 0 HX3005 (unit arm suppressed by guard), got " + to_string(nag) + " (total=" + to_string(len(diags_ag)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3005 (unit-inferring arm `v()` suppressed by unit-permissive guard) — if/else-join parity")
     }
 
     println("")
