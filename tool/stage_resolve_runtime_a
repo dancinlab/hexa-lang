@@ -2596,7 +2596,7 @@ build_runtime_a_from_source() {
         # this same PR, so the pool bake must re-emit realloc (and the free/calloc/strcmp whole-
         # module seeds that carry hxlcl_realloc as a demoted local) from the guarded body.
         # convergence stage-resolve-runtime-a-2 · regen-hxlcl-free-native-s-sh-1.
-        _rnre_mode="${HEXA_RT_NATIVE_REALLOC:-0}"
+        _rnre_mode="${HEXA_RT_NATIVE_REALLOC:-auto}"
         if [ "$_rnre_mode" != "0" ]; then
             _rnre_tgt="${TARGET:-}"; _rnre_tgt="${_rnre_tgt%-musl}"; _rnre_tgt="${_rnre_tgt%-cuda}"
             [ -z "$_rnre_tgt" ] && case "$(uname -sm 2>/dev/null)" in
