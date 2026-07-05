@@ -1397,9 +1397,16 @@ pub fn hxlcl_getegid() -> int {
 // `*errno_p = -r` and the fn returns -1, exactly like musl's __syscall_ret
 // (`if (r > -4096UL) { errno = -r; return -1; }`). The errno store is gated on
 // `target_is_linux()` — DARWIN signals errors via the carry flag with a POSITIVE
-// errno (not -r), so the Linux store would be wrong there; on darwin the gate is
-// a compile-time-false const → DCE drops the `__errno_location` call entirely
-// (darwin errno = a separate round via `__error()`, the darwin accessor). The
+// errno (not -r), so the Linux store would be wrong there. NOTE: darwin lowers
+// `target_is_linux()` to a MATERIALIZED RUNTIME const #0 (`movz x1,#0`, boxed as a
+// {x0=TAG_INT, x1=0} HexaVal) — there is NO branch-fold / dead-code-elimination
+// pass (see the codegen target_is_* lowering, compiler/codegen/arm64_darwin.hexa),
+// so the `if target_is_linux()` block — including its `bl __errno_location` — is
+// EMITTED as dead-but-present code carrying a LIVE external `__errno_location`
+// reference: never executed on darwin (darwin errno = a separate round via
+// `__error()`, the darwin accessor), but PRESENT in the object. That dead-but-
+// present external ref is exactly why RT-NATIVE frozen seeds must be transitive-
+// closure-isolated (ref convergence isolate-native-seed-py-1). The
 // darwin smoke therefore asserts only close's return value (0 / -1), while the
 // LINUX routec-smoke asserts errno == EBADF (value-exact, the substrate's core
 // claim).
