@@ -1211,7 +1211,7 @@ build_runtime_a_from_source() {
     # copies as memcpy even under -fno-builtin). clang REJECTS the gcc-only -ftree-* flag
     # ("unknown argument"), so it is added conditionally for gcc only. Prereq: the #4366 fast
     # glibc-dispatch hxlcl_memcpy/memset/memmove/memcmp bodies (explicit calls stay fast).
-    local _zeroc_nobuiltin="-fno-builtin-memcpy -fno-builtin-memset -fno-builtin-memmove -fno-builtin-memcmp -fno-builtin-strlen"
+    local _zeroc_nobuiltin="-fno-builtin-memcpy -fno-builtin-memset -fno-builtin-memmove -fno-builtin-memcmp -fno-builtin-strcpy -fno-builtin-strncpy -fno-builtin-strcat -fno-builtin-strlen"
     case "$("${CC:-cc}" --version 2>/dev/null | head -1)" in
         *[Cc]lang*) : ;;                                  # clang: -fno-builtin-* suffices
         *) _zeroc_nobuiltin="$_zeroc_nobuiltin -fno-tree-loop-distribute-patterns" ;;  # gcc
@@ -2622,8 +2622,21 @@ build_runtime_a_from_source() {
                 # the Mach-O underscore. Both counts from `.globl` (toolchain-free).
                 _rnre_nc="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?hxlcl_realloc([[:space:]]|$)' "$_rnre_seed" 2>/dev/null || echo 0)"
                 _rnre_nt="$(grep -cE '^[[:space:]]*\.globl[[:space:]]' "$_rnre_seed" 2>/dev/null || echo 0)"
+                # SEED BODY-INTEGRITY GATE (zeroc #29 realloc · #4599 lesson, verbatim
+                # state/hexa-own/memleaf_flip_design_fable.md:58): a body-SLICED seed (the
+                # isolate_native_seed.py bb-label hex-hash misparse) still passes the
+                # .globl==1 contract above AND assembles cleanly — byteeq and install-link
+                # prove NOTHING about seed EXECUTION (the prologue fell off the end of .text
+                # → SIGABRT only under a faithful/self-host RUN). Require the adopted seed
+                # carry a real function body: ≥1 `ret`-class return AND ≥1 `_bb` basic-block
+                # label. A prologue-only sliced seed has NEITHER (all bb labels + the epilogue
+                # `ret` live in the dropped body). Toolchain-free (grep on the .s text).
+                _rnre_rc="$(grep -cE '(^|[[:space:]])retq?([[:space:]]|$)' "$_rnre_seed" 2>/dev/null || echo 0)"
+                _rnre_bc="$(grep -cE '_bb[0-9]+' "$_rnre_seed" 2>/dev/null || echo 0)"
                 if [ "${_rnre_nc:-0}" -ne 1 ] || [ "${_rnre_nt:-0}" -ne 1 ]; then
                     _rnre_err="seed $_rnre_seed exports $_rnre_nc/1 hxlcl_realloc (total globals $_rnre_nt, want 1 — demotion drift)"
+                elif [ "${_rnre_rc:-0}" -lt 1 ] || [ "${_rnre_bc:-0}" -lt 1 ]; then
+                    _rnre_err="seed $_rnre_seed body-integrity FAIL (ret=$_rnre_rc bb=$_rnre_bc, want ≥1 each — sliced body, #4599 slicer bb-label misparse; byteeq/link cannot see this, only faithful RUN)"
                 else
                     mkdir -p build
                     _rnre_s="build/hxlcl_realloc_seed.s"; _rnre_o="build/hxlcl_realloc_native.o"
