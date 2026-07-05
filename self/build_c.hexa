@@ -3771,7 +3771,18 @@ fn emit_runtime() {
     rp.push("    }\n")
     rp.push("    closedir(d); return a;\n")
     rp.push("}\n")
-    rp.push("static long hexa_to_int_str(const char* s) { return strtol(s, NULL, 10); }\n")
+    // zeroc #29: self-contained base-10 parser drops libc strtol (__isoc23_strtol) from
+    // the build-driver prelude's nm-UND floor. This is the sole strtol call site; a raw
+    // digit scan is exact for strtol(s, NULL, 10) semantics (leading ws + sign + digits),
+    // no hxlcl/TU-visibility dependency, cold build-time path so byte-loop perf is moot.
+    rp.push("static long hexa_to_int_str(const char* s) {\n")
+    rp.push("    while (*s == ' ' || *s == '\\t') s++;\n")
+    rp.push("    int neg = 0;\n")
+    rp.push("    if (*s == '-') { neg = 1; s++; } else if (*s == '+') s++;\n")
+    rp.push("    long v = 0;\n")
+    rp.push("    while (*s >= '0' && *s <= '9') { v = v * 10 + (long)(*s - '0'); s++; }\n")
+    rp.push("    return neg ? -v : v;\n")
+    rp.push("}\n")
     rp.push("static long hexa_append_file(const char* path, const char* content) {\n")
     rp.push("    FILE* f = fopen(path, \"ab\");\n")
     rp.push("    if (!f) return 0;\n")
