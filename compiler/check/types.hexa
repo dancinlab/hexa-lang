@@ -2781,7 +2781,14 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         // still strict-check, so real mismatches report (no g3 weakening).
         if len(frame_ret.kind) > 0 && frame_ret.kind != "unit" {
             if !_types_assignable(frame_ret, val_t, val_src) {
-                _emit_hx3004(frame_name, frame_ret, val_t, e.span, out)
+                // segment(b) Rung B — permissive on an actual `unit` from
+                // `return <expr>` where expr is an unannotated-return call the
+                // inferencer resolves to unit (parity with call-arg 3642 and the
+                // if/else join). A bare `return` (no children → val_t defaults
+                // to unit) still fires HX3004 (Rust E0069, must not be silenced).
+                if !(len(e.children) > 0 && val_t.kind == "unit") {
+                    _emit_hx3004(frame_name, frame_ret, val_t, e.span, out)
+                }
             }
         }
         return _types_t_unit()
@@ -3021,7 +3028,12 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // unknown-side cases stop false-flagging HX3001; genuine
             // kind≠kind non-literal mismatches still report (g3 intact).
             if !r3_rejected && !_types_assignable(lhs_t, rhs_t, e.children[1]) {
-                _emit_hx3001(lhs_t, rhs_t, e.span, out)
+                // segment(b) Rung B — permissive on an actual `unit` RHS (an
+                // unannotated-return call the inferencer resolves to unit),
+                // parity with call-arg 3642 / return / if-join.
+                if rhs_t.kind != "unit" {
+                    _emit_hx3001(lhs_t, rhs_t, e.span, out)
+                }
             }
             // HEXA-OWN L2 r1 — a bare-ident RHS of an assignment MOVES the
             // owned value (`y = x` where `x` is a registered `@own` binding):
@@ -3628,9 +3640,9 @@ fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // int-lit→int-kind, float-lit→float-kind, HexaVal/any wildcard).
             // `_types_assignable` is a strict SUPERSET of `_types_equal` (its
             // first line returns true on equal), so this is loosening-only — no
-            // NEW reject is possible, only false-positives removed. This closes
-            // the last bare-`_types_equal` value-flow site (let/assign/return/
-            // if-join/field-init/match-scrutinee already use assignable).
+            // NEW reject is possible, only false-positives removed. (Sibling
+            // value-flow sites let/assign/return/if-join/field-init and the
+            // match arm-body join all use assignable too — see :3714.)
             if !_types_assignable(want, got, e.children[1 + k]) {
                 // Permissive on `unit`-typed actuals: the inferencer
                 // resolves an unannotated `fn f(x) { if … { return X }
@@ -3711,7 +3723,18 @@ fn _check_match(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             first_t = bt
             have_first = true
         } else {
-            if !_types_equal(first_t, bt) {
+            // segment(b) HX3005 coercion-faithfulness: match arm bodies join
+            // into the match's value type (this fn returns first_t), so this is
+            // a value-flow site — use the SAME `_types_assignable` contract as
+            // the if/else join (2704, `_types_assignable(then_t, else_t, …)`),
+            // let/assign/return, and call-arg (#4603). Rust unifies arm bodies
+            // via E0308 demand_coerce (int-lit→int-kind, HexaVal wildcard), so
+            // `match a { 1 -> a_i32, _ -> 3 }` must not reject. `_types_assignable`
+            // is a strict superset of `_types_equal` → loosening-only, no NEW
+            // reject possible. HX3005 is unbanded Error, so a false-positive here
+            // hard-bricks the build; this is the actual last bare-`_types_equal`
+            // value-flow site (the #4603 call-arg comment missed this one).
+            if !_types_assignable(first_t, bt, e.children[i + 1]) {
                 _emit_hx3005(arm_idx, first_t, bt, e.children[i + 1].span, out)
             }
         }
@@ -5059,7 +5082,12 @@ pub fn type_check(module: Module) -> array {
         let rhs_t = _infer_expr(it.body, env, ctx0, out)
         if len(declared.kind) > 0 && len(rhs_t.kind) > 0 {
             if !_types_assignable(declared, rhs_t, it.body) {
-                _emit_hx3001(declared, rhs_t, it.body.span, out)
+                // segment(b) Rung B — permissive on an actual `unit` RHS (an
+                // unannotated-return call resolved to unit), parity with the
+                // assign / return / call-arg / if-join sites.
+                if rhs_t.kind != "unit" {
+                    _emit_hx3001(declared, rhs_t, it.body.span, out)
+                }
             }
         }
         li = li + 1
