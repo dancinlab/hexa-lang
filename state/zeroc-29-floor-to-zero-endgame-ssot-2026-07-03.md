@@ -26,10 +26,11 @@
 | **WALL-2 free** `HEXA_RT_NATIVE_FREE` | ✅ merged | **OFF** (`${…:-0}`) | ❌ __libc free 유지 | #4242 | byteeq-neutral 3-target + faithful DROP |
 | **WALL-2 calloc** `HEXA_RT_NATIVE_CALLOC` | ✅ merged | **OFF** | ❌ __libc calloc 유지 | #4244 | 동상 (FLIP-6) |
 | **WALL-2 realloc** `HEXA_RT_NATIVE_REALLOC` | ✅ merged | **OFF** | ❌ __libc realloc 유지 | #4244 | 동상 (FLIP-6) |
+| **RT-NATIVE str\* ×5** `HEXA_RT_NATIVE_{STRCMP,STRNCMP,STRCHR,STRSTR,STRDUP}` | ✅ merged | **ON (auto)** 3-target | ✅ strcmp·strncmp·strchr·strstr·strdup drop (isolated frozen seed) | #4591(strcmp)+#4592 | **byteeq 3-target GREEN + SELFEMIT smoke 복구** · 4겹결함 순차수정(errno-격리·shim가드·co-drop·dangling directive) |
 | **S2** self-symtab `HEXA_SELF_SYMTAB` | ❌ NONE | — | — | — (S1 뒤) | default-OFF→byteeq→flip |
 | **S3** own loader `HEXA_OWN_DLOPEN` (RFC070 G7-C) | ❌ NONE | — | — | — (S1·G7-B 뒤) | default-OFF→falsifier(RFC070 §4.1)→byteeq 3-target→flip |
 
-**net: 현재 linux canonical `runtime.a` 에서 실제 drop 된 것** = glob·globfree·fgets·rand·srand·mkstemp·mkdtemp·ns-syscall군(getppid/setsid/mount/umount2/unshare/setns/flock/sigaddset/sigemptyset).
+**net: 현재 linux canonical `runtime.a` 에서 실제 drop 된 것** = glob·globfree·fgets·rand·srand·mkstemp·mkdtemp·ns-syscall군(getppid/setsid/mount/umount2/unshare/setns/flock/sigaddset/sigemptyset)·**strcmp·strncmp·strchr·strstr·strdup(#4591+#4592, isolated frozen seed default-ON 3-target)**.
 **merged-but-OFF(flip 대기)** = regex·strtod-tail·free·calloc·realloc. (qsort = flip #4452 완료로 linux ON.)
 **not-merged(open)** = atexit/environ own-start(#4409, CONFLICTING · rebase 선결). (dl*×3 = S1 #4481 MERGED로 구조적 이탈 완료 · PR-2 #4487 MERGED.)
 
