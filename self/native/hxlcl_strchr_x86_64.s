@@ -14,7 +14,6 @@
 .intel_syntax noprefix
 .file 1 "stdlib/runtime/hxlcl_core.hexa"
 .text
-.hidden hxlcl_strlen
     .p2align 4
 .globl hxlcl_strchr
 hxlcl_strchr:
@@ -172,7 +171,6 @@ hxlcl_strchr:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.hidden hxlcl_strstr
     .p2align 4
 .section .rodata
 .LCstr0:

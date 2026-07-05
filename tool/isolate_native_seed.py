@@ -80,12 +80,23 @@ def main():
     # so re-assert it (and drop any stray .globl/.private_extern for dropped syms from the
     # header) to preserve the 1-symbol export contract.
     kept_order = [f for f in order if f in keep]
-    header = [l for l in header if not re.match(r'^\s*\.(globl|private_extern)\b', l)]
-    header.append(f".globl {root}")
-    outlines = list(header)
+    # Strip EVERY symbol-attribute directive (.globl/.hidden/.weak/.protected/.internal/
+    # .local/.private_extern/.type/.size) that targets a symbol OTHER than the contract.
+    # A dropped sibling's leftover `.hidden hxlcl_strrchr` (its body removed) otherwise
+    # emits an UNDEFINED hidden symbol into the .o → the ELF hexat link dies with
+    # "hidden symbol 'hxlcl_strrchr' isn't defined" (Mach-O tolerated it; ELF does not).
+    root_bare = root.lstrip('_')
+    attr_re = re.compile(r'^\s*\.(?:globl|hidden|weak|weak_definition|protected|internal|local|private_extern|type|size|no_dead_strip)\b[^;/\n]*?\b(_?[A-Za-z_][A-Za-z0-9_$.]*)')
+    def stray_attr(l):
+        m = attr_re.match(l)
+        return bool(m) and m.group(1).lstrip('_') != root_bare
+    body = []
     for f in kept_order:
-        outlines += fnblocks[f]
-    outlines += data
+        body += fnblocks[f]
+    outlines = [l for l in (header + body + data) if not stray_attr(l)]
+    # re-assert exactly one contract global (its original .globl lived in a dropped segment)
+    if not any(re.match(rf'^\s*\.globl\s+_?{re.escape(root_bare)}\b', l) for l in outlines):
+        outlines.insert(0, f".globl {root}")
     open(out, "w").write("\n".join(outlines))
     dropped = len(defined) - len(keep)
     sys.stderr.write(f"[isolate] {inp}: kept {len(keep)} fn ({','.join(kept_order[:6])}{'…' if len(kept_order)>6 else ''}), dropped {dropped} dead sibling bodies\n")
