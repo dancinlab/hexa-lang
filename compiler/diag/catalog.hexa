@@ -467,6 +467,25 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3023",
+        title: "cannot assign to a borrowed value",
+        // Warning band (SSOT F4 warn-first), the write-through rung of the E2
+        // loan-registry family: the opt-in borrow checker (`HEXA_BORROWCK=1`)
+        // surfaces an assignment to a value that already has a LIVE loan (a
+        // write through the original storage invalidates the borrow). Under
+        // `HEXA_BORROWCK_STRICT=1` the SAME diagnostic instance is re-banded to
+        // a build-refusing Error via the sanctioned caller override in
+        // `_bck_emit_write_through` (identical mechanism to HX3014/HX3019/
+        // HX3021). With the flag unset the loan pass is inert (`_bck_active`
+        // false), so nothing is emitted and the diagnostic stream + emitted
+        // bytes are byte-identical — release integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "cannot assign to `{origin}` because it is borrowed by `{name}` at line {borrow_line}",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN E4) found an assignment `x = …` (or any write-through to the original storage) while a LIVE loan of `x` exists in the E2 registry — i.e. some binding `r` was borrowed against `x` (`let r = &x` / `let r = &mut x`) earlier in the same function and has not been killed (by reassigning `r` to a non-borrow RHS) before this write. This is Rust's E0506 ('cannot assign to `x` because it is borrowed'; rustc_borrowck reports it when a write to a place overlaps a live loan of that place): the write would invalidate the borrow's aliasing guarantee — a `&mut x` loan promises exclusive write access through `r`, and even a shared `&x` loan promises the observed value is stable, so overwriting `x` directly breaks both. The E4 scan runs in the assign-arm of `_lower_hexpr` IMMEDIATELY before the L5-E1 ref-kill block, so it observes the registry state BEFORE the assigned name's own loan (if any) is detached — the scan keys on `origin == lhs.text`, so it matches loans OF the assigned name regardless of mutability (a write invalidates both `&` and `&mut` loans). The detection is conservative / flow-insensitive within a scope (no NLL last-use yet): a loan stays LIVE from its `let` to the end of the function or until the binding is reassigned to a non-borrow, so `let r = &x; <use r>; x = 5;` ALSO fires even though Rust NLL (last-use) would end `r`'s loan before the assign — this is the documented flow-insensitive false-positive class, the SAME conservative-loud-over-quiet policy as E2/E3 (precision-first: a real hazard is never missed, a benign cascade is warned rather than silently accepted). Only same-fn live loans count; borrows of module-level globals, through call args / struct fields / array elements / closures, and cross-function loans are NOT tracked (documented false-negatives). Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical. Fix: end the borrow before writing (reassign the borrowed binding to a non-borrow RHS, or restructure so the write precedes the borrow), or write through the borrow itself (`*r = …`) once place-projection loans are tracked.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
