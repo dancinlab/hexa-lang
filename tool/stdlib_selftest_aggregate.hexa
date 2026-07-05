@@ -90,13 +90,17 @@ fn run_one(path: string) {
     let combined = run_capture(cmd)
     let rc = parse_rc(combined)
     let status = classify(rc, combined)
-    // tail = first 200 chars (sans rc marker) — debug aid in jsonl
+    // tail = LAST 300 chars (sans rc marker) — debug aid in jsonl. Last-N not
+    // first-N because a failing test exits at its FIRST assertion, so the
+    // `FAIL: <label>` line sits at the END of the output (the section headers
+    // before it are noise); first-N misses it.
     let cut_at = combined.last_index_of("__RC=")
     let body = combined
     if cut_at > 0 { body = combined.substring(0, cut_at) }
-    let max = len(body)
-    if max > 200 { max = 200 }
-    return #{ "path": path, "status": status, "rc": rc, "tail": body.substring(0, max) }
+    let blen = len(body)
+    let start = 0
+    if blen > 300 { start = blen - 300 }
+    return #{ "path": path, "status": status, "rc": rc, "tail": body.substring(start, blen) }
 }
 
 fn main() {
