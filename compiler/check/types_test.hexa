@@ -1425,6 +1425,55 @@ fn _build_case_hx3025_fixture() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (al) segment(b) HX3026 field-on-scalar REJECT (Rust E0610). A field READ
+// `n.foo` on a KNOWN scalar (n: i64) → 1 HX3026 Error; a real field of a struct
+// (`p.x`, p: Point) → 0; a builtin-method selector (`n.len`) → 0 (exempt); a
+// callee-position `n.foo()` → 0 HX3026 (callee-depth guard) + 1 HX2001 (the
+// unresolved-callee is the single diagnostic for that mistake). Expect exactly
+// 1 HX3026 (error) and exactly 1 HX2001 across the module.
+fn _build_case_hx3026_field_scalar() -> Module {
+    let f = "case_hx3026.hexa"
+    // struct Point { x: i64, y: i64 }
+    let mut sfields = []
+    sfields.push(_param("x", "i64", f, 1, 14))
+    sfields.push(_param("y", "i64", f, 1, 22))
+    let item_pt = _struct_item("Point", sfields, f, 1)
+    // fn f(n: i64, p: Point) -> i64 {
+    //     let x = n.foo     — scalar field READ           → HX3026 (×1)
+    //     let a = p.x       — named receiver, real field  → clean
+    //     let b = n.len     — builtin-method selector     → clean (exempt)
+    //     let c = n.foo()   — callee position             → 0 HX3026 + 1 HX2001
+    //     return 0
+    // }
+    let s1 = _let_expr("x", _field_expr(_ident_expr("n", f, 4, 13), "foo", f, 4, 15), f, 4, 5)
+    let s2 = _let_expr("a", _field_expr(_ident_expr("p", f, 5, 13), "x", f, 5, 15), f, 5, 5)
+    let s3 = _let_expr("b", _field_expr(_ident_expr("n", f, 6, 13), "len", f, 6, 15), f, 6, 5)
+    let s4 = _let_expr("c", _call_expr(_field_expr(_ident_expr("n", f, 7, 13), "foo", f, 7, 15), [], f, 7, 18), f, 7, 5)
+    let fr = _return_expr(_int_expr("0", f, 8, 12), f, 8, 5)
+    let mut pf = []
+    pf.push(_param("n", "i64", f, 3, 6))
+    pf.push(_param("p", "Point", f, 3, 15))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([s1, s2, s3, s4, fr], f, 3, 1), f, 3)
+    let mut items = []
+    items.push(item_pt)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (am) HX3026 fixture carve-out — identical scalar-field-READ AST on a byte-eq
+// TEST-FIXTURE path (`*_test.hexa`) stays WARNING via _types_strict_for.
+fn _build_case_hx3026_fixture() -> Module {
+    let f = "case_hx3026_test.hexa"
+    let fx = _let_expr("x", _field_expr(_ident_expr("n", f, 2, 13), "foo", f, 2, 15), f, 2, 5)
+    let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
+    let mut pf = []
+    pf.push(_param("n", "i64", f, 1, 6))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 1, 1), f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // static-types r9d — struct-literal field-EXISTENCE reject (HEXA_STATIC_TYPES=1,
 // no ARRAY_LOWER dependency). r6 deliberately scoped existence out, so a
 // typo'd field name silently skipped BOTH the existence and the type check.
@@ -2407,6 +2456,31 @@ fn main() {
         ok = false
     } else {
         println("  ok: 1 HX3025 as WARNING (flagless fixture carve-out: *_test.hexa path stays warn-band)")
+    }
+
+    // (al) segment(b) HX3026 field-on-scalar REJECT (Rust E0610) — `n.foo` on a
+    // scalar → Error; real struct field / builtin selector / callee position →
+    // silent (callee-depth guard yields the single HX2001 for `n.foo()`).
+    let diags_al = _run_case("(al) static-types segment(b) — field-on-scalar REJECT (n.foo scalar / p.x struct clean / n.len builtin exempt / n.foo() callee→HX2001) (HX3026)", _build_case_hx3026_field_scalar())
+    let nal = _count_code(diags_al, "HX3026")
+    let nal_err = _count_code_sev(diags_al, "HX3026", "error")
+    let nal_2001 = _count_code(diags_al, "HX2001")
+    if nal != 1 || nal_err != 1 || nal_2001 != 1 {
+        println("  FAIL: case (al) expected 1 HX3026 as ERROR (n.foo scalar; p.x + n.len clean) + 1 HX2001 (n.foo() callee), got " + to_string(nal) + " HX3026 (" + to_string(nal_err) + " error), " + to_string(nal_2001) + " HX2001 (total=" + to_string(len(diags_al)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3026 as ERROR (scalar `n.foo` reject; `p.x` struct + `n.len` builtin silent) + 1 HX2001 (`n.foo()` callee, no HX3026 double-report) — E0610 field-on-primitive")
+    }
+
+    // (am) HX3026 fixture carve-out — identical AST on a *_test.hexa path → WARNING.
+    let diags_am = _run_case("(am) static-types segment(b) — HX3026 fixture carve-out (*_test.hexa scalar field)", _build_case_hx3026_fixture())
+    let nam = _count_code(diags_am, "HX3026")
+    let nam_warn = _count_code_sev(diags_am, "HX3026", "warning")
+    if nam != 1 || nam_warn != 1 {
+        println("  FAIL: case (am) expected 1 HX3026 as WARNING (fixture carve-out), got " + to_string(nam) + " HX3026 (" + to_string(nam_warn) + " warn) (total=" + to_string(len(diags_am)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3026 as WARNING (flagless fixture carve-out: *_test.hexa path stays warn-band)")
     }
 
     println("")
