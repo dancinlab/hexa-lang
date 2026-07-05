@@ -1716,7 +1716,10 @@ int  hexa_forge_is_deterministic(void);      /* runtime_cuda.c — #4214 */
 #else
 static inline void hexa_forge_set_deterministic(int on) { (void)on; }
 static inline int  hexa_forge_is_deterministic(void) {
-    const char* v = getenv("HEXA_DET");
+    /* zeroc #29 env-leaf: route to the floor hxlcl_getenv (this static-inline is parsed
+     * at include time, before runtime.c's umbrella #define — needs a local extern decl). */
+    extern char *hxlcl_getenv(const char *);
+    const char* v = hxlcl_getenv("HEXA_DET");
     return (v && v[0] && v[0] != '0') ? 1 : 0;
 }
 #endif
@@ -2283,7 +2286,9 @@ static inline void hexa_rss_trace_on_free(void) {
     static int     _hx_rss_trace_on  = -1;   /* -1=unprobed 0=off 1=on */
     static long long _hx_rss_free_seq = 0;
     if (_hx_rss_trace_on < 0) {
-        const char* e = getenv("HEXA_RSS_TRACE");
+        /* zeroc #29 env-leaf: route to floor hxlcl_getenv (include-time, pre-umbrella). */
+        extern char *hxlcl_getenv(const char *);
+        const char* e = hxlcl_getenv("HEXA_RSS_TRACE");
         _hx_rss_trace_on = (e && e[0] && e[0] != '0') ? 1 : 0;
     }
     if (!_hx_rss_trace_on) return;
