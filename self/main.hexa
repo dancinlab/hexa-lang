@@ -3205,11 +3205,19 @@ fn cmd_build(src, out, c_only, target, shared) {
             println("  [flat] warn: compiled module_loader not found — falling back to raw src")
         }
     }
-    // ─── HX3012 @own use-after-move lint — opt-in ADVISORY (HEXA_OWN_LINT=1) ──
+    // ─── HX3012/HX3014 @own+borrowck lint — opt-in ADVISORY ──────────────────
+    // Trigger flags: HEXA_OWN_LINT=1 (use-after-move) · HEXA_BORROWCK=1 /
+    // HEXA_BORROWCK_STRICT=1 (borrowck E-ladder). R4 vehicle (b2): the borrowck
+    // flags ALSO gate the native frontend's borrow pass (compiler/check), so
+    // adding them to the OR here is the whole wiring — the same env var inherits
+    // into the advisory aprime_cc child and turns its registry on.
     // Vehicle (b), state/hexa-own/ownlint_shipping_wiring.md §2b/§3. The real
-    // own-lint lives only in the native frontend (compiler/check/types.hexa,
-    // itself gated on HEXA_OWN_LINT — the env var inherits into the child, so
+    // own/borrow-lint lives only in the native frontend (compiler/check/types.hexa,
+    // itself gated on these flags — the env var inherits into the child, so
     // ONE flag both triggers this block and activates the lint registry). The
+    // ADVISORY contract is IDENTICAL for all 3 flags, STRICT included: aprime rc
+    // is ignored and the gen2 build is NEVER blocked (enforcement, if any, is
+    // the native-path's job; here it is diagnostics-only — PR body records this). The
     // gen2 ship path runs no own pass; under the flag we spawn one advisory
     // aprime_cc compile of the flattened source (sits AFTER flatten so it sees
     // __actual_src, BEFORE the backend select so it covers both C and native
@@ -3225,15 +3233,15 @@ fn cmd_build(src, out, c_only, target, shared) {
     // aprime_cc degrades to ONE loud line, NOT die_no_native_cc (a lint must
     // never kill a build). Flag unset = this whole block is a single env()
     // compare — default path byte-identical (byteeq 3-target gate = proof).
-    if env("HEXA_OWN_LINT") == "1" {
+    if env("HEXA_OWN_LINT") == "1" || env("HEXA_BORROWCK") == "1" || env("HEXA_BORROWCK_STRICT") == "1" {
         let __ol_cc = resolve_native_cc()
         if len(__ol_cc) == 0 {
-            eprintln("  [own-lint] advisory unavailable: aprime_cc not found — build it: bash tool/build_aprime.sh -o build/aprime_cc (build continues)")
+            eprintln("  [own/borrow-lint] advisory unavailable: aprime_cc not found — build it: bash tool/build_aprime.sh -o build/aprime_cc (build continues)")
         } else {
             let __ol_obj = runtime_tmpname("hexa_own_lint") + ".o"
             let __ol_out = exec("'" + __ol_cc + "' _drv.hexa --emit=obj -o '" + __ol_obj + "' '" + __actual_src + "' 2>&1")
             if len(__ol_out) > 0 {
-                eprintln("  [own-lint] advisory diagnostics (aprime frontend · rc ignored · build continues):")
+                eprintln("  [own/borrow-lint] advisory diagnostics (aprime frontend · rc ignored · build continues):")
                 eprintln(__ol_out)
             }
             let _ = exec("rm -f '" + __ol_obj + "' 2>/dev/null")
@@ -4526,7 +4534,14 @@ fn cmd_run_user_direct(file, extra_args) {
             // HEXA_CG_PROFILE per-pass rows; swallowing it on success made the
             // instrumentation unreachable from CI (anima gate saw 0 rows over
             // a 24m cold). Forward it when profiling is on.
-            if env("HEXA_CG_PROFILE") == "1" && len(_ne) > 0 { eprintln(_ne) }
+            // R4 own/borrow-lint vehicle (b2): the same aprime --emit=obj emit
+            // is the native frontend that runs the own/borrowck advisory pass —
+            // its merged diag stream (HX3012/HX3014 + anything aprime renders)
+            // is "already running but nobody can see it" on this cold path. Add
+            // the 3-flag OR so a run under HEXA_OWN_LINT / HEXA_BORROWCK /
+            // HEXA_BORROWCK_STRICT surfaces those diags (advisory · rc ignored).
+            let _ne_show = env("HEXA_CG_PROFILE") == "1" || env("HEXA_OWN_LINT") == "1" || env("HEXA_BORROWCK") == "1" || env("HEXA_BORROWCK_STRICT") == "1"
+            if _ne_show && len(_ne) > 0 { eprintln(_ne) }
             let _nobj_ok = exec("test -s '" + _nobj + "' && printf yes || printf no")
             if _nobj_ok == "yes" {
                 // 2) ld link (no clang): crt + runtime.a + libm/libc/pthread.

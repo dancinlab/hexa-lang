@@ -557,6 +557,14 @@ pub let mut _bck_ref_lines: [i64] = []
 // kill-on-reassign) that E3's borrow-conflict rule (Rust E0502) reads. A
 // KILL row carries `false` (unused — the empty origin already excludes it).
 pub let mut _bck_ref_mut: [bool] = []
+// HEXA-OWN L5-E5 — borrow-RHS suppression flag (Rust E0503, use-while-mut).
+// Set true only around lowering the inner ident of a `&x` / `&mut x` unop, so
+// the ident READ hook does NOT treat "take the address of x for a new borrow"
+// as a use-of-value of x: a re-borrow of an already-`&mut`-loaned origin is
+// E3's (HX3021 borrow-conflict) to report, not E0503's — otherwise the second
+// `&mut x` would double-fire HX3021 + HX3027. Saved/restored per-unop so it is
+// self-healing; flag-OFF (`_bck_active` false) never sets it (byteeq-neutral).
+pub let mut _bck_in_borrow_rhs = false
 
 fn _bck_reset_fn() {
     _bck_grp_ctr = 0
@@ -780,6 +788,33 @@ fn _bck_ref_find_write_through(origin: string) -> i64 {
     return 0 - 1
 }
 
+// ── HEXA-OWN L5-E5 — use-while-mutably-borrowed (Rust E0503) ─────────
+// Scan the loan registry for a live `&mut` loan whose origin == `origin`. This
+// is the E4 write-through scan (`_bck_ref_find_write_through`) NARROWED to
+// mutable loans: a READ (use of value) of `x` is illegal only while a MUTABLE
+// borrow of `x` is live (a shared `&x` loan permits concurrent reads, so E0503
+// keys on the `_bck_ref_mut[i]` bit — unlike E0506 write-through which
+// invalidates both loan kinds). A loan row is LIVE iff it is the newest entry
+// for its name (END-scan / newest-per-name-wins, so a re-let or kill shadows
+// it) AND its origin is non-empty (a KILL row has origin ""). Returns the first
+// matching live mutable-loan row index, or -1. Intra-scope / flow-insensitive-
+// conservative (no NLL last-use): a loan stays live from its `let` to end-of-fn
+// or until the binding is reassigned to a non-borrow, so `let m = &mut x; <m
+// unused>; use x;` ALSO fires — the documented false-positive class, the SAME
+// conservative-loud-over-quiet policy as E2/E3/E4.
+fn _bck_ref_find_mut_loan(origin: string) -> i64 {
+    let mut i = len(_bck_ref_names) - 1
+    while i >= 0 {
+        if len(_bck_ref_origins[i]) > 0 && _bck_ref_origins[i] == origin
+            && _bck_ref_mut[i]
+            && _bck_find_ref(_bck_ref_names[i]) == i {
+            return i
+        }
+        i = i - 1
+    }
+    return 0 - 1
+}
+
 // HX3021 emit (borrow-conflict, Rust E0502) — same-site dedup + STRICT
 // escalation, cloned from `_bck_emit_ret_escape`. `name` is the new binding,
 // `origin` the twice-borrowed value, `new_mut` the new borrow's kind; `other`
@@ -849,6 +884,39 @@ fn _bck_emit_write_through(origin: string, name: string, borrow_mut: bool,
     _lr_diag.push(d)
 }
 
+// HX3027 emit (use-while-mutably-borrowed, Rust E0503) — same-site dedup +
+// STRICT escalation, cloned from `_bck_emit_write_through`. `origin` is the
+// value being READ, `name` the `&mut` binding that borrows it, `borrow_mut` the
+// loan's mutability (always true — E0503 is mutable-loan-only), `borrow_line`
+// where the loan was created.
+fn _bck_emit_use_while_mut(origin: string, name: string, borrow_mut: bool,
+                           borrow_line: i64, sp: Span) {
+    let mut di = 0
+    while di < len(_bck_e_lines) {
+        if _bck_e_lines[di] == sp.line && _bck_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_e_lines.push(sp.line)
+    _bck_e_cols.push(sp.col)
+    let mut b = diag_new("HX3027")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "origin", origin)
+    b = diag_arg(b, "name", name)
+    let mut _bk = "immutable"
+    if borrow_mut { _bk = "mutable" }
+    b = diag_arg(b, "borrow_kind", _bk)
+    b = diag_arg(b, "borrow_line", to_string(borrow_line))
+    let mut d = diag_emit(b)
+    // STRICT (HEXA_BORROWCK_STRICT) re-bands the SAME diagnostic instance to a
+    // build-refusing Error via the sanctioned caller override — identical to
+    // the HX3014/HX3019/HX3021/HX3023 escalation. OFF-strict keeps the catalog
+    // Warning band, and the flag-OFF path never reaches here (byteeq-neutral).
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
+}
+
 // HX3019 emit (return-borrow-escape) — same-site dedup + STRICT escalation,
 // cloned from `_emit_hx3014`. `name` is the returned binding, `origin` the
 // function-local value it borrows, `borrow_line` where the loan was created.
@@ -880,6 +948,22 @@ fn _bck_emit_ret_escape(name: string, origin: string, borrow_line: i64, sp: Span
 // (the single funnel: field/index reads, binop and call args, and the
 // base of every write all lower their idents through the ident arm).
 fn _bck_check_use(name: string, local_id: i64, blk: i64, sp: Span) {
+    // HEXA-OWN L5-E5 — use-while-mutably-borrowed (Rust E0503). A READ of a
+    // value through its OWN name while a live `&mut` loan of it exists. Keyed on
+    // the E2 loan registry (NOT the aggregate group registry), so it runs BEFORE
+    // the `ti < 0` early-return below — the canonical origin (`let mut x = 5`) is
+    // a scalar that is never group-tracked. Suppressed inside a borrow RHS
+    // (`_bck_in_borrow_rhs`): a re-borrow `let n = &mut x` reads x to take its
+    // ADDRESS, which is E3's (HX3021) to report, not E0503's. The `!= name`
+    // guard is defensive (a loan's name never equals its own origin absent a
+    // `let x = &mut x` self-borrow). STRICT re-bands inside the emitter.
+    if !_bck_in_borrow_rhs {
+        let _bk_mli = _bck_ref_find_mut_loan(name)
+        if _bk_mli >= 0 && _bck_ref_names[_bk_mli] != name {
+            _bck_emit_use_while_mut(name, _bck_ref_names[_bk_mli],
+                _bck_ref_mut[_bk_mli], _bck_ref_lines[_bk_mli], sp)
+        }
+    }
     let ti = _bck_find_local(local_id)
     if ti < 0 { return }
     let grp = _bck_groups[ti]
@@ -2175,7 +2259,17 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     // ── unop → STMT_UNOP ───────────────────────────────────
     if k == "unop" {
         if len(e.children) < 1 { return _no_value(ctx) }
+        // HEXA-OWN L5-E5 — inside a `&x` / `&mut x` borrow, the inner ident is
+        // read to take its ADDRESS, not to use its value: mark the borrow-RHS
+        // context so the ident READ hook suppresses HX3027 (a re-borrow of an
+        // already-`&mut`-loaned origin is E3/HX3021's alone). Saved/restored so
+        // nested non-borrow unops are unaffected; flag-OFF never sets it.
+        let _bk_saved_brhs = _bck_in_borrow_rhs
+        if _bck_active && (e.text == "&" || e.text == "&mut") {
+            _bck_in_borrow_rhs = true
+        }
         let r = _lower_hexpr(ctx, e.children[0])
+        _bck_in_borrow_rhs = _bk_saved_brhs
         // INBOX 2026-05-27 #3 (fold) - `-<const>` folds to a single
         // const_float / const_int operand so codegen never sees STMT_UNOP
         // for a literal-only negation. Closes the NVPTX `-1.0e308` / `-1`
