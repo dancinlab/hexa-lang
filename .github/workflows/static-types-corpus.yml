@@ -47,8 +47,9 @@
 # COST
 #   Target < 25 min: one aprime build (~minutes) + FULL-corpus per-file front-end
 #   runs — ~3,805 tracked .hexa (compiler 389 + stdlib 2,249 + self 1,167), fanned
-#   out `xargs -P $(nproc)` (sub-second to seconds each, 60 s timeout guard per
-#   file). FREE ubuntu-latest only. Advisory, so a budget timeout blocks nothing.
+#   out `xargs -P $(nproc)` (sub-second to seconds each, 15 s timeout guard per
+#   file — slow-tail files SKIP fast: advisory undercount bias, never GO-block).
+#   FREE ubuntu-latest only. Advisory, so a budget timeout blocks nothing.
 
 name: static-types-corpus
 
@@ -81,7 +82,7 @@ jobs:
   corpus-census:
     name: static-types corpus census (HX3011/HX3016/HX3017 · advisory)
     runs-on: ubuntu-latest      # FREE runner only — paid runners forbidden (#4016)
-    timeout-minutes: 60         # full corpus (~3.8k files) + parallel fan MEASURED >25 min (run 28716733095 was killed mid-xargs at the 25-min cap, summary never reached → no census verdict); the one-time aprime build (~min) + ~3.8k sub-second-to-second front-end runs at nproc≈4 lands ~40 min, so 60 gives margin. Advisory (continue-on-error) so a timeout blocks nothing — but a timeout produces NO census data, which is why the cap must clear the real runtime.
+    timeout-minutes: 90         # full corpus (~3.8k files). Hxstory: 25-min cap killed run mid-xargs (no verdict); 60-min cap STILL killed it (run 28723070379 hit 60min16s with orphan aprime_cc per-file timeouts — a tail of slow stdlib files pegging the per-file 60s limit starves the fan). Fix = per-file timeout 60→15s (below) so the slow tail is SKIPPED fast (advisory undercount bias, cf. §LANE-B) instead of pegging a worker for 60s each; 90-min job cap gives margin over the now-bounded fan. Advisory (continue-on-error) — a timeout blocks nothing, but yields NO census data, which is why the cap must clear the real runtime.
     continue-on-error: true     # ADVISORY — never a required check
     steps:
       - name: Checkout
@@ -166,7 +167,7 @@ jobs:
             # the census, only the HX3011/HX3016/HX3017 emission count is.
             # `_drv.hexa` is the positional driver-name shim (argv[1] slot), same
             # contract as tool/codegen_perf_budget.sh / control_singletu.sh.
-            timeout 60 ./build/aprime_cc _drv.hexa \
+            timeout 15 ./build/aprime_cc _drv.hexa \
                 --emit=asm --target=x86_64-linux-gnu --error-format=short \
                 -o "$scratch/asm/$h.s" "$f" > "$log" 2>&1 || true
             n="$( (grep -o -E 'HX301[167]' "$log" || true) | wc -l | tr -d ' ')"
