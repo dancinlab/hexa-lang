@@ -79,10 +79,18 @@ fn parse_rc(combined: string) -> int {
 }
 
 fn classify(rc: int, combined: string) {
-    if combined.contains("FAIL") { return "FAIL" }
-    if rc == 0 { return "PASS" }
+    // The test's exit code is authoritative. rc==0 = PASS even if the output
+    // legitimately contains the substring "FAIL" (e.g. no_autorent_test prints
+    // "pod-loss FAILS LOUD" as a DEPRECATED header — bare contains("FAIL")
+    // false-positived that as FAIL). Only treat an explicit test-failure
+    // marker ("FAIL: " from _t_assert) printed alongside rc==0 as a FAIL
+    // (a test that forgot to exit(1)).
+    if rc == 0 {
+        if combined.contains("FAIL: ") { return "FAIL" }
+        return "PASS"
+    }
     if rc == 124 { return "TIMEOUT" }
-    return "ERROR"
+    return "FAIL"
 }
 
 fn run_one(path: string) {
