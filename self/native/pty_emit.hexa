@@ -79,9 +79,18 @@ fn emit_pty_c() -> str {
             "    strncpy(name_buf, nm, sizeof(name_buf) - 1);\n" +
             "    name_buf[sizeof(name_buf) - 1] = '\\0';\n" +
             "#else\n" +
-            "    if (ptsname_r(master, name_buf, sizeof(name_buf)) != 0) {\n" +
-            "        int e = errno; hxlcl_close(master); return _hexa_pty_err(e, \"ptsname_r\");\n" +
+            "    /* zeroc #29: drop libc ptsname_r — get the slave pty index via the raw\n" +
+            "     * TIOCGPTN ioctl (already using hxlcl_ioctl for TIOCGWINSZ) + format\n" +
+            "     * /dev/pts/<n> through the already-routed hxlcl_snprintf. Self-contained,\n" +
+            "     * exact for the Linux devpts naming ptsname_r itself uses internally. */\n" +
+            "#ifndef TIOCGPTN\n" +
+            "#define TIOCGPTN 0x80045430\n" +
+            "#endif\n" +
+            "    unsigned int _ptn = 0;\n" +
+            "    if (hxlcl_ioctl(master, TIOCGPTN, &_ptn) < 0) {\n" +
+            "        int e = errno; hxlcl_close(master); return _hexa_pty_err(e, \"TIOCGPTN\");\n" +
             "    }\n" +
+            "    snprintf(name_buf, sizeof(name_buf), \"/dev/pts/%u\", _ptn);\n" +
             "#endif\n" +
             "    int slave = hxlcl_open_sys(name_buf, O_RDWR | O_NOCTTY);\n" +
             "    if (slave < 0) { int e = errno; hxlcl_close(master); return _hexa_pty_err(e, \"hxlcl_open_sys(slave)\"); }\n" +
