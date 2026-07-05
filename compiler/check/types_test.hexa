@@ -738,6 +738,40 @@ fn _build_case_static_types() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// FLIP-2 fixture carve-out probes — identical shape to _build_case_static_types
+// (`let x: i32 = "s"` → 1 HX3011) but the span.file is a byte-eq TEST-FIXTURE
+// path, so _types_is_fixture_path() matches and STRICT-default keeps the diag in
+// the WARNING band while an explicit HEXA_STATIC_TYPES_STRICT=1 still escalates
+// to Error everywhere. Two variants pin BOTH predicate arms: the `compiler/test/`
+// containment arm, and the `*_test.hexa` suffix arm (cwd-independent).
+fn _build_case_static_types_fixture() -> Module {
+    let f = "compiler/test/macho_p0_corpus/case_fixture.hexa"
+    let bad  = _let_expr("x|i32", _string_expr("s", f, 2, 18), f, 2, 5)
+    let good = _let_expr("y|i32", _int_expr("5", f, 3, 18), f, 3, 5)
+    let mut kids = []
+    kids.push(bad)
+    kids.push(good)
+    let body = _block(kids, f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+fn _build_case_static_types_fixture_suffix() -> Module {
+    let f = "compiler/optimize/case_fixture_lower_test.hexa"
+    let bad  = _let_expr("x|i32", _string_expr("s", f, 2, 18), f, 2, 5)
+    let good = _let_expr("y|i32", _int_expr("5", f, 3, 18), f, 3, 5)
+    let mut kids = []
+    kids.push(bad)
+    kids.push(good)
+    let body = _block(kids, f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // Wall A r2 — non-literal known-type RHS (ident / call) under the same
 // opt-in flag. Two REJECT shapes whose inferred scalar type provably
 // disagrees with the annotation (Rust E0308):
@@ -1989,19 +2023,19 @@ fn main() {
     let nv_warn = _count_code_sev(diags_v, "HX3016", "warning")
     let nv_err = _count_code_sev(diags_v, "HX3016", "error")
     if env("HEXA_STATIC_TYPES") == "1" {
-        if env("HEXA_STATIC_TYPES_STRICT") == "1" {
-            if nv3014 != 1 || nv3011 != 0 || nv_err != 1 {
-                println("  FAIL: case (v) STRICT expected 1 HX3016 as ERROR (REJECT) + 0 HX3011, got " + to_string(nv3014) + " HX3016 (" + to_string(nv_err) + " error/" + to_string(nv_warn) + " warn) / " + to_string(nv3011) + " HX3011 (total=" + to_string(len(diags_v)) + ")")
+        if env("HEXA_STATIC_TYPES_STRICT") == "0" {
+            if nv3014 != 1 || nv3011 != 0 || nv_warn != 1 {
+                println("  FAIL: case (v) STRICT=0 escape expected 1 HX3016 as WARNING (non-fatal) + 0 HX3011, got " + to_string(nv3014) + " HX3016 (" + to_string(nv_err) + " error/" + to_string(nv_warn) + " warn) / " + to_string(nv3011) + " HX3011 (total=" + to_string(len(diags_v)) + ")")
                 ok = false
             } else {
-                println("  ok: 1 HX3016 as ERROR (HEXA_STATIC_TYPES_STRICT=1 → REJECT/rc≠0; F4 strict escalation)")
+                println("  ok: 1 HX3016 as WARNING (HEXA_STATIC_TYPES_STRICT=0 → FLIP-1 warn-band escape)")
             }
         } else {
-            if nv3014 != 1 || nv3011 != 0 || nv_warn != 1 {
-                println("  FAIL: case (v) plain HEXA_STATIC_TYPES=1 expected 1 HX3016 as WARNING (non-fatal) + 0 HX3011, got " + to_string(nv3014) + " HX3016 (" + to_string(nv_err) + " error/" + to_string(nv_warn) + " warn) / " + to_string(nv3011) + " HX3011 (total=" + to_string(len(diags_v)) + ")")
+            if nv3014 != 1 || nv3011 != 0 || nv_err != 1 {
+                println("  FAIL: case (v) real-source STRICT-default expected 1 HX3016 as ERROR (REJECT) + 0 HX3011, got " + to_string(nv3014) + " HX3016 (" + to_string(nv_err) + " error/" + to_string(nv_warn) + " warn) / " + to_string(nv3011) + " HX3011 (total=" + to_string(len(diags_v)) + ")")
                 ok = false
             } else {
-                println("  ok: 1 HX3016 as WARNING (plain HEXA_STATIC_TYPES=1 → rc=0, non-fatal; F4 warn-first)")
+                println("  ok: 1 HX3016 as ERROR (FLIP-2: real-source case_static_r9d.hexa → STRICT-default REJECT; explicit STRICT=1 same)")
             }
         }
     } else {
@@ -2033,19 +2067,19 @@ fn main() {
     let nw_warn = _count_code_sev(diags_w, "HX3017", "warning")
     let nw_err = _count_code_sev(diags_w, "HX3017", "error")
     if env("HEXA_STATIC_TYPES") == "1" {
-        if env("HEXA_STATIC_TYPES_STRICT") == "1" {
-            if nw3017 != 1 || nw3016 != 0 || nw3011 != 0 || nw_err != 1 || nw_warn != 0 {
-                println("  FAIL: case (w) STRICT expected 1 HX3017 as ERROR (REJECT) + 0 HX3016 + 0 HX3011, got " + to_string(nw3017) + " HX3017 (" + to_string(nw_err) + " error/" + to_string(nw_warn) + " warn) / " + to_string(nw3016) + " HX3016 / " + to_string(nw3011) + " HX3011 (total=" + to_string(len(diags_w)) + ")")
+        if env("HEXA_STATIC_TYPES_STRICT") == "0" {
+            if nw3017 != 1 || nw3016 != 0 || nw3011 != 0 || nw_warn != 1 || nw_err != 0 {
+                println("  FAIL: case (w) STRICT=0 escape expected 1 HX3017 as WARNING (non-fatal) + 0 HX3016 + 0 HX3011, got " + to_string(nw3017) + " HX3017 (" + to_string(nw_err) + " error/" + to_string(nw_warn) + " warn) / " + to_string(nw3016) + " HX3016 / " + to_string(nw3011) + " HX3011 (total=" + to_string(len(diags_w)) + ")")
                 ok = false
             } else {
-                println("  ok: 1 HX3017 as ERROR (HEXA_STATIC_TYPES_STRICT=1 → REJECT/rc≠0; F4 strict escalation)")
+                println("  ok: 1 HX3017 as WARNING (HEXA_STATIC_TYPES_STRICT=0 → FLIP-1 warn-band escape)")
             }
         } else {
-            if nw3017 != 1 || nw3016 != 0 || nw3011 != 0 || nw_warn != 1 || nw_err != 0 {
-                println("  FAIL: case (w) plain HEXA_STATIC_TYPES=1 expected 1 HX3017 as WARNING (non-fatal) + 0 HX3016 + 0 HX3011, got " + to_string(nw3017) + " HX3017 (" + to_string(nw_err) + " error/" + to_string(nw_warn) + " warn) / " + to_string(nw3016) + " HX3016 / " + to_string(nw3011) + " HX3011 (total=" + to_string(len(diags_w)) + ")")
+            if nw3017 != 1 || nw3016 != 0 || nw3011 != 0 || nw_err != 1 || nw_warn != 0 {
+                println("  FAIL: case (w) real-source STRICT-default expected 1 HX3017 as ERROR (REJECT) + 0 HX3016 + 0 HX3011, got " + to_string(nw3017) + " HX3017 (" + to_string(nw_err) + " error/" + to_string(nw_warn) + " warn) / " + to_string(nw3016) + " HX3016 / " + to_string(nw3011) + " HX3011 (total=" + to_string(len(diags_w)) + ")")
                 ok = false
             } else {
-                println("  ok: 1 HX3017 as WARNING (plain HEXA_STATIC_TYPES=1 → rc=0, non-fatal; F4 warn-first)")
+                println("  ok: 1 HX3017 as ERROR (FLIP-2: real-source case_static_r11.hexa → STRICT-default REJECT; explicit STRICT=1 same)")
             }
         }
     } else {
@@ -2099,19 +2133,19 @@ fn main() {
     let ny_warn = _count_code_sev(diags_y, "HX3011", "warning")
     let ny_err = _count_code_sev(diags_y, "HX3011", "error")
     if env("HEXA_STATIC_TYPES") == "1" {
-        if env("HEXA_STATIC_TYPES_STRICT") == "1" {
-            if ny != 1 || ny_err != 1 {
-                println("  FAIL: case (y) STRICT expected 1 HX3011 as ERROR (REJECT), got " + to_string(ny) + " HX3011 (" + to_string(ny_err) + " error/" + to_string(ny_warn) + " warn) (total=" + to_string(len(diags_y)) + ")")
+        if env("HEXA_STATIC_TYPES_STRICT") == "0" {
+            if ny != 1 || ny_warn != 1 {
+                println("  FAIL: case (y) STRICT=0 escape expected 1 HX3011 as WARNING (non-fatal), got " + to_string(ny) + " HX3011 (" + to_string(ny_err) + " error/" + to_string(ny_warn) + " warn) (total=" + to_string(len(diags_y)) + ")")
                 ok = false
             } else {
-                println("  ok: 1 HX3011 as ERROR (HEXA_STATIC_TYPES_STRICT=1 → REJECT/rc≠0; F4 strict escalation)")
+                println("  ok: 1 HX3011 as WARNING (HEXA_STATIC_TYPES_STRICT=0 → FLIP-1 warn-band escape)")
             }
         } else {
-            if ny != 1 || ny_warn != 1 {
-                println("  FAIL: case (y) plain HEXA_STATIC_TYPES=1 expected 1 HX3011 as WARNING (non-fatal), got " + to_string(ny) + " HX3011 (" + to_string(ny_err) + " error/" + to_string(ny_warn) + " warn) (total=" + to_string(len(diags_y)) + ")")
+            if ny != 1 || ny_err != 1 {
+                println("  FAIL: case (y) real-source STRICT-default expected 1 HX3011 as ERROR (REJECT), got " + to_string(ny) + " HX3011 (" + to_string(ny_err) + " error/" + to_string(ny_warn) + " warn) (total=" + to_string(len(diags_y)) + ")")
                 ok = false
             } else {
-                println("  ok: 1 HX3011 as WARNING (plain HEXA_STATIC_TYPES=1 → rc=0, non-fatal; F4 warn-first)")
+                println("  ok: 1 HX3011 as ERROR (FLIP-2: real-source case_static.hexa → STRICT-default REJECT; explicit STRICT=1 same)")
             }
         }
     } else {
@@ -2154,6 +2188,72 @@ fn main() {
             ok = false
         } else {
             println("  ok: 0 exhaustiveness diags on default build (byte-identity preserved)")
+        }
+    }
+
+    // (aa) FLIP-2 fixture carve-out — contains-arm (compiler/test/…). Same
+    // real-source-shaped HX3011 (`let x: i32 = "s"`) as case (y) but on a byte-eq
+    // fixture path: STRICT-default keeps it WARNING (carve-out, non-fatal) while
+    // explicit HEXA_STATIC_TYPES_STRICT=1 escalates to ERROR everywhere. This is
+    // the release-integrity proof that the 147 fixture census hits stay warn-band
+    // (build never breaks) under the FLIP-2 default.
+    let diags_aa = _run_case("(aa) static-types FLIP-2 — fixture carve-out (compiler/test/ contains-arm)", _build_case_static_types_fixture())
+    let naa = _count_code(diags_aa, "HX3011")
+    let naa_warn = _count_code_sev(diags_aa, "HX3011", "warning")
+    let naa_err = _count_code_sev(diags_aa, "HX3011", "error")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if env("HEXA_STATIC_TYPES_STRICT") == "1" {
+            if naa != 1 || naa_err != 1 {
+                println("  FAIL: case (aa) explicit STRICT=1 expected 1 HX3011 as ERROR everywhere (fixture included), got " + to_string(naa) + " HX3011 (" + to_string(naa_err) + " error/" + to_string(naa_warn) + " warn) (total=" + to_string(len(diags_aa)) + ")")
+                ok = false
+            } else {
+                println("  ok: 1 HX3011 as ERROR (explicit STRICT=1 → everywhere-Error contract, fixture included)")
+            }
+        } else {
+            if naa != 1 || naa_warn != 1 {
+                println("  FAIL: case (aa) STRICT-default expected 1 HX3011 as WARNING (fixture carve-out), got " + to_string(naa) + " HX3011 (" + to_string(naa_err) + " error/" + to_string(naa_warn) + " warn) (total=" + to_string(len(diags_aa)) + ")")
+                ok = false
+            } else {
+                println("  ok: 1 HX3011 as WARNING (FLIP-2 fixture carve-out: compiler/test/ path stays warn-band)")
+            }
+        }
+    } else {
+        if naa != 0 {
+            println("  FAIL: case (aa) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(naa) + " (total=" + to_string(len(diags_aa)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (ab) FLIP-2 fixture carve-out — suffix-arm (*_test.hexa). Same contract via
+    // the other predicate arm (a `_test.hexa`-suffixed path, cwd-independent).
+    let diags_ab = _run_case("(ab) static-types FLIP-2 — fixture carve-out (*_test.hexa suffix-arm)", _build_case_static_types_fixture_suffix())
+    let nab = _count_code(diags_ab, "HX3011")
+    let nab_warn = _count_code_sev(diags_ab, "HX3011", "warning")
+    let nab_err = _count_code_sev(diags_ab, "HX3011", "error")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if env("HEXA_STATIC_TYPES_STRICT") == "1" {
+            if nab != 1 || nab_err != 1 {
+                println("  FAIL: case (ab) explicit STRICT=1 expected 1 HX3011 as ERROR everywhere (fixture included), got " + to_string(nab) + " HX3011 (" + to_string(nab_err) + " error/" + to_string(nab_warn) + " warn) (total=" + to_string(len(diags_ab)) + ")")
+                ok = false
+            } else {
+                println("  ok: 1 HX3011 as ERROR (explicit STRICT=1 → everywhere-Error, *_test.hexa included)")
+            }
+        } else {
+            if nab != 1 || nab_warn != 1 {
+                println("  FAIL: case (ab) STRICT-default expected 1 HX3011 as WARNING (fixture carve-out), got " + to_string(nab) + " HX3011 (" + to_string(nab_err) + " error/" + to_string(nab_warn) + " warn) (total=" + to_string(len(diags_ab)) + ")")
+                ok = false
+            } else {
+                println("  ok: 1 HX3011 as WARNING (FLIP-2 fixture carve-out: *_test.hexa suffix stays warn-band)")
+            }
+        }
+    } else {
+        if nab != 0 {
+            println("  FAIL: case (ab) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nab) + " (total=" + to_string(len(diags_ab)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
         }
     }
 

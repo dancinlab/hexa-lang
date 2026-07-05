@@ -119,14 +119,10 @@ jobs:
           echo "built=1" >> "$GITHUB_OUTPUT"
           echo "aprime_cc: $(wc -c < build/aprime_cc) bytes"
 
-      - name: Census — HEXA_STATIC_TYPES=1 over the corpus (count HX3011/HX3016/HX3017)
+      - name: Census — real-source static-types diags over the corpus (HX3011/HX3016/HX3017)
         if: ${{ steps.build.outputs.built == '1' }}
         shell: bash
-        env:
-          # Both flags ON. ARRAY_LOWER is inert until the r7prep+ stack
-          # (#4457) merges — forward-compatible by construction.
-          HEXA_STATIC_TYPES: '1'
-          HEXA_STATIC_TYPES_ARRAY_LOWER: '1'
+        # FLIP-3 flagless: static-types is unconditional — no env to set.
         run: |
           # NB: -uo pipefail, NOT -e. A clean file greps 0 matches -> grep exits
           # 1; under `set -e` + pipefail that 1 propagated and crashed the very
@@ -142,14 +138,20 @@ jobs:
           # Was `find -maxdepth 1` (~69-file sample); now the whole tracked tree
           # (~3,805 files). Deterministic order (sort). git ls-files == tracked
           # only (no build artifacts, no untracked scratch).
+          # FLIP-3: exclude byte-eq TEST FIXTURES (the _types_strict_for carve-out
+          # set — *_test.hexa + compiler/test/**) so this census measures REAL
+          # SHIPPING SOURCE only. Under flagless, fixtures stay Warning-band, but
+          # a nonzero count HERE is the flip-guard alarm: real source must be
+          # type-clean or the unconditional-ERROR default would brick the build.
           corpus_list="$scratch/corpus.txt"
           git ls-files \
               'compiler/**/*.hexa' \
               'stdlib/**/*.hexa' \
               'self/**/*.hexa' \
+            | grep -vE '(_test\.hexa$|^compiler/test/)' \
             | sort > "$corpus_list"
           n_corpus="$(wc -l < "$corpus_list" | tr -d ' ')"
-          echo "corpus: $n_corpus files (git ls-files compiler/**/*.hexa + stdlib/**/*.hexa + self/**/*.hexa)"
+          echo "corpus: $n_corpus real-source files (fixtures excluded — matches _types_strict_for carve-out)"
 
           # ── per-file worker (fanned out below) ──────────────────────────────
           # Each file runs the identical front-end command, greps its OWN log for
