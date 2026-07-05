@@ -3,11 +3,11 @@
 #
 # PURPOSE
 #   The static-types flip gate needs one axis no prior flip had: corpus-clean =
-#   0 HX3011/HX3016/HX3017 emissions over the FULL tracked .hexa corpus with
+#   0 HX3011/HX3016/HX3017/HX3024 emissions over the FULL tracked .hexa corpus with
 #   the flag ON (the checker REJECT-only changes which programs BUILD, not what
 #   accepted programs emit). This job compiles the corpus front-end with
 #   HEXA_STATIC_TYPES=1 (+HEXA_STATIC_TYPES_ARRAY_LOWER=1) and counts
-#   HX3011/HX3016/HX3017 diagnostic emissions per file. 0 total = corpus-clean proof
+#   HX3011/HX3016/HX3017/HX3024 diagnostic emissions per file. 0 total = corpus-clean proof
 #   for the flip PR; >0 = either a true positive (fix the corpus code as an
 #   ordinary PR first — the flip's value proof) or a checker false positive
 #   (flip-blocking, cf. §F0 r9b coercion).
@@ -80,7 +80,7 @@ concurrency:
 
 jobs:
   corpus-census:
-    name: static-types corpus census (HX3011/HX3016/HX3017 · advisory)
+    name: static-types corpus census (HX3011/HX3016/HX3017/HX3024 · advisory)
     runs-on: ubuntu-latest      # FREE runner only — paid runners forbidden (#4016)
     timeout-minutes: 90         # full corpus (~3.8k files). Hxstory: 25-min cap killed run mid-xargs (no verdict); 60-min cap STILL killed it (run 28723070379 hit 60min16s with orphan aprime_cc per-file timeouts — a tail of slow stdlib files pegging the per-file 60s limit starves the fan). Fix = per-file timeout 60→15s (below) so the slow tail is SKIPPED fast (advisory undercount bias, cf. §LANE-B) instead of pegging a worker for 60s each; 90-min job cap gives margin over the now-bounded fan. Advisory (continue-on-error) — a timeout blocks nothing, but yields NO census data, which is why the cap must clear the real runtime.
     continue-on-error: true     # ADVISORY — never a required check
@@ -111,7 +111,7 @@ jobs:
           if [ "$rc" -ne 0 ] || [ ! -x build/aprime_cc ]; then
             # Build infra failure is NOT a corpus verdict — report NEUTRAL, do
             # not fake a dirty/clean census. (Advisory job; exit 0 keeps the
-            # signal unambiguous: red = real HX3011/HX3016/HX3017 emissions only.)
+            # signal unambiguous: red = real HX3011/HX3016/HX3017/HX3024 emissions only.)
             echo "::warning::static-types-corpus NEUTRAL — aprime_cc build failed (rc=$rc); corpus census NOT run (infra, not a corpus verdict)."
             echo "built=0" >> "$GITHUB_OUTPUT"
             exit 0
@@ -119,7 +119,7 @@ jobs:
           echo "built=1" >> "$GITHUB_OUTPUT"
           echo "aprime_cc: $(wc -c < build/aprime_cc) bytes"
 
-      - name: Census — real-source static-types diags over the corpus (HX3011/HX3016/HX3017)
+      - name: Census — real-source static-types diags over the corpus (HX3011/HX3016/HX3017/HX3024)
         if: ${{ steps.build.outputs.built == '1' }}
         shell: bash
         # FLIP-3 flagless: static-types is unconditional — no env to set.
@@ -155,7 +155,7 @@ jobs:
 
           # ── per-file worker (fanned out below) ──────────────────────────────
           # Each file runs the identical front-end command, greps its OWN log for
-          # HX3011/HX3016/HX3017, and writes its count to $scratch/counts/<hash>.
+          # HX3011/HX3016/HX3017/HX3024, and writes its count to $scratch/counts/<hash>.
           # Scratch names key on a PATH HASH (sha1), not basename: the full
           # corpus spans dirs, so basenames now collide (e.g. many `mod.hexa`) —
           # a basename-keyed .s/.log would clobber across the parallel fan.
@@ -166,13 +166,13 @@ jobs:
             log="$scratch/logs/$h.log"
             # Front-end run: the driver renders ALL diagnostics (short format)
             # before codegen and exits nonzero on errors — rc is irrelevant to
-            # the census, only the HX3011/HX3016/HX3017 emission count is.
+            # the census, only the HX3011/HX3016/HX3017/HX3024 emission count is.
             # `_drv.hexa` is the positional driver-name shim (argv[1] slot), same
             # contract as tool/codegen_perf_budget.sh / control_singletu.sh.
             timeout 15 ./build/aprime_cc _drv.hexa \
                 --emit=asm --target=x86_64-linux-gnu --error-format=short \
                 -o "$scratch/asm/$h.s" "$f" > "$log" 2>&1 || true
-            n="$( (grep -o -E 'HX301[167]' "$log" || true) | wc -l | tr -d ' ')"
+            n="$( (grep -o -E 'HX30(1[167]|24)' "$log" || true) | wc -l | tr -d ' ')"
             # <count>\t<path> — path has no tabs; hash is the count-file name.
             printf '%s\t%s\n' "$n" "$f" > "$scratch/counts/$h"
           }
@@ -202,7 +202,7 @@ jobs:
             if [ "$n" -gt 0 ]; then
               dirty_files=$((dirty_files + 1))
               summary="$summary$f: $n%0A"
-              echo "::notice file=$f::static-types corpus: $n HX3011/HX3016/HX3017 emission(s) with HEXA_STATIC_TYPES=1"
+              echo "::notice file=$f::static-types corpus: $n HX3011/HX3016/HX3017/HX3024 emission(s) with HEXA_STATIC_TYPES=1"
               h="$(basename "$cf")"
               (grep -E 'HX301[167]' "$scratch/logs/$h.log" || true) | head -10 | sed "s|^|    $f: |"
             fi
@@ -212,12 +212,12 @@ jobs:
           echo "════ static-types corpus census ════"
           echo "files checked        : $ran"
           echo "dirty files          : $dirty_files"
-          echo "HX3011/HX3016/HX3017 : $total"
+          echo "HX3011/HX3016/HX3017/HX3024 : $total"
 
           if [ "$total" -eq 0 ]; then
-            echo "::notice::static-types corpus CLEAN — 0 HX3011/HX3016/HX3017 over $ran files (full corpus) with HEXA_STATIC_TYPES=1 (+ARRAY_LOWER). Corpus-clean proof for the default-ON flip (wall_a_endgame.md §B F1)."
+            echo "::notice::static-types corpus CLEAN — 0 HX3011/HX3016/HX3017/HX3024 over $ran files (full corpus) with HEXA_STATIC_TYPES=1 (+ARRAY_LOWER). Corpus-clean proof for the default-ON flip (wall_a_endgame.md §B F1)."
             exit 0
           fi
-          echo "::notice::static-types corpus DIRTY — $total HX3011/HX3016/HX3017 emission(s) in $dirty_files/$ran files: %0A$summary(true positive -> fix the corpus code as an ordinary PR; false positive -> flip-blocking checker rung, cf. §F0 r9b)"
+          echo "::notice::static-types corpus DIRTY — $total HX3011/HX3016/HX3017/HX3024 emission(s) in $dirty_files/$ran files: %0A$summary(true positive -> fix the corpus code as an ordinary PR; false positive -> flip-blocking checker rung, cf. §F0 r9b)"
           # Advisory red (continue-on-error keeps it non-blocking).
           exit 1

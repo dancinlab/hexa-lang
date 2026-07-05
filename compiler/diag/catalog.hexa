@@ -486,6 +486,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3024",
+        title: "cannot apply unary operator `-`",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "cannot apply unary operator `-` to type `{actual}`",
+        explain: "Static type check (always-on since FLIP-3 flagless — Rust-style, no disable switch), static-types segment(b). A unary negation `-x` whose operand's inferred static type is a KNOWN non-numeric scalar (`string` or `char`) can never succeed: codegen lowers `-x` as `hexa_sub(0, x)` on every target, and both runtime dispatchers (stdlib rt_sub and the C-substrate hexa_sub) throw 'cannot subtract non-numeric operand' at run time. This is the Rust E0600 'cannot apply unary operator' rule (rustc_hir_typeck op.rs lookup_op_method failure → E0600), the unary mirror of the always-on binop arithmetic mismatch (HX3001). Conservative under-reject: it fires ONLY when the operand type is the KNOWN scalar string/char — unknown idents (empty kind), `unit` (unresolved-callee sentinel), HexaVal/any dynamics, aggregates, and generics all stay SILENT. `bool` is deliberately EXEMPT: the runtime legalizes `-true` via bool→int coercion (_HX_COERCE_BOOL / the rt_sub bool arm), and the checker matches runtime policy exactly (the same reason string `+` concatenation is legal at the HX3001 binop site). Logical `!x` is NEVER flagged — it lowers through hexa_truthy, which accepts every tag; `~x` is likewise out of scope. Emitted unconditionally (FLIP-3 flagless) as a build-refusing ERROR for real source (REJECT), while byte-eq TEST FIXTURES (`compiler/test/` corpus + `*_test.hexa`) stay WARNING via the `_types_strict_for` path carve-out. No env opt-out or severity switch. Fix: convert the operand to a number first (e.g. parse the string), or fix the producing expression.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
