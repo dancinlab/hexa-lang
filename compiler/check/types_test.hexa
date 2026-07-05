@@ -1296,6 +1296,36 @@ fn _build_case_static_types_r9c() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (af) segment(b) HX3005 coercion-faithfulness — match arm-body join now uses
+// _types_assignable (like the if/else join). first arm body `a` fixes first_t=i32
+// (typed param ident, not a literal → conservative first-arm-literal boundary
+// N/A). arm `"s"` (string vs i32) still REJECTs (positive, stays); arm `3`
+// (int-lit vs i32) now COERCEs. Expect exactly 1 HX3005 (pre-fix: 2) + it stays
+// Error (unbanded) + 0 HX3011 (int-lit patterns `1`/`2` coerce vs i32 scrutinee).
+fn _build_case_hx3005_join_coerce() -> Module {
+    let f = "case_hx3005_join.hexa"
+    let mut arms = []
+    // 1 -> a      first_t = i32 (typed param ident)
+    arms.push(_int_expr("1", f, 3, 9))
+    arms.push(_ident_expr("a", f, 3, 14))
+    // 2 -> "s"    string body vs i32 → HX3005 (positive, must stay)
+    arms.push(_int_expr("2", f, 4, 9))
+    arms.push(_string_expr("s", f, 4, 14))
+    // _ -> 3      int-lit body vs i32 → coerce clean (pre-fix: HX3005)
+    arms.push(_wildcard_expr(f, 5, 9))
+    arms.push(_int_expr("3", f, 5, 14))
+    let m = _match_expr(_ident_expr("a", f, 2, 11), arms, f, 2, 5)
+    let mut kids = []
+    kids.push(m)
+    let body = _block(kids, f, 2, 1)
+    let mut fparams = []
+    fparams.push(_param("a", "i32", f, 1, 6))
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // static-types r9d — struct-literal field-EXISTENCE reject (HEXA_STATIC_TYPES=1,
 // no ARRAY_LOWER dependency). r6 deliberately scoped existence out, so a
 // typo'd field name silently skipped BOTH the existence and the type check.
@@ -2217,6 +2247,21 @@ fn main() {
         ok = false
     } else {
         println("  ok: 2 HX3003 (str→i32 + int-lit→f32 reject; take32(0)/dynp(1) coerce clean) — E0308 demand_coerce faithfulness")
+    }
+
+    // (af) segment(b) HX3005 coercion-faithfulness — match arm-body join
+    // _types_equal→_types_assignable (like the if/else join). `match a { 1 -> a,
+    // 2 -> "s", _ -> 3 }`: string arm REJECTs (stays), int-lit arm `3` coerces to
+    // i32. Expect 1 HX3005 (pre-fix 2) + Error-severity (unbanded) + 0 HX3011.
+    let diags_af = _run_case("(af) static-types segment(b) — match arm-body join coercion (int-lit→i32 coerce · string reject) (HX3005)", _build_case_hx3005_join_coerce())
+    let naf = _count_code(diags_af, "HX3005")
+    let naf_err = _count_code_sev(diags_af, "HX3005", "error")
+    let naf_3011 = _count_code(diags_af, "HX3011")
+    if naf != 1 || naf_err != 1 || naf_3011 != 0 {
+        println("  FAIL: case (af) expected 1 HX3005 as ERROR (string arm; int-lit arm coerces) + 0 HX3011, got " + to_string(naf) + " HX3005 (" + to_string(naf_err) + " error) / " + to_string(naf_3011) + " HX3011 (total=" + to_string(len(diags_af)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3005 as ERROR (string arm reject; int-lit `3` coerces to i32) — match join E0308 demand_coerce faithfulness")
     }
 
     println("")
