@@ -22,7 +22,7 @@
 | **ns-syscall** (getppid/setsid/mount/umount2/unshare/setns/flock/sigset) | ✅ | **ON** (FRAG-REGEN) | ✅ drop | #4428/#4430 | faithful 3/3 완료 |
 | **S1 dl\*** FFI floor-partition (`runtime_ffi_dyn` TU) | ✅ **MERGED** | n/a (byteeq-neutral · ungated) | ✅ dlopen/dlsym/dlerror 구조적 이탈(canonical runtime.a nm-UND 부재 확증 · CI run 28678730603) | #4481 | byteeq-neutral · 구조 완료 |
 | **PR-2** codegen 조건부-링크 (`HEXA_FFI_DYN_TU`) | ✅ **MERGED** | n/a (byteeq-neutral) | n/a (프로그램측 조건부-링크) | #4487 | byteeq-neutral · 구조 완료 |
-| **own-start** environ+atexit (FLIP-7) | ❌ OPEN | OFF (byte-neutral) | ❌ atexit·environ 유지 | #4409 (CONFLICTING) | bit-changing · 3-target + install-smoke |
+| **own-start** environ+atexit (FLIP-7) | ✅ merged (build-half scaffold) | **OFF** (byte-neutral · `HEXA_ZEROC_OWN_START:-0`) | ❌ atexit·environ 유지 | #4409 MERGED | default-ON flip = 별도 pool FLIP-7(bit-changing · 3-target + install-smoke) |
 | **WALL-2 free** `HEXA_RT_NATIVE_FREE` | ✅ merged | **OFF** (`${…:-0}`) | ❌ __libc free 유지 | #4242 | byteeq-neutral 3-target + faithful DROP |
 | **WALL-2 calloc** `HEXA_RT_NATIVE_CALLOC` | ✅ merged | **OFF** | ❌ __libc calloc 유지 | #4244 | 동상 (FLIP-6) |
 | **WALL-2 realloc** `HEXA_RT_NATIVE_REALLOC` | ✅ merged | **OFF** | ❌ __libc realloc 유지 | #4244 | 동상 (FLIP-6) |
@@ -32,7 +32,7 @@
 
 **net: 현재 linux canonical `runtime.a` 에서 실제 drop 된 것** = glob·globfree·fgets·rand·srand·mkstemp·mkdtemp·ns-syscall군(getppid/setsid/mount/umount2/unshare/setns/flock/sigaddset/sigemptyset)·**strcmp·strncmp·strchr·strstr·strdup(#4591+#4592, isolated frozen seed default-ON 3-target)**.
 **merged-but-OFF(flip 대기)** = regex·strtod-tail·free·calloc·realloc. (qsort = flip #4452 완료로 linux ON.)
-**not-merged(open)** = atexit/environ own-start(#4409, CONFLICTING · rebase 선결). (dl*×3 = S1 #4481 MERGED로 구조적 이탈 완료 · PR-2 #4487 MERGED.)
+**not-merged(open)** = 없음 — own-start #4409(build-half scaffold)는 MERGED default-OFF(default-ON flip만 pool FLIP-7 잔여). (dl*×3 = S1 #4481 MERGED로 구조적 이탈 완료 · PR-2 #4487 MERGED.)
 
 > ⚠️ 프롬프트 census 중 정정: qsort=**#4447**(≠#4452), regex=**#4445**(≠#4458). FLIP-6(WALL-2 default-ON linux flip) 는 **미실시** — #4242/#4244 는 메커니즘 merge 일 뿐 default-ON flip PR 은 없음. Route-C native body 는 x86_64-linux-only(`stage_resolve_runtime_a:1930` non-x86_64-linux 무시) = arm64/darwin fp-ABI 커버리지가 FLIP-6 블로커.
 
@@ -148,6 +148,8 @@ unfiltered nm -u runtime.a  ─→  { network-FFI · CRT-startup · exec-family 
 ## 4. 다음 3 액션 (#4481 착지 직후 즉시 우선순위)
 
 > **⟳ 2026-07-04 reconcile (self-host workflow wcwe457nb · CI run 28678730603)**: **PHASE A 완전 종료** — S1 #4481 + PR-2 #4487 MERGED(아래 우선1 = done). qsort flip #4452 착지(default-ON). dl* 소멸 실측 확증(canonical runtime.a nm-UND 부재). **최신 floor = nm-UND 228 total · reducible residual 60**. ★**mini(git/gh only) 즉시-landing 가능 = 0** — 잔여 reducible 전부 (a) pool-gated(byteeq 3-target · seed regen · faithful) 또는 (b) PR-landing-blocked. mini-authorable **보조** 3종: ① #4409 rebase(CONFLICTING 해소=git-only · merge는 pool) ② resolver no-binary GRACEFUL 하드닝(`stage_resolve_runtime_a` · WALL-2 레인 unblock · flip은 pool) ③ 본 SSOT stale-line 정정(이 커밋). 아래 우선1(PR-2)은 done이라 실질 다음 = 우선2/3의 pool flip 라운드(aiden/summer seed regen).
+>
+> **⟳ 2026-07-06 reconcile (self-host floor 워크플로우 wf_35423332 · CI run 28745095773 nobaseline nm-UND)**: str*/free/calloc 라운드 착지 반영. **최신 floor = nm-UND 231 total · reducible residual 54** (honest-libc ~51: array_store/join/fs_write_all_native 3개는 hexa-own 내부 def·prefix-filter 누락). `total 228→231(+3)`은 무관 landing(static-types FLIP-1/3·borrowck)의 상승분 = **감축 지표 아님**(회귀 아님). `reducible 60→54(−6)`가 실 신호 — 정확히 이번 세션 이탈한 **strncmp+strstr+strchr+strdup+free+calloc** 6개. ⚠️ **strcmp는 flip 착지했으나 floor 잔존** — flip은 shim의 hxlcl_strcmp→libc-strcmp edge만 드롭·non-shim caller(runtime_core.c·hexa_cc.c 등)가 여전히 strcmp 참조 → union nm-UND에 남음 = 정직한 다음 타깃(non-shim strcmp caller 소멸 = codegen 라운드, seed-flip 아님). regex `#4535` default-ON 착지 확증(regcomp/regexec/regfree drop). **★mini(git/gh only) 즉시-landing 가능 = 0 유지** — 잔여 reducer 전부: (a) 이미 landed(regex#4535·qsort#4452 emit-#ifdef·own-start#4409 build-half) 또는 (b) pool-blocked(realloc/strtod = seed 파일 부재·aprime_cc-at-Stage-0b bake 구조불가 #4489/#4545). own-start default-ON = 별도 pool FLIP-7(bit-changing·install-smoke). **정직 종점 = sanctioned-floor(net-FFI~11-15 + CRT __libc_start_main[M8-#3959] + exec-family + hexa.real 센티넬[#3933] + CUDA opt-in), 리터럴 ∅ 도달불가(§3).**
 
 | 우선 | 액션 | 게이트 | dep / 비고 |
 |---|---|---|---|
