@@ -1172,6 +1172,16 @@ resolve_cuda_runtime_seed() {
     fi
 }
 
+# ── zero-c #29 CO-DROP default SSOT (convergence stage-resolve-runtime-a-4) ──
+# THE single per-symbol default for ${HEXA_RT_NATIVE_<SYM>:-…}. A flip PR edits
+# ONLY _RN_AUTO_SYMS (add/remove one word); the CO-DROP registry AND every
+# RT-NATIVE-<SYM> tri-state consume block resolve their default through
+# _rn_default, so the two authorities can never desync again (#4591 S5-multidef
+# class). Keep the list single-space-delimited with a leading+trailing space —
+# the CI no-literal-default lint parses this exact line.
+_RN_AUTO_SYMS=" strcmp strncmp strchr strdup strstr free calloc "
+_rn_default() { case "$_RN_AUTO_SYMS" in *" $1 "*) echo auto ;; *) echo 0 ;; esac; }
+
 build_runtime_a_from_source() {
     regen_runtime_core_from_emitter
     # Seed-contamination gate (convergence stage-resolve-runtime-a-3): a frozen RT-NATIVE
@@ -1522,16 +1532,15 @@ build_runtime_a_from_source() {
         # SEED-BACKED RT-NATIVE symbols that ALSO appear in a SELFEMIT/MEMLEAF list
         # (the ONLY ones that can collide). Add a symbol here the same round its
         # RT-NATIVE-<SYM> seed-consume block + seeds land.
-        # Each entry is <sym>:<default> — the DEFAULT MUST mirror the RT-NATIVE-<SYM>
-        # consuming block's default (convergence selfemit-smoke-4591-codrop-default-mismatch).
-        # A default-auto flip whose registry entry stays :-0 makes the registry read
-        # "unclaimed" while the block engages → the SELFEMIT loop double-emits the member →
-        # S5 ld -r multidef (silently swallowed → stale runtime.a). A flip PR MUST bump the
-        # <sym>:<default> pair here in the SAME change. (strcmp/strncmp/strchr/strdup are
-        # default-auto seed leaves; strstr is NOT in the SELFEMIT list so it needs no entry.)
+        # Defaults come from _rn_default (SSOT above build_runtime_a_from_source); this
+        # list is ONLY the collision-candidate SET (symbols that also appear in a SELFEMIT/
+        # MEMLEAF list — the only ones that can multidef). Add a symbol here the same round
+        # its RT-NATIVE-<SYM> seed-consume block + seeds land; its DEFAULT lives in
+        # _RN_AUTO_SYMS, never here — so the registry and the consume block can never desync
+        # (convergence selfemit-smoke-4591-codrop-default-mismatch · stage-resolve-runtime-a-4).
         local _mo_rn_sym _mo_rn_SYM _mo_rn_gate _mo_rn_def
-        for _mo_rn_sym in strcmp:auto strncmp:auto strchr:auto strdup:auto strcpy:0 strncpy:0 strcat:0 memcmp:0 memcpy:0 memset:0 strlen:0; do
-            _mo_rn_def="${_mo_rn_sym#*:}"; _mo_rn_sym="${_mo_rn_sym%%:*}"
+        for _mo_rn_sym in strcmp strncmp strchr strdup strcpy strncpy strcat memcmp memcpy memset strlen; do
+            _mo_rn_def="$(_rn_default "$_mo_rn_sym")"
             _mo_rn_SYM=$(printf '%s' "$_mo_rn_sym" | tr 'a-z' 'A-Z')
             eval "_mo_rn_gate=\${HEXA_RT_NATIVE_${_mo_rn_SYM}:-$_mo_rn_def}"
             [ "$_mo_rn_gate" = "0" ] && continue
@@ -1871,7 +1880,7 @@ build_runtime_a_from_source() {
         #   1    = strict: a missing/bad seed is FATAL (measurement / verify scripts).
         # Seeds self/native/hxlcl_strcmp_{x86_64,arm64-linux,arm64}.s baked by the pool.
         # convergence stage-resolve-runtime-a-2 · regen-hxlcl-free-native-s-sh-1.
-        _rnsc_mode="${HEXA_RT_NATIVE_STRCMP:-auto}"
+        _rnsc_mode="${HEXA_RT_NATIVE_STRCMP:-$(_rn_default strcmp)}"
         if [ "$_rnsc_mode" != "0" ]; then
             _rnsc_tgt="${TARGET:-}"; _rnsc_tgt="${_rnsc_tgt%-musl}"; _rnsc_tgt="${_rnsc_tgt%-cuda}"
             [ -z "$_rnsc_tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -1990,7 +1999,7 @@ build_runtime_a_from_source() {
         #          is observable as `free` still UND in the nobaseline nm-UND dump (#4360).
         #   1    = strict: a missing/bad seed is FATAL (measurement / verify scripts).
         # convergence stage-resolve-runtime-a-2.
-        _rnfr_mode="${HEXA_RT_NATIVE_FREE:-auto}"
+        _rnfr_mode="${HEXA_RT_NATIVE_FREE:-$(_rn_default free)}"
         if [ "$_rnfr_mode" != "0" ]; then
             _rnfr_tgt="${TARGET:-}"; _rnfr_tgt="${_rnfr_tgt%-musl}"; _rnfr_tgt="${_rnfr_tgt%-cuda}"
             [ -z "$_rnfr_tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -2175,7 +2184,7 @@ build_runtime_a_from_source() {
         # The 3 seeds self/native/hxlcl_calloc_{x86_64,arm64-linux,arm64}.s landed in #4556
         # (pool aprime_cc bake, all 3 verified .globl=1 .private_extern=0).
         # convergence stage-resolve-runtime-a-2 · regen-hxlcl-free-native-s-sh-1.
-        _rnca_mode="${HEXA_RT_NATIVE_CALLOC:-auto}"
+        _rnca_mode="${HEXA_RT_NATIVE_CALLOC:-$(_rn_default calloc)}"
         if [ "$_rnca_mode" != "0" ]; then
             _rnca_tgt="${TARGET:-}"; _rnca_tgt="${_rnca_tgt%-musl}"; _rnca_tgt="${_rnca_tgt%-cuda}"
             [ -z "$_rnca_tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -2255,7 +2264,7 @@ build_runtime_a_from_source() {
         # pool aprime_cc bake (tool/regen_hxlcl_strncmp_native_s.sh); until they land the
         # resolver graceful-skips (default 0 = block never runs → byteeq-neutral).
         # convergence stage-resolve-runtime-a-2 · regen-hxlcl-free-native-s-sh-1.
-        _rnst_mode="${HEXA_RT_NATIVE_STRNCMP:-auto}"
+        _rnst_mode="${HEXA_RT_NATIVE_STRNCMP:-$(_rn_default strncmp)}"
         if [ "$_rnst_mode" != "0" ]; then
             _rnst_tgt="${TARGET:-}"; _rnst_tgt="${_rnst_tgt%-musl}"; _rnst_tgt="${_rnst_tgt%-cuda}"
             [ -z "$_rnst_tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -2337,7 +2346,7 @@ build_runtime_a_from_source() {
         # self/native/hxlcl_strstr_{x86_64,arm64-linux,arm64}.s are PENDING a pool aprime_cc
         # bake — until they land, `auto` gracefully FALLBACK-SHIMs (byteeq path unchanged).
         # convergence stage-resolve-runtime-a-2 · regen-hxlcl-free-native-s-sh-1.
-        _rnss_mode="${HEXA_RT_NATIVE_STRSTR:-auto}"
+        _rnss_mode="${HEXA_RT_NATIVE_STRSTR:-$(_rn_default strstr)}"
         if [ "$_rnss_mode" != "0" ]; then
             _rnss_tgt="${TARGET:-}"; _rnss_tgt="${_rnss_tgt%-musl}"; _rnss_tgt="${_rnss_tgt%-cuda}"
             [ -z "$_rnss_tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -2421,7 +2430,7 @@ build_runtime_a_from_source() {
         # aprime_cc bake (this prereq-a lands the resolver + regen tool default-OFF; the parent
         # bakes + verifies .globl=1 .private_extern=0, then flips the default in a follow-up).
         # convergence stage-resolve-runtime-a-2 · regen-hxlcl-strchr-native-s-sh-1.
-        _rnst_mode="${HEXA_RT_NATIVE_STRCHR:-auto}"
+        _rnst_mode="${HEXA_RT_NATIVE_STRCHR:-$(_rn_default strchr)}"
         if [ "$_rnst_mode" != "0" ]; then
             _rnst_tgt="${TARGET:-}"; _rnst_tgt="${_rnst_tgt%-musl}"; _rnst_tgt="${_rnst_tgt%-cuda}"
             [ -z "$_rnst_tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -2509,7 +2518,7 @@ build_runtime_a_from_source() {
         # pool aprime_cc bake (regen tool/regen_hxlcl_strdup_native_s.sh); until they land
         # the resolver graceful-skips (auto/1 WARN; 0 no-op). convergence
         # stage-resolve-runtime-a-2 · regen-hxlcl-strdup-native-s-sh-1.
-        _rnst_mode="${HEXA_RT_NATIVE_STRDUP:-auto}"
+        _rnst_mode="${HEXA_RT_NATIVE_STRDUP:-$(_rn_default strdup)}"
         if [ "$_rnst_mode" != "0" ]; then
             _rnst_tgt="${TARGET:-}"; _rnst_tgt="${_rnst_tgt%-musl}"; _rnst_tgt="${_rnst_tgt%-cuda}"
             [ -z "$_rnst_tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -2596,7 +2605,7 @@ build_runtime_a_from_source() {
         # this same PR, so the pool bake must re-emit realloc (and the free/calloc/strcmp whole-
         # module seeds that carry hxlcl_realloc as a demoted local) from the guarded body.
         # convergence stage-resolve-runtime-a-2 · regen-hxlcl-free-native-s-sh-1.
-        _rnre_mode="${HEXA_RT_NATIVE_REALLOC:-0}"
+        _rnre_mode="${HEXA_RT_NATIVE_REALLOC:-$(_rn_default realloc)}"
         if [ "$_rnre_mode" != "0" ]; then
             _rnre_tgt="${TARGET:-}"; _rnre_tgt="${_rnre_tgt%-musl}"; _rnre_tgt="${_rnre_tgt%-cuda}"
             [ -z "$_rnre_tgt" ] && case "$(uname -sm 2>/dev/null)" in

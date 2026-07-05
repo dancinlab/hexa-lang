@@ -539,6 +539,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: co-drop default SSOT lint (convergence stage-resolve-runtime-a-4)
+        shell: bash
+        run: |
+          set -euo pipefail
+          F=tool/stage_resolve_runtime_a
+          # (a) no literal ':-auto}' may bypass the _rn_default SSOT.
+          ! grep -nE ':-auto\}' "$F" || { echo "FAIL: literal ':-auto}' — route the default through \$(_rn_default <sym>)"; exit 1; }
+          # (b) no SSOT-auto symbol may carry a literal default anywhere (derives the set from the SSOT line — never a 3rd authority).
+          for s in $(sed -n 's/^_RN_AUTO_SYMS=" \(.*\) "$/\1/p' "$F"); do
+            ! grep -nE "HEXA_RT_NATIVE_$(printf '%s' "$s" | tr a-z A-Z):-[01a-z]" "$F" || { echo "FAIL: literal default on SSOT-auto symbol '$s' — use \$(_rn_default $s)"; exit 1; }
+          done
+          echo "co-drop default SSOT lint OK"
+
       # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
       # only reroutes the compile through the cache, never the link/emit bytes).
       - name: ccache setup
