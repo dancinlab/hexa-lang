@@ -3129,7 +3129,11 @@ build_runtime_a_from_source() {
         # release_build @ main a372449a: "hidden symbol __dso_handle isn't defined").
         # GATE-1 missed it because it ran the single-TU (non-MULTIOBJ) archive shape.
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S4]: compile build/hxlcl_shim.o…"
-        $CC -c -O2 $_mo_archflag -std=gnu11 -D_GNU_SOURCE $_mo_shim_def $_zc_own_def self/runtime_core_hxlcl_shim.c -o build/hxlcl_shim.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: hxlcl_shim.o compile failed" >&2; return 1; }
+        # zeroc #29 mem-leaf: $_zeroc_nobuiltin is MANDATORY here — the shim's default-native
+        # hxlcl_memcpy/memset/memcmp bodies are C loops; without -fno-builtin-mem* clang's
+        # loop-idiom pass rewrites them back into `call memcpy` (self-recursion). Mirrors the
+        # S2/S3 runtime.o/runtime_core.o compiles (:3118/:3123) which already carry it.
+        $CC -c -O2 $_mo_archflag -std=gnu11 -D_GNU_SOURCE $_zeroc_nobuiltin $_mo_shim_def $_zc_own_def self/runtime_core_hxlcl_shim.c -o build/hxlcl_shim.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: hxlcl_shim.o compile failed" >&2; return 1; }
         # (S5) MULTIDEF SAFETY GATE — `ld -r` partial relocatable merge of all
         #      members. `ld -r` leaves undefined externs unresolved (the program-
         #      supplied compiler-side symbols are EXPECTED to be absent here, same as
