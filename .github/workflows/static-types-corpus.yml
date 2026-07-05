@@ -80,7 +80,7 @@ concurrency:
 
 jobs:
   corpus-census:
-    name: static-types corpus census (HX3011/HX3016/HX3017/HX3024 · advisory)
+    name: static-types corpus census (HX3011/HX3016/HX3017/HX3024/HX3025 · advisory)
     runs-on: ubuntu-latest      # FREE runner only — paid runners forbidden (#4016)
     timeout-minutes: 90         # full corpus (~3.8k files). Hxstory: 25-min cap killed run mid-xargs (no verdict); 60-min cap STILL killed it (run 28723070379 hit 60min16s with orphan aprime_cc per-file timeouts — a tail of slow stdlib files pegging the per-file 60s limit starves the fan). Fix = per-file timeout 60→15s (below) so the slow tail is SKIPPED fast (advisory undercount bias, cf. §LANE-B) instead of pegging a worker for 60s each; 90-min job cap gives margin over the now-bounded fan. Advisory (continue-on-error) — a timeout blocks nothing, but yields NO census data, which is why the cap must clear the real runtime.
     continue-on-error: true     # ADVISORY — never a required check
@@ -172,7 +172,7 @@ jobs:
             timeout 15 ./build/aprime_cc _drv.hexa \
                 --emit=asm --target=x86_64-linux-gnu --error-format=short \
                 -o "$scratch/asm/$h.s" "$f" > "$log" 2>&1 || true
-            n="$( (grep -o -E 'HX30(1[167]|24)' "$log" || true) | wc -l | tr -d ' ')"
+            n="$( (grep -o -E 'HX30(1[167]|2[45])' "$log" || true) | wc -l | tr -d ' ')"
             # <count>\t<path> — path has no tabs; hash is the count-file name.
             printf '%s\t%s\n' "$n" "$f" > "$scratch/counts/$h"
           }
