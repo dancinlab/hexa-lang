@@ -2781,7 +2781,14 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         // still strict-check, so real mismatches report (no g3 weakening).
         if len(frame_ret.kind) > 0 && frame_ret.kind != "unit" {
             if !_types_assignable(frame_ret, val_t, val_src) {
-                _emit_hx3004(frame_name, frame_ret, val_t, e.span, out)
+                // segment(b) Rung B — permissive on an actual `unit` from
+                // `return <expr>` where expr is an unannotated-return call the
+                // inferencer resolves to unit (parity with call-arg 3642 and the
+                // if/else join). A bare `return` (no children → val_t defaults
+                // to unit) still fires HX3004 (Rust E0069, must not be silenced).
+                if !(len(e.children) > 0 && val_t.kind == "unit") {
+                    _emit_hx3004(frame_name, frame_ret, val_t, e.span, out)
+                }
             }
         }
         return _types_t_unit()
@@ -3021,7 +3028,12 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // unknown-side cases stop false-flagging HX3001; genuine
             // kind≠kind non-literal mismatches still report (g3 intact).
             if !r3_rejected && !_types_assignable(lhs_t, rhs_t, e.children[1]) {
-                _emit_hx3001(lhs_t, rhs_t, e.span, out)
+                // segment(b) Rung B — permissive on an actual `unit` RHS (an
+                // unannotated-return call the inferencer resolves to unit),
+                // parity with call-arg 3642 / return / if-join.
+                if rhs_t.kind != "unit" {
+                    _emit_hx3001(lhs_t, rhs_t, e.span, out)
+                }
             }
             // HEXA-OWN L2 r1 — a bare-ident RHS of an assignment MOVES the
             // owned value (`y = x` where `x` is a registered `@own` binding):
@@ -5070,7 +5082,12 @@ pub fn type_check(module: Module) -> array {
         let rhs_t = _infer_expr(it.body, env, ctx0, out)
         if len(declared.kind) > 0 && len(rhs_t.kind) > 0 {
             if !_types_assignable(declared, rhs_t, it.body) {
-                _emit_hx3001(declared, rhs_t, it.body.span, out)
+                // segment(b) Rung B — permissive on an actual `unit` RHS (an
+                // unannotated-return call resolved to unit), parity with the
+                // assign / return / call-arg / if-join sites.
+                if rhs_t.kind != "unit" {
+                    _emit_hx3001(declared, rhs_t, it.body.span, out)
+                }
             }
         }
         li = li + 1
