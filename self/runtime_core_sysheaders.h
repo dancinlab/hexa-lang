@@ -139,4 +139,23 @@ int    hxlcl_task_info(unsigned int target, unsigned int flavor, void *info_out,
 #endif
 #endif /* !HEXA_RT_MEM_LIBC */
 
+/* zeroc #29 realloc F2 (load-bearing fix): under the realloc flip, hxlcl_malloc hands out
+ * base+16 family pointers with an 8-byte MAGIC. The standalone runtime_core TU must route the
+ * WHOLE malloc-family (malloc/free/realloc/calloc) through the shim's magic-guarded providers —
+ * else its bare libc free(hxlcl_strdup'd key) = free(base+16) aborts darwin (the #4614 root
+ * cause). Placed after <stdlib.h> (line ~27) so the prototypes are already parsed, not
+ * macro-expanded; the foreign-pointer path (magic-miss) degrades to the exact libc call, so
+ * arena kdup keys and any direct-libc alloc stay today-equivalent. The linux glibc <malloc.h>
+ * re-arm block #undef/redefines the same way — no conflict. OFF path (flag unset) = byte-identical. */
+#ifdef HEXA_RT_NATIVE_REALLOC
+#undef malloc
+#undef free
+#undef realloc
+#undef calloc
+#define malloc(n)     hxlcl_malloc((size_t)(n))
+#define free(p)       hxlcl_free((void *)(p))
+#define realloc(p,n)  hxlcl_realloc((void *)(p), (size_t)(n))
+#define calloc(nm,sz) hxlcl_calloc((size_t)(nm), (size_t)(sz))
+#endif /* HEXA_RT_NATIVE_REALLOC */
+
 #endif /* HEXA_RUNTIME_CORE_SYSHEADERS_H */
