@@ -1228,16 +1228,35 @@ let mut _types_array_lower_on: bool = false
 let mut _types_strict: bool = false
 
 fn _types_static_flags_hoist() {
-    _types_static_on = env("HEXA_STATIC_TYPES") == "1"
+    // FLIP-1 (static-types warn-band DEFAULT-ON, opt-OUT): unset → ON,
+    // "1" → ON (backward-compat), any other value → ON, "0" → OFF (the opt-out).
+    // The warn-band (HX3011 E0308 / HX3016 E0560 / HX3017 E0063) is F4
+    // warn-first (Severity::Warning under the plain flag → renders to stderr,
+    // NEVER aborts — main.hexa `_has_errors` counts Severity::Error only), so
+    // default-ON is byteeq-neutral: codegen runs unchanged, gen3≡gen4 emit is
+    // byte-identical. HEXA_STATIC_TYPES_STRICT=1 re-escalates to Error (REJECT)
+    // for callers who want the fatal path; HEXA_STATIC_TYPES=0 is the opt-out
+    // back to the fully-silent default. Every gate site consults
+    // _types_static_on / _types_array_lower_on ONLY inside compiler/check/
+    // (the S3 diagnostic pass) — none reach compiler/lower · codegen · emit.
+    _types_static_on = env("HEXA_STATIC_TYPES") != "0"
     _types_strict = env("HEXA_STATIC_TYPES_STRICT") == "1"
     // static-types F0 flag-fold (wall_a_endgame.md §B.3 F0): HEXA_STATIC_TYPES
     // IMPLIES array-lower. A default-ON flip of a two-flag AND is incoherent,
     // so the r7-prep/r8/r9 array-lowering rungs fold under the single
     // HEXA_STATIC_TYPES flag. HEXA_STATIC_TYPES_ARRAY_LOWER stays a still-
     // working ALIAS for one deprecation cycle (additive fold, not a rename /
-    // delete). Byteeq-neutral on the DEFAULT path: both flags unset →
-    // _types_static_on=false → the disjunction is still false → the array-lower
-    // gates (963/2777/3080/3131) keep the byte-identical fallthrough.
+    // delete). After FLIP-1 the default path is DEFAULT-ON: both flags unset →
+    // _types_static_on=true → the disjunction is true → the array-lower gates
+    // (963/2777/3080/3131) take the structured-element path. This is STILL
+    // byteeq-neutral: the array-lower gate lives in _types_lower_type_ref,
+    // consulted only by the S3 type-check pass (callers all in compiler/check/,
+    // grep-verified) — types are erased at MIR (dynamic {tag,payload} runtime),
+    // so the structured-element kind feeds diagnostic type-comparison only,
+    // never MIR/codegen/emit. Full-corpus census triage: real shipping source
+    // (compiler/check·lower·parse·stdlib·self) is CLEAN; the 21 dirty files are
+    // all test fixtures (byte-equality inputs + _test.hexa) where a warning on
+    // stderr does not break the build. byteeq 3-target on PR CI is the proof.
     _types_array_lower_on = _types_static_on || (env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1")
 }
 
