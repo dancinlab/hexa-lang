@@ -1211,7 +1211,7 @@ build_runtime_a_from_source() {
     # copies as memcpy even under -fno-builtin). clang REJECTS the gcc-only -ftree-* flag
     # ("unknown argument"), so it is added conditionally for gcc only. Prereq: the #4366 fast
     # glibc-dispatch hxlcl_memcpy/memset/memmove/memcmp bodies (explicit calls stay fast).
-    local _zeroc_nobuiltin="-fno-builtin-memcpy -fno-builtin-memset -fno-builtin-memmove -fno-builtin-memcmp"
+    local _zeroc_nobuiltin="-fno-builtin-memcpy -fno-builtin-memset -fno-builtin-memmove -fno-builtin-memcmp -fno-builtin-strcpy -fno-builtin-strncpy -fno-builtin-strcat"
     case "$("${CC:-cc}" --version 2>/dev/null | head -1)" in
         *[Cc]lang*) : ;;                                  # clang: -fno-builtin-* suffices
         *) _zeroc_nobuiltin="$_zeroc_nobuiltin -fno-tree-loop-distribute-patterns" ;;  # gcc
