@@ -98,6 +98,20 @@ emit_one() {
     [ "$total" -eq 1 ] || { echo "[regen_hxlcl_strdup] ERROR: $triple demotion left $total globals (expected 1 — sed pattern drift)" >&2; exit 1; }
     [ "$pext" -eq 0 ] || { echo "[regen_hxlcl_strdup] ERROR: $triple demotion left $pext .private_extern (Mach-O N_PEXT stays external → ld -r multidef)" >&2; exit 1; }
 
+    # ── ISOLATION pass (convergence stage-resolve-runtime-a-3) ───────────────────────
+    # Whole-module Route-C emit bundles every hxlcl_* sibling (incl. syscall leaves whose
+    # `bl __errno_location` is glibc-only, darwin-absent) as local bodies; .globl-demotion
+    # leaves them in the .o, detonating build/hexat on darwin (Undefined ___errno_location)
+    # when consumed default-ON. Slice to the ONE contract fn (+ referenced data/stamps);
+    # sibling calls (incl. hxlcl_malloc) stay shim/carrier-served externals. Byte-neutral OFF.
+    python3 "$(dirname "$0")/isolate_native_seed.py" "$demoted" "$CONTRACT" "$demoted.iso" \
+        || { echo "[regen_hxlcl_strdup] ERROR: $triple isolation slice failed" >&2; exit 1; }
+    mv "$demoted.iso" "$demoted"
+    [ "$(grep -cE '^[[:space:]]*\.globl[[:space:]]' "$demoted")" -eq 1 ] \
+        || { echo "[regen_hxlcl_strdup] ERROR: $triple isolation left != 1 global" >&2; exit 1; }
+    ! grep -qE 'errno_location' "$demoted" \
+        || { echo "[regen_hxlcl_strdup] ERROR: $triple isolation left an errno_location ref" >&2; exit 1; }
+
     {
         printf '// %s — FROZEN BOOTSTRAP SEED (RT-NATIVE zero-c #29 — WALL-2 hxlcl_strdup).\n' "$(basename "$out")"
         printf '// GENERATED: tool/regen_hxlcl_strdup_native_s.sh — aprime_cc _drv.hexa --emit=asm\n'

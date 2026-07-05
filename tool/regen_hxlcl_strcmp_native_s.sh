@@ -101,6 +101,23 @@ emit_one() {
     [ "$total" -eq 1 ] || { echo "[regen_hxlcl_strcmp] ERROR: $triple demotion left $total globals (expected 1 — sed pattern drift)" >&2; exit 1; }
     [ "$pext" -eq 0 ] || { echo "[regen_hxlcl_strcmp] ERROR: $triple demotion left $pext .private_extern (Mach-O N_PEXT stays external → ld -r multidef)" >&2; exit 1; }
 
+    # ── ISOLATION pass (convergence stage-resolve-runtime-a-3) ───────────────────────
+    # The whole-module Route-C emit bundles EVERY hxlcl_* sibling (strlen, syscall leaves
+    # fork/execve/open/…) as local bodies; the syscall leaves emit `bl __errno_location`
+    # (glibc extern, ABSENT on darwin — macOS uses __error). .globl-demotion above leaves
+    # those DEAD bodies in the .o, so consuming this seed default-ON detonates the
+    # build/hexat link on darwin with `Undefined symbols: ___errno_location`. Slice the
+    # demoted emit down to the ONE contract fn body (+ referenced data/stamps); every
+    # sibling the contract calls stays a shim/carrier-served undefined external (the seed
+    # drops exactly its own shim def). Target-uniform; byte-neutral on the flag-OFF path.
+    python3 "$(dirname "$0")/isolate_native_seed.py" "$demoted" "$CONTRACT" "$demoted.iso" \
+        || { echo "[regen_hxlcl_strcmp] ERROR: $triple isolation slice failed" >&2; exit 1; }
+    mv "$demoted.iso" "$demoted"
+    [ "$(grep -cE '^[[:space:]]*\.globl[[:space:]]' "$demoted")" -eq 1 ] \
+        || { echo "[regen_hxlcl_strcmp] ERROR: $triple isolation left != 1 global" >&2; exit 1; }
+    ! grep -qE 'errno_location' "$demoted" \
+        || { echo "[regen_hxlcl_strcmp] ERROR: $triple isolation left an errno_location ref" >&2; exit 1; }
+
     {
         printf '// %s — FROZEN BOOTSTRAP SEED (RT-NATIVE zero-c #29 — WALL-2 hxlcl_strcmp).\n' "$(basename "$out")"
         printf '// GENERATED: tool/regen_hxlcl_strcmp_native_s.sh — aprime_cc _drv.hexa --emit=asm\n'

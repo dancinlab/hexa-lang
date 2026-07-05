@@ -1174,6 +1174,18 @@ resolve_cuda_runtime_seed() {
 
 build_runtime_a_from_source() {
     regen_runtime_core_from_emitter
+    # Seed-contamination gate (convergence stage-resolve-runtime-a-3): a frozen RT-NATIVE
+    # seed's assembled .o must carry NO undefined external beyond the sanctioned carriers
+    # (hexa_*/hxlcl_*/__hx_* — served by runtime.o + the still-compiled shim inside runtime.a).
+    # A whole-module dump that slipped past the `.globl`-count isolation drags syscall-leaf
+    # siblings' `bl __errno_location` (glibc-only) → detonates the build/hexat link on a target
+    # lacking it (darwin: ___errno_location). Echoes the offending symbols ('' = clean); the
+    # caller turns a non-empty result into the tri-state's graceful FALLBACK-SHIM (auto) or a
+    # FATAL (strict), instead of a misattributed ld error at the much-later hexat link.
+    _rn_seed_und_gate() {
+        command -v nm >/dev/null 2>&1 || return 0
+        nm -u "$1" 2>/dev/null | awk '{print $NF}' | grep -vE '^_?(hexa_|hxlcl_|__hx_)' | tr '\n' ' '
+    }
     # RT-NATIVE Z2a (gated): supply rt_str_* from a NATIVE-compiled object
     # (build/rt_hi_native.o, assembled from the self/native/runtime_hi_*.s
     # frozen seed by resolve_native_rt_hi_seed) instead of the hexat-transpiled
@@ -1878,9 +1890,14 @@ build_runtime_a_from_source() {
                     _rnsc_s="build/hxlcl_strcmp_seed.s"; _rnsc_o="build/hxlcl_strcmp_native.o"
                     grep -vE '^// ' "$_rnsc_seed" > "$_rnsc_s" 2>/dev/null || cp "$_rnsc_seed" "$_rnsc_s"
                     if $CC $_mo_archflag -c "$_rnsc_s" -o "$_rnsc_o" 2>/dev/null; then
+                        _rnsc_bad="$(_rn_seed_und_gate "$_rnsc_o")"
+                        if [ -n "$_rnsc_bad" ]; then
+                            _rnsc_err="seed $_rnsc_seed carries non-carrier undefined externals ($_rnsc_bad) — would break the hexat link on a target lacking them (darwin ___errno_location); re-isolate via tool/isolate_native_seed.py (convergence stage-resolve-runtime-a-3)"
+                        else
                         _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_STRCMP"
                         _mo_hxlcl_members="$_mo_hxlcl_members $_rnsc_o"
                         echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCMP: hxlcl_strcmp ← frozen seed $_rnsc_seed (TARGET=$_rnsc_tgt, 1-symbol contract); shim.o built with -DHEXA_RT_NATIVE_STRCMP (strcmp dropped) — ld -r multidef gate validates"
+                        fi
                     else
                         _rnsc_err="assemble of $_rnsc_seed failed"
                     fi
@@ -2261,9 +2278,14 @@ build_runtime_a_from_source() {
                     _rnst_s="build/hxlcl_strncmp_seed.s"; _rnst_o="build/hxlcl_strncmp_native.o"
                     grep -vE '^// ' "$_rnst_seed" > "$_rnst_s" 2>/dev/null || cp "$_rnst_seed" "$_rnst_s"
                     if $CC $_mo_archflag -c "$_rnst_s" -o "$_rnst_o" 2>/dev/null; then
+                        _rnst_bad="$(_rn_seed_und_gate "$_rnst_o")"
+                        if [ -n "$_rnst_bad" ]; then
+                            _rnst_err="seed $_rnst_seed carries non-carrier undefined externals ($_rnst_bad) — would break the hexat link on a target lacking them (darwin ___errno_location); re-isolate via tool/isolate_native_seed.py (convergence stage-resolve-runtime-a-3)"
+                        else
                         _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_STRNCMP"
                         _mo_hxlcl_members="$_mo_hxlcl_members $_rnst_o"
                         echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRNCMP: hxlcl_strncmp ← frozen seed $_rnst_seed (TARGET=$_rnst_tgt, 1-symbol contract); shim.o built with -DHEXA_RT_NATIVE_STRNCMP (strncmp dropped) — ld -r multidef gate validates"
+                        fi
                     else
                         _rnst_err="assemble of $_rnst_seed failed"
                     fi
@@ -2338,9 +2360,14 @@ build_runtime_a_from_source() {
                     _rnss_s="build/hxlcl_strstr_seed.s"; _rnss_o="build/hxlcl_strstr_native.o"
                     grep -vE '^// ' "$_rnss_seed" > "$_rnss_s" 2>/dev/null || cp "$_rnss_seed" "$_rnss_s"
                     if $CC $_mo_archflag -c "$_rnss_s" -o "$_rnss_o" 2>/dev/null; then
+                        _rnss_bad="$(_rn_seed_und_gate "$_rnss_o")"
+                        if [ -n "$_rnss_bad" ]; then
+                            _rnss_err="seed $_rnss_seed carries non-carrier undefined externals ($_rnss_bad) — would break the hexat link on a target lacking them (darwin ___errno_location); re-isolate via tool/isolate_native_seed.py (convergence stage-resolve-runtime-a-3)"
+                        else
                         _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_STRSTR"
                         _mo_hxlcl_members="$_mo_hxlcl_members $_rnss_o"
                         echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRSTR: hxlcl_strstr ← frozen seed $_rnss_seed (TARGET=$_rnss_tgt, 1-symbol contract); shim.o built with -DHEXA_RT_NATIVE_STRSTR (strstr dropped) — ld -r multidef gate validates"
+                        fi
                     else
                         _rnss_err="assemble of $_rnss_seed failed"
                     fi
@@ -2417,9 +2444,14 @@ build_runtime_a_from_source() {
                     _rnst_s="build/hxlcl_strchr_seed.s"; _rnst_o="build/hxlcl_strchr_native.o"
                     grep -vE '^// ' "$_rnst_seed" > "$_rnst_s" 2>/dev/null || cp "$_rnst_seed" "$_rnst_s"
                     if $CC $_mo_archflag -c "$_rnst_s" -o "$_rnst_o" 2>/dev/null; then
+                        _rnst_bad="$(_rn_seed_und_gate "$_rnst_o")"
+                        if [ -n "$_rnst_bad" ]; then
+                            _rnst_err="seed $_rnst_seed carries non-carrier undefined externals ($_rnst_bad) — would break the hexat link on a target lacking them (darwin ___errno_location); re-isolate via tool/isolate_native_seed.py (convergence stage-resolve-runtime-a-3)"
+                        else
                         _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_STRCHR"
                         _mo_hxlcl_members="$_mo_hxlcl_members $_rnst_o"
                         echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCHR: hxlcl_strchr ← frozen seed $_rnst_seed (TARGET=$_rnst_tgt, 1-symbol contract); shim.o built with -DHEXA_RT_NATIVE_STRCHR (strchr dropped) — ld -r multidef gate validates"
+                        fi
                     else
                         _rnst_err="assemble of $_rnst_seed failed"
                     fi
@@ -2500,9 +2532,14 @@ build_runtime_a_from_source() {
                     _rnst_s="build/hxlcl_strdup_seed.s"; _rnst_o="build/hxlcl_strdup_native.o"
                     grep -vE '^// ' "$_rnst_seed" > "$_rnst_s" 2>/dev/null || cp "$_rnst_seed" "$_rnst_s"
                     if $CC $_mo_archflag -c "$_rnst_s" -o "$_rnst_o" 2>/dev/null; then
+                        _rnst_bad="$(_rn_seed_und_gate "$_rnst_o")"
+                        if [ -n "$_rnst_bad" ]; then
+                            _rnst_err="seed $_rnst_seed carries non-carrier undefined externals ($_rnst_bad) — would break the hexat link on a target lacking them (darwin ___errno_location); re-isolate via tool/isolate_native_seed.py (convergence stage-resolve-runtime-a-3)"
+                        else
                         _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_STRDUP"
                         _mo_hxlcl_members="$_mo_hxlcl_members $_rnst_o"
                         echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRDUP: hxlcl_strdup ← frozen seed $_rnst_seed (TARGET=$_rnst_tgt, 1-symbol contract); shim.o built with -DHEXA_RT_NATIVE_STRDUP (strdup dropped) — ld -r multidef gate validates"
+                        fi
                     else
                         _rnst_err="assemble of $_rnst_seed failed"
                     fi
