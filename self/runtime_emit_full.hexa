@@ -1444,6 +1444,10 @@ fn emit_runtime_to(out_path: str) {
     buf = buf + "// this file can still link.\n"
     buf = buf + "static int hxlcl_isalnum(int c);\n"
     buf = buf + "static int hxlcl_isalpha(int c);\n"
+    // zeroc #29 PR-3: hxlcl_isdigit symmetry with isalnum/isalpha — self-contained
+    // ASCII predicate (no rt_ delegate needed; digit test is locale-free). Forward
+    // decl here so earlier callers link; body after the runtime_core.c include.
+    buf = buf + "static int hxlcl_isdigit(int c);\n"
     buf = buf + "// RUNTIME.md step-2 cycle 3 — pthread stubs MOVED to\n"
     buf = buf + "// stdlib/runtime/thread.hexa (single noop + create policy hexa fns).\n"
     buf = buf + "// Thin C shims delegate. forward decls only here; bodies after include.\n"
@@ -2978,8 +2982,10 @@ fn emit_runtime_to(out_path: str) {
     buf = buf + "// hxlcl_* helpers (safe — ASCII classifiers, same locale-free intent).\n"
     buf = buf + "#undef isalnum\n"
     buf = buf + "#undef isalpha\n"
+    buf = buf + "#undef isdigit\n"
     buf = buf + "#define isalnum(c) hxlcl_isalnum((int)(c))\n"
     buf = buf + "#define isalpha(c) hxlcl_isalpha((int)(c))\n"
+    buf = buf + "#define isdigit(c) hxlcl_isdigit((int)(c))\n"
     buf = buf + "// Cycle 65: exit() in <stdlib.h> as inline that calls _exit/__exit\n"
     buf = buf + "// after libc cleanup. Override to call our exit syscall (SYS_EXIT=1)\n"
     buf = buf + "// directly. Drops _exit + __exit externs.\n"
@@ -3061,6 +3067,7 @@ fn emit_runtime_to(out_path: str) {
     buf = buf + "#endif\n"
     buf = buf + "static int hxlcl_isalnum(int c) { return hexa_truthy(rt_isalnum(hexa_int((int64_t)c))) ? 1 : 0; }\n"
     buf = buf + "static int hxlcl_isalpha(int c) { return hexa_truthy(rt_isalpha(hexa_int((int64_t)c))) ? 1 : 0; }\n"
+    buf = buf + "static int hxlcl_isdigit(int c) { return c >= '0' && c <= '9'; }\n"
     buf = buf + "\n"
     buf = buf + "// RUNTIME.md step-2 cycle 5 — hxlcl_atof DEFINITION (forward-declared in the\n"
     buf = buf + "// early helper zone ~L294). Under HEXA_HAS_HEXA_RT_STDLIB delegate to the\n"
