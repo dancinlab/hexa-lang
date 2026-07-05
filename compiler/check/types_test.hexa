@@ -162,6 +162,23 @@ fn _bin_expr(op: string, lhs: Expr, rhs: Expr, file: string, line: i64, col: i64
     }
 }
 
+// static-types segment(b) — unary-op node `<op><inner>` (e.g. `-s`, `!s`).
+// text = the operator literal (parser emits only `-`/`!`/`~`), children[0] =
+// operand. Mirrors _ident_expr's Expr shape; the HX3024 UnOp arm in
+// types.hexa reads e.text + children[0].
+fn _unop_expr(op: string, inner: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(inner)
+    return Expr {
+        kind: ExprKind::UnOp,
+        span: _span(file, line, col, len(op)),
+        text: op,
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
 fn _call_expr(callee: Expr, args: [Expr], file: string, line: i64, col: i64) -> Expr {
     let mut kids = []
     kids.push(callee)
@@ -628,6 +645,55 @@ fn _build_case_c() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (ae) segment(b) HX3003 coercion-faithfulness — call-arg now uses
+// _types_assignable (Rust E0308 demand_coerce). take32(0): int-lit→i32 COERCE
+// (0 HX3003); dynp(1): HexaVal param wildcard (0); take32("s"): string→i32 non-
+// coercible → REJECT (1); takef(1): int-lit→f32 param → REJECT (1, Rust-faithful).
+// Expect 2 HX3003. Bodies use literal `return 0` (int-lit→ret coerces clean; a
+// `return p` would trip HX3004). Regression-lock for the _types_equal→assignable swap.
+fn _build_case_coerce_arg() -> Module {
+    let f = "case_coerce_arg.hexa"
+    // fn take32(p: i32) -> i32 { return 0 }
+    let mut p_take32 = []
+    p_take32.push(_param("p", "i32", f, 1, 13))
+    let mut k_take32 = []
+    k_take32.push(_return_expr(_int_expr("0", f, 1, 30), f, 1, 23))
+    let item_take32 = _fn_item("take32", p_take32, _named_type_ref("i32"), _block(k_take32, f, 1, 26), f, 1)
+    // fn dynp(v: HexaVal) -> Int { return 0 }
+    let mut p_dynp = []
+    p_dynp.push(_param("v", "HexaVal", f, 2, 11))
+    let mut k_dynp = []
+    k_dynp.push(_return_expr(_int_expr("0", f, 2, 34), f, 2, 27))
+    let item_dynp = _fn_item("dynp", p_dynp, _named_type_ref("Int"), _block(k_dynp, f, 2, 30), f, 2)
+    // fn takef(q: f32) -> Int { return 0 }
+    let mut p_takef = []
+    p_takef.push(_param("q", "f32", f, 3, 12))
+    let mut k_takef = []
+    k_takef.push(_return_expr(_int_expr("0", f, 3, 31), f, 3, 24))
+    let item_takef = _fn_item("takef", p_takef, _named_type_ref("Int"), _block(k_takef, f, 3, 27), f, 3)
+    // fn main() { take32(0)  dynp(1)  take32("s")  takef(1) }
+    let mut a1 = []
+    a1.push(_int_expr("0", f, 5, 12))
+    let mut a2 = []
+    a2.push(_int_expr("1", f, 5, 24))
+    let mut a3 = []
+    a3.push(_string_expr("s", f, 5, 36))
+    let mut a4 = []
+    a4.push(_int_expr("1", f, 5, 49))
+    let mut main_kids = []
+    main_kids.push(_call_expr(_ident_expr("take32", f, 5, 5), a1, f, 5, 11))
+    main_kids.push(_call_expr(_ident_expr("dynp", f, 5, 18), a2, f, 5, 23))
+    main_kids.push(_call_expr(_ident_expr("take32", f, 5, 29), a3, f, 5, 35))
+    main_kids.push(_call_expr(_ident_expr("takef", f, 5, 42), a4, f, 5, 48))
+    let item_main = _fn_item("main", [], _empty_type_ref(), _block(main_kids, f, 5, 1), f, 5)
+    let mut items = []
+    items.push(item_take32)
+    items.push(item_dynp)
+    items.push(item_takef)
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // (d) FAIL HX3001: 1 + true — binop operand mismatch
 fn _build_case_d() -> Module {
     let f = "case_d.hexa"
@@ -769,6 +835,50 @@ fn _build_case_static_types_fixture_suffix() -> Module {
     let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
     let mut items = []
     items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// static-types segment(b) — HX3024 unary-minus non-numeric REJECT (Rust
+// E0600). fn u(s: string) { let x = -s   let y = -5   let z = !s }
+//   -s → operand ident s : string (bound via the `s: string` param) → HX3024
+//   -5 → numeric-literal operand → clean (no fire)
+//   !s → logical-not (truthiness) → never flagged
+// Real-source path (f="case_unop_neg.hexa") → HX3024 in the ERROR band
+// (REJECT) via _types_strict_for. Expect exactly 1 HX3024 (Error) + 0 HX3001
+// (the `-5`/`!s` controls prove no over-fire, and no binop cross-fire).
+fn _build_case_unop_neg() -> Module {
+    let f = "case_unop_neg.hexa"
+    let neg_s = _unop_expr("-", _ident_expr("s", f, 2, 14), f, 2, 13)
+    let neg_5 = _unop_expr("-", _int_expr("5", f, 3, 14), f, 3, 13)
+    let not_s = _unop_expr("!", _ident_expr("s", f, 4, 14), f, 4, 13)
+    let mut kids = []
+    kids.push(_let_expr("x", neg_s, f, 2, 5))
+    kids.push(_let_expr("y", neg_5, f, 3, 5))
+    kids.push(_let_expr("z", not_s, f, 4, 5))
+    let body = _block(kids, f, 2, 1)
+    let item_u = _fn_item("u", [_param("s", "string", f, 1, 6)], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_u)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// static-types segment(b) — HX3024 fixture carve-out. Identical AST to
+// _build_case_unop_neg but the span.file is a byte-eq TEST-FIXTURE path, so
+// _types_strict_for() → false and the diag lands in the WARNING band (the
+// shipping/byte-eq path never breaks). Expect exactly 1 HX3024 (Warning).
+fn _build_case_unop_neg_fixture() -> Module {
+    let f = "compiler/test/macho_p0_corpus/case_unop_fixture.hexa"
+    let neg_s = _unop_expr("-", _ident_expr("s", f, 2, 14), f, 2, 13)
+    let neg_5 = _unop_expr("-", _int_expr("5", f, 3, 14), f, 3, 13)
+    let not_s = _unop_expr("!", _ident_expr("s", f, 4, 14), f, 4, 13)
+    let mut kids = []
+    kids.push(_let_expr("x", neg_s, f, 2, 5))
+    kids.push(_let_expr("y", neg_5, f, 3, 5))
+    kids.push(_let_expr("z", not_s, f, 4, 5))
+    let body = _block(kids, f, 2, 1)
+    let item_u = _fn_item("u", [_param("s", "string", f, 1, 6)], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_u)
     return Module { file: f, items: items, imports: [] }
 }
 
@@ -1639,20 +1749,11 @@ fn main() {
     // `let y:i32=5` binding never trips HX3011 in either mode.
     let diags_h = _run_case("(h) static-types — let x:i32=\"s\" mismatch (HEXA_STATIC_TYPES)", _build_case_static_types())
     let nh = _count_code(diags_h, "HX3011")
-    if env("HEXA_STATIC_TYPES") == "1" {
-        if nh != 1 {
-            println("  FAIL: case (h) HEXA_STATIC_TYPES=1 expected 1 HX3011, got " + to_string(nh) + " (total=" + to_string(len(diags_h)) + ")")
-            ok = false
-        } else {
-            println("  ok: 1 HX3011 emitted (REJECT; matching `let y:i32=5` stays clean)")
-        }
+    if nh != 1 {
+        println("  FAIL: case (h) expected 1 HX3011 (flagless), got " + to_string(nh) + " (total=" + to_string(len(diags_h)) + ")")
+        ok = false
     } else {
-        if nh != 0 {
-            println("  FAIL: case (h) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nh) + " (total=" + to_string(len(diags_h)) + ")")
-            ok = false
-        } else {
-            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
-        }
+        println("  ok: 1 HX3011 emitted (REJECT; matching `let y:i32=5` stays clean)")
     }
 
     // (i) Wall A r2 — non-literal known-type RHS (ident / call). Under the
@@ -1663,20 +1764,11 @@ fn main() {
     // ident/call rung.
     let diags_i = _run_case("(i) static-types r2 — ident/call known-type RHS mismatch (HEXA_STATIC_TYPES)", _build_case_static_types_r2())
     let ni = _count_code(diags_i, "HX3011")
-    if env("HEXA_STATIC_TYPES") == "1" {
-        if ni != 2 {
-            println("  FAIL: case (i) HEXA_STATIC_TYPES=1 expected 2 HX3011 (ident+call), got " + to_string(ni) + " (total=" + to_string(len(diags_i)) + ")")
-            ok = false
-        } else {
-            println("  ok: 2 HX3011 emitted (ident p:i32 + call g()->i32 vs string; matching i32=g() stays clean)")
-        }
+    if ni != 2 {
+        println("  FAIL: case (i) expected 2 HX3011 (ident+call, flagless), got " + to_string(ni) + " (total=" + to_string(len(diags_i)) + ")")
+        ok = false
     } else {
-        if ni != 0 {
-            println("  FAIL: case (i) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(ni) + " (total=" + to_string(len(diags_i)) + ")")
-            ok = false
-        } else {
-            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
-        }
+        println("  ok: 2 HX3011 emitted (ident p:i32 + call g()->i32 vs string; matching i32=g() stays clean)")
     }
 
     // (j) Wall A r3 — decl/init split. Under the flag, a decl-only `let x:i32`
@@ -1687,20 +1779,11 @@ fn main() {
     // split-init assignment rung.
     let diags_j = _run_case("(j) static-types r3 — decl/init-split assign mismatch (HEXA_STATIC_TYPES)", _build_case_static_types_r3())
     let nj = _count_code(diags_j, "HX3011")
-    if env("HEXA_STATIC_TYPES") == "1" {
-        if nj != 2 {
-            println("  FAIL: case (j) HEXA_STATIC_TYPES=1 expected 2 HX3011 (x=\"s\" + y=5), got " + to_string(nj) + " (total=" + to_string(len(diags_j)) + ")")
-            ok = false
-        } else {
-            println("  ok: 2 HX3011 emitted (x:i32=\"s\" + y:string=5; matching z:i32=7 stays clean)")
-        }
+    if nj != 2 {
+        println("  FAIL: case (j) expected 2 HX3011 (x=\"s\" + y=5, flagless), got " + to_string(nj) + " (total=" + to_string(len(diags_j)) + ")")
+        ok = false
     } else {
-        if nj != 0 {
-            println("  FAIL: case (j) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nj) + " (total=" + to_string(len(diags_j)) + ")")
-            ok = false
-        } else {
-            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
-        }
+        println("  ok: 2 HX3011 emitted (x:i32=\"s\" + y:string=5; matching z:i32=7 stays clean)")
     }
 
     // (k) Wall A r4 — array element-fit assign. Under the flag, a decl-only
@@ -1711,20 +1794,11 @@ fn main() {
     // contract from the plain-ident assign to the array index place.
     let diags_k = _run_case("(k) static-types r4 — array element-fit assign mismatch (HEXA_STATIC_TYPES)", _build_case_static_types_r4())
     let nk = _count_code(diags_k, "HX3011")
-    if env("HEXA_STATIC_TYPES") == "1" {
-        if nk != 2 {
-            println("  FAIL: case (k) HEXA_STATIC_TYPES=1 expected 2 HX3011 (a[0]=\"s\" + b[1]=9), got " + to_string(nk) + " (total=" + to_string(len(diags_k)) + ")")
-            ok = false
-        } else {
-            println("  ok: 2 HX3011 emitted (a:[i32]=\"s\" + b:[string]=9; matching c:[i32][2]=7 stays clean)")
-        }
+    if nk != 2 {
+        println("  FAIL: case (k) expected 2 HX3011 (a[0]=\"s\" + b[1]=9, flagless), got " + to_string(nk) + " (total=" + to_string(len(diags_k)) + ")")
+        ok = false
     } else {
-        if nk != 0 {
-            println("  FAIL: case (k) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nk) + " (total=" + to_string(len(diags_k)) + ")")
-            ok = false
-        } else {
-            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
-        }
+        println("  ok: 2 HX3011 emitted (a:[i32]=\"s\" + b:[string]=9; matching c:[i32][2]=7 stays clean)")
     }
 
     // (l) Wall A r5 — struct field-type assign. Under the flag, with
@@ -1735,20 +1809,11 @@ fn main() {
     // array place to the struct field place.
     let diags_l = _run_case("(l) static-types r5 — struct field-type assign mismatch (HEXA_STATIC_TYPES)", _build_case_static_types_r5())
     let nl = _count_code(diags_l, "HX3011")
-    if env("HEXA_STATIC_TYPES") == "1" {
-        if nl != 2 {
-            println("  FAIL: case (l) HEXA_STATIC_TYPES=1 expected 2 HX3011 (p.x=\"s\" + s.x=\"z\"), got " + to_string(nl) + " (total=" + to_string(len(diags_l)) + ")")
-            ok = false
-        } else {
-            println("  ok: 2 HX3011 emitted (p.x:i32=\"s\" param + s.x:i32=\"z\" block-local; matching p.y:i32=7 stays clean)")
-        }
+    if nl != 2 {
+        println("  FAIL: case (l) expected 2 HX3011 (p.x=\"s\" + s.x=\"z\", flagless), got " + to_string(nl) + " (total=" + to_string(len(diags_l)) + ")")
+        ok = false
     } else {
-        if nl != 0 {
-            println("  FAIL: case (l) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nl) + " (total=" + to_string(len(diags_l)) + ")")
-            ok = false
-        } else {
-            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
-        }
+        println("  ok: 2 HX3011 emitted (p.x:i32=\"s\" param + s.x:i32=\"z\" block-local; matching p.y:i32=7 stays clean)")
     }
 
     // (m) Wall A r6 — struct-literal field-init mismatch. Under the flag, with
@@ -1760,20 +1825,11 @@ fn main() {
     // wireable rung (r7+ = generic/trait static-dispatch = measured ceiling).
     let diags_m = _run_case("(m) static-types r6 — struct-literal field-init mismatch (HEXA_STATIC_TYPES)", _build_case_static_types_r6())
     let nm = _count_code(diags_m, "HX3011")
-    if env("HEXA_STATIC_TYPES") == "1" {
-        if nm != 2 {
-            println("  FAIL: case (m) HEXA_STATIC_TYPES=1 expected 2 HX3011 (x:\"s\" + x:true), got " + to_string(nm) + " (total=" + to_string(len(diags_m)) + ")")
-            ok = false
-        } else {
-            println("  ok: 2 HX3011 emitted (Point{x:\"s\"} string + Point{x:true} bool; matching y:7 stays clean)")
-        }
+    if nm != 2 {
+        println("  FAIL: case (m) expected 2 HX3011 (x:\"s\" + x:true, flagless), got " + to_string(nm) + " (total=" + to_string(len(diags_m)) + ")")
+        ok = false
     } else {
-        if nm != 0 {
-            println("  FAIL: case (m) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nm) + " (total=" + to_string(len(diags_m)) + ")")
-            ok = false
-        } else {
-            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
-        }
+        println("  ok: 2 HX3011 emitted (Point{x:\"s\"} string + Point{x:true} bool; matching y:7 stays clean)")
     }
 
     // (n) HEXA-OWN L2 r1 — @own use-after-move lint (HEXA_OWN_LINT). Under
@@ -1812,14 +1868,10 @@ fn main() {
     let diags_o = _run_case("(o) static-types r7-prep — array element preserved across lowering (HEXA_STATIC_TYPES_ARRAY_LOWER)", _build_case_static_types_r7prep())
     let no = _count_code(diags_o, "HX3003")
     if no != 1 {
-        println("  FAIL: case (o) expected 1 HX3003 in BOTH modes (g(ys) [f64]≠[i32]; matching g(zs) clean), got " + to_string(no) + " (total=" + to_string(len(diags_o)) + ")")
+        println("  FAIL: case (o) expected 1 HX3003 (g(ys) [f64]≠[i32]; matching g(zs) clean, flagless), got " + to_string(no) + " (total=" + to_string(len(diags_o)) + ")")
         ok = false
     } else {
-        if env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1" || env("HEXA_STATIC_TYPES") == "1" {
-            println("  ok: 1 HX3003 emitted (structured lowering — [f64] ≠ [i32] element recursion; matching g(zs) stays clean; F0 fold: STATIC implies array-lower)")
-        } else {
-            println("  ok: 1 HX3003 emitted (string sentinel — generic:Array:f64 ≠ generic:Array:i32; default-OFF path untouched)")
-        }
+        println("  ok: 1 HX3003 emitted (structured lowering — [f64] ≠ [i32] element recursion; matching g(zs) stays clean)")
     }
 
     // (q) static-types r8 — array-literal call-arg element mismatch + r8b
@@ -1836,20 +1888,11 @@ fn main() {
     let diags_q = _run_case("(q) static-types r8 — array-literal call-arg element mismatch (HEXA_STATIC_TYPES)", _build_case_static_types_r8())
     let nq3003 = _count_code(diags_q, "HX3003")
     let nq3011 = _count_code(diags_q, "HX3011")
-    if env("HEXA_STATIC_TYPES") == "1" {
-        if nq3003 != 1 || nq3011 != 1 {
-            println("  FAIL: case (q) HEXA_STATIC_TYPES=1 expected 1 HX3003 (g([1.5])) + 1 HX3011 (ws[0]=\"s\"; F0 fold → array-lower under the single flag), got " + to_string(nq3003) + " HX3003 / " + to_string(nq3011) + " HX3011 (total=" + to_string(len(diags_q)) + ")")
-            ok = false
-        } else {
-            println("  ok: 1 HX3003 + 1 HX3011 emitted (matching g([1,2]) and coercing vs[1]=7 stay clean; F0 fold)")
-        }
+    if nq3003 != 1 || nq3011 != 1 {
+        println("  FAIL: case (q) expected 1 HX3003 (g([1.5])) + 1 HX3011 (ws[0]=\"s\", flagless), got " + to_string(nq3003) + " HX3003 / " + to_string(nq3011) + " HX3011 (total=" + to_string(len(diags_q)) + ")")
+        ok = false
     } else {
-        if nq3003 != 0 || nq3011 != 0 {
-            println("  FAIL: case (q) flags-OFF expected 0 HX3003 + 0 HX3011 (byteeq-neutral), got " + to_string(nq3003) + " HX3003 / " + to_string(nq3011) + " HX3011 (total=" + to_string(len(diags_q)) + ")")
-            ok = false
-        } else {
-            println("  ok: 0 HX3003 / 0 HX3011 (default-OFF → byteeq-neutral)")
-        }
+        println("  ok: 1 HX3003 + 1 HX3011 emitted (matching g([1,2]) and coercing vs[1]=7 stay clean)")
     }
 
     // (s) static-types r9a — Index/Field READ inference feeding the EXISTING
@@ -1863,20 +1906,11 @@ fn main() {
     // stays 0: the inference arms gate on _types_static_on.)
     let diags_s = _run_case("(s) static-types r9a — Index/Field READ inference into typed let (HEXA_STATIC_TYPES)", _build_case_static_types_r9a())
     let ns = _count_code(diags_s, "HX3011")
-    if env("HEXA_STATIC_TYPES") == "1" {
-        if ns != 2 {
-            println("  FAIL: case (s) HEXA_STATIC_TYPES=1 expected 2 HX3011 (n:string=xs[0] Index + q:string=p.x Field; F0 fold → array-lower under the single flag), got " + to_string(ns) + " (total=" + to_string(len(diags_s)) + ")")
-            ok = false
-        } else {
-            println("  ok: 2 HX3011 emitted (Index READ i64-elem + Field READ i32 vs string; F0 fold; matching m/r stay clean)")
-        }
+    if ns != 2 {
+        println("  FAIL: case (s) expected 2 HX3011 (n:string=xs[0] Index + q:string=p.x Field, flagless), got " + to_string(ns) + " (total=" + to_string(len(diags_s)) + ")")
+        ok = false
     } else {
-        if ns != 0 {
-            println("  FAIL: case (s) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(ns) + " (total=" + to_string(len(diags_s)) + ")")
-            ok = false
-        } else {
-            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
-        }
+        println("  ok: 2 HX3011 emitted (Index READ i64-elem + Field READ i32 vs string; matching m/r stay clean)")
     }
 
     // (t) static-types r9b — fn-return array-element REJECT + element-literal
@@ -1891,20 +1925,11 @@ fn main() {
     // _types_static_on.)
     let diags_t = _run_case("(t) static-types r9b — return [1.5] vs [i64] REJECT + [0.0] vs [f32] coercion no-FP (HEXA_STATIC_TYPES)", _build_case_static_types_r9b())
     let nt = _count_code(diags_t, "HX3004")
-    if env("HEXA_STATIC_TYPES") == "1" {
-        if nt != 1 {
-            println("  FAIL: case (t) HEXA_STATIC_TYPES=1 expected 1 HX3004 (f: [1.5] vs [i64] REJECT; g: [0.0] vs [f32] coerces; F0 fold → array-lower under the single flag), got " + to_string(nt) + " (total=" + to_string(len(diags_t)) + ")")
-            ok = false
-        } else {
-            println("  ok: 1 HX3004 emitted (return-position element REJECT; [0.0]→[f32] element coercion stays clean — no FP; F0 fold)")
-        }
+    if nt != 1 {
+        println("  FAIL: case (t) expected 1 HX3004 (f: [1.5] vs [i64] REJECT; g: [0.0] vs [f32] coerces, flagless), got " + to_string(nt) + " (total=" + to_string(len(diags_t)) + ")")
+        ok = false
     } else {
-        if nt != 0 {
-            println("  FAIL: case (t) flags-OFF expected 0 HX3004 (byteeq-neutral), got " + to_string(nt) + " (total=" + to_string(len(diags_t)) + ")")
-            ok = false
-        } else {
-            println("  ok: 0 HX3004 (default-OFF → byteeq-neutral)")
-        }
+        println("  ok: 1 HX3004 emitted (return-position element REJECT; [0.0]→[f32] element coercion stays clean — no FP)")
     }
 
     // (p) HEXA-OWN L2 r2 — @own use-after-move at RETURN position
@@ -1990,20 +2015,11 @@ fn main() {
     // proof — the discard-only pattern walk is unchanged).
     let diags_u = _run_case("(u) static-types r9c — match \"x\" pattern vs i64 scrutinee REJECT (HEXA_STATIC_TYPES)", _build_case_static_types_r9c())
     let nu = _count_code(diags_u, "HX3011")
-    if env("HEXA_STATIC_TYPES") == "1" {
-        if nu != 1 {
-            println("  FAIL: case (u) HEXA_STATIC_TYPES=1 expected 1 HX3011 (\"x\" pattern vs i64 scrutinee; 7 + _ stay clean), got " + to_string(nu) + " (total=" + to_string(len(diags_u)) + ")")
-            ok = false
-        } else {
-            println("  ok: 1 HX3011 emitted (string-literal pattern vs i64 scrutinee; matching literal + wildcard stay clean)")
-        }
+    if nu != 1 {
+        println("  FAIL: case (u) expected 1 HX3011 (\"x\" pattern vs i64 scrutinee; 7 + _ stay clean, flagless), got " + to_string(nu) + " (total=" + to_string(len(diags_u)) + ")")
+        ok = false
     } else {
-        if nu != 0 {
-            println("  FAIL: case (u) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nu) + " (total=" + to_string(len(diags_u)) + ")")
-            ok = false
-        } else {
-            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
-        }
+        println("  ok: 1 HX3011 emitted (string-literal pattern vs i64 scrutinee; matching literal + wildcard stay clean)")
     }
 
     // (v) static-types r9d — struct-literal field-EXISTENCE reject + F4
@@ -2022,29 +2038,11 @@ fn main() {
     let nv3011 = _count_code(diags_v, "HX3011")
     let nv_warn = _count_code_sev(diags_v, "HX3016", "warning")
     let nv_err = _count_code_sev(diags_v, "HX3016", "error")
-    if env("HEXA_STATIC_TYPES") == "1" {
-        if env("HEXA_STATIC_TYPES_STRICT") == "0" {
-            if nv3014 != 1 || nv3011 != 0 || nv_warn != 1 {
-                println("  FAIL: case (v) STRICT=0 escape expected 1 HX3016 as WARNING (non-fatal) + 0 HX3011, got " + to_string(nv3014) + " HX3016 (" + to_string(nv_err) + " error/" + to_string(nv_warn) + " warn) / " + to_string(nv3011) + " HX3011 (total=" + to_string(len(diags_v)) + ")")
-                ok = false
-            } else {
-                println("  ok: 1 HX3016 as WARNING (HEXA_STATIC_TYPES_STRICT=0 → FLIP-1 warn-band escape)")
-            }
-        } else {
-            if nv3014 != 1 || nv3011 != 0 || nv_err != 1 {
-                println("  FAIL: case (v) real-source STRICT-default expected 1 HX3016 as ERROR (REJECT) + 0 HX3011, got " + to_string(nv3014) + " HX3016 (" + to_string(nv_err) + " error/" + to_string(nv_warn) + " warn) / " + to_string(nv3011) + " HX3011 (total=" + to_string(len(diags_v)) + ")")
-                ok = false
-            } else {
-                println("  ok: 1 HX3016 as ERROR (FLIP-2: real-source case_static_r9d.hexa → STRICT-default REJECT; explicit STRICT=1 same)")
-            }
-        }
+    if nv3014 != 1 || nv3011 != 0 || nv_err != 1 {
+        println("  FAIL: case (v) expected 1 HX3016 as ERROR (REJECT, flagless real-source) + 0 HX3011, got " + to_string(nv3014) + " HX3016 (" + to_string(nv_err) + " error/" + to_string(nv_warn) + " warn) / " + to_string(nv3011) + " HX3011 (total=" + to_string(len(diags_v)) + ")")
+        ok = false
     } else {
-        if nv3014 != 0 || nv3011 != 0 {
-            println("  FAIL: case (v) default build expected 0 HX3016 + 0 HX3011 (byteeq-neutral), got " + to_string(nv3014) + " HX3016 / " + to_string(nv3011) + " HX3011 (total=" + to_string(len(diags_v)) + ")")
-            ok = false
-        } else {
-            println("  ok: 0 HX3016 / 0 HX3011 (default-OFF → byteeq-neutral)")
-        }
+        println("  ok: 1 HX3016 as ERROR (flagless: real-source case_static_r9d.hexa → REJECT)")
     }
 
     // (w) static-types r11 — struct-literal MISSING-required-field + F5-prep F4
@@ -2066,29 +2064,11 @@ fn main() {
     let nw3011 = _count_code(diags_w, "HX3011")
     let nw_warn = _count_code_sev(diags_w, "HX3017", "warning")
     let nw_err = _count_code_sev(diags_w, "HX3017", "error")
-    if env("HEXA_STATIC_TYPES") == "1" {
-        if env("HEXA_STATIC_TYPES_STRICT") == "0" {
-            if nw3017 != 1 || nw3016 != 0 || nw3011 != 0 || nw_warn != 1 || nw_err != 0 {
-                println("  FAIL: case (w) STRICT=0 escape expected 1 HX3017 as WARNING (non-fatal) + 0 HX3016 + 0 HX3011, got " + to_string(nw3017) + " HX3017 (" + to_string(nw_err) + " error/" + to_string(nw_warn) + " warn) / " + to_string(nw3016) + " HX3016 / " + to_string(nw3011) + " HX3011 (total=" + to_string(len(diags_w)) + ")")
-                ok = false
-            } else {
-                println("  ok: 1 HX3017 as WARNING (HEXA_STATIC_TYPES_STRICT=0 → FLIP-1 warn-band escape)")
-            }
-        } else {
-            if nw3017 != 1 || nw3016 != 0 || nw3011 != 0 || nw_err != 1 || nw_warn != 0 {
-                println("  FAIL: case (w) real-source STRICT-default expected 1 HX3017 as ERROR (REJECT) + 0 HX3016 + 0 HX3011, got " + to_string(nw3017) + " HX3017 (" + to_string(nw_err) + " error/" + to_string(nw_warn) + " warn) / " + to_string(nw3016) + " HX3016 / " + to_string(nw3011) + " HX3011 (total=" + to_string(len(diags_w)) + ")")
-                ok = false
-            } else {
-                println("  ok: 1 HX3017 as ERROR (FLIP-2: real-source case_static_r11.hexa → STRICT-default REJECT; explicit STRICT=1 same)")
-            }
-        }
+    if nw3017 != 1 || nw3016 != 0 || nw3011 != 0 || nw_err != 1 || nw_warn != 0 {
+        println("  FAIL: case (w) expected 1 HX3017 as ERROR (REJECT, flagless real-source) + 0 HX3016 + 0 HX3011, got " + to_string(nw3017) + " HX3017 (" + to_string(nw_err) + " error/" + to_string(nw_warn) + " warn) / " + to_string(nw3016) + " HX3016 / " + to_string(nw3011) + " HX3011 (total=" + to_string(len(diags_w)) + ")")
+        ok = false
     } else {
-        if nw3017 != 0 {
-            println("  FAIL: case (w) default build expected 0 HX3017 (byteeq-neutral), got " + to_string(nw3017) + " (total=" + to_string(len(diags_w)) + ")")
-            ok = false
-        } else {
-            println("  ok: 0 HX3017 (default-OFF → byteeq-neutral)")
-        }
+        println("  ok: 1 HX3017 as ERROR (flagless: real-source case_static_r11.hexa → REJECT)")
     }
 
     // (x) static-types F0 flag-fold — array-lower now folds under the single
@@ -2104,20 +2084,11 @@ fn main() {
     // under the single flag by the same fold).
     let diags_x = _run_case("(x) static-types F0 — array-lower folds under HEXA_STATIC_TYPES alone", _build_case_static_types_r9b())
     let nx = _count_code(diags_x, "HX3004")
-    if env("HEXA_STATIC_TYPES") == "1" {
-        if nx != 1 {
-            println("  FAIL: case (x) HEXA_STATIC_TYPES=1 (ALONE) expected 1 HX3004 (F0 fold: STATIC implies array-lower; return [1.5] vs [i64] REJECT), got " + to_string(nx) + " (total=" + to_string(len(diags_x)) + ")")
-            ok = false
-        } else {
-            println("  ok: 1 HX3004 emitted under HEXA_STATIC_TYPES alone — F0 flag-fold proven (no ARRAY_LOWER needed)")
-        }
+    if nx != 1 {
+        println("  FAIL: case (x) expected 1 HX3004 (array-lower folded; return [1.5] vs [i64] REJECT, flagless), got " + to_string(nx) + " (total=" + to_string(len(diags_x)) + ")")
+        ok = false
     } else {
-        if nx != 0 {
-            println("  FAIL: case (x) default build expected 0 HX3004 (byteeq-neutral), got " + to_string(nx) + " (total=" + to_string(len(diags_x)) + ")")
-            ok = false
-        } else {
-            println("  ok: 0 HX3004 (default-OFF → byteeq-neutral)")
-        }
+        println("  ok: 1 HX3004 emitted (array-lower folded structurally — return [1.5] vs [i64] REJECT)")
     }
 
     // (y) static-types F4 warn-first — HX3011 SEVERITY two-step. Re-uses the
@@ -2132,29 +2103,11 @@ fn main() {
     let ny = _count_code(diags_y, "HX3011")
     let ny_warn = _count_code_sev(diags_y, "HX3011", "warning")
     let ny_err = _count_code_sev(diags_y, "HX3011", "error")
-    if env("HEXA_STATIC_TYPES") == "1" {
-        if env("HEXA_STATIC_TYPES_STRICT") == "0" {
-            if ny != 1 || ny_warn != 1 {
-                println("  FAIL: case (y) STRICT=0 escape expected 1 HX3011 as WARNING (non-fatal), got " + to_string(ny) + " HX3011 (" + to_string(ny_err) + " error/" + to_string(ny_warn) + " warn) (total=" + to_string(len(diags_y)) + ")")
-                ok = false
-            } else {
-                println("  ok: 1 HX3011 as WARNING (HEXA_STATIC_TYPES_STRICT=0 → FLIP-1 warn-band escape)")
-            }
-        } else {
-            if ny != 1 || ny_err != 1 {
-                println("  FAIL: case (y) real-source STRICT-default expected 1 HX3011 as ERROR (REJECT), got " + to_string(ny) + " HX3011 (" + to_string(ny_err) + " error/" + to_string(ny_warn) + " warn) (total=" + to_string(len(diags_y)) + ")")
-                ok = false
-            } else {
-                println("  ok: 1 HX3011 as ERROR (FLIP-2: real-source case_static.hexa → STRICT-default REJECT; explicit STRICT=1 same)")
-            }
-        }
+    if ny != 1 || ny_err != 1 {
+        println("  FAIL: case (y) expected 1 HX3011 as ERROR (REJECT, flagless real-source), got " + to_string(ny) + " HX3011 (" + to_string(ny_err) + " error/" + to_string(ny_warn) + " warn) (total=" + to_string(len(diags_y)) + ")")
+        ok = false
     } else {
-        if ny != 0 {
-            println("  FAIL: case (y) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(ny) + " (total=" + to_string(len(diags_y)) + ")")
-            ok = false
-        } else {
-            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
-        }
+        println("  ok: 1 HX3011 as ERROR (flagless: real-source case_static.hexa → REJECT)")
     }
 
     // (z) Exhaustiveness severity gating — env-adaptive contract. Renumbered
@@ -2201,29 +2154,11 @@ fn main() {
     let naa = _count_code(diags_aa, "HX3011")
     let naa_warn = _count_code_sev(diags_aa, "HX3011", "warning")
     let naa_err = _count_code_sev(diags_aa, "HX3011", "error")
-    if env("HEXA_STATIC_TYPES") == "1" {
-        if env("HEXA_STATIC_TYPES_STRICT") == "1" {
-            if naa != 1 || naa_err != 1 {
-                println("  FAIL: case (aa) explicit STRICT=1 expected 1 HX3011 as ERROR everywhere (fixture included), got " + to_string(naa) + " HX3011 (" + to_string(naa_err) + " error/" + to_string(naa_warn) + " warn) (total=" + to_string(len(diags_aa)) + ")")
-                ok = false
-            } else {
-                println("  ok: 1 HX3011 as ERROR (explicit STRICT=1 → everywhere-Error contract, fixture included)")
-            }
-        } else {
-            if naa != 1 || naa_warn != 1 {
-                println("  FAIL: case (aa) STRICT-default expected 1 HX3011 as WARNING (fixture carve-out), got " + to_string(naa) + " HX3011 (" + to_string(naa_err) + " error/" + to_string(naa_warn) + " warn) (total=" + to_string(len(diags_aa)) + ")")
-                ok = false
-            } else {
-                println("  ok: 1 HX3011 as WARNING (FLIP-2 fixture carve-out: compiler/test/ path stays warn-band)")
-            }
-        }
+    if naa != 1 || naa_warn != 1 {
+        println("  FAIL: case (aa) expected 1 HX3011 as WARNING (fixture carve-out, flagless), got " + to_string(naa) + " HX3011 (" + to_string(naa_err) + " error/" + to_string(naa_warn) + " warn) (total=" + to_string(len(diags_aa)) + ")")
+        ok = false
     } else {
-        if naa != 0 {
-            println("  FAIL: case (aa) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(naa) + " (total=" + to_string(len(diags_aa)) + ")")
-            ok = false
-        } else {
-            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
-        }
+        println("  ok: 1 HX3011 as WARNING (flagless fixture carve-out: compiler/test/ path stays warn-band)")
     }
 
     // (ab) FLIP-2 fixture carve-out — suffix-arm (*_test.hexa). Same contract via
@@ -2232,29 +2167,56 @@ fn main() {
     let nab = _count_code(diags_ab, "HX3011")
     let nab_warn = _count_code_sev(diags_ab, "HX3011", "warning")
     let nab_err = _count_code_sev(diags_ab, "HX3011", "error")
-    if env("HEXA_STATIC_TYPES") == "1" {
-        if env("HEXA_STATIC_TYPES_STRICT") == "1" {
-            if nab != 1 || nab_err != 1 {
-                println("  FAIL: case (ab) explicit STRICT=1 expected 1 HX3011 as ERROR everywhere (fixture included), got " + to_string(nab) + " HX3011 (" + to_string(nab_err) + " error/" + to_string(nab_warn) + " warn) (total=" + to_string(len(diags_ab)) + ")")
-                ok = false
-            } else {
-                println("  ok: 1 HX3011 as ERROR (explicit STRICT=1 → everywhere-Error, *_test.hexa included)")
-            }
-        } else {
-            if nab != 1 || nab_warn != 1 {
-                println("  FAIL: case (ab) STRICT-default expected 1 HX3011 as WARNING (fixture carve-out), got " + to_string(nab) + " HX3011 (" + to_string(nab_err) + " error/" + to_string(nab_warn) + " warn) (total=" + to_string(len(diags_ab)) + ")")
-                ok = false
-            } else {
-                println("  ok: 1 HX3011 as WARNING (FLIP-2 fixture carve-out: *_test.hexa suffix stays warn-band)")
-            }
-        }
+    if nab != 1 || nab_warn != 1 {
+        println("  FAIL: case (ab) expected 1 HX3011 as WARNING (fixture carve-out, flagless), got " + to_string(nab) + " HX3011 (" + to_string(nab_err) + " error/" + to_string(nab_warn) + " warn) (total=" + to_string(len(diags_ab)) + ")")
+        ok = false
     } else {
-        if nab != 0 {
-            println("  FAIL: case (ab) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nab) + " (total=" + to_string(len(diags_ab)) + ")")
-            ok = false
-        } else {
-            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
-        }
+        println("  ok: 1 HX3011 as WARNING (flagless fixture carve-out: *_test.hexa suffix stays warn-band)")
+    }
+
+    // (ac) static-types segment(b) — HX3024 unary-minus non-numeric REJECT
+    // (Rust E0600). Real source `fn u(s: string) { let x = -s ... }` → the
+    // `-s` operand infers to string → 1 HX3024 in the ERROR band (REJECT via
+    // _types_strict_for); the `-5` numeric and `!s` truthiness controls prove
+    // no over-fire, and 0 HX3001 proves no binop cross-fire. Flagless: fires
+    // unconditionally (always-on since FLIP-3).
+    let diags_ac = _run_case("(ac) static-types segment(b) — unary `-s` non-numeric REJECT (HX3024)", _build_case_unop_neg())
+    let nac = _count_code(diags_ac, "HX3024")
+    let nac_err = _count_code_sev(diags_ac, "HX3024", "error")
+    let nac_3001 = _count_code(diags_ac, "HX3001")
+    if nac != 1 || nac_err != 1 || nac_3001 != 0 {
+        println("  FAIL: case (ac) expected 1 HX3024 as ERROR (REJECT) + 0 HX3001 (flagless real-source; -5/!s clean), got " + to_string(nac) + " HX3024 (" + to_string(nac_err) + " error) / " + to_string(nac_3001) + " HX3001 (total=" + to_string(len(diags_ac)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3024 as ERROR (`-s` string REJECT; `-5` numeric + `!s` truthiness stay clean; no HX3001 cross-fire)")
+    }
+
+    // (ad) HX3024 fixture carve-out — identical AST on a byte-eq TEST-FIXTURE
+    // path (compiler/test/…) → _types_strict_for() false → the HX3024 lands in
+    // the WARNING band (the shipping/byte-eq path never breaks). Expect 1
+    // HX3024 as WARNING.
+    let diags_ad = _run_case("(ad) static-types segment(b) — HX3024 fixture carve-out (compiler/test/ contains-arm)", _build_case_unop_neg_fixture())
+    let nad = _count_code(diags_ad, "HX3024")
+    let nad_warn = _count_code_sev(diags_ad, "HX3024", "warning")
+    if nad != 1 || nad_warn != 1 {
+        println("  FAIL: case (ad) expected 1 HX3024 as WARNING (fixture carve-out, flagless), got " + to_string(nad) + " HX3024 (" + to_string(nad_warn) + " warn) (total=" + to_string(len(diags_ad)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3024 as WARNING (flagless fixture carve-out: compiler/test/ path stays warn-band)")
+    }
+
+    // (ae) segment(b) HX3003 coercion-faithfulness — call-arg _types_equal→
+    // _types_assignable (Rust E0308 demand_coerce). take32(0) int-lit→i32 +
+    // dynp(1) HexaVal wildcard now COERCE (0 HX3003); take32("s") + takef(1)
+    // int-lit→f32 still REJECT. Expect 2 HX3003, 0 HX3002. Regression-lock.
+    let diags_ae = _run_case("(ae) static-types segment(b) — call-arg coercion (int-lit→i32/HexaVal accept · str/f32 reject) (HX3003)", _build_case_coerce_arg())
+    let nae = _count_code(diags_ae, "HX3003")
+    let nae2 = _count_code(diags_ae, "HX3002")
+    if nae != 2 || nae2 != 0 {
+        println("  FAIL: case (ae) expected 2 HX3003 (take32(\"s\") + takef(1)) + 0 HX3002, got " + to_string(nae) + " HX3003 / " + to_string(nae2) + " HX3002 (total=" + to_string(len(diags_ae)) + ")")
+        ok = false
+    } else {
+        println("  ok: 2 HX3003 (str→i32 + int-lit→f32 reject; take32(0)/dynp(1) coerce clean) — E0308 demand_coerce faithfulness")
     }
 
     println("")
