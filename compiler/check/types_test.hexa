@@ -1326,6 +1326,47 @@ fn _build_case_hx3005_join_coerce() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (ai) segment(b) HX3025 index-on-scalar REJECT (Rust E0608). `n[0]` on a KNOWN
+// scalar (n: i64) → 1 HX3025 Error; `xs[0]` on `xs: [i64]` (array) → 0; `unk[0]`
+// on an unknown ident → 0 (conservative under-reject). Expect 1 HX3025 (error).
+fn _build_case_hx3025_index_scalar() -> Module {
+    let f = "case_hx3025.hexa"
+    // fn f(n: i64) -> i64 { let x = n[0]  return 0 }   — scalar index → HX3025
+    let fx = _let_expr("x", _index_expr(_ident_expr("n", f, 2, 13), _int_expr("0", f, 2, 15), f, 2, 14), f, 2, 5)
+    let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
+    let mut pf = []
+    pf.push(_param("n", "i64", f, 1, 6))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 1, 1), f, 1)
+    // fn g(xs: [i64]) -> i64 { let y = xs[0]  return 0 }   — array index → clean
+    let gy = _let_expr("y", _index_expr(_ident_expr("xs", f, 5, 13), _int_expr("0", f, 5, 16), f, 5, 15), f, 5, 5)
+    let gr = _return_expr(_int_expr("0", f, 6, 12), f, 6, 5)
+    let mut pg = []
+    pg.push(_param("xs", "[i64]", f, 4, 6))
+    let item_g = _fn_item("g", pg, _named_type_ref("i64"), _block([gy, gr], f, 4, 1), f, 4)
+    // fn h() { let z = unk[0] }   — unknown base → silent (under-reject)
+    let hz = _let_expr("z", _index_expr(_ident_expr("unk", f, 8, 13), _int_expr("0", f, 8, 17), f, 8, 16), f, 8, 5)
+    let item_h = _fn_item("h", [], _empty_type_ref(), _block([hz], f, 8, 1), f, 8)
+    let mut items = []
+    items.push(item_f)
+    items.push(item_g)
+    items.push(item_h)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (aj) HX3025 fixture carve-out — identical scalar-index AST on a byte-eq
+// TEST-FIXTURE path (`*_test.hexa`) stays WARNING via _types_strict_for.
+fn _build_case_hx3025_fixture() -> Module {
+    let f = "case_hx3025_test.hexa"
+    let fx = _let_expr("x", _index_expr(_ident_expr("n", f, 2, 13), _int_expr("0", f, 2, 15), f, 2, 14), f, 2, 5)
+    let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
+    let mut pf = []
+    pf.push(_param("n", "i64", f, 1, 6))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 1, 1), f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // static-types r9d — struct-literal field-EXISTENCE reject (HEXA_STATIC_TYPES=1,
 // no ARRAY_LOWER dependency). r6 deliberately scoped existence out, so a
 // typo'd field name silently skipped BOTH the existence and the type check.
@@ -2262,6 +2303,29 @@ fn main() {
         ok = false
     } else {
         println("  ok: 1 HX3005 as ERROR (string arm reject; int-lit `3` coerces to i32) — match join E0308 demand_coerce faithfulness")
+    }
+
+    // (ai) segment(b) HX3025 index-on-scalar REJECT (Rust E0608) — `n[0]` on a
+    // scalar → Error; array/unknown base → silent (conservative under-reject).
+    let diags_ai = _run_case("(ai) static-types segment(b) — index-on-scalar REJECT (n[0] scalar / xs[0] array clean / unk[0] silent) (HX3025)", _build_case_hx3025_index_scalar())
+    let nai = _count_code(diags_ai, "HX3025")
+    let nai_err = _count_code_sev(diags_ai, "HX3025", "error")
+    if nai != 1 || nai_err != 1 {
+        println("  FAIL: case (ai) expected 1 HX3025 as ERROR (n[0] scalar; xs[0] array + unk[0] unknown clean), got " + to_string(nai) + " HX3025 (" + to_string(nai_err) + " error) (total=" + to_string(len(diags_ai)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3025 as ERROR (scalar `n[0]` reject; array `xs[0]` + unknown `unk[0]` silent) — E0608 index-on-scalar")
+    }
+
+    // (aj) HX3025 fixture carve-out — identical AST on a *_test.hexa path → WARNING.
+    let diags_aj = _run_case("(aj) static-types segment(b) — HX3025 fixture carve-out (*_test.hexa scalar index)", _build_case_hx3025_fixture())
+    let naj = _count_code(diags_aj, "HX3025")
+    let naj_warn = _count_code_sev(diags_aj, "HX3025", "warning")
+    if naj != 1 || naj_warn != 1 {
+        println("  FAIL: case (aj) expected 1 HX3025 as WARNING (fixture carve-out), got " + to_string(naj) + " HX3025 (" + to_string(naj_warn) + " warn) (total=" + to_string(len(diags_aj)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3025 as WARNING (flagless fixture carve-out: *_test.hexa path stays warn-band)")
     }
 
     println("")
