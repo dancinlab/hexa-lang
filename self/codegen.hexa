@@ -15100,6 +15100,40 @@ fn codegen_full(ast) {
     out_parts.push("#elif !defined(hxlcl_setjmp)\n")
     out_parts.push("#define hxlcl_setjmp(buf) setjmp(*(jmp_buf *)(buf))\n")
     out_parts.push("#endif\n\n")
+    // zeroc #29 (finishes #4591): route THIS TU's emitted strcmp() call sites
+    // through a file-local hxlcl_strcmp so the transpiled compiler-C (hexa_cc.c /
+    // user.c) drops its own libc strcmp reference. #4591 dropped only runtime.a's
+    // shim->libc edge; the census (wf_35423332) showed strcmp still in the nm-UND
+    // floor because these non-shim TUs kept calling raw strcmp. Pure-comparison
+    // leaf (byte loop = libc strcmp semantics), header-INDEPENDENT — unlike the
+    // realloc header-composite wall, so no heap-corruption path; worst case is a
+    // loud compile error the byteeq/faithful build catches. Emitted AFTER all
+    // #includes (runtime.h @ L15074 transitively pulls <string.h>) so string.h's
+    // strcmp prototype is already parsed and NOT macro-expanded. static per-TU =
+    // no multidef (mirrors runtime.c's own #4591 static hxlcl_strcmp body).
+    // include-guard: codegen_full's prologue is emitted once per module, but a
+    // FLATTENED build (tool/flatten_imports) concatenates N modules into one .c
+    // (hexa_cc.c), so the prologue lands N times in a single TU → a bare `static`
+    // body would `redefinition of hxlcl_strcmp`. Guard the body to define exactly
+    // once per TU (the #define below is idempotent under #ifndef strcmp).
+    out_parts.push("#ifndef HEXA_HXLCL_STRCMP_LOCAL_DEFINED\n")
+    out_parts.push("#define HEXA_HXLCL_STRCMP_LOCAL_DEFINED 1\n")
+    out_parts.push("#ifdef HEXA_RT_SELFEMIT\n")
+    out_parts.push("extern int hxlcl_strcmp(const char *a, const char *b);\n")
+    out_parts.push("#else\n")
+    out_parts.push("static int __attribute__((noinline)) hxlcl_strcmp(const char *a, const char *b) {\n")
+    out_parts.push("    for (size_t i = 0; ; i++) {\n")
+    out_parts.push("        unsigned char ca = (unsigned char)a[i];\n")
+    out_parts.push("        unsigned char cb = (unsigned char)b[i];\n")
+    out_parts.push("        if (ca != cb) return (int)ca - (int)cb;\n")
+    out_parts.push("        if (ca == 0) return 0;\n")
+    out_parts.push("    }\n")
+    out_parts.push("}\n")
+    out_parts.push("#endif\n")
+    out_parts.push("#endif /* HEXA_HXLCL_STRCMP_LOCAL_DEFINED */\n")
+    out_parts.push("#ifndef strcmp\n")
+    out_parts.push("#define strcmp(a,b) hxlcl_strcmp((const char *)(a), (const char *)(b))\n")
+    out_parts.push("#endif\n\n")
     out_parts.push(fwd_parts.join(""))
     out_parts.push("\n")
     out_parts.push(global_parts.join(""))

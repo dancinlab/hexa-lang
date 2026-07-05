@@ -411,6 +411,13 @@ fn emit_runtime_to(out_path: str) {
     buf = buf + "}\n"
     buf = buf + "#endif\n"
     buf = buf + "// F3 ACTIVATION RUNBOOK · Path A — hxlcl_strcmp self-emit slot (rt_strcmp, 48 B).\n"
+    // include-guard shared with codegen_full's strcmp caller-drop (#4602): a Route-C
+    // amalgam (ap_post.c) concatenates this runtime.c body AND codegen_full's prologue
+    // body into ONE TU → without a shared guard both emit `static hxlcl_strcmp` →
+    // redefinition. The #ifndef makes whichever lands first the sole definer; byte-neutral
+    // for a normal build (macro undefined ⇒ body still emits, same bytes).
+    buf = buf + "#ifndef HEXA_HXLCL_STRCMP_LOCAL_DEFINED\n"
+    buf = buf + "#define HEXA_HXLCL_STRCMP_LOCAL_DEFINED 1\n"
     buf = buf + "#ifdef HEXA_RT_SELFEMIT\n"
     buf = buf + "extern int hxlcl_strcmp(const char *a, const char *b);\n"
     buf = buf + "#else\n"
@@ -423,6 +430,7 @@ fn emit_runtime_to(out_path: str) {
     buf = buf + "    }\n"
     buf = buf + "}\n"
     buf = buf + "#endif\n"
+    buf = buf + "#endif /* HEXA_HXLCL_STRCMP_LOCAL_DEFINED */\n"
     buf = buf + "// Cycle 47: `strcat` unhook. Same loop pattern in `hxlcl_strcat` body\n"
     buf = buf + "// would let clang's libcall recognizer convert it back to `strcat` +\n"
     buf = buf + "// `strlen`; the volatile read on the dest scan defeats that, mirroring\n"
