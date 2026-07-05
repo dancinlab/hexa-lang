@@ -645,6 +645,55 @@ fn _build_case_c() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (ae) segment(b) HX3003 coercion-faithfulness — call-arg now uses
+// _types_assignable (Rust E0308 demand_coerce). take32(0): int-lit→i32 COERCE
+// (0 HX3003); dynp(1): HexaVal param wildcard (0); take32("s"): string→i32 non-
+// coercible → REJECT (1); takef(1): int-lit→f32 param → REJECT (1, Rust-faithful).
+// Expect 2 HX3003. Bodies use literal `return 0` (int-lit→ret coerces clean; a
+// `return p` would trip HX3004). Regression-lock for the _types_equal→assignable swap.
+fn _build_case_coerce_arg() -> Module {
+    let f = "case_coerce_arg.hexa"
+    // fn take32(p: i32) -> i32 { return 0 }
+    let mut p_take32 = []
+    p_take32.push(_param("p", "i32", f, 1, 13))
+    let mut k_take32 = []
+    k_take32.push(_return_expr(_int_expr("0", f, 1, 30), f, 1, 23))
+    let item_take32 = _fn_item("take32", p_take32, _named_type_ref("i32"), _block(k_take32, f, 1, 26), f, 1)
+    // fn dynp(v: HexaVal) -> Int { return 0 }
+    let mut p_dynp = []
+    p_dynp.push(_param("v", "HexaVal", f, 2, 11))
+    let mut k_dynp = []
+    k_dynp.push(_return_expr(_int_expr("0", f, 2, 34), f, 2, 27))
+    let item_dynp = _fn_item("dynp", p_dynp, _named_type_ref("Int"), _block(k_dynp, f, 2, 30), f, 2)
+    // fn takef(q: f32) -> Int { return 0 }
+    let mut p_takef = []
+    p_takef.push(_param("q", "f32", f, 3, 12))
+    let mut k_takef = []
+    k_takef.push(_return_expr(_int_expr("0", f, 3, 31), f, 3, 24))
+    let item_takef = _fn_item("takef", p_takef, _named_type_ref("Int"), _block(k_takef, f, 3, 27), f, 3)
+    // fn main() { take32(0)  dynp(1)  take32("s")  takef(1) }
+    let mut a1 = []
+    a1.push(_int_expr("0", f, 5, 12))
+    let mut a2 = []
+    a2.push(_int_expr("1", f, 5, 24))
+    let mut a3 = []
+    a3.push(_string_expr("s", f, 5, 36))
+    let mut a4 = []
+    a4.push(_int_expr("1", f, 5, 49))
+    let mut main_kids = []
+    main_kids.push(_call_expr(_ident_expr("take32", f, 5, 5), a1, f, 5, 11))
+    main_kids.push(_call_expr(_ident_expr("dynp", f, 5, 18), a2, f, 5, 23))
+    main_kids.push(_call_expr(_ident_expr("take32", f, 5, 29), a3, f, 5, 35))
+    main_kids.push(_call_expr(_ident_expr("takef", f, 5, 42), a4, f, 5, 48))
+    let item_main = _fn_item("main", [], _empty_type_ref(), _block(main_kids, f, 5, 1), f, 5)
+    let mut items = []
+    items.push(item_take32)
+    items.push(item_dynp)
+    items.push(item_takef)
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // (d) FAIL HX3001: 1 + true — binop operand mismatch
 fn _build_case_d() -> Module {
     let f = "case_d.hexa"
@@ -2154,6 +2203,20 @@ fn main() {
         ok = false
     } else {
         println("  ok: 1 HX3024 as WARNING (flagless fixture carve-out: compiler/test/ path stays warn-band)")
+    }
+
+    // (ae) segment(b) HX3003 coercion-faithfulness — call-arg _types_equal→
+    // _types_assignable (Rust E0308 demand_coerce). take32(0) int-lit→i32 +
+    // dynp(1) HexaVal wildcard now COERCE (0 HX3003); take32("s") + takef(1)
+    // int-lit→f32 still REJECT. Expect 2 HX3003, 0 HX3002. Regression-lock.
+    let diags_ae = _run_case("(ae) static-types segment(b) — call-arg coercion (int-lit→i32/HexaVal accept · str/f32 reject) (HX3003)", _build_case_coerce_arg())
+    let nae = _count_code(diags_ae, "HX3003")
+    let nae2 = _count_code(diags_ae, "HX3002")
+    if nae != 2 || nae2 != 0 {
+        println("  FAIL: case (ae) expected 2 HX3003 (take32(\"s\") + takef(1)) + 0 HX3002, got " + to_string(nae) + " HX3003 / " + to_string(nae2) + " HX3002 (total=" + to_string(len(diags_ae)) + ")")
+        ok = false
+    } else {
+        println("  ok: 2 HX3003 (str→i32 + int-lit→f32 reject; take32(0)/dynp(1) coerce clean) — E0308 demand_coerce faithfulness")
     }
 
     println("")
