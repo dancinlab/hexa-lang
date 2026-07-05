@@ -13,7 +13,6 @@
 // source: stdlib/runtime/hxlcl_core.hexa
 .file 1 "stdlib/runtime/hxlcl_core.hexa"
 .text
-.hidden hxlcl_strlen
     .p2align 2
 .globl hxlcl_strstr
 hxlcl_strstr:
@@ -254,7 +253,6 @@ _L5211_hxlcl_strstr_bb17:
     add sp, sp, #576 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-.hidden hxlcl_strrchr
     .p2align 2
 .section .rodata
 .LCstr0:

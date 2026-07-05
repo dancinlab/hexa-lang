@@ -587,6 +587,15 @@ jobs:
           HEXA_RT_MULTIOBJ: "1"
           HEXA_RT_SELFEMIT: "1"
           HEXA_SELFEMIT_BIN: ./hexa
+          # SELFEMIT isolation (convergence selfemit-smoke-4591-codrop-default-mismatch):
+          # strcmp/strncmp/strchr/strdup are now default-auto RT-NATIVE frozen-seed leaves
+          # AND appear in the SELFEMIT 21-list — their seed member collides with the
+          # self-emitted member (S5 multidef). This smoke measures the SELFEMIT emitter
+          # ALONE, so pin the overlapping seed gates OFF (strstr is NOT in the SELFEMIT list).
+          HEXA_RT_NATIVE_STRCMP: "0"
+          HEXA_RT_NATIVE_STRNCMP: "0"
+          HEXA_RT_NATIVE_STRCHR: "0"
+          HEXA_RT_NATIVE_STRDUP: "0"
         run: |
           set -euo pipefail
           mkdir -p build
