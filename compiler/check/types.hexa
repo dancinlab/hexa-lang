@@ -2028,6 +2028,23 @@ fn _emit_hx3017(sname: string, fname: string, sp: Span, out: array) {
     }
 }
 
+// HX3024 — unary-minus non-numeric-operand REJECT (always-on since FLIP-3
+// flagless), static-types segment(b). Rust E0600-faithful "cannot apply unary
+// operator `-`" — fired at the UnOp arm in _infer_expr when `-x`'s operand is a
+// KNOWN string/char (both runtime dispatchers throw on it). SAME band policy as
+// HX3011/HX3016 (catalog-default Error): real source → Error (REJECT), byte-eq
+// test fixture → Warning via _types_strict_for carve-out.
+fn _emit_hx3024(actual: Type, sp: Span, out: array) {
+    let mut b = diag_new("HX3024")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "actual", _type_display(actual))
+    if _types_strict_for(sp.file) {
+        out.push(diag_emit(b))
+    } else {
+        out.push(diag_emit_sev(b, Severity::Warning))
+    }
+}
+
 fn _emit_hx3002(name: string, expected: i64, actual: i64, sp: Span, out: array) {
     let mut b = diag_new("HX3002")
     b = diag_span(b, sp)
@@ -2510,6 +2527,22 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     if _types_is_unop(e.kind) {
         if len(e.children) == 0 { return _types_empty_type() }
         let inner = _infer_expr(e.children[0], env, ctx, out)
+        // static-types segment(b) — HX3024 REJECT: unary `-` on a KNOWN
+        // non-numeric scalar (string/char). `-x` lowers as hexa_sub(0, x) on
+        // every target, and BOTH runtime dispatchers (stdlib rt_sub +
+        // C-substrate hexa_sub) throw "cannot subtract non-numeric operand" —
+        // a guaranteed runtime type error, surfaced at S3 instead (Rust E0600).
+        // bool is EXEMPT (rt_sub/_HX_COERCE_BOOL legalize bool→int; the checker
+        // matches runtime policy exactly, same contract as the binop string-`+`
+        // concat arm). `!`/`~` never flag. Unknown/unit/HexaVal/aggregate
+        // operands stay conservatively SILENT (under-reject). Explicit
+        // string||char enumeration (not !_types_is_numeric) so a future scalar
+        // kind cannot auto-join the fire set.
+        if e.text == "-" {
+            if inner.kind == "string" || inner.kind == "char" {
+                _emit_hx3024(inner, e.span, out)
+            }
+        }
         // Unary `-` keeps the operand's numeric type; otherwise pass through.
         if e.text == "-" && _types_is_numeric(inner) {
             return inner
