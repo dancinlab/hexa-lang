@@ -131,6 +131,12 @@ int    hxlcl_task_info(unsigned int target, unsigned int flavor, void *info_out,
 #ifndef memcmp
 #define memcmp(a,b,n)  hxlcl_memcmp((const void *)(a), (const void *)(b), (size_t)(n))
 #endif
+/* zeroc #29 str-leaf caller-drop (defensive): runtime_core.c has zero bare strlen today, but
+ * memcpy survived every prior round through exactly this gap class — cheap insurance so any
+ * future bare strlen() here routes to the shim's native hxlcl_strlen. Opt-out: -DHEXA_RT_MEM_LIBC. */
+#ifndef strlen
+#define strlen(s)  hxlcl_strlen((const char *)(s))
+#endif
 #endif /* !HEXA_RT_MEM_LIBC */
 
 #endif /* HEXA_RUNTIME_CORE_SYSHEADERS_H */
