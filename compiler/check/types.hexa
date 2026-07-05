@@ -960,7 +960,7 @@ fn _types_lower_type_ref(tr: TypeRef) -> Type {
     // annotation as kind:"named" (`_types_let_type_text` string) and parses
     // the element out of the raw text via `_types_array_elem_kind`, so this
     // kind:"generic"-gated branch never fires there.
-    if _types_array_lower_on && tr.kind == "generic" && _types_is_array_name(tr.name) && len(tr.args) >= 1 {
+    if tr.kind == "generic" && _types_is_array_name(tr.name) && len(tr.args) >= 1 {
         let mut elem_args: [Type] = []
         elem_args.push(_types_lower_type_ref(tr.args[0]))
         return Type {
@@ -1201,64 +1201,23 @@ fn _types_lookup_variant_payload_types(enum_name: string, variant_name: string) 
 // `kind == "named"` spelling is stored (the common scalar/nominal field case —
 // `x: i32`, `inner: Widget`); non-named fields store "" → the r5 fit check
 // conservatively skips them (r6+ scope).
-// ── static-types §F3 pre-flip env-hoist (wall_a_endgame.md §B.3 F3) ──
-//
-// Every static-types gate used to read `env("HEXA_STATIC_TYPES")` (and
-// `…_ARRAY_LOWER`) inline — a per-NODE string compare on hot `_infer_expr`
-// paths once the ladder grew past a handful of sites. Hoist both reads to
-// once-per-`type_check()` cached bools (process env cannot change mid-pass,
-// so this is semantics-preserving), refreshed at the top of `type_check`
-// alongside the registry resets. The gate idiom is unchanged: the cached
-// bool stays the FIRST `&&` operand at every site (short-circuit), and the
-// default build (both false) takes the byte-identical fallthrough paths —
-// diagnostic stream unchanged (byteeq-neutral). This is the census-named
-// prerequisite for the flip-gate perf measurement (stage-1 wall ON vs OFF,
-// condition #5 "post env-hoist").
-let mut _types_static_on: bool = false
-let mut _types_array_lower_on: bool = false
-// static-types F4 warn-first two-step (wall_a_endgame.md §B.3 F4): the opt-in
-// static-types REJECTs (HX3011 let/assign/match-mismatch, HX3016 struct-field
-// existence) ship as a WARNING band under the plain HEXA_STATIC_TYPES=1 flag —
-// a default-ON flip with fatal errors would break the shipping path on any
-// latent true-positive. HEXA_STATIC_TYPES_STRICT=1 re-escalates them to the
-// build-refusing Error (REJECT), keeping the fatal path reachable so no
-// coverage is lost. Consulted ONLY at the HX3011/HX3016 emit sites, which are
-// themselves reached only under _types_static_on — so STRICT without STATIC is
-// an inert no-op (no diagnostic fires to re-severity).
-let mut _types_strict: bool = false
+// ── static-types §FLIP-3 flagless (wall_a_endgame.md §B.3) ──
+// FLIP-3 flagless (state/static-types/flip3_flagless_design.md): static-types
+// checking is UNCONDITIONAL — Rust-style, no disable switch. The former
+// HEXA_STATIC_TYPES / _STRICT / _ARRAY_LOWER env opt-outs are removed; real-
+// source violations are build-refusing ERRORs, byte-eq test fixtures stay
+// WARNING via _types_strict_for's path carve-out. Byteeq-neutral: the default
+// build (env unset) already resolved to on + real-source-Error after FLIP-1/2,
+// so dropping the off path leaves the default diagnostic stream unchanged (real
+// shipping source is census-CLEAN). Gates live only in compiler/check/ (S3
+// pass); types erase at MIR so severity never reaches codegen — byteeq 3-target
+// on PR CI is the proof. `_types_static_on` stays a named always-on marker at
+// the check sites (array-lower + strict are now unconditional in-line).
+let mut _types_static_on: bool = true
 
-fn _types_static_flags_hoist() {
-    // FLIP-1 (static-types warn-band DEFAULT-ON, opt-OUT): unset → ON,
-    // "1" → ON (backward-compat), any other value → ON, "0" → OFF (the opt-out).
-    // The warn-band (HX3011 E0308 / HX3016 E0560 / HX3017 E0063) is F4
-    // warn-first (Severity::Warning under the plain flag → renders to stderr,
-    // NEVER aborts — main.hexa `_has_errors` counts Severity::Error only), so
-    // default-ON is byteeq-neutral: codegen runs unchanged, gen3≡gen4 emit is
-    // byte-identical. HEXA_STATIC_TYPES_STRICT=1 re-escalates to Error (REJECT)
-    // for callers who want the fatal path; HEXA_STATIC_TYPES=0 is the opt-out
-    // back to the fully-silent default. Every gate site consults
-    // _types_static_on / _types_array_lower_on ONLY inside compiler/check/
-    // (the S3 diagnostic pass) — none reach compiler/lower · codegen · emit.
-    _types_static_on = env("HEXA_STATIC_TYPES") != "0"
-    _types_strict = env("HEXA_STATIC_TYPES_STRICT") == "1"
-    // static-types F0 flag-fold (wall_a_endgame.md §B.3 F0): HEXA_STATIC_TYPES
-    // IMPLIES array-lower. A default-ON flip of a two-flag AND is incoherent,
-    // so the r7-prep/r8/r9 array-lowering rungs fold under the single
-    // HEXA_STATIC_TYPES flag. HEXA_STATIC_TYPES_ARRAY_LOWER stays a still-
-    // working ALIAS for one deprecation cycle (additive fold, not a rename /
-    // delete). After FLIP-1 the default path is DEFAULT-ON: both flags unset →
-    // _types_static_on=true → the disjunction is true → the array-lower gates
-    // (963/2777/3080/3131) take the structured-element path. This is STILL
-    // byteeq-neutral: the array-lower gate lives in _types_lower_type_ref,
-    // consulted only by the S3 type-check pass (callers all in compiler/check/,
-    // grep-verified) — types are erased at MIR (dynamic {tag,payload} runtime),
-    // so the structured-element kind feeds diagnostic type-comparison only,
-    // never MIR/codegen/emit. Full-corpus census triage: real shipping source
-    // (compiler/check·lower·parse·stdlib·self) is CLEAN; the 21 dirty files are
-    // all test fixtures (byte-equality inputs + _test.hexa) where a warning on
-    // stderr does not break the build. byteeq 3-target on PR CI is the proof.
-    _types_array_lower_on = _types_static_on || (env("HEXA_STATIC_TYPES_ARRAY_LOWER") == "1")
-}
+// FLIP-3: env-hoist removed — static-types is unconditional, no env to read.
+// `_types_static_on` is a module const (true); array-lower/strict gates are
+// now inlined unconditionally at each check site.
 
 let mut _types_struct_names: [string] = []
 let mut _types_struct_field_offsets: [i64] = []
@@ -1912,20 +1871,81 @@ fn _emit_hx3001(expected: Type, actual: Type, sp: Span, out: array) {
 }
 
 // HX3011 — opt-in static-type let-mismatch (HEXA_STATIC_TYPES=1).
+// ── FLIP-2 test-fixture carve-out (local; stage0 has no slice/starts_with
+// intrinsic — hand-rolled char loops, mirroring compiler/check/target_gate.hexa
+// _tg_starts_with/_tg_contains). Byte-eq test fixtures (compiler/test/ corpus)
+// and *_test.hexa carry deliberate type-unstable inputs, so the STRICT-default
+// band keeps them WARNING while real source escalates to Error. An explicit
+// HEXA_STATIC_TYPES_STRICT=1 overrides everywhere (fixtures included) — the
+// unchanged opt-in contract. contains/suffix only (never starts_with): span.file
+// may carry ./ ../ import-resolve prefixes or an absolute build cwd, so a
+// prefix match would be cwd-fragile.
+fn _types_path_ends_with(s: string, suffix: string) -> bool {
+    let cs = s.chars()
+    let ss = suffix.chars()
+    if len(ss) > len(cs) { return false }
+    let off = len(cs) - len(ss)
+    let mut i = 0
+    while i < len(ss) {
+        if cs[off + i] != ss[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn _types_path_contains(hay: string, needle: string) -> bool {
+    let h = hay.chars()
+    let n = needle.chars()
+    let hn = len(h)
+    let nn = len(n)
+    if nn == 0 { return true }
+    if nn > hn { return false }
+    let mut i = 0
+    while i + nn < hn + 1 {
+        let mut j = 0
+        let mut okc = true
+        while j < nn {
+            if h[i + j] != n[j] { okc = false; break }
+            j = j + 1
+        }
+        if okc { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _types_is_fixture_path(file: string) -> bool {
+    if _types_path_ends_with(file, "_test.hexa") { return true }
+    if _types_path_contains(file, "compiler/test/") { return true }
+    return false
+}
+
+// STRICT resolution for a given source file under FLIP-2:
+//   explicit HEXA_STATIC_TYPES_STRICT=1 → Error EVERYWHERE (fixtures included);
+//   HEXA_STATIC_TYPES_STRICT=0          → warn-band everywhere (FLIP-1 escape);
+//   unset/other (FLIP-2 default)        → Error for real source, Warning for fixtures.
+fn _types_strict_for(file: string) -> bool {
+    // FLIP-3 flagless: real source → Error, byte-eq test fixture → Warning.
+    // No env opt-out — the path carve-out is the only remaining band decision.
+    return !_types_is_fixture_path(file)
+}
+
 // Rust E0308-faithful "mismatched types": a `let x: T = <literal>` whose
 // scalar-literal RHS provably disagrees with the declared scalar T. F4
 // warn-first two-step (wall_a_endgame.md §B.3 F4): WARNING band under the
 // plain flag (renders, never aborts) so a default-ON flip cannot break the
-// shipping path on a latent true-positive; HEXA_STATIC_TYPES_STRICT=1
-// re-escalates to Error → main.hexa `_has_errors` aborts before codegen
-// (REJECT). Only emitted under HEXA_STATIC_TYPES, so the default diagnostic
-// stream is byte-identical in BOTH bands (byteeq-neutral).
+// shipping path on a latent true-positive; STRICT (default for real source,
+// or explicit HEXA_STATIC_TYPES_STRICT=1 everywhere) re-escalates to Error →
+// main.hexa `_has_errors` aborts before codegen (REJECT). Only emitted under
+// HEXA_STATIC_TYPES, so the default diagnostic stream is byte-identical (the
+// FLIP-2 carve-out keeps fixtures at Warning, so the observable corpus stream
+// is unchanged from FLIP-1 — real source has zero violations, byteeq-neutral).
 fn _emit_hx3011(expected: Type, actual: Type, sp: Span, out: array) {
     let mut b = diag_new("HX3011")
     b = diag_span(b, sp)
     b = diag_arg(b, "expected", _type_display(expected))
     b = diag_arg(b, "actual", _type_display(actual))
-    if _types_strict {
+    if _types_strict_for(sp.file) {
         out.push(diag_emit(b))
     } else {
         out.push(diag_emit_sev(b, Severity::Warning))
@@ -1974,7 +1994,7 @@ fn _emit_hx3016(sname: string, fname: string, sp: Span, out: array) {
     b = diag_span(b, sp)
     b = diag_arg(b, "name", sname)
     b = diag_arg(b, "field", fname)
-    if _types_strict {
+    if _types_strict_for(sp.file) {
         out.push(diag_emit(b))
     } else {
         out.push(diag_emit_sev(b, Severity::Warning))
@@ -2001,7 +2021,7 @@ fn _emit_hx3017(sname: string, fname: string, sp: Span, out: array) {
     b = diag_span(b, sp)
     b = diag_arg(b, "name", sname)
     b = diag_arg(b, "field", fname)
-    if _types_strict {
+    if _types_strict_for(sp.file) {
         out.push(diag_emit_sev(b, Severity::Error))
     } else {
         out.push(diag_emit(b))
@@ -2878,7 +2898,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                                 _emit_hx3011(elem_t, rhs_t, e.span, out)
                                 r3_rejected = true
                             }
-                        } else if _types_array_lower_on && !_types_kind_is_scalar(elem_t.kind) {
+                        } else if !_types_kind_is_scalar(elem_t.kind) {
                             // static-types r8b — param / module-let array base
                             // fallback. The `[]<name>` record above only exists
                             // for BLOCK-LOCAL annotated lets (Block-arm r4
@@ -3103,7 +3123,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     // (which the legacy STUB's per-Ident walk did NOT reach, since the Ident
     // arm returns before recursing into children[0]) so inner value errors are
     // ALSO surfaced under the flag.
-    if _types_static_on && _cg_is_struct_lit(e.kind) {
+    if _cg_is_struct_lit(e.kind) {
         let sname = e.text
         let mut fi = 0
         while fi < len(e.children) {
@@ -3181,7 +3201,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     // as bare `array` in diagnostics. Both env checks are the FIRST `&&`
     // operands (short-circuit) → the default build takes the byte-identical
     // STUB path below (byteeq / gen3≡gen4 preserved, r1-r6 gate idiom).
-    if _types_static_on && _types_array_lower_on && _types_is_array_lit(e.kind) {
+    if _types_is_array_lit(e.kind) {
         let mut elem_t = _types_empty_type()
         let mut uniform = true
         let mut ai = 0
@@ -3232,7 +3252,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     // r2 soundness gates. Both env checks are the FIRST `&&` operands
     // (short-circuit) → the default build takes the byte-identical STUB
     // path below (byteeq / gen3≡gen4 preserved, r1-r8 gate idiom).
-    if _types_static_on && _types_array_lower_on && _types_is_index(e.kind) {
+    if _types_is_index(e.kind) {
         let mut base_t = _types_empty_type()
         let mut xi = 0
         while xi < len(e.children) {
@@ -3272,7 +3292,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     // flag-ON false-positive class — flip-blocking, §B F0). Flag check is
     // the FIRST `&&` operand (short-circuit) → the default build takes the
     // byte-identical STUB path below.
-    if _types_static_on && _types_is_field(e.kind) && len(e.children) > 0 {
+    if _types_is_field(e.kind) && len(e.children) > 0 {
         let mut recv_t = _types_empty_type()
         let mut wi = 0
         while wi < len(e.children) {
@@ -3636,7 +3656,7 @@ fn _check_match(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // FIRST `&&` operand, short-circuit) so the default build keeps
             // the discard-only walk → diagnostic stream byte-identical →
             // byteeq (gen3≡gen4) preserved.
-            if _types_static_on && (_types_is_lit_int(pat_i.kind) || _types_is_lit_float(pat_i.kind) || _types_is_lit_string(pat_i.kind) || _is_lit_bool(pat_i.kind) || _is_lit_char(pat_i.kind)) {
+            if _types_is_lit_int(pat_i.kind) || _types_is_lit_float(pat_i.kind) || _types_is_lit_string(pat_i.kind) || _is_lit_bool(pat_i.kind) || _is_lit_char(pat_i.kind) {
                 if _types_kind_is_scalar(scrut_t.kind) && _types_kind_is_scalar(pt.kind) {
                     if !_types_assignable(scrut_t, pt, pat_i) {
                         _emit_hx3011(scrut_t, pt, pat_i.span, out)
@@ -4836,9 +4856,7 @@ fn _types_bind_params(env: TypeEnv, it: Item, caller_file: string) -> TypeEnv {
 
 pub fn type_check(module: Module) -> array {
     let mut out = []
-    // static-types §F3 env-hoist — refresh the cached flag bools ONCE per
-    // pass, FIRST thing (before any registry/lowering work reads them).
-    _types_static_flags_hoist()
+    // FLIP-3 flagless: no env-hoist — static-types gates are unconditional.
     // RFC-074 Phase 2.1 — reset the per-module enum variant payload type
     // registry before `_collect_item_types` re-populates it on this run.
     // `type_check()` is called once per module pass; registry lifetime ==
