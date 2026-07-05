@@ -560,6 +560,146 @@ fn _src_fp_use_then_write() -> string {
     return s
 }
 
+// ── HEXA-OWN L5-E5 — use-while-mutably-borrowed (HX3027, Rust E0503) ──
+//
+// The E2 loan registry feeds a THIRD conflict rule at the ident READ funnel
+// (`_bck_check_use`): a use (read of value) of `x` while a live `&mut x` loan
+// exists fires HX3027. UNLIKE E4 write-through (both loan kinds), E0503 keys on
+// the mutability bit — a use while only a shared `&x` loan is live is SILENT.
+// A borrow RHS (`&mut x` re-borrow) is exempt (that is E3/HX3021's to report).
+// ON → 1 HX3027 per hazard; OFF → empty stream (byteeq-neutral).
+
+fn _src_hz_use_while_mut() -> string {
+    // `let m = &mut x; let y = x + 1` — x is READ while a live `&mut` loan of
+    // it exists → E0503. The read is inside a binop (value-use), not a borrow.
+    let mut s = "fn huwm() {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    let m = &mut x\n"
+    s = s + "    let y = x + 1\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_use_shared() -> string {
+    // `let r = &x; let y = x` — the live loan is SHARED (`&`), which permits
+    // concurrent reads → E0503 does NOT fire (mutability-bit keyed) → silent.
+    let mut s = "fn fus() {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    let r = &x\n"
+    s = s + "    let y = x\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_use_after_kill() -> string {
+    // `let mut m = &mut x; m = 0; let y = x` — the `&mut` loan is killed by the
+    // non-borrow reassign before x is read → no live mutable loan → silent.
+    let mut s = "fn fuak() {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    let mut m = &mut x\n"
+    s = s + "    m = 0\n"
+    s = s + "    let y = x\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_use_loan_name() -> string {
+    // `let m = &mut x; let y = m` — reading the loan BINDING `m` (not its
+    // origin) never matches `_bck_ref_find_mut_loan(name="m")` (no loan has
+    // origin "m") → silent. This is the intended use of a mutable borrow.
+    let mut s = "fn fuln() {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    let m = &mut x\n"
+    s = s + "    let y = m\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+// §5.2 ⓐ double-fire probe: a re-borrow `let n = &mut x` while a live `&mut x`
+// loan exists reads x to take its ADDRESS. WITHOUT the `_bck_in_borrow_rhs`
+// suppression this would fire BOTH HX3021 (E3 borrow-conflict) AND HX3027 (E5
+// use). With suppression, E3 owns it alone: HX3027 = 0, HX3021 = 1. This runner
+// asserts BOTH (the standard hygiene runner cannot — HX3021 is a legit stray).
+fn _src_fp_reborrow_suppress() -> string {
+    let mut s = "fn frs() {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    let m = &mut x\n"
+    s = s + "    let n = &mut x\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _run_reborrow_suppress_probe() -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want_use = 0
+    let mut want_conf = 0
+    if flag_on { want_conf = 1 }
+    let mut ok = true
+    println("")
+    println("── fp_reborrow_suppress (expect HX3027 ×" + to_string(want_use)
+        + " suppressed, HX3021 ×" + to_string(want_conf) + " owns it) ──")
+    let d = _compile_probe("fp_reborrow_suppress", _src_fp_reborrow_suppress())
+    let nu = _count_code(d, "HX3027")
+    let nc = _count_code(d, "HX3021")
+    let other = len(d) - nu - nc
+    _print_diags(d)
+    if nu != want_use {
+        println("  FAIL: HX3027 = " + to_string(nu) + ", want " + to_string(want_use) + " (E5 must be suppressed inside a borrow RHS)")
+        ok = false
+    }
+    if nc != want_conf {
+        println("  FAIL: HX3021 = " + to_string(nc) + ", want " + to_string(want_conf) + " (E3 owns the re-borrow)")
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3027/HX3021 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if ok { println("  ok: HX3027 ×" + to_string(want_use) + " (suppressed) · HX3021 ×" + to_string(want_conf)) }
+    return ok
+}
+
+// HX3027 probe runner — mirrors `_run_write_through_probe`, keyed on the use-
+// while-mut code and asserting every OTHER code is 0 (probe hygiene). STRICT
+// re-bands HX3027 to Error, so the error-band count must equal the HX3027
+// count. OFF → want 0 (empty stream).
+fn _run_use_while_mut_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3027 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3027")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3027 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3027 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
 // HX3021 probe runner — mirrors `_run_ret_probe`, keyed on the borrow-
 // conflict code and asserting every OTHER code is 0 (probe hygiene). STRICT
 // re-bands HX3021 to Error, so the error-band count must equal the HX3021
@@ -898,6 +1038,15 @@ fn main() {
         if !_run_write_through_probe("fp_write_no_borrow", _src_fp_write_no_borrow(), 0) { ok = false }
         if !_run_write_through_probe("fp_write_diff_origin", _src_fp_write_diff_origin(), 0) { ok = false }
         if !_run_write_through_probe("fp_use_then_write", _src_fp_use_then_write(), 1) { ok = false }
+        // HEXA-OWN L5-E5 — use-while-mutably-borrowed (HX3027, Rust E0503).
+        // Hazard → ×1 ON; controls (shared loan, killed loan, loan-name read)
+        // → 0. fp_reborrow_suppress proves the borrow-RHS suppression: E5 stays
+        // silent while E3 (HX3021) owns the re-borrow. OFF sweep → empty stream.
+        if !_run_use_while_mut_probe("hz_use_while_mut", _src_hz_use_while_mut(), 1) { ok = false }
+        if !_run_use_while_mut_probe("fp_use_shared", _src_fp_use_shared(), 0) { ok = false }
+        if !_run_use_while_mut_probe("fp_use_after_kill", _src_fp_use_after_kill(), 0) { ok = false }
+        if !_run_use_while_mut_probe("fp_use_loan_name", _src_fp_use_loan_name(), 0) { ok = false }
+        if !_run_reborrow_suppress_probe() { ok = false }
         if !_run_tp_own() { ok = false }
         // census lane must be silent whenever HEXA_BORROWCK_CENSUS is unset
         // (byteeq-neutral proof at the census-count level).
