@@ -3735,7 +3735,14 @@ fn _check_match(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // hard-bricks the build; this is the actual last bare-`_types_equal`
             // value-flow site (the #4603 call-arg comment missed this one).
             if !_types_assignable(first_t, bt, e.children[i + 1]) {
-                _emit_hx3005(arm_idx, first_t, bt, e.children[i + 1].span, out)
+                // Permissive on unit: mirror the if/else join (2709) — an arm
+                // whose body infers `unit` (an unannotated-return call the
+                // inferencer resolves to unit) must not error. Genuine non-unit
+                // arm mismatches (`match c { 1 -> 5, _ -> "x" }`) still fire.
+                let ku = "unit"
+                if first_t.kind != ku && bt.kind != ku {
+                    _emit_hx3005(arm_idx, first_t, bt, e.children[i + 1].span, out)
+                }
             }
         }
         arm_idx = arm_idx + 1
