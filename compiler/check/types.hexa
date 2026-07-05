@@ -2045,6 +2045,17 @@ fn _emit_hx3024(actual: Type, sp: Span, out: array) {
     }
 }
 
+fn _emit_hx3025(actual: Type, sp: Span, out: array) {
+    let mut b = diag_new("HX3025")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "actual", _type_display(actual))
+    if _types_strict_for(sp.file) {
+        out.push(diag_emit(b))
+    } else {
+        out.push(diag_emit_sev(b, Severity::Warning))
+    }
+}
+
 fn _emit_hx3002(name: string, expected: i64, actual: i64, sp: Span, out: array) {
     let mut b = diag_new("HX3002")
     b = diag_span(b, sp)
@@ -3304,6 +3315,16 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             let ct = _infer_expr(e.children[xi], env, ctx, out)
             if xi == 0 { base_t = ct }
             xi = xi + 1
+        }
+        // segment(b) HX3025 REJECT (Rust E0608): indexing a KNOWN non-container
+        // scalar (`n[0]`, n: int/float/bool/char). The C-substrate hexa_array_get
+        // wrapper aborts at runtime on a non-array tag (runtime_core_emit ~3398),
+        // so this is a guaranteed runtime error surfaced to S3 (the HX3024
+        // contract). Conservative under-reject: string is excluded in v1 (aborts
+        // too, but a dead-code `s[i]` corpus census is not yet done), and
+        // unknown/unit/HexaVal/array/map/named all stay SILENT.
+        if _is_integer_kind(base_t) || _is_float_kind(base_t) || base_t.kind == "bool" || base_t.kind == "char" {
+            _emit_hx3025(base_t, e.span, out)
         }
         if base_t.kind == "array" && len(base_t.args) > 0 {
             return base_t.args[0]
