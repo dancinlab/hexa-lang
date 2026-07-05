@@ -3476,7 +3476,19 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
             let mixed_int_float =
                 (_is_integer_kind(lt) && _is_float_kind(rt)) ||
                 (_is_float_kind(lt) && _is_integer_kind(rt))
-            if !_types_equal(lt, rt) && !mixed_int_float {
+            // R1 (ak): literal-aware BIDIRECTIONAL coercion. Bare
+            // `_types_equal` false-fired HX3001 on `a_i32 + 1` — the `1`
+            // infers i64 (universal int-literal), so i32≠i64 mis-rejected a
+            // build-legal line (Rust E0308: rustc unifies an untyped int/float
+            // literal with the typed operand). `_types_assignable` already
+            // encodes the literal-coercion arm keyed on the src Expr's literal
+            // kind, so pass the operand-producing child as `src` in each
+            // direction (children[1]→rt, children[0]→lt) — the literal can sit
+            // on either side. `a_i32 + b_i64` (ident pair, neither literal)
+            // still REJECTs (Rust-parity) and `a - "s"` reaches the non-numeric
+            // mismatch branch below unchanged. `_types_assignable ⊇
+            // _types_equal` → strictly loosening → byteeq-neutral.
+            if !_types_assignable(lt, rt, e.children[1]) && !_types_assignable(rt, lt, e.children[0]) && !mixed_int_float {
                 _emit_hx3001(lt, rt, e.span, out)
             }
             // S4: integer / integer narrows the ℝ domain → HX4001 (Warning).
@@ -3504,7 +3516,11 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
     }
 
     if _types_is_compare_op(op) {
-        if !_types_equal(lt, rt) {
+        // R1 (ak): same literal-aware BIDIRECTIONAL swap as the arith branch
+        // — `a_i32 < 2` must not HX3001 (the `2` infers i64). The unit guard
+        // below is RETAINED (assignable still rejects unit, and the guard
+        // covers the unannotated-fn `unit` placeholder case). Loosening-only.
+        if !_types_assignable(lt, rt, e.children[1]) && !_types_assignable(rt, lt, e.children[0]) {
             // Permissive: when one side is `unit` (the placeholder for
             // a fn return-type the inferencer couldn't pin — typically
             // an unannotated `fn f(x) { if … { return X }; return Y }`
