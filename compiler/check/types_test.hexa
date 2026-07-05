@@ -694,6 +694,37 @@ fn _build_case_coerce_arg() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (ah) segment(b) Rung B — actual-`unit` permissive guard on the return (2784),
+// assign (3024), and module-let (5073) sites. A `<expr>` that infers `unit` (an
+// unannotated-return call) must not fire HX3004/HX3001, mirroring call-arg/if-join.
+// Covers: fn v() unit · return v() (0 HX3004, guard) · bare `return` (1 HX3004,
+// E0069 control — must still fire) · g = v() (0 HX3001, guard) · module-let
+// W: i64 = v() (0 HX3001, guard). Expect exactly 1 HX3004 (bare only) + 0 HX3001.
+fn _build_case_actual_unit_guard() -> Module {
+    let f = "case_actual_unit.hexa"
+    // fn v() { }   — no return annotation → infers unit
+    let item_v = _fn_item("v", [], _empty_type_ref(), _block([], f, 1, 10), f, 1)
+    // fn f() -> i64 { return v() }   — return-expr unit → suppressed (0 HX3004)
+    let ret_call = _return_expr(_call_expr(_ident_expr("v", f, 2, 22), [], f, 2, 22), f, 2, 15)
+    let item_f = _fn_item("f", [], _named_type_ref("i64"), _block([ret_call], f, 2, 1), f, 2)
+    // fn h() -> i64 { return }   — bare return (no children) → HX3004 (E0069, fires)
+    let bare_ret = Expr { kind: ExprKind::Return, span: _span(f, 3, 15, 6), text: "", annotations: [], children: [], atlas_ref: _empty_atlas_ref() }
+    let item_h = _fn_item("h", [], _named_type_ref("i64"), _block([bare_ret], f, 3, 1), f, 3)
+    // fn a() { let g: i64 = 0  g = v() }   — assign unit → suppressed (0 HX3001)
+    let let_g = Expr { kind: ExprKind::Let, span: _span(f, 4, 5, 3), text: "g|i64", annotations: [], children: [_int_expr("0", f, 4, 18)], atlas_ref: _empty_atlas_ref() }
+    let asg = _assign_expr(_ident_expr("g", f, 5, 5), _call_expr(_ident_expr("v", f, 5, 9), [], f, 5, 9), f, 5, 7)
+    let item_a = _fn_item("a", [], _empty_type_ref(), _block([let_g, asg], f, 4, 1), f, 4)
+    // module let W: i64 = v()   — module-let unit → suppressed (0 HX3001)
+    let item_w = Item { kind: ItemKind::Let, name: "W", span: _span(f, 6, 1, 1), annotations: [], params: [], return_type: _named_type_ref("i64"), body: _call_expr(_ident_expr("v", f, 6, 12), [], f, 6, 12), is_pub: false }
+    let mut items = []
+    items.push(item_v)
+    items.push(item_f)
+    items.push(item_h)
+    items.push(item_a)
+    items.push(item_w)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // (d) FAIL HX3001: 1 + true — binop operand mismatch
 fn _build_case_d() -> Module {
     let f = "case_d.hexa"
@@ -1290,6 +1321,36 @@ fn _build_case_static_types_r9c() -> Module {
     let body = _block(kids, f, 2, 1)
     let mut fparams = []
     fparams.push(_param("n", "i64", f, 1, 6))
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (af) segment(b) HX3005 coercion-faithfulness — match arm-body join now uses
+// _types_assignable (like the if/else join). first arm body `a` fixes first_t=i32
+// (typed param ident, not a literal → conservative first-arm-literal boundary
+// N/A). arm `"s"` (string vs i32) still REJECTs (positive, stays); arm `3`
+// (int-lit vs i32) now COERCEs. Expect exactly 1 HX3005 (pre-fix: 2) + it stays
+// Error (unbanded) + 0 HX3011 (int-lit patterns `1`/`2` coerce vs i32 scrutinee).
+fn _build_case_hx3005_join_coerce() -> Module {
+    let f = "case_hx3005_join.hexa"
+    let mut arms = []
+    // 1 -> a      first_t = i32 (typed param ident)
+    arms.push(_int_expr("1", f, 3, 9))
+    arms.push(_ident_expr("a", f, 3, 14))
+    // 2 -> "s"    string body vs i32 → HX3005 (positive, must stay)
+    arms.push(_int_expr("2", f, 4, 9))
+    arms.push(_string_expr("s", f, 4, 14))
+    // _ -> 3      int-lit body vs i32 → coerce clean (pre-fix: HX3005)
+    arms.push(_wildcard_expr(f, 5, 9))
+    arms.push(_int_expr("3", f, 5, 14))
+    let m = _match_expr(_ident_expr("a", f, 2, 11), arms, f, 2, 5)
+    let mut kids = []
+    kids.push(m)
+    let body = _block(kids, f, 2, 1)
+    let mut fparams = []
+    fparams.push(_param("a", "i32", f, 1, 6))
     let item_f = _fn_item("f", fparams, _empty_type_ref(), body, f, 1)
     let mut items = []
     items.push(item_f)
@@ -2217,6 +2278,33 @@ fn main() {
         ok = false
     } else {
         println("  ok: 2 HX3003 (str→i32 + int-lit→f32 reject; take32(0)/dynp(1) coerce clean) — E0308 demand_coerce faithfulness")
+    }
+
+    // (af) segment(b) HX3005 coercion-faithfulness — match arm-body join
+    // _types_equal→_types_assignable (like the if/else join). `match a { 1 -> a,
+    // 2 -> "s", _ -> 3 }`: string arm REJECTs (stays), int-lit arm `3` coerces to
+    // i32. Expect 1 HX3005 (pre-fix 2) + Error-severity (unbanded) + 0 HX3011.
+    let diags_af = _run_case("(af) static-types segment(b) — match arm-body join coercion (int-lit→i32 coerce · string reject) (HX3005)", _build_case_hx3005_join_coerce())
+    let naf = _count_code(diags_af, "HX3005")
+    let naf_err = _count_code_sev(diags_af, "HX3005", "error")
+    let naf_3011 = _count_code(diags_af, "HX3011")
+    if naf != 1 || naf_err != 1 || naf_3011 != 0 {
+        println("  FAIL: case (af) expected 1 HX3005 as ERROR (string arm; int-lit arm coerces) + 0 HX3011, got " + to_string(naf) + " HX3005 (" + to_string(naf_err) + " error) / " + to_string(naf_3011) + " HX3011 (total=" + to_string(len(diags_af)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3005 as ERROR (string arm reject; int-lit `3` coerces to i32) — match join E0308 demand_coerce faithfulness")
+    }
+
+    // (ah) segment(b) Rung B — actual-`unit` permissive guard (return/assign/module-let).
+    // return v() + g = v() + module-let W = v() suppressed; bare `return` still fires (E0069).
+    let diags_ah = _run_case("(ah) static-types segment(b) — actual-unit permissive guard (return/assign/module-let · bare-return preserved) (HX3004/HX3001)", _build_case_actual_unit_guard())
+    let nah_3004 = _count_code(diags_ah, "HX3004")
+    let nah_3001 = _count_code(diags_ah, "HX3001")
+    if nah_3004 != 1 || nah_3001 != 0 {
+        println("  FAIL: case (ah) expected 1 HX3004 (bare return only; return v() suppressed) + 0 HX3001 (assign/module-let v() suppressed), got " + to_string(nah_3004) + " HX3004 / " + to_string(nah_3001) + " HX3001 (total=" + to_string(len(diags_ah)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3004 (bare `return` fires E0069; `return v()` suppressed) + 0 HX3001 (assign/module-let unit suppressed) — actual-unit guard parity")
     }
 
     println("")
