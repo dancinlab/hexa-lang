@@ -757,6 +757,29 @@ fn _bck_ref_find_conflict(origin: string, new_is_mut: bool) -> i64 {
     return 0 - 1
 }
 
+// ── HEXA-OWN E4 — write-through-while-borrowed (Rust E0506) ──────────
+// Scan the loan registry for ANY live loan whose origin == `origin` — a write
+// to the underlying storage invalidates both `&` and `&mut` loans (the aliasing
+// guarantee is symmetry-broken by the write regardless of mutability). A loan
+// row is LIVE iff it is the newest entry for its name (END-scan / newest-per-
+// name-wins, so a re-let or kill shadows it) AND its origin is non-empty (a
+// KILL row has origin ""). Returns the first matching live row index, or -1.
+// Intra-scope / flow-insensitive-conservative (no NLL last-use): a loan stays
+// live from its `let` to end-of-fn or until the binding is reassigned to a
+// non-borrow, so a `let r = &x; <use r>; x = 5;` ALSO fires — the documented
+// false-positive class, the SAME conservative-loud-over-quiet policy as E2/E3.
+fn _bck_ref_find_write_through(origin: string) -> i64 {
+    let mut i = len(_bck_ref_names) - 1
+    while i >= 0 {
+        if len(_bck_ref_origins[i]) > 0 && _bck_ref_origins[i] == origin
+            && _bck_find_ref(_bck_ref_names[i]) == i {
+            return i
+        }
+        i = i - 1
+    }
+    return 0 - 1
+}
+
 // HX3021 emit (borrow-conflict, Rust E0502) — same-site dedup + STRICT
 // escalation, cloned from `_bck_emit_ret_escape`. `name` is the new binding,
 // `origin` the twice-borrowed value, `new_mut` the new borrow's kind; `other`
@@ -788,6 +811,38 @@ fn _bck_emit_borrow_conflict(name: string, origin: string, new_mut: bool,
     // build-refusing Error via the sanctioned caller override — identical to
     // the HX3014/HX3019 escalation. OFF-strict keeps the catalog Warning band,
     // and the flag-OFF path never reaches here (byteeq-neutral).
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
+}
+
+// HX3023 emit (write-through-while-borrowed, Rust E0506) — same-site dedup +
+// STRICT escalation, cloned from `_bck_emit_borrow_conflict`. `origin` is the
+// assigned value (the write target), `name` the borrowing binding, `borrow_mut`
+// the loan's mutability, `borrow_line` where the loan was created.
+fn _bck_emit_write_through(origin: string, name: string, borrow_mut: bool,
+                           borrow_line: i64, sp: Span) {
+    let mut di = 0
+    while di < len(_bck_e_lines) {
+        if _bck_e_lines[di] == sp.line && _bck_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_e_lines.push(sp.line)
+    _bck_e_cols.push(sp.col)
+    let mut b = diag_new("HX3023")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "origin", origin)
+    b = diag_arg(b, "name", name)
+    let mut _bk = "immutable"
+    if borrow_mut { _bk = "mutable" }
+    b = diag_arg(b, "borrow_kind", _bk)
+    b = diag_arg(b, "borrow_line", to_string(borrow_line))
+    let mut d = diag_emit(b)
+    // STRICT (HEXA_BORROWCK_STRICT) re-bands the SAME diagnostic instance to a
+    // build-refusing Error via the sanctioned caller override — identical to
+    // the HX3014/HX3019/HX3021 escalation. OFF-strict keeps the catalog Warning
+    // band, and the flag-OFF path never reaches here (byteeq-neutral).
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
@@ -3184,6 +3239,25 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 if _bck_find_local(dst.id) >= 0 {
                     _bck_track(dst.id, lhs.text, _bck_new_group(), e.span)
                 }
+            }
+        }
+        // HEXA-OWN E4 — write-through-while-borrowed (Rust E0506). At
+        // `x = RHS` over a non-global ident `x`, scan the E2 loan registry
+        // for ANY LIVE loan whose origin == `x` BEFORE the L5-E1 kill below
+        // detaches `x`'s OWN loan (if any). A write to the underlying storage
+        // invalidates both `&` and `&mut` loans (the scan keys on origin, not
+        // mutability), so `let r = &x; x = 5;` fires HX3023 here. The scan
+        // runs PRE-KILL so the registry still reflects every live loan of `x`
+        // as origin; for the canonical E4 case `x` is not itself a ref-binding
+        // name so the kill below would not fire anyway, but PRE-KILL is the
+        // conservative-correct order (matches the E3.5 design insight). Flow-
+        // insensitive (no NLL last-use): `let r = &x; <use r>; x = 5;` ALSO
+        // fires — the documented false-positive class, loud over quiet.
+        if _bck_active && !is_global && len(lhs.text) > 0 && lhs.kind == "ident" {
+            let _bk_wti = _bck_ref_find_write_through(lhs.text)
+            if _bk_wti >= 0 {
+                _bck_emit_write_through(lhs.text, _bck_ref_names[_bk_wti],
+                    _bck_ref_mut[_bk_wti], _bck_ref_lines[_bk_wti], e.span)
             }
         }
         // HEXA-OWN L5-E1 — reassigning a name that was a live ref binding to

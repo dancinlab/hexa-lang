@@ -489,6 +489,77 @@ fn _src_fp_diff_origin() -> string {
     return s
 }
 
+// ── HEXA-OWN E4 — write-through-while-borrowed (HX3023, Rust E0506) ──
+//
+// The E2 loan registry (reused from E2+E3) feeds a SECOND conflict rule at
+// the ASSIGN arm: `x = RHS` over a non-global ident `x` scans for ANY live
+// loan whose origin == `x` (regardless of mutability — a write invalidates
+// both `&` and `&mut` loans) and fires HX3023. The scan runs PRE-KILL so the
+// registry still reflects every live loan of `x` as origin. ON → 1 HX3023
+// per hazard; OFF → empty stream (byteeq-neutral). Controls (no-borrow-then-
+// assign, different-origin) stay at 0.
+
+fn _src_hz_write_through() -> string {
+    // `let r = &x; x = 5` — r is live when x is written → E0506 (shared loan).
+    let mut s = "fn hwt() {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    let r = &x\n"
+    s = s + "    x = 5\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_hz_write_through_mut() -> string {
+    // `let m = &mut x; x = 5` — a write invalidates a live `&mut` loan too
+    // (the scan keys on origin, not mutability) → E0506.
+    let mut s = "fn hwtm() {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    let m = &mut x\n"
+    s = s + "    x = 9\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_write_no_borrow() -> string {
+    // `x = 9` with no prior borrow of x → no live loan to conflict → silent.
+    let mut s = "fn fwnb() {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    x = 9\n"
+    s = s + "    println(x)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_write_diff_origin() -> string {
+    // `let r = &y; x = 5` — the live loan's origin is y, not x → silent.
+    let mut s = "fn fwdo() {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    let mut y = 7\n"
+    s = s + "    let r = &y\n"
+    s = s + "    x = 5\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_use_then_write() -> string {
+    // `let r = &x; <use r>; x = 5` — DOCUMENTED flow-insensitive false-
+    // positive: under no NLL last-use yet r is STILL live at the assign, so
+    // HX3023 fires ×1 (Rust NLL would end r's loan at last use → silent).
+    // Conservative loud-over-quiet, the SAME policy as E2/E3. A future NLL
+    // last-use improvement would UPDATE this probe's expectation to 0.
+    let mut s = "fn fuutw() {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    let r = &x\n"
+    s = s + "    println(r)\n"
+    s = s + "    x = 5\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
 // HX3021 probe runner — mirrors `_run_ret_probe`, keyed on the borrow-
 // conflict code and asserting every OTHER code is 0 (probe hygiene). STRICT
 // re-bands HX3021 to Error, so the error-band count must equal the HX3021
@@ -511,6 +582,41 @@ fn _run_conflict_probe(label: string, src: string, want_on: i64) -> bool {
     }
     if other != 0 {
         println("  FAIL: stray non-HX3021 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
+// HX3023 probe runner — mirrors `_run_conflict_probe`, keyed on the write-
+// through-borrowed code and asserting every OTHER code is 0 (probe hygiene).
+// STRICT re-bands HX3023 to Error, so the error-band count must equal the
+// HX3023 count. OFF → want 0 (empty stream).
+fn _run_write_through_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3023 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3023")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3023 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3023 diagnostics = " + to_string(other))
         ok = false
     }
     if strict {
@@ -783,6 +889,15 @@ fn main() {
         if !_run_conflict_probe("fp_two_shared", _src_fp_two_shared(), 0) { ok = false }
         if !_run_conflict_probe("fp_sequential", _src_fp_sequential(), 0) { ok = false }
         if !_run_conflict_probe("fp_diff_origin", _src_fp_diff_origin(), 0) { ok = false }
+        // HEXA-OWN E4 — write-through-while-borrowed (HX3023, Rust E0506).
+        // Hazards → ×1 ON, controls → 0. fp_use_then_write is the documented
+        // flow-insensitive false-positive (×1 under ON, no NLL last-use yet).
+        // OFF sweep asserts a fully empty stream for all.
+        if !_run_write_through_probe("hz_write_through", _src_hz_write_through(), 1) { ok = false }
+        if !_run_write_through_probe("hz_write_through_mut", _src_hz_write_through_mut(), 1) { ok = false }
+        if !_run_write_through_probe("fp_write_no_borrow", _src_fp_write_no_borrow(), 0) { ok = false }
+        if !_run_write_through_probe("fp_write_diff_origin", _src_fp_write_diff_origin(), 0) { ok = false }
+        if !_run_write_through_probe("fp_use_then_write", _src_fp_use_then_write(), 1) { ok = false }
         if !_run_tp_own() { ok = false }
         // census lane must be silent whenever HEXA_BORROWCK_CENSUS is unset
         // (byteeq-neutral proof at the census-count level).
