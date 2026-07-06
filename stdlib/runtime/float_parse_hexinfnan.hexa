@@ -305,7 +305,8 @@ fn hpx_nan_payload(s: string, i0, jend) -> int {
                 }
                 if hd == 0 { return 0 - 1 }              // "0x" w/o hexdigit → strtoull took "0" only, not full seq
                 base = 16
-                i = i + 2
+                i = i + 1                                // '0' already consumed above; skip only 'x' (i was at 'x') — the
+                                                         // first hexdigit stays for the loop (off-by-one that dropped it → nan(0x7b) parsed 0xb not 0x7b)
             }
         }
     }
