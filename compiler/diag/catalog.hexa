@@ -569,6 +569,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3030",
+        title: "mismatched enum in match pattern",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "mismatched types in match pattern: expected `{expected}`, found `{actual}::{variant}`",
+        explain: "Static type check (always-on since FLIP-3 flagless — Rust-style, no disable switch), static-types R5-r1. A `match` arm's pattern names a variant of a DIFFERENT enum than the scrutinee's type — e.g. `match c { Dir::North -> … }` where `c: Color` — so the arm can NEVER match: enum tags are nominal, and the runtime tag of a `Color` value is never a `Dir` tag, making the arm silently dead (the same silent-mismatch bug class as the r9c literal-pattern rule, which this extends from scalar literals to enum-path patterns). This is the Rust E0308 'mismatched types' rule as fired from the pattern checker (rustc_hir_typeck/src/pat.rs check_pat_path → demand::eqtype → report_mismatched_types). Conservative by construction: it fires ONLY when BOTH the scrutinee's inferred type resolves (after alias substitution) to an enum REGISTERED in this module pass AND the pattern's `Enum::Variant` head is ALSO a registered enum, and the two names differ. A struct-typed scrutinee, an unknown/cross-module enum head (bind's HX2001 territory), a HexaVal/unknown scrutinee, and a guarded arm (`match_guard` carrier, which stays on the r9c discard path) are all SILENT — under-reject, never over-reject. The scrutinee's enum is recovered two ways: params / module-level lets carry `named:<Enum>` directly in the env; a block-local `let c: Color` is recovered from the r5 `{}name` side slot. Emitted unconditionally (FLIP-3 flagless) as a build-refusing ERROR for real source (REJECT), while byte-eq TEST FIXTURES (`compiler/test/` corpus + `*_test.hexa`) stay WARNING via the `_types_strict_for` path carve-out. No env opt-out or severity switch. Fix: use a variant of the scrutinee's enum in the pattern, or match on a value of the pattern's enum.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,

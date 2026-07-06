@@ -1237,6 +1237,19 @@ let mut _types_struct_field_counts: [i64] = []
 let mut _types_struct_field_names: [string] = []
 let mut _types_struct_field_typenames: [string] = []
 
+// R5-r1 (ap) — enum-name existence probe over the RFC-074 registry
+// (`_types_enum_names`, populated at `_collect_item_types` time). Used by the
+// wrong-enum match-pattern rule (HX3030) to fire ONLY when both the scrutinee
+// enum and the pattern's `Enum::Variant` head resolve to a REGISTERED enum.
+fn _types_enum_registry_has(name: string) -> bool {
+    let mut i = 0
+    while i < len(_types_enum_names) {
+        if _types_enum_names[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
 fn _types_struct_registry_reset() {
     _types_struct_names = []
     _types_struct_field_offsets = []
@@ -2073,6 +2086,23 @@ fn _emit_hx3026(actual: Type, field: string, sp: Span, out: array) {
     b = diag_span(b, sp)
     b = diag_arg(b, "actual", _type_display(actual))
     b = diag_arg(b, "field", field)
+    if _types_strict_for(sp.file) {
+        out.push(diag_emit(b))
+    } else {
+        out.push(diag_emit_sev(b, Severity::Warning))
+    }
+}
+
+// static-types R5-r1 (ap) — wrong-enum match-pattern REJECT (Rust E0308).
+// `expected` = the scrutinee's enum, `actual`::`variant` = the pattern head.
+// HX3011 band policy: real source → build-refusing Error (REJECT), byte-eq
+// test fixtures stay Warning via the `_types_strict_for` path carve-out.
+fn _emit_hx3030(expected: string, actual: string, variant: string, sp: Span, out: array) {
+    let mut b = diag_new("HX3030")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "expected", expected)
+    b = diag_arg(b, "actual", actual)
+    b = diag_arg(b, "variant", variant)
     if _types_strict_for(sp.file) {
         out.push(diag_emit(b))
     } else {
@@ -3821,6 +3851,27 @@ fn _check_match(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                     if !_types_assignable(scrut_t, pt, pat_i) {
                         _emit_hx3011(scrut_t, pt, pat_i.span, out)
                     }
+                }
+            }
+            // static-types R5-r1 (ap) — wrong-enum match pattern REJECT (Rust
+            // E0308, rustc_hir_typeck check_pat → demand::eqtype: a pattern
+            // naming a variant of enum `Dir` on a scrutinee of enum `Color` can
+            // never match). Fires ONLY when BOTH sides resolve to REGISTERED
+            // enums and differ (unknown/cross-module head, struct-typed
+            // scrutinee, HexaVal → silent; guarded arms stay on the discard
+            // path above — documented conservative false-negative, r9c shape).
+            if _types_is_enum_path_kind(pat_i.kind) {
+                let phead = _types_resolve_alias_name(_types_enum_path_head(pat_i.text))
+                let mut sename = _types_struct_name_of(scrut_t.kind)
+                if len(sename) == 0 && _types_is_ident(e.children[0].kind) && len(e.children[0].text) > 0 {
+                    // block-local `let c: Color` scrutinee — recover via the r5 `{}name` slot
+                    sename = _types_struct_name_of(_types_env_lookup(env, "{}" + e.children[0].text).kind)
+                }
+                let sh = _types_resolve_alias_name(sename)
+                if len(phead) > 0 && len(sh) > 0
+                    && _types_enum_registry_has(sh) && _types_enum_registry_has(phead)
+                    && phead != sh {
+                    _emit_hx3030(sh, phead, _types_enum_path_tail(pat_i.text), pat_i.span, out)
                 }
             }
         }
