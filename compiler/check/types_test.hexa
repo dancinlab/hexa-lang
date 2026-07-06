@@ -694,6 +694,37 @@ fn _build_case_coerce_arg() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (ah) segment(b) Rung B — actual-`unit` permissive guard on the return (2784),
+// assign (3024), and module-let (5073) sites. A `<expr>` that infers `unit` (an
+// unannotated-return call) must not fire HX3004/HX3001, mirroring call-arg/if-join.
+// Covers: fn v() unit · return v() (0 HX3004, guard) · bare `return` (1 HX3004,
+// E0069 control — must still fire) · g = v() (0 HX3001, guard) · module-let
+// W: i64 = v() (0 HX3001, guard). Expect exactly 1 HX3004 (bare only) + 0 HX3001.
+fn _build_case_actual_unit_guard() -> Module {
+    let f = "case_actual_unit.hexa"
+    // fn v() { }   — no return annotation → infers unit
+    let item_v = _fn_item("v", [], _empty_type_ref(), _block([], f, 1, 10), f, 1)
+    // fn f() -> i64 { return v() }   — return-expr unit → suppressed (0 HX3004)
+    let ret_call = _return_expr(_call_expr(_ident_expr("v", f, 2, 22), [], f, 2, 22), f, 2, 15)
+    let item_f = _fn_item("f", [], _named_type_ref("i64"), _block([ret_call], f, 2, 1), f, 2)
+    // fn h() -> i64 { return }   — bare return (no children) → HX3004 (E0069, fires)
+    let bare_ret = Expr { kind: ExprKind::Return, span: _span(f, 3, 15, 6), text: "", annotations: [], children: [], atlas_ref: _empty_atlas_ref() }
+    let item_h = _fn_item("h", [], _named_type_ref("i64"), _block([bare_ret], f, 3, 1), f, 3)
+    // fn a() { let g: i64 = 0  g = v() }   — assign unit → suppressed (0 HX3001)
+    let let_g = Expr { kind: ExprKind::Let, span: _span(f, 4, 5, 3), text: "g|i64", annotations: [], children: [_int_expr("0", f, 4, 18)], atlas_ref: _empty_atlas_ref() }
+    let asg = _assign_expr(_ident_expr("g", f, 5, 5), _call_expr(_ident_expr("v", f, 5, 9), [], f, 5, 9), f, 5, 7)
+    let item_a = _fn_item("a", [], _empty_type_ref(), _block([let_g, asg], f, 4, 1), f, 4)
+    // module let W: i64 = v()   — module-let unit → suppressed (0 HX3001)
+    let item_w = Item { kind: ItemKind::Let, name: "W", span: _span(f, 6, 1, 1), annotations: [], params: [], return_type: _named_type_ref("i64"), body: _call_expr(_ident_expr("v", f, 6, 12), [], f, 6, 12), is_pub: false }
+    let mut items = []
+    items.push(item_v)
+    items.push(item_f)
+    items.push(item_h)
+    items.push(item_a)
+    items.push(item_w)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // (d) FAIL HX3001: 1 + true — binop operand mismatch
 fn _build_case_d() -> Module {
     let f = "case_d.hexa"
@@ -1291,6 +1322,175 @@ fn _build_case_static_types_r9c() -> Module {
     let mut fparams = []
     fparams.push(_param("n", "i64", f, 1, 6))
     let item_f = _fn_item("f", fparams, _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (af) segment(b) HX3005 coercion-faithfulness — match arm-body join now uses
+// _types_assignable (like the if/else join). first arm body `a` fixes first_t=i32
+// (typed param ident, not a literal → conservative first-arm-literal boundary
+// N/A). arm `"s"` (string vs i32) still REJECTs (positive, stays); arm `3`
+// (int-lit vs i32) now COERCEs. Expect exactly 1 HX3005 (pre-fix: 2) + it stays
+// Error (unbanded) + 0 HX3011 (int-lit patterns `1`/`2` coerce vs i32 scrutinee).
+fn _build_case_hx3005_join_coerce() -> Module {
+    let f = "case_hx3005_join.hexa"
+    let mut arms = []
+    // 1 -> a      first_t = i32 (typed param ident)
+    arms.push(_int_expr("1", f, 3, 9))
+    arms.push(_ident_expr("a", f, 3, 14))
+    // 2 -> "s"    string body vs i32 → HX3005 (positive, must stay)
+    arms.push(_int_expr("2", f, 4, 9))
+    arms.push(_string_expr("s", f, 4, 14))
+    // _ -> 3      int-lit body vs i32 → coerce clean (pre-fix: HX3005)
+    arms.push(_wildcard_expr(f, 5, 9))
+    arms.push(_int_expr("3", f, 5, 14))
+    let m = _match_expr(_ident_expr("a", f, 2, 11), arms, f, 2, 5)
+    let mut kids = []
+    kids.push(m)
+    let body = _block(kids, f, 2, 1)
+    let mut fparams = []
+    fparams.push(_param("a", "i32", f, 1, 6))
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (ag) segment(b) HX3005 match-join unit-permissive guard — an arm body that
+// infers `unit` (unannotated-return call) must not error, mirroring the if/else
+// join. `match c { 1 -> v(), _ -> 3 }` where `fn v()` has no return annotation
+// → first_t=unit → guard suppresses. Expect 0 HX3005 (pre-guard: 1).
+fn _build_case_hx3005_join_unit() -> Module {
+    let f = "case_hx3005_unit.hexa"
+    // fn v() { }   — no return annotation → infers unit
+    let mut vkids = []
+    let item_v = _fn_item("v", [], _empty_type_ref(), _block(vkids, f, 1, 10), f, 1)
+    // fn f(c: i64) { match c { 1 -> v(), _ -> 3 } }
+    let mut arms = []
+    arms.push(_int_expr("1", f, 4, 9))
+    arms.push(_call_expr(_ident_expr("v", f, 4, 14), [], f, 4, 14))
+    arms.push(_wildcard_expr(f, 5, 9))
+    arms.push(_int_expr("3", f, 5, 14))
+    let m = _match_expr(_ident_expr("c", f, 3, 11), arms, f, 3, 5)
+    let mut fkids = []
+    fkids.push(m)
+    let mut fparams = []
+    fparams.push(_param("c", "i64", f, 3, 6))
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), _block(fkids, f, 3, 1), f, 3)
+    let mut items = []
+    items.push(item_v)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (ai) segment(b) HX3025 index-on-scalar REJECT (Rust E0608). `n[0]` on a KNOWN
+// scalar (n: i64) → 1 HX3025 Error; `xs[0]` on `xs: [i64]` (array) → 0; `unk[0]`
+// on an unknown ident → 0 (conservative under-reject). Expect 1 HX3025 (error).
+fn _build_case_hx3025_index_scalar() -> Module {
+    let f = "case_hx3025.hexa"
+    // fn f(n: i64) -> i64 { let x = n[0]  return 0 }   — scalar index → HX3025
+    let fx = _let_expr("x", _index_expr(_ident_expr("n", f, 2, 13), _int_expr("0", f, 2, 15), f, 2, 14), f, 2, 5)
+    let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
+    let mut pf = []
+    pf.push(_param("n", "i64", f, 1, 6))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 1, 1), f, 1)
+    // fn g(xs: [i64]) -> i64 { let y = xs[0]  return 0 }   — array index → clean
+    let gy = _let_expr("y", _index_expr(_ident_expr("xs", f, 5, 13), _int_expr("0", f, 5, 16), f, 5, 15), f, 5, 5)
+    let gr = _return_expr(_int_expr("0", f, 6, 12), f, 6, 5)
+    let mut pg = []
+    pg.push(_param("xs", "[i64]", f, 4, 6))
+    let item_g = _fn_item("g", pg, _named_type_ref("i64"), _block([gy, gr], f, 4, 1), f, 4)
+    // fn h() { let z = unk[0] }   — unknown base → silent (under-reject)
+    let hz = _let_expr("z", _index_expr(_ident_expr("unk", f, 8, 13), _int_expr("0", f, 8, 17), f, 8, 16), f, 8, 5)
+    let item_h = _fn_item("h", [], _empty_type_ref(), _block([hz], f, 8, 1), f, 8)
+    let mut items = []
+    items.push(item_f)
+    items.push(item_g)
+    items.push(item_h)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (aj) HX3025 fixture carve-out — identical scalar-index AST on a byte-eq
+// TEST-FIXTURE path (`*_test.hexa`) stays WARNING via _types_strict_for.
+fn _build_case_hx3025_fixture() -> Module {
+    let f = "case_hx3025_test.hexa"
+    let fx = _let_expr("x", _index_expr(_ident_expr("n", f, 2, 13), _int_expr("0", f, 2, 15), f, 2, 14), f, 2, 5)
+    let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
+    let mut pf = []
+    pf.push(_param("n", "i64", f, 1, 6))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 1, 1), f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (ak) R1 — binop operand literal-aware BIDIRECTIONAL coercion. Bare
+// `_types_equal(lt, rt)` false-fired HX3001 on `a_i32 + 1` / `a_i32 < 2`: the
+// literal `1`/`2` infers i64 (universal int-literal), so i32≠i64 mis-rejected a
+// build-legal line. Rust E0308 unifies an untyped int/float literal with the
+// typed operand, so the swap to `_types_assignable` (keyed on the operand's
+// literal kind, checked in BOTH directions since the literal can sit on either
+// side) coerces those two lines clean — while a typed ident-pair mismatch
+// (`a_i32 + b_i64`, neither a literal) and a non-numeric operand (`a - "s"`,
+// reaches the mismatch branch) STILL reject (Rust-parity). Pre-fix = 4 HX3001;
+// post-fix = exactly 2 (the two genuine mismatches).
+//   fn f(a: i32, b: i64) {
+//       let x = a + 1     // int-lit coerces to i32 → clean
+//       let c = a < 2     // int-lit coerces to i32 → clean
+//       let y = a - "s"   // non-numeric string operand → HX3001
+//       let w = a + b     // i32 × i64 ident pair → HX3001
+//   }
+fn _build_case_binop_literal_coerce() -> Module {
+    let f = "case_binop_lit.hexa"
+    let ex = _let_expr("x", _bin_expr("+", _ident_expr("a", f, 2, 13), _int_expr("1", f, 2, 17), f, 2, 15), f, 2, 5)
+    let ec = _let_expr("c", _bin_expr("<", _ident_expr("a", f, 3, 13), _int_expr("2", f, 3, 17), f, 3, 15), f, 3, 5)
+    let ey = _let_expr("y", _bin_expr("-", _ident_expr("a", f, 4, 13), _string_expr("s", f, 4, 17), f, 4, 15), f, 4, 5)
+    let ew = _let_expr("w", _bin_expr("+", _ident_expr("a", f, 5, 13), _ident_expr("b", f, 5, 17), f, 5, 15), f, 5, 5)
+    let mut pf = []
+    pf.push(_param("a", "i32", f, 1, 6))
+    pf.push(_param("b", "i64", f, 1, 14))
+    let item_f = _fn_item("f", pf, _empty_type_ref(), _block([ex, ec, ey, ew], f, 1, 1), f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (al) segment(b) HX3026 field-on-scalar REJECT (Rust E0610). A field READ
+// `n.foo` on a KNOWN scalar (n: i64) → 1 HX3026 Error; a real field of a struct
+// (`p.x`, p: Point) → 0; a builtin-method selector (`n.len`) → 0 (exempt); a
+// callee-position `n.foo()` → 0 HX3026 (callee-depth guard) + 1 HX2001. Expect
+// exactly 1 HX3026 (error) and exactly 1 HX2001 across the module.
+fn _build_case_hx3026_field_scalar() -> Module {
+    let f = "case_hx3026.hexa"
+    let mut sfields = []
+    sfields.push(_param("x", "i64", f, 1, 14))
+    sfields.push(_param("y", "i64", f, 1, 22))
+    let item_pt = _struct_item("Point", sfields, f, 1)
+    let s1 = _let_expr("x", _field_expr(_ident_expr("n", f, 4, 13), "foo", f, 4, 15), f, 4, 5)
+    let s2 = _let_expr("a", _field_expr(_ident_expr("p", f, 5, 13), "x", f, 5, 15), f, 5, 5)
+    let s3 = _let_expr("b", _field_expr(_ident_expr("n", f, 6, 13), "len", f, 6, 15), f, 6, 5)
+    let s4 = _let_expr("c", _call_expr(_field_expr(_ident_expr("n", f, 7, 13), "foo", f, 7, 15), [], f, 7, 18), f, 7, 5)
+    let fr = _return_expr(_int_expr("0", f, 8, 12), f, 8, 5)
+    let mut pf = []
+    pf.push(_param("n", "i64", f, 3, 6))
+    pf.push(_param("p", "Point", f, 3, 15))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([s1, s2, s3, s4, fr], f, 3, 1), f, 3)
+    let mut items = []
+    items.push(item_pt)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (am) HX3026 fixture carve-out — identical scalar-field-READ AST on a byte-eq
+// TEST-FIXTURE path (`*_test.hexa`) stays WARNING via _types_strict_for.
+fn _build_case_hx3026_fixture() -> Module {
+    let f = "case_hx3026_test.hexa"
+    let fx = _let_expr("x", _field_expr(_ident_expr("n", f, 2, 13), "foo", f, 2, 15), f, 2, 5)
+    let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
+    let mut pf = []
+    pf.push(_param("n", "i64", f, 1, 6))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 1, 1), f, 1)
     let mut items = []
     items.push(item_f)
     return Module { file: f, items: items, imports: [] }
@@ -2217,6 +2417,105 @@ fn main() {
         ok = false
     } else {
         println("  ok: 2 HX3003 (str→i32 + int-lit→f32 reject; take32(0)/dynp(1) coerce clean) — E0308 demand_coerce faithfulness")
+    }
+
+    // (af) segment(b) HX3005 coercion-faithfulness — match arm-body join
+    // _types_equal→_types_assignable (like the if/else join). `match a { 1 -> a,
+    // 2 -> "s", _ -> 3 }`: string arm REJECTs (stays), int-lit arm `3` coerces to
+    // i32. Expect 1 HX3005 (pre-fix 2) + Error-severity (unbanded) + 0 HX3011.
+    let diags_af = _run_case("(af) static-types segment(b) — match arm-body join coercion (int-lit→i32 coerce · string reject) (HX3005)", _build_case_hx3005_join_coerce())
+    let naf = _count_code(diags_af, "HX3005")
+    let naf_err = _count_code_sev(diags_af, "HX3005", "error")
+    let naf_3011 = _count_code(diags_af, "HX3011")
+    if naf != 1 || naf_err != 1 || naf_3011 != 0 {
+        println("  FAIL: case (af) expected 1 HX3005 as ERROR (string arm; int-lit arm coerces) + 0 HX3011, got " + to_string(naf) + " HX3005 (" + to_string(naf_err) + " error) / " + to_string(naf_3011) + " HX3011 (total=" + to_string(len(diags_af)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3005 as ERROR (string arm reject; int-lit `3` coerces to i32) — match join E0308 demand_coerce faithfulness")
+    }
+
+    // (ag) segment(b) HX3005 match-join unit-permissive guard — arm body inferring
+    // `unit` (unannotated-return call) suppressed, mirroring the if/else join.
+    let diags_ag = _run_case("(ag) static-types segment(b) — match-join unit-permissive guard (unit arm suppressed) (HX3005)", _build_case_hx3005_join_unit())
+    let nag = _count_code(diags_ag, "HX3005")
+    if nag != 0 {
+        println("  FAIL: case (ag) expected 0 HX3005 (unit arm suppressed by guard), got " + to_string(nag) + " (total=" + to_string(len(diags_ag)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3005 (unit-inferring arm `v()` suppressed by unit-permissive guard) — if/else-join parity")
+    }
+
+    // (ah) segment(b) Rung B — actual-`unit` permissive guard (return/assign/module-let).
+    // return v() + g = v() + module-let W = v() suppressed; bare `return` still fires (E0069).
+    let diags_ah = _run_case("(ah) static-types segment(b) — actual-unit permissive guard (return/assign/module-let · bare-return preserved) (HX3004/HX3001)", _build_case_actual_unit_guard())
+    let nah_3004 = _count_code(diags_ah, "HX3004")
+    let nah_3001 = _count_code(diags_ah, "HX3001")
+    if nah_3004 != 1 || nah_3001 != 0 {
+        println("  FAIL: case (ah) expected 1 HX3004 (bare return only; return v() suppressed) + 0 HX3001 (assign/module-let v() suppressed), got " + to_string(nah_3004) + " HX3004 / " + to_string(nah_3001) + " HX3001 (total=" + to_string(len(diags_ah)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3004 (bare `return` fires E0069; `return v()` suppressed) + 0 HX3001 (assign/module-let unit suppressed) — actual-unit guard parity")
+    }
+
+    // (ai) segment(b) HX3025 index-on-scalar REJECT (Rust E0608) — `n[0]` on a
+    // scalar → Error; array/unknown base → silent (conservative under-reject).
+    let diags_ai = _run_case("(ai) static-types segment(b) — index-on-scalar REJECT (n[0] scalar / xs[0] array clean / unk[0] silent) (HX3025)", _build_case_hx3025_index_scalar())
+    let nai = _count_code(diags_ai, "HX3025")
+    let nai_err = _count_code_sev(diags_ai, "HX3025", "error")
+    if nai != 1 || nai_err != 1 {
+        println("  FAIL: case (ai) expected 1 HX3025 as ERROR (n[0] scalar; xs[0] array + unk[0] unknown clean), got " + to_string(nai) + " HX3025 (" + to_string(nai_err) + " error) (total=" + to_string(len(diags_ai)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3025 as ERROR (scalar `n[0]` reject; array `xs[0]` + unknown `unk[0]` silent) — E0608 index-on-scalar")
+    }
+
+    // (aj) HX3025 fixture carve-out — identical AST on a *_test.hexa path → WARNING.
+    let diags_aj = _run_case("(aj) static-types segment(b) — HX3025 fixture carve-out (*_test.hexa scalar index)", _build_case_hx3025_fixture())
+    let naj = _count_code(diags_aj, "HX3025")
+    let naj_warn = _count_code_sev(diags_aj, "HX3025", "warning")
+    if naj != 1 || naj_warn != 1 {
+        println("  FAIL: case (aj) expected 1 HX3025 as WARNING (fixture carve-out), got " + to_string(naj) + " HX3025 (" + to_string(naj_warn) + " warn) (total=" + to_string(len(diags_aj)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3025 as WARNING (flagless fixture carve-out: *_test.hexa path stays warn-band)")
+    }
+
+    // (ak) R1 binop literal-aware BIDIRECTIONAL coercion — `a_i32 + 1` and
+    // `a_i32 < 2` coerce clean (Rust E0308 unifies the untyped literal), while
+    // `a - "s"` (non-numeric) and `a + b` (i32×i64 ident pair) STILL reject.
+    let diags_ak = _run_case("(ak) static-types R1 — binop literal-aware coercion (a+1 / a<2 coerce · a-\"s\" / a+b reject) (HX3001)", _build_case_binop_literal_coerce())
+    let nak = _count_code(diags_ak, "HX3001")
+    let nak_err = _count_code_sev(diags_ak, "HX3001", "error")
+    if nak != 2 || nak_err != 2 {
+        println("  FAIL: case (ak) expected exactly 2 HX3001 as ERROR (a-\"s\" non-numeric + a+b i32×i64 ident pair; a+1/a<2 coerce), got " + to_string(nak) + " HX3001 (" + to_string(nak_err) + " error) (total=" + to_string(len(diags_ak)) + ")")
+        ok = false
+    } else {
+        println("  ok: exactly 2 HX3001 (a-\"s\" + a+b reject; a+1/a<2 literal-coerce clean) — E0308 literal unification")
+    }
+
+    // (al) segment(b) HX3026 field-on-scalar REJECT (Rust E0610) — `n.foo` on a
+    // scalar → Error; real struct field / builtin selector / callee position →
+    // silent (callee-depth guard yields the single HX2001 for `n.foo()`).
+    let diags_al = _run_case("(al) static-types segment(b) — field-on-scalar REJECT (n.foo scalar / p.x struct clean / n.len builtin exempt / n.foo() callee→HX2001) (HX3026)", _build_case_hx3026_field_scalar())
+    let nal = _count_code(diags_al, "HX3026")
+    let nal_err = _count_code_sev(diags_al, "HX3026", "error")
+    let nal_2001 = _count_code(diags_al, "HX2001")
+    if nal != 1 || nal_err != 1 || nal_2001 != 1 {
+        println("  FAIL: case (al) expected 1 HX3026 as ERROR (n.foo scalar; p.x + n.len clean) + 1 HX2001 (n.foo() callee), got " + to_string(nal) + " HX3026 (" + to_string(nal_err) + " error), " + to_string(nal_2001) + " HX2001 (total=" + to_string(len(diags_al)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3026 as ERROR (scalar `n.foo` reject; `p.x` struct + `n.len` builtin silent) + 1 HX2001 (`n.foo()` callee, no HX3026 double-report) — E0610 field-on-primitive")
+    }
+
+    // (am) HX3026 fixture carve-out — identical AST on a *_test.hexa path → WARNING.
+    let diags_am = _run_case("(am) static-types segment(b) — HX3026 fixture carve-out (*_test.hexa scalar field)", _build_case_hx3026_fixture())
+    let nam = _count_code(diags_am, "HX3026")
+    let nam_warn = _count_code_sev(diags_am, "HX3026", "warning")
+    if nam != 1 || nam_warn != 1 {
+        println("  FAIL: case (am) expected 1 HX3026 as WARNING (fixture carve-out), got " + to_string(nam) + " HX3026 (" + to_string(nam_warn) + " warn) (total=" + to_string(len(diags_am)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3026 as WARNING (flagless fixture carve-out: *_test.hexa path stays warn-band)")
     }
 
     println("")
