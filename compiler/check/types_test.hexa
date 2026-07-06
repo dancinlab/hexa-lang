@@ -1509,6 +1509,61 @@ fn _build_case_hx3030_fixture() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (aq) R6-rD — wrong-enum `==`/`!=` compare REJECT (Rust E0308). Module:
+//   enum Color { Red, Green }
+//   enum Dir   { North, South }
+//   fn f(c: Color) {
+//       let a = c == Dir::North   // wrong enum → HX3033
+//       let b = c == Color::Red   // same enum → clean
+//   }
+// The `c == Dir::North` compare → 1 HX3033 Error; `c == Color::Red` (same enum)
+// is clean. The param scrutinee `c` carries `named:Color` directly, pinning the
+// value-operand recovery path (the sibling of HX3030's scrutinee recovery).
+fn _build_case_hx3033_wrong_enum_compare() -> Module {
+    let f = "case_hx3033.hexa"
+    let mut cvars = []
+    cvars.push(_variant_unit("Red", f, 1, 13))
+    cvars.push(_variant_unit("Green", f, 1, 18))
+    let item_color = _enum_item("Color", cvars, f, 1)
+    let mut dvars = []
+    dvars.push(_variant_unit("North", f, 2, 11))
+    dvars.push(_variant_unit("South", f, 2, 18))
+    let item_dir = _enum_item("Dir", dvars, f, 2)
+    let ea = _let_expr("a", _bin_expr("==", _ident_expr("c", f, 4, 13), _enum_path("Dir", "North", [], f, 4, 18), f, 4, 15), f, 4, 5)
+    let eb = _let_expr("b", _bin_expr("==", _ident_expr("c", f, 5, 13), _enum_path("Color", "Red", [], f, 5, 18), f, 5, 15), f, 5, 5)
+    let mut fparams = []
+    fparams.push(_param("c", "Color", f, 3, 6))
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), _block([ea, eb], f, 3, 1), f, 3)
+    let mut items = []
+    items.push(item_color)
+    items.push(item_dir)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (aq) HX3033 fixture carve-out — identical wrong-enum compare AST on a byte-eq
+// TEST-FIXTURE path (`*_test.hexa`) stays WARNING via _types_strict_for.
+fn _build_case_hx3033_fixture() -> Module {
+    let f = "case_hx3033_test.hexa"
+    let mut cvars = []
+    cvars.push(_variant_unit("Red", f, 1, 13))
+    cvars.push(_variant_unit("Green", f, 1, 18))
+    let item_color = _enum_item("Color", cvars, f, 1)
+    let mut dvars = []
+    dvars.push(_variant_unit("North", f, 2, 11))
+    dvars.push(_variant_unit("South", f, 2, 18))
+    let item_dir = _enum_item("Dir", dvars, f, 2)
+    let ea = _let_expr("a", _bin_expr("==", _ident_expr("c", f, 4, 13), _enum_path("Dir", "North", [], f, 4, 18), f, 4, 15), f, 4, 5)
+    let mut fparams = []
+    fparams.push(_param("c", "Color", f, 3, 6))
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), _block([ea], f, 3, 1), f, 3)
+    let mut items = []
+    items.push(item_color)
+    items.push(item_dir)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // (ak) R1 — binop operand literal-aware BIDIRECTIONAL coercion. Bare
 // `_types_equal(lt, rt)` false-fired HX3001 on `a_i32 + 1` / `a_i32 < 2`: the
 // literal `1`/`2` infers i64 (universal int-literal), so i32≠i64 mis-rejected a
@@ -1665,6 +1720,75 @@ fn _build_case_hx3025_string_index() -> Module {
 fn _build_case_hx3025_string_fixture() -> Module {
     let f = "case_hx3025_string_test.hexa"
     let fx = _let_expr("x", _index_expr(_ident_expr("s", f, 2, 13), _int_expr("0", f, 2, 15), f, 2, 14), f, 2, 5)
+    let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
+    let mut pf = []
+    pf.push(_param("s", "string", f, 1, 6))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 1, 1), f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (aq) R5-r2 — let-RHS BinOp + leaves-known gate (HX3011, Rust E0308). A typed
+// `let` whose BinOp RHS infers a KNOWN-scalar type that disagrees with the
+// annotation REJECTs; an unknown leaf disqualifies the tree (silent). Builds
+//   fn f(a: i64, b: i64, c: i32) -> i64 {
+//       let x: i32 = a + b     // both i64 → result i64 ≠ i32  → 1 HX3011
+//       let v: i32 = c + 1     // i32 + lit → i32 (R1 coerce)  → 0 (clean)
+//       let z: i32 = a + u     // u unresolved → leaves-known false → 0 HX3011
+//   }                          //   (may add HX2001 for `u`; we count HX3011 only)
+fn _build_case_let_binop_leaves_known() -> Module {
+    let f = "case_let_binop.hexa"
+    let ex = _let_expr("x|i32", _bin_expr("+", _ident_expr("a", f, 2, 18), _ident_expr("b", f, 2, 22), f, 2, 20), f, 2, 5)
+    let ev = _let_expr("v|i32", _bin_expr("+", _ident_expr("c", f, 3, 18), _int_expr("1", f, 3, 22), f, 3, 20), f, 3, 5)
+    let ez = _let_expr("z|i32", _bin_expr("+", _ident_expr("a", f, 4, 18), _ident_expr("u", f, 4, 22), f, 4, 20), f, 4, 5)
+    let mut pf = []
+    pf.push(_param("a", "i64", f, 1, 6))
+    pf.push(_param("b", "i64", f, 1, 14))
+    pf.push(_param("c", "i32", f, 1, 22))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([ex, ev, ez], f, 1, 1), f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (aq) R5-r2 fixture carve-out — identical typed-let BinOp on a *_test.hexa
+// path → the one REJECT stays WARNING via _types_strict_for.
+fn _build_case_let_binop_fixture() -> Module {
+    let f = "case_let_binop_test.hexa"
+    let ex = _let_expr("x|i32", _bin_expr("+", _ident_expr("a", f, 2, 18), _ident_expr("b", f, 2, 22), f, 2, 20), f, 2, 5)
+    let mut pf = []
+    pf.push(_param("a", "i64", f, 1, 6))
+    pf.push(_param("b", "i64", f, 1, 14))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([ex], f, 1, 1), f, 1)
+// (ar) R6 rung C — segment(b) HX3026 STRING-arm (Rust E0610). A field READ
+// `s.foo` on a KNOWN string base → 1 HX3026 (E0610; a string primitive carries
+// no user field slots). `s.chars()` is a METHOD dispatched from the callee
+// position (depth > 0) → 0 (callee-depth guard + `_is_builtin_method` exempt).
+// Expect 1 HX3026 error. Mirrors the HX3025 string-index arm (#4626).
+fn _build_case_hx3026_string_field() -> Module {
+    let f = "case_hx3026_string.hexa"
+    let fx = _let_expr("n", _field_expr(_ident_expr("s", f, 2, 13), "foo", f, 2, 15), f, 2, 5)
+    let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
+    let mut pf = []
+    pf.push(_param("s", "string", f, 1, 6))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 1, 1), f, 1)
+    let gcs = _let_expr("cs", _call_expr(_field_expr(_ident_expr("s", f, 5, 14), "chars", f, 5, 16), [], f, 5, 22), f, 5, 5)
+    let gr = _return_expr(_int_expr("0", f, 6, 12), f, 6, 5)
+    let mut pg = []
+    pg.push(_param("s", "string", f, 4, 6))
+    let item_g = _fn_item("g", pg, _named_type_ref("i64"), _block([gcs, gr], f, 4, 1), f, 4)
+    let mut items = []
+    items.push(item_f)
+    items.push(item_g)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (ar) HX3026 string-arm fixture carve-out — identical string-field-READ AST on
+// a *_test.hexa path → WARNING via _types_strict_for.
+fn _build_case_hx3026_string_fixture() -> Module {
+    let f = "case_hx3026_string_test.hexa"
+    let fx = _let_expr("n", _field_expr(_ident_expr("s", f, 2, 13), "foo", f, 2, 15), f, 2, 5)
     let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
     let mut pf = []
     pf.push(_param("s", "string", f, 1, 6))
@@ -2754,6 +2878,69 @@ fn main() {
         ok = false
     } else {
         println("  ok: 1 HX3030 as WARNING (wrong-enum fixture carve-out: *_test.hexa stays warn-band)")
+    }
+
+    // (aq) R5-r2 — let-RHS BinOp + leaves-known gate (HX3011, Rust E0308).
+    let diags_aq = _run_case("(aq) static-types R5-r2 — typed-let BinOp REJECT (a_i64+b_i64→i32 rejects; c_i32+1 coerces clean; a+u_unknown leaves-known-false silent) (HX3011)", _build_case_let_binop_leaves_known())
+    let caq = _count_code(diags_aq, "HX3011")
+    let caq_err = _count_code_sev(diags_aq, "HX3011", "error")
+    if caq != 1 || caq_err != 1 {
+        println("  FAIL: case (aq) expected 1 HX3011 as ERROR (a+b i64→i32 reject; c+1 clean; a+u silent), got " + to_string(caq) + " HX3011 (" + to_string(caq_err) + " error) (total=" + to_string(len(diags_aq)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3011 as ERROR (typed-let BinOp: a+b i64 vs i32 reject; c+1 coerce clean; a+u_unknown leaves-known-false silent) — E0308 let-RHS binop")
+    }
+
+    // (aq) R5-r2 fixture carve-out — same typed-let BinOp on *_test.hexa → WARNING.
+    let diags_aqf = _run_case("(aq) static-types R5-r2 — HX3011 let-BinOp fixture carve-out (*_test.hexa typed-let binop)", _build_case_let_binop_fixture())
+    let caqf = _count_code(diags_aqf, "HX3011")
+    let caqf_warn = _count_code_sev(diags_aqf, "HX3011", "warning")
+    if caqf != 1 || caqf_warn != 1 {
+        println("  FAIL: case (aq) fixture expected 1 HX3011 as WARNING (fixture carve-out), got " + to_string(caqf) + " HX3011 (" + to_string(caqf_warn) + " warn) (total=" + to_string(len(diags_aqf)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3011 as WARNING (let-BinOp fixture carve-out: *_test.hexa stays warn-band)")
+    // (ar) R6 rung C — segment(b) HX3026 STRING-arm (Rust E0610) — `s.foo` on a
+    // KNOWN string base → 1 HX3026 error; `s.chars()` (method, callee depth>0) → 0.
+    let diags_ar = _run_case("(ar) static-types R6 rung C — field-on-string REJECT (s.foo string / s.chars() method clean) (HX3026)", _build_case_hx3026_string_field())
+    let car = _count_code(diags_ar, "HX3026")
+    let car_err = _count_code_sev(diags_ar, "HX3026", "error")
+    if car != 1 || car_err != 1 {
+        println("  FAIL: case (ar) expected 1 HX3026 as ERROR (s.foo string reject; s.chars() method clean), got " + to_string(car) + " HX3026 (" + to_string(car_err) + " error) (total=" + to_string(len(diags_ar)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3026 as ERROR (string `s.foo` reject; `s.chars()` method callee silent) — E0610 field-on-string")
+    }
+
+    // (ar) HX3026 string-arm fixture carve-out — *_test.hexa path → WARNING.
+    let diags_arf = _run_case("(ar) static-types R6 rung C — HX3026 string-arm fixture carve-out (*_test.hexa string field)", _build_case_hx3026_string_fixture())
+    let carf = _count_code(diags_arf, "HX3026")
+    let carf_warn = _count_code_sev(diags_arf, "HX3026", "warning")
+    if carf != 1 || carf_warn != 1 {
+        println("  FAIL: case (ar) fixture expected 1 HX3026 as WARNING (fixture carve-out), got " + to_string(carf) + " HX3026 (" + to_string(carf_warn) + " warn) (total=" + to_string(len(diags_arf)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3026 as WARNING (string-field fixture carve-out: *_test.hexa stays warn-band)")
+    // (as) R6-rD — wrong-enum `==`/`!=` compare REJECT (Rust E0308).
+    let diags_as = _run_case("(as) static-types R6-rD — wrong-enum compare REJECT (c == Dir::North → 1 HX3033 / c == Color::Red same-enum clean) (HX3033)", _build_case_hx3033_wrong_enum_compare())
+    let cas = _count_code(diags_as, "HX3033")
+    let cas_err = _count_code_sev(diags_as, "HX3033", "error")
+    if cas != 1 || cas_err != 1 {
+        println("  FAIL: case (as) expected 1 HX3033 as ERROR (c == Dir::North wrong-enum; c == Color::Red same-enum clean), got " + to_string(cas) + " HX3033 (" + to_string(cas_err) + " error) (total=" + to_string(len(diags_as)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3033 as ERROR (wrong-enum `c == Dir::North`; same-enum `c == Color::Red` silent) — E0308 mismatched enum in comparison")
+    }
+
+    // (as) HX3033 fixture carve-out — *_test.hexa path → WARNING.
+    let diags_asf = _run_case("(as) static-types R6-rD — HX3033 fixture carve-out (*_test.hexa wrong-enum compare)", _build_case_hx3033_fixture())
+    let casf = _count_code(diags_asf, "HX3033")
+    let casf_warn = _count_code_sev(diags_asf, "HX3033", "warning")
+    if casf != 1 || casf_warn != 1 {
+        println("  FAIL: case (as) fixture expected 1 HX3033 as WARNING (fixture carve-out), got " + to_string(casf) + " HX3033 (" + to_string(casf_warn) + " warn) (total=" + to_string(len(diags_asf)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3033 as WARNING (wrong-enum compare fixture carve-out: *_test.hexa stays warn-band)")
     }
 
     println("")
