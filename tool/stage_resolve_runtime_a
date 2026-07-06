@@ -704,7 +704,7 @@ resolve_native_float_parse_exact_seed() {
 # RECONVERGE-flip gated on Blacksmith byteeq x86_64 + arm64-linux + darwin-arm64 GREEN
 # + the tail-corpus-vs-host-libc oracle (both glibc and Apple), never on mini.
 resolve_native_float_parse_hexinfnan_seed() {
-    [ "${HEXA_RT_STRTOD_TAIL_NATIVE:-0}" = "1" ] || return 0        # opt-IN only (default-OFF)
+    [ "${HEXA_RT_STRTOD_TAIL_NATIVE:-1}" = "1" ] || return 0        # DEFAULT-ON (opt-out with =0) — native hex/inf/nan tail matches glibc strtod bit-exact (T_mis=0, aiden n=140,678); flip after the 176→5→0 accuracy rounds (#4639/#4645/#4646)
     [ -f build/float_parse_hexinfnan_native.o ] && { export HEXA_RT_STRTOD_TAIL_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"
