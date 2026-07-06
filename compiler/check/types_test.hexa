@@ -2567,10 +2567,10 @@ fn main() {
     // the `.chars()`-then-index control stays clean (unknown local base →
     // conservative under-reject silent). Fixture path stays WARNING.
     let diags_an = _run_case("(an) static-types R1 — string-index REJECT (s[0] string / cs[0] via chars() clean) (HX3025)", _build_case_hx3025_string_index())
-    let nan = _count_code(diags_an, "HX3025")
+    let n_an = _count_code(diags_an, "HX3025")
     let nan_err = _count_code_sev(diags_an, "HX3025", "error")
-    if nan != 1 || nan_err != 1 {
-        println("  FAIL: case (an) expected 1 HX3025 as ERROR (s[0] string reject; cs[0] via chars() clean), got " + to_string(nan) + " HX3025 (" + to_string(nan_err) + " error) (total=" + to_string(len(diags_an)) + ")")
+    if n_an != 1 || nan_err != 1 {
+        println("  FAIL: case (an) expected 1 HX3025 as ERROR (s[0] string reject; cs[0] via chars() clean), got " + to_string(n_an) + " HX3025 (" + to_string(nan_err) + " error) (total=" + to_string(len(diags_an)) + ")")
         ok = false
     } else {
         println("  ok: 1 HX3025 as ERROR (string `s[0]` reject; `cs = s.chars()` then `cs[0]` clean) — E0608 index-on-string")
