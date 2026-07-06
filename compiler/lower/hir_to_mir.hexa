@@ -852,6 +852,46 @@ fn _bck_emit_borrow_conflict(name: string, origin: string, new_mut: bool,
     _lr_diag.push(d)
 }
 
+// HX3028 emit (double-mutable-borrow, Rust E0499) — same-site dedup + STRICT
+// escalation, cloned from `_bck_emit_borrow_conflict`. Fired only for the
+// mut-while-mut split (both loans `&mut`); `name` is the new binding, `origin`
+// the twice-`&mut`-borrowed value, `new_mut` the new borrow's kind (always
+// true here), `other` / `other_mut` / `other_line` the existing live `&mut`
+// loan. Shares the `_bck_e_*` dedup array with the E0502 sibling — the single
+// emit site (the E3.9 branch) means the two codes never contend on it.
+fn _bck_emit_double_mut(name: string, origin: string, new_mut: bool,
+                        other: string, other_mut: bool, other_line: i64,
+                        sp: Span) {
+    let mut di = 0
+    while di < len(_bck_e_lines) {
+        if _bck_e_lines[di] == sp.line && _bck_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_e_lines.push(sp.line)
+    _bck_e_cols.push(sp.col)
+    let mut b = diag_new("HX3028")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "origin", origin)
+    let mut _nk = "immutable"
+    if new_mut { _nk = "mutable" }
+    b = diag_arg(b, "new_kind", _nk)
+    b = diag_arg(b, "other", other)
+    let mut _ok = "immutable"
+    if other_mut { _ok = "mutable" }
+    b = diag_arg(b, "other_kind", _ok)
+    b = diag_arg(b, "other_line", to_string(other_line))
+    let mut d = diag_emit(b)
+    // STRICT (HEXA_BORROWCK_STRICT) re-bands the SAME diagnostic instance to a
+    // build-refusing Error via the sanctioned caller override — identical to
+    // the HX3014/HX3019/HX3021 escalation. OFF-strict keeps the catalog Warning
+    // band, and the flag-OFF path never reaches here (byteeq-neutral).
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
+}
+
 // HX3023 emit (write-through-while-borrowed, Rust E0506) — same-site dedup +
 // STRICT escalation, cloned from `_bck_emit_borrow_conflict`. `origin` is the
 // assigned value (the write target), `name` the borrowing binding, `borrow_mut`
@@ -3143,10 +3183,26 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                         let _bk_cfi = _bck_ref_find_conflict(_bk_refinner.text,
                                                              _bk_new_mut)
                         if _bk_cfi >= 0 {
-                            _bck_emit_borrow_conflict(nm, _bk_refinner.text,
-                                _bk_new_mut, _bck_ref_names[_bk_cfi],
-                                _bck_ref_mut[_bk_cfi], _bck_ref_lines[_bk_cfi],
-                                e.span)
+                            // HEXA-OWN E3.9 — E0499 faithfulness split. A
+                            // conflict where BOTH the existing live loan and the
+                            // new borrow are `&mut` is the "double mutable
+                            // borrow" case rustc reports as E0499 (a distinct
+                            // code from the shared-vs-mut E0502), so it is split
+                            // out to HX3028; every other conflict (`&`-while-
+                            // `&mut`, `&mut`-while-`&`) stays HX3021/E0502. The
+                            // branch is the SOLE HX3028 emit site → the shared
+                            // same-site dedup array can never contend.
+                            if _bck_ref_mut[_bk_cfi] && _bk_new_mut {
+                                _bck_emit_double_mut(nm, _bk_refinner.text,
+                                    _bk_new_mut, _bck_ref_names[_bk_cfi],
+                                    _bck_ref_mut[_bk_cfi], _bck_ref_lines[_bk_cfi],
+                                    e.span)
+                            } else {
+                                _bck_emit_borrow_conflict(nm, _bk_refinner.text,
+                                    _bk_new_mut, _bck_ref_names[_bk_cfi],
+                                    _bck_ref_mut[_bk_cfi], _bck_ref_lines[_bk_cfi],
+                                    e.span)
+                            }
                         }
                         _bck_ref_track(nm, _bk_refinner.text, e.span.line,
                                        _bk_new_mut)
