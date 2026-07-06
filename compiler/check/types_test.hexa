@@ -1761,6 +1761,11 @@ fn _build_case_let_binop_fixture() -> Module {
     pf.push(_param("a", "i64", f, 1, 6))
     pf.push(_param("b", "i64", f, 1, 14))
     let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([ex], f, 1, 1), f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // (ar) R6 rung C — segment(b) HX3026 STRING-arm (Rust E0610). A field READ
 // `s.foo` on a KNOWN string base → 1 HX3026 (E0610; a string primitive carries
 // no user field slots). `s.chars()` is a METHOD dispatched from the callee
