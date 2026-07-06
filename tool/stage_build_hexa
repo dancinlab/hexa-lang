@@ -34,7 +34,7 @@ LIBS="${LIBS:-}"
 # stage_resolve_runtime_a when HEXA_ZEROC_OWN_START=1). Without -nostartfiles the $CC link ALSO
 # pulls glibc crt1.o _start -> duplicate _start. Same env gates archive-carry + link-drop.
 # linux x86_64/arm64 ONLY (darwin = Mach-O LC_MAIN). DEFAULT-OFF byte-neutral; flip = PR-C.
-if [ "${HEXA_ZEROC_OWN_START:-0}" = "1" ] && [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
+if [ "${HEXA_ZEROC_OWN_START:-1}" = "1" ] && [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
     _zc_arch="$(uname -m 2>/dev/null)"
     if [ "$_zc_arch" = "x86_64" ] || [ "$_zc_arch" = "aarch64" ] || [ "$_zc_arch" = "arm64" ]; then
         # own-start #29 PR-C probe: only drop crt _start if the runtime.a on THIS link actually
