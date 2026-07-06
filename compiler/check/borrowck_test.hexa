@@ -1186,6 +1186,89 @@ fn _run_census() -> bool {
     return ok
 }
 
+// ── HEXA-OWN L5-E8 — mutating-method-behind-shared-ref (HX3032, E0596) ─
+//
+// A receiver-mutating method (`push`/`pop`/`truncate`/`set`) dispatched
+// THROUGH a binding that is itself a live shared (`&`) borrow. A `&mut`
+// receiver is legal (that is what mutating methods require), a call on the
+// OWNER directly is legal, and a non-mutating selector (`len`) never reaches
+// the scan.
+//   * hz `let r = &arr; r.push(1)`     → HX3032 ×1 (mutate through `&`)
+//   * fp `let r = &mut arr; r.push(1)` → 0 (mutable borrow is legal)
+//   * fp `arr.push(1)` (owner)         → 0 (no ref binding)
+//   * fp `let r = &arr; r.len()`       → 0 (non-mutating selector)
+// ON → ×1 per hazard; OFF → empty stream (byteeq-neutral). STRICT re-bands
+// every emitted HX3032 to the Error band.
+
+fn _src_hz_mut_method_behind_ref() -> string {
+    let mut s = "fn hz8() {\n"
+    s = s + "    let arr = [1]\n"
+    s = s + "    let r = &arr\n"
+    s = s + "    r.push(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_mut_method_mutref() -> string {
+    let mut s = "fn fp8m() {\n"
+    s = s + "    let mut arr = [1]\n"
+    s = s + "    let r = &mut arr\n"
+    s = s + "    r.push(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_mut_method_owner() -> string {
+    let mut s = "fn fp8o() {\n"
+    s = s + "    let mut arr = [1]\n"
+    s = s + "    arr.push(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_nonmut_method_ref() -> string {
+    let mut s = "fn fp8n() {\n"
+    s = s + "    let arr = [1]\n"
+    s = s + "    let r = &arr\n"
+    s = s + "    let n = r.len()\n"
+    s = s + "    println(n)\n"
+    s = s + "}\n"
+    return s
+}
+
+// Mirrors `_run_probe` but keys on HX3032 (the E8 rung code). Zero stray
+// codes required (probe hygiene); STRICT asserts every HX3032 is Error-band.
+fn _run_mut_method_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3032 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3032")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3032 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3032 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
 // ── driver ───────────────────────────────────────────────────
 
 fn main() {
@@ -1273,6 +1356,14 @@ fn main() {
         if !_run_mvb("hz_move_while_shared_borrow", true, false, 1, 0) { ok = false }
         if !_run_mvb("fp_move_while_mut_borrow_dedup", true, true, 0, 1) { ok = false }
         if !_run_mvb("fp_move_no_borrow", false, false, 0, 0) { ok = false }
+        // HEXA-OWN L5-E8 — mutating-method-behind-shared-ref (HX3032, Rust
+        // E0596). Hazard `r.push(…)` through a live `&` borrow → ×1 ON; a
+        // `&mut` receiver, a call on the owner, and a non-mutating selector
+        // all → 0. OFF → empty stream; STRICT → Error-band.
+        if !_run_mut_method_probe("hz_mut_method_behind_ref", _src_hz_mut_method_behind_ref(), 1) { ok = false }
+        if !_run_mut_method_probe("fp_mut_method_mutref", _src_fp_mut_method_mutref(), 0) { ok = false }
+        if !_run_mut_method_probe("fp_mut_method_owner", _src_fp_mut_method_owner(), 0) { ok = false }
+        if !_run_mut_method_probe("fp_nonmut_method_ref", _src_fp_nonmut_method_ref(), 0) { ok = false }
         // census lane must be silent whenever HEXA_BORROWCK_CENSUS is unset
         // (byteeq-neutral proof at the census-count level).
         if !_run_census() { ok = false }

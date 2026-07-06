@@ -569,6 +569,26 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3032",
+        title: "cannot call a mutating method through a shared reference",
+        // Warning band (SSOT F4 warn-first), the mutating-method rung of the E2
+        // loan-registry family: the opt-in borrow checker (`HEXA_BORROWCK=1`)
+        // surfaces a call to a receiver-mutating method (`push`/`pop`/`truncate`/
+        // `set`) dispatched THROUGH a binding that is itself a live shared (`&`)
+        // borrow. Under `HEXA_BORROWCK_STRICT=1` the SAME diagnostic instance is
+        // re-banded to a build-refusing Error via the sanctioned caller override
+        // in `_bck_emit_mut_method_behind_ref` (identical mechanism to
+        // HX3014/HX3019/HX3021/HX3023/HX3027/HX3029/HX3031). With the flag unset
+        // the loan pass is inert (`_bck_active` false), so nothing is emitted and
+        // the diagnostic stream + emitted bytes are byte-identical — release
+        // integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "cannot call mutating method `{method}` through `{name}` — `{name}` is a shared (`&`) borrow of `{origin}` (line {borrow_line})",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN L5-E8) found a call to a receiver-mutating method — one of the whitelisted mutators `push`/`pop`/`truncate`/`set` (`_bck_is_mutating_method`, verified against codegen's `_builtin_runtime_sym`) — dispatched THROUGH a binding `r` that is itself a live SHARED (`&`) reference: some `let r = &x` earlier in the same function borrowed `x` immutably, and `r` has not been killed (reassigned to a non-borrow RHS) before this `r.push(…)` call. This is Rust's E0596 ('cannot borrow `*r` as mutable, as it is behind a `&` reference'; rustc_borrowck reports it when a `&mut`-requiring method or place-mutation is reached through a shared reference): a `&` borrow grants read-only access, and a mutating method needs `&mut self`, so calling it through the shared handle would mutate the borrowed storage that the `&` loan promised would stay unchanged. Only `&` loans flag — a `&mut r` receiver is exactly what mutating methods require and is legal, and a direct `arr.push(…)` on the owner (no ref binding) is fine — and a non-mutating selector (`r.len()`) never reaches this scan (filtered by `_bck_is_mutating_method`). Liveness = the newest registry row for the receiver name with a non-empty origin (the E3 idiom): a killed loan (`let r = &x; r = 0; r.push(…)`) is silent. The detection is conservative / flow-insensitive within a scope (no NLL last-use yet): a loan stays LIVE from its `let` to the end of the function or until the binding is reassigned to a non-borrow — the SAME conservative-loud-over-quiet policy as E2/E3/E4/E5/E6/E7. Only same-fn local receivers with a captured `_bk_recv_local` count; methods on module-level globals, on struct fields / array elements, and cross-function loans are NOT tracked (documented false-negatives). Runs at the `_lower_hexpr` call arm (HEXA-OWN L3 M3), immediately after the receiver-mutating WRITE is recorded (`_bck_note_write`), reusing the E3 ref registry (`_bck_find_ref` / `_bck_ref_origins` / `_bck_ref_mut` / `_bck_ref_lines`) with zero new borrow-checker state. `&`/`&mut` inline-carrier adoption is currently 0 in the corpus, so even with the flag ON this rule fires on ZERO real source (corpus-clean). Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical. Fix: borrow mutably instead (`let r = &mut x`), call the method on the owner directly, or restructure so the mutation does not go through a shared reference.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
