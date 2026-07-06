@@ -917,6 +917,42 @@ fn _bck_emit_use_while_mut(origin: string, name: string, borrow_mut: bool,
     _lr_diag.push(d)
 }
 
+// HX3029 emit (move-out-while-borrowed, Rust E0505) — same-site dedup + STRICT
+// escalation, cloned from `_bck_emit_use_while_mut`. `origin` is the value being
+// MOVED (out via an @own call arg), `name` the borrowing binding that holds a
+// live loan of it, `borrow_mut` the loan's mutability, `borrow_line` where the
+// loan was created. The shared dedup array (`_bck_e_lines`/`_bck_e_cols`) makes
+// a `&mut`-loan move collapse into the HX3027 already emitted at this span (the
+// arg ident READ preempts) — "shared-loan primary": a `&` loan fires HX3029, a
+// `&mut` loan is HX3027-only.
+fn _bck_emit_move_while_borrowed(origin: string, name: string, borrow_mut: bool,
+                                 borrow_line: i64, sp: Span) {
+    let mut di = 0
+    while di < len(_bck_e_lines) {
+        if _bck_e_lines[di] == sp.line && _bck_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_e_lines.push(sp.line)
+    _bck_e_cols.push(sp.col)
+    let mut b = diag_new("HX3029")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "origin", origin)
+    b = diag_arg(b, "name", name)
+    let mut _bk = "immutable"
+    if borrow_mut { _bk = "mutable" }
+    b = diag_arg(b, "borrow_kind", _bk)
+    b = diag_arg(b, "borrow_line", to_string(borrow_line))
+    let mut d = diag_emit(b)
+    // STRICT (HEXA_BORROWCK_STRICT) re-bands the SAME diagnostic instance to a
+    // build-refusing Error via the sanctioned caller override — identical to the
+    // HX3014/HX3019/HX3021/HX3023/HX3027 escalation. OFF-strict keeps the catalog
+    // Warning band, and the flag-OFF path never reaches here (byteeq-neutral).
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
+}
+
 // HX3019 emit (return-borrow-escape) — same-site dedup + STRICT escalation,
 // cloned from `_emit_hx3014`. `name` is the returned binding, `origin` the
 // function-local value it borrows, `borrow_line` where the loan was created.
@@ -2499,6 +2535,24 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 if _bck_own_param(callee_text, i - 1) {
                     _bck_note_move(r.operand.local_id, callee_text,
                                    ctx_r.cur_block, e.children[i].span)
+                    // HEXA-OWN L5-E6 — move-out-while-borrowed (Rust E0505). An
+                    // @own call-arg MOVES the value out of its binding; if a LIVE
+                    // loan of that same origin exists in the E2 registry, the move
+                    // invalidates the borrow. The write-through scan is mutability-
+                    // blind (moving out breaks BOTH `&` and `&mut` loans — the same
+                    // aliasing break as E0506), so it reuses `_bck_ref_find_write_
+                    // through`. For a `&mut` loan the arg ident's own READ (lowered
+                    // at line above) already fired HX3027 at THIS span, so the
+                    // same-site dedup inside the emitter collapses HX3029 into it →
+                    // "shared-loan primary" (a `&` loan is HX3029, a `&mut` loan is
+                    // HX3027-only). Gated on `_bck_active`; flag-OFF never reaches
+                    // here (byteeq-neutral) and @own adoption is 0 (corpus-clean).
+                    let _bk_mvl = _bck_ref_find_write_through(e.children[i].text)
+                    if _bk_mvl >= 0 {
+                        _bck_emit_move_while_borrowed(e.children[i].text,
+                            _bck_ref_names[_bk_mvl], _bck_ref_mut[_bk_mvl],
+                            _bck_ref_lines[_bk_mvl], e.children[i].span)
+                    }
                 }
             }
             i = i + 1

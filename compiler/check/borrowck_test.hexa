@@ -918,6 +918,119 @@ fn _run_tp_own() -> bool {
     return ok
 }
 
+// ── HEXA-OWN L5-E6 — move-out-while-borrowed (HX3029, Rust E0505) ──────
+//
+// #4470 (@own inline-carrier) has NOT landed, so a bare-ident @own move cannot
+// be expressed in source — these probes hand-build the HIR (same technique as
+// tp_own_param_move), inserting a `let r = &x` / `let r = &mut x` loan before an
+// @own call-arg move of the same origin:
+//
+//   fn g(@own p: [i64]) {}
+//   fn mvb_caller() {
+//       let a = [1]
+//       let r = &a        (or &mut a, or omitted)   line 3
+//       g(a)              → MOVE (own-param index 0) line 4
+//   }
+//
+// ① shared loan (`&a`) live at the move  → HX3029 ×1 (move-while-borrowed)
+// ② `&mut a` loan live at the move       → HX3027 ×1, HX3029 ×0 — the arg
+//    ident's READ fires E0503 first at the move span, and the shared same-site
+//    dedup collapses HX3029 into it ("shared-loan primary" contract).
+// ③ no loan at all                       → HX3029 ×0, HX3027 ×0
+// OFF sweep → fully empty stream; STRICT re-bands the fired code to Error.
+fn _build_mvb_module(with_loan: bool, mut_loan: bool) -> HModule {
+    // fn g — empty body, @own aggregate param p.
+    let mut g_anns: [Annotation] = []
+    g_anns.push(_ann1("own", "p"))
+    g_anns.push(_ann1("param_names", "p"))
+    let mut g_sigp: [Type] = []
+    g_sigp.push(_t_arr_i64())
+    let g_body = _hx("block", "", [], 1)
+    let item_g = _hitem_fn("g", g_anns, g_sigp, g_body)
+
+    // fn mvb_caller — let a = [1]  ( [let r = &a / &mut a]  )  g(a)
+    let mut arr_kids: [HExpr] = []
+    arr_kids.push(_hx_int("1", 2))
+    let mut let_a_kids: [HExpr] = []
+    let_a_kids.push(_hx("array_lit", "", arr_kids, 2))
+    let let_a = _hx("let", "a", let_a_kids, 2)
+
+    let mut body_kids: [HExpr] = []
+    body_kids.push(let_a)
+
+    if with_loan {
+        let mut ref_inner: [HExpr] = []
+        ref_inner.push(_hx("ident", "a", [], 3))
+        let mut btext = "&"
+        if mut_loan { btext = "&mut" }
+        let mut ref_kids: [HExpr] = []
+        ref_kids.push(_hx("unop", btext, ref_inner, 3))
+        let let_r = _hx("let", "r", ref_kids, 3)
+        body_kids.push(let_r)
+    }
+
+    let mut call_kids: [HExpr] = []
+    call_kids.push(_hx("ident", "g", [], 4))
+    call_kids.push(_hx("ident", "a", [], 4))
+    let call_g = _hx("call", "", call_kids, 4)
+    body_kids.push(call_g)
+
+    let body = _hx("block", "", body_kids, 2)
+    let mut caller_anns: [Annotation] = []
+    let item_c = _hitem_fn("mvb_caller", caller_anns, [], body)
+
+    let mut items: [HItem] = []
+    items.push(item_g)
+    items.push(item_c)
+    return HModule { file: "mvb.hexa", items: items }
+}
+
+fn _run_mvb(label: string, with_loan: bool, mut_loan: bool,
+            want29_on: i64, want27_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want29 = 0
+    let mut want27 = 0
+    if flag_on { want29 = want29_on  want27 = want27_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (hand-built HIR, expect HX3029 ×" + to_string(want29)
+        + " · HX3027 ×" + to_string(want27) + ") ──")
+    let mm = lower_hir(_build_mvb_module(with_loan, mut_loan))
+    let d = hir_to_mir_diags()
+    let n29 = _count_code(d, "HX3029")
+    let n27 = _count_code(d, "HX3027")
+    let other = len(d) - n29 - n27
+    _print_diags(d)
+    if n29 != want29 {
+        println("  FAIL: HX3029 = " + to_string(n29) + ", want " + to_string(want29))
+        ok = false
+    }
+    if n27 != want27 {
+        println("  FAIL: HX3027 = " + to_string(n27) + ", want " + to_string(want27)
+            + " (dedup: &mut loan → E0503 preempts, HX3029 collapses)")
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3029/HX3027 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want29 + want27 {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want "
+                + to_string(want29 + want27))
+            ok = false
+        }
+    }
+    if len(mm.funcs) != 2 {
+        println("  FAIL: expected 2 lowered fns, got " + to_string(len(mm.funcs)))
+        ok = false
+    }
+    if ok { println("  ok: HX3029 ×" + to_string(want29) + " · HX3027 ×" + to_string(want27)) }
+    return ok
+}
+
 // ── L4 A2 — WOULD-MOVE CENSUS (HEXA_BORROWCK_CENSUS=1) ────────
 //
 // Census is a SEPARATE observe-only lane (no HX3014, no _lr_diag): under
@@ -1048,6 +1161,14 @@ fn main() {
         if !_run_use_while_mut_probe("fp_use_loan_name", _src_fp_use_loan_name(), 0) { ok = false }
         if !_run_reborrow_suppress_probe() { ok = false }
         if !_run_tp_own() { ok = false }
+        // HEXA-OWN L5-E6 — move-out-while-borrowed (HX3029, Rust E0505). Hand-
+        // built HIR (@own inline-carrier #4470 not landed). ① shared loan live at
+        // an @own move → HX3029 ×1. ② `&mut` loan → HX3027 ×1, HX3029 ×0 (the arg
+        // READ's E0503 preempts at the move span, shared dedup collapses HX3029 —
+        // "shared-loan primary"). ③ no loan → 0. OFF → empty stream.
+        if !_run_mvb("hz_move_while_shared_borrow", true, false, 1, 0) { ok = false }
+        if !_run_mvb("fp_move_while_mut_borrow_dedup", true, true, 0, 1) { ok = false }
+        if !_run_mvb("fp_move_no_borrow", false, false, 0, 0) { ok = false }
         // census lane must be silent whenever HEXA_BORROWCK_CENSUS is unset
         // (byteeq-neutral proof at the census-count level).
         if !_run_census() { ok = false }
