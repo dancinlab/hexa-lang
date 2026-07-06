@@ -1456,6 +1456,64 @@ fn _build_case_binop_literal_coerce() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (an) R2 — binop result-type propagation SYMMETRY. `a_i32 + 1` already
+// yielded i32 (the `return lt` tail = the LHS/typed side), but `1 + a_i32`
+// yielded i64 (lt = the literal's universal i64) — an order-asymmetry that
+// false-fired diagnostics whenever the BinOp's INFERRED type flowed on
+// (call-arg / assign), because the lit-coerce arm (:2281) applies only to a
+// bare literal operand, never to a BinOp node. R2 returns the TYPED side when
+// the LHS is an untyped literal and both sides share the numeric kind (Rust
+// E0308 unifies the literal to the typed operand regardless of order). This
+// test pins BOTH directions in ONE module:
+//   fn take32(p: i32) -> i64 { return 0 }
+//   fn take64(p: i64) -> i64 { return 0 }
+//   fn f(a: i32, b: i64) -> i64 {
+//       take32(1 + a)     // (1+a)=i32 → arg fits i32 → 0 HX3003 (pre-fix 1)
+//       take64(1 + a)     // (1+a)=i32 → arg i32≠i64  → 1 HX3003 (NEW faithful
+//                         //   fire — the i64-default previously MASKED it;
+//                         //   Rust E0308 parity, pinned as expected)
+//       let y = a + b     // i32×i64 ident pair (neither literal) → 1 HX3001
+//                         //   (order-swap POSITIVE control — still rejects)
+//       let mut x: i32 = 0
+//       x = 1 + x         // (1+x)=i32 → assign fits i32 → 0 HX3011 (pre-fix 1)
+//       return 0
+//   }
+// Contract across the module: HX3003 = 1 (take64 only), HX3001 = 1 (a+b
+// positive keep), HX3011 = 0 (assign symmetrized). Real-source path (not a
+// *_test.hexa fixture) → the fires are ERROR-band.
+fn _build_case_binop_result_symmetry() -> Module {
+    let f = "case_binop_symmetry.hexa"
+    // fn take32(p: i32) -> i64 { return 0 }
+    let mut p_take32 = []
+    p_take32.push(_param("p", "i32", f, 1, 13))
+    let item_take32 = _fn_item("take32", p_take32, _named_type_ref("i64"), _block([_return_expr(_int_expr("0", f, 1, 30), f, 1, 23)], f, 1, 26), f, 1)
+    // fn take64(p: i64) -> i64 { return 0 }
+    let mut p_take64 = []
+    p_take64.push(_param("p", "i64", f, 2, 13))
+    let item_take64 = _fn_item("take64", p_take64, _named_type_ref("i64"), _block([_return_expr(_int_expr("0", f, 2, 30), f, 2, 23)], f, 2, 26), f, 2)
+    // fn f(a: i32, b: i64) -> i64 { … }
+    // take32(1 + a)  — LHS literal, symmetrized to i32 → fits → 0 HX3003
+    let c32 = _call_expr(_ident_expr("take32", f, 4, 5), [_bin_expr("+", _int_expr("1", f, 4, 12), _ident_expr("a", f, 4, 16), f, 4, 14)], f, 4, 11)
+    // take64(1 + a)  — symmetrized to i32, but i32≠i64 → 1 HX3003 (new fire)
+    let c64 = _call_expr(_ident_expr("take64", f, 5, 5), [_bin_expr("+", _int_expr("1", f, 5, 12), _ident_expr("a", f, 5, 16), f, 5, 14)], f, 5, 11)
+    // let y = a + b  — ident pair (neither literal) → 1 HX3001 (positive keep)
+    let ey = _let_expr("y", _bin_expr("+", _ident_expr("a", f, 6, 13), _ident_expr("b", f, 6, 17), f, 6, 15), f, 6, 5)
+    // let mut x: i32 = 0
+    let emx = _let_expr("mut:x|i32", _int_expr("0", f, 7, 18), f, 7, 5)
+    // x = 1 + x  — LHS literal, symmetrized to i32 → fits → 0 HX3011
+    let ax = _assign_expr(_ident_expr("x", f, 8, 5), _bin_expr("+", _int_expr("1", f, 8, 9), _ident_expr("x", f, 8, 13), f, 8, 11), f, 8, 7)
+    let fr = _return_expr(_int_expr("0", f, 9, 12), f, 9, 5)
+    let mut pf = []
+    pf.push(_param("a", "i32", f, 3, 6))
+    pf.push(_param("b", "i64", f, 3, 14))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([c32, c64, ey, emx, ax, fr], f, 3, 1), f, 3)
+    let mut items = []
+    items.push(item_take32)
+    items.push(item_take64)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // (al) segment(b) HX3026 field-on-scalar REJECT (Rust E0610). A field READ
 // `n.foo` on a KNOWN scalar (n: i64) → 1 HX3026 Error; a real field of a struct
 // (`p.x`, p: Point) → 0; a builtin-method selector (`n.len`) → 0 (exempt); a
@@ -2516,6 +2574,21 @@ fn main() {
         ok = false
     } else {
         println("  ok: 1 HX3026 as WARNING (flagless fixture carve-out: *_test.hexa path stays warn-band)")
+    }
+
+    // (an) R2 binop result-type propagation symmetry — `1 + a_i32` now yields
+    // i32 (was i64), erasing 2 order-asymmetry false-positives (take32(1+a) +
+    // `x = 1 + x`) while a NEW faithful fire (take64(1+a): i32≠i64, Rust E0308)
+    // + the a+b ident-pair positive control both stay pinned.
+    let diags_an = _run_case("(an) static-types R2 — binop result-type symmetry (take32(1+a)/x=1+x coerce · take64(1+a) faithful-fire · a+b keep) (HX3003/HX3011/HX3001)", _build_case_binop_result_symmetry())
+    let nan_3003 = _count_code(diags_an, "HX3003")
+    let nan_3001 = _count_code(diags_an, "HX3001")
+    let nan_3011 = _count_code(diags_an, "HX3011")
+    if nan_3003 != 1 || nan_3001 != 1 || nan_3011 != 0 {
+        println("  FAIL: case (an) expected 1 HX3003 (take64(1+a) i32≠i64 faithful-fire; take32(1+a) coerces) + 1 HX3001 (a+b ident pair) + 0 HX3011 (x=1+x symmetrized to i32), got " + to_string(nan_3003) + " HX3003 / " + to_string(nan_3001) + " HX3001 / " + to_string(nan_3011) + " HX3011 (total=" + to_string(len(diags_an)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3003 (take64(1+a) faithful-fire) + 1 HX3001 (a+b keep) + 0 HX3011 (take32(1+a)/x=1+x symmetrized to i32) — E0308 order-symmetric literal unification")
     }
 
     println("")
