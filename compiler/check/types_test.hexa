@@ -1798,6 +1798,26 @@ fn _build_case_hx3026_string_fixture() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (at) HEXA-OWN L2 rung B — use-after-move at field/index BASE or binop OPERAND
+// (HEXA_OWN_LINT). @own `x` moved by `let a = x`, then read as x.f / x[0] / x + 1
+// warns HX3012 ×3; live `y.g` (y never moved) stays clean.
+fn _build_case_own_lint_rungB() -> Module {
+    let f = "case_own_lint_rungB.hexa"
+    let mut kids = []
+    kids.push(_own_let_expr("x", _int_expr("5", f, 2, 18), f, 2, 5))
+    kids.push(_let_expr("a", _ident_expr("x", f, 3, 13), f, 3, 5))
+    kids.push(_field_expr(_ident_expr("x", f, 4, 5), "f", f, 4, 5))
+    kids.push(_index_expr(_ident_expr("x", f, 5, 5), _int_expr("0", f, 5, 7), f, 5, 5))
+    kids.push(_bin_expr("+", _ident_expr("x", f, 6, 5), _int_expr("1", f, 6, 9), f, 6, 5))
+    kids.push(_own_let_expr("y", _int_expr("7", f, 7, 18), f, 7, 5))
+    kids.push(_field_expr(_ident_expr("y", f, 8, 5), "g", f, 8, 5))
+    let body = _block(kids, f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // static-types r9d — struct-literal field-EXISTENCE reject (HEXA_STATIC_TYPES=1,
 // no ARRAY_LOWER dependency). r6 deliberately scoped existence out, so a
 // typo'd field name silently skipped BOTH the existence and the type check.
@@ -2052,48 +2072,6 @@ fn _build_case_own_lint_r2b() -> Module {
     let mut items = []
     items.push(item_h)
     items.push(item_k)
-    return Module { file: f, items: items, imports: [] }
-}
-
-// HEXA-OWN L2 rung B — use-after-move at a field/index BASE or a binop
-// OPERAND (HEXA_OWN_LINT=1). After a bare-ident `let` move consumes an @own
-// binding, reading it back as a field receiver (`x.f`), an index base
-// (`x[0]`), or a binop operand (`x + 1`) is a use-after-move too — each warns
-// HX3012 once. Warn-only: the read never re-marks (so a still-LIVE binding
-// read the same way stays clean) and the move site itself never re-counts.
-// One module covers all three read contexts + the live control:
-//   fn main() {
-//       @own let x = 5        // register x (own, live)
-//       let a = x             // FIRST use = move                  → clean
-//       x.f                   // field receiver after move         → HX3012
-//       x[0]                  // index base after move             → HX3012
-//       x + 1                 // binop operand after move          → HX3012
-//       @own let y = 7        // independent own binding (never moved)
-//       y.g                   // field receiver, y LIVE            → clean
-//   }
-// Under the flag exactly 3 HX3012 (x.f / x[0] / x + 1); the move `let a = x`
-// and the live-receiver read `y.g` never fire (warn-only proof). On the
-// default build → 0 (byteeq-neutral).
-fn _build_case_own_lint_rungB() -> Module {
-    let f = "case_own_lint_rungB.hexa"
-    let mut kids = []
-    // @own let x = 5
-    kids.push(_own_let_expr("x", _int_expr("5", f, 2, 18), f, 2, 5))
-    // let a = x   → first move of x (clean)
-    kids.push(_let_expr("a", _ident_expr("x", f, 3, 13), f, 3, 5))
-    // x.f   → field receiver after move → HX3012
-    kids.push(_field_expr(_ident_expr("x", f, 4, 5), "f", f, 4, 5))
-    // x[0]  → index base after move → HX3012
-    kids.push(_index_expr(_ident_expr("x", f, 5, 5), _int_expr("0", f, 5, 7), f, 5, 5))
-    // x + 1 → binop operand after move → HX3012
-    kids.push(_bin_expr("+", _ident_expr("x", f, 6, 5), _int_expr("1", f, 6, 9), f, 6, 5))
-    // @own let y = 7 (never moved) ; y.g → live receiver → clean (warn-only)
-    kids.push(_own_let_expr("y", _int_expr("7", f, 7, 18), f, 7, 5))
-    kids.push(_field_expr(_ident_expr("y", f, 8, 5), "g", f, 8, 5))
-    let body = _block(kids, f, 2, 1)
-    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
-    let mut items = []
-    items.push(item_main)
     return Module { file: f, items: items, imports: [] }
 }
 
@@ -2983,12 +2961,9 @@ fn main() {
         ok = false
     } else {
         println("  ok: 1 HX3033 as WARNING (wrong-enum compare fixture carve-out: *_test.hexa stays warn-band)")
-    // (at) HEXA-OWN L2 rung B — use-after-move at a field/index BASE or a
-    // binop OPERAND (HEXA_OWN_LINT). Under the flag, after `let a = x` moves
-    // the @own `x`, reading it as `x.f` / `x[0]` / `x + 1` warns HX3012
-    // exactly THREE times; the move itself and a LIVE receiver read (`y.g`,
-    // y never moved) stay clean (warn-only proof). On the default build → 0
-    // (byteeq-neutral). Same self-adapting contract as (n)/(p)/(q).
+    }
+
+    // (at) HEXA-OWN L2 rung B — use-after-move at field/index base + binop operand.
     let diags_at = _run_case("(at) own-lint rung B — use-after-move at field/index base + binop operand (HEXA_OWN_LINT)", _build_case_own_lint_rungB())
     let cat = _count_code(diags_at, "HX3012")
     if env("HEXA_OWN_LINT") == "1" {
@@ -2996,7 +2971,7 @@ fn main() {
             println("  FAIL: case (at) HEXA_OWN_LINT=1 expected 3 HX3012 (x.f / x[0] / x + 1), got " + to_string(cat) + " (total=" + to_string(len(diags_at)) + ")")
             ok = false
         } else {
-            println("  ok: 3 HX3012 emitted (field/index base + binop operand after move; live `y.g` warn-only silent)")
+            println("  ok: 3 HX3012 (field/index base + binop operand after move; live `y.g` warn-only silent)")
         }
     } else {
         if cat != 0 {
