@@ -3687,20 +3687,25 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
             // (`_types_empty_type()`), so a compare against one lands HERE (the
             // unknown-operand arm) rather than the known-both compare arm at the
             // tail. Fires ONLY for `==`/`!=` when BOTH operands resolve to
-            // REGISTERED enums of DIFFERENT names, with at least one side an
-            // EnumPath literal; an unknown/HexaVal/same-enum operand stays silent
+            // REGISTERED enums of DIFFERENT names. R7-R2 (au): the outer "≥1 side
+            // EnumPath literal" gate is DROPPED so value-operand pairs (ident×
+            // ident `c == d`, ident×call) ALSO fire — `_types_operand_enum_name`
+            // already recovers an ident's `{}slot`/inferred-Type enum name
+            // (block-local `let c: Color` + param `named:<Enum>`), and the ln/rn
+            // recover + `_types_enum_registry_has` both-sides + `ln != rn` triad
+            // IS the real safety gate. param×param stays on the known-both compare
+            // arm (HX3001), never reaching this unknown arm.
+            // An unknown/HexaVal/same-enum operand stays silent
             // (conservative under-reject, never over-reject — HX3030's shape).
             // Byteeq-neutral: S3 diagnostics erase at MIR; test fixtures stay
             // Warning via `_types_strict_for`.
             if op == "==" || op == "!=" {
-                if _types_is_enum_path_kind(e.children[0].kind) || _types_is_enum_path_kind(e.children[1].kind) {
-                    let ln = _types_operand_enum_name(e.children[0], lt, env)
-                    let rn = _types_operand_enum_name(e.children[1], rt, env)
-                    if len(ln) > 0 && len(rn) > 0
-                        && _types_enum_registry_has(ln) && _types_enum_registry_has(rn)
-                        && ln != rn {
-                        _emit_hx3033(ln, rn, e.span, out)
-                    }
+                let ln = _types_operand_enum_name(e.children[0], lt, env)
+                let rn = _types_operand_enum_name(e.children[1], rt, env)
+                if len(ln) > 0 && len(rn) > 0
+                    && _types_enum_registry_has(ln) && _types_enum_registry_has(rn)
+                    && ln != rn {
+                    _emit_hx3033(ln, rn, e.span, out)
                 }
             }
             return _types_t_bool()

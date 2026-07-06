@@ -1823,6 +1823,96 @@ fn _build_case_own_lint_rungB() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+fn _build_case_hx3033_ident_pair() -> Module {
+    let f = "case_hx3033_ident.hexa"
+    let mut cvars = []
+    cvars.push(_variant_unit("Red", f, 1, 13))
+    cvars.push(_variant_unit("Green", f, 1, 18))
+    let item_color = _enum_item("Color", cvars, f, 1)
+    let mut dvars = []
+    dvars.push(_variant_unit("North", f, 2, 11))
+    dvars.push(_variant_unit("South", f, 2, 18))
+    let item_dir = _enum_item("Dir", dvars, f, 2)
+    let lc = _let_expr("c|Color", _enum_path("Color", "Red", [], f, 4, 20), f, 4, 5)
+    let ld = _let_expr("d|Dir", _enum_path("Dir", "North", [], f, 5, 18), f, 5, 5)
+    let lc2 = _let_expr("c2|Color", _enum_path("Color", "Green", [], f, 6, 21), f, 6, 5)
+    let ea = _let_expr("a", _bin_expr("==", _ident_expr("c", f, 7, 13), _ident_expr("d", f, 7, 18), f, 7, 15), f, 7, 5)
+    let eb = _let_expr("b", _bin_expr("==", _ident_expr("c", f, 8, 13), _ident_expr("c2", f, 8, 18), f, 8, 15), f, 8, 5)
+    let mut fparams = []
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), _block([lc, ld, lc2, ea, eb], f, 3, 1), f, 3)
+    let mut items = []
+    items.push(item_color)
+    items.push(item_dir)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+fn _build_case_hx3033_param_blocklocal() -> Module {
+    let f = "case_hx3033_param_mix.hexa"
+    let mut cvars = []
+    cvars.push(_variant_unit("Red", f, 1, 13))
+    cvars.push(_variant_unit("Green", f, 1, 18))
+    let item_color = _enum_item("Color", cvars, f, 1)
+    let mut dvars = []
+    dvars.push(_variant_unit("North", f, 2, 11))
+    dvars.push(_variant_unit("South", f, 2, 18))
+    let item_dir = _enum_item("Dir", dvars, f, 2)
+    let ld = _let_expr("d|Dir", _enum_path("Dir", "North", [], f, 4, 18), f, 4, 5)
+    let ea = _let_expr("a", _bin_expr("==", _ident_expr("c", f, 5, 13), _ident_expr("d", f, 5, 18), f, 5, 15), f, 5, 5)
+    let mut fparams = []
+    fparams.push(_param("c", "Color", f, 3, 6))
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), _block([ld, ea], f, 3, 1), f, 3)
+    let mut items = []
+    items.push(item_color)
+    items.push(item_dir)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+fn _build_case_hx3033_ident_fixture() -> Module {
+    let f = "case_hx3033_ident_test.hexa"
+    let mut cvars = []
+    cvars.push(_variant_unit("Red", f, 1, 13))
+    cvars.push(_variant_unit("Green", f, 1, 18))
+    let item_color = _enum_item("Color", cvars, f, 1)
+    let mut dvars = []
+    dvars.push(_variant_unit("North", f, 2, 11))
+    dvars.push(_variant_unit("South", f, 2, 18))
+    let item_dir = _enum_item("Dir", dvars, f, 2)
+    let lc = _let_expr("c|Color", _enum_path("Color", "Red", [], f, 4, 20), f, 4, 5)
+    let ld = _let_expr("d|Dir", _enum_path("Dir", "North", [], f, 5, 18), f, 5, 5)
+    let ea = _let_expr("a", _bin_expr("==", _ident_expr("c", f, 6, 13), _ident_expr("d", f, 6, 18), f, 6, 15), f, 6, 5)
+    let mut fparams = []
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), _block([lc, ld, ea], f, 3, 1), f, 3)
+    let mut items = []
+    items.push(item_color)
+    items.push(item_dir)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+fn _build_case_hx3033_param_param_control() -> Module {
+    let f = "case_hx3033_param_param.hexa"
+    let mut cvars = []
+    cvars.push(_variant_unit("Red", f, 1, 13))
+    cvars.push(_variant_unit("Green", f, 1, 18))
+    let item_color = _enum_item("Color", cvars, f, 1)
+    let mut dvars = []
+    dvars.push(_variant_unit("North", f, 2, 11))
+    dvars.push(_variant_unit("South", f, 2, 18))
+    let item_dir = _enum_item("Dir", dvars, f, 2)
+    let ea = _let_expr("a", _bin_expr("==", _ident_expr("c", f, 4, 13), _ident_expr("d", f, 4, 18), f, 4, 15), f, 4, 5)
+    let mut fparams = []
+    fparams.push(_param("c", "Color", f, 3, 6))
+    fparams.push(_param("d", "Dir", f, 3, 17))
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), _block([ea], f, 3, 1), f, 3)
+    let mut items = []
+    items.push(item_color)
+    items.push(item_dir)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // static-types r9d — struct-literal field-EXISTENCE reject (HEXA_STATIC_TYPES=1,
 // no ARRAY_LOWER dependency). r6 deliberately scoped existence out, so a
 // typo'd field name silently skipped BOTH the existence and the type check.
@@ -2987,6 +3077,52 @@ fn main() {
         } else {
             println("  ok: 0 HX3012 (default-OFF → byteeq-neutral)")
         }
+    }
+
+
+    // (au) R7-R2 — HX3033 ident-pair / value-operand extension (gate drop).
+    // Block-local `c: Color` vs `d: Dir` wrong-enum compare → 1 ERROR; same-enum
+    // `c == c2` in the same module stays silent.
+    let diags_au = _run_case("(au) static-types R7-R2 — wrong-enum ident-pair compare REJECT (c:Color == d:Dir → 1 HX3033 / c == c2 same-enum clean) (HX3033)", _build_case_hx3033_ident_pair())
+    let cau = _count_code(diags_au, "HX3033")
+    let cau_err = _count_code_sev(diags_au, "HX3033", "error")
+    if cau != 1 || cau_err != 1 {
+        println("  FAIL: case (au) expected 1 HX3033 as ERROR (block-local c:Color == d:Dir wrong-enum; c == c2 same-enum clean), got " + to_string(cau) + " HX3033 (" + to_string(cau_err) + " error) (total=" + to_string(len(diags_au)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3033 as ERROR (ident-pair `c == d` wrong-enum; `c == c2` same-enum silent) — E0308 value-operand extension")
+    }
+
+    // (au) param × block-local MIX → 1 HX3033 ERROR.
+    let diags_aum = _run_case("(au) static-types R7-R2 — param × block-local wrong-enum compare (c:Color param == d:Dir local → 1 HX3033) (HX3033)", _build_case_hx3033_param_blocklocal())
+    let caum = _count_code(diags_aum, "HX3033")
+    let caum_err = _count_code_sev(diags_aum, "HX3033", "error")
+    if caum != 1 || caum_err != 1 {
+        println("  FAIL: case (au) param×local expected 1 HX3033 as ERROR (param c:Color == local d:Dir), got " + to_string(caum) + " HX3033 (" + to_string(caum_err) + " error) (total=" + to_string(len(diags_aum)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3033 as ERROR (param×block-local mix `c == d` wrong-enum) — known-side + empty-side still lands in unknown arm")
+    }
+
+    // (au) HX3033 ident-pair fixture carve-out — *_test.hexa path → WARNING.
+    let diags_auf = _run_case("(au) static-types R7-R2 — HX3033 ident-pair fixture carve-out (*_test.hexa ident-vs-ident compare)", _build_case_hx3033_ident_fixture())
+    let cauf = _count_code(diags_auf, "HX3033")
+    let cauf_warn = _count_code_sev(diags_auf, "HX3033", "warning")
+    if cauf != 1 || cauf_warn != 1 {
+        println("  FAIL: case (au) fixture expected 1 HX3033 as WARNING (fixture carve-out), got " + to_string(cauf) + " HX3033 (" + to_string(cauf_warn) + " warn) (total=" + to_string(len(diags_auf)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3033 as WARNING (ident-pair fixture carve-out: *_test.hexa stays warn-band)")
+    }
+
+    // (au) ★ HX3001 non-interference CONTROL — param × param → HX3033 = 0.
+    let diags_auc = _run_case("(au) static-types R7-R2 — param×param HX3001 non-interference control (c:Color == d:Dir both typed → HX3033 × 0, HX3001 territory) (HX3033)", _build_case_hx3033_param_param_control())
+    let cauc = _count_code(diags_auc, "HX3033")
+    if cauc != 0 {
+        println("  FAIL: case (au) control expected 0 HX3033 (param×param stays on the known-both compare arm / HX3001), got " + to_string(cauc) + " HX3033 (total=" + to_string(len(diags_auc)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3033 (param×param both-known → known-both compare arm; HX3033 never over-reaches into HX3001 territory)")
     }
 
     println("")
