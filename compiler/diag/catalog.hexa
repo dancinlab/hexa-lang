@@ -647,6 +647,26 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3035",
+        title: "use of possibly-uninitialized binding",
+        // Warning band (SSOT F4 warn-first), the use-of-possibly-uninitialized
+        // rung of the opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN
+        // round8-1): a `let x` declared WITHOUT an initializer is read on a
+        // control-flow path where no assignment to `x` is guaranteed to have
+        // run first. Under `HEXA_BORROWCK_STRICT=1` the SAME diagnostic instance
+        // is re-banded to a build-refusing Error via the sanctioned caller
+        // override in `_bcki_emit_uninit_use` (identical mechanism to
+        // HX3014/HX3019/HX3021/HX3023/HX3027/HX3029/HX3031/HX3032/HX3034). With
+        // the flag unset the pass is inert (`_bck_active` false), so nothing is
+        // emitted and the diagnostic stream + emitted bytes are byte-identical —
+        // release integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "used binding `{name}` is possibly-uninitialized (declared without an initializer at line {decl_line})",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN round8-1) found a READ of a binding declared without an initializer (`let x` / `let mut x: T` with no `= …`) on a control-flow path where no assignment to it is guaranteed to have executed first. This is Rust's E0381 ('used binding is possibly-uninitialized'), reference-matched to rustc_mir_dataflow's `MaybeUninitializedPlaces` — a MAY (union / OR-join) forward dataflow whose bit=1 means 'this place is maybe-uninitialized here', the exact DUAL of the must-initialized AND-join. The pass (`_bcki_check` at end of `_lower_fn`, beside the NLL liveness pass, over the fully-materialized CFG) seeds every tracked place maybe-uninit at function entry, kills the bit at each initializing assignment (`x = v`, and — partial-init tolerance — a place-write `x.f = v` / `x[i] = v`), and OR-joins over `Block.preds` to a fixed point (monotone bitset, hard sweep cap blocks*4+8, loud bail dropping only this fn's result). A use fires ⇔ the maybe-uninit bit reaches the use's block AND no initialization precedes the use within that block (program order) — so `let x; x = 1; use x` is CLEAN while `let x; use x; x = 1` FIRES, and a loop body's first-iteration read of a not-yet-assigned `let mut x` fires. Structurally FP-free on the merge cases: `if c { x = 1 } else { x = 2 }; use x` is CLEAN (the OR-join of two initialized predecessors is 0), and `if c { return } else { x = 1 }; use x` is CLEAN (a return-terminated branch has NO join edge — it is not a predecessor of the merge block, so it contributes no maybe-uninit bit). Conservative by construction — the FP=0 mandate takes precedence over completeness: an uninit place is registered ONLY at a genuine no-initializer `let` (the sole site where an uninit binding is distinguishable from `= 0` at MIR level, since the let lowering otherwise synthesizes a zero RHS); a PARTIAL init (`s.f = 1`) marks the WHOLE place initialized so a later `use s` stays SILENT (hexa's runtime aborts on a field-write to an uninitialized value — a separate defect class, not this rule's); params, `match` / `for` bindings, closure bodies and captures, and `@own` moves are never tracked. Reference-faithful conservative-FIRE (not false positives): a no-`else` `if { x = 1 }; use x`, a `while` body's pre-first-iteration read, and a use after a `match` without a wildcard arm (a real fall-through path exists) all fire, matching rustc. Only same-function flow is analyzed; cross-function, through-field, and through-closure initialization are not tracked (documented false-negatives). Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical, and the corpus contains ZERO uninitialized `let` bindings, so even with the flag ON this rule fires on zero real source (corpus-clean, gen3≡gen4 preserved). Fix: give the binding an initializer at its declaration (`let x = <value>`), or ensure every control-flow path assigns to it before the first read.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
