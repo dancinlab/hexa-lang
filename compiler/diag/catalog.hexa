@@ -569,6 +569,26 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3031",
+        title: "cannot assign to a value behind a `&` reference",
+        // Warning band (SSOT F4 warn-first), the assign-behind-shared-ref rung
+        // of the E2 loan-registry family: the opt-in borrow checker
+        // (`HEXA_BORROWCK=1`) surfaces a WRITE through a binding that is itself a
+        // LIVE SHARED (`&`) borrow — `let r = &s; r.x = 1` / `r[i] = v`. A `&`
+        // borrow grants read-only access; only `&mut` permits write-through.
+        // Under `HEXA_BORROWCK_STRICT=1` the SAME diagnostic instance is re-banded
+        // to a build-refusing Error via the sanctioned caller override in
+        // `_bck_emit_assign_behind_ref` (identical mechanism to HX3023/3027/3029).
+        // With the flag unset the loan pass is inert (`_bck_active` false), so
+        // nothing is emitted and the diagnostic stream + emitted bytes are
+        // byte-identical — release integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "cannot assign through `{name}` because it is behind a `&` reference — `{name}` is a shared borrow of `{origin}` (line {borrow_line})",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN L5-E7) found an ASSIGNMENT through a binding that is itself a LIVE SHARED (`&`) reference: `let r = &s; r.x = 1` or `let r = &arr; r[i] = v`. A shared `&` borrow grants READ-only access to the borrowed value; writing through it would mutate storage that other shared borrows assume is stable — only a `&mut` borrow permits write-through. This is Rust's E0594 ('cannot assign to `*r`, which is behind a `&` reference'; rustc_borrowck reports it when an assignment place resolves through a shared reference). The check fires at the field-set and index-set lowering hooks (`_lower_hexpr` assign arms, HEXA-OWN L3): after recording the write (`_bck_note_write` for Rule 1), it looks up the LHS base ident in the E2 loan registry (`_bck_find_ref`) and, when the newest live row for that name is a NON-mutable loan (`origin != \"\"` AND `_bck_ref_mut` false), emits HX3031 against the shared loan. Fires ONLY for `&` loans — writing through `&mut` is the loan's whole purpose (no arg for borrow kind). Conservative / flow-insensitive within a scope (no NLL last-use yet): a loan stays LIVE from its `let` to end-of-function or until the binding is reassigned to a non-borrow RHS (KILL row → `origin == \"\"` → silent, so `let r = &s; r = other; r.x = 1` does not fire); only same-fn loans count; borrows through call args / struct fields / array elements / closures and cross-function loans are NOT tracked (documented false-negatives). A bare ident reassignment `r = v` is NOT flagged (that is a rebind, not a deref-write — hexa has no `*r`), and nested places `r.a.b` are already excluded by the existing single-ident base gate. No new borrow-checker state is introduced — the E2 loan registry is reused as-is. `&`/`&mut` inline-carrier adoption is currently ~0 in the corpus, so even with the flag ON this rule fires on ZERO real source (corpus-clean). Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical. Fix: take a `&mut` borrow instead of `&` if you need to write through it, or mutate the owner directly rather than through the shared reference.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
