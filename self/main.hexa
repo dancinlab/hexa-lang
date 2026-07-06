@@ -1430,27 +1430,28 @@ fn os_clang_ldflags() {
     // glibc shared OpenSSL/libsodium to satisfy these, and the cflags side
     // already dropped the -DHEXA_HAS_* defines, so skip the link flags too.
     if env("HEXA_STATIC_DEPS") == "1" || host_cc().contains("musl") { return base }
-    // ── HEXA_CUDA=1 (opt-in · `-cuda` release variant) — pull cuBLAS/cudart so a
-    // consumer `hexa build`/`run` program links the CUDA-enabled runtime.a (which
-    // ar's runtime_cuda.o + the nvcc -dlink device blob, folded in by
-    // stage_resolve_runtime_a's resolve_cuda_runtime_seed). The CPU default build
-    // NEVER sets HEXA_CUDA, so these flags are absent there — additive + opt-in,
-    // no regression to the default CPU release (self-host ≠ release ABSOLUTE).
-    // Order: -lcudadevrt MUST follow runtime_cuda_dlink.o (the device blob it
-    // resolves); the runtime.a is already on the link line BEFORE os_clang_ldflags,
-    // so appending the cuda libs here satisfies that ordering. Lib dir resolved
-    // from CUDA_HOME (release job sets it) with the targets/x86_64-linux/lib
-    // toolkit layout fallback; -L lets the loader find libcudart/libcublas at link.
-    // cuda link is active when EITHER (a) HEXA_CUDA=1 explicit opt-in, OR (b) the
-    // INSTALLED runtime.a is the cuBLAS build — install.sh drops $HX_HOME/.cuda-runtime
-    // when it pulls the `-cuda` asset (prefer_cuda). Without (b) a consumer who got
-    // the cuda asset (GPU auto-detect) had to pass HEXA_CUDA=1 on EVERY `hexa run/build`
-    // or runtime_cuda.o's cudaLaunchKernel/cublas symbols went undefined at link
-    // (#3723 link wall). HEXA_CUDA=0 stays a hard opt-out. A CPU install / self-host
-    // source build has no marker → cuda_on=false → byte-identical to before (NEUTRAL).
+    // ── CUDA link (`-cuda` self-contained variant) — a consumer `hexa build`/`run`
+    // program links the CUDA-enabled runtime.a (ar's runtime_cuda.o + the nvcc -dlink
+    // device blob, folded in by stage_resolve_runtime_a's resolve_cuda_runtime_seed)
+    // + the STATICALLY-bundled CUDA runtime (build/cuda-static/, see below). The CPU
+    // default build has no runtime_cuda* members → these flags are absent there — no
+    // regression to the default CPU release (self-host ≠ release ABSOLUTE).
+    // Order: -lcudadevrt MUST follow runtime_cuda_dlink.o (the device blob it resolves);
+    // the runtime.a is already on the link line BEFORE os_clang_ldflags, so appending
+    // the cuda libs here satisfies that ordering.
+    // AUTO-ONLY (NO HEXA_CUDA env flag — a_gpu_default_no_optin): cuda link is active
+    // when EITHER (a) the install marker $HX_HOME/.cuda-runtime exists (install.sh drops
+    // it when nvidia-smi auto-selects the `-cuda` asset), OR (b) the RESOLVED runtime.a
+    // ar's runtime_cuda* members (marker-independent probe below — a manual pool sync
+    // that installs the cuda runtime.a without the marker still links correctly, the
+    // #3723 link wall). A CPU install / self-host source build has neither → cuda_on=
+    // false → byte-identical to before (NEUTRAL). No per-invocation env flag anywhere.
     let hx_home = if env("HX_HOME") != "" { env("HX_HOME") } else { env("HOME") + "/.hx" }
     let cuda_marked = exec("test -f '" + hx_home + "/.cuda-runtime' && printf 1 || printf 0").trim()
-    let mut cuda_on = env("HEXA_CUDA") == "1" || (env("HEXA_CUDA") != "0" && cuda_marked == "1")
+    // AUTO-ONLY (no HEXA_CUDA env flag): the -cuda asset is self-contained + auto-
+    // selected by install.sh (nvidia-smi). cuda link activates on the install marker
+    // OR the runtime.a probe below — never a per-invocation env flag.
+    let mut cuda_on = cuda_marked == "1"
     // runtime.a auto-detect (marker-independent): a CUDA-built runtime.a ar's
     // runtime_cuda*.o members whose cudaLaunchKernel/cudaMalloc/__cudaRegister*
     // symbols go undefined at link unless the cuda libs are on the line. install.sh's
@@ -1459,9 +1460,9 @@ fn os_clang_ldflags() {
     // cuda_marked=0 → the link omitted cudart and died "undefined reference cudaMalloc"
     // (summer pool, 2026-06-27). Probe the RESOLVED runtime.a directly so the link
     // follows the archive it links (native-canonical: the link adapts to the runtime,
-    // not a side-band marker). HEXA_CUDA=0 stays a hard opt-out; a CPU runtime.a has no
-    // runtime_cuda* members → cuda_on stays false → byte-identical to before (NEUTRAL).
-    if !cuda_on && env("HEXA_CUDA") != "0" {
+    // not a side-band marker). A CPU runtime.a has no runtime_cuda* members → cuda_on
+    // stays false → byte-identical to before (NEUTRAL) with no env flag involved.
+    if !cuda_on {
         let __rt_probe = resolve_prebuilt_runtime()
         if len(__rt_probe) > 0 {
             // grep -c always prints a count (0 on no-match / unreadable archive),
@@ -1472,60 +1473,41 @@ fn os_clang_ldflags() {
         }
     }
     if cuda_on {
-        let mut cuda_l = ""
-        let mut cuda_rpath = ""
-        // ── pip-nvidia farm — a bare rent pod (vast/runpod) has NO toolkit; the only
-        // CUDA libs are SONAME-only pip wheels under site-packages. install.sh wires
-        // them into the hexa-owned symlink farm $HX_HOME/cuda-libs (bare .so linker
-        // names + one stable dir). Probe it FIRST. A toolkit host never has the farm
-        // (install.sh skips wiring when toolkit cudart resolves) → cuda_l stays ""
-        // → the CUDA_HOME branch below emits the exact link line as before (NEUTRAL).
-        // rpath: the farm is OFF the loader's default search path, so embed it — the
-        // linked binary must LOAD libcudart.so.12 with zero env exports (canonical DX).
-        let farm = hx_home + "/cuda-libs"
-        let farm_ok = exec("test -f '" + farm + "/libcudart.so' && printf 1 || printf 0").trim()
-        if farm_ok == "1" {
-            cuda_l = " -L" + farm
-            cuda_rpath = " -Wl,-rpath," + farm
-        }
-        if cuda_l == "" {
-            // CUDA_HOME from env (release job sets it); else the standard toolkit root on
-            // a consumer GPU host (libcudart resolves from /usr/local/cuda/lib64).
-            let cuda_home = if env("CUDA_HOME") != "" { env("CUDA_HOME") } else { "/usr/local/cuda" }
-            if cuda_home != "" {
-                // toolkit layout: $CUDA_HOME/targets/x86_64-linux/lib (preferred) or
-                // $CUDA_HOME/lib64 (classic). stubs holds the GPU-less libcuda.so stub.
-                let tgt_lib = cuda_home + "/targets/x86_64-linux/lib"
-                let lib64 = cuda_home + "/lib64"
-                let cuda_probe = exec("test -f '" + tgt_lib + "/libcudart.so' && printf '" + tgt_lib + "' || (test -f '" + lib64 + "/libcudart.so' && printf '" + lib64 + "' || printf '')")
-                if cuda_probe != "" { cuda_l = " -L" + cuda_probe.trim() + " -L" + cuda_probe.trim() + "/stubs" }
-            }
-        }
-        if cuda_l == "" {
-            // last-resort LIVE pip probe: a manually-installed cuda runtime.a on a bare
-            // pod that never ran install.sh (the runtime.a auto-detect above set cuda_on
-            // with no farm and no toolkit). Build the same farm lazily — idempotent,
-            // hexa-owned — then subsequent links take the farm path.
-            let _pyroots = exec("python3 -c 'import nvidia; print(chr(10).join(nvidia.__path__))' 2>/dev/null | tr '\n' ' '").trim()
-            let _roots = if _pyroots != "" { _pyroots } else { exec("ls -d /opt/conda/lib/python3*/site-packages/nvidia /usr/local/lib/python3*/dist-packages/nvidia /usr/lib/python3*/dist-packages/nvidia $HOME/.local/lib/python3*/site-packages/nvidia 2>/dev/null | tr '\n' ' '").trim() }
-            if _roots != "" {
-                let _ = exec("mkdir -p '" + farm + "'; for r in " + _roots + "; do for f in $r/*/lib/lib*.so* $r/*/lib/lib*.a; do [ -e $f ] || continue; b=$(basename $f); ln -sf $f '" + farm + "'/$b; case $b in *.so.*) ln -sf $f '" + farm + "'/${b%%.so.*}.so;; esac; done; done; true")
-                let _2 = exec("if [ ! -e '" + farm + "/libcuda.so' ]; then for c in $(ldconfig -p 2>/dev/null | sed -n 's/.*libcuda\\.so\\.1 .*=> //p' | head -1) /usr/lib/x86_64-linux-gnu/libcuda.so.1 /usr/lib64/libcuda.so.1; do [ -e $c ] && ln -sf $c '" + farm + "/libcuda.so' && break; done; fi; if [ ! -e '" + farm + "/libcuda.so' ]; then for r in " + _roots + "; do for s in $r/*/lib/stubs/libcuda.so; do [ -e $s ] && ln -sf $s '" + farm + "/libcuda.so'; done; done; fi; true")
-                let farm_ok2 = exec("test -f '" + farm + "/libcudart.so' && printf 1 || printf 0").trim()
-                if farm_ok2 == "1" {
-                    cuda_l = " -L" + farm
-                    cuda_rpath = " -Wl,-rpath," + farm
-                }
-            }
-        }
-        // cudadevrt is a STATIC archive shipped by the toolkit (device-runtime for
-        // the -dlink blob); cudart/cuda are the host-side shared libs always needed.
         // cuBLAS is OPT-IN (native-canonical-default): forge runtime_cuda.o defaults
         // to OWN kernels with ZERO undefined cublas* symbols — only HEXA_USE_CUBLAS=1
-        // needs -lcublas. cuda_rpath appended LAST so the toolkit-host flag prefix is
-        // character-identical to before (cuda_rpath == "" there → NEUTRAL).
+        // needs -lcublas (the shipped self-contained object is cuBLAS-free).
         let cublas_l = if env("HEXA_USE_CUBLAS") == "1" { " -lcublas" } else { "" }
-        return base + cuda_l + " -lcudart" + cublas_l + " -lcuda -lcudadevrt" + cuda_rpath
+        // ── SELF-CONTAINED: static CUDA runtime bundled IN the -cuda tarball ──
+        // The release asset ships build/cuda-static/{libcudart_static,libculibos,
+        // libcudadevrt}.a + stubs/libcuda.so next to the resolved runtime.a. Link them
+        // STATICALLY so the consumer binary needs ONLY the driver libcuda.so.1 (SONAME)
+        // at run time — NO pip wheels, NO $HX_HOME/cuda-libs farm, NO LD_LIBRARY_PATH,
+        // NO rpath (a_gpu_default_no_optin: zero opt-in, self-contained like Go/Rust).
+        // cudart_static pulls libculibos + needs -ldl -lrt; libcudadevrt satisfies the
+        // -rdc/-dlink device blob in runtime_cuda.o. NEVER emit an rpath: a binary that
+        // resolves stubs/libcuda.so at run time gets cuInit CUDA_ERROR_STUB_LIBRARY —
+        // the SONAME libcuda.so.1 must bind the REAL driver from the loader default path.
+        let __rt = resolve_prebuilt_runtime()
+        if len(__rt) > 0 {
+            let cs = exec("dirname '" + __rt + "'").trim() + "/cuda-static"
+            let cs_ok = exec("test -f '" + cs + "/libcudart_static.a' && printf 1 || printf 0").trim()
+            if cs_ok == "1" {
+                return base + " -L" + cs + " -L" + cs + "/stubs" + " -l:libcudart_static.a -l:libculibos.a -l:libcudadevrt.a" + cublas_l + " -lcuda -ldl -lrt"
+            }
+        }
+        // ── FALLBACK: CUDA_HOME toolkit (dynamic) — REQUIRED, do not delete. Reached
+        // by a dev toolkit self-host cuda build (a locally-built cuda runtime.a → the
+        // probe sets cuda_on, but cuda-static/ is only bundled at release packaging).
+        // Byte-identical to the pre-self-contained toolkit branch (no rpath). ──
+        let mut cuda_l = ""
+        let cuda_home = if env("CUDA_HOME") != "" { env("CUDA_HOME") } else { "/usr/local/cuda" }
+        if cuda_home != "" {
+            let tgt_lib = cuda_home + "/targets/x86_64-linux/lib"
+            let lib64 = cuda_home + "/lib64"
+            let cuda_probe = exec("test -f '" + tgt_lib + "/libcudart.so' && printf '" + tgt_lib + "' || (test -f '" + lib64 + "/libcudart.so' && printf '" + lib64 + "' || printf '')")
+            if cuda_probe != "" { cuda_l = " -L" + cuda_probe.trim() + " -L" + cuda_probe.trim() + "/stubs" }
+        }
+        return base + cuda_l + " -lcudart" + cublas_l + " -lcuda -lcudadevrt"
     }
     // 2026-05-14: libsodium link flags (when found via pkg-config or brew).
     let probe = exec("pkg-config --libs libsodium 2>/dev/null")
@@ -5820,25 +5802,26 @@ fn cmd_gpu_status() {
         println("  cuda_device_count: " + str(ndev))
         println("    note: stock release `hexa` is CPU-only (subsystem wired, CUDA runtime")
         println("          not compiled in). cuda_available()==1 needs the `-cuda` asset.")
-        println("    ENABLE GPU: on a CUDA host run  HEXA_CUDA=1 sh install.sh")
-        println("          (auto-installs the -cuda asset; install.sh prefer_cuda() also")
-        println("           auto-detects nvidia-smi + libcudart [toolkit OR pip nvidia-cuda-")
-        println("           runtime-cu12 wheels] → cuda when HEXA_CUDA unset, pip-install-torch")
-        println("           style). Verify: hexa run 'fn main(){print(cuda_available())}' → 1")
+        println("    ENABLE GPU: on an NVIDIA host just run  sh install.sh")
+        println("          — prefer_cuda auto-detects nvidia-smi → installs the SELF-CONTAINED")
+        println("           -cuda asset (CUDA runtime statically bundled; the ONLY run-time dep")
+        println("           is the driver libcuda.so.1 — no pip wheels / cuda-libs farm / LD_")
+        println("           LIBRARY_PATH). Verify: hexa run 'fn main(){print(cuda_available())}' → 1")
     }
-    // CUDA LIB SOURCE — where the -cuda link resolves cudart/cuda from (GPU-status
-    // SSOT: makes the bare-pod pip symlink farm diagnosable). farm > toolkit > none,
-    // mirroring os_clang_ldflags' probe order.
+    // CUDA LIB SOURCE — where the -cuda link resolves cudart from (GPU-status SSOT).
+    // Self-contained: the STATIC CUDA runtime is bundled next to runtime.a
+    // (build/cuda-static/) and linked statically → the only run-time dep is the
+    // driver. Toolkit is the release-builder/dev-host fallback (dynamic).
     let hx_home_g = if env_var("HX_HOME") != "" { env_var("HX_HOME") } else { env_var("HOME") + "/.hx" }
-    let farm_g = hx_home_g + "/cuda-libs"
-    if exec("test -f '" + farm_g + "/libcudart.so' && printf 1 || printf 0").trim() == "1" {
-        println("  cuda libs:         pip farm " + farm_g + "  (bare rent pod — SONAME wheels symlinked + rpath)")
+    let static_g = hx_home_g + "/bin/build/cuda-static"
+    if exec("test -f '" + static_g + "/libcudart_static.a' && printf 1 || printf 0").trim() == "1" {
+        println("  cuda libs:         self-contained static " + static_g + "  (bundled cudart; run-time dep = driver libcuda.so.1 only)")
     } else {
         let ch = if env_var("CUDA_HOME") != "" { env_var("CUDA_HOME") } else { "/usr/local/cuda" }
         if exec("test -e '" + ch + "/lib64/libcudart.so' -o -e '" + ch + "/targets/x86_64-linux/lib/libcudart.so' && printf 1 || printf 0").trim() == "1" {
-            println("  cuda libs:         toolkit " + ch)
+            println("  cuda libs:         toolkit " + ch + "  (dynamic fallback — dev/builder host)")
         } else {
-            println("  cuda libs:         (none resolved — CPU build, or a -cuda build needs a toolkit / pip nvidia-cuda-runtime-cu12)")
+            println("  cuda libs:         (none — CPU build, or a -cuda asset missing its bundled build/cuda-static/)")
         }
     }
     println("")
