@@ -1422,7 +1422,18 @@ fn os_clang_ldflags() {
         if env_var("HEXA_ZEROC_OWN_START") == "1" {
             let _zc_arch = exec("uname -m 2>/dev/null | tr -d ' \\n\\t'")
             if _zc_arch == "x86_64" || _zc_arch == "aarch64" || _zc_arch == "arm64" {
-                base = base + " -nostartfiles"
+                // own-start #29 PR-C probe (mirrors the stage_build_hexa/stage_prebuild_hexat
+                // nm ' T _start' guard): only drop crt _start when the runtime.a on THIS user link
+                // actually CARRIES own _start. A stale/CPU prebuilt (HEXA_PREBUILT_RUNTIME seam, or a
+                // build/runtime.a from a non-OWN_START install) has none → -nostartfiles = no _start
+                // = link/exec FATAL (#4489 class; C1/C2 has no loud-fail fallback, unlike the C3 ld
+                // path). Probe resolve_prebuilt_runtime(); if it lacks own _start, keep crt1 _start.
+                // Byte-neutral: the whole block is OWN_START-gated (default-OFF → base unchanged).
+                let _zc_ra = resolve_prebuilt_runtime()
+                let _zc_has = exec("nm '" + _zc_ra + "' 2>/dev/null | grep -qE ' T _?_start$' && printf yes || printf no")
+                if len(_zc_ra) > 0 && _zc_has == "yes" {
+                    base = base + " -nostartfiles"
+                }
             }
         }
     }
