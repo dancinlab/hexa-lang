@@ -566,6 +566,34 @@ pub let mut _bck_ref_mut: [bool] = []
 // self-healing; flag-OFF (`_bck_active` false) never sets it (byteeq-neutral).
 pub let mut _bck_in_borrow_rhs = false
 
+// ── HEXA-OWN round8-1 — HX3035 use-of-possibly-uninitialized (Rust E0381) ──
+// Reference-matched to rustc_mir_dataflow `MaybeUninitializedPlaces` (a MAY
+// forward dataflow: bit=1 ⇔ the place is maybe-uninitialized at this point).
+// A separate, minimal registry from the E2/M3 aggregate-loan arrays above:
+// TRACKED = the local id of an uninitialized `let x` (declared with NO
+// initializer — the parser gives `children == []`, the only site where an
+// uninit binding is distinguishable from `= 0` at MIR level). Population is
+// gated on `_bck_active` (default false, HEXA_BORROWCK), so the flag-OFF diag
+// stream + emitted bytes stay byte-identical. The pass is OBSERVE-ONLY (it
+// records events; it never mutates any MIR stmt/local/block). Reset per-fn in
+// `_bck_reset_fn`. See the `_bcki_check` fixpoint below for the dataflow.
+pub let mut _bcki_ids: [i64] = []          // tracked = uninit-let local ids
+pub let mut _bcki_names: [string] = []
+pub let mut _bcki_decl_lines: [i64] = []
+// per-fn EVENTS in program (push) order: kind 0=INIT (kill) / 1=USE.
+pub let mut _bcki_ev_kind: [i64] = []      // 0=INIT 1=USE
+pub let mut _bcki_ev_t: [i64] = []         // index into _bcki_ids
+pub let mut _bcki_ev_blocks: [i64] = []    // Block.id the event occurred in
+pub let mut _bcki_ev_spans: [Span] = []
+// place-write base suppression: set true around lowering the BASE of a
+// `s.f = v` / `a[i] = v` place-write so the base ident READ does not count as
+// a use-of-value (a partial init is not a use). Saved/restored per write.
+pub let mut _bcki_in_place_base = false
+// HX3035-only same-site dedup (kept SEPARATE from `_bck_e_*` so an uninit-use
+// never collapses into an unrelated loan diagnostic at the same span).
+pub let mut _bcki_e_lines: [i64] = []
+pub let mut _bcki_e_cols: [i64] = []
+
 fn _bck_reset_fn() {
     _bck_grp_ctr = 0
     _bck_local_ids = []
@@ -591,6 +619,18 @@ fn _bck_reset_fn() {
     _bck_ref_origins = []
     _bck_ref_lines = []
     _bck_ref_mut = []
+    // round8-1 — HX3035 uninit registry (byteeq-neutral: flag-OFF leaves all
+    // arrays empty and `_bcki_check` returns immediately on T==0).
+    _bcki_ids = []
+    _bcki_names = []
+    _bcki_decl_lines = []
+    _bcki_ev_kind = []
+    _bcki_ev_t = []
+    _bcki_ev_blocks = []
+    _bcki_ev_spans = []
+    _bcki_in_place_base = false
+    _bcki_e_lines = []
+    _bcki_e_cols = []
 }
 
 fn _bck_new_group() -> i64 {
@@ -1117,6 +1157,18 @@ fn _bck_emit_ret_escape(name: string, origin: string, borrow_line: i64, sp: Span
 // (the single funnel: field/index reads, binop and call args, and the
 // base of every write all lower their idents through the ident arm).
 fn _bck_check_use(name: string, local_id: i64, blk: i64, sp: Span) {
+    // HEXA-OWN round8-1 — W2, HX3035 use-of-possibly-uninitialized (Rust
+    // E0381). Every ident value-read funnels here, so this is the single USE
+    // hook for the MaybeUninitialized dataflow. Suppressed when lowering the
+    // BASE of a place-write (`s.f = v` / `a[i] = v`): writing THROUGH a place
+    // is not a use OF its value (a partial init, not a read). Record the event
+    // ONLY; `_bcki_check` decides emit at end-of-fn against the full CFG.
+    if !_bcki_in_place_base {
+        let _bki_ut = _bcki_find(local_id)
+        if _bki_ut >= 0 {
+            _bcki_note_use(_bki_ut, blk, sp)
+        }
+    }
     // HEXA-OWN L5-E5 — use-while-mutably-borrowed (Rust E0503). A READ of a
     // value through its OWN name while a live `&mut` loan of it exists. Keyed on
     // the E2 loan registry (NOT the aggregate group registry), so it runs BEFORE
@@ -1307,6 +1359,217 @@ fn _bck_nll_check() {
                     }
                 }
                 e = e + 1
+            }
+        }
+        u = u + 1
+    }
+}
+
+// ── HEXA-OWN round8-1 — HX3035 uninit dataflow helpers ──────────────
+// Newest-entry-wins scan (the `_bck_find_local` idiom): the local id of a
+// tracked uninit `let`. A later initialized shadow `let x = …` gets a fresh
+// id that is never tracked, so `_bcki_find` on that id fails (correct — the
+// new binding is initialized).
+fn _bcki_find(id: i64) -> i64 {
+    let mut i = len(_bcki_ids) - 1
+    while i >= 0 {
+        if _bcki_ids[i] == id { return i }
+        i = i - 1
+    }
+    return 0 - 1
+}
+
+// W1 — register an uninitialized `let` binding as a tracked place.
+fn _bcki_track(id: i64, name: string, decl_line: i64) {
+    _bcki_ids.push(id)
+    _bcki_names.push(name)
+    _bcki_decl_lines.push(decl_line)
+}
+
+// Program-order event log (push order == program order globally, so within a
+// block the relative order is program order). kind 1 = USE (a read of value),
+// kind 0 = INIT (a write that initializes the place → kills the uninit bit).
+fn _bcki_note_use(t: i64, blk: i64, sp: Span) {
+    _bcki_ev_kind.push(1)
+    _bcki_ev_t.push(t)
+    _bcki_ev_blocks.push(blk)
+    _bcki_ev_spans.push(sp)
+}
+
+fn _bcki_note_init(t: i64, blk: i64, sp: Span) {
+    _bcki_ev_kind.push(0)
+    _bcki_ev_t.push(t)
+    _bcki_ev_blocks.push(blk)
+    _bcki_ev_spans.push(sp)
+}
+
+// HX3035 emit (use-of-possibly-uninitialized, Rust E0381) — HX3035-only
+// same-site dedup + STRICT escalation, cloned from `_bck_emit_use_while_mut`.
+// `name` is the binding read while maybe-uninitialized, `decl_line` where it
+// was declared without an initializer.
+fn _bcki_emit_uninit_use(name: string, decl_line: i64, sp: Span) {
+    let mut di = 0
+    while di < len(_bcki_e_lines) {
+        if _bcki_e_lines[di] == sp.line && _bcki_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bcki_e_lines.push(sp.line)
+    _bcki_e_cols.push(sp.col)
+    let mut b = diag_new("HX3035")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "decl_line", to_string(decl_line))
+    let mut d = diag_emit(b)
+    // STRICT (HEXA_BORROWCK_STRICT) re-bands the SAME diagnostic instance to a
+    // build-refusing Error via the sanctioned caller override — identical to
+    // the HX3014/…/HX3034 escalation. OFF-strict keeps the catalog Warning
+    // band, and the flag-OFF path never reaches here (byteeq-neutral).
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
+}
+
+// ── HEXA-OWN round8-1 — HX3035 forward MaybeUninitialized fixed-point ──
+// Runs ONCE at the end of _lower_fn (guarded by `_bck_active`), beside
+// `_bck_nll_check`, when the fn's full CFG is materialized in `_lr_blocks`.
+// Reference-matched to rustc_mir_dataflow `MaybeUninitializedPlaces` — a MAY
+// (union/OR-join) forward analysis, the exact DUAL of the must-init AND-join:
+//     OUT[b][t] = 0 if b INITs t  else  IN[b][t]      (gen=∅, kill=INIT)
+//     IN[b][t]  = OR over preds p of OUT[p][t]        (entry seeded to 1)
+// Every tracked uninit place is maybe-uninit at fn entry (seed 1). A block
+// with NO CFG pred (unreachable, or a return-terminated branch whose join
+// edge `_add_edge` omitted) gets IN=0 → structurally FP-free: `if c { return }
+// else { x = 1 }; use x` and `if c { x=1 } else { x=2 }; use x` are both CLEAN
+// (the return branch is not a pred of the join; the OR-join of two INIT'd
+// preds is 0). Emit at a USE u ⇔ IN[block(u)][t]==1 AND no INIT(t) precedes u
+// within the same block (program order) — so `let x; x=1; use x` is clean but
+// `let x; use x; x=1` fires. Same convergence guard as _bck_nll_check: hard
+// sweep cap blocks*4+8, loud bail drops THIS fn's cross-block results only.
+fn _bcki_check(entry_id: i64) {
+    let nt = len(_bcki_ids)
+    if nt == 0 { return }   // corpus has 0 uninit lets → flag-ON is a no-op too
+    let nu = len(_bcki_ev_kind)
+    if nu == 0 { return }
+    let nb = len(_lr_blocks)
+    if nb == 0 { return }
+    // block id → _lr_blocks index map (defensive; ids are per-fn monotonic).
+    let mut max_id = 0
+    let mut bi = 0
+    while bi < nb {
+        if _lr_blocks[bi].id > max_id { max_id = _lr_blocks[bi].id }
+        bi = bi + 1
+    }
+    let mut id2ix: [i64] = []
+    let mut k = 0
+    while k <= max_id {
+        id2ix.push(0 - 1)
+        k = k + 1
+    }
+    bi = 0
+    while bi < nb {
+        let bid = _lr_blocks[bi].id
+        if bid >= 0 { id2ix[bid] = bi }
+        bi = bi + 1
+    }
+    // KILL[b][t] = 1 iff block b has an INIT event for t (whole-block kill;
+    // within-block ordering is handled at emit, not here).
+    let mut kill: [i64] = []
+    let mut in_bits: [i64] = []
+    let mut z = 0
+    while z < nb * nt {
+        kill.push(0)
+        in_bits.push(0)
+        z = z + 1
+    }
+    let mut ei = 0
+    while ei < nu {
+        if _bcki_ev_kind[ei] == 0 {
+            let eb = _bcki_ev_blocks[ei]
+            if eb >= 0 && eb <= max_id {
+                let ebx = id2ix[eb]
+                if ebx >= 0 { kill[ebx * nt + _bcki_ev_t[ei]] = 1 }
+            }
+        }
+        ei = ei + 1
+    }
+    // seed IN[entry][t] = 1 (every tracked place is maybe-uninit at entry).
+    let mut entry_ix = 0 - 1
+    if entry_id >= 0 && entry_id <= max_id { entry_ix = id2ix[entry_id] }
+    if entry_ix >= 0 {
+        let mut t = 0
+        while t < nt {
+            in_bits[entry_ix * nt + t] = 1
+            t = t + 1
+        }
+    }
+    // forward OR-join fixed-point over Block.preds (monotone: bits only set).
+    let cap = nb * 4 + 8
+    let mut iter = 0
+    let mut changed = true
+    while changed {
+        if iter >= cap {
+            println("borrowck HX3035 BAIL: uninit fixed-point exceeded "
+                    + to_string(cap) + " sweeps (blocks=" + to_string(nb)
+                    + ", tracked=" + to_string(nt)
+                    + ") — uninit results dropped for this fn")
+            return
+        }
+        changed = false
+        bi = 0
+        while bi < nb {
+            let preds = _lr_blocks[bi].preds
+            let mut pi = 0
+            while pi < len(preds) {
+                let pid = preds[pi]
+                let mut pix = 0 - 1
+                if pid >= 0 && pid <= max_id { pix = id2ix[pid] }
+                if pix >= 0 {
+                    let mut t = 0
+                    while t < nt {
+                        if in_bits[bi * nt + t] == 0 {
+                            let mut out_p = in_bits[pix * nt + t]
+                            if kill[pix * nt + t] == 1 { out_p = 0 }
+                            if out_p == 1 {
+                                in_bits[bi * nt + t] = 1
+                                changed = true
+                            }
+                        }
+                        t = t + 1
+                    }
+                }
+                pi = pi + 1
+            }
+            bi = bi + 1
+        }
+        iter = iter + 1
+    }
+    // emit at every recorded USE event.
+    let mut u = 0
+    while u < nu {
+        if _bcki_ev_kind[u] == 1 {
+            let t = _bcki_ev_t[u]
+            let ub = _bcki_ev_blocks[u]
+            let mut uix = 0 - 1
+            if ub >= 0 && ub <= max_id { uix = id2ix[ub] }
+            if uix >= 0 {
+                if in_bits[uix * nt + t] == 1 {
+                    // same-block preceding INIT of t ⇒ initialized before use.
+                    let mut preceding_init = false
+                    let mut pe = 0
+                    while pe < u {
+                        if _bcki_ev_kind[pe] == 0 && _bcki_ev_t[pe] == t
+                            && _bcki_ev_blocks[pe] == ub {
+                            preceding_init = true
+                            break
+                        }
+                        pe = pe + 1
+                    }
+                    if !preceding_init {
+                        _bcki_emit_uninit_use(_bcki_names[t], _bcki_decl_lines[t],
+                                              _bcki_ev_spans[u])
+                    }
+                }
             }
         }
         u = u + 1
@@ -3356,6 +3619,15 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         }
         ctx2 = _push_stmt(ctx2, s)
         if len(nm) > 0 { ctx2 = _bind(ctx2, nm, dst.id) }
+        // HEXA-OWN round8-1 — W1, HX3035 uninit registration. A `let x` with
+        // NO initializer (`len(e.children) == 0`) is the ONLY site an uninit
+        // binding is distinguishable from `= 0` at MIR level (the let arm still
+        // synthesizes `rhs_op = _const_int_op(0)` above). Type-agnostic: track
+        // every uninitialized `let` by its local id. Flag-OFF (`_bck_active`
+        // false) never registers → byteeq-neutral.
+        if _bck_active && len(nm) > 0 && len(e.children) == 0 {
+            _bcki_track(dst.id, nm, e.span.line)
+        }
         // HEXA-OWN L3 M3 — loan registration at the binding site:
         //   * `let a = [..]` / `let c = S{..}` → new tracked ROOT (fresh
         //     group). Composite literals are the only aggregate births
@@ -3489,7 +3761,14 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // hexa_map_set(base, key, val), symmetric to the field-read map_get.
         // (C-path self/codegen.hexa:3287 "Field assignment: obj.field = val".)
         if lhs.kind == "field" && len(lhs.children) >= 1 {
+            // round8-1 — W4: the BASE of `s.f = v` is a place-write target, not
+            // a use-of-value; suppress the HX3035 USE hook around its lowering
+            // (E5 save/set/restore idiom). The RHS is lowered OUTSIDE the guard
+            // so an uninit value on the RHS still fires.
+            let _bki_saved_pb = _bcki_in_place_base
+            if _bck_active { _bcki_in_place_base = true }
             let fbr = _lower_hexpr(ctx, lhs.children[0])
+            _bcki_in_place_base = _bki_saved_pb
             let frr = _lower_hexpr(fbr.ctx, e.children[1])
             let mut fargs: [Operand] = []
             fargs.push(fbr.operand)
@@ -3504,6 +3783,15 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 target_block_else: -1
             }
             let fctx = _push_stmt(frr.ctx, fs)
+            // round8-1 — W4: `s.f = v` INITs `s` (partial init → the whole
+            // place is treated as initialized, so a later `use s` is silent).
+            if _bck_active && lhs.children[0].kind == "ident"
+                && fbr.operand.kind == "local" {
+                let _bki_ft = _bcki_find(fbr.operand.local_id)
+                if _bki_ft >= 0 {
+                    _bcki_note_init(_bki_ft, fctx.cur_block, e.span)
+                }
+            }
             // HEXA-OWN L3 M3 — `obj.f = v` is a WRITE through the base
             // handle (structs are map-backed reference values). Whole-
             // local granularity: no place projections in Operand, so a
@@ -3528,7 +3816,14 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             return _no_value(fctx)
         }
         if lhs.kind == "index" && len(lhs.children) >= 2 {
+            // round8-1 — W4: suppress the HX3035 USE hook around the container
+            // BASE only. The KEY (`lhs.children[1]`) and RHS (`e.children[1]`)
+            // are lowered OUTSIDE the guard, so an uninit index `a[i] = v` (i
+            // uninit) still fires normally.
+            let _bki_saved_pb2 = _bcki_in_place_base
+            if _bck_active { _bcki_in_place_base = true }
             let br = _lower_hexpr(ctx, lhs.children[0])
+            _bcki_in_place_base = _bki_saved_pb2
             let kr = _lower_hexpr(br.ctx, lhs.children[1])
             let rr2 = _lower_hexpr(kr.ctx, e.children[1])
             let mut args: [Operand] = []
@@ -3544,6 +3839,15 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 target_block_else: -1
             }
             let ctx_s = _push_stmt(rr2.ctx, s)
+            // round8-1 — W4: `a[i] = v` INITs the container `a` (partial init
+            // → whole place treated as initialized).
+            if _bck_active && lhs.children[0].kind == "ident"
+                && br.operand.kind == "local" {
+                let _bki_it = _bcki_find(br.operand.local_id)
+                if _bki_it >= 0 {
+                    _bcki_note_init(_bki_it, ctx_s.cur_block, e.span)
+                }
+            }
             // HEXA-OWN L3 M3 — `a[i] = v` / `m[k] = v` is a WRITE through
             // the container handle: arm Rule 1 for later same-block uses
             // of the group through a different alias name.
@@ -3617,6 +3921,17 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         ctx2 = _push_stmt(ctx2, s)
         if !did_reuse && !is_global && len(lhs.text) > 0 {
             ctx2 = _rebind(ctx2, lhs.text, dst.id)
+        }
+        // round8-1 — W3: a plain `x = v` reassign of a tracked uninit `let x`
+        // INITs it. `did_reuse` means `_mir_lookup` found the SAME local id the
+        // uninit `let` bound (an uninit let always takes the reuse path). The
+        // RHS was lowered FIRST (above), so `x = x + 1` records the RHS USE
+        // before this INIT → use-before-init still fires.
+        if _bck_active && did_reuse && lhs.kind == "ident" {
+            let _bki_at = _bcki_find(dst.id)
+            if _bki_at >= 0 {
+                _bcki_note_init(_bki_at, ctx2.cur_block, e.span)
+            }
         }
         // HEXA-OWN L3 M3 — ident re-assign `b = x` is a BINDING-level
         // event (not a write through the handle): EDGE-KILL + RE-POINT.
@@ -5934,6 +6249,10 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
     // Block.preds/succs. Flag OFF ⇒ `_bck_active` false ⇒ zero work.
     if _bck_active {
         _bck_nll_check()
+        // round8-1 — HX3035 use-of-possibly-uninitialized forward dataflow,
+        // beside the NLL pass (same _bck_active gate, same CFG). No-op when no
+        // uninit `let` was registered (T==0 → immediate return).
+        _bcki_check(entry_id)
     }
     return MFunc {
         name: __fn_name,
