@@ -4033,7 +4033,22 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                                      "materialize cmp lhs to reg"))
                     a_real = _x86_op_reg(a_scratch)
                 }
-                _x86_buf.push(_x86_instr2("cmp", a_real, b, "binop " + s.op))
+                // x86-64 `cmp r/m64, imm` takes a SIGN-EXTENDED imm32 ONLY — a 64-bit RHS
+                // immediate (e.g. a 2^53/2^52/2^59 mantissa/exponent bound) is not encodable
+                // (GNU as / clang: "invalid operand for instruction"). Mirrors the ALU imm32
+                // guard below: materialize a wide RHS const into b_scratch (r11, provably dead
+                // when this fires — it only homes a resolved non-const b) first. Small imms keep
+                // the direct `cmp reg, imm` → byte-identical emit for every existing program.
+                let mut b_real = b
+                if s.args[1].kind == "const_int" {
+                    let bv = s.args[1].int_val
+                    if bv > 2147483647 || bv < -2147483648 {
+                        _x86_buf.push(_x86_instr2("mov", _x86_op_reg(b_scratch), b,
+                                         "materialize wide cmp imm to reg (x86 cmp imm is imm32)"))
+                        b_real = _x86_op_reg(b_scratch)
+                    }
+                }
+                _x86_buf.push(_x86_instr2("cmp", a_real, b_real, "binop " + s.op))
                 _x86_buf.push(_x86_instr1("set" + suf, _x86_op_reg("al"),
                                  "binop " + s.op + " → al"))
                 _x86_buf.push(_x86_instr2("movzx", dst, _x86_op_reg("al"),
