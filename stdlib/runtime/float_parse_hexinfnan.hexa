@@ -134,22 +134,35 @@ fn hpx_round_shift(sign, m, ndrop, st, ebits_lead) -> float {
         // more than the whole i64 significand shifts out → below half min-subnormal → ±0.
         return hpx_assemble(sign, 0, 0)
     }
-    // divisor = 2^ndrop (ndrop < 64, fits in i64 as long as ndrop <= 62; guard 63).
+    // ndrop==63 needs div=2^63 which overflows i64 (goes negative → r>half is true for
+    // every r → every value wrongly rounds UP to denorm_min; this was Family A of the 176
+    // strtod-tail mismatches, reachable only at e2==-1137). Fold the bits BELOW the round
+    // region into sticky first (glibc round_and_return GRS semantics) so the divisor stays
+    // <= 2^62. RNE is unchanged; ndrop<=62 runs zero iterations → byte-identical.
+    let mut m2 = m
+    let mut nd = ndrop
+    let mut st2 = st
+    while nd > 62 {
+        if m2 % 2 == 1 { st2 = 1 }
+        m2 = m2 / 2
+        nd = nd - 1
+    }
+    // divisor = 2^nd (nd <= 62, fits in i64).
     let mut div = 1
     let mut k = 0
-    while k < ndrop {
+    while k < nd {
         div = div * 2
         k = k + 1
     }
-    let q = m / div
-    let r = m % div
+    let q = m2 / div
+    let r = m2 % div
     let half = div / 2
     let mut qi = q
     // round-half-even: r>half → up ; r<half → down ; r==half → up iff sticky OR q odd.
     if r > half {
         qi = qi + 1
     } else if r == half {
-        if st == 1 { qi = qi + 1 }
+        if st2 == 1 { qi = qi + 1 }
         else if qi % 2 == 1 { qi = qi + 1 }
     }
     // Post-round assembly. Two regimes:
@@ -174,8 +187,9 @@ fn hpx_round_shift(sign, m, ndrop, st, ebits_lead) -> float {
 
 // EXACT hex-float → f64. `s` positioned at the char AFTER the "0x"/"0X" prefix.
 // Accumulates the integer significand across hex digits (integer + fractional part),
-// tracks the fractional-digit count as a binary exponent, reads the mandatory p/P
-// exponent, then normalizes to 53 significand bits with round-half-even.
+// tracks the fractional-digit count as a binary exponent, reads the OPTIONAL p/P
+// exponent (strtod: defaults p0, dangling 'p' not consumed), then normalizes to 53
+// significand bits with round-half-even.
 fn hpx_hexfloat(s: string, i0, n, sign) -> float {
     let mut i = i0
     // accumulate significand into i64 `sig`; once sig has >=60 bits we stop shifting
@@ -219,31 +233,40 @@ fn hpx_hexfloat(s: string, i0, n, sign) -> float {
             go = 0
         }
     }
-    // a hex-float REQUIRES a binary exponent 'p'/'P' (C99). No 'p' AND no digit → junk.
-    if anydig == 0 { return __hx_make_val(4, 0) }
-    // read mandatory p/P exponent.
-    if i >= n { return __hx_make_val(4, 0) }
-    let pc = s.byte_at(i)
-    if pc != 112 && pc != 80 { return __hx_make_val(4, 0) }   // 'p'/'P' required
-    i = i + 1
+    // strtod hex-float grammar (C11 7.22.1.3): after >=1 hexdigit the binary-exponent
+    // part is OPTIONAL (defaults to p0), and a 'p'/'P' NOT followed by >=1 decimal digit
+    // (after an optional sign) is NOT consumed — longest-valid-prefix wins ("0x10"->16.0,
+    // "0x1.8"->1.5, "0x1p"/"0x1p+"/"0x1pz"->1.0, "0x1.2.3p4"->"0x1.2"). Anything past the
+    // accepted prefix is trailing junk (endptr). This was Family B of the 176 mismatches
+    // (native previously REQUIRED 'p' and declined the rest to the lenient 0.0 fallback).
+    if anydig == 0 { return __hx_make_val(4, 0) }        // "0x"/"0x." with no hexdigit → junk
     let mut psign = 1
-    if i < n {
-        let pb = s.byte_at(i)
-        if pb == 45 { psign = 0 - 1; i = i + 1 }
-        else if pb == 43 { i = i + 1 }
-    }
     let mut pval = 0
-    let mut phad = 0
-    while i < n {
-        let pb = s.byte_at(i)
-        if pb >= 48 && pb <= 57 {
-            pval = pval * 10 + (pb - 48)
-            phad = 1
-            if pval > 100000 { pval = 100000 }        // clamp (past overflow anyway)
-            i = i + 1
-        } else { break }
+    if i < n {
+        let pc = s.byte_at(i)
+        if pc == 112 || pc == 80 {                       // 'p'/'P' — peek; commit only if a digit follows
+            let mut j = i + 1
+            let mut jsign = 1
+            if j < n {
+                let pb = s.byte_at(j)
+                if pb == 45 { jsign = 0 - 1; j = j + 1 }
+                else if pb == 43 { j = j + 1 }
+            }
+            let mut jval = 0
+            let mut jhad = 0
+            while j < n {
+                let pb = s.byte_at(j)
+                if pb >= 48 && pb <= 57 {
+                    jval = jval * 10 + (pb - 48)
+                    jhad = 1
+                    if jval > 100000 { jval = 100000 }   // clamp (past overflow anyway)
+                    j = j + 1
+                } else { break }
+            }
+            if jhad == 1 { psign = jsign; pval = jval; i = j }   // commit the exponent
+            // else: dangling 'p' — rollback, exponent absent (p0), 'p' becomes trailing junk
+        }
     }
-    if phad == 0 { return __hx_make_val(4, 0) }        // 'p' with no digits → junk
     // value = sig · 2^(bexp + psign·pval). sig==0 → signed zero.
     if sig == 0 {
         if sticky == 0 { return hpx_assemble(sign, 0, 0) }
@@ -256,32 +279,58 @@ fn hpx_hexfloat(s: string, i0, n, sign) -> float {
     return hpx_pack(sign, sig, e2, sticky)
 }
 
-// parse the nan(...) payload body as glibc/Apple does: strtoull(p, 0, 0)-style —
-// leading 0x/0X = base 16, else base 10; '_' separators skipped; stop at ')'.
-// Returns the parsed unsigned value (low bits used). Matches glibc __strtod nan().
-fn hpx_nan_payload(s: string, i0, n) -> int {
+// glibc strtod_nan: payload = strtoull(seq, &endp, 0), applied ONLY if the WHOLE
+// n-char-seq [i0,jend) is consumed. '_' is NOT a digit separator — strtoull stops at it
+// → payload ignored → default quiet NaN. Overflow saturates to ULLONG_MAX (low-51 = all
+// ones). base 0: "0x"/"0X"+hexdigit → 16, leading '0' → 8 (octal), else 10. Returns the
+// low-51 payload bits, or -1 = "not fully consumed" → leave the default quiet-NaN mantissa.
+// 32-bit limbs keep every intermediate < 2^63 (i64-safe, no wrap = the old Family-C bug).
+fn hpx_nan_payload(s: string, i0, jend) -> int {
     let mut i = i0
     let mut base = 10
-    if i + 1 < n {
-        let a = s.byte_at(i)
-        let bb = s.byte_at(i + 1)
-        if a == 48 && (bb == 120 || bb == 88) { base = 16; i = i + 2 }
-    }
-    let mut v = 0
-    while i < n {
-        let b = s.byte_at(i)
-        if b == 95 { i = i + 1 }                       // '_' digit separator (glibc)
-        else {
-            let mut d = 0 - 1
-            if b >= 48 && b <= 57 { d = b - 48 }
-            else if base == 16 && b >= 97 && b <= 102 { d = b - 87 }
-            else if base == 16 && b >= 65 && b <= 70 { d = b - 55 }
-            if d < 0 || d >= base { break }
-            v = v * base + d
-            i = i + 1
+    let mut had0 = 0
+    if i < jend && s.byte_at(i) == 48 {                 // leading '0'
+        base = 8
+        had0 = 1
+        i = i + 1
+        if i < jend {
+            let x = s.byte_at(i)
+            if x == 120 || x == 88 {                    // "0x"/"0X"
+                let mut hd = 0
+                if i + 1 < jend {
+                    let hb = s.byte_at(i + 1)
+                    if hb >= 48 && hb <= 57 { hd = 1 }
+                    else if hb >= 97 && hb <= 102 { hd = 1 }
+                    else if hb >= 65 && hb <= 70 { hd = 1 }
+                }
+                if hd == 0 { return 0 - 1 }              // "0x" w/o hexdigit → strtoull took "0" only, not full seq
+                base = 16
+                i = i + 2
+            }
         }
     }
-    return v
+    let mut hi = 0                                       // value = hi*2^32 + lo, limbs < 2^32
+    let mut lo = 0
+    let mut sat = 0
+    let mut ndig = 0
+    while i < jend {
+        let b = s.byte_at(i)
+        let mut d = 0 - 1
+        if b >= 48 && b <= 57 { d = b - 48 }
+        else if b >= 97 && b <= 102 { d = b - 87 }
+        else if b >= 65 && b <= 70 { d = b - 55 }
+        if d < 0 || d >= base { return 0 - 1 }          // '_' / out-of-base → not fully consumed
+        ndig = ndig + 1
+        let lo2 = lo * base + d
+        let hi2 = hi * base + lo2 / 4294967296
+        lo = lo2 % 4294967296
+        if hi2 >= 4294967296 { sat = 1 }                // u64 overflow → ULLONG_MAX
+        hi = hi2 % 4294967296
+        i = i + 1
+    }
+    if ndig == 0 && had0 == 0 { return 0 - 1 }
+    if sat == 1 { return 2251799813685247 }             // ULLONG_MAX low-51 = all ones
+    return (hi % 524288) * 4294967296 + lo              // low 51 = (hi mod 2^19)*2^32 + lo
 }
 
 // TAIL string→f64: hex-float / inf / nan(+payload) / malformed. Returns the double,
@@ -293,7 +342,7 @@ pub fn rt_str_parse_float_hexinfnan(s: string) -> float {
     // 1. skip leading C-isspace (mirrors rt_str_parse_float_exact L344-348).
     while i < n {
         let b = s.byte_at(i)
-        if b == 32 || b == 9 || b == 10 || b == 13 { i = i + 1 } else { break }
+        if b == 32 || b == 9 || b == 10 || b == 11 || b == 12 || b == 13 { i = i + 1 } else { break }   // C isspace incl. \v \f (strtod skips)
     }
     // 2. optional sign.
     let mut sign = 0
@@ -333,17 +382,29 @@ pub fn rt_str_parse_float_hexinfnan(s: string) -> float {
                 i = i + 3
                 // canonical quiet NaN mantissa top bit = 2^51 = 0x8000000000000.
                 let mut frac = 2251799813685248
-                // optional (payload)
+                // optional (payload) — glibc strtod_nan: scan the n-char-seq [A-Za-z0-9_]*
+                // and apply the payload ONLY if it is closed by ')'. No ')' (incl. EOS) →
+                // rollback to bare "nan" (default quiet mantissa): "nan(123", "nan(12-3)" → default.
                 if i < n {
                     let pb = s.byte_at(i)
                     if pb == 40 {                        // '('
-                        let pay = hpx_nan_payload(s, i + 1, n)
-                        // OR the payload's low 51 bits into the mantissa (glibc/Apple).
-                        // low 51 bits = pay % 2^51 ; quiet bit (2^51) stays set via +.
-                        // fields disjoint (quiet bit is bit 51, payload is bits 0..50)
-                        // so + == | . Payload cannot touch the quiet bit.
-                        let low = pay % 2251799813685248
-                        frac = frac + low
+                        let mut j = i + 1
+                        while j < n {
+                            let cb = s.byte_at(j)
+                            let mut isseq = 0
+                            if cb >= 48 && cb <= 57 { isseq = 1 }
+                            else if cb >= 97 && cb <= 122 { isseq = 1 }
+                            else if cb >= 65 && cb <= 90 { isseq = 1 }
+                            else if cb == 95 { isseq = 1 }   // '_'
+                            if isseq == 0 { break }
+                            j = j + 1
+                        }
+                        if j < n && s.byte_at(j) == 41 {     // ')' closes the seq
+                            let pay = hpx_nan_payload(s, i + 1, j)
+                            // pay is the low-51 payload bits (or -1 = not fully consumed →
+                            // leave default). quiet bit (2^51) disjoint from bits 0..50 → + == |.
+                            if pay >= 0 { frac = frac + pay }
+                        }
                     }
                 }
                 return hpx_assemble(sign, 2047, frac)
