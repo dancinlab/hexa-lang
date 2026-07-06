@@ -2434,6 +2434,40 @@ fn _types_kind_is_scalar(k: string) -> bool {
     return false
 }
 
+// static-types r12 (aq) — TRUE iff every leaf of a BinOp/UnOp RHS tree is
+// provably a KNOWN scalar, so the tree's inferred result type is SOUND to
+// compare against a let annotation. Kills the unknown-operand literal-fallback
+// false-positive class: `a_unknown + 1` infers i64 via the check_binop
+// unknown-arm (the literal side), which would false-REJECT `let x: i32 = a + 1`
+// — an unknown leaf disqualifies the whole tree. Logical ops (&&/||/and/or) are
+// value-returning truthy short-circuits (hir_to_mir lowering) whose static type
+// is unsound on mixed operands, and non-`-` unops (`!`) yield a truthy bool at
+// runtime while passing the operand type through — both excluded (under-reject).
+fn _types_rhs_leaves_known(e: Expr, env: TypeEnv, ctx: CheckCtx) -> bool {
+    if _types_is_lit_int(e.kind) || _types_is_lit_float(e.kind)
+        || _types_is_lit_string(e.kind) || _is_lit_bool(e.kind) || _is_lit_char(e.kind) {
+        return true
+    }
+    if _types_is_binop(e.kind) {
+        if e.text == "as" { return true }
+        if !_is_arith_op(e.text) && !_types_is_compare_op(e.text) { return false }
+        if len(e.children) < 2 { return false }
+        return _types_rhs_leaves_known(e.children[0], env, ctx)
+            && _types_rhs_leaves_known(e.children[1], env, ctx)
+    }
+    if _types_is_unop(e.kind) {
+        if e.text != "-" { return false }
+        if len(e.children) == 0 { return false }
+        return _types_rhs_leaves_known(e.children[0], env, ctx)
+    }
+    if _types_is_ident(e.kind) || _types_is_call(e.kind)
+        || _types_is_index(e.kind) || _types_is_field(e.kind) {
+        let mut scratch: array = []
+        return _types_kind_is_scalar(_infer_expr(e, env, ctx, scratch).kind)
+    }
+    return false
+}
+
 // Wall A r4 — Index-expr probe (stage0 has no derived Eq). Mirrors the
 // per-ExprKind match shape of `_types_is_assign`; only `ExprKind::Index`
 // (a postfix `a[i]` subscript, parser.hexa:753) is true. Used so the assign
@@ -2971,6 +3005,27 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                             }
                         }
                     }
+                } else if _types_is_binop(rhs.kind) || _types_is_unop(rhs.kind) {
+                    // static-types r12 (aq) — BinOp/UnOp RHS, the LAST let-RHS
+                    // kind gap. assign r3 / call-arg / return already consume
+                    // binop result types unrestricted (round4-R2 #4630 made them
+                    // corpus-clean); this closes the typed-`let` gap. Same
+                    // scratch re-infer + soundness gates ①② as r2, PLUS the
+                    // leaves-known tree gate that requires EVERY leaf to be a
+                    // KNOWN scalar — so `let x: i32 = a_unknown + 1` (unknown
+                    // leaf → i64 literal-fallback) stays SILENT (under-reject),
+                    // while `let x: i32 = a_i64 + b_i64` faithfully REJECTs.
+                    let tr = TypeRef { kind: "named", name: tt, args: [], span: e.span }
+                    let declared = _types_lower_type_ref(tr)
+                    if _types_kind_is_scalar(declared.kind) && _types_rhs_leaves_known(rhs, env, ctx) {
+                        let mut scratch: array = []
+                        let rhs_t = _infer_expr(rhs, env, ctx, scratch)
+                        if _types_kind_is_scalar(rhs_t.kind) {
+                            if !_types_assignable(declared, rhs_t, rhs) {
+                                _emit_hx3011(declared, rhs_t, e.span, out)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -3459,21 +3514,27 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             wi = wi + 1
         }
         // segment(b) HX3026 REJECT (Rust E0610): a field READ (`n.foo`) on a
-        // KNOWN non-aggregate scalar receiver (`int`/`float`/`bool`/`char`) can
-        // never succeed — a scalar HexaVal has no field slots, so the C-substrate
-        // field access is a guaranteed runtime error (the HX3024/HX3025 "known-
-        // runtime-error → REJECT" contract). This is the r9a READ site, distinct
-        // from the callee position: `n.foo()` infers this SAME Field node as the
-        // call's callee (`_types_check_call` :3582), where the HX2001 unresolved-
-        // callee already fires — so `_types_callee_depth > 0` SILENCES this arm
-        // (one mistake = one diagnostic). Builtin methods (`n.len`, 90-set) are
-        // codegen receiver-dispatch, not fields, so `_is_builtin_method` exempts
-        // them. Conservative under-reject: unknown/unit/HexaVal/named/array/map
-        // receivers all stay SILENT (only the KNOWN scalar kinds reject). Real
-        // source → build-refusing ERROR; byte-eq TEST FIXTURES (`*_test.hexa`)
-        // stay WARNING via the `_types_strict_for` path carve-out.
+        // KNOWN non-aggregate primitive receiver (`int`/`float`/`bool`/`char`/
+        // `string`) can never succeed — a primitive HexaVal has no user field
+        // slots, so the C-substrate field access is a guaranteed runtime error
+        // (the HX3024/HX3025 "known-runtime-error → REJECT" contract). A KNOWN
+        // `string` base is included as the measured symmetry gap (the HX3025
+        // index arm already covers `string` since #4626): `s.foo` on a string
+        // has no user fields and is a guaranteed runtime error, while
+        // `s.chars()`/`s.len()` are METHODS dispatched from the callee position
+        // (depth > 0) and are silenced by the callee-depth guard below —
+        // `_is_builtin_method` also exempts the ~90 builtin-method selectors.
+        // This is the r9a READ site, distinct from the callee position:
+        // `n.foo()` infers this SAME Field node as the call's callee
+        // (`_types_check_call` :3582), where the HX2001 unresolved-callee
+        // already fires — so `_types_callee_depth > 0` SILENCES this arm (one
+        // mistake = one diagnostic). Conservative under-reject: unknown/unit/
+        // HexaVal/named/array/map receivers all stay SILENT (only the KNOWN
+        // primitive kinds reject). Real source → build-refusing ERROR; byte-eq
+        // TEST FIXTURES (`*_test.hexa`) stay WARNING via the `_types_strict_for`
+        // path carve-out.
         if _types_callee_depth == 0 && len(e.text) > 0 && !_is_builtin_method(e.text)
-            && (_is_integer_kind(recv_t) || _is_float_kind(recv_t) || recv_t.kind == "bool" || recv_t.kind == "char") {
+            && (_is_integer_kind(recv_t) || _is_float_kind(recv_t) || recv_t.kind == "bool" || recv_t.kind == "char" || recv_t.kind == "string") {
             _emit_hx3026(recv_t, e.text, e.span, out)
         }
         let recv = e.children[0]
