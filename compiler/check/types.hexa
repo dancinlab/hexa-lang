@@ -2144,6 +2144,39 @@ fn _emit_hx3030(expected: string, actual: string, variant: string, sp: Span, out
     }
 }
 
+// Rung D (HX3033) — recover the REGISTERED-enum name of a `==`/`!=` operand:
+// an EnumPath literal's head IS the enum; a value operand's name comes from its
+// already-inferred Type (`named:<Enum>` for params / module-level lets) with a
+// block-local `let c: Color` recovered from the r5 `{}name` side slot (mirror
+// of HX3030's scrutinee recovery). Returns "" when no enum name is recoverable
+// → the caller stays silent (conservative under-reject).
+fn _types_operand_enum_name(child: Expr, t: Type, env: TypeEnv) -> string {
+    if _types_is_enum_path_kind(child.kind) {
+        return _types_resolve_alias_name(_types_enum_path_head(child.text))
+    }
+    let mut name = _types_struct_name_of(t.kind)
+    if len(name) == 0 && _types_is_ident(child.kind) && len(child.text) > 0 {
+        name = _types_struct_name_of(_types_env_lookup(env, "{}" + child.text).kind)
+    }
+    return _types_resolve_alias_name(name)
+}
+
+// Rung D (HX3033) — wrong-enum `==`/`!=` compare REJECT (Rust E0308). `a` and
+// `b` are the two operands' resolved enum names. Mirrors _emit_hx3030's band
+// policy: real source → build-refusing Error (REJECT), byte-eq test fixtures
+// stay Warning via the `_types_strict_for` path carve-out.
+fn _emit_hx3033(a: string, b: string, sp: Span, out: array) {
+    let mut bd = diag_new("HX3033")
+    bd = diag_span(bd, sp)
+    bd = diag_arg(bd, "a", a)
+    bd = diag_arg(bd, "b", b)
+    if _types_strict_for(sp.file) {
+        out.push(diag_emit(bd))
+    } else {
+        out.push(diag_emit_sev(bd, Severity::Warning))
+    }
+}
+
 fn _emit_hx3002(name: string, expected: i64, actual: i64, sp: Span, out: array) {
     let mut b = diag_new("HX3002")
     b = diag_span(b, sp)
@@ -2432,6 +2465,40 @@ fn _types_kind_is_scalar(k: string) -> bool {
     if k == "bool"   { return true }
     if k == "string" { return true }
     if k == "char"   { return true }
+    return false
+}
+
+// static-types r12 (aq) — TRUE iff every leaf of a BinOp/UnOp RHS tree is
+// provably a KNOWN scalar, so the tree's inferred result type is SOUND to
+// compare against a let annotation. Kills the unknown-operand literal-fallback
+// false-positive class: `a_unknown + 1` infers i64 via the check_binop
+// unknown-arm (the literal side), which would false-REJECT `let x: i32 = a + 1`
+// — an unknown leaf disqualifies the whole tree. Logical ops (&&/||/and/or) are
+// value-returning truthy short-circuits (hir_to_mir lowering) whose static type
+// is unsound on mixed operands, and non-`-` unops (`!`) yield a truthy bool at
+// runtime while passing the operand type through — both excluded (under-reject).
+fn _types_rhs_leaves_known(e: Expr, env: TypeEnv, ctx: CheckCtx) -> bool {
+    if _types_is_lit_int(e.kind) || _types_is_lit_float(e.kind)
+        || _types_is_lit_string(e.kind) || _is_lit_bool(e.kind) || _is_lit_char(e.kind) {
+        return true
+    }
+    if _types_is_binop(e.kind) {
+        if e.text == "as" { return true }
+        if !_is_arith_op(e.text) && !_types_is_compare_op(e.text) { return false }
+        if len(e.children) < 2 { return false }
+        return _types_rhs_leaves_known(e.children[0], env, ctx)
+            && _types_rhs_leaves_known(e.children[1], env, ctx)
+    }
+    if _types_is_unop(e.kind) {
+        if e.text != "-" { return false }
+        if len(e.children) == 0 { return false }
+        return _types_rhs_leaves_known(e.children[0], env, ctx)
+    }
+    if _types_is_ident(e.kind) || _types_is_call(e.kind)
+        || _types_is_index(e.kind) || _types_is_field(e.kind) {
+        let mut scratch: array = []
+        return _types_kind_is_scalar(_infer_expr(e, env, ctx, scratch).kind)
+    }
     return false
 }
 
@@ -2972,6 +3039,27 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                             }
                         }
                     }
+                } else if _types_is_binop(rhs.kind) || _types_is_unop(rhs.kind) {
+                    // static-types r12 (aq) — BinOp/UnOp RHS, the LAST let-RHS
+                    // kind gap. assign r3 / call-arg / return already consume
+                    // binop result types unrestricted (round4-R2 #4630 made them
+                    // corpus-clean); this closes the typed-`let` gap. Same
+                    // scratch re-infer + soundness gates ①② as r2, PLUS the
+                    // leaves-known tree gate that requires EVERY leaf to be a
+                    // KNOWN scalar — so `let x: i32 = a_unknown + 1` (unknown
+                    // leaf → i64 literal-fallback) stays SILENT (under-reject),
+                    // while `let x: i32 = a_i64 + b_i64` faithfully REJECTs.
+                    let tr = TypeRef { kind: "named", name: tt, args: [], span: e.span }
+                    let declared = _types_lower_type_ref(tr)
+                    if _types_kind_is_scalar(declared.kind) && _types_rhs_leaves_known(rhs, env, ctx) {
+                        let mut scratch: array = []
+                        let rhs_t = _infer_expr(rhs, env, ctx, scratch)
+                        if _types_kind_is_scalar(rhs_t.kind) {
+                            if !_types_assignable(declared, rhs_t, rhs) {
+                                _emit_hx3011(declared, rhs_t, e.span, out)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -3472,21 +3560,27 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             _own_lint_use_check(e.children[0], out)
         }
         // segment(b) HX3026 REJECT (Rust E0610): a field READ (`n.foo`) on a
-        // KNOWN non-aggregate scalar receiver (`int`/`float`/`bool`/`char`) can
-        // never succeed — a scalar HexaVal has no field slots, so the C-substrate
-        // field access is a guaranteed runtime error (the HX3024/HX3025 "known-
-        // runtime-error → REJECT" contract). This is the r9a READ site, distinct
-        // from the callee position: `n.foo()` infers this SAME Field node as the
-        // call's callee (`_types_check_call` :3582), where the HX2001 unresolved-
-        // callee already fires — so `_types_callee_depth > 0` SILENCES this arm
-        // (one mistake = one diagnostic). Builtin methods (`n.len`, 90-set) are
-        // codegen receiver-dispatch, not fields, so `_is_builtin_method` exempts
-        // them. Conservative under-reject: unknown/unit/HexaVal/named/array/map
-        // receivers all stay SILENT (only the KNOWN scalar kinds reject). Real
-        // source → build-refusing ERROR; byte-eq TEST FIXTURES (`*_test.hexa`)
-        // stay WARNING via the `_types_strict_for` path carve-out.
+        // KNOWN non-aggregate primitive receiver (`int`/`float`/`bool`/`char`/
+        // `string`) can never succeed — a primitive HexaVal has no user field
+        // slots, so the C-substrate field access is a guaranteed runtime error
+        // (the HX3024/HX3025 "known-runtime-error → REJECT" contract). A KNOWN
+        // `string` base is included as the measured symmetry gap (the HX3025
+        // index arm already covers `string` since #4626): `s.foo` on a string
+        // has no user fields and is a guaranteed runtime error, while
+        // `s.chars()`/`s.len()` are METHODS dispatched from the callee position
+        // (depth > 0) and are silenced by the callee-depth guard below —
+        // `_is_builtin_method` also exempts the ~90 builtin-method selectors.
+        // This is the r9a READ site, distinct from the callee position:
+        // `n.foo()` infers this SAME Field node as the call's callee
+        // (`_types_check_call` :3582), where the HX2001 unresolved-callee
+        // already fires — so `_types_callee_depth > 0` SILENCES this arm (one
+        // mistake = one diagnostic). Conservative under-reject: unknown/unit/
+        // HexaVal/named/array/map receivers all stay SILENT (only the KNOWN
+        // primitive kinds reject). Real source → build-refusing ERROR; byte-eq
+        // TEST FIXTURES (`*_test.hexa`) stay WARNING via the `_types_strict_for`
+        // path carve-out.
         if _types_callee_depth == 0 && len(e.text) > 0 && !_is_builtin_method(e.text)
-            && (_is_integer_kind(recv_t) || _is_float_kind(recv_t) || recv_t.kind == "bool" || recv_t.kind == "char") {
+            && (_is_integer_kind(recv_t) || _is_float_kind(recv_t) || recv_t.kind == "bool" || recv_t.kind == "char" || recv_t.kind == "string") {
             _emit_hx3026(recv_t, e.text, e.span, out)
         }
         let recv = e.children[0]
@@ -3584,7 +3678,33 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
         // HX3001 `expected bool, got <X>` at the enclosing if/while
         // condition (the bool/i64=405 + bool/string=304 + bool/char=132
         // residual). Arith keeps the known operand's numeric type.
-        if _types_is_compare_op(op) { return _types_t_bool() }
+        if _types_is_compare_op(op) {
+            // Rung D (HX3033) — wrong-enum `==`/`!=` compare REJECT (Rust E0308,
+            // rustc_hir_typeck check_expr_binop → op::check_overloaded_binop →
+            // demand::eqtype: `c == Dir::North` where `c: Color` is an
+            // always-false silent compare — the same silent-mismatch bug class as
+            // HX3030 wrong-enum MATCH). An EnumPath operand ALWAYS infers empty
+            // (`_types_empty_type()`), so a compare against one lands HERE (the
+            // unknown-operand arm) rather than the known-both compare arm at the
+            // tail. Fires ONLY for `==`/`!=` when BOTH operands resolve to
+            // REGISTERED enums of DIFFERENT names, with at least one side an
+            // EnumPath literal; an unknown/HexaVal/same-enum operand stays silent
+            // (conservative under-reject, never over-reject — HX3030's shape).
+            // Byteeq-neutral: S3 diagnostics erase at MIR; test fixtures stay
+            // Warning via `_types_strict_for`.
+            if op == "==" || op == "!=" {
+                if _types_is_enum_path_kind(e.children[0].kind) || _types_is_enum_path_kind(e.children[1].kind) {
+                    let ln = _types_operand_enum_name(e.children[0], lt, env)
+                    let rn = _types_operand_enum_name(e.children[1], rt, env)
+                    if len(ln) > 0 && len(rn) > 0
+                        && _types_enum_registry_has(ln) && _types_enum_registry_has(rn)
+                        && ln != rn {
+                        _emit_hx3033(ln, rn, e.span, out)
+                    }
+                }
+            }
+            return _types_t_bool()
+        }
         if len(lt.kind) > 0 { return lt }
         return rt
     }
