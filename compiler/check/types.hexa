@@ -3546,6 +3546,19 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
             // __hx_to_double path) so the inferred type propagates correctly
             // into the enclosing let/return/arg context.
             if mixed_int_float { return _types_t_f64() }
+            // R2 (an): result-type propagation SYMMETRY. The `return lt` tail
+            // returns the LHS type, so `a_i32 + 1` already yields i32 (lt=typed
+            // side) — but `1 + a_i32` yielded i64 (lt = the literal's universal
+            // i64), which then false-fired HX3003 on `take32(1 + a_i32)` (arg
+            // BinOp so the lit-coerce arm :2281 never applies) and HX3011 on
+            // `x = 1 + x` (x:i32). When the LHS is an untyped int/float literal
+            // and both sides share the numeric kind, return the RHS (typed)
+            // type — Rust unifies the untyped literal to the typed operand
+            // (E0308) regardless of order. Faithfulness fix (NOT loosening):
+            // `take64(1 + a_i32)` now correctly fires HX3003 (result i32≠i64,
+            // Rust E0308 parity) where the i64-default previously masked it.
+            if _types_is_lit_int(e.children[0].kind) && _is_integer_kind(lt) && _is_integer_kind(rt) { return rt }
+            if _types_is_lit_float(e.children[0].kind) && _is_float_kind(lt) && _is_float_kind(rt) { return rt }
             return lt
         }
         // Mismatch (one or both non-numeric) — treat as type-mismatch with
@@ -3783,8 +3796,8 @@ fn _check_match(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             let _gd = _infer_expr(pat_i.children[1], env, ctx, out)
         } else {
             let pt = _infer_expr(pat_i, env, ctx, out)
-            // static-types r9c — opt-in literal-pattern vs scrutinee REJECT
-            // (HEXA_STATIC_TYPES=1). Rust E0308 "mismatched types" as fired
+            // static-types r9c — literal-pattern vs scrutinee REJECT.
+            // Rust E0308 "mismatched types" as fired
             // from `check_pat` (rustc_hir_typeck/src/pat.rs check_pat_lit →
             // demand_suptype → report_mismatched_types): a scalar LITERAL
             // pattern (`match n { "x" -> … }` on an i64 scrutinee) can never
@@ -3797,10 +3810,12 @@ fn _check_match(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // primitives (unknown sentinel / aggregate / named: → skip, the
             // r2 soundness-gate idiom). `_types_assignable` (src = the
             // pattern expr) keeps int/float-literal coercion — `match x_i32
-            // { 1 -> … }` stays clean. ENTIRELY flag-gated (env check is the
-            // FIRST `&&` operand, short-circuit) so the default build keeps
-            // the discard-only walk → diagnostic stream byte-identical →
-            // byteeq (gen3≡gen4) preserved.
+            // { 1 -> … }` stays clean. Fires UNCONDITIONALLY (FLIP-3 flagless
+            // — the former HEXA_STATIC_TYPES env gate is removed, :1206): real
+            // silent-mismatch source is a build-refusing Error, byte-eq test
+            // fixtures stay Warning via `_types_strict_for`. Byteeq is preserved
+            // structurally, not by a flag — types erase at MIR so severity never
+            // reaches codegen (byteeq 3-target on PR CI is the proof).
             if _types_is_lit_int(pat_i.kind) || _types_is_lit_float(pat_i.kind) || _types_is_lit_string(pat_i.kind) || _is_lit_bool(pat_i.kind) || _is_lit_char(pat_i.kind) {
                 if _types_kind_is_scalar(scrut_t.kind) && _types_kind_is_scalar(pt.kind) {
                     if !_types_assignable(scrut_t, pt, pat_i) {

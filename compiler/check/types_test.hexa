@@ -1425,50 +1425,6 @@ fn _build_case_hx3025_fixture() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
-// (an) R1 — segment(b) HX3025 STRING-arm extension. A subscript `s[i]` on a
-// KNOWN string base is a guaranteed runtime error (the C-substrate wrapper
-// detects the string tag and throws `string[i]: use .chars()[i] or substring`,
-// runtime_core_emit ~3395), so it now REJECTs under the same
-// guaranteed-runtime-error contract as the int/float/bool/char arms. The
-// `.chars()`-then-index control stays clean (`cs` is an untyped local → unknown
-// base → the conservative under-reject stays silent). Expect exactly 1 HX3025
-// (error) across the module.
-//   fn f(s: string) -> i64 { let x = s[0]  return 0 }         // string index → HX3025
-//   fn g(s: string) -> i64 { let cs = s.chars()  let y = cs[0]  return 0 }  // unknown base → clean
-fn _build_case_hx3025_string_index() -> Module {
-    let f = "case_hx3025_string.hexa"
-    let fx = _let_expr("x", _index_expr(_ident_expr("s", f, 2, 13), _int_expr("0", f, 2, 15), f, 2, 14), f, 2, 5)
-    let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
-    let mut pf = []
-    pf.push(_param("s", "string", f, 1, 6))
-    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 1, 1), f, 1)
-    // fn g(s: string) { let cs = s.chars()  let y = cs[0]  return 0 } — unknown base → clean
-    let gcs = _let_expr("cs", _call_expr(_field_expr(_ident_expr("s", f, 5, 14), "chars", f, 5, 16), [], f, 5, 22), f, 5, 5)
-    let gy = _let_expr("y", _index_expr(_ident_expr("cs", f, 6, 14), _int_expr("0", f, 6, 17), f, 6, 16), f, 6, 5)
-    let gr = _return_expr(_int_expr("0", f, 7, 12), f, 7, 5)
-    let mut pg = []
-    pg.push(_param("s", "string", f, 4, 6))
-    let item_g = _fn_item("g", pg, _named_type_ref("i64"), _block([gcs, gy, gr], f, 4, 1), f, 4)
-    let mut items = []
-    items.push(item_f)
-    items.push(item_g)
-    return Module { file: f, items: items, imports: [] }
-}
-
-// (an) HX3025 string-arm fixture carve-out — identical string-index AST on a
-// byte-eq TEST-FIXTURE path (`*_test.hexa`) stays WARNING via _types_strict_for.
-fn _build_case_hx3025_string_fixture() -> Module {
-    let f = "case_hx3025_string_test.hexa"
-    let fx = _let_expr("x", _index_expr(_ident_expr("s", f, 2, 13), _int_expr("0", f, 2, 15), f, 2, 14), f, 2, 5)
-    let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
-    let mut pf = []
-    pf.push(_param("s", "string", f, 1, 6))
-    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 1, 1), f, 1)
-    let mut items = []
-    items.push(item_f)
-    return Module { file: f, items: items, imports: [] }
-}
-
 // (ak) R1 — binop operand literal-aware BIDIRECTIONAL coercion. Bare
 // `_types_equal(lt, rt)` false-fired HX3001 on `a_i32 + 1` / `a_i32 < 2`: the
 // literal `1`/`2` infers i64 (universal int-literal), so i32≠i64 mis-rejected a
@@ -1496,6 +1452,64 @@ fn _build_case_binop_literal_coerce() -> Module {
     pf.push(_param("b", "i64", f, 1, 14))
     let item_f = _fn_item("f", pf, _empty_type_ref(), _block([ex, ec, ey, ew], f, 1, 1), f, 1)
     let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (an) R2 — binop result-type propagation SYMMETRY. `a_i32 + 1` already
+// yielded i32 (the `return lt` tail = the LHS/typed side), but `1 + a_i32`
+// yielded i64 (lt = the literal's universal i64) — an order-asymmetry that
+// false-fired diagnostics whenever the BinOp's INFERRED type flowed on
+// (call-arg / assign), because the lit-coerce arm (:2281) applies only to a
+// bare literal operand, never to a BinOp node. R2 returns the TYPED side when
+// the LHS is an untyped literal and both sides share the numeric kind (Rust
+// E0308 unifies the literal to the typed operand regardless of order). This
+// test pins BOTH directions in ONE module:
+//   fn take32(p: i32) -> i64 { return 0 }
+//   fn take64(p: i64) -> i64 { return 0 }
+//   fn f(a: i32, b: i64) -> i64 {
+//       take32(1 + a)     // (1+a)=i32 → arg fits i32 → 0 HX3003 (pre-fix 1)
+//       take64(1 + a)     // (1+a)=i32 → arg i32≠i64  → 1 HX3003 (NEW faithful
+//                         //   fire — the i64-default previously MASKED it;
+//                         //   Rust E0308 parity, pinned as expected)
+//       let y = a + b     // i32×i64 ident pair (neither literal) → 1 HX3001
+//                         //   (order-swap POSITIVE control — still rejects)
+//       let mut x: i32 = 0
+//       x = 1 + x         // (1+x)=i32 → assign fits i32 → 0 HX3011 (pre-fix 1)
+//       return 0
+//   }
+// Contract across the module: HX3003 = 1 (take64 only), HX3001 = 1 (a+b
+// positive keep), HX3011 = 0 (assign symmetrized). Real-source path (not a
+// *_test.hexa fixture) → the fires are ERROR-band.
+fn _build_case_binop_result_symmetry() -> Module {
+    let f = "case_binop_symmetry.hexa"
+    // fn take32(p: i32) -> i64 { return 0 }
+    let mut p_take32 = []
+    p_take32.push(_param("p", "i32", f, 1, 13))
+    let item_take32 = _fn_item("take32", p_take32, _named_type_ref("i64"), _block([_return_expr(_int_expr("0", f, 1, 30), f, 1, 23)], f, 1, 26), f, 1)
+    // fn take64(p: i64) -> i64 { return 0 }
+    let mut p_take64 = []
+    p_take64.push(_param("p", "i64", f, 2, 13))
+    let item_take64 = _fn_item("take64", p_take64, _named_type_ref("i64"), _block([_return_expr(_int_expr("0", f, 2, 30), f, 2, 23)], f, 2, 26), f, 2)
+    // fn f(a: i32, b: i64) -> i64 { … }
+    // take32(1 + a)  — LHS literal, symmetrized to i32 → fits → 0 HX3003
+    let c32 = _call_expr(_ident_expr("take32", f, 4, 5), [_bin_expr("+", _int_expr("1", f, 4, 12), _ident_expr("a", f, 4, 16), f, 4, 14)], f, 4, 11)
+    // take64(1 + a)  — symmetrized to i32, but i32≠i64 → 1 HX3003 (new fire)
+    let c64 = _call_expr(_ident_expr("take64", f, 5, 5), [_bin_expr("+", _int_expr("1", f, 5, 12), _ident_expr("a", f, 5, 16), f, 5, 14)], f, 5, 11)
+    // let y = a + b  — ident pair (neither literal) → 1 HX3001 (positive keep)
+    let ey = _let_expr("y", _bin_expr("+", _ident_expr("a", f, 6, 13), _ident_expr("b", f, 6, 17), f, 6, 15), f, 6, 5)
+    // let mut x: i32 = 0
+    let emx = _let_expr("mut:x|i32", _int_expr("0", f, 7, 18), f, 7, 5)
+    // x = 1 + x  — LHS literal, symmetrized to i32 → fits → 0 HX3011
+    let ax = _assign_expr(_ident_expr("x", f, 8, 5), _bin_expr("+", _int_expr("1", f, 8, 9), _ident_expr("x", f, 8, 13), f, 8, 11), f, 8, 7)
+    let fr = _return_expr(_int_expr("0", f, 9, 12), f, 9, 5)
+    let mut pf = []
+    pf.push(_param("a", "i32", f, 3, 6))
+    pf.push(_param("b", "i64", f, 3, 14))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([c32, c64, ey, emx, ax, fr], f, 3, 1), f, 3)
+    let mut items = []
+    items.push(item_take32)
+    items.push(item_take64)
     items.push(item_f)
     return Module { file: f, items: items, imports: [] }
 }
@@ -1534,6 +1548,42 @@ fn _build_case_hx3026_fixture() -> Module {
     let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
     let mut pf = []
     pf.push(_param("n", "i64", f, 1, 6))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 1, 1), f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (ao) R1 — segment(b) HX3025 STRING-arm. `s[i]` on a KNOWN string base → HX3025
+// (E0608; the C-substrate wrapper throws "string[i]: use .chars()[i]"). Array via
+// `.chars()` stays clean (unknown base). Expect 1 HX3025 error.
+fn _build_case_hx3025_string_index() -> Module {
+    let f = "case_hx3025_string.hexa"
+    let fx = _let_expr("x", _index_expr(_ident_expr("s", f, 2, 13), _int_expr("0", f, 2, 15), f, 2, 14), f, 2, 5)
+    let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
+    let mut pf = []
+    pf.push(_param("s", "string", f, 1, 6))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 1, 1), f, 1)
+    let gcs = _let_expr("cs", _call_expr(_field_expr(_ident_expr("s", f, 5, 14), "chars", f, 5, 16), [], f, 5, 22), f, 5, 5)
+    let gy = _let_expr("y", _index_expr(_ident_expr("cs", f, 6, 14), _int_expr("0", f, 6, 17), f, 6, 16), f, 6, 5)
+    let gr = _return_expr(_int_expr("0", f, 7, 12), f, 7, 5)
+    let mut pg = []
+    pg.push(_param("s", "string", f, 4, 6))
+    let item_g = _fn_item("g", pg, _named_type_ref("i64"), _block([gcs, gy, gr], f, 4, 1), f, 4)
+    let mut items = []
+    items.push(item_f)
+    items.push(item_g)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (ao) HX3025 string-arm fixture carve-out — identical string-index AST on a
+// *_test.hexa path → WARNING via _types_strict_for.
+fn _build_case_hx3025_string_fixture() -> Module {
+    let f = "case_hx3025_string_test.hexa"
+    let fx = _let_expr("x", _index_expr(_ident_expr("s", f, 2, 13), _int_expr("0", f, 2, 15), f, 2, 14), f, 2, 5)
+    let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
+    let mut pf = []
+    pf.push(_param("s", "string", f, 1, 6))
     let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 1, 1), f, 1)
     let mut items = []
     items.push(item_f)
@@ -2562,29 +2612,42 @@ fn main() {
         println("  ok: 1 HX3026 as WARNING (flagless fixture carve-out: *_test.hexa path stays warn-band)")
     }
 
-    // (an) R1 — segment(b) HX3025 STRING-arm extension (Rust E0608). A `s[i]`
-    // GET on a KNOWN string base now REJECTs (guaranteed runtime error), while
-    // the `.chars()`-then-index control stays clean (unknown local base →
-    // conservative under-reject silent). Fixture path stays WARNING.
-    let diags_an = _run_case("(an) static-types R1 — string-index REJECT (s[0] string / cs[0] via chars() clean) (HX3025)", _build_case_hx3025_string_index())
-    let n_an = _count_code(diags_an, "HX3025")
-    let nan_err = _count_code_sev(diags_an, "HX3025", "error")
-    if n_an != 1 || nan_err != 1 {
-        println("  FAIL: case (an) expected 1 HX3025 as ERROR (s[0] string reject; cs[0] via chars() clean), got " + to_string(n_an) + " HX3025 (" + to_string(nan_err) + " error) (total=" + to_string(len(diags_an)) + ")")
+    // (an) R2 binop result-type propagation symmetry — `1 + a_i32` now yields
+    // i32 (was i64), erasing 2 order-asymmetry false-positives (take32(1+a) +
+    // `x = 1 + x`) while a NEW faithful fire (take64(1+a): i32≠i64, Rust E0308)
+    // + the a+b ident-pair positive control both stay pinned.
+    let diags_an = _run_case("(an) static-types R2 — binop result-type symmetry (take32(1+a)/x=1+x coerce · take64(1+a) faithful-fire · a+b keep) (HX3003/HX3011/HX3001)", _build_case_binop_result_symmetry())
+    let nan_3003 = _count_code(diags_an, "HX3003")
+    let nan_3001 = _count_code(diags_an, "HX3001")
+    let nan_3011 = _count_code(diags_an, "HX3011")
+    if nan_3003 != 1 || nan_3001 != 1 || nan_3011 != 0 {
+        println("  FAIL: case (an) expected 1 HX3003 (take64(1+a) i32≠i64 faithful-fire; take32(1+a) coerces) + 1 HX3001 (a+b ident pair) + 0 HX3011 (x=1+x symmetrized to i32), got " + to_string(nan_3003) + " HX3003 / " + to_string(nan_3001) + " HX3001 / " + to_string(nan_3011) + " HX3011 (total=" + to_string(len(diags_an)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3003 (take64(1+a) faithful-fire) + 1 HX3001 (a+b keep) + 0 HX3011 (take32(1+a)/x=1+x symmetrized to i32) — E0308 order-symmetric literal unification")
+    }
+
+    // (ao) R1 — segment(b) HX3025 STRING-arm (Rust E0608). `s[0]` on a string base
+    // → Error; `.chars()` result index → clean (unknown base). Fixture → WARNING.
+    let diags_ao = _run_case("(ao) static-types R1 — string-index REJECT (s[0] string / cs[0] via chars() clean) (HX3025)", _build_case_hx3025_string_index())
+    let cao = _count_code(diags_ao, "HX3025")
+    let cao_err = _count_code_sev(diags_ao, "HX3025", "error")
+    if cao != 1 || cao_err != 1 {
+        println("  FAIL: case (ao) expected 1 HX3025 as ERROR (s[0] string reject; cs[0] via chars() clean), got " + to_string(cao) + " HX3025 (" + to_string(cao_err) + " error) (total=" + to_string(len(diags_ao)) + ")")
         ok = false
     } else {
         println("  ok: 1 HX3025 as ERROR (string `s[0]` reject; `cs = s.chars()` then `cs[0]` clean) — E0608 index-on-string")
     }
 
-    // (an) HX3025 string-arm fixture carve-out — identical AST on a *_test.hexa path → WARNING.
-    let diags_an2 = _run_case("(an) static-types R1 — HX3025 string-arm fixture carve-out (*_test.hexa string index)", _build_case_hx3025_string_fixture())
-    let nan2 = _count_code(diags_an2, "HX3025")
-    let nan2_warn = _count_code_sev(diags_an2, "HX3025", "warning")
-    if nan2 != 1 || nan2_warn != 1 {
-        println("  FAIL: case (an) fixture expected 1 HX3025 as WARNING (fixture carve-out), got " + to_string(nan2) + " HX3025 (" + to_string(nan2_warn) + " warn) (total=" + to_string(len(diags_an2)) + ")")
+    // (ao) HX3025 string-arm fixture carve-out — *_test.hexa path → WARNING.
+    let diags_aof = _run_case("(ao) static-types R1 — HX3025 string-arm fixture carve-out (*_test.hexa string index)", _build_case_hx3025_string_fixture())
+    let caof = _count_code(diags_aof, "HX3025")
+    let caof_warn = _count_code_sev(diags_aof, "HX3025", "warning")
+    if caof != 1 || caof_warn != 1 {
+        println("  FAIL: case (ao) fixture expected 1 HX3025 as WARNING (fixture carve-out), got " + to_string(caof) + " HX3025 (" + to_string(caof_warn) + " warn) (total=" + to_string(len(diags_aof)) + ")")
         ok = false
     } else {
-        println("  ok: 1 HX3025 as WARNING (flagless fixture carve-out: *_test.hexa string index stays warn-band)")
+        println("  ok: 1 HX3025 as WARNING (string-index fixture carve-out: *_test.hexa stays warn-band)")
     }
 
     println("")
