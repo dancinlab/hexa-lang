@@ -133,6 +133,27 @@ fn main() {
     }
     n = n + 1
 
+    // 3. runpod_normalize_gpu — a friendly alias maps to RunPod's canonical
+    //    gpuTypeId (the "Unknown GPU type: RTX4090" fix). Pure function, no shim.
+    if runpod_normalize_gpu("A40") != "NVIDIA A40" {
+        _fail("3a-alias-a40", "A40 not normalized: " + runpod_normalize_gpu("A40"))
+    }
+    if runpod_normalize_gpu("RTX4090") != "NVIDIA GeForce RTX 4090" {
+        _fail("3b-alias-4090", "RTX4090 not normalized: " + runpod_normalize_gpu("RTX4090"))
+    }
+    if runpod_normalize_gpu("rtx 4090") != "NVIDIA GeForce RTX 4090" {
+        _fail("3c-alias-spaced", "spaced/lower alias not normalized: " + runpod_normalize_gpu("rtx 4090"))
+    }
+    // an already-canonical id passes through unchanged (never blocks a valid id)
+    if runpod_normalize_gpu("NVIDIA A40") != "NVIDIA A40" {
+        _fail("3d-canonical-passthrough", "canonical id mutated: " + runpod_normalize_gpu("NVIDIA A40"))
+    }
+    // an unknown alias passes through so RunPod fail-loud on a real typo
+    if runpod_normalize_gpu("NoSuchGpu") != "NoSuchGpu" {
+        _fail("3e-unknown-passthrough", "unknown alias mutated (should pass through): " + runpod_normalize_gpu("NoSuchGpu"))
+    }
+    n = n + 1
+
     println("runpod_create_surface_test PASS — " + to_string(n) + "/" + to_string(n) + " cases")
     exit(0)
 }
