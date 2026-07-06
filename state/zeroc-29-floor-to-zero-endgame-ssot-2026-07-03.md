@@ -25,14 +25,22 @@
 | **own-start** environ+atexit (FLIP-7) | ✅ merged (build-half scaffold) | **OFF** (byte-neutral · `HEXA_ZEROC_OWN_START:-0`) | ❌ atexit·environ 유지 | #4409 MERGED | default-ON flip = 별도 pool FLIP-7(bit-changing · 3-target + install-smoke) |
 | **WALL-2 free** `HEXA_RT_NATIVE_FREE` | ✅ merged | **OFF** (`${…:-0}`) | ❌ __libc free 유지 | #4242 | byteeq-neutral 3-target + faithful DROP |
 | **WALL-2 calloc** `HEXA_RT_NATIVE_CALLOC` | ✅ merged | **OFF** | ❌ __libc calloc 유지 | #4244 | 동상 (FLIP-6) |
-| **WALL-2 realloc** `HEXA_RT_NATIVE_REALLOC` | ✅ merged | **OFF** | ❌ __libc realloc 유지 | #4244 | 동상 (FLIP-6) |
+| **WALL-2 realloc** `HEXA_RT_NATIVE_REALLOC` | ✅ **F2 flip 완료** | **default-ON (auto)** | ✅ **realloc drop · faithful darwin GREEN** | mech #4620 · flip #4621 | **F2 magic-guard + malloc-family rename** — #4599/#4614 SIGABRT(heap-family ABI split) 해소, convergence hxlcl-realloc-arm64-s-1 POS-CONV |
+| **str-leaf** strcpy/strncpy/strcat `default-native` | ✅ | **default-native** | ✅ drop | #4605 (mem-leaf 레시피) | byteeq 3-target |
+| **strlen** caller-drop + native | ✅ | **native** | ✅ strlen drop | #4612 | byteeq 3-target |
+| **mem-leaf** memcpy/memset/memmove/memcmp | ✅ | **native (sysheaders rename)** | ✅ drop | #4604 | byteeq 3-target |
+| **strcmp** codegen caller-drop | ✅ | **native** | ✅ drop | #4602 | byteeq 3-target |
+| **strtol / ptsname_r** self-contained inline | ✅ | **native** | ✅ drop | #4607 | byteeq 3-target |
+| **isdigit** codegen clone + build_c str* inline | ✅ | **native** | ✅ drop | #4613 | byteeq 3-target |
+| **env-leaf** getenv/setenv shim-native | ✅ | **default-native** | ✅ drop | #4611 | byteeq 3-target |
 | **RT-NATIVE str\* ×5** `HEXA_RT_NATIVE_{STRCMP,STRNCMP,STRCHR,STRSTR,STRDUP}` | ✅ merged | **ON (auto)** 3-target | ✅ strcmp·strncmp·strchr·strstr·strdup drop (isolated frozen seed) | #4591(strcmp)+#4592 | **byteeq 3-target GREEN + SELFEMIT smoke 복구** · 4겹결함 순차수정(errno-격리·shim가드·co-drop·dangling directive) |
 | **S2** self-symtab `HEXA_SELF_SYMTAB` | ❌ NONE | — | — | — (S1 뒤) | default-OFF→byteeq→flip |
 | **S3** own loader `HEXA_OWN_DLOPEN` (RFC070 G7-C) | ❌ NONE | — | — | — (S1·G7-B 뒤) | default-OFF→falsifier(RFC070 §4.1)→byteeq 3-target→flip |
 
-**net: 현재 linux canonical `runtime.a` 에서 실제 drop 된 것** = glob·globfree·fgets·rand·srand·mkstemp·mkdtemp·ns-syscall군(getppid/setsid/mount/umount2/unshare/setns/flock/sigaddset/sigemptyset)·**strcmp·strncmp·strchr·strstr·strdup(#4591+#4592, isolated frozen seed default-ON 3-target)**.
-**merged-but-OFF(flip 대기)** = regex·strtod-tail·free·calloc·realloc. (qsort = flip #4452 완료로 linux ON.)
-**not-merged(open)** = 없음 — own-start #4409(build-half scaffold)는 MERGED default-OFF(default-ON flip만 pool FLIP-7 잔여). (dl*×3 = S1 #4481 MERGED로 구조적 이탈 완료 · PR-2 #4487 MERGED.)
+**net: 현재 linux canonical `runtime.a` 에서 실제 drop 된 것** = glob·globfree·fgets·rand·srand·mkstemp·mkdtemp·ns-syscall군(getppid/setsid/mount/umount2/unshare/setns/flock/sigaddset/sigemptyset)·**strcmp·strncmp·strchr·strstr·strdup(#4591+#4592)** · **[2026-07-06 batch] realloc(F2 flip #4620+#4621)·mem-leaf(memcpy/memset/memmove/memcmp #4604)·str-leaf(strcpy/strncpy/strcat #4605)·strlen(#4612)·strcmp-caller(#4602)·strtol·ptsname_r(#4607)·isdigit+build_c-str-inline(#4613)·getenv·setenv(#4611)**.
+**2026-07-06 일괄배치 (COMPLETE)**: Fable 종합설계 → workflow 병렬구현 → CI-fix. ★realloc F2 = 2회 SIGABRT 벽(#4599 header-wall 오진 · #4614 slicer 오진)이 **동일 heap-family ABI split**(darwin `#define free` 가 `#if __linux__` 안이라 죽어 base+16 map key 를 bare libc free → mid-chunk abort)이었음을 Fable 이 규명 → **magic-tag 헤더로 family/foreign 구분 + sysheaders malloc-family rename 으로 darwin 닫기** 로 돌파, faithful darwin GREEN, convergence hxlcl-realloc-arm64-s-1 POS-CONV. PR: #4602·#4604·#4605·#4607·#4610(slicer)·#4611·#4612·#4613·#4620·#4621·#4622(docs).
+**merged-but-OFF(flip 대기)** = regex·strtod-tail. (qsort = flip #4452 · realloc = F2 flip #4621 · free/calloc = realloc-F2 활성 시 shim reclaiming free 서비스.)
+**not-merged(open)** = 없음 — own-start #4409(build-half scaffold)는 MERGED default-OFF(default-ON flip만 pool FLIP-7 잔여 · P-C). (dl*×3 = S1 #4481 MERGED · PR-2 #4487 MERGED.) **남은 pool: P-B strtod bundle · P-C FLIP-7 own-start(environ+atexit).**
 
 > ⚠️ 프롬프트 census 중 정정: qsort=**#4447**(≠#4452), regex=**#4445**(≠#4458). FLIP-6(WALL-2 default-ON linux flip) 는 **미실시** — #4242/#4244 는 메커니즘 merge 일 뿐 default-ON flip PR 은 없음. Route-C native body 는 x86_64-linux-only(`stage_resolve_runtime_a:1930` non-x86_64-linux 무시) = arm64/darwin fp-ABI 커버리지가 FLIP-6 블로커.
 
