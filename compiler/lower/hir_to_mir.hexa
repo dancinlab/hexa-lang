@@ -2649,6 +2649,54 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                     }
                 }
             }
+            // HEXA-OWN R6-A — call-arg borrow-conflict scan (Rust E0499/E0502).
+            // A `&x` / `&mut x` passed as a CALL ARGUMENT is a borrow the let-RHS
+            // registration site (:3286) never sees, so `f(&mut x, &mut x)` and
+            // `f(&mut x)` while `&x` is live were SILENT. Mirror the let-RHS
+            // scan+register 1:1 for each bare `&ident` / `&mut ident` arg: scan
+            // the E2 loan registry for an existing LIVE loan of the SAME origin
+            // BEFORE registering this borrow (so it never matches itself); the
+            // E3.9 faithfulness split routes a mut-while-mut conflict to HX3028
+            // (E0499) and every other conflict (`&`-while-`&mut`, `&mut`-while-
+            // `&`) to HX3021 (E0502). The borrow is registered under a synthetic
+            // `$callarg:line:col` name — unique per arg site (one AST node = one
+            // span) and unforgeable as a user binding (leading `$`) — so a second
+            // `&mut x` in the SAME arg list finds the first as a live loan
+            // (newest-per-name-wins). Only a bare ident operand is handled; a
+            // field/index/call-nested borrow is a conservative silent skip. The
+            // `&`/`&mut` unop lowering (:2398) already set `_bck_in_borrow_rhs`
+            // during the inner ident read, so the arg's own READ never fires a
+            // spurious HX3027. Gated on `_bck_active` → flag-OFF path never
+            // touches the registry (byteeq-neutral).
+            if _bck_active && e.children[i].kind == "unop"
+                && (e.children[i].text == "&" || e.children[i].text == "&mut")
+                && len(e.children[i].children) > 0 {
+                let _bk_ca_inner = e.children[i].children[0]
+                if _bk_ca_inner.kind == "ident"
+                    && _mir_lookup_global(ctx_r, _bk_ca_inner.text) < 0 {
+                    let _bk_ca_mut = e.children[i].text == "&mut"
+                    let _bk_ca_sp = e.children[i].span
+                    let _bk_ca_nm = "$callarg:" + to_string(_bk_ca_sp.line)
+                                    + ":" + to_string(_bk_ca_sp.col)
+                    let _bk_ca_cfi = _bck_ref_find_conflict(_bk_ca_inner.text,
+                                                            _bk_ca_mut)
+                    if _bk_ca_cfi >= 0 {
+                        if _bck_ref_mut[_bk_ca_cfi] && _bk_ca_mut {
+                            _bck_emit_double_mut(_bk_ca_nm, _bk_ca_inner.text,
+                                _bk_ca_mut, _bck_ref_names[_bk_ca_cfi],
+                                _bck_ref_mut[_bk_ca_cfi],
+                                _bck_ref_lines[_bk_ca_cfi], _bk_ca_sp)
+                        } else {
+                            _bck_emit_borrow_conflict(_bk_ca_nm, _bk_ca_inner.text,
+                                _bk_ca_mut, _bck_ref_names[_bk_ca_cfi],
+                                _bck_ref_mut[_bk_ca_cfi],
+                                _bck_ref_lines[_bk_ca_cfi], _bk_ca_sp)
+                        }
+                    }
+                    _bck_ref_track(_bk_ca_nm, _bk_ca_inner.text,
+                                   _bk_ca_sp.line, _bk_ca_mut)
+                }
+            }
             i = i + 1
         }
         // RFC 071 P5++ — `gpu_matmul(c, a, b, M, N, K)` builtin synthesis.
