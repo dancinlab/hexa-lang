@@ -37,8 +37,18 @@ LIBS="${LIBS:-}"
 if [ "${HEXA_ZEROC_OWN_START:-0}" = "1" ] && [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
     _zc_arch="$(uname -m 2>/dev/null)"
     if [ "$_zc_arch" = "x86_64" ] || [ "$_zc_arch" = "aarch64" ] || [ "$_zc_arch" = "arm64" ]; then
-        LIBS="$LIBS -nostartfiles"
-        echo "stage_build_hexa: HEXA_ZEROC_OWN_START=1 (linux/$_zc_arch) — appending -nostartfiles to final links (own _start from runtime.a)"
+        # own-start #29 PR-C probe: only drop crt _start if the runtime.a on THIS link actually
+        # CARRIES own _start. A stale/default-OFF prebuilt runtime.a (HEXA_PREBUILT_RUNTIME seam,
+        # or a build/runtime.a from a non-OWN_START stage) has NO own _start → -nostartfiles then
+        # leaves the binary with NO _start = link/exec FATAL (the #4489 no-_start hazard). $PWD ==
+        # the ROOT set below (line 46); resolving the path here (pre-ROOT) is safe.
+        _zc_ra="${HEXA_PREBUILT_RUNTIME:-$PWD/build/runtime.a}"
+        if [ -f "$_zc_ra" ] && nm "$_zc_ra" 2>/dev/null | grep -qE ' T _?_start$'; then
+            LIBS="$LIBS -nostartfiles"
+            echo "stage_build_hexa: HEXA_ZEROC_OWN_START=1 (linux/$_zc_arch) — own _start confirmed in $_zc_ra, appending -nostartfiles"
+        else
+            echo "stage_build_hexa: HEXA_ZEROC_OWN_START=1 but $_zc_ra has NO ' T _start' — NOT appending -nostartfiles (crt1 _start retained; averts the #4489 no-_start link FATAL)" >&2
+        fi
     fi
 fi
 CFLAGS="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
