@@ -1425,6 +1425,90 @@ fn _build_case_hx3025_fixture() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (ap) R5-r1 — wrong-enum match pattern REJECT (Rust E0308). Module:
+//   enum Color { Red, Green }
+//   enum Dir   { North, South }
+//   fn f(c: Color) { match c { Dir::North -> 1, Color::Red -> 2, _ -> 0 } }
+//   fn g(p: Point) { match p { Color::Red -> 1, _ -> 0 } }   — struct scrut control
+// The `Dir::North` arm on a `Color` scrutinee → 1 HX3030 Error; `Color::Red`
+// (same enum) + `_` clean; the struct-scrutinee `g` control fires 0 (Point is
+// not a registered enum → under-reject). Param scrutinees carry `named:Enum`
+// directly, pinning the recovery path (not the block-local `{}name` slot).
+fn _build_case_hx3030_wrong_enum() -> Module {
+    let f = "case_hx3030.hexa"
+    // enum Color { Red, Green }
+    let mut cvars = []
+    cvars.push(_variant_unit("Red", f, 1, 13))
+    cvars.push(_variant_unit("Green", f, 1, 18))
+    let item_color = _enum_item("Color", cvars, f, 1)
+    // enum Dir { North, South }
+    let mut dvars = []
+    dvars.push(_variant_unit("North", f, 2, 11))
+    dvars.push(_variant_unit("South", f, 2, 18))
+    let item_dir = _enum_item("Dir", dvars, f, 2)
+    // struct Point { x: i64 }
+    let mut sfields = []
+    sfields.push(_param("x", "i64", f, 3, 14))
+    let item_pt = _struct_item("Point", sfields, f, 3)
+    // fn f(c: Color) { match c { Dir::North -> 1, Color::Red -> 2, _ -> 0 } }
+    let mut arms = []
+    arms.push(_enum_path("Dir", "North", [], f, 5, 9))    // wrong enum → HX3030
+    arms.push(_int_expr("1", f, 5, 20))
+    arms.push(_enum_path("Color", "Red", [], f, 6, 9))    // same enum → clean
+    arms.push(_int_expr("2", f, 6, 22))
+    arms.push(_wildcard_expr(f, 7, 9))                    // wildcard → clean
+    arms.push(_int_expr("0", f, 7, 14))
+    let mf = _match_expr(_ident_expr("c", f, 4, 24), arms, f, 4, 20)
+    let mut fparams = []
+    fparams.push(_param("c", "Color", f, 4, 6))
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), _block([mf], f, 4, 1), f, 4)
+    // fn g(p: Point) { match p { Color::Red -> 1, _ -> 0 } }  — struct scrut → silent
+    let mut garms = []
+    garms.push(_enum_path("Color", "Red", [], f, 9, 9))   // struct scrutinee → under-reject
+    garms.push(_int_expr("1", f, 9, 22))
+    garms.push(_wildcard_expr(f, 10, 9))
+    garms.push(_int_expr("0", f, 10, 14))
+    let mg = _match_expr(_ident_expr("p", f, 8, 24), garms, f, 8, 20)
+    let mut gparams = []
+    gparams.push(_param("p", "Point", f, 8, 6))
+    let item_g = _fn_item("g", gparams, _empty_type_ref(), _block([mg], f, 8, 1), f, 8)
+    let mut items = []
+    items.push(item_color)
+    items.push(item_dir)
+    items.push(item_pt)
+    items.push(item_f)
+    items.push(item_g)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (ap) HX3030 fixture carve-out — identical wrong-enum match AST on a byte-eq
+// TEST-FIXTURE path (`*_test.hexa`) stays WARNING via _types_strict_for.
+fn _build_case_hx3030_fixture() -> Module {
+    let f = "case_hx3030_test.hexa"
+    let mut cvars = []
+    cvars.push(_variant_unit("Red", f, 1, 13))
+    cvars.push(_variant_unit("Green", f, 1, 18))
+    let item_color = _enum_item("Color", cvars, f, 1)
+    let mut dvars = []
+    dvars.push(_variant_unit("North", f, 2, 11))
+    dvars.push(_variant_unit("South", f, 2, 18))
+    let item_dir = _enum_item("Dir", dvars, f, 2)
+    let mut arms = []
+    arms.push(_enum_path("Dir", "North", [], f, 4, 9))
+    arms.push(_int_expr("1", f, 4, 20))
+    arms.push(_wildcard_expr(f, 5, 9))
+    arms.push(_int_expr("0", f, 5, 14))
+    let mf = _match_expr(_ident_expr("c", f, 3, 24), arms, f, 3, 20)
+    let mut fparams = []
+    fparams.push(_param("c", "Color", f, 3, 6))
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), _block([mf], f, 3, 1), f, 3)
+    let mut items = []
+    items.push(item_color)
+    items.push(item_dir)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // (ak) R1 — binop operand literal-aware BIDIRECTIONAL coercion. Bare
 // `_types_equal(lt, rt)` false-fired HX3001 on `a_i32 + 1` / `a_i32 < 2`: the
 // literal `1`/`2` infers i64 (universal int-literal), so i32≠i64 mis-rejected a
@@ -2648,6 +2732,28 @@ fn main() {
         ok = false
     } else {
         println("  ok: 1 HX3025 as WARNING (string-index fixture carve-out: *_test.hexa stays warn-band)")
+    }
+
+    // (ap) R5-r1 — wrong-enum match pattern REJECT (Rust E0308).
+    let diags_ap = _run_case("(ap) static-types R5-r1 — wrong-enum match pattern REJECT (Dir::North on Color scrut / Color::Red same-enum + `_` clean / struct scrut silent) (HX3030)", _build_case_hx3030_wrong_enum())
+    let cap = _count_code(diags_ap, "HX3030")
+    let cap_err = _count_code_sev(diags_ap, "HX3030", "error")
+    if cap != 1 || cap_err != 1 {
+        println("  FAIL: case (ap) expected 1 HX3030 as ERROR (Dir::North arm on Color scrut; Color::Red same-enum + `_` + struct-scrut control clean), got " + to_string(cap) + " HX3030 (" + to_string(cap_err) + " error) (total=" + to_string(len(diags_ap)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3030 as ERROR (wrong-enum `Dir::North` on `Color` scrutinee; same-enum + wildcard + struct-scrutinee control silent) — E0308 mismatched enum in match pattern")
+    }
+
+    // (ap) HX3030 fixture carve-out — *_test.hexa path → WARNING.
+    let diags_apf = _run_case("(ap) static-types R5-r1 — HX3030 fixture carve-out (*_test.hexa wrong-enum match)", _build_case_hx3030_fixture())
+    let capf = _count_code(diags_apf, "HX3030")
+    let capf_warn = _count_code_sev(diags_apf, "HX3030", "warning")
+    if capf != 1 || capf_warn != 1 {
+        println("  FAIL: case (ap) fixture expected 1 HX3030 as WARNING (fixture carve-out), got " + to_string(capf) + " HX3030 (" + to_string(capf_warn) + " warn) (total=" + to_string(len(diags_apf)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3030 as WARNING (wrong-enum fixture carve-out: *_test.hexa stays warn-band)")
     }
 
     println("")
