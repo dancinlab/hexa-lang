@@ -1526,6 +1526,145 @@ fn _run_mut_method_probe(label: string, src: string, want_on: i64) -> bool {
     return ok
 }
 
+// ── HEXA-OWN round8-1 — HX3035 use-of-possibly-uninitialized (Rust E0381) ──
+// Self-contained balanced source probes (NEVER line-unioned). Each returns a
+// full program string; the runner keys on HX3035 and asserts probe hygiene
+// (zero stray codes). OFF → all 0 (byteeq-neutral proof); STRICT → Error-band.
+
+// HAZARD — read of an uninit `let` before any assignment fires.
+fn _src_hz_use_before_init() -> string {
+    let mut s = "fn hzu() {\n"
+    s = s + "    let x: i64\n"
+    s = s + "    let y = x + 1\n"
+    s = s + "    println(y)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — use precedes the init WITHIN the same block (order-precise).
+fn _src_hz_use_then_init() -> string {
+    let mut s = "fn hzt() {\n"
+    s = s + "    let mut x: i64\n"
+    s = s + "    let y = x\n"
+    s = s + "    x = 1\n"
+    s = s + "    println(y + x)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — a loop body reads x on its FIRST iteration before the in-body
+// assignment (the back-edge kills, but the entry pred keeps IN=1).
+fn _src_hz_loop_first_iter() -> string {
+    let mut s = "fn hzl(c: bool) {\n"
+    s = s + "    let mut x: i64\n"
+    s = s + "    while c {\n"
+    s = s + "        let y = x\n"
+    s = s + "        x = 1\n"
+    s = s + "        println(y)\n"
+    s = s + "    }\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — init precedes use in the same block → clean.
+fn _src_fp_init_then_use() -> string {
+    let mut s = "fn fpit() {\n"
+    s = s + "    let mut x: i64\n"
+    s = s + "    x = 1\n"
+    s = s + "    let y = x\n"
+    s = s + "    println(y)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — BOTH if/else branches init → OR-join is 0 (must-init AND dual).
+fn _src_fp_init_both_branches() -> string {
+    let mut s = "fn fpib(c: bool) {\n"
+    s = s + "    let mut x: i64\n"
+    s = s + "    if c {\n"
+    s = s + "        x = 1\n"
+    s = s + "    } else {\n"
+    s = s + "        x = 2\n"
+    s = s + "    }\n"
+    s = s + "    let y = x\n"
+    s = s + "    println(y)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a return-terminated branch has NO join edge, so the merge's only
+// pred is the else branch that inits x → clean.
+fn _src_fp_return_branch() -> string {
+    let mut s = "fn fprb(c: bool) -> i64 {\n"
+    s = s + "    let mut x: i64\n"
+    s = s + "    if c {\n"
+    s = s + "        return 0\n"
+    s = s + "    } else {\n"
+    s = s + "        x = 1\n"
+    s = s + "    }\n"
+    s = s + "    return x\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a partial place-write `s.f = 1` marks the whole place initialized
+// (partial-init tolerance) → a later read of the field is silent.
+fn _src_fp_field_partial() -> string {
+    let mut s = "struct P { f: i64 }\n"
+    s = s + "fn fpfp() {\n"
+    s = s + "    let s: P\n"
+    s = s + "    s.f = 1\n"
+    s = s + "    let y = s.f\n"
+    s = s + "    println(y)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — an ordinary initialized `let` is never tracked.
+fn _src_fp_normal_let() -> string {
+    let mut s = "fn fpnl() {\n"
+    s = s + "    let x = 1\n"
+    s = s + "    let y = x\n"
+    s = s + "    println(y)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HX3035 probe runner — mirrors `_run_use_while_mut_probe`, keyed on the
+// uninit-use code and asserting every OTHER code is 0 (probe hygiene). STRICT
+// re-bands HX3035 to Error, so the error-band count must equal the HX3035
+// count. OFF → want 0 (empty stream).
+fn _run_uninit_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3035 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3035")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3035 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3035 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
 // ── driver ───────────────────────────────────────────────────
 
 fn main() {
@@ -1643,6 +1782,19 @@ fn main() {
         if !_run_mob("hz_move_out_mut_borrow", "mut", "r", 1) { ok = false }
         if !_run_mob("fp_move_out_plain_copy", "plain", "r", 0) { ok = false }
         if !_run_mob("fp_move_out_owner_base", "none", "a", 0) { ok = false }
+        // HEXA-OWN round8-1 — use-of-possibly-uninitialized (HX3035, Rust
+        // E0381). Hazards (read before init · use-then-init · loop first-iter)
+        // → ×1 ON; controls (init-then-use · both-branches init · return branch
+        // · partial field init · normal init) → 0. OFF → empty stream (byteeq-
+        // neutral); STRICT → Error-band.
+        if !_run_uninit_probe("hz_use_before_init", _src_hz_use_before_init(), 1) { ok = false }
+        if !_run_uninit_probe("hz_use_then_init", _src_hz_use_then_init(), 1) { ok = false }
+        if !_run_uninit_probe("hz_loop_first_iter", _src_hz_loop_first_iter(), 1) { ok = false }
+        if !_run_uninit_probe("fp_init_then_use", _src_fp_init_then_use(), 0) { ok = false }
+        if !_run_uninit_probe("fp_init_both_branches", _src_fp_init_both_branches(), 0) { ok = false }
+        if !_run_uninit_probe("fp_return_branch", _src_fp_return_branch(), 0) { ok = false }
+        if !_run_uninit_probe("fp_field_partial", _src_fp_field_partial(), 0) { ok = false }
+        if !_run_uninit_probe("fp_normal_let", _src_fp_normal_let(), 0) { ok = false }
         // census lane must be silent whenever HEXA_BORROWCK_CENSUS is unset
         // (byteeq-neutral proof at the census-count level).
         if !_run_census() { ok = false }
