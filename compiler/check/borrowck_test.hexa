@@ -1259,6 +1259,135 @@ fn _run_mvb(label: string, with_loan: bool, mut_loan: bool,
     return ok
 }
 
+// ── L5-E9 — move-out-of-borrowed-content (HX3034, Rust E0507) ──
+//
+// Hand-built HIR mirroring _build_mvb_module, but the @own call arg is a FIELD
+// access `<ref_base>.f` instead of a bare ident:
+//
+//   fn g(@own p: [i64]) {}
+//   fn mob_caller() {
+//       let a = [1]
+//       [ let r = &a / &mut a / a ]   line 3   (binding ∈ shared/mut/plain/none)
+//       g(<ref_base>.f)              line 4   MOVE-OUT of a field
+//   }
+//
+// binding: "shared" → `let r = &a` · "mut" → `let r = &mut a` · "plain" →
+//          `let r = a` (non-ref handle-copy — NOT a loan) · "none" → no `r`.
+// ref_base: the base ident of the field arg (`r` for the loan cases, `a` for the
+//           owner-direct case).
+//
+// ① `&a` loan live, base=r  → HX3034 ×1 (shared).
+// ② `&mut a` loan live, base=r → HX3034 ×1 (mutability-blind: `&mut` grants
+//    mutation, not move-out) — HX3027 ×0 (E0507 is report-only, no move recorded,
+//    so no E0503 preemption; the arg READ is of the ref binding `r`, not origin).
+// ③ `let r = a` plain copy, base=r → 0 (`r` is not a ref binding — find_ref = -1).
+// ④ owner-direct `g(a.f)`, base=a → 0 (`a` is the owner, not a ref binding).
+// OFF sweep → fully empty stream; STRICT re-bands the fired code to Error.
+fn _build_mob_module(binding: string, ref_base: string) -> HModule {
+    // fn g — empty body, @own aggregate param p.
+    let mut g_anns: [Annotation] = []
+    g_anns.push(_ann1("own", "p"))
+    g_anns.push(_ann1("param_names", "p"))
+    let mut g_sigp: [Type] = []
+    g_sigp.push(_t_arr_i64())
+    let g_body = _hx("block", "", [], 1)
+    let item_g = _hitem_fn("g", g_anns, g_sigp, g_body)
+
+    // fn mob_caller — let a = [1]  ( [let r = &a / &mut a / a] )  g(<ref_base>.f)
+    let mut arr_kids: [HExpr] = []
+    arr_kids.push(_hx_int("1", 2))
+    let mut let_a_kids: [HExpr] = []
+    let_a_kids.push(_hx("array_lit", "", arr_kids, 2))
+    let let_a = _hx("let", "a", let_a_kids, 2)
+
+    let mut body_kids: [HExpr] = []
+    body_kids.push(let_a)
+
+    if binding == "shared" || binding == "mut" {
+        let mut ref_inner: [HExpr] = []
+        ref_inner.push(_hx("ident", "a", [], 3))
+        let mut btext = "&"
+        if binding == "mut" { btext = "&mut" }
+        let mut ref_kids: [HExpr] = []
+        ref_kids.push(_hx("unop", btext, ref_inner, 3))
+        let let_r = _hx("let", "r", ref_kids, 3)
+        body_kids.push(let_r)
+    }
+    if binding == "plain" {
+        // `let r = a` — a non-ref aggregate handle-copy (census-only, never a
+        // loan row), so find_ref("r") stays -1 and HX3034 must NOT fire.
+        let mut copy_kids: [HExpr] = []
+        copy_kids.push(_hx("ident", "a", [], 3))
+        let let_r = _hx("let", "r", copy_kids, 3)
+        body_kids.push(let_r)
+    }
+
+    // g(<ref_base>.f) — field access (kind="field", text="f", child[0]=base) as
+    // the @own call arg.
+    let mut fld_kids: [HExpr] = []
+    fld_kids.push(_hx("ident", ref_base, [], 4))
+    let fld = _hx("field", "f", fld_kids, 4)
+    let mut call_kids: [HExpr] = []
+    call_kids.push(_hx("ident", "g", [], 4))
+    call_kids.push(fld)
+    let call_g = _hx("call", "", call_kids, 4)
+    body_kids.push(call_g)
+
+    let body = _hx("block", "", body_kids, 2)
+    let mut caller_anns: [Annotation] = []
+    let item_c = _hitem_fn("mob_caller", caller_anns, [], body)
+
+    let mut items: [HItem] = []
+    items.push(item_g)
+    items.push(item_c)
+    return HModule { file: "mob.hexa", items: items }
+}
+
+fn _run_mob(label: string, binding: string, ref_base: string,
+            want34_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want34 = 0
+    if flag_on { want34 = want34_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (hand-built HIR, expect HX3034 ×" + to_string(want34)
+        + " · HX3027 ×0) ──")
+    let mm = lower_hir(_build_mob_module(binding, ref_base))
+    let d = hir_to_mir_diags()
+    let n34 = _count_code(d, "HX3034")
+    let n27 = _count_code(d, "HX3027")
+    let other = len(d) - n34 - n27
+    _print_diags(d)
+    if n34 != want34 {
+        println("  FAIL: HX3034 = " + to_string(n34) + ", want " + to_string(want34))
+        ok = false
+    }
+    if n27 != 0 {
+        println("  FAIL: HX3027 = " + to_string(n27)
+            + ", want 0 (E0507 is report-only — no move recorded, no E0503 preemption)")
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3034/HX3027 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want34 {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want "
+                + to_string(want34))
+            ok = false
+        }
+    }
+    if len(mm.funcs) != 2 {
+        println("  FAIL: expected 2 lowered fns, got " + to_string(len(mm.funcs)))
+        ok = false
+    }
+    if ok { println("  ok: HX3034 ×" + to_string(want34) + " · HX3027 ×0") }
+    return ok
+}
+
 // ── L4 A2 — WOULD-MOVE CENSUS (HEXA_BORROWCK_CENSUS=1) ────────
 //
 // Census is a SEPARATE observe-only lane (no HX3014, no _lr_diag): under
@@ -1504,6 +1633,16 @@ fn main() {
         if !_run_mut_method_probe("fp_mut_method_mutref", _src_fp_mut_method_mutref(), 0) { ok = false }
         if !_run_mut_method_probe("fp_mut_method_owner", _src_fp_mut_method_owner(), 0) { ok = false }
         if !_run_mut_method_probe("fp_nonmut_method_ref", _src_fp_nonmut_method_ref(), 0) { ok = false }
+        // HEXA-OWN L5-E9 — move-out-of-borrowed-content (HX3034, Rust E0507).
+        // Hand-built HIR: an @own call arg `r.f` where `r` is a live `&`/`&mut`
+        // ref binding → HX3034 ×1 (mutability-blind — BOTH loan kinds fire).
+        // Report-only (no move recorded) → HX3034 stands ALONE, HX3027 ×0 (no
+        // preemption). A plain-copy base (`let r = a`) and an owner-direct base
+        // (`g(a.f)`) do NOT fire. OFF → empty stream; STRICT → Error-band.
+        if !_run_mob("hz_move_out_shared_borrow", "shared", "r", 1) { ok = false }
+        if !_run_mob("hz_move_out_mut_borrow", "mut", "r", 1) { ok = false }
+        if !_run_mob("fp_move_out_plain_copy", "plain", "r", 0) { ok = false }
+        if !_run_mob("fp_move_out_owner_base", "none", "a", 0) { ok = false }
         // census lane must be silent whenever HEXA_BORROWCK_CENSUS is unset
         // (byteeq-neutral proof at the census-count level).
         if !_run_census() { ok = false }
