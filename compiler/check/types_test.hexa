@@ -1674,6 +1674,43 @@ fn _build_case_hx3025_string_fixture() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (aq) R5-r2 — let-RHS BinOp + leaves-known gate (HX3011, Rust E0308). A typed
+// `let` whose BinOp RHS infers a KNOWN-scalar type that disagrees with the
+// annotation REJECTs; an unknown leaf disqualifies the tree (silent). Builds
+//   fn f(a: i64, b: i64, c: i32) -> i64 {
+//       let x: i32 = a + b     // both i64 → result i64 ≠ i32  → 1 HX3011
+//       let v: i32 = c + 1     // i32 + lit → i32 (R1 coerce)  → 0 (clean)
+//       let z: i32 = a + u     // u unresolved → leaves-known false → 0 HX3011
+//   }                          //   (may add HX2001 for `u`; we count HX3011 only)
+fn _build_case_let_binop_leaves_known() -> Module {
+    let f = "case_let_binop.hexa"
+    let ex = _let_expr("x|i32", _bin_expr("+", _ident_expr("a", f, 2, 18), _ident_expr("b", f, 2, 22), f, 2, 20), f, 2, 5)
+    let ev = _let_expr("v|i32", _bin_expr("+", _ident_expr("c", f, 3, 18), _int_expr("1", f, 3, 22), f, 3, 20), f, 3, 5)
+    let ez = _let_expr("z|i32", _bin_expr("+", _ident_expr("a", f, 4, 18), _ident_expr("u", f, 4, 22), f, 4, 20), f, 4, 5)
+    let mut pf = []
+    pf.push(_param("a", "i64", f, 1, 6))
+    pf.push(_param("b", "i64", f, 1, 14))
+    pf.push(_param("c", "i32", f, 1, 22))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([ex, ev, ez], f, 1, 1), f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (aq) R5-r2 fixture carve-out — identical typed-let BinOp on a *_test.hexa
+// path → the one REJECT stays WARNING via _types_strict_for.
+fn _build_case_let_binop_fixture() -> Module {
+    let f = "case_let_binop_test.hexa"
+    let ex = _let_expr("x|i32", _bin_expr("+", _ident_expr("a", f, 2, 18), _ident_expr("b", f, 2, 22), f, 2, 20), f, 2, 5)
+    let mut pf = []
+    pf.push(_param("a", "i64", f, 1, 6))
+    pf.push(_param("b", "i64", f, 1, 14))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([ex], f, 1, 1), f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // static-types r9d — struct-literal field-EXISTENCE reject (HEXA_STATIC_TYPES=1,
 // no ARRAY_LOWER dependency). r6 deliberately scoped existence out, so a
 // typo'd field name silently skipped BOTH the existence and the type check.
@@ -2754,6 +2791,28 @@ fn main() {
         ok = false
     } else {
         println("  ok: 1 HX3030 as WARNING (wrong-enum fixture carve-out: *_test.hexa stays warn-band)")
+    }
+
+    // (aq) R5-r2 — let-RHS BinOp + leaves-known gate (HX3011, Rust E0308).
+    let diags_aq = _run_case("(aq) static-types R5-r2 — typed-let BinOp REJECT (a_i64+b_i64→i32 rejects; c_i32+1 coerces clean; a+u_unknown leaves-known-false silent) (HX3011)", _build_case_let_binop_leaves_known())
+    let caq = _count_code(diags_aq, "HX3011")
+    let caq_err = _count_code_sev(diags_aq, "HX3011", "error")
+    if caq != 1 || caq_err != 1 {
+        println("  FAIL: case (aq) expected 1 HX3011 as ERROR (a+b i64→i32 reject; c+1 clean; a+u silent), got " + to_string(caq) + " HX3011 (" + to_string(caq_err) + " error) (total=" + to_string(len(diags_aq)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3011 as ERROR (typed-let BinOp: a+b i64 vs i32 reject; c+1 coerce clean; a+u_unknown leaves-known-false silent) — E0308 let-RHS binop")
+    }
+
+    // (aq) R5-r2 fixture carve-out — same typed-let BinOp on *_test.hexa → WARNING.
+    let diags_aqf = _run_case("(aq) static-types R5-r2 — HX3011 let-BinOp fixture carve-out (*_test.hexa typed-let binop)", _build_case_let_binop_fixture())
+    let caqf = _count_code(diags_aqf, "HX3011")
+    let caqf_warn = _count_code_sev(diags_aqf, "HX3011", "warning")
+    if caqf != 1 || caqf_warn != 1 {
+        println("  FAIL: case (aq) fixture expected 1 HX3011 as WARNING (fixture carve-out), got " + to_string(caqf) + " HX3011 (" + to_string(caqf_warn) + " warn) (total=" + to_string(len(diags_aqf)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3011 as WARNING (let-BinOp fixture carve-out: *_test.hexa stays warn-band)")
     }
 
     println("")
