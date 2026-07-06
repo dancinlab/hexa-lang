@@ -1931,6 +1931,48 @@ fn _build_case_own_lint_r2b() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// HEXA-OWN L2 rung B — use-after-move at a field/index BASE or a binop
+// OPERAND (HEXA_OWN_LINT=1). After a bare-ident `let` move consumes an @own
+// binding, reading it back as a field receiver (`x.f`), an index base
+// (`x[0]`), or a binop operand (`x + 1`) is a use-after-move too — each warns
+// HX3012 once. Warn-only: the read never re-marks (so a still-LIVE binding
+// read the same way stays clean) and the move site itself never re-counts.
+// One module covers all three read contexts + the live control:
+//   fn main() {
+//       @own let x = 5        // register x (own, live)
+//       let a = x             // FIRST use = move                  → clean
+//       x.f                   // field receiver after move         → HX3012
+//       x[0]                  // index base after move             → HX3012
+//       x + 1                 // binop operand after move          → HX3012
+//       @own let y = 7        // independent own binding (never moved)
+//       y.g                   // field receiver, y LIVE            → clean
+//   }
+// Under the flag exactly 3 HX3012 (x.f / x[0] / x + 1); the move `let a = x`
+// and the live-receiver read `y.g` never fire (warn-only proof). On the
+// default build → 0 (byteeq-neutral).
+fn _build_case_own_lint_rungB() -> Module {
+    let f = "case_own_lint_rungB.hexa"
+    let mut kids = []
+    // @own let x = 5
+    kids.push(_own_let_expr("x", _int_expr("5", f, 2, 18), f, 2, 5))
+    // let a = x   → first move of x (clean)
+    kids.push(_let_expr("a", _ident_expr("x", f, 3, 13), f, 3, 5))
+    // x.f   → field receiver after move → HX3012
+    kids.push(_field_expr(_ident_expr("x", f, 4, 5), "f", f, 4, 5))
+    // x[0]  → index base after move → HX3012
+    kids.push(_index_expr(_ident_expr("x", f, 5, 5), _int_expr("0", f, 5, 7), f, 5, 5))
+    // x + 1 → binop operand after move → HX3012
+    kids.push(_bin_expr("+", _ident_expr("x", f, 6, 5), _int_expr("1", f, 6, 9), f, 6, 5))
+    // @own let y = 7 (never moved) ; y.g → live receiver → clean (warn-only)
+    kids.push(_own_let_expr("y", _int_expr("7", f, 7, 18), f, 7, 5))
+    kids.push(_field_expr(_ident_expr("y", f, 8, 5), "g", f, 8, 5))
+    let body = _block(kids, f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // HEXA-OWN L2.5 r1 — arena-escape lint (HEXA_ARENA_ESCAPE_LINT=1). A
 // fn-local `let` whose RHS is a composite literal is arena-allocated; only
 // the RETURN value is heapified by the fn-arena runtime, so assigning such
@@ -2754,6 +2796,30 @@ fn main() {
         ok = false
     } else {
         println("  ok: 1 HX3030 as WARNING (wrong-enum fixture carve-out: *_test.hexa stays warn-band)")
+    }
+
+    // (aq) HEXA-OWN L2 rung B — use-after-move at a field/index BASE or a
+    // binop OPERAND (HEXA_OWN_LINT). Under the flag, after `let a = x` moves
+    // the @own `x`, reading it as `x.f` / `x[0]` / `x + 1` warns HX3012
+    // exactly THREE times; the move itself and a LIVE receiver read (`y.g`,
+    // y never moved) stay clean (warn-only proof). On the default build → 0
+    // (byteeq-neutral). Same self-adapting contract as (n)/(p)/(q).
+    let diags_aq = _run_case("(aq) own-lint rung B — use-after-move at field/index base + binop operand (HEXA_OWN_LINT)", _build_case_own_lint_rungB())
+    let caq = _count_code(diags_aq, "HX3012")
+    if env("HEXA_OWN_LINT") == "1" {
+        if caq != 3 {
+            println("  FAIL: case (aq) HEXA_OWN_LINT=1 expected 3 HX3012 (x.f / x[0] / x + 1), got " + to_string(caq) + " (total=" + to_string(len(diags_aq)) + ")")
+            ok = false
+        } else {
+            println("  ok: 3 HX3012 emitted (field/index base + binop operand after move; live `y.g` warn-only silent)")
+        }
+    } else {
+        if caq != 0 {
+            println("  FAIL: case (aq) default build expected 0 HX3012 (byteeq-neutral), got " + to_string(caq) + " (total=" + to_string(len(diags_aq)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3012 (default-OFF → byteeq-neutral)")
+        }
     }
 
     println("")
