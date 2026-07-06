@@ -43,7 +43,7 @@ CFLAGS="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
 # byteeq 3-target + install.sh smoke. Env HEXA_ZEROC_OWN_START=1 exercises it for validation.
 # Linux-intent; the scaffold's own #if __x86_64__/__aarch64__ arch-gates the asm (harmless elsewhere).
 _zc_own_def=""
-[ "${HEXA_ZEROC_OWN_START:-0}" = "1" ] && _zc_own_def="-DHEXA_ZEROC_OWN_START"
+{ [ "${HEXA_ZEROC_OWN_START:-1}" = "1" ] && [ "$(uname -s 2>/dev/null)" = "Linux" ]; } && _zc_own_def="-DHEXA_ZEROC_OWN_START"   # FLIP-7 flip-D: default-ON (opt-out =0). Linux guard is load-bearing — the own _start asm (runtime_emit_full.hexa) is arch-gated #if __aarch64__ which is TRUE on darwin-arm64, so an unguarded -D byte-changes darwin runtime.a
 ROOT="$PWD"
 RA="$ROOT/build/runtime.a"
 mkdir -p build
