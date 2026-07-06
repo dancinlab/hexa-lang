@@ -531,6 +531,43 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3028",
+        title: "cannot borrow a value as mutable more than once at a time",
+        // Warning band (SSOT F4 warn-first), the E0499 faithfulness split of the
+        // E2 loan-registry borrow-conflict family: the opt-in borrow checker
+        // (`HEXA_BORROWCK=1`) surfaces a SECOND `&mut` borrow of a value whose
+        // first `&mut` loan is still live — the double-mutable-borrow case rustc
+        // reports with a DISTINCT code (E0499) from the shared-vs-mutable E0502
+        // (HX3021). Under `HEXA_BORROWCK_STRICT=1` the SAME diagnostic instance
+        // is re-banded to a build-refusing Error via the sanctioned caller
+        // override in `_bck_emit_double_mut` (identical mechanism to HX3014/
+        // HX3019/HX3021/HX3023/HX3027). With the flag unset the loan pass is
+        // inert (`_bck_active` false), so nothing is emitted and the diagnostic
+        // stream + emitted bytes are byte-identical — release integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "cannot borrow `{origin}` as mutable more than once at a time (for `{name}`) — first mutable borrow by `{other}` at line {other_line} is still live",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN E3.9) found a SECOND mutable borrow of a value whose first mutable borrow is still live: `let a = &mut x; let b = &mut x;`. hexa uses the same aliasing-XOR-mutation model as Rust — a value may have EITHER any number of shared (`&`) borrows OR exactly one mutable (`&mut`) borrow live at once. This is the SPECIFIC mut-while-mut case, which rustc reports with its OWN diagnostic code E0499 ('cannot borrow `x` as mutable more than once at a time'; rustc_borrowck report_conflicting_borrow splits the two-mutable case out from the shared-vs-mutable E0502): a `&mut` loan promises EXCLUSIVE access, so a concurrent second `&mut` would alias two exclusive references. It is the faithfulness split of HX3021/E0502 — the shared conflict cases (a new `&` while a `&mut` is live, or a new `&mut` while a `&` is live) stay on HX3021; ONLY the both-mutable case is re-coded here. The split fires at the SINGLE E3 conflict branch (`_bck_ref_find_conflict` >= 0 with `_bck_ref_mut[cfi] && new_mut`), so HX3028 and HX3021 share one same-site dedup array with zero contention. The detection is conservative / flow-insensitive within a scope (no NLL last-use yet): only same-fn live loans count, a loan reassigned to a non-borrow RHS is killed (newest-entry-per-name wins), and borrows created through a call argument, a struct field / array element, or a closure are NOT tracked — this is the documented flow-insensitive false-positive class (a re-borrow that Rust NLL would allow after the first loan's last use still fires here), the SAME conservative-loud-over-quiet policy as E2/E3/E4/E5. Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical. Fix: end the first mutable borrow before starting the second (borrows end at last use under NLL), or take a single `&mut` and thread it through instead of aliasing.",
+    },
+    DiagSpec {
+        code: "HX3029",
+        title: "cannot move out of a value while it is borrowed",
+        // Warning band (SSOT F4 warn-first), the move-out rung of the E2
+        // loan-registry family: the opt-in borrow checker (`HEXA_BORROWCK=1`)
+        // surfaces a MOVE of a value (out via an `@own` call arg) while it has a
+        // LIVE loan. Under `HEXA_BORROWCK_STRICT=1` the SAME diagnostic instance
+        // is re-banded to a build-refusing Error via the sanctioned caller
+        // override in `_bck_emit_move_while_borrowed` (identical mechanism to
+        // HX3014/HX3019/HX3021/HX3023/HX3027). With the flag unset the loan pass
+        // is inert (`_bck_active` false), so nothing is emitted and the diagnostic
+        // stream + emitted bytes are byte-identical — release integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "cannot move out of `{origin}` because it is borrowed by `{name}` at line {borrow_line}",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN L5-E6) found a MOVE of `x` — a bare-ident argument passed to a resolved callee whose corresponding parameter is declared `@own`, which moves the value out of `x`'s binding (the M3 move classification, `_bck_note_move`) — while a LIVE loan of `x` exists in the E2 registry: some binding `r` was borrowed against `x` (`let r = &x` / `let r = &mut x`) earlier in the same function and has not been killed (by reassigning `r` to a non-borrow RHS) before this move. This is Rust's E0505 ('cannot move out of `x` because it is borrowed'; rustc_borrowck reports it when a move of a place overlaps a live loan of that place): moving the value out invalidates the borrow's aliasing guarantee — a `&mut x` loan promises exclusive access through `r`, and even a shared `&x` loan promises the borrowed storage stays put, so moving `x` away breaks BOTH. The move-out scan (`_bck_ref_find_write_through`) is therefore MUTABILITY-BLIND (unlike E0503/HX3027 use-while-mut, which keys on the mutability bit) — the SAME symmetry break as the write-through rule (E0506/HX3023). It runs at the @own call-arg move site (`_lower_hexpr` call arm, HEXA-OWN L3 M3), immediately after the move is recorded, and reuses the E4 write-through scan. Dedup contract (shared-loan primary): when the live loan is `&mut`, the arg ident's own READ (lowered a line earlier) already fired HX3027 (E0503) at THIS span, so the shared same-site dedup array (`_bck_e_lines`/`_bck_e_cols`) collapses HX3029 into it — a `&x` (shared) loan reports HX3029, a `&mut x` loan reports HX3027 alone, never both at one move site. The detection is conservative / flow-insensitive within a scope (no NLL last-use yet): a loan stays LIVE from its `let` to the end of the function or until the binding is reassigned to a non-borrow, so `let r = &x; g(x); <r unused>` ALSO fires even though Rust NLL would end `r`'s loan before the move — the documented flow-insensitive false-positive class, the SAME conservative-loud-over-quiet policy as E2/E3/E4/E5. Only same-fn live loans count; borrows of module-level globals, through call args / struct fields / array elements / closures, and cross-function loans are NOT tracked (documented false-negatives). Move classification itself fires ONLY at `@own` call args (the polarity inversion vs every-arg-moves), and `@own` inline-carrier adoption is currently 0 in the corpus, so even with the flag ON this rule fires on ZERO real source (corpus-clean). Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical. Fix: end the borrow before the move (reassign the borrowing binding to a non-borrow RHS, or restructure so the move precedes the borrow), or pass a borrow / clone instead of moving the owned value.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,

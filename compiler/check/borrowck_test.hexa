@@ -420,16 +420,18 @@ fn _run_ret_probe(label: string, src: string, want_on: i64) -> bool {
     return ok
 }
 
-// ── HEXA-OWN E2+E3 — borrow-conflict rule (HX3021, Rust E0502) ────
+// ── HEXA-OWN E2+E3 — borrow-conflict rule (HX3021/HX3028, E0502/E0499) ──
 //
 // The E2 loan registry (name → origin, mutability bit, live via
 // kill-on-reassign) is wired to E3's first conflict check: a NEW borrow
 // `&x` / `&mut x` over a function-local that already has a LIVE loan of the
 // same origin conflicts when the existing loan is `&mut` (any second borrow
 // illegal) OR the new borrow is `&mut` (mutable demands exclusivity). Two
-// shared borrows never conflict. ON → 1 HX3021 per hazard; OFF → empty
-// stream (byteeq-neutral). Controls (both-shared, sequential-after-kill,
-// different-origin) stay at 0.
+// shared borrows never conflict. E3.9 faithfulness split (Rust): the BOTH-
+// mutable case (`&mut` while `&mut`) is E0499 → HX3028; the shared-vs-mut
+// case (`&` while `&mut`) stays E0502 → HX3021. ON → 1 diagnostic per
+// hazard; OFF → empty stream (byteeq-neutral). Controls (both-shared,
+// sequential-after-kill, different-origin) stay at 0.
 
 fn _src_hz_shared_while_mut() -> string {
     // `&x` while `&mut x` is live → E0502 (shared-while-mut).
@@ -443,7 +445,8 @@ fn _src_hz_shared_while_mut() -> string {
 }
 
 fn _src_hz_mut_while_mut() -> string {
-    // A second `&mut x` while the first `&mut x` is live → E0502.
+    // A second `&mut x` while the first `&mut x` is live → E0499 (double-mut),
+    // the faithfulness split — HX3028, NOT the shared-vs-mut HX3021/E0502.
     let mut s = "fn hmm() {\n"
     s = s + "    let mut x = 5\n"
     s = s + "    let a = &mut x\n"
@@ -621,9 +624,11 @@ fn _src_fp_use_loan_name() -> string {
 
 // §5.2 ⓐ double-fire probe: a re-borrow `let n = &mut x` while a live `&mut x`
 // loan exists reads x to take its ADDRESS. WITHOUT the `_bck_in_borrow_rhs`
-// suppression this would fire BOTH HX3021 (E3 borrow-conflict) AND HX3027 (E5
-// use). With suppression, E3 owns it alone: HX3027 = 0, HX3021 = 1. This runner
-// asserts BOTH (the standard hygiene runner cannot — HX3021 is a legit stray).
+// suppression this would fire BOTH the borrow-conflict AND HX3027 (E5 use).
+// With suppression, E3 owns it alone: HX3027 = 0. Because BOTH loans are
+// `&mut`, the E3.9 split routes the conflict to HX3028 (E0499 double-mut), NOT
+// HX3021 — so this asserts HX3028 = 1, HX3021 = 0, HX3027 = 0 (the standard
+// hygiene runner cannot — the conflict code is a legit non-HX3027 stray).
 fn _src_fp_reborrow_suppress() -> string {
     let mut s = "fn frs() {\n"
     s = s + "    let mut x = 5\n"
@@ -638,30 +643,89 @@ fn _run_reborrow_suppress_probe() -> bool {
     let strict = env("HEXA_BORROWCK_STRICT") == "1"
     let flag_on = env("HEXA_BORROWCK") == "1" || strict
     let mut want_use = 0
-    let mut want_conf = 0
-    if flag_on { want_conf = 1 }
+    let mut want_dmut = 0
+    if flag_on { want_dmut = 1 }
     let mut ok = true
     println("")
     println("── fp_reborrow_suppress (expect HX3027 ×" + to_string(want_use)
-        + " suppressed, HX3021 ×" + to_string(want_conf) + " owns it) ──")
+        + " suppressed, HX3028 ×" + to_string(want_dmut) + " owns it, HX3021 ×0) ──")
     let d = _compile_probe("fp_reborrow_suppress", _src_fp_reborrow_suppress())
     let nu = _count_code(d, "HX3027")
+    let nd = _count_code(d, "HX3028")
     let nc = _count_code(d, "HX3021")
-    let other = len(d) - nu - nc
+    let other = len(d) - nu - nd - nc
     _print_diags(d)
     if nu != want_use {
         println("  FAIL: HX3027 = " + to_string(nu) + ", want " + to_string(want_use) + " (E5 must be suppressed inside a borrow RHS)")
         ok = false
     }
-    if nc != want_conf {
-        println("  FAIL: HX3021 = " + to_string(nc) + ", want " + to_string(want_conf) + " (E3 owns the re-borrow)")
+    if nd != want_dmut {
+        println("  FAIL: HX3028 = " + to_string(nd) + ", want " + to_string(want_dmut) + " (E0499 double-mut owns the re-borrow)")
+        ok = false
+    }
+    if nc != 0 {
+        println("  FAIL: HX3021 = " + to_string(nc) + ", want 0 (mut-mut MIGRATED off E0502)")
         ok = false
     }
     if other != 0 {
-        println("  FAIL: stray non-HX3027/HX3021 diagnostics = " + to_string(other))
+        println("  FAIL: stray non-HX3027/HX3028/HX3021 diagnostics = " + to_string(other))
         ok = false
     }
-    if ok { println("  ok: HX3027 ×" + to_string(want_use) + " (suppressed) · HX3021 ×" + to_string(want_conf)) }
+    if ok { println("  ok: HX3027 ×" + to_string(want_use) + " (suppressed) · HX3028 ×" + to_string(want_dmut) + " · HX3021 ×0") }
+    return ok
+}
+
+// §5.4 rider — compound-assign dual-fire pin: `let m = &mut x; x = x + 1` while
+// a live `&mut x` loan exists is BOTH a write-through of x (E0506/HX3023, the
+// assign span) AND a value-use of x in the RHS `x + 1` (E0503/HX3027, the RHS
+// read span). The two fire at DISTINCT (line,col) spans so the shared same-site
+// dedup array keeps both. Rust is likewise dual (E0503 on the use + E0506 on
+// the assign), so 1+1 is the faithful expectation, pinned here as a control
+// (no HX3028 — there is no second borrow). OFF → empty stream.
+fn _src_hz_compound_assign() -> string {
+    let mut s = "fn hca() {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    let m = &mut x\n"
+    s = s + "    x = x + 1\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _run_compound_assign_probe() -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = 1 }
+    let mut ok = true
+    println("")
+    println("── hz_compound_assign (expect HX3023 ×" + to_string(want)
+        + " + HX3027 ×" + to_string(want) + " dual-fire) ──")
+    let d = _compile_probe("hz_compound_assign", _src_hz_compound_assign())
+    let nw = _count_code(d, "HX3023")
+    let nu = _count_code(d, "HX3027")
+    let other = len(d) - nw - nu
+    _print_diags(d)
+    if nw != want {
+        println("  FAIL: HX3023 = " + to_string(nw) + ", want " + to_string(want) + " (write-through of x)")
+        ok = false
+    }
+    if nu != want {
+        println("  FAIL: HX3027 = " + to_string(nu) + ", want " + to_string(want) + " (use of x in RHS)")
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3023/HX3027 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != (want + want) {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want + want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: HX3023 ×" + to_string(want) + " · HX3027 ×" + to_string(want) + " (faithful dual-fire)") }
     return ok
 }
 
@@ -722,6 +786,42 @@ fn _run_conflict_probe(label: string, src: string, want_on: i64) -> bool {
     }
     if other != 0 {
         println("  FAIL: stray non-HX3021 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
+// HX3028 probe runner — mirrors `_run_conflict_probe`, keyed on the double-
+// mutable-borrow code (E0499) and asserting every OTHER code is 0 (probe
+// hygiene — in particular HX3021=0, proving the mut-mut case MIGRATED off the
+// shared-vs-mut E0502). STRICT re-bands HX3028 to Error, so the error-band
+// count must equal the HX3028 count. OFF → want 0 (empty stream).
+fn _run_double_mut_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3028 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3028")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3028 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3028 diagnostics = " + to_string(other))
         ok = false
     }
     if strict {
@@ -918,6 +1018,119 @@ fn _run_tp_own() -> bool {
     return ok
 }
 
+// ── HEXA-OWN L5-E6 — move-out-while-borrowed (HX3029, Rust E0505) ──────
+//
+// #4470 (@own inline-carrier) has NOT landed, so a bare-ident @own move cannot
+// be expressed in source — these probes hand-build the HIR (same technique as
+// tp_own_param_move), inserting a `let r = &x` / `let r = &mut x` loan before an
+// @own call-arg move of the same origin:
+//
+//   fn g(@own p: [i64]) {}
+//   fn mvb_caller() {
+//       let a = [1]
+//       let r = &a        (or &mut a, or omitted)   line 3
+//       g(a)              → MOVE (own-param index 0) line 4
+//   }
+//
+// ① shared loan (`&a`) live at the move  → HX3029 ×1 (move-while-borrowed)
+// ② `&mut a` loan live at the move       → HX3027 ×1, HX3029 ×0 — the arg
+//    ident's READ fires E0503 first at the move span, and the shared same-site
+//    dedup collapses HX3029 into it ("shared-loan primary" contract).
+// ③ no loan at all                       → HX3029 ×0, HX3027 ×0
+// OFF sweep → fully empty stream; STRICT re-bands the fired code to Error.
+fn _build_mvb_module(with_loan: bool, mut_loan: bool) -> HModule {
+    // fn g — empty body, @own aggregate param p.
+    let mut g_anns: [Annotation] = []
+    g_anns.push(_ann1("own", "p"))
+    g_anns.push(_ann1("param_names", "p"))
+    let mut g_sigp: [Type] = []
+    g_sigp.push(_t_arr_i64())
+    let g_body = _hx("block", "", [], 1)
+    let item_g = _hitem_fn("g", g_anns, g_sigp, g_body)
+
+    // fn mvb_caller — let a = [1]  ( [let r = &a / &mut a]  )  g(a)
+    let mut arr_kids: [HExpr] = []
+    arr_kids.push(_hx_int("1", 2))
+    let mut let_a_kids: [HExpr] = []
+    let_a_kids.push(_hx("array_lit", "", arr_kids, 2))
+    let let_a = _hx("let", "a", let_a_kids, 2)
+
+    let mut body_kids: [HExpr] = []
+    body_kids.push(let_a)
+
+    if with_loan {
+        let mut ref_inner: [HExpr] = []
+        ref_inner.push(_hx("ident", "a", [], 3))
+        let mut btext = "&"
+        if mut_loan { btext = "&mut" }
+        let mut ref_kids: [HExpr] = []
+        ref_kids.push(_hx("unop", btext, ref_inner, 3))
+        let let_r = _hx("let", "r", ref_kids, 3)
+        body_kids.push(let_r)
+    }
+
+    let mut call_kids: [HExpr] = []
+    call_kids.push(_hx("ident", "g", [], 4))
+    call_kids.push(_hx("ident", "a", [], 4))
+    let call_g = _hx("call", "", call_kids, 4)
+    body_kids.push(call_g)
+
+    let body = _hx("block", "", body_kids, 2)
+    let mut caller_anns: [Annotation] = []
+    let item_c = _hitem_fn("mvb_caller", caller_anns, [], body)
+
+    let mut items: [HItem] = []
+    items.push(item_g)
+    items.push(item_c)
+    return HModule { file: "mvb.hexa", items: items }
+}
+
+fn _run_mvb(label: string, with_loan: bool, mut_loan: bool,
+            want29_on: i64, want27_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want29 = 0
+    let mut want27 = 0
+    if flag_on { want29 = want29_on  want27 = want27_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (hand-built HIR, expect HX3029 ×" + to_string(want29)
+        + " · HX3027 ×" + to_string(want27) + ") ──")
+    let mm = lower_hir(_build_mvb_module(with_loan, mut_loan))
+    let d = hir_to_mir_diags()
+    let n29 = _count_code(d, "HX3029")
+    let n27 = _count_code(d, "HX3027")
+    let other = len(d) - n29 - n27
+    _print_diags(d)
+    if n29 != want29 {
+        println("  FAIL: HX3029 = " + to_string(n29) + ", want " + to_string(want29))
+        ok = false
+    }
+    if n27 != want27 {
+        println("  FAIL: HX3027 = " + to_string(n27) + ", want " + to_string(want27)
+            + " (dedup: &mut loan → E0503 preempts, HX3029 collapses)")
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3029/HX3027 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want29 + want27 {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want "
+                + to_string(want29 + want27))
+            ok = false
+        }
+    }
+    if len(mm.funcs) != 2 {
+        println("  FAIL: expected 2 lowered fns, got " + to_string(len(mm.funcs)))
+        ok = false
+    }
+    if ok { println("  ok: HX3029 ×" + to_string(want29) + " · HX3027 ×" + to_string(want27)) }
+    return ok
+}
+
 // ── L4 A2 — WOULD-MOVE CENSUS (HEXA_BORROWCK_CENSUS=1) ────────
 //
 // Census is a SEPARATE observe-only lane (no HX3014, no _lr_diag): under
@@ -1022,10 +1235,12 @@ fn main() {
         if !_run_ret_probe("fp_ref_no_escape", _src_fp_ref_no_escape(), 0) { ok = false }
         if !_run_ret_probe("fp_ret_global_ref", _src_fp_ret_global_ref(), 0) { ok = false }
         if !_run_ret_probe("fp_ref_killed", _src_fp_ref_killed(), 0) { ok = false }
-        // HEXA-OWN E2+E3 — borrow-conflict (HX3021, Rust E0502). Hazards → ×1
-        // ON, controls → 0. OFF sweep asserts a fully empty stream for all.
+        // HEXA-OWN E2+E3 — borrow-conflict (HX3021, Rust E0502) + E3.9 E0499
+        // split (HX3028). Hazards → ×1 ON, controls → 0. shared-while-mut stays
+        // HX3021; mut-while-mut MIGRATED to HX3028 (asserts HX3021=0). OFF sweep
+        // asserts a fully empty stream for all.
         if !_run_conflict_probe("hz_shared_while_mut", _src_hz_shared_while_mut(), 1) { ok = false }
-        if !_run_conflict_probe("hz_mut_while_mut", _src_hz_mut_while_mut(), 1) { ok = false }
+        if !_run_double_mut_probe("hz_mut_while_mut", _src_hz_mut_while_mut(), 1) { ok = false }
         if !_run_conflict_probe("fp_two_shared", _src_fp_two_shared(), 0) { ok = false }
         if !_run_conflict_probe("fp_sequential", _src_fp_sequential(), 0) { ok = false }
         if !_run_conflict_probe("fp_diff_origin", _src_fp_diff_origin(), 0) { ok = false }
@@ -1047,7 +1262,17 @@ fn main() {
         if !_run_use_while_mut_probe("fp_use_after_kill", _src_fp_use_after_kill(), 0) { ok = false }
         if !_run_use_while_mut_probe("fp_use_loan_name", _src_fp_use_loan_name(), 0) { ok = false }
         if !_run_reborrow_suppress_probe() { ok = false }
+        // §5.4 rider — compound-assign dual-fire (HX3023 + HX3027, faithful).
+        if !_run_compound_assign_probe() { ok = false }
         if !_run_tp_own() { ok = false }
+        // HEXA-OWN L5-E6 — move-out-while-borrowed (HX3029, Rust E0505). Hand-
+        // built HIR (@own inline-carrier #4470 not landed). ① shared loan live at
+        // an @own move → HX3029 ×1. ② `&mut` loan → HX3027 ×1, HX3029 ×0 (the arg
+        // READ's E0503 preempts at the move span, shared dedup collapses HX3029 —
+        // "shared-loan primary"). ③ no loan → 0. OFF → empty stream.
+        if !_run_mvb("hz_move_while_shared_borrow", true, false, 1, 0) { ok = false }
+        if !_run_mvb("fp_move_while_mut_borrow_dedup", true, true, 0, 1) { ok = false }
+        if !_run_mvb("fp_move_no_borrow", false, false, 0, 0) { ok = false }
         // census lane must be silent whenever HEXA_BORROWCK_CENSUS is unset
         // (byteeq-neutral proof at the census-count level).
         if !_run_census() { ok = false }
