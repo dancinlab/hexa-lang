@@ -3100,6 +3100,23 @@ build_runtime_a_from_source() {
             grep -iE 'multiple definition|duplicate symbol' build/_caseB_ldr.err 2>/dev/null | sort -u | head -20 | sed 's/^/    /' >&2
             rm -f "$_mo_merge"; return 1
         fi
+        # (S5.5) own-start nm-clean gate — MULTIOBJ-keyed (convergence OWN-START-GATE-VS-SHIP-ARCHIVE-
+        # SHAPE-DRIFT #4399/#4408: the ship uses HEXA_RT_MULTIOBJ=1, so the gate MUST audit the ld -r
+        # MULTIOBJ merge = the REAL ship shape, never a single-TU archive — GATE-1 missed the drift by
+        # auditing single-TU). Under HEXA_ZEROC_OWN_START the own _start + own atexit (_hxlcl_atexit_
+        # register #4409) + own environ (_hxlcl_environ ELF alias #4631) must FULLY resolve: 0 undefined
+        # atexit/environ/__cxa_atexit AND a DEFINED __dso_handle (weak-hidden #4410). A hit = the flip
+        # would link-die under -nostartfiles (the #4408 __dso_handle / #4489 no-_start class). Inert when
+        # OWN_START unset ($_zc_own_def empty) → shim/archive byte-identical → byteeq-neutral.
+        if [ -n "$_zc_own_def" ]; then
+            _os_undef=$(nm -u "$_mo_merge" 2>/dev/null | awk '{print $NF}' | grep -xE '_?(atexit|environ|__cxa_atexit)' | tr '\n' ' ')
+            _os_dso_u=$(nm "$_mo_merge" 2>/dev/null | grep -cE '^\s*U _?__dso_handle$')
+            if [ -n "$_os_undef" ] || [ "${_os_dso_u:-0}" -ne 0 ]; then
+                echo "[stage_resolve_runtime_a] RFC061 §M8 OWN-START nm-clean FATAL (MULTIOBJ ship shape): undefined own-start symbols in the ld -r merge =[${_os_undef}] __dso_handle_undef=${_os_dso_u} — the own-start flip would link-die under -nostartfiles. atexit/environ must be own (_hxlcl_atexit_register #4409 / _hxlcl_environ alias #4631); __dso_handle must be the weak-hidden def (#4410). Refusing to ship." >&2
+                rm -f "$_mo_merge"; return 1
+            fi
+            echo "[stage_resolve_runtime_a] RFC061 §M8 OWN-START nm-clean GREEN: 0 undefined atexit/environ/__cxa_atexit + __dso_handle resolved in the MULTIOBJ ld -r merge (ship-shape drift sealed)"
+        fi
         rm -f "$_mo_merge"
         # (S6) ar the multi-object archive into the SAME canonical build/runtime.a
         #      (NO new name → install.sh + main.hexa resolve_prebuilt_runtime +
