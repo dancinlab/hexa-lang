@@ -1025,6 +1025,44 @@ fn _build_case_static_types_r4() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// Wall A r12 (aq) — let-RHS BinOp/UnOp inference + leaves-known gate. A typed
+// `let x: T` whose RHS is a BinOp/UnOp tree REJECTs with HX3011 when the tree's
+// inferred scalar result provably disagrees with T — BUT only when EVERY leaf
+// operand is a KNOWN scalar (the `_types_rhs_leaves_known` tree gate). An
+// unknown leaf (unannotated param `u`) disqualifies the tree → silent
+// (under-reject), killing the `_types_check_binop` unknown-operand literal-
+// fallback (:3494) false-positive on `let z: i32 = a + u`.
+//   fn f(a: i64, b: i64, u) {
+//       let x: i32 = a + b        // REJECT: i64 result ≠ i32           → HX3011
+//       let y: i64 = a + b        // matches (i64 = i64)                → clean
+//       let z: i32 = a + u        // u unknown leaf → gate false        → silent
+//       let w: i32 = a + 1        // REJECT: i64+lit ≠ i32              → HX3011
+//       let m: i32 = -a           // REJECT: -(i64) ≠ i32               → HX3011
+//   }
+// Exactly 3 HX3011 (x, w, m); y clean, z silent; flag-off → 0 (byteeq-neutral).
+fn _build_case_static_types_r12() -> Module {
+    let f = "case_static_r12.hexa"
+    let mut kids = []
+    // let x: i32 = a + b   → i64 result ≠ i32
+    kids.push(_let_expr("x|i32", _bin_expr("+", _ident_expr("a", f, 2, 18), _ident_expr("b", f, 2, 22), f, 2, 20), f, 2, 5))
+    // let y: i64 = a + b   → matches (clean)
+    kids.push(_let_expr("y|i64", _bin_expr("+", _ident_expr("a", f, 3, 18), _ident_expr("b", f, 3, 22), f, 3, 20), f, 3, 5))
+    // let z: i32 = a + u   → u unknown leaf → leaves-known false → silent
+    kids.push(_let_expr("z|i32", _bin_expr("+", _ident_expr("a", f, 4, 18), _ident_expr("u", f, 4, 22), f, 4, 20), f, 4, 5))
+    // let w: i32 = a + 1   → i64+lit result ≠ i32
+    kids.push(_let_expr("w|i32", _bin_expr("+", _ident_expr("a", f, 5, 18), _int_expr("1", f, 5, 22), f, 5, 20), f, 5, 5))
+    // let m: i32 = -a      → -(i64) ≠ i32
+    kids.push(_let_expr("m|i32", _unop_expr("-", _ident_expr("a", f, 6, 18), f, 6, 17), f, 6, 5))
+    let body = _block(kids, f, 2, 1)
+    // `u` is an UNANNOTATED param (empty TypeRef → empty sentinel Type) so the
+    // ident `u` infers an empty (non-scalar) kind — the unknown-leaf control.
+    let params = [_param("a", "i64", f, 1, 6), _param("b", "i64", f, 1, 14), _param("u", "", f, 1, 22)]
+    let item_f = _fn_item("f", params, _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // Wall A r5 — struct field-type assign. A `struct Point { x: i32, y: i32 }`
 // records its field names + types into the side registry. A receiver of struct
 // type — a fn PARAM `p: Point` (carries `named:Point` via bind_params) OR a
@@ -2093,6 +2131,22 @@ fn main() {
         ok = false
     } else {
         println("  ok: 2 HX3011 emitted (a:[i32]=\"s\" + b:[string]=9; matching c:[i32][2]=7 stays clean)")
+    }
+
+    // (aq) Wall A r12 — let-RHS BinOp/UnOp + leaves-known gate. With
+    // `fn f(a:i64, b:i64, u)`, three typed lets whose BinOp/UnOp RHS infers a
+    // scalar that disagrees with the annotation REJECT: `x:i32 = a+b`,
+    // `w:i32 = a+1`, `m:i32 = -a` (3 HX3011). The matching `y:i64 = a+b` stays
+    // clean, and `z:i32 = a+u` is SILENT (u is an unannotated param → unknown
+    // leaf → the leaves-known tree gate suppresses the check_binop literal-
+    // fallback false-positive). On the default build → 0 (byteeq-neutral).
+    let diags_aq = _run_case("(aq) static-types r12 — let-RHS BinOp/UnOp + leaves-known gate (HEXA_STATIC_TYPES)", _build_case_static_types_r12())
+    let naq = _count_code(diags_aq, "HX3011")
+    if naq != 3 {
+        println("  FAIL: case (aq) expected 3 HX3011 (x=a+b, w=a+1, m=-a; y clean, z silent), got " + to_string(naq) + " (total=" + to_string(len(diags_aq)) + ")")
+        ok = false
+    } else {
+        println("  ok: 3 HX3011 emitted (x:i32=a+b + w:i32=a+1 + m:i32=-a; y:i64=a+b clean, z:i32=a+u silent [unknown leaf])")
     }
 
     // (l) Wall A r5 — struct field-type assign. Under the flag, with
