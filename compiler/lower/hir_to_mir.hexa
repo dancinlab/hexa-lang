@@ -993,6 +993,45 @@ fn _bck_emit_move_while_borrowed(origin: string, name: string, borrow_mut: bool,
     _lr_diag.push(d)
 }
 
+// HX3034 emit (move-out-of-borrowed-content, Rust E0507) — same-site dedup +
+// STRICT escalation, cloned from `_bck_emit_move_while_borrowed`. `name` is the
+// `&`/`&mut` ref binding, `field` the field moved out of it (`g(r.f)`), `origin`
+// the value `name` borrows, `borrow_mut` the loan's mutability, `borrow_line`
+// where the loan was created. E0507 is MUTABILITY-BLIND (moving content out from
+// behind ANY reference — `&` or `&mut` — is forbidden; a `&mut` grants mutation,
+// not ownership transfer), so both loan kinds fire HX3034. Report-only: the move
+// is NOT recorded (`_bck_note_move` is never called), so no HX3027/HX3029
+// preemption is expected — the READ lowered for the arg is of the ref binding
+// itself (not `origin`), so this stands alone.
+fn _bck_emit_move_out_of_borrow(name: string, field: string, origin: string,
+                                borrow_mut: bool, borrow_line: i64, sp: Span) {
+    let mut di = 0
+    while di < len(_bck_e_lines) {
+        if _bck_e_lines[di] == sp.line && _bck_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_e_lines.push(sp.line)
+    _bck_e_cols.push(sp.col)
+    let mut b = diag_new("HX3034")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "field", field)
+    b = diag_arg(b, "origin", origin)
+    let mut _bk = "immutable"
+    if borrow_mut { _bk = "mutable" }
+    b = diag_arg(b, "borrow_kind", _bk)
+    b = diag_arg(b, "borrow_line", to_string(borrow_line))
+    let mut d = diag_emit(b)
+    // STRICT (HEXA_BORROWCK_STRICT) re-bands the SAME diagnostic instance to a
+    // build-refusing Error via the sanctioned caller override — identical to the
+    // HX3014/HX3019/HX3021/HX3023/HX3027/HX3029 escalation. OFF-strict keeps the
+    // catalog Warning band, and the flag-OFF path never reaches here (byteeq-neutral).
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
+}
+
 // HX3032 emit (mutating-method-behind-shared-ref, Rust E0596) — same-site
 // dedup + STRICT escalation, cloned from `_bck_emit_write_through`. `name` is
 // the ref binding the method is dispatched THROUGH, `origin` the value it
@@ -2646,6 +2685,34 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                         _bck_emit_move_while_borrowed(e.children[i].text,
                             _bck_ref_names[_bk_mvl], _bck_ref_mut[_bk_mvl],
                             _bck_ref_lines[_bk_mvl], e.children[i].span)
+                    }
+                }
+            }
+            // HEXA-OWN L5-E9 — move-out-of-borrowed-content (Rust E0507). A call
+            // arg of shape `r.f` where `r` is a LIVE `&`/`&mut` ref binding and
+            // the callee's corresponding param is `@own` moves content out from
+            // behind a reference — forbidden. E0507 is MUTABILITY-BLIND (`&` and
+            // `&mut` both fire — a `&mut` grants mutation, not ownership move-out),
+            // so no mutability check gates this. Report-only: the move is NOT
+            // recorded (`_bck_note_move` unused — move classification stays a bare-
+            // ident invariant), and the arg's own READ is of the ref binding `r`
+            // (not `origin`), so HX3034 stands alone (no HX3027/HX3029 preemption).
+            // Conservative: single-ident base only (nested `r.a.b` silent — base
+            // child not an ident), same-fn loan (E2 registry), killed loan silent
+            // (origin=""), global base skipped. `!_bk_is_method` mirrors the ident-
+            // branch gate (receiver-first shifts the `i-1` param index). Gated on
+            // `_bck_active` → flag-OFF never reaches here (byteeq-neutral).
+            if _bck_active && !_bk_is_method && e.children[i].kind == "field"
+                && len(e.children[i].children) > 0
+                && e.children[i].children[0].kind == "ident" {
+                let _bk_mo_base = e.children[i].children[0].text
+                if _bck_own_param(callee_text, i - 1)
+                    && _mir_lookup_global(ctx_r, _bk_mo_base) < 0 {
+                    let _bk_mo_ri = _bck_find_ref(_bk_mo_base)
+                    if _bk_mo_ri >= 0 && len(_bck_ref_origins[_bk_mo_ri]) > 0 {
+                        _bck_emit_move_out_of_borrow(_bk_mo_base, e.children[i].text,
+                            _bck_ref_origins[_bk_mo_ri], _bck_ref_mut[_bk_mo_ri],
+                            _bck_ref_lines[_bk_mo_ri], e.children[i].span)
                     }
                 }
             }
