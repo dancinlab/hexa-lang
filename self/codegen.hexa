@@ -15134,6 +15134,31 @@ fn codegen_full(ast) {
     out_parts.push("#ifndef strcmp\n")
     out_parts.push("#define strcmp(a,b) hxlcl_strcmp((const char *)(a), (const char *)(b))\n")
     out_parts.push("#endif\n\n")
+    // zeroc #29 (PR-1 Half B, mirror of the strcmp caller-drop above): route THIS TU's
+    // emitted strlen() call sites through a file-local hxlcl_strlen so the transpiled
+    // compiler-C (hexa_cc.c / user.c) drops its own libc strlen reference from the union
+    // nm-UND floor. Shared include-guard HEXA_HXLCL_STRLEN_LOCAL_DEFINED with
+    // runtime_emit_full.hexa's frozen strlen body so a FLATTENED Route-C amalgam (runtime.c
+    // body + this prologue in ONE TU) defines it exactly once. Body = volatile byte scan
+    // (byte-identical to the frozen runtime.c hxlcl_strlen) — the volatile read defeats
+    // clang's libcall recognizer so no self-recursion even absent -fno-builtin-strlen; the
+    // bootstrap/native compile lines carry it regardless (build_aprime.sh:808 et al).
+    out_parts.push("#ifndef HEXA_HXLCL_STRLEN_LOCAL_DEFINED\n")
+    out_parts.push("#define HEXA_HXLCL_STRLEN_LOCAL_DEFINED 1\n")
+    out_parts.push("#ifdef HEXA_RT_SELFEMIT\n")
+    out_parts.push("extern size_t hxlcl_strlen(const char *s);\n")
+    out_parts.push("#else\n")
+    out_parts.push("static size_t __attribute__((noinline)) hxlcl_strlen(const char *s) {\n")
+    out_parts.push("    if (!s) return 0;\n")
+    out_parts.push("    size_t n = 0;\n")
+    out_parts.push("    while (((const volatile char *)s)[n]) n++;\n")
+    out_parts.push("    return n;\n")
+    out_parts.push("}\n")
+    out_parts.push("#endif\n")
+    out_parts.push("#endif /* HEXA_HXLCL_STRLEN_LOCAL_DEFINED */\n")
+    out_parts.push("#ifndef strlen\n")
+    out_parts.push("#define strlen(s) hxlcl_strlen((const char *)(s))\n")
+    out_parts.push("#endif\n\n")
     // zeroc #29 PR-3: isdigit union-floor drop — route THIS TU's emitted
     // isdigit() sites (codegen.hexa:6927, the str_is_digit builtin) through a
     // file-local hxlcl_isdigit_pc so the transpiled compiler-C (hexa_cc.c) drops

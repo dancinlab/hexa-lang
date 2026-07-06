@@ -486,6 +486,24 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3027",
+        title: "cannot use a value while it is mutably borrowed",
+        // Warning band (SSOT F4 warn-first), the use-of-value rung of the E2
+        // loan-registry family: the opt-in borrow checker (`HEXA_BORROWCK=1`)
+        // surfaces a READ of a value while it has a LIVE `&mut` loan. Under
+        // `HEXA_BORROWCK_STRICT=1` the SAME diagnostic instance is re-banded to
+        // a build-refusing Error via the sanctioned caller override in
+        // `_bck_emit_use_while_mut` (identical mechanism to HX3014/HX3019/
+        // HX3021/HX3023). With the flag unset the loan pass is inert
+        // (`_bck_active` false), so nothing is emitted and the diagnostic stream
+        // + emitted bytes are byte-identical — release integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "cannot use `{origin}` because it is mutably borrowed by `{name}` at line {borrow_line}",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN L5-E5) found a USE (a read of the value) of `x` while a LIVE MUTABLE loan of `x` exists in the E2 registry — i.e. some binding `m` was mutably borrowed against `x` (`let m = &mut x`) earlier in the same function and has not been killed (by reassigning `m` to a non-borrow RHS) before this read. This is Rust's E0503 ('cannot use `x` because it was mutably borrowed'; rustc_borrowck reports it when a use of a place overlaps a live mutable loan of that place): a `&mut x` loan promises EXCLUSIVE access through `m`, so reading `x` directly through its own name while that promise is outstanding would observe a value the mutable borrower may be about to change. UNLIKE the write-through rule (E0506/HX3023, which invalidates BOTH `&` and `&mut` loans because any write breaks aliasing), E0503 keys on the MUTABILITY bit: a shared `&x` loan permits concurrent reads, so a use of `x` while only shared loans are live is SILENT — the rule fires only when `_bck_ref_mut` is set. The scan runs at the single ident READ funnel (`_bck_check_use`, HEXA-OWN L3 M3), before the aggregate-group early-return, so a scalar origin (`let mut x = 5`) is covered even though it is never group-tracked. A borrow RHS is EXEMPT: `let n = &mut x` reads `x` to take its ADDRESS (not to use its value), so a re-borrow of an already-`&mut`-loaned origin is reported by the borrow-conflict rule (E0502/HX3021) alone, never double-reported here (the `_bck_in_borrow_rhs` suppression). The detection is conservative / flow-insensitive within a scope (no NLL last-use yet): a loan stays LIVE from its `let` to the end of the function or until the binding is reassigned to a non-borrow, so `let m = &mut x; <m unused>; let y = x;` ALSO fires even though Rust NLL (last-use) would end `m`'s loan before the read — this is the documented flow-insensitive false-positive class, the SAME conservative-loud-over-quiet policy as E2/E3/E4. Only same-fn live loans count; borrows of module-level globals, through call args / struct fields / array elements / closures, and cross-function loans are NOT tracked (documented false-negatives). Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical. Fix: finish the mutable borrow before reading the value (end `m`'s last use, or reassign `m` to a non-borrow RHS before the read), or read through the borrow itself (`*m`) instead of the original name.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX3024",
         title: "cannot apply unary operator `-`",
         severity: Severity::Error,
@@ -501,6 +519,15 @@ pub let CATALOG: [DiagSpec] = [
         stage: "S3",
         template: "cannot index into a value of type `{actual}`",
         explain: "Static type check (always-on since FLIP-3 flagless — Rust-style, no disable switch), static-types segment(b). A subscript `x[i]` whose base's inferred static type is a KNOWN non-container scalar (`int`/`float`/`bool`/`char`) can never succeed: the C-substrate `hexa_array_get` wrapper aborts at run time on a non-array tag ('container is not an array'), so the index is a guaranteed runtime error surfaced to S3 (the same 'guaranteed-runtime-error → REJECT' contract as HX3024). This is the Rust E0608 'cannot index into a value of type `{actual}`' rule (rustc_hir_typeck failing to find an `Index` impl for a scalar). Conservative under-reject: it fires ONLY for the KNOWN scalars int/float/bool/char — `string` is deliberately EXCLUDED in v1 (a `s[i]` GET also aborts at runtime, but a dead-code corpus census confirming zero `s[i]` sites is not yet done), and unknown idents (empty kind), `unit`, HexaVal/any dynamics, `array`, `map`, and `named` (struct/enum, which may define indexing) all stay SILENT. Emitted unconditionally (FLIP-3 flagless) as a build-refusing ERROR for real source (REJECT), while byte-eq TEST FIXTURES (`compiler/test/` corpus + `*_test.hexa`) stay WARNING via the `_types_strict_for` path carve-out. No env opt-out or severity switch. Fix: index an array/collection instead, or fix the producing expression so the base is a container.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3026",
+        title: "no field on a primitive type",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "`{actual}` is a primitive type and therefore has no field `{field}`",
+        explain: "Static type check (always-on since FLIP-3 flagless — Rust-style, no disable switch), static-types segment(b). A field READ `x.f` whose receiver's inferred static type is a KNOWN non-aggregate scalar (`int`/`float`/`bool`/`char`) can never succeed: a scalar HexaVal carries no field slots, so the runtime field access is meaningless / a guaranteed error (the same 'known-runtime-error → REJECT' contract as HX3024/HX3025). This is the Rust E0610 rule (rustc_hir_typeck: '`{actual}` is a primitive type and therefore doesn't have fields'). It fires ONLY at the r9a field-READ site (`_infer_expr` Field arm), NOT in callee position: `n.foo()` infers the SAME `Field{foo}` node as the call's callee, where the unresolved-callee HX2001 already fires — so the checker raises an internal callee-depth guard around that infer (`_types_callee_depth`) and this arm stays SILENT there (one mistake = one diagnostic). Builtin methods (`n.len`, `n.count`, … — the ~90-member `_is_builtin_method` set) are codegen receiver-dispatch, not fields, so they are EXEMPT (returning a field type for a legal builtin-method selector would false-fire elsewhere). Conservative under-reject: it fires ONLY for the KNOWN scalars int/float/bool/char — unknown idents (empty kind), `unit`, HexaVal/any dynamics, `array`, `map`, and `named` (struct/enum, which DO have fields) all stay SILENT; a nested receiver (`s.inner.x`) whose type erases to unknown is also silent (the documented r7+ type-erasure ceiling). Emitted unconditionally (FLIP-3 flagless) as a build-refusing ERROR for real source (REJECT), while byte-eq TEST FIXTURES (`compiler/test/` corpus + `*_test.hexa`) stay WARNING via the `_types_strict_for` path carve-out. No env opt-out or severity switch. Fix: access a field of a struct/aggregate instead, or fix the producing expression so the receiver is an aggregate.",
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
