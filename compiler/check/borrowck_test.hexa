@@ -929,13 +929,15 @@ fn _src_hz_index_behind_ref() -> string {
 }
 
 fn _src_fp_assign_behind_mut() -> string {
-    // `let m = &mut c; m.depth = 5` — a `&mut` loan permits write-through → silent.
+    // `let m = &mut c; m.depth = 5` — a `&mut` loan permits write-through → no
+    // HX3031. (Read through `m`, not `c` — reading `c` while the `&mut` loan is
+    // live is a separate, legitimate HX3027 use-while-mut, unrelated to E0594.)
     let mut s = "struct Ctx2 { depth: i64 }\n"
     s = s + "fn fpabm() {\n"
     s = s + "    let mut c = Ctx2 { depth: 1 }\n"
     s = s + "    let m = &mut c\n"
     s = s + "    m.depth = 5\n"
-    s = s + "    println(c.depth)\n"
+    s = s + "    println(m.depth)\n"
     s = s + "}\n"
     return s
 }
