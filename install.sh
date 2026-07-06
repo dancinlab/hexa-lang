@@ -31,6 +31,27 @@
 #                   cuda asset is SUPPLEMENTARY, so on a release where it is
 #                   absent the installer falls back to the CPU glibc asset
 #                   automatically. Takes precedence over HEXA_MUSL when both apply.
+#
+# ── GPU (CUDA): AUTO-ENABLED — do NOT hand-roll ──────────────────────────────
+# On a linux-x86_64 GPU host, THIS SCRIPT does the full cuda enablement. Never
+# hand-roll it. HEXA_CUDA selects the asset:
+#   unset (AUTO) — prefer_cuda auto-detects an NVIDIA GPU (nvidia-smi) AND a
+#                  resolvable libcudart (toolkit OR pip nvidia-cuda-runtime-cu12),
+#                  installs the `-cuda` asset, and lands cuda_available()==1 with
+#                  ZERO opt-in.
+#   HEXA_CUDA=1  — force the `-cuda` asset.
+#   HEXA_CUDA=0  — force the CPU glibc asset (escape hatch).
+# When the -cuda asset is installed, install_hexa AUTOMATICALLY wires the GPU
+# runtime so a later `hexa build`/`hexa run` links -lcudart -lcublas and reports
+# cuda_available()==1 with no per-invocation flag:
+#   • $HX_HOME/cuda-libs — symlink farm of bare .so linker names from the pip
+#     nvidia wheels (_wire_pip_cuda_libs) + libcuda.so from the driver.
+#   • $HX_HOME/.cuda-runtime — marker that makes a consumer build auto-link cudart
+#     /cublas (#3723); the cuda runtime.a FFI stub is folded in for you too.
+# THEREFORE, on a fresh GPU pod: run `HEXA_CUDA=1 sh install.sh` and DO NOT
+# hand-build cuda-libs / the .cuda-runtime marker / libcudart symlinks / a
+# runtime.a FFI stub — install.sh already does ALL of it. (anima-session lesson:
+# an agent burned ~30 turns re-creating exactly this farm+marker by hand.)
 
 set -eu
 
