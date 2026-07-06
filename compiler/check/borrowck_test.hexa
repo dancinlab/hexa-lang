@@ -870,6 +870,89 @@ fn _run_write_through_probe(label: string, src: string, want_on: i64) -> bool {
     return ok
 }
 
+// ── HEXA-OWN L5-E7 — assign-behind-shared-ref (HX3031, Rust E0594) ──
+// `let r = &s; r.f = v` / `r[i] = v` where r is a LIVE shared (`&`) loan →
+// HX3031 (a `&` borrow grants no write-through). A `&mut` loan permits it
+// (silent). ON → 1 HX3031 per hazard; OFF → empty stream (byteeq-neutral).
+fn _run_assign_behind_ref_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3031 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3031")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3031 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3031 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
+fn _src_hz_assign_behind_ref() -> string {
+    // `let r = &c; r.depth = 5` — r is a shared loan → write-through is E0594.
+    let mut s = "struct Ctx { depth: i64 }\n"
+    s = s + "fn habr() {\n"
+    s = s + "    let c = Ctx { depth: 1 }\n"
+    s = s + "    let r = &c\n"
+    s = s + "    r.depth = 5\n"
+    s = s + "    println(c.depth)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_hz_index_behind_ref() -> string {
+    // `let r = &a; r[0] = 9` — shared loan, index-write → E0594.
+    let mut s = "fn hibr() {\n"
+    s = s + "    let a = [1, 2]\n"
+    s = s + "    let r = &a\n"
+    s = s + "    r[0] = 9\n"
+    s = s + "    println(a[0])\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_assign_behind_mut() -> string {
+    // `let m = &mut c; m.depth = 5` — a `&mut` loan permits write-through → no
+    // HX3031. (Read through `m`, not `c` — reading `c` while the `&mut` loan is
+    // live is a separate, legitimate HX3027 use-while-mut, unrelated to E0594.)
+    let mut s = "struct Ctx2 { depth: i64 }\n"
+    s = s + "fn fpabm() {\n"
+    s = s + "    let mut c = Ctx2 { depth: 1 }\n"
+    s = s + "    let m = &mut c\n"
+    s = s + "    m.depth = 5\n"
+    s = s + "    println(m.depth)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_assign_no_borrow() -> string {
+    // no ref binding — plain field write on the owner → silent.
+    let mut s = "struct Ctx3 { depth: i64 }\n"
+    s = s + "fn fpanb() {\n"
+    s = s + "    let mut c = Ctx3 { depth: 1 }\n"
+    s = s + "    c.depth = 5\n"
+    s = s + "    println(c.depth)\n"
+    s = s + "}\n"
+    return s
+}
+
 // ── tp_own_param_move: hand-built HIR (Rule 2 mechanism proof) ──
 
 fn _tsp(line: i64) -> Span {
@@ -1345,6 +1428,12 @@ fn main() {
         if !_run_use_while_mut_probe("fp_use_after_kill", _src_fp_use_after_kill(), 0) { ok = false }
         if !_run_use_while_mut_probe("fp_use_loan_name", _src_fp_use_loan_name(), 0) { ok = false }
         if !_run_reborrow_suppress_probe() { ok = false }
+
+        // HEXA-OWN L5-E7 — assign-behind-shared-ref (HX3031, Rust E0594)
+        if !_run_assign_behind_ref_probe("hz_assign_behind_ref", _src_hz_assign_behind_ref(), 1) { ok = false }
+        if !_run_assign_behind_ref_probe("hz_index_behind_ref", _src_hz_index_behind_ref(), 1) { ok = false }
+        if !_run_assign_behind_ref_probe("fp_assign_behind_mut", _src_fp_assign_behind_mut(), 0) { ok = false }
+        if !_run_assign_behind_ref_probe("fp_assign_no_borrow", _src_fp_assign_no_borrow(), 0) { ok = false }
         // §5.4 rider — compound-assign dual-fire (HX3023 + HX3027, faithful).
         if !_run_compound_assign_probe() { ok = false }
         if !_run_tp_own() { ok = false }

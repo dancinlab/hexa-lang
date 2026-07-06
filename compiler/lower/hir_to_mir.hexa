@@ -1015,11 +1015,32 @@ fn _bck_emit_mut_method_behind_ref(name: string, origin: string, method: string,
     b = diag_arg(b, "method", method)
     b = diag_arg(b, "borrow_line", to_string(borrow_line))
     let mut d = diag_emit(b)
-    // STRICT (HEXA_BORROWCK_STRICT) re-bands the SAME diagnostic instance to a
-    // build-refusing Error via the sanctioned caller override — identical to the
-    // HX3014/HX3019/HX3021/HX3023/HX3027/HX3029 escalation. OFF-strict keeps the
-    // catalog Warning band, and the flag-OFF path never reaches here
-    // (byteeq-neutral).
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
+}
+
+// HX3031 emit (assign-behind-shared-ref, Rust E0594) — same-site dedup +
+// STRICT escalation, cloned from `_bck_emit_write_through`. `name` is the `&`
+// ref binding written THROUGH, `origin` the value it borrows, `borrow_line`
+// where the shared loan was created. Fires only for `&` loans (writing through
+// `&mut` is the loan's whole point), so no borrow_kind arg.
+fn _bck_emit_assign_behind_ref(name: string, origin: string,
+                               borrow_line: i64, sp: Span) {
+    let mut di = 0
+    while di < len(_bck_e_lines) {
+        if _bck_e_lines[di] == sp.line && _bck_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_e_lines.push(sp.line)
+    _bck_e_cols.push(sp.col)
+    let mut b = diag_new("HX3031")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "origin", origin)
+    b = diag_arg(b, "borrow_line", to_string(borrow_line))
+    let mut d = diag_emit(b)
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
@@ -3378,6 +3399,17 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 _bck_note_write(fbr.operand.local_id, lhs.children[0].text,
                                 fctx.cur_block, e.span)
             }
+            // HEXA-OWN L5-E7 — assign-behind-shared-ref (Rust E0594). `r.f = v`
+            // where `r` is itself a LIVE SHARED (`&`) ref-binding: a `&` borrow
+            // never grants write access through the reference (only `&mut` does).
+            // Liveness = newest row for the name AND origin != "" (E3 idiom).
+            if _bck_active && lhs.children[0].kind == "ident" {
+                let _bk_ri = _bck_find_ref(lhs.children[0].text)
+                if _bk_ri >= 0 && len(_bck_ref_origins[_bk_ri]) > 0 && !_bck_ref_mut[_bk_ri] {
+                    _bck_emit_assign_behind_ref(lhs.children[0].text,
+                        _bck_ref_origins[_bk_ri], _bck_ref_lines[_bk_ri], e.span)
+                }
+            }
             return _no_value(fctx)
         }
         if lhs.kind == "index" && len(lhs.children) >= 2 {
@@ -3404,6 +3436,15 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 && br.operand.kind == "local" {
                 _bck_note_write(br.operand.local_id, lhs.children[0].text,
                                 ctx_s.cur_block, e.span)
+            }
+            // HEXA-OWN L5-E7 — assign-behind-shared-ref (Rust E0594). `r[i] = v`
+            // where `r` is a LIVE SHARED (`&`) ref-binding: same rule as `r.f = v`.
+            if _bck_active && lhs.children[0].kind == "ident" {
+                let _bk_ri2 = _bck_find_ref(lhs.children[0].text)
+                if _bk_ri2 >= 0 && len(_bck_ref_origins[_bk_ri2]) > 0 && !_bck_ref_mut[_bk_ri2] {
+                    _bck_emit_assign_behind_ref(lhs.children[0].text,
+                        _bck_ref_origins[_bk_ri2], _bck_ref_lines[_bk_ri2], e.span)
+                }
             }
             return _no_value(ctx_s)
         }
