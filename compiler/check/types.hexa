@@ -3426,21 +3426,27 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             wi = wi + 1
         }
         // segment(b) HX3026 REJECT (Rust E0610): a field READ (`n.foo`) on a
-        // KNOWN non-aggregate scalar receiver (`int`/`float`/`bool`/`char`) can
-        // never succeed — a scalar HexaVal has no field slots, so the C-substrate
-        // field access is a guaranteed runtime error (the HX3024/HX3025 "known-
-        // runtime-error → REJECT" contract). This is the r9a READ site, distinct
-        // from the callee position: `n.foo()` infers this SAME Field node as the
-        // call's callee (`_types_check_call` :3582), where the HX2001 unresolved-
-        // callee already fires — so `_types_callee_depth > 0` SILENCES this arm
-        // (one mistake = one diagnostic). Builtin methods (`n.len`, 90-set) are
-        // codegen receiver-dispatch, not fields, so `_is_builtin_method` exempts
-        // them. Conservative under-reject: unknown/unit/HexaVal/named/array/map
-        // receivers all stay SILENT (only the KNOWN scalar kinds reject). Real
-        // source → build-refusing ERROR; byte-eq TEST FIXTURES (`*_test.hexa`)
-        // stay WARNING via the `_types_strict_for` path carve-out.
+        // KNOWN non-aggregate primitive receiver (`int`/`float`/`bool`/`char`/
+        // `string`) can never succeed — a primitive HexaVal has no user field
+        // slots, so the C-substrate field access is a guaranteed runtime error
+        // (the HX3024/HX3025 "known-runtime-error → REJECT" contract). A KNOWN
+        // `string` base is included as the measured symmetry gap (the HX3025
+        // index arm already covers `string` since #4626): `s.foo` on a string
+        // has no user fields and is a guaranteed runtime error, while
+        // `s.chars()`/`s.len()` are METHODS dispatched from the callee position
+        // (depth > 0) and are silenced by the callee-depth guard below —
+        // `_is_builtin_method` also exempts the ~90 builtin-method selectors.
+        // This is the r9a READ site, distinct from the callee position:
+        // `n.foo()` infers this SAME Field node as the call's callee
+        // (`_types_check_call` :3582), where the HX2001 unresolved-callee
+        // already fires — so `_types_callee_depth > 0` SILENCES this arm (one
+        // mistake = one diagnostic). Conservative under-reject: unknown/unit/
+        // HexaVal/named/array/map receivers all stay SILENT (only the KNOWN
+        // primitive kinds reject). Real source → build-refusing ERROR; byte-eq
+        // TEST FIXTURES (`*_test.hexa`) stay WARNING via the `_types_strict_for`
+        // path carve-out.
         if _types_callee_depth == 0 && len(e.text) > 0 && !_is_builtin_method(e.text)
-            && (_is_integer_kind(recv_t) || _is_float_kind(recv_t) || recv_t.kind == "bool" || recv_t.kind == "char") {
+            && (_is_integer_kind(recv_t) || _is_float_kind(recv_t) || recv_t.kind == "bool" || recv_t.kind == "char" || recv_t.kind == "string") {
             _emit_hx3026(recv_t, e.text, e.span, out)
         }
         let recv = e.children[0]
