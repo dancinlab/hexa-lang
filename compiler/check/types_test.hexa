@@ -1509,6 +1509,61 @@ fn _build_case_hx3030_fixture() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (aq) R6-rD — wrong-enum `==`/`!=` compare REJECT (Rust E0308). Module:
+//   enum Color { Red, Green }
+//   enum Dir   { North, South }
+//   fn f(c: Color) {
+//       let a = c == Dir::North   // wrong enum → HX3033
+//       let b = c == Color::Red   // same enum → clean
+//   }
+// The `c == Dir::North` compare → 1 HX3033 Error; `c == Color::Red` (same enum)
+// is clean. The param scrutinee `c` carries `named:Color` directly, pinning the
+// value-operand recovery path (the sibling of HX3030's scrutinee recovery).
+fn _build_case_hx3033_wrong_enum_compare() -> Module {
+    let f = "case_hx3033.hexa"
+    let mut cvars = []
+    cvars.push(_variant_unit("Red", f, 1, 13))
+    cvars.push(_variant_unit("Green", f, 1, 18))
+    let item_color = _enum_item("Color", cvars, f, 1)
+    let mut dvars = []
+    dvars.push(_variant_unit("North", f, 2, 11))
+    dvars.push(_variant_unit("South", f, 2, 18))
+    let item_dir = _enum_item("Dir", dvars, f, 2)
+    let ea = _let_expr("a", _bin_expr("==", _ident_expr("c", f, 4, 13), _enum_path("Dir", "North", [], f, 4, 18), f, 4, 15), f, 4, 5)
+    let eb = _let_expr("b", _bin_expr("==", _ident_expr("c", f, 5, 13), _enum_path("Color", "Red", [], f, 5, 18), f, 5, 15), f, 5, 5)
+    let mut fparams = []
+    fparams.push(_param("c", "Color", f, 3, 6))
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), _block([ea, eb], f, 3, 1), f, 3)
+    let mut items = []
+    items.push(item_color)
+    items.push(item_dir)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (aq) HX3033 fixture carve-out — identical wrong-enum compare AST on a byte-eq
+// TEST-FIXTURE path (`*_test.hexa`) stays WARNING via _types_strict_for.
+fn _build_case_hx3033_fixture() -> Module {
+    let f = "case_hx3033_test.hexa"
+    let mut cvars = []
+    cvars.push(_variant_unit("Red", f, 1, 13))
+    cvars.push(_variant_unit("Green", f, 1, 18))
+    let item_color = _enum_item("Color", cvars, f, 1)
+    let mut dvars = []
+    dvars.push(_variant_unit("North", f, 2, 11))
+    dvars.push(_variant_unit("South", f, 2, 18))
+    let item_dir = _enum_item("Dir", dvars, f, 2)
+    let ea = _let_expr("a", _bin_expr("==", _ident_expr("c", f, 4, 13), _enum_path("Dir", "North", [], f, 4, 18), f, 4, 15), f, 4, 5)
+    let mut fparams = []
+    fparams.push(_param("c", "Color", f, 3, 6))
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), _block([ea], f, 3, 1), f, 3)
+    let mut items = []
+    items.push(item_color)
+    items.push(item_dir)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // (ak) R1 — binop operand literal-aware BIDIRECTIONAL coercion. Bare
 // `_types_equal(lt, rt)` false-fired HX3001 on `a_i32 + 1` / `a_i32 < 2`: the
 // literal `1`/`2` infers i64 (universal int-literal), so i32≠i64 mis-rejected a
@@ -2754,6 +2809,28 @@ fn main() {
         ok = false
     } else {
         println("  ok: 1 HX3030 as WARNING (wrong-enum fixture carve-out: *_test.hexa stays warn-band)")
+    }
+
+    // (aq) R6-rD — wrong-enum `==`/`!=` compare REJECT (Rust E0308).
+    let diags_aq = _run_case("(aq) static-types R6-rD — wrong-enum compare REJECT (c == Dir::North → 1 HX3033 / c == Color::Red same-enum clean) (HX3033)", _build_case_hx3033_wrong_enum_compare())
+    let caq = _count_code(diags_aq, "HX3033")
+    let caq_err = _count_code_sev(diags_aq, "HX3033", "error")
+    if caq != 1 || caq_err != 1 {
+        println("  FAIL: case (aq) expected 1 HX3033 as ERROR (c == Dir::North wrong-enum; c == Color::Red same-enum clean), got " + to_string(caq) + " HX3033 (" + to_string(caq_err) + " error) (total=" + to_string(len(diags_aq)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3033 as ERROR (wrong-enum `c == Dir::North`; same-enum `c == Color::Red` silent) — E0308 mismatched enum in comparison")
+    }
+
+    // (aq) HX3033 fixture carve-out — *_test.hexa path → WARNING.
+    let diags_aqf = _run_case("(aq) static-types R6-rD — HX3033 fixture carve-out (*_test.hexa wrong-enum compare)", _build_case_hx3033_fixture())
+    let caqf = _count_code(diags_aqf, "HX3033")
+    let caqf_warn = _count_code_sev(diags_aqf, "HX3033", "warning")
+    if caqf != 1 || caqf_warn != 1 {
+        println("  FAIL: case (aq) fixture expected 1 HX3033 as WARNING (fixture carve-out), got " + to_string(caqf) + " HX3033 (" + to_string(caqf_warn) + " warn) (total=" + to_string(len(diags_aqf)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3033 as WARNING (wrong-enum compare fixture carve-out: *_test.hexa stays warn-band)")
     }
 
     println("")

@@ -2110,6 +2110,39 @@ fn _emit_hx3030(expected: string, actual: string, variant: string, sp: Span, out
     }
 }
 
+// Rung D (HX3033) — recover the REGISTERED-enum name of a `==`/`!=` operand:
+// an EnumPath literal's head IS the enum; a value operand's name comes from its
+// already-inferred Type (`named:<Enum>` for params / module-level lets) with a
+// block-local `let c: Color` recovered from the r5 `{}name` side slot (mirror
+// of HX3030's scrutinee recovery). Returns "" when no enum name is recoverable
+// → the caller stays silent (conservative under-reject).
+fn _types_operand_enum_name(child: Expr, t: Type, env: TypeEnv) -> string {
+    if _types_is_enum_path_kind(child.kind) {
+        return _types_resolve_alias_name(_types_enum_path_head(child.text))
+    }
+    let mut name = _types_struct_name_of(t.kind)
+    if len(name) == 0 && _types_is_ident(child.kind) && len(child.text) > 0 {
+        name = _types_struct_name_of(_types_env_lookup(env, "{}" + child.text).kind)
+    }
+    return _types_resolve_alias_name(name)
+}
+
+// Rung D (HX3033) — wrong-enum `==`/`!=` compare REJECT (Rust E0308). `a` and
+// `b` are the two operands' resolved enum names. Mirrors _emit_hx3030's band
+// policy: real source → build-refusing Error (REJECT), byte-eq test fixtures
+// stay Warning via the `_types_strict_for` path carve-out.
+fn _emit_hx3033(a: string, b: string, sp: Span, out: array) {
+    let mut bd = diag_new("HX3033")
+    bd = diag_span(bd, sp)
+    bd = diag_arg(bd, "a", a)
+    bd = diag_arg(bd, "b", b)
+    if _types_strict_for(sp.file) {
+        out.push(diag_emit(bd))
+    } else {
+        out.push(diag_emit_sev(bd, Severity::Warning))
+    }
+}
+
 fn _emit_hx3002(name: string, expected: i64, actual: i64, sp: Span, out: array) {
     let mut b = diag_new("HX3002")
     b = diag_span(b, sp)
@@ -3528,7 +3561,33 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
         // HX3001 `expected bool, got <X>` at the enclosing if/while
         // condition (the bool/i64=405 + bool/string=304 + bool/char=132
         // residual). Arith keeps the known operand's numeric type.
-        if _types_is_compare_op(op) { return _types_t_bool() }
+        if _types_is_compare_op(op) {
+            // Rung D (HX3033) — wrong-enum `==`/`!=` compare REJECT (Rust E0308,
+            // rustc_hir_typeck check_expr_binop → op::check_overloaded_binop →
+            // demand::eqtype: `c == Dir::North` where `c: Color` is an
+            // always-false silent compare — the same silent-mismatch bug class as
+            // HX3030 wrong-enum MATCH). An EnumPath operand ALWAYS infers empty
+            // (`_types_empty_type()`), so a compare against one lands HERE (the
+            // unknown-operand arm) rather than the known-both compare arm at the
+            // tail. Fires ONLY for `==`/`!=` when BOTH operands resolve to
+            // REGISTERED enums of DIFFERENT names, with at least one side an
+            // EnumPath literal; an unknown/HexaVal/same-enum operand stays silent
+            // (conservative under-reject, never over-reject — HX3030's shape).
+            // Byteeq-neutral: S3 diagnostics erase at MIR; test fixtures stay
+            // Warning via `_types_strict_for`.
+            if op == "==" || op == "!=" {
+                if _types_is_enum_path_kind(e.children[0].kind) || _types_is_enum_path_kind(e.children[1].kind) {
+                    let ln = _types_operand_enum_name(e.children[0], lt, env)
+                    let rn = _types_operand_enum_name(e.children[1], rt, env)
+                    if len(ln) > 0 && len(rn) > 0
+                        && _types_enum_registry_has(ln) && _types_enum_registry_has(rn)
+                        && ln != rn {
+                        _emit_hx3033(ln, rn, e.span, out)
+                    }
+                }
+            }
+            return _types_t_bool()
+        }
         if len(lt.kind) > 0 { return lt }
         return rt
     }
