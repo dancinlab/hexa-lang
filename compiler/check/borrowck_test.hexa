@@ -492,6 +492,51 @@ fn _src_fp_diff_origin() -> string {
     return s
 }
 
+// ── HEXA-OWN R6-A — call-arg borrow-conflict (HX3021/HX3028, E0502/E0499) ──
+//
+// E2+E3 extended to CALL ARGUMENTS: a bare `&x` / `&mut x` passed as a call
+// arg is registered + conflict-scanned exactly like a let-RHS borrow (the
+// let-RHS site never saw call-arg borrows, so these hazards were SILENT). Two
+// `&mut x` in one arg list → E0499 double-mut → HX3028; a `&mut x` arg while a
+// prior `&x` loan is live → shared-vs-mut → HX3021; two `&x` args never
+// conflict. ON → 1 diagnostic per hazard; OFF → empty stream (byteeq-neutral).
+
+fn _src_hz_callarg_double_mut() -> string {
+    // `f(&mut x, &mut x)` — both args borrow x mutably in one call → E0499.
+    let mut s = "fn cadm_f(a: i64, b: i64) { println(a) }\n"
+    s = s + "fn cadm() {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    cadm_f(&mut x, &mut x)\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_callarg_two_shared() -> string {
+    // `f(&x, &x)` — two shared call-arg borrows never conflict → silent.
+    let mut s = "fn cats_f(a: i64, b: i64) { println(a) }\n"
+    s = s + "fn cats() {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    cats_f(&x, &x)\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_hz_callarg_mut_while_shared() -> string {
+    // `let r = &x; f(&mut x)` — a `&mut x` call-arg while a prior shared loan
+    // of x is live → E0502 (shared-while-mut), the HX3021 split (NOT HX3028,
+    // since the existing loan is `&`, not `&mut`).
+    let mut s = "fn camws_f(a: i64) { println(a) }\n"
+    s = s + "fn camws() {\n"
+    s = s + "    let mut x = 5\n"
+    s = s + "    let r = &x\n"
+    s = s + "    camws_f(&mut x)\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
 // ── HEXA-OWN E4 — write-through-while-borrowed (HX3023, Rust E0506) ──
 //
 // The E2 loan registry (reused from E2+E3) feeds a SECOND conflict rule at
@@ -1410,6 +1455,12 @@ fn main() {
         if !_run_conflict_probe("fp_two_shared", _src_fp_two_shared(), 0) { ok = false }
         if !_run_conflict_probe("fp_sequential", _src_fp_sequential(), 0) { ok = false }
         if !_run_conflict_probe("fp_diff_origin", _src_fp_diff_origin(), 0) { ok = false }
+        // HEXA-OWN R6-A — call-arg borrow-conflict. `f(&mut x, &mut x)` → E0499
+        // (HX3028 ×1); `f(&mut x)` while `&x` live → E0502 (HX3021 ×1); `f(&x,
+        // &x)` never conflicts (×0). OFF → empty stream; STRICT → Error-band.
+        if !_run_double_mut_probe("hz_callarg_double_mut", _src_hz_callarg_double_mut(), 1) { ok = false }
+        if !_run_conflict_probe("hz_callarg_mut_while_shared", _src_hz_callarg_mut_while_shared(), 1) { ok = false }
+        if !_run_conflict_probe("fp_callarg_two_shared", _src_fp_callarg_two_shared(), 0) { ok = false }
         // HEXA-OWN E4 — write-through-while-borrowed (HX3023, Rust E0506).
         // Hazards → ×1 ON, controls → 0. fp_use_then_write is the documented
         // flow-insensitive false-positive (×1 under ON, no NLL last-use yet).
