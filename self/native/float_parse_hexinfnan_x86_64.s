@@ -919,7 +919,8 @@ hpx_round_shift:
     mov [rbp - 680], r11 # store tag L34
     mov [rbp - 288], r10 # spill L34 to slot
     mov r10, [rbp - 168] # reload L19 from spill slot
-    cmp r10, 9007199254740992 # binop >=
+    mov r11, 9007199254740992 # materialize wide cmp imm to reg (x86 cmp imm is imm32)
+    cmp r10, r11 # binop >=
     setge al # binop >= → al
     movzx r10, al # zero-extend al into dst
     mov r11, 2 # materialize tag imm 2
@@ -931,7 +932,8 @@ hpx_round_shift:
     jmp .La4b0_hpx_round_shift_bb18 # jump -> then
 .La4b0_hpx_round_shift_bb17:
     mov r10, [rbp - 168] # reload L19 from spill slot
-    cmp r10, 4503599627370496 # binop >=
+    mov r11, 4503599627370496 # materialize wide cmp imm to reg (x86 cmp imm is imm32)
+    cmp r10, r11 # binop >=
     setge al # binop >= → al
     movzx r10, al # zero-extend al into dst
     mov r11, 2 # materialize tag imm 2
@@ -1433,7 +1435,8 @@ hpx_hexfloat:
     mov [rbp - 920], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
     mov r10, [rbp - 56] # reload L5 from spill slot
-    cmp r10, 576460752303423488 # binop <
+    mov r11, 576460752303423488 # materialize wide cmp imm to reg (x86 cmp imm is imm32)
+    cmp r10, r11 # binop <
     setl al # binop < → al
     movzx r10, al # zero-extend al into dst
     mov r11, 2 # materialize tag imm 2
