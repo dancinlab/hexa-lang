@@ -1425,6 +1425,50 @@ fn _build_case_hx3025_fixture() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (an) R1 — segment(b) HX3025 STRING-arm extension. A subscript `s[i]` on a
+// KNOWN string base is a guaranteed runtime error (the C-substrate wrapper
+// detects the string tag and throws `string[i]: use .chars()[i] or substring`,
+// runtime_core_emit ~3395), so it now REJECTs under the same
+// guaranteed-runtime-error contract as the int/float/bool/char arms. The
+// `.chars()`-then-index control stays clean (`cs` is an untyped local → unknown
+// base → the conservative under-reject stays silent). Expect exactly 1 HX3025
+// (error) across the module.
+//   fn f(s: string) -> i64 { let x = s[0]  return 0 }         // string index → HX3025
+//   fn g(s: string) -> i64 { let cs = s.chars()  let y = cs[0]  return 0 }  // unknown base → clean
+fn _build_case_hx3025_string_index() -> Module {
+    let f = "case_hx3025_string.hexa"
+    let fx = _let_expr("x", _index_expr(_ident_expr("s", f, 2, 13), _int_expr("0", f, 2, 15), f, 2, 14), f, 2, 5)
+    let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
+    let mut pf = []
+    pf.push(_param("s", "string", f, 1, 6))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 1, 1), f, 1)
+    // fn g(s: string) { let cs = s.chars()  let y = cs[0]  return 0 } — unknown base → clean
+    let gcs = _let_expr("cs", _call_expr(_field_expr(_ident_expr("s", f, 5, 14), "chars", f, 5, 16), [], f, 5, 22), f, 5, 5)
+    let gy = _let_expr("y", _index_expr(_ident_expr("cs", f, 6, 14), _int_expr("0", f, 6, 17), f, 6, 16), f, 6, 5)
+    let gr = _return_expr(_int_expr("0", f, 7, 12), f, 7, 5)
+    let mut pg = []
+    pg.push(_param("s", "string", f, 4, 6))
+    let item_g = _fn_item("g", pg, _named_type_ref("i64"), _block([gcs, gy, gr], f, 4, 1), f, 4)
+    let mut items = []
+    items.push(item_f)
+    items.push(item_g)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (an) HX3025 string-arm fixture carve-out — identical string-index AST on a
+// byte-eq TEST-FIXTURE path (`*_test.hexa`) stays WARNING via _types_strict_for.
+fn _build_case_hx3025_string_fixture() -> Module {
+    let f = "case_hx3025_string_test.hexa"
+    let fx = _let_expr("x", _index_expr(_ident_expr("s", f, 2, 13), _int_expr("0", f, 2, 15), f, 2, 14), f, 2, 5)
+    let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
+    let mut pf = []
+    pf.push(_param("s", "string", f, 1, 6))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 1, 1), f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // (ak) R1 — binop operand literal-aware BIDIRECTIONAL coercion. Bare
 // `_types_equal(lt, rt)` false-fired HX3001 on `a_i32 + 1` / `a_i32 < 2`: the
 // literal `1`/`2` infers i64 (universal int-literal), so i32≠i64 mis-rejected a
@@ -2516,6 +2560,31 @@ fn main() {
         ok = false
     } else {
         println("  ok: 1 HX3026 as WARNING (flagless fixture carve-out: *_test.hexa path stays warn-band)")
+    }
+
+    // (an) R1 — segment(b) HX3025 STRING-arm extension (Rust E0608). A `s[i]`
+    // GET on a KNOWN string base now REJECTs (guaranteed runtime error), while
+    // the `.chars()`-then-index control stays clean (unknown local base →
+    // conservative under-reject silent). Fixture path stays WARNING.
+    let diags_an = _run_case("(an) static-types R1 — string-index REJECT (s[0] string / cs[0] via chars() clean) (HX3025)", _build_case_hx3025_string_index())
+    let nan = _count_code(diags_an, "HX3025")
+    let nan_err = _count_code_sev(diags_an, "HX3025", "error")
+    if nan != 1 || nan_err != 1 {
+        println("  FAIL: case (an) expected 1 HX3025 as ERROR (s[0] string reject; cs[0] via chars() clean), got " + to_string(nan) + " HX3025 (" + to_string(nan_err) + " error) (total=" + to_string(len(diags_an)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3025 as ERROR (string `s[0]` reject; `cs = s.chars()` then `cs[0]` clean) — E0608 index-on-string")
+    }
+
+    // (an) HX3025 string-arm fixture carve-out — identical AST on a *_test.hexa path → WARNING.
+    let diags_an2 = _run_case("(an) static-types R1 — HX3025 string-arm fixture carve-out (*_test.hexa string index)", _build_case_hx3025_string_fixture())
+    let nan2 = _count_code(diags_an2, "HX3025")
+    let nan2_warn = _count_code_sev(diags_an2, "HX3025", "warning")
+    if nan2 != 1 || nan2_warn != 1 {
+        println("  FAIL: case (an) fixture expected 1 HX3025 as WARNING (fixture carve-out), got " + to_string(nan2) + " HX3025 (" + to_string(nan2_warn) + " warn) (total=" + to_string(len(diags_an2)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3025 as WARNING (flagless fixture carve-out: *_test.hexa string index stays warn-band)")
     }
 
     println("")

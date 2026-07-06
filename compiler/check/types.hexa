@@ -3344,10 +3344,15 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         // scalar (`n[0]`, n: int/float/bool/char). The C-substrate hexa_array_get
         // wrapper aborts at runtime on a non-array tag (runtime_core_emit ~3398),
         // so this is a guaranteed runtime error surfaced to S3 (the HX3024
-        // contract). Conservative under-reject: string is excluded in v1 (aborts
-        // too, but a dead-code `s[i]` corpus census is not yet done), and
-        // unknown/unit/HexaVal/array/map/named all stay SILENT.
-        if _is_integer_kind(base_t) || _is_float_kind(base_t) || base_t.kind == "bool" || base_t.kind == "char" {
+        // contract). Conservative under-reject: a KNOWN `string` base is now
+        // included — an `s[i]` GET is a guaranteed runtime error via the same
+        // aborting mechanism: the C-substrate wrapper detects the string tag
+        // and throws `string[i]: use .chars()[i] or substring`
+        // (runtime_core_emit ~3395 `hexa_throw`), so this REJECT matches the
+        // "guaranteed-runtime-error → REJECT" contract. Still conservative: it
+        // fires ONLY for a KNOWN string base, while unknown/unit/HexaVal/
+        // array/map/named all stay SILENT.
+        if _is_integer_kind(base_t) || _is_float_kind(base_t) || base_t.kind == "bool" || base_t.kind == "char" || base_t.kind == "string" {
             _emit_hx3025(base_t, e.span, out)
         }
         if base_t.kind == "array" && len(base_t.args) > 0 {
