@@ -21,37 +21,23 @@
 #                   are unaffected. The musl asset is a SUPPLEMENTARY target
 #                   shipped alongside the per-target tarball; if it is absent the
 #                   installer falls back to the dynamic glibc asset automatically.
-#   HEXA_CUDA       linux-x86_64 only: install the cuBLAS-enabled
-#                   `hexa-linux-x86_64-cuda.tar.gz` asset (GPU-accelerated GEMM
-#                   via the CUDA-folded runtime.a → cuda_available()=1, anima
-#                   #2386). =1 forces it; =0 forces the CPU glibc asset. UNSET =
-#                   AUTO: prefer cuda when the host has an NVIDIA GPU (nvidia-smi)
-#                   AND a resolvable cuBLAS/cudart runtime (so a GPU consumer's
-#                   install lands cuda_available()=1 without opt-in — #3701). The
-#                   cuda asset is SUPPLEMENTARY, so on a release where it is
-#                   absent the installer falls back to the CPU glibc asset
-#                   automatically. Takes precedence over HEXA_MUSL when both apply.
+#   (GPU/CUDA is AUTO-DETECTED — there is NO HEXA_CUDA flag; see the CUDA note below.)
 #
-# ── GPU (CUDA): AUTO-ENABLED — do NOT hand-roll ──────────────────────────────
-# On a linux-x86_64 GPU host, THIS SCRIPT does the full cuda enablement. Never
-# hand-roll it. HEXA_CUDA selects the asset:
-#   unset (AUTO) — prefer_cuda auto-detects an NVIDIA GPU (nvidia-smi) AND a
-#                  resolvable libcudart (toolkit OR pip nvidia-cuda-runtime-cu12),
-#                  installs the `-cuda` asset, and lands cuda_available()==1 with
-#                  ZERO opt-in.
-#   HEXA_CUDA=1  — force the `-cuda` asset.
-#   HEXA_CUDA=0  — force the CPU glibc asset (escape hatch).
-# When the -cuda asset is installed, install_hexa AUTOMATICALLY wires the GPU
-# runtime so a later `hexa build`/`hexa run` links -lcudart -lcublas and reports
-# cuda_available()==1 with no per-invocation flag:
-#   • $HX_HOME/cuda-libs — symlink farm of bare .so linker names from the pip
-#     nvidia wheels (_wire_pip_cuda_libs) + libcuda.so from the driver.
-#   • $HX_HOME/.cuda-runtime — marker that makes a consumer build auto-link cudart
-#     /cublas (#3723); the cuda runtime.a FFI stub is folded in for you too.
-# THEREFORE, on a fresh GPU pod: run `HEXA_CUDA=1 sh install.sh` and DO NOT
-# hand-build cuda-libs / the .cuda-runtime marker / libcudart symlinks / a
-# runtime.a FFI stub — install.sh already does ALL of it. (anima-session lesson:
-# an agent burned ~30 turns re-creating exactly this farm+marker by hand.)
+# ── GPU (CUDA): SELF-CONTAINED, AUTO-DETECTED — do NOT hand-roll ─────────────
+# The `-cuda` release asset is SELF-CONTAINED: the CUDA runtime is statically
+# bundled (build/cuda-static/{libcudart_static,libculibos,libcudadevrt}.a +
+# stubs/libcuda.so), so a consumer `hexa build`/`hexa run` links it STATICALLY and
+# the only run-time requirement is the NVIDIA driver libcuda.so.1 (always present
+# on a GPU host, SONAME-resolved). NO flag selects it: prefer_cuda AUTO-detects an
+# NVIDIA GPU (nvidia-smi) → installs the `-cuda` asset → cuda_available()==1 with
+# ZERO opt-in; a non-GPU host gets the CPU glibc asset. Install drops one marker
+# ($HX_HOME/.cuda-runtime) that flips os_clang_ldflags to the static-cuda link line
+# — NOTHING else. There is NO HEXA_CUDA flag, NO cuda-libs farm, NO pip nvidia-cuda-
+# runtime-cu12 wheel, NO LD_LIBRARY_PATH, NO runtime.a FFI stub, NO manual libcudart
+# symlink. THEREFORE, on a fresh GPU pod: run `sh install.sh` and DO NOT hand-build
+# ANY of that machinery — it no longer exists and is not needed. (anima-session
+# lesson: an agent burned ~30 turns re-creating a farm+marker a self-contained
+# asset makes obsolete.)
 
 set -eu
 
@@ -107,17 +93,12 @@ need_cmd() {
 # consumer `hexa build`/`run` program gets GPU-accelerated GEMM (cuda_available()
 # == 1 — anima #2386); the default CPU glibc asset reports cuda_available() == 0.
 #
-# Selection (linux-x86_64 ONLY — the only target with a cuda asset):
-#   HEXA_CUDA=1  → force cuda (explicit opt-in, unchanged).
-#   HEXA_CUDA=0  → force CPU glibc (explicit opt-out / escape hatch).
-#   unset (auto) → AUTO-PREFER cuda when the host BOTH (a) has an NVIDIA GPU
-#                  (`nvidia-smi -L` lists ≥1 device) AND (b) has the cuBLAS/cudart
-#                  runtime libs resolvable (ldconfig or the usual CUDA lib dirs).
-#                  Requiring BOTH avoids shipping a cuBLAS-linked binary that
-#                  would fail to load libcudart on a GPU host without the CUDA
-#                  runtime installed — in that case we keep the CPU asset. This is
-#                  the consumer half of #3701 (a GPU consumer's `install.sh hexa`
-#                  now lands cuda_available()=1 without needing HEXA_CUDA=1).
+# Selection (linux-x86_64 ONLY — the only target with a cuda asset) — AUTO-ONLY,
+# no flag: AUTO-PREFER the self-contained `-cuda` asset when the host has an NVIDIA
+# GPU (`nvidia-smi -L` lists ≥1 device). Because the asset statically bundles the
+# CUDA runtime, the only host requirement is the driver (nvidia-smi ⇒ libcuda.so.1),
+# so a GPU consumer's `install.sh hexa` lands cuda_available()=1 with ZERO opt-in
+# (#3701 self-contained). A non-GPU host keeps the CPU glibc asset.
 #
 # Returns 0 (prefer cuda) / 1 (keep default). The cuda asset is SUPPLEMENTARY,
 # so a release install where the asset is absent falls back to the CPU glibc
@@ -129,113 +110,12 @@ _has_nvidia_gpu() {
     nvidia-smi -L 2>/dev/null | grep -q '^GPU ' || return 1
     return 0
 }
-# ── pip-nvidia wiring (bare rent pod: no toolkit, CUDA libs only in pip wheels) ──
-# Wheels ship SONAME-only libs (libcudart.so.12 — no bare .so linker name) under
-# <site-packages>/nvidia/*/lib and are never in the ldconfig cache. Resolve them
-# into a hexa-owned symlink farm $HX_HOME/cuda-libs providing bare linker names
-# + one stable -L/-rpath dir — the user's python env is never mutated.
-_pip_nvidia_roots() {
-    # primary: the live interpreter resolves venv/conda/user/system site in one
-    # shot. nvidia is a PEP-420 namespace pkg → __path__ (never __file__). No
-    # network, no `pip show` (slow / pip may be absent); sub-100ms, cannot hang.
-    for py in python3 python; do
-        command -v "$py" >/dev/null 2>&1 || continue
-        "$py" -c 'import nvidia; print("\n".join(nvidia.__path__))' 2>/dev/null && return 0
-        break    # interpreter present but no nvidia pkg → try the glob fallback
-    done
-    # fallback (python absent / exotic install): bounded glob, standard roots.
-    for r in "${VIRTUAL_ENV:-/nonexistent}"/lib/python3*/site-packages/nvidia \
-             /opt/conda/lib/python3*/site-packages/nvidia \
-             /usr/local/lib/python3*/dist-packages/nvidia \
-             /usr/lib/python3*/dist-packages/nvidia \
-             "$HOME"/.local/lib/python3*/site-packages/nvidia; do
-        [ -d "$r" ] && printf '%s\n' "$r"
-    done
-    return 0
-}
-_wire_pip_cuda_libs() {
-    farm="$HX_HOME/cuda-libs"
-    roots="$(_pip_nvidia_roots)"
-    rm -rf "$farm" 2>/dev/null || true          # idempotent: rebuilt from scratch
-    [ -n "$roots" ] || return 1
-    mkdir -p "$farm" || return 1
-    # Symlink every wheel lib (SONAME name + bare linker name). Glob expansion is
-    # sorted → deterministic; ln -sf ascending → the highest .so.N wins the bare name.
-    printf '%s\n' "$roots" | while IFS= read -r root; do
-        for f in "$root"/*/lib/lib*.so* "$root"/*/lib/lib*.a; do
-            [ -e "$f" ] || continue
-            b="${f##*/}"
-            ln -sf "$f" "$farm/$b"
-            case "$b" in
-                *.so.*) ln -sf "$f" "$farm/${b%%.so.*}.so" ;;
-            esac
-        done
-    done
-    # -lcuda linker name: prefer the REAL driver lib (present whenever nvidia-smi
-    # is), else the wheel's lib/stubs/libcuda.so (link-only stub — fine for -lcuda;
-    # the loader binds the real driver at run time via its SONAME libcuda.so.1).
-    if [ ! -e "$farm/libcuda.so" ]; then
-        for c in $(ldconfig -p 2>/dev/null | sed -n 's/.*libcuda\.so\.1 .*=> //p' | head -1) \
-                 /usr/lib/x86_64-linux-gnu/libcuda.so.1 /usr/lib64/libcuda.so.1; do
-            [ -e "$c" ] || continue
-            ln -sf "$c" "$farm/libcuda.so"
-            ln -sf "$c" "$farm/libcuda.so.1"
-            break
-        done
-    fi
-    if [ ! -e "$farm/libcuda.so" ]; then
-        printf '%s\n' "$roots" | while IFS= read -r root; do
-            for s in "$root"/*/lib/stubs/libcuda.so; do
-                [ -e "$s" ] && [ ! -e "$farm/libcuda.so" ] && ln -sf "$s" "$farm/libcuda.so"
-            done
-        done
-    fi
-    # gate on the one lib the link always needs; report the rest loudly.
-    if [ ! -e "$farm/libcudart.so" ]; then
-        rm -rf "$farm" 2>/dev/null || true
-        return 1
-    fi
-    for need in libcuda.so libcudadevrt.a; do
-        [ -e "$farm/$need" ] || red "  ⚠ cuda-libs: $need unresolved — cuda link may fail (check nvidia driver / nvidia-cuda-runtime-cu12 wheel)"
-    done
-    return 0
-}
-_has_toolkit_cudart() {
-    # cuBLAS/cudart resolvable via the dynamic loader cache or a standard CUDA
-    # install dir. The cuda binary links -lcudart -lcublas, so without these it
-    # would fail to start — keep the CPU asset in that case.
-    if command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q 'libcudart\.so'; then
-        return 0
-    fi
-    for d in /usr/local/cuda/lib64 /usr/local/cuda/targets/x86_64-linux/lib \
-             /usr/lib/x86_64-linux-gnu /usr/lib64; do
-        [ -e "$d"/libcudart.so* ] 2>/dev/null && return 0
-    done
-    return 1
-}
-_has_pip_cudart() {
-    for r in $(_pip_nvidia_roots); do
-        for f in "$r"/*/lib/libcudart.so*; do
-            [ -e "$f" ] && return 0
-        done
-    done
-    return 1
-}
-_has_cuda_runtime() {
-    # union: a toolkit OR pip-wheel cudart makes the -cuda asset resolvable.
-    _has_toolkit_cudart || _has_pip_cudart
-}
 prefer_cuda() {
+    # AUTO-ONLY (no HEXA_CUDA flag): an NVIDIA GPU present → install the self-contained
+    # -cuda asset (static cudart bundled). The only host requirement is the driver
+    # itself (nvidia-smi ⇒ libcuda.so.1 present); no cudart/toolkit/pip resolve.
     [ "$(detect_target)" = "linux-x86_64" ] || return 1
-    case "${HEXA_CUDA:-}" in
-        1) return 0 ;;   # explicit opt-in
-        0) return 1 ;;   # explicit opt-out
-    esac
-    # auto: GPU present AND cuda runtime libs resolvable → prefer cuda.
-    if _has_nvidia_gpu && _has_cuda_runtime; then
-        return 0
-    fi
-    return 1
+    _has_nvidia_gpu
 }
 
 MUSL_GLIBC_FLOOR_MAJOR=2
@@ -292,15 +172,10 @@ install_hexa() {
     # matching the asset name.
     asset="hexa-${target}"
     if prefer_cuda; then
-        # HEXA_CUDA=1 opt-in (linux-x86_64): cuBLAS-enabled asset. Takes precedence
-        # over musl (a CUDA host is glibc + has an NVIDIA GPU; the cuda asset is a
-        # dynamic glibc binary, not static-musl).
+        # auto-detected NVIDIA GPU (linux-x86_64): the SELF-CONTAINED -cuda asset
+        # (static cudart bundled) — takes precedence over musl (a GPU host is glibc).
         asset="hexa-${target}-cuda"
-        if [ "${HEXA_CUDA:-}" = "1" ]; then
-            dim "  HEXA_CUDA=1 → preferring cuBLAS-enabled asset (GPU-accelerated)"
-        else
-            dim "  NVIDIA GPU + cuda runtime detected → preferring cuBLAS-enabled asset (cuda_available=1; HEXA_CUDA=0 to opt out)"
-        fi
+        dim "  NVIDIA GPU detected → self-contained -cuda asset (cuda_available=1, zero flags)"
     elif prefer_musl; then
         asset="hexa-${target}-musl"
         dim "  glibc-independent host → preferring static-musl asset"
@@ -321,7 +196,7 @@ install_hexa() {
     if ! curl -fsSL "$url" -o "$tmp/hexa.tar.gz"; then
         # The musl AND cuda assets are SUPPLEMENTARY targets; a release may not
         # carry them. Fall back to the default glibc asset rather than fail —
-        # this keeps a forced/auto-musl or HEXA_CUDA=1 request working
+        # this keeps a forced/auto-musl or auto-cuda request working
         # (it just lands the glibc binary, which is what shipped before).
         if [ "$asset" != "hexa-${target}" ]; then
             dim "  ⚠ ${asset}.tar.gz not found (musl/cuda assets are supplementary) → glibc asset"
@@ -436,22 +311,22 @@ EOF
     # never go stale. A fresh standalone built from current source is fine; this
     # only removes the unrefreshed shadow.
     rm -f "$HX_BIN/bin/hexa-cloud" "$HX_BIN/bin/hexa-sim-universe" 2>/dev/null || true
-    # #3723 fix — mark a cuda-runtime install so a consumer `hexa run/build` auto-links
-    # cudart/cublas WITHOUT needing HEXA_CUDA=1 on every invocation. The cuda asset's
-    # runtime.a (runtime_cuda.o) references cudaLaunchKernel/cublas; main.hexa
-    # os_clang_ldflags reads $HX_HOME/.cuda-runtime and adds -lcudart -lcublas when
-    # present. Idempotent: a CPU/musl (re)install REMOVES the marker (no stale cuda link).
+    # #3723 fix — mark a cuda-runtime install so a consumer `hexa run/build` links the
+    # cuda runtime on a consumer build (no per-invocation flag). main.hexa
+    # os_clang_ldflags reads $HX_HOME/.cuda-runtime and links the bundled static CUDA
+    # runtime. Idempotent: a CPU/musl (re)install REMOVES the marker (no stale cuda link).
     if [ "${asset##*-}" = "cuda" ]; then
         : > "$HX_HOME/.cuda-runtime" 2>/dev/null || true
-        # bare-pod pip wiring: ONLY when no toolkit cudart resolves — a toolkit host
-        # takes today's exact path (no farm → os_clang_ldflags CUDA_HOME branch →
-        # byte-identical link line). The farm's existence IS the record.
-        if _has_toolkit_cudart; then
-            rm -rf "$HX_HOME/cuda-libs" 2>/dev/null || true
-        elif _wire_pip_cuda_libs; then
-            dim "  pip-nvidia libs wired → $HX_HOME/cuda-libs (bare .so linker names + rpath dir)"
-        else
-            red "  ⚠ cuda asset installed but no resolvable libcudart (toolkit or pip nvidia-cuda-runtime-cu12) — cuda link will fail"
+        # SELF-CONTAINED (#cuda-self-contained): the -cuda asset STATICALLY bundles the
+        # CUDA runtime under $HX_BIN/build/cuda-static/ (libcudart_static+libculibos+
+        # libcudadevrt + stubs/libcuda.so). os_clang_ldflags links those .a's statically,
+        # so a consumer build needs ONLY the driver libcuda.so.1 at run time — NO pip
+        # wheels, NO cuda-libs farm, NO LD_LIBRARY_PATH. Migration: sweep any stale farm
+        # from a pre-self-contained install. Assert the bundle is present (a mis-packaged
+        # asset = a loud install-time defect, not a silent consumer link failure).
+        rm -rf "$HX_HOME/cuda-libs" 2>/dev/null || true
+        if [ ! -f "$HX_BIN/build/cuda-static/libcudart_static.a" ]; then
+            red "  ⚠ -cuda asset missing bundled build/cuda-static/ (static CUDA runtime) — release packaging defect; cuda link will fail"
         fi
     else
         rm -f "$HX_HOME/.cuda-runtime" 2>/dev/null || true

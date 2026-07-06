@@ -172,7 +172,7 @@ jobs:
             timeout 15 ./build/aprime_cc _drv.hexa \
                 --emit=asm --target=x86_64-linux-gnu --error-format=short \
                 -o "$scratch/asm/$h.s" "$f" > "$log" 2>&1 || true
-            n="$( (grep -o -E 'HX30(1[167]|2[45])' "$log" || true) | wc -l | tr -d ' ')"
+            n="$( (grep -o -E 'HX30(1[167]|2[4-6])' "$log" || true) | wc -l | tr -d ' ')"
             # <count>\t<path> — path has no tabs; hash is the count-file name.
             printf '%s\t%s\n' "$n" "$f" > "$scratch/counts/$h"
           }

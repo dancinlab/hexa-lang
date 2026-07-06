@@ -43,8 +43,31 @@ cp build/hexa_module_loader "$stage/build/hexa_module_loader"
 # build produced build/runtime.cuda.a (HEXA_CUDA path), ship THAT as the tarball's
 # build/runtime.a; else ship the CPU archive unchanged (every default target).
 if [ -f build/runtime.cuda.a ]; then
-    echo "[stage_precompile_package] CUDA-R1: shipping consumer cuBLAS archive build/runtime.cuda.a as build/runtime.a (toolchain used the CPU runtime.a)"
+    echo "[stage_precompile_package] CUDA-R1: shipping consumer cuda archive build/runtime.cuda.a as build/runtime.a (toolchain used the CPU runtime.a)"
     cp build/runtime.cuda.a "$stage/build/runtime.a"
+    # SELF-CONTAINED (#cuda-self-contained): bundle the STATIC CUDA runtime next to
+    # runtime.a so os_clang_ldflags links it statically → the consumer binary needs
+    # ONLY the driver libcuda.so.1 at run time (no pip wheels / cuda-libs farm /
+    # LD_LIBRARY_PATH). The toolkit (cudart-dev) present on the release builder ships
+    # all four files. FATAL if any is missing — never ship a -cuda asset that would
+    # silently fall back to dynamic cudart on the consumer.
+    _cs_d="${CUDA_HOME:-/usr/local/cuda}"
+    _cs_L="$_cs_d/targets/x86_64-linux/lib"
+    [ -f "$_cs_L/libcudart_static.a" ] || _cs_L="$_cs_d/lib64"
+    mkdir -p "$stage/build/cuda-static/stubs"
+    for _f in libcudart_static.a libculibos.a libcudadevrt.a; do
+        if [ ! -f "$_cs_L/$_f" ]; then
+            echo "[stage_precompile_package] FATAL: -cuda asset needs $_cs_L/$_f (static CUDA runtime) — cudart-dev toolkit missing at package time" >&2
+            exit 1
+        fi
+        cp "$_cs_L/$_f" "$stage/build/cuda-static/"
+    done
+    if [ ! -f "$_cs_L/stubs/libcuda.so" ]; then
+        echo "[stage_precompile_package] FATAL: -cuda asset needs $_cs_L/stubs/libcuda.so (driver link stub)" >&2
+        exit 1
+    fi
+    cp "$_cs_L/stubs/libcuda.so" "$stage/build/cuda-static/stubs/"
+    echo "[stage_precompile_package] CUDA-R1: bundled self-contained cuda-static/ (libcudart_static+libculibos+libcudadevrt+stubs/libcuda.so) from $_cs_L"
 else
     cp build/runtime.a "$stage/build/runtime.a"
 fi
