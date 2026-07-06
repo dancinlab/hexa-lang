@@ -1711,8 +1711,15 @@ if [ -f "$rt" ] && ! grep -q 'OP-19e (HEXA-0POD' "$rt"; then
       print "// the `#define environ hxlcl_environ` shadow below so it is the libc symbol."
       print "extern char **environ;"
       print "static char **hxlcl_environ = 0;"
+      print "// FLIP-7 own-start (#29): under HEXA_ZEROC_OWN_START the own _start writes"
+      print "// hxlcl_environ (via _hxlcl_environ alias) before init_array, and -nostartfiles"
+      print "// never provides the libc `environ` cell — this ctor `= environ` READ was the"
+      print "// runtime.o `U environ` that tripped the S5.5 own-start nm-clean ship gate, so the"
+      print "// libc-environ capture is compiled out under own-start (own _start supplies it)."
+      print "#ifndef HEXA_ZEROC_OWN_START"
       print "__attribute__((constructor(101)))"
       print "static void hxlcl_capture_environ(void) { if (!hxlcl_environ) hxlcl_environ = environ; }"
+      print "#endif"
       print "#define environ hxlcl_environ"
       skip=1; patched=1; next
     }

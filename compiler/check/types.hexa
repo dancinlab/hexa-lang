@@ -1450,6 +1450,40 @@ fn _own_lint_touch(use_node: Expr, out: array) {
     _emit_hx3012(use_node.text, _own_lint_def_lines[idx], _own_lint_move_lines[idx], use_node.span, out)
 }
 
+// HEXA-OWN L2 rung B — use-after-move at a field/index BASE or a binop
+// OPERAND (HEXA_OWN_LINT=1). Extends HX3012 coverage past the bare-ident MOVE
+// contexts (`let y = x`, `return x`, call-arg) that `_own_lint_touch`
+// records: reading an already-moved `@own` binding as a receiver (`x.f`), an
+// index base (`x[i]`), or a binop operand (`x + 1`) is a use-after-move too.
+// Differs from `_own_lint_touch` in two ways that match the READ (not MOVE)
+// semantics of these positions:
+//   * WARN-ONLY — a read NEVER marks a live binding moved (no state-1 shadow
+//     push), so two legitimate reads of a still-owned aggregate
+//     (`let a = p.x; let b = p.y`) never false-fire. Only an ALREADY-moved
+//     binding (newest registry entry is state 1) warns → conservative
+//     under-reject, only registered @own-moved idents fire.
+//   * ONE LEVEL — the caller passes the immediate base/operand ident; nested
+//     positions (`s.a.b`, `(x + 1) + 2`) are each covered by their own
+//     sub-node's arm during the `_infer_expr` child walk, so no recursion is
+//     needed here (and no double-emit of one use span).
+// Emission-only (no registry mutation), so a scratch-sink re-infer
+// (static-types r2/r9a) discards cleanly. Every call site is
+// `env("HEXA_OWN_LINT") == "1"`-gated (flag-first short-circuit) → the
+// default diagnostic stream stays byte-identical (byteeq-neutral).
+fn _own_lint_use_check(use_node: Expr, out: array) {
+    if !_types_is_ident(use_node.kind) { return }
+    if len(use_node.text) == 0 { return }
+    let idx = _own_lint_find(use_node.text)
+    if idx < 0 { return }
+    // Still live (newest entry state 0) → a READ is not a move: stay silent.
+    if _own_lint_states[idx] == 0 { return }
+    // The recorded move site itself is never re-counted as a use-after-move.
+    if _own_lint_move_lines[idx] == use_node.span.line && _own_lint_move_cols[idx] == use_node.span.col {
+        return
+    }
+    _emit_hx3012(use_node.text, _own_lint_def_lines[idx], _own_lint_move_lines[idx], use_node.span, out)
+}
+
 // ── HEXA-OWN L2 r2b — Copy-class exemption ──
 // Adapted (not cherry-picked) from the preserved PR #4088 `feat/borrow-checker`
 // branch's `_type_is_copy` predicate + `_borrow_name_is_copy` table: a binding
@@ -3458,6 +3492,12 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             if xi == 0 { base_t = ct }
             xi = xi + 1
         }
+        // HEXA-OWN L2 rung B — an index BASE (`x[i]`) is a READ of `x`; if `x`
+        // is an already-moved `@own` binding this is a use-after-move → HX3012
+        // (warn-only, no move mark). Flag-first short-circuit → byteeq-neutral.
+        if env("HEXA_OWN_LINT") == "1" && len(e.children) > 0 {
+            _own_lint_use_check(e.children[0], out)
+        }
         // segment(b) HX3025 REJECT (Rust E0608): indexing a KNOWN non-container
         // scalar (`n[0]`, n: int/float/bool/char). The C-substrate hexa_array_get
         // wrapper aborts at runtime on a non-array tag (runtime_core_emit ~3398),
@@ -3512,6 +3552,12 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             let ct = _infer_expr(e.children[wi], env, ctx, out)
             if wi == 0 { recv_t = ct }
             wi = wi + 1
+        }
+        // HEXA-OWN L2 rung B — a field-access RECEIVER (`x.f`) is a READ of
+        // `x`; an already-moved `@own` receiver is a use-after-move → HX3012
+        // (warn-only, no move mark). Flag-first short-circuit → byteeq-neutral.
+        if env("HEXA_OWN_LINT") == "1" {
+            _own_lint_use_check(e.children[0], out)
         }
         // segment(b) HX3026 REJECT (Rust E0610): a field READ (`n.foo`) on a
         // KNOWN non-aggregate primitive receiver (`int`/`float`/`bool`/`char`/
@@ -3608,6 +3654,16 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
     let lt = _infer_expr(e.children[0], env, ctx, out)
     let rt = _infer_expr(e.children[1], env, ctx, out)
 
+    // HEXA-OWN L2 rung B — a binop OPERAND (`x + 1`, `a == b`) is a READ of
+    // each side; an already-moved `@own` operand is a use-after-move → HX3012
+    // (warn-only, no move mark). Each side is the immediate ident; nested
+    // sub-binops recurse through their own arm. `as`-cast returned above
+    // (rhs is a type-name, not a value). Flag-first → byteeq-neutral.
+    if env("HEXA_OWN_LINT") == "1" {
+        _own_lint_use_check(e.children[0], out)
+        _own_lint_use_check(e.children[1], out)
+    }
+
     // Unknown operand type — local-var typing is a v1 stub, so an Ident
     // operand frequently infers an empty Type. _types_equal already
     // encodes "either side unknown → tolerate"; the arith branch's
@@ -3631,20 +3687,25 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
             // (`_types_empty_type()`), so a compare against one lands HERE (the
             // unknown-operand arm) rather than the known-both compare arm at the
             // tail. Fires ONLY for `==`/`!=` when BOTH operands resolve to
-            // REGISTERED enums of DIFFERENT names, with at least one side an
-            // EnumPath literal; an unknown/HexaVal/same-enum operand stays silent
+            // REGISTERED enums of DIFFERENT names. R7-R2 (au): the outer "≥1 side
+            // EnumPath literal" gate is DROPPED so value-operand pairs (ident×
+            // ident `c == d`, ident×call) ALSO fire — `_types_operand_enum_name`
+            // already recovers an ident's `{}slot`/inferred-Type enum name
+            // (block-local `let c: Color` + param `named:<Enum>`), and the ln/rn
+            // recover + `_types_enum_registry_has` both-sides + `ln != rn` triad
+            // IS the real safety gate. param×param stays on the known-both compare
+            // arm (HX3001), never reaching this unknown arm.
+            // An unknown/HexaVal/same-enum operand stays silent
             // (conservative under-reject, never over-reject — HX3030's shape).
             // Byteeq-neutral: S3 diagnostics erase at MIR; test fixtures stay
             // Warning via `_types_strict_for`.
             if op == "==" || op == "!=" {
-                if _types_is_enum_path_kind(e.children[0].kind) || _types_is_enum_path_kind(e.children[1].kind) {
-                    let ln = _types_operand_enum_name(e.children[0], lt, env)
-                    let rn = _types_operand_enum_name(e.children[1], rt, env)
-                    if len(ln) > 0 && len(rn) > 0
-                        && _types_enum_registry_has(ln) && _types_enum_registry_has(rn)
-                        && ln != rn {
-                        _emit_hx3033(ln, rn, e.span, out)
-                    }
+                let ln = _types_operand_enum_name(e.children[0], lt, env)
+                let rn = _types_operand_enum_name(e.children[1], rt, env)
+                if len(ln) > 0 && len(rn) > 0
+                    && _types_enum_registry_has(ln) && _types_enum_registry_has(rn)
+                    && ln != rn {
+                    _emit_hx3033(ln, rn, e.span, out)
                 }
             }
             return _types_t_bool()
