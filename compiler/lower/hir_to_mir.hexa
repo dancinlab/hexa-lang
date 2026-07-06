@@ -993,6 +993,34 @@ fn _bck_emit_move_while_borrowed(origin: string, name: string, borrow_mut: bool,
     _lr_diag.push(d)
 }
 
+// HX3032 emit (mutating-method-behind-shared-ref, Rust E0596) — same-site
+// dedup + STRICT escalation, cloned from `_bck_emit_write_through`. `name` is
+// the ref binding the method is dispatched THROUGH, `origin` the value it
+// borrows, `method` the mutating selector (push/pop/truncate/set), `borrow_line`
+// where the shared loan was created. Fires only for `&` loans (a `&mut`
+// receiver is exactly what mutating methods require), so no borrow_kind arg.
+fn _bck_emit_mut_method_behind_ref(name: string, origin: string, method: string,
+                                   borrow_line: i64, sp: Span) {
+    let mut di = 0
+    while di < len(_bck_e_lines) {
+        if _bck_e_lines[di] == sp.line && _bck_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_e_lines.push(sp.line)
+    _bck_e_cols.push(sp.col)
+    let mut b = diag_new("HX3032")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "origin", origin)
+    b = diag_arg(b, "method", method)
+    b = diag_arg(b, "borrow_line", to_string(borrow_line))
+    let mut d = diag_emit(b)
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
+}
+
 // HX3031 emit (assign-behind-shared-ref, Rust E0594) — same-site dedup +
 // STRICT escalation, cloned from `_bck_emit_write_through`. `name` is the `&`
 // ref binding written THROUGH, `origin` the value it borrows, `borrow_line`
@@ -1013,8 +1041,6 @@ fn _bck_emit_assign_behind_ref(name: string, origin: string,
     b = diag_arg(b, "origin", origin)
     b = diag_arg(b, "borrow_line", to_string(borrow_line))
     let mut d = diag_emit(b)
-    // STRICT (HEXA_BORROWCK_STRICT) re-bands to build-refusing Error via the
-    // sanctioned caller override; flag-OFF never reaches here (byteeq-neutral).
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
@@ -2773,6 +2799,19 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             if _bck_is_mutating_method(callee_text) {
                 _bck_note_write(_bk_recv_local, _bk_recv_name,
                                 ctx2.cur_block, e.span)
+                // HEXA-OWN L5-E8 — mutating method through a SHARED ref (Rust
+                // E0596): `r.push(x)` where `r` is itself a live `&` borrow. A
+                // `&mut` receiver is exactly what mutating methods require, so
+                // only `&` loans flag; non-mutating selectors never reach here
+                // (filtered by `_bck_is_mutating_method` above). Liveness =
+                // newest row for the name AND origin != "" (the E3 idiom).
+                let _bk_ri8 = _bck_find_ref(_bk_recv_name)
+                if _bk_ri8 >= 0 && len(_bck_ref_origins[_bk_ri8]) > 0
+                    && !_bck_ref_mut[_bk_ri8] {
+                    _bck_emit_mut_method_behind_ref(_bk_recv_name,
+                        _bck_ref_origins[_bk_ri8], callee_text,
+                        _bck_ref_lines[_bk_ri8], e.span)
+                }
             }
         }
         return _value(ctx2, _local_op(dst.id))
