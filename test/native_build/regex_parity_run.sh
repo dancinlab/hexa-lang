@@ -50,16 +50,21 @@ echo "   -> D3 backref acceptance on this host = $BACKREF_OK (1=glibc diverges, 
 "$WORK/oracle" "$WORK/corpus.txt" "$WORK/golden.txt"
 
 build_ledger() {  # $1 = ON|OFF -> echoes ledger path
-  local mode="$1" out="$WORK/ledger_$1.txt" bin="$WORK/driver_$1"
+  local mode="$1" out="$WORK/ledger_$1.txt" bin="$WORK/driver_$1" log="$WORK/build_$1.log"
   rm -rf "$HOME/.hexa-cache" 2>/dev/null || true
+  # CRITICAL: send BOTH build streams to $log — only `echo "$out"` may reach this
+  # function's stdout, else `$(build_ledger …)` captures the whole build transcript into
+  # the ledger-path variable (was: ON build stdout leaked → "File name too long").
   if [ "$mode" = OFF ]; then
-    HEXA_REGEX_NATIVE=0 "$HEXA" build "$HERE/regex_parity_corpus.hexa" -o "$bin" >&2
+    HEXA_REGEX_NATIVE=0 "$HEXA" build "$HERE/regex_parity_corpus.hexa" -o "$bin" > "$log" 2>&1 \
+      || { echo "OFF build failed:" >&2; cat "$log" >&2; exit 1; }
   else
     # native default-ON: the resolver assembles the frozen git-tracked seed itself
     # (stage_resolve_runtime_a: seed map + 6-symbol contract + assemble). Fail loud if
     # the native seed is not present (a stale-seed OFF-fallback would silently pass).
-    "$HEXA" build "$HERE/regex_parity_corpus.hexa" -o "$bin" 2> "$WORK/on_build.log" || { cat "$WORK/on_build.log" >&2; exit 1; }
-    if ! grep -qE 'HEXA_REGEX_NATIVE=1|regex_rt_native\.o' "$WORK/on_build.log"; then
+    "$HEXA" build "$HERE/regex_parity_corpus.hexa" -o "$bin" > "$log" 2>&1 \
+      || { echo "ON build failed:" >&2; cat "$log" >&2; exit 1; }
+    if ! grep -qE 'HEXA_REGEX_NATIVE=1|regex_rt_native\.o' "$log"; then
       echo "WARN: ON build did not report native regex seed assembly — verify HEXA_REGEX_NATIVE seed present" >&2
     fi
   fi
