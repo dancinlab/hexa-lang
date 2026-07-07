@@ -1,0 +1,103 @@
+// test/native_build/regex_parity_corpus.hexa — zero-c #29 regex OFF-vs-ON parity driver.
+// REPLAYS the C-oracle-generated corpus.txt (the LCG lives ONLY in regex_parity_oracle.c)
+// and emits a ledger byte-identical in grammar to golden.txt, so `diff` is line-clean.
+//   corpus line : IDX \t TAG \t OP \t PAT \t INPUT \t REPL   (read from env REGEX_CORPUS)
+//   ledger line : IDX \t TAG \t OP \t RESULT                 (to stdout)
+//   RESULT: match->M:1|M:0  full->F:1|F:0  search->S:so,eo|S:-
+//           findall->A:k:so,eo,...  split->P:k:seg,...  replace->R:<str>
+// SAME source compiled against both runtime.a variants (ON vs OFF regex); only the linked
+// runtime differs. The 6 regex builtins are the ONLY regex surface (no captures — nmatch<=1).
+
+fn read_file(p: string) -> string { return exec("cat '" + p + "' 2>/dev/null") }
+
+fn to_lines(s: string) -> array {
+    let mut lines: array = []
+    let mut cur = ""
+    let mut k = 0
+    while k < len(s) {
+        let c = s.substr(k, 1)
+        if c == "\n" { lines.push(cur); cur = "" }
+        else if c != "\r" { cur = cur + c }
+        k = k + 1
+    }
+    if len(cur) > 0 { lines.push(cur) }
+    return lines
+}
+
+fn split_tab(s: string) -> array {
+    let mut parts: array = []
+    let mut cur = ""
+    let mut k = 0
+    while k < len(s) {
+        let c = s.substr(k, 1)
+        if c == "\t" { parts.push(cur); cur = "" }
+        else { cur = cur + c }
+        k = k + 1
+    }
+    parts.push(cur)
+    return parts
+}
+
+// RESULT formatters — must byte-match the C oracle grammar exactly.
+fn fmt_search(pat: string, s: string) -> string {
+    let sp = regex_search(pat, s)          // [int] = [so, eo]  or  []
+    if sp.len() == 0 { return "S:-" }
+    return "S:" + str(sp[0]) + "," + str(sp[1])
+}
+
+fn fmt_findall(pat: string, s: string) -> string {
+    let all = regex_findall(pat, s)        // [[int]] of [so, eo]  (absolute)
+    let mut out = "A:" + str(all.len()) + ":"
+    let mut i = 0
+    while i < all.len() {
+        let pair = all[i]
+        if i > 0 { out = out + "," }
+        out = out + str(pair[0]) + "," + str(pair[1])
+        i = i + 1
+    }
+    return out
+}
+
+fn fmt_split(pat: string, s: string) -> string {
+    let segs = regex_split(pat, s)         // [string]
+    let mut out = "P:" + str(segs.len()) + ":"
+    let mut i = 0
+    while i < segs.len() {
+        if i > 0 { out = out + "," }
+        out = out + segs[i]
+        i = i + 1
+    }
+    return out
+}
+
+fn eval_row(op: string, pat: string, inp: string, repl: string) -> string {
+    if op == "match"    { if regex_match(pat, inp)      { return "M:1" } return "M:0" }
+    if op == "full"     { if regex_match_full(pat, inp) { return "F:1" } return "F:0" }
+    if op == "search"   { return fmt_search(pat, inp) }
+    if op == "findall"  { return fmt_findall(pat, inp) }
+    if op == "split"    { return fmt_split(pat, inp) }
+    if op == "replace"  { return "R:" + regex_replace(pat, inp, repl) }
+    return "?:bad-op"
+}
+
+fn main() {
+    let path = env("REGEX_CORPUS")
+    let blob = read_file(path)
+    let lines = to_lines(blob)
+    let mut li = 0
+    while li < lines.len() {
+        let line = lines[li]
+        li = li + 1
+        if len(line) == 0 { continue }
+        let f = split_tab(line)
+        if f.len() < 6 { continue }
+        let idx = f[0]
+        let tag = f[1]
+        let op = f[2]
+        let pat = f[3]
+        let inp = f[4]
+        let repl = f[5]
+        let res = eval_row(op, pat, inp, repl)
+        println(idx + "\t" + tag + "\t" + op + "\t" + res)
+    }
+}
