@@ -2389,6 +2389,68 @@ fn _build_case_container_method_unknown() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// ── (bd)–(bh) HX3044 (Rust `overflowing_literals`) int-literal range-fit ──────
+// Static-types let-check lane (always-on flagless). A positive int literal
+// assigned to a narrower signed `iN` annotation whose value exceeds the width's
+// signed MAX → HX3044 (Warning-band MVP, `_types_int_lit_fits` + `_emit_hx3044`).
+// INDEPENDENT of HX3011: `let x: i8 = 300` IS kind-assignable (integer-lit →
+// integer-kind coercion), so only HX3044 fires. hexa's shipping tree is
+// i64-only → corpus-0 by construction; this is a forward guardrail for user iN
+// annotations. Each is a self-contained module (types-test-hexa-1: no union).
+// Overflow cases assert the Warning band explicitly (emit is Warning ALWAYS —
+// never a real-source Error in the MVP), fit cases assert 0.
+
+// (bd) hz_i8_over — `let x: i8 = 300` : 300 > 127 → 1 HX3044 (Warning).
+fn _build_case_i8_over() -> Module {
+    let f = "case_bd.hexa"
+    let body = _block([_let_expr("x|i8", _int_expr("300", f, 2, 18), f, 2, 5)], f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (be) fp_i8_max — `let x: i8 = 127` : 127 == i8::MAX → 0 HX3044 (boundary fit).
+fn _build_case_i8_max() -> Module {
+    let f = "case_be.hexa"
+    let body = _block([_let_expr("x|i8", _int_expr("127", f, 2, 18), f, 2, 5)], f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (bf) fp_i64_max — `let x: i64 = 9223372036854775807` : == i64::MAX → 0 HX3044
+// (overflow-guarded accumulation reaches MAX exactly without wrapping).
+fn _build_case_i64_max() -> Module {
+    let f = "case_bf.hexa"
+    let body = _block([_let_expr("x|i64", _int_expr("9223372036854775807", f, 2, 20), f, 2, 5)], f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (bg) hz_i32_over — `let x: i32 = 2147483648` : one past i32::MAX → 1 HX3044.
+fn _build_case_i32_over() -> Module {
+    let f = "case_bg.hexa"
+    let body = _block([_let_expr("x|i32", _int_expr("2147483648", f, 2, 18), f, 2, 5)], f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (bh) fp_i32_max — `let x: i32 = 2147483647` : == i32::MAX → 0 HX3044 (boundary fit).
+fn _build_case_i32_max() -> Module {
+    let f = "case_bh.hexa"
+    let body = _block([_let_expr("x|i32", _int_expr("2147483647", f, 2, 18), f, 2, 5)], f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
 fn _run_case(label: string, m: Module) -> array {
     println("")
     println("── " + label + " ──")
@@ -3364,6 +3426,62 @@ fn main() {
         ok = false
     } else {
         println("  ok: 0 HX3011 (polymorphic map stays unknown — no false diagnostics)")
+    }
+
+    // (bd) ★ HX3044 int-literal range-fit — hz_i8_over: `let x: i8 = 300`
+    // (300 > 127) → 1 HX3044 in the Warning band (MVP never escalates to Error).
+    let diags_bd = _run_case("(bd) static-types — int-lit range-fit: let x:i8 = 300 → 300 > 127 → 1 HX3044 (Warning)", _build_case_i8_over())
+    let cbd = _count_code_sev(diags_bd, "HX3044", "warning")
+    let cbd_e = _count_code_sev(diags_bd, "HX3044", "error")
+    if cbd != 1 || cbd_e != 0 {
+        println("  FAIL: case (bd) expected 1 HX3044 warning / 0 error, got warn=" + to_string(cbd) + " err=" + to_string(cbd_e) + " (total=" + to_string(len(diags_bd)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3044 emitted as Warning (i8 = 300 overflows [-128,127])")
+    }
+
+    // (be) ★ HX3044 boundary fit — fp_i8_max: `let x: i8 = 127` → 0 HX3044.
+    let diags_be = _run_case("(be) static-types — int-lit range-fit: let x:i8 = 127 → == i8::MAX → 0 HX3044 (no false fire)", _build_case_i8_max())
+    let cbe = _count_code(diags_be, "HX3044")
+    if cbe != 0 {
+        println("  FAIL: case (be) expected 0 HX3044 (127 fits i8), got " + to_string(cbe) + " (total=" + to_string(len(diags_be)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3044 (127 == i8::MAX fits — boundary, no over-reject)")
+    }
+
+    // (bf) ★ HX3044 i64 boundary fit — fp_i64_max: `let x: i64 = 9223372036854775807`
+    // → 0 HX3044 (overflow-guarded accumulation reaches i64::MAX exactly).
+    let diags_bf = _run_case("(bf) static-types — int-lit range-fit: let x:i64 = 9223372036854775807 → == i64::MAX → 0 HX3044", _build_case_i64_max())
+    let cbf = _count_code(diags_bf, "HX3044")
+    if cbf != 0 {
+        println("  FAIL: case (bf) expected 0 HX3044 (i64::MAX fits i64), got " + to_string(cbf) + " (total=" + to_string(len(diags_bf)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3044 (i64::MAX fits — no accumulator wrap on the boundary)")
+    }
+
+    // (bg) ★ HX3044 int-literal range-fit — hz_i32_over: `let x: i32 = 2147483648`
+    // (one past i32::MAX) → 1 HX3044 in the Warning band.
+    let diags_bg = _run_case("(bg) static-types — int-lit range-fit: let x:i32 = 2147483648 → i32::MAX+1 → 1 HX3044 (Warning)", _build_case_i32_over())
+    let cbg = _count_code_sev(diags_bg, "HX3044", "warning")
+    let cbg_e = _count_code_sev(diags_bg, "HX3044", "error")
+    if cbg != 1 || cbg_e != 0 {
+        println("  FAIL: case (bg) expected 1 HX3044 warning / 0 error, got warn=" + to_string(cbg) + " err=" + to_string(cbg_e) + " (total=" + to_string(len(diags_bg)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3044 emitted as Warning (i32 = 2147483648 overflows i32::MAX)")
+    }
+
+    // (bh) ★ HX3044 i32 boundary fit — fp_i32_max: `let x: i32 = 2147483647`
+    // → 0 HX3044.
+    let diags_bh = _run_case("(bh) static-types — int-lit range-fit: let x:i32 = 2147483647 → == i32::MAX → 0 HX3044 (no false fire)", _build_case_i32_max())
+    let cbh = _count_code(diags_bh, "HX3044")
+    if cbh != 0 {
+        println("  FAIL: case (bh) expected 0 HX3044 (2147483647 fits i32), got " + to_string(cbh) + " (total=" + to_string(len(diags_bh)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3044 (2147483647 == i32::MAX fits — boundary, no over-reject)")
     }
 
     println("")
