@@ -14,3 +14,11 @@
 - C-class parity-clean(non-D FAIL 없음).
 - 그러나 `WARN: ON build did not report native regex seed assembly` + gate 3c FAIL(D1/D2/D3 never diverged) — 설치 hexa v0.577.0의 ON 빌드가 native regex seed 미조립 → ON==OFF → D-divergence 없음. **parity 결함 아님·native regex 미engage(stale-hexa)**.
 - 재측정 필요: native regex seed를 조립하는 current-main hexa(또는 seed .o present + 올바른 resolver).
+
+## UPDATE 2026-07-07 — nm-probe fix (#4674) CONFIRMED ACTIVE
+- Re-measured on fixed main (49ba06b35): inner leg-B ld now emits `crt1.o` = **CRT-KEEP** → `nm-probe fix ACTIVE` (was crt-drop). #4674 works: it correctly detected the stale runtime.a lacks own _start and kept crt1.o.
+- BUT the crt-keep leg-B ld STILL fell back to clang. Deeper root = the aiden prebuilt runtime.a (`~/.hx/bin/build/runtime.a`, installed release) LACKS `rt_*_native` symbols the current aprime `--emit=obj` object references — SAME undefined-ref class as the build_selfhost failure (`rt_array_set_native`/`rt_map_get_native`/… undefined → FATAL: linker hexa_ld-clang). This is a **stale/mismatched runtime.a** (verdict-integrity): the leg-B needs a runtime.a built from the SAME source as aprime_cc. A matched fresh runtime.a is blocked because build_selfhost fails with the same symbol mismatch → aiden environment repair is a separate infra task.
+- VERDICT: axis-① round-1 arm is WIRED + the nm-probe fix (#4674) is CORRECT (crt-keep confirmed). The clean end-to-end 0-execve measurement is QUARANTINED (infra-wall-noneval): blocked by an aiden stale runtime.a symbol mismatch, NOT an axis-① target defect. On a consumer with a matched (freshly installed) runtime.a, the leg-B would link. Re-measure needs: fresh matched runtime.a on aiden (repair build_selfhost or reinstall) → then HEXA_BUILD_NATIVE=1 strace 0 hexat/clang.
+
+## Fable axis-③ own-emit round-1 design DELIVERED
+- state/hexa-own/axis3_own_emit_round1_design_fable.md — the next major track (own x86_64/ELF object-writer + linker to drop clang/as/ld ③).
