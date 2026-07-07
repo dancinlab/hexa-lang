@@ -594,6 +594,55 @@ pub let mut _bcki_in_place_base = false
 pub let mut _bcki_e_lines: [i64] = []
 pub let mut _bcki_e_cols: [i64] = []
 
+// ── HEXA-OWN round8-2 — HX3036 borrowed-value-does-not-live-long-enough ──
+// (Rust E0597). Reference-matched to rustc's NLL borrow checker (RFC 2094): a
+// loan may not be used past the point its referent's storage dies. The ONLY
+// firing form on the current surface is the assign-arm re-borrow
+// `let mut r = &y; { let x = 5; r = &x; } use r` — a let-arm loan `let r = &x`
+// is structurally nested inside `x`'s scope (r's scope ⊆ x's scope) so it can
+// NEVER dangle, and the let-lane `_bck_ref_*` registry is left untouched. This
+// is a SEPARATE asn-lane (all arrays `_bck_asn_*`/`_bck_sc_*`/`_bck_dg_*`/
+// `_bck_au_*`), OBSERVE-ONLY (no MIR mutation), gated on `_bck_active` (default
+// false, HEXA_BORROWCK) at every hook so the flag-OFF diag stream + emitted
+// bytes stay byte-identical. Reset per-fn in `_bck_reset_fn`.
+//   * lexical scope log — append-only names + a dead bit (index永久-unique so a
+//     later same-name `let` in a sibling scope never aliases a dead origin).
+//     Pushed at EVERY `let` (any local can be a borrow origin); the tail slice
+//     is marked dead on scope exit.
+//   * asn-lane loan registry — assign-arm `r = &x` re-borrows only (push-only,
+//     newest-per-name wins). `odecl` = the scope-log index of the origin at
+//     track time (-1 = param/global/unlogged), which pins EXACTLY which `x` the
+//     loan points at (origin-shadow disambiguation). `done` terminates a row
+//     once its origin's scope has been swept (index-reuse re-match block).
+//   * dangle events — produced by the scope-exit sweep when a live asn loan's
+//     origin dies in the exiting scope while the loan binding was declared
+//     outside it. Keyed by asn row + block + end-line + a monotonic seq.
+//   * asn-lane use events — a snapshot of the newest-live asn row at USE time
+//     (the reassign-then-use FP killer: `r = &live` before the use repoints the
+//     snapshot to a non-dangling row). Same `_bck_evseq` counter as dangles for
+//     same-block program-order comparison.
+//   * `_bck_ref_outlives_check` (end of `_lower_fn`) reuses the `_bck_nll_check`
+//     reach-matrix pattern: a use fires ⇔ a dangle of the SAME asn row reaches
+//     the use's block (≥1 CFG edge) OR precedes it in the same block by seq.
+pub let mut _bck_sc_names: [string] = []
+pub let mut _bck_sc_dead: [bool] = []
+pub let mut _bck_asn_names: [string] = []
+pub let mut _bck_asn_origins: [string] = []
+pub let mut _bck_asn_lines: [i64] = []
+pub let mut _bck_asn_odecl: [i64] = []
+pub let mut _bck_asn_done: [bool] = []
+pub let mut _bck_dg_rows: [i64] = []
+pub let mut _bck_dg_blocks: [i64] = []
+pub let mut _bck_dg_lines: [i64] = []
+pub let mut _bck_dg_seqs: [i64] = []
+pub let mut _bck_au_rows: [i64] = []
+pub let mut _bck_au_blocks: [i64] = []
+pub let mut _bck_au_seqs: [i64] = []
+pub let mut _bck_au_spans: [Span] = []
+pub let mut _bck_evseq: i64 = 0
+pub let mut _bck_ro_e_lines: [i64] = []
+pub let mut _bck_ro_e_cols: [i64] = []
+
 fn _bck_reset_fn() {
     _bck_grp_ctr = 0
     _bck_local_ids = []
@@ -631,6 +680,26 @@ fn _bck_reset_fn() {
     _bcki_in_place_base = false
     _bcki_e_lines = []
     _bcki_e_cols = []
+    // round8-2 — HX3036 asn-lane registries (byteeq-neutral: flag-OFF leaves
+    // every array empty and `_bck_ref_outlives_check` returns on nd==0).
+    _bck_sc_names = []
+    _bck_sc_dead = []
+    _bck_asn_names = []
+    _bck_asn_origins = []
+    _bck_asn_lines = []
+    _bck_asn_odecl = []
+    _bck_asn_done = []
+    _bck_dg_rows = []
+    _bck_dg_blocks = []
+    _bck_dg_lines = []
+    _bck_dg_seqs = []
+    _bck_au_rows = []
+    _bck_au_blocks = []
+    _bck_au_seqs = []
+    _bck_au_spans = []
+    _bck_evseq = 0
+    _bck_ro_e_lines = []
+    _bck_ro_e_cols = []
 }
 
 fn _bck_new_group() -> i64 {
@@ -778,6 +847,121 @@ fn _bck_ref_kill(name: string) {
     _bck_ref_origins.push("")
     _bck_ref_lines.push(0)
     _bck_ref_mut.push(false)
+}
+
+// ── HEXA-OWN round8-2 — HX3036 asn-lane loan / scope-log ops (E0597) ──
+// Newest-per-name END-scan (the `_bck_find_ref` idiom): the current asn-lane
+// loan row for `name`, or -1. A KILL row (origin "") shadows an earlier loan.
+fn _bck_asn_find(name: string) -> i64 {
+    let mut i = len(_bck_asn_names) - 1
+    while i >= 0 {
+        if _bck_asn_names[i] == name { return i }
+        i = i - 1
+    }
+    return 0 - 1
+}
+
+// Record an assign-arm re-borrow `name = &origin`. `odecl` = the scope-log
+// index of `origin` at track time (-1 = param/global/unlogged), pinning the
+// exact declaration the loan points at (origin-shadow disambiguation).
+fn _bck_asn_track(name: string, origin: string, line: i64, odecl: i64) {
+    _bck_asn_names.push(name)
+    _bck_asn_origins.push(origin)
+    _bck_asn_lines.push(line)
+    _bck_asn_odecl.push(odecl)
+    _bck_asn_done.push(false)
+}
+
+// Record a KILL for `name` — a re-let / non-borrow reassign detached the loan.
+// The empty origin makes the sweep + use-snapshot treat the name as non-loan.
+fn _bck_asn_kill(name: string) {
+    _bck_asn_names.push(name)
+    _bck_asn_origins.push("")
+    _bck_asn_lines.push(0)
+    _bck_asn_odecl.push(0 - 1)
+    _bck_asn_done.push(false)
+}
+
+// Newest NON-dead scope-log index for `name`, or -1. Used to (a) find an
+// origin's current declaration at loan time and (b) test whether a loan's
+// binding was declared OUTSIDE a dying scope.
+fn _bck_sc_find_live(name: string) -> i64 {
+    let mut i = len(_bck_sc_names) - 1
+    while i >= 0 {
+        if _bck_sc_names[i] == name && !_bck_sc_dead[i] { return i }
+        i = i - 1
+    }
+    return 0 - 1
+}
+
+// Scope-exit sweep — called ONCE per lexical `block` on exit (gated by the
+// caller on `_bck_active`). `w` = scope-log length at block ENTRY, so
+// [w..len) are the lets born in this scope. For each LIVE asn loan (newest-
+// per-name, origin != "", not done) whose origin was declared in this dying
+// scope (`odecl >= w`), push a DANGLE event IFF the loan binding was declared
+// OUTSIDE it (its live scope index < w) — otherwise both die together and it
+// is silent. Then terminate every `odecl >= w` row (index-reuse re-match
+// block) and mark [w..len) scope entries dead.
+fn _bck_scope_exit(w: i64, end_line: i64, blk: i64) {
+    let mut i = 0
+    while i < len(_bck_asn_names) {
+        if !_bck_asn_done[i] && len(_bck_asn_origins[i]) > 0
+            && _bck_asn_find(_bck_asn_names[i]) == i {
+            if _bck_asn_odecl[i] >= w {
+                let ri = _bck_sc_find_live(_bck_asn_names[i])
+                if ri >= 0 && ri < w {
+                    _bck_dg_rows.push(i)
+                    _bck_dg_blocks.push(blk)
+                    _bck_dg_lines.push(end_line)
+                    _bck_dg_seqs.push(_bck_evseq)
+                    _bck_evseq = _bck_evseq + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    i = 0
+    while i < len(_bck_asn_names) {
+        if !_bck_asn_done[i] && _bck_asn_odecl[i] >= w {
+            _bck_asn_done[i] = true
+        }
+        i = i + 1
+    }
+    let mut j = w
+    while j < len(_bck_sc_names) {
+        _bck_sc_dead[j] = true
+        j = j + 1
+    }
+}
+
+// HX3036 emit (borrowed-value-does-not-live-long-enough, Rust E0597) — HX3036-
+// only same-site dedup + STRICT escalation, cloned from `_bcki_emit_uninit_use`.
+// `name` is the borrowing binding, `origin` the value it borrows, `borrow_line`
+// where the re-borrow was created, `scope_end_line` where the origin's scope ends.
+fn _bck_emit_ref_outlives(name: string, origin: string, borrow_line: i64,
+                          scope_end_line: i64, sp: Span) {
+    let mut di = 0
+    while di < len(_bck_ro_e_lines) {
+        if _bck_ro_e_lines[di] == sp.line && _bck_ro_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_ro_e_lines.push(sp.line)
+    _bck_ro_e_cols.push(sp.col)
+    let mut b = diag_new("HX3036")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "origin", origin)
+    b = diag_arg(b, "borrow_line", to_string(borrow_line))
+    b = diag_arg(b, "scope_end_line", to_string(scope_end_line))
+    let mut d = diag_emit(b)
+    // STRICT (HEXA_BORROWCK_STRICT) re-bands the SAME diagnostic instance to a
+    // build-refusing Error via the sanctioned caller override — identical to the
+    // HX3014/…/HX3035 escalation. OFF-strict keeps the catalog Warning band, and
+    // the flag-OFF path never reaches here (byteeq-neutral).
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
 }
 
 // ── HEXA-OWN E3 — first borrow-conflict rule (Rust E0502) ────────────
@@ -1185,6 +1369,22 @@ fn _bck_check_use(name: string, local_id: i64, blk: i64, sp: Span) {
                 _bck_ref_mut[_bk_mli], _bck_ref_lines[_bk_mli], sp)
         }
     }
+    // HEXA-OWN round8-2 — HX3036 asn-lane USE event (Rust E0597). Snapshot the
+    // NEWEST-LIVE asn-lane loan row for this name at USE time — the reassign-
+    // then-use FP killer: a later `r = &live` before the use repoints the
+    // snapshot to a non-dangling row (a killed loan has origin "" → skipped).
+    // Suppressed inside a borrow RHS (taking r's address is not a value-use of
+    // r). `return r` funnels through the ident arm too, so it is auto-covered.
+    if !_bck_in_borrow_rhs {
+        let _bk_ar = _bck_asn_find(name)
+        if _bk_ar >= 0 && len(_bck_asn_origins[_bk_ar]) > 0 {
+            _bck_au_rows.push(_bk_ar)
+            _bck_au_blocks.push(blk)
+            _bck_au_seqs.push(_bck_evseq)
+            _bck_evseq = _bck_evseq + 1
+            _bck_au_spans.push(sp)
+        }
+    }
     let ti = _bck_find_local(local_id)
     if ti < 0 { return }
     let grp = _bck_groups[ti]
@@ -1356,6 +1556,131 @@ fn _bck_nll_check() {
                                          _bck_m_lines[e - nw],
                                          _bck_u_spans[u])
                         }
+                    }
+                }
+                e = e + 1
+            }
+        }
+        u = u + 1
+    }
+}
+
+// ── HEXA-OWN round8-2 — HX3036 ref-outlives forward-reachability ─────
+// Runs ONCE at the end of _lower_fn (guarded by `_bck_active`), beside
+// `_bck_nll_check`, when the fn's full CFG is materialized in `_lr_blocks`.
+// Reuses the M4 event-reachability pattern (RFC 2094 NLL, reference-matched):
+// the EVENTS are the scope-exit DANGLE records. Compute the set of blocks each
+// dangle's source block reaches through ≥1 CFG edge —
+//     reach[b][d] = 1  ⇔  ∃ pred p of b with (p == block(d) ∨ reach[p][d])
+// iterated to a fixed point over Block.preds (loop back-edges converge). A use
+// u fires ⇔ ∃ dangle d with d.row == u.row AND either (a) same-block program
+// order: d.block == u.block ∧ d.seq < u.seq, OR (b) cross-block: reach[u.block]
+// [d] == 1. Same convergence guard as _bck_nll_check: hard sweep cap
+// blocks*4+8, loud bail drops THIS fn's ref-outlives results only. Same-site
+// dedup in the emitter collapses any same-span double-hit. Flag OFF ⇒ never
+// called and every registry empty ⇒ zero work (byteeq-neutral).
+fn _bck_ref_outlives_check() {
+    let nd = len(_bck_dg_rows)
+    if nd == 0 { return }
+    let nu = len(_bck_au_rows)
+    if nu == 0 { return }
+    let nb = len(_lr_blocks)
+    if nb == 0 { return }
+    // block id → _lr_blocks index map (defensive; ids are per-fn monotonic).
+    let mut max_id = 0
+    let mut bi = 0
+    while bi < nb {
+        if _lr_blocks[bi].id > max_id { max_id = _lr_blocks[bi].id }
+        bi = bi + 1
+    }
+    let mut id2ix: [i64] = []
+    let mut k = 0
+    while k <= max_id {
+        id2ix.push(0 - 1)
+        k = k + 1
+    }
+    bi = 0
+    while bi < nb {
+        let bid = _lr_blocks[bi].id
+        if bid >= 0 { id2ix[bid] = bi }
+        bi = bi + 1
+    }
+    // per-dangle source block INDEX.
+    let mut ev_bix: [i64] = []
+    let mut e = 0
+    while e < nd {
+        let mut dix = 0 - 1
+        if _bck_dg_blocks[e] >= 0 && _bck_dg_blocks[e] <= max_id {
+            dix = id2ix[_bck_dg_blocks[e]]
+        }
+        ev_bix.push(dix)
+        e = e + 1
+    }
+    // reach bitmatrix, flat [block-index × dangle-index], all zero.
+    let mut reach: [i64] = []
+    let mut z = 0
+    while z < nb * nd {
+        reach.push(0)
+        z = z + 1
+    }
+    let cap = nb * 4 + 8
+    let mut iter = 0
+    let mut changed = true
+    while changed {
+        if iter >= cap {
+            println("borrowck HX3036 BAIL: reach fixed-point exceeded "
+                    + to_string(cap) + " sweeps (blocks=" + to_string(nb)
+                    + ", dangles=" + to_string(nd)
+                    + ") — ref-outlives results dropped for this fn")
+            return
+        }
+        changed = false
+        bi = 0
+        while bi < nb {
+            let preds = _lr_blocks[bi].preds
+            let mut pi = 0
+            while pi < len(preds) {
+                let pid = preds[pi]
+                let mut pix = 0 - 1
+                if pid >= 0 && pid <= max_id { pix = id2ix[pid] }
+                if pix >= 0 {
+                    e = 0
+                    while e < nd {
+                        if reach[bi * nd + e] == 0 {
+                            if ev_bix[e] == pix || reach[pix * nd + e] == 1 {
+                                reach[bi * nd + e] = 1
+                                changed = true
+                            }
+                        }
+                        e = e + 1
+                    }
+                }
+                pi = pi + 1
+            }
+            bi = bi + 1
+        }
+        iter = iter + 1
+    }
+    // emit at every recorded asn-lane use.
+    let mut u = 0
+    while u < nu {
+        let ub = _bck_au_blocks[u]
+        let mut uix = 0 - 1
+        if ub >= 0 && ub <= max_id { uix = id2ix[ub] }
+        if uix >= 0 {
+            let urow = _bck_au_rows[u]
+            e = 0
+            while e < nd {
+                if _bck_dg_rows[e] == urow {
+                    let mut hit = false
+                    if _bck_dg_blocks[e] == ub && _bck_dg_seqs[e] < _bck_au_seqs[u] {
+                        hit = true
+                    }
+                    if reach[uix * nd + e] == 1 { hit = true }
+                    if hit {
+                        _bck_emit_ref_outlives(_bck_asn_names[urow],
+                            _bck_asn_origins[urow], _bck_asn_lines[urow],
+                            _bck_dg_lines[e], _bck_au_spans[u])
                     }
                 }
                 e = e + 1
@@ -3619,6 +3944,16 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         }
         ctx2 = _push_stmt(ctx2, s)
         if len(nm) > 0 { ctx2 = _bind(ctx2, nm, dst.id) }
+        // HEXA-OWN round8-2 — HX3036 lexical scope log. EVERY `let` (borrow or
+        // not — any local can be an asn-lane loan origin) appends a scope entry;
+        // the scope-exit sweep marks the tail slice dead. Append-only + a dead
+        // bit keeps indices永久-unique so an origin's exact declaration is
+        // pinned at loan time (origin-shadow disambiguation). Flag-OFF never
+        // pushes (byteeq-neutral).
+        if _bck_active && len(nm) > 0 {
+            _bck_sc_names.push(nm)
+            _bck_sc_dead.push(false)
+        }
         // HEXA-OWN round8-1 — W1, HX3035 uninit registration. A `let x` with
         // NO initializer (`len(e.children) == 0`) is the ONLY site an uninit
         // binding is distinguishable from `= 0` at MIR level (the let arm still
@@ -3720,6 +4055,14 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             }
             if !_bk_is_ref && _bck_find_ref(nm) >= 0 {
                 _bck_ref_kill(nm)
+            }
+            // HEXA-OWN round8-2 — cross-lane kill: a re-`let` of a name that
+            // held an asn-lane loan detaches it (a `let r = &y` re-declaration
+            // masking an earlier dangling `r = &x` → stale-FP block). The fresh
+            // scope entry pushed above shadows the old one; killing the asn row
+            // makes a later `use r` snapshot the (empty-origin) kill → silent.
+            if _bck_asn_find(nm) >= 0 {
+                _bck_asn_kill(nm)
             }
         }
         return _no_value(ctx2)
@@ -4002,6 +4345,33 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             }
             if !_bk_still_ref { _bck_ref_kill(lhs.text) }
         }
+        // HEXA-OWN round8-2 — HX3036 asn-lane loan registry (Rust E0597). An
+        // assign-arm re-borrow `r = &x` / `r = &mut x` over a NON-global ident
+        // is the ONLY shape that can outlive the borrowed value's scope (a
+        // let-arm loan's binding is structurally nested inside the origin's
+        // scope), so it lives in a SEPARATE lane from the let-lane `_bck_ref_*`.
+        // `odecl` pins the exact origin declaration (the newest-live scope-log
+        // index) so an origin-shadow can never mis-match. A non-borrow reassign
+        // pushes an asn KILL (detaches the loan). Gated on `_bck_active`; the
+        // flag-OFF path never touches the registry (byteeq-neutral).
+        if _bck_active && !is_global && len(lhs.text) > 0 && lhs.kind == "ident" {
+            let _bk_arhs = e.children[1]
+            let mut _bk_asn_ref = false
+            if _bk_arhs.kind == "unop"
+                && (_bk_arhs.text == "&" || _bk_arhs.text == "&mut")
+                && len(_bk_arhs.children) > 0 {
+                let _bk_ainner = _bk_arhs.children[0]
+                if _bk_ainner.kind == "ident"
+                    && _mir_lookup_global(ctx2, _bk_ainner.text) < 0 {
+                    let _bk_od = _bck_sc_find_live(_bk_ainner.text)
+                    _bck_asn_track(lhs.text, _bk_ainner.text, e.span.line, _bk_od)
+                    _bk_asn_ref = true
+                }
+            }
+            if !_bk_asn_ref && _bck_asn_find(lhs.text) >= 0 {
+                _bck_asn_kill(lhs.text)
+            }
+        }
         return _no_value(ctx2)
     }
 
@@ -4010,15 +4380,26 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let mut ctx2 = ctx
         let mut last_op = _const_int_op(0)
         let mut last_has = false
+        // round8-2 — HX3036 scope window at block ENTRY (lets born in [w..len)
+        // die when this lexical block exits). `len()` of an empty array is 0
+        // when the flag is OFF (nothing ever pushed), so this is harmless work.
+        let _bk_sc_w = len(_bck_sc_names)
+        let mut _bk_end_line = e.span.line
         let mut i = 0
         while i < len(e.children) {
             if ctx2.has_returned { break }
+            _bk_end_line = e.children[i].span.line
             let r = _lower_hexpr(ctx2, e.children[i])
             ctx2 = r.ctx
             last_op = r.operand
             last_has = r.has_value
             i = i + 1
         }
+        // round8-2 — HX3036 scope-exit sweep (Rust E0597): mark this block's
+        // lets dead and record a dangle for any asn loan whose origin died here
+        // while its binding was declared outside. Gated on `_bck_active`;
+        // flag-OFF returns immediately inside (no dangle, byteeq-neutral).
+        if _bck_active { _bck_scope_exit(_bk_sc_w, _bk_end_line, ctx2.cur_block) }
         if last_has { return _value(ctx2, last_op) }
         return _no_value(ctx2)
     }
@@ -6253,6 +6634,10 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
         // beside the NLL pass (same _bck_active gate, same CFG). No-op when no
         // uninit `let` was registered (T==0 → immediate return).
         _bcki_check(entry_id)
+        // round8-2 — HX3036 borrowed-value-does-not-live-long-enough forward
+        // reachability, beside the two passes above (same _bck_active gate, same
+        // CFG). No-op when no dangle event was recorded (nd==0 → immediate return).
+        _bck_ref_outlives_check()
     }
     return MFunc {
         name: __fn_name,

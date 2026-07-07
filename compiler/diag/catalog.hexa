@@ -667,6 +667,25 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3036",
+        title: "borrowed value does not live long enough",
+        // Warning band (SSOT F4 warn-first), the lifetime rung of the opt-in
+        // borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN round8-2): an assign-arm
+        // re-borrow `r = &x` where the borrowed value `x`'s lexical scope ends
+        // while the borrowing binding `r` is still live and later USED. Under
+        // `HEXA_BORROWCK_STRICT=1` the SAME diagnostic instance is re-banded to
+        // a build-refusing Error via the sanctioned caller override in
+        // `_bck_emit_ref_outlives` (identical mechanism to HX3035/…/HX3014).
+        // With the flag unset the pass is inert (`_bck_active` false), so
+        // nothing is emitted and the diagnostic stream + emitted bytes are
+        // byte-identical — release integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "`{name}` borrows `{origin}` (line {borrow_line}) but `{origin}`'s scope ends at line {scope_end_line} — the borrow is used here after the borrowed value is dead",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN round8-2) found a borrow that outlives the value it points at: a binding `r` holds a re-borrow `r = &x` (the assign-arm re-borrow form) of a local `x` whose lexical scope ENDS while `r` is still live, and `r` is then read on a path reachable from that scope's death. This is Rust's E0597 ('borrowed value does not live long enough'), reference-matched to rustc's NLL borrow checker (RFC 2094): a loan may not be used past the point where its referent's storage is deallocated. The mechanism is the third instance of the round8 forward-reachability dataflow (after HX3035's `MaybeUninitializedPlaces`): a SEPARATE asn-lane loan registry records assign-arm `r = &x` re-borrows (the ONLY shape that can dangle — a let-arm loan `let r = &x` is structurally nested inside `x`'s scope, so `r`'s scope is a subset of `x`'s and can never outlive it, and is untouched here); a lexical scope log (push at every `let`, mark-dead on scope exit through the pure-lexical `block` arm) drives a scope-exit sweep that emits a DANGLE event when a live asn-lane loan's borrowed origin dies inside the exiting scope while the loan binding was declared OUTSIDE it; and at end of `_lower_fn` — when the full CFG is materialized in `Block.preds`/`succs` — `_bck_ref_outlives_check` runs an event-reachability fixed-point (the `_bck_nll_check` reach-matrix pattern, hard sweep cap blocks*4+8, loud bail dropping only this fn's result) that fires a use ⇔ a dangle of the SAME asn row reaches the use's block (≥1 CFG edge — loop back-edges included) OR precedes it in the same block by program order (`_bck_evseq` monotonic counter). Conservative by construction — the FP=0 mandate takes precedence over completeness: the asn-lane USE event snapshots the NEWEST LIVE asn row at use time, so a `r = &live` reassignment before the use repoints the snapshot to a non-dangling row and stays SILENT (the reassign-then-use FP killer); a use INSIDE the borrowed value's scope stays silent (use precedes the scope-exit dangle in program order with no reaching edge); a sibling-branch use stays silent (no CFG edge from the borrowing branch to the sibling); a return-terminated branch contributes no join-edge dangle; and an origin that is a parameter or module-level global is never an asn-lane origin (a shadowed inner origin is disambiguated by the exact scope-log index recorded at loan time). The whole-local granularity ceiling (no place projections), 1-hop propagation (`let r2 = r`), and block-tail value escape are documented false-negatives deferred to a later round. Only same-function flow is analyzed. Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical, and the corpus contains ZERO assign-arm re-borrows across a scope, so even with the flag ON this rule fires on zero real source (corpus-clean, gen3≡gen4 preserved). Fix: extend the borrowed value's scope to outlive the borrow, borrow a value that lives at least as long as the binding, or store an owned copy instead of a reference.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
