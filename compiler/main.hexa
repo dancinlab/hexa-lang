@@ -507,7 +507,7 @@ if want_version { print_version(); exit(0) }
 // (post-P0-closure 2026-05-20). Opt-out via `--backend=system`.
 if !backend_kind_user_set
     && target == "arm64-apple-darwin"
-    && emit_kind == "obj" {
+    && (emit_kind == "obj" || emit_kind == "exec") {
     backend_kind = "native"
 }
 // SELFHOST-NEXT — same native-default for the ELF AArch64 obj path so
@@ -801,6 +801,15 @@ fn _mmod_stmt_count(m: MModule) -> i64 {
 // non-stream path keep the legacy whole-module pipeline, including the
 // MIR optimizer (which the streaming path does not yet run).
 let mut asm_text = ""
+// axis-③ round-3 track A — native-object carrier for the --emit=exec path.
+// When the native backend serializes the object for an exec build (in the
+// obj-emit branches below), the bytes land here + native_obj_ready is set, so
+// the link section writes them straight to obj_path and skips emit_asm + the
+// system `as` fork — the exec-path sibling of the --emit=obj native branches
+// (which write out_path + exit). Dormant unless backend_kind=="native" on an
+// exec build, so byte-neutral for every default invocation.
+let mut native_obj_bytes: [Int] = []
+let mut native_obj_ready = false
 if stream_mode && target == "arm64-apple-darwin" {
     if opt_level > 0 {
         eprintln("hexa-compiler: --stream uses the fused per-function path; "
@@ -974,15 +983,24 @@ if stream_mode && target == "arm64-apple-darwin" {
     // the Mach-O `.o` directly via `pack_lir` + `serialize`. Skips
     // `.s` text + `as`/clang fork entirely. Branches early — out_path
     // is final and we exit here.
-    if emit_kind == "obj" && backend_kind == "native" && target == "arm64-apple-darwin" {
+    if (emit_kind == "obj" || emit_kind == "exec") && backend_kind == "native" && target == "arm64-apple-darwin" {
         let obj_data = pack_lir(lmodule)
         let obj_bytes = serialize(obj_data)
-        write_bytes(out_path, obj_bytes)
-        if verbose {
-            eprintln("hexa-compiler: emitted Mach-O .o via native backend ("
-                     + to_string(len(obj_bytes)) + " bytes) to " + out_path)
+        if emit_kind == "obj" {
+            write_bytes(out_path, obj_bytes)
+            if verbose {
+                eprintln("hexa-compiler: emitted Mach-O .o via native backend ("
+                         + to_string(len(obj_bytes)) + " bytes) to " + out_path)
+            }
+            exit(0)
+        } else {
+            native_obj_bytes = obj_bytes
+            native_obj_ready = true
+            if verbose {
+                eprintln("hexa-compiler: serialized Mach-O .o via native backend for exec link ("
+                         + to_string(len(obj_bytes)) + " bytes)")
+            }
         }
-        exit(0)
     }
 
     // ── Emit OBJ (native ELF AArch64, SELFHOST-NEXT) ─────────────
@@ -994,15 +1012,24 @@ if stream_mode && target == "arm64-apple-darwin" {
     // wire delta from the Mach-O path is the ELF container + AArch64
     // relocs. Default arm64-apple-darwin stays Mach-O (guarded above),
     // byte-identical.
-    if emit_kind == "obj" && backend_kind == "native" && target == "arm64-linux-gnu" {
+    if (emit_kind == "obj" || emit_kind == "exec") && backend_kind == "native" && target == "arm64-linux-gnu" {
         let elf_obj = pack_lir_arm64_elf(lmodule)
         let elf_bytes = serialize_elf_arm64(elf_obj)
-        write_bytes(out_path, elf_bytes)
-        if verbose {
-            eprintln("hexa-compiler: emitted ELF AArch64 .o via native backend ("
-                     + to_string(len(elf_bytes)) + " bytes) to " + out_path)
+        if emit_kind == "obj" {
+            write_bytes(out_path, elf_bytes)
+            if verbose {
+                eprintln("hexa-compiler: emitted ELF AArch64 .o via native backend ("
+                         + to_string(len(elf_bytes)) + " bytes) to " + out_path)
+            }
+            exit(0)
+        } else {
+            native_obj_bytes = elf_bytes
+            native_obj_ready = true
+            if verbose {
+                eprintln("hexa-compiler: serialized ELF AArch64 .o via native backend for exec link ("
+                         + to_string(len(elf_bytes)) + " bytes)")
+            }
         }
-        exit(0)
     }
 
     // ── Emit OBJ (native ELF x86-64, SELFHOST-NEXT) ──────────────
@@ -1016,15 +1043,24 @@ if stream_mode && target == "arm64-apple-darwin" {
     // This is the x86-64 sibling of the arm64-linux branch above and
     // mirrors it byte-for-byte in structure. Closes SELFHOST-NEXT
     // "multi-target bootstrap: x86_64 codegen path".
-    if emit_kind == "obj" && backend_kind == "native" && target == "x86_64-linux-gnu" {
+    if (emit_kind == "obj" || emit_kind == "exec") && backend_kind == "native" && target == "x86_64-linux-gnu" {
         let elf_obj = pack_lir_x86_64(lmodule)
         let elf_bytes = serialize_elf_x86_64(elf_obj)
-        write_bytes(out_path, elf_bytes)
-        if verbose {
-            eprintln("hexa-compiler: emitted ELF x86-64 .o via native backend ("
-                     + to_string(len(elf_bytes)) + " bytes) to " + out_path)
+        if emit_kind == "obj" {
+            write_bytes(out_path, elf_bytes)
+            if verbose {
+                eprintln("hexa-compiler: emitted ELF x86-64 .o via native backend ("
+                         + to_string(len(elf_bytes)) + " bytes) to " + out_path)
+            }
+            exit(0)
+        } else {
+            native_obj_bytes = elf_bytes
+            native_obj_ready = true
+            if verbose {
+                eprintln("hexa-compiler: serialized ELF x86-64 .o via native backend for exec link ("
+                         + to_string(len(elf_bytes)) + " bytes)")
+            }
         }
-        exit(0)
     }
 
     // RFC 055 055-P3 — NVPTX uses the PTX text emit pass, not the CPU
@@ -1035,7 +1071,7 @@ if stream_mode && target == "arm64-apple-darwin" {
     // the .ptx and the driver exits.
     if target == NVPTX_TARGET_SM90 || target == NVPTX_TARGET_SM80 {
         asm_text = emit_ptx(lmodule)
-    } else {
+    } else if !native_obj_ready {
         asm_text = emit_asm(lmodule)
     }
     // S1-step-1 — emit (LIR->asm text) phase boundary.
@@ -1075,6 +1111,17 @@ if verbose {
     eprintln("hexa-compiler:   obj: " + obj_path)
 }
 
+if native_obj_ready {
+    // axis-③ round-3 track A — object already serialized by the native backend
+    // for this exec build; write it straight to obj_path and skip write-asm +
+    // the `as` fork. Kills the last exec-path `as` execve on native targets.
+    write_bytes(obj_path, native_obj_bytes)
+    if verbose {
+        eprintln("hexa-compiler: wrote native object ("
+            + to_string(len(native_obj_bytes)) + " bytes) to " + obj_path
+            + "; skipped `as`")
+    }
+} else {
 write_file(asm_path, asm_text)
 
 // ── Assemble (system `as`) ───────────────────────────────────
@@ -1104,6 +1151,7 @@ if as_status != "ok" {
     write_file(out_path + ".compile_failed",
         "stage=as\ncmd=" + as_cmd + "\n" + as_out + "\n")
     exit(2)
+}
 }
 
 if emit_kind == "obj" {
