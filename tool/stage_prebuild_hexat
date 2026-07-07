@@ -56,6 +56,16 @@ if [ "${HEXA_ZEROC_OWN_START:-1}" = "1" ] && [ "$(uname -s 2>/dev/null)" = "Linu
         # non-OWN_START build/runtime.a) has none → -nostartfiles = no _start = FATAL (#4489). $PWD ==
         # the ROOT set below (line 78).
         _zc_ra="${HEXA_PREBUILT_RUNTIME:-$PWD/build/runtime.a}"
+        # OWN-START-GATE-VS-SHIP-ARCHIVE-SHAPE-DRIFT: refresh the archive symbol
+        # index before the nm probe. On a fresh clean build the runtime.a written
+        # by stage_resolve_runtime_a can carry runtime.o's own `_start` in a member
+        # object whose symbol is NOT yet in the (stale) archive index — `nm` reads
+        # the index and reports NO _start, so we keep crt1, but `ld` scans the
+        # member and pulls runtime.o's _start -> duplicate _start with Scrt1.o
+        # (FATAL). ranlib rebuilds the index so the nm decision matches what ld
+        # links. armap-only (member .text untouched) -> byteeq-neutral. Non-fatal
+        # on a read-only prebuilt seam.
+        [ -f "$_zc_ra" ] && ranlib "$_zc_ra" 2>/dev/null || true
         if [ -f "$_zc_ra" ] && nm "$_zc_ra" 2>/dev/null | grep -qE ' T _?_start$'; then
             LIBS="$LIBS -nostartfiles"
             echo "stage_prebuild_hexat: HEXA_ZEROC_OWN_START=1 (linux/$_zc_arch) — own _start confirmed in $_zc_ra, -nostartfiles on hexat link"
