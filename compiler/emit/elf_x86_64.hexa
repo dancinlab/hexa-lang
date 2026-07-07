@@ -874,8 +874,13 @@ pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> In
 // here: rel32 = (main final offset) − (next-insn addr = 5); for main at
 // obj-local value 0 that is 14 − 5 = 9.
 //
-// Text-only (round-1): serialize_elf_exec_x86_64 emits a single PT_LOAD;
-// only programs with ZERO data refs link correctly (see round-2 wall).
+// Round-2 (data-segment): extends the round-1 text-only path with a SECOND
+// RW PT_LOAD carrying .rodata ++ .data (+ .bss reserved in p_memsz), so a
+// program with string/const-literal data refs (e.g. print("hello") -> lea
+// rip->.LCstr0, an R_X86_64_PC32) links into a running static ET_EXEC.
+// Byte-identical to round-1 when NO obj carries data (single PT_LOAD via the
+// untouched serialize_elf_exec_x86_64; text->text deltas are vaddr-base
+// invariant). Data present -> serialize_elf_exec_x86_64_2seg (two PT_LOADs).
 pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: string) -> Int {
     // 14-byte own-start stub at text offset 0.
     let mut text_bytes: [Int] = []
@@ -887,16 +892,40 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     text_bytes.push(0x0F); text_bytes.push(0x05)          // syscall
     // len(text_bytes) is now 14 — the +14 shift applied to every obj below.
 
+    // Concatenated data blob (.rodata ++ .data per obj) for the RW segment.
+    let mut data_bytes: [Int] = []
+    let mut total_bss  = 0
+
     let mut main_off = -1
+    // Defined-symbol map. def_seg = 0 for a .text def, 1 for a data-blob def;
+    // def_off is the byte offset INSIDE that segment's blob (text offset for
+    // text, data-blob offset for data). Converted to a vaddr AFTER the layout
+    // constants (code_off / data_file_off) are known below.
     let mut def_names:   [string] = []
-    let mut def_offsets: [Int]    = []
-    let mut obj_bases:   [Int]    = []
+    let mut def_seg:     [Int]    = []
+    let mut def_off:     [Int]    = []
+
+    let mut obj_bases:       [Int] = []   // .text base per obj
+    let mut obj_rodata_base: [Int] = []   // .rodata start in data_bytes per obj
+    let mut obj_data_base:   [Int] = []   // .data   start in data_bytes per obj
 
     let mut oi = 0
     while oi < len(objs) {
         let obj = objs[oi]
         let base = len(text_bytes)        // >= 14 — the own-start shift
         obj_bases.push(base)
+
+        // Append this obj's data blob: .rodata then .data (bss reserved later).
+        let ro_base = len(data_bytes)
+        obj_rodata_base.push(ro_base)
+        let mut rri = 0
+        while rri < len(obj.rodata) { data_bytes.push(obj.rodata[rri] & 0xff); rri = rri + 1 }
+        let da_base = len(data_bytes)
+        obj_data_base.push(da_base)
+        let mut ddi = 0
+        while ddi < len(obj.data) { data_bytes.push(obj.data[ddi] & 0xff); ddi = ddi + 1 }
+        total_bss = total_bss + obj.bss_size
+
         let mut di = 0
         while di < len(obj.symbols) {
             let s = obj.symbols[di]
@@ -908,11 +937,25 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                 name = name + from_char_code(b)
                 k = k + 1
             }
-            if s.section != 0 {
+            if s.section == 1 {
+                // .text def -> segment 0, text offset.
                 def_names.push(name)
-                def_offsets.push(base + s.value)
+                def_seg.push(0)
+                def_off.push(base + s.value)
                 if main_off < 0 && name == main_name {
                     main_off = base + s.value
+                }
+            } else if s.section != 0 {
+                // Data def. section==4 (data_sec when .rodata present) -> .data
+                // pool; otherwise (section==3) -> .rodata pool. When the obj has
+                // no .rodata its .data syms carry section==3 and ro_base==da_base,
+                // so the .rodata branch still lands at the right blob offset.
+                def_names.push(name)
+                def_seg.push(1)
+                if s.section >= 4 {
+                    def_off.push(da_base + s.value)
+                } else {
+                    def_off.push(ro_base + s.value)
                 }
             }
             di = di + 1
@@ -936,8 +979,24 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     text_bytes[3] = (call_rel >> 16) & 0xff
     text_bytes[4] = (call_rel >> 24) & 0xff
 
-    // Resolve inter/intra-obj PLT32/PC32 relocs. The shared +14 shift
-    // cancels in S+A−P, so this is identical to link_elf_x86_64.
+    // Layout constants — MUST match serialize_elf_exec_x86_64{,_2seg}.
+    // No data blob -> single PT_LOAD (phnum=1, code_off=120): byte-identical
+    // to round-1. Data present -> two PT_LOADs (phnum=2, code_off=176: R-X
+    // text + RW rodata/data at a page-aligned vaddr above text).
+    let vaddr_base = 0x400000
+    let has_data   = (len(data_bytes) > 0) || (total_bss > 0)
+    let phnum      = if has_data { 2 } else { 1 }
+    let code_off   = 64 + 56 * phnum
+    let text_end_file = code_off + len(text_bytes)
+    // Page-align the data segment's file offset (=> p_vaddr === p_offset mod
+    // 0x1000 holds and the R-X/RW pages never overlap). Same idiom as the
+    // serializer's rodata_pad round-up.
+    let data_file_off   = text_end_file + ((0x1000 - (text_end_file & 0xfff)) & 0xfff)
+    let data_vaddr_base = vaddr_base + data_file_off
+
+    // Resolve relocs in TRUE vaddr space. text->text reduces to the round-1
+    // text-offset delta (vaddr_base+code_off cancels) => no-data path is
+    // byte-identical; text->data uses the data segment's distinct vaddr.
     let mut ro = 0
     while ro < len(objs) {
         let obj = objs[ro]
@@ -961,23 +1020,49 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                 sk = sk + 1
             }
             if found_idx >= 0 {
-                let tgt_off = def_offsets[found_idx]
+                // Target symbol's virtual address (text seg vs data seg).
+                let mut s_vaddr = 0
+                if def_seg[found_idx] == 0 {
+                    s_vaddr = vaddr_base + code_off + def_off[found_idx]
+                } else {
+                    s_vaddr = data_vaddr_base + def_off[found_idx]
+                }
+                // Patch site is always in .text (CALL imm32 or lea disp32).
                 let patch_off = base + r.offset
-                let delta = tgt_off + r.addend - patch_off
-                text_bytes[patch_off + 0] = delta & 0xff
-                text_bytes[patch_off + 1] = (delta >> 8) & 0xff
-                text_bytes[patch_off + 2] = (delta >> 16) & 0xff
-                text_bytes[patch_off + 3] = (delta >> 24) & 0xff
+                let p_vaddr = vaddr_base + code_off + patch_off
+                if r.kind == 1 {
+                    // R_X86_64_64 — absolute 64-bit (patch site in .text).
+                    // Data-resident absolute relocs (data->data) are round-3.
+                    let av = s_vaddr + r.addend
+                    text_bytes[patch_off + 0] = av & 0xff
+                    text_bytes[patch_off + 1] = (av >> 8) & 0xff
+                    text_bytes[patch_off + 2] = (av >> 16) & 0xff
+                    text_bytes[patch_off + 3] = (av >> 24) & 0xff
+                    text_bytes[patch_off + 4] = (av >> 32) & 0xff
+                    text_bytes[patch_off + 5] = (av >> 40) & 0xff
+                    text_bytes[patch_off + 6] = (av >> 48) & 0xff
+                    text_bytes[patch_off + 7] = (av >> 56) & 0xff
+                } else {
+                    // R_X86_64_PC32 (2) / R_X86_64_PLT32 (4) — 32-bit PC-relative.
+                    let delta = s_vaddr + r.addend - p_vaddr
+                    text_bytes[patch_off + 0] = delta & 0xff
+                    text_bytes[patch_off + 1] = (delta >> 8) & 0xff
+                    text_bytes[patch_off + 2] = (delta >> 16) & 0xff
+                    text_bytes[patch_off + 3] = (delta >> 24) & 0xff
+                }
             }
             ri = ri + 1
         }
         ro = ro + 1
     }
 
-    // Entry is the stub at text offset 0 (serialize_elf_exec_x86_64 sets
-    // e_entry = vaddr_base + code_off where code_off is the first text byte).
-    let bytes = serialize_elf_exec_x86_64(text_bytes)
-    write_bytes(out_path, bytes)
+    // Serialize. No data -> single-PT_LOAD round-1 serializer (byte-identical);
+    // data present -> two-segment serializer (R-X text + RW rodata/data).
+    if has_data {
+        write_bytes(out_path, serialize_elf_exec_x86_64_2seg(text_bytes, data_bytes, total_bss))
+    } else {
+        write_bytes(out_path, serialize_elf_exec_x86_64(text_bytes))
+    }
     return 0
 }
 
@@ -1293,6 +1378,99 @@ pub fn serialize_elf_exec_x86_64(text: [Int]) -> [Int] {
 }
 
 // ─────────────────────────────────────────────────────────────────
+
+// serialize_elf_exec_x86_64_2seg — round-2 two-segment static exec.
+// ─────────────────────────────────────────────────────────────
+// Static ELF ET_EXEC for Linux x86_64 with TWO PT_LOAD segments:
+//   seg0 (R-X): ELF header + 2 phdrs + .text          at vaddr 0x400000
+//   seg1 (RW):  .rodata ++ .data (+ .bss in p_memsz)   at a page-aligned
+//               vaddr above the text segment.
+// The whole file stays a uniform vaddr = 0x400000 + file_off map, split at a
+// page boundary between the R-X and RW segments, so each segment satisfies
+// p_vaddr === p_offset (mod 0x1000) and their pages never overlap. No dynamic
+// linker, no symtab. .bss is zero-filled by the kernel (p_memsz > p_filesz).
+//
+// Layout (data program):
+//   ELF64 header  64 B   e_type=ET_EXEC e_entry=0x400000+176
+//   PT_LOAD[0]    56 B   R-X  p_offset=0            p_vaddr=0x400000
+//   PT_LOAD[1]    56 B   RW   p_offset=data_file_off p_vaddr=0x400000+data_file_off
+//   .text          N B   at file offset 176 (=64+56*2)
+//   (zero pad to the next page)
+//   .rodata/.data  D B   at file offset data_file_off
+pub fn serialize_elf_exec_x86_64_2seg(text: [Int], data: [Int], bss_size: Int) -> [Int] {
+    let out: [Int] = []
+    let text_size = len(text)
+    let data_size = len(data)
+
+    let elf_header_size = 64
+    let phdr_size = 56
+    let phnum = 2
+    let code_off = elf_header_size + phdr_size * phnum     // 176
+    let vaddr_base = 0x400000
+    let entry_vaddr = vaddr_base + code_off
+    let text_end_file = code_off + text_size
+    // Page-align the data segment's file offset (=> vaddr congruence holds).
+    let data_file_off = text_end_file + ((0x1000 - (text_end_file & 0xfff)) & 0xfff)
+    let data_vaddr = vaddr_base + data_file_off
+    let text_filesz = code_off + text_size                 // seg0 file+mem size
+    let data_memsz  = data_size + bss_size                 // seg1 mem (incl .bss)
+
+    // ── ELF header ──
+    out.push(ELF_EI_MAG0); out.push(ELF_EI_MAG1)
+    out.push(ELF_EI_MAG2); out.push(ELF_EI_MAG3)
+    out.push(ELF_ELFCLASS64)
+    out.push(ELF_ELFDATA2LSB)
+    out.push(ELF_EV_CURRENT)
+    out.push(ELF_ELFOSABI_NONE)
+    _ew_zero(out, 8)
+    _ew_u16(out, ELF_ET_EXEC)
+    _ew_u16(out, ELF_EM_X86_64)
+    _ew_u32(out, ELF_EV_CURRENT)
+    _ew_u64(out, entry_vaddr)
+    _ew_u64(out, elf_header_size)           // e_phoff
+    _ew_u64(out, 0)                         // e_shoff
+    _ew_u32(out, 0)                         // e_flags
+    _ew_u16(out, elf_header_size)
+    _ew_u16(out, phdr_size)
+    _ew_u16(out, phnum)
+    _ew_u16(out, 0)                         // e_shentsize
+    _ew_u16(out, 0)                         // e_shnum
+    _ew_u16(out, 0)                         // e_shstrndx
+
+    // ── PT_LOAD[0] — R-X text ──
+    _ew_u32(out, 1)                         // p_type = PT_LOAD
+    _ew_u32(out, 5)                         // p_flags = PF_R | PF_X
+    _ew_u64(out, 0)                         // p_offset
+    _ew_u64(out, vaddr_base)                // p_vaddr
+    _ew_u64(out, vaddr_base)                // p_paddr
+    _ew_u64(out, text_filesz)               // p_filesz
+    _ew_u64(out, text_filesz)               // p_memsz
+    _ew_u64(out, 0x1000)                    // p_align
+
+    // ── PT_LOAD[1] — RW rodata/data (+ .bss in memsz) ──
+    _ew_u32(out, 1)                         // p_type = PT_LOAD
+    _ew_u32(out, 6)                         // p_flags = PF_R | PF_W
+    _ew_u64(out, data_file_off)             // p_offset
+    _ew_u64(out, data_vaddr)                // p_vaddr
+    _ew_u64(out, data_vaddr)                // p_paddr
+    _ew_u64(out, data_size)                 // p_filesz
+    _ew_u64(out, data_memsz)                // p_memsz  (includes .bss)
+    _ew_u64(out, 0x1000)                    // p_align
+
+    // ── .text at file offset code_off (176) ──
+    let mut i = 0
+    while i < text_size { out.push(text[i] & 0xff); i = i + 1 }
+
+    // ── zero pad from text end up to the page-aligned data file offset ──
+    _ew_zero(out, data_file_off - text_end_file)
+
+    // ── .rodata/.data at file offset data_file_off ──
+    let mut d = 0
+    while d < data_size { out.push(data[d] & 0xff); d = d + 1 }
+
+    return out
+}
+
 // LIR walker — `LModule` → byte stream (RFC 063 § P2, cycle 29)
 // ─────────────────────────────────────────────────────────────────
 //
