@@ -1665,6 +1665,238 @@ fn _run_uninit_probe(label: string, src: string, want_on: i64) -> bool {
     return ok
 }
 
+// ── HEXA-OWN round8-2 — HX3036 borrowed-value-does-not-live-long-enough
+// (Rust E0597) source probes. The ONLY firing form is the assign-arm
+// re-borrow across a scope: `let mut r = &y; { let x = 5; r = &x } use r`
+// (r outlives x's scope). let-arm loans are structurally safe. ──
+
+// HAZARD — an assign-arm re-borrow of a value whose scope dies while the
+// binding lives, then used after the scope. bare `{ }` does not split MIR
+// blocks, so the dangle (scope-exit) precedes the use by program-order seq.
+fn _src_hz_dangle_asn_reborrow() -> string {
+    let mut s = "fn hzd() {\n"
+    s = s + "    let y = 10\n"
+    s = s + "    let mut r = &y\n"
+    s = s + "    {\n"
+    s = s + "        let x = 5\n"
+    s = s + "        r = &x\n"
+    s = s + "    }\n"
+    s = s + "    println(r)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a same-scope let-arm loan: r's scope ⊆ x's scope, so the borrow
+// can never outlive the value (no asn-lane row is ever recorded).
+fn _src_fp_same_scope() -> string {
+    let mut s = "fn fpss() {\n"
+    s = s + "    let x = 5\n"
+    s = s + "    let r = &x\n"
+    s = s + "    println(r)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — the reassign-then-use FP killer: after the scope dies, r is
+// repointed to a live outer value BEFORE the use, so the use snapshots the
+// non-dangling row (row != dangle row → silent).
+fn _src_fp_reassign_before_use() -> string {
+    let mut s = "fn fprb2() {\n"
+    s = s + "    let y = 1\n"
+    s = s + "    let w = 2\n"
+    s = s + "    let mut r = &y\n"
+    s = s + "    {\n"
+    s = s + "        let x = 5\n"
+    s = s + "        r = &x\n"
+    s = s + "    }\n"
+    s = s + "    r = &w\n"
+    s = s + "    println(r)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HX3036 probe runner — mirrors `_run_uninit_probe`, keyed on the ref-outlives
+// code and asserting every OTHER code is 0 (probe hygiene). STRICT re-bands
+// HX3036 to Error, so the error-band count must equal the HX3036 count. OFF →
+// want 0 (empty stream). Note: the hz probe's `let mut r = &y` makes a let-lane
+// loan of y, but y never reappears as an origin, so E3/E4/E0503 stay silent.
+fn _run_outlives_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3036 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3036")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3036 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3036 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
+// ── HEXA-OWN round8-3 — HX3037 closure capture-move (Rust E0507
+// "cannot move out of `X`, a captured variable in an `FnMut` closure").
+// The ONLY firing form is a bare-ident @own call-arg inside a closure body
+// that is a CAPTURE of the enclosing scope. Source-level probes are viable:
+// the inline `@own p: T` parser carrier is live on main (parser.hexa
+// p_param_own_anns → ast_to_hir param_names → hir_to_mir @own pre-pass), so
+// no hand-built HIR is needed (unlike the older tp_own_param_move). ──
+
+// HAZARD — a captured `xs` moved into `sink`'s @own param inside the closure
+// body. The closure may be called more than once (f(1); f(2)), and the env
+// slot aliases xs's heap object, so the move is UAF-unsafe → HX3037 ×1.
+fn _src_hz_clo_capture_move() -> string {
+    let mut s = "fn sink(@own v: [i64]) {\n"
+    s = s + "    println(len(v))\n"
+    s = s + "}\n"
+    s = s + "fn hzcm() {\n"
+    s = s + "    let xs = [1, 2, 3]\n"
+    s = s + "    let f = fn(n: i64) {\n"
+    s = s + "        sink(xs)\n"
+    s = s + "    }\n"
+    s = s + "    f(1)\n"
+    s = s + "    f(2)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — a nested closure inside an outer closure moves the ENCLOSING-fn
+// capture `xs` into sink's @own param. Proves the read-only walk descends
+// into inner closures for outer-fn captures → HX3037 ×1 (only the outer
+// closure's scan runs; the inner closure lowers with `_bck_active` false).
+fn _src_hz_clo_nested_capture_move() -> string {
+    let mut s = "fn sink(@own v: [i64]) {\n"
+    s = s + "    println(len(v))\n"
+    s = s + "}\n"
+    s = s + "fn hznest() {\n"
+    s = s + "    let xs = [1, 2, 3]\n"
+    s = s + "    let outer = fn(a: i64) {\n"
+    s = s + "        let inner = fn(b: i64) {\n"
+    s = s + "            sink(xs)\n"
+    s = s + "        }\n"
+    s = s + "        inner(a)\n"
+    s = s + "    }\n"
+    s = s + "    outer(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — same capture-and-pass shape, but sink's param is NOT @own, so
+// the arg is a READ (no move source) → 0.
+fn _src_fp_clo_param_not_own() -> string {
+    let mut s = "fn sink(v: [i64]) {\n"
+    s = s + "    println(len(v))\n"
+    s = s + "}\n"
+    s = s + "fn fpno() {\n"
+    s = s + "    let xs = [1, 2, 3]\n"
+    s = s + "    let f = fn(n: i64) {\n"
+    s = s + "        sink(xs)\n"
+    s = s + "    }\n"
+    s = s + "    f(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — the moved arg is the closure's OWN param `v`, not a capture, so
+// it is not in the free set → 0 (moving a closure-local into @own is fine).
+fn _src_fp_clo_own_arg_is_param() -> string {
+    let mut s = "fn sink(@own v: [i64]) {\n"
+    s = s + "    println(len(v))\n"
+    s = s + "}\n"
+    s = s + "fn fpparam() {\n"
+    s = s + "    let f = fn(v: [i64]) {\n"
+    s = s + "        sink(v)\n"
+    s = s + "    }\n"
+    s = s + "    f([1, 2])\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a body `let xs = [9]` shadows the outer `xs`, so the moved name
+// is a closure-local, not a capture (the `_collect_free` whole-subtree
+// over-approximation drops `xs` from the free set) → 0.
+fn _src_fp_clo_shadow_let() -> string {
+    let mut s = "fn sink(@own v: [i64]) {\n"
+    s = s + "    println(len(v))\n"
+    s = s + "}\n"
+    s = s + "fn fpshadow() {\n"
+    s = s + "    let xs = [1, 2, 3]\n"
+    s = s + "    let f = fn(n: i64) {\n"
+    s = s + "        let xs = [9]\n"
+    s = s + "        sink(xs)\n"
+    s = s + "    }\n"
+    s = s + "    f(1)\n"
+    s = s + "    println(len(xs))\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — an @own move in the ENCLOSING fn (outside any closure). This is
+// the bare-ident Rule-2 move classifier's domain, not this rung; with no live
+// loan it records a move but emits nothing → HX3037 0, empty stream.
+fn _src_fp_clo_enclosing_direct() -> string {
+    let mut s = "fn sink(@own v: [i64]) {\n"
+    s = s + "    println(len(v))\n"
+    s = s + "}\n"
+    s = s + "fn fpencl() {\n"
+    s = s + "    let xs = [1, 2, 3]\n"
+    s = s + "    sink(xs)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HX3037 probe runner — mirrors `_run_outlives_probe`, keyed on the capture-
+// move code and asserting every OTHER code is 0 (probe hygiene). STRICT
+// re-bands HX3037 to Error, so the error-band count must equal the HX3037
+// count. OFF → want 0 (empty stream, byteeq-neutral).
+fn _run_capture_move_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3037 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3037")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3037 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3037 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
 // ── driver ───────────────────────────────────────────────────
 
 fn main() {
@@ -1795,6 +2027,26 @@ fn main() {
         if !_run_uninit_probe("fp_return_branch", _src_fp_return_branch(), 0) { ok = false }
         if !_run_uninit_probe("fp_field_partial", _src_fp_field_partial(), 0) { ok = false }
         if !_run_uninit_probe("fp_normal_let", _src_fp_normal_let(), 0) { ok = false }
+        // HEXA-OWN round8-2 — borrowed-value-does-not-live-long-enough (HX3036,
+        // Rust E0597). Hazard (assign-arm re-borrow across a dying scope, used
+        // after) → ×1 ON; controls (same-scope let-arm loan · repoint-to-live-
+        // before-use) → 0. OFF → empty stream (byteeq-neutral); STRICT → Error-band.
+        if !_run_outlives_probe("hz_dangle_asn_reborrow", _src_hz_dangle_asn_reborrow(), 1) { ok = false }
+        if !_run_outlives_probe("fp_same_scope", _src_fp_same_scope(), 0) { ok = false }
+        if !_run_outlives_probe("fp_reassign_before_use", _src_fp_reassign_before_use(), 0) { ok = false }
+        // HEXA-OWN round8-3 — closure capture-move (HX3037, Rust E0507
+        // "captured variable in an FnMut closure"). Hazards (a captured var
+        // moved into an @own param inside a closure · same via a nested inner
+        // closure) → ×1 ON; controls (param not @own · arg is the closure's
+        // own param · body-let shadow of the capture · @own move in the
+        // enclosing fn outside the closure) → 0. OFF → empty stream (byteeq-
+        // neutral); STRICT → Error-band.
+        if !_run_capture_move_probe("hz_clo_capture_move", _src_hz_clo_capture_move(), 1) { ok = false }
+        if !_run_capture_move_probe("hz_clo_nested_capture_move", _src_hz_clo_nested_capture_move(), 1) { ok = false }
+        if !_run_capture_move_probe("fp_clo_param_not_own", _src_fp_clo_param_not_own(), 0) { ok = false }
+        if !_run_capture_move_probe("fp_clo_own_arg_is_param", _src_fp_clo_own_arg_is_param(), 0) { ok = false }
+        if !_run_capture_move_probe("fp_clo_shadow_let", _src_fp_clo_shadow_let(), 0) { ok = false }
+        if !_run_capture_move_probe("fp_clo_enclosing_direct", _src_fp_clo_enclosing_direct(), 0) { ok = false }
         // census lane must be silent whenever HEXA_BORROWCK_CENSUS is unset
         // (byteeq-neutral proof at the census-count level).
         if !_run_census() { ok = false }

@@ -3132,10 +3132,9 @@ fn cmd_build(src, out, c_only, target, shared) {
             exit(1)
         }
     }
-    let v2 = resolve_or_bootstrap_hexat()
-    if len(v2) == 0 {
-        die_no_hexat()
-    }
+    // (axis ① round-1) hexat resolve/bootstrap HOISTED to its sole use just above the
+    // C-transpile path below — a leg-B-native-served build forks zero hexat. Nothing between
+    // here and there touches v2 (verified: native arm returns at its own `return ""`).
     println("=== Building " + src + " -> " + out + " ===")
     // #12 (wilson-needs-hexa-build-out-of-tree): mirror cmd_run's flatten
     //   step — use self/module_loader.hexa (the canonical module loader
@@ -3531,6 +3530,51 @@ fn cmd_build(src, out, c_only, target, shared) {
             println("OK: built " + out + " (native backend)")
         }
         return ""
+    }
+    // ── DONE-criterion axis ① round-1: `hexa build` leg-B mirror (no hexat, no clang) ──
+    // HEXA_BUILD_NATIVE=1 (default-OFF, byte-neutral): reuse cmd_run's proven leg-B recipe
+    // (aprime --emit=obj + ld, own-start crt-drop) so `hexa build` lowers through the native
+    // source→own-IR→native path with ZERO hexat fork and ZERO clang. ANY emit/link failure
+    // falls through to the C-transpile path below (delegate intact; trace under
+    // HEXA_RUN_NATIVE_TRACE=1). linux x86_64 only (the host the recipe is proven on); refuses
+    // shared/--c-only/--target. Design: state/hexa-own/no_hexacc_round1_design_fable.md.
+    if env_var("HEXA_BUILD_NATIVE") == "1" && exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxx86_64" && shared != "1" && c_only != "1" && len(target) == 0 && len(__actual_src) > 0 {
+        let _bncc = resolve_native_cc()
+        let _bnrt = resolve_prebuilt_runtime()
+        let _bnld = exec("command -v ld 2>/dev/null | tr -d '\\n'")
+        if len(_bncc) > 0 && len(_bnrt) > 0 && len(_bnld) > 0 {
+            let _ = exec("mkdir -p build/artifacts 2>/dev/null")
+            let _bnobj = "build/artifacts/" + basename_stem(out) + ".bnobj.o"
+            let _bne = exec("'" + _bncc + "' _drv.hexa --emit=obj --target=x86_64-linux-gnu -o '" + _bnobj + "' '" + __actual_src + "' 2>&1")
+            let _bnobj_ok = exec("test -s '" + _bnobj + "' && printf yes || printf no")
+            if _bnobj_ok == "yes" {
+                let _bncrt = exec("for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do if [ -f $d/crt1.o ]; then printf %s $d; break; fi; done")
+                let _bndl = exec("for f in /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-x86-64.so.2; do if [ -e $f ]; then printf %s $f; break; fi; done")
+                if len(_bncrt) > 0 && len(_bndl) > 0 {
+                    let _bnzc = env_var("HEXA_ZEROC_OWN_START") != "0"
+                    let _bntmp = exec("printf '%s.bntmp.%s' '" + out + "' \"$$\"")
+                    let _bnlnk = if _bnzc { "'" + _bnld + "' --dynamic-linker '" + _bndl + "' '" + _bnobj + "' '" + _bnrt + "' --start-group -lc -lpthread -lm --end-group -L'" + _bncrt + "' -o '" + _bntmp + "' 2>&1" } else { "'" + _bnld + "' --dynamic-linker '" + _bndl + "' '" + _bncrt + "/crt1.o' '" + _bncrt + "/crti.o' '" + _bnobj + "' '" + _bnrt + "' --start-group -lc -lpthread -lm --end-group '" + _bncrt + "/crtn.o' -L'" + _bncrt + "' -o '" + _bntmp + "' 2>&1" }
+                    let _bnlr = exec(_bnlnk)
+                    let _bnbin_ok = exec("test -x '" + _bntmp + "' && printf yes || printf no")
+                    if _bnbin_ok == "yes" {
+                        let _ = exec("mv -f '" + _bntmp + "' '" + out + "' 2>/dev/null")
+                        let _ = exec("rm -f '" + _bnobj + "' 2>/dev/null")
+                        if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[build-native] clang-free: aprime --emit=obj + ld → " + out) }
+                        println("OK: built " + out + " (native backend, leg-B — no hexat, no clang)")
+                        return ""
+                    } else if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[build-native] ld link failed → C fallback: " + _bnlr) }
+                }
+            } else if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[build-native] native-emit failed → C fallback: " + _bne) }
+            let _ = exec("rm -f '" + _bnobj + "' 2>/dev/null")
+        }
+    }
+    // Rider (axis ① measurement): resolve/bootstrap hexat HERE (at its sole use below), NOT at
+    // the top of cmd_build — so a leg-B-native-served build above forks ZERO hexat (and a fresh
+    // clone does not bootstrap-compile hexa_cc.c for a binary it never runs). Nothing between the
+    // former top-of-fn site and here touched v2 (verified). Default-path artifacts unchanged.
+    let v2 = resolve_or_bootstrap_hexat()
+    if len(v2) == 0 {
+        die_no_hexat()
     }
     let stem = basename_stem(out)
     let c_file = "build/artifacts/" + stem + ".c"
