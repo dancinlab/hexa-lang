@@ -1,0 +1,45 @@
+// c14_array_trycatch.hexa — miscompile class: stack-alloc escape-scan × try/catch.
+// A function carrying BOTH a stack-eligible bounded array literal (`let a = […]`)
+// AND a try/catch in the same body. This is the 2nd hole in the escape-scan
+// array/value divergence family (after #4690's node.args): a `TryCatch` node
+// stores try_body/catch_body in node.left/node.right as STATEMENT LISTS, and the
+// escape scans (`_stmt_escapes_arr_name` gated on HEXA_STACK_ALLOC, and
+// `_stmt_escapes_name` on the default-ON `_native_arr_noescape_scan` path for
+// int/float-literal arrays) had no TryCatch arm — the generic tail routed those
+// statement-lists through the EXPRESSION scan → `map key 'kind'/'left' not
+// found` (~314k) + runaway recursion → compiler SIGSEGV during transpile.
+// The `bad`/`nums` bindings are non-escaping bounded arrays (index-read only),
+// so they must classify clean and the try/catch bodies must be scanned as
+// statements. Correct output: no-match paths return 0.
+// Added by the mem-lane ② escape-scan TryCatch-arm fix (sibling of #4690).
+
+// int-literal array + try/catch — exercises the DEFAULT-ON value scan
+// (_stmt_escapes_name via _native_arr_noescape_scan).
+fn chk_int(p) {
+    let nums = [1, 2, 3]
+    let mut i = 0
+    while i < len(nums) { if p == nums[i] { return 1 } i = i + 1 }
+    try {
+        let _t = 42
+    } catch e {
+        return 2
+    }
+    return 0
+}
+
+// string-literal array + try/catch — exercises the gated array scan
+// (_stmt_escapes_arr_name under HEXA_STACK_ALLOC=1).
+fn chk_str(p) {
+    let bad = [".rs", ".py", ".sh"]
+    let mut i = 0
+    while i < len(bad) { if p == bad[i] { return 1 } i = i + 1 }
+    try {
+        throw "boom"
+    } catch e {
+        return 0
+    }
+    return 3
+}
+
+println("chk_int:", chk_int(9))
+println("chk_str:", chk_str("ok"))

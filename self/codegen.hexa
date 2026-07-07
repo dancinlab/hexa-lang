@@ -12882,6 +12882,17 @@ fn _stmt_escapes_name(node, name) {
         if type_of(node.value) != "string" && _expr_escapes_name(node.value, name) { return true }
         return false
     }
+    // TRY/CATCH + RECOVER STMT-LIST ESCAPE — sibling of the _stmt_escapes_arr_name
+    // fix (same 2nd hole). `TryCatch` stores try_body/catch_body in node.left/
+    // node.right and `RecoverStmt` stores its body in node.left as STATEMENT
+    // LISTS; the generic .left/.right fall-through would mis-dispatch a stmt-list
+    // through the expression scan (_expr_escapes_name → node.kind on an array →
+    // map-key errors → SIGSEGV). Route through the statement-list scan instead.
+    if sk == "TryCatch" || sk == "RecoverStmt" {
+        if type_of(node.left) != "string" && _stmts_escape_name(node.left, name) { return true }
+        if type_of(node.right) != "string" && _stmts_escape_name(node.right, name) { return true }
+        return false
+    }
     // ExprStmt / general statement carrying an expression in .left
     if type_of(node.left) != "string" {
         if _expr_escapes_name(node.left, name) { return true }
@@ -13348,6 +13359,23 @@ fn _stmt_escapes_arr_name(node, name) {
     if sk == "ReturnStmt" {
         if type_of(node.left) != "string" && _expr_escapes_arr_name(node.left, name) { return true }
         if type_of(node.value) != "string" && _expr_escapes_arr_name(node.value, name) { return true }
+        return false
+    }
+    // TRY/CATCH + RECOVER STMT-LIST ESCAPE (mem-lane ②, 2nd hole in the
+    // array-scan/value-scan divergence family after #4690 node.args): a
+    // `TryCatch` node stores try_body in `node.left` and catch_body in
+    // `node.right` as STATEMENT LISTS (parser.hexa parse_try_catch), and a
+    // `RecoverStmt` stores its body in `node.left`. The generic fall-through
+    // below tests `type_of(node.left) != "string"` — a statement-list array
+    // passes that guard and was routed through the EXPRESSION scan
+    // (_expr_escapes_arr_name), which does `node.kind` on the array
+    // (map-key 'kind'/'left' not found) → mis-dispatch + runaway malformed
+    // recursion → compiler SIGSEGV under HEXA_STACK_ALLOC=1 whenever a fn had
+    // BOTH a stack-eligible array binding AND a try/catch. Route these bodies
+    // through the STATEMENT-list scan (mirrors then_body/body below).
+    if sk == "TryCatch" || sk == "RecoverStmt" {
+        if type_of(node.left) != "string" && _stmts_escape_arr_name(node.left, name) { return true }
+        if type_of(node.right) != "string" && _stmts_escape_arr_name(node.right, name) { return true }
         return false
     }
     if type_of(node.left) != "string" {
