@@ -5684,6 +5684,48 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 ctx3 = _add_edge(ctx3, ctx3.cur_block, arm_id)
                 ctx3 = _add_edge(ctx3, ctx3.cur_block, next_id)
                 ctx2 = ctx3
+            } else if pat.kind == "literal_bool" {
+                // HEXA-OWN axis-① r2 — boolean-literal pattern `match b {
+                // true -> …, false -> … }`. Byte-for-byte clone of the
+                // literal_int arm above with the operand constructor swapped to
+                // _const_bool_op (TAG_BOOL) so hexa_eq tag-matches the bool
+                // scrutinee (see _const_bool_op note). Previously this shape fell
+                // to the HX1102 `else` below — a fatal S2 error that aborted the
+                // native own-IR path (main.hexa exit(1)) and forced a C-transpile
+                // punt — even though the emitted compare is identical to the
+                // fallback. Lowering here drops the abort; byte-neutral (programs
+                // without bool-arms never reach this branch; the default
+                // C-transpile path never runs hir_to_mir).
+                let mut bv: i64 = 0
+                if pat.text == "true" { bv = 1 }
+                let mut ctx3 = _fresh_local(ctx2, pat.typ, "lit_eq")
+                let cmp_dst = _lr_locals[len(_lr_locals) - 1]
+                let mut cmp_args: [Operand] = []
+                cmp_args.push(scrut_op)
+                cmp_args.push(_const_bool_op(bv))
+                let cmp = Stmt {
+                    kind: STMT_BINOP,
+                    dst: cmp_dst,
+                    op: "==",
+                    args: cmp_args,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx3 = _push_stmt(ctx3, cmp)
+                let mut br_args: [Operand] = []
+                br_args.push(_local_op(cmp_dst.id))
+                let br = Stmt {
+                    kind: STMT_BR_COND,
+                    dst: _miss_local(),
+                    op: "",
+                    args: br_args,
+                    target_block: arm_id,
+                    target_block_else: next_id
+                }
+                ctx3 = _push_stmt(ctx3, br)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, arm_id)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, next_id)
+                ctx2 = ctx3
             } else if pat.kind == "struct_pattern" {
                 // Stage1 punch list C10 — struct-pattern. v0: take an
                 // unconditional STMT_BR to the arm (the structural match
