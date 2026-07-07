@@ -513,6 +513,7 @@ pub fn parse_archive(path: string) -> [ParsedObj] {
             }
             data_off = data_off + nm
             data_sz = data_sz - nm
+            if data_sz < 0 { data_sz = 0 }  // defensive: malformed nm>sz -> empty member, skipped (#4684 review, PLAUSIBLE LOW)
         }
         // parse only Mach-O members (magic 0xfeedfacf); this skips __.SYMDEF + //
         if data_off + 4 <= n && _r_u32(buf, data_off) == 0xfeedfacf {
@@ -525,7 +526,11 @@ pub fn parse_archive(path: string) -> [ParsedObj] {
             out.push(parse_macho_from_bytes(member, path + "(member)"))
         }
         // next header at data_off + size, rounded up to even (2-byte pad)
-        let mut next = data_off + sz
+        // next header = member-data-start (off+60) + size, even-padded. Use off+60,
+        // NOT data_off: for a #1/N BSD extended-name member data_off was already
+        // advanced by the name length nm, so data_off+sz overshoots by nm and
+        // mis-parses every following member (#4684 review, CONFIRMED HIGH).
+        let mut next = off + 60 + sz
         if next % 2 == 1 { next = next + 1 }
         off = next
     }
