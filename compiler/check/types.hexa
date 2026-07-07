@@ -3878,6 +3878,79 @@ fn _is_builtin_method(name: string) -> bool {
     }
 }
 
+// static-types builtin-method RESULT inference. Mirrors the authoritative
+// runtime dispatch `self/codegen.hexa::gen2_method_builtin` EXACTLY for the
+// receiver-INDEPENDENT MONOMORPHIC selector subset — every arm below produces
+// a value whose tag is the SAME regardless of the receiver's type, so the
+// static result type is closed-form. Returns `_types_empty_type()` (unknown,
+// conservative) for every polymorphic / container / element-returning /
+// ambiguous selector so those keep the pre-existing type-opaque behaviour (no
+// false diagnostics). Read at the builtin-method Field callee return site of
+// `_types_check_call` under `_types_static_on` (FLIP-3 flagless always-on
+// marker), feeding the HX3011 / HX3003 / HX3004 rungs; byteeq-neutral by the
+// established mechanism (corpus-clean real source + MIR type-erase + the
+// `_types_strict_for` fixture Warning-band). gen2 return-tag provenance is
+// cited per band below (traced through runtime_emit_full / runtime_core_emit /
+// zeroc_rt_core_prims_emit).
+//
+// EXCLUDED on purpose (stay unknown): `find` returns the matched ELEMENT
+// (gen2 → hexa_array_find; `hexa_void()` when none), NOT an index — the naive
+// `find → i64` guess is a mis-type. `pad_start`/`pad_end` have NO gen2 dispatch
+// arm (they would runtime-error), so they are never typed. `char_at`
+// (codepoint-string, ambiguous), `mean` (array-only), and all higher-order /
+// container selectors (map/filter/fold/get/pop/slice/sum/product/min/max/
+// first/last/keys/values/entries/…) resolve to a receiver/element-dependent
+// type and are left unknown.
+fn _types_builtin_method_ret(name: string) -> Type {
+    return match name {
+        // → i64: gen2 hexa_int(...)-wrapped counts/indices —
+        //   len            → hexa_int(hexa_len(...))
+        //   index_of/rfind/last_index_of → hexa_int(str_index_of/last_index_of)
+        //   count          → hexa_count_poly (all 3 arms str_count_substr /
+        //                    hexa_map_count / hexa_array_count → hexa_int)
+        //   char_code_at/byte_at → hexa_str_char_code_at / hexa_str_byte_at
+        //                    (hexa_int on the value path)
+        //   to_int         → rt_to_int (int on every path)
+        "len" -> _types_t_i64(),
+        "count" -> _types_t_i64(),
+        "index_of" -> _types_t_i64(),
+        "rfind" -> _types_t_i64(),
+        "last_index_of" -> _types_t_i64(),
+        "char_code_at" -> _types_t_i64(),
+        "byte_at" -> _types_t_i64(),
+        "to_int" -> _types_t_i64(),
+        // → f64: to_float → rt_to_float → hexa_float(...) always.
+        "to_float" -> _types_t_f64(),
+        // → bool: gen2 hexa_bool(...)-wrapped —
+        //   contains  → hexa_contains_poly (both arms hexa_bool)
+        //   is_empty  → hexa_is_empty (all arms hexa_bool)
+        //   starts_with/ends_with/to_bool → hexa_bool(...)
+        "is_empty" -> _types_t_bool(),
+        "contains" -> _types_t_bool(),
+        "starts_with" -> _types_t_bool(),
+        "ends_with" -> _types_t_bool(),
+        "to_bool" -> _types_t_bool(),
+        // → string: gen2 hexa_to_string / str_* / rt_str_* kernels (→ string).
+        "to_string" -> _types_t_string(),
+        "to_upper" -> _types_t_string(),
+        "to_lower" -> _types_t_string(),
+        "to_uppercase" -> _types_t_string(),
+        "to_lowercase" -> _types_t_string(),
+        "trim" -> _types_t_string(),
+        "trim_start" -> _types_t_string(),
+        "trim_end" -> _types_t_string(),
+        "substring" -> _types_t_string(),
+        "substr" -> _types_t_string(),
+        "replace" -> _types_t_string(),
+        "join" -> _types_t_string(),
+        "repeat" -> _types_t_string(),
+        "pad_left" -> _types_t_string(),
+        "pad_right" -> _types_t_string(),
+        "center" -> _types_t_string(),
+        _ -> _types_empty_type(),
+    }
+}
+
 // ── Call checker ─────────────────────────────────────────────
 
 fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
@@ -3973,6 +4046,18 @@ fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // receiver, so the selector is NOT an unresolved free name.
             if !(callee.kind == ExprKind::Field && _is_builtin_method(callee.text)) {
                 _emit_hx2001_callee(name, callee.span, out)
+            } else if _types_static_on {
+                // static-types: type the builtin-method-call RESULT from the
+                // gen2_method_builtin-mirrored table (receiver-independent
+                // monomorphic subset), so `s.len()`/`xs.count()`/… flow a
+                // KNOWN scalar into the HX3011/HX3003/HX3004 rungs instead of
+                // the type-opaque unknown they carried before (the last total
+                // inference hole). Polymorphic/container selectors return
+                // empty → keep the conservative unknown, no false diagnostics.
+                // FLIP-3 flagless always-on marker; byteeq-neutral via corpus-
+                // clean real source + MIR type-erase + fixture Warning-band.
+                let _bm_ret = _types_builtin_method_ret(callee.text)
+                if len(_bm_ret.kind) > 0 { return _bm_ret }
             }
         }
         // Callee not resolved as fn — skip arity/argument checks; return value

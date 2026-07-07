@@ -2330,6 +2330,65 @@ fn _build_case_iife_over_fixture() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// ── (ba/bb/bc) static-types builtin-method-call RESULT inference ─────────────
+// The last total inference hole: builtin-method-call results (`s.len()`,
+// `xs.map(f)`, …) were 100% type-opaque (inferred unknown). The
+// `_types_builtin_method_ret` table — mirrored EXACTLY from
+// `self/codegen.hexa::gen2_method_builtin` — now types the receiver-INDEPENDENT
+// MONOMORPHIC subset (len→i64, contains→bool, trim→string, …), so the KNOWN
+// scalar flows into the already-shipped HX3011 typed-let rung; polymorphic /
+// container / element-returning selectors (map/filter/fold/get/pop/find/…) stay
+// unknown → no false diagnostics. FLIP-3 flagless (real=Error / *_test fixture=
+// Warning via _types_strict_for); the assertions below are count-based and
+// band-agnostic, matching the (h)/(i)/(j) HX3011 rungs.
+
+// (ba) hz_method_ret_typed — `fn u(s: string) { let n: bool = s.len() }`:
+// len()→i64 provably ≠ bool → exactly 1 HX3011 (E0308 typed-let mismatch).
+fn _build_case_method_ret_typed() -> Module {
+    let f = "case_method_ret_typed.hexa"
+    let recv = _ident_expr("s", f, 2, 18)
+    let call = _call_expr(_field_expr(recv, "len", f, 2, 20), [], f, 2, 20)
+    let body = _block([_let_expr("n|bool", call, f, 2, 5)], f, 2, 1)
+    let item_u = _fn_item("u", [_param("s", "string", f, 1, 6)], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_u)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (bb) fp_method_ret_ok — `fn u(s: string) { let n: i64 = s.len() }`:
+// len()→i64 matches the i64 annotation → 0 HX3011 (false-positive guard: a
+// correctly-typed builtin-method result must never over-reject).
+fn _build_case_method_ret_ok() -> Module {
+    let f = "case_method_ret_ok.hexa"
+    let recv = _ident_expr("s", f, 2, 17)
+    let call = _call_expr(_field_expr(recv, "len", f, 2, 19), [], f, 2, 19)
+    let body = _block([_let_expr("n|i64", call, f, 2, 5)], f, 2, 1)
+    let item_u = _fn_item("u", [_param("s", "string", f, 1, 6)], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_u)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (bc) fp_container_unknown — `fn u(xs: [i64], f: i64) { let x: i64 = xs.map(f) }`:
+// `map` is EXCLUDED (polymorphic/container — result element type depends on the
+// receiver + callback), so the call stays type-opaque and the typed-let never
+// fires → 0 HX3011. This is the guard that the excluded-set stays unknown (a
+// mis-typed container/element method would produce WRONG diagnostics here).
+fn _build_case_container_method_unknown() -> Module {
+    let f = "case_container_method_unknown.hexa"
+    let recv = _ident_expr("xs", f, 2, 17)
+    let arg = _ident_expr("f", f, 2, 24)
+    let call = _call_expr(_field_expr(recv, "map", f, 2, 20), [arg], f, 2, 20)
+    let body = _block([_let_expr("x|i64", call, f, 2, 5)], f, 2, 1)
+    let mut params = []
+    params.push(_array_param("xs", "i64", f, 1, 6))
+    params.push(_param("f", "i64", f, 1, 15))
+    let item_u = _fn_item("u", params, _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_u)
+    return Module { file: f, items: items, imports: [] }
+}
+
 fn _run_case(label: string, m: Module) -> array {
     println("")
     println("── " + label + " ──")
@@ -3271,6 +3330,40 @@ fn main() {
         ok = false
     } else {
         println("  ok: 1 HX3043 as WARNING (fixture carve-out: *_test.hexa stays warn-band)")
+    }
+
+    // (ba) ★ builtin-method-call RESULT inference — hz_method_ret_typed:
+    // `let n: bool = s.len()` → len()→i64 ≠ bool → 1 HX3011 (the last total
+    // inference hole now feeds the typed-let rung).
+    let diags_ba = _run_case("(ba) static-types — builtin-method result typed: let n:bool = s.len() → len→i64 ≠ bool → 1 HX3011", _build_case_method_ret_typed())
+    let cba = _count_code(diags_ba, "HX3011")
+    if cba != 1 {
+        println("  FAIL: case (ba) expected 1 HX3011 (bool = i64-returning len()), got " + to_string(cba) + " (total=" + to_string(len(diags_ba)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3011 (s.len()→i64 vs bool annotation)")
+    }
+
+    // (bb) ★ builtin-method-call RESULT inference — fp_method_ret_ok:
+    // `let n: i64 = s.len()` → len()→i64 == i64 → 0 HX3011 (no over-reject).
+    let diags_bb = _run_case("(bb) static-types — builtin-method result ok: let n:i64 = s.len() → 0 HX3011 (false-positive guard)", _build_case_method_ret_ok())
+    let cbb = _count_code(diags_bb, "HX3011")
+    if cbb != 0 {
+        println("  FAIL: case (bb) expected 0 HX3011 (i64 = i64-returning len()), got " + to_string(cbb) + " (total=" + to_string(len(diags_bb)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3011 (matched i64 = s.len() never over-rejects)")
+    }
+
+    // (bc) ★ builtin-method-call RESULT inference — fp_container_unknown:
+    // `let x: i64 = xs.map(f)` → map EXCLUDED (polymorphic) → unknown → 0 HX3011.
+    let diags_bc = _run_case("(bc) static-types — container method excluded: let x:i64 = xs.map(f) → map unknown → 0 HX3011 (no false fire)", _build_case_container_method_unknown())
+    let cbc = _count_code(diags_bc, "HX3011")
+    if cbc != 0 {
+        println("  FAIL: case (bc) expected 0 HX3011 (map excluded/unknown), got " + to_string(cbc) + " (total=" + to_string(len(diags_bc)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3011 (polymorphic map stays unknown — no false diagnostics)")
     }
 
     println("")
