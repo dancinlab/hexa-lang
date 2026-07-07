@@ -2177,6 +2177,23 @@ fn _emit_hx3033(a: string, b: string, sp: Span, out: array) {
     }
 }
 
+// HX3043 — IIFE (immediately-invoked closure literal) arg-count mismatch
+// (Rust E0593), static-types R6. `expected` = the closure's declared param
+// count, `actual` = the call's argument count. Mirrors _emit_hx3030's band
+// policy: real source → build-refusing Error (REJECT), byte-eq test fixtures
+// stay Warning via the `_types_strict_for` path carve-out.
+fn _emit_hx3043(expected: i64, actual: i64, sp: Span, out: array) {
+    let mut b = diag_new("HX3043")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "expected", to_string(expected))
+    b = diag_arg(b, "actual", to_string(actual))
+    if _types_strict_for(sp.file) {
+        out.push(diag_emit(b))
+    } else {
+        out.push(diag_emit_sev(b, Severity::Warning))
+    }
+}
+
 fn _emit_hx3002(name: string, expected: i64, actual: i64, sp: Span, out: array) {
     let mut b = diag_new("HX3002")
     b = diag_span(b, sp)
@@ -3897,6 +3914,35 @@ fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             _own_lint_touch(e.children[1 + i], out)
         }
         i = i + 1
+    }
+
+    // HX3043 (Rust E0593) — IIFE (immediately-invoked closure literal)
+    // arg-count mismatch. The callee is SYNTACTICALLY a closure literal
+    // `(fn(p0..p_{n-1}){ body })(a0..a_{m-1})`, so the parameter count is on
+    // the closure node (children minus the trailing body block) and the
+    // argument count is on this call — both present, so NO closure typing /
+    // inference / dataflow is needed. Scope = IIFE ONLY: a `let f = fn(..)`
+    // bound closure is out of scope (a separate future round). hexa closures
+    // are non-variadic / no-default / no-spread (parser: params are plain
+    // comma-separated idents), so the required arity is EXACT.
+    //
+    // We handle the closure-callee case here and RETURN, so the generic
+    // fn-arity block below never reaches a closure: RFC-C1 closure inference
+    // (`_infer_expr` closure arm) returns a bare `fn` type with EMPTY args
+    // (expected_count would be 0), which would otherwise mis-fire HX3002 on
+    // every IIFE-with-args. The call's static result is the closure body's
+    // value, which RFC-C1 does not type (empty ret) → unit, matching the
+    // generic tail. FLIP-3 band: real source → build-refusing Error (REJECT),
+    // byte-eq test fixture → Warning via _types_strict_for. Lane B is
+    // always-on (no gate); safe because real-source IIFE-arity mismatches are
+    // ZERO across the shipping tree (the corpus contains no IIFE at all), so
+    // this is adds-only-true-positives and byteeq-real neutral.
+    if _types_is_closure(callee.kind) && len(callee.children) >= 1 {
+        let clo_arity = len(callee.children) - 1
+        if arg_count != clo_arity {
+            _emit_hx3043(clo_arity, arg_count, e.span, out)
+        }
+        return _types_t_unit()
     }
 
     // Callee must be a fn type. A `named:HexaVal` callee is the dynamic
