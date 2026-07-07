@@ -197,6 +197,29 @@ fn _call_expr(callee: Expr, args: [Expr], file: string, line: i64, col: i64) -> 
     }
 }
 
+// HX3043 (E0593) IIFE probe — closure literal `fn(p0..){ body }`. Parser AST
+// shape (parser.hexa parse_closure_expr): text = decimal param count,
+// children = [param_0 .. param_{n-1}, body_block]; each param is an Ident
+// carrying the NAME. Bodies here are literal-only so callee-inference's body
+// walk (types.hexa closure arm) surfaces no param-lookup noise.
+fn _closure_expr(param_names: [string], body: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    let mut i = 0
+    while i < len(param_names) {
+        kids.push(_ident_expr(param_names[i], file, line, col + i))
+        i = i + 1
+    }
+    kids.push(body)
+    return Expr {
+        kind: ExprKind::Closure,
+        span: _span(file, line, col, 2),
+        text: to_string(len(param_names)),
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
 fn _return_expr(value: Expr, file: string, line: i64, col: i64) -> Expr {
     let mut kids = []
     kids.push(value)
@@ -2233,6 +2256,80 @@ fn _build_case_arena_escape() -> Module {
 
 // ── Driver ───────────────────────────────────────────────────
 
+// ── (av)–(az) HX3043 (Rust E0593) IIFE arg-count mismatch ────────────────
+// Static-types R6 rung, lane B (always-on flagless). Scope = IIFE only: the
+// callee IS a closure literal, so param count (closure node) and arg count
+// (call) are both syntactic. FLIP-3 band: real source → Error, *_test.hexa
+// fixture → Warning. Bodies are literal-only (`{ 0 }`) so no param-lookup
+// noise. Each is a self-contained module (types-test-hexa-1: no union).
+
+// (av) hz_iife_arity_over — `(fn(a){ 0 })(1, 2)` : 1 param, 2 args → HX3043.
+fn _build_case_iife_over() -> Module {
+    let f = "case_av.hexa"
+    let clo = _closure_expr(["a"], _block([_int_expr("0", f, 1, 20)], f, 1, 18), f, 1, 14)
+    let mut args = []
+    args.push(_int_expr("1", f, 1, 26))
+    args.push(_int_expr("2", f, 1, 29))
+    let call = _call_expr(clo, args, f, 1, 25)
+    let item_main = _fn_item("main", [], _empty_type_ref(), _block([call], f, 1, 12), f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (aw) hz_iife_arity_under — `(fn(a,b){ 0 })(1)` : 2 params, 1 arg → HX3043.
+fn _build_case_iife_under() -> Module {
+    let f = "case_aw.hexa"
+    let clo = _closure_expr(["a", "b"], _block([_int_expr("0", f, 1, 22)], f, 1, 20), f, 1, 14)
+    let mut args = []
+    args.push(_int_expr("1", f, 1, 30))
+    let call = _call_expr(clo, args, f, 1, 29)
+    let item_main = _fn_item("main", [], _empty_type_ref(), _block([call], f, 1, 12), f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (ax) fp_iife_arity_ok — `(fn(a,b){ 0 })(1, 2)` : 2 params, 2 args → 0.
+fn _build_case_iife_ok() -> Module {
+    let f = "case_ax.hexa"
+    let clo = _closure_expr(["a", "b"], _block([_int_expr("0", f, 1, 22)], f, 1, 20), f, 1, 14)
+    let mut args = []
+    args.push(_int_expr("1", f, 1, 30))
+    args.push(_int_expr("2", f, 1, 33))
+    let call = _call_expr(clo, args, f, 1, 29)
+    let item_main = _fn_item("main", [], _empty_type_ref(), _block([call], f, 1, 12), f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (ay) fp_iife_zero — `(fn(){ 0 })()` : 0 params, 0 args → 0.
+fn _build_case_iife_zero() -> Module {
+    let f = "case_ay.hexa"
+    let clo = _closure_expr([], _block([_int_expr("0", f, 1, 16)], f, 1, 14), f, 1, 14)
+    let call = _call_expr(clo, [], f, 1, 23)
+    let item_main = _fn_item("main", [], _empty_type_ref(), _block([call], f, 1, 12), f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (az) hz_iife_arity_over WARNING band — same shape as (av) but a *_test.hexa
+// fixture path → FLIP-3 carve-out re-bands HX3043 to Warning (never aborts).
+fn _build_case_iife_over_fixture() -> Module {
+    let f = "case_az_test.hexa"
+    let clo = _closure_expr(["a"], _block([_int_expr("0", f, 1, 20)], f, 1, 18), f, 1, 14)
+    let mut args = []
+    args.push(_int_expr("1", f, 1, 26))
+    args.push(_int_expr("2", f, 1, 29))
+    let call = _call_expr(clo, args, f, 1, 25)
+    let item_main = _fn_item("main", [], _empty_type_ref(), _block([call], f, 1, 12), f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
 fn _run_case(label: string, m: Module) -> array {
     println("")
     println("── " + label + " ──")
@@ -3123,6 +3220,57 @@ fn main() {
         ok = false
     } else {
         println("  ok: 0 HX3033 (param×param both-known → known-both compare arm; HX3033 never over-reaches into HX3001 territory)")
+    }
+
+    // (av) ★ HX3043 (E0593) IIFE arity OVER — (fn(a){0})(1,2) → 1 HX3043 Error.
+    let diags_av = _run_case("(av) static-types R6 — IIFE arity over (fn(a){0})(1,2) → 1 HX3043 (E0593) as ERROR (real source)", _build_case_iife_over())
+    let cav = _count_code_sev(diags_av, "HX3043", "error")
+    if cav != 1 {
+        println("  FAIL: case (av) expected 1 HX3043 error, got " + to_string(cav) + " (total=" + to_string(len(diags_av)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3043 error (IIFE 1 param vs 2 args)")
+    }
+
+    // (aw) ★ HX3043 IIFE arity UNDER — (fn(a,b){0})(1) → 1 HX3043 Error.
+    let diags_aw = _run_case("(aw) static-types R6 — IIFE arity under (fn(a,b){0})(1) → 1 HX3043 (E0593) as ERROR", _build_case_iife_under())
+    let caw = _count_code_sev(diags_aw, "HX3043", "error")
+    if caw != 1 {
+        println("  FAIL: case (aw) expected 1 HX3043 error, got " + to_string(caw) + " (total=" + to_string(len(diags_aw)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3043 error (IIFE 2 params vs 1 arg)")
+    }
+
+    // (ax) ★ HX3043 IIFE arity OK — (fn(a,b){0})(1,2) → 0 HX3043.
+    let diags_ax = _run_case("(ax) static-types R6 — IIFE arity ok (fn(a,b){0})(1,2) → 0 HX3043 (false-positive guard)", _build_case_iife_ok())
+    let cax = _count_code(diags_ax, "HX3043")
+    if cax != 0 {
+        println("  FAIL: case (ax) expected 0 HX3043 (matched arity), got " + to_string(cax) + " (total=" + to_string(len(diags_ax)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3043 (matched arity IIFE never over-rejects)")
+    }
+
+    // (ay) ★ HX3043 IIFE zero-arity — (fn(){0})() → 0 HX3043.
+    let diags_ay = _run_case("(ay) static-types R6 — IIFE zero-arity (fn(){0})() → 0 HX3043 (false-positive guard)", _build_case_iife_zero())
+    let cay = _count_code(diags_ay, "HX3043")
+    if cay != 0 {
+        println("  FAIL: case (ay) expected 0 HX3043 (zero-arity match), got " + to_string(cay) + " (total=" + to_string(len(diags_ay)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3043 (zero-param zero-arg IIFE clean)")
+    }
+
+    // (az) ★ HX3043 IIFE arity over — WARNING band (*_test.hexa fixture carve-out).
+    let diags_az = _run_case("(az) static-types R6 — IIFE arity over in *_test.hexa fixture → 1 HX3043 as WARNING (FLIP-3 carve-out)", _build_case_iife_over_fixture())
+    let caz = _count_code_sev(diags_az, "HX3043", "warning")
+    let caz_e = _count_code_sev(diags_az, "HX3043", "error")
+    if caz != 1 || caz_e != 0 {
+        println("  FAIL: case (az) expected 1 HX3043 warning / 0 error, got warn=" + to_string(caz) + " err=" + to_string(caz_e) + " (total=" + to_string(len(diags_az)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3043 as WARNING (fixture carve-out: *_test.hexa stays warn-band)")
     }
 
     println("")

@@ -799,6 +799,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3043",
+        title: "this closure takes a different number of arguments than were supplied",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "this closure takes {expected} argument(s) but {actual} were supplied",
+        explain: "Static type check (always-on since FLIP-3 flagless — Rust-style, no disable switch), static-types R6-r? (HX3043). An IMMEDIATELY-INVOKED closure literal — `(fn(p0..p_{n-1}){ body })(a0..a_{m-1})`, the IIFE form where the callee expression IS a closure literal — is called with a number of arguments that does not match the closure's declared parameter count. This is Rust's E0593 ('closure is expected to take N argument(s)'; rustc_hir_typeck closure-arg-count check), narrowed here to the IIFE subset where BOTH the parameter count (on the closure node — its children minus the trailing body block) and the argument count (on the enclosing call) are SYNTACTICALLY PRESENT at the call site, so no closure typing, inference, or dataflow is needed. Scope is deliberately the IIFE ONLY: a `let f = fn(..)` bound-closure call, or any fn-typed value whose arity must be inferred, is OUT of scope (a separate future round) — the RFC-C1 closure inference returns a bare `fn` type with EMPTY args, so the generic HX3002 fn-arity block cannot recover a closure's real arity; HX3043 reads it directly off the closure literal instead. hexa closures are non-variadic, have no default parameters, and no spread/rest argument (parser: closure params are plain comma-separated idents), so the required arity is EXACT and a count mismatch is an unconditional true positive. Conservative by construction: it fires ONLY when the callee is syntactically a closure literal (`ExprKind::Closure`) with at least the body child — a non-closure callee, a method call, a bound-closure ident, and any non-IIFE form are all SILENT. Emitted as a build-refusing ERROR for real source (REJECT), while byte-eq TEST FIXTURES (`compiler/test/` corpus + `*_test.hexa`) stay WARNING via the `_types_strict_for` path carve-out. Lane B is always-on with NO gate, so this is safe only because real-source IIFE-arity mismatches are ZERO across the shipping tree (corpus-0 verified — the corpus contains no IIFE at all), making it adds-only-true-positives and byteeq-real neutral. Fix: pass exactly as many arguments as the closure declares parameters, or adjust the closure's parameter list to match the call.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
