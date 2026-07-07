@@ -518,6 +518,19 @@ if !backend_kind_user_set
     && emit_kind == "obj" {
     backend_kind = "native"
 }
+// axis ③ round-1 — native-default for the ELF x86_64 obj path so
+// `--target=x86_64-linux-gnu --emit=obj` skips host `as` out of the box, the
+// missing sibling of the two flips above (the x86_64 ELF writer at ~:1006 —
+// pack_lir_x86_64 + serialize_elf_x86_64 — is already wired). This kills the
+// LAST `as` fork on the linux native-emit path (leg-B x86_64). Opt back into the
+// `as` fork via `--backend=system`. BIT-CHANGING: x86_64 object bytes shift from
+// as-produced to native-encoder-produced — gated on byteeq 3-target GREEN + an
+// ENCODE-MISS==0 self-emit census (a miss emits silently-empty bytes).
+if !backend_kind_user_set
+    && target == "x86_64-linux-gnu"
+    && emit_kind == "obj" {
+    backend_kind = "native"
+}
 
 if len(source_path) == 0 {
     eprintln("hexa-compiler: missing SOURCE.hexa")
