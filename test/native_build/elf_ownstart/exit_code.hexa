@@ -1,0 +1,19 @@
+// test/native_build/elf_ownstart/exit_code.hexa
+//
+// HEXA-OWN axis-③ · ELF x86_64 own-start linker ROUND-1 target (exit-code-only).
+//
+// Compiled to a native x86_64 ELF .o via the OWN backend (pack_lir_x86_64 +
+// serialize_elf_x86_64, compiler/main.hexa native ELF-x86 branch), then linked
+// to a static ET_EXEC via the in-tree ELF own-start linker
+// (link_elf_x86_64_ownstart, compiler/emit/elf_x86_64.hexa) with 0 binutils.
+//
+// ROUND-1 invariant proven by this file: ZERO data refs + zero runtime-builtin
+// CALL, so `.text` is fully self-contained (0 UNDEF externs). The synthesized
+// 14-byte own `_start` at text offset 0 (call main; mov edi,eax; mov eax,60;
+// syscall) forwards main's return (EAX) as the process exit code — no crt1.o,
+// no -lc, no -dynamic-linker.
+//
+// Expected end-to-end:  ./exit_code ; echo $?   ->   42
+fn main() -> int {
+    return 42
+}
