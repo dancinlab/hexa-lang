@@ -2104,6 +2104,24 @@ fn _emit_hx3024(actual: Type, sp: Span, out: array) {
     }
 }
 
+// HX3044 — int-literal range-fit REJECT (Warning-band MVP). Reference-matched
+// to rustc's `overflowing_literals` lint ("literal out of range for `i8`": a
+// decimal/hex int literal whose value falls outside the [MIN,MAX] of the
+// narrower signed integer it is annotated with, e.g. `let x: i8 = 300`). hexa's
+// shipping tree is i64-only, so this is CORPUS-0 by construction — a forward
+// guardrail for user programs that annotate iN widths. Types erase at MIR so
+// .text stays byte-identical (byteeq-neutral). MVP BAND = Warning ALWAYS (never
+// escalates to a real-source Error) so a latent true-positive can never abort
+// the shipping path; STRICT-Error re-band + multi-site fan-out (return / assign
+// / field / call-arg) is a documented follow-up. Only reached under
+// HEXA_STATIC_TYPES, so the default diagnostic stream is unchanged.
+fn _emit_hx3044(expected: Type, sp: Span, out: array) {
+    let mut b = diag_new("HX3044")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "expected", _type_display(expected))
+    out.push(diag_emit_sev(b, Severity::Warning))
+}
+
 fn _emit_hx3025(actual: Type, sp: Span, out: array) {
     let mut b = diag_new("HX3025")
     b = diag_span(b, sp)
@@ -2336,6 +2354,99 @@ fn _is_float_kind(t: Type) -> bool {
     return false
 }
 
+// ── HX3044 int-literal range-fit predicate (Warning-band MVP) ──
+// Decimal digit → value (0-9), or -1 for a non-digit. Explicit `==` if-ladder
+// (the `is_digit_ch` lexer idiom) — NO char arithmetic / NO to_int, so it is
+// stage0-safe (no bigint, no char subtraction assumption).
+fn _types_dec_digit_val(c) -> i64 {
+    if c == '0' { return 0 }
+    if c == '1' { return 1 }
+    if c == '2' { return 2 }
+    if c == '3' { return 3 }
+    if c == '4' { return 4 }
+    if c == '5' { return 5 }
+    if c == '6' { return 6 }
+    if c == '7' { return 7 }
+    if c == '8' { return 8 }
+    if c == '9' { return 9 }
+    return -1
+}
+
+// Hex digit → value (0-15), or -1. Mirrors `is_hex_digit_ch`.
+fn _types_hex_digit_val(c) -> i64 {
+    let d = _types_dec_digit_val(c)
+    if d >= 0 { return d }
+    if c == 'a' || c == 'A' { return 10 }
+    if c == 'b' || c == 'B' { return 11 }
+    if c == 'c' || c == 'C' { return 12 }
+    if c == 'd' || c == 'D' { return 13 }
+    if c == 'e' || c == 'E' { return 14 }
+    if c == 'f' || c == 'F' { return 15 }
+    return -1
+}
+
+// Per-width signed MAX (positive-literal magnitude bound). Negative literals
+// arrive as `UnOp(-, LiteralInt)` and never reach the lit-int arm (a documented
+// follow-up), so we bound positive magnitude against MAX only. i64's MAX is
+// itself i64-representable, so all four bounds fit the stage0 i64 accumulator.
+fn _types_int_max_for(t: Type) -> i64 {
+    if t.kind == "i8"  { return 127 }
+    if t.kind == "i16" { return 32767 }
+    if t.kind == "i32" { return 2147483647 }
+    return 9223372036854775807   // i64
+}
+
+// TRUE iff the positive int-literal `src` fits the signed width of `expected`.
+// Scans the literal's digits DIRECTLY (decimal, or `0x`/`0X` hex; the lexer
+// already strips `_` separators but we skip them defensively) with an
+// OVERFLOW-GUARDED i64 accumulation — stage0 has no bigint, so we never let the
+// partial value exceed the target MAX (the `val > (maxv - d) / base` guard is
+// checked BEFORE each multiply-add, and never itself overflows since maxv is
+// i64-repr and d < base). Mirrors the char-scan idiom of `_types_let_name`.
+// FP-guard: on ANY unrecognised form (empty text, a non-digit char — e.g. a
+// stray sign / float punctuation that should never reach a LiteralInt) it
+// CONSERVATIVELY returns true (never a false REJECT).
+fn _types_int_lit_fits(expected: Type, src: Expr) -> bool {
+    let chars = src.text.chars()
+    let n = len(chars)
+    if n == 0 { return true }
+    let maxv = _types_int_max_for(expected)
+    // hex form: `0x` / `0X` prefix (the lexer emits the prefix verbatim).
+    if n >= 2 && chars[0] == '0' && (chars[1] == 'x' || chars[1] == 'X') {
+        let mut hval = 0
+        let mut hi = 2
+        let mut hsaw = false
+        while hi < n {
+            let c = chars[hi]
+            if c != '_' {
+                let d = _types_hex_digit_val(c)
+                if d < 0 { return true }
+                hsaw = true
+                if hval > (maxv - d) / 16 { return false }
+                hval = hval * 16 + d
+            }
+            hi = hi + 1
+        }
+        return true
+    }
+    // decimal form.
+    let mut val = 0
+    let mut i = 0
+    let mut saw = false
+    while i < n {
+        let c = chars[i]
+        if c != '_' {
+            let d = _types_dec_digit_val(c)
+            if d < 0 { return true }
+            saw = true
+            if val > (maxv - d) / 10 { return false }
+            val = val * 10 + d
+        }
+        i = i + 1
+    }
+    return true
+}
+
 // Literal-coercion-aware compatibility check.
 //
 // `_types_equal` is structural on `kind`, which is too strict for the
@@ -2350,9 +2461,13 @@ fn _is_float_kind(t: Type) -> bool {
 //   - if `actual` came from a float literal AND both kinds are float
 //     kinds (f32/f64) → ok
 //
-// Range-fit checking (does the literal value fit in i8?) is deferred to
-// a later pass; v0 trusts the programmer the way Rust's untyped-int
-// literal inference does. Out-of-range fits surface as codegen overflow.
+// Range-fit checking (does the literal value fit in i8?) is layered on TOP of
+// this coercion at the let-check site by HX3044 (`_types_int_lit_fits` +
+// `_emit_hx3044`, Warning-band MVP) — reference-matched to rustc's
+// `overflowing_literals`. This arm intentionally stays range-BLIND (it only
+// answers kind-compatibility); the value gate lives at the emit site so this
+// helper's coercion policy is unchanged. Out-of-range non-let positions still
+// surface as codegen overflow until the multi-site fan-out follow-up.
 // HexaVal is the dynamic tagged any-value: at runtime every value is a HexaVal
 // and the runtime dispatches on its tag (the same rationale the existing
 // unit/unknown tolerances already cite). `named:HexaVal` and the explicit
@@ -3010,6 +3125,17 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                         let rhs_t = _infer_expr(rhs, env, ctx, out)
                         if !_types_assignable(declared, rhs_t, rhs) {
                             _emit_hx3011(declared, rhs_t, e.span, out)
+                        }
+                        // HX3044 — int-literal range-fit (Warning-band MVP).
+                        // INDEPENDENT of the HX3011 arm above: `let x: i8 = 300`
+                        // IS assignable (both are integer kinds, so the literal-
+                        // coercion arm accepts it) → HX3011 stays silent; this
+                        // gate catches the overflow rustc's `overflowing_literals`
+                        // rejects. Only POSITIVE int literals reach here (a
+                        // negative literal is `UnOp(-, LiteralInt)`, not
+                        // `_types_is_lit_int` — documented follow-up).
+                        if _types_is_lit_int(rhs.kind) && _is_integer_kind(declared) && !_types_int_lit_fits(declared, rhs) {
+                            _emit_hx3044(declared, e.span, out)
                         }
                     }
                 } else if _types_is_ident(rhs.kind) || _types_is_call(rhs.kind) || _types_is_index(rhs.kind) || _types_is_field(rhs.kind) {

@@ -808,6 +808,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3044",
+        title: "literal out of range for its integer type",
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "literal out of range for `{expected}`",
+        explain: "Static type check (opt-in static-types lane, HEXA_STATIC_TYPES). An integer literal assigned to a typed `let x: iN = <literal>` binding has a value that does not fit the signed range of the annotated width `iN`. This is Rust's `overflowing_literals` lint ('literal out of range for `i8`'; rustc_lint::types LintExpectation — e.g. `let x: i8 = 300` where `i8`'s range is `-128..=127`, or `let x: i32 = 2147483648` one past `i32::MAX`). The predicate (`_types_int_lit_fits`) scans the literal's digits DIRECTLY — decimal, or a `0x`/`0X` hex form, with `_` separators skipped defensively (the lexer already strips them) — using an OVERFLOW-GUARDED i64 accumulation (stage0 has no bigint, so the partial value is never allowed to exceed the target MAX; the `val > (max - digit) / base` guard is checked before each multiply-add and never itself overflows). The per-width signed bounds are i8 [-128,127], i16 [-32768,32767], i32 [-2147483648,2147483647], i64 [-9223372036854775808,9223372036854775807]. This gate is INDEPENDENT of HX3011 (mismatched-types): `let x: i8 = 300` IS kind-assignable (the literal-coercion arm accepts any integer-literal → integer-kind pair), so HX3011 stays silent while HX3044 catches the value overflow. SCOPE (MVP): fires ONLY at the let-check site, and ONLY on POSITIVE int literals — a negative literal arrives as `UnOp(-, LiteralInt)` (not `_types_is_lit_int`), so `let x: i8 = -128` is a documented follow-up alongside the STRICT-Error re-band and the multi-site fan-out (return / assign / field / call-arg). Conservative by construction: any unrecognised literal form (empty, a stray non-digit char) returns 'fits' → never a false REJECT. hexa's shipping tree is i64-only, so this rule fires on ZERO real source (corpus-0 by construction) — it is a forward guardrail for user programs that annotate narrower iN widths. BAND = Warning ALWAYS (never escalates to a real-source Error) so a latent true positive can never abort the shipping path; types erase at MIR so codegen .text is byte-identical (byteeq-neutral). Only reached under HEXA_STATIC_TYPES, so the default diagnostic stream is unchanged. Fix: widen the annotation to a type whose range holds the value (e.g. `i32`/`i64`), or use a literal within the type's range.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
