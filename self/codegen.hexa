@@ -12754,7 +12754,18 @@ fn gen2_flat_struct_typedef(node) {
 //  global · captured by a closure · reassigned · address-of → all force heap.
 // ═══════════════════════════════════════════════════════════
 fn _stack_alloc_enabled() {
-    return env("HEXA_STACK_ALLOC") != ""
+    // mem-lane ② default-ON flip (attempt #3): opt-OUT. The escape scan is now
+    // SOUND — both array-scan/value-scan divergence holes closed (#4690 node.args
+    // expr-form · #4693 TryCatch/RecoverStmt stmt-form) + sibling-parity audit
+    // #4695 confirms the family is CLOSED (no third hole). Re-proven on aiden
+    // (x86_64-linux) over the FULL self-host+stdlib corpus (980 modules) with the
+    // SOUND scan: 0 new SIGSEGV, 0 rc-diffs ON-vs-OFF; module_loader ml_hset_new
+    // `empty`→hexa_array_new() HEAP (escape caught); law_io.hexa (try/catch+array)
+    // transpiles rc=0; runnable sample byte-identical ON vs OFF. Win: 5M-iter
+    // non-escaping [i,i+1,i+2] → 25M allocations dropped to 0, MaxRSS 943048→5384 KB
+    // (~175×), output byte-identical. BIT-CHANGING codegen — the release gate is
+    // byteeq 3-target gen3≡gen4 (PR-CI) + shipping smoke, NOT a local merge.
+    return env("HEXA_STACK_ALLOC") != "0"
 }
 
 // Names of flat-struct bindings in the CURRENT fn body that are proven
