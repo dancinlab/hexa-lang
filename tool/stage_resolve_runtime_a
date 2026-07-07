@@ -1501,6 +1501,17 @@ build_runtime_a_from_source() {
         # heap family on darwin. An allocator header-ABI flag is part of the CALLER surface, not
         # just the shim provider (convergence hxlcl-realloc-arm64-s-1).
         local _mo_rtcore_def=""
+        # axis-② strcmp caller-drop (#4667 follow-up flip · default-ON, COUPLED to the
+        # RT-NATIVE-STRCMP seed adoption at ~L1910). -DHEXA_RT_RANGE_STRCMP_NATIVE routes the
+        # standalone runtime_core.o (S3) hexa_map_get_field range key-compare
+        # (self/runtime_core_emit.hexa:4256 — the ONLY direct strcmp( in that TU; every other
+        # compare is the self-contained rt_strcmp) from libc strcmp to native hxlcl_strcmp,
+        # dropping runtime_core.o's last `strcmp` nm-UND. SET only when the strcmp native seed
+        # is adopted (hxlcl_strcmp becomes the native word-scan, not the shim :464
+        # `return strcmp` libc delegate) so the pair moves together; empty (seed-fallback /
+        # SELFEMIT-smoke RT_NATIVE_STRCMP=0 / non-adopting target) => range gate OFF =>
+        # runtime_core.o byte-identical to today.
+        local _rng_strcmp_def=""
         # ── zero-c #29 SELFEMIT×RT-NATIVE CO-DROP registry (root-cause #4570→#4571) ──
         # A symbol that a RT-NATIVE-<SYM> frozen seed will adopt must NOT ALSO get a
         # SELFEMIT/MEMLEAF member — two archive members exporting the same global
@@ -1909,6 +1920,7 @@ build_runtime_a_from_source() {
                         else
                         _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_STRCMP"
                         _mo_hxlcl_members="$_mo_hxlcl_members $_rnsc_o"
+                        _rng_strcmp_def="-DHEXA_RT_RANGE_STRCMP_NATIVE"  # axis-② flip: couple range_field caller-drop to strcmp-seed adoption (both ON => strcmp fully drops: runtime_core.o->hxlcl_strcmp + shim native seed member)
                         echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCMP: hxlcl_strcmp ← frozen seed $_rnsc_seed (TARGET=$_rnsc_tgt, 1-symbol contract); shim.o built with -DHEXA_RT_NATIVE_STRCMP (strcmp dropped) — ld -r multidef gate validates"
                         fi
                     else
@@ -3066,7 +3078,7 @@ build_runtime_a_from_source() {
         #      KEPT (supplies the HI-tier rt_* C bodies). SAME seed -D set. NO
         #      HEXA_HAS_HEXA_RT_STDLIB (keeps those bodies inline, not externed).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S3]: compile build/runtime_core.o (standalone TU, runtime_hi_gen.c kept)…"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE $_mo_rtcore_def -I self -include self/runtime_core_sysheaders.h -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE $_mo_rtcore_def $_rng_strcmp_def -I self -include self/runtime_core_sysheaders.h -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
         # (S4) hxlcl_shim.o — libc-delegate hxlcl_* sibling TU.
         # own-start #29 coherence: $_zc_own_def MUST flow here too — without it the
         # shim's hxlcl_atexit stays the glibc-atexit delegate (U atexit), and under
