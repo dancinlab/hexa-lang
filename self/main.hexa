@@ -1419,7 +1419,7 @@ fn os_clang_ldflags() {
         // link ALSO pulls glibc crt1.o _start -> duplicate _start. Append to `base` BEFORE the musl/cuda/
         // default returns so it propagates through all of them. Linux x86_64/arm64 only (darwin = Mach-O
         // LC_MAIN, never entered here). Default-OFF byte-neutral (env unset -> base unchanged).
-        if env_var("HEXA_ZEROC_OWN_START") == "1" {
+        if env_var("HEXA_ZEROC_OWN_START") != "0" {   // FLIP-7 flip-D: default-ON (opt-out =0). Inside the Linux guard (:1414) + arch check + the C1/C2 _start probe (#4652) below.
             let _zc_arch = exec("uname -m 2>/dev/null | tr -d ' \\n\\t'")
             if _zc_arch == "x86_64" || _zc_arch == "aarch64" || _zc_arch == "arm64" {
                 // own-start #29 PR-C probe (mirrors the stage_build_hexa/stage_prebuild_hexat
@@ -4548,7 +4548,7 @@ fn cmd_run_user_direct(file, extra_args) {
                     // --start-group so libc still resolves. This block is x86_64-hardcoded (arm64 never
                     // reaches here). Default-OFF byte-neutral: else-branch char-identical to today.
                     // Loud-fail-safe: a failed ld link falls through to the clang path below.
-                    let _zc_own = env_var("HEXA_ZEROC_OWN_START") == "1"
+                    let _zc_own = env_var("HEXA_ZEROC_OWN_START") != "0"   // FLIP-7 flip-D: default-ON (opt-out =0). x86_64-linux-only path; a failed -nostartfiles ld link loud-falls-through to clang (comment below)
                     let _lnk = if _zc_own { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread -lm --end-group -L'" + _crt + "' -o '" + _nbin + "' 2>&1" } else { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _crt + "/crt1.o' '" + _crt + "/crti.o' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread -lm --end-group '" + _crt + "/crtn.o' -L'" + _crt + "' -o '" + _nbin + "' 2>&1" }
                     let _lr = exec(_lnk)
                     let _nbin_ok = exec("test -x '" + _nbin + "' && printf yes || printf no")

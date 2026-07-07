@@ -48,7 +48,7 @@ LIBS="${LIBS:-}"
 # coverage is complete; the default-ON flip is a SEPARATE PR gated on faithful-nobaseline 3-target GREEN.
 # Both _r7_cc_compile_link call sites end in $LIBS, so this single mutation covers cold + seed-converge.
 # linux x86_64/arm64 ONLY (darwin = Mach-O LC_MAIN); env=0 force-overrides OFF. Mirrors stage_build_hexa C0.
-if [ "${HEXA_ZEROC_OWN_START:-0}" = "1" ] && [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
+if [ "${HEXA_ZEROC_OWN_START:-1}" = "1" ] && [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
     _zc_arch="$(uname -m 2>/dev/null)"
     if [ "$_zc_arch" = "x86_64" ] || [ "$_zc_arch" = "aarch64" ] || [ "$_zc_arch" = "arm64" ]; then
         # own-start #29 PR-C probe (mirrors stage_build_hexa): drop crt _start only if the runtime.a
