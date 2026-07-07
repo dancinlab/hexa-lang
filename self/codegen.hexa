@@ -13286,6 +13286,26 @@ fn _expr_escapes_arr_name(node, name) {
             i = i + 1
         }
     }
+    // CALL-ARG ESCAPE (mem-lane ②, mirrors _expr_escapes_name's c17 fix): a
+    // `Call`/method-call node carries its argument expressions in `node.args`
+    // (NOT `node.items` — see parser Call construction, `"args": args`). A
+    // non-`len` call falls through the `k == "Call"` block above into this
+    // generic recursion, so an array binding handed to an opaque sink as a call
+    // arg — `f(empty)`, `x.push(empty)` (module_loader.hexa ml_hset_new) — was
+    // MISSED because this scan never visited `node.args`. It was then wrongly
+    // marked non-escaping → stack-allocated → the pushed descriptor outlived its
+    // frame → dangling stack pointer → use-after-scope SIGSEGV under
+    // HEXA_STACK_ALLOC=1. Scan the arg list so any appearance of `name` there is
+    // an escape (the value-scan sibling _expr_escapes_name already does this;
+    // the array-descriptor scan had diverged on the args-fix). Function-position
+    // (callee) is already covered via node.left.
+    if type_of(node.args) != "string" {
+        let mut i = 0
+        while i < len(node.args) {
+            if _expr_escapes_arr_name(node.args[i], name) { return true }
+            i = i + 1
+        }
+    }
     if type_of(node.fields) != "string" {
         let mut i = 0
         while i < len(node.fields) {
