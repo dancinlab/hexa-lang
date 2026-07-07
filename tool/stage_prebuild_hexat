@@ -56,7 +56,17 @@ if [ "${HEXA_ZEROC_OWN_START:-1}" = "1" ] && [ "$(uname -s 2>/dev/null)" = "Linu
         # non-OWN_START build/runtime.a) has none → -nostartfiles = no _start = FATAL (#4489). $PWD ==
         # the ROOT set below (line 78).
         _zc_ra="${HEXA_PREBUILT_RUNTIME:-$PWD/build/runtime.a}"
-        if [ -f "$_zc_ra" ] && nm "$_zc_ra" 2>/dev/null | grep -qE ' T _?_start$'; then
+        # NO -q: grep MUST read ALL of nm's output. `_start` sorts early (runtime.o,
+        # first member, alphabetical), so `grep -q` early-exits and closes the pipe
+        # while nm is still writing the rest of a >64KB archive symbol dump -> nm
+        # takes SIGPIPE (rc 141) -> under this script's `set -o pipefail` the pipeline
+        # rc is 141 -> the `if` reads FALSE -> crt1 retained -> runtime.o's own _start
+        # collides with Scrt1.o at the link (dup-_start FATAL). The bug fires ONLY
+        # when _start IS present (match -> early-exit -> SIGPIPE), so the probe is
+        # inverted exactly on its TRUE arm. Draining nm (grep, no -q, >/dev/null)
+        # makes the pipeline rc == the real match truth. (measured: nm 93737B,
+        # pipefail+grep-q rc=141; drained rc=0.)
+        if [ -f "$_zc_ra" ] && nm "$_zc_ra" 2>/dev/null | grep -E ' T _?_start$' >/dev/null; then
             LIBS="$LIBS -nostartfiles"
             echo "stage_prebuild_hexat: HEXA_ZEROC_OWN_START=1 (linux/$_zc_arch) — own _start confirmed in $_zc_ra, -nostartfiles on hexat link"
         else

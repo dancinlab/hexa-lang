@@ -80,7 +80,11 @@ jobs:
           # crt startfiles when the archive carries own _start (mirrors the
           # stage_build_hexa nm ' T _start' probe). linux x86_64 CI only.
           _gc_nostart=""
-          if nm build/runtime.a 2>/dev/null | grep -qE ' T _?_start$'; then
+          # NO -q: grep must drain nm — `grep -q` early-exits on the (early-sorting)
+          # _start match, SIGPIPEs nm mid-archive, and under this step's `set -o
+          # pipefail` inverts a FOUND _start into the crt1-retained arm -> dup-_start
+          # at the link. Drained probe (no -q, >/dev/null) makes rc == match truth.
+          if nm build/runtime.a 2>/dev/null | grep -E ' T _?_start$' >/dev/null; then
             _gc_nostart="-nostartfiles"
           fi
           clang -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
