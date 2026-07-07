@@ -1,0 +1,24 @@
+// test/native_build/elf_ownstart/hello_str.hexa
+//
+// HEXA-OWN axis-③ · ELF x86_64 own-start linker ROUND-2 target (data segment).
+//
+// Prints a string via the raw write(2) syscall — NOT println: println lowers to
+// a CALL of a runtime print symbol = an UNDEF extern in the .o (a multi-object
+// link dependency = round-1b), which would NOT exercise the round-2 gate. Using
+// the __hx_syscall6 intrinsic (compiler/codegen/x86_64_linux.hexa:4578) emits an
+// inline `syscall` (no runtime symbol), and the bare string literal materializes
+// as a self-contained RIP-relative `lea` into .rodata with an R_X86_64_PC32
+// reloc (__hx_str_ptr, x86_64_linux.hexa:4448). So the .o has 0 UNDEF externs
+// yet genuinely carries a .rodata data ref.
+//
+// ROUND-2 invariant proven by this file: the string lives in .rodata, so the
+// own-start linker MUST emit a second RW PT_LOAD (serialize_elf_exec_x86_64_2seg)
+// and resolve the PC32 reloc against the data-segment vaddr. A text-only linker
+// (round-1) would mis-link the .rodata reference.
+//
+// __NR_write=1, fd=1, buf=&.LCstr0("hello\n"), count=6.
+// Expected end-to-end:  ./hello_str   ->   stdout "hello\n", exit 0
+fn main() -> int {
+    __hx_syscall6(1, 1, __hx_str_ptr("hello\n"), 6, 0, 0, 0)
+    return 0
+}
