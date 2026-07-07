@@ -605,6 +605,40 @@ pub let mut _bcki_in_place_base = false
 pub let mut _bcki_e_lines: [i64] = []
 pub let mut _bcki_e_cols: [i64] = []
 
+// ── HEXA-OWN round10 — HX3042 use-of-partially-moved-value (Rust E0382) ──
+// A depth-1 field-projection move-state dataflow. Reference-matched to rustc's
+// `MaybeInitializedPlaces` (move = kill/gen inverse of the uninit lane above):
+// the DUAL of the HX3035 `_bcki_check` MaybeUninitialized fixpoint. moved-lane
+// seed = 0, gen = MOVE (an @own call-arg move of `s.f`), kill = a field_set
+// reinit (`s.f = v`) — the SAME bitset, OR-join and convergence guard as
+// `_bcki_check`, keyed by a FLAT (group, field-string) pair, NOT a move-path
+// tree (the ONLY move source on the surface is the @own call-arg, so depth-1
+// pairs suffice — index projections are HX3038/3039, nested bases are silent).
+// The gap this closes: `sink(s.a)` where `s` is an OWNED (non-borrowed) struct
+// local and the callee param is @own — HX3034 only fires when the base is a
+// LIVE ref; an owned base was fully silent. After such a move, `use(s.a)` (a
+// field re-read) or `use(s)` (a whole use) is E0382. Population is gated on
+// `_bck_active` (default false, HEXA_BORROWCK), so the flag-OFF diag stream +
+// emitted bytes stay byte-identical, and @own corpus adoption is 0 → even ON
+// the diag delta is 0 (corpus-clean, gen3≡gen4 preserved). OBSERVE-ONLY (it
+// records events; never mutates any MIR stmt/local/block). Reset per-fn in
+// `_bck_reset_fn`. See `_bck_pm_check` below for the dataflow. SEPARATE lane
+// from HX3014's `_bck_m_*` whole-move registry (mutually exclusive: whole-move
+// = _bck_m_*, partial = _bck_pm_*), so the two never double-fire.
+pub let mut _bck_pm_field: string = ""      // innermost field-read ctx (ident-base only)
+// program-order event log: kind 0=KILL (field_set reinit) · 1=USE · 2=MOVE.
+pub let mut _bck_pm_ev_kind:    [i64] = []
+pub let mut _bck_pm_ev_grps:    [i64] = []
+pub let mut _bck_pm_ev_fields:  [string] = []   // USE "" = whole-base use
+pub let mut _bck_pm_ev_names:   [string] = []
+pub let mut _bck_pm_ev_callees: [string] = []   // MOVE rows only ("" otherwise)
+pub let mut _bck_pm_ev_blocks:  [i64] = []
+pub let mut _bck_pm_ev_lines:   [i64] = []
+pub let mut _bck_pm_ev_spans:   [Span] = []
+// HX3042-only same-site dedup (SEPARATE from `_bck_e_*`/`_bcki_e_*`).
+pub let mut _bck_pm_e_lines: [i64] = []
+pub let mut _bck_pm_e_cols:  [i64] = []
+
 // ── HEXA-OWN round8-2 — HX3036 borrowed-value-does-not-live-long-enough ──
 // (Rust E0597). Reference-matched to rustc's NLL borrow checker (RFC 2094): a
 // loan may not be used past the point its referent's storage dies. The ONLY
@@ -691,6 +725,19 @@ fn _bck_reset_fn() {
     _bcki_in_place_base = false
     _bcki_e_lines = []
     _bcki_e_cols = []
+    // round10 — HX3042 partial-move registry (byteeq-neutral: flag-OFF leaves
+    // every array empty and `_bck_pm_check` returns immediately on nt==0).
+    _bck_pm_field = ""
+    _bck_pm_ev_kind = []
+    _bck_pm_ev_grps = []
+    _bck_pm_ev_fields = []
+    _bck_pm_ev_names = []
+    _bck_pm_ev_callees = []
+    _bck_pm_ev_blocks = []
+    _bck_pm_ev_lines = []
+    _bck_pm_ev_spans = []
+    _bck_pm_e_lines = []
+    _bck_pm_e_cols = []
     // round8-2 — HX3036 asn-lane registries (byteeq-neutral: flag-OFF leaves
     // every array empty and `_bck_ref_outlives_check` returns on nd==0).
     _bck_sc_names = []
@@ -1578,6 +1625,17 @@ fn _bck_check_use(name: string, local_id: i64, blk: i64, sp: Span) {
     _bck_u_names.push(name)
     _bck_u_blocks.push(blk)
     _bck_u_spans.push(sp)
+    // HEXA-OWN round10 (HX3042) — record a partial-move USE. `_bck_pm_field` is
+    // the field this ident is the base of (set by the field-read arm), or "" for
+    // a whole-base use. Suppressed for a place-write base (`s.f = v`/`a[i] = v`),
+    // exactly as the HX3035 lane: rustc allows re-assigning a field / writing a
+    // sibling field after a partial move. `_bck_pm_check` decides emit at end-of-
+    // fn against the full CFG. (No `_bck_in_borrow_rhs` gate: `&s` of a partially
+    // moved value is E0382 "borrow of partially moved value", so a borrow-base
+    // read SHOULD fire — reference-consistent.)
+    if !_bcki_in_place_base {
+        _bck_pm_note_use(grp, name, _bck_pm_field, blk, sp)
+    }
 }
 
 // ── HEXA-OWN L3 M4 — cross-block NLL liveness fixed-point ────────────
@@ -2062,6 +2120,285 @@ fn _bcki_check(entry_id: i64) {
                         _bcki_emit_uninit_use(_bcki_names[t], _bcki_decl_lines[t],
                                               _bcki_ev_spans[u])
                     }
+                }
+            }
+        }
+        u = u + 1
+    }
+}
+
+// ── HEXA-OWN round10 — HX3042 partial-move event log helpers ────────
+// Program-order log (push order == global program order; within a block the
+// relative order is program order). kind 2 = MOVE (an @own call-arg move of
+// `s.f` out of an owned-local base), 1 = USE (a read — field re-read carries
+// its field, a whole-base read carries ""), 0 = KILL (a `s.f = v` reinit that
+// re-initializes the moved field). All keyed on a (group, field-string) pair.
+fn _bck_pm_note_move(grp: i64, name: string, field: string, callee: string,
+                     blk: i64, sp: Span) {
+    _bck_pm_ev_kind.push(2)
+    _bck_pm_ev_grps.push(grp)
+    _bck_pm_ev_fields.push(field)
+    _bck_pm_ev_names.push(name)
+    _bck_pm_ev_callees.push(callee)
+    _bck_pm_ev_blocks.push(blk)
+    _bck_pm_ev_lines.push(sp.line)
+    _bck_pm_ev_spans.push(sp)
+}
+
+fn _bck_pm_note_use(grp: i64, name: string, field: string, blk: i64, sp: Span) {
+    _bck_pm_ev_kind.push(1)
+    _bck_pm_ev_grps.push(grp)
+    _bck_pm_ev_fields.push(field)
+    _bck_pm_ev_names.push(name)
+    _bck_pm_ev_callees.push("")
+    _bck_pm_ev_blocks.push(blk)
+    _bck_pm_ev_lines.push(sp.line)
+    _bck_pm_ev_spans.push(sp)
+}
+
+fn _bck_pm_note_kill(grp: i64, field: string, blk: i64, sp: Span) {
+    _bck_pm_ev_kind.push(0)
+    _bck_pm_ev_grps.push(grp)
+    _bck_pm_ev_fields.push(field)
+    _bck_pm_ev_names.push("")
+    _bck_pm_ev_callees.push("")
+    _bck_pm_ev_blocks.push(blk)
+    _bck_pm_ev_lines.push(sp.line)
+    _bck_pm_ev_spans.push(sp)
+}
+
+// HX3042 emit (use-of-partially-moved-value, Rust E0382) — HX3042-only
+// same-site dedup + STRICT escalation, cloned from `_bcki_emit_uninit_use`.
+// `form` = "moved" (a field re-read of the moved place) / "partially moved"
+// (a whole-base use while a field is moved out); `place` = `s.a` / `s`.
+fn _bck_emit_use_after_move_pm(form: string, place: string, name: string,
+                              field: string, callee: string, move_line: i64,
+                              sp: Span) {
+    let mut di = 0
+    while di < len(_bck_pm_e_lines) {
+        if _bck_pm_e_lines[di] == sp.line && _bck_pm_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_pm_e_lines.push(sp.line)
+    _bck_pm_e_cols.push(sp.col)
+    let mut b = diag_new("HX3042")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "form", form)
+    b = diag_arg(b, "place", place)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "field", field)
+    b = diag_arg(b, "callee", callee)
+    b = diag_arg(b, "move_line", to_string(move_line))
+    let mut d = diag_emit(b)
+    // STRICT (HEXA_BORROWCK_STRICT) re-bands the SAME diagnostic instance to a
+    // build-refusing Error via the sanctioned caller override — identical to the
+    // HX3014/…/HX3041 escalation. OFF-strict keeps the catalog Warning band, and
+    // the flag-OFF path never reaches here (byteeq-neutral).
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
+}
+
+// ── HEXA-OWN round10 — HX3042 forward MaybeInitialized (moved) fixed-point ──
+// Runs ONCE at the end of _lower_fn (guarded by `_bck_active`), beside the
+// HX3035 `_bcki_check`. Reference-matched to rustc_mir_dataflow
+// `MaybeInitializedPlaces` where a move KILLS the init bit / an assign GENs it —
+// here inverted to a "maybe-moved" MAY (union/OR-join) forward analysis:
+//     OUT[b][t] = 1 if b's LAST event for t is MOVE                (gen)
+//               = 0 if b's LAST event for t is KILL (reinit)       (kill)
+//               = IN[b][t] otherwise
+//     IN[b][t]  = OR over preds p of OUT[p][t]                     (seed 0)
+// Seed 0 (every place starts fully initialized — the DUAL of the uninit lane's
+// seed 1). Tracked pair set t = the distinct (group, field) among MOVE events;
+// nt==0 (no @own move recorded) ⇒ immediate return, so flag-ON is a no-op on a
+// move-free corpus (@own adoption = 0 → nt is always 0 today). Emit at a USE u
+// ⇔ its group matches a tracked pair AND (u.field=="" [whole use] OR ==t.field
+// [field re-read]) AND the maybe-moved bit holds at u — IN[block(u)][t] replayed
+// forward over the SAME block's preceding MOVE/KILL events for t (program
+// order). The `sink(s.a)` base-read USE is logged BEFORE its own MOVE, so the
+// move-site is silent; a later `use(s.a)`/`use(s)` after the MOVE fires. Same
+// convergence guard as `_bcki_check`: hard sweep cap blocks*4+8, loud bail drops
+// THIS fn's partial-move results only.
+fn _bck_pm_check() {
+    let nev = len(_bck_pm_ev_kind)
+    if nev == 0 { return }
+    // tracked pairs = distinct (grp, field) among MOVE events.
+    let mut pt_grp: [i64] = []
+    let mut pt_field: [string] = []
+    let mut i = 0
+    while i < nev {
+        if _bck_pm_ev_kind[i] == 2 {
+            let mut found = false
+            let mut j = 0
+            while j < len(pt_grp) {
+                if pt_grp[j] == _bck_pm_ev_grps[i] && pt_field[j] == _bck_pm_ev_fields[i] {
+                    found = true
+                    break
+                }
+                j = j + 1
+            }
+            if !found {
+                pt_grp.push(_bck_pm_ev_grps[i])
+                pt_field.push(_bck_pm_ev_fields[i])
+            }
+        }
+        i = i + 1
+    }
+    let nt = len(pt_grp)
+    if nt == 0 { return }   // corpus has 0 @own field moves → flag-ON is a no-op
+    let nb = len(_lr_blocks)
+    if nb == 0 { return }
+    // block id → _lr_blocks index map (defensive; ids are per-fn monotonic).
+    let mut max_id = 0
+    let mut bi = 0
+    while bi < nb {
+        if _lr_blocks[bi].id > max_id { max_id = _lr_blocks[bi].id }
+        bi = bi + 1
+    }
+    let mut id2ix: [i64] = []
+    let mut k = 0
+    while k <= max_id {
+        id2ix.push(0 - 1)
+        k = k + 1
+    }
+    bi = 0
+    while bi < nb {
+        let bid = _lr_blocks[bi].id
+        if bid >= 0 { id2ix[bid] = bi }
+        bi = bi + 1
+    }
+    // lastev[b][t] ∈ {0=none, 1=MOVE, 2=KILL} — the LAST MOVE/KILL for pair t in
+    // block b (program order; a later event in the same block wins).
+    let mut lastev: [i64] = []
+    let mut in_bits: [i64] = []
+    let mut z = 0
+    while z < nb * nt {
+        lastev.push(0)
+        in_bits.push(0)
+        z = z + 1
+    }
+    i = 0
+    while i < nev {
+        let ek = _bck_pm_ev_kind[i]
+        if ek == 2 || ek == 0 {
+            let eb = _bck_pm_ev_blocks[i]
+            let mut ebx = 0 - 1
+            if eb >= 0 && eb <= max_id { ebx = id2ix[eb] }
+            if ebx >= 0 {
+                let mut t = 0
+                while t < nt {
+                    if pt_grp[t] == _bck_pm_ev_grps[i] && pt_field[t] == _bck_pm_ev_fields[i] {
+                        if ek == 2 { lastev[ebx * nt + t] = 1 }
+                        if ek == 0 { lastev[ebx * nt + t] = 2 }
+                    }
+                    t = t + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    // forward OR-join fixed-point over Block.preds (monotone; seed IN = 0).
+    let cap = nb * 4 + 8
+    let mut iter = 0
+    let mut changed = true
+    while changed {
+        if iter >= cap {
+            println("borrowck HX3042 BAIL: partial-move fixed-point exceeded "
+                    + to_string(cap) + " sweeps (blocks=" + to_string(nb)
+                    + ", tracked=" + to_string(nt)
+                    + ") — partial-move results dropped for this fn")
+            return
+        }
+        changed = false
+        bi = 0
+        while bi < nb {
+            let preds = _lr_blocks[bi].preds
+            let mut pi = 0
+            while pi < len(preds) {
+                let pid = preds[pi]
+                let mut pix = 0 - 1
+                if pid >= 0 && pid <= max_id { pix = id2ix[pid] }
+                if pix >= 0 {
+                    let mut t = 0
+                    while t < nt {
+                        if in_bits[bi * nt + t] == 0 {
+                            let mut out_p = in_bits[pix * nt + t]
+                            let le = lastev[pix * nt + t]
+                            if le == 1 { out_p = 1 }
+                            if le == 2 { out_p = 0 }
+                            if out_p == 1 {
+                                in_bits[bi * nt + t] = 1
+                                changed = true
+                            }
+                        }
+                        t = t + 1
+                    }
+                }
+                pi = pi + 1
+            }
+            bi = bi + 1
+        }
+        iter = iter + 1
+    }
+    // emit at every recorded USE event.
+    let mut u = 0
+    while u < nev {
+        if _bck_pm_ev_kind[u] == 1 {
+            let ub = _bck_pm_ev_blocks[u]
+            let ug = _bck_pm_ev_grps[u]
+            let uf = _bck_pm_ev_fields[u]
+            let uname = _bck_pm_ev_names[u]
+            let mut uix = 0 - 1
+            if ub >= 0 && ub <= max_id { uix = id2ix[ub] }
+            if uix >= 0 {
+                let mut t = 0
+                let mut fired = false
+                while t < nt && !fired {
+                    if pt_grp[t] == ug && (len(uf) == 0 || uf == pt_field[t]) {
+                        // state at u = IN[ub][t], then replay same-block preceding
+                        // MOVE/KILL of pair t in program order.
+                        let mut state = in_bits[uix * nt + t]
+                        let mut pe = 0
+                        while pe < u {
+                            if _bck_pm_ev_blocks[pe] == ub
+                                && _bck_pm_ev_grps[pe] == pt_grp[t]
+                                && _bck_pm_ev_fields[pe] == pt_field[t] {
+                                if _bck_pm_ev_kind[pe] == 2 { state = 1 }
+                                if _bck_pm_ev_kind[pe] == 0 { state = 0 }
+                            }
+                            pe = pe + 1
+                        }
+                        if state == 1 {
+                            // latest MOVE of pair t supplies the message args.
+                            let mut mv = 0 - 1
+                            let mut mi = 0
+                            while mi < nev {
+                                if _bck_pm_ev_kind[mi] == 2
+                                    && _bck_pm_ev_grps[mi] == pt_grp[t]
+                                    && _bck_pm_ev_fields[mi] == pt_field[t] {
+                                    mv = mi
+                                }
+                                mi = mi + 1
+                            }
+                            let mut mvcallee = ""
+                            let mut mvline = 0
+                            if mv >= 0 {
+                                mvcallee = _bck_pm_ev_callees[mv]
+                                mvline = _bck_pm_ev_lines[mv]
+                            }
+                            let mut form = "moved"
+                            let mut place = uname + "." + pt_field[t]
+                            if len(uf) == 0 {
+                                form = "partially moved"
+                                place = uname
+                            }
+                            _bck_emit_use_after_move_pm(form, place, uname,
+                                pt_field[t], mvcallee, mvline, _bck_pm_ev_spans[u])
+                            fired = true
+                        }
+                    }
+                    t = t + 1
                 }
             }
         }
@@ -3531,6 +3868,25 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                         _bck_emit_move_out_of_borrow(_bk_mo_base, e.children[i].text,
                             _bck_ref_origins[_bk_mo_ri], _bck_ref_mut[_bk_mo_ri],
                             _bck_ref_lines[_bk_mo_ri], e.children[i].span)
+                    } else {
+                        // HEXA-OWN round10 (HX3042) — OWNED-local base: a partial
+                        // move of `s.f` into an @own param is LEGAL at the move
+                        // site (rustc allows it); we record the moved-lane state
+                        // ONLY, and a later `use(s.f)`/`use(s)` fires HX3042 at
+                        // end-of-fn. group-keyed so an alias (`let t = s;
+                        // sink(t.a); use(s.a)`) is caught. A group-untracked base
+                        // (a call-returned struct, etc.) derives no group → silent
+                        // (conservative). `_mir_lookup >= 0` = same-fn local (a
+                        // global was already excluded by the guard above).
+                        let _bk_pm_id = _mir_lookup(ctx_r, _bk_mo_base)
+                        if _bk_pm_id >= 0 {
+                            let _bk_pm_ti = _bck_find_local(_bk_pm_id)
+                            if _bk_pm_ti >= 0 {
+                                _bck_pm_note_move(_bck_groups[_bk_pm_ti], _bk_mo_base,
+                                    e.children[i].text, callee_text,
+                                    ctx_r.cur_block, e.children[i].span)
+                            }
+                        }
                     }
                 }
             }
@@ -4439,6 +4795,19 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 let _bki_ft = _bcki_find(fbr.operand.local_id)
                 if _bki_ft >= 0 {
                     _bcki_note_init(_bki_ft, fctx.cur_block, e.span)
+                }
+            }
+            // HEXA-OWN round10 (HX3042) — `s.f = v` REINITs the field `f`,
+            // killing a prior partial move of `s.f` (rustc: assigning the moved
+            // field makes it usable again). field-specific KILL keyed on the
+            // base's group + the field name; a sibling field's move state is
+            // untouched. Gated on `_bck_active` (byteeq-neutral).
+            if _bck_active && lhs.children[0].kind == "ident"
+                && fbr.operand.kind == "local" {
+                let _bk_pm_kt = _bck_find_local(fbr.operand.local_id)
+                if _bk_pm_kt >= 0 {
+                    _bck_pm_note_kill(_bck_groups[_bk_pm_kt], lhs.text,
+                                      fctx.cur_block, e.span)
                 }
             }
             // HEXA-OWN L3 M3 — `obj.f = v` is a WRITE through the base
@@ -5790,7 +6159,18 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // hexa_map_get const char* key ABI. "field." op had no consumer
         // yet, so the reshape is safe.)
         if len(e.children) < 1 { return _no_value(ctx) }
+        // HEXA-OWN round10 (HX3042) — thread the field-read context into the
+        // base-ident USE funnel so `_bck_check_use` knows this ident read is the
+        // base of `<ident>.<field>`. ident-base gate is the key FP wall: a
+        // call/nested base carries no ctx, so an inner ident is never polluted.
+        // A nested `s.a.b` sets ctx="a" on the INNER field arm (the base of the
+        // outer `.b` is the field node `s.a`, not an ident) — so a moved `s.a`
+        // used inside `s.a.b` fires precisely (rustc parity). save/restore is
+        // unconditional (self-healing); flag-OFF never sets ctx (byteeq-neutral).
+        let _bk_pm_saved = _bck_pm_field
+        if _bck_active && e.children[0].kind == "ident" { _bck_pm_field = e.text }
         let r = _lower_hexpr(ctx, e.children[0])
+        _bck_pm_field = _bk_pm_saved
         let mut ctx2 = _fresh_local(r.ctx, e.typ, "field_" + e.text)
         let dst = _lr_locals[len(_lr_locals) - 1]
         let mut args: [Operand] = []
@@ -6975,6 +7355,10 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
         // beside the NLL pass (same _bck_active gate, same CFG). No-op when no
         // uninit `let` was registered (T==0 → immediate return).
         _bcki_check(entry_id)
+        // round10 — HX3042 use-of-partially-moved-value forward moved-lane
+        // dataflow, beside the uninit pass (same _bck_active gate, same CFG).
+        // No-op when no @own field move was recorded (nt==0 → immediate return).
+        _bck_pm_check()
         // round8-2 — HX3036 borrowed-value-does-not-live-long-enough forward
         // reachability, beside the two passes above (same _bck_active gate, same
         // CFG). No-op when no dangle event was recorded (nd==0 → immediate return).

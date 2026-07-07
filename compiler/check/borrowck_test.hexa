@@ -2174,6 +2174,216 @@ fn _run_ret_temp_probe(label: string, src: string, want_on: i64) -> bool {
     return ok
 }
 
+// ── HEXA-OWN round10 — HX3042 use-of-partially-moved-value (Rust E0382).
+// A depth-1 field-projection move-state dataflow. `sink(s.a)` where `s` is an
+// OWNED (non-borrowed) struct local and sink's param is @own moves the field
+// `s.a`; a later `use(s.a)` (field re-read) or `use(s)` (whole use) → HX3042.
+// A field reinit (`s.a = v`), a disjoint field (`s.b`), a non-@own arg, and a
+// module global are silent. The inline `@own p: T` carrier is live on main (as
+// for HX3038). Source-level probes below; the runner keys on HX3042. ──
+
+// HAZARD — `s.a` moved into sink's @own param, then re-read → HX3042.
+fn _src_hz_pm_use_field() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn hzpf() {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    sink(s.a)\n"
+    s = s + "    println(s.a)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — a WHOLE-base use of `s` while `s.a` is moved → partially moved.
+fn _src_hz_pm_use_whole() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn hzpw() {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    sink(s.a)\n"
+    s = s + "    println(s)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — a second move of the already-moved `s.a` (the 2nd sink's base-read
+// USE lands after the 1st MOVE) → HX3042 ×1.
+fn _src_hz_pm_double_move() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn hzpd() {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    sink(s.a)\n"
+    s = s + "    sink(s.a)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — an ALIAS `let t = s` joins s's group; a move via `t.a` is seen by a
+// later `use(s.a)` (group-keyed) → HX3042 ×1.
+fn _src_hz_pm_alias() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn hzpa() {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    let t = s\n"
+    s = s + "    sink(t.a)\n"
+    s = s + "    println(s.a)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — a move on ONE branch, used at the join (a may-join) → HX3042 ×1.
+fn _src_xb_pm_branch_join() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn xbpj(c: bool) {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    if c {\n"
+    s = s + "        sink(s.a)\n"
+    s = s + "    }\n"
+    s = s + "    println(s.a)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — loop-carried: the body uses `s.a` then moves it; the back-edge makes
+// the maybe-moved bit reach the body's use → HX3042 ×1.
+fn _src_xb_pm_loop_carried() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn xbpl() {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    let mut i = 0\n"
+    s = s + "    while i < 2 {\n"
+    s = s + "        println(s.a)\n"
+    s = s + "        sink(s.a)\n"
+    s = s + "        i = i + 1\n"
+    s = s + "    }\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — the move SITE alone is legal (rustc allows a partial move); the
+// only USE is the move-arg's own base-read, logged BEFORE the move → 0.
+fn _src_fp_pm_move_site_only() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn fppm() {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    sink(s.a)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a DISJOINT field `s.b` used after `s.a` is moved → 0 (per-field).
+fn _src_fp_pm_disjoint() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn fppd() {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    sink(s.a)\n"
+    s = s + "    println(s.b)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a field REINIT `s.a = v` kills the move; the later use is clean → 0.
+fn _src_fp_pm_reinit() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn fppr() {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    sink(s.a)\n"
+    s = s + "    s.a = 2\n"
+    s = s + "    println(s.a)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — the arg is a plain (non-@own) param, so `s.a` is a handle-copy, not
+// a move → 0.
+fn _src_fp_pm_noown() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink2(v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn fppn() {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    sink2(s.a)\n"
+    s = s + "    println(s.a)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a module-GLOBAL base: the global's storage outlives the call and the
+// conservative check skips a global base (_mir_lookup_global hit) → 0.
+fn _src_fp_pm_global() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "let g = P { a: 1, b: 2 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn fppg() {\n"
+    s = s + "    sink(g.a)\n"
+    s = s + "    println(g.a)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HX3042 probe runner — keys on the partial-move use-after-move code; asserts
+// every OTHER code is 0 (probe hygiene — a stray HX3014/HX3035 would mean the
+// pm lane crossed into another lane). STRICT re-bands HX3042 to Error → error-
+// band count equals the HX3042 count. OFF → want 0 (empty stream, byteeq-neutral).
+fn _run_pm_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3042 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3042")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3042 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3042 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
 // ── driver ───────────────────────────────────────────────────
 
 fn main() {
@@ -2347,6 +2557,23 @@ fn main() {
         if !_run_ret_temp_probe("hz_ret_temp_struct", _src_hz_ret_temp_struct(), 1) { ok = false }
         if !_run_ret_temp_probe("hz_ret_temp_binop", _src_hz_ret_temp_binop(), 1) { ok = false }
         if !_run_ret_temp_probe("fp_ret_temp_global", _src_fp_ret_temp_global(), 0) { ok = false }
+        // HEXA-OWN round10 — HX3042 use-of-partially-moved-value (E0382). A
+        // field-projection move of `s.a` into an @own param, then a re-read of
+        // the field / a whole-base use / a second move / an alias / a branch-join
+        // / a loop-carried use → HX3042 ×1; the move site alone, a disjoint field,
+        // a field reinit, a non-@own arg, and a module global → 0. OFF → empty
+        // stream (byteeq-neutral); STRICT → Error-band.
+        if !_run_pm_probe("hz_pm_use_field", _src_hz_pm_use_field(), 1) { ok = false }
+        if !_run_pm_probe("hz_pm_use_whole", _src_hz_pm_use_whole(), 1) { ok = false }
+        if !_run_pm_probe("hz_pm_double_move", _src_hz_pm_double_move(), 1) { ok = false }
+        if !_run_pm_probe("hz_pm_alias", _src_hz_pm_alias(), 1) { ok = false }
+        if !_run_pm_probe("xb_pm_branch_join", _src_xb_pm_branch_join(), 1) { ok = false }
+        if !_run_pm_probe("xb_pm_loop_carried", _src_xb_pm_loop_carried(), 1) { ok = false }
+        if !_run_pm_probe("fp_pm_move_site_only", _src_fp_pm_move_site_only(), 0) { ok = false }
+        if !_run_pm_probe("fp_pm_disjoint", _src_fp_pm_disjoint(), 0) { ok = false }
+        if !_run_pm_probe("fp_pm_reinit", _src_fp_pm_reinit(), 0) { ok = false }
+        if !_run_pm_probe("fp_pm_noown", _src_fp_pm_noown(), 0) { ok = false }
+        if !_run_pm_probe("fp_pm_global", _src_fp_pm_global(), 0) { ok = false }
         // census lane must be silent whenever HEXA_BORROWCK_CENSUS is unset
         // (byteeq-neutral proof at the census-count level).
         if !_run_census() { ok = false }
