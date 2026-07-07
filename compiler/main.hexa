@@ -161,7 +161,7 @@ fn print_help() {
     println("  --target=TRIPLE        arm64-apple-darwin | arm64-linux-gnu | x86_64-linux-gnu | thumbv7em-none-eabihf | nvptx64-nvidia-cuda-sm{80,90} (default: detected)")
     println("  --emit=KIND            asm | obj | exec   (default: exec)")
     println("  --error-format=MODE    pretty | short | json | github (default: pretty)")
-    println("  --linker=KIND          hexa | system     (default: system; hexa=in-tree hexa_ld, arm64-darwin opt-in via $HEXA_LD)")
+    println("  --linker=KIND          hexa | system     (default: system; hexa=in-tree hexa_ld: arm64-darwin Mach-O via $HEXA_LD, x86_64-linux static ELF ET_EXEC via own-start _start — no crt1.o/-lc/ld)")
     println("  --opt=LEVEL            0 | 1 | 2 | 3     (default: 0, or $HEXA_OPT_LEVEL)")
     println("  --stream               fused per-function codegen (lower RSS; arm64, no --opt)")
     println("  --keep-temp            do not remove the per-build intermediate dir (default: off)")
@@ -810,6 +810,14 @@ let mut asm_text = ""
 // exec build, so byte-neutral for every default invocation.
 let mut native_obj_bytes: [Int] = []
 let mut native_obj_ready = false
+// axis-② own-start ELF static-exec link (opt-in --linker=hexa on
+// x86_64-linux): capture the native ElfX86Obj so the hexa-linker dispatch
+// below can link it in-process with a synthesized 14-byte _start — no
+// crt1.o / -lc / -dynamic-linker. A 0-or-1 element holder array avoids
+// needing a struct zero-value; it stays empty (dormant, byte-neutral) for
+// every non-native / non-hexa-linker build.
+let mut elf_obj_x86_holder: [ElfX86Obj] = []
+let mut elf_obj_x86_ready = false
 if stream_mode && target == "arm64-apple-darwin" {
     if opt_level > 0 {
         eprintln("hexa-compiler: --stream uses the fused per-function path; "
@@ -1056,6 +1064,8 @@ if stream_mode && target == "arm64-apple-darwin" {
         } else {
             native_obj_bytes = elf_bytes
             native_obj_ready = true
+            elf_obj_x86_holder.push(elf_obj)
+            elf_obj_x86_ready = true
             if verbose {
                 eprintln("hexa-compiler: serialized ELF x86-64 .o via native backend for exec link ("
                          + to_string(len(elf_bytes)) + " bytes)")
@@ -1210,7 +1220,24 @@ if target == "arm64-apple-darwin" {
 }
 
 if linker_kind == "hexa" {
-    if target == "arm64-apple-darwin" {
+    if target == "x86_64-linux-gnu" && elf_obj_x86_ready {
+        // axis-② own-start ELF static-exec link (round-1, opt-in): link the
+        // native ElfX86Obj in-process via the in-tree ELF linker with a
+        // synthesized 14-byte _start — NO crt1.o / -lc / -dynamic-linker and
+        // ZERO `ld`/`as` execve. Exits before the shared system-ld exec
+        // below. Round-1 = exit-code-only (serialize_elf_exec_x86_64 is
+        // text-only; a print(\"..\")-with-string data ref is the round-2 wall).
+        let rc = link_elf_x86_64_ownstart(elf_obj_x86_holder, out_path, "main")
+        if rc != 0 {
+            eprintln("hexa-compiler: hexa_ld(elf) own-start link failed rc=" + to_string(rc))
+            exit(2)
+        }
+        if verbose {
+            eprintln("hexa-compiler: linked static ELF ET_EXEC via in-tree hexa_ld "
+                     + "(own-start _start, no crt1.o/-lc/-dynamic-linker) to " + out_path)
+        }
+        exit(0)
+    } else if target == "arm64-apple-darwin" {
         // axis-③ track-2 (opt-in, default-OFF): link via the in-tree Mach-O
         // arm64 linker tool/hexa_ld.hexa instead of forking ld64 + xcrun.
         // hexa_ld emits MH_EXECUTE + MH_PIE, LC_LOAD_DYLIB libSystem +
