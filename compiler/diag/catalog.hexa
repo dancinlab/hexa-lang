@@ -667,6 +667,138 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3036",
+        title: "borrowed value does not live long enough",
+        // Warning band (SSOT F4 warn-first), the lifetime rung of the opt-in
+        // borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN round8-2): an assign-arm
+        // re-borrow `r = &x` where the borrowed value `x`'s lexical scope ends
+        // while the borrowing binding `r` is still live and later USED. Under
+        // `HEXA_BORROWCK_STRICT=1` the SAME diagnostic instance is re-banded to
+        // a build-refusing Error via the sanctioned caller override in
+        // `_bck_emit_ref_outlives` (identical mechanism to HX3035/…/HX3014).
+        // With the flag unset the pass is inert (`_bck_active` false), so
+        // nothing is emitted and the diagnostic stream + emitted bytes are
+        // byte-identical — release integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "`{name}` borrows `{origin}` (line {borrow_line}) but `{origin}`'s scope ends at line {scope_end_line} — the borrow is used here after the borrowed value is dead",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN round8-2) found a borrow that outlives the value it points at: a binding `r` holds a re-borrow `r = &x` (the assign-arm re-borrow form) of a local `x` whose lexical scope ENDS while `r` is still live, and `r` is then read on a path reachable from that scope's death. This is Rust's E0597 ('borrowed value does not live long enough'), reference-matched to rustc's NLL borrow checker (RFC 2094): a loan may not be used past the point where its referent's storage is deallocated. The mechanism is the third instance of the round8 forward-reachability dataflow (after HX3035's `MaybeUninitializedPlaces`): a SEPARATE asn-lane loan registry records assign-arm `r = &x` re-borrows (the ONLY shape that can dangle — a let-arm loan `let r = &x` is structurally nested inside `x`'s scope, so `r`'s scope is a subset of `x`'s and can never outlive it, and is untouched here); a lexical scope log (push at every `let`, mark-dead on scope exit through the pure-lexical `block` arm) drives a scope-exit sweep that emits a DANGLE event when a live asn-lane loan's borrowed origin dies inside the exiting scope while the loan binding was declared OUTSIDE it; and at end of `_lower_fn` — when the full CFG is materialized in `Block.preds`/`succs` — `_bck_ref_outlives_check` runs an event-reachability fixed-point (the `_bck_nll_check` reach-matrix pattern, hard sweep cap blocks*4+8, loud bail dropping only this fn's result) that fires a use ⇔ a dangle of the SAME asn row reaches the use's block (≥1 CFG edge — loop back-edges included) OR precedes it in the same block by program order (`_bck_evseq` monotonic counter). Conservative by construction — the FP=0 mandate takes precedence over completeness: the asn-lane USE event snapshots the NEWEST LIVE asn row at use time, so a `r = &live` reassignment before the use repoints the snapshot to a non-dangling row and stays SILENT (the reassign-then-use FP killer); a use INSIDE the borrowed value's scope stays silent (use precedes the scope-exit dangle in program order with no reaching edge); a sibling-branch use stays silent (no CFG edge from the borrowing branch to the sibling); a return-terminated branch contributes no join-edge dangle; and an origin that is a parameter or module-level global is never an asn-lane origin (a shadowed inner origin is disambiguated by the exact scope-log index recorded at loan time). The whole-local granularity ceiling (no place projections), 1-hop propagation (`let r2 = r`), and block-tail value escape are documented false-negatives deferred to a later round. Only same-function flow is analyzed. Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical, and the corpus contains ZERO assign-arm re-borrows across a scope, so even with the flag ON this rule fires on zero real source (corpus-clean, gen3≡gen4 preserved). Fix: extend the borrowed value's scope to outlive the borrow, borrow a value that lives at least as long as the binding, or store an owned copy instead of a reference.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3037",
+        title: "cannot move out of captured variable",
+        // Warning band (SSOT F4 warn-first), the closure capture-move rung of
+        // the opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN round8-3): a
+        // variable captured by a closure is passed to an `@own` parameter
+        // INSIDE the closure body, moving the captured value out. Under
+        // `HEXA_BORROWCK_STRICT=1` the SAME diagnostic instance is re-banded to
+        // a build-refusing Error via the sanctioned caller override in
+        // `_bck_emit_capture_move` (identical mechanism to HX3034/HX3035/HX3036/
+        // …/HX3014). With the flag unset the pass is inert (`_bck_active`
+        // false), so nothing is emitted and the diagnostic stream + emitted
+        // bytes are byte-identical — release integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "cannot move out of `{name}`, a variable captured by a closure — passed to `{callee}` whose parameter is declared `@own` (closure defined at line {closure_line}); a closure may be called more than once",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN round8-3) found a MOVE of a captured variable out of a closure body: a bare-ident argument that is a CAPTURE of the enclosing scope (in the closure's free-variable set) is passed to a resolved callee whose corresponding parameter is declared `@own`, which moves the captured value out of the closure. rustc reports this exact shape as E0507 — 'cannot move out of `X`, a captured variable in an `FnMut` closure' (rustc_borrowck, move-out-of-capture check). NOTE ON THE LEDGER LABEL: the round8 borrow-checker family tracks this rung under the E0504 slot for continuity, but the rustc *message* is E0507; rustc's E0504-proper ('cannot move `x` into closure because it is borrowed') is the move-INTO-a-`move`-closure-while-borrowed form, which has NO corresponding shape in hexa — hexa has no `move` closure and a capture is a by-value env copy that never invalidates the source binding, so E0504-proper cannot arise here. hexa's capture model: `_lower_closure` performs free-variable analysis (`_collect_free`) collecting enclosing LOCALS referenced in the body, builds an env array by value (`hexa_array_new` + push each capture), and the body unpacks `cap_i ← __env[i]`. Every closure is a `TAG_CLOSURE` invoked via the env-first `hexa_callN` ABI with NO call-count limit — hexa has no FnOnce kind, so every closure is semantically FnMut-equivalent (callable more than once), making 'a captured value moved out' ALWAYS unsafe rather than an over-approximation. There is moreover a hexa-specific DOUBLE hazard: an aggregate HexaVal env slot is a pointer copy that ALIASES the enclosing binding's heap object, so a move-out through the `@own` param can dangle BOTH the env slot and the enclosing binding after even a SINGLE call (a stronger justification than rustc's call-count argument). Mechanism: the check is a READ-ONLY recursive HExpr walk (`_bck_closure_capture_move_scan`, cloned from `_collect_free`) run at the closure-lower SITE in the enclosing scope, gated on `_bck_active` BEFORE the loan pass is suspended for the lambda body — so it never touches the lambda's fresh (id-reset) MIR local space, and no MIR/dataflow state is needed. The single move source in the whole language is the `@own` call-arg (`_bck_own_param`), so capture-move detection reduces to: bare-ident arg ∧ free-set membership ∧ resolved `@own` param slot ∧ not shadowed. Report-only: `_bck_note_move` is NEVER called (a move is an event of the lambda frame; the enclosing fn's id-based registry must stay untouched — same posture as HX3034). Conservative by construction (documented false-negatives): only a bare-ident arg is flagged (a field/index arg `sink(s.f)` is silent), only a direct-ident callee (method/field callee skipped, matching the `!_bk_is_method` gate), a body `let`/nested-closure param that shadows the capture name is silent (the `_collect_free` whole-subtree over-approximation drops such names from the free set), and an inner lambda's OWN local captured only within itself is not scanned (only outer-fn captures reached by the descending walk). A scalar `@own` param would fire (no Copy-silence — the HIR layer has no type info; `@own` is the author's move-semantics assertion, same posture as the bare-ident move classifier), but corpus `@own` adoption is 0 so no real FP arises. `@own` inline-carrier adoption is currently 0 in the corpus, so even with the flag ON this rule fires on ZERO real source (corpus-clean, gen3≡gen4 preserved). Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical. Fix: clone the captured value before consuming it (`sink(v.clone())`), pass a borrow instead of moving, or restructure so the value is consumed OUTSIDE the closure rather than captured and moved within it.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3038",
+        title: "cannot move out of array by indexing",
+        // Warning band (SSOT F4 warn-first), the move-out-of-array-by-indexing
+        // rung of the opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN round9):
+        // a call argument of shape `a[i]` on an owned-local array `a` passed to a
+        // resolved callee whose corresponding parameter is declared `@own`. Under
+        // `HEXA_BORROWCK_STRICT=1` the SAME diagnostic instance is re-banded to a
+        // build-refusing Error via the sanctioned caller override in
+        // `_bck_emit_move_out_of_array` (identical mechanism to HX3034/…/HX3014).
+        // With the flag unset the loan pass is inert (`_bck_active` false), so
+        // nothing is emitted and the diagnostic stream + emitted bytes are byte-
+        // identical — release integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "cannot move out of `{name}[…]` by indexing — `{name}` is an array of owned values and indexing would move an element out",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN round9) found an index-projection MOVE: a call argument of shape `a[i]` — an index access on a bare-ident base `a` that resolves to a same-function owned LOCAL array (not a reference binding, not a module-level global) — is passed to a resolved callee whose corresponding parameter is declared `@own`, which would move an element out of the array by indexing. This is Rust's E0508 ('cannot move out of type `[T; N]`, a non-copy array'; rustc_borrowck reports it when a move path projects through an array index). HONESTY CAVEAT (the reference-faithful stance, made explicit): hexa arrays are REFERENCE AGGREGATES, so `a[i]` is a handle-COPY read, NOT a literal hole-leaving move as in C++/Rust value arrays — an ordinary (non-`@own`) index read never fires. HX3038 is therefore faithful to E0508's REJECT SURFACE as an `@own`-ALIASING HAZARD (the array retains the aliased element pointer while the `@own` parameter asserts ownership transfer → a later use of the array or the callee's owned value can dangle), NOT to E0508's literal hole mechanic. It runs at the `@own` call-arg site (`_lower_hexpr` call arm), as a sibling branch to the HX3034 field-projection move-out and the bare-ident move classifier, and is REPORT-ONLY: the move is NOT recorded (`_bck_note_move` is never called), so HX3038 stands alone (no HX3027/HX3029 preemption). Conservative by construction: only a SINGLE-IDENT base is handled (`a[i]`), so a nested place `a[i][j]` (whose index base is itself an index, not an ident) is a SILENT skip; a global-array base (`_mir_lookup_global` hit) is skipped; a reference-binding base routes instead to HX3039 (the E0507 index variant); method calls are excluded (`!_bk_is_method` — a receiver-first shifts the `i-1` param index); a non-`@own` arg is an ordinary read; and the flag-OFF path never reaches the branch. `@own` adoption is currently 0 in the corpus, so even with the flag ON this rule fires on ZERO real source (corpus-clean, gen3≡gen4 preserved). Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical. Fix: pass a borrow of the element or a clone instead of moving it out (`sink(&a[i])` / `sink(a[i].clone())`), or move the whole array and index inside the callee.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3039",
+        title: "cannot move out of borrowed content by indexing",
+        // Warning band (SSOT F4 warn-first), the INDEX-projection variant of the
+        // move-out-of-borrowed-content rung of the opt-in borrow checker
+        // (`HEXA_BORROWCK=1`, HEXA-OWN round9); HX3034 covers the FIELD `r.f`
+        // projection, this covers the INDEX `r[i]` projection. Under
+        // `HEXA_BORROWCK_STRICT=1` the SAME diagnostic instance is re-banded to a
+        // build-refusing Error via the sanctioned caller override in
+        // `_bck_emit_move_out_of_borrow_index` (identical mechanism to HX3034/…).
+        // With the flag unset the loan pass is inert (`_bck_active` false), so
+        // nothing is emitted and the diagnostic stream + emitted bytes are byte-
+        // identical — release integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "cannot move out of `{name}[…]` which is behind a {borrow_kind} reference — `{name}` borrows `{origin}` (line {borrow_line})",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN round9) found a MOVE-OUT of borrowed content through an INDEX: a call argument of shape `r[i]` — an index access on a binding `r` that is itself a LIVE `&`/`&mut` reference (`let r = &x` / `let r = &mut x` earlier in the same function, not yet killed) — is passed to a resolved callee whose corresponding parameter is declared `@own`, which would move an element's value out from behind the reference. This is the INDEX-projection sibling of HX3034 (which handles the field projection `r.f`) — both are Rust's E0507 ('cannot move out of `*r` which is behind a shared reference'; rustc_borrowck reports it when a move path resolves through a borrow, whether the terminal projection is a field or an index). A reference — shared OR mutable — grants access to borrowed storage but NOT ownership of it, so the check is MUTABILITY-BLIND: it fires for BOTH `&` and `&mut` loans (a `&mut` grants the right to MUTATE the borrowed value, not to MOVE OWNERSHIP out of it — the same all-references-forbidden symmetry HX3034 and the real rustc E0507 enforce). It runs at the `@own` call-arg site (`_lower_hexpr` call arm, the shared `index` branch), and is REPORT-ONLY: the move is NOT recorded (`_bck_note_move` is never called), so HX3039 stands alone (the arg's own READ is of the ref binding `r`, not of `origin`, so there is no HX3027/HX3029 preemption at this span). Conservative by construction: only a SINGLE-IDENT base is handled (`r[i]`), so a nested place `r[i][j]` is a SILENT skip; only same-fn live loans in the E2 registry count; a killed loan (origin reassigned to a non-borrow → `origin == \"\"`) is silent (an owned-local base routes to HX3038 instead); a global base is skipped; method calls are excluded (`!_bk_is_method`); a non-`@own` arg is an ordinary read; and the flag-OFF path never reaches the branch. `&`/`&mut` inline-carrier and `@own` adoption are currently 0 in the corpus, so even with the flag ON this rule fires on ZERO real source (corpus-clean, the same posture as HX3034/HX3029). Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical. Fix: pass a borrow of the element or a clone instead of moving it (`sink(&r[i])`), move out of the owner directly rather than through the reference, or restructure so the value is owned at the move site.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3040",
+        title: "cannot move out of value because it is borrowed",
+        // Warning band (SSOT F4 warn-first), the NON-call move-site variant of the
+        // move-out-while-borrowed rung of the opt-in borrow checker
+        // (`HEXA_BORROWCK=1`, HEXA-OWN round9); HX3029 wires the SAME E0505 rule
+        // only at the call-arg move site, this wires it at the let-RHS / assign-RHS
+        // / bare-ident-return move sites. Under `HEXA_BORROWCK_STRICT=1` the SAME
+        // diagnostic instance is re-banded to a build-refusing Error via the
+        // sanctioned caller override in `_bck_emit_move_while_borrowed_nc`
+        // (identical mechanism to HX3029/HX3034/…/HX3014). With the flag unset the
+        // loan pass is inert (`_bck_active` false), so nothing is emitted and the
+        // diagnostic stream + emitted bytes are byte-identical — release integrity
+        // first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "cannot move out of `{origin}` because it is borrowed — `{name}` holds a {borrow_kind} loan of it (line {borrow_line})",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN round9) found a MOVE-OUT-WHILE-BORROWED at a NON-call move site: a bare-ident `let b = a` / `b = a` / `return a` moves an `@own` binding `a` out of its storage while a LIVE loan of that same origin exists in the E2 registry (`let r = &a` / `let r = &mut a`, not yet killed). This is Rust's E0505 ('cannot move out of `a` because it is borrowed'; rustc_borrowck), the exact same rule HX3029 fires at the `@own` call-arg site — HX3040 simply extends the loan-scan to the three non-call move sites (the let-RHS, the assignment-RHS, and a bare-ident return) that HX3012's move classifier already recognizes as moves but that HX3029 never loan-scanned. The move invalidates the borrow: after `a` moves, the loan `r` promises `a` is intact but its storage has been transferred. The write-through scan (`_bck_ref_find_write_through`) is MUTABILITY-BLIND (moving out breaks BOTH `&` and `&mut` loans — the same aliasing break as E0506). The MOVE gate is `@own`: only a bare ident that is an `@own` binding of the current function is treated as a move-out — an ordinary hexa aggregate handle-copy `let b = a` over a non-`@own` local is a reference copy, NOT a move, and stays SILENT (the FP-killer for hexa's reference-value arrays/structs). Report-only (no MIR mutation), same conservative flow-insensitive posture as HX3029. Conservative by construction: fires only when the RHS/return is a bare-ident `@own` binding with a live write-through loan; a killed loan (`origin == \"\"`), a non-`@own` binding, a global, and a non-ident RHS are all silent. `@own` + `&` corpus adoption are both 0, so even with the flag ON this rule fires on ZERO real source (corpus-clean, gen3≡gen4 preserved). Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical. Fix: finish using the borrow `r` before moving `a`, clone instead of moving (`let b = a.clone()`), or borrow `a` rather than moving it.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3041",
+        title: "cannot return reference to temporary value",
+        // Warning band (SSOT F4 warn-first), the return-ref-to-rvalue variant of
+        // the return-borrow-escape rung of the opt-in borrow checker
+        // (`HEXA_BORROWCK=1`, HEXA-OWN round9); HX3019 covers `return &<ident>`,
+        // this covers `return &<rvalue>` (a call result / struct-or-array literal /
+        // binop temporary). Under `HEXA_BORROWCK_STRICT=1` the SAME diagnostic
+        // instance is re-banded to a build-refusing Error via the sanctioned caller
+        // override in `_bck_emit_ret_temp` (identical mechanism to HX3019/…/HX3014).
+        // With the flag unset the loan pass is inert (`_bck_active` false), so
+        // nothing is emitted and the diagnostic stream + emitted bytes are byte-
+        // identical — release integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "cannot return a reference to a temporary {kind} value — it is owned by this function and does not outlive the return",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN round9) found a `return &<rvalue>` where the borrowed value is a TEMPORARY with no named local storage that outlives the function: a call result (`return &make()`), a struct or array literal (`return &S{..}` / `return &[1]`), or a binop temporary (`return &(x + y)`). This is Rust's E0515 ('cannot return reference to temporary value'; rustc_borrowck) — the temporary is materialized in the callee's frame and destroyed at the return, so a reference to it dangles at the call site. It is the rvalue sibling of HX3019 (which covers `return &<ident>` over a function-local): both are added as arms of the `&`/`&mut` unop branch of the return hook, emitting via the shared return-escape mechanism. HONESTY CAVEAT (the same reference-faithful stance as shipped HX3019): the check classifies the return-borrow as dangling PER RUSTC — it is NOT proven against hexa's arena free-model (where a temporary might outlive the frame if arena-allocated), so it matches rustc's REJECT surface rather than a hexa-specific liveness proof. Pure SYNTACTIC classification at the return hook: it keys only on the inner HIR node kind (call / struct_lit / array_lit / binop), so it CANNOT over-reach into aliasing or flow FP classes. Conservative by construction: `return &<ident>` stays HX3019 (a named local base), and `return &<global>` derives no local base (its storage outlives the call) — both are SILENT here; the flag-OFF path never reaches the branch. `&`-carrier corpus adoption is ~0, so even with the flag ON this rule fires on ZERO real source (corpus-clean, gen3≡gen4 preserved). IMMEDIATE FOLLOW-ON (shares this return arm): the E0515 projection variant `return &local.field` / `return &local[i]` via a field/index base-walk to the head ident + `_mir_lookup_global<0` guard could fold into HX3041 or take the next free HX30xx. Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical. Fix: bind the temporary to a local the caller owns and return that by value, return the value itself rather than a reference to it, or have the caller create the value and pass in a reference.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3042",
+        title: "use of moved value",
+        // Warning band (SSOT F4 warn-first), the partial-move (field-projection)
+        // use-after-move rung of the opt-in borrow checker (`HEXA_BORROWCK=1`,
+        // HEXA-OWN round10). Under `HEXA_BORROWCK_STRICT=1` the SAME diagnostic
+        // instance is re-banded to a build-refusing Error via the sanctioned
+        // caller override in `_bck_emit_use_after_move_pm` (identical mechanism to
+        // HX3014/…/HX3041). With the flag unset the loan pass is inert
+        // (`_bck_active` false), so nothing is emitted and the diagnostic stream +
+        // emitted bytes are byte-identical — release integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "use of {form} value: `{place}` — `{name}.{field}` was moved into `{callee}` at line {move_line}",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN round10) found a use of a value whose field was already moved out: `sink(s.a)` (an @own call-arg move of the field projection `s.a`) followed by `use(s.a)` (a re-read of the moved field) or `use(s)` (a whole-base use while a field is moved). This is Rust's E0382 ('use of moved value' / 'use of partially moved value'; rustc_borrowck), the field-projection sibling of the whole-binding use-after-move already covered by HX3014 (flow-sensitive) and HX3012 (flow-insensitive). Mechanism: a moved-lane mirror of the HX3035 `MaybeUninitializedPlaces` gen/kill forward dataflow — reference-matched to rustc's `MaybeInitializedPlaces` where move=kill and assign=gen, here inverted to a maybe-moved MAY analysis (seed 0, gen=MOVE, kill=a `s.f = v` reinit) over the same bitset, OR-join and convergence guard. SCOPE-REDUCTION ARGUMENT (why this is one rung, not a place-granular MovePathData new axis): the ONLY move source on the hexa surface is the @own call-arg, so a FLAT (group, field-string) pair is sufficient — no move-path tree is needed; index projections are terminated by HX3038 (E0508 move-out-of-array) / HX3039 (E0507 index variant) at the move site, exactly as rustc builds NO per-element move path for arrays (reference-consistent), and a nested base `s.a.b` is a conservative silence (single-ident base only, like HX3034). HONESTY CAVEAT: hexa structs are MAP-BACKED REFERENCE VALUES, so `s.a` is a handle-copy and `let y = s.a` is NOT a move — this rule therefore fires ONLY under @own move semantics; it tracks E0382's REJECT surface as an @own-aliasing hazard (the same stance as HX3038), not a hexa-specific liveness proof. The move SITE is legal (rustc allows a partial move; hexa has no Drop, so E0509's drop-of-partially-moved axis is absent) — only a USE after the move fires. Conservative boundaries: single-ident base (nested `s.a.b` as a move source is silent), a group-untracked base (a call-returned struct) is silent, a module global is silent, and `let y = s.a` is not a move. A cross-block reinit down only ONE branch (a may-join) fires — this is the sole point more conservative than rustc's must-init, tolerated in the same advisory band as the write lane (pure theoretical FP: @own adoption is 0). @own carrier corpus adoption is 0, so even with the flag ON this rule fires on ZERO real source (corpus-clean, gen3≡gen4 preserved). Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical. Fix: pass a borrow (`sink(&s.a)`), clone the field (`sink(s.a.clone())`), or re-initialize the field (`s.a = v`) before using it again.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,

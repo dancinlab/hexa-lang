@@ -161,7 +161,7 @@ fn print_help() {
     println("  --target=TRIPLE        arm64-apple-darwin | arm64-linux-gnu | x86_64-linux-gnu | thumbv7em-none-eabihf | nvptx64-nvidia-cuda-sm{80,90} (default: detected)")
     println("  --emit=KIND            asm | obj | exec   (default: exec)")
     println("  --error-format=MODE    pretty | short | json | github (default: pretty)")
-    println("  --linker=KIND          hexa | system     (default: system; hexa_ld not yet landed)")
+    println("  --linker=KIND          hexa | system     (default: system; hexa=in-tree hexa_ld, arm64-darwin opt-in via $HEXA_LD)")
     println("  --opt=LEVEL            0 | 1 | 2 | 3     (default: 0, or $HEXA_OPT_LEVEL)")
     println("  --stream               fused per-function codegen (lower RSS; arm64, no --opt)")
     println("  --keep-temp            do not remove the per-build intermediate dir (default: off)")
@@ -515,6 +515,19 @@ if !backend_kind_user_set
 // Opt back into the `as` fork via `--backend=system`.
 if !backend_kind_user_set
     && target == "arm64-linux-gnu"
+    && emit_kind == "obj" {
+    backend_kind = "native"
+}
+// axis ③ round-1 — native-default for the ELF x86_64 obj path so
+// `--target=x86_64-linux-gnu --emit=obj` skips host `as` out of the box, the
+// missing sibling of the two flips above (the x86_64 ELF writer at ~:1006 —
+// pack_lir_x86_64 + serialize_elf_x86_64 — is already wired). This kills the
+// LAST `as` fork on the linux native-emit path (leg-B x86_64). Opt back into the
+// `as` fork via `--backend=system`. BIT-CHANGING: x86_64 object bytes shift from
+// as-produced to native-encoder-produced — gated on byteeq 3-target GREEN + an
+// ENCODE-MISS==0 self-emit census (a miss emits silently-empty bytes).
+if !backend_kind_user_set
+    && target == "x86_64-linux-gnu"
     && emit_kind == "obj" {
     backend_kind = "native"
 }
@@ -1149,7 +1162,24 @@ if target == "arm64-apple-darwin" {
 }
 
 if linker_kind == "hexa" {
-    eprintln("hexa-compiler: warning: --linker=hexa not yet implemented; falling back to system")
+    if target == "arm64-apple-darwin" {
+        // axis-③ track-2 (opt-in, default-OFF): link via the in-tree Mach-O
+        // arm64 linker tool/hexa_ld.hexa instead of forking ld64 + xcrun.
+        // hexa_ld emits MH_EXECUTE + MH_PIE, LC_LOAD_DYLIB libSystem +
+        // chained fixups for extern refs, LC_MAIN(_main), then ad-hoc
+        // codesigns in-tool (codesign is a sanctioned OS-Gatekeeper leaf).
+        // Gate = 0 ld64/xcrun execve on a --linker=hexa build; behavior
+        // parity vs --linker=system over a corpus. Resolution: $HEXA_LD
+        // (explicit prefix; a prebuilt hexa_ld binary or "hexa run
+        // tool/hexa_ld.hexa") else `hexa_ld` on PATH. Overrides the system
+        // ld_cmd built above; the shared exec + `test -f OUT` success check
+        // below is unchanged (hexa_ld writes out_path on success).
+        let mut _hexa_ld = env("HEXA_LD")
+        if len(_hexa_ld) == 0 { _hexa_ld = "hexa_ld" }
+        ld_cmd = _hexa_ld + " -o " + out_path + " " + obj_path + " --lc-main _main 2>&1"
+    } else {
+        eprintln("hexa-compiler: warning: --linker=hexa is only wired for arm64-apple-darwin (target=" + target + "); falling back to system ld")
+    }
 }
 
 // L1 keeper: external linker invocation; replaced when hexa_ld lands.

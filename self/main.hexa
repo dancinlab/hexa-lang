@@ -3132,10 +3132,9 @@ fn cmd_build(src, out, c_only, target, shared) {
             exit(1)
         }
     }
-    let v2 = resolve_or_bootstrap_hexat()
-    if len(v2) == 0 {
-        die_no_hexat()
-    }
+    // (axis ① round-1) hexat resolve/bootstrap HOISTED to its sole use just above the
+    // C-transpile path below — a leg-B-native-served build forks zero hexat. Nothing between
+    // here and there touches v2 (verified: native arm returns at its own `return ""`).
     println("=== Building " + src + " -> " + out + " ===")
     // #12 (wilson-needs-hexa-build-out-of-tree): mirror cmd_run's flatten
     //   step — use self/module_loader.hexa (the canonical module loader
@@ -3531,6 +3530,58 @@ fn cmd_build(src, out, c_only, target, shared) {
             println("OK: built " + out + " (native backend)")
         }
         return ""
+    }
+    // ── DONE-criterion axis ① round-1: `hexa build` leg-B mirror (no hexat, no clang) ──
+    // HEXA_BUILD_NATIVE=1 (default-OFF, byte-neutral): reuse cmd_run's proven leg-B recipe
+    // (aprime --emit=obj + ld, own-start crt-drop) so `hexa build` lowers through the native
+    // source→own-IR→native path with ZERO hexat fork and ZERO clang. ANY emit/link failure
+    // falls through to the C-transpile path below (delegate intact; trace under
+    // HEXA_RUN_NATIVE_TRACE=1). linux x86_64 only (the host the recipe is proven on); refuses
+    // shared/--c-only/--target. Design: state/hexa-own/no_hexacc_round1_design_fable.md.
+    if env_var("HEXA_BUILD_NATIVE") == "1" && (exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxx86_64" || exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxaarch64" || exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxarm64") && shared != "1" && c_only != "1" && len(target) == 0 && len(__actual_src) > 0 {
+        let _bn_arm = exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") != "Linuxx86_64"
+        let _bntgt = if _bn_arm { "arm64-linux-gnu" } else { "x86_64-linux-gnu" }
+        let _bncc = resolve_native_cc()
+        let _bnrt = resolve_prebuilt_runtime()
+        let _bnld = exec("command -v ld 2>/dev/null | tr -d '\\n'")
+        if len(_bncc) > 0 && len(_bnrt) > 0 && len(_bnld) > 0 {
+            let _ = exec("mkdir -p build/artifacts 2>/dev/null")
+            let _bnobj = "build/artifacts/" + basename_stem(out) + ".bnobj.o"
+            let _bne = exec("'" + _bncc + "' _drv.hexa --emit=obj --target=" + _bntgt + " -o '" + _bnobj + "' '" + __actual_src + "' 2>&1")
+            let _bnobj_ok = exec("test -s '" + _bnobj + "' && printf yes || printf no")
+            if _bnobj_ok == "yes" {
+                let _bncrt = if _bn_arm { exec("for d in /usr/lib/aarch64-linux-gnu /usr/lib64 /usr/lib; do if [ -f $d/crt1.o ]; then printf %s $d; break; fi; done") } else { exec("for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do if [ -f $d/crt1.o ]; then printf %s $d; break; fi; done") }
+                let _bndl = if _bn_arm { exec("for f in /lib/ld-linux-aarch64.so.1; do if [ -e $f ]; then printf %s $f; break; fi; done") } else { exec("for f in /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-x86-64.so.2; do if [ -e $f ]; then printf %s $f; break; fi; done") }
+                if len(_bncrt) > 0 && len(_bndl) > 0 {
+                    // nm-probe the resolved runtime.a: only crt-drop when it ACTUALLY carries
+                    // own _start (#4638 consumer-link pattern). A stale/release runtime.a without
+                    // own-start + a blind crt-drop => `ld: cannot find entry symbol _start` => link
+                    // fails => C fallback (measured on aiden 2026-07-07, stale ~/.hx runtime.a).
+                    let _bn_rt_ownstart = exec("nm '" + _bnrt + "' 2>/dev/null | grep -qE ' T _?_start' && printf yes || printf no") == "yes"
+                    let _bnzc = !_bn_arm && env_var("HEXA_ZEROC_OWN_START") != "0" && _bn_rt_ownstart
+                    let _bntmp = exec("printf '%s.bntmp.%s' '" + out + "' \"$$\"")
+                    let _bnlnk = if _bnzc { "'" + _bnld + "' --dynamic-linker '" + _bndl + "' '" + _bnobj + "' '" + _bnrt + "' --start-group -lc -lpthread -lm --end-group -L'" + _bncrt + "' -o '" + _bntmp + "' 2>&1" } else { "'" + _bnld + "' --dynamic-linker '" + _bndl + "' '" + _bncrt + "/crt1.o' '" + _bncrt + "/crti.o' '" + _bnobj + "' '" + _bnrt + "' --start-group -lc -lpthread -lm --end-group '" + _bncrt + "/crtn.o' -L'" + _bncrt + "' -o '" + _bntmp + "' 2>&1" }
+                    let _bnlr = exec(_bnlnk)
+                    let _bnbin_ok = exec("test -x '" + _bntmp + "' && printf yes || printf no")
+                    if _bnbin_ok == "yes" {
+                        let _ = exec("mv -f '" + _bntmp + "' '" + out + "' 2>/dev/null")
+                        let _ = exec("rm -f '" + _bnobj + "' 2>/dev/null")
+                        if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[build-native] clang-free: aprime --emit=obj + ld → " + out) }
+                        println("OK: built " + out + " (native backend, leg-B — no hexat, no clang)")
+                        return ""
+                    } else if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[build-native] ld link failed → C fallback: " + _bnlr) }
+                }
+            } else if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[build-native] native-emit failed → C fallback: " + _bne) }
+            let _ = exec("rm -f '" + _bnobj + "' 2>/dev/null")
+        }
+    }
+    // Rider (axis ① measurement): resolve/bootstrap hexat HERE (at its sole use below), NOT at
+    // the top of cmd_build — so a leg-B-native-served build above forks ZERO hexat (and a fresh
+    // clone does not bootstrap-compile hexa_cc.c for a binary it never runs). Nothing between the
+    // former top-of-fn site and here touched v2 (verified). Default-path artifacts unchanged.
+    let v2 = resolve_or_bootstrap_hexat()
+    if len(v2) == 0 {
+        die_no_hexat()
     }
     let stem = basename_stem(out)
     let c_file = "build/artifacts/" + stem + ".c"
@@ -4493,7 +4544,8 @@ fn cmd_run_user_direct(file, extra_args) {
     // from the clang fallback anyway. Skipping straight to that fallback on
     // non-linux-x86_64 hosts is outcome-identical minus the doomed compile.
     let _run_native_host = exec("uname -sm 2>/dev/null").trim()
-    let _run_native_on = _run_native_host == "Linux x86_64" && env("HEXA_RUN_CTRANSPILE") != "1"
+    let _run_native_arm = _run_native_host == "Linux aarch64" || _run_native_host == "Linux arm64"
+    let _run_native_on = (_run_native_host == "Linux x86_64" || _run_native_arm) && env("HEXA_RUN_CTRANSPILE") != "1"
     if !file_exists(tmpbin) && _run_native_on {
         let _ncc = resolve_native_cc()
         let _nrt = resolve_prebuilt_runtime()
@@ -4522,7 +4574,8 @@ fn cmd_run_user_direct(file, extra_args) {
                 } else { _nsrc = "" }
             }
             // 1) native object emit (no clang) — on the flattened source
-            let _ne = if len(_nsrc) > 0 { exec("'" + _ncc + "' _drv.hexa --emit=obj --target=x86_64-linux-gnu -o '" + _nobj + "' '" + _nsrc + "' 2>&1") } else { "flatten-failed-skip-native" }
+            let _ntgt = if _run_native_arm { "arm64-linux-gnu" } else { "x86_64-linux-gnu" }
+            let _ne = if len(_nsrc) > 0 { exec("'" + _ncc + "' _drv.hexa --emit=obj --target=" + _ntgt + " -o '" + _nobj + "' '" + _nsrc + "' 2>&1") } else { "flatten-failed-skip-native" }
             // Observability (2026-07-03): the emit's merged output carries the
             // HEXA_CG_PROFILE per-pass rows; swallowing it on success made the
             // instrumentation unreachable from CI (anima gate saw 0 rows over
@@ -4539,8 +4592,8 @@ fn cmd_run_user_direct(file, extra_args) {
             if _nobj_ok == "yes" {
                 // 2) ld link (no clang): crt + runtime.a + libm/libc/pthread.
                 // crt dir auto-detected (gnu-preferred over musl).
-                let _crt = exec("for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do if [ -f $d/crt1.o ]; then printf %s $d; break; fi; done")
-                let _dl = exec("for f in /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-x86-64.so.2; do if [ -e $f ]; then printf %s $f; break; fi; done")
+                let _crt = if _run_native_arm { exec("for d in /usr/lib/aarch64-linux-gnu /usr/lib64 /usr/lib; do if [ -f $d/crt1.o ]; then printf %s $d; break; fi; done") } else { exec("for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do if [ -f $d/crt1.o ]; then printf %s $d; break; fi; done") }
+                let _dl = if _run_native_arm { exec("for f in /lib/ld-linux-aarch64.so.1; do if [ -e $f ]; then printf %s $f; break; fi; done") } else { exec("for f in /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-x86-64.so.2; do if [ -e $f ]; then printf %s $f; break; fi; done") }
                 if len(_crt) > 0 && len(_dl) > 0 {
                     // own-start #29 PR-B (C3): crt-drop when runtime.a carries own _start (#4390/#4395,
                     // HEXA_ZEROC_OWN_START=1). Omitting crt1/crti/crtn stops glibc's _start from linking
@@ -4548,7 +4601,11 @@ fn cmd_run_user_direct(file, extra_args) {
                     // --start-group so libc still resolves. This block is x86_64-hardcoded (arm64 never
                     // reaches here). Default-OFF byte-neutral: else-branch char-identical to today.
                     // Loud-fail-safe: a failed ld link falls through to the clang path below.
-                    let _zc_own = env_var("HEXA_ZEROC_OWN_START") != "0"   // FLIP-7 flip-D: default-ON (opt-out =0). x86_64-linux-only path; a failed -nostartfiles ld link loud-falls-through to clang (comment below)
+                    // nm-probe (#4638 pattern): only crt-drop when the resolved runtime.a ACTUALLY
+                    // carries own _start — a stale/release runtime.a without it + a blind crt-drop =>
+                    // `ld: cannot find entry symbol _start` => link fails => C fallback.
+                    let _rt_ownstart = exec("nm '" + _nrt + "' 2>/dev/null | grep -qE ' T _?_start' && printf yes || printf no") == "yes"
+                    let _zc_own = !_run_native_arm && env_var("HEXA_ZEROC_OWN_START") != "0" && _rt_ownstart   // FLIP-7 flip-D: default-ON on x86_64 (opt-out =0), gated on the archive actually carrying own _start. arm64 forces crt-keep (else-branch = compiler/main.hexa:1134 glibc-crt1 recipe); own-start arm64 = separate round
                     let _lnk = if _zc_own { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread -lm --end-group -L'" + _crt + "' -o '" + _nbin + "' 2>&1" } else { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _crt + "/crt1.o' '" + _crt + "/crti.o' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread -lm --end-group '" + _crt + "/crtn.o' -L'" + _crt + "' -o '" + _nbin + "' 2>&1" }
                     let _lr = exec(_lnk)
                     let _nbin_ok = exec("test -x '" + _nbin + "' && printf yes || printf no")

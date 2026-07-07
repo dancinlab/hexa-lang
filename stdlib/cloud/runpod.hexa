@@ -457,6 +457,47 @@ fn runpod_is_cpu_selector(gpu_type: str) -> int {
     return 0
 }
 
+// runpod_normalize_gpu — map a short/friendly `--gpu` alias to RunPod's CANONICAL
+// gpuTypeId. RunPod's `runpodctl pod create --gpu-id` (and the GraphQL gpuTypeId)
+// accept ONLY the full display id, e.g. "NVIDIA A40" / "NVIDIA GeForce RTX 4090"
+// (see `runpodctl get cloud`). A bare "A40" / "RTX4090" is passed through verbatim
+// and RunPod rejects it with `Unknown GPU type: RTX4090` — the accidental-fail trap.
+// This normalizes the common aliases so the same `--gpu A40` that works on vast also
+// works on runpod (provider-agnostic selector, matching the --tier canonicalization).
+// An already-canonical id (contains "NVIDIA"/"AMD", or unmatched) passes through
+// unchanged, so this never blocks a valid full id and stays forward-compatible.
+fn runpod_normalize_gpu(gpu_type: str) -> str {
+    let raw = gpu_type.trim()
+    // an id that already names the vendor is canonical — leave it alone.
+    let lo = raw.to_lower()
+    if lo.contains("nvidia") { return raw }
+    if lo.contains("amd") { return raw }
+    // strip spaces/hyphens from the alias for a tolerant match ("RTX 4090"→"rtx4090").
+    let key = lo.replace(" ", "").replace("-", "")
+    // GeForce consumer cards
+    if key == "rtx4090" { return "NVIDIA GeForce RTX 4090" }
+    if key == "rtx5090" { return "NVIDIA GeForce RTX 5090" }
+    if key == "rtx5080" { return "NVIDIA GeForce RTX 5080" }
+    if key == "rtx4080" { return "NVIDIA GeForce RTX 4080" }
+    if key == "rtx4070ti" { return "NVIDIA GeForce RTX 4070 Ti" }
+    if key == "rtx3090" { return "NVIDIA GeForce RTX 3090" }
+    if key == "rtx3080" { return "NVIDIA GeForce RTX 3080" }
+    // datacenter cards
+    if key == "a40" { return "NVIDIA A40" }
+    if key == "a100" { return "NVIDIA A100 80GB PCIe" }
+    if key == "a10080gb" { return "NVIDIA A100 80GB PCIe" }
+    if key == "h100" { return "NVIDIA H100 80GB HBM3" }
+    if key == "h100nvl" { return "NVIDIA H100 NVL" }
+    if key == "l40" { return "NVIDIA L40" }
+    if key == "l40s" { return "NVIDIA L40S" }
+    if key == "l4" { return "NVIDIA L4" }
+    if key == "rtx4000ada" { return "NVIDIA RTX 4000 Ada Generation" }
+    if key == "rtx5000ada" { return "NVIDIA RTX 5000 Ada Generation" }
+    // unknown alias — pass through so RunPod surfaces its own "Unknown GPU type"
+    // (fail-loud) rather than us silently swallowing a typo.
+    return raw
+}
+
 // _runpod_default_cpu_flavors — the default REST cpuFlavorIds JSON-array body.
 // Compute/general flavors across both generations, ordered for availability
 // (RunPod rents the first free one when cpuFlavorPriority is "availability").
@@ -569,12 +610,15 @@ fn runpod_create_vol(api_key: str, gpu_type: str, image: str, pubkey: str, name:
 // runpod_create_vol_ct — runpod_create_vol with an explicit cloud-type
 // (SECURE | COMMUNITY | ALL). ALL is the availability-first default; a pin
 // only narrows the search. Backward-compatible: runpod_create_vol passes ALL.
-fn runpod_create_vol_ct(api_key: str, gpu_type: str, image: str, pubkey: str, name: str, volume_gb: int, disk_gb: int, cloud_type: str) -> RunPodPod {
+fn runpod_create_vol_ct(api_key: str, gpu_type_in: str, image: str, pubkey: str, name: str, volume_gb: int, disk_gb: int, cloud_type: str) -> RunPodPod {
     // CPU-pod path (ING #30) — REST v1 is the only working CPU deploy route;
     // runpodctl `pod create` requires --gpu-id and cannot launch a CPU pod.
-    if runpod_is_cpu_selector(gpu_type) == 1 {
+    if runpod_is_cpu_selector(gpu_type_in) == 1 {
         return _runpod_create_cpu_rest(api_key, image, pubkey, name, volume_gb, disk_gb, 0, "")
     }
+    // Map a friendly alias (A40 / RTX4090) to RunPod's canonical gpuTypeId — a bare
+    // alias is rejected with "Unknown GPU type" (the accidental-fail trap this fixes).
+    let gpu_type = runpod_normalize_gpu(gpu_type_in)
     let rpc = _runpodctl_path()
     if len(rpc) > 0 {
         // runpodctl `pod create` is the SUPPORTED GPU deploy path. RunPod retired

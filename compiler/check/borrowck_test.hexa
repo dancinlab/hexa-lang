@@ -1665,6 +1665,728 @@ fn _run_uninit_probe(label: string, src: string, want_on: i64) -> bool {
     return ok
 }
 
+// ── HEXA-OWN round8-2 — HX3036 borrowed-value-does-not-live-long-enough
+// (Rust E0597) source probes. The ONLY firing form is the assign-arm
+// re-borrow across a scope: `let mut r = &y; { let x = 5; r = &x } use r`
+// (r outlives x's scope). let-arm loans are structurally safe. ──
+
+// HAZARD — an assign-arm re-borrow of a value whose scope dies while the
+// binding lives, then used after the scope. bare `{ }` does not split MIR
+// blocks, so the dangle (scope-exit) precedes the use by program-order seq.
+fn _src_hz_dangle_asn_reborrow() -> string {
+    let mut s = "fn hzd() {\n"
+    s = s + "    let y = 10\n"
+    s = s + "    let mut r = &y\n"
+    s = s + "    {\n"
+    s = s + "        let x = 5\n"
+    s = s + "        r = &x\n"
+    s = s + "    }\n"
+    s = s + "    println(r)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a same-scope let-arm loan: r's scope ⊆ x's scope, so the borrow
+// can never outlive the value (no asn-lane row is ever recorded).
+fn _src_fp_same_scope() -> string {
+    let mut s = "fn fpss() {\n"
+    s = s + "    let x = 5\n"
+    s = s + "    let r = &x\n"
+    s = s + "    println(r)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — the reassign-then-use FP killer: after the scope dies, r is
+// repointed to a live outer value BEFORE the use, so the use snapshots the
+// non-dangling row (row != dangle row → silent).
+fn _src_fp_reassign_before_use() -> string {
+    let mut s = "fn fprb2() {\n"
+    s = s + "    let y = 1\n"
+    s = s + "    let w = 2\n"
+    s = s + "    let mut r = &y\n"
+    s = s + "    {\n"
+    s = s + "        let x = 5\n"
+    s = s + "        r = &x\n"
+    s = s + "    }\n"
+    s = s + "    r = &w\n"
+    s = s + "    println(r)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HX3036 probe runner — mirrors `_run_uninit_probe`, keyed on the ref-outlives
+// code and asserting every OTHER code is 0 (probe hygiene). STRICT re-bands
+// HX3036 to Error, so the error-band count must equal the HX3036 count. OFF →
+// want 0 (empty stream). Note: the hz probe's `let mut r = &y` makes a let-lane
+// loan of y, but y never reappears as an origin, so E3/E4/E0503 stay silent.
+fn _run_outlives_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3036 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3036")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3036 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3036 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
+// ── HEXA-OWN round8-3 — HX3037 closure capture-move (Rust E0507
+// "cannot move out of `X`, a captured variable in an `FnMut` closure").
+// The ONLY firing form is a bare-ident @own call-arg inside a closure body
+// that is a CAPTURE of the enclosing scope. Source-level probes are viable:
+// the inline `@own p: T` parser carrier is live on main (parser.hexa
+// p_param_own_anns → ast_to_hir param_names → hir_to_mir @own pre-pass), so
+// no hand-built HIR is needed (unlike the older tp_own_param_move). ──
+
+// HAZARD — a captured `xs` moved into `sink`'s @own param inside the closure
+// body. The closure may be called more than once (f(1); f(2)), and the env
+// slot aliases xs's heap object, so the move is UAF-unsafe → HX3037 ×1.
+fn _src_hz_clo_capture_move() -> string {
+    let mut s = "fn sink(@own v: [i64]) {\n"
+    s = s + "    println(len(v))\n"
+    s = s + "}\n"
+    s = s + "fn hzcm() {\n"
+    s = s + "    let xs = [1, 2, 3]\n"
+    s = s + "    let f = fn(n: i64) {\n"
+    s = s + "        sink(xs)\n"
+    s = s + "    }\n"
+    s = s + "    f(1)\n"
+    s = s + "    f(2)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — a nested closure inside an outer closure moves the ENCLOSING-fn
+// capture `xs` into sink's @own param. Proves the read-only walk descends
+// into inner closures for outer-fn captures → HX3037 ×1 (only the outer
+// closure's scan runs; the inner closure lowers with `_bck_active` false).
+fn _src_hz_clo_nested_capture_move() -> string {
+    let mut s = "fn sink(@own v: [i64]) {\n"
+    s = s + "    println(len(v))\n"
+    s = s + "}\n"
+    s = s + "fn hznest() {\n"
+    s = s + "    let xs = [1, 2, 3]\n"
+    s = s + "    let outer = fn(a: i64) {\n"
+    s = s + "        let inner = fn(b: i64) {\n"
+    s = s + "            sink(xs)\n"
+    s = s + "        }\n"
+    s = s + "        inner(a)\n"
+    s = s + "    }\n"
+    s = s + "    outer(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — same capture-and-pass shape, but sink's param is NOT @own, so
+// the arg is a READ (no move source) → 0.
+fn _src_fp_clo_param_not_own() -> string {
+    let mut s = "fn sink(v: [i64]) {\n"
+    s = s + "    println(len(v))\n"
+    s = s + "}\n"
+    s = s + "fn fpno() {\n"
+    s = s + "    let xs = [1, 2, 3]\n"
+    s = s + "    let f = fn(n: i64) {\n"
+    s = s + "        sink(xs)\n"
+    s = s + "    }\n"
+    s = s + "    f(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — the moved arg is the closure's OWN param `v`, not a capture, so
+// it is not in the free set → 0 (moving a closure-local into @own is fine).
+fn _src_fp_clo_own_arg_is_param() -> string {
+    let mut s = "fn sink(@own v: [i64]) {\n"
+    s = s + "    println(len(v))\n"
+    s = s + "}\n"
+    s = s + "fn fpparam() {\n"
+    s = s + "    let f = fn(v: [i64]) {\n"
+    s = s + "        sink(v)\n"
+    s = s + "    }\n"
+    s = s + "    f([1, 2])\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a body `let xs = [9]` shadows the outer `xs`, so the moved name
+// is a closure-local, not a capture (the `_collect_free` whole-subtree
+// over-approximation drops `xs` from the free set) → 0.
+fn _src_fp_clo_shadow_let() -> string {
+    let mut s = "fn sink(@own v: [i64]) {\n"
+    s = s + "    println(len(v))\n"
+    s = s + "}\n"
+    s = s + "fn fpshadow() {\n"
+    s = s + "    let xs = [1, 2, 3]\n"
+    s = s + "    let f = fn(n: i64) {\n"
+    s = s + "        let xs = [9]\n"
+    s = s + "        sink(xs)\n"
+    s = s + "    }\n"
+    s = s + "    f(1)\n"
+    s = s + "    println(len(xs))\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — an @own move in the ENCLOSING fn (outside any closure). This is
+// the bare-ident Rule-2 move classifier's domain, not this rung; with no live
+// loan it records a move but emits nothing → HX3037 0, empty stream.
+fn _src_fp_clo_enclosing_direct() -> string {
+    let mut s = "fn sink(@own v: [i64]) {\n"
+    s = s + "    println(len(v))\n"
+    s = s + "}\n"
+    s = s + "fn fpencl() {\n"
+    s = s + "    let xs = [1, 2, 3]\n"
+    s = s + "    sink(xs)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HX3037 probe runner — mirrors `_run_outlives_probe`, keyed on the capture-
+// move code and asserting every OTHER code is 0 (probe hygiene). STRICT
+// re-bands HX3037 to Error, so the error-band count must equal the HX3037
+// count. OFF → want 0 (empty stream, byteeq-neutral).
+fn _run_capture_move_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3037 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3037")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3037 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3037 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
+// ── HEXA-OWN round9 — HX3038 move-out-of-array-by-indexing (Rust E0508) +
+// HX3039 move-out-of-borrowed-content via INDEX (Rust E0507). Source-level
+// probes are viable (the inline `@own p: T` carrier is live on main, as for
+// HX3037). `sink(a[i])` on an owned-local array `a` → HX3038; `sink(r[i])` on
+// a live ref `r` → HX3039. Non-@own arg and a global base are silent. ──
+
+// HAZARD — `a[0]` is an owned-local array element moved into sink's @own param.
+fn _src_hz_moveout_array() -> string {
+    let mut s = "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn hzma() {\n"
+    s = s + "    let a = [1, 2]\n"
+    s = s + "    sink(a[0])\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — same shape but sink's param is NOT @own, so `a[0]` is an ordinary
+// index read (arrays are reference aggregates → handle-copy) → 0.
+fn _src_fp_moveout_array_noown() -> string {
+    let mut s = "fn sink(v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn fpma() {\n"
+    s = s + "    let a = [1, 2]\n"
+    s = s + "    sink(a[0])\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — `r[0]` where `r` is a live `&a` loan moved into sink's @own param →
+// index-projection move-out-of-borrowed-content (E0507 index variant).
+fn _src_hz_moveout_index_borrow() -> string {
+    let mut s = "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn hzmi() {\n"
+    s = s + "    let a = [1, 2]\n"
+    s = s + "    let r = &a\n"
+    s = s + "    sink(r[0])\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a GLOBAL-array base `g[0]` into an @own param: a module global's
+// storage outlives the call, and the conservative check skips a global base
+// (_mir_lookup_global hit) → neither HX3038 nor HX3039 fires → 0.
+fn _src_fp_moveout_index_global() -> string {
+    let mut s = "let g = [1, 2]\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn fpmi() {\n"
+    s = s + "    sink(g[0])\n"
+    s = s + "}\n"
+    return s
+}
+
+// HX3038 probe runner — keys on the array-index move-out code; asserts every
+// OTHER code is 0 (probe hygiene). STRICT re-bands HX3038 to Error → error-band
+// count equals the HX3038 count. OFF → want 0 (empty stream, byteeq-neutral).
+fn _run_moveout_array_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3038 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3038")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3038 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3038 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
+// HX3039 probe runner — keys on the index-projection move-out-of-borrow code.
+fn _run_moveout_index_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3039 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3039")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3039 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3039 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
+// ── HEXA-OWN round9 — HX3040 move-out-while-borrowed at the NON-call move sites
+// (Rust E0505). `let b = a` / `b = a` / `return a` of an @own binding `a` while
+// a live loan `let r = &a` exists → HX3040. A killed loan is silent. ──
+
+// HAZARD — let-RHS move of the @own param `a` while `r` borrows it.
+fn _src_hz_nc_move_let() -> string {
+    let mut s = "fn hznl(@own a: [i64]) -> [i64] {\n"
+    s = s + "    let r = &a\n"
+    s = s + "    let b = a\n"
+    s = s + "    return b\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — assign-RHS move of the @own param `a` while `r` borrows it.
+fn _src_hz_nc_move_assign() -> string {
+    let mut s = "fn hzna(@own a: [i64]) -> [i64] {\n"
+    s = s + "    let mut b = [0]\n"
+    s = s + "    let r = &a\n"
+    s = s + "    b = a\n"
+    s = s + "    return b\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — bare-ident return move of the @own param `a` while `r` borrows it.
+fn _src_hz_nc_move_return() -> string {
+    let mut s = "fn hznr(@own a: [i64]) -> [i64] {\n"
+    s = s + "    let r = &a\n"
+    s = s + "    return a\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — the loan `r` is KILLED (re-let to a non-borrow) before the move, so
+// no live loan of `a` remains → HX3040 ×0.
+fn _src_fp_nc_move_killed() -> string {
+    let mut s = "fn fpnk(@own a: [i64]) -> [i64] {\n"
+    s = s + "    let r = &a\n"
+    s = s + "    let r = [9]\n"
+    s = s + "    let b = a\n"
+    s = s + "    return b\n"
+    s = s + "}\n"
+    return s
+}
+
+// HX3040 probe runner — keys on the non-call move-while-borrowed code.
+fn _run_nc_move_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3040 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3040")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3040 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3040 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
+// ── HEXA-OWN round9 — HX3041 return-reference-to-temporary (Rust E0515).
+// `return &<call/struct-literal/array-literal/binop>` → HX3041. `return
+// &<ident>` stays HX3019 and `return &<global>` is silent. ──
+
+// HAZARD — return a reference to a CALL-result temporary.
+fn _src_hz_ret_temp_call() -> string {
+    let mut s = "fn make() -> i64 {\n"
+    s = s + "    return 5\n"
+    s = s + "}\n"
+    s = s + "fn rtc() -> &i64 {\n"
+    s = s + "    return &make()\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — return a reference to a STRUCT-literal temporary.
+fn _src_hz_ret_temp_struct() -> string {
+    let mut s = "struct P { x: i64 }\n"
+    s = s + "fn rts() -> &P {\n"
+    s = s + "    return &P { x: 1 }\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — return a reference to a BINOP temporary.
+fn _src_hz_ret_temp_binop() -> string {
+    let mut s = "fn rtb(x: i64) -> &i64 {\n"
+    s = s + "    return &(x + 1)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — return a reference to a module GLOBAL: its storage outlives the
+// call and derives no local base, so neither HX3041 nor HX3019 fires → 0.
+fn _src_fp_ret_temp_global() -> string {
+    let mut s = "let g = 0\n"
+    s = s + "fn rtg() -> &i64 {\n"
+    s = s + "    return &g\n"
+    s = s + "}\n"
+    return s
+}
+
+// HX3041 probe runner — keys on the return-ref-to-temporary code.
+fn _run_ret_temp_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3041 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3041")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3041 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3041 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
+// ── HEXA-OWN round10 — HX3042 use-of-partially-moved-value (Rust E0382).
+// A depth-1 field-projection move-state dataflow. `sink(s.a)` where `s` is an
+// OWNED (non-borrowed) struct local and sink's param is @own moves the field
+// `s.a`; a later `use(s.a)` (field re-read) or `use(s)` (whole use) → HX3042.
+// A field reinit (`s.a = v`), a disjoint field (`s.b`), a non-@own arg, and a
+// module global are silent. The inline `@own p: T` carrier is live on main (as
+// for HX3038). Source-level probes below; the runner keys on HX3042. ──
+
+// HAZARD — `s.a` moved into sink's @own param, then re-read → HX3042.
+fn _src_hz_pm_use_field() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn hzpf() {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    sink(s.a)\n"
+    s = s + "    println(s.a)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — a WHOLE-base use of `s` while `s.a` is moved → partially moved.
+fn _src_hz_pm_use_whole() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn hzpw() {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    sink(s.a)\n"
+    s = s + "    println(s)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — a second move of the already-moved `s.a` (the 2nd sink's base-read
+// USE lands after the 1st MOVE) → HX3042 ×1.
+fn _src_hz_pm_double_move() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn hzpd() {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    sink(s.a)\n"
+    s = s + "    sink(s.a)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — an ALIAS `let t = s` joins s's group; a move via `t.a` is seen by a
+// later `use(s.a)` (group-keyed) → HX3042 ×1.
+fn _src_hz_pm_alias() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn hzpa() {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    let t = s\n"
+    s = s + "    sink(t.a)\n"
+    s = s + "    println(s.a)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — a move on ONE branch, used at the join (a may-join) → HX3042 ×1.
+fn _src_xb_pm_branch_join() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn xbpj(c: bool) {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    if c {\n"
+    s = s + "        sink(s.a)\n"
+    s = s + "    }\n"
+    s = s + "    println(s.a)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — loop-carried: the body uses `s.a` then moves it; the back-edge makes
+// the maybe-moved bit reach the TOP of the body → on the repeat iteration BOTH
+// the `println(s.a)` read AND the `sink(s.a)` re-move are uses of an already-
+// moved value → HX3042 ×2 (rustc-faithful: a loop re-move is itself E0382 "value
+// moved here, in previous iteration of loop"; same mechanism as double_move).
+fn _src_xb_pm_loop_carried() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn xbpl() {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    let mut i = 0\n"
+    s = s + "    while i < 2 {\n"
+    s = s + "        println(s.a)\n"
+    s = s + "        sink(s.a)\n"
+    s = s + "        i = i + 1\n"
+    s = s + "    }\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — the move SITE alone is legal (rustc allows a partial move); the
+// only USE is the move-arg's own base-read, logged BEFORE the move → 0.
+fn _src_fp_pm_move_site_only() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn fppm() {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    sink(s.a)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a DISJOINT field `s.b` used after `s.a` is moved → 0 (per-field).
+fn _src_fp_pm_disjoint() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn fppd() {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    sink(s.a)\n"
+    s = s + "    println(s.b)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a field REINIT `s.a = v` kills the move; the later use is clean → 0.
+fn _src_fp_pm_reinit() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn fppr() {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    sink(s.a)\n"
+    s = s + "    s.a = 2\n"
+    s = s + "    println(s.a)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — the arg is a plain (non-@own) param, so `s.a` is a handle-copy, not
+// a move → 0.
+fn _src_fp_pm_noown() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "fn sink2(v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn fppn() {\n"
+    s = s + "    let s = P { a: 1, b: 2 }\n"
+    s = s + "    sink2(s.a)\n"
+    s = s + "    println(s.a)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a module-GLOBAL base: the global's storage outlives the call and the
+// conservative check skips a global base (_mir_lookup_global hit) → 0.
+fn _src_fp_pm_global() -> string {
+    let mut s = "struct P { a: i64, b: i64 }\n"
+    s = s + "let g = P { a: 1, b: 2 }\n"
+    s = s + "fn sink(@own v: i64) {\n"
+    s = s + "    println(v)\n"
+    s = s + "}\n"
+    s = s + "fn fppg() {\n"
+    s = s + "    sink(g.a)\n"
+    s = s + "    println(g.a)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HX3042 probe runner — keys on the partial-move use-after-move code; asserts
+// every OTHER code is 0 (probe hygiene — a stray HX3014/HX3035 would mean the
+// pm lane crossed into another lane). STRICT re-bands HX3042 to Error → error-
+// band count equals the HX3042 count. OFF → want 0 (empty stream, byteeq-neutral).
+fn _run_pm_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3042 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3042")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3042 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3042 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
 // ── driver ───────────────────────────────────────────────────
 
 fn main() {
@@ -1795,6 +2517,68 @@ fn main() {
         if !_run_uninit_probe("fp_return_branch", _src_fp_return_branch(), 0) { ok = false }
         if !_run_uninit_probe("fp_field_partial", _src_fp_field_partial(), 0) { ok = false }
         if !_run_uninit_probe("fp_normal_let", _src_fp_normal_let(), 0) { ok = false }
+        // HEXA-OWN round8-2 — borrowed-value-does-not-live-long-enough (HX3036,
+        // Rust E0597). Hazard (assign-arm re-borrow across a dying scope, used
+        // after) → ×1 ON; controls (same-scope let-arm loan · repoint-to-live-
+        // before-use) → 0. OFF → empty stream (byteeq-neutral); STRICT → Error-band.
+        if !_run_outlives_probe("hz_dangle_asn_reborrow", _src_hz_dangle_asn_reborrow(), 1) { ok = false }
+        if !_run_outlives_probe("fp_same_scope", _src_fp_same_scope(), 0) { ok = false }
+        if !_run_outlives_probe("fp_reassign_before_use", _src_fp_reassign_before_use(), 0) { ok = false }
+        // HEXA-OWN round8-3 — closure capture-move (HX3037, Rust E0507
+        // "captured variable in an FnMut closure"). Hazards (a captured var
+        // moved into an @own param inside a closure · same via a nested inner
+        // closure) → ×1 ON; controls (param not @own · arg is the closure's
+        // own param · body-let shadow of the capture · @own move in the
+        // enclosing fn outside the closure) → 0. OFF → empty stream (byteeq-
+        // neutral); STRICT → Error-band.
+        if !_run_capture_move_probe("hz_clo_capture_move", _src_hz_clo_capture_move(), 1) { ok = false }
+        if !_run_capture_move_probe("hz_clo_nested_capture_move", _src_hz_clo_nested_capture_move(), 1) { ok = false }
+        if !_run_capture_move_probe("fp_clo_param_not_own", _src_fp_clo_param_not_own(), 0) { ok = false }
+        if !_run_capture_move_probe("fp_clo_own_arg_is_param", _src_fp_clo_own_arg_is_param(), 0) { ok = false }
+        if !_run_capture_move_probe("fp_clo_shadow_let", _src_fp_clo_shadow_let(), 0) { ok = false }
+        if !_run_capture_move_probe("fp_clo_enclosing_direct", _src_fp_clo_enclosing_direct(), 0) { ok = false }
+        // HEXA-OWN round9 — HX3038 move-out-of-array-by-indexing (E0508) + HX3039
+        // move-out-of-borrowed-content via INDEX (E0507). `sink(a[i])` on an
+        // owned-local array → HX3038 ×1; `sink(r[i])` on a live `&a` loan → HX3039
+        // ×1; a non-@own arg and a global base → 0. OFF → empty; STRICT → Error-band.
+        if !_run_moveout_array_probe("hz_moveout_array", _src_hz_moveout_array(), 1) { ok = false }
+        if !_run_moveout_array_probe("fp_moveout_array_noown", _src_fp_moveout_array_noown(), 0) { ok = false }
+        if !_run_moveout_index_probe("hz_moveout_index_borrow", _src_hz_moveout_index_borrow(), 1) { ok = false }
+        if !_run_moveout_index_probe("fp_moveout_index_global", _src_fp_moveout_index_global(), 0) { ok = false }
+        // HEXA-OWN round9 — HX3040 move-out-while-borrowed at the NON-call move
+        // sites (E0505). `let b = a` / `b = a` / `return a` of an @own binding
+        // while a live `&a` loan exists → HX3040 ×1; a killed loan → 0. OFF →
+        // empty stream (byteeq-neutral); STRICT → Error-band.
+        if !_run_nc_move_probe("hz_nc_move_let", _src_hz_nc_move_let(), 1) { ok = false }
+        if !_run_nc_move_probe("hz_nc_move_assign", _src_hz_nc_move_assign(), 1) { ok = false }
+        if !_run_nc_move_probe("hz_nc_move_return", _src_hz_nc_move_return(), 1) { ok = false }
+        if !_run_nc_move_probe("fp_nc_move_killed", _src_fp_nc_move_killed(), 0) { ok = false }
+        // HEXA-OWN round9 — HX3041 return-reference-to-temporary (E0515).
+        // `return &<call/struct-literal/binop>` → HX3041 ×1; `return &<global>`
+        // → 0. OFF → empty stream (byteeq-neutral); STRICT → Error-band.
+        if !_run_ret_temp_probe("hz_ret_temp_call", _src_hz_ret_temp_call(), 1) { ok = false }
+        if !_run_ret_temp_probe("hz_ret_temp_struct", _src_hz_ret_temp_struct(), 1) { ok = false }
+        if !_run_ret_temp_probe("hz_ret_temp_binop", _src_hz_ret_temp_binop(), 1) { ok = false }
+        if !_run_ret_temp_probe("fp_ret_temp_global", _src_fp_ret_temp_global(), 0) { ok = false }
+        // HEXA-OWN round10 — HX3042 use-of-partially-moved-value (E0382). A
+        // field-projection move of `s.a` into an @own param, then a re-read of
+        // the field / a whole-base use / a second move / an alias / a branch-join
+        // / a loop-carried use → HX3042 ×1; the move site alone, a disjoint field,
+        // a field reinit, a non-@own arg, and a module global → 0. OFF → empty
+        // stream (byteeq-neutral); STRICT → Error-band.
+        if !_run_pm_probe("hz_pm_use_field", _src_hz_pm_use_field(), 1) { ok = false }
+        if !_run_pm_probe("hz_pm_use_whole", _src_hz_pm_use_whole(), 1) { ok = false }
+        if !_run_pm_probe("hz_pm_double_move", _src_hz_pm_double_move(), 1) { ok = false }
+        if !_run_pm_probe("hz_pm_alias", _src_hz_pm_alias(), 1) { ok = false }
+        if !_run_pm_probe("xb_pm_branch_join", _src_xb_pm_branch_join(), 1) { ok = false }
+        // ×2: on the repeat iteration BOTH the body's read AND the re-move of the
+        // already-moved `s.a` are E0382 (rustc-faithful loop re-move; see source).
+        if !_run_pm_probe("xb_pm_loop_carried", _src_xb_pm_loop_carried(), 2) { ok = false }
+        if !_run_pm_probe("fp_pm_move_site_only", _src_fp_pm_move_site_only(), 0) { ok = false }
+        if !_run_pm_probe("fp_pm_disjoint", _src_fp_pm_disjoint(), 0) { ok = false }
+        if !_run_pm_probe("fp_pm_reinit", _src_fp_pm_reinit(), 0) { ok = false }
+        if !_run_pm_probe("fp_pm_noown", _src_fp_pm_noown(), 0) { ok = false }
+        if !_run_pm_probe("fp_pm_global", _src_fp_pm_global(), 0) { ok = false }
         // census lane must be silent whenever HEXA_BORROWCK_CENSUS is unset
         // (byteeq-neutral proof at the census-count level).
         if !_run_census() { ok = false }
