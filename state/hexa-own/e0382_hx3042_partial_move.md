@@ -81,6 +81,20 @@ later use lands after the MOVE and fires. Loop-carried is caught by the back-edg
 ## Companion tests (`_run_pm_probe`, keyed on HX3042 + probe-hygiene stray=0)
 
 hz_pm_use_field / hz_pm_use_whole / hz_pm_double_move / hz_pm_alias /
-xb_pm_branch_join (may-join) / xb_pm_loop_carried (back-edge) → ×1 ON;
+xb_pm_branch_join (may-join) → ×1 ON; xb_pm_loop_carried (back-edge) → **×2**;
 fp_pm_move_site_only / fp_pm_disjoint / fp_pm_reinit / fp_pm_noown /
 fp_pm_global → 0. OFF all 0; STRICT error-band == HX3042 count.
+
+### Measured finding: loop-carried re-move = ×2 (design expected ×1)
+
+The design table anticipated `xb_pm_loop_carried` → ×1 (only the body's
+`println(s.a)` read after the back-edge). Live behavior on aiden is **×2**: on
+the repeat iteration BOTH the read `println(s.a)` AND the re-move `sink(s.a)`
+observe the maybe-moved bit carried by the back-edge, and re-moving an already-
+moved value is itself E0382 ("value moved here, in previous iteration of loop").
+This is the SAME mechanism that makes `hz_pm_double_move` fire ×1 (a move
+operand's own base-read USE can fire once the pair is already moved). It is
+**more** rustc-faithful, not an over-report: the move site is correctly silent on
+the FIRST/straight-line pass (fp_pm_move_site_only → 0), and fires only when the
+value is genuinely already moved. Test expectation corrected to ×2. All other
+probes matched the design exactly.

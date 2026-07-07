@@ -2258,7 +2258,10 @@ fn _src_xb_pm_branch_join() -> string {
 }
 
 // HAZARD — loop-carried: the body uses `s.a` then moves it; the back-edge makes
-// the maybe-moved bit reach the body's use → HX3042 ×1.
+// the maybe-moved bit reach the TOP of the body → on the repeat iteration BOTH
+// the `println(s.a)` read AND the `sink(s.a)` re-move are uses of an already-
+// moved value → HX3042 ×2 (rustc-faithful: a loop re-move is itself E0382 "value
+// moved here, in previous iteration of loop"; same mechanism as double_move).
 fn _src_xb_pm_loop_carried() -> string {
     let mut s = "struct P { a: i64, b: i64 }\n"
     s = s + "fn sink(@own v: i64) {\n"
@@ -2568,7 +2571,9 @@ fn main() {
         if !_run_pm_probe("hz_pm_double_move", _src_hz_pm_double_move(), 1) { ok = false }
         if !_run_pm_probe("hz_pm_alias", _src_hz_pm_alias(), 1) { ok = false }
         if !_run_pm_probe("xb_pm_branch_join", _src_xb_pm_branch_join(), 1) { ok = false }
-        if !_run_pm_probe("xb_pm_loop_carried", _src_xb_pm_loop_carried(), 1) { ok = false }
+        // ×2: on the repeat iteration BOTH the body's read AND the re-move of the
+        // already-moved `s.a` are E0382 (rustc-faithful loop re-move; see source).
+        if !_run_pm_probe("xb_pm_loop_carried", _src_xb_pm_loop_carried(), 2) { ok = false }
         if !_run_pm_probe("fp_pm_move_site_only", _src_fp_pm_move_site_only(), 0) { ok = false }
         if !_run_pm_probe("fp_pm_disjoint", _src_fp_pm_disjoint(), 0) { ok = false }
         if !_run_pm_probe("fp_pm_reinit", _src_fp_pm_reinit(), 0) { ok = false }
