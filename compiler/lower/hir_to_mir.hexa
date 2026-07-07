@@ -540,6 +540,17 @@ pub let mut _bck_u_spans: [Span] = []
 // ALL item annotations through — zero new plumbing).
 pub let mut _bck_own_fns: [string] = []
 pub let mut _bck_own_pidx: [i64] = []
+// HEXA-OWN round9 (HX3040) — parallel @own-param NAME column (module lifetime,
+// pushed alongside `_bck_own_fns`/`_bck_own_pidx` in the lower_hir pre-pass).
+// Lets the non-call move sites (let-RHS / assign-RHS / return of a bare ident)
+// answer "is this bare ident an `@own` binding of the CURRENT fn?" — the gate
+// that keeps HX3040 (E0505 at the non-call move sites) from firing on an
+// ordinary hexa handle-copy `let b = a`. Never reset per-fn (map is global).
+pub let mut _bck_own_pnames: [string] = []
+// HEXA-OWN round9 (HX3040) — name of the fn currently being lowered, set in the
+// per-fn setup (gated on `_bck_on`). Read ONLY inside `_bck_active`-gated code
+// (`_bck_is_own_binding`), so the flag-OFF path never touches it (byteeq-neutral).
+pub let mut _bck_cur_fn: string = ""
 // HEXA-OWN L5-E1 — ref-binding registry (push-only; newest entry per NAME
 // wins via `_bck_find_ref` END-scan, the same idiom as _bck_find_local).
 // Records `let r = &x` / `let r = &mut x` borrows of a NON-global ident so
@@ -762,6 +773,21 @@ fn _bck_own_param(fn_name: string, idx: i64) -> bool {
     let mut i = 0
     while i < len(_bck_own_fns) {
         if _bck_own_fns[i] == fn_name && _bck_own_pidx[i] == idx { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// HEXA-OWN round9 (HX3040) — is bare ident `name` an `@own` param of top-level
+// fn `fn_name`? Reuses the module-lifetime pre-pass map (fn-name / param-name
+// columns). This is the move-source gate for the NON-call move sites: only an
+// `@own` binding is treated as a MOVE at a `let b = a` / `b = a` / `return a`
+// (an ordinary aggregate handle-copy over a non-`@own` local must stay silent —
+// hexa arrays/structs are reference values, so a plain copy is not a move-out).
+fn _bck_is_own_binding(fn_name: string, name: string) -> bool {
+    let mut i = 0
+    while i < len(_bck_own_fns) {
+        if _bck_own_fns[i] == fn_name && _bck_own_pnames[i] == name { return true }
         i = i + 1
     }
     return false
@@ -1277,6 +1303,120 @@ fn _bck_emit_capture_move(name: string, callee: string, clo_line: i64, sp: Span)
     b = diag_arg(b, "name", name)
     b = diag_arg(b, "callee", callee)
     b = diag_arg(b, "closure_line", to_string(clo_line))
+    let mut d = diag_emit(b)
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
+}
+
+// HX3038 emit (move-out-of-array-by-indexing, Rust E0508) — same-site dedup +
+// STRICT escalation, cloned from `_bck_emit_move_out_of_borrow`. `name` is the
+// owned-local array whose element `name[i]` is moved into an `@own` param.
+// Report-only (`_bck_note_move` is NEVER called — move classification stays a
+// bare-ident invariant). Honesty: hexa arrays are reference aggregates, so
+// `name[i]` is a handle-COPY read, not a literal hole-leaving move — this
+// fires as the @own-aliasing hazard (the array retains the aliased pointer
+// while `@own` asserts transfer → dangling), faithful to E0508's REJECT
+// surface, not its literal C++/Rust hole mechanic.
+fn _bck_emit_move_out_of_array(name: string, sp: Span) {
+    let mut di = 0
+    while di < len(_bck_e_lines) {
+        if _bck_e_lines[di] == sp.line && _bck_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_e_lines.push(sp.line)
+    _bck_e_cols.push(sp.col)
+    let mut b = diag_new("HX3038")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    let mut d = diag_emit(b)
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
+}
+
+// HX3039 emit (move-out-of-borrowed-content via INDEX projection, Rust E0507)
+// — same-site dedup + STRICT escalation, cloned from
+// `_bck_emit_move_out_of_borrow` (HX3034 covers the FIELD `r.f` projection;
+// this is the sibling INDEX `r[i]` projection). `name` is the `&`/`&mut` ref
+// binding, `origin` the value it borrows, `borrow_mut` the loan's mutability,
+// `borrow_line` where the loan was created. MUTABILITY-BLIND (both `&` and
+// `&mut` fire — a `&mut` grants mutation, not ownership move-out). Report-only.
+fn _bck_emit_move_out_of_borrow_index(name: string, origin: string,
+                                      borrow_mut: bool, borrow_line: i64, sp: Span) {
+    let mut di = 0
+    while di < len(_bck_e_lines) {
+        if _bck_e_lines[di] == sp.line && _bck_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_e_lines.push(sp.line)
+    _bck_e_cols.push(sp.col)
+    let mut b = diag_new("HX3039")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "origin", origin)
+    let mut _bk = "immutable"
+    if borrow_mut { _bk = "mutable" }
+    b = diag_arg(b, "borrow_kind", _bk)
+    b = diag_arg(b, "borrow_line", to_string(borrow_line))
+    let mut d = diag_emit(b)
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
+}
+
+// HX3040 emit (move-out-while-borrowed at the NON-call move sites, Rust E0505)
+// — same-site dedup + STRICT escalation, cloned from
+// `_bck_emit_move_while_borrowed` (HX3029 wires the SAME rule only at the
+// call-arg move site; this covers the let-RHS / assign-RHS / bare-ident return
+// sites). `origin` is the `@own` value being moved out, `name` the borrowing
+// binding that holds a live loan of it, `borrow_mut` the loan's mutability,
+// `borrow_line` where the loan was created. Report-only.
+fn _bck_emit_move_while_borrowed_nc(origin: string, name: string, borrow_mut: bool,
+                                    borrow_line: i64, sp: Span) {
+    let mut di = 0
+    while di < len(_bck_e_lines) {
+        if _bck_e_lines[di] == sp.line && _bck_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_e_lines.push(sp.line)
+    _bck_e_cols.push(sp.col)
+    let mut b = diag_new("HX3040")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "origin", origin)
+    b = diag_arg(b, "name", name)
+    let mut _bk = "immutable"
+    if borrow_mut { _bk = "mutable" }
+    b = diag_arg(b, "borrow_kind", _bk)
+    b = diag_arg(b, "borrow_line", to_string(borrow_line))
+    let mut d = diag_emit(b)
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
+}
+
+// HX3041 emit (return-reference-to-temporary, Rust E0515) — same-site dedup +
+// STRICT escalation, cloned from `_bck_emit_ret_escape` (HX3019 covers
+// `return &<ident>`; this covers `return &<rvalue>` where the inner is a call
+// result / struct-or-array literal / binop temporary with no named local
+// storage). `kind` is the HIR node kind of the temporary. Honesty: classifies
+// the return-borrow as dangling per rustc (not proven against hexa's arena
+// free-model), the same reference-faithful stance as shipped HX3019.
+fn _bck_emit_ret_temp(kind: string, sp: Span) {
+    let mut di = 0
+    while di < len(_bck_e_lines) {
+        if _bck_e_lines[di] == sp.line && _bck_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_e_lines.push(sp.line)
+    _bck_e_cols.push(sp.col)
+    let mut b = diag_new("HX3041")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "kind", kind)
     let mut d = diag_emit(b)
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
@@ -3394,6 +3534,39 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                     }
                 }
             }
+            // HEXA-OWN round9 — index-projection move-out (E0508 / E0507). A call
+            // arg of shape `x[i]` — an INDEX access on a bare-ident base `x` —
+            // passed to a callee whose corresponding param is `@own` moves an
+            // element out through a projection. Sibling to the HX3034 FIELD branch
+            // above, split on the base binding:
+            //   * ref base (`x` is a LIVE `&`/`&mut` loan in the E2 registry,
+            //     origin != "") → HX3039 (E0507 move-out-of-borrowed-content, the
+            //     INDEX variant), MUTABILITY-BLIND like HX3034.
+            //   * owned-local base (`x` resolves to a same-fn local, not a ref,
+            //     not a module global) → HX3038 (E0508 move-out-of-array; hexa
+            //     arrays are reference aggregates so this is faithful to E0508's
+            //     REJECT surface as an @own-aliasing hazard, not the literal hole).
+            // Conservative: single-ident base only (nested `x[i][j]` silent — base
+            // child not an ident), global base skipped (`_mir_lookup_global`),
+            // `!_bk_is_method` mirrors the ident/field gates (receiver-first shifts
+            // the `i-1` param index). Report-only (`_bck_note_move` unused). Gated
+            // on `_bck_active` → flag-OFF never reaches here (byteeq-neutral).
+            if _bck_active && !_bk_is_method && e.children[i].kind == "index"
+                && len(e.children[i].children) > 0
+                && e.children[i].children[0].kind == "ident" {
+                let _bk_ix_base = e.children[i].children[0].text
+                if _bck_own_param(callee_text, i - 1)
+                    && _mir_lookup_global(ctx_r, _bk_ix_base) < 0 {
+                    let _bk_ix_ri = _bck_find_ref(_bk_ix_base)
+                    if _bk_ix_ri >= 0 && len(_bck_ref_origins[_bk_ix_ri]) > 0 {
+                        _bck_emit_move_out_of_borrow_index(_bk_ix_base,
+                            _bck_ref_origins[_bk_ix_ri], _bck_ref_mut[_bk_ix_ri],
+                            _bck_ref_lines[_bk_ix_ri], e.children[i].span)
+                    } else if _mir_lookup(ctx_r, _bk_ix_base) >= 0 {
+                        _bck_emit_move_out_of_array(_bk_ix_base, e.children[i].span)
+                    }
+                }
+            }
             // HEXA-OWN R6-A — call-arg borrow-conflict scan (Rust E0499/E0502).
             // A `&x` / `&mut x` passed as a CALL ARGUMENT is a borrow the let-RHS
             // registration site (:3286) never sees, so `f(&mut x, &mut x)` and
@@ -3638,12 +3811,40 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                     _bck_emit_ret_escape(_bk_inner.text, _bk_inner.text,
                                          e.span.line, e.span)
                 }
+                // HEXA-OWN round9 (HX3041, Rust E0515) — `return &<rvalue>` where
+                // the inner is a TEMPORARY with no named local storage that
+                // outlives the fn: a call result, a struct/array literal, or a
+                // binop temporary. Sibling arms to the `&<ident>` (HX3019) gate
+                // above; pure syntactic classification at the return hook (cannot
+                // over-reach into aliasing/flow FP classes). `return &<ident>`
+                // stays HX3019 and `return &<global>` derives no local base — both
+                // SILENT here. Same reference-faithful dangling stance as HX3019.
+                if _bk_inner.kind == "call" || _bk_inner.kind == "struct_lit"
+                    || _bk_inner.kind == "array_lit" || _bk_inner.kind == "binop" {
+                    _bck_emit_ret_temp(_bk_inner.kind, e.span)
+                }
             } else {
                 if _bk_rv.kind == "ident" {
                     let _bk_ri = _bck_find_ref(_bk_rv.text)
                     if _bk_ri >= 0 && len(_bck_ref_origins[_bk_ri]) > 0 {
                         _bck_emit_ret_escape(_bk_rv.text, _bck_ref_origins[_bk_ri],
                                              _bck_ref_lines[_bk_ri], e.span)
+                    }
+                    // HEXA-OWN round9 (HX3040, Rust E0505) — a bare-ident `return a`
+                    // where `a` is an `@own` binding of THIS fn moved out while a
+                    // live loan of it exists. The non-call move-site variant of
+                    // HX3029 (which loan-scans only the call-arg site): reuse the
+                    // E4 write-through scan for a live loan of `a`. `@own` gate keeps
+                    // an ordinary handle-copy return silent; the ref-escape check
+                    // above (`a` as a loan NAME) is orthogonal (here `a` is the
+                    // loan ORIGIN). Report-only; gated on `_bck_active`.
+                    if _bck_is_own_binding(_bck_cur_fn, _bk_rv.text) {
+                        let _bk_rmv = _bck_ref_find_write_through(_bk_rv.text)
+                        if _bk_rmv >= 0 {
+                            _bck_emit_move_while_borrowed_nc(_bk_rv.text,
+                                _bck_ref_names[_bk_rmv], _bck_ref_mut[_bk_rmv],
+                                _bck_ref_lines[_bk_rmv], e.span)
+                        }
                     }
                 }
             }
@@ -4086,6 +4287,21 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                         eprintln(_bk_cl)
                         _bck_census_lines.push(_bk_cl)
                     }
+                    // HEXA-OWN round9 (HX3040, Rust E0505) — `let b = a` where the
+                    // RHS `a` is an `@own` binding of THIS fn moved out while a
+                    // live loan of it exists. The non-call move-site variant of
+                    // HX3029; reuse the E4 write-through scan for a live loan of
+                    // `a`. The `@own` gate keeps an ordinary hexa handle-copy
+                    // silent (arrays/structs are reference values → a plain copy
+                    // is not a move-out). Report-only; gated on `_bck_active`.
+                    if _bck_is_own_binding(_bck_cur_fn, _bk_rhs.text) {
+                        let _bk_lmv = _bck_ref_find_write_through(_bk_rhs.text)
+                        if _bk_lmv >= 0 {
+                            _bck_emit_move_while_borrowed_nc(_bk_rhs.text,
+                                _bck_ref_names[_bk_lmv], _bck_ref_mut[_bk_lmv],
+                                _bck_ref_lines[_bk_lmv], e.span)
+                        }
+                    }
                 }
             }
         }
@@ -4392,6 +4608,25 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             if !_bk_joined {
                 if _bck_find_local(dst.id) >= 0 {
                     _bck_track(dst.id, lhs.text, _bck_new_group(), e.span)
+                }
+            }
+        }
+        // HEXA-OWN round9 (HX3040, Rust E0505) — `b = a` where the RHS `a` is an
+        // `@own` binding of THIS fn moved out while a live loan of it exists. The
+        // non-call move-site variant of HX3029; distinct from the E4 write-through
+        // below (which keys on the LHS `b` being an origin) — here the moved value
+        // is the RHS `a`. Reuse the E4 write-through scan for a live loan of `a`.
+        // The `@own` gate keeps an ordinary handle-copy reassign silent. Report-
+        // only; gated on `_bck_active` (flag-OFF never reaches here, byteeq-neutral).
+        if _bck_active && !is_global && len(lhs.text) > 0 && lhs.kind == "ident"
+            && e.children[1].kind == "ident" {
+            let _bk_amv_rhs = e.children[1].text
+            if _bck_is_own_binding(_bck_cur_fn, _bk_amv_rhs) {
+                let _bk_amv = _bck_ref_find_write_through(_bk_amv_rhs)
+                if _bk_amv >= 0 {
+                    _bck_emit_move_while_borrowed_nc(_bk_amv_rhs,
+                        _bck_ref_names[_bk_amv], _bck_ref_mut[_bk_amv],
+                        _bck_ref_lines[_bk_amv], e.span)
                 }
             }
         }
@@ -6435,6 +6670,9 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
     if _bck_on {
         _bck_active = true
         _bck_reset_fn()
+        // round9 (HX3040) — record the fn being lowered so the non-call move
+        // sites can gate on "is the moved ident an @own param of THIS fn".
+        _bck_cur_fn = it.name
         let mut _bk_ai = 0
         while _bk_ai < len(it.annotations) {
             let _bk_a = it.annotations[_bk_ai]
@@ -6786,6 +7024,11 @@ pub fn lower_hir(module: HModule) -> MModule {
     _bck_active = false
     _bck_own_fns = []
     _bck_own_pidx = []
+    // round9 (HX3040) — reset the parallel @own-param NAME column in lockstep
+    // with the fn/pidx columns above (module-lifetime, rebuilt per lower_hir);
+    // omitting this desyncs the arrays so `_bck_is_own_binding` reads a stale
+    // name row against a fresh fn row.
+    _bck_own_pnames = []
     // Two-pass: collect all module-level globals first so every fn body
     // can resolve any global by name regardless of textual order
     // (parser may put `fn main` before or after a `let mut g = …`).
@@ -6860,6 +7103,9 @@ pub fn lower_hir(module: HModule) -> MModule {
                                     if _bk_pa.args[_bk_qq].text == _bk_pname {
                                         _bck_own_fns.push(fit.name.substring(0, len(fit.name)))
                                         _bck_own_pidx.push(_bk_qq)
+                                        // round9 (HX3040) — parallel NAME column
+                                        // for the non-call move-site @own gate.
+                                        _bck_own_pnames.push(_bk_pname)
                                         break
                                     }
                                     _bk_qq = _bk_qq + 1
