@@ -850,6 +850,137 @@ pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> In
     return 0
 }
 
+// ────────────────────────────────────────────────
+// link_elf_x86_64_ownstart — axis-② own-start ELF static-exec link
+// ────────────────────────────────────────────────
+//
+// Round-1 (exit-code-only) own-start wrapper over link_elf_x86_64's
+// body. Prepends a 14-byte `_start` stub at text offset 0 so the ET_EXEC
+// needs NO crt1.o / -lc / -dynamic-linker: the kernel enters at _start,
+// which calls `main`, forwards main's return (EAX) into EDI and issues
+// the exit syscall directly.
+//
+// _start (14 bytes = 5+2+5+2):
+//   E8 00 00 00 00   call  main          ; rel32 patched below (offs 1..4)
+//   89 C7            mov   edi, eax       ; exit code = main() ret
+//   B8 3C 00 00 00   mov   eax, 60        ; __NR_exit
+//   0F 05            syscall
+//
+// Every obj symbol.value and reloc.offset is shifted by len(stub)=14
+// because the text concat begins with `base = len(text_bytes) = 14` (the
+// stub occupies [0,14)). PC-relative reloc deltas (S+A−P) are invariant
+// under the shared +14 shift, so the reloc loop is byte-identical to
+// link_elf_x86_64. Only the intra-stub `call main` rel32 is resolved
+// here: rel32 = (main final offset) − (next-insn addr = 5); for main at
+// obj-local value 0 that is 14 − 5 = 9.
+//
+// Text-only (round-1): serialize_elf_exec_x86_64 emits a single PT_LOAD;
+// only programs with ZERO data refs link correctly (see round-2 wall).
+pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: string) -> Int {
+    // 14-byte own-start stub at text offset 0.
+    let mut text_bytes: [Int] = []
+    text_bytes.push(0xE8); text_bytes.push(0x00); text_bytes.push(0x00)
+    text_bytes.push(0x00); text_bytes.push(0x00)          // call rel32 (patched)
+    text_bytes.push(0x89); text_bytes.push(0xC7)          // mov edi, eax
+    text_bytes.push(0xB8); text_bytes.push(0x3C); text_bytes.push(0x00)
+    text_bytes.push(0x00); text_bytes.push(0x00)          // mov eax, 60 (__NR_exit)
+    text_bytes.push(0x0F); text_bytes.push(0x05)          // syscall
+    // len(text_bytes) is now 14 — the +14 shift applied to every obj below.
+
+    let mut main_off = -1
+    let mut def_names:   [string] = []
+    let mut def_offsets: [Int]    = []
+    let mut obj_bases:   [Int]    = []
+
+    let mut oi = 0
+    while oi < len(objs) {
+        let obj = objs[oi]
+        let base = len(text_bytes)        // >= 14 — the own-start shift
+        obj_bases.push(base)
+        let mut di = 0
+        while di < len(obj.symbols) {
+            let s = obj.symbols[di]
+            let mut name = ""
+            let mut k = 0
+            while true {
+                let b = obj.strtab[s.name_offset + k] & 0xff
+                if b == 0 { break }
+                name = name + from_char_code(b)
+                k = k + 1
+            }
+            if s.section != 0 {
+                def_names.push(name)
+                def_offsets.push(base + s.value)
+                if main_off < 0 && name == main_name {
+                    main_off = base + s.value
+                }
+            }
+            di = di + 1
+        }
+        let mut ti = 0
+        while ti < len(obj.text) {
+            text_bytes.push(obj.text[ti] & 0xff)
+            ti = ti + 1
+        }
+        oi = oi + 1
+    }
+    if main_off < 0 {
+        eprintln("hexa_ld(elf,ownstart): entry '" + main_name + "' not defined in any obj")
+        return 3
+    }
+
+    // Patch the `call main` rel32 (stub bytes 1..4). Next-insn addr = 5.
+    let call_rel = main_off - 5
+    text_bytes[1] = call_rel & 0xff
+    text_bytes[2] = (call_rel >> 8) & 0xff
+    text_bytes[3] = (call_rel >> 16) & 0xff
+    text_bytes[4] = (call_rel >> 24) & 0xff
+
+    // Resolve inter/intra-obj PLT32/PC32 relocs. The shared +14 shift
+    // cancels in S+A−P, so this is identical to link_elf_x86_64.
+    let mut ro = 0
+    while ro < len(objs) {
+        let obj = objs[ro]
+        let base = obj_bases[ro]
+        let mut ri = 0
+        while ri < len(obj.relocs) {
+            let r = obj.relocs[ri]
+            let sym = obj.symbols[r.sym_idx]
+            let mut name = ""
+            let mut k = 0
+            while true {
+                let b = obj.strtab[sym.name_offset + k] & 0xff
+                if b == 0 { break }
+                name = name + from_char_code(b)
+                k = k + 1
+            }
+            let mut found_idx = -1
+            let mut sk = 0
+            while sk < len(def_names) {
+                if def_names[sk] == name { found_idx = sk; break }
+                sk = sk + 1
+            }
+            if found_idx >= 0 {
+                let tgt_off = def_offsets[found_idx]
+                let patch_off = base + r.offset
+                let delta = tgt_off + r.addend - patch_off
+                text_bytes[patch_off + 0] = delta & 0xff
+                text_bytes[patch_off + 1] = (delta >> 8) & 0xff
+                text_bytes[patch_off + 2] = (delta >> 16) & 0xff
+                text_bytes[patch_off + 3] = (delta >> 24) & 0xff
+            }
+            ri = ri + 1
+        }
+        ro = ro + 1
+    }
+
+    // Entry is the stub at text offset 0 (serialize_elf_exec_x86_64 sets
+    // e_entry = vaddr_base + code_off where code_off is the first text byte).
+    let bytes = serialize_elf_exec_x86_64(text_bytes)
+    write_bytes(out_path, bytes)
+    return 0
+}
+
 // serialize_elf_x86_64 — P2 cycle 1: empty-object byte stream.
 // Layout: header → .text → .symtab → .strtab → .shstrtab → section
 // header table (5 entries: NULL, .text, .symtab, .strtab, .shstrtab).
