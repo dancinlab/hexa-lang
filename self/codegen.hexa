@@ -2020,15 +2020,26 @@ fn _gen2_noarena_lint_scan(node, fn_name) {
 // loop-body region = the innermost reclaimable arena scope.
 //
 // SOUNDNESS RULE (conservative, mirrors #4697; reuses the #4690/#4693/#4695-fixed
-// SOUND escape scan _stmt_escapes_name / _stmts_escape_name / _expr_escapes_name).
-// A loop body is a reclaim-safe candidate ONLY IF:
-//   (1) it declares >=1 body-local IMMUTABLE `let` whose initializer allocates a
-//       container (Array/Map/Struct/Tuple literal, or a Call/MethodCall that may
-//       produce one) — the reclaim-beneficial transient. `let mut` is EXCLUDED:
-//       a later reassignment voids the no-escape proof (reassignment = escape).
+// SOUND array-descriptor escape scan _stmt_escapes_arr_name / _stmts_escape_arr_name
+// / _expr_escapes_arr_name — the array sibling of the stack-alloc value scan, with
+// the SAME node.args [#4690] + TryCatch/RecoverStmt [#4693] soundness fixes). The
+// array scan is the correct lifetime model for whole-body ARRAY reclaim: an `a[i]`
+// index READ and `len(a)` are in-iteration LOCAL uses (they do not outlive the
+// iteration), whereas reassignment (`a = …`) / index-WRITE (`a[i] = …`) / return /
+// call-arg / global-store / container-set / bare-operand ALL count as escape. (The
+// value scan _stmt_escapes_name treats a[i] as an escape — right for structs whose
+// only local use is `p.field`, wrong for arrays read by index — so reclaim uses the
+// array scan.) A loop body is a reclaim-safe candidate ONLY IF:
+//   (1) it declares >=1 body-local IMMUTABLE `let` whose initializer is a fresh
+//       CONTAINER LITERAL (Array/Tuple/TupleLit/MapLit) — the reclaim-beneficial
+//       transient. `let mut` is EXCLUDED: a later reassignment voids the no-escape
+//       proof (reassignment = escape) — so mutable push-GROWN transients (the d8
+//       churn 849×-win shape) are NOT counted by this conservative rung; they need
+//       the refined in-iteration-reassignment-vs-cross-iteration-liveness analysis
+//       that is the deferred reclaim EMIT campaign's job.
 //   (2) EVERY such body-local binding is proven non-escaping over the whole loop
-//       body via the sound scan — call-arg / return / global-store / container-set
-//       / bare-operand / reassignment ALL count as escape.
+//       body via the sound ARRAY scan (index-read + len local; every other mention
+//       an escape).
 //   (3) NO assignment in the loop body writes an allocating RHS to a name declared
 //       OUTSIDE the loop body (cross-iteration container liveness — e.g. the
 //       xs=xs.push() grow-across-iterations shape). Scalar reassignments to outer
@@ -2057,10 +2068,12 @@ fn _arena_detect_alloc_expr(node) {
     return false
 }
 
-// Collect the TOP-LEVEL body-local reclaim-candidate binding names of a loop body:
+// Collect the TOP-LEVEL body-local reclaim-candidate binding NAMES of a loop body:
 // immutable LetStmt whose initializer (.left) allocates a container. Returns a
-// parallel pair of arrays [names, decl-indices] packed as a flat array of maps
-// #{name, idx}. `let mut` (LetMutStmt) is skipped by construction (condition 1).
+// flat array of name strings. `let mut` (LetMutStmt) is skipped by construction
+// (a later reassignment voids the no-escape proof — condition 1). A let-
+// initializer can never reference its own not-yet-bound name, so the whole-body
+// escape scan over the candidate is safe WITHOUT skipping its declaration site.
 fn _arena_detect_body_cands(stmts) {
     let mut out = []
     if type_of(stmts) != "array" { return out }
@@ -2068,8 +2081,11 @@ fn _arena_detect_body_cands(stmts) {
     while i < len(stmts) {
         let s = stmts[i]
         if type_of(s) == "map" && s.kind == "LetStmt" {
-            if type_of(s.left) != "string" && _arena_detect_alloc_expr(s.left) {
-                out = out.push(#{ name: s.name, idx: i })
+            if type_of(s.left) == "map" {
+                let ik = s.left.kind
+                if ik == "Array" || ik == "Tuple" || ik == "TupleLit" || ik == "MapLit" {
+                    out = out.push(s.name)
+                }
             }
         }
         i = i + 1
@@ -2081,7 +2097,7 @@ fn _arena_detect_body_cands(stmts) {
 fn _arena_detect_is_body_name(cands, name) {
     let mut i = 0
     while i < len(cands) {
-        if cands[i].name == name { return true }
+        if cands[i] == name { return true }
         i = i + 1
     }
     return false
@@ -2140,17 +2156,16 @@ fn _arena_detect_outer_heapwrite_list(stmts, body_names) {
 fn _arena_detect_loop_safe(loop_body) {
     let cands = _arena_detect_body_cands(loop_body)
     if len(cands) == 0 { return false }        // (1) no reclaim-beneficial transient
-    // (2) every body-local candidate proven non-escaping over the loop body
-    //     (skip its own declaration statement, mirror _native_arr_noescape_scan).
+    // (2) every body-local candidate proven non-escaping over the loop body via
+    //     the sound scan (call-arg / return / store / container-set / bare-operand
+    //     / reassignment = escape). The declaration site can never reference the
+    //     name's own not-yet-bound value, so scanning it too is safe.
     let mut ci = 0
     while ci < len(cands) {
-        let nm = cands[ci].name
-        let didx = cands[ci].idx
+        let nm = cands[ci]
         let mut j = 0
         while j < len(loop_body) {
-            if j != didx {
-                if _stmt_escapes_name(loop_body[j], nm) { return false }
-            }
+            if _stmt_escapes_arr_name(loop_body[j], nm) { return false }
             j = j + 1
         }
         ci = ci + 1
