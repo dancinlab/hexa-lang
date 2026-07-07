@@ -1992,6 +1992,239 @@ fn _gen2_noarena_lint_scan(node, fn_name) {
     return 0
 }
 
+// ═══════════════════════════════════════════════════════════
+// mem-lane ② tier-2 — LOOP-BODY REGION-NO-ESCAPE RECLAIM DETECTOR (REPORT-ONLY)
+// ═══════════════════════════════════════════════════════════
+// Characterization + soundness-oracle rung for the (deferred, large) sub-arena
+// loop-body reclaim EMIT — the analogue of the #4697 stack-alloc escape scan but
+// for WHOLE-LOOP-BODY arena rewind at iteration end. It EMITS NOTHING: no
+// __HEXA_ARENA_PUSH__/POP__, no arena mutation, no chunks.push. Its ONLY output
+// is an eprintln fire-rate line, GATED behind HEXA_ARENA_DETECT (the env gate is
+// the FIRST && operand at the gen2_fn_decl call site) — so emitted C is
+// byte-identical flag-ON, and flag-OFF the scan never runs → stderr identical too.
+// BYTEEQ-NEUTRAL BY CONSTRUCTION.
+//
+// WHY: arena reclamation is the real memory ceiling after stack-alloc (#4697).
+// Measured (.verdicts/d8-arena-pushleak): ~32 KB/iter monotonic never-free growth
+// in the push-array hot-loop path; a d8 combo shows ~849× headroom (3.2GB→3.8MB
+// flat) IF a loop body could rewind its arena at iteration end. But the reclaim
+// EMIT is soundness-critical: an unsound rewind frees a still-live escaping value
+// = use-after-free miscompile (d8 free-on-pop CORRUPTS global-store escapes and
+// SEGVs on arena-slice-global escapes). So THIS rung only (a) counts how many
+// shipping-corpus loops meet the conservative whole-body no-escape bar (fire-rate)
+// and (b) stands up the d8 5-case soundness oracle — BEFORE any reclaim codegen.
+//
+// LITERATURE: Tofte–Talpin region inference (region-polymorphic stack of arenas,
+// deallocate-at-region-exit); Go's escape analysis (stack vs heap by proven
+// escape); Rust's drop-at-scope (RAII, ownership-scoped deallocation). This is the
+// loop-body region = the innermost reclaimable arena scope.
+//
+// SOUNDNESS RULE (conservative, mirrors #4697; reuses the #4690/#4693/#4695-fixed
+// SOUND array-descriptor escape scan _stmt_escapes_arr_name / _stmts_escape_arr_name
+// / _expr_escapes_arr_name — the array sibling of the stack-alloc value scan, with
+// the SAME node.args [#4690] + TryCatch/RecoverStmt [#4693] soundness fixes). The
+// array scan is the correct lifetime model for whole-body ARRAY reclaim: an `a[i]`
+// index READ and `len(a)` are in-iteration LOCAL uses (they do not outlive the
+// iteration), whereas reassignment (`a = …`) / index-WRITE (`a[i] = …`) / return /
+// call-arg / global-store / container-set / bare-operand ALL count as escape. (The
+// value scan _stmt_escapes_name treats a[i] as an escape — right for structs whose
+// only local use is `p.field`, wrong for arrays read by index — so reclaim uses the
+// array scan.) A loop body is a reclaim-safe candidate ONLY IF:
+//   (1) it declares >=1 body-local IMMUTABLE `let` whose initializer is a fresh
+//       CONTAINER LITERAL (Array/Tuple/TupleLit/MapLit) — the reclaim-beneficial
+//       transient. `let mut` is EXCLUDED: a later reassignment voids the no-escape
+//       proof (reassignment = escape) — so mutable push-GROWN transients (the d8
+//       churn 849×-win shape) are NOT counted by this conservative rung; they need
+//       the refined in-iteration-reassignment-vs-cross-iteration-liveness analysis
+//       that is the deferred reclaim EMIT campaign's job.
+//   (2) EVERY such body-local binding is proven non-escaping over the whole loop
+//       body via the sound ARRAY scan (index-read + len local; every other mention
+//       an escape).
+//   (3) NO assignment in the loop body writes an allocating RHS to a name declared
+//       OUTSIDE the loop body (cross-iteration container liveness — e.g. the
+//       xs=xs.push() grow-across-iterations shape). Scalar reassignments to outer
+//       names (counters/accumulators, paired with unbox) are permitted.
+// Report-only: nothing is emitted; escaping bindings keep every existing behavior.
+let mut _arena_detect_loops_total = 0
+let mut _arena_detect_loops_safe = 0
+
+// Does this expression allocate a fresh CONTAINER value (one that could carry
+// arena-backed memory across an iteration if held by an outer binding)? Container
+// literals + method-calls (.push/.slice/.concat/…) + fn calls (may return a
+// container) are heap; arithmetic/comparison/index-read/field-read/scalar literals
+// are NOT. Recurse only through BinOp operands so a container reached through an
+// operator position is still caught, while pure-arithmetic operands stay scalar.
+fn _arena_detect_alloc_expr(node) {
+    if type_of(node) != "map" { return false }
+    let k = node.kind
+    if k == "Array" || k == "Tuple" || k == "TupleLit" || k == "MapLit" || k == "StructInit" { return true }
+    if k == "MethodCall" { return true }
+    if k == "Call" { return true }
+    if k == "BinOp" || k == "Binary" {
+        if _arena_detect_alloc_expr(node.left) { return true }
+        if _arena_detect_alloc_expr(node.right) { return true }
+        return false
+    }
+    return false
+}
+
+// Collect the TOP-LEVEL body-local reclaim-candidate binding NAMES of a loop body:
+// immutable LetStmt whose initializer (.left) allocates a container. Returns a
+// flat array of name strings. `let mut` (LetMutStmt) is skipped by construction
+// (a later reassignment voids the no-escape proof — condition 1). A let-
+// initializer can never reference its own not-yet-bound name, so the whole-body
+// escape scan over the candidate is safe WITHOUT skipping its declaration site.
+fn _arena_detect_body_cands(stmts) {
+    let mut out = []
+    if type_of(stmts) != "array" { return out }
+    let mut i = 0
+    while i < len(stmts) {
+        let s = stmts[i]
+        if type_of(s) == "map" && s.kind == "LetStmt" {
+            if type_of(s.left) == "map" {
+                let ik = s.left.kind
+                if ik == "Array" || ik == "Tuple" || ik == "TupleLit" || ik == "MapLit" {
+                    out = out.push(s.name)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Is `name` in the body-candidate name set?
+fn _arena_detect_is_body_name(cands, name) {
+    let mut i = 0
+    while i < len(cands) {
+        if cands[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Recursively scan a statement for an assignment whose TARGET is a name NOT in
+// `body_names` and whose RHS allocates a container = cross-iteration container
+// liveness through an outer binding → unsafe (condition 3). Descends into nested
+// if/while/for/match bodies (a grow-across-iterations write can be nested).
+fn _arena_detect_outer_heapwrite_stmt(node, body_names) {
+    if type_of(node) != "map" { return false }
+    let sk = node.kind
+    if sk == "AssignStmt" {
+        let _tgt = node.left
+        if type_of(_tgt) == "map" && _tgt.kind == "Ident" {
+            if !_arena_detect_is_body_name(body_names, _tgt.name) {
+                if type_of(node.right) != "string" && _arena_detect_alloc_expr(node.right) { return true }
+                if type_of(node.value) != "string" && _arena_detect_alloc_expr(node.value) { return true }
+            }
+        }
+    }
+    if type_of(node.then_body) != "string" {
+        if _arena_detect_outer_heapwrite_list(node.then_body, body_names) { return true }
+    }
+    if type_of(node.else_body) != "string" {
+        if _arena_detect_outer_heapwrite_list(node.else_body, body_names) { return true }
+    }
+    if type_of(node.body) != "string" {
+        if _arena_detect_outer_heapwrite_list(node.body, body_names) { return true }
+    }
+    if type_of(node.arms) != "string" {
+        let mut ai = 0
+        while ai < len(node.arms) {
+            let arm = node.arms[ai]
+            if type_of(arm) == "map" && type_of(arm.body) != "string" {
+                if _arena_detect_outer_heapwrite_list(arm.body, body_names) { return true }
+            }
+            ai = ai + 1
+        }
+    }
+    return false
+}
+
+fn _arena_detect_outer_heapwrite_list(stmts, body_names) {
+    if type_of(stmts) != "array" { return false }
+    let mut i = 0
+    while i < len(stmts) {
+        if _arena_detect_outer_heapwrite_stmt(stmts[i], body_names) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Classify ONE loop body: is it a whole-body region-no-escape reclaim-safe
+// candidate? (conditions 1-3 above). REPORT-ONLY verdict — never drives emission.
+fn _arena_detect_loop_safe(loop_body) {
+    let cands = _arena_detect_body_cands(loop_body)
+    if len(cands) == 0 { return false }        // (1) no reclaim-beneficial transient
+    // (2) every body-local candidate proven non-escaping over the loop body via
+    //     the sound scan (call-arg / return / store / container-set / bare-operand
+    //     / reassignment = escape). The declaration site can never reference the
+    //     name's own not-yet-bound value, so scanning it too is safe.
+    let mut ci = 0
+    while ci < len(cands) {
+        let nm = cands[ci]
+        let mut j = 0
+        while j < len(loop_body) {
+            if _stmt_escapes_arr_name(loop_body[j], nm) { return false }
+            j = j + 1
+        }
+        ci = ci + 1
+    }
+    // (3) no cross-iteration container liveness via an outer-name allocating write
+    if _arena_detect_outer_heapwrite_list(loop_body, cands) { return false }
+    return true
+}
+
+// Walk a fn body: find every While/For/Loop node, classify its body, tally into
+// the module-global counters. Recurses into nested bodies (a nested loop is scored
+// independently against its OWN body scope).
+fn _arena_detect_walk(stmts) {
+    if type_of(stmts) != "array" { return 0 }
+    let mut i = 0
+    while i < len(stmts) {
+        let s = stmts[i]
+        if type_of(s) == "map" {
+            let k = s.kind
+            if k == "WhileStmt" || k == "While" || k == "ForStmt" || k == "For" || k == "LoopStmt" {
+                _arena_detect_loops_total = _arena_detect_loops_total + 1
+                if _arena_detect_loop_safe(s.body) {
+                    _arena_detect_loops_safe = _arena_detect_loops_safe + 1
+                }
+            }
+            // Descend into every nested statement list so inner loops are scored.
+            if type_of(s.then_body) != "string" { _arena_detect_walk(s.then_body) }
+            if type_of(s.else_body) != "string" { _arena_detect_walk(s.else_body) }
+            if type_of(s.body) != "string" { _arena_detect_walk(s.body) }
+            if type_of(s.arms) != "string" {
+                let mut ai = 0
+                while ai < len(s.arms) {
+                    let arm = s.arms[ai]
+                    if type_of(arm) == "map" && type_of(arm.body) != "string" {
+                        _arena_detect_walk(arm.body)
+                    }
+                    ai = ai + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// Driver: per-fn, count loop-bodies + reclaim-safe candidates, print ONE stderr
+// line for a loop-bearing fn (grep-aggregatable). eprintln only, never chunks.
+fn _gen2_arena_detect_scan(node, fn_name) {
+    let _before_total = _arena_detect_loops_total
+    let _before_safe = _arena_detect_loops_safe
+    _arena_detect_walk(node.body)
+    let _ft = _arena_detect_loops_total - _before_total
+    let _fs = _arena_detect_loops_safe - _before_safe
+    if _ft > 0 {
+        eprintln("[arena-detect] fn `" + fn_name + "`: " + to_string(_fs) + "/" + to_string(_ft) + " loop(s) whole-body region-no-escape reclaim-safe [HEXA_ARENA_DETECT]")
+    }
+    return 0
+}
+
 fn gen2_fn_decl(node) {
     let has_restrict = gen2_has_attr(node, "restrict")
     let has_flatten = gen2_has_attr(node, "flatten")
@@ -2196,6 +2429,15 @@ fn gen2_fn_decl(node) {
     // byte-identical in both C and stderr. See _gen2_noarena_lint_scan.
     if env("HEXA_ARENA_ESCAPE_LINT") == "1" && has_no_arena {
         _gen2_noarena_lint_scan(node, _fn_name)
+    }
+    // mem-lane ② tier-2 — loop-body region-no-escape RECLAIM DETECTOR (report-only,
+    // default-OFF; env gate FIRST && operand). stderr-only fire-rate line: the scan
+    // never pushes to chunks, so emitted C is byte-identical flag-ON, and flag-OFF
+    // it never runs → stderr identical too. NO emit / NO arena mutation — the
+    // (deferred, soundness-critical) reclaim EMIT is a separate large campaign.
+    // See _gen2_arena_detect_scan.
+    if env("HEXA_ARENA_DETECT") == "1" {
+        _gen2_arena_detect_scan(node, _fn_name)
     }
     // Plan B Phase 3: defer/scope/spawn codegen entry.
     //   Save previous fn's state (enables nested FnDecl emission to

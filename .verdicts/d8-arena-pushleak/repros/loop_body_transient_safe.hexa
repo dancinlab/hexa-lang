@@ -1,0 +1,17 @@
+// POSITIVE CONTROL for the mem-lane ② loop-body region-no-escape RECLAIM
+// DETECTOR (report-only). This is the discriminating positive: a loop whose
+// body declares an IMMUTABLE container transient that is used only locally
+// (read-only) and never escapes — the whole-body region IS reclaim-safe. The
+// detector MUST flag the inner `while` as reclaim-safe (1/…). If it does NOT,
+// the scan is vacuously rejecting everything (no discrimination) — a defect.
+// Output (baseline, any sound reclaim): 2970000.
+fn main() {
+  let mut acc = 0
+  let mut i = 0
+  while i < 100000 {
+    let t = [i, i + 1, i + 2]   // immutable body-local container transient
+    acc = acc + t[0] + t[1] + t[2]   // read-only local use — never escapes
+    i = i + 1
+  }
+  println(acc)   // expect 2970000 = sum_{i<1e5} (3i+3)
+}
