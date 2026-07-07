@@ -1,0 +1,35 @@
+# test/native_build/regex_intentional_divergence.txt
+# zero-c #29 regex OFF(libc/POSIX)-vs-ON(native NFA) intentional-divergence allowlist.
+# Any ON!=OFF diff whose corpus TAG is NOT listed here is a parity FAILURE.
+# Gate 3c: every D-class listed here MUST actually appear in the on-vs-off diff
+# (on at least one row) — a silently-agreeing D-class is RED (stale allowlist).
+
+D1  {n,m} counted-repeat = leftmost GREEDY-FIRST (PCRE) not leftmost-LONGEST (POSIX).
+    ROOT: stdlib/regex/backtrack.hexa:140 (FIX-A routes '{'+digit to the backtrack VM;
+    rationale :133-139) -> REPEAT dispatch :657 -> _bt_run_repeat :755 (greedy
+    prefer-one-more :761-767). By-design PCRE order: backtrack.hexa:39-41.
+    Thompson (all non-interval routes) is POSIX-longest: thompson.hexa:593/:655.
+    SCOPE: diverges only when a shorter alternation branch precedes a viable longer
+    one inside the repeated group. Plain literal/class intervals are C-class.
+    EXAMPLE: (a|ab){1,2} on 'aab' -> native S:0,2 vs libc S:0,3 (ops search/findall/full).
+    DISPOSITION: intentional (PCRE-by-design; POSIX-longest backtracking would break
+    the REDOS step-budget contract, F-OP113-REGEX-REDOS-REPEAT-CAP). ERASURE ROUND
+    (named, separate PR): thompson bounded interval expansion (child^n (child?)^(m-n),
+    cap max<=64, larger stays bt-routed) -> empties D1; gate 3c then forces removal.
+
+D2  (?i) + fold-corrupting character-class RANGES.
+    ROOT: stdlib/runtime/regex_rt.hexa:61-70 (_rt_re_ascii_fold rewrites class-range
+    endpoint bytes: [A-Z]->[a-z]) + :42-45 (KNOWN DIVERGENCE header). Pure-alpha
+    ranges/members/negations TRANSLATE correctly (parity-clean, C8); the divergence
+    is (i) order-inverting endpoints: (?i)[X-b] -> [x-b] invalid -> ON compile-fail
+    vs libc icase match; (ii) block-crossing ranges: (?i)[;-Z] -> [;-z] gains bytes
+    91-96 -> ON matches '^' where libc does not.
+    EXAMPLE: (?i)[;-Z] on '^' -> libc M:0 vs native M:1.
+
+D3  ERE backreference acceptance is PER-LIBC (glibc GNU-extension ACCEPTS \1..\9;
+    darwin/BSD rejects; shim rejects both: regex_rt.hexa:132-164 FIX-D).
+    ROOT: runtime_emit_full.hexa:13833-13836 passes the pattern to regcomp verbatim
+    (no reject) -> OFF truth = host regcomp. CONFIRM via run.sh step-0 probe; if
+    glibc accepts, D3 rows diverge on linux targets and agree on darwin (both are
+    ACCOUNTED outcomes; gate 3c applies per-target).
+    EXAMPLE: (a)\1 on 'aa' -> glibc OFF M:1 vs native M:0; darwin OFF M:0 == native.
