@@ -3553,7 +3553,12 @@ fn cmd_build(src, out, c_only, target, shared) {
                 let _bncrt = if _bn_arm { exec("for d in /usr/lib/aarch64-linux-gnu /usr/lib64 /usr/lib; do if [ -f $d/crt1.o ]; then printf %s $d; break; fi; done") } else { exec("for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do if [ -f $d/crt1.o ]; then printf %s $d; break; fi; done") }
                 let _bndl = if _bn_arm { exec("for f in /lib/ld-linux-aarch64.so.1; do if [ -e $f ]; then printf %s $f; break; fi; done") } else { exec("for f in /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-x86-64.so.2; do if [ -e $f ]; then printf %s $f; break; fi; done") }
                 if len(_bncrt) > 0 && len(_bndl) > 0 {
-                    let _bnzc = !_bn_arm && env_var("HEXA_ZEROC_OWN_START") != "0"
+                    // nm-probe the resolved runtime.a: only crt-drop when it ACTUALLY carries
+                    // own _start (#4638 consumer-link pattern). A stale/release runtime.a without
+                    // own-start + a blind crt-drop => `ld: cannot find entry symbol _start` => link
+                    // fails => C fallback (measured on aiden 2026-07-07, stale ~/.hx runtime.a).
+                    let _bn_rt_ownstart = exec("nm '" + _bnrt + "' 2>/dev/null | grep -qE ' T _?_start' && printf yes || printf no") == "yes"
+                    let _bnzc = !_bn_arm && env_var("HEXA_ZEROC_OWN_START") != "0" && _bn_rt_ownstart
                     let _bntmp = exec("printf '%s.bntmp.%s' '" + out + "' \"$$\"")
                     let _bnlnk = if _bnzc { "'" + _bnld + "' --dynamic-linker '" + _bndl + "' '" + _bnobj + "' '" + _bnrt + "' --start-group -lc -lpthread -lm --end-group -L'" + _bncrt + "' -o '" + _bntmp + "' 2>&1" } else { "'" + _bnld + "' --dynamic-linker '" + _bndl + "' '" + _bncrt + "/crt1.o' '" + _bncrt + "/crti.o' '" + _bnobj + "' '" + _bnrt + "' --start-group -lc -lpthread -lm --end-group '" + _bncrt + "/crtn.o' -L'" + _bncrt + "' -o '" + _bntmp + "' 2>&1" }
                     let _bnlr = exec(_bnlnk)
@@ -4596,7 +4601,11 @@ fn cmd_run_user_direct(file, extra_args) {
                     // --start-group so libc still resolves. This block is x86_64-hardcoded (arm64 never
                     // reaches here). Default-OFF byte-neutral: else-branch char-identical to today.
                     // Loud-fail-safe: a failed ld link falls through to the clang path below.
-                    let _zc_own = !_run_native_arm && env_var("HEXA_ZEROC_OWN_START") != "0"   // FLIP-7 flip-D: default-ON on x86_64 (opt-out =0). arm64 forces crt-keep (else-branch = compiler/main.hexa:1134 glibc-crt1 recipe); own-start arm64 = separate round
+                    // nm-probe (#4638 pattern): only crt-drop when the resolved runtime.a ACTUALLY
+                    // carries own _start — a stale/release runtime.a without it + a blind crt-drop =>
+                    // `ld: cannot find entry symbol _start` => link fails => C fallback.
+                    let _rt_ownstart = exec("nm '" + _nrt + "' 2>/dev/null | grep -qE ' T _?_start' && printf yes || printf no") == "yes"
+                    let _zc_own = !_run_native_arm && env_var("HEXA_ZEROC_OWN_START") != "0" && _rt_ownstart   // FLIP-7 flip-D: default-ON on x86_64 (opt-out =0), gated on the archive actually carrying own _start. arm64 forces crt-keep (else-branch = compiler/main.hexa:1134 glibc-crt1 recipe); own-start arm64 = separate round
                     let _lnk = if _zc_own { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread -lm --end-group -L'" + _crt + "' -o '" + _nbin + "' 2>&1" } else { "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _crt + "/crt1.o' '" + _crt + "/crti.o' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lpthread -lm --end-group '" + _crt + "/crtn.o' -L'" + _crt + "' -o '" + _nbin + "' 2>&1" }
                     let _lr = exec(_lnk)
                     let _nbin_ok = exec("test -x '" + _nbin + "' && printf yes || printf no")
