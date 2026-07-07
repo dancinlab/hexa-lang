@@ -1256,6 +1256,34 @@ fn _bck_emit_move_out_of_borrow(name: string, field: string, origin: string,
     _lr_diag.push(d)
 }
 
+// HX3037 emit (closure capture-move, Rust E0507 "captured variable in an
+// `FnMut` closure") — same-site dedup + STRICT re-band, cloned from
+// `_bck_emit_move_out_of_borrow`. `name` is the captured variable moved out,
+// `callee` the resolved fn whose param is `@own`, `clo_line` where the
+// closure is defined. Report-only (no move recorded). Under
+// `HEXA_BORROWCK_STRICT=1` the SAME diagnostic instance re-bands to a build-
+// refusing Error via the sanctioned caller override; the flag-OFF path never
+// reaches here (byteeq-neutral).
+fn _bck_emit_capture_move(name: string, callee: string, clo_line: i64, sp: Span) {
+    let mut di = 0
+    while di < len(_bck_e_lines) {
+        if _bck_e_lines[di] == sp.line && _bck_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_e_lines.push(sp.line)
+    _bck_e_cols.push(sp.col)
+    let mut b = diag_new("HX3037")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "callee", callee)
+    b = diag_arg(b, "closure_line", to_string(clo_line))
+    let mut d = diag_emit(b)
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
+}
+
 // HX3032 emit (mutating-method-behind-shared-ref, Rust E0596) — same-site
 // dedup + STRICT escalation, cloned from `_bck_emit_write_through`. `name` is
 // the ref binding the method is dispatched THROUGH, `origin` the value it
@@ -2572,6 +2600,68 @@ fn _collect_free(e: HExpr, bound: [string], acc: [string],
         i = i + 1
     }
     return out
+}
+
+// HEXA-OWN round8-3 — HX3037 closure capture-move scanner (Rust E0507
+// "cannot move out of `X`, a captured variable in an `FnMut` closure").
+// A READ-ONLY recursive HExpr walk (cloned from `_collect_free`) over a
+// closure BODY: fire when a `@own` call-arg is a bare-ident that (a) is in
+// the closure's capture set `free`, (b) lands in a resolved callee's `@own`
+// param slot, and (c) is not shadowed by a closure param / body `let`.
+// Because hexa has no FnOnce kind (every closure is `hexa_callN`-callable
+// more than once) and captures alias the enclosing binding by heap pointer
+// (env-array by-value → aggregate slot shares storage), moving a captured
+// value out is UAF-unsafe on the very first call. Report-only: `_bck_note_
+// move` is NEVER called — the enclosing fn's id-based move registry must not
+// be touched from inside the lambda frame (matches HX3034's report-only
+// posture). Runs at the closure-lower SITE in the ENCLOSING scope BEFORE the
+// loan pass is suspended, so it needs no `_bck_active` inside the lambda.
+fn _bck_closure_capture_move_scan(e: HExpr, bound: [string],
+                                  free: [string], clo_line: i64) {
+    let k = e.kind
+    // Direct call `f(args)` — children[0] = callee ident, children[1..] =
+    // args (arg i maps to param index i-1). Method/field callees are skipped
+    // (mirrors the :3254 `!_bk_is_method` gate — a receiver-first shifts the
+    // param index and method names never carry @own params).
+    if k == "call" && len(e.children) >= 1 && e.children[0].kind == "ident" {
+        let callee_text = e.children[0].text
+        let mut ai = 1
+        while ai < len(e.children) {
+            let arg = e.children[ai]
+            if arg.kind == "ident" {
+                let nm = _strip_mut_prefix(arg.text)
+                if !_str_list_has(bound, nm) && _str_list_has(free, nm)
+                    && _bck_own_param(callee_text, ai - 1) {
+                    _bck_emit_capture_move(nm, callee_text, clo_line, arg.span)
+                }
+            }
+            ai = ai + 1
+        }
+    }
+    // Shadowing: a body `let` name (whole-subtree over-approx, same as
+    // `_collect_free`) and a nested closure's params both mask an outer
+    // capture of the same name — extend `bound` before recursing.
+    let mut bound2 = bound
+    if k == "let" {
+        let lnm = _strip_mut_prefix(e.text)
+        if len(lnm) > 0 && !_str_list_has(bound2, lnm) { bound2.push(lnm) }
+    }
+    if k == "closure" {
+        let nkid = len(e.children)
+        let mut ci = 0
+        while ci < nkid - 1 {
+            let pnm = _strip_mut_prefix(e.children[ci].text)
+            if len(pnm) > 0 && !_str_list_has(bound2, pnm) { bound2.push(pnm) }
+            ci = ci + 1
+        }
+    }
+    // Keep descending after a fire (covers nested calls + inner closures that
+    // pass an OUTER-fn capture into an @own slot).
+    let mut j = 0
+    while j < len(e.children) {
+        _bck_closure_capture_move_scan(e.children[j], bound2, free, clo_line)
+        j = j + 1
+    }
 }
 
 // ── HExpr lowering core ─────────────────────────────────────
@@ -5585,6 +5675,19 @@ fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
         free = _collect_free(e.children[nc - 1], pnames, [], enc)
     }
     let nfree = len(free)
+
+    // HEXA-OWN round8-3 — HX3037 closure capture-move (Rust E0507 "captured
+    // variable in an `FnMut` closure"). A read-only HIR walk over the closure
+    // body reusing the `_collect_free` capture set: a bare-ident @own call-arg
+    // that is a captured variable moves it out of the closure (UAF-unsafe on
+    // the first of possibly-many calls; the env slot aliases the enclosing
+    // binding by heap pointer). Gated at the ENCLOSING `_bck_active` HERE —
+    // BEFORE the loan pass is suspended below — so flag-OFF is zero work and
+    // the id-based registry (reset fresh for the lambda body) is never touched
+    // (byteeq-neutral). See catalog HX3037.
+    if _bck_active && nfree > 0 && nc >= 1 {
+        _bck_closure_capture_move_scan(e.children[nc - 1], pnames, free, e.span.line)
+    }
 
     // ── 1. build the synthetic lambda MFunc ──────────────────
     let lam_id = _lr_lambda_ctr
