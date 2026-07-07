@@ -1563,6 +1563,7 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     //     For an LDR/STR (load/store, top byte 0x39/0xb9/0xf9/0x3d/...)
     //     the imm12 is SCALED by the access size: imm = (target&0xfff)>>scale,
     //     where scale = (instr>>30)&0x3 for the integer/scaled-imm forms.
+    let mut unhandled_relocs = 0
     let mut pro = 0
     while pro < len(objs) {
         let pobj = objs[pro]
@@ -1636,6 +1637,9 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                     text_bytes[patch_off + 1] = (patched >> 8) & 0xff
                     text_bytes[patch_off + 2] = (patched >> 16) & 0xff
                     text_bytes[patch_off + 3] = (patched >> 24) & 0xff
+                } else {
+                    eprintln("hexa_ld: WARN unresolved PAGE21/PAGEOFF12 target sym '" + pr.sym_name + "' (kind " + to_string(pr.kind) + ") -> UNPATCHED")
+                    unhandled_relocs = unhandled_relocs + 1
                 }
             } else if pr.kind == 5 || pr.kind == 6 {
                 // ── Phase-H inc5: ARM64_RELOC_GOT_LOAD_PAGE21/PAGEOFF12 ──
@@ -1745,12 +1749,21 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                     text_bytes[patch_off + 1] = (patched >> 8) & 0xff
                     text_bytes[patch_off + 2] = (patched >> 16) & 0xff
                     text_bytes[patch_off + 3] = (patched >> 24) & 0xff
+                } else {
+                    eprintln("hexa_ld: WARN GOT_LOAD sym '" + pr.sym_name + "' (kind " + to_string(pr.kind) + ") neither internal nor imported -> UNPATCHED")
+                    unhandled_relocs = unhandled_relocs + 1
                 }
                 }
+            } else if pr.kind != 2 {
+                eprintln("hexa_ld: WARN unhandled reloc kind " + to_string(pr.kind) + " sym '" + pr.sym_name + "' -> UNPATCHED")
+                unhandled_relocs = unhandled_relocs + 1
             }
             pri = pri + 1
         }
         pro = pro + 1
+    }
+    if unhandled_relocs > 0 {
+        eprintln("hexa_ld: ADVISORY " + to_string(unhandled_relocs) + " unhandled reloc(s) -- output may be MISCOMPILED")
     }
 
     // ── ARM64_RELOC_UNSIGNED in DATA sections — absolute pointer init ──
