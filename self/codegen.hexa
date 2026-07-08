@@ -2116,6 +2116,12 @@ let mut _fn_summary_regionsafe_count = 0
 let mut _fn_summary_top_count = 0
 let mut _fn_summary_indirect_count = 0
 let mut _fn_summary_rounds = 0
+// Recursion-depth guard for the whole-fn-body IP scanners (a very deep/large
+// generated body can exceed the native C stack). On overflow every guarded
+// scanner returns the ⊤-CONSERVATIVE answer (escape / not-region-safe / leaks),
+// so the summary stays SOUND — it only ever UNDER-widens on a too-deep body.
+let mut _fn_summary_depth = 0
+let mut _fn_summary_depth_tripped = 0
 
 // Build a new array = `arr` with element `j` replaced by `v` (arrays are value-
 // like here; rebuild rather than nested index-write). O(n) — report-only path.
@@ -2730,6 +2736,17 @@ fn _fn_summary_ret_is_alloc(node) {
 // alloc; set glob_store if ANY assignment writes an alloc RHS to (a place rooted
 // at) a MODULE GLOBAL. Both are iteration-INVARIANT (computed once, pre-fixpoint).
 fn _fn_summary_scan_leaks_stmt(node, box2) {
+    _fn_summary_depth = _fn_summary_depth + 1
+    if _fn_summary_depth > 1400 {
+        _fn_summary_depth = _fn_summary_depth - 1
+        _fn_summary_depth_tripped = 1
+        return [1, 1]   // assume both ret_alloc + glob_store (sound)
+    }
+    let _r = _fn_summary_scan_leaks_stmt_i(node, box2)
+    _fn_summary_depth = _fn_summary_depth - 1
+    return _r
+}
+fn _fn_summary_scan_leaks_stmt_i(node, box2) {
     // box2 is a 2-elem carrier [ret_alloc, glob_store]; returns updated carrier.
     if type_of(node) != "map" { return box2 }
     let mut _ra = box2[0]
@@ -2781,6 +2798,17 @@ fn _fn_summary_scan_leaks_list(stmts, box2) {
 // only for the ⊤-reporting count (region-safety already rejects these via
 // _fn_summary_call_target_ok).
 fn _fn_summary_expr_has_indirect(node) {
+    _fn_summary_depth = _fn_summary_depth + 1
+    if _fn_summary_depth > 1400 {
+        _fn_summary_depth = _fn_summary_depth - 1
+        _fn_summary_depth_tripped = 1
+        return false   // report-only flag; conservative-omit on overflow
+    }
+    let _r = _fn_summary_expr_has_indirect_i(node)
+    _fn_summary_depth = _fn_summary_depth - 1
+    return _r
+}
+fn _fn_summary_expr_has_indirect_i(node) {
     if type_of(node) != "map" { return false }
     let k = node.kind
     if k == "Call" {
@@ -2829,6 +2857,17 @@ fn _fn_summary_call_target_ok(callee) {
 // Walk a body: FALSE if any Call in it has a non-region-safe target (transitive
 // dependency — drives the region_safe fixpoint). Descends every nested body.
 fn _fn_summary_all_calls_ok_expr(node) {
+    _fn_summary_depth = _fn_summary_depth + 1
+    if _fn_summary_depth > 1400 {
+        _fn_summary_depth = _fn_summary_depth - 1
+        _fn_summary_depth_tripped = 1
+        return false   // assume a non-region-safe call (sound)
+    }
+    let _r = _fn_summary_all_calls_ok_expr_i(node)
+    _fn_summary_depth = _fn_summary_depth - 1
+    return _r
+}
+fn _fn_summary_all_calls_ok_expr_i(node) {
     if type_of(node) != "map" { return true }
     if node.kind == "Call" {
         if !_fn_summary_call_target_ok(node.left) { return false }
@@ -2857,6 +2896,17 @@ fn _fn_summary_all_calls_ok_expr(node) {
     return true
 }
 fn _fn_summary_all_calls_ok_stmt(node) {
+    _fn_summary_depth = _fn_summary_depth + 1
+    if _fn_summary_depth > 1400 {
+        _fn_summary_depth = _fn_summary_depth - 1
+        _fn_summary_depth_tripped = 1
+        return false
+    }
+    let _r = _fn_summary_all_calls_ok_stmt_i(node)
+    _fn_summary_depth = _fn_summary_depth - 1
+    return _r
+}
+fn _fn_summary_all_calls_ok_stmt_i(node) {
     if type_of(node) != "map" { return true }
     if type_of(node.left) == "map" { if !_fn_summary_all_calls_ok_expr(node.left) { return false } }
     if type_of(node.right) == "map" { if !_fn_summary_all_calls_ok_expr(node.right) { return false } }
@@ -2959,6 +3009,8 @@ fn _arena_summary_build(ast) {
     _fn_summary_top_count = 0
     _fn_summary_indirect_count = 0
     _fn_summary_rounds = 0
+    _fn_summary_depth = 0
+    _fn_summary_depth_tripped = 0
     if type_of(ast) != "array" { return 0 }
     // Pass 1: register every plain FnDecl (extern / pure excluded ⇒ not-in-map ⇒ ⊤).
     let mut i = 0
@@ -3046,7 +3098,7 @@ fn _arena_summary_build(ast) {
     }
     let mut _cv = 0
     if _converged { _cv = 1 }
-    eprintln("[arena-summary] fns=" + to_string(_fn_summary_count) + " region-safe=" + to_string(_fn_summary_regionsafe_count) + " top=" + to_string(_fn_summary_top_count) + " indirect-bodies=" + to_string(_fn_summary_indirect_count) + " rounds=" + to_string(_fn_summary_rounds) + " converged=" + to_string(_cv) + " [HEXA_ARENA_DETECT]")
+    eprintln("[arena-summary] fns=" + to_string(_fn_summary_count) + " region-safe=" + to_string(_fn_summary_regionsafe_count) + " top=" + to_string(_fn_summary_top_count) + " indirect-bodies=" + to_string(_fn_summary_indirect_count) + " rounds=" + to_string(_fn_summary_rounds) + " converged=" + to_string(_cv) + " depth-tripped=" + to_string(_fn_summary_depth_tripped) + " [HEXA_ARENA_DETECT]")
     // Targeted watchlist probe — the go/no-go asks specifically about these.
     _arena_summary_probe("transformer_forward")
     _arena_summary_probe("load_embedding")
@@ -3056,6 +3108,15 @@ fn _arena_summary_build(ast) {
     _arena_summary_probe("infer_batch_shared_prefix")
     _arena_summary_probe("qforge_dvnl_du_block")
     _arena_summary_probe("jacobi_step")
+    // oracle adversary/positive-control callees (fire only when compiling a repro).
+    _arena_summary_probe("stash_it")
+    _arena_summary_probe("wrap")
+    _arena_summary_probe("ping")
+    _arena_summary_probe("pong")
+    _arena_summary_probe("leaf_esc")
+    _arena_summary_probe("top_fn")
+    _arena_summary_probe("apply_fn")
+    _arena_summary_probe("peek")
     return 0
 }
 
@@ -14632,6 +14693,18 @@ fn _stmts_escape_arr_name(stmts, name) {
 // through to the blanket-escape base behavior. Report-only (used ONLY by the
 // HEXA_ARENA_DETECT summary fixpoint), so the base scans are untouched (byteeq).
 fn _expr_escapes_arr_name_ip(node, name) {
+    // depth-guarded wrapper (⊤-conservative on native-stack overflow risk).
+    _fn_summary_depth = _fn_summary_depth + 1
+    if _fn_summary_depth > 1400 {
+        _fn_summary_depth = _fn_summary_depth - 1
+        _fn_summary_depth_tripped = 1
+        return true    // assume escape (sound)
+    }
+    let _r = _expr_escapes_arr_name_ip_i(node, name)
+    _fn_summary_depth = _fn_summary_depth - 1
+    return _r
+}
+fn _expr_escapes_arr_name_ip_i(node, name) {
     if type_of(node) == "string" { return false }
     let k = node.kind
     if k == "Index" {
@@ -14725,6 +14798,17 @@ fn _expr_escapes_arr_name_ip(node, name) {
 }
 
 fn _stmt_escapes_arr_name_ip(node, name) {
+    _fn_summary_depth = _fn_summary_depth + 1
+    if _fn_summary_depth > 1400 {
+        _fn_summary_depth = _fn_summary_depth - 1
+        _fn_summary_depth_tripped = 1
+        return true    // assume escape (sound)
+    }
+    let _r = _stmt_escapes_arr_name_ip_i(node, name)
+    _fn_summary_depth = _fn_summary_depth - 1
+    return _r
+}
+fn _stmt_escapes_arr_name_ip_i(node, name) {
     if type_of(node) == "string" { return false }
     let sk = node.kind
     if sk == "LetMutStmt" || sk == "AtomicLet" {
