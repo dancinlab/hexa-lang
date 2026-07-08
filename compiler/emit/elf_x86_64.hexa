@@ -195,6 +195,32 @@ fn _ex86_reg8(s: string) -> Int {
     return -1
 }
 
+// x86_64 xmm (SSE) register name → index 0..15.
+//   xmm0..xmm7=0..7 · xmm8..xmm15=8..15 (require REX.R / REX.B prefix bit).
+// The ③-R2b scalar-double family (movsd/addsd/…/cvt*/comisd) selects xmm
+// operands via this table; a GP-register token returns -1 here so the
+// mixed-operand ops (movq / cvtsi2sd / cvttsd2si) can disambiguate which
+// side is the SSE register vs the GP register. Returns -1 on no match.
+fn _ex86_xmm(s: string) -> Int {
+    if s == "xmm0"  || s == "XMM0"  { return 0 }
+    if s == "xmm1"  || s == "XMM1"  { return 1 }
+    if s == "xmm2"  || s == "XMM2"  { return 2 }
+    if s == "xmm3"  || s == "XMM3"  { return 3 }
+    if s == "xmm4"  || s == "XMM4"  { return 4 }
+    if s == "xmm5"  || s == "XMM5"  { return 5 }
+    if s == "xmm6"  || s == "XMM6"  { return 6 }
+    if s == "xmm7"  || s == "XMM7"  { return 7 }
+    if s == "xmm8"  || s == "XMM8"  { return 8 }
+    if s == "xmm9"  || s == "XMM9"  { return 9 }
+    if s == "xmm10" || s == "XMM10" { return 10 }
+    if s == "xmm11" || s == "XMM11" { return 11 }
+    if s == "xmm12" || s == "XMM12" { return 12 }
+    if s == "xmm13" || s == "XMM13" { return 13 }
+    if s == "xmm14" || s == "XMM14" { return 14 }
+    if s == "xmm15" || s == "XMM15" { return 15 }
+    return -1
+}
+
 // REX prefix builder.  REX = 0100 W R X B (4-bit fixed + 4 flag bits).
 //   W = 64-bit operand size (1 for r64 ops)
 //   R = extends ModR/M.reg (1 if reg >= 8)
@@ -454,11 +480,26 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     //
     // MOV r64, #imm32 (sign-extend to 64) — REX.W + C7 /0 id (7 B).
     //   e.g. MOV RAX, #60 → 48 c7 c0 3c 00 00 00
+    // ③-R2b movabs fold: C7 /0 id sign-extends a 32-bit immediate, so a
+    // value OUTSIDE the signed-imm32 range [-2^31, 2^31-1] would be
+    // silently truncated/mis-encoded (the gap R2a flagged — e.g. a 64-bit
+    // pointer/float-payload constant). For those, emit `movabs r64, imm64`
+    // = REX.W + B8+rd io (10 B). Byte-NEUTRAL for every value that fits
+    // signed-imm32 (keeps the canonical C7 /0 form the golden tests pin);
+    // only large constants — previously wrong bytes — take the new path.
     if op == "MOV64" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
         let rd = _ex86_reg64(ops[0])
         let imm = _ex86_imm(ops[1])
         if rd >= 0 {
             let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
+            if imm > 2147483647 || imm < -2147483648 {
+                // movabs r64, imm64 — REX.W + (B8+rd) + imm64 LE.
+                return [rex, 0xb8 | (rd & 0x7),
+                        imm & 0xff, (imm >> 8) & 0xff,
+                        (imm >> 16) & 0xff, (imm >> 24) & 0xff,
+                        (imm >> 32) & 0xff, (imm >> 40) & 0xff,
+                        (imm >> 48) & 0xff, (imm >> 56) & 0xff]
+            }
             let modrm = 0xc0 | (0 << 3) | (rd & 0x7)
             return [rex, 0xc7, modrm,
                     imm & 0xff, (imm >> 8) & 0xff,
@@ -844,6 +885,137 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
             let rex = _ex86_rex(1, if rd >= 8 { 1 } else { 0 }, 0,
                                     if rs >= 8 { 1 } else { 0 })
             return [rex, 0x63, 0xc0 | ((rd & 0x7) << 3) | (rs & 0x7)]
+        }
+    }
+
+    // ── ③-R2b additions — SSE scalar-double float family (own-emit) ──────
+    // Reference-matched against Intel SDM Vol 2 (SSE2 scalar double). The
+    // codegen (x86_64_linux.hexa `__hx_payload_f*`/`__hx_to_double`/f2i/i2f)
+    // emits these with xmm0/xmm1 + r10/r11 reg-reg operands only — mem forms
+    // fall through to the loud ENCODE-MISS below. Encoding order is
+    // [mandatory prefix F2/66] [REX] [0F] [opcode] [ModR/M] (the mandatory
+    // prefix precedes REX per SDM §2.2.1). Byte-neutral for the shipping
+    // compiler (built via C-transpile, not this walker); only own-emit
+    // exercises these bytes.
+
+    // MOVQ — GP↔xmm 64-bit bit copy (the fp-payload ingress/egress the
+    // codegen uses via `movq xmm, r64` / `movq r64, xmm`). Two forms keyed
+    // by which operand is the xmm register:
+    //   movq xmm, r/m64 : 66 REX.W 0F 6E /r  (reg=xmm dest, rm=GP src)
+    //   movq r/m64, xmm : 66 REX.W 0F 7E /r  (reg=xmm src,  rm=GP dest)
+    //   e.g. movq xmm0, r10 → 66 49 0f 6e c2 · movq r10, xmm0 → 66 49 0f 7e c2
+    if op == "MOVQ" && len(ops) == 2 {
+        let xd = _ex86_xmm(ops[0])
+        let xs = _ex86_xmm(ops[1])
+        if xd >= 0 && xs < 0 {
+            // GP→xmm : dest is xmm (ops[0]), src is GP (ops[1]).
+            let gp = _ex86_reg64(ops[1])
+            if gp >= 0 {
+                let rex = _ex86_rex(1, if xd >= 8 { 1 } else { 0 }, 0,
+                                        if gp >= 8 { 1 } else { 0 })
+                return [0x66, rex, 0x0f, 0x6e,
+                        0xc0 | ((xd & 0x7) << 3) | (gp & 0x7)]
+            }
+        }
+        if xd < 0 && xs >= 0 {
+            // xmm→GP : dest is GP (ops[0]), src is xmm (ops[1]).
+            let gp = _ex86_reg64(ops[0])
+            if gp >= 0 {
+                let rex = _ex86_rex(1, if xs >= 8 { 1 } else { 0 }, 0,
+                                        if gp >= 8 { 1 } else { 0 })
+                return [0x66, rex, 0x0f, 0x7e,
+                        0xc0 | ((xs & 0x7) << 3) | (gp & 0x7)]
+            }
+        }
+    }
+    // MOVSD xmm1, xmm2 — F2 0F 10 /r (scalar-double reg-reg move). reg=dest,
+    // rm=src. (Additive: no codegen emitter today — scalar spills would use
+    // it; mem forms 10/11 land when the codegen needs a stack home.)
+    //   e.g. movsd xmm0, xmm1 → f2 0f 10 c1
+    if op == "MOVSD" && len(ops) == 2 {
+        let xd = _ex86_xmm(ops[0])
+        let xs = _ex86_xmm(ops[1])
+        if xd >= 0 && xs >= 0 {
+            let out: [Int] = []
+            out.push(0xf2)
+            if xd >= 8 || xs >= 8 {
+                out.push(_ex86_rex(0, if xd >= 8 { 1 } else { 0 }, 0,
+                                      if xs >= 8 { 1 } else { 0 }))
+            }
+            out.push(0x0f); out.push(0x10)
+            out.push(0xc0 | ((xd & 0x7) << 3) | (xs & 0x7))
+            return out
+        }
+    }
+    // ADDSD/SUBSD/MULSD/DIVSD xmm1, xmm2 — F2 0F {58,5C,59,5E} /r (3-4 B).
+    // reg=dest xmm (ops[0]), rm=src xmm (ops[1]). No REX.W (operand size is
+    // implied by the F2 + 0F opcode). REX only for xmm8..15.
+    //   e.g. addsd xmm0, xmm1 → f2 0f 58 c1 · divsd xmm0, xmm1 → f2 0f 5e c1
+    if (op == "ADDSD" || op == "SUBSD" || op == "MULSD" || op == "DIVSD")
+       && len(ops) == 2 {
+        let xd = _ex86_xmm(ops[0])
+        let xs = _ex86_xmm(ops[1])
+        if xd >= 0 && xs >= 0 {
+            let mut opc = 0x58              // ADDSD
+            if op == "SUBSD" { opc = 0x5c }
+            if op == "MULSD" { opc = 0x59 }
+            if op == "DIVSD" { opc = 0x5e }
+            let out: [Int] = []
+            out.push(0xf2)
+            if xd >= 8 || xs >= 8 {
+                out.push(_ex86_rex(0, if xd >= 8 { 1 } else { 0 }, 0,
+                                      if xs >= 8 { 1 } else { 0 }))
+            }
+            out.push(0x0f); out.push(opc)
+            out.push(0xc0 | ((xd & 0x7) << 3) | (xs & 0x7))
+            return out
+        }
+    }
+    // COMISD / UCOMISD xmm1, xmm2 — 66 0F {2F,2E} /r. Ordered/unordered
+    // scalar-double compare → EFLAGS (the NaN-correct `comisd`+`seta` idiom
+    // the codegen emits for float </<=/>/>=). 66 prefix (NOT F2). reg=ops[0],
+    // rm=ops[1].  e.g. comisd xmm0, xmm1 → 66 0f 2f c1
+    if (op == "COMISD" || op == "UCOMISD") && len(ops) == 2 {
+        let xd = _ex86_xmm(ops[0])
+        let xs = _ex86_xmm(ops[1])
+        if xd >= 0 && xs >= 0 {
+            let opc = if op == "COMISD" { 0x2f } else { 0x2e }
+            let out: [Int] = []
+            out.push(0x66)
+            if xd >= 8 || xs >= 8 {
+                out.push(_ex86_rex(0, if xd >= 8 { 1 } else { 0 }, 0,
+                                      if xs >= 8 { 1 } else { 0 }))
+            }
+            out.push(0x0f); out.push(opc)
+            out.push(0xc0 | ((xd & 0x7) << 3) | (xs & 0x7))
+            return out
+        }
+    }
+    // CVTSI2SD xmm, r/m64 — F2 REX.W 0F 2A /r (signed int64 → double).
+    // reg=dest xmm (ops[0]), rm=src GP (ops[1]). REX.W=1 for the 64-bit
+    // integer source.  e.g. cvtsi2sd xmm0, r10 → f2 49 0f 2a c2
+    if op == "CVTSI2SD" && len(ops) == 2 {
+        let xd = _ex86_xmm(ops[0])
+        let gp = _ex86_reg64(ops[1])
+        if xd >= 0 && gp >= 0 {
+            let rex = _ex86_rex(1, if xd >= 8 { 1 } else { 0 }, 0,
+                                    if gp >= 8 { 1 } else { 0 })
+            return [0xf2, rex, 0x0f, 0x2a,
+                    0xc0 | ((xd & 0x7) << 3) | (gp & 0x7)]
+        }
+    }
+    // CVTTSD2SI r64, xmm/m64 — F2 REX.W 0F 2C /r (double → signed int64,
+    // truncating toward zero). reg=dest GP (ops[0]), rm=src xmm (ops[1]).
+    // REX.W=1 for the 64-bit integer destination.
+    //   e.g. cvttsd2si r10, xmm0 → f2 4c 0f 2c d0
+    if op == "CVTTSD2SI" && len(ops) == 2 {
+        let gp = _ex86_reg64(ops[0])
+        let xs = _ex86_xmm(ops[1])
+        if gp >= 0 && xs >= 0 {
+            let rex = _ex86_rex(1, if gp >= 8 { 1 } else { 0 }, 0,
+                                    if xs >= 8 { 1 } else { 0 })
+            return [0xf2, rex, 0x0f, 0x2c,
+                    0xc0 | ((gp & 0x7) << 3) | (xs & 0x7)]
         }
     }
 
@@ -2435,6 +2607,21 @@ fn _lir_op_uppercase_x86(op: string, ops: [LOperand]) -> string {
     if op == "lea"  { return "LEA64" }
     if op == "push" { if is64 { return "PUSH64" }; return "PUSH" }
     if op == "pop"  { if is64 { return "POP64" };  return "POP" }
+    // ③-R2b SSE scalar-double family. These are width-fixed (the F2/66 0F
+    // opcode implies operand size), so no is64 dispatch — map straight to
+    // the uppercase encoder op-string. `movq` is the GP↔xmm bit copy the
+    // float payload path leans on; the rest are the arith/compare/convert
+    // ops the codegen emits with xmm operands.
+    if op == "movq"      { return "MOVQ" }
+    if op == "movsd"     { return "MOVSD" }
+    if op == "addsd"     { return "ADDSD" }
+    if op == "subsd"     { return "SUBSD" }
+    if op == "mulsd"     { return "MULSD" }
+    if op == "divsd"     { return "DIVSD" }
+    if op == "comisd"    { return "COMISD" }
+    if op == "ucomisd"   { return "UCOMISD" }
+    if op == "cvtsi2sd"  { return "CVTSI2SD" }
+    if op == "cvttsd2si" { return "CVTTSD2SI" }
     return op
 }
 

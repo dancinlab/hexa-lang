@@ -1,0 +1,109 @@
+// F-P2-X86-SSE — ③-R2b SSE scalar-double family byte-golden check.
+//
+// Verifies encode_x86_64_insn's new SSE ops against Intel SDM Vol 2
+// hand-derived encodings (see the per-case comments). Pure byte-check —
+// no remote host needed (unlike the DIV/CTRLFLOW execution harnesses),
+// so it runs anywhere `hexa run` works.
+//
+// SDM opcode reference (scalar double-precision, SSE2):
+//   movq  xmm, r/m64 : 66 REX.W 0F 6E /r   (GP→xmm)
+//   movq  r/m64, xmm : 66 REX.W 0F 7E /r   (xmm→GP)
+//   movsd xmm1, xmm2 : F2 0F 10 /r
+//   addsd            : F2 0F 58 /r
+//   subsd            : F2 0F 5C /r
+//   mulsd            : F2 0F 59 /r
+//   divsd            : F2 0F 5E /r
+//   comisd           : 66 0F 2F /r
+//   ucomisd          : 66 0F 2E /r
+//   cvtsi2sd xmm,r64 : F2 REX.W 0F 2A /r
+//   cvttsd2si r64,xmm: F2 REX.W 0F 2C /r
+//   movabs r64,imm64 : REX.W B8+rd io
+
+import "../../emit/elf_x86_64.hexa"
+
+fn _hex(v: Int) -> string {
+    let hi = (v >> 4) & 0xF; let lo = v & 0xF
+    let d = "0123456789abcdef"
+    return d.substring(hi, hi + 1) + d.substring(lo, lo + 1)
+}
+fn _bs(bs: [Int]) -> string {
+    let mut s = ""; let mut i = 0
+    while i < len(bs) { if i > 0 { s = s + " " }; s = s + _hex(bs[i] & 0xFF); i = i + 1 }
+    return s
+}
+fn _eq(label: string, got: [Int], want: [Int]) -> bool {
+    if len(got) != len(want) { println("FAIL " + label + ": len " + to_string(len(got)) + " vs " + to_string(len(want)) + " (" + _bs(got) + ")"); return false }
+    let mut i = 0
+    while i < len(got) {
+        if (got[i] & 0xFF) != want[i] {
+            println("FAIL " + label + " byte " + to_string(i) + ": " + _hex(got[i] & 0xFF) + " vs " + _hex(want[i]))
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+fn main() {
+    let mut ok = true
+
+    let cases: [string] = [
+        "movq xmm0, r10",   "movq xmm1, r11",   "movq r10, xmm0",
+        "movq xmm8, r10",
+        "movsd xmm0, xmm1",
+        "addsd xmm0, xmm1", "subsd xmm0, xmm1",
+        "mulsd xmm0, xmm1", "divsd xmm0, xmm1",
+        "addsd xmm8, xmm1",
+        "comisd xmm0, xmm1", "ucomisd xmm0, xmm1",
+        "cvtsi2sd xmm0, r10", "cvttsd2si r10, xmm0",
+        "movabs rax, 2^32",  "mov rax, #60 (neutral)",
+        "movabs r8, -2^32",
+    ]
+    let want: [[Int]] = [
+        [0x66, 0x49, 0x0f, 0x6e, 0xc2],       // movq xmm0, r10  (6E, REX.W|B)
+        [0x66, 0x49, 0x0f, 0x6e, 0xcb],       // movq xmm1, r11
+        [0x66, 0x49, 0x0f, 0x7e, 0xc2],       // movq r10, xmm0  (7E)
+        [0x66, 0x4d, 0x0f, 0x6e, 0xc2],       // movq xmm8, r10  (REX.W|R|B)
+        [0xf2, 0x0f, 0x10, 0xc1],             // movsd xmm0, xmm1
+        [0xf2, 0x0f, 0x58, 0xc1],             // addsd
+        [0xf2, 0x0f, 0x5c, 0xc1],             // subsd
+        [0xf2, 0x0f, 0x59, 0xc1],             // mulsd
+        [0xf2, 0x0f, 0x5e, 0xc1],             // divsd
+        [0xf2, 0x44, 0x0f, 0x58, 0xc1],       // addsd xmm8, xmm1 (REX.R)
+        [0x66, 0x0f, 0x2f, 0xc1],             // comisd
+        [0x66, 0x0f, 0x2e, 0xc1],             // ucomisd
+        [0xf2, 0x49, 0x0f, 0x2a, 0xc2],       // cvtsi2sd xmm0, r10 (REX.W|B)
+        [0xf2, 0x4c, 0x0f, 0x2c, 0xd0],       // cvttsd2si r10, xmm0 (REX.W|R)
+        [0x48, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00],  // movabs rax, 0x100000000
+        [0x48, 0xc7, 0xc0, 0x3c, 0x00, 0x00, 0x00],                    // mov rax, #60 (C7 form kept)
+        [0x49, 0xb8, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff],  // movabs r8, -0x100000000
+    ]
+    let got: [[Int]] = [
+        encode_x86_64_insn("MOVQ", ["xmm0", "r10"]),
+        encode_x86_64_insn("MOVQ", ["xmm1", "r11"]),
+        encode_x86_64_insn("MOVQ", ["r10", "xmm0"]),
+        encode_x86_64_insn("MOVQ", ["xmm8", "r10"]),
+        encode_x86_64_insn("MOVSD", ["xmm0", "xmm1"]),
+        encode_x86_64_insn("ADDSD", ["xmm0", "xmm1"]),
+        encode_x86_64_insn("SUBSD", ["xmm0", "xmm1"]),
+        encode_x86_64_insn("MULSD", ["xmm0", "xmm1"]),
+        encode_x86_64_insn("DIVSD", ["xmm0", "xmm1"]),
+        encode_x86_64_insn("ADDSD", ["xmm8", "xmm1"]),
+        encode_x86_64_insn("COMISD", ["xmm0", "xmm1"]),
+        encode_x86_64_insn("UCOMISD", ["xmm0", "xmm1"]),
+        encode_x86_64_insn("CVTSI2SD", ["xmm0", "r10"]),
+        encode_x86_64_insn("CVTTSD2SI", ["r10", "xmm0"]),
+        encode_x86_64_insn("MOV64", ["rax", "#4294967296"]),
+        encode_x86_64_insn("MOV64", ["rax", "#60"]),
+        encode_x86_64_insn("MOV64", ["r8", "#-4294967296"]),
+    ]
+    let mut i = 0
+    while i < len(cases) {
+        println(cases[i] + " → " + _bs(got[i]))
+        if !_eq(cases[i], got[i], want[i]) { ok = false }
+        i = i + 1
+    }
+    if !ok { exit(1) }
+    println("🎉 F-P2-X86-SSE PASS — 17 SSE/movabs byte-golden cases match Intel SDM Vol 2")
+    exit(0)
+}
