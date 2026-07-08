@@ -1,0 +1,35 @@
+// WIDENED (rung-1) POSITIVE CONTROL for the mem-lane ② P0 characterization.
+// The strict #4700 detector EXCLUDES this (mutable `let mut buf=[]` transient);
+// the widened bar (R1/R2/R3 self-grow + C4 structured + C5 leaf) MUST flag the
+// OUTER `while i` as widened-reclaim-safe (widened 1/…), while strict stays 0/…:
+//   - `buf` is a MUTABLE body-local container transient (declared in the outer
+//     loop body), grown IN-ITERATION by `buf = buf.push(...)` (R1), consumed
+//     read-only via `buf[t]` (index-read) / `buf.len()`, and dies at iteration end.
+//   - no break/continue/return/defer/spawn (C4 structured; inner loops are nested).
+//   - no nested USER-fn call (C5 leaf; push/len are retain-free methods, println
+//     is outside the loop).
+// This is the shape the deferred rung-1 EMIT would reclaim; the point of P0 is to
+// measure whether the REAL churn loops (bytegpt-decode/QFORGE) also match — they
+// do NOT (they are non-leaf: the churn lives behind forge/kernel USER-fn calls).
+// Expected output: 2970000 (same read-only aggregate as loop_body_transient_safe).
+fn main() {
+  let mut acc = 0
+  let mut i = 0
+  while i < 100000 {
+    let mut buf = []              // MUTABLE body-local transient (widened-only)
+    let mut j = 0
+    while j < 3 {
+      buf = buf.push(i + j)       // R1 self-grow via push — not an escape
+      j = j + 1
+    }
+    let mut s = 0
+    let mut t = 0
+    while t < buf.len() {         // buf.len() — non-escaping read
+      s = s + buf[t]             // buf[t] index-read — non-escaping local use
+      t = t + 1
+    }
+    acc = acc + s
+    i = i + 1
+  }
+  println(acc)   // expect 2970000 = sum_{i<1e5} (3i+3)
+}
