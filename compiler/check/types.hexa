@@ -3265,7 +3265,35 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                     //  `demand_coerce` → `FnCtxt::report_mismatched_types`,
                     //  the SAME E0308 path the literal arm already mirrors).
                     let tr = TypeRef { kind: "named", name: tt, args: [], span: e.span }
-                    let declared = _types_lower_type_ref(tr)
+                    // array-repr Rung 2 — array-typed LET annotation lowering
+                    // (the LET-side completion of the array-repr capability;
+                    // Rung 0+1 = the helper `_types_t_array` + the 4 monomorphic
+                    // builtin array returns split/lines/chars→[string],
+                    // bytes→[i64], #4737). The parser encodes `let xs: [T]` as
+                    // the type-name `Array:<elem>` (parser.hexa:parse_type); the
+                    // plain `named` lowering collapses that to the non-scalar
+                    // `named:Array:<elem>` SENTINEL (gate ① below then skips, so
+                    // array annotations never type-checked). Instead, parse the
+                    // element and route through the generic @963 array form so
+                    // `declared` is a real kind:"array" Type whose args[0] is
+                    // minted with the SAME canonical element constructor
+                    // (_types_t_string/_types_t_i64 via the @926/@919 `named`
+                    // branch) that the Rung 0+1 builtin returns use — so
+                    // `_types_equal` accepts an element-matched array RHS
+                    // (`s.split(",") ⇒ [string]`) and REJECTs a genuine element
+                    // mismatch (`let ys:[i64] = s.split(",") ⇒ HX3011`). Only a
+                    // KNOWN-scalar element promotes; unknown / abbreviated
+                    // (`str`/`int`/`float`) / nested / count-only (`Array:<N>`)
+                    // stay on the sentinel path → gate skips (r5+). Byte-neutral:
+                    // this whole branch is under the `_types_static_on` gate and
+                    // types erase at MIR.
+                    let mut declared = _types_lower_type_ref(tr)
+                    let arr_elem = _types_array_elem_kind(tt)
+                    if len(arr_elem) > 0 && _types_kind_is_scalar(arr_elem) {
+                        let elem_tr = TypeRef { kind: "named", name: arr_elem, args: [], span: e.span }
+                        let arr_tr = TypeRef { kind: "generic", name: "Array", args: [elem_tr], span: e.span }
+                        declared = _types_lower_type_ref(arr_tr)
+                    }
                     // r2 soundness gate ① — declared side must be a KNOWN
                     // scalar primitive (named:/struct/enum stay r5+).
                     if _types_kind_is_scalar(declared.kind) {
@@ -3283,6 +3311,27 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                         // all NON-scalar here → conservatively skipped (r5+),
                         // so no false REJECT on anything unknown.
                         if _types_kind_is_scalar(rhs_t.kind) {
+                            if !_types_assignable(declared, rhs_t, rhs) {
+                                _emit_hx3011(declared, rhs_t, e.span, out)
+                            }
+                        }
+                    } else if declared.kind == "array" && len(declared.args) >= 1 {
+                        // array-repr Rung 2 gate ① (array arm) — an array-typed
+                        // annotation with a KNOWN scalar element. Require the
+                        // inferred RHS to itself be a kind:"array" (the Rung 0+1
+                        // builtin returns + r8 ArrayLit inference) before the
+                        // assignability check, so a non-array / unknown RHS stays
+                        // conservatively silent. `_types_assignable` is UNCHANGED
+                        // — it accepts via `_types_equal`'s element recursion
+                        // (args[0]) for an exact-element match and rejects a
+                        // mismatch (a method-call src is NOT an ArrayLit, so the
+                        // element-coercion arm — proven wrong+unnecessary in
+                        // Rung 0+1 — never fires). Corpus census: 0 method-fed
+                        // typed array LETs on the tracked tree, so this enables a
+                        // new-but-empty surface (byteeq-neutral by construction).
+                        let mut scratch: array = []
+                        let rhs_t = _infer_expr(rhs, env, ctx, scratch)
+                        if rhs_t.kind == "array" && len(rhs_t.args) >= 1 {
                             if !_types_assignable(declared, rhs_t, rhs) {
                                 _emit_hx3011(declared, rhs_t, e.span, out)
                             }
