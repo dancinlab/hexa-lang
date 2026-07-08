@@ -668,6 +668,7 @@ pub fn pack_lir_arm64_elf(lm: LModule) -> ElfArm64Obj {
             sym_idx: idx,
             kind:    ELF_R_AARCH64_CALL26,
             addend:  0,
+            site_seg: 1,
         })
         // Intra-module pre-patch when the target is defined here.
         let sym = obj.symbols[idx]
@@ -726,6 +727,7 @@ pub fn pack_lir_arm64_elf(lm: LModule) -> ElfArm64Obj {
             sym_idx: idx,
             kind:    kind,
             addend:  0,
+            site_seg: 1,
         })
         gi2 = gi2 + 1
     }

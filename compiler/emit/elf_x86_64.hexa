@@ -72,6 +72,7 @@ struct ElfRel {
     sym_idx: i64,
     kind:    i64,
     addend:  i64,
+    site_seg: i64,   // reloc SITE pool: 1=text, 3=rodata, 4=data (own-emit writers=text=1)
 }
 
 struct ElfSym {
@@ -953,6 +954,16 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                 if main_off < 0 && name == main_name {
                     main_off = base + s.value
                 }
+            } else if s.section == 5 {
+                // .bss/COMMON def (round-3b) — no file bytes; lives in the data
+                // segment's zero-fill region AFTER the concatenated .data blob
+                // (p_memsz > p_filesz). def_seg==2 defers the (not-yet-final)
+                // len(data_bytes) base to the resolve pass; def_off = this obj's
+                // bss base (total_bss was advanced by obj.bss_size at the concat
+                // loop top -> subtract it back) + the sym's obj-local bss value.
+                def_names.push(name)
+                def_seg.push(2)
+                def_off.push((total_bss - obj.bss_size) + s.value)
             } else if s.section != 0 {
                 // Data def. section==4 (data_sec when .rodata present) -> .data
                 // pool; otherwise (section==3) -> .rodata pool. When the obj has
@@ -1028,35 +1039,59 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                 sk = sk + 1
             }
             if found_idx >= 0 {
-                // Target symbol's virtual address (text seg vs data seg).
+                // Target symbol's virtual address (text seg / data seg / bss).
                 let mut s_vaddr = 0
                 if def_seg[found_idx] == 0 {
                     s_vaddr = vaddr_base + code_off + def_off[found_idx]
+                } else if def_seg[found_idx] == 2 {
+                    // .bss target — data-seg zero-fill region, after all .data.
+                    s_vaddr = data_vaddr_base + len(data_bytes) + def_off[found_idx]
                 } else {
                     s_vaddr = data_vaddr_base + def_off[found_idx]
                 }
-                // Patch site is always in .text (CALL imm32 or lea disp32).
-                let patch_off = base + r.offset
-                let p_vaddr = vaddr_base + code_off + patch_off
-                if r.kind == 1 {
-                    // R_X86_64_64 — absolute 64-bit (patch site in .text).
-                    // Data-resident absolute relocs (data->data) are round-3.
-                    let av = s_vaddr + r.addend
-                    text_bytes[patch_off + 0] = av & 0xff
-                    text_bytes[patch_off + 1] = (av >> 8) & 0xff
-                    text_bytes[patch_off + 2] = (av >> 16) & 0xff
-                    text_bytes[patch_off + 3] = (av >> 24) & 0xff
-                    text_bytes[patch_off + 4] = (av >> 32) & 0xff
-                    text_bytes[patch_off + 5] = (av >> 40) & 0xff
-                    text_bytes[patch_off + 6] = (av >> 48) & 0xff
-                    text_bytes[patch_off + 7] = (av >> 56) & 0xff
+                // Site segment (round-3b): 3=rodata / 4=data land in the DATA blob
+                // at the data-seg vaddr; anything else (1=text, or 0) patches .text.
+                if r.site_seg == 3 || r.site_seg == 4 {
+                    let blob_off = if r.site_seg == 4 { obj_data_base[ro] + r.offset } else { obj_rodata_base[ro] + r.offset }
+                    let p_vaddr  = data_vaddr_base + blob_off
+                    if r.kind == 1 {
+                        let av = s_vaddr + r.addend
+                        data_bytes[blob_off + 0] = av & 0xff
+                        data_bytes[blob_off + 1] = (av >> 8) & 0xff
+                        data_bytes[blob_off + 2] = (av >> 16) & 0xff
+                        data_bytes[blob_off + 3] = (av >> 24) & 0xff
+                        data_bytes[blob_off + 4] = (av >> 32) & 0xff
+                        data_bytes[blob_off + 5] = (av >> 40) & 0xff
+                        data_bytes[blob_off + 6] = (av >> 48) & 0xff
+                        data_bytes[blob_off + 7] = (av >> 56) & 0xff
+                    } else {
+                        let delta = s_vaddr + r.addend - p_vaddr
+                        data_bytes[blob_off + 0] = delta & 0xff
+                        data_bytes[blob_off + 1] = (delta >> 8) & 0xff
+                        data_bytes[blob_off + 2] = (delta >> 16) & 0xff
+                        data_bytes[blob_off + 3] = (delta >> 24) & 0xff
+                    }
                 } else {
-                    // R_X86_64_PC32 (2) / R_X86_64_PLT32 (4) — 32-bit PC-relative.
-                    let delta = s_vaddr + r.addend - p_vaddr
-                    text_bytes[patch_off + 0] = delta & 0xff
-                    text_bytes[patch_off + 1] = (delta >> 8) & 0xff
-                    text_bytes[patch_off + 2] = (delta >> 16) & 0xff
-                    text_bytes[patch_off + 3] = (delta >> 24) & 0xff
+                    // Text-resident site (CALL imm32 / lea disp32) — round-1/2 path.
+                    let patch_off = base + r.offset
+                    let p_vaddr = vaddr_base + code_off + patch_off
+                    if r.kind == 1 {
+                        let av = s_vaddr + r.addend
+                        text_bytes[patch_off + 0] = av & 0xff
+                        text_bytes[patch_off + 1] = (av >> 8) & 0xff
+                        text_bytes[patch_off + 2] = (av >> 16) & 0xff
+                        text_bytes[patch_off + 3] = (av >> 24) & 0xff
+                        text_bytes[patch_off + 4] = (av >> 32) & 0xff
+                        text_bytes[patch_off + 5] = (av >> 40) & 0xff
+                        text_bytes[patch_off + 6] = (av >> 48) & 0xff
+                        text_bytes[patch_off + 7] = (av >> 56) & 0xff
+                    } else {
+                        let delta = s_vaddr + r.addend - p_vaddr
+                        text_bytes[patch_off + 0] = delta & 0xff
+                        text_bytes[patch_off + 1] = (delta >> 8) & 0xff
+                        text_bytes[patch_off + 2] = (delta >> 16) & 0xff
+                        text_bytes[patch_off + 3] = (delta >> 24) & 0xff
+                    }
                 }
             }
             ri = ri + 1
@@ -1773,6 +1808,7 @@ pub fn parse_elf_x86_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfX86O
                         sym_idx: sym_file - 1,
                         kind:    rtype,
                         addend:  radd,
+                        site_seg: (if tgt < e_shnum { sec_slot[tgt] } else { 1 }),
                     })
                 }
                 ri = ri + 1
@@ -2577,6 +2613,7 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
             sym_idx: idx,
             kind:    ELF_R_X86_64_PLT32,
             addend:  -4,
+            site_seg: 1,
         })
         // Intra-module pre-patch — when the target is defined here
         // (section != 0), compute the delta the linker would write
@@ -2637,6 +2674,7 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
             sym_idx: idx,
             kind:    ELF_R_X86_64_PC32,
             addend:  -4,
+            site_seg: 1,
         })
         dpi = dpi + 1
     }
