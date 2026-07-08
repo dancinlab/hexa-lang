@@ -110,6 +110,24 @@ fn _ends_with_hexa(s: string) -> bool {
 fn _normalize_argv() -> [string] {
     let raw = args()
     let mut user_start = 1
+    // The `hexa run <launcher.hexa> ...` / `hexa eval ...` / `hexa <launcher.hexa> ...`
+    // WRAPPER form carries a LAUNCHER .hexa (compiler/main.hexa) that must be skipped so the
+    // remaining args are the user's. A STANDALONE compiled driver binary (e.g. the output of
+    // `hexa build compiler/main.hexa`) has NO launcher — its only .hexa is the SOURCE to compile,
+    // which must NOT be consumed. Detect the wrapper by raw[1] being run/eval or itself a .hexa.
+    // Standalone is invoked flags-first (`driver --backend … SRC.hexa`) so raw[1] is a flag.
+    let is_wrapper = len(raw) >= 2 && (raw[1] == "run" || raw[1] == "eval" || _ends_with_hexa(raw[1]))
+    if !is_wrapper {
+        // Standalone driver: everything after argv[0] is a user arg (SOURCE .hexa included).
+        user_start = 1
+        let mut out0: [string] = []
+        let mut k = user_start
+        while k < len(raw) {
+            out0.push(raw[k])
+            k = k + 1
+        }
+        return out0
+    }
     let mut found = false
     let mut i = 0
     while i < len(raw) {
