@@ -716,6 +716,142 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
             return [rex, 0x0f, opcode, 0xc0 | (rd & 0x7)]
         }
     }
+
+    // ── ③-R2a additions — integer-ALU completion (own-emit path) ──────
+    // Reference-matched x86-64 opcode/ModR/M/REX against Intel SDM Vol 2,
+    // mirroring the ADD64/SUB64 reg-reg + 81-imm idiom above. 64-bit
+    // (REX.W) forms only — the codegen (x86_64_linux.hexa) emits these ops
+    // solely through r64 operands (r10/r11/rax/rdx…), so any non-64 variant
+    // correctly falls through to the loud ENCODE-MISS below. Byte-neutral
+    // for the shipping compiler (built via the C-transpile path, not this
+    // walker); only `--emit=exec`/own-emit exercises these bytes.
+
+    // IMUL r64, r64 — REX.W + 0F AF /r (4 B). NOTE: 0F AF is a
+    // reg-is-DESTINATION two-byte opcode, so ModR/M.reg = DEST, rm = SRC
+    // (unlike ADD's 01 /r where reg = SRC).  e.g. imul r10, r11 → 4d 0f af d3
+    if op == "IMUL64" && len(ops) == 2 && ops[1].substring(0, 1) != "#" {
+        let rd = _ex86_reg64(ops[0])
+        let rs = _ex86_reg64(ops[1])
+        if rd >= 0 && rs >= 0 {
+            let rex = _ex86_rex(1, if rd >= 8 { 1 } else { 0 }, 0,
+                                    if rs >= 8 { 1 } else { 0 })
+            return [rex, 0x0f, 0xaf, 0xc0 | ((rd & 0x7) << 3) | (rs & 0x7)]
+        }
+    }
+    // IMUL r64, r64, imm32 — REX.W + 69 /r id (7 B). reg = DEST, rm = SRC,
+    // then imm32 LE.  e.g. imul rax, rax, 16 → 48 69 c0 10 00 00 00
+    if op == "IMUL64" && len(ops) == 3 && ops[2].substring(0, 1) == "#" {
+        let rd = _ex86_reg64(ops[0])
+        let rs = _ex86_reg64(ops[1])
+        let imm = _ex86_imm(ops[2])
+        if rd >= 0 && rs >= 0 {
+            let rex = _ex86_rex(1, if rd >= 8 { 1 } else { 0 }, 0,
+                                    if rs >= 8 { 1 } else { 0 })
+            let modrm = 0xc0 | ((rd & 0x7) << 3) | (rs & 0x7)
+            return [rex, 0x69, modrm,
+                    imm & 0xff, (imm >> 8) & 0xff,
+                    (imm >> 16) & 0xff, (imm >> 24) & 0xff]
+        }
+    }
+    // IMUL r/m64 (1-op) — REX.W + F7 /5 (3 B). RDX:RAX = RAX * r/m64
+    // (full 128-bit signed product, hi → RDX). Used by the magicdiv path.
+    //   e.g. imul r11 → 49 f7 eb
+    if op == "IMUL64" && len(ops) == 1 {
+        let rd = _ex86_reg64(ops[0])
+        if rd >= 0 {
+            let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
+            return [rex, 0xf7, 0xc0 | (5 << 3) | (rd & 0x7)]
+        }
+    }
+    // AND/OR/XOR r64, r64 — REX.W + {21,09,31} /r (3 B). Mirrors ADD's
+    // 01 /r reg-reg exactly: ModR/M.reg = SRC, rm = DEST.
+    //   e.g. xor rax, rax → 48 31 c0 (zeroing idiom) · and r10,r11 → 4d 21 da
+    if (op == "AND64" || op == "OR64" || op == "XOR64") && len(ops) == 2
+       && ops[1].substring(0, 1) != "#" {
+        let rd = _ex86_reg64(ops[0])
+        let rs = _ex86_reg64(ops[1])
+        if rd >= 0 && rs >= 0 {
+            let mut opc = 0x21
+            if op == "OR64"  { opc = 0x09 }
+            if op == "XOR64" { opc = 0x31 }
+            let rex = _ex86_rex(1, if rs >= 8 { 1 } else { 0 }, 0,
+                                    if rd >= 8 { 1 } else { 0 })
+            return [rex, opc, 0xc0 | ((rs & 0x7) << 3) | (rd & 0x7)]
+        }
+    }
+    // AND/OR/XOR r64, imm32 — REX.W + 81 /N id (7 B). /N: AND=4 OR=1 XOR=6.
+    // Mirrors ADD/SUB/CMP r64, #imm32 (81 /0,/5,/7).
+    if (op == "AND64" || op == "OR64" || op == "XOR64") && len(ops) == 2
+       && ops[1].substring(0, 1) == "#" {
+        let rd = _ex86_reg64(ops[0])
+        let imm = _ex86_imm(ops[1])
+        if rd >= 0 {
+            let mut ext = 4
+            if op == "OR64"  { ext = 1 }
+            if op == "XOR64" { ext = 6 }
+            let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
+            let modrm = 0xc0 | (ext << 3) | (rd & 0x7)
+            return [rex, 0x81, modrm,
+                    imm & 0xff, (imm >> 8) & 0xff,
+                    (imm >> 16) & 0xff, (imm >> 24) & 0xff]
+        }
+    }
+    // SHL/SHR/SAR r64, imm8 — REX.W + C1 /N ib (4 B). /N: SHL=4 SHR=5 SAR=7.
+    //   e.g. shr rax, 63 → 48 c1 e8 3f · sar rdx, s → 48 c1 fa <s>
+    if (op == "SHL64" || op == "SHR64" || op == "SAR64") && len(ops) == 2
+       && ops[1].substring(0, 1) == "#" {
+        let rd = _ex86_reg64(ops[0])
+        let imm = _ex86_imm(ops[1])
+        if rd >= 0 {
+            let mut ext = 4
+            if op == "SHR64" { ext = 5 }
+            if op == "SAR64" { ext = 7 }
+            let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
+            return [rex, 0xc1, 0xc0 | (ext << 3) | (rd & 0x7), imm & 0xff]
+        }
+    }
+    // SHL/SHR/SAR r64, cl — REX.W + D3 /N (3 B). Variable count in CL.
+    //   e.g. shl r10, cl → 49 d3 e2
+    if (op == "SHL64" || op == "SHR64" || op == "SAR64") && len(ops) == 2
+       && (ops[1] == "cl" || ops[1] == "CL") {
+        let rd = _ex86_reg64(ops[0])
+        if rd >= 0 {
+            let mut ext = 4
+            if op == "SHR64" { ext = 5 }
+            if op == "SAR64" { ext = 7 }
+            let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
+            return [rex, 0xd3, 0xc0 | (ext << 3) | (rd & 0x7)]
+        }
+    }
+    // NEG/NOT r64 — REX.W + F7 /{3,2} (3 B). Unary two's-/ones-complement.
+    // (Additive: no codegen emitter today; completes ALU parity with `as`.)
+    //   e.g. neg rax → 48 f7 d8 · not rax → 48 f7 d0
+    if (op == "NEG64" || op == "NOT64") && len(ops) == 1 {
+        let rd = _ex86_reg64(ops[0])
+        if rd >= 0 {
+            let ext = if op == "NEG64" { 3 } else { 2 }
+            let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
+            return [rex, 0xf7, 0xc0 | (ext << 3) | (rd & 0x7)]
+        }
+    }
+    // MOVSXD r64, r32 — REX.W + 63 /r (3 B). Sign-extend 32→64.
+    // reg = DEST(r64), rm = SRC(r32). (Additive: no codegen emitter today.)
+    //   e.g. movsxd rax, ecx → 48 63 c1
+    if op == "MOVSXD64" && len(ops) == 2 {
+        let rd = _ex86_reg64(ops[0])
+        let rs = _ex86_reg32(ops[1])
+        if rd >= 0 && rs >= 0 {
+            let rex = _ex86_rex(1, if rd >= 8 { 1 } else { 0 }, 0,
+                                    if rs >= 8 { 1 } else { 0 })
+            return [rex, 0x63, 0xc0 | ((rd & 0x7) << 3) | (rs & 0x7)]
+        }
+    }
+
+    // ── Loud fall-through — was a silent `return []` (corrupt text). ──
+    // Mirror macho_arm64.hexa's ENCODE-MISS: an op the encoder can't
+    // encode is now a VISIBLE error on the own-emit path, not a
+    // zero-length silent drop that ships corrupt machine code.
+    eprintln("ENCODE-MISS (x86_64): " + op + " nargs=" + to_string(len(ops)))
     return []
 }
 
@@ -2282,6 +2418,19 @@ fn _lir_op_uppercase_x86(op: string, ops: [LOperand]) -> string {
     if op == "add" { if is64 { return "ADD64" }; return "ADD" }
     if op == "sub" { if is64 { return "SUB64" }; return "SUB" }
     if op == "cmp" { return "CMP" }    // r32 only for now (cycle-30 widens)
+    // ③-R2a integer-ALU family — codegen emits these solely with r64
+    // operands, so the is64 branch is always taken; the r32 fall-through
+    // returns the bare name → a loud ENCODE-MISS (honest, never emitted).
+    if op == "imul"  { if is64 { return "IMUL64" };  return "IMUL" }
+    if op == "and"   { if is64 { return "AND64" };   return "AND" }
+    if op == "or"    { if is64 { return "OR64" };    return "OR" }
+    if op == "xor"   { if is64 { return "XOR64" };   return "XOR" }
+    if op == "shl"   { if is64 { return "SHL64" };   return "SHL" }
+    if op == "shr"   { if is64 { return "SHR64" };   return "SHR" }
+    if op == "sar"   { if is64 { return "SAR64" };   return "SAR" }
+    if op == "neg"   { if is64 { return "NEG64" };   return "NEG" }
+    if op == "not"   { if is64 { return "NOT64" };   return "NOT" }
+    if op == "movsx" || op == "movsxd" { return "MOVSXD64" }
     // Cycle 30 mem / r64 push family.
     if op == "lea"  { return "LEA64" }
     if op == "push" { if is64 { return "PUSH64" }; return "PUSH" }
