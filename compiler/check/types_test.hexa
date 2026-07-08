@@ -2474,6 +2474,92 @@ fn _build_case_ret_chars_char_bad() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// ── (cj)–(cn) array-repr Rung 2 — LET-arm array-annotation lowering ───────────
+// The LET-side completion of the array-repr capability (Rung 0+1 = #4737 helper
+// + 4 builtin array returns). The parser encodes `let xs: [T]` as the LET text
+// `xs|Array:<elem>`; the LET-arm now routes that through the generic array
+// lowering so `declared` is a real kind:"array" Type (args[0] minted with the
+// SAME canonical constructor the builtin returns use), and gate ① admits an
+// array declared + array RHS → `_types_equal` accepts an exact-element match and
+// rejects a mismatch. `_types_assignable` is UNTOUCHED. Each case is a
+// self-contained module (types-test-hexa-1: no union into the main reset).
+
+// (cj) LET split→[string] ACCEPT — `fn f(s: string) { let xs: [string] = s.split(",") }`:
+// split() infers array[string]; the [string] annotation lowers to array[string]
+// (byte-identical element) → _types_equal accepts → 0 HX3011.
+fn _build_case_let_split_string_ok() -> Module {
+    let f = "case_cj.hexa"
+    let recv = _ident_expr("s", f, 2, 30)
+    let call = _call_expr(_field_expr(recv, "split", f, 2, 32), [_string_expr(",", f, 2, 38)], f, 2, 32)
+    let letx = _let_expr("xs|Array:string", call, f, 2, 5)
+    let body = _block([letx], f, 1, 20)
+    let item_f = _fn_item("f", [_param("s", "string", f, 1, 6)], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (ck) LET bytes→[i64] ACCEPT — `fn f(s: string) { let ys: [i64] = s.bytes() }`:
+// bytes() infers array[i64] (boxed i64); the [i64] annotation lowers to
+// array[i64] → 0 HX3011.
+fn _build_case_let_bytes_i64_ok() -> Module {
+    let f = "case_ck.hexa"
+    let recv = _ident_expr("s", f, 2, 28)
+    let call = _call_expr(_field_expr(recv, "bytes", f, 2, 30), [], f, 2, 30)
+    let letx = _let_expr("ys|Array:i64", call, f, 2, 5)
+    let body = _block([letx], f, 1, 20)
+    let item_f = _fn_item("f", [_param("s", "string", f, 1, 6)], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (cl) LET split→[i64] MISMATCH — `fn f(s: string) { let bad: [i64] = s.split(",") }`:
+// split() infers array[string], the [i64] annotation lowers to array[i64];
+// _types_equal rejects the element mismatch (a method-call src is NOT an
+// ArrayLit so the element-coercion arm never fires) → exactly 1 HX3011.
+fn _build_case_let_split_i64_bad() -> Module {
+    let f = "case_cl.hexa"
+    let recv = _ident_expr("s", f, 2, 27)
+    let call = _call_expr(_field_expr(recv, "split", f, 2, 29), [_string_expr(",", f, 2, 35)], f, 2, 29)
+    let letx = _let_expr("bad|Array:i64", call, f, 2, 5)
+    let body = _block([letx], f, 1, 20)
+    let item_f = _fn_item("f", [_param("s", "string", f, 1, 6)], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (cm) LET ArrayLit regression-guard — `fn f() { let lit: [string] = ["a","b"] }`:
+// an ArrayLit RHS is NOT ident/call/index/field, so the array-annotation arm is
+// never entered → 0 HX3011 (element-matched literal stays clean; guards that the
+// Rung 2 change did not start rejecting a valid array-literal sink).
+fn _build_case_let_arraylit_string_ok() -> Module {
+    let f = "case_cm.hexa"
+    let arr = _array_lit_expr([_string_expr("a", f, 2, 25), _string_expr("b", f, 2, 30)], f, 2, 24)
+    let letx = _let_expr("lit|Array:string", arr, f, 2, 5)
+    let body = _block([letx], f, 1, 12)
+    let item_f = _fn_item("f", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (cn) LET ArrayLit mismatch — existing-behavior guard: `fn f() { let mism: [string] = [1,2] }`:
+// an ArrayLit RHS is NOT in the checked arm, so this stays 0 HX3011 exactly as
+// before Rung 2 (element-vs-annotation ArrayLit checking is a separate rung; do
+// NOT regress it into a new reject).
+fn _build_case_let_arraylit_mismatch() -> Module {
+    let f = "case_cn.hexa"
+    let arr = _array_lit_expr([_int_expr("1", f, 2, 26), _int_expr("2", f, 2, 29)], f, 2, 25)
+    let letx = _let_expr("mism|Array:string", arr, f, 2, 5)
+    let body = _block([letx], f, 1, 12)
+    let item_f = _fn_item("f", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // ── (bd)–(bh) HX3044 (Rust `overflowing_literals`) int-literal range-fit ──────
 // Static-types let-check lane (always-on flagless). A positive int literal
 // assigned to a narrower signed `iN` annotation whose value exceeds the width's
@@ -4216,6 +4302,52 @@ fn main() {
         ok = false
     } else {
         println("  ok: 1 HX3004 (array[char] vs array[string] — chars() yields [string], not [char])")
+    }
+
+    // ── (cj)–(cn) array-repr Rung 2 — LET-arm array annotation checking ──────────
+    let diags_cj = _run_case("(cj) array-repr Rung2 — LET split→[string] ACCEPT: let xs:[string]=s.split(\",\") → 0 HX3011", _build_case_let_split_string_ok())
+    let ccj = _count_code(diags_cj, "HX3011")
+    if ccj != 0 {
+        println("  FAIL: case (cj) expected 0 HX3011 (split→[string] matches [string] annotation), got " + to_string(ccj) + " (total=" + to_string(len(diags_cj)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3011 (LET [string] = s.split() exact-element accept)")
+    }
+
+    let diags_ck = _run_case("(ck) array-repr Rung2 — LET bytes→[i64] ACCEPT: let ys:[i64]=s.bytes() → 0 HX3011", _build_case_let_bytes_i64_ok())
+    let cck = _count_code(diags_ck, "HX3011")
+    if cck != 0 {
+        println("  FAIL: case (ck) expected 0 HX3011 (bytes→[i64] matches [i64] annotation), got " + to_string(cck) + " (total=" + to_string(len(diags_ck)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3011 (LET [i64] = s.bytes() exact-element accept)")
+    }
+
+    let diags_cl = _run_case("(cl) array-repr Rung2 — LET split→[i64] MISMATCH: let bad:[i64]=s.split(\",\") → 1 HX3011", _build_case_let_split_i64_bad())
+    let ccl = _count_code(diags_cl, "HX3011")
+    if ccl != 1 {
+        println("  FAIL: case (cl) expected 1 HX3011 (split→[string] vs [i64] annotation element mismatch), got " + to_string(ccl) + " (total=" + to_string(len(diags_cl)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3011 (LET array[i64] vs array[string] element mismatch REJECT)")
+    }
+
+    let diags_cm = _run_case("(cm) array-repr Rung2 — LET ArrayLit guard: let lit:[string]=[\"a\",\"b\"] → 0 HX3011", _build_case_let_arraylit_string_ok())
+    let ccm = _count_code(diags_cm, "HX3011")
+    if ccm != 0 {
+        println("  FAIL: case (cm) expected 0 HX3011 (ArrayLit RHS not in checked arm — valid literal sink), got " + to_string(ccm) + " (total=" + to_string(len(diags_cm)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3011 (LET [string] = [\"a\",\"b\"] ArrayLit stays clean)")
+    }
+
+    let diags_cn = _run_case("(cn) array-repr Rung2 — LET ArrayLit no-regress: let mism:[string]=[1,2] → 0 HX3011 (unchanged)", _build_case_let_arraylit_mismatch())
+    let ccn = _count_code(diags_cn, "HX3011")
+    if ccn != 0 {
+        println("  FAIL: case (cn) expected 0 HX3011 (ArrayLit-element checking is a later rung — must not regress into a new reject), got " + to_string(ccn) + " (total=" + to_string(len(diags_cn)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3011 (LET [string] = [1,2] ArrayLit unchanged — no new reject)")
     }
 
     println("")
