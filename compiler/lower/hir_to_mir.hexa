@@ -514,6 +514,19 @@ pub let mut _bck_groups: [i64] = []
 pub let mut _bck_names: [string] = []
 pub let mut _bck_decl_lines: [i64] = []
 pub let mut _bck_decl_cols: [i64] = []
+// HX3045 (Rust E0384) — immutable-binding reassign registry. The aggregate
+// loan registry above (`_bck_*`, keyed by GROUP) never tracks scalar `let`s
+// (they are Copy, never grouped), so the canonical E0384 case `let x = 1;
+// x = 2` (a scalar) needs its own per-binding lane. This is a flow-INSENSITIVE
+// append-only registry keyed by LOCAL ID (shadow-safe: a rebind gets a fresh
+// id → fresh row → silent), a sibling of the `_bcki_*` uninit registry — NOT a
+// new dataflow axis. `_bckm_wr` is the definite-assignment bit: a `let x = 1`
+// starts written (init counts as the first assignment) so the first `x = …`
+// reassign fires; a deferred `let x` starts unwritten so the first `x = …` is
+// the init (silent) and only a second `x = …` fires.
+pub let mut _bckm_ids: [i64] = []      // tracked let-binding local ids
+pub let mut _bckm_mut: [bool] = []     // was the binding declared `let mut`
+pub let mut _bckm_wr: [bool] = []      // has a definite assignment been seen
 // per-group WRITE events (push-only; newest event for a group wins)
 pub let mut _bck_w_grps: [i64] = []
 pub let mut _bck_w_names: [string] = []
@@ -695,6 +708,9 @@ fn _bck_reset_fn() {
     _bck_names = []
     _bck_decl_lines = []
     _bck_decl_cols = []
+    _bckm_ids = []
+    _bckm_mut = []
+    _bckm_wr = []
     _bck_w_grps = []
     _bck_w_names = []
     _bck_w_lines = []
@@ -791,6 +807,26 @@ fn _bck_find_move(grp: i64) -> i64 {
         i = i - 1
     }
     return 0 - 1
+}
+
+// HX3045 (Rust E0384) — newest-entry-wins lookup of a let-binding's
+// immutable-reassign row by its local id.
+fn _bckm_find(id: i64) -> i64 {
+    let mut i = len(_bckm_ids) - 1
+    while i >= 0 {
+        if _bckm_ids[i] == id { return i }
+        i = i - 1
+    }
+    return 0 - 1
+}
+
+// HX3045 — register a bare-ident `let` binding. `is_mut` = declared `let mut`;
+// `initialized` = the let has an RHS (so the binding-write is the first
+// definite assignment). Append-only (a shadowing rebind pushes a fresh row).
+fn _bckm_track(id: i64, is_mut: bool, initialized: bool) {
+    _bckm_ids.push(id)
+    _bckm_mut.push(is_mut)
+    _bckm_wr.push(initialized)
 }
 
 fn _bck_track(local_id: i64, name: string, grp: i64, sp: Span) {
@@ -1248,6 +1284,31 @@ fn _bck_emit_use_while_mut(origin: string, name: string, borrow_mut: bool,
     // build-refusing Error via the sanctioned caller override — identical to
     // the HX3014/HX3019/HX3021/HX3023 escalation. OFF-strict keeps the catalog
     // Warning band, and the flag-OFF path never reaches here (byteeq-neutral).
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
+}
+
+// HX3045 emit (cannot assign twice to immutable variable, Rust E0384) —
+// same-site dedup + STRICT escalation, cloned from `_bck_emit_use_while_mut`.
+// `name` is the immutable binding being reassigned. Warning-band DEFAULT (this
+// rung — unlike the `&`-carrier rungs — CAN fire on real i64 shipping source,
+// since hexa permits immutable reassign silently today), re-banded to a
+// build-refusing Error only under HEXA_BORROWCK_STRICT (`_bck_strict`). The
+// flag-OFF path (`_bck_active` false) never reaches here → byteeq-neutral.
+fn _bck_emit_reassign_immut(name: string, sp: Span) {
+    let mut di = 0
+    while di < len(_bck_e_lines) {
+        if _bck_e_lines[di] == sp.line && _bck_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_e_lines.push(sp.line)
+    _bck_e_cols.push(sp.col)
+    let mut b = diag_new("HX3045")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    let mut d = diag_emit(b)
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
@@ -4615,6 +4676,20 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             _bck_sc_names.push(nm)
             _bck_sc_dead.push(false)
         }
+        // HEXA-OWN HX3045 (Rust E0384) — record this bare-ident `let` binding's
+        // mutability + definite-assignment state, keyed on its local id, so a
+        // later `x = …` reassign of an IMMUTABLE binding can fire. Mutability is
+        // read off the raw `e.text` `mut:` prefix (the same signal
+        // `_strip_mut_prefix` consumes above). `initialized` = the let has an
+        // RHS (`let x = 1` → the binding-write is the first definite assign, so
+        // the next `x = …` fires); a deferred `let x` starts uninit so the first
+        // `x = …` is the init (silent). Keyed on the local id makes a shadow
+        // rebind (`let x=…; let x=…`) a fresh row → silent. Gated on
+        // `_bck_active` (flag-OFF never registers → byteeq-neutral).
+        if _bck_active && len(nm) > 0 {
+            let _bckm_is_mut = len(e.text) >= 4 && e.text.substring(0, 4) == "mut:"
+            _bckm_track(dst.id, _bckm_is_mut, len(e.children) > 0)
+        }
         // HEXA-OWN round8-1 — W1, HX3035 uninit registration. A `let x` with
         // NO initializer (`len(e.children) == 0`) is the ONLY site an uninit
         // binding is distinguishable from `= 0` at MIR level (the let arm still
@@ -4982,6 +5057,29 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             let _bki_at = _bcki_find(dst.id)
             if _bki_at >= 0 {
                 _bcki_note_init(_bki_at, ctx2.cur_block, e.span)
+            }
+        }
+        // HEXA-OWN HX3045 (Rust E0384) — cannot assign twice to an immutable
+        // variable. A bare-ident `x = …` over a local whose `let` binding is
+        // IMMUTABLE and already has a definite assignment fires. FP=0 boundary:
+        // bare-ident LHS only (a field/index LHS `a.b = …` / `a[i] = …` never
+        // reaches here — those return earlier via the aggregate/index arms, and
+        // are EXCLUDED); immutable binding only (`let mut x` → the row's mut bit
+        // is set → SILENT); same-fn local (the registry resets per fn); a
+        // deferred `let x; x = 1` treats the first assign as the init (the row
+        // starts unwritten → mark written, silent) and only a second `x = 2`
+        // fires; a shadow rebind `let x=…; let x=…` is a fresh id/row → silent.
+        // `is_global` excludes module-level globals (mutable by design). Gated on
+        // `_bck_active`; warning-band default, STRICT re-bands in the emitter.
+        // Flag-OFF never registers/emits → codegen .text byte-identical.
+        if _bck_active && !is_global && len(lhs.text) > 0 && lhs.kind == "ident" {
+            let _bckm_ti = _bckm_find(dst.id)
+            if _bckm_ti >= 0 && !_bckm_mut[_bckm_ti] {
+                if _bckm_wr[_bckm_ti] {
+                    _bck_emit_reassign_immut(lhs.text, e.span)
+                } else {
+                    _bckm_wr[_bckm_ti] = true
+                }
             }
         }
         // HEXA-OWN L3 M3 — ident re-assign `b = x` is a BINDING-level

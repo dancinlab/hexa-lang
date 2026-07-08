@@ -2483,6 +2483,91 @@ fn _run_pm_probe(label: string, src: string, want_on: i64) -> bool {
     return ok
 }
 
+// ── HEXA-OWN HX3045 — cannot assign twice to immutable variable (Rust E0384) ──
+// A `let`-bound local declared WITHOUT `mut` receives a SECOND definite
+// assignment. Opt-in HEXA_BORROWCK; warning-band DEFAULT (this rung CAN fire on
+// real i64 source — hexa permits immutable reassign silently today), STRICT
+// re-bands to Error. OFF → empty stream (byteeq-neutral). Keyed on HX3045 with
+// probe hygiene (every other code 0). This is a scalar-`let` lane keyed by
+// local id (`_bckm_*`), distinct from the aggregate loan registry.
+
+// HAZARD — reassign of an immutable scalar `let` → HX3045 ×1.
+fn _src_hz_immut_reassign() -> string {
+    let mut s = "fn hir() -> i64 {\n"
+    s = s + "    let x = 1\n"
+    s = s + "    x = 2\n"
+    s = s + "    return x\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a `let mut` binding may be reassigned → 0.
+fn _src_fp_mut_reassign() -> string {
+    let mut s = "fn fmr() -> i64 {\n"
+    s = s + "    let mut y = 1\n"
+    s = s + "    y = 2\n"
+    s = s + "    return y\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a deferred-init `let z: i64` : the FIRST `z = 1` is the init
+// (silent), and there is no second assignment → 0.
+fn _src_fp_deferred_init() -> string {
+    let mut s = "fn fdi() -> i64 {\n"
+    s = s + "    let z: i64\n"
+    s = s + "    z = 1\n"
+    s = s + "    return z\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a shadowing rebind `let s = …; let s = …` is a FRESH binding
+// (fresh local id → fresh row), not a reassignment → 0.
+fn _src_fp_shadow_rebind() -> string {
+    let mut s = "fn fsr() -> i64 {\n"
+    s = s + "    let s = 1\n"
+    s = s + "    let s = 2\n"
+    s = s + "    return s\n"
+    s = s + "}\n"
+    return s
+}
+
+// HX3045 probe runner — mirrors `_run_pm_probe`, keyed on the immutable-reassign
+// code and asserting every OTHER code is 0 (probe hygiene). STRICT re-bands
+// HX3045 to Error, so the error-band count must equal the HX3045 count. OFF →
+// want 0 (empty stream, byteeq-neutral).
+fn _run_e0384_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3045 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3045")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3045 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3045 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
 // ── driver ───────────────────────────────────────────────────
 
 fn main() {
@@ -2685,6 +2770,14 @@ fn main() {
         if !_run_pm_probe("fp_pm_reinit", _src_fp_pm_reinit(), 0) { ok = false }
         if !_run_pm_probe("fp_pm_noown", _src_fp_pm_noown(), 0) { ok = false }
         if !_run_pm_probe("fp_pm_global", _src_fp_pm_global(), 0) { ok = false }
+        // HEXA-OWN HX3045 — cannot assign twice to immutable variable (E0384). A
+        // `let x = 1; x = 2` reassign of an immutable binding → HX3045 ×1; a
+        // `let mut` reassign, a deferred-init first assign, and a shadow rebind
+        // → 0. OFF → empty stream (byteeq-neutral); STRICT → Error-band.
+        if !_run_e0384_probe("hz_immut_reassign", _src_hz_immut_reassign(), 1) { ok = false }
+        if !_run_e0384_probe("fp_mut_reassign", _src_fp_mut_reassign(), 0) { ok = false }
+        if !_run_e0384_probe("fp_deferred_init", _src_fp_deferred_init(), 0) { ok = false }
+        if !_run_e0384_probe("fp_shadow_rebind", _src_fp_shadow_rebind(), 0) { ok = false }
         // census lane must be silent whenever HEXA_BORROWCK_CENSUS is unset
         // (byteeq-neutral proof at the census-count level).
         if !_run_census() { ok = false }

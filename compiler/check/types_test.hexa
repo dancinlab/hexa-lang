@@ -2637,6 +2637,35 @@ fn _build_case_parse_float_infer() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (bu) ★ Lane-B builtin-method bool/f64 inference — `fn u(m: string, xs: [f64])`
+// with has_key/contains_key → bool and mean → f64 (name-based, receiver-
+// independent per _types_builtin_method_ret): the bool sinks + the f64 sink
+// match (0), while a bool→i64 sink and an f64→string sink provably mismatch
+// (2 HX3011). Locks the new bool/f64 method-ret arms. Self-contained module
+// (types-test-hexa-1: no union with the main reset).
+fn _build_case_builtin_bool_f64_infer() -> Module {
+    let f = "case_bu.hexa"
+    let hk_ok  = _call_expr(_field_expr(_ident_expr("m", f, 2, 20), "has_key", f, 2, 22), [_string_expr("k", f, 2, 30)], f, 2, 22)
+    let ck_ok  = _call_expr(_field_expr(_ident_expr("m", f, 3, 20), "contains_key", f, 3, 22), [_string_expr("k", f, 3, 35)], f, 3, 22)
+    let mn_ok  = _call_expr(_field_expr(_ident_expr("xs", f, 4, 18), "mean", f, 4, 21), [], f, 4, 21)
+    let hk_bad = _call_expr(_field_expr(_ident_expr("m", f, 5, 20), "has_key", f, 5, 22), [_string_expr("k", f, 5, 30)], f, 5, 22)
+    let mn_bad = _call_expr(_field_expr(_ident_expr("xs", f, 6, 22), "mean", f, 6, 25), [], f, 6, 25)
+    let mut kids = []
+    kids.push(_let_expr("ok1|bool", hk_ok, f, 2, 5))
+    kids.push(_let_expr("ok2|bool", ck_ok, f, 3, 5))
+    kids.push(_let_expr("ok3|f64", mn_ok, f, 4, 5))
+    kids.push(_let_expr("bad1|i64", hk_bad, f, 5, 5))
+    kids.push(_let_expr("bad2|string", mn_bad, f, 6, 5))
+    let body = _block(kids, f, 2, 1)
+    let mut params = []
+    params.push(_param("m", "string", f, 1, 6))
+    params.push(_array_param("xs", "f64", f, 1, 15))
+    let item_u = _fn_item("u", params, _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_u)
+    return Module { file: f, items: items, imports: [] }
+}
+
 fn _run_case(label: string, m: Module) -> array {
     println("")
     println("── " + label + " ──")
@@ -3797,6 +3826,17 @@ fn main() {
         ok = false
     } else {
         println("  ok: 1 HX3011 (parse_float typed f64 — i64 sink rejected, f64 sink clean)")
+    }
+
+    // (bu) ★ Lane-B builtin bool/f64 inference — has_key/contains_key→bool +
+    // mean→f64 (2 ok sinks) + bool→i64 + f64→string mismatch → 2 HX3011.
+    let diags_bu = _run_case("(bu) static-types — builtin bool/f64 infer: has_key/contains_key→bool + mean→f64 (ok sinks) + bool→i64 + f64→string mismatch → 2 HX3011", _build_case_builtin_bool_f64_infer())
+    let cbu = _count_code(diags_bu, "HX3011")
+    if cbu != 2 {
+        println("  FAIL: case (bu) expected 2 HX3011 (has_key→bool≠i64, mean→f64≠string; bool/f64 ok sinks clean), got " + to_string(cbu) + " (total=" + to_string(len(diags_bu)) + ")")
+        ok = false
+    } else {
+        println("  ok: 2 HX3011 (has_key/contains_key→bool + mean→f64 inference locked; ok sinks clean)")
     }
 
     println("")
