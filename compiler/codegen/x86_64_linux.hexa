@@ -3323,16 +3323,20 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             _x86_store_tag_reg(rm, s.dst.id, "rax")
             let mut i = 1
             while i + 1 < len(s.args) {
-                _x86_op_rm(s.args[i], st, rm, "r10", opts)
-                let key = _x86_op_resolve(s.args[i], st, rm, "r10", opts)
-                _x86_op_rm(s.args[i + 1], st, rm, "r11", opts)
-                let val = _x86_op_resolve(s.args[i + 1], st, rm, "r11", opts)
-                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), key,
-                                 "enum_ctor: cell key"))
-                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rdx"), val,
-                                 "enum_ctor: cell val"))
-                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rdi"), dst,
-                                 "enum_ctor: map arg"))
+                // F-RT-NATIVE-X86-CODEGEN-ROOTCAUSE fix: the old body used the
+                // stale single-register ABI (rsi=key, rdx=val-single-reg, rdi=dst)
+                // — it DROPPED the value's HexaVal pair (val payload never reached
+                // rcx:r8) and passed the value's payload word AS the char* key, so
+                // hexa_map_set_impl hashed an integer as a pointer -> SIGSEGV. Mirror
+                // the correct struct_lit loop verbatim (tear-free, pair-aware).
+                // val (HexaVal) -> rcx(tag):r8(payload) — full pair, not a single reg
+                _x86_hv_box_arg(s.args[i + 1], st, rm, "rcx", "r8", opts)
+                // key (const char*) -> rdx — lea the ADDRESS, not the content
+                _x86_emit_cstr_key(s.args[i], st, rm, "rdx", opts)
+                // map (HexaVal m) -> rdi(tag):rsi(payload) — set LAST.
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), dst,
+                                 "enum_ctor: map payload"))
+                _x86_tag_resolve_local(rm, s.dst.id, "rdi")
                 _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_map_set"),
                                  "enum_ctor: set cell"))
                 _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
