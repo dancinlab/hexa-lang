@@ -2100,6 +2100,102 @@ fn _run_nc_move_probe(label: string, src: string, want_on: i64) -> bool {
     return ok
 }
 
+// ── HEXA-OWN L5 — HX3014 (Rule 2) USE-AFTER-MOVE at the 3 NON-CALL move
+// sites (Rust E0382). The DUAL of the HX3040/_run_nc_move round: HX3040
+// (E0505) flags a move-out of an @own param `a` WHILE a live loan exists
+// at `let b = a` / `b = a` / `return a`; this round records that same
+// non-call move into the move registry so any LATER use of `a` fires the
+// existing Rule 2 (use-after-move) — no new catalog code (HX3014 reused),
+// no new fixpoint (the M4 NLL reach-matrix re-evaluates verbatim). Source-
+// string probes (the @own-param parser carrier is landed — same as the
+// HX3040 _src_hz_nc_move_* probes). Opt-in HEXA_BORROWCK (default-OFF ⇒
+// every want collapses to 0 = the OFF-gate leg). ──
+
+// HAZARD — let-site move of the @own param `a`, then a later use `a[0]`.
+fn _src_hz_e0382_let() -> string {
+    let mut s = "fn h382l(@own a: [i64]) {\n"
+    s = s + "    let b = a\n"
+    s = s + "    let n = a[0]\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — assign-RHS move of the @own param `a`, then a later use `a[0]`.
+fn _src_hz_e0382_assign() -> string {
+    let mut s = "fn h382a(@own a: [i64]) {\n"
+    s = s + "    let mut b = [0]\n"
+    s = s + "    b = a\n"
+    s = s + "    let n = a[0]\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — `let r = &a` is a BORROW, not a bare-ident move, so nothing is
+// recorded; a shared borrow permits the later read `a[0]` → 0.
+fn _src_fp_e0382_borrow() -> string {
+    let mut s = "fn f382b(@own a: [i64]) {\n"
+    s = s + "    let r = &a\n"
+    s = s + "    let n = a[0]\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — the moved binding `a` is REASSIGNED (`a = [9]`) before the use,
+// which re-points `a` to a fresh group (newest-entry-wins), clearing the
+// recorded move → the later `a[0]` sees no reaching move → 0.
+fn _src_fp_e0382_reassign() -> string {
+    let mut s = "fn f382r(@own a: [i64]) {\n"
+    s = s + "    let b = a\n"
+    s = s + "    a = [9]\n"
+    s = s + "    let n = a[0]\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — `return a` records the move but the return's OWN value read was
+// recorded BEFORE the move (same block, use-before-move) and nothing runs
+// after the return, so there is no use-AFTER-move → 0 (no spurious self-fire).
+fn _src_fp_e0382_return_only() -> string {
+    let mut s = "fn f382ret(@own a: [i64]) -> [i64] {\n"
+    s = s + "    return a\n"
+    s = s + "}\n"
+    return s
+}
+
+// HX3014 use-after-move probe runner (mirror of _run_nc_move_probe, keyed on
+// HX3014 instead of HX3040). ON ⇒ `want_on` HX3014 + zero stray codes; STRICT
+// ⇒ same count, all Error-band; OFF ⇒ 0 (want collapses to 0).
+fn _run_e0382_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3014 ×" + to_string(want) + " Rule 2) ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3014")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3014 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3014 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
 // ── HEXA-OWN round9 — HX3041 return-reference-to-temporary (Rust E0515).
 // `return &<call/struct-literal/array-literal/binop>` → HX3041. `return
 // &<ident>` stays HX3019 and `return &<global>` is silent. ──
@@ -2553,6 +2649,16 @@ fn main() {
         if !_run_nc_move_probe("hz_nc_move_assign", _src_hz_nc_move_assign(), 1) { ok = false }
         if !_run_nc_move_probe("hz_nc_move_return", _src_hz_nc_move_return(), 1) { ok = false }
         if !_run_nc_move_probe("fp_nc_move_killed", _src_fp_nc_move_killed(), 0) { ok = false }
+        // HEXA-OWN L5 — HX3014 use-after-move (E0382) at the 3 NON-CALL move
+        // sites — the DUAL of the HX3040 nc_move round above. `let b=a` /
+        // `b=a` then a later use `a[0]` → HX3014 ×1; borrow (`&a`) / reassign
+        // (`a=[9]`) / return-only controls → 0. OFF → 0 (byteeq-neutral);
+        // STRICT → Error-band.
+        if !_run_e0382_probe("hz_e0382_let", _src_hz_e0382_let(), 1) { ok = false }
+        if !_run_e0382_probe("hz_e0382_assign", _src_hz_e0382_assign(), 1) { ok = false }
+        if !_run_e0382_probe("fp_e0382_borrow", _src_fp_e0382_borrow(), 0) { ok = false }
+        if !_run_e0382_probe("fp_e0382_reassign", _src_fp_e0382_reassign(), 0) { ok = false }
+        if !_run_e0382_probe("fp_e0382_return_only", _src_fp_e0382_return_only(), 0) { ok = false }
         // HEXA-OWN round9 — HX3041 return-reference-to-temporary (E0515).
         // `return &<call/struct-literal/binop>` → HX3041 ×1; `return &<global>`
         // → 0. OFF → empty stream (byteeq-neutral); STRICT → Error-band.
