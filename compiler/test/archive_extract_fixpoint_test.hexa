@@ -1,0 +1,156 @@
+// compiler/test/archive_extract_fixpoint_test.hexa
+//
+// RFC 063 § P3 round-3 Stage 3 — hermetic archive_extract_fixpoint test.
+// NO clang / ld / pool / disk: hand-builds 2+1 tiny ELF64 .o member blobs
+// with serialize_elf_x86_64 (writer-inverse of parse_elf_x86_obj), packs
+// them into a synthetic GNU-ar buf in memory, parses it with
+// parse_ar_archive, and drives the extraction fixpoint from a program obj
+// whose sole UND is "foo".
+//
+//   member A ("a.o")  DEFINES foo (GLOBAL/text) · UND bar · UND malloc
+//   member B ("b.o")  DEFINES bar (GLOBAL/text)
+//   member C ("c.o")  DEFINES unused (GLOBAL/text)   [never referenced]
+//
+// program UND foo → pulls A → A's UND bar → pulls B (dependency order
+// [A,B]) → fixpoint. C is NOT pulled. The residual UND "malloc" (sanctioned
+// libc floor — no member defines it) is LEFT unresolved with NO error.
+//
+// Run:  hexa run compiler/test/archive_extract_fixpoint_test.hexa
+//       (in-memory only — no out_elfx86 dir / no disk I/O needed)
+
+import "../ir/lir.hexa"
+import "../emit/macho_arm64.hexa"
+import "../emit/elf_x86_64.hexa"
+
+let mut _fails = 0
+fn _check(cond: bool, msg: string) {
+    if cond { println("  ok   " + msg) }
+    else { println("  FAIL " + msg); _fails = _fails + 1 }
+}
+
+// Append a NUL-terminated string to a strtab, return its offset.
+fn _mkstr(strtab: [Int], s: string) -> Int {
+    let off = len(strtab)
+    let mut i = 0
+    while i < len(s) { strtab.push(char_code(s, i) & 0xff); i = i + 1 }
+    strtab.push(0)
+    return off
+}
+
+// Does this obj carry a DEFINITION (section != 0) named `name`?
+fn _defs(obj: ElfX86Obj, name: string) -> bool {
+    let mut i = 0
+    while i < len(obj.symbols) {
+        let s = obj.symbols[i]
+        if s.section != 0 {
+            let off = s.name_offset
+            let mut str = ""
+            let mut k = 0
+            while off + k < len(obj.strtab) {
+                let b = obj.strtab[off + k] & 0xff
+                if b == 0 { break }
+                str = str + from_char_code(b)
+                k = k + 1
+            }
+            if str == name { return true }
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// Write one ar ASCII field, left-justified, space-padded to `width`.
+fn _ar_field(buf: [Int], s: string, width: Int) {
+    let mut i = 0
+    while i < len(s) { buf.push(char_code(s, i) & 0xff); i = i + 1 }
+    while i < width { buf.push(0x20); i = i + 1 }
+}
+
+// Append one GNU-ar member (short "name/" header + even-padded data).
+fn _ar_add(buf: [Int], name: string, data: [Int]) {
+    _ar_field(buf, name + "/", 16)              // name[0:16]
+    _ar_field(buf, "0", 12)                     // mtime[16:28]
+    _ar_field(buf, "0", 6)                      // uid[28:34]
+    _ar_field(buf, "0", 6)                      // gid[34:40]
+    _ar_field(buf, "644", 8)                    // mode[40:48]
+    _ar_field(buf, to_string(len(data)), 10)    // size[48:58]
+    buf.push(0x60); buf.push(0x0a)              // magic  `\n  [58:60]
+    let mut i = 0
+    while i < len(data) { buf.push(data[i] & 0xff); i = i + 1 }
+    if (len(data) & 1) == 1 { buf.push(0x0a) }  // pad to even length
+}
+
+// Build a tiny ElfX86Obj: one `ret` .text byte + the given symbols.
+// `syms` are (name, section, bind) — section 0 = UND, 1 = text DEF.
+fn _mkobj_A() -> ElfX86Obj {
+    let mut o = ElfX86Obj { text: [0xc3], relocs: [], symbols: [], strtab: [],
+                            rodata: [], data: [], bss_size: 0, nlocal: 0 }
+    o.strtab.push(0)                            // idx 0 = ""
+    let foo = _mkstr(o.strtab, "foo")
+    let bar = _mkstr(o.strtab, "bar")
+    let mal = _mkstr(o.strtab, "malloc")
+    o.symbols.push(ElfSym { name_offset: foo, section: 1, value: 0, size: 0, bind: 1, type_: 2 }) // DEF foo
+    o.symbols.push(ElfSym { name_offset: bar, section: 0, value: 0, size: 0, bind: 1, type_: 0 }) // UND bar
+    o.symbols.push(ElfSym { name_offset: mal, section: 0, value: 0, size: 0, bind: 1, type_: 0 }) // UND malloc (floor)
+    return o
+}
+fn _mkobj_def(name: string) -> ElfX86Obj {
+    let mut o = ElfX86Obj { text: [0xc3], relocs: [], symbols: [], strtab: [],
+                            rodata: [], data: [], bss_size: 0, nlocal: 0 }
+    o.strtab.push(0)
+    let off = _mkstr(o.strtab, name)
+    o.symbols.push(ElfSym { name_offset: off, section: 1, value: 0, size: 0, bind: 1, type_: 2 })
+    return o
+}
+
+fn main() {
+    // ── program obj: sole UND "foo". ──
+    let mut prog = ElfX86Obj { text: [], relocs: [], symbols: [], strtab: [],
+                               rodata: [], data: [], bss_size: 0, nlocal: 0 }
+    prog.strtab.push(0)
+    let pf = _mkstr(prog.strtab, "foo")
+    prog.symbols.push(ElfSym { name_offset: pf, section: 0, value: 0, size: 0, bind: 1, type_: 0 })
+
+    // ── members A/B/C → serialized .o blobs → synthetic GNU-ar buf. ──
+    let objA = _mkobj_A()
+    let objB = _mkobj_def("bar")
+    let objC = _mkobj_def("unused")
+
+    let buf: [Int] = []
+    let magic: [Int] = [0x21, 0x3c, 0x61, 0x72, 0x63, 0x68, 0x3e, 0x0a] // "!<arch>\n"
+    let mut mi = 0
+    while mi < 8 { buf.push(magic[mi]); mi = mi + 1 }
+    _ar_add(buf, "a.o", serialize_elf_x86_64(objA))
+    _ar_add(buf, "b.o", serialize_elf_x86_64(objB))
+    _ar_add(buf, "c.o", serialize_elf_x86_64(objC))
+
+    println("archive_extract_fixpoint:")
+
+    let members = parse_ar_archive(buf)
+    _check(len(members) == 3, "ar parsed 3 members")
+
+    let extracted = archive_extract_fixpoint([prog], buf, members)
+
+    // ── core: pulls exactly A then B, in dependency order. ──
+    _check(len(extracted) == 2, "extracted 2 members (got " + to_string(len(extracted)) + ")")
+    _check(len(extracted) >= 1 && _defs(extracted[0], "foo"),
+           "extracted[0] defines foo (direct pull)")
+    _check(len(extracted) >= 2 && _defs(extracted[1], "bar"),
+           "extracted[1] defines bar (transitive pull, dependency order)")
+
+    // ── negative: unreferenced member C is NOT pulled. ──
+    let mut pulled_unused = false
+    let mut ei = 0
+    while ei < len(extracted) {
+        if _defs(extracted[ei], "unused") { pulled_unused = true }
+        ei = ei + 1
+    }
+    _check(!pulled_unused, "unused member NOT pulled")
+
+    // ── sanctioned floor: residual UND malloc left unresolved, no error,
+    //    no phantom pull (extraction still terminated with exactly [A,B]). ──
+    _check(len(extracted) == 2, "residual UND 'malloc' left unresolved (no floor pull/error)")
+
+    if _fails == 0 { println("EXTRACT-FIXPOINT: ALL PASS") }
+    else { println("EXTRACT-FIXPOINT: " + to_string(_fails) + " FAILURE(S)") }
+}
