@@ -1754,6 +1754,139 @@ pub fn parse_elf_x86_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfX86O
     return obj
 }
 
+// ── RFC 063 § P3 round-3 Stage 2 — GNU ar member record ──
+// One entry per LINKABLE member (the "/" armap and "//" long-name string
+// table are NOT members — they are consumed internally). `data_off` =
+// absolute byte offset in `buf` where this member's data begins (past its
+// 60-byte header); Stage 3 feeds (data_off, size) to
+// parse_elf_x86_obj(buf, data_off, size, member_idx). Fields are i64 to
+// match the ElfRel/ElfSym/ElfX86Obj struct idiom in this file (Int compiles
+// equally — _er_*/_ar_* helpers return Int and assign cleanly, exactly as
+// ElfX86Obj.bss_size does).
+struct ArMember {
+    name:     string,
+    data_off: i64,
+    size:     i64,
+}
+
+// ── ar ASCII-field helpers (reuse this file's private _er_u8 byte reader) ──
+
+// Read `n` raw bytes at `off` as an ASCII string (for the space-padded fields).
+fn _ar_read_ascii(buf, off: Int, n: Int) -> string {
+    let mut s = ""
+    let mut i = 0
+    while i < n { s = s + from_char_code(_er_u8(buf, off + i)); i = i + 1 }
+    return s
+}
+
+// Parse a left-justified decimal ASCII field (size[48:58] · the /N offset).
+// Skips leading spaces, then reads digits until the first non-digit (the
+// trailing space padding), so "1234      " -> 1234 and "0   " -> 0.
+fn _ar_atoi_dec(buf, off: Int, n: Int) -> Int {
+    let mut v = 0
+    let mut i = 0
+    while i < n {
+        if _er_u8(buf, off + i) != 0x20 { break }   // skip leading spaces
+        i = i + 1
+    }
+    while i < n {
+        let c = _er_u8(buf, off + i)
+        if c < 48 || c > 57 { break }               // stop on space / non-digit
+        v = v * 10 + (c - 48)
+        i = i + 1
+    }
+    return v
+}
+
+// Strip trailing ASCII spaces from a 16-byte name field.
+fn _ar_rstrip(s: string) -> string {
+    let mut n = len(s)
+    while n > 0 {
+        if char_code(s, n - 1) != 0x20 { break }    // 0x20 = ' '
+        n = n - 1
+    }
+    return s.substring(0, n)
+}
+
+// Resolve a long name from the "//" string table: read from tab_off+n up to
+// the GNU terminator ('/' then '\n'; tolerate a bare '\n' or NUL too).
+// tab_off < 0 (no // table seen) yields "" — a defensive no-op.
+fn _ar_longname(buf, tab_off: Int, tab_size: Int, n: Int) -> string {
+    if tab_off < 0 { return "" }
+    let mut s = ""
+    let mut i = n
+    while i < tab_size {
+        let c = _er_u8(buf, tab_off + i)
+        if c == 0x2f { break }   // '/' GNU terminator
+        if c == 0x0a { break }   // '\n'
+        if c == 0    { break }
+        s = s + from_char_code(c)
+        i = i + 1
+    }
+    return s
+}
+
+// parse_ar_archive(buf) -> [ArMember]
+//
+// Parse a GNU ar archive (e.g. ~/.hx/bin/build/runtime.a) into the linkable
+// member records Stage 3 will hand to parse_elf_x86_obj. The GNU "//"
+// long-name string table always precedes any "/N" reference (GNU writer
+// guarantee), so a single forward pass captures it before it is consulted.
+// Reads are clamped by _er_u8 (returns 0 past len(buf)); adv >= 60 each
+// iteration so a malformed size can never spin the loop.
+pub fn parse_ar_archive(buf) -> [ArMember] {
+    let members: [ArMember] = []
+
+    // ── 8-byte magic "!<arch>\n" ──
+    let magic: [Int] = [0x21, 0x3c, 0x61, 0x72, 0x63, 0x68, 0x3e, 0x0a]
+    let mut m = 0
+    while m < 8 {
+        if _er_u8(buf, m) != magic[m] { return members }
+        m = m + 1
+    }
+
+    let total = len(buf)
+    let mut ln_off  = -1     // "//" table data offset (abs), -1 until seen
+    let mut ln_size = 0
+    let mut off = 8          // past magic
+
+    while off + 60 <= total {
+        let name_tok = _ar_rstrip(_ar_read_ascii(buf, off, 16))
+        let size     = _ar_atoi_dec(buf, off + 48, 10)   // size[48:58]
+        let data_off = off + 60
+
+        if name_tok == "/" {
+            // ARMAP symbol index — SKIP (Stage 3 scans symtabs linearly).
+        } else if name_tok == "//" {
+            // Long-name string table — keep its bytes for /N resolution.
+            ln_off  = data_off
+            ln_size = size
+        } else if len(name_tok) >= 2 && char_code(name_tok, 0) == 0x2f
+                  && char_code(name_tok, 1) >= 48 && char_code(name_tok, 1) <= 57 {
+            // Long name "/N" — N = decimal offset into the "//" table data.
+            let noff = _ar_atoi_dec(buf, off + 1, 15)
+            members.push(ArMember {
+                name: _ar_longname(buf, ln_off, ln_size, noff),
+                data_off: data_off, size: size,
+            })
+        } else {
+            // Short name "name/" — strip the terminating '/'.
+            let mut nm = name_tok
+            let ln = len(nm)
+            if ln > 0 && char_code(nm, ln - 1) == 0x2f { nm = nm.substring(0, ln - 1) }
+            members.push(ArMember { name: nm, data_off: data_off, size: size })
+        }
+
+        // Advance past header + data, padded to even length with '\n'.
+        let mut adv = 60 + size
+        if (size & 1) == 1 { adv = adv + 1 }
+        off = off + adv
+    }
+
+    return members
+}
+
+
 // LIR walker — `LModule` → byte stream (RFC 063 § P2, cycle 29)
 // ─────────────────────────────────────────────────────────────────
 //
