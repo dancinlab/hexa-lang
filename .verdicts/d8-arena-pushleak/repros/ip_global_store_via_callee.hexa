@@ -1,0 +1,27 @@
+// RUNG-2a inter-procedural ADVERSARY: the loop transient `t` is handed to a
+// callee that STASHES its parameter into a MODULE GLOBAL. The summary MUST mark
+// stash_it's param Escape (param stored to a global outlives the region), so the
+// cand escapes AND the callee is not region-safe → the loop is REJECTED.
+// EXPECT: 0 widened (FP=0). A wrong NoEscape here would be a use-after-free.
+let mut G = []
+fn stash_it(x) {
+  G = x        // parameter stored into a module global → ESCAPES the region
+  0
+}
+fn churn(n) {
+  let mut acc = 0
+  let mut a = 0
+  while a < n {
+    let mut t = []
+    let mut b = 0
+    while b < 20 { t = t.push(a + b); b = b + 1 }
+    stash_it(t)          // cand handed to a param-escaping callee
+    acc = acc + t[19]    // index-read only (does NOT escape t)
+    a = a + 1
+  }
+  acc
+}
+fn main() {
+  println(churn(50))
+  println(G.len())
+}

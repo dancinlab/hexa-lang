@@ -1,0 +1,31 @@
+// RUNG-2a inter-procedural ADVERSARY: the transient is handed to an INDIRECT
+// call (a fn-value parameter — the ML-glue hexa_call1 shape). An indirect callee
+// is UNKNOWABLE at summary time ⇒ ⊤ (contagious all-Escape): apply_fn's fn-value
+// param and its forwarded arg are both Escape, and apply_fn is not region-safe.
+// The loop is REJECTED. EXPECT: 0 widened (FP=0). The ⊤ guard must never relax.
+let mut GLOB = []
+fn sink_it(x) {
+  GLOB = x
+  0
+}
+fn apply_fn(f, x) {
+  f(x)        // INDIRECT call through a fn-value → ⊤ (callee unknown)
+  0
+}
+fn churn(n) {
+  let mut acc = 0
+  let mut a = 0
+  while a < n {
+    let mut t = []
+    let mut b = 0
+    while b < 10 { t = t.push(a - b); b = b + 1 }
+    apply_fn(sink_it, t)      // cand forwarded through an indirect dispatcher
+    acc = acc + t[0]
+    a = a + 1
+  }
+  acc
+}
+fn main() {
+  println(churn(20))
+  println(GLOB.len())
+}

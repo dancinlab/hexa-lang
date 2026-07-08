@@ -1095,6 +1095,16 @@ fn codegen(ast) {
         _gi = _gi + 1
     }
 
+    // mem-lane ② RUNG-2a — inter-procedural callee no-escape SUMMARY build
+    // (report-only, byteeq-neutral). Runs AFTER the name-collection prescan (so
+    // module globals are known) and BEFORE the emit loop (so gen2_fn_decl's
+    // widened C5 gate consumes complete summaries). GATED: HEXA_ARENA_DETECT=1
+    // (and NOT HEXA_ARENA_NO_IP — that leaves summaries empty for the P0 leaf-only
+    // baseline). Emits nothing → flag-OFF byte-identical. See _arena_summary_build.
+    if env("HEXA_ARENA_DETECT") == "1" && env("HEXA_ARENA_NO_IP") != "1" {
+        _arena_summary_build(ast)
+    }
+
     // Collect sections as arrays, join at end
     let mut fwd_parts = []
     let mut global_parts = []
@@ -2077,6 +2087,87 @@ let mut _arena_reclaim_nonstruct_loops = 0  // cand-loops failing C4 (break/cont
 let mut _arena_reclaim_escape_loops = 0     // cand-loops with an escaping cand (R1/R2/R3 not satisfied)
 let mut _arena_reclaim_outerwrite_loops = 0 // cand-loops with an outer-name allocating write (#4700 cond-3)
 
+// ── mem-lane ② RUNG-2a — inter-procedural callee no-escape SUMMARIES ──────────
+// Report-only characterization (byteeq-neutral, HEXA_ARENA_DETECT-gated). A
+// bottom-up may-escape worklist fixpoint over EVERY flattened FnDecl body builds
+// a per-fn summary that the WIDENED C5 leaf gate CONSUMES so a loop body that
+// calls a user fn is no longer auto-rejected: it is reclaim-safe iff every user
+// callee is summary-proven region-safe (no arg escape · no global-alloc store ·
+// no alloc return · transitively). SOUNDNESS-FIRST: init OPTIMISTIC and DEFAULT
+// TO ⊤ (unsafe / all-Escape) on ANY resolution miss — unknown / indirect
+// (hexa_call1 / fn-value) / extern / multi-def callee ⇒ ⊤ (contagious). A wrong
+// NoEscape is a future use-after-free, so a false-positive (FP) MUST read 0.
+// NOTHING is emitted (no chunks.push) → emitted C byte-identical flag-ON vs OFF.
+//
+// Parallel-array store keyed by fn name (mirrors the _fn_arity_* registry).
+let mut _fn_summary_names = []          // fn name (plain FnDecl only)
+let mut _fn_summary_param_names = []    // [i] = array of the fn's param name strings
+let mut _fn_summary_param_escape = []   // [i] = array of ints (0=NoEscape ⊑ 1=Escape), one per param — monotone RAISE
+let mut _fn_summary_nparams = []        // [i] = param count (int)
+let mut _fn_summary_bodies = []         // [i] = the fn body stmt-list (name→body map)
+let mut _fn_summary_ret_alloc = []      // [i] = 1 iff the fn returns a fresh-alloc expr (int)
+let mut _fn_summary_glob_store = []     // [i] = 1 iff the fn stores an alloc into a module global (int)
+let mut _fn_summary_has_indirect = []   // [i] = 1 iff the body contains an indirect/hexa_call1/unknown callee (int)
+let mut _fn_summary_region_safe = []    // [i] = 1 iff safe to run inside a reclaimed loop iteration (int) — monotone LOWER
+let mut _fn_summary_top = []            // [i] = 1 iff ⊤ (multi-def / non-converged) — all-Escape, contagious (int)
+// Aggregate report counters (recomputed per build).
+let mut _fn_summary_count = 0
+let mut _fn_summary_regionsafe_count = 0
+let mut _fn_summary_top_count = 0
+let mut _fn_summary_indirect_count = 0
+let mut _fn_summary_rounds = 0
+// Recursion-depth guard for the whole-fn-body IP scanners (a very deep/large
+// generated body can exceed the native C stack). On overflow every guarded
+// scanner returns the ⊤-CONSERVATIVE answer (escape / not-region-safe / leaks),
+// so the summary stays SOUND — it only ever UNDER-widens on a too-deep body.
+let mut _fn_summary_depth = 0
+let mut _fn_summary_depth_tripped = 0
+
+// Build a new array = `arr` with element `j` replaced by `v` (arrays are value-
+// like here; rebuild rather than nested index-write). O(n) — report-only path.
+fn _arr_set_i(arr, j, v) {
+    let mut out = []
+    let mut i = 0
+    while i < len(arr) {
+        if i == j { out = out.push(v) } else { out = out.push(arr[i]) }
+        i = i + 1
+    }
+    return out
+}
+
+// name → summary index (linear; the registry is name-keyed like _fn_arity_*).
+fn _fn_summary_index(nm) {
+    let mut i = 0
+    while i < len(_fn_summary_names) {
+        if _fn_summary_names[i] == nm { return i }
+        i = i + 1
+    }
+    return -1
+}
+fn _fn_summary_has(nm) {
+    if _fn_summary_index(nm) >= 0 { return true }
+    return false
+}
+// Does passing a value at position `j` to summary `si` escape? ⊤-conservative:
+// unresolved (si<0) / ⊤ / arity-mismatch / out-of-range ⇒ Escape.
+fn _fn_summary_param_escapes(si, j) {
+    if si < 0 { return true }
+    if _fn_summary_top[si] == 1 { return true }
+    if j < 0 { return true }
+    let _pe = _fn_summary_param_escape[si]
+    if j >= len(_pe) { return true }
+    if _pe[j] == 1 { return true }
+    return false
+}
+// Is summary `si` region-safe to CALL from inside a reclaimed loop iteration?
+fn _fn_summary_call_region_safe(nm) {
+    let _si = _fn_summary_index(nm)
+    if _si < 0 { return false }             // extern / unknown ⇒ ⊤ ⇒ unsafe
+    if _fn_summary_top[_si] == 1 { return false }
+    if _fn_summary_region_safe[_si] == 1 { return true }
+    return false
+}
+
 // Does this expression allocate a fresh CONTAINER value (one that could carry
 // arena-backed memory across an iteration if held by an outer binding)? Container
 // literals + method-calls (.push/.slice/.concat/…) + fn calls (may return a
@@ -2282,6 +2373,26 @@ fn _arena_reclaim_expr_escapes(node, name) {
                     return false
                 }
             }
+        }
+        // RUNG-2a widening: a cand `name` passed as a bare arg to a RESOLVED
+        // direct user-fn callee does NOT escape if the callee's summary marks
+        // that parameter NoEscape (⊤-conservative: unresolved / ⊤ / out-of-range
+        // ⇒ escape). Deeper arg expressions embedding `name` stay conservative.
+        if type_of(_callee) == "map" && _callee.kind == "Ident" && _fn_summary_has(_callee.name) {
+            let _si = _fn_summary_index(_callee.name)
+            if type_of(node.args) != "string" {
+                let mut ai = 0
+                while ai < len(node.args) {
+                    let _aarg = node.args[ai]
+                    if type_of(_aarg) == "map" && _aarg.kind == "Ident" && _aarg.name == name {
+                        if _fn_summary_param_escapes(_si, ai) { return true }
+                    } else {
+                        if _arena_reclaim_expr_escapes(_aarg, name) { return true }
+                    }
+                    ai = ai + 1
+                }
+            }
+            return false
         }
         // any other call — fall through to generic recursion (name in callee/args escapes)
     }
@@ -2509,7 +2620,12 @@ fn _arena_reclaim_expr_leaf(node) {
     if k == "Call" {
         let _c = node.left
         if type_of(_c) == "map" && _c.kind == "Ident" {
-            if !_arena_reclaim_is_leaf_builtin(_c.name) { return false }
+            // RUNG-2a widening: a user-fn call is now leaf-safe iff the callee's
+            // summary is region-safe (no arg escape · no alloc return · no global-
+            // alloc store · transitively) — else non-leaf (⊤-conservative).
+            if !_arena_reclaim_is_leaf_builtin(_c.name) {
+                if !_fn_summary_call_region_safe(_c.name) { return false }
+            }
         } else if type_of(_c) == "map" && _c.kind == "Field" {
             if !_arena_reclaim_is_leaf_method(_c.name) { return false }
         } else {
@@ -2594,6 +2710,426 @@ fn _arena_reclaim_stmts_leaf(stmts) {
         i = i + 1
     }
     return true
+}
+
+// ── RUNG-2a: inter-procedural summary BUILD (report-only, HEXA_ARENA_DETECT) ──
+// The root Ident name of a Field/Index lvalue spine (`G.x[i].y` → "G"); "" if the
+// spine bottoms out on a non-Ident (a call result, literal, …).
+fn _fn_summary_root_ident(node) {
+    if type_of(node) != "map" { return "" }
+    let k = node.kind
+    if k == "Ident" { return node.name }
+    if k == "Field" || k == "Index" {
+        return _fn_summary_root_ident(node.left)
+    }
+    return ""
+}
+
+// Does a return-expression allocate a FRESH container (Array/Tuple/Map/Struct/
+// Call/MethodCall)? Reuses the container-alloc predicate (recurses BinOp operands).
+fn _fn_summary_ret_is_alloc(node) {
+    if type_of(node) != "map" { return false }
+    return _arena_detect_alloc_expr(node)
+}
+
+// Scan a fn body (stmt-list) — set ret_alloc if ANY ReturnStmt returns a fresh
+// alloc; set glob_store if ANY assignment writes an alloc RHS to (a place rooted
+// at) a MODULE GLOBAL. Both are iteration-INVARIANT (computed once, pre-fixpoint).
+fn _fn_summary_scan_leaks_stmt(node, box2) {
+    _fn_summary_depth = _fn_summary_depth + 1
+    if _fn_summary_depth > 1400 {
+        _fn_summary_depth = _fn_summary_depth - 1
+        _fn_summary_depth_tripped = 1
+        return [1, 1]   // assume both ret_alloc + glob_store (sound)
+    }
+    let _r = _fn_summary_scan_leaks_stmt_i(node, box2)
+    _fn_summary_depth = _fn_summary_depth - 1
+    return _r
+}
+fn _fn_summary_scan_leaks_stmt_i(node, box2) {
+    // box2 is a 2-elem carrier [ret_alloc, glob_store]; returns updated carrier.
+    if type_of(node) != "map" { return box2 }
+    let mut _ra = box2[0]
+    let mut _gs = box2[1]
+    let sk = node.kind
+    if sk == "ReturnStmt" {
+        if type_of(node.left) != "string" && _fn_summary_ret_is_alloc(node.left) { _ra = 1 }
+        if type_of(node.value) != "string" && _fn_summary_ret_is_alloc(node.value) { _ra = 1 }
+    }
+    if sk == "AssignStmt" {
+        let _tgt = node.left
+        let _root = _fn_summary_root_ident(_tgt)
+        if _root != "" && _is_known_global(_root) {
+            if type_of(node.right) != "string" && _arena_detect_alloc_expr(node.right) { _gs = 1 }
+            if type_of(node.value) != "string" && _arena_detect_alloc_expr(node.value) { _gs = 1 }
+        }
+    }
+    let mut _cur = [_ra, _gs]
+    if type_of(node.then_body) == "array" { _cur = _fn_summary_scan_leaks_list(node.then_body, _cur) }
+    if type_of(node.else_body) == "array" { _cur = _fn_summary_scan_leaks_list(node.else_body, _cur) }
+    if type_of(node.body) == "array" { _cur = _fn_summary_scan_leaks_list(node.body, _cur) }
+    if type_of(node.left) == "array" { _cur = _fn_summary_scan_leaks_list(node.left, _cur) }   // TryCatch bodies
+    if type_of(node.right) == "array" { _cur = _fn_summary_scan_leaks_list(node.right, _cur) }
+    if type_of(node.arms) == "array" {
+        let mut ai = 0
+        while ai < len(node.arms) {
+            let arm = node.arms[ai]
+            if type_of(arm) == "map" && type_of(arm.body) == "array" {
+                _cur = _fn_summary_scan_leaks_list(arm.body, _cur)
+            }
+            ai = ai + 1
+        }
+    }
+    return _cur
+}
+fn _fn_summary_scan_leaks_list(stmts, box2) {
+    if type_of(stmts) != "array" { return box2 }
+    let mut _cur = box2
+    let mut i = 0
+    while i < len(stmts) {
+        _cur = _fn_summary_scan_leaks_stmt(stmts[i], _cur)
+        i = i + 1
+    }
+    return _cur
+}
+
+// Does the body contain an INDIRECT / unknown callee? A Call whose callee is not
+// a direct Ident (computed / fn-value), or is `hexa_call1`/`hexa_call*`. Used
+// only for the ⊤-reporting count (region-safety already rejects these via
+// _fn_summary_call_target_ok).
+fn _fn_summary_expr_has_indirect(node) {
+    _fn_summary_depth = _fn_summary_depth + 1
+    if _fn_summary_depth > 1400 {
+        _fn_summary_depth = _fn_summary_depth - 1
+        _fn_summary_depth_tripped = 1
+        return false   // report-only flag; conservative-omit on overflow
+    }
+    let _r = _fn_summary_expr_has_indirect_i(node)
+    _fn_summary_depth = _fn_summary_depth - 1
+    return _r
+}
+fn _fn_summary_expr_has_indirect_i(node) {
+    if type_of(node) != "map" { return false }
+    let k = node.kind
+    if k == "Call" {
+        let _c = node.left
+        if type_of(_c) == "map" && _c.kind == "Ident" {
+            let _n = _c.name
+            if _n == "hexa_call1" || _n == "hexa_call2" || _n == "hexa_call3" || _n == "hexa_call0" { return true }
+        } else if type_of(_c) == "map" && _c.kind == "Field" {
+            // method call — treated as opaque unless a known-leaf method
+        } else {
+            return true    // indirect / computed callee
+        }
+    }
+    if type_of(node.left) == "map" { if _fn_summary_expr_has_indirect(node.left) { return true } }
+    if type_of(node.right) == "map" { if _fn_summary_expr_has_indirect(node.right) { return true } }
+    if type_of(node.cond) == "map" { if _fn_summary_expr_has_indirect(node.cond) { return true } }
+    if type_of(node.args) == "array" {
+        let mut i = 0
+        while i < len(node.args) { if _fn_summary_expr_has_indirect(node.args[i]) { return true } i = i + 1 }
+    }
+    if type_of(node.items) == "array" {
+        let mut i = 0
+        while i < len(node.items) { if _fn_summary_expr_has_indirect(node.items[i]) { return true } i = i + 1 }
+    }
+    return false
+}
+
+// A call target is region-safe iff: a retain-free leaf builtin (len/print/…), a
+// leaf method (push/append/len/to_string — mutation of the receiver is caught as
+// a param escape at the caller/callee), or a resolved user fn whose summary is
+// region-safe. Anything else (indirect / unknown / extern / ⊤) ⇒ FALSE (⊤).
+fn _fn_summary_call_target_ok(callee) {
+    if type_of(callee) != "map" { return false }
+    let k = callee.kind
+    if k == "Ident" {
+        if _arena_reclaim_is_leaf_builtin(callee.name) { return true }
+        return _fn_summary_call_region_safe(callee.name)
+    }
+    if k == "Field" {
+        if _arena_reclaim_is_leaf_method(callee.name) { return true }
+        return false
+    }
+    return false
+}
+
+// Walk a body: FALSE if any Call in it has a non-region-safe target (transitive
+// dependency — drives the region_safe fixpoint). Descends every nested body.
+fn _fn_summary_all_calls_ok_expr(node) {
+    _fn_summary_depth = _fn_summary_depth + 1
+    if _fn_summary_depth > 1400 {
+        _fn_summary_depth = _fn_summary_depth - 1
+        _fn_summary_depth_tripped = 1
+        return false   // assume a non-region-safe call (sound)
+    }
+    let _r = _fn_summary_all_calls_ok_expr_i(node)
+    _fn_summary_depth = _fn_summary_depth - 1
+    return _r
+}
+fn _fn_summary_all_calls_ok_expr_i(node) {
+    if type_of(node) != "map" { return true }
+    if node.kind == "Call" {
+        if !_fn_summary_call_target_ok(node.left) { return false }
+    }
+    if type_of(node.left) == "map" { if !_fn_summary_all_calls_ok_expr(node.left) { return false } }
+    if type_of(node.right) == "map" { if !_fn_summary_all_calls_ok_expr(node.right) { return false } }
+    if type_of(node.cond) == "map" { if !_fn_summary_all_calls_ok_expr(node.cond) { return false } }
+    if type_of(node.args) == "array" {
+        let mut i = 0
+        while i < len(node.args) { if !_fn_summary_all_calls_ok_expr(node.args[i]) { return false } i = i + 1 }
+    }
+    if type_of(node.items) == "array" {
+        let mut i = 0
+        while i < len(node.items) { if !_fn_summary_all_calls_ok_expr(node.items[i]) { return false } i = i + 1 }
+    }
+    if type_of(node.fields) == "array" {
+        let mut i = 0
+        while i < len(node.fields) {
+            let _fe = node.fields[i]
+            if type_of(_fe) == "map" && type_of(_fe.left) == "map" {
+                if !_fn_summary_all_calls_ok_expr(_fe.left) { return false }
+            }
+            i = i + 1
+        }
+    }
+    return true
+}
+fn _fn_summary_all_calls_ok_stmt(node) {
+    _fn_summary_depth = _fn_summary_depth + 1
+    if _fn_summary_depth > 1400 {
+        _fn_summary_depth = _fn_summary_depth - 1
+        _fn_summary_depth_tripped = 1
+        return false
+    }
+    let _r = _fn_summary_all_calls_ok_stmt_i(node)
+    _fn_summary_depth = _fn_summary_depth - 1
+    return _r
+}
+fn _fn_summary_all_calls_ok_stmt_i(node) {
+    if type_of(node) != "map" { return true }
+    if type_of(node.left) == "map" { if !_fn_summary_all_calls_ok_expr(node.left) { return false } }
+    if type_of(node.right) == "map" { if !_fn_summary_all_calls_ok_expr(node.right) { return false } }
+    if type_of(node.value) == "map" { if !_fn_summary_all_calls_ok_expr(node.value) { return false } }
+    if type_of(node.cond) == "map" { if !_fn_summary_all_calls_ok_expr(node.cond) { return false } }
+    if type_of(node.left) == "array" { if !_fn_summary_all_calls_ok_list(node.left) { return false } }
+    if type_of(node.right) == "array" { if !_fn_summary_all_calls_ok_list(node.right) { return false } }
+    if type_of(node.then_body) == "array" { if !_fn_summary_all_calls_ok_list(node.then_body) { return false } }
+    if type_of(node.else_body) == "array" { if !_fn_summary_all_calls_ok_list(node.else_body) { return false } }
+    if type_of(node.body) == "array" { if !_fn_summary_all_calls_ok_list(node.body) { return false } }
+    if type_of(node.arms) == "array" {
+        let mut ai = 0
+        while ai < len(node.arms) {
+            let arm = node.arms[ai]
+            if type_of(arm) == "map" {
+                if type_of(arm.cond) == "map" { if !_fn_summary_all_calls_ok_expr(arm.cond) { return false } }
+                if type_of(arm.body) == "array" { if !_fn_summary_all_calls_ok_list(arm.body) { return false } }
+            }
+            ai = ai + 1
+        }
+    }
+    return true
+}
+fn _fn_summary_all_calls_ok_list(stmts) {
+    if type_of(stmts) != "array" { return true }
+    let mut i = 0
+    while i < len(stmts) {
+        if !_fn_summary_all_calls_ok_stmt(stmts[i]) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// Register one FnDecl into the summary registry. Multi-def (same name twice) ⇒
+// mark the existing entry ⊤ (first-wins body may not be the body that runs).
+fn _fn_summary_register(node) {
+    let _nm = node.name
+    let _existing = _fn_summary_index(_nm)
+    if _existing >= 0 {
+        _fn_summary_top[_existing] = 1     // multi-def ⇒ ⊤ (contagious all-Escape)
+        return 0
+    }
+    let mut _pnames = []
+    let mut _pesc = []
+    let mut _np = 0
+    if type_of(node.params) == "array" {
+        let mut pj = 0
+        while pj < len(node.params) {
+            let _pp = node.params[pj]
+            if type_of(_pp) != "string" { _pnames = _pnames.push(_pp.name) } else { _pnames = _pnames.push("") }
+            _pesc = _pesc.push(0)          // init OPTIMISTIC: NoEscape
+            _np = _np + 1
+            pj = pj + 1
+        }
+    }
+    _fn_summary_names = _fn_summary_names.push(_nm)
+    _fn_summary_param_names = _fn_summary_param_names.push(_pnames)
+    _fn_summary_param_escape = _fn_summary_param_escape.push(_pesc)
+    _fn_summary_nparams = _fn_summary_nparams.push(_np)
+    let mut _body = []
+    if type_of(node.body) == "array" { _body = node.body }
+    _fn_summary_bodies = _fn_summary_bodies.push(_body)
+    // iteration-invariant leak facts (ret_alloc, glob_store) computed once.
+    let _leaks = _fn_summary_scan_leaks_list(_body, [0, 0])
+    _fn_summary_ret_alloc = _fn_summary_ret_alloc.push(_leaks[0])
+    _fn_summary_glob_store = _fn_summary_glob_store.push(_leaks[1])
+    // indirect-call flag (report-only): scan body exprs.
+    let mut _hasind = 0
+    let mut _ii = 0
+    while _ii < len(_body) {
+        let _s = _body[_ii]
+        if type_of(_s) == "map" {
+            if _fn_summary_expr_has_indirect(_s) { _hasind = 1 }
+        }
+        _ii = _ii + 1
+    }
+    _fn_summary_has_indirect = _fn_summary_has_indirect.push(_hasind)
+    _fn_summary_region_safe = _fn_summary_region_safe.push(1)   // init OPTIMISTIC: region-safe
+    _fn_summary_top = _fn_summary_top.push(0)
+    return 0
+}
+
+// The monotone may-escape + region-safe worklist fixpoint. init OPTIMISTIC
+// (all params NoEscape · every fn region-safe) then RAISE param-escape / LOWER
+// region-safe until stable. ⊤-conservative on every miss. On non-convergence
+// (cap hit) fall back to ALL-⊤ (sound). Builds over the flattened `ast`.
+fn _arena_summary_build(ast) {
+    _fn_summary_names = []
+    _fn_summary_param_names = []
+    _fn_summary_param_escape = []
+    _fn_summary_nparams = []
+    _fn_summary_bodies = []
+    _fn_summary_ret_alloc = []
+    _fn_summary_glob_store = []
+    _fn_summary_has_indirect = []
+    _fn_summary_region_safe = []
+    _fn_summary_top = []
+    _fn_summary_count = 0
+    _fn_summary_regionsafe_count = 0
+    _fn_summary_top_count = 0
+    _fn_summary_indirect_count = 0
+    _fn_summary_rounds = 0
+    _fn_summary_depth = 0
+    _fn_summary_depth_tripped = 0
+    if type_of(ast) != "array" { return 0 }
+    // Pass 1: register every plain FnDecl (extern / pure excluded ⇒ not-in-map ⇒ ⊤).
+    let mut i = 0
+    while i < len(ast) {
+        let _n = ast[i]
+        if type_of(_n) == "map" && _n.kind == "FnDecl" {
+            _fn_summary_register(_n)
+        }
+        i = i + 1
+    }
+    let _nfn = len(_fn_summary_names)
+    // Pass 2: worklist fixpoint. Cap generously; break on stability. A monotone
+    // MAY analysis propagates one call-graph level per round, so convergence is
+    // bounded by call-chain depth — the cap only fires on pathological depth.
+    let _cap = 256
+    let mut _round = 0
+    let mut _converged = false
+    while _round < _cap {
+        let mut _changed = false
+        let mut fi = 0
+        while fi < _nfn {
+            if _fn_summary_top[fi] == 1 {
+                fi = fi + 1
+            } else {
+                let _body = _fn_summary_bodies[fi]
+                let _pn = _fn_summary_param_names[fi]
+                // (a) RAISE param escape (skip params already Escape).
+                let mut _pe = _fn_summary_param_escape[fi]
+                let mut pj = 0
+                while pj < len(_pn) {
+                    if _pe[pj] == 0 {
+                        let _pname = _pn[pj]
+                        if _pname != "" && _stmts_escape_arr_name_ip(_body, _pname) {
+                            _pe = _arr_set_i(_pe, pj, 1)
+                            _changed = true
+                        }
+                    }
+                    pj = pj + 1
+                }
+                _fn_summary_param_escape[fi] = _pe
+                // (b) LOWER region_safe if any disqualifier now holds.
+                if _fn_summary_region_safe[fi] == 1 {
+                    let mut _rs = true
+                    if _fn_summary_ret_alloc[fi] == 1 { _rs = false }
+                    if _fn_summary_glob_store[fi] == 1 { _rs = false }
+                    // all params must be NoEscape
+                    let mut _allno = true
+                    let mut qk = 0
+                    while qk < len(_pe) {
+                        if _pe[qk] == 1 { _allno = false }
+                        qk = qk + 1
+                    }
+                    if !_allno { _rs = false }
+                    // every callee region-safe (transitive)
+                    if _rs {
+                        if !_fn_summary_all_calls_ok_list(_body) { _rs = false }
+                    }
+                    if !_rs {
+                        _fn_summary_region_safe[fi] = 0
+                        _changed = true
+                    }
+                }
+                fi = fi + 1
+            }
+        }
+        _round = _round + 1
+        if !_changed { _converged = true; _round = _cap }
+    }
+    _fn_summary_rounds = _round
+    if !_converged {
+        // Non-convergence ⇒ conservative fallback: mark every fn ⊤ (all-Escape).
+        let mut ti = 0
+        while ti < _nfn { _fn_summary_top[ti] = 1; ti = ti + 1 }
+    }
+    // Aggregate report counters.
+    let mut ci = 0
+    while ci < _nfn {
+        _fn_summary_count = _fn_summary_count + 1
+        if _fn_summary_top[ci] == 0 && _fn_summary_region_safe[ci] == 1 {
+            _fn_summary_regionsafe_count = _fn_summary_regionsafe_count + 1
+        }
+        if _fn_summary_top[ci] == 1 { _fn_summary_top_count = _fn_summary_top_count + 1 }
+        if _fn_summary_has_indirect[ci] == 1 { _fn_summary_indirect_count = _fn_summary_indirect_count + 1 }
+        ci = ci + 1
+    }
+    let mut _cv = 0
+    if _converged { _cv = 1 }
+    eprintln("[arena-summary] fns=" + to_string(_fn_summary_count) + " region-safe=" + to_string(_fn_summary_regionsafe_count) + " top=" + to_string(_fn_summary_top_count) + " indirect-bodies=" + to_string(_fn_summary_indirect_count) + " rounds=" + to_string(_fn_summary_rounds) + " converged=" + to_string(_cv) + " depth-tripped=" + to_string(_fn_summary_depth_tripped) + " [HEXA_ARENA_DETECT]")
+    // Targeted watchlist probe — the go/no-go asks specifically about these.
+    _arena_summary_probe("transformer_forward")
+    _arena_summary_probe("load_embedding")
+    _arena_summary_probe("qforge_assemble_h_multi")
+    _arena_summary_probe("qforge_elph_g2")
+    _arena_summary_probe("dv_run")
+    _arena_summary_probe("infer_batch_shared_prefix")
+    _arena_summary_probe("qforge_dvnl_du_block")
+    _arena_summary_probe("jacobi_step")
+    // oracle adversary/positive-control callees (fire only when compiling a repro).
+    _arena_summary_probe("stash_it")
+    _arena_summary_probe("wrap")
+    _arena_summary_probe("ping")
+    _arena_summary_probe("pong")
+    _arena_summary_probe("leaf_esc")
+    _arena_summary_probe("top_fn")
+    _arena_summary_probe("apply_fn")
+    _arena_summary_probe("peek")
+    return 0
+}
+
+// Print ONE fn's summary if it exists (report-only watchlist probe).
+fn _arena_summary_probe(nm) {
+    let _si = _fn_summary_index(nm)
+    if _si < 0 { return 0 }
+    let _pe = _fn_summary_param_escape[_si]
+    let mut _esc = 0
+    let mut i = 0
+    while i < len(_pe) { if _pe[i] == 1 { _esc = _esc + 1 } i = i + 1 }
+    eprintln("[arena-summary] fn `" + nm + "`: nparams=" + to_string(_fn_summary_nparams[_si]) + " esc-params=" + to_string(_esc) + " ret_alloc=" + to_string(_fn_summary_ret_alloc[_si]) + " glob_store=" + to_string(_fn_summary_glob_store[_si]) + " indirect=" + to_string(_fn_summary_has_indirect[_si]) + " top=" + to_string(_fn_summary_top[_si]) + " region-safe=" + to_string(_fn_summary_region_safe[_si]) + " [HEXA_ARENA_DETECT]")
+    return 0
 }
 
 // Classify ONE loop body under the WIDENED bar; updates the module-global tallies
@@ -14147,6 +14683,203 @@ fn _stmts_escape_arr_name(stmts, name) {
     return false
 }
 
+// ── RUNG-2a: SUMMARY-AWARE (inter-procedural) escape scans ────────────────────
+// Exact clones of _expr/_stmt/_stmts_escape_arr_name (index-read + len local;
+// store / return / index-write / reassign / call-arg escape) EXCEPT at the
+// Call-arg arm: when a bare `name` is a top-level argument to a RESOLVED,
+// singly-defined user fn whose summary marks that parameter NoEscape, the arg
+// does NOT escape (the callee provably does not leak it). Every OTHER callee —
+// unknown / extern / indirect (hexa_call1 / fn-value) / method / ⊤ — falls
+// through to the blanket-escape base behavior. Report-only (used ONLY by the
+// HEXA_ARENA_DETECT summary fixpoint), so the base scans are untouched (byteeq).
+fn _expr_escapes_arr_name_ip(node, name) {
+    // depth-guarded wrapper (⊤-conservative on native-stack overflow risk).
+    _fn_summary_depth = _fn_summary_depth + 1
+    if _fn_summary_depth > 1400 {
+        _fn_summary_depth = _fn_summary_depth - 1
+        _fn_summary_depth_tripped = 1
+        return true    // assume escape (sound)
+    }
+    let _r = _expr_escapes_arr_name_ip_i(node, name)
+    _fn_summary_depth = _fn_summary_depth - 1
+    return _r
+}
+fn _expr_escapes_arr_name_ip_i(node, name) {
+    if type_of(node) == "string" { return false }
+    let k = node.kind
+    if k == "Index" {
+        let _recv = node.left
+        if type_of(_recv) != "string" && _recv.kind == "Ident" && _recv.name == name {
+            if type_of(node.right) != "string" && _expr_escapes_arr_name_ip(node.right, name) { return true }
+            return false   // a[i] read — the sole allowed array shape
+        }
+        if _expr_escapes_arr_name_ip(_recv, name) { return true }
+        if type_of(node.right) != "string" && _expr_escapes_arr_name_ip(node.right, name) { return true }
+        return false
+    }
+    if k == "Call" {
+        let _ce = node.left
+        // len(a) — non-escaping read (int result); only a NON-bare arg escapes.
+        if type_of(_ce) != "string" && _ce.kind == "Ident" && _ce.name == "len" {
+            if type_of(node.items) != "string" {
+                let mut i = 0
+                while i < len(node.items) {
+                    let _a = node.items[i]
+                    if type_of(_a) != "string" && _a.kind == "Ident" && _a.name == name {
+                        // bare len(a) — allowed
+                    } else if _expr_escapes_arr_name_ip(_a, name) {
+                        return true
+                    }
+                    i = i + 1
+                }
+            }
+            return false
+        }
+        // IP RELAXATION: resolved direct user-fn callee → per-arg summary lookup.
+        if type_of(_ce) != "string" && _ce.kind == "Ident" && _fn_summary_has(_ce.name) {
+            let _si = _fn_summary_index(_ce.name)
+            if type_of(node.args) != "string" {
+                let mut i = 0
+                while i < len(node.args) {
+                    let _a = node.args[i]
+                    if type_of(_a) != "string" && _a.kind == "Ident" && _a.name == name {
+                        // bare `name` at arg position i — escapes IFF the callee's
+                        // param i is Escape (or ⊤ / out-of-range ⇒ conservative).
+                        if _fn_summary_param_escapes(_si, i) { return true }
+                    } else {
+                        // a deeper arg expression embedding `name` — conservative.
+                        if _expr_escapes_arr_name_ip(_a, name) { return true }
+                    }
+                    i = i + 1
+                }
+            }
+            return false   // callee position is a fn name, never `name`
+        }
+        // any other callee (extern / indirect / method / ⊤) → blanket-escape base.
+    }
+    if k == "Ident" {
+        if node.name == name { return true }
+        return false
+    }
+    if type_of(node.left) != "string" {
+        if _expr_escapes_arr_name_ip(node.left, name) { return true }
+    }
+    if type_of(node.right) != "string" {
+        if _expr_escapes_arr_name_ip(node.right, name) { return true }
+    }
+    if type_of(node.items) != "string" {
+        let mut i = 0
+        while i < len(node.items) {
+            if _expr_escapes_arr_name_ip(node.items[i], name) { return true }
+            i = i + 1
+        }
+    }
+    if type_of(node.args) != "string" {
+        let mut i = 0
+        while i < len(node.args) {
+            if _expr_escapes_arr_name_ip(node.args[i], name) { return true }
+            i = i + 1
+        }
+    }
+    if type_of(node.fields) != "string" {
+        let mut i = 0
+        while i < len(node.fields) {
+            let _fe = node.fields[i]
+            if type_of(_fe) != "string" && type_of(_fe.left) != "string" {
+                if _expr_escapes_arr_name_ip(_fe.left, name) { return true }
+            }
+            i = i + 1
+        }
+    }
+    if type_of(node.cond) != "string" {
+        if _expr_escapes_arr_name_ip(node.cond, name) { return true }
+    }
+    return false
+}
+
+fn _stmt_escapes_arr_name_ip(node, name) {
+    _fn_summary_depth = _fn_summary_depth + 1
+    if _fn_summary_depth > 1400 {
+        _fn_summary_depth = _fn_summary_depth - 1
+        _fn_summary_depth_tripped = 1
+        return true    // assume escape (sound)
+    }
+    let _r = _stmt_escapes_arr_name_ip_i(node, name)
+    _fn_summary_depth = _fn_summary_depth - 1
+    return _r
+}
+fn _stmt_escapes_arr_name_ip_i(node, name) {
+    if type_of(node) == "string" { return false }
+    let sk = node.kind
+    if sk == "LetMutStmt" || sk == "AtomicLet" {
+        if node.name == name { return true }
+    }
+    if sk == "AssignStmt" {
+        let _tgt = node.left
+        if type_of(_tgt) != "string" && _tgt.kind == "Ident" && _tgt.name == name { return true }
+        if type_of(_tgt) != "string" && _tgt.kind == "Index" {
+            let _ir = _tgt.left
+            if type_of(_ir) != "string" && _ir.kind == "Ident" && _ir.name == name { return true }
+        }
+        if type_of(_tgt) != "string" && _expr_escapes_arr_name_ip(_tgt, name) { return true }
+        if type_of(node.right) != "string" && _expr_escapes_arr_name_ip(node.right, name) { return true }
+        if type_of(node.value) != "string" && _expr_escapes_arr_name_ip(node.value, name) { return true }
+        return false
+    }
+    if sk == "ReturnStmt" {
+        if type_of(node.left) != "string" && _expr_escapes_arr_name_ip(node.left, name) { return true }
+        if type_of(node.value) != "string" && _expr_escapes_arr_name_ip(node.value, name) { return true }
+        return false
+    }
+    if sk == "TryCatch" || sk == "RecoverStmt" {
+        if type_of(node.left) != "string" && _stmts_escape_arr_name_ip(node.left, name) { return true }
+        if type_of(node.right) != "string" && _stmts_escape_arr_name_ip(node.right, name) { return true }
+        return false
+    }
+    if type_of(node.left) != "string" {
+        if _expr_escapes_arr_name_ip(node.left, name) { return true }
+    }
+    if type_of(node.right) != "string" {
+        if _expr_escapes_arr_name_ip(node.right, name) { return true }
+    }
+    if type_of(node.value) != "string" {
+        if _expr_escapes_arr_name_ip(node.value, name) { return true }
+    }
+    if type_of(node.cond) != "string" {
+        if _expr_escapes_arr_name_ip(node.cond, name) { return true }
+    }
+    if type_of(node.then_body) != "string" {
+        if _stmts_escape_arr_name_ip(node.then_body, name) { return true }
+    }
+    if type_of(node.else_body) != "string" {
+        if _stmts_escape_arr_name_ip(node.else_body, name) { return true }
+    }
+    if type_of(node.body) != "string" {
+        if _stmts_escape_arr_name_ip(node.body, name) { return true }
+    }
+    if type_of(node.arms) != "string" {
+        let mut ai = 0
+        while ai < len(node.arms) {
+            let arm = node.arms[ai]
+            if type_of(arm) != "string" && type_of(arm.body) != "string" {
+                if _stmts_escape_arr_name_ip(arm.body, name) { return true }
+            }
+            ai = ai + 1
+        }
+    }
+    return false
+}
+
+fn _stmts_escape_arr_name_ip(stmts, name) {
+    if type_of(stmts) == "string" { return false }
+    let mut i = 0
+    while i < len(stmts) {
+        if _stmt_escapes_arr_name_ip(stmts[i], name) { return true }
+        i = i + 1
+    }
+    return false
+}
+
 // Names of NON-FLAT (bounded array) bindings proven non-escaping in the current
 // fn body — eligible for stack-alloc of the HexaArr descriptor + items buffer.
 let mut _stack_noescape_arr_set = []
@@ -15575,6 +16308,16 @@ fn codegen_full(ast) {
             _resolve_use_register_names(ast[gi].name)
         }
         gi = gi + 1
+    }
+
+    // mem-lane ② RUNG-2a — inter-procedural callee no-escape SUMMARY build
+    // (report-only, byteeq-neutral; mirror of the codegen() wire point). Runs
+    // AFTER Pass-0 name collection, BEFORE the emit loop, so gen2_fn_decl's
+    // widened C5 gate consumes complete summaries. GATED HEXA_ARENA_DETECT=1
+    // (NOT HEXA_ARENA_NO_IP = P0 leaf-only baseline). Emits nothing → flag-OFF
+    // byte-identical. See _arena_summary_build.
+    if env("HEXA_ARENA_DETECT") == "1" && env("HEXA_ARENA_NO_IP") != "1" {
+        _arena_summary_build(ast)
     }
 
     // Collect sections as arrays, join at end (avoid O(n²) concat)
