@@ -33,6 +33,8 @@
 #include <setjmp.h>    /* try/catch lowers to setjmp/longjmp + __hexa_try_* */
 #include <math.h>      /* hexat emits direct log/sin/cos/exp calls for math intrinsics */
 #include <sys/stat.h>  /* hexat emits bare mkdir(path,0755) for stdlib mkdir_p */
+#include <string.h>    /* strlen fallback for the SELFBUILD hexa_strlen_v_inline body (Part C-2) */
+#include <unistd.h>    /* write(2) for the SELFBUILD hxlcl_write delegate (Part C-4) */
 
 /* ── Tagged value layout (mirrors runtime.c lines 908–996) ── */
 
@@ -2249,6 +2251,75 @@ HexaVal __raw_d2i(HexaVal v);                           /* runtime_core.c (rtcor
  * byteeq-neutral. Completes the `hexa build compiler/main.hexa` symbol set. */
 double  hxlcl_fmod(double x, double y);                 /* runtime.a delegate (global) */
 int     hexa_str_eq(HexaVal a, HexaVal b);              /* runtime_core.c:4446 */
+
+/* Part C: `hexa build compiler/main.hexa` transpiles the compiler's OWN stdlib
+ * closure (stdlib/runtime/{map_pure,numeric,io}.hexa) into the driver C; the seed
+ * self-host compiler never did (it links runtime.a, never re-emits these bodies),
+ * so this minimal header (curated for the 7.75x user-compile speedup) never had to
+ * declare the following BOUNDED set. All additions are byteeq-neutral: extern decls
+ * emit no code; the static-inline delegates/macros emit code only where the driver
+ * references them, and the current byteeq build does NOT go through this fast-path
+ * gap (it fails to compile today), so the gen3==gen4 fixpoint is unaffected. */
+
+/* C-1: four map-query leaves -- external-linkage (T) in runtime_core.c/runtime.a
+ * (self/runtime_core_emit.hexa:3689-3729). codegen.hexa:7600-7610 lowers the
+ * stdlib map_pure.hexa builtins to bare calls on these. Decls only. */
+HexaVal __map_has_cstr_v(HexaVal m, HexaVal key);       /* runtime_core.c (rtcore_map-query) */
+HexaVal __map_get_cstr_v(HexaVal m, HexaVal key);       /* runtime_core.c (rtcore_map-query) */
+HexaVal __map_order_key_at(HexaVal m, HexaVal i);       /* runtime_core.c (rtcore_map-query) */
+HexaVal __map_order_val_at(HexaVal m, HexaVal i);       /* runtime_core.c (rtcore_map-query) */
+
+/* C-2: HX_MAP_LEN / HX_STRLEN are CORE-tier macros (runtime_core.c), not in this
+ * minimal header; codegen emits them bare for __map_raw_len / __str_raw_len
+ * (codegen.hexa:7674,7668) and the __fd_write_bytes byte count (:7705). HX_MAP_LEN's
+ * dep (.map_ptr) and HX_STRLEN's dep (HX_STR) are already declared above. Reproduced
+ * VERBATIM from self/runtime_core_emit.hexa:1440,926. hexa_strlen_v_inline is a
+ * `static inline` (file-local) in runtime_core.c and cannot be linked cross-TU, so
+ * supply the identical fast body here: O(1) header-len read (embedded 0x00 survive)
+ * with a strlen() fallback for non-header strings. */
+#ifndef HEXA_STR_MAGIC
+#define HEXA_STR_MAGIC ((uint64_t)0xC0DECAFE0F58A7E1ULL)
+typedef struct { uint64_t magic; size_t len; char data[]; } HexaStrHdr;
+#endif
+#ifndef HX_STRLEN
+static inline size_t hexa_strlen_v_inline(const char* s) {
+    if (!s) return 0;
+    HexaStrHdr* hdr = (HexaStrHdr*)((const char*)s - sizeof(HexaStrHdr));
+    if (hdr->magic == HEXA_STR_MAGIC) return hdr->len;
+    return strlen(s);
+}
+#define HX_STRLEN(v)    hexa_strlen_v_inline(HX_STR(v))
+#endif
+#ifndef HX_MAP_LEN
+#define HX_MAP_LEN(v)   ((v).map_ptr->len)
+#endif
+
+/* C-3: __arr_alloc_items_zero{,_int} are codegen-inline builtins. The NATIVE codegen
+ * maps them to the runtime.a leaves hexa_arr_zeros_leaf{,_int}
+ * (compiler/codegen/arm64_darwin.hexa:1974-1975); the aprime build gets them as
+ * s4_flatc_post.py-injected statics. The C-transpile (self/codegen.hexa) has neither,
+ * so the driver emits the bare names -> undefined. Delegate to the SAME global leaf
+ * the native codegen uses (definition self/runtime_core_emit.hexa:9262) -- no
+ * codegen/emit edit, driver-only reference. */
+extern HexaVal hexa_arr_zeros_leaf(HexaVal nv);
+extern HexaVal hexa_arr_zeros_leaf_int(HexaVal nv);
+static inline HexaVal __arr_alloc_items_zero(HexaVal nv)     { return hexa_arr_zeros_leaf(nv); }
+static inline HexaVal __arr_alloc_items_zero_int(HexaVal nv) { return hexa_arr_zeros_leaf_int(nv); }
+
+/* C-4: __fd_write_bytes lowers (codegen.hexa:7705) to a bare hxlcl_write() call --
+ * the zeroc svc-trap write that keeps a `_write` extern out of the SHIPPING runtime.
+ * hxlcl_write is `static` in every runtime TU (runtime_emit_full.hexa:1721,2206) so
+ * runtime.a exports NO global (nm '[TW] hxlcl_write' == empty) -> a bare decl would
+ * compile but not link. Supply a self-contained file-local delegate for the
+ * clang+libc-built driver (this header IS the libc user-compile path; the shipping
+ * runtime is untouched, so the _write-elimination invariant holds there). Signature
+ * matches runtime_emit_full.hexa:1721 (int fd, const void*, unsigned long) -> bytes. */
+#ifndef HEXA_SELFBUILD_HXLCL_WRITE
+#define HEXA_SELFBUILD_HXLCL_WRITE
+static inline long hxlcl_write(int fd, const void *buf, unsigned long n) {
+    return (long)write(fd, buf, (size_t)n);
+}
+#endif
 
 
 /* ── HEXA-TRAIN-FLOOR M4 · host-RSS retention trace (env opt-in) ──────────
