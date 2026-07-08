@@ -1,0 +1,196 @@
+// HEXA Native Compiler — unused-local-`let` (rustc unused_variables / HX3050) smoke test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Probe matrix for the opt-in identifier-binding unused-variable check
+// (HEXA_UNUSED_LET=1 / `_unused_let_on`, compiler/check/bind.hexa). A
+// FUNCTION-LOCAL `let` that is never referenced anywhere in its scope = rustc
+// `unused_variables` ("unused variable: `x`", warn-by-default). Each source
+// probe runs the REAL pipeline — lex → parse → bind — across two ambient-flag
+// modes:
+//   * OFF (no flag)             → 0 diagnostics of ANY code (byteeq-neutral
+//                                 stream proof at the diag level; the .text
+//                                 byte-identity is the pool/CI gate's job)
+//   * ON (HEXA_UNUSED_LET=1)     → expected HX3050 count per probe, Warning band
+//
+//   hz_unused_let      `fn f() { let x = 1 }`                        → ×1
+//   fp_used            `fn g() { let x = 1  print(x) }`              → 0
+//   fp_underscore      `fn h() { let _x = 1 }`   (escape hatch)      → 0
+//   fp_shadow_nested   `fn s(){ let x=1 print(x) if true{ let x=2 print(x)}}` → 0
+//   fp_assign_write    `fn a() { let mut x = 0  x = 5 }` (write=use) → 0
+//
+// The hz_unused_let / fp_used PAIR is the core discriminator: identical shape,
+// the only difference is the later `print(x)`. fp_underscore proves the rustc
+// `_`-prefix escape hatch; fp_assign_write proves the conservative assume-used
+// stance (a write descends to the Ident choke ⇒ counts as a use, FP=0).
+// fp_shadow_nested proves INNER-SCOPE shadowing resolves inner-first (both
+// bindings used ⇒ 0). NOTE the SAME-FRAME sequential re-`let`
+// (`let x=1; print(x); let x=2; print(x)` in ONE block) is NOT clean under the
+// S2 resolver: `_bind_lookup` returns the FIRST match within a frame, so every
+// later `x` reference resolves to the FIRST binding and the SECOND same-frame
+// shadow is genuinely never the resolution target ⇒ flagged. That is FP=0
+// relative to S2 (the lint marks exactly what the resolver resolves), a known
+// divergence from rustc's last-shadow-wins, and a P4-corpus-census concern.
+//
+// Run:
+//   hexa run compiler/check/unused_let_test.hexa                     (OFF sweep)
+//   HEXA_UNUSED_LET=1 hexa run compiler/check/unused_let_test.hexa
+
+import "../lex/lexer.hexa"
+import "../parse/parser.hexa"
+import "../parse/ast.hexa"
+import "../lex/tokens.hexa"
+import "../diag/catalog.hexa"
+import "../ir/hir.hexa"
+import "./bind.hexa"
+
+// ── pipeline driver ──────────────────────────────────────────
+
+fn _compile_probe(name: string, src: string) -> array {
+    let file = name + ".hexa"
+    let toks = lex(src, file)
+    let m = parse(toks, file)
+    return bind(m)
+}
+
+fn _count_code(diags: array, code: string) -> i64 {
+    let mut i = 0
+    let mut n = 0
+    while i < len(diags) {
+        let d = diags[i]
+        if d.code == code { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+fn _count_warn_band(diags: array) -> i64 {
+    let mut i = 0
+    let mut n = 0
+    while i < len(diags) {
+        let d = diags[i]
+        if d.severity == Severity::Warning { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+fn _print_diags(diags: array) {
+    let mut i = 0
+    while i < len(diags) {
+        let d = diags[i]
+        let sp = d.span
+        println("      [" + to_string(i) + "] " + d.code + " @ "
+                + sp.file + ":" + to_string(sp.line) + ":" + to_string(sp.col)
+                + " — " + d.message)
+        i = i + 1
+    }
+}
+
+// Expectations branch on the AMBIENT flag (missing_return_test convention —
+// `setenv` does not feed `env()` in the stage0 runtime, so the flag must be set
+// on the PROCESS: run twice, once plain = OFF sweep, once under
+// HEXA_UNUSED_LET=1). ON-mode: expect `want` HX3050 and zero other codes (probe
+// hygiene). OFF-mode: expect a fully empty diag stream (byte-neutral proof at
+// the diag level). Every emitted HX3050 is Warning-band; a want>0 probe asserts
+// that too.
+fn _run_unused_probe(label: string, src: string, want_on: i64) -> bool {
+    let flag_on = env("HEXA_UNUSED_LET") == "1"
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3050 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3050")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3050 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3050 diagnostics = " + to_string(other))
+        ok = false
+    }
+    // Every emitted HX3050 is Warning-band; a want=0 probe has zero HX3050 →
+    // zero Warning-band (the probes emit no other code).
+    let wb = _count_warn_band(d)
+    if wb != want {
+        println("  FAIL: warn-band = " + to_string(wb) + ", want " + to_string(want))
+        ok = false
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
+// ── source probes ────────────────────────────────────────────
+
+fn _src_hz_unused_let() -> string {
+    let mut s = "fn f() {\n"
+    s = s + "    let x = 1\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_used() -> string {
+    let mut s = "fn g() {\n"
+    s = s + "    let x = 1\n"
+    s = s + "    print(x)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_underscore() -> string {
+    let mut s = "fn h() {\n"
+    s = s + "    let _x = 1\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_shadow_nested() -> string {
+    let mut s = "fn s() {\n"
+    s = s + "    let x = 1\n"
+    s = s + "    print(x)\n"
+    s = s + "    if true {\n"
+    s = s + "        let x = 2\n"
+    s = s + "        print(x)\n"
+    s = s + "    }\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_assign_write() -> string {
+    let mut s = "fn a() {\n"
+    s = s + "    let mut x = 0\n"
+    s = s + "    x = 5\n"
+    s = s + "}\n"
+    return s
+}
+
+// ── driver ───────────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  unused-local-let (unused_variables / HX3050) — S2 binding")
+    let mut mode = "OFF (byteeq-neutral sweep)"
+    if env("HEXA_UNUSED_LET") == "1" { mode = "ON (HEXA_UNUSED_LET=1)" }
+    println("  mode: " + mode)
+    println("══════════════════════════════════════════════")
+
+    let mut ok = true
+    if !_run_unused_probe("hz_unused_let", _src_hz_unused_let(), 1) { ok = false }
+    if !_run_unused_probe("fp_used", _src_fp_used(), 0) { ok = false }
+    if !_run_unused_probe("fp_underscore", _src_fp_underscore(), 0) { ok = false }
+    if !_run_unused_probe("fp_shadow_nested", _src_fp_shadow_nested(), 0) { ok = false }
+    if !_run_unused_probe("fp_assign_write", _src_fp_assign_write(), 0) { ok = false }
+
+    println("")
+    if ok {
+        println("ALL PASS — HX3050 hz fires ×1, every FP control 0, OFF-sweep empty")
+    } else {
+        println("FAILURES — see above")
+        exit(1)
+    }
+}

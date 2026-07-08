@@ -79,6 +79,33 @@ fn _bind_enum_registry_reset() {
     _bind_enum_variant_arities = []
 }
 
+// ── HX3050 unused-local-`let` (opt-in) — module-level accumulate lane ─
+// Rust's `unused_variables` lint. Opt-in HEXA_UNUSED_LET=1 (`_unused_let_on`),
+// default OFF ⇒ byteeq-NEUTRAL (nothing pushed, nothing emitted, diag stream +
+// .text byte-identical). Marking happens at the SAME name-resolution choke as
+// HX2001 (the `_bind_walk_expr` Ident arm), so the used-set is exactly
+// resolver-complete — FP=0 by construction. CANDIDATES = FUNCTION-LOCAL `let`
+// defines (the sole `_define_mut` let-expr site); a candidate whose minted
+// dense DefId.index never appears in `_unused_used_ids` was never referenced.
+// A write via assign-LHS descends to the Ident arm ⇒ counts as a use
+// (conservative); closure captures resolve up-chain ⇒ marked used; `_`-prefixed
+// names are the rustc escape hatch and are excluded at the accumulate site.
+// Module-level state (no by-value threading) mirrors the enum-registry + `_bck`
+// convention — the BindFrame struct and _pop_scope signature are untouched.
+let mut _unused_let_on = false
+let mut _unused_cand_ids: [i64] = []
+let mut _unused_cand_names: [string] = []
+let mut _unused_cand_spans: [Span] = []
+let mut _unused_used_ids: [i64] = []
+
+fn _unused_let_reset() {
+    _unused_let_on = env("HEXA_UNUSED_LET") == "1"
+    _unused_cand_ids = []
+    _unused_cand_names = []
+    _unused_cand_spans = []
+    _unused_used_ids = []
+}
+
 fn _bind_register_enum_item(it: Item) {
     if !_is_enum_kind(it.kind) { return }
     _bind_enum_names.push(it.name)
@@ -760,6 +787,17 @@ fn _emit_hx2006(name: string, span: Span, out: array) {
     out.push(d)
 }
 
+// HX3050 — unused local `let` (Rust `unused_variables`). Warning band,
+// opt-in (`_unused_let_on` / HEXA_UNUSED_LET). Mirrors _emit_hx2001's plain
+// warning-emit: no fix-it, single `name` arg. Emitted from the bind() end-of-
+// pass sweep for every accumulated candidate whose index went un-referenced.
+fn _emit_hx3050(name: string, span: Span, out: array) {
+    let mut b = diag_new("HX3050")
+    b = diag_span(b, span)
+    b = diag_arg(b, "name", name)
+    out.push(diag_emit(b))
+}
+
 // ── `let` text decoder ──────────────────────────────────────
 // parse_let_expr stashes the binding name in `text`, prefixed with
 // "mut:" if it was declared mutable. Strip the prefix for binding.
@@ -853,6 +891,10 @@ fn _bind_walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> B
                 let suggest = _suggest_name(sc, e.text, 2)
                 _emit_hx2001(e.text, e.span, suggest, out)
             }
+            // HX3050 — mark the resolved binding USED. This is the SINGLE
+            // value-reference choke (assign-LHS, call-callee, field-receiver
+            // all descend here), so the used-set is resolver-complete ⇒ FP=0.
+            if _unused_let_on && hit.index >= 0 { _unused_used_ids.push(hit.index) }
         }
         return sc
     }
@@ -938,6 +980,19 @@ fn _bind_walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> B
         let nm = _bind_let_name(e.text)
         if len(nm) > 0 {
             sc = _define_mut(sc, nm, mod_file, _bind_let_is_mut(e.text))
+            // HX3050 — accumulate this function-local `let` as an unused-var
+            // candidate. This is the ONLY let-expr define site; params /
+            // for-iter / catch / match-binder / closure-param bind elsewhere
+            // and are excluded. The just-minted dense index == sc.next_index-1
+            // (post-_define_mut increment). `_`-prefix = rustc escape hatch.
+            if _unused_let_on {
+                let nmc = nm.chars()
+                if len(nmc) > 0 && nmc[0] != '_' {
+                    _unused_cand_ids.push(sc.next_index - 1)
+                    _unused_cand_names.push(nm)
+                    _unused_cand_spans.push(e.span)
+                }
+            }
         }
         return sc
     }
@@ -1604,6 +1659,9 @@ pub fn bind(module: Module) -> array {
     // before the pre-pass populates it. `bind()` is called once per module;
     // the registry's lifetime is exactly this call.
     _bind_enum_registry_reset()
+    // HX3050 — reset the opt-in unused-local-`let` accumulate lane and read the
+    // HEXA_UNUSED_LET flag once per module (default OFF ⇒ byteeq-neutral).
+    _unused_let_reset()
 
     // ── Pre-pass: register host-runtime builtins so identifier lookups
     // don't surface as HX2001. Anchored to mod_file so the same scope
@@ -1683,6 +1741,30 @@ pub fn bind(module: Module) -> array {
             // (parse path). Nothing to walk.
         }
         k = k + 1
+    }
+
+    // ── HX3050 — end-of-pass unused-local-`let` sweep (opt-in). A candidate
+    // whose minted dense DefId.index never appears in the used-set was never
+    // referenced ⇒ Rust `unused_variables`. Linear absent-scan; the opt-in flag
+    // gates the whole loop so the default build does zero extra work.
+    if _unused_let_on {
+        let mut ci = 0
+        while ci < len(_unused_cand_ids) {
+            let cid = _unused_cand_ids[ci]
+            let mut used = false
+            let mut ui = 0
+            while ui < len(_unused_used_ids) {
+                if _unused_used_ids[ui] == cid {
+                    used = true
+                    break
+                }
+                ui = ui + 1
+            }
+            if !used {
+                _emit_hx3050(_unused_cand_names[ci], _unused_cand_spans[ci], out)
+            }
+            ci = ci + 1
+        }
     }
 
     return out
