@@ -2560,6 +2560,74 @@ fn _build_case_let_arraylit_mismatch() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// ── (co)–(cr) string-family scalar builtin returns (char_at/pad_start/pad_end) ─
+// `_types_builtin_method_ret` now types the 3 remaining MONOMORPHIC scalar-string
+// builtins: char_at (str_char_at → hexa_str_char_at returns hexa_str(...) on every
+// non-throw path — single-char string, receiver-independent), pad_start/pad_end
+// (JS/Python aliases emitting the SAME str_pad_left/str_pad_right symbols as the
+// already-typed pad_left/pad_right → string). These arm the always-on RETURN-place
+// check (_infer_expr Return arm → _types_assignable): an exact `-> string { return
+// recv.<m>() }` is ACCEPTED, a `-> i64` mismatch REJECTs HX3004 (E0308 return
+// coercion). Scalar mirror of the (ce)–(ci) array-repr rung.
+
+// (co) char_at→string ACCEPT — `fn f(s: string) -> string { return s.char_at(0) }`:
+// char_at()→string matches the string return annotation → 0 HX3004.
+fn _build_case_ret_char_at_string_ok() -> Module {
+    let f = "case_co.hexa"
+    let recv = _ident_expr("s", f, 2, 12)
+    let call = _call_expr(_field_expr(recv, "char_at", f, 2, 14), [_int_expr("0", f, 2, 22)], f, 2, 14)
+    let ret = _return_expr(call, f, 2, 5)
+    let body = _block([ret], f, 1, 30)
+    let item_f = _fn_item("f", [_param("s", "string", f, 1, 6)], _named_type_ref("string"), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (cp) char_at→i64 MISMATCH — `fn f(s: string) -> i64 { return s.char_at(0) }`:
+// PROVES char_at→string, NOT i64: char_at()→string ≠ i64 return annotation →
+// exactly 1 HX3004. Were char_at typed i64 this would over-accept (0), and a real
+// `-> string` char_at() sink would false-reject.
+fn _build_case_ret_char_at_i64_bad() -> Module {
+    let f = "case_cp.hexa"
+    let recv = _ident_expr("s", f, 2, 12)
+    let call = _call_expr(_field_expr(recv, "char_at", f, 2, 14), [_int_expr("0", f, 2, 22)], f, 2, 14)
+    let ret = _return_expr(call, f, 2, 5)
+    let body = _block([ret], f, 1, 27)
+    let item_f = _fn_item("f", [_param("s", "string", f, 1, 6)], _named_type_ref("i64"), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (cq) pad_start→string ACCEPT — `fn f(s: string) -> string { return s.pad_start(5, " ") }`:
+// pad_start() emits str_pad_left (same symbol as pad_left) → string matches → 0 HX3004.
+fn _build_case_ret_pad_start_string_ok() -> Module {
+    let f = "case_cq.hexa"
+    let recv = _ident_expr("s", f, 2, 12)
+    let call = _call_expr(_field_expr(recv, "pad_start", f, 2, 14), [_int_expr("5", f, 2, 24), _string_expr(" ", f, 2, 27)], f, 2, 14)
+    let ret = _return_expr(call, f, 2, 5)
+    let body = _block([ret], f, 1, 30)
+    let item_f = _fn_item("f", [_param("s", "string", f, 1, 6)], _named_type_ref("string"), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (cr) pad_end→string ACCEPT — `fn f(s: string) -> string { return s.pad_end(5, " ") }`:
+// pad_end() emits str_pad_right (same symbol as pad_right) → string matches → 0 HX3004.
+fn _build_case_ret_pad_end_string_ok() -> Module {
+    let f = "case_cr.hexa"
+    let recv = _ident_expr("s", f, 2, 12)
+    let call = _call_expr(_field_expr(recv, "pad_end", f, 2, 14), [_int_expr("5", f, 2, 22), _string_expr(" ", f, 2, 25)], f, 2, 14)
+    let ret = _return_expr(call, f, 2, 5)
+    let body = _block([ret], f, 1, 28)
+    let item_f = _fn_item("f", [_param("s", "string", f, 1, 6)], _named_type_ref("string"), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // ── (bd)–(bh) HX3044 (Rust `overflowing_literals`) int-literal range-fit ──────
 // Static-types let-check lane (always-on flagless). A positive int literal
 // assigned to a narrower signed `iN` annotation whose value exceeds the width's
@@ -4348,6 +4416,43 @@ fn main() {
         ok = false
     } else {
         println("  ok: 0 HX3011 (LET [string] = [1,2] ArrayLit unchanged — no new reject)")
+    }
+
+    // ── (co)–(cr) string-family scalar builtin returns (char_at/pad_start/pad_end) ─
+    let diags_co = _run_case("(co) string-family — char_at→string ACCEPT: fn f(s)->string{ return s.char_at(0) } → 0 HX3004", _build_case_ret_char_at_string_ok())
+    let cco = _count_code(diags_co, "HX3004")
+    if cco != 0 {
+        println("  FAIL: case (co) expected 0 HX3004 (char_at→string matches string return), got " + to_string(cco) + " (total=" + to_string(len(diags_co)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3004 (char_at→string exact accept)")
+    }
+
+    let diags_cp = _run_case("(cp) string-family — char_at→i64 MISMATCH: fn f(s)->i64{ return s.char_at(0) } → 1 HX3004 (proves char_at=string)", _build_case_ret_char_at_i64_bad())
+    let ccp = _count_code(diags_cp, "HX3004")
+    if ccp != 1 {
+        println("  FAIL: case (cp) expected 1 HX3004 (char_at→string vs i64 proves char_at≠i64), got " + to_string(ccp) + " (total=" + to_string(len(diags_cp)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3004 (string vs i64 — char_at() yields string, not i64)")
+    }
+
+    let diags_cq = _run_case("(cq) string-family — pad_start→string ACCEPT: fn f(s)->string{ return s.pad_start(5,\" \") } → 0 HX3004", _build_case_ret_pad_start_string_ok())
+    let ccq = _count_code(diags_cq, "HX3004")
+    if ccq != 0 {
+        println("  FAIL: case (cq) expected 0 HX3004 (pad_start→string matches string return), got " + to_string(ccq) + " (total=" + to_string(len(diags_cq)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3004 (pad_start→string exact accept — str_pad_left alias)")
+    }
+
+    let diags_cr = _run_case("(cr) string-family — pad_end→string ACCEPT: fn f(s)->string{ return s.pad_end(5,\" \") } → 0 HX3004", _build_case_ret_pad_end_string_ok())
+    let ccr = _count_code(diags_cr, "HX3004")
+    if ccr != 0 {
+        println("  FAIL: case (cr) expected 0 HX3004 (pad_end→string matches string return), got " + to_string(ccr) + " (total=" + to_string(len(diags_cr)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3004 (pad_end→string exact accept — str_pad_right alias)")
     }
 
     println("")
