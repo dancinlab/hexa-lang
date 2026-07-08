@@ -1512,6 +1512,13 @@ build_runtime_a_from_source() {
         # SELFEMIT-smoke RT_NATIVE_STRCMP=0 / non-adopting target) => range gate OFF =>
         # runtime_core.o byte-identical to today.
         local _rng_strcmp_def=""
+        # ── FLIP-6 native RECLAIMING heap allocator (HEXA_RT_HEAP_NATIVE, default OFF) ──
+        # One -D that reaches EVERY TU producing/consuming family pointers (#4614 LAW):
+        # the shim (allocator core + hxlcl_heap_* exports + malloc/free/calloc reroute) AND
+        # runtime.c/runtime_core.c (HXFARR carve-out). Empty by DEFAULT => every arm
+        # preprocesses away => runtime.a byte-identical (PR-A byteeq-neutral). Set ONLY in
+        # the RT-NATIVE-REALLOC F2 block below (gated on $_heap_mode), which HEAP forces ON.
+        local _heap_def=""
         # ── zero-c #29 SELFEMIT×RT-NATIVE CO-DROP registry (root-cause #4570→#4571) ──
         # A symbol that a RT-NATIVE-<SYM> frozen seed will adopt must NOT ALSO get a
         # SELFEMIT/MEMLEAF member — two archive members exporting the same global
@@ -2007,6 +2014,10 @@ build_runtime_a_from_source() {
         #          is observable as `free` still UND in the nobaseline nm-UND dump (#4360).
         #   1    = strict: a missing/bad seed is FATAL (measurement / verify scripts).
         # convergence stage-resolve-runtime-a-2.
+        # FLIP-6 tri-state (default 0=OFF). Read HERE, before the seed-mode reads it forces
+        # below (rule: HEAP forces REALLOC-F2 ON, free/calloc seeds OFF — one symbol one
+        # provider). A 1-line PR-B flip (:-0 -> :-auto) turns it on after byteeq reconverge.
+        _heap_mode="${HEXA_RT_HEAP_NATIVE:-0}"
         _rnfr_mode="${HEXA_RT_NATIVE_FREE:-auto}"
         # zeroc #29 realloc F2: when the realloc flip is active, the shim's magic-guarded
         # RECLAIMING hxlcl_free MUST serve — the free no-op seed would (a) leak (never reclaim),
@@ -2014,6 +2025,9 @@ build_runtime_a_from_source() {
         # freed via the renamed free()). Exclude the free no-op seed so the shim body wins.
         # convergence hxlcl-realloc-arm64-s-1.
         [ "${HEXA_RT_NATIVE_REALLOC:-auto}" != "0" ] && _rnfr_mode=0
+        # FLIP-6 interlock: the reclaiming heap needs the shim's magic-guarded free — a free
+        # no-op seed would un-reclaim (the leak this flip fixes). Exclude the free seed.
+        [ "$_heap_mode" != "0" ] && _rnfr_mode=0
         if [ "$_rnfr_mode" != "0" ]; then
             _rnfr_tgt="${TARGET:-}"; _rnfr_tgt="${_rnfr_tgt%-musl}"; _rnfr_tgt="${_rnfr_tgt%-cuda}"
             [ -z "$_rnfr_tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -2199,6 +2213,9 @@ build_runtime_a_from_source() {
         # (pool aprime_cc bake, all 3 verified .globl=1 .private_extern=0).
         # convergence stage-resolve-runtime-a-2 · regen-hxlcl-free-native-s-sh-1.
         _rnca_mode="${HEXA_RT_NATIVE_CALLOC:-auto}"
+        # FLIP-6 interlock: one symbol one provider (#4591 co-drop lesson). The heap owns
+        # hxlcl_calloc (shim reroute); a native-calloc seed member would S5 ld -r multidef.
+        [ "$_heap_mode" != "0" ] && _rnca_mode=0
         if [ "$_rnca_mode" != "0" ]; then
             _rnca_tgt="${TARGET:-}"; _rnca_tgt="${_rnca_tgt%-musl}"; _rnca_tgt="${_rnca_tgt%-cuda}"
             [ -z "$_rnca_tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -2596,10 +2613,21 @@ build_runtime_a_from_source() {
         # Gated on byteeq (OFF-neutral #4620) + faithful BUILD execution darwin+linux (the SIGABRT
         # witness class) + a malloc→realloc→free round-trip smoke.
         _rnre_mode="${HEXA_RT_NATIVE_REALLOC:-auto}"
+        # FLIP-6 interlock: heap-native without the F2 magic header/rename re-creates the
+        # #4614 bifurcation, so HEAP forces REALLOC-F2 ON (even if the caller set it 0).
+        [ "$_heap_mode" != "0" ] && _rnre_mode="auto"
         if [ "$_rnre_mode" != "0" ]; then
             _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_REALLOC"
             _mo_rtcore_def="$_mo_rtcore_def -DHEXA_RT_NATIVE_REALLOC"
             echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-REALLOC F2: shim + runtime_core both -DHEXA_RT_NATIVE_REALLOC (magic-guarded family header + malloc-family sysheaders rename; NO seed) — reclaiming magic-guarded free serves (free no-op seed excluded)"
+            # FLIP-6 native RECLAIMING heap allocator: set the single -D that flows to all
+            # family TUs (shim allocator core + runtime.c/runtime_core.c HXFARR carve-out).
+            # Gated on $_heap_mode -> DEFAULT (0) leaves _heap_def empty -> archive byte-identical.
+            if [ "$_heap_mode" != "0" ]; then
+                _heap_def="-DHEXA_RT_HEAP_NATIVE"
+                _mo_shim_def="$_mo_shim_def -DHEXA_RT_HEAP_NATIVE"
+                echo "[stage_resolve_runtime_a] FLIP-6 RT-HEAP-NATIVE: native reclaiming heap allocator ON — shim + runtime.c/runtime_core.c -DHEXA_RT_HEAP_NATIVE (segregated size-class free-lists + large-mmap/munmap; forces REALLOC-F2 ON, free/calloc seeds excluded)"
+            fi
         fi
         # ── RFC061 §M8 RT-NATIVE-GETENV (Route C whole-module emit · non-libm leaf
         #    RUNG 4 · FIRST extern-DATA leaf, default OFF) ──
@@ -3073,12 +3101,12 @@ build_runtime_a_from_source() {
         #      archive-internal resolution). NO HEXA_HAS_HEXA_RT_STDLIB (matches the
         #      default single-TU object; setting it would extern rt_log/… → multidef).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S2]: compile build/runtime.o (include-drop, HI-tier inline)…"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self -c self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self $_heap_def -c self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
         # (S3) runtime_core.o — standalone TU (sysheaders prelude), runtime_hi_gen.c
         #      KEPT (supplies the HI-tier rt_* C bodies). SAME seed -D set. NO
         #      HEXA_HAS_HEXA_RT_STDLIB (keeps those bodies inline, not externed).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S3]: compile build/runtime_core.o (standalone TU, runtime_hi_gen.c kept)…"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE $_mo_rtcore_def $_rng_strcmp_def -I self -include self/runtime_core_sysheaders.h -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE $_mo_rtcore_def $_rng_strcmp_def -I self -include self/runtime_core_sysheaders.h $_heap_def -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
         # (S4) hxlcl_shim.o — libc-delegate hxlcl_* sibling TU.
         # own-start #29 coherence: $_zc_own_def MUST flow here too — without it the
         # shim's hxlcl_atexit stays the glibc-atexit delegate (U atexit), and under
@@ -3141,7 +3169,7 @@ build_runtime_a_from_source() {
             local _mo_cinc="$_mo_cuda_home/targets/x86_64-linux/include"
             [ -d "$_mo_cinc" ] || _mo_cinc="$_mo_cuda_home/include"
             echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA: build SEPARATE build/runtime.cuda.a (include-drop multi-object + cuda objects)"
-            $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
+            $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
             ar rcs build/runtime.cuda.a build/runtime_cuda_host.o build/runtime_core.o $_mo_hxlcl_members $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
             ls -la build/runtime.cuda.a
             local _mo_cseed _mo_cm
@@ -3161,7 +3189,7 @@ build_runtime_a_from_source() {
         echo "$RA"
         return 0
     fi
-    $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -I self -c self/runtime.c -o build/runtime.o
+    $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -I self $_heap_def -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     if [ "${HEXA_CUDA:-0}" = "1" ] && [ -f build/runtime_cuda.o ] && [ -f build/runtime_cuda_dlink.o ]; then
@@ -3169,7 +3197,7 @@ build_runtime_a_from_source() {
         local _cinc="$_cuda_home/targets/x86_64-linux/include"
         [ -d "$_cinc" ] || _cinc="$_cuda_home/include"
         echo "[stage_resolve_runtime_a] CUDA-R1: building SEPARATE consumer archive build/runtime.cuda.a (runtime.c -DHEXA_CUDA -I$_cinc + runtime_cuda.o + runtime_cuda_dlink.o); toolchain keeps the CPU build/runtime.a (libcuda-free, GPU-less-host-runnable)"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_CUDA -I "$_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_CUDA -I "$_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o
         ar rcs build/runtime.cuda.a build/runtime_cuda_host.o $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
         ls -la build/runtime.cuda.a
         # ING-35 #2 — fail loudly if the CUDA archive dropped a native-core seed the
