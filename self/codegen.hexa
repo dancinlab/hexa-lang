@@ -2048,6 +2048,35 @@ fn _gen2_noarena_lint_scan(node, fn_name) {
 let mut _arena_detect_loops_total = 0
 let mut _arena_detect_loops_safe = 0
 
+// ── mem-lane ② P0 WIDENED classification (report-only, byteeq-neutral) ────────
+// Extends the #4700 strict (immutable-only) detector to the rung-1 WIDENED bar
+// from the arena-reclaim design so P0 can MEASURE whether the real memory-churn
+// loops actually qualify for the (deferred, soundness-critical) reclaim EMIT.
+// The widened bar admits, beyond #4700's immutable container-literal transient:
+//   (W1) a MUTABLE body-local transient `let mut x=[literal]` grown IN-ITERATION
+//        by the R1/R2/R3 self-grow whitelist —
+//          R1  x = x.push(e)        (self-reassign via push/append chain on x)
+//          R1' x = [literal]        (fresh literal reset; aliasing embed rejected)
+//          R2  x[i] = v             (index-write of x is not an escape of x)
+//          R3  x.push(e) / x.append (push-receiver whitelist; SLICE/alias EXCLUDED)
+//        everything else (return / global-store / outer-store / container-set /
+//        call-arg / bare-operand / slice-alias) stays ESCAPE (default-escape closure).
+//   (C4) STRUCTURED fall-through — no break/continue/return/defer/spawn in the loop
+//        body (guarantees exactly one region push paired with one pop per iteration).
+//        break/continue inside a NESTED loop belong to that loop (allowed).
+//   (C5) LEAF — no nested USER-fn call (nested LOOPS + retain-free builtins
+//        len/print/println/to_string + push/append-on-local method OK).
+// STILL report-only: increments module-global tallies + eprintln only; emits
+// NOTHING to codegen (no chunks.push, no arena mutation) → emitted C byte-identical
+// flag-ON vs OFF, and flag-OFF the widened scan never runs. This is the P0
+// characterization rung; the reclaim EMIT (P1) is a separate opt-in campaign.
+let mut _arena_reclaim_loops_widened = 0    // fully widened-safe loops (W1+C4+C5, no escape/outerwrite)
+let mut _arena_reclaim_cand_loops = 0       // loops with >=1 widened container cand
+let mut _arena_reclaim_nonleaf_loops = 0    // cand-loops failing C5 (body calls a USER fn)
+let mut _arena_reclaim_nonstruct_loops = 0  // cand-loops failing C4 (break/continue/return/defer/spawn)
+let mut _arena_reclaim_escape_loops = 0     // cand-loops with an escaping cand (R1/R2/R3 not satisfied)
+let mut _arena_reclaim_outerwrite_loops = 0 // cand-loops with an outer-name allocating write (#4700 cond-3)
+
 // Does this expression allocate a fresh CONTAINER value (one that could carry
 // arena-backed memory across an iteration if held by an outer binding)? Container
 // literals + method-calls (.push/.slice/.concat/…) + fn calls (may return a
@@ -2175,6 +2204,432 @@ fn _arena_detect_loop_safe(loop_body) {
     return true
 }
 
+// ── WIDENED (rung-1) classification helpers (report-only) ────────────────────
+// Collect top-level body-local reclaim candidates under the WIDENED bar: BOTH
+// immutable `let x=[lit]` (as #4700) AND mutable `let mut x=[lit]` (NEW — the
+// self-grow shape). Initializer must be a fresh container literal.
+fn _arena_reclaim_body_cands(stmts) {
+    let mut out = []
+    if type_of(stmts) != "array" { return out }
+    let mut i = 0
+    while i < len(stmts) {
+        let s = stmts[i]
+        if type_of(s) == "map" {
+            let sk = s.kind
+            if sk == "LetStmt" || sk == "LetMutStmt" {
+                if type_of(s.left) == "map" {
+                    let ik = s.left.kind
+                    if ik == "Array" || ik == "Tuple" || ik == "TupleLit" || ik == "MapLit" {
+                        out = out.push(s.name)
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Reclaim-variant EXPRESSION escape scan (R2/R3): as _expr_escapes_arr_name but
+// a `name.push(e)` / `name.append(e)` receiver is NOT an escape (R3 whitelist;
+// args still scanned). index-read + len stay local (as the array scan).
+fn _arena_reclaim_expr_escapes(node, name) {
+    if type_of(node) != "map" { return false }
+    let k = node.kind
+    if k == "Index" {
+        let _recv = node.left
+        if type_of(_recv) == "map" && _recv.kind == "Ident" && _recv.name == name {
+            if type_of(node.right) != "string" && _arena_reclaim_expr_escapes(node.right, name) { return true }
+            return false
+        }
+        if _arena_reclaim_expr_escapes(_recv, name) { return true }
+        if type_of(node.right) != "string" && _arena_reclaim_expr_escapes(node.right, name) { return true }
+        return false
+    }
+    if k == "Call" {
+        let _callee = node.left
+        // len(a) — non-escaping read (int result). Bare receiver arg allowed.
+        if type_of(_callee) == "map" && _callee.kind == "Ident" && _callee.name == "len" {
+            if type_of(node.items) != "string" {
+                let mut i = 0
+                while i < len(node.items) {
+                    let _a = node.items[i]
+                    if type_of(_a) == "map" && _a.kind == "Ident" && _a.name == name {
+                        // bare len(a) — allowed
+                    } else if _arena_reclaim_expr_escapes(_a, name) {
+                        return true
+                    }
+                    i = i + 1
+                }
+            }
+            return false
+        }
+        // R3: name.push(e) / name.append(e) — receiver protected (grow whitelist).
+        //     name.len() — non-escaping read (int result), same as free len(a).
+        //     Both scan args for an embedded escaping name.
+        if type_of(_callee) == "map" && _callee.kind == "Field" {
+            let _m = _callee.name
+            if _m == "push" || _m == "append" || _m == "len" {
+                let _rv = _callee.left
+                if type_of(_rv) == "map" && _rv.kind == "Ident" && _rv.name == name {
+                    if type_of(node.args) != "string" {
+                        let mut ai = 0
+                        while ai < len(node.args) {
+                            if _arena_reclaim_expr_escapes(node.args[ai], name) { return true }
+                            ai = ai + 1
+                        }
+                    }
+                    return false
+                }
+            }
+        }
+        // any other call — fall through to generic recursion (name in callee/args escapes)
+    }
+    if k == "Ident" {
+        if node.name == name { return true }
+        return false
+    }
+    if type_of(node.left) != "string" {
+        if _arena_reclaim_expr_escapes(node.left, name) { return true }
+    }
+    if type_of(node.right) != "string" {
+        if _arena_reclaim_expr_escapes(node.right, name) { return true }
+    }
+    if type_of(node.items) != "string" {
+        let mut i = 0
+        while i < len(node.items) {
+            if _arena_reclaim_expr_escapes(node.items[i], name) { return true }
+            i = i + 1
+        }
+    }
+    if type_of(node.args) != "string" {
+        let mut i = 0
+        while i < len(node.args) {
+            if _arena_reclaim_expr_escapes(node.args[i], name) { return true }
+            i = i + 1
+        }
+    }
+    if type_of(node.fields) != "string" {
+        let mut i = 0
+        while i < len(node.fields) {
+            let _fe = node.fields[i]
+            if type_of(_fe) == "map" && type_of(_fe.left) != "string" {
+                if _arena_reclaim_expr_escapes(_fe.left, name) { return true }
+            }
+            i = i + 1
+        }
+    }
+    if type_of(node.cond) != "string" {
+        if _arena_reclaim_expr_escapes(node.cond, name) { return true }
+    }
+    return false
+}
+
+// Reclaim-variant STATEMENT escape scan (R1/R2/R3): as _stmt_escapes_arr_name but
+//   R1  x = x.push(e) / x = [lit]  → NOT escape (self-grow / fresh literal; scan args/items)
+//   R2  x[i] = v                   → NOT escape of x (scan index + v)
+// return / global-store / outer-store / other-reassign / call-arg / slice all escape.
+fn _arena_reclaim_stmt_escapes(node, name) {
+    if type_of(node) != "map" { return false }
+    let sk = node.kind
+    // The candidate's own declaration (`let mut name = [lit]`) is not an escape;
+    // its literal initializer cannot reference the not-yet-bound name.
+    if sk == "LetStmt" || sk == "LetMutStmt" || sk == "AtomicLet" {
+        if node.name == name { return false }
+    }
+    if sk == "AssignStmt" {
+        let _tgt = node.left
+        // R1: self-reassign `name = RHS`
+        if type_of(_tgt) == "map" && _tgt.kind == "Ident" && _tgt.name == name {
+            let _rhs = node.right
+            if type_of(_rhs) != "map" { return true }
+            let rk = _rhs.kind
+            // (a) fresh container literal reset — reject an aliasing embed of name
+            if rk == "Array" || rk == "Tuple" || rk == "TupleLit" || rk == "MapLit" {
+                return _arena_reclaim_expr_escapes(_rhs, name)
+            }
+            // (b) push/append chain on name itself — scan args for embedded escape
+            if rk == "Call" {
+                let _c = _rhs.left
+                if type_of(_c) == "map" && _c.kind == "Field" && (_c.name == "push" || _c.name == "append") {
+                    let _rv = _c.left
+                    if type_of(_rv) == "map" && _rv.kind == "Ident" && _rv.name == name {
+                        if type_of(_rhs.args) != "string" {
+                            let mut ai = 0
+                            while ai < len(_rhs.args) {
+                                if _arena_reclaim_expr_escapes(_rhs.args[ai], name) { return true }
+                                ai = ai + 1
+                            }
+                        }
+                        return false
+                    }
+                }
+            }
+            // anything else assigned to name = escape (unknown provenance)
+            return true
+        }
+        // R2: index-write `name[i] = v` — not an escape of name; scan index + v
+        if type_of(_tgt) == "map" && _tgt.kind == "Index" {
+            let _ir = _tgt.left
+            if type_of(_ir) == "map" && _ir.kind == "Ident" && _ir.name == name {
+                if type_of(_tgt.right) != "string" && _arena_reclaim_expr_escapes(_tgt.right, name) { return true }
+                if type_of(node.right) != "string" && _arena_reclaim_expr_escapes(node.right, name) { return true }
+                if type_of(node.value) != "string" && _arena_reclaim_expr_escapes(node.value, name) { return true }
+                return false
+            }
+        }
+        // other targets — generic
+        if type_of(_tgt) != "string" && _arena_reclaim_expr_escapes(_tgt, name) { return true }
+        if type_of(node.right) != "string" && _arena_reclaim_expr_escapes(node.right, name) { return true }
+        if type_of(node.value) != "string" && _arena_reclaim_expr_escapes(node.value, name) { return true }
+        return false
+    }
+    if sk == "ReturnStmt" {
+        if type_of(node.left) != "string" && _arena_reclaim_expr_escapes(node.left, name) { return true }
+        if type_of(node.value) != "string" && _arena_reclaim_expr_escapes(node.value, name) { return true }
+        return false
+    }
+    if sk == "TryCatch" || sk == "RecoverStmt" {
+        if type_of(node.left) != "string" && _arena_reclaim_stmts_escape(node.left, name) { return true }
+        if type_of(node.right) != "string" && _arena_reclaim_stmts_escape(node.right, name) { return true }
+        return false
+    }
+    if type_of(node.left) != "string" {
+        if _arena_reclaim_expr_escapes(node.left, name) { return true }
+    }
+    if type_of(node.right) != "string" {
+        if _arena_reclaim_expr_escapes(node.right, name) { return true }
+    }
+    if type_of(node.value) != "string" {
+        if _arena_reclaim_expr_escapes(node.value, name) { return true }
+    }
+    if type_of(node.cond) != "string" {
+        if _arena_reclaim_expr_escapes(node.cond, name) { return true }
+    }
+    if type_of(node.then_body) != "string" {
+        if _arena_reclaim_stmts_escape(node.then_body, name) { return true }
+    }
+    if type_of(node.else_body) != "string" {
+        if _arena_reclaim_stmts_escape(node.else_body, name) { return true }
+    }
+    if type_of(node.body) != "string" {
+        if _arena_reclaim_stmts_escape(node.body, name) { return true }
+    }
+    if type_of(node.arms) != "string" {
+        let mut ai = 0
+        while ai < len(node.arms) {
+            let arm = node.arms[ai]
+            if type_of(arm) == "map" && type_of(arm.body) != "string" {
+                if _arena_reclaim_stmts_escape(arm.body, name) { return true }
+            }
+            ai = ai + 1
+        }
+    }
+    return false
+}
+
+fn _arena_reclaim_stmts_escape(stmts, name) {
+    if type_of(stmts) != "array" { return false }
+    let mut i = 0
+    while i < len(stmts) {
+        if _arena_reclaim_stmt_escapes(stmts[i], name) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// C4 STRUCTURED fall-through: no break/continue/return/defer/spawn in the loop
+// body. return/defer/spawn disqualify anywhere; break/continue disqualify only at
+// THIS loop's level (a nested loop consumes its own break/continue).
+fn _arena_reclaim_structured(stmts, in_nested_loop) {
+    if type_of(stmts) != "array" { return true }
+    let mut i = 0
+    while i < len(stmts) {
+        let s = stmts[i]
+        if type_of(s) == "map" {
+            let k = s.kind
+            if k == "ReturnStmt" || k == "Return" { return false }
+            if k == "DeferStmt" || k == "Defer" { return false }
+            if k == "SpawnStmt" || k == "Spawn" { return false }
+            if !in_nested_loop {
+                if k == "BreakStmt" || k == "Break" { return false }
+                if k == "ContinueStmt" || k == "Continue" { return false }
+            }
+            let _isloop = k == "WhileStmt" || k == "While" || k == "ForStmt" || k == "For" || k == "LoopStmt"
+            let _child_nested = if _isloop { true } else { in_nested_loop }
+            if type_of(s.then_body) != "string" {
+                if !_arena_reclaim_structured(s.then_body, in_nested_loop) { return false }
+            }
+            if type_of(s.else_body) != "string" {
+                if !_arena_reclaim_structured(s.else_body, in_nested_loop) { return false }
+            }
+            if type_of(s.body) != "string" {
+                if !_arena_reclaim_structured(s.body, _child_nested) { return false }
+            }
+            if type_of(s.arms) != "string" {
+                let mut ai = 0
+                while ai < len(s.arms) {
+                    let arm = s.arms[ai]
+                    if type_of(arm) == "map" && type_of(arm.body) != "string" {
+                        if !_arena_reclaim_structured(arm.body, in_nested_loop) { return false }
+                    }
+                    ai = ai + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// C5 LEAF whitelist: retain-free builtins (Ident callees) + methods.
+fn _arena_reclaim_is_leaf_builtin(nm) {
+    if nm == "len" { return true }
+    if nm == "print" { return true }
+    if nm == "println" { return true }
+    if nm == "eprint" { return true }
+    if nm == "eprintln" { return true }
+    if nm == "to_string" { return true }
+    return false
+}
+fn _arena_reclaim_is_leaf_method(m) {
+    if m == "push" { return true }
+    if m == "append" { return true }
+    if m == "len" { return true }
+    if m == "to_string" { return true }
+    return false
+}
+
+// C5 LEAF expression scan: false if the expr contains any USER-fn call (a Call
+// whose callee is a non-whitelisted Ident, a non-whitelisted method, or an
+// indirect/computed callee). Nested loops + whitelisted builtins/methods are OK.
+fn _arena_reclaim_expr_leaf(node) {
+    if type_of(node) != "map" { return true }
+    let k = node.kind
+    if k == "Call" {
+        let _c = node.left
+        if type_of(_c) == "map" && _c.kind == "Ident" {
+            if !_arena_reclaim_is_leaf_builtin(_c.name) { return false }
+        } else if type_of(_c) == "map" && _c.kind == "Field" {
+            if !_arena_reclaim_is_leaf_method(_c.name) { return false }
+        } else {
+            return false   // indirect/computed callee — conservatively non-leaf
+        }
+    }
+    if type_of(node.left) == "map" { if !_arena_reclaim_expr_leaf(node.left) { return false } }
+    if type_of(node.right) == "map" { if !_arena_reclaim_expr_leaf(node.right) { return false } }
+    if type_of(node.cond) == "map" { if !_arena_reclaim_expr_leaf(node.cond) { return false } }
+    if type_of(node.items) == "array" {
+        let mut i = 0
+        while i < len(node.items) {
+            if !_arena_reclaim_expr_leaf(node.items[i]) { return false }
+            i = i + 1
+        }
+    }
+    if type_of(node.args) == "array" {
+        let mut i = 0
+        while i < len(node.args) {
+            if !_arena_reclaim_expr_leaf(node.args[i]) { return false }
+            i = i + 1
+        }
+    }
+    if type_of(node.fields) == "array" {
+        let mut i = 0
+        while i < len(node.fields) {
+            let _fe = node.fields[i]
+            if type_of(_fe) == "map" && type_of(_fe.left) == "map" {
+                if !_arena_reclaim_expr_leaf(_fe.left) { return false }
+            }
+            i = i + 1
+        }
+    }
+    return true
+}
+
+fn _arena_reclaim_stmt_leaf(node) {
+    if type_of(node) != "map" { return true }
+    // expr slots (map) + stmt-list slots (array) for left/right (TryCatch bodies).
+    if type_of(node.left) == "map" { if !_arena_reclaim_expr_leaf(node.left) { return false } }
+    if type_of(node.left) == "array" { if !_arena_reclaim_stmts_leaf(node.left) { return false } }
+    if type_of(node.right) == "map" { if !_arena_reclaim_expr_leaf(node.right) { return false } }
+    if type_of(node.right) == "array" { if !_arena_reclaim_stmts_leaf(node.right) { return false } }
+    if type_of(node.value) == "map" { if !_arena_reclaim_expr_leaf(node.value) { return false } }
+    if type_of(node.cond) == "map" { if !_arena_reclaim_expr_leaf(node.cond) { return false } }
+    if type_of(node.items) == "array" {
+        let mut i = 0
+        while i < len(node.items) {
+            if !_arena_reclaim_expr_leaf(node.items[i]) { return false }
+            i = i + 1
+        }
+    }
+    if type_of(node.args) == "array" {
+        let mut i = 0
+        while i < len(node.args) {
+            if !_arena_reclaim_expr_leaf(node.args[i]) { return false }
+            i = i + 1
+        }
+    }
+    if type_of(node.then_body) == "array" { if !_arena_reclaim_stmts_leaf(node.then_body) { return false } }
+    if type_of(node.else_body) == "array" { if !_arena_reclaim_stmts_leaf(node.else_body) { return false } }
+    if type_of(node.body) == "array" { if !_arena_reclaim_stmts_leaf(node.body) { return false } }
+    if type_of(node.arms) == "array" {
+        let mut ai = 0
+        while ai < len(node.arms) {
+            let arm = node.arms[ai]
+            if type_of(arm) == "map" {
+                if type_of(arm.cond) == "map" { if !_arena_reclaim_expr_leaf(arm.cond) { return false } }
+                if type_of(arm.body) == "array" { if !_arena_reclaim_stmts_leaf(arm.body) { return false } }
+            }
+            ai = ai + 1
+        }
+    }
+    return true
+}
+
+fn _arena_reclaim_stmts_leaf(stmts) {
+    if type_of(stmts) != "array" { return true }
+    let mut i = 0
+    while i < len(stmts) {
+        if !_arena_reclaim_stmt_leaf(stmts[i]) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// Classify ONE loop body under the WIDENED bar; updates the module-global tallies
+// (report-only). Returns true iff fully widened-reclaim-safe (W1+C4+C5, no escape,
+// no outer-name allocating write). Independent failure tallies let P0 measure WHY
+// the real churn loops don't qualify (the non-leaf breakdown = the go/no-go).
+fn _arena_reclaim_loop_safe(loop_body) {
+    let cands = _arena_reclaim_body_cands(loop_body)
+    if len(cands) == 0 { return false }        // no reclaim-beneficial body-local transient
+    _arena_reclaim_cand_loops = _arena_reclaim_cand_loops + 1
+    let mut _escaped = false
+    let mut ci = 0
+    while ci < len(cands) {
+        let nm = cands[ci]
+        let mut j = 0
+        while j < len(loop_body) {
+            if _arena_reclaim_stmt_escapes(loop_body[j], nm) { _escaped = true }
+            j = j + 1
+        }
+        ci = ci + 1
+    }
+    let _outerwrite = _arena_detect_outer_heapwrite_list(loop_body, cands)
+    let _structured = _arena_reclaim_structured(loop_body, false)
+    let _leaf = _arena_reclaim_stmts_leaf(loop_body)
+    if _escaped { _arena_reclaim_escape_loops = _arena_reclaim_escape_loops + 1 }
+    if _outerwrite { _arena_reclaim_outerwrite_loops = _arena_reclaim_outerwrite_loops + 1 }
+    if !_structured { _arena_reclaim_nonstruct_loops = _arena_reclaim_nonstruct_loops + 1 }
+    if !_leaf { _arena_reclaim_nonleaf_loops = _arena_reclaim_nonleaf_loops + 1 }
+    if _escaped { return false }
+    if _outerwrite { return false }
+    if !_structured { return false }
+    if !_leaf { return false }
+    _arena_reclaim_loops_widened = _arena_reclaim_loops_widened + 1
+    return true
+}
+
 // Walk a fn body: find every While/For/Loop node, classify its body, tally into
 // the module-global counters. Recurses into nested bodies (a nested loop is scored
 // independently against its OWN body scope).
@@ -2190,6 +2645,9 @@ fn _arena_detect_walk(stmts) {
                 if _arena_detect_loop_safe(s.body) {
                     _arena_detect_loops_safe = _arena_detect_loops_safe + 1
                 }
+                // WIDENED (rung-1) classification — updates the widened tallies
+                // (mut-grow cand + C4 structured + C5 leaf). Report-only.
+                _arena_reclaim_loop_safe(s.body)
             }
             // Descend into every nested statement list so inner loops are scored.
             if type_of(s.then_body) != "string" { _arena_detect_walk(s.then_body) }
@@ -2216,11 +2674,25 @@ fn _arena_detect_walk(stmts) {
 fn _gen2_arena_detect_scan(node, fn_name) {
     let _before_total = _arena_detect_loops_total
     let _before_safe = _arena_detect_loops_safe
+    let _before_wide = _arena_reclaim_loops_widened
+    let _before_cand = _arena_reclaim_cand_loops
+    let _before_nl = _arena_reclaim_nonleaf_loops
+    let _before_ns = _arena_reclaim_nonstruct_loops
+    let _before_esc = _arena_reclaim_escape_loops
+    let _before_ow = _arena_reclaim_outerwrite_loops
     _arena_detect_walk(node.body)
     let _ft = _arena_detect_loops_total - _before_total
     let _fs = _arena_detect_loops_safe - _before_safe
+    let _fw = _arena_reclaim_loops_widened - _before_wide
+    let _fc = _arena_reclaim_cand_loops - _before_cand
+    let _fnl = _arena_reclaim_nonleaf_loops - _before_nl
+    let _fns = _arena_reclaim_nonstruct_loops - _before_ns
+    let _fesc = _arena_reclaim_escape_loops - _before_esc
+    let _fow = _arena_reclaim_outerwrite_loops - _before_ow
     if _ft > 0 {
-        eprintln("[arena-detect] fn `" + fn_name + "`: " + to_string(_fs) + "/" + to_string(_ft) + " loop(s) whole-body region-no-escape reclaim-safe [HEXA_ARENA_DETECT]")
+        // strict = #4700 immutable-only bar; widened = rung-1 (mut-grow + C4 + C5).
+        // fail-breakdown counts why cand-bearing loops missed widened (independent).
+        eprintln("[arena-detect] fn `" + fn_name + "`: strict " + to_string(_fs) + "/" + to_string(_ft) + " widened " + to_string(_fw) + "/" + to_string(_ft) + " reclaim-safe [cand=" + to_string(_fc) + " nonleaf=" + to_string(_fnl) + " nonstruct=" + to_string(_fns) + " escape=" + to_string(_fesc) + " outerwrite=" + to_string(_fow) + "] [HEXA_ARENA_DETECT]")
     }
     return 0
 }

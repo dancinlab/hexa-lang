@@ -1,0 +1,28 @@
+// ADVERSARIAL ABA/ALIAS repro for the mem-lane ② WIDENED (rung-1) detector.
+// A body-local mutable transient `t` is grown by push (would be widened-safe on
+// its own), but is then ALIASED to a second body-local `s = t` which ESCAPES via
+// a module global. An unsound rewind that reclaimed t's region would free the
+// value still reachable through G -> use-after-free. The widened escape scan MUST
+// classify the loop as NOT reclaim-safe (widened 0/…): the alias `let s = t`
+// mentions `t` outside the R1/R2/R3 self-grow whitelist -> escape.
+// Expected: the [arena-detect] line for `churn_alias` shows widened 0/… (REJECTED).
+let mut G = []
+fn churn_alias(m) {
+  let mut acc = 0
+  let mut a = 0
+  while a < m {
+    let mut t = []
+    let mut b = 0
+    while b < 8 { t = t.push(a + b); b = b + 1 }
+    let s = t          // ALIAS — t now reachable through s
+    G = s              // s (== t) ESCAPES via a module global -> t must NOT be freed
+    acc = acc + t[7]
+    a = a + 1
+  }
+  acc
+}
+fn main() {
+  let r = churn_alias(4)
+  println(r)
+  println(G.len())
+}
