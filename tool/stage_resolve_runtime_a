@@ -2022,8 +2022,9 @@ build_runtime_a_from_source() {
         # convergence stage-resolve-runtime-a-2.
         # FLIP-6 tri-state (default 0=OFF). Read HERE, before the seed-mode reads it forces
         # below (rule: HEAP forces REALLOC-F2 ON, free/calloc seeds OFF — one symbol one
-        # provider). A 1-line PR-B flip (:-0 -> :-auto) turns it on after byteeq reconverge.
-        _heap_mode="${HEXA_RT_HEAP_NATIVE:-0}"
+        # provider). PR-B flips the default ON (:-auto); explicit HEXA_RT_HEAP_NATIVE=0 opts
+        # out, rollback = revert this token to :-0 (PR-A #4731 mechanism stays inert OFF).
+        _heap_mode="${HEXA_RT_HEAP_NATIVE:-auto}"
         _rnfr_mode="${HEXA_RT_NATIVE_FREE:-auto}"
         # zeroc #29 realloc F2: when the realloc flip is active, the shim's magic-guarded
         # RECLAIMING hxlcl_free MUST serve — the free no-op seed would (a) leak (never reclaim),
@@ -3362,6 +3363,23 @@ resolve_native_alloc_syscall_seed
 # runtime objects so build_runtime_a_from_source folds them into runtime.a +
 # compiles runtime.c -DHEXA_CUDA. No-op (HEXA_CUDA unset) on every default build.
 resolve_cuda_runtime_seed
+
+# FLIP-6 warm-tree staleness reconcile: self/runtime.c is a gitignored artifact
+# of arbitrary vintage. A stale copy (old 2-arm HXFARR block, or pre-HXFARR)
+# makes -DHEXA_RT_HEAP_NATIVE match no conditional -> __libc_calloc -> the
+# native heap is INERT on warm pool trees while .c=0 CI regens GREEN (warm-tree-
+# only divergence). Key on the exact #define the 3-arm injection emits
+# (restore_frozen_seeds FARR block) and force the proven regen path (frozen
+# restore -> M3 synth -> 3-arm inject). Byte-neutral flip-OFF (the 3-arm #ifdef
+# preprocesses away to the same __GLIBC__/#else bytes). Restore is invoked inline
+# (not rm-only) because the seeds-removed path hard-requires EDGE_ASSET (:?)
+# BEFORE restore; only a genuine restore failure should reach that last-resort.
+if [ -f self/runtime.c ] && \
+   ! grep -qF '#define HXFARR_CALLOC(nm,sz) hxlcl_heap_calloc((nm),(sz))' self/runtime.c; then
+    echo "stage_resolve_runtime_a: self/runtime.c STALE (HXFARR 3-arm HEXA_RT_HEAP_NATIVE marker absent) — regenerating via restore_frozen_seeds"
+    rm -f self/runtime.c
+    bash tool/restore_frozen_seeds || true   # on failure runtime.c stays absent -> seeds-removed path below takes over
+fi
 
 if [ -f self/runtime.c ]; then
     echo "stage_resolve_runtime_a: seeds present — building runtime.a from source"
