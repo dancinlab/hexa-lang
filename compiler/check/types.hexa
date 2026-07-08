@@ -4154,7 +4154,7 @@ fn _is_builtin_method(name: string) -> bool {
 // (gen2 → hexa_array_find; `hexa_void()` when none), NOT an index — the naive
 // `find → i64` guess is a mis-type. `pad_start`/`pad_end` have NO gen2 dispatch
 // arm (they would runtime-error), so they are never typed. `char_at`
-// (codepoint-string, ambiguous), `mean` (array-only), and all higher-order /
+// (codepoint-string, ambiguous), and all higher-order /
 // container selectors (map/filter/fold/get/pop/slice/sum/product/min/max/
 // first/last/keys/values/entries/…) resolve to a receiver/element-dependent
 // type and are left unknown.
@@ -4195,6 +4195,21 @@ fn _types_builtin_method_ret(name: string) -> Type {
         "starts_with" -> _types_t_bool(),
         "ends_with" -> _types_t_bool(),
         "to_bool" -> _types_t_bool(),
+        //   contains_key/has_key/has → self/codegen.hexa emit
+        //     hexa_bool(hexa_map_contains_key(...)) on every arm (map methods).
+        //   any/all → codegen hexa_array_any/all (runtime_emit hexa_array_any/all)
+        //     return hexa_bool on every path; the map-delegate arms
+        //     hexa_map_any/hexa_map_all (runtime_core_emit / native rtcore) also
+        //     return hexa_bool → receiver-independent bool.
+        "contains_key" -> _types_t_bool(),
+        "has_key" -> _types_t_bool(),
+        "has" -> _types_t_bool(),
+        "any" -> _types_t_bool(),
+        "all" -> _types_t_bool(),
+        //   mean → codegen hexa_array_mean → runtime_emit hexa_array_mean returns
+        //     hexa_float even on the non-array fallback (hexa_float(0.0)), so the
+        //     f64 tag is receiver-independent.
+        "mean" -> _types_t_f64(),
         // → string: gen2 hexa_to_string / str_* / rt_str_* kernels (→ string).
         "to_string" -> _types_t_string(),
         "to_upper" -> _types_t_string(),

@@ -817,6 +817,27 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3045",
+        title: "cannot assign twice to immutable variable",
+        // Warning band (SSOT F4 warn-first), the immutable-reassign rung of the
+        // opt-in borrow checker (`HEXA_BORROWCK=1` / `_bck_active`). Unlike the
+        // `&`-carrier rungs this rung CAN fire on real i64 shipping source
+        // (hexa currently permits immutable reassign silently), so it ships
+        // warning-band DEFAULT; under `HEXA_BORROWCK_STRICT=1` the SAME
+        // diagnostic instance re-bands to a build-refusing Error via the
+        // sanctioned caller override in `_bck_emit_reassign_immut` (identical
+        // mechanism to HX3014/HX3027/HX3029/HX3040). With the flag unset the
+        // pass is inert (`_bck_active` false) so nothing is emitted and the
+        // diagnostic stream + emitted bytes are byte-identical — release
+        // integrity first. STRICT-Error promotion is a follow-up gated on a
+        // clean corpus scan.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "cannot assign twice to immutable variable `{name}`",
+        explain: "Borrow/mutability check (borrowck ladder, opt-in HEXA_BORROWCK / `_bck_active`-gated). A `let`-bound local declared WITHOUT `mut` receives a second definite assignment. This is Rust's E0384 ('cannot assign twice to immutable variable `x`'; the MIR borrowck immutable-place check) — `let x = 1; x = 2` is rejected because the binding is immutable. hexa wires it at the assign-arm bare-ident reassign hook (hir_to_mir.hexa, the `lhs.kind == \"ident\"` block that already fires `_bck_ref_kill`/`_bck_asn_track`): a second definite write to an immutable binding whose reassign-registry (`_bckm_*` / `_bckm_find`) already records a prior definite assignment = E0384. Immutability is read from the parser's `mut:` name prefix and recorded in a dedicated per-binding registry (`_bckm_ids`/`_bckm_mut`/`_bckm_wr`) populated at each bare-ident `let` — a flow-insensitive append-only lane keyed by LOCAL ID (a sibling of the `_bcki_*` uninit registry), NOT a new dataflow axis. This dedicated lane is used rather than the aggregate loan registry because scalar `let`s are Copy and never grouped there, so the canonical scalar E0384 case would otherwise be invisible. Conservative FP=0 boundary: bare-ident LHS only (a field/index LHS `a.b = …` / `a[i] = …` returns earlier via the aggregate/index arms and is EXCLUDED); immutable binding only (a `let mut x` binding is SILENT); same-fn local (the registry resets per fn); the `let x = init` binding-write counts as the FIRST definite assignment so the first post-init `x = …` fires, while a deferred-init `let x; x = 1` treats the first assign AS the init (silent) and only a second `x = 2` fires; a shadowing rebind `let x = …; let x = …` is a fresh id/row → silent (correct — a new binding, not a reassignment); module-level globals are excluded (`is_global`). BAND: opt-in `_bck_active` (HEXA_BORROWCK), warning-band DEFAULT with a HEXA_BORROWCK_STRICT re-band to build-refusing ERROR; unlike the `&`-carrier rungs this rung CAN fire on real i64 shipping source (hexa currently permits immutable reassign silently), so STRICT-Error promotion is gated on a clean corpus scan (real hits → `let mut` fixes or the rung stays warning-band). Ships byteeq-neutral regardless: the flag defaults OFF and writes/types erase at MIR so codegen .text is byte-identical. Fix: declare the binding `let mut {name}` if it must change, or introduce a fresh binding instead of reassigning.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
