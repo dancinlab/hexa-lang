@@ -48,6 +48,16 @@
 #define forge_dispatch_adamw_fused       __hx_rtdecls_skip_fda2
 #define hexa_forge_dispatch_clm_megafwd  __hx_rtdecls_skip_fcm
 #define forge_dispatch_clm_megafwd       __hx_rtdecls_skip_fcm2
+/* C-4 (#4704) suppress: this Case-B runtime TU already owns hxlcl_write -- the
+ * svc-trap `static` def (runtime_emit_full.hexa:1721 darwin / :2206 linux, under
+ * #ifndef HEXA_RT_SELFEMIT) or, under HEXA_RT_SELFEMIT, the `extern` resolved by
+ * the self-emit .o. runtime.h's static-inline write(2) delegate is for the DRIVER
+ * TU only; unsuppressed it is a C redefinition (default) / static-follows-extern
+ * (SELFEMIT) error when decls.h pulls runtime.h into this TU. Pre-defining the
+ * guard skips runtime.h's copy (which #defines the same macro when it fires, so
+ * no #undef is needed). Fixes the `runtime.h:2319 redefinition of hxlcl_write`
+ * FATAL that broke every release_build S2 gate (HEXA_RT_MULTIOBJ default-ON). */
+#define HEXA_SELFBUILD_HXLCL_WRITE
 #include "runtime.h"
 #undef hexa_forge_dispatch_adamw_fused
 #undef forge_dispatch_adamw_fused
