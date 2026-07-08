@@ -1,0 +1,24 @@
+// RUNG-2a inter-procedural ADVERSARY: the callee embeds its parameter in a FRESH
+// container that it RETURNS (arg-escape + ret-alloc). The summary MUST mark the
+// param Escape (embedded in a returned alloc) AND ret_alloc=1 → callee not
+// region-safe → the loop is REJECTED. EXPECT: 0 widened (FP=0).
+fn wrap(x) {
+  let w = [x, x]     // parameter captured into a fresh alloc …
+  w                  // … which is RETURNED (survives the call)
+}
+fn churn(n) {
+  let mut acc = 0
+  let mut a = 0
+  while a < n {
+    let mut t = []
+    let mut b = 0
+    while b < 16 { t = t.push(a * b); b = b + 1 }
+    wrap(t)              // cand captured+returned by the callee
+    acc = acc + t[0]
+    a = a + 1
+  }
+  acc
+}
+fn main() {
+  println(churn(40))
+}

@@ -1,0 +1,34 @@
+// RUNG-2a inter-procedural ADVERSARY: a 3-deep call chain whose LEAF stashes the
+// parameter into a global. Region-safety (and param-Escape) MUST propagate FALSE
+// up the whole chain (transitive) — top_fn is unsafe because mid_fn is unsafe
+// because leaf_esc leaks. The loop is REJECTED. EXPECT: 0 widened (FP=0).
+let mut STORE = []
+fn leaf_esc(x) {
+  STORE = x        // the chain leaf leaks the param to a global
+  0
+}
+fn mid_fn(x) {
+  leaf_esc(x)
+  0
+}
+fn top_fn(x) {
+  mid_fn(x)
+  0
+}
+fn churn(n) {
+  let mut acc = 0
+  let mut a = 0
+  while a < n {
+    let mut t = []
+    let mut b = 0
+    while b < 14 { t = t.push(a + b * 2); b = b + 1 }
+    top_fn(t)              // cand enters a chain whose leaf escapes
+    acc = acc + t[1]
+    a = a + 1
+  }
+  acc
+}
+fn main() {
+  println(churn(25))
+  println(STORE.len())
+}

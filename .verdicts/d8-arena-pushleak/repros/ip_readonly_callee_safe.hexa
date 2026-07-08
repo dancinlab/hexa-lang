@@ -1,0 +1,31 @@
+// RUNG-2a inter-procedural POSITIVE control (discrimination): the loop transient
+// is handed to a callee that ONLY READS it (index + len), returns a scalar, and
+// stores nothing to a global. Summary = param NoEscape + ret_alloc=0 + no
+// glob-store ⇒ region-safe. The loop therefore FLIPS from nonleaf (P0 leaf-only,
+// HEXA_ARENA_NO_IP=1 → 0 widened) to reclaim-safe under IP widening (→ 1 widened).
+// This is the ONLY repro that MUST show a >=1 widened line; every ip_*_escape
+// adversary MUST stay 0.
+fn peek(a) {
+  let mut s = 0
+  let mut i = 0
+  while i < len(a) {
+    s = s + a[i]      // pure index-read — does NOT escape the param
+    i = i + 1
+  }
+  s
+}
+fn worker(n) {
+  let mut acc = 0
+  let mut a = 0
+  while a < n {
+    let mut t = []
+    let mut b = 0
+    while b < 18 { t = t.push(a + b); b = b + 1 }
+    peek(t)          // cand handed to a read-only, no-escape callee
+    a = a + 1
+  }
+  acc
+}
+fn main() {
+  println(worker(40))
+}
