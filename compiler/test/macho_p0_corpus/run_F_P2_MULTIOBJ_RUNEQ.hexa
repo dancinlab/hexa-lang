@@ -41,6 +41,7 @@ fn main() {
                 sym_idx: 1,                          // symbols[1] = _exit_helper
                 kind:    4,                          // R_X86_64_PLT32
                 addend:  -4,
+                site_seg: 1,
             },
         ],
         symbols: [
