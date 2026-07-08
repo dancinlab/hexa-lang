@@ -1,3 +1,4 @@
+{"ts":"2026-07-08","title":"feat(emit): axis-③ R2a x86_64 own-emit encoder integer-ALU completion — IMUL(1/2/3-op)·AND/OR/XOR(r64,r64+imm32)·SHL/SHR/SAR(imm8+CL)·NEG/NOT·MOVSXD + LOUD ENCODE-MISS (was silent return[]→corrupt text). Byte-neutral: shipping=C-transpile path, encoder only on --emit=exec own-emit. next=③-R2b SSE-float family + ENCODE-MISS==0 self-emit census","body":""}
 {"ts":"2026-07-08","title":"docs(hexa-own): axis-③ R2 own-emit x86_64 COMPILE coverage census — encoder=integer-subset·gaps=imul/bitwise/shift/SSE·default-flip readiness ~0-5%·silent ENCODE-MISS safety bug·next=③-R2a","body":""}
 {"ts":"2026-07-08","title":"docs(hexa-own): FLIP-6 native reclaiming heap allocator 설계 박제 (axis-② terminal flip·Fable) — segregated free-list+F2 magic-header+HXFARR carve-out·PR-A byte-neutral OFF","body":""}
 {"ts":"2026-07-08","title":"docs: 박제 self-host DONE 3-기준 완료 목표 (user standing) — ARCHITECTURE activeGoal + CLAUDE.md ACTIVE GOAL + 3-axis fleet","body":""}
