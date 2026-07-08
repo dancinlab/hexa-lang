@@ -1377,6 +1377,12 @@ build_runtime_a_from_source() {
     # RT-NATIVE Route B (gated, opt-IN): native linked-block arena replaces the C
     # arena `#else` in runtime_core.c when HEXA_RT_ALLOC_NATIVE=1 + seed object built.
     local rt_alloc_def=""
+    # _heap_def MUST be declared unconditionally at function-body scope (like the sibling
+    # rt_*_def locals): $_heap_def is referenced at the ALWAYS-reached fallback compiles
+    # (:3192/:3200), outside the RT-ALLOC-NATIVE if-block where it was mis-scoped (8-space)
+    # — under `set -u` (the @grace consent job) that path crashed with `_heap_def: unbound
+    # variable`. The FLIP-6 default-flip exposed it by taking a path that skips the if-block.
+    local _heap_def=""
     if [ "${HEXA_RT_ALLOC_NATIVE:-1}" != "0" ] && [ -f build/alloc_syscall_native.o ]; then
         rt_alloc_def="-DHEXA_RT_ALLOC_NATIVE=1"
         extra_obj="$extra_obj build/alloc_syscall_native.o"
@@ -1518,7 +1524,7 @@ build_runtime_a_from_source() {
         # runtime.c/runtime_core.c (HXFARR carve-out). Empty by DEFAULT => every arm
         # preprocesses away => runtime.a byte-identical (PR-A byteeq-neutral). Set ONLY in
         # the RT-NATIVE-REALLOC F2 block below (gated on $_heap_mode), which HEAP forces ON.
-        local _heap_def=""
+        # (_heap_def is now declared unconditionally at the rt_alloc_def scope above.)
         # ── zero-c #29 SELFEMIT×RT-NATIVE CO-DROP registry (root-cause #4570→#4571) ──
         # A symbol that a RT-NATIVE-<SYM> frozen seed will adopt must NOT ALSO get a
         # SELFEMIT/MEMLEAF member — two archive members exporting the same global
