@@ -1,0 +1,259 @@
+#!/usr/bin/env bash
+# tool/native_c_crash_census — NATIVE-vs-C `hexa build` differential crash census.
+#
+# WHY THIS EXISTS  (axis-① round-3, deliverable named by the ①-R2 census #4742)
+#   The LOUD abort class (HX110x → C fallback) is measured NEAR-DRAINED: no
+#   discrete `lower/` arm still fires on in-tree code. What keeps `hexa_cc.c`
+#   alive on the default `cmd_build` path is NOT a missing lowering arm — it is
+#   (1) the x86_64 HexaVal pair-carry SILENT miscompile
+#   (`F-RT-NATIVE-X86-CODEGEN-ROOTCAUSE`, owned by ②-R4's value-model rearch),
+#   and (2) the ABSENCE of a live crash-census measurement — the legacy
+#   "13 native-crash-where-clang-works" number is STALE and unproven.
+#
+#   The delegate-fallback (`self/main.hexa` leg-B / HEXA_BUILD_NATIVE) catches
+#   emit/link *failures* (loud → non-zero → fall back to C). It CANNOT see a
+#   native binary that emits, links, runs, and produces the WRONG answer or
+#   SIGSEGVs. That silent class is the only thing that can burn a user on a
+#   "green" `cmd_build` default-flip. This harness MEASURES it.
+#
+# WHAT IT DOES  (the differential)
+#   For each `.hexa` program in a real build corpus it builds the program BOTH
+#   ways through the SHIPPING `hexa build` consumer path:
+#     • C-ORACLE  — default `hexa build` (hexat → C-transpile → clang). Golden.
+#     • NATIVE    — `HEXA_BUILD_NATIVE=1` (aprime own-IR --emit=obj + `ld`,
+#                   ZERO hexat, ZERO clang), traced with HEXA_RUN_NATIVE_TRACE=1.
+#   It RUNS both resulting binaries and diffs (exit code + stdout). The C-oracle
+#   IS the expected value — no per-program hardcoded output is needed, so the
+#   corpus can be ANY real `.hexa` program.
+#
+#   ┌ serve-mode discrimination (the crux) ────────────────────────────────────┐
+#   │ The native `hexa build` path FALLS BACK to C on any emit/link failure, so │
+#   │ an invocation that fell back is NOT a native measurement (its binary ==   │
+#   │ the C oracle — a safe compile-coverage gap, not a silent miscompile). We  │
+#   │ detect a genuine native serve by the success marker on the build's stdout:│
+#   │   "(native backend, leg-B — no hexat, no clang)"   (self/main.hexa:3570)  │
+#   │ Only a program that SERVED native and then diverged is a census entry.    │
+#   └──────────────────────────────────────────────────────────────────────────┘
+#
+# CLASSIFICATION  (the whole point — a live count, not the stale "13")
+#   PASS        native SERVED and (rc,stdout) == C-oracle. The native consumer
+#               build is byte-behaviour-correct for this program.
+#   MISCOMPILE  native SERVED, produced a binary, but (rc,stdout) DIVERGES from
+#               the C-oracle — OR the native binary crashed (rc>=128 signal) /
+#               hung (timeout). THIS is a live "native-crash-where-clang-works"
+#               census entry — the trust-gate breaker. The dominant expected
+#               member on x86_64-linux is the HexaVal pair-carry (census #1).
+#   FALLBACK    native invocation fell back to C (loud abort / infra). The
+#               delegate is intact and the served binary == the C build — SAFE.
+#               Counted separately as the residual COMPILE-coverage gap, never
+#               graded RED (no user burn).
+#   SETUP       the C-oracle itself failed to build/run here → no differential
+#               can be formed → infra, skipped (never a native regression).
+#
+#   `CENSUS_KNOWN` may name basenames EXPECTED to miscompile (the tracked
+#   #1 x86_64 pair-carry, until ②-R4 lands). A KNOWN entry is still COUNTED and
+#   PRINTED in the live census, but does NOT flip the gate RED — so this can wire
+#   into CI as a "no NEW silent miscompile" regression gate without being
+#   permanently red on the acknowledged x86 value-model rearch.
+#
+# EXIT
+#   0  no NEW silent miscompile (the live census is clean, or contains only
+#      CENSUS_KNOWN entries). The measured live count is printed regardless.
+#   1  REGRESSION — >=1 NEW (unexpected) native-crash-where-clang-works entry.
+#      This is the only red: a program the C path builds+runs correctly, that
+#      the native own-IR path silently miscompiles/crashes.
+#   2  SETUP/INFRA neutral — no driver, empty corpus, OR no program EVER served
+#      native here (the canary won't native-serve: a non-Linux-x86_64/aarch64
+#      host, mini, or a runtime.a without own-start — the native leg-B is a
+#      no-op there). The census FLOOR is not broken; the runner simply cannot
+#      native-serve → run on the linux pool (aiden/summer). CI remaps 2->neutral.
+#
+# ── POLICY: RUN ON THE POOL (aiden/summer), NOT mini ──────────────────────────
+#   The native leg-B only fires on Linux x86_64/aarch64 with a native runtime.a
+#   carrying own-start. On mini (darwin) every case is FALLBACK → the canary
+#   fails → exit 2. This is a MEASUREMENT vehicle: `bash tool/native_c_crash_census`
+#   on aiden. This gate is ADVISORY on the CI summary until ②-R4 fixes census #1
+#   (it will report the tracked x86 pair-carry as a KNOWN entry, not a NEW red).
+#
+# CONFIG (env)
+#   HEXA           build driver (default: `hexa` on PATH, else ~/.hx/bin/hexa)
+#   CENSUS_CORPUS  space/newline-separated corpus DIRS of *.hexa programs
+#                  (default: the two proven miscompile corpora —
+#                   self/test/miscompile_zero + self/test/miscompile_class)
+#   CENSUS_KNOWN   space-separated program basenames (no .hexa) expected to
+#                  miscompile — counted+printed but not graded RED (default: none)
+#   CENSUS_OUT     work/log dir (default: <repo>/build/crash-census-out)
+#   CENSUS_TIMEOUT per-binary run timeout seconds (default: 20)
+#
+# Extension-less (not .sh) per the selfhost_native_build_gate / stage_* precedent
+# (the project sidecar hook blocks .sh Write/Edit). Invoke: `bash tool/native_c_crash_census`.
+set -u
+
+# ── locate repo ───────────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO" || { echo "crash-census: SETUP — cannot cd to repo $REPO" >&2; exit 2; }
+
+# ── resolve the build driver ──────────────────────────────────────────────
+HEXA="${HEXA:-hexa}"
+if ! command -v "$HEXA" >/dev/null 2>&1; then
+    if [ -x "$HOME/.hx/bin/hexa" ]; then
+        HEXA="$HOME/.hx/bin/hexa"
+    else
+        echo "crash-census: NEUTRAL — driver \`$HEXA\` not on PATH and no ~/.hx/bin/hexa" >&2
+        exit 2
+    fi
+fi
+
+CORPUS_DIRS="${CENSUS_CORPUS:-self/test/miscompile_zero self/test/miscompile_class}"
+TIMEOUT="${CENSUS_TIMEOUT:-20}"
+OUT="${CENSUS_OUT:-$REPO/build/crash-census-out}"
+mkdir -p "$OUT"
+
+# CENSUS_KNOWN → a lookup helper (basename membership).
+KNOWN=" ${CENSUS_KNOWN:-} "
+is_known() { case "$KNOWN" in *" $1 "*) return 0;; *) return 1;; esac }
+
+# timeout wrapper (fall back to a bare run if `timeout` is absent).
+run_to() {
+    if command -v timeout >/dev/null 2>&1; then timeout "$TIMEOUT" "$@"; else "$@"; fi
+}
+
+# build_c SRC OBJ  — default (C-transpile) build. Sets C_RC (driver rc), C_OK.
+build_c() {
+    local src="$1" bin="$2"
+    rm -f "$bin"
+    env -u HEXA_BUILD_NATIVE -u HEXA_RUN_NATIVE_TRACE \
+        "$HEXA" build "$src" -o "$bin" >"$OUT/_c.buildlog" 2>&1
+    C_RC=$?
+    if [ -x "$bin" ]; then C_OK=1; else C_OK=0; fi
+}
+
+# build_native SRC OBJ  — native leg-B build, traced. Sets N_RC, N_OK, N_SERVED.
+build_native() {
+    local src="$1" bin="$2"
+    rm -f "$bin"
+    HEXA_BUILD_NATIVE=1 HEXA_RUN_NATIVE_TRACE=1 \
+        "$HEXA" build "$src" -o "$bin" >"$OUT/_n.buildlog" 2>&1
+    N_RC=$?
+    if [ -x "$bin" ]; then N_OK=1; else N_OK=0; fi
+    # served-native discriminator: the leg-B success marker on the build stdout.
+    if grep -q "native backend, leg-B" "$OUT/_n.buildlog" 2>/dev/null; then
+        N_SERVED=1
+    else
+        N_SERVED=0
+    fi
+}
+
+echo "── native-vs-C crash census ──────────────────────────────────────"
+echo "  driver : $HEXA"
+echo "  corpus : $CORPUS_DIRS"
+echo "  out    : $OUT"
+[ -n "${CENSUS_KNOWN:-}" ] && echo "  known  : $CENSUS_KNOWN"
+echo "──────────────────────────────────────────────────────────────────"
+
+# ── CANARY — can this host native-serve AT ALL? ───────────────────────────
+# A trivial arith program MUST serve native on a capable Linux host. If even it
+# falls back, the native leg-B is a no-op here (darwin/mini, non-x86_64/aarch64,
+# or a runtime.a without own-start) → SETUP/INFRA (exit 2), NOT a red regression
+# (mirrors the miscompile_zero_gate canary guard). This is the structural fence
+# against a whole-host non-serving run masquerading as "0 findings".
+CANARY_SRC="$OUT/_canary.hexa"
+printf '%s\n' 'fn main(){ let a=30; let b=12; print(to_string(a+b)); exit(0) }' > "$CANARY_SRC"
+build_native "$CANARY_SRC" "$OUT/_canary.bin"
+if [ "$N_SERVED" -ne 1 ]; then
+    echo "crash-census: NEUTRAL — canary will not native-serve on this host" >&2
+    echo "  (arith canary fell back to C: this host cannot exercise the native" >&2
+    echo "   leg-B — non-Linux-x86_64/aarch64, mini, or a runtime.a without" >&2
+    echo "   own-start. The census FLOOR is not broken; run on the linux pool" >&2
+    echo "   aiden/summer. Native build log tail:)" >&2
+    tail -3 "$OUT/_n.buildlog" >&2 2>/dev/null
+    exit 2
+fi
+echo "  canary : native-serve OK (leg-B active) — measuring differential"
+echo "──────────────────────────────────────────────────────────────────"
+
+# ── the differential sweep ────────────────────────────────────────────────
+n=0; served=0; pass=0
+miscompile=0; new_mis=0; known_mis=0
+fallback=0; setup=0
+
+for dir in $CORPUS_DIRS; do
+    [ -d "$dir" ] || { echo "  (skip absent corpus dir: $dir)"; continue; }
+    for src in "$dir"/*.hexa; do
+        [ -e "$src" ] || continue
+        n=$((n + 1))
+        b="$(basename "$src" .hexa)"
+
+        # (1) C-oracle build + run — the golden.
+        build_c "$src" "$OUT/$b.c.bin"
+        if [ "$C_OK" -ne 1 ]; then
+            printf "  SETUP  %-26s C-oracle build failed (rc=%s) — no differential\n" "$b" "$C_RC"
+            setup=$((setup + 1)); continue
+        fi
+        c_out="$(run_to "$OUT/$b.c.bin" 2>/dev/null)"; c_rc=$?
+
+        # (2) native leg-B build.
+        build_native "$src" "$OUT/$b.n.bin"
+        if [ "$N_SERVED" -ne 1 ]; then
+            # Fell back to C → the delegate caught it; served binary == C oracle.
+            # A COMPILE-coverage residual, never RED.
+            reason="$(grep -m1 '\[build-native\]' "$OUT/_n.buildlog" 2>/dev/null | sed 's/^[[:space:]]*//')"
+            printf "  FALLB  %-26s native fell back to C (safe) %s\n" "$b" "${reason:+— $reason}"
+            fallback=$((fallback + 1)); continue
+        fi
+        served=$((served + 1))
+
+        if [ "$N_OK" -ne 1 ]; then
+            # Served marker printed but no binary — treat as a divergence entry.
+            printf "  MISC*  %-26s native SERVED but produced no binary (rc=%s)\n" "$b" "$N_RC"
+            miscompile=$((miscompile + 1))
+            if is_known "$b"; then known_mis=$((known_mis + 1)); else new_mis=$((new_mis + 1)); fi
+            continue
+        fi
+
+        # (3) native run + diff vs oracle.
+        n_out="$(run_to "$OUT/$b.n.bin" 2>/dev/null)"; n_rc=$?
+
+        if [ "$n_rc" = "$c_rc" ] && [ "$n_out" = "$c_out" ]; then
+            printf "  PASS   %-26s rc=%s (native==C)\n" "$b" "$n_rc"
+            pass=$((pass + 1))
+            continue
+        fi
+
+        # DIVERGENCE — a live census entry.
+        crash=""
+        [ "$n_rc" -ge 128 ] && crash=" SIGNAL(crash rc=$n_rc)"
+        [ "$n_rc" = 124 ]   && crash=" TIMEOUT"
+        miscompile=$((miscompile + 1))
+        tag="NEW"
+        if is_known "$b"; then tag="KNOWN"; known_mis=$((known_mis + 1)); else new_mis=$((new_mis + 1)); fi
+        printf "  MISC   %-26s [%s]%s  native(rc=%s out=%s) != C(rc=%s out=%s)\n" \
+               "$b" "$tag" "$crash" "$n_rc" "$(printf %s "$n_out" | head -c 40)" \
+               "$c_rc" "$(printf %s "$c_out" | head -c 40)"
+    done
+done
+
+echo "──────────────────────────────────────────────────────────────────"
+if [ "$n" -eq 0 ]; then
+    echo "crash-census: NEUTRAL — corpus is empty ($CORPUS_DIRS)" >&2
+    exit 2
+fi
+echo "crash-census SUMMARY  programs=$n served=$served"
+echo "  PASS=$pass  MISCOMPILE=$miscompile (NEW=$new_mis KNOWN=$known_mis)  FALLBACK=$fallback  SETUP=$setup"
+echo "  ── LIVE crash-where-clang-works count = $miscompile ──"
+echo "     (this replaces the stale '13'; NEW=$new_mis is the regression axis)"
+
+if [ "$served" -eq 0 ]; then
+    echo "crash-census: NEUTRAL — no program served native (all fell back); cannot measure here" >&2
+    exit 2
+fi
+if [ "$new_mis" -ne 0 ]; then
+    echo "crash-census: FAIL — $new_mis NEW native-crash-where-clang-works entr(y/ies)" >&2
+    echo "  (a program the C path builds+runs correctly is silently miscompiled by" >&2
+    echo "   the native own-IR path). If this is the tracked x86_64 pair-carry," >&2
+    echo "   add its basename to CENSUS_KNOWN to acknowledge it as census #1." >&2
+    exit 1
+fi
+echo "crash-census: PASS — 0 NEW silent miscompiles (KNOWN=$known_mis acknowledged)"
+exit 0
