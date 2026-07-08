@@ -145,6 +145,26 @@ fn _ex86_reg32(s: string) -> Int {
     return -1
 }
 
+// ③-R2f: extended 32-bit reg names (r8d..r15d = the low dword of r8..r15).
+// `_ex86_reg32` only knows the legacy eax..edi (0..7); the `dword ptr [..]`
+// mem-operand family (arr_len/ptr_load32/va_start) targets r10d/r11d, whose
+// r-prefixed name the width-dispatcher routes to MOV64 but whose true width
+// is 32-bit (the `dword ptr` size prefix). This resolver is used ONLY by the
+// R2f size-ptr mem arms below, so the legacy reg32 callers are unperturbed.
+fn _ex86_reg32e(s: string) -> Int {
+    let r = _ex86_reg32(s)
+    if r >= 0 { return r }
+    if s == "r8d"  || s == "R8D"  { return 8 }
+    if s == "r9d"  || s == "R9D"  { return 9 }
+    if s == "r10d" || s == "R10D" { return 10 }
+    if s == "r11d" || s == "R11D" { return 11 }
+    if s == "r12d" || s == "R12D" { return 12 }
+    if s == "r13d" || s == "R13D" { return 13 }
+    if s == "r14d" || s == "R14D" { return 14 }
+    if s == "r15d" || s == "R15D" { return 15 }
+    return -1
+}
+
 // x86_64 r64 register name → index 0..15.
 //   rax=0 · rcx=1 · rdx=2 · rbx=3 · rsp=4 · rbp=5 · rsi=6 · rdi=7 ·
 //   r8..r15=8..15 (require REX.B prefix bit).
@@ -287,6 +307,36 @@ fn _ex86_parse_mem(s: string) -> [Int] {
     let base_idx  = _ex86_reg64(base_name)
     let disp      = sign * off_str.to_int()
     return [base_idx, disp]
+}
+
+// ③-R2f: parse a SIZE-prefixed memory-operand LABEL string as emitted by the
+// codegen for va_arg / ptr_load* / ptr_store* / arr_len / str_byte — the form
+// `<size> ptr [base ± disp]` where size ∈ {byte,word,dword,qword}. Unlike the
+// `kind:"mem"` operand (which stringifies to a bare `[base ± disp]`), these
+// arrive as `kind:"label"` carrying the whole `dword ptr [r10 + 8]` string, so
+// `_ex86_parse_mem` (which requires a leading `[`) rejects them → ENCODE-MISS.
+// This strips the `<size> ptr ` prefix, then reuses `_ex86_parse_mem` for the
+// `[base ± disp]` tail. Returns `[size_code, base_r64_idx, disp]` with
+// size_code ∈ {1=byte, 2=word, 4=dword, 8=qword}; `[-1, 0, 0]` if not a
+// size-ptr label (caller then falls through to the non-ptr arms).
+fn _ex86_parse_ptr_mem(s: string) -> [Int] {
+    let n = len(s)
+    let mut sz = -1
+    let mut rest = ""
+    if n > 9 && s.substring(0, 9) == "byte ptr " {
+        sz = 1; rest = s.substring(9, n)
+    } else if n > 9 && s.substring(0, 9) == "word ptr " {
+        sz = 2; rest = s.substring(9, n)
+    } else if n > 10 && s.substring(0, 10) == "dword ptr " {
+        sz = 4; rest = s.substring(10, n)
+    } else if n > 10 && s.substring(0, 10) == "qword ptr " {
+        sz = 8; rest = s.substring(10, n)
+    } else {
+        return [-1, 0, 0]
+    }
+    let mem = _ex86_parse_mem(rest)
+    if mem[0] < 0 { return [-1, 0, 0] }
+    return [sz, mem[0], mem[1]]
 }
 
 // Emit ModR/M (+ SIB if base==RSP/R12) (+ disp8/disp32) for a memory
@@ -801,6 +851,130 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
                                     if rs >= 8 { 1 } else { 0 })
             return [rex, 0x0f, 0xb6,
                     0xc0 | ((rd & 0x7) << 3) | (rs & 0x7)]
+        }
+    }
+    // ── ③-R2f additions — SIZE-prefixed memory-operand LABEL family ──────────
+    // The codegen (x86_64_linux.hexa) emits va_arg / ptr_load* / ptr_store* /
+    // arr_len / str_byte through `_x86_op_label("<size> ptr [base ± disp]")`
+    // (and `_x86_va_memsz`), i.e. a `kind:"label"` operand carrying the whole
+    // mem string. The existing `[base ± disp]` mem arms only match a leading
+    // `[`, so these size-prefixed strings hit the loud ENCODE-MISS. Parse them
+    // via `_ex86_parse_ptr_mem` and emit the reference-matched ModR/M+SIB+disp
+    // mem form. Reg width comes from the SIZE PREFIX (not MOV vs MOV64), so a
+    // single check covers both dispatch outcomes (r10d→MOV64, eax→MOV).
+    // Reference: Intel SDM Vol 2 — MOVZX (0F B6/B7 /r), MOV (8B/89, 88 /r).
+    //
+    // MOVZX r64, byte/word ptr [base ± disp] — REX.W 0F B6 (byte) / B7 (word)
+    // /r. Codegen dst is always r64 (r10) → zero-extend to 64 bits.
+    //   e.g. movzx r10, byte ptr [r10]  → 4d 0f b6 12
+    if op == "MOVZX" && len(ops) == 2 {
+        let pm = _ex86_parse_ptr_mem(ops[1])
+        if pm[0] == 1 || pm[0] == 2 {
+            let rd = _ex86_reg64(ops[0])
+            if rd >= 0 {
+                let base = pm[1]; let disp = pm[2]
+                let rex = _ex86_rex(1, if rd >= 8 { 1 } else { 0 }, 0,
+                                        if base >= 8 { 1 } else { 0 })
+                let opcode = if pm[0] == 1 { 0xb6 } else { 0xb7 }
+                let mr = _ex86_modrm_mem(rd, base, disp)
+                let out: [Int] = []
+                out.push(rex); out.push(0x0f); out.push(opcode)
+                let mut i = 0
+                while i < len(mr) { out.push(mr[i]); i = i + 1 }
+                return out
+            }
+        }
+    }
+    // MOV — LOAD form: dst reg, src `<size> ptr [base ± disp]` (mem = ops[1]).
+    //   dword: 8B /r (no REX.W) — dst r32 (eax / r10d).  e.g.
+    //     mov eax,  dword ptr [r10]     → 41 8b 02
+    //     mov r10d, dword ptr [r10 + 8] → 45 8b 52 08
+    //   qword: REX.W 8B /r — dst r64 (r10). e.g. mov r10, qword ptr [r10] → 4d 8b 12
+    if (op == "MOV" || op == "MOV64") && len(ops) == 2 {
+        let pm = _ex86_parse_ptr_mem(ops[1])
+        if pm[0] == 4 || pm[0] == 8 {
+            let base = pm[1]; let disp = pm[2]
+            if pm[0] == 4 {
+                let rd = _ex86_reg32e(ops[0])
+                if rd >= 0 {
+                    let out: [Int] = []
+                    if rd >= 8 || base >= 8 {
+                        out.push(_ex86_rex(0, if rd >= 8 { 1 } else { 0 }, 0,
+                                              if base >= 8 { 1 } else { 0 }))
+                    }
+                    out.push(0x8b)
+                    let mr = _ex86_modrm_mem(rd, base, disp)
+                    let mut i = 0
+                    while i < len(mr) { out.push(mr[i]); i = i + 1 }
+                    return out
+                }
+            } else {
+                let rd = _ex86_reg64(ops[0])
+                if rd >= 0 {
+                    let rex = _ex86_rex(1, if rd >= 8 { 1 } else { 0 }, 0,
+                                            if base >= 8 { 1 } else { 0 })
+                    let mr = _ex86_modrm_mem(rd, base, disp)
+                    let out: [Int] = []
+                    out.push(rex); out.push(0x8b)
+                    let mut i = 0
+                    while i < len(mr) { out.push(mr[i]); i = i + 1 }
+                    return out
+                }
+            }
+        }
+    }
+    // MOV — STORE form: dst `<size> ptr [base ± disp]`, src reg (mem = ops[0]).
+    //   byte:  88 /r        — src r8  (sil).  e.g. mov byte ptr [r10], sil → 41 88 32
+    //   dword: 89 /r        — src r32 (esi / eax / r11d). e.g.
+    //     mov dword ptr [r10], esi        → 41 89 32
+    //     mov dword ptr [rbp + 0], r11d   → 44 89 5d 00
+    //   qword: REX.W 89 /r  — src r64 (rsi / r11 / r8). e.g. mov qword ptr [r10], r11 → 4d 89 1a
+    if (op == "MOV" || op == "MOV64") && len(ops) == 2 {
+        let pm = _ex86_parse_ptr_mem(ops[0])
+        if pm[0] == 1 || pm[0] == 4 || pm[0] == 8 {
+            let base = pm[1]; let disp = pm[2]
+            if pm[0] == 1 {
+                let rs = _ex86_reg8(ops[1])
+                if rs >= 0 {
+                    let out: [Int] = []
+                    // spl/bpl/sil/dil (rs 4..7) or r8b..r15b force a REX byte.
+                    if rs >= 4 || base >= 8 {
+                        out.push(_ex86_rex(0, if rs >= 8 { 1 } else { 0 }, 0,
+                                              if base >= 8 { 1 } else { 0 }))
+                    }
+                    out.push(0x88)
+                    let mr = _ex86_modrm_mem(rs, base, disp)
+                    let mut i = 0
+                    while i < len(mr) { out.push(mr[i]); i = i + 1 }
+                    return out
+                }
+            } else if pm[0] == 4 {
+                let rs = _ex86_reg32e(ops[1])
+                if rs >= 0 {
+                    let out: [Int] = []
+                    if rs >= 8 || base >= 8 {
+                        out.push(_ex86_rex(0, if rs >= 8 { 1 } else { 0 }, 0,
+                                              if base >= 8 { 1 } else { 0 }))
+                    }
+                    out.push(0x89)
+                    let mr = _ex86_modrm_mem(rs, base, disp)
+                    let mut i = 0
+                    while i < len(mr) { out.push(mr[i]); i = i + 1 }
+                    return out
+                }
+            } else {
+                let rs = _ex86_reg64(ops[1])
+                if rs >= 0 {
+                    let rex = _ex86_rex(1, if rs >= 8 { 1 } else { 0 }, 0,
+                                            if base >= 8 { 1 } else { 0 })
+                    let mr = _ex86_modrm_mem(rs, base, disp)
+                    let out: [Int] = []
+                    out.push(rex); out.push(0x89)
+                    let mut i = 0
+                    while i < len(mr) { out.push(mr[i]); i = i + 1 }
+                    return out
+                }
+            }
         }
     }
     // SETcc r8 — 0F 9x /r (set 1 byte on condition).
