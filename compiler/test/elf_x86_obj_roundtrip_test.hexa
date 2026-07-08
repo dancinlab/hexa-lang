@@ -1,0 +1,146 @@
+// compiler/test/elf_x86_obj_roundtrip_test.hexa
+//
+// RFC 063 § P3 round-3 Stage 1 — hermetic serialize->parse round-trip
+// for parse_elf_x86_obj. NO clang / ld / pool: builds an ElfX86Obj via
+// pack_lir_x86_64 (the exact module-A data-ref shape from
+// elf_x86_64_data.hexa — .text + .rodata(.LCstr0) + .data(g0) + two
+// R_X86_64_PC32 relocs + LOCAL-before-GLOBAL symtab), serializes it to
+// disk, reads it back with parse_elf_x86_obj, and asserts every
+// round-trippable field matches. Because serialize is the exact inverse
+// the reader parses, this makes the reader NOT all-or-nothing.
+//
+// (Clang-pattern coverage — STT_SECTION relocs, multi-.text, COMMON — is
+//  a Stage-1 clang-fixture add per design caveat #4; this file locks the
+//  writer-inverse contract.)
+//
+// Run:  mkdir -p out_elfx86 && hexa run compiler/test/elf_x86_obj_roundtrip_test.hexa
+
+import "../ir/lir.hexa"
+import "../emit/macho_arm64.hexa"     // _append_hex_bytes + LIR helpers
+import "../emit/elf_x86_64.hexa"      // pack_lir_x86_64 / serialize / parse (under test)
+
+fn _xreg(name: string) -> PReg {
+    return PReg { name: name, kind: "gpr", frag_role: "", frag_dtype: "", frag_layout: "" }
+}
+fn _xop_reg(name: string) -> LOperand {
+    return LOperand { kind: "reg", reg: _xreg(name), imm: 0,
+                      mem_base: _xreg(""), mem_offset: 0, label: "" }
+}
+fn _xop_label(name: string) -> LOperand {
+    return LOperand { kind: "label", reg: _xreg(""), imm: 0,
+                      mem_base: _xreg(""), mem_offset: 0, label: name }
+}
+fn _xins(op: string, args: [LOperand]) -> LInstr {
+    return LInstr { op: op, args: args, comment: "" }
+}
+
+// Resolve a NUL-terminated name out of an ElfX86Obj strtab.
+fn _nm(strtab, off: Int) -> string {
+    let mut s = ""
+    let mut k = 0
+    while true {
+        let b = strtab[off + k] & 0xff
+        if b == 0 { break }
+        s = s + from_char_code(b)
+        k = k + 1
+    }
+    return s
+}
+
+let mut _fails = 0
+fn _check(cond: bool, msg: string) {
+    if cond {
+        println("  ok   " + msg)
+    } else {
+        println("  FAIL " + msg)
+        _fails = _fails + 1
+    }
+}
+
+fn main() {
+    let dir = "out_elfx86"
+
+    // module A — lea .LCstr0 / lea g0 / ret (drives rodata+data+relocs).
+    let fa = LFunc {
+        name: "main", target: "x86_64-linux-gnu",
+        instrs: [
+            _xins("lea", [_xop_reg("rdi"), _xop_label(".LCstr0")]),
+            _xins("lea", [_xop_reg("rsi"), _xop_label("g0")]),
+            _xins("ret", [])
+        ],
+        frame_size: 0, callee_saved: [], def_line: 0
+    }
+    let ro = LSection { name: ".LCstr0", bytes: "686900", align: 1 }
+    let lm_a = LModule {
+        file: "elfx86_data.hexa", target: "x86_64-linux-gnu",
+        funcs: [fa], rodata: [ro], bss: [], globals: ["g0"], floats: []
+    }
+
+    let src = pack_lir_x86_64(lm_a)
+    let bytes = serialize_elf_x86_64(src)
+    let path = dir + "/rt_elf_x86_obj.o"
+    write_bytes(path, bytes)
+
+    let got = parse_elf_x86_obj(read_file_bytes(path), 0, len(bytes), 0)
+
+    println("round-trip parse_elf_x86_obj:")
+
+    // ── section pools ──
+    _check(len(got.text) == len(src.text), "text length " + to_string(len(got.text)))
+    let mut ti = 0
+    let mut text_eq = true
+    while ti < len(src.text) {
+        if (got.text[ti] & 0xff) != (src.text[ti] & 0xff) { text_eq = false; break }
+        ti = ti + 1
+    }
+    _check(text_eq, "text bytes identical")
+    _check(len(got.rodata) == len(src.rodata), "rodata length " + to_string(len(got.rodata)))
+    let mut roi = 0
+    let mut ro_eq = true
+    while roi < len(src.rodata) {
+        if (got.rodata[roi] & 0xff) != (src.rodata[roi] & 0xff) { ro_eq = false; break }
+        roi = roi + 1
+    }
+    _check(ro_eq, "rodata bytes identical")
+    _check(len(got.data) == len(src.data), "data length " + to_string(len(got.data)))
+    _check(got.bss_size == src.bss_size, "bss_size " + to_string(got.bss_size))
+    _check(got.nlocal == src.nlocal, "nlocal " + to_string(got.nlocal))
+
+    // ── symbols (name-string / slot / rebased value / bind / type / size) ──
+    _check(len(got.symbols) == len(src.symbols), "symbol count " + to_string(len(got.symbols)))
+    let mut si = 0
+    while si < len(src.symbols) {
+        let a = src.symbols[si]
+        let b = got.symbols[si]
+        let an = _nm(src.strtab, a.name_offset)
+        let bn = _nm(got.strtab, b.name_offset)
+        _check(an == bn, "sym[" + to_string(si) + "] name '" + bn + "'")
+        _check(a.section == b.section, "sym[" + to_string(si) + "] section " + to_string(b.section))
+        _check(a.value == b.value,     "sym[" + to_string(si) + "] value " + to_string(b.value))
+        _check(a.bind == b.bind,       "sym[" + to_string(si) + "] bind " + to_string(b.bind))
+        _check(a.type_ == b.type_,     "sym[" + to_string(si) + "] type " + to_string(b.type_))
+        _check(a.size == b.size,       "sym[" + to_string(si) + "] size " + to_string(b.size))
+        si = si + 1
+    }
+
+    // ── relocs (offset / kind / addend / resolved-sym-name) ──
+    _check(len(got.relocs) == len(src.relocs), "reloc count " + to_string(len(got.relocs)))
+    let mut ri = 0
+    while ri < len(src.relocs) {
+        let ra = src.relocs[ri]
+        let rb = got.relocs[ri]
+        _check(ra.offset == rb.offset, "rel[" + to_string(ri) + "] offset " + to_string(rb.offset))
+        _check(ra.kind == rb.kind,     "rel[" + to_string(ri) + "] kind " + to_string(rb.kind))
+        _check(ra.addend == rb.addend, "rel[" + to_string(ri) + "] addend " + to_string(rb.addend))
+        let na = _nm(src.strtab, src.symbols[ra.sym_idx].name_offset)
+        let nb = _nm(got.strtab, got.symbols[rb.sym_idx].name_offset)
+        _check(na == nb, "rel[" + to_string(ri) + "] sym '" + nb + "'")
+        ri = ri + 1
+    }
+
+    if _fails == 0 {
+        println("ROUND-TRIP: ALL PASS")
+    } else {
+        println("ROUND-TRIP: " + to_string(_fails) + " FAILURE(S)")
+    }
+}
