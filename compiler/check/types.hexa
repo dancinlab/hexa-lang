@@ -3359,6 +3359,17 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                                 _emit_hx3011(elem_t, rhs_t, e.span, out)
                                 r3_rejected = true
                             }
+                            // HX3044 fan-out site (E) — int-literal range-fit at
+                            // the recorded index-place assign `a[i] = 300` where
+                            // `a:[i8]`. The elem/int-lit pair is kind-assignable
+                            // (int-lit → int-kind) so HX3011 stays silent; this
+                            // catches the value overflow at the index-place
+                            // coercion (rustc `overflowing_literals`). Reuses the
+                            // predicate + emitter verbatim; independent of the
+                            // kind gate (`r3_rejected`) — value overflow ⊥ kind.
+                            if _types_int_lit_overflows(elem_t, e.children[1]) {
+                                _emit_hx3044(elem_t, e.children[1].span, out)
+                            }
                         } else if !_types_kind_is_scalar(elem_t.kind) {
                             // static-types r8b — param / module-let array base
                             // fallback. The `[]<name>` record above only exists
@@ -3390,6 +3401,15 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                                     if !_types_assignable(base_t.args[0], rhs_t, e.children[1]) {
                                         _emit_hx3011(base_t.args[0], rhs_t, e.span, out)
                                         r3_rejected = true
+                                    }
+                                    // HX3044 fan-out site (E, ARRAY_LOWER) — same
+                                    // index-place overflow check for the param /
+                                    // module-let array base whose element type is
+                                    // recovered from `base_t.args[0]` (flag-ON
+                                    // kind:"array" carrier). int-lit → int-kind is
+                                    // kind-assignable so HX3011 stays silent.
+                                    if _types_int_lit_overflows(base_t.args[0], e.children[1]) {
+                                        _emit_hx3044(base_t.args[0], e.children[1].span, out)
                                     }
                                 }
                             }
@@ -3437,6 +3457,16 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                                     if !_types_assignable(field_t, rhs_t, e.children[1]) {
                                         _emit_hx3011(field_t, rhs_t, e.span, out)
                                         r3_rejected = true
+                                    }
+                                    // HX3044 fan-out site (F) — int-literal range-fit
+                                    // at the field-place assign `s.b = 300` where the
+                                    // struct field `b:i8`. int-lit → int-kind is kind-
+                                    // assignable so HX3011 stays silent; this catches
+                                    // the value overflow at the field-place coercion
+                                    // (rustc `overflowing_literals`). Reuses the
+                                    // predicate + emitter verbatim.
+                                    if _types_int_lit_overflows(field_t, e.children[1]) {
+                                        _emit_hx3044(field_t, e.children[1].span, out)
                                     }
                                 }
                             }
@@ -4146,8 +4176,16 @@ fn _types_builtin_method_ret(name: string) -> Type {
         "char_code_at" -> _types_t_i64(),
         "byte_at" -> _types_t_i64(),
         "to_int" -> _types_t_i64(),
+        //   parse_int      → str_parse_int → hexa_str_parse_int (bare int,
+        //                    0 on failure; parse.hexa:100 — NOT an Option), so
+        //                    the return tag is monomorphic + receiver-independent
+        //                    (self/codegen.hexa dispatch). Sound to fix at i64.
+        "parse_int" -> _types_t_i64(),
         // → f64: to_float → rt_to_float → hexa_float(...) always.
         "to_float" -> _types_t_f64(),
+        //   parse_float    → str_parse_float → hexa_str_parse_float (bare float,
+        //                    0.0 on failure; NOT an Option) — monomorphic f64.
+        "parse_float" -> _types_t_f64(),
         // → bool: gen2 hexa_bool(...)-wrapped —
         //   contains  → hexa_contains_poly (both arms hexa_bool)
         //   is_empty  → hexa_is_empty (all arms hexa_bool)
