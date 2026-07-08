@@ -1399,7 +1399,7 @@ fn _types_emit_missing_required(sname: string, e: Expr, out: array) {
 // TWO deliberate deviations, both recipe-mandated:
 //   * population is FLAG-GATED (r5 populates unconditionally; own-lint
 //     must be structurally zero-cost when OFF — every push below happens
-//     only under `env("HEXA_OWN_LINT") == "1"` at the call sites);
+//     only under `env_var("HEXA_OWN_LINT") == "1"` at the call sites);
 //   * lifetime is ONE FN body, not one module pass (reset at the top of
 //     `type_check`'s per-fn loop) — move state must never leak across fns
 //     (fn A moving `x` must not poison an unrelated `@own let x` in fn B).
@@ -1487,7 +1487,7 @@ fn _own_lint_touch(use_node: Expr, out: array) {
 //     needed here (and no double-emit of one use span).
 // Emission-only (no registry mutation), so a scratch-sink re-infer
 // (static-types r2/r9a) discards cleanly. Every call site is
-// `env("HEXA_OWN_LINT") == "1"`-gated (flag-first short-circuit) → the
+// `env_var("HEXA_OWN_LINT") == "1"`-gated (flag-first short-circuit) → the
 // default diagnostic stream stays byte-identical (byteeq-neutral).
 fn _own_lint_use_check(use_node: Expr, out: array) {
     if !_types_is_ident(use_node.kind) { return }
@@ -1511,7 +1511,7 @@ fn _own_lint_use_check(use_node: Expr, out: array) {
 // use-after-move can never apply — it is EXEMPT from move tracking. The
 // exemption is applied as a REGISTER-SKIP (the binding never enters the
 // registry) because every registration site already sits under an
-// `env("HEXA_OWN_LINT") == "1"` gate — flag-OFF stays byte-identical with no
+// `env_var("HEXA_OWN_LINT") == "1"` gate — flag-OFF stays byte-identical with no
 // extra guard. Aggregates (string, named structs, arrays, tuples, generics,
 // fn types) keep move semantics. Type aliases resolve first so
 // `type Celsius = f64` is Copy (same as #4088).
@@ -3034,7 +3034,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // registry's unconditional population). NOT threaded through
             // benv: `_types_env_lookup` is first-hit-wins, so encoding move
             // state as an env redefinition would silently read stale.
-            if env("HEXA_OWN_LINT") == "1" {
+            if env_var("HEXA_OWN_LINT") == "1" {
                 let och = e.children[i]
                 if _types_is_let(och.kind) && _own_lint_has_own_ann(och) {
                     let onm = _types_let_name(och.text)
@@ -3056,7 +3056,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // registry. Same placement as the @own registration above
             // (AFTER child inference → correct decl-before-use ordering);
             // flag first (short-circuit) → default build byteeq-neutral.
-            if env("HEXA_ARENA_ESCAPE_LINT") == "1" {
+            if env_var("HEXA_ARENA_ESCAPE_LINT") == "1" {
                 let ach = e.children[i]
                 if _types_is_let(ach.kind) {
                     _arena_esc_register_let(ach)
@@ -3157,7 +3157,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // pinned-frame HX3004 reads above/below are not reordered.
             // Flag first (short-circuit) → the default build is
             // byteeq-neutral.
-            if env("HEXA_OWN_LINT") == "1" && _types_is_ident(e.children[0].kind) {
+            if env_var("HEXA_OWN_LINT") == "1" && _types_is_ident(e.children[0].kind) {
                 _own_lint_touch(e.children[0], out)
             }
         }
@@ -3376,7 +3376,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         // (`let y = x` where `x` is a registered `@own` binding): first such
         // use marks it moved, a second one warns HX3012 (use-after-move).
         // Flag first (short-circuit) → the default build is byteeq-neutral.
-        if env("HEXA_OWN_LINT") == "1" && len(e.children) > 0 && _types_is_ident(e.children[0].kind) {
+        if env_var("HEXA_OWN_LINT") == "1" && len(e.children) > 0 && _types_is_ident(e.children[0].kind) {
             _own_lint_touch(e.children[0], out)
         }
         return _types_t_unit()
@@ -3575,7 +3575,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // owned value (`y = x` where `x` is a registered `@own` binding):
             // second use after the move warns HX3012. Flag first
             // (short-circuit) → the default build is byteeq-neutral.
-            if env("HEXA_OWN_LINT") == "1" && _types_is_ident(e.children[1].kind) {
+            if env_var("HEXA_OWN_LINT") == "1" && _types_is_ident(e.children[1].kind) {
                 _own_lint_touch(e.children[1], out)
             }
             // HEXA-OWN L2.5 r1 Rule B — arena-escape into a module global
@@ -3587,7 +3587,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // global holds reclaimed arena memory — the runtime-admitted
             // unheapified escape (runtime_core.c:3432). Warning-band, flag
             // first (short-circuit) → default build byteeq-neutral.
-            if env("HEXA_ARENA_ESCAPE_LINT") == "1" && _types_is_ident(e.children[0].kind) && _types_is_ident(e.children[1].kind) {
+            if env_var("HEXA_ARENA_ESCAPE_LINT") == "1" && _types_is_ident(e.children[0].kind) && _types_is_ident(e.children[1].kind) {
                 let gnm = e.children[0].text
                 if _arena_esc_name_in(_arena_esc_globals, gnm) && !_arena_esc_name_in(_arena_esc_locals, gnm) {
                     let ai = _arena_esc_find(e.children[1].text)
@@ -3854,7 +3854,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         // HEXA-OWN L2 rung B — an index BASE (`x[i]`) is a READ of `x`; if `x`
         // is an already-moved `@own` binding this is a use-after-move → HX3012
         // (warn-only, no move mark). Flag-first short-circuit → byteeq-neutral.
-        if env("HEXA_OWN_LINT") == "1" && len(e.children) > 0 {
+        if env_var("HEXA_OWN_LINT") == "1" && len(e.children) > 0 {
             _own_lint_use_check(e.children[0], out)
         }
         // segment(b) HX3025 REJECT (Rust E0608): indexing a KNOWN non-container
@@ -3915,7 +3915,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         // HEXA-OWN L2 rung B — a field-access RECEIVER (`x.f`) is a READ of
         // `x`; an already-moved `@own` receiver is a use-after-move → HX3012
         // (warn-only, no move mark). Flag-first short-circuit → byteeq-neutral.
-        if env("HEXA_OWN_LINT") == "1" {
+        if env_var("HEXA_OWN_LINT") == "1" {
             _own_lint_use_check(e.children[0], out)
         }
         // segment(b) HX3026 REJECT (Rust E0610): a field READ (`n.foo`) on a
@@ -4029,7 +4029,7 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
     // (warn-only, no move mark). Each side is the immediate ident; nested
     // sub-binops recurse through their own arm. `as`-cast returned above
     // (rhs is a type-name, not a value). Flag-first → byteeq-neutral.
-    if env("HEXA_OWN_LINT") == "1" {
+    if env_var("HEXA_OWN_LINT") == "1" {
         _own_lint_use_check(e.children[0], out)
         _own_lint_use_check(e.children[1], out)
     }
@@ -4380,7 +4380,7 @@ fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         // (the r2 let-arm) re-touches the SAME node — the registry's
         // move-site span dedupe keeps that silent. Flag first
         // (short-circuit) → the default build is byteeq-neutral.
-        if env("HEXA_OWN_LINT") == "1" && _types_is_ident(e.children[1 + i].kind) {
+        if env_var("HEXA_OWN_LINT") == "1" && _types_is_ident(e.children[1 + i].kind) {
             _own_lint_touch(e.children[1 + i], out)
         }
         i = i + 1
@@ -4841,8 +4841,8 @@ fn _exh_check_module(module: Module, out: array) {
     // (byte-identical diagnostic stream + emitted bytes — release integrity):
     //   HEXA_EXHAUSTIVE=1        → non-fatal warning (HX3006)
     //   HEXA_EXHAUSTIVE_FATAL=1  → fatal error (HX3018), implies the check.
-    let fatal = env("HEXA_EXHAUSTIVE_FATAL") == "1"
-    if env("HEXA_EXHAUSTIVE") != "1" && !fatal { return }
+    let fatal = env_var("HEXA_EXHAUSTIVE_FATAL") == "1"
+    if env_var("HEXA_EXHAUSTIVE") != "1" && !fatal { return }
     let reg = _exh_build_registry(module)
     let mut i = 0
     while i < len(module.items) {
@@ -5141,7 +5141,7 @@ fn _cg_check_struct_lit(e: Expr, reg: CgGenericReg, out: array) {
         }
         j = j + 1
     }
-    let strict = env("HEXA_STRICT_BOUNDS") == "1"
+    let strict = env_var("HEXA_STRICT_BOUNDS") == "1"
     let nactual = len(akinds)
     let mut i = 0
     while i < nactual {
@@ -5205,7 +5205,7 @@ fn _cg_walk(e: Expr, reg: CgGenericReg, out: array) {
 }
 
 fn _cg_check_module(module: Module, out: array) {
-    if env("HEXA_CONST_GENERICS") != "1" { return }
+    if env_var("HEXA_CONST_GENERICS") != "1" { return }
     let reg = _cg_build_registry(module)
     let mut i = 0
     while i < len(module.items) {
@@ -5335,9 +5335,9 @@ fn _assoc_reg_index(reg: AssocTraitReg, tname: string) -> i64 {
 }
 
 fn _assoc_check_module(module: Module, out: array) {
-    if env("HEXA_ASSOC_TYPES") != "1" { return }
+    if env_var("HEXA_ASSOC_TYPES") != "1" { return }
     let reg = _assoc_build_registry(module)
-    let strict = env("HEXA_STRICT_BOUNDS") == "1"
+    let strict = env_var("HEXA_STRICT_BOUNDS") == "1"
     let mut ii = 0
     while ii < len(module.items) {
         let it = module.items[ii]
@@ -5574,7 +5574,7 @@ fn _hkt_check_item(it: Item, out: array) {
 }
 
 fn _hkt_check_module(module: Module, out: array) {
-    if env("HEXA_HKT") != "1" { return }
+    if env_var("HEXA_HKT") != "1" { return }
     let mut i = 0
     while i < len(module.items) {
         let it = module.items[i]
@@ -5864,7 +5864,7 @@ pub fn type_check(module: Module) -> array {
     // (module-level `let` item names) from the let-index built above, BEFORE
     // the fn-body walk consumes it at the assign site. Flag first (short-
     // circuit) → the default build resets/pushes nothing (byteeq-neutral).
-    if env("HEXA_ARENA_ESCAPE_LINT") == "1" {
+    if env_var("HEXA_ARENA_ESCAPE_LINT") == "1" {
         _arena_esc_globals_reset()
         let mut gi = 0
         while gi < len(let_idx) {
@@ -5895,7 +5895,7 @@ pub fn type_check(module: Module) -> array {
         // moving `x` must not poison an unrelated `@own let x` in fn B).
         // Flag-gated like every own-lint site → structurally zero-cost on
         // the default build (byteeq-neutral; the registry stays empty).
-        if env("HEXA_OWN_LINT") == "1" {
+        if env_var("HEXA_OWN_LINT") == "1" {
             _own_lint_reset()
             // HEXA-OWN L2 r2b — PARAM position: an `@own` param is treated
             // AFFINELY by the fn body — registration here (fn entry, after
@@ -5931,7 +5931,7 @@ pub fn type_check(module: Module) -> array {
         // walk so fn A's locals never leak into fn B. Its own flag, its own
         // arrays — L2 (HX3012) and L2.5 (HX3013) state never cross-
         // contaminates. Flag first → default build byteeq-neutral.
-        if env("HEXA_ARENA_ESCAPE_LINT") == "1" {
+        if env_var("HEXA_ARENA_ESCAPE_LINT") == "1" {
             _arena_esc_reset()
         }
         // Walk body — inner Returns validate against ctx.fn_return.
