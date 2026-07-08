@@ -2666,6 +2666,161 @@ fn _build_case_builtin_bool_f64_infer() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// ── (bv)–(cd) HX3046 (Rust E0605) non-primitive `as`-cast REJECT ────────────
+// The `op == "as"` arm of `_types_check_binop` resolves the target through the
+// alias table FIRST, then fires HX3046 iff the resolved name is a REGISTERED
+// struct or enum. The original `_types_lower_type_ref(...)` return is preserved
+// verbatim, so a primitive target still types normally (byteeq-neutral). Cast
+// nodes are `_bin_expr("as", <value>, <type-name Ident>)` — the parser carries
+// the target as an Ident in children[1] (types.hexa reads `.text`/`.span`).
+// Case files are non-fixture (`case_*.hexa`) → FLIP-3 strict → Error band.
+
+// Small inline `type <name> = <underlying>` alias carrier (ItemKind::Let +
+// `__type_alias` annotation, name = alias, return_type = underlying named ref),
+// exactly the shape `_types_register_aliases` reads.
+fn _type_alias_item(name: string, underlying: string, file: string, line: i64) -> Item {
+    let mut anns = []
+    anns.push(Annotation { name: "__type_alias", args: [], span: _span(file, line, 1, 4) })
+    return Item {
+        kind: ItemKind::Let,
+        name: name,
+        span: _span(file, line, 1, len(name)),
+        annotations: anns,
+        params: [],
+        return_type: _named_type_ref(underlying),
+        body: _block([], file, line, 1),
+        is_pub: false
+    }
+}
+
+// (bv) ★ HX3046 struct target — `struct Point { x: i64 } ; let p = 3 as Point`.
+// Point is a registered struct → 1 HX3046 (Error, real source).
+fn _build_case_as_struct() -> Module {
+    let f = "case_bv.hexa"
+    let mut sfields = []
+    sfields.push(_param("x", "i64", f, 1, 16))
+    let item_s = _struct_item("Point", sfields, f, 1)
+    let cast = _bin_expr("as", _int_expr("3", f, 3, 13), _ident_expr("Point", f, 3, 18), f, 3, 15)
+    let body = _block([_let_expr("p", cast, f, 3, 5)], f, 2, 1)
+    let item_f = _fn_item("f", [], _empty_type_ref(), body, f, 2)
+    let mut items = []
+    items.push(item_s)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (bw) ★ HX3046 enum target — `enum Color { Red, Green } ; let c = 3 as Color`.
+// Color is a registered enum → 1 HX3046 (Error).
+fn _build_case_as_enum() -> Module {
+    let f = "case_bw.hexa"
+    let mut variants = []
+    variants.push(_variant_unit("Red", f, 1, 13))
+    variants.push(_variant_unit("Green", f, 1, 18))
+    let item_enum = _enum_item("Color", variants, f, 1)
+    let cast = _bin_expr("as", _int_expr("3", f, 3, 13), _ident_expr("Color", f, 3, 18), f, 3, 15)
+    let body = _block([_let_expr("c", cast, f, 3, 5)], f, 2, 1)
+    let item_g = _fn_item("g", [], _empty_type_ref(), body, f, 2)
+    let mut items = []
+    items.push(item_enum)
+    items.push(item_g)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (bx) ★ HX3046 alias-to-struct — `struct Point{..} ; type P2 = Point ;
+// let q = 3 as P2`. P2 resolves through the alias table to Point (registered) →
+// 1 HX3046 (proves the alias-resolve-FIRST ordering).
+fn _build_case_as_alias_struct() -> Module {
+    let f = "case_bx.hexa"
+    let mut sfields = []
+    sfields.push(_param("x", "i64", f, 1, 16))
+    let item_s = _struct_item("Point", sfields, f, 1)
+    let item_alias = _type_alias_item("P2", "Point", f, 2)
+    let cast = _bin_expr("as", _int_expr("3", f, 4, 13), _ident_expr("P2", f, 4, 18), f, 4, 15)
+    let body = _block([_let_expr("q", cast, f, 4, 5)], f, 3, 1)
+    let item_h = _fn_item("h", [], _empty_type_ref(), body, f, 3)
+    let mut items = []
+    items.push(item_s)
+    items.push(item_alias)
+    items.push(item_h)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (by) N1 — `let a = 3.5 as int`. int is primitive (in neither registry) → 0.
+fn _build_case_as_prim_int() -> Module {
+    let f = "case_by.hexa"
+    let cast = _bin_expr("as", _float_expr("3.5", f, 2, 13), _ident_expr("int", f, 2, 20), f, 2, 17)
+    let body = _block([_let_expr("a", cast, f, 2, 5)], f, 1, 1)
+    let item_m = _fn_item("m", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_m)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (bz) N2 — `fn m(x: i64) { let s = x as string }`. string is primitive → 0.
+fn _build_case_as_prim_string() -> Module {
+    let f = "case_bz.hexa"
+    let cast = _bin_expr("as", _ident_expr("x", f, 2, 13), _ident_expr("string", f, 2, 18), f, 2, 15)
+    let body = _block([_let_expr("s", cast, f, 2, 5)], f, 1, 1)
+    let item_m = _fn_item("m", [_param("x", "i64", f, 1, 6)], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_m)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (ca) N3 — `fn m(x: i64) { let xs = x as array }`. `array` is NOT a registered
+// struct/enum → 0 HX3046 (the FP-critical builtin-name boundary).
+fn _build_case_as_array() -> Module {
+    let f = "case_ca.hexa"
+    let cast = _bin_expr("as", _ident_expr("x", f, 2, 14), _ident_expr("array", f, 2, 19), f, 2, 16)
+    let body = _block([_let_expr("xs", cast, f, 2, 5)], f, 1, 1)
+    let item_m = _fn_item("m", [_param("x", "i64", f, 1, 6)], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_m)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (cb) N4 ★ REGRESSION-GUARD — `fn m(v: f64) { let r: int = (v + 0.5) as int }`.
+// The as-arm returns the target type `int` VERBATIM without inferring the `v +
+// 0.5` operand, so the RHS types as int (not f64) → 0 HX3046 AND 0 HX3011
+// (an int sink vs an f64 RHS would fire HX3011 if the preserved return path
+// regressed). Locks the original `(v+0.5) as int` fix untouched.
+fn _build_case_as_regression_guard() -> Module {
+    let f = "case_cb.hexa"
+    let inner = _bin_expr("+", _ident_expr("v", f, 2, 18), _float_expr("0.5", f, 2, 22), f, 2, 20)
+    let cast = _bin_expr("as", inner, _ident_expr("int", f, 2, 30), f, 2, 27)
+    let body = _block([_let_expr("r|int", cast, f, 2, 5)], f, 1, 1)
+    let item_m = _fn_item("m", [_param("v", "f64", f, 1, 6)], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_m)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (cc) N5 — `type MyInt = i64 ; fn m(x: i64) { let k = x as MyInt }`. MyInt
+// resolves through the alias table to i64 (primitive, unregistered) → 0.
+fn _build_case_as_alias_prim() -> Module {
+    let f = "case_cc.hexa"
+    let item_alias = _type_alias_item("MyInt", "i64", f, 1)
+    let cast = _bin_expr("as", _ident_expr("x", f, 3, 13), _ident_expr("MyInt", f, 3, 18), f, 3, 15)
+    let body = _block([_let_expr("k", cast, f, 3, 5)], f, 2, 1)
+    let item_m = _fn_item("m", [_param("x", "i64", f, 2, 6)], _empty_type_ref(), body, f, 2)
+    let mut items = []
+    items.push(item_alias)
+    items.push(item_m)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (cd) N6 — `fn m(x: i64) { let z = x as Foobar }`. Foobar is undeclared (in
+// neither registry, not an alias) → 0 HX3046 (undeclared-name boundary).
+fn _build_case_as_undeclared() -> Module {
+    let f = "case_cd.hexa"
+    let cast = _bin_expr("as", _ident_expr("x", f, 2, 13), _ident_expr("Foobar", f, 2, 18), f, 2, 15)
+    let body = _block([_let_expr("z", cast, f, 2, 5)], f, 1, 1)
+    let item_m = _fn_item("m", [_param("x", "i64", f, 1, 6)], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_m)
+    return Module { file: f, items: items, imports: [] }
+}
+
 fn _run_case(label: string, m: Module) -> array {
     println("")
     println("── " + label + " ──")
@@ -3837,6 +3992,99 @@ fn main() {
         ok = false
     } else {
         println("  ok: 2 HX3011 (has_key/contains_key→bool + mean→f64 inference locked; ok sinks clean)")
+    }
+
+    // (bv) ★ HX3046 struct target — `struct Point{x:i64} ; 3 as Point` → 1 HX3046 (Error, real source).
+    let diags_bv = _run_case("(bv) static-types — non-primitive cast: 3 as Point (registered struct) → 1 HX3046 (Error)", _build_case_as_struct())
+    let cbv_e = _count_code_sev(diags_bv, "HX3046", "error")
+    let cbv_w = _count_code_sev(diags_bv, "HX3046", "warning")
+    if cbv_e != 1 || cbv_w != 0 {
+        println("  FAIL: case (bv) expected 1 HX3046 error / 0 warning, got err=" + to_string(cbv_e) + " warn=" + to_string(cbv_w) + " (total=" + to_string(len(diags_bv)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3046 Error (as-cast to registered struct Point rejected, real-source STRICT band)")
+    }
+
+    // (bw) ★ HX3046 enum target — `enum Color{Red,Green} ; 3 as Color` → 1 HX3046 (Error).
+    let diags_bw = _run_case("(bw) static-types — non-primitive cast: 3 as Color (registered enum) → 1 HX3046 (Error)", _build_case_as_enum())
+    let cbw_e = _count_code_sev(diags_bw, "HX3046", "error")
+    if cbw_e != 1 {
+        println("  FAIL: case (bw) expected 1 HX3046 error (as-cast to registered enum), got err=" + to_string(cbw_e) + " (total=" + to_string(len(diags_bw)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3046 Error (as-cast to registered enum Color rejected)")
+    }
+
+    // (bx) ★ HX3046 alias-to-struct — `type P2 = Point ; 3 as P2` resolves to Point → 1 HX3046.
+    let diags_bx = _run_case("(bx) static-types — non-primitive cast: type P2=Point ; 3 as P2 → resolves to Point → 1 HX3046 (Error)", _build_case_as_alias_struct())
+    let cbx_e = _count_code_sev(diags_bx, "HX3046", "error")
+    if cbx_e != 1 {
+        println("  FAIL: case (bx) expected 1 HX3046 error (alias P2→Point resolves to a registered struct), got err=" + to_string(cbx_e) + " (total=" + to_string(len(diags_bx)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3046 Error (alias-resolve-FIRST: P2→Point registered → rejected)")
+    }
+
+    // (by) N1 — `3.5 as int` (primitive) → 0 HX3046.
+    let diags_by = _run_case("(by) static-types — FP-guard: 3.5 as int (primitive) → 0 HX3046 (silent)", _build_case_as_prim_int())
+    let cby = _count_code(diags_by, "HX3046")
+    if cby != 0 {
+        println("  FAIL: case (by) expected 0 HX3046 (int is primitive), got " + to_string(cby) + " (total=" + to_string(len(diags_by)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3046 (int primitive target — silent, no false fire)")
+    }
+
+    // (bz) N2 — `x as string` (primitive) → 0 HX3046.
+    let diags_bz = _run_case("(bz) static-types — FP-guard: x as string (primitive) → 0 HX3046 (silent)", _build_case_as_prim_string())
+    let cbz = _count_code(diags_bz, "HX3046")
+    if cbz != 0 {
+        println("  FAIL: case (bz) expected 0 HX3046 (string is primitive), got " + to_string(cbz) + " (total=" + to_string(len(diags_bz)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3046 (string primitive target — silent)")
+    }
+
+    // (ca) N3 — `x as array` (`array` NOT registered) → 0 HX3046.
+    let diags_ca = _run_case("(ca) static-types — FP-guard: x as array (array not a registered struct/enum) → 0 HX3046 (silent)", _build_case_as_array())
+    let cca = _count_code(diags_ca, "HX3046")
+    if cca != 0 {
+        println("  FAIL: case (ca) expected 0 HX3046 (array is not a registered struct/enum), got " + to_string(cca) + " (total=" + to_string(len(diags_ca)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3046 (array builtin-name not in struct/enum registry — silent, FP boundary)")
+    }
+
+    // (cb) N4 ★ REGRESSION-GUARD — `let r:int = (v + 0.5) as int` → 0 HX3046 AND 0 HX3011
+    // (still types as int via the preserved verbatim return path).
+    let diags_cb = _run_case("(cb) static-types — REGRESSION-GUARD: let r:int = (v + 0.5) as int → types int → 0 HX3046, 0 HX3011", _build_case_as_regression_guard())
+    let ccb_46 = _count_code(diags_cb, "HX3046")
+    let ccb_11 = _count_code(diags_cb, "HX3011")
+    if ccb_46 != 0 || ccb_11 != 0 {
+        println("  FAIL: case (cb) expected 0 HX3046 + 0 HX3011 ((v+0.5) as int types as int), got HX3046=" + to_string(ccb_46) + " HX3011=" + to_string(ccb_11) + " (total=" + to_string(len(diags_cb)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3046 + 0 HX3011 ((v+0.5) as int still types int — preserved return path untouched)")
+    }
+
+    // (cc) N5 — `type MyInt = i64 ; x as MyInt` resolves to i64 (primitive) → 0 HX3046.
+    let diags_cc = _run_case("(cc) static-types — FP-guard: type MyInt=i64 ; x as MyInt → resolves to i64 → 0 HX3046 (silent)", _build_case_as_alias_prim())
+    let ccc = _count_code(diags_cc, "HX3046")
+    if ccc != 0 {
+        println("  FAIL: case (cc) expected 0 HX3046 (MyInt resolves to primitive i64), got " + to_string(ccc) + " (total=" + to_string(len(diags_cc)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3046 (alias-to-primitive MyInt→i64 — silent)")
+    }
+
+    // (cd) N6 — `x as Foobar` (undeclared, in neither registry) → 0 HX3046.
+    let diags_cd = _run_case("(cd) static-types — FP-guard: x as Foobar (undeclared) → 0 HX3046 (silent)", _build_case_as_undeclared())
+    let ccd = _count_code(diags_cd, "HX3046")
+    if ccd != 0 {
+        println("  FAIL: case (cd) expected 0 HX3046 (Foobar undeclared, not registered), got " + to_string(ccd) + " (total=" + to_string(len(diags_cd)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3046 (undeclared name Foobar not in any registry — silent)")
     }
 
     println("")

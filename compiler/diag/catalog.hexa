@@ -838,6 +838,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3046",
+        title: "non-primitive cast",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "non-primitive cast: `{target}` is not a primitive numeric/bool type",
+        explain: "Static type check (static-types lane). An `expr as T` cast names a T that is a REGISTERED struct or enum, not a primitive scalar. This is Rust's E0605 ('non-primitive cast: `X` as `Y`', rustc_hir_typeck cast.rs `CastError::NonScalar`) — `as` in Rust (and hexa) is a primitive numeric/pointer coercion only; a struct/enum target is never a valid `as` cast (`x as MyStruct` must be a constructor call or `.into()`, never `as`). hexa wires it in the `op == \"as\"` arm of `_types_check_binop` (types.hexa): the arm otherwise returns `_types_lower_type_ref(...)` UNCONDITIONALLY (the type of `x as T` is T), and that return stays VERBATIM — the gate is inserted BEFORE it. The gate resolves the target through `_types_resolve_alias_name` FIRST (so a `type MyInt = i64` alias collapses to its primitive underlying → not a registered nominal → SILENT), then fires `_emit_hx3046` iff `_types_struct_registry_has(target) || _types_enum_registry_has(target)`. Conservative FP=0 boundary: primitives (int/float/string/i64/f64/i32/bool/char) are in NEITHER registry → SILENT; `array` is NOT a registered struct/enum → SILENT; an alias-to-primitive collapses before the check → SILENT; an unregistered/undeclared name (`x as Foobar`) is in neither registry → SILENT. ONLY a target that resolves to a REGISTERED struct or enum fires. Because the original lowering return is preserved verbatim, the regression case `(v + 0.5) as int` still types as `int` and emits NOTHING (int is primitive). hexa's shipping tree casts EXCLUSIVELY to primitives/builtins (a corpus-0 audit of compiler/stdlib/self found every struct-shaped `as X` occurrence — `as BigInt`, `as HexaVal`, `as Tensor`, … — to be comment prose or string-literal contents, ZERO executable `expr as <RegisteredStruct/Enum>` casts), so this rule fires on ZERO real source (corpus-0, audited) — a forward guardrail for user mistakes. BAND = FLIP-3 (`_types_strict_for`): real source → build-refusing ERROR (REJECT), byte-eq TEST FIXTURE (`*_test.hexa` / `compiler/test/`) stays WARNING via the path carve-out — the same policy as HX3024/HX3025/HX3044/HX3045. The STRICT-Error band is safe precisely because the corpus is 0, so no real-source site can abort the shipping path; types erase at MIR so codegen .text is byte-identical (byteeq-neutral). Fix: construct the target with its constructor/struct-literal (e.g. `Point { x: v }`) or a conversion method instead of an `as` cast — `as` is for primitive numeric/bool coercions only.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,

@@ -2131,6 +2131,23 @@ fn _emit_hx3044(expected: Type, sp: Span, out: array) {
     }
 }
 
+// HX3046 (E0605) — non-primitive `as`-cast to a REGISTERED struct/enum
+// target → REJECT. Modeled exactly on `_emit_hx3044`: FLIP-3 band via
+// `_types_strict_for` (real source → build-refusing Error, `*_test.hexa`/
+// compiler/test fixtures → Warning). Fires only from the `op == "as"` arm
+// after alias-resolve + both-registry gate, so it never touches a primitive
+// cast → byteeq-neutral (types erase at MIR).
+fn _emit_hx3046(target: string, sp: Span, out: array) {
+    let mut b = diag_new("HX3046")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "target", target)
+    if _types_strict_for(sp.file) {
+        out.push(diag_emit(b))
+    } else {
+        out.push(diag_emit_sev(b, Severity::Warning))
+    }
+}
+
 fn _emit_hx3025(actual: Type, sp: Span, out: array) {
     let mut b = diag_new("HX3025")
     b = diag_span(b, sp)
@@ -3922,6 +3939,17 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
     // to the `return lt` tail = the casted value's type, mis-typing
     // `(v + 0.5) as int` as f64 and false-firing HX3004 (e.g. rt_round).
     if op == "as" {
+        // HX3046 (E0605) — non-primitive `as`-cast REJECT. rustc rejects
+        // `expr as T` when T is a struct/enum (CastError::NonScalar). Resolve
+        // the alias FIRST so `type MyInt = i64; x as MyInt` → i64 (not a
+        // registered nominal) → SILENT; only a REGISTERED struct/enum target
+        // fires. Primitives (int/float/string/array/i64/…) are in neither
+        // registry → SILENT (FP=0). The original return stays VERBATIM below,
+        // so downstream typing + byteeq are untouched (types erase at MIR).
+        let _hx3046_tgt = _types_resolve_alias_name(e.children[1].text)
+        if _types_struct_registry_has(_hx3046_tgt) || _types_enum_registry_has(_hx3046_tgt) {
+            _emit_hx3046(_hx3046_tgt, e.children[1].span, out)
+        }
         return _types_lower_type_ref(TypeRef { kind: "named", name: e.children[1].text, args: [], span: e.children[1].span })
     }
 
