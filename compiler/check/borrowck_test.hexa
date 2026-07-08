@@ -2270,6 +2270,129 @@ fn _run_ret_temp_probe(label: string, src: string, want_on: i64) -> bool {
     return ok
 }
 
+// ── HEXA-OWN round11 — HX3049 temporary-dropped-while-borrowed (Rust E0716).
+// The assign-arm re-borrow of a CALL temporary `r = &make()` where `r` is a ref
+// binding declared in an enclosing scope → HX3049. The LET-init `let r = &make()`
+// (Rust temporary-lifetime-extension), a binop/struct temp (const-promotable), and
+// an assign whose LHS is not a known ref binding stay SILENT. It is the assign-site
+// sibling of HX3041 (`return &<temp>`). ──
+
+// HAZARD — assign-arm re-borrow of a CALL-result temporary into a longer-lived
+// ref binding `r`. The temporary is dropped at statement end → HX3049 ×1.
+fn _src_hz_asn_temp_call() -> string {
+    let mut s = "fn make() -> i64 {\n"
+    s = s + "    return 5\n"
+    s = s + "}\n"
+    s = s + "fn atc() {\n"
+    s = s + "    let x = 1\n"
+    s = s + "    let mut r = &x\n"
+    s = s + "    r = &make()\n"
+    s = s + "    println(r)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — the `&mut` re-borrow of a call temporary (mutability-blind) → HX3049 ×1.
+fn _src_hz_asn_temp_call_mut() -> string {
+    let mut s = "fn make() -> i64 {\n"
+    s = s + "    return 5\n"
+    s = s + "}\n"
+    s = s + "fn atcm() {\n"
+    s = s + "    let mut x = 1\n"
+    s = s + "    let mut r = &mut x\n"
+    s = s + "    r = &mut make()\n"
+    s = s + "    println(r)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — the LET-init form `let r = &make()`: Rust's temporary-lifetime-
+// extension makes this VALID, and it lowers through the let-lane (never the assign
+// hook), so no temp re-borrow is recorded → 0.
+fn _src_fp_letinit_temp() -> string {
+    let mut s = "fn make() -> i64 {\n"
+    s = s + "    return 5\n"
+    s = s + "}\n"
+    s = s + "fn flt() {\n"
+    s = s + "    let r = &make()\n"
+    s = s + "    println(r)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a BINOP temporary `r = &(x + 1)`: const-promotable in the reference
+// model (rvalue static promotion → 'static), so it is EXCLUDED (call-only) → 0.
+fn _src_fp_asn_temp_binop() -> string {
+    let mut s = "fn atb() {\n"
+    s = s + "    let x = 1\n"
+    s = s + "    let mut r = &x\n"
+    s = s + "    r = &(x + 1)\n"
+    s = s + "    println(r)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a STRUCT-literal temporary `r = &P { x: 2 }`: const-promotable, so
+// EXCLUDED (call-only) → 0.
+fn _src_fp_asn_temp_struct() -> string {
+    let mut s = "struct P { x: i64 }\n"
+    s = s + "fn ats() {\n"
+    s = s + "    let p = P { x: 1 }\n"
+    s = s + "    let mut r = &p\n"
+    s = s + "    r = &P { x: 2 }\n"
+    s = s + "    println(r)\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — the RHS is a `&make()` temp re-borrow but the LHS `n` was never a
+// ref binding (`_bck_find_ref` miss), so the known-ref gate keeps it SILENT → 0.
+fn _src_fp_asn_temp_unknown_ref() -> string {
+    let mut s = "fn make() -> i64 {\n"
+    s = s + "    return 5\n"
+    s = s + "}\n"
+    s = s + "fn atur() {\n"
+    s = s + "    let mut n = 0\n"
+    s = s + "    n = &make()\n"
+    s = s + "    println(n)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HX3049 probe runner — keys on the temporary-dropped-while-borrowed code and
+// asserts every OTHER code is 0 (probe hygiene). STRICT re-bands HX3049 to Error,
+// so the error-band count must equal the HX3049 count. OFF → want 0 (byteeq-neutral).
+fn _run_temp_dangle_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3049 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3049")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3049 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3049 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
 // ── HEXA-OWN round10 — HX3042 use-of-partially-moved-value (Rust E0382).
 // A depth-1 field-projection move-state dataflow. `sink(s.a)` where `s` is an
 // OWNED (non-borrowed) struct local and sink's param is @own moves the field
@@ -2751,6 +2874,18 @@ fn main() {
         if !_run_ret_temp_probe("hz_ret_temp_struct", _src_hz_ret_temp_struct(), 1) { ok = false }
         if !_run_ret_temp_probe("hz_ret_temp_binop", _src_hz_ret_temp_binop(), 1) { ok = false }
         if !_run_ret_temp_probe("fp_ret_temp_global", _src_fp_ret_temp_global(), 0) { ok = false }
+        // HEXA-OWN round11 — HX3049 temporary-dropped-while-borrowed (E0716). An
+        // assign-arm re-borrow of a CALL temporary `r = &make()` / `r = &mut make()`
+        // into a longer-lived ref binding → HX3049 ×1; the LET-init `let r = &make()`
+        // (temporary-lifetime-extension), a binop/struct temp (const-promotable), and
+        // an assign whose LHS is not a known ref binding → 0. OFF → empty stream
+        // (byteeq-neutral); STRICT → Error-band.
+        if !_run_temp_dangle_probe("hz_asn_temp_call", _src_hz_asn_temp_call(), 1) { ok = false }
+        if !_run_temp_dangle_probe("hz_asn_temp_call_mut", _src_hz_asn_temp_call_mut(), 1) { ok = false }
+        if !_run_temp_dangle_probe("fp_letinit_temp", _src_fp_letinit_temp(), 0) { ok = false }
+        if !_run_temp_dangle_probe("fp_asn_temp_binop", _src_fp_asn_temp_binop(), 0) { ok = false }
+        if !_run_temp_dangle_probe("fp_asn_temp_struct", _src_fp_asn_temp_struct(), 0) { ok = false }
+        if !_run_temp_dangle_probe("fp_asn_temp_unknown_ref", _src_fp_asn_temp_unknown_ref(), 0) { ok = false }
         // HEXA-OWN round10 — HX3042 use-of-partially-moved-value (E0382). A
         // field-projection move of `s.a` into an @own param, then a re-read of
         // the field / a whole-base use / a second move / an alias / a branch-join

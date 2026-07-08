@@ -1554,6 +1554,33 @@ fn _bck_emit_ret_temp(kind: string, sp: Span) {
     _lr_diag.push(d)
 }
 
+// HX3049 emit (temporary-dropped-while-borrowed, Rust E0716) — same-site dedup +
+// STRICT escalation, cloned from `_bck_emit_ret_temp`. Fires for the assign-arm
+// re-borrow of a CALL temporary `r = &make()` / `r = &mut make()` where `r` is a
+// ref binding declared in an enclosing scope (so it outlives the statement). The
+// temporary is materialized for THIS statement and destroyed at its end, so the
+// re-borrow into a longer-lived `r` dangles. `kind` is the inner HIR node kind
+// (always "call" on the FP=0 subset). Shares the `_bck_e_lines`/`_bck_e_cols`
+// dedup arrays with the other asn-arm emitters.
+fn _bck_emit_temp_dangle(name: string, kind: string, sp: Span) {
+    let mut di = 0
+    while di < len(_bck_e_lines) {
+        if _bck_e_lines[di] == sp.line && _bck_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_e_lines.push(sp.line)
+    _bck_e_cols.push(sp.col)
+    let mut b = diag_new("HX3049")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "kind", kind)
+    let mut d = diag_emit(b)
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
+}
+
 // HX3032 emit (mutating-method-behind-shared-ref, Rust E0596) — same-site
 // dedup + STRICT escalation, cloned from `_bck_emit_write_through`. `name` is
 // the ref binding the method is dispatched THROUGH, `origin` the value it
@@ -5470,6 +5497,26 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                     && _mir_lookup_global(ctx2, _bk_ainner.text) < 0 {
                     let _bk_od = _bck_sc_find_live(_bk_ainner.text)
                     _bck_asn_track(lhs.text, _bk_ainner.text, e.span.line, _bk_od)
+                    _bk_asn_ref = true
+                }
+                // HEXA-OWN round11 — HX3049 temporary-dropped-while-borrowed (Rust
+                // E0716). The assign-arm re-borrow of a TEMPORARY: `r = &make()` /
+                // `r = &mut make()` where the RHS inner is a CALL result with no named
+                // storage. The temporary is materialized for THIS statement and
+                // destroyed at its end, but `r` — present in the let-lane ref registry
+                // (`_bck_find_ref >= 0`), hence a ref binding declared in an enclosing
+                // scope — outlives it, so the re-borrow is an UNCONDITIONAL dangle (no
+                // reach-matrix, unlike the named-origin HX3036 lane whose origin can
+                // share `r`'s scope). It is the assign-arm sibling of the return-site
+                // HX3041 (`return &<call>`): same syntactic temp classifier at a
+                // different escape site. Restricted to the `call` temp form —
+                // struct/array/binop literals are const-promotable in the reference
+                // model (rvalue static promotion) so they are EXCLUDED to hold FP=0;
+                // the LET-init form `let r = &make()` never reaches this ASSIGN hook
+                // (Rust's temporary-lifetime-extension makes it valid). Diag-push only
+                // (no MIR mutation); gated on `_bck_active` (byteeq-neutral).
+                else if _bk_ainner.kind == "call" && _bck_find_ref(lhs.text) >= 0 {
+                    _bck_emit_temp_dangle(lhs.text, _bk_ainner.kind, e.span)
                     _bk_asn_ref = true
                 }
             }

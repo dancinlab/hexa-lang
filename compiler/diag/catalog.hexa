@@ -782,6 +782,25 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3049",
+        title: "temporary value dropped while borrowed",
+        // Warning band (SSOT F4 warn-first), the assign-arm re-borrow-of-a-temporary
+        // rung of the opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN round11);
+        // HX3041 covers `return &<temp>` (return-site escape), this covers `r = &<temp>`
+        // (assign-site escape into a longer-lived ref binding). Under
+        // `HEXA_BORROWCK_STRICT=1` the SAME diagnostic instance is re-banded to a
+        // build-refusing Error via the sanctioned caller override in
+        // `_bck_emit_temp_dangle` (identical mechanism to HX3041/HX3019/…/HX3014).
+        // With the flag unset the loan pass is inert (`_bck_active` false), so nothing
+        // is emitted and the diagnostic stream + emitted bytes are byte-identical —
+        // release integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "`{name}` re-borrows a temporary {kind} value that is dropped at the end of this statement, but `{name}` outlives it — the borrow dangles",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN round11) found a temporary dropped while borrowed: an assign-arm re-borrow `r = &make()` / `r = &mut make()` where the RHS is a borrow of a CALL-result TEMPORARY with no named storage, and `r` is a ref binding declared in an enclosing scope (present in the let-lane ref registry, so it outlives this statement). This is Rust's E0716 ('temporary value dropped while borrowed'; rustc_borrowck) — the temporary is materialized ONLY for the enclosing statement and destroyed at its end (the temporary-scope drop point), so re-borrowing it into a longer-lived binding leaves `r` pointing at freed storage. It is the ASSIGN-site sibling of HX3041 (which covers `return &<temp>` at the return-site): both reuse the same syntactic temp classifier (the inner HIR node kind) at a different escape site, wired as an else-arm of the `&`/`&mut` unop branch of the assign hook's asn-lane (`compiler/lower/hir_to_mir.hexa`, beside the HX3036 named-origin `r = &x` re-borrow track). Unlike HX3036's named-origin lane — which needs the round8 forward-reachability event-matrix because the origin `x` may share `r`'s scope (a use may or may not reach the scope-death) — a temporary's lifetime is the STATEMENT itself, strictly shorter than any binding declared before the statement, so the dangle is UNCONDITIONAL at the assign site (no reach pass, emitted inline like HX3041) and needs NO new dataflow axis. FP=0 by construction, three independent guards: (1) it fires ONLY in the ASSIGN hook, so the LET-init form `let r = &make()` — which Rust's temporary-lifetime-extension (RFC 66) makes VALID — never reaches this branch (it lowers through the let-lane, which never records a temp re-borrow); (2) it is restricted to the `call` temp form — a `struct_lit` / `array_lit` / `binop` temporary is const-promotable in the reference model (rvalue static promotion gives it `'static`, so `r = &(x + 1)` / `r = &[1,2]` / `r = &P{..}` is NOT E0716) and is EXCLUDED, staying SILENT; (3) the `_bck_find_ref(lhs) >= 0` gate fires only when `r` is a KNOWN ref binding (declared as `let r = &…` earlier), guaranteeing both that `r` is reference-typed and that it outlives the statement — an assign whose LHS was never a reference is SILENT. HONESTY CAVEAT (the same reference-faithful stance as shipped HX3041/HX3019): the check classifies the re-borrow as dangling PER RUSTC — it is NOT proven against hexa's arena free-model (where a call temporary might be arena-allocated and outlive the statement), so it matches rustc's REJECT surface rather than a hexa-specific liveness proof. Report-only: no MIR mutation, no asn-lane row pushed (a temp has no named origin, so no scope-exit dangle / USE-event bookkeeping), no `_bck_note_move`. `&`-carrier + reassignable-ref corpus adoption is 0, so even with the flag ON this rule fires on ZERO real source (corpus-clean, gen3≡gen4 preserved). Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical. Fix: bind the temporary to a `let` so it lives as long as the borrow (`let t = make(); r = &t`), store an owned copy instead of a reference, or borrow a value that outlives `r`.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX3042",
         title: "use of moved value",
         // Warning band (SSOT F4 warn-first), the partial-move (field-projection)
