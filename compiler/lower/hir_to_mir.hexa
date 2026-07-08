@@ -5698,6 +5698,14 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             }
 
             let cur_block_id = ctx2.cur_block
+            // HEXA-OWN axis-① R1c — set true below when a bare-ident pattern
+            // resolves to a module-level const/global (a refutable COMPARE, not
+            // an irrefutable binder). Threaded to the arm-entry binding section
+            // so a const-ident is NOT re-bound — mirrors the reference, which
+            // never binds a bare Ident pattern (self/codegen.hexa gen2_match_stmt
+            // emits no binder for a bare Ident; gen2_match_cond's fallback
+            // compares `hexa_eq(scrut, gen2_expr(pat))`, inlining the const).
+            let mut _pat_is_const = false
             if pat.kind == "wildcard" {
                 let br = Stmt {
                     kind: STMT_BR,
@@ -5710,16 +5718,71 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 ctx2 = _push_stmt_to(ctx2, cur_block_id, br)
                 ctx2 = _add_edge(ctx2, cur_block_id, arm_id)
             } else if pat.kind == "ident" && len(pat.text) > 0 && pat.text != "_" {
-                let br = Stmt {
-                    kind: STMT_BR,
-                    dst: _miss_local(),
-                    op: "",
-                    args: [],
-                    target_block: arm_id,
-                    target_block_else: -1
+                // HEXA-OWN axis-① R1c — const-identifier match pattern
+                // `match x { MAX -> … }` where MAX resolves to a module-level
+                // const / global (NOT a fresh binding name, NOT a shadowing
+                // local). The reference C-transpile path (self/codegen.hexa)
+                // treats a bare-ident pattern as a refutable COMPARE — its
+                // gen2_match_cond fallback emits `hexa_eq(scrut, gen2_expr(pat))`
+                // and gen2_expr inlines the comptime-const / global value, while
+                // gen2_match_stmt emits NO binder for a bare Ident. The native
+                // own-IR path, by contrast, bound EVERY bare ident (the
+                // irrefutable STMT_BR below), so `match x { MAX -> A, _ -> B }`
+                // ALWAYS took the MAX arm (a miscompile vs the reference).
+                // Resolve the ident to its module-global operand and emit the
+                // exact literal_int clone body (STMT_BINOP `==` + STMT_BR_COND +
+                // arm/next edges) — reusing _global_op the same way the ident
+                // ExprKind lowering resolves a module `let`/const (:3295). A
+                // fresh binding name (not a global) or a name shadowed by a
+                // local keeps the irrefutable-bind branch unchanged, so the
+                // const cannot be resolved → it stays a binding (the `else`).
+                // Byte-neutral: the C-transpile default path never runs
+                // hir_to_mir and const-ident arms are ~0 in shipping sources, so
+                // byteeq stays bit-identical.
+                let _cg = _mir_lookup_global(ctx2, pat.text)
+                let _cl = _mir_lookup(ctx2, pat.text)
+                if _cg >= 0 && _cl < 0 {
+                    _pat_is_const = true
+                    let mut ctx3 = _fresh_local(ctx2, pat.typ, "const_eq")
+                    let cmp_dst = _lr_locals[len(_lr_locals) - 1]
+                    let mut cmp_args: [Operand] = []
+                    cmp_args.push(scrut_op)
+                    cmp_args.push(_global_op(_cg, pat.text))
+                    let cmp = Stmt {
+                        kind: STMT_BINOP,
+                        dst: cmp_dst,
+                        op: "==",
+                        args: cmp_args,
+                        target_block: -1,
+                        target_block_else: -1
+                    }
+                    ctx3 = _push_stmt(ctx3, cmp)
+                    let mut br_args: [Operand] = []
+                    br_args.push(_local_op(cmp_dst.id))
+                    let br = Stmt {
+                        kind: STMT_BR_COND,
+                        dst: _miss_local(),
+                        op: "",
+                        args: br_args,
+                        target_block: arm_id,
+                        target_block_else: next_id
+                    }
+                    ctx3 = _push_stmt(ctx3, br)
+                    ctx3 = _add_edge(ctx3, ctx3.cur_block, arm_id)
+                    ctx3 = _add_edge(ctx3, ctx3.cur_block, next_id)
+                    ctx2 = ctx3
+                } else {
+                    let br = Stmt {
+                        kind: STMT_BR,
+                        dst: _miss_local(),
+                        op: "",
+                        args: [],
+                        target_block: arm_id,
+                        target_block_else: -1
+                    }
+                    ctx2 = _push_stmt_to(ctx2, cur_block_id, br)
+                    ctx2 = _add_edge(ctx2, cur_block_id, arm_id)
                 }
-                ctx2 = _push_stmt_to(ctx2, cur_block_id, br)
-                ctx2 = _add_edge(ctx2, cur_block_id, arm_id)
             } else if pat.kind == "enum_path" {
                 let tag_v = _path_hash(pat.text)
                 // enum_path is map-backed ({"__tag": hash, "__pN": …},
@@ -6070,7 +6133,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             // payload child name to scrut for v0 — the structural extract
             // is a Gap 15 follow-up).
             ctx2 = _set_cur_block(ctx2, arm_id)
-            if pat.kind == "ident" && len(pat.text) > 0 && pat.text != "_" {
+            if pat.kind == "ident" && len(pat.text) > 0 && pat.text != "_" && !_pat_is_const {
                 let mut ctx_a = _fresh_local(ctx2, pat.typ, pat.text)
                 let dst_a = _lr_locals[len(_lr_locals) - 1]
                 let mut a: [Operand] = []
