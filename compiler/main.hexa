@@ -1245,7 +1245,38 @@ if linker_kind == "hexa" {
         // ZERO `ld`/`as` execve. Exits before the shared system-ld exec
         // below. Round-1 = exit-code-only (serialize_elf_exec_x86_64 is
         // text-only; a print(\"..\")-with-string data ref is the round-2 wall).
-        let rc = link_elf_x86_64_ownstart(elf_obj_x86_holder, out_path, "main")
+        // Round-3 (Stage 4): if the program carries runtime UNDs (SHN_UNDEF
+        // globals), link own objs PLUS the runtime.a members that satisfy them
+        // via the in-tree archive extractor (zero binutils). No UND (round-1/2)
+        // -> the plain path, byte-identical.
+        let mut _prog_has_und = false
+        let mut _hk = 0
+        while _hk < len(elf_obj_x86_holder) {
+            let _ho = elf_obj_x86_holder[_hk]
+            let mut _hs = 0
+            while _hs < len(_ho.symbols) {
+                if _ho.symbols[_hs].section == 0 { _prog_has_und = true }
+                _hs = _hs + 1
+            }
+            _hk = _hk + 1
+        }
+        // runtime.a discovery — HEXA_PREBUILT_RUNTIME, else <HEXA_LANG>/build/
+        // runtime.a; "" -> stay on the plain path (byte-identical).
+        let mut _rt_a = env("HEXA_PREBUILT_RUNTIME")
+        if len(_rt_a) == 0 || !file_exists(_rt_a) {
+            let _lang = env("HEXA_LANG")
+            if len(_lang) > 0 && file_exists(_lang + "/build/runtime.a") {
+                _rt_a = _lang + "/build/runtime.a"
+            } else {
+                _rt_a = ""
+            }
+        }
+        let mut rc = 0
+        if _prog_has_und && len(_rt_a) > 0 {
+            rc = link_elf_x86_64_ownstart_ar(elf_obj_x86_holder, out_path, "main", _rt_a)
+        } else {
+            rc = link_elf_x86_64_ownstart(elf_obj_x86_holder, out_path, "main")
+        }
         if rc != 0 {
             eprintln("hexa-compiler: hexa_ld(elf) own-start link failed rc=" + to_string(rc))
             exit(2)
