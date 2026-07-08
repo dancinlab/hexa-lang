@@ -2014,10 +2014,14 @@ build_runtime_a_from_source() {
         #          is observable as `free` still UND in the nobaseline nm-UND dump (#4360).
         #   1    = strict: a missing/bad seed is FATAL (measurement / verify scripts).
         # convergence stage-resolve-runtime-a-2.
-        # FLIP-6 tri-state (default 0=OFF). Read HERE, before the seed-mode reads it forces
-        # below (rule: HEAP forces REALLOC-F2 ON, free/calloc seeds OFF — one symbol one
-        # provider). A 1-line PR-B flip (:-0 -> :-auto) turns it on after byteeq reconverge.
-        _heap_mode="${HEXA_RT_HEAP_NATIVE:-0}"
+        # FLIP-6 tri-state (default auto=ON since PR-B). Read HERE, before the seed-mode reads
+        # it forces below (rule: HEAP forces REALLOC-F2 ON, free/calloc seeds OFF — one symbol
+        # one provider). PR-B is this 1-line flip (:-0 -> :-auto) — gated on byteeq 3-target
+        # reconverge + faithful nm-DROP (malloc/free/calloc/__libc_calloc/__libc_free) +
+        # install.sh smoke 3/3 + [L1] 30GB leak witness + [L3] decode RSS. Rollback = revert
+        # this token to :-0 (PR-A mechanism stays inert OFF). Explicit `HEXA_RT_HEAP_NATIVE=0`
+        # still opts out.
+        _heap_mode="${HEXA_RT_HEAP_NATIVE:-auto}"
         _rnfr_mode="${HEXA_RT_NATIVE_FREE:-auto}"
         # zeroc #29 realloc F2: when the realloc flip is active, the shim's magic-guarded
         # RECLAIMING hxlcl_free MUST serve — the free no-op seed would (a) leak (never reclaim),
