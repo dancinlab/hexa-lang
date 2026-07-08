@@ -105,6 +105,14 @@ if [ -x "$HEXA_V2" ] && [ -f self/runtime.c ] && [ -z "$_apw_stale" ]; then
     bash tool/regen_runtime_core_c.sh "$REPO" 2>&1 | sed 's/^/  [0\/5] /'
 else
     echo "  [0/5] regen: clean checkout — restoring seeds + building hexat from SSOT"
+    # Same staleness rule as the warm-tree freshness guard (:88): a stale
+    # build/hexat (older than the compiler source) makes stage_prebuild_hexat
+    # early-exit "already present" and SKIP the seed-converge loop below, so the
+    # 0c HEXA_SEED_CONVERGE reconcile never runs. Remove it so converge fires.
+    if [ -x build/hexat ] && [ -n "$(find self compiler/lex -name '*.hexa' -newer build/hexat -print -quit 2>/dev/null)" ]; then
+        rm -f build/hexat
+        echo "  [0/5] regen: stale build/hexat removed (older than compiler source)"
+    fi
     # STAGE-0 toolchain env (mirrors release CI Stage 0b contract).
     export CC="${CC:-clang}"
     export LIBS="${LIBS:--lm}"
@@ -117,7 +125,19 @@ else
     #     SSOT dups, then compiles runtime.a from source (seeds-present path).
     bash tool/stage_resolve_runtime_a || { echo "build_aprime: STAGE-0 stage_resolve_runtime_a failed" >&2; exit 1; }
     # 0c: build build/hexat (self-hosted transpiler) from hexa_cc.c + runtime.a.
-    HEXA_PREBUILT_RUNTIME="$REPO/build/runtime.a" bash tool/stage_prebuild_hexat \
+    #     HEXA_SEED_CONVERGE=1 (caller-overridable): the frozen hexa_cc.c seed
+    #     (151c52c82) PRE-DATES current self/lexer.hexa rules (e.g. the RParen-
+    #     value-ender regex disambiguation fix, regex_value_ender :199) — a
+    #     hexat built straight from the seed mis-lexes a `... s) / x` division
+    #     (e.g. stdlib/runtime/math.hexa Bessel rt_j0) as a regex-literal start
+    #     ("unbalanced regex literal", the :83 stale-hexat failure — but on a
+    #     CLEAN checkout where the freshness guard cannot help). Converge runs
+    #     the SAME deterministic seed→current-source fixpoint (tool/regen_cc_manual,
+    #     RFC 086) that release_build:89 defaults to, so stage-2 gets a hexat with
+    #     current lexer rules. tracked diff = this recipe only; native/byteeq
+    #     paths never run it, so byte-invariant.
+    HEXA_PREBUILT_RUNTIME="$REPO/build/runtime.a" HEXA_SEED_CONVERGE="${HEXA_SEED_CONVERGE:-1}" \
+        bash tool/stage_prebuild_hexat \
         || { echo "build_aprime: STAGE-0 stage_prebuild_hexat failed" >&2; exit 1; }
     # 0d: point HEXA_V2 at the STAGE-0-built transpiler. Prefer the canonical
     #     build/hexat (already covered by the `build/` .gitignore) over the
