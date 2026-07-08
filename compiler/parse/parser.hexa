@@ -1734,7 +1734,9 @@ fn parse_pipe_closure() -> Expr {
     let mut n_params = 0
     if check_kind(TokenKind::PipePipe) {
         // `||` — zero-arg lambda; the `||` token already covers both bars.
-        advance()
+        // HX3001 self-typecheck fix: discard-let makes the then-tail `unit` so the
+        // S3 if/else branch-join skips (statement-position if; both tails discarded).
+        let _pp = advance()
     } else {
         advance() // consume opening `|`
         if !check_kind(TokenKind::Pipe) {

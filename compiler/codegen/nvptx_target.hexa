@@ -3443,15 +3443,13 @@ fn _nvptx_parse_i64(s: string) -> i64 {
     let mut i = 0
     let n = len(s)
     while i < n {
-        let c = s[i]
-        if c < "0" || c > "9" { return 0 }
-        // NOTE: `c.code()` is the natural form, but legacy codegen_c2 doesn't
-        // lower bare `.code()` on a single-char string yet (PR-C piece 6 - only
-        // `char_code_at(i)`/`byte_at(i)` are registered in self/codegen.hexa
-        // L4326-4334). Use `char_code_at(0)` to extract the byte from the
-        // 1-char slice so the standalone CLI build (legacy codegen) can lower.
-        let d: i64 = (c.char_code_at(0) - 48) as i64
-        acc = acc * 10 + d
+        // HX3025 self-typecheck fix: index the code directly via char_code_at(i)
+        // (registered, i64-typed) instead of string-indexing s[i] then extracting
+        // — the S3 string-arm rejects s[i] (Rust E0608 parity). Behavior-identical:
+        // ASCII '0'..'9' compare ≡ code 48..57; non-digit → return 0.
+        let d: i64 = s.char_code_at(i)
+        if d < 48 || d > 57 { return 0 }
+        acc = acc * 10 + (d - 48)
         i = i + 1
     }
     return acc
