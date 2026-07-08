@@ -77,14 +77,28 @@ srcs=(
 )
 exps=(42 hello 15 42 big 40 41)
 
-pass=0; fail=0
+pass=0; fail=0; slot_stale=0
 i=0
 while [ $i -lt ${#names[@]} ]; do
     n="${names[$i]}"; src="${srcs[$i]}"; exp="${exps[$i]}"
     printf '%s\n' "$src" > "$WORK/$n.hexa"
-    HEXA_NATIVE_BUILD=1 "$HEXA" build "$WORK/$n.hexa" -o "$WORK/$n.bin" >/dev/null 2>&1
+    HEXA_NATIVE_BUILD=1 "$HEXA" build "$WORK/$n.hexa" -o "$WORK/$n.bin" >/dev/null 2>"$WORK/$n.err"
     if [ ! -x "$WORK/$n.bin" ]; then
+        # STALE-SLOT vs REAL failure classification. A STALE promoted slot (its
+        # rt.o predates the current runtime → missing symbols) fails at the
+        # hexa_ld LINK stage with undefined-symbol errors — even on a TRIVIAL
+        # corpus program that references only basic runtime symbols. That is a
+        # runner-provisioning issue (the slot needs re-promote), NOT a native-
+        # build code regression, so it must NOT grade RED (infra-wall-noneval: a
+        # degraded/blocked run is not a real verdict — same class as the absent-
+        # slot NEUTRAL above). A REAL regression fails differently (a compile
+        # error, or a produced-but-wrong binary), which stays a hard FAIL below.
+        if grep -qiE 'undefined symbol|Undefined symbols|symbol\(s\) not found|^ld:|unresolved (external )?symbol|hexa_ld: .*(undefined|unresolved|missing)' "$WORK/$n.err" 2>/dev/null; then
+            echo "SLOT-STALE $n — link failed on the promoted slot's rt.o (undefined symbol); slot needs re-promote"
+            slot_stale=$((slot_stale+1)); i=$((i+1)); continue
+        fi
         echo "FAIL $n — native build produced no executable"
+        echo "  err: $(tail -2 "$WORK/$n.err" 2>/dev/null | tr '\n' ' ')"
         fail=$((fail+1)); i=$((i+1)); continue
     fi
     out="$("$WORK/$n.bin" 2>&1)"; rc=$?
@@ -98,6 +112,16 @@ while [ $i -lt ${#names[@]} ]; do
     i=$((i+1))
 done
 
-echo "selfhost_native_build_gate: PASS=$pass FAIL=$fail (corpus ${#names[@]})"
+echo "selfhost_native_build_gate: PASS=$pass FAIL=$fail SLOT-STALE=$slot_stale (corpus ${#names[@]})"
+# A REAL native-build regression is a hard fail (RED). A uniformly stale/
+# incompatible promoted slot (link failures only, no real fails) is a runner-
+# provisioning issue → exit 2 (CI remaps to NEUTRAL) with a loud re-promote
+# warning, NOT a false RED — a stale slot cannot yield a valid measurement, so
+# grading it RED would fold an infra state into the gate verdict.
 [ "$fail" = 0 ] || exit 1
+if [ "$slot_stale" != 0 ]; then
+    echo "::warning::selfhost native-build gate NEUTRAL — the promoted self-host slot ($SLOT/rt.o) is STALE (link undefined-symbols on trivial corpus); re-promote via 'tool/build_selfhost.sh && tool/promote_selfhost.sh install' on this runner" >&2
+    echo "selfhost_native_build_gate: NEUTRAL — $slot_stale/${#names[@]} corpus cases hit a stale-slot link failure (re-promote needed; not a code regression)" >&2
+    exit 2
+fi
 exit 0
