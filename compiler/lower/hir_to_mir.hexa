@@ -4201,6 +4201,20 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                                 _bck_ref_names[_bk_rmv], _bck_ref_mut[_bk_rmv],
                                 _bck_ref_lines[_bk_rmv], e.span)
                         }
+                        // HEXA-OWN L5 E0382 — record the non-call MOVE of the @own
+                        // param at the `return a` site so a later use of `a` fires
+                        // Rule 2 (use-after-move, HX3014) via the existing move
+                        // registry + NLL reach-matrix — the DUAL of the HX3040 move-
+                        // while-borrowed scan above (E0505). `args[0]` is the lowered
+                        // return operand (the tracked local of `a`); `_bck_note_move`
+                        // resolves its group. Gated on `_bck_active`+@own (byteeq-
+                        // neutral; a plain handle-copy return stays silent). The
+                        // return's own value read was recorded BEFORE this move (same
+                        // block, use-before-move) so `return a` alone never self-fires.
+                        if len(args) > 0 && args[0].kind == "local" {
+                            _bck_note_move(args[0].local_id, "<return move>",
+                                           ctx2.cur_block, e.span)
+                        }
                     }
                 }
             }
@@ -4657,6 +4671,25 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                                 _bck_ref_names[_bk_lmv], _bck_ref_mut[_bk_lmv],
                                 _bck_ref_lines[_bk_lmv], e.span)
                         }
+                        // HEXA-OWN L5 E0382 — record the non-call MOVE of the @own
+                        // param at the `let b = a` site so a later use of `a` fires
+                        // Rule 2 (use-after-move, HX3014) via the existing move
+                        // registry — the DUAL of the HX3040 move-while-borrowed scan
+                        // above (E0505). `rhs_op` is the tracked local of `a`
+                        // (kind=="local" per the enclosing `_bck_find_local >= 0`
+                        // guard); `_bck_note_move` resolves its group. Gated on
+                        // `_bck_active`+@own (byteeq-neutral; a plain handle-copy of a
+                        // non-@own local stays silent).
+                        _bck_note_move(rhs_op.local_id, "<let move>",
+                                       ctx2.cur_block, e.span)
+                        // Move semantics: `b` is the NEW sole owner and `a` is dead,
+                        // so DETACH `b` from `a`'s (now-moved) group into a fresh
+                        // group (newest-entry-wins) — otherwise the group-granular
+                        // Rule 2 would spuriously fire on a later use of the move-
+                        // TARGET `b` (the correct `let b = a; return b` idiom). Only
+                        // under @own (a real move); a non-@own handle-copy keeps the
+                        // group-join above so Rule-1 aliasing stays intact.
+                        _bck_track(dst.id, nm, _bck_new_group(), e.span)
                     }
                 }
             }
@@ -4996,6 +5029,23 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                     _bck_emit_move_while_borrowed_nc(_bk_amv_rhs,
                         _bck_ref_names[_bk_amv], _bck_ref_mut[_bk_amv],
                         _bck_ref_lines[_bk_amv], e.span)
+                }
+                // HEXA-OWN L5 E0382 — record the non-call MOVE of the @own param at
+                // the `b = a` site so a later use of `a` fires Rule 2 (use-after-move,
+                // HX3014) via the existing move registry — the DUAL of the HX3040
+                // move-while-borrowed scan above (E0505). `rr.operand` is the lowered
+                // RHS `a`; `_bck_note_move` resolves its group. The re-point above
+                // joined `b` to `a`'s group, so the move keys on that group. Gated on
+                // `_bck_active`+@own (byteeq-neutral).
+                if rr.operand.kind == "local" {
+                    _bck_note_move(rr.operand.local_id, "<assign move>",
+                                   ctx2.cur_block, e.span)
+                    // Move semantics: the assign-target `b` is the NEW sole owner and
+                    // `a` is dead — DETACH `b` from `a`'s (now-moved) group into a
+                    // fresh group so the group-granular Rule 2 does not spuriously
+                    // fire on a later use of `b` (the correct `b = a; return b`
+                    // idiom). Mirrors the let-site detach.
+                    _bck_track(dst.id, lhs.text, _bck_new_group(), e.span)
                 }
             }
         }
