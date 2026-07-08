@@ -1894,6 +1894,178 @@ pub fn parse_ar_archive(buf) -> [ArMember] {
     return members
 }
 
+// ── RFC 063 § P3 round-3 Stage 3 — own-linker archive extraction ──
+//
+// archive_extract_fixpoint(program_objs, buf, members) -> [ElfX86Obj]
+//
+// Classic `ld` archive-member pull. Given the PROGRAM's already-parsed
+// ElfX86Obj[] (Stage-1 parses of the own .o files) plus the archive `buf`
+// and its [ArMember] records (Stage-2 parse_ar_archive), pull exactly the
+// runtime.a members needed to satisfy the program's unresolved references,
+// transitively, to a fixpoint. Returns the pulled ElfX86Obj[] in
+// dependency (pull) order, to be appended to program_objs by Stage 4.
+//
+// Symbol model (from parse_elf_x86_obj / ElfSym):
+//   section == 0            → UNDEFINED reference (SHN_UNDEF).
+//   section != 0 && GLOBAL  → a linkable DEFINITION.
+//   STT_SECTION synth syms  → bind LOCAL, so excluded from DEF matching.
+//
+// Two monotonically-growing name sets drive the fixpoint:
+//   def_names — every GLOBAL name defined so far (program + pulled members).
+//               Membership here is the "satisfied" marker.
+//   und_names — every reference name ever seen (program + pulled UNDs).
+// A name is still-NEEDED  ==  in und_names AND NOT in def_names. Because
+// def_names only grows, once a name is defined it can never re-trigger a
+// pull; und_names only grows, so no element is ever removed — the sets are
+// append-only, which makes termination obvious.
+//
+// A member is PULLED iff it has a GLOBAL DEF whose name is still-NEEDED.
+// On pull: its GLOBAL defs fold into def_names (satisfying those needs) and
+// its UNDs fold into und_names (creating new needs). Each member is pulled
+// AT MOST ONCE (the `pulled` flag). Members are parsed once up front — the
+// armap ("/") is intentionally dropped by parse_ar_archive, so symbol
+// discovery is a linear symtab scan per member.
+//
+// Sanctioned-floor boundary: names that stay NEEDED after the fixpoint
+// (malloc/free/write/memcpy/mmap/__errno_location …) are simply LEFT
+// unresolved — runtime.a does not self-satisfy the axis-③ libc floor, so no
+// member pulls for them and this function NEVER errors on a residual UND.
+// Resolving/erroring on the floor is Stage-4's concern, not this pass's.
+
+// Read a NUL-terminated symbol name out of an ElfX86Obj strtab ([u8]),
+// bounded by the strtab length (defensive against a malformed name_offset).
+fn _aef_symname(obj: ElfX86Obj, off: Int) -> string {
+    let mut s = ""
+    let n = len(obj.strtab)
+    let mut k = 0
+    while off + k < n {
+        let b = obj.strtab[off + k] & 0xff
+        if b == 0 { break }
+        s = s + from_char_code(b)
+        k = k + 1
+    }
+    return s
+}
+
+// Linear membership test for an append-only [string] name set.
+fn _aef_has(xs: [string], name: string) -> bool {
+    let mut i = 0
+    let n = len(xs)
+    while i < n {
+        if xs[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+pub fn archive_extract_fixpoint(program_objs: [ElfX86Obj], buf, members: [ArMember]) -> [ElfX86Obj] {
+    let extracted: [ElfX86Obj] = []
+
+    // ── Parse every member once (symbol discovery needs the symtab). ──
+    let parsed: [ElfX86Obj] = []
+    let mut pulled: [bool] = []
+    let mut m = 0
+    while m < len(members) {
+        let mem = members[m]
+        parsed.push(parse_elf_x86_obj(buf, mem.data_off, mem.size, m))
+        pulled.push(false)
+        m = m + 1
+    }
+
+    // ── Seed def_names / und_names from the program objs. ──
+    let def_names: [string] = []
+    let und_names: [string] = []
+    // Pass 1: program GLOBAL definitions.
+    let mut pi = 0
+    while pi < len(program_objs) {
+        let po = program_objs[pi]
+        let mut sj = 0
+        while sj < len(po.symbols) {
+            let s = po.symbols[sj]
+            if s.section != 0 && s.bind == ELF_STB_GLOBAL {
+                let nm = _aef_symname(po, s.name_offset)
+                if len(nm) > 0 && !_aef_has(def_names, nm) { def_names.push(nm) }
+            }
+            sj = sj + 1
+        }
+        pi = pi + 1
+    }
+    // Pass 2: program undefined references.
+    pi = 0
+    while pi < len(program_objs) {
+        let po = program_objs[pi]
+        let mut sj = 0
+        while sj < len(po.symbols) {
+            let s = po.symbols[sj]
+            if s.section == 0 {
+                let nm = _aef_symname(po, s.name_offset)
+                if len(nm) > 0 && !_aef_has(und_names, nm) { und_names.push(nm) }
+            }
+            sj = sj + 1
+        }
+        pi = pi + 1
+    }
+
+    // ── Fixpoint: repeat full passes until one pulls nothing. ──
+    let mut changed = true
+    while changed {
+        changed = false
+        let mut mi = 0
+        while mi < len(members) {
+            if !pulled[mi] {
+                let obj = parsed[mi]
+
+                // Wants pulling iff it has a GLOBAL DEF for a still-NEEDED
+                // name (in und_names AND not yet in def_names).
+                let mut wants = false
+                let mut k = 0
+                while k < len(obj.symbols) {
+                    let s = obj.symbols[k]
+                    if s.section != 0 && s.bind == ELF_STB_GLOBAL {
+                        let nm = _aef_symname(obj, s.name_offset)
+                        if _aef_has(und_names, nm) && !_aef_has(def_names, nm) {
+                            wants = true
+                            break
+                        }
+                    }
+                    k = k + 1
+                }
+
+                if wants {
+                    pulled[mi] = true
+                    changed = true
+
+                    // Fold this member's GLOBAL defs into def_names.
+                    let mut d = 0
+                    while d < len(obj.symbols) {
+                        let s = obj.symbols[d]
+                        if s.section != 0 && s.bind == ELF_STB_GLOBAL {
+                            let nm = _aef_symname(obj, s.name_offset)
+                            if len(nm) > 0 && !_aef_has(def_names, nm) { def_names.push(nm) }
+                        }
+                        d = d + 1
+                    }
+                    // Fold this member's new UNDs into und_names.
+                    let mut u = 0
+                    while u < len(obj.symbols) {
+                        let s = obj.symbols[u]
+                        if s.section == 0 {
+                            let nm = _aef_symname(obj, s.name_offset)
+                            if len(nm) > 0 && !_aef_has(und_names, nm) { und_names.push(nm) }
+                        }
+                        u = u + 1
+                    }
+
+                    extracted.push(obj)
+                }
+            }
+            mi = mi + 1
+        }
+    }
+
+    return extracted
+}
+
 
 // LIR walker — `LModule` → byte stream (RFC 063 § P2, cycle 29)
 // ─────────────────────────────────────────────────────────────────
