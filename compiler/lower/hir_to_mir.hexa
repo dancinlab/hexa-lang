@@ -507,6 +507,15 @@ pub let mut _bck_strict = false    // HEXA_BORROWCK_STRICT=1, read once per lowe
 // A2 byteeq-neutral, gen3≡gen4).
 pub let mut _bck_census = false    // HEXA_BORROWCK_CENSUS=1, read once per lower_hir
 pub let mut _bck_active = false    // per-fn gate; suspended in closure bodies
+// ── missing-return (E0308 / HX3047) — env-gated default-OFF ─────────────
+// HEXA_MISSING_RETURN=1: opt-in CFG-reachability missing-return check (rustc
+// E0308 "mismatched types: expected T, found ()" — a fn declared `-> T` whose
+// body can fall off the end without returning). Read ONCE per lower_hir
+// (mirrors `_bck_on`). Default false ⇒ `_missret_check` early-returns ⇒ ZERO
+// diagnostics ⇒ the diag stream + emitted .text are byte-identical
+// (byteeq-neutral). Flip-to-default-ON is a LATER phase (P4), gated on the
+// offline corpus census (0 false-reject) + faithful×3 GREEN + install smoke.
+pub let mut _missret_on = false    // HEXA_MISSING_RETURN=1, read once per lower_hir
 pub let mut _bck_grp_ctr: i64 = 0  // fresh group-representative ids (per fn)
 // tracked-local registry (push-only; newest entry for a local id wins)
 pub let mut _bck_local_ids: [i64] = []
@@ -1849,6 +1858,144 @@ fn _bck_nll_check() {
             }
         }
         u = u + 1
+    }
+}
+
+// ── missing-return (E0308 / HX3047) — env-gated default-OFF ─────────────
+// Emitter mirrors `_emit_hx3004` (types.hexa) — the return-type-mismatch
+// diagnostic — but pushes into `_lr_diag` (the lowering diag sink) like the
+// _bck HX30xx family. `ret_kind` is the declared return type's Type.kind
+// (e.g. "int", "string"); the message reads "missing return: control reaches
+// the end of `fn <name>`, which must return `<T>`".
+fn _emit_hx3047(fn_name: string, ret_kind: string, sp: Span) {
+    let mut b = diag_new("HX3047")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", fn_name)
+    b = diag_arg(b, "expected", ret_kind)
+    _lr_diag.push(diag_emit(b))
+}
+
+// CFG-reachability missing-return predicate (rustc E0308). SOUND: it runs on
+// the MATERIALIZED per-fn CFG in `_lr_blocks` (blocks + succs), NOT on the
+// FP-unsound `ctx.has_returned` flag (which is reset at a match join and never
+// set for a `while true`). Called from `_lower_fn` at the implicit fall-off
+// return synthesis site, BEFORE the synthetic STMT_RETURN is pushed, so the
+// fall-off leaf still carries its concrete tail statement.
+//
+// MISSING_RETURN(fn) := ∃ block B reachable from `entry_id` via a forward BFS
+// over Block.succs such that B has NO successor AND B's final Stmt.kind is a
+// CONCRETE non-call, non-diverging statement (STMT_ASSIGN/BINOP/UNOP/LOAD/
+// STORE). Evaluated ONLY when the frame return type is non-unit and the
+// implicit return carries no value (`br_has_value == false`).
+//
+// ★FP=0 by construction (the whole value):
+//   • Only fires under the opt-in HEXA_MISSING_RETURN flag (default OFF).
+//   • RETURN / THROW tail — leaf ends in STMT_RETURN/STMT_THROW ⇒ NOT in the
+//     concrete-fall-off set ⇒ silent (the {return, throw} divergence vocab).
+//   • if/else both-diverge — lowering `_set_returned(true)` when both arms
+//     terminate ⇒ ctx.has_returned true ⇒ this whole check is skipped at the
+//     `!ctx.has_returned` guard in _lower_fn.
+//   • match all-arms-diverge — a returning arm omits its to-join edge, so the
+//     join has NO live pred and the forward BFS never reaches it ⇒ silent
+//     (reachability, NOT the reset ctx.has_returned flag).
+//   • try/catch both-return + defer single-exit — route through an exit block
+//     ending STMT_RETURN ⇒ ctx.has_returned true ⇒ skipped.
+//   • while-true (D1) — the empty `after` block of an infinite loop has NO
+//     concrete tail statement (0 stmts) ⇒ NOT in the fall-off set ⇒ silent,
+//     WITHOUT needing edge suppression.
+//   • EVERY unrecognised / unmodeled tail (any STMT_CALL diverging-or-not,
+//     STMT_CALL_INDIRECT, nested try, an empty leaf, a break/continue tail) is
+//     treated as "returns" — assume-returns is the safe direction because we
+//     are the party raising the error; only a PROVABLE non-call fall-off fires.
+// Same convergence guard as _bck_nll_check (hard sweep cap = nb*4+8); a
+// non-converging sweep bails SILENTLY (never a false REJECT).
+fn _missret_check(entry_id: i64, sig_return: Type, br_has_value: bool,
+                  fn_name: string, sp: Span) {
+    if !_missret_on { return }
+    // Non-unit return type only. An unannotated fn infers to "unit"; a `-> void`
+    // / unit / empty-kind frame can never miss a value.
+    let rk = sig_return.kind
+    if len(rk) == 0 { return }
+    if rk == "unit" || rk == "void" { return }
+    // A trailing VALUE expression IS the returned value (the synthetic
+    // STMT_RETURN carries it) — only a valueless fall-off can miss a return.
+    if br_has_value { return }
+    let nb = len(_lr_blocks)
+    if nb == 0 { return }
+    // block id → _lr_blocks index map (defensive; mirrors _bck_nll_check —
+    // ids are per-fn monotonic but map by id, never by array index).
+    let mut max_id = 0
+    let mut bi = 0
+    while bi < nb {
+        if _lr_blocks[bi].id > max_id { max_id = _lr_blocks[bi].id }
+        bi = bi + 1
+    }
+    let mut id2ix: [i64] = []
+    let mut k = 0
+    while k <= max_id {
+        id2ix.push(0 - 1)
+        k = k + 1
+    }
+    bi = 0
+    while bi < nb {
+        let bid = _lr_blocks[bi].id
+        if bid >= 0 { id2ix[bid] = bi }
+        bi = bi + 1
+    }
+    // forward reachability from entry over Block.succs (monotone bitset
+    // fixed-point; loop back-edges converge). All-zero, seed the entry.
+    let mut entry_ix = 0 - 1
+    if entry_id >= 0 && entry_id <= max_id { entry_ix = id2ix[entry_id] }
+    if entry_ix < 0 { return }
+    let mut reach: [i64] = []
+    let mut z = 0
+    while z < nb { reach.push(0); z = z + 1 }
+    reach[entry_ix] = 1
+    let cap = nb * 4 + 8
+    let mut iter = 0
+    let mut changed = true
+    while changed {
+        // non-converging guard: cannot happen for a monotone bitset over a
+        // finite CFG, but bail SILENTLY rather than risk a false reject.
+        if iter >= cap { return }
+        changed = false
+        bi = 0
+        while bi < nb {
+            if reach[bi] == 1 {
+                let succs = _lr_blocks[bi].succs
+                let mut si = 0
+                while si < len(succs) {
+                    let sid = succs[si]
+                    let mut six = 0 - 1
+                    if sid >= 0 && sid <= max_id { six = id2ix[sid] }
+                    if six >= 0 && reach[six] == 0 {
+                        reach[six] = 1
+                        changed = true
+                    }
+                    si = si + 1
+                }
+            }
+            bi = bi + 1
+        }
+        iter = iter + 1
+    }
+    // find a reachable fall-off leaf: reachable, no successor, whose terminal
+    // statement is a CONCRETE non-call, non-diverging kind. Empty leaves and
+    // any diverging / unrecognised tail are treated as "returns" (FP=0).
+    bi = 0
+    while bi < nb {
+        if reach[bi] == 1 && len(_lr_blocks[bi].succs) == 0 {
+            let stmts = _lr_blocks[bi].stmts
+            if len(stmts) > 0 {
+                let lk = stmts[len(stmts) - 1].kind
+                if lk == STMT_ASSIGN || lk == STMT_BINOP || lk == STMT_UNOP
+                    || lk == STMT_LOAD || lk == STMT_STORE {
+                    _emit_hx3047(fn_name, rk, sp)
+                    return
+                }
+            }
+        }
+        bi = bi + 1
     }
 }
 
@@ -7669,6 +7816,11 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
     }
 
     if !ctx.has_returned {
+        // missing-return (E0308 / HX3047) — env-gated default-OFF, byteeq-
+        // neutral. Runs on the materialized CFG BEFORE the synthetic
+        // STMT_RETURN below masks the fall-off leaf's concrete tail. No-op
+        // (immediate return) when HEXA_MISSING_RETURN is unset.
+        _missret_check(entry_id, it.sig_return, br_has_value, it.name, it.span)
         let mut args: [Operand] = []
         if br_has_value { args.push(br_operand) }
         let s = Stmt {
@@ -7796,6 +7948,10 @@ pub fn lower_hir(module: HModule) -> MModule {
     _bck_census = env("HEXA_BORROWCK_CENSUS") == "1"
     _bck_on = _bck_on || _bck_census
     if _bck_census { _bck_census_lines = [] }
+    // missing-return (E0308 / HX3047) — opt-in flag read ONCE per lower_hir
+    // (same latched idiom as _bck_on). Default OFF ⇒ `_missret_check`
+    // early-returns per-fn ⇒ diag stream + emitted .text byte-identical.
+    _missret_on = env("HEXA_MISSING_RETURN") == "1"
     _bck_active = false
     _bck_own_fns = []
     _bck_own_pidx = []

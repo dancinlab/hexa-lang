@@ -847,6 +847,22 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3047",
+        title: "missing return: control can reach the end of a function that must return a value",
+        // Opt-in (HEXA_MISSING_RETURN / `_missret_on`-gated) CFG-reachability
+        // rung. Error band (a fall-off-the-end of a `-> T` fn IS a type error,
+        // not a lint), but ships byteeq-NEUTRAL because the flag defaults OFF
+        // → `_missret_check` early-returns per fn → nothing is emitted and the
+        // diag stream + emitted .text are byte-identical. Default-ON flip is a
+        // LATER phase, gated on the offline corpus census (0 false-reject) +
+        // faithful×3 GREEN + install smoke.
+        severity: Severity::Error,
+        stage: "S3",
+        template: "missing return: control reaches the end of `fn {name}`, which must return `{expected}`",
+        explain: "CFG-reachability missing-return check (opt-in HEXA_MISSING_RETURN / `_missret_on`-gated, default OFF). A function declared `-> T` (non-unit) has a control-flow path that falls off the end of its body WITHOUT returning a value. This is Rust's E0308 ('mismatched types: expected `T`, found `()`'; the implicit-unit tail of a value-returning fn) — `fn f() -> i32 { let x = 1; }` reaches the closing brace with no `return`, so the fn yields `()` where `i32` was promised. hexa wires it in compiler/lower/hir_to_mir.hexa::`_lower_fn`, at the implicit fall-off-return synthesis site (the `!ctx.has_returned` guard), where the fn's FULL per-fn CFG (`_lr_blocks` = blocks + preds/succs, materialized by `_add_edge` across if/else joins, while/for back-edges, break/continue sentinel patches, defer epilogue, try/catch) coexists with `entry_id`, `it.sig_return`, and `br_has_value`. `_missret_check` runs a SOUND predicate on that CFG — NOT on `ctx.has_returned`, which is FP-unsound (reset at a match join, never set for `while true`): MISSING_RETURN(fn) := ∃ block B reachable from `entry_id` via a forward BFS over Block.succs such that B has NO successor AND B's terminal Stmt.kind is a CONCRETE non-call, non-diverging statement (STMT_ASSIGN / STMT_BINOP / STMT_UNOP / STMT_LOAD / STMT_STORE), evaluated ONLY when the frame return type is non-unit and `br_has_value` is false. FP=0 is a CONSTRUCTION property: (return/throw tail) a leaf ending STMT_RETURN/STMT_THROW is not in the concrete-fall-off set → silent; (if/else both-diverge) lowering `_set_returned(true)` when both arms terminate → `ctx.has_returned` true → the whole check is skipped; (match all-arms-diverge) a returning arm omits its to-join edge so the join has no live pred and the forward BFS never reaches it → silent (reachability, not the reset flag); (try/catch both-return + defer single-exit) route through an exit block ending STMT_RETURN → skipped; (while-true / D1) the empty `after` block of an infinite loop has NO concrete tail statement → not in the fall-off set → silent WITHOUT edge suppression; (every unrecognised tail) any STMT_CALL diverging-or-not, STMT_CALL_INDIRECT, nested try, empty leaf, or break/continue tail is treated as 'returns' — assume-returns is the safe direction because hexa is the party raising the error, so ONLY a provable non-call fall-off leaf fires (no callee allowlist, so a user `fn die() { exit(1) }` in tail position can never be mis-flagged). The offline corpus census over compiler/stdlib/self (all git-tracked `-> T` fns) is asserted at 0 false-reject before any promotion. BAND: opt-in `_missret_on` (HEXA_MISSING_RETURN), Error-band. Ships byteeq-neutral regardless: the flag defaults OFF so nothing is emitted and codegen .text is byte-identical; the default-ON flip is a follow-up gated on the census + faithful×3 GREEN + install.sh consumer smoke (never promote on x86-only). Fix: add an explicit `return <value>` on every path that reaches the end of the function, or make the trailing expression the function's value.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,

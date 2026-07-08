@@ -1,0 +1,219 @@
+// HEXA Native Compiler — missing-return (E0308 / HX3047) CFG-reachability smoke test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Probe matrix for the opt-in CFG-reachability missing-return check
+// (HEXA_MISSING_RETURN=1 / `_missret_on`, compiler/lower/hir_to_mir.hexa
+// `_missret_check`). A fn declared `-> T` (non-unit) whose body can fall off
+// the end WITHOUT returning a value = rustc E0308 ("mismatched types: expected
+// `T`, found `()`"). Each source probe runs the REAL pipeline — lex → parse →
+// ast_to_hir lower → lower_hir — across two ambient-flag modes:
+//   * OFF (no flag)              → 0 diagnostics of ANY code (byteeq-neutral
+//                                  stream proof at the diag level; the .text
+//                                  byte-identity is the pool/CI gate's job)
+//   * ON (HEXA_MISSING_RETURN=1)  → expected HX3047 count per probe, Error band
+//
+//   hz_missing_return   `fn f() -> int { let x = 1 }`                    → ×1
+//   fp_return           `fn g() -> int { return 1 }`                     → 0
+//   fp_if_else_both     `fn h(b) -> int { if b {return 1} else {return 2} }` → 0
+//   fp_match_exhaustive `fn m(c) -> int { return match c {…exhaustive…} }`  → 0
+//   fp_tail_call        `fn k() -> int { return compute() }`             → 0
+//   fp_bare_tail_call   `fn kb() -> int { sideEffect() }` (conservative) → 0
+//   fp_unit             `fn u() { let x = 1 }` (unit return)             → 0
+//
+// The hz_missing_return / fp_return PAIR is the core discriminator: identical
+// shape, the only difference is the explicit `return`. fp_bare_tail_call is the
+// conservative-rule control — a trailing bare call is treated as "returns"
+// (FP=0 by construction; a false NEGATIVE is the safe direction).
+//
+// Run:
+//   hexa run compiler/check/missing_return_test.hexa                  (OFF sweep)
+//   HEXA_MISSING_RETURN=1 hexa run compiler/check/missing_return_test.hexa
+
+import "../lex/lexer.hexa"
+import "../parse/parser.hexa"
+import "../parse/ast.hexa"
+import "../ir/hir.hexa"
+import "../ir/mir.hexa"
+import "../lex/tokens.hexa"
+import "../diag/catalog.hexa"
+import "../atlas/static_index.hexa"
+import "../lower/ast_to_hir.hexa"
+import "../lower/hir_to_mir.hexa"
+
+// ── pipeline driver ──────────────────────────────────────────
+
+fn _compile_probe(name: string, src: string) -> array {
+    let file = name + ".hexa"
+    let toks = lex(src, file)
+    let m = parse(toks, file)
+    let hm = lower(m, empty_atlas_index())
+    let mm = lower_hir(hm)
+    if len(mm.funcs) == 0 {
+        println("  WARN: probe " + name + " lowered 0 fns")
+    }
+    return hir_to_mir_diags()
+}
+
+fn _count_code(diags: array, code: string) -> i64 {
+    let mut i = 0
+    let mut n = 0
+    while i < len(diags) {
+        let d = diags[i]
+        if d.code == code { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+fn _count_error_band(diags: array) -> i64 {
+    let mut i = 0
+    let mut n = 0
+    while i < len(diags) {
+        let d = diags[i]
+        if d.severity == Severity::Error { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+fn _print_diags(diags: array) {
+    let mut i = 0
+    while i < len(diags) {
+        let d = diags[i]
+        let sp = d.span
+        println("      [" + to_string(i) + "] " + d.code + " @ "
+                + sp.file + ":" + to_string(sp.line) + ":" + to_string(sp.col)
+                + " — " + d.message)
+        i = i + 1
+    }
+}
+
+// Expectations branch on the AMBIENT flag (borrowck_test convention — `setenv`
+// does not feed `env()` in the stage0 runtime, so the flag must be set on the
+// PROCESS: run twice, once plain = OFF sweep, once under HEXA_MISSING_RETURN=1).
+// ON-mode: expect `want` HX3047 and zero other codes (probe hygiene). OFF-mode:
+// expect a fully empty diag stream (byte-neutral proof at the diag level).
+// Every emitted HX3047 is Error-band; a want>0 probe asserts that too.
+fn _run_missret_probe(label: string, src: string, want_on: i64) -> bool {
+    let flag_on = env("HEXA_MISSING_RETURN") == "1"
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3047 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3047")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3047 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3047 diagnostics = " + to_string(other))
+        ok = false
+    }
+    // Every emitted HX3047 is Error-band (build-refusing under a future
+    // default-ON flip); a want=0 probe has zero HX3047 → zero Error-band.
+    let eb = _count_error_band(d)
+    if eb != want {
+        println("  FAIL: error-band = " + to_string(eb) + ", want " + to_string(want))
+        ok = false
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
+// ── source probes ────────────────────────────────────────────
+
+fn _src_hz_missing_return() -> string {
+    let mut s = "fn f() -> int {\n"
+    s = s + "    let x = 1\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_return() -> string {
+    let mut s = "fn g() -> int {\n"
+    s = s + "    return 1\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_if_else_both() -> string {
+    let mut s = "fn h(b) -> int {\n"
+    s = s + "    if b {\n"
+    s = s + "        return 1\n"
+    s = s + "    } else {\n"
+    s = s + "        return 2\n"
+    s = s + "    }\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_match_exhaustive() -> string {
+    let mut s = "fn m(c: int) -> int {\n"
+    s = s + "    return match c {\n"
+    s = s + "        1 -> 10,\n"
+    s = s + "        _ -> 20\n"
+    s = s + "    }\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_tail_call() -> string {
+    let mut s = "fn compute() -> int {\n"
+    s = s + "    return 42\n"
+    s = s + "}\n"
+    s = s + "fn k() -> int {\n"
+    s = s + "    return compute()\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_bare_tail_call() -> string {
+    let mut s = "fn sideEffect() {\n"
+    s = s + "    let z = 0\n"
+    s = s + "}\n"
+    s = s + "fn kb() -> int {\n"
+    s = s + "    sideEffect()\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_unit() -> string {
+    let mut s = "fn u() {\n"
+    s = s + "    let x = 1\n"
+    s = s + "}\n"
+    return s
+}
+
+// ── driver ───────────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  missing-return (E0308 / HX3047) — CFG reachability")
+    let mut mode = "OFF (byteeq-neutral sweep)"
+    if env("HEXA_MISSING_RETURN") == "1" { mode = "ON (HEXA_MISSING_RETURN=1)" }
+    println("  mode: " + mode)
+    println("══════════════════════════════════════════════")
+
+    let mut ok = true
+    if !_run_missret_probe("hz_missing_return", _src_hz_missing_return(), 1) { ok = false }
+    if !_run_missret_probe("fp_return", _src_fp_return(), 0) { ok = false }
+    if !_run_missret_probe("fp_if_else_both", _src_fp_if_else_both(), 0) { ok = false }
+    if !_run_missret_probe("fp_match_exhaustive", _src_fp_match_exhaustive(), 0) { ok = false }
+    if !_run_missret_probe("fp_tail_call", _src_fp_tail_call(), 0) { ok = false }
+    if !_run_missret_probe("fp_bare_tail_call", _src_fp_bare_tail_call(), 0) { ok = false }
+    if !_run_missret_probe("fp_unit", _src_fp_unit(), 0) { ok = false }
+
+    println("")
+    if ok {
+        println("ALL PASS — HX3047 hz fires ×1, every FP control 0, OFF-sweep empty")
+    } else {
+        println("FAILURES — see above")
+        exit(1)
+    }
+}
