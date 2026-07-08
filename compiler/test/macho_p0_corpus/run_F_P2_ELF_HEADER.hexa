@@ -8,7 +8,8 @@
 //   - EV_CURRENT = 1
 //   - e_type = ET_REL (1)
 //   - e_machine = EM_X86_64 (0x3E)
-//   - e_ehsize = 64, e_shentsize = 64, e_shnum = 5
+//   - e_ehsize = 64, e_shentsize = 64, e_shnum = 6
+//     (NULL, .text, .symtab, .strtab, .shstrtab, .note.GNU-stack)
 //   - section header table offset valid
 
 import "../../emit/elf_x86_64.hexa"
@@ -59,7 +60,9 @@ fn main() {
 
     // e_shnum @ offset 60, u16 LE
     let e_shnum = bytes[60] | (bytes[61] << 8)
-    ok = _expect("e_shnum", e_shnum, 5) && ok
+    // 6 = NULL, .text, .symtab, .strtab, .shstrtab, .note.GNU-stack
+    // (the trailing zero-length non-exec-stack marker; .shstrtab stays index 4).
+    ok = _expect("e_shnum", e_shnum, 6) && ok
 
     // e_shstrndx @ offset 62, u16 LE
     let e_shstrndx = bytes[62] | (bytes[63] << 8)

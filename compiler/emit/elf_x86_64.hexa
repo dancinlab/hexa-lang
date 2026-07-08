@@ -1755,6 +1755,9 @@ pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
     let off_symtab   = _ew_str(shstrtab, ".symtab")
     let off_strtab   = _ew_str(shstrtab, ".strtab")
     let off_shstrtab = _ew_str(shstrtab, ".shstrtab")
+    // `.note.GNU-stack` — zero-length non-ALLOC marker (emitted as the trailing
+    // section header below). Register its name in .shstrtab here.
+    let off_note     = _ew_str(shstrtab, ".note.GNU-stack")
     let shstrsize = len(shstrtab)
 
     let elf_header_size = 64
@@ -1774,7 +1777,11 @@ pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
     let symtab_sec = next
     let strtab_sec = next + 1
     let shstrndx   = next + 2
-    let nshdrs     = next + 3
+    // `.note.GNU-stack` appended LAST (index shstrndx+1) so NO referenced
+    // section index shifts — .text/.rodata/.data/.bss and pack_lir_x86_64's
+    // precomputed indices, plus symtab_sec/strtab_sec/shstrndx, all stay in sync.
+    let _note_sec  = next + 3
+    let nshdrs     = next + 4
 
     let text_off     = elf_header_size
     let text_pad     = (8 - (text_size & 7)) & 7    // 8-align for rela
@@ -1962,6 +1969,20 @@ pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
     _ew_u64(out, shstrsize)
     _ew_u32(out, 0); _ew_u32(out, 0)
     _ew_u64(out, 1); _ew_u64(out, 0)
+    // [note_sec] .note.GNU-stack — zero-length SHT_PROGBITS with sh_flags=0
+    // (NO SHF_EXECINSTR). This is exactly how gcc/clang mark a non-executable
+    // stack; its presence stops modern binutils `ld` from assuming an
+    // executable stack and emitting the "missing .note.GNU-stack section
+    // implies executable stack" warning/error that fails the leg-B link and
+    // forces the C-transpile fallback (aiden crash-census #4752: 16/29).
+    _ew_u32(out, off_note)                    // sh_name → ".note.GNU-stack"
+    _ew_u32(out, ELF_SHT_PROGBITS)            // sh_type = 1
+    _ew_u64(out, 0)                           // sh_flags = 0 (non-exec-stack marker)
+    _ew_u64(out, 0)                           // sh_addr (non-ALLOC)
+    _ew_u64(out, pre_shdr)                    // sh_offset — benign; sh_size=0 → no bytes read
+    _ew_u64(out, 0)                           // sh_size = 0
+    _ew_u32(out, 0); _ew_u32(out, 0)          // sh_link, sh_info
+    _ew_u64(out, 1); _ew_u64(out, 0)          // sh_addralign=1, sh_entsize=0
 
     return out
 }
