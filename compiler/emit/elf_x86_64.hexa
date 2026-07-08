@@ -1548,11 +1548,12 @@ fn _er_cstr(buf, off: Int) -> string {
 //           STT_SECTION names so they stay globally unique across members
 //           (blocker #1). Pass 0 for a standalone parse.
 pub fn parse_elf_x86_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfX86Obj {
-    let obj = ElfX86Obj {
+    let mut obj = ElfX86Obj {
         text: [], relocs: [], symbols: [], strtab: [],
         rodata: [], data: [], bss_size: 0, nlocal: 0,
     }
     obj.strtab.push(0)                       // ELF strtab idx 0 = ""
+    println("DBG enter buflen=" + to_string(len(buf)) + " b0=" + to_string(_er_u8(buf, base)) + " etype=" + to_string(_er_u16le(buf, base + 0x10)))
 
     // ── Guards: ELF magic + ET_REL + EM_X86_64 ──
     if _er_u8(buf, base + 0) != 0x7f { return obj }
