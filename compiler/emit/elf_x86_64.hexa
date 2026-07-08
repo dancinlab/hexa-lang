@@ -258,6 +258,21 @@ fn _ex86_trim(s: string) -> string {
     return s.substring(a, b)
 }
 
+// ③-R2e: strip an optional size-hint prefix (`byte ptr `, `qword ptr `, …)
+// from a memory-operand token so `_ex86_parse_mem` sees the bare `[...]`.
+// The codegen emits `movzx r10, byte ptr [r10]` (byte-load) via a label
+// operand carrying that full string; return the substring from the first
+// `[`, or the input unchanged when there is no bracket.
+fn _ex86_mem_from_ptr(s: string) -> string {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        if s.substring(i, i + 1) == "[" { return s.substring(i, n) }
+        i = i + 1
+    }
+    return s
+}
+
 fn _ex86_parse_mem(s: string) -> [Int] {
     let n = len(s)
     if n < 3 { return [-1, 0] }
@@ -364,8 +379,22 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     }
     if op == "SYSCALL" { return [0x0f, 0x05] }
     if op == "RET"     { return [0xc3] }
-    // CALL rel32 — 5 bytes: E8 + 4-byte signed PC-relative offset.
+    // CALL — two shapes:
+    //   ③-R2e: indirect `call r64` — FF /2 (call r/m64). REX.B for r8..r15.
+    //     The codegen emits `call r11` for closure/fn-ptr dispatch
+    //     (call_indirect); without this arm it silently fell through to the
+    //     E8 rel32 form below → a direct call to the next insn (miscompile).
+    //     e.g. call r11 → 41 ff d3 · call rax → ff d0
+    //   direct `call <label>` — rel32 (E8 + 4-byte PC-rel, patched by the
+    //     packer's label path). A label operand never parses as an r64, so it
+    //     falls through to the E8 placeholder — byte-identical to before.
     if op == "CALL" && len(ops) == 1 {
+        let rt = _ex86_reg64(ops[0])
+        if rt >= 0 {
+            let modrm = 0xc0 | (2 << 3) | (rt & 0x7)     // FF /2, mod=11
+            if rt >= 8 { return [_ex86_rex(0, 0, 0, 1), 0xff, modrm] }
+            return [0xff, modrm]
+        }
         return [0xe8, 0x00, 0x00, 0x00, 0x00]
     }
 
@@ -440,6 +469,33 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
         let rs = _ex86_reg32(ops[1])
         if rd >= 0 && rs >= 0 {
             return [0x89, 0xc0 | (rs << 3) | rd]
+        }
+    }
+    // ③-R2e: AND/OR/XOR r32, r32 — {21,09,31} /r (2 B, no REX). Mirrors the
+    // r64 forms (48 {21,09,31}) minus REX.W. The codegen emits the 32-bit
+    // zeroing idiom `xor eax, eax` / `xor edx, edx` (idiv sign-clear +
+    // truthy-negate) which previously fell through to ENCODE-MISS.
+    //   e.g. xor eax, eax → 31 c0 · xor edx, edx → 31 d2
+    if (op == "AND" || op == "OR" || op == "XOR") && len(ops) == 2
+       && ops[1].substring(0, 1) != "#" {
+        let rd = _ex86_reg32(ops[0])
+        let rs = _ex86_reg32(ops[1])
+        if rd >= 0 && rs >= 0 {
+            let mut opc = 0x21
+            if op == "OR"  { opc = 0x09 }
+            if op == "XOR" { opc = 0x31 }
+            return [opc, 0xc0 | ((rs & 0x7) << 3) | (rd & 0x7)]
+        }
+    }
+    // ③-R2e: TEST r32, r32 — 85 /r (2 B, no REX). The 32-bit sibling of
+    // TEST64 (85 /r + REX.W); the codegen emits `test eax, eax` for the
+    // br_cond zero-test on a 32-bit condition value.
+    //   e.g. test eax, eax → 85 c0
+    if op == "TEST" && len(ops) == 2 {
+        let rd = _ex86_reg32(ops[0])
+        let rs = _ex86_reg32(ops[1])
+        if rd >= 0 && rs >= 0 {
+            return [0x85, 0xc0 | ((rs & 0x7) << 3) | (rd & 0x7)]
         }
     }
     // PUSH r32 — 50+r (1 byte, x86_64 implicit pushes 64-bit value).
@@ -565,6 +621,34 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
             let rex = _ex86_rex(1, if rs >= 8 { 1 } else { 0 }, 0,
                                     if rd >= 8 { 1 } else { 0 })
             return [rex, 0x29, 0xc0 | ((rs & 0x7) << 3) | (rd & 0x7)]
+        }
+    }
+    // ③-R2e: CMP r64, #imm32 — REX.W + 81 /7 id (7 B). Mirrors ADD64/SUB64
+    // (81 /0,/5); /7 selects CMP. The codegen materializes any imm wider than
+    // signed-imm32 into a scratch reg first (x86_64_linux.hexa), so imm always
+    // fits.  e.g. cmp r10, #0 → 49 81 fa 00 00 00 00
+    if op == "CMP64" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
+        let rd = _ex86_reg64(ops[0])
+        let imm = _ex86_imm(ops[1])
+        if rd >= 0 {
+            let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
+            let modrm = 0xc0 | (7 << 3) | (rd & 0x7)
+            return [rex, 0x81, modrm,
+                    imm & 0xff, (imm >> 8) & 0xff,
+                    (imm >> 16) & 0xff, (imm >> 24) & 0xff]
+        }
+    }
+    // ③-R2e: CMP r64, r64 — REX.W + 39 /r (3 B). Same 39 opcode as the r32
+    // CMP (reg=SRC, rm=DEST); REX.W widens to 64-bit. This is the DOMINANT
+    // compare the codegen emits (`cmp rax, r11`, `cmp r10, r11`).
+    //   e.g. cmp rax, r11 → 4c 39 d8
+    if op == "CMP64" && len(ops) == 2 {
+        let rd = _ex86_reg64(ops[0])
+        let rs = _ex86_reg64(ops[1])
+        if rd >= 0 && rs >= 0 {
+            let rex = _ex86_rex(1, if rs >= 8 { 1 } else { 0 }, 0,
+                                    if rd >= 8 { 1 } else { 0 })
+            return [rex, 0x39, 0xc0 | ((rs & 0x7) << 3) | (rd & 0x7)]
         }
     }
     // ── Cycle 27 additions — division / sign-extend / NOP / TEST ──
@@ -733,6 +817,36 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
                                     if rs >= 8 { 1 } else { 0 })
             return [rex, 0x0f, 0xb6,
                     0xc0 | ((rd & 0x7) << 3) | (rs & 0x7)]
+        }
+        // ③-R2e: r64 destination — MOVZX r64, r/m8 = REX.W + 0F B6 /r. The
+        // codegen names the setcc→movzx destination with a 64-bit reg
+        // (`movzx rax, al`, `movzx r10, al`; _x86_dst_reg returns r64), which
+        // the reg32 branch above rejected → ENCODE-MISS. Byte→qword zero-
+        // extend is well-defined (upper bits cleared).
+        let rd64 = _ex86_reg64(ops[0])
+        if rd64 >= 0 && rs >= 0 {
+            let rex = _ex86_rex(1, if rd64 >= 8 { 1 } else { 0 }, 0,
+                                    if rs   >= 8 { 1 } else { 0 })
+            return [rex, 0x0f, 0xb6,
+                    0xc0 | ((rd64 & 0x7) << 3) | (rs & 0x7)]
+        }
+        // ③-R2e: r64 dest + byte memory source — REX.W + 0F B6 /r with a
+        // ModR/M mem form. The codegen emits `movzx r10, byte ptr [r10]`
+        // (__hx_str_byte / __hx_ptr_load8 byte-load) via a label operand that
+        // carries the `byte ptr [...]` string.
+        if rd64 >= 0 {
+            let mem = _ex86_parse_mem(_ex86_mem_from_ptr(ops[1]))
+            if mem[0] >= 0 {
+                let base = mem[0]; let disp = mem[1]
+                let rex = _ex86_rex(1, if rd64 >= 8 { 1 } else { 0 }, 0,
+                                        if base >= 8 { 1 } else { 0 })
+                let mr = _ex86_modrm_mem(rd64, base, disp)
+                let out: [Int] = []
+                out.push(rex); out.push(0x0f); out.push(0xb6)
+                let mut i = 0
+                while i < len(mr) { out.push(mr[i]); i = i + 1 }
+                return out
+            }
         }
     }
     // SETcc r8 — 0F 9x /r (set 1 byte on condition).
@@ -2606,7 +2720,8 @@ fn _lir_op_uppercase_x86(op: string, ops: [LOperand]) -> string {
     if op == "cmovne" { return "CMOVNE64" }
     if op == "movzx" { return "MOVZX" }
     if op == "idiv"  { return "IDIV64" }    // 64-bit-only in encoder
-    if op == "test"  { return "TEST64" }    // 64-bit-only in encoder
+    // `test` is width-dispatched below (③-R2e) — the codegen emits both
+    // `test r10, r10` (r64 → TEST64) and `test eax, eax` (r32 → TEST).
 
     // Width-dispatched ops — detect 64-bit operand by reg name prefix
     // OR by mem operand (memory accesses through 64-bit base regs are
@@ -2628,7 +2743,11 @@ fn _lir_op_uppercase_x86(op: string, ops: [LOperand]) -> string {
     if op == "mov" { if is64 { return "MOV64" }; return "MOV" }
     if op == "add" { if is64 { return "ADD64" }; return "ADD" }
     if op == "sub" { if is64 { return "SUB64" }; return "SUB" }
-    if op == "cmp" { return "CMP" }    // r32 only for now (cycle-30 widens)
+    // ③-R2e: `cmp` is width-dispatched — the codegen emits `cmp rax, r11` /
+    // `cmp r10, #0` (r64 → CMP64) far more than the r32 `cmp eax, #47` form.
+    if op == "cmp"  { if is64 { return "CMP64" };  return "CMP" }
+    // ③-R2e: `test` width-dispatch (see note above at the 0/1-arg block).
+    if op == "test" { if is64 { return "TEST64" }; return "TEST" }
     // ③-R2a integer-ALU family — codegen emits these solely with r64
     // operands, so the is64 branch is always taken; the r32 fall-through
     // returns the bare name → a loud ENCODE-MISS (honest, never emitted).
