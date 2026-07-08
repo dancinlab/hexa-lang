@@ -1,0 +1,233 @@
+// HEXA Native Compiler — unreachable-code (rustc unreachable_code / HX3048) smoke test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Probe matrix for the opt-in CFG-reachability unreachable-code check
+// (HEXA_UNREACHABLE_CODE=1 / `_deadblock_on`, compiler/lower/hir_to_mir.hexa
+// `_deadblock_check`). SHAPE A only: a `match` whose arms ALL diverge
+// (return/throw) with an irrefutable UNGUARDED last arm leaves the match join
+// block with preds==[] / reach==0 while carrying the post-match user statements
+// = rustc `unreachable_code` (warn-by-default). Each source probe runs the REAL
+// pipeline — lex → parse → ast_to_hir lower → lower_hir — across two ambient
+// modes:
+//   * OFF (no flag)                → 0 diagnostics of ANY code (byteeq-neutral
+//                                    stream proof at the diag level; the .text
+//                                    byte-identity is the pool/CI gate's job)
+//   * ON (HEXA_UNREACHABLE_CODE=1)  → expected HX3048 count per probe, WARN band
+//
+//   hz_dead_after_match  match{all-return, `_` last} + trailing call        → ×1
+//   fp_guarded_last      last arm guarded (join reachable)                  → 0
+//   fp_refutable_last    all-literal arms (last refutable, join reachable)  → 0
+//   fp_normal_match      arms don't all diverge (live join) + trailing      → 0
+//   fp_no_trailing       match all-diverge, `_` last, NO trailing stmt      → 0
+//
+// The hz_dead_after_match / fp_normal_match PAIR is the core discriminator:
+// same trailing statement, the only difference is whether every arm diverges.
+//
+// Run:
+//   hexa run compiler/check/unreachable_code_test.hexa                  (OFF sweep)
+//   HEXA_UNREACHABLE_CODE=1 hexa run compiler/check/unreachable_code_test.hexa
+
+import "../lex/lexer.hexa"
+import "../parse/parser.hexa"
+import "../parse/ast.hexa"
+import "../ir/hir.hexa"
+import "../ir/mir.hexa"
+import "../lex/tokens.hexa"
+import "../diag/catalog.hexa"
+import "../atlas/static_index.hexa"
+import "../lower/ast_to_hir.hexa"
+import "../lower/hir_to_mir.hexa"
+
+// ── pipeline driver ──────────────────────────────────────────
+
+fn _compile_probe(name: string, src: string) -> array {
+    let file = name + ".hexa"
+    let toks = lex(src, file)
+    let m = parse(toks, file)
+    let hm = lower(m, empty_atlas_index())
+    let mm = lower_hir(hm)
+    if len(mm.funcs) == 0 {
+        println("  WARN: probe " + name + " lowered 0 fns")
+    }
+    return hir_to_mir_diags()
+}
+
+fn _count_code(diags: array, code: string) -> i64 {
+    let mut i = 0
+    let mut n = 0
+    while i < len(diags) {
+        let d = diags[i]
+        if d.code == code { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+fn _count_warn_band(diags: array) -> i64 {
+    let mut i = 0
+    let mut n = 0
+    while i < len(diags) {
+        let d = diags[i]
+        if d.severity == Severity::Warning { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+fn _print_diags(diags: array) {
+    let mut i = 0
+    while i < len(diags) {
+        let d = diags[i]
+        let sp = d.span
+        println("      [" + to_string(i) + "] " + d.code + " @ "
+                + sp.file + ":" + to_string(sp.line) + ":" + to_string(sp.col)
+                + " — " + d.message)
+        i = i + 1
+    }
+}
+
+// Expectations branch on the AMBIENT flag (borrowck/missret_test convention —
+// `setenv` does not feed `env()` in the stage0 runtime, so the flag must be set
+// on the PROCESS: run twice, once plain = OFF sweep, once under
+// HEXA_UNREACHABLE_CODE=1). ON-mode: expect `want` HX3048 and zero other codes
+// (probe hygiene). OFF-mode: expect a fully empty diag stream (byte-neutral proof
+// at the diag level). Every emitted HX3048 is WARN-band; a want>0 probe asserts
+// that too.
+fn _run_dead_probe(label: string, src: string, want_on: i64) -> bool {
+    let flag_on = env("HEXA_UNREACHABLE_CODE") == "1"
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3048 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3048")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3048 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3048 diagnostics = " + to_string(other))
+        ok = false
+    }
+    // Every emitted HX3048 is WARN-band (rustc unreachable_code is warn-by-
+    // default); a want=0 probe has zero HX3048 → zero WARN-band.
+    let wb = _count_warn_band(d)
+    if wb != want {
+        println("  FAIL: warn-band = " + to_string(wb) + ", want " + to_string(want))
+        ok = false
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
+// ── source probes ────────────────────────────────────────────
+
+// A trailing bare CALL after a match whose every arm returns and whose last arm
+// is the irrefutable wildcard `_` → the match join is orphaned (preds==[] /
+// reach==0) but carries `sink()` = unreachable code.
+fn _src_hz_dead_after_match() -> string {
+    let mut s = "fn sink() {\n"
+    s = s + "    let z = 0\n"
+    s = s + "}\n"
+    s = s + "fn hz(c: int) -> int {\n"
+    s = s + "    match c {\n"
+    s = s + "        1 -> return 10,\n"
+    s = s + "        _ -> return 20\n"
+    s = s + "    }\n"
+    s = s + "    sink()\n"
+    s = s + "}\n"
+    return s
+}
+
+// A guard on the last arm adds the fall-through (next_id/join) edge, so the join
+// is reachable ⇒ never enters the reach==0 scan ⇒ 0.
+fn _src_fp_guarded_last() -> string {
+    let mut s = "fn sink() {\n"
+    s = s + "    let z = 0\n"
+    s = s + "}\n"
+    s = s + "fn g(c: int) -> int {\n"
+    s = s + "    match c {\n"
+    s = s + "        1 -> return 10,\n"
+    s = s + "        _ if c > 5 -> return 20\n"
+    s = s + "    }\n"
+    s = s + "    sink()\n"
+    s = s + "}\n"
+    return s
+}
+
+// A refutable last arm (a literal, not `_`) adds a next_id edge (match-fall-
+// through), so the join is reachable ⇒ 0.
+fn _src_fp_refutable_last() -> string {
+    let mut s = "fn sink() {\n"
+    s = s + "    let z = 0\n"
+    s = s + "}\n"
+    s = s + "fn r(c: int) -> int {\n"
+    s = s + "    match c {\n"
+    s = s + "        1 -> return 10,\n"
+    s = s + "        2 -> return 20\n"
+    s = s + "    }\n"
+    s = s + "    sink()\n"
+    s = s + "}\n"
+    return s
+}
+
+// Arms do NOT all diverge (they bind a value); the match join is a LIVE join
+// (reach==1) and the trailing statement is reachable ⇒ 0.
+fn _src_fp_normal_match() -> string {
+    let mut s = "fn sink() {\n"
+    s = s + "    let z = 0\n"
+    s = s + "}\n"
+    s = s + "fn nm(c: int) -> int {\n"
+    s = s + "    let mut x = 0\n"
+    s = s + "    x = match c {\n"
+    s = s + "        1 -> 10,\n"
+    s = s + "        _ -> 20\n"
+    s = s + "    }\n"
+    s = s + "    sink()\n"
+    s = s + "    return x\n"
+    s = s + "}\n"
+    return s
+}
+
+// All-diverge + irrefutable last arm, but NO trailing statement ⇒ the orphaned
+// join is EMPTY (0 stmts) ⇒ excluded by the len(stmts)>0 gate ⇒ 0.
+fn _src_fp_no_trailing() -> string {
+    let mut s = "fn nt(c: int) -> int {\n"
+    s = s + "    match c {\n"
+    s = s + "        1 -> return 10,\n"
+    s = s + "        _ -> return 20\n"
+    s = s + "    }\n"
+    s = s + "}\n"
+    return s
+}
+
+// ── driver ───────────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  unreachable-code (rustc unreachable_code / HX3048) — CFG reachability")
+    let mut mode = "OFF (byteeq-neutral sweep)"
+    if env("HEXA_UNREACHABLE_CODE") == "1" { mode = "ON (HEXA_UNREACHABLE_CODE=1)" }
+    println("  mode: " + mode)
+    println("══════════════════════════════════════════════")
+
+    let mut ok = true
+    if !_run_dead_probe("hz_dead_after_match", _src_hz_dead_after_match(), 1) { ok = false }
+    if !_run_dead_probe("fp_guarded_last", _src_fp_guarded_last(), 0) { ok = false }
+    if !_run_dead_probe("fp_refutable_last", _src_fp_refutable_last(), 0) { ok = false }
+    if !_run_dead_probe("fp_normal_match", _src_fp_normal_match(), 0) { ok = false }
+    if !_run_dead_probe("fp_no_trailing", _src_fp_no_trailing(), 0) { ok = false }
+
+    println("")
+    if ok {
+        println("ALL PASS — HX3048 hz fires ×1, every FP control 0, OFF-sweep empty")
+    } else {
+        println("FAILURES — see above")
+        exit(1)
+    }
+}

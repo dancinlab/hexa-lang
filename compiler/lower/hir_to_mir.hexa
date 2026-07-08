@@ -516,6 +516,19 @@ pub let mut _bck_active = false    // per-fn gate; suspended in closure bodies
 // (byteeq-neutral). Flip-to-default-ON is a LATER phase (P4), gated on the
 // offline corpus census (0 false-reject) + faithful×3 GREEN + install smoke.
 pub let mut _missret_on = false    // HEXA_MISSING_RETURN=1, read once per lower_hir
+// ── unreachable-code (rustc unreachable_code / HX3048) — env-gated OFF ───
+// HEXA_UNREACHABLE_CODE=1: opt-in CFG-reachability dead-block check (rustc
+// `unreachable_code` warn-by-default lint — statements that can NEVER execute
+// because their block is unreachable from fn entry). Reuses the SAME reach[]
+// forward-BFS as `_missret_check` (shared `_reach_from` helper). SHAPE A only:
+// a `match` whose arms ALL diverge (return/throw) with an irrefutable unguarded
+// last arm leaves the match join_id with preds==[] / reach==0 while carrying the
+// post-match user statements = a genuine unreachable-code region. Read ONCE per
+// lower_hir (mirrors `_missret_on`). Default false ⇒ `_deadblock_check`
+// early-returns ⇒ ZERO diagnostics ⇒ diag stream + emitted .text byte-identical
+// (byteeq-neutral). WARN band. Flip-to-default-ON is a LATER phase (P4), gated on
+// the offline corpus census (0 false-warn) + faithful×3 GREEN + install smoke.
+pub let mut _deadblock_on = false  // HEXA_UNREACHABLE_CODE=1, read once per lower_hir
 pub let mut _bck_grp_ctr: i64 = 0  // fresh group-representative ids (per fn)
 // tracked-local registry (push-only; newest entry for a local id wins)
 pub let mut _bck_local_ids: [i64] = []
@@ -1875,6 +1888,79 @@ fn _emit_hx3047(fn_name: string, ret_kind: string, sp: Span) {
     _lr_diag.push(diag_emit(b))
 }
 
+// ── shared forward CFG-reachability BFS ──────────────────────────────────
+// Factored out of `_missret_check` (byteeq-NEUTRAL extraction — the reach[]
+// array returned here is bit-identical to the inline BFS it replaced) so that
+// both `_missret_check` and `_deadblock_check` (HX3048 unreachable-code) run the
+// SAME forward reachability over the materialized per-fn CFG (`_lr_blocks`).
+//
+// Returns a per-`_lr_blocks`-INDEX (not block-id) bitset `reach` where
+// reach[bi]==1 ⇔ block bi is reachable from `entry_id` via a forward BFS over
+// Block.succs. Monotone bitset fixed-point (loop back-edges converge); the hard
+// sweep cap = nb*4+8. Returns [] (empty) on ANY bail — no blocks, an out-of-CFG
+// entry, or a non-converging sweep — so callers early-return SILENTLY on
+// `len(reach)==0` (never a false diagnostic). Map by block-id, never by array
+// index (ids are per-fn monotonic but sparse).
+fn _reach_from(entry_id: i64) -> [i64] {
+    let nb = len(_lr_blocks)
+    if nb == 0 { return [] }
+    let mut max_id = 0
+    let mut bi = 0
+    while bi < nb {
+        if _lr_blocks[bi].id > max_id { max_id = _lr_blocks[bi].id }
+        bi = bi + 1
+    }
+    let mut id2ix: [i64] = []
+    let mut k = 0
+    while k <= max_id {
+        id2ix.push(0 - 1)
+        k = k + 1
+    }
+    bi = 0
+    while bi < nb {
+        let bid = _lr_blocks[bi].id
+        if bid >= 0 { id2ix[bid] = bi }
+        bi = bi + 1
+    }
+    let mut entry_ix = 0 - 1
+    if entry_id >= 0 && entry_id <= max_id { entry_ix = id2ix[entry_id] }
+    if entry_ix < 0 { return [] }
+    let mut reach: [i64] = []
+    let mut z = 0
+    while z < nb { reach.push(0); z = z + 1 }
+    reach[entry_ix] = 1
+    let cap = nb * 4 + 8
+    let mut iter = 0
+    let mut changed = true
+    while changed {
+        // non-converging guard: cannot happen for a monotone bitset over a
+        // finite CFG, but bail SILENTLY (return []) rather than risk a false
+        // diagnostic.
+        if iter >= cap { return [] }
+        changed = false
+        bi = 0
+        while bi < nb {
+            if reach[bi] == 1 {
+                let succs = _lr_blocks[bi].succs
+                let mut si = 0
+                while si < len(succs) {
+                    let sid = succs[si]
+                    let mut six = 0 - 1
+                    if sid >= 0 && sid <= max_id { six = id2ix[sid] }
+                    if six >= 0 && reach[six] == 0 {
+                        reach[six] = 1
+                        changed = true
+                    }
+                    si = si + 1
+                }
+            }
+            bi = bi + 1
+        }
+        iter = iter + 1
+    }
+    return reach
+}
+
 // CFG-reachability missing-return predicate (rustc E0308). SOUND: it runs on
 // the MATERIALIZED per-fn CFG in `_lr_blocks` (blocks + succs), NOT on the
 // FP-unsound `ctx.has_returned` flag (which is reset at a match join and never
@@ -1920,69 +2006,16 @@ fn _missret_check(entry_id: i64, sig_return: Type, br_has_value: bool,
     // A trailing VALUE expression IS the returned value (the synthetic
     // STMT_RETURN carries it) — only a valueless fall-off can miss a return.
     if br_has_value { return }
-    let nb = len(_lr_blocks)
+    // forward reachability from entry over Block.succs (shared helper; the
+    // reach[] array is per-`_lr_blocks`-INDEX). Empty ⇒ bail (no blocks /
+    // out-of-CFG entry / non-converge) ⇒ SILENT (never a false reject).
+    let reach = _reach_from(entry_id)
+    let nb = len(reach)
     if nb == 0 { return }
-    // block id → _lr_blocks index map (defensive; mirrors _bck_nll_check —
-    // ids are per-fn monotonic but map by id, never by array index).
-    let mut max_id = 0
-    let mut bi = 0
-    while bi < nb {
-        if _lr_blocks[bi].id > max_id { max_id = _lr_blocks[bi].id }
-        bi = bi + 1
-    }
-    let mut id2ix: [i64] = []
-    let mut k = 0
-    while k <= max_id {
-        id2ix.push(0 - 1)
-        k = k + 1
-    }
-    bi = 0
-    while bi < nb {
-        let bid = _lr_blocks[bi].id
-        if bid >= 0 { id2ix[bid] = bi }
-        bi = bi + 1
-    }
-    // forward reachability from entry over Block.succs (monotone bitset
-    // fixed-point; loop back-edges converge). All-zero, seed the entry.
-    let mut entry_ix = 0 - 1
-    if entry_id >= 0 && entry_id <= max_id { entry_ix = id2ix[entry_id] }
-    if entry_ix < 0 { return }
-    let mut reach: [i64] = []
-    let mut z = 0
-    while z < nb { reach.push(0); z = z + 1 }
-    reach[entry_ix] = 1
-    let cap = nb * 4 + 8
-    let mut iter = 0
-    let mut changed = true
-    while changed {
-        // non-converging guard: cannot happen for a monotone bitset over a
-        // finite CFG, but bail SILENTLY rather than risk a false reject.
-        if iter >= cap { return }
-        changed = false
-        bi = 0
-        while bi < nb {
-            if reach[bi] == 1 {
-                let succs = _lr_blocks[bi].succs
-                let mut si = 0
-                while si < len(succs) {
-                    let sid = succs[si]
-                    let mut six = 0 - 1
-                    if sid >= 0 && sid <= max_id { six = id2ix[sid] }
-                    if six >= 0 && reach[six] == 0 {
-                        reach[six] = 1
-                        changed = true
-                    }
-                    si = si + 1
-                }
-            }
-            bi = bi + 1
-        }
-        iter = iter + 1
-    }
     // find a reachable fall-off leaf: reachable, no successor, whose terminal
     // statement is a CONCRETE non-call, non-diverging kind. Empty leaves and
     // any diverging / unrecognised tail are treated as "returns" (FP=0).
-    bi = 0
+    let mut bi = 0
     while bi < nb {
         if reach[bi] == 1 && len(_lr_blocks[bi].succs) == 0 {
             let stmts = _lr_blocks[bi].stmts
@@ -1991,6 +2024,89 @@ fn _missret_check(entry_id: i64, sig_return: Type, br_has_value: bool,
                 if lk == STMT_ASSIGN || lk == STMT_BINOP || lk == STMT_UNOP
                     || lk == STMT_LOAD || lk == STMT_STORE {
                     _emit_hx3047(fn_name, rk, sp)
+                    return
+                }
+            }
+        }
+        bi = bi + 1
+    }
+}
+
+// ── unreachable-code (rustc unreachable_code / HX3048) — env-gated OFF ───
+// Emitter mirrors `_emit_hx3047`. The mir Stmt has NO span field, so the
+// diagnostic is anchored at the FUNCTION span (imprecise but FP-safe and
+// byteeq-neutral; a per-statement span is a LATER additive refinement).
+fn _emit_hx3048(fn_name: string, sp: Span) {
+    let mut b = diag_new("HX3048")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", fn_name)
+    _lr_diag.push(diag_emit(b))
+}
+
+// CFG-reachability unreachable-code predicate (rustc `unreachable_code`, WARN
+// band). Reuses the SHARED `_reach_from` forward BFS. SOUND — runs at end-of-fn
+// on the fully-materialized CFG (`_lr_blocks`), so edge-insertion order cannot
+// manufacture a spurious reach==0.
+//
+// SHAPE A (the ONLY MIR-detectable shape, verified against the match lowering):
+// a `match` whose arms ALL diverge (return/throw) skips every to-join edge
+// (`if !ctx2.has_returned` at the arm-join site), and an irrefutable UNGUARDED
+// last arm (wildcard `_` or a bare-binding non-const ident) emits an edge-less
+// `STMT_BR arm_id` (no next_id/join edge). The match `_set_cur_block(join_id)`
+// then RESETS has_returned=false, so the outer block-stmt loop keeps lowering
+// the post-match USER statements INTO join_id. Result: join_id has preds==[] /
+// reach==0 while carrying genuine user statements = real unreachable_code.
+// (SHAPE B — a post-return/throw dead TAIL in the same block — is NOT viable at
+// MIR: the block loop breaks on has_returned BEFORE the tail is lowered, so it
+// never enters any Block; it survives only at HIR. Not attempted here.)
+//
+// PREDICATE per block bi:  reach[bi]==0  (subsumes bi!=entry_ix — the entry is
+// always seeded reach==1)  &&  preds==[]  (the dead-region ROOT key — dedups to
+// ONE warning per region)  &&  ≥1 statement  &&  the LAST stmt is a CONCRETE
+// USER statement (the whitelist below).
+//
+// ★FP=0 by construction (default-OFF opt-in flag on top):
+//   • EMPTY blocks (0 stmts) — try/catch after-join, any unreached empty tail —
+//     excluded by len(stmts)>0.
+//   • SCAFFOLD/CARRIER-only last stmt — STMT_BR/BR_COND/RETURN/TRY_* or a
+//     carrier STMT_ASSIGN (op ∈ {let, if_val, sc_val, bind}; "match_result" is a
+//     LOCAL name, not an op) — excluded by the whitelist.
+//   • REFUTABLE or GUARDED last arm — SELF-EXCLUDING: a const-ident/literal else
+//     and a guarded arm both add a next_id (and thus a join) edge ⇒ join
+//     reach==1 ⇒ never enters the reach==0 scan.
+//   • ZERO-arm match — degenerate empty join ⇒ excluded by len(stmts)>0.
+//   • entry block — reach==1 ⇒ excluded.
+//   • defer/catch epilogue — always wired ⇒ reach==1.
+// Under-approximation (sound, not a false positive): `while true`'s after-block
+// stays reach==1 (header→after always wired) ⇒ not detected.
+fn _deadblock_check(entry_id: i64, fn_name: string, sp: Span) {
+    if !_deadblock_on { return }
+    let reach = _reach_from(entry_id)
+    let nb = len(reach)
+    if nb == 0 { return }
+    let mut bi = 0
+    while bi < nb {
+        // dead-region ROOT: unreachable (reach==0) AND no live predecessor
+        // (preds==[]) — the orphaned match join. One warning per region.
+        if reach[bi] == 0 && len(_lr_blocks[bi].preds) == 0 {
+            let stmts = _lr_blocks[bi].stmts
+            if len(stmts) > 0 {
+                let last = stmts[len(stmts) - 1]
+                let lk = last.kind
+                let mut concrete = false
+                if lk == STMT_BINOP || lk == STMT_UNOP || lk == STMT_LOAD
+                    || lk == STMT_STORE || lk == STMT_CALL {
+                    concrete = true
+                } else if lk == STMT_ASSIGN {
+                    // a user assignment fires; carrier/plumbing assigns do not.
+                    let op = last.op
+                    if op != "let" && op != "if_val" && op != "sc_val"
+                        && op != "bind" && op != "match_result" {
+                        concrete = true
+                    }
+                }
+                if concrete {
+                    _emit_hx3048(fn_name, sp)
                     return
                 }
             }
@@ -7815,6 +7931,14 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
         _lr_defer_active = false
     }
 
+    // unreachable-code (rustc unreachable_code / HX3048) — env-gated default-OFF,
+    // byteeq-neutral. UNCONDITIONAL (NOT inside `!ctx.has_returned`) — a dead
+    // match-join can exist in a fn that overall returns. Runs on the fully-
+    // materialized CFG BEFORE the synthetic fall-off STMT_RETURN below is pushed,
+    // so a dead join's post-match user tail is still its last stmt. No-op
+    // (immediate return) when HEXA_UNREACHABLE_CODE is unset.
+    _deadblock_check(entry_id, it.name, it.span)
+
     if !ctx.has_returned {
         // missing-return (E0308 / HX3047) — env-gated default-OFF, byteeq-
         // neutral. Runs on the materialized CFG BEFORE the synthetic
@@ -7952,6 +8076,10 @@ pub fn lower_hir(module: HModule) -> MModule {
     // (same latched idiom as _bck_on). Default OFF ⇒ `_missret_check`
     // early-returns per-fn ⇒ diag stream + emitted .text byte-identical.
     _missret_on = env("HEXA_MISSING_RETURN") == "1"
+    // unreachable-code (rustc unreachable_code / HX3048) — opt-in flag read ONCE
+    // per lower_hir (same latched idiom). Default OFF ⇒ `_deadblock_check`
+    // early-returns per-fn ⇒ diag stream + emitted .text byte-identical.
+    _deadblock_on = env("HEXA_UNREACHABLE_CODE") == "1"
     _bck_active = false
     _bck_own_fns = []
     _bck_own_pidx = []
