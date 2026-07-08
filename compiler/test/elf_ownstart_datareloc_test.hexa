@@ -1,0 +1,166 @@
+// compiler/test/elf_ownstart_datareloc_test.hexa
+//
+// ROUND-3b coverage — EXERCISES the data/rodata-RESIDENT reloc patch (the
+// data arm) + the bss def-collection in link_elf_x86_64_ownstart
+// (compiler/emit/elf_x86_64.hexa). hexa's OWN codegen emits only text-
+// resident relocs (module globals are zero-init HexaVal slots), so the data
+// arm's real consumer is EXTERNAL .o members (a runtime.a member whose .data
+// holds a pointer initializer, resolved cross-obj). Hence hand-built
+// ElfX86Obj inputs, in the corpus-test idiom.
+//
+// Two objs:
+//   A: main (mov edx,42; ret) + an 8B .rodata slot + a 20B .data slot region
+//      (abs64 / PC32 / abs64-to-bss reloc SITES) + bss_size 16 (sym `gbss`).
+//   B: NO text — one 8B .data slot with an abs64 site_seg=4 reloc against
+//      `main` declared UND here (the cross-obj runtime.a-member shape; also
+//      exercises the per-obj obj_data_base[ro] index at ro=1).
+//
+// All data-blob bytes are 0xAA-sentinel pre-filled; every patched site is
+// checked against a value SELF-DERIVED from the emitted file's own headers
+// (e_entry+stub, phdr[1] p_vaddr/p_filesz) so the assertions are robust to
+// exact-layout drift. Hermetic: the link runs in-process, we read the
+// ET_EXEC back and assert raw bytes — no clang / ld / x86 host needed.
+//
+// Run:  mkdir -p out_elfx86 && hexa run compiler/test/elf_ownstart_datareloc_test.hexa
+
+import "../ir/lir.hexa"                 // LFunc / LModule / LSection helpers
+import "../emit/macho_arm64.hexa"       // _append_hex_bytes + LIR helpers
+import "../emit/elf_x86_64.hexa"        // link_elf_x86_64_ownstart (data arm under test)
+
+fn _build_strtab(names: [string]) -> [Int] {
+    let st: [Int] = []
+    st.push(0)                                       // index 0 = NUL
+    let mut i = 0
+    while i < len(names) {
+        let nm = names[i]
+        let mut k = 0
+        while k < len(nm) { st.push(char_code(nm, k) & 0xFF); k = k + 1 }
+        st.push(0)
+        i = i + 1
+    }
+    return st
+}
+
+fn _sentinel(n: Int) -> [Int] {
+    let a: [Int] = []
+    let mut i = 0
+    while i < n { a.push(0xAA); i = i + 1 }
+    return a
+}
+
+fn _rd_u16(b, off: Int) -> Int {
+    return (b[off] & 0xff) + (b[off + 1] & 0xff) * 256
+}
+fn _rd_u32(b, off: Int) -> Int {
+    let mut v = 0
+    let mut i = 3
+    while i >= 0 { v = v * 256 + (b[off + i] & 0xff); i = i - 1 }
+    return v
+}
+fn _rd_u64(b, off: Int) -> Int {
+    let mut v = 0
+    let mut i = 7
+    while i >= 0 { v = v * 256 + (b[off + i] & 0xff); i = i - 1 }
+    return v
+}
+
+let mut _fails = 0
+fn _check(cond: bool, msg: string) {
+    if cond {
+        println("  ok   " + msg)
+    } else {
+        println("  FAIL " + msg)
+        _fails = _fails + 1
+    }
+}
+
+fn main() {
+    // ── obj A ── main + rodata/data reloc SITES + bss def ──
+    // text (6B): BA 2A 00 00 00  mov edx,42  (PAIR-MODEL payload)
+    //            C3              ret
+    let strtab_a = _build_strtab(["main", "gbss"])   // main=1, gbss=6
+    let obj_a: ElfX86Obj = ElfX86Obj {
+        text: [0xBA, 0x2A, 0x00, 0x00, 0x00, 0xC3],
+        relocs: [
+            // A1: rodata-SITE abs64 -> main (addend 0)  => rodata blob off 0
+            ElfRel { offset: 0,  sym_idx: 0, kind: 1, addend: 0, site_seg: 3 },
+            // A2: data-SITE abs64 -> main (addend 8)     => data blob off 0
+            ElfRel { offset: 0,  sym_idx: 0, kind: 1, addend: 8, site_seg: 4 },
+            // A3: data-SITE PC32 -> main (addend 0)      => data blob off 8
+            ElfRel { offset: 8,  sym_idx: 0, kind: 2, addend: 0, site_seg: 4 },
+            // A4: data-SITE abs64 -> gbss (.bss)         => data blob off 12
+            ElfRel { offset: 12, sym_idx: 1, kind: 1, addend: 0, site_seg: 4 },
+        ],
+        symbols: [
+            ElfSym { name_offset: 1, section: 1, value: 0, size: 6, bind: 1, type_: 2 },
+            ElfSym { name_offset: 6, section: 5, value: 0, size: 8, bind: 1, type_: 1 },
+        ],
+        strtab:   strtab_a,
+        rodata:   _sentinel(8),
+        data:     _sentinel(20),
+        bss_size: 16,
+        nlocal:   0,
+    }
+
+    // ── obj B ── text-less .data pointer initializer against UND `main`
+    // (runtime.a-member shape; exercises obj_data_base[ro] at ro=1) ──
+    let strtab_b = _build_strtab(["main"])
+    let obj_b: ElfX86Obj = ElfX86Obj {
+        text: [],
+        relocs: [
+            ElfRel { offset: 0, sym_idx: 0, kind: 1, addend: 0, site_seg: 4 },
+        ],
+        symbols: [
+            ElfSym { name_offset: 1, section: 0, value: 0, size: 0, bind: 1, type_: 0 },
+        ],
+        strtab:   strtab_b,
+        rodata:   [],
+        data:     _sentinel(8),
+        bss_size: 0,
+        nlocal:   0,
+    }
+
+    let objs: [ElfX86Obj] = [obj_a, obj_b]
+    let out_path = "out_elfx86/datareloc.elf"
+    let rc = link_elf_x86_64_ownstart(objs, out_path, "main")
+    _check(rc == 0, "link_elf_x86_64_ownstart rc==0")
+
+    let b = read_file_bytes(out_path)
+
+    // ── ELF/phdr layout (2-seg: R-X text + RW data) ──
+    let e_entry = _rd_u64(b, 24)
+    let e_phnum = _rd_u16(b, 56)
+    let ph1     = 64 + 56                              // phdr[1] (RW data seg)
+    let p_off   = _rd_u64(b, ph1 + 8)
+    let p_vaddr = _rd_u64(b, ph1 + 16)
+    let p_fsz   = _rd_u64(b, ph1 + 32)
+    let p_msz   = _rd_u64(b, ph1 + 40)
+    _check(e_phnum == 2, "e_phnum==2 (two PT_LOAD)")
+    _check(p_fsz == 36, "data p_filesz==36 (ro8 + dataA20 + dataB8)")
+    _check(p_msz == 52, "data p_memsz==52 (+16 bss zero-fill)")
+
+    // Self-derived target vaddrs: stub is 14B and main is the first text
+    // after it -> main_vaddr = e_entry + 14. gbss lives in the zero-fill
+    // region right after .data -> data_vaddr_base(=p_vaddr) + len(.data)(=p_fsz).
+    let main_v = e_entry + 14
+    let gbss_v = p_vaddr + p_fsz
+
+    // A1: rodata blob off 0 <- main (abs64, addend 0)
+    _check(_rd_u64(b, p_off + 0) == main_v, "A1 rodata abs64 -> main @blob0")
+    // A2: data blob off 0 (=rodata8 + 0) <- main+8 (abs64, addend 8)
+    _check(_rd_u64(b, p_off + 8) == main_v + 8, "A2 data abs64 -> main+8 @blob8")
+    // A3: data blob off 8 (=blob16) <- PC32 to main
+    let a3     = _rd_u32(b, p_off + 16)
+    let a3_exp = (main_v - (p_vaddr + 16)) & 0xffffffff
+    _check(a3 == a3_exp, "A3 data PC32 -> main @blob16")
+    // A4: data blob off 12 (=blob20) <- gbss (.bss target)
+    _check(_rd_u64(b, p_off + 20) == gbss_v, "A4 data abs64 -> gbss(.bss) @blob20")
+    // B1: obj B data blob off 0 (=blob28) <- main (ro=1 base index)
+    _check(_rd_u64(b, p_off + 28) == main_v, "B1 data abs64 -> UND main @blob28 (obj_data_base[1])")
+
+    if _fails == 0 {
+        println("DATARELOC ALL PASS")
+    } else {
+        println("DATARELOC FAIL count=" + to_string(_fails))
+    }
+}
