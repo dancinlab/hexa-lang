@@ -2022,8 +2022,9 @@ build_runtime_a_from_source() {
         # convergence stage-resolve-runtime-a-2.
         # FLIP-6 tri-state (default 0=OFF). Read HERE, before the seed-mode reads it forces
         # below (rule: HEAP forces REALLOC-F2 ON, free/calloc seeds OFF — one symbol one
-        # provider). A 1-line PR-B flip (:-0 -> :-auto) turns it on after byteeq reconverge.
-        _heap_mode="${HEXA_RT_HEAP_NATIVE:-0}"
+        # provider). PR-B flips the default ON (:-auto); explicit HEXA_RT_HEAP_NATIVE=0 opts
+        # out, rollback = revert this token to :-0 (PR-A #4731 mechanism stays inert OFF).
+        _heap_mode="${HEXA_RT_HEAP_NATIVE:-auto}"
         _rnfr_mode="${HEXA_RT_NATIVE_FREE:-auto}"
         # zeroc #29 realloc F2: when the realloc flip is active, the shim's magic-guarded
         # RECLAIMING hxlcl_free MUST serve — the free no-op seed would (a) leak (never reclaim),
