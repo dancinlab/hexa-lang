@@ -196,6 +196,25 @@ fn _types_t_string() -> Type { return _prim("string", "") }
 fn _types_t_char()   -> Type { return _prim("char",   "") }
 fn _types_t_unit()   -> Type { return _prim("unit",   "") }
 
+// array-repr — shared constructor for a structured `kind:"array"` Type with a
+// known element repr. Mirrors the `_types_lower_type_ref` generic @963 struct
+// literal EXACTLY (def:_types_miss_def_id(), args:[elem], ret:[], domain/unit
+// "") so a builtin-minted array element is byte-identical to the one produced
+// by lowering a `[T]` annotation — `_types_equal` (structural on args[0]) then
+// accepts an exact-element match at a return/let sink independent of the
+// source kind. Used by `_types_builtin_method_ret` for the monomorphic
+// array-returning string builtins (split/lines/bytes/chars).
+fn _types_t_array(elem: Type) -> Type {
+    return Type {
+        kind: "array",
+        def: _types_miss_def_id(),
+        args: [elem],
+        ret: [],
+        domain: "",
+        unit: ""
+    }
+}
+
 // Render a Type for diagnostic messages. Stage0 has no Display impl, so we
 // hand-roll a minimal pretty-printer that resolves the most common cases.
 fn _type_display(t: Type) -> string {
@@ -4255,6 +4274,27 @@ fn _types_builtin_method_ret(name: string) -> Type {
         "pad_left" -> _types_t_string(),
         "pad_right" -> _types_t_string(),
         "center" -> _types_t_string(),
+        // → [T]: monomorphic array-returning string builtins (self/codegen.hexa
+        //   dispatch + emitted runtime bodies).
+        //   split → hexa_str_split; body pushes hexa_str(pos) ⇒ [string].
+        //   lines → rt_str_lines (thin split-on-'\n' wrapper) ⇒ [string].
+        //   bytes → hexa_str_bytes; body pushes hexa_int((int64_t)*p) ⇒ boxed
+        //           i64 (hexa has NO u8 scalar), so [i64] — NOT [u8].
+        //   chars → hexa_str_chars; body pushes hexa_str(buf) — codegen.hexa
+        //           notes "Runtime uses TAG_STR for chars (single-char
+        //           strings)", so [string] — NOT [char]; a [char] element would
+        //           false-reject a valid [string] chars() sink.
+        //   Element repr is minted with the CANONICAL constructors so it is
+        //   byte-identical to the `[T]` annotation lowering (_types_t_string /
+        //   _types_t_i64 = the same `_prim` the @926/@919 name branch uses) —
+        //   _types_equal then accepts an exact-element return sink, and a
+        //   genuine `-> [i64] { return s.split() }` element mismatch REJECTs
+        //   (HX3004). Corpus census: every armed return site is `-> [string]`
+        //   / `-> [str]` (both → _prim("string","")); zero mismatched sinks.
+        "split" -> _types_t_array(_types_t_string()),
+        "lines" -> _types_t_array(_types_t_string()),
+        "bytes" -> _types_t_array(_types_t_i64()),
+        "chars" -> _types_t_array(_types_t_string()),
         _ -> _types_empty_type(),
     }
 }
