@@ -1571,6 +1571,7 @@ pub fn parse_elf_x86_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfX86O
     if e_shentsize < 64 { return obj }
     if e_shnum < 1 { return obj }
     if e_shstrndx > e_shnum - 1 { return obj }
+    println("DBG hdr shnum=" + to_string(e_shnum) + " shoff=" + to_string(e_shoff) + " shentsize=" + to_string(e_shentsize))
 
     let shstr_hdr = base + e_shoff + e_shstrndx * e_shentsize
     let shstr_off = base + _er_u64le(buf, shstr_hdr + 0x18)
@@ -1624,6 +1625,7 @@ pub fn parse_elf_x86_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfX86O
             pbase = obj.bss_size
             obj.bss_size = obj.bss_size + ssize
         }
+        println("DBG sec i=" + to_string(i) + " type=" + to_string(stype) + " flags=" + to_string(flags) + " off=" + to_string(soff) + " size=" + to_string(ssize) + " slot=" + to_string(slot))
         sec_slot.push(slot)
         sec_base.push(pbase)
         sec_off.push(base + soff)
