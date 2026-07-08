@@ -2228,6 +2228,26 @@ int     hexa_is_type(HexaVal v, const char* type_name); /* runtime_core.c:3046 *
 HexaVal hexa_log2(HexaVal v);                           /* runtime_core.c:6484 */
 HexaVal hexa_map_count(HexaVal m, HexaVal pred);        /* runtime_core.c:2866 */
 HexaVal hexa_str_concat(HexaVal a, HexaVal b);          /* runtime_core.c:4321 */
+/* SELFBUILD arithmetic-runtime externs: `hexa build compiler/main.hexa`
+ * transpiles the compiler's APPLICATION closure (stdlib/runtime/numeric.hexa's
+ * rt_add_slow, rt_cmp comparisons, rt_to_int) INTO the driver C, exposing bare
+ * __raw_ call sites; the self-host seed compiler never re-emits those bodies (runtime.a
+ * provides them) so it never hit this. All four are external-linkage (T) in
+ * runtime_core.c/runtime.a, so declaring them lets the separate-TU `hexa build`
+ * driver compile+link. Unused in every other TU -> byteeq-neutral (a decl emits
+ * no code). See self/native/rtcore_arith_emit.hexa (defs) + numeric.hexa (uses). */
+HexaVal __raw_add_f(HexaVal a, HexaVal b);              /* runtime_core.c (rtcore_arith) */
+HexaVal __raw_cmp3(HexaVal a, HexaVal b);               /* runtime_core.c (rtcore_arith) */
+HexaVal __raw_code_is(HexaVal v, HexaVal k);            /* runtime_core.c (rtcore_arith) */
+HexaVal __raw_d2i(HexaVal v);                           /* runtime_core.c (rtcore_arith) */
+/* Part B: codegen lowers a float-modulo (__raw_fmod, self/codegen.hexa:7222) to a
+ * bare hxlcl_fmod() call. hxlcl_fmod is file-local `static` in the runtime TUs, but
+ * runtime.a also archives a GLOBAL (T) hxlcl_fmod from the zeroc delegate; the
+ * separate-TU driver links against that global. Safe here precisely because
+ * runtime.c does NOT include runtime.h (runtime_core_emit.hexa:1564) so this decl
+ * cannot clash with the static defs. Unused outside the compiler self-build ->
+ * byteeq-neutral. Completes the `hexa build compiler/main.hexa` symbol set. */
+double  hxlcl_fmod(double x, double y);                 /* runtime.a delegate (global) */
 int     hexa_str_eq(HexaVal a, HexaVal b);              /* runtime_core.c:4446 */
 
 
