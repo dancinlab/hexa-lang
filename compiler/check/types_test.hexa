@@ -2451,6 +2451,91 @@ fn _build_case_i32_max() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (bi) ★ HX3044 negated-literal FIT — `let x: i8 = -128`. The negated i8::MIN
+// magnitude (128) fits abs(MIN)=128 → 0 HX3044 (no over-reject at the boundary).
+// `-128` is a `UnOp(-, LiteralInt "128")`, landing in the let-RHS unop arm.
+fn _build_case_i8_neg_fit() -> Module {
+    let f = "case_bi.hexa"
+    let neg = _unop_expr("-", _int_expr("128", f, 2, 19), f, 2, 18)
+    let body = _block([_let_expr("x|i8", neg, f, 2, 5)], f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (bj) ★ HX3044 negated-literal OVERFLOW — `let x: i8 = -129`. Magnitude 129 >
+// abs(i8::MIN)=128 → 1 HX3044 (Error, real source). Proves the negated bound is
+// abs(MIN)=MAX+1, not MAX (which would false-accept -129 or false-reject -128).
+fn _build_case_i8_neg_over() -> Module {
+    let f = "case_bj.hexa"
+    let neg = _unop_expr("-", _int_expr("129", f, 2, 19), f, 2, 18)
+    let body = _block([_let_expr("x|i8", neg, f, 2, 5)], f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (bk) ★ HX3044 fan-out site A (return) — `fn f() -> i8 { return 300 }`.
+// 300 > i8::MAX(127) at the return-place coercion → 1 HX3044 (Error).
+fn _build_case_i8_ret_over() -> Module {
+    let f = "case_bk.hexa"
+    let ret = _return_expr(_int_expr("300", f, 2, 12), f, 2, 5)
+    let body = _block([ret], f, 1, 20)
+    let item_f = _fn_item("f", [], _named_type_ref("i8"), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (bl) ★ HX3044 fan-out site B (assign) — `let x: i8 ; x = 300`.
+// The decl records `x: i8`; the assign's int-lit RHS overflows i8 → 1 HX3044.
+fn _build_case_i8_assign_over() -> Module {
+    let f = "case_bl.hexa"
+    let mut kids = []
+    kids.push(_let_decl_expr("x|i8", f, 2, 5))
+    kids.push(_assign_expr(_ident_expr("x", f, 3, 5), _int_expr("300", f, 3, 9), f, 3, 7))
+    let body = _block(kids, f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (bm) ★ HX3044 fan-out site C (struct field-init) — `struct S { b: i8 }` then
+// `S { b: 300 }`. The field-init int-lit overflows the declared i8 field → 1 HX3044.
+fn _build_case_i8_field_over() -> Module {
+    let f = "case_bm.hexa"
+    let mut sfields = []
+    sfields.push(_param("b", "i8", f, 1, 12))
+    let item_s = _struct_item("S", sfields, f, 1)
+    let mut inits = []
+    inits.push(_field_init("b", _int_expr("300", f, 3, 22), f, 3, 19))
+    let lit = _struct_lit_expr("S", inits, f, 3, 14)
+    let body = _block([lit], f, 2, 1)
+    let item_f = _fn_item("f", [], _empty_type_ref(), body, f, 2)
+    let mut items = []
+    items.push(item_s)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (bn) ★ HX3044 fan-out site D (call-arg) — `fn g(p: i8) {}` then `g(300)`.
+// The literal argument overflows the declared i8 param at the arg coercion → 1 HX3044.
+fn _build_case_i8_arg_over() -> Module {
+    let f = "case_bn.hexa"
+    let g_body = _block([], f, 1, 15)
+    let item_g = _fn_item("g", [_param("p", "i8", f, 1, 6)], _empty_type_ref(), g_body, f, 1)
+    let call = _call_expr(_ident_expr("g", f, 3, 5), [_int_expr("300", f, 3, 7)], f, 3, 5)
+    let m_body = _block([call], f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), m_body, f, 2)
+    let mut items = []
+    items.push(item_g)
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
 fn _run_case(label: string, m: Module) -> array {
     println("")
     println("── " + label + " ──")
@@ -3429,15 +3514,16 @@ fn main() {
     }
 
     // (bd) ★ HX3044 int-literal range-fit — hz_i8_over: `let x: i8 = 300`
-    // (300 > 127) → 1 HX3044 in the Warning band (MVP never escalates to Error).
-    let diags_bd = _run_case("(bd) static-types — int-lit range-fit: let x:i8 = 300 → 300 > 127 → 1 HX3044 (Warning)", _build_case_i8_over())
-    let cbd = _count_code_sev(diags_bd, "HX3044", "warning")
+    // (300 > 127) → 1 HX3044 in the ERROR band (STRICT re-band: `case_bd.hexa`
+    // is a real-source path → _types_strict_for → Error). Corpus-0 makes this safe.
+    let diags_bd = _run_case("(bd) static-types — int-lit range-fit: let x:i8 = 300 → 300 > 127 → 1 HX3044 (Error, real source)", _build_case_i8_over())
     let cbd_e = _count_code_sev(diags_bd, "HX3044", "error")
-    if cbd != 1 || cbd_e != 0 {
-        println("  FAIL: case (bd) expected 1 HX3044 warning / 0 error, got warn=" + to_string(cbd) + " err=" + to_string(cbd_e) + " (total=" + to_string(len(diags_bd)) + ")")
+    let cbd_w = _count_code_sev(diags_bd, "HX3044", "warning")
+    if cbd_e != 1 || cbd_w != 0 {
+        println("  FAIL: case (bd) expected 1 HX3044 error / 0 warning, got err=" + to_string(cbd_e) + " warn=" + to_string(cbd_w) + " (total=" + to_string(len(diags_bd)) + ")")
         ok = false
     } else {
-        println("  ok: 1 HX3044 emitted as Warning (i8 = 300 overflows [-128,127])")
+        println("  ok: 1 HX3044 emitted as Error (i8 = 300 overflows [-128,127], real-source STRICT band)")
     }
 
     // (be) ★ HX3044 boundary fit — fp_i8_max: `let x: i8 = 127` → 0 HX3044.
@@ -3462,15 +3548,15 @@ fn main() {
     }
 
     // (bg) ★ HX3044 int-literal range-fit — hz_i32_over: `let x: i32 = 2147483648`
-    // (one past i32::MAX) → 1 HX3044 in the Warning band.
-    let diags_bg = _run_case("(bg) static-types — int-lit range-fit: let x:i32 = 2147483648 → i32::MAX+1 → 1 HX3044 (Warning)", _build_case_i32_over())
-    let cbg = _count_code_sev(diags_bg, "HX3044", "warning")
+    // (one past i32::MAX) → 1 HX3044 in the ERROR band (STRICT re-band, real source).
+    let diags_bg = _run_case("(bg) static-types — int-lit range-fit: let x:i32 = 2147483648 → i32::MAX+1 → 1 HX3044 (Error, real source)", _build_case_i32_over())
     let cbg_e = _count_code_sev(diags_bg, "HX3044", "error")
-    if cbg != 1 || cbg_e != 0 {
-        println("  FAIL: case (bg) expected 1 HX3044 warning / 0 error, got warn=" + to_string(cbg) + " err=" + to_string(cbg_e) + " (total=" + to_string(len(diags_bg)) + ")")
+    let cbg_w = _count_code_sev(diags_bg, "HX3044", "warning")
+    if cbg_e != 1 || cbg_w != 0 {
+        println("  FAIL: case (bg) expected 1 HX3044 error / 0 warning, got err=" + to_string(cbg_e) + " warn=" + to_string(cbg_w) + " (total=" + to_string(len(diags_bg)) + ")")
         ok = false
     } else {
-        println("  ok: 1 HX3044 emitted as Warning (i32 = 2147483648 overflows i32::MAX)")
+        println("  ok: 1 HX3044 emitted as Error (i32 = 2147483648 overflows i32::MAX)")
     }
 
     // (bh) ★ HX3044 i32 boundary fit — fp_i32_max: `let x: i32 = 2147483647`
@@ -3482,6 +3568,72 @@ fn main() {
         ok = false
     } else {
         println("  ok: 0 HX3044 (2147483647 == i32::MAX fits — boundary, no over-reject)")
+    }
+
+    // (bi) ★ HX3044 negated-literal FIT — `let x: i8 = -128` → 0 HX3044 AND
+    // 0 HX3011: the `_types_assignable` negated-int-lit coercion arm makes `-128`
+    // coerce cleanly (no spurious mismatched-types false-positive). Total = 0.
+    let diags_bi = _run_case("(bi) static-types — negated-lit fit: let x:i8 = -128 → abs(MIN)=128 fits → 0 HX3044, 0 HX3011", _build_case_i8_neg_fit())
+    let cbi = _count_code(diags_bi, "HX3044")
+    let cbi_11 = _count_code(diags_bi, "HX3011")
+    if cbi != 0 || cbi_11 != 0 {
+        println("  FAIL: case (bi) expected 0 HX3044 + 0 HX3011 (-128 fits i8), got HX3044=" + to_string(cbi) + " HX3011=" + to_string(cbi_11) + " (total=" + to_string(len(diags_bi)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3044 + 0 HX3011 (-128 == i8::MIN fits + coerces cleanly — no false mismatch)")
+    }
+
+    // (bj) ★ HX3044 negated-literal OVERFLOW — `let x: i8 = -129` → 1 HX3044
+    // (Error) AND 0 HX3011 (the negated literal coerces, only the value overflows).
+    let diags_bj = _run_case("(bj) static-types — negated-lit overflow: let x:i8 = -129 → 129 > abs(MIN)=128 → 1 HX3044 (Error), 0 HX3011", _build_case_i8_neg_over())
+    let cbj_e = _count_code_sev(diags_bj, "HX3044", "error")
+    let cbj_w = _count_code_sev(diags_bj, "HX3044", "warning")
+    let cbj_11 = _count_code(diags_bj, "HX3011")
+    if cbj_e != 1 || cbj_w != 0 || cbj_11 != 0 {
+        println("  FAIL: case (bj) expected 1 HX3044 error / 0 warning / 0 HX3011, got err=" + to_string(cbj_e) + " warn=" + to_string(cbj_w) + " HX3011=" + to_string(cbj_11) + " (total=" + to_string(len(diags_bj)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3044 Error + 0 HX3011 (-129 overflows i8::MIN — value gate only, clean coercion)")
+    }
+
+    // (bk) ★ HX3044 fan-out site A (return) — `fn f() -> i8 { return 300 }` → 1 HX3044.
+    let diags_bk = _run_case("(bk) static-types — fan-out return: fn f() -> i8 { return 300 } → 300 > 127 → 1 HX3044 (Error)", _build_case_i8_ret_over())
+    let cbk_e = _count_code_sev(diags_bk, "HX3044", "error")
+    if cbk_e != 1 {
+        println("  FAIL: case (bk) expected 1 HX3044 error at return site, got err=" + to_string(cbk_e) + " (total=" + to_string(len(diags_bk)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3044 Error at return-place coercion (fan-out site A)")
+    }
+
+    // (bl) ★ HX3044 fan-out site B (assign) — `let x: i8 ; x = 300` → 1 HX3044.
+    let diags_bl = _run_case("(bl) static-types — fan-out assign: let x:i8 ; x = 300 → 300 > 127 → 1 HX3044 (Error)", _build_case_i8_assign_over())
+    let cbl_e = _count_code_sev(diags_bl, "HX3044", "error")
+    if cbl_e != 1 {
+        println("  FAIL: case (bl) expected 1 HX3044 error at assign site, got err=" + to_string(cbl_e) + " (total=" + to_string(len(diags_bl)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3044 Error at assignment-place coercion (fan-out site B)")
+    }
+
+    // (bm) ★ HX3044 fan-out site C (field-init) — `struct S { b: i8 }` ; `S { b: 300 }` → 1 HX3044.
+    let diags_bm = _run_case("(bm) static-types — fan-out field-init: struct S{b:i8} ; S{b:300} → 300 > 127 → 1 HX3044 (Error)", _build_case_i8_field_over())
+    let cbm_e = _count_code_sev(diags_bm, "HX3044", "error")
+    if cbm_e != 1 {
+        println("  FAIL: case (bm) expected 1 HX3044 error at field-init site, got err=" + to_string(cbm_e) + " (total=" + to_string(len(diags_bm)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3044 Error at struct field-init coercion (fan-out site C)")
+    }
+
+    // (bn) ★ HX3044 fan-out site D (call-arg) — `fn g(p: i8) {}` ; `g(300)` → 1 HX3044.
+    let diags_bn = _run_case("(bn) static-types — fan-out call-arg: fn g(p:i8) ; g(300) → 300 > 127 → 1 HX3044 (Error)", _build_case_i8_arg_over())
+    let cbn_e = _count_code_sev(diags_bn, "HX3044", "error")
+    if cbn_e != 1 {
+        println("  FAIL: case (bn) expected 1 HX3044 error at call-arg site, got err=" + to_string(cbn_e) + " (total=" + to_string(len(diags_bn)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3044 Error at call-argument coercion (fan-out site D)")
     }
 
     println("")
