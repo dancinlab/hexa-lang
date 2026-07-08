@@ -863,6 +863,23 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3048",
+        title: "unreachable code",
+        // Opt-in (HEXA_UNREACHABLE_CODE / `_deadblock_on`-gated) CFG-reachability
+        // rung. WARNING band — rustc's `unreachable_code` is warn-by-default (a
+        // lint, not a type error), and warn-band preserves release integrity even
+        // after a future default-ON flip. Ships byteeq-NEUTRAL: the flag defaults
+        // OFF → `_deadblock_check` early-returns per fn → nothing is emitted and
+        // the diag stream + emitted .text are byte-identical. Default-ON flip is a
+        // LATER phase, gated on the offline corpus census (0 false-warn) +
+        // faithful×3 GREEN + install smoke.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "unreachable code in `fn {name}`: statements after a diverging `match` can never execute",
+        explain: "CFG-reachability unreachable-code check (opt-in HEXA_UNREACHABLE_CODE / `_deadblock_on`-gated, default OFF). Statements that can NEVER execute because their basic block is unreachable from the function entry. This is Rust's `unreachable_code` lint (warn-by-default, rustc_passes liveness) — code dominated by a diverging construct. hexa detects the ONE shape that survives to MIR (SHAPE A): a `match` whose arms ALL diverge (`return`/`throw`) with an irrefutable UNGUARDED last arm (a wildcard `_` or a bare-binding non-const ident), followed by ≥1 statement — e.g. `match c { 1 -> return a, _ -> return b } sideEffect()`. Mechanism (compiler/lower/hir_to_mir.hexa): a match creates a fresh join block; each arm adds its to-join edge ONLY `if !ctx2.has_returned`, so all-diverging arms skip every join edge; an irrefutable last arm emits an edge-less `STMT_BR arm_id` (no next_id/join edge either); the match then `_set_cur_block(join_id)` which RESETS has_returned=false, so the outer block-stmt loop keeps lowering the post-match USER statements INTO join_id. Result: join_id has preds==[] / reach==0 while carrying real user statements. `_deadblock_check` runs the SHARED `_reach_from` forward BFS (the same helper `_missret_check` uses) at end-of-`_lower_fn` on the fully-materialized CFG (so edge-insertion order cannot manufacture a spurious reach==0), UNCONDITIONALLY (a dead join can exist in a fn that overall returns), and fires HX3048 on a block bi where reach[bi]==0 (subsumes bi!=entry — the entry is always seeded reach==1) AND preds==[] (the dead-region ROOT — one warning per region) AND ≥1 statement AND the LAST stmt is a CONCRETE USER statement (STMT_BINOP / STMT_UNOP / STMT_LOAD / STMT_STORE / STMT_CALL, or a STMT_ASSIGN whose op is NOT a carrier {let, if_val, sc_val, bind}). FP=0 by construction: EMPTY blocks (0 stmts) — excluded by ≥1; SCAFFOLD/CARRIER-only last stmt (STMT_BR/BR_COND/RETURN/TRY_* or a carrier STMT_ASSIGN) — excluded by the whitelist; REFUTABLE or GUARDED last arm — SELF-EXCLUDING (a const-ident/literal else and a guarded arm both add a next_id/join edge ⇒ join reach==1 ⇒ never scanned); ZERO-arm match — degenerate empty join ⇒ excluded by ≥1; entry block — reach==1 ⇒ excluded; defer/catch epilogue — always wired ⇒ reach==1. SHAPE B (a post-return/throw dead tail in the SAME block) is NOT viable at MIR — the block-stmt loop breaks on has_returned BEFORE the tail is lowered, so it never enters any Block; it survives only at HIR and, if wanted, would be a separate HIR-level rung. Sound under-approximation (not a false positive): a `while true`'s after-block stays reach==1 ⇒ not detected. The mir Stmt has NO span field, so the diagnostic anchors at the FUNCTION span (imprecise but FP-safe; a per-statement span is a LATER additive refinement, codegen-ignored ⇒ byteeq-neutral). BAND: opt-in `_deadblock_on` (HEXA_UNREACHABLE_CODE), Warning-band. Ships byteeq-neutral regardless: the flag defaults OFF so nothing is emitted and codegen .text is byte-identical; the default-ON flip is a follow-up gated on the offline corpus census (0 false-warn) + faithful×3 GREEN + install.sh consumer smoke (never promote on x86-only). Fix: remove the unreachable statements, or restructure so the `match` does not diverge on every arm if the trailing code is meant to run.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
