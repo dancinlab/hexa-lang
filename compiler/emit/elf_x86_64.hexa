@@ -862,9 +862,17 @@ pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> In
 //
 // _start (14 bytes = 5+2+5+2):
 //   E8 00 00 00 00   call  main          ; rel32 patched below (offs 1..4)
-//   89 C7            mov   edi, eax       ; exit code = main() ret
+//   89 D7            mov   edi, edx       ; exit code = main()'s HexaVal PAYLOAD
 //   B8 3C 00 00 00   mov   eax, 60        ; __NR_exit
 //   0F 05            syscall
+//
+// PAIR-MODEL note: every user .hexa fn returns a 16-byte HexaVal in the SysV
+// integer pair rax=tag, rdx=payload (x86_64_linux.hexa _STMT_RETURN) — a user
+// fn never returns a bare int in rax. So the exit code is the PAYLOAD (rdx),
+// not the tag (rax): `mov edi, edx`. `return 42` -> rdx=42 -> exit(42); a
+// value-less return is _x86_emit_zero_ret_pair's xor edx,edx -> exit(0). This
+// own-start path adopts the C-canon "main's return IS the exit code"; the
+// shipping C-transpile path still discards main's return (crt returns 0).
 //
 // Every obj symbol.value and reloc.offset is shifted by len(stub)=14
 // because the text concat begins with `base = len(text_bytes) = 14` (the
@@ -886,7 +894,7 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     let mut text_bytes: [Int] = []
     text_bytes.push(0xE8); text_bytes.push(0x00); text_bytes.push(0x00)
     text_bytes.push(0x00); text_bytes.push(0x00)          // call rel32 (patched)
-    text_bytes.push(0x89); text_bytes.push(0xC7)          // mov edi, eax
+    text_bytes.push(0x89); text_bytes.push(0xD7)          // mov edi, edx (HexaVal payload)
     text_bytes.push(0xB8); text_bytes.push(0x3C); text_bytes.push(0x00)
     text_bytes.push(0x00); text_bytes.push(0x00)          // mov eax, 60 (__NR_exit)
     text_bytes.push(0x0F); text_bytes.push(0x05)          // syscall
