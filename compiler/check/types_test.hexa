@@ -2389,6 +2389,91 @@ fn _build_case_container_method_unknown() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// ── (ce)–(ci) array-repr builtin method returns (split/lines/bytes/chars) ─────
+// `_types_builtin_method_ret` now types the 4 monomorphic array-returning
+// string builtins with EXACT element repr (split/lines/chars → [string],
+// bytes → [i64]). This arms the always-on RETURN-place check (_infer_expr's
+// return arm → _types_assignable → _types_equal, which recurses the array
+// element): an exact-element `-> [T] { return recv.<m>() }` is ACCEPTED, a
+// mismatched element REJECTs HX3004 (E0308 return coercion). NOT the typed-LET
+// path (array-typed let initializers stay r-next — the let-arm gate is
+// scalar-only); these fixtures exercise the return arm the Rung-1 change arms.
+// Element repr is minted with the canonical `_types_t_string()`/`_types_t_i64()`
+// so it is byte-identical to a `[T]` annotation's element → _types_equal true.
+
+// (ce) split→[string] ACCEPT — `fn f(s: string) -> [string] { return s.split(",") }`:
+// split()→[string] matches the [string] return annotation → 0 HX3004.
+fn _build_case_ret_split_string_ok() -> Module {
+    let f = "case_ce.hexa"
+    let recv = _ident_expr("s", f, 2, 12)
+    let call = _call_expr(_field_expr(recv, "split", f, 2, 14), [_string_expr(",", f, 2, 20)], f, 2, 14)
+    let ret = _return_expr(call, f, 2, 5)
+    let body = _block([ret], f, 1, 30)
+    let item_f = _fn_item("f", [_param("s", "string", f, 1, 6)], _generic_array_type_ref("string"), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (cf) bytes→[i64] ACCEPT — `fn f(s: string) -> [i64] { return s.bytes() }`:
+// bytes()→[i64] (boxed i64, hexa has no u8) matches the [i64] annotation → 0 HX3004.
+fn _build_case_ret_bytes_i64_ok() -> Module {
+    let f = "case_cf.hexa"
+    let recv = _ident_expr("s", f, 2, 12)
+    let call = _call_expr(_field_expr(recv, "bytes", f, 2, 14), [], f, 2, 14)
+    let ret = _return_expr(call, f, 2, 5)
+    let body = _block([ret], f, 1, 27)
+    let item_f = _fn_item("f", [_param("s", "string", f, 1, 6)], _generic_array_type_ref("i64"), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (cg) chars→[string] ACCEPT — `fn f(s: string) -> [string] { return s.chars() }`:
+// chars()→[string] (runtime emits single-codepoint STRINGS) matches → 0 HX3004.
+fn _build_case_ret_chars_string_ok() -> Module {
+    let f = "case_cg.hexa"
+    let recv = _ident_expr("s", f, 2, 12)
+    let call = _call_expr(_field_expr(recv, "chars", f, 2, 14), [], f, 2, 14)
+    let ret = _return_expr(call, f, 2, 5)
+    let body = _block([ret], f, 1, 30)
+    let item_f = _fn_item("f", [_param("s", "string", f, 1, 6)], _generic_array_type_ref("string"), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (ch) split→[i64] MISMATCH — `fn f(s: string) -> [i64] { return s.split(",") }`:
+// split()→[string] provably ≠ [i64] return annotation → exactly 1 HX3004
+// (array[i64] vs array[string]; the element mismatch the exact-repr mint catches).
+fn _build_case_ret_split_i64_bad() -> Module {
+    let f = "case_ch.hexa"
+    let recv = _ident_expr("s", f, 2, 12)
+    let call = _call_expr(_field_expr(recv, "split", f, 2, 14), [_string_expr(",", f, 2, 20)], f, 2, 14)
+    let ret = _return_expr(call, f, 2, 5)
+    let body = _block([ret], f, 1, 27)
+    let item_f = _fn_item("f", [_param("s", "string", f, 1, 6)], _generic_array_type_ref("i64"), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (ci) chars→[char] MISMATCH — `fn f(s: string) -> [char] { return s.chars() }`:
+// PROVES chars→[string], NOT [char]: chars()→[string] ≠ [char] annotation →
+// exactly 1 HX3004 (array[char] vs array[string]). Were chars typed [char] this
+// would over-accept (0), and a real [string] chars() sink would false-reject.
+fn _build_case_ret_chars_char_bad() -> Module {
+    let f = "case_ci.hexa"
+    let recv = _ident_expr("s", f, 2, 12)
+    let call = _call_expr(_field_expr(recv, "chars", f, 2, 14), [], f, 2, 14)
+    let ret = _return_expr(call, f, 2, 5)
+    let body = _block([ret], f, 1, 28)
+    let item_f = _fn_item("f", [_param("s", "string", f, 1, 6)], _generic_array_type_ref("char"), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // ── (bd)–(bh) HX3044 (Rust `overflowing_literals`) int-literal range-fit ──────
 // Static-types let-check lane (always-on flagless). A positive int literal
 // assigned to a narrower signed `iN` annotation whose value exceeds the width's
@@ -4085,6 +4170,52 @@ fn main() {
         ok = false
     } else {
         println("  ok: 0 HX3046 (undeclared name Foobar not in any registry — silent)")
+    }
+
+    // ── (ce)–(ci) array-repr builtin method returns ──────────────────────────
+    let diags_ce = _run_case("(ce) array-repr — split→[string] ACCEPT: fn f(s)->[string]{ return s.split(\",\") } → 0 HX3004", _build_case_ret_split_string_ok())
+    let cce = _count_code(diags_ce, "HX3004")
+    if cce != 0 {
+        println("  FAIL: case (ce) expected 0 HX3004 (split→[string] matches [string] return), got " + to_string(cce) + " (total=" + to_string(len(diags_ce)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3004 (split→[string] exact-element accept)")
+    }
+
+    let diags_cf = _run_case("(cf) array-repr — bytes→[i64] ACCEPT: fn f(s)->[i64]{ return s.bytes() } → 0 HX3004", _build_case_ret_bytes_i64_ok())
+    let ccf = _count_code(diags_cf, "HX3004")
+    if ccf != 0 {
+        println("  FAIL: case (cf) expected 0 HX3004 (bytes→[i64] matches [i64] return), got " + to_string(ccf) + " (total=" + to_string(len(diags_cf)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3004 (bytes→[i64] exact-element accept)")
+    }
+
+    let diags_cg = _run_case("(cg) array-repr — chars→[string] ACCEPT: fn f(s)->[string]{ return s.chars() } → 0 HX3004", _build_case_ret_chars_string_ok())
+    let ccg = _count_code(diags_cg, "HX3004")
+    if ccg != 0 {
+        println("  FAIL: case (cg) expected 0 HX3004 (chars→[string] matches [string] return), got " + to_string(ccg) + " (total=" + to_string(len(diags_cg)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3004 (chars→[string] exact-element accept)")
+    }
+
+    let diags_ch = _run_case("(ch) array-repr — split→[i64] MISMATCH: fn f(s)->[i64]{ return s.split(\",\") } → 1 HX3004", _build_case_ret_split_i64_bad())
+    let cch = _count_code(diags_ch, "HX3004")
+    if cch != 1 {
+        println("  FAIL: case (ch) expected 1 HX3004 (split→[string] vs [i64] return element mismatch), got " + to_string(cch) + " (total=" + to_string(len(diags_ch)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3004 (array[i64] vs array[string] element mismatch REJECT)")
+    }
+
+    let diags_ci = _run_case("(ci) array-repr — chars→[char] MISMATCH: fn f(s)->[char]{ return s.chars() } → 1 HX3004 (proves chars=[string])", _build_case_ret_chars_char_bad())
+    let cci = _count_code(diags_ci, "HX3004")
+    if cci != 1 {
+        println("  FAIL: case (ci) expected 1 HX3004 (chars→[string] vs [char] proves chars≠[char]), got " + to_string(cci) + " (total=" + to_string(len(diags_ci)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3004 (array[char] vs array[string] — chars() yields [string], not [char])")
     }
 
     println("")
