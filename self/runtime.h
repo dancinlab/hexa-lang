@@ -2240,6 +2240,14 @@ HexaVal __raw_add_f(HexaVal a, HexaVal b);              /* runtime_core.c (rtcor
 HexaVal __raw_cmp3(HexaVal a, HexaVal b);               /* runtime_core.c (rtcore_arith) */
 HexaVal __raw_code_is(HexaVal v, HexaVal k);            /* runtime_core.c (rtcore_arith) */
 HexaVal __raw_d2i(HexaVal v);                           /* runtime_core.c (rtcore_arith) */
+/* Part B: codegen lowers a float-modulo (__raw_fmod, self/codegen.hexa:7222) to a
+ * bare hxlcl_fmod() call. hxlcl_fmod is file-local `static` in the runtime TUs, but
+ * runtime.a also archives a GLOBAL (T) hxlcl_fmod from the zeroc delegate; the
+ * separate-TU driver links against that global. Safe here precisely because
+ * runtime.c does NOT include runtime.h (runtime_core_emit.hexa:1564) so this decl
+ * cannot clash with the static defs. Unused outside the compiler self-build ->
+ * byteeq-neutral. Completes the `hexa build compiler/main.hexa` symbol set. */
+double  hxlcl_fmod(double x, double y);                 /* runtime.a delegate (global) */
 int     hexa_str_eq(HexaVal a, HexaVal b);              /* runtime_core.c:4446 */
 
 
