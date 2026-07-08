@@ -899,6 +899,25 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3050",
+        title: "unused variable",
+        // Opt-in (HEXA_UNUSED_LET / `_unused_let_on`-gated, compiler/check/bind.hexa)
+        // identifier-binding rung. WARNING band — rustc's `unused_variables` is
+        // warn-by-default (a lint, not a type error), and warn-band preserves
+        // release integrity even after a future default-ON flip. Ships byteeq-
+        // NEUTRAL: the flag defaults OFF → the bind() accumulate lane pushes
+        // nothing and the end-of-pass sweep is skipped → nothing is emitted and
+        // the diag stream + emitted .text are byte-identical. The default-ON flip
+        // is a LATER phase (P4), gated on a ~270-site offline corpus MIGRATION
+        // (prefix the genuinely-unused shipping locals with `_`) + faithful×3
+        // GREEN + install smoke — the same staged path as HX3047/HX3048.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "unused variable: `{name}`",
+        explain: "Identifier-binding unused-variable check (opt-in HEXA_UNUSED_LET / `_unused_let_on`-gated, default OFF). A FUNCTION-LOCAL `let` binding is never referenced anywhere in its scope. This is Rust's `unused_variables` lint (warn-by-default, rustc_passes liveness — `let x = 1;` with no later use of `x` warns 'unused variable: `x`', with the machine-applicable suggestion to prefix an underscore). hexa wires it in compiler/check/bind.hexa (the S2 identifier resolver): the walker ACCUMULATES every function-local `let` define (the single `_define_mut` let-expr site — its just-minted dense DefId.index, the binding name, and its span) into a module-level candidate lane, and MARKS a binding USED at the SAME name-resolution choke that drives HX2001 (the `_bind_walk_expr` Ident arm, right after `_bind_lookup`). Because value references, the assign LHS, the call callee, and the field receiver ALL descend to that one Ident arm, the used-set is exactly resolver-complete. At end-of-`bind()` a candidate whose index never appears in the used-set is emitted as HX3050. FP=0 by construction: marking is co-located with name resolution, so a binding that resolves anywhere is marked used; a WRITE via `x = …` is a use (the assign-arm walks its LHS Ident through the choke), matching a conservative assume-used stance (a false NEGATIVE is the safe direction); a CLOSURE capture resolves up the enclosing scope chain through the same choke ⇒ marked used; a `_`-prefixed name (`_x`) is the rustc escape hatch and is EXCLUDED at the accumulate site so an intentionally-unused binding is silent; NESTED-scope shadowing resolves inner-first (the walker pushes a frame per block) so an inner+outer both-used pair is clean. The used-set is defined relative to the S2 resolver: `_bind_lookup` returns the FIRST match WITHIN a frame, so a SAME-FRAME sequential re-`let` (`let x=1; …; let x=2` in one block) resolves every later `x` to the FIRST binding — the second same-frame shadow is genuinely never the resolution target and is flagged. That is FP=0 relative to S2 (the lint marks exactly what the resolver resolves), a known divergence from rustc's last-shadow-wins, folded into the P4 corpus census. Only FUNCTION-LOCAL let-expr defines are candidates: top-level `let` globals (pre-registered in the module frame, walked as item RHS, never through the let-expr arm), fn params, `for` iterators, `catch` binders, `match` pattern binders and closure params all bind at DIFFERENT sites and are NOT accumulated. The BindFrame struct and _pop_scope signature are untouched — the accumulate-then-check uses module-level state (the enum-registry / `_bck` convention), no by-value threading. BAND: opt-in `_unused_let_on` (HEXA_UNUSED_LET), Warning-band. Ships byteeq-neutral regardless: the flag defaults OFF so nothing is emitted and codegen .text is byte-identical; the shipping tree DOES contain genuinely-unused locals, so the default-ON flip is a follow-up gated on a ~270-site corpus `_`-prefix migration + faithful×3 GREEN + install.sh consumer smoke (never promote on x86-only) — the same staged path as HX3047/HX3048. Fix: remove the unused `let` binding, or prefix its name with an underscore (`let _{name} = …`) to mark it intentionally unused.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
