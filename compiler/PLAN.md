@@ -5996,7 +5996,7 @@ ADD EAX,EBX → 01 d8
 SUB EAX,EBX → 29 d8
 CMP EAX,EBX → 39 d8
 
-[program] mov eax,20; add eax,22; mov edi,eax; mov eax,60; syscall
+[program] mov eax,20; add eax,22; mov edi,edx; mov eax,60; syscall
   → ubu-2 → REMOTE_RC=42
 🎉 F-P2-X86-ARITH FULL PASS
 ```
@@ -6067,7 +6067,7 @@ B8 0A 00 00 00    mov eax, #10
 81 E8 01 00 00 00 sub eax, #1         (loop body)
 81 F8 00 00 00 00 cmp eax, #0
 75 F2             jne loop (imm8 = -14)
-89 C7             mov edi, eax
+89 D7             mov edi, edx
 B8 3C 00 00 00    mov eax, #60
 0F 05             syscall
                   (28 B total, 9 loop iterations)
