@@ -2104,22 +2104,31 @@ fn _emit_hx3024(actual: Type, sp: Span, out: array) {
     }
 }
 
-// HX3044 — int-literal range-fit REJECT (Warning-band MVP). Reference-matched
-// to rustc's `overflowing_literals` lint ("literal out of range for `i8`": a
+// HX3044 — int-literal range-fit REJECT (STRICT+fan-out). Reference-matched to
+// rustc's `overflowing_literals` lint ("literal out of range for `i8`": a
 // decimal/hex int literal whose value falls outside the [MIN,MAX] of the
-// narrower signed integer it is annotated with, e.g. `let x: i8 = 300`). hexa's
-// shipping tree is i64-only, so this is CORPUS-0 by construction — a forward
+// narrower signed integer it is annotated with, e.g. `let x: i8 = 300`). rustc
+// fires this at EVERY coercion site — wired here at let / return / assign /
+// field-init / call-arg via the single `_types_int_lit_overflows` predicate
+// (positive literals bounded by MAX; `-<lit>` by abs(MIN), so `-128` fits i8
+// while `-129` overflows). hexa's shipping tree is i64-only (zero i8/i16, zero
+// narrow-int struct fields, i32 fns return small exit codes, large literals all
+// in i64 RNG/hash context), so this is CORPUS-0 by construction — a forward
 // guardrail for user programs that annotate iN widths. Types erase at MIR so
-// .text stays byte-identical (byteeq-neutral). MVP BAND = Warning ALWAYS (never
-// escalates to a real-source Error) so a latent true-positive can never abort
-// the shipping path; STRICT-Error re-band + multi-site fan-out (return / assign
-// / field / call-arg) is a documented follow-up. Only reached under
-// HEXA_STATIC_TYPES, so the default diagnostic stream is unchanged.
+// .text stays byte-identical (byteeq-neutral). BAND = FLIP-3 (`_types_strict_for`):
+// real source → build-refusing Error (REJECT), byte-eq test fixture
+// (`*_test.hexa` / `compiler/test/`) stays Warning via the path carve-out — the
+// same policy as HX3011/HX3024/HX3043. The re-band is safe precisely because the
+// corpus is 0 (no real-source site can fire an Error).
 fn _emit_hx3044(expected: Type, sp: Span, out: array) {
     let mut b = diag_new("HX3044")
     b = diag_span(b, sp)
     b = diag_arg(b, "expected", _type_display(expected))
-    out.push(diag_emit_sev(b, Severity::Warning))
+    if _types_strict_for(sp.file) {
+        out.push(diag_emit(b))
+    } else {
+        out.push(diag_emit_sev(b, Severity::Warning))
+    }
 }
 
 fn _emit_hx3025(actual: Type, sp: Span, out: array) {
@@ -2385,10 +2394,8 @@ fn _types_hex_digit_val(c) -> i64 {
     return -1
 }
 
-// Per-width signed MAX (positive-literal magnitude bound). Negative literals
-// arrive as `UnOp(-, LiteralInt)` and never reach the lit-int arm (a documented
-// follow-up), so we bound positive magnitude against MAX only. i64's MAX is
-// itself i64-representable, so all four bounds fit the stage0 i64 accumulator.
+// Per-width signed MAX (positive-literal magnitude bound). i64's MAX is itself
+// i64-representable, so all four bounds fit the stage0 i64 accumulator.
 fn _types_int_max_for(t: Type) -> i64 {
     if t.kind == "i8"  { return 127 }
     if t.kind == "i16" { return 32767 }
@@ -2396,32 +2403,44 @@ fn _types_int_max_for(t: Type) -> i64 {
     return 9223372036854775807   // i64
 }
 
-// TRUE iff the positive int-literal `src` fits the signed width of `expected`.
-// Scans the literal's digits DIRECTLY (decimal, or `0x`/`0X` hex; the lexer
-// already strips `_` separators but we skip them defensively) with an
-// OVERFLOW-GUARDED i64 accumulation — stage0 has no bigint, so we never let the
-// partial value exceed the target MAX (the `val > (maxv - d) / base` guard is
-// checked BEFORE each multiply-add, and never itself overflows since maxv is
-// i64-repr and d < base). Mirrors the char-scan idiom of `_types_let_name`.
-// FP-guard: on ANY unrecognised form (empty text, a non-digit char — e.g. a
-// stray sign / float punctuation that should never reach a LiteralInt) it
-// CONSERVATIVELY returns true (never a false REJECT).
-fn _types_int_lit_fits(expected: Type, src: Expr) -> bool {
-    let chars = src.text.chars()
+// Per-width negated-literal magnitude bound = abs(signed MIN) = MAX+1: i8 128,
+// i16 32768, i32 2147483648 — all i64-representable. i64's abs(MIN)=2^63 is NOT
+// i64-representable, so a negated i64 literal returns the -1 sentinel and the
+// caller CONSERVATIVELY accepts it (FP-guard: never a false REJECT; the lexer
+// already bounds i64 magnitude, and the single MIN boundary is not worth a
+// stage0 bignum). Used by `_types_int_lit_overflows` for the `-<lit>` arm so
+// `let x: i8 = -128` fits while `-129` overflows.
+fn _types_int_absmin_for(t: Type) -> i64 {
+    if t.kind == "i8"  { return 128 }
+    if t.kind == "i16" { return 32768 }
+    if t.kind == "i32" { return 2147483648 }
+    return -1   // i64 sentinel: caller tolerates
+}
+
+// Digit-scan core: TRUE iff the magnitude spelled by `text` fits within `maxv`.
+// Scans the digits DIRECTLY (decimal, or `0x`/`0X` hex; the lexer already
+// strips `_` separators but we skip them defensively) with an OVERFLOW-GUARDED
+// i64 accumulation — stage0 has no bigint, so we never let the partial value
+// exceed `maxv` (the `val > (maxv - d) / base` guard is checked BEFORE each
+// multiply-add, and never itself overflows since maxv is i64-repr and d < base).
+// Mirrors the char-scan idiom of `_types_let_name`. FP-guard: on ANY
+// unrecognised form (empty text, a non-digit char — e.g. a stray sign / float
+// punctuation that should never reach a LiteralInt) it CONSERVATIVELY returns
+// true (never a false REJECT). Shared by the positive-MAX and negated-absmin
+// fit paths.
+fn _types_int_text_fits(text: string, maxv: i64) -> bool {
+    let chars = text.chars()
     let n = len(chars)
     if n == 0 { return true }
-    let maxv = _types_int_max_for(expected)
     // hex form: `0x` / `0X` prefix (the lexer emits the prefix verbatim).
     if n >= 2 && chars[0] == '0' && (chars[1] == 'x' || chars[1] == 'X') {
         let mut hval = 0
         let mut hi = 2
-        let mut hsaw = false
         while hi < n {
             let c = chars[hi]
             if c != '_' {
                 let d = _types_hex_digit_val(c)
                 if d < 0 { return true }
-                hsaw = true
                 if hval > (maxv - d) / 16 { return false }
                 hval = hval * 16 + d
             }
@@ -2432,19 +2451,49 @@ fn _types_int_lit_fits(expected: Type, src: Expr) -> bool {
     // decimal form.
     let mut val = 0
     let mut i = 0
-    let mut saw = false
     while i < n {
         let c = chars[i]
         if c != '_' {
             let d = _types_dec_digit_val(c)
             if d < 0 { return true }
-            saw = true
             if val > (maxv - d) / 10 { return false }
             val = val * 10 + d
         }
         i = i + 1
     }
     return true
+}
+
+// TRUE iff the positive int-literal `src` fits the signed MAX of `expected`.
+fn _types_int_lit_fits(expected: Type, src: Expr) -> bool {
+    return _types_int_text_fits(src.text, _types_int_max_for(expected))
+}
+
+// ★ Single fan-out predicate for HX3044 (STRICT+multi-site follow-up). TRUE iff
+// `src` is an int-literal (or the `UnOp(-)` negation of one) whose value
+// OVERFLOWS the narrow signed integer `expected`. Reference-matched to rustc's
+// `overflowing_literals`, which fires at EVERY coercion site — this one predicate
+// is wired at let / return / assign / field-init / call-arg. A positive literal
+// is bounded by MAX; a `-<lit>` by abs(MIN)=MAX+1 (so i8 accepts -128, rejects
+// -129 / +128). Returns FALSE (no fire) for a non-integer target, a non-int-
+// literal src, an i64-negated boundary, or an in-range value — conservative by
+// construction, never a false REJECT.
+fn _types_int_lit_overflows(expected: Type, src: Expr) -> bool {
+    if !_is_integer_kind(expected) { return false }
+    // positive int-literal: magnitude ≤ MAX.
+    if _types_is_lit_int(src.kind) {
+        return !_types_int_text_fits(src.text, _types_int_max_for(expected))
+    }
+    // negated int-literal `UnOp("-", LiteralInt)`: magnitude ≤ abs(MIN)=MAX+1.
+    if _types_is_unop(src.kind) && src.text == "-" && len(src.children) == 1 {
+        let inner = src.children[0]
+        if _types_is_lit_int(inner.kind) {
+            let bound = _types_int_absmin_for(expected)
+            if bound < 0 { return false }   // i64: tolerate the single MIN edge
+            return !_types_int_text_fits(inner.text, bound)
+        }
+    }
+    return false
 }
 
 // Literal-coercion-aware compatibility check.
@@ -2508,6 +2557,18 @@ fn _types_assignable(expected: Type, actual: Type, src: Expr) -> bool {
         return true
     }
     if _types_is_lit_int(src.kind) && _is_integer_kind(expected) && _is_integer_kind(actual) {
+        return true
+    }
+    // A negated int-literal `-<lit>` arrives as `UnOp(-, LiteralInt)` and is
+    // still an integer literal for coercion purposes (rustc treats `-128` as an
+    // int literal), so `let x: i8 = -128` coerces exactly like `let x: i8 = 128`.
+    // Without this the binop/unop let-arm false-fires HX3011 (mismatched i8 vs
+    // i64) on a valid narrow-int negated literal. Range-fit stays HX3044's job
+    // (fan site 0b). Pure LOOSENING (removes a false REJECT); only reachable when
+    // expected≠actual (same-kind i64 already returned via `_types_equal`), i.e.
+    // a narrow-int negated literal — corpus-0, so the real-source diagnostic
+    // stream is unchanged (byteeq-neutral).
+    if _types_is_unop(src.kind) && src.text == "-" && len(src.children) == 1 && _types_is_lit_int(src.children[0].kind) && _is_integer_kind(expected) && _is_integer_kind(actual) {
         return true
     }
     if _types_is_lit_float(src.kind) && _is_float_kind(expected) && _is_float_kind(actual) {
@@ -3088,6 +3149,15 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                     _emit_hx3004(frame_name, frame_ret, val_t, e.span, out)
                 }
             }
+            // HX3044 — int-literal range-fit (STRICT+fan-out site A: return).
+            // `fn f() -> i8 { return 300 }` is kind-assignable (int-lit → int-
+            // kind coercion) so HX3004 stays silent; this catches the value
+            // overflow rustc's `overflowing_literals` rejects at a return-place
+            // coercion. Handles the negated `return -129` form too (the predicate
+            // reads UnOp(-, LiteralInt)). Uses `val_src` = the returned expr.
+            if _types_int_lit_overflows(frame_ret, val_src) {
+                _emit_hx3044(frame_ret, val_src.span, out)
+            }
         }
         return _types_t_unit()
     }
@@ -3126,15 +3196,15 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                         if !_types_assignable(declared, rhs_t, rhs) {
                             _emit_hx3011(declared, rhs_t, e.span, out)
                         }
-                        // HX3044 — int-literal range-fit (Warning-band MVP).
+                        // HX3044 — int-literal range-fit (STRICT+fan-out site 0).
                         // INDEPENDENT of the HX3011 arm above: `let x: i8 = 300`
                         // IS assignable (both are integer kinds, so the literal-
                         // coercion arm accepts it) → HX3011 stays silent; this
                         // gate catches the overflow rustc's `overflowing_literals`
-                        // rejects. Only POSITIVE int literals reach here (a
-                        // negative literal is `UnOp(-, LiteralInt)`, not
-                        // `_types_is_lit_int` — documented follow-up).
-                        if _types_is_lit_int(rhs.kind) && _is_integer_kind(declared) && !_types_int_lit_fits(declared, rhs) {
+                        // rejects. Positive int literals reach here; the negated
+                        // `UnOp(-, LiteralInt)` form lands in the binop/unop arm
+                        // below (site 0b).
+                        if _types_int_lit_overflows(declared, rhs) {
                             _emit_hx3044(declared, e.span, out)
                         }
                     }
@@ -3194,6 +3264,17 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                     // while `let x: i32 = a_i64 + b_i64` faithfully REJECTs.
                     let tr = TypeRef { kind: "named", name: tt, args: [], span: e.span }
                     let declared = _types_lower_type_ref(tr)
+                    // HX3044 — int-literal range-fit (STRICT+fan-out site 0b):
+                    // the NEGATED-literal `let x: i8 = -128` case. `-128` is a
+                    // `UnOp(-, LiteralInt)` so it lands in this arm (not the
+                    // lit-int arm above). `_types_int_lit_overflows` bounds the
+                    // negated magnitude by abs(MIN) — `-128` fits i8, `-129`
+                    // overflows. Independent of the `_types_rhs_leaves_known`
+                    // HX3011 gate below (the predicate self-guards to a narrow
+                    // integer target × int-literal operand).
+                    if _types_kind_is_scalar(declared.kind) && _types_int_lit_overflows(declared, rhs) {
+                        _emit_hx3044(declared, e.span, out)
+                    }
                     if _types_kind_is_scalar(declared.kind) && _types_rhs_leaves_known(rhs, env, ctx) {
                         let mut scratch: array = []
                         let rhs_t = _infer_expr(rhs, env, ctx, scratch)
@@ -3240,6 +3321,16 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                     if !_types_assignable(lhs_t, rhs_t, e.children[1]) {
                         _emit_hx3011(lhs_t, rhs_t, e.span, out)
                         r3_rejected = true
+                    }
+                    // HX3044 — int-literal range-fit (STRICT+fan-out site B:
+                    // assign). `x = 300` where `x: i8` is kind-assignable (int-
+                    // lit → int-kind) so HX3011 stays silent; this catches the
+                    // value overflow at the assignment-place coercion (rustc
+                    // `overflowing_literals`). Handles `x = -129` (predicate reads
+                    // UnOp(-, LiteralInt)). Independent of `r3_rejected` — a value
+                    // overflow is orthogonal to a kind mismatch.
+                    if _types_int_lit_overflows(lhs_t, e.children[1]) {
+                        _emit_hx3044(lhs_t, e.children[1].span, out)
                     }
                 } else if _types_is_index(e.children[0].kind) && len(e.children[0].children) > 0 {
                     // Wall A r4 — array element-fit assign REJECT. The LHS is an
@@ -3515,6 +3606,16 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                             if !_types_assignable(field_t, val_t, val) {
                                 _emit_hx3011(field_t, val_t, val.span, out)
                             }
+                        }
+                        // HX3044 — int-literal range-fit (STRICT+fan-out site C:
+                        // struct field-init). `Point{ b: 300 }` with `b: i8` is
+                        // kind-assignable (int-lit → int-kind) so HX3011 stays
+                        // silent; this catches the value overflow at the field-
+                        // init coercion (rustc `overflowing_literals`). Handles
+                        // `{ b: -129 }` (UnOp(-, LiteralInt)). `field_t` = the
+                        // declared field type, `val` = the field-value expr.
+                        if _types_int_lit_overflows(field_t, val) {
+                            _emit_hx3044(field_t, val.span, out)
                         }
                     } else {
                         // static-types r9d — field-EXISTENCE reject (the piece
@@ -4227,6 +4328,15 @@ fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                 if got.kind != ku {
                     _emit_hx3003(name, k + 1, want, got, e.children[1 + k].span, out)
                 }
+            }
+            // HX3044 — int-literal range-fit (STRICT+fan-out site D: call-arg).
+            // `f(300)` where param `k` is `i8` is kind-assignable (int-lit →
+            // int-kind) so HX3003 stays silent; this catches the value overflow
+            // at the argument-place coercion (rustc `overflowing_literals`).
+            // Handles `f(-129)` (UnOp(-, LiteralInt)). `want` = the declared
+            // param type, `e.children[1 + k]` = the argument expr.
+            if _types_int_lit_overflows(want, e.children[1 + k]) {
+                _emit_hx3044(want, e.children[1 + k].span, out)
             }
             k = k + 1
         }
