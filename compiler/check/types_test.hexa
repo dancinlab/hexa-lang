@@ -2536,6 +2536,107 @@ fn _build_case_i8_arg_over() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (bo) ★ HX3044 fan-out site E (index-place assign) — `let a: [i8] ; a[0] = 300`.
+// The decl records elem `[]a : i8`; the index-place int-lit RHS is kind-
+// assignable (coerces, so HX3011 stays silent) yet overflows i8 → 1 HX3044.
+fn _build_case_i8_index_assign_over() -> Module {
+    let f = "case_bo.hexa"
+    let mut kids = []
+    kids.push(_let_decl_expr("a|Array:i8", f, 2, 5))
+    kids.push(_assign_expr(_index_expr(_ident_expr("a", f, 3, 5), _int_expr("0", f, 3, 7), f, 3, 6), _int_expr("300", f, 3, 12), f, 3, 10))
+    let body = _block(kids, f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (bp) ★ HX3044 fan-out site E boundary FIT — `let a: [i8] ; a[0] = 127`.
+// 127 == i8::MAX → 0 HX3044 (no over-reject at the boundary).
+fn _build_case_i8_index_assign_fit() -> Module {
+    let f = "case_bp.hexa"
+    let mut kids = []
+    kids.push(_let_decl_expr("a|Array:i8", f, 2, 5))
+    kids.push(_assign_expr(_index_expr(_ident_expr("a", f, 3, 5), _int_expr("0", f, 3, 7), f, 3, 6), _int_expr("127", f, 3, 12), f, 3, 10))
+    let body = _block(kids, f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (bq) ★ HX3044 fan-out site F (field-place assign) — `struct S { b: i8 }` ;
+// `let s: S ; s.b = 300`. The field-place int-lit RHS is kind-assignable
+// (HX3011 silent) yet overflows the declared i8 field → 1 HX3044.
+fn _build_case_i8_field_assign_over() -> Module {
+    let f = "case_bq.hexa"
+    let mut sfields = []
+    sfields.push(_param("b", "i8", f, 1, 12))
+    let item_s = _struct_item("S", sfields, f, 1)
+    let mut kids = []
+    kids.push(_let_decl_expr("s|S", f, 3, 5))
+    kids.push(_assign_expr(_field_expr(_ident_expr("s", f, 4, 5), "b", f, 4, 7), _int_expr("300", f, 4, 11), f, 4, 9))
+    let body = _block(kids, f, 2, 1)
+    let item_f = _fn_item("f", [], _empty_type_ref(), body, f, 2)
+    let mut items = []
+    items.push(item_s)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (br) ★ HX3044 fan-out site F boundary FIT — `s.b = 127` → 0 HX3044.
+fn _build_case_i8_field_assign_fit() -> Module {
+    let f = "case_br.hexa"
+    let mut sfields = []
+    sfields.push(_param("b", "i8", f, 1, 12))
+    let item_s = _struct_item("S", sfields, f, 1)
+    let mut kids = []
+    kids.push(_let_decl_expr("s|S", f, 3, 5))
+    kids.push(_assign_expr(_field_expr(_ident_expr("s", f, 4, 5), "b", f, 4, 7), _int_expr("127", f, 4, 11), f, 4, 9))
+    let body = _block(kids, f, 2, 1)
+    let item_f = _fn_item("f", [], _empty_type_ref(), body, f, 2)
+    let mut items = []
+    items.push(item_s)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (bs) ★ Lane-B parse_int inference — `fn u(x: string) { let n: i64 =
+// x.parse_int() ; let s: string = x.parse_int() }`. parse_int()→i64 (bare int,
+// monomorphic): the i64 sink matches (0 HX3011), the string sink provably
+// mismatches (1 HX3011). Exactly 1 HX3011 locks the new inference edge.
+fn _build_case_parse_int_infer() -> Module {
+    let f = "case_bs.hexa"
+    let call_ok = _call_expr(_field_expr(_ident_expr("x", f, 2, 17), "parse_int", f, 2, 19), [], f, 2, 19)
+    let call_bad = _call_expr(_field_expr(_ident_expr("x", f, 3, 20), "parse_int", f, 3, 22), [], f, 3, 22)
+    let mut kids = []
+    kids.push(_let_expr("n|i64", call_ok, f, 2, 5))
+    kids.push(_let_expr("s|string", call_bad, f, 3, 5))
+    let body = _block(kids, f, 2, 1)
+    let item_u = _fn_item("u", [_param("x", "string", f, 1, 6)], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_u)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (bt) ★ Lane-B parse_float inference — `fn u(x: string) { let g: f64 =
+// x.parse_float() ; let k: i64 = x.parse_float() }`. parse_float()→f64 (bare
+// float, monomorphic): the f64 sink matches (0), the i64 sink provably
+// mismatches (1 HX3011 — non-literal call result, no int/float coercion).
+fn _build_case_parse_float_infer() -> Module {
+    let f = "case_bt.hexa"
+    let call_ok = _call_expr(_field_expr(_ident_expr("x", f, 2, 17), "parse_float", f, 2, 19), [], f, 2, 19)
+    let call_bad = _call_expr(_field_expr(_ident_expr("x", f, 3, 17), "parse_float", f, 3, 19), [], f, 3, 19)
+    let mut kids = []
+    kids.push(_let_expr("g|f64", call_ok, f, 2, 5))
+    kids.push(_let_expr("k|i64", call_bad, f, 3, 5))
+    let body = _block(kids, f, 2, 1)
+    let item_u = _fn_item("u", [_param("x", "string", f, 1, 6)], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_u)
+    return Module { file: f, items: items, imports: [] }
+}
+
 fn _run_case(label: string, m: Module) -> array {
     println("")
     println("── " + label + " ──")
@@ -3634,6 +3735,68 @@ fn main() {
         ok = false
     } else {
         println("  ok: 1 HX3044 Error at call-argument coercion (fan-out site D)")
+    }
+
+    // (bo) ★ HX3044 fan-out site E (index-place assign) — `let a:[i8] ; a[0] = 300` → 1 HX3044.
+    let diags_bo = _run_case("(bo) static-types — fan-out index-assign: let a:[i8] ; a[0] = 300 → 300 > 127 → 1 HX3044 (Error)", _build_case_i8_index_assign_over())
+    let cbo_e = _count_code_sev(diags_bo, "HX3044", "error")
+    let cbo_11 = _count_code(diags_bo, "HX3011")
+    if cbo_e != 1 || cbo_11 != 0 {
+        println("  FAIL: case (bo) expected 1 HX3044 error / 0 HX3011 at index-place, got err=" + to_string(cbo_e) + " HX3011=" + to_string(cbo_11) + " (total=" + to_string(len(diags_bo)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3044 Error at index-place coercion (fan-out site E)")
+    }
+
+    // (bp) ★ HX3044 fan-out site E boundary FIT — `a[0] = 127` → 0 HX3044.
+    let diags_bp = _run_case("(bp) static-types — fan-out index-assign fit: let a:[i8] ; a[0] = 127 → == i8::MAX → 0 HX3044", _build_case_i8_index_assign_fit())
+    let cbp = _count_code(diags_bp, "HX3044")
+    if cbp != 0 {
+        println("  FAIL: case (bp) expected 0 HX3044 (127 fits i8 at index-place), got " + to_string(cbp) + " (total=" + to_string(len(diags_bp)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3044 (127 == i8::MAX fits at index-place — no over-reject)")
+    }
+
+    // (bq) ★ HX3044 fan-out site F (field-place assign) — `struct S{b:i8} ; s.b = 300` → 1 HX3044.
+    let diags_bq = _run_case("(bq) static-types — fan-out field-assign: struct S{b:i8} ; s.b = 300 → 300 > 127 → 1 HX3044 (Error)", _build_case_i8_field_assign_over())
+    let cbq_e = _count_code_sev(diags_bq, "HX3044", "error")
+    let cbq_11 = _count_code(diags_bq, "HX3011")
+    if cbq_e != 1 || cbq_11 != 0 {
+        println("  FAIL: case (bq) expected 1 HX3044 error / 0 HX3011 at field-place, got err=" + to_string(cbq_e) + " HX3011=" + to_string(cbq_11) + " (total=" + to_string(len(diags_bq)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3044 Error at field-place coercion (fan-out site F)")
+    }
+
+    // (br) ★ HX3044 fan-out site F boundary FIT — `s.b = 127` → 0 HX3044.
+    let diags_br = _run_case("(br) static-types — fan-out field-assign fit: s.b = 127 → == i8::MAX → 0 HX3044", _build_case_i8_field_assign_fit())
+    let cbr = _count_code(diags_br, "HX3044")
+    if cbr != 0 {
+        println("  FAIL: case (br) expected 0 HX3044 (127 fits i8 at field-place), got " + to_string(cbr) + " (total=" + to_string(len(diags_br)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3044 (127 == i8::MAX fits at field-place — no over-reject)")
+    }
+
+    // (bs) ★ Lane-B parse_int inference — i64 sink ok + string sink mismatch → 1 HX3011.
+    let diags_bs = _run_case("(bs) static-types — parse_int infer: n:i64 = x.parse_int() (ok) + s:string = x.parse_int() (mismatch) → 1 HX3011", _build_case_parse_int_infer())
+    let cbs = _count_code(diags_bs, "HX3011")
+    if cbs != 1 {
+        println("  FAIL: case (bs) expected 1 HX3011 (parse_int→i64: string sink mismatch, i64 sink ok), got " + to_string(cbs) + " (total=" + to_string(len(diags_bs)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3011 (parse_int typed i64 — string sink rejected, i64 sink clean)")
+    }
+
+    // (bt) ★ Lane-B parse_float inference — f64 sink ok + i64 sink mismatch → 1 HX3011.
+    let diags_bt = _run_case("(bt) static-types — parse_float infer: g:f64 = x.parse_float() (ok) + k:i64 = x.parse_float() (mismatch) → 1 HX3011", _build_case_parse_float_infer())
+    let cbt = _count_code(diags_bt, "HX3011")
+    if cbt != 1 {
+        println("  FAIL: case (bt) expected 1 HX3011 (parse_float→f64: i64 sink mismatch, f64 sink ok), got " + to_string(cbt) + " (total=" + to_string(len(diags_bt)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3011 (parse_float typed f64 — i64 sink rejected, f64 sink clean)")
     }
 
     println("")
