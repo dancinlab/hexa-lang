@@ -4152,7 +4152,7 @@
         "detail": ""
        },
        {
-        "name": "🧱 WALL residual (~15, each a separate campaign or honest-keep): strtod (IEEE oracle) · dlopen/dlsym/dlerror (FFI) · environ/atexit/__libc_calloc/__libc_free (CRT bootstrap) · fgets (FILE* layer) · glob/globfree (fnmatch fidelity, MEDIUM) · qsort (tie-order) · regcomp/regexec/regfree (ERE oracle). SSOT: state/zeroc-floor-census-2026-07-03.md + memory project_hexa_zeroc_floor_goal_state.",
+        "name": "🧱 WALL residual (current, post-FLIP-6/7): dlopen/dlsym/dlerror (FFI) · fgets (FILE* layer) · glob/globfree (fnmatch fidelity, MEDIUM) · qsort (tie-order) · regcomp/regexec/regfree (ERE oracle). DROPPED since the 07-03 census: strtod (#4651 native tail, T_mis=0) · environ/atexit (#4656 FLIP-7 own-start) · __libc_calloc/__libc_free (#4747 FLIP-6 native reclaiming heap default-ON — the HXFARR carve-out routes farr calloc/free to hxlcl_heap_calloc/free; RE-WITNESSED native on aiden: nm runtime.a ZERO __libc_calloc/free, objdump hexa_farr_zeros→call hxlcl_heap_calloc, [L1] 30GB leak witness MaxRSS 7.04MB slope 0.0010). SSOT: state/zeroc-floor-census-2026-07-03.md + memory project_hexa_zeroc_floor_goal_state.",
         "role": "",
         "id": "zeroc-frontier-wall-residual",
         "detail": ""
