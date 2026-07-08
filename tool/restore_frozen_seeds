@@ -388,8 +388,12 @@ fi
 # glibc exposes __libc_calloc/__libc_free under DISTINCT names, so the file-wide
 # `#define calloc/free → hxlcl_*` shims do NOT rewrite them; non-glibc (Darwin
 # one-shot dev builds) falls back to plain calloc/free (no leak concern there).
-# Idempotent: the HXFARR_CALLOC marker guards against double-injection.
-if [ -f "$rt" ] && ! grep -q 'HXFARR_CALLOC' "$rt"; then
+# Idempotent: key on the exact 3-arm HEXA_RT_HEAP_NATIVE define (not bare
+# HXFARR_CALLOC) so a stale 2-arm block counts as NEEDS-UPGRADE, not current.
+# No double-injection risk: the unconditional seed restore above + M3 synth
+# (byte-eq to the raw pre-mutation blob) always hand this guard an HXFARR-free
+# file, so the awk header anchor fires exactly once.
+if [ -f "$rt" ] && ! grep -qF '#define HXFARR_CALLOC(nm,sz) hxlcl_heap_calloc((nm),(sz))' "$rt"; then
   awk '
     # (1) Insert the HXFARR macro block immediately BEFORE the farr_zeros body.
     /^HexaVal hexa_farr_zeros\(HexaVal n_v\) \{$/ && !hdr {
