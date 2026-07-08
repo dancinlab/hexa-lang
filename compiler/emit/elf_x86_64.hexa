@@ -1845,6 +1845,14 @@ pub fn parse_ar_archive(buf) -> [ArMember] {
         m = m + 1
     }
 
+    // BSD-ar guard: the local darwin runtime.a is BSD (first member '#1/NN',
+    // '__.SYMDEF' armap) — this parser is GNU-only (the Linux-pool runtime.a).
+    // Fail loudly (empty list) on a BSD archive rather than emit bogus members.
+    let _first = _ar_rstrip(_ar_read_ascii(buf, 8, 16))
+    if len(_first) >= 3 && char_code(_first, 0) == 0x23
+       && char_code(_first, 1) == 0x31 && char_code(_first, 2) == 0x2f { return members }
+    if _first == "__.SYMDEF" || _first == "__.SYMDEF SORTED" { return members }
+
     let total = len(buf)
     let mut ln_off  = -1     // "//" table data offset (abs), -1 until seen
     let mut ln_size = 0
