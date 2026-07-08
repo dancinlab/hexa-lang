@@ -788,5 +788,20 @@ pub fn emit_asm(module: LModule) -> string {
         parts.push(_emit_meta_section(abi_dir, "_hexa_abi_stamp", _abi_stamp_hex()))
     }
 
+    // .note.GNU-stack — mark a NON-executable stack on Linux ELF targets so a
+    // modern GNU ld stops promoting "missing .note.GNU-stack section implies
+    // executable stack" to a hard link error (the leg-B native-serve FALLBACK,
+    // measured 15/29 corpus programs on summer). #4761 fixed the own-emit object
+    // writer half; this covers the asm-text path the self/native/*.s bootstrap
+    // seeds are regenerated from. Zero-length, non-alloc PROGBITS. AArch64 GAS
+    // uses `%progbits` (`@` starts a comment on ARM); x86_64 uses `@progbits`.
+    // Darwin (Mach-O) and thumb (bare-metal Cortex-M) have no such section —
+    // strict no-op for both, so it cannot regress the shipping darwin/embedded path.
+    if _is_elf_arm64(target) {
+        parts.push(".section .note.GNU-stack,\"\",%progbits\n")
+    } else if !_is_darwin(target) && !_is_thumb(target) {
+        parts.push(".section .note.GNU-stack,\"\",@progbits\n")
+    }
+
     return parts.join("")
 }
