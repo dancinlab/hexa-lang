@@ -1074,6 +1074,36 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     return 0
 }
 
+// ── RFC 063 § P3 round-3 Stage 4 — own-linker + runtime.a integration ──
+//
+// link_elf_x86_64_ownstart_ar — link the program ElfX86Obj[] PLUS exactly
+// the runtime.a members that satisfy the program's unresolved refs
+// (archive_extract_fixpoint), into a static ET_EXEC with ZERO binutils.
+// Reads runtime.a (read_file_bytes) -> parse_ar_archive -> pull to fixpoint
+// -> append pulled objs to the program objs -> CALL THROUGH to
+// link_elf_x86_64_ownstart on the combined list. When nothing is pulled
+// (extracted == []) the combined list is content-identical to program_objs
+// and the bytes are byte-identical to the plain round-1/2 path. A
+// missing/BSD/empty runtime.a -> members == [] -> extracted == [] -> same
+// byte-identical plain link (never errors here). The sanctioned libc floor
+// (malloc/free/write/memcpy/mmap/__errno…) stays UND after extraction — the
+// known axis-③ libc floor (a separate flip), not resolved here. The
+// data-segment reloc patch + bss def-collection (design components B/C) are a
+// round-3b follow-on (unexercised by the text-CALL round-3 end-to-end).
+pub fn link_elf_x86_64_ownstart_ar(program_objs: [ElfX86Obj], out_path: string, main_name: string, runtime_a_path: string) -> Int {
+    let buf       = read_file_bytes(runtime_a_path)
+    let members   = parse_ar_archive(buf)
+    let extracted = archive_extract_fixpoint(program_objs, buf, members)
+
+    let mut combined: [ElfX86Obj] = []
+    let mut i = 0
+    while i < len(program_objs) { combined.push(program_objs[i]); i = i + 1 }
+    let mut j = 0
+    while j < len(extracted) { combined.push(extracted[j]); j = j + 1 }
+
+    return link_elf_x86_64_ownstart(combined, out_path, main_name)
+}
+
 // serialize_elf_x86_64 — P2 cycle 1: empty-object byte stream.
 // Layout: header → .text → .symtab → .strtab → .shstrtab → section
 // header table (5 entries: NULL, .text, .symtab, .strtab, .shstrtab).

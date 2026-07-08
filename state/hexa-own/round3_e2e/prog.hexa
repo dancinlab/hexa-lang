@@ -1,0 +1,5 @@
+extern fn rt_answer() -> Int
+
+fn main() -> Int {
+    return rt_answer()
+}
