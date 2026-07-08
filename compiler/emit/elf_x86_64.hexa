@@ -1479,6 +1479,281 @@ pub fn serialize_elf_exec_x86_64_2seg(text: [Int], data: [Int], bss_size: Int) -
     return out
 }
 
+// ─────────────────────────────────────────────────────────────────
+// RFC 063 § P3 round-3 Stage 1 — on-disk ELF64 REL (.o) reader.
+//
+// parse_elf_x86_obj inverts serialize_elf_x86_64 AND normalizes a real
+// clang-compiled runtime_core.o into the linker's SECTION-SLOT model
+// {1=.text, 3=.rodata, >=4=.data, 5=.bss, 0=SHN_UNDEF} so
+// link_elf_x86_64_ownstart's name-keyed def/reloc resolve loop
+// (elf_x86_64.hexa:948-1065) can consume it directly.
+//
+// Local _er_* byte helpers are private COPIES of the hexa_ld.hexa
+// idioms (_read_u8/16/32/64le/_read_cstr) — hexa_ld is a *different*
+// module (compiler/link), so round-3 stays self-contained in this file.
+// ─────────────────────────────────────────────────────────────────
+
+fn _er_u8(buf, off: Int) -> Int {
+    if off < 0 { return 0 }
+    if off > len(buf) - 1 { return 0 }
+    return buf[off] & 0xff
+}
+fn _er_u16le(buf, off: Int) -> Int {
+    return _er_u8(buf, off) + _er_u8(buf, off + 1) * 256
+}
+fn _er_u32le(buf, off: Int) -> Int {
+    let mut u = 0
+    let mut i = 3
+    while i > -1 { u = u * 256 + _er_u8(buf, off + i); i = i - 1 }
+    return u
+}
+fn _er_u64le(buf, off: Int) -> Int {
+    let mut u = 0
+    let mut i = 7
+    while i > -1 { u = u * 256 + _er_u8(buf, off + i); i = i - 1 }
+    return u
+}
+// Signed Sxword read (r_addend). Sign-extend off the top byte so the
+// value round-trips as a small negative (e.g. -4) under BOTH the i64-wrap
+// and BigInt int models — 2^64 is computed at runtime (4294967296^2) to
+// dodge a literal-overflow at parse time.
+fn _er_s64le(buf, off: Int) -> Int {
+    let raw = _er_u64le(buf, off)
+    let hi  = _er_u8(buf, off + 7)
+    if (hi & 0x80) != 0 {
+        let two32 = 4294967296
+        return raw - two32 * two32
+    }
+    return raw
+}
+fn _er_cstr(buf, off: Int) -> string {
+    let mut s = ""
+    let mut i = 0
+    while i < 256 {
+        let c = _er_u8(buf, off + i)
+        if c == 0 { return s }
+        s = s + from_char_code(c)
+        i = i + 1
+    }
+    return s
+}
+
+// parse_elf_x86_obj(buf, base, limit, member_idx) -> ElfX86Obj
+//
+// `base`  = byte offset of this member's ELF header inside `buf` (0 for a
+//           standalone .o; the ar member data offset for an archive read).
+// `limit` = member byte length (advisory bound; reads are also clamped to
+//           len(buf)).
+// `member_idx` = archive-member discriminator, folded into synthetic
+//           STT_SECTION names so they stay globally unique across members
+//           (blocker #1). Pass 0 for a standalone parse.
+pub fn parse_elf_x86_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfX86Obj {
+    let obj = ElfX86Obj {
+        text: [], relocs: [], symbols: [], strtab: [],
+        rodata: [], data: [], bss_size: 0, nlocal: 0,
+    }
+    obj.strtab.push(0)                       // ELF strtab idx 0 = ""
+
+    // ── Guards: ELF magic + ET_REL + EM_X86_64 ──
+    if _er_u8(buf, base + 0) != 0x7f { return obj }
+    if _er_u8(buf, base + 1) != 0x45 { return obj }   // 'E'
+    if _er_u8(buf, base + 2) != 0x4c { return obj }   // 'L'
+    if _er_u8(buf, base + 3) != 0x46 { return obj }   // 'F'
+    if _er_u8(buf, base + 4) != 2    { return obj }   // ELFCLASS64
+    if _er_u8(buf, base + 5) != 1    { return obj }   // ELFDATA2LSB
+    if _er_u16le(buf, base + 0x10) != ELF_ET_REL   { return obj }
+    if _er_u16le(buf, base + 0x12) != ELF_EM_X86_64 { return obj }
+
+    let e_shoff     = _er_u64le(buf, base + 0x28)
+    let e_shentsize = _er_u16le(buf, base + 0x3A)
+    let e_shnum     = _er_u16le(buf, base + 0x3C)
+    let e_shstrndx  = _er_u16le(buf, base + 0x3E)
+    if e_shentsize < 64 { return obj }
+    if e_shnum < 1 { return obj }
+    if e_shstrndx > e_shnum - 1 { return obj }
+
+    let shstr_hdr = base + e_shoff + e_shstrndx * e_shentsize
+    let shstr_off = base + _er_u64le(buf, shstr_hdr + 0x18)
+
+    // ── Pass A: section headers → per-index slot + concat-pool base,
+    //    copying section bytes into obj.text / rodata / data pools and
+    //    accumulating bss. Slot picked by (type,flags), so .text/.text.*,
+    //    .rodata/.rodata.*, .data/.data.* pool symmetrically — no
+    //    else->0 drop (blocker #2). Pooling REBASES st_value/r_offset. ──
+    let sec_slot: [Int] = []      // 0 none, 1 text, 3 rodata, 4 data, 5 bss
+    let sec_base: [Int] = []      // this section's start within its pool
+    let sec_off:  [Int] = []      // absolute file offset in buf
+    let sec_size: [Int] = []
+    let sec_type: [Int] = []
+    let sec_link: [Int] = []
+    let sec_info: [Int] = []
+    let sec_ent:  [Int] = []
+
+    let mut i = 0
+    while i < e_shnum {
+        let sh    = base + e_shoff + i * e_shentsize
+        let stype = _er_u32le(buf, sh + 0x04)
+        let flags = _er_u64le(buf, sh + 0x08)
+        let soff  = _er_u64le(buf, sh + 0x18)
+        let ssize = _er_u64le(buf, sh + 0x20)
+        let slink = _er_u32le(buf, sh + 0x28)
+        let sinfo = _er_u32le(buf, sh + 0x2C)
+        let sent  = _er_u64le(buf, sh + 0x38)
+
+        let mut slot  = 0
+        let mut pbase = 0
+        if stype == ELF_SHT_PROGBITS && (flags & ELF_SHF_ALLOC) != 0 {
+            if (flags & ELF_SHF_EXECINSTR) != 0 {
+                slot = 1
+                pbase = len(obj.text)
+                let mut k = 0
+                while k < ssize { obj.text.push(_er_u8(buf, base + soff + k)); k = k + 1 }
+            } else if (flags & ELF_SHF_WRITE) != 0 {
+                slot = 4
+                pbase = len(obj.data)
+                let mut k = 0
+                while k < ssize { obj.data.push(_er_u8(buf, base + soff + k)); k = k + 1 }
+            } else {
+                slot = 3
+                pbase = len(obj.rodata)
+                let mut k = 0
+                while k < ssize { obj.rodata.push(_er_u8(buf, base + soff + k)); k = k + 1 }
+            }
+        } else if stype == ELF_SHT_NOBITS && (flags & ELF_SHF_ALLOC) != 0 {
+            slot = 5
+            pbase = obj.bss_size
+            obj.bss_size = obj.bss_size + ssize
+        }
+        sec_slot.push(slot)
+        sec_base.push(pbase)
+        sec_off.push(base + soff)
+        sec_size.push(ssize)
+        sec_type.push(stype)
+        sec_link.push(slink)
+        sec_info.push(sinfo)
+        sec_ent.push(sent)
+        i = i + 1
+    }
+
+    // ── Locate .symtab (+ its .strtab via sh_link). ──
+    let mut symtab_idx = -1
+    let mut j = 0
+    while j < e_shnum {
+        if sec_type[j] == ELF_SHT_SYMTAB { symtab_idx = j; break }
+        j = j + 1
+    }
+    if symtab_idx < 0 { return obj }
+    let sym_off  = sec_off[symtab_idx]
+    let sym_size = sec_size[symtab_idx]
+    let mut sym_es = sec_ent[symtab_idx]
+    if sym_es < 1 { sym_es = 24 }
+    let str_sec = sec_link[symtab_idx]
+    if str_sec < 0 { return obj }
+    if str_sec > e_shnum - 1 { return obj }
+    let str_off = sec_off[str_sec]
+
+    // ── Pass B: symbols (skip file idx 0 = STN_UNDEF). obj.symbols is
+    //    1:1 with file symtab entries 1..N, so a reloc's r_info sym index
+    //    S maps to obj.symbols[S-1]. STT_SECTION syms (name='', value=0)
+    //    get a UNIQUE synthesized name registered as a DEF at their
+    //    section's pool base — the name-keyed resolve loop then works
+    //    (blocker #1). COMMON allocates aligned bss (blocker #3). ──
+    let count = sym_size / sym_es
+    let mut si = 1
+    while si < count {
+        let s = sym_off + si * sym_es
+        let st_name  = _er_u32le(buf, s + 0x00)
+        let st_info  = _er_u8(buf, s + 0x04)
+        let st_shndx = _er_u16le(buf, s + 0x06)
+        let st_value = _er_u64le(buf, s + 0x08)
+        let st_size  = _er_u64le(buf, s + 0x10)
+        let bind  = (st_info >> 4) & 0xf
+        let type_ = st_info & 0xf
+
+        let mut nsec = 0
+        let mut nval = 0
+        if st_shndx == 0 {
+            nsec = 0; nval = 0                         // SHN_UNDEF
+        } else if st_shndx == 0xfff1 {
+            nsec = 0; nval = 0                         // SHN_ABS -> non-def
+        } else if st_shndx == 0xfff2 {
+            // SHN_COMMON: st_value = alignment, st_size = byte size.
+            let mut al = st_value
+            if al < 1 { al = 1 }
+            let cur = obj.bss_size
+            let rem = cur - (cur / al) * al
+            let aligned = if rem == 0 { cur } else { cur + (al - rem) }
+            nsec = 5
+            nval = aligned
+            obj.bss_size = aligned + st_size
+        } else if st_shndx < e_shnum {
+            nsec = sec_slot[st_shndx]
+            nval = st_value + sec_base[st_shndx]      // rebase into pool
+        } else {
+            nsec = 0; nval = 0
+        }
+
+        let mut nm_off = 0
+        if type_ == 3 {                               // STT_SECTION
+            let sname = "$sec_" + to_string(member_idx) + "_" + to_string(st_shndx)
+            nm_off = _ew_str(obj.strtab, sname)
+        } else {
+            nm_off = _ew_str(obj.strtab, _er_cstr(buf, str_off + st_name))
+        }
+
+        obj.symbols.push(ElfSym {
+            name_offset: nm_off,
+            section:     nsec,
+            value:       nval,
+            size:        st_size,
+            bind:        bind,
+            type_:       type_,
+        })
+        if bind == ELF_STB_LOCAL { obj.nlocal = obj.nlocal + 1 }
+        si = si + 1
+    }
+
+    // ── Pass C: SHT_RELA sections. sh_info = target section index; the
+    //    reloc's r_offset is rebased into that section's pool so the patch
+    //    site is pool-relative (blocker #2). sym index → obj.symbols via
+    //    -1. Addend is sign-extended. ──
+    let mut ci = 0
+    while ci < e_shnum {
+        if sec_type[ci] == ELF_SHT_RELA {
+            let roff = sec_off[ci]
+            let rsz  = sec_size[ci]
+            let mut res = sec_ent[ci]
+            if res < 24 { res = 24 }
+            let tgt = sec_info[ci]
+            let mut tgt_base = 0
+            if tgt < e_shnum { tgt_base = sec_base[tgt] }
+            let rcount = rsz / res
+            let mut ri = 0
+            while ri < rcount {
+                let r     = roff + ri * res
+                let r_off = _er_u64le(buf, r + 0x00)
+                let rinfo = _er_u64le(buf, r + 0x08)
+                let radd  = _er_s64le(buf, r + 0x10)
+                let div   = 0x100000000
+                let sym_file = rinfo / div
+                let rtype    = rinfo - (rinfo / div) * div
+                if sym_file > 0 {                     // skip relocs vs STN_UNDEF
+                    obj.relocs.push(ElfRel {
+                        offset:  r_off + tgt_base,
+                        sym_idx: sym_file - 1,
+                        kind:    rtype,
+                        addend:  radd,
+                    })
+                }
+                ri = ri + 1
+            }
+        }
+        ci = ci + 1
+    }
+
+    return obj
+}
+
 // LIR walker — `LModule` → byte stream (RFC 063 § P2, cycle 29)
 // ─────────────────────────────────────────────────────────────────
 //
