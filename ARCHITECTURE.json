@@ -374,6 +374,13 @@
     "value": "axis-③ own ELF linker now links own .o + runtime.a into a running static ET_EXEC with ZERO binutils (round-3 COMPLETE, 4 pool-verified stages): #4711 parse_elf_x86_obj(on-disk ELF64 .o→ElfX86Obj·round-trip PASS)·#4712 parse_ar_archive(GNU ar→[ArMember]·BSD-guard·AR-PARSE PASS)·#4713 archive_extract_fixpoint(심볼구동 멤버 pull to fixpoint·sanctioned libc floor 잔존·EXTRACT-FIXPOINT PASS)·#4714 link_elf_x86_64_ownstart_ar + main.hexa --linker=hexa dispatch(UND-gated). e2e(idle aiden): prog.o(UND rt_answer)+runtime.a(leaf rt_answer→42)→own 링커→260B static ET_EXEC→exit 42. byteeq-neutral(extracted==[]→plain round-1/2 경로·UND 없으면 plain). round-1(exit-code)+round-2(data-seg)에 이어 round-3(archive-link) 완성 = axis-③ '③ no clang link' 자체-링크 실증(옵트인 --linker=hexa).",
     "threshold": "round-3b DONE(#4716 impl + #4717 coverage runtime-verified: data-segment reloc patch(설계 component B·ElfRel.site_seg tag·data/rodata-resident reloc site를 data vaddr에)+bss slot=5 def-collection(component C)= EDIT-6 data arm. #4717 hand-built 2-obj ElfX86Obj(A=main+rodata/data/bss·B=UND main cross-obj)로 data-arm EXERCISE→DATARELOC 8/8 PASS on summer(abs64·PC32·bss·rodata/data-base·ro=1 self-derived assert). FINDING: hexa codegen data-resident reloc=0(전역=zero-init HexaVal 슬롯+text-resident writer)→data-arm 소비자=외부 .o(runtime.a .data ptr init). round-3(core)+round-3b(data/bss impl+coverage) 전부 runtime-verified. 방법론(4연속 유효): 워크플로 draft+adversarial verify(정적 compile/알고리즘/종료성)→내 적용→idle-pool 실측 검증(summer load starved시 idle aiden 이전)→머지. verdict-integrity 반복 적중: Stage1 harness-mkdir 누락·Stage2 summer-load hang·Stage4 stdbuf env=val 오배치 모두 코드 아닌 launcher/env. 설계 SSOT=state/hexa-own/elf_round3_archive_link_design.json.",
     "source": "#4711·#4712·#4713·#4714 · zeroc#29 axis-③ round-3 · idle aiden 실측 exit 42 · #4716 round-3b · #4717 data-arm coverage 8/8"
+   },
+   {
+    "id": "selfhost-done-3axis-fleet-goal",
+    "state": "active",
+    "value": "USER STANDING GOAL set 2026-07-08: drive self-host DONE 3-기준 (①no hexa_cc.c ②no runtime.c ③no clang) to completion via a perpetual 3-lane fleet (selfhost-done-3axis-fleet). Each lane fires-on-arrival round-by-round until its criterion crosses DONE. axis-③ LINK half landed this session (#4711-#4718 own ELF linker: own .o + runtime.a -> static ET_EXEC exit 42, ZERO binutils, opt-in --linker=hexa). See root.activeGoal for the per-axis status SSOT.",
+    "threshold": "Per-axis DONE gates: ①=build/run never invokes the C-transpile delegate (native default) · ②=nm-UND libc floor at the sanctioned-irreducible floor (net-FFI/CRT/exec) with nothing compiling a generated .c · ③=install/build/run never shell out to clang/gcc (own object-emit + hexa_ld default). Each flip opt-in-first->byteeq 3-target GREEN + shipping smoke->default-ON. release integrity > self-host progress. Fleet round-1 scouts each axis's genuinely-open frontier (survey-first, no re-deriving closed walls).",
+    "source": "user goal 2026-07-08 · axis-③ #4711-#4718 · CLAUDE.md SELF-HOST DONE CRITERION"
    }
   ]
  },
@@ -3745,6 +3752,12 @@
         ]
        }
       ]
+     },
+     {
+      "name": "⭐ ACTIVE GOAL — self-host DONE 3-axis fleet (user standing)",
+      "id": "self-host-status-active-3axis-done-fleet",
+      "role": "Drive ①no hexa_cc.c · ②no runtime.c · ③no clang to DONE (see root.activeGoal SSOT).",
+      "detail": "Perpetual 3-lane fleet. ① C-transpile fallback still default (native opt-in #3865) — OPEN. ② nm-UND libc floor reducible (memcpy un-flipped, strtod/own-start/fortify landed) — OPEN. ③ own-linker LINK half landed #4711-#4718 (own .o + runtime.a -> ET_EXEC exit 42, ZERO binutils, opt-in --linker=hexa); frontier=default-flip + own-emit coverage — OPEN. Guardrail: opt-in-first + byteeq 3-target + shipping smoke before default-ON; no-LLVM inviolable."
      }
     ]
    },
@@ -5803,5 +5816,16 @@
     ]
    }
   ]
+ },
+ "activeGoal": {
+  "title": "self-host DONE 3-기준 완료까지 (user standing goal · 영구 함대)",
+  "definition": "self-host is DONE only when the toolchain needs NONE of: ① no hexa_cc.c (the emitted hexa->C transpile fallback; build/run lowers every flow through native source->own-IR->native) · ② no runtime.c (the ~5.5k-LOC emitted-C runtime/libc-syscall substrate; ported to native .hexa/.s/own-emit) · ③ no clang / external C compiler to build OR use hexa (own object-emit backend + hexa_ld do the whole compile+link). File-∅ of hand-written C is NOT the line; eliminating all three ①②③ is.",
+  "driver": "perpetual 3-lane fleet (selfhost-done-3axis-fleet) — lane1=①hexa_cc, lane2=②runtime_c, lane3=③clang-flip — fire-on-arrival until each crosses DONE. SSOT for per-axis status = convergence.records[] + this node.",
+  "status": {
+   "axis1_no_hexa_cc": "OPEN — C-transpile fallback still the default build/run path; native path opt-in (#3865). Lever = default-flip / codegen-gap census.",
+   "axis2_no_runtime_c": "OPEN (reducible) — nm-UND libc floor tracked (nobaseline-gate.yml #4360); families dropped one at a time (strtod #4651, own-start FLIP-7, fortify #4361); memcpy/memset measured 1.3-2.0x viable, un-flipped. Sanctioned-floor (CUDA/dlopen/CRT/net) irreducible.",
+   "axis3_no_clang": "OPEN — own-linker LINK half DEMONSTRATED this session (#4711-#4718: own .o + runtime.a -> hexa_ld -> static ET_EXEC exit 42, ZERO binutils, data-seg/bss covered, opt-in --linker=hexa). COMPILE half exists (--backend=native --emit=obj). Frontier = DEFAULT-FLIP (cmd_build wire HEXA_PREBUILT_RUNTIME + own-emit coverage census + byteeq 3-target release integrity)."
+  },
+  "guardrail": "release integrity > self-host progress; every flip opt-in-first + byteeq 3-target GREEN + shipping smoke before default-ON; the sole inviolable = no-LLVM."
  }
 }
