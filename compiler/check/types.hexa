@@ -4322,7 +4322,24 @@ fn _types_builtin_method_ret(name: string) -> Type {
         "repeat" -> _types_t_string(),
         "pad_left" -> _types_t_string(),
         "pad_right" -> _types_t_string(),
+        //   pad_start/pad_end — JS/Python-idiomatic aliases; self/codegen.hexa
+        //     emits the SAME runtime symbols (str_pad_left / str_pad_right) as
+        //     pad_left/pad_right, so the → string tag is byte-for-byte the same
+        //     monomorphic result (pad_left/pad_right stay for backward compat).
+        "pad_start" -> _types_t_string(),
+        "pad_end" -> _types_t_string(),
         "center" -> _types_t_string(),
+        //   char_at — byte-indexed single-char access; self/codegen.hexa emits
+        //     str_char_at → hexa_str_char_at, whose body returns hexa_str(...)
+        //     on EVERY non-throw path (single-char buf on success; hexa_str("")
+        //     on a non-string receiver), so the tag is monomorphic + receiver-
+        //     independent string — the scalar mirror of chars()'s [string]
+        //     element (runtime uses TAG_STR for single chars). A genuine
+        //     `-> int { return s.char_at(i) }` mismatch now REJECTs (HX3004);
+        //     corpus census: every armed sink is string-typed, zero numeric
+        //     sinks (pad_start/pad_end unused in-tree; char_at only flows into
+        //     string compares + an untyped param → no false reject).
+        "char_at" -> _types_t_string(),
         // → [T]: monomorphic array-returning string builtins (self/codegen.hexa
         //   dispatch + emitted runtime bodies).
         //   split → hexa_str_split; body pushes hexa_str(pos) ⇒ [string].
