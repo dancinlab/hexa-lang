@@ -475,6 +475,12 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     if op == "JGE_REL8" && len(ops) == 1 { return [0x7d, 0x00] }
     if op == "JLE_REL8" && len(ops) == 1 { return [0x7e, 0x00] }
     if op == "JG_REL8"  && len(ops) == 1 { return [0x7f, 0x00] }
+    // R2d (axis-③): unsigned conditional jumps (ja/jae/jb/jbe) — same REL8 shape.
+    //   JA(>u) 77 · JAE(>=u) 73 · JB(<u) 72 · JBE(<=u) 76
+    if op == "JA_REL8"  && len(ops) == 1 { return [0x77, 0x00] }
+    if op == "JAE_REL8" && len(ops) == 1 { return [0x73, 0x00] }
+    if op == "JB_REL8"  && len(ops) == 1 { return [0x72, 0x00] }
+    if op == "JBE_REL8" && len(ops) == 1 { return [0x76, 0x00] }
 
     // ── x86_64 r64 ops (REX.W) ──────────────────────────────────
     //
@@ -737,9 +743,13 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     //   SETLE  0F 9E    (signed <=, ZF=1 or SF≠OF)
     //   SETG   0F 9F    (signed >, ZF=0 and SF=OF)
     // Operand is r8 (AL/CL/DL/BL by default; SPL..DIL via REX).
+    // R2d (axis-③) adds the unsigned/float setcc: SETA 0F 97 · SETAE 0F 93 ·
+    // SETB 0F 92 · SETBE 0F 96 (same ModR/M + REX shape as the signed six).
     if (op == "SETE" || op == "SETNE" ||
         op == "SETL" || op == "SETGE" ||
-        op == "SETLE" || op == "SETG") && len(ops) == 1 {
+        op == "SETLE" || op == "SETG" ||
+        op == "SETA" || op == "SETAE" ||
+        op == "SETB" || op == "SETBE") && len(ops) == 1 {
         let rd = _ex86_reg8(ops[0])
         if rd >= 0 {
             let mut opcode = 0
@@ -749,6 +759,10 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
             if op == "SETGE" { opcode = 0x9d }
             if op == "SETLE" { opcode = 0x9e }
             if op == "SETG"  { opcode = 0x9f }
+            if op == "SETA"  { opcode = 0x97 }
+            if op == "SETAE" { opcode = 0x93 }
+            if op == "SETB"  { opcode = 0x92 }
+            if op == "SETBE" { opcode = 0x96 }
             if rd <= 3 {
                 return [0x0f, opcode, 0xc0 | (rd & 0x7)]
             }
@@ -777,6 +791,19 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
             let rex = _ex86_rex(1, if rd >= 8 { 1 } else { 0 }, 0,
                                     if rs >= 8 { 1 } else { 0 })
             return [rex, 0x0f, 0xaf, 0xc0 | ((rd & 0x7) << 3) | (rs & 0x7)]
+        }
+    }
+    // R2d: conditional move CMOVcc r64, r64 — REX.W 0F 4x /r (reg = DEST,
+    // rm = SRC), same reg-is-dest form as IMUL64 (0F AF). CMOVE 44 · CMOVNE 45.
+    if (op == "CMOVE64" || op == "CMOVNE64") && len(ops) == 2 {
+        let rd = _ex86_reg64(ops[0])
+        let rs = _ex86_reg64(ops[1])
+        if rd >= 0 && rs >= 0 {
+            let mut cc = 0x44
+            if op == "CMOVNE64" { cc = 0x45 }
+            let rex = _ex86_rex(1, if rd >= 8 { 1 } else { 0 }, 0,
+                                    if rs >= 8 { 1 } else { 0 })
+            return [rex, 0x0f, cc, 0xc0 | ((rd & 0x7) << 3) | (rs & 0x7)]
         }
     }
     // IMUL r64, r64, imm32 — REX.W + 69 /r id (7 B). reg = DEST, rm = SRC,
@@ -2558,6 +2585,11 @@ fn _lir_op_uppercase_x86(op: string, ops: [LOperand]) -> string {
     if op == "jge" { return "JGE_REL8" }
     if op == "jle" { return "JLE_REL8" }
     if op == "jg"  { return "JG_REL8" }
+    // R2d: unsigned conditional branches.
+    if op == "ja"  { return "JA_REL8" }
+    if op == "jae" { return "JAE_REL8" }
+    if op == "jb"  { return "JB_REL8" }
+    if op == "jbe" { return "JBE_REL8" }
     // setcc — kept lowercase in LIR, uppercased here.
     if op == "sete"  { return "SETE" }
     if op == "setne" { return "SETNE" }
@@ -2565,6 +2597,13 @@ fn _lir_op_uppercase_x86(op: string, ops: [LOperand]) -> string {
     if op == "setge" { return "SETGE" }
     if op == "setle" { return "SETLE" }
     if op == "setg"  { return "SETG" }
+    // R2d: unsigned/float setcc + conditional move.
+    if op == "seta"  { return "SETA" }
+    if op == "setae" { return "SETAE" }
+    if op == "setb"  { return "SETB" }
+    if op == "setbe" { return "SETBE" }
+    if op == "cmove"  { return "CMOVE64" }
+    if op == "cmovne" { return "CMOVNE64" }
     if op == "movzx" { return "MOVZX" }
     if op == "idiv"  { return "IDIV64" }    // 64-bit-only in encoder
     if op == "test"  { return "TEST64" }    // 64-bit-only in encoder
@@ -2691,7 +2730,9 @@ fn _pack_fn_x86(out_text: [Int],
         let is_cc = (ins.op == "je"  || ins.op == "jz"  ||
                      ins.op == "jne" || ins.op == "jnz" ||
                      ins.op == "jl"  || ins.op == "jge" ||
-                     ins.op == "jle" || ins.op == "jg")
+                     ins.op == "jle" || ins.op == "jg"  ||
+                     ins.op == "ja"  || ins.op == "jae" ||
+                     ins.op == "jb"  || ins.op == "jbe")
         if is_cc && len(ins.args) == 1 && ins.args[0].kind == "label" {
             let cur_off = len(out_text)
             let up = _lir_op_uppercase_x86(ins.op, ins.args)
