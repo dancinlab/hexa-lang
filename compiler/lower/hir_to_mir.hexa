@@ -5823,6 +5823,62 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 }
                 ctx2 = _push_stmt_to(ctx2, cur_block_id, br)
                 ctx2 = _add_edge(ctx2, cur_block_id, arm_id)
+            } else if pat.kind == "unop" && pat.text == "-" && len(pat.children) == 1
+                      && (pat.children[0].kind == "literal_int"
+                          || pat.children[0].kind == "literal_float") {
+                // HEXA-OWN axis-① — negative-literal pattern `match n { -1 -> … }`.
+                // The parser emits `-1` / `-1.0` as a unop (unary minus, pat.text
+                // "-") over a literal_int / literal_float inner child — not a signed
+                // literal token — so this shape previously fell to the HX1102 `else`
+                // below: a fatal S2 abort (main.hexa exit(1)) that forced a
+                // C-transpile punt even though the emitted compare is identical to
+                // the fallback. Fold the unary minus to a single negative constant
+                // (mirroring the unop value-fold at :3607 — int `0 - v`, float IEEE
+                // sign-bit flip) and reuse the exact literal_int / literal_float
+                // clone body below (STMT_BINOP `==` compare + STMT_BR_COND + edges).
+                // Byte-neutral: programs without negative-literal arms never reach
+                // here and the C-transpile path never runs hir_to_mir, so byteeq
+                // stays bit-identical.
+                let inner = pat.children[0]
+                let mut ctx3 = _fresh_local(ctx2, pat.typ, "lit_eq")
+                let cmp_dst = _lr_locals[len(_lr_locals) - 1]
+                let mut cmp_args: [Operand] = []
+                cmp_args.push(scrut_op)
+                if inner.kind == "literal_int" {
+                    cmp_args.push(_const_int_op(0 - _parse_int(inner.text)))
+                } else {
+                    // literal_float: negate exactly by flipping the IEEE-754 sign
+                    // bit (bit 63) — matches the unop value-fold at :3611 so `-0.0`
+                    // / `-Inf` / `-NaN` literal patterns negate bit-exactly. Thread
+                    // the source text ("-" + inner text) so the codegen float-pool
+                    // keeps full `.double` precision, as the literal_float arm does.
+                    let SIGN_BIT: i64 = 1 << 63
+                    let neg_bits = float_to_bits(to_float(inner.text)) ^ SIGN_BIT
+                    cmp_args.push(_const_float_op_with_text(bits_to_float(neg_bits), "-" + inner.text))
+                }
+                let cmp = Stmt {
+                    kind: STMT_BINOP,
+                    dst: cmp_dst,
+                    op: "==",
+                    args: cmp_args,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx3 = _push_stmt(ctx3, cmp)
+                let mut br_args: [Operand] = []
+                br_args.push(_local_op(cmp_dst.id))
+                let br = Stmt {
+                    kind: STMT_BR_COND,
+                    dst: _miss_local(),
+                    op: "",
+                    args: br_args,
+                    target_block: arm_id,
+                    target_block_else: next_id
+                }
+                ctx3 = _push_stmt(ctx3, br)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, arm_id)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, next_id)
+                ctx2 = ctx3
             } else {
                 // Stage1 punch list C10 — truly unknown pattern shape.
                 // Emit HX1102 with the kind so the gap surfaces, then fall
