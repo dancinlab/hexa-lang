@@ -523,6 +523,60 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
             return [rex, 0x39, 0xc0 | ((rs & 0x7) << 3) | (rd & 0x7)]
         }
     }
+    // ③: 64-bit IMUL. The encoder had NO imul form of any kind, so the native
+    // object walker silently dropped every `imul` as zero bytes (:1188 "silent
+    // on unsupported ops") → ALL multiplies acted as identity on the
+    // `--backend=native --emit=obj` route (measured churn:199 for
+    // c2_stack_locals; the asm-text/`as` route was already correct). Intel SDM
+    // Vol.2A. UNLIKE ADD64/SUB64 (01/29 /r, dst in ModRM.rm), IMUL's 2-operand
+    // forms put DST in ModRM.reg and SRC in rm — REX.R extends dst, REX.B
+    // extends src (the field roles are reversed vs the add/sub idiom).
+    // IMUL64 dst, src, #imm32 — REX.W + 69 /r id (3-operand; magicdiv remainder
+    // + index scaling). e.g. imul rax, rdx, 7.
+    if op == "IMUL64" && len(ops) == 3 && ops[2].substring(0, 1) == "#" {
+        let rd = _ex86_reg64(ops[0])
+        let rs = _ex86_reg64(ops[1])
+        let imm = _ex86_imm(ops[2])
+        if rd >= 0 && rs >= 0 {
+            let rex = _ex86_rex(1, if rd >= 8 { 1 } else { 0 }, 0,
+                                    if rs >= 8 { 1 } else { 0 })
+            return [rex, 0x69, 0xc0 | ((rd & 0x7) << 3) | (rs & 0x7),
+                    imm & 0xff, (imm >> 8) & 0xff,
+                    (imm >> 16) & 0xff, (imm >> 24) & 0xff]
+        }
+    }
+    // IMUL64 dst, #imm32 — GAS 2-operand alias `imul dst, imm` = dst *= imm
+    // (69 /r, reg field == rm field == dst). e.g. imul r14, 2.
+    if op == "IMUL64" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
+        let rd = _ex86_reg64(ops[0])
+        let imm = _ex86_imm(ops[1])
+        if rd >= 0 {
+            let rex = _ex86_rex(1, if rd >= 8 { 1 } else { 0 }, 0,
+                                    if rd >= 8 { 1 } else { 0 })
+            return [rex, 0x69, 0xc0 | ((rd & 0x7) << 3) | (rd & 0x7),
+                    imm & 0xff, (imm >> 8) & 0xff,
+                    (imm >> 16) & 0xff, (imm >> 24) & 0xff]
+        }
+    }
+    // IMUL64 dst, src — REX.W + 0F AF /r (dst=ModRM.reg, src=rm).
+    // e.g. imul r10, r15 → 4d 0f af d7.
+    if op == "IMUL64" && len(ops) == 2 {
+        let rd = _ex86_reg64(ops[0])
+        let rs = _ex86_reg64(ops[1])
+        if rd >= 0 && rs >= 0 {
+            let rex = _ex86_rex(1, if rd >= 8 { 1 } else { 0 }, 0,
+                                    if rs >= 8 { 1 } else { 0 })
+            return [rex, 0x0f, 0xaf, 0xc0 | ((rd & 0x7) << 3) | (rs & 0x7)]
+        }
+    }
+    // IMUL64 r64 — REX.W + F7 /5 (RDX:RAX = RAX * r/m64; magicdiv widening mul).
+    if op == "IMUL64" && len(ops) == 1 {
+        let rd = _ex86_reg64(ops[0])
+        if rd >= 0 {
+            let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
+            return [rex, 0xf7, 0xc0 | (5 << 3) | (rd & 0x7)]
+        }
+    }
     // ③-R2e: XOR r32, r32 — 31 /r (2 B, no REX). The codegen's div / neg
     // prep emits the `xor eax, eax` / `xor edx, edx` zeroing idiom (32-bit),
     // which the uppercase map routes to bare `XOR` (is64=false); without this
@@ -2869,6 +2923,11 @@ fn _lir_op_uppercase_x86(op: string, ops: [LOperand]) -> string {
     if op == "cmovne" { return "CMOVNE64" }
     if op == "movzx" { return "MOVZX" }
     if op == "idiv"  { return "IDIV64" }    // 64-bit-only in encoder
+    if op == "imul"  { return "IMUL64" }    // 64-bit-only in encoder — all
+                                            // forms (3-op imm, 2-op imm/reg,
+                                            // 1-op widening); the object walker
+                                            // silently dropped `imul` as zero
+                                            // bytes before this mapping existed.
     if op == "test"  { return "TEST64" }    // 64-bit-only in encoder
 
     // Width-dispatched ops — detect 64-bit operand by reg name prefix
