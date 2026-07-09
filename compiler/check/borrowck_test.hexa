@@ -448,6 +448,23 @@ fn _src_fp_ret_proj_temp() -> string {
     return s
 }
 
+// CONTROL (round12 FP guard) — projection over a REFERENCE-typed PARAM
+// (`return &p.x` where `p: &P`): `&p.x` borrows p's referent, which is
+// caller-provided storage that OUTLIVES the call — rustc ACCEPTS it (it is NOT
+// a function-local escape). The base-walk head is the ident `p`, and
+// `_mir_lookup_global(p) < 0` (a param, not a global), so WITHOUT the ref-param
+// guard the rung wrongly fires HX3019 — and STRICT re-bands the canonical
+// accessor pattern (`return &self.field` / `return &p.field`) to a
+// build-refusing Error. `_bck_is_ref_param` recognises `p`'s `&P` type and
+// keeps this SILENT → 0.
+fn _src_fp_ret_proj_refparam() -> string {
+    let mut s = "struct P { x: i64 }\n"
+    s = s + "fn rprp(p: &P) -> &i64 {\n"
+    s = s + "    return &p.x\n"
+    s = s + "}\n"
+    return s
+}
+
 // HX3019 probe runner — mirrors `_run_probe` but keys on HX3019 (the
 // return-borrow code) and asserts every OTHER code is 0 (probe hygiene).
 // STRICT re-bands HX3019 to Error, so the error-band count must equal the
@@ -2811,6 +2828,9 @@ fn main() {
         if !_run_ret_probe("hz_ret_proj_nested", _src_hz_ret_proj_nested(), 1) { ok = false }
         if !_run_ret_probe("fp_ret_proj_global", _src_fp_ret_proj_global(), 0) { ok = false }
         if !_run_ret_probe("fp_ret_proj_temp", _src_fp_ret_proj_temp(), 0) { ok = false }
+        // round12 FP guard — `return &p.x` where `p: &P` (reference param):
+        // borrows p's referent, which outlives the call → rustc ACCEPTS → 0.
+        if !_run_ret_probe("fp_ret_proj_refparam", _src_fp_ret_proj_refparam(), 0) { ok = false }
         // HEXA-OWN E2+E3 — borrow-conflict (HX3021, Rust E0502) + E3.9 E0499
         // split (HX3028). Hazards → ×1 ON, controls → 0. shared-while-mut stays
         // HX3021; mut-while-mut MIGRATED to HX3028 (asserts HX3021=0). OFF sweep

@@ -617,6 +617,21 @@ pub let mut _bck_own_pidx: [i64] = []
 // that keeps HX3040 (E0505 at the non-call move sites) from firing on an
 // ordinary hexa handle-copy `let b = a`. Never reset per-fn (map is global).
 pub let mut _bck_own_pnames: [string] = []
+// HEXA-OWN round12 (HX3019 FP guard) — reference-typed PARAM registry (module
+// lifetime, paired fn-name / param-name columns, built in the same lower_hir
+// pre-pass that fills `_bck_own_*`). A param whose declared type is a borrow
+// (`&P` / `&mut P`) lowers to HIR `Type{kind:"named:&…"}` (ast_to_hir
+// `_hir_lower_type_ref` name-fold); this column records those param names so the
+// E0515 projection rung can distinguish a borrow THROUGH a reference param
+// (`return &p.x` — carries p's referent lifetime, which OUTLIVES the call, so
+// rustc ACCEPTS it) from a borrow into an OWNED function-local (`return &loc.x`
+// — dangles). Only PARAMS are recorded, never ref-typed LOCALS: a `let r = &x`
+// local may point at another function-local, so skipping it would be UNSOUND
+// (false negative); a reference PARAM's referent is caller-provided and always
+// outlives the call. Never reset per-fn (map is global). Populated only under
+// `_bck_on`, so the flag-OFF path never touches it (byteeq-neutral).
+pub let mut _bck_refp_fns: [string] = []
+pub let mut _bck_refp_names: [string] = []
 // HEXA-OWN round9 (HX3040) — name of the fn currently being lowered, set in the
 // per-fn setup (gated on `_bck_on`). Read ONLY inside `_bck_active`-gated code
 // (`_bck_is_own_binding`), so the flag-OFF path never touches it (byteeq-neutral).
@@ -928,6 +943,22 @@ fn _bck_is_own_binding(fn_name: string, name: string) -> bool {
     let mut i = 0
     while i < len(_bck_own_fns) {
         if _bck_own_fns[i] == fn_name && _bck_own_pnames[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// HEXA-OWN round12 (HX3019 FP guard) — is bare ident `name` a REFERENCE-typed
+// param (`&P` / `&mut P`) of top-level fn `fn_name`? Reads the module-lifetime
+// ref-param registry built in the lower_hir pre-pass. This is the E0515
+// projection-rung silencing gate: `return &p.x` where `p: &P` borrows p's
+// referent (caller storage that outlives the call), NOT a function-local, so
+// rustc ACCEPTS it — the rung must stay silent. Owned locals (`&loc.x`) and
+// owned params (`&p.x` where `p: P`) are absent from this map and still fire.
+fn _bck_is_ref_param(fn_name: string, name: string) -> bool {
+    let mut i = 0
+    while i < len(_bck_refp_fns) {
+        if _bck_refp_fns[i] == fn_name && _bck_refp_names[i] == name { return true }
         i = i + 1
     }
     return false
@@ -4687,8 +4718,21 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                         && len(_bk_head.children) > 0 {
                         _bk_head = _bk_head.children[0]
                     }
+                    // round12 FP guard (adversarial-review fix): a borrow THROUGH
+                    // a reference-typed PARAM (`return &p.x` where `p: &P`) carries
+                    // p's referent lifetime — caller storage that OUTLIVES the call
+                    // — so rustc ACCEPTS it (it is NOT a function-local escape).
+                    // Skip the emit when the base-walk head is a reference param of
+                    // the current fn; owned locals (`&loc.x`) and owned params
+                    // (`&p.x`, `p: P`) are absent from the ref-param map and still
+                    // fire. Only PARAMS are skipped, never ref-typed LOCALS (a
+                    // `let r = &local` may point at a function-local, so skipping it
+                    // would be an unsound false negative). Without this guard STRICT
+                    // re-bands the canonical accessor pattern (`return &self.field`
+                    // / `return &p.field`) to a build-refusing Error.
                     if _bk_head.kind == "ident"
-                        && _mir_lookup_global(ctx2, _bk_head.text) < 0 {
+                        && _mir_lookup_global(ctx2, _bk_head.text) < 0
+                        && !_bck_is_ref_param(_bck_cur_fn, _bk_head.text) {
                         _bck_emit_ret_escape(_bk_head.text, _bk_head.text,
                                              e.span.line, e.span)
                     }
@@ -8323,6 +8367,11 @@ pub fn lower_hir(module: HModule) -> MModule {
     // omitting this desyncs the arrays so `_bck_is_own_binding` reads a stale
     // name row against a fresh fn row.
     _bck_own_pnames = []
+    // round12 (HX3019 FP guard) — reset the reference-typed-param registry in
+    // lockstep (module-lifetime, rebuilt per lower_hir); omitting this leaks a
+    // stale fn's ref-param names into the next module's projection-rung gate.
+    _bck_refp_fns = []
+    _bck_refp_names = []
     // Two-pass: collect all module-level globals first so every fn body
     // can resolve any global by name regardless of textual order
     // (parser may put `fn main` before or after a `let mut g = …`).
@@ -8446,6 +8495,34 @@ pub fn lower_hir(module: HModule) -> MModule {
                         }
                     }
                     _bk_oi = _bk_oi + 1
+                }
+            }
+            // HEXA-OWN round12 (HX3019 FP guard) — reference-typed-param pre-pass.
+            // Walk this fn's `param_names` annotation (index-aligned with
+            // `fit.sig_params`, both built in the same ast_to_hir loop) and record
+            // (fn, param-name) for every param whose lowered HIR type is a borrow
+            // — kind `"named:&P"` / `"named:&mut P"` (the ast_to_hir name-fold of
+            // the parser's `&T` type). The E0515 projection rung reads this via
+            // `_bck_is_ref_param` to stay SILENT on `return &p.x` (p a reference
+            // param — its referent outlives the call) while still firing on
+            // owned-local / owned-param projections. Gated on `_bck_on`; with no
+            // `&`-typed params the map stays empty and the rung is unchanged.
+            if _bck_on {
+                let mut _bk_rpi = 0
+                while _bk_rpi < len(fit.annotations) {
+                    let _bk_rpa = fit.annotations[_bk_rpi]
+                    if _bk_rpa.name == "param_names" {
+                        let mut _bk_rq = 0
+                        while _bk_rq < len(_bk_rpa.args) && _bk_rq < len(fit.sig_params) {
+                            let _bk_rpk = fit.sig_params[_bk_rq].kind
+                            if len(_bk_rpk) >= 7 && _bk_rpk.substring(0, 7) == "named:&" {
+                                _bck_refp_fns.push(fit.name.substring(0, len(fit.name)))
+                                _bck_refp_names.push(_bk_rpa.args[_bk_rq].text)
+                            }
+                            _bk_rq = _bk_rq + 1
+                        }
+                    }
+                    _bk_rpi = _bk_rpi + 1
                 }
             }
         }
