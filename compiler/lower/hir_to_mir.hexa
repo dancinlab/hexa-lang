@@ -410,6 +410,20 @@ pub let mut _lr_globals: [Local] = []
 pub let mut _lr_fn_ref_names: [string] = []
 pub let mut _lr_fn_ref_arities: [i64] = []
 
+// PERF (whole-module O(refs·globals) kill — mirror of the _x86_strtab /
+// _arm64_strtab 64-bucket FNV name index, both documented byte-eq NEUTRAL):
+// `_mir_lookup_global` was a forward linear scan over the ENTIRE module
+// globals table (`_lr_globals`, never reset — module-wide read-only), run for
+// every non-local identifier during lowering. On a self-compile (thousands of
+// top-level fns/globals × tens of thousands of name resolutions) that is
+// O(N²). A 64-bucket hash index, built ONCE right after `_lr_globals` is
+// published and holding names in ASCENDING global-index order, makes each
+// probe O(bucket) and returns the SAME first-by-index id the scan would —
+// byte-eq NEUTRAL. Empty until primed; `_mir_lookup_global` falls back to the
+// legacy full scan when the index is not 64-wide (any pre-publish probe).
+pub let mut _lr_gidx_keys: [[string]] = []
+pub let mut _lr_gidx_ids:  [[i64]]    = []
+
 // ── defer state (HEXA-OWN M1 — native port of gen2's flags+goto) ─────
 // Mirrors self/codegen.hexa `_gen2_defer_bodies` / `_gen2_defer_flag_count`
 // (2739-2740): _lower_fn pre-scans the fn's HIR body for "defer" nodes.
@@ -3239,7 +3253,39 @@ fn _mir_lookup(ctx: LowerCtx, name: string) -> i64 {
 // local/param binding matches). Returns the global id (== index into
 // MModule.globals matching the module-scope `_lr_globals`) or -1 if not
 // a global.
+// FNV-1a 32-bit fold reduced to 64 buckets — copy of `_x86_strtab_hash`
+// (`% 4294967296` keeps the i64 multiply overflow-free). Index-only, so any
+// stable partition is byte-eq NEUTRAL.
+fn _lr_gname_hash(s: string) -> i64 {
+    let mut h: i64 = 2166136261
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        h = (h ^ s.char_code_at(i)) * 16777619
+        h = h % 4294967296
+        i = i + 1
+    }
+    let mut b = h % 64
+    if b < 0 { b = b + 64 }
+    return b
+}
+
 fn _mir_lookup_global(ctx: LowerCtx, name: string) -> i64 {
+    // PERF: O(bucket) probe when the index is primed. Buckets hold names in
+    // ascending global-index order (build appends in `_lr_globals` order), so
+    // the first match is the lowest-index one — identical to the legacy
+    // forward scan below. Falls back to that scan when the index is not built.
+    if len(_lr_gidx_keys) == 64 {
+        let b = _lr_gname_hash(name)
+        let bucket = _lr_gidx_keys[b]
+        let bids   = _lr_gidx_ids[b]
+        let mut j = 0
+        while j < len(bucket) {
+            if bucket[j] == name { return bids[j] }
+            j = j + 1
+        }
+        return -1
+    }
     let mut i = 0
     while i < len(_lr_globals) {
         if _lr_globals[i].name_hint == name {
@@ -8165,6 +8211,34 @@ pub fn lower_hir(module: HModule) -> MModule {
     // _lower_fn / closure body resolves them via `_lr_globals` without
     // threading a per-ctx `globals` array.
     _lr_globals = globals
+    // PERF (whole-module O(refs·globals) → O(bucket) — mirror of the
+    // _x86_strtab 64-bucket FNV index, byte-eq NEUTRAL): prime the
+    // global-name → id hash index INLINE here — the SAME lower_hir frame that
+    // built `globals` (mark_top==0 → heap), so the module-scope buckets are
+    // heap-resident, not arena-dangling (see the _lr_ctx_clear handle-vs-buffer
+    // note; a nested helper would dangle on frame rewind). Names append in
+    // ascending `_lr_globals` index order, so a bucket probe returns the
+    // lowest-index match — identical to the legacy forward scan.
+    let mut _gk: [[string]] = []
+    let mut _gi: [[i64]]    = []
+    let mut _gb = 0
+    while _gb < 64 {
+        let _ek: [string] = []
+        let _ei: [i64]    = []
+        _gk.push(_ek)
+        _gi.push(_ei)
+        _gb = _gb + 1
+    }
+    let mut _gp = 0
+    while _gp < len(_lr_globals) {
+        let _gnm = _lr_globals[_gp].name_hint
+        let _gh  = _lr_gname_hash(_gnm)
+        _gk[_gh] = _gk[_gh].push(_gnm)
+        _gi[_gh] = _gi[_gh].push(_lr_globals[_gp].id)
+        _gp = _gp + 1
+    }
+    _lr_gidx_keys = _gk
+    _lr_gidx_ids  = _gi
     // ── fn-ref-as-value pre-pass: collect top-level fn names + arities ──
     // Runs BEFORE the body-lowering loop so a fn used as a value (e.g.
     // `thread_spawn(worker, 1)`) resolves even when referenced before its
