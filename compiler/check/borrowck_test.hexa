@@ -385,6 +385,86 @@ fn _src_fp_ref_killed() -> string {
     return s
 }
 
+// ── HEXA-OWN round12 — HX3019 E0515 PROJECTION variant. `return &local.field`
+// / `return &local[i]` (and nested `&a.b.c`) borrows into a function-local
+// through a field/index projection → HX3019 (same code as the bare-ident base:
+// rustc E0515 "cannot return reference to local variable"). `return &g.field`
+// over a module GLOBAL and `return &make().f` over a temporary head stay
+// SILENT. Runs on the SAME `_run_ret_probe` (keys on HX3019). ──
+
+// HAZARD — return a reference to a FIELD projection of a function-local.
+fn _src_hz_ret_proj_field() -> string {
+    let mut s = "struct P { x: i64 }\n"
+    s = s + "fn rpf() -> &i64 {\n"
+    s = s + "    let p = P { x: 1 }\n"
+    s = s + "    return &p.x\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — return a reference to an INDEX projection of a function-local.
+fn _src_hz_ret_proj_index() -> string {
+    let mut s = "fn rpi() -> &i64 {\n"
+    s = s + "    let a = [1, 2, 3]\n"
+    s = s + "    return &a[0]\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD — nested field-of-field projection walks down to the head local.
+fn _src_hz_ret_proj_nested() -> string {
+    let mut s = "struct Inner { v: i64 }\n"
+    s = s + "struct Outer { inner: Inner }\n"
+    s = s + "fn rpn() -> &i64 {\n"
+    s = s + "    let o = Outer { inner: Inner { v: 1 } }\n"
+    s = s + "    return &o.inner.v\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — projection over a module GLOBAL: the head is a global, its storage
+// outlives the call (`_mir_lookup_global >= 0`) → SILENT, identical global-skip
+// to the bare-ident and HX3041 arms.
+fn _src_fp_ret_proj_global() -> string {
+    let mut s = "struct P { x: i64 }\n"
+    s = s + "let g = P { x: 0 }\n"
+    s = s + "fn rpg() -> &i64 {\n"
+    s = s + "    return &g.x\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — projection over a TEMPORARY head (`&make().f`): the base-walk head
+// is a `call`, not an ident, so no named local base is derived → SILENT here
+// (left to HX3041's temp classifier; asserted 0-HX3019 by the probe).
+fn _src_fp_ret_proj_temp() -> string {
+    let mut s = "struct P { x: i64 }\n"
+    s = s + "fn mk() -> P {\n"
+    s = s + "    return P { x: 1 }\n"
+    s = s + "}\n"
+    s = s + "fn rpt() -> &i64 {\n"
+    s = s + "    return &mk().x\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL (round12 FP guard) — projection over a REFERENCE-typed PARAM
+// (`return &p.x` where `p: &P`): `&p.x` borrows p's referent, which is
+// caller-provided storage that OUTLIVES the call — rustc ACCEPTS it (it is NOT
+// a function-local escape). The base-walk head is the ident `p`, and
+// `_mir_lookup_global(p) < 0` (a param, not a global), so WITHOUT the ref-param
+// guard the rung wrongly fires HX3019 — and STRICT re-bands the canonical
+// accessor pattern (`return &self.field` / `return &p.field`) to a
+// build-refusing Error. `_bck_is_ref_param` recognises `p`'s `&P` type and
+// keeps this SILENT → 0.
+fn _src_fp_ret_proj_refparam() -> string {
+    let mut s = "struct P { x: i64 }\n"
+    s = s + "fn rprp(p: &P) -> &i64 {\n"
+    s = s + "    return &p.x\n"
+    s = s + "}\n"
+    return s
+}
+
 // HX3019 probe runner — mirrors `_run_probe` but keys on HX3019 (the
 // return-borrow code) and asserts every OTHER code is 0 (probe hygiene).
 // STRICT re-bands HX3019 to Error, so the error-band count must equal the
@@ -2740,6 +2820,17 @@ fn main() {
         if !_run_ret_probe("fp_ref_no_escape", _src_fp_ref_no_escape(), 0) { ok = false }
         if !_run_ret_probe("fp_ret_global_ref", _src_fp_ret_global_ref(), 0) { ok = false }
         if !_run_ret_probe("fp_ref_killed", _src_fp_ref_killed(), 0) { ok = false }
+        // HEXA-OWN round12 — HX3019 E0515 PROJECTION variant. `return &local.field`
+        // / `return &local[i]` / nested `&a.b.c` → HX3019 ×1; `return &g.field`
+        // (global head) and `return &make().f` (temp head) stay SILENT → 0.
+        if !_run_ret_probe("hz_ret_proj_field", _src_hz_ret_proj_field(), 1) { ok = false }
+        if !_run_ret_probe("hz_ret_proj_index", _src_hz_ret_proj_index(), 1) { ok = false }
+        if !_run_ret_probe("hz_ret_proj_nested", _src_hz_ret_proj_nested(), 1) { ok = false }
+        if !_run_ret_probe("fp_ret_proj_global", _src_fp_ret_proj_global(), 0) { ok = false }
+        if !_run_ret_probe("fp_ret_proj_temp", _src_fp_ret_proj_temp(), 0) { ok = false }
+        // round12 FP guard — `return &p.x` where `p: &P` (reference param):
+        // borrows p's referent, which outlives the call → rustc ACCEPTS → 0.
+        if !_run_ret_probe("fp_ret_proj_refparam", _src_fp_ret_proj_refparam(), 0) { ok = false }
         // HEXA-OWN E2+E3 — borrow-conflict (HX3021, Rust E0502) + E3.9 E0499
         // split (HX3028). Hazards → ×1 ON, controls → 0. shared-while-mut stays
         // HX3021; mut-while-mut MIGRATED to HX3028 (asserts HX3021=0). OFF sweep
