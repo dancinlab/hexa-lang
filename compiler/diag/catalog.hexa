@@ -918,6 +918,25 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3051",
+        title: "unused assignment",
+        // Opt-in (HEXA_UNUSED_ASSIGN / `_unused_assign_on`-gated,
+        // compiler/check/bind.hexa) identifier-binding rung — SEPARATE flag from
+        // HX3050's HEXA_UNUSED_LET so HX3050's emitted stream is byte-identical
+        // when only HEXA_UNUSED_LET is set. WARNING band — rustc's
+        // `unused_assignments` is warn-by-default. Ships byteeq-NEUTRAL: the flag
+        // defaults OFF → the assign choke does not split a write-set, the sweep
+        // is skipped → nothing emitted, diag stream + .text byte-identical. The
+        // default-ON flip is a LATER phase (P4), gated on an offline corpus
+        // census (0 false-warn) + faithful×3 GREEN + install smoke — the same
+        // staged path as HX3047/HX3048/HX3050 (never promote on x86-only).
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "value assigned to `{name}` is never read",
+        explain: "Identifier-binding unused-ASSIGNMENT check (opt-in HEXA_UNUSED_ASSIGN / `_unused_assign_on`-gated, default OFF). NARROW rung of Rust's `unused_assignments` lint (warn-by-default, rustc_passes liveness — `let mut x = 1; x = 2;` with no later read of `x` warns 'value assigned to `x` is never read'). rustc computes unused_assignments from ONE backward liveness dataflow over an intra-procedural CFG (rustc_passes::liveness — an RWU read/write/used triple per Variable per LiveNode, Liveness::compute fixpoint): the FULL lint flags a SPECIFIC dead store even when the variable IS read elsewhere (the store is overwritten/dies before any read), which genuinely needs the per-program-point fixpoint (`live_on_exit`). The hexa NARROW rung is the DEGENERATE PROJECTION 'the variable is read at NO node' — a function-local `let mut` that is WRITTEN via a pure `=` reassignment but never READ anywhere — a purely SYNTACTIC 'no read-occurrence exists' test needing NO CFG/fixpoint. It reuses the HX3050 candidate lane (compiler/check/bind.hexa, the S2 identifier resolver) with ONE addition: at the assign choke, a PURE `=` (the parser tags compound `+= -= *= /=` with a different `.text`, parser.hexa parse_assignment, so a read-modify-write is distinguished) whose LHS is a BARE function-local Ident is recorded in a WRITTEN-set INSTEAD of descending the read choke — so a pure-write does NOT count as a use. At end-of-`bind()` a candidate present in the written-set AND absent from the read used-set is emitted as HX3051. Disjoint from HX3050 by a guard: when this lane is ON, a written-only local is owned by HX3051 and HX3050 means exactly 'never referenced at all' (absent from BOTH the read used-set and the written-set); the two lints never double-fire on one binding. FP=0 by resolver-completeness: a LOCAL binding has NO external linkage, so it is referenced ONLY via a source ident descending the single name-resolution choke ⇒ the read-set is complete for locals (the same argument HX3050 relies on), MINUS the write-as-use conflation. Every non-write reference stays a READ: compound-assign LHS (read-modify-write), field/index LHS (`a[i]=`, `p.f=` — the receiver ident is a place computation walked as a read), call-arg / closure-capture (resolves up the enclosing chain through the choke) / return all descend as reads; a `_`-prefixed name is the rustc escape hatch, EXCLUDED at the accumulate site. Only FUNCTION-LOCAL let-expr defines are candidates (params / for-iter / catch / match-binder / closure-param bind at different sites and are NOT accumulated). BAND: opt-in `_unused_assign_on` (HEXA_UNUSED_ASSIGN), Warning-band. Ships byteeq-neutral regardless: the flag defaults OFF so nothing is emitted and codegen .text is byte-identical; the default-ON flip is a follow-up (P4) gated on an offline corpus census + faithful×3 GREEN + install.sh consumer smoke (never promote on x86-only) — the same staged path as HX3050. NOTE: the FULL unused_assignments dead-store detection (a variable read elsewhere but THIS assignment overwritten before any read) is the fixpoint-requiring half and is a LARGE follow-up. Fix: remove the dead assignment to `{name}`, or use the assigned value (read `{name}` afterward).",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
