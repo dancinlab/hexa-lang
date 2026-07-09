@@ -3056,6 +3056,24 @@ fn _set_cur_block(ctx: LowerCtx, id: i64) -> LowerCtx {
 }
 
 fn _push_stmt_to(ctx: LowerCtx, block_id: i64, s: Stmt) -> LowerCtx {
+    // #self-emit-oom round-2: a block's id == its _lr_blocks index by construction
+    // (_new_block pushes ids monotonically 0,1,2,…; _lr_ctx_clear resets per fn), so
+    // a direct index is O(1) vs the O(blocks) scan below. The scan made lowering
+    // O(stmts·blocks) PER FN — a codegen-phase quadratic that dominated the self-emit
+    // wall on the compiler self-source's large fns (#4779 cleared the reloc-scan RSS
+    // creep; this clears the surviving compile-TIME phase). Guarded fast-path — the
+    // scan stays below as a provable-safety fallback (byte-eq identical placement).
+    if block_id >= 0 && block_id < len(_lr_blocks) && _lr_blocks[block_id].id == block_id {
+        _lr_blocks[block_id].stmts.push(s)
+        return LowerCtx {
+            next_local: ctx.next_local,
+            next_block: ctx.next_block,
+            next_arena: ctx.next_arena,
+            arena_root: ctx.arena_root,
+            cur_block: ctx.cur_block,
+            has_returned: ctx.has_returned
+        }
+    }
     let mut i = 0
     while i < len(_lr_blocks) {
         if _lr_blocks[i].id == block_id {
@@ -3089,6 +3107,23 @@ fn _push_stmt(ctx: LowerCtx, s: Stmt) -> LowerCtx {
 }
 
 fn _add_edge(ctx: LowerCtx, from_id: i64, to_id: i64) -> LowerCtx {
+    // #self-emit-oom round-2: direct-index both endpoints (id==_lr_blocks index
+    // invariant, see _push_stmt_to). The scan below walks ALL blocks per edge and
+    // never breaks → O(edges·blocks) per fn. Guarded fast-path; scan stays as the
+    // provable-safety fallback (byte-eq identical succ/pred placement).
+    let _nb = len(_lr_blocks)
+    if from_id >= 0 && from_id < _nb && _lr_blocks[from_id].id == from_id && to_id >= 0 && to_id < _nb && _lr_blocks[to_id].id == to_id {
+        _lr_blocks[from_id].succs.push(to_id)
+        _lr_blocks[to_id].preds.push(from_id)
+        return LowerCtx {
+            next_local: ctx.next_local,
+            next_block: ctx.next_block,
+            next_arena: ctx.next_arena,
+            arena_root: ctx.arena_root,
+            cur_block: ctx.cur_block,
+            has_returned: ctx.has_returned
+        }
+    }
     let mut i = 0
     while i < len(_lr_blocks) {
         // S1-step-2: in-place edge growth (see _push_stmt_to). `.succs` /
@@ -5296,6 +5331,31 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                     if _lr_locals[li].id == existing {
                         dst = _lr_locals[li]
                         did_reuse = true
+                        // FUSE soundness (m12 t5, x86 native): a reassign whose RHS is
+                        // NOT provably the stamped type falsifies the "statically-typed
+                        // local ⇒ invariant runtime tag" assumption the codegen tag fuse
+                        // reads (_x86_tag_resolve i64-local shortcut, x86_64_linux.hexa
+                        // :1385) — e.g. `let mut v = k` (stamps type_id=1) then `v =
+                        // "boom"+to_string(k)` kept type_id==1 while the tag became STR,
+                        // so len(v) read a fused TAG_INT → 0 != 5 → exit 46. WIDEN the
+                        // Local to 0 (unclassified) so every boxed reader loads the LIVE
+                        // tag slot (mirrors arm64's unconditional ldp). A provably-same-
+                        // type RHS (int literal / stamped-i64 local, `i = i + 1`) keeps
+                        // the stamp → the r5-unbox / element-pack perf lanes emit byte-
+                        // identically. Inline _lr_locals[li] = … per the producer pattern
+                        // (the helper must not mutate the module-global _lr_locals).
+                        if dst.type_id != 0 {
+                            let mut _rw_same = false
+                            if dst.type_id == 1 {
+                                _rw_same = _lr_operand_provably_i64(rr.operand)
+                            } else {
+                                _rw_same = _lr_type_of_op(rr.operand) == dst.type_id
+                            }
+                            if !_rw_same {
+                                _lr_locals[li] = _lr_rebuild_local_tid(dst, 0)
+                                dst = _lr_locals[li]
+                            }
+                        }
                         break
                     }
                     li = li + 1
