@@ -413,10 +413,38 @@ fn _ex86_mov_r32_imm32(reg_idx: Int, imm: Int) -> [Int] {
     return out
 }
 
+// PERF (self-emit x86_pack_lir O(n) constant kill — census measured this phase
+// at ~342s: encode RE-PARSED the operand strings _lir_operand_str_x86 had just
+// built from the LOperand struct). `sops` carries the same LOperand list so the
+// encoder reads imm/mem directly instead of char-scanning the string form. When
+// `sops` is empty (the 2-arg delegate below + all test callers) it falls back to
+// the string parse — byte-eq NEUTRAL by construction (sops[i].imm / mem_base /
+// mem_offset are exactly what _lir_operand_str_x86 stringified, so the parse and
+// the struct read return identical values).
+fn _ex86_imm_s(ops: [string], sops: [LOperand], i: Int) -> Int {
+    if len(sops) > i {
+        if sops[i].kind == "imm" { return sops[i].imm }
+    }
+    return _ex86_imm(ops[i])
+}
+fn _ex86_mem_s(ops: [string], sops: [LOperand], i: Int) -> [Int] {
+    if len(sops) > i {
+        if sops[i].kind == "mem" { return [_ex86_reg64(sops[i].mem_base.name), sops[i].mem_offset] }
+    }
+    return _ex86_parse_mem(ops[i])
+}
+
+// 2-arg delegate — preserves the public API for the 60+ test/self callers; the
+// hot self-emit path (_pack_fn_x86) calls the _sops variant with ins.args.
 pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
+    let sops: [LOperand] = []
+    return encode_x86_64_insn_sops(op, ops, sops)
+}
+
+pub fn encode_x86_64_insn_sops(op: string, ops: [string], sops: [LOperand]) -> [Int] {
     if op == "MOV" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
         let rd = _ex86_reg32(ops[0])
-        let imm = _ex86_imm(ops[1])
+        let imm = _ex86_imm_s(ops, sops, 1)
         if rd >= 0 { return _ex86_mov_r32_imm32(rd, imm) }
     }
     if op == "SYSCALL" { return [0x0f, 0x05] }
@@ -447,7 +475,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     // so ModR/M = 0b11_<ext>_<rm> = 0xc0 | (ext<<3) | r.
     if op == "ADD" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
         let rd = _ex86_reg32(ops[0])
-        let imm = _ex86_imm(ops[1])
+        let imm = _ex86_imm_s(ops, sops, 1)
         if rd >= 0 {
             let modrm = 0xc0 | (0 << 3) | rd     // /0
             return [0x81, modrm,
@@ -457,7 +485,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     }
     if op == "SUB" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
         let rd = _ex86_reg32(ops[0])
-        let imm = _ex86_imm(ops[1])
+        let imm = _ex86_imm_s(ops, sops, 1)
         if rd >= 0 {
             let modrm = 0xc0 | (5 << 3) | rd     // /5 = ModR/M reg=5
             return [0x81, modrm,
@@ -467,7 +495,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     }
     if op == "CMP" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
         let rd = _ex86_reg32(ops[0])
-        let imm = _ex86_imm(ops[1])
+        let imm = _ex86_imm_s(ops, sops, 1)
         if rd >= 0 {
             let modrm = 0xc0 | (7 << 3) | rd     // /7
             return [0x81, modrm,
@@ -510,7 +538,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     // CMP64 r64, #imm32 — REX.W + 81 /7 id (7 B). e.g. cmp r10, 0 → 49 81 fa 00 00 00 00
     if op == "CMP64" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
         let rd = _ex86_reg64(ops[0])
-        let imm = _ex86_imm(ops[1])
+        let imm = _ex86_imm_s(ops, sops, 1)
         if rd >= 0 {
             let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
             let modrm = 0xc0 | (7 << 3) | (rd & 0x7)
@@ -543,7 +571,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     if op == "IMUL64" && len(ops) == 3 && ops[2].substring(0, 1) == "#" {
         let rd = _ex86_reg64(ops[0])
         let rs = _ex86_reg64(ops[1])
-        let imm = _ex86_imm(ops[2])
+        let imm = _ex86_imm_s(ops, sops, 2)
         if rd >= 0 && rs >= 0 {
             let rex = _ex86_rex(1, if rd >= 8 { 1 } else { 0 }, 0,
                                     if rs >= 8 { 1 } else { 0 })
@@ -556,7 +584,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     // (69 /r, reg field == rm field == dst). e.g. imul r14, 2.
     if op == "IMUL64" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
         let rd = _ex86_reg64(ops[0])
-        let imm = _ex86_imm(ops[1])
+        let imm = _ex86_imm_s(ops, sops, 1)
         if rd >= 0 {
             let rex = _ex86_rex(1, if rd >= 8 { 1 } else { 0 }, 0,
                                     if rd >= 8 { 1 } else { 0 })
@@ -673,7 +701,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     // only large constants — previously wrong bytes — take the new path.
     if op == "MOV64" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
         let rd = _ex86_reg64(ops[0])
-        let imm = _ex86_imm(ops[1])
+        let imm = _ex86_imm_s(ops, sops, 1)
         if rd >= 0 {
             let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
             if imm > 2147483647 || imm < -2147483648 {
@@ -704,7 +732,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     // ADD r64, #imm32 — REX.W + 81 /0 id (7 B).
     if op == "ADD64" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
         let rd = _ex86_reg64(ops[0])
-        let imm = _ex86_imm(ops[1])
+        let imm = _ex86_imm_s(ops, sops, 1)
         if rd >= 0 {
             let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
             let modrm = 0xc0 | (0 << 3) | (rd & 0x7)
@@ -716,7 +744,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     // SUB r64, #imm32 — REX.W + 81 /5 id (7 B).
     if op == "SUB64" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
         let rd = _ex86_reg64(ops[0])
-        let imm = _ex86_imm(ops[1])
+        let imm = _ex86_imm_s(ops, sops, 1)
         if rd >= 0 {
             let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
             let modrm = 0xc0 | (5 << 3) | (rd & 0x7)
@@ -799,7 +827,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     // MOV64 r64, [base + disp] — REX.W + 8B /r
     if op == "MOV64" && len(ops) == 2 && ops[1].substring(0, 1) == "[" {
         let rd = _ex86_reg64(ops[0])
-        let mem = _ex86_parse_mem(ops[1])
+        let mem = _ex86_mem_s(ops, sops, 1)
         if rd >= 0 && mem[0] >= 0 {
             let base = mem[0]; let disp = mem[1]
             let rex = _ex86_rex(1, if rd   >= 8 { 1 } else { 0 }, 0,
@@ -814,7 +842,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     }
     // MOV64 [base + disp], r64 — REX.W + 89 /r
     if op == "MOV64" && len(ops) == 2 && ops[0].substring(0, 1) == "[" {
-        let mem = _ex86_parse_mem(ops[0])
+        let mem = _ex86_mem_s(ops, sops, 0)
         let rs = _ex86_reg64(ops[1])
         if rs >= 0 && mem[0] >= 0 {
             let base = mem[0]; let disp = mem[1]
@@ -831,7 +859,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     // MOV r32, [base + disp] — 8B /r (no REX.W)
     if op == "MOV" && len(ops) == 2 && ops[1].substring(0, 1) == "[" {
         let rd = _ex86_reg32(ops[0])
-        let mem = _ex86_parse_mem(ops[1])
+        let mem = _ex86_mem_s(ops, sops, 1)
         if rd >= 0 && mem[0] >= 0 {
             let base = mem[0]; let disp = mem[1]
             // REX needed only if base >= 8 (REX.B). Skip REX for low regs.
@@ -848,7 +876,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     }
     // MOV [base + disp], r32 — 89 /r (no REX.W)
     if op == "MOV" && len(ops) == 2 && ops[0].substring(0, 1) == "[" {
-        let mem = _ex86_parse_mem(ops[0])
+        let mem = _ex86_mem_s(ops, sops, 0)
         let rs = _ex86_reg32(ops[1])
         if rs >= 0 && mem[0] >= 0 {
             let base = mem[0]; let disp = mem[1]
@@ -866,7 +894,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     // LEA64 r64, [base + disp] — REX.W + 8D /r
     if op == "LEA64" && len(ops) == 2 && ops[1].substring(0, 1) == "[" {
         let rd = _ex86_reg64(ops[0])
-        let mem = _ex86_parse_mem(ops[1])
+        let mem = _ex86_mem_s(ops, sops, 1)
         if rd >= 0 && mem[0] >= 0 {
             let base = mem[0]; let disp = mem[1]
             let rex = _ex86_rex(1, if rd   >= 8 { 1 } else { 0 }, 0,
@@ -1141,7 +1169,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     if op == "IMUL64" && len(ops) == 3 && ops[2].substring(0, 1) == "#" {
         let rd = _ex86_reg64(ops[0])
         let rs = _ex86_reg64(ops[1])
-        let imm = _ex86_imm(ops[2])
+        let imm = _ex86_imm_s(ops, sops, 2)
         if rd >= 0 && rs >= 0 {
             let rex = _ex86_rex(1, if rd >= 8 { 1 } else { 0 }, 0,
                                     if rs >= 8 { 1 } else { 0 })
@@ -1182,7 +1210,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     if (op == "AND64" || op == "OR64" || op == "XOR64") && len(ops) == 2
        && ops[1].substring(0, 1) == "#" {
         let rd = _ex86_reg64(ops[0])
-        let imm = _ex86_imm(ops[1])
+        let imm = _ex86_imm_s(ops, sops, 1)
         if rd >= 0 {
             let mut ext = 4
             if op == "OR64"  { ext = 1 }
@@ -1199,7 +1227,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     if (op == "SHL64" || op == "SHR64" || op == "SAR64") && len(ops) == 2
        && ops[1].substring(0, 1) == "#" {
         let rd = _ex86_reg64(ops[0])
-        let imm = _ex86_imm(ops[1])
+        let imm = _ex86_imm_s(ops, sops, 1)
         if rd >= 0 {
             let mut ext = 4
             if op == "SHR64" { ext = 5 }
@@ -3483,7 +3511,9 @@ fn _pack_fn_x86(out_text: [Int],
             k = k + 1
         }
         let up = _lir_op_uppercase_x86(ins.op, ins.args)
-        let bs = encode_x86_64_insn(up, ops)
+        // PERF: pass the LOperand list so the encoder reads imm/mem from the
+        // struct instead of re-parsing the stringified operands (x86_pack_lir).
+        let bs = encode_x86_64_insn_sops(up, ops, ins.args)
         let mut bi = 0
         while bi < len(bs) { out_text.push(bs[bi]); bi = bi + 1 }
         i = i + 1
