@@ -49,6 +49,13 @@ let ELF_R_X86_64_NONE     = 0
 let ELF_R_X86_64_64       = 1
 let ELF_R_X86_64_PC32     = 2
 let ELF_R_X86_64_PLT32    = 4
+// R_X86_64_GOTPCREL = 9 — PC-relative offset to the symbol's GOT slot
+// (SysV AMD64 ABI §B.2 / §4.4.1 Table 4-11: word32, G + GOT + A - P).
+// Emitted for `mov reg, [rip+sym@GOTPCREL]` extern-data GOT loads
+// (codegen x86_64_linux.hexa: --shared globals + environ/stdout/stderr/
+// getenv address loads). The linker classifier already knows kind 9
+// (compiler/link/hexa_ld.hexa::_HEXA_LD_R_X86_64_GOTPCREL / elf_reloc_is_got_typed).
+let ELF_R_X86_64_GOTPCREL = 9
 
 struct ElfX86Obj {
     text:    [u8],
@@ -2911,8 +2918,9 @@ fn _ex86_data_label_of(s: string) -> string {
 
 // ③-3lane — strip a `[rip+<inner>]` wrapper; "" when not wrapped or when
 // the inner carries an `@` reloc suffix (`@GOTPCREL`/`@PLT` = GOT/PLT
-// reloc, NOT plain PC32 — those stay on the loud ENCODE-MISS path until
-// the GOT round).
+// reloc, NOT plain PC32). `@GOTPCREL` mov-loads are handled ahead of the
+// default by the FORM-1 arm (see `_ex86_gotpcrel_sym`); `@PLT` and any
+// other `@` shape still fall to the loud ENCODE-MISS.
 fn _ex86_rip_inner(s: string) -> string {
     let n = len(s)
     if n < 7 { return "" }
@@ -2925,6 +2933,32 @@ fn _ex86_rip_inner(s: string) -> string {
         j = j + 1
     }
     return inner
+}
+
+// FORM-1 GOTPCREL — extract `<sym>` from `[rip+<sym>@GOTPCREL]`, or ""
+// when the operand is not that exact wrapped form. Codegen emits this for
+// extern-data GOT loads (x86_64_linux.hexa: --shared `g<id>@GOTPCREL` +
+// the environ/stdout/stderr/getenv runtime address builtins), which the
+// `_ex86_rip_inner` / `_ex86_data_label_of` matchers deliberately reject
+// (they return "" on any `@`) so those loads fell to the loud ENCODE-MISS.
+// The suffix is a fixed literal "@GOTPCREL"; the symbol never embeds '@'.
+fn _ex86_gotpcrel_sym(s: string) -> string {
+    let n = len(s)
+    let suf = "@GOTPCREL]"
+    let sl = len(suf)
+    // Need at least "[rip+" + one sym char + "@GOTPCREL]".
+    if n < 5 + 1 + sl { return "" }
+    if s.substring(0, 5) != "[rip+" { return "" }
+    if s.substring(n - sl, n) != suf { return "" }
+    let sym = s.substring(5, n - sl)
+    if len(sym) == 0 { return "" }
+    // Reject any stray '@' inside the symbol (only the suffix may carry it).
+    let mut j = 0
+    while j < len(sym) {
+        if sym.substring(j, j + 1) == "@" { return "" }
+        j = j + 1
+    }
+    return sym
 }
 
 // ③-3lane — position of a trailing `+N`/`-N` addend in a wrapped inner
@@ -3115,6 +3149,7 @@ fn _lookup_label_x86(names: [string], offsets: [Int], target: string) -> Int {
 fn _pack_fn_x86(out_text: [Int],
                 pending_offsets: [Int], pending_names: [string],
                 data_offsets: [Int], data_names: [string], data_addends: [Int],
+                got_offsets: [Int], got_names: [string],
                 f: LFunc) {
     let label_names:     [string] = []
     let label_offsets:   [Int]    = []
@@ -3208,7 +3243,8 @@ fn _pack_fn_x86(out_text: [Int],
         // undef symbol literally named "g0+8"; wrapped STORES fell through
         // to ENCODE-MISS entirely (the module-global write never reached
         // the object). `@GOTPCREL`/`@PLT` inners are a DIFFERENT reloc →
-        // `_ex86_rip_inner` returns "" (still the loud miss).
+        // `_ex86_rip_inner` returns "" here; `@GOTPCREL` mov-loads are then
+        // caught by the FORM-1 arm below (Pass 4), `@PLT` stays a loud miss.
         if (ins.op == "mov" || ins.op == "lea") && len(ins.args) == 2
            && ins.args[0].kind == "reg" && ins.args[1].kind == "label" {
             let inner = _ex86_rip_inner(ins.args[1].label)
@@ -3243,6 +3279,34 @@ fn _pack_fn_x86(out_text: [Int],
                     data_offsets.push(cur_off + 3)
                     data_names.push(_ex86_sym_base(inner))
                     data_addends.push(_ex86_sym_addend(inner))
+                    i = i + 1
+                    continue
+                }
+            }
+        }
+
+        // ── FORM-1: extern-data GOT load `mov reg,[rip+sym@GOTPCREL]` ──
+        //   REX.W 8B /r  ModR/M(mod=00 reg=rd rm=101=RIP)  disp32=0
+        //   + R_X86_64_GOTPCREL(9) at the disp32 field, addend -4.
+        // The GOT slot holds the ADDRESS of `sym`; this is a VALUE load of
+        // that slot (opcode 0x8B), so `rd` receives `&sym`. Reference:
+        // SDM Vol.2A MOV (8B /r) + SysV AMD64 ABI §B.2 GOTPCREL (linker
+        // computes G+GOT+A-P). Codegen emits ONLY the `mov reg,…` form
+        // (x86_64_linux.hexa: --shared globals + environ/stdout/stderr/
+        // getenv), so we match mov+reg-dest only; any other `@GOTPCREL`
+        // shape stays a loud ENCODE-MISS (honest).
+        if ins.op == "mov" && len(ins.args) == 2
+           && ins.args[0].kind == "reg" && ins.args[1].kind == "label" {
+            let gsym = _ex86_gotpcrel_sym(ins.args[1].label)
+            if len(gsym) > 0 {
+                let rd = _ex86_reg64(ins.args[0].reg.name)
+                if rd >= 0 {
+                    let cur_off = len(out_text)
+                    let bs = _ex86_rip_rel_insn(0x8b, rd)  // mov r64,[rip+0]
+                    let mut bi = 0
+                    while bi < len(bs) { out_text.push(bs[bi]); bi = bi + 1 }
+                    got_offsets.push(cur_off + 3)          // disp32 field
+                    got_names.push(gsym)
                     i = i + 1
                     continue
                 }
@@ -3422,6 +3486,9 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
     let data_offsets:    [Int]    = []
     let data_names:      [string] = []
     let data_addends:    [Int]    = []
+    // FORM-1 GOTPCREL — disp32 sites of `mov reg,[rip+sym@GOTPCREL]` loads.
+    let got_offsets:     [Int]    = []
+    let got_names:       [string] = []
 
     let nf = len(lm.funcs)
     let mut i = 0
@@ -3430,7 +3497,8 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
         let fn_start = len(obj.text)
         let strx = _ew_str(obj.strtab, f.name)
         _pack_fn_x86(obj.text, pending_offsets, pending_names,
-                     data_offsets, data_names, data_addends, f)
+                     data_offsets, data_names, data_addends,
+                     got_offsets, got_names, f)
         // ElfSym pushed after packing so `size` is final (hexa rvalue
         // restriction prevents `obj.symbols[k].size = ...` patching).
         obj.symbols.push(ElfSym {
@@ -3601,6 +3669,52 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
             site_seg: 1,
         })
         dpi = dpi + 1
+    }
+
+    // ── Pass 4: extern-data GOT loads → R_X86_64_GOTPCREL reloc records ──
+    //
+    // Each got_* entry is the disp32 field of a `mov reg, [rip+0]` (opcode
+    // 0x8B) that loads a symbol's GOT slot. The referenced symbol is an
+    // extern data symbol (environ/stdout/stderr/getenv) or a --shared
+    // module global — either way the GOT entry is linker-synthesized, so
+    // NEVER pre-patch: emit one R_X86_64_GOTPCREL with addend -4 and let
+    // the linker compute G + GOT + A - P (SysV AMD64 ABI §B.2). An unknown
+    // symbol becomes an undef STB_GLOBAL extern, exactly like the CALL /
+    // data-ref passes. Shares the #3712 name→symtab-index memo cache.
+    let ng = len(got_offsets)
+    let mut gpi = 0
+    while gpi < ng {
+        let g_off = got_offsets[gpi]
+        let name  = got_names[gpi]
+        let mut idx = _symc_lookup(_symc_names, _symc_idx, name)
+        let was_cached = idx >= 0
+        if idx < 0 {
+            idx = _find_elf_sym_by_name(obj.symbols, obj.strtab, name)
+        }
+        if idx < 0 {
+            let strx = _ew_str(obj.strtab, name)
+            obj.symbols.push(ElfSym {
+                name_offset: strx,
+                section:     0,    // SHN_UNDEF
+                value:       0,
+                size:        0,
+                bind:        1,    // STB_GLOBAL
+                type_:       0,    // STT_NOTYPE
+            })
+            idx = len(obj.symbols) - 1
+        }
+        if !was_cached {
+            _symc_names.push(name)
+            _symc_idx.push(idx)
+        }
+        obj.relocs.push(ElfRel {
+            offset:  g_off,
+            sym_idx: idx,
+            kind:    ELF_R_X86_64_GOTPCREL,
+            addend:  -4,
+            site_seg: 1,
+        })
+        gpi = gpi + 1
     }
     return obj
 }
