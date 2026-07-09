@@ -79,7 +79,11 @@ typedef struct HexaMapTable {
 #endif
 } HexaMapTable;
 
-typedef struct HexaArr { HexaVal* items; int64_t len; int64_t cap; }    HexaArr; /* 64-bit len/cap: a >=4GB read_file_bytes buffer must not wrap (MUST match runtime_core.c) */
+typedef struct HexaArr { HexaVal* items; int64_t len; int64_t cap;
+#ifdef HEXA_ARR_HEAPIFY_WATER
+    int64_t heap_water; /* elements [0..heap_water) proven deep-heap; 0=unknown (MUST match runtime_core.c) */
+#endif
+}    HexaArr; /* 64-bit len/cap: a >=4GB read_file_bytes buffer must not wrap (MUST match runtime_core.c) */
 typedef struct HexaMap { HexaMapTable* tbl; int len; }                  HexaMap;
 typedef struct HexaFn  { void* fn_ptr; int arity; }                     HexaFn;
 typedef struct HexaClo { void* fn_ptr; int arity; HexaVal* env_box; }   HexaClo;
