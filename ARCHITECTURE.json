@@ -395,6 +395,13 @@
     "value": "darwin-arm64 native-build gate가 stale 러너 false-RED(PR #4790 PASS=0/FAIL=7 stdout=[]). 원인=mini-selfhost ~/.hx/bin/hexad v0.574.1 stale dispatch→HEXA_NATIVE_BUILD 무시·clang fallback·stale codegen print()+exit() no-fflush 빈출력. native emit 자체는 건강. gate stale분류기가 link-undefined만 잡아 build-clean stale dispatch 놓침. verdict-integrity: 측정경로가 실제 native path냐 먼저 검증.",
     "threshold": "재발조건=selfhost_native_build_gate RED인데 산출바이너리가 native 아님(libsodium/openssl=clang fallback). 해결=native-path assertion(probe otool-L/ldd에 libsodium 있으면 NEUTRAL·RED아님·#4792 MERGED). ops=stale러너 재프로비전. 연관=elf-x86-64-hexa-1.",
     "source": "tool/selfhost_native_build_gate"
+   },
+   {
+    "id": "codegen-hexa-2",
+    "state": "pos-conv",
+    "value": "#4800/#4801 SELFEMIT_PACK_OUT param-packing is a COMPILER-BREAKING regression, not a working RSS fix. self/codegen.hexa:3356-3374 registers EVERY [Int]/[i64]/[int]-typed PARAMETER as packed TAG_ARRAY_I64 + routes through hexa_arr_poly_*, on the source comment's false claim it is SOUND-for-a-BOXED-arg-too. FALSIFIED (pod, origin/main, clang-14): flag-ON aprime cannot compile trivial fn main(){exit(6*7)} -> 3x HX1101 unbound (main/x/exit); native self-emit --emit=obj over the 52-file closure SIGSEGVs after only front_begin at 632MB RSS (exit 139), NOT OOM and NOT the serialize RSS wall. OFF-path control PASSes (exit(42)==42), isolating the flag. Binder/scope/lexer [Int] params get ordinary boxed arrays; poly-reader routing corrupts them. My prior 'RSS 19GB->6.82GB confirmed, only wall-clock unmeasured' stamp was a verdict-integrity slip: measured an ISOLATED RSS probe, never a full flag-ON self-build+probe run-to-completion.",
+    "threshold": "Recurrence: any packing lever keyed on PARAMETER TYPE ([Int]/[i64]/[int]) not value-provenance corrupts boxed args. Resolution: narrow packing to the serialize out-accumulator lineage (value-provenance) OR make hexa_arr_poly_* readers runtime-tag-safe for boxed args. Discipline: never stamp a codegen flag working from an isolated RSS/micro measurement — require a full flag-ON self-build that compiles a trivial program AND runs the profiled self-emit to completion (x86_serialize).",
+    "source": "self/codegen.hexa"
    }
   ]
  },
