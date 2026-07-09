@@ -1071,7 +1071,9 @@ if stream_mode && target == "arm64-apple-darwin" {
     // "multi-target bootstrap: x86_64 codegen path".
     if (emit_kind == "obj" || emit_kind == "exec") && backend_kind == "native" && target == "x86_64-linux-gnu" {
         let elf_obj = pack_lir_x86_64(lmodule)
+        cg_profile_mark("x86_pack_lir")
         let elf_bytes = serialize_elf_x86_64(elf_obj)
+        cg_profile_mark("x86_serialize")
         if emit_kind == "obj" {
             write_bytes(out_path, elf_bytes)
             if verbose {
