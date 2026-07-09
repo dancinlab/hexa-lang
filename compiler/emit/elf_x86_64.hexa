@@ -3540,6 +3540,27 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
     // first-match index, just found via its hash bucket) — see _symh_hash.
     let mut _symh_names = _symh_empty_names()
     let mut _symh_idx   = _symh_empty_idx()
+    // #self-emit-round3: PRE-SEED the buckets from obj.symbols (one O(symbols)
+    // walk). #4779 bucketed only the HIT path — the FIRST resolution of each
+    // distinct name still ran the O(symbols) _find_elf_sym_by_name scan, i.e.
+    // O(distinct·symbols) ≈ 6e8 string-compares on the compiler self-source, and
+    // emit_asm never finished (aiden: RC=124). After this seed a bucket miss
+    // means the name has no def, so the fallback scan fires only once per distinct
+    // UNDEF name (~hundreds of true externs) — measured-negligible. Byte-eq
+    // NEUTRAL: first-wins in obj.symbols order, so a pre-seeded index ==
+    // _find_elf_sym_by_name's first-match; every ElfRel sym_idx is identical and
+    // the fallback below is kept untouched as the safety net.
+    let nseed = len(obj.symbols)
+    let mut spi = 0
+    while spi < nseed {
+        let sname = _symh_name_at(obj.strtab, obj.symbols[spi].name_offset)
+        let shb = _symh_hash(sname)
+        if _symh_get(_symh_names[shb], _symh_idx[shb], sname) < 0 {
+            _symh_names[shb] = _symh_names[shb].push(sname)
+            _symh_idx[shb]   = _symh_idx[shb].push(spi)
+        }
+        spi = spi + 1
+    }
     let np = len(pending_offsets)
     let mut pi = 0
     while pi < np {
@@ -3762,6 +3783,20 @@ fn _symh_get(bucket_names: [string], bucket_idx: [Int], name: string) -> Int {
         i = i + 1
     }
     return -1
+}
+
+// #self-emit-round3 — read a NUL-terminated symbol name back out of the in-memory
+// strtab pool. Byte-faithful inverse of _ew_str (which wrote `char_code(s,i) & 0xff`
+// per char, then NUL). Uncapped (unlike _er_cstr's 256-char guard) so a long mangled
+// fn name can't pre-seed under a truncated key. Used only by the round-3 pre-seed.
+fn _symh_name_at(strtab: [Int], off: Int) -> string {
+    let mut s = ""
+    let mut i = 0
+    while (strtab[off + i] & 0xff) != 0 {
+        s = s + from_char_code(strtab[off + i] & 0xff)
+        i = i + 1
+    }
+    return s
 }
 
 fn _find_elf_sym_by_name(symbols: [ElfSym], strtab: [Int], name: string) -> Int {
