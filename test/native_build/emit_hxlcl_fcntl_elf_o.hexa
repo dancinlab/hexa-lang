@@ -1,0 +1,300 @@
+// test/native_build/emit_hxlcl_fcntl_elf_o.hexa
+//
+// RFC061 §M8 SELFEMIT · Route B′ · cross-target ELF extension of the proven
+// darwin Mach-O hand-assemble precedent (emit_hxlcl_fcntl_o.hexa) — the
+// x86_64-LINUX sibling of emit_hxlcl_strlen_elf_o.hexa, applied to the
+// class-C 3-arg NON-errno syscall leaf `fcntl` (r10 "four non-errno leaves").
+//
+// EMITS an ELF64 ET_REL relocatable object exporting strong external symbol
+// `hxlcl_fcntl` (NO leading underscore — Linux/ELF C symbols are bare, unlike
+// Mach-O's `_`-prefix) whose body is a bare 3-arg syscall trap. Under
+// HEXA_RT_SELFEMIT_FCNTL=1 (linux/x86_64 gate in tool/stage_resolve_runtime_a),
+// the libc-delegate shim drops `hxlcl_fcntl` (#ifndef HEXA_RT_SELFEMIT_FCNTL,
+// self/runtime_core_hxlcl_shim_emit.hexa:1415) and the system `ld` binds the
+// `call hxlcl_fcntl` callsites to THIS .o's strong symbol. Same per-symbol
+// shim-swap mechanism as the Mach-O path + the strlen ELF path; only the code
+// bytes (a syscall trap vs a byte-loop) differ.
+//
+// ── ABI (class-C syscall · 3-arg NON-errno leaf) ──
+//   int fcntl(int fd, int cmd, long arg) -> rax = trap result. On x86_64-linux
+//   the System V syscall convention maps the C args rdi/rsi/rdx STRAIGHT
+//   THROUGH to the kernel's rdi/rsi/rdx — no register shuffle, no sign-extend
+//   glue. SYS_fcntl = 72 (0x48) loads into eax, `syscall` issues the trap, ret
+//   returns rax. Pure leaf: NO relocation, NO errno branch, NO arena state, NO
+//   HexaVal touch, NO external callee (mirrors the darwin no-_cf leaf, which
+//   likewise returns the raw trap result with no error branch). Position-
+//   independent.
+//
+// ── ARCH (env HEXA_SELFEMIT_ELF_ARCH) ──
+//   "x86_64"  -> EM_X86_64 (62), 8-byte System V AMD64 syscall trap.
+//   "arm64"   -> NEXT RUNG. arm64-linux fcntl is SYS 25 via `svc #0` (NOT the
+//                darwin BSD SYS_FCNTL=92 / `svc #0x80` of emit_hxlcl_fcntl_o),
+//                so the darwin Mach-O bytes are NOT reusable verbatim. This
+//                fixture returns FAIL on arm64 (the stage-script gate is
+//                x86_64-only, so it is never invoked there).
+//
+// ── HONESTY ──
+//   - x86_64 bytes are the canonical bare-syscall lowering of fcntl on Linux
+//     (mov eax,72; syscall; ret). Cross-checked against
+//     `clang --target=x86_64-linux-gnu` assembling the identical mnemonic
+//     sequence: emitted .text == these 8 bytes (verified, not invented).
+//   - clang appears ONLY as the cross-check oracle, NEVER in emit.
+//   - HEXA_RT_SELFEMIT_FCNTL=1 gates the build append; unset = no behavior
+//     change (DEFAULT shim.o byte-identical, sha f2d507e1 invariant preserved).
+//   - no binaries committed.
+//
+// SELF-CONTAINED (no `use`): mirrors the strlen ELF emitter — the local repo
+// has no compiled module_loader, so multi-`use` programs link-fail.
+
+// ═══════════════════════════════════════════════════════════════════
+// x86_64 System V AMD64 fcntl — 8 bytes (rdi=fd, rsi=cmd, rdx=arg -> rax=res).
+//   b8 48 00 00 00   mov    eax, 72           ; SYS_fcntl
+//   0f 05            syscall                   ; args rdi/rsi/rdx pass through
+//   c3               ret                       ; rax = trap result
+// ═══════════════════════════════════════════════════════════════════
+fn x86_fcntl_bytes() -> [int] {
+    let mut c = []
+    c.push(0xb8); c.push(0x48); c.push(0x00); c.push(0x00); c.push(0x00)
+    c.push(0x0f); c.push(0x05)
+    c.push(0xc3)
+    return c
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Little-endian byte writers + align (identical to the strlen ELF emitter).
+// ═══════════════════════════════════════════════════════════════════
+fn align_to_v(val: int, align: int) -> int {
+    return (val + align - 1) / align * align
+}
+
+fn push_u16_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256)
+}
+
+fn push_u32_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256).push((val / 65536) % 256).push((val / 16777216) % 256)
+}
+
+fn push_u64_le_v(buf: [int], val: int) -> [int] {
+    let mut b = push_u32_le_v(buf, val % 0x100000000)
+    return push_u32_le_v(b, val / 0x100000000)
+}
+
+// Push "hxlcl_fcntl" (11 bytes, no leading underscore for ELF).
+fn push_sym_name(buf: [int]) -> [int] {
+    let mut b = buf
+    b.push(104) // h
+    b.push(120) // x
+    b.push(108) // l
+    b.push(99)  // c
+    b.push(108) // l
+    b.push(95)  // _
+    b.push(102) // f
+    b.push(99)  // c
+    b.push(110) // n
+    b.push(116) // t
+    b.push(108) // l
+    return b
+}
+
+// Push the section-header string table:
+//   \0 ".text" \0 ".note.GNU-stack" \0 ".symtab" \0 ".strtab" \0 ".shstrtab" \0  (49 bytes)
+// Names land at offsets 1 / 7 / 23 / 31 / 39.
+fn push_shstrtab(buf: [int]) -> [int] {
+    let mut b = buf
+    b.push(0)
+    // .text
+    b.push(46); b.push(116); b.push(101); b.push(120); b.push(116); b.push(0)
+    // .note.GNU-stack   (marks the stack NON-executable; without it GNU ld
+    // marks the whole consumer binary's stack executable — a security regression)
+    b.push(46); b.push(110); b.push(111); b.push(116); b.push(101) // .note
+    b.push(46); b.push(71); b.push(78); b.push(85)                 // .GNU
+    b.push(45); b.push(115); b.push(116); b.push(97); b.push(99); b.push(107) // -stack
+    b.push(0)
+    // .symtab
+    b.push(46); b.push(115); b.push(121); b.push(109); b.push(116); b.push(97); b.push(98); b.push(0)
+    // .strtab
+    b.push(46); b.push(115); b.push(116); b.push(114); b.push(116); b.push(97); b.push(98); b.push(0)
+    // .shstrtab
+    b.push(46); b.push(115); b.push(104); b.push(115); b.push(116); b.push(114); b.push(116); b.push(97); b.push(98); b.push(0)
+    return b
+}
+
+// One Elf64_Shdr (64 bytes).
+fn push_shdr(buf: [int], name: int, typ: int, flags: int, off: int, size: int, link: int, info: int, addralign: int, entsize: int) -> [int] {
+    let mut b = buf
+    b = push_u32_le_v(b, name)
+    b = push_u32_le_v(b, typ)
+    b = push_u64_le_v(b, flags)
+    b = push_u64_le_v(b, 0)        // sh_addr
+    b = push_u64_le_v(b, off)
+    b = push_u64_le_v(b, size)
+    b = push_u32_le_v(b, link)
+    b = push_u32_le_v(b, info)
+    b = push_u64_le_v(b, addralign)
+    b = push_u64_le_v(b, entsize)
+    return b
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ELF64 ET_REL wrapper. Layout:
+//   [0]   Elf64_Ehdr (64)
+//   [64]  .text (code)
+//   ...   .symtab (2 * Elf64_Sym = 48)   — 8-aligned
+//   ...   .strtab ("\0hxlcl_fcntl\0" = 13)
+//   ...   .shstrtab (49)
+//   ...   section header table (6 * Elf64_Shdr = 384)  — 8-aligned
+// Section indices: 0 NULL, 1 .text, 2 .note.GNU-stack, 3 .symtab,
+//                  4 .strtab, 5 .shstrtab.
+// ═══════════════════════════════════════════════════════════════════
+fn elf_obj_wrap(code: [int], e_machine: int) -> [int] {
+    let code_size = len(code)
+
+    let text_off = 64
+    let symtab_off = align_to_v(text_off + code_size, 8)
+    let symtab_size = 2 * 24
+    let strtab_off = symtab_off + symtab_size
+    let strtab_size = 1 + 11 + 1            // \0 hxlcl_fcntl \0
+    let shstrtab_off = strtab_off + strtab_size
+    let shstrtab_size = 49
+    let shoff = align_to_v(shstrtab_off + shstrtab_size, 8)
+
+    let mut out = []
+
+    // ── Elf64_Ehdr ──
+    // e_ident: 0x7f 'E' 'L' 'F', ELFCLASS64(2), ELFDATA2LSB(1), EV_CURRENT(1), SYSV(0), +8 pad
+    out.push(0x7f); out.push(0x45); out.push(0x4c); out.push(0x46)
+    out.push(2); out.push(1); out.push(1); out.push(0)
+    let mut p = 0
+    while p < 8 { out.push(0); p = p + 1 }
+    out = push_u16_le_v(out, 1)            // e_type = ET_REL
+    out = push_u16_le_v(out, e_machine)    // e_machine
+    out = push_u32_le_v(out, 1)            // e_version = EV_CURRENT
+    out = push_u64_le_v(out, 0)            // e_entry
+    out = push_u64_le_v(out, 0)            // e_phoff
+    out = push_u64_le_v(out, shoff)        // e_shoff
+    out = push_u32_le_v(out, 0)            // e_flags
+    out = push_u16_le_v(out, 64)           // e_ehsize
+    out = push_u16_le_v(out, 0)            // e_phentsize
+    out = push_u16_le_v(out, 0)            // e_phnum
+    out = push_u16_le_v(out, 64)           // e_shentsize
+    out = push_u16_le_v(out, 6)            // e_shnum
+    out = push_u16_le_v(out, 5)            // e_shstrndx
+
+    // ── .text ──
+    let mut k = 0
+    while k < len(code) { out.push(code[k]); k = k + 1 }
+    while len(out) < symtab_off { out.push(0) }
+
+    // ── .symtab ──
+    // sym[0] = NULL (24 zero bytes)
+    let mut z = 0
+    while z < 24 { out.push(0); z = z + 1 }
+    // sym[1] = hxlcl_fcntl : st_name=1, st_info=(GLOBAL<<4|FUNC)=0x12,
+    //          st_other=0, st_shndx=1(.text), st_value=0, st_size=code_size
+    out = push_u32_le_v(out, 1)            // st_name -> strtab offset 1
+    out.push(0x12)                         // st_info: STB_GLOBAL<<4 | STT_FUNC
+    out.push(0)                            // st_other
+    out = push_u16_le_v(out, 1)            // st_shndx = .text
+    out = push_u64_le_v(out, 0)            // st_value
+    out = push_u64_le_v(out, code_size)    // st_size
+
+    // ── .strtab ──
+    out.push(0)
+    out = push_sym_name(out)
+    out.push(0)
+
+    // ── .shstrtab ──
+    out = push_shstrtab(out)
+
+    // pad to section header table
+    while len(out) < shoff { out.push(0) }
+
+    // ── section header table (6 entries) ──
+    out = push_shdr(out, 0, 0, 0, 0, 0, 0, 0, 0, 0)                          // [0] NULL
+    out = push_shdr(out, 1, 1, 6, text_off, code_size, 0, 0, 16, 0)          // [1] .text PROGBITS, ALLOC|EXEC
+    out = push_shdr(out, 7, 1, 0, 0, 0, 0, 0, 1, 0)                          // [2] .note.GNU-stack PROGBITS, size 0, flags 0 (non-exec stack)
+    out = push_shdr(out, 23, 2, 0, symtab_off, symtab_size, 4, 1, 8, 24)     // [3] .symtab, link=.strtab(4), info=1(first global)
+    out = push_shdr(out, 31, 3, 0, strtab_off, strtab_size, 0, 0, 1, 0)      // [4] .strtab
+    out = push_shdr(out, 39, 3, 0, shstrtab_off, shstrtab_size, 0, 0, 1, 0)  // [5] .shstrtab
+
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Driver
+// ═══════════════════════════════════════════════════════════════════
+fn emit_hxlcl_fcntl_elf_o() {
+    let arch = env_var("HEXA_SELFEMIT_ELF_ARCH")
+    println("[wire] RFC061 §M8 SELFEMIT ELF · hxlcl_fcntl · arch=" + arch)
+
+    let mut code = []
+    let mut e_machine = 0
+    let mut want = 0
+    if arch == "x86_64" {
+        code = x86_fcntl_bytes()
+        e_machine = 62
+        want = 8
+    } else if arch == "arm64" {
+        println("FAIL: arm64-linux fcntl (SYS 25 / svc #0) is the NEXT rung — darwin Mach-O bytes (SYS 92 / svc #0x80) are NOT verbatim-reusable; x86_64-only for now")
+        return
+    } else {
+        println("FAIL: HEXA_SELFEMIT_ELF_ARCH must be 'x86_64' (got '" + arch + "')")
+        return
+    }
+
+    if len(code) != want {
+        println("FAIL: code expected " + to_string(want) + " bytes, got " + to_string(len(code)))
+        return
+    }
+    println("  code bytes     : " + to_string(len(code)) + " (" + to_string(want) + " expected)")
+
+    // syscall-trap sanity: b8 48 00 00 00 / 0f 05 / c3
+    if code[0] != 0xb8 || code[1] != 0x48 || code[2] != 0x00 || code[3] != 0x00 || code[4] != 0x00 {
+        println("FAIL: mov eax,72 (b8 48 00 00 00) prefix mismatch")
+        return
+    }
+    if code[5] != 0x0f || code[6] != 0x05 {
+        println("FAIL: syscall (0f 05) mismatch")
+        return
+    }
+    if code[7] != 0xc3 {
+        println("FAIL: ret (c3) trailer mismatch")
+        return
+    }
+    println("  mov eax,72 / syscall / ret : b8 48 00 00 00 0f 05 c3 OK")
+
+    let obj = elf_obj_wrap(code, e_machine)
+    println("  obj_wrap size  : " + to_string(len(obj)) + " bytes total")
+
+    // ELFMAG sanity (0x7f 'E' 'L' 'F')
+    if obj[0] != 0x7f || obj[1] != 0x45 || obj[2] != 0x4c || obj[3] != 0x46 {
+        println("FAIL: ELFMAG mismatch")
+        return
+    }
+    // ELFCLASS64 / ELFDATA2LSB
+    if obj[4] != 2 || obj[5] != 1 {
+        println("FAIL: EI_CLASS/EI_DATA mismatch")
+        return
+    }
+    // e_type = ET_REL (1) at offset 16
+    if obj[16] != 1 || obj[17] != 0 {
+        println("FAIL: e_type not ET_REL")
+        return
+    }
+    // e_machine at offset 18
+    if obj[18] != (e_machine % 256) || obj[19] != ((e_machine / 256) % 256) {
+        println("FAIL: e_machine mismatch")
+        return
+    }
+    println("  ELFMAG + ELFCLASS64 + ET_REL + e_machine OK")
+
+    let out_path = env_var("HEXA_HXLCL_FCNTL_O")
+    let mut dest = out_path
+    if dest == "" { dest = "build/poc/hxlcl_fcntl_elf.o" }
+    write_bytes(dest, obj)
+    println("  wrote          : " + dest)
+    println("[wire] EMIT OK — link via runtime.a with HEXA_RT_SELFEMIT_FCNTL=1")
+}
+
+emit_hxlcl_fcntl_elf_o()

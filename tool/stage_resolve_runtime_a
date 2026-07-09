@@ -1643,6 +1643,48 @@ build_runtime_a_from_source() {
             _mo_hxlcl_members="$_mo_hxlcl_members $_ses_o"
             echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-STRLEN: hxlcl_strlen → native ELF .o; shim.o built with -DHEXA_RT_SELFEMIT_STRLEN (strlen dropped) — ld -r multidef gate validates"
         fi
+        # ── RFC061 §M8 SELFEMIT-FCNTL (LINUX x86_64 cross-target ELF · HEXA_RT_SELFEMIT_FCNTL, default OFF) ──
+        # r10 single-symbol scale-out of the strlen ELF precedent to the class-C
+        # 3-arg NON-errno syscall LEAF `fcntl` (the darwin family's fcntl/poll are
+        # "four non-errno leaves"). fcntl is the ONLY remaining darwin member with the
+        # same link profile as the proven MEMLEAF leaves: a single strong global
+        # `hxlcl_fcntl`, NO reloc, NO errno provider, NO external callee. On x86_64-linux
+        # the body is `mov eax,72; syscall; ret` (8 bytes) — the C args rdi/rsi/rdx map
+        # STRAIGHT THROUGH to the kernel's rdi/rsi/rdx (no register shuffle). The emitter
+        # is the self-contained ELF fixture test/native_build/emit_hxlcl_fcntl_elf_o.hexa
+        # (x86_64-only; arm64-linux fcntl = SYS 25 / svc #0, distinct from the darwin
+        # SYS 92 / svc #0x80 bytes — the NEXT rung). The shim drops its fcntl via the SAME
+        # `-DHEXA_RT_SELFEMIT_FCNTL` macro the darwin path uses (the #ifndef already exists
+        # at self/runtime_core_hxlcl_shim_emit.hexa:1415). fcntl is absent from the CO-DROP
+        # registry (~L1562), the MEMLEAF list (~L1668), and has NO RT-NATIVE-FCNTL block —
+        # so `_mo_rtnative_syms` can never contain 'fcntl' and exactly ONE member exports
+        # the global (zero multidef risk); the defensive case-skip below is a forward-safe
+        # no-op today. Gated x86_64-only like RT-NATIVE-FMOD (:1704). DEFAULT (flag OFF)
+        # adds NO -D and NO member → shim.o + archive byte-identical (release-integrity >
+        # self-host: sha f2d507e1 invariant).
+        if [ "${HEXA_RT_SELFEMIT_FCNTL:-0}" = "1" ] && [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
+            local _sef_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
+            if [ -z "$_sef_bin" ]; then
+                echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-FCNTL FATAL: HEXA_RT_SELFEMIT_FCNTL=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
+            fi
+            # defensive CO-DROP skip (no-op today: fcntl has no seed → never in the
+            # registry; forward-safe like the MEMLEAF skip at :1673).
+            case "$_mo_rtnative_syms" in
+                *" fcntl "*)
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-FCNTL: skip fcntl — RT-NATIVE-FCNTL seed owns hxlcl_fcntl (co-drop)" ;;
+                *)
+                    local _sef_o="build/hxlcl_fcntl_native.o"
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-FCNTL: emitting native ELF hxlcl_fcntl .o (arch=x86_64) via $_sef_bin (replacing libc-shim member)…"
+                    env "HEXA_SELFEMIT_ELF_ARCH=x86_64" "HEXA_HXLCL_FCNTL_O=$_sef_o" "$_sef_bin" "test/native_build/emit_hxlcl_fcntl_elf_o.hexa" >"build/_selfemit_fcntl_elf.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-FCNTL FATAL: fcntl ELF emit failed — see build/_selfemit_fcntl_elf.log" >&2; cat "build/_selfemit_fcntl_elf.log" >&2; return 1; }
+                    [ -f "$_sef_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-FCNTL FATAL: $_sef_o not produced" >&2; return 1; }
+                    _mo_shim_def="$_mo_shim_def -DHEXA_RT_SELFEMIT_FCNTL"
+                    _mo_hxlcl_members="$_mo_hxlcl_members $_sef_o"
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-FCNTL: hxlcl_fcntl → native ELF .o; shim.o built with -DHEXA_RT_SELFEMIT_FCNTL (fcntl dropped) — ld -r multidef gate validates" ;;
+            esac
+        elif [ "${HEXA_RT_SELFEMIT_FCNTL:-0}" = "1" ]; then
+            echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-FCNTL: HEXA_RT_SELFEMIT_FCNTL=1 IGNORED — the fcntl ELF leaf is linux/x86_64-only (host=$(uname -sm)); retaining libc shim member" >&2
+        fi
         # ── RFC061 §M8 SELFEMIT-MEMLEAF (LINUX cross-target ELF · per-symbol gates, default OFF) ──
         # r2 scale-out of the strlen ELF precedent to the PURE mem-leaf family.
         # Each symbol has its OWN independent env gate HEXA_RT_SELFEMIT_<SYM>=1 (so
