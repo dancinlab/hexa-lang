@@ -3265,15 +3265,6 @@ fn _lir_operand_str_x86(op: LOperand) -> string {
     return "<?" + op.kind + "?>"
 }
 
-fn _lookup_label_x86(names: [string], offsets: [Int], target: string) -> Int {
-    let n = len(names)
-    let mut i = 0
-    while i < n {
-        if names[i] == target { return offsets[i] }
-        i = i + 1
-    }
-    return -1
-}
 
 fn _pack_fn_x86(out_text: [Int],
                 pending_offsets: [Int], pending_names: [string],
@@ -3288,6 +3279,19 @@ fn _pack_fn_x86(out_text: [Int],
     //           1 = REL32 jmp/call (5-B insn, imm32 at off+1)
     //           2 = REL32 jcc     (6-B insn, 2-B opcode → imm32 at off+2)
     let unresolved_kind: [Int]    = []
+    // Round-5 (#4790): per-fn 1024-way FNV bucket over label_names indices.
+    // Kills the O(labels²) `_lookup_label_x86` full-scan that surfaced as the
+    // self-emit emit/reloc wall (every jcc/jmp/call did a linear scan over the
+    // whole fn label list; cross-fn calls = guaranteed full-length misses).
+    // Byteeq-neutral: same-name labels share a bucket, scanned in ascending
+    // push order, so the first bucket match == the linear scan's first match;
+    // misses return -1 identically → byte-identical .o.
+    let mut label_bkt: [[Int]] = []
+    let mut _lbi = 0
+    while _lbi < 1024 {
+        label_bkt.push([])
+        _lbi = _lbi + 1
+    }
 
     let n = len(f.instrs)
     let mut i = 0
@@ -3298,6 +3302,8 @@ fn _pack_fn_x86(out_text: [Int],
             if len(name) == 0 && len(ins.args) > 0 { name = ins.args[0].label }
             label_names.push(name)
             label_offsets.push(len(out_text))
+            let _lb = _symh_hash(name) % 1024
+            label_bkt[_lb] = label_bkt[_lb].push(len(label_names) - 1)
             i = i + 1
             continue
         }
@@ -3492,7 +3498,21 @@ fn _pack_fn_x86(out_text: [Int],
         let off    = unresolved_brs[bi]
         let kind   = unresolved_kind[bi]
         let target = unresolved_to[bi]
-        let toff   = _lookup_label_x86(label_names, label_offsets, target)
+        // Round-5 (#4790): bucketed intra-fn resolve (was O(labels) linear scan).
+        let _lt_hb = _symh_hash(target) % 1024
+        let mut toff = -1
+        let _ltb    = label_bkt[_lt_hb]
+        let _ltn    = len(_ltb)
+        let mut _lti = 0
+        while _lti < _ltn {
+            let _lidx = _ltb[_lti]
+            if label_names[_lidx] == target {
+                toff = label_offsets[_lidx]
+                _lti = _ltn
+            } else {
+                _lti = _lti + 1
+            }
+        }
         if toff < 0 {
             // Extern / cross-fn — bubble to pending; cycle 30 builds reloc.
             // jcc (kind=2) always targets an intra-fn block label, so an
