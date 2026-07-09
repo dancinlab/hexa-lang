@@ -1117,6 +1117,17 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "HexaVal hexa_arr_f64_push(HexaVal v, double x);\n"
     buf = buf + "int     hexa_arr_f64_len(HexaVal v);\n"
     buf = buf + "HexaVal hexa_arr_f64_box(HexaVal v, int64_t i);\n"
+    // ③ SELFEMIT-PACK-OUT (round-6): public surface for the ESCAPING packed
+    // [Int] buffer (TAG_ARRAY_I64) + the runtime poly readers, so codegen-
+    // emitted user.c can mint / push / index / len a packed accumulator that
+    // leaves its fn (return / write_bytes). Prototypes only — no code — so
+    // adding them is byteeq-NEUTRAL (a declaration emits nothing). The bodies
+    // are defined UNCONDITIONALLY later in this file (census #4174 unguard).
+    buf = buf + "HexaVal hexa_arr_i64_new_esc(int cap);\n"
+    buf = buf + "int64_t hexa_arr_poly_len(HexaVal v);\n"
+    buf = buf + "HexaVal hexa_arr_poly_get(HexaVal v, int64_t idx);\n"
+    buf = buf + "HexaVal hexa_arr_poly_push(HexaVal v, HexaVal item);\n"
+    buf = buf + "HexaVal hexa_arr_poly_set(HexaVal v, int64_t idx, HexaVal item);\n"
     buf = buf + "HexaVal hexa_void(void);\n"
     buf = buf + "HexaVal hexa_null_coal(HexaVal a, HexaVal b);\n"
     buf = buf + "int hexa_is_type(HexaVal v, const char* type_name);\n"
@@ -9323,6 +9334,21 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "extern HexaVal fs_write_all_native(HexaVal path_cstr, HexaVal buf, HexaVal len);\n"
     buf = buf + "extern HexaVal fs_append_all_native(HexaVal path_cstr, HexaVal buf, HexaVal len);\n"
     buf = buf + "HexaVal rt_write_bytes(HexaVal path, HexaVal arr) {\n"
+    // ③ SELFEMIT-PACK-OUT (round-6): a packed [Int] serialize buffer arrives as
+    // TAG_ARRAY_I64 (HX_IS_ARRAY matches only TAG_ARRAY → the boxed path below
+    // would drop it / misread the raw int64_t[] as 16B HexaVal). Rebox it into a
+    // normal boxed array ONCE, then fall through unchanged. C-guarded by
+    // -DHEXA_SELFEMIT_PACK_OUT (added by build_aprime.sh only when the codegen
+    // env flag is set) → without the define this compiles to nothing and the
+    // runtime.o is byte-IDENTICAL to current.
+    buf = buf + "#ifdef HEXA_SELFEMIT_PACK_OUT\n"
+    buf = buf + "    if (HX_TAG(arr) == TAG_ARRAY_I64) {\n"
+    buf = buf + "        HexaArrI64* __pa = (HexaArrI64*)HX_ARR_PTR(arr);\n"
+    buf = buf + "        HexaVal __bx = hexa_array_new();\n"
+    buf = buf + "        for (int __i = 0; __i < __pa->len; __i++) __bx = hexa_array_push(__bx, hexa_int(__pa->data[__i]));\n"
+    buf = buf + "        arr = __bx;\n"
+    buf = buf + "    }\n"
+    buf = buf + "#endif\n"
     buf = buf + "    if (!HX_IS_ARRAY(arr)) return hexa_bool(0);\n"
     buf = buf + "    int len = HX_ARR_LEN(arr);\n"
     buf = buf + "    const char* p = HX_STR(path);\n"
@@ -9344,6 +9370,16 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "}\n"
     buf = buf + "#else\n"
     buf = buf + "HexaVal rt_write_bytes(HexaVal path, HexaVal arr) {\n"
+    // ③ SELFEMIT-PACK-OUT (round-6): rebox a packed TAG_ARRAY_I64 buffer (see
+    // the HEXA_RT_FS_NATIVE arm above). C-guarded → byteeq-neutral without -D.
+    buf = buf + "#ifdef HEXA_SELFEMIT_PACK_OUT\n"
+    buf = buf + "    if (HX_TAG(arr) == TAG_ARRAY_I64) {\n"
+    buf = buf + "        HexaArrI64* __pa = (HexaArrI64*)HX_ARR_PTR(arr);\n"
+    buf = buf + "        HexaVal __bx = hexa_array_new();\n"
+    buf = buf + "        for (int __i = 0; __i < __pa->len; __i++) __bx = hexa_array_push(__bx, hexa_int(__pa->data[__i]));\n"
+    buf = buf + "        arr = __bx;\n"
+    buf = buf + "    }\n"
+    buf = buf + "#endif\n"
     buf = buf + "    if (!HX_IS_ARRAY(arr)) return hexa_bool(0);\n"
     buf = buf + "    int len = HX_ARR_LEN(arr);\n"
     buf = buf + "    FILE* f = fopen(HX_STR(path), \"wb\");\n"
