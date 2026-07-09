@@ -1048,6 +1048,12 @@ fn codegen(ast) {
     _gen2_tu_has_strict_fp = 0
     _gen2_current_fn_strict_fp = 0
     _gen2_tu_has_vendor_ffi = 0
+    // ③ SELFEMIT-PACK-OUT (round-7): reset the MODULE-level packed-return fn set
+    // once per transpile (paired with the Pass-0 populate below). NOT reset in
+    // the per-fn _selfemit_pack_out_reset() — it must outlive each fn so a
+    // caller can consult a callee registered earlier/later in the module. No-op
+    // when the flag is unset (nothing is ever added) → OFF-path byte-identical.
+    _selfemit_pack_out_ret_fns = []
     let mut _gi = 0
     while _gi < len(ast) {
         let _gk = ast[_gi].kind
@@ -1056,6 +1062,15 @@ fn codegen(ast) {
             _known_nonlocal_names.push(ast[_gi].name)
             _known_fn_globals_add(ast[_gi].name)
             _known_nonlocal_add(ast[_gi].name)
+            // ③ SELFEMIT-PACK-OUT (round-7): record fns declared `-> [Int]` so an
+            // untyped `let x = f(...)` caller local routes its reads through the
+            // poly readers (see _is_selfemit_pack_out_ret_call). GATED default-OFF.
+            if _selfemit_pack_out_enabled() && _gk == "FnDecl" {
+                let _rt = ast[_gi].ret_type
+                if type_of(_rt) == "string" && (_rt == "[Int]" || _rt == "[i64]" || _rt == "[int]") {
+                    _selfemit_pack_out_ret_fn_add(ast[_gi].name)
+                }
+            }
         } else if _gk == "StructDecl" {
             // Struct constructors are C functions
             _known_fn_globals.push(ast[_gi].name)
@@ -4676,6 +4691,14 @@ fn _gen2_stmt_inner(node, depth) {
             if _is_empty_typed_int_array_let(node) {
                 _selfemit_pack_out_add(node.name)
                 init = "hexa_arr_i64_new_esc(16)"
+            } else if _is_selfemit_pack_out_ret_call(node.left) {
+                // ③ SELFEMIT-PACK-OUT (round-7): `let x = f(...)` where f is
+                // declared `-> [Int]` (registered in Pass-0). The RHS call
+                // already yields the packed/boxed handle (init above =
+                // gen2_expr(node.left)) — do NOT swap the mint; just register the
+                // binder so x[i] / len(x) route through the poly readers. Superset
+                // -sound: byte-identical whether f returned TAG_ARRAY_I64 or boxed.
+                _selfemit_pack_out_add(node.name)
             } else {
                 _selfemit_pack_out_void(node.name)
             }
@@ -13004,6 +13027,54 @@ fn _is_selfemit_pack_out_name(name) {
     return false
 }
 
+// ③ SELFEMIT-PACK-OUT (round-7) — interprocedural RETURN-type propagation.
+// The small per-instruction encoders in compiler/emit/elf_x86_64.hexa declare
+// `-> [Int]` and `return out`; the caller writes `let mr = _enc(...)` (an
+// UNTYPED local, no `[Int]` annotation) then reads `mr[i]` / `len(mr)`. Under
+// the flag, `_enc` returns a packed TAG_ARRAY_I64 handle, but `mr` is not
+// registered as packed → its reads take the BOXED 16B-stride path → misreads
+// the packed buffer. To close that residual we register, in the Pass-0
+// prescan, every top-level fn whose DECLARED ret_type is `[Int]`/`[i64]`/
+// `[int]` into this MODULE-level set (NOT the per-fn _selfemit_pack_out_names —
+// this outlives each fn), then register any untyped `let x = f(...)` local as a
+// pack-out handle when `f` is in the set. SOUND without body analysis: the poly
+// readers (hexa_arr_poly_*) branch on the runtime tag, so routing a caller
+// local through them is a superset that is byte-identical whether the callee
+// actually returned TAG_ARRAY_I64 or a boxed TAG_ARRAY — the same claim the
+// [Int]-param path already relies on. GATED: only populated under the flag
+// (Pass-0 add is `_selfemit_pack_out_enabled()`-guarded), so OFF-path this set
+// stays [], every membership check is false, and output is byte-identical.
+let mut _selfemit_pack_out_ret_fns = []
+
+fn _selfemit_pack_out_ret_fn_add(name) {
+    let mut i = 0
+    while i < len(_selfemit_pack_out_ret_fns) {
+        if _selfemit_pack_out_ret_fns[i] == name { return }
+        i = i + 1
+    }
+    _selfemit_pack_out_ret_fns = _selfemit_pack_out_ret_fns.push(name)
+}
+
+fn _is_selfemit_pack_out_ret_fn(name) {
+    let mut i = 0
+    while i < len(_selfemit_pack_out_ret_fns) {
+        if _selfemit_pack_out_ret_fns[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Is `rhs` a direct call `f(...)` to a fn whose declared return is a packed
+// [Int] handle (i.e. `f` was registered in _selfemit_pack_out_ret_fns)? Only a
+// bare-Ident callee qualifies (method / computed callees are out of scope).
+fn _is_selfemit_pack_out_ret_call(rhs) {
+    if type_of(rhs) == "string" { return false }
+    if rhs.kind != "Call" { return false }
+    if type_of(rhs.left) == "string" { return false }
+    if rhs.left.kind != "Ident" { return false }
+    return _is_selfemit_pack_out_ret_fn(rhs.left.name)
+}
+
 // Is `node` a LetStmt/LetMutStmt/AtomicLet binding an EMPTY array literal `[]`
 // carrying an explicit `[Int]` / `[i64]` / `[int]` type annotation? `node.value`
 // holds the parsed type-annotation string (parser.hexa parse_let → `.value`),
@@ -16361,6 +16432,9 @@ fn codegen_full(ast) {
     _fn_required = []
     _fn_param_names = []
     _fn_variadic_idx = []
+    // ③ SELFEMIT-PACK-OUT (round-7): reset the MODULE-level packed-return fn set
+    // once per transpile (mirror of the codegen() prescan). No-op OFF-path.
+    _selfemit_pack_out_ret_fns = []
     // ── Pass 0: collect known global names for closure free-var analysis ──
     let mut gi = 0
     while gi < len(ast) {
@@ -16370,6 +16444,14 @@ fn codegen_full(ast) {
             _known_nonlocal_names.push(ast[gi].name)
             _known_fn_globals_add(ast[gi].name)
             _known_nonlocal_add(ast[gi].name)
+            // ③ SELFEMIT-PACK-OUT (round-7): record fns declared `-> [Int]` (mirror
+            // of the codegen() prescan). GATED default-OFF → OFF-path byte-id.
+            if _selfemit_pack_out_enabled() && gk == "FnDecl" {
+                let _rt = ast[gi].ret_type
+                if type_of(_rt) == "string" && (_rt == "[Int]" || _rt == "[i64]" || _rt == "[int]") {
+                    _selfemit_pack_out_ret_fn_add(ast[gi].name)
+                }
+            }
             // PROBE r16-T2: register arity for PLAIN FnDecl only. extern fns
             // (variadic C) and pure fns are excluded — extern arity is a C
             // contract, and pure-fn arg coercion can differ. params is an
