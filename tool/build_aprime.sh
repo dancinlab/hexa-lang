@@ -225,7 +225,13 @@ PY
 [ -f "$FLAT" ] || { echo "build_aprime: flatten failed" >&2; exit 1; }
 
 # ── stage 2: transpile ─────────────────────────────────────────────
-"$HEXA_V2" "$FLAT" "$APC" 2>&1 | tail -1
+# ③ SELFEMIT-PACK-OUT (round-6, DEFAULT OFF): pass the opt-in packed-[Int]-
+# buffer codegen flag through to hexat's env so it reaches this aprime compile.
+# Empty/unset (the default) = byte-neutral: hexat registers no packed handle and
+# emits byte-identical C. Only when the caller exports HEXA_SELFEMIT_PACK_OUT=1
+# does hexat pack the compiler's own serialize `out: [Int]` buffers (paired with
+# the -DHEXA_SELFEMIT_PACK_OUT runtime arm added at stage 4 below).
+HEXA_SELFEMIT_PACK_OUT="${HEXA_SELFEMIT_PACK_OUT:-}" "$HEXA_V2" "$FLAT" "$APC" 2>&1 | tail -1
 [ -f "$APC" ] || { echo "build_aprime: transpile failed (no $APC)" >&2; exit 1; }
 echo "  [2/5] transpile: $(wc -l < "$APC") lines C"
 
@@ -823,10 +829,14 @@ mkdir -p "$(dirname "$OUT")"
 # pre-r28 link, byte-identical). Closes the arm64 aprime_cc faithful-gate link
 # fail (5/5 reliable: undefined reference rt_str_split/rt_str_trim).
 RT_A=""; [ -f "$REPO/build/runtime.a" ] && RT_A="$REPO/build/runtime.a"
+# ③ SELFEMIT-PACK-OUT (round-6): enable the rt_write_bytes TAG_ARRAY_I64 rebox
+# arm ONLY when the codegen flag is set (matches the stage-2 hexat env). Unset
+# (the default) → empty → the runtime.o is byte-IDENTICAL to current.
+PACK_OUT_DEF=""; [ -n "${HEXA_SELFEMIT_PACK_OUT:-}" ] && PACK_OUT_DEF="-DHEXA_SELFEMIT_PACK_OUT"
 CL_ERR="$(clang -Oz $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
     -ffunction-sections -fdata-sections $DEAD_STRIP \
     -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen -fno-builtin-strstr -fno-builtin-strncmp \
-    -D_FORTIFY_SOURCE=0 -fno-stack-protector $ALLOC_DEF $STR_DEF $PRINT_DEF $RTCORE_LEAF_DEF $RTCORE_STRARR_READ_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MATH2_DEF $RTCORE_VALOP_DISPATCH_DEF $RTCORE_MAP_QUERY_DISPATCH_DEF $RTCORE_MAP_QUERY_FOLD_DEF $RTCORE_COLLECTION_MUTATE_DEF $RTCORE_ATL_DEF $RTCORE_FS_RW_DEF $RTCORE_ACF_DEF $RTCORE_RUNTIME_MISC_DEF \
+    -D_FORTIFY_SOURCE=0 -fno-stack-protector $PACK_OUT_DEF $ALLOC_DEF $STR_DEF $PRINT_DEF $RTCORE_LEAF_DEF $RTCORE_STRARR_READ_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MATH2_DEF $RTCORE_VALOP_DISPATCH_DEF $RTCORE_MAP_QUERY_DISPATCH_DEF $RTCORE_MAP_QUERY_FOLD_DEF $RTCORE_COLLECTION_MUTATE_DEF $RTCORE_ATL_DEF $RTCORE_FS_RW_DEF $RTCORE_ACF_DEF $RTCORE_RUNTIME_MISC_DEF \
     -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $STR_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_STRARR_READ_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ $RTCORE_VALOP_DISPATCH_OBJ $RTCORE_MAP_QUERY_DISPATCH_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ $RT_A -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
 # ZERO-C Z2a: restore the warm runtime_core.c artifact ONLY when runtime_hi_gen.c
 # still exists (legacy gated test). When the file is permanently gone (default

@@ -1194,8 +1194,96 @@ fn _define_with_def(sc: LowerScope, name: string, def: DefId, typ: Type) -> Lowe
     }
 }
 
+// PERF (self-emit lower_ast_to_hir O(idents*M) kill — census measured this
+// phase at 430s on a 67920-line self-compile, ENCODE-MISS=0). The module frame
+// (all top-level fn/struct/enum/let, ~2.5-5k defs) sits at the BASE of the
+// value-threaded LowerScope.bindings, so `_lookup_in_scope` backward-scanned
+// all M module entries for every non-local identifier -> O(idents*M). A once-
+// primed 64-bucket FNV index over the module frame turns the module portion
+// into an O(bucket) probe, IDENTICAL to the #4773 `_mir_lookup_global` /
+// `_x86_strtab` (x86_64_linux.hexa:1448) idiom. Buckets hold bindings in
+// ASCENDING module-index order (pre-pass insertion order), so a BACKWARD bucket
+// walk returns the highest-index match == the full backward scan's first module
+// hit -> byte-eq NEUTRAL. Heap-resident module globals (reset + re-primed per
+// lower() call; a nested arena helper would dangle on frame rewind).
+let mut _lr_ast_gnames: [[string]] = []
+let mut _lr_ast_gbinds: [[LowerBinding]] = []
+let mut _lr_ast_gbound: i64 = -1
+
+// FNV-1a 32-bit fold -> 64 buckets — clone of _x86_strtab_hash (`% 4294967296`
+// keeps the i64 multiply overflow-free). Index-only, so byte-eq NEUTRAL.
+fn _lr_ast_gname_hash(s: string) -> i64 {
+    let mut h: i64 = 2166136261
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        h = (h ^ s.char_code_at(i)) * 16777619
+        h = h % 4294967296
+        i = i + 1
+    }
+    let mut b = h % 64
+    if b < 0 { b = b + 64 }
+    return b
+}
+
+// Prime the module-frame bucket index ONCE, right after the pre-pass publishes
+// the module scope. `sc.bindings` at this point is exactly the module frame.
+fn _lr_ast_prime_globals(sc: LowerScope) {
+    _lr_ast_gbound = len(sc.bindings)
+    let mut gn: [[string]] = []
+    let mut gb: [[LowerBinding]] = []
+    let mut e = 0
+    while e < 64 {
+        let en: [string] = []
+        let eb: [LowerBinding] = []
+        gn.push(en)
+        gb.push(eb)
+        e = e + 1
+    }
+    let mut i = 0
+    while i < _lr_ast_gbound {
+        let bd = sc.bindings[i]
+        let h = _lr_ast_gname_hash(bd.name)
+        gn[h] = gn[h].push(bd.name)
+        gb[h] = gb[h].push(bd)
+        i = i + 1
+    }
+    _lr_ast_gnames = gn
+    _lr_ast_gbinds = gb
+}
+
 fn _lookup_in_scope(sc: LowerScope, name: string) -> LowerBinding {
     let n = len(sc.bindings)
+    // Primed fast path: scan only the LOCAL suffix (indices _lr_ast_gbound..n)
+    // backward, then probe the 64-bucket module index. Equivalent to the full
+    // backward scan (locals shadow globals; the bucket's backward walk yields
+    // the highest module index for the name). byte-eq NEUTRAL.
+    if _lr_ast_gbound >= 0 && n >= _lr_ast_gbound && len(_lr_ast_gnames) == 64 {
+        let mut i = n - 1
+        while i >= _lr_ast_gbound {
+            let b = sc.bindings[i]
+            if b.name == name {
+                return b
+            }
+            i = i - 1
+        }
+        let h = _lr_ast_gname_hash(name)
+        let bnames = _lr_ast_gnames[h]
+        let bbinds = _lr_ast_gbinds[h]
+        let mut j = len(bnames) - 1
+        while j >= 0 {
+            if bnames[j] == name {
+                return bbinds[j]
+            }
+            j = j - 1
+        }
+        return LowerBinding {
+            name: "",
+            def: _hir_miss_def_id(),
+            typ: _hir_empty_type()
+        }
+    }
+    // Fallback: full backward scan (index not primed — e.g. during the pre-pass).
     let mut i = n - 1
     while i >= 0 {
         let b = sc.bindings[i]
@@ -2636,6 +2724,11 @@ pub fn lower(module: Module, atlas: AtlasIndex) -> HModule {
     l_diags = []
     // C19: reset for-desugar uid counter so output is determinate.
     _for_uid = 0
+    // PERF: reset the module-frame bucket index — lower() runs once per module
+    // and successive calls in one process must not read a stale index.
+    _lr_ast_gbound = -1
+    _lr_ast_gnames = []
+    _lr_ast_gbinds = []
 
     // Pre-pass: mint DefIds + collect module-level type bindings so that
     // intra-module references (calls, struct-of-fields, etc.) can resolve.
@@ -2669,6 +2762,11 @@ pub fn lower(module: Module, atlas: AtlasIndex) -> HModule {
         idx = idx + 1
         i = i + 1
     }
+
+    // PERF: prime the module-frame 64-bucket index now that the pre-pass has
+    // published every module def — the main pass's per-ident _lookup_in_scope
+    // probes it instead of the O(M) backward scan.
+    _lr_ast_prime_globals(module_sc)
 
     // Main pass: lower each item using the populated module scope.
     let mut hitems: [HItem] = []
