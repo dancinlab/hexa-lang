@@ -3613,6 +3613,20 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                                  "field_set: store-back struct payload"))
                 _x86_store_tag_reg(rm, fbase.local_id, "rax")
                 _x86_emit_dst_writeback(rm, fbase.local_id, 0)
+            } else if fbase.kind == "global" {
+                // r22 global store-back — arm64 stp-mirror (arm64_darwin :2596).
+                // hexa_map_set may relocate the struct descriptor; the local-only
+                // arm dropped it for a GLOBAL base → stale [rip+gN] → corruption on
+                // the next cross-fn read. Persist both halves to the .data slot:
+                // payload word0 [rip+gN] (rdx), tag word1 [rip+gN+8] (rax).
+                _x86_buf.push(_x86_instr2("mov",
+                                 _x86_op_label("[rip+g" + to_string(fbase.global_id) + "]"),
+                                 _x86_op_reg("rdx"),
+                                 "field_set: store-back struct payload to global g" + to_string(fbase.global_id)))
+                _x86_buf.push(_x86_instr2("mov",
+                                 _x86_op_label("[rip+g" + to_string(fbase.global_id) + "+8]"),
+                                 _x86_op_reg("rax"),
+                                 "field_set: store-back struct tag to global g" + to_string(fbase.global_id) + "+8"))
             }
             return
         }
@@ -3646,6 +3660,16 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                                      "index_set: store-back poly descriptor"))
                     _x86_store_tag_reg(rm, econt.local_id, "rax")
                     _x86_emit_dst_writeback(rm, econt.local_id, 0)
+                } else if econt.kind == "global" {
+                    // r22 global store-back — arm64 stp-mirror (arm64_darwin :2580).
+                    _x86_buf.push(_x86_instr2("mov",
+                                     _x86_op_label("[rip+g" + to_string(econt.global_id) + "]"),
+                                     _x86_op_reg("rdx"),
+                                     "index_set: store-back poly descriptor to global g" + to_string(econt.global_id)))
+                    _x86_buf.push(_x86_instr2("mov",
+                                     _x86_op_label("[rip+g" + to_string(econt.global_id) + "+8]"),
+                                     _x86_op_reg("rax"),
+                                     "index_set: store-back poly tag to global g" + to_string(econt.global_id) + "+8"))
                 }
                 return
             }
@@ -3683,6 +3707,16 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                                      "index_set: store-back container payload"))
                     _x86_store_tag_reg(rm, cont0.local_id, "rax")
                     _x86_emit_dst_writeback(rm, cont0.local_id, 0)
+                } else if cont0.kind == "global" {
+                    // r22 global store-back — arm64 stp-mirror (arm64_darwin :2596).
+                    _x86_buf.push(_x86_instr2("mov",
+                                     _x86_op_label("[rip+g" + to_string(cont0.global_id) + "]"),
+                                     _x86_op_reg("rdx"),
+                                     "index_set: store-back container payload to global g" + to_string(cont0.global_id)))
+                    _x86_buf.push(_x86_instr2("mov",
+                                     _x86_op_label("[rip+g" + to_string(cont0.global_id) + "+8]"),
+                                     _x86_op_reg("rax"),
+                                     "index_set: store-back container tag to global g" + to_string(cont0.global_id) + "+8"))
                 }
                 _x86_arru_emit_label(".Larru_done" + to_string(_n))
                 return
@@ -3699,6 +3733,20 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                                  "index_set: store-back container payload"))
                 _x86_store_tag_reg(rm, cont.local_id, "rax")
                 _x86_emit_dst_writeback(rm, cont.local_id, 0)
+            } else if cont.kind == "global" {
+                // r22 global store-back — arm64 stp-mirror (arm64_darwin :2606).
+                // hexa_index_set may relocate the container (growth); the local-only
+                // arm dropped the returned descriptor for a GLOBAL container → stale
+                // [rip+gN] → corruption on the next global read. Persist both halves:
+                // payload word0 [rip+gN] (rdx), tag word1 [rip+gN+8] (rax).
+                _x86_buf.push(_x86_instr2("mov",
+                                 _x86_op_label("[rip+g" + to_string(cont.global_id) + "]"),
+                                 _x86_op_reg("rdx"),
+                                 "index_set: store-back container payload to global g" + to_string(cont.global_id)))
+                _x86_buf.push(_x86_instr2("mov",
+                                 _x86_op_label("[rip+g" + to_string(cont.global_id) + "+8]"),
+                                 _x86_op_reg("rax"),
+                                 "index_set: store-back container tag to global g" + to_string(cont.global_id) + "+8"))
             }
             return
         }
