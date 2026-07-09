@@ -762,6 +762,17 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
             return [rex, 0x85, 0xc0 | ((rs & 0x7) << 3) | (rd & 0x7)]
         }
     }
+    // ③ census: TEST r32, r32 — 85 /r (2 B, no REX.W). The va_arg gp/fp_offset
+    // zero-checks emit `test eax,eax` / `test edx,edx` (32-bit); the r64 arm
+    // above rejects eax/edx (reg64 has no such name) → the walker dropped 14
+    // `test reg,reg` misses. Mirrors the CMP (r32) arm exactly (39 /r → 85 /r).
+    if op == "TEST" && len(ops) == 2 {
+        let rd = _ex86_reg32(ops[0])
+        let rs = _ex86_reg32(ops[1])
+        if rd >= 0 && rs >= 0 {
+            return [0x85, 0xc0 | (rs << 3) | rd]
+        }
+    }
     // IDIV r64 — REX.W + F7 /7 (3 B). Signed division of RDX:RAX by
     // r64, quotient → RAX, remainder → RDX. Caller must CQO first.
     if op == "IDIV64" && len(ops) == 1 {
@@ -3010,7 +3021,9 @@ fn _lir_op_uppercase_x86(op: string, ops: [LOperand]) -> string {
                                             // 1-op widening); the object walker
                                             // silently dropped `imul` as zero
                                             // bytes before this mapping existed.
-    if op == "test"  { return "TEST64" }    // 64-bit-only in encoder
+    // `test` is width-dispatched below (like `cmp`) — a 32-bit `test eax,eax`
+    // (va_arg gp/fp_offset zero-check) must route to the r32 TEST arm, not the
+    // r64 TEST64 which rejects eax/edx → a silent ENCODE-MISS drop.
 
     // Width-dispatched ops — detect 64-bit operand by reg name prefix
     // OR by mem operand (memory accesses through 64-bit base regs are
@@ -3035,6 +3048,9 @@ fn _lir_op_uppercase_x86(op: string, ops: [LOperand]) -> string {
     // ③-R2e: width-dispatch cmp — 64-bit reg operand → CMP64 (REX.W 39/81-7);
     // 32-bit (eax/edx, the va_arg gp/fp_offset checks) stays CMP (r32).
     if op == "cmp" { if is64 { return "CMP64" }; return "CMP" }
+    // ③ census: width-dispatch `test` — 64-bit reg → TEST64 (REX.W 85/r);
+    // 32-bit eax/edx (va_arg gp/fp_offset zero-checks) → TEST (r32, 85/r no REX).
+    if op == "test" { if is64 { return "TEST64" }; return "TEST" }
     // ③-R2a integer-ALU family — codegen emits these solely with r64
     // operands, so the is64 branch is always taken; the r32 fall-through
     // returns the bare name → a loud ENCODE-MISS (honest, never emitted).
