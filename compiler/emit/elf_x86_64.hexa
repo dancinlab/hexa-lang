@@ -636,6 +636,22 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     if op == "JAE_REL8" && len(ops) == 1 { return [0x73, 0x00] }
     if op == "JB_REL8"  && len(ops) == 1 { return [0x72, 0x00] }
     if op == "JBE_REL8" && len(ops) == 1 { return [0x76, 0x00] }
+    // Conditional jumps rel32 — 0F 80+cc cd (6 bytes). The 2-byte-opcode
+    // near form; the cc low-nibble is IDENTICAL to the REL8 opcodes above.
+    // Default for label branches (jcc → REL8 silently truncated any span
+    // >127 B: c14/m12 nested/large try bodies — see _pack_fn_x86 kind=2).
+    //   JE 0F 84 · JNE 0F 85 · JL 0F 8C · JGE 0F 8D · JLE 0F 8E · JG 0F 8F
+    //   JA 0F 87 · JAE 0F 83 · JB 0F 82 · JBE 0F 86
+    if op == "JE_REL32"  && len(ops) == 1 { return [0x0f, 0x84, 0x00, 0x00, 0x00, 0x00] }
+    if op == "JNE_REL32" && len(ops) == 1 { return [0x0f, 0x85, 0x00, 0x00, 0x00, 0x00] }
+    if op == "JL_REL32"  && len(ops) == 1 { return [0x0f, 0x8c, 0x00, 0x00, 0x00, 0x00] }
+    if op == "JGE_REL32" && len(ops) == 1 { return [0x0f, 0x8d, 0x00, 0x00, 0x00, 0x00] }
+    if op == "JLE_REL32" && len(ops) == 1 { return [0x0f, 0x8e, 0x00, 0x00, 0x00, 0x00] }
+    if op == "JG_REL32"  && len(ops) == 1 { return [0x0f, 0x8f, 0x00, 0x00, 0x00, 0x00] }
+    if op == "JA_REL32"  && len(ops) == 1 { return [0x0f, 0x87, 0x00, 0x00, 0x00, 0x00] }
+    if op == "JAE_REL32" && len(ops) == 1 { return [0x0f, 0x83, 0x00, 0x00, 0x00, 0x00] }
+    if op == "JB_REL32"  && len(ops) == 1 { return [0x0f, 0x82, 0x00, 0x00, 0x00, 0x00] }
+    if op == "JBE_REL32" && len(ops) == 1 { return [0x0f, 0x86, 0x00, 0x00, 0x00, 0x00] }
 
     // ── x86_64 r64 ops (REX.W) ──────────────────────────────────
     //
@@ -3090,6 +3106,7 @@ fn _pack_fn_x86(out_text: [Int],
     let unresolved_to:   [string] = []
     // Kind tag: 0 = REL8 (2-B insn, imm8 at off+1)
     //           1 = REL32 jmp/call (5-B insn, imm32 at off+1)
+    //           2 = REL32 jcc     (6-B insn, 2-B opcode → imm32 at off+2)
     let unresolved_kind: [Int]    = []
 
     let n = len(f.instrs)
@@ -3116,7 +3133,11 @@ fn _pack_fn_x86(out_text: [Int],
             i = i + 1
             continue
         }
-        // Conditional branches to labels — REL8 placeholder (2 B).
+        // Conditional branches to labels — REL32 near form (6 B, 0F 8x cd).
+        // The REL8 (2 B) form silently truncated any label span >127 B
+        // (delta & 0xff, no range check): a nested / all-spill try body
+        // (#4541) exceeds that, producing a wild jump → SIGSEGV (c14/m12).
+        // The near form always fits an intra-fn delta; kind=2 resolves it.
         let is_cc = (ins.op == "je"  || ins.op == "jz"  ||
                      ins.op == "jne" || ins.op == "jnz" ||
                      ins.op == "jl"  || ins.op == "jge" ||
@@ -3125,13 +3146,23 @@ fn _pack_fn_x86(out_text: [Int],
                      ins.op == "jb"  || ins.op == "jbe")
         if is_cc && len(ins.args) == 1 && ins.args[0].kind == "label" {
             let cur_off = len(out_text)
-            let up = _lir_op_uppercase_x86(ins.op, ins.args)
+            let mut up = "JNE_REL32"
+            if ins.op == "je"  || ins.op == "jz"  { up = "JE_REL32"  }
+            if ins.op == "jne" || ins.op == "jnz" { up = "JNE_REL32" }
+            if ins.op == "jl"  { up = "JL_REL32"  }
+            if ins.op == "jge" { up = "JGE_REL32" }
+            if ins.op == "jle" { up = "JLE_REL32" }
+            if ins.op == "jg"  { up = "JG_REL32"  }
+            if ins.op == "ja"  { up = "JA_REL32"  }
+            if ins.op == "jae" { up = "JAE_REL32" }
+            if ins.op == "jb"  { up = "JB_REL32"  }
+            if ins.op == "jbe" { up = "JBE_REL32" }
             let bs = encode_x86_64_insn(up, ["x"])
             let mut bi = 0
             while bi < len(bs) { out_text.push(bs[bi]); bi = bi + 1 }
             unresolved_brs.push(cur_off)
             unresolved_to.push(ins.args[0].label)
-            unresolved_kind.push(0)
+            unresolved_kind.push(2)
             i = i + 1
             continue
         }
@@ -3244,7 +3275,8 @@ fn _pack_fn_x86(out_text: [Int],
     }
 
     // Resolve intra-fn branches. REL8: imm8 at off+1, delta = toff-(off+2).
-    // REL32: imm32 at off+1, delta = toff-(off+5).
+    // REL32 jmp/call: imm32 at off+1, delta = toff-(off+5).
+    // REL32 jcc (2-B opcode): imm32 at off+2, delta = toff-(off+6).
     let nb = len(unresolved_brs)
     let mut bi = 0
     while bi < nb {
@@ -3254,15 +3286,41 @@ fn _pack_fn_x86(out_text: [Int],
         let toff   = _lookup_label_x86(label_names, label_offsets, target)
         if toff < 0 {
             // Extern / cross-fn — bubble to pending; cycle 30 builds reloc.
-            pending_offsets.push(off)
+            // jcc (kind=2) always targets an intra-fn block label, so an
+            // unresolved kind=2 is a walker-invariant break — make it loud
+            // (its disp32 field is at off+2, unlike call/jmp's off+1).
+            if kind == 2 {
+                eprintln("ENCODE-MISS (x86_64): unresolved intra-fn jcc target '" +
+                         target + "' (kind=2 must resolve locally)")
+                pending_offsets.push(off + 2)
+            } else {
+                pending_offsets.push(off)
+            }
             pending_names.push(target)
             bi = bi + 1
             continue
         }
         if kind == 0 {
+            // REL8 (2-B insn): imm8 at off+1, delta = toff-(off+2).
+            // HARD range-guard — jcc now defaults to REL32, so REL8 is only
+            // reached by forms whose delta provably fits; any future re-use
+            // that overflows ±127 is LOUD, never a silent 0xff truncation.
             let delta = toff - (off + 2)
+            if delta > 127 || delta < -128 {
+                eprintln("ENCODE-MISS (x86_64): REL8 branch delta out of range " +
+                         to_string(delta) + " to '" + target + "' (needs REL32)")
+            }
             out_text[off + 1] = delta & 0xff
+        } else if kind == 2 {
+            // jcc REL32 (6-B insn, 2-B opcode): imm32 at off+2,
+            // delta = toff-(off+6). 4-byte little-endian writeback.
+            let delta = toff - (off + 6)
+            out_text[off + 2] =  delta        & 0xff
+            out_text[off + 3] = (delta >> 8)  & 0xff
+            out_text[off + 4] = (delta >> 16) & 0xff
+            out_text[off + 5] = (delta >> 24) & 0xff
         } else {
+            // REL32 jmp/call (5-B insn): imm32 at off+1, delta = toff-(off+5).
             let delta = toff - (off + 5)
             out_text[off + 1] =  delta        & 0xff
             out_text[off + 2] = (delta >> 8)  & 0xff
