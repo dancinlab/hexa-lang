@@ -1,0 +1,159 @@
+// compiler/test/elf_ownstart_gotpcrel_test.hexa
+//
+// LINK-half / axis-③ — EXERCISES static GOT-slot synthesis for
+// R_X86_64_GOTPCREL(9) in link_elf_x86_64_ownstart (compiler/emit/
+// elf_x86_64.hexa). #4783 self-emits `mov reg,[rip+sym@GOTPCREL]` (REX.W
+// 8B /r RIP disp32=0, RELA addend -4); the own linker must SYNTHESIZE the
+// GOT (ZERO binutils): one 8-byte slot per DISTINCT symbol, slot = symbol's
+// final vaddr, disp32 patched to G+GOT+A-P (SysV AMD64 psABI §B.2; tcc
+// x86_64-link.c put_got_entry + relocate_section case R_X86_64_GOTPCREL).
+//
+// One hand-built obj (corpus-test idiom — hexa's own codegen path that
+// emits GOTPCREL is the extern/--shared case, so we drive the linker with
+// a hand-built ElfX86Obj):
+//   main: mov rax,[rip+g@GOTPCREL] ; mov rcx,[rip+g@GOTPCREL] ; ret
+//         (TWO GOTPCREL relocs against the SAME symbol `g` -> DEDUP to ONE
+//          GOT slot) + an 8-byte .data slot defining `g`.
+//
+// Hermetic: link runs in-process, we read the ET_EXEC back and assert raw
+// bytes SELF-DERIVED from the file's own headers (e_entry, phdr[1]) — no
+// clang / ld / x86 host needed. This is the structural gate PR-CI runs;
+// run-correctness (execute + diff vs binutils) is the pool follow-on.
+//
+// Run:  mkdir -p out_elfx86 && hexa run compiler/test/elf_ownstart_gotpcrel_test.hexa
+
+import "../ir/lir.hexa"
+import "../emit/macho_arm64.hexa"
+import "../emit/elf_x86_64.hexa"        // link_elf_x86_64_ownstart (GOT synth under test)
+
+fn _build_strtab(names: [string]) -> [Int] {
+    let st: [Int] = []
+    st.push(0)                                       // index 0 = NUL
+    let mut i = 0
+    while i < len(names) {
+        let nm = names[i]
+        let mut k = 0
+        while k < len(nm) { st.push(char_code(nm, k) & 0xFF); k = k + 1 }
+        st.push(0)
+        i = i + 1
+    }
+    return st
+}
+
+fn _sentinel(n: Int) -> [Int] {
+    let a: [Int] = []
+    let mut i = 0
+    while i < n { a.push(0xAA); i = i + 1 }
+    return a
+}
+
+fn _rd_u16(b, off: Int) -> Int {
+    return (b[off] & 0xff) + (b[off + 1] & 0xff) * 256
+}
+fn _rd_u32(b, off: Int) -> Int {
+    let mut v = 0
+    let mut i = 3
+    while i >= 0 { v = v * 256 + (b[off + i] & 0xff); i = i - 1 }
+    return v
+}
+fn _rd_u64(b, off: Int) -> Int {
+    let mut v = 0
+    let mut i = 7
+    while i >= 0 { v = v * 256 + (b[off + i] & 0xff); i = i - 1 }
+    return v
+}
+
+let mut _fails = 0
+fn _check(cond: bool, msg: string) {
+    if cond {
+        println("  ok   " + msg)
+    } else {
+        println("  FAIL " + msg)
+        _fails = _fails + 1
+    }
+}
+
+fn main() {
+    // ── obj: main with two GOTPCREL loads of `g` + a .data slot for `g` ──
+    // text (15B):
+    //   48 8B 05 <disp32>   mov rax,[rip+g@GOTPCREL]   ; disp field @ off 3
+    //   48 8B 0D <disp32>   mov rcx,[rip+g@GOTPCREL]   ; disp field @ off 10
+    //   C3                  ret
+    let strtab = _build_strtab(["main", "g"])          // main=1, g=6
+    let obj: ElfX86Obj = ElfX86Obj {
+        text: [0x48, 0x8B, 0x05, 0x00, 0x00, 0x00, 0x00,
+               0x48, 0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00,
+               0xC3],
+        relocs: [
+            // R1: GOTPCREL(9) -> g, RELA addend -4, text site @ off 3
+            ElfRel { offset: 3,  sym_idx: 1, kind: 9, addend: -4, site_seg: 1 },
+            // R2: GOTPCREL(9) -> g AGAIN (dedup -> same slot), site @ off 10
+            ElfRel { offset: 10, sym_idx: 1, kind: 9, addend: -4, site_seg: 1 },
+        ],
+        symbols: [
+            // main: .text (section 1), entry
+            ElfSym { name_offset: 1, section: 1, value: 0, size: 15, bind: 1, type_: 2 },
+            // g: .data (section 4), blob offset 0
+            ElfSym { name_offset: 6, section: 4, value: 0, size: 8, bind: 1, type_: 1 },
+        ],
+        strtab:   strtab,
+        rodata:   [],
+        data:     _sentinel(8),          // g's 8-byte storage slot
+        bss_size: 0,
+        nlocal:   0,
+    }
+
+    let objs: [ElfX86Obj] = [obj]
+    let out_path = "out_elfx86/gotpcrel.elf"
+    let rc = link_elf_x86_64_ownstart(objs, out_path, "main")
+    _check(rc == 0, "link_elf_x86_64_ownstart rc==0")
+
+    let b = read_file_bytes(out_path)
+
+    // ── ELF/phdr layout (2-seg: R-X text + RW data; GOT rides in .data) ──
+    let e_entry = _rd_u64(b, 24)
+    let e_phnum = _rd_u16(b, 56)
+    let ph1     = 64 + 56                               // phdr[1] (RW data seg)
+    let p_off   = _rd_u64(b, ph1 + 8)
+    let p_vaddr = _rd_u64(b, ph1 + 16)
+    let p_fsz   = _rd_u64(b, ph1 + 32)
+    _check(e_phnum == 2, "e_phnum==2 (two PT_LOAD; GOT forces RW seg)")
+    // .data blob = g-slot(8) + GOT(8). DEDUP: two relocs, one symbol -> ONE
+    // 8-byte slot. If dedup failed there'd be a second slot => p_filesz 24.
+    _check(p_fsz == 16, "data p_filesz==16 (g-slot 8 + ONE 8B GOT slot => dedup)")
+
+    // g lives at .data blob offset 0 -> g_vaddr == data_vaddr_base == p_vaddr.
+    let g_vaddr = p_vaddr
+    // GOT slot rides at .data blob offset 8 (8-aligned tail, got_blob_off=8).
+    let got_slot_vaddr = p_vaddr + 8
+
+    // (1) GOT slot CONTENT = g's final vaddr, 8-byte little-endian.
+    _check(_rd_u64(b, p_off + 8) == g_vaddr, "GOT slot @blob8 == g final vaddr (8B LE)")
+
+    // (2) disp32 at each mov = G+GOT+A-P = got_slot_vaddr + (-4) - P.
+    // .text sits at file offset code_off = 64 + 56*phnum (=176 for 2-seg);
+    // main is the first text after the 14-byte own-start stub (base 14).
+    let code_off = 64 + 56 * e_phnum
+    let main_base = 14
+    let main_v   = e_entry + main_base                  // main's vaddr
+    // R1: field @ text off (base+3); P = its vaddr; addend -4.
+    let f1_file = code_off + main_base + 3
+    let p1      = main_v + 3
+    let d1_exp  = (got_slot_vaddr - 4 - p1) & 0xffffffff
+    _check(_rd_u32(b, f1_file) == d1_exp, "R1 disp32 == slot_vaddr-4-P (points at GOT slot)")
+    // R2: same slot (dedup), field @ (base+10).
+    let f2_file = code_off + main_base + 10
+    let p2      = main_v + 10
+    let d2_exp  = (got_slot_vaddr - 4 - p2) & 0xffffffff
+    _check(_rd_u32(b, f2_file) == d2_exp, "R2 disp32 == slot_vaddr-4-P (same slot, dedup)")
+
+    // (3) Cross-check: disp32 == got_slot_vaddr - rip_next (rip_next = P+4).
+    _check(_rd_u32(b, f1_file) == ((got_slot_vaddr - (p1 + 4)) & 0xffffffff),
+           "R1 disp32 == got_slot_vaddr - rip_next")
+
+    if _fails == 0 {
+        println("GOTPCREL ALL PASS")
+    } else {
+        println("GOTPCREL FAIL count=" + to_string(_fails))
+    }
+}
