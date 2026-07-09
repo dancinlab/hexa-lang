@@ -3467,15 +3467,19 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
     // pushed once is found at the same index forever after), so memoizing the
     // first resolution per distinct name is byte-IDENTICAL. Distinct callee
     // names are few (~tens), so the cache scan is ~O(distinct) ≪ O(symbols).
-    let mut _symc_names: [string] = []
-    let mut _symc_idx:   [Int]    = []
+    // #self-emit-oom: bucketed (1024-way FNV-1a) name→symidx cache, shared by the
+    // CALL + data reloc passes. Byte-eq NEUTRAL vs the old flat _symc_* scan (same
+    // first-match index, just found via its hash bucket) — see _symh_hash.
+    let mut _symh_names = _symh_empty_names()
+    let mut _symh_idx   = _symh_empty_idx()
     let np = len(pending_offsets)
     let mut pi = 0
     while pi < np {
         let call_off = pending_offsets[pi]
         let name     = pending_names[pi]
         // Cached resolution first; fall back to the symtab scan on a miss.
-        let mut idx = _symc_lookup(_symc_names, _symc_idx, name)
+        let _hb = _symh_hash(name)
+        let mut idx = _symh_get(_symh_names[_hb], _symh_idx[_hb], name)
         let was_cached = idx >= 0
         if idx < 0 {
             idx = _find_elf_sym_by_name(obj.symbols, obj.strtab, name)
@@ -3499,8 +3503,8 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
         // Memoize on a MISS only (so the cache holds one entry per distinct
         // name — pushing on hits too would re-grow it to O(N)).
         if !was_cached {
-            _symc_names.push(name)
-            _symc_idx.push(idx)
+            _symh_names[_hb] = _symh_names[_hb].push(name)
+            _symh_idx[_hb]   = _symh_idx[_hb].push(idx)
         }
         // The reloc's `r_offset` points at the imm32 field of the
         // CALL placeholder, i.e. call_off + 1.
@@ -3543,8 +3547,9 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
         let disp_off = data_offsets[dpi]
         let name     = data_names[dpi]
         let adnd     = data_addends[dpi]
-        // Same #3712 memo cache as the CALL pass (shared across both passes).
-        let mut idx = _symc_lookup(_symc_names, _symc_idx, name)
+        // Same bucketed cache as the CALL pass (shared across both passes).
+        let _hb = _symh_hash(name)
+        let mut idx = _symh_get(_symh_names[_hb], _symh_idx[_hb], name)
         let was_cached = idx >= 0
         if idx < 0 {
             idx = _find_elf_sym_by_name(obj.symbols, obj.strtab, name)
@@ -3564,8 +3569,8 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
             idx = len(obj.symbols) - 1
         }
         if !was_cached {
-            _symc_names.push(name)
-            _symc_idx.push(idx)
+            _symh_names[_hb] = _symh_names[_hb].push(name)
+            _symh_idx[_hb]   = _symh_idx[_hb].push(idx)
         }
         obj.relocs.push(ElfRel {
             offset:  disp_off,
@@ -3592,6 +3597,54 @@ fn _symc_lookup(names: [string], idxs: [Int], name: string) -> Int {
     let mut i = 0
     while i < n {
         if names[i] == name { return idxs[i] }
+        i = i + 1
+    }
+    return -1
+}
+
+// #self-emit-oom — the flat _symc_* cache above is O(distinct) PER reloc probe.
+// On corpus files distinct callee/data names are ~tens, so it is ~O(1). On the
+// COMPILER SELF-SOURCE distinct names are ~5k fns + ~15-20k unique `.LCstrN`, so
+// np·O(distinct) ≈ 10^10 runtime string-compares and the pack phase never
+// finishes (the per-insn encoder completes with 0 ENCODE-MISS, then parks in the
+// reloc passes at peak RSS → swap-thrash). These helpers bucket the SAME cache by
+// an FNV-1a hash (1024 buckets, mirroring codegen's `_x86_strtab_hash` widened),
+// collapsing each probe to O(distinct/1024) ≈ O(1). Byte-eq NEUTRAL: a name still
+// resolves to `_find_elf_sym_by_name`'s first (== only) match — found via its
+// bucket rather than a full scan — so every ElfRel `sym_idx` is identical.
+fn _symh_hash(s: string) -> i64 {
+    let mut h: i64 = 2166136261
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        h = (h ^ s.char_code_at(i)) * 16777619
+        h = h % 4294967296
+        i = i + 1
+    }
+    let mut b = h % 1024
+    if b < 0 { b = b + 1024 }
+    return b
+}
+
+fn _symh_empty_names() -> [[string]] {
+    let mut bs: [[string]] = []
+    let mut i = 0
+    while i < 1024 { let e: [string] = []; bs.push(e); i = i + 1 }
+    return bs
+}
+
+fn _symh_empty_idx() -> [[Int]] {
+    let mut bs: [[Int]] = []
+    let mut i = 0
+    while i < 1024 { let e: [Int] = []; bs.push(e); i = i + 1 }
+    return bs
+}
+
+fn _symh_get(bucket_names: [string], bucket_idx: [Int], name: string) -> Int {
+    let n = len(bucket_names)
+    let mut i = 0
+    while i < n {
+        if bucket_names[i] == name { return bucket_idx[i] }
         i = i + 1
     }
     return -1
