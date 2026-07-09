@@ -3056,6 +3056,24 @@ fn _set_cur_block(ctx: LowerCtx, id: i64) -> LowerCtx {
 }
 
 fn _push_stmt_to(ctx: LowerCtx, block_id: i64, s: Stmt) -> LowerCtx {
+    // #self-emit-oom round-2: a block's id == its _lr_blocks index by construction
+    // (_new_block pushes ids monotonically 0,1,2,…; _lr_ctx_clear resets per fn), so
+    // a direct index is O(1) vs the O(blocks) scan below. The scan made lowering
+    // O(stmts·blocks) PER FN — a codegen-phase quadratic that dominated the self-emit
+    // wall on the compiler self-source's large fns (#4779 cleared the reloc-scan RSS
+    // creep; this clears the surviving compile-TIME phase). Guarded fast-path — the
+    // scan stays below as a provable-safety fallback (byte-eq identical placement).
+    if block_id >= 0 && block_id < len(_lr_blocks) && _lr_blocks[block_id].id == block_id {
+        _lr_blocks[block_id].stmts.push(s)
+        return LowerCtx {
+            next_local: ctx.next_local,
+            next_block: ctx.next_block,
+            next_arena: ctx.next_arena,
+            arena_root: ctx.arena_root,
+            cur_block: ctx.cur_block,
+            has_returned: ctx.has_returned
+        }
+    }
     let mut i = 0
     while i < len(_lr_blocks) {
         if _lr_blocks[i].id == block_id {
@@ -3089,6 +3107,23 @@ fn _push_stmt(ctx: LowerCtx, s: Stmt) -> LowerCtx {
 }
 
 fn _add_edge(ctx: LowerCtx, from_id: i64, to_id: i64) -> LowerCtx {
+    // #self-emit-oom round-2: direct-index both endpoints (id==_lr_blocks index
+    // invariant, see _push_stmt_to). The scan below walks ALL blocks per edge and
+    // never breaks → O(edges·blocks) per fn. Guarded fast-path; scan stays as the
+    // provable-safety fallback (byte-eq identical succ/pred placement).
+    let _nb = len(_lr_blocks)
+    if from_id >= 0 && from_id < _nb && _lr_blocks[from_id].id == from_id && to_id >= 0 && to_id < _nb && _lr_blocks[to_id].id == to_id {
+        _lr_blocks[from_id].succs.push(to_id)
+        _lr_blocks[to_id].preds.push(from_id)
+        return LowerCtx {
+            next_local: ctx.next_local,
+            next_block: ctx.next_block,
+            next_arena: ctx.next_arena,
+            arena_root: ctx.arena_root,
+            cur_block: ctx.cur_block,
+            has_returned: ctx.has_returned
+        }
+    }
     let mut i = 0
     while i < len(_lr_blocks) {
         // S1-step-2: in-place edge growth (see _push_stmt_to). `.succs` /
