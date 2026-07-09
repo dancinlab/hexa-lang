@@ -3815,7 +3815,12 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
     while gpi < ng {
         let g_off = got_offsets[gpi]
         let name  = got_names[gpi]
-        let mut idx = _symc_lookup(_symc_names, _symc_idx, name)
+        // #build-break fix: #4783's GOTPCREL pass used the flat _symc_* cache that
+        // #4784 replaced with the bucketed _symh_* (it was cut pre-#4784 + merged
+        // without rebasing → undeclared _symc_names/_symc_idx → aprime build death).
+        // Convert to the same bucketed lookup #4784 gave the CALL + data passes.
+        let _hb = _symh_hash(name)
+        let mut idx = _symh_get(_symh_names[_hb], _symh_idx[_hb], name)
         let was_cached = idx >= 0
         if idx < 0 {
             idx = _find_elf_sym_by_name(obj.symbols, obj.strtab, name)
@@ -3833,8 +3838,8 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
             idx = len(obj.symbols) - 1
         }
         if !was_cached {
-            _symc_names.push(name)
-            _symc_idx.push(idx)
+            _symh_names[_hb] = _symh_names[_hb].push(name)
+            _symh_idx[_hb]   = _symh_idx[_hb].push(idx)
         }
         obj.relocs.push(ElfRel {
             offset:  g_off,
