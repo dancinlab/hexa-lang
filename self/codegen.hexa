@@ -3335,6 +3335,29 @@ fn gen2_fn_decl(node) {
     // by DEFAULT (no env flag) — the boxed-HexaArr surface is never reachable, so
     // it is sound. Escaping bindings keep the boxed representation (no regression).
     _native_arr_noescape_scan(node.body)
+    // ③ SELFEMIT-PACK-OUT: clear the per-fn packed-[Int]-buffer name set so a
+    // packed handle in one fn never leaks routing into the next. No-op set when
+    // HEXA_SELFEMIT_PACK_OUT is unset (nothing is ever added) → OFF-path byte-id.
+    _selfemit_pack_out_reset()
+    // ③ SELFEMIT-PACK-OUT: also register every `[Int]`/`[i64]`/`[int]`-typed
+    // PARAMETER as a pack-out handle so a packed buffer passed to a byte-append
+    // helper (`_ew_u32(out: [Int], v)`) keeps growing through the poly readers
+    // across the call boundary — the compiler's serialize `out` is grown via
+    // exactly these helpers, not only direct pushes. SOUND for a BOXED [Int]
+    // arg too: the poly readers (hexa_arr_poly_*) branch on the tag and delegate
+    // to the boxed path for TAG_ARRAY, so routing is a superset (identical
+    // output for a non-packed arg). GATED: only under the flag → OFF-path
+    // byte-identical (the set stays empty).
+    if _selfemit_pack_out_enabled() {
+        let mut _ppi = 0
+        while _ppi < len(_gen2_current_fn_param_types) {
+            let _pty = _gen2_current_fn_param_types[_ppi]
+            if _pty == "[Int]" || _pty == "[i64]" || _pty == "[int]" {
+                _selfemit_pack_out_add(_gen2_current_fn_params[_ppi])
+            }
+            _ppi = _ppi + 1
+        }
+    }
     let mut _hoisted = []
     let mut hoists = []
     let mut ii = 0
@@ -4454,6 +4477,15 @@ fn _gen2_collect_main_body_lets(ast) {
 // output preserved). lhs = the Index AST node (AssignStmt.left); val_c = the
 // already-lowered RHS C-string. Returns the full `root = …;` statement string.
 fn _gen2_nested_index_assign_stmt(lhs, val_c, pad) {
+    // ③ SELFEMIT-PACK-OUT: depth-1 `out[i] = v` on a packed [Int] buffer →
+    // poly set (TAG_ARRAY_I64 aware in-place store; the boxed hexa_index_set
+    // would walk the raw int64_t[] as 16B HexaVal). Backpatch writes are
+    // in-bounds (poly_set does not auto-grow). Nested spines fall through.
+    // Membership empty when HEXA_SELFEMIT_PACK_OUT is unset → byte-identical.
+    if type_of(lhs.left) != "string" && lhs.left.kind == "Ident" && _is_selfemit_pack_out_name(lhs.left.name) {
+        let _pc = gen2_expr(lhs.left)
+        return pad + _pc + " = hexa_arr_poly_set(" + _pc + ", (int64_t)HX_INT(" + gen2_expr(lhs.right) + "), " + val_c + ");\n"
+    }
     // Walk the Index spine outermost→innermost collecting index keys.
     // lhs.right = last key (kN); lhs.left = root[k0]...[k(N-1)].
     let mut keys_rev = []
@@ -4629,6 +4661,24 @@ fn _gen2_stmt_inner(node, depth) {
         // live variable read when the new init does not fold).
         if _gen2_has_decl(node.name) {
             _invalidate_comptime_const(node.name)
+        }
+        // ③ SELFEMIT-PACK-OUT (round-6): an EMPTY type-annotated
+        // `let out: [Int] = []` accumulator (grown by .push, then returned /
+        // written) packs into a native contiguous int64_t[] via the ESCAPING
+        // descriptor hexa_arr_i64_new_esc (TAG_ARRAY_I64) so the runtime poly
+        // readers handle it after it leaves the fn. Register the name so the
+        // push / index / len use-site arms route to hexa_arr_poly_*, and swap
+        // the boxed hexa_array_new init for the packed mint. GATED default-OFF
+        // (HEXA_SELFEMIT_PACK_OUT): when unset this block never fires, the name
+        // set stays empty, and `init` / every use-site is byte-identical. A
+        // same-name re-let to a non-packed RHS voids the handle.
+        if _selfemit_pack_out_enabled() {
+            if _is_empty_typed_int_array_let(node) {
+                _selfemit_pack_out_add(node.name)
+                init = "hexa_arr_i64_new_esc(16)"
+            } else {
+                _selfemit_pack_out_void(node.name)
+            }
         }
         // STRUCTURAL-2 Phase B: register immutable let with int initializer
         // as known-int for downstream BinOp .i unboxing. Only LetStmt
@@ -4892,6 +4942,9 @@ fn _gen2_stmt_inner(node, depth) {
             // array (or a non-array) — void the known-int-array proof.
             _known_intarr_void(node.left.name)
             _known_floatarr_void(node.left.name)
+            // ③ SELFEMIT-PACK-OUT: `out = <expr>` rebinds to a possibly
+            // non-packed value — void the packed handle (no-op when absent).
+            _selfemit_pack_out_void(node.left.name)
         }
         return pad + gen2_expr(node.left) + " = " + gen2_expr(node.right) + ";\n"
     }
@@ -7838,6 +7891,13 @@ fn gen2_expr(node) {
                 return pr
             }
             if name == "len" {
+                // ③ SELFEMIT-PACK-OUT: free `len(out)` on a packed [Int] buffer
+                // → poly len (hexa_len returns 0 for TAG_ARRAY_I64 since
+                // HX_IS_ARRAY only matches TAG_ARRAY). Membership empty when the
+                // flag is off → byte-identical.
+                if len(node.args) == 1 && type_of(node.args[0]) != "string" && node.args[0].kind == "Ident" && _is_selfemit_pack_out_name(node.args[0].name) {
+                    return "hexa_int(hexa_arr_poly_len(" + gen2_expr(node.args[0]) + "))"
+                }
                 return "hexa_int(hexa_len(" + gen2_expr(node.args[0]) + "))"
             }
             if name == "to_string" {
@@ -10118,6 +10178,19 @@ fn gen2_expr(node) {
         if type_of(callee) != "string" && callee.kind == "Field" {
             let obj = gen2_expr(callee.left)
             let method = callee.name
+            // ③ SELFEMIT-PACK-OUT: route .push / .append / .len on a packed
+            // [Int] buffer to the runtime poly readers (TAG_ARRAY_I64 aware).
+            // Membership is empty when HEXA_SELFEMIT_PACK_OUT is unset →
+            // byte-identical (this arm never fires). Placed before the user-impl
+            // dispatch: a packed accumulator is a plain array (no user impl).
+            if type_of(callee.left) != "string" && callee.left.kind == "Ident" && _is_selfemit_pack_out_name(callee.left.name) {
+                if method == "push" || method == "append" {
+                    return "hexa_arr_poly_push(" + obj + ", " + gen2_expr(node.args[0]) + ")"
+                }
+                if method == "len" {
+                    return "hexa_int(hexa_arr_poly_len(" + obj + "))"
+                }
+            }
             // ── User impl method dispatch (P2-6) ──────────────
             // If any ImplBlock defines this method, emit a runtime type
             // check chain so struct receivers dispatch to Type__method while
@@ -10470,6 +10543,13 @@ fn gen2_expr(node) {
                 }
             }
             return "hexa_array_slice(" + arr_c + ", " + s_c + ", " + e_c + ")"
+        }
+        // ③ SELFEMIT-PACK-OUT: scalar index read `out[i]` of a packed [Int]
+        // buffer → poly get (TAG_ARRAY_I64 aware; the boxed hexa_index_get would
+        // walk the raw int64_t[] as 16B HexaVal → garbage). Membership empty
+        // when HEXA_SELFEMIT_PACK_OUT is unset → byte-identical.
+        if type_of(node.left) != "string" && node.left.kind == "Ident" && _is_selfemit_pack_out_name(node.left.name) {
+            return "hexa_arr_poly_get(" + gen2_expr(node.left) + ", (int64_t)HX_INT(" + gen2_expr(node.right) + "))"
         }
         // ── UNSHADOW item C: proof-carrying bounds-elision emit ─────────────
         // If `arr[i]` is covered by a LIVE in-range fact (established by an
@@ -12869,6 +12949,76 @@ let mut _known_intarr_set = []
 // the full no-escape auto-firing generalization is a separate sub-task.
 fn _native_arr_enabled() {
     return env("HEXA_NATIVE_ARR") != ""
+}
+
+// ③ SELFEMIT-PACK-OUT (round-6) — gate for packing an EMPTY, type-annotated
+// `let out: [Int] = []` accumulator (grown only by .push, then RETURNED /
+// written by write_bytes) into a native contiguous int64_t[] via the ESCAPING
+// descriptor hexa_arr_i64_new_esc (TAG_ARRAY_I64) instead of the boxed
+// 16B-stride HexaArr. Targets the compiler's OWN ELF/Mach-O serialize output
+// buffer, whose per-element boxing is the measured ~26.7min / 19GB
+// serialize_elf_x86_64 self-emit wall. DEFAULT OFF (env HEXA_SELFEMIT_PACK_OUT
+// empty/unset): the name set below stays empty, every use-site membership
+// check is false, and output is byte-IDENTICAL to current. Distinct from
+// HEXA_NATIVE_ARR / the auto-fire no-escape proof: this uses the ESCAPING
+// discriminator (TAG_ARRAY_I64) + the runtime poly readers, so the buffer may
+// safely leave the fn (return / write_bytes) without the #4133 boxed-stride
+// miscompile — the poly readers branch on the tag at runtime.
+fn _selfemit_pack_out_enabled() {
+    return env("HEXA_SELFEMIT_PACK_OUT") != ""
+}
+
+let mut _selfemit_pack_out_names = []
+
+fn _selfemit_pack_out_reset() {
+    _selfemit_pack_out_names = []
+}
+
+fn _selfemit_pack_out_add(name) {
+    let mut i = 0
+    while i < len(_selfemit_pack_out_names) {
+        if _selfemit_pack_out_names[i] == name { return }
+        i = i + 1
+    }
+    _selfemit_pack_out_names = _selfemit_pack_out_names.push(name)
+}
+
+fn _selfemit_pack_out_void(name) {
+    let n = len(_selfemit_pack_out_names)
+    if n <= 0 { return }
+    let mut _rebuilt = []
+    let mut i = 0
+    while i < n {
+        if _selfemit_pack_out_names[i] != name { _rebuilt = _rebuilt.push(_selfemit_pack_out_names[i]) }
+        i = i + 1
+    }
+    _selfemit_pack_out_names = _rebuilt
+}
+
+fn _is_selfemit_pack_out_name(name) {
+    let mut i = 0
+    while i < len(_selfemit_pack_out_names) {
+        if _selfemit_pack_out_names[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Is `node` a LetStmt/LetMutStmt/AtomicLet binding an EMPTY array literal `[]`
+// carrying an explicit `[Int]` / `[i64]` / `[int]` type annotation? `node.value`
+// holds the parsed type-annotation string (parser.hexa parse_let → `.value`),
+// `node.left` is the RHS expr. This is the narrow shape the pack-out lever
+// admits: a typed, empty, push-grown int accumulator.
+fn _is_empty_typed_int_array_let(node) {
+    if type_of(node) == "string" { return false }
+    let t = node.value
+    if t != "[Int]" && t != "[i64]" && t != "[int]" { return false }
+    let rhs = node.left
+    if type_of(rhs) == "string" { return false }
+    if rhs.kind != "Array" { return false }
+    if type_of(rhs.items) != "array" { return false }
+    if len(rhs.items) != 0 { return false }
+    return true
 }
 
 fn _known_intarr_add(name) {
