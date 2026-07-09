@@ -2882,6 +2882,72 @@ fn _ex86_data_label_of(s: string) -> string {
     return ""
 }
 
+// ③-3lane — strip a `[rip+<inner>]` wrapper; "" when not wrapped or when
+// the inner carries an `@` reloc suffix (`@GOTPCREL`/`@PLT` = GOT/PLT
+// reloc, NOT plain PC32 — those stay on the loud ENCODE-MISS path until
+// the GOT round).
+fn _ex86_rip_inner(s: string) -> string {
+    let n = len(s)
+    if n < 7 { return "" }
+    if s.substring(0, 5) != "[rip+" { return "" }
+    if s.substring(n - 1, n) != "]" { return "" }
+    let inner = s.substring(5, n - 1)
+    let mut j = 0
+    while j < len(inner) {
+        if inner.substring(j, j + 1) == "@" { return "" }
+        j = j + 1
+    }
+    return inner
+}
+
+// ③-3lane — position of a trailing `+N`/`-N` addend in a wrapped inner
+// (`g0+8` → 2), or -1 when none. Only an ALL-digit tail after a `+`/`-`
+// at position ≥ 1 counts: symbol names never embed `+`, and a leading
+// `.`/`-` is part of the name, never a separator.
+fn _ex86_addend_pos(inner: string) -> Int {
+    let n = len(inner)
+    let mut j = 1
+    while j < n {
+        let c = inner.substring(j, j + 1)
+        if c == "+" || c == "-" {
+            if j + 1 >= n { return -1 }
+            let mut k = j + 1
+            while k < n {
+                let d = char_code(inner, k)
+                if d < 48 || d > 57 { return -1 }
+                k = k + 1
+            }
+            return j
+        }
+        j = j + 1
+    }
+    return -1
+}
+
+fn _ex86_sym_base(inner: string) -> string {
+    let p = _ex86_addend_pos(inner)
+    if p < 0 { return inner }
+    return inner.substring(0, p)
+}
+
+fn _ex86_sym_addend(inner: string) -> Int {
+    let p = _ex86_addend_pos(inner)
+    if p < 0 { return 0 }
+    let mag = inner.substring(p + 1, len(inner)).to_int()
+    if inner.substring(p, p + 1) == "-" { return 0 - mag }
+    return mag
+}
+
+// ③-3lane — generalized RIP-relative insn: REX.W + opcode + ModRM
+// (mod=00 reg=reg_idx rm=101=RIP) + disp32 placeholder. opcode: 0x8B
+// mov load · 0x89 mov store · 0x8D lea. For 89 the ModRM.reg field is
+// the SOURCE register — same layout either direction.
+fn _ex86_rip_rel_insn(opcode: Int, reg_idx: Int) -> [Int] {
+    let rex = _ex86_rex(1, if reg_idx >= 8 { 1 } else { 0 }, 0, 0)
+    let modrm = (0 << 6) | ((reg_idx & 0x7) << 3) | 0x5   // mod=00 rm=101 (RIP)
+    return [rex, opcode, modrm, 0x00, 0x00, 0x00, 0x00]
+}
+
 fn _lir_op_uppercase_x86(op: string, ops: [LOperand]) -> string {
     // 0/1-arg ops with no width variant.
     if op == "ret"     { return "RET" }
@@ -3016,7 +3082,7 @@ fn _lookup_label_x86(names: [string], offsets: [Int], target: string) -> Int {
 
 fn _pack_fn_x86(out_text: [Int],
                 pending_offsets: [Int], pending_names: [string],
-                data_offsets: [Int], data_names: [string],
+                data_offsets: [Int], data_names: [string], data_addends: [Int],
                 f: LFunc) {
     let label_names:     [string] = []
     let label_offsets:   [Int]    = []
@@ -3082,6 +3148,60 @@ fn _pack_fn_x86(out_text: [Int],
             continue
         }
 
+        // ── ③-3lane: RIP-wrapped `[rip+sym±N]` label operands ──────────
+        //   mov reg,[rip+sym±N]  → REX.W 8B /r  (VALUE load)
+        //   mov [rip+sym±N],reg  → REX.W 89 /r  (VALUE store)
+        //   lea reg,[rip+sym±N]  → REX.W 8D /r  (address — ANY symbol
+        //     family, not just the data-label whitelist: fn_sym/lam_sym/
+        //     slot_<id>)
+        // All three: disp32 placeholder + R_X86_64_PC32 vs the BASE
+        // symbol, reloc addend = N - 4. The old route sent wrapped movs
+        // to the lea data-address path — a value load of [rip+g<id>+8]
+        // materialized the ADDRESS (not the tag VALUE) and minted a bogus
+        // undef symbol literally named "g0+8"; wrapped STORES fell through
+        // to ENCODE-MISS entirely (the module-global write never reached
+        // the object). `@GOTPCREL`/`@PLT` inners are a DIFFERENT reloc →
+        // `_ex86_rip_inner` returns "" (still the loud miss).
+        if (ins.op == "mov" || ins.op == "lea") && len(ins.args) == 2
+           && ins.args[0].kind == "reg" && ins.args[1].kind == "label" {
+            let inner = _ex86_rip_inner(ins.args[1].label)
+            if len(inner) > 0 {
+                let rd = _ex86_reg64(ins.args[0].reg.name)
+                if rd >= 0 {
+                    let mut opc = 0x8b                    // mov = value load
+                    if ins.op == "lea" { opc = 0x8d }     // lea = address
+                    let cur_off = len(out_text)
+                    let bs = _ex86_rip_rel_insn(opc, rd)
+                    let mut bi = 0
+                    while bi < len(bs) { out_text.push(bs[bi]); bi = bi + 1 }
+                    data_offsets.push(cur_off + 3)
+                    data_names.push(_ex86_sym_base(inner))
+                    data_addends.push(_ex86_sym_addend(inner))
+                    i = i + 1
+                    continue
+                }
+            }
+        }
+        // mov [rip+sym±N], reg — the store mirror (census #1, 1796×).
+        if ins.op == "mov" && len(ins.args) == 2
+           && ins.args[0].kind == "label" && ins.args[1].kind == "reg" {
+            let inner = _ex86_rip_inner(ins.args[0].label)
+            if len(inner) > 0 {
+                let rs = _ex86_reg64(ins.args[1].reg.name)
+                if rs >= 0 {
+                    let cur_off = len(out_text)
+                    let bs = _ex86_rip_rel_insn(0x89, rs)
+                    let mut bi = 0
+                    while bi < len(bs) { out_text.push(bs[bi]); bi = bi + 1 }
+                    data_offsets.push(cur_off + 3)
+                    data_names.push(_ex86_sym_base(inner))
+                    data_addends.push(_ex86_sym_addend(inner))
+                    i = i + 1
+                    continue
+                }
+            }
+        }
+
         // Data-address materialization — `mov <reg>, <.LCstrN | g<id>>`.
         // The source is a data symbol whose ADDRESS is wanted; encode as
         // RIP-relative `lea reg, [rip+0]` + bubble an R_X86_64_PC32 reloc
@@ -3101,6 +3221,7 @@ fn _pack_fn_x86(out_text: [Int],
                     // disp32 sits at the last 4 bytes of the 7-byte insn.
                     data_offsets.push(cur_off + 3)
                     data_names.push(dl)
+                    data_addends.push(0)
                     i = i + 1
                     continue
                 }
@@ -3226,6 +3347,7 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
     let pending_names:   [string] = []
     let data_offsets:    [Int]    = []
     let data_names:      [string] = []
+    let data_addends:    [Int]    = []
 
     let nf = len(lm.funcs)
     let mut i = 0
@@ -3234,7 +3356,7 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
         let fn_start = len(obj.text)
         let strx = _ew_str(obj.strtab, f.name)
         _pack_fn_x86(obj.text, pending_offsets, pending_names,
-                     data_offsets, data_names, f)
+                     data_offsets, data_names, data_addends, f)
         // ElfSym pushed after packing so `size` is final (hexa rvalue
         // restriction prevents `obj.symbols[k].size = ...` patching).
         obj.symbols.push(ElfSym {
@@ -3346,6 +3468,7 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
     while dpi < nd {
         let disp_off = data_offsets[dpi]
         let name     = data_names[dpi]
+        let adnd     = data_addends[dpi]
         // Same #3712 memo cache as the CALL pass (shared across both passes).
         let mut idx = _symc_lookup(_symc_names, _symc_idx, name)
         let was_cached = idx >= 0
@@ -3374,7 +3497,7 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
             offset:  disp_off,
             sym_idx: idx,
             kind:    ELF_R_X86_64_PC32,
-            addend:  -4,
+            addend:  adnd - 4,
             site_seg: 1,
         })
         dpi = dpi + 1
