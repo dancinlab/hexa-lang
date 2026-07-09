@@ -381,6 +381,20 @@
     "value": "USER STANDING GOAL set 2026-07-08: drive self-host DONE 3-기준 (①no hexa_cc.c ②no runtime.c ③no clang) to completion via a perpetual 3-lane fleet (selfhost-done-3axis-fleet). Each lane fires-on-arrival round-by-round until its criterion crosses DONE. axis-③ LINK half landed this session (#4711-#4718 own ELF linker: own .o + runtime.a -> static ET_EXEC exit 42, ZERO binutils, opt-in --linker=hexa). See root.activeGoal for the per-axis status SSOT.",
     "threshold": "Per-axis DONE gates: ①=build/run never invokes the C-transpile delegate (native default) · ②=nm-UND libc floor at the sanctioned-irreducible floor (net-FFI/CRT/exec) with nothing compiling a generated .c · ③=install/build/run never shell out to clang/gcc (own object-emit + hexa_ld default). Each flip opt-in-first->byteeq 3-target GREEN + shipping smoke->default-ON. release integrity > self-host progress. Fleet round-1 scouts each axis's genuinely-open frontier (survey-first, no re-deriving closed walls).",
     "source": "user goal 2026-07-08 · axis-③ #4711-#4718 · CLAUDE.md SELF-HOST DONE CRITERION"
+   },
+   {
+    "id": "elf-x86-64-hexa-1",
+    "state": "pos-conv",
+    "value": "③ self-emit O(n²) 벽을 RSS/timing 추론으로 reloc pass에 2라운드(#4779·#4784) 오귀속→둘다 벽 0이동. 진짜=_lookup_label_x86 per-fn intra-branch resolver(jcc/jmp/call마다 fn 全 label linear-scan·cross-fn=full-miss·O(n²) in fn size). #4790 per-fn 1024-way FNV label_bkt 종결. 교훈: superlinear phase를 RSS-plateau 추론으로 특정 금지—verdict-integrity는 pass 내부 phase-attribution에도 적용·같은 region 연속2fix가 벽 안옮기면 그 region 아님.",
+    "threshold": "재발조건=native self-emit RC=124인데 profiler sub-mark 없이 phase 지목. 해결=pack_lir_x86_64에 phase별 stderr-only cg_profile sub-mark(byte-neutral) 후 measure로 판별. 다음후보=encoder string round-trip(선형).",
+    "source": "compiler/emit/elf_x86_64.hexa"
+   },
+   {
+    "id": "selfhost-native-build-gate-1",
+    "state": "pos-conv",
+    "value": "darwin-arm64 native-build gate가 stale 러너 false-RED(PR #4790 PASS=0/FAIL=7 stdout=[]). 원인=mini-selfhost ~/.hx/bin/hexad v0.574.1 stale dispatch→HEXA_NATIVE_BUILD 무시·clang fallback·stale codegen print()+exit() no-fflush 빈출력. native emit 자체는 건강. gate stale분류기가 link-undefined만 잡아 build-clean stale dispatch 놓침. verdict-integrity: 측정경로가 실제 native path냐 먼저 검증.",
+    "threshold": "재발조건=selfhost_native_build_gate RED인데 산출바이너리가 native 아님(libsodium/openssl=clang fallback). 해결=native-path assertion(probe otool-L/ldd에 libsodium 있으면 NEUTRAL·RED아님·#4792 MERGED). ops=stale러너 재프로비전. 연관=elf-x86-64-hexa-1.",
+    "source": "tool/selfhost_native_build_gate"
    }
   ]
  },
