@@ -4647,6 +4647,52 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                     || _bk_inner.kind == "array_lit" || _bk_inner.kind == "binop" {
                     _bck_emit_ret_temp(_bk_inner.kind, e.span)
                 }
+                // HEXA-OWN round12 (HX3019, Rust E0515) — the E0515 PROJECTION
+                // variant `return &local.field` / `return &local[i]` (and nested
+                // `&a.b.c` / `&a[i].f`): a returned borrow into a function-local
+                // through a FIELD/INDEX projection. The `&<ident>` arm above only
+                // matches a BARE-ident base (→HX3019) and the temp arm matches
+                // call/struct/array/binop RVALUES (→HX3041); a field/index
+                // projection base fell THROUGH — SILENT. Walk the projection chain
+                // down `children[0]` to the head node (the SAME base-walk idiom
+                // used at the call-arg field/index move sites :4328/:4378 and the
+                // assign LHS), and if the head is a NON-global ident it is a named
+                // function-local whose storage is reclaimed at return, so the
+                // borrow of `head.f` / `head[i]` dangles exactly as `&head` would.
+                // Reuse the HX3019 emitter (`_bck_emit_ret_escape`) verbatim —
+                // rustc reports E0515 "cannot return reference to local variable
+                // `head`" identically for the base and its projections; this IS a
+                // borrow of a named function-local, not a distinct diagnostic.
+                // Conservative, FP-free by construction — mirrors the HX3019/HX3041
+                // arms' two silencing guards:
+                //   * global head (`return &g.field`) → `_mir_lookup_global >= 0`
+                //     → SILENT (global storage outlives the call), the identical
+                //     global-skip used by the `&<ident>` arm above;
+                //   * non-ident head (`return &make().f` — a projection of a
+                //     TEMPORARY) → head.kind != "ident" → SILENT (no named local
+                //     base; the temp itself is HX3041's to classify), so no over-
+                //     reach into aliasing/flow FP classes — pure syntactic
+                //     classification at the return hook, diag-push only (no
+                //     MIR/registry/dataflow). HONESTY CAVEAT (same reference-
+                //     faithful stance as HX3019/HX3041): the dangle is classified
+                //     PER RUSTC, not proven against hexa's arena free-model.
+                // Gated on `_bck_active` so the flag-OFF diag stream is byte-
+                // identical (byteeq-neutral); `&`-projection corpus adoption is 0
+                // (every corpus `return &…[i]` is a C-emitter STRING literal, not a
+                // hexa return), so even flag-ON it fires on ZERO real source
+                // (gen3≡gen4 preserved). STRICT re-bands via the shared emitter.
+                if _bk_inner.kind == "field" || _bk_inner.kind == "index" {
+                    let mut _bk_head = _bk_inner
+                    while (_bk_head.kind == "field" || _bk_head.kind == "index")
+                        && len(_bk_head.children) > 0 {
+                        _bk_head = _bk_head.children[0]
+                    }
+                    if _bk_head.kind == "ident"
+                        && _mir_lookup_global(ctx2, _bk_head.text) < 0 {
+                        _bck_emit_ret_escape(_bk_head.text, _bk_head.text,
+                                             e.span.line, e.span)
+                    }
+                }
             } else {
                 if _bk_rv.kind == "ident" {
                     let _bk_ri = _bck_find_ref(_bk_rv.text)
