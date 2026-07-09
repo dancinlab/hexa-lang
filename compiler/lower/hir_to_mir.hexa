@@ -409,6 +409,27 @@ pub let mut _lr_globals: [Local] = []
 // empty-env closure_new over the fn symbol is a callable fn value.
 pub let mut _lr_fn_ref_names: [string] = []
 pub let mut _lr_fn_ref_arities: [i64] = []
+// #self-emit-round4 RANK2: the ONLY module-wide-unreset O(N·F) scan —
+// _lr_fn_ref_names holds every non-extern top-level fn (F ~thousands on the
+// compiler self-source), built once and never reset per-fn, and
+// _lr_fn_ref_arity linear-scans all F per lookup. Bucket it (64-way FNV-1a,
+// FIRST-WINS to reproduce the scan's first-match) so each lookup is O(F/64).
+// Byte-eq NEUTRAL: same arity returned → identical MIR. Parallel arrays hold
+// the index into _lr_fn_ref_names/_arities per bucket.
+pub let mut _lr_fn_ref_bkt: [[i64]] = []
+fn _lr_fnref_hash(s: string) -> i64 {
+    let mut h: i64 = 2166136261
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        h = (h ^ s.char_code_at(i)) * 16777619
+        h = h % 4294967296
+        i = i + 1
+    }
+    let mut b = h % 64
+    if b < 0 { b = b + 64 }
+    return b
+}
 
 // ── defer state (HEXA-OWN M1 — native port of gen2's flags+goto) ─────
 // Mirrors self/codegen.hexa `_gen2_defer_bodies` / `_gen2_defer_flag_count`
@@ -2772,6 +2793,21 @@ fn _bck_is_mutating_method(op: string) -> bool {
 
 // arity (param count) of a top-level fn name, or -1 if not a known fn.
 fn _lr_fn_ref_arity(name: string) -> i64 {
+    // #self-emit-round4 RANK2: bucket lookup. Indices sit in each bucket in
+    // ascending push order, so the first matching name == the linear scan's
+    // first-match → identical arity → byte-eq. Guarded: if the bucket wasn't
+    // built (len != 64) fall back to the linear scan below.
+    if len(_lr_fn_ref_bkt) == 64 {
+        let b = _lr_fnref_hash(name)
+        let bucket = _lr_fn_ref_bkt[b]
+        let mut j = 0
+        while j < len(bucket) {
+            let idx = bucket[j]
+            if _lr_fn_ref_names[idx] == name { return _lr_fn_ref_arities[idx] }
+            j = j + 1
+        }
+        return -1
+    }
     let mut i = 0
     while i < len(_lr_fn_ref_names) {
         if _lr_fn_ref_names[i] == name { return _lr_fn_ref_arities[i] }
@@ -8233,6 +8269,10 @@ pub fn lower_hir(module: HModule) -> MModule {
     // _lr_fn_ref_arity + the `ident` value-position branch.
     _lr_fn_ref_names = []
     _lr_fn_ref_arities = []
+    // #self-emit-round4 RANK2: (re)build the 64-way bucket index alongside.
+    _lr_fn_ref_bkt = []
+    let mut _bki = 0
+    while _bki < 64 { let _e: [i64] = []; _lr_fn_ref_bkt.push(_e); _bki = _bki + 1 }
     let mut fpp = 0
     while fpp < len(module.items) {
         let fit = module.items[fpp]
@@ -8244,7 +8284,12 @@ pub fn lower_hir(module: HModule) -> MModule {
                 _ea = _ea + 1
             }
             if !_is_ext {
-                _lr_fn_ref_names.push(fit.name.substring(0, len(fit.name)))
+                let _fnm = fit.name.substring(0, len(fit.name))
+                // #self-emit-round4 RANK2: bucket the new index (in ascending push
+                // order so the lookup's first match == the linear scan's).
+                let _fb = _lr_fnref_hash(_fnm)
+                _lr_fn_ref_bkt[_fb] = _lr_fn_ref_bkt[_fb].push(len(_lr_fn_ref_names))
+                _lr_fn_ref_names.push(_fnm)
                 _lr_fn_ref_arities.push(len(fit.sig_params))
             }
             // HEXA-OWN L3 M3 — @own-param pre-pass (Rule 2 signal
