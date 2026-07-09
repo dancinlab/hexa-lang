@@ -331,12 +331,13 @@ jobs:
           if [ -f "$RT" ]; then
             echo "=== RFC061 nm-UND reducible libc floor (sanctioned FFI/CRT/hexa-own/cuda excluded) ==="
             nm -u "$RT" 2>/dev/null | awk '{print $2}' | sort -u \
-              | grep -vE '^(_hx_|__hexa|__hx_|__blk_|rt_|hexa_|_hexa|hxlcl_|_GLOBAL)' \
+              | grep -vE '^(_hx_|__hexa|__hx_|__blk_|rt_|hexa_|_hexa|_?hxlcl_|_GLOBAL)' \
               | grep -vE 'cuda|fatbin' \
               | grep -vE '^(accept|bind|connect|listen|socket|recv|recvfrom|send|sendto|setsockopt|getsockopt|getaddrinfo|freeaddrinfo|gai_strerror)' \
               | grep -vE '^(__libc_|_exit|atexit|environ|mallopt|__cxa|__errno_location|__stack_chk|__assert)' \
               | grep -vE '^(execve|execvp|setns|unshare|mount|umount2?|posix_spawn|opendir|readdir|closedir|glob|globfree|mkstemp|mkdtemp)' \
               | grep -vE '^(rand|srand|strtod|strtof|strtold)' \
+              | grep -vE '^(__init_array_start|__init_array_end|main|array_store|fs_write_all_native|join)$' \
               | tr '\n' ' '
             echo ""
             echo "=== RFC061 nm-UND TOTAL undefined: $(nm -u "$RT" 2>/dev/null | awk '{print $2}' | sort -u | wc -l) ==="
