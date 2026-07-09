@@ -173,7 +173,16 @@ log "stage5: cc_native emit hi.hexa -> native ELF .o (--target=x86_64-linux-gnu 
 "$WORK/cc_native" _drv.hexa --emit=obj --backend=native --target=x86_64-linux-gnu -o "$T/hi.o" "$T/hi.hexa" 2>&1 | tail -2
 [ -s "$T/hi.o" ] || fail emit "hi.o not produced" 2
 log "stage5: hi.o = $(file -b "$T/hi.o" | cut -d, -f1-2)"
-$CC "$T/hi.o" build/runtime.a -o "$T/hi" -lm -ldl 2>&1 | grep -iE 'undefined|error' | head
+# build/runtime.a now carries its OWN `_start` when the zero-c own-_start flip is
+# ON (HEXA_ZEROC_OWN_START default-ON on x86_64-linux, #4489). Linking it with
+# gcc's default CRT (Scrt1.o also defines `_start`) then multiple-defines `_start`
+# → `collect2: ld returned 1`. Detect the own-_start by artifact (nm, so it tracks
+# the archive as-built regardless of the current env var) and drop the default
+# startfiles so runtime.a's own _start is the entry. Mirrors build_selfhost.sh's
+# -nostartfiles guard for the shipped hexat.
+_zc_nostart=""
+nm build/runtime.a 2>/dev/null | grep -qE ' T _start$' && _zc_nostart="-nostartfiles"
+$CC $_zc_nostart "$T/hi.o" build/runtime.a -o "$T/hi" -lm -ldl 2>&1 | grep -iE 'undefined|error' | head
 [ -x "$T/hi" ] || fail link "hi link failed" 2
 OUT="$("$T/hi")"; RC=$?
 log "stage5: NATIVE RUN — stdout=[$OUT] rc=$RC"

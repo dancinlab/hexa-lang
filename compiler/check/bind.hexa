@@ -98,12 +98,26 @@ let mut _unused_cand_names: [string] = []
 let mut _unused_cand_spans: [Span] = []
 let mut _unused_used_ids: [i64] = []
 
+// ── HX3051 unused-assignment (opt-in) — write-only-local `let mut` lane ─
+// Rust's `unused_assignments` NARROW rung: a function-local `let mut` that is
+// WRITTEN via a pure `=` reassignment but whose value is never READ anywhere.
+// SEPARATE flag from HEXA_UNUSED_LET so HX3050's emitted diag stream stays
+// byte-identical when only HEXA_UNUSED_LET is set (both default OFF ⇒ byteeq
+// holds regardless). `_unused_written_ids` collects the dense DefId.index of a
+// bare-local pure-assign LHS at the assign choke — split OUT of the read
+// used-set so a pure-write does NOT count as a use. HX3051 then fires for a
+// candidate present in the WRITTEN-set AND absent from the READ used-set.
+let mut _unused_assign_on = false
+let mut _unused_written_ids: [i64] = []
+
 fn _unused_let_reset() {
     _unused_let_on = env("HEXA_UNUSED_LET") == "1"
+    _unused_assign_on = env("HEXA_UNUSED_ASSIGN") == "1"
     _unused_cand_ids = []
     _unused_cand_names = []
     _unused_cand_spans = []
     _unused_used_ids = []
+    _unused_written_ids = []
 }
 
 fn _bind_register_enum_item(it: Item) {
@@ -798,6 +812,17 @@ fn _emit_hx3050(name: string, span: Span, out: array) {
     out.push(diag_emit(b))
 }
 
+// HX3051 — unused assignment (Rust `unused_assignments`, NARROW rung). Warning
+// band, opt-in (`_unused_assign_on` / HEXA_UNUSED_ASSIGN). Mirrors _emit_hx3050:
+// no fix-it, single `name` arg. Emitted from the bind() end-of-pass sweep for a
+// candidate whose index appears in the WRITTEN-set but never in the read used-set.
+fn _emit_hx3051(name: string, span: Span, out: array) {
+    let mut b = diag_new("HX3051")
+    b = diag_span(b, span)
+    b = diag_arg(b, "name", name)
+    out.push(diag_emit(b))
+}
+
 // ── `let` text decoder ──────────────────────────────────────
 // parse_let_expr stashes the binding name in `text`, prefixed with
 // "mut:" if it was declared mutable. Strip the prefix for binding.
@@ -894,7 +919,7 @@ fn _bind_walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> B
             // HX3050 — mark the resolved binding USED. This is the SINGLE
             // value-reference choke (assign-LHS, call-callee, field-receiver
             // all descend here), so the used-set is resolver-complete ⇒ FP=0.
-            if _unused_let_on && hit.index >= 0 { _unused_used_ids.push(hit.index) }
+            if (_unused_let_on || _unused_assign_on) && hit.index >= 0 { _unused_used_ids.push(hit.index) }
         }
         return sc
     }
@@ -985,7 +1010,7 @@ fn _bind_walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> B
             // for-iter / catch / match-binder / closure-param bind elsewhere
             // and are excluded. The just-minted dense index == sc.next_index-1
             // (post-_define_mut increment). `_`-prefix = rustc escape hatch.
-            if _unused_let_on {
+            if _unused_let_on || _unused_assign_on {
                 let nmc = nm.chars()
                 if len(nmc) > 0 && nmc[0] != '_' {
                     _unused_cand_ids.push(sc.next_index - 1)
@@ -1128,11 +1153,46 @@ fn _bind_walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> B
     // miscompiled, and the parser's per-global init-assign synthesis lives
     // there too) and unknown targets (== -1) are all left to other passes.
     if _bind_is_assign_kind(e.kind) {
-        // Walk both sides first so name-resolution (HX2001) still runs.
-        let mut k = 0
-        while k < len(e.children) {
-            sc = _bind_walk_expr(e.children[k], sc, mod_file, out)
-            k = k + 1
+        // HX3051 read/write split (opt-in `_unused_assign_on`, default OFF ⇒
+        // byteeq-neutral). For a PURE assign (`e.text == "="`; the parser tags
+        // compound `+= -= *= /=` with a DIFFERENT `.text`, parser.hexa
+        // parse_assignment) whose LHS is a BARE function-local Ident (not `_`),
+        // the LHS is a pure WRITE — resolve it WITHOUT descending the read
+        // choke so it does NOT enter the read used-set, and record its index in
+        // `_unused_written_ids`. HX2001-on-miss is PRESERVED (mirrors the Ident
+        // arm). RHS children[1..] are always walked as reads. Compound ops
+        // (read-modify-write) and NON-bare-ident LHS (`a[i]=`, `p.f=` — place
+        // computation) keep the LHS as a READ (FP-safe). When the flag is OFF
+        // the else-branch reproduces the original walk EXACTLY (LHS = read).
+        let mut _write_only = false
+        if _unused_assign_on && e.text == "=" && len(e.children) >= 1 {
+            let lhs0 = e.children[0]
+            if _bind_is_ident_kind(lhs0.kind) && len(lhs0.text) > 0 && lhs0.text != "_" {
+                _write_only = true
+            }
+        }
+        if _write_only {
+            let lhs0 = e.children[0]
+            let whit = _bind_lookup(sc, lhs0.text)
+            if whit.index < 0 {
+                let suggest = _suggest_name(sc, lhs0.text, 2)
+                _emit_hx2001(lhs0.text, lhs0.span, suggest, out)
+            } else {
+                _unused_written_ids.push(whit.index)
+            }
+            // RHS (and any further children) walked normally as reads.
+            let mut k = 1
+            while k < len(e.children) {
+                sc = _bind_walk_expr(e.children[k], sc, mod_file, out)
+                k = k + 1
+            }
+        } else {
+            // Walk both sides first so name-resolution (HX2001) still runs.
+            let mut k = 0
+            while k < len(e.children) {
+                sc = _bind_walk_expr(e.children[k], sc, mod_file, out)
+                k = k + 1
+            }
         }
         if len(e.children) >= 1 {
             let lhs = e.children[0]
@@ -1761,9 +1821,64 @@ pub fn bind(module: Module) -> array {
                 ui = ui + 1
             }
             if !used {
-                _emit_hx3050(_unused_cand_names[ci], _unused_cand_spans[ci], out)
+                // HX3051 non-overlap guard: when the unused-assignment lane is
+                // ON, a write-only local (present in the WRITTEN-set) is owned
+                // by HX3051, not HX3050. HX3050 then means "never referenced at
+                // all" (absent from BOTH the read used-set and the written-set).
+                let mut written = false
+                if _unused_assign_on {
+                    let mut wi = 0
+                    while wi < len(_unused_written_ids) {
+                        if _unused_written_ids[wi] == cid {
+                            written = true
+                            break
+                        }
+                        wi = wi + 1
+                    }
+                }
+                if !written {
+                    _emit_hx3050(_unused_cand_names[ci], _unused_cand_spans[ci], out)
+                }
             }
             ci = ci + 1
+        }
+    }
+
+    // ── HX3051 — end-of-pass unused-assignment sweep (opt-in). A candidate
+    // whose index appears in the WRITTEN-set (a pure `=` reassignment of a bare
+    // local) but NEVER in the read used-set was written but never read ⇒ Rust
+    // `unused_assignments` (narrow never-read-anywhere projection). Disjoint
+    // from HX3050 by the guard above: written-only ⇒ HX3051, never-referenced ⇒
+    // HX3050. The opt-in flag gates the whole loop so the default build does
+    // zero extra work.
+    if _unused_assign_on {
+        let mut ai = 0
+        while ai < len(_unused_cand_ids) {
+            let aid = _unused_cand_ids[ai]
+            let mut written = false
+            let mut wj = 0
+            while wj < len(_unused_written_ids) {
+                if _unused_written_ids[wj] == aid {
+                    written = true
+                    break
+                }
+                wj = wj + 1
+            }
+            if written {
+                let mut read = false
+                let mut rj = 0
+                while rj < len(_unused_used_ids) {
+                    if _unused_used_ids[rj] == aid {
+                        read = true
+                        break
+                    }
+                    rj = rj + 1
+                }
+                if !read {
+                    _emit_hx3051(_unused_cand_names[ai], _unused_cand_spans[ai], out)
+                }
+            }
+            ai = ai + 1
         }
     }
 

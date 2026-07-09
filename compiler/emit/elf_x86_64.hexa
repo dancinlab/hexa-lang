@@ -49,6 +49,13 @@ let ELF_R_X86_64_NONE     = 0
 let ELF_R_X86_64_64       = 1
 let ELF_R_X86_64_PC32     = 2
 let ELF_R_X86_64_PLT32    = 4
+// R_X86_64_GOTPCREL = 9 — PC-relative offset to the symbol's GOT slot
+// (SysV AMD64 ABI §B.2 / §4.4.1 Table 4-11: word32, G + GOT + A - P).
+// Emitted for `mov reg, [rip+sym@GOTPCREL]` extern-data GOT loads
+// (codegen x86_64_linux.hexa: --shared globals + environ/stdout/stderr/
+// getenv address loads). The linker classifier already knows kind 9
+// (compiler/link/hexa_ld.hexa::_HEXA_LD_R_X86_64_GOTPCREL / elf_reloc_is_got_typed).
+let ELF_R_X86_64_GOTPCREL = 9
 
 struct ElfX86Obj {
     text:    [u8],
@@ -523,6 +530,60 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
             return [rex, 0x39, 0xc0 | ((rs & 0x7) << 3) | (rd & 0x7)]
         }
     }
+    // ③: 64-bit IMUL. The encoder had NO imul form of any kind, so the native
+    // object walker silently dropped every `imul` as zero bytes (:1188 "silent
+    // on unsupported ops") → ALL multiplies acted as identity on the
+    // `--backend=native --emit=obj` route (measured churn:199 for
+    // c2_stack_locals; the asm-text/`as` route was already correct). Intel SDM
+    // Vol.2A. UNLIKE ADD64/SUB64 (01/29 /r, dst in ModRM.rm), IMUL's 2-operand
+    // forms put DST in ModRM.reg and SRC in rm — REX.R extends dst, REX.B
+    // extends src (the field roles are reversed vs the add/sub idiom).
+    // IMUL64 dst, src, #imm32 — REX.W + 69 /r id (3-operand; magicdiv remainder
+    // + index scaling). e.g. imul rax, rdx, 7.
+    if op == "IMUL64" && len(ops) == 3 && ops[2].substring(0, 1) == "#" {
+        let rd = _ex86_reg64(ops[0])
+        let rs = _ex86_reg64(ops[1])
+        let imm = _ex86_imm(ops[2])
+        if rd >= 0 && rs >= 0 {
+            let rex = _ex86_rex(1, if rd >= 8 { 1 } else { 0 }, 0,
+                                    if rs >= 8 { 1 } else { 0 })
+            return [rex, 0x69, 0xc0 | ((rd & 0x7) << 3) | (rs & 0x7),
+                    imm & 0xff, (imm >> 8) & 0xff,
+                    (imm >> 16) & 0xff, (imm >> 24) & 0xff]
+        }
+    }
+    // IMUL64 dst, #imm32 — GAS 2-operand alias `imul dst, imm` = dst *= imm
+    // (69 /r, reg field == rm field == dst). e.g. imul r14, 2.
+    if op == "IMUL64" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
+        let rd = _ex86_reg64(ops[0])
+        let imm = _ex86_imm(ops[1])
+        if rd >= 0 {
+            let rex = _ex86_rex(1, if rd >= 8 { 1 } else { 0 }, 0,
+                                    if rd >= 8 { 1 } else { 0 })
+            return [rex, 0x69, 0xc0 | ((rd & 0x7) << 3) | (rd & 0x7),
+                    imm & 0xff, (imm >> 8) & 0xff,
+                    (imm >> 16) & 0xff, (imm >> 24) & 0xff]
+        }
+    }
+    // IMUL64 dst, src — REX.W + 0F AF /r (dst=ModRM.reg, src=rm).
+    // e.g. imul r10, r15 → 4d 0f af d7.
+    if op == "IMUL64" && len(ops) == 2 {
+        let rd = _ex86_reg64(ops[0])
+        let rs = _ex86_reg64(ops[1])
+        if rd >= 0 && rs >= 0 {
+            let rex = _ex86_rex(1, if rd >= 8 { 1 } else { 0 }, 0,
+                                    if rs >= 8 { 1 } else { 0 })
+            return [rex, 0x0f, 0xaf, 0xc0 | ((rd & 0x7) << 3) | (rs & 0x7)]
+        }
+    }
+    // IMUL64 r64 — REX.W + F7 /5 (RDX:RAX = RAX * r/m64; magicdiv widening mul).
+    if op == "IMUL64" && len(ops) == 1 {
+        let rd = _ex86_reg64(ops[0])
+        if rd >= 0 {
+            let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
+            return [rex, 0xf7, 0xc0 | (5 << 3) | (rd & 0x7)]
+        }
+    }
     // ③-R2e: XOR r32, r32 — 31 /r (2 B, no REX). The codegen's div / neg
     // prep emits the `xor eax, eax` / `xor edx, edx` zeroing idiom (32-bit),
     // which the uppercase map routes to bare `XOR` (is64=false); without this
@@ -582,6 +643,22 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     if op == "JAE_REL8" && len(ops) == 1 { return [0x73, 0x00] }
     if op == "JB_REL8"  && len(ops) == 1 { return [0x72, 0x00] }
     if op == "JBE_REL8" && len(ops) == 1 { return [0x76, 0x00] }
+    // Conditional jumps rel32 — 0F 80+cc cd (6 bytes). The 2-byte-opcode
+    // near form; the cc low-nibble is IDENTICAL to the REL8 opcodes above.
+    // Default for label branches (jcc → REL8 silently truncated any span
+    // >127 B: c14/m12 nested/large try bodies — see _pack_fn_x86 kind=2).
+    //   JE 0F 84 · JNE 0F 85 · JL 0F 8C · JGE 0F 8D · JLE 0F 8E · JG 0F 8F
+    //   JA 0F 87 · JAE 0F 83 · JB 0F 82 · JBE 0F 86
+    if op == "JE_REL32"  && len(ops) == 1 { return [0x0f, 0x84, 0x00, 0x00, 0x00, 0x00] }
+    if op == "JNE_REL32" && len(ops) == 1 { return [0x0f, 0x85, 0x00, 0x00, 0x00, 0x00] }
+    if op == "JL_REL32"  && len(ops) == 1 { return [0x0f, 0x8c, 0x00, 0x00, 0x00, 0x00] }
+    if op == "JGE_REL32" && len(ops) == 1 { return [0x0f, 0x8d, 0x00, 0x00, 0x00, 0x00] }
+    if op == "JLE_REL32" && len(ops) == 1 { return [0x0f, 0x8e, 0x00, 0x00, 0x00, 0x00] }
+    if op == "JG_REL32"  && len(ops) == 1 { return [0x0f, 0x8f, 0x00, 0x00, 0x00, 0x00] }
+    if op == "JA_REL32"  && len(ops) == 1 { return [0x0f, 0x87, 0x00, 0x00, 0x00, 0x00] }
+    if op == "JAE_REL32" && len(ops) == 1 { return [0x0f, 0x83, 0x00, 0x00, 0x00, 0x00] }
+    if op == "JB_REL32"  && len(ops) == 1 { return [0x0f, 0x82, 0x00, 0x00, 0x00, 0x00] }
+    if op == "JBE_REL32" && len(ops) == 1 { return [0x0f, 0x86, 0x00, 0x00, 0x00, 0x00] }
 
     // ── x86_64 r64 ops (REX.W) ──────────────────────────────────
     //
@@ -690,6 +767,17 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
             let rex = _ex86_rex(1, if rs >= 8 { 1 } else { 0 }, 0,
                                     if rd >= 8 { 1 } else { 0 })
             return [rex, 0x85, 0xc0 | ((rs & 0x7) << 3) | (rd & 0x7)]
+        }
+    }
+    // ③ census: TEST r32, r32 — 85 /r (2 B, no REX.W). The va_arg gp/fp_offset
+    // zero-checks emit `test eax,eax` / `test edx,edx` (32-bit); the r64 arm
+    // above rejects eax/edx (reg64 has no such name) → the walker dropped 14
+    // `test reg,reg` misses. Mirrors the CMP (r32) arm exactly (39 /r → 85 /r).
+    if op == "TEST" && len(ops) == 2 {
+        let rd = _ex86_reg32(ops[0])
+        let rs = _ex86_reg32(ops[1])
+        if rd >= 0 && rs >= 0 {
+            return [0x85, 0xc0 | (rs << 3) | rd]
         }
     }
     // IDIV r64 — REX.W + F7 /7 (3 B). Signed division of RDX:RAX by
@@ -1575,12 +1663,52 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     text_bytes[3] = (call_rel >> 16) & 0xff
     text_bytes[4] = (call_rel >> 24) & 0xff
 
+    // ── GOT COLLECT (R_X86_64_GOTPCREL, type 9) — one slot per DISTINCT target ──
+    // #4783 self-emits `mov reg,[rip+sym@GOTPCREL]` (REX.W 8B /r RIP disp32=0,
+    // addend -4). This static own-linker must SYNTHESIZE the GOT (ZERO binutils):
+    // allocate one 8-byte slot per referenced symbol, fill it with the symbol's
+    // final vaddr, and patch each disp32 to point at its slot (G+GOT+A-P).
+    // Reference: tcc x86_64-link.c put_got_entry memoizes sym_attr->got_offset
+    // ("if (attr->got_offset) return attr;") -> exactly one slot per symbol;
+    // SysV AMD64 psABI §12.2 (GOT entries = word64) / §B.2 R_X86_64_GOTPCREL.
+    // (kind==9 previously fell through the generic PC-rel `else` below, which
+    // computed S+A-P -> disp32 pointed straight AT the symbol, not at a GOT
+    // slot: a live miscompile of every GOTPCREL load. This pass fixes it.)
+    let mut got_syms: [string] = []
+    let mut gci = 0
+    while gci < len(objs) {
+        let gco = objs[gci]
+        let mut gcr = 0
+        while gcr < len(gco.relocs) {
+            let gr = gco.relocs[gcr]
+            if gr.kind == 9 {
+                let gsym = gco.symbols[gr.sym_idx]
+                let mut gnm = ""
+                let mut gk = 0
+                while true {
+                    let gb = gco.strtab[gsym.name_offset + gk] & 0xff
+                    if gb == 0 { break }
+                    gnm = gnm + from_char_code(gb)
+                    gk = gk + 1
+                }
+                let mut gseen = false
+                let mut gsi = 0
+                while gsi < len(got_syms) { if got_syms[gsi] == gnm { gseen = true; break } gsi = gsi + 1 }
+                if !gseen { got_syms.push(gnm) }
+            }
+            gcr = gcr + 1
+        }
+        gci = gci + 1
+    }
+    let n_got = len(got_syms)
+
     // Layout constants — MUST match serialize_elf_exec_x86_64{,_2seg}.
     // No data blob -> single PT_LOAD (phnum=1, code_off=120): byte-identical
     // to round-1. Data present -> two PT_LOADs (phnum=2, code_off=176: R-X
     // text + RW rodata/data at a page-aligned vaddr above text).
+    // n_got>0 forces the 2-seg path so a GOT-only program still gets a RW page.
     let vaddr_base = 0x400000
-    let has_data   = (len(data_bytes) > 0) || (total_bss > 0)
+    let has_data   = (len(data_bytes) > 0) || (total_bss > 0) || (n_got > 0)
     let phnum      = if has_data { 2 } else { 1 }
     let code_off   = 64 + 56 * phnum
     let text_end_file = code_off + len(text_bytes)
@@ -1589,6 +1717,19 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     // serializer's rodata_pad round-up.
     let data_file_off   = text_end_file + ((0x1000 - (text_end_file & 0xfff)) & 0xfff)
     let data_vaddr_base = vaddr_base + data_file_off
+
+    // ── GOT ALLOCATE — 8-align, then reserve n_got 8-byte slots at the TAIL of
+    // the data blob. The GOT rides inside data_bytes (real file bytes covered by
+    // the RW segment's p_filesz) -> ZERO serializer change, ZERO new segment.
+    // Appended BEFORE the reloc pass so the .bss vaddr (data_vaddr_base +
+    // len(data_bytes) + off) naturally sits AFTER the GOT. slot i's vaddr =
+    // data_vaddr_base + got_blob_off + i*8 (8-aligned inside a page-aligned seg).
+    let got_pad = (8 - (len(data_bytes) & 7)) & 7
+    let mut gpi = 0
+    while gpi < got_pad { data_bytes.push(0); gpi = gpi + 1 }
+    let got_blob_off = len(data_bytes)
+    let mut gres = 0
+    while gres < n_got * 8 { data_bytes.push(0); gres = gres + 1 }
 
     // Resolve relocs in TRUE vaddr space. text->text reduces to the round-1
     // text-offset delta (vaddr_base+code_off cancels) => no-data path is
@@ -1641,6 +1782,23 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                         data_bytes[blob_off + 5] = (av >> 40) & 0xff
                         data_bytes[blob_off + 6] = (av >> 48) & 0xff
                         data_bytes[blob_off + 7] = (av >> 56) & 0xff
+                    } else if r.kind == 9 {
+                        // R_X86_64_GOTPCREL (data-resident site): disp32 -> GOT
+                        // slot. G+GOT+A-P = slot_vaddr + addend - P. tcc:
+                        // val = got->sh_addr + got_offset + r_addend - addr.
+                        let mut gslot = -1
+                        let mut gpx = 0
+                        while gpx < n_got { if got_syms[gpx] == name { gslot = gpx; break } gpx = gpx + 1 }
+                        let slot_vaddr = data_vaddr_base + got_blob_off + gslot * 8
+                        let gdelta = slot_vaddr + r.addend - p_vaddr
+                        if gdelta < -2147483648 || gdelta > 2147483647 {
+                            eprintln("hexa_ld(elf,ownstart): GOTPCREL disp32 overflow for '" + name + "'")
+                            return 3
+                        }
+                        data_bytes[blob_off + 0] = gdelta & 0xff
+                        data_bytes[blob_off + 1] = (gdelta >> 8) & 0xff
+                        data_bytes[blob_off + 2] = (gdelta >> 16) & 0xff
+                        data_bytes[blob_off + 3] = (gdelta >> 24) & 0xff
                     } else {
                         let delta = s_vaddr + r.addend - p_vaddr
                         data_bytes[blob_off + 0] = delta & 0xff
@@ -1662,6 +1820,25 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                         text_bytes[patch_off + 5] = (av >> 40) & 0xff
                         text_bytes[patch_off + 6] = (av >> 48) & 0xff
                         text_bytes[patch_off + 7] = (av >> 56) & 0xff
+                    } else if r.kind == 9 {
+                        // R_X86_64_GOTPCREL (text-resident site, #4783 FORM-1
+                        // `mov reg,[rip+sym@GOTPCREL]`): disp32 -> GOT slot.
+                        // G+GOT+A-P = slot_vaddr + addend(-4) - P. Reference:
+                        // SysV AMD64 psABI §B.2; tcc x86_64-link.c relocate_section
+                        // case R_X86_64_GOTPCREL: got->sh_addr+got_offset+A-addr.
+                        let mut gslot = -1
+                        let mut gpx = 0
+                        while gpx < n_got { if got_syms[gpx] == name { gslot = gpx; break } gpx = gpx + 1 }
+                        let slot_vaddr = data_vaddr_base + got_blob_off + gslot * 8
+                        let gdelta = slot_vaddr + r.addend - p_vaddr
+                        if gdelta < -2147483648 || gdelta > 2147483647 {
+                            eprintln("hexa_ld(elf,ownstart): GOTPCREL disp32 overflow for '" + name + "'")
+                            return 3
+                        }
+                        text_bytes[patch_off + 0] = gdelta & 0xff
+                        text_bytes[patch_off + 1] = (gdelta >> 8) & 0xff
+                        text_bytes[patch_off + 2] = (gdelta >> 16) & 0xff
+                        text_bytes[patch_off + 3] = (gdelta >> 24) & 0xff
                     } else {
                         let delta = s_vaddr + r.addend - p_vaddr
                         text_bytes[patch_off + 0] = delta & 0xff
@@ -1674,6 +1851,46 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
             ri = ri + 1
         }
         ro = ro + 1
+    }
+
+    // ── GOT FILL — write each 8-byte slot = the symbol's FINAL resolved vaddr
+    // (little-endian). In a fully-resolved STATIC link the slot literally holds
+    // S; dynamic linking would defer this to ld.so via R_X86_64_GLOB_DAT. Uses
+    // the SAME text/data/bss vaddr resolver as the reloc loop above (kept in
+    // sync by hand — factor to a helper if a third copy appears). psABI §B.2.
+    let mut gfi = 0
+    while gfi < n_got {
+        let gname = got_syms[gfi]
+        let mut gfound = -1
+        let mut gfk = 0
+        while gfk < len(def_names) { if def_names[gfk] == gname { gfound = gfk; break } gfk = gfk + 1 }
+        if gfound < 0 {
+            // A static own-link cannot fabricate an address for an undefined
+            // GOTPCREL target (extern/libc symbols like environ/stdout need
+            // dynamic linking). Error rather than emit a slot pointing at 0.
+            // NEXT-ROUND WALL: dyn-link GOT (R_X86_64_GLOB_DAT via ld.so) or
+            // resolve from runtime.a. Matches tcc "undefined symbol".
+            eprintln("hexa_ld(elf,ownstart): undefined GOTPCREL symbol '" + gname + "' (static own-link; extern/libc GOT symbols are the next-round dynamic-link wall)")
+            return 3
+        }
+        let mut gs_vaddr = 0
+        if def_seg[gfound] == 0 {
+            gs_vaddr = vaddr_base + code_off + def_off[gfound]
+        } else if def_seg[gfound] == 2 {
+            gs_vaddr = data_vaddr_base + len(data_bytes) + def_off[gfound]
+        } else {
+            gs_vaddr = data_vaddr_base + def_off[gfound]
+        }
+        let gslot = got_blob_off + gfi * 8
+        data_bytes[gslot + 0] = gs_vaddr & 0xff
+        data_bytes[gslot + 1] = (gs_vaddr >> 8) & 0xff
+        data_bytes[gslot + 2] = (gs_vaddr >> 16) & 0xff
+        data_bytes[gslot + 3] = (gs_vaddr >> 24) & 0xff
+        data_bytes[gslot + 4] = (gs_vaddr >> 32) & 0xff
+        data_bytes[gslot + 5] = (gs_vaddr >> 40) & 0xff
+        data_bytes[gslot + 6] = (gs_vaddr >> 48) & 0xff
+        data_bytes[gslot + 7] = (gs_vaddr >> 56) & 0xff
+        gfi = gfi + 1
     }
 
     // Serialize. No data -> single-PT_LOAD round-1 serializer (byte-identical);
@@ -2828,6 +3045,99 @@ fn _ex86_data_label_of(s: string) -> string {
     return ""
 }
 
+// ③-3lane — strip a `[rip+<inner>]` wrapper; "" when not wrapped or when
+// the inner carries an `@` reloc suffix (`@GOTPCREL`/`@PLT` = GOT/PLT
+// reloc, NOT plain PC32). `@GOTPCREL` mov-loads are handled ahead of the
+// default by the FORM-1 arm (see `_ex86_gotpcrel_sym`); `@PLT` and any
+// other `@` shape still fall to the loud ENCODE-MISS.
+fn _ex86_rip_inner(s: string) -> string {
+    let n = len(s)
+    if n < 7 { return "" }
+    if s.substring(0, 5) != "[rip+" { return "" }
+    if s.substring(n - 1, n) != "]" { return "" }
+    let inner = s.substring(5, n - 1)
+    let mut j = 0
+    while j < len(inner) {
+        if inner.substring(j, j + 1) == "@" { return "" }
+        j = j + 1
+    }
+    return inner
+}
+
+// FORM-1 GOTPCREL — extract `<sym>` from `[rip+<sym>@GOTPCREL]`, or ""
+// when the operand is not that exact wrapped form. Codegen emits this for
+// extern-data GOT loads (x86_64_linux.hexa: --shared `g<id>@GOTPCREL` +
+// the environ/stdout/stderr/getenv runtime address builtins), which the
+// `_ex86_rip_inner` / `_ex86_data_label_of` matchers deliberately reject
+// (they return "" on any `@`) so those loads fell to the loud ENCODE-MISS.
+// The suffix is a fixed literal "@GOTPCREL"; the symbol never embeds '@'.
+fn _ex86_gotpcrel_sym(s: string) -> string {
+    let n = len(s)
+    let suf = "@GOTPCREL]"
+    let sl = len(suf)
+    // Need at least "[rip+" + one sym char + "@GOTPCREL]".
+    if n < 5 + 1 + sl { return "" }
+    if s.substring(0, 5) != "[rip+" { return "" }
+    if s.substring(n - sl, n) != suf { return "" }
+    let sym = s.substring(5, n - sl)
+    if len(sym) == 0 { return "" }
+    // Reject any stray '@' inside the symbol (only the suffix may carry it).
+    let mut j = 0
+    while j < len(sym) {
+        if sym.substring(j, j + 1) == "@" { return "" }
+        j = j + 1
+    }
+    return sym
+}
+
+// ③-3lane — position of a trailing `+N`/`-N` addend in a wrapped inner
+// (`g0+8` → 2), or -1 when none. Only an ALL-digit tail after a `+`/`-`
+// at position ≥ 1 counts: symbol names never embed `+`, and a leading
+// `.`/`-` is part of the name, never a separator.
+fn _ex86_addend_pos(inner: string) -> Int {
+    let n = len(inner)
+    let mut j = 1
+    while j < n {
+        let c = inner.substring(j, j + 1)
+        if c == "+" || c == "-" {
+            if j + 1 >= n { return -1 }
+            let mut k = j + 1
+            while k < n {
+                let d = char_code(inner, k)
+                if d < 48 || d > 57 { return -1 }
+                k = k + 1
+            }
+            return j
+        }
+        j = j + 1
+    }
+    return -1
+}
+
+fn _ex86_sym_base(inner: string) -> string {
+    let p = _ex86_addend_pos(inner)
+    if p < 0 { return inner }
+    return inner.substring(0, p)
+}
+
+fn _ex86_sym_addend(inner: string) -> Int {
+    let p = _ex86_addend_pos(inner)
+    if p < 0 { return 0 }
+    let mag = inner.substring(p + 1, len(inner)).to_int()
+    if inner.substring(p, p + 1) == "-" { return 0 - mag }
+    return mag
+}
+
+// ③-3lane — generalized RIP-relative insn: REX.W + opcode + ModRM
+// (mod=00 reg=reg_idx rm=101=RIP) + disp32 placeholder. opcode: 0x8B
+// mov load · 0x89 mov store · 0x8D lea. For 89 the ModRM.reg field is
+// the SOURCE register — same layout either direction.
+fn _ex86_rip_rel_insn(opcode: Int, reg_idx: Int) -> [Int] {
+    let rex = _ex86_rex(1, if reg_idx >= 8 { 1 } else { 0 }, 0, 0)
+    let modrm = (0 << 6) | ((reg_idx & 0x7) << 3) | 0x5   // mod=00 rm=101 (RIP)
+    return [rex, opcode, modrm, 0x00, 0x00, 0x00, 0x00]
+}
+
 fn _lir_op_uppercase_x86(op: string, ops: [LOperand]) -> string {
     // 0/1-arg ops with no width variant.
     if op == "ret"     { return "RET" }
@@ -2869,7 +3179,14 @@ fn _lir_op_uppercase_x86(op: string, ops: [LOperand]) -> string {
     if op == "cmovne" { return "CMOVNE64" }
     if op == "movzx" { return "MOVZX" }
     if op == "idiv"  { return "IDIV64" }    // 64-bit-only in encoder
-    if op == "test"  { return "TEST64" }    // 64-bit-only in encoder
+    if op == "imul"  { return "IMUL64" }    // 64-bit-only in encoder — all
+                                            // forms (3-op imm, 2-op imm/reg,
+                                            // 1-op widening); the object walker
+                                            // silently dropped `imul` as zero
+                                            // bytes before this mapping existed.
+    // `test` is width-dispatched below (like `cmp`) — a 32-bit `test eax,eax`
+    // (va_arg gp/fp_offset zero-check) must route to the r32 TEST arm, not the
+    // r64 TEST64 which rejects eax/edx → a silent ENCODE-MISS drop.
 
     // Width-dispatched ops — detect 64-bit operand by reg name prefix
     // OR by mem operand (memory accesses through 64-bit base regs are
@@ -2894,6 +3211,9 @@ fn _lir_op_uppercase_x86(op: string, ops: [LOperand]) -> string {
     // ③-R2e: width-dispatch cmp — 64-bit reg operand → CMP64 (REX.W 39/81-7);
     // 32-bit (eax/edx, the va_arg gp/fp_offset checks) stays CMP (r32).
     if op == "cmp" { if is64 { return "CMP64" }; return "CMP" }
+    // ③ census: width-dispatch `test` — 64-bit reg → TEST64 (REX.W 85/r);
+    // 32-bit eax/edx (va_arg gp/fp_offset zero-checks) → TEST (r32, 85/r no REX).
+    if op == "test" { if is64 { return "TEST64" }; return "TEST" }
     // ③-R2a integer-ALU family — codegen emits these solely with r64
     // operands, so the is64 branch is always taken; the r32 fall-through
     // returns the bare name → a loud ENCODE-MISS (honest, never emitted).
@@ -2945,19 +3265,11 @@ fn _lir_operand_str_x86(op: LOperand) -> string {
     return "<?" + op.kind + "?>"
 }
 
-fn _lookup_label_x86(names: [string], offsets: [Int], target: string) -> Int {
-    let n = len(names)
-    let mut i = 0
-    while i < n {
-        if names[i] == target { return offsets[i] }
-        i = i + 1
-    }
-    return -1
-}
 
 fn _pack_fn_x86(out_text: [Int],
                 pending_offsets: [Int], pending_names: [string],
-                data_offsets: [Int], data_names: [string],
+                data_offsets: [Int], data_names: [string], data_addends: [Int],
+                got_offsets: [Int], got_names: [string],
                 f: LFunc) {
     let label_names:     [string] = []
     let label_offsets:   [Int]    = []
@@ -2965,7 +3277,21 @@ fn _pack_fn_x86(out_text: [Int],
     let unresolved_to:   [string] = []
     // Kind tag: 0 = REL8 (2-B insn, imm8 at off+1)
     //           1 = REL32 jmp/call (5-B insn, imm32 at off+1)
+    //           2 = REL32 jcc     (6-B insn, 2-B opcode → imm32 at off+2)
     let unresolved_kind: [Int]    = []
+    // Round-5 (#4790): per-fn 1024-way FNV bucket over label_names indices.
+    // Kills the O(labels²) `_lookup_label_x86` full-scan that surfaced as the
+    // self-emit emit/reloc wall (every jcc/jmp/call did a linear scan over the
+    // whole fn label list; cross-fn calls = guaranteed full-length misses).
+    // Byteeq-neutral: same-name labels share a bucket, scanned in ascending
+    // push order, so the first bucket match == the linear scan's first match;
+    // misses return -1 identically → byte-identical .o.
+    let mut label_bkt: [[Int]] = []
+    let mut _lbi = 0
+    while _lbi < 1024 {
+        label_bkt.push([])
+        _lbi = _lbi + 1
+    }
 
     let n = len(f.instrs)
     let mut i = 0
@@ -2976,6 +3302,8 @@ fn _pack_fn_x86(out_text: [Int],
             if len(name) == 0 && len(ins.args) > 0 { name = ins.args[0].label }
             label_names.push(name)
             label_offsets.push(len(out_text))
+            let _lb = _symh_hash(name) % 1024
+            label_bkt[_lb] = label_bkt[_lb].push(len(label_names) - 1)
             i = i + 1
             continue
         }
@@ -2991,7 +3319,11 @@ fn _pack_fn_x86(out_text: [Int],
             i = i + 1
             continue
         }
-        // Conditional branches to labels — REL8 placeholder (2 B).
+        // Conditional branches to labels — REL32 near form (6 B, 0F 8x cd).
+        // The REL8 (2 B) form silently truncated any label span >127 B
+        // (delta & 0xff, no range check): a nested / all-spill try body
+        // (#4541) exceeds that, producing a wild jump → SIGSEGV (c14/m12).
+        // The near form always fits an intra-fn delta; kind=2 resolves it.
         let is_cc = (ins.op == "je"  || ins.op == "jz"  ||
                      ins.op == "jne" || ins.op == "jnz" ||
                      ins.op == "jl"  || ins.op == "jge" ||
@@ -3000,13 +3332,23 @@ fn _pack_fn_x86(out_text: [Int],
                      ins.op == "jb"  || ins.op == "jbe")
         if is_cc && len(ins.args) == 1 && ins.args[0].kind == "label" {
             let cur_off = len(out_text)
-            let up = _lir_op_uppercase_x86(ins.op, ins.args)
+            let mut up = "JNE_REL32"
+            if ins.op == "je"  || ins.op == "jz"  { up = "JE_REL32"  }
+            if ins.op == "jne" || ins.op == "jnz" { up = "JNE_REL32" }
+            if ins.op == "jl"  { up = "JL_REL32"  }
+            if ins.op == "jge" { up = "JGE_REL32" }
+            if ins.op == "jle" { up = "JLE_REL32" }
+            if ins.op == "jg"  { up = "JG_REL32"  }
+            if ins.op == "ja"  { up = "JA_REL32"  }
+            if ins.op == "jae" { up = "JAE_REL32" }
+            if ins.op == "jb"  { up = "JB_REL32"  }
+            if ins.op == "jbe" { up = "JBE_REL32" }
             let bs = encode_x86_64_insn(up, ["x"])
             let mut bi = 0
             while bi < len(bs) { out_text.push(bs[bi]); bi = bi + 1 }
             unresolved_brs.push(cur_off)
             unresolved_to.push(ins.args[0].label)
-            unresolved_kind.push(0)
+            unresolved_kind.push(2)
             i = i + 1
             continue
         }
@@ -3021,6 +3363,89 @@ fn _pack_fn_x86(out_text: [Int],
             unresolved_kind.push(1)
             i = i + 1
             continue
+        }
+
+        // ── ③-3lane: RIP-wrapped `[rip+sym±N]` label operands ──────────
+        //   mov reg,[rip+sym±N]  → REX.W 8B /r  (VALUE load)
+        //   mov [rip+sym±N],reg  → REX.W 89 /r  (VALUE store)
+        //   lea reg,[rip+sym±N]  → REX.W 8D /r  (address — ANY symbol
+        //     family, not just the data-label whitelist: fn_sym/lam_sym/
+        //     slot_<id>)
+        // All three: disp32 placeholder + R_X86_64_PC32 vs the BASE
+        // symbol, reloc addend = N - 4. The old route sent wrapped movs
+        // to the lea data-address path — a value load of [rip+g<id>+8]
+        // materialized the ADDRESS (not the tag VALUE) and minted a bogus
+        // undef symbol literally named "g0+8"; wrapped STORES fell through
+        // to ENCODE-MISS entirely (the module-global write never reached
+        // the object). `@GOTPCREL`/`@PLT` inners are a DIFFERENT reloc →
+        // `_ex86_rip_inner` returns "" here; `@GOTPCREL` mov-loads are then
+        // caught by the FORM-1 arm below (Pass 4), `@PLT` stays a loud miss.
+        if (ins.op == "mov" || ins.op == "lea") && len(ins.args) == 2
+           && ins.args[0].kind == "reg" && ins.args[1].kind == "label" {
+            let inner = _ex86_rip_inner(ins.args[1].label)
+            if len(inner) > 0 {
+                let rd = _ex86_reg64(ins.args[0].reg.name)
+                if rd >= 0 {
+                    let mut opc = 0x8b                    // mov = value load
+                    if ins.op == "lea" { opc = 0x8d }     // lea = address
+                    let cur_off = len(out_text)
+                    let bs = _ex86_rip_rel_insn(opc, rd)
+                    let mut bi = 0
+                    while bi < len(bs) { out_text.push(bs[bi]); bi = bi + 1 }
+                    data_offsets.push(cur_off + 3)
+                    data_names.push(_ex86_sym_base(inner))
+                    data_addends.push(_ex86_sym_addend(inner))
+                    i = i + 1
+                    continue
+                }
+            }
+        }
+        // mov [rip+sym±N], reg — the store mirror (census #1, 1796×).
+        if ins.op == "mov" && len(ins.args) == 2
+           && ins.args[0].kind == "label" && ins.args[1].kind == "reg" {
+            let inner = _ex86_rip_inner(ins.args[0].label)
+            if len(inner) > 0 {
+                let rs = _ex86_reg64(ins.args[1].reg.name)
+                if rs >= 0 {
+                    let cur_off = len(out_text)
+                    let bs = _ex86_rip_rel_insn(0x89, rs)
+                    let mut bi = 0
+                    while bi < len(bs) { out_text.push(bs[bi]); bi = bi + 1 }
+                    data_offsets.push(cur_off + 3)
+                    data_names.push(_ex86_sym_base(inner))
+                    data_addends.push(_ex86_sym_addend(inner))
+                    i = i + 1
+                    continue
+                }
+            }
+        }
+
+        // ── FORM-1: extern-data GOT load `mov reg,[rip+sym@GOTPCREL]` ──
+        //   REX.W 8B /r  ModR/M(mod=00 reg=rd rm=101=RIP)  disp32=0
+        //   + R_X86_64_GOTPCREL(9) at the disp32 field, addend -4.
+        // The GOT slot holds the ADDRESS of `sym`; this is a VALUE load of
+        // that slot (opcode 0x8B), so `rd` receives `&sym`. Reference:
+        // SDM Vol.2A MOV (8B /r) + SysV AMD64 ABI §B.2 GOTPCREL (linker
+        // computes G+GOT+A-P). Codegen emits ONLY the `mov reg,…` form
+        // (x86_64_linux.hexa: --shared globals + environ/stdout/stderr/
+        // getenv), so we match mov+reg-dest only; any other `@GOTPCREL`
+        // shape stays a loud ENCODE-MISS (honest).
+        if ins.op == "mov" && len(ins.args) == 2
+           && ins.args[0].kind == "reg" && ins.args[1].kind == "label" {
+            let gsym = _ex86_gotpcrel_sym(ins.args[1].label)
+            if len(gsym) > 0 {
+                let rd = _ex86_reg64(ins.args[0].reg.name)
+                if rd >= 0 {
+                    let cur_off = len(out_text)
+                    let bs = _ex86_rip_rel_insn(0x8b, rd)  // mov r64,[rip+0]
+                    let mut bi = 0
+                    while bi < len(bs) { out_text.push(bs[bi]); bi = bi + 1 }
+                    got_offsets.push(cur_off + 3)          // disp32 field
+                    got_names.push(gsym)
+                    i = i + 1
+                    continue
+                }
+            }
         }
 
         // Data-address materialization — `mov <reg>, <.LCstrN | g<id>>`.
@@ -3042,6 +3467,7 @@ fn _pack_fn_x86(out_text: [Int],
                     // disp32 sits at the last 4 bytes of the 7-byte insn.
                     data_offsets.push(cur_off + 3)
                     data_names.push(dl)
+                    data_addends.push(0)
                     i = i + 1
                     continue
                 }
@@ -3064,25 +3490,66 @@ fn _pack_fn_x86(out_text: [Int],
     }
 
     // Resolve intra-fn branches. REL8: imm8 at off+1, delta = toff-(off+2).
-    // REL32: imm32 at off+1, delta = toff-(off+5).
+    // REL32 jmp/call: imm32 at off+1, delta = toff-(off+5).
+    // REL32 jcc (2-B opcode): imm32 at off+2, delta = toff-(off+6).
     let nb = len(unresolved_brs)
     let mut bi = 0
     while bi < nb {
         let off    = unresolved_brs[bi]
         let kind   = unresolved_kind[bi]
         let target = unresolved_to[bi]
-        let toff   = _lookup_label_x86(label_names, label_offsets, target)
+        // Round-5 (#4790): bucketed intra-fn resolve (was O(labels) linear scan).
+        let _lt_hb = _symh_hash(target) % 1024
+        let mut toff = -1
+        let _ltb    = label_bkt[_lt_hb]
+        let _ltn    = len(_ltb)
+        let mut _lti = 0
+        while _lti < _ltn {
+            let _lidx = _ltb[_lti]
+            if label_names[_lidx] == target {
+                toff = label_offsets[_lidx]
+                _lti = _ltn
+            } else {
+                _lti = _lti + 1
+            }
+        }
         if toff < 0 {
             // Extern / cross-fn — bubble to pending; cycle 30 builds reloc.
-            pending_offsets.push(off)
+            // jcc (kind=2) always targets an intra-fn block label, so an
+            // unresolved kind=2 is a walker-invariant break — make it loud
+            // (its disp32 field is at off+2, unlike call/jmp's off+1).
+            if kind == 2 {
+                eprintln("ENCODE-MISS (x86_64): unresolved intra-fn jcc target '" +
+                         target + "' (kind=2 must resolve locally)")
+                pending_offsets.push(off + 2)
+            } else {
+                pending_offsets.push(off)
+            }
             pending_names.push(target)
             bi = bi + 1
             continue
         }
         if kind == 0 {
+            // REL8 (2-B insn): imm8 at off+1, delta = toff-(off+2).
+            // HARD range-guard — jcc now defaults to REL32, so REL8 is only
+            // reached by forms whose delta provably fits; any future re-use
+            // that overflows ±127 is LOUD, never a silent 0xff truncation.
             let delta = toff - (off + 2)
+            if delta > 127 || delta < -128 {
+                eprintln("ENCODE-MISS (x86_64): REL8 branch delta out of range " +
+                         to_string(delta) + " to '" + target + "' (needs REL32)")
+            }
             out_text[off + 1] = delta & 0xff
+        } else if kind == 2 {
+            // jcc REL32 (6-B insn, 2-B opcode): imm32 at off+2,
+            // delta = toff-(off+6). 4-byte little-endian writeback.
+            let delta = toff - (off + 6)
+            out_text[off + 2] =  delta        & 0xff
+            out_text[off + 3] = (delta >> 8)  & 0xff
+            out_text[off + 4] = (delta >> 16) & 0xff
+            out_text[off + 5] = (delta >> 24) & 0xff
         } else {
+            // REL32 jmp/call (5-B insn): imm32 at off+1, delta = toff-(off+5).
             let delta = toff - (off + 5)
             out_text[off + 1] =  delta        & 0xff
             out_text[off + 2] = (delta >> 8)  & 0xff
@@ -3167,6 +3634,10 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
     let pending_names:   [string] = []
     let data_offsets:    [Int]    = []
     let data_names:      [string] = []
+    let data_addends:    [Int]    = []
+    // FORM-1 GOTPCREL — disp32 sites of `mov reg,[rip+sym@GOTPCREL]` loads.
+    let got_offsets:     [Int]    = []
+    let got_names:       [string] = []
 
     let nf = len(lm.funcs)
     let mut i = 0
@@ -3175,7 +3646,8 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
         let fn_start = len(obj.text)
         let strx = _ew_str(obj.strtab, f.name)
         _pack_fn_x86(obj.text, pending_offsets, pending_names,
-                     data_offsets, data_names, f)
+                     data_offsets, data_names, data_addends,
+                     got_offsets, got_names, f)
         // ElfSym pushed after packing so `size` is final (hexa rvalue
         // restriction prevents `obj.symbols[k].size = ...` patching).
         obj.symbols.push(ElfSym {
@@ -3212,15 +3684,40 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
     // pushed once is found at the same index forever after), so memoizing the
     // first resolution per distinct name is byte-IDENTICAL. Distinct callee
     // names are few (~tens), so the cache scan is ~O(distinct) ≪ O(symbols).
-    let mut _symc_names: [string] = []
-    let mut _symc_idx:   [Int]    = []
+    // #self-emit-oom: bucketed (1024-way FNV-1a) name→symidx cache, shared by the
+    // CALL + data reloc passes. Byte-eq NEUTRAL vs the old flat _symc_* scan (same
+    // first-match index, just found via its hash bucket) — see _symh_hash.
+    let mut _symh_names = _symh_empty_names()
+    let mut _symh_idx   = _symh_empty_idx()
+    // #self-emit-round3: PRE-SEED the buckets from obj.symbols (one O(symbols)
+    // walk). #4779 bucketed only the HIT path — the FIRST resolution of each
+    // distinct name still ran the O(symbols) _find_elf_sym_by_name scan, i.e.
+    // O(distinct·symbols) ≈ 6e8 string-compares on the compiler self-source, and
+    // emit_asm never finished (aiden: RC=124). After this seed a bucket miss
+    // means the name has no def, so the fallback scan fires only once per distinct
+    // UNDEF name (~hundreds of true externs) — measured-negligible. Byte-eq
+    // NEUTRAL: first-wins in obj.symbols order, so a pre-seeded index ==
+    // _find_elf_sym_by_name's first-match; every ElfRel sym_idx is identical and
+    // the fallback below is kept untouched as the safety net.
+    let nseed = len(obj.symbols)
+    let mut spi = 0
+    while spi < nseed {
+        let sname = _symh_name_at(obj.strtab, obj.symbols[spi].name_offset)
+        let shb = _symh_hash(sname)
+        if _symh_get(_symh_names[shb], _symh_idx[shb], sname) < 0 {
+            _symh_names[shb] = _symh_names[shb].push(sname)
+            _symh_idx[shb]   = _symh_idx[shb].push(spi)
+        }
+        spi = spi + 1
+    }
     let np = len(pending_offsets)
     let mut pi = 0
     while pi < np {
         let call_off = pending_offsets[pi]
         let name     = pending_names[pi]
         // Cached resolution first; fall back to the symtab scan on a miss.
-        let mut idx = _symc_lookup(_symc_names, _symc_idx, name)
+        let _hb = _symh_hash(name)
+        let mut idx = _symh_get(_symh_names[_hb], _symh_idx[_hb], name)
         let was_cached = idx >= 0
         if idx < 0 {
             idx = _find_elf_sym_by_name(obj.symbols, obj.strtab, name)
@@ -3244,8 +3741,8 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
         // Memoize on a MISS only (so the cache holds one entry per distinct
         // name — pushing on hits too would re-grow it to O(N)).
         if !was_cached {
-            _symc_names.push(name)
-            _symc_idx.push(idx)
+            _symh_names[_hb] = _symh_names[_hb].push(name)
+            _symh_idx[_hb]   = _symh_idx[_hb].push(idx)
         }
         // The reloc's `r_offset` points at the imm32 field of the
         // CALL placeholder, i.e. call_off + 1.
@@ -3287,8 +3784,10 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
     while dpi < nd {
         let disp_off = data_offsets[dpi]
         let name     = data_names[dpi]
-        // Same #3712 memo cache as the CALL pass (shared across both passes).
-        let mut idx = _symc_lookup(_symc_names, _symc_idx, name)
+        let adnd     = data_addends[dpi]
+        // Same bucketed cache as the CALL pass (shared across both passes).
+        let _hb = _symh_hash(name)
+        let mut idx = _symh_get(_symh_names[_hb], _symh_idx[_hb], name)
         let was_cached = idx >= 0
         if idx < 0 {
             idx = _find_elf_sym_by_name(obj.symbols, obj.strtab, name)
@@ -3308,17 +3807,68 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
             idx = len(obj.symbols) - 1
         }
         if !was_cached {
-            _symc_names.push(name)
-            _symc_idx.push(idx)
+            _symh_names[_hb] = _symh_names[_hb].push(name)
+            _symh_idx[_hb]   = _symh_idx[_hb].push(idx)
         }
         obj.relocs.push(ElfRel {
             offset:  disp_off,
             sym_idx: idx,
             kind:    ELF_R_X86_64_PC32,
-            addend:  -4,
+            addend:  adnd - 4,
             site_seg: 1,
         })
         dpi = dpi + 1
+    }
+
+    // ── Pass 4: extern-data GOT loads → R_X86_64_GOTPCREL reloc records ──
+    //
+    // Each got_* entry is the disp32 field of a `mov reg, [rip+0]` (opcode
+    // 0x8B) that loads a symbol's GOT slot. The referenced symbol is an
+    // extern data symbol (environ/stdout/stderr/getenv) or a --shared
+    // module global — either way the GOT entry is linker-synthesized, so
+    // NEVER pre-patch: emit one R_X86_64_GOTPCREL with addend -4 and let
+    // the linker compute G + GOT + A - P (SysV AMD64 ABI §B.2). An unknown
+    // symbol becomes an undef STB_GLOBAL extern, exactly like the CALL /
+    // data-ref passes. Shares the #3712 name→symtab-index memo cache.
+    let ng = len(got_offsets)
+    let mut gpi = 0
+    while gpi < ng {
+        let g_off = got_offsets[gpi]
+        let name  = got_names[gpi]
+        // #build-break fix: #4783's GOTPCREL pass used the flat _symc_* cache that
+        // #4784 replaced with the bucketed _symh_* (it was cut pre-#4784 + merged
+        // without rebasing → undeclared _symc_names/_symc_idx → aprime build death).
+        // Convert to the same bucketed lookup #4784 gave the CALL + data passes.
+        let _hb = _symh_hash(name)
+        let mut idx = _symh_get(_symh_names[_hb], _symh_idx[_hb], name)
+        let was_cached = idx >= 0
+        if idx < 0 {
+            idx = _find_elf_sym_by_name(obj.symbols, obj.strtab, name)
+        }
+        if idx < 0 {
+            let strx = _ew_str(obj.strtab, name)
+            obj.symbols.push(ElfSym {
+                name_offset: strx,
+                section:     0,    // SHN_UNDEF
+                value:       0,
+                size:        0,
+                bind:        1,    // STB_GLOBAL
+                type_:       0,    // STT_NOTYPE
+            })
+            idx = len(obj.symbols) - 1
+        }
+        if !was_cached {
+            _symh_names[_hb] = _symh_names[_hb].push(name)
+            _symh_idx[_hb]   = _symh_idx[_hb].push(idx)
+        }
+        obj.relocs.push(ElfRel {
+            offset:  g_off,
+            sym_idx: idx,
+            kind:    ELF_R_X86_64_GOTPCREL,
+            addend:  -4,
+            site_seg: 1,
+        })
+        gpi = gpi + 1
     }
     return obj
 }
@@ -3339,6 +3889,68 @@ fn _symc_lookup(names: [string], idxs: [Int], name: string) -> Int {
         i = i + 1
     }
     return -1
+}
+
+// #self-emit-oom — the flat _symc_* cache above is O(distinct) PER reloc probe.
+// On corpus files distinct callee/data names are ~tens, so it is ~O(1). On the
+// COMPILER SELF-SOURCE distinct names are ~5k fns + ~15-20k unique `.LCstrN`, so
+// np·O(distinct) ≈ 10^10 runtime string-compares and the pack phase never
+// finishes (the per-insn encoder completes with 0 ENCODE-MISS, then parks in the
+// reloc passes at peak RSS → swap-thrash). These helpers bucket the SAME cache by
+// an FNV-1a hash (1024 buckets, mirroring codegen's `_x86_strtab_hash` widened),
+// collapsing each probe to O(distinct/1024) ≈ O(1). Byte-eq NEUTRAL: a name still
+// resolves to `_find_elf_sym_by_name`'s first (== only) match — found via its
+// bucket rather than a full scan — so every ElfRel `sym_idx` is identical.
+fn _symh_hash(s: string) -> i64 {
+    let mut h: i64 = 2166136261
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        h = (h ^ s.char_code_at(i)) * 16777619
+        h = h % 4294967296
+        i = i + 1
+    }
+    let mut b = h % 1024
+    if b < 0 { b = b + 1024 }
+    return b
+}
+
+fn _symh_empty_names() -> [[string]] {
+    let mut bs: [[string]] = []
+    let mut i = 0
+    while i < 1024 { let e: [string] = []; bs.push(e); i = i + 1 }
+    return bs
+}
+
+fn _symh_empty_idx() -> [[Int]] {
+    let mut bs: [[Int]] = []
+    let mut i = 0
+    while i < 1024 { let e: [Int] = []; bs.push(e); i = i + 1 }
+    return bs
+}
+
+fn _symh_get(bucket_names: [string], bucket_idx: [Int], name: string) -> Int {
+    let n = len(bucket_names)
+    let mut i = 0
+    while i < n {
+        if bucket_names[i] == name { return bucket_idx[i] }
+        i = i + 1
+    }
+    return -1
+}
+
+// #self-emit-round3 — read a NUL-terminated symbol name back out of the in-memory
+// strtab pool. Byte-faithful inverse of _ew_str (which wrote `char_code(s,i) & 0xff`
+// per char, then NUL). Uncapped (unlike _er_cstr's 256-char guard) so a long mangled
+// fn name can't pre-seed under a truncated key. Used only by the round-3 pre-seed.
+fn _symh_name_at(strtab: [Int], off: Int) -> string {
+    let mut s = ""
+    let mut i = 0
+    while (strtab[off + i] & 0xff) != 0 {
+        s = s + from_char_code(strtab[off + i] & 0xff)
+        i = i + 1
+    }
+    return s
 }
 
 fn _find_elf_sym_by_name(symbols: [ElfSym], strtab: [Int], name: string) -> Int {

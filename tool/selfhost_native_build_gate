@@ -58,6 +58,31 @@ done
 WORK="$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/snbg.$$")"; mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
+# Native-path assertion — the gate exists to measure the NATIVE emit path
+# (gen3 --emit=obj + hexa_ld + rt.o = direct write(2) syscalls). A stale /
+# mis-provisioned driver silently ignores HEXA_NATIVE_BUILD and falls back to
+# its internal clang C-transpile build (buffered stdio + libsodium/openssl) —
+# that build is NOT the native path, so grading its output tells us nothing
+# about native-emit health. Worse, a stale clang codegen with the line-buffered
+# `print()`+`exit()` no-fflush bug (mini-selfhost v0.574.1, PR #4790 darwin
+# gate false-RED) links+runs clean but emits empty stdout → 7/7 false FAIL.
+# Discriminate by artifact: the native binary links NO libsodium/openssl. If
+# the probe is a clang fallback, this is INFRA (re-promote the runner), never a
+# native-emit regression → NEUTRAL(2), not RED.
+printf 'fn main(){ print("x"); exit(0) }\n' > "$WORK/_probe.hexa"
+HEXA_NATIVE_BUILD=1 "$HEXA" build "$WORK/_probe.hexa" -o "$WORK/_probe.bin" >/dev/null 2>&1
+if [ -x "$WORK/_probe.bin" ]; then
+    pdeps=""
+    case "$(uname -s)" in
+        Darwin) pdeps="$(otool -L "$WORK/_probe.bin" 2>/dev/null)";;
+        *)      pdeps="$(ldd "$WORK/_probe.bin" 2>/dev/null; readelf -d "$WORK/_probe.bin" 2>/dev/null)";;
+    esac
+    if printf '%s' "$pdeps" | grep -qiE 'libsodium|libcrypto|libssl'; then
+        echo "selfhost_native_build_gate: NEUTRAL — HEXA_NATIVE_BUILD produced a clang-fallback binary (links libsodium/openssl), not the native emit path; the runner's driver slot is stale/mis-provisioned (INFRA, not a native-emit regression). Re-promote it: tool/build_selfhost.sh && tool/promote_selfhost.sh install" >&2
+        exit 2
+    fi
+fi
+
 # corpus: (name | source | expected-stdout)
 #   `var` exercises the mutable-let sugar `var x = …` (≡ `let mut x = …`). A
 #   regression here (the C-transpile emitting a leaked `var;` + dropping the
