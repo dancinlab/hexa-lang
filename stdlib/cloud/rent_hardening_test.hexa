@@ -95,6 +95,26 @@ fn main() {
     if !cmd.contains("-PB1G") { println("FAIL df-cmd-blocks"); fails = fails + 1 }
     if !cmd.contains("NR==2") { println("FAIL df-cmd-row"); fails = fails + 1 }
 
+    // ── (2) cgroup RAM-cap check (community pod `free` leaks host RAM) ─────
+    // finite cap below the 16 GiB floor → WARN (exit 2, the OOM-risk case)
+    let cap8 = cloud_cgroup_ram_verdict("8", 16)
+    if cap8.exit_code != 2 { println("FAIL cgroup-cap8: " + cap8.message); fails = fails + 1 }
+    // cap at/above floor → OK (silent)
+    let cap30 = cloud_cgroup_ram_verdict("30", 16)
+    if cap30.exit_code != 0 { println("FAIL cgroup-cap30: " + cap30.message); fails = fails + 1 }
+    let cap16 = cloud_cgroup_ram_verdict("16", 16)
+    if cap16.exit_code != 0 { println("FAIL cgroup-cap16-exact: " + cap16.message); fails = fails + 1 }
+    // "max" (cgroup v2 unlimited) → OK
+    let capmax = cloud_cgroup_ram_verdict("max", 16)
+    if capmax.exit_code != 0 { println("FAIL cgroup-max: " + capmax.message); fails = fails + 1 }
+    // empty (unreadable) → inconclusive (exit 3, caller stays quiet)
+    let capnc = cloud_cgroup_ram_verdict("", 16)
+    if capnc.exit_code != 3 { println("FAIL cgroup-inconclusive: " + capnc.message); fails = fails + 1 }
+    // cmd shape (pure): reads memory.max with the v1 limit_in_bytes fallback.
+    let rcmd = cloud_cgroup_ram_cmd()
+    if !rcmd.contains("memory.max") { println("FAIL cgroup-cmd-v2"); fails = fails + 1 }
+    if !rcmd.contains("limit_in_bytes") { println("FAIL cgroup-cmd-v1-fallback"); fails = fails + 1 }
+
     if fails == 0 {
         println("rent_hardening_test PASS")
         exit(0)
