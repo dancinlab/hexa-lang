@@ -1755,6 +1755,7 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     // Resolve relocs in TRUE vaddr space. text->text reduces to the round-1
     // text-offset delta (vaddr_base+code_off cancels) => no-data path is
     // byte-identical; text->data uses the data segment's distinct vaddr.
+    let mut unresolved = 0
     let mut ro = 0
     while ro < len(objs) {
         let obj = objs[ro]
@@ -1868,10 +1869,22 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                         text_bytes[patch_off + 3] = (delta >> 24) & 0xff
                     }
                 }
+            } else {
+                // H1 fix: unresolved reloc — no defining obj carries `name`. A
+                // silent skip left the site at placeholder 0 -> si_addr=NULL
+                // SIGSEGV at run (Fable H1). Never silent-skip (release-integrity):
+                // log obj/sym/kind and count; the fn refuses to emit below.
+                eprintln("hexa_ld(elf,ownstart): unresolved reloc — obj[" + to_string(ro) + "] sym '" + name + "' kind=" + to_string(r.kind) + " (no defining obj; placeholder 0 -> si_addr=NULL SIGSEGV)")
+                unresolved = unresolved + 1
             }
             ri = ri + 1
         }
         ro = ro + 1
+    }
+
+    if unresolved > 0 {
+        eprintln("hexa_ld(elf,ownstart): " + to_string(unresolved) + " unresolved reloc(s) — refusing to emit (silent-skip leaves placeholder 0 -> si_addr=NULL SIGSEGV; release-integrity)")
+        return 3
     }
 
     // ── GOT FILL — write each 8-byte slot = the symbol's FINAL resolved vaddr
