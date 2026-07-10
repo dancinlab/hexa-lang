@@ -147,7 +147,7 @@ emit_one() {
         [ "$t" -eq 1 ] || { echo "[regen_hxlcl_strtoll] ERROR: $triple nm shows $t/1 T hxlcl_strtoll" >&2; exit 1; }
         # Floor-reduction assert: the seed must introduce NO new libc UND (a libc name in
         # U would defeat the flip). Only the hexa carrier (hexa_*/__hx_*) may be U.
-        local libc_u; libc_u="$( (nm "$o" 2>/dev/null || echo) | grep -E '^[[:space:]]*U ' | grep -vE ' _?(hexa_|__hx_|hxlcl_)' | grep -cvE ' _?(GLOBAL_OFFSET_TABLE|__stack_chk)' || echo 0)"
+        local libc_u; libc_u="$( (nm "$o" 2>/dev/null || echo) | grep -E '^[[:space:]]*U ' | grep -vE ' _?(hexa_|__hx_|hxlcl_)' | grep -cvE ' _?(GLOBAL_OFFSET_TABLE|__stack_chk)' || true )"
         echo "[regen_hxlcl_strtoll] $triple → $out (1 globl · $t T hxlcl_strtoll · ${libc_u} non-carrier U)"
         [ "${libc_u:-0}" -eq 0 ] || echo "[regen_hxlcl_strtoll] WARN $triple: seed has ${libc_u} non-carrier undefined symbols — inspect (floor-reduction assert)" >&2
     else
