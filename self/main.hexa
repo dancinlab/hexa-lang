@@ -3538,7 +3538,7 @@ fn cmd_build(src, out, c_only, target, shared) {
     // falls through to the C-transpile path below (delegate intact; trace under
     // HEXA_RUN_NATIVE_TRACE=1). linux x86_64 only (the host the recipe is proven on); refuses
     // shared/--c-only/--target. Design: state/hexa-own/no_hexacc_round1_design_fable.md.
-    if env_var("HEXA_BUILD_NATIVE") == "1" && (exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxx86_64" || exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxaarch64" || exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxarm64") && shared != "1" && c_only != "1" && len(target) == 0 && len(__actual_src) > 0 {
+    if env_var("HEXA_BUILD_NATIVE") != "0" && (exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxx86_64" || exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxaarch64" || exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxarm64") && shared != "1" && c_only != "1" && len(target) == 0 && len(__actual_src) > 0 {
         let _bn_arm = exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") != "Linuxx86_64"
         let _bntgt = if _bn_arm { "arm64-linux-gnu" } else { "x86_64-linux-gnu" }
         let _bncc = resolve_native_cc()
