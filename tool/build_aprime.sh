@@ -737,6 +737,15 @@ fi
 RTCORE_FS_RW_OBJ=""
 RTCORE_FS_RW_DEF=""
 if [ "${HEXA_ZEROC_RT_CORE_FS_READ_WRITE:-0}" != "0" ]; then
+    # ③ R7 flag-interaction guard: the native fs-read-write seed's rt_write_bytes
+    # (rtcore_fs-read-write_native.o) has NO TAG_ARRAY_I64 rebox, unlike the
+    # emitted-C rt_write_bytes (runtime_core_emit.hexa #else arm). Combining it with
+    # HEXA_SELFEMIT_PACK_OUT=1 makes write_bytes(<packed handle>) misread the packed
+    # ELF stream → corrupt/empty object. The two opt-ins are mutually exclusive until
+    # the native seed mirrors the rebox (adversarial-review follow-up).
+    if [ "${HEXA_SELFEMIT_PACK_OUT:-}" != "" ]; then
+        echo "build_aprime: HEXA_ZEROC_RT_CORE_FS_READ_WRITE=1 is mutually exclusive with HEXA_SELFEMIT_PACK_OUT=1 (native fs-write seed lacks the TAG_ARRAY_I64 rebox — packed handle would corrupt). Unset one." >&2; exit 1
+    fi
     if [ ! -f "$REPO/build/rtcore_fs-read-write_native.o" ]; then
         CC="${CC:-clang}" ARCH_FLAG="$ARCH_FLAG" bash tool/regen_rtcore_fs-read-write_native_o.sh "$REPO/build/rtcore_fs-read-write_native.o" >&2 \
             || { echo "build_aprime: HEXA_ZEROC_RT_CORE_FS_READ_WRITE=1 but rtcore_fs-read-write_native.o build failed" >&2; exit 1; }

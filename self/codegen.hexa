@@ -1054,6 +1054,9 @@ fn codegen(ast) {
     // caller can consult a callee registered earlier/later in the module. No-op
     // when the flag is unset (nothing is ever added) → OFF-path byte-identical.
     _selfemit_pack_out_ret_fns = []
+    // ③ round-7: clear lineage name so a module-level `let x:[int]=[]` never
+    // inherits a stale fn name (would else pack outside the emit lineage).
+    _gen2_current_fn_name = ""
     let mut _gi = 0
     while _gi < len(ast) {
         let _gk = ast[_gi].kind
@@ -1065,7 +1068,7 @@ fn codegen(ast) {
             // ③ SELFEMIT-PACK-OUT (round-7): record fns declared `-> [Int]` so an
             // untyped `let x = f(...)` caller local routes its reads through the
             // poly readers (see _is_selfemit_pack_out_ret_call). GATED default-OFF.
-            if _selfemit_pack_out_enabled() && _gk == "FnDecl" {
+            if _selfemit_pack_out_enabled() && _gk == "FnDecl" && _selfemit_pack_out_lineage_fn(ast[_gi].name) {
                 let _rt = ast[_gi].ret_type
                 if type_of(_rt) == "string" && (_rt == "[Int]" || _rt == "[i64]" || _rt == "[int]") {
                     _selfemit_pack_out_ret_fn_add(ast[_gi].name)
@@ -3301,6 +3304,8 @@ fn gen2_fn_decl(node) {
     // perfect_number_engine_smoke a/b float params after Fibonacci helper.
     _gen2_current_fn_params = []
     _gen2_current_fn_param_types = []
+    // ③ SELFEMIT-PACK-OUT (round-7): track the current fn name for lineage gating.
+    _gen2_current_fn_name = node.name
     let mut _pi = 0
     while _pi < len(node.params) {
         _gen2_declared_names.push(_hexa_mangle_ident(node.params[_pi].name))
@@ -3358,12 +3363,15 @@ fn gen2_fn_decl(node) {
     // PARAMETER as a pack-out handle so a packed buffer passed to a byte-append
     // helper (`_ew_u32(out: [Int], v)`) keeps growing through the poly readers
     // across the call boundary — the compiler's serialize `out` is grown via
-    // exactly these helpers, not only direct pushes. SOUND for a BOXED [Int]
-    // arg too: the poly readers (hexa_arr_poly_*) branch on the tag and delegate
-    // to the boxed path for TAG_ARRAY, so routing is a superset (identical
-    // output for a non-packed arg). GATED: only under the flag → OFF-path
-    // byte-identical (the set stays empty).
-    if _selfemit_pack_out_enabled() {
+    // exactly these helpers, not only direct pushes. ROUND-7: the R6 "SOUND for a
+    // BOXED [Int] arg too" claim was FALSIFIED (convergence codegen-hexa-2) — the
+    // poly readers do NOT tag-check every use-site (for-in / slice / concat / plain
+    // assign are uncovered), so packing a param whose caller passes a BOXED array
+    // corrupts it (#4133 stride-16). FIX: gate on _selfemit_pack_out_lineage_fn so
+    // only the x86 emit helpers (_ew_/_ex86_/encode_x86_64/serialize_elf_x86*) —
+    // which receive the packed `out` by construction — pack their params. GATED:
+    // only under the flag AND lineage → OFF-path byte-identical (the set stays empty).
+    if _selfemit_pack_out_enabled() && _selfemit_pack_out_lineage_fn(node.name) {
         let mut _ppi = 0
         while _ppi < len(_gen2_current_fn_param_types) {
             let _pty = _gen2_current_fn_param_types[_ppi]
@@ -4688,7 +4696,10 @@ fn _gen2_stmt_inner(node, depth) {
         // set stays empty, and `init` / every use-site is byte-identical. A
         // same-name re-let to a non-packed RHS voids the handle.
         if _selfemit_pack_out_enabled() {
-            if _is_empty_typed_int_array_let(node) {
+            // ③ round-7: pack an empty-typed [Int] let ONLY inside the x86 emit
+            // lineage (value-provenance) — a bare `let x:[int]=[]` in atlas/borrowck
+            // must stay boxed or its handle flows to a boxed use-site and corrupts.
+            if _is_empty_typed_int_array_let(node) && _selfemit_pack_out_lineage_fn(_gen2_current_fn_name) {
                 _selfemit_pack_out_add(node.name)
                 init = "hexa_arr_i64_new_esc(16)"
             } else if _is_selfemit_pack_out_ret_call(node.left) {
@@ -6880,6 +6891,10 @@ let mut _gen2_current_fn_params = []
 // and typed-source direct cast for `as int`/`as float`. Empty string
 // means no annotation. Indexed in lockstep with _gen2_current_fn_params.
 let mut _gen2_current_fn_param_types = []
+// ③ SELFEMIT-PACK-OUT (round-7): name of the fn currently being emitted, so the
+// empty-typed [Int] let packing (site 2) can gate on _selfemit_pack_out_lineage_fn.
+// Compiler-internal only — read solely inside flag-gated blocks → OFF-path byte-id.
+let mut _gen2_current_fn_name = ""
 
 // Step-3 cycle 76 — return the declared type annotation for a fn-param
 // name, or "" if not a param of the current fn.
@@ -12991,6 +13006,23 @@ fn _selfemit_pack_out_enabled() {
     return env("HEXA_SELFEMIT_PACK_OUT") != ""
 }
 
+// ③ SELFEMIT-PACK-OUT (round-7): confine packed-handle CREATION to the x86 ELF
+// emit lineage by fn-name prefix. R6 over-applied the lever to EVERY [Int] param
+// + empty-typed [Int] let across ALL self-compiled sources (atlas/borrowck/…),
+// minting TAG_ARRAY_I64 handles that flow to boxed [int] params and get walked as
+// stride-16 (#4133) → flag-ON aprime miscompiled trivial main (convergence
+// codegen-hexa-2). This narrows creation to the serialize/encode helpers only, so
+// the packed representation never escapes the emit lineage. serialize_elf_arm64 is
+// deliberately excluded (arm64 = parallel follow-on; keeps R7 scoped to the
+// measured x86 break). Read ONLY under _selfemit_pack_out_enabled() → OFF-path
+// byte-identical.
+fn _selfemit_pack_out_lineage_fn(name) {
+    if type_of(name) != "string" { return false }
+    return name.starts_with("_ew_") || name.starts_with("_ex86_")
+        || name.starts_with("encode_x86_64")
+        || name.starts_with("serialize_elf_x86") || name.starts_with("serialize_elf_exec_x86")
+}
+
 let mut _selfemit_pack_out_names = []
 
 fn _selfemit_pack_out_reset() {
@@ -16435,6 +16467,8 @@ fn codegen_full(ast) {
     // ③ SELFEMIT-PACK-OUT (round-7): reset the MODULE-level packed-return fn set
     // once per transpile (mirror of the codegen() prescan). No-op OFF-path.
     _selfemit_pack_out_ret_fns = []
+    // ③ round-7: clear lineage name (mirror of codegen() prescan).
+    _gen2_current_fn_name = ""
     // ── Pass 0: collect known global names for closure free-var analysis ──
     let mut gi = 0
     while gi < len(ast) {
@@ -16446,7 +16480,7 @@ fn codegen_full(ast) {
             _known_nonlocal_add(ast[gi].name)
             // ③ SELFEMIT-PACK-OUT (round-7): record fns declared `-> [Int]` (mirror
             // of the codegen() prescan). GATED default-OFF → OFF-path byte-id.
-            if _selfemit_pack_out_enabled() && gk == "FnDecl" {
+            if _selfemit_pack_out_enabled() && gk == "FnDecl" && _selfemit_pack_out_lineage_fn(ast[gi].name) {
                 let _rt = ast[gi].ret_type
                 if type_of(_rt) == "string" && (_rt == "[Int]" || _rt == "[i64]" || _rt == "[int]") {
                     _selfemit_pack_out_ret_fn_add(ast[gi].name)
