@@ -2560,6 +2560,79 @@ fn _types_int_text_fits(text: string, maxv: i64) -> bool {
     return true
 }
 
+// TRUE iff the magnitude spelled by `text` fits within u64 (2^64-1) — the widest
+// value hexa's 64-bit container expresses. hexa is i64-only: i64 is the SOLE
+// 64-bit word (payload/HexaVal, RNG state, IEEE-754 double bits), so a literal
+// with value in (i64::MAX, u64::MAX] is a SANCTIONED u64 bit-pattern (raw
+// IEEE-754 bits reinterpreted mod 2^64 by the emit pipeline — see the "coefficients
+// passed as raw IEEE-754 bit patterns" discipline in stdlib/runtime/hxlcl_core.hexa,
+// plus FNV/splitmix constants). Only a value ≥ 2^64 truly overflows the container.
+// Java (JLS 3.10.1) is the precedent: an unsigned-less language admits the full
+// 64-bit range for its widest integer literal. stage0 has no bigint and U64_MAX is
+// NOT i64-representable, so the overflow-guarded accumulation used by
+// `_types_int_text_fits` cannot apply here — instead this counts significant digits
+// and, at the 20-digit boundary, lexicographically compares against U64_MAX
+// ("18446744073709551615"). FP-guard: any unrecognised glyph returns true (never a
+// false REJECT), matching `_types_int_text_fits`.
+fn _types_int_text_fits_u64(text: string) -> bool {
+    let chars = text.chars()
+    let n = len(chars)
+    if n == 0 { return true }
+    // hex form `0x`/`0X`: ≤ 16 significant hex digits fit u64.
+    if n >= 2 && chars[0] == '0' && (chars[1] == 'x' || chars[1] == 'X') {
+        let mut hc = 0
+        let mut seenh = false
+        let mut hi = 2
+        while hi < n {
+            let c = chars[hi]
+            if c != '_' {
+                let d = _types_hex_digit_val(c)
+                if d < 0 { return true }
+                if d != 0 { seenh = true }
+                if seenh { hc = hc + 1 }
+            }
+            hi = hi + 1
+        }
+        return hc <= 16
+    }
+    // decimal — pass 1: count significant digits (leading zeros / `_` skipped).
+    let mut sig = 0
+    let mut seen = false
+    let mut i = 0
+    while i < n {
+        let c = chars[i]
+        if c != '_' {
+            let d = _types_dec_digit_val(c)
+            if d < 0 { return true }
+            if d != 0 { seen = true }
+            if seen { sig = sig + 1 }
+        }
+        i = i + 1
+    }
+    if sig < 20 { return true }
+    if sig > 20 { return false }
+    // exactly 20 significant digits → lexicographic ≤ compare vs U64_MAX.
+    let bchars = "18446744073709551615".chars()
+    let mut k = 0
+    let mut seen2 = false
+    let mut i2 = 0
+    while i2 < n {
+        let c = chars[i2]
+        if c != '_' {
+            let d = _types_dec_digit_val(c)
+            if d != 0 { seen2 = true }
+            if seen2 {
+                let bd = _types_dec_digit_val(bchars[k])
+                if d < bd { return true }
+                if d > bd { return false }
+                k = k + 1
+            }
+        }
+        i2 = i2 + 1
+    }
+    return true
+}
+
 // TRUE iff the positive int-literal `src` fits the signed MAX of `expected`.
 fn _types_int_lit_fits(expected: Type, src: Expr) -> bool {
     return _types_int_text_fits(src.text, _types_int_max_for(expected))
@@ -2576,9 +2649,16 @@ fn _types_int_lit_fits(expected: Type, src: Expr) -> bool {
 // construction, never a false REJECT.
 fn _types_int_lit_overflows(expected: Type, src: Expr) -> bool {
     if !_is_integer_kind(expected) { return false }
-    // positive int-literal: magnitude ≤ MAX.
+    // positive int-literal.
     if _types_is_lit_int(src.kind) {
-        return !_types_int_text_fits(src.text, _types_int_max_for(expected))
+        // narrow iN (i8/i16/i32): rustc-exact signed-MAX bound.
+        if expected.kind == "i8" || expected.kind == "i16" || expected.kind == "i32" {
+            return !_types_int_text_fits(src.text, _types_int_max_for(expected))
+        }
+        // 64-bit container (i64/int/Int): full u64 range — a value in
+        // (i64::MAX, u64::MAX] is a sanctioned u64 bit-pattern (mod 2^64), NOT an
+        // overflow. Only ≥ 2^64 truly overflows the container.
+        return !_types_int_text_fits_u64(src.text)
     }
     // negated int-literal `UnOp("-", LiteralInt)`: magnitude ≤ abs(MIN)=MAX+1.
     if _types_is_unop(src.kind) && src.text == "-" && len(src.children) == 1 {
