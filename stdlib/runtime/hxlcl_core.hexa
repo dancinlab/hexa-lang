@@ -718,10 +718,21 @@ pub fn hxlcl_setenv(name: HexaVal, value: HexaVal, overwrite: HexaVal) -> int {
 // BYTE-FAITHFUL to the frozen 0-libc floor self/runtime.c:513 (hxlcl_strtoll) /
 // the byte-identical shim runtime_core_hxlcl_shim.c:404. Char codes: ' '=32
 // '\t'=9 '\n'=10 '-'=45 '+'=43 '0'=48 '9'=57 'x'=120 'X'=88 'a'=97 'z'=122
-// 'A'=65 'Z'=90. The unsigned-accumulation `n = n*base + d` uses signed
-// __hx_payload_mul/_add: bit-identical to the C body for any non-overflowing
-// value (the real callers parse small env/limit strings), overflow is the same
-// wrap-UB-adjacent territory as the C body and unobserved here.
+// 'A'=65 'Z'=90. OVERFLOW CONTRACT (R1c resolution, state/hexa-own/
+// rfc061-r1c-strtoll-contract-resolution.md): out-of-range input WRAPS mod 2^64
+// (two's-complement) — signed __hx_payload_mul/_add is bit-identical to the C
+// body's `unsigned long long` accumulation + (long long) cast for ALL inputs,
+// including overflow, and __hx_payload_sub(0,n) ≡ -(long long)n. This is the
+// SHIPPING semantics (runtime.c single-TU static body + rt/string.hexa
+// rt_str_parse_int both wrap; libc strtoll is not linked on the default path)
+// and is deliberately NOT libc's LLONG_MAX/MIN clamp + ERANGE: no errno, no
+// clamp. endptr on overflow matches libc exactly (all digits consumed). Pinned
+// wrap witnesses (tool/routec_strtoll_native_verify.sh chk_wrap):
+//   "9223372036854775808"  -> -9223372036854775808 @19
+//   "-9223372036854775809" ->  9223372036854775807 @20
+//   "99999999999999999999" ->  7766279631452241919 @20
+// Do NOT "fix" the wrap to clamp+errno: it would break the frozen-floor byte-
+// faithfulness anchor + change shipped to_int() behavior for zero callers.
 pub fn hxlcl_strtoll(nptr: HexaVal, endptr: HexaVal, base: HexaVal) -> int {
     let p = __hx_payload_add(nptr, 0)          // const char* s = nptr (raw)
     let pe = __hx_payload_add(endptr, 0)       // char** endptr (raw, may be NULL)
