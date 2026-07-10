@@ -1809,7 +1809,7 @@ fn _hv_binop_sym(op: string) -> string {
 // undefined → link still gated) rather than silently mis-run. That
 // residual is the precisely-scoped final builtin-lowering sub-unit.
 // Non-builtin (hexa user fn) names pass through → normal mangling.
-pub fn _builtin_runtime_sym(name: string) -> string {
+pub fn _builtin_runtime_sym(name: string, nargs: i64) -> string {
     if name == "append_file"   { return "rt_append_file" }
     if name == "args"          { return "hexa_args" }
     if name == "char_code_at"  { return "hexa_str_char_code_at" }
@@ -1839,7 +1839,101 @@ pub fn _builtin_runtime_sym(name: string) -> string {
     // flipped atlas-verifier predicates.
     if name == "join"          { return "hexa_str_join" }
     if name == "push"          { return "hexa_array_push" }
+    if name == "push_nostat"   { return "hexa_array_push_nostat" }
     if name == "pop"           { return "hexa_array_pop" }
+    // ── axis-③ symcensus part-1 (CONVERGENCE codegen-runtime-sym-mapping-1):
+    // 60 array/string/map methods were unmapped → the `return name` fallthrough
+    // (below) emitted a BARE symbol, which hexa_ld's dyn-census misfiled as a
+    // libc-floor UND → ld.so failure at the self-emit cc-self-bin run. Each
+    // target is the AUTHORITATIVE runtime symbol self/codegen.hexa's gen2
+    // method-dispatch already emits (nm-verified in build/runtime.a), so the
+    // generic STMT_CALL HexaVal pair-ABI emit lowers them verbatim. ADDITIVE:
+    // these names had NO linkable def before (bare UND), so every existing-GREEN
+    // byteeq artifact is byte-unchanged. This block is shared by BOTH backends
+    // (x86_64_linux.hexa calls the same fn). See state/hexa-own/
+    // axis3-symcensus-drain-design.md Rung A.
+    //
+    // A-1 pure rename (HexaVal-in / HexaVal-out, no ret-box) — 49
+    if name == "all"           { return "hexa_array_all" }
+    if name == "any"           { return "hexa_array_any" }
+    if name == "append"        { return "hexa_array_push" }      // append = push alias (gen2 :6029)
+    if name == "center"        { return "rt_str_center" }
+    if name == "char_at"       { return "hexa_str_char_at" }
+    if name == "chunk"         { return "hexa_array_chunk" }
+    if name == "drop"          { return "hexa_array_drop" }
+    if name == "entries"       { return "hexa_map_entries" }
+    if name == "enumerate"     { return "hexa_array_enumerate" }
+    if name == "fill"          { return "hexa_array_fill" }
+    if name == "filter"        { return "hexa_array_filter" }
+    if name == "filter_keys"   { return "hexa_map_filter_keys" }
+    if name == "flat_map"      { return "hexa_array_flat_map" }
+    if name == "flatten"       { return "hexa_array_flatten" }
+    if name == "fold"          { return "hexa_array_fold" }
+    if name == "for_each"      { return "hexa_array_for_each" }
+    if name == "frequencies"   { return "hexa_array_frequencies" }
+    if name == "from_array"    { return "hexa_map_from_array" }
+    if name == "group_by"      { return "hexa_array_group_by" }
+    if name == "interleave"    { return "hexa_array_interleave" }
+    if name == "invert"        { return "hexa_map_invert" }
+    if name == "is_empty"      { return "hexa_is_empty" }
+    if name == "lines"         { return "rt_str_lines" }
+    if name == "map"           { return "hexa_array_map" }
+    if name == "mean"          { return "hexa_array_mean" }
+    if name == "merge"         { return "hexa_map_merge" }        // map-only (no hexa_array_merge def; gen2 emits map)
+    if name == "pad_end"       { return "rt_str_pad_right" }
+    if name == "pad_start"     { return "rt_str_pad_left" }
+    if name == "parse_float"   { return "hexa_str_parse_float" }
+    if name == "partition"     { return "hexa_array_partition" }
+    if name == "product"       { return "hexa_array_product" }
+    if name == "repeat"        { return "rt_str_repeat" }
+    if name == "reverse"       { return "hexa_array_reverse" }
+    if name == "rotate"        { return "hexa_array_rotate" }
+    if name == "sample"        { return "hexa_array_sample" }
+    if name == "scan"          { return "hexa_array_scan" }
+    if name == "shift"         { return "hexa_array_shift" }
+    if name == "sort"          { return "hexa_array_sort" }
+    if name == "sort_by"       { return "hexa_array_sort_by" }
+    if name == "sum"           { return "hexa_sum" }             // hexa_sum, not hexa_array_sum (gen2 :6346)
+    if name == "swap"          { return "hexa_array_swap" }
+    if name == "take"          { return "hexa_array_take" }
+    if name == "to_array"      { return "hexa_map_to_array" }    // map-only (no hexa_array_to_array def)
+    if name == "trim_end"      { return "rt_str_trim_end" }
+    if name == "trim_start"    { return "rt_str_trim_start" }
+    if name == "unique"        { return "hexa_array_unique" }
+    if name == "values"        { return "hexa_map_values" }
+    if name == "window"        { return "hexa_array_window" }
+    if name == "zip"           { return "hexa_array_zip" }
+    // A-4 arity-branch — the ONLY rename-regressing pair. hir_to_mir merges
+    // method + free calls into one STMT_CALL keyed on op text (recv is prepended
+    // to arg_ops[0] for methods), so `nargs` is the sole discriminator: a
+    // receiver method `.min()`/`.max()` has 1 arg → array reduction; a free
+    // scalar `min(a,b)`/`max(a,b)` has 2 args → math. A rename-only map would
+    // resolve free min(a,b) to hexa_array_min → a SILENT wrong-value miscompile
+    // (link would succeed). Callers pass len(s.args).
+    if name == "min"           { if nargs == 2 { return "hexa_math_min" } return "hexa_array_min" }
+    if name == "max"           { if nargs == 2 { return "hexa_math_max" } return "hexa_array_max" }
+    // A-2 ret-box — hexa_str_last_index_of returns raw int64 (runtime.c:3831);
+    // `_builtin_ret_box` adds "int" so the callee's w0/rax is boxed to a HexaVal
+    // (gen2 wraps with hexa_int() :6119).
+    if name == "rfind"         { return "hexa_str_last_index_of" }
+    if name == "last_index_of" { return "hexa_str_last_index_of" }
+    // A-3 cstring-avoiding HexaVal shim — the direct runtime fns
+    // (hexa_map_contains_key / hexa_map_remove) take a raw `const char*` 2nd arg,
+    // so they cannot be reached by the generic HexaVal pair-ABI emit. Route to
+    // the HexaVal-pure leaves instead (runtime unchanged): hexa_has_key_v (the
+    // existing has_key target) and __map_remove_cstr_v (HexaVal(HexaVal,HexaVal)).
+    if name == "contains_key"  { return "hexa_has_key_v" }
+    if name == "has"           { return "hexa_has_key_v" }
+    if name == "remove"        { return "__map_remove_cstr_v" }
+    // A-5 optional-arg void-sentinel TARGETS. The runtime fns take a fixed arity
+    // with a HexaVal void sentinel for the omitted trailing arg; the missing arg
+    // is synthesised as a const-void operand in hir_to_mir's method-lowering
+    // (once, at MIR level — both backends inherit it), so here we only map the
+    // name. gen2: slice/slice_fast :6444-6453 · count :6204-6212 · substr :6401-6406.
+    if name == "slice"         { return "hexa_array_slice" }
+    if name == "slice_fast"    { return "hexa_array_slice_fast" }
+    if name == "count"         { return "hexa_count_poly" }
+    if name == "substr"        { return "hexa_str_substr" }
     if name == "read_file"     { return "rt_read_file" }
     if name == "replace"       { return "hexa_str_replace" }
     if name == "split"         { return "hexa_str_split" }
@@ -2030,6 +2124,185 @@ pub fn _builtin_runtime_sym(name: string) -> string {
     if name == "has_key"           { return "hexa_has_key_v" }
     if name == "index_of"          { return "hexa_index_of_v" }
     if name == "ord"               { return "hexa_ord_v" }
+    // ── axis-③ symcensus part-2 (CONVERGENCE codegen-runtime-sym-mapping-1):
+    // 137 non-array free-fn host builtins (the `read_file_bytes` class) were
+    // registered in bind.hexa's `_bind_builtin_names` gate (the type/bind
+    // surface) but UNMAPPED here → the `return name` fallthrough (below) emitted
+    // a BARE symbol, which hexa_ld's dyn-census misfiled as a libc-floor UND →
+    // ld.so failure / rc127 at the self-emit cc-self-bin run. bind.hexa
+    // (:1613-1615) documents this second gate as intentionally generous, so this
+    // class is DESIGNED to fail at link — the drain closes it. Each target is the
+    // AUTHORITATIVE runtime symbol (nm-verified in build/runtime.a): file-I/O
+    // takes rt_*, the rest hexa_<name>. All take/return HexaVal pairs, so the
+    // generic STMT_CALL pair-ABI emit lowers them verbatim (no special branch,
+    // no ret-box). ADDITIVE: every one of these names was a BARE UND (no linkable
+    // def) on the native path before, so every existing-GREEN byteeq artifact is
+    // byte-unchanged. Shared by BOTH backends (x86_64_linux.hexa calls this fn).
+    // Census = _bind_builtin_names(395) − mapped(120) − _is_cabi(84) − special-op
+    // (__hx_*/target_is_*/__builtin_va_*/__raw_*) = need-map 144; the 7 excluded:
+    // {min,max,sum,is_empty} are array-reductions owned by part-1 (Rung A — min/max
+    // are arity-hazardous and need its nargs-branch, a pure rename would silently
+    // miscompile free `min(a,b)`→hexa_array_min); {thread_spawn,thread_join,now_ms}
+    // are TAG_FN carrier globals (thread_emit.hexa) resolved via hexa_callN — routing
+    // them through the pair-ABI here would be a non-additive behaviour change.
+    // See state/hexa-own/axis3-symcensus-drain-design.md Rung B.
+    // file I/O (rt_*)
+    if name == "delete_file"               { return "rt_delete_file" }
+    if name == "read_bytes_at"             { return "rt_read_bytes_at" }
+    if name == "read_file_bytes"           { return "rt_read_file_bytes" }
+    if name == "read_lines"                { return "rt_read_lines" }
+    if name == "read_stdin"                { return "hexa_read_stdin" }
+    if name == "str_trim_end"              { return "rt_str_trim_end" }
+    if name == "str_trim_start"            { return "rt_str_trim_start" }
+    if name == "write_bytes_append"        { return "rt_write_bytes_append" }
+    if name == "write_bytes_append_v"      { return "rt_write_bytes_append_v" }
+    if name == "write_bytes_v"             { return "rt_write_bytes_v" }
+    // net_*
+    if name == "net_accept"                { return "hexa_net_accept" }
+    if name == "net_close"                 { return "hexa_net_close" }
+    if name == "net_connect"               { return "hexa_net_connect" }
+    if name == "net_listen"                { return "hexa_net_listen" }
+    if name == "net_read"                  { return "hexa_net_read" }
+    if name == "net_read_bytes"            { return "hexa_net_read_bytes" }
+    if name == "net_read_n"                { return "hexa_net_read_n" }
+    if name == "net_recv_fd"               { return "hexa_net_recv_fd" }
+    if name == "net_select"                { return "hexa_net_select" }
+    if name == "net_send_fd"               { return "hexa_net_send_fd" }
+    if name == "net_set_nonblock"          { return "hexa_net_set_nonblock" }
+    if name == "net_set_timeout"           { return "hexa_net_set_timeout" }
+    if name == "net_write"                 { return "hexa_net_write" }
+    if name == "net_write_bytes"           { return "hexa_net_write_bytes" }
+    // proc_*
+    if name == "proc_fork"                 { return "hexa_proc_fork" }
+    if name == "proc_reap_zombies"         { return "hexa_proc_reap_zombies" }
+    if name == "proc_setsid"               { return "hexa_proc_setsid" }
+    if name == "proc_wait"                 { return "hexa_proc_wait" }
+    if name == "proc_wait_flag_const"      { return "hexa_proc_wait_flag_const" }
+    // pty_*
+    if name == "pty_forkexec"              { return "hexa_pty_forkexec" }
+    if name == "pty_get_winsize"           { return "hexa_pty_get_winsize" }
+    if name == "pty_open"                  { return "hexa_pty_open" }
+    if name == "pty_set_winsize"           { return "hexa_pty_set_winsize" }
+    // regex_*
+    if name == "regex_findall"             { return "hexa_regex_findall" }
+    if name == "regex_match"               { return "hexa_regex_match" }
+    if name == "regex_match_full"          { return "hexa_regex_match_full" }
+    if name == "regex_replace"             { return "hexa_regex_replace" }
+    if name == "regex_search"              { return "hexa_regex_search" }
+    if name == "regex_split"               { return "hexa_regex_split" }
+    // json_*
+    if name == "json_decode"               { return "hexa_json_decode" }
+    if name == "json_encode"               { return "hexa_json_encode" }
+    if name == "json_parse"                { return "hexa_json_parse" }
+    if name == "json_stringify"            { return "hexa_json_stringify" }
+    // tensor_*
+    if name == "tensor_add"                { return "hexa_tensor_add" }
+    if name == "tensor_dot"                { return "hexa_tensor_dot" }
+    if name == "tensor_mul_scalar"         { return "hexa_tensor_mul_scalar" }
+    if name == "tensor_ones"               { return "hexa_tensor_ones" }
+    if name == "tensor_slice"              { return "hexa_tensor_slice" }
+    if name == "tensor_zeros"              { return "hexa_tensor_zeros" }
+    // sleep_*
+    if name == "sleep_ms"                  { return "hexa_sleep_ms" }
+    if name == "sleep_ns"                  { return "hexa_sleep_ns" }
+    if name == "sleep_s"                   { return "hexa_sleep_s" }
+    // utc_*
+    if name == "utc_compact_now"           { return "hexa_utc_compact_now" }
+    if name == "utc_iso_format"            { return "hexa_utc_iso_format" }
+    if name == "utc_iso_parse"             { return "hexa_utc_iso_parse" }
+    // crypto
+    if name == "aes256_ctr_xor"            { return "hexa_aes256_ctr_xor" }
+    if name == "chacha20_poly1305_decrypt" { return "hexa_chacha20_poly1305_decrypt" }
+    if name == "chacha20_poly1305_encrypt" { return "hexa_chacha20_poly1305_encrypt" }
+    if name == "chacha20_xor"              { return "hexa_chacha20_xor" }
+    if name == "ed25519_keypair"           { return "hexa_ed25519_keypair" }
+    if name == "ed25519_sign"              { return "hexa_ed25519_sign" }
+    if name == "ed25519_verify"            { return "hexa_ed25519_verify" }
+    if name == "libsodium_available"       { return "hexa_libsodium_available" }
+    if name == "poly1305_onetimeauth"      { return "hexa_poly1305_onetimeauth" }
+    if name == "sha256_bytes"              { return "hexa_sha256_bytes" }
+    if name == "sha512"                    { return "hexa_sha512" }
+    if name == "x25519_keypair"            { return "hexa_x25519_keypair" }
+    if name == "x25519_scalarmult"         { return "hexa_x25519_scalarmult" }
+    // ml ops
+    if name == "fma"                       { return "hexa_fma" }
+    if name == "gelu"                      { return "hexa_gelu" }
+    if name == "hadamard"                  { return "hexa_hadamard" }
+    if name == "layer_norm"                { return "hexa_layer_norm" }
+    if name == "matmul"                    { return "hexa_matmul" }
+    if name == "matvec"                    { return "hexa_matvec" }
+    if name == "one_hot"                   { return "hexa_one_hot" }
+    if name == "phi_mi_pair"               { return "hexa_phi_mi_pair" }
+    if name == "phi_spatial"               { return "hexa_phi_spatial" }
+    if name == "rms_norm"                  { return "hexa_rms_norm" }
+    if name == "rope_pair"                 { return "hexa_rope_pair" }
+    if name == "silu"                      { return "hexa_silu" }
+    if name == "softmax"                   { return "hexa_softmax" }
+    if name == "swiglu_vec"                { return "hexa_swiglu_vec" }
+    // array_* free-call forms
+    if name == "array_alloc"               { return "hexa_array_alloc" }
+    if name == "array_count"               { return "hexa_array_count" }
+    if name == "array_drop"                { return "hexa_array_drop" }
+    if name == "array_fill"                { return "hexa_array_fill" }
+    if name == "array_index_of"            { return "hexa_array_index_of" }
+    if name == "array_max"                 { return "hexa_array_max" }
+    if name == "array_min"                 { return "hexa_array_min" }
+    if name == "array_product"             { return "hexa_array_product" }
+    if name == "array_reverse"             { return "hexa_array_reverse" }
+    if name == "array_take"                { return "hexa_array_take" }
+    // ptr_* / struct_*
+    if name == "ptr_addr"                  { return "hexa_ptr_addr" }
+    if name == "ptr_alloc"                 { return "hexa_ptr_alloc" }
+    if name == "ptr_free"                  { return "hexa_ptr_free" }
+    if name == "ptr_null"                  { return "hexa_ptr_null" }
+    if name == "ptr_offset"                { return "hexa_ptr_offset" }
+    if name == "struct_free"               { return "hexa_struct_free" }
+    if name == "struct_pack"               { return "hexa_struct_pack" }
+    if name == "struct_unpack"             { return "hexa_struct_unpack" }
+    // term_* residual
+    if name == "term_winsize_cols"         { return "hexa_term_winsize_cols" }
+    if name == "term_winsize_rows"         { return "hexa_term_winsize_rows" }
+    if name == "term_write_str"            { return "hexa_term_write_str" }
+    // float<->bytes
+    if name == "bytes_to_f32_le"           { return "hexa_bytes_to_f32_le" }
+    if name == "bytes_to_f64_le"           { return "hexa_bytes_to_f64_le" }
+    if name == "f32_to_bytes_le"           { return "hexa_f32_to_bytes_le" }
+    if name == "f64_to_bytes_le"           { return "hexa_f64_to_bytes_le" }
+    // namespace / mount
+    if name == "mount"                     { return "hexa_mount" }
+    if name == "namespace_clone_const"     { return "hexa_namespace_clone_const" }
+    if name == "pivot_root"                { return "hexa_pivot_root" }
+    if name == "setns"                     { return "hexa_setns" }
+    if name == "umount"                    { return "hexa_umount" }
+    if name == "unshare"                   { return "hexa_unshare" }
+    // misc free-fns
+    if name == "clock"                     { return "hexa_clock" }
+    if name == "cstring"                   { return "hexa_cstring" }
+    if name == "deref"                     { return "hexa_deref" }
+    if name == "exec_argv"                 { return "hexa_exec_argv" }
+    if name == "exec_capture"              { return "hexa_exec_capture" }
+    if name == "exec_pipe_open"            { return "hexa_exec_pipe_open" }
+    if name == "from_cstring"              { return "hexa_from_cstring" }
+    if name == "ham_free"                  { return "hexa_ham_free" }
+    if name == "http_get"                  { return "hexa_http_get" }
+    if name == "input"                     { return "hexa_input" }
+    if name == "is_error"                  { return "hexa_is_error" }
+    if name == "isfinite"                  { return "hexa_math_isfinite" }
+    if name == "isinf"                     { return "hexa_math_isinf" }
+    if name == "isnan"                     { return "hexa_math_isnan" }
+    // map_contains_key: hexa_map_contains_key takes a raw `const char*` 2nd arg
+    // (NOT reachable by the HexaVal pair-ABI emit) — route to the HexaVal-pure
+    // leaf hexa_has_key_v instead (same as Rung A's contains_key/has). A-3 shim.
+    if name == "map_contains_key"          { return "hexa_has_key_v" }
+    if name == "mod"                       { return "hexa_mod" }
+    if name == "now_monotonic_s"           { return "hexa_now_monotonic_s" }
+    if name == "real_args"                 { return "hexa_real_args" }
+    if name == "script_path"               { return "hexa_script_path" }
+    if name == "setenv"                    { return "hexa_setenv" }
+    if name == "time_ms"                   { return "hexa_time_ms" }
+    if name == "tty_isatty"                { return "hexa_tty_isatty" }
+    if name == "tty_ttyname"               { return "hexa_tty_ttyname" }
+    if name == "u_floor"                   { return "hexa_u_floor" }
     return name
 }
 
@@ -2041,6 +2314,10 @@ pub fn _builtin_ret_box(name: string) -> string {
     if name == "contains"    { return "bool" }
     if name == "starts_with" { return "bool" }
     if name == "ends_with"   { return "bool" }
+    // axis-③ symcensus part-1 A-2 — hexa_str_last_index_of (rfind/last_index_of)
+    // returns a raw int64 (-1 or index); box it into a TAG_INT HexaVal.
+    if name == "rfind"          { return "int" }
+    if name == "last_index_of"  { return "int" }
     return ""
 }
 
@@ -3855,7 +4132,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 }
                 ci = ci + 1
             }
-            let ctarget = _builtin_runtime_sym(s.op)
+            let ctarget = _builtin_runtime_sym(s.op, len(s.args))
             buf.push(_arm64_instr1("bl", _arm64_op_label(ctarget), "cabi call " + ctarget))
             if s.dst.id >= 0 {
                 buf.push(_arm64_instr2("movz", _arm64_op_reg("x9"),
@@ -3881,7 +4158,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             }
             i = i + 1
         }
-        let mut target = _builtin_runtime_sym(s.op)
+        let mut target = _builtin_runtime_sym(s.op, len(s.args))
         // FLEET arm64 element-pack (HEXA_PACK_ESCAPING) — escaping-poly push/len.
         // The generic builtin emit already lands the args in the SAME registers the
         // poly readers want (push: v → x0:x1, item → x2:x3 ≡ hexa_arr_poly_push;

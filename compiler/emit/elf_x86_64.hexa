@@ -42,6 +42,7 @@ let ELF_SHF_EXECINSTR     = 0x4
 
 let ELF_STB_LOCAL         = 0
 let ELF_STB_GLOBAL        = 1
+let ELF_STB_WEAK          = 2
 let ELF_STT_NOTYPE        = 0
 let ELF_STT_FUNC          = 2
 
@@ -56,6 +57,22 @@ let ELF_R_X86_64_PLT32    = 4
 // getenv address loads). The linker classifier already knows kind 9
 // (compiler/link/hexa_ld.hexa::_HEXA_LD_R_X86_64_GOTPCREL / elf_reloc_is_got_typed).
 let ELF_R_X86_64_GOTPCREL = 9
+let ELF_R_X86_64_32       = 10   // absolute S+A, zero-extended to 32 bits
+let ELF_R_X86_64_32S      = 11   // absolute S+A, sign-extended to 32 bits
+// R_X86_64_GOTPCRELX (41) / R_X86_64_REX_GOTPCRELX (42) — psABI §B.2 addendum
+// (Table 4-11): a `mov`/`test` GOT load (42 = the REX-prefixed form) that a
+// RELAXING linker may rewrite to a direct PC-rel access. This own-link does NOT
+// relax -> both are treated exactly like plain GOTPCREL (9): allocate a GOT
+// slot + patch disp32 = G+GOT+A-P. clang emits kind 42 for the weak `extern
+// __init_array_start/end[]` refs in runtime_emit_full's _hx_run_init_array.
+let ELF_R_X86_64_GOTPCRELX     = 41
+let ELF_R_X86_64_REX_GOTPCRELX = 42
+
+// GOT-load reloc kinds — every reloc whose disp32 addresses the symbol's GOT
+// slot (not the symbol itself). A non-relaxing linker treats 9/41/42 alike.
+fn _elf_kind_is_got(k: i64) -> bool {
+    return k == ELF_R_X86_64_GOTPCREL || k == ELF_R_X86_64_GOTPCRELX || k == ELF_R_X86_64_REX_GOTPCRELX
+}
 
 struct ElfX86Obj {
     text:    [u8],
@@ -1561,7 +1578,20 @@ pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> In
 // Byte-identical to round-1 when NO obj carries data (single PT_LOAD via the
 // untouched serialize_elf_exec_x86_64; text->text deltas are vaddr-base
 // invariant). Data present -> serialize_elf_exec_x86_64_2seg (two PT_LOADs).
-pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: string) -> Int {
+// _elf_has_prefix — does string `s` start with `p`? (self-contained; avoids a
+// dependency on whichever runtime .starts_with is linked for this compiler TU).
+fn _elf_has_prefix(s: string, p: string) -> bool {
+    let np = len(p)
+    if len(s) < np { return false }
+    return s.substring(0, np) == p
+}
+
+// runtime_defs = the FULL runtime.a definition universe (all members, pulled or
+// not), supplied ONLY by the _ar self-emit link path (_aef_all_member_defs).
+// Empty ([]) on the plain static path (main.hexa direct call, round-1/2 tests)
+// -> the near-miss tripwire in the dyn-census below is fully inert and output is
+// byte-identical. See the tripwire block for the two fail-closed arms.
+pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: string, runtime_defs: [string]) -> Int {
     // 23-byte own-start stub at text offset 0.
     // Round-3 (argc/argv): the SysV crt0 process-entry contract — the kernel
     // enters at _start with rsp = [argc, argv[0..argc-1], NULL, envp..., NULL].
@@ -1692,6 +1722,32 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     text_bytes[12] = (call_rel >> 16) & 0xff
     text_bytes[13] = (call_rel >> 24) & 0xff
 
+    // ── linker-defined __init_array_start / __init_array_end (GNU ld PROVIDE
+    // parity). runtime_emit_full's _hx_run_init_array references the two boundary
+    // symbols via REX_GOTPCRELX (kind 42); GNU ld synthesizes them at the
+    // .init_array section bounds. This own-link's reader Pass A pools only
+    // PROGBITS/NOBITS -> SHT_INIT_ARRAY is dropped -> the array is EMPTY here.
+    // Register BOTH at the SAME data-blob offset (current end of the concatenated
+    // obj data, before the GOT blob) so start == end and the ctor walk is
+    // zero-trip. Registered as GLOBAL defs (def_obj=-1 = linker-synthetic). MUST
+    // precede the dyn census below: these names are NOT exported by libc.so.6, so
+    // a defined entry here is what keeps the census from dyn-routing them (which
+    // would make ld.so fail the load). def registration does not serialize into
+    // the ET_EXEC symtab -> zero output-byte contribution (byteeq-neutral); they
+    // only appear as clang-compiled runtime.a members' relocs on the own-link
+    // path, never on the shipping (system ld) path.
+    let init_array_off = len(data_bytes)
+    def_names.push("__init_array_start")
+    def_seg.push(1)
+    def_off.push(init_array_off)
+    def_bind.push(ELF_STB_GLOBAL)
+    def_obj.push(-1)
+    def_names.push("__init_array_end")
+    def_seg.push(1)
+    def_off.push(init_array_off)
+    def_bind.push(ELF_STB_GLOBAL)
+    def_obj.push(-1)
+
     // ── GOT COLLECT (R_X86_64_GOTPCREL, type 9) — one slot per DISTINCT target ──
     // #4783 self-emits `mov reg,[rip+sym@GOTPCREL]` (REX.W 8B /r RIP disp32=0,
     // addend -4). This static own-linker must SYNTHESIZE the GOT (ZERO binutils):
@@ -1710,7 +1766,7 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         let mut gcr = 0
         while gcr < len(gco.relocs) {
             let gr = gco.relocs[gcr]
-            if gr.kind == 9 {
+            if _elf_kind_is_got(gr.kind) {
                 let gsym = gco.symbols[gr.sym_idx]
                 let mut gnm = ""
                 let mut gk = 0
@@ -1748,7 +1804,7 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         let mut dcr = 0
         while dcr < len(dco.relocs) {
             let dr = dco.relocs[dcr]
-            if dr.kind == 2 || dr.kind == 4 || dr.kind == 9 {
+            if dr.kind == 2 || dr.kind == 4 || _elf_kind_is_got(dr.kind) {
                 let dsym = dco.symbols[dr.sym_idx]
                 let mut dnm = ""
                 let mut dk = 0
@@ -1765,10 +1821,71 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                     let mut dfi = -1
                     let mut dfj = 0
                     while dfj < len(dyn_names) { if dyn_names[dfj] == dnm { dfi = dfj; break } dfj = dfj + 1 }
+                    // ── axis-③ NEAR-MISS TRIPWIRE (guard C-2 · fail-closed) ──
+                    // A UND about to be routed to libc.so.6 that is really a
+                    // codegen↔runtime symbol MISMATCH is caught here and REFUSED
+                    // (rc=3) with an exact fix directive — never re-resolved, so
+                    // the wrong-dynamic (foreign-symbol absorption) risk is 0.
+                    // Active only when a runtime.a def universe was supplied (the
+                    // _ar self-emit link path); on the plain static path
+                    // (runtime_defs == []) this whole block is skipped and output
+                    // stays byte- and behaviour-identical. Runs once per distinct
+                    // name (dfi<0 = first encounter) — no per-call-site rescans.
+                    if dfi < 0 && len(runtime_defs) > 0 {
+                        // (1) FORWARD — runtime.a defines a COMPOUND hexa-own prefix
+                        //     VARIANT of this bare name => a missing
+                        //     _builtin_runtime_sym mapping entry (the checker gate
+                        //     accepted the name but codegen's fallthrough emitted it
+                        //     bare). Only the compound namespaces hexa_array_ /
+                        //     hexa_str_ / hexa_map_ / rt_str_ are probed: they are
+                        //     structurally collision-FREE with the libc floor (no
+                        //     libc symbol is `array_<x>`/`str_<x>`/`map_<x>`), so the
+                        //     tripwire can NEVER refuse a valid libm/mem/io floor
+                        //     link — release-integrity (top guardrail) over
+                        //     completeness. The plain hexa_<x>/rt_<x> namespaces are
+                        //     DELIBERATELY not probed here: they DO collide (rt_memcpy
+                        //     / rt_getpid / hexa_sin / rt_socket …), so a plain probe
+                        //     would false-refuse a genuine libc-floor UND. This
+                        //     precisely covers the demonstrated Rung-A array/string/
+                        //     map method whack-a-mole class (symcensus part-1); the
+                        //     plain free-fn class (Rung B) is caught upstream by the
+                        //     source lint (guard C-1) + the dynsym gate (guard C-3).
+                        let mut _hit = ""
+                        let mut _rdi = 0
+                        while _rdi < len(runtime_defs) {
+                            let _rd = runtime_defs[_rdi]
+                            if _rd == "hexa_array_" + dnm || _rd == "hexa_str_" + dnm
+                               || _rd == "hexa_map_" + dnm || _rd == "rt_str_" + dnm {
+                                _hit = _rd
+                                break
+                            }
+                            _rdi = _rdi + 1
+                        }
+                        if len(_hit) > 0 {
+                            eprintln("hexa_ld(elf,ownstart): codegen-runtime sym mismatch: "
+                                     + "UND '" + dnm + "' — runtime.a defines '" + _hit
+                                     + "' (missing _builtin_runtime_sym entry)")
+                            return 3
+                        }
+                        // (2) REVERSE — a hexa-own-prefixed name can NEVER be a
+                        //     libc symbol, so reaching dynamic routing means
+                        //     runtime.a is missing this def (a drop-list / runtime
+                        //     port gap). Refuse rather than emit an ld.so-failing
+                        //     binary.
+                        if _elf_has_prefix(dnm, "hexa_") || _elf_has_prefix(dnm, "rt_")
+                           || _elf_has_prefix(dnm, "_hx_") || _elf_has_prefix(dnm, "__hexa")
+                           || _elf_has_prefix(dnm, "hxlcl_") || _elf_has_prefix(dnm, "forge_")
+                           || _elf_has_prefix(dnm, "farr_") {
+                            eprintln("hexa_ld(elf,ownstart): codegen-runtime sym mismatch: "
+                                     + "hexa-own UND '" + dnm + "' routed dynamic "
+                                     + "(runtime.a missing this def / drop-list gap)")
+                            return 3
+                        }
+                    }
                     if dfi < 0 {
                         dyn_names.push(dnm)
-                        if dr.kind == 9 { dyn_stub.push(0) } else { dyn_stub.push(1) }
-                    } else if dr.kind != 9 {
+                        if _elf_kind_is_got(dr.kind) { dyn_stub.push(0) } else { dyn_stub.push(1) }
+                    } else if !_elf_kind_is_got(dr.kind) {
                         dyn_stub[dfi] = 1
                     }
                 }
@@ -2000,13 +2117,20 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                     if def_bind[sk] == ELF_STB_GLOBAL {
                         found_idx = sk
                         break
+                    } else if def_bind[sk] == ELF_STB_WEAK {
+                        // ELF weak canon: a weak def is globally visible but a
+                        // STRONG (GLOBAL) def anywhere still WINS — keep scanning
+                        // for one, only fall back to the weak def if none exists.
+                        // (hexa_exit is __attribute__((weak)) in runtime_emit_full;
+                        // this arm is what makes its STB_WEAK def resolvable.)
+                        if found_idx < 0 { found_idx = sk }
                     } else if def_obj[sk] == ro {
                         if found_idx < 0 { found_idx = sk }
                     }
                 }
                 sk = sk + 1
             }
-            if r.kind == 9 {
+            if _elf_kind_is_got(r.kind) {
                 // ── (D) GOTPCREL hoist ── The disp32 targets the symbol's GOT
                 // SLOT, never the symbol's own vaddr — so the resolved (`g<id>`
                 // module-global) and the dyn-UND (environ/stdout, filled by
@@ -2076,6 +2200,20 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                         data_bytes[blob_off + 5] = (av >> 40) & 0xff
                         data_bytes[blob_off + 6] = (av >> 48) & 0xff
                         data_bytes[blob_off + 7] = (av >> 56) & 0xff
+                    } else if r.kind == ELF_R_X86_64_32 || r.kind == ELF_R_X86_64_32S {
+                        // Rung 2: R_X86_64_32/32S — absolute S+A truncated to 32 bits
+                        // (psABI §4.4). gas non-PIE refs section-resident literals via
+                        // STT_SECTION+addend; without this arm they fell to the PC-rel
+                        // else = silent miscompile. ET_EXEC@0x400000 keeps vaddr<2^31.
+                        let av = s_vaddr + r.addend
+                        if av < 0 || av > 2147483647 {
+                            eprintln("hexa_ld(elf,ownstart): abs32 overflow (data) for '" + name + "' kind=" + to_string(r.kind))
+                            return 3
+                        }
+                        data_bytes[blob_off + 0] = av & 0xff
+                        data_bytes[blob_off + 1] = (av >> 8) & 0xff
+                        data_bytes[blob_off + 2] = (av >> 16) & 0xff
+                        data_bytes[blob_off + 3] = (av >> 24) & 0xff
                     } else {
                         // kind==9 (GOTPCREL) is handled by the hoisted (D) branch
                         // above; here only kind 2/4 PC-rel data-site refs remain.
@@ -2099,6 +2237,20 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                         text_bytes[patch_off + 5] = (av >> 40) & 0xff
                         text_bytes[patch_off + 6] = (av >> 48) & 0xff
                         text_bytes[patch_off + 7] = (av >> 56) & 0xff
+                    } else if r.kind == ELF_R_X86_64_32 || r.kind == ELF_R_X86_64_32S {
+                        // Rung 2: R_X86_64_32/32S — absolute S+A truncated to 32 bits
+                        // (psABI §4.4). gas non-PIE `mov edi, $LC0` refs a section
+                        // literal via STT_SECTION+addend; without this arm it fell to
+                        // the PC-rel else = silent miscompile. ET_EXEC@0x400000<2^31.
+                        let av = s_vaddr + r.addend
+                        if av < 0 || av > 2147483647 {
+                            eprintln("hexa_ld(elf,ownstart): abs32 overflow (text) for '" + name + "' kind=" + to_string(r.kind))
+                            return 3
+                        }
+                        text_bytes[patch_off + 0] = av & 0xff
+                        text_bytes[patch_off + 1] = (av >> 8) & 0xff
+                        text_bytes[patch_off + 2] = (av >> 16) & 0xff
+                        text_bytes[patch_off + 3] = (av >> 24) & 0xff
                     } else {
                         // kind==9 (GOTPCREL) is handled by the hoisted (D) branch
                         // above; here only kind 2/4 PC-rel text-site refs (CALL
@@ -2237,6 +2389,11 @@ pub fn link_elf_x86_64_ownstart_ar(program_objs: [ElfX86Obj], out_path: string, 
     let buf       = read_file_bytes(runtime_a_path)
     let members   = parse_ar_archive(buf)
     let extracted = archive_extract_fixpoint(program_objs, buf, members)
+    // Full runtime.a def universe (ALL members, not just the pulled ones) — the
+    // near-miss tripwire (guard C-2) inside link_elf_x86_64_ownstart needs it to
+    // catch a bare/mis-mapped UND whose correct prefixed def sits in an unpulled
+    // member. Supplied ONLY here; the plain callers pass [] (tripwire inert).
+    let runtime_defs = _aef_all_member_defs(buf, members)
 
     let mut combined: [ElfX86Obj] = []
     let mut i = 0
@@ -2244,7 +2401,7 @@ pub fn link_elf_x86_64_ownstart_ar(program_objs: [ElfX86Obj], out_path: string, 
     let mut j = 0
     while j < len(extracted) { combined.push(extracted[j]); j = j + 1 }
 
-    return link_elf_x86_64_ownstart(combined, out_path, main_name)
+    return link_elf_x86_64_ownstart(combined, out_path, main_name, runtime_defs)
 }
 
 // serialize_elf_x86_64 — P2 cycle 1: empty-object byte stream.
@@ -3023,6 +3180,13 @@ pub fn parse_elf_x86_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfX86O
             let tgt = sec_info[ci]
             let mut tgt_base = 0
             if tgt < e_shnum { tgt_base = sec_base[tgt] }
+            // Rung 1: a reloc SITED in a non-ALLOC section (sec_slot==0: .debug_*/
+            // .comment/.note metadata) has no patch site in the e_shnum=0 ET_EXEC —
+            // its r_offset indexes the debug section, so patching would misindex a
+            // pool (silent .text corruption). Drop such relocs at parse (ld does the
+            // same for non-loaded output sections). Fixes 91 unresolved $sec_N_M.
+            let mut site_ok = true
+            if tgt < e_shnum { if sec_slot[tgt] == 0 { site_ok = false } }
             let rcount = rsz / res
             let mut ri = 0
             while ri < rcount {
@@ -3033,7 +3197,7 @@ pub fn parse_elf_x86_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfX86O
                 let div   = 0x100000000
                 let sym_file = rinfo / div
                 let rtype    = rinfo - (rinfo / div) * div
-                if sym_file > 0 {                     // skip relocs vs STN_UNDEF
+                if sym_file > 0 && site_ok {          // skip STN_UNDEF + non-ALLOC site (Rung 1)
                     obj.relocs.push(ElfRel {
                         offset:  r_off + tgt_base,
                         sym_idx: sym_file - 1,
@@ -3255,6 +3419,36 @@ fn _aef_has(xs: [string], name: string) -> bool {
     return false
 }
 
+// _aef_all_member_defs — the FULL runtime.a DEFINITION UNIVERSE: every
+// GLOBAL/WEAK def name across ALL members, pulled or not. archive_extract_
+// fixpoint folds only PULLED members' defs into its private def_names, but a
+// codegen↔runtime symbol mismatch names a def that lives in an UNPULLED member
+// (nothing references the CORRECT prefixed name — codegen emitted the bare/wrong
+// one — so that member never pulls). The near-miss tripwire in
+// link_elf_x86_64_ownstart needs this whole set to prove that a bare UND about
+// to be routed dynamic is really a mis-mapped runtime symbol. Parses each member
+// once (independent of the fixpoint's own parse — link-time, one-shot, so the
+// second scan is negligible and keeps the fixpoint function untouched).
+fn _aef_all_member_defs(buf, members: [ArMember]) -> [string] {
+    let defs: [string] = []
+    let mut m = 0
+    while m < len(members) {
+        let mem = members[m]
+        let obj = parse_elf_x86_obj(buf, mem.data_off, mem.size, m)
+        let mut sj = 0
+        while sj < len(obj.symbols) {
+            let s = obj.symbols[sj]
+            if s.section != 0 && (s.bind == ELF_STB_GLOBAL || s.bind == ELF_STB_WEAK) {
+                let nm = _aef_symname(obj, s.name_offset)
+                if len(nm) > 0 && !_aef_has(defs, nm) { defs.push(nm) }
+            }
+            sj = sj + 1
+        }
+        m = m + 1
+    }
+    return defs
+}
+
 pub fn archive_extract_fixpoint(program_objs: [ElfX86Obj], buf, members: [ArMember]) -> [ElfX86Obj] {
     let extracted: [ElfX86Obj] = []
 
@@ -3279,7 +3473,7 @@ pub fn archive_extract_fixpoint(program_objs: [ElfX86Obj], buf, members: [ArMemb
         let mut sj = 0
         while sj < len(po.symbols) {
             let s = po.symbols[sj]
-            if s.section != 0 && s.bind == ELF_STB_GLOBAL {
+            if s.section != 0 && (s.bind == ELF_STB_GLOBAL || s.bind == ELF_STB_WEAK) {
                 let nm = _aef_symname(po, s.name_offset)
                 if len(nm) > 0 && !_aef_has(def_names, nm) { def_names.push(nm) }
             }
@@ -3318,7 +3512,7 @@ pub fn archive_extract_fixpoint(program_objs: [ElfX86Obj], buf, members: [ArMemb
                 let mut k = 0
                 while k < len(obj.symbols) {
                     let s = obj.symbols[k]
-                    if s.section != 0 && s.bind == ELF_STB_GLOBAL {
+                    if s.section != 0 && (s.bind == ELF_STB_GLOBAL || s.bind == ELF_STB_WEAK) {
                         let nm = _aef_symname(obj, s.name_offset)
                         if _aef_has(und_names, nm) && !_aef_has(def_names, nm) {
                             wants = true
@@ -3336,7 +3530,7 @@ pub fn archive_extract_fixpoint(program_objs: [ElfX86Obj], buf, members: [ArMemb
                     let mut d = 0
                     while d < len(obj.symbols) {
                         let s = obj.symbols[d]
-                        if s.section != 0 && s.bind == ELF_STB_GLOBAL {
+                        if s.section != 0 && (s.bind == ELF_STB_GLOBAL || s.bind == ELF_STB_WEAK) {
                             let nm = _aef_symname(obj, s.name_offset)
                             if len(nm) > 0 && !_aef_has(def_names, nm) { def_names.push(nm) }
                         }
