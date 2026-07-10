@@ -1,0 +1,13 @@
+Design complete — saved to `state/hexa-own/axis3-l1-fieldkey-interning-plan.md` (272 lines, all cites at origin/main `590aa1129`; local checkout is behind, so I read everything via git refs).
+
+## The design in brief
+
+**Both mechanisms are runtime-generator-lane only** — `self/runtime_core_emit.hexa` plus two mirror shards. Zero `compiler/codegen` edits, so `self.o` neutrality holds by construction (§4 of the doc argues it observable-by-observable: lookups are content-based, all iteration walks insertion-order arrays — slot order is never program-visible — and `struct_id` is assigned only in `hmap_alloc_ex`, which grow never re-enters).
+
+**Mechanism A (interning)** turned out to be mostly *reuse*: a global intern table already exists (`hexa_intern`, `runtime_core_emit.hexa:942-998`, header-alloc'd, buckets never freed/moved, 64 B cap), and `hexa_str` already routes every short string through it — so keys interning adds no new thread/lifetime class. The change is a two-line intern-or-dup swap at the three key-create sites (`:4011` map_set insert — the native struct_lit lane; `:3925`/`:3902` pack_map).
+
+**The soundness crux — and a census correction**: the census's "keys immutable + free-never → sharing safe" is **false as stated**. Keys are freed at exactly two sites, each with a SELFEMIT mirror shard copy: `map_remove_impl` (`:4722` + `rtcore_collection-mutate_emit.hexa:216`) and `val_free_tree` (`:6096` + `rtcore_runtime-misc_emit.hexa:296`). The fix is an exported `hexa_intern_owns(p)` pointer-identity probe (exact because bucket strings never move; no slot-layout change, which would cost +128 B/table) guarding all four frees. All four must change in lockstep or the RT-NATIVE flag lanes get a double-lifecycle bug.
+
+**Mechanism B (right-sizing)** is 3 lines: `HMAP_INIT_CAP 16→4` (`:1286`, its only two consumers are the lazy first-insert alloc and pack_map's floor) plus the order-array floor `8→4` (`:3629`). A `hexa_map_new_sized` codegen call is explicitly rejected — it changes emitted bytes, which is L2 territory.
+
+**One honest disagreement with the prompt**: my chunk arithmetic says B (−448…−672 B/instance table slack) beats A (−96…−192 B key chunks), not the reverse. The plan doesn't argue — it lands B as commit 1, A as commit 2, and runs the summer re-census after each (~3 min/run) to attribute the split. Gate: byteeq 3-target + self.o sha pin (`165ffa6f…`) + peak ≤ 15.7 GB via per-phase `-v` ΔRSS (not `HEXA_ALLOC_STATS` — atexit doesn't fire on the raw exit_group lane) + an ASAN remove/reinsert/free_tree smoke.
