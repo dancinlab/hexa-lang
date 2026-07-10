@@ -4690,6 +4690,28 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             _last.push(arg_ops[len(arg_ops) - 1])
             arg_ops = _last
         }
+        // axis-③ symcensus part-1 A-5 — optional-arg void-sentinel synthesis.
+        // gen2 (self/codegen.hexa) fills the omitted trailing arg of these method
+        // builtins with hexa_void() so the runtime's HX_IS_VOID sentinel fires:
+        // slice/slice_fast(recv,start,end) :6444-6453 · substr(recv,start,len)
+        // :6401-6406 · count(recv,pred) :6204-6212. The native path lowers a
+        // method call through THIS STMT_CALL (recv already prepended to
+        // arg_ops[0] above), so a 1-arg form `a.slice(i)` / `s.substr(i)` /
+        // `m.count()` would otherwise leave the runtime fn's trailing HexaVal arg
+        // register uninitialised. Filling here — at MIR level, once — means BOTH
+        // codegen backends inherit the identical const-void operand (no per-
+        // backend divergence). Method calls only (gen2 dispatches these via
+        // gen2_method_builtin); the arity guard is self-limiting, so a fully-
+        // applied call (`.slice(i,j)`, `.count(pred)`) is left untouched.
+        if _bk_is_method {
+            let mut _vs_want = 0
+            if callee_text == "count" { _vs_want = 2 }
+            if callee_text == "substr" || callee_text == "slice"
+                || callee_text == "slice_fast" { _vs_want = 3 }
+            while _vs_want > 0 && len(arg_ops) < _vs_want {
+                arg_ops.push(_const_void_op())
+            }
+        }
         let mut ctx2 = _fresh_local(ctx_r, e.typ, "call_ret")
         let dst = _lr_locals[len(_lr_locals) - 1]
         let s = Stmt {

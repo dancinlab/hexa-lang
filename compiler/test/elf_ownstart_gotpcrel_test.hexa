@@ -105,7 +105,7 @@ fn main() {
 
     let objs: [ElfX86Obj] = [obj]
     let out_path = "out_elfx86/gotpcrel.elf"
-    let rc = link_elf_x86_64_ownstart(objs, out_path, "main")
+    let rc = link_elf_x86_64_ownstart(objs, out_path, "main", [])
     _check(rc == 0, "link_elf_x86_64_ownstart rc==0")
 
     let b = read_file_bytes(out_path)

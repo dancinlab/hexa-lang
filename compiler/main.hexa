@@ -1277,7 +1277,7 @@ if linker_kind == "hexa" {
         if _prog_has_und && len(_rt_a) > 0 {
             rc = link_elf_x86_64_ownstart_ar(elf_obj_x86_holder, out_path, "main", _rt_a)
         } else {
-            rc = link_elf_x86_64_ownstart(elf_obj_x86_holder, out_path, "main")
+            rc = link_elf_x86_64_ownstart(elf_obj_x86_holder, out_path, "main", [])
         }
         if rc != 0 {
             eprintln("hexa-compiler: hexa_ld(elf) own-start link failed rc=" + to_string(rc))
