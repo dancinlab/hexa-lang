@@ -1301,7 +1301,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "// Stored on the heap; the HexaVal map union holds a pointer + len.\n"
     buf = buf + "// Keeps a parallel insertion-order array for keys()/values()/iter.\n"
     buf = buf + "\n"
-    buf = buf + "#define HMAP_INIT_CAP   16\n"
+    buf = buf + "#define HMAP_INIT_CAP   4  // axis-3 L1-B: 16->4 cuts per-struct table slack (most struct-lits have 2-6 fields; pack_map right-sizes above this floor). Output-neutral: iteration walks insertion-order arrays, lookups are content-based, slot order is never program-visible.\n"
     if buf.len() > 65536 { _flush_runtime_core(out_path, buf); buf = "" }
     buf = buf + "#define HMAP_LOAD_MAX   75  // percent\n"
     buf = buf + "\n"
@@ -3644,7 +3644,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "// arena rewind point catches up. When from_arena=0, behavior is unchanged.\n"
     buf = buf + "static HexaMapTable* hmap_alloc_ex(int ht_cap, int from_arena) {\n"
     buf = buf + "    HexaMapTable* t;\n"
-    buf = buf + "    int order_init = ht_cap < 8 ? 8 : ht_cap;\n"
+    buf = buf + "    int order_init = ht_cap < 4 ? 4 : ht_cap;\n"
     buf = buf + "    if (from_arena) {\n"
     buf = buf + "        // All four allocations satisfied from the same bump frontier — single\n"
     buf = buf + "        // O(1) reset frees them in bulk. Zeroing via memset is required to\n"
