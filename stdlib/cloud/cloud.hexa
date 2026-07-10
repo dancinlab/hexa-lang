@@ -1414,3 +1414,51 @@ fn cloud_check_workspace_mount(host: str, ssh_opts: [str], requested_gb: int) ->
     let line = _ssh_capture(host, ssh_opts, cloud_workspace_df_cmd())
     return cloud_workspace_df_verdict(line, requested_gb)
 }
+
+// A community pod's `free` reports HOST physical RAM leaking through the
+// container namespace (e.g. 1133 GiB) while the real ceiling is the cgroup
+// memory limit — community CPU slices commonly cap `memory.max` at 8 GiB. A
+// memory-heavy build/self-emit then OOM-kills mid-run. Post-rent we read the
+// cgroup limit (v2 `memory.max`, fallback v1 `memory.limit_in_bytes`) and
+// LOUD-warn if it is below a build-sane floor — do NOT trust `free`.
+
+// cloud_cgroup_ram_cmd — PURE: remote one-liner emitting the cgroup memory
+// ceiling in whole GiB, or "max" when unlimited (cgroup v2 literal "max", or a
+// v1 sentinel so large it is effectively unbounded), or empty when unreadable
+// (the verdict treats empty as inconclusive → no false alarm).
+fn cloud_cgroup_ram_cmd() -> str {
+    return "b=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null); case \"$b\" in ''|max) echo max ;; *) g=$((b/1073741824)); if [ \"$g\" -gt 131072 ]; then echo max; else echo \"$g\"; fi ;; esac"
+}
+
+// cloud_cgroup_ram_verdict — PURE: turn the cgroup GiB line + a build-sane
+// floor into a CloudResult. exit_code:
+//   0   unlimited ("max") or cap >= floor — silent
+//   2   finite cap < floor → cgroup-capped, memory-heavy runs will OOM
+//   3   inconclusive (empty/unreadable) — caller stays quiet (no warn)
+fn cloud_cgroup_ram_verdict(mem_line: str, floor_gb: int) -> CloudResult {
+    let line = mem_line.trim()
+    if len(line) == 0 {
+        return CloudResult { ok: 0, exit_code: 3, pid: 0, stdout_: line,
+            message: "cgroup_ram_inconclusive (memory.max unreadable)", logfile: "" }
+    }
+    if line == "max" {
+        return CloudResult { ok: 1, exit_code: 0, pid: 0, stdout_: line,
+            message: "cgroup_ram OK (unlimited)", logfile: "" }
+    }
+    let cap = _cloud_atoi(line)
+    if cap > 0 && cap < floor_gb {
+        return CloudResult { ok: 0, exit_code: 2, pid: 0, stdout_: line,
+            message: "cgroup_ram_capped (memory.max=" + str(cap) + " GiB, build-sane floor " + str(floor_gb) + " GiB) — `free` shows host RAM, not this ceiling; memory-heavy builds/self-emit will OOM", logfile: "" }
+    }
+    return CloudResult { ok: 1, exit_code: 0, pid: 0, stdout_: line,
+        message: "cgroup_ram OK (" + str(cap) + " GiB)", logfile: "" }
+}
+
+// cloud_check_cgroup_ram — LIVE: ssh the pod, read the cgroup memory ceiling,
+// return the verdict. Caller LOUD-warns on exit_code 2; 0 (OK) and 3
+// (inconclusive) stay quiet. Best-effort — an ssh failure surfaces as
+// inconclusive, never a false alarm.
+fn cloud_check_cgroup_ram(host: str, ssh_opts: [str], floor_gb: int) -> CloudResult {
+    let line = _ssh_capture(host, ssh_opts, cloud_cgroup_ram_cmd())
+    return cloud_cgroup_ram_verdict(line, floor_gb)
+}

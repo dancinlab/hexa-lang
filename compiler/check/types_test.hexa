@@ -1752,6 +1752,111 @@ fn _build_case_hx3025_string_fixture() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (cs) R2 — segment(b) HX3053 array-index-BY-STRING REJECT (Rust E0277). `xs["k"]`
+// on a KNOWN array base (xs: [i64]) indexed by a STRING literal → 1 HX3053 Error
+// (the C-substrate hexa_arr_poly_get takes int64_t idx, so a string operand's
+// pointer bits become a garbage OOB index). `xs[0]` (int index) stays clean; and
+// `unk["k"]` (unknown base) stays silent (conservative under-reject — the base is
+// not a KNOWN array). Expect exactly 1 HX3053 error. Also expect 0 HX3025 (the
+// array base is not a scalar/string, so the sibling non-container gate never
+// fires on `xs`).
+fn _build_case_hx3053_arr_str_index() -> Module {
+    let f = "case_hx3053.hexa"
+    // fn f(xs: [i64]) -> i64 { let x = xs["k"]  return 0 }   — string index on array → HX3053
+    let fx = _let_expr("x", _index_expr(_ident_expr("xs", f, 2, 13), _string_expr("k", f, 2, 16), f, 2, 15), f, 2, 5)
+    let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
+    let mut pf = []
+    pf.push(_param("xs", "[i64]", f, 1, 6))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 1, 1), f, 1)
+    // fn g(xs: [i64]) -> i64 { let y = xs[0]  return 0 }   — int index → clean
+    let gy = _let_expr("y", _index_expr(_ident_expr("xs", f, 5, 13), _int_expr("0", f, 5, 16), f, 5, 15), f, 5, 5)
+    let gr = _return_expr(_int_expr("0", f, 6, 12), f, 6, 5)
+    let mut pg = []
+    pg.push(_param("xs", "[i64]", f, 4, 6))
+    let item_g = _fn_item("g", pg, _named_type_ref("i64"), _block([gy, gr], f, 4, 1), f, 4)
+    // fn h() { let z = unk["k"] }   — unknown base → silent (under-reject)
+    let hz = _let_expr("z", _index_expr(_ident_expr("unk", f, 8, 13), _string_expr("k", f, 8, 17), f, 8, 16), f, 8, 5)
+    let item_h = _fn_item("h", [], _empty_type_ref(), _block([hz], f, 8, 1), f, 8)
+    let mut items = []
+    items.push(item_f)
+    items.push(item_g)
+    items.push(item_h)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (cs) HX3053 fixture carve-out — identical array-index-by-string AST on a byte-eq
+// TEST-FIXTURE path (`*_test.hexa`) stays WARNING via _types_strict_for.
+fn _build_case_hx3053_fixture() -> Module {
+    let f = "case_hx3053_test.hexa"
+    let fx = _let_expr("x", _index_expr(_ident_expr("xs", f, 2, 13), _string_expr("k", f, 2, 16), f, 2, 15), f, 2, 5)
+    let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
+    let mut pf = []
+    pf.push(_param("xs", "[i64]", f, 1, 6))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 1, 1), f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (ct) R4 — segment(b) HX3054 array-index-BY-AGGREGATE/REF REJECT (Rust E0277,
+// parity+1 sibling of HX3053). Two rejects on a KNOWN array base (xs: [i64]):
+//   • `xs[p]`  with p: Point (struct) → idx infers to `named:Point` → HX3054
+//   • `xs[ys]` with ys: [i64] (array) → idx infers to `array`       → HX3054
+// (both boxed heap-pointer payloads become garbage int64 offsets, same
+// mechanism as HX3053). `xs[0]` (int index) stays clean. Expect exactly 2
+// HX3054 errors. Also expect 0 HX3053 (no string index) and 0 HX3025 (the
+// array base is not a scalar/string, so the sibling non-container gate never
+// fires on `xs`).
+fn _build_case_hx3054_arr_ref_index() -> Module {
+    let f = "case_hx3054.hexa"
+    // struct Point { x: i64 }
+    let item_pt = _struct_item("Point", [_param("x", "i64", f, 1, 14)], f, 1)
+    // fn f(xs: [i64], p: Point) -> i64 { let x = xs[p]  return 0 }  — struct index → HX3054
+    let fx = _let_expr("x", _index_expr(_ident_expr("xs", f, 3, 13), _ident_expr("p", f, 3, 16), f, 3, 15), f, 3, 5)
+    let fr = _return_expr(_int_expr("0", f, 4, 12), f, 4, 5)
+    let mut pf = []
+    pf.push(_param("xs", "[i64]", f, 2, 6))
+    pf.push(_param("p", "Point", f, 2, 15))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 2, 1), f, 2)
+    // fn g(xs: [i64], ys: [i64]) -> i64 { let y = xs[ys]  return 0 } — nested-array index → HX3054
+    let gy = _let_expr("y", _index_expr(_ident_expr("xs", f, 6, 13), _ident_expr("ys", f, 6, 16), f, 6, 15), f, 6, 5)
+    let gr = _return_expr(_int_expr("0", f, 7, 12), f, 7, 5)
+    let mut pg = []
+    pg.push(_param("xs", "[i64]", f, 6, 6))
+    pg.push(_param("ys", "[i64]", f, 6, 16))
+    let item_g = _fn_item("g", pg, _named_type_ref("i64"), _block([gy, gr], f, 6, 1), f, 6)
+    // fn h(xs: [i64]) -> i64 { let z = xs[0]  return 0 } — int index → clean
+    let hz = _let_expr("z", _index_expr(_ident_expr("xs", f, 9, 13), _int_expr("0", f, 9, 16), f, 9, 15), f, 9, 5)
+    let hr = _return_expr(_int_expr("0", f, 10, 12), f, 10, 5)
+    let mut ph = []
+    ph.push(_param("xs", "[i64]", f, 9, 6))
+    let item_h = _fn_item("h", ph, _named_type_ref("i64"), _block([hz, hr], f, 9, 1), f, 9)
+    let mut items = []
+    items.push(item_pt)
+    items.push(item_f)
+    items.push(item_g)
+    items.push(item_h)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (ct) HX3054 fixture carve-out — array-index-by-aggregate AST on a byte-eq
+// TEST-FIXTURE path (`*_test.hexa`) → the reject stays WARNING via
+// _types_strict_for. One reject (`xs[p]`, struct index).
+fn _build_case_hx3054_fixture() -> Module {
+    let f = "case_hx3054_test.hexa"
+    let item_pt = _struct_item("Point", [_param("x", "i64", f, 1, 14)], f, 1)
+    let fx = _let_expr("x", _index_expr(_ident_expr("xs", f, 3, 13), _ident_expr("p", f, 3, 16), f, 3, 15), f, 3, 5)
+    let fr = _return_expr(_int_expr("0", f, 4, 12), f, 4, 5)
+    let mut pf = []
+    pf.push(_param("xs", "[i64]", f, 2, 6))
+    pf.push(_param("p", "Point", f, 2, 15))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 2, 1), f, 2)
+    let mut items = []
+    items.push(item_pt)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // (aq) R5-r2 — let-RHS BinOp + leaves-known gate (HX3011, Rust E0308). A typed
 // `let` whose BinOp RHS infers a KNOWN-scalar type that disagrees with the
 // annotation REJECTs; an unknown leaf disqualifies the tree (silent). Builds
@@ -2667,6 +2772,43 @@ fn _build_case_i64_max() -> Module {
     let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
     let mut items = []
     items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (u64-fit) ★ HX3044 i64 u64-container FIT — `let x: i64 = 18446744073709551615`
+// (U64_MAX). i64 is hexa's sole 64-bit container; a value in (i64::MAX, u64::MAX]
+// is a sanctioned bit-pattern → 0 HX3044 (`_types_int_text_fits_u64`).
+fn _build_case_i64_u64max() -> Module {
+    let f = "case_u64fit.hexa"
+    let body = _block([_let_expr("x|i64", _int_expr("18446744073709551615", f, 2, 20), f, 2, 5)], f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (u64-over) ★ HX3044 i64 container OVERFLOW — `let x: i64 = 18446744073709551616`
+// (2^64, one past U64_MAX) → truly overflows the 64-bit container → 1 HX3044 (Error).
+fn _build_case_i64_over_u64() -> Module {
+    let f = "case_u64over.hexa"
+    let body = _block([_let_expr("x|i64", _int_expr("18446744073709551616", f, 2, 20), f, 2, 5)], f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (bitpattern) ★ HX3044 regression pin (catalog-hexa-1) —
+// `fn f() -> int { return 18442240474082181120 }`. hxlcl_log's -INFINITY IEEE-754
+// bit-pattern (0xfff0000000000000, > i64::MAX) at the return-place coercion to the
+// i64 container → 0 HX3044 (the native-seed bake regression this fix resolves).
+fn _build_case_i64_bitpattern_ret() -> Module {
+    let f = "case_bitpat.hexa"
+    let ret = _return_expr(_int_expr("18442240474082181120", f, 2, 12), f, 2, 5)
+    let body = _block([ret], f, 1, 20)
+    let item_f = _fn_item("f", [], _named_type_ref("int"), body, f, 1)
+    let mut items = []
+    items.push(item_f)
     return Module { file: f, items: items, imports: [] }
 }
 
@@ -4071,6 +4213,37 @@ fn main() {
         println("  ok: 0 HX3044 (i64::MAX fits — no accumulator wrap on the boundary)")
     }
 
+    // (u64-fit) ★ HX3044 i64 u64-container FIT — let x:i64 = U64_MAX(18446744073709551615) → 0 HX3044.
+    let diags_u64fit = _run_case("(u64-fit) static-types — i64 container: let x:i64 = 18446744073709551615 (U64_MAX) → sanctioned bit-pattern → 0 HX3044", _build_case_i64_u64max())
+    let c_u64fit = _count_code(diags_u64fit, "HX3044")
+    if c_u64fit != 0 {
+        println("  FAIL: case (u64-fit) expected 0 HX3044 (U64_MAX fits the i64 container), got " + to_string(c_u64fit) + " (total=" + to_string(len(diags_u64fit)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3044 (U64_MAX = sanctioned u64 bit-pattern in the i64 container)")
+    }
+
+    // (u64-over) ★ HX3044 i64 container OVERFLOW — let x:i64 = 2^64(18446744073709551616) → 1 HX3044 (Error).
+    let diags_u64over = _run_case("(u64-over) static-types — i64 container: let x:i64 = 18446744073709551616 (2^64) → past U64_MAX → 1 HX3044 (Error)", _build_case_i64_over_u64())
+    let c_u64over = _count_code_sev(diags_u64over, "HX3044", "error")
+    if c_u64over != 1 {
+        println("  FAIL: case (u64-over) expected 1 HX3044 error (2^64 overflows the 64-bit container), got err=" + to_string(c_u64over) + " (total=" + to_string(len(diags_u64over)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3044 error (>= 2^64 truly overflows the container)")
+    }
+
+    // (bitpattern) ★ HX3044 regression pin (catalog-hexa-1) — fn f()->int { return 18442240474082181120 }
+    // = hxlcl_log -INFINITY IEEE-754 bits (0xfff0000000000000, > i64::MAX) → 0 HX3044.
+    let diags_bitpat = _run_case("(bitpattern) static-types — i64 container return: fn f()->int { return 18442240474082181120 } (-INF bits) → 0 HX3044", _build_case_i64_bitpattern_ret())
+    let c_bitpat = _count_code(diags_bitpat, "HX3044")
+    if c_bitpat != 0 {
+        println("  FAIL: case (bitpattern) expected 0 HX3044 (-INFINITY bit-pattern is a sanctioned u64 value), got " + to_string(c_bitpat) + " (total=" + to_string(len(diags_bitpat)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3044 (regression fixed — hxlcl_core IEEE-754 bit-patterns accepted)")
+    }
+
     // (bg) ★ HX3044 int-literal range-fit — hz_i32_over: `let x: i32 = 2147483648`
     // (one past i32::MAX) → 1 HX3044 in the ERROR band (STRICT re-band, real source).
     let diags_bg = _run_case("(bg) static-types — int-lit range-fit: let x:i32 = 2147483648 → i32::MAX+1 → 1 HX3044 (Error, real source)", _build_case_i32_over())
@@ -4453,6 +4626,58 @@ fn main() {
         ok = false
     } else {
         println("  ok: 0 HX3004 (pad_end→string exact accept — str_pad_right alias)")
+    }
+
+    // (cs) R2 — segment(b) HX3053 array-index-BY-STRING REJECT (Rust E0277).
+    // `xs["k"]` on a KNOWN array base → 1 HX3053 ERROR; `xs[0]` int-index clean;
+    // `unk["k"]` unknown base silent. 0 HX3025 (array base ≠ scalar/string).
+    let diags_cs = _run_case("(cs) static-types R2 — array-index-by-string REJECT (xs[\"k\"] array reject / xs[0] int clean / unk[\"k\"] silent) (HX3053)", _build_case_hx3053_arr_str_index())
+    let ccs = _count_code(diags_cs, "HX3053")
+    let ccs_err = _count_code_sev(diags_cs, "HX3053", "error")
+    let ccs_3025 = _count_code(diags_cs, "HX3025")
+    if ccs != 1 || ccs_err != 1 || ccs_3025 != 0 {
+        println("  FAIL: case (cs) expected 1 HX3053 as ERROR + 0 HX3025 (xs[\"k\"] array reject; xs[0] int + unk[\"k\"] unknown clean), got " + to_string(ccs) + " HX3053 (" + to_string(ccs_err) + " error) / " + to_string(ccs_3025) + " HX3025 (total=" + to_string(len(diags_cs)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3053 as ERROR (array `xs[\"k\"]` string-index reject; int `xs[0]` + unknown `unk[\"k\"]` clean; 0 HX3025) — E0277 array cannot be indexed by string")
+    }
+
+    // (cs) HX3053 fixture carve-out — *_test.hexa path → WARNING.
+    let diags_csf = _run_case("(cs) static-types R2 — HX3053 fixture carve-out (*_test.hexa array-index-by-string)", _build_case_hx3053_fixture())
+    let ccsf = _count_code(diags_csf, "HX3053")
+    let ccsf_warn = _count_code_sev(diags_csf, "HX3053", "warning")
+    if ccsf != 1 || ccsf_warn != 1 {
+        println("  FAIL: case (cs) fixture expected 1 HX3053 as WARNING (fixture carve-out), got " + to_string(ccsf) + " HX3053 (" + to_string(ccsf_warn) + " warn) (total=" + to_string(len(diags_csf)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3053 as WARNING (array-index-by-string fixture carve-out: *_test.hexa stays warn-band)")
+    }
+
+    // (ct) R4 — segment(b) HX3054 array-index-BY-AGGREGATE/REF REJECT (Rust
+    // E0277). `xs[p]` (p: Point struct) + `xs[ys]` (ys: [i64] array) → 2 HX3054
+    // ERROR; `xs[0]` int-index clean. 0 HX3053 (no string idx) + 0 HX3025
+    // (array base ≠ scalar/string).
+    let diags_ct = _run_case("(ct) static-types R4 — array-index-by-aggregate REJECT (xs[p] struct / xs[ys] array reject / xs[0] int clean) (HX3054)", _build_case_hx3054_arr_ref_index())
+    let cct = _count_code(diags_ct, "HX3054")
+    let cct_err = _count_code_sev(diags_ct, "HX3054", "error")
+    let cct_3053 = _count_code(diags_ct, "HX3053")
+    let cct_3025 = _count_code(diags_ct, "HX3025")
+    if cct != 2 || cct_err != 2 || cct_3053 != 0 || cct_3025 != 0 {
+        println("  FAIL: case (ct) expected 2 HX3054 as ERROR + 0 HX3053 + 0 HX3025 (xs[p] struct + xs[ys] array reject; xs[0] int clean), got " + to_string(cct) + " HX3054 (" + to_string(cct_err) + " error) / " + to_string(cct_3053) + " HX3053 / " + to_string(cct_3025) + " HX3025 (total=" + to_string(len(diags_ct)) + ")")
+        ok = false
+    } else {
+        println("  ok: 2 HX3054 as ERROR (array `xs[p]` struct-index + `xs[ys]` array-index reject; int `xs[0]` clean; 0 HX3053 + 0 HX3025) — E0277 array cannot be indexed by an aggregate")
+    }
+
+    // (ct) HX3054 fixture carve-out — *_test.hexa path → WARNING.
+    let diags_ctf = _run_case("(ct) static-types R4 — HX3054 fixture carve-out (*_test.hexa array-index-by-aggregate)", _build_case_hx3054_fixture())
+    let cctf = _count_code(diags_ctf, "HX3054")
+    let cctf_warn = _count_code_sev(diags_ctf, "HX3054", "warning")
+    if cctf != 1 || cctf_warn != 1 {
+        println("  FAIL: case (ct) fixture expected 1 HX3054 as WARNING (fixture carve-out), got " + to_string(cctf) + " HX3054 (" + to_string(cctf_warn) + " warn) (total=" + to_string(len(diags_ctf)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3054 as WARNING (array-index-by-aggregate fixture carve-out: *_test.hexa stays warn-band)")
     }
 
     println("")

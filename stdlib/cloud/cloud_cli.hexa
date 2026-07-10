@@ -2114,6 +2114,15 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
             println("                     work written under /workspace may be on EPHEMERAL disk (pod kill wipes it) and the requested " + str(volume_gb) + " GiB may not be present. Verify: cloud run root@" + port.ip + " -p " + port.port + " -- df -h /workspace")
         }
     }
+    // (convergence build-aprime-sh-1) cgroup RAM-cap check: `free` reports host
+    // RAM through the container ns while community slices cap `memory.max` at
+    // 8 GiB, so a memory-heavy build/self-emit OOM-kills. Read the real ceiling
+    // and LOUD-warn below a build-sane 16 GiB floor.
+    let ramv = cloud_check_cgroup_ram("root@" + port.ip, runpod_pod_opts(port.port), 16)
+    if ramv.exit_code == 2 {
+        println("[cloud] rent runpod: ⚠ RAM CGROUP-CAPPED — " + ramv.message)
+        println("                     the advertised host RAM (`free`) is NOT the real ceiling. Memory-heavy builds/self-emit will OOM at the cgroup cap. Verify: cloud run root@" + port.ip + " -p " + port.port + " -- cat /sys/fs/cgroup/memory.max")
+    }
     // Always capture the RunPod hourly rate into the registry so `cloud list`
     // renders the dph column even without a cost-cap flag ("" → column "-").
     let mut dph_now = pod.cost_per_hr
