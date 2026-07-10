@@ -5099,7 +5099,7 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             }
             return
         }
-        let mut target = _builtin_runtime_sym(s.op)
+        let mut target = _builtin_runtime_sym(s.op, len(s.args))
         // FLEET lane A2 — escaping-poly len (HEXA_PACK_ESCAPING): `len(xs)` on a
         // typed-prim array of unknown packed-ness routes to hexa_arr_poly_len,
         // which branches on HX_TAG==TAG_ARRAY_I64 (raw ->len) else delegates to
