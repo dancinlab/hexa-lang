@@ -1526,11 +1526,17 @@ pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> In
 // which calls `main`, forwards main's return (EAX) into EDI and issues
 // the exit syscall directly.
 //
-// _start (14 bytes = 5+2+5+2):
-//   E8 00 00 00 00   call  main          ; rel32 patched below (offs 1..4)
+// _start (23 bytes = 4+5+5+2+5+2):
+//   48 8B 3C 24      mov   rdi, [rsp]     ; argc  (SysV crt0 process-entry)
+//   48 8D 74 24 08   lea   rsi, [rsp+8]   ; argv
+//   E8 00 00 00 00   call  main          ; rel32 patched below (offs 10..13)
 //   89 D7            mov   edi, edx       ; exit code = main()'s HexaVal PAYLOAD
 //   B8 3C 00 00 00   mov   eax, 60        ; __NR_exit
 //   0F 05            syscall
+// Round-3 (argc/argv): main is the emitted C `int main(int argc,char** argv)`
+// (runtime_core_emit ~:9871) — Round-1/2 called it with garbage rdi/rsi (never
+// unpacked rsp) → garbage-argc malloc + garbage-argv deref → execve-immediate
+// SIGSEGV. The 9-byte unpack is stack→register, NO reloc.
 //
 // PAIR-MODEL note: every user .hexa fn returns a 16-byte HexaVal in the SysV
 // integer pair rax=tag, rdx=payload (x86_64_linux.hexa _STMT_RETURN) — a user
@@ -1540,12 +1546,12 @@ pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> In
 // own-start path adopts the C-canon "main's return IS the exit code"; the
 // shipping C-transpile path still discards main's return (crt returns 0).
 //
-// Every obj symbol.value and reloc.offset is shifted by len(stub)=14
-// because the text concat begins with `base = len(text_bytes) = 14` (the
-// stub occupies [0,14)). PC-relative reloc deltas (S+A−P) are invariant
-// under the shared +14 shift, so the reloc loop is byte-identical to
+// Every obj symbol.value and reloc.offset is shifted by len(stub)=23
+// because the text concat begins with `base = len(text_bytes) = 23` (the
+// stub occupies [0,23)). PC-relative reloc deltas (S+A−P) are invariant
+// under the shared +23 shift, so the reloc loop is byte-identical to
 // link_elf_x86_64. Only the intra-stub `call main` rel32 is resolved
-// here: rel32 = (main final offset) − (next-insn addr = 5); for main at
+// here: rel32 = (main final offset) − (next-insn addr = 14); for main at
 // obj-local value 0 that is 14 − 5 = 9.
 //
 // Round-2 (data-segment): extends the round-1 text-only path with a SECOND
@@ -1556,15 +1562,29 @@ pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> In
 // untouched serialize_elf_exec_x86_64; text->text deltas are vaddr-base
 // invariant). Data present -> serialize_elf_exec_x86_64_2seg (two PT_LOADs).
 pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: string) -> Int {
-    // 14-byte own-start stub at text offset 0.
+    // 23-byte own-start stub at text offset 0.
+    // Round-3 (argc/argv): the SysV crt0 process-entry contract — the kernel
+    // enters at _start with rsp = [argc, argv[0..argc-1], NULL, envp..., NULL].
+    // main is the emitted C `int main(int argc, char** argv)` (runtime_core_emit
+    // ~:9871) which reads argc/argv (SysV: rdi=argc, rsi=argv) to init the
+    // _hexa_argc/_hexa_argv globals. Round-1/2 called main with GARBAGE rdi/rsi
+    // (never unpacked the stack) → main malloc'd sizeof(char*)*garbage-argc and
+    // dereferenced a garbage argv → execve-immediate SIGSEGV (si_addr=NULL).
+    // Fix: unpack argc/argv from rsp into rdi/rsi before `call main` (9 bytes),
+    // no reloc (stack→register). All obj symbol/reloc offsets shift by the new
+    // len(stub)=23 automatically (base = len(text_bytes), read below).
     let mut text_bytes: [Int] = []
+    text_bytes.push(0x48); text_bytes.push(0x8B); text_bytes.push(0x3C)
+    text_bytes.push(0x24)                                 // mov rdi, [rsp]      (argc)
+    text_bytes.push(0x48); text_bytes.push(0x8D); text_bytes.push(0x74)
+    text_bytes.push(0x24); text_bytes.push(0x08)          // lea rsi, [rsp+8]    (argv)
     text_bytes.push(0xE8); text_bytes.push(0x00); text_bytes.push(0x00)
-    text_bytes.push(0x00); text_bytes.push(0x00)          // call rel32 (patched)
+    text_bytes.push(0x00); text_bytes.push(0x00)          // call rel32 (patched, stub bytes 10..13)
     text_bytes.push(0x89); text_bytes.push(0xD7)          // mov edi, edx (HexaVal payload)
     text_bytes.push(0xB8); text_bytes.push(0x3C); text_bytes.push(0x00)
     text_bytes.push(0x00); text_bytes.push(0x00)          // mov eax, 60 (__NR_exit)
     text_bytes.push(0x0F); text_bytes.push(0x05)          // syscall
-    // len(text_bytes) is now 14 — the +14 shift applied to every obj below.
+    // len(text_bytes) is now 23 — the +23 shift applied to every obj below.
 
     // Concatenated data blob (.rodata ++ .data per obj) for the RW segment.
     let mut data_bytes: [Int] = []
@@ -1656,12 +1676,13 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         return 3
     }
 
-    // Patch the `call main` rel32 (stub bytes 1..4). Next-insn addr = 5.
-    let call_rel = main_off - 5
-    text_bytes[1] = call_rel & 0xff
-    text_bytes[2] = (call_rel >> 8) & 0xff
-    text_bytes[3] = (call_rel >> 16) & 0xff
-    text_bytes[4] = (call_rel >> 24) & 0xff
+    // Patch the `call main` rel32 (stub bytes 10..13). The call opcode sits at
+    // stub offset 9 (after the 9-byte argc/argv unpack); next-insn addr = 14.
+    let call_rel = main_off - 14
+    text_bytes[10] = call_rel & 0xff
+    text_bytes[11] = (call_rel >> 8) & 0xff
+    text_bytes[12] = (call_rel >> 16) & 0xff
+    text_bytes[13] = (call_rel >> 24) & 0xff
 
     // ── GOT COLLECT (R_X86_64_GOTPCREL, type 9) — one slot per DISTINCT target ──
     // #4783 self-emits `mov reg,[rip+sym@GOTPCREL]` (REX.W 8B /r RIP disp32=0,
