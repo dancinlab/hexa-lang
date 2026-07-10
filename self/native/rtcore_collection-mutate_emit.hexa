@@ -130,6 +130,7 @@ fn emit_rtcore_collection-mutate_to(out_path: str) {
     if buf.len() > 65536 { _flush_rtcore_collection-mutate(out_path, buf); buf = "" }
     buf = buf + "extern HexaVal hexa_map_set_impl(HexaVal m, const char* key, HexaVal val);\n"
     buf = buf + "extern HexaVal hexa_map_remove_impl(HexaVal m, const char* key);\n"
+    buf = buf + "extern int hexa_intern_owns(const char* p);  // axis-3 L1-A: shared intern-owns probe (runtime_core.c)\n"
     buf = buf + "extern HexaVal hexa_str(const char* s);\n"
     buf = buf + "extern HexaVal hexa_to_string(HexaVal v);\n"
     buf = buf + "extern const char* hexa_str_as_ptr(HexaVal v);\n"
@@ -213,7 +214,7 @@ fn emit_rtcore_collection-mutate_to(out_path: str) {
     buf = buf + "    }\n"
     buf = buf + "\n"
     buf = buf + "    // Remove from hash table: mark slot empty and re-insert displaced entries\n"
-    buf = buf + "    free(t->slots[si].key);\n"
+    buf = buf + "    if (!hexa_intern_owns(t->slots[si].key)) free(t->slots[si].key);  /* axis-3 L1-A: skip interned keys */\n"
     buf = buf + "    t->slots[si].key = NULL;\n"
     buf = buf + "    t->slots[si].hash = 0;\n"
     buf = buf + "    // Robin Hood deletion: re-probe subsequent slots\n"

@@ -2015,7 +2015,7 @@ build_runtime_a_from_source() {
         #          a non-adopted flip stays observable as `strtoll` UND in the nm floor (#4360).
         #   1    = strict: a missing/bad seed is FATAL (measurement / verify scripts).
         # Seeds self/native/hxlcl_strtoll_{x86_64,arm64-linux,arm64}.s baked by the pool.
-        _rnstl_mode="${HEXA_RT_NATIVE_STRTOLL:-0}"
+        _rnstl_mode="${HEXA_RT_NATIVE_STRTOLL:-auto}"
         if [ "$_rnstl_mode" != "0" ]; then
             _rnstl_tgt="${TARGET:-}"; _rnstl_tgt="${_rnstl_tgt%-musl}"; _rnstl_tgt="${_rnstl_tgt%-cuda}"
             [ -z "$_rnstl_tgt" ] && case "$(uname -sm 2>/dev/null)" in

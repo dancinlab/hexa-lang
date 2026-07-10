@@ -761,6 +761,9 @@ pub fn hxlcl_strtoll(nptr: HexaVal, endptr: HexaVal, base: HexaVal) -> int {
             i = __hx_payload_add(i, 1)
         }
     }
+    // C99 7.22.1.4p8 no-conversion rollback anchor: position AFTER ws+sign, BEFORE any
+    // '0'/'0x' prefix consumption. If no digit converts, endptr = (i != ip ? &'0'+1 : nptr).
+    let ip = __hx_payload_add(i, 0)
     // base prefix: base-0 auto-detect (0x→16, 0→8, else 10); base-16 0x-skip.
     let i1 = __hx_payload_add(i, 1)
     let c0 = __hx_ptr_load8(p, i)
@@ -793,6 +796,7 @@ pub fn hxlcl_strtoll(nptr: HexaVal, endptr: HexaVal, base: HexaVal) -> int {
     // digit accumulation: for(;;){ d=digit(c); if(none||d>=base) break;
     //                              n = n*base + d; s++; }
     let mut n = 0
+    let mut ndig = 0                            // any digit converted? (endptr rollback)
     let mut cont = 1
     while __hx_payload_ne(cont, 0) {
         let c = __hx_ptr_load8(p, i)
@@ -831,12 +835,22 @@ pub fn hxlcl_strtoll(nptr: HexaVal, endptr: HexaVal, base: HexaVal) -> int {
             } else {
                 let nb = __hx_payload_mul(n, b)
                 n = __hx_payload_add(nb, d)     // n = n*base + d
+                ndig = 1                        // ≥1 digit converted
                 i = __hx_payload_add(i, 1)
             }
         }
     }
-    // if (endptr) *endptr = (char *)s;   (s = nptr + i)
-    let endp = __hx_payload_add(p, i)
+    // C99 7.22.1.4p8: no digit converted → *endptr = nptr, unless a '0'/'0x' prefix
+    // consumed a '0' (itself the conversion) → one past that '0'. (see `ip` anchor)
+    let mut ei = i
+    if __hx_payload_eq(ndig, 0) {
+        if __hx_payload_ne(i, ip) {
+            ei = __hx_payload_add(ip, 1)        // prefix '0' consumed → &'0'+1
+        } else {
+            ei = 0                              // only ws/sign → nptr
+        }
+    }
+    let endp = __hx_payload_add(p, ei)
     if __hx_payload_ne(pe, 0) {
         __hx_ptr_store64(pe, 0, endp)
     }
@@ -897,6 +911,8 @@ pub fn hxlcl_strtoull(nptr: HexaVal, endptr: HexaVal, base: HexaVal) -> int {
     if __hx_payload_eq(cs, 43) {                // '+'
         i = __hx_payload_add(i, 1)
     }
+    // C99 no-conversion rollback anchor: position after ws+sign, before any '0'/'0x'.
+    let ip = __hx_payload_add(i, 0)
     // base prefix: base-0 auto-detect (0x→16, 0→8, else 10); base-16 0x-skip.
     let i1 = __hx_payload_add(i, 1)
     let c0 = __hx_ptr_load8(p, i)
@@ -929,6 +945,7 @@ pub fn hxlcl_strtoull(nptr: HexaVal, endptr: HexaVal, base: HexaVal) -> int {
     // digit accumulation: for(;;){ d=digit(c); if(none||d>=base) break;
     //                              n = n*base + d; s++; }
     let mut n = 0
+    let mut ndig = 0                            // any digit converted? (endptr rollback)
     let mut cont = 1
     while __hx_payload_ne(cont, 0) {
         let c = __hx_ptr_load8(p, i)
@@ -967,12 +984,21 @@ pub fn hxlcl_strtoull(nptr: HexaVal, endptr: HexaVal, base: HexaVal) -> int {
             } else {
                 let nb = __hx_payload_mul(n, b)
                 n = __hx_payload_add(nb, d)     // n = n*base + d
+                ndig = 1                        // ≥1 digit converted
                 i = __hx_payload_add(i, 1)
             }
         }
     }
-    // if (endptr) *endptr = (char *)s;   (s = nptr + i)
-    let endp = __hx_payload_add(p, i)
+    // C99 7.22.1.4p8 no-conversion rollback (mirror of hxlcl_strtoll).
+    let mut ei = i
+    if __hx_payload_eq(ndig, 0) {
+        if __hx_payload_ne(i, ip) {
+            ei = __hx_payload_add(ip, 1)        // prefix '0' consumed → &'0'+1
+        } else {
+            ei = 0                              // only ws/sign → nptr
+        }
+    }
+    let endp = __hx_payload_add(p, ei)
     if __hx_payload_ne(pe, 0) {
         __hx_ptr_store64(pe, 0, endp)
     }

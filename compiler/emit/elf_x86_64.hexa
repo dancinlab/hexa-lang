@@ -1526,11 +1526,17 @@ pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> In
 // which calls `main`, forwards main's return (EAX) into EDI and issues
 // the exit syscall directly.
 //
-// _start (14 bytes = 5+2+5+2):
-//   E8 00 00 00 00   call  main          ; rel32 patched below (offs 1..4)
+// _start (23 bytes = 4+5+5+2+5+2):
+//   48 8B 3C 24      mov   rdi, [rsp]     ; argc  (SysV crt0 process-entry)
+//   48 8D 74 24 08   lea   rsi, [rsp+8]   ; argv
+//   E8 00 00 00 00   call  main          ; rel32 patched below (offs 10..13)
 //   89 D7            mov   edi, edx       ; exit code = main()'s HexaVal PAYLOAD
 //   B8 3C 00 00 00   mov   eax, 60        ; __NR_exit
 //   0F 05            syscall
+// Round-3 (argc/argv): main is the emitted C `int main(int argc,char** argv)`
+// (runtime_core_emit ~:9871) — Round-1/2 called it with garbage rdi/rsi (never
+// unpacked rsp) → garbage-argc malloc + garbage-argv deref → execve-immediate
+// SIGSEGV. The 9-byte unpack is stack→register, NO reloc.
 //
 // PAIR-MODEL note: every user .hexa fn returns a 16-byte HexaVal in the SysV
 // integer pair rax=tag, rdx=payload (x86_64_linux.hexa _STMT_RETURN) — a user
@@ -1540,12 +1546,12 @@ pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> In
 // own-start path adopts the C-canon "main's return IS the exit code"; the
 // shipping C-transpile path still discards main's return (crt returns 0).
 //
-// Every obj symbol.value and reloc.offset is shifted by len(stub)=14
-// because the text concat begins with `base = len(text_bytes) = 14` (the
-// stub occupies [0,14)). PC-relative reloc deltas (S+A−P) are invariant
-// under the shared +14 shift, so the reloc loop is byte-identical to
+// Every obj symbol.value and reloc.offset is shifted by len(stub)=23
+// because the text concat begins with `base = len(text_bytes) = 23` (the
+// stub occupies [0,23)). PC-relative reloc deltas (S+A−P) are invariant
+// under the shared +23 shift, so the reloc loop is byte-identical to
 // link_elf_x86_64. Only the intra-stub `call main` rel32 is resolved
-// here: rel32 = (main final offset) − (next-insn addr = 5); for main at
+// here: rel32 = (main final offset) − (next-insn addr = 14); for main at
 // obj-local value 0 that is 14 − 5 = 9.
 //
 // Round-2 (data-segment): extends the round-1 text-only path with a SECOND
@@ -1556,15 +1562,29 @@ pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> In
 // untouched serialize_elf_exec_x86_64; text->text deltas are vaddr-base
 // invariant). Data present -> serialize_elf_exec_x86_64_2seg (two PT_LOADs).
 pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: string) -> Int {
-    // 14-byte own-start stub at text offset 0.
+    // 23-byte own-start stub at text offset 0.
+    // Round-3 (argc/argv): the SysV crt0 process-entry contract — the kernel
+    // enters at _start with rsp = [argc, argv[0..argc-1], NULL, envp..., NULL].
+    // main is the emitted C `int main(int argc, char** argv)` (runtime_core_emit
+    // ~:9871) which reads argc/argv (SysV: rdi=argc, rsi=argv) to init the
+    // _hexa_argc/_hexa_argv globals. Round-1/2 called main with GARBAGE rdi/rsi
+    // (never unpacked the stack) → main malloc'd sizeof(char*)*garbage-argc and
+    // dereferenced a garbage argv → execve-immediate SIGSEGV (si_addr=NULL).
+    // Fix: unpack argc/argv from rsp into rdi/rsi before `call main` (9 bytes),
+    // no reloc (stack→register). All obj symbol/reloc offsets shift by the new
+    // len(stub)=23 automatically (base = len(text_bytes), read below).
     let mut text_bytes: [Int] = []
+    text_bytes.push(0x48); text_bytes.push(0x8B); text_bytes.push(0x3C)
+    text_bytes.push(0x24)                                 // mov rdi, [rsp]      (argc)
+    text_bytes.push(0x48); text_bytes.push(0x8D); text_bytes.push(0x74)
+    text_bytes.push(0x24); text_bytes.push(0x08)          // lea rsi, [rsp+8]    (argv)
     text_bytes.push(0xE8); text_bytes.push(0x00); text_bytes.push(0x00)
-    text_bytes.push(0x00); text_bytes.push(0x00)          // call rel32 (patched)
+    text_bytes.push(0x00); text_bytes.push(0x00)          // call rel32 (patched, stub bytes 10..13)
     text_bytes.push(0x89); text_bytes.push(0xD7)          // mov edi, edx (HexaVal payload)
     text_bytes.push(0xB8); text_bytes.push(0x3C); text_bytes.push(0x00)
     text_bytes.push(0x00); text_bytes.push(0x00)          // mov eax, 60 (__NR_exit)
     text_bytes.push(0x0F); text_bytes.push(0x05)          // syscall
-    // len(text_bytes) is now 14 — the +14 shift applied to every obj below.
+    // len(text_bytes) is now 23 — the +23 shift applied to every obj below.
 
     // Concatenated data blob (.rodata ++ .data per obj) for the RW segment.
     let mut data_bytes: [Int] = []
@@ -1578,6 +1598,8 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     let mut def_names:   [string] = []
     let mut def_seg:     [Int]    = []
     let mut def_off:     [Int]    = []
+    let mut def_bind:    [Int]    = []   // H2: STB_LOCAL(0)/STB_GLOBAL(1) per def
+    let mut def_obj:     [Int]    = []   // H2: owning-obj index per def (LOCAL scoping)
 
     let mut obj_bases:       [Int] = []   // .text base per obj
     let mut obj_rodata_base: [Int] = []   // .rodata start in data_bytes per obj
@@ -1616,6 +1638,8 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                 def_names.push(name)
                 def_seg.push(0)
                 def_off.push(base + s.value)
+                def_bind.push(s.bind)
+                def_obj.push(oi)
                 if main_off < 0 && name == main_name {
                     main_off = base + s.value
                 }
@@ -1629,6 +1653,8 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                 def_names.push(name)
                 def_seg.push(2)
                 def_off.push((total_bss - obj.bss_size) + s.value)
+                def_bind.push(s.bind)
+                def_obj.push(oi)
             } else if s.section != 0 {
                 // Data def. section==4 (data_sec when .rodata present) -> .data
                 // pool; otherwise (section==3) -> .rodata pool. When the obj has
@@ -1641,6 +1667,8 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                 } else {
                     def_off.push(ro_base + s.value)
                 }
+                def_bind.push(s.bind)
+                def_obj.push(oi)
             }
             di = di + 1
         }
@@ -1656,12 +1684,13 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         return 3
     }
 
-    // Patch the `call main` rel32 (stub bytes 1..4). Next-insn addr = 5.
-    let call_rel = main_off - 5
-    text_bytes[1] = call_rel & 0xff
-    text_bytes[2] = (call_rel >> 8) & 0xff
-    text_bytes[3] = (call_rel >> 16) & 0xff
-    text_bytes[4] = (call_rel >> 24) & 0xff
+    // Patch the `call main` rel32 (stub bytes 10..13). The call opcode sits at
+    // stub offset 9 (after the 9-byte argc/argv unpack); next-insn addr = 14.
+    let call_rel = main_off - 14
+    text_bytes[10] = call_rel & 0xff
+    text_bytes[11] = (call_rel >> 8) & 0xff
+    text_bytes[12] = (call_rel >> 16) & 0xff
+    text_bytes[13] = (call_rel >> 24) & 0xff
 
     // ── GOT COLLECT (R_X86_64_GOTPCREL, type 9) — one slot per DISTINCT target ──
     // #4783 self-emits `mov reg,[rip+sym@GOTPCREL]` (REX.W 8B /r RIP disp32=0,
@@ -1700,6 +1729,95 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         }
         gci = gci + 1
     }
+
+    // ── (A) DYN-UND CENSUS — axis-③ Road A rung-1 (GLOB_DAT-only + 6B stub) ──
+    // Every reloc target NOT in def_names (no defining obj carries it) is an
+    // undefined libc symbol -> dynamic link. Only kinds 2 (PC32) / 4 (PLT32,
+    // the `call libc` sites) and 9 (GOTPCREL, extern-data address loads like
+    // environ/stdout) participate: kind 2/4 need a text stub, kind 9 need only a
+    // GOT slot. kind 1 (R_X86_64_64) UND is deliberately NOT collected -> it
+    // still falls to the H1 unresolved hard-error (a text-site R_X86_64_64 would
+    // demand DT_TEXTREL — not crossed this rung). dyn_stub[i]=1 marks a symbol
+    // with a code call-site. Static link (n_dyn==0): loop finds no UND, appends
+    // nothing, and EVERY new dyn path below is skipped -> byte-identical output.
+    let mut dyn_names: [string] = []
+    let mut dyn_stub:  [Int]    = []
+    let mut dcen = 0
+    while dcen < len(objs) {
+        let dco = objs[dcen]
+        let mut dcr = 0
+        while dcr < len(dco.relocs) {
+            let dr = dco.relocs[dcr]
+            if dr.kind == 2 || dr.kind == 4 || dr.kind == 9 {
+                let dsym = dco.symbols[dr.sym_idx]
+                let mut dnm = ""
+                let mut dk = 0
+                while true {
+                    let db = dco.strtab[dsym.name_offset + dk] & 0xff
+                    if db == 0 { break }
+                    dnm = dnm + from_char_code(db)
+                    dk = dk + 1
+                }
+                let mut ddef = false
+                let mut ddi = 0
+                while ddi < len(def_names) { if def_names[ddi] == dnm { ddef = true; break } ddi = ddi + 1 }
+                if !ddef && len(dnm) > 0 {
+                    let mut dfi = -1
+                    let mut dfj = 0
+                    while dfj < len(dyn_names) { if dyn_names[dfj] == dnm { dfi = dfj; break } dfj = dfj + 1 }
+                    if dfi < 0 {
+                        dyn_names.push(dnm)
+                        if dr.kind == 9 { dyn_stub.push(0) } else { dyn_stub.push(1) }
+                    } else if dr.kind != 9 {
+                        dyn_stub[dfi] = 1
+                    }
+                }
+            }
+            dcr = dcr + 1
+        }
+        dcen = dcen + 1
+    }
+    let n_dyn = len(dyn_names)
+
+    // ── (C) GOT EXTENSION — one shared 8-byte GOT slot per dyn symbol (both the
+    // stub's `jmp [rip+slot]` target AND the extern-data GOTPCREL load land on
+    // it). kind-9 UND names are already in got_syms (GOT COLLECT is def-agnostic);
+    // add the kind-2/4 stub names. Static path adds nothing -> n_got unchanged. ──
+    let mut dgi = 0
+    while dgi < n_dyn {
+        let dgn = dyn_names[dgi]
+        let mut dgseen = false
+        let mut dgs = 0
+        while dgs < len(got_syms) { if got_syms[dgs] == dgn { dgseen = true; break } dgs = dgs + 1 }
+        if !dgseen { got_syms.push(dgn) }
+        dgi = dgi + 1
+    }
+
+    // ── (B) STUB SYNTHESIS — for each call-target dyn symbol push a 6-byte
+    // `ff 25 disp32` (jmp qword ptr [rip+disp32]) at the TEXT tail and register
+    // it as a normal GLOBAL text def (def_obj=-1 = linker-synthetic). The generic
+    // PC-rel reloc loop then resolves every `call sym` site straight onto the
+    // stub with ZERO changes to the call-site bytes. disp32 stays 0 here; the
+    // STUB-FILL pass writes slot_vaddr-(stub_vaddr+6) once the layout is known. ──
+    let mut stub_names: [string] = []
+    let mut stub_offs:  [Int]    = []
+    let mut dsy = 0
+    while dsy < n_dyn {
+        if dyn_stub[dsy] == 1 {
+            let soff = len(text_bytes)
+            text_bytes.push(0xff); text_bytes.push(0x25)
+            text_bytes.push(0x00); text_bytes.push(0x00); text_bytes.push(0x00); text_bytes.push(0x00)
+            def_names.push(dyn_names[dsy])
+            def_seg.push(0)
+            def_off.push(soff)
+            def_bind.push(ELF_STB_GLOBAL)
+            def_obj.push(-1)
+            stub_names.push(dyn_names[dsy])
+            stub_offs.push(soff)
+        }
+        dsy = dsy + 1
+    }
+
     let n_got = len(got_syms)
 
     // Layout constants — MUST match serialize_elf_exec_x86_64{,_2seg}.
@@ -1709,7 +1827,9 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     // n_got>0 forces the 2-seg path so a GOT-only program still gets a RW page.
     let vaddr_base = 0x400000
     let has_data   = (len(data_bytes) > 0) || (total_bss > 0) || (n_got > 0)
-    let phnum      = if has_data { 2 } else { 1 }
+    // (E) dyn path = 4 phdrs (PT_INTERP · PT_LOAD R-X · PT_LOAD RW · PT_DYNAMIC)
+    // -> code_off=288. Static paths unchanged (2 or 1) -> byteeq preserved.
+    let phnum      = if n_dyn > 0 { 4 } else if has_data { 2 } else { 1 }
     let code_off   = 64 + 56 * phnum
     let text_end_file = code_off + len(text_bytes)
     // Page-align the data segment's file offset (=> p_vaddr === p_offset mod
@@ -1731,9 +1851,123 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     let mut gres = 0
     while gres < n_got * 8 { data_bytes.push(0); gres = gres + 1 }
 
+    // ── DYN DATA STRUCTURES — ride the data blob tail after the GOT (all
+    // ld.so-consumed via program headers + DT_* only, so e_shnum stays 0). Order:
+    //   [.dynstr][pad8][.dynsym][pad8][DT_HASH][pad8][.rela.dyn][pad8][_DYNAMIC][interp]
+    // Every vaddr = data_vaddr_base + blob_off (data_vaddr_base already reflects
+    // the phnum=4 code_off=288). Skipped entirely when n_dyn==0 (byteeq). ──
+    let mut interp_off = 0
+    let mut interp_len = 0
+    let mut dyn_off    = 0
+    let mut dyn_sz     = 0
+    if n_dyn > 0 {
+        // .dynstr: leading '\0', each dyn name, then "libc.so.6" (DT_NEEDED).
+        let dynstr_blob_off = len(data_bytes)
+        data_bytes.push(0)
+        let mut dynstr_name_off: [Int] = []
+        let mut ds = 0
+        while ds < n_dyn {
+            dynstr_name_off.push(len(data_bytes) - dynstr_blob_off)
+            let nm = dyn_names[ds]
+            let mut ci = 0
+            while ci < len(nm) { data_bytes.push(char_code(nm, ci) & 0xff); ci = ci + 1 }
+            data_bytes.push(0)
+            ds = ds + 1
+        }
+        let needed_off = len(data_bytes) - dynstr_blob_off
+        let libc = "libc.so.6"
+        let mut li = 0
+        while li < len(libc) { data_bytes.push(char_code(libc, li) & 0xff); li = li + 1 }
+        data_bytes.push(0)
+        let dynstr_size  = len(data_bytes) - dynstr_blob_off
+        let dynstr_vaddr = data_vaddr_base + dynstr_blob_off
+
+        // .dynsym: 24B/entry. entry 0 = null; entry i+1 = UND
+        // {st_info=0x10(GLOBAL|NOTYPE), st_shndx=0(UND), value/size=0}.
+        let mut pd1 = (8 - (len(data_bytes) & 7)) & 7
+        while pd1 > 0 { data_bytes.push(0); pd1 = pd1 - 1 }
+        let dynsym_blob_off = len(data_bytes)
+        let dynsym_vaddr    = data_vaddr_base + dynsym_blob_off
+        let mut z0 = 0
+        while z0 < 24 { data_bytes.push(0); z0 = z0 + 1 }
+        let mut sy = 0
+        while sy < n_dyn {
+            _ew_u32(data_bytes, dynstr_name_off[sy])   // st_name
+            data_bytes.push(0x10)                       // st_info = GLOBAL|NOTYPE
+            data_bytes.push(0)                          // st_other
+            _ew_u16(data_bytes, 0)                      // st_shndx = SHN_UNDEF
+            _ew_u64(data_bytes, 0)                      // st_value
+            _ew_u64(data_bytes, 0)                      // st_size
+            sy = sy + 1
+        }
+        let n_dynsym = n_dyn + 1
+
+        // DT_HASH (SysV minimal): nbucket=1, all symbols on the single chain
+        // 1->2->...->n->STN_UNDEF(0). ld.so walks the whole chain (name-compare),
+        // so no hash function is needed. GNU_HASH omitted.
+        let mut pd2 = (8 - (len(data_bytes) & 7)) & 7
+        while pd2 > 0 { data_bytes.push(0); pd2 = pd2 - 1 }
+        let hash_blob_off = len(data_bytes)
+        let hash_vaddr    = data_vaddr_base + hash_blob_off
+        _ew_u32(data_bytes, 1)                          // nbucket
+        _ew_u32(data_bytes, n_dynsym)                   // nchain
+        if n_dynsym > 1 { _ew_u32(data_bytes, 1) } else { _ew_u32(data_bytes, 0) }   // bucket[0]
+        let mut ch = 0
+        while ch < n_dynsym {
+            if ch == n_dynsym - 1 { _ew_u32(data_bytes, 0) } else { _ew_u32(data_bytes, ch + 1) }
+            ch = ch + 1
+        }
+
+        // .rela.dyn: one R_X86_64_GLOB_DAT (type 6) per dyn symbol pointing ld.so
+        // at the symbol's GOT slot. r_info = (dynsym_idx<<32)|6 (multiplication
+        // to dodge a 2^32 literal at parse — same idiom as _er_s64le).
+        let mut pd3 = (8 - (len(data_bytes) & 7)) & 7
+        while pd3 > 0 { data_bytes.push(0); pd3 = pd3 - 1 }
+        let rela_blob_off = len(data_bytes)
+        let rela_vaddr    = data_vaddr_base + rela_blob_off
+        let mut rr = 0
+        while rr < n_dyn {
+            let mut rgs = -1
+            let mut rgx = 0
+            while rgx < n_got { if got_syms[rgx] == dyn_names[rr] { rgs = rgx; break } rgx = rgx + 1 }
+            let slot_vaddr = data_vaddr_base + got_blob_off + rgs * 8
+            _ew_u64(data_bytes, slot_vaddr)                       // r_offset
+            _ew_u64(data_bytes, (rr + 1) * 4294967296 + 6)       // r_info = (idx<<32)|GLOB_DAT
+            _ew_u64(data_bytes, 0)                                // r_addend
+            rr = rr + 1
+        }
+        let rela_size = n_dyn * 24
+
+        // _DYNAMIC: 16B/entry (d_tag, d_val|d_ptr). glibc>=2.34 folds
+        // dlopen/dlsym into libc.so.6 -> a single DT_NEEDED suffices.
+        let mut pd4 = (8 - (len(data_bytes) & 7)) & 7
+        while pd4 > 0 { data_bytes.push(0); pd4 = pd4 - 1 }
+        dyn_off = len(data_bytes)
+        _ew_u64(data_bytes, 1);  _ew_u64(data_bytes, needed_off)     // DT_NEEDED  = "libc.so.6"
+        _ew_u64(data_bytes, 4);  _ew_u64(data_bytes, hash_vaddr)     // DT_HASH
+        _ew_u64(data_bytes, 5);  _ew_u64(data_bytes, dynstr_vaddr)   // DT_STRTAB
+        _ew_u64(data_bytes, 6);  _ew_u64(data_bytes, dynsym_vaddr)   // DT_SYMTAB
+        _ew_u64(data_bytes, 10); _ew_u64(data_bytes, dynstr_size)    // DT_STRSZ
+        _ew_u64(data_bytes, 11); _ew_u64(data_bytes, 24)             // DT_SYMENT
+        _ew_u64(data_bytes, 7);  _ew_u64(data_bytes, rela_vaddr)     // DT_RELA
+        _ew_u64(data_bytes, 8);  _ew_u64(data_bytes, rela_size)      // DT_RELASZ
+        _ew_u64(data_bytes, 9);  _ew_u64(data_bytes, 24)             // DT_RELAENT
+        _ew_u64(data_bytes, 0);  _ew_u64(data_bytes, 0)              // DT_NULL
+        dyn_sz = len(data_bytes) - dyn_off
+
+        // interp string — kernel reads it by file offset from PT_INTERP.
+        interp_off = len(data_bytes)
+        let interp = "/lib64/ld-linux-x86-64.so.2"
+        let mut ip = 0
+        while ip < len(interp) { data_bytes.push(char_code(interp, ip) & 0xff); ip = ip + 1 }
+        data_bytes.push(0)
+        interp_len = len(interp) + 1
+    }
+
     // Resolve relocs in TRUE vaddr space. text->text reduces to the round-1
     // text-offset delta (vaddr_base+code_off cancels) => no-data path is
     // byte-identical; text->data uses the data segment's distinct vaddr.
+    let mut unresolved = 0
     let mut ro = 0
     while ro < len(objs) {
         let obj = objs[ro]
@@ -1750,13 +1984,73 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                 name = name + from_char_code(b)
                 k = k + 1
             }
+            // ── H2 fix: symbol-scoped resolution ────────────────────────────
+            // Flat first-match let one obj's STB_LOCAL def (a file-local static /
+            // `g<id>` module-global / `.LCstrN`) satisfy ANOTHER obj's same-named
+            // reloc — a wrong-def miscompile (#3899 flatten-globals alias in the
+            // linker). Scope by the def's bind: STB_GLOBAL is globally visible +
+            // PREFERRED (break on first); STB_LOCAL is visible ONLY to relocs in
+            // its owning obj (def_obj == ro), a later GLOBAL homonym wins. An
+            // all-GLOBAL link (the normal path) takes the first GLOBAL match and
+            // breaks — byte-identical index to the old first-match (byteeq-safe).
             let mut found_idx = -1
             let mut sk = 0
             while sk < len(def_names) {
-                if def_names[sk] == name { found_idx = sk; break }
+                if def_names[sk] == name {
+                    if def_bind[sk] == ELF_STB_GLOBAL {
+                        found_idx = sk
+                        break
+                    } else if def_obj[sk] == ro {
+                        if found_idx < 0 { found_idx = sk }
+                    }
+                }
                 sk = sk + 1
             }
-            if found_idx >= 0 {
+            if r.kind == 9 {
+                // ── (D) GOTPCREL hoist ── The disp32 targets the symbol's GOT
+                // SLOT, never the symbol's own vaddr — so the resolved (`g<id>`
+                // module-global) and the dyn-UND (environ/stdout, filled by
+                // ld.so via GLOB_DAT) cases are byte-identically the same math.
+                // Hoisted ABOVE the def-lookup so an UND GOTPCREL no longer sinks
+                // into the H1 unresolved-error `else`. Static path (n_dyn==0, no
+                // UND GOTPCREL): every kind==9 is resolved and the gdelta below is
+                // the SAME value the pre-hoist `found_idx>=0` branch wrote ->
+                // byteeq-neutral (n_got / got_syms / got_blob_off all unchanged).
+                let mut gslot = -1
+                let mut gpx = 0
+                while gpx < n_got { if got_syms[gpx] == name { gslot = gpx; break } gpx = gpx + 1 }
+                if gslot < 0 {
+                    eprintln("hexa_ld(elf,ownstart): GOTPCREL '" + name + "' has no GOT slot (census/collect gap)")
+                    unresolved = unresolved + 1
+                } else {
+                    let slot_vaddr = data_vaddr_base + got_blob_off + gslot * 8
+                    if r.site_seg == 3 || r.site_seg == 4 {
+                        let blob_off = if r.site_seg == 4 { obj_data_base[ro] + r.offset } else { obj_rodata_base[ro] + r.offset }
+                        let p_vaddr  = data_vaddr_base + blob_off
+                        let gdelta   = slot_vaddr + r.addend - p_vaddr
+                        if gdelta < -2147483648 || gdelta > 2147483647 {
+                            eprintln("hexa_ld(elf,ownstart): GOTPCREL disp32 overflow for '" + name + "'")
+                            return 3
+                        }
+                        data_bytes[blob_off + 0] = gdelta & 0xff
+                        data_bytes[blob_off + 1] = (gdelta >> 8) & 0xff
+                        data_bytes[blob_off + 2] = (gdelta >> 16) & 0xff
+                        data_bytes[blob_off + 3] = (gdelta >> 24) & 0xff
+                    } else {
+                        let patch_off = base + r.offset
+                        let p_vaddr   = vaddr_base + code_off + patch_off
+                        let gdelta    = slot_vaddr + r.addend - p_vaddr
+                        if gdelta < -2147483648 || gdelta > 2147483647 {
+                            eprintln("hexa_ld(elf,ownstart): GOTPCREL disp32 overflow for '" + name + "'")
+                            return 3
+                        }
+                        text_bytes[patch_off + 0] = gdelta & 0xff
+                        text_bytes[patch_off + 1] = (gdelta >> 8) & 0xff
+                        text_bytes[patch_off + 2] = (gdelta >> 16) & 0xff
+                        text_bytes[patch_off + 3] = (gdelta >> 24) & 0xff
+                    }
+                }
+            } else if found_idx >= 0 {
                 // Target symbol's virtual address (text seg / data seg / bss).
                 let mut s_vaddr = 0
                 if def_seg[found_idx] == 0 {
@@ -1782,24 +2076,9 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                         data_bytes[blob_off + 5] = (av >> 40) & 0xff
                         data_bytes[blob_off + 6] = (av >> 48) & 0xff
                         data_bytes[blob_off + 7] = (av >> 56) & 0xff
-                    } else if r.kind == 9 {
-                        // R_X86_64_GOTPCREL (data-resident site): disp32 -> GOT
-                        // slot. G+GOT+A-P = slot_vaddr + addend - P. tcc:
-                        // val = got->sh_addr + got_offset + r_addend - addr.
-                        let mut gslot = -1
-                        let mut gpx = 0
-                        while gpx < n_got { if got_syms[gpx] == name { gslot = gpx; break } gpx = gpx + 1 }
-                        let slot_vaddr = data_vaddr_base + got_blob_off + gslot * 8
-                        let gdelta = slot_vaddr + r.addend - p_vaddr
-                        if gdelta < -2147483648 || gdelta > 2147483647 {
-                            eprintln("hexa_ld(elf,ownstart): GOTPCREL disp32 overflow for '" + name + "'")
-                            return 3
-                        }
-                        data_bytes[blob_off + 0] = gdelta & 0xff
-                        data_bytes[blob_off + 1] = (gdelta >> 8) & 0xff
-                        data_bytes[blob_off + 2] = (gdelta >> 16) & 0xff
-                        data_bytes[blob_off + 3] = (gdelta >> 24) & 0xff
                     } else {
+                        // kind==9 (GOTPCREL) is handled by the hoisted (D) branch
+                        // above; here only kind 2/4 PC-rel data-site refs remain.
                         let delta = s_vaddr + r.addend - p_vaddr
                         data_bytes[blob_off + 0] = delta & 0xff
                         data_bytes[blob_off + 1] = (delta >> 8) & 0xff
@@ -1820,26 +2099,10 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                         text_bytes[patch_off + 5] = (av >> 40) & 0xff
                         text_bytes[patch_off + 6] = (av >> 48) & 0xff
                         text_bytes[patch_off + 7] = (av >> 56) & 0xff
-                    } else if r.kind == 9 {
-                        // R_X86_64_GOTPCREL (text-resident site, #4783 FORM-1
-                        // `mov reg,[rip+sym@GOTPCREL]`): disp32 -> GOT slot.
-                        // G+GOT+A-P = slot_vaddr + addend(-4) - P. Reference:
-                        // SysV AMD64 psABI §B.2; tcc x86_64-link.c relocate_section
-                        // case R_X86_64_GOTPCREL: got->sh_addr+got_offset+A-addr.
-                        let mut gslot = -1
-                        let mut gpx = 0
-                        while gpx < n_got { if got_syms[gpx] == name { gslot = gpx; break } gpx = gpx + 1 }
-                        let slot_vaddr = data_vaddr_base + got_blob_off + gslot * 8
-                        let gdelta = slot_vaddr + r.addend - p_vaddr
-                        if gdelta < -2147483648 || gdelta > 2147483647 {
-                            eprintln("hexa_ld(elf,ownstart): GOTPCREL disp32 overflow for '" + name + "'")
-                            return 3
-                        }
-                        text_bytes[patch_off + 0] = gdelta & 0xff
-                        text_bytes[patch_off + 1] = (gdelta >> 8) & 0xff
-                        text_bytes[patch_off + 2] = (gdelta >> 16) & 0xff
-                        text_bytes[patch_off + 3] = (gdelta >> 24) & 0xff
                     } else {
+                        // kind==9 (GOTPCREL) is handled by the hoisted (D) branch
+                        // above; here only kind 2/4 PC-rel text-site refs (CALL
+                        // imm32 / lea disp32, incl. the synthesized 6B stubs) remain.
                         let delta = s_vaddr + r.addend - p_vaddr
                         text_bytes[patch_off + 0] = delta & 0xff
                         text_bytes[patch_off + 1] = (delta >> 8) & 0xff
@@ -1847,10 +2110,22 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                         text_bytes[patch_off + 3] = (delta >> 24) & 0xff
                     }
                 }
+            } else {
+                // H1 fix: unresolved reloc — no defining obj carries `name`. A
+                // silent skip left the site at placeholder 0 -> si_addr=NULL
+                // SIGSEGV at run (Fable H1). Never silent-skip (release-integrity):
+                // log obj/sym/kind and count; the fn refuses to emit below.
+                eprintln("hexa_ld(elf,ownstart): unresolved reloc — obj[" + to_string(ro) + "] sym '" + name + "' kind=" + to_string(r.kind) + " (no defining obj; placeholder 0 -> si_addr=NULL SIGSEGV)")
+                unresolved = unresolved + 1
             }
             ri = ri + 1
         }
         ro = ro + 1
+    }
+
+    if unresolved > 0 {
+        eprintln("hexa_ld(elf,ownstart): " + to_string(unresolved) + " unresolved reloc(s) — refusing to emit (silent-skip leaves placeholder 0 -> si_addr=NULL SIGSEGV; release-integrity)")
+        return 3
     }
 
     // ── GOT FILL — write each 8-byte slot = the symbol's FINAL resolved vaddr
@@ -1861,41 +2136,80 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     let mut gfi = 0
     while gfi < n_got {
         let gname = got_syms[gfi]
+        // H2: prefer a GLOBAL def for the shared GOT slot; fall back to a LOCAL
+        // def (own-emit `g<id>` module-global GOTPCREL targets are STB_LOCAL, so
+        // a GLOBAL-only filter would break them). Byte-neutral for all-GLOBAL.
+        // The GOT is de-duped purely by NAME (got_syms), so two objs' same-named
+        // STB_LOCAL `g<id>` still collapse to ONE slot — a latent cross-obj GOT
+        // collision that only per-(obj,name) slots would close (named next round).
         let mut gfound = -1
         let mut gfk = 0
-        while gfk < len(def_names) { if def_names[gfk] == gname { gfound = gfk; break } gfk = gfk + 1 }
+        while gfk < len(def_names) {
+            if def_names[gfk] == gname {
+                if def_bind[gfk] == ELF_STB_GLOBAL { gfound = gfk; break }
+                if gfound < 0 { gfound = gfk }
+            }
+            gfk = gfk + 1
+        }
         if gfound < 0 {
-            // A static own-link cannot fabricate an address for an undefined
-            // GOTPCREL target (extern/libc symbols like environ/stdout need
-            // dynamic linking). Error rather than emit a slot pointing at 0.
-            // NEXT-ROUND WALL: dyn-link GOT (R_X86_64_GLOB_DAT via ld.so) or
-            // resolve from runtime.a. Matches tcc "undefined symbol".
-            eprintln("hexa_ld(elf,ownstart): undefined GOTPCREL symbol '" + gname + "' (static own-link; extern/libc GOT symbols are the next-round dynamic-link wall)")
-            return 3
-        }
-        let mut gs_vaddr = 0
-        if def_seg[gfound] == 0 {
-            gs_vaddr = vaddr_base + code_off + def_off[gfound]
-        } else if def_seg[gfound] == 2 {
-            gs_vaddr = data_vaddr_base + len(data_bytes) + def_off[gfound]
+            // (C) A dynamic UND symbol -> LEAVE the slot 0: ld.so fills it via the
+            // R_X86_64_GLOB_DAT reloc emitted in .rela.dyn (eager, before entry).
+            // Only a genuinely undefined non-dyn symbol is a hard error (a static
+            // own-link cannot fabricate an address). Static path: dyn_names empty
+            // -> gdyn always false -> identical error behavior (byteeq).
+            let mut gdyn = false
+            let mut gdi = 0
+            while gdi < n_dyn { if dyn_names[gdi] == gname { gdyn = true; break } gdi = gdi + 1 }
+            if !gdyn {
+                eprintln("hexa_ld(elf,ownstart): undefined GOTPCREL symbol '" + gname + "' (static own-link; extern/libc GOT symbols are the dynamic-link path — pass through census)")
+                return 3
+            }
         } else {
-            gs_vaddr = data_vaddr_base + def_off[gfound]
+            let mut gs_vaddr = 0
+            if def_seg[gfound] == 0 {
+                gs_vaddr = vaddr_base + code_off + def_off[gfound]
+            } else if def_seg[gfound] == 2 {
+                gs_vaddr = data_vaddr_base + len(data_bytes) + def_off[gfound]
+            } else {
+                gs_vaddr = data_vaddr_base + def_off[gfound]
+            }
+            let gslot = got_blob_off + gfi * 8
+            data_bytes[gslot + 0] = gs_vaddr & 0xff
+            data_bytes[gslot + 1] = (gs_vaddr >> 8) & 0xff
+            data_bytes[gslot + 2] = (gs_vaddr >> 16) & 0xff
+            data_bytes[gslot + 3] = (gs_vaddr >> 24) & 0xff
+            data_bytes[gslot + 4] = (gs_vaddr >> 32) & 0xff
+            data_bytes[gslot + 5] = (gs_vaddr >> 40) & 0xff
+            data_bytes[gslot + 6] = (gs_vaddr >> 48) & 0xff
+            data_bytes[gslot + 7] = (gs_vaddr >> 56) & 0xff
         }
-        let gslot = got_blob_off + gfi * 8
-        data_bytes[gslot + 0] = gs_vaddr & 0xff
-        data_bytes[gslot + 1] = (gs_vaddr >> 8) & 0xff
-        data_bytes[gslot + 2] = (gs_vaddr >> 16) & 0xff
-        data_bytes[gslot + 3] = (gs_vaddr >> 24) & 0xff
-        data_bytes[gslot + 4] = (gs_vaddr >> 32) & 0xff
-        data_bytes[gslot + 5] = (gs_vaddr >> 40) & 0xff
-        data_bytes[gslot + 6] = (gs_vaddr >> 48) & 0xff
-        data_bytes[gslot + 7] = (gs_vaddr >> 56) & 0xff
         gfi = gfi + 1
     }
 
+    // ── (B) STUB-FILL — patch each 6-byte `ff 25 disp32` stub's disp32 to point
+    // (RIP-relative) at its GOT slot: disp = slot_vaddr - (stub_vaddr + 6). The
+    // 0x400000-based text<->data distance is far inside ±2GB, so no overflow.
+    let mut sfi = 0
+    while sfi < len(stub_names) {
+        let mut sgs = -1
+        let mut sgx = 0
+        while sgx < n_got { if got_syms[sgx] == stub_names[sfi] { sgs = sgx; break } sgx = sgx + 1 }
+        let sslot_vaddr = data_vaddr_base + got_blob_off + sgs * 8
+        let s_next      = vaddr_base + code_off + stub_offs[sfi] + 6
+        let sdisp       = sslot_vaddr - s_next
+        text_bytes[stub_offs[sfi] + 2] = sdisp & 0xff
+        text_bytes[stub_offs[sfi] + 3] = (sdisp >> 8) & 0xff
+        text_bytes[stub_offs[sfi] + 4] = (sdisp >> 16) & 0xff
+        text_bytes[stub_offs[sfi] + 5] = (sdisp >> 24) & 0xff
+        sfi = sfi + 1
+    }
+
     // Serialize. No data -> single-PT_LOAD round-1 serializer (byte-identical);
-    // data present -> two-segment serializer (R-X text + RW rodata/data).
-    if has_data {
+    // data present -> two-segment serializer (R-X text + RW rodata/data);
+    // dyn present -> 4-phdr dynamic serializer (PT_INTERP + PT_DYNAMIC added).
+    if n_dyn > 0 {
+        write_bytes(out_path, serialize_elf_exec_x86_64_dyn(text_bytes, data_bytes, total_bss, interp_off, interp_len, dyn_off, dyn_sz))
+    } else if has_data {
         write_bytes(out_path, serialize_elf_exec_x86_64_2seg(text_bytes, data_bytes, total_bss))
     } else {
         write_bytes(out_path, serialize_elf_exec_x86_64(text_bytes))
@@ -2353,6 +2667,108 @@ pub fn serialize_elf_exec_x86_64_2seg(text: [Int], data: [Int], bss_size: Int) -
     _ew_zero(out, data_file_off - text_end_file)
 
     // ── .rodata/.data at file offset data_file_off ──
+    let mut d = 0
+    while d < data_size { out.push(data[d] & 0xff); d = d + 1 }
+
+    return out
+}
+
+// (E) serialize_elf_exec_x86_64_dyn — axis-③ Road A rung-1 dynamic-link
+// ET_EXEC serializer. A byte-for-byte clone of `_2seg` with TWO extra program
+// headers (phnum=4 -> code_off=288): PT_INTERP (kernel loads ld.so) + PT_DYNAMIC
+// (ld.so reads DT_*). phdr order = PT_INTERP · PT_LOAD(R-X) · PT_LOAD(RW) ·
+// PT_DYNAMIC. `_2seg` is left untouched, so the static two-segment path stays
+// byte-identical. e_type = ET_EXEC (a dynamically-linked -no-pie executable at
+// the fixed 0x400000 base — gcc `-no-pie` form; e_shnum=0, ld.so uses phdrs+DT).
+// interp_off/dyn_off are blob offsets inside `data`; interp_len/dyn_sz are byte
+// sizes. All congruent with the linker's data_vaddr_base (same phnum=4).
+pub fn serialize_elf_exec_x86_64_dyn(text: [Int], data: [Int], bss_size: Int, interp_off: Int, interp_len: Int, dyn_off: Int, dyn_sz: Int) -> [Int] {
+    let out: [Int] = []
+    let text_size = len(text)
+    let data_size = len(data)
+
+    let elf_header_size = 64
+    let phdr_size = 56
+    let phnum = 4
+    let code_off = elf_header_size + phdr_size * phnum     // 288
+    let vaddr_base = 0x400000
+    let entry_vaddr = vaddr_base + code_off
+    let text_end_file = code_off + text_size
+    let data_file_off = text_end_file + ((0x1000 - (text_end_file & 0xfff)) & 0xfff)
+    let data_vaddr = vaddr_base + data_file_off
+    let text_filesz = code_off + text_size
+    let data_memsz  = data_size + bss_size
+
+    // ── ELF header ── (ET_EXEC, dynamically-linked -no-pie form)
+    out.push(ELF_EI_MAG0); out.push(ELF_EI_MAG1)
+    out.push(ELF_EI_MAG2); out.push(ELF_EI_MAG3)
+    out.push(ELF_ELFCLASS64)
+    out.push(ELF_ELFDATA2LSB)
+    out.push(ELF_EV_CURRENT)
+    out.push(ELF_ELFOSABI_NONE)
+    _ew_zero(out, 8)
+    _ew_u16(out, ELF_ET_EXEC)
+    _ew_u16(out, ELF_EM_X86_64)
+    _ew_u32(out, ELF_EV_CURRENT)
+    _ew_u64(out, entry_vaddr)
+    _ew_u64(out, elf_header_size)           // e_phoff
+    _ew_u64(out, 0)                         // e_shoff
+    _ew_u32(out, 0)                         // e_flags
+    _ew_u16(out, elf_header_size)
+    _ew_u16(out, phdr_size)
+    _ew_u16(out, phnum)
+    _ew_u16(out, 0)                         // e_shentsize
+    _ew_u16(out, 0)                         // e_shnum
+    _ew_u16(out, 0)                         // e_shstrndx
+
+    // ── PT_INTERP — kernel maps ld.so and jumps to it first ──
+    _ew_u32(out, 3)                         // p_type = PT_INTERP
+    _ew_u32(out, 4)                         // p_flags = PF_R
+    _ew_u64(out, data_file_off + interp_off) // p_offset
+    _ew_u64(out, data_vaddr + interp_off)   // p_vaddr
+    _ew_u64(out, data_vaddr + interp_off)   // p_paddr
+    _ew_u64(out, interp_len)                // p_filesz
+    _ew_u64(out, interp_len)                // p_memsz
+    _ew_u64(out, 1)                         // p_align
+
+    // ── PT_LOAD[0] — R-X text ──
+    _ew_u32(out, 1)                         // p_type = PT_LOAD
+    _ew_u32(out, 5)                         // p_flags = PF_R | PF_X
+    _ew_u64(out, 0)                         // p_offset
+    _ew_u64(out, vaddr_base)                // p_vaddr
+    _ew_u64(out, vaddr_base)                // p_paddr
+    _ew_u64(out, text_filesz)               // p_filesz
+    _ew_u64(out, text_filesz)               // p_memsz
+    _ew_u64(out, 0x1000)                    // p_align
+
+    // ── PT_LOAD[1] — RW rodata/data/GOT/dyn (+ .bss in memsz) ──
+    _ew_u32(out, 1)                         // p_type = PT_LOAD
+    _ew_u32(out, 6)                         // p_flags = PF_R | PF_W
+    _ew_u64(out, data_file_off)             // p_offset
+    _ew_u64(out, data_vaddr)                // p_vaddr
+    _ew_u64(out, data_vaddr)                // p_paddr
+    _ew_u64(out, data_size)                 // p_filesz
+    _ew_u64(out, data_memsz)                // p_memsz  (includes .bss)
+    _ew_u64(out, 0x1000)                    // p_align
+
+    // ── PT_DYNAMIC — ld.so reads the DT_* array ──
+    _ew_u32(out, 2)                         // p_type = PT_DYNAMIC
+    _ew_u32(out, 6)                         // p_flags = PF_R | PF_W
+    _ew_u64(out, data_file_off + dyn_off)   // p_offset
+    _ew_u64(out, data_vaddr + dyn_off)      // p_vaddr
+    _ew_u64(out, data_vaddr + dyn_off)      // p_paddr
+    _ew_u64(out, dyn_sz)                    // p_filesz
+    _ew_u64(out, dyn_sz)                    // p_memsz
+    _ew_u64(out, 8)                         // p_align
+
+    // ── .text at file offset code_off (288) ──
+    let mut i = 0
+    while i < text_size { out.push(text[i] & 0xff); i = i + 1 }
+
+    // ── zero pad from text end up to the page-aligned data file offset ──
+    _ew_zero(out, data_file_off - text_end_file)
+
+    // ── .rodata/.data (+GOT/dynstr/dynsym/hash/rela/_DYNAMIC/interp) ──
     let mut d = 0
     while d < data_size { out.push(data[d] & 0xff); d = d + 1 }
 

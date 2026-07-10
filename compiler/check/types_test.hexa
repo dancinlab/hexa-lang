@@ -2775,6 +2775,43 @@ fn _build_case_i64_max() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (u64-fit) ★ HX3044 i64 u64-container FIT — `let x: i64 = 18446744073709551615`
+// (U64_MAX). i64 is hexa's sole 64-bit container; a value in (i64::MAX, u64::MAX]
+// is a sanctioned bit-pattern → 0 HX3044 (`_types_int_text_fits_u64`).
+fn _build_case_i64_u64max() -> Module {
+    let f = "case_u64fit.hexa"
+    let body = _block([_let_expr("x|i64", _int_expr("18446744073709551615", f, 2, 20), f, 2, 5)], f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (u64-over) ★ HX3044 i64 container OVERFLOW — `let x: i64 = 18446744073709551616`
+// (2^64, one past U64_MAX) → truly overflows the 64-bit container → 1 HX3044 (Error).
+fn _build_case_i64_over_u64() -> Module {
+    let f = "case_u64over.hexa"
+    let body = _block([_let_expr("x|i64", _int_expr("18446744073709551616", f, 2, 20), f, 2, 5)], f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (bitpattern) ★ HX3044 regression pin (catalog-hexa-1) —
+// `fn f() -> int { return 18442240474082181120 }`. hxlcl_log's -INFINITY IEEE-754
+// bit-pattern (0xfff0000000000000, > i64::MAX) at the return-place coercion to the
+// i64 container → 0 HX3044 (the native-seed bake regression this fix resolves).
+fn _build_case_i64_bitpattern_ret() -> Module {
+    let f = "case_bitpat.hexa"
+    let ret = _return_expr(_int_expr("18442240474082181120", f, 2, 12), f, 2, 5)
+    let body = _block([ret], f, 1, 20)
+    let item_f = _fn_item("f", [], _named_type_ref("int"), body, f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // (bg) hz_i32_over — `let x: i32 = 2147483648` : one past i32::MAX → 1 HX3044.
 fn _build_case_i32_over() -> Module {
     let f = "case_bg.hexa"
@@ -4174,6 +4211,37 @@ fn main() {
         ok = false
     } else {
         println("  ok: 0 HX3044 (i64::MAX fits — no accumulator wrap on the boundary)")
+    }
+
+    // (u64-fit) ★ HX3044 i64 u64-container FIT — let x:i64 = U64_MAX(18446744073709551615) → 0 HX3044.
+    let diags_u64fit = _run_case("(u64-fit) static-types — i64 container: let x:i64 = 18446744073709551615 (U64_MAX) → sanctioned bit-pattern → 0 HX3044", _build_case_i64_u64max())
+    let c_u64fit = _count_code(diags_u64fit, "HX3044")
+    if c_u64fit != 0 {
+        println("  FAIL: case (u64-fit) expected 0 HX3044 (U64_MAX fits the i64 container), got " + to_string(c_u64fit) + " (total=" + to_string(len(diags_u64fit)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3044 (U64_MAX = sanctioned u64 bit-pattern in the i64 container)")
+    }
+
+    // (u64-over) ★ HX3044 i64 container OVERFLOW — let x:i64 = 2^64(18446744073709551616) → 1 HX3044 (Error).
+    let diags_u64over = _run_case("(u64-over) static-types — i64 container: let x:i64 = 18446744073709551616 (2^64) → past U64_MAX → 1 HX3044 (Error)", _build_case_i64_over_u64())
+    let c_u64over = _count_code_sev(diags_u64over, "HX3044", "error")
+    if c_u64over != 1 {
+        println("  FAIL: case (u64-over) expected 1 HX3044 error (2^64 overflows the 64-bit container), got err=" + to_string(c_u64over) + " (total=" + to_string(len(diags_u64over)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3044 error (>= 2^64 truly overflows the container)")
+    }
+
+    // (bitpattern) ★ HX3044 regression pin (catalog-hexa-1) — fn f()->int { return 18442240474082181120 }
+    // = hxlcl_log -INFINITY IEEE-754 bits (0xfff0000000000000, > i64::MAX) → 0 HX3044.
+    let diags_bitpat = _run_case("(bitpattern) static-types — i64 container return: fn f()->int { return 18442240474082181120 } (-INF bits) → 0 HX3044", _build_case_i64_bitpattern_ret())
+    let c_bitpat = _count_code(diags_bitpat, "HX3044")
+    if c_bitpat != 0 {
+        println("  FAIL: case (bitpattern) expected 0 HX3044 (-INFINITY bit-pattern is a sanctioned u64 value), got " + to_string(c_bitpat) + " (total=" + to_string(len(diags_bitpat)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX3044 (regression fixed — hxlcl_core IEEE-754 bit-patterns accepted)")
     }
 
     // (bg) ★ HX3044 int-literal range-fit — hz_i32_over: `let x: i32 = 2147483648`
