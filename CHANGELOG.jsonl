@@ -28,3 +28,4 @@
 {"ts":"2026-07-08","title":"docs: 박제 self-host DONE 3-기준 완료 목표 (user standing) — ARCHITECTURE activeGoal + CLAUDE.md ACTIVE GOAL + 3-axis fleet","body":""}
 {"ts":"2026-07-08","title":"docs: ELF axis-③ 자체링크 캠페인 완주 — round-3b data-arm coverage runtime-verified (#4717 8/8 PASS)","body":""}
 {"ts":"2026-07-08","title":"test(elf round-3b): data-resident reloc + bss coverage — hand-built ElfX86Obj exercises EDIT-6 data arm (DATARELOC 8/8 PASS on summer)","body":""}
+{"ts":"2026-07-11","title":"fix(codegen/x86_64): axis-③ _x86_tag_resolve const_void arm — nil-arg TAG_VOID=4 parity with arm64 (void-sentinel a.slice/s.substr/m.count wrong value on x86)","body":""}
