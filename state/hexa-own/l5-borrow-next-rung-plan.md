@@ -3,7 +3,9 @@
 Base: origin/main `25057d1b5`. Gate: `HEXA_BORROWCK` (default-OFF), STRICT re-band via `HEXA_BORROWCK_STRICT`. Next-free code = **HX3052** (HX3050/HX3051 taken by unused-let/unused-assign).
 
 ## Why this rung
-The closure lane already ships **HX3037** (E0507 capture-MOVE of an `@own` bare-ident inside a closure body) but it emits report-only and **never loan-scans the captured name**. So the intersection `let r = &xs; let f = fn(n){ sink(xs) }` — a capture-move of `xs` **while `xs` is borrowed by `r`** — is silent. rustc reports **E0505** ("cannot move out of `xs` because it is borrowed"; closure-specific lineage E0504) here, not E0507. This is the single clean, guaranteed-x0-FP parity gap left in the closure lane, and it is per-fn expressible because the enclosing loan registry `_bck_ref_*` is live at the closure-lower site.
+The closure lane already ships **HX3037** (E0507 capture-MOVE of an `@own` bare-ident inside a closure body) but it emits report-only and **never loan-scans the captured name**. So the intersection `let r = &xs; let f = fn(n){ sink(xs) }` — a capture-move of `xs` **while `xs` is borrowed by `r`** — is silent. rustc reports **E0505** ("cannot move out of `xs` because it is borrowed"; closure-specific lineage E0504) here, not E0507. It is per-fn expressible because the enclosing loan registry `_bck_ref_*` is live at the closure-lower site.
+
+> ⚠️ **HONEST FP FRAMING (adversarial-review correction — state/hexa-own/frontier-r1-review-verdicts.md):** this rung is **NOT guaranteed-x0-FP**. Its gate `_bck_ref_find_write_through` (hir_to_mir.hexa:1200-1210) is the **flow-insensitive** loan-liveness scan whose own docstring (hir_to_mir.hexa:1196-1199) declares a documented FP class — a loan stays "live" from its `let` to end-of-fn with **no NLL last-use kill** (the M4 last-use pass only serves the HX3014 group lane, not this registry). So HX3052 **inherits HX3040\'s dead-loan FP class**: when `r`\'s last use is BEFORE the closure (modern rustc/NLL ends the borrow there and ACCEPTS the move) HX3052 still fires. Concrete FP (rustc accepts, HX3052 rejects): `fn hz(){ let xs=[1,2,3]; let r=&xs; println(len(r)); let f=fn(n:i64){ sink(xs) }; f(1) }`. **Parity target = pre-NLL E0505 / conservative-loud-over-quiet** (E2/E3/E4 lane posture), NOT NLL-precise E0505 — do not claim zero-FP.
 
 Sound in hexa: closures capture by heap pointer (`hir_to_mir.hexa:3588-3592` — "env slot aliases the enclosing binding"), so the first call's `@own` move-out invalidates the enclosing loan — exactly the E0505 hazard.
 
@@ -23,6 +25,7 @@ Sound in hexa: closures capture by heap pointer (`hir_to_mir.hexa:3588-3592` —
 - **positive** `hz_clo_capture_move_borrowed`: `fn sink(@own v:[i64]){println(len(v))}` + `fn hz(){ let xs=[1,2,3]; let r=&xs; let f=fn(n:i64){ sink(xs) }; f(1); println(len(r)) }` => HX3052 x1, HX3037 x0.
 - **positive/mutable** `hz_clo_capture_move_mut_borrow`: `let r=&mut xs` => HX3052 x1 (borrow_kind=mutable).
 - **control (collapse boundary)** `fp_clo_capture_move_no_loan`: same body, NO `let r=&xs` => HX3037 x1, HX3052 x0 (proves no over-broadening).
+- **KNOWN-FP witness (dead-loan / NLL last-use)** `fp_clo_dead_loan_before_closure`: `fn hz(){ let xs=[1,2,3]; let r=&xs; println(len(r)); let f=fn(n:i64){ sink(xs) }; f(1) }` — `r`\'s last use precedes the closure => rustc/NLL ACCEPTS => **HX3052 x1 = a documented FALSE POSITIVE** (flow-insensitive loan liveness, inherited HX3040 class). Recorded as a KNOWN-FP, NOT a want-0. The `fp_clo_capture_move_no_loan` control only removes the loan entirely and does NOT exercise this FP vector.
 - OFF sweep: all new probes want 0. STRICT: error-band == want.
 
 ## Verify gate (pool)
