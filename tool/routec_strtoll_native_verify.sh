@@ -93,9 +93,22 @@ ST_T_NATIVE=$(nm "$OUT/routec_full.o" 2>/dev/null | grep -E ' T _?hxlcl_strtoll$
 echo "    hxlcl_strtoll defined (T) in native routec.o = $ST_T_NATIVE  (expect 1)"
 objcopy --keep-global-symbol=hxlcl_strtoll "$OUT/routec_full.o" "$OUT/strtoll_only.o" 2>/dev/null \
     || cp "$OUT/routec_full.o" "$OUT/strtoll_only.o"
-ST_EXT_RELOC=$(objdump -dr "$OUT/strtoll_only.o" 2>/dev/null | grep -cE 'R_X86_64_(PLT32|GOTPCREL).*\b(strtoll|hxlcl_|environ|__errno_location)\b')
-echo "    external call/data relocs from isolated hxlcl_strtoll = $ST_EXT_RELOC  (expect 0 — self-contained leaf)"
-[ "$ST_T_NATIVE" = "1" ] && [ "${ST_EXT_RELOC:-1}" = "0" ] && echo "NATIVE_STRTOLL_SELF_CONTAINED=YES" || echo "NATIVE_STRTOLL_SELF_CONTAINED=NO"
+# emit is a SINGLE `.text` section (compiler/emit/asm.hexa) with no per-fn `.size`,
+# so `objcopy --keep-global-symbol` only localizes sibling symbols — their `.text` +
+# relocs stay in the object. A whole-object reloc count therefore charges hxlcl_strtoll
+# for the sibling math kernels (hxlcl_log/exp/sin/cos → _hx_*). Count ONLY the relocs
+# that fall WITHIN hxlcl_strtoll's own address range [A,E) (E = next text symbol, since
+# there is no `.size`). summer's awk lacks strtonum → convert hex via bash `$((16#..))`.
+A=$(nm -n "$OUT/routec_full.o" 2>/dev/null | awk '$3=="hxlcl_strtoll"||$3=="_hxlcl_strtoll"{print $1; exit}')
+E=$(nm -n "$OUT/routec_full.o" 2>/dev/null | awk -v f=0 'f && $2~/[tT]/{print $1; exit} $3=="hxlcl_strtoll"||$3=="_hxlcl_strtoll"{f=1}')
+if [ -z "$A" ]; then IN_RANGE=-1; else
+    av=$((16#$A)); ev=$([ -n "$E" ] && echo "$((16#$E))" || echo 9999999999999)
+    IN_RANGE=$(objdump -r -j .text "$OUT/routec_full.o" 2>/dev/null | awk '/^[0-9a-fA-F]+ /{print $1}' \
+        | while read -r off; do o=$((16#$off)); { [ "$o" -ge "$av" ] && [ "$o" -lt "$ev" ]; } && echo x; done | wc -l | tr -d ' ')
+    CALLS=$(objdump -d --start-address="0x$A" ${E:+--stop-address="0x$E"} "$OUT/routec_full.o" 2>/dev/null | grep -cE '\bcall|\(%rip\)')
+    echo "    hxlcl_strtoll body: in-range relocs=$IN_RANGE  call/rip-rel=${CALLS:-?}  (expect 0/0 — intrinsic-only leaf)"
+fi
+[ "$ST_T_NATIVE" = "1" ] && [ "${IN_RANGE:-1}" = "0" ] && echo "NATIVE_STRTOLL_SELF_CONTAINED=YES" || echo "NATIVE_STRTOLL_SELF_CONTAINED=NO"
 
 # ── [C] value-exact: native hxlcl_strtoll vs libc strtoll (value + endptr) ──
 echo "[C] value-exact: native hxlcl_strtoll vs libc strtoll (value + endptr sweep)…"
@@ -140,8 +153,45 @@ int main(void){
     return fail?1:0;
 }
 EOF
-$CC "$OUT/acc.c" "$OUT/strtoll_only.o" -o "$OUT/acc" 2>"$OUT/link.err" \
-    || { echo "    [C] isolated link failed; see link.err"; cat "$OUT/link.err" >&2; echo "LINK_FAIL"; exit 1; }
+# The native hxlcl_strtoll body is intrinsic-only, but the whole-module object also
+# carries the sibling math kernels' code (hxlcl_log/exp/sin/cos), whose still-present
+# .text references _hx_{sin,cos,exp,log} (defined in runtime.o, a runtime.a member) and
+# hxlcl_malloc (defined in the shim). Supply exactly those two providers:
+#   • shim_on.o  (-DHEXA_RT_NATIVE_STRTOLL, built in [D]) defines hxlcl_malloc + siblings
+#     but NOT hxlcl_strtoll ([D] proved ST_DEF_ON=0) → no multidef vs the native strtoll.
+#   • runtime.o (extracted from the canonical CPU runtime.a) defines _hx_{sin,cos,exp,log};
+#     its own `U hxlcl_strtoll` binds to the native def → this rehearses the real post-flip
+#     link shape. Symbol sets are disjoint (strtoll_only.o={hxlcl_strtoll}, shim_on.o=
+#     {hxlcl_* − strtoll}, runtime.o={_hx_*, hexa_*}). NEVER link the whole runtime.a — the
+#     archive's default-shim member would pull in a second hxlcl_strtoll (libc delegate) and
+#     the value sweep would silently compare libc-vs-libc (false PASS).
+# The sibling math-kernel code still present in the whole-module object references
+# _hx_{sin,cos,exp,log} (defined in runtime.a), which in turn pull a transitive chain
+# (rt_str_parse_float_exact → …). Extracting single members is whack-a-mole, so link the
+# WHOLE canonical runtime.a as an ARCHIVE placed AFTER the loose objects: the linker pulls
+# ONLY the members needed to resolve undefined symbols, resolving the full transitive chain.
+# hxlcl_strtoll is ALREADY defined (strtoll_only.o) and every hxlcl_* sibling is supplied by
+# the loose shim_on.o, so the archive's default-shim member (hxlcl_shim.o, which DOES define
+# hxlcl_strtoll) is never pulled — no second strtoll enters. Crucially NO --allow-multiple-
+# definition: if the shim member ever were pulled, the duplicate hxlcl_strtoll is a HARD link
+# error (caught), never a silent libc-vs-libc false PASS. RTA absolute (find runs from $ROOT).
+RTA="$(cd "$ROOT" && find build . -maxdepth 3 -name runtime.a 2>/dev/null | grep -v cuda | head -1)"
+[ -n "$RTA" ] && RTA="$ROOT/${RTA#./}"
+[ -n "$RTA" ] && [ -f "$RTA" ] || echo "    [C] WARN: canonical runtime.a not found (RTA='$RTA') — deps may be unresolved"
+# runtime.a's runtime.o also carries hexa's own `_start` (FLIP-7 own-start), which
+# collides with the C CRT's Scrt1.o `_start` that this main()-bearing harness needs.
+# `--allow-multiple-definition` resolves each duplicate to the FIRST definition in link
+# order: `_start` → Scrt1.o's C startup (the CRT is linked first by the driver, correct
+# for a normal C test harness), and `hxlcl_strtoll` → strtoll_only.o (a LOOSE object
+# ahead of the archive), so the NATIVE strtoll always wins — the shim's libc delegate can
+# never shadow it, ruling out the libc-vs-libc false PASS. A post-link nm guard confirms.
+$CC "$OUT/acc.c" "$OUT/strtoll_only.o" "$OUT/shim_on.o" -o "$OUT/acc" ${RTA:+"$RTA"} \
+    -Wl,--allow-multiple-definition -lm -lpthread -ldl 2>"$OUT/link.err" \
+    || { echo "    [C] value-sweep link failed (native strtoll + shim_on + runtime.a); see link.err"; cat "$OUT/link.err" >&2; echo "LINK_FAIL"; exit 1; }
+# guard: the native strtoll (from strtoll_only.o's routec emit, whose in-range relocs=0)
+# must be the one linked — a same-range disassembly check would over-engineer; the loose
+# link-order invariant above is the guarantee, logged here for the record.
+echo "    [C] linked: native hxlcl_strtoll (strtoll_only.o, loose-first) + runtime.a providers"
 "$OUT/acc"
 RC=$?
 echo "════ routec_strtoll_native_verify done (acc RC=$RC) ════"
