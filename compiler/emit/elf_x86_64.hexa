@@ -1526,11 +1526,17 @@ pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> In
 // which calls `main`, forwards main's return (EAX) into EDI and issues
 // the exit syscall directly.
 //
-// _start (14 bytes = 5+2+5+2):
-//   E8 00 00 00 00   call  main          ; rel32 patched below (offs 1..4)
+// _start (23 bytes = 4+5+5+2+5+2):
+//   48 8B 3C 24      mov   rdi, [rsp]     ; argc  (SysV crt0 process-entry)
+//   48 8D 74 24 08   lea   rsi, [rsp+8]   ; argv
+//   E8 00 00 00 00   call  main          ; rel32 patched below (offs 10..13)
 //   89 D7            mov   edi, edx       ; exit code = main()'s HexaVal PAYLOAD
 //   B8 3C 00 00 00   mov   eax, 60        ; __NR_exit
 //   0F 05            syscall
+// Round-3 (argc/argv): main is the emitted C `int main(int argc,char** argv)`
+// (runtime_core_emit ~:9871) — Round-1/2 called it with garbage rdi/rsi (never
+// unpacked rsp) → garbage-argc malloc + garbage-argv deref → execve-immediate
+// SIGSEGV. The 9-byte unpack is stack→register, NO reloc.
 //
 // PAIR-MODEL note: every user .hexa fn returns a 16-byte HexaVal in the SysV
 // integer pair rax=tag, rdx=payload (x86_64_linux.hexa _STMT_RETURN) — a user
@@ -1540,12 +1546,12 @@ pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> In
 // own-start path adopts the C-canon "main's return IS the exit code"; the
 // shipping C-transpile path still discards main's return (crt returns 0).
 //
-// Every obj symbol.value and reloc.offset is shifted by len(stub)=14
-// because the text concat begins with `base = len(text_bytes) = 14` (the
-// stub occupies [0,14)). PC-relative reloc deltas (S+A−P) are invariant
-// under the shared +14 shift, so the reloc loop is byte-identical to
+// Every obj symbol.value and reloc.offset is shifted by len(stub)=23
+// because the text concat begins with `base = len(text_bytes) = 23` (the
+// stub occupies [0,23)). PC-relative reloc deltas (S+A−P) are invariant
+// under the shared +23 shift, so the reloc loop is byte-identical to
 // link_elf_x86_64. Only the intra-stub `call main` rel32 is resolved
-// here: rel32 = (main final offset) − (next-insn addr = 5); for main at
+// here: rel32 = (main final offset) − (next-insn addr = 14); for main at
 // obj-local value 0 that is 14 − 5 = 9.
 //
 // Round-2 (data-segment): extends the round-1 text-only path with a SECOND
@@ -1556,15 +1562,29 @@ pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> In
 // untouched serialize_elf_exec_x86_64; text->text deltas are vaddr-base
 // invariant). Data present -> serialize_elf_exec_x86_64_2seg (two PT_LOADs).
 pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: string) -> Int {
-    // 14-byte own-start stub at text offset 0.
+    // 23-byte own-start stub at text offset 0.
+    // Round-3 (argc/argv): the SysV crt0 process-entry contract — the kernel
+    // enters at _start with rsp = [argc, argv[0..argc-1], NULL, envp..., NULL].
+    // main is the emitted C `int main(int argc, char** argv)` (runtime_core_emit
+    // ~:9871) which reads argc/argv (SysV: rdi=argc, rsi=argv) to init the
+    // _hexa_argc/_hexa_argv globals. Round-1/2 called main with GARBAGE rdi/rsi
+    // (never unpacked the stack) → main malloc'd sizeof(char*)*garbage-argc and
+    // dereferenced a garbage argv → execve-immediate SIGSEGV (si_addr=NULL).
+    // Fix: unpack argc/argv from rsp into rdi/rsi before `call main` (9 bytes),
+    // no reloc (stack→register). All obj symbol/reloc offsets shift by the new
+    // len(stub)=23 automatically (base = len(text_bytes), read below).
     let mut text_bytes: [Int] = []
+    text_bytes.push(0x48); text_bytes.push(0x8B); text_bytes.push(0x3C)
+    text_bytes.push(0x24)                                 // mov rdi, [rsp]      (argc)
+    text_bytes.push(0x48); text_bytes.push(0x8D); text_bytes.push(0x74)
+    text_bytes.push(0x24); text_bytes.push(0x08)          // lea rsi, [rsp+8]    (argv)
     text_bytes.push(0xE8); text_bytes.push(0x00); text_bytes.push(0x00)
-    text_bytes.push(0x00); text_bytes.push(0x00)          // call rel32 (patched)
+    text_bytes.push(0x00); text_bytes.push(0x00)          // call rel32 (patched, stub bytes 10..13)
     text_bytes.push(0x89); text_bytes.push(0xD7)          // mov edi, edx (HexaVal payload)
     text_bytes.push(0xB8); text_bytes.push(0x3C); text_bytes.push(0x00)
     text_bytes.push(0x00); text_bytes.push(0x00)          // mov eax, 60 (__NR_exit)
     text_bytes.push(0x0F); text_bytes.push(0x05)          // syscall
-    // len(text_bytes) is now 14 — the +14 shift applied to every obj below.
+    // len(text_bytes) is now 23 — the +23 shift applied to every obj below.
 
     // Concatenated data blob (.rodata ++ .data per obj) for the RW segment.
     let mut data_bytes: [Int] = []
@@ -1578,6 +1598,8 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     let mut def_names:   [string] = []
     let mut def_seg:     [Int]    = []
     let mut def_off:     [Int]    = []
+    let mut def_bind:    [Int]    = []   // H2: STB_LOCAL(0)/STB_GLOBAL(1) per def
+    let mut def_obj:     [Int]    = []   // H2: owning-obj index per def (LOCAL scoping)
 
     let mut obj_bases:       [Int] = []   // .text base per obj
     let mut obj_rodata_base: [Int] = []   // .rodata start in data_bytes per obj
@@ -1616,6 +1638,8 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                 def_names.push(name)
                 def_seg.push(0)
                 def_off.push(base + s.value)
+                def_bind.push(s.bind)
+                def_obj.push(oi)
                 if main_off < 0 && name == main_name {
                     main_off = base + s.value
                 }
@@ -1629,6 +1653,8 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                 def_names.push(name)
                 def_seg.push(2)
                 def_off.push((total_bss - obj.bss_size) + s.value)
+                def_bind.push(s.bind)
+                def_obj.push(oi)
             } else if s.section != 0 {
                 // Data def. section==4 (data_sec when .rodata present) -> .data
                 // pool; otherwise (section==3) -> .rodata pool. When the obj has
@@ -1641,6 +1667,8 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                 } else {
                     def_off.push(ro_base + s.value)
                 }
+                def_bind.push(s.bind)
+                def_obj.push(oi)
             }
             di = di + 1
         }
@@ -1656,12 +1684,13 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         return 3
     }
 
-    // Patch the `call main` rel32 (stub bytes 1..4). Next-insn addr = 5.
-    let call_rel = main_off - 5
-    text_bytes[1] = call_rel & 0xff
-    text_bytes[2] = (call_rel >> 8) & 0xff
-    text_bytes[3] = (call_rel >> 16) & 0xff
-    text_bytes[4] = (call_rel >> 24) & 0xff
+    // Patch the `call main` rel32 (stub bytes 10..13). The call opcode sits at
+    // stub offset 9 (after the 9-byte argc/argv unpack); next-insn addr = 14.
+    let call_rel = main_off - 14
+    text_bytes[10] = call_rel & 0xff
+    text_bytes[11] = (call_rel >> 8) & 0xff
+    text_bytes[12] = (call_rel >> 16) & 0xff
+    text_bytes[13] = (call_rel >> 24) & 0xff
 
     // ── GOT COLLECT (R_X86_64_GOTPCREL, type 9) — one slot per DISTINCT target ──
     // #4783 self-emits `mov reg,[rip+sym@GOTPCREL]` (REX.W 8B /r RIP disp32=0,
@@ -1734,6 +1763,7 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     // Resolve relocs in TRUE vaddr space. text->text reduces to the round-1
     // text-offset delta (vaddr_base+code_off cancels) => no-data path is
     // byte-identical; text->data uses the data segment's distinct vaddr.
+    let mut unresolved = 0
     let mut ro = 0
     while ro < len(objs) {
         let obj = objs[ro]
@@ -1750,10 +1780,26 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                 name = name + from_char_code(b)
                 k = k + 1
             }
+            // ── H2 fix: symbol-scoped resolution ────────────────────────────
+            // Flat first-match let one obj's STB_LOCAL def (a file-local static /
+            // `g<id>` module-global / `.LCstrN`) satisfy ANOTHER obj's same-named
+            // reloc — a wrong-def miscompile (#3899 flatten-globals alias in the
+            // linker). Scope by the def's bind: STB_GLOBAL is globally visible +
+            // PREFERRED (break on first); STB_LOCAL is visible ONLY to relocs in
+            // its owning obj (def_obj == ro), a later GLOBAL homonym wins. An
+            // all-GLOBAL link (the normal path) takes the first GLOBAL match and
+            // breaks — byte-identical index to the old first-match (byteeq-safe).
             let mut found_idx = -1
             let mut sk = 0
             while sk < len(def_names) {
-                if def_names[sk] == name { found_idx = sk; break }
+                if def_names[sk] == name {
+                    if def_bind[sk] == ELF_STB_GLOBAL {
+                        found_idx = sk
+                        break
+                    } else if def_obj[sk] == ro {
+                        if found_idx < 0 { found_idx = sk }
+                    }
+                }
                 sk = sk + 1
             }
             if found_idx >= 0 {
@@ -1847,10 +1893,22 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                         text_bytes[patch_off + 3] = (delta >> 24) & 0xff
                     }
                 }
+            } else {
+                // H1 fix: unresolved reloc — no defining obj carries `name`. A
+                // silent skip left the site at placeholder 0 -> si_addr=NULL
+                // SIGSEGV at run (Fable H1). Never silent-skip (release-integrity):
+                // log obj/sym/kind and count; the fn refuses to emit below.
+                eprintln("hexa_ld(elf,ownstart): unresolved reloc — obj[" + to_string(ro) + "] sym '" + name + "' kind=" + to_string(r.kind) + " (no defining obj; placeholder 0 -> si_addr=NULL SIGSEGV)")
+                unresolved = unresolved + 1
             }
             ri = ri + 1
         }
         ro = ro + 1
+    }
+
+    if unresolved > 0 {
+        eprintln("hexa_ld(elf,ownstart): " + to_string(unresolved) + " unresolved reloc(s) — refusing to emit (silent-skip leaves placeholder 0 -> si_addr=NULL SIGSEGV; release-integrity)")
+        return 3
     }
 
     // ── GOT FILL — write each 8-byte slot = the symbol's FINAL resolved vaddr
@@ -1861,9 +1919,21 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     let mut gfi = 0
     while gfi < n_got {
         let gname = got_syms[gfi]
+        // H2: prefer a GLOBAL def for the shared GOT slot; fall back to a LOCAL
+        // def (own-emit `g<id>` module-global GOTPCREL targets are STB_LOCAL, so
+        // a GLOBAL-only filter would break them). Byte-neutral for all-GLOBAL.
+        // The GOT is de-duped purely by NAME (got_syms), so two objs' same-named
+        // STB_LOCAL `g<id>` still collapse to ONE slot — a latent cross-obj GOT
+        // collision that only per-(obj,name) slots would close (named next round).
         let mut gfound = -1
         let mut gfk = 0
-        while gfk < len(def_names) { if def_names[gfk] == gname { gfound = gfk; break } gfk = gfk + 1 }
+        while gfk < len(def_names) {
+            if def_names[gfk] == gname {
+                if def_bind[gfk] == ELF_STB_GLOBAL { gfound = gfk; break }
+                if gfound < 0 { gfound = gfk }
+            }
+            gfk = gfk + 1
+        }
         if gfound < 0 {
             // A static own-link cannot fabricate an address for an undefined
             // GOTPCREL target (extern/libc symbols like environ/stdout need
