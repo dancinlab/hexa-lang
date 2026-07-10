@@ -26,15 +26,15 @@ hxlcl_strtoll:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-    sub rsp, 1984 # prologue: alloc spill frame
+    sub rsp, 2128 # prologue: alloc spill frame
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1024], r11 # store tag L0
+    mov [rbp - 1096], r11 # store tag L0
     mov rbx, rdi # cabi ingress param payload
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1032], r11 # store tag L1
+    mov [rbp - 1104], r11 # store tag L1
     mov r12, rsi # cabi ingress param payload
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1040], r11 # store tag L2
+    mov [rbp - 1112], r11 # store tag L2
     mov r13, rdx # cabi ingress param payload
 .L5211_hxlcl_strtoll_bb0:
     mov r11, 0 # hv payload
@@ -42,20 +42,20 @@ hxlcl_strtoll:
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r14, r10 # leaf: payload → dst L3
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1048], r11 # store tag L3
+    mov [rbp - 1120], r11 # store tag L3
     mov r15, r14 # assign L4
-    mov r11, [rbp - 1048] # tag L3 from tag-slot
-    mov [rbp - 1056], r11 # store tag L4
+    mov r11, [rbp - 1120] # tag L3 from tag-slot
+    mov [rbp - 1128], r11 # store tag L4
     mov r11, 0 # hv payload
     mov r10, r12 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1064], r11 # store tag L5
+    mov [rbp - 1136], r11 # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
     mov r11, [rbp - 56] # reload L5 from spill slot
     mov r10, r11 # assign L6
-    mov r11, [rbp - 1064] # tag L5 from tag-slot
-    mov [rbp - 1072], r11 # store tag L6
+    mov r11, [rbp - 1136] # tag L5 from tag-slot
+    mov [rbp - 1144], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
     mov r10, r15 # hv payload
     mov r11, 0 # hv payload
@@ -63,7 +63,7 @@ hxlcl_strtoll:
     sete al # __hx_payload_eq: al = (a==b)
     movzx r10, al # __hx_payload_eq: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1080], r11 # store tag L7
+    mov [rbp - 1152], r11 # store tag L7
     mov [rbp - 72], r10 # spill L7 to slot
     mov r10, [rbp - 72] # reload L7 from spill slot
     test r10, r10 # br_cond test
@@ -77,7 +77,7 @@ hxlcl_strtoll:
     setne al # __hx_payload_ne: al = predicate
     movzx r10, al # __hx_payload_ne: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1096], r11 # store tag L9
+    mov [rbp - 1168], r11 # store tag L9
     mov [rbp - 88], r10 # spill L9 to slot
     mov r10, [rbp - 88] # reload L9 from spill slot
     test r10, r10 # br_cond test
@@ -88,16 +88,16 @@ hxlcl_strtoll:
     mov r10, r13 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1120], r11 # store tag L12
+    mov [rbp - 1192], r11 # store tag L12
     mov [rbp - 112], r10 # spill L12 to slot
     mov r11, [rbp - 112] # reload L12 from spill slot
     mov r10, r11 # assign L13
-    mov r11, [rbp - 1120] # tag L12 from tag-slot
-    mov [rbp - 1128], r11 # store tag L13
+    mov r11, [rbp - 1192] # tag L12 from tag-slot
+    mov [rbp - 1200], r11 # store tag L13
     mov [rbp - 120], r10 # spill L13 to slot
     mov r10, 0 # assign L14
     mov r11, 0 # tag default = TAG_INT
-    mov [rbp - 1136], r11 # store tag L14
+    mov [rbp - 1208], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
     mov r10, r15 # hv payload
     mov r11, [rbp - 128] # reload L14 from spill slot
@@ -105,16 +105,16 @@ hxlcl_strtoll:
     add r10, r11 # __hx_ptr_load8: addr = ptr + off
     movzx r10, byte ptr [r10] # __hx_ptr_load8: r10 = *(u8*)addr (zero-ext)
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1144], r11 # store tag L15
+    mov [rbp - 1216], r11 # store tag L15
     mov [rbp - 136], r10 # spill L15 to slot
     mov r11, [rbp - 136] # reload L15 from spill slot
     mov r10, r11 # assign L16
-    mov r11, [rbp - 1144] # tag L15 from tag-slot
-    mov [rbp - 1152], r11 # store tag L16
+    mov r11, [rbp - 1216] # tag L15 from tag-slot
+    mov [rbp - 1224], r11 # store tag L16
     mov [rbp - 144], r10 # spill L16 to slot
     mov r10, 1 # assign L17
     mov r11, 0 # tag default = TAG_INT
-    mov [rbp - 1160], r11 # store tag L17
+    mov [rbp - 1232], r11 # store tag L17
     mov [rbp - 152], r10 # spill L17 to slot
     jmp .L5211_hxlcl_strtoll_bb5 # branch
 .L5211_hxlcl_strtoll_bb3:
@@ -127,12 +127,12 @@ hxlcl_strtoll:
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1112], r11 # store tag L11
+    mov [rbp - 1184], r11 # store tag L11
     mov [rbp - 104], r10 # spill L11 to slot
     jmp .L5211_hxlcl_strtoll_bb4 # branch
 .L5211_hxlcl_strtoll_bb4:
     mov rax, 0 # hv payload
-    add rsp, 1984 # epilogue: free spill frame
+    add rsp, 2128 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
     pop r15 # epilogue: restore r15
     pop r14 # epilogue: restore r14
@@ -149,7 +149,7 @@ hxlcl_strtoll:
     setne al # __hx_payload_ne: al = predicate
     movzx r10, al # __hx_payload_ne: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1168], r11 # store tag L18
+    mov [rbp - 1240], r11 # store tag L18
     mov [rbp - 160], r10 # spill L18 to slot
     mov r10, [rbp - 160] # reload L18 from spill slot
     test r10, r10 # br_cond test
@@ -163,12 +163,12 @@ hxlcl_strtoll:
     sete al # __hx_payload_eq: al = (a==b)
     movzx r10, al # __hx_payload_eq: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1176], r11 # store tag L19
+    mov [rbp - 1248], r11 # store tag L19
     mov [rbp - 168], r10 # spill L19 to slot
     mov r11, [rbp - 168] # reload L19 from spill slot
     mov r10, r11 # assign L20
-    mov r11, [rbp - 1176] # tag L19 from tag-slot
-    mov [rbp - 1184], r11 # store tag L20
+    mov r11, [rbp - 1248] # tag L19 from tag-slot
+    mov [rbp - 1256], r11 # store tag L20
     mov [rbp - 176], r10 # spill L20 to slot
     mov r10, [rbp - 144] # reload L16 from spill slot
     mov r10, r10 # hv payload
@@ -177,12 +177,12 @@ hxlcl_strtoll:
     sete al # __hx_payload_eq: al = (a==b)
     movzx r10, al # __hx_payload_eq: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1192], r11 # store tag L21
+    mov [rbp - 1264], r11 # store tag L21
     mov [rbp - 184], r10 # spill L21 to slot
     mov r11, [rbp - 184] # reload L21 from spill slot
     mov r10, r11 # assign L22
-    mov r11, [rbp - 1192] # tag L21 from tag-slot
-    mov [rbp - 1200], r11 # store tag L22
+    mov r11, [rbp - 1264] # tag L21 from tag-slot
+    mov [rbp - 1272], r11 # store tag L22
     mov [rbp - 192], r10 # spill L22 to slot
     mov r10, [rbp - 144] # reload L16 from spill slot
     mov r10, r10 # hv payload
@@ -191,12 +191,12 @@ hxlcl_strtoll:
     sete al # __hx_payload_eq: al = (a==b)
     movzx r10, al # __hx_payload_eq: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1208], r11 # store tag L23
+    mov [rbp - 1280], r11 # store tag L23
     mov [rbp - 200], r10 # spill L23 to slot
     mov r11, [rbp - 200] # reload L23 from spill slot
     mov r10, r11 # assign L24
-    mov r11, [rbp - 1208] # tag L23 from tag-slot
-    mov [rbp - 1216], r11 # store tag L24
+    mov r11, [rbp - 1280] # tag L23 from tag-slot
+    mov [rbp - 1288], r11 # store tag L24
     mov [rbp - 208], r10 # spill L24 to slot
     mov r11, [rbp - 192] # reload L22 from spill slot
     mov r11, r11 # hv payload
@@ -204,12 +204,12 @@ hxlcl_strtoll:
     mov r10, r10 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1224], r11 # store tag L25
+    mov [rbp - 1296], r11 # store tag L25
     mov [rbp - 216], r10 # spill L25 to slot
     mov r11, [rbp - 216] # reload L25 from spill slot
     mov r10, r11 # assign L26
-    mov r11, [rbp - 1224] # tag L25 from tag-slot
-    mov [rbp - 1232], r11 # store tag L26
+    mov r11, [rbp - 1296] # tag L25 from tag-slot
+    mov [rbp - 1304], r11 # store tag L26
     mov [rbp - 224], r10 # spill L26 to slot
     mov r11, [rbp - 208] # reload L24 from spill slot
     mov r11, r11 # hv payload
@@ -217,12 +217,12 @@ hxlcl_strtoll:
     mov r10, r10 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1240], r11 # store tag L27
+    mov [rbp - 1312], r11 # store tag L27
     mov [rbp - 232], r10 # spill L27 to slot
     mov r11, [rbp - 232] # reload L27 from spill slot
     mov r10, r11 # assign L28
-    mov r11, [rbp - 1240] # tag L27 from tag-slot
-    mov [rbp - 1248], r11 # store tag L28
+    mov r11, [rbp - 1312] # tag L27 from tag-slot
+    mov [rbp - 1320], r11 # store tag L28
     mov [rbp - 240], r10 # spill L28 to slot
     mov r11, 0 # hv payload
     mov r10, [rbp - 240] # reload L28 from spill slot
@@ -231,7 +231,7 @@ hxlcl_strtoll:
     setne al # __hx_payload_ne: al = predicate
     movzx r10, al # __hx_payload_ne: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1256], r11 # store tag L29
+    mov [rbp - 1328], r11 # store tag L29
     mov [rbp - 248], r10 # spill L29 to slot
     mov r10, [rbp - 248] # reload L29 from spill slot
     test r10, r10 # br_cond test
@@ -244,16 +244,16 @@ hxlcl_strtoll:
     add r10, r11 # __hx_ptr_load8: addr = ptr + off
     movzx r10, byte ptr [r10] # __hx_ptr_load8: r10 = *(u8*)addr (zero-ext)
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1288], r11 # store tag L33
+    mov [rbp - 1360], r11 # store tag L33
     mov [rbp - 280], r10 # spill L33 to slot
     mov r11, [rbp - 280] # reload L33 from spill slot
     mov r10, r11 # assign L34
-    mov r11, [rbp - 1288] # tag L33 from tag-slot
-    mov [rbp - 1296], r11 # store tag L34
+    mov r11, [rbp - 1360] # tag L33 from tag-slot
+    mov [rbp - 1368], r11 # store tag L34
     mov [rbp - 288], r10 # spill L34 to slot
     mov r10, 0 # assign L35
     mov r11, 0 # tag default = TAG_INT
-    mov [rbp - 1304], r11 # store tag L35
+    mov [rbp - 1376], r11 # store tag L35
     mov [rbp - 296], r10 # spill L35 to slot
     mov r10, [rbp - 288] # reload L34 from spill slot
     mov r10, r10 # hv payload
@@ -262,7 +262,7 @@ hxlcl_strtoll:
     sete al # __hx_payload_eq: al = (a==b)
     movzx r10, al # __hx_payload_eq: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1312], r11 # store tag L36
+    mov [rbp - 1384], r11 # store tag L36
     mov [rbp - 304], r10 # spill L36 to slot
     mov r10, [rbp - 304] # reload L36 from spill slot
     test r10, r10 # br_cond test
@@ -274,12 +274,12 @@ hxlcl_strtoll:
     mov r10, r10 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1272], r11 # store tag L31
+    mov [rbp - 1344], r11 # store tag L31
     mov [rbp - 264], r10 # spill L31 to slot
     mov r11, [rbp - 264] # reload L31 from spill slot
     mov r10, r11 # assign L14
-    mov r11, [rbp - 1272] # tag L31 from tag-slot
-    mov [rbp - 1136], r11 # store tag L14
+    mov r11, [rbp - 1344] # tag L31 from tag-slot
+    mov [rbp - 1208], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
     mov r10, r15 # hv payload
     mov r11, [rbp - 128] # reload L14 from spill slot
@@ -287,18 +287,18 @@ hxlcl_strtoll:
     add r10, r11 # __hx_ptr_load8: addr = ptr + off
     movzx r10, byte ptr [r10] # __hx_ptr_load8: r10 = *(u8*)addr (zero-ext)
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1280], r11 # store tag L32
+    mov [rbp - 1352], r11 # store tag L32
     mov [rbp - 272], r10 # spill L32 to slot
     mov r11, [rbp - 272] # reload L32 from spill slot
     mov r10, r11 # assign L16
-    mov r11, [rbp - 1280] # tag L32 from tag-slot
-    mov [rbp - 1152], r11 # store tag L16
+    mov r11, [rbp - 1352] # tag L32 from tag-slot
+    mov [rbp - 1224], r11 # store tag L16
     mov [rbp - 144], r10 # spill L16 to slot
     jmp .L5211_hxlcl_strtoll_bb10 # branch
 .L5211_hxlcl_strtoll_bb9:
     mov r10, 0 # assign L17
     mov r11, 0 # tag default = TAG_INT
-    mov [rbp - 1160], r11 # store tag L17
+    mov [rbp - 1232], r11 # store tag L17
     mov [rbp - 152], r10 # spill L17 to slot
     jmp .L5211_hxlcl_strtoll_bb10 # branch
 .L5211_hxlcl_strtoll_bb10:
@@ -306,19 +306,19 @@ hxlcl_strtoll:
 .L5211_hxlcl_strtoll_bb11:
     mov r10, 1 # assign L35
     mov r11, 0 # tag default = TAG_INT
-    mov [rbp - 1304], r11 # store tag L35
+    mov [rbp - 1376], r11 # store tag L35
     mov [rbp - 296], r10 # spill L35 to slot
     mov r11, 1 # hv payload
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1328], r11 # store tag L38
+    mov [rbp - 1400], r11 # store tag L38
     mov [rbp - 320], r10 # spill L38 to slot
     mov r11, [rbp - 320] # reload L38 from spill slot
     mov r10, r11 # assign L14
-    mov r11, [rbp - 1328] # tag L38 from tag-slot
-    mov [rbp - 1136], r11 # store tag L14
+    mov r11, [rbp - 1400] # tag L38 from tag-slot
+    mov [rbp - 1208], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
     jmp .L5211_hxlcl_strtoll_bb15 # branch
 .L5211_hxlcl_strtoll_bb12:
@@ -329,7 +329,7 @@ hxlcl_strtoll:
     sete al # __hx_payload_eq: al = (a==b)
     movzx r10, al # __hx_payload_eq: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1336], r11 # store tag L39
+    mov [rbp - 1408], r11 # store tag L39
     mov [rbp - 328], r10 # spill L39 to slot
     mov r10, [rbp - 328] # reload L39 from spill slot
     test r10, r10 # br_cond test
@@ -341,110 +341,122 @@ hxlcl_strtoll:
     mov r10, r10 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1352], r11 # store tag L41
+    mov [rbp - 1424], r11 # store tag L41
     mov [rbp - 344], r10 # spill L41 to slot
     mov r11, [rbp - 344] # reload L41 from spill slot
     mov r10, r11 # assign L14
-    mov r11, [rbp - 1352] # tag L41 from tag-slot
-    mov [rbp - 1136], r11 # store tag L14
+    mov r11, [rbp - 1424] # tag L41 from tag-slot
+    mov [rbp - 1208], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
     jmp .L5211_hxlcl_strtoll_bb14 # branch
 .L5211_hxlcl_strtoll_bb14:
     jmp .L5211_hxlcl_strtoll_bb15 # branch
 .L5211_hxlcl_strtoll_bb15:
+    mov r11, 0 # hv payload
+    mov r10, [rbp - 128] # reload L14 from spill slot
+    mov r10, r10 # hv payload
+    add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 1432], r11 # store tag L42
+    mov [rbp - 352], r10 # spill L42 to slot
+    mov r11, [rbp - 352] # reload L42 from spill slot
+    mov r10, r11 # assign L43
+    mov r11, [rbp - 1432] # tag L42 from tag-slot
+    mov [rbp - 1440], r11 # store tag L43
+    mov [rbp - 360], r10 # spill L43 to slot
     mov r11, 1 # hv payload
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1360], r11 # store tag L42
-    mov [rbp - 352], r10 # spill L42 to slot
-    mov r11, [rbp - 352] # reload L42 from spill slot
-    mov r10, r11 # assign L43
-    mov r11, [rbp - 1360] # tag L42 from tag-slot
-    mov [rbp - 1368], r11 # store tag L43
-    mov [rbp - 360], r10 # spill L43 to slot
+    mov [rbp - 1448], r11 # store tag L44
+    mov [rbp - 368], r10 # spill L44 to slot
+    mov r11, [rbp - 368] # reload L44 from spill slot
+    mov r10, r11 # assign L45
+    mov r11, [rbp - 1448] # tag L44 from tag-slot
+    mov [rbp - 1456], r11 # store tag L45
+    mov [rbp - 376], r10 # spill L45 to slot
     mov r10, r15 # hv payload
     mov r11, [rbp - 128] # reload L14 from spill slot
     mov r11, r11 # hv payload
     add r10, r11 # __hx_ptr_load8: addr = ptr + off
     movzx r10, byte ptr [r10] # __hx_ptr_load8: r10 = *(u8*)addr (zero-ext)
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1376], r11 # store tag L44
-    mov [rbp - 368], r10 # spill L44 to slot
-    mov r11, [rbp - 368] # reload L44 from spill slot
-    mov r10, r11 # assign L45
-    mov r11, [rbp - 1376] # tag L44 from tag-slot
-    mov [rbp - 1384], r11 # store tag L45
-    mov [rbp - 376], r10 # spill L45 to slot
+    mov [rbp - 1464], r11 # store tag L46
+    mov [rbp - 384], r10 # spill L46 to slot
+    mov r11, [rbp - 384] # reload L46 from spill slot
+    mov r10, r11 # assign L47
+    mov r11, [rbp - 1464] # tag L46 from tag-slot
+    mov [rbp - 1472], r11 # store tag L47
+    mov [rbp - 392], r10 # spill L47 to slot
     mov r10, r15 # hv payload
-    mov r11, [rbp - 360] # reload L43 from spill slot
+    mov r11, [rbp - 376] # reload L45 from spill slot
     mov r11, r11 # hv payload
     add r10, r11 # __hx_ptr_load8: addr = ptr + off
     movzx r10, byte ptr [r10] # __hx_ptr_load8: r10 = *(u8*)addr (zero-ext)
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1392], r11 # store tag L46
-    mov [rbp - 384], r10 # spill L46 to slot
-    mov r11, [rbp - 384] # reload L46 from spill slot
-    mov r10, r11 # assign L47
-    mov r11, [rbp - 1392] # tag L46 from tag-slot
-    mov [rbp - 1400], r11 # store tag L47
-    mov [rbp - 392], r10 # spill L47 to slot
-    mov r10, [rbp - 376] # reload L45 from spill slot
+    mov [rbp - 1480], r11 # store tag L48
+    mov [rbp - 400], r10 # spill L48 to slot
+    mov r11, [rbp - 400] # reload L48 from spill slot
+    mov r10, r11 # assign L49
+    mov r11, [rbp - 1480] # tag L48 from tag-slot
+    mov [rbp - 1488], r11 # store tag L49
+    mov [rbp - 408], r10 # spill L49 to slot
+    mov r10, [rbp - 392] # reload L47 from spill slot
     mov r10, r10 # hv payload
     mov r11, 48 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
     sete al # __hx_payload_eq: al = (a==b)
     movzx r10, al # __hx_payload_eq: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1408], r11 # store tag L48
-    mov [rbp - 400], r10 # spill L48 to slot
-    mov r11, [rbp - 400] # reload L48 from spill slot
-    mov r10, r11 # assign L49
-    mov r11, [rbp - 1408] # tag L48 from tag-slot
-    mov [rbp - 1416], r11 # store tag L49
-    mov [rbp - 408], r10 # spill L49 to slot
-    mov r10, [rbp - 392] # reload L47 from spill slot
+    mov [rbp - 1496], r11 # store tag L50
+    mov [rbp - 416], r10 # spill L50 to slot
+    mov r11, [rbp - 416] # reload L50 from spill slot
+    mov r10, r11 # assign L51
+    mov r11, [rbp - 1496] # tag L50 from tag-slot
+    mov [rbp - 1504], r11 # store tag L51
+    mov [rbp - 424], r10 # spill L51 to slot
+    mov r10, [rbp - 408] # reload L49 from spill slot
     mov r10, r10 # hv payload
     mov r11, 120 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
     sete al # __hx_payload_eq: al = (a==b)
     movzx r10, al # __hx_payload_eq: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1424], r11 # store tag L50
-    mov [rbp - 416], r10 # spill L50 to slot
-    mov r11, [rbp - 416] # reload L50 from spill slot
-    mov r10, r11 # assign L51
-    mov r11, [rbp - 1424] # tag L50 from tag-slot
-    mov [rbp - 1432], r11 # store tag L51
-    mov [rbp - 424], r10 # spill L51 to slot
-    mov r10, [rbp - 392] # reload L47 from spill slot
+    mov [rbp - 1512], r11 # store tag L52
+    mov [rbp - 432], r10 # spill L52 to slot
+    mov r11, [rbp - 432] # reload L52 from spill slot
+    mov r10, r11 # assign L53
+    mov r11, [rbp - 1512] # tag L52 from tag-slot
+    mov [rbp - 1520], r11 # store tag L53
+    mov [rbp - 440], r10 # spill L53 to slot
+    mov r10, [rbp - 408] # reload L49 from spill slot
     mov r10, r10 # hv payload
     mov r11, 88 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
     sete al # __hx_payload_eq: al = (a==b)
     movzx r10, al # __hx_payload_eq: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1440], r11 # store tag L52
-    mov [rbp - 432], r10 # spill L52 to slot
-    mov r11, [rbp - 432] # reload L52 from spill slot
-    mov r10, r11 # assign L53
-    mov r11, [rbp - 1440] # tag L52 from tag-slot
-    mov [rbp - 1448], r11 # store tag L53
-    mov [rbp - 440], r10 # spill L53 to slot
-    mov r11, [rbp - 440] # reload L53 from spill slot
-    mov r11, r11 # hv payload
-    mov r10, [rbp - 424] # reload L51 from spill slot
-    mov r10, r10 # hv payload
-    add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
-    mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1456], r11 # store tag L54
+    mov [rbp - 1528], r11 # store tag L54
     mov [rbp - 448], r10 # spill L54 to slot
     mov r11, [rbp - 448] # reload L54 from spill slot
     mov r10, r11 # assign L55
-    mov r11, [rbp - 1456] # tag L54 from tag-slot
-    mov [rbp - 1464], r11 # store tag L55
+    mov r11, [rbp - 1528] # tag L54 from tag-slot
+    mov [rbp - 1536], r11 # store tag L55
     mov [rbp - 456], r10 # spill L55 to slot
+    mov r11, [rbp - 456] # reload L55 from spill slot
+    mov r11, r11 # hv payload
+    mov r10, [rbp - 440] # reload L53 from spill slot
+    mov r10, r10 # hv payload
+    add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 1544], r11 # store tag L56
+    mov [rbp - 464], r10 # spill L56 to slot
+    mov r11, [rbp - 464] # reload L56 from spill slot
+    mov r10, r11 # assign L57
+    mov r11, [rbp - 1544] # tag L56 from tag-slot
+    mov [rbp - 1552], r11 # store tag L57
+    mov [rbp - 472], r10 # spill L57 to slot
     mov r10, [rbp - 120] # reload L13 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -452,23 +464,23 @@ hxlcl_strtoll:
     sete al # __hx_payload_eq: al = (a==b)
     movzx r10, al # __hx_payload_eq: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1472], r11 # store tag L56
-    mov [rbp - 464], r10 # spill L56 to slot
-    mov r10, [rbp - 464] # reload L56 from spill slot
+    mov [rbp - 1560], r11 # store tag L58
+    mov [rbp - 480], r10 # spill L58 to slot
+    mov r10, [rbp - 480] # reload L58 from spill slot
     test r10, r10 # br_cond test
     jz .L5211_hxlcl_strtoll_bb17 # jump-if-zero -> else
     jmp .L5211_hxlcl_strtoll_bb16 # jump -> then
 .L5211_hxlcl_strtoll_bb16:
     mov r11, 0 # hv payload
-    mov r10, [rbp - 408] # reload L49 from spill slot
+    mov r10, [rbp - 424] # reload L51 from spill slot
     mov r10, r10 # hv payload
     cmp r10, r11 # __hx_payload_ne: cmp payloads
     setne al # __hx_payload_ne: al = predicate
     movzx r10, al # __hx_payload_ne: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1488], r11 # store tag L58
-    mov [rbp - 480], r10 # spill L58 to slot
-    mov r10, [rbp - 480] # reload L58 from spill slot
+    mov [rbp - 1576], r11 # store tag L60
+    mov [rbp - 496], r10 # spill L60 to slot
+    mov r10, [rbp - 496] # reload L60 from spill slot
     test r10, r10 # br_cond test
     jz .L5211_hxlcl_strtoll_bb19 # jump-if-zero -> else
     jmp .L5211_hxlcl_strtoll_bb18 # jump -> then
@@ -480,66 +492,66 @@ hxlcl_strtoll:
     sete al # __hx_payload_eq: al = (a==b)
     movzx r10, al # __hx_payload_eq: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1536], r11 # store tag L64
-    mov [rbp - 528], r10 # spill L64 to slot
-    mov r10, [rbp - 528] # reload L64 from spill slot
+    mov [rbp - 1624], r11 # store tag L66
+    mov [rbp - 544], r10 # spill L66 to slot
+    mov r10, [rbp - 544] # reload L66 from spill slot
     test r10, r10 # br_cond test
     jz .L5211_hxlcl_strtoll_bb25 # jump-if-zero -> else
     jmp .L5211_hxlcl_strtoll_bb24 # jump -> then
 .L5211_hxlcl_strtoll_bb18:
     mov r11, 0 # hv payload
-    mov r10, [rbp - 456] # reload L55 from spill slot
+    mov r10, [rbp - 472] # reload L57 from spill slot
     mov r10, r10 # hv payload
     cmp r10, r11 # __hx_payload_ne: cmp payloads
     setne al # __hx_payload_ne: al = predicate
     movzx r10, al # __hx_payload_ne: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1504], r11 # store tag L60
-    mov [rbp - 496], r10 # spill L60 to slot
-    mov r10, [rbp - 496] # reload L60 from spill slot
+    mov [rbp - 1592], r11 # store tag L62
+    mov [rbp - 512], r10 # spill L62 to slot
+    mov r10, [rbp - 512] # reload L62 from spill slot
     test r10, r10 # br_cond test
     jz .L5211_hxlcl_strtoll_bb21 # jump-if-zero -> else
     jmp .L5211_hxlcl_strtoll_bb20 # jump -> then
 .L5211_hxlcl_strtoll_bb19:
     mov r10, 10 # assign L13
     mov r11, 0 # tag default = TAG_INT
-    mov [rbp - 1128], r11 # store tag L13
+    mov [rbp - 1200], r11 # store tag L13
     mov [rbp - 120], r10 # spill L13 to slot
     jmp .L5211_hxlcl_strtoll_bb23 # branch
 .L5211_hxlcl_strtoll_bb20:
     mov r10, 16 # assign L13
     mov r11, 0 # tag default = TAG_INT
-    mov [rbp - 1128], r11 # store tag L13
+    mov [rbp - 1200], r11 # store tag L13
     mov [rbp - 120], r10 # spill L13 to slot
     mov r11, 2 # hv payload
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1520], r11 # store tag L62
-    mov [rbp - 512], r10 # spill L62 to slot
-    mov r11, [rbp - 512] # reload L62 from spill slot
+    mov [rbp - 1608], r11 # store tag L64
+    mov [rbp - 528], r10 # spill L64 to slot
+    mov r11, [rbp - 528] # reload L64 from spill slot
     mov r10, r11 # assign L14
-    mov r11, [rbp - 1520] # tag L62 from tag-slot
-    mov [rbp - 1136], r11 # store tag L14
+    mov r11, [rbp - 1608] # tag L64 from tag-slot
+    mov [rbp - 1208], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
     jmp .L5211_hxlcl_strtoll_bb22 # branch
 .L5211_hxlcl_strtoll_bb21:
     mov r10, 8 # assign L13
     mov r11, 0 # tag default = TAG_INT
-    mov [rbp - 1128], r11 # store tag L13
+    mov [rbp - 1200], r11 # store tag L13
     mov [rbp - 120], r10 # spill L13 to slot
     mov r11, 1 # hv payload
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1528], r11 # store tag L63
-    mov [rbp - 520], r10 # spill L63 to slot
-    mov r11, [rbp - 520] # reload L63 from spill slot
+    mov [rbp - 1616], r11 # store tag L65
+    mov [rbp - 536], r10 # spill L65 to slot
+    mov r11, [rbp - 536] # reload L65 from spill slot
     mov r10, r11 # assign L14
-    mov r11, [rbp - 1528] # tag L63 from tag-slot
-    mov [rbp - 1136], r11 # store tag L14
+    mov r11, [rbp - 1616] # tag L65 from tag-slot
+    mov [rbp - 1208], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
     jmp .L5211_hxlcl_strtoll_bb22 # branch
 .L5211_hxlcl_strtoll_bb22:
@@ -548,15 +560,15 @@ hxlcl_strtoll:
     jmp .L5211_hxlcl_strtoll_bb30 # branch
 .L5211_hxlcl_strtoll_bb24:
     mov r11, 0 # hv payload
-    mov r10, [rbp - 408] # reload L49 from spill slot
+    mov r10, [rbp - 424] # reload L51 from spill slot
     mov r10, r10 # hv payload
     cmp r10, r11 # __hx_payload_ne: cmp payloads
     setne al # __hx_payload_ne: al = predicate
     movzx r10, al # __hx_payload_ne: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1552], r11 # store tag L66
-    mov [rbp - 544], r10 # spill L66 to slot
-    mov r10, [rbp - 544] # reload L66 from spill slot
+    mov [rbp - 1640], r11 # store tag L68
+    mov [rbp - 560], r10 # spill L68 to slot
+    mov r10, [rbp - 560] # reload L68 from spill slot
     test r10, r10 # br_cond test
     jz .L5211_hxlcl_strtoll_bb27 # jump-if-zero -> else
     jmp .L5211_hxlcl_strtoll_bb26 # jump -> then
@@ -564,15 +576,15 @@ hxlcl_strtoll:
     jmp .L5211_hxlcl_strtoll_bb30 # branch
 .L5211_hxlcl_strtoll_bb26:
     mov r11, 0 # hv payload
-    mov r10, [rbp - 456] # reload L55 from spill slot
+    mov r10, [rbp - 472] # reload L57 from spill slot
     mov r10, r10 # hv payload
     cmp r10, r11 # __hx_payload_ne: cmp payloads
     setne al # __hx_payload_ne: al = predicate
     movzx r10, al # __hx_payload_ne: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1568], r11 # store tag L68
-    mov [rbp - 560], r10 # spill L68 to slot
-    mov r10, [rbp - 560] # reload L68 from spill slot
+    mov [rbp - 1656], r11 # store tag L70
+    mov [rbp - 576], r10 # spill L70 to slot
+    mov r10, [rbp - 576] # reload L70 from spill slot
     test r10, r10 # br_cond test
     jz .L5211_hxlcl_strtoll_bb29 # jump-if-zero -> else
     jmp .L5211_hxlcl_strtoll_bb28 # jump -> then
@@ -584,37 +596,41 @@ hxlcl_strtoll:
     mov r10, r10 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1584], r11 # store tag L70
-    mov [rbp - 576], r10 # spill L70 to slot
-    mov r11, [rbp - 576] # reload L70 from spill slot
+    mov [rbp - 1672], r11 # store tag L72
+    mov [rbp - 592], r10 # spill L72 to slot
+    mov r11, [rbp - 592] # reload L72 from spill slot
     mov r10, r11 # assign L14
-    mov r11, [rbp - 1584] # tag L70 from tag-slot
-    mov [rbp - 1136], r11 # store tag L14
+    mov r11, [rbp - 1672] # tag L72 from tag-slot
+    mov [rbp - 1208], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
     jmp .L5211_hxlcl_strtoll_bb29 # branch
 .L5211_hxlcl_strtoll_bb29:
     jmp .L5211_hxlcl_strtoll_bb27 # branch
 .L5211_hxlcl_strtoll_bb30:
-    mov r10, 0 # assign L71
+    mov r10, 0 # assign L73
     mov r11, 0 # tag default = TAG_INT
-    mov [rbp - 1592], r11 # store tag L71
-    mov [rbp - 584], r10 # spill L71 to slot
-    mov r10, 1 # assign L72
+    mov [rbp - 1680], r11 # store tag L73
+    mov [rbp - 600], r10 # spill L73 to slot
+    mov r10, 0 # assign L74
     mov r11, 0 # tag default = TAG_INT
-    mov [rbp - 1600], r11 # store tag L72
-    mov [rbp - 592], r10 # spill L72 to slot
+    mov [rbp - 1688], r11 # store tag L74
+    mov [rbp - 608], r10 # spill L74 to slot
+    mov r10, 1 # assign L75
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 1696], r11 # store tag L75
+    mov [rbp - 616], r10 # spill L75 to slot
     jmp .L5211_hxlcl_strtoll_bb31 # branch
 .L5211_hxlcl_strtoll_bb31:
     mov r11, 0 # hv payload
-    mov r10, [rbp - 592] # reload L72 from spill slot
+    mov r10, [rbp - 616] # reload L75 from spill slot
     mov r10, r10 # hv payload
     cmp r10, r11 # __hx_payload_ne: cmp payloads
     setne al # __hx_payload_ne: al = predicate
     movzx r10, al # __hx_payload_ne: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1608], r11 # store tag L73
-    mov [rbp - 600], r10 # spill L73 to slot
-    mov r10, [rbp - 600] # reload L73 from spill slot
+    mov [rbp - 1704], r11 # store tag L76
+    mov [rbp - 624], r10 # spill L76 to slot
+    mov r10, [rbp - 624] # reload L76 from spill slot
     test r10, r10 # br_cond test
     jz .L5211_hxlcl_strtoll_bb33 # jump-if-zero -> else
     jmp .L5211_hxlcl_strtoll_bb32 # jump -> then
@@ -625,372 +641,369 @@ hxlcl_strtoll:
     add r10, r11 # __hx_ptr_load8: addr = ptr + off
     movzx r10, byte ptr [r10] # __hx_ptr_load8: r10 = *(u8*)addr (zero-ext)
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1616], r11 # store tag L74
-    mov [rbp - 608], r10 # spill L74 to slot
-    mov r11, [rbp - 608] # reload L74 from spill slot
-    mov r10, r11 # assign L75
-    mov r11, [rbp - 1616] # tag L74 from tag-slot
-    mov [rbp - 1624], r11 # store tag L75
-    mov [rbp - 616], r10 # spill L75 to slot
-    mov r10, 0 # assign L76
-    mov r11, 0 # tag default = TAG_INT
-    mov [rbp - 1632], r11 # store tag L76
-    mov [rbp - 624], r10 # spill L76 to slot
-    mov r10, 0 # assign L77
-    mov r11, 0 # tag default = TAG_INT
-    mov [rbp - 1640], r11 # store tag L77
+    mov [rbp - 1712], r11 # store tag L77
     mov [rbp - 632], r10 # spill L77 to slot
+    mov r11, [rbp - 632] # reload L77 from spill slot
+    mov r10, r11 # assign L78
+    mov r11, [rbp - 1712] # tag L77 from tag-slot
+    mov [rbp - 1720], r11 # store tag L78
+    mov [rbp - 640], r10 # spill L78 to slot
+    mov r10, 0 # assign L79
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 1728], r11 # store tag L79
+    mov [rbp - 648], r10 # spill L79 to slot
+    mov r10, 0 # assign L80
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 1736], r11 # store tag L80
+    mov [rbp - 656], r10 # spill L80 to slot
     mov r11, 48 # hv payload
-    mov r10, [rbp - 616] # reload L75 from spill slot
+    mov r10, [rbp - 640] # reload L78 from spill slot
     mov r10, r10 # hv payload
     cmp r10, r11 # __hx_payload_ge: cmp payloads
     setge al # __hx_payload_ge: al = predicate
     movzx r10, al # __hx_payload_ge: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1648], r11 # store tag L78
-    mov [rbp - 640], r10 # spill L78 to slot
-    mov r11, [rbp - 640] # reload L78 from spill slot
-    mov r10, r11 # assign L79
-    mov r11, [rbp - 1648] # tag L78 from tag-slot
-    mov [rbp - 1656], r11 # store tag L79
-    mov [rbp - 648], r10 # spill L79 to slot
+    mov [rbp - 1744], r11 # store tag L81
+    mov [rbp - 664], r10 # spill L81 to slot
+    mov r11, [rbp - 664] # reload L81 from spill slot
+    mov r10, r11 # assign L82
+    mov r11, [rbp - 1744] # tag L81 from tag-slot
+    mov [rbp - 1752], r11 # store tag L82
+    mov [rbp - 672], r10 # spill L82 to slot
     mov r11, 57 # hv payload
-    mov r10, [rbp - 616] # reload L75 from spill slot
+    mov r10, [rbp - 640] # reload L78 from spill slot
     mov r10, r10 # hv payload
     cmp r10, r11 # __hx_payload_le: cmp payloads
     setle al # __hx_payload_le: al = predicate
     movzx r10, al # __hx_payload_le: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1664], r11 # store tag L80
-    mov [rbp - 656], r10 # spill L80 to slot
-    mov r11, [rbp - 656] # reload L80 from spill slot
-    mov r10, r11 # assign L81
-    mov r11, [rbp - 1664] # tag L80 from tag-slot
-    mov [rbp - 1672], r11 # store tag L81
-    mov [rbp - 664], r10 # spill L81 to slot
-    mov r11, [rbp - 664] # reload L81 from spill slot
+    mov [rbp - 1760], r11 # store tag L83
+    mov [rbp - 680], r10 # spill L83 to slot
+    mov r11, [rbp - 680] # reload L83 from spill slot
+    mov r10, r11 # assign L84
+    mov r11, [rbp - 1760] # tag L83 from tag-slot
+    mov [rbp - 1768], r11 # store tag L84
+    mov [rbp - 688], r10 # spill L84 to slot
+    mov r11, [rbp - 688] # reload L84 from spill slot
     mov r11, r11 # hv payload
-    mov r10, [rbp - 648] # reload L79 from spill slot
+    mov r10, [rbp - 672] # reload L82 from spill slot
     mov r10, r10 # hv payload
     and r10, r11 # __hx_payload_and: r10 = a.pl and b.pl
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1680], r11 # store tag L82
-    mov [rbp - 672], r10 # spill L82 to slot
-    mov r11, [rbp - 672] # reload L82 from spill slot
-    mov r10, r11 # assign L83
-    mov r11, [rbp - 1680] # tag L82 from tag-slot
-    mov [rbp - 1688], r11 # store tag L83
-    mov [rbp - 680], r10 # spill L83 to slot
+    mov [rbp - 1776], r11 # store tag L85
+    mov [rbp - 696], r10 # spill L85 to slot
+    mov r11, [rbp - 696] # reload L85 from spill slot
+    mov r10, r11 # assign L86
+    mov r11, [rbp - 1776] # tag L85 from tag-slot
+    mov [rbp - 1784], r11 # store tag L86
+    mov [rbp - 704], r10 # spill L86 to slot
     mov r11, 0 # hv payload
-    mov r10, [rbp - 680] # reload L83 from spill slot
+    mov r10, [rbp - 704] # reload L86 from spill slot
     mov r10, r10 # hv payload
     cmp r10, r11 # __hx_payload_ne: cmp payloads
     setne al # __hx_payload_ne: al = predicate
     movzx r10, al # __hx_payload_ne: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1696], r11 # store tag L84
-    mov [rbp - 688], r10 # spill L84 to slot
-    mov r10, [rbp - 688] # reload L84 from spill slot
+    mov [rbp - 1792], r11 # store tag L87
+    mov [rbp - 712], r10 # spill L87 to slot
+    mov r10, [rbp - 712] # reload L87 from spill slot
     test r10, r10 # br_cond test
     jz .L5211_hxlcl_strtoll_bb35 # jump-if-zero -> else
     jmp .L5211_hxlcl_strtoll_bb34 # jump -> then
 .L5211_hxlcl_strtoll_bb33:
     mov r11, [rbp - 128] # reload L14 from spill slot
-    mov r11, r11 # hv payload
-    mov r10, r15 # hv payload
-    add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
-    mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1960], r11 # store tag L117
-    mov [rbp - 952], r10 # spill L117 to slot
-    mov r11, [rbp - 952] # reload L117 from spill slot
-    mov r10, r11 # assign L118
-    mov r11, [rbp - 1960] # tag L117 from tag-slot
-    mov [rbp - 1968], r11 # store tag L118
-    mov [rbp - 960], r10 # spill L118 to slot
-    mov r11, 0 # hv payload
-    mov r10, [rbp - 64] # reload L6 from spill slot
-    mov r10, r10 # hv payload
-    cmp r10, r11 # __hx_payload_ne: cmp payloads
-    setne al # __hx_payload_ne: al = predicate
-    movzx r10, al # __hx_payload_ne: zero-extend bool
-    mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1976], r11 # store tag L119
-    mov [rbp - 968], r10 # spill L119 to slot
-    mov r10, [rbp - 968] # reload L119 from spill slot
-    test r10, r10 # br_cond test
-    jz .L5211_hxlcl_strtoll_bb49 # jump-if-zero -> else
-    jmp .L5211_hxlcl_strtoll_bb48 # jump -> then
-.L5211_hxlcl_strtoll_bb34:
-    mov r10, 1 # assign L76
-    mov r11, 0 # tag default = TAG_INT
-    mov [rbp - 1632], r11 # store tag L76
-    mov [rbp - 624], r10 # spill L76 to slot
-    mov r11, 48 # hv payload
-    mov r10, [rbp - 616] # reload L75 from spill slot
-    mov r10, r10 # hv payload
-    sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
-    mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1712], r11 # store tag L86
-    mov [rbp - 704], r10 # spill L86 to slot
-    mov r11, [rbp - 704] # reload L86 from spill slot
-    mov r10, r11 # assign L77
-    mov r11, [rbp - 1712] # tag L86 from tag-slot
-    mov [rbp - 1640], r11 # store tag L77
-    mov [rbp - 632], r10 # spill L77 to slot
-    jmp .L5211_hxlcl_strtoll_bb41 # branch
-.L5211_hxlcl_strtoll_bb35:
-    mov r11, 97 # hv payload
-    mov r10, [rbp - 616] # reload L75 from spill slot
-    mov r10, r10 # hv payload
-    cmp r10, r11 # __hx_payload_ge: cmp payloads
-    setge al # __hx_payload_ge: al = predicate
-    movzx r10, al # __hx_payload_ge: zero-extend bool
-    mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1720], r11 # store tag L87
-    mov [rbp - 712], r10 # spill L87 to slot
-    mov r11, [rbp - 712] # reload L87 from spill slot
-    mov r10, r11 # assign L88
-    mov r11, [rbp - 1720] # tag L87 from tag-slot
-    mov [rbp - 1728], r11 # store tag L88
-    mov [rbp - 720], r10 # spill L88 to slot
-    mov r11, 122 # hv payload
-    mov r10, [rbp - 616] # reload L75 from spill slot
-    mov r10, r10 # hv payload
-    cmp r10, r11 # __hx_payload_le: cmp payloads
-    setle al # __hx_payload_le: al = predicate
-    movzx r10, al # __hx_payload_le: zero-extend bool
-    mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1736], r11 # store tag L89
-    mov [rbp - 728], r10 # spill L89 to slot
-    mov r11, [rbp - 728] # reload L89 from spill slot
-    mov r10, r11 # assign L90
-    mov r11, [rbp - 1736] # tag L89 from tag-slot
-    mov [rbp - 1744], r11 # store tag L90
-    mov [rbp - 736], r10 # spill L90 to slot
-    mov r11, [rbp - 736] # reload L90 from spill slot
-    mov r11, r11 # hv payload
-    mov r10, [rbp - 720] # reload L88 from spill slot
-    mov r10, r10 # hv payload
-    and r10, r11 # __hx_payload_and: r10 = a.pl and b.pl
-    mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1752], r11 # store tag L91
-    mov [rbp - 744], r10 # spill L91 to slot
-    mov r11, [rbp - 744] # reload L91 from spill slot
-    mov r10, r11 # assign L92
-    mov r11, [rbp - 1752] # tag L91 from tag-slot
-    mov [rbp - 1760], r11 # store tag L92
-    mov [rbp - 752], r10 # spill L92 to slot
-    mov r11, 0 # hv payload
-    mov r10, [rbp - 752] # reload L92 from spill slot
-    mov r10, r10 # hv payload
-    cmp r10, r11 # __hx_payload_ne: cmp payloads
-    setne al # __hx_payload_ne: al = predicate
-    movzx r10, al # __hx_payload_ne: zero-extend bool
-    mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1768], r11 # store tag L93
-    mov [rbp - 760], r10 # spill L93 to slot
-    mov r10, [rbp - 760] # reload L93 from spill slot
-    test r10, r10 # br_cond test
-    jz .L5211_hxlcl_strtoll_bb37 # jump-if-zero -> else
-    jmp .L5211_hxlcl_strtoll_bb36 # jump -> then
-.L5211_hxlcl_strtoll_bb36:
-    mov r10, 1 # assign L76
-    mov r11, 0 # tag default = TAG_INT
-    mov [rbp - 1632], r11 # store tag L76
-    mov [rbp - 624], r10 # spill L76 to slot
-    mov r11, 97 # hv payload
-    mov r10, [rbp - 616] # reload L75 from spill slot
-    mov r10, r10 # hv payload
-    sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
-    mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1784], r11 # store tag L95
-    mov [rbp - 776], r10 # spill L95 to slot
-    mov r11, [rbp - 776] # reload L95 from spill slot
-    mov r10, r11 # assign L96
-    mov r11, [rbp - 1784] # tag L95 from tag-slot
-    mov [rbp - 1792], r11 # store tag L96
-    mov [rbp - 784], r10 # spill L96 to slot
-    mov r11, 10 # hv payload
-    mov r10, [rbp - 784] # reload L96 from spill slot
-    mov r10, r10 # hv payload
-    add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
-    mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1800], r11 # store tag L97
-    mov [rbp - 792], r10 # spill L97 to slot
-    mov r11, [rbp - 792] # reload L97 from spill slot
-    mov r10, r11 # assign L77
-    mov r11, [rbp - 1800] # tag L97 from tag-slot
-    mov [rbp - 1640], r11 # store tag L77
-    mov [rbp - 632], r10 # spill L77 to slot
-    jmp .L5211_hxlcl_strtoll_bb40 # branch
-.L5211_hxlcl_strtoll_bb37:
-    mov r11, 65 # hv payload
-    mov r10, [rbp - 616] # reload L75 from spill slot
-    mov r10, r10 # hv payload
-    cmp r10, r11 # __hx_payload_ge: cmp payloads
-    setge al # __hx_payload_ge: al = predicate
-    movzx r10, al # __hx_payload_ge: zero-extend bool
-    mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1808], r11 # store tag L98
-    mov [rbp - 800], r10 # spill L98 to slot
-    mov r11, [rbp - 800] # reload L98 from spill slot
-    mov r10, r11 # assign L99
-    mov r11, [rbp - 1808] # tag L98 from tag-slot
-    mov [rbp - 1816], r11 # store tag L99
-    mov [rbp - 808], r10 # spill L99 to slot
-    mov r11, 90 # hv payload
-    mov r10, [rbp - 616] # reload L75 from spill slot
-    mov r10, r10 # hv payload
-    cmp r10, r11 # __hx_payload_le: cmp payloads
-    setle al # __hx_payload_le: al = predicate
-    movzx r10, al # __hx_payload_le: zero-extend bool
-    mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1824], r11 # store tag L100
-    mov [rbp - 816], r10 # spill L100 to slot
-    mov r11, [rbp - 816] # reload L100 from spill slot
-    mov r10, r11 # assign L101
-    mov r11, [rbp - 1824] # tag L100 from tag-slot
-    mov [rbp - 1832], r11 # store tag L101
-    mov [rbp - 824], r10 # spill L101 to slot
-    mov r11, [rbp - 824] # reload L101 from spill slot
-    mov r11, r11 # hv payload
-    mov r10, [rbp - 808] # reload L99 from spill slot
-    mov r10, r10 # hv payload
-    and r10, r11 # __hx_payload_and: r10 = a.pl and b.pl
-    mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1840], r11 # store tag L102
-    mov [rbp - 832], r10 # spill L102 to slot
-    mov r11, [rbp - 832] # reload L102 from spill slot
-    mov r10, r11 # assign L103
-    mov r11, [rbp - 1840] # tag L102 from tag-slot
-    mov [rbp - 1848], r11 # store tag L103
-    mov [rbp - 840], r10 # spill L103 to slot
-    mov r11, 0 # hv payload
-    mov r10, [rbp - 840] # reload L103 from spill slot
-    mov r10, r10 # hv payload
-    cmp r10, r11 # __hx_payload_ne: cmp payloads
-    setne al # __hx_payload_ne: al = predicate
-    movzx r10, al # __hx_payload_ne: zero-extend bool
-    mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1856], r11 # store tag L104
-    mov [rbp - 848], r10 # spill L104 to slot
-    mov r10, [rbp - 848] # reload L104 from spill slot
-    test r10, r10 # br_cond test
-    jz .L5211_hxlcl_strtoll_bb39 # jump-if-zero -> else
-    jmp .L5211_hxlcl_strtoll_bb38 # jump -> then
-.L5211_hxlcl_strtoll_bb38:
-    mov r10, 1 # assign L76
-    mov r11, 0 # tag default = TAG_INT
-    mov [rbp - 1632], r11 # store tag L76
-    mov [rbp - 624], r10 # spill L76 to slot
-    mov r11, 65 # hv payload
-    mov r10, [rbp - 616] # reload L75 from spill slot
-    mov r10, r10 # hv payload
-    sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
-    mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1872], r11 # store tag L106
-    mov [rbp - 864], r10 # spill L106 to slot
-    mov r11, [rbp - 864] # reload L106 from spill slot
-    mov r10, r11 # assign L107
-    mov r11, [rbp - 1872] # tag L106 from tag-slot
-    mov [rbp - 1880], r11 # store tag L107
-    mov [rbp - 872], r10 # spill L107 to slot
-    mov r11, 10 # hv payload
-    mov r10, [rbp - 872] # reload L107 from spill slot
-    mov r10, r10 # hv payload
-    add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
-    mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1888], r11 # store tag L108
-    mov [rbp - 880], r10 # spill L108 to slot
-    mov r11, [rbp - 880] # reload L108 from spill slot
-    mov r10, r11 # assign L77
-    mov r11, [rbp - 1888] # tag L108 from tag-slot
-    mov [rbp - 1640], r11 # store tag L77
-    mov [rbp - 632], r10 # spill L77 to slot
-    jmp .L5211_hxlcl_strtoll_bb39 # branch
-.L5211_hxlcl_strtoll_bb39:
-    jmp .L5211_hxlcl_strtoll_bb40 # branch
-.L5211_hxlcl_strtoll_bb40:
-    jmp .L5211_hxlcl_strtoll_bb41 # branch
-.L5211_hxlcl_strtoll_bb41:
-    mov r10, [rbp - 624] # reload L76 from spill slot
+    mov r10, r11 # assign L120
+    mov r11, [rbp - 1208] # tag L14 from tag-slot
+    mov [rbp - 2056], r11 # store tag L120
+    mov [rbp - 976], r10 # spill L120 to slot
+    mov r10, [rbp - 608] # reload L74 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
     sete al # __hx_payload_eq: al = (a==b)
     movzx r10, al # __hx_payload_eq: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1896], r11 # store tag L109
-    mov [rbp - 888], r10 # spill L109 to slot
-    mov r10, [rbp - 888] # reload L109 from spill slot
+    mov [rbp - 2064], r11 # store tag L121
+    mov [rbp - 984], r10 # spill L121 to slot
+    mov r10, [rbp - 984] # reload L121 from spill slot
     test r10, r10 # br_cond test
-    jz .L5211_hxlcl_strtoll_bb43 # jump-if-zero -> else
-    jmp .L5211_hxlcl_strtoll_bb42 # jump -> then
-.L5211_hxlcl_strtoll_bb42:
-    mov r10, 0 # assign L72
+    jz .L5211_hxlcl_strtoll_bb49 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb48 # jump -> then
+.L5211_hxlcl_strtoll_bb34:
+    mov r10, 1 # assign L79
     mov r11, 0 # tag default = TAG_INT
-    mov [rbp - 1600], r11 # store tag L72
-    mov [rbp - 592], r10 # spill L72 to slot
-    jmp .L5211_hxlcl_strtoll_bb47 # branch
-.L5211_hxlcl_strtoll_bb43:
-    mov r11, [rbp - 120] # reload L13 from spill slot
-    mov r11, r11 # hv payload
-    mov r10, [rbp - 632] # reload L77 from spill slot
+    mov [rbp - 1728], r11 # store tag L79
+    mov [rbp - 648], r10 # spill L79 to slot
+    mov r11, 48 # hv payload
+    mov r10, [rbp - 640] # reload L78 from spill slot
+    mov r10, r10 # hv payload
+    sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 1808], r11 # store tag L89
+    mov [rbp - 728], r10 # spill L89 to slot
+    mov r11, [rbp - 728] # reload L89 from spill slot
+    mov r10, r11 # assign L80
+    mov r11, [rbp - 1808] # tag L89 from tag-slot
+    mov [rbp - 1736], r11 # store tag L80
+    mov [rbp - 656], r10 # spill L80 to slot
+    jmp .L5211_hxlcl_strtoll_bb41 # branch
+.L5211_hxlcl_strtoll_bb35:
+    mov r11, 97 # hv payload
+    mov r10, [rbp - 640] # reload L78 from spill slot
     mov r10, r10 # hv payload
     cmp r10, r11 # __hx_payload_ge: cmp payloads
     setge al # __hx_payload_ge: al = predicate
     movzx r10, al # __hx_payload_ge: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 1912], r11 # store tag L111
+    mov [rbp - 1816], r11 # store tag L90
+    mov [rbp - 736], r10 # spill L90 to slot
+    mov r11, [rbp - 736] # reload L90 from spill slot
+    mov r10, r11 # assign L91
+    mov r11, [rbp - 1816] # tag L90 from tag-slot
+    mov [rbp - 1824], r11 # store tag L91
+    mov [rbp - 744], r10 # spill L91 to slot
+    mov r11, 122 # hv payload
+    mov r10, [rbp - 640] # reload L78 from spill slot
+    mov r10, r10 # hv payload
+    cmp r10, r11 # __hx_payload_le: cmp payloads
+    setle al # __hx_payload_le: al = predicate
+    movzx r10, al # __hx_payload_le: zero-extend bool
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 1832], r11 # store tag L92
+    mov [rbp - 752], r10 # spill L92 to slot
+    mov r11, [rbp - 752] # reload L92 from spill slot
+    mov r10, r11 # assign L93
+    mov r11, [rbp - 1832] # tag L92 from tag-slot
+    mov [rbp - 1840], r11 # store tag L93
+    mov [rbp - 760], r10 # spill L93 to slot
+    mov r11, [rbp - 760] # reload L93 from spill slot
+    mov r11, r11 # hv payload
+    mov r10, [rbp - 744] # reload L91 from spill slot
+    mov r10, r10 # hv payload
+    and r10, r11 # __hx_payload_and: r10 = a.pl and b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 1848], r11 # store tag L94
+    mov [rbp - 768], r10 # spill L94 to slot
+    mov r11, [rbp - 768] # reload L94 from spill slot
+    mov r10, r11 # assign L95
+    mov r11, [rbp - 1848] # tag L94 from tag-slot
+    mov [rbp - 1856], r11 # store tag L95
+    mov [rbp - 776], r10 # spill L95 to slot
+    mov r11, 0 # hv payload
+    mov r10, [rbp - 776] # reload L95 from spill slot
+    mov r10, r10 # hv payload
+    cmp r10, r11 # __hx_payload_ne: cmp payloads
+    setne al # __hx_payload_ne: al = predicate
+    movzx r10, al # __hx_payload_ne: zero-extend bool
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 1864], r11 # store tag L96
+    mov [rbp - 784], r10 # spill L96 to slot
+    mov r10, [rbp - 784] # reload L96 from spill slot
+    test r10, r10 # br_cond test
+    jz .L5211_hxlcl_strtoll_bb37 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb36 # jump -> then
+.L5211_hxlcl_strtoll_bb36:
+    mov r10, 1 # assign L79
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 1728], r11 # store tag L79
+    mov [rbp - 648], r10 # spill L79 to slot
+    mov r11, 97 # hv payload
+    mov r10, [rbp - 640] # reload L78 from spill slot
+    mov r10, r10 # hv payload
+    sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 1880], r11 # store tag L98
+    mov [rbp - 800], r10 # spill L98 to slot
+    mov r11, [rbp - 800] # reload L98 from spill slot
+    mov r10, r11 # assign L99
+    mov r11, [rbp - 1880] # tag L98 from tag-slot
+    mov [rbp - 1888], r11 # store tag L99
+    mov [rbp - 808], r10 # spill L99 to slot
+    mov r11, 10 # hv payload
+    mov r10, [rbp - 808] # reload L99 from spill slot
+    mov r10, r10 # hv payload
+    add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 1896], r11 # store tag L100
+    mov [rbp - 816], r10 # spill L100 to slot
+    mov r11, [rbp - 816] # reload L100 from spill slot
+    mov r10, r11 # assign L80
+    mov r11, [rbp - 1896] # tag L100 from tag-slot
+    mov [rbp - 1736], r11 # store tag L80
+    mov [rbp - 656], r10 # spill L80 to slot
+    jmp .L5211_hxlcl_strtoll_bb40 # branch
+.L5211_hxlcl_strtoll_bb37:
+    mov r11, 65 # hv payload
+    mov r10, [rbp - 640] # reload L78 from spill slot
+    mov r10, r10 # hv payload
+    cmp r10, r11 # __hx_payload_ge: cmp payloads
+    setge al # __hx_payload_ge: al = predicate
+    movzx r10, al # __hx_payload_ge: zero-extend bool
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 1904], r11 # store tag L101
+    mov [rbp - 824], r10 # spill L101 to slot
+    mov r11, [rbp - 824] # reload L101 from spill slot
+    mov r10, r11 # assign L102
+    mov r11, [rbp - 1904] # tag L101 from tag-slot
+    mov [rbp - 1912], r11 # store tag L102
+    mov [rbp - 832], r10 # spill L102 to slot
+    mov r11, 90 # hv payload
+    mov r10, [rbp - 640] # reload L78 from spill slot
+    mov r10, r10 # hv payload
+    cmp r10, r11 # __hx_payload_le: cmp payloads
+    setle al # __hx_payload_le: al = predicate
+    movzx r10, al # __hx_payload_le: zero-extend bool
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 1920], r11 # store tag L103
+    mov [rbp - 840], r10 # spill L103 to slot
+    mov r11, [rbp - 840] # reload L103 from spill slot
+    mov r10, r11 # assign L104
+    mov r11, [rbp - 1920] # tag L103 from tag-slot
+    mov [rbp - 1928], r11 # store tag L104
+    mov [rbp - 848], r10 # spill L104 to slot
+    mov r11, [rbp - 848] # reload L104 from spill slot
+    mov r11, r11 # hv payload
+    mov r10, [rbp - 832] # reload L102 from spill slot
+    mov r10, r10 # hv payload
+    and r10, r11 # __hx_payload_and: r10 = a.pl and b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 1936], r11 # store tag L105
+    mov [rbp - 856], r10 # spill L105 to slot
+    mov r11, [rbp - 856] # reload L105 from spill slot
+    mov r10, r11 # assign L106
+    mov r11, [rbp - 1936] # tag L105 from tag-slot
+    mov [rbp - 1944], r11 # store tag L106
+    mov [rbp - 864], r10 # spill L106 to slot
+    mov r11, 0 # hv payload
+    mov r10, [rbp - 864] # reload L106 from spill slot
+    mov r10, r10 # hv payload
+    cmp r10, r11 # __hx_payload_ne: cmp payloads
+    setne al # __hx_payload_ne: al = predicate
+    movzx r10, al # __hx_payload_ne: zero-extend bool
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 1952], r11 # store tag L107
+    mov [rbp - 872], r10 # spill L107 to slot
+    mov r10, [rbp - 872] # reload L107 from spill slot
+    test r10, r10 # br_cond test
+    jz .L5211_hxlcl_strtoll_bb39 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb38 # jump -> then
+.L5211_hxlcl_strtoll_bb38:
+    mov r10, 1 # assign L79
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 1728], r11 # store tag L79
+    mov [rbp - 648], r10 # spill L79 to slot
+    mov r11, 65 # hv payload
+    mov r10, [rbp - 640] # reload L78 from spill slot
+    mov r10, r10 # hv payload
+    sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 1968], r11 # store tag L109
+    mov [rbp - 888], r10 # spill L109 to slot
+    mov r11, [rbp - 888] # reload L109 from spill slot
+    mov r10, r11 # assign L110
+    mov r11, [rbp - 1968] # tag L109 from tag-slot
+    mov [rbp - 1976], r11 # store tag L110
+    mov [rbp - 896], r10 # spill L110 to slot
+    mov r11, 10 # hv payload
+    mov r10, [rbp - 896] # reload L110 from spill slot
+    mov r10, r10 # hv payload
+    add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 1984], r11 # store tag L111
     mov [rbp - 904], r10 # spill L111 to slot
-    mov r10, [rbp - 904] # reload L111 from spill slot
+    mov r11, [rbp - 904] # reload L111 from spill slot
+    mov r10, r11 # assign L80
+    mov r11, [rbp - 1984] # tag L111 from tag-slot
+    mov [rbp - 1736], r11 # store tag L80
+    mov [rbp - 656], r10 # spill L80 to slot
+    jmp .L5211_hxlcl_strtoll_bb39 # branch
+.L5211_hxlcl_strtoll_bb39:
+    jmp .L5211_hxlcl_strtoll_bb40 # branch
+.L5211_hxlcl_strtoll_bb40:
+    jmp .L5211_hxlcl_strtoll_bb41 # branch
+.L5211_hxlcl_strtoll_bb41:
+    mov r10, [rbp - 648] # reload L79 from spill slot
+    mov r10, r10 # hv payload
+    mov r11, 0 # hv payload
+    cmp r10, r11 # __hx_payload_eq: cmp payloads
+    sete al # __hx_payload_eq: al = (a==b)
+    movzx r10, al # __hx_payload_eq: zero-extend bool
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 1992], r11 # store tag L112
+    mov [rbp - 912], r10 # spill L112 to slot
+    mov r10, [rbp - 912] # reload L112 from spill slot
+    test r10, r10 # br_cond test
+    jz .L5211_hxlcl_strtoll_bb43 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb42 # jump -> then
+.L5211_hxlcl_strtoll_bb42:
+    mov r10, 0 # assign L75
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 1696], r11 # store tag L75
+    mov [rbp - 616], r10 # spill L75 to slot
+    jmp .L5211_hxlcl_strtoll_bb47 # branch
+.L5211_hxlcl_strtoll_bb43:
+    mov r11, [rbp - 120] # reload L13 from spill slot
+    mov r11, r11 # hv payload
+    mov r10, [rbp - 656] # reload L80 from spill slot
+    mov r10, r10 # hv payload
+    cmp r10, r11 # __hx_payload_ge: cmp payloads
+    setge al # __hx_payload_ge: al = predicate
+    movzx r10, al # __hx_payload_ge: zero-extend bool
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 2008], r11 # store tag L114
+    mov [rbp - 928], r10 # spill L114 to slot
+    mov r10, [rbp - 928] # reload L114 from spill slot
     test r10, r10 # br_cond test
     jz .L5211_hxlcl_strtoll_bb45 # jump-if-zero -> else
     jmp .L5211_hxlcl_strtoll_bb44 # jump -> then
 .L5211_hxlcl_strtoll_bb44:
-    mov r10, 0 # assign L72
+    mov r10, 0 # assign L75
     mov r11, 0 # tag default = TAG_INT
-    mov [rbp - 1600], r11 # store tag L72
-    mov [rbp - 592], r10 # spill L72 to slot
+    mov [rbp - 1696], r11 # store tag L75
+    mov [rbp - 616], r10 # spill L75 to slot
     jmp .L5211_hxlcl_strtoll_bb46 # branch
 .L5211_hxlcl_strtoll_bb45:
     mov r11, [rbp - 120] # reload L13 from spill slot
     mov r11, r11 # hv payload
-    mov r10, [rbp - 584] # reload L71 from spill slot
+    mov r10, [rbp - 600] # reload L73 from spill slot
     mov r10, r10 # hv payload
     imul r10, r11 # __hx_payload_mul: r10 = a.pl imul b.pl
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1928], r11 # store tag L113
-    mov [rbp - 920], r10 # spill L113 to slot
-    mov r11, [rbp - 920] # reload L113 from spill slot
-    mov r10, r11 # assign L114
-    mov r11, [rbp - 1928] # tag L113 from tag-slot
-    mov [rbp - 1936], r11 # store tag L114
-    mov [rbp - 928], r10 # spill L114 to slot
-    mov r11, [rbp - 632] # reload L77 from spill slot
+    mov [rbp - 2024], r11 # store tag L116
+    mov [rbp - 944], r10 # spill L116 to slot
+    mov r11, [rbp - 944] # reload L116 from spill slot
+    mov r10, r11 # assign L117
+    mov r11, [rbp - 2024] # tag L116 from tag-slot
+    mov [rbp - 2032], r11 # store tag L117
+    mov [rbp - 952], r10 # spill L117 to slot
+    mov r11, [rbp - 656] # reload L80 from spill slot
     mov r11, r11 # hv payload
-    mov r10, [rbp - 928] # reload L114 from spill slot
+    mov r10, [rbp - 952] # reload L117 from spill slot
     mov r10, r10 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1944], r11 # store tag L115
-    mov [rbp - 936], r10 # spill L115 to slot
-    mov r11, [rbp - 936] # reload L115 from spill slot
-    mov r10, r11 # assign L71
-    mov r11, [rbp - 1944] # tag L115 from tag-slot
-    mov [rbp - 1592], r11 # store tag L71
-    mov [rbp - 584], r10 # spill L71 to slot
+    mov [rbp - 2040], r11 # store tag L118
+    mov [rbp - 960], r10 # spill L118 to slot
+    mov r11, [rbp - 960] # reload L118 from spill slot
+    mov r10, r11 # assign L73
+    mov r11, [rbp - 2040] # tag L118 from tag-slot
+    mov [rbp - 1680], r11 # store tag L73
+    mov [rbp - 600], r10 # spill L73 to slot
+    mov r10, 1 # assign L74
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 1688], r11 # store tag L74
+    mov [rbp - 608], r10 # spill L74 to slot
     mov r11, 1 # hv payload
     mov r10, [rbp - 128] # reload L14 from spill slot
     mov r10, r10 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1952], r11 # store tag L116
-    mov [rbp - 944], r10 # spill L116 to slot
-    mov r11, [rbp - 944] # reload L116 from spill slot
+    mov [rbp - 2048], r11 # store tag L119
+    mov [rbp - 968], r10 # spill L119 to slot
+    mov r11, [rbp - 968] # reload L119 from spill slot
     mov r10, r11 # assign L14
-    mov r11, [rbp - 1952] # tag L116 from tag-slot
-    mov [rbp - 1136], r11 # store tag L14
+    mov r11, [rbp - 2048] # tag L119 from tag-slot
+    mov [rbp - 1208], r11 # store tag L14
     mov [rbp - 128], r10 # spill L14 to slot
     jmp .L5211_hxlcl_strtoll_bb46 # branch
 .L5211_hxlcl_strtoll_bb46:
@@ -998,20 +1011,83 @@ hxlcl_strtoll:
 .L5211_hxlcl_strtoll_bb47:
     jmp .L5211_hxlcl_strtoll_bb31 # branch
 .L5211_hxlcl_strtoll_bb48:
+    mov r11, [rbp - 360] # reload L43 from spill slot
+    mov r11, r11 # hv payload
+    mov r10, [rbp - 128] # reload L14 from spill slot
+    mov r10, r10 # hv payload
+    cmp r10, r11 # __hx_payload_ne: cmp payloads
+    setne al # __hx_payload_ne: al = predicate
+    movzx r10, al # __hx_payload_ne: zero-extend bool
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 2080], r11 # store tag L123
+    mov [rbp - 1000], r10 # spill L123 to slot
+    mov r10, [rbp - 1000] # reload L123 from spill slot
+    test r10, r10 # br_cond test
+    jz .L5211_hxlcl_strtoll_bb51 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb50 # jump -> then
+.L5211_hxlcl_strtoll_bb49:
+    mov r11, [rbp - 976] # reload L120 from spill slot
+    mov r11, r11 # hv payload
+    mov r10, r15 # hv payload
+    add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 2104], r11 # store tag L126
+    mov [rbp - 1024], r10 # spill L126 to slot
+    mov r11, [rbp - 1024] # reload L126 from spill slot
+    mov r10, r11 # assign L127
+    mov r11, [rbp - 2104] # tag L126 from tag-slot
+    mov [rbp - 2112], r11 # store tag L127
+    mov [rbp - 1032], r10 # spill L127 to slot
+    mov r11, 0 # hv payload
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    mov r10, r10 # hv payload
+    cmp r10, r11 # __hx_payload_ne: cmp payloads
+    setne al # __hx_payload_ne: al = predicate
+    movzx r10, al # __hx_payload_ne: zero-extend bool
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 2120], r11 # store tag L128
+    mov [rbp - 1040], r10 # spill L128 to slot
+    mov r10, [rbp - 1040] # reload L128 from spill slot
+    test r10, r10 # br_cond test
+    jz .L5211_hxlcl_strtoll_bb54 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb53 # jump -> then
+.L5211_hxlcl_strtoll_bb50:
+    mov r11, 1 # hv payload
+    mov r10, [rbp - 360] # reload L43 from spill slot
+    mov r10, r10 # hv payload
+    add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 2096], r11 # store tag L125
+    mov [rbp - 1016], r10 # spill L125 to slot
+    mov r11, [rbp - 1016] # reload L125 from spill slot
+    mov r10, r11 # assign L120
+    mov r11, [rbp - 2096] # tag L125 from tag-slot
+    mov [rbp - 2056], r11 # store tag L120
+    mov [rbp - 976], r10 # spill L120 to slot
+    jmp .L5211_hxlcl_strtoll_bb52 # branch
+.L5211_hxlcl_strtoll_bb51:
+    mov r10, 0 # assign L120
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 2056], r11 # store tag L120
+    mov [rbp - 976], r10 # spill L120 to slot
+    jmp .L5211_hxlcl_strtoll_bb52 # branch
+.L5211_hxlcl_strtoll_bb52:
+    jmp .L5211_hxlcl_strtoll_bb49 # branch
+.L5211_hxlcl_strtoll_bb53:
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
-    mov rsi, [rbp - 960] # reload L118 from spill slot
+    mov rsi, [rbp - 1032] # reload L127 from spill slot
     mov rsi, rsi # hv payload
     add r10, r11 # __hx_ptr_store64: addr = ptr + off
     mov qword ptr [r10], rsi # __hx_ptr_store64: *(addr) = val
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 1992], r11 # store tag L121
-    mov [rbp - 984], r10 # spill L121 to slot
-    jmp .L5211_hxlcl_strtoll_bb49 # branch
-.L5211_hxlcl_strtoll_bb49:
+    mov [rbp - 2136], r11 # store tag L130
+    mov [rbp - 1056], r10 # spill L130 to slot
+    jmp .L5211_hxlcl_strtoll_bb54 # branch
+.L5211_hxlcl_strtoll_bb54:
     mov r11, 0 # hv payload
     mov r10, [rbp - 296] # reload L35 from spill slot
     mov r10, r10 # hv payload
@@ -1019,28 +1095,28 @@ hxlcl_strtoll:
     setne al # __hx_payload_ne: al = predicate
     movzx r10, al # __hx_payload_ne: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 2000], r11 # store tag L122
-    mov [rbp - 992], r10 # spill L122 to slot
-    mov r10, [rbp - 992] # reload L122 from spill slot
+    mov [rbp - 2144], r11 # store tag L131
+    mov [rbp - 1064], r10 # spill L131 to slot
+    mov r10, [rbp - 1064] # reload L131 from spill slot
     test r10, r10 # br_cond test
-    jz .L5211_hxlcl_strtoll_bb51 # jump-if-zero -> else
-    jmp .L5211_hxlcl_strtoll_bb50 # jump -> then
-.L5211_hxlcl_strtoll_bb50:
-    mov r11, [rbp - 584] # reload L71 from spill slot
+    jz .L5211_hxlcl_strtoll_bb56 # jump-if-zero -> else
+    jmp .L5211_hxlcl_strtoll_bb55 # jump -> then
+.L5211_hxlcl_strtoll_bb55:
+    mov r11, [rbp - 600] # reload L73 from spill slot
     mov r11, r11 # hv payload
     mov r10, 0 # hv payload
     sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 2016], r11 # store tag L124
-    mov [rbp - 1008], r10 # spill L124 to slot
-    mov r11, [rbp - 1008] # reload L124 from spill slot
-    mov r10, r11 # assign L125
-    mov r11, [rbp - 2016] # tag L124 from tag-slot
-    mov [rbp - 2024], r11 # store tag L125
-    mov [rbp - 1016], r10 # spill L125 to slot
-    mov rax, [rbp - 1016] # reload L125 from spill slot
+    mov [rbp - 2160], r11 # store tag L133
+    mov [rbp - 1080], r10 # spill L133 to slot
+    mov r11, [rbp - 1080] # reload L133 from spill slot
+    mov r10, r11 # assign L134
+    mov r11, [rbp - 2160] # tag L133 from tag-slot
+    mov [rbp - 2168], r11 # store tag L134
+    mov [rbp - 1088], r10 # spill L134 to slot
+    mov rax, [rbp - 1088] # reload L134 from spill slot
     mov rax, rax # hv payload
-    add rsp, 1984 # epilogue: free spill frame
+    add rsp, 2128 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
     pop r15 # epilogue: restore r15
     pop r14 # epilogue: restore r14
@@ -1049,10 +1125,10 @@ hxlcl_strtoll:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L5211_hxlcl_strtoll_bb51:
-    mov rax, [rbp - 584] # reload L71 from spill slot
+.L5211_hxlcl_strtoll_bb56:
+    mov rax, [rbp - 600] # reload L73 from spill slot
     mov rax, rax # hv payload
-    add rsp, 1984 # epilogue: free spill frame
+    add rsp, 2128 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
     pop r15 # epilogue: restore r15
     pop r14 # epilogue: restore r14
