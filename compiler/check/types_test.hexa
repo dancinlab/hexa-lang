@@ -1752,6 +1752,52 @@ fn _build_case_hx3025_string_fixture() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (cs) R2 — segment(b) HX3053 array-index-BY-STRING REJECT (Rust E0277). `xs["k"]`
+// on a KNOWN array base (xs: [i64]) indexed by a STRING literal → 1 HX3053 Error
+// (the C-substrate hexa_arr_poly_get takes int64_t idx, so a string operand's
+// pointer bits become a garbage OOB index). `xs[0]` (int index) stays clean; and
+// `unk["k"]` (unknown base) stays silent (conservative under-reject — the base is
+// not a KNOWN array). Expect exactly 1 HX3053 error. Also expect 0 HX3025 (the
+// array base is not a scalar/string, so the sibling non-container gate never
+// fires on `xs`).
+fn _build_case_hx3053_arr_str_index() -> Module {
+    let f = "case_hx3053.hexa"
+    // fn f(xs: [i64]) -> i64 { let x = xs["k"]  return 0 }   — string index on array → HX3053
+    let fx = _let_expr("x", _index_expr(_ident_expr("xs", f, 2, 13), _string_expr("k", f, 2, 16), f, 2, 15), f, 2, 5)
+    let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
+    let mut pf = []
+    pf.push(_param("xs", "[i64]", f, 1, 6))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 1, 1), f, 1)
+    // fn g(xs: [i64]) -> i64 { let y = xs[0]  return 0 }   — int index → clean
+    let gy = _let_expr("y", _index_expr(_ident_expr("xs", f, 5, 13), _int_expr("0", f, 5, 16), f, 5, 15), f, 5, 5)
+    let gr = _return_expr(_int_expr("0", f, 6, 12), f, 6, 5)
+    let mut pg = []
+    pg.push(_param("xs", "[i64]", f, 4, 6))
+    let item_g = _fn_item("g", pg, _named_type_ref("i64"), _block([gy, gr], f, 4, 1), f, 4)
+    // fn h() { let z = unk["k"] }   — unknown base → silent (under-reject)
+    let hz = _let_expr("z", _index_expr(_ident_expr("unk", f, 8, 13), _string_expr("k", f, 8, 17), f, 8, 16), f, 8, 5)
+    let item_h = _fn_item("h", [], _empty_type_ref(), _block([hz], f, 8, 1), f, 8)
+    let mut items = []
+    items.push(item_f)
+    items.push(item_g)
+    items.push(item_h)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (cs) HX3053 fixture carve-out — identical array-index-by-string AST on a byte-eq
+// TEST-FIXTURE path (`*_test.hexa`) stays WARNING via _types_strict_for.
+fn _build_case_hx3053_fixture() -> Module {
+    let f = "case_hx3053_test.hexa"
+    let fx = _let_expr("x", _index_expr(_ident_expr("xs", f, 2, 13), _string_expr("k", f, 2, 16), f, 2, 15), f, 2, 5)
+    let fr = _return_expr(_int_expr("0", f, 3, 12), f, 3, 5)
+    let mut pf = []
+    pf.push(_param("xs", "[i64]", f, 1, 6))
+    let item_f = _fn_item("f", pf, _named_type_ref("i64"), _block([fx, fr], f, 1, 1), f, 1)
+    let mut items = []
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // (aq) R5-r2 — let-RHS BinOp + leaves-known gate (HX3011, Rust E0308). A typed
 // `let` whose BinOp RHS infers a KNOWN-scalar type that disagrees with the
 // annotation REJECTs; an unknown leaf disqualifies the tree (silent). Builds
@@ -4453,6 +4499,31 @@ fn main() {
         ok = false
     } else {
         println("  ok: 0 HX3004 (pad_end→string exact accept — str_pad_right alias)")
+    }
+
+    // (cs) R2 — segment(b) HX3053 array-index-BY-STRING REJECT (Rust E0277).
+    // `xs["k"]` on a KNOWN array base → 1 HX3053 ERROR; `xs[0]` int-index clean;
+    // `unk["k"]` unknown base silent. 0 HX3025 (array base ≠ scalar/string).
+    let diags_cs = _run_case("(cs) static-types R2 — array-index-by-string REJECT (xs[\"k\"] array reject / xs[0] int clean / unk[\"k\"] silent) (HX3053)", _build_case_hx3053_arr_str_index())
+    let ccs = _count_code(diags_cs, "HX3053")
+    let ccs_err = _count_code_sev(diags_cs, "HX3053", "error")
+    let ccs_3025 = _count_code(diags_cs, "HX3025")
+    if ccs != 1 || ccs_err != 1 || ccs_3025 != 0 {
+        println("  FAIL: case (cs) expected 1 HX3053 as ERROR + 0 HX3025 (xs[\"k\"] array reject; xs[0] int + unk[\"k\"] unknown clean), got " + to_string(ccs) + " HX3053 (" + to_string(ccs_err) + " error) / " + to_string(ccs_3025) + " HX3025 (total=" + to_string(len(diags_cs)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3053 as ERROR (array `xs[\"k\"]` string-index reject; int `xs[0]` + unknown `unk[\"k\"]` clean; 0 HX3025) — E0277 array cannot be indexed by string")
+    }
+
+    // (cs) HX3053 fixture carve-out — *_test.hexa path → WARNING.
+    let diags_csf = _run_case("(cs) static-types R2 — HX3053 fixture carve-out (*_test.hexa array-index-by-string)", _build_case_hx3053_fixture())
+    let ccsf = _count_code(diags_csf, "HX3053")
+    let ccsf_warn = _count_code_sev(diags_csf, "HX3053", "warning")
+    if ccsf != 1 || ccsf_warn != 1 {
+        println("  FAIL: case (cs) fixture expected 1 HX3053 as WARNING (fixture carve-out), got " + to_string(ccsf) + " HX3053 (" + to_string(ccsf_warn) + " warn) (total=" + to_string(len(diags_csf)) + ")")
+        ok = false
+    } else {
+        println("  ok: 1 HX3053 as WARNING (array-index-by-string fixture carve-out: *_test.hexa stays warn-band)")
     }
 
     println("")

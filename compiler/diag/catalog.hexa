@@ -937,6 +937,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3053",
+        title: "array cannot be indexed by a string",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "the type `array` cannot be indexed by a value of type `{actual}`",
+        explain: "Static type check (always-on since FLIP-3 flagless — Rust-style, no disable switch), static-types segment(b). A subscript `x[k]` whose base's inferred static type is a KNOWN structured `array` AND whose index's inferred static type is a KNOWN `string` can never succeed: the C-substrate `hexa_arr_poly_get` wrapper takes an int64_t index (runtime_core_emit ~2949), so a string operand's pointer bits get reinterpreted as an integer offset — a guaranteed out-of-bounds / garbage read (the same 'guaranteed-runtime-error → REJECT' contract as HX3024/HX3025/HX3026). This is the Rust E0277 rule (rustc_hir_typeck: 'the type `[T]` cannot be indexed by `str`' / 'the trait bound `[T]: Index<&str>` is not satisfied' — an array/slice implements only integer/range indexing, never string indexing). It fires in the `_infer_expr` Index arm right after the HX3025 non-container base check: the base child is captured as `base_t` and the index child as `idx_t`, and the gate fires `_emit_hx3053(idx_t, …)` iff `base_t.kind == \"array\" && idx_t.kind == \"string\"`. Structured array lowering (`_types_lower_type_ref` producing kind:\"array\") is unconditional post-FLIP-3, so `x: [i64]` carries the array kind and the base gate is live. Conservative under-reject: it fires ONLY for the KNOWN (`array`, `string`) pair — a `map` base (string-keyed lookup IS legal and lowers to kind:\"map\"), an integer/char/unknown index, an unknown/unit/HexaVal base, and a `named` base (a user type may define its own indexing) all stay SILENT. Emitted unconditionally (FLIP-3 flagless) as a build-refusing ERROR for real source (REJECT), while byte-eq TEST FIXTURES (`compiler/test/` corpus + `*_test.hexa`) stay WARNING via the `_types_strict_for` path carve-out. No env opt-out or severity switch. Real shipping source is census-clean (arrays are integer-indexed; string-keyed containers are maps) — the static-types-corpus advisory census is the flip-guard, and types erase at MIR so codegen .text is byte-identical (byteeq-neutral). Fix: index the array with an integer, or use a `map` (dictionary) if you meant a string-keyed lookup.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
