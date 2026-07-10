@@ -1977,6 +1977,132 @@ fn _run_capture_move_probe(label: string, src: string, want_on: i64) -> bool {
     return ok
 }
 
+// ── HEXA-OWN L5-E14 — HX3052 closure capture-move WHILE BORROWED (Rust
+// E0505/E0504 "cannot move out of `xs` because it is borrowed"). The loan-aware
+// COLLAPSE of HX3037: the same closure capture-move form, but with a LIVE loan
+// `let r = &xs` / `let r = &mut xs` of the captured origin at the closure-lower
+// site → the more-specific E0505/E0504 fires INSTEAD of the bare E0507. ──
+
+// HAZARD — a captured `xs` moved into sink's @own param inside a closure while a
+// live SHARED loan `let r = &xs` exists (r's last use is AFTER the closure, so
+// even NLL keeps the loan live across the capture → a TRUE positive). The env
+// slot aliases xs's heap object → the first call's move-out invalidates r's
+// loan → HX3052 ×1, HX3037 ×0 (collapsed).
+fn _src_hz_clo_capture_move_borrowed() -> string {
+    let mut s = "fn sink(@own v: [i64]) {\n"
+    s = s + "    println(len(v))\n"
+    s = s + "}\n"
+    s = s + "fn hzcmb() {\n"
+    s = s + "    let xs = [1, 2, 3]\n"
+    s = s + "    let r = &xs\n"
+    s = s + "    let f = fn(n: i64) {\n"
+    s = s + "        sink(xs)\n"
+    s = s + "    }\n"
+    s = s + "    f(1)\n"
+    s = s + "    println(len(r))\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD/mutable — same shape but a MUTABLE loan `let r = &mut xs`. The write-
+// through scan is mutability-blind (moving out breaks both `&` and `&mut`), so
+// this fires HX3052 ×1 with borrow_kind=mutable (r's last use is AFTER the
+// closure → true positive).
+fn _src_hz_clo_capture_move_mut_borrow() -> string {
+    let mut s = "fn sink(@own v: [i64]) {\n"
+    s = s + "    println(len(v))\n"
+    s = s + "}\n"
+    s = s + "fn hzcmbmut() {\n"
+    s = s + "    let mut xs = [1, 2, 3]\n"
+    s = s + "    let r = &mut xs\n"
+    s = s + "    let f = fn(n: i64) {\n"
+    s = s + "        sink(xs)\n"
+    s = s + "    }\n"
+    s = s + "    f(1)\n"
+    s = s + "    println(len(r))\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL (collapse boundary) — the SAME capture-move body but NO `let r = &xs`
+// loan of the captured origin. Proves the collapse does not over-broaden: with
+// no live loan the write-through scan returns -1 and the plain HX3037 fires →
+// HX3037 ×1, HX3052 ×0 (dispatched on the existing `_run_capture_move_probe`).
+fn _src_fp_clo_capture_move_no_loan() -> string {
+    let mut s = "fn sink(@own v: [i64]) {\n"
+    s = s + "    println(len(v))\n"
+    s = s + "}\n"
+    s = s + "fn fpnoloan() {\n"
+    s = s + "    let xs = [1, 2, 3]\n"
+    s = s + "    let f = fn(n: i64) {\n"
+    s = s + "        sink(xs)\n"
+    s = s + "    }\n"
+    s = s + "    f(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+// KNOWN-FP WITNESS (dead-loan / NLL last-use) — `r`'s last use (`println(len(r))`)
+// PRECEDES the closure, so modern rustc/NLL ends r's borrow there and ACCEPTS the
+// move: rustc emits NO E0505 here. But `_bck_ref_find_write_through` is FLOW-
+// INSENSITIVE (a loan stays live from its `let` to end-of-fn, NO NLL last-use
+// kill — hir_to_mir.hexa:1196-1199 documented FP class inherited from HX3040), so
+// HX3052 STILL FIRES ×1. This is a DOCUMENTED FALSE POSITIVE (parity target =
+// pre-NLL E0505 / conservative-loud-over-quiet, NOT NLL-precise), recorded as a
+// KNOWN-FP witness — want=1, NOT want-0. The `fp_clo_capture_move_no_loan` control
+// only removes the loan entirely and does NOT exercise this dead-loan FP vector.
+fn _src_fp_clo_dead_loan_before_closure() -> string {
+    let mut s = "fn sink(@own v: [i64]) {\n"
+    s = s + "    println(len(v))\n"
+    s = s + "}\n"
+    s = s + "fn fpdeadloan() {\n"
+    s = s + "    let xs = [1, 2, 3]\n"
+    s = s + "    let r = &xs\n"
+    s = s + "    println(len(r))\n"
+    s = s + "    let f = fn(n: i64) {\n"
+    s = s + "        sink(xs)\n"
+    s = s + "    }\n"
+    s = s + "    f(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HX3052 probe runner — mirrors `_run_capture_move_probe`, keyed on the loan-
+// aware capture-move code and asserting every OTHER code is 0 (probe hygiene —
+// the stray check auto-asserts HX3037 == 0, proving the collapse). STRICT re-bands
+// HX3052 to Error, so the error-band count must equal the HX3052 count. OFF →
+// want 0 (empty stream, byteeq-neutral).
+fn _run_capture_move_borrowed_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3052 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3052")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3052 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3052 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
 // ── HEXA-OWN round9 — HX3038 move-out-of-array-by-indexing (Rust E0508) +
 // HX3039 move-out-of-borrowed-content via INDEX (Rust E0507). Source-level
 // probes are viable (the inline `@own p: T` carrier is live on main, as for
@@ -2771,6 +2897,130 @@ fn _run_e0384_probe(label: string, src: string, want_on: i64) -> bool {
     return ok
 }
 
+// ── HEXA-OWN L5-E15 — HX3055 assign to a field/element of an IMMUTABLE OWNED
+// base (Rust E0594 'cannot assign to `s.f`, as `s` is not declared as mutable').
+// The OWNED-base sibling of HX3031 (which owns the DIFFERENT shared-`&`-ref-base
+// case): here `s`/`a` is a plain non-ref `let` declared WITHOUT `mut`, so
+// `s.f = v` / `a[i] = v` is an assign-to-immutable. Opt-in HEXA_BORROWCK,
+// warning-band DEFAULT, STRICT re-bands to Error. OFF → empty stream
+// (byteeq-neutral). DECL-BASED (keyed on the `_bckm_*` immutable-let registry by
+// local id) so it does NOT inherit HX3040's flow-insensitive dead-loan FP class.
+
+// HAZARD (field) — a field write on an immutable OWNED struct `let s` → HX3055 ×1.
+fn _src_hz_immut_field_write() -> string {
+    let mut s = "struct Pt { f: i64 }\n"
+    s = s + "fn hifw() {\n"
+    s = s + "    let p = Pt { f: 1 }\n"
+    s = s + "    p.f = 2\n"
+    s = s + "    println(p.f)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD (element) — an index write on an immutable OWNED array `let a` → HX3055 ×1.
+fn _src_hz_immut_index_write() -> string {
+    let mut s = "fn hiiw() {\n"
+    s = s + "    let a = [1, 2, 3]\n"
+    s = s + "    a[0] = 9\n"
+    s = s + "    println(a[0])\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a `let mut` owner may have its fields written → 0 (mut bit set →
+// SILENT). Proves the rung fires on the mutability of the DECLARATION, not the
+// presence of a place write.
+fn _src_fp_mut_field_write() -> string {
+    let mut s = "struct Pt2 { f: i64 }\n"
+    s = s + "fn fmfw() {\n"
+    s = s + "    let mut p = Pt2 { f: 1 }\n"
+    s = s + "    p.f = 2\n"
+    s = s + "    println(p.f)\n"
+    s = s + "}\n"
+    return s
+}
+
+// EXCLUSION CONTROL (HX3031 별개) — a write through a SHARED `&` ref binding of an
+// immutable owner. `r` is BOTH an immutable `let` (in the `_bckm_*` registry) AND
+// a live shared loan (in the E2 ref registry). HX3055 MUST NOT fire here (the
+// call-site ref-exclusion routes it to HX3031 only) — proving no DOUBLE-FIRE:
+// HX3055 ×0, HX3031 ×1. This is the separate assign-behind-shared-ref rung.
+fn _src_fp_immut_write_via_ref() -> string {
+    let mut s = "struct Pt3 { f: i64 }\n"
+    s = s + "fn fiwvr() {\n"
+    s = s + "    let p = Pt3 { f: 1 }\n"
+    s = s + "    let r = &p\n"
+    s = s + "    r.f = 2\n"
+    s = s + "    println(p.f)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HX3055 probe runner — mirrors `_run_e0384_probe`, keyed on the immutable-owned-
+// base write code and asserting every OTHER code is 0 (probe hygiene). STRICT
+// re-bands HX3055 to Error, so the error-band count must equal the HX3055 count.
+// OFF → want 0 (empty stream, byteeq-neutral).
+fn _run_e0594_immut_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3055 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3055")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3055 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3055 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
+// HX3055/HX3031 exclusion probe — asserts the ref-base write fires HX3031 ×1 and
+// HX3055 ×0 (no double-fire), proving the call-site ref-exclusion. OFF → both 0.
+fn _run_e0594_ref_exclusion(label: string, src: string) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want_ref = 0
+    if flag_on { want_ref = 1 }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3031 ×" + to_string(want_ref) + ", HX3055 ×0) ──")
+    let d = _compile_probe(label, src)
+    let n55 = _count_code(d, "HX3055")
+    let n31 = _count_code(d, "HX3031")
+    _print_diags(d)
+    if n55 != 0 {
+        println("  FAIL: HX3055 = " + to_string(n55) + ", want 0 (a ref base must NOT double-fire)")
+        ok = false
+    }
+    if n31 != want_ref {
+        println("  FAIL: HX3031 = " + to_string(n31) + ", want " + to_string(want_ref))
+        ok = false
+    }
+    if len(d) != want_ref {
+        println("  FAIL: total diagnostics = " + to_string(len(d)) + ", want " + to_string(want_ref))
+        ok = false
+    }
+    if ok { println("  ok: HX3031 ×" + to_string(want_ref) + " · HX3055 ×0") }
+    return ok
+}
+
 // ── driver ───────────────────────────────────────────────────
 
 fn main() {
@@ -2932,6 +3182,19 @@ fn main() {
         if !_run_capture_move_probe("fp_clo_own_arg_is_param", _src_fp_clo_own_arg_is_param(), 0) { ok = false }
         if !_run_capture_move_probe("fp_clo_shadow_let", _src_fp_clo_shadow_let(), 0) { ok = false }
         if !_run_capture_move_probe("fp_clo_enclosing_direct", _src_fp_clo_enclosing_direct(), 0) { ok = false }
+        // HEXA-OWN L5-E14 — closure capture-move WHILE BORROWED (HX3052, Rust
+        // E0505/E0504), the loan-aware COLLAPSE of HX3037. Positives (a captured
+        // var moved into an @own param while a live `&xs` / `&mut xs` loan is held
+        // and used AFTER the closure) → HX3052 ×1 (HX3037 ×0). Collapse-boundary
+        // control (same body, NO loan) → the plain HX3037 ×1 via the existing
+        // runner. KNOWN-FP witness (dead loan whose last use precedes the closure —
+        // NLL accepts, flow-insensitive scan still fires) → HX3052 ×1, a DOCUMENTED
+        // false positive (pre-NLL parity, inherited HX3040 class), want=1 NOT 0.
+        // OFF → empty stream (byteeq-neutral); STRICT → Error-band.
+        if !_run_capture_move_borrowed_probe("hz_clo_capture_move_borrowed", _src_hz_clo_capture_move_borrowed(), 1) { ok = false }
+        if !_run_capture_move_borrowed_probe("hz_clo_capture_move_mut_borrow", _src_hz_clo_capture_move_mut_borrow(), 1) { ok = false }
+        if !_run_capture_move_probe("fp_clo_capture_move_no_loan", _src_fp_clo_capture_move_no_loan(), 1) { ok = false }
+        if !_run_capture_move_borrowed_probe("fp_clo_dead_loan_before_closure", _src_fp_clo_dead_loan_before_closure(), 1) { ok = false }
         // HEXA-OWN round9 — HX3038 move-out-of-array-by-indexing (E0508) + HX3039
         // move-out-of-borrowed-content via INDEX (E0507). `sink(a[i])` on an
         // owned-local array → HX3038 ×1; `sink(r[i])` on a live `&a` loan → HX3039
@@ -3004,6 +3267,16 @@ fn main() {
         if !_run_e0384_probe("fp_mut_reassign", _src_fp_mut_reassign(), 0) { ok = false }
         if !_run_e0384_probe("fp_deferred_init", _src_fp_deferred_init(), 0) { ok = false }
         if !_run_e0384_probe("fp_shadow_rebind", _src_fp_shadow_rebind(), 0) { ok = false }
+        // HEXA-OWN L5-E15 — HX3055 assign to a field/element of an IMMUTABLE OWNED
+        // base (E0594). `let p = Pt{..}; p.f = v` / `let a = [..]; a[i] = v` on an
+        // immutable owner → HX3055 ×1; a `let mut` owner → 0 (mut bit); a write via
+        // a live `&` ref binding is the SEPARATE HX3031 rung (exclusion control →
+        // HX3031 ×1, HX3055 ×0, no double-fire). OFF → empty (byteeq-neutral);
+        // STRICT → Error-band.
+        if !_run_e0594_immut_probe("hz_immut_field_write", _src_hz_immut_field_write(), 1) { ok = false }
+        if !_run_e0594_immut_probe("hz_immut_index_write", _src_hz_immut_index_write(), 1) { ok = false }
+        if !_run_e0594_immut_probe("fp_mut_field_write", _src_fp_mut_field_write(), 0) { ok = false }
+        if !_run_e0594_ref_exclusion("fp_immut_write_via_ref", _src_fp_immut_write_via_ref()) { ok = false }
         // census lane must be silent whenever HEXA_BORROWCK_CENSUS is unset
         // (byteeq-neutral proof at the census-count level).
         if !_run_census() { ok = false }
