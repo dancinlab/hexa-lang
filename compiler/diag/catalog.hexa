@@ -957,6 +957,26 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3055",
+        title: "cannot assign to a field/element of an immutable value",
+        // Warning band (SSOT F4 warn-first), the OWNED-immutable-base rung of the
+        // opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN L5-E15). The OWNED-base
+        // sibling of HX3031 (which fires when the assign base is a live `&` shared
+        // REFERENCE): here the base is a plain non-ref `let` binding declared
+        // WITHOUT `mut`, so `s.f = v` / `a[i] = v` is an assign-to-immutable
+        // (Rust E0594). Under `HEXA_BORROWCK_STRICT=1` the SAME diagnostic instance
+        // is re-banded to a build-refusing Error via the sanctioned caller override
+        // in `_bck_emit_write_immut_base` (identical mechanism to HX3031/HX3045/…
+        // /HX3014). With the flag unset the loan pass is inert (`_bck_active`
+        // false), so nothing is emitted and the diagnostic stream + emitted bytes
+        // are byte-identical — release integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "cannot assign to {kind} of `{name}` because `{name}` is not declared as mutable",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN L5-E15) found an ASSIGNMENT to a FIELD or ELEMENT of a base binding that is an OWNED value declared WITHOUT `mut`: `let s = S{ .. }; s.f = v` or `let a = [ .. ]; a[i] = v`. In Rust an immutable `let` binding forbids mutation of the binding OR any place reachable through it, so writing a field/element of an immutable owner is E0594 ('cannot assign to `s.f`, as `s` is not declared as mutable'; rustc_borrowck reports it when the assigned place's local base is not a mutable binding). This is the OWNED-base sibling of HX3031, which covers the DIFFERENT case where the base is itself a live SHARED (`&`) reference binding (assign-behind-shared-ref); HX3055 covers a plain non-ref owner. The check fires at the field-set and index-set lowering hooks (`_lower_hexpr` assign arms, HEXA-OWN L3), right after the HX3031 shared-ref check: it looks up the LHS base ident's local id in the immutable-let registry (`_bckm_find`, the SAME `_bckm_ids`/`_bckm_mut`/`_bckm_wr` lane HX3045 uses for bare-ident E0384) and, when the newest row is a NON-mutable (`!_bckm_mut`) binding that already has a definite assignment (`_bckm_wr`), emits HX3055. Conservative FP=0 boundary — DECL-BASED (it does NOT inherit HX3040's flow-insensitive dead-loan FP class): (1) the base must be a same-fn `let` binding in the registry — a function PARAMETER is never registered (`_bckm_track` runs only at `let` lowering) so `fn f(c: Ctx){ c.depth = 1 }` is SILENT (hexa params are map-backed reference handles, not owned immutable locals); (2) a `let mut s` base sets the mut bit → SILENT; (3) a live `&`/`&mut` ref base is EXCLUDED at the call site (`_bck_find_ref` with a non-empty origin) so HX3031 (for `&`) or a legal `&mut` write-through owns it — no double-fire; (4) a deferred/uninitialized base (`_bckm_wr` unset) stays SILENT (the first write may be the initializing assignment); (5) module-level globals never reach these arms (they route through the bare-ident global-store path); (6) a nested base `s.a.b = v` uses a non-ident inner base and is excluded by the single-ident base gate. This is a scalar-and-aggregate `let` lane keyed by local id, reusing HX3045's registry with ZERO new borrow-checker state. `let`-with-`mut`-elision + field/index writes on immutable owners are near-0 in the corpus (the shipping tree overwhelmingly declares `let mut` before a place write), so even with the flag ON this rule fires on ~ZERO real source (corpus-clean, gen3≡gen4 preserved). Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical. Fix: declare the base `let mut {name}` if it must change, or copy into a fresh mutable binding before writing its fields/elements.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
