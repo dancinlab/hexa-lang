@@ -2195,6 +2195,49 @@ fn _emit_hx3053(actual: Type, sp: Span, out: array) {
     }
 }
 
+// static-types R4 — HX3054 array-index-by-AGGREGATE/REF REJECT (Rust E0277,
+// parity+1 sibling of HX3053). Fires from the Index arm right after the HX3053
+// string-index clause when the base is a KNOWN `array` AND the index infers to
+// an AGGREGATE/reference-typed value (a nested `array`, or a struct/enum
+// `named:<X>`). Same mechanism as HX3053: the C-substrate `hexa_arr_poly_get`
+// takes an int64_t index (runtime_core_emit ~2949), so an aggregate operand's
+// boxed heap-pointer payload is reinterpreted as an integer offset → a
+// guaranteed OOB / garbage read ('guaranteed-runtime-error → REJECT' contract).
+// `actual` = the index operand's inferred type. Clone of `_emit_hx3053`: FLIP-3
+// band via `_types_strict_for` (real source → build-refusing Error, `*_test.hexa`
+// / compiler-test fixtures → Warning). Byteeq-neutral (types erase at MIR).
+fn _emit_hx3054(actual: Type, sp: Span, out: array) {
+    let mut b = diag_new("HX3054")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "actual", _type_display(actual))
+    if _types_strict_for(sp.file) {
+        out.push(diag_emit(b))
+    } else {
+        out.push(diag_emit_sev(b, Severity::Warning))
+    }
+}
+
+// static-types R4 — HX3054 index-operand classifier. TRUE iff `t` is an
+// AGGREGATE / reference-typed value whose runtime payload is a boxed heap
+// pointer (so reinterpreting it as an int64 array offset is a guaranteed OOB):
+//   • a nested `array` (structured lowering kind "array", or the flag-OFF
+//     `named:[...]` sentinel spelling) — an array value can never be an index;
+//   • a struct / enum nominal `named:<X>` value.
+// Conservative under-reject — the dynamic wildcards (`named:HexaVal`/`named:any`
+// may be an int at runtime) and the deferred unsigned scalars (`u8`..`u64` are
+// scalar ints, NOT heap pointers → legal offsets) are EXCLUDED, and every
+// primitive scalar (i*/f*/bool/char/string/unit) carries its own non-`named:`
+// kind so it never reaches here. FP=0 for real source (arrays are integer-
+// indexed; the static-types-corpus census is the flip-guard).
+fn _types_hx3054_bad_idx(t: Type) -> bool {
+    if t.kind == "array" { return true }
+    let n = _types_struct_name_of(t.kind)
+    if len(n) == 0 { return false }
+    if n == "HexaVal" || n == "any" { return false }
+    if n == "u8" || n == "u16" || n == "u32" || n == "u64" { return false }
+    return true
+}
+
 fn _emit_hx3026(actual: Type, field: string, sp: Span, out: array) {
     let mut b = diag_new("HX3026")
     b = diag_span(b, sp)
@@ -3908,6 +3951,23 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         // census is the flip-guard.
         if base_t.kind == "array" && idx_t.kind == "string" {
             _emit_hx3053(idx_t, e.span, out)
+        }
+        // static-types R4 — segment(b) HX3054 array-index-BY-AGGREGATE/REF
+        // REJECT (Rust E0277). Parity+1 sibling of the HX3053 string clause: a
+        // subscript `x[k]` whose base is a KNOWN structured `array` AND whose
+        // index infers to an AGGREGATE/reference-typed value (a nested `array`,
+        // or a struct/enum `named:<X>`) can never succeed — the C-substrate
+        // `hexa_arr_poly_get` takes an int64_t index, so the aggregate operand's
+        // boxed heap-pointer payload is reinterpreted as an integer offset → a
+        // guaranteed OOB / garbage read (same mechanism + REJECT contract as
+        // HX3053). Disjoint from the string clause above (`_types_hx3054_bad_idx`
+        // never matches a `string`/scalar index) — the two never double-fire on
+        // one subscript. Conservative under-reject (dynamic HexaVal/any and the
+        // deferred u8..u64 scalars stay SILENT); byteeq-neutral (types erase at
+        // MIR). Real shipping source is census-clean (arrays are integer-indexed)
+        // — the static-types-corpus advisory census is the flip-guard.
+        if base_t.kind == "array" && _types_hx3054_bad_idx(idx_t) {
+            _emit_hx3054(idx_t, e.span, out)
         }
         if base_t.kind == "array" && len(base_t.args) > 0 {
             return base_t.args[0]
