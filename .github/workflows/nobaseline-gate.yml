@@ -345,6 +345,35 @@ jobs:
             echo "(no runtime.a found — nm-UND dump skipped)"
           fi
 
+      - name: RFC061 substrate-dump — generated-C reduction TRACK-S (advisory)
+        if: always()
+        shell: bash
+        run: |
+          # RFC061 axis-② (runtime.c→0) per-round reduction signal — sibling of the
+          # nm-UND floor dump, advisory only (NEVER gates). Three metrics track the
+          # generated-C substrate the DEFAULT build still compiles through $CC:
+          #   ① compiled generated-.c TU count  ② runtime*.c live #include "native/*.c"
+          #   ③ total generated-C LOC handed to $CC.  SSOT: state/rfc061-axis2-runtime-
+          #   zero-attack-plan (TRACK-S). Measured post-build (the faithful gate removes
+          #   all seeds then release_build regenerates the .c at self/*.c). mini cannot
+          #   build → this measurement is CI-harness-bound, same as the nm-UND dump.
+          GENC="self/runtime.c self/runtime_core.c self/runtime_hi_gen.c self/native/hexa_cc.c"
+          tus=0; loc=0; present=""
+          for f in $GENC; do
+            if [ -f "$f" ]; then
+              tus=$((tus + 1)); loc=$((loc + $(wc -l < "$f" 2>/dev/null || echo 0)))
+              present="$present $f"
+            fi
+          done
+          inc=0
+          for f in self/runtime.c self/runtime_core.c; do
+            [ -f "$f" ] && inc=$((inc + $(grep -cE '^[[:space:]]*#include[[:space:]]*"native/[^"]*\.c"' "$f" 2>/dev/null || echo 0)))
+          done
+          echo "=== RFC061 substrate-dump (advisory · never gates · TRACK-S) ==="
+          echo "generated-.c compiled TUs: $tus (present:$present )"
+          echo "runtime*.c live #include \"native/*.c\": $inc"
+          echo "generated-C total LOC to \$CC: $loc"
+
       - name: zero-c #29 S1 — runtime.a dl* nm-UND ∅ (HARD GATE · Linux)
         if: always() && runner.os == 'Linux'
         shell: bash
