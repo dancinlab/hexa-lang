@@ -56,6 +56,8 @@ let ELF_R_X86_64_PLT32    = 4
 // getenv address loads). The linker classifier already knows kind 9
 // (compiler/link/hexa_ld.hexa::_HEXA_LD_R_X86_64_GOTPCREL / elf_reloc_is_got_typed).
 let ELF_R_X86_64_GOTPCREL = 9
+let ELF_R_X86_64_32       = 10   // absolute S+A, zero-extended to 32 bits
+let ELF_R_X86_64_32S      = 11   // absolute S+A, sign-extended to 32 bits
 
 struct ElfX86Obj {
     text:    [u8],
@@ -2076,6 +2078,20 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                         data_bytes[blob_off + 5] = (av >> 40) & 0xff
                         data_bytes[blob_off + 6] = (av >> 48) & 0xff
                         data_bytes[blob_off + 7] = (av >> 56) & 0xff
+                    } else if r.kind == ELF_R_X86_64_32 || r.kind == ELF_R_X86_64_32S {
+                        // Rung 2: R_X86_64_32/32S — absolute S+A truncated to 32 bits
+                        // (psABI §4.4). gas non-PIE refs section-resident literals via
+                        // STT_SECTION+addend; without this arm they fell to the PC-rel
+                        // else = silent miscompile. ET_EXEC@0x400000 keeps vaddr<2^31.
+                        let av = s_vaddr + r.addend
+                        if av < 0 || av > 2147483647 {
+                            eprintln("hexa_ld(elf,ownstart): abs32 overflow (data) for '" + name + "' kind=" + to_string(r.kind))
+                            return 3
+                        }
+                        data_bytes[blob_off + 0] = av & 0xff
+                        data_bytes[blob_off + 1] = (av >> 8) & 0xff
+                        data_bytes[blob_off + 2] = (av >> 16) & 0xff
+                        data_bytes[blob_off + 3] = (av >> 24) & 0xff
                     } else {
                         // kind==9 (GOTPCREL) is handled by the hoisted (D) branch
                         // above; here only kind 2/4 PC-rel data-site refs remain.
@@ -2099,6 +2115,20 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                         text_bytes[patch_off + 5] = (av >> 40) & 0xff
                         text_bytes[patch_off + 6] = (av >> 48) & 0xff
                         text_bytes[patch_off + 7] = (av >> 56) & 0xff
+                    } else if r.kind == ELF_R_X86_64_32 || r.kind == ELF_R_X86_64_32S {
+                        // Rung 2: R_X86_64_32/32S — absolute S+A truncated to 32 bits
+                        // (psABI §4.4). gas non-PIE `mov edi, $LC0` refs a section
+                        // literal via STT_SECTION+addend; without this arm it fell to
+                        // the PC-rel else = silent miscompile. ET_EXEC@0x400000<2^31.
+                        let av = s_vaddr + r.addend
+                        if av < 0 || av > 2147483647 {
+                            eprintln("hexa_ld(elf,ownstart): abs32 overflow (text) for '" + name + "' kind=" + to_string(r.kind))
+                            return 3
+                        }
+                        text_bytes[patch_off + 0] = av & 0xff
+                        text_bytes[patch_off + 1] = (av >> 8) & 0xff
+                        text_bytes[patch_off + 2] = (av >> 16) & 0xff
+                        text_bytes[patch_off + 3] = (av >> 24) & 0xff
                     } else {
                         // kind==9 (GOTPCREL) is handled by the hoisted (D) branch
                         // above; here only kind 2/4 PC-rel text-site refs (CALL
@@ -3023,6 +3053,13 @@ pub fn parse_elf_x86_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfX86O
             let tgt = sec_info[ci]
             let mut tgt_base = 0
             if tgt < e_shnum { tgt_base = sec_base[tgt] }
+            // Rung 1: a reloc SITED in a non-ALLOC section (sec_slot==0: .debug_*/
+            // .comment/.note metadata) has no patch site in the e_shnum=0 ET_EXEC —
+            // its r_offset indexes the debug section, so patching would misindex a
+            // pool (silent .text corruption). Drop such relocs at parse (ld does the
+            // same for non-loaded output sections). Fixes 91 unresolved $sec_N_M.
+            let mut site_ok = true
+            if tgt < e_shnum { if sec_slot[tgt] == 0 { site_ok = false } }
             let rcount = rsz / res
             let mut ri = 0
             while ri < rcount {
@@ -3033,7 +3070,7 @@ pub fn parse_elf_x86_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfX86O
                 let div   = 0x100000000
                 let sym_file = rinfo / div
                 let rtype    = rinfo - (rinfo / div) * div
-                if sym_file > 0 {                     // skip relocs vs STN_UNDEF
+                if sym_file > 0 && site_ok {          // skip STN_UNDEF + non-ALLOC site (Rung 1)
                     obj.relocs.push(ElfRel {
                         offset:  r_off + tgt_base,
                         sym_idx: sym_file - 1,
