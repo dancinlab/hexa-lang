@@ -42,6 +42,7 @@ let ELF_SHF_EXECINSTR     = 0x4
 
 let ELF_STB_LOCAL         = 0
 let ELF_STB_GLOBAL        = 1
+let ELF_STB_WEAK          = 2
 let ELF_STT_NOTYPE        = 0
 let ELF_STT_FUNC          = 2
 
@@ -58,6 +59,20 @@ let ELF_R_X86_64_PLT32    = 4
 let ELF_R_X86_64_GOTPCREL = 9
 let ELF_R_X86_64_32       = 10   // absolute S+A, zero-extended to 32 bits
 let ELF_R_X86_64_32S      = 11   // absolute S+A, sign-extended to 32 bits
+// R_X86_64_GOTPCRELX (41) / R_X86_64_REX_GOTPCRELX (42) — psABI §B.2 addendum
+// (Table 4-11): a `mov`/`test` GOT load (42 = the REX-prefixed form) that a
+// RELAXING linker may rewrite to a direct PC-rel access. This own-link does NOT
+// relax -> both are treated exactly like plain GOTPCREL (9): allocate a GOT
+// slot + patch disp32 = G+GOT+A-P. clang emits kind 42 for the weak `extern
+// __init_array_start/end[]` refs in runtime_emit_full's _hx_run_init_array.
+let ELF_R_X86_64_GOTPCRELX     = 41
+let ELF_R_X86_64_REX_GOTPCRELX = 42
+
+// GOT-load reloc kinds — every reloc whose disp32 addresses the symbol's GOT
+// slot (not the symbol itself). A non-relaxing linker treats 9/41/42 alike.
+fn _elf_kind_is_got(k: i64) -> bool {
+    return k == ELF_R_X86_64_GOTPCREL || k == ELF_R_X86_64_GOTPCRELX || k == ELF_R_X86_64_REX_GOTPCRELX
+}
 
 struct ElfX86Obj {
     text:    [u8],
@@ -1694,6 +1709,32 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     text_bytes[12] = (call_rel >> 16) & 0xff
     text_bytes[13] = (call_rel >> 24) & 0xff
 
+    // ── linker-defined __init_array_start / __init_array_end (GNU ld PROVIDE
+    // parity). runtime_emit_full's _hx_run_init_array references the two boundary
+    // symbols via REX_GOTPCRELX (kind 42); GNU ld synthesizes them at the
+    // .init_array section bounds. This own-link's reader Pass A pools only
+    // PROGBITS/NOBITS -> SHT_INIT_ARRAY is dropped -> the array is EMPTY here.
+    // Register BOTH at the SAME data-blob offset (current end of the concatenated
+    // obj data, before the GOT blob) so start == end and the ctor walk is
+    // zero-trip. Registered as GLOBAL defs (def_obj=-1 = linker-synthetic). MUST
+    // precede the dyn census below: these names are NOT exported by libc.so.6, so
+    // a defined entry here is what keeps the census from dyn-routing them (which
+    // would make ld.so fail the load). def registration does not serialize into
+    // the ET_EXEC symtab -> zero output-byte contribution (byteeq-neutral); they
+    // only appear as clang-compiled runtime.a members' relocs on the own-link
+    // path, never on the shipping (system ld) path.
+    let init_array_off = len(data_bytes)
+    def_names.push("__init_array_start")
+    def_seg.push(1)
+    def_off.push(init_array_off)
+    def_bind.push(ELF_STB_GLOBAL)
+    def_obj.push(-1)
+    def_names.push("__init_array_end")
+    def_seg.push(1)
+    def_off.push(init_array_off)
+    def_bind.push(ELF_STB_GLOBAL)
+    def_obj.push(-1)
+
     // ── GOT COLLECT (R_X86_64_GOTPCREL, type 9) — one slot per DISTINCT target ──
     // #4783 self-emits `mov reg,[rip+sym@GOTPCREL]` (REX.W 8B /r RIP disp32=0,
     // addend -4). This static own-linker must SYNTHESIZE the GOT (ZERO binutils):
@@ -1712,7 +1753,7 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         let mut gcr = 0
         while gcr < len(gco.relocs) {
             let gr = gco.relocs[gcr]
-            if gr.kind == 9 {
+            if _elf_kind_is_got(gr.kind) {
                 let gsym = gco.symbols[gr.sym_idx]
                 let mut gnm = ""
                 let mut gk = 0
@@ -1750,7 +1791,7 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         let mut dcr = 0
         while dcr < len(dco.relocs) {
             let dr = dco.relocs[dcr]
-            if dr.kind == 2 || dr.kind == 4 || dr.kind == 9 {
+            if dr.kind == 2 || dr.kind == 4 || _elf_kind_is_got(dr.kind) {
                 let dsym = dco.symbols[dr.sym_idx]
                 let mut dnm = ""
                 let mut dk = 0
@@ -1769,8 +1810,8 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                     while dfj < len(dyn_names) { if dyn_names[dfj] == dnm { dfi = dfj; break } dfj = dfj + 1 }
                     if dfi < 0 {
                         dyn_names.push(dnm)
-                        if dr.kind == 9 { dyn_stub.push(0) } else { dyn_stub.push(1) }
-                    } else if dr.kind != 9 {
+                        if _elf_kind_is_got(dr.kind) { dyn_stub.push(0) } else { dyn_stub.push(1) }
+                    } else if !_elf_kind_is_got(dr.kind) {
                         dyn_stub[dfi] = 1
                     }
                 }
@@ -2002,13 +2043,20 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                     if def_bind[sk] == ELF_STB_GLOBAL {
                         found_idx = sk
                         break
+                    } else if def_bind[sk] == ELF_STB_WEAK {
+                        // ELF weak canon: a weak def is globally visible but a
+                        // STRONG (GLOBAL) def anywhere still WINS — keep scanning
+                        // for one, only fall back to the weak def if none exists.
+                        // (hexa_exit is __attribute__((weak)) in runtime_emit_full;
+                        // this arm is what makes its STB_WEAK def resolvable.)
+                        if found_idx < 0 { found_idx = sk }
                     } else if def_obj[sk] == ro {
                         if found_idx < 0 { found_idx = sk }
                     }
                 }
                 sk = sk + 1
             }
-            if r.kind == 9 {
+            if _elf_kind_is_got(r.kind) {
                 // ── (D) GOTPCREL hoist ── The disp32 targets the symbol's GOT
                 // SLOT, never the symbol's own vaddr — so the resolved (`g<id>`
                 // module-global) and the dyn-UND (environ/stdout, filled by
@@ -3316,7 +3364,7 @@ pub fn archive_extract_fixpoint(program_objs: [ElfX86Obj], buf, members: [ArMemb
         let mut sj = 0
         while sj < len(po.symbols) {
             let s = po.symbols[sj]
-            if s.section != 0 && s.bind == ELF_STB_GLOBAL {
+            if s.section != 0 && (s.bind == ELF_STB_GLOBAL || s.bind == ELF_STB_WEAK) {
                 let nm = _aef_symname(po, s.name_offset)
                 if len(nm) > 0 && !_aef_has(def_names, nm) { def_names.push(nm) }
             }
@@ -3355,7 +3403,7 @@ pub fn archive_extract_fixpoint(program_objs: [ElfX86Obj], buf, members: [ArMemb
                 let mut k = 0
                 while k < len(obj.symbols) {
                     let s = obj.symbols[k]
-                    if s.section != 0 && s.bind == ELF_STB_GLOBAL {
+                    if s.section != 0 && (s.bind == ELF_STB_GLOBAL || s.bind == ELF_STB_WEAK) {
                         let nm = _aef_symname(obj, s.name_offset)
                         if _aef_has(und_names, nm) && !_aef_has(def_names, nm) {
                             wants = true
@@ -3373,7 +3421,7 @@ pub fn archive_extract_fixpoint(program_objs: [ElfX86Obj], buf, members: [ArMemb
                     let mut d = 0
                     while d < len(obj.symbols) {
                         let s = obj.symbols[d]
-                        if s.section != 0 && s.bind == ELF_STB_GLOBAL {
+                        if s.section != 0 && (s.bind == ELF_STB_GLOBAL || s.bind == ELF_STB_WEAK) {
                             let nm = _aef_symname(obj, s.name_offset)
                             if len(nm) > 0 && !_aef_has(def_names, nm) { def_names.push(nm) }
                         }
