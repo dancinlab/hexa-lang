@@ -107,6 +107,25 @@ jobs:
           # macos-15 fallback; present → routing goes live. See PR/root-cause.
           token: ${{ secrets.RUNNER_PROBE_TOKEN || github.token }}
 
+  # ── symcensus-lint — axis-③ codegen↔runtime symbol-census PRIMARY guard (C-1).
+  # Source-only set assertion (NO build, NO runtime.a) → runs instantly on the
+  # free GitHub-hosted cloud, INDEPENDENT of the heavy faithful jobs. Seals the
+  # whack-a-mole root cause at its source: a builtin that passes a checker gate
+  # (_is_builtin_method / _bind_builtin_names) but is absent from codegen's
+  # _builtin_runtime_sym mapping — and lacks an exemption — turns the PR RED here
+  # BEFORE it can reach a run-time SIGBUS/rc127 in the self-emit path. Layered
+  # with the link-time tripwire (C-2, compiler/emit/elf_x86_64.hexa) + the CI
+  # dynsym gate (C-3, in the linux faithful job below).
+  symcensus-lint:
+    name: symcensus-lint (codegen↔runtime sym census · C-1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: axis-③ symbol-census set assertion (∅)
+        shell: bash
+        run: bash tool/symcensus_lint.sh
+
   # ── faithful-nobaseline — the authoritative seed-removed release-safety gate.
   #
   # These faithful-* jobs model a `.c=0` checkout FAITHFULLY: remove ALL seeds
@@ -389,6 +408,57 @@ jobs:
             echo "❌ S1 FAIL — canonical runtime.a still carries dl* nm-UND:"; echo "$HITS"; exit 1
           fi
           echo "✅ S1 GREEN — runtime.a nm-UND dl* = ∅ (unfiltered) — $RT"
+
+      - name: axis-③ symcensus — own-linked cc-self-bin dynsym UND ⊆ sanctioned (C-3 · Linux)
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        run: |
+          # Guard C-3 (defence layer, sibling of the dl* hard gate above): the
+          # FINAL own-linked (hexa_ld / --linker=hexa) self-emit binary must carry
+          # NO dynamic-symbol UND outside the sanctioned libc floor. A codegen↔
+          # runtime symbol mismatch that slipped BOTH the source lint (C-1) and the
+          # link-time tripwire (C-2) — e.g. via a brand-new emit path that bypasses
+          # _builtin_runtime_sym — surfaces here as a stray dyn UND (bare `zip`,
+          # `read_file_bytes`, or a `hexa_*`/`rt_*` name that leaked dynamic).
+          # Skip-if-absent (like the dl* gate): activates the moment a future
+          # step deposits an own-linked binary at HEXA_CC_SELF_BIN or build/.
+          BIN="${HEXA_CC_SELF_BIN:-}"
+          if [ -z "$BIN" ] || [ ! -f "$BIN" ]; then
+            BIN="$(find build . -type f \( -name 'cc-self*' -o -name 'hexa-ownlink*' -o -name '*.ownstart' \) 2>/dev/null | head -1)"
+          fi
+          if [ -z "$BIN" ] || [ ! -f "$BIN" ]; then
+            echo "(no own-linked cc-self-bin artifact — C-3 dynsym gate skipped; activates when a self-emit own-link step deposits one)"
+            exit 0
+          fi
+          command -v readelf >/dev/null 2>&1 || { echo "(no readelf — C-3 skipped)"; exit 0; }
+          echo "C-3 subject: $BIN"
+          # Dynamic UND symbol names (readelf --dyn-syms, UND section == index 0).
+          UND="$(readelf --dyn-syms -W "$BIN" 2>/dev/null \
+                 | awk '$7=="UND" && $8!="" {print $8}' | sed 's/@.*//' | sort -u)"
+          if [ -z "$UND" ]; then
+            echo "✅ C-3 GREEN — own-linked $BIN carries ZERO dynamic UND"; exit 0
+          fi
+          # Sanctioned floor = the genuine libc UNDs an own-link legitimately routes
+          # dynamic. Reuses the nm-UND advisory chain (FFI/CRT/exec/rand families)
+          # and adds the mem/str/heap/io floor. ANY residual = a leaked mismatch.
+          RESID="$(printf '%s\n' "$UND" \
+            | grep -vE '^(memcpy|memset|memmove|memcmp|memchr|strlen|strcmp|strncmp|strcpy|strncpy|strcat|strchr|strrchr|strstr|strdup|strtol|strtoll)$' \
+            | grep -vE '^(malloc|free|calloc|realloc|aligned_alloc|posix_memalign|mallopt)$' \
+            | grep -vE '^(read|write|open|close|lseek|mmap|munmap|mprotect|brk|sbrk|_?exit|abort)$' \
+            | grep -vE '^(accept|bind|connect|listen|socket|recv|recvfrom|send|sendto|setsockopt|getsockopt|getaddrinfo|freeaddrinfo|gai_strerror)$' \
+            | grep -vE '^(__libc_|__cxa|__errno_location|__stack_chk|__assert|atexit|environ)' \
+            | grep -vE '^(execve|execvp|setns|unshare|mount|umount2?|posix_spawn|opendir|readdir|closedir|glob|globfree|mkstemp|mkdtemp)$' \
+            | grep -vE '^(rand|srand|strtod|strtof|strtold)$' \
+            | grep -vE '^(__init_array_start|__init_array_end)$' \
+            || true)"
+          if [ -n "$RESID" ]; then
+            echo "❌ C-3 FAIL — own-linked $BIN has NON-sanctioned dynamic UND (codegen↔runtime sym leak):"
+            printf '%s\n' "$RESID" | sed 's/^/    /'
+            echo "  fix: add the corresponding _builtin_runtime_sym mapping (arm64_darwin.hexa)"
+            echo "  so the symbol resolves to its runtime.a def instead of leaking to libc.so.6."
+            exit 1
+          fi
+          echo "✅ C-3 GREEN — own-linked $BIN dynamic UND ⊆ sanctioned libc floor"
 
       - name: ccache stats
         if: always()

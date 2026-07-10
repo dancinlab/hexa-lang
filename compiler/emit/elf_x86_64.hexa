@@ -1578,7 +1578,20 @@ pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> In
 // Byte-identical to round-1 when NO obj carries data (single PT_LOAD via the
 // untouched serialize_elf_exec_x86_64; text->text deltas are vaddr-base
 // invariant). Data present -> serialize_elf_exec_x86_64_2seg (two PT_LOADs).
-pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: string) -> Int {
+// _elf_has_prefix — does string `s` start with `p`? (self-contained; avoids a
+// dependency on whichever runtime .starts_with is linked for this compiler TU).
+fn _elf_has_prefix(s: string, p: string) -> bool {
+    let np = len(p)
+    if len(s) < np { return false }
+    return s.substring(0, np) == p
+}
+
+// runtime_defs = the FULL runtime.a definition universe (all members, pulled or
+// not), supplied ONLY by the _ar self-emit link path (_aef_all_member_defs).
+// Empty ([]) on the plain static path (main.hexa direct call, round-1/2 tests)
+// -> the near-miss tripwire in the dyn-census below is fully inert and output is
+// byte-identical. See the tripwire block for the two fail-closed arms.
+pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: string, runtime_defs: [string]) -> Int {
     // 23-byte own-start stub at text offset 0.
     // Round-3 (argc/argv): the SysV crt0 process-entry contract — the kernel
     // enters at _start with rsp = [argc, argv[0..argc-1], NULL, envp..., NULL].
@@ -1808,6 +1821,67 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                     let mut dfi = -1
                     let mut dfj = 0
                     while dfj < len(dyn_names) { if dyn_names[dfj] == dnm { dfi = dfj; break } dfj = dfj + 1 }
+                    // ── axis-③ NEAR-MISS TRIPWIRE (guard C-2 · fail-closed) ──
+                    // A UND about to be routed to libc.so.6 that is really a
+                    // codegen↔runtime symbol MISMATCH is caught here and REFUSED
+                    // (rc=3) with an exact fix directive — never re-resolved, so
+                    // the wrong-dynamic (foreign-symbol absorption) risk is 0.
+                    // Active only when a runtime.a def universe was supplied (the
+                    // _ar self-emit link path); on the plain static path
+                    // (runtime_defs == []) this whole block is skipped and output
+                    // stays byte- and behaviour-identical. Runs once per distinct
+                    // name (dfi<0 = first encounter) — no per-call-site rescans.
+                    if dfi < 0 && len(runtime_defs) > 0 {
+                        // (1) FORWARD — runtime.a defines a COMPOUND hexa-own prefix
+                        //     VARIANT of this bare name => a missing
+                        //     _builtin_runtime_sym mapping entry (the checker gate
+                        //     accepted the name but codegen's fallthrough emitted it
+                        //     bare). Only the compound namespaces hexa_array_ /
+                        //     hexa_str_ / hexa_map_ / rt_str_ are probed: they are
+                        //     structurally collision-FREE with the libc floor (no
+                        //     libc symbol is `array_<x>`/`str_<x>`/`map_<x>`), so the
+                        //     tripwire can NEVER refuse a valid libm/mem/io floor
+                        //     link — release-integrity (top guardrail) over
+                        //     completeness. The plain hexa_<x>/rt_<x> namespaces are
+                        //     DELIBERATELY not probed here: they DO collide (rt_memcpy
+                        //     / rt_getpid / hexa_sin / rt_socket …), so a plain probe
+                        //     would false-refuse a genuine libc-floor UND. This
+                        //     precisely covers the demonstrated Rung-A array/string/
+                        //     map method whack-a-mole class (symcensus part-1); the
+                        //     plain free-fn class (Rung B) is caught upstream by the
+                        //     source lint (guard C-1) + the dynsym gate (guard C-3).
+                        let mut _hit = ""
+                        let mut _rdi = 0
+                        while _rdi < len(runtime_defs) {
+                            let _rd = runtime_defs[_rdi]
+                            if _rd == "hexa_array_" + dnm || _rd == "hexa_str_" + dnm
+                               || _rd == "hexa_map_" + dnm || _rd == "rt_str_" + dnm {
+                                _hit = _rd
+                                break
+                            }
+                            _rdi = _rdi + 1
+                        }
+                        if len(_hit) > 0 {
+                            eprintln("hexa_ld(elf,ownstart): codegen-runtime sym mismatch: "
+                                     + "UND '" + dnm + "' — runtime.a defines '" + _hit
+                                     + "' (missing _builtin_runtime_sym entry)")
+                            return 3
+                        }
+                        // (2) REVERSE — a hexa-own-prefixed name can NEVER be a
+                        //     libc symbol, so reaching dynamic routing means
+                        //     runtime.a is missing this def (a drop-list / runtime
+                        //     port gap). Refuse rather than emit an ld.so-failing
+                        //     binary.
+                        if _elf_has_prefix(dnm, "hexa_") || _elf_has_prefix(dnm, "rt_")
+                           || _elf_has_prefix(dnm, "_hx_") || _elf_has_prefix(dnm, "__hexa")
+                           || _elf_has_prefix(dnm, "hxlcl_") || _elf_has_prefix(dnm, "forge_")
+                           || _elf_has_prefix(dnm, "farr_") {
+                            eprintln("hexa_ld(elf,ownstart): codegen-runtime sym mismatch: "
+                                     + "hexa-own UND '" + dnm + "' routed dynamic "
+                                     + "(runtime.a missing this def / drop-list gap)")
+                            return 3
+                        }
+                    }
                     if dfi < 0 {
                         dyn_names.push(dnm)
                         if _elf_kind_is_got(dr.kind) { dyn_stub.push(0) } else { dyn_stub.push(1) }
@@ -2315,6 +2389,11 @@ pub fn link_elf_x86_64_ownstart_ar(program_objs: [ElfX86Obj], out_path: string, 
     let buf       = read_file_bytes(runtime_a_path)
     let members   = parse_ar_archive(buf)
     let extracted = archive_extract_fixpoint(program_objs, buf, members)
+    // Full runtime.a def universe (ALL members, not just the pulled ones) — the
+    // near-miss tripwire (guard C-2) inside link_elf_x86_64_ownstart needs it to
+    // catch a bare/mis-mapped UND whose correct prefixed def sits in an unpulled
+    // member. Supplied ONLY here; the plain callers pass [] (tripwire inert).
+    let runtime_defs = _aef_all_member_defs(buf, members)
 
     let mut combined: [ElfX86Obj] = []
     let mut i = 0
@@ -2322,7 +2401,7 @@ pub fn link_elf_x86_64_ownstart_ar(program_objs: [ElfX86Obj], out_path: string, 
     let mut j = 0
     while j < len(extracted) { combined.push(extracted[j]); j = j + 1 }
 
-    return link_elf_x86_64_ownstart(combined, out_path, main_name)
+    return link_elf_x86_64_ownstart(combined, out_path, main_name, runtime_defs)
 }
 
 // serialize_elf_x86_64 — P2 cycle 1: empty-object byte stream.
@@ -3338,6 +3417,36 @@ fn _aef_has(xs: [string], name: string) -> bool {
         i = i + 1
     }
     return false
+}
+
+// _aef_all_member_defs — the FULL runtime.a DEFINITION UNIVERSE: every
+// GLOBAL/WEAK def name across ALL members, pulled or not. archive_extract_
+// fixpoint folds only PULLED members' defs into its private def_names, but a
+// codegen↔runtime symbol mismatch names a def that lives in an UNPULLED member
+// (nothing references the CORRECT prefixed name — codegen emitted the bare/wrong
+// one — so that member never pulls). The near-miss tripwire in
+// link_elf_x86_64_ownstart needs this whole set to prove that a bare UND about
+// to be routed dynamic is really a mis-mapped runtime symbol. Parses each member
+// once (independent of the fixpoint's own parse — link-time, one-shot, so the
+// second scan is negligible and keeps the fixpoint function untouched).
+fn _aef_all_member_defs(buf, members: [ArMember]) -> [string] {
+    let defs: [string] = []
+    let mut m = 0
+    while m < len(members) {
+        let mem = members[m]
+        let obj = parse_elf_x86_obj(buf, mem.data_off, mem.size, m)
+        let mut sj = 0
+        while sj < len(obj.symbols) {
+            let s = obj.symbols[sj]
+            if s.section != 0 && (s.bind == ELF_STB_GLOBAL || s.bind == ELF_STB_WEAK) {
+                let nm = _aef_symname(obj, s.name_offset)
+                if len(nm) > 0 && !_aef_has(defs, nm) { defs.push(nm) }
+            }
+            sj = sj + 1
+        }
+        m = m + 1
+    }
+    return defs
 }
 
 pub fn archive_extract_fixpoint(program_objs: [ElfX86Obj], buf, members: [ArMember]) -> [ElfX86Obj] {
