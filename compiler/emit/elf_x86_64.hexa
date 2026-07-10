@@ -1598,6 +1598,8 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     let mut def_names:   [string] = []
     let mut def_seg:     [Int]    = []
     let mut def_off:     [Int]    = []
+    let mut def_bind:    [Int]    = []   // H2: STB_LOCAL(0)/STB_GLOBAL(1) per def
+    let mut def_obj:     [Int]    = []   // H2: owning-obj index per def (LOCAL scoping)
 
     let mut obj_bases:       [Int] = []   // .text base per obj
     let mut obj_rodata_base: [Int] = []   // .rodata start in data_bytes per obj
@@ -1636,6 +1638,8 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                 def_names.push(name)
                 def_seg.push(0)
                 def_off.push(base + s.value)
+                def_bind.push(s.bind)
+                def_obj.push(oi)
                 if main_off < 0 && name == main_name {
                     main_off = base + s.value
                 }
@@ -1649,6 +1653,8 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                 def_names.push(name)
                 def_seg.push(2)
                 def_off.push((total_bss - obj.bss_size) + s.value)
+                def_bind.push(s.bind)
+                def_obj.push(oi)
             } else if s.section != 0 {
                 // Data def. section==4 (data_sec when .rodata present) -> .data
                 // pool; otherwise (section==3) -> .rodata pool. When the obj has
@@ -1661,6 +1667,8 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                 } else {
                     def_off.push(ro_base + s.value)
                 }
+                def_bind.push(s.bind)
+                def_obj.push(oi)
             }
             di = di + 1
         }
@@ -1772,10 +1780,26 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                 name = name + from_char_code(b)
                 k = k + 1
             }
+            // ── H2 fix: symbol-scoped resolution ────────────────────────────
+            // Flat first-match let one obj's STB_LOCAL def (a file-local static /
+            // `g<id>` module-global / `.LCstrN`) satisfy ANOTHER obj's same-named
+            // reloc — a wrong-def miscompile (#3899 flatten-globals alias in the
+            // linker). Scope by the def's bind: STB_GLOBAL is globally visible +
+            // PREFERRED (break on first); STB_LOCAL is visible ONLY to relocs in
+            // its owning obj (def_obj == ro), a later GLOBAL homonym wins. An
+            // all-GLOBAL link (the normal path) takes the first GLOBAL match and
+            // breaks — byte-identical index to the old first-match (byteeq-safe).
             let mut found_idx = -1
             let mut sk = 0
             while sk < len(def_names) {
-                if def_names[sk] == name { found_idx = sk; break }
+                if def_names[sk] == name {
+                    if def_bind[sk] == ELF_STB_GLOBAL {
+                        found_idx = sk
+                        break
+                    } else if def_obj[sk] == ro {
+                        if found_idx < 0 { found_idx = sk }
+                    }
+                }
                 sk = sk + 1
             }
             if found_idx >= 0 {
@@ -1895,9 +1919,21 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     let mut gfi = 0
     while gfi < n_got {
         let gname = got_syms[gfi]
+        // H2: prefer a GLOBAL def for the shared GOT slot; fall back to a LOCAL
+        // def (own-emit `g<id>` module-global GOTPCREL targets are STB_LOCAL, so
+        // a GLOBAL-only filter would break them). Byte-neutral for all-GLOBAL.
+        // The GOT is de-duped purely by NAME (got_syms), so two objs' same-named
+        // STB_LOCAL `g<id>` still collapse to ONE slot — a latent cross-obj GOT
+        // collision that only per-(obj,name) slots would close (named next round).
         let mut gfound = -1
         let mut gfk = 0
-        while gfk < len(def_names) { if def_names[gfk] == gname { gfound = gfk; break } gfk = gfk + 1 }
+        while gfk < len(def_names) {
+            if def_names[gfk] == gname {
+                if def_bind[gfk] == ELF_STB_GLOBAL { gfound = gfk; break }
+                if gfound < 0 { gfound = gfk }
+            }
+            gfk = gfk + 1
+        }
         if gfound < 0 {
             // A static own-link cannot fabricate an address for an undefined
             // GOTPCREL target (extern/libc symbols like environ/stdout need
