@@ -2897,6 +2897,130 @@ fn _run_e0384_probe(label: string, src: string, want_on: i64) -> bool {
     return ok
 }
 
+// ── HEXA-OWN L5-E15 — HX3055 assign to a field/element of an IMMUTABLE OWNED
+// base (Rust E0594 'cannot assign to `s.f`, as `s` is not declared as mutable').
+// The OWNED-base sibling of HX3031 (which owns the DIFFERENT shared-`&`-ref-base
+// case): here `s`/`a` is a plain non-ref `let` declared WITHOUT `mut`, so
+// `s.f = v` / `a[i] = v` is an assign-to-immutable. Opt-in HEXA_BORROWCK,
+// warning-band DEFAULT, STRICT re-bands to Error. OFF → empty stream
+// (byteeq-neutral). DECL-BASED (keyed on the `_bckm_*` immutable-let registry by
+// local id) so it does NOT inherit HX3040's flow-insensitive dead-loan FP class.
+
+// HAZARD (field) — a field write on an immutable OWNED struct `let s` → HX3055 ×1.
+fn _src_hz_immut_field_write() -> string {
+    let mut s = "struct Pt { f: i64 }\n"
+    s = s + "fn hifw() {\n"
+    s = s + "    let p = Pt { f: 1 }\n"
+    s = s + "    p.f = 2\n"
+    s = s + "    println(p.f)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HAZARD (element) — an index write on an immutable OWNED array `let a` → HX3055 ×1.
+fn _src_hz_immut_index_write() -> string {
+    let mut s = "fn hiiw() {\n"
+    s = s + "    let a = [1, 2, 3]\n"
+    s = s + "    a[0] = 9\n"
+    s = s + "    println(a[0])\n"
+    s = s + "}\n"
+    return s
+}
+
+// CONTROL — a `let mut` owner may have its fields written → 0 (mut bit set →
+// SILENT). Proves the rung fires on the mutability of the DECLARATION, not the
+// presence of a place write.
+fn _src_fp_mut_field_write() -> string {
+    let mut s = "struct Pt2 { f: i64 }\n"
+    s = s + "fn fmfw() {\n"
+    s = s + "    let mut p = Pt2 { f: 1 }\n"
+    s = s + "    p.f = 2\n"
+    s = s + "    println(p.f)\n"
+    s = s + "}\n"
+    return s
+}
+
+// EXCLUSION CONTROL (HX3031 별개) — a write through a SHARED `&` ref binding of an
+// immutable owner. `r` is BOTH an immutable `let` (in the `_bckm_*` registry) AND
+// a live shared loan (in the E2 ref registry). HX3055 MUST NOT fire here (the
+// call-site ref-exclusion routes it to HX3031 only) — proving no DOUBLE-FIRE:
+// HX3055 ×0, HX3031 ×1. This is the separate assign-behind-shared-ref rung.
+fn _src_fp_immut_write_via_ref() -> string {
+    let mut s = "struct Pt3 { f: i64 }\n"
+    s = s + "fn fiwvr() {\n"
+    s = s + "    let p = Pt3 { f: 1 }\n"
+    s = s + "    let r = &p\n"
+    s = s + "    r.f = 2\n"
+    s = s + "    println(p.f)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HX3055 probe runner — mirrors `_run_e0384_probe`, keyed on the immutable-owned-
+// base write code and asserting every OTHER code is 0 (probe hygiene). STRICT
+// re-bands HX3055 to Error, so the error-band count must equal the HX3055 count.
+// OFF → want 0 (empty stream, byteeq-neutral).
+fn _run_e0594_immut_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3055 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3055")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3055 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3055 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
+// HX3055/HX3031 exclusion probe — asserts the ref-base write fires HX3031 ×1 and
+// HX3055 ×0 (no double-fire), proving the call-site ref-exclusion. OFF → both 0.
+fn _run_e0594_ref_exclusion(label: string, src: string) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want_ref = 0
+    if flag_on { want_ref = 1 }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3031 ×" + to_string(want_ref) + ", HX3055 ×0) ──")
+    let d = _compile_probe(label, src)
+    let n55 = _count_code(d, "HX3055")
+    let n31 = _count_code(d, "HX3031")
+    _print_diags(d)
+    if n55 != 0 {
+        println("  FAIL: HX3055 = " + to_string(n55) + ", want 0 (a ref base must NOT double-fire)")
+        ok = false
+    }
+    if n31 != want_ref {
+        println("  FAIL: HX3031 = " + to_string(n31) + ", want " + to_string(want_ref))
+        ok = false
+    }
+    if len(d) != want_ref {
+        println("  FAIL: total diagnostics = " + to_string(len(d)) + ", want " + to_string(want_ref))
+        ok = false
+    }
+    if ok { println("  ok: HX3031 ×" + to_string(want_ref) + " · HX3055 ×0") }
+    return ok
+}
+
 // ── driver ───────────────────────────────────────────────────
 
 fn main() {
@@ -3143,6 +3267,16 @@ fn main() {
         if !_run_e0384_probe("fp_mut_reassign", _src_fp_mut_reassign(), 0) { ok = false }
         if !_run_e0384_probe("fp_deferred_init", _src_fp_deferred_init(), 0) { ok = false }
         if !_run_e0384_probe("fp_shadow_rebind", _src_fp_shadow_rebind(), 0) { ok = false }
+        // HEXA-OWN L5-E15 — HX3055 assign to a field/element of an IMMUTABLE OWNED
+        // base (E0594). `let p = Pt{..}; p.f = v` / `let a = [..]; a[i] = v` on an
+        // immutable owner → HX3055 ×1; a `let mut` owner → 0 (mut bit); a write via
+        // a live `&` ref binding is the SEPARATE HX3031 rung (exclusion control →
+        // HX3031 ×1, HX3055 ×0, no double-fire). OFF → empty (byteeq-neutral);
+        // STRICT → Error-band.
+        if !_run_e0594_immut_probe("hz_immut_field_write", _src_hz_immut_field_write(), 1) { ok = false }
+        if !_run_e0594_immut_probe("hz_immut_index_write", _src_hz_immut_index_write(), 1) { ok = false }
+        if !_run_e0594_immut_probe("fp_mut_field_write", _src_fp_mut_field_write(), 0) { ok = false }
+        if !_run_e0594_ref_exclusion("fp_immut_write_via_ref", _src_fp_immut_write_via_ref()) { ok = false }
         // census lane must be silent whenever HEXA_BORROWCK_CENSUS is unset
         // (byteeq-neutral proof at the census-count level).
         if !_run_census() { ok = false }
