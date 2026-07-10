@@ -1506,6 +1506,45 @@ fn _bck_emit_capture_move(name: string, callee: string, clo_line: i64, sp: Span)
     _lr_diag.push(d)
 }
 
+// HX3052 emit (move-out-of-captured-value-WHILE-BORROWED, Rust E0505/E0504) —
+// same-site dedup + STRICT escalation, cloned from
+// `_bck_emit_move_while_borrowed_nc` (HX3040 covers the NON-call move sites;
+// this covers the CLOSURE capture-move site, the loan-aware collapse of HX3037).
+// `origin` is the captured value moved into the closure, `callee` the resolved
+// @own-param callee inside the body, `name` the borrowing binding that holds a
+// LIVE loan of `origin`, `borrow_mut` the loan's mutability, `borrow_line` where
+// the loan was created, `clo_line` the closure-lower line. Report-only. HONESTY:
+// inherits HX3040's flow-insensitive loan-liveness FP class — a DEAD loan whose
+// last use precedes the closure still fires (pre-NLL E0505 / conservative-loud-
+// over-quiet, NOT NLL-precise; see catalog HX3052 + borrowck_test known-FP
+// witness `fp_clo_dead_loan_before_closure`).
+fn _bck_emit_capture_move_borrowed(origin: string, callee: string, name: string,
+                                   borrow_mut: bool, borrow_line: i64,
+                                   clo_line: i64, sp: Span) {
+    let mut di = 0
+    while di < len(_bck_e_lines) {
+        if _bck_e_lines[di] == sp.line && _bck_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_e_lines.push(sp.line)
+    _bck_e_cols.push(sp.col)
+    let mut b = diag_new("HX3052")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "origin", origin)
+    b = diag_arg(b, "callee", callee)
+    b = diag_arg(b, "name", name)
+    let mut _bk = "immutable"
+    if borrow_mut { _bk = "mutable" }
+    b = diag_arg(b, "borrow_kind", _bk)
+    b = diag_arg(b, "borrow_line", to_string(borrow_line))
+    b = diag_arg(b, "closure_line", to_string(clo_line))
+    let mut d = diag_emit(b)
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _lr_diag.push(d)
+}
+
 // HX3038 emit (move-out-of-array-by-indexing, Rust E0508) — same-site dedup +
 // STRICT escalation, cloned from `_bck_emit_move_out_of_borrow`. `name` is the
 // owned-local array whose element `name[i]` is moved into an `@own` param.
@@ -3608,7 +3647,25 @@ fn _bck_closure_capture_move_scan(e: HExpr, bound: [string],
                 let nm = _strip_mut_prefix(arg.text)
                 if !_str_list_has(bound, nm) && _str_list_has(free, nm)
                     && _bck_own_param(callee_text, ai - 1) {
-                    _bck_emit_capture_move(nm, callee_text, clo_line, arg.span)
+                    // HEXA-OWN L5-E14 — collapse HX3037 → HX3052 when a LIVE loan
+                    // of the captured origin `nm` exists at the closure-lower site
+                    // (Rust E0505/E0504 "cannot move out of `nm` because it is
+                    // borrowed"). The env slot aliases the enclosing binding by heap
+                    // pointer (:3588-3592), so the first call's @own move-out
+                    // invalidates the live loan — exactly the E0505 hazard, more
+                    // specific than the bare capture-move E0507. Reuses the E4
+                    // write-through scan (`_bck_ref_find_write_through`, live in the
+                    // ENCLOSING scope here BEFORE the loan pass is suspended). No live
+                    // loan (-1) → the plain HX3037 capture-move as before (every
+                    // shipped HX3037 fixture lacks a `&nm` loan → -1 → UNCHANGED).
+                    let _bk_cmb = _bck_ref_find_write_through(nm)
+                    if _bk_cmb >= 0 {
+                        _bck_emit_capture_move_borrowed(nm, callee_text,
+                            _bck_ref_names[_bk_cmb], _bck_ref_mut[_bk_cmb],
+                            _bck_ref_lines[_bk_cmb], clo_line, arg.span)
+                    } else {
+                        _bck_emit_capture_move(nm, callee_text, clo_line, arg.span)
+                    }
                 }
             }
             ai = ai + 1

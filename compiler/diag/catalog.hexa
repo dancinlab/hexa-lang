@@ -937,6 +937,26 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3052",
+        title: "cannot move out of value because it is borrowed",
+        // Warning band (SSOT F4 warn-first), the CLOSURE capture-move variant of the
+        // move-out-while-borrowed rung of the opt-in borrow checker
+        // (`HEXA_BORROWCK=1`, HEXA-OWN L5-E14); HX3040 wires the SAME E0505 rule at
+        // the let-RHS / assign-RHS / bare-ident-return move sites, this wires it at
+        // the closure capture-move site as the loan-aware COLLAPSE of HX3037 (the
+        // bare capture-move E0507). Under `HEXA_BORROWCK_STRICT=1` the SAME diagnostic
+        // instance is re-banded to a build-refusing Error via the sanctioned caller
+        // override in `_bck_emit_capture_move_borrowed` (identical mechanism to
+        // HX3040/HX3037/…/HX3014). With the flag unset the loan pass is inert
+        // (`_bck_active` false), so nothing is emitted and the diagnostic stream +
+        // emitted bytes are byte-identical — release integrity first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "cannot move out of `{origin}` into the closure (line {closure_line}) because it is borrowed — `{name}` holds a {borrow_kind} loan of it (line {borrow_line})",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN L5-E14) found a MOVE-OUT-OF-A-CAPTURED-VALUE-WHILE-BORROWED: a closure captures `{origin}` and moves it into a callee's `@own` param inside its body (`sink({origin})`), while a LIVE loan of that same origin exists in the E2 registry (`let {name} = &{origin}` / `let {name} = &mut {origin}`, not yet killed). This is Rust's E0505 ('cannot move out of `{origin}` because it is borrowed'; closure-specific lineage E0504), the SAME rule HX3040 fires at the non-call move sites and HX3029 fires at the `@own` call-arg site — HX3052 extends the loan-scan to the closure capture-move site that shipped HX3037 recognizes as a capture-move but never loan-scanned. Because hexa closures capture by heap pointer (the env slot ALIASES the enclosing binding, hir_to_mir.hexa:3588-3592) and every hexa closure is `hexa_callN`-callable more than once (no FnOnce kind), the FIRST call's `@own` move-out invalidates the enclosing loan — exactly the E0505 hazard, so this is the MORE SPECIFIC diagnostic than the bare capture-move HX3037 (E0507). The collapse is loan-gated: with NO live loan of `{origin}` the scan emits the plain HX3037 as before (the `_bck_ref_find_write_through` write-through scan returns -1), so every shipped HX3037 fixture — none of which carries a `&{origin}` loan — is byte-for-byte UNCHANGED. The write-through scan is MUTABILITY-BLIND (moving out breaks BOTH `&` and `&mut` loans — the same aliasing break as E0506), so `{borrow_kind}` is reported for the diagnostic surface but does not gate firing. Report-only (no MIR mutation, `_bck_note_move` is NEVER called inside the lambda frame — matching HX3037's report-only posture). HONESTY CAVEAT (adversarial-review corrected, state/hexa-own/frontier-r1-review-verdicts.md): this rung is NOT zero-FP. Its gate `_bck_ref_find_write_through` (hir_to_mir.hexa:1200-1210) is the FLOW-INSENSITIVE loan-liveness scan whose own docstring declares a documented false-positive class — a loan stays 'live' from its `let` to end-of-fn with NO NLL last-use kill (the M4 last-use pass serves only the HX3014 group lane, not this registry). So HX3052 INHERITS HX3040's dead-loan FP class: when `{name}`'s last use is BEFORE the closure (modern rustc/NLL ends the borrow there and ACCEPTS the move), HX3052 still fires — a documented FALSE POSITIVE (`fn hz(){ let xs=[1,2,3]; let r=&xs; println(len(r)); let f=fn(n:i64){ sink(xs) }; f(1) }`, recorded as the KNOWN-FP witness `fp_clo_dead_loan_before_closure` in borrowck_test.hexa). The parity target is therefore PRE-NLL E0505 / conservative-loud-over-quiet (the SAME E2/E3/E4/E5 lane posture), NOT NLL-precise E0505. `@own` + `&` corpus adoption are both 0, so even with the flag ON this rule fires on ZERO real source (corpus-clean, gen3≡gen4 preserved). Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical. Fix: finish using the borrow `{name}` before the closure captures `{origin}`, clone into the closure instead of moving (`let c = {origin}.clone()` captured by the closure), or borrow `{origin}` inside the closure rather than moving it.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
