@@ -946,6 +946,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3054",
+        title: "array cannot be indexed by an aggregate value",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "the type `array` cannot be indexed by a value of type `{actual}`",
+        explain: "Static type check (always-on since FLIP-3 flagless — Rust-style, no disable switch), static-types segment(b). Parity+1 sibling of HX3053: a subscript `x[k]` whose base's inferred static type is a KNOWN structured `array` AND whose index's inferred static type is an AGGREGATE / reference-typed value — a nested `array` (`xs[ys]`) or a struct/enum nominal `named:<X>` (`xs[p]`) — can never succeed: the C-substrate `hexa_arr_poly_get` wrapper takes an int64_t index (runtime_core_emit ~2949), so the aggregate operand's boxed heap-pointer payload is reinterpreted as an integer offset — a guaranteed out-of-bounds / garbage read (the same 'guaranteed-runtime-error → REJECT' contract + mechanism as HX3053). This is the Rust E0277 rule (rustc_hir_typeck: 'the type `[T]` cannot be indexed by `<aggregate>`' / 'the trait bound `[T]: Index<…>` is not satisfied' — an array/slice implements only integer/range indexing). It fires in the `_infer_expr` Index arm right after the HX3053 string clause: the gate fires `_emit_hx3054(idx_t, …)` iff `base_t.kind == \"array\" && _types_hx3054_bad_idx(idx_t)`, where the classifier is TRUE for `idx_t.kind == \"array\"` (or the flag-OFF `named:[…]` array sentinel spelling) and any struct/enum `named:<X>`. Disjoint from the HX3053 string clause (a `string` index carries its own `string` kind, never a `named:` prefix, so the two never double-fire) and from HX3025 (which owns the non-container BASE, not the index). Conservative under-reject: the dynamic wildcards `named:HexaVal` / `named:any` (may be an int at runtime) and the deferred unsigned scalars `u8`..`u64` (scalar ints, NOT heap pointers → legal offsets) are EXCLUDED; every primitive scalar (i*/f*/bool/char/string/unit) carries its own non-`named:` kind so it never reaches the classifier. Emitted unconditionally (FLIP-3 flagless) as a build-refusing ERROR for real source (REJECT), while byte-eq TEST FIXTURES (`compiler/test/` corpus + `*_test.hexa`) stay WARNING via the `_types_strict_for` path carve-out. No env opt-out or severity switch. Real shipping source is census-clean (arrays are integer-indexed) — the static-types-corpus advisory census is the flip-guard, and types erase at MIR so codegen .text is byte-identical (byteeq-neutral). Fix: index the array with an integer, or use a `map` (dictionary) if you meant an aggregate-keyed lookup.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
