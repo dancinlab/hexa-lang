@@ -19,7 +19,7 @@ hxlcl_strtoll:
     .loc 1 725 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
-    sub sp, sp, #2016 // sp adj
+    sub sp, sp, #2160 // sp adj
     movz x9, #0 // cabi ingress tag = TAG_INT
     stp x9, x0, [sp, #0] // cabi ingress param 0
     movz x9, #0 // cabi ingress tag = TAG_INT
@@ -103,7 +103,7 @@ _L5211_hxlcl_strtoll_bb3:
 _L5211_hxlcl_strtoll_bb4:
     movz x9, #0 // hv const_int: TAG_INT
     movz x0, #0 // hv const_int val
-    add sp, sp, #2016 // sp adj
+    add sp, sp, #2160 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
 _L5211_hxlcl_strtoll_bb5:
@@ -272,7 +272,7 @@ _L5211_hxlcl_strtoll_bb14:
 _L5211_hxlcl_strtoll_bb15:
     ldp x0, x1, [sp, #224] // hv load L14
     movz x2, #0 // hv const_int: TAG_INT
-    movz x3, #1 // hv const_int val
+    movz x3, #0 // hv const_int val
     add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
     movz x0, #0 // __hx_payload_add: TAG_INT
     add x15, sp, #672 // hv frame base
@@ -281,11 +281,11 @@ _L5211_hxlcl_strtoll_bb15:
     ldp x0, x1, [x15] // hv load L42
     add x15, sp, #688 // hv frame base
     stp x0, x1, [x15] // hv store L43
-    ldp x0, x1, [sp, #64] // hv load L4
-    ldp x2, x3, [sp, #224] // hv load L14
-    add x1, x1, x3 // __hx_ptr_load8: addr = ptr + off
-    ldrb w1, [x1] // __hx_ptr_load8: w1 = *(u8*)addr (zero-ext)
-    movz x0, #0 // __hx_ptr_load8: TAG_INT
+    ldp x0, x1, [sp, #224] // hv load L14
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #1 // hv const_int val
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
     add x15, sp, #704 // hv frame base
     stp x0, x1, [x15] // hv store L44
     add x15, sp, #704 // hv frame base
@@ -293,8 +293,7 @@ _L5211_hxlcl_strtoll_bb15:
     add x15, sp, #720 // hv frame base
     stp x0, x1, [x15] // hv store L45
     ldp x0, x1, [sp, #64] // hv load L4
-    add x15, sp, #688 // hv frame base
-    ldp x2, x3, [x15] // hv load L43
+    ldp x2, x3, [sp, #224] // hv load L14
     add x1, x1, x3 // __hx_ptr_load8: addr = ptr + off
     ldrb w1, [x1] // __hx_ptr_load8: w1 = *(u8*)addr (zero-ext)
     movz x0, #0 // __hx_ptr_load8: TAG_INT
@@ -304,13 +303,12 @@ _L5211_hxlcl_strtoll_bb15:
     ldp x0, x1, [x15] // hv load L46
     add x15, sp, #752 // hv frame base
     stp x0, x1, [x15] // hv store L47
+    ldp x0, x1, [sp, #64] // hv load L4
     add x15, sp, #720 // hv frame base
-    ldp x0, x1, [x15] // hv load L45
-    movz x2, #0 // hv const_int: TAG_INT
-    movz x3, #48 // hv const_int val
-    cmp x1, x3 // __hx_payload_eq: cmp payloads
-    cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
-    bl hexa_bool // __hx_payload_eq: box bool
+    ldp x2, x3, [x15] // hv load L45
+    add x1, x1, x3 // __hx_ptr_load8: addr = ptr + off
+    ldrb w1, [x1] // __hx_ptr_load8: w1 = *(u8*)addr (zero-ext)
+    movz x0, #0 // __hx_ptr_load8: TAG_INT
     add x15, sp, #768 // hv frame base
     stp x0, x1, [x15] // hv store L48
     add x15, sp, #768 // hv frame base
@@ -320,7 +318,7 @@ _L5211_hxlcl_strtoll_bb15:
     add x15, sp, #752 // hv frame base
     ldp x0, x1, [x15] // hv load L47
     movz x2, #0 // hv const_int: TAG_INT
-    movz x3, #120 // hv const_int val
+    movz x3, #48 // hv const_int val
     cmp x1, x3 // __hx_payload_eq: cmp payloads
     cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
     bl hexa_bool // __hx_payload_eq: box bool
@@ -330,10 +328,10 @@ _L5211_hxlcl_strtoll_bb15:
     ldp x0, x1, [x15] // hv load L50
     add x15, sp, #816 // hv frame base
     stp x0, x1, [x15] // hv store L51
-    add x15, sp, #752 // hv frame base
-    ldp x0, x1, [x15] // hv load L47
+    add x15, sp, #784 // hv frame base
+    ldp x0, x1, [x15] // hv load L49
     movz x2, #0 // hv const_int: TAG_INT
-    movz x3, #88 // hv const_int val
+    movz x3, #120 // hv const_int val
     cmp x1, x3 // __hx_payload_eq: cmp payloads
     cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
     bl hexa_bool // __hx_payload_eq: box bool
@@ -343,60 +341,46 @@ _L5211_hxlcl_strtoll_bb15:
     ldp x0, x1, [x15] // hv load L52
     add x15, sp, #848 // hv frame base
     stp x0, x1, [x15] // hv store L53
-    add x15, sp, #816 // hv frame base
-    ldp x0, x1, [x15] // hv load L51
-    add x15, sp, #848 // hv frame base
-    ldp x2, x3, [x15] // hv load L53
-    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
-    movz x0, #0 // __hx_payload_add: TAG_INT
+    add x15, sp, #784 // hv frame base
+    ldp x0, x1, [x15] // hv load L49
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #88 // hv const_int val
+    cmp x1, x3 // __hx_payload_eq: cmp payloads
+    cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
+    bl hexa_bool // __hx_payload_eq: box bool
     add x15, sp, #864 // hv frame base
     stp x0, x1, [x15] // hv store L54
     add x15, sp, #864 // hv frame base
     ldp x0, x1, [x15] // hv load L54
     add x15, sp, #880 // hv frame base
     stp x0, x1, [x15] // hv store L55
-    ldp x0, x1, [sp, #208] // hv load L13
-    movz x2, #0 // hv const_int: TAG_INT
-    movz x3, #0 // hv const_int val
-    cmp x1, x3 // __hx_payload_eq: cmp payloads
-    cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
-    bl hexa_bool // __hx_payload_eq: box bool
+    add x15, sp, #848 // hv frame base
+    ldp x0, x1, [x15] // hv load L53
+    add x15, sp, #880 // hv frame base
+    ldp x2, x3, [x15] // hv load L55
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
     add x15, sp, #896 // hv frame base
     stp x0, x1, [x15] // hv store L56
     add x15, sp, #896 // hv frame base
     ldp x0, x1, [x15] // hv load L56
-    cbz x1, _L5211_hxlcl_strtoll_bb17 // br_cond: !payload -> else
-    b _L5211_hxlcl_strtoll_bb16 // branch -> then
-_L5211_hxlcl_strtoll_bb16:
-    add x15, sp, #784 // hv frame base
-    ldp x0, x1, [x15] // hv load L49
+    add x15, sp, #912 // hv frame base
+    stp x0, x1, [x15] // hv store L57
+    ldp x0, x1, [sp, #208] // hv load L13
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
-    cmp x1, x3 // __hx_payload_ne: cmp payloads
-    cset x0, ne // __hx_payload_ne: x0 = (a.pl ne b.pl)
-    bl hexa_bool // __hx_payload_ne: box bool
+    cmp x1, x3 // __hx_payload_eq: cmp payloads
+    cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
+    bl hexa_bool // __hx_payload_eq: box bool
     add x15, sp, #928 // hv frame base
     stp x0, x1, [x15] // hv store L58
     add x15, sp, #928 // hv frame base
     ldp x0, x1, [x15] // hv load L58
-    cbz x1, _L5211_hxlcl_strtoll_bb19 // br_cond: !payload -> else
-    b _L5211_hxlcl_strtoll_bb18 // branch -> then
-_L5211_hxlcl_strtoll_bb17:
-    ldp x0, x1, [sp, #208] // hv load L13
-    movz x2, #0 // hv const_int: TAG_INT
-    movz x3, #16 // hv const_int val
-    cmp x1, x3 // __hx_payload_eq: cmp payloads
-    cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
-    bl hexa_bool // __hx_payload_eq: box bool
-    add x15, sp, #1024 // hv frame base
-    stp x0, x1, [x15] // hv store L64
-    add x15, sp, #1024 // hv frame base
-    ldp x0, x1, [x15] // hv load L64
-    cbz x1, _L5211_hxlcl_strtoll_bb25 // br_cond: !payload -> else
-    b _L5211_hxlcl_strtoll_bb24 // branch -> then
-_L5211_hxlcl_strtoll_bb18:
-    add x15, sp, #880 // hv frame base
-    ldp x0, x1, [x15] // hv load L55
+    cbz x1, _L5211_hxlcl_strtoll_bb17 // br_cond: !payload -> else
+    b _L5211_hxlcl_strtoll_bb16 // branch -> then
+_L5211_hxlcl_strtoll_bb16:
+    add x15, sp, #816 // hv frame base
+    ldp x0, x1, [x15] // hv load L51
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     cmp x1, x3 // __hx_payload_ne: cmp payloads
@@ -406,6 +390,33 @@ _L5211_hxlcl_strtoll_bb18:
     stp x0, x1, [x15] // hv store L60
     add x15, sp, #960 // hv frame base
     ldp x0, x1, [x15] // hv load L60
+    cbz x1, _L5211_hxlcl_strtoll_bb19 // br_cond: !payload -> else
+    b _L5211_hxlcl_strtoll_bb18 // branch -> then
+_L5211_hxlcl_strtoll_bb17:
+    ldp x0, x1, [sp, #208] // hv load L13
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #16 // hv const_int val
+    cmp x1, x3 // __hx_payload_eq: cmp payloads
+    cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
+    bl hexa_bool // __hx_payload_eq: box bool
+    add x15, sp, #1056 // hv frame base
+    stp x0, x1, [x15] // hv store L66
+    add x15, sp, #1056 // hv frame base
+    ldp x0, x1, [x15] // hv load L66
+    cbz x1, _L5211_hxlcl_strtoll_bb25 // br_cond: !payload -> else
+    b _L5211_hxlcl_strtoll_bb24 // branch -> then
+_L5211_hxlcl_strtoll_bb18:
+    add x15, sp, #912 // hv frame base
+    ldp x0, x1, [x15] // hv load L57
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    cmp x1, x3 // __hx_payload_ne: cmp payloads
+    cset x0, ne // __hx_payload_ne: x0 = (a.pl ne b.pl)
+    bl hexa_bool // __hx_payload_ne: box bool
+    add x15, sp, #992 // hv frame base
+    stp x0, x1, [x15] // hv store L62
+    add x15, sp, #992 // hv frame base
+    ldp x0, x1, [x15] // hv load L62
     cbz x1, _L5211_hxlcl_strtoll_bb21 // br_cond: !payload -> else
     b _L5211_hxlcl_strtoll_bb20 // branch -> then
 _L5211_hxlcl_strtoll_bb19:
@@ -422,10 +433,10 @@ _L5211_hxlcl_strtoll_bb20:
     movz x3, #2 // hv const_int val
     add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
     movz x0, #0 // __hx_payload_add: TAG_INT
-    add x15, sp, #992 // hv frame base
-    stp x0, x1, [x15] // hv store L62
-    add x15, sp, #992 // hv frame base
-    ldp x0, x1, [x15] // hv load L62
+    add x15, sp, #1024 // hv frame base
+    stp x0, x1, [x15] // hv store L64
+    add x15, sp, #1024 // hv frame base
+    ldp x0, x1, [x15] // hv load L64
     stp x0, x1, [sp, #224] // hv store L14
     b _L5211_hxlcl_strtoll_bb22 // branch
 _L5211_hxlcl_strtoll_bb21:
@@ -437,10 +448,10 @@ _L5211_hxlcl_strtoll_bb21:
     movz x3, #1 // hv const_int val
     add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
     movz x0, #0 // __hx_payload_add: TAG_INT
-    add x15, sp, #1008 // hv frame base
-    stp x0, x1, [x15] // hv store L63
-    add x15, sp, #1008 // hv frame base
-    ldp x0, x1, [x15] // hv load L63
+    add x15, sp, #1040 // hv frame base
+    stp x0, x1, [x15] // hv store L65
+    add x15, sp, #1040 // hv frame base
+    ldp x0, x1, [x15] // hv load L65
     stp x0, x1, [sp, #224] // hv store L14
     b _L5211_hxlcl_strtoll_bb22 // branch
 _L5211_hxlcl_strtoll_bb22:
@@ -448,24 +459,8 @@ _L5211_hxlcl_strtoll_bb22:
 _L5211_hxlcl_strtoll_bb23:
     b _L5211_hxlcl_strtoll_bb30 // branch
 _L5211_hxlcl_strtoll_bb24:
-    add x15, sp, #784 // hv frame base
-    ldp x0, x1, [x15] // hv load L49
-    movz x2, #0 // hv const_int: TAG_INT
-    movz x3, #0 // hv const_int val
-    cmp x1, x3 // __hx_payload_ne: cmp payloads
-    cset x0, ne // __hx_payload_ne: x0 = (a.pl ne b.pl)
-    bl hexa_bool // __hx_payload_ne: box bool
-    add x15, sp, #1056 // hv frame base
-    stp x0, x1, [x15] // hv store L66
-    add x15, sp, #1056 // hv frame base
-    ldp x0, x1, [x15] // hv load L66
-    cbz x1, _L5211_hxlcl_strtoll_bb27 // br_cond: !payload -> else
-    b _L5211_hxlcl_strtoll_bb26 // branch -> then
-_L5211_hxlcl_strtoll_bb25:
-    b _L5211_hxlcl_strtoll_bb30 // branch
-_L5211_hxlcl_strtoll_bb26:
-    add x15, sp, #880 // hv frame base
-    ldp x0, x1, [x15] // hv load L55
+    add x15, sp, #816 // hv frame base
+    ldp x0, x1, [x15] // hv load L51
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     cmp x1, x3 // __hx_payload_ne: cmp payloads
@@ -475,6 +470,22 @@ _L5211_hxlcl_strtoll_bb26:
     stp x0, x1, [x15] // hv store L68
     add x15, sp, #1088 // hv frame base
     ldp x0, x1, [x15] // hv load L68
+    cbz x1, _L5211_hxlcl_strtoll_bb27 // br_cond: !payload -> else
+    b _L5211_hxlcl_strtoll_bb26 // branch -> then
+_L5211_hxlcl_strtoll_bb25:
+    b _L5211_hxlcl_strtoll_bb30 // branch
+_L5211_hxlcl_strtoll_bb26:
+    add x15, sp, #912 // hv frame base
+    ldp x0, x1, [x15] // hv load L57
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    cmp x1, x3 // __hx_payload_ne: cmp payloads
+    cset x0, ne // __hx_payload_ne: x0 = (a.pl ne b.pl)
+    bl hexa_bool // __hx_payload_ne: box bool
+    add x15, sp, #1120 // hv frame base
+    stp x0, x1, [x15] // hv store L70
+    add x15, sp, #1120 // hv frame base
+    ldp x0, x1, [x15] // hv load L70
     cbz x1, _L5211_hxlcl_strtoll_bb29 // br_cond: !payload -> else
     b _L5211_hxlcl_strtoll_bb28 // branch -> then
 _L5211_hxlcl_strtoll_bb27:
@@ -485,10 +496,10 @@ _L5211_hxlcl_strtoll_bb28:
     movz x3, #2 // hv const_int val
     add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
     movz x0, #0 // __hx_payload_add: TAG_INT
-    add x15, sp, #1120 // hv frame base
-    stp x0, x1, [x15] // hv store L70
-    add x15, sp, #1120 // hv frame base
-    ldp x0, x1, [x15] // hv load L70
+    add x15, sp, #1152 // hv frame base
+    stp x0, x1, [x15] // hv store L72
+    add x15, sp, #1152 // hv frame base
+    ldp x0, x1, [x15] // hv load L72
     stp x0, x1, [sp, #224] // hv store L14
     b _L5211_hxlcl_strtoll_bb29 // branch
 _L5211_hxlcl_strtoll_bb29:
@@ -496,25 +507,29 @@ _L5211_hxlcl_strtoll_bb29:
 _L5211_hxlcl_strtoll_bb30:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
-    add x15, sp, #1136 // hv frame base
-    stp x0, x1, [x15] // hv store L71
+    add x15, sp, #1168 // hv frame base
+    stp x0, x1, [x15] // hv store L73
+    movz x0, #0 // hv const_int: TAG_INT
+    movz x1, #0 // hv const_int val
+    add x15, sp, #1184 // hv frame base
+    stp x0, x1, [x15] // hv store L74
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // hv const_int val
-    add x15, sp, #1152 // hv frame base
-    stp x0, x1, [x15] // hv store L72
+    add x15, sp, #1200 // hv frame base
+    stp x0, x1, [x15] // hv store L75
     b _L5211_hxlcl_strtoll_bb31 // branch
 _L5211_hxlcl_strtoll_bb31:
-    add x15, sp, #1152 // hv frame base
-    ldp x0, x1, [x15] // hv load L72
+    add x15, sp, #1200 // hv frame base
+    ldp x0, x1, [x15] // hv load L75
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     cmp x1, x3 // __hx_payload_ne: cmp payloads
     cset x0, ne // __hx_payload_ne: x0 = (a.pl ne b.pl)
     bl hexa_bool // __hx_payload_ne: box bool
-    add x15, sp, #1168 // hv frame base
-    stp x0, x1, [x15] // hv store L73
-    add x15, sp, #1168 // hv frame base
-    ldp x0, x1, [x15] // hv load L73
+    add x15, sp, #1216 // hv frame base
+    stp x0, x1, [x15] // hv store L76
+    add x15, sp, #1216 // hv frame base
+    ldp x0, x1, [x15] // hv load L76
     cbz x1, _L5211_hxlcl_strtoll_bb33 // br_cond: !payload -> else
     b _L5211_hxlcl_strtoll_bb32 // branch -> then
 _L5211_hxlcl_strtoll_bb32:
@@ -523,352 +538,350 @@ _L5211_hxlcl_strtoll_bb32:
     add x1, x1, x3 // __hx_ptr_load8: addr = ptr + off
     ldrb w1, [x1] // __hx_ptr_load8: w1 = *(u8*)addr (zero-ext)
     movz x0, #0 // __hx_ptr_load8: TAG_INT
-    add x15, sp, #1184 // hv frame base
-    stp x0, x1, [x15] // hv store L74
-    add x15, sp, #1184 // hv frame base
-    ldp x0, x1, [x15] // hv load L74
-    add x15, sp, #1200 // hv frame base
-    stp x0, x1, [x15] // hv store L75
-    movz x0, #0 // hv const_int: TAG_INT
-    movz x1, #0 // hv const_int val
-    add x15, sp, #1216 // hv frame base
-    stp x0, x1, [x15] // hv store L76
-    movz x0, #0 // hv const_int: TAG_INT
-    movz x1, #0 // hv const_int val
     add x15, sp, #1232 // hv frame base
     stp x0, x1, [x15] // hv store L77
-    add x15, sp, #1200 // hv frame base
-    ldp x0, x1, [x15] // hv load L75
+    add x15, sp, #1232 // hv frame base
+    ldp x0, x1, [x15] // hv load L77
+    add x15, sp, #1248 // hv frame base
+    stp x0, x1, [x15] // hv store L78
+    movz x0, #0 // hv const_int: TAG_INT
+    movz x1, #0 // hv const_int val
+    add x15, sp, #1264 // hv frame base
+    stp x0, x1, [x15] // hv store L79
+    movz x0, #0 // hv const_int: TAG_INT
+    movz x1, #0 // hv const_int val
+    add x15, sp, #1280 // hv frame base
+    stp x0, x1, [x15] // hv store L80
+    add x15, sp, #1248 // hv frame base
+    ldp x0, x1, [x15] // hv load L78
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #48 // hv const_int val
     cmp x1, x3 // __hx_payload_ge: cmp payloads
     cset x0, ge // __hx_payload_ge: x0 = (a.pl ge b.pl)
     bl hexa_bool // __hx_payload_ge: box bool
-    add x15, sp, #1248 // hv frame base
-    stp x0, x1, [x15] // hv store L78
+    add x15, sp, #1296 // hv frame base
+    stp x0, x1, [x15] // hv store L81
+    add x15, sp, #1296 // hv frame base
+    ldp x0, x1, [x15] // hv load L81
+    add x15, sp, #1312 // hv frame base
+    stp x0, x1, [x15] // hv store L82
     add x15, sp, #1248 // hv frame base
     ldp x0, x1, [x15] // hv load L78
-    add x15, sp, #1264 // hv frame base
-    stp x0, x1, [x15] // hv store L79
-    add x15, sp, #1200 // hv frame base
-    ldp x0, x1, [x15] // hv load L75
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #57 // hv const_int val
     cmp x1, x3 // __hx_payload_le: cmp payloads
     cset x0, le // __hx_payload_le: x0 = (a.pl le b.pl)
     bl hexa_bool // __hx_payload_le: box bool
-    add x15, sp, #1280 // hv frame base
-    stp x0, x1, [x15] // hv store L80
-    add x15, sp, #1280 // hv frame base
-    ldp x0, x1, [x15] // hv load L80
-    add x15, sp, #1296 // hv frame base
-    stp x0, x1, [x15] // hv store L81
-    add x15, sp, #1264 // hv frame base
-    ldp x0, x1, [x15] // hv load L79
-    add x15, sp, #1296 // hv frame base
-    ldp x2, x3, [x15] // hv load L81
-    and x1, x1, x3 // __hx_payload_and: x1 = a.pl and b.pl
-    movz x0, #0 // __hx_payload_and: TAG_INT
-    add x15, sp, #1312 // hv frame base
-    stp x0, x1, [x15] // hv store L82
-    add x15, sp, #1312 // hv frame base
-    ldp x0, x1, [x15] // hv load L82
     add x15, sp, #1328 // hv frame base
     stp x0, x1, [x15] // hv store L83
     add x15, sp, #1328 // hv frame base
     ldp x0, x1, [x15] // hv load L83
+    add x15, sp, #1344 // hv frame base
+    stp x0, x1, [x15] // hv store L84
+    add x15, sp, #1312 // hv frame base
+    ldp x0, x1, [x15] // hv load L82
+    add x15, sp, #1344 // hv frame base
+    ldp x2, x3, [x15] // hv load L84
+    and x1, x1, x3 // __hx_payload_and: x1 = a.pl and b.pl
+    movz x0, #0 // __hx_payload_and: TAG_INT
+    add x15, sp, #1360 // hv frame base
+    stp x0, x1, [x15] // hv store L85
+    add x15, sp, #1360 // hv frame base
+    ldp x0, x1, [x15] // hv load L85
+    add x15, sp, #1376 // hv frame base
+    stp x0, x1, [x15] // hv store L86
+    add x15, sp, #1376 // hv frame base
+    ldp x0, x1, [x15] // hv load L86
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     cmp x1, x3 // __hx_payload_ne: cmp payloads
     cset x0, ne // __hx_payload_ne: x0 = (a.pl ne b.pl)
     bl hexa_bool // __hx_payload_ne: box bool
-    add x15, sp, #1344 // hv frame base
-    stp x0, x1, [x15] // hv store L84
-    add x15, sp, #1344 // hv frame base
-    ldp x0, x1, [x15] // hv load L84
+    add x15, sp, #1392 // hv frame base
+    stp x0, x1, [x15] // hv store L87
+    add x15, sp, #1392 // hv frame base
+    ldp x0, x1, [x15] // hv load L87
     cbz x1, _L5211_hxlcl_strtoll_bb35 // br_cond: !payload -> else
     b _L5211_hxlcl_strtoll_bb34 // branch -> then
 _L5211_hxlcl_strtoll_bb33:
-    ldp x0, x1, [sp, #64] // hv load L4
-    ldp x2, x3, [sp, #224] // hv load L14
-    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
-    movz x0, #0 // __hx_payload_add: TAG_INT
-    add x15, sp, #1872 // hv frame base
-    stp x0, x1, [x15] // hv store L117
-    add x15, sp, #1872 // hv frame base
-    ldp x0, x1, [x15] // hv load L117
-    add x15, sp, #1888 // hv frame base
-    stp x0, x1, [x15] // hv store L118
-    ldp x0, x1, [sp, #96] // hv load L6
+    ldp x0, x1, [sp, #224] // hv load L14
+    add x15, sp, #1920 // hv frame base
+    stp x0, x1, [x15] // hv store L120
+    add x15, sp, #1184 // hv frame base
+    ldp x0, x1, [x15] // hv load L74
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
-    cmp x1, x3 // __hx_payload_ne: cmp payloads
-    cset x0, ne // __hx_payload_ne: x0 = (a.pl ne b.pl)
-    bl hexa_bool // __hx_payload_ne: box bool
-    add x15, sp, #1904 // hv frame base
-    stp x0, x1, [x15] // hv store L119
-    add x15, sp, #1904 // hv frame base
-    ldp x0, x1, [x15] // hv load L119
+    cmp x1, x3 // __hx_payload_eq: cmp payloads
+    cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
+    bl hexa_bool // __hx_payload_eq: box bool
+    add x15, sp, #1936 // hv frame base
+    stp x0, x1, [x15] // hv store L121
+    add x15, sp, #1936 // hv frame base
+    ldp x0, x1, [x15] // hv load L121
     cbz x1, _L5211_hxlcl_strtoll_bb49 // br_cond: !payload -> else
     b _L5211_hxlcl_strtoll_bb48 // branch -> then
 _L5211_hxlcl_strtoll_bb34:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // hv const_int val
-    add x15, sp, #1216 // hv frame base
-    stp x0, x1, [x15] // hv store L76
-    add x15, sp, #1200 // hv frame base
-    ldp x0, x1, [x15] // hv load L75
+    add x15, sp, #1264 // hv frame base
+    stp x0, x1, [x15] // hv store L79
+    add x15, sp, #1248 // hv frame base
+    ldp x0, x1, [x15] // hv load L78
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #48 // hv const_int val
     sub x1, x1, x3 // __hx_payload_sub: x1 = a.pl sub b.pl
     movz x0, #0 // __hx_payload_sub: TAG_INT
-    add x15, sp, #1376 // hv frame base
-    stp x0, x1, [x15] // hv store L86
-    add x15, sp, #1376 // hv frame base
-    ldp x0, x1, [x15] // hv load L86
-    add x15, sp, #1232 // hv frame base
-    stp x0, x1, [x15] // hv store L77
+    add x15, sp, #1424 // hv frame base
+    stp x0, x1, [x15] // hv store L89
+    add x15, sp, #1424 // hv frame base
+    ldp x0, x1, [x15] // hv load L89
+    add x15, sp, #1280 // hv frame base
+    stp x0, x1, [x15] // hv store L80
     b _L5211_hxlcl_strtoll_bb41 // branch
 _L5211_hxlcl_strtoll_bb35:
-    add x15, sp, #1200 // hv frame base
-    ldp x0, x1, [x15] // hv load L75
+    add x15, sp, #1248 // hv frame base
+    ldp x0, x1, [x15] // hv load L78
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #97 // hv const_int val
     cmp x1, x3 // __hx_payload_ge: cmp payloads
     cset x0, ge // __hx_payload_ge: x0 = (a.pl ge b.pl)
     bl hexa_bool // __hx_payload_ge: box bool
-    add x15, sp, #1392 // hv frame base
-    stp x0, x1, [x15] // hv store L87
-    add x15, sp, #1392 // hv frame base
-    ldp x0, x1, [x15] // hv load L87
-    add x15, sp, #1408 // hv frame base
-    stp x0, x1, [x15] // hv store L88
-    add x15, sp, #1200 // hv frame base
-    ldp x0, x1, [x15] // hv load L75
+    add x15, sp, #1440 // hv frame base
+    stp x0, x1, [x15] // hv store L90
+    add x15, sp, #1440 // hv frame base
+    ldp x0, x1, [x15] // hv load L90
+    add x15, sp, #1456 // hv frame base
+    stp x0, x1, [x15] // hv store L91
+    add x15, sp, #1248 // hv frame base
+    ldp x0, x1, [x15] // hv load L78
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #122 // hv const_int val
     cmp x1, x3 // __hx_payload_le: cmp payloads
     cset x0, le // __hx_payload_le: x0 = (a.pl le b.pl)
     bl hexa_bool // __hx_payload_le: box bool
-    add x15, sp, #1424 // hv frame base
-    stp x0, x1, [x15] // hv store L89
-    add x15, sp, #1424 // hv frame base
-    ldp x0, x1, [x15] // hv load L89
-    add x15, sp, #1440 // hv frame base
-    stp x0, x1, [x15] // hv store L90
-    add x15, sp, #1408 // hv frame base
-    ldp x0, x1, [x15] // hv load L88
-    add x15, sp, #1440 // hv frame base
-    ldp x2, x3, [x15] // hv load L90
-    and x1, x1, x3 // __hx_payload_and: x1 = a.pl and b.pl
-    movz x0, #0 // __hx_payload_and: TAG_INT
-    add x15, sp, #1456 // hv frame base
-    stp x0, x1, [x15] // hv store L91
-    add x15, sp, #1456 // hv frame base
-    ldp x0, x1, [x15] // hv load L91
     add x15, sp, #1472 // hv frame base
     stp x0, x1, [x15] // hv store L92
     add x15, sp, #1472 // hv frame base
     ldp x0, x1, [x15] // hv load L92
+    add x15, sp, #1488 // hv frame base
+    stp x0, x1, [x15] // hv store L93
+    add x15, sp, #1456 // hv frame base
+    ldp x0, x1, [x15] // hv load L91
+    add x15, sp, #1488 // hv frame base
+    ldp x2, x3, [x15] // hv load L93
+    and x1, x1, x3 // __hx_payload_and: x1 = a.pl and b.pl
+    movz x0, #0 // __hx_payload_and: TAG_INT
+    add x15, sp, #1504 // hv frame base
+    stp x0, x1, [x15] // hv store L94
+    add x15, sp, #1504 // hv frame base
+    ldp x0, x1, [x15] // hv load L94
+    add x15, sp, #1520 // hv frame base
+    stp x0, x1, [x15] // hv store L95
+    add x15, sp, #1520 // hv frame base
+    ldp x0, x1, [x15] // hv load L95
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     cmp x1, x3 // __hx_payload_ne: cmp payloads
     cset x0, ne // __hx_payload_ne: x0 = (a.pl ne b.pl)
     bl hexa_bool // __hx_payload_ne: box bool
-    add x15, sp, #1488 // hv frame base
-    stp x0, x1, [x15] // hv store L93
-    add x15, sp, #1488 // hv frame base
-    ldp x0, x1, [x15] // hv load L93
+    add x15, sp, #1536 // hv frame base
+    stp x0, x1, [x15] // hv store L96
+    add x15, sp, #1536 // hv frame base
+    ldp x0, x1, [x15] // hv load L96
     cbz x1, _L5211_hxlcl_strtoll_bb37 // br_cond: !payload -> else
     b _L5211_hxlcl_strtoll_bb36 // branch -> then
 _L5211_hxlcl_strtoll_bb36:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // hv const_int val
-    add x15, sp, #1216 // hv frame base
-    stp x0, x1, [x15] // hv store L76
-    add x15, sp, #1200 // hv frame base
-    ldp x0, x1, [x15] // hv load L75
+    add x15, sp, #1264 // hv frame base
+    stp x0, x1, [x15] // hv store L79
+    add x15, sp, #1248 // hv frame base
+    ldp x0, x1, [x15] // hv load L78
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #97 // hv const_int val
     sub x1, x1, x3 // __hx_payload_sub: x1 = a.pl sub b.pl
     movz x0, #0 // __hx_payload_sub: TAG_INT
-    add x15, sp, #1520 // hv frame base
-    stp x0, x1, [x15] // hv store L95
-    add x15, sp, #1520 // hv frame base
-    ldp x0, x1, [x15] // hv load L95
-    add x15, sp, #1536 // hv frame base
-    stp x0, x1, [x15] // hv store L96
-    add x15, sp, #1536 // hv frame base
-    ldp x0, x1, [x15] // hv load L96
-    movz x2, #0 // hv const_int: TAG_INT
-    movz x3, #10 // hv const_int val
-    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
-    movz x0, #0 // __hx_payload_add: TAG_INT
-    add x15, sp, #1552 // hv frame base
-    stp x0, x1, [x15] // hv store L97
-    add x15, sp, #1552 // hv frame base
-    ldp x0, x1, [x15] // hv load L97
-    add x15, sp, #1232 // hv frame base
-    stp x0, x1, [x15] // hv store L77
-    b _L5211_hxlcl_strtoll_bb40 // branch
-_L5211_hxlcl_strtoll_bb37:
-    add x15, sp, #1200 // hv frame base
-    ldp x0, x1, [x15] // hv load L75
-    movz x2, #0 // hv const_int: TAG_INT
-    movz x3, #65 // hv const_int val
-    cmp x1, x3 // __hx_payload_ge: cmp payloads
-    cset x0, ge // __hx_payload_ge: x0 = (a.pl ge b.pl)
-    bl hexa_bool // __hx_payload_ge: box bool
     add x15, sp, #1568 // hv frame base
     stp x0, x1, [x15] // hv store L98
     add x15, sp, #1568 // hv frame base
     ldp x0, x1, [x15] // hv load L98
     add x15, sp, #1584 // hv frame base
     stp x0, x1, [x15] // hv store L99
-    add x15, sp, #1200 // hv frame base
-    ldp x0, x1, [x15] // hv load L75
+    add x15, sp, #1584 // hv frame base
+    ldp x0, x1, [x15] // hv load L99
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #10 // hv const_int val
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
+    add x15, sp, #1600 // hv frame base
+    stp x0, x1, [x15] // hv store L100
+    add x15, sp, #1600 // hv frame base
+    ldp x0, x1, [x15] // hv load L100
+    add x15, sp, #1280 // hv frame base
+    stp x0, x1, [x15] // hv store L80
+    b _L5211_hxlcl_strtoll_bb40 // branch
+_L5211_hxlcl_strtoll_bb37:
+    add x15, sp, #1248 // hv frame base
+    ldp x0, x1, [x15] // hv load L78
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #65 // hv const_int val
+    cmp x1, x3 // __hx_payload_ge: cmp payloads
+    cset x0, ge // __hx_payload_ge: x0 = (a.pl ge b.pl)
+    bl hexa_bool // __hx_payload_ge: box bool
+    add x15, sp, #1616 // hv frame base
+    stp x0, x1, [x15] // hv store L101
+    add x15, sp, #1616 // hv frame base
+    ldp x0, x1, [x15] // hv load L101
+    add x15, sp, #1632 // hv frame base
+    stp x0, x1, [x15] // hv store L102
+    add x15, sp, #1248 // hv frame base
+    ldp x0, x1, [x15] // hv load L78
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #90 // hv const_int val
     cmp x1, x3 // __hx_payload_le: cmp payloads
     cset x0, le // __hx_payload_le: x0 = (a.pl le b.pl)
     bl hexa_bool // __hx_payload_le: box bool
-    add x15, sp, #1600 // hv frame base
-    stp x0, x1, [x15] // hv store L100
-    add x15, sp, #1600 // hv frame base
-    ldp x0, x1, [x15] // hv load L100
-    add x15, sp, #1616 // hv frame base
-    stp x0, x1, [x15] // hv store L101
-    add x15, sp, #1584 // hv frame base
-    ldp x0, x1, [x15] // hv load L99
-    add x15, sp, #1616 // hv frame base
-    ldp x2, x3, [x15] // hv load L101
-    and x1, x1, x3 // __hx_payload_and: x1 = a.pl and b.pl
-    movz x0, #0 // __hx_payload_and: TAG_INT
-    add x15, sp, #1632 // hv frame base
-    stp x0, x1, [x15] // hv store L102
-    add x15, sp, #1632 // hv frame base
-    ldp x0, x1, [x15] // hv load L102
     add x15, sp, #1648 // hv frame base
     stp x0, x1, [x15] // hv store L103
     add x15, sp, #1648 // hv frame base
     ldp x0, x1, [x15] // hv load L103
+    add x15, sp, #1664 // hv frame base
+    stp x0, x1, [x15] // hv store L104
+    add x15, sp, #1632 // hv frame base
+    ldp x0, x1, [x15] // hv load L102
+    add x15, sp, #1664 // hv frame base
+    ldp x2, x3, [x15] // hv load L104
+    and x1, x1, x3 // __hx_payload_and: x1 = a.pl and b.pl
+    movz x0, #0 // __hx_payload_and: TAG_INT
+    add x15, sp, #1680 // hv frame base
+    stp x0, x1, [x15] // hv store L105
+    add x15, sp, #1680 // hv frame base
+    ldp x0, x1, [x15] // hv load L105
+    add x15, sp, #1696 // hv frame base
+    stp x0, x1, [x15] // hv store L106
+    add x15, sp, #1696 // hv frame base
+    ldp x0, x1, [x15] // hv load L106
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     cmp x1, x3 // __hx_payload_ne: cmp payloads
     cset x0, ne // __hx_payload_ne: x0 = (a.pl ne b.pl)
     bl hexa_bool // __hx_payload_ne: box bool
-    add x15, sp, #1664 // hv frame base
-    stp x0, x1, [x15] // hv store L104
-    add x15, sp, #1664 // hv frame base
-    ldp x0, x1, [x15] // hv load L104
+    add x15, sp, #1712 // hv frame base
+    stp x0, x1, [x15] // hv store L107
+    add x15, sp, #1712 // hv frame base
+    ldp x0, x1, [x15] // hv load L107
     cbz x1, _L5211_hxlcl_strtoll_bb39 // br_cond: !payload -> else
     b _L5211_hxlcl_strtoll_bb38 // branch -> then
 _L5211_hxlcl_strtoll_bb38:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // hv const_int val
-    add x15, sp, #1216 // hv frame base
-    stp x0, x1, [x15] // hv store L76
-    add x15, sp, #1200 // hv frame base
-    ldp x0, x1, [x15] // hv load L75
+    add x15, sp, #1264 // hv frame base
+    stp x0, x1, [x15] // hv store L79
+    add x15, sp, #1248 // hv frame base
+    ldp x0, x1, [x15] // hv load L78
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #65 // hv const_int val
     sub x1, x1, x3 // __hx_payload_sub: x1 = a.pl sub b.pl
     movz x0, #0 // __hx_payload_sub: TAG_INT
-    add x15, sp, #1696 // hv frame base
-    stp x0, x1, [x15] // hv store L106
-    add x15, sp, #1696 // hv frame base
-    ldp x0, x1, [x15] // hv load L106
-    add x15, sp, #1712 // hv frame base
-    stp x0, x1, [x15] // hv store L107
-    add x15, sp, #1712 // hv frame base
-    ldp x0, x1, [x15] // hv load L107
+    add x15, sp, #1744 // hv frame base
+    stp x0, x1, [x15] // hv store L109
+    add x15, sp, #1744 // hv frame base
+    ldp x0, x1, [x15] // hv load L109
+    add x15, sp, #1760 // hv frame base
+    stp x0, x1, [x15] // hv store L110
+    add x15, sp, #1760 // hv frame base
+    ldp x0, x1, [x15] // hv load L110
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #10 // hv const_int val
     add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
     movz x0, #0 // __hx_payload_add: TAG_INT
-    add x15, sp, #1728 // hv frame base
-    stp x0, x1, [x15] // hv store L108
-    add x15, sp, #1728 // hv frame base
-    ldp x0, x1, [x15] // hv load L108
-    add x15, sp, #1232 // hv frame base
-    stp x0, x1, [x15] // hv store L77
+    add x15, sp, #1776 // hv frame base
+    stp x0, x1, [x15] // hv store L111
+    add x15, sp, #1776 // hv frame base
+    ldp x0, x1, [x15] // hv load L111
+    add x15, sp, #1280 // hv frame base
+    stp x0, x1, [x15] // hv store L80
     b _L5211_hxlcl_strtoll_bb39 // branch
 _L5211_hxlcl_strtoll_bb39:
     b _L5211_hxlcl_strtoll_bb40 // branch
 _L5211_hxlcl_strtoll_bb40:
     b _L5211_hxlcl_strtoll_bb41 // branch
 _L5211_hxlcl_strtoll_bb41:
-    add x15, sp, #1216 // hv frame base
-    ldp x0, x1, [x15] // hv load L76
+    add x15, sp, #1264 // hv frame base
+    ldp x0, x1, [x15] // hv load L79
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     cmp x1, x3 // __hx_payload_eq: cmp payloads
     cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
     bl hexa_bool // __hx_payload_eq: box bool
-    add x15, sp, #1744 // hv frame base
-    stp x0, x1, [x15] // hv store L109
-    add x15, sp, #1744 // hv frame base
-    ldp x0, x1, [x15] // hv load L109
+    add x15, sp, #1792 // hv frame base
+    stp x0, x1, [x15] // hv store L112
+    add x15, sp, #1792 // hv frame base
+    ldp x0, x1, [x15] // hv load L112
     cbz x1, _L5211_hxlcl_strtoll_bb43 // br_cond: !payload -> else
     b _L5211_hxlcl_strtoll_bb42 // branch -> then
 _L5211_hxlcl_strtoll_bb42:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
-    add x15, sp, #1152 // hv frame base
-    stp x0, x1, [x15] // hv store L72
+    add x15, sp, #1200 // hv frame base
+    stp x0, x1, [x15] // hv store L75
     b _L5211_hxlcl_strtoll_bb47 // branch
 _L5211_hxlcl_strtoll_bb43:
-    add x15, sp, #1232 // hv frame base
-    ldp x0, x1, [x15] // hv load L77
+    add x15, sp, #1280 // hv frame base
+    ldp x0, x1, [x15] // hv load L80
     ldp x2, x3, [sp, #208] // hv load L13
     cmp x1, x3 // __hx_payload_ge: cmp payloads
     cset x0, ge // __hx_payload_ge: x0 = (a.pl ge b.pl)
     bl hexa_bool // __hx_payload_ge: box bool
-    add x15, sp, #1776 // hv frame base
-    stp x0, x1, [x15] // hv store L111
-    add x15, sp, #1776 // hv frame base
-    ldp x0, x1, [x15] // hv load L111
+    add x15, sp, #1824 // hv frame base
+    stp x0, x1, [x15] // hv store L114
+    add x15, sp, #1824 // hv frame base
+    ldp x0, x1, [x15] // hv load L114
     cbz x1, _L5211_hxlcl_strtoll_bb45 // br_cond: !payload -> else
     b _L5211_hxlcl_strtoll_bb44 // branch -> then
 _L5211_hxlcl_strtoll_bb44:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
-    add x15, sp, #1152 // hv frame base
-    stp x0, x1, [x15] // hv store L72
+    add x15, sp, #1200 // hv frame base
+    stp x0, x1, [x15] // hv store L75
     b _L5211_hxlcl_strtoll_bb46 // branch
 _L5211_hxlcl_strtoll_bb45:
-    add x15, sp, #1136 // hv frame base
-    ldp x0, x1, [x15] // hv load L71
+    add x15, sp, #1168 // hv frame base
+    ldp x0, x1, [x15] // hv load L73
     ldp x2, x3, [sp, #208] // hv load L13
     mul x1, x1, x3 // __hx_payload_mul: x1 = a.pl mul b.pl
     movz x0, #0 // __hx_payload_mul: TAG_INT
-    add x15, sp, #1808 // hv frame base
-    stp x0, x1, [x15] // hv store L113
-    add x15, sp, #1808 // hv frame base
-    ldp x0, x1, [x15] // hv load L113
-    add x15, sp, #1824 // hv frame base
-    stp x0, x1, [x15] // hv store L114
-    add x15, sp, #1824 // hv frame base
-    ldp x0, x1, [x15] // hv load L114
-    add x15, sp, #1232 // hv frame base
-    ldp x2, x3, [x15] // hv load L77
+    add x15, sp, #1856 // hv frame base
+    stp x0, x1, [x15] // hv store L116
+    add x15, sp, #1856 // hv frame base
+    ldp x0, x1, [x15] // hv load L116
+    add x15, sp, #1872 // hv frame base
+    stp x0, x1, [x15] // hv store L117
+    add x15, sp, #1872 // hv frame base
+    ldp x0, x1, [x15] // hv load L117
+    add x15, sp, #1280 // hv frame base
+    ldp x2, x3, [x15] // hv load L80
     add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
     movz x0, #0 // __hx_payload_add: TAG_INT
-    add x15, sp, #1840 // hv frame base
-    stp x0, x1, [x15] // hv store L115
-    add x15, sp, #1840 // hv frame base
-    ldp x0, x1, [x15] // hv load L115
-    add x15, sp, #1136 // hv frame base
-    stp x0, x1, [x15] // hv store L71
+    add x15, sp, #1888 // hv frame base
+    stp x0, x1, [x15] // hv store L118
+    add x15, sp, #1888 // hv frame base
+    ldp x0, x1, [x15] // hv load L118
+    add x15, sp, #1168 // hv frame base
+    stp x0, x1, [x15] // hv store L73
+    movz x0, #0 // hv const_int: TAG_INT
+    movz x1, #1 // hv const_int val
+    add x15, sp, #1184 // hv frame base
+    stp x0, x1, [x15] // hv store L74
     ldp x0, x1, [sp, #224] // hv load L14
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
     add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
     movz x0, #0 // __hx_payload_add: TAG_INT
-    add x15, sp, #1856 // hv frame base
-    stp x0, x1, [x15] // hv store L116
-    add x15, sp, #1856 // hv frame base
-    ldp x0, x1, [x15] // hv load L116
+    add x15, sp, #1904 // hv frame base
+    stp x0, x1, [x15] // hv store L119
+    add x15, sp, #1904 // hv frame base
+    ldp x0, x1, [x15] // hv load L119
     stp x0, x1, [sp, #224] // hv store L14
     b _L5211_hxlcl_strtoll_bb46 // branch
 _L5211_hxlcl_strtoll_bb46:
@@ -876,20 +889,79 @@ _L5211_hxlcl_strtoll_bb46:
 _L5211_hxlcl_strtoll_bb47:
     b _L5211_hxlcl_strtoll_bb31 // branch
 _L5211_hxlcl_strtoll_bb48:
+    ldp x0, x1, [sp, #224] // hv load L14
+    add x15, sp, #688 // hv frame base
+    ldp x2, x3, [x15] // hv load L43
+    cmp x1, x3 // __hx_payload_ne: cmp payloads
+    cset x0, ne // __hx_payload_ne: x0 = (a.pl ne b.pl)
+    bl hexa_bool // __hx_payload_ne: box bool
+    add x15, sp, #1968 // hv frame base
+    stp x0, x1, [x15] // hv store L123
+    add x15, sp, #1968 // hv frame base
+    ldp x0, x1, [x15] // hv load L123
+    cbz x1, _L5211_hxlcl_strtoll_bb51 // br_cond: !payload -> else
+    b _L5211_hxlcl_strtoll_bb50 // branch -> then
+_L5211_hxlcl_strtoll_bb49:
+    ldp x0, x1, [sp, #64] // hv load L4
+    add x15, sp, #1920 // hv frame base
+    ldp x2, x3, [x15] // hv load L120
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
+    add x15, sp, #2016 // hv frame base
+    stp x0, x1, [x15] // hv store L126
+    add x15, sp, #2016 // hv frame base
+    ldp x0, x1, [x15] // hv load L126
+    add x15, sp, #2032 // hv frame base
+    stp x0, x1, [x15] // hv store L127
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
-    add x15, sp, #1888 // hv frame base
-    ldp x4, x5, [x15] // hv load L118
+    cmp x1, x3 // __hx_payload_ne: cmp payloads
+    cset x0, ne // __hx_payload_ne: x0 = (a.pl ne b.pl)
+    bl hexa_bool // __hx_payload_ne: box bool
+    add x15, sp, #2048 // hv frame base
+    stp x0, x1, [x15] // hv store L128
+    add x15, sp, #2048 // hv frame base
+    ldp x0, x1, [x15] // hv load L128
+    cbz x1, _L5211_hxlcl_strtoll_bb54 // br_cond: !payload -> else
+    b _L5211_hxlcl_strtoll_bb53 // branch -> then
+_L5211_hxlcl_strtoll_bb50:
+    add x15, sp, #688 // hv frame base
+    ldp x0, x1, [x15] // hv load L43
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #1 // hv const_int val
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
+    add x15, sp, #2000 // hv frame base
+    stp x0, x1, [x15] // hv store L125
+    add x15, sp, #2000 // hv frame base
+    ldp x0, x1, [x15] // hv load L125
+    add x15, sp, #1920 // hv frame base
+    stp x0, x1, [x15] // hv store L120
+    b _L5211_hxlcl_strtoll_bb52 // branch
+_L5211_hxlcl_strtoll_bb51:
+    movz x0, #0 // hv const_int: TAG_INT
+    movz x1, #0 // hv const_int val
+    add x15, sp, #1920 // hv frame base
+    stp x0, x1, [x15] // hv store L120
+    b _L5211_hxlcl_strtoll_bb52 // branch
+_L5211_hxlcl_strtoll_bb52:
+    b _L5211_hxlcl_strtoll_bb49 // branch
+_L5211_hxlcl_strtoll_bb53:
+    ldp x0, x1, [sp, #96] // hv load L6
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    add x15, sp, #2032 // hv frame base
+    ldp x4, x5, [x15] // hv load L127
     add x1, x1, x3 // __hx_ptr_store64: addr = ptr + off
     str x5, [x1] // __hx_ptr_store64: *(addr) = val
     movz x0, #0 // __hx_ptr_store64: TAG_INT (ret ptr)
     ldp x0, x1, [sp, #96] // hv load L6
     movz x0, #0 // __hx_ptr_store64: TAG_INT
-    add x15, sp, #1936 // hv frame base
-    stp x0, x1, [x15] // hv store L121
-    b _L5211_hxlcl_strtoll_bb49 // branch
-_L5211_hxlcl_strtoll_bb49:
+    add x15, sp, #2080 // hv frame base
+    stp x0, x1, [x15] // hv store L130
+    b _L5211_hxlcl_strtoll_bb54 // branch
+_L5211_hxlcl_strtoll_bb54:
     add x15, sp, #560 // hv frame base
     ldp x0, x1, [x15] // hv load L35
     movz x2, #0 // hv const_int: TAG_INT
@@ -897,34 +969,34 @@ _L5211_hxlcl_strtoll_bb49:
     cmp x1, x3 // __hx_payload_ne: cmp payloads
     cset x0, ne // __hx_payload_ne: x0 = (a.pl ne b.pl)
     bl hexa_bool // __hx_payload_ne: box bool
-    add x15, sp, #1952 // hv frame base
-    stp x0, x1, [x15] // hv store L122
-    add x15, sp, #1952 // hv frame base
-    ldp x0, x1, [x15] // hv load L122
-    cbz x1, _L5211_hxlcl_strtoll_bb51 // br_cond: !payload -> else
-    b _L5211_hxlcl_strtoll_bb50 // branch -> then
-_L5211_hxlcl_strtoll_bb50:
+    add x15, sp, #2096 // hv frame base
+    stp x0, x1, [x15] // hv store L131
+    add x15, sp, #2096 // hv frame base
+    ldp x0, x1, [x15] // hv load L131
+    cbz x1, _L5211_hxlcl_strtoll_bb56 // br_cond: !payload -> else
+    b _L5211_hxlcl_strtoll_bb55 // branch -> then
+_L5211_hxlcl_strtoll_bb55:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
-    add x15, sp, #1136 // hv frame base
-    ldp x2, x3, [x15] // hv load L71
+    add x15, sp, #1168 // hv frame base
+    ldp x2, x3, [x15] // hv load L73
     sub x1, x1, x3 // __hx_payload_sub: x1 = a.pl sub b.pl
     movz x0, #0 // __hx_payload_sub: TAG_INT
-    add x15, sp, #1984 // hv frame base
-    stp x0, x1, [x15] // hv store L124
-    add x15, sp, #1984 // hv frame base
-    ldp x0, x1, [x15] // hv load L124
-    add x15, sp, #2000 // hv frame base
-    stp x0, x1, [x15] // hv store L125
-    add x15, sp, #2000 // hv frame base
-    ldp x9, x0, [x15] // hv load L125
-    add sp, sp, #2016 // sp adj
+    add x15, sp, #2128 // hv frame base
+    stp x0, x1, [x15] // hv store L133
+    add x15, sp, #2128 // hv frame base
+    ldp x0, x1, [x15] // hv load L133
+    add x15, sp, #2144 // hv frame base
+    stp x0, x1, [x15] // hv store L134
+    add x15, sp, #2144 // hv frame base
+    ldp x9, x0, [x15] // hv load L134
+    add sp, sp, #2160 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_L5211_hxlcl_strtoll_bb51:
-    add x15, sp, #1136 // hv frame base
-    ldp x9, x0, [x15] // hv load L71
-    add sp, sp, #2016 // sp adj
+_L5211_hxlcl_strtoll_bb56:
+    add x15, sp, #1168 // hv frame base
+    ldp x9, x0, [x15] // hv load L73
+    add sp, sp, #2160 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
     .p2align 2
