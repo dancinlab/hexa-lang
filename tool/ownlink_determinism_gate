@@ -33,8 +33,8 @@ D1="$W/d1"; D2="$W/d2"; mkdir -p "$D1" "$D2"
 export HEXA_PREBUILT_RUNTIME="$RTA" HEXA_LANG="$REPO"
 
 # ── T1 — emit-twice .o byte-identical (native-obj determinism) ──
-"$CCN" "$FIX" --backend=native --emit=obj -o "$D1/rt.o" 2>"$W/e1.err" || infra "emit#1 failed ($(tail -1 "$W/e1.err" 2>/dev/null))"
-"$CCN" "$FIX" --backend=native --emit=obj -o "$D2/rt.o" 2>"$W/e2.err" || infra "emit#2 failed"
+"$CCN" _drv.hexa --backend=native --emit=obj --target=x86_64-linux-gnu -o "$D1/rt.o" "$FIX" 2>"$W/e1.err" || infra "emit#1 failed ($(tail -1 "$W/e1.err" 2>/dev/null))"
+"$CCN" _drv.hexa --backend=native --emit=obj --target=x86_64-linux-gnu -o "$D2/rt.o" "$FIX" 2>"$W/e2.err" || infra "emit#2 failed"
 cmp -s "$D1/rt.o" "$D2/rt.o" || fail "emit non-deterministic — rt.o(1) != rt.o(2)"
 echo "T1 OK — emit-twice byte-identical"
 
@@ -46,8 +46,8 @@ echo "T0 — fixture UND count = $UND (floor $MIN_UND)"
 # ── T2 — link-twice exec byte-identical (THE CORE: own-link determinism) ──
 # Two independent processes from two cwds with identical RELATIVE argv → catches
 # ASLR/pointer-order leaks, cwd/path/env embedding, timestamp fields, pad garbage.
-( cd "$D1" && "$CCN" "$FIX" --backend=native --emit=exec --linker=hexa --target=x86_64-linux-gnu -o rt_pull 2>rt.err ) || infra "own-link#1 failed ($(tail -1 "$D1/rt.err" 2>/dev/null))"
-( cd "$D2" && "$CCN" "$FIX" --backend=native --emit=exec --linker=hexa --target=x86_64-linux-gnu -o rt_pull 2>rt.err ) || infra "own-link#2 failed"
+( cd "$D1" && "$CCN" _drv.hexa --backend=native --emit=exec --linker=hexa --target=x86_64-linux-gnu -o rt_pull "$FIX" 2>rt.err ) || infra "own-link#1 failed ($(tail -1 "$D1/rt.err" 2>/dev/null))"
+( cd "$D2" && "$CCN" _drv.hexa --backend=native --emit=exec --linker=hexa --target=x86_64-linux-gnu -o rt_pull "$FIX" 2>rt.err ) || infra "own-link#2 failed"
 if ! cmp -s "$D1/rt_pull" "$D2/rt_pull"; then
     echo "== first 20 byte diffs =="; cmp -l "$D1/rt_pull" "$D2/rt_pull" 2>/dev/null | head -20
     echo "== D1 sections =="; readelf -SW "$D1/rt_pull" 2>/dev/null | head -30
