@@ -409,6 +409,20 @@
     "value": "POD/HOST RAM for memory-heavy self-emit measurement: a community RunPod CPU slice advertises host RAM via free (e.g. 1133GB) but cgroup-caps at /sys/fs/cgroup/memory.max=8GB — a ~19.87GB frontend-arena self-emit census OOM-kills mid-compile, never reaching the serialize-time peak where all 5 IR carriers are co-resident. --secure often still assigns COMMUNITY. Pool aiden/summer = 30G each (marginal but fits a 19.87GB peak when idle; earlyoom risk near 66%). The R7 verify DID reach 19.87GB on some RunPod pod, so it is achievable, but the slice's cgroup cap is the gate, not advertised host RAM.",
     "threshold": "Before dispatching ANY pod/host for a memory-heavy census/build, verify RAM via cgroup not free: cat /sys/fs/cgroup/memory.max (or memory.limit_in_bytes) >= the run's peak + margin — free leaks host RAM through the container namespace. For the ~19.87GB frontend-arena census require memory.max >= ~42GB; community slices cap at 8GB (disqualifying). Fallback = an idle pool host (summer 30G idle fits a 19.87GB peak). Always measure clean or QUARANTINE (infra-wall-noneval) — never grade an OOM-truncated run (verdict-integrity). Sibling: build-aprime-sh-1 (STABLE non-community pod methodology).",
     "source": "tool/build_aprime.sh"
+   },
+   {
+    "id": "runtime-c-synth-dedup-1",
+    "state": "pos-conv",
+    "value": "runtime.c는 emitter(runtime_emit_full.hexa) 출력의 awk-synth 합성물 — 이 합성이 중복 #define 라인을 DEDUP한다. #ifdef-gated emitted-C body에서 같은 매크로명을 2번 #define(예: ON=empty·OFF=static)하면 synth가 한쪽을 제거→#ifdef/#else 구조 붕괴→컴파일 'unknown type name'. 실측 #4853: axis-② stdio linkage용 `#ifdef HEXA_RT_STDIO_NATIVE #define HXLCL_STDIO_LINK #else #define HXLCL_STDIO_LINK static #endif` 매크로가 runtime.c:1097서 16-target RED(default-OFF인데 OFF 컴파일도 깨짐). fix=재사용 매크로 폐기·각 함수 시그니처에 inline #ifdef(external ON/static OFF) 직접 emit — emitter의 기존 `#if defined(__x86_64__)` 블록과 동일 패턴이라 synth 보존됨.",
+    "threshold": "재발조건=gated emitted-C에서 같은 매크로명 2회 #define 후 install.sh/faithful RED('unknown type name'/'expected'). 판정=emitter에서 중복 #define grep. 해결=재사용 매크로 대신 함수/선언 단위 inline #ifdef. OFF verification(byteeq/faithful)은 #if-제외 못하므로 ON-body는 flip/실사용이 첫 검증(runtime-emit-full-hexa-2 sibling).",
+    "source": "self/runtime_emit_full.hexa"
+   },
+   {
+    "id": "stage-resolve-flag-space-1",
+    "state": "pos-conv",
+    "value": "stage_resolve_runtime_a 컴파일 라인에 새 -D flag 토큰을 replace_all로 추가할 때 trailing space를 떨어뜨리면 `$_zc_flag-Dnext`로 뭉개진다 — flag=ON일 때 `-DHEXA_FLAG-DHEXA_NEXT`(한 토큰)이 되어 다음 인자(-DHEXA_ZEROC_DROP_RTCORE_INCLUDE·-I self·-DHEXA_CUDA)를 삼킴. 실측 #4852→#4854: `$_zc_exit_flush-DHEXA_ZEROC_DROP_RTCORE_INCLUDE`(공백누락 5사이트)→flag ON시 DROP_RTCORE_INCLUDE 유실→runtime.c가 runtime_core.c 인라인→hexa_sqrt 등 중복→release_build multidef=219. OFF(default)는 빈문자라 `-DHEXA_NEXT`로 정상→byteeq OFF-lane이 못잡음.",
+    "threshold": "재발조건=flag ON build에서 release_build multidef 또는 예상 -D 누락. 판정=stage_resolve grep '_zc_[a-z]*[^ =]'(flag 토큰 뒤 non-space). 해결=flag 삽입시 `$_zc_flag ` trailing space 보존·전 사이트 sweep. 예방=default-OFF flag의 ON-path는 byteeq(OFF)로 검증 불가→full release_build(HEXA_*=1)로 실검증 필수(runtime-emit-full-hexa-2 sibling).",
+    "source": "tool/stage_resolve_runtime_a"
    }
   ]
  },
