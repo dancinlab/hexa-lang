@@ -1809,6 +1809,35 @@ fn _hv_binop_sym(op: string) -> string {
 // undefined → link still gated) rather than silently mis-run. That
 // residual is the precisely-scoped final builtin-lowering sub-unit.
 // Non-builtin (hexa user fn) names pass through → normal mangling.
+
+// ── Native reserved-fn-symbol mangle (axis-③ own-emit) ──
+// A user-defined top-level `fn <name>` whose name is ALSO a libc link symbol
+// (today only `compiler/free/free.hexa` `pub fn free`) is emitted BARE by the
+// native backends at both def and call — colliding with libc `free` (dynamic
+// link) / refused by the own-link guard C-2 near-miss tripwire (elf_x86_64.hexa,
+// `hexa_array_free` match). gen2's C path already dodges this via
+// `_hexa_name_is_reserved`/`_hexa_mangle_ident` (self/codegen.hexa:11/:244,
+// `u_`+name at def+ref). This is the native equivalent — scoped to the
+// heap-allocation family, the only reserved names that (a) are unmapped by
+// `_builtin_runtime_sym` (so they reach the user-call fallback / stay bare at
+// def) AND (b) never appear as a legitimate bare libc call in the native path
+// (allocation always routes through the hexa runtime). Math/string/stdio libc
+// names are `_builtin_runtime_sym`-mapped (sin→hexa_sin, …) so they never reach
+// the user path; the tripwire remains the net for any future unmapped collision.
+// Applied at the SAME helper for def + call + fn-as-value → def==ref invariant
+// holds by construction; `_fmt_label` composes on top (darwin `u_free`→`_u_free`).
+pub fn _native_fn_sym_reserved(s: string) -> bool {
+    if s == "free"    { return true }
+    if s == "malloc"  { return true }
+    if s == "calloc"  { return true }
+    if s == "realloc" { return true }
+    return false
+}
+pub fn _native_mangle_fn_sym(s: string) -> string {
+    if _native_fn_sym_reserved(s) { return "u_" + s }
+    return s
+}
+
 pub fn _builtin_runtime_sym(name: string, nargs: i64) -> string {
     if name == "append_file"   { return "rt_append_file" }
     if name == "args"          { return "hexa_args" }
@@ -2678,7 +2707,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // `worker(start)` takes its arg directly. Mirrors the C-transpile
         // hexa_fn_new auto-wrap.
         if s.op == "fn_ref" && len(s.args) >= 2 {
-            let fn_sym = s.args[0].str_val
+            let fn_sym = _native_mangle_fn_sym(s.args[0].str_val)
             let fn_arity = s.args[1].int_val
             // x0 = &<fn_sym> (PC-relative; symbol mangled by _fmt_label)
             buf.push(_arm64_instr2("adrp", _arm64_op_reg("x0"),
@@ -2709,7 +2738,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // mis-emit root cause). ADD-only / byte-eq NEUTRAL.
         if s.op == "__hx_fn_addr" && len(s.args) >= 1 {
             if s.args[0].kind == "const_str" {
-                let fn_sym = s.args[0].str_val
+                let fn_sym = _native_mangle_fn_sym(s.args[0].str_val)
                 buf.push(_arm64_instr2("adrp", _arm64_op_reg("x1"),
                                  _arm64_op_label(fn_sym + "@PAGE"),
                                  "__hx_fn_addr: &" + fn_sym + " page (raw .text fn ptr)"))
@@ -4181,7 +4210,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         if s.op == "len" && len(s.args) >= 1 && _arm_operand_pack_esc(s.args[0], rm) {
             target = "hexa_arr_poly_len"
         }
-        buf.push(_arm64_instr1("bl", _arm64_op_label(target), "call " + target))
+        buf.push(_arm64_instr1("bl", _arm64_op_label(_native_mangle_fn_sym(target)), "call " + target))
         // Box int/bool-returning runtime builtins into a HexaVal (the
         // callee returns a C int in w0; A′ expects x0:x1 HexaVal).
         let box = _builtin_ret_box(s.op)
@@ -4794,7 +4823,7 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
         let last = instrs[len(instrs) - 1]
         if last.op == "ret" {
             return LFunc {
-                name: fn_name,
+                name: _native_mangle_fn_sym(fn_name),
                 target: cg_target,
                 instrs: instrs,
                 frame_size: 16 + total_frame,
@@ -4822,7 +4851,7 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
     }
 
     return LFunc {
-        name: fn_name,
+        name: _native_mangle_fn_sym(fn_name),
         target: cg_target,
         instrs: instrs,
         frame_size: 16 + total_frame,
