@@ -89,6 +89,13 @@ struct ElfX86Obj {
     data:     [u8],
     bss_size: i64,
     nlocal:   i64,
+    // Per-pool max sh_addralign (min 1) — clang runtime.a members carry
+    // 16-aligned `.rodata.cst16` SSE constants (movdqa #GP if the own-link
+    // drops the alignment). Honored by parse_elf_x86_obj (pool-internal pad)
+    // + link_elf_x86_64_ownstart (per-obj concat pad). own-emit=8.
+    rodata_align: i64,
+    data_align:   i64,
+    bss_align:    i64,
 }
 
 struct ElfRel {
@@ -1621,18 +1628,61 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     // Fix: unpack argc/argv from rsp into rdi/rsi before `call main` (9 bytes),
     // no reloc (stack→register). All obj symbol/reloc offsets shift by the new
     // len(stub)=23 automatically (base = len(text_bytes), read below).
+    // ── own-start environ populate (axis-③ L2) ──────────────────────────
+    // The own-link's hand stub bypasses runtime.a's asm `_start`/`_hx_start_c`
+    // (which does `hxlcl_environ = envp`) AND synthesizes .init_array as
+    // zero-trip, so the `_hxlcl_environ` cell (runtime.o `.bss` GLOBAL, the
+    // alias `hxlcl_getenv` walks under HEXA_ZEROC_OWN_START) stays NULL forever
+    // → env()/getenv return "" for every key in an own-start binary. Fix: if a
+    // DEFINED `_hxlcl_environ` is present, the stub captures envp from the entry
+    // stack + stores it to that cell (35-byte v4 stub); else the plain 23-byte
+    // stub (no-runtime unit-test links stay byte-identical). Store target is a
+    // RIP-rel disp32 hand-patched after the data blob is final (bss vaddr known).
+    let mut env_cell = false
+    let mut _eci = 0
+    while _eci < len(objs) {
+        let _eco = objs[_eci]
+        let mut _ecs = 0
+        while _ecs < len(_eco.symbols) {
+            let _sy = _eco.symbols[_ecs]
+            if _sy.section != 0 {
+                let mut _en = ""
+                let mut _ek = 0
+                while true {
+                    let _b = _eco.strtab[_sy.name_offset + _ek] & 0xff
+                    if _b == 0 { break }
+                    _en = _en + from_char_code(_b)
+                    _ek = _ek + 1
+                }
+                if _en == "_hxlcl_environ" { env_cell = true }
+            }
+            _ecs = _ecs + 1
+        }
+        _eci = _eci + 1
+    }
+
     let mut text_bytes: [Int] = []
     text_bytes.push(0x48); text_bytes.push(0x8B); text_bytes.push(0x3C)
     text_bytes.push(0x24)                                 // mov rdi, [rsp]      (argc)
     text_bytes.push(0x48); text_bytes.push(0x8D); text_bytes.push(0x74)
     text_bytes.push(0x24); text_bytes.push(0x08)          // lea rsi, [rsp+8]    (argv)
+    if env_cell {
+        text_bytes.push(0x48); text_bytes.push(0x8D); text_bytes.push(0x54)
+        text_bytes.push(0xFC); text_bytes.push(0x10)      // lea rdx, [rsp+rdi*8+16]  (envp)
+        text_bytes.push(0x48); text_bytes.push(0x89); text_bytes.push(0x15)
+        text_bytes.push(0x00); text_bytes.push(0x00); text_bytes.push(0x00)
+        text_bytes.push(0x00)                             // mov [rip+d32], rdx  (d32 patched, stub bytes 17..20)
+    }
     text_bytes.push(0xE8); text_bytes.push(0x00); text_bytes.push(0x00)
-    text_bytes.push(0x00); text_bytes.push(0x00)          // call rel32 (patched, stub bytes 10..13)
+    text_bytes.push(0x00); text_bytes.push(0x00)          // call rel32 (patched; field/next per shape below)
     text_bytes.push(0x89); text_bytes.push(0xD7)          // mov edi, edx (HexaVal payload)
     text_bytes.push(0xB8); text_bytes.push(0x3C); text_bytes.push(0x00)
     text_bytes.push(0x00); text_bytes.push(0x00)          // mov eax, 60 (__NR_exit)
     text_bytes.push(0x0F); text_bytes.push(0x05)          // syscall
-    // len(text_bytes) is now 23 — the +23 shift applied to every obj below.
+    // len(text_bytes) is now 23 (plain) or 35 (env_cell) — the +len shift is
+    // applied to every obj below via `base = len(text_bytes)` (auto).
+    let stub_call_field = if env_cell { 22 } else { 10 }
+    let stub_call_next  = if env_cell { 26 } else { 14 }
 
     // Concatenated data blob (.rodata ++ .data per obj) for the RW segment.
     let mut data_bytes: [Int] = []
@@ -1660,14 +1710,21 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         obj_bases.push(base)
 
         // Append this obj's data blob: .rodata then .data (bss reserved later).
+        // Honor per-obj pool alignment before each base — clang runtime.a
+        // members carry 16-aligned `.rodata.cst16` SSE constants (movdqa #GP
+        // if the concat shifts them to an odd parity). own-emit objs=8.
+        while (len(data_bytes) % obj.rodata_align) != 0 { data_bytes.push(0) }
         let ro_base = len(data_bytes)
         obj_rodata_base.push(ro_base)
         let mut rri = 0
         while rri < len(obj.rodata) { data_bytes.push(obj.rodata[rri] & 0xff); rri = rri + 1 }
+        while (len(data_bytes) % obj.data_align) != 0 { data_bytes.push(0) }
         let da_base = len(data_bytes)
         obj_data_base.push(da_base)
         let mut ddi = 0
         while ddi < len(obj.data) { data_bytes.push(obj.data[ddi] & 0xff); ddi = ddi + 1 }
+        // .bss pad BEFORE the += (bss defs use (total_bss - obj.bss_size) + val).
+        total_bss = total_bss + ((obj.bss_align - (total_bss % obj.bss_align)) % obj.bss_align)
         total_bss = total_bss + obj.bss_size
 
         let mut di = 0
@@ -1732,13 +1789,14 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         return 3
     }
 
-    // Patch the `call main` rel32 (stub bytes 10..13). The call opcode sits at
-    // stub offset 9 (after the 9-byte argc/argv unpack); next-insn addr = 14.
-    let call_rel = main_off - 14
-    text_bytes[10] = call_rel & 0xff
-    text_bytes[11] = (call_rel >> 8) & 0xff
-    text_bytes[12] = (call_rel >> 16) & 0xff
-    text_bytes[13] = (call_rel >> 24) & 0xff
+    // Patch the `call main` rel32. Field/next-insn depend on the stub shape:
+    // plain 23-byte (call opcode at off 9, field 10..13, next 14) vs env_cell
+    // 35-byte (call opcode at off 21, field 22..25, next 26).
+    let call_rel = main_off - stub_call_next
+    text_bytes[stub_call_field]     = call_rel & 0xff
+    text_bytes[stub_call_field + 1] = (call_rel >> 8) & 0xff
+    text_bytes[stub_call_field + 2] = (call_rel >> 16) & 0xff
+    text_bytes[stub_call_field + 3] = (call_rel >> 24) & 0xff
 
     // ── linker-defined __init_array_start / __init_array_end (GNU ld PROVIDE
     // parity). runtime_emit_full's _hx_run_init_array references the two boundary
@@ -1765,6 +1823,127 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     def_off.push(init_array_off)
     def_bind.push(ELF_STB_GLOBAL)
     def_obj.push(-1)
+
+    // ── (A0) FLOOR-NAME ALIAS — axis-① bug3 (own-link-only · byteeq-neutral) ──
+    // The sanctioned libc floor a program leaves UNDEFINED after runtime.a
+    // extraction — malloc/free/calloc/realloc/memcpy/memmove/memset/write/mmap/
+    // munmap (+ the clang-synthesized memcpy/memset/memcmp/bzero/strlen/strcmp
+    // that arrive as bare PC32/PLT32 UNDs) — ALREADY has an OWN, libc-free
+    // implementation in the pulled runtime.a members, named `hxlcl_<name>`
+    // (self/runtime.c mmap-bump arena etc.), wired to the bare libc name via
+    // `#define <libc> hxlcl_<libc>` in runtime_core.c. Those defs live in the
+    // combined obj list (the runtime_core member is pulled for its GLOBAL main/
+    // hexa_* defs, carrying its file-local hxlcl_* bodies along) but are
+    // STB_LOCAL (nm `t`), so a bare-name reloc never binds to them and the bare
+    // UND persists -> the DYN-UND census below would set n_dyn>0 -> the PT_INTERP
+    // hybrid serializer -> the 23-byte own `_start` bypasses glibc init -> the
+    // dynamic-libc floor call SIGSEGVs at exit (bug3, rc139).
+    //
+    // Fix: for each bare floor name whose `hxlcl_<name>` def is PRESENT in the
+    // linked/extracted objs, register a linker-synthetic GLOBAL ALIAS def at the
+    // SAME segment/offset as the hxlcl_ body (def_obj=-1). The census then finds
+    // the bare name DEFINED -> it never enters dyn_names -> n_dyn stays 0 -> the
+    // STATIC serializer (serialize_elf_exec_x86_64_2seg, no PT_INTERP) is chosen
+    // -> truly static, raw-syscall exit, no ld.so. This mutates NOTHING in
+    // runtime.a's symbol visibility, so the shipping C-transpile path (system ld)
+    // and its byteeq are byte-identical; own-link is the opt-in `--linker=hexa`
+    // leg. Self-gating: an absent hxlcl_ def (plain static round-1/2/3 tests,
+    // runtime_defs==[] with no runtime.a) -> no alias registered -> inert ->
+    // plain-static output byte-identical. MUST precede the ldx index build + the
+    // census so the alias is indexed and consulted. One-shot O(floor·defs) scan
+    // (floor = 14 names) — negligible vs the per-reloc census below.
+    let floor_alias: [string] = ["malloc", "free", "calloc", "realloc",
+        "memcpy", "memmove", "memset", "write", "mmap", "munmap",
+        "memcmp", "bzero", "strlen", "strcmp"]
+    let mut fai = 0
+    while fai < len(floor_alias) {
+        let bare = floor_alias[fai]
+        // Skip if the bare name is genuinely defined already (no alias needed) —
+        // a duplicate GLOBAL homonym would only be shadowed by the first anyway.
+        let mut bare_def = false
+        let mut bdi = 0
+        while bdi < len(def_names) { if def_names[bdi] == bare { bare_def = true; break } bdi = bdi + 1 }
+        if !bare_def {
+            let own_name = "hxlcl_" + bare
+            let mut oidx = -1
+            let mut odi = 0
+            while odi < len(def_names) { if def_names[odi] == own_name { oidx = odi; break } odi = odi + 1 }
+            if oidx >= 0 {
+                def_names.push(bare)
+                def_seg.push(def_seg[oidx])
+                def_off.push(def_off[oidx])
+                def_bind.push(ELF_STB_GLOBAL)
+                def_obj.push(-1)
+            }
+        }
+        fai = fai + 1
+    }
+
+    // ── (A1) __errno_location NATIVE PROVIDER — axis-① bug3 (own-link-only) ──
+    // __errno_location is the ONLY sanctioned floor name with NO hxlcl_ variant:
+    // it is a libc thread-local errno accessor by design (codegen keys `_is_cabi`
+    // on the exact name; runtime.c never defines it — the errno-bearing syscall
+    // wrappers hxlcl_close/read/lseek/fork/open/… `call __errno_location` expecting
+    // libc to resolve it). Leaving it dynamic re-arms bug3 (n_dyn>0 -> PT_INTERP ->
+    // glibc-init-bypass crash) for any errno-touching program. On the own-start
+    // STATIC exec (single-threaded, no glibc TLS) the correct own resolution is a
+    // process-global errno cell + a tiny accessor returning its address. Synthesize
+    // `__errno_location: lea rax,[rip+cell]; ret` (RW-data cell) and register it as
+    // a GLOBAL text def so those wrappers resolve WITHOUT any dynamic routing. The
+    // accessor's disp32 is filled after layout (STUB-FILL neighbourhood below).
+    // Self-gating: synthesized ONLY when a reloc actually references
+    // __errno_location AND it is not already defined -> text-only / non-errno
+    // programs are byte-identical (byteeq-neutral). The RW cell forces has_data
+    // (2-seg), which is always already true for an errno-touching runtime link.
+    let mut errno_provided = false
+    let mut errno_fn_off   = -1
+    let mut errno_cell_off = -1
+    let mut _errno_already = false
+    let mut _eadi = 0
+    while _eadi < len(def_names) { if def_names[_eadi] == "__errno_location" { _errno_already = true; break } _eadi = _eadi + 1 }
+    if !_errno_already {
+        let mut errno_ref = false
+        let mut eci = 0
+        while eci < len(objs) && !errno_ref {
+            let eco = objs[eci]
+            let mut ecr = 0
+            while ecr < len(eco.relocs) {
+                let er = eco.relocs[ecr]
+                if er.kind == 2 || er.kind == 4 || _elf_kind_is_got(er.kind) {
+                    let esym = eco.symbols[er.sym_idx]
+                    let mut enm = ""
+                    let mut ek = 0
+                    while true {
+                        let eb = eco.strtab[esym.name_offset + ek] & 0xff
+                        if eb == 0 { break }
+                        enm = enm + from_char_code(eb)
+                        ek = ek + 1
+                    }
+                    if enm == "__errno_location" { errno_ref = true; break }
+                }
+                ecr = ecr + 1
+            }
+            eci = eci + 1
+        }
+        if errno_ref {
+            // 8-byte RW errno cell at the current data-blob tail (before the GOT).
+            while (len(data_bytes) % 8) != 0 { data_bytes.push(0) }
+            errno_cell_off = len(data_bytes)
+            let mut ez = 0
+            while ez < 8 { data_bytes.push(0); ez = ez + 1 }
+            // Accessor body at the text tail: 48 8D 05 <disp32> C3.
+            errno_fn_off = len(text_bytes)
+            text_bytes.push(0x48); text_bytes.push(0x8D); text_bytes.push(0x05)
+            text_bytes.push(0x00); text_bytes.push(0x00); text_bytes.push(0x00); text_bytes.push(0x00)
+            text_bytes.push(0xC3)
+            def_names.push("__errno_location")
+            def_seg.push(0)
+            def_off.push(errno_fn_off)
+            def_bind.push(ELF_STB_GLOBAL)
+            def_obj.push(-1)
+            errno_provided = true
+        }
+    }
 
     // ── GOT COLLECT (R_X86_64_GOTPCREL, type 9) — one slot per DISTINCT target ──
     // #4783 self-emits `mov reg,[rip+sym@GOTPCREL]` (REX.W 8B /r RIP disp32=0,
@@ -2140,6 +2319,43 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         interp_len = len(interp) + 1
     }
 
+    // 16-align the data blob tail so the .bss region base
+    // (data_vaddr_base + len(data_bytes)) is 16-aligned — covers `movaps`
+    // into aligned static .bss buffers. Deterministic; own-link is opt-in.
+    while (len(data_bytes) & 15) != 0 { data_bytes.push(0) }
+
+    // ── own-start environ store — hand-patch the stub's `mov [rip+d32],rdx`
+    // disp32 now that the data blob (and thus the `.bss` region vaddr) is final.
+    // S − P: S = _hxlcl_environ vaddr; P = next-insn vaddr (stub off 21). Same
+    // .bss vaddr formula as the resolve pass (data_vaddr_base + len(data_bytes)
+    // + def_off). GLOBAL-preferred def pick. No obj reloc record — direct patch.
+    if env_cell {
+        let mut _envi = -1
+        let mut _envs = 0
+        while _envs < len(def_names) {
+            if def_names[_envs] == "_hxlcl_environ" {
+                _envi = _envs
+                if def_bind[_envs] == 1 { break }
+            }
+            _envs = _envs + 1
+        }
+        if _envi >= 0 {
+            let mut _evaddr = 0
+            if def_seg[_envi] == 2 {
+                _evaddr = data_vaddr_base + len(data_bytes) + def_off[_envi]
+            } else if def_seg[_envi] == 0 {
+                _evaddr = vaddr_base + code_off + def_off[_envi]
+            } else {
+                _evaddr = data_vaddr_base + def_off[_envi]
+            }
+            let _edelta = _evaddr - (vaddr_base + code_off + 21)
+            text_bytes[17] = _edelta & 0xff
+            text_bytes[18] = (_edelta >> 8) & 0xff
+            text_bytes[19] = (_edelta >> 16) & 0xff
+            text_bytes[20] = (_edelta >> 24) & 0xff
+        }
+    }
+
     // Resolve relocs in TRUE vaddr space. text->text reduces to the round-1
     // text-offset delta (vaddr_base+code_off cancels) => no-data path is
     // byte-identical; text->data uses the data segment's distinct vaddr.
@@ -2410,6 +2626,25 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         text_bytes[stub_offs[sfi] + 4] = (sdisp >> 16) & 0xff
         text_bytes[stub_offs[sfi] + 5] = (sdisp >> 24) & 0xff
         sfi = sfi + 1
+    }
+
+    // ── (A1-FILL) __errno_location accessor disp32 — RIP-relative to the errno
+    // cell. The `48 8D 05 <disp32> C3` lea's disp32 site is errno_fn_off+3; the
+    // instruction ends at errno_fn_off+7, so disp = cell_vaddr - (text_vaddr +
+    // errno_fn_off + 7). Data<->text distance is far inside ±2GB (both 0x400000-
+    // based). Skipped entirely when the provider was not synthesized (byteeq). ──
+    if errno_provided {
+        let ecell_vaddr = data_vaddr_base + errno_cell_off
+        let elea_next   = vaddr_base + code_off + errno_fn_off + 7
+        let edisp       = ecell_vaddr - elea_next
+        if edisp < -2147483648 || edisp > 2147483647 {
+            eprintln("hexa_ld(elf,ownstart): __errno_location accessor disp32 overflow")
+            return 3
+        }
+        text_bytes[errno_fn_off + 3] = edisp & 0xff
+        text_bytes[errno_fn_off + 4] = (edisp >> 8) & 0xff
+        text_bytes[errno_fn_off + 5] = (edisp >> 16) & 0xff
+        text_bytes[errno_fn_off + 6] = (edisp >> 24) & 0xff
     }
 
     // Serialize. No data -> single-PT_LOAD round-1 serializer (byte-identical);
@@ -3060,6 +3295,7 @@ pub fn parse_elf_x86_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfX86O
     let mut obj = ElfX86Obj {
         text: [], relocs: [], symbols: [], strtab: [],
         rodata: [], data: [], bss_size: 0, nlocal: 0,
+        rodata_align: 1, data_align: 1, bss_align: 1,
     }
     obj.strtab.push(0)                       // ELF strtab idx 0 = ""
 
@@ -3108,6 +3344,11 @@ pub fn parse_elf_x86_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfX86O
         let slink = _er_u32le(buf, sh + 0x28)
         let sinfo = _er_u32le(buf, sh + 0x2C)
         let sent  = _er_u64le(buf, sh + 0x38)
+        // sh_addralign (sh+0x30) — clang emits `.rodata.cst16` with align=16
+        // (movdqa operand). Honor it pool-internally so a cst16 section that
+        // follows an odd-length `.rodata.str1.1` still lands 16-aligned.
+        let salign0 = _er_u64le(buf, sh + 0x30)
+        let salign  = if salign0 < 1 { 1 } else if salign0 > 4096 { 4096 } else { salign0 }
 
         let mut slot  = 0
         let mut pbase = 0
@@ -3119,17 +3360,23 @@ pub fn parse_elf_x86_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfX86O
                 while k < ssize { obj.text.push(_er_u8(buf, base + soff + k)); k = k + 1 }
             } else if (flags & ELF_SHF_WRITE) != 0 {
                 slot = 4
+                while (len(obj.data) % salign) != 0 { obj.data.push(0) }
+                if salign > obj.data_align { obj.data_align = salign }
                 pbase = len(obj.data)
                 let mut k = 0
                 while k < ssize { obj.data.push(_er_u8(buf, base + soff + k)); k = k + 1 }
             } else {
                 slot = 3
+                while (len(obj.rodata) % salign) != 0 { obj.rodata.push(0) }
+                if salign > obj.rodata_align { obj.rodata_align = salign }
                 pbase = len(obj.rodata)
                 let mut k = 0
                 while k < ssize { obj.rodata.push(_er_u8(buf, base + soff + k)); k = k + 1 }
             }
         } else if stype == ELF_SHT_NOBITS && (flags & ELF_SHF_ALLOC) != 0 {
             slot = 5
+            obj.bss_size = obj.bss_size + ((salign - (obj.bss_size % salign)) % salign)
+            if salign > obj.bss_align { obj.bss_align = salign }
             pbase = obj.bss_size
             obj.bss_size = obj.bss_size + ssize
         }
@@ -4240,6 +4487,9 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
         data:     [],
         bss_size: 0,
         nlocal:   0,
+        rodata_align: 8,   // own-emit pool contract (8-align, no SSE consts)
+        data_align:   8,
+        bss_align:    8,
     }
     // ELF strtab convention: index 0 is the empty string (NUL terminator).
     obj.strtab.push(0)

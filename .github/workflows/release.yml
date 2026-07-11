@@ -301,6 +301,23 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
 
+      # ── axis-① rung-2b: cross-consumable arch-tagged runtime.a (ADDITIVE ·
+      # SUPPLEMENTARY). stage_resolve_runtime_a emitted build/runtime.<triple>.a
+      # (TARGET-gated, arch-verified) during release_build. Upload it as a bare
+      # standalone asset so install.sh's HEXA_CROSS_RUNTIME opt-in can pull it to
+      # a consumer's <hxroot>/build/runtime.<triple>.a. Inherits the all-3-green
+      # gate (prerelease + never Latest); fail_on_unmatched_files:false keeps a
+      # release GREEN if the emit was skipped (release integrity > this asset).
+      - name: Upload cross-consumable runtime.a (axis-① rung-2b · supplementary)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.setup.outputs.release_tag }}
+          prerelease: true
+          make_latest: false
+          target_commitish: ${{ github.sha }}
+          files: build/runtime.arm64-apple-darwin.a
+          fail_on_unmatched_files: false
+
   # ── Linux x86_64 ───────────────────────────────────────────
   release-linux-x86_64:
     name: release (linux-x86_64)
@@ -368,6 +385,22 @@ jobs:
           files: hexa-linux-x86_64.tar.gz
           fail_on_unmatched_files: true
           generate_release_notes: true
+
+      # ── axis-① rung-2b: cross-consumable arch-tagged runtime.a (ADDITIVE ·
+      # SUPPLEMENTARY). See the darwin-arm64 job for the full rationale. This is
+      # the ONLY live cross target today (self/main.hexa _resolve_target_runtime_a
+      # gates on x86_64-linux-gnu); the runtime.a here is the CPU (libcuda-free)
+      # archive built by stage_resolve — exactly what an own-start-static cross
+      # link consumes.
+      - name: Upload cross-consumable runtime.a (axis-① rung-2b · supplementary)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.setup.outputs.release_tag }}
+          prerelease: true
+          make_latest: false
+          target_commitish: ${{ github.sha }}
+          files: build/runtime.x86_64-linux-gnu.a
+          fail_on_unmatched_files: false
 
   # ── Linux arm64 ────────────────────────────────────────────
   release-linux-arm64:
@@ -440,6 +473,20 @@ jobs:
           files: hexa-linux-arm64.tar.gz
           fail_on_unmatched_files: true
           generate_release_notes: true
+
+      # ── axis-① rung-2b: cross-consumable arch-tagged runtime.a (ADDITIVE ·
+      # SUPPLEMENTARY). See the darwin-arm64 job for the full rationale. arm64-linux
+      # is published for future cross parity; the consumer gates it OFF today
+      # (only x86_64-linux-gnu is live), so this asset is inert until that rung.
+      - name: Upload cross-consumable runtime.a (axis-① rung-2b · supplementary)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.setup.outputs.release_tag }}
+          prerelease: true
+          make_latest: false
+          target_commitish: ${{ github.sha }}
+          files: build/runtime.arm64-linux-gnu.a
+          fail_on_unmatched_files: false
 
   # ── Linux x86_64 STATIC-MUSL (ING #2 — supplementary asset) ──────
   # A glibc-FREE single static ELF so consumers (anima/…) install on ANY pod OS
