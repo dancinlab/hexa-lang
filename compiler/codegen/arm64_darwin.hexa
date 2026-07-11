@@ -1812,6 +1812,15 @@ fn _hv_binop_sym(op: string) -> string {
 pub fn _builtin_runtime_sym(name: string, nargs: i64) -> string {
     if name == "append_file"   { return "rt_append_file" }
     if name == "args"          { return "hexa_args" }
+    // `argv` — native-backend alias for the same runtime accessor (mirrors the
+    // gen2 C-path argv->hexa_args alias at self/codegen.hexa; runtime exports
+    // hexa_args, not argv). Latent today (cli_args() is outside the cc-self-bin
+    // graph — no _cli_args import in self/main.hexa) but this resolves the W3
+    // asymmetry so a future refactor links clean. axis-③ RUN closeout.
+    // (W4 `is_digit` is DELIBERATELY not mapped: no runtime hexa_is_digit def
+    // exists, so a map would be a wrong-symbol miscompile; the C-2 own-link
+    // tripwire is the correct net for it — all reachable callers have fn defs.)
+    if name == "argv"          { return "hexa_args" }
     if name == "char_code_at"  { return "hexa_str_char_code_at" }
     if name == "char_code"     { return "hexa_char_code" }
     if name == "lgamma"        { return "hexa_math_lgamma" }

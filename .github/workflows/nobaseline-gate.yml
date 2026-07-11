@@ -916,3 +916,37 @@ jobs:
         run: |
           set -euo pipefail
           bash tool/routec_cabi_smoke_linux.sh
+
+  # ── C-4 libgcc-lowering builtin forbid (source lint · target-independent) ────
+  # WHY: __popcountdi2 (the axis-③ cc-self-bin own-link RUN wall, #4845) came from
+  # __builtin_popcountll in the emitted-C runtime substrate — gcc lowers such
+  # builtins to a libgcc soft-int helper CALL, which the -nostdlib own-link (no
+  # -lgcc) leaves undefined → rc127 at the dynamic loader. It leaked SILENTLY to a
+  # paid pod because no CI gate scanned the emitted-C for this class (symcensus C-1
+  # is hexa-level only; the dynsym C-3 gate is skip-if-absent and does not run the
+  # own-emit+own-link path). This gate FAILS LOUDLY at PR time on any such builtin
+  # in the runtime emitter SSOTs. CALL-SHAPED (requires `(`) so a legitimate
+  # comment mention — runtime_emit_full.hexa names it in "NOT __builtin_popcountll)"
+  # — does NOT false-trip. Free · <5 s · BLOCKING · target-independent (a source
+  # lint, so it catches the leak on every target at once).
+  libgcc-forbid:
+    name: C-4 libgcc-lowering builtin forbid (source lint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: forbid libgcc-lowering builtins in runtime emitter SSOTs
+        shell: bash
+        run: |
+          set -euo pipefail
+          hits=$(grep -nE '__builtin_(popcount|parity|clz|ctz|bswap|ffs)[a-z]*\(|__builtin_(mul|add|sub)_overflow\(|__int128' \
+            self/runtime_emit_full.hexa self/runtime_core_emit.hexa self/runtime_core_hxlcl_shim_emit.hexa || true)
+          if [ -n "$hits" ]; then
+            echo "$hits"
+            echo "FAIL: libgcc-lowering builtin in the emitted-C runtime substrate."
+            echo "gcc lowers it to a libgcc soft-int call left UNDEFINED by the -nostdlib"
+            echo "own-link (no -lgcc) → rc127 at ld.so on cc-self-bin (see #4845)."
+            echo "Fix: emit a portable C body, or provide the helper as a runtime def."
+            exit 1
+          fi
+          echo "C-4 OK — no libgcc-lowering builtin in runtime emitter SSOTs"
