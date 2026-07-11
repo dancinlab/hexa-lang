@@ -1723,8 +1723,8 @@ fn _runtime_a_arch_ok(ra, aprime_tgt) {
     if len(_mem) == 0 { return false }
     let _sig = exec("ar p '" + ra + "' '" + _mem + "' 2>/dev/null | od -An -tx1 -N20 | tr -s ' '")
     if aprime_tgt == "x86_64-linux-gnu" {
-        let _elf = exec("printf '%s' \"" + _sig + "\" | grep -c '7f 45 4c 46 02'")
-        let _mach = exec("printf '%s' \"" + _sig + "\" | grep -c ' 3e 00'")
+        let _elf = exec("printf '%s' \"" + _sig + "\" | grep -c '7f 45 4c 46 02'").trim()
+        let _mach = exec("printf '%s' \"" + _sig + "\" | grep -c ' 3e 00'").trim()
         if _elf == "1" && _mach == "1" { return true }
         return false
     }
