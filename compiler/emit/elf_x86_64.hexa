@@ -1824,60 +1824,16 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     def_bind.push(ELF_STB_GLOBAL)
     def_obj.push(-1)
 
-    // ── (A0) FLOOR-NAME ALIAS — axis-① bug3 (own-link-only · byteeq-neutral) ──
-    // The sanctioned libc floor a program leaves UNDEFINED after runtime.a
-    // extraction — malloc/free/calloc/realloc/memcpy/memmove/memset/write/mmap/
-    // munmap (+ the clang-synthesized memcpy/memset/memcmp/bzero/strlen/strcmp
-    // that arrive as bare PC32/PLT32 UNDs) — ALREADY has an OWN, libc-free
-    // implementation in the pulled runtime.a members, named `hxlcl_<name>`
-    // (self/runtime.c mmap-bump arena etc.), wired to the bare libc name via
-    // `#define <libc> hxlcl_<libc>` in runtime_core.c. Those defs live in the
-    // combined obj list (the runtime_core member is pulled for its GLOBAL main/
-    // hexa_* defs, carrying its file-local hxlcl_* bodies along) but are
-    // STB_LOCAL (nm `t`), so a bare-name reloc never binds to them and the bare
-    // UND persists -> the DYN-UND census below would set n_dyn>0 -> the PT_INTERP
-    // hybrid serializer -> the 23-byte own `_start` bypasses glibc init -> the
-    // dynamic-libc floor call SIGSEGVs at exit (bug3, rc139).
-    //
-    // Fix: for each bare floor name whose `hxlcl_<name>` def is PRESENT in the
-    // linked/extracted objs, register a linker-synthetic GLOBAL ALIAS def at the
-    // SAME segment/offset as the hxlcl_ body (def_obj=-1). The census then finds
-    // the bare name DEFINED -> it never enters dyn_names -> n_dyn stays 0 -> the
-    // STATIC serializer (serialize_elf_exec_x86_64_2seg, no PT_INTERP) is chosen
-    // -> truly static, raw-syscall exit, no ld.so. This mutates NOTHING in
-    // runtime.a's symbol visibility, so the shipping C-transpile path (system ld)
-    // and its byteeq are byte-identical; own-link is the opt-in `--linker=hexa`
-    // leg. Self-gating: an absent hxlcl_ def (plain static round-1/2/3 tests,
-    // runtime_defs==[] with no runtime.a) -> no alias registered -> inert ->
-    // plain-static output byte-identical. MUST precede the ldx index build + the
-    // census so the alias is indexed and consulted. One-shot O(floor·defs) scan
-    // (floor = 14 names) — negligible vs the per-reloc census below.
-    let floor_alias: [string] = ["malloc", "free", "calloc", "realloc",
-        "memcpy", "memmove", "memset", "write", "mmap", "munmap",
-        "memcmp", "bzero", "strlen", "strcmp"]
-    let mut fai = 0
-    while fai < len(floor_alias) {
-        let bare = floor_alias[fai]
-        // Skip if the bare name is genuinely defined already (no alias needed) —
-        // a duplicate GLOBAL homonym would only be shadowed by the first anyway.
-        let mut bare_def = false
-        let mut bdi = 0
-        while bdi < len(def_names) { if def_names[bdi] == bare { bare_def = true; break } bdi = bdi + 1 }
-        if !bare_def {
-            let own_name = "hxlcl_" + bare
-            let mut oidx = -1
-            let mut odi = 0
-            while odi < len(def_names) { if def_names[odi] == own_name { oidx = odi; break } odi = odi + 1 }
-            if oidx >= 0 {
-                def_names.push(bare)
-                def_seg.push(def_seg[oidx])
-                def_off.push(def_off[oidx])
-                def_bind.push(ELF_STB_GLOBAL)
-                def_obj.push(-1)
-            }
-        }
-        fai = fai + 1
-    }
+    // ── (A0) FLOOR-NAME ALIAS — moved into the DYN-UND census below ──────────
+    // The bare libc-floor UND → `hxlcl_<name>` GLOBAL-alias synthesis (axis-①
+    // bug3 fix) now runs DATA-DRIVEN inside the census loop (over every bare UND,
+    // not a hardcoded 14-name list), AFTER the ldx index is built and AFTER
+    // LOCUS-1's own-link floor-pull has pulled the STB_LOCAL hxlcl_ bodies into
+    // the linked obj list. See the "(A0) FLOOR-NAME ALIAS" block in the census
+    // just before the near-miss tripwire. (The prior pre-census hardcoded pass
+    // was inert: it ran before the member carrying the hxlcl_ bodies was pulled,
+    // so `hxlcl_<name>` was never in def_names to alias — that is exactly why
+    // both #4867 and #4870 stayed inert.)
 
     // ── (A1) __errno_location NATIVE PROVIDER — axis-① bug3 (own-link-only) ──
     // __errno_location is the ONLY sanctioned floor name with NO hxlcl_ variant:
@@ -2052,6 +2008,42 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                 let dbn = ldx_n[dhb]
                 let mut ddi = 0
                 while ddi < len(dbn) { if dbn[ddi] == dnm { ddef = true; break } ddi = ddi + 1 }
+                // ── (A0) FLOOR-NAME ALIAS — axis-① bug3 (own-link-only · data-driven) ──
+                // A bare libc-floor UND <X> (malloc/free/memcpy/write/mmap/…) left
+                // undefined after runtime.a extraction has an OWN, libc-free body
+                // `hxlcl_<X>` in a pulled member (STB_LOCAL, so section != 0 puts it
+                // in def_names/ldx but a bare-name reloc never binds to it). LOCUS-1's
+                // own-link floor-pull guarantees that member IS pulled, so `hxlcl_<X>`
+                // is now in the ldx index. Register a linker-synthetic GLOBAL ALIAS
+                // for the bare name at the SAME seg/off as the hxlcl_ body (def_obj=-1)
+                // and index it, so the census sees <X> DEFINED → it never enters
+                // dyn_names → n_dyn stays 0 → the STATIC serializer (no PT_INTERP) is
+                // chosen → raw-syscall exit, no ld.so (bug3 cleared). Data-driven over
+                // every bare UND (supersedes the old hardcoded 14-name list). Gated on
+                // runtime_defs (the _ar self-emit link path); plain static links
+                // (runtime_defs == []) skip it → byte-identical output. Mutates NOTHING
+                // in runtime.a visibility → shipping C-transpile (system ld) byteeq is
+                // byte-identical; own-link is the opt-in `--linker=hexa` leg.
+                if !ddef && len(dnm) > 0 && len(runtime_defs) > 0 {
+                    let own_nm = "hxlcl_" + dnm
+                    let ohb = _ldx_hash(own_nm)
+                    let obn = ldx_n[ohb]
+                    let obi = ldx_i[ohb]
+                    let mut oix = -1
+                    let mut oj = 0
+                    while oj < len(obn) { if obn[oj] == own_nm { oix = obi[oj]; break } oj = oj + 1 }
+                    if oix >= 0 {
+                        def_names.push(dnm)
+                        def_seg.push(def_seg[oix])
+                        def_off.push(def_off[oix])
+                        def_bind.push(ELF_STB_GLOBAL)
+                        def_obj.push(-1)
+                        let nhb = _ldx_hash(dnm)
+                        ldx_n[nhb] = ldx_n[nhb].push(dnm)
+                        ldx_i[nhb] = ldx_i[nhb].push(len(def_names) - 1)
+                        ddef = true
+                    }
+                }
                 if !ddef && len(dnm) > 0 {
                     let mut dfi = -1
                     let mut dfj = 0
@@ -2130,6 +2122,19 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         dcen = dcen + 1
     }
     let n_dyn = len(dyn_names)
+
+    // ── DIAGNOSTIC — HEXA_LD_DUMP_DYN dumps the residual DYN-UND census so the
+    // pool can measure n_dyn (0 = static / no PT_INTERP; >0 = dyn-hybrid → bug3
+    // window). Gated on the env var (own-link-only path anyway); one shell fork
+    // per link when set, none of the emitted bytes change (byteeq-neutral). ──
+    if len(getenv("HEXA_LD_DUMP_DYN")) > 0 {
+        eprintln("hexa_ld(elf,ownstart): n_dyn=" + to_string(n_dyn))
+        let mut _di = 0
+        while _di < n_dyn {
+            eprintln("  DYN-UND: " + dyn_names[_di])
+            _di = _di + 1
+        }
+    }
 
     // ── (C) GOT EXTENSION — one shared 8-byte GOT slot per dyn symbol (both the
     // stub's `jmp [rip+slot]` target AND the extern-data GOTPCREL load land on
@@ -3825,6 +3830,43 @@ pub fn archive_extract_fixpoint(program_objs: [ElfX86Obj], buf, members: [ArMemb
                     k = k + 1
                 }
 
+                // ── own-link floor-pull (axis-① bug3 · --linker=hexa opt-in) ──
+                // The sanctioned libc floor bodies `hxlcl_<X>` (self/runtime.c
+                // mmap-bump arena etc., wired to the bare libc name <X> via
+                // `#define <X> hxlcl_<X>`) are STB_LOCAL (nm `t`), so the
+                // GLOBAL/WEAK armap `wants` test above NEVER pulls the member
+                // carrying them. The bare floor UND <X> then stays absent from
+                // the linked obj list → the census-side bare→hxlcl alias finds
+                // nothing → n_dyn stays high → PT_INTERP dyn-hybrid → own `_start`
+                // bypasses glibc init → floor call SIGSEGVs at exit (bug3 rc139).
+                // Reference `-static` binds the bare floor name to the archive
+                // body directly (armap only decides membership, not visibility);
+                // the own-link equivalent adds this exception: if a still-NEEDED
+                // bare <X> has a `hxlcl_<X>` body (ANY binding, section != 0) in
+                // this member, pull it. Own-link only — archive_extract_fixpoint
+                // is reached solely via link_elf_x86_64_ownstart_ar; shipping
+                // C-transpile uses system ld and never enters here, so runtime.a
+                // symbol visibility is untouched (byteeq-neutral).
+                if !wants {
+                    let mut ui = 0
+                    while ui < len(und_names) && !wants {
+                        let bx = und_names[ui]
+                        if !_aef_has(def_names, bx) {
+                            let owx = "hxlcl_" + bx
+                            let mut kk = 0
+                            while kk < len(obj.symbols) {
+                                let s2 = obj.symbols[kk]
+                                if s2.section != 0 && _aef_symname(obj, s2.name_offset) == owx {
+                                    wants = true
+                                    break
+                                }
+                                kk = kk + 1
+                            }
+                        }
+                        ui = ui + 1
+                    }
+                }
+
                 if wants {
                     pulled[mi] = true
                     changed = true
@@ -3838,6 +3880,29 @@ pub fn archive_extract_fixpoint(program_objs: [ElfX86Obj], buf, members: [ArMemb
                             if len(nm) > 0 && !_aef_has(def_names, nm) { def_names.push(nm) }
                         }
                         d = d + 1
+                    }
+                    // Mirror the own-link floor-pull into def_names: any still-
+                    // NEEDED bare <X> whose STB_LOCAL `hxlcl_<X>` body this member
+                    // carries is now satisfied (the GLOBAL-def fold above skips it
+                    // — it is LOCAL). Marking <X> defined keeps the append-only
+                    // "still-NEEDED" set correct so no other member is pulled for
+                    // it and the fixpoint terminates cleanly.
+                    let mut fd = 0
+                    while fd < len(und_names) {
+                        let bx = und_names[fd]
+                        if !_aef_has(def_names, bx) {
+                            let owx = "hxlcl_" + bx
+                            let mut fk = 0
+                            while fk < len(obj.symbols) {
+                                let sf = obj.symbols[fk]
+                                if sf.section != 0 && _aef_symname(obj, sf.name_offset) == owx {
+                                    def_names.push(bx)
+                                    break
+                                }
+                                fk = fk + 1
+                            }
+                        }
+                        fd = fd + 1
                     }
                     // Fold this member's new UNDs into und_names.
                     let mut u = 0
