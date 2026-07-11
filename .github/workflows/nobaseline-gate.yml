@@ -950,3 +950,48 @@ jobs:
             exit 1
           fi
           echo "C-4 OK — no libgcc-lowering builtin in runtime emitter SSOTs"
+
+  # ── L1 own-link determinism gate — axis-③ default-flip prerequisite ─────────
+  # Proves the x86_64-linux own-emit + own-link pipeline is DETERMINISTIC (emit-
+  # twice + link-twice byte-identical on a broad-UND fixture) → the own-linked
+  # binary is byteeq gen3≡gen4 by TRANSITIVITY (.o byteeq [selfhost-byteeq gate] ∘
+  # deterministic own-link [this gate]), the precondition for flipping
+  # --linker=hexa default-ON on x86 (flip ladder L2). A full-compiler cross-gen
+  # byteeq job would re-prove the same at ~6× cost. ADVISORY (not in
+  # selfhost-gates-summary) until a measured-green streak on both the self-hosted
+  # pool and the ubuntu-latest fallback; the fallback runs the gate REAL (x86_64,
+  # builds from source) so it is deadlock-proof. See tool/ownlink_determinism_gate.
+  ownlink-determinism-x86_64:
+    name: own-link determinism (emit+link twice, linux-x86_64)
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.linux_label) }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+      - name: Build toolchain + converged runtime.a (shared release_build)
+        shell: bash
+        env:
+          TARGET: linux-x86_64
+          CC: gcc
+          LIBS: "-lm -ldl"
+          GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
+        run: bash tool/release_build
+      - name: Build cc_native (preserve the converged runtime.a first)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # release_build's build/runtime.a is converged (libgcc-clean, #4845);
+          # build_native may restore frozen seeds + rebuild it, so snapshot first.
+          cp build/runtime.a "$RUNNER_TEMP/rt_converged.a"
+          bash tool/build_native_linux_x86_64 -r "$PWD" -w "$PWD/build/lx8664"
+          [ -x build/lx8664/cc_native ] && echo "cc_native = $(stat -c%s build/lx8664/cc_native) B"
+      - name: own-link determinism gate (emit+link twice + static floor)
+        shell: bash
+        env:
+          REPO: ${{ github.workspace }}
+          CC_NATIVE: ${{ github.workspace }}/build/lx8664/cc_native
+          HEXA_PREBUILT_RUNTIME: ${{ runner.temp }}/rt_converged.a
+        run: bash tool/ownlink_determinism_gate
