@@ -1839,9 +1839,12 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     // hybrid serializer -> the 23-byte own `_start` bypasses glibc init -> the
     // dynamic-libc floor call SIGSEGVs at exit (bug3, rc139).
     //
-    // Fix: for each bare floor name whose `hxlcl_<name>` def is PRESENT in the
-    // linked/extracted objs, register a linker-synthetic GLOBAL ALIAS def at the
-    // SAME segment/offset as the hxlcl_ body (def_obj=-1). The census then finds
+    // Fix (data-driven · #4867 hardcoded-14 → generalized): scan EVERY def named
+    // `hxlcl_<X>` in the linked/extracted objs; for each, if the bare `<X>` is not
+    // itself already defined, register a linker-synthetic GLOBAL ALIAS def at the
+    // SAME segment/offset as the hxlcl_ body (def_obj=-1). This aliases the FULL
+    // ~157-entry self/runtime.c hxlcl_ floor (not just the 14-name hand-list),
+    // which is what a minimal `println` program actually leaves UND. The census then finds
     // the bare name DEFINED -> it never enters dyn_names -> n_dyn stays 0 -> the
     // STATIC serializer (serialize_elf_exec_x86_64_2seg, no PT_INTERP) is chosen
     // -> truly static, raw-syscall exit, no ld.so. This mutates NOTHING in
@@ -1850,30 +1853,33 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     // leg. Self-gating: an absent hxlcl_ def (plain static round-1/2/3 tests,
     // runtime_defs==[] with no runtime.a) -> no alias registered -> inert ->
     // plain-static output byte-identical. MUST precede the ldx index build + the
-    // census so the alias is indexed and consulted. One-shot O(floor·defs) scan
-    // (floor = 14 names) — negligible vs the per-reloc census below.
-    let floor_alias: [string] = ["malloc", "free", "calloc", "realloc",
-        "memcpy", "memmove", "memset", "write", "mmap", "munmap",
-        "memcmp", "bzero", "strlen", "strcmp"]
+    // census so the alias is indexed and consulted. One-shot O(defs²) scan over
+    // every hxlcl_-prefixed def — negligible vs the per-reloc census below.
+    // `_da_n` snapshots the pre-alias def count so the loop never re-processes a
+    // freshly-pushed bare alias (which never carries the hxlcl_ prefix anyway).
+    let _hxp  = "hxlcl_"
+    let _hxpn = len(_hxp)
+    let _da_n = len(def_names)
     let mut fai = 0
-    while fai < len(floor_alias) {
-        let bare = floor_alias[fai]
-        // Skip if the bare name is genuinely defined already (no alias needed) —
-        // a duplicate GLOBAL homonym would only be shadowed by the first anyway.
-        let mut bare_def = false
-        let mut bdi = 0
-        while bdi < len(def_names) { if def_names[bdi] == bare { bare_def = true; break } bdi = bdi + 1 }
-        if !bare_def {
-            let own_name = "hxlcl_" + bare
-            let mut oidx = -1
-            let mut odi = 0
-            while odi < len(def_names) { if def_names[odi] == own_name { oidx = odi; break } odi = odi + 1 }
-            if oidx >= 0 {
-                def_names.push(bare)
-                def_seg.push(def_seg[oidx])
-                def_off.push(def_off[oidx])
-                def_bind.push(ELF_STB_GLOBAL)
-                def_obj.push(-1)
+    while fai < _da_n {
+        if _elf_has_prefix(def_names[fai], _hxp) {
+            // Strip the `hxlcl_` prefix to recover the bare libc floor name `<X>`.
+            let bare = def_names[fai].substring(_hxpn, len(def_names[fai]))
+            if len(bare) > 0 {
+                // Skip if the bare name is genuinely defined already (no alias
+                // needed) — a duplicate GLOBAL homonym would only be shadowed by
+                // the first anyway. Scans the FULL (growing) def list so a bare
+                // name already aliased in an earlier iteration is not re-pushed.
+                let mut bare_def = false
+                let mut bdi = 0
+                while bdi < len(def_names) { if def_names[bdi] == bare { bare_def = true; break } bdi = bdi + 1 }
+                if !bare_def {
+                    def_names.push(bare)
+                    def_seg.push(def_seg[fai])
+                    def_off.push(def_off[fai])
+                    def_bind.push(ELF_STB_GLOBAL)
+                    def_obj.push(-1)
+                }
             }
         }
         fai = fai + 1
@@ -2130,6 +2136,18 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         dcen = dcen + 1
     }
     let n_dyn = len(dyn_names)
+
+    // ── DYN-UND CENSUS DUMP (diagnostic · env-gated · byteeq-neutral) ──
+    // Set HEXA_LD_DUMP_DYN=1 to print the residual dynamic-UND census the own-
+    // start serializer sees: n_dyn plus each name still routed dynamic. This is
+    // the ground truth for whether the (A0/A1) alias pass drove n_dyn→0 (STATIC
+    // serializer, no PT_INTERP) or left a genuine dlopen-family WALL. Emits to
+    // stderr only when the env is set → zero effect on the emitted image bytes.
+    if len(env_var("HEXA_LD_DUMP_DYN")) > 0 {
+        eprintln("hexa_ld(elf,ownstart): n_dyn=" + to_string(n_dyn))
+        let mut _di = 0
+        while _di < n_dyn { eprintln("  DYN-UND: " + dyn_names[_di]); _di = _di + 1 }
+    }
 
     // ── (C) GOT EXTENSION — one shared 8-byte GOT slot per dyn symbol (both the
     // stub's `jmp [rip+slot]` target AND the extern-data GOTPCREL load land on
