@@ -4572,7 +4572,9 @@ fn cmd_run_user_direct(file, extra_args) {
     // non-linux-x86_64 hosts is outcome-identical minus the doomed compile.
     let _run_native_host = exec("uname -sm 2>/dev/null").trim()
     let _run_native_arm = _run_native_host == "Linux aarch64" || _run_native_host == "Linux arm64"
-    let _run_native_on = (_run_native_host == "Linux x86_64" || _run_native_arm) && env("HEXA_RUN_CTRANSPILE") != "1"
+    // axis-① rung-1b (L2): darwin arm64 native `hexa run` leg — opt-in HEXA_NATIVE_DARWIN=1 (default-OFF·byte-neutral).
+    let _run_native_dar = _run_native_host == "Darwin arm64" && env_var("HEXA_NATIVE_DARWIN") == "1"
+    let _run_native_on = (_run_native_host == "Linux x86_64" || _run_native_arm || _run_native_dar) && env("HEXA_RUN_CTRANSPILE") != "1"
     // ── axis-③ own-link cold path (opt-in HEXA_LINK_HEXA=1) ────────────────
     // FULLY CLANG-FREE + binutils-FREE: the native compiler does BOTH the
     // compile (own object emit) AND the link in ONE invocation —
@@ -4654,7 +4656,7 @@ fn cmd_run_user_direct(file, extra_args) {
                 } else { _nsrc = "" }
             }
             // 1) native object emit (no clang) — on the flattened source
-            let _ntgt = if _run_native_arm { "arm64-linux-gnu" } else { "x86_64-linux-gnu" }
+            let _ntgt = if _run_native_dar { "arm64-apple-darwin" } else if _run_native_arm { "arm64-linux-gnu" } else { "x86_64-linux-gnu" }
             let _ne = if len(_nsrc) > 0 { exec("'" + _ncc + "' _drv.hexa --emit=obj --target=" + _ntgt + " -o '" + _nobj + "' '" + _nsrc + "' 2>&1") } else { "flatten-failed-skip-native" }
             // Observability (2026-07-03): the emit's merged output carries the
             // HEXA_CG_PROFILE per-pass rows; swallowing it on success made the
@@ -4670,6 +4672,22 @@ fn cmd_run_user_direct(file, extra_args) {
             if _ne_show && len(_ne) > 0 { eprintln(_ne) }
             let _nobj_ok = exec("test -s '" + _nobj + "' && printf yes || printf no")
             if _nobj_ok == "yes" {
+              if _run_native_dar {
+                // darwin rung-1b: ld64 `-lSystem -syslibroot` recipe (no crt/own-start —
+                // dyld+libSystem init). codesign then atomic-rename into the cache slot.
+                // Any failure (SDK absent / ld64 / codesign) → clang fallback below.
+                let _nsdk = exec("xcrun --show-sdk-path 2>/dev/null | tr -d '\\n'")
+                let mut _nsdkarg = ""
+                if len(_nsdk) > 0 { _nsdkarg = " -syslibroot '" + _nsdk + "'" }
+                let _lnk = "'" + _nld + "' -o '" + _nbin + "' '" + _nobj + "' '" + _nrt + "' -lSystem" + _nsdkarg + " -arch arm64 -e _main 2>&1"
+                let _lr = exec(_lnk)
+                let _nbin_ok = exec("test -x '" + _nbin + "' && printf yes || printf no")
+                if _nbin_ok == "yes" {
+                    codesign_if_macos(_nbin)
+                    let _rn = exec("mv -f '" + _nbin + "' '" + tmpbin + "' 2>/dev/null")
+                    if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[run-native] clang-free: aprime --emit=obj + ld64 → " + tmpbin) }
+                } else if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[run-native] ld64 link failed → clang fallback: " + _lr) }
+              } else {
                 // 2) ld link (no clang): crt + runtime.a + libm/libc/pthread.
                 // crt dir auto-detected (gnu-preferred over musl).
                 let _crt = if _run_native_arm { exec("for d in /usr/lib/aarch64-linux-gnu /usr/lib64 /usr/lib; do if [ -f $d/crt1.o ]; then printf %s $d; break; fi; done") } else { exec("for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do if [ -f $d/crt1.o ]; then printf %s $d; break; fi; done") }
@@ -4695,6 +4713,7 @@ fn cmd_run_user_direct(file, extra_args) {
                         if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[run-native] clang-free: aprime --emit=obj + ld → " + tmpbin) }
                     } else if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[run-native] ld link failed → clang fallback: " + _lr) }
                 }
+              }
             } else if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[run-native] native-emit failed → clang fallback: " + _ne) }
             // best-effort cleanup of the intermediate object
             let _ = exec("rm -f '" + _nobj + "' 2>/dev/null")
