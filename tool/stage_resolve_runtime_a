@@ -3383,6 +3383,52 @@ sync_runtime_a_to_installed_link() {
         || echo "[stage_resolve_runtime_a] installed-runtime-sync WARN: cp $RA → $installed failed (permission?) — consumer may still link a stale installed runtime.a" >&2
 }
 
+# axis-① rung-2b (cross-consumable runtime.a asset). When a release job sets
+# TARGET, emit an arch-tagged copy build/runtime.<aprime-triple>.a of the freshly
+# built build/runtime.a; release.yml uploads that copy as a standalone
+# supplementary GitHub-release asset (per job, native arch), install.sh opt-in
+# pulls it to <hxroot>/build/runtime.<triple>.a, and self/main.hexa's cross-build
+# consumer (_resolve_target_runtime_a / _runtime_a_arch_ok) resolves + re-verifies
+# it there. The triple filename == the exact path the merged consumer already
+# probes, so the asset name is identical end-to-end (no TARGET↔triple mapping seam).
+#
+# TARGET is a RELEASE-CI-ONLY env — it is UNSET at user install time, so this is a
+# strict no-op on the default install path (runtime.a bytes + install layout
+# byte-identical). Unknown / musl TARGET → skipped (no cross asset for those).
+#
+# Anti-vacuous magic self-verify mirrors self/main.hexa _runtime_a_arch_ok exactly
+# (od on the first archive member, toolchain-agnostic — no ELF nm needed on
+# darwin): ELF64 = "7f 45 4c 46 02" + e_machine (x86_64 = "3e 00", arm64 = "b7 00");
+# Mach-O arm64 = "cf fa ed fe". This runs only on the native release runner where
+# the arch always matches, so a mismatch means a corrupt/empty archive. It is a
+# WARN + skip-emit (NOT a release-abort): rung-2b is additive/opt-in and must never
+# regress a release, and install.sh + the consumer BOTH re-verify the magic before
+# use, so a missing/rejected cross asset just falls through to the safe zig-cc path.
+emit_cross_arch_runtime_a() {
+    [ -n "${TARGET:-}" ] || return 0
+    [ -f "$RA" ] || return 0
+    local _tri="" _mem _sig _ok=0
+    case "$TARGET" in
+        linux-x86_64) _tri="x86_64-linux-gnu" ;;
+        linux-arm64)  _tri="arm64-linux-gnu" ;;
+        darwin-arm64) _tri="arm64-apple-darwin" ;;
+        *) return 0 ;;   # musl / unknown target: no cross-consumable asset
+    esac
+    _mem="$(ar t "$RA" 2>/dev/null | head -1)"
+    _sig="$(ar p "$RA" "$_mem" 2>/dev/null | od -An -tx1 -N20 | tr -s ' ')"
+    case "$_tri" in
+        x86_64-linux-gnu)   echo "$_sig" | grep -q '7f 45 4c 46 02' && echo "$_sig" | grep -q ' 3e 00' && _ok=1 ;;
+        arm64-linux-gnu)    echo "$_sig" | grep -q '7f 45 4c 46 02' && echo "$_sig" | grep -q ' b7 00' && _ok=1 ;;
+        arm64-apple-darwin) echo "$_sig" | grep -q 'cf fa ed fe' && _ok=1 ;;
+    esac
+    if [ "$_ok" != 1 ]; then
+        echo "[stage_resolve_runtime_a] rung-2b WARN: build/runtime.a first member is not $_tri arch (magic=[$_sig]) — cross-consumable asset NOT emitted (release integrity preserved; consumer will zig-cc fallback)" >&2
+        return 0
+    fi
+    cp -f "$RA" "$ROOT/build/runtime.${_tri}.a"
+    echo "[stage_resolve_runtime_a] rung-2b: emitted arch-verified cross-consumable build/runtime.${_tri}.a for standalone asset upload"
+}
+
 # Assemble the arch-matched native rt_hi seed (sets HEXA_ZEROC_RT_HI=1 on the
 # platforms that have one) BEFORE either branch — restore_frozen_seeds reads
 # HEXA_ZEROC_RT_HI to decide whether to synthesize runtime_hi_gen.c at all.
@@ -3468,6 +3514,7 @@ if [ -f self/runtime.c ]; then
     echo "stage_resolve_runtime_a: seeds present — building runtime.a from source"
     build_runtime_a_from_source || exit 1   # convergence selfemit-smoke-4591-codrop-default-mismatch: a Case-B FATAL (return 1) must NOT be swallowed (set -uo pipefail has no -e) into exit 0 + a stale runtime.a
     sync_runtime_a_to_installed_link
+    emit_cross_arch_runtime_a   # axis-① rung-2b: TARGET-gated (release CI only) arch-tagged asset; no-op at user install
     exit 0
 fi
 
@@ -3495,6 +3542,7 @@ echo "stage_resolve_runtime_a: self/runtime.c ABSENT — restoring frozen seeds 
 if bash tool/restore_frozen_seeds && [ -f self/runtime.c ]; then
     build_runtime_a_from_source || exit 1   # convergence selfemit-smoke-4591-codrop-default-mismatch: a Case-B FATAL (return 1) must NOT be swallowed (set -uo pipefail has no -e) into exit 0 + a stale runtime.a
     sync_runtime_a_to_installed_link
+    emit_cross_arch_runtime_a   # axis-① rung-2b: TARGET-gated (release CI only) arch-tagged asset; no-op at user install
     exit 0
 fi
 
@@ -3510,6 +3558,7 @@ if gh release download edge --repo "${GITHUB_REPOSITORY:-dancinlab/hexa-lang}" \
     if [ -n "$PRIOR_RA" ]; then
         cp "$PRIOR_RA" "$RA"
         ls -la "$RA"
+        emit_cross_arch_runtime_a   # axis-① rung-2b: TARGET-gated (release CI only) arch-tagged asset; no-op at user install
         echo "$RA"
         exit 0
     fi
