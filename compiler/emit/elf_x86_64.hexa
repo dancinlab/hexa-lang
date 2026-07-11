@@ -1824,6 +1824,127 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     def_bind.push(ELF_STB_GLOBAL)
     def_obj.push(-1)
 
+    // ── (A0) FLOOR-NAME ALIAS — axis-① bug3 (own-link-only · byteeq-neutral) ──
+    // The sanctioned libc floor a program leaves UNDEFINED after runtime.a
+    // extraction — malloc/free/calloc/realloc/memcpy/memmove/memset/write/mmap/
+    // munmap (+ the clang-synthesized memcpy/memset/memcmp/bzero/strlen/strcmp
+    // that arrive as bare PC32/PLT32 UNDs) — ALREADY has an OWN, libc-free
+    // implementation in the pulled runtime.a members, named `hxlcl_<name>`
+    // (self/runtime.c mmap-bump arena etc.), wired to the bare libc name via
+    // `#define <libc> hxlcl_<libc>` in runtime_core.c. Those defs live in the
+    // combined obj list (the runtime_core member is pulled for its GLOBAL main/
+    // hexa_* defs, carrying its file-local hxlcl_* bodies along) but are
+    // STB_LOCAL (nm `t`), so a bare-name reloc never binds to them and the bare
+    // UND persists -> the DYN-UND census below would set n_dyn>0 -> the PT_INTERP
+    // hybrid serializer -> the 23-byte own `_start` bypasses glibc init -> the
+    // dynamic-libc floor call SIGSEGVs at exit (bug3, rc139).
+    //
+    // Fix: for each bare floor name whose `hxlcl_<name>` def is PRESENT in the
+    // linked/extracted objs, register a linker-synthetic GLOBAL ALIAS def at the
+    // SAME segment/offset as the hxlcl_ body (def_obj=-1). The census then finds
+    // the bare name DEFINED -> it never enters dyn_names -> n_dyn stays 0 -> the
+    // STATIC serializer (serialize_elf_exec_x86_64_2seg, no PT_INTERP) is chosen
+    // -> truly static, raw-syscall exit, no ld.so. This mutates NOTHING in
+    // runtime.a's symbol visibility, so the shipping C-transpile path (system ld)
+    // and its byteeq are byte-identical; own-link is the opt-in `--linker=hexa`
+    // leg. Self-gating: an absent hxlcl_ def (plain static round-1/2/3 tests,
+    // runtime_defs==[] with no runtime.a) -> no alias registered -> inert ->
+    // plain-static output byte-identical. MUST precede the ldx index build + the
+    // census so the alias is indexed and consulted. One-shot O(floor·defs) scan
+    // (floor = 14 names) — negligible vs the per-reloc census below.
+    let floor_alias: [string] = ["malloc", "free", "calloc", "realloc",
+        "memcpy", "memmove", "memset", "write", "mmap", "munmap",
+        "memcmp", "bzero", "strlen", "strcmp"]
+    let mut fai = 0
+    while fai < len(floor_alias) {
+        let bare = floor_alias[fai]
+        // Skip if the bare name is genuinely defined already (no alias needed) —
+        // a duplicate GLOBAL homonym would only be shadowed by the first anyway.
+        let mut bare_def = false
+        let mut bdi = 0
+        while bdi < len(def_names) { if def_names[bdi] == bare { bare_def = true; break } bdi = bdi + 1 }
+        if !bare_def {
+            let own = "hxlcl_" + bare
+            let mut oidx = -1
+            let mut odi = 0
+            while odi < len(def_names) { if def_names[odi] == own { oidx = odi; break } odi = odi + 1 }
+            if oidx >= 0 {
+                def_names.push(bare)
+                def_seg.push(def_seg[oidx])
+                def_off.push(def_off[oidx])
+                def_bind.push(ELF_STB_GLOBAL)
+                def_obj.push(-1)
+            }
+        }
+        fai = fai + 1
+    }
+
+    // ── (A1) __errno_location NATIVE PROVIDER — axis-① bug3 (own-link-only) ──
+    // __errno_location is the ONLY sanctioned floor name with NO hxlcl_ variant:
+    // it is a libc thread-local errno accessor by design (codegen keys `_is_cabi`
+    // on the exact name; runtime.c never defines it — the errno-bearing syscall
+    // wrappers hxlcl_close/read/lseek/fork/open/… `call __errno_location` expecting
+    // libc to resolve it). Leaving it dynamic re-arms bug3 (n_dyn>0 -> PT_INTERP ->
+    // glibc-init-bypass crash) for any errno-touching program. On the own-start
+    // STATIC exec (single-threaded, no glibc TLS) the correct own resolution is a
+    // process-global errno cell + a tiny accessor returning its address. Synthesize
+    // `__errno_location: lea rax,[rip+cell]; ret` (RW-data cell) and register it as
+    // a GLOBAL text def so those wrappers resolve WITHOUT any dynamic routing. The
+    // accessor's disp32 is filled after layout (STUB-FILL neighbourhood below).
+    // Self-gating: synthesized ONLY when a reloc actually references
+    // __errno_location AND it is not already defined -> text-only / non-errno
+    // programs are byte-identical (byteeq-neutral). The RW cell forces has_data
+    // (2-seg), which is always already true for an errno-touching runtime link.
+    let mut errno_provided = false
+    let mut errno_fn_off   = -1
+    let mut errno_cell_off = -1
+    let mut _errno_already = false
+    let mut _eadi = 0
+    while _eadi < len(def_names) { if def_names[_eadi] == "__errno_location" { _errno_already = true; break } _eadi = _eadi + 1 }
+    if !_errno_already {
+        let mut errno_ref = false
+        let mut eci = 0
+        while eci < len(objs) && !errno_ref {
+            let eco = objs[eci]
+            let mut ecr = 0
+            while ecr < len(eco.relocs) {
+                let er = eco.relocs[ecr]
+                if er.kind == 2 || er.kind == 4 || _elf_kind_is_got(er.kind) {
+                    let esym = eco.symbols[er.sym_idx]
+                    let mut enm = ""
+                    let mut ek = 0
+                    while true {
+                        let eb = eco.strtab[esym.name_offset + ek] & 0xff
+                        if eb == 0 { break }
+                        enm = enm + from_char_code(eb)
+                        ek = ek + 1
+                    }
+                    if enm == "__errno_location" { errno_ref = true; break }
+                }
+                ecr = ecr + 1
+            }
+            eci = eci + 1
+        }
+        if errno_ref {
+            // 8-byte RW errno cell at the current data-blob tail (before the GOT).
+            while (len(data_bytes) % 8) != 0 { data_bytes.push(0) }
+            errno_cell_off = len(data_bytes)
+            let mut ez = 0
+            while ez < 8 { data_bytes.push(0); ez = ez + 1 }
+            // Accessor body at the text tail: 48 8D 05 <disp32> C3.
+            errno_fn_off = len(text_bytes)
+            text_bytes.push(0x48); text_bytes.push(0x8D); text_bytes.push(0x05)
+            text_bytes.push(0x00); text_bytes.push(0x00); text_bytes.push(0x00); text_bytes.push(0x00)
+            text_bytes.push(0xC3)
+            def_names.push("__errno_location")
+            def_seg.push(0)
+            def_off.push(errno_fn_off)
+            def_bind.push(ELF_STB_GLOBAL)
+            def_obj.push(-1)
+            errno_provided = true
+        }
+    }
+
     // ── GOT COLLECT (R_X86_64_GOTPCREL, type 9) — one slot per DISTINCT target ──
     // #4783 self-emits `mov reg,[rip+sym@GOTPCREL]` (REX.W 8B /r RIP disp32=0,
     // addend -4). This static own-linker must SYNTHESIZE the GOT (ZERO binutils):
@@ -2505,6 +2626,25 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         text_bytes[stub_offs[sfi] + 4] = (sdisp >> 16) & 0xff
         text_bytes[stub_offs[sfi] + 5] = (sdisp >> 24) & 0xff
         sfi = sfi + 1
+    }
+
+    // ── (A1-FILL) __errno_location accessor disp32 — RIP-relative to the errno
+    // cell. The `48 8D 05 <disp32> C3` lea's disp32 site is errno_fn_off+3; the
+    // instruction ends at errno_fn_off+7, so disp = cell_vaddr - (text_vaddr +
+    // errno_fn_off + 7). Data<->text distance is far inside ±2GB (both 0x400000-
+    // based). Skipped entirely when the provider was not synthesized (byteeq). ──
+    if errno_provided {
+        let ecell_vaddr = data_vaddr_base + errno_cell_off
+        let elea_next   = vaddr_base + code_off + errno_fn_off + 7
+        let edisp       = ecell_vaddr - elea_next
+        if edisp < -2147483648 || edisp > 2147483647 {
+            eprintln("hexa_ld(elf,ownstart): __errno_location accessor disp32 overflow")
+            return 3
+        }
+        text_bytes[errno_fn_off + 3] = edisp & 0xff
+        text_bytes[errno_fn_off + 4] = (edisp >> 8) & 0xff
+        text_bytes[errno_fn_off + 5] = (edisp >> 16) & 0xff
+        text_bytes[errno_fn_off + 6] = (edisp >> 24) & 0xff
     }
 
     // Serialize. No data -> single-PT_LOAD round-1 serializer (byte-identical);
