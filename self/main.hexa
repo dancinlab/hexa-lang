@@ -3538,9 +3538,14 @@ fn cmd_build(src, out, c_only, target, shared) {
     // falls through to the C-transpile path below (delegate intact; trace under
     // HEXA_RUN_NATIVE_TRACE=1). linux x86_64 only (the host the recipe is proven on); refuses
     // shared/--c-only/--target. Design: state/hexa-own/no_hexacc_round1_design_fable.md.
-    if env_var("HEXA_BUILD_NATIVE") != "0" && (exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxx86_64" || exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxaarch64" || exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxarm64") && shared != "1" && c_only != "1" && len(target) == 0 && len(__actual_src) > 0 {
-        let _bn_arm = exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") != "Linuxx86_64"
-        let _bntgt = if _bn_arm { "arm64-linux-gnu" } else { "x86_64-linux-gnu" }
+    if env_var("HEXA_BUILD_NATIVE") != "0" && (exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxx86_64" || exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxaarch64" || exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxarm64" || (exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Darwinarm64" && env_var("HEXA_NATIVE_DARWIN") == "1")) && shared != "1" && c_only != "1" && len(target) == 0 && len(__actual_src) > 0 {
+        // axis-① rung-1 (L2): darwin arm64 native build leg — opt-in HEXA_NATIVE_DARWIN=1
+        // (default-OFF·byte-neutral). darwin은 crt1/own-start 규약이 없어(dyld+libSystem이
+        // 초기화) linux crt-probe를 skip하고 ld64 `-lSystem -syslibroot` 레시피로 링크한다.
+        let _bn_dar = exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Darwinarm64"
+        let _bn_arm = !_bn_dar && exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") != "Linuxx86_64"
+        let mut _bntgt = if _bn_arm { "arm64-linux-gnu" } else { "x86_64-linux-gnu" }
+        if _bn_dar { _bntgt = "arm64-apple-darwin" }
         let _bncc = resolve_native_cc()
         let _bnrt = resolve_prebuilt_runtime()
         let _bnld = exec("command -v ld 2>/dev/null | tr -d '\\n'")
@@ -3550,6 +3555,27 @@ fn cmd_build(src, out, c_only, target, shared) {
             let _bne = exec("'" + _bncc + "' _drv.hexa --emit=obj --target=" + _bntgt + " -o '" + _bnobj + "' '" + __actual_src + "' 2>&1")
             let _bnobj_ok = exec("test -s '" + _bnobj + "' && printf yes || printf no")
             if _bnobj_ok == "yes" {
+              if _bn_dar {
+                // darwin: no crt1/crti/crtn, no own _start — ld64 synthesizes LC_MAIN(_main)
+                // + LC_LOAD_DYLINKER; dyld+libSystem do process init. -lSystem covers
+                // libc/libm/libpthread. xcrun probes the SDK path (not clang). arm64 macOS
+                // needs code-signing (codesign_if_macos, same as the native-backend path).
+                let _bnsdk = exec("xcrun --show-sdk-path 2>/dev/null | tr -d '\\n'")
+                let _bntmp = exec("printf '%s.bntmp.%s' '" + out + "' \"$$\"")
+                let mut _bnsdkarg = ""
+                if len(_bnsdk) > 0 { _bnsdkarg = " -syslibroot '" + _bnsdk + "'" }
+                let _bnlnk = "'" + _bnld + "' -o '" + _bntmp + "' '" + _bnobj + "' '" + _bnrt + "' -lSystem" + _bnsdkarg + " -arch arm64 -e _main 2>&1"
+                let _bnlr = exec(_bnlnk)
+                let _bnbin_ok = exec("test -x '" + _bntmp + "' && printf yes || printf no")
+                if _bnbin_ok == "yes" {
+                    codesign_if_macos(_bntmp)
+                    let _ = exec("mv -f '" + _bntmp + "' '" + out + "' 2>/dev/null")
+                    let _ = exec("rm -f '" + _bnobj + "' 2>/dev/null")
+                    if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[build-native] clang-free: aprime --emit=obj + ld64 → " + out) }
+                    println("OK: built " + out + " (native backend, leg-B darwin — no hexat, no clang)")
+                    return ""
+                } else if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[build-native] ld64 link failed → C fallback: " + _bnlr) }
+              } else {
                 let _bncrt = if _bn_arm { exec("for d in /usr/lib/aarch64-linux-gnu /usr/lib64 /usr/lib; do if [ -f $d/crt1.o ]; then printf %s $d; break; fi; done") } else { exec("for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do if [ -f $d/crt1.o ]; then printf %s $d; break; fi; done") }
                 let _bndl = if _bn_arm { exec("for f in /lib/ld-linux-aarch64.so.1; do if [ -e $f ]; then printf %s $f; break; fi; done") } else { exec("for f in /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-x86-64.so.2; do if [ -e $f ]; then printf %s $f; break; fi; done") }
                 if len(_bncrt) > 0 && len(_bndl) > 0 {
@@ -3571,6 +3597,7 @@ fn cmd_build(src, out, c_only, target, shared) {
                         return ""
                     } else if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[build-native] ld link failed → C fallback: " + _bnlr) }
                 }
+              }
             } else if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[build-native] native-emit failed → C fallback: " + _bne) }
             let _ = exec("rm -f '" + _bnobj + "' 2>/dev/null")
         }
@@ -4545,7 +4572,9 @@ fn cmd_run_user_direct(file, extra_args) {
     // non-linux-x86_64 hosts is outcome-identical minus the doomed compile.
     let _run_native_host = exec("uname -sm 2>/dev/null").trim()
     let _run_native_arm = _run_native_host == "Linux aarch64" || _run_native_host == "Linux arm64"
-    let _run_native_on = (_run_native_host == "Linux x86_64" || _run_native_arm) && env("HEXA_RUN_CTRANSPILE") != "1"
+    // axis-① rung-1b (L2): darwin arm64 native `hexa run` leg — opt-in HEXA_NATIVE_DARWIN=1 (default-OFF·byte-neutral).
+    let _run_native_dar = _run_native_host == "Darwin arm64" && env_var("HEXA_NATIVE_DARWIN") == "1"
+    let _run_native_on = (_run_native_host == "Linux x86_64" || _run_native_arm || _run_native_dar) && env("HEXA_RUN_CTRANSPILE") != "1"
     // ── axis-③ own-link cold path (opt-in HEXA_LINK_HEXA=1) ────────────────
     // FULLY CLANG-FREE + binutils-FREE: the native compiler does BOTH the
     // compile (own object emit) AND the link in ONE invocation —
@@ -4627,7 +4656,7 @@ fn cmd_run_user_direct(file, extra_args) {
                 } else { _nsrc = "" }
             }
             // 1) native object emit (no clang) — on the flattened source
-            let _ntgt = if _run_native_arm { "arm64-linux-gnu" } else { "x86_64-linux-gnu" }
+            let _ntgt = if _run_native_dar { "arm64-apple-darwin" } else if _run_native_arm { "arm64-linux-gnu" } else { "x86_64-linux-gnu" }
             let _ne = if len(_nsrc) > 0 { exec("'" + _ncc + "' _drv.hexa --emit=obj --target=" + _ntgt + " -o '" + _nobj + "' '" + _nsrc + "' 2>&1") } else { "flatten-failed-skip-native" }
             // Observability (2026-07-03): the emit's merged output carries the
             // HEXA_CG_PROFILE per-pass rows; swallowing it on success made the
@@ -4643,6 +4672,22 @@ fn cmd_run_user_direct(file, extra_args) {
             if _ne_show && len(_ne) > 0 { eprintln(_ne) }
             let _nobj_ok = exec("test -s '" + _nobj + "' && printf yes || printf no")
             if _nobj_ok == "yes" {
+              if _run_native_dar {
+                // darwin rung-1b: ld64 `-lSystem -syslibroot` recipe (no crt/own-start —
+                // dyld+libSystem init). codesign then atomic-rename into the cache slot.
+                // Any failure (SDK absent / ld64 / codesign) → clang fallback below.
+                let _nsdk = exec("xcrun --show-sdk-path 2>/dev/null | tr -d '\\n'")
+                let mut _nsdkarg = ""
+                if len(_nsdk) > 0 { _nsdkarg = " -syslibroot '" + _nsdk + "'" }
+                let _lnk = "'" + _nld + "' -o '" + _nbin + "' '" + _nobj + "' '" + _nrt + "' -lSystem" + _nsdkarg + " -arch arm64 -e _main 2>&1"
+                let _lr = exec(_lnk)
+                let _nbin_ok = exec("test -x '" + _nbin + "' && printf yes || printf no")
+                if _nbin_ok == "yes" {
+                    codesign_if_macos(_nbin)
+                    let _rn = exec("mv -f '" + _nbin + "' '" + tmpbin + "' 2>/dev/null")
+                    if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[run-native] clang-free: aprime --emit=obj + ld64 → " + tmpbin) }
+                } else if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[run-native] ld64 link failed → clang fallback: " + _lr) }
+              } else {
                 // 2) ld link (no clang): crt + runtime.a + libm/libc/pthread.
                 // crt dir auto-detected (gnu-preferred over musl).
                 let _crt = if _run_native_arm { exec("for d in /usr/lib/aarch64-linux-gnu /usr/lib64 /usr/lib; do if [ -f $d/crt1.o ]; then printf %s $d; break; fi; done") } else { exec("for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do if [ -f $d/crt1.o ]; then printf %s $d; break; fi; done") }
@@ -4668,6 +4713,7 @@ fn cmd_run_user_direct(file, extra_args) {
                         if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[run-native] clang-free: aprime --emit=obj + ld → " + tmpbin) }
                     } else if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[run-native] ld link failed → clang fallback: " + _lr) }
                 }
+              }
             } else if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[run-native] native-emit failed → clang fallback: " + _ne) }
             // best-effort cleanup of the intermediate object
             let _ = exec("rm -f '" + _nobj + "' 2>/dev/null")
