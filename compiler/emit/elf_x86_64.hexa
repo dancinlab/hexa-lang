@@ -1591,6 +1591,24 @@ fn _elf_has_prefix(s: string, p: string) -> bool {
 // Empty ([]) on the plain static path (main.hexa direct call, round-1/2 tests)
 // -> the near-miss tripwire in the dyn-census below is fully inert and output is
 // byte-identical. See the tripwire block for the two fail-closed arms.
+// 1024-bucket FNV-1a fold for the own-link def-index — clone of the .o-emit
+// `_symh` idiom (:4504 #self-emit-oom) / codegen `_x86_strtab_hash`. Turns the
+// per-reloc O(defs) census+resolve linear scans (the own-link >85min wall on a
+// 95k-reloc cc-self link) into a homonym-bucket probe. Index-only → byteeq NEUTRAL.
+fn _ldx_hash(s: string) -> Int {
+    let mut h: Int = 2166136261
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        h = (h ^ char_code(s, i)) * 16777619
+        h = h % 4294967296
+        i = i + 1
+    }
+    let mut b = h % 1024
+    if b < 0 { b = b + 1024 }
+    return b
+}
+
 pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: string, runtime_defs: [string]) -> Int {
     // 23-byte own-start stub at text offset 0.
     // Round-3 (argc/argv): the SysV crt0 process-entry contract — the kernel
@@ -1796,6 +1814,50 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     // demand DT_TEXTREL — not crossed this rung). dyn_stub[i]=1 marks a symbol
     // with a code call-site. Static link (n_dyn==0): loop finds no UND, appends
     // nothing, and EVERY new dyn path below is skipped -> byte-identical output.
+    // def-index build (1024-bucket · name -> insertion-ordered def indices). All
+    // non-stub defs are registered above (objs + init_array); dyn stubs are added
+    // to the index incrementally at their push site below. Census + resolve probe
+    // only the homonym bucket -> O(bucket) not O(defs). byteeq-neutral (bucket
+    // preserves insertion order -> H2 GLOBAL-prefer/WEAK/LOCAL-owning pick unchanged).
+    let mut ldx_n: [[string]] = []
+    let mut ldx_i: [[Int]]    = []
+    let mut lb = 0
+    while lb < 1024 { ldx_n.push([]); ldx_i.push([]); lb = lb + 1 }
+    let mut ld = 0
+    while ld < len(def_names) {
+        let hb = _ldx_hash(def_names[ld])
+        ldx_n[hb] = ldx_n[hb].push(def_names[ld])
+        ldx_i[hb] = ldx_i[hb].push(ld)
+        ld = ld + 1
+    }
+
+    // per-obj symbol-name cache — census + resolve rebuild each reloc's target
+    // name char-by-char from strtab (immut-string concat = O(L^2) per name, x2
+    // per reloc, x ~95k relocs, ZERO memo). Build every symbol's name ONCE per
+    // obj here; the census/resolve loops index osn[obj][sym_idx] instead.
+    let mut osn: [[string]] = []
+    let mut osi = 0
+    while osi < len(objs) {
+        let osobj = objs[osi]
+        let mut nrow: [string] = []
+        let mut syi = 0
+        while syi < len(osobj.symbols) {
+            let ssym = osobj.symbols[syi]
+            let mut snm = ""
+            let mut sck = 0
+            while true {
+                let sb = osobj.strtab[ssym.name_offset + sck] & 0xff
+                if sb == 0 { break }
+                snm = snm + from_char_code(sb)
+                sck = sck + 1
+            }
+            nrow.push(snm)
+            syi = syi + 1
+        }
+        osn.push(nrow)
+        osi = osi + 1
+    }
+
     let mut dyn_names: [string] = []
     let mut dyn_stub:  [Int]    = []
     let mut dcen = 0
@@ -1805,18 +1867,12 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         while dcr < len(dco.relocs) {
             let dr = dco.relocs[dcr]
             if dr.kind == 2 || dr.kind == 4 || _elf_kind_is_got(dr.kind) {
-                let dsym = dco.symbols[dr.sym_idx]
-                let mut dnm = ""
-                let mut dk = 0
-                while true {
-                    let db = dco.strtab[dsym.name_offset + dk] & 0xff
-                    if db == 0 { break }
-                    dnm = dnm + from_char_code(db)
-                    dk = dk + 1
-                }
+                let dnm = osn[dcen][dr.sym_idx]
                 let mut ddef = false
+                let dhb = _ldx_hash(dnm)
+                let dbn = ldx_n[dhb]
                 let mut ddi = 0
-                while ddi < len(def_names) { if def_names[ddi] == dnm { ddef = true; break } ddi = ddi + 1 }
+                while ddi < len(dbn) { if dbn[ddi] == dnm { ddef = true; break } ddi = ddi + 1 }
                 if !ddef && len(dnm) > 0 {
                     let mut dfi = -1
                     let mut dfj = 0
@@ -1929,6 +1985,9 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
             def_off.push(soff)
             def_bind.push(ELF_STB_GLOBAL)
             def_obj.push(-1)
+            let shb = _ldx_hash(dyn_names[dsy])
+            ldx_n[shb] = ldx_n[shb].push(dyn_names[dsy])
+            ldx_i[shb] = ldx_i[shb].push(len(def_names) - 1)
             stub_names.push(dyn_names[dsy])
             stub_offs.push(soff)
         }
@@ -2093,14 +2152,7 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         while ri < len(obj.relocs) {
             let r = obj.relocs[ri]
             let sym = obj.symbols[r.sym_idx]
-            let mut name = ""
-            let mut k = 0
-            while true {
-                let b = obj.strtab[sym.name_offset + k] & 0xff
-                if b == 0 { break }
-                name = name + from_char_code(b)
-                k = k + 1
-            }
+            let name = osn[ro][r.sym_idx]
             // ── H2 fix: symbol-scoped resolution ────────────────────────────
             // Flat first-match let one obj's STB_LOCAL def (a file-local static /
             // `g<id>` module-global / `.LCstrN`) satisfy ANOTHER obj's same-named
@@ -2111,21 +2163,25 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
             // all-GLOBAL link (the normal path) takes the first GLOBAL match and
             // breaks — byte-identical index to the old first-match (byteeq-safe).
             let mut found_idx = -1
+            let rhb = _ldx_hash(name)
+            let rbn = ldx_n[rhb]
+            let rbi = ldx_i[rhb]
             let mut sk = 0
-            while sk < len(def_names) {
-                if def_names[sk] == name {
-                    if def_bind[sk] == ELF_STB_GLOBAL {
-                        found_idx = sk
+            while sk < len(rbn) {
+                if rbn[sk] == name {
+                    let di = rbi[sk]
+                    if def_bind[di] == ELF_STB_GLOBAL {
+                        found_idx = di
                         break
-                    } else if def_bind[sk] == ELF_STB_WEAK {
+                    } else if def_bind[di] == ELF_STB_WEAK {
                         // ELF weak canon: a weak def is globally visible but a
                         // STRONG (GLOBAL) def anywhere still WINS — keep scanning
                         // for one, only fall back to the weak def if none exists.
                         // (hexa_exit is __attribute__((weak)) in runtime_emit_full;
                         // this arm is what makes its STB_WEAK def resolvable.)
-                        if found_idx < 0 { found_idx = sk }
-                    } else if def_obj[sk] == ro {
-                        if found_idx < 0 { found_idx = sk }
+                        if found_idx < 0 { found_idx = di }
+                    } else if def_obj[di] == ro {
+                        if found_idx < 0 { found_idx = di }
                     }
                 }
                 sk = sk + 1
