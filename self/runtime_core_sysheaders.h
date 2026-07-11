@@ -111,6 +111,11 @@ void   hxlcl_longjmp(void *buf, int val);
 int    hxlcl_backtrace(void **buf, int sz);
 void   hxlcl_backtrace_symbols_fd(void *const *buf, int sz, int fd);
 int    hxlcl_task_info(unsigned int target, unsigned int flavor, void *info_out, unsigned int *count);
+/* axis-2 print family (exported from runtime.o under HEXA_RT_STDIO_NATIVE via inline #ifdef) */
+int    hxlcl_printf(const char *fmt, ...);
+int    hxlcl_fprintf(void *fp, const char *fmt, ...);
+int    hxlcl_snprintf(char *buf, size_t cap, const char *fmt, ...);
+void   hxlcl_perror(const char *s);
 #endif /* HEXA_RTCORE_HXLCL_PROTOS */
 
 /* zeroc #29 mem-leaf caller-drop: route runtime_core.c's bare mem*() call sites through the
@@ -157,5 +162,22 @@ int    hxlcl_task_info(unsigned int target, unsigned int flavor, void *info_out,
 #define realloc(p,n)  hxlcl_realloc((void *)(p), (size_t)(n))
 #define calloc(nm,sz) hxlcl_calloc((size_t)(nm), (size_t)(sz))
 #endif /* HEXA_RT_NATIVE_REALLOC */
+
+#ifdef HEXA_RT_STDIO_NATIVE
+/* axis-2 MULTIOBJ print-family redirect (default-OFF, byte-neutral OFF). runtime_core.c's
+   stdout/stderr writers route through runtime.o's exported hxlcl_* raw write(2), matching the
+   single-TU amalgam, so MULTIOBJ print survives own-start raw exit_group with no glibc buffering
+   and the printf/fprintf/perror/snprintf UND leave runtime.a. fflush + the FILE* family stay on
+   glibc on purpose: fuel_abort's real-fopen'd log (fwrite+fflush(f)) is untouched, so there is no
+   partial-redirect landmine (fflush is NOT redirected). Placed after stdio.h at line 26. */
+#undef printf
+#undef fprintf
+#undef perror
+#undef snprintf
+#define printf(...)        hxlcl_printf(__VA_ARGS__)
+#define fprintf(fp,...)    hxlcl_fprintf((void *)(fp), __VA_ARGS__)
+#define perror(s)          hxlcl_perror((const char *)(s))
+#define snprintf(b,c,...)  hxlcl_snprintf((char *)(b), (size_t)(c), __VA_ARGS__)
+#endif /* HEXA_RT_STDIO_NATIVE */
 
 #endif /* HEXA_RUNTIME_CORE_SYSHEADERS_H */
