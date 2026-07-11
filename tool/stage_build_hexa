@@ -217,13 +217,13 @@ PYFLAT
     # across Mach-O/ELF without re-implementing hexa_ld inside this stage.
     $CC $CFLAGS_BOOTSTRAP -I self "$NS_OBJ" "$RT_ARG" -o build/hexa_v2 $LIBS \
         || { echo "stage_build_hexa: native-seed link FAILED" >&2; exit 1; }
-    file build/hexa_v2
+    file build/hexa_v2 || true   # informational only — never abort the build if `file` is absent
     echo "stage_build_hexa: hexa_v2 built from a HEXA-EMITTED object — none-hexa_cc OK"
     echo "::endgroup::"
 else
     echo "::group::Stage 0 — compile self-hosted transpiler (hexa_v2)"
     _r7_cc_compile_link "-I self" "$CFLAGS_BOOTSTRAP" self/native/hexa_cc.c build/hexa_v2 "$RT_ARG"
-    file build/hexa_v2
+    file build/hexa_v2 || true   # informational only — never abort the build if `file` is absent
     echo "::endgroup::"
 fi
 
@@ -245,5 +245,5 @@ echo "::endgroup::"
 
 echo "::group::Stage 2 — compile CLI driver ($OUT_HEXA)"
 _r7_cc_compile_link "-I self" "$CFLAGS" build/stage1/main.c "$OUT_HEXA" "$RT_ARG"
-file "$OUT_HEXA"
+file "$OUT_HEXA" || true   # informational only — never abort the build if `file` is absent
 echo "::endgroup::"
