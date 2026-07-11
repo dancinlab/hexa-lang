@@ -2127,7 +2127,7 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     // pool can measure n_dyn (0 = static / no PT_INTERP; >0 = dyn-hybrid → bug3
     // window). Gated on the env var (own-link-only path anyway); one shell fork
     // per link when set, none of the emitted bytes change (byteeq-neutral). ──
-    if len(getenv("HEXA_LD_DUMP_DYN")) > 0 {
+    if len(env_var("HEXA_LD_DUMP_DYN")) > 0 {
         eprintln("hexa_ld(elf,ownstart): n_dyn=" + to_string(n_dyn))
         let mut _di = 0
         while _di < n_dyn {
