@@ -3575,6 +3575,32 @@ fn cmd_build(src, out, c_only, target, shared) {
         }
         return ""
     }
+    // ── axis-③ PR-1: own-link default-flip OPT-IN leg (HEXA_OWNLINK_DEFAULT=1, default-OFF·byte-neutral) ──
+    // Route the linux-x86_64 host default build through own-emit + own-LINK (hexa_ld) — clang-0
+    // AND binutils-0 (no system `ld`) — mirroring the proven tier-C cross leg below
+    // (--backend=native --emit=exec --linker=hexa) but HOST-native (uname==Linuxx86_64,
+    // len(target)==0). ANY emit/own-link failure falls through to tier-B (aprime --emit=obj +
+    // system ld) below, C-transpile delegate intact. The default-ON flip (== "1" → != "0") is
+    // PR-2, gated on byteeq 3-target + ownlink-corpus-parity + shipping/install smoke.
+    // Roadmap: state/hexa-own/axis3-ownlink-default-flip-roadmap.md.
+    if env_var("HEXA_OWNLINK_DEFAULT") == "1" && exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxx86_64" && shared != "1" && c_only != "1" && len(target) == 0 && len(__actual_src) > 0 {
+        let _olcc = resolve_native_cc()
+        let _olrt = resolve_prebuilt_runtime()
+        if len(_olcc) > 0 && len(_olrt) > 0 {
+            let _oltmp = exec("printf '%s.oltmp.%s' '" + out + "' \"$$\"")
+            let _olr = exec("HEXA_PREBUILT_RUNTIME='" + _olrt + "' '" + _olcc + "' _drv.hexa --backend=native --emit=exec --linker=hexa --target=x86_64-linux-gnu -o '" + _oltmp + "' '" + __actual_src + "' 2>&1")
+            let _olok = exec("test -x '" + _oltmp + "' && printf yes || printf no")
+            if _olok == "yes" {
+                let _ = exec("mv -f '" + _oltmp + "' '" + out + "' 2>/dev/null")
+                if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[build] clang-free + binutils-free own-link → " + out) }
+                println("OK: built " + out + " (native own-link, own-start — no clang, no ld)")
+                return ""
+            } else {
+                let _ = exec("rm -f '" + _oltmp + "' 2>/dev/null")
+                if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[build] own-link failed → tier-B ld fallback: " + _olr) }
+            }
+        }
+    }
     // ── DONE-criterion axis ① round-1: `hexa build` leg-B mirror (no hexat, no clang) ──
     // HEXA_BUILD_NATIVE (default-ON, opt-out with =0; self-host byteeq-neutral): reuse cmd_run's proven leg-B recipe
     // (aprime --emit=obj + ld, own-start crt-drop) so `hexa build` lowers through the native
