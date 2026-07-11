@@ -111,7 +111,7 @@ void   hxlcl_longjmp(void *buf, int val);
 int    hxlcl_backtrace(void **buf, int sz);
 void   hxlcl_backtrace_symbols_fd(void *const *buf, int sz, int fd);
 int    hxlcl_task_info(unsigned int target, unsigned int flavor, void *info_out, unsigned int *count);
-/* axis-2 print family (exported from runtime.o under HEXA_RT_STDIO_NATIVE via HXLCL_STDIO_LINK) */
+/* axis-2 print family (exported from runtime.o under HEXA_RT_STDIO_NATIVE via inline #ifdef) */
 int    hxlcl_printf(const char *fmt, ...);
 int    hxlcl_fprintf(void *fp, const char *fmt, ...);
 int    hxlcl_snprintf(char *buf, size_t cap, const char *fmt, ...);
