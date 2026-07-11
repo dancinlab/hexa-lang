@@ -35,6 +35,7 @@ let ELF_SHT_SYMTAB        = 2
 let ELF_SHT_STRTAB        = 3
 let ELF_SHT_RELA          = 4
 let ELF_SHT_NOBITS        = 8
+let ELF_SHT_DYNSYM        = 11      // dynamic linker symbol table (.dynsym)
 
 let ELF_SHF_WRITE         = 0x1
 let ELF_SHF_ALLOC         = 0x2
@@ -44,11 +45,18 @@ let ELF_STB_LOCAL         = 0
 let ELF_STB_GLOBAL        = 1
 let ELF_STB_WEAK          = 2
 let ELF_STT_NOTYPE        = 0
+let ELF_STT_OBJECT        = 1       // data object (variable) — R_X86_64_COPY lane
 let ELF_STT_FUNC          = 2
 
 let ELF_R_X86_64_NONE     = 0
 let ELF_R_X86_64_64       = 1
 let ELF_R_X86_64_PC32     = 2
+// R_X86_64_COPY = 5 — ld.so reserves the symbol in the exe (.bss/.data) and
+// memcpy's the shared-lib initial value in at load; the exe DEFINES the symbol
+// so libc's own refs rebind to the exe copy (exe-first). Emitted (instead of
+// GLOB_DAT) for a direct (non-GOT) reference to an UND STT_OBJECT libc import
+// (stdout/stderr — `FILE *`). r_offset = copy vaddr, r_addend = 0.
+let ELF_R_X86_64_COPY     = 5
 let ELF_R_X86_64_PLT32    = 4
 // R_X86_64_GOTPCREL = 9 — PC-relative offset to the symbol's GOT slot
 // (SysV AMD64 ABI §B.2 / §4.4.1 Table 4-11: word32, G + GOT + A - P).
@@ -1616,7 +1624,256 @@ fn _ldx_hash(s: string) -> Int {
     return b
 }
 
-pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: string, runtime_defs: [string]) -> Int {
+// ── CRT1-HANDOFF census pre-pass (axis-① bug3 · LOCUS 1) ────────────────────
+// Return the GENUINE residual libc UND names — every kind 2/4/GOT reloc target
+// that (a) no obj defines, (b) has NO `hxlcl_<name>` own-body to alias to (so
+// the (A0) FLOOR-NAME alias below cannot resolve it), and (c) is neither a
+// linker-synthetic name (__init_array_start/end, __errno_location gets a native
+// provider) nor a hexa-own-prefixed name (a codegen↔runtime mismatch caught by
+// the near-miss tripwire, never dynamic). This is EXACTLY the set that becomes
+// n_dyn>0 in the real census on the ORIGINAL (pre-crt1) obj list, so
+// `len(resid) > 0` predicts the dynamic-link path — the trigger for the crt1
+// entry-contract handoff. Pure/read-only over objs; uses the same 1024-bucket
+// _ldx_hash def-index as the real census so it is O(relocs·bucket), not O(n²).
+// When the libc floor later drains to ∅ (L3/RFC061) this returns [] and the
+// gate auto-reverts to the pure own-start static serializer (byte-identical).
+fn _census_resid_und(objs: [ElfX86Obj]) -> [string] {
+    // Hashed set of every DEFINED symbol name (section != 0) across all objs.
+    let mut dfx: [[string]] = []
+    let mut db = 0
+    while db < 1024 { dfx.push([]); db = db + 1 }
+    let mut oi = 0
+    while oi < len(objs) {
+        let o = objs[oi]
+        let mut si = 0
+        while si < len(o.symbols) {
+            let s = o.symbols[si]
+            if s.section != 0 {
+                let mut nm = ""
+                let mut k = 0
+                while true {
+                    let bb = o.strtab[s.name_offset + k] & 0xff
+                    if bb == 0 { break }
+                    nm = nm + from_char_code(bb)
+                    k = k + 1
+                }
+                if len(nm) > 0 {
+                    let hb = _ldx_hash(nm)
+                    dfx[hb] = dfx[hb].push(nm)
+                }
+            }
+            si = si + 1
+        }
+        oi = oi + 1
+    }
+    let mut resid: [string] = []
+    let mut ro = 0
+    while ro < len(objs) {
+        let o = objs[ro]
+        let mut rj = 0
+        while rj < len(o.relocs) {
+            let r = o.relocs[rj]
+            if r.kind == 2 || r.kind == 4 || _elf_kind_is_got(r.kind) {
+                let s = o.symbols[r.sym_idx]
+                let mut nm = ""
+                let mut k = 0
+                while true {
+                    let bb = o.strtab[s.name_offset + k] & 0xff
+                    if bb == 0 { break }
+                    nm = nm + from_char_code(bb)
+                    k = k + 1
+                }
+                if len(nm) > 0 {
+                    // defined?  (probe the name's homonym bucket)
+                    let mut is_def = false
+                    let hb = _ldx_hash(nm)
+                    let bn = dfx[hb]
+                    let mut bi = 0
+                    while bi < len(bn) { if bn[bi] == nm { is_def = true; break } bi = bi + 1 }
+                    // aliasable?  (hxlcl_<name> own-body present)
+                    let mut is_alias = false
+                    if !is_def {
+                        let own_nm = "hxlcl_" + nm
+                        let ohb = _ldx_hash(own_nm)
+                        let obn = dfx[ohb]
+                        let mut obi = 0
+                        while obi < len(obn) { if obn[obi] == own_nm { is_alias = true; break } obi = obi + 1 }
+                    }
+                    let synth = nm == "__errno_location" || nm == "__init_array_start"
+                                || nm == "__init_array_end"
+                    let own_pre = _elf_has_prefix(nm, "hexa_") || _elf_has_prefix(nm, "rt_")
+                                  || _elf_has_prefix(nm, "_hx_") || _elf_has_prefix(nm, "__hexa")
+                                  || _elf_has_prefix(nm, "hxlcl_") || _elf_has_prefix(nm, "forge_")
+                                  || _elf_has_prefix(nm, "farr_")
+                    if !is_def && !is_alias && !synth && !own_pre {
+                        if !_aef_has(resid, nm) { resid.push(nm) }
+                    }
+                }
+            }
+            rj = rj + 1
+        }
+        ro = ro + 1
+    }
+    return resid
+}
+
+// ── crt1.o sourcing (axis-① bug3 · LOCUS 4) ─────────────────────────────────
+// Read the target sysroot's crt1.o (glibc process-entry object) and parse it
+// into the linker's ElfX86Obj model. Path = `$HEXA_LD_SYSROOT/crt1.o` when the
+// env var is set, else the Debian/Ubuntu multiarch default. member_idx is a
+// unique sentinel (777001) so crt1's synthesized STT_SECTION names never collide
+// with any runtime.a member's `$sec_<midx>_<shndx>`. Env read uses env_var (the
+// registered hexa builtin) — NOT getenv. A missing/unreadable file parses to an
+// empty obj (no symbols); the caller hard-errors on that.
+fn _ld_read_crt1() -> ElfX86Obj {
+    let sysroot = env_var("HEXA_LD_SYSROOT")
+    let mut crt_path = "/usr/lib/x86_64-linux-gnu/crt1.o"
+    if len(sysroot) > 0 { crt_path = sysroot + "/crt1.o" }
+    let cbuf = read_file_bytes(crt_path)
+    return parse_elf_x86_obj(cbuf, 0, len(cbuf), 777001)
+}
+
+// ── libc.so.6 .dynsym sourcing (axis-① bug3 · LOCUS A · R_X86_64_COPY lane) ──
+// name -> (st_type, st_size) map read from the target's shared libc .dynsym /
+// .dynstr. `ok`=1 on a good read, 0 otherwise. `parse_elf_x86_obj` is ET_REL-
+// only (it hard-guards ET_REL), so a .so (ET_DYN, with program headers) needs a
+// focused reader — this one.
+struct LibcDynsym {
+    names: [string],
+    types: [i64],
+    sizes: [i64],
+    ok:    i64,
+}
+
+// Read the target's shared libc and return its DEFINED .dynsym entries as a
+// name -> (st_type, st_size) map. This is exactly what a reference linker (GNU
+// ld, ET_EXEC against a shared libc) does — it reads the library it links
+// against — so a direct (non-GOT) reference to an UND STT_OBJECT symbol
+// (stdout/stderr — `FILE *`) can be reserved in the exe with the CORRECT byte
+// size (ld.so uses the exe's st_size as the R_X86_64_COPY memcpy length — a
+// wrong size = heap corruption, so it MUST be exact, never guessed). Path =
+// `$HEXA_LD_SYSROOT/libc.so.6` when the env var is set, else the Debian/Ubuntu
+// multiarch defaults (both /lib and /usr/lib probed). Env read via env_var (the
+// registered hexa builtin) — NOT getenv. A missing/unreadable/unparsable file
+// returns ok=0; the caller hard-errors on the dyn (crt_handoff) path. Only
+// DEFINED entries (st_shndx != SHN_UNDEF) are kept, so a lookup always yields a
+// real definition (libc's own UND imports are skipped).
+fn _ld_read_libc_dynsym() -> LibcDynsym {
+    let mut out = LibcDynsym { names: [], types: [], sizes: [], ok: 0 }
+    let sysroot = env_var("HEXA_LD_SYSROOT")
+    let first_path = if len(sysroot) > 0 { sysroot + "/libc.so.6" } else { "/lib/x86_64-linux-gnu/libc.so.6" }
+    let mut buf = read_file_bytes(first_path)
+    if len(buf) == 0 { buf = read_file_bytes("/lib/x86_64-linux-gnu/libc.so.6") }
+    if len(buf) == 0 { buf = read_file_bytes("/usr/lib/x86_64-linux-gnu/libc.so.6") }
+    if len(buf) == 0 { return out }
+
+    // ELF header guards — ELFCLASS64 LE, ET_DYN, EM_X86_64.
+    if _er_u8(buf, 0) != 0x7f { return out }
+    if _er_u8(buf, 1) != 0x45 { return out }
+    if _er_u8(buf, 2) != 0x4c { return out }
+    if _er_u8(buf, 3) != 0x46 { return out }
+    if _er_u8(buf, 4) != 2    { return out }
+    if _er_u8(buf, 5) != 1    { return out }
+    if _er_u16le(buf, 0x10) != ELF_ET_DYN    { return out }
+    if _er_u16le(buf, 0x12) != ELF_EM_X86_64 { return out }
+
+    let e_shoff     = _er_u64le(buf, 0x28)
+    let e_shentsize = _er_u16le(buf, 0x3A)
+    let e_shnum     = _er_u16le(buf, 0x3C)
+    if e_shentsize < 64 { return out }
+    if e_shnum < 1 { return out }
+
+    // Locate .dynsym (SHT_DYNSYM) + its linked .dynstr (sh_link).
+    let mut dynsym_hdr = -1
+    let mut si = 0
+    while si < e_shnum {
+        let sh = e_shoff + si * e_shentsize
+        if _er_u32le(buf, sh + 0x04) == ELF_SHT_DYNSYM { dynsym_hdr = sh; break }
+        si = si + 1
+    }
+    if dynsym_hdr < 0 { return out }
+    let dsym_off = _er_u64le(buf, dynsym_hdr + 0x18)
+    let dsym_sz  = _er_u64le(buf, dynsym_hdr + 0x20)
+    let dsym_lnk = _er_u32le(buf, dynsym_hdr + 0x28)
+    let mut dsym_es = _er_u64le(buf, dynsym_hdr + 0x38)
+    if dsym_es < 1 { dsym_es = 24 }
+    if dsym_lnk > e_shnum - 1 { return out }
+    let dstr_hdr = e_shoff + dsym_lnk * e_shentsize
+    let dstr_off = _er_u64le(buf, dstr_hdr + 0x18)
+
+    // Iterate dynsym (skip file idx 0 = STN_UNDEF). Keep only DEFINED entries.
+    let count = dsym_sz / dsym_es
+    let mut k = 1
+    while k < count {
+        let s = dsym_off + k * dsym_es
+        let st_name  = _er_u32le(buf, s + 0x00)
+        let st_info  = _er_u8(buf, s + 0x04)
+        let st_shndx = _er_u16le(buf, s + 0x06)
+        let st_size  = _er_u64le(buf, s + 0x10)
+        if st_shndx != 0 {
+            let nm = _er_cstr(buf, dstr_off + st_name)
+            if len(nm) > 0 {
+                out.names.push(nm)
+                out.types.push(st_info & 0xf)
+                out.sizes.push(st_size)
+            }
+        }
+        k = k + 1
+    }
+    out.ok = 1
+    return out
+}
+
+// name -> st_type over the libc .dynsym map; ELF_STT_FUNC when unknown/absent
+// (task default → the FUNC stub lane, never the COPY lane, so an unclassifiable
+// residual can never mis-route to a COPY reservation).
+fn _libc_sym_type(m: LibcDynsym, nm: string) -> Int {
+    let mut i = 0
+    while i < len(m.names) { if m.names[i] == nm { return m.types[i] } i = i + 1 }
+    return ELF_STT_FUNC
+}
+// name -> st_size over the libc .dynsym map (COPY memcpy length). A copy symbol
+// is only ever routed here after _libc_sym_type returned STT_OBJECT (found), so
+// the size is the real found size; the <1 clamp to 8 (a `FILE *` word) is a
+// defensive floor that a legitimately-routed copy symbol never triggers.
+fn _libc_sym_size(m: LibcDynsym, nm: string) -> Int {
+    let mut i = 0
+    while i < len(m.names) { if m.names[i] == nm { let z = m.sizes[i]; if z < 1 { return 8 } return z } i = i + 1 }
+    return 8
+}
+
+pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_name: string, runtime_defs: [string]) -> Int {
+    // ── CRT1-HANDOFF gate (axis-① bug3 · Path 2 · LOCUS 1+2) ────────────────
+    // When the residual-UND census (over the ALREADY-floor-pulled objs — #4871
+    // ran in the _ar caller before this call) finds genuine libc UND that no
+    // hxlcl_ body can alias away (n_dyn>0), the own raw-syscall `_start` stub can
+    // NOT coexist with ld.so on a PT_INTERP binary: ld.so did glibc TLS init and
+    // expects __libc_start_main / _dl_fini teardown, so the stub's bare
+    // exit-group crashes rc139 at exit. FIX: pull the sysroot's crt1.o, make ITS
+    // `_start` the ELF entry, and SUPPRESS the own stub — the output becomes an
+    // ordinary glibc dynamic executable (crt1 → __libc_start_main → main → exit →
+    // _IO_cleanup → _dl_fini → clean exit_group). crt1 is prepended so it is
+    // obj[0]; the entry is resolved by `_start` symbol lookup (LOCUS 3 plumbs the
+    // offset into the dyn serializer). Gated on runtime_defs>0 (the _ar self-emit
+    // path) so plain/text-only links (main.hexa direct call, unit tests) skip it
+    // and stay byte-identical. When the floor drains to ∅ the census returns []
+    // → crt_handoff false → pure own-start static serializer (convergent revert).
+    let mut crt_handoff = false
+    if len(runtime_defs) > 0 {
+        let _resid = _census_resid_und(objs_in)
+        if len(_resid) > 0 { crt_handoff = true }
+    }
+    let mut objs: [ElfX86Obj] = []
+    if crt_handoff {
+        let _crt1 = _ld_read_crt1()
+        if len(_crt1.symbols) == 0 {
+            eprintln("hexa_ld(elf,ownstart): CRT1-HANDOFF needs crt1.o but none was found — set HEXA_LD_SYSROOT=<dir containing crt1.o> or install /usr/lib/x86_64-linux-gnu/crt1.o")
+            return 3
+        }
+        objs.push(_crt1)
+    }
+    let mut _oii = 0
+    while _oii < len(objs_in) { objs.push(objs_in[_oii]); _oii = _oii + 1 }
     // 23-byte own-start stub at text offset 0.
     // Round-3 (argc/argv): the SysV crt0 process-entry contract — the kernel
     // enters at _start with rsp = [argc, argv[0..argc-1], NULL, envp..., NULL].
@@ -1662,6 +1919,10 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     }
 
     let mut text_bytes: [Int] = []
+    // CRT1-HANDOFF (LOCUS 2a): suppress the own raw-syscall `_start` stub — crt1's
+    // `_start` becomes the entry, so no argc/argv unpack and no env-cell store.
+    if crt_handoff { env_cell = false }
+    if !crt_handoff {
     text_bytes.push(0x48); text_bytes.push(0x8B); text_bytes.push(0x3C)
     text_bytes.push(0x24)                                 // mov rdi, [rsp]      (argc)
     text_bytes.push(0x48); text_bytes.push(0x8D); text_bytes.push(0x74)
@@ -1679,8 +1940,10 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     text_bytes.push(0xB8); text_bytes.push(0x3C); text_bytes.push(0x00)
     text_bytes.push(0x00); text_bytes.push(0x00)          // mov eax, 60 (__NR_exit)
     text_bytes.push(0x0F); text_bytes.push(0x05)          // syscall
+    }
     // len(text_bytes) is now 23 (plain) or 35 (env_cell) — the +len shift is
-    // applied to every obj below via `base = len(text_bytes)` (auto).
+    // applied to every obj below via `base = len(text_bytes)` (auto). When
+    // crt_handoff suppressed the stub, len==0 → crt1 (obj[0]) .text lands at 0.
     let stub_call_field = if env_cell { 22 } else { 10 }
     let stub_call_next  = if env_cell { 26 } else { 14 }
 
@@ -1791,12 +2054,16 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
 
     // Patch the `call main` rel32. Field/next-insn depend on the stub shape:
     // plain 23-byte (call opcode at off 9, field 10..13, next 14) vs env_cell
-    // 35-byte (call opcode at off 21, field 22..25, next 26).
-    let call_rel = main_off - stub_call_next
-    text_bytes[stub_call_field]     = call_rel & 0xff
-    text_bytes[stub_call_field + 1] = (call_rel >> 8) & 0xff
-    text_bytes[stub_call_field + 2] = (call_rel >> 16) & 0xff
-    text_bytes[stub_call_field + 3] = (call_rel >> 24) & 0xff
+    // 35-byte (call opcode at off 21, field 22..25, next 26). CRT1-HANDOFF
+    // (LOCUS 2b): skipped when the own stub is suppressed — crt1's `_start`
+    // reaches main via its own GOTPCRELX(main) reloc through the GOT pass.
+    if !crt_handoff {
+        let call_rel = main_off - stub_call_next
+        text_bytes[stub_call_field]     = call_rel & 0xff
+        text_bytes[stub_call_field + 1] = (call_rel >> 8) & 0xff
+        text_bytes[stub_call_field + 2] = (call_rel >> 16) & 0xff
+        text_bytes[stub_call_field + 3] = (call_rel >> 24) & 0xff
+    }
 
     // ── linker-defined __init_array_start / __init_array_end (GNU ld PROVIDE
     // parity). runtime_emit_full's _hx_run_init_array references the two boundary
@@ -1824,60 +2091,16 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     def_bind.push(ELF_STB_GLOBAL)
     def_obj.push(-1)
 
-    // ── (A0) FLOOR-NAME ALIAS — axis-① bug3 (own-link-only · byteeq-neutral) ──
-    // The sanctioned libc floor a program leaves UNDEFINED after runtime.a
-    // extraction — malloc/free/calloc/realloc/memcpy/memmove/memset/write/mmap/
-    // munmap (+ the clang-synthesized memcpy/memset/memcmp/bzero/strlen/strcmp
-    // that arrive as bare PC32/PLT32 UNDs) — ALREADY has an OWN, libc-free
-    // implementation in the pulled runtime.a members, named `hxlcl_<name>`
-    // (self/runtime.c mmap-bump arena etc.), wired to the bare libc name via
-    // `#define <libc> hxlcl_<libc>` in runtime_core.c. Those defs live in the
-    // combined obj list (the runtime_core member is pulled for its GLOBAL main/
-    // hexa_* defs, carrying its file-local hxlcl_* bodies along) but are
-    // STB_LOCAL (nm `t`), so a bare-name reloc never binds to them and the bare
-    // UND persists -> the DYN-UND census below would set n_dyn>0 -> the PT_INTERP
-    // hybrid serializer -> the 23-byte own `_start` bypasses glibc init -> the
-    // dynamic-libc floor call SIGSEGVs at exit (bug3, rc139).
-    //
-    // Fix: for each bare floor name whose `hxlcl_<name>` def is PRESENT in the
-    // linked/extracted objs, register a linker-synthetic GLOBAL ALIAS def at the
-    // SAME segment/offset as the hxlcl_ body (def_obj=-1). The census then finds
-    // the bare name DEFINED -> it never enters dyn_names -> n_dyn stays 0 -> the
-    // STATIC serializer (serialize_elf_exec_x86_64_2seg, no PT_INTERP) is chosen
-    // -> truly static, raw-syscall exit, no ld.so. This mutates NOTHING in
-    // runtime.a's symbol visibility, so the shipping C-transpile path (system ld)
-    // and its byteeq are byte-identical; own-link is the opt-in `--linker=hexa`
-    // leg. Self-gating: an absent hxlcl_ def (plain static round-1/2/3 tests,
-    // runtime_defs==[] with no runtime.a) -> no alias registered -> inert ->
-    // plain-static output byte-identical. MUST precede the ldx index build + the
-    // census so the alias is indexed and consulted. One-shot O(floor·defs) scan
-    // (floor = 14 names) — negligible vs the per-reloc census below.
-    let floor_alias: [string] = ["malloc", "free", "calloc", "realloc",
-        "memcpy", "memmove", "memset", "write", "mmap", "munmap",
-        "memcmp", "bzero", "strlen", "strcmp"]
-    let mut fai = 0
-    while fai < len(floor_alias) {
-        let bare = floor_alias[fai]
-        // Skip if the bare name is genuinely defined already (no alias needed) —
-        // a duplicate GLOBAL homonym would only be shadowed by the first anyway.
-        let mut bare_def = false
-        let mut bdi = 0
-        while bdi < len(def_names) { if def_names[bdi] == bare { bare_def = true; break } bdi = bdi + 1 }
-        if !bare_def {
-            let own_name = "hxlcl_" + bare
-            let mut oidx = -1
-            let mut odi = 0
-            while odi < len(def_names) { if def_names[odi] == own_name { oidx = odi; break } odi = odi + 1 }
-            if oidx >= 0 {
-                def_names.push(bare)
-                def_seg.push(def_seg[oidx])
-                def_off.push(def_off[oidx])
-                def_bind.push(ELF_STB_GLOBAL)
-                def_obj.push(-1)
-            }
-        }
-        fai = fai + 1
-    }
+    // ── (A0) FLOOR-NAME ALIAS — moved into the DYN-UND census below ──────────
+    // The bare libc-floor UND → `hxlcl_<name>` GLOBAL-alias synthesis (axis-①
+    // bug3 fix) now runs DATA-DRIVEN inside the census loop (over every bare UND,
+    // not a hardcoded 14-name list), AFTER the ldx index is built and AFTER
+    // LOCUS-1's own-link floor-pull has pulled the STB_LOCAL hxlcl_ bodies into
+    // the linked obj list. See the "(A0) FLOOR-NAME ALIAS" block in the census
+    // just before the near-miss tripwire. (The prior pre-census hardcoded pass
+    // was inert: it ran before the member carrying the hxlcl_ bodies was pulled,
+    // so `hxlcl_<name>` was never in def_names to alias — that is exactly why
+    // both #4867 and #4870 stayed inert.)
 
     // ── (A1) __errno_location NATIVE PROVIDER — axis-① bug3 (own-link-only) ──
     // __errno_location is the ONLY sanctioned floor name with NO hxlcl_ variant:
@@ -2037,8 +2260,33 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         osi = osi + 1
     }
 
+    // ── libc.so.6 .dynsym map (axis-① bug3 · LOCUS A) ── Read the shared libc's
+    // DEFINED symbol type/size map so the census can discriminate residual UND
+    // imports by SYMBOL TYPE (STT_OBJECT vs STT_FUNC) — the reloc KIND alone
+    // (kind 2 = PC32 is used for BOTH `call fn` AND `mov data(%rip),reg`) can't
+    // tell a data symbol (stdout/stderr) from a function. Gated on crt_handoff:
+    // that is exactly the n_dyn>0 (real libc UND → PT_INTERP) path where a COPY
+    // can arise; on the static/text-only path the map stays empty (ok=0) →
+    // _libc_sym_type returns FUNC for everything → dyn_copy never set → the
+    // stub-only census + output is byte-identical to before (byteeq neutral).
+    // Hard-error (like the crt1.o handoff) if the dyn path can't source libc.
+    let mut libc_dyn = LibcDynsym { names: [], types: [], sizes: [], ok: 0 }
+    if crt_handoff {
+        libc_dyn = _ld_read_libc_dynsym()
+        if libc_dyn.ok == 0 {
+            eprintln("hexa_ld(elf,ownstart): R_X86_64_COPY lane needs libc.so.6 .dynsym but none was found/parsed — set HEXA_LD_SYSROOT=<dir containing libc.so.6> or install /lib/x86_64-linux-gnu/libc.so.6")
+            return 3
+        }
+    }
+
     let mut dyn_names: [string] = []
     let mut dyn_stub:  [Int]    = []
+    // dyn_copy[i]=1 → a direct (non-GOT) reference to an UND STT_OBJECT libc
+    // import: gets an R_X86_64_COPY (.bss reservation + exe-first rebind), NEVER
+    // a text stub. dyn_isobj[i] caches the libc symbol-type verdict so the type
+    // map is probed once per distinct dyn name, not per call-site.
+    let mut dyn_copy:  [Int]    = []
+    let mut dyn_isobj: [Int]    = []
     let mut dcen = 0
     while dcen < len(objs) {
         let dco = objs[dcen]
@@ -2052,6 +2300,42 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                 let dbn = ldx_n[dhb]
                 let mut ddi = 0
                 while ddi < len(dbn) { if dbn[ddi] == dnm { ddef = true; break } ddi = ddi + 1 }
+                // ── (A0) FLOOR-NAME ALIAS — axis-① bug3 (own-link-only · data-driven) ──
+                // A bare libc-floor UND <X> (malloc/free/memcpy/write/mmap/…) left
+                // undefined after runtime.a extraction has an OWN, libc-free body
+                // `hxlcl_<X>` in a pulled member (STB_LOCAL, so section != 0 puts it
+                // in def_names/ldx but a bare-name reloc never binds to it). LOCUS-1's
+                // own-link floor-pull guarantees that member IS pulled, so `hxlcl_<X>`
+                // is now in the ldx index. Register a linker-synthetic GLOBAL ALIAS
+                // for the bare name at the SAME seg/off as the hxlcl_ body (def_obj=-1)
+                // and index it, so the census sees <X> DEFINED → it never enters
+                // dyn_names → n_dyn stays 0 → the STATIC serializer (no PT_INTERP) is
+                // chosen → raw-syscall exit, no ld.so (bug3 cleared). Data-driven over
+                // every bare UND (supersedes the old hardcoded 14-name list). Gated on
+                // runtime_defs (the _ar self-emit link path); plain static links
+                // (runtime_defs == []) skip it → byte-identical output. Mutates NOTHING
+                // in runtime.a visibility → shipping C-transpile (system ld) byteeq is
+                // byte-identical; own-link is the opt-in `--linker=hexa` leg.
+                if !ddef && len(dnm) > 0 && len(runtime_defs) > 0 {
+                    let own_nm = "hxlcl_" + dnm
+                    let ohb = _ldx_hash(own_nm)
+                    let obn = ldx_n[ohb]
+                    let obi = ldx_i[ohb]
+                    let mut oix = -1
+                    let mut oj = 0
+                    while oj < len(obn) { if obn[oj] == own_nm { oix = obi[oj]; break } oj = oj + 1 }
+                    if oix >= 0 {
+                        def_names.push(dnm)
+                        def_seg.push(def_seg[oix])
+                        def_off.push(def_off[oix])
+                        def_bind.push(ELF_STB_GLOBAL)
+                        def_obj.push(-1)
+                        let nhb = _ldx_hash(dnm)
+                        ldx_n[nhb] = ldx_n[nhb].push(dnm)
+                        ldx_i[nhb] = ldx_i[nhb].push(len(def_names) - 1)
+                        ddef = true
+                    }
+                }
                 if !ddef && len(dnm) > 0 {
                     let mut dfi = -1
                     let mut dfj = 0
@@ -2117,11 +2401,25 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
                             return 3
                         }
                     }
+                    // ── (A0') CENSUS ROUTING — reloc-kind × SYMBOL-TYPE (3-way) ──
+                    // First encounter registers the name + caches its libc type;
+                    // then every non-GOT ref sets the lane by TYPE, not KIND:
+                    //   STT_OBJECT (data: stdout/stderr) → dyn_copy (COPY reloc,
+                    //     never a stub — a data load of a stub reads instruction
+                    //     bytes as a FILE* → the rc139 _IO_flush_all garbage);
+                    //   STT_FUNC / unknown → dyn_stub (the poor-man's-PLT fn ptr,
+                    //     unchanged); GOT-only refs stay dyn_stub=0 (GLOB_DAT).
+                    // libc_dyn is empty (ok=0) off the crt_handoff path → every
+                    // type resolves FUNC → dyn_copy stays 0 → byte-identical.
                     if dfi < 0 {
                         dyn_names.push(dnm)
-                        if _elf_kind_is_got(dr.kind) { dyn_stub.push(0) } else { dyn_stub.push(1) }
-                    } else if !_elf_kind_is_got(dr.kind) {
-                        dyn_stub[dfi] = 1
+                        dyn_stub.push(0)
+                        dyn_copy.push(0)
+                        if _libc_sym_type(libc_dyn, dnm) == ELF_STT_OBJECT { dyn_isobj.push(1) } else { dyn_isobj.push(0) }
+                        dfi = len(dyn_names) - 1
+                    }
+                    if !_elf_kind_is_got(dr.kind) {
+                        if dyn_isobj[dfi] == 1 { dyn_copy[dfi] = 1 } else { dyn_stub[dfi] = 1 }
                     }
                 }
             }
@@ -2130,6 +2428,19 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         dcen = dcen + 1
     }
     let n_dyn = len(dyn_names)
+
+    // ── DIAGNOSTIC — HEXA_LD_DUMP_DYN dumps the residual DYN-UND census so the
+    // pool can measure n_dyn (0 = static / no PT_INTERP; >0 = dyn-hybrid → bug3
+    // window). Gated on the env var (own-link-only path anyway); one shell fork
+    // per link when set, none of the emitted bytes change (byteeq-neutral). ──
+    if len(env_var("HEXA_LD_DUMP_DYN")) > 0 {
+        eprintln("hexa_ld(elf,ownstart): n_dyn=" + to_string(n_dyn))
+        let mut _di = 0
+        while _di < n_dyn {
+            eprintln("  DYN-UND: " + dyn_names[_di])
+            _di = _di + 1
+        }
+    }
 
     // ── (C) GOT EXTENSION — one shared 8-byte GOT slot per dyn symbol (both the
     // stub's `jmp [rip+slot]` target AND the extern-data GOTPCREL load land on
@@ -2206,6 +2517,66 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
     let mut gres = 0
     while gres < n_got * 8 { data_bytes.push(0); gres = gres + 1 }
 
+    // ── (C) COPY SYNTHESIS — R_X86_64_COPY reservation (axis-① bug3 · LOCUS C) ──
+    // For each dyn_copy symbol (an UND STT_OBJECT libc import referenced
+    // directly / non-GOT — stdout/stderr), reserve st_size bytes (8-align, 16 if
+    // >8) in the RW data blob and DEFINE the bare name there as a linker-
+    // synthetic GLOBAL data def (def_seg=1 RW, def_obj=-1) — exactly like the
+    // CRT1-HANDOFF _GLOBAL_OFFSET_TABLE_ synth def. The generic resolve pass then
+    // binds every PC32 data load to this copy, and GOT-fill binds the symbol's
+    // GOT slot to it too — so the poisoned non-PIC data lane now reads the copy
+    // (which ld.so memcpy's libc's initial FILE* into at load) instead of stub
+    // instruction bytes. Reserved BEFORE the dyn structures so the copy vaddr is
+    // final; copy_* feed the DEFINED .dynsym entry + the R_X86_64_COPY reloc
+    // below. Empty when dyn_copy is all-0 (byte-identical to the pre-COPY path).
+    let mut copy_names:  [string] = []
+    let mut copy_vaddrs: [Int]    = []
+    let mut copy_sizes:  [Int]    = []
+    let mut dcp = 0
+    while dcp < n_dyn {
+        if dyn_copy[dcp] == 1 {
+            let csz    = _libc_sym_size(libc_dyn, dyn_names[dcp])
+            let calign = if csz > 8 { 16 } else { 8 }
+            while (len(data_bytes) % calign) != 0 { data_bytes.push(0) }
+            let coff = len(data_bytes)
+            let mut cz = 0
+            while cz < csz { data_bytes.push(0); cz = cz + 1 }
+            def_names.push(dyn_names[dcp])
+            def_seg.push(1)
+            def_off.push(coff)
+            def_bind.push(ELF_STB_GLOBAL)
+            def_obj.push(-1)
+            let chb = _ldx_hash(dyn_names[dcp])
+            ldx_n[chb] = ldx_n[chb].push(dyn_names[dcp])
+            ldx_i[chb] = ldx_i[chb].push(len(def_names) - 1)
+            copy_names.push(dyn_names[dcp])
+            copy_vaddrs.push(data_vaddr_base + coff)
+            copy_sizes.push(csz)
+        }
+        dcp = dcp + 1
+    }
+
+    // ── CRT1-HANDOFF (LOCUS 2c): define `_GLOBAL_OFFSET_TABLE_` at the GOT base ──
+    // crt1.o's `_start`/`_dl_relocate_static_pie` reference `_GLOBAL_OFFSET_TABLE_`
+    // (an EXTRA UND beyond {main,__libc_start_main}) via a GOTPC-family reloc
+    // (S+A-P against the GOT base). The census does NOT route it (not kind
+    // 2/4/GOT) and no obj defines it, so WITHOUT this def it would hit the H1
+    // unresolved hard-error. Define it as a linker-synthetic GLOBAL DATA def at
+    // the GOT base's data-blob offset (its vaddr = data_vaddr_base + got_blob_off);
+    // the resolve pass's generic PC-relative arm then computes S+A-P exactly.
+    // Registered in BOTH def_names AND the ldx index (the resolve pass probes ldx).
+    // Gated on crt_handoff so non-crt links never gain a stray def (byte-identical).
+    if crt_handoff {
+        def_names.push("_GLOBAL_OFFSET_TABLE_")
+        def_seg.push(1)
+        def_off.push(got_blob_off)
+        def_bind.push(ELF_STB_GLOBAL)
+        def_obj.push(-1)
+        let _gothb = _ldx_hash("_GLOBAL_OFFSET_TABLE_")
+        ldx_n[_gothb] = ldx_n[_gothb].push("_GLOBAL_OFFSET_TABLE_")
+        ldx_i[_gothb] = ldx_i[_gothb].push(len(def_names) - 1)
+    }
+
     // ── DYN DATA STRUCTURES — ride the data blob tail after the GOT (all
     // ld.so-consumed via program headers + DT_* only, so e_shnum stays 0). Order:
     //   [.dynstr][pad8][.dynsym][pad8][DT_HASH][pad8][.rela.dyn][pad8][_DYNAMIC][interp]
@@ -2248,11 +2619,29 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         let mut sy = 0
         while sy < n_dyn {
             _ew_u32(data_bytes, dynstr_name_off[sy])   // st_name
-            data_bytes.push(0x10)                       // st_info = GLOBAL|NOTYPE
-            data_bytes.push(0)                          // st_other
-            _ew_u16(data_bytes, 0)                      // st_shndx = SHN_UNDEF
-            _ew_u64(data_bytes, 0)                      // st_value
-            _ew_u64(data_bytes, 0)                      // st_size
+            // A copied STT_OBJECT (LOCUS D): the exe DEFINES the symbol so
+            // ld.so's exe-first lookup rebinds libc's own refs to the exe copy.
+            // st_shndx must be != SHN_UNDEF to count as defined; this linker
+            // emits e_shnum=0, so ld.so never dereferences section headers (it
+            // uses l_addr + st_value; l_addr=0 for ET_EXEC) — 2 = the RW PT_LOAD
+            // slot marks "defined, non-special". st_size MUST be the real size
+            // (ld.so uses the EXE's st_size as the R_X86_64_COPY memcpy length).
+            let mut cvi = -1
+            let mut cvk = 0
+            while cvk < len(copy_names) { if copy_names[cvk] == dyn_names[sy] { cvi = cvk; break } cvk = cvk + 1 }
+            if cvi >= 0 {
+                data_bytes.push(0x11)                   // st_info = (GLOBAL<<4)|OBJECT
+                data_bytes.push(0)                      // st_other
+                _ew_u16(data_bytes, 2)                  // st_shndx = RW seg (defined)
+                _ew_u64(data_bytes, copy_vaddrs[cvi])   // st_value = copy vaddr
+                _ew_u64(data_bytes, copy_sizes[cvi])    // st_size  = real size
+            } else {
+                data_bytes.push(0x10)                   // st_info = GLOBAL|NOTYPE
+                data_bytes.push(0)                      // st_other
+                _ew_u16(data_bytes, 0)                  // st_shndx = SHN_UNDEF
+                _ew_u64(data_bytes, 0)                  // st_value
+                _ew_u64(data_bytes, 0)                  // st_size
+            }
             sy = sy + 1
         }
         let n_dynsym = n_dyn + 1
@@ -2273,22 +2662,35 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
             ch = ch + 1
         }
 
-        // .rela.dyn: one R_X86_64_GLOB_DAT (type 6) per dyn symbol pointing ld.so
-        // at the symbol's GOT slot. r_info = (dynsym_idx<<32)|6 (multiplication
-        // to dodge a 2^32 literal at parse — same idiom as _er_s64le).
+        // .rela.dyn: one reloc per dyn symbol. Default = R_X86_64_GLOB_DAT (type
+        // 6) pointing ld.so at the symbol's GOT slot. A copied STT_OBJECT (LOCUS
+        // D) instead gets R_X86_64_COPY (type 5) with r_offset = the exe copy
+        // vaddr (its GOT slot, if any, is static-filled by GOT-fill to the same
+        // copy — no GLOB_DAT needed since the symbol is exe-DEFINED). r_info =
+        // (dynsym_idx<<32)|type (multiplication dodges a 2^32 literal at parse —
+        // same idiom as _er_s64le). Count stays n_dyn → DT_RELASZ unchanged.
         let mut pd3 = (8 - (len(data_bytes) & 7)) & 7
         while pd3 > 0 { data_bytes.push(0); pd3 = pd3 - 1 }
         let rela_blob_off = len(data_bytes)
         let rela_vaddr    = data_vaddr_base + rela_blob_off
         let mut rr = 0
         while rr < n_dyn {
-            let mut rgs = -1
-            let mut rgx = 0
-            while rgx < n_got { if got_syms[rgx] == dyn_names[rr] { rgs = rgx; break } rgx = rgx + 1 }
-            let slot_vaddr = data_vaddr_base + got_blob_off + rgs * 8
-            _ew_u64(data_bytes, slot_vaddr)                       // r_offset
-            _ew_u64(data_bytes, (rr + 1) * 4294967296 + 6)       // r_info = (idx<<32)|GLOB_DAT
-            _ew_u64(data_bytes, 0)                                // r_addend
+            let mut rcvi = -1
+            let mut rcvk = 0
+            while rcvk < len(copy_names) { if copy_names[rcvk] == dyn_names[rr] { rcvi = rcvk; break } rcvk = rcvk + 1 }
+            if rcvi >= 0 {
+                _ew_u64(data_bytes, copy_vaddrs[rcvi])               // r_offset = copy vaddr
+                _ew_u64(data_bytes, (rr + 1) * 4294967296 + ELF_R_X86_64_COPY)   // r_info = (idx<<32)|COPY
+                _ew_u64(data_bytes, 0)                               // r_addend
+            } else {
+                let mut rgs = -1
+                let mut rgx = 0
+                while rgx < n_got { if got_syms[rgx] == dyn_names[rr] { rgs = rgx; break } rgx = rgx + 1 }
+                let slot_vaddr = data_vaddr_base + got_blob_off + rgs * 8
+                _ew_u64(data_bytes, slot_vaddr)                       // r_offset
+                _ew_u64(data_bytes, (rr + 1) * 4294967296 + 6)       // r_info = (idx<<32)|GLOB_DAT
+                _ew_u64(data_bytes, 0)                                // r_addend
+            }
             rr = rr + 1
         }
         let rela_size = n_dyn * 24
@@ -2647,11 +3049,31 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         text_bytes[errno_fn_off + 6] = (edisp >> 24) & 0xff
     }
 
+    // ── CRT1-HANDOFF (LOCUS 2d): resolve the ELF entry ──
+    // Own-stub path: entry_off = 0 (the stub sits at code offset 0). crt_handoff:
+    // resolve the offset of crt1's `_start` .text def (crt1 is obj[0], but resolve
+    // by SYMBOL so a non-zero-offset _start still works) → the dyn serializer sets
+    // e_entry = vaddr_base + code_off + entry_off. Only the n_dyn>0 serializer
+    // consumes it; entry_off stays 0 for the byte-identical static/2seg paths.
+    let mut entry_off = 0
+    if crt_handoff {
+        entry_off = -1
+        let mut _ei = 0
+        while _ei < len(def_names) {
+            if def_names[_ei] == "_start" && def_seg[_ei] == 0 { entry_off = def_off[_ei]; break }
+            _ei = _ei + 1
+        }
+        if entry_off < 0 {
+            eprintln("hexa_ld(elf,ownstart): CRT1-HANDOFF — crt1.o defines no `_start` .text symbol")
+            return 3
+        }
+    }
+
     // Serialize. No data -> single-PT_LOAD round-1 serializer (byte-identical);
     // data present -> two-segment serializer (R-X text + RW rodata/data);
     // dyn present -> 4-phdr dynamic serializer (PT_INTERP + PT_DYNAMIC added).
     if n_dyn > 0 {
-        write_bytes(out_path, serialize_elf_exec_x86_64_dyn(text_bytes, data_bytes, total_bss, interp_off, interp_len, dyn_off, dyn_sz))
+        write_bytes(out_path, serialize_elf_exec_x86_64_dyn(text_bytes, data_bytes, total_bss, interp_off, interp_len, dyn_off, dyn_sz, entry_off))
     } else if has_data {
         write_bytes(out_path, serialize_elf_exec_x86_64_2seg(text_bytes, data_bytes, total_bss))
     } else {
@@ -3130,7 +3552,7 @@ pub fn serialize_elf_exec_x86_64_2seg(text: [Int], data: [Int], bss_size: Int) -
 // the fixed 0x400000 base — gcc `-no-pie` form; e_shnum=0, ld.so uses phdrs+DT).
 // interp_off/dyn_off are blob offsets inside `data`; interp_len/dyn_sz are byte
 // sizes. All congruent with the linker's data_vaddr_base (same phnum=4).
-pub fn serialize_elf_exec_x86_64_dyn(text: [Int], data: [Int], bss_size: Int, interp_off: Int, interp_len: Int, dyn_off: Int, dyn_sz: Int) -> [Int] {
+pub fn serialize_elf_exec_x86_64_dyn(text: [Int], data: [Int], bss_size: Int, interp_off: Int, interp_len: Int, dyn_off: Int, dyn_sz: Int, entry_off: Int) -> [Int] {
     let out: [Int] = []
     let text_size = len(text)
     let data_size = len(data)
@@ -3140,7 +3562,10 @@ pub fn serialize_elf_exec_x86_64_dyn(text: [Int], data: [Int], bss_size: Int, in
     let phnum = 4
     let code_off = elf_header_size + phdr_size * phnum     // 288
     let vaddr_base = 0x400000
-    let entry_vaddr = vaddr_base + code_off
+    // CRT1-HANDOFF (LOCUS 3): e_entry = code base + entry_off. The own-stub path
+    // passes entry_off=0 (stub at code offset 0) → byte-identical to before; the
+    // crt handoff passes the resolved crt1 `_start` .text offset.
+    let entry_vaddr = vaddr_base + code_off + entry_off
     let text_end_file = code_off + text_size
     let data_file_off = text_end_file + ((0x1000 - (text_end_file & 0xfff)) & 0xfff)
     let data_vaddr = vaddr_base + data_file_off
@@ -3825,6 +4250,43 @@ pub fn archive_extract_fixpoint(program_objs: [ElfX86Obj], buf, members: [ArMemb
                     k = k + 1
                 }
 
+                // ── own-link floor-pull (axis-① bug3 · --linker=hexa opt-in) ──
+                // The sanctioned libc floor bodies `hxlcl_<X>` (self/runtime.c
+                // mmap-bump arena etc., wired to the bare libc name <X> via
+                // `#define <X> hxlcl_<X>`) are STB_LOCAL (nm `t`), so the
+                // GLOBAL/WEAK armap `wants` test above NEVER pulls the member
+                // carrying them. The bare floor UND <X> then stays absent from
+                // the linked obj list → the census-side bare→hxlcl alias finds
+                // nothing → n_dyn stays high → PT_INTERP dyn-hybrid → own `_start`
+                // bypasses glibc init → floor call SIGSEGVs at exit (bug3 rc139).
+                // Reference `-static` binds the bare floor name to the archive
+                // body directly (armap only decides membership, not visibility);
+                // the own-link equivalent adds this exception: if a still-NEEDED
+                // bare <X> has a `hxlcl_<X>` body (ANY binding, section != 0) in
+                // this member, pull it. Own-link only — archive_extract_fixpoint
+                // is reached solely via link_elf_x86_64_ownstart_ar; shipping
+                // C-transpile uses system ld and never enters here, so runtime.a
+                // symbol visibility is untouched (byteeq-neutral).
+                if !wants {
+                    let mut ui = 0
+                    while ui < len(und_names) && !wants {
+                        let bx = und_names[ui]
+                        if !_aef_has(def_names, bx) {
+                            let owx = "hxlcl_" + bx
+                            let mut kk = 0
+                            while kk < len(obj.symbols) {
+                                let s2 = obj.symbols[kk]
+                                if s2.section != 0 && _aef_symname(obj, s2.name_offset) == owx {
+                                    wants = true
+                                    break
+                                }
+                                kk = kk + 1
+                            }
+                        }
+                        ui = ui + 1
+                    }
+                }
+
                 if wants {
                     pulled[mi] = true
                     changed = true
@@ -3838,6 +4300,29 @@ pub fn archive_extract_fixpoint(program_objs: [ElfX86Obj], buf, members: [ArMemb
                             if len(nm) > 0 && !_aef_has(def_names, nm) { def_names.push(nm) }
                         }
                         d = d + 1
+                    }
+                    // Mirror the own-link floor-pull into def_names: any still-
+                    // NEEDED bare <X> whose STB_LOCAL `hxlcl_<X>` body this member
+                    // carries is now satisfied (the GLOBAL-def fold above skips it
+                    // — it is LOCAL). Marking <X> defined keeps the append-only
+                    // "still-NEEDED" set correct so no other member is pulled for
+                    // it and the fixpoint terminates cleanly.
+                    let mut fd = 0
+                    while fd < len(und_names) {
+                        let bx = und_names[fd]
+                        if !_aef_has(def_names, bx) {
+                            let owx = "hxlcl_" + bx
+                            let mut fk = 0
+                            while fk < len(obj.symbols) {
+                                let sf = obj.symbols[fk]
+                                if sf.section != 0 && _aef_symname(obj, sf.name_offset) == owx {
+                                    def_names.push(bx)
+                                    break
+                                }
+                                fk = fk + 1
+                            }
+                        }
+                        fd = fd + 1
                     }
                     // Fold this member's new UNDs into und_names.
                     let mut u = 0
