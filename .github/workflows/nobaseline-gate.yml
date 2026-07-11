@@ -950,3 +950,44 @@ jobs:
             exit 1
           fi
           echo "C-4 OK — no libgcc-lowering builtin in runtime emitter SSOTs"
+
+  # axis-2 ON-path gate: HEXA_RT_STDIO_NATIVE=1 compiles the MULTIOBJ print-family
+  # redirect (default-OFF byte-neutral, so the OFF byteeq/faithful lanes never exercise
+  # it — runtime-emit-full-hexa-2: OFF verification can't catch an ON-body defect).
+  # Builds the real ship recipe with the flag ON and asserts the glibc stdio UND
+  # (printf/fprintf/perror/snprintf) actually LEFT runtime.a — proving the redirect
+  # applied + runtime.o exported hxlcl_* + the archive linked. Advisory (not in the
+  # required selfhost-gates-summary set until measured green, per CLAUDE.md).
+  stdio-native-onpath-x86_64:
+    name: stdio-native ON-path (MULTIOBJ redirect, linux-x86_64)
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.linux_label) }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+      - name: release_build with HEXA_RT_STDIO_NATIVE=1 + assert print-family UND dropped
+        shell: bash
+        env:
+          TARGET: linux-x86_64
+          CC: gcc
+          LIBS: "-lm -ldl"
+          GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
+          HEXA_RT_STDIO_NATIVE: "1"
+        run: |
+          set -euo pipefail
+          bash tool/release_build
+          RT="$(find build . -name runtime.a 2>/dev/null | head -1)"
+          [ -f "$RT" ] || { echo "no runtime.a produced"; exit 1; }
+          echo "runtime.a: $RT ($(stat -c%s "$RT") bytes)"
+          U=$(nm "$RT" 2>/dev/null | grep -cE ' U (printf|fprintf|perror|snprintf)$' || true)
+          echo "stdio-native ON: runtime.a U(printf/fprintf/perror/snprintf) = $U (want 0)"
+          if [ "$U" != 0 ]; then
+            echo "FAIL: HEXA_RT_STDIO_NATIVE=1 but $U glibc stdio UND remain — redirect incomplete"
+            echo "  (check S2/S3 _zc_stdio routing in tool/stage_resolve_runtime_a + the HXLCL_STDIO_LINK export)"
+            nm "$RT" | grep -E ' U (printf|fprintf|perror|snprintf)$' | sort -u
+            exit 1
+          fi
+          echo "OK — MULTIOBJ print-family redirected to runtime.o hxlcl_* raw write(2); glibc stdio UND dropped (axis-2)"
