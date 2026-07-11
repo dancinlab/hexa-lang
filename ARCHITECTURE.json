@@ -430,6 +430,13 @@
     "value": "파일→f32 읽기가 값-boxing 되어 RSS 가 파일 크기의 ~10배로 폭발한다 (2026-07-12 summer 실측: read_bytes 1.43GB → RSS 15.3GB; 이전 anima 303M 사례 1.2GB → ~24GB). read_bytes_at 슬라이스로도 peak 이 안 줄어든다 — 반환 바이트도 boxing 되기 때문. 진짜 fix 는 런타임 mmap(RFC025).",
     "threshold": "재발조건: 대용량 f32/가중치 파일을 hexa 로 읽는 잡. 증상 연쇄 — cgroup memory.high 초과 → mem_cgroup_handle_over_high 스로틀 → D-state 무한잔류 → 부모 세션 사망 시 PPID=1 고아가 GB 를 문 채 잔류 → D-state 가 loadavg 에 카운트돼 호스트가 '다운'으로 오진됨(ssh 인증은 통과, 셸 spawn 만 1~3분). 해결: 원격 hexa 잡은 sidecar pool on 으로 실행(orphan fence 가 프로세스그룹 수거); 이미 생긴 고아는 ps PPID=1 + /proc/<pid>/wchan=mem_cgroup_handle_over_high 로 확진 후 kill -9.",
     "source": "self/runtime.c"
+   },
+   {
+    "id": "runtime-core-emit-hexa-1",
+    "state": "pos-conv",
+    "value": "Native-backend escaping-packed arrays (TAG_ARRAY_I64/F64/F32) flowing through a type-erasing boundary (struct field via hexa_map_get / fn-return / generic) reach a BOXED runtime reader (hexa_len/hexa_index_get/hexa_iter_get) that does NOT discriminate the runtime tag -> HX_IS_ARRAY false for a packed tag -> len collapses to 0 / index aborts (tag=12). Poly readers (hexa_arr_poly_len/get) already discriminate; gen2-C carries inseparable {tag,payload} so is immune. Two-backend path-mismatch at the RUNTIME reader layer. MEASURED fix GREEN (aiden 5020100). SECONDARY trap: build_native reuses HEXA_PREBUILT_RUNTIME=build/runtime.a (stale) so emitter edits need a forced stage_resolve_runtime_a rebuild to take.",
+    "threshold": "Recurs whenever a new boxed HexaVal reader/consumer is added without a packed-tag branch. Fix = mirror hexa_arr_poly_* discriminate into EVERY boxed reader (uniform-representation soundness). Blast: _x86_compute_live_ranges empty X86Intervals -> degenerate regalloc -> cc_self miscompiles all array-returns (axis-3 L2). Verify on a FRESH runtime.a (rm build/runtime.a + HEXA_PREBUILT_RUNTIME= stage_resolve_runtime_a), else a stale archive masks the fix.",
+    "source": "self/runtime_core_emit.hexa"
    }
   ]
  },
