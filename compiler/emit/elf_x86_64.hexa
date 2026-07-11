@@ -89,6 +89,13 @@ struct ElfX86Obj {
     data:     [u8],
     bss_size: i64,
     nlocal:   i64,
+    // Per-pool max sh_addralign (min 1) — clang runtime.a members carry
+    // 16-aligned `.rodata.cst16` SSE constants (movdqa #GP if the own-link
+    // drops the alignment). Honored by parse_elf_x86_obj (pool-internal pad)
+    // + link_elf_x86_64_ownstart (per-obj concat pad). own-emit=8.
+    rodata_align: i64,
+    data_align:   i64,
+    bss_align:    i64,
 }
 
 struct ElfRel {
@@ -1660,14 +1667,21 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         obj_bases.push(base)
 
         // Append this obj's data blob: .rodata then .data (bss reserved later).
+        // Honor per-obj pool alignment before each base — clang runtime.a
+        // members carry 16-aligned `.rodata.cst16` SSE constants (movdqa #GP
+        // if the concat shifts them to an odd parity). own-emit objs=8.
+        while (len(data_bytes) % obj.rodata_align) != 0 { data_bytes.push(0) }
         let ro_base = len(data_bytes)
         obj_rodata_base.push(ro_base)
         let mut rri = 0
         while rri < len(obj.rodata) { data_bytes.push(obj.rodata[rri] & 0xff); rri = rri + 1 }
+        while (len(data_bytes) % obj.data_align) != 0 { data_bytes.push(0) }
         let da_base = len(data_bytes)
         obj_data_base.push(da_base)
         let mut ddi = 0
         while ddi < len(obj.data) { data_bytes.push(obj.data[ddi] & 0xff); ddi = ddi + 1 }
+        // .bss pad BEFORE the += (bss defs use (total_bss - obj.bss_size) + val).
+        total_bss = total_bss + ((obj.bss_align - (total_bss % obj.bss_align)) % obj.bss_align)
         total_bss = total_bss + obj.bss_size
 
         let mut di = 0
@@ -2139,6 +2153,11 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         data_bytes.push(0)
         interp_len = len(interp) + 1
     }
+
+    // 16-align the data blob tail so the .bss region base
+    // (data_vaddr_base + len(data_bytes)) is 16-aligned — covers `movaps`
+    // into aligned static .bss buffers. Deterministic; own-link is opt-in.
+    while (len(data_bytes) & 15) != 0 { data_bytes.push(0) }
 
     // Resolve relocs in TRUE vaddr space. text->text reduces to the round-1
     // text-offset delta (vaddr_base+code_off cancels) => no-data path is
@@ -3060,6 +3079,7 @@ pub fn parse_elf_x86_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfX86O
     let mut obj = ElfX86Obj {
         text: [], relocs: [], symbols: [], strtab: [],
         rodata: [], data: [], bss_size: 0, nlocal: 0,
+        rodata_align: 1, data_align: 1, bss_align: 1,
     }
     obj.strtab.push(0)                       // ELF strtab idx 0 = ""
 
@@ -3108,6 +3128,11 @@ pub fn parse_elf_x86_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfX86O
         let slink = _er_u32le(buf, sh + 0x28)
         let sinfo = _er_u32le(buf, sh + 0x2C)
         let sent  = _er_u64le(buf, sh + 0x38)
+        // sh_addralign (sh+0x30) — clang emits `.rodata.cst16` with align=16
+        // (movdqa operand). Honor it pool-internally so a cst16 section that
+        // follows an odd-length `.rodata.str1.1` still lands 16-aligned.
+        let salign0 = _er_u64le(buf, sh + 0x30)
+        let salign  = if salign0 < 1 { 1 } else if salign0 > 4096 { 4096 } else { salign0 }
 
         let mut slot  = 0
         let mut pbase = 0
@@ -3119,17 +3144,23 @@ pub fn parse_elf_x86_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfX86O
                 while k < ssize { obj.text.push(_er_u8(buf, base + soff + k)); k = k + 1 }
             } else if (flags & ELF_SHF_WRITE) != 0 {
                 slot = 4
+                while (len(obj.data) % salign) != 0 { obj.data.push(0) }
+                if salign > obj.data_align { obj.data_align = salign }
                 pbase = len(obj.data)
                 let mut k = 0
                 while k < ssize { obj.data.push(_er_u8(buf, base + soff + k)); k = k + 1 }
             } else {
                 slot = 3
+                while (len(obj.rodata) % salign) != 0 { obj.rodata.push(0) }
+                if salign > obj.rodata_align { obj.rodata_align = salign }
                 pbase = len(obj.rodata)
                 let mut k = 0
                 while k < ssize { obj.rodata.push(_er_u8(buf, base + soff + k)); k = k + 1 }
             }
         } else if stype == ELF_SHT_NOBITS && (flags & ELF_SHF_ALLOC) != 0 {
             slot = 5
+            obj.bss_size = obj.bss_size + ((salign - (obj.bss_size % salign)) % salign)
+            if salign > obj.bss_align { obj.bss_align = salign }
             pbase = obj.bss_size
             obj.bss_size = obj.bss_size + ssize
         }
@@ -4240,6 +4271,9 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
         data:     [],
         bss_size: 0,
         nlocal:   0,
+        rodata_align: 8,   // own-emit pool contract (8-align, no SSE consts)
+        data_align:   8,
+        bss_align:    8,
     }
     // ELF strtab convention: index 0 is the empty string (NUL terminator).
     obj.strtab.push(0)
