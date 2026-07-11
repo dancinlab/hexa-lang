@@ -1,0 +1,138 @@
+#!hexa strict
+// gmtime_native_emit.hexa
+//   B9.C (.c-text · #1850 pattern) — gmtime_native.c source emitter.
+//
+// RFC061 #29 axis-② gmtime_r civil-from-days leaf · self/native runtime_core-standalone .c-text · emitter-SSOT graduation
+//
+// Emits gmtime_native.c VERBATIM. The hexa build regenerates the .c from
+// this emitter before compiling, so the emitter becomes the SSOT and the
+// .c becomes a build artifact. Byte-identity (the tool/regen_gmtime_native_o.sh
+// awk un-escape round-trip reproduces the .c BYTE-FOR-BYTE) ⇒ identical .o/.so
+// ⇒ PERF UNCHANGED. Default-OFF ⇒ runtime.a byte-identical.
+//
+// 1:1 clone of self/native/timegm_native_emit.hexa (#4352 timegm graduation) —
+// this is the gmtime_r (epoch→civil) INVERSE of that timegm (civil→epoch) leaf.
+// The C body is the VERBATIM in-blob hxlcl_gmtime_r (Howard Hinnant
+// civil-from-days, pure integer, "no libc") lifted to a strong-external override.
+//
+// Invocation:  hexa-run gmtime_native_emit.hexa <output-path>
+// Default output path (if argv missing): "gmtime_native.c" in cwd.
+
+let MODULE_NAME = "gmtime_native_emit"
+
+fn _flush_gmtime_native(out_path: str, buf: str) {
+    let _ = exec("cat >> \"" + out_path + "\" <<'GEN_gmtime_native_EOF'\n" + buf + "GEN_gmtime_native_EOF")
+}
+
+fn emit_gmtime_native_to(out_path: str) {
+    // Verbatim content of gmtime_native.c, streamed in size-bounded chunks
+    // (see generator note on the per-command exec limit).
+    let _ = exec("printf '' > \"" + out_path + "\"")
+    let mut buf = ""
+    buf = buf + "// self/native/gmtime_native.c — ING #29 libc-free re-architecture ladder, R1 (axis-②).\n"
+    buf = buf + "//\n"
+    buf = buf + "// α (native-compute) pure-leaf: replaces the runtime substrate's RAW libc\n"
+    buf = buf + "// `gmtime_r()` reference with a hexa-native integer calendar computation. No\n"
+    buf = buf + "// syscall, no ABI surface — Unix time_t → broken-down UTC tm{year,mon,mday,\n"
+    buf = buf + "// hour,min,sec,wday,yday}. The exact INVERSE of self/native/timegm_native.c.\n"
+    buf = buf + "//\n"
+    buf = buf + "// ── Why a delegate (NOT a frozen-blob edit) ──────────────────────────────────\n"
+    buf = buf + "// The FROZEN runtime.c blob (151c52c8) already routes its 4 gmtime_r call sites\n"
+    buf = buf + "// through an in-blob hexa-native `hxlcl_gmtime_r` (`#define gmtime_r hxlcl_...`).\n"
+    buf = buf + "// But the STANDALONE runtime_core.c translation unit — compiled under the opt-in\n"
+    buf = buf + "// HEXA_ZEROC_RTCORE_SHIM_TU measurement path via self/runtime_core_sysheaders.h,\n"
+    buf = buf + "// which re-supplies RAW <time.h> — still references libc `gmtime_r` at one site:\n"
+    buf = buf + "//   self/runtime_core.c:544 (emitted by self/runtime_core_emit.hexa:580) —\n"
+    buf = buf + "//     `gmtime_r(&now, &tmv);`\n"
+    buf = buf + "// The blob is IMMUTABLE (faithful byte-identity gate vs 151c52c8) and the\n"
+    buf = buf + "// sysheaders shim deliberately re-supplies raw libc, so this site cannot be\n"
+    buf = buf + "// redirected from inside either.\n"
+    buf = buf + "//\n"
+    buf = buf + "// Instead we follow the #3798 fmod→rt_fmod / timegm_native.c (#4352) pattern:\n"
+    buf = buf + "// supply a STRONG EXTERNAL definition of `gmtime_r` in a SEPARATE seed object that\n"
+    buf = buf + "// the DEFAULT build never compiles (byte-identical OFF). When opt-in\n"
+    buf = buf + "// (-DHEXA_RT_GMTIME_NATIVE) the seed .o is linked ahead of libc, so the standalone\n"
+    buf = buf + "// runtime_core.c's raw `gmtime_r(&now,&tmv)` reference resolves to THIS definition\n"
+    buf = buf + "// and the libc `gmtime_r` symbol is dropped from the final link — one symbol off\n"
+    buf = buf + "// the -lc ladder, with zero edits to the immutable frozen blob.\n"
+    buf = buf + "//\n"
+    buf = buf + "// ── Reference-match (white-box port) ─────────────────────────────────────────\n"
+    buf = buf + "// Body is the VERBATIM in-blob `hxlcl_gmtime_r` (self/runtime_emit_full.hexa,\n"
+    buf = buf + "// runtime.c) — Howard Hinnant's public-domain civil-from-days algorithm, pure\n"
+    buf = buf + "// integer, floor-toward-−inf for negative epochs. This is the epoch→civil INVERSE\n"
+    buf = buf + "// of timegm_native.c's musl __tm_to_secs civil→epoch port. Cross-checks the repo's\n"
+    buf = buf + "// own native calendar (stdlib/time/civil.hexa) and libc gmtime_r bit-for-bit.\n"
+    buf = buf + "//\n"
+    if buf.len() > 65536 { _flush_gmtime_native(out_path, buf); buf = "" }
+    buf = buf + "// The pure compute (hxlcl_gmtime_r_compute) is ALWAYS defined so the standalone\n"
+    buf = buf + "// test harness (test/native_build/gmtime_native_test.c) can diff it field-by-field\n"
+    buf = buf + "// against libc gmtime_r without pulling in the symbol override; the override\n"
+    buf = buf + "// `gmtime_r` is gated behind -DHEXA_RT_GMTIME_NATIVE.\n"
+    buf = buf + "\n"
+    buf = buf + "#include <time.h>\n"
+    buf = buf + "#include <stdint.h>\n"
+    buf = buf + "\n"
+    buf = buf + "// hexa-native gmtime_r core — UTC civil time from a Unix epoch, no libc. Uses\n"
+    buf = buf + "// Howard Hinnant's public-domain civil-from-days algorithm. Fills the struct tm\n"
+    buf = buf + "// fields gmtime_r populates (year/mon/mday/hour/min/sec + wday/yday/isdst).\n"
+    buf = buf + "// ALWAYS defined so the standalone verifier can diff it against libc without the\n"
+    buf = buf + "// symbol override. Result is bit-exact with glibc/musl gmtime_r for UTC.\n"
+    buf = buf + "struct tm *hxlcl_gmtime_r_compute(const time_t *tp, struct tm *out) {\n"
+    buf = buf + "    long long t = (long long)(*tp);\n"
+    buf = buf + "    long long days = t / 86400;\n"
+    buf = buf + "    long long secs = t % 86400;\n"
+    buf = buf + "    if (secs < 0) { secs += 86400; days -= 1; }   // floor toward -inf\n"
+    buf = buf + "    long long z = days + 719468;\n"
+    buf = buf + "    long long era = (z >= 0 ? z : z - 146096) / 146097;\n"
+    buf = buf + "    unsigned doe = (unsigned)(z - era * 146097);                 // [0,146096]\n"
+    buf = buf + "    unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0,399]\n"
+    buf = buf + "    long long y = (long long)yoe + era * 400;\n"
+    buf = buf + "    unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);      // [0,365]\n"
+    buf = buf + "    unsigned mp = (5 * doy + 2) / 153;                           // [0,11]\n"
+    buf = buf + "    unsigned d = doy - (153 * mp + 2) / 5 + 1;                   // [1,31]\n"
+    buf = buf + "    unsigned m = mp < 10 ? mp + 3 : mp - 9;                      // [1,12]\n"
+    if buf.len() > 65536 { _flush_gmtime_native(out_path, buf); buf = "" }
+    buf = buf + "    y += (m <= 2);\n"
+    buf = buf + "    struct tm *g = out;\n"
+    buf = buf + "    g->tm_year = (int)(y - 1900);\n"
+    buf = buf + "    g->tm_mon  = (int)(m - 1);\n"
+    buf = buf + "    g->tm_mday = (int)d;\n"
+    buf = buf + "    g->tm_hour = (int)(secs / 3600);\n"
+    buf = buf + "    g->tm_min  = (int)((secs % 3600) / 60);\n"
+    buf = buf + "    g->tm_sec  = (int)(secs % 60);\n"
+    buf = buf + "    int wd = (int)((days % 7 + 4) % 7); if (wd < 0) wd += 7;     // 1970-01-01 = Thu(4)\n"
+    buf = buf + "    g->tm_wday = wd;\n"
+    buf = buf + "    static const int mdays[12] = {31,28,31,30,31,30,31,31,30,31,30,31};\n"
+    buf = buf + "    int leap = ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0);\n"
+    buf = buf + "    int yd = (int)d - 1;\n"
+    buf = buf + "    for (unsigned i = 0; i + 1 < m; i++) { yd += mdays[i]; if (i == 1 && leap) yd += 1; }\n"
+    buf = buf + "    g->tm_yday = yd;\n"
+    buf = buf + "    g->tm_isdst = 0;\n"
+    buf = buf + "    return out;\n"
+    buf = buf + "}\n"
+    buf = buf + "\n"
+    buf = buf + "#ifdef HEXA_RT_GMTIME_NATIVE\n"
+    buf = buf + "// Strong external definition: when this seed object is linked (opt-in), it\n"
+    buf = buf + "// satisfies the standalone runtime_core.c's raw `gmtime_r` reference ahead of\n"
+    buf = buf + "// libc, dropping the libc gmtime_r symbol from the final link. Signature matches\n"
+    buf = buf + "// the POSIX <time.h> declaration (top-level restrict qualifiers are dropped in the\n"
+    buf = buf + "// function type, so this is compatible with glibc/musl's `__restrict` prototype).\n"
+    buf = buf + "struct tm *gmtime_r(const time_t *tp, struct tm *out) {\n"
+    buf = buf + "    return hxlcl_gmtime_r_compute(tp, out);\n"
+    buf = buf + "}\n"
+    buf = buf + "#endif\n"
+    if buf.len() > 0 { _flush_gmtime_native(out_path, buf) }
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "gmtime_native.c" }
+    emit_gmtime_native_to(out_path)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[gmtime_native_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[gmtime_native_emit] wrote " + out_path)
+    exit(0)
+}
