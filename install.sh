@@ -21,6 +21,17 @@
 #                   are unaffected. The musl asset is a SUPPLEMENTARY target
 #                   shipped alongside the per-target tarball; if it is absent the
 #                   installer falls back to the dynamic glibc asset automatically.
+#   HEXA_CROSS_RUNTIME  OPT-IN (default unset = no-op). Space-separated aprime
+#                   target triple(s) whose arch-matched runtime.a to ALSO pull, so
+#                   `HEXA_BUILD_NATIVE_CROSS=1 hexa build --target=<t>` links the
+#                   own-start-static cross artifact with ZERO clang/zig (axis-①
+#                   rung-2). Recognised: x86_64-linux-gnu (the only live target
+#                   today) · arm64-linux-gnu · arm64-apple-darwin. Each triple's
+#                   `runtime.<triple>.a` release asset (SUPPLEMENTARY) is fetched to
+#                   <hxroot>/build/runtime.<triple>.a and arch-verified (od magic);
+#                   a missing/mismatched asset is skipped (install still succeeds —
+#                   the cross build then zig-cc falls back). Unset = byte-identical
+#                   to the prior installer (no extra download, no layout change).
 #   (GPU/CUDA is AUTO-DETECTED — there is NO HEXA_CUDA flag; see the CUDA note below.)
 #
 # ── GPU (CUDA): SELF-CONTAINED, AUTO-DETECTED — do NOT hand-roll ─────────────
@@ -70,6 +81,26 @@ detect_target() {
 
 need_cmd() {
     command -v "$1" >/dev/null 2>&1 || { red "missing: $1"; exit 1; }
+}
+
+# axis-① rung-2 cross-runtime pull: verify a pulled runtime.<triple>.a really
+# holds the expected target arch before it is kept, mirroring self/main.hexa's
+# consumer _runtime_a_arch_ok EXACTLY (od magic on the first archive member —
+# toolchain-agnostic; a darwin host has no ELF nm). Returns 0 = arch matches.
+#   ELF64 = "7f 45 4c 46 02" + e_machine (x86_64 = "3e 00", arm64 = "b7 00");
+#   Mach-O arm64 = "cf fa ed fe".
+_cross_runtime_arch_ok() {
+    local _ra="$1" _tri="$2" _mem _sig
+    [ -s "$_ra" ] || return 1
+    _mem="$(ar t "$_ra" 2>/dev/null | head -1)"
+    [ -n "$_mem" ] || return 1
+    _sig="$(ar p "$_ra" "$_mem" 2>/dev/null | od -An -tx1 -N20 | tr -s ' ')"
+    case "$_tri" in
+        x86_64-linux-gnu)   echo "$_sig" | grep -q '7f 45 4c 46 02' && echo "$_sig" | grep -q ' 3e 00' ;;
+        arm64-linux-gnu)    echo "$_sig" | grep -q '7f 45 4c 46 02' && echo "$_sig" | grep -q ' b7 00' ;;
+        arm64-apple-darwin) echo "$_sig" | grep -q 'cf fa ed fe' ;;
+        *) return 1 ;;
+    esac
 }
 
 # Decide whether the linux-x86_64 install should prefer the statically-linked,
@@ -188,6 +219,15 @@ install_hexa() {
             echo "${base}/download/${tag}/${1}.tar.gz"
         fi
     }
+    # Raw (non-tarball) asset URL — the arch-tagged cross runtime.<triple>.a assets
+    # ship as bare archives, not tarballs, so they need the extension-free form.
+    _raw_asset_url() {
+        if [ "$tag" = "latest" ]; then
+            echo "${base}/latest/download/${1}"
+        else
+            echo "${base}/download/${tag}/${1}"
+        fi
+    }
     url="$(_asset_url "$asset")"
 
     tmp="$(mktemp -d)"
@@ -285,6 +325,41 @@ EOF
         mkdir -p "$HX_BIN/build"
         cp -R "$src/build/." "$HX_BIN/build/"
         chmod -R u+rwX,go+rX "$HX_BIN/build"
+    fi
+
+    # axis-① rung-2b (cross-consumable runtime.a) — OPT-IN, default no-op. When
+    # HEXA_CROSS_RUNTIME names one or more aprime target triple(s), pull each
+    # arch-matched `runtime.<triple>.a` release asset into
+    # $HX_BIN/build/runtime.<triple>.a — the EXACT path self/main.hexa's cross-build
+    # consumer (_resolve_target_runtime_a, merged in #4862) probes, so it links the
+    # own-start-static cross artifact with zero clang/zig. The asset is
+    # SUPPLEMENTARY (release.yml emits it per native job): a missing OR
+    # arch-mismatched archive is discarded and the install still succeeds — the
+    # cross build then silently zig-cc falls back (release-safe). When the env is
+    # UNSET this whole block is skipped → the default install path is byte-identical
+    # to the prior installer (no extra fetch, no new file in build/).
+    if [ -n "${HEXA_CROSS_RUNTIME:-}" ]; then
+        mkdir -p "$HX_BIN/build"
+        for _xtri in $HEXA_CROSS_RUNTIME; do
+            case "$_xtri" in
+                x86_64-linux-gnu|arm64-linux-gnu|arm64-apple-darwin) ;;
+                *) dim "  ⚠ HEXA_CROSS_RUNTIME: unknown triple '$_xtri' → skipped"; continue ;;
+            esac
+            _xurl="$(_raw_asset_url "runtime.${_xtri}.a")"
+            _xdst="$HX_BIN/build/runtime.${_xtri}.a"
+            dim "  fetching cross runtime.a $_xurl"
+            if curl -fsSL "$_xurl" -o "$_xdst" 2>/dev/null; then
+                if _cross_runtime_arch_ok "$_xdst" "$_xtri"; then
+                    green "  ✓ cross runtime.a → build/runtime.${_xtri}.a"
+                else
+                    red "  ⚠ runtime.${_xtri}.a arch-mismatch → discarded"
+                    rm -f "$_xdst"
+                fi
+            else
+                rm -f "$_xdst"
+                dim "  ⚠ runtime.${_xtri}.a not published (supplementary asset) → cross build will zig-cc fallback"
+            fi
+        done
     fi
     # Place the shipped precompile cache at the install dir. The tarball carries
     # release/precompile/hexa_run.<key> (stage_precompile_package), and the

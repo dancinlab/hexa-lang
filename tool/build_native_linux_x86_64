@@ -187,6 +187,14 @@ $CC $_zc_nostart "$T/hi.o" build/runtime.a -o "$T/hi" -lm -ldl 2>&1 | grep -iE '
 OUT="$("$T/hi")"; RC=$?
 log "stage5: NATIVE RUN — stdout=[$OUT] rc=$RC"
 if [ "$OUT" != "hi" ] || [ "$RC" != "7" ]; then
+    # hygiene: empty stdout + correct rc on a -nostartfiles own-start link almost always
+    # means a STALE pre-shim runtime.a (glibc-buffered printf, UND printf/fflush) — in a
+    # fresh runtime.a print lowers to a raw hxlcl_write(2) (self/runtime_emit_full.hexa
+    # macro-redirects printf/fputs/fflush -> hxlcl_*), so it survives raw exit_group. Dump
+    # the runtime.a UND surface so a stale archive self-identifies instead of masquerading
+    # as a codegen defect (rebuild via tool/stage_resolve_runtime_a).
+    _undp=$(nm build/runtime.a 2>/dev/null | grep -cE ' U (printf|fflush|puts|fwrite)$' || true)
+    log "stage5 HYGIENE: runtime.a UND(printf/fflush/puts/fwrite)=$_undp (non-zero => STALE pre-shim runtime.a, rebuild via tool/stage_resolve_runtime_a; 0 => genuine native-emit print regression)"
     fail run "expected stdout=hi rc=7, got stdout=[$OUT] rc=$RC" 2
 fi
 log "stage5: PASS — native ELF .o emitted + linked + RAN natively (hi / rc 7)"

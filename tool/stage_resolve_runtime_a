@@ -44,6 +44,21 @@ CFLAGS="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
 # Linux-intent; the scaffold's own #if __x86_64__/__aarch64__ arch-gates the asm (harmless elsewhere).
 _zc_own_def=""
 { [ "${HEXA_ZEROC_OWN_START:-1}" = "1" ] && [ "$(uname -s 2>/dev/null)" = "Linux" ]; } && _zc_own_def="-DHEXA_ZEROC_OWN_START"   # FLIP-7 flip-D: default-ON (opt-out =0). Linux guard is load-bearing — the own _start asm (runtime_emit_full.hexa) is arch-gated #if __aarch64__ which is TRUE on darwin-arm64, so an unguarded -D byte-changes darwin runtime.a
+# axis-2 MULTIOBJ print-family redirect (PR-2 flip: DEFAULT-ON · opt-out HEXA_RT_STDIO_NATIVE=0).
+# ONLY the MULTIOBJ pair (runtime.o exports hxlcl_printf/fprintf/perror/snprintf via inline #ifdef ·
+# runtime_core.o redirects to them via sysheaders) — NOT the single-TU Case-A runtime.o, so the
+# single-TU byteeq lane stays byte-identical. Native-canonical polarity: MULTIOBJ print = own raw
+# write(2), matching single-TU; drops the printf/fprintf/perror/snprintf glibc-stdio UND from the
+# ship runtime.a (axis-2) + closes the own-start+explicit-exit buffered-print loss (measured summer
+# #4850/#4852; ON-path smoke GREEN #4853). Opt-out (=0) restores glibc-buffered stdio.
+_zc_stdio=""
+[ "${HEXA_RT_STDIO_NATIVE:-1}" != "0" ] && _zc_stdio="-DHEXA_RT_STDIO_NATIVE"   # PR-2 flip: default-ON (opt-out =0). arch-neutral (pure-C redirect, no asm gate unlike own-start), applied MULTIOBJ-only (S2/S3/CUDA) so single-TU byteeq lane unaffected.
+# axis-③ own-link defense-in-depth (default-OFF, byte-neutral OFF): exit-time stdio flush in hxlcl_exit.
+# NO-OP in the default single-TU runtime (print = raw hxlcl_write(2)); closes the real gap in
+# HEXA_RT_MULTIOBJ (separate-TU runtime_core.o keeps glibc-buffered stdio) where own _start + raw
+# exit_group runs no _IO_cleanup. Flip default-ON only after byteeq 3-target + shipping smoke GREEN.
+_zc_exit_flush=""
+[ "${HEXA_ZEROC_EXIT_FLUSH:-0}" = "1" ] && _zc_exit_flush="-DHEXA_ZEROC_EXIT_FLUSH"
 ROOT="$PWD"
 RA="$ROOT/build/runtime.a"
 mkdir -p build
@@ -3176,12 +3191,12 @@ build_runtime_a_from_source() {
         #      archive-internal resolution). NO HEXA_HAS_HEXA_RT_STDLIB (matches the
         #      default single-TU object; setting it would extern rt_log/… → multidef).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S2]: compile build/runtime.o (include-drop, HI-tier inline)…"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self $_heap_def -c self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self $_heap_def -c self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
         # (S3) runtime_core.o — standalone TU (sysheaders prelude), runtime_hi_gen.c
         #      KEPT (supplies the HI-tier rt_* C bodies). SAME seed -D set. NO
         #      HEXA_HAS_HEXA_RT_STDLIB (keeps those bodies inline, not externed).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S3]: compile build/runtime_core.o (standalone TU, runtime_hi_gen.c kept)…"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE $_mo_rtcore_def $_rng_strcmp_def -I self -include self/runtime_core_sysheaders.h $_heap_def -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE $_mo_rtcore_def $_rng_strcmp_def -I self -include self/runtime_core_sysheaders.h $_heap_def -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
         # (S4) hxlcl_shim.o — libc-delegate hxlcl_* sibling TU.
         # own-start #29 coherence: $_zc_own_def MUST flow here too — without it the
         # shim's hxlcl_atexit stays the glibc-atexit delegate (U atexit), and under
@@ -3244,7 +3259,7 @@ build_runtime_a_from_source() {
             local _mo_cinc="$_mo_cuda_home/targets/x86_64-linux/include"
             [ -d "$_mo_cinc" ] || _mo_cinc="$_mo_cuda_home/include"
             echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA: build SEPARATE build/runtime.cuda.a (include-drop multi-object + cuda objects)"
-            $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
+            $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
             ar rcs build/runtime.cuda.a build/runtime_cuda_host.o build/runtime_core.o $_mo_hxlcl_members $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
             ls -la build/runtime.cuda.a
             local _mo_cseed _mo_cm
@@ -3264,7 +3279,7 @@ build_runtime_a_from_source() {
         echo "$RA"
         return 0
     fi
-    $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -I self $_heap_def -c self/runtime.c -o build/runtime.o
+    $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_exit_flush -I self $_heap_def -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     if [ "${HEXA_CUDA:-0}" = "1" ] && [ -f build/runtime_cuda.o ] && [ -f build/runtime_cuda_dlink.o ]; then
@@ -3272,7 +3287,7 @@ build_runtime_a_from_source() {
         local _cinc="$_cuda_home/targets/x86_64-linux/include"
         [ -d "$_cinc" ] || _cinc="$_cuda_home/include"
         echo "[stage_resolve_runtime_a] CUDA-R1: building SEPARATE consumer archive build/runtime.cuda.a (runtime.c -DHEXA_CUDA -I$_cinc + runtime_cuda.o + runtime_cuda_dlink.o); toolchain keeps the CPU build/runtime.a (libcuda-free, GPU-less-host-runnable)"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_CUDA -I "$_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_exit_flush -DHEXA_CUDA -I "$_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o
         ar rcs build/runtime.cuda.a build/runtime_cuda_host.o $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
         ls -la build/runtime.cuda.a
         # ING-35 #2 — fail loudly if the CUDA archive dropped a native-core seed the
@@ -3368,6 +3383,52 @@ sync_runtime_a_to_installed_link() {
         || echo "[stage_resolve_runtime_a] installed-runtime-sync WARN: cp $RA → $installed failed (permission?) — consumer may still link a stale installed runtime.a" >&2
 }
 
+# axis-① rung-2b (cross-consumable runtime.a asset). When a release job sets
+# TARGET, emit an arch-tagged copy build/runtime.<aprime-triple>.a of the freshly
+# built build/runtime.a; release.yml uploads that copy as a standalone
+# supplementary GitHub-release asset (per job, native arch), install.sh opt-in
+# pulls it to <hxroot>/build/runtime.<triple>.a, and self/main.hexa's cross-build
+# consumer (_resolve_target_runtime_a / _runtime_a_arch_ok) resolves + re-verifies
+# it there. The triple filename == the exact path the merged consumer already
+# probes, so the asset name is identical end-to-end (no TARGET↔triple mapping seam).
+#
+# TARGET is a RELEASE-CI-ONLY env — it is UNSET at user install time, so this is a
+# strict no-op on the default install path (runtime.a bytes + install layout
+# byte-identical). Unknown / musl TARGET → skipped (no cross asset for those).
+#
+# Anti-vacuous magic self-verify mirrors self/main.hexa _runtime_a_arch_ok exactly
+# (od on the first archive member, toolchain-agnostic — no ELF nm needed on
+# darwin): ELF64 = "7f 45 4c 46 02" + e_machine (x86_64 = "3e 00", arm64 = "b7 00");
+# Mach-O arm64 = "cf fa ed fe". This runs only on the native release runner where
+# the arch always matches, so a mismatch means a corrupt/empty archive. It is a
+# WARN + skip-emit (NOT a release-abort): rung-2b is additive/opt-in and must never
+# regress a release, and install.sh + the consumer BOTH re-verify the magic before
+# use, so a missing/rejected cross asset just falls through to the safe zig-cc path.
+emit_cross_arch_runtime_a() {
+    [ -n "${TARGET:-}" ] || return 0
+    [ -f "$RA" ] || return 0
+    local _tri="" _mem _sig _ok=0
+    case "$TARGET" in
+        linux-x86_64) _tri="x86_64-linux-gnu" ;;
+        linux-arm64)  _tri="arm64-linux-gnu" ;;
+        darwin-arm64) _tri="arm64-apple-darwin" ;;
+        *) return 0 ;;   # musl / unknown target: no cross-consumable asset
+    esac
+    _mem="$(ar t "$RA" 2>/dev/null | head -1)"
+    _sig="$(ar p "$RA" "$_mem" 2>/dev/null | od -An -tx1 -N20 | tr -s ' ')"
+    case "$_tri" in
+        x86_64-linux-gnu)   echo "$_sig" | grep -q '7f 45 4c 46 02' && echo "$_sig" | grep -q ' 3e 00' && _ok=1 ;;
+        arm64-linux-gnu)    echo "$_sig" | grep -q '7f 45 4c 46 02' && echo "$_sig" | grep -q ' b7 00' && _ok=1 ;;
+        arm64-apple-darwin) echo "$_sig" | grep -q 'cf fa ed fe' && _ok=1 ;;
+    esac
+    if [ "$_ok" != 1 ]; then
+        echo "[stage_resolve_runtime_a] rung-2b WARN: build/runtime.a first member is not $_tri arch (magic=[$_sig]) — cross-consumable asset NOT emitted (release integrity preserved; consumer will zig-cc fallback)" >&2
+        return 0
+    fi
+    cp -f "$RA" "$ROOT/build/runtime.${_tri}.a"
+    echo "[stage_resolve_runtime_a] rung-2b: emitted arch-verified cross-consumable build/runtime.${_tri}.a for standalone asset upload"
+}
+
 # Assemble the arch-matched native rt_hi seed (sets HEXA_ZEROC_RT_HI=1 on the
 # platforms that have one) BEFORE either branch — restore_frozen_seeds reads
 # HEXA_ZEROC_RT_HI to decide whether to synthesize runtime_hi_gen.c at all.
@@ -3453,6 +3514,7 @@ if [ -f self/runtime.c ]; then
     echo "stage_resolve_runtime_a: seeds present — building runtime.a from source"
     build_runtime_a_from_source || exit 1   # convergence selfemit-smoke-4591-codrop-default-mismatch: a Case-B FATAL (return 1) must NOT be swallowed (set -uo pipefail has no -e) into exit 0 + a stale runtime.a
     sync_runtime_a_to_installed_link
+    emit_cross_arch_runtime_a   # axis-① rung-2b: TARGET-gated (release CI only) arch-tagged asset; no-op at user install
     exit 0
 fi
 
@@ -3480,6 +3542,7 @@ echo "stage_resolve_runtime_a: self/runtime.c ABSENT — restoring frozen seeds 
 if bash tool/restore_frozen_seeds && [ -f self/runtime.c ]; then
     build_runtime_a_from_source || exit 1   # convergence selfemit-smoke-4591-codrop-default-mismatch: a Case-B FATAL (return 1) must NOT be swallowed (set -uo pipefail has no -e) into exit 0 + a stale runtime.a
     sync_runtime_a_to_installed_link
+    emit_cross_arch_runtime_a   # axis-① rung-2b: TARGET-gated (release CI only) arch-tagged asset; no-op at user install
     exit 0
 fi
 
@@ -3495,6 +3558,7 @@ if gh release download edge --repo "${GITHUB_REPOSITORY:-dancinlab/hexa-lang}" \
     if [ -n "$PRIOR_RA" ]; then
         cp "$PRIOR_RA" "$RA"
         ls -la "$RA"
+        emit_cross_arch_runtime_a   # axis-① rung-2b: TARGET-gated (release CI only) arch-tagged asset; no-op at user install
         echo "$RA"
         exit 0
     fi

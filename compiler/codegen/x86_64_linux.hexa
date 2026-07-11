@@ -1421,6 +1421,19 @@ fn _x86_tag_resolve(o: Operand, rm: X86RegMap, scratch: string) {
                          "tag const_bool = TAG_BOOL"))
         return
     }
+    // A `nil` literal (`const_void`) carries TAG_VOID=4, NOT the operand-kind
+    // default 0. x86_64 parity with arm64_darwin.hexa `_hv_load` const_void case
+    // (TAG_VOID=4, payload 0; pairs with _const_void_op() in hir_to_mir.hexa).
+    // Without this the void-sentinel 1-arg forms (a.slice(i)/s.substr(i)/m.count())
+    // lowered their nil arg to TAG_INT and every boxed reader / HX_IS_VOID probe
+    // saw TAG_INT=0, reading a wrong value on x86. The PAYLOAD side is already
+    // correct — `_x86_op_resolve` falls through to `imm 0` for const_void, matching
+    // arm64's payload #0.
+    if o.kind == "const_void" {
+        _x86_buf.push(_x86_instr2("mov", _x86_op_reg(scratch), _x86_op_imm(4),
+                         "tag const_void = TAG_VOID"))
+        return
+    }
     // const_int / untracked → TAG_INT = 0
     _x86_buf.push(_x86_instr2("mov", _x86_op_reg(scratch), _x86_op_imm(0),
                      "tag default = TAG_INT"))
@@ -5602,6 +5615,17 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
     if !_x86_is_naked {
     _x86_buf.push(_x86_instr1("push", _x86_op_reg("rbp"), "prologue: save rbp"))
     _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rbp"), _x86_op_reg("rsp"), "prologue: set rbp"))
+    // Entry argv wiring — mirror of arm64_darwin.hexa (fn_name=="main"). The
+    // C-transpile path emits `int main(argc,argv){ hexa_set_args(argc,argv); … }`
+    // (self/codegen.hexa:1551); the direct-native path must too, else every
+    // native-emitted program sees an empty args() ("missing SOURCE.hexa" — the
+    // self-emit run-correctness blocker). rsp is 16B-aligned here (post push rbp),
+    // rdi=argc/rsi=argv intact (_start unpacks them, elf_x86_64.hexa:1596/#4828),
+    // and callee-saves are pushed AFTER (hexa_set_args preserves rbx/r12-r15).
+    if mf.name == "main" {
+        _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_set_args"),
+                         "entry: wire argc/argv -> hexa_set_args"))
+    }
     // PAIR-MODEL — preserve the callee-saved allocation pool (rbx/r12-r15) for
     // the caller (ABI contract; the C harness and any C caller require it). The
     // 5 pushes + 8-byte pad = 48 bytes (_X86_CALLEE_SAVE_BYTES, a 16-byte

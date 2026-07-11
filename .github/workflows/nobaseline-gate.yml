@@ -916,3 +916,121 @@ jobs:
         run: |
           set -euo pipefail
           bash tool/routec_cabi_smoke_linux.sh
+
+  # ── C-4 libgcc-lowering builtin forbid (source lint · target-independent) ────
+  # WHY: __popcountdi2 (the axis-③ cc-self-bin own-link RUN wall, #4845) came from
+  # __builtin_popcountll in the emitted-C runtime substrate — gcc lowers such
+  # builtins to a libgcc soft-int helper CALL, which the -nostdlib own-link (no
+  # -lgcc) leaves undefined → rc127 at the dynamic loader. It leaked SILENTLY to a
+  # paid pod because no CI gate scanned the emitted-C for this class (symcensus C-1
+  # is hexa-level only; the dynsym C-3 gate is skip-if-absent and does not run the
+  # own-emit+own-link path). This gate FAILS LOUDLY at PR time on any such builtin
+  # in the runtime emitter SSOTs. CALL-SHAPED (requires `(`) so a legitimate
+  # comment mention — runtime_emit_full.hexa names it in "NOT __builtin_popcountll)"
+  # — does NOT false-trip. Free · <5 s · BLOCKING · target-independent (a source
+  # lint, so it catches the leak on every target at once).
+  libgcc-forbid:
+    name: C-4 libgcc-lowering builtin forbid (source lint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: forbid libgcc-lowering builtins in runtime emitter SSOTs
+        shell: bash
+        run: |
+          set -euo pipefail
+          hits=$(grep -nE '__builtin_(popcount|parity|clz|ctz|bswap|ffs)[a-z]*\(|__builtin_(mul|add|sub)_overflow\(|__int128' \
+            self/runtime_emit_full.hexa self/runtime_core_emit.hexa self/runtime_core_hxlcl_shim_emit.hexa || true)
+          if [ -n "$hits" ]; then
+            echo "$hits"
+            echo "FAIL: libgcc-lowering builtin in the emitted-C runtime substrate."
+            echo "gcc lowers it to a libgcc soft-int call left UNDEFINED by the -nostdlib"
+            echo "own-link (no -lgcc) → rc127 at ld.so on cc-self-bin (see #4845)."
+            echo "Fix: emit a portable C body, or provide the helper as a runtime def."
+            exit 1
+          fi
+          echo "C-4 OK — no libgcc-lowering builtin in runtime emitter SSOTs"
+
+  # axis-2 ON-path gate: HEXA_RT_STDIO_NATIVE=1 compiles the MULTIOBJ print-family
+  # redirect (default-OFF byte-neutral, so the OFF byteeq/faithful lanes never exercise
+  # it — runtime-emit-full-hexa-2: OFF verification can't catch an ON-body defect).
+  # Builds the real ship recipe with the flag ON and asserts the glibc stdio UND
+  # (printf/fprintf/perror/snprintf) actually LEFT runtime.a — proving the redirect
+  # applied + runtime.o exported hxlcl_* + the archive linked. Advisory (not in the
+  # required selfhost-gates-summary set until measured green, per CLAUDE.md).
+  stdio-native-onpath-x86_64:
+    name: stdio-native ON-path (MULTIOBJ redirect, linux-x86_64)
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.linux_label) }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+      - name: release_build with HEXA_RT_STDIO_NATIVE=1 + assert print-family UND dropped
+        shell: bash
+        env:
+          TARGET: linux-x86_64
+          CC: gcc
+          LIBS: "-lm -ldl"
+          GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
+          HEXA_RT_STDIO_NATIVE: "1"
+        run: |
+          set -euo pipefail
+          bash tool/release_build
+          RT="$(find build . -name runtime.a 2>/dev/null | head -1)"
+          [ -f "$RT" ] || { echo "no runtime.a produced"; exit 1; }
+          echo "runtime.a: $RT ($(stat -c%s "$RT") bytes)"
+          U=$(nm "$RT" 2>/dev/null | grep -cE ' U (printf|fprintf|perror|snprintf)$' || true)
+          echo "stdio-native ON: runtime.a U(printf/fprintf/perror/snprintf) = $U (want 0)"
+          if [ "$U" != 0 ]; then
+            echo "FAIL: HEXA_RT_STDIO_NATIVE=1 but $U glibc stdio UND remain — redirect incomplete"
+            echo "  (check S2/S3 _zc_stdio routing in tool/stage_resolve_runtime_a + the HXLCL_STDIO_LINK export)"
+            nm "$RT" | grep -E ' U (printf|fprintf|perror|snprintf)$' | sort -u
+            exit 1
+          fi
+          echo "OK — MULTIOBJ print-family redirected to runtime.o hxlcl_* raw write(2); glibc stdio UND dropped (axis-2)"
+
+  # axis-3 L1: own-link determinism gate (emit-twice + link-twice byte-identical on
+  # a broad-UND fixture) — the default-flip prerequisite. HEXA_ZEROC_EXIT_FLUSH=1
+  # (merged #4852, mangle-fixed #4853) makes the MULTIOBJ own-start runtime.a flush
+  # buffered print at exit so build_native's stage5 print("hi")+exit(7) survives → the
+  # gate runs. Advisory (not in the required selfhost-gates-summary set yet).
+  ownlink-determinism-x86_64:
+    name: own-link determinism (emit+link twice, linux-x86_64)
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.linux_label) }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+      - name: Build toolchain + converged runtime.a (shared release_build)
+        shell: bash
+        env:
+          TARGET: linux-x86_64
+          CC: gcc
+          LIBS: "-lm -ldl"
+          GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
+          HEXA_RT_STDIO_NATIVE: "1"
+        run: bash tool/release_build
+      - name: Build cc_native (preserve the converged runtime.a first)
+        shell: bash
+        env:
+          HEXA_RT_STDIO_NATIVE: "1"
+        run: |
+          set -euo pipefail
+          # converged runtime.a (libgcc-clean #4845 + exit-flush ON); build_native may
+          # restore frozen seeds + rebuild it, so snapshot first.
+          cp build/runtime.a "$RUNNER_TEMP/rt_converged.a"
+          bash tool/build_native_linux_x86_64 -r "$PWD" -w "$PWD/build/lx8664"
+          [ -x build/lx8664/cc_native ] && echo "cc_native = $(stat -c%s build/lx8664/cc_native) B"
+      - name: own-link determinism gate (emit+link twice + static floor)
+        shell: bash
+        env:
+          REPO: ${{ github.workspace }}
+          CC_NATIVE: ${{ github.workspace }}/build/lx8664/cc_native
+          HEXA_PREBUILT_RUNTIME: ${{ runner.temp }}/rt_converged.a
+        run: bash tool/ownlink_determinism_gate

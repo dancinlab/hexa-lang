@@ -1,0 +1,38 @@
+// rt_pull.hexa — L1 own-link determinism gate fixture (driver: tool/ownlink_determinism_gate).
+//
+// Exercises a BROAD runtime-symbol surface — array push/index/len, string concat,
+// to_string, .chars()/.split(), .char_code_at(), print/println — so that
+// `cc_native --backend=native --emit=exec --linker=hexa --target=x86_64-linux-gnu`
+// fires the FULL link_elf_x86_64_ownstart_ar path: archive-member pull from
+// runtime.a, GOT/got_syms population, and cross-obj reloc resolution. An
+// exit-42-only program is self-contained and would skip that path entirely — the
+// gate's T0 UND-breadth tripwire pins this fixture against future stdlib inlining.
+//
+// Fully DETERMINISTIC by construction: no time/rand/env/path input, all values
+// computed from constants — so `--emit=exec --linker=hexa` must produce
+// byte-identical output on two independent process invocations (the gate's T2).
+
+fn compute() -> int {
+    let mut arr: [int] = []
+    let mut i = 0
+    while i < 8 {
+        arr.push(i * i + 1)
+        i = i + 1
+    }
+    let mut acc = 0
+    let mut j = 0
+    while j < len(arr) {
+        acc = acc + arr[j]
+        j = j + 1
+    }
+    return acc
+}
+
+let total = compute()
+let mut s = "own-link-rt-pull-"
+s = s + to_string(total)
+let cs = s.chars()
+let bits = s.split("-")
+println("[rt_pull] s=" + s + " chars=" + to_string(len(cs)) + " parts=" + to_string(len(bits)))
+print("[rt_pull] c0=")
+println(to_string(s.char_code_at(0)))
