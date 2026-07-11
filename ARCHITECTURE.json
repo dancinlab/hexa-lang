@@ -423,6 +423,13 @@
     "value": "stage_resolve_runtime_a 컴파일 라인에 새 -D flag 토큰을 replace_all로 추가할 때 trailing space를 떨어뜨리면 `$_zc_flag-Dnext`로 뭉개진다 — flag=ON일 때 `-DHEXA_FLAG-DHEXA_NEXT`(한 토큰)이 되어 다음 인자(-DHEXA_ZEROC_DROP_RTCORE_INCLUDE·-I self·-DHEXA_CUDA)를 삼킴. 실측 #4852→#4854: `$_zc_exit_flush-DHEXA_ZEROC_DROP_RTCORE_INCLUDE`(공백누락 5사이트)→flag ON시 DROP_RTCORE_INCLUDE 유실→runtime.c가 runtime_core.c 인라인→hexa_sqrt 등 중복→release_build multidef=219. OFF(default)는 빈문자라 `-DHEXA_NEXT`로 정상→byteeq OFF-lane이 못잡음.",
     "threshold": "재발조건=flag ON build에서 release_build multidef 또는 예상 -D 누락. 판정=stage_resolve grep '_zc_[a-z]*[^ =]'(flag 토큰 뒤 non-space). 해결=flag 삽입시 `$_zc_flag ` trailing space 보존·전 사이트 sweep. 예방=default-OFF flag의 ON-path는 byteeq(OFF)로 검증 불가→full release_build(HEXA_*=1)로 실검증 필수(runtime-emit-full-hexa-2 sibling).",
     "source": "tool/stage_resolve_runtime_a"
+   },
+   {
+    "id": "runtime-c-1",
+    "state": "pos-conv",
+    "value": "파일→f32 읽기가 값-boxing 되어 RSS 가 파일 크기의 ~10배로 폭발한다 (2026-07-12 summer 실측: read_bytes 1.43GB → RSS 15.3GB; 이전 anima 303M 사례 1.2GB → ~24GB). read_bytes_at 슬라이스로도 peak 이 안 줄어든다 — 반환 바이트도 boxing 되기 때문. 진짜 fix 는 런타임 mmap(RFC025).",
+    "threshold": "재발조건: 대용량 f32/가중치 파일을 hexa 로 읽는 잡. 증상 연쇄 — cgroup memory.high 초과 → mem_cgroup_handle_over_high 스로틀 → D-state 무한잔류 → 부모 세션 사망 시 PPID=1 고아가 GB 를 문 채 잔류 → D-state 가 loadavg 에 카운트돼 호스트가 '다운'으로 오진됨(ssh 인증은 통과, 셸 spawn 만 1~3분). 해결: 원격 hexa 잡은 sidecar pool on 으로 실행(orphan fence 가 프로세스그룹 수거); 이미 생긴 고아는 ps PPID=1 + /proc/<pid>/wchan=mem_cgroup_handle_over_high 로 확진 후 kill -9.",
+    "source": "self/runtime.c"
    }
   ]
  },
