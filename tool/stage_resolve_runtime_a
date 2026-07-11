@@ -45,7 +45,7 @@ CFLAGS="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
 _zc_own_def=""
 { [ "${HEXA_ZEROC_OWN_START:-1}" = "1" ] && [ "$(uname -s 2>/dev/null)" = "Linux" ]; } && _zc_own_def="-DHEXA_ZEROC_OWN_START"   # FLIP-7 flip-D: default-ON (opt-out =0). Linux guard is load-bearing — the own _start asm (runtime_emit_full.hexa) is arch-gated #if __aarch64__ which is TRUE on darwin-arm64, so an unguarded -D byte-changes darwin runtime.a
 # axis-2 MULTIOBJ print-family redirect (default-OFF, byte-neutral OFF). ONLY the MULTIOBJ pair
-# (runtime.o exports hxlcl_printf/fprintf/perror/snprintf via HXLCL_STDIO_LINK · runtime_core.o
+# (runtime.o exports hxlcl_printf/fprintf/perror/snprintf via inline #ifdef · runtime_core.o
 # redirects to them via sysheaders) — NOT the single-TU Case-A runtime.o, so the single-TU byteeq
 # lane stays byte-identical. Closes the own-start+explicit-exit buffered-print loss (measured
 # summer #4850/#4852). Flip default-ON only after byteeq 3-target + MULTIOBJ ON-path smoke GREEN.
