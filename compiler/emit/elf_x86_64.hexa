@@ -1864,10 +1864,10 @@ pub fn link_elf_x86_64_ownstart(objs: [ElfX86Obj], out_path: string, main_name: 
         let mut bdi = 0
         while bdi < len(def_names) { if def_names[bdi] == bare { bare_def = true; break } bdi = bdi + 1 }
         if !bare_def {
-            let own = "hxlcl_" + bare
+            let own_name = "hxlcl_" + bare
             let mut oidx = -1
             let mut odi = 0
-            while odi < len(def_names) { if def_names[odi] == own { oidx = odi; break } odi = odi + 1 }
+            while odi < len(def_names) { if def_names[odi] == own_name { oidx = odi; break } odi = odi + 1 }
             if oidx >= 0 {
                 def_names.push(bare)
                 def_seg.push(def_seg[oidx])
