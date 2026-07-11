@@ -1276,6 +1276,17 @@ if linker_kind == "hexa" {
         let mut rc = 0
         if _prog_has_und && len(_rt_a) > 0 {
             rc = link_elf_x86_64_ownstart_ar(elf_obj_x86_holder, out_path, "main", _rt_a)
+        } else if _prog_has_und {
+            // axis-③ RUN closeout (W1 fail-close): the program has undefined
+            // symbols but no runtime.a was found. The plain own-start path would
+            // dyn-route every hexa_*/libc UND against libc.so.6 and emit a binary
+            // that fails at the dynamic loader (silent rc127 — the 2026-07-11
+            // cc-self-bin pod failure mode). Refuse loudly with the fix directive
+            // instead of depositing a broken binary.
+            eprintln("hexa-compiler: FATAL - program has undefined symbols but no "
+                     + "runtime.a found; set HEXA_PREBUILT_RUNTIME=<runtime.a> or "
+                     + "HEXA_LANG=<hexa-lang checkout> (own-link needs the runtime archive)")
+            exit(3)
         } else {
             rc = link_elf_x86_64_ownstart(elf_obj_x86_holder, out_path, "main", [])
         }
