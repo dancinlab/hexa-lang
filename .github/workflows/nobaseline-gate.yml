@@ -1014,12 +1014,12 @@ jobs:
           LIBS: "-lm -ldl"
           GH_TOKEN: ${{ github.token }}
           HEXA_CCACHE: "1"
-          HEXA_ZEROC_EXIT_FLUSH: "1"
+          HEXA_RT_STDIO_NATIVE: "1"
         run: bash tool/release_build
       - name: Build cc_native (preserve the converged runtime.a first)
         shell: bash
         env:
-          HEXA_ZEROC_EXIT_FLUSH: "1"
+          HEXA_RT_STDIO_NATIVE: "1"
         run: |
           set -euo pipefail
           # converged runtime.a (libgcc-clean #4845 + exit-flush ON); build_native may
