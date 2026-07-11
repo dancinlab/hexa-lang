@@ -51,6 +51,12 @@ _zc_own_def=""
 # summer #4850/#4852). Flip default-ON only after byteeq 3-target + MULTIOBJ ON-path smoke GREEN.
 _zc_stdio=""
 [ "${HEXA_RT_STDIO_NATIVE:-0}" = "1" ] && _zc_stdio="-DHEXA_RT_STDIO_NATIVE"
+# axis-③ own-link defense-in-depth (default-OFF, byte-neutral OFF): exit-time stdio flush in hxlcl_exit.
+# NO-OP in the default single-TU runtime (print = raw hxlcl_write(2)); closes the real gap in
+# HEXA_RT_MULTIOBJ (separate-TU runtime_core.o keeps glibc-buffered stdio) where own _start + raw
+# exit_group runs no _IO_cleanup. Flip default-ON only after byteeq 3-target + shipping smoke GREEN.
+_zc_exit_flush=""
+[ "${HEXA_ZEROC_EXIT_FLUSH:-0}" = "1" ] && _zc_exit_flush="-DHEXA_ZEROC_EXIT_FLUSH"
 ROOT="$PWD"
 RA="$ROOT/build/runtime.a"
 mkdir -p build
@@ -3183,12 +3189,12 @@ build_runtime_a_from_source() {
         #      archive-internal resolution). NO HEXA_HAS_HEXA_RT_STDLIB (matches the
         #      default single-TU object; setting it would extern rt_log/… → multidef).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S2]: compile build/runtime.o (include-drop, HI-tier inline)…"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self $_heap_def -c self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self $_heap_def -c self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
         # (S3) runtime_core.o — standalone TU (sysheaders prelude), runtime_hi_gen.c
         #      KEPT (supplies the HI-tier rt_* C bodies). SAME seed -D set. NO
         #      HEXA_HAS_HEXA_RT_STDLIB (keeps those bodies inline, not externed).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S3]: compile build/runtime_core.o (standalone TU, runtime_hi_gen.c kept)…"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE $_mo_rtcore_def $_rng_strcmp_def -I self -include self/runtime_core_sysheaders.h $_heap_def -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE $_mo_rtcore_def $_rng_strcmp_def -I self -include self/runtime_core_sysheaders.h $_heap_def -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
         # (S4) hxlcl_shim.o — libc-delegate hxlcl_* sibling TU.
         # own-start #29 coherence: $_zc_own_def MUST flow here too — without it the
         # shim's hxlcl_atexit stays the glibc-atexit delegate (U atexit), and under
@@ -3251,7 +3257,7 @@ build_runtime_a_from_source() {
             local _mo_cinc="$_mo_cuda_home/targets/x86_64-linux/include"
             [ -d "$_mo_cinc" ] || _mo_cinc="$_mo_cuda_home/include"
             echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA: build SEPARATE build/runtime.cuda.a (include-drop multi-object + cuda objects)"
-            $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
+            $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
             ar rcs build/runtime.cuda.a build/runtime_cuda_host.o build/runtime_core.o $_mo_hxlcl_members $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
             ls -la build/runtime.cuda.a
             local _mo_cseed _mo_cm
@@ -3271,7 +3277,7 @@ build_runtime_a_from_source() {
         echo "$RA"
         return 0
     fi
-    $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -I self $_heap_def -c self/runtime.c -o build/runtime.o
+    $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_exit_flush -I self $_heap_def -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     if [ "${HEXA_CUDA:-0}" = "1" ] && [ -f build/runtime_cuda.o ] && [ -f build/runtime_cuda_dlink.o ]; then
@@ -3279,7 +3285,7 @@ build_runtime_a_from_source() {
         local _cinc="$_cuda_home/targets/x86_64-linux/include"
         [ -d "$_cinc" ] || _cinc="$_cuda_home/include"
         echo "[stage_resolve_runtime_a] CUDA-R1: building SEPARATE consumer archive build/runtime.cuda.a (runtime.c -DHEXA_CUDA -I$_cinc + runtime_cuda.o + runtime_cuda_dlink.o); toolchain keeps the CPU build/runtime.a (libcuda-free, GPU-less-host-runnable)"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def -DHEXA_CUDA -I "$_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_exit_flush -DHEXA_CUDA -I "$_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o
         ar rcs build/runtime.cuda.a build/runtime_cuda_host.o $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
         ls -la build/runtime.cuda.a
         # ING-35 #2 — fail loudly if the CUDA archive dropped a native-core seed the
