@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# tool/ownlink_determinism_gate — L1 CI gate for the axis-③ own-link DEFAULT-flip.
+#
+# Proves the x86_64-linux own-emit + own-link pipeline is DETERMINISTIC (emit-twice
+# + link-twice byte-identical) on a broad-UND fixture, so the own-linked binary is
+# byteeq gen3≡gen4 by TRANSITIVITY: .o(gen3)≡.o(gen4) [selfhost-byteeq gate] ∘
+# own-link = pure deterministic fn of (.o, runtime.a) [this gate]. A ~60-min
+# full-compiler cross-generation job would re-prove the same thing at 6× cost.
+#
+# Extension-less per the tool/build_native_linux_x86_64 precedent (the sidecar
+# harness blocks .sh Write/Edit). Inputs (env or default): REPO (cwd), CC_NATIVE
+# (build/lx8664/cc_native), HEXA_PREBUILT_RUNTIME (build/runtime.a).
+# Exit: 0 GREEN · 1 true nondeterminism/regression (the only red) · 2 infra
+# (host not x86_64 / cc_native unbuildable — remapped to a neutral ::warning::).
+set -uo pipefail
+REPO="${REPO:-$(pwd)}"
+CCN="${CC_NATIVE:-$REPO/build/lx8664/cc_native}"
+RTA="${HEXA_PREBUILT_RUNTIME:-$REPO/build/runtime.a}"
+FIX="$REPO/self/test/ownlink_determinism/rt_pull.hexa"
+MIN_UND="${OWNLINK_MIN_UND:-6}"
+
+infra() { echo "::warning::ownlink-determinism INFRA (neutral) — $1"; exit 2; }
+fail()  { echo "FAIL(ownlink-determinism): $1"; exit 1; }
+
+[ "$(uname -sm | tr -d ' \n\t')" = "Linuxx86_64" ] || infra "host not linux-x86_64 (uname=$(uname -sm))"
+[ -x "$CCN" ] || infra "cc_native missing/not-exec: $CCN"
+[ -f "$RTA" ] || infra "runtime.a missing: $RTA"
+[ -f "$FIX" ] || infra "fixture missing: $FIX"
+command -v readelf >/dev/null 2>&1 || infra "readelf absent"
+
+W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
+D1="$W/d1"; D2="$W/d2"; mkdir -p "$D1" "$D2"
+export HEXA_PREBUILT_RUNTIME="$RTA" HEXA_LANG="$REPO"
+
+# ── T1 — emit-twice .o byte-identical (native-obj determinism) ──
+"$CCN" "$FIX" --backend=native --emit=obj -o "$D1/rt.o" 2>"$W/e1.err" || infra "emit#1 failed ($(tail -1 "$W/e1.err" 2>/dev/null))"
+"$CCN" "$FIX" --backend=native --emit=obj -o "$D2/rt.o" 2>"$W/e2.err" || infra "emit#2 failed"
+cmp -s "$D1/rt.o" "$D2/rt.o" || fail "emit non-deterministic — rt.o(1) != rt.o(2)"
+echo "T1 OK — emit-twice byte-identical"
+
+# ── T0 — UND-breadth tripwire (fixture must exercise the archive-pull path) ──
+UND=$(readelf -sW "$D1/rt.o" 2>/dev/null | awk '$7=="UND" && $8!=""{print $8}' | sort -u | grep -vcE '^$')
+echo "T0 — fixture UND count = $UND (floor $MIN_UND)"
+[ "$UND" -ge "$MIN_UND" ] || fail "fixture decayed to $UND UND (< $MIN_UND) — no longer exercises the runtime.a archive-pull path (stdlib inlined?)"
+
+# ── T2 — link-twice exec byte-identical (THE CORE: own-link determinism) ──
+# Two independent processes from two cwds with identical RELATIVE argv → catches
+# ASLR/pointer-order leaks, cwd/path/env embedding, timestamp fields, pad garbage.
+( cd "$D1" && "$CCN" "$FIX" --backend=native --emit=exec --linker=hexa --target=x86_64-linux-gnu -o rt_pull 2>rt.err ) || infra "own-link#1 failed ($(tail -1 "$D1/rt.err" 2>/dev/null))"
+( cd "$D2" && "$CCN" "$FIX" --backend=native --emit=exec --linker=hexa --target=x86_64-linux-gnu -o rt_pull 2>rt.err ) || infra "own-link#2 failed"
+if ! cmp -s "$D1/rt_pull" "$D2/rt_pull"; then
+    echo "== first 20 byte diffs =="; cmp -l "$D1/rt_pull" "$D2/rt_pull" 2>/dev/null | head -20
+    echo "== D1 sections =="; readelf -SW "$D1/rt_pull" 2>/dev/null | head -30
+    fail "own-link NON-deterministic — rt_pull(1) != rt_pull(2) (T1 clean → linker: suspect got_syms/dyn_names/def-map hash-order or archive member-pull order)"
+fi
+echo "T2 OK — own-link-twice byte-identical ($(stat -c%s "$D1/rt_pull" 2>/dev/null) B)"
+
+# ── T4 — static own-_start shape floor (stricter than C-3: ZERO dynamic) ──
+readelf -lW "$D1/rt_pull" 2>/dev/null | grep -q 'INTERP' && fail "own-linked binary has PT_INTERP (not static own-start ET_EXEC)"
+readelf -dW "$D1/rt_pull" 2>/dev/null | grep -q 'NEEDED' && fail "own-linked binary has DT_NEEDED (not self-contained static)"
+DYNU=$(readelf --dyn-syms -W "$D1/rt_pull" 2>/dev/null | awk '$7=="UND"{c++} END{print c+0}')
+[ "$DYNU" = "0" ] || fail "own-linked binary has $DYNU dynamic UND (expected 0 for a static ET_EXEC)"
+echo "T4 OK — static ET_EXEC: no PT_INTERP · no DT_NEEDED · dyn-UND=0"
+
+# ── T3 — RUN own-vs-own consistency (NOT vs a golden: the own-start _start does
+# not flush buffered stdio, so stdout may be empty — the determinism claim is
+# D1==D2, whatever the observed value). ──
+chmod +x "$D1/rt_pull" "$D2/rt_pull" 2>/dev/null
+O1=$("$D1/rt_pull" 2>&1); R1=$?
+O2=$("$D2/rt_pull" 2>&1); R2=$?
+[ "$R1" = "$R2" ] || fail "RUN rc mismatch D1=$R1 D2=$R2 (own-vs-own)"
+[ "$O1" = "$O2" ] || fail "RUN stdout mismatch (own-vs-own)"
+echo "T3 OK — own-vs-own RUN consistent (rc=$R1)"
+
+echo "OWNLINK-DETERMINISM GREEN — emit+link twice byte-identical + static floor (linux-x86_64) · UND=$UND"
