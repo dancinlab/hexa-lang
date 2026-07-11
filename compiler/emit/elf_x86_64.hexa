@@ -35,6 +35,7 @@ let ELF_SHT_SYMTAB        = 2
 let ELF_SHT_STRTAB        = 3
 let ELF_SHT_RELA          = 4
 let ELF_SHT_NOBITS        = 8
+let ELF_SHT_DYNSYM        = 11      // dynamic linker symbol table (.dynsym)
 
 let ELF_SHF_WRITE         = 0x1
 let ELF_SHF_ALLOC         = 0x2
@@ -44,11 +45,18 @@ let ELF_STB_LOCAL         = 0
 let ELF_STB_GLOBAL        = 1
 let ELF_STB_WEAK          = 2
 let ELF_STT_NOTYPE        = 0
+let ELF_STT_OBJECT        = 1       // data object (variable) — R_X86_64_COPY lane
 let ELF_STT_FUNC          = 2
 
 let ELF_R_X86_64_NONE     = 0
 let ELF_R_X86_64_64       = 1
 let ELF_R_X86_64_PC32     = 2
+// R_X86_64_COPY = 5 — ld.so reserves the symbol in the exe (.bss/.data) and
+// memcpy's the shared-lib initial value in at load; the exe DEFINES the symbol
+// so libc's own refs rebind to the exe copy (exe-first). Emitted (instead of
+// GLOB_DAT) for a direct (non-GOT) reference to an UND STT_OBJECT libc import
+// (stdout/stderr — `FILE *`). r_offset = copy vaddr, r_addend = 0.
+let ELF_R_X86_64_COPY     = 5
 let ELF_R_X86_64_PLT32    = 4
 // R_X86_64_GOTPCREL = 9 — PC-relative offset to the symbol's GOT slot
 // (SysV AMD64 ABI §B.2 / §4.4.1 Table 4-11: word32, G + GOT + A - P).
@@ -1725,6 +1733,115 @@ fn _ld_read_crt1() -> ElfX86Obj {
     return parse_elf_x86_obj(cbuf, 0, len(cbuf), 777001)
 }
 
+// ── libc.so.6 .dynsym sourcing (axis-① bug3 · LOCUS A · R_X86_64_COPY lane) ──
+// name -> (st_type, st_size) map read from the target's shared libc .dynsym /
+// .dynstr. `ok`=1 on a good read, 0 otherwise. `parse_elf_x86_obj` is ET_REL-
+// only (it hard-guards ET_REL), so a .so (ET_DYN, with program headers) needs a
+// focused reader — this one.
+struct LibcDynsym {
+    names: [string],
+    types: [i64],
+    sizes: [i64],
+    ok:    i64,
+}
+
+// Read the target's shared libc and return its DEFINED .dynsym entries as a
+// name -> (st_type, st_size) map. This is exactly what a reference linker (GNU
+// ld, ET_EXEC against a shared libc) does — it reads the library it links
+// against — so a direct (non-GOT) reference to an UND STT_OBJECT symbol
+// (stdout/stderr — `FILE *`) can be reserved in the exe with the CORRECT byte
+// size (ld.so uses the exe's st_size as the R_X86_64_COPY memcpy length — a
+// wrong size = heap corruption, so it MUST be exact, never guessed). Path =
+// `$HEXA_LD_SYSROOT/libc.so.6` when the env var is set, else the Debian/Ubuntu
+// multiarch defaults (both /lib and /usr/lib probed). Env read via env_var (the
+// registered hexa builtin) — NOT getenv. A missing/unreadable/unparsable file
+// returns ok=0; the caller hard-errors on the dyn (crt_handoff) path. Only
+// DEFINED entries (st_shndx != SHN_UNDEF) are kept, so a lookup always yields a
+// real definition (libc's own UND imports are skipped).
+fn _ld_read_libc_dynsym() -> LibcDynsym {
+    let mut out = LibcDynsym { names: [], types: [], sizes: [], ok: 0 }
+    let sysroot = env_var("HEXA_LD_SYSROOT")
+    let first_path = if len(sysroot) > 0 { sysroot + "/libc.so.6" } else { "/lib/x86_64-linux-gnu/libc.so.6" }
+    let mut buf = read_file_bytes(first_path)
+    if len(buf) == 0 { buf = read_file_bytes("/lib/x86_64-linux-gnu/libc.so.6") }
+    if len(buf) == 0 { buf = read_file_bytes("/usr/lib/x86_64-linux-gnu/libc.so.6") }
+    if len(buf) == 0 { return out }
+
+    // ELF header guards — ELFCLASS64 LE, ET_DYN, EM_X86_64.
+    if _er_u8(buf, 0) != 0x7f { return out }
+    if _er_u8(buf, 1) != 0x45 { return out }
+    if _er_u8(buf, 2) != 0x4c { return out }
+    if _er_u8(buf, 3) != 0x46 { return out }
+    if _er_u8(buf, 4) != 2    { return out }
+    if _er_u8(buf, 5) != 1    { return out }
+    if _er_u16le(buf, 0x10) != ELF_ET_DYN    { return out }
+    if _er_u16le(buf, 0x12) != ELF_EM_X86_64 { return out }
+
+    let e_shoff     = _er_u64le(buf, 0x28)
+    let e_shentsize = _er_u16le(buf, 0x3A)
+    let e_shnum     = _er_u16le(buf, 0x3C)
+    if e_shentsize < 64 { return out }
+    if e_shnum < 1 { return out }
+
+    // Locate .dynsym (SHT_DYNSYM) + its linked .dynstr (sh_link).
+    let mut dynsym_hdr = -1
+    let mut si = 0
+    while si < e_shnum {
+        let sh = e_shoff + si * e_shentsize
+        if _er_u32le(buf, sh + 0x04) == ELF_SHT_DYNSYM { dynsym_hdr = sh; break }
+        si = si + 1
+    }
+    if dynsym_hdr < 0 { return out }
+    let dsym_off = _er_u64le(buf, dynsym_hdr + 0x18)
+    let dsym_sz  = _er_u64le(buf, dynsym_hdr + 0x20)
+    let dsym_lnk = _er_u32le(buf, dynsym_hdr + 0x28)
+    let mut dsym_es = _er_u64le(buf, dynsym_hdr + 0x38)
+    if dsym_es < 1 { dsym_es = 24 }
+    if dsym_lnk > e_shnum - 1 { return out }
+    let dstr_hdr = e_shoff + dsym_lnk * e_shentsize
+    let dstr_off = _er_u64le(buf, dstr_hdr + 0x18)
+
+    // Iterate dynsym (skip file idx 0 = STN_UNDEF). Keep only DEFINED entries.
+    let count = dsym_sz / dsym_es
+    let mut k = 1
+    while k < count {
+        let s = dsym_off + k * dsym_es
+        let st_name  = _er_u32le(buf, s + 0x00)
+        let st_info  = _er_u8(buf, s + 0x04)
+        let st_shndx = _er_u16le(buf, s + 0x06)
+        let st_size  = _er_u64le(buf, s + 0x10)
+        if st_shndx != 0 {
+            let nm = _er_cstr(buf, dstr_off + st_name)
+            if len(nm) > 0 {
+                out.names.push(nm)
+                out.types.push(st_info & 0xf)
+                out.sizes.push(st_size)
+            }
+        }
+        k = k + 1
+    }
+    out.ok = 1
+    return out
+}
+
+// name -> st_type over the libc .dynsym map; ELF_STT_FUNC when unknown/absent
+// (task default → the FUNC stub lane, never the COPY lane, so an unclassifiable
+// residual can never mis-route to a COPY reservation).
+fn _libc_sym_type(m: LibcDynsym, nm: string) -> Int {
+    let mut i = 0
+    while i < len(m.names) { if m.names[i] == nm { return m.types[i] } i = i + 1 }
+    return ELF_STT_FUNC
+}
+// name -> st_size over the libc .dynsym map (COPY memcpy length). A copy symbol
+// is only ever routed here after _libc_sym_type returned STT_OBJECT (found), so
+// the size is the real found size; the <1 clamp to 8 (a `FILE *` word) is a
+// defensive floor that a legitimately-routed copy symbol never triggers.
+fn _libc_sym_size(m: LibcDynsym, nm: string) -> Int {
+    let mut i = 0
+    while i < len(m.names) { if m.names[i] == nm { let z = m.sizes[i]; if z < 1 { return 8 } return z } i = i + 1 }
+    return 8
+}
+
 pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_name: string, runtime_defs: [string]) -> Int {
     // ── CRT1-HANDOFF gate (axis-① bug3 · Path 2 · LOCUS 1+2) ────────────────
     // When the residual-UND census (over the ALREADY-floor-pulled objs — #4871
@@ -2143,8 +2260,33 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
         osi = osi + 1
     }
 
+    // ── libc.so.6 .dynsym map (axis-① bug3 · LOCUS A) ── Read the shared libc's
+    // DEFINED symbol type/size map so the census can discriminate residual UND
+    // imports by SYMBOL TYPE (STT_OBJECT vs STT_FUNC) — the reloc KIND alone
+    // (kind 2 = PC32 is used for BOTH `call fn` AND `mov data(%rip),reg`) can't
+    // tell a data symbol (stdout/stderr) from a function. Gated on crt_handoff:
+    // that is exactly the n_dyn>0 (real libc UND → PT_INTERP) path where a COPY
+    // can arise; on the static/text-only path the map stays empty (ok=0) →
+    // _libc_sym_type returns FUNC for everything → dyn_copy never set → the
+    // stub-only census + output is byte-identical to before (byteeq neutral).
+    // Hard-error (like the crt1.o handoff) if the dyn path can't source libc.
+    let mut libc_dyn = LibcDynsym { names: [], types: [], sizes: [], ok: 0 }
+    if crt_handoff {
+        libc_dyn = _ld_read_libc_dynsym()
+        if libc_dyn.ok == 0 {
+            eprintln("hexa_ld(elf,ownstart): R_X86_64_COPY lane needs libc.so.6 .dynsym but none was found/parsed — set HEXA_LD_SYSROOT=<dir containing libc.so.6> or install /lib/x86_64-linux-gnu/libc.so.6")
+            return 3
+        }
+    }
+
     let mut dyn_names: [string] = []
     let mut dyn_stub:  [Int]    = []
+    // dyn_copy[i]=1 → a direct (non-GOT) reference to an UND STT_OBJECT libc
+    // import: gets an R_X86_64_COPY (.bss reservation + exe-first rebind), NEVER
+    // a text stub. dyn_isobj[i] caches the libc symbol-type verdict so the type
+    // map is probed once per distinct dyn name, not per call-site.
+    let mut dyn_copy:  [Int]    = []
+    let mut dyn_isobj: [Int]    = []
     let mut dcen = 0
     while dcen < len(objs) {
         let dco = objs[dcen]
@@ -2259,11 +2401,25 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
                             return 3
                         }
                     }
+                    // ── (A0') CENSUS ROUTING — reloc-kind × SYMBOL-TYPE (3-way) ──
+                    // First encounter registers the name + caches its libc type;
+                    // then every non-GOT ref sets the lane by TYPE, not KIND:
+                    //   STT_OBJECT (data: stdout/stderr) → dyn_copy (COPY reloc,
+                    //     never a stub — a data load of a stub reads instruction
+                    //     bytes as a FILE* → the rc139 _IO_flush_all garbage);
+                    //   STT_FUNC / unknown → dyn_stub (the poor-man's-PLT fn ptr,
+                    //     unchanged); GOT-only refs stay dyn_stub=0 (GLOB_DAT).
+                    // libc_dyn is empty (ok=0) off the crt_handoff path → every
+                    // type resolves FUNC → dyn_copy stays 0 → byte-identical.
                     if dfi < 0 {
                         dyn_names.push(dnm)
-                        if _elf_kind_is_got(dr.kind) { dyn_stub.push(0) } else { dyn_stub.push(1) }
-                    } else if !_elf_kind_is_got(dr.kind) {
-                        dyn_stub[dfi] = 1
+                        dyn_stub.push(0)
+                        dyn_copy.push(0)
+                        if _libc_sym_type(libc_dyn, dnm) == ELF_STT_OBJECT { dyn_isobj.push(1) } else { dyn_isobj.push(0) }
+                        dfi = len(dyn_names) - 1
+                    }
+                    if !_elf_kind_is_got(dr.kind) {
+                        if dyn_isobj[dfi] == 1 { dyn_copy[dfi] = 1 } else { dyn_stub[dfi] = 1 }
                     }
                 }
             }
@@ -2361,6 +2517,45 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
     let mut gres = 0
     while gres < n_got * 8 { data_bytes.push(0); gres = gres + 1 }
 
+    // ── (C) COPY SYNTHESIS — R_X86_64_COPY reservation (axis-① bug3 · LOCUS C) ──
+    // For each dyn_copy symbol (an UND STT_OBJECT libc import referenced
+    // directly / non-GOT — stdout/stderr), reserve st_size bytes (8-align, 16 if
+    // >8) in the RW data blob and DEFINE the bare name there as a linker-
+    // synthetic GLOBAL data def (def_seg=1 RW, def_obj=-1) — exactly like the
+    // CRT1-HANDOFF _GLOBAL_OFFSET_TABLE_ synth def. The generic resolve pass then
+    // binds every PC32 data load to this copy, and GOT-fill binds the symbol's
+    // GOT slot to it too — so the poisoned non-PIC data lane now reads the copy
+    // (which ld.so memcpy's libc's initial FILE* into at load) instead of stub
+    // instruction bytes. Reserved BEFORE the dyn structures so the copy vaddr is
+    // final; copy_* feed the DEFINED .dynsym entry + the R_X86_64_COPY reloc
+    // below. Empty when dyn_copy is all-0 (byte-identical to the pre-COPY path).
+    let mut copy_names:  [string] = []
+    let mut copy_vaddrs: [Int]    = []
+    let mut copy_sizes:  [Int]    = []
+    let mut dcp = 0
+    while dcp < n_dyn {
+        if dyn_copy[dcp] == 1 {
+            let csz    = _libc_sym_size(libc_dyn, dyn_names[dcp])
+            let calign = if csz > 8 { 16 } else { 8 }
+            while (len(data_bytes) % calign) != 0 { data_bytes.push(0) }
+            let coff = len(data_bytes)
+            let mut cz = 0
+            while cz < csz { data_bytes.push(0); cz = cz + 1 }
+            def_names.push(dyn_names[dcp])
+            def_seg.push(1)
+            def_off.push(coff)
+            def_bind.push(ELF_STB_GLOBAL)
+            def_obj.push(-1)
+            let chb = _ldx_hash(dyn_names[dcp])
+            ldx_n[chb] = ldx_n[chb].push(dyn_names[dcp])
+            ldx_i[chb] = ldx_i[chb].push(len(def_names) - 1)
+            copy_names.push(dyn_names[dcp])
+            copy_vaddrs.push(data_vaddr_base + coff)
+            copy_sizes.push(csz)
+        }
+        dcp = dcp + 1
+    }
+
     // ── CRT1-HANDOFF (LOCUS 2c): define `_GLOBAL_OFFSET_TABLE_` at the GOT base ──
     // crt1.o's `_start`/`_dl_relocate_static_pie` reference `_GLOBAL_OFFSET_TABLE_`
     // (an EXTRA UND beyond {main,__libc_start_main}) via a GOTPC-family reloc
@@ -2424,11 +2619,29 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
         let mut sy = 0
         while sy < n_dyn {
             _ew_u32(data_bytes, dynstr_name_off[sy])   // st_name
-            data_bytes.push(0x10)                       // st_info = GLOBAL|NOTYPE
-            data_bytes.push(0)                          // st_other
-            _ew_u16(data_bytes, 0)                      // st_shndx = SHN_UNDEF
-            _ew_u64(data_bytes, 0)                      // st_value
-            _ew_u64(data_bytes, 0)                      // st_size
+            // A copied STT_OBJECT (LOCUS D): the exe DEFINES the symbol so
+            // ld.so's exe-first lookup rebinds libc's own refs to the exe copy.
+            // st_shndx must be != SHN_UNDEF to count as defined; this linker
+            // emits e_shnum=0, so ld.so never dereferences section headers (it
+            // uses l_addr + st_value; l_addr=0 for ET_EXEC) — 2 = the RW PT_LOAD
+            // slot marks "defined, non-special". st_size MUST be the real size
+            // (ld.so uses the EXE's st_size as the R_X86_64_COPY memcpy length).
+            let mut cvi = -1
+            let mut cvk = 0
+            while cvk < len(copy_names) { if copy_names[cvk] == dyn_names[sy] { cvi = cvk; break } cvk = cvk + 1 }
+            if cvi >= 0 {
+                data_bytes.push(0x11)                   // st_info = (GLOBAL<<4)|OBJECT
+                data_bytes.push(0)                      // st_other
+                _ew_u16(data_bytes, 2)                  // st_shndx = RW seg (defined)
+                _ew_u64(data_bytes, copy_vaddrs[cvi])   // st_value = copy vaddr
+                _ew_u64(data_bytes, copy_sizes[cvi])    // st_size  = real size
+            } else {
+                data_bytes.push(0x10)                   // st_info = GLOBAL|NOTYPE
+                data_bytes.push(0)                      // st_other
+                _ew_u16(data_bytes, 0)                  // st_shndx = SHN_UNDEF
+                _ew_u64(data_bytes, 0)                  // st_value
+                _ew_u64(data_bytes, 0)                  // st_size
+            }
             sy = sy + 1
         }
         let n_dynsym = n_dyn + 1
@@ -2449,22 +2662,35 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
             ch = ch + 1
         }
 
-        // .rela.dyn: one R_X86_64_GLOB_DAT (type 6) per dyn symbol pointing ld.so
-        // at the symbol's GOT slot. r_info = (dynsym_idx<<32)|6 (multiplication
-        // to dodge a 2^32 literal at parse — same idiom as _er_s64le).
+        // .rela.dyn: one reloc per dyn symbol. Default = R_X86_64_GLOB_DAT (type
+        // 6) pointing ld.so at the symbol's GOT slot. A copied STT_OBJECT (LOCUS
+        // D) instead gets R_X86_64_COPY (type 5) with r_offset = the exe copy
+        // vaddr (its GOT slot, if any, is static-filled by GOT-fill to the same
+        // copy — no GLOB_DAT needed since the symbol is exe-DEFINED). r_info =
+        // (dynsym_idx<<32)|type (multiplication dodges a 2^32 literal at parse —
+        // same idiom as _er_s64le). Count stays n_dyn → DT_RELASZ unchanged.
         let mut pd3 = (8 - (len(data_bytes) & 7)) & 7
         while pd3 > 0 { data_bytes.push(0); pd3 = pd3 - 1 }
         let rela_blob_off = len(data_bytes)
         let rela_vaddr    = data_vaddr_base + rela_blob_off
         let mut rr = 0
         while rr < n_dyn {
-            let mut rgs = -1
-            let mut rgx = 0
-            while rgx < n_got { if got_syms[rgx] == dyn_names[rr] { rgs = rgx; break } rgx = rgx + 1 }
-            let slot_vaddr = data_vaddr_base + got_blob_off + rgs * 8
-            _ew_u64(data_bytes, slot_vaddr)                       // r_offset
-            _ew_u64(data_bytes, (rr + 1) * 4294967296 + 6)       // r_info = (idx<<32)|GLOB_DAT
-            _ew_u64(data_bytes, 0)                                // r_addend
+            let mut rcvi = -1
+            let mut rcvk = 0
+            while rcvk < len(copy_names) { if copy_names[rcvk] == dyn_names[rr] { rcvi = rcvk; break } rcvk = rcvk + 1 }
+            if rcvi >= 0 {
+                _ew_u64(data_bytes, copy_vaddrs[rcvi])               // r_offset = copy vaddr
+                _ew_u64(data_bytes, (rr + 1) * 4294967296 + ELF_R_X86_64_COPY)   // r_info = (idx<<32)|COPY
+                _ew_u64(data_bytes, 0)                               // r_addend
+            } else {
+                let mut rgs = -1
+                let mut rgx = 0
+                while rgx < n_got { if got_syms[rgx] == dyn_names[rr] { rgs = rgx; break } rgx = rgx + 1 }
+                let slot_vaddr = data_vaddr_base + got_blob_off + rgs * 8
+                _ew_u64(data_bytes, slot_vaddr)                       // r_offset
+                _ew_u64(data_bytes, (rr + 1) * 4294967296 + 6)       // r_info = (idx<<32)|GLOB_DAT
+                _ew_u64(data_bytes, 0)                                // r_addend
+            }
             rr = rr + 1
         }
         let rela_size = n_dyn * 24
