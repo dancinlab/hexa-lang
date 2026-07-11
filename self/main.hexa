@@ -3532,7 +3532,7 @@ fn cmd_build(src, out, c_only, target, shared) {
         return ""
     }
     // ── DONE-criterion axis ① round-1: `hexa build` leg-B mirror (no hexat, no clang) ──
-    // HEXA_BUILD_NATIVE=1 (default-OFF, byte-neutral): reuse cmd_run's proven leg-B recipe
+    // HEXA_BUILD_NATIVE (default-ON, opt-out with =0; self-host byteeq-neutral): reuse cmd_run's proven leg-B recipe
     // (aprime --emit=obj + ld, own-start crt-drop) so `hexa build` lowers through the native
     // source→own-IR→native path with ZERO hexat fork and ZERO clang. ANY emit/link failure
     // falls through to the C-transpile path below (delegate intact; trace under
