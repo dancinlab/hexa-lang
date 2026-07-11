@@ -1696,6 +1696,41 @@ fn resolve_prebuilt_runtime() {
     return ""
 }
 
+// axis-① rung-2: cross-target용 arch-매치 runtime.a 리졸버. resolve_prebuilt_runtime()은
+// host-arch 1개만 돌려주므로(HEXA_PREBUILT_RUNTIME=host runtime.a 강제) cross엔 wrong-arch
+// trap. arch-태그 archive를 명시 리졸브 + magic 검증한 것만 반환. 실패="" → 호출처 zig cc 폴백.
+fn _resolve_target_runtime_a(aprime_tgt) {
+    if aprime_tgt == "x86_64-linux-gnu" {
+        let _p = env("HEXA_PREBUILT_RUNTIME_X86_64_LINUX")
+        if len(_p) > 0 && file_exists(_p) {
+            if _runtime_a_arch_ok(_p, aprime_tgt) { return _p }
+            return ""
+        }
+    }
+    let __root = resolve_hxroot()
+    if len(__root) > 0 {
+        let __ra = __root + "/build/runtime." + aprime_tgt + ".a"
+        if file_exists(__ra) {
+            if _runtime_a_arch_ok(__ra, aprime_tgt) { return __ra }
+        }
+    }
+    return ""
+}
+// archive 첫 멤버 오브젝트의 magic으로 arch 검증(od magic-byte·툴체인 무관 — darwin에 ELF nm 부재).
+// x86_64-linux = ELF64(7f 45 4c 46 02) + e_machine 0x3e(LE bytes 18-19 = "3e 00").
+fn _runtime_a_arch_ok(ra, aprime_tgt) {
+    let _mem = exec("ar t '" + ra + "' 2>/dev/null | head -1 | tr -d '\\n'")
+    if len(_mem) == 0 { return false }
+    let _sig = exec("ar p '" + ra + "' '" + _mem + "' 2>/dev/null | od -An -tx1 -N20 | tr -s ' '")
+    if aprime_tgt == "x86_64-linux-gnu" {
+        let _elf = exec("printf '%s' \"" + _sig + "\" | grep -c '7f 45 4c 46 02'")
+        let _mach = exec("printf '%s' \"" + _sig + "\" | grep -c ' 3e 00'")
+        if _elf == "1" && _mach == "1" { return true }
+        return false
+    }
+    return false
+}
+
 // ── RT-NATIVE drop-guard (sh-ctranspile-dropguard) ──────────────────────
 // Scan a prebuilt native runtime.a for the symbols it DEFINES with external
 // linkage, returning a space-joined token list (" sys_exit hexa_arena_alloc
@@ -2841,6 +2876,15 @@ fn target_zig_triple(t) {
     if t == "darwin-x86_64"      { return "x86_64-macos-none"  }
     return ""
 }
+// axis-① rung-2: surface --target 별칭 → aprime 타깃. rung-2 실현 = x86_64-linux own-start
+// static 하나만(musl은 own-start static이 musl-static과 동형이라 안전 포함). 그 외 ""=cross
+// 게이트 미통과(zig cc 폴백). arm64-linux/darwin cross는 own aarch64-static/SDK-less Mach-O
+// 링커 부재로 다음 rung.
+fn _cross_aprime_target(t) {
+    if t == "linux-x86_64-glibc" { return "x86_64-linux-gnu" }
+    if t == "linux-x86_64-musl"  { return "x86_64-linux-gnu" }
+    return ""
+}
 fn target_static_flag(t) {
     if t == "linux-x86_64-musl"  { return " -static" }
     if t == "linux-aarch64-musl" { return " -static" }
@@ -3600,6 +3644,30 @@ fn cmd_build(src, out, c_only, target, shared) {
               }
             } else if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[build-native] native-emit failed → C fallback: " + _bne) }
             let _ = exec("rm -f '" + _bnobj + "' 2>/dev/null")
+        }
+    }
+    // axis-① rung-2: cross-target native leg (clang-0, own-start static ELF). Gate=
+    // HEXA_BUILD_NATIVE_CROSS=1 (default-OFF·byte-neutral) + --target→x86_64-linux +
+    // !shared + !c_only + src>0. 유일 clang-0 cross = →x86_64-linux own-start static
+    // (arm64-linux/darwin cross는 게이트 미통과→zig cc 폴백 유지). runtime.a 부재/링크
+    // 실패 시 전부 아래 C-transpile로 fall-through(안전망 온전·구현됨·미배선=runtime.a
+    // 타깃arch 배포 rung-2b 선결이면 실효). 기존 leg-B 게이트 len(target)==0 무수정.
+    if env_var("HEXA_BUILD_NATIVE_CROSS") == "1" && shared != "1" && c_only != "1" && len(__actual_src) > 0 && _cross_aprime_target(target) == "x86_64-linux-gnu" {
+        let _xcc = resolve_native_cc()
+        let _xrt = _resolve_target_runtime_a("x86_64-linux-gnu")
+        if len(_xcc) > 0 && len(_xrt) > 0 {
+            let _xtmp = exec("printf '%s.xtmp.%s' '" + out + "' \"$$\"")
+            let _xr = exec("HEXA_PREBUILT_RUNTIME='" + _xrt + "' '" + _xcc + "' _drv.hexa --backend=native --emit=exec --linker=hexa --target=x86_64-linux-gnu -o '" + _xtmp + "' '" + __actual_src + "' 2>&1")
+            let _xok = exec("test -x '" + _xtmp + "' && printf yes || printf no")
+            if _xok == "yes" {
+                let _ = exec("mv -f '" + _xtmp + "' '" + out + "' 2>/dev/null")
+                if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[build-cross] clang-free own-link → " + out) }
+                println("OK: built " + out + " (native cross-target x86_64-linux, own-start static — no clang, no zig)")
+                return ""
+            } else {
+                let _ = exec("rm -f '" + _xtmp + "' 2>/dev/null")
+                if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[build-cross] own-link failed → zig cc fallback: " + _xr) }
+            }
         }
     }
     // Rider (axis ① measurement): resolve/bootstrap hexat HERE (at its sole use below), NOT at
