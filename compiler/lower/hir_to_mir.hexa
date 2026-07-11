@@ -541,6 +541,24 @@ pub let mut _bck_strict = false    // HEXA_BORROWCK_STRICT=1, read once per lowe
 // the emit is never reached → binary + diag stream byte-identical (roadmap
 // A2 byteeq-neutral, gen3≡gen4).
 pub let mut _bck_census = false    // HEXA_BORROWCK_CENSUS=1, read once per lower_hir
+// HEXA-OWN L4/L5 Lane-B B3 — opt-OUT WARNING-BAND default (HEXA_BORROWCK_WARN_DEFAULT=1).
+// The mechanism for the roadmap B3 rung (`_bck_on = env != "0"`, polarity-preserving
+// opt-OUT) landed INERT: default OFF ⇒ this stays false ⇒ the `_bck_on` opt-out
+// reassignment in lower_hir is never taken and `_bck_diag_push` is a straight
+// passthrough ⇒ the diag stream + emitted binary are byte-identical (byteeq-neutral,
+// gen3≡gen4). When set: (a) borrowck runs opt-OUT (on unless HEXA_BORROWCK=="0"),
+// (b) every admitted diagnostic is FORCED to the Warning band (never build-refusing —
+// STRICT stays a SEPARATE opt-in via HEXA_BORROWCK_STRICT), (c) ONLY codes on
+// `_bck_warn_allowlist` are emitted; all other borrowck diags are dropped. The flip to
+// default-ON is GATED on the B1 census triage (0 unfixed hazards) — do NOT flip the live
+// `_bck_on` default here.
+pub let mut _bck_warn_default = false   // HEXA_BORROWCK_WARN_DEFAULT=1, read once per lower_hir
+// B3 allowlist — the HX30xx borrowck codes the B1 census cleared to FP=0. EMPTY until the
+// census + triage runs (roadmap gate B1->B3): empty ⇒ warn-default admits NOTHING ⇒
+// behaviourally identical to OFF (no borrowck diagnostic survives the gate). It is a
+// deliberate placeholder; a code is added ONLY after the census measures its FP=0, e.g.
+// ["HX3014", ...]. @root-cause-ok B1 census is the gate — empty is correct until measured, not a punt
+pub let mut _bck_warn_allowlist: [string] = []
 pub let mut _bck_active = false    // per-fn gate; suspended in closure bodies
 // ── missing-return (E0308 / HX3047) — env-gated default-OFF ─────────────
 // HEXA_MISSING_RETURN=1: opt-in CFG-reachability missing-return check (rustc
@@ -985,6 +1003,35 @@ fn _bck_note_move(local_id: i64, callee: string, blk: i64, sp: Span) {
     _bck_m_blocks.push(blk)
 }
 
+// HEXA-OWN L4/L5 Lane-B B3 — allowlist membership test for the opt-OUT
+// warning-band. Linear scan (the allowlist is O(codes)); only consulted when
+// `_bck_warn_default` is set, so the default path never calls it.
+fn _bck_warn_allowed(code: string) -> bool {
+    let mut i = 0
+    while i < len(_bck_warn_allowlist) {
+        if _bck_warn_allowlist[i] == code { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// HEXA-OWN L4/L5 Lane-B B3 — the SINGLE choke every borrowck emit helper pushes
+// through (replacing a bare `_lr_diag.push(d)`). Default path (`_bck_warn_default`
+// false) is a verbatim passthrough ⇒ byte-identical diag stream (byteeq-neutral).
+// Under HEXA_BORROWCK_WARN_DEFAULT: admit ONLY allowlisted codes (empty allowlist
+// ⇒ drop everything ⇒ behaves like OFF) and FORCE the Warning band, so a diagnostic
+// that STRICT may have escalated to Error upstream is re-banded to Warning here
+// (warn-default is never build-refusing; STRICT is the separate opt-in for that).
+fn _bck_diag_push(d: Diagnostic) {
+    if _bck_warn_default {
+        if !_bck_warn_allowed(d.code) { return }
+        _lr_diag.push(diag_with_severity(d, Severity::Warning))
+        return
+    }
+    let passthru = d
+    _lr_diag.push(passthru)
+}
+
 // HX3014 emit with same-site dedup (one warning per source line/col —
 // Rule 1 and Rule 2 firing on the same use site collapse to the first).
 fn _emit_hx3014(rule: string, name: string, other: string, line: i64, sp: Span) {
@@ -1012,7 +1059,7 @@ fn _emit_hx3014(rule: string, name: string, other: string, line: i64, sp: Span) 
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // ── HEXA-OWN L5-E1 — ref-binding registry ops (newest-per-name wins) ──
@@ -1158,7 +1205,7 @@ fn _bck_emit_ref_outlives(name: string, origin: string, borrow_line: i64,
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // ── HEXA-OWN E3 — first borrow-conflict rule (Rust E0502) ────────────
@@ -1270,7 +1317,7 @@ fn _bck_emit_borrow_conflict(name: string, origin: string, new_mut: bool,
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // HX3028 emit (double-mutable-borrow, Rust E0499) — same-site dedup + STRICT
@@ -1310,7 +1357,7 @@ fn _bck_emit_double_mut(name: string, origin: string, new_mut: bool,
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // HX3023 emit (write-through-while-borrowed, Rust E0506) — same-site dedup +
@@ -1342,7 +1389,7 @@ fn _bck_emit_write_through(origin: string, name: string, borrow_mut: bool,
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // HX3027 emit (use-while-mutably-borrowed, Rust E0503) — same-site dedup +
@@ -1375,7 +1422,7 @@ fn _bck_emit_use_while_mut(origin: string, name: string, borrow_mut: bool,
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // HX3045 emit (cannot assign twice to immutable variable, Rust E0384) —
@@ -1400,7 +1447,7 @@ fn _bck_emit_reassign_immut(name: string, sp: Span) {
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // HX3029 emit (move-out-while-borrowed, Rust E0505) — same-site dedup + STRICT
@@ -1436,7 +1483,7 @@ fn _bck_emit_move_while_borrowed(origin: string, name: string, borrow_mut: bool,
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // HX3034 emit (move-out-of-borrowed-content, Rust E0507) — same-site dedup +
@@ -1475,7 +1522,7 @@ fn _bck_emit_move_out_of_borrow(name: string, field: string, origin: string,
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // HX3037 emit (closure capture-move, Rust E0507 "captured variable in an
@@ -1503,7 +1550,7 @@ fn _bck_emit_capture_move(name: string, callee: string, clo_line: i64, sp: Span)
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // HX3052 emit (move-out-of-captured-value-WHILE-BORROWED, Rust E0505/E0504) —
@@ -1542,7 +1589,7 @@ fn _bck_emit_capture_move_borrowed(origin: string, callee: string, name: string,
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // HX3038 emit (move-out-of-array-by-indexing, Rust E0508) — same-site dedup +
@@ -1569,7 +1616,7 @@ fn _bck_emit_move_out_of_array(name: string, sp: Span) {
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // HX3039 emit (move-out-of-borrowed-content via INDEX projection, Rust E0507)
@@ -1600,7 +1647,7 @@ fn _bck_emit_move_out_of_borrow_index(name: string, origin: string,
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // HX3040 emit (move-out-while-borrowed at the NON-call move sites, Rust E0505)
@@ -1631,7 +1678,7 @@ fn _bck_emit_move_while_borrowed_nc(origin: string, name: string, borrow_mut: bo
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // HX3041 emit (return-reference-to-temporary, Rust E0515) — same-site dedup +
@@ -1656,7 +1703,7 @@ fn _bck_emit_ret_temp(kind: string, sp: Span) {
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // HX3049 emit (temporary-dropped-while-borrowed, Rust E0716) — same-site dedup +
@@ -1683,7 +1730,7 @@ fn _bck_emit_temp_dangle(name: string, kind: string, sp: Span) {
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // HX3032 emit (mutating-method-behind-shared-ref, Rust E0596) — same-site
@@ -1711,7 +1758,7 @@ fn _bck_emit_mut_method_behind_ref(name: string, origin: string, method: string,
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // HX3031 emit (assign-behind-shared-ref, Rust E0594) — same-site dedup +
@@ -1737,7 +1784,7 @@ fn _bck_emit_assign_behind_ref(name: string, origin: string,
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // HX3055 emit (assign-to-field/index-of-immutable-owned-base, Rust E0594) —
@@ -1769,7 +1816,7 @@ fn _bck_emit_write_immut_base(name: string, kind: string, sp: Span) {
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // HX3019 emit (return-borrow-escape) — same-site dedup + STRICT escalation,
@@ -1796,7 +1843,7 @@ fn _bck_emit_ret_escape(name: string, origin: string, borrow_line: i64, sp: Span
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // The two rules — evaluated at every ident USE that resolves to a local
@@ -2466,7 +2513,7 @@ fn _bcki_emit_uninit_use(name: string, decl_line: i64, sp: Span) {
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // ── HEXA-OWN round8-1 — HX3035 forward MaybeUninitialized fixed-point ──
@@ -2685,7 +2732,7 @@ fn _bck_emit_use_after_move_pm(form: string, place: string, name: string,
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
     }
-    _lr_diag.push(d)
+    _bck_diag_push(d)
 }
 
 // ── HEXA-OWN round10 — HX3042 forward MaybeInitialized (moved) fixed-point ──
@@ -8502,6 +8549,17 @@ pub fn lower_hir(module: HModule) -> MModule {
     _bck_census = env("HEXA_BORROWCK_CENSUS") == "1"
     _bck_on = _bck_on || _bck_census
     if _bck_census { _bck_census_lines = [] }
+    // HEXA-OWN L4/L5 Lane-B B3 — opt-OUT warning-band DEFAULT (INERT mechanism;
+    // flip gated on the B1 census triage). Read the SEPARATE flag; default OFF ⇒
+    // this branch is never taken ⇒ `_bck_on` keeps its opt-IN value above ⇒
+    // byte-identical. When set, borrowck runs opt-OUT (on unless HEXA_BORROWCK is
+    // explicitly "0"); the Warning-band + allowlist gate lives in `_bck_diag_push`,
+    // and STRICT stays its own opt-in flag (read above) — do NOT flip the live
+    // default here.
+    _bck_warn_default = env("HEXA_BORROWCK_WARN_DEFAULT") == "1"
+    if _bck_warn_default {
+        _bck_on = env("HEXA_BORROWCK") != "0"
+    }
     // missing-return (E0308 / HX3047) — opt-in flag read ONCE per lower_hir
     // (same latched idiom as _bck_on). Default OFF ⇒ `_missret_check`
     // early-returns per-fn ⇒ diag stream + emitted .text byte-identical.
