@@ -1294,6 +1294,11 @@ if linker_kind == "hexa" {
             eprintln("hexa-compiler: hexa_ld(elf) own-start link failed rc=" + to_string(rc))
             exit(2)
         }
+        // own-start ELF is written via write_file (mode 0644); an --emit=exec
+        // output must be executable. External ld (leg-B) sets +x for free; the
+        // own-link writer does not — chmod so consumers' `test -x` passes (else
+        // the axis-① rung-2 cross-target leg silently falls back to zig cc).
+        let _ = exec("chmod +x '" + out_path + "'")
         if verbose {
             eprintln("hexa-compiler: linked static ELF ET_EXEC via in-tree hexa_ld "
                      + "(own-start _start, no crt1.o/-lc/-dynamic-linker) to " + out_path)
