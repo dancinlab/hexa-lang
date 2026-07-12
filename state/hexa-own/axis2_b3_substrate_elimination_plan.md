@@ -102,6 +102,22 @@ the 6/6-global assertion fails → **clean fallback to the `.s` seed** (so #4900
 **A0 round-1 = DONE** (10/10 seed families own-emit under `HEXA_RT_OWNOBJ`) + ship witness PASS. Next =
 the `:-0`→`:-auto` flip PR (ship witness3 already PASS).
 
-**Remaining for lane-2**: A1 (~35 one-sym members: strcmp/strtoll/free/calloc/sin/cos/FILE-family) via
-the same E4 `--keep-global` pattern → own-obj. Then S1/S2 fragments, then the runtime.c body (Round-3+,
-~29-32k LOC HexaVal machinery, multi-session = literal ② DONE at the m3 TU-drop).
+## A1 mechanism PROVEN (2026-07-12) — E4 own-emits the one-sym hxlcl members
+
+The ~27 A1 one-sym members (`HEXA_RT_NATIVE_{CALLOC,FREE,REALLOC,STRCMP,STRNCMP,STRCHR,STRDUP,STRSTR,
+STRTOLL,ATOF,ATOLL,SIN,COS,EXP,LOG,FMOD,TIME,CLOCK,GETENV,SETENV,OPEN,FORK,PIPE,POPEN,PCLOSE,EXECVP,
+SIGNAL}`) all derive from a **single `stdlib/runtime/hxlcl_core.hexa`** (248KB, all shims): each `.s`
+seed today is `aprime --emit=asm hxlcl_core.hexa` + a `regen_hxlcl_<sym>_native_s.sh` `.globl` demotion
+post-pass keeping ONE shim global. That is **exactly E4's job**. VERIFIED on summer with the E4 aprime:
+`aprime --emit=obj --keep-global=hxlcl_strcmp hxlcl_core.hexa` → **1 global T (hxlcl_strcmp) + 79 local t**,
+matching the frozen `.s` seed's `.globl` count of 1. So the whole A1 batch is de-risked + uniform:
+per member, own-emit `hxlcl_core.hexa --keep-global=<one shim>` replaces the `--emit=asm`+regen-sed seed.
+
+**A1 wiring (next round)**: the one-sym members live in the MULTIOBJ tri-state resolvers (e.g.
+`HEXA_RT_NATIVE_CALLOC=auto` at stage_resolve_runtime_a:~2583, `-DHEXA_RT_NATIVE_CALLOC` + member add) —
+more structure than the A0 seed families, so each needs an own-emit branch mirroring the regex_rt A0
+pattern (own-emit + `nm` assert exactly-1-global + fallback to `.s`). Batch by family (string / mem /
+libm / FILE / proc). Gated on E4 #4904 (non-E4 aprime → all-global → clean `.s` fallback = merge-safe).
+
+**Remaining for lane-2 (multi-session)**: A1 wiring (~27 members, mechanism proven above) → S1/S2
+fragments → the runtime.c body (Round-3+, ~29-32k LOC HexaVal machinery) → m3 TU-drop = literal ② DONE.
