@@ -57,7 +57,7 @@ BR="${BR:-origin/main}"                           # flag is merged → main; ove
 KDIR_REL="state/static-types/unbox-broadbench-r1" # committed kernel dir inside the checkout
 FLAG="HEXA_UNBOX_HIR_CALLTYPE"
 CONTROL="k1_sum k2_branch k3_arridx"
-TARGET="k4_arrlen k5_strlen k6_idxof k7_byteat k8_charcode k9_scan"
+TARGET="k4_arrlen k5_strlen k6_idxof k7_byteat k8_charcode k9_scan k10_contains k11_tofloat"
 say() { echo "$@" | tee -a "$RESULT"; }
 
 : > "$RESULT"
