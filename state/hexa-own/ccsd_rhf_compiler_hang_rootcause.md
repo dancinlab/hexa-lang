@@ -1,4 +1,19 @@
-# ccsd_rhf.hexa 컴파일러 hang (>2h17m) 근인 — workflow wf_6bdb8220 (3-agent)
+# ccsd_rhf.hexa 컴파일러 hang (>2h17m) 근인 — workflow wf_6bdb8220 (3-agent) + ★실증정정
+
+## ★★ CORRECTION (empirical·ghost sample) — 정적 3-agent 근인 FALSIFIED ★★
+**실측(ghost v0.741.7·자식 hexad sample·2026-07-12)**: hang은 hexa 자체 lowering이 **아니다**. busy 자식 hexad hot frame(8760/8760 샘플):
+```
+main → cmd_build → _hexa_clang_capped → hexa_exec → hexa_popen_sh → poll/__wait4
+```
+= **`_hexa_clang_capped`(self/main.hexa:3013·:3924·:3975)가 clang(외부 C컴파일러)을 popen하고 대기**. 즉 근인 = **C-transpile 경로의 clang이 emitted-C(거대 ccrhf_iterate=456줄 1함수→거대 단일 C함수)에서 옵티마이저 blowup** (>2h·aiden 23.8%CPU=clang grind). `_hexa_clang_capped`는 **동시성 cap(cap_n=2 토큰)일 뿐 wall-clock timeout 無**("normal clang 3-4s" 가정)→clang이 안 끝나면 hexa가 영원히 poll 대기.
+
+- **아래 3-agent 정적분석(HIR→MIR `_mir_lookup` append-only `_lr_bindings` O(N²))은 PLAUSIBLE했으나 틀림** — 정적으로 hexa lowering을 지목했지만 실측 sample은 clang을 지목. measure-first/verdict-integrity 승(sample 대상 프로세스 특정: 부모 hexa run=poll drain-wait, 자식 hexad=_hexa_clang_capped→clang wait).
+- **비회귀**: ghost v0.741.7도 hang(최근 .741→.753 회귀 아님·longstanding).
+- **fix 방향(정정됨)**: ①`_hexa_clang_capped`에 wall-clock timeout 추가(clang N초 초과 kill·census #4901과 별개로 컴파일러 자체 가드) ②거대 emitted-C 단일함수 -O0/분할 ③**진짜 종점=native-emit로 clang 제거**(프런티어 axis-③ L2 目). 이전 "bindings O(1) index" fix는 **무효**(잘못된 근인).
+- **프런티어 연결**: 이 hang은 C-transpile fallback(hexa_cc→clang)의 병리 = 자기호스트 DONE ①(no hexa_cc.c)·③(no clang)이 제거하려는 바로 그것.
+
+---
+## (아래는 실측 前 3-agent 정적 가설 — clang 실측으로 FALSIFIED·기록 보존)
 
 **증상**: `hexa run compiler/main.hexa --emit=obj stdlib/qforge/atoms/ccsd_rhf.hexa` HANG — 2h17m·23.8%CPU 단일스레드(OOM 아님·idle 아님)·v0.753.0. 타 코퍼스 파일은 ~1-2s, 이 파일만 wedge. #4901이 census 하니스에 per-file timeout(mitigation)만 착지, 근인은 미규명이었음.
 
