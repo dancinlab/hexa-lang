@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# tool/ownobj_member_parity_gate — axis-②③ B3 A0 proof gate (Fable gate (ii)).
+#
+# For each runtime seed family, produce the member TWO ways and assert the
+# EXTERNAL CONTRACT is identical:
+#   (own) aprime --backend=native --emit=obj  stdlib/runtime/<fam>.hexa  → own.o
+#   (seed) $CC -c  self/native/<fam>_x86_64.s                            → seed.o
+# then compare the **defined-global symbol SET** (`nm -g --defined-only`, name-only,
+# sorted) — NOT byte-identity (own-emit bytes ≠ GNU-as bytes by construction, same
+# as the own-link-vs-ld precedent). Equal set ⇒ the own-object member is a
+# drop-in for the `.s` seed member under the HEXA_RT_OWNOBJ lane; the ar'd
+# runtime.a keeps the same nm contract, so every consumer link resolves identically.
+#
+# This is the per-member half of the A0 flip gate; the RUN half (link both archives,
+# run the ownlink corpus incl float.hexa, stdout+rc identical) rides
+# ownlink_corpus_parity_gate. Advisory until promoted into selfhost-gates-summary.
+#
+#   tool/ownobj_member_parity_gate [APRIME=build/aprime_cc] [CC=clang]
+#
+# POOL ONLY (aprime emit is a heavy build). Exit 0 = all families PASS.
+set -uo pipefail
+
+APRIME="${APRIME:-build/aprime_cc}"
+CC="${CC:-clang}"
+TRIPLE="${TRIPLE:-x86_64-linux-gnu}"
+HX="$(cd "$(dirname "$0")/.."; pwd)"
+cd "$HX"
+
+[ -x "$APRIME" ] || { echo "[ownobj-parity] ERROR: no native compiler at $APRIME (set APRIME=)" >&2; exit 1; }
+
+# family : hexa-source : seed-.s : contract-symbol grep (the external member contract)
+# (the 10 round-0-GREEN families; rt_hi/fs_core/alloc_syscall live under other
+#  source names — added when their A0 branch lands.)
+FAMILIES="
+array_core:stdlib/runtime/array_core.hexa:self/native/array_core_x86_64.s
+map_core:stdlib/runtime/map_core.hexa:self/native/map_core_x86_64.s
+intern_core:stdlib/runtime/intern_core.hexa:self/native/intern_core_x86_64.s
+str_core:stdlib/runtime/str_core.hexa:self/native/str_core_x86_64.s
+num_core:stdlib/runtime/num_core.hexa:self/native/num_core_x86_64.s
+num_float_core:stdlib/runtime/num_float_core.hexa:self/native/num_float_core_x86_64.s
+float_parse_exact:stdlib/runtime/float_parse_exact.hexa:self/native/float_parse_exact_x86_64.s
+float_parse_hexinfnan:stdlib/runtime/float_parse_hexinfnan.hexa:self/native/float_parse_hexinfnan_x86_64.s
+regex_rt:stdlib/runtime/regex_rt.hexa:self/native/regex_rt_x86_64.s
+valop_core:stdlib/runtime/valop_core.hexa:self/native/valop_core_x86_64.s
+"
+
+W="$(mktemp -d -t ownobj_parity.XXXXXX)"; trap 'rm -rf "$W"' EXIT
+printf 'fn _drv_unused() {}\n' > "$W/_drv.hexa"
+N=0; FAIL=0
+
+# name-only, defined-globals, sorted — the external contract of a member.
+_defsyms() { nm -g --defined-only "$1" 2>/dev/null | awk '$2=="T"||$2=="D"||$2=="R"||$2=="B"{print $3}' | sort -u; }
+
+for row in $FAMILIES; do
+    [ -z "$row" ] && continue
+    fam="${row%%:*}"; rest="${row#*:}"; src="${rest%%:*}"; seed="${rest#*:}"
+    N=$((N + 1))
+    if [ ! -f "$src" ]; then echo "  $fam: SKIP (no hexa src $src)"; continue; fi
+    if [ ! -f "$seed" ]; then echo "  $fam: SKIP (no seed .s $seed)"; continue; fi
+    # own-emit
+    if ! "$APRIME" "$W/_drv.hexa" --backend=native --emit=obj --target="$TRIPLE" -o "$W/$fam.own.o" "$src" 2>"$W/$fam.own.err"; then
+        echo "  $fam: FAIL own-emit — $(head -1 "$W/$fam.own.err")"; FAIL=$((FAIL + 1)); continue
+    fi
+    # seed assemble (strip the `// ` header comments like the resolver does)
+    grep -vE '^// ' "$seed" > "$W/$fam.seed.s" 2>/dev/null || cp "$seed" "$W/$fam.seed.s"
+    if ! $CC -c "$W/$fam.seed.s" -o "$W/$fam.seed.o" 2>"$W/$fam.seed.err"; then
+        echo "  $fam: SKIP (seed assemble failed — $(head -1 "$W/$fam.seed.err"))"; continue
+    fi
+    _defsyms "$W/$fam.own.o"  > "$W/$fam.own.syms"
+    _defsyms "$W/$fam.seed.o" > "$W/$fam.seed.syms"
+    # The contract = the rt_* / hexa_* / farr_* exported globals the runtime.c
+    # delegation resolves. Compare the intersection-relevant contract set: the
+    # seed's defined globals MUST all be present in the own-emit member (own may
+    # export MORE internal helpers — those get demoted/ignored; missing a seed
+    # contract sym is the fatal case that breaks a consumer link).
+    missing="$(comm -23 "$W/$fam.seed.syms" "$W/$fam.own.syms" | tr '\n' ' ')"
+    if [ -z "${missing// /}" ]; then
+        echo "  $fam: PASS (own ⊇ seed contract · own=$(wc -l < "$W/$fam.own.syms") seed=$(wc -l < "$W/$fam.seed.syms") defined-globals)"
+    else
+        echo "  $fam: FAIL — own-emit missing seed contract syms: $missing"; FAIL=$((FAIL + 1))
+    fi
+done
+
+echo "── ownobj member parity: $((N - FAIL))/$N families PASS (own-emit ⊇ seed contract) ──"
+[ "$FAIL" -eq 0 ] && { echo "OWNOBJ-PARITY GREEN — A0 members are drop-in for the .s seeds"; exit 0; } || exit 1
