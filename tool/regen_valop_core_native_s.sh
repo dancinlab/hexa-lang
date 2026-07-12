@@ -43,8 +43,8 @@ trap 'rm -rf "$TMP"' EXIT
 printf 'fn _drv_unused() {}\n' > "$TMP/_drv.hexa"
 
 # the native value-op symbols this seed must export.
-SYMS="rt_truthy_native rt_sub_native rt_mul_native rt_add_native rt_cmp_lt_native rt_cmp_gt_native rt_cmp_le_native rt_cmp_ge_native rt_div_native rt_mod_native"
-NSYMS=10
+SYMS="rt_truthy_native rt_sub_native rt_mul_native rt_add_native rt_cmp_lt_native rt_cmp_gt_native rt_cmp_le_native rt_cmp_ge_native rt_div_native rt_mod_native rt_eq_scalar_native rt_to_int_native rt_to_float_native rt_abs_native rt_null_coal_native"
+NSYMS=15
 
 emit_one() {
     local triple="$1" out="$2" abi="$3"
