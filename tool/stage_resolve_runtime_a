@@ -729,6 +729,36 @@ resolve_native_num_float_core_seed() {
         echo "[stage_resolve_runtime_a] RT-NATIVE NUM-FLOAT: seed $seed exports only $nsyms/1 rt_parse_float_native — falling back to C #else path" >&2
         return 0
     fi
+    # ── axis-②③ B3 A0 (own-object seed) — num_float_core (DUAL flag: parse +
+    #    format halves; parity own=3 ⊇ seed=3 PROVEN). Set each flag from the
+    #    own-emit member's exported sym (rt_parse_float_native / rt_format_float_native),
+    #    mirroring the .s path's split flag logic above (lines ~25-32/40-48). ──
+    if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_NUMFLOAT:-0}" != "0" ]; } then
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/num_float_core.hexa" _otri=""
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --target="$_otri" -o build/num_float_core_native.o "$_osrc" 2>build/num_float_core_ownobj.err; then
+                local _otp _otf
+                _otp="$(nm build/num_float_core_native.o 2>/dev/null | grep -cE ' T _?rt_parse_float_native')"
+                _otf="$(nm build/num_float_core_native.o 2>/dev/null | grep -cE ' T _?rt_format_float_native')"
+                if [ "${_otp:-0}" -ge 1 ]; then
+                    export HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1
+                    if [ "${_otf:-0}" -ge 1 ]; then
+                        export HEXA_RT_FORMAT_FLOAT_NATIVE_AVAIL=1
+                        [ "${HEXA_RT_FORMAT_FLOAT_NATIVE:-x}" != "0" ] && export HEXA_RT_FORMAT_FLOAT_NATIVE=1
+                    fi
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: num_float_core via $_oc --emit=obj ($_otp parse + $_otf format rt_*float_native, TARGET=$tgt) → native string→f64 parse+format path, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: num_float_core own-emit exported $_otp parse — falling back to .s seed" >&2
+            else
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: num_float_core own-emit failed — falling back to .s seed ($(head -1 build/num_float_core_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
+    fi
     local s_tmp="build/num_float_core_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
     if $CC -c "$s_tmp" -o build/num_float_core_native.o 2>/dev/null; then
