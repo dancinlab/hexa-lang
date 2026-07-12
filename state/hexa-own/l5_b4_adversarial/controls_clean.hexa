@@ -1,0 +1,43 @@
+// L5 B4-precensus adversarial corpus — CLEAN controls (MUST fire ZERO).
+// ─────────────────────────────────────────────────────────────────────────
+// These SAFE programs deliberately sit just outside every Rule-1 arming
+// condition. They must fire ZERO HX3014. A fire here would be a DIFFERENT
+// precision defect (over-firing on same-name / read-only / pre-join writes) —
+// not the field-disjoint place-projection FP the B4 gate is about — so keeping
+// them separate stops such a regression from inflating the B4-gating count.
+
+struct Cfg {
+    a: i64,
+    b: i64
+}
+
+// CL-1 — single name, field write then disjoint read (NO alias). write name ==
+// read name (`c`) → Rule 1 requires a write through a DIFFERENT name → no fire.
+fn cl_same_name() -> i64 {
+    let mut c = Cfg { a: 1, b: 2 }
+    c.a = 10
+    return c.b
+}
+
+// CL-2 — read-only aliasing (no write at all). Benign alias → no write event → no fire.
+fn cl_readonly_alias() -> i64 {
+    let c = Cfg { a: 1, b: 2 }
+    let d = c
+    return c.a + d.b
+}
+
+// CL-3 — write BEFORE the alias is created. The L5 round-2b gen/kill gate
+// (hir_to_mir.hexa:1977 `_bck_w_seqs[wi] > _bk_ujoin`) requires the write to
+// POSTDATE the use-name's join, so a write recorded before `d` joined the group
+// cannot arm `d` → no fire.
+fn cl_write_before_alias() -> i64 {
+    let mut c = Cfg { a: 1, b: 2 }
+    c.a = 10
+    let d = c
+    return d.b
+}
+
+fn main() {
+    let s = cl_same_name() + cl_readonly_alias() + cl_write_before_alias()
+    println(s)
+}
