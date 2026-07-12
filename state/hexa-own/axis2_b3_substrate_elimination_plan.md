@@ -131,8 +131,21 @@ The two SAFE A1 classes are fully wired (all default-OFF byte-neutral; own-emit 
 
 **Only the frozen-seed class remains for A1** — strcmp/strncmp/strchr/strdup/strstr/calloc: the frozen
 `.s` seeds were `isolate_native_seed.py`-isolated to **0 undefined externals**, but `--keep-global` alone
-reintroduces 5 (convergence stage-resolve-runtime-a-3). Needs an isolation step (own dead-code-elim or a
-`--keep-global` + own-strip pass) → **design-gated (fable)**, distinct sub-problem.
+reintroduces 5 (convergence stage-resolve-runtime-a-3). Needs an isolation step → **design-gated (fable,
+in-flight)**, distinct sub-problem.
+
+### Reference algorithm characterized (isolate_native_seed.py) — the own-emit target to match
+The isolation is a **transitive reachability DCE over the call graph**: `keep = {root}`; BFS following
+`refs_of(block)` (symbols a function references = call-graph edges) via `resolve(sym)`; emit only the
+reachable functions (`kept_order`), strip every `.globl/.type/.size/…` directive for dropped syms, and
+re-assert the single contract `.globl <root>`. Dropping the dead sibling bodies removes the darwin-absent
+externals they carried (errno/environ/…). So the own-emit design (Fable) must do the same reachability
+sweep at `--emit=obj`: from the keeplist function roots, follow **reloc edges to STT_FUNC defined
+symbols** transitively, KEEP only reachable functions (drop unreachable bodies from `obj.text` — recompute
+offsets — + their symbols + their relocs + now-unreferenced undef externals). This is E4 + a reachability
+filter, but with **text-range removal + offset/reloc recompute** (harder than E4's symbol-reorder) →
+needs the grounded Fable design + a compiler rebuild to verify (own-emit strcmp.o `nm U == 0`). Interim
+fallback: the frozen `.s` seeds still ship (default path), so this is purely the own-obj upgrade.
 
 **Remaining for lane-2 (multi-session)**: A1 frozen-seed isolation (~6 members, design-gated) → the
 `:-0`→`:-auto` flip PR (ship witness3 PASS) verified by `release_build HEXA_RT_OWNOBJ=1` archive-link →
