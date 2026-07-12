@@ -733,3 +733,148 @@ pub fn pack_lir_arm64_elf(lm: LModule) -> ElfArm64Obj {
     }
     return obj
 }
+
+// ─────────────────────────────────────────────────────────────────
+// axis-③ arm64 own-link — serialize_elf_exec_arm64 (static ET_EXEC)
+// ─────────────────────────────────────────────────────────────
+// AArch64 sibling of serialize_elf_exec_x86_64 (elf_x86_64.hexa). Emits a
+// STATIC AArch64 ELF ET_EXEC: ELF64 header + a single R+X PT_LOAD carrying the
+// linked .text at vaddr 0x400000, NO program interpreter / dynamic section /
+// section headers — the kernel enters at e_entry directly. Two deltas vs the
+// x86 twin: e_machine = ELF_EM_AARCH64 (0xb7, not 0x3e), and p_align = 0x10000
+// (64KB — the max-safe aarch64 page size; 0x1000 can be unloadable on 64KB-page
+// kernels). Design + verify: state/hexa-own/axis3_arm64_ownlink_campaign.md.
+pub fn serialize_elf_exec_arm64(text: [Int]) -> [Int] {
+    let out: [Int] = []
+    let text_size = len(text)
+
+    let elf_header_size = 64
+    let phdr_size = 56
+    let phnum = 1
+    let code_off = elf_header_size + phdr_size * phnum     // 120
+    let vaddr_base = 0x400000
+    let entry_vaddr = vaddr_base + code_off
+    let file_size = code_off + text_size
+
+    out.push(ELF_EI_MAG0); out.push(ELF_EI_MAG1)
+    out.push(ELF_EI_MAG2); out.push(ELF_EI_MAG3)
+    out.push(ELF_ELFCLASS64)
+    out.push(ELF_ELFDATA2LSB)
+    out.push(ELF_EV_CURRENT)
+    out.push(ELF_ELFOSABI_NONE)
+    _ew_zero(out, 8)
+    _ew_u16(out, ELF_ET_EXEC)
+    _ew_u16(out, ELF_EM_AARCH64)            // ← the AArch64 delta (was ELF_EM_X86_64)
+    _ew_u32(out, ELF_EV_CURRENT)
+    _ew_u64(out, entry_vaddr)
+    _ew_u64(out, elf_header_size)           // e_phoff
+    _ew_u64(out, 0)                         // e_shoff
+    _ew_u32(out, 0)                         // e_flags
+    _ew_u16(out, elf_header_size)
+    _ew_u16(out, phdr_size)
+    _ew_u16(out, phnum)
+    _ew_u16(out, 0)                         // e_shentsize
+    _ew_u16(out, 0)                         // e_shnum
+    _ew_u16(out, 0)                         // e_shstrndx
+
+    // PT_LOAD (R+X)
+    _ew_u32(out, 1)                         // p_type = PT_LOAD
+    _ew_u32(out, 5)                         // p_flags = PF_R | PF_X
+    _ew_u64(out, 0)                         // p_offset
+    _ew_u64(out, vaddr_base)                // p_vaddr
+    _ew_u64(out, vaddr_base)                // p_paddr
+    _ew_u64(out, file_size)                 // p_filesz
+    _ew_u64(out, file_size)                 // p_memsz
+    _ew_u64(out, 0x10000)                   // p_align (64KB-page-safe · x86 uses 0x1000)
+
+    let mut i = 0
+    while i < text_size { out.push(text[i] & 0xff); i = i + 1 }
+
+    return out
+}
+
+// ─────────────────────────────────────────────────────────────────
+// axis-③ arm64 own-link — link_elf_arm64_ownstart (RUNG-1, exit-code-only)
+// ─────────────────────────────────────────────────────────────
+// AArch64 sibling of link_elf_x86_64_ownstart (elf_x86_64.hexa). Prepends a
+// 24-byte own `_start` stub so the ET_EXEC needs NO crt1.o / -lc / dynamic
+// linker: the kernel enters at _start, which unpacks argc/argv from the stack,
+// calls `main`, forwards main's HexaVal PAYLOAD (x1 of the AAPCS64 x0=tag/x1=
+// payload return pair) into x0 and issues `exit(payload)` directly.
+//
+// _start (24 bytes · aiden aarch64-linux-gnu-as verified):
+//   f94003e0  ldr  x0, [sp]      ; argc (aarch64 entry: argc at [sp], NOT x0)
+//   910023e1  add  x1, sp, #8    ; argv
+//   94000000  bl   main          ; CALL26 patched here (imm26 = (main-here)>>2)
+//   aa0103e0  mov  x0, x1        ; exit code = main's HexaVal payload (x1)
+//   d2800ba8  movz x8, #93       ; __NR_exit (aarch64 = 93, NOT x86 60)
+//   d4000001  svc  #0            ; trap (x8=NR, svc #0)
+//
+// RUNG-1 SCOPE: single trivial program object, NO runtime.a, NO data segment,
+// NO cross-object/extern relocation application (that is rung-2). The .o's
+// intra-fn imm26/imm19 are already pre-resolved at pack time (pack_lir_arm64_elf),
+// so a truly trivial `fn main()->Int{return 42}` carries ZERO obj relocs; the
+// ONLY reloc this rung applies is the stub's own `bl main` CALL26. If any obj
+// carries relocs (cross-fn/extern → needs the rung-2 applicator + likely a
+// runtime.a member), refuse LOUDLY rather than emit a silently-miscompiled exec.
+// Design + rungs 2-7: state/hexa-own/axis3_arm64_ownlink_campaign.md.
+pub fn link_elf_arm64_ownstart(objs: [ElfArm64Obj], out_path: string, main_name: string, runtime_defs: [string]) -> Int {
+    // 24-byte _start stub (bl main's imm26 patched below; bl at byte offset 8).
+    let mut text: [Int] = []
+    text.push(0xe0); text.push(0x03); text.push(0x40); text.push(0xf9)   // ldr x0,[sp]
+    text.push(0xe1); text.push(0x23); text.push(0x00); text.push(0x91)   // add x1,sp,#8
+    text.push(0x00); text.push(0x00); text.push(0x00); text.push(0x94)   // bl main (CALL26)
+    text.push(0xe0); text.push(0x03); text.push(0x01); text.push(0xaa)   // mov x0,x1
+    text.push(0xa8); text.push(0x0b); text.push(0x80); text.push(0xd2)   // movz x8,#93
+    text.push(0x01); text.push(0x00); text.push(0x00); text.push(0xd4)   // svc #0
+    let bl_off = 8                     // stub's `bl main` byte offset
+
+    // Concatenate each obj's .text after the stub; locate `main`; refuse on any
+    // obj reloc (rung-2 applies those). No runtime.a / data for rung-1.
+    let mut main_off = -1
+    let mut oi = 0
+    while oi < len(objs) {
+        let obj = objs[oi]
+        if len(obj.relocs) > 0 {
+            eprintln("hexa_ld(arm64,ownstart): rung-1 supports only reloc-free trivial programs; obj carries " + to_string(len(obj.relocs)) + " unresolved reloc(s) (cross-fn/extern/data need the rung-2 applicator + runtime.a) — refusing (no silent miscompile)")
+            return 3
+        }
+        let base = len(text)
+        let mut si = 0
+        while si < len(obj.symbols) {
+            let s = obj.symbols[si]
+            if s.section != 0 {
+                let mut nm = ""
+                let mut k = 0
+                while true {
+                    let b = obj.strtab[s.name_offset + k] & 0xff
+                    if b == 0 { break }
+                    nm = nm + from_char_code(b)
+                    k = k + 1
+                }
+                if nm == main_name { main_off = base + s.value }
+            }
+            si = si + 1
+        }
+        let mut ti = 0
+        while ti < len(obj.text) { text.push(obj.text[ti] & 0xff); ti = ti + 1 }
+        oi = oi + 1
+    }
+    if main_off < 0 {
+        eprintln("hexa_ld(arm64,ownstart): entry symbol '" + main_name + "' not found (no defined .text symbol)")
+        return 3
+    }
+
+    // Patch the stub's `bl main` CALL26: imm26 = (S - P) >> 2 into bits[25:0];
+    // opcode 100101b (0x94000000) in bits[31:26]. Range ±128MB (fine intra-image).
+    let delta = main_off - bl_off
+    let imm26 = (delta >> 2) & 0x3ffffff
+    let bl_word = 0x94000000 | imm26
+    text[bl_off + 0] = bl_word & 0xff
+    text[bl_off + 1] = (bl_word >> 8) & 0xff
+    text[bl_off + 2] = (bl_word >> 16) & 0xff
+    text[bl_off + 3] = (bl_word >> 24) & 0xff
+
+    write_bytes(out_path, serialize_elf_exec_arm64(text))
+    return 0
+}

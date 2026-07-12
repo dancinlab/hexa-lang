@@ -836,6 +836,10 @@ let mut native_obj_ready = false
 // every non-native / non-hexa-linker build.
 let mut elf_obj_x86_holder: [ElfX86Obj] = []
 let mut elf_obj_x86_ready = false
+// axis-③ arm64 own-link (rung-1): the AArch64 twin holder — dormant/byte-neutral
+// unless a native --linker=hexa --target=arm64-linux-gnu build populates it.
+let mut elf_obj_arm64_holder: [ElfArm64Obj] = []
+let mut elf_obj_arm64_ready = false
 if stream_mode && target == "arm64-apple-darwin" {
     if opt_level > 0 {
         eprintln("hexa-compiler: --stream uses the fused per-function path; "
@@ -1051,6 +1055,10 @@ if stream_mode && target == "arm64-apple-darwin" {
         } else {
             native_obj_bytes = elf_bytes
             native_obj_ready = true
+            // axis-③ arm64 own-link (rung-1): stash the ElfArm64Obj so the
+            // --linker=hexa dispatch can in-process own-link it (no system ld).
+            elf_obj_arm64_holder.push(elf_obj)
+            elf_obj_arm64_ready = true
             if verbose {
                 eprintln("hexa-compiler: serialized ELF AArch64 .o via native backend for exec link ("
                          + to_string(len(elf_bytes)) + " bytes)")
@@ -1301,6 +1309,24 @@ if linker_kind == "hexa" {
         let _ = exec("chmod +x '" + out_path + "'")
         if verbose {
             eprintln("hexa-compiler: linked static ELF ET_EXEC via in-tree hexa_ld "
+                     + "(own-start _start, no crt1.o/-lc/-dynamic-linker) to " + out_path)
+        }
+        exit(0)
+    } else if target == "arm64-linux-gnu" && elf_obj_arm64_ready {
+        // axis-③ arm64 own-link (rung-1, opt-in): in-process own-start ELF
+        // static-exec link — NO ld/as/crt1.o/-lc/-dynamic-linker, ZERO binutils.
+        // Mirrors the x86_64 own-start leg above. RUNG-1 = trivial reloc-free
+        // program (exit-code-only); link_elf_arm64_ownstart refuses LOUDLY on any
+        // obj reloc (cross-fn/extern/data → rung-2 runtime.a-aware applicator).
+        // Replaces the old arm64-linux system-ld fallback warning below.
+        let rc = link_elf_arm64_ownstart(elf_obj_arm64_holder, out_path, "main", [])
+        if rc != 0 {
+            eprintln("hexa-compiler: hexa_ld(elf,arm64) own-start link failed rc=" + to_string(rc))
+            exit(2)
+        }
+        let _ = exec("chmod +x '" + out_path + "'")
+        if verbose {
+            eprintln("hexa-compiler: linked static AArch64 ELF ET_EXEC via in-tree hexa_ld "
                      + "(own-start _start, no crt1.o/-lc/-dynamic-linker) to " + out_path)
         }
         exit(0)
