@@ -48,6 +48,10 @@
 #                                                      (default: "state/hexa-own/l5_b4_adversarial tests stdlib")
 #   CORPUS_LIMIT       cap auto-globbed file count (0=all)  (default: 0)
 #   REPS               timing repetitions per band    (default: 1 — census, not cost)
+#   CENSUS_FILE_TIMEOUT per-file compile timeout (sec)  (default: 90 — a corpus file
+#                        exceeding it = compiler blowup/hang → SKIP + record, so one
+#                        pathological file cannot wedge the whole census. e.g.
+#                        stdlib/qforge/atoms/ccsd_rhf.hexa hung >2h @ v0.753.0.)
 #   GH_TOKEN           github token (release_build edge-pull, if needed)
 # Self-harvests the verdict to $WORK/B4_PRECENSUS_RESULT.txt AND $HOME/.
 # Isolated worktree; single-SSH; FOREGROUND blocking. mini = git/gh only — RUN
@@ -148,9 +152,19 @@ compile_corpus() { # $1=diag-log ; census env comes from the CALLER's exported v
         [ -e "$SRC/$src" ] || { echo "[census-harness] MISSING corpus file: $src" >>"$log"; continue; }
         n=$((n+1))
         ( cd "$SRC" && HEXA_ATLAS_EMBED="$NOATLAS" \
+            timeout "${CENSUS_FILE_TIMEOUT:-90}" \
             "$HEXA" run compiler/main.hexa \
                 --emit=obj --target="$TARGET" --ignore-errors --error-format=short \
-                -o "$WORK/census_obj.o" "$src" ) >>"$log" 2>&1 || rc_any=1
+                -o "$WORK/census_obj.o" "$src" ) >>"$log" 2>&1
+        frc=$?
+        # per-file timeout guard: one pathological corpus file (compiler
+        # blowup/hang) must not wedge the whole census. rc 124(timeout)/137(kill)
+        # → SKIP + record; quarantined from the FP count (infra-wall-noneval:
+        # a compiler-hang defect != a borrow-check false positive).
+        if [ "$frc" = 124 ] || [ "$frc" = 137 ]; then
+            echo "[census-harness] TIMEOUT(${CENSUS_FILE_TIMEOUT:-90}s) SKIP: $src" >>"$log"
+            echo "$src" >> "$WORK/census_skipped.txt"
+        elif [ "$frc" != 0 ]; then rc_any=1; fi
     done
     return $rc_any
 }
@@ -302,6 +316,15 @@ say "    A4 'place projection (field-disjoint)=별도 schema-add') — keep B4 a
 say "  * If B4_GATE==0 across a broad+adversarial corpus AND the adversarial FDs"
 say "    genuinely fire (census live), the ceiling is a non-issue in practice →"
 say "    B4-fatal viable behind @grace waivers (separate PR, byteeq 3-target)."
+say ""
+if [ -s "$WORK/census_skipped.txt" ]; then
+    SK_N=$(wc -l < "$WORK/census_skipped.txt" | tr -d ' ')
+    say "CENSUS_SKIPPED_FILES = $SK_N  (per-file timeout >${CENSUS_FILE_TIMEOUT:-90}s — compiler-hang, QUARANTINED from FP count · infra-wall-noneval):"
+    sort -u "$WORK/census_skipped.txt" | sed 's/^/    /' | tee -a "$RESULT"
+    say "  ⇒ each = a separate compiler perf/hang defect (own investigation), NOT a borrow-check FP."
+else
+    say "CENSUS_SKIPPED_FILES = 0  (no per-file timeout hit)"
+fi
 say "════════════════════════════════════════════════════════════════════"
 
 cp "$RESULT" "$HOME/B4_PRECENSUS_RESULT.txt" 2>/dev/null || true
