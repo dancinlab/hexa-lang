@@ -1,3 +1,16 @@
+// Runtime-prelude imports — pull the rt_map_* delegate BODIES (+ their reachable
+// closure) into this seed's compile so `--keep-global=<8> --isolate` can absorb them
+// as STB_LOCAL (self-contained seed). Seed-only source (imported by nothing); these
+// imports affect ONLY the own-obj seed emit, never a default build.
+import "ctype.hexa"
+import "math.hexa"
+import "thread.hexa"
+import "net.hexa"
+import "posix.hexa"
+import "numeric.hexa"
+import "regex_rt.hexa"
+import "io.hexa"
+
 // stdlib/runtime/map_query.hexa — axis-② B3 map-query DISPATCHER natives.
 //
 // The hexa-source bodies for 8 of the 9 thin map query/projection DISPATCHERS
@@ -39,15 +52,17 @@
 extern fn hexa_array_new() -> HexaVal
 extern fn hexa_map_new() -> HexaVal
 
-// hexa-source delegates (numeric.hexa; C-ABI = HexaVal-uniform via hexat boxing).
-extern fn rt_map_keys(m: HexaVal) -> HexaVal
-extern fn rt_map_values(m: HexaVal) -> HexaVal
-extern fn rt_map_entries(m: HexaVal) -> HexaVal
-extern fn rt_map_map_values(m: HexaVal, fn_v: HexaVal, empty: HexaVal) -> HexaVal
-extern fn rt_map_filter_keys(m: HexaVal, fn_v: HexaVal, empty: HexaVal) -> HexaVal
-extern fn rt_map_count_pred(m: HexaVal, pred: HexaVal) -> HexaVal
-extern fn rt_map_any_pred_b(m: HexaVal, pred: HexaVal) -> HexaVal
-extern fn rt_map_all_pred_b(m: HexaVal, pred: HexaVal) -> HexaVal
+// hexa-source delegates (rt_map_*) are pulled in by the runtime-prelude imports at
+// the TOP of this file — NOT extern-declared. Compiling this seed as
+// `aprime --emit=obj --keep-global=<the 8 hexa_map_*> --isolate` (own-obj lane)
+// ABSORBS the rt_map_* bodies (+ their reachable closure) as STB_LOCAL and prunes
+// at the carrier boundary, so the emitted seed .o is SELF-CONTAINED: its only
+// undefined externals are the 13 runtime.a-resident C primitives
+// (__map_order_key_at/__map_raw_len/hexa_array_new/hexa_array_push/hexa_map_get_v/…),
+// zero program-side `rt_map_*`. This is REQUIRED for the flip — an extern-based seed
+// leaves `rt_map_*` undefined, breaking every runtime.a-ONLY link (grace-consent
+// checker, minimal consumers). Verified summer: runtime.a-only OFF+ON link rc=0,
+// RUN-parity byte-identical. See state/hexa-own/axis2_runtime_c_body_reduction_roadmap.md.
 
 // C: if (!HX_MAP_TBL(m)) return hexa_array_new(); return rt_map_keys(m);
 pub fn hexa_map_keys(m: HexaVal) -> HexaVal {
