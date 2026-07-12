@@ -119,5 +119,21 @@ more structure than the A0 seed families, so each needs an own-emit branch mirro
 pattern (own-emit + `nm` assert exactly-1-global + fallback to `.s`). Batch by family (string / mem /
 libm / FILE / proc). Gated on E4 #4904 (non-E4 aprime → all-global → clean `.s` fallback = merge-safe).
 
-**Remaining for lane-2 (multi-session)**: A1 wiring (~27 members, mechanism proven above) → S1/S2
-fragments → the runtime.c body (Round-3+, ~29-32k LOC HexaVal machinery) → m3 TU-drop = literal ② DONE.
+## A1 wiring — libm + objcopy classes COMPLETE (2026-07-12, 17 branches / 18 symbols)
+
+The two SAFE A1 classes are fully wired (all default-OFF byte-neutral; own-emit only under HEXA_RT_OWNOBJ):
+- **libm class (5)**: fmod · sin · cos · exp · log — `--emit=asm` → `--emit=obj --keep-global`, drops `$CC`.
+- **objcopy class (12)**: getenv · time · atof · atoll · signal · fork · setenv · pipe · execvp ·
+  clock_gettime (`hxlcl_clock_gettime`) · open (`hxlcl_open_sys`) · popen/pclose (2-sym combined) —
+  `--emit=asm + $CC + objcopy --keep-global-symbol` → `--emit=obj --keep-global`, drops **BOTH `$CC` AND
+  binutils objcopy** (the direct axis-③ no-binutils win). Each own-emit verified on summer to the exact
+  global count (1, or 2 for popen/pclose); popen/pclose builds the comma-list from its POPEN/PCLOSE flags.
+
+**Only the frozen-seed class remains for A1** — strcmp/strncmp/strchr/strdup/strstr/calloc: the frozen
+`.s` seeds were `isolate_native_seed.py`-isolated to **0 undefined externals**, but `--keep-global` alone
+reintroduces 5 (convergence stage-resolve-runtime-a-3). Needs an isolation step (own dead-code-elim or a
+`--keep-global` + own-strip pass) → **design-gated (fable)**, distinct sub-problem.
+
+**Remaining for lane-2 (multi-session)**: A1 frozen-seed isolation (~6 members, design-gated) → the
+`:-0`→`:-auto` flip PR (ship witness3 PASS) verified by `release_build HEXA_RT_OWNOBJ=1` archive-link →
+S1/S2 fragments → the runtime.c body (Round-3+, ~29-32k LOC HexaVal machinery) → m3 TU-drop = literal ② DONE.
