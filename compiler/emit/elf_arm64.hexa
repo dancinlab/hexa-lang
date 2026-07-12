@@ -522,7 +522,7 @@ fn _elf_lookup_label(names: [string], offsets: [Int], target: string) -> Int {
 // `obj.nlocal` is stored so `serialize_elf_arm64` can stamp the .symtab
 // `sh_info` (= first-non-local index = nlocal+1, counting STN_UNDEF).
 pub fn pack_lir_arm64_elf(lm: LModule) -> ElfArm64Obj {
-    let obj = ElfArm64Obj {
+    let mut obj = ElfArm64Obj {
         text:     [],
         relocs:   [],
         symbols:  [],

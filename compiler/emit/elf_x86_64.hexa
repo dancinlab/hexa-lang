@@ -4963,7 +4963,7 @@ fn _pack_fn_x86(out_text: [Int],
 // `relocs` empty; cycle 30 attaches `R_X86_64_PLT32` records for
 // cross-fn / extern CALL/JMP targets that bubble up unresolved.
 pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
-    let obj = ElfX86Obj {
+    let mut obj = ElfX86Obj {
         text:     [],
         relocs:   [],
         symbols:  [],

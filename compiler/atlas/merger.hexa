@@ -161,7 +161,7 @@ pub fn load_atlas(root: string) -> AtlasIndex {
         effective = env("HOME") + "/core/hexa-lang/n6"
     }
 
-    let idx = AtlasIndex {
+    let mut idx = AtlasIndex {
         p_nodes: [],
         c_nodes: [],
         l_nodes: [],

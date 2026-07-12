@@ -592,7 +592,7 @@ fn _re_add(re: Regex, list: [int], seen: [int], gen: int, acc: [int], st: int, p
 // consumed s[start..end), or -1 if no match begins at `start`.
 fn _re_longest_from(re: Regex, s: string, start: int, n: int) -> int {
     let seen = _re_zeros(re.nstates)
-    let acc = [0]
+    let mut acc = [0]
     let mut gen = 1
     let mut list: [int] = []
     _re_add(re, list, seen, gen, acc, re.start, start, n)
