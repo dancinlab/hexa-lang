@@ -1,0 +1,17 @@
+// k4_arrlen — TARGET · HOISTABLE (array .len() → i64). The broadbench anchor,
+// byte-for-byte the r1 k6_callres kernel so this bench re-anchors on the one
+// kernel already measured at 0.750× (25% faster) in unbox-hir-calltype-r1.
+//
+// flag OFF: ast_to_hir leaves `xs.len()` result "?" → operand rejected → the
+//   `* i` and outer `s + …` stay BOXED (call hexa_mul / hexa_add per iter).
+// flag ON : the checker-mirror stamps i64 → the native unbox ALU path fires →
+//   hexa_mul / hexa_add call-count DROPS. Parity identical (len=8 constant).
+fn main() {
+    let xs: [i64] = [3, 1, 4, 1, 5, 9, 2, 6]
+    let mut s = 0
+    let N = 100000000
+    for i in 0..N {
+        s = s + xs.len() * i
+    }
+    println(s)
+}
