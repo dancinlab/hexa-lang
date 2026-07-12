@@ -1094,7 +1094,7 @@ jobs:
       - uses: actions/checkout@v6
       - name: ccache setup
         uses: ./.github/actions/ccache-setup
-      - name: Build ./hexa — shared release_build (produces the CLI + restores seeds)
+      - name: (1) Build ./hexa + stage the SHIPPED consumer artifact (ships aprime_cc per r27)
         shell: bash
         env:
           TARGET: linux-x86_64
@@ -1107,10 +1107,28 @@ jobs:
           set -euo pipefail
           bash tool/release_build
           ./hexa --version
-          echo "./hexa built OK"
-      - name: cfallback-zero census (default hexa build must take own-link)
+          # stage_precompile_package = the exact packaging a consumer install consumes;
+          # r27 builds+ships build/aprime_cc so the own-link default leg can fire. The
+          # census MUST test THIS artifact (not the bare release_build tree), else it
+          # models an env no consumer has — see tool/cfallback_zero_census FIDELITY note.
+          bash tool/stage_precompile_package
+          echo "── staged consumer artifact ──"; ls -la dist/hexa-linux-x86_64 dist/hexa-linux-x86_64/build
+      - name: (2) HARD packaging gate — aprime_cc must be in the staged install
         shell: bash
-        env:
-          REPO: ${{ github.workspace }}
-          HEXA_BIN: ${{ github.workspace }}/hexa
-        run: bash tool/cfallback_zero_census
+        run: |
+          # Separate from the census so a RED here pinpoints PACKAGING (stage_precompile_
+          # package r27 aprime build flaked) vs the CLI ladder itself. On linux-x86_64 the
+          # own-link default REQUIRES this binary; a missing one = silent clang-fallback.
+          test -x dist/hexa-linux-x86_64/build/aprime_cc \
+            || { echo "PACKAGING DEFECT: staged install lacks build/aprime_cc — the own-link default leg would clang-fallback on the consumer (stage_precompile_package r27 must hard-ship it on linux-x86_64)"; exit 1; }
+          echo "aprime_cc present in staged install ✓"
+      - name: (3) cfallback-zero census against the STAGED consumer artifact (neutral cwd · no probe leakage)
+        shell: bash
+        run: |
+          set -uo pipefail
+          stage="$GITHUB_WORKSPACE/dist/hexa-linux-x86_64"
+          # Neutral cwd + HEXA_APRIME_CC/HEXA_LANG unset ⇒ the only surviving native-cc
+          # probe is <install>/build/aprime_cc (the staged one) = the consumer's real path.
+          mkdir -p /tmp/census-cwd && cd /tmp/census-cwd
+          env -u HEXA_APRIME_CC -u HEXA_LANG \
+            bash "$GITHUB_WORKSPACE/tool/cfallback_zero_census" --hexa "$stage/hexa"
