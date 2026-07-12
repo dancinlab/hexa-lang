@@ -158,7 +158,9 @@ say "--- Gate3+4 runtime ratio + parity ---"
 link_run() { local kn="$1" tag="$2"; local o="$WORK/${kn}_${tag}.o" b="$WORK/${kn}_${tag}.bin"
     [ -f "$o" ] || { say "  [$kn] $tag: no .o"; return; }
     [ -n "$RT" ] || { say "  [$kn] $tag: no runtime.a → skip link"; return; }
-    gcc -O2 "$o" "$RT" -lm -o "$b" 2>"$b.ld.log" || { say "  [$kn] $tag: gcc link FAIL"; tail -6 "$b.ld.log" | sed 's/^/      /' | tee -a "$RESULT"; return; }
+    # -nostartfiles: runtime.a carries its own own-start `_start`; without this the
+    # default Scrt1.o `_start` collides (multiple definition). Use runtime.a's entry.
+    gcc -O2 -nostartfiles "$o" "$RT" -lm -o "$b" 2>"$b.ld.log" || { say "  [$kn] $tag: gcc link FAIL"; tail -6 "$b.ld.log" | sed 's/^/      /' | tee -a "$RESULT"; return; }
     local out vals=() t med; out=$("$b" 2>/dev/null)
     for r in 1 2 3 4 5; do t=$( { /usr/bin/time -v taskset -c 3 "$b" >/dev/null; } 2>&1 | awk '/User time|System time/{s+=$NF} END{print s+0}'); vals+=("$t"); done
     med=$(printf '%s\n' "${vals[@]}" | sort -n | sed -n '3p')
