@@ -498,7 +498,7 @@ resolve_native_map_core_seed() {
 # (mixed C-ABI — CONTAINS sub-guard undefined here). Default-OFF byte-neutral.
 resolve_native_map_query_seed() {
     [ "${HEXA_RT_MAP_QUERY_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
-    [ -f build/map_query_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_RT_MAP_QUERY_NATIVE=1; return 0; }
+    [ -f build/map_query_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && [ "${HEXA_RT_OWNOBJ_MAPQUERY:-0}" = "0" ] && { export HEXA_RT_MAP_QUERY_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"; tgt="${tgt%-cuda}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in

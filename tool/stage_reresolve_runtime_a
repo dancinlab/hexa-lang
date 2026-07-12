@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────
+# tool/stage_reresolve_runtime_a — Stage 0b′ — post-compiler re-resolve of the
+# SHIPPED build/runtime.a with the axis-② map-query own-obj --isolate seed.
+#
+# ── Why this stage exists (the compiler-free Stage-0b constraint) ──
+# Stage 0b (tool/stage_resolve_runtime_a) resolves runtime.a BEFORE any hexa
+# compiler is built — that is the whole reason the frozen ".s"/frozen-".c"
+# bootstrap seeds are compiler-free. The map-query native seed is produced by
+# `aprime_cc --emit=obj --keep-global=<8> --isolate` (only compiler/main.hexa
+# parses --keep-global/--isolate; self/main.hexa's build/hexat + ./hexa cannot),
+# and aprime_cc itself needs build/hexat + build/runtime.a to exist. So the
+# earliest legal point to flip map-query is AFTER stage_prebuild_hexat +
+# stage_regen_hexa_cc and BEFORE stage_build_hexa — i.e. here, so the shipped
+# ./hexa + packaged runtime.a link the flipped archive (no re-link, no
+# circular dep: pass-1 archive is compiler-free C; this pass rewrites it once
+# a --isolate-capable aprime exists).
+#
+# gen3≡gen4 byteeq is UNAFFECTED: build_selfhost.sh compiles its own rt.o from
+# self/runtime.c flag-free and never links runtime.a. The flip changes only
+# shipped-binary bytes; it is verified by shipping/install.sh consumer smoke +
+# the faithful-nobaseline lane (which runs release_build verbatim), NOT by
+# selfhost-byteeq-real.
+#
+# DEFAULT-OFF byte-neutral: HEXA_RT_MAP_QUERY_RERESOLVE=1 = the flip; unset/0 =
+# skip (the archive stays exactly as Stage 0b left it — zero byte delta).
+# HARD-FAILS on non-adoption — the silent C-fallback of the own-obj path is
+# acceptable ONLY in pass-1; here a failure to flip must stop the build.
+#
+#   HEXA_RT_MAP_QUERY_RERESOLVE=1 bash tool/stage_reresolve_runtime_a
+#
+# Env: inherits TARGET / CC / CFLAGS_COMMON from the release_build contract.
+#   HEXA_OWNOBJ_CC   pinned to $PWD/build/aprime_cc (the --isolate-capable binary).
+# ─────────────────────────────────────────────────────────────────────────
+set -euo pipefail
+
+ROOT="${HX_ROOT:-$(cd "$(dirname "$0")/.."; pwd)}"
+cd "$ROOT"
+
+if [ "${HEXA_RT_MAP_QUERY_RERESOLVE:-0}" != "1" ]; then
+    echo "[stage_reresolve_runtime_a] HEXA_RT_MAP_QUERY_RERESOLVE!=1 — skip (byte-neutral)"
+    exit 0
+fi
+
+# The --isolate-capable compiler is aprime_cc (compiler/main.hexa closure), NOT
+# build/hexat/./hexa (self/main.hexa exec-delegates --emit=obj and never parses
+# --keep-global/--isolate). Build it if absent (warm-skips when hexat+runtime.a fresh).
+if [ ! -x build/aprime_cc ]; then
+    echo "[stage_reresolve_runtime_a] building build/aprime_cc (--isolate-capable seed compiler)…"
+    bash tool/build_aprime.sh -o build/aprime_cc \
+        || { echo "[stage_reresolve_runtime_a] FATAL: aprime_cc build failed — refusing silent C fallback" >&2; exit 1; }
+fi
+
+# A stale / cross-arch build/map_query_native.o must NEVER be adopted (cf. the
+# arm64 archive-contamination incident) — force a fresh own-obj --isolate emit.
+rm -f build/map_query_native.o
+
+echo "[stage_reresolve_runtime_a] re-resolving shipped runtime.a with own-obj --isolate map-query…"
+HEXA_RT_OWNOBJ_MAPQUERY=1 HEXA_OWNOBJ_CC="$PWD/build/aprime_cc" bash tool/stage_resolve_runtime_a
+
+# ── Hard adoption assertions (no silent no-op) ──
+RA="${HEXA_RUNTIME_A_OUT:-$PWD/build/runtime.a}"
+NM="${NM:-nm}"
+[ -f build/map_query_native.o ] \
+    || { echo "[stage_reresolve_runtime_a] FATAL: build/map_query_native.o not emitted" >&2; exit 1; }
+ar t "$RA" 2>/dev/null | grep -q '^map_query_native\.o$' \
+    || { echo "[stage_reresolve_runtime_a] FATAL: seed not ar'd into $RA" >&2; exit 1; }
+
+_g="$("$NM" build/map_query_native.o 2>/dev/null | grep -cE ' T _?hexa_map_(keys|values|entries|map_values|filter_keys|count|any|all)$')"
+[ "${_g:-0}" -eq 8 ] \
+    || { echo "[stage_reresolve_runtime_a] FATAL: seed exports $_g/8 hexa_map_* globals" >&2; exit 1; }
+
+_rtu="$("$NM" build/map_query_native.o 2>/dev/null | awk '$1=="U"||$2=="U"{print $NF}' | grep -cE '^_?rt_map_')"
+[ "${_rtu:-1}" -eq 0 ] \
+    || { echo "[stage_reresolve_runtime_a] FATAL: seed carries $_rtu program-side rt_map_* undef — NOT self-contained" >&2; exit 1; }
+
+echo "[stage_reresolve_runtime_a] PASS — shipped runtime.a re-resolved: 8/8 hexa_map_* own-native (self-contained), C bodies dropped from runtime_core.c"
