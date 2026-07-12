@@ -59,6 +59,26 @@ let ELF_R_AARCH64_ADR_PREL_PG_HI21 = 275   // ADRP: Page(S+A) - Page(P)
 let ELF_R_AARCH64_ADD_ABS_LO12_NC  = 277   // ADD:  (S+A) & 0xfff
 let ELF_R_AARCH64_CALL26           = 283   // BL:   (S+A-P) >> 2, imm26
 let ELF_R_AARCH64_JUMP26           = 282   // B:    (S+A-P) >> 2, imm26
+// axis-③ arm64 own-link rung-2 (S1) — reloc types the cross-gcc runtime.arm64.a emits
+// beyond the rung-1 set. Numbers reference-matched to the AArch64 ELF psABI +
+// compiler/link/hexa_ld.hexa:692-697. (LDST family = scaled-imm12 loads/stores;
+// GOT pair = static-GOT synth targets, S5.) Applied by _apply_arm64_reloc (S4).
+let ELF_R_AARCH64_PREL32            = 261   // S + A - P (word32)
+let ELF_R_AARCH64_LDST8_ABS_LO12_NC  = 278   // scale 0
+let ELF_R_AARCH64_LDST16_ABS_LO12_NC = 284   // scale 1
+let ELF_R_AARCH64_LDST32_ABS_LO12_NC = 285   // scale 2
+let ELF_R_AARCH64_LDST64_ABS_LO12_NC = 286   // scale 3
+let ELF_R_AARCH64_LDST128_ABS_LO12_NC = 299  // scale 4
+let ELF_R_AARCH64_ADR_GOT_PAGE     = 311   // ADRP: Page(G+A) - Page(P)  (G = GOT slot vaddr)
+let ELF_R_AARCH64_LD64_GOT_LO12_NC = 312   // LDR:  (G+A) & 0xfff >> 3
+
+// _elf_arm64_kind_is_got — mirrors elf_x86_64.hexa _elf_kind_is_got. GOT-relocs
+// route through the static-GOT synth (S5) rather than a direct S+A patch.
+fn _elf_arm64_kind_is_got(k: Int) -> Int {
+    if k == ELF_R_AARCH64_ADR_GOT_PAGE { return 1 }
+    if k == ELF_R_AARCH64_LD64_GOT_LO12_NC { return 1 }
+    return 0
+}
 
 // ─────────────────────────────────────────────────────────────────
 // Object model — reuses `ElfRel` / `ElfSym` from elf_x86_64.hexa

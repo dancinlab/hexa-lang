@@ -159,6 +159,61 @@ runtime.a + selective `archive_extract_fixpoint` (pulls only a symbol's closure,
 blob) + the full x86 native-seed set — so the arm64 campaign must port BOTH the archive linker (rung-2)
 AND the arm64 native-seed runtime (rung-4-extended), across many focused rounds with per-round qemu verify.
 
+## 🗺️ RUNG-2 IMPLEMENTATION PLAN (workflow wf_3521d199-82f · reference-matched · IN PROGRESS)
+VERDICT: a working arm64 exit-42 own-link IS achievable — a faithful retype of the already-GREEN
+5493-line x86 own-link stack (link_elf_x86_64_ownstart :1849 + archive_extract_fixpoint :4297 + GOT
+synth + CRT1-HANDOFF). Reloc math is FULLY spec'd + 12-unit-vectored (the bit masks already exist,
+proven, in the Mach-O arm64 patcher tool/hexa_ld.hexa:1601-1746 + the CALL26 stub elf_arm64.hexa:868)
+— the ELF port REUSES them verbatim. ~3-5 focused rounds. HARD PRECONDITION (S0, VERIFIED): branch
+from origin/main (5493-line elf_x86_64.hexa), NOT the stale fix/install-bare-cuda-pip 1739-line copy.
+
+MINIMAL FIRST-WORKING (Round-1, dynamic crt_handoff): reuse the x86 CRT1-HANDOFF — when the residual-UND
+census (n_dyn>0) finds genuine libc UND, pull sysroot crt1.o, make ITS _start the entry, emit a dynamic
+glibc aarch64 ET_EXEC. Proves parser+extractor+applicator+GOT+2-seg (ZERO binutils; uses system crt1.o
++libc.so — not yet fully clang-free). Round-2 drains residual to ∅ (ar the arm64 array/map/alloc seeds
++ hxlcl_ alias) → census []→ crt_handoff false → PURE own-start static ET_EXEC (no PT_INTERP/crt1) =
+the true no-crt exit-42. (rt_array_*_native/rt_map_*_native UNDs resolve once those seed .o's are ar'd.)
+
+Ordered steps (file · x86 anchor · verify):
+- **S0** branch from origin/main (VERIFIED: 5493 lines · fixpoint@4297 · parse@3826 · ar@4143).
+- **S1** ✅ DONE constants — elf_arm64.hexa:62: PREL32=261, LDST8/16/32/64/128=278/284/285/286/299,
+  ADR_GOT_PAGE=311, LD64_GOT_LO12_NC=312, _elf_arm64_kind_is_got. (psABI + link/hexa_ld.hexa:692-697.)
+- **S2** runtime.arm64-linux-gnu.a (rung-4) — 2 shell diffs to tool/stage_resolve_runtime_a: (a) :63
+  RA=${HEXA_RUNTIME_A_OUT:-.../runtime.a}; (b) ar rcs → "${AR:-ar}" rcs (:3283/3254/3263/3291). Run
+  CC=aarch64-linux-gnu-gcc AR=aarch64-linux-gnu-ar TARGET=linux-arm64 CFLAGS+=' -fno-stack-protector'.
+  Verify: nm shows all rt_*_native + own _start defined; per-family seed echoes present; member EM_AARCH64.
+- **S3** parse_elf_arm64_obj (clone parse_elf_x86_obj, 2 deltas: e_machine 0x3e→0xb7 + ElfArm64Obj 8-field,
+  drop SHT_INIT_ARRAY slot-6/aligns) + REUSE parse_ar_archive verbatim + archive_extract_fixpoint_arm64
+  (s/ElfX86Obj/ElfArm64Obj/, floor-pull #4871 carries verbatim). Anchors :3826/:4143/:4297/:4370-4443.
+- **S4** _apply_arm64_reloc + _aa_page/_aa_u32/_aa_put32/_aa_put64/_aa_ldst_scale (12 types · masks VERBATIM
+  from tool/hexa_ld.hexa:1601-1636/1730-1746). CRITICAL: page delta = (Page(base+A)-Page(P))/0x1000 integer
+  DIVIDE not >> (Q4); site_seg dispatch (1=text/3=rodata/4=data); ABS64/PREL32 raw bytes; G≠S for 311/312;
+  LDST assert (S+A)&((1<<scale)-1)==0; branch on TYPE not instr bits; rc 0/1-unhandled/2-range. Full code
+  in the piece-1 workflow result (task w608xhoul).
+- **S5** GOT synth in link_elf_arm64 — fix @GOTPAGE→311/@GOTPAGEOFF→312 (:102-104) + emit LDR base word;
+  collect got_syms by DISTINCT name over 311/312; alloc n_got*8 at data tail; patch G=data_base+off+slot*8
+  (ADRP Page uses 0x1000 not p_align); fill slot = sym final vaddr (truly-undef → rc3). Anchors :2285/2603/2914/3064.
+- **S6** serialize_elf_exec_arm64 (phnum=2: R+X text + R+W data+GOT · code_off=176 · data page-aligned 0x10000)
+  + link_elf_arm64 + link_elf_arm64_ownstart w/ crt_handoff census. Anchors :730/:1109/:1849. NEW = aarch64
+  own _start stub (Q1, BLOCKING — Fable byte-spec).
+- **S7** driver wiring — opt-in --linker=hexa for aarch64 only; default bit-identical (byteeq-neutral).
+- **S8** aiden qemu-aarch64-static exit-42 (see gate) — Round-1 dynamic, Round-2 pure static.
+
+AIDEN VERIFY GATE: git checkout -b arm64-ownlink origin/main; build runtime.arm64.a (S2 env); build hexa;
+`HEXA_LD_SYSROOT=/usr/aarch64-linux-gnu/lib hexa build --target=aarch64-linux-gnu --linker=hexa -o /tmp/exit42
+exit42.hexa`; `qemu-aarch64-static /tmp/exit42; echo rc=$?` → rc=42. readelf: ET_EXEC/AArch64/ELF64;
+R-1 PT_LOAD×2+PT_INTERP, R-2 PT_LOAD×2 no PT_INTERP/PT_DYNAMIC; -r zero unresolved. BYTEEQ-3-target with
+--linker=hexa OFF → default gen3 sha256 bit-identical (opt-in fns unreferenced).
+
+BLOCKING open questions (Fable / measure-first):
+- Q1 own-start stub bytes (aarch64: sp→x0/x1, optional envp→_hxlcl_environ, bl main, mov x8,#94/svc#0, rc=x0).
+- Q2 crt1.o handoff: does sysroot crt1.o parse + exit clean under qemu? PIE Scrt1.o carries RELATIVE/GLOB_DAT
+  (1025/1027 — outside the 12); Round-1 likely needs -no-pie crt1.o.
+- Q3 ✅ ANSWERED (my earlier readelf histogram = the 12 types · no MOVW/CONDBR/TLS surprises).
+- Q4 (silent-miscompile #1) hexa `>>` sign-extend vs zero-fill — confirm empirically; use DIVIDE for page deltas.
+- Q5 GOT name-dedup collision (two STB_LOCAL g<id> same name → one slot) — key by (member,name) if unsafe.
+- Q6 alignment: ElfArm64Obj drops rodata/data_align — pad pools to 16 or extend struct; census .init_array.
+
 ## Subsequent rungs (not this session)
 - **Rung-2** runtime.a-aware own-link: port `link_elf_arm64_ownstart_ar` (:3208) + `parse_elf_arm64_obj`
   (:3826) + `parse_ar_archive` (:4143) + `archive_extract_fixpoint` (:4297) + `serialize_elf_exec_arm64_2seg`
