@@ -369,6 +369,37 @@ resolve_native_array_core_seed() {
         echo "[stage_resolve_runtime_a] RT-NATIVE ARRAY-R4: seed $seed exports only $nsyms/6 rt_array_*_native — falling back to C #else path" >&2
         return 0
     fi
+    # ── axis-②③ B3 A0 (own-object seed): when HEXA_RT_OWNOBJ is opted in, produce
+    #    build/array_core_native.o by OWN-EMITTING the .hexa SSOT directly
+    #    (aprime --backend=native --emit=obj) instead of the .s-seed + $CC assemble —
+    #    the round-0-GREEN build-path swap that drops $CC-as-assembler for this family.
+    #    The own-emit binary is the frozen-dough hexa/hexat (NEVER build/aprime_cc, #4489)
+    #    via $HEXA_OWNOBJ_CC. Adopt only if it exports the SAME 6 rt_array_*_native
+    #    contract syms; ANY miss (flag off · no binary · own-emit fail · <6 syms) falls
+    #    through to the .s path below → default (flag-unset) output byte-identical.
+    #    Tri-state: HEXA_RT_OWNOBJ / HEXA_RT_OWNOBJ_ARRAY = {unset|0(off default) | 1(on)}.
+    if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_ARRAY:-0}" != "0" ]; } then
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/array_core.hexa" _otri=""
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;;
+            linux-arm64)  _otri="arm64-linux-gnu" ;;
+            darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --target="$_otri" -o build/array_core_native.o "$_osrc" 2>build/array_core_ownobj.err; then
+                local _ots; _ots="$(nm build/array_core_native.o 2>/dev/null | grep -cE ' T _?rt_array_(get|set|len|pop|shift|truncate)_native')"
+                if [ "${_ots:-0}" -ge 6 ]; then
+                    export HEXA_RT_ARRAY_NATIVE=1
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: array_core via $_oc --emit=obj ($_ots/6 rt_array_*_native, TARGET=$tgt) → native element path, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: array_core own-emit exported $_ots/6 syms — falling back to .s seed" >&2
+            else
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: array_core own-emit failed — falling back to .s seed ($(head -1 build/array_core_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
+    fi
     local s_tmp="build/array_core_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
     if $CC -c "$s_tmp" -o build/array_core_native.o 2>/dev/null; then
