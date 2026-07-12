@@ -1,0 +1,41 @@
+// L5 B4-precensus adversarial corpus — PARTIAL-WRITE / reinit disjoint-read FPs.
+// ─────────────────────────────────────────────────────────────────────────
+// Probes the `let s = S{}; s.f = v` partial-write shape: multiple disjoint
+// field writes on a mut base, then a sibling-field read through an alias. All
+// SAFE (every read touches a field that was never written through the alias),
+// but the whole-local ceiling arms the alias on each partial write → HX3014.
+//
+// The base is declared `mut` (writes are legal) so the ONLY thing that can fire
+// is the aliased-write FP against the aliasing binding — not HX3055/HX3031
+// (assign-to-immutable), keeping the partial-write FP class clean.
+
+struct Vec3 {
+    x: i64,
+    y: i64,
+    z: i64
+}
+
+// PW-1 — two disjoint partial writes on mut base `v`, alias read of a THIRD field.
+// v.x and v.y written; w.z read. z touched by neither write → SAFE → HX3014 FP.
+fn pw_multi_field() -> i64 {
+    let mut v = Vec3 { x: 1, y: 2, z: 3 }
+    let w = v
+    v.x = 10
+    v.y = 20
+    return w.z
+}
+
+// PW-2 — reinit the SAME field twice, then read a disjoint field through alias.
+// v.x reinitialised; w.y read. y untouched → SAFE → HX3014 FP.
+fn pw_reinit_field() -> i64 {
+    let mut v = Vec3 { x: 1, y: 2, z: 3 }
+    let w = v
+    v.x = 100
+    v.x = 200
+    return w.y
+}
+
+fn main() {
+    let s = pw_multi_field() + pw_reinit_field()
+    println(s)
+}

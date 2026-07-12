@@ -2092,7 +2092,7 @@ fn _build_merged_strtab(out: [Int], names: [string]) -> [Int] {
     // sort; the returned offsets map back to the original `names`). O(n)
     // dedup via a hash-set membership map — was O(n²) `_str_in` per name.
     let uniq: [string] = []
-    let seen = {}
+    let mut seen = {}
     let mut i = 0
     while i < len(names) {
         if !has_key(seen, names[i]) {
@@ -2111,7 +2111,7 @@ fn _build_merged_strtab(out: [Int], names: [string]) -> [Int] {
     // Assign a merged offset to each unique name, tail-merging suffixes.
     // `off_of` (name -> merged offset) lets the final original-order map
     // be O(1)/name instead of an O(n²) `_index_of_str` linear scan.
-    let off_of = {}
+    let mut off_of = {}
     let mut u = 0
     let mut prev_name = ""
     let mut prev_off = 0
@@ -2666,7 +2666,7 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     // same bool `_str_in` did. Uses the same `{}`+`has_key` primitive as
     // `_build_merged_strtab`'s `seen` set. `fn_names` is fully populated above
     // and never mutated after, so one precompute serves both passes.
-    let fn_names_set = {}
+    let mut fn_names_set = {}
     let mut fnsi = 0
     while fnsi < len(fn_names) {
         fn_names_set[fn_names[fnsi]] = true
@@ -3023,7 +3023,7 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     // Flush all relocs in DESCENDING address order. Insertion-order the
     // (offset, idx, kind) triples high-address-first.
     let nr = len(reloc_offs)
-    let order: [Int] = []
+    let mut order: [Int] = []
     let mut oi = 0
     while oi < nr { order.push(oi); oi = oi + 1 }
     // Selection-sort `order` by reloc_offs DESCENDING (nr is small).

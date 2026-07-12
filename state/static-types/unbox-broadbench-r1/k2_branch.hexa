@@ -1,0 +1,12 @@
+// k2_branch — CONTROL (branch-heavy, call-less). Same OFF==ON byte-identical
+// invariant as k1: no builtin-method-call operand → flip unreachable. Adds a
+// dense if/else + two `%` sites to widen the control's codegen surface (from
+// state/unbox-native-r6 k4_branch) so a stray stamp on branch arms is caught.
+fn main() {
+    let mut acc = 0
+    let N = 100000000
+    for i in 0..N {
+        if i % 3 == 0 { acc = acc + i % 5 } else { acc = acc - i % 5 }
+    }
+    println(acc)
+}

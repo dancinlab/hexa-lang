@@ -101,6 +101,77 @@ fn _hir_t_string() -> Type { return _prim_type("string", "") }
 fn _hir_t_char()   -> Type { return _prim_type("char",   "") }
 fn _hir_t_unit()   -> Type { return _prim_type("unit",   "") }
 
+// ── L4 unboxing round-1 — HEXA_UNBOX_HIR_CALLTYPE (gated · default-OFF) ──
+// Plumbing gap: main.hexa lowers the RAW AST with no TypeEnv, so ast_to_hir
+// re-does shallow inference and leaves builtin-method-call RESULTS as the
+// unknown sentinel `"?"` → MIR `type_id 0` → `_x86_operand_provably_int`
+// (codegen/x86_64_linux.hexa:1613) rejects the operand → any binop touching a
+// call result RE-BOXES, so the ALREADY-measured native unbox levers (k1-k5,
+// default-ON) never fire on call-result operands.
+//
+// This flag closes the gap ONLY when set to "1": at the Call lowering site the
+// callee-Field method name is consulted against a MIRROR of the checker's
+// authoritative monomorphic builtin-method return table
+// (compiler/check/types.hexa::_types_builtin_method_ret, #4688) and, for the
+// receiver-INDEPENDENT PRIMITIVE-scalar subset (i64 / f64 / bool) ONLY, the
+// HIR result `typ` is stamped — which `hir_to_mir.hexa::_type_id_of` then maps
+// to the matching MIR `type_id` (1 / 3 / 5), feeding the codegen unbox gate.
+//
+// SOUNDNESS / CONSERVATISM (byteeq-neutral OFF by construction — the stamp
+// code only runs under the flag):
+//   • ONLY builtin-METHOD calls stamp (callee HExpr.kind == "field"): user-fn
+//     calls (callee.kind == "ident", unknown result) NEVER stamp.
+//   • ONLY the monomorphic PRIMITIVE arms (i64/f64/bool) are mirrored — every
+//     polymorphic / container / element-returning / string / array selector
+//     stays UNKNOWN (this fn returns the "?" sentinel), exactly as today, so a
+//     receiver-dependent tag is never mis-stamped (the m12 `_x86_tag_resolve`
+//     unsound-const incident class).
+//   • The stamp targets the call R-VALUE node (a single-use temporary), which
+//     is categorically NOT a reassignable / `let mut` binding, so the gen2
+//     `_build_unbox_facts` mut-reassignment void-guard class does not arise at
+//     this site; the mirrored table is already the reassignment-safe closed
+//     subset (each arm's tag is receiver-INDEPENDENT).
+//   • This EXTENDS the pre-existing fn-return stamp (the Call arm already sets
+//     `t = ct.ret[0]` when the callee has a known `fn` return type) to the
+//     builtin-method case via the same mechanism.
+fn _hir_calltype_stamp_enabled() -> bool {
+    return env_var("HEXA_UNBOX_HIR_CALLTYPE") == "1"
+}
+
+// Mirror of the PRIMITIVE-scalar arms of check/types.hexa::_types_builtin_method_ret.
+// Returns the `_hir_empty_type()` sentinel (kind "?") for every name outside the
+// closed i64/f64/bool subset — the caller stamps ONLY on a non-"?" result.
+fn _hir_builtin_method_ret_prim(name: string) -> Type {
+    return match name {
+        // → i64 (gen2 hexa_int(...)-wrapped counts/indices)
+        "len" -> _hir_t_i64(),
+        "count" -> _hir_t_i64(),
+        "index_of" -> _hir_t_i64(),
+        "rfind" -> _hir_t_i64(),
+        "last_index_of" -> _hir_t_i64(),
+        "char_code_at" -> _hir_t_i64(),
+        "byte_at" -> _hir_t_i64(),
+        "to_int" -> _hir_t_i64(),
+        "parse_int" -> _hir_t_i64(),
+        // → f64 (rt_to_float / str_parse_float / hexa_array_mean → hexa_float)
+        "to_float" -> _hir_t_f64(),
+        "parse_float" -> _hir_t_f64(),
+        "mean" -> _hir_t_f64(),
+        // → bool (hexa_bool(...)-wrapped predicates)
+        "is_empty" -> _hir_t_bool(),
+        "contains" -> _hir_t_bool(),
+        "starts_with" -> _hir_t_bool(),
+        "ends_with" -> _hir_t_bool(),
+        "to_bool" -> _hir_t_bool(),
+        "contains_key" -> _hir_t_bool(),
+        "has_key" -> _hir_t_bool(),
+        "has" -> _hir_t_bool(),
+        "any" -> _hir_t_bool(),
+        "all" -> _hir_t_bool(),
+        _ -> _hir_empty_type(),
+    }
+}
+
 fn _empty_atlas_binding() -> AtlasBinding {
     return AtlasBinding {
         ref_kind: "",
@@ -2074,6 +2145,19 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             let ct = callee.typ
             if ct.kind == "fn" && len(ct.ret) > 0 {
                 t = ct.ret[0]
+            }
+        }
+        // L4 unboxing round-1 — HEXA_UNBOX_HIR_CALLTYPE (gated · default-OFF).
+        // When the fn-return stamp above left the result UNKNOWN ("?") and the
+        // callee is a builtin-METHOD (Field callee), stamp the monomorphic
+        // primitive result from the mirrored checker table so the codegen unbox
+        // gate can fire on the call-result operand. OFF path is byte-identical:
+        // this branch is unreachable unless the env flag is "1".
+        if t.kind == "?" && _hir_calltype_stamp_enabled() && len(kids) > 0 {
+            let bm_callee = kids[0]
+            if bm_callee.kind == "field" {
+                let bm_ret = _hir_builtin_method_ret_prim(bm_callee.text)
+                if bm_ret.kind != "?" { t = bm_ret }
             }
         }
         let h = _mk_hexpr(kind_tag, e.span, t, e.text,

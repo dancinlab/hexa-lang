@@ -34,6 +34,12 @@ test "$(ls -1 release/precompile/ | wc -l)" -gt 0
 # ── Package — assemble tarball (parity with release) ────────────────────────
 stage="dist/hexa-${TARGET}"
 mkdir -p "$stage/build" "$stage/release/precompile"
+# axis-① marker-decouple PR-1: stamp a neutral hxroot sentinel so resolve_hxroot()
+# (self/main.hexa) can identify the install root WITHOUT keying on self/native/hexa_cc.c
+# — the very C-transpile file axis-① deletes. Additive/producer-only (no compiler change
+# this PR); the resolver swap that consumes it is a follow-on. See state/hexa-own/
+# axis1_hxroot_marker_decouple.md.
+printf 'hexa-root v1\n' > "$stage/.hxroot"
 cp hexa "$stage/hexa"
 cp build/hexa_module_loader "$stage/build/hexa_module_loader"
 # CUDA-R1 DUAL-RUNTIME (#3701 r2): the toolchain built + precompiled against the
@@ -85,11 +91,22 @@ fi
 # native --emit=obj compiler used by the cold path). Build it here if the
 # build stage did not (it needs build/hexat + build/runtime.a, both staged
 # above) so the toolchain that produced ./hexa also yields a matching
-# aprime_cc. Guarded: a build failure leaves aprime_cc absent → the install
-# falls back to the clang path cleanly (no regression, just not-yet-native).
+# aprime_cc. On darwin/arm64 a build failure degrades cleanly to the clang path
+# (no regression); on linux-x86_64 it is a HARD failure (r28 below) because own-link
+# is the default there and a missing aprime_cc = a silent clang-fallback consumer.
 if [ ! -x build/aprime_cc ]; then
     echo "[stage_precompile_package] r27: building native compiler build/aprime_cc (ING #79 default-ON cold path)"
-    bash tool/build_aprime.sh -o build/aprime_cc || echo "[stage_precompile_package] r27: aprime_cc build failed — install will clang-fallback (no regression)"
+    bash tool/build_aprime.sh -o build/aprime_cc || echo "[stage_precompile_package] r27: aprime_cc build failed"
+fi
+# axis-① r28 HARD-SHIP on the own-link-default target: with own-link DEFAULT-ON on
+# linux-x86_64 (#4882), a missing aprime_cc makes the shipped hexa's own-link leg
+# silently clang-fallback on EVERY consumer (the #4885 census finding). Under the
+# axis-① claim that IS a regression — fail the release LOUDLY rather than ship a
+# clang-fallback install. darwin/arm64 stay best-effort (own-link is not their
+# default yet): there a build failure still degrades cleanly to the clang path.
+if [ "$TARGET" = "linux-x86_64" ] && [ ! -x build/aprime_cc ]; then
+    echo "[stage_precompile_package] r28 FATAL: build/aprime_cc missing on linux-x86_64 — the own-link default leg (#4882) would clang-fallback on every consumer install. Refusing to ship. build_aprime.sh must succeed on the own-link-default target." >&2
+    exit 1
 fi
 [ -x build/aprime_cc ] && cp build/aprime_cc "$stage/build/aprime_cc" || true
 cp -R release/precompile/. "$stage/release/precompile/"

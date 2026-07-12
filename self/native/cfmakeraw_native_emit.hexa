@@ -1,0 +1,120 @@
+#!hexa strict
+// cfmakeraw_native_emit.hexa
+//   B9.C (.c-text · #1850 pattern) — cfmakeraw_native.c source emitter.
+//
+// RFC061 #29 axis-② cfmakeraw termios raw-mode leaf · self/native runtime-standalone .c-text · emitter-SSOT graduation
+//
+// Emits cfmakeraw_native.c VERBATIM. The hexa build regenerates the .c from
+// this emitter before compiling, so the emitter becomes the SSOT and the
+// .c becomes a build artifact. Byte-identity (the tool/regen_cfmakeraw_native_o.sh
+// awk un-escape round-trip reproduces the .c BYTE-FOR-BYTE) ⇒ identical .o/.so
+// ⇒ PERF UNCHANGED. Default-OFF ⇒ runtime.a byte-identical.
+//
+// 1:1 clone of self/native/gmtime_native_emit.hexa (#4874 gmtime graduation) /
+// self/native/timegm_native_emit.hexa (#4352 timegm graduation) — the tty sibling
+// of those calendar leaves. Attack plan rfc061-axis2-runtime-zero-attack-plan.md
+// groups cfmakeraw in the same tier-4 as gmtime_r/strftime: "순수 알고리즘 +
+// kernel-ABI struct" (pure symbolic-flag clearing on struct termios · no syscall,
+// no FILE*, no float-ABI). Body is the VERBATIM glibc termios/cfmakeraw.c ==
+// musl src/termios/cfmakeraw.c (byte-identical) reference lifted to a strong-external
+// override.
+//
+// Invocation:  hexa-run cfmakeraw_native_emit.hexa <output-path>
+// Default output path (if argv missing): "cfmakeraw_native.c" in cwd.
+
+let MODULE_NAME = "cfmakeraw_native_emit"
+
+fn _flush_cfmakeraw_native(out_path: str, buf: str) {
+    let _ = exec("cat >> \"" + out_path + "\" <<'GEN_cfmakeraw_native_EOF'\n" + buf + "GEN_cfmakeraw_native_EOF")
+}
+
+fn emit_cfmakeraw_native_to(out_path: str) {
+    // Verbatim content of cfmakeraw_native.c, streamed in size-bounded chunks
+    // (see generator note on the per-command exec limit).
+    let _ = exec("printf '' > \"" + out_path + "\"")
+    let mut buf = ""
+    buf = buf + "// self/native/cfmakeraw_native.c — ING #29 libc-free re-architecture ladder (axis-②).\n"
+    buf = buf + "//\n"
+    buf = buf + "// α (native-compute) pure-leaf: replaces the runtime substrate's RAW libc\n"
+    buf = buf + "// `cfmakeraw()` reference with a hexa-native symbolic-flag clear. No syscall,\n"
+    buf = buf + "// no FILE*, no float-ABI — pure struct termios field manipulation (the tty\n"
+    buf = buf + "// sibling of the calendar leaves timegm_native.c / gmtime_native.c).\n"
+    buf = buf + "//\n"
+    buf = buf + "// ── Why a delegate (NOT a frozen-blob edit) ──────────────────────────────────\n"
+    buf = buf + "// The FROZEN runtime.c blob (151c52c8) calls RAW libc `cfmakeraw` at one site —\n"
+    buf = buf + "//   self/runtime.c term_raw_enter() (emitted by self/runtime_emit.hexa:3423) —\n"
+    buf = buf + "//     `cfmakeraw(&raw);`\n"
+    buf = buf + "// (there is no in-blob `hxlcl_cfmakeraw` redirect, so this is a raw reference —\n"
+    buf = buf + "//  the timegm #4352 case, NOT the gmtime standalone-shim case). The blob is\n"
+    buf = buf + "// IMMUTABLE (faithful byte-identity gate vs 151c52c8), so this site cannot be\n"
+    buf = buf + "// redirected from inside it.\n"
+    buf = buf + "//\n"
+    buf = buf + "// Instead we follow the #3798 fmod→rt_fmod / timegm_native.c (#4352) /\n"
+    buf = buf + "// gmtime_native.c (#4874) pattern: supply a STRONG EXTERNAL definition of\n"
+    buf = buf + "// `cfmakeraw` in a SEPARATE seed object that the DEFAULT build never compiles\n"
+    buf = buf + "// (byte-identical OFF). When opt-in (-DHEXA_RT_CFMAKERAW_NATIVE) the seed .o is\n"
+    buf = buf + "// linked ahead of libc, so the runtime.c raw `cfmakeraw(&raw)` reference resolves\n"
+    buf = buf + "// to THIS definition and the libc `cfmakeraw` symbol is dropped from the final\n"
+    buf = buf + "// link — one symbol off the -lc ladder, with zero edits to the immutable blob.\n"
+    buf = buf + "//\n"
+    buf = buf + "// ── Reference-match (white-box port) ─────────────────────────────────────────\n"
+    buf = buf + "// Body is the VERBATIM glibc termios/cfmakeraw.c, which is byte-identical to musl\n"
+    buf = buf + "// src/termios/cfmakeraw.c: clear the canonical raw-mode input/output/local/control\n"
+    buf = buf + "// flags via their <termios.h> SYMBOLIC constants, force CS8, and set VMIN=1/VTIME=0.\n"
+    buf = buf + "// Because it clears by SYMBOLIC name (not hardcoded bit values), it is bit-exact\n"
+    buf = buf + "// with the host libc `cfmakeraw` on the Linux (glibc/musl) byteeq targets.\n"
+    buf = buf + "//\n"
+    buf = buf + "// NOTE (platform): BSD/Darwin `cfmakeraw` clears a SUPERSET of these symbolic\n"
+    buf = buf + "// flags (e.g. IMAXBEL, NOFLSH, TOSTOP, PENDIN). That divergence is expected and\n"
+    buf = buf + "// irrelevant here: the residual libc `cfmakeraw` UND being dropped is on the\n"
+    buf = buf + "// Linux x86_64/arm64 runtime.a floor (glibc), and this override is linked only on\n"
+    buf = buf + "// that target. Darwin builds keep the host cfmakeraw. The standalone verifier\n"
+    buf = buf + "// (test/native_build/cfmakeraw_native_test.c) asserts EXACT parity vs libc on\n"
+    buf = buf + "// __linux__ and mask-aware parity elsewhere.\n"
+    buf = buf + "//\n"
+    if buf.len() > 65536 { _flush_cfmakeraw_native(out_path, buf); buf = "" }
+    buf = buf + "// The pure compute (hxlcl_cfmakeraw_compute) is ALWAYS defined so the standalone\n"
+    buf = buf + "// test harness can diff it against libc cfmakeraw without pulling in the symbol\n"
+    buf = buf + "// override; the override `cfmakeraw` is gated behind -DHEXA_RT_CFMAKERAW_NATIVE.\n"
+    buf = buf + "\n"
+    buf = buf + "#include <termios.h>\n"
+    buf = buf + "\n"
+    buf = buf + "// hexa-native cfmakeraw core — put a struct termios into raw mode, no libc. Clears\n"
+    buf = buf + "// the canonical raw-mode flags by their <termios.h> symbolic names, forces 8-bit\n"
+    buf = buf + "// characters (CS8), and sets a blocking 1-byte read (VMIN=1, VTIME=0). ALWAYS\n"
+    buf = buf + "// defined so the standalone verifier can diff it against libc without the symbol\n"
+    buf = buf + "// override. Bit-exact with glibc/musl cfmakeraw on the Linux byteeq targets.\n"
+    buf = buf + "void hxlcl_cfmakeraw_compute(struct termios *t) {\n"
+    buf = buf + "    t->c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);\n"
+    buf = buf + "    t->c_oflag &= ~OPOST;\n"
+    buf = buf + "    t->c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);\n"
+    buf = buf + "    t->c_cflag &= ~(CSIZE | PARENB);\n"
+    buf = buf + "    t->c_cflag |= CS8;\n"
+    buf = buf + "    t->c_cc[VMIN] = 1;\n"
+    buf = buf + "    t->c_cc[VTIME] = 0;\n"
+    buf = buf + "}\n"
+    buf = buf + "\n"
+    buf = buf + "#ifdef HEXA_RT_CFMAKERAW_NATIVE\n"
+    buf = buf + "// Strong external definition: when this seed object is linked (opt-in), it\n"
+    buf = buf + "// satisfies the runtime.c raw `cfmakeraw` reference ahead of libc, dropping the\n"
+    buf = buf + "// libc cfmakeraw symbol from the final link. Signature matches the POSIX\n"
+    buf = buf + "// <termios.h> declaration `void cfmakeraw(struct termios *)`.\n"
+    buf = buf + "void cfmakeraw(struct termios *t) {\n"
+    buf = buf + "    hxlcl_cfmakeraw_compute(t);\n"
+    buf = buf + "}\n"
+    buf = buf + "#endif\n"
+    if buf.len() > 0 { _flush_cfmakeraw_native(out_path, buf) }
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "cfmakeraw_native.c" }
+    emit_cfmakeraw_native_to(out_path)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[cfmakeraw_native_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[cfmakeraw_native_emit] wrote " + out_path)
+    exit(0)
+}

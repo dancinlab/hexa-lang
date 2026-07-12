@@ -295,8 +295,10 @@ self/bootstrap_compiler.c
 self/native/crypto_openssl.c
 self/native/crypto_sodium.c
 self/native/exec_argv_sha256.c
+self/native/cfmakeraw_native.c
 self/native/exec_pipe.c
 self/native/fp_init.c
+self/native/gmtime_native.c
 self/native/mount.c
 self/native/namespace.c
 self/native/net.c

@@ -297,6 +297,14 @@ install_hexa() {
     # retired-name compat symlinks (relative target — install dir relocatable).
     ln -sf hexad "$HX_BIN/hexa.real"
     ln -sf hexad "$HX_BIN/hxv2"
+    # axis-① marker-decouple PR-1: stamp a neutral hxroot sentinel in $HX_BIN so
+    # resolve_hxroot() (a future binary) can identify the install root WITHOUT keying
+    # on self/native/hexa_cc.c — the C-transpile file axis-① deletes. Written
+    # unconditionally (NOT relying on the tarball carrying it), so it also covers
+    # HEXA_SKIP_SRC installs and old-tarball/new-installer combinations. Additive;
+    # the resolver that consumes it is a follow-on. See state/hexa-own/
+    # axis1_hxroot_marker_decouple.md.
+    printf 'hexa-root v1\n' > "$HX_BIN/.hxroot"
     # standalone-rtlink: the shim exports HEXA_PREBUILT_RUNTIME at the persisted
     # native-seed runtime.a ($HX_BIN/build/runtime.a, dropped by install_src's
     # stage_resolve_runtime_a step) so a consumer `hexa build`/`run` in a FRESH
