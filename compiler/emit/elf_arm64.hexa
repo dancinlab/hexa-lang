@@ -1420,3 +1420,195 @@ pub fn serialize_elf_exec_arm64_2seg(text: [Int], data: [Int], bss_size: Int) ->
 
     return out
 }
+
+// ─────────────────────────────────────────────────────────────────
+// axis-③ arm64 own-link rung-2 (S5+S6b) — link_elf_arm64_ownstart_ar
+// ─────────────────────────────────────────────────────────────
+// The full AArch64 archive-aware own-link driver (twin of link_elf_x86_64_
+// ownstart_ar + the core of link_elf_x86_64_ownstart, elf_x86_64.hexa:1849/3208):
+// read runtime.arm64.a → extract the members that satisfy the program's UNDs →
+// concat text/rodata/data + build a name→vaddr def-map → synthesize a static GOT
+// (S5, for the 926 ADR_GOT_PAGE/LD64_GOT_LO12 relocs) → apply ALL relocs at final
+// vaddr via _apply_arm64_reloc (S4) → serialize a 2-seg static ET_EXEC (S6a).
+// Round-1 scope: pure own-start static (no crt1). Fail-loud (rc 3) on any undef
+// or unhandled reloc — a gap surfaces, never a silent miscompile (S8 qemu verify).
+
+// name → final vaddr via the def-map. seg 0=text, 1=data-blob, 2=bss. Returns
+// -1 if undefined (caller refuses). bss lives above the data blob (incl GOT).
+fn _aa_vaddr_of(name: string, dn: [string], ds: [Int], doff: [Int],
+                text_vaddr: Int, data_vaddr: Int, bss_vaddr_base: Int) -> Int {
+    let mut i = 0
+    while i < len(dn) {
+        if dn[i] == name {
+            let seg = ds[i]
+            if seg == 0 { return text_vaddr + doff[i] }
+            if seg == 2 { return bss_vaddr_base + doff[i] }
+            return data_vaddr + doff[i]                   // seg 1
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+pub fn link_elf_arm64_ownstart_ar(program_objs: [ElfArm64Obj], out_path: string, main_name: string, runtime_a_path: string) -> Int {
+    let buf       = read_file_bytes(runtime_a_path)
+    let members   = parse_ar_archive(buf)
+    let extracted = archive_extract_fixpoint_arm64(program_objs, buf, members)
+
+    let objs: [ElfArm64Obj] = []
+    let mut ci = 0
+    while ci < len(program_objs) { objs.push(program_objs[ci]); ci = ci + 1 }
+    let mut cj = 0
+    while cj < len(extracted) { objs.push(extracted[cj]); cj = cj + 1 }
+
+    // 24-byte own _start stub (bl main patched below; bl at text offset 8).
+    let text: [Int] = []
+    text.push(0xe0); text.push(0x03); text.push(0x40); text.push(0xf9)   // ldr x0,[sp]
+    text.push(0xe1); text.push(0x23); text.push(0x00); text.push(0x91)   // add x1,sp,#8
+    text.push(0x00); text.push(0x00); text.push(0x00); text.push(0x94)   // bl main
+    text.push(0xe0); text.push(0x03); text.push(0x01); text.push(0xaa)   // mov x0,x1
+    text.push(0xa8); text.push(0x0b); text.push(0x80); text.push(0xd2)   // movz x8,#93
+    text.push(0x01); text.push(0x00); text.push(0x00); text.push(0xd4)   // svc #0
+    let bl_off = 8
+
+    let data_bytes: [Int] = []
+    let mut total_bss = 0
+    let def_names: [string] = []
+    let def_seg:   [Int]    = []
+    let def_off:   [Int]    = []
+    let obj_text_base: [Int] = []
+    let obj_ro_base:   [Int] = []
+    let obj_da_base:   [Int] = []
+    let obj_bss_base:  [Int] = []
+    let mut main_off = -1
+
+    // ── concat pass: text/rodata/data blobs + name→(seg,off) def-map ──
+    let mut oi = 0
+    while oi < len(objs) {
+        let obj = objs[oi]
+        let tbase = len(text)
+        obj_text_base.push(tbase)
+        let ro_base = len(data_bytes)
+        let mut r = 0
+        while r < len(obj.rodata) { data_bytes.push(obj.rodata[r] & 0xff); r = r + 1 }
+        let da_base = len(data_bytes)
+        let mut dd = 0
+        while dd < len(obj.data) { data_bytes.push(obj.data[dd] & 0xff); dd = dd + 1 }
+        obj_ro_base.push(ro_base)
+        obj_da_base.push(da_base)
+        let bss_base = total_bss
+        obj_bss_base.push(bss_base)
+        total_bss = total_bss + obj.bss_size
+        let mut si = 0
+        while si < len(obj.symbols) {
+            let s = obj.symbols[si]
+            if s.section != 0 {
+                let name = _aef_symname_arm64(obj, s.name_offset)
+                if s.section == 1 {
+                    def_names.push(name); def_seg.push(0); def_off.push(tbase + s.value)
+                    if main_off < 0 && name == main_name { main_off = tbase + s.value }
+                } else if s.section == 5 {
+                    def_names.push(name); def_seg.push(2); def_off.push(bss_base + s.value)
+                } else {
+                    def_names.push(name); def_seg.push(1)
+                    if s.section >= 4 { def_off.push(da_base + s.value) } else { def_off.push(ro_base + s.value) }
+                }
+            }
+            si = si + 1
+        }
+        let mut t = 0
+        while t < len(obj.text) { text.push(obj.text[t] & 0xff); t = t + 1 }
+        oi = oi + 1
+    }
+    if main_off < 0 {
+        eprintln("hexa_ld(arm64,ownstart_ar): entry '" + main_name + "' not defined")
+        return 3
+    }
+
+    // ── layout constants ──
+    let code_off = 176                                   // 64 + 56*2 (phnum=2)
+    let vaddr_base = 0x400000
+    let text_vaddr = vaddr_base + code_off
+    let text_end = code_off + len(text)
+    let data_file_off = text_end + ((0x10000 - (text_end & 0xffff)) & 0xffff)
+    let data_vaddr = vaddr_base + data_file_off
+
+    // ── S5: GOT synth. Collect distinct GOT-referenced sym names, reserve one
+    //    8-byte slot each at the data-blob tail, fill = sym final vaddr. ──
+    let got_names: [string] = []
+    let mut goi = 0
+    while goi < len(objs) {
+        let obj = objs[goi]
+        let mut ri = 0
+        while ri < len(obj.relocs) {
+            let rl = obj.relocs[ri]
+            if _elf_arm64_kind_is_got(rl.kind) == 1 {
+                let nm = _aef_symname_arm64(obj, obj.symbols[rl.sym_idx].name_offset)
+                if !_aef_has(got_names, nm) { got_names.push(nm) }
+            }
+            ri = ri + 1
+        }
+        goi = goi + 1
+    }
+    while (len(data_bytes) & 7) != 0 { data_bytes.push(0) }
+    let got_off = len(data_bytes)
+    let mut gg = 0
+    while gg < len(got_names) { let mut z = 0; while z < 8 { data_bytes.push(0); z = z + 1 }; gg = gg + 1 }
+    let bss_vaddr_base = data_vaddr + len(data_bytes)     // bss above data (incl GOT)
+
+    // fill GOT slots
+    let mut fi = 0
+    while fi < len(got_names) {
+        let sv = _aa_vaddr_of(got_names[fi], def_names, def_seg, def_off, text_vaddr, data_vaddr, bss_vaddr_base)
+        if sv == -1 { eprintln("hexa_ld(arm64,ownstart_ar): GOT sym '" + got_names[fi] + "' undefined"); return 3 }
+        let mut b = 0
+        while b < 8 { data_bytes[got_off + fi*8 + b] = (sv >> (8*b)) & 0xff; b = b + 1 }
+        fi = fi + 1
+    }
+
+    // ── patch the stub's `bl main` (CALL26) to main's final vaddr ──
+    let _bp = _apply_arm64_reloc(text, bl_off, ELF_R_AARCH64_CALL26, text_vaddr + main_off, 0, text_vaddr + bl_off, 0)
+    if _bp != 0 { eprintln("hexa_ld(arm64,ownstart_ar): stub bl main patch rc=" + to_string(_bp)); return 3 }
+
+    // ── S4 apply: every obj reloc at final vaddr (site_seg picks buffer + P) ──
+    let mut aoi = 0
+    while aoi < len(objs) {
+        let obj = objs[aoi]
+        let mut ri = 0
+        while ri < len(obj.relocs) {
+            let rl = obj.relocs[ri]
+            let sname = _aef_symname_arm64(obj, obj.symbols[rl.sym_idx].name_offset)
+            let S = _aa_vaddr_of(sname, def_names, def_seg, def_off, text_vaddr, data_vaddr, bss_vaddr_base)
+            if S == -1 {
+                eprintln("hexa_ld(arm64,ownstart_ar): undefined symbol '" + sname + "' (reloc kind " + to_string(rl.kind) + ")")
+                return 3
+            }
+            let mut G = 0
+            if _elf_arm64_kind_is_got(rl.kind) == 1 {
+                let mut gi = 0
+                while gi < len(got_names) { if got_names[gi] == sname { G = data_vaddr + got_off + gi*8 }; gi = gi + 1 }
+            }
+            let seg = rl.site_seg
+            let mut rc = 0
+            if seg == 1 {
+                let P = text_vaddr + obj_text_base[aoi] + rl.offset
+                rc = _apply_arm64_reloc(text, obj_text_base[aoi] + rl.offset, rl.kind, S, rl.addend, P, G)
+            } else if seg == 4 {
+                let P = data_vaddr + obj_da_base[aoi] + rl.offset
+                rc = _apply_arm64_reloc(data_bytes, obj_da_base[aoi] + rl.offset, rl.kind, S, rl.addend, P, G)
+            } else {
+                let P = data_vaddr + obj_ro_base[aoi] + rl.offset
+                rc = _apply_arm64_reloc(data_bytes, obj_ro_base[aoi] + rl.offset, rl.kind, S, rl.addend, P, G)
+            }
+            if rc != 0 {
+                eprintln("hexa_ld(arm64,ownstart_ar): reloc '" + sname + "' kind " + to_string(rl.kind) + " rc=" + to_string(rc))
+                return 3
+            }
+            ri = ri + 1
+        }
+        aoi = aoi + 1
+    }
+
+    write_bytes(out_path, serialize_elf_exec_arm64_2seg(text, data_bytes, total_bss))
+    return 0
+}

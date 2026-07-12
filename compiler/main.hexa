@@ -1313,13 +1313,44 @@ if linker_kind == "hexa" {
         }
         exit(0)
     } else if target == "arm64-linux-gnu" && elf_obj_arm64_ready {
-        // axis-③ arm64 own-link (rung-1, opt-in): in-process own-start ELF
-        // static-exec link — NO ld/as/crt1.o/-lc/-dynamic-linker, ZERO binutils.
-        // Mirrors the x86_64 own-start leg above. RUNG-1 = trivial reloc-free
-        // program (exit-code-only); link_elf_arm64_ownstart refuses LOUDLY on any
-        // obj reloc (cross-fn/extern/data → rung-2 runtime.a-aware applicator).
-        // Replaces the old arm64-linux system-ld fallback warning below.
-        let rc = link_elf_arm64_ownstart(elf_obj_arm64_holder, out_path, "main", [])
+        // axis-③ arm64 own-link (opt-in): in-process own-start ELF static-exec
+        // link — NO ld/as/crt1.o/-lc/-dynamic-linker, ZERO binutils. Mirrors the
+        // x86_64 own-start leg above: a program with undefined symbols (every real
+        // hexa program has `bl hexa_set_args`) links via the rung-2 runtime.a-aware
+        // driver link_elf_arm64_ownstart_ar (pulls the members that satisfy the
+        // UNDs + a static GOT); a reloc-free trivial program uses the rung-1
+        // link_elf_arm64_ownstart. runtime.a discovery mirrors the x86 leg.
+        let mut _a_und = false
+        let mut _ahk = 0
+        while _ahk < len(elf_obj_arm64_holder) {
+            let _aho = elf_obj_arm64_holder[_ahk]
+            let mut _ahs = 0
+            while _ahs < len(_aho.symbols) {
+                if _aho.symbols[_ahs].section == 0 { _a_und = true }
+                _ahs = _ahs + 1
+            }
+            _ahk = _ahk + 1
+        }
+        let mut _a_rt = env("HEXA_PREBUILT_RUNTIME")
+        if len(_a_rt) == 0 || !file_exists(_a_rt) {
+            let _alang = env("HEXA_LANG")
+            if len(_alang) > 0 && file_exists(_alang + "/build/runtime.arm64-linux-gnu.a") {
+                _a_rt = _alang + "/build/runtime.arm64-linux-gnu.a"
+            } else {
+                _a_rt = ""
+            }
+        }
+        let mut rc = 0
+        if _a_und && len(_a_rt) > 0 {
+            rc = link_elf_arm64_ownstart_ar(elf_obj_arm64_holder, out_path, "main", _a_rt)
+        } else if _a_und {
+            eprintln("hexa-compiler: FATAL - arm64 program has undefined symbols but no "
+                     + "runtime.arm64-linux-gnu.a found; set HEXA_PREBUILT_RUNTIME=<runtime.arm64.a> "
+                     + "or HEXA_LANG=<checkout> (own-link needs the runtime archive)")
+            exit(3)
+        } else {
+            rc = link_elf_arm64_ownstart(elf_obj_arm64_holder, out_path, "main", [])
+        }
         if rc != 0 {
             eprintln("hexa-compiler: hexa_ld(elf,arm64) own-start link failed rc=" + to_string(rc))
             exit(2)
