@@ -448,6 +448,31 @@ resolve_native_map_core_seed() {
         echo "[stage_resolve_runtime_a] RT-NATIVE MAP: seed $seed exports $nsyms/4 read + $ninpl/1 set_inplace rt_map_*_native — falling back to C #else path (seed needs regen via tool/regen_map_core_native_s.sh)" >&2
         return 0
     fi
+    # ── axis-②③ B3 A0 (own-object seed) — map_core (single flag, 4 read + 1 inplace
+    #    contract; parity own=5 ⊇ seed=5 PROVEN). Adopt only if own-emit exports the 4
+    #    rt_map_(get|fnv1a|strcmp0|contains)_native AND rt_map_set_inplace_native. ──
+    if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_MAP:-0}" != "0" ]; } then
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/map_core.hexa" _otri=""
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --target="$_otri" -o build/map_core_native.o "$_osrc" 2>build/map_core_ownobj.err; then
+                local _otr _oti
+                _otr="$(nm build/map_core_native.o 2>/dev/null | grep -cE ' T _?rt_map_(get|fnv1a|strcmp0|contains)_native')"
+                _oti="$(nm build/map_core_native.o 2>/dev/null | grep -cE ' T _?rt_map_set_inplace_native')"
+                if [ "${_otr:-0}" -ge 4 ] && [ "${_oti:-0}" -ge 1 ]; then
+                    export HEXA_RT_MAP_NATIVE=1
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: map_core via $_oc --emit=obj ($_otr/4 read + $_oti/1 set_inplace rt_map_*_native, TARGET=$tgt) → native map path, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: map_core own-emit exported $_otr/4 read + $_oti/1 inplace — falling back to .s seed" >&2
+            else
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: map_core own-emit failed — falling back to .s seed ($(head -1 build/map_core_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
+    fi
     local s_tmp="build/map_core_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
     if $CC -c "$s_tmp" -o build/map_core_native.o 2>/dev/null; then
@@ -1053,6 +1078,28 @@ resolve_native_valop_core_seed() {
         [ "${n:-0}" -ge 1 ] || { ok=0; echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: seed $seed exports only $n/1 $sym — falling back to C scalar path" >&2; }
     done
     [ "$ok" = "1" ] || return 0
+    # ── axis-②③ B3 A0 (own-object seed) — valop_core (single flag, 10-sym contract;
+    #    parity own=10 ⊇ seed=10 PROVEN). own-emit must export all 10 rt_*_native. ──
+    if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_VALOP:-0}" != "0" ]; } then
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/valop_core.hexa" _otri=""
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --target="$_otri" -o build/valop_core_native.o "$_osrc" 2>build/valop_core_ownobj.err; then
+                local _ots; _ots="$(nm build/valop_core_native.o 2>/dev/null | grep -cE ' T _?rt_(truthy|sub|mul|add|cmp_lt|cmp_gt|cmp_le|cmp_ge|div|mod)_native')"
+                if [ "${_ots:-0}" -ge 10 ]; then
+                    export HEXA_RT_VALOP_NATIVE=1
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: valop_core via $_oc --emit=obj ($_ots/10 rt_*_native, TARGET=$tgt) → native scalar value-op path, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: valop_core own-emit exported $_ots/10 — falling back to .s seed" >&2
+            else
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: valop_core own-emit failed — falling back to .s seed ($(head -1 build/valop_core_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
+    fi
     local s_tmp="build/valop_core_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
     if $CC -c "$s_tmp" -o build/valop_core_native.o 2>/dev/null; then
