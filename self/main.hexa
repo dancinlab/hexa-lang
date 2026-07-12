@@ -4689,7 +4689,7 @@ fn cmd_run_user_direct(file, extra_args) {
     // HEXA_PREBUILT_RUNTIME is exported = resolve_prebuilt_runtime() so the
     // inner compiler's runtime.a discovery resolves the archive the own linker
     // links (same seam as the emit=obj stage's _nrt / the build path).
-    if !file_exists(tmpbin) && _run_native_on && _run_native_host == "Linux x86_64" && env("HEXA_LINK_HEXA") == "1" {
+    if !file_exists(tmpbin) && _run_native_on && _run_native_host == "Linux x86_64" && (env("HEXA_LINK_HEXA") == "1" || env("HEXA_OWNLINK_DEFAULT") == "1") {
         let _hlcc = resolve_native_cc()
         let _hlrt = resolve_prebuilt_runtime()
         if len(_hlcc) > 0 && len(_hlrt) > 0 {
