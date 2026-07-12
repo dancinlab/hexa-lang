@@ -89,6 +89,19 @@ TWO ship-recipe traps found + fixed this session (convergence `stage-resolve-run
    inherits an installed CUDA-baked runtime.a → Stage-0 link dies on `__cudaRegister*` without `-lcudart`
    — a measurement-path artifact, not a target defect).
 
-**Remaining for lane-2**: E4 own-symbol-demotion (`demote_nonkeep_to_local` + `--keep-global=` flag in
-elf_x86_64.hexa/elf_arm64.hexa) → unblocks regex_rt (10th A0 family) + A1 (~35 one-sym members). Then
-S1/S2 fragments, then the runtime.c body (Round-3+, ~29-32k LOC, multi-session).
+## A0 round-1 COMPLETE — 10/10 families (2026-07-12, regex_rt via E4)
+
+E4 own-symbol-demotion (`demote_nonkeep_to_local` + `--keep-global=` flag, PR #4904, verified GREEN:
+regex_rt `--keep-global=<6>` → 6 global T + 76 local t, byte-neutral off-flag 195984B identical) landed,
+so the 10th/final A0 family **regex_rt** is wired: own-emit `--emit=obj --keep-global=rt_regex_findall,
+rt_regex_match,rt_regex_match_full,rt_regex_replace,rt_regex_search,rt_regex_split` → the 76 internal
+helpers demote to STB_LOCAL, matching the `.s` seed's exactly-6-global contract. summer verify:
+**10/10 B3-A0 families fire** with the E4 aprime. Merge-safety: a non-E4 aprime emits all 82 global →
+the 6/6-global assertion fails → **clean fallback to the `.s` seed** (so #4900 ships safe before #4904).
+
+**A0 round-1 = DONE** (10/10 seed families own-emit under `HEXA_RT_OWNOBJ`) + ship witness PASS. Next =
+the `:-0`→`:-auto` flip PR (ship witness3 already PASS).
+
+**Remaining for lane-2**: A1 (~35 one-sym members: strcmp/strtoll/free/calloc/sin/cos/FILE-family) via
+the same E4 `--keep-global` pattern → own-obj. Then S1/S2 fragments, then the runtime.c body (Round-3+,
+~29-32k LOC HexaVal machinery, multi-session = literal ② DONE at the m3 TU-drop).
