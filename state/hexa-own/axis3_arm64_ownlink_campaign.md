@@ -116,6 +116,28 @@ a working arm64 own-link, not a follow-on. Recommended order: rung-4 (cross-buil
 linux-gnu.a) → rung-2 (parse_ar_arm64 + archive_extract + full CALL26/ADRP/ADD/ABS64 applicator) →
 verify qemu exit 42 → PR. This is a large multi-file port (mirror elf_x86_64.hexa:3208/3826/4143/4297).
 
+## ✅ rung-4 FEASIBILITY PROVEN (aiden · measured)
+`runtime.c` (the emitted C substrate) cross-compiles CLEANLY for arm64:
+`aarch64-linux-gnu-gcc -c -O2 -D_GNU_SOURCE -DHEXA_ZEROC_OWN_START -I self self/runtime.c` → 0 errors
+(only benign `no_builtin`/`weak_import` attribute-ignored warnings) → `rt_arm64.o` = ELF64 ARM aarch64
+relocatable (584KB) with `hexa_set_args` DEFINED (`T`). So an arm64 runtime.a is buildable by cross-
+compiling runtime.c + the arm64 native seeds (runtime_hi_arm64-linux.s etc.) + `aarch64-linux-gnu-ar`.
+(Building runtime.a via a C cross-compiler is BUILD-time — sanctioned, exactly like the x86 runtime.a
+is built with clang; the arm64 own-LINK via hexa_ld is what makes USING hexa clang-free.) rung-4 is
+therefore a mechanical stage_resolve_runtime_a cross-TARGET extension, NOT a research risk.
+
+## Remaining = rung-2 (the archive-aware arm64 linker port · the large careful effort)
+With rung-1 (serialize + stub + CALL26 + wiring) landed & verified and rung-4 proven feasible, the SOLE
+remaining piece for a WORKING arm64 exit-42 own-link is rung-2: mirror the x86 archive-aware own-link —
+`parse_elf_arm64_obj` (mirror elf_x86_64.hexa:3826), `parse_ar_archive` (:4143), `archive_extract_fixpoint`
+(:4297), `link_elf_arm64_ownstart_ar` (:3208) + a FULL aarch64 reloc applicator (CALL26 + ADR_PREL_PG_HI21/
+ADD_ABS_LO12_NC page-pair + ABS64 + JUMP26 for every reloc in the pulled runtime.a members). This is a
+large, error-prone multi-file port (the ADRP page-math + per-type bit-packing are silent-fail hazards
+requiring reference-match + qemu verification of each) — a focused multi-session engineering effort, NOT
+a tail-of-session rush (measure-not-LLM + release-integrity forbid merging an unverified reloc applicator).
+Recommended: rung-4 (cross-build build/runtime.arm64-linux-gnu.a) first as a completable deliverable, then
+rung-2 with the runtime.arm64.a as the qemu-verifiable link target.
+
 ## Subsequent rungs (not this session)
 - **Rung-2** runtime.a-aware own-link: port `link_elf_arm64_ownstart_ar` (:3208) + `parse_elf_arm64_obj`
   (:3826) + `parse_ar_archive` (:4143) + `archive_extract_fixpoint` (:4297) + `serialize_elf_exec_arm64_2seg`
