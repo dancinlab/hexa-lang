@@ -1800,9 +1800,26 @@ pub fn link_elf_arm64_ownstart_ar(program_objs: [ElfArm64Obj], out_path: string,
         text.push(0xe0); text.push(0x03); text.push(0x40); text.push(0xf9)   // ldr x0,[sp]
         text.push(0xe1); text.push(0x23); text.push(0x00); text.push(0x91)   // add x1,sp,#8
         text.push(0x00); text.push(0x00); text.push(0x00); text.push(0x94)   // bl main
-        text.push(0xe0); text.push(0x03); text.push(0x01); text.push(0xaa)   // mov x0,x1
+        text.push(0xe0); text.push(0x03); text.push(0x01); text.push(0xaa)   // mov x0,x1  (exit code = HexaVal payload)
         text.push(0xa8); text.push(0x0b); text.push(0x80); text.push(0xd2)   // movz x8,#93
         text.push(0x01); text.push(0x00); text.push(0x00); text.push(0xd4)   // svc #0
+        bl_off = 8
+    } else {
+        // ── C-ABI `main` trampoline (crt_handoff path) ── hexa fns return a 16-byte
+        // HexaVal pair (x0=tag, x1=payload; TAG_INT=0), so crt1's __libc_start_main,
+        // reading x0 as the C-ABI `int main()` return, would exit(tag)=exit(0). This
+        // 24B trampoline (at text offset 0, before crt1) is what the `main` DEF is
+        // redirected to: it calls the real hexa main, moves the PAYLOAD into x0, and
+        // returns the C-ABI int — so __libc_start_main exit()s with the real value.
+        // +8B nop pad keeps crt1's prepended text base 16-aligned (rung-3 align lesson).
+        text.push(0xfd); text.push(0x7b); text.push(0xbf); text.push(0xa9)   // stp x29,x30,[sp,#-16]!
+        text.push(0xfd); text.push(0x03); text.push(0x00); text.push(0x91)   // mov x29,sp
+        text.push(0x00); text.push(0x00); text.push(0x00); text.push(0x94)   // bl <hexa main> (offset 8)
+        text.push(0xe0); text.push(0x03); text.push(0x01); text.push(0xaa)   // mov x0,x1  (C-ABI ret = payload)
+        text.push(0xfd); text.push(0x7b); text.push(0xc1); text.push(0xa8)   // ldp x29,x30,[sp],#16
+        text.push(0xc0); text.push(0x03); text.push(0x5f); text.push(0xd6)   // ret
+        text.push(0x1f); text.push(0x20); text.push(0x03); text.push(0xd5)   // nop
+        text.push(0x1f); text.push(0x20); text.push(0x03); text.push(0xd5)   // nop
         bl_off = 8
     }
 
@@ -1849,8 +1866,16 @@ pub fn link_elf_arm64_ownstart_ar(program_objs: [ElfArm64Obj], out_path: string,
             if s.section != 0 {
                 let name = _aef_symname_arm64(obj, s.name_offset)
                 if s.section == 1 {
-                    def_names.push(name); def_seg.push(0); def_off.push(tbase + s.value)
-                    if main_off < 0 && name == main_name { main_off = tbase + s.value }
+                    if crt_handoff && name == main_name {
+                        // crt1 binds `main` → the C-ABI trampoline @ text offset 0
+                        // (emitted above); main_off stays the REAL hexa body for the
+                        // trampoline's bl patch.
+                        def_names.push(name); def_seg.push(0); def_off.push(0)
+                        if main_off < 0 { main_off = tbase + s.value }
+                    } else {
+                        def_names.push(name); def_seg.push(0); def_off.push(tbase + s.value)
+                        if main_off < 0 && name == main_name { main_off = tbase + s.value }
+                    }
                 } else if s.section == 5 {
                     def_names.push(name); def_seg.push(2); def_off.push(bss_base + s.value)
                 } else {
