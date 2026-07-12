@@ -1525,6 +1525,17 @@ pub fn link_elf_arm64_ownstart_ar(program_objs: [ElfArm64Obj], out_path: string,
         return 3
     }
 
+    // ── linker-synthetic __init_array_start/__init_array_end (GNU ld PROVIDE
+    //    parity, x86 twin at elf_x86_64.hexa:2149). runtime.arm64.a's
+    //    _hx_run_init_array walks [__init_array_start,__init_array_end) via GOT
+    //    relocs. arm64 drops the SHT_INIT_ARRAY region (no ctors for exit-42), so
+    //    register BOTH GLOBAL defs at the SAME data-blob offset (current data end,
+    //    before the GOT blob) → start==end → the ctor walk is zero-trip. MUST
+    //    precede the GOT collect+fill so the two boundary syms resolve. ──
+    let _iar_off = len(data_bytes)
+    def_names.push("__init_array_start"); def_seg.push(1); def_off.push(_iar_off)
+    def_names.push("__init_array_end");   def_seg.push(1); def_off.push(_iar_off)
+
     // ── layout constants ──
     let code_off = 176                                   // 64 + 56*2 (phnum=2)
     let vaddr_base = 0x400000
