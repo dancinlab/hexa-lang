@@ -71,6 +71,14 @@ let ELF_R_AARCH64_LDST64_ABS_LO12_NC = 286   // scale 3
 let ELF_R_AARCH64_LDST128_ABS_LO12_NC = 299  // scale 4
 let ELF_R_AARCH64_ADR_GOT_PAGE     = 311   // ADRP: Page(G+A) - Page(P)  (G = GOT slot vaddr)
 let ELF_R_AARCH64_LD64_GOT_LO12_NC = 312   // LDR:  (G+A) & 0xfff >> 3
+// axis-③ arm64 own-link rung-3 (S1) — dynamic-link (Road A) reloc types. Only these
+// two are needed for the GLOB_DAT-only eager-binding design (reference-matched to
+// elf_x86_64.hexa, which emits R_X86_64_GLOB_DAT(6) + COPY(5) only — no JUMP_SLOT,
+// no lazy PLT). GLOB_DAT fills a shared GOT slot from ld.so at load; COPY (data
+// import) is NOT ported in the rung-3 minimal cut (all 6 floor syms are STT_FUNC —
+// the census fails closed with rc=3 if any dyn sym is STT_OBJECT).
+let ELF_R_AARCH64_COPY             = 1024  // ld.so memcpy of a data import (COPY lane — not ported)
+let ELF_R_AARCH64_GLOB_DAT         = 1025  // ld.so writes S into the GOT slot at r_offset
 
 // _elf_arm64_kind_is_got — mirrors elf_x86_64.hexa _elf_kind_is_got. GOT-relocs
 // route through the static-GOT synth (S5) rather than a direct S+A patch.
@@ -1455,6 +1463,192 @@ fn _aa_vaddr_of(name: string, dn: [string], ds: [Int], doff: [Int],
         i = i + 1
     }
     return -1
+}
+
+// ── axis-③ arm64 own-link rung-3 (S1) — Road A dynamic-link readers ─────────
+// 1:1 arm64 twins of the x86 crt1 / libc.so.6 / residual-UND-census helpers
+// (elf_x86_64.hexa:1644-1738, :1765-1829). Reuse the shared LibcDynsym struct +
+// _libc_sym_type/_size + _ldx_hash + _elf_has_prefix + _aef_has + _er_* (defined
+// in elf_x86_64.hexa, whole-program scope); only the ET_REL/ET_DYN parse + the
+// e_machine guard + the multiarch paths + the GOT-kind predicate are arch-specific.
+
+// Read the target sysroot's aarch64 crt1.o (glibc process-entry object) into the
+// linker's ElfArm64Obj model. member_idx 777001 = unique sentinel so crt1's
+// synthesized STT_SECTION names never collide with a runtime.a member. On aiden
+// the cross crt1.o lives under /usr/aarch64-linux-gnu/lib; Debian multiarch uses
+// /usr/lib/aarch64-linux-gnu. Missing/unreadable → empty obj; caller hard-errors.
+fn _ld_read_crt1_arm64() -> ElfArm64Obj {
+    let sysroot = env_var("HEXA_LD_SYSROOT")
+    let mut crt_path = "/usr/lib/aarch64-linux-gnu/crt1.o"
+    if len(sysroot) > 0 { crt_path = sysroot + "/crt1.o" }
+    let mut cbuf = read_file_bytes(crt_path)
+    if len(cbuf) == 0 { cbuf = read_file_bytes("/usr/lib/aarch64-linux-gnu/crt1.o") }
+    if len(cbuf) == 0 { cbuf = read_file_bytes("/usr/aarch64-linux-gnu/lib/crt1.o") }
+    return parse_elf_arm64_obj(cbuf, 0, len(cbuf), 777001)
+}
+
+// Read the target's shared aarch64 libc.so.6 and return its DEFINED .dynsym
+// entries as a name -> (st_type, st_size) map (ok=1 on success). Mirror of
+// _ld_read_libc_dynsym with the EM_AARCH64 guard + aarch64 multiarch paths. Used
+// to fail-closed if any residual dyn UND is STT_OBJECT (the COPY lane is not
+// ported in the rung-3 minimal cut — all 6 floor syms are STT_FUNC).
+fn _ld_read_libc_dynsym_arm64() -> LibcDynsym {
+    let mut out = LibcDynsym { names: [], types: [], sizes: [], ok: 0 }
+    let sysroot = env_var("HEXA_LD_SYSROOT")
+    let first_path = if len(sysroot) > 0 { sysroot + "/libc.so.6" } else { "/lib/aarch64-linux-gnu/libc.so.6" }
+    let mut buf = read_file_bytes(first_path)
+    if len(buf) == 0 { buf = read_file_bytes("/lib/aarch64-linux-gnu/libc.so.6") }
+    if len(buf) == 0 { buf = read_file_bytes("/usr/lib/aarch64-linux-gnu/libc.so.6") }
+    if len(buf) == 0 { buf = read_file_bytes("/usr/aarch64-linux-gnu/lib/libc.so.6") }
+    if len(buf) == 0 { return out }
+
+    if _er_u8(buf, 0) != 0x7f { return out }
+    if _er_u8(buf, 1) != 0x45 { return out }
+    if _er_u8(buf, 2) != 0x4c { return out }
+    if _er_u8(buf, 3) != 0x46 { return out }
+    if _er_u8(buf, 4) != 2    { return out }
+    if _er_u8(buf, 5) != 1    { return out }
+    if _er_u16le(buf, 0x10) != ELF_ET_DYN     { return out }
+    if _er_u16le(buf, 0x12) != ELF_EM_AARCH64 { return out }
+
+    let e_shoff     = _er_u64le(buf, 0x28)
+    let e_shentsize = _er_u16le(buf, 0x3A)
+    let e_shnum     = _er_u16le(buf, 0x3C)
+    if e_shentsize < 64 { return out }
+    if e_shnum < 1 { return out }
+
+    let mut dynsym_hdr = -1
+    let mut si = 0
+    while si < e_shnum {
+        let sh = e_shoff + si * e_shentsize
+        if _er_u32le(buf, sh + 0x04) == ELF_SHT_DYNSYM { dynsym_hdr = sh; break }
+        si = si + 1
+    }
+    if dynsym_hdr < 0 { return out }
+    let dsym_off = _er_u64le(buf, dynsym_hdr + 0x18)
+    let dsym_sz  = _er_u64le(buf, dynsym_hdr + 0x20)
+    let dsym_lnk = _er_u32le(buf, dynsym_hdr + 0x28)
+    let mut dsym_es = _er_u64le(buf, dynsym_hdr + 0x38)
+    if dsym_es < 1 { dsym_es = 24 }
+    if dsym_lnk > e_shnum - 1 { return out }
+    let dstr_hdr = e_shoff + dsym_lnk * e_shentsize
+    let dstr_off = _er_u64le(buf, dstr_hdr + 0x18)
+
+    let count = dsym_sz / dsym_es
+    let mut k = 1
+    while k < count {
+        let s = dsym_off + k * dsym_es
+        let st_name  = _er_u32le(buf, s + 0x00)
+        let st_info  = _er_u8(buf, s + 0x04)
+        let st_shndx = _er_u16le(buf, s + 0x06)
+        let st_size  = _er_u64le(buf, s + 0x10)
+        if st_shndx != 0 {
+            let nm = _er_cstr(buf, dstr_off + st_name)
+            if len(nm) > 0 {
+                out.names.push(nm)
+                out.types.push(st_info & 0xf)
+                out.sizes.push(st_size)
+            }
+        }
+        k = k + 1
+    }
+    out.ok = 1
+    return out
+}
+
+// All GLOBAL/WEAK def names across every archive member — the tripwire's
+// runtime_defs (twin of _aef_all_member_defs). Uses parse_elf_arm64_obj +
+// _aef_symname_arm64.
+fn _aef_all_member_defs_arm64(buf, members: [ArMember]) -> [string] {
+    let defs: [string] = []
+    let mut m = 0
+    while m < len(members) {
+        let mem = members[m]
+        let obj = parse_elf_arm64_obj(buf, mem.data_off, mem.size, m)
+        let mut sj = 0
+        while sj < len(obj.symbols) {
+            let s = obj.symbols[sj]
+            if s.section != 0 && (s.bind == ELF_STB_GLOBAL || s.bind == ELF_STB_WEAK) {
+                let nm = _aef_symname_arm64(obj, s.name_offset)
+                if len(nm) > 0 && !_aef_has(defs, nm) { defs.push(nm) }
+            }
+            sj = sj + 1
+        }
+        m = m + 1
+    }
+    return defs
+}
+
+// Return the GENUINE residual libc UND names over the combined obj list — every
+// symbol-referencing reloc target (CALL26/JUMP26/ADR/ADD/LDST/PREL32 + GOT — i.e.
+// everything EXCEPT the data-absolute ABS64/ABS32, which stay hard-error like
+// x86's kind-1 rule) that (a) no obj defines, (b) has no `hxlcl_<name>` own-body
+// to alias to, (c) is not a linker-synthetic/hexa-own-prefixed name. This is the
+// set that becomes n_dyn>0 → predicts the crt1 dynamic-link handoff. Mirror of
+// _census_resid_und; O(relocs·bucket) via the 1024-bucket _ldx_hash def-index.
+fn _census_resid_und_arm64(objs: [ElfArm64Obj]) -> [string] {
+    let mut dfx: [[string]] = []
+    let mut db = 0
+    while db < 1024 { dfx.push([]); db = db + 1 }
+    let mut oi = 0
+    while oi < len(objs) {
+        let o = objs[oi]
+        let mut si = 0
+        while si < len(o.symbols) {
+            let s = o.symbols[si]
+            if s.section != 0 {
+                let nm = _aef_symname_arm64(o, s.name_offset)
+                if len(nm) > 0 {
+                    let hb = _ldx_hash(nm)
+                    dfx[hb] = dfx[hb].push(nm)
+                }
+            }
+            si = si + 1
+        }
+        oi = oi + 1
+    }
+    let mut resid: [string] = []
+    let mut ro = 0
+    while ro < len(objs) {
+        let o = objs[ro]
+        let mut rj = 0
+        while rj < len(o.relocs) {
+            let r = o.relocs[rj]
+            let is_symref = r.kind != ELF_R_AARCH64_ABS64 && r.kind != ELF_R_AARCH64_ABS32
+                            && r.kind != ELF_R_AARCH64_NONE
+            if is_symref {
+                let s = o.symbols[r.sym_idx]
+                let nm = _aef_symname_arm64(o, s.name_offset)
+                if len(nm) > 0 {
+                    let mut is_def = false
+                    let hb = _ldx_hash(nm)
+                    let bn = dfx[hb]
+                    let mut bi = 0
+                    while bi < len(bn) { if bn[bi] == nm { is_def = true; break } bi = bi + 1 }
+                    let mut is_alias = false
+                    if !is_def {
+                        let own_nm = "hxlcl_" + nm
+                        let ohb = _ldx_hash(own_nm)
+                        let obn = dfx[ohb]
+                        let mut obi = 0
+                        while obi < len(obn) { if obn[obi] == own_nm { is_alias = true; break } obi = obi + 1 }
+                    }
+                    let synth = nm == "__errno_location" || nm == "__init_array_start"
+                                || nm == "__init_array_end"
+                    let own_pre = _elf_has_prefix(nm, "hexa_") || _elf_has_prefix(nm, "rt_")
+                                  || _elf_has_prefix(nm, "_hx_") || _elf_has_prefix(nm, "__hexa")
+                                  || _elf_has_prefix(nm, "hxlcl_") || _elf_has_prefix(nm, "forge_")
+                                  || _elf_has_prefix(nm, "farr_")
+                    if !is_def && !is_alias && !synth && !own_pre {
+                        if !_aef_has(resid, nm) { resid.push(nm) }
+                    }
+                }
+            }
+            rj = rj + 1
+        }
+        ro = ro + 1
+    }
+    return resid
 }
 
 pub fn link_elf_arm64_ownstart_ar(program_objs: [ElfArm64Obj], out_path: string, main_name: string, runtime_a_path: string) -> Int {
