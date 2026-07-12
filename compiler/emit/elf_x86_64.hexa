@@ -35,6 +35,7 @@ let ELF_SHT_SYMTAB        = 2
 let ELF_SHT_STRTAB        = 3
 let ELF_SHT_RELA          = 4
 let ELF_SHT_NOBITS        = 8
+let ELF_SHT_INIT_ARRAY    = 14      // ctor fn-pointer array (.init_array / .init_array.NNNNN)
 let ELF_SHT_DYNSYM        = 11      // dynamic linker symbol table (.dynsym)
 
 let ELF_SHF_WRITE         = 0x1
@@ -95,6 +96,9 @@ struct ElfX86Obj {
     // stamp `.symtab` `sh_info` = nlocal+1 (ELF requires LOCAL < GLOBAL).
     rodata:   [u8],
     data:     [u8],
+    // SHT_INIT_ARRAY pool (slot 6) — 8-byte ctor fn ptrs, link order. Pooled so
+    // the linker materializes a contiguous output .init_array + runs ctors.
+    init_array: [u8],
     bss_size: i64,
     nlocal:   i64,
     // Per-pool max sh_addralign (min 1) — clang runtime.a members carry
@@ -1896,9 +1900,14 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
     // stub (no-runtime unit-test links stay byte-identical). Store target is a
     // RIP-rel disp32 hand-patched after the data blob is final (bss vaddr known).
     let mut env_cell = false
+    let mut hxsc_def   = false          // runtime.a OWN_START scaffold (_hx_start_c) present
+    let mut init_total = 0              // pooled .init_array byte size (all objs)
+    let mut obj_init_base: [Int] = []   // region-relative base per obj (prefix sum)
     let mut _eci = 0
     while _eci < len(objs) {
         let _eco = objs[_eci]
+        obj_init_base.push(init_total)
+        init_total = init_total + len(_eco.init_array)
         let mut _ecs = 0
         while _ecs < len(_eco.symbols) {
             let _sy = _eco.symbols[_ecs]
@@ -1912,6 +1921,7 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
                     _ek = _ek + 1
                 }
                 if _en == "_hxlcl_environ" { env_cell = true }
+                if _en == "_hx_start_c" { hxsc_def = true }
             }
             _ecs = _ecs + 1
         }
@@ -1922,7 +1932,28 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
     // CRT1-HANDOFF (LOCUS 2a): suppress the own raw-syscall `_start` stub — crt1's
     // `_start` becomes the entry, so no argc/argv unpack and no env-cell store.
     if crt_handoff { env_cell = false }
+    // ── init-stub gate: a nonempty pooled .init_array on the STATIC path must run
+    // via runtime.a's _hx_start_c (env store + _hx_run_init_array walk + atexit-
+    // drain exit). _hx_run_init_array itself is `static` (inlined) — not callable;
+    // _hx_start_c is __attribute__((used)) GLOBAL. Zero-ctor links keep the exact
+    // old stub (byte-identical). Ctors with no runtime scaffold = loud fail.
+    let init_stub = init_total > 0 && !crt_handoff
+    if init_stub && !hxsc_def {
+        eprintln("hexa_ld(elf,ownstart): .init_array ctor(s) present but no _hx_start_c (runtime.a OWN_START scaffold) to run them — refusing (silent ctor-skip)")
+        return 3
+    }
+    if init_stub { env_cell = false }   // _hx_start_c stores hxlcl_environ itself
     if !crt_handoff {
+    if init_stub {
+        // xor %rbp,%rbp; mov %rsp,%rdi; and $-16,%rsp; call _hx_start_c; hlt (16 B)
+        // rdi = RAW entry rsp (sp[0]=argc contract); _hx_start_c never returns.
+        text_bytes.push(0x48); text_bytes.push(0x31); text_bytes.push(0xED)   // xor rbp,rbp
+        text_bytes.push(0x48); text_bytes.push(0x89); text_bytes.push(0xE7)   // mov rdi,rsp
+        text_bytes.push(0x48); text_bytes.push(0x83); text_bytes.push(0xE4); text_bytes.push(0xF0)  // and rsp,-16
+        text_bytes.push(0xE8); text_bytes.push(0x00); text_bytes.push(0x00)
+        text_bytes.push(0x00); text_bytes.push(0x00)          // call rel32 _hx_start_c (field 11, next 15)
+        text_bytes.push(0xF4)                                 // hlt (unreachable)
+    } else {
     text_bytes.push(0x48); text_bytes.push(0x8B); text_bytes.push(0x3C)
     text_bytes.push(0x24)                                 // mov rdi, [rsp]      (argc)
     text_bytes.push(0x48); text_bytes.push(0x8D); text_bytes.push(0x74)
@@ -1941,17 +1972,19 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
     text_bytes.push(0x00); text_bytes.push(0x00)          // mov eax, 60 (__NR_exit)
     text_bytes.push(0x0F); text_bytes.push(0x05)          // syscall
     }
-    // len(text_bytes) is now 23 (plain) or 35 (env_cell) — the +len shift is
+    }
+    // len(text_bytes) is now 16 (init_stub) / 23 (plain) or 35 (env_cell) — the +len shift is
     // applied to every obj below via `base = len(text_bytes)` (auto). When
     // crt_handoff suppressed the stub, len==0 → crt1 (obj[0]) .text lands at 0.
-    let stub_call_field = if env_cell { 22 } else { 10 }
-    let stub_call_next  = if env_cell { 26 } else { 14 }
+    let stub_call_field = if init_stub { 11 } else if env_cell { 22 } else { 10 }
+    let stub_call_next  = if init_stub { 15 } else if env_cell { 26 } else { 14 }
 
     // Concatenated data blob (.rodata ++ .data per obj) for the RW segment.
     let mut data_bytes: [Int] = []
     let mut total_bss  = 0
 
     let mut main_off = -1
+    let mut hxsc_off = -1   // _hx_start_c .text offset (init_stub call target)
     // Defined-symbol map. def_seg = 0 for a .text def, 1 for a data-blob def;
     // def_off is the byte offset INSIDE that segment's blob (text offset for
     // text, data-blob offset for data). Converted to a vaddr AFTER the layout
@@ -2011,6 +2044,9 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
                 if main_off < 0 && name == main_name {
                     main_off = base + s.value
                 }
+                if hxsc_off < 0 && name == "_hx_start_c" {
+                    hxsc_off = base + s.value
+                }
             } else if s.section == 5 {
                 // .bss/COMMON def (round-3b) — no file bytes; lives in the data
                 // segment's zero-fill region AFTER the concatenated .data blob
@@ -2023,6 +2059,10 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
                 def_off.push((total_bss - obj.bss_size) + s.value)
                 def_bind.push(s.bind)
                 def_obj.push(oi)
+            } else if s.section == 6 {
+                // .init_array-resident sym (slot 6) — registered AFTER the region
+                // is materialized below (init_region_off not yet known here);
+                // falling into the data arm would register a WRONG blob offset.
             } else if s.section != 0 {
                 // Data def. section==4 (data_sec when .rodata present) -> .data
                 // pool; otherwise (section==3) -> .rodata pool. When the obj has
@@ -2058,7 +2098,12 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
     // (LOCUS 2b): skipped when the own stub is suppressed — crt1's `_start`
     // reaches main via its own GOTPCRELX(main) reloc through the GOT pass.
     if !crt_handoff {
-        let call_rel = main_off - stub_call_next
+        let mut _tgt = main_off
+        if init_stub {
+            if hxsc_off < 0 { eprintln("hexa_ld(elf,ownstart): _hx_start_c defined but no .text offset resolved"); return 3 }
+            _tgt = hxsc_off
+        }
+        let call_rel = _tgt - stub_call_next
         text_bytes[stub_call_field]     = call_rel & 0xff
         text_bytes[stub_call_field + 1] = (call_rel >> 8) & 0xff
         text_bytes[stub_call_field + 2] = (call_rel >> 16) & 0xff
@@ -2079,17 +2124,68 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
     // the ET_EXEC symtab -> zero output-byte contribution (byteeq-neutral); they
     // only appear as clang-compiled runtime.a members' relocs on the own-link
     // path, never on the shipping (system ld) path.
-    let init_array_off = len(data_bytes)
+    // ── output .init_array region — contiguous concat of every obj's pooled
+    // SHT_INIT_ARRAY bytes, link order (GNU ld parity; cross-obj priority-sort is
+    // a named follow-up rung). Entries are patched to FINAL ctor vaddrs by the
+    // kind-1 site_seg==6 resolve arm below. Zero-ctor links: no pad, empty region,
+    // start==end at the same offset as today — bit-identical.
+    // Materialize the .init_array region ONLY on the STATIC own-start path
+    // (init_stub). On the dyn (crt_handoff) path keep the region EMPTY →
+    // __init_array_start == __init_array_end → the runtime's _hx_run_init_array
+    // walk stays a no-op → byte-identical to pre-branch. (MEASURED: materializing
+    // real bounds on the dyn path made a runtime walk run the OWN_START ctors
+    // out-of-context → rc 0→2; the dyn ctors are glibc/crt1's job, not ours.)
+    if init_stub && init_total > 0 { while (len(data_bytes) & 7) != 0 { data_bytes.push(0) } }
+    let init_region_off = len(data_bytes)
+    if init_stub {
+        let mut _iri = 0
+        while _iri < len(objs) {
+            let _iro = objs[_iri]
+            let mut _irb = 0
+            while _irb < len(_iro.init_array) { data_bytes.push(_iro.init_array[_irb] & 0xff); _irb = _irb + 1 }
+            _iri = _iri + 1
+        }
+    }
     def_names.push("__init_array_start")
     def_seg.push(1)
-    def_off.push(init_array_off)
+    def_off.push(init_region_off)
     def_bind.push(ELF_STB_GLOBAL)
     def_obj.push(-1)
     def_names.push("__init_array_end")
     def_seg.push(1)
-    def_off.push(init_array_off)
+    def_off.push(len(data_bytes))            // init_region_off + init_total
     def_bind.push(ELF_STB_GLOBAL)
     def_obj.push(-1)
+    // deferred section-6 (E7) sym registration — absolute blob offsets now known.
+    // Only on the static path (region materialized); dyn keeps the syms unbound
+    // (region empty), matching pre-branch.
+    if init_stub && init_total > 0 {
+        let mut _isi = 0
+        while _isi < len(objs) {
+            let _iso = objs[_isi]
+            let mut _iss = 0
+            while _iss < len(_iso.symbols) {
+                let _isy = _iso.symbols[_iss]
+                if _isy.section == 6 {
+                    let mut _isn = ""
+                    let mut _isk = 0
+                    while true {
+                        let _isb = _iso.strtab[_isy.name_offset + _isk] & 0xff
+                        if _isb == 0 { break }
+                        _isn = _isn + from_char_code(_isb)
+                        _isk = _isk + 1
+                    }
+                    def_names.push(_isn)
+                    def_seg.push(1)
+                    def_off.push(init_region_off + obj_init_base[_isi] + _isy.value)
+                    def_bind.push(_isy.bind)
+                    def_obj.push(_isi)
+                }
+                _iss = _iss + 1
+            }
+            _isi = _isi + 1
+        }
+    }
 
     // ── (A0) FLOOR-NAME ALIAS — moved into the DYN-UND census below ──────────
     // The bare libc-floor UND → `hxlcl_<name>` GLOBAL-alias synthesis (axis-①
@@ -2709,6 +2805,17 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
         _ew_u64(data_bytes, 7);  _ew_u64(data_bytes, rela_vaddr)     // DT_RELA
         _ew_u64(data_bytes, 8);  _ew_u64(data_bytes, rela_size)      // DT_RELASZ
         _ew_u64(data_bytes, 9);  _ew_u64(data_bytes, 24)             // DT_RELAENT
+        // CRT1-HANDOFF: NO DT_INIT_ARRAY. This runtime.a is OWN_START-compiled
+        // (-DHEXA_ZEROC_OWN_START) — its static ctors assume the _hx_start_c
+        // contract (environ-first store, own atexit-LIFO via hxlcl_exit, raw
+        // exit_group, premain TAG_FN binding). Under glibc _dl_init an
+        // extraction-accident SUBSET of them runs out of context = partial init
+        // (MEASURED: mir3 own-link rc 0→2). One init authority per path: dyn =
+        // crt1/glibc (runs zero exe ctors — status-quo, byte-behavior identical to
+        // pre-branch), static = the _hx_start_c 16-byte stub walk (E5/E6, the
+        // RFC061 resid-UND→0 endgame where these ctors are needed AND contract-
+        // valid). The dyn env() gap (hxlcl_getenv walks only hxlcl_environ, no
+        // libc fallback) is a pre-existing runtime issue, not a linker DT tag.
         _ew_u64(data_bytes, 0);  _ew_u64(data_bytes, 0)              // DT_NULL
         dyn_sz = len(data_bytes) - dyn_off
 
@@ -2822,8 +2929,8 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
                     unresolved = unresolved + 1
                 } else {
                     let slot_vaddr = data_vaddr_base + got_blob_off + gslot * 8
-                    if r.site_seg == 3 || r.site_seg == 4 {
-                        let blob_off = if r.site_seg == 4 { obj_data_base[ro] + r.offset } else { obj_rodata_base[ro] + r.offset }
+                    if r.site_seg == 3 || r.site_seg == 4 || (r.site_seg == 6 && init_stub) {
+                        let blob_off = if r.site_seg == 4 { obj_data_base[ro] + r.offset } else if r.site_seg == 6 { init_region_off + obj_init_base[ro] + r.offset } else { obj_rodata_base[ro] + r.offset }
                         let p_vaddr  = data_vaddr_base + blob_off
                         let gdelta   = slot_vaddr + r.addend - p_vaddr
                         if gdelta < -2147483648 || gdelta > 2147483647 {
@@ -2861,8 +2968,8 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
                 }
                 // Site segment (round-3b): 3=rodata / 4=data land in the DATA blob
                 // at the data-seg vaddr; anything else (1=text, or 0) patches .text.
-                if r.site_seg == 3 || r.site_seg == 4 {
-                    let blob_off = if r.site_seg == 4 { obj_data_base[ro] + r.offset } else { obj_rodata_base[ro] + r.offset }
+                if r.site_seg == 3 || r.site_seg == 4 || (r.site_seg == 6 && init_stub) {
+                    let blob_off = if r.site_seg == 4 { obj_data_base[ro] + r.offset } else if r.site_seg == 6 { init_region_off + obj_init_base[ro] + r.offset } else { obj_rodata_base[ro] + r.offset }
                     let p_vaddr  = data_vaddr_base + blob_off
                     if r.kind == 1 {
                         let av = s_vaddr + r.addend
@@ -3719,7 +3826,7 @@ fn _er_cstr(buf, off: Int) -> string {
 pub fn parse_elf_x86_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfX86Obj {
     let mut obj = ElfX86Obj {
         text: [], relocs: [], symbols: [], strtab: [],
-        rodata: [], data: [], bss_size: 0, nlocal: 0,
+        rodata: [], data: [], init_array: [], bss_size: 0, nlocal: 0,
         rodata_align: 1, data_align: 1, bss_align: 1,
     }
     obj.strtab.push(0)                       // ELF strtab idx 0 = ""
@@ -3804,6 +3911,16 @@ pub fn parse_elf_x86_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfX86O
             if salign > obj.bss_align { obj.bss_align = salign }
             pbase = obj.bss_size
             obj.bss_size = obj.bss_size + ssize
+        } else if stype == ELF_SHT_INIT_ARRAY && (flags & ELF_SHF_ALLOC) != 0 {
+            // ctor array — pooled (slot 6) so relocs sited here survive the Rung-1
+            // drop and the linker materializes a contiguous output .init_array.
+            // 8-byte fn ptrs; keep the pool 8-aligned across .init_array.NNNNN +
+            // plain .init_array members (selection by sh_type, not name).
+            slot = 6
+            while (len(obj.init_array) % 8) != 0 { obj.init_array.push(0) }
+            pbase = len(obj.init_array)
+            let mut k = 0
+            while k < ssize { obj.init_array.push(_er_u8(buf, base + soff + k)); k = k + 1 }
         }
         sec_slot.push(slot)
         sec_base.push(pbase)
@@ -4970,6 +5087,7 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
         strtab:   [],
         rodata:   [],
         data:     [],
+        init_array: [],    // own-emit never produces ctors — pool stays empty
         bss_size: 0,
         nlocal:   0,
         rodata_align: 8,   // own-emit pool contract (8-align, no SSE consts)

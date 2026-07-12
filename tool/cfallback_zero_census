@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# tool/cfallback_zero_census — axis-① hexa_cc.c C-transpile-delegate removal census.
+#
+# With own-link default-ON (#4882), a linux-x86_64 `hexa build` should take the
+# own-link leg (self/main.hexa:3587, prints "... (native own-link, own-start ...)")
+# for EVERY program — never falling through to tier-B system-ld (prints "(native
+# backend)") nor to the C-transpile delegate (resolve_or_bootstrap_hexat → clang
+# on a generated `.c`). This gate builds a corpus with the DEFAULT `hexa build`
+# and asserts (a) the own-link marker fired AND (b) NO clang/system-ld child ran.
+#
+# WHY (distinct from ENCODE-MISS=0 + corpus-parity): those prove codegen coverage
+# + own-link≡ld link correctness. THIS proves the CLI cmd_build ladder actually
+# TAKES the own-link leg and NEVER reaches the C-transpile fall-through — a fall-
+# through also fires on aprime_cc-resolution miss (resolve_native_cc()="") / runtime.a
+# miss / flatten failure / link error, not just ENCODE-MISS.
+#
+# ⚠️ FIDELITY (measured, aiden): the own-link leg auto-resolves BOTH a co-located native
+# compiler `build/aprime_cc` (resolve_native_cc(), self/main.hexa:2680) AND the prebuilt
+# `build/runtime.a` (resolve_prebuilt_runtime() → resolve_hxroot(), :1630). resolve_hxroot's
+# root marker is `self/native/hexa_cc.c` — so both resolvers succeed ONLY from the INSTALL.SH
+# LAYOUT ($HX_BIN/{hexa,build/,self→source}), NOT the raw stage_precompile_package tarball
+# dir (which has build/ but NO self/ → resolve_hxroot falls to "." → runtime.a="" → the leg
+# skips → clang delegate = a FALSE red). So the CI must replicate install.sh's layout (copy
+# the staged build/ + symlink self/) and point --hexa there; run from a neutral cwd with
+# HEXA_APRIME_CC/HEXA_LANG/HEXA_PREBUILT_RUNTIME ALL unset so own-link resolves purely from
+# the layout (argv0 + self/ marker) as a real consumer does. Hand-building aprime_cc or
+# hand-setting the runtime env in the census would be tune-to-green (a privileged env no
+# consumer has). A green soak here = the hexa_cc.c delegate is dead on the shipped default
+# leg → removable (axis-① done). NOTE the marker irony: resolve_hxroot keys on the very
+# `hexa_cc.c` axis-① aims to delete — decoupling that marker is an axis-① prerequisite.
+#
+# Advisory (not in the required selfhost-gates-summary set) — promote after a green
+# soak, per the CI rule "measure a job green before making it required".
+#
+# Usage: bash tool/cfallback_zero_census --hexa <path-to-staged-hexa>
+#   --hexa PATH  the shipped `hexa` CLI to census (default: $HEXA_BIN or $REPO/hexa).
+# INFRA(non-eval) exits (rc=2) quarantine toolchain walls (infra-wall-noneval).
+set -uo pipefail
+
+REPO="${REPO:-$PWD}"
+HEXA="${HEXA_BIN:-$REPO/hexa}"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --hexa) HEXA="$2"; shift 2 ;;
+        --hexa=*) HEXA="${1#--hexa=}"; shift ;;
+        *) echo "unknown arg: $1" >&2; exit 3 ;;
+    esac
+done
+infra() { echo "INFRA(non-eval): $*"; exit 2; }
+[ -x "$HEXA" ] || infra "no hexa CLI at $HEXA (build + stage_precompile_package first)"
+HEXA="$(cd "$(dirname "$HEXA")" && pwd)/$(basename "$HEXA")"  # absolutize (install_dir probe)
+
+# own-link default only fires on a linux-x86_64 host (the #4882 leg gate). On any
+# other host `hexa build` legitimately uses ld → the census is not meaningful there.
+_host="$(uname -sm 2>/dev/null | tr -d ' \n\t')"
+[ "$_host" = "Linuxx86_64" ] || infra "census only meaningful on Linuxx86_64 host (got '$_host')"
+
+W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
+mkdir -p "$W/c"
+# Neutral cwd (defense-in-depth vs resolve_native_cc()'s ./build/aprime_cc cwd probe:
+# a repo-root cwd could resolve the repo's aprime_cc instead of the staged one).
+cd "$W"
+# corpus — same feature spread as the ownlink-corpus-parity gate.
+cat > "$W/c/arith.hexa"      <<'H'
+fn main() { let a = 6; let b = 7; print(a * b + 1); print(a - b) }
+H
+cat > "$W/c/array.hexa"      <<'H'
+fn main() { let mut a: [i64] = []; a.push(11); a.push(22); a.push(33); print(a[0]); print(a[2]); print(len(a)) }
+H
+cat > "$W/c/struct_arr.hexa" <<'H'
+struct Iv { ids: [i64], starts: [i64] }
+fn build() -> Iv { let mut ids: [i64] = []; let mut i = 0; while i < 4 { ids.push(i * 10); i = i + 1 }; let mut s: [i64] = []; return Iv { ids: ids, starts: s } }
+fn main() { let v = build(); print(len(v.ids)); print(v.ids[0]); print(v.ids[3]) }
+H
+cat > "$W/c/str.hexa"        <<'H'
+fn main() { let s = "hexa"; print(s); print(len(s)) }
+H
+cat > "$W/c/loop.hexa"       <<'H'
+fn main() { let mut s = 0; let mut i = 1; while i <= 10 { s = s + i; i = i + 1 }; print(s) }
+H
+
+echo "census target: $HEXA (cwd=$W · HEXA_APRIME_CC/HEXA_LANG must be unset by caller)"
+N=0; FAIL=0
+for P in "$W"/c/*.hexa; do
+    name="$(basename "$P" .hexa)"; N=$((N + 1))
+    out="$("$HEXA" build "$P" -o "$W/$name.bin" 2>&1)"
+    # Classify by the DECISIVE evidence, own-link first: a clang invocation on a
+    # generated `.c` is the C-transpile delegate; "(native backend)" is tier-B
+    # (clang-free but SYSTEM-LD — still fails axis-①'s zero-ld clause); the own-link
+    # leg prints "native own-link" AND must show NO clang child (belt-and-suspenders).
+    if echo "$out" | grep -q "native own-link"; then
+        if echo "$out" | grep -qE "(^|[[:space:]/])(clang|cc|gcc)([[:space:]]|$)"; then
+            echo "  $name: ✗ own-link marker BUT a clang/cc child ran (contaminated) —"; echo "$out" | grep -E "(clang|cc|gcc) " | tail -2; FAIL=$((FAIL + 1))
+        else
+            echo "  $name: OWN-LINK ✓ (clang-0 + ld-0 — aprime_cc + hexa_ld)"
+        fi
+    elif echo "$out" | grep -qE "(^|[[:space:]/])clang([[:space:]]|$)"; then
+        echo "  $name: ✗ C-TRANSPILE DELEGATE reached (clang on generated .c) —"; echo "$out" | grep -E "clang " | tail -1; FAIL=$((FAIL + 1))
+    elif echo "$out" | grep -q "(native backend)"; then
+        echo "  $name: ✗ tier-B system-ld fallback (clang-free but uses ld — own-link leg NOT taken) —"; echo "$out" | tail -2; FAIL=$((FAIL + 1))
+    else
+        echo "  $name: ? unrecognized build path —"; echo "$out" | tail -3; FAIL=$((FAIL + 1))
+    fi
+done
+
+echo "── cfallback-zero census: $((N - FAIL))/$N own-link (clang-0 + ld-0) ──"
+[ "$FAIL" -eq 0 ] || { echo "CENSUS RED ($FAIL programs did NOT take own-link) — the C-transpile delegate / system-ld path is still reachable on the SHIPPED default leg; blocks axis-① hexa_cc.c removal. If aprime_cc is absent from the staged install, the PACKAGING gate (test -x <stage>/build/aprime_cc) should have caught it first."; exit 1; }
+echo "CENSUS GREEN — every default hexa build on the shipped consumer artifact took own-link (clang-0 + ld-0); the C-transpile delegate is dead code on the shipped default leg → soak → remove (axis-①)"
