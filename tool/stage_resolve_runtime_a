@@ -344,7 +344,7 @@ resolve_native_rt_hi_seed() {
 # HEXA_RT_ARRAY_NATIVE=0 to force the C path even when a seed exists.
 resolve_native_array_core_seed() {
     [ "${HEXA_RT_ARRAY_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
-    [ -f build/array_core_native.o ] && { export HEXA_RT_ARRAY_NATIVE=1; return 0; }
+    [ -f build/array_core_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_RT_ARRAY_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     # The static-musl edge build sets TARGET=linux-x86_64-musl. The frozen native
     # .s seeds are ELF-object/x86_64-ABI artifacts shared by glibc and musl (same
@@ -373,6 +373,37 @@ resolve_native_array_core_seed() {
         echo "[stage_resolve_runtime_a] RT-NATIVE ARRAY-R4: seed $seed exports only $nsyms/6 rt_array_*_native — falling back to C #else path" >&2
         return 0
     fi
+    # ── axis-②③ B3 A0 (own-object seed): when HEXA_RT_OWNOBJ is opted in, produce
+    #    build/array_core_native.o by OWN-EMITTING the .hexa SSOT directly
+    #    (aprime --backend=native --emit=obj) instead of the .s-seed + $CC assemble —
+    #    the round-0-GREEN build-path swap that drops $CC-as-assembler for this family.
+    #    The own-emit binary is the frozen-dough hexa/hexat (NEVER build/aprime_cc, #4489)
+    #    via $HEXA_OWNOBJ_CC. Adopt only if it exports the SAME 6 rt_array_*_native
+    #    contract syms; ANY miss (flag off · no binary · own-emit fail · <6 syms) falls
+    #    through to the .s path below → default (flag-unset) output byte-identical.
+    #    Tri-state: HEXA_RT_OWNOBJ / HEXA_RT_OWNOBJ_ARRAY = {unset|0(off default) | 1(on)}.
+    if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_ARRAY:-0}" != "0" ]; } then
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/array_core.hexa" _otri=""
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;;
+            linux-arm64)  _otri="arm64-linux-gnu" ;;
+            darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --target="$_otri" -o build/array_core_native.o "$_osrc" 2>build/array_core_ownobj.err; then
+                local _ots; _ots="$(nm build/array_core_native.o 2>/dev/null | grep -cE ' T _?rt_array_(get|set|len|pop|shift|truncate)_native')"
+                if [ "${_ots:-0}" -ge 6 ]; then
+                    export HEXA_RT_ARRAY_NATIVE=1
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: array_core via $_oc --emit=obj ($_ots/6 rt_array_*_native, TARGET=$tgt) → native element path, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: array_core own-emit exported $_ots/6 syms — falling back to .s seed" >&2
+            else
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: array_core own-emit failed — falling back to .s seed ($(head -1 build/array_core_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
+    fi
     local s_tmp="build/array_core_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
     if $CC -c "$s_tmp" -o build/array_core_native.o 2>/dev/null; then
@@ -386,7 +417,7 @@ resolve_native_array_core_seed() {
 
 resolve_native_map_core_seed() {
     [ "${HEXA_RT_MAP_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
-    [ -f build/map_core_native.o ] && { export HEXA_RT_MAP_NATIVE=1; return 0; }
+    [ -f build/map_core_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_RT_MAP_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     # The static-musl edge build sets TARGET=linux-x86_64-musl. The frozen native
     # .s seeds are ELF-object/x86_64-ABI artifacts shared by glibc and musl (same
@@ -421,6 +452,31 @@ resolve_native_map_core_seed() {
         echo "[stage_resolve_runtime_a] RT-NATIVE MAP: seed $seed exports $nsyms/4 read + $ninpl/1 set_inplace rt_map_*_native — falling back to C #else path (seed needs regen via tool/regen_map_core_native_s.sh)" >&2
         return 0
     fi
+    # ── axis-②③ B3 A0 (own-object seed) — map_core (single flag, 4 read + 1 inplace
+    #    contract; parity own=5 ⊇ seed=5 PROVEN). Adopt only if own-emit exports the 4
+    #    rt_map_(get|fnv1a|strcmp0|contains)_native AND rt_map_set_inplace_native. ──
+    if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_MAP:-0}" != "0" ]; } then
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/map_core.hexa" _otri=""
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --target="$_otri" -o build/map_core_native.o "$_osrc" 2>build/map_core_ownobj.err; then
+                local _otr _oti
+                _otr="$(nm build/map_core_native.o 2>/dev/null | grep -cE ' T _?rt_map_(get|fnv1a|strcmp0|contains)_native')"
+                _oti="$(nm build/map_core_native.o 2>/dev/null | grep -cE ' T _?rt_map_set_inplace_native')"
+                if [ "${_otr:-0}" -ge 4 ] && [ "${_oti:-0}" -ge 1 ]; then
+                    export HEXA_RT_MAP_NATIVE=1
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: map_core via $_oc --emit=obj ($_otr/4 read + $_oti/1 set_inplace rt_map_*_native, TARGET=$tgt) → native map path, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: map_core own-emit exported $_otr/4 read + $_oti/1 inplace — falling back to .s seed" >&2
+            else
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: map_core own-emit failed — falling back to .s seed ($(head -1 build/map_core_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
+    fi
     local s_tmp="build/map_core_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
     if $CC -c "$s_tmp" -o build/map_core_native.o 2>/dev/null; then
@@ -445,7 +501,7 @@ resolve_native_map_core_seed() {
 # Set HEXA_RT_INTERN_NATIVE=0 to force the C path even when a seed exists.
 resolve_native_intern_core_seed() {
     [ "${HEXA_RT_INTERN_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
-    [ -f build/intern_core_native.o ] && { export HEXA_RT_INTERN_NATIVE=1; return 0; }
+    [ -f build/intern_core_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_RT_INTERN_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"; tgt="${tgt%-cuda}"   # -cuda variant shares the linux-x86_64 ELF/SysV rt-seeds
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -468,6 +524,33 @@ resolve_native_intern_core_seed() {
     if [ "${nsyms:-0}" -lt 2 ]; then
         echo "[stage_resolve_runtime_a] RT-NATIVE INTERN-R1: seed $seed exports only $nsyms/2 rt_intern_*_native — falling back to C #else path" >&2
         return 0
+    fi
+    # ── axis-②③ B3 A0 (own-object seed) — intern_core. Same lane as array_core:
+    #    own-emit stdlib/runtime/intern_core.hexa via $HEXA_OWNOBJ_CC (frozen-dough)
+    #    under HEXA_RT_OWNOBJ, adopt only on the 2 rt_intern_*_native contract syms,
+    #    else fall through to the .s path → default (flag-unset) byte-identical.
+    #    member parity own=2 ⊇ seed=2 PROVEN (ownobj_member_parity_gate, summer). ──
+    if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_INTERN:-0}" != "0" ]; } then
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/intern_core.hexa" _otri=""
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;;
+            linux-arm64)  _otri="arm64-linux-gnu" ;;
+            darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --target="$_otri" -o build/intern_core_native.o "$_osrc" 2>build/intern_core_ownobj.err; then
+                local _ots; _ots="$(nm build/intern_core_native.o 2>/dev/null | grep -cE ' T _?rt_intern_(find|strcmp0)_native')"
+                if [ "${_ots:-0}" -ge 2 ]; then
+                    export HEXA_RT_INTERN_NATIVE=1
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: intern_core via $_oc --emit=obj ($_ots/2 rt_intern_*_native, TARGET=$tgt) → native intern probe path, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: intern_core own-emit exported $_ots/2 syms — falling back to .s seed" >&2
+            else
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: intern_core own-emit failed — falling back to .s seed ($(head -1 build/intern_core_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
     fi
     local s_tmp="build/intern_core_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
@@ -549,7 +632,7 @@ resolve_native_fs_core_seed() {
 # HEXA_RT_STR_STARTS_WITH_NATIVE=0 to force the C path even when a seed exists.
 resolve_native_str_core_seed() {
     [ "${HEXA_RT_STR_EQ_NATIVE:-x}" = "0" ] && [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-x}" = "0" ] && [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-x}" = "0" ] && [ "${HEXA_RT_STR_INDEX_OF_NATIVE:-x}" = "0" ] && [ "${HEXA_RT_STR_CONTAINS_NATIVE:-x}" = "0" ] && return 0   # all opted out
-    [ -f build/str_core_native.o ] && { [ "${HEXA_RT_STR_EQ_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_EQ_NATIVE=1; [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_STARTS_WITH_NATIVE=1; [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_ENDS_WITH_NATIVE=1; [ "${HEXA_RT_STR_INDEX_OF_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_INDEX_OF_NATIVE=1; [ "${HEXA_RT_STR_CONTAINS_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_CONTAINS_NATIVE=1; return 0; }
+    [ -f build/str_core_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { [ "${HEXA_RT_STR_EQ_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_EQ_NATIVE=1; [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_STARTS_WITH_NATIVE=1; [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_ENDS_WITH_NATIVE=1; [ "${HEXA_RT_STR_INDEX_OF_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_INDEX_OF_NATIVE=1; [ "${HEXA_RT_STR_CONTAINS_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_CONTAINS_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -563,6 +646,43 @@ resolve_native_str_core_seed() {
         linux-arm64)  seed="self/native/str_core_arm64-linux.s" ;;
         *)            seed="" ;;   # unknown → C #else path
     esac
+    # ── axis-②③ B3 A0 (own-object seed) — str_core (5-flag: eq/starts_with/
+    #    ends_with/index_of/contains; parity own=5 PROVEN). Placed BEFORE the .s
+    #    seed-existence guard below because str_core has NO in-tree .s seed (parity
+    #    gate SKIPs it) — the whole point of A0 is to not need the assembled seed.
+    #    Own-emit the member; require ALL 5 rt_str_*_native exported (mirrors the
+    #    .s 5-sym guard), then set each flag (unless opted-out =0). ──
+    if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_STRCORE:-0}" != "0" ]; } then
+        mkdir -p build
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/str_core.hexa" _otri=""
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --target="$_otri" -o build/str_core_native.o "$_osrc" 2>build/str_core_ownobj.err; then
+                local _oe _os _on _oi _ocn
+                _oe="$(nm build/str_core_native.o 2>/dev/null | grep -cE ' T _?rt_str_eq_native')"
+                _os="$(nm build/str_core_native.o 2>/dev/null | grep -cE ' T _?rt_str_starts_with_native')"
+                _on="$(nm build/str_core_native.o 2>/dev/null | grep -cE ' T _?rt_str_ends_with_native')"
+                _oi="$(nm build/str_core_native.o 2>/dev/null | grep -cE ' T _?rt_str_index_of_native')"
+                _ocn="$(nm build/str_core_native.o 2>/dev/null | grep -cE ' T _?rt_str_contains_native')"
+                if [ "${_oe:-0}" -ge 1 ] && [ "${_os:-0}" -ge 1 ] && [ "${_on:-0}" -ge 1 ] && [ "${_oi:-0}" -ge 1 ] && [ "${_ocn:-0}" -ge 1 ]; then
+                    [ "${HEXA_RT_STR_EQ_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_EQ_NATIVE=1
+                    [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_STARTS_WITH_NATIVE=1
+                    [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_ENDS_WITH_NATIVE=1
+                    [ "${HEXA_RT_STR_INDEX_OF_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_INDEX_OF_NATIVE=1
+                    [ "${HEXA_RT_STR_CONTAINS_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_CONTAINS_NATIVE=1
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: str_core via $_oc --emit=obj (eq:$_oe starts:$_os ends:$_on index_of:$_oi contains:$_ocn rt_str_*_native, TARGET=$tgt) → native string scan/compare path, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: str_core own-emit exported eq:$_oe starts:$_os ends:$_on index_of:$_oi contains:$_ocn (need all≥1) — falling back to .s seed" >&2
+                rm -f build/str_core_native.o
+            else
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: str_core own-emit failed — falling back to .s seed ($(head -1 build/str_core_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
+    fi
     [ -n "$seed" ] && [ -f "$seed" ] || return 0
     mkdir -p build
     # SAFETY: only adopt the native path if the seed exports BOTH scan/compare fns
@@ -639,7 +759,7 @@ resolve_native_num_float_core_seed() {
         # → the runtime ships the snprintf shortest path and NATIVE mode degrades to %.17g.
         [ "${HEXA_RT_FORMAT_FLOAT_NATIVE:-x}" != "0" ] && export HEXA_RT_FORMAT_FLOAT_NATIVE=1
     fi
-    [ -f build/num_float_core_native.o ] && { export HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1; return 0; }
+    [ -f build/num_float_core_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1; return 0; }
     [ -n "$seed" ] && [ -f "$seed" ] || return 0
     mkdir -p build
     # SAFETY: only adopt the native path if the seed exports the parse fn the
@@ -649,6 +769,36 @@ resolve_native_num_float_core_seed() {
     if [ "${nsyms:-0}" -lt 1 ]; then
         echo "[stage_resolve_runtime_a] RT-NATIVE NUM-FLOAT: seed $seed exports only $nsyms/1 rt_parse_float_native — falling back to C #else path" >&2
         return 0
+    fi
+    # ── axis-②③ B3 A0 (own-object seed) — num_float_core (DUAL flag: parse +
+    #    format halves; parity own=3 ⊇ seed=3 PROVEN). Set each flag from the
+    #    own-emit member's exported sym (rt_parse_float_native / rt_format_float_native),
+    #    mirroring the .s path's split flag logic above (lines ~25-32/40-48). ──
+    if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_NUMFLOAT:-0}" != "0" ]; } then
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/num_float_core.hexa" _otri=""
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --target="$_otri" -o build/num_float_core_native.o "$_osrc" 2>build/num_float_core_ownobj.err; then
+                local _otp _otf
+                _otp="$(nm build/num_float_core_native.o 2>/dev/null | grep -cE ' T _?rt_parse_float_native')"
+                _otf="$(nm build/num_float_core_native.o 2>/dev/null | grep -cE ' T _?rt_format_float_native')"
+                if [ "${_otp:-0}" -ge 1 ]; then
+                    export HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1
+                    if [ "${_otf:-0}" -ge 1 ]; then
+                        export HEXA_RT_FORMAT_FLOAT_NATIVE_AVAIL=1
+                        [ "${HEXA_RT_FORMAT_FLOAT_NATIVE:-x}" != "0" ] && export HEXA_RT_FORMAT_FLOAT_NATIVE=1
+                    fi
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: num_float_core via $_oc --emit=obj ($_otp parse + $_otf format rt_*float_native, TARGET=$tgt) → native string→f64 parse+format path, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: num_float_core own-emit exported $_otp parse — falling back to .s seed" >&2
+            else
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: num_float_core own-emit failed — falling back to .s seed ($(head -1 build/num_float_core_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
     fi
     local s_tmp="build/num_float_core_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
@@ -681,7 +831,7 @@ resolve_native_num_float_core_seed() {
 # byte-identical change. (R4 #4201 was the byteeq-neutral opt-IN wiring PR.)
 resolve_native_float_parse_exact_seed() {
     [ "${HEXA_RT_NUM_PARSE_FLOAT_EXACT:-x}" = "0" ] && return 0   # explicit opt-out
-    [ -f build/float_parse_exact_native.o ] && { export HEXA_RT_NUM_PARSE_FLOAT_EXACT=1; return 0; }
+    [ -f build/float_parse_exact_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_RT_NUM_PARSE_FLOAT_EXACT=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -704,6 +854,27 @@ resolve_native_float_parse_exact_seed() {
     if [ "${nsyms:-0}" -lt 1 ]; then
         echo "[stage_resolve_runtime_a] RT-NATIVE FLOAT-EXACT: seed $seed exports only $nsyms/1 rt_str_parse_float_exact — exact path stays off (C strtod tail)" >&2
         return 0
+    fi
+    # ── axis-②③ B3 A0 (own-object seed) — float_parse_exact (parity own=17 ⊇ seed=17 PROVEN). ──
+    if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_FLOATEXACT:-0}" != "0" ]; } then
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/float_parse_exact.hexa" _otri=""
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --target="$_otri" -o build/float_parse_exact_native.o "$_osrc" 2>build/float_parse_exact_ownobj.err; then
+                local _ots; _ots="$(nm build/float_parse_exact_native.o 2>/dev/null | grep -cE ' T _?rt_str_parse_float_exact')"
+                if [ "${_ots:-0}" -ge 1 ]; then
+                    export HEXA_RT_NUM_PARSE_FLOAT_EXACT=1
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: float_parse_exact via $_oc --emit=obj ($_ots rt_str_parse_float_exact, TARGET=$tgt) → native correctly-rounded tail, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: float_parse_exact own-emit exported $_ots — falling back to .s seed" >&2
+            else
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: float_parse_exact own-emit failed — falling back to .s seed ($(head -1 build/float_parse_exact_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
     fi
     local s_tmp="build/float_parse_exact_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
@@ -736,7 +907,7 @@ resolve_native_float_parse_exact_seed() {
 # + the tail-corpus-vs-host-libc oracle (both glibc and Apple), never on mini.
 resolve_native_float_parse_hexinfnan_seed() {
     [ "${HEXA_RT_STRTOD_TAIL_NATIVE:-1}" = "1" ] || return 0        # DEFAULT-ON (opt-out with =0) — native hex/inf/nan tail matches glibc strtod bit-exact (T_mis=0, aiden n=140,678); flip after the 176→5→0 accuracy rounds (#4639/#4645/#4646)
-    [ -f build/float_parse_hexinfnan_native.o ] && { export HEXA_RT_STRTOD_TAIL_NATIVE=1; return 0; }
+    [ -f build/float_parse_hexinfnan_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_RT_STRTOD_TAIL_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -759,6 +930,27 @@ resolve_native_float_parse_hexinfnan_seed() {
     if [ "${nsyms:-0}" -lt 1 ]; then
         echo "[stage_resolve_runtime_a] RT-NATIVE STRTOD-TAIL: seed $seed exports only $nsyms/1 rt_str_parse_float_hexinfnan — tail path stays off (C strtod tail)" >&2
         return 0
+    fi
+    # ── axis-②③ B3 A0 (own-object seed) — float_parse_hexinfnan (parity own=6 ⊇ seed=6 PROVEN). ──
+    if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_HEXINFNAN:-0}" != "0" ]; } then
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/float_parse_hexinfnan.hexa" _otri=""
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --target="$_otri" -o build/float_parse_hexinfnan_native.o "$_osrc" 2>build/float_parse_hexinfnan_ownobj.err; then
+                local _ots; _ots="$(nm build/float_parse_hexinfnan_native.o 2>/dev/null | grep -cE ' T _?rt_str_parse_float_hexinfnan')"
+                if [ "${_ots:-0}" -ge 1 ]; then
+                    export HEXA_RT_STRTOD_TAIL_NATIVE=1
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: float_parse_hexinfnan via $_oc --emit=obj ($_ots rt_str_parse_float_hexinfnan, TARGET=$tgt) → native hex/inf/nan tail, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: float_parse_hexinfnan own-emit exported $_ots — falling back to .s seed" >&2
+            else
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: float_parse_hexinfnan own-emit failed — falling back to .s seed ($(head -1 build/float_parse_hexinfnan_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
     fi
     local s_tmp="build/float_parse_hexinfnan_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
@@ -791,7 +983,7 @@ resolve_native_float_parse_hexinfnan_seed() {
 # off (seed export absent → :1359 lockstep OFF) and the C libc-regex #else ships (#3583 lesson).
 resolve_native_regex_rt_seed() {
     [ "${HEXA_REGEX_NATIVE:-1}" != "0" ] || return 0                # zeroc #29 FLIP: native default-ON; HEXA_REGEX_NATIVE=0 reverts to libc regcomp
-    [ -f build/regex_rt_native.o ] && { export HEXA_REGEX_NATIVE=1; return 0; }
+    [ -f build/regex_rt_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_REGEX_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"
     tgt="${tgt%-cuda}"
@@ -818,6 +1010,37 @@ resolve_native_regex_rt_seed() {
     if [ "${ncontract:-0}" -ne 6 ] || [ "${ntotal:-0}" -ne 6 ]; then
         echo "[stage_resolve_runtime_a] RT-NATIVE REGEX: seed $seed exports $ncontract/6 rt_regex_* (total globals $ntotal, want 6) — regex path stays off (C libc regex)" >&2
         return 0
+    fi
+    # ── axis-②③ B3 A0 (own-object seed) — regex_rt (family 10/10, the E4 family).
+    #    own-emit exports 82 globals; E4's `--keep-global=<6 contract>` demotes the
+    #    76 internal helpers to STB_LOCAL, reproducing the .s seed's exactly-6-global
+    #    contract (regen_regex_rt_native_s.sh's sed-demotion, now in-compiler). The
+    #    6/6-global assertion below DOUBLES as the E4-presence probe: an aprime
+    #    without --keep-global emits all 82 global → _otot!=6 → clean fallback to the
+    #    .s seed (so this is safe to ship before E4 merges). ──
+    if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_REGEX:-0}" != "0" ]; } then
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/regex_rt.hexa" _otri=""
+        local _okeep="rt_regex_findall,rt_regex_match,rt_regex_match_full,rt_regex_replace,rt_regex_search,rt_regex_split"
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --keep-global="$_okeep" --target="$_otri" -o build/regex_rt_native.o "$_osrc" 2>build/regex_rt_ownobj.err; then
+                local _orc _otot
+                _orc="$(nm build/regex_rt_native.o 2>/dev/null | grep -cE ' T _?rt_regex_(match|match_full|search|findall|split|replace)$')"
+                _otot="$(nm build/regex_rt_native.o 2>/dev/null | grep -cE ' T ')"
+                if [ "${_orc:-0}" -eq 6 ] && [ "${_otot:-0}" -eq 6 ]; then
+                    export HEXA_REGEX_NATIVE=1
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: regex_rt via $_oc --emit=obj --keep-global=<6> (E4-demoted: 6 rt_regex_ global + 76 STB_LOCAL, TARGET=$tgt) → native Thompson-NFA regex path, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: regex_rt own-emit gave contract:$_orc/6 total-global:$_otot/6 (aprime lacks E4 --keep-global? all 82 global) — falling back to .s seed" >&2
+                rm -f build/regex_rt_native.o
+            else
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: regex_rt own-emit failed — falling back to .s seed ($(head -1 build/regex_rt_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
     fi
     local s_tmp="build/regex_rt_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
@@ -846,7 +1069,7 @@ resolve_native_regex_rt_seed() {
 # seed exists.
 resolve_native_num_core_seed() {
     [ "${HEXA_RT_NUM_PARSE_INT_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
-    [ -f build/num_core_native.o ] && { export HEXA_RT_NUM_PARSE_INT_NATIVE=1; return 0; }
+    [ -f build/num_core_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_RT_NUM_PARSE_INT_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -869,6 +1092,27 @@ resolve_native_num_core_seed() {
     if [ "${nsyms:-0}" -lt 1 ]; then
         echo "[stage_resolve_runtime_a] RT-NATIVE NUM: seed $seed exports only $nsyms/1 rt_parse_int_native — falling back to C #else path" >&2
         return 0
+    fi
+    # ── axis-②③ B3 A0 (own-object seed) — num_core (parity own=1 ⊇ seed=1 PROVEN). ──
+    if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_NUM:-0}" != "0" ]; } then
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/num_core.hexa" _otri=""
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --target="$_otri" -o build/num_core_native.o "$_osrc" 2>build/num_core_ownobj.err; then
+                local _ots; _ots="$(nm build/num_core_native.o 2>/dev/null | grep -cE ' T _?rt_parse_int_native')"
+                if [ "${_ots:-0}" -ge 1 ]; then
+                    export HEXA_RT_NUM_PARSE_INT_NATIVE=1
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: num_core via $_oc --emit=obj ($_ots/1 rt_parse_int_native, TARGET=$tgt) → native int-parse path, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: num_core own-emit exported $_ots/1 — falling back to .s seed" >&2
+            else
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: num_core own-emit failed — falling back to .s seed ($(head -1 build/num_core_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
     fi
     local s_tmp="build/num_core_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
@@ -896,7 +1140,7 @@ resolve_native_num_core_seed() {
 # fallback). Override by pre-setting HEXA_RT_VALOP_NATIVE=0 to force the C path.
 resolve_native_valop_core_seed() {
     [ "${HEXA_RT_VALOP_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
-    [ -f build/valop_core_native.o ] && { export HEXA_RT_VALOP_NATIVE=1; return 0; }
+    [ -f build/valop_core_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_RT_VALOP_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"; tgt="${tgt%-cuda}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -936,6 +1180,28 @@ resolve_native_valop_core_seed() {
         [ "${n:-0}" -ge 1 ] || { ok=0; echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: seed $seed exports only $n/1 $sym — falling back to C scalar path" >&2; }
     done
     [ "$ok" = "1" ] || return 0
+    # ── axis-②③ B3 A0 (own-object seed) — valop_core (single flag, 10-sym contract;
+    #    parity own=10 ⊇ seed=10 PROVEN). own-emit must export all 10 rt_*_native. ──
+    if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_VALOP:-0}" != "0" ]; } then
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/valop_core.hexa" _otri=""
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --target="$_otri" -o build/valop_core_native.o "$_osrc" 2>build/valop_core_ownobj.err; then
+                local _ots; _ots="$(nm build/valop_core_native.o 2>/dev/null | grep -cE ' T _?rt_(truthy|sub|mul|add|cmp_lt|cmp_gt|cmp_le|cmp_ge|div|mod)_native')"
+                if [ "${_ots:-0}" -ge 10 ]; then
+                    export HEXA_RT_VALOP_NATIVE=1
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: valop_core via $_oc --emit=obj ($_ots/10 rt_*_native, TARGET=$tgt) → native scalar value-op path, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: valop_core own-emit exported $_ots/10 — falling back to .s seed" >&2
+            else
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: valop_core own-emit failed — falling back to .s seed ($(head -1 build/valop_core_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
+    fi
     local s_tmp="build/valop_core_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
     if $CC -c "$s_tmp" -o build/valop_core_native.o 2>/dev/null; then
@@ -1783,14 +2049,29 @@ build_runtime_a_from_source() {
                 local _rnf_s="build/hxlcl_fmod_native.s"
                 local _rnf_o="build/hxlcl_fmod_native.o"
                 printf 'fn _rnf_unused() {}\n' > "$_rnf_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD: emitting native fp-ABI (xmm) hxlcl_fmod .o via $_rnf_bin (HEXA_CABI_HXLCL=1, replacing libc-shim fmod member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnf_bin" "$_rnf_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnf_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnf_fmod.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD FATAL: fmod Route C asm emit failed — see build/_rnf_fmod.log" >&2; cat "build/_rnf_fmod.log" >&2; return 1; }
-                [ -s "$_rnf_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD FATAL: empty $_rnf_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnf_s" -o "$_rnf_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD FATAL: assemble $_rnf_s failed" >&2; return 1; }
-                [ -f "$_rnf_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD FATAL: $_rnf_o not produced" >&2; return 1; }
+                # ── axis-②③ A1 (E4 own-obj): under HEXA_RT_OWNOBJ + an E4 aprime
+                #    (--keep-global), own-emit hxlcl_fmod DIRECT to .o (1 global +
+                #    rest STB_LOCAL), dropping the --emit=asm + $CC assemble (no
+                #    binutils). Default (OWNOBJ unset / non-E4 aprime) falls to the
+                #    existing --emit=asm path = byte-identical (release-integrity). ──
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rnf_drv" --backend=native --emit=obj --keep-global=hxlcl_fmod \
+                       --target=x86_64-linux-gnu -o "$_rnf_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rnf_fmod_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rnf_o" 2>/dev/null | grep -cE ' T _?hxlcl_fmod$')" -eq 1 ] \
+                   && [ "$(nm "$_rnf_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_fmod via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_fmod (1 global, no \$CC assemble) — fmod dropped from shim"
+                else
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD: emitting native fp-ABI (xmm) hxlcl_fmod .o via $_rnf_bin (HEXA_CABI_HXLCL=1, replacing libc-shim fmod member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rnf_bin" "$_rnf_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnf_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rnf_fmod.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD FATAL: fmod Route C asm emit failed — see build/_rnf_fmod.log" >&2; cat "build/_rnf_fmod.log" >&2; return 1; }
+                    [ -s "$_rnf_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD FATAL: empty $_rnf_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rnf_s" -o "$_rnf_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD FATAL: assemble $_rnf_s failed" >&2; return 1; }
+                    [ -f "$_rnf_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD FATAL: $_rnf_o not produced" >&2; return 1; }
+                fi
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_FMOD"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnf_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FMOD: hxlcl_fmod → native fp-ABI .o; shim.o built with -DHEXA_RT_NATIVE_FMOD (fmod dropped) — ld -r multidef gate validates"
@@ -1819,14 +2100,25 @@ build_runtime_a_from_source() {
                 local _rns_s="build/hxlcl_sin_native.s"
                 local _rns_o="build/hxlcl_sin_native.o"
                 printf 'fn _rns_unused() {}\n' > "$_rns_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN: emitting native fp-ABI (xmm) hxlcl_sin .o via $_rns_bin (HEXA_CABI_HXLCL=1, replacing libc-shim sin member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rns_bin" "$_rns_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rns_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rns_sin.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: sin Route C asm emit failed — see build/_rns_sin.log" >&2; cat "build/_rns_sin.log" >&2; return 1; }
-                [ -s "$_rns_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: empty $_rns_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rns_s" -o "$_rns_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: assemble $_rns_s failed" >&2; return 1; }
-                [ -f "$_rns_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: $_rns_o not produced" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — see hxlcl_fmod; default = --emit=asm (byte-identical).
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rns_drv" --backend=native --emit=obj --keep-global=hxlcl_sin \
+                       --target=x86_64-linux-gnu -o "$_rns_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rns_sin_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rns_o" 2>/dev/null | grep -cE ' T _?hxlcl_sin$')" -eq 1 ] \
+                   && [ "$(nm "$_rns_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_sin via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_sin (1 global, no \$CC assemble) — sin dropped from shim"
+                else
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN: emitting native fp-ABI (xmm) hxlcl_sin .o via $_rns_bin (HEXA_CABI_HXLCL=1, replacing libc-shim sin member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rns_bin" "$_rns_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rns_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rns_sin.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: sin Route C asm emit failed — see build/_rns_sin.log" >&2; cat "build/_rns_sin.log" >&2; return 1; }
+                    [ -s "$_rns_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: empty $_rns_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rns_s" -o "$_rns_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: assemble $_rns_s failed" >&2; return 1; }
+                    [ -f "$_rns_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: $_rns_o not produced" >&2; return 1; }
+                fi
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_SIN"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rns_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN: hxlcl_sin → native fp-ABI .o; shim.o built with -DHEXA_RT_NATIVE_SIN (sin dropped) — ld -r multidef gate validates"
@@ -1855,14 +2147,25 @@ build_runtime_a_from_source() {
                 local _rnc_s="build/hxlcl_cos_native.s"
                 local _rnc_o="build/hxlcl_cos_native.o"
                 printf 'fn _rnc_unused() {}\n' > "$_rnc_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS: emitting native fp-ABI (xmm) hxlcl_cos .o via $_rnc_bin (HEXA_CABI_HXLCL=1, replacing libc-shim cos member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnc_bin" "$_rnc_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnc_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnc_cos.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS FATAL: cos Route C asm emit failed — see build/_rnc_cos.log" >&2; cat "build/_rnc_cos.log" >&2; return 1; }
-                [ -s "$_rnc_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS FATAL: empty $_rnc_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnc_s" -o "$_rnc_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS FATAL: assemble $_rnc_s failed" >&2; return 1; }
-                [ -f "$_rnc_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS FATAL: $_rnc_o not produced" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — see hxlcl_fmod; default = --emit=asm (byte-identical).
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rnc_drv" --backend=native --emit=obj --keep-global=hxlcl_cos \
+                       --target=x86_64-linux-gnu -o "$_rnc_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rnc_cos_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rnc_o" 2>/dev/null | grep -cE ' T _?hxlcl_cos$')" -eq 1 ] \
+                   && [ "$(nm "$_rnc_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_cos via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_cos (1 global, no \$CC assemble) — cos dropped from shim"
+                else
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS: emitting native fp-ABI (xmm) hxlcl_cos .o via $_rnc_bin (HEXA_CABI_HXLCL=1, replacing libc-shim cos member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rnc_bin" "$_rnc_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnc_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rnc_cos.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS FATAL: cos Route C asm emit failed — see build/_rnc_cos.log" >&2; cat "build/_rnc_cos.log" >&2; return 1; }
+                    [ -s "$_rnc_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS FATAL: empty $_rnc_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rnc_s" -o "$_rnc_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS FATAL: assemble $_rnc_s failed" >&2; return 1; }
+                    [ -f "$_rnc_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS FATAL: $_rnc_o not produced" >&2; return 1; }
+                fi
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_COS"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnc_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS: hxlcl_cos → native fp-ABI .o; shim.o built with -DHEXA_RT_NATIVE_COS (cos dropped) — ld -r multidef gate validates"
@@ -1892,14 +2195,25 @@ build_runtime_a_from_source() {
                 local _rne_s="build/hxlcl_exp_native.s"
                 local _rne_o="build/hxlcl_exp_native.o"
                 printf 'fn _rne_unused() {}\n' > "$_rne_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP: emitting native fp-ABI (xmm) hxlcl_exp .o via $_rne_bin (HEXA_CABI_HXLCL=1, replacing libc-shim exp member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rne_bin" "$_rne_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rne_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rne_exp.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP FATAL: exp Route C asm emit failed — see build/_rne_exp.log" >&2; cat "build/_rne_exp.log" >&2; return 1; }
-                [ -s "$_rne_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP FATAL: empty $_rne_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rne_s" -o "$_rne_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP FATAL: assemble $_rne_s failed" >&2; return 1; }
-                [ -f "$_rne_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP FATAL: $_rne_o not produced" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — see hxlcl_fmod; default = --emit=asm (byte-identical).
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rne_drv" --backend=native --emit=obj --keep-global=hxlcl_exp \
+                       --target=x86_64-linux-gnu -o "$_rne_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rne_exp_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rne_o" 2>/dev/null | grep -cE ' T _?hxlcl_exp$')" -eq 1 ] \
+                   && [ "$(nm "$_rne_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_exp via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_exp (1 global, no \$CC assemble) — exp dropped from shim"
+                else
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP: emitting native fp-ABI (xmm) hxlcl_exp .o via $_rne_bin (HEXA_CABI_HXLCL=1, replacing libc-shim exp member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rne_bin" "$_rne_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rne_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rne_exp.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP FATAL: exp Route C asm emit failed — see build/_rne_exp.log" >&2; cat "build/_rne_exp.log" >&2; return 1; }
+                    [ -s "$_rne_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP FATAL: empty $_rne_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rne_s" -o "$_rne_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP FATAL: assemble $_rne_s failed" >&2; return 1; }
+                    [ -f "$_rne_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP FATAL: $_rne_o not produced" >&2; return 1; }
+                fi
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_EXP"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rne_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP: hxlcl_exp → native fp-ABI .o (rotab_1 .rodata table); shim.o built with -DHEXA_RT_NATIVE_EXP (exp dropped) — ld -r multidef gate validates"
@@ -1929,14 +2243,25 @@ build_runtime_a_from_source() {
                 local _rnl_s="build/hxlcl_log_native.s"
                 local _rnl_o="build/hxlcl_log_native.o"
                 printf 'fn _rnl_unused() {}\n' > "$_rnl_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG: emitting native fp-ABI (xmm) hxlcl_log .o via $_rnl_bin (HEXA_CABI_HXLCL=1, replacing libc-shim log member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnl_bin" "$_rnl_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnl_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnl_log.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: log Route C asm emit failed — see build/_rnl_log.log" >&2; cat "build/_rnl_log.log" >&2; return 1; }
-                [ -s "$_rnl_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: empty $_rnl_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnl_s" -o "$_rnl_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: assemble $_rnl_s failed" >&2; return 1; }
-                [ -f "$_rnl_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: $_rnl_o not produced" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — see hxlcl_fmod; default = --emit=asm (byte-identical).
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rnl_drv" --backend=native --emit=obj --keep-global=hxlcl_log \
+                       --target=x86_64-linux-gnu -o "$_rnl_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rnl_log_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rnl_o" 2>/dev/null | grep -cE ' T _?hxlcl_log$')" -eq 1 ] \
+                   && [ "$(nm "$_rnl_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_log via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_log (1 global, no \$CC assemble) — log dropped from shim"
+                else
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG: emitting native fp-ABI (xmm) hxlcl_log .o via $_rnl_bin (HEXA_CABI_HXLCL=1, replacing libc-shim log member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rnl_bin" "$_rnl_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnl_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rnl_log.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: log Route C asm emit failed — see build/_rnl_log.log" >&2; cat "build/_rnl_log.log" >&2; return 1; }
+                    [ -s "$_rnl_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: empty $_rnl_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rnl_s" -o "$_rnl_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: assemble $_rnl_s failed" >&2; return 1; }
+                    [ -f "$_rnl_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: $_rnl_o not produced" >&2; return 1; }
+                fi
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_LOG"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnl_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG: hxlcl_log → native fp-ABI .o (rotab_2 .rodata table); shim.o built with -DHEXA_RT_NATIVE_LOG (log dropped) — ld -r multidef gate validates"
@@ -1981,6 +2306,30 @@ build_runtime_a_from_source() {
                 "Linux x86_64") _rnsc_tgt="linux-x86_64" ;;
                 "Linux aarch64"|"Linux arm64") _rnsc_tgt="linux-arm64" ;;
             esac
+            # ── axis-②③ A1 (E4+isolate own-obj) — own-emit --keep-global=hxlcl_strcmp
+            #    --isolate (frozen-seed class): reachability filter → 1-global .o, 0
+            #    non-carrier undef, replacing the .s seed + $CC + objcopy +
+            #    isolate_native_seed.py (binutils-free). MANDATORY _rn_seed_und_gate
+            #    check (== the seed path's _rnsc_bad). aprime lacking --isolate → 5
+            #    externals → gate non-empty → clean fall to the frozen seed. x86_64
+            #    only (isolate_lmodule_x86_64; arm64 twin ships next). ──
+            _rnsc_ownobj_ok=0
+            if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && [ "$_rnsc_tgt" = "linux-x86_64" ]; then
+                mkdir -p build; printf 'fn _rnsc_drv() {}\n' > build/_rnsc_drv.hexa
+                if env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" build/_rnsc_drv.hexa --backend=native --emit=obj --keep-global=hxlcl_strcmp --isolate \
+                       --target=x86_64-linux-gnu -o build/hxlcl_strcmp_native.o stdlib/runtime/hxlcl_core.hexa >build/_rnsc_ownobj.log 2>&1 \
+                   && [ "$(nm build/hxlcl_strcmp_native.o 2>/dev/null | grep -cE ' T _?hxlcl_strcmp$')" -eq 1 ] \
+                   && [ "$(nm build/hxlcl_strcmp_native.o 2>/dev/null | grep -cE ' T ')" -eq 1 ] \
+                   && [ -z "$(_rn_seed_und_gate build/hxlcl_strcmp_native.o)" ]; then
+                    _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_STRCMP"
+                    _mo_hxlcl_members="$_mo_hxlcl_members build/hxlcl_strcmp_native.o"
+                    _rng_strcmp_def="-DHEXA_RT_RANGE_STRCMP_NATIVE"
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_strcmp via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_strcmp --isolate (isolated 1-global, 0 non-carrier undef, no $CC/objcopy/.s seed — binutils-free)"
+                    _rnsc_ownobj_ok=1
+                fi
+            fi
+            if [ "$_rnsc_ownobj_ok" = "0" ]; then
             case "$_rnsc_tgt" in
                 darwin-arm64) _rnsc_seed="self/native/hxlcl_strcmp_arm64.s" ;;
                 linux-x86_64) _rnsc_seed="self/native/hxlcl_strcmp_x86_64.s" ;;
@@ -2018,6 +2367,7 @@ build_runtime_a_from_source() {
             if [ -n "$_rnsc_err" ]; then
                 [ "$_rnsc_mode" = "1" ] && { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCMP FATAL (strict): $_rnsc_err" >&2; return 1; }
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCMP WARN: $_rnsc_err — FALLBACK-SHIM (retaining libc strcmp member; strcmp stays UND in the nm floor)" >&2
+            fi
             fi
         fi
         # ── RFC061 §M8 RT-NATIVE-STRTOLL (frozen seed-consume · pure byte-walk parse leaf, default OFF) ──
@@ -2141,6 +2491,25 @@ build_runtime_a_from_source() {
                 "Linux x86_64") _rnfr_tgt="linux-x86_64" ;;
                 "Linux aarch64"|"Linux arm64") _rnfr_tgt="linux-arm64" ;;
             esac
+            # ── axis-②③ A1 (E4+isolate own-obj) — own-emit --keep-global=hxlcl_free
+            #    --isolate; MANDATORY _rn_seed_und_gate acceptance (carrier undefs like
+            #    hxlcl_malloc allowed); clean fall to the frozen seed without --isolate. ──
+            _rnfr_ownobj_ok=0
+            if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && [ "$_rnfr_tgt" = "linux-x86_64" ]; then
+                mkdir -p build; printf 'fn _rnfr_drv() {}\n' > build/_rnfr_drv.hexa
+                if env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" build/_rnfr_drv.hexa --backend=native --emit=obj --keep-global=hxlcl_free --isolate \
+                       --target=x86_64-linux-gnu -o build/hxlcl_free_native.o stdlib/runtime/hxlcl_core.hexa >build/_rnfr_ownobj.log 2>&1 \
+                   && [ "$(nm build/hxlcl_free_native.o 2>/dev/null | grep -cE ' T _?hxlcl_free$')" -eq 1 ] \
+                   && [ "$(nm build/hxlcl_free_native.o 2>/dev/null | grep -cE ' T ')" -eq 1 ] \
+                   && [ -z "$(_rn_seed_und_gate build/hxlcl_free_native.o)" ]; then
+                    _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_FREE"
+                    _mo_hxlcl_members="$_mo_hxlcl_members build/hxlcl_free_native.o"
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_free via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_free --isolate (isolated, no $CC/objcopy/.s seed — binutils-free)"
+                    _rnfr_ownobj_ok=1
+                fi
+            fi
+            if [ "$_rnfr_ownobj_ok" = "0" ]; then
             case "$_rnfr_tgt" in
                 darwin-arm64) _rnfr_seed="self/native/hxlcl_free_arm64.s" ;;
                 linux-x86_64) _rnfr_seed="self/native/hxlcl_free_x86_64.s" ;;
@@ -2177,6 +2546,7 @@ build_runtime_a_from_source() {
                 [ "$_rnfr_mode" = "1" ] && { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FREE FATAL (strict): $_rnfr_err" >&2; return 1; }
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FREE WARN: $_rnfr_err — FALLBACK-SHIM (retaining libc free member; free stays UND in the nm floor)" >&2
             fi
+            fi
         fi
         # ── RFC061 §M8 RT-NATIVE-ATOF (fp-ABI xmm Route C · MIXED-ABI leaf, default OFF) ──
         # FIRST MIXED-ABI leaf to leave the shim: an INTEGER-class `const char*` param
@@ -2206,20 +2576,33 @@ build_runtime_a_from_source() {
                 local _rnat_full="build/hxlcl_atof_native_full.o"
                 local _rnat_o="build/hxlcl_atof_native.o"
                 printf 'fn _rnat_unused() {}\n' > "$_rnat_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF: emitting native fp-ABI (xmm) hxlcl_atof .o via $_rnat_bin (HEXA_CABI_HXLCL=1, replacing libc-shim atof member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnat_bin" "$_rnat_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnat_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnat_atof.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF FATAL: atof Route C asm emit failed — see build/_rnat_atof.log" >&2; cat "build/_rnat_atof.log" >&2; return 1; }
-                [ -s "$_rnat_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF FATAL: empty $_rnat_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnat_s" -o "$_rnat_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF FATAL: assemble $_rnat_s failed" >&2; return 1; }
-                if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_atof "$_rnat_full" "$_rnat_o" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF FATAL: objcopy isolate atof failed" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — own-emit --keep-global replaces $CC + binutils objcopy
+                # (no binutils). objcopy-class (carries carrier-resolved externals, not isolated
+                # frozen-seed). Default (OWNOBJ unset) = existing path = byte-identical.
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rnat_drv" --backend=native --emit=obj --keep-global=hxlcl_atof \
+                       --target=x86_64-linux-gnu -o "$_rnat_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rnat_atof_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rnat_o" 2>/dev/null | grep -cE ' T _?hxlcl_atof$')" -eq 1 ] \
+                   && [ "$(nm "$_rnat_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_atof via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_atof (1 global, no $CC/objcopy — binutils-free) — atof dropped from shim"
                 else
-                    cp "$_rnat_full" "$_rnat_o"
+    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF: emitting native fp-ABI (xmm) hxlcl_atof .o via $_rnat_bin (HEXA_CABI_HXLCL=1, replacing libc-shim atof member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rnat_bin" "$_rnat_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnat_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rnat_atof.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF FATAL: atof Route C asm emit failed — see build/_rnat_atof.log" >&2; cat "build/_rnat_atof.log" >&2; return 1; }
+                    [ -s "$_rnat_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF FATAL: empty $_rnat_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rnat_s" -o "$_rnat_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF FATAL: assemble $_rnat_s failed" >&2; return 1; }
+                    if command -v objcopy >/dev/null 2>&1; then
+                        objcopy --keep-global-symbol=hxlcl_atof "$_rnat_full" "$_rnat_o" \
+                            || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF FATAL: objcopy isolate atof failed" >&2; return 1; }
+                    else
+                        cp "$_rnat_full" "$_rnat_o"
+                    fi
+                    [ -f "$_rnat_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF FATAL: $_rnat_o not produced" >&2; return 1; }
                 fi
-                [ -f "$_rnat_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF FATAL: $_rnat_o not produced" >&2; return 1; }
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_ATOF"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnat_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOF: hxlcl_atof → native fp-ABI .o (isolated); shim.o built with -DHEXA_RT_NATIVE_ATOF (atof dropped) — ld -r multidef gate validates"
@@ -2329,6 +2712,25 @@ build_runtime_a_from_source() {
                 "Linux x86_64") _rnca_tgt="linux-x86_64" ;;
                 "Linux aarch64"|"Linux arm64") _rnca_tgt="linux-arm64" ;;
             esac
+            # ── axis-②③ A1 (E4+isolate own-obj) — own-emit --keep-global=hxlcl_calloc
+            #    --isolate; MANDATORY _rn_seed_und_gate acceptance (carrier undefs like
+            #    hxlcl_malloc allowed); clean fall to the frozen seed without --isolate. ──
+            _rnca_ownobj_ok=0
+            if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && [ "$_rnca_tgt" = "linux-x86_64" ]; then
+                mkdir -p build; printf 'fn _rnca_drv() {}\n' > build/_rnca_drv.hexa
+                if env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" build/_rnca_drv.hexa --backend=native --emit=obj --keep-global=hxlcl_calloc --isolate \
+                       --target=x86_64-linux-gnu -o build/hxlcl_calloc_native.o stdlib/runtime/hxlcl_core.hexa >build/_rnca_ownobj.log 2>&1 \
+                   && [ "$(nm build/hxlcl_calloc_native.o 2>/dev/null | grep -cE ' T _?hxlcl_calloc$')" -eq 1 ] \
+                   && [ "$(nm build/hxlcl_calloc_native.o 2>/dev/null | grep -cE ' T ')" -eq 1 ] \
+                   && [ -z "$(_rn_seed_und_gate build/hxlcl_calloc_native.o)" ]; then
+                    _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_CALLOC"
+                    _mo_hxlcl_members="$_mo_hxlcl_members build/hxlcl_calloc_native.o"
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_calloc via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_calloc --isolate (isolated, no $CC/objcopy/.s seed — binutils-free)"
+                    _rnca_ownobj_ok=1
+                fi
+            fi
+            if [ "$_rnca_ownobj_ok" = "0" ]; then
             case "$_rnca_tgt" in
                 darwin-arm64) _rnca_seed="self/native/hxlcl_calloc_arm64.s" ;;
                 linux-x86_64) _rnca_seed="self/native/hxlcl_calloc_x86_64.s" ;;
@@ -2364,6 +2766,7 @@ build_runtime_a_from_source() {
             if [ -n "$_rnca_err" ]; then
                 [ "$_rnca_mode" = "1" ] && { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL (strict): $_rnca_err" >&2; return 1; }
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC WARN: $_rnca_err — FALLBACK-SHIM (retaining libc calloc member; calloc stays UND in the nm floor)" >&2
+            fi
             fi
         fi
         # ── RFC061 §M8 RT-NATIVE-STRNCMP (frozen seed-consume · pure-leaf, default OFF) ──
@@ -2409,6 +2812,25 @@ build_runtime_a_from_source() {
                 "Linux x86_64") _rnst_tgt="linux-x86_64" ;;
                 "Linux aarch64"|"Linux arm64") _rnst_tgt="linux-arm64" ;;
             esac
+            # ── axis-②③ A1 (E4+isolate own-obj) — own-emit --keep-global=hxlcl_strncmp
+            #    --isolate; MANDATORY _rn_seed_und_gate acceptance; clean fall to the
+            #    frozen seed if the aprime lacks --isolate. x86_64 only (arm64 twin ships next). ──
+            _rnst_ownobj_ok=0
+            if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && [ "$_rnst_tgt" = "linux-x86_64" ]; then
+                mkdir -p build; printf 'fn _rnst_drv() {}\n' > build/_rnst_drv.hexa
+                if env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" build/_rnst_drv.hexa --backend=native --emit=obj --keep-global=hxlcl_strncmp --isolate \
+                       --target=x86_64-linux-gnu -o build/hxlcl_strncmp_native.o stdlib/runtime/hxlcl_core.hexa >build/_rnst_ownobj.log 2>&1 \
+                   && [ "$(nm build/hxlcl_strncmp_native.o 2>/dev/null | grep -cE ' T _?hxlcl_strncmp$')" -eq 1 ] \
+                   && [ "$(nm build/hxlcl_strncmp_native.o 2>/dev/null | grep -cE ' T ')" -eq 1 ] \
+                   && [ -z "$(_rn_seed_und_gate build/hxlcl_strncmp_native.o)" ]; then
+                    _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_STRNCMP"
+                    _mo_hxlcl_members="$_mo_hxlcl_members build/hxlcl_strncmp_native.o"
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_strncmp via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_strncmp --isolate (isolated 1-global, 0 non-carrier undef, no $CC/objcopy/.s seed — binutils-free)"
+                    _rnst_ownobj_ok=1
+                fi
+            fi
+            if [ "$_rnst_ownobj_ok" = "0" ]; then
             case "$_rnst_tgt" in
                 darwin-arm64) _rnst_seed="self/native/hxlcl_strncmp_arm64.s" ;;
                 linux-x86_64) _rnst_seed="self/native/hxlcl_strncmp_x86_64.s" ;;
@@ -2449,6 +2871,7 @@ build_runtime_a_from_source() {
             if [ -n "$_rnst_err" ]; then
                 [ "$_rnst_mode" = "1" ] && { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRNCMP FATAL (strict): $_rnst_err" >&2; return 1; }
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRNCMP WARN: $_rnst_err — FALLBACK-SHIM (retaining libc strncmp member; strncmp stays UND in the nm floor)" >&2
+            fi
             fi
         fi
         # ── RFC061 §M8 RT-NATIVE-STRSTR (frozen seed-consume · PURE non-libm leaf, default OFF) ──
@@ -2491,6 +2914,25 @@ build_runtime_a_from_source() {
                 "Linux x86_64") _rnss_tgt="linux-x86_64" ;;
                 "Linux aarch64"|"Linux arm64") _rnss_tgt="linux-arm64" ;;
             esac
+            # ── axis-②③ A1 (E4+isolate own-obj) — own-emit --keep-global=hxlcl_strstr
+            #    --isolate; MANDATORY _rn_seed_und_gate acceptance; clean fall to the
+            #    frozen seed if the aprime lacks --isolate. x86_64 only (arm64 twin ships next). ──
+            _rnss_ownobj_ok=0
+            if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && [ "$_rnss_tgt" = "linux-x86_64" ]; then
+                mkdir -p build; printf 'fn _rnss_drv() {}\n' > build/_rnss_drv.hexa
+                if env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" build/_rnss_drv.hexa --backend=native --emit=obj --keep-global=hxlcl_strstr --isolate \
+                       --target=x86_64-linux-gnu -o build/hxlcl_strstr_native.o stdlib/runtime/hxlcl_core.hexa >build/_rnss_ownobj.log 2>&1 \
+                   && [ "$(nm build/hxlcl_strstr_native.o 2>/dev/null | grep -cE ' T _?hxlcl_strstr$')" -eq 1 ] \
+                   && [ "$(nm build/hxlcl_strstr_native.o 2>/dev/null | grep -cE ' T ')" -eq 1 ] \
+                   && [ -z "$(_rn_seed_und_gate build/hxlcl_strstr_native.o)" ]; then
+                    _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_STRSTR"
+                    _mo_hxlcl_members="$_mo_hxlcl_members build/hxlcl_strstr_native.o"
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_strstr via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_strstr --isolate (isolated 1-global, 0 non-carrier undef, no $CC/objcopy/.s seed — binutils-free)"
+                    _rnss_ownobj_ok=1
+                fi
+            fi
+            if [ "$_rnss_ownobj_ok" = "0" ]; then
             case "$_rnss_tgt" in
                 darwin-arm64) _rnss_seed="self/native/hxlcl_strstr_arm64.s" ;;
                 linux-x86_64) _rnss_seed="self/native/hxlcl_strstr_x86_64.s" ;;
@@ -2531,6 +2973,7 @@ build_runtime_a_from_source() {
             if [ -n "$_rnss_err" ]; then
                 [ "$_rnss_mode" = "1" ] && { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRSTR FATAL (strict): $_rnss_err" >&2; return 1; }
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRSTR WARN: $_rnss_err — FALLBACK-SHIM (retaining libc strstr member; strstr stays UND in the nm floor)" >&2
+            fi
             fi
         fi
         # ── RFC061 §M8 RT-NATIVE-STRCHR (frozen seed-consume · non-libm leaf, default OFF · prereq-a) ──
@@ -2575,6 +3018,25 @@ build_runtime_a_from_source() {
                 "Linux x86_64") _rnst_tgt="linux-x86_64" ;;
                 "Linux aarch64"|"Linux arm64") _rnst_tgt="linux-arm64" ;;
             esac
+            # ── axis-②③ A1 (E4+isolate own-obj) — own-emit --keep-global=hxlcl_strchr
+            #    --isolate; MANDATORY _rn_seed_und_gate acceptance; clean fall to the
+            #    frozen seed if the aprime lacks --isolate. x86_64 only (arm64 twin ships next). ──
+            _rnst_ownobj_ok=0
+            if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && [ "$_rnst_tgt" = "linux-x86_64" ]; then
+                mkdir -p build; printf 'fn _rnst_drv() {}\n' > build/_rnst_drv.hexa
+                if env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" build/_rnst_drv.hexa --backend=native --emit=obj --keep-global=hxlcl_strchr --isolate \
+                       --target=x86_64-linux-gnu -o build/hxlcl_strchr_native.o stdlib/runtime/hxlcl_core.hexa >build/_rnst_ownobj.log 2>&1 \
+                   && [ "$(nm build/hxlcl_strchr_native.o 2>/dev/null | grep -cE ' T _?hxlcl_strchr$')" -eq 1 ] \
+                   && [ "$(nm build/hxlcl_strchr_native.o 2>/dev/null | grep -cE ' T ')" -eq 1 ] \
+                   && [ -z "$(_rn_seed_und_gate build/hxlcl_strchr_native.o)" ]; then
+                    _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_STRCHR"
+                    _mo_hxlcl_members="$_mo_hxlcl_members build/hxlcl_strchr_native.o"
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_strchr via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_strchr --isolate (isolated 1-global, 0 non-carrier undef, no $CC/objcopy/.s seed — binutils-free)"
+                    _rnst_ownobj_ok=1
+                fi
+            fi
+            if [ "$_rnst_ownobj_ok" = "0" ]; then
             case "$_rnst_tgt" in
                 darwin-arm64) _rnst_seed="self/native/hxlcl_strchr_arm64.s" ;;
                 linux-x86_64) _rnst_seed="self/native/hxlcl_strchr_x86_64.s" ;;
@@ -2615,6 +3077,7 @@ build_runtime_a_from_source() {
             if [ -n "$_rnst_err" ]; then
                 [ "$_rnst_mode" = "1" ] && { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCHR FATAL (strict): $_rnst_err" >&2; return 1; }
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCHR WARN: $_rnst_err — FALLBACK-SHIM (retaining libc strchr member; strchr stays UND in the nm floor)" >&2
+            fi
             fi
         fi
         # ── RFC061 §M8 RT-NATIVE-STRDUP (frozen seed-consume · COMPOSITE non-libm leaf, PREREQ-a default OFF) ──
@@ -2663,6 +3126,25 @@ build_runtime_a_from_source() {
                 "Linux x86_64") _rnst_tgt="linux-x86_64" ;;
                 "Linux aarch64"|"Linux arm64") _rnst_tgt="linux-arm64" ;;
             esac
+            # ── axis-②③ A1 (E4+isolate own-obj) — own-emit --keep-global=hxlcl_strdup
+            #    --isolate; MANDATORY _rn_seed_und_gate acceptance (carrier undefs like
+            #    hxlcl_malloc allowed); clean fall to the frozen seed without --isolate. ──
+            _rnst_ownobj_ok=0
+            if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && [ "$_rnst_tgt" = "linux-x86_64" ]; then
+                mkdir -p build; printf 'fn _rnst_drv() {}\n' > build/_rnst_drv.hexa
+                if env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" build/_rnst_drv.hexa --backend=native --emit=obj --keep-global=hxlcl_strdup --isolate \
+                       --target=x86_64-linux-gnu -o build/hxlcl_strdup_native.o stdlib/runtime/hxlcl_core.hexa >build/_rnst_ownobj.log 2>&1 \
+                   && [ "$(nm build/hxlcl_strdup_native.o 2>/dev/null | grep -cE ' T _?hxlcl_strdup$')" -eq 1 ] \
+                   && [ "$(nm build/hxlcl_strdup_native.o 2>/dev/null | grep -cE ' T ')" -eq 1 ] \
+                   && [ -z "$(_rn_seed_und_gate build/hxlcl_strdup_native.o)" ]; then
+                    _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_STRDUP"
+                    _mo_hxlcl_members="$_mo_hxlcl_members build/hxlcl_strdup_native.o"
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_strdup via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_strdup --isolate (isolated, no $CC/objcopy/.s seed — binutils-free)"
+                    _rnst_ownobj_ok=1
+                fi
+            fi
+            if [ "$_rnst_ownobj_ok" = "0" ]; then
             case "$_rnst_tgt" in
                 darwin-arm64) _rnst_seed="self/native/hxlcl_strdup_arm64.s" ;;
                 linux-x86_64) _rnst_seed="self/native/hxlcl_strdup_x86_64.s" ;;
@@ -2703,6 +3185,7 @@ build_runtime_a_from_source() {
             if [ -n "$_rnst_err" ]; then
                 [ "$_rnst_mode" = "1" ] && { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRDUP FATAL (strict): $_rnst_err" >&2; return 1; }
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRDUP WARN: $_rnst_err — FALLBACK-SHIM (retaining libc strdup member; strdup stays UND in the nm floor)" >&2
+            fi
             fi
         fi
         # ── RFC061 §M8 RT-NATIVE-REALLOC (zeroc #29 F2 · pure -D flip, NO seed) ──
@@ -2766,20 +3249,34 @@ build_runtime_a_from_source() {
                 local _rnge_full="build/hxlcl_getenv_native_full.o"
                 local _rnge_o="build/hxlcl_getenv_native.o"
                 printf 'fn _rnge_unused() {}\n' > "$_rnge_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV: emitting native Route C hxlcl_getenv .o via $_rnge_bin (HEXA_CABI_HXLCL=1, replacing libc-shim getenv member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnge_bin" "$_rnge_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnge_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnge_getenv.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: getenv Route C asm emit failed — see build/_rnge_getenv.log" >&2; cat "build/_rnge_getenv.log" >&2; return 1; }
-                [ -s "$_rnge_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: empty $_rnge_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnge_s" -o "$_rnge_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: assemble $_rnge_s failed" >&2; return 1; }
-                if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_getenv "$_rnge_full" "$_rnge_o" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: objcopy isolate getenv failed" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — own-emit --keep-global replaces BOTH the
+                # $CC assemble AND the binutils objcopy --keep-global-symbol (no binutils).
+                # Same 5 carrier-resolved externals as the objcopy'd path (NOT the isolated
+                # frozen-seed class). Default (OWNOBJ unset) = existing path (byte-identical).
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rnge_drv" --backend=native --emit=obj --keep-global=hxlcl_getenv \
+                       --target=x86_64-linux-gnu -o "$_rnge_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rnge_getenv_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rnge_o" 2>/dev/null | grep -cE ' T _?hxlcl_getenv$')" -eq 1 ] \
+                   && [ "$(nm "$_rnge_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_getenv via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_getenv (1 global, no \$CC/objcopy — binutils-free) — getenv dropped from shim"
                 else
-                    cp "$_rnge_full" "$_rnge_o"
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV: emitting native Route C hxlcl_getenv .o via $_rnge_bin (HEXA_CABI_HXLCL=1, replacing libc-shim getenv member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rnge_bin" "$_rnge_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnge_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rnge_getenv.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: getenv Route C asm emit failed — see build/_rnge_getenv.log" >&2; cat "build/_rnge_getenv.log" >&2; return 1; }
+                    [ -s "$_rnge_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: empty $_rnge_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rnge_s" -o "$_rnge_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: assemble $_rnge_s failed" >&2; return 1; }
+                    if command -v objcopy >/dev/null 2>&1; then
+                        objcopy --keep-global-symbol=hxlcl_getenv "$_rnge_full" "$_rnge_o" \
+                            || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: objcopy isolate getenv failed" >&2; return 1; }
+                    else
+                        cp "$_rnge_full" "$_rnge_o"
+                    fi
+                    [ -f "$_rnge_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: $_rnge_o not produced" >&2; return 1; }
                 fi
-                [ -f "$_rnge_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: $_rnge_o not produced" >&2; return 1; }
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_GETENV"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnge_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV: hxlcl_getenv → native Route C .o (isolated, environ@GOTPCREL→libc); shim.o built with -DHEXA_RT_NATIVE_GETENV (getenv dropped) — ld -r multidef gate validates"
@@ -2803,20 +3300,32 @@ build_runtime_a_from_source() {
                 local _rnal_full="build/hxlcl_atoll_native_full.o"
                 local _rnal_o="build/hxlcl_atoll_native.o"
                 printf 'fn _rnal_unused() {}\n' > "$_rnal_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOLL: emitting native Route C hxlcl_atoll .o via $_rnal_bin (HEXA_CABI_HXLCL=1, replacing libc-shim atoll member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnal_bin" "$_rnal_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnal_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnal_atoll.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOLL FATAL: atoll Route C asm emit failed — see build/_rnal_atoll.log" >&2; cat "build/_rnal_atoll.log" >&2; return 1; }
-                [ -s "$_rnal_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOLL FATAL: empty $_rnal_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnal_s" -o "$_rnal_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOLL FATAL: assemble $_rnal_s failed" >&2; return 1; }
-                if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_atoll "$_rnal_full" "$_rnal_o" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOLL FATAL: objcopy isolate atoll failed" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — own-emit --keep-global replaces $CC + binutils objcopy
+                # (objcopy-class). Default (OWNOBJ unset) = existing path = byte-identical.
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rnal_drv" --backend=native --emit=obj --keep-global=hxlcl_atoll \
+                       --target=x86_64-linux-gnu -o "$_rnal_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rnal_atoll_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rnal_o" 2>/dev/null | grep -cE ' T _?hxlcl_atoll$')" -eq 1 ] \
+                   && [ "$(nm "$_rnal_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_atoll via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_atoll (1 global, no $CC/objcopy — binutils-free) — ATOLL dropped from shim"
                 else
-                    cp "$_rnal_full" "$_rnal_o"
+    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOLL: emitting native Route C hxlcl_atoll .o via $_rnal_bin (HEXA_CABI_HXLCL=1, replacing libc-shim atoll member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rnal_bin" "$_rnal_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnal_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rnal_atoll.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOLL FATAL: atoll Route C asm emit failed — see build/_rnal_atoll.log" >&2; cat "build/_rnal_atoll.log" >&2; return 1; }
+                    [ -s "$_rnal_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOLL FATAL: empty $_rnal_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rnal_s" -o "$_rnal_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOLL FATAL: assemble $_rnal_s failed" >&2; return 1; }
+                    if command -v objcopy >/dev/null 2>&1; then
+                        objcopy --keep-global-symbol=hxlcl_atoll "$_rnal_full" "$_rnal_o" \
+                            || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOLL FATAL: objcopy isolate atoll failed" >&2; return 1; }
+                    else
+                        cp "$_rnal_full" "$_rnal_o"
+                    fi
+                    [ -f "$_rnal_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOLL FATAL: $_rnal_o not produced" >&2; return 1; }
                 fi
-                [ -f "$_rnal_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOLL FATAL: $_rnal_o not produced" >&2; return 1; }
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_ATOLL"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnal_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-ATOLL: hxlcl_atoll → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_ATOLL (atoll dropped) — ld -r multidef gate validates"
@@ -2840,20 +3349,33 @@ build_runtime_a_from_source() {
                 local _rntm_full="build/hxlcl_time_native_full.o"
                 local _rntm_o="build/hxlcl_time_native.o"
                 printf 'fn _rntm_unused() {}\n' > "$_rntm_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-TIME: emitting native Route C hxlcl_time .o via $_rntm_bin (HEXA_CABI_HXLCL=1, replacing libc-shim time member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rntm_bin" "$_rntm_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rntm_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rntm_time.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-TIME FATAL: time Route C asm emit failed — see build/_rntm_time.log" >&2; cat "build/_rntm_time.log" >&2; return 1; }
-                [ -s "$_rntm_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-TIME FATAL: empty $_rntm_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rntm_s" -o "$_rntm_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-TIME FATAL: assemble $_rntm_s failed" >&2; return 1; }
-                if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_time "$_rntm_full" "$_rntm_o" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-TIME FATAL: objcopy isolate time failed" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — own-emit --keep-global replaces $CC + binutils objcopy
+                # (no binutils). objcopy-class (carries carrier-resolved externals, not isolated
+                # frozen-seed). Default (OWNOBJ unset) = existing path = byte-identical.
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rntm_drv" --backend=native --emit=obj --keep-global=hxlcl_time \
+                       --target=x86_64-linux-gnu -o "$_rntm_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rntm_time_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rntm_o" 2>/dev/null | grep -cE ' T _?hxlcl_time$')" -eq 1 ] \
+                   && [ "$(nm "$_rntm_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_time via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_time (1 global, no $CC/objcopy — binutils-free) — time dropped from shim"
                 else
-                    cp "$_rntm_full" "$_rntm_o"
+    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-TIME: emitting native Route C hxlcl_time .o via $_rntm_bin (HEXA_CABI_HXLCL=1, replacing libc-shim time member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rntm_bin" "$_rntm_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rntm_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rntm_time.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-TIME FATAL: time Route C asm emit failed — see build/_rntm_time.log" >&2; cat "build/_rntm_time.log" >&2; return 1; }
+                    [ -s "$_rntm_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-TIME FATAL: empty $_rntm_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rntm_s" -o "$_rntm_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-TIME FATAL: assemble $_rntm_s failed" >&2; return 1; }
+                    if command -v objcopy >/dev/null 2>&1; then
+                        objcopy --keep-global-symbol=hxlcl_time "$_rntm_full" "$_rntm_o" \
+                            || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-TIME FATAL: objcopy isolate time failed" >&2; return 1; }
+                    else
+                        cp "$_rntm_full" "$_rntm_o"
+                    fi
+                    [ -f "$_rntm_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-TIME FATAL: $_rntm_o not produced" >&2; return 1; }
                 fi
-                [ -f "$_rntm_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-TIME FATAL: $_rntm_o not produced" >&2; return 1; }
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_TIME"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rntm_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-TIME: hxlcl_time → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_TIME (time dropped) — ld -r multidef gate validates"
@@ -2879,20 +3401,31 @@ build_runtime_a_from_source() {
                 local _rnos_full="build/hxlcl_open_sys_native_full.o"
                 local _rnos_o="build/hxlcl_open_sys_native.o"
                 printf 'fn _rnos_unused() {}\n' > "$_rnos_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS: emitting native Route C hxlcl_open_sys .o via $_rnos_bin (HEXA_CABI_HXLCL=1, replacing libc-shim open_sys member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnos_bin" "$_rnos_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnos_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnos_open_sys.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: open_sys Route C asm emit failed — see build/_rnos_open_sys.log" >&2; cat "build/_rnos_open_sys.log" >&2; return 1; }
-                [ -s "$_rnos_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: empty $_rnos_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnos_s" -o "$_rnos_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: assemble $_rnos_s failed" >&2; return 1; }
-                if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_open_sys "$_rnos_full" "$_rnos_o" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: objcopy isolate open_sys failed" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — own-emit --keep-global replaces $CC + binutils objcopy.
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rnos_drv" --backend=native --emit=obj --keep-global=hxlcl_open_sys \
+                       --target=x86_64-linux-gnu -o "$_rnos_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rnos_open_sys_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rnos_o" 2>/dev/null | grep -cE ' T _?hxlcl_open_sys$')" -eq 1 ] \
+                   && [ "$(nm "$_rnos_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_open_sys via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_open_sys (1 global, no $CC/objcopy — binutils-free) — OPEN_SYS dropped from shim"
                 else
-                    cp "$_rnos_full" "$_rnos_o"
+    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS: emitting native Route C hxlcl_open_sys .o via $_rnos_bin (HEXA_CABI_HXLCL=1, replacing libc-shim open_sys member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rnos_bin" "$_rnos_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnos_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rnos_open_sys.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: open_sys Route C asm emit failed — see build/_rnos_open_sys.log" >&2; cat "build/_rnos_open_sys.log" >&2; return 1; }
+                    [ -s "$_rnos_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: empty $_rnos_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rnos_s" -o "$_rnos_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: assemble $_rnos_s failed" >&2; return 1; }
+                    if command -v objcopy >/dev/null 2>&1; then
+                        objcopy --keep-global-symbol=hxlcl_open_sys "$_rnos_full" "$_rnos_o" \
+                            || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: objcopy isolate open_sys failed" >&2; return 1; }
+                    else
+                        cp "$_rnos_full" "$_rnos_o"
+                    fi
+                    [ -f "$_rnos_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: $_rnos_o not produced" >&2; return 1; }
                 fi
-                [ -f "$_rnos_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: $_rnos_o not produced" >&2; return 1; }
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_OPEN_SYS"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnos_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS: hxlcl_open_sys → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_OPEN_SYS (open_sys dropped) — ld -r multidef gate validates"
@@ -2917,20 +3450,33 @@ build_runtime_a_from_source() {
                 local _rnfk_full="build/hxlcl_fork_native_full.o"
                 local _rnfk_o="build/hxlcl_fork_native.o"
                 printf 'fn _rnfk_unused() {}\n' > "$_rnfk_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FORK: emitting native Route C hxlcl_fork .o via $_rnfk_bin (HEXA_CABI_HXLCL=1, replacing libc-shim fork member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnfk_bin" "$_rnfk_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnfk_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnfk_fork.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FORK FATAL: fork Route C asm emit failed — see build/_rnfk_fork.log" >&2; cat "build/_rnfk_fork.log" >&2; return 1; }
-                [ -s "$_rnfk_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FORK FATAL: empty $_rnfk_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnfk_s" -o "$_rnfk_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FORK FATAL: assemble $_rnfk_s failed" >&2; return 1; }
-                if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_fork "$_rnfk_full" "$_rnfk_o" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FORK FATAL: objcopy isolate fork failed" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — own-emit --keep-global replaces $CC + binutils objcopy
+                # (no binutils). objcopy-class (carries carrier-resolved externals, not isolated
+                # frozen-seed). Default (OWNOBJ unset) = existing path = byte-identical.
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rnfk_drv" --backend=native --emit=obj --keep-global=hxlcl_fork \
+                       --target=x86_64-linux-gnu -o "$_rnfk_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rnfk_fork_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rnfk_o" 2>/dev/null | grep -cE ' T _?hxlcl_fork$')" -eq 1 ] \
+                   && [ "$(nm "$_rnfk_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_fork via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_fork (1 global, no $CC/objcopy — binutils-free) — fork dropped from shim"
                 else
-                    cp "$_rnfk_full" "$_rnfk_o"
+    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FORK: emitting native Route C hxlcl_fork .o via $_rnfk_bin (HEXA_CABI_HXLCL=1, replacing libc-shim fork member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rnfk_bin" "$_rnfk_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnfk_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rnfk_fork.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FORK FATAL: fork Route C asm emit failed — see build/_rnfk_fork.log" >&2; cat "build/_rnfk_fork.log" >&2; return 1; }
+                    [ -s "$_rnfk_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FORK FATAL: empty $_rnfk_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rnfk_s" -o "$_rnfk_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FORK FATAL: assemble $_rnfk_s failed" >&2; return 1; }
+                    if command -v objcopy >/dev/null 2>&1; then
+                        objcopy --keep-global-symbol=hxlcl_fork "$_rnfk_full" "$_rnfk_o" \
+                            || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FORK FATAL: objcopy isolate fork failed" >&2; return 1; }
+                    else
+                        cp "$_rnfk_full" "$_rnfk_o"
+                    fi
+                    [ -f "$_rnfk_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FORK FATAL: $_rnfk_o not produced" >&2; return 1; }
                 fi
-                [ -f "$_rnfk_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FORK FATAL: $_rnfk_o not produced" >&2; return 1; }
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_FORK"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnfk_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FORK: hxlcl_fork → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_FORK (fork dropped) — ld -r multidef gate validates"
@@ -2957,20 +3503,32 @@ build_runtime_a_from_source() {
                 local _rnse_full="build/hxlcl_setenv_native_full.o"
                 local _rnse_o="build/hxlcl_setenv_native.o"
                 printf 'fn _rnse_unused() {}\n' > "$_rnse_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SETENV: emitting native Route C hxlcl_setenv .o via $_rnse_bin (HEXA_CABI_HXLCL=1, replacing libc-shim setenv member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnse_bin" "$_rnse_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnse_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnse_setenv.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SETENV FATAL: setenv Route C asm emit failed — see build/_rnse_setenv.log" >&2; cat "build/_rnse_setenv.log" >&2; return 1; }
-                [ -s "$_rnse_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SETENV FATAL: empty $_rnse_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnse_s" -o "$_rnse_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SETENV FATAL: assemble $_rnse_s failed" >&2; return 1; }
-                if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_setenv "$_rnse_full" "$_rnse_o" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SETENV FATAL: objcopy isolate setenv failed" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — own-emit --keep-global replaces $CC + binutils objcopy
+                # (objcopy-class). Default (OWNOBJ unset) = existing path = byte-identical.
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rnse_drv" --backend=native --emit=obj --keep-global=hxlcl_setenv \
+                       --target=x86_64-linux-gnu -o "$_rnse_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rnse_setenv_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rnse_o" 2>/dev/null | grep -cE ' T _?hxlcl_setenv$')" -eq 1 ] \
+                   && [ "$(nm "$_rnse_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_setenv via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_setenv (1 global, no $CC/objcopy — binutils-free) — SETENV dropped from shim"
                 else
-                    cp "$_rnse_full" "$_rnse_o"
+    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SETENV: emitting native Route C hxlcl_setenv .o via $_rnse_bin (HEXA_CABI_HXLCL=1, replacing libc-shim setenv member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rnse_bin" "$_rnse_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnse_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rnse_setenv.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SETENV FATAL: setenv Route C asm emit failed — see build/_rnse_setenv.log" >&2; cat "build/_rnse_setenv.log" >&2; return 1; }
+                    [ -s "$_rnse_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SETENV FATAL: empty $_rnse_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rnse_s" -o "$_rnse_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SETENV FATAL: assemble $_rnse_s failed" >&2; return 1; }
+                    if command -v objcopy >/dev/null 2>&1; then
+                        objcopy --keep-global-symbol=hxlcl_setenv "$_rnse_full" "$_rnse_o" \
+                            || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SETENV FATAL: objcopy isolate setenv failed" >&2; return 1; }
+                    else
+                        cp "$_rnse_full" "$_rnse_o"
+                    fi
+                    [ -f "$_rnse_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SETENV FATAL: $_rnse_o not produced" >&2; return 1; }
                 fi
-                [ -f "$_rnse_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SETENV FATAL: $_rnse_o not produced" >&2; return 1; }
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_SETENV"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnse_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SETENV: hxlcl_setenv → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_SETENV (setenv dropped) — ld -r multidef gate validates"
@@ -2998,20 +3556,31 @@ build_runtime_a_from_source() {
                 local _rncg_full="build/hxlcl_clock_gettime_native_full.o"
                 local _rncg_o="build/hxlcl_clock_gettime_native.o"
                 printf 'fn _rncg_unused() {}\n' > "$_rncg_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME: emitting native Route C hxlcl_clock_gettime .o via $_rncg_bin (HEXA_CABI_HXLCL=1, replacing libc-shim clock_gettime member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rncg_bin" "$_rncg_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rncg_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rncg_clock_gettime.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: clock_gettime Route C asm emit failed — see build/_rncg_clock_gettime.log" >&2; cat "build/_rncg_clock_gettime.log" >&2; return 1; }
-                [ -s "$_rncg_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: empty $_rncg_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rncg_s" -o "$_rncg_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: assemble $_rncg_s failed" >&2; return 1; }
-                if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_clock_gettime "$_rncg_full" "$_rncg_o" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: objcopy isolate clock_gettime failed" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — own-emit --keep-global replaces $CC + binutils objcopy.
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rncg_drv" --backend=native --emit=obj --keep-global=hxlcl_clock_gettime \
+                       --target=x86_64-linux-gnu -o "$_rncg_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rncg_clock_gettime_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rncg_o" 2>/dev/null | grep -cE ' T _?hxlcl_clock_gettime$')" -eq 1 ] \
+                   && [ "$(nm "$_rncg_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_clock_gettime via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_clock_gettime (1 global, no $CC/objcopy — binutils-free) — CLOCK_GETTIME dropped from shim"
                 else
-                    cp "$_rncg_full" "$_rncg_o"
+    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME: emitting native Route C hxlcl_clock_gettime .o via $_rncg_bin (HEXA_CABI_HXLCL=1, replacing libc-shim clock_gettime member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rncg_bin" "$_rncg_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rncg_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rncg_clock_gettime.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: clock_gettime Route C asm emit failed — see build/_rncg_clock_gettime.log" >&2; cat "build/_rncg_clock_gettime.log" >&2; return 1; }
+                    [ -s "$_rncg_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: empty $_rncg_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rncg_s" -o "$_rncg_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: assemble $_rncg_s failed" >&2; return 1; }
+                    if command -v objcopy >/dev/null 2>&1; then
+                        objcopy --keep-global-symbol=hxlcl_clock_gettime "$_rncg_full" "$_rncg_o" \
+                            || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: objcopy isolate clock_gettime failed" >&2; return 1; }
+                    else
+                        cp "$_rncg_full" "$_rncg_o"
+                    fi
+                    [ -f "$_rncg_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: $_rncg_o not produced" >&2; return 1; }
                 fi
-                [ -f "$_rncg_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: $_rncg_o not produced" >&2; return 1; }
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_CLOCK_GETTIME"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rncg_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME: hxlcl_clock_gettime → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_CLOCK_GETTIME (clock_gettime dropped) — ld -r multidef gate validates"
@@ -3041,20 +3610,32 @@ build_runtime_a_from_source() {
                 local _rnpipe_full="build/hxlcl_pipe_native_full.o"
                 local _rnpipe_o="build/hxlcl_pipe_native.o"
                 printf 'fn _rnpipe_unused() {}\n' > "$_rnpipe_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE: emitting native Route C hxlcl_pipe .o via $_rnpipe_bin (HEXA_CABI_HXLCL=1, replacing libc-shim pipe member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnpipe_bin" "$_rnpipe_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnpipe_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnpipe.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE FATAL: pipe Route C asm emit failed — see build/_rnpipe.log" >&2; cat "build/_rnpipe.log" >&2; return 1; }
-                [ -s "$_rnpipe_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE FATAL: empty $_rnpipe_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnpipe_s" -o "$_rnpipe_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE FATAL: assemble $_rnpipe_s failed" >&2; return 1; }
-                if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_pipe "$_rnpipe_full" "$_rnpipe_o" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE FATAL: objcopy isolate pipe failed" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — own-emit --keep-global replaces $CC + binutils objcopy
+                # (objcopy-class). Default (OWNOBJ unset) = existing path = byte-identical.
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rnpipe_drv" --backend=native --emit=obj --keep-global=hxlcl_pipe \
+                       --target=x86_64-linux-gnu -o "$_rnpipe_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rnpipe_pipe_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rnpipe_o" 2>/dev/null | grep -cE ' T _?hxlcl_pipe$')" -eq 1 ] \
+                   && [ "$(nm "$_rnpipe_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_pipe via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_pipe (1 global, no $CC/objcopy — binutils-free) — PIPE dropped from shim"
                 else
-                    cp "$_rnpipe_full" "$_rnpipe_o"
+    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE: emitting native Route C hxlcl_pipe .o via $_rnpipe_bin (HEXA_CABI_HXLCL=1, replacing libc-shim pipe member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rnpipe_bin" "$_rnpipe_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnpipe_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rnpipe.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE FATAL: pipe Route C asm emit failed — see build/_rnpipe.log" >&2; cat "build/_rnpipe.log" >&2; return 1; }
+                    [ -s "$_rnpipe_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE FATAL: empty $_rnpipe_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rnpipe_s" -o "$_rnpipe_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE FATAL: assemble $_rnpipe_s failed" >&2; return 1; }
+                    if command -v objcopy >/dev/null 2>&1; then
+                        objcopy --keep-global-symbol=hxlcl_pipe "$_rnpipe_full" "$_rnpipe_o" \
+                            || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE FATAL: objcopy isolate pipe failed" >&2; return 1; }
+                    else
+                        cp "$_rnpipe_full" "$_rnpipe_o"
+                    fi
+                    [ -f "$_rnpipe_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE FATAL: $_rnpipe_o not produced" >&2; return 1; }
                 fi
-                [ -f "$_rnpipe_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE FATAL: $_rnpipe_o not produced" >&2; return 1; }
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_PIPE"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnpipe_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-PIPE: hxlcl_pipe → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_PIPE (pipe dropped) — ld -r multidef gate validates"
@@ -3082,20 +3663,33 @@ build_runtime_a_from_source() {
                 local _rnsig_full="build/hxlcl_signal_native_full.o"
                 local _rnsig_o="build/hxlcl_signal_native.o"
                 printf 'fn _rnsig_unused() {}\n' > "$_rnsig_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL: emitting native Route C hxlcl_signal .o via $_rnsig_bin (HEXA_CABI_HXLCL=1, replacing libc-shim signal member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnsig_bin" "$_rnsig_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnsig_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnsig.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL FATAL: signal Route C asm emit failed — see build/_rnsig.log" >&2; cat "build/_rnsig.log" >&2; return 1; }
-                [ -s "$_rnsig_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL FATAL: empty $_rnsig_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnsig_s" -o "$_rnsig_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL FATAL: assemble $_rnsig_s failed" >&2; return 1; }
-                if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_signal "$_rnsig_full" "$_rnsig_o" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL FATAL: objcopy isolate signal failed" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — own-emit --keep-global replaces $CC + binutils objcopy
+                # (no binutils). objcopy-class (carries carrier-resolved externals, not isolated
+                # frozen-seed). Default (OWNOBJ unset) = existing path = byte-identical.
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rnsig_drv" --backend=native --emit=obj --keep-global=hxlcl_signal \
+                       --target=x86_64-linux-gnu -o "$_rnsig_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rnsig_signal_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rnsig_o" 2>/dev/null | grep -cE ' T _?hxlcl_signal$')" -eq 1 ] \
+                   && [ "$(nm "$_rnsig_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_signal via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_signal (1 global, no $CC/objcopy — binutils-free) — signal dropped from shim"
                 else
-                    cp "$_rnsig_full" "$_rnsig_o"
+    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL: emitting native Route C hxlcl_signal .o via $_rnsig_bin (HEXA_CABI_HXLCL=1, replacing libc-shim signal member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rnsig_bin" "$_rnsig_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnsig_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rnsig.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL FATAL: signal Route C asm emit failed — see build/_rnsig.log" >&2; cat "build/_rnsig.log" >&2; return 1; }
+                    [ -s "$_rnsig_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL FATAL: empty $_rnsig_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rnsig_s" -o "$_rnsig_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL FATAL: assemble $_rnsig_s failed" >&2; return 1; }
+                    if command -v objcopy >/dev/null 2>&1; then
+                        objcopy --keep-global-symbol=hxlcl_signal "$_rnsig_full" "$_rnsig_o" \
+                            || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL FATAL: objcopy isolate signal failed" >&2; return 1; }
+                    else
+                        cp "$_rnsig_full" "$_rnsig_o"
+                    fi
+                    [ -f "$_rnsig_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL FATAL: $_rnsig_o not produced" >&2; return 1; }
                 fi
-                [ -f "$_rnsig_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL FATAL: $_rnsig_o not produced" >&2; return 1; }
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_SIGNAL"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnsig_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIGNAL: hxlcl_signal → native Route C .o (isolated, sa_restorer WIRED); shim.o built with -DHEXA_RT_NATIVE_SIGNAL (signal dropped) — ld -r multidef gate validates"
@@ -3131,20 +3725,36 @@ build_runtime_a_from_source() {
                 [ "${HEXA_RT_NATIVE_POPEN:-0}" = "1" ]  && _rnpop_keep="$_rnpop_keep --keep-global-symbol=hxlcl_popen"
                 [ "${HEXA_RT_NATIVE_PCLOSE:-0}" = "1" ] && _rnpop_keep="$_rnpop_keep --keep-global-symbol=hxlcl_pclose"
                 printf 'fn _rnpop_unused() {}\n' > "$_rnpop_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE: emitting native Route C popen/pclose .o via $_rnpop_bin (HEXA_CABI_HXLCL=1, replacing libc-shim member(s))…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnpop_bin" "$_rnpop_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnpop_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnpop.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: popen/pclose Route C asm emit failed — see build/_rnpop.log" >&2; cat "build/_rnpop.log" >&2; return 1; }
-                [ -s "$_rnpop_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: empty $_rnpop_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnpop_s" -o "$_rnpop_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: assemble $_rnpop_s failed" >&2; return 1; }
-                if command -v objcopy >/dev/null 2>&1; then
-                    objcopy $_rnpop_keep "$_rnpop_full" "$_rnpop_o" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: objcopy isolate popen/pclose failed" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — 2-symbol combined member: build the
+                # --keep-global comma-list from the SAME flags as $_rnpop_keep, own-emit
+                # (drops $CC + binutils objcopy), assert global count == kept-count.
+                # Default (OWNOBJ unset) = existing --emit=asm+objcopy = byte-identical.
+                _rnpop_kg=""; _rnpop_ng=0
+                [ "${HEXA_RT_NATIVE_POPEN:-0}" = "1" ]  && { _rnpop_kg="${_rnpop_kg:+$_rnpop_kg,}hxlcl_popen"; _rnpop_ng=$((_rnpop_ng+1)); }
+                [ "${HEXA_RT_NATIVE_PCLOSE:-0}" = "1" ] && { _rnpop_kg="${_rnpop_kg:+$_rnpop_kg,}hxlcl_pclose"; _rnpop_ng=$((_rnpop_ng+1)); }
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && [ -n "$_rnpop_kg" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rnpop_drv" --backend=native --emit=obj --keep-global="$_rnpop_kg" \
+                       --target=x86_64-linux-gnu -o "$_rnpop_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rnpop_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rnpop_o" 2>/dev/null | grep -cE ' T ')" -eq "$_rnpop_ng" ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_popen/pclose via $HEXA_OWNOBJ_CC --emit=obj --keep-global=$_rnpop_kg ($_rnpop_ng global, no \$CC/objcopy — binutils-free)"
                 else
-                    cp "$_rnpop_full" "$_rnpop_o"
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE: emitting native Route C popen/pclose .o via $_rnpop_bin (HEXA_CABI_HXLCL=1, replacing libc-shim member(s))…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rnpop_bin" "$_rnpop_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnpop_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rnpop.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: popen/pclose Route C asm emit failed — see build/_rnpop.log" >&2; cat "build/_rnpop.log" >&2; return 1; }
+                    [ -s "$_rnpop_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: empty $_rnpop_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rnpop_s" -o "$_rnpop_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: assemble $_rnpop_s failed" >&2; return 1; }
+                    if command -v objcopy >/dev/null 2>&1; then
+                        objcopy $_rnpop_keep "$_rnpop_full" "$_rnpop_o" \
+                            || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: objcopy isolate popen/pclose failed" >&2; return 1; }
+                    else
+                        cp "$_rnpop_full" "$_rnpop_o"
+                    fi
+                    [ -f "$_rnpop_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: $_rnpop_o not produced" >&2; return 1; }
                 fi
-                [ -f "$_rnpop_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: $_rnpop_o not produced" >&2; return 1; }
                 if [ "${HEXA_RT_NATIVE_POPEN:-0}" = "1" ];  then _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_POPEN"; fi
                 if [ "${HEXA_RT_NATIVE_PCLOSE:-0}" = "1" ]; then _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_PCLOSE"; fi
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnpop_o"
@@ -3176,20 +3786,32 @@ build_runtime_a_from_source() {
                 local _rnxv_full="build/hxlcl_execvp_native_full.o"
                 local _rnxv_o="build/hxlcl_execvp_native.o"
                 printf 'fn _rnxv_unused() {}\n' > "$_rnxv_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXECVP: emitting native Route C hxlcl_execvp .o via $_rnxv_bin (HEXA_CABI_HXLCL=1, replacing libc-shim execvp member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnxv_bin" "$_rnxv_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnxv_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnxv_execvp.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXECVP FATAL: execvp Route C asm emit failed — see build/_rnxv_execvp.log" >&2; cat "build/_rnxv_execvp.log" >&2; return 1; }
-                [ -s "$_rnxv_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXECVP FATAL: empty $_rnxv_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnxv_s" -o "$_rnxv_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXECVP FATAL: assemble $_rnxv_s failed" >&2; return 1; }
-                if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_execvp "$_rnxv_full" "$_rnxv_o" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXECVP FATAL: objcopy isolate execvp failed" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — own-emit --keep-global replaces $CC + binutils objcopy
+                # (objcopy-class). Default (OWNOBJ unset) = existing path = byte-identical.
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rnxv_drv" --backend=native --emit=obj --keep-global=hxlcl_execvp \
+                       --target=x86_64-linux-gnu -o "$_rnxv_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rnxv_execvp_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rnxv_o" 2>/dev/null | grep -cE ' T _?hxlcl_execvp$')" -eq 1 ] \
+                   && [ "$(nm "$_rnxv_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_execvp via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_execvp (1 global, no $CC/objcopy — binutils-free) — EXECVP dropped from shim"
                 else
-                    cp "$_rnxv_full" "$_rnxv_o"
+    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXECVP: emitting native Route C hxlcl_execvp .o via $_rnxv_bin (HEXA_CABI_HXLCL=1, replacing libc-shim execvp member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rnxv_bin" "$_rnxv_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnxv_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rnxv_execvp.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXECVP FATAL: execvp Route C asm emit failed — see build/_rnxv_execvp.log" >&2; cat "build/_rnxv_execvp.log" >&2; return 1; }
+                    [ -s "$_rnxv_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXECVP FATAL: empty $_rnxv_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rnxv_s" -o "$_rnxv_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXECVP FATAL: assemble $_rnxv_s failed" >&2; return 1; }
+                    if command -v objcopy >/dev/null 2>&1; then
+                        objcopy --keep-global-symbol=hxlcl_execvp "$_rnxv_full" "$_rnxv_o" \
+                            || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXECVP FATAL: objcopy isolate execvp failed" >&2; return 1; }
+                    else
+                        cp "$_rnxv_full" "$_rnxv_o"
+                    fi
+                    [ -f "$_rnxv_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXECVP FATAL: $_rnxv_o not produced" >&2; return 1; }
                 fi
-                [ -f "$_rnxv_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXECVP FATAL: $_rnxv_o not produced" >&2; return 1; }
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_EXECVP"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnxv_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXECVP: hxlcl_execvp → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_EXECVP (execvp dropped) — ld -r multidef gate validates"
