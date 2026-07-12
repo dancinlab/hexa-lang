@@ -55,6 +55,33 @@ fn _is_elf_arm64(target: string) -> bool {
     return target == TARGET_LINUX_ARM64
 }
 
+// SELFHOST axis-③ arm64 own-link rung-2: Mach-O → ELF aarch64 page-reloc
+// spelling. The LIR label convention keeps the Mach-O `@PAGE`/`@PAGEOFF`/
+// `@GOTPAGE`/`@GOTPAGEOFF` suffixes — BOTH object writers parse them for reloc
+// kinds (elf_arm64.hexa maps `@PAGE`→R_AARCH64_ADR_PREL_PG_HI21, `@PAGEOFF`→
+// R_AARCH64_ADD_ABS_LO12_NC; macho_arm64.hexa maps the ld64 kinds). So the
+// suffix stays the internal convention; ONLY the asm-TEXT rendering must
+// translate, because GNU `as` rejects `adrp x1, sym@PAGE` and wants the
+// `:lo12:`/bare-adrp ELF spelling instead:
+//   sym@PAGE       → sym             (R_AARCH64_ADR_PREL_PG_HI21)
+//   sym@PAGEOFF    → :lo12:sym       (R_AARCH64_ADD_ABS_LO12_NC)
+//   sym@GOTPAGE    → :got:sym        (R_AARCH64_ADR_GOT_PAGE)
+//   sym@GOTPAGEOFF → :got_lo12:sym   (R_AARCH64_LD64_GOT_LO12_NC)
+// This is what lets the frozen arm64-linux native seeds (regex_rt /
+// float_parse_hexinfnan / …) regen from `aprime --emit=asm --target=arm64-
+// linux-gnu` and actually cross-assemble. Suffix-checked with substring (not a
+// new `_ends_with` — a duplicate would flat-globals-collide with the one in
+// macho_arm64.hexa, cf. #3899); the `@`-prefixed patterns are mutually
+// exclusive (the char before `PAGEOFF` in `@GOTPAGEOFF` is `T`, not `@`).
+fn _elf_arm64_page_reloc(label: string) -> string {
+    let n = len(label)
+    if n >= 11 && label.substring(n - 11, n) == "@GOTPAGEOFF" { return ":got_lo12:" + label.substring(0, n - 11) }
+    if n >= 8  && label.substring(n - 8, n)  == "@GOTPAGE"    { return ":got:" + label.substring(0, n - 8) }
+    if n >= 8  && label.substring(n - 8, n)  == "@PAGEOFF"    { return ":lo12:" + label.substring(0, n - 8) }
+    if n >= 5  && label.substring(n - 5, n)  == "@PAGE"       { return label.substring(0, n - 5) }
+    return label
+}
+
 fn _is_arm64(target: string) -> bool {
     return _is_darwin(target) || _is_elf_arm64(target)
 }
@@ -158,6 +185,15 @@ fn _fmt_label(target: string, label: string) -> string {
     // "_" → `_hexa_*`, matching clang's Mach-O symbol for runtime.c.
     let cs = label.chars()
     if len(cs) == 0 { return label }
+    // ELF aarch64 (arm64-linux-gnu): translate the Mach-O page-reloc suffix to
+    // the GNU-as `:lo12:`/`:got:`/bare-adrp spelling BEFORE the "."/"["/"{"/"#"
+    // carve-outs below — `.LCstr0@PAGE` starts with "." and would otherwise
+    // return verbatim, keeping the @PAGE that GNU as rejects. `_elf_arm64_page_
+    // reloc` returns any non-page-reloc label (bl targets, `#42`, `[sp,#0]`,
+    // register lists) unchanged, matching the linux fall-through (`return
+    // label`) at the bottom — so this is byte-neutral for every non-@PAGE
+    // operand and darwin never reaches here (its `"_"` mangling is untouched).
+    if _is_elf_arm64(target) { return _elf_arm64_page_reloc(label) }
     let first = cs[0]
     if first == "." { return label }   // directive-like / .LCstr@PAGE
     if first == "[" { return label }   // raw addressing-mode literal
