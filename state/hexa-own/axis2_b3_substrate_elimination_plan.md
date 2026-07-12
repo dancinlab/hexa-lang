@@ -53,3 +53,20 @@ So A0 round-1 remainder = these 5 careful per-family units (regex_rt gated on E4
 flip PR, verified by **a full `tool/release_build` with HEXA_RT_OWNOBJ=1** (default-OFF byteeq can't
 exercise the ON-path — convergence stage-resolve-flag-space-1 / runtime-emit-full-hexa-2). Beyond A0:
 A1 (~35 one-sym members) · S1/S2 fragments · then the runtime.c body (Round-3+, ~29-32k LOC, multi-session).
+
+## A0 round-1 COMPLETE — 9/10 tractable families landed + ON-path GREEN (2026-07-12)
+
+All 4 multi-flag families now landed, closing the round-1 tractable set (PR #4900):
+- **map_core** (4-read `rt_map_(get|fnv1a|strcmp0|contains)_native` + 1-inplace `rt_map_set_inplace_native`)
+- **valop_core** (10-sym `rt_(truthy|sub|mul|add|cmp_lt|cmp_gt|cmp_le|cmp_ge|div|mod)_native`)
+- **num_float_core** (dual-flag: parse `rt_parse_float_native` + format `rt_format_float_native`)
+- **str_core** (5-flag; **A0 branch placed BEFORE the `.s` seed-existence guard** — str_core has no
+  in-tree `.s` seed so the guard would else early-return before A0; own-emit needs no seed)
+
+**summer ON-path verify: 9/9 own-obj families GREEN** (`HEXA_RT_OWNOBJ=1` → every family own-emits
+`--emit=obj`, ZERO `$CC` assemble). Only **regex_rt** remains for A0 — **blocked on E4** (82⊇6
+over-export needs own symbol-demotion). So A0 round-1 is DONE modulo the E4-gated family.
+
+**Next**: the `:-0`→`:-auto` flip PR, gated on a full `tool/release_build HEXA_RT_OWNOBJ=1` witness
+(the ON-path is invisible to default-OFF byteeq) + byteeq 3-target + install smoke. Then A1
+(~35 one-sym members), which E4 (own symbol-demotion) also unblocks alongside regex_rt.
