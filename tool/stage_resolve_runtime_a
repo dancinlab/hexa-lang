@@ -1247,7 +1247,8 @@ resolve_native_valop_core_seed() {
     local ok=1 sym n
     for sym in rt_truthy_native rt_sub_native rt_mul_native rt_add_native \
                rt_cmp_lt_native rt_cmp_gt_native rt_cmp_le_native rt_cmp_ge_native \
-               rt_div_native rt_mod_native; do
+               rt_div_native rt_mod_native \
+               rt_eq_scalar_native rt_to_int_native rt_to_float_native rt_abs_native rt_null_coal_native; do
         n="$(grep -cE "^\.globl[[:space:]]+_?${sym}\$" "$seed" 2>/dev/null || echo 0)"
         [ "${n:-0}" -ge 1 ] || { ok=0; echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: seed $seed exports only $n/1 $sym — falling back to C scalar path" >&2; }
     done
@@ -1262,13 +1263,13 @@ resolve_native_valop_core_seed() {
         if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
             printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
             if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --target="$_otri" -o build/valop_core_native.o "$_osrc" 2>build/valop_core_ownobj.err; then
-                local _ots; _ots="$(nm build/valop_core_native.o 2>/dev/null | grep -cE ' T _?rt_(truthy|sub|mul|add|cmp_lt|cmp_gt|cmp_le|cmp_ge|div|mod)_native')"
-                if [ "${_ots:-0}" -ge 10 ]; then
+                local _ots; _ots="$(nm build/valop_core_native.o 2>/dev/null | grep -cE ' T _?rt_(truthy|sub|mul|add|cmp_lt|cmp_gt|cmp_le|cmp_ge|div|mod|eq_scalar|to_int|to_float|abs|null_coal)_native')"
+                if [ "${_ots:-0}" -ge 15 ]; then
                     export HEXA_RT_VALOP_NATIVE=1
-                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: valop_core via $_oc --emit=obj ($_ots/10 rt_*_native, TARGET=$tgt) → native scalar value-op path, no \$CC assemble"
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: valop_core via $_oc --emit=obj ($_ots/15 rt_*_native, TARGET=$tgt) → native scalar value-op path, no \$CC assemble"
                     return 0
                 fi
-                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: valop_core own-emit exported $_ots/10 — falling back to .s seed" >&2
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: valop_core own-emit exported $_ots/15 — falling back to .s seed" >&2
             else
                 echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: valop_core own-emit failed — falling back to .s seed ($(head -1 build/valop_core_ownobj.err 2>/dev/null))" >&2
             fi
@@ -1278,7 +1279,7 @@ resolve_native_valop_core_seed() {
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
     if $CC -c "$s_tmp" -o build/valop_core_native.o 2>/dev/null; then
         export HEXA_RT_VALOP_NATIVE=1
-        echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: assembled build/valop_core_native.o from $seed (TARGET=$tgt, 10/10 rt_*_native syms incl cmp+div/mod) → native scalar value-op path"
+        echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: assembled build/valop_core_native.o from $seed (TARGET=$tgt, 15/15 rt_*_native syms incl cmp+div/mod+eqcoerce) → native scalar value-op path"
     else
         echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: WARN assemble of $seed failed — falling back to C scalar path" >&2
     fi
