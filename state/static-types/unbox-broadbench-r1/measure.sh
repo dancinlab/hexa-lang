@@ -133,7 +133,10 @@ emit_one() { # $1=cc $2=flag(0/1) $3=outbase $4=kernel-hexa
     local cc="$1" f="$2" out="$3" k="$4"
     ( cd "$(dirname "$k")"
       unset HEXA_UNBOX_NATIVE                       # default-ON both arms
-      if [ "$f" = 1 ]; then export HEXA_UNBOX_HIR_CALLTYPE=1; else unset HEXA_UNBOX_HIR_CALLTYPE; fi
+      # OFF arm = explicit =0 (NOT unset): post-#4897 the flag defaults ON
+      # (env!="0"), so `unset` would leave the OFF arm ON → OFF==ON on every
+      # kernel (contaminated delta, observed 2026-07-13). Explicit 0 disables.
+      if [ "$f" = 1 ]; then export HEXA_UNBOX_HIR_CALLTYPE=1; else export HEXA_UNBOX_HIR_CALLTYPE=0; fi
       "$cc" _drv.hexa --emit=asm --target=x86_64-linux-gnu -o "$out.s" "$k" >"$out.s.log" 2>&1 || echo "emit asm rc=$? f=$f"
       "$cc" _drv.hexa --emit=obj --target=x86_64-linux-gnu -o "$out.o" "$k" >"$out.o.log" 2>&1 || echo "emit obj rc=$? f=$f" )
 }
