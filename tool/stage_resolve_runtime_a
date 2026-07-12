@@ -2306,6 +2306,30 @@ build_runtime_a_from_source() {
                 "Linux x86_64") _rnsc_tgt="linux-x86_64" ;;
                 "Linux aarch64"|"Linux arm64") _rnsc_tgt="linux-arm64" ;;
             esac
+            # ── axis-②③ A1 (E4+isolate own-obj) — own-emit --keep-global=hxlcl_strcmp
+            #    --isolate (frozen-seed class): reachability filter → 1-global .o, 0
+            #    non-carrier undef, replacing the .s seed + $CC + objcopy +
+            #    isolate_native_seed.py (binutils-free). MANDATORY _rn_seed_und_gate
+            #    check (== the seed path's _rnsc_bad). aprime lacking --isolate → 5
+            #    externals → gate non-empty → clean fall to the frozen seed. x86_64
+            #    only (isolate_lmodule_x86_64; arm64 twin ships next). ──
+            _rnsc_ownobj_ok=0
+            if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && [ "$_rnsc_tgt" = "linux-x86_64" ]; then
+                mkdir -p build; printf 'fn _rnsc_drv() {}\n' > build/_rnsc_drv.hexa
+                if env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" build/_rnsc_drv.hexa --backend=native --emit=obj --keep-global=hxlcl_strcmp --isolate \
+                       --target=x86_64-linux-gnu -o build/hxlcl_strcmp_native.o stdlib/runtime/hxlcl_core.hexa >build/_rnsc_ownobj.log 2>&1 \
+                   && [ "$(nm build/hxlcl_strcmp_native.o 2>/dev/null | grep -cE ' T _?hxlcl_strcmp$')" -eq 1 ] \
+                   && [ "$(nm build/hxlcl_strcmp_native.o 2>/dev/null | grep -cE ' T ')" -eq 1 ] \
+                   && [ -z "$(_rn_seed_und_gate build/hxlcl_strcmp_native.o)" ]; then
+                    _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_STRCMP"
+                    _mo_hxlcl_members="$_mo_hxlcl_members build/hxlcl_strcmp_native.o"
+                    _rng_strcmp_def="-DHEXA_RT_RANGE_STRCMP_NATIVE"
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_strcmp via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_strcmp --isolate (isolated 1-global, 0 non-carrier undef, no $CC/objcopy/.s seed — binutils-free)"
+                    _rnsc_ownobj_ok=1
+                fi
+            fi
+            if [ "$_rnsc_ownobj_ok" = "0" ]; then
             case "$_rnsc_tgt" in
                 darwin-arm64) _rnsc_seed="self/native/hxlcl_strcmp_arm64.s" ;;
                 linux-x86_64) _rnsc_seed="self/native/hxlcl_strcmp_x86_64.s" ;;
@@ -2343,6 +2367,7 @@ build_runtime_a_from_source() {
             if [ -n "$_rnsc_err" ]; then
                 [ "$_rnsc_mode" = "1" ] && { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCMP FATAL (strict): $_rnsc_err" >&2; return 1; }
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCMP WARN: $_rnsc_err — FALLBACK-SHIM (retaining libc strcmp member; strcmp stays UND in the nm floor)" >&2
+            fi
             fi
         fi
         # ── RFC061 §M8 RT-NATIVE-STRTOLL (frozen seed-consume · pure byte-walk parse leaf, default OFF) ──
