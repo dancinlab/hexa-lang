@@ -820,7 +820,7 @@ pub fn bt_search_captures(prog: BtProg, s: string) -> [int] {
     let ctr = [0, prog.max_steps, 0]
     let mut start = 0
     while start <= n {
-        let caps = _bt_fill(2 * (prog.ngroups + 1), -1)
+        let mut caps = _bt_fill(2 * (prog.ngroups + 1), -1)
         let r = _bt_run(prog, caps, ctr, [prog.root], s, start, n)
         if ctr[2] == 1 { prog.st[0] = 1; return [] }
         if r >= 0 {
