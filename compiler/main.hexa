@@ -181,6 +181,7 @@ fn print_help() {
     println("  --error-format=MODE    pretty | short | json | github (default: pretty)")
     println("  --linker=KIND          hexa | system     (default: system; hexa=in-tree hexa_ld: arm64-darwin Mach-O via $HEXA_LD, x86_64-linux static ELF ET_EXEC via own-start _start — no crt1.o/-lc/ld)")
     println("  --keep-global=LIST     comma-list of symbols kept STB_GLOBAL in --emit=obj native ELF output; all other defined fns demoted to STB_LOCAL (own objcopy --keep-global-symbol)")
+    println("  --isolate              with --keep-global= + --emit=obj: prune to the keeplist-reachable fn closure (carrier-boundary cut) so the .o's only undefs are carrier syms (own isolate_native_seed.py)")
     println("  --opt=LEVEL            0 | 1 | 2 | 3     (default: 0, or $HEXA_OPT_LEVEL)")
     println("  --stream               fused per-function codegen (lower RSS; arm64, no --opt)")
     println("  --keep-temp            do not remove the per-build intermediate dir (default: off)")
@@ -442,6 +443,12 @@ let mut shared_flag = false
 // comma-list captured here; split into keep_globals after the parse
 // loop (order-independent vs --emit=).
 let mut keep_global_arg = ""
+// axis-② A1 frozen-seed isolation — `--isolate` (boolean, valid only with
+// --emit=obj + --keep-global=): prune lm.funcs to the keeplist-reachable closure
+// (carrier-boundary cut) before pack, so own-emit matches isolate_native_seed.py's
+// 0-non-carrier-undef seed. SEPARATE flag (not a --keep-global semantics change) —
+// the 17 wired libm/objcopy members keep their keep-all-bodies semantics.
+let mut isolate_flag = false
 let mut ai = 0
 while ai < len(user_argv) {
     let a = user_argv[ai]
@@ -473,6 +480,9 @@ while ai < len(user_argv) {
         ai = ai + 1
     } else if len(a) >= 14 && a.substring(0, 14) == "--keep-global=" {
         keep_global_arg = a.substring(14, len(a))
+        ai = ai + 1
+    } else if a == "--isolate" {
+        isolate_flag = true
         ai = ai + 1
     } else if len(a) >= 10 && a.substring(0, 10) == "--backend=" {
         // S7 P0 — `--backend=native` routes `--emit=obj` through the
@@ -1077,7 +1087,9 @@ if stream_mode && target == "arm64-apple-darwin" {
     // relocs. Default arm64-apple-darwin stays Mach-O (guarded above),
     // byte-identical.
     if (emit_kind == "obj" || emit_kind == "exec") && backend_kind == "native" && target == "arm64-linux-gnu" {
-        let elf_obj0 = pack_lir_arm64_elf(lmodule)
+        // axis-② A1 isolation — see the x86_64 twin; flag-gated pass-through.
+        let lmodule_iso = if isolate_flag { isolate_lmodule_arm64_elf(lmodule, keep_globals) } else { lmodule }
+        let elf_obj0 = pack_lir_arm64_elf(lmodule_iso)
         // axis-② E4 — see the x86_64 twin; pass-through when empty.
         let elf_obj = demote_nonkeep_to_local_arm64(elf_obj0, keep_globals)
         let elf_bytes = serialize_elf_arm64(elf_obj)
@@ -1114,7 +1126,13 @@ if stream_mode && target == "arm64-apple-darwin" {
     // mirrors it byte-for-byte in structure. Closes SELFHOST-NEXT
     // "multi-target bootstrap: x86_64 codegen path".
     if (emit_kind == "obj" || emit_kind == "exec") && backend_kind == "native" && target == "x86_64-linux-gnu" {
-        let elf_obj0 = pack_lir_x86_64(lmodule)
+        // axis-② A1 isolation — under --isolate, prune lmodule to the keeplist-
+        // reachable closure (carrier-boundary cut) BEFORE packing, so own-emit
+        // matches isolate_native_seed.py's 0-non-carrier-undef seed. Flag-gated:
+        // isolate_flag is false everywhere except --emit=obj --keep-global= --isolate,
+        // so exec/own-link and all existing obj emits pass the raw lmodule (byte-neutral).
+        let lmodule_iso = if isolate_flag { isolate_lmodule_x86_64(lmodule, keep_globals) } else { lmodule }
+        let elf_obj0 = pack_lir_x86_64(lmodule_iso)
         cg_profile_mark("x86_pack_lir")
         // axis-② E4 — demote non-keeplist fn globals to STB_LOCAL.
         // keep_globals is non-empty ONLY under --emit=obj --keep-global=

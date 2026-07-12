@@ -77,3 +77,14 @@ Gate arithmetic the pool number plugs into:
   **DECISION INPUT = FD_HEUR (+ triaged PP_INVOLVED) on the REAL corpus only.**
   == 0  → B4 warn→error GO (behind @grace, byteeq 3-target).
   >  0  → B4 stays WARN (honest terminal); land field place-projection first, re-census.
+---
+## ★ B4 CENSUS 판정 (실측·census2 timeout판·2026-07-13·결과=state/hexa-own/l5_b4_precensus_result.txt)
+
+**run-validity VALID**: ADV_TP_LIVENESS=2(>0✓ census 살아있음)·ADV_CLEAN_OVERFIRE=0(✓ 비-FD 정밀결함 無).
+
+**게이트 넘버**: REAL-corpus field-disjoint FP = **3**(FD_HEURISTIC·WHOLE=0) — 전부 `stdlib/kernels/logic_synth/passes.hexa:3331-3333`(read `[str]` / write `.push`·`.connect_lhs/rhs`·`[ti]`·둘다 projected·disjoint token). ADV_FD_CONFIRMED_FP=7(adversarial·by-construction·예상). B4_GATE_FIELD_DISJOINT_TOTAL=10. WOULD_MOVE=84·HX3014=21. 8파일 timeout-SKIP(#4901 가드·infra 격리).
+
+**B4 판정 = NO-GO → WARN 유지(정직 terminal)**: 게이트 바 "REAL-corpus FD-FP==정확히 0"인데 **3 발견** → B4-error면 안전한 field-disjoint 코드(passes.hexa 3곳) 빌드거부=release-integrity 위반. B3(default-ON warn·#4891)은 이미 출하 중이라 버그류를 advisory로 노출(빌드거부 0비용). 
+
+**PREREQ(B4-error 가능 조건)**: field place-projection ceiling lift — `_bck_w_projs` push-only parallel array로 write-site field token 포착 + Rule1(`_bck_check_use`)/`_bck_nll_check` gate를 write-proj==read-proj일 때만 arm(빈 proj=whole-value·오늘처럼 arm). FIELD-disjoint FEASIBLE(frozen-seed-safe·기존 parallel-array 관용구)·ELEMENT-disjoint(dynamic index)는 PARTIAL(잔여 FP). byteeq 3-target·default-OFF→flip. 착륙 후 재센서스→REAL FD==0 확인→@grace로 B4-error flip. 
+- ★place-projection이 3 real FP(passes.hexa)를 정확히 해소하는지가 다음 라운드 검증 타깃.
