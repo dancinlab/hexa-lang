@@ -75,8 +75,7 @@ ABI fits neither pair-model nor Route C all-raw; the named next wall = a per-par
 2. ✅ `tool/build_aprime.sh:630` `RTCORE_MAP_QUERY_DISPATCH_DEF` also sets `..._CONTAINS_NATIVE=1`.
 3. ✅ `tool/stage_resolve_runtime_a` `resolve_native_map_query_seed()`: own-obj first + `.s`-seed fallback; consumption
    `$rt_mapq_def` on the runtime_core.o compile + `extra_obj += map_query_native.o`. Default-OFF byte-neutral.
-4. ✅ 3-target `.s` seeds baked + committed (`self/native/map_query_{x86_64,arm64,arm64-linux}.s`, 8 globl each;
-   x86_64 cross-assemble-verified 8/8 T + U-floor clean).
+4. `.s` seeds baked (3-target, x86_64 cross-assemble-verified 8/8 T) but **REVERTED, not committed** — see wall below.
 
 **Two REAL bugs caught + fixed via ship-shape verification (the convergence-warned false-green class):**
 - `.s`-seed assemble referenced `$_mo_archflag` (unbound outside the MULTIOBJ block → `set -u` abort). Dropped it
@@ -87,17 +86,25 @@ ABI fits neither pair-model nor Route C all-raw; the named next wall = a per-par
 - **Verified summer, BOTH shapes** (single-TU + MULTIOBJ ship): each of the 8 `hexa_map_*` defined **exactly once**
   (seed only, dropped from runtime_core.c), contains_key stays inline (1 T), **NO dup / no multidef**.
 
-**Flip default-ON — GATED on ship CI (structural PROVEN; behavioral = ship oracle):**
-- STRUCTURAL (drop + no-multidef, both shapes) = PROVEN above. Seed emit 8/8 T + U-floor clean.
-- LINK-CONTRACT EQUIVALENCE: the C `hexa_map_*` bodies **also** delegate via `extern rt_map_*_pred/rt_map_keys…`
-  (runtime_core.c) — the 8 delegates are `U` (program-side stdlib `numeric.hexa`) in runtime.a, NOT `T`. So the
-  seed has the **identical** link contract as the C bodies (no new dependency class); in the real `hexa build`
-  (program + full stdlib) OFF and ON resolve the delegates identically.
-- BEHAVIORAL RUN-parity: a hand-built `clang corpus.o + runtime.a` link is an **unreliable oracle** — aprime's
-  stdlib-DCE emits different delegate subsets per corpus, so a 3-method corpus can't A/B the monolithic seed's
-  8-delegate drag (verdict-integrity: suspect the harness). The **authoritative** behavioral oracle = the PR's
-  `own-link corpus parity` + `cfallback-zero census` CI (real toolchain). Flip default-ON only after byteeq
-  3-target GREEN + `own-link corpus parity` GREEN + shipping smoke.
+**🧱 FLIP WALL — seed is NOT isolated (delegate-availability) + seed-presence auto-enables (2026-07-13, CI-measured):**
+- **Committing the `.s` seeds is NOT byte-neutral.** `resolve_native_map_query_seed` treats seed-file PRESENCE as
+  auto-enable (`[ "${HEXA_RT_MAP_QUERY_NATIVE:-x}" = "0" ]` → unset PROCEEDS → assembles seed → exports `=1`), same
+  as every shipped family. So committing the seeds flipped the feature ON in every CI job (selfhost-codegen-guard,
+  miscompile-zero, grace-consent all logged `HEXA_RT_MAP_QUERY_NATIVE=1; ar'ing map_query_native.o`).
+- **And the flip is broken:** the seed's 8 `rt_map_*` delegates are program-side stdlib (`numeric.hexa`) symbols —
+  `U` in runtime.a, **not `T`**. Any **runtime.a-ONLY link** (the grace-consent checker binary; any minimal consumer
+  that isn't a full stdlib program) fails: `build/runtime.a(map_query_native.o): undefined reference to rt_map_keys`.
+  The C bodies had the SAME `extern rt_map_*` refs, but in the C build those live in the big runtime_core.o TU whose
+  own stdlib-carrier resolves them; the standalone seed .o has no such carrier. My earlier "U-floor clean (10 externs)"
+  was WRONG to call ship-ready — those 10 externs BREAK the ship link, they don't pass it.
+- **FIX (named next round):** the seed must be **isolated to zero non-libc undefined externals** — i.e. compile
+  map_query.hexa **together with** its `rt_map_*` delegate bodies (numeric.hexa) into ONE self-contained seed .o,
+  exactly as the shipped string/mem seeds were isolated via `tool/isolate_native_seed.py` (convergence
+  `stage-resolve-runtime-a-3`: isolated seed = ZERO undefined externals, cross-target-clean). Then re-bake 3-target,
+  gate on `nm seed.o | grep ' U ' == libc-carrier-only`, re-commit, verify byteeq 3-target + `own-link corpus parity`
+  GREEN → flip. Until then the seeds stay OUT of tree (they auto-enable a broken flip).
+- STRUCTURAL drop + no-multidef (both single-TU + MULTIOBJ shapes) remains PROVEN; that half is done. The wall is
+  seed self-sufficiency, not the drop mechanism.
 Then Tier-1 #2 (valop eqtruthy) + #3 (array typed-leaf). `_Static_assert(offsetof(HexaMapTable,len)==40)` = still-TODO tripwire.
 
 Full census/synthesis: Workflow journal `subagents/workflows/wf_aa30b431-930/journal.jsonl`;
