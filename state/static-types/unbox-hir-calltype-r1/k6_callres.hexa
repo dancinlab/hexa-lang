@@ -1,0 +1,27 @@
+// k6_callres — L4 unboxing round-1 (HEXA_UNBOX_HIR_CALLTYPE).
+//
+// A builtin-method call RESULT (`xs.len()` → i64) used as an int operand in a
+// hot loop — the exact plumbing gap this round closes. Mirrors the k1-k5
+// single-`main` hot-loop kernel shape (state/unbox-infer-r1/k1_sum.hexa,
+// state/unbox-native-r{5,6}/measure*.sh) so the same OFF-vs-ON native-emit
+// call-count harness runs it.
+//
+//   • flag OFF: ast_to_hir leaves the `.len()` result typ "?" → MIR type_id 0
+//     → `_x86_operand_provably_int` (x86_64_linux.hexa:1613) rejects the
+//     operand → `xs.len() * i` (and thus the outer `s + …` add) stay BOXED
+//     (`call hexa_mul` / `call hexa_add` emitted).
+//   • flag ON: the checker-mirror table (ast_to_hir::_hir_builtin_method_ret_prim)
+//     stamps i64 → type_id 1 → both binops take the ALREADY-measured native
+//     unbox ALU path → the hexa_mul / hexa_add call-count DROPS.
+//
+// Output MUST be identical OFF vs ON (parity gate). N=1e8, len=8 ⇒
+// s = 8·Σi ≈ 4e16 < i64 max — no overflow, deterministic on both paths.
+fn main() {
+    let xs: [i64] = [3, 1, 4, 1, 5, 9, 2, 6]
+    let mut s = 0
+    let N = 100000000
+    for i in 0..N {
+        s = s + xs.len() * i
+    }
+    println(s)
+}
