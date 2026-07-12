@@ -26,7 +26,7 @@ bt_needs_backtrack:
     mov x29, sp // prologue: set fp
     sub sp, sp, #1312 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd_bt_needs_backtrack_bb0:
+_Lfd34_bt_needs_backtrack_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_byte_len // call hexa_byte_len
     stp x0, x1, [sp, #16] // hv store L1
@@ -35,16 +35,16 @@ _Lb2dd_bt_needs_backtrack_bb0:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd_bt_needs_backtrack_bb1 // branch
-_Lb2dd_bt_needs_backtrack_bb1:
+    b _Lfd34_bt_needs_backtrack_bb1 // branch
+_Lfd34_bt_needs_backtrack_bb1:
     ldp x0, x1, [sp, #48] // hv load L3
     ldp x2, x3, [sp, #32] // hv load L2
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb3 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb2 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb2:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb3 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb2 // branch -> then
+_Lfd34_bt_needs_backtrack_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #48] // hv load L3
     bl hexa_str_byte_at // call hexa_str_byte_at
@@ -57,15 +57,15 @@ _Lb2dd_bt_needs_backtrack_bb2:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb5 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb4 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb3:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb5 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb4 // branch -> then
+_Lfd34_bt_needs_backtrack_bb3:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     add sp, sp, #1312 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_needs_backtrack_bb4:
+_Lfd34_bt_needs_backtrack_bb4:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -76,18 +76,18 @@ _Lb2dd_bt_needs_backtrack_bb4:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv load L10
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb7 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb6 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb5:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb7 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb6 // branch -> then
+_Lfd34_bt_needs_backtrack_bb5:
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #91 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #320] // hv store L20
     ldp x0, x1, [sp, #320] // hv load L20
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb14 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb13 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb6:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb14 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb13 // branch -> then
+_Lfd34_bt_needs_backtrack_bb6:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -105,9 +105,9 @@ _Lb2dd_bt_needs_backtrack_bb6:
     bl hexa_cmp_ge // binop >=
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv load L15
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb9 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb8 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb7:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb9 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb8 // branch -> then
+_Lfd34_bt_needs_backtrack_bb7:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -115,8 +115,8 @@ _Lb2dd_bt_needs_backtrack_bb7:
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv load L19
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd_bt_needs_backtrack_bb1 // branch
-_Lb2dd_bt_needs_backtrack_bb8:
+    b _Lfd34_bt_needs_backtrack_bb1 // branch
+_Lfd34_bt_needs_backtrack_bb8:
     ldp x0, x1, [sp, #224] // hv load L14
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #57 // hv const_int val
@@ -124,24 +124,24 @@ _Lb2dd_bt_needs_backtrack_bb8:
     stp x0, x1, [sp, #272] // hv store L17
     ldp x0, x1, [sp, #272] // hv load L17
     stp x0, x1, [sp, #256] // hv store L16
-    b _Lb2dd_bt_needs_backtrack_bb10 // branch
-_Lb2dd_bt_needs_backtrack_bb9:
+    b _Lfd34_bt_needs_backtrack_bb10 // branch
+_Lfd34_bt_needs_backtrack_bb9:
     ldp x0, x1, [sp, #240] // hv load L15
     stp x0, x1, [sp, #256] // hv store L16
-    b _Lb2dd_bt_needs_backtrack_bb10 // branch
-_Lb2dd_bt_needs_backtrack_bb10:
+    b _Lfd34_bt_needs_backtrack_bb10 // branch
+_Lfd34_bt_needs_backtrack_bb10:
     ldp x0, x1, [sp, #256] // hv load L16
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb12 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb11 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb11:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb12 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb11 // branch -> then
+_Lfd34_bt_needs_backtrack_bb11:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
     add sp, sp, #1312 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_needs_backtrack_bb12:
-    b _Lb2dd_bt_needs_backtrack_bb7 // branch
-_Lb2dd_bt_needs_backtrack_bb13:
+_Lfd34_bt_needs_backtrack_bb12:
+    b _Lfd34_bt_needs_backtrack_bb7 // branch
+_Lfd34_bt_needs_backtrack_bb13:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -154,9 +154,9 @@ _Lb2dd_bt_needs_backtrack_bb13:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #368] // hv store L23
     ldp x0, x1, [sp, #368] // hv load L23
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb16 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb15 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb14:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb16 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb15 // branch -> then
+_Lfd34_bt_needs_backtrack_bb14:
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #40 // hv const_int val
@@ -165,9 +165,9 @@ _Lb2dd_bt_needs_backtrack_bb14:
     stp x0, x1, [x15] // hv store L47
     add x15, sp, #752 // hv frame base
     ldp x0, x1, [x15] // hv load L47
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb37 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb36 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb15:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb37 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb36 // branch -> then
+_Lfd34_bt_needs_backtrack_bb15:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #48] // hv load L3
     bl hexa_str_byte_at // call hexa_str_byte_at
@@ -179,16 +179,16 @@ _Lb2dd_bt_needs_backtrack_bb15:
     stp x0, x1, [sp, #416] // hv store L26
     ldp x0, x1, [sp, #416] // hv load L26
     stp x0, x1, [sp, #384] // hv store L24
-    b _Lb2dd_bt_needs_backtrack_bb17 // branch
-_Lb2dd_bt_needs_backtrack_bb16:
+    b _Lfd34_bt_needs_backtrack_bb17 // branch
+_Lfd34_bt_needs_backtrack_bb16:
     ldp x0, x1, [sp, #368] // hv load L23
     stp x0, x1, [sp, #384] // hv store L24
-    b _Lb2dd_bt_needs_backtrack_bb17 // branch
-_Lb2dd_bt_needs_backtrack_bb17:
+    b _Lfd34_bt_needs_backtrack_bb17 // branch
+_Lfd34_bt_needs_backtrack_bb17:
     ldp x0, x1, [sp, #384] // hv load L24
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb19 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb18 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb18:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb19 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb18 // branch -> then
+_Lfd34_bt_needs_backtrack_bb18:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -196,16 +196,16 @@ _Lb2dd_bt_needs_backtrack_bb18:
     stp x0, x1, [sp, #448] // hv store L28
     ldp x0, x1, [sp, #448] // hv load L28
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd_bt_needs_backtrack_bb19 // branch
-_Lb2dd_bt_needs_backtrack_bb19:
+    b _Lfd34_bt_needs_backtrack_bb19 // branch
+_Lfd34_bt_needs_backtrack_bb19:
     ldp x0, x1, [sp, #48] // hv load L3
     ldp x2, x3, [sp, #32] // hv load L2
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #464] // hv store L29
     ldp x0, x1, [sp, #464] // hv load L29
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb21 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb20 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb20:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb21 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb20 // branch -> then
+_Lfd34_bt_needs_backtrack_bb20:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #48] // hv load L3
     bl hexa_str_byte_at // call hexa_str_byte_at
@@ -219,16 +219,16 @@ _Lb2dd_bt_needs_backtrack_bb20:
     add x15, sp, #512 // hv frame base
     ldp x0, x1, [x15] // hv load L32
     stp x0, x1, [sp, #480] // hv store L30
-    b _Lb2dd_bt_needs_backtrack_bb22 // branch
-_Lb2dd_bt_needs_backtrack_bb21:
+    b _Lfd34_bt_needs_backtrack_bb22 // branch
+_Lfd34_bt_needs_backtrack_bb21:
     ldp x0, x1, [sp, #464] // hv load L29
     stp x0, x1, [sp, #480] // hv store L30
-    b _Lb2dd_bt_needs_backtrack_bb22 // branch
-_Lb2dd_bt_needs_backtrack_bb22:
+    b _Lfd34_bt_needs_backtrack_bb22 // branch
+_Lfd34_bt_needs_backtrack_bb22:
     ldp x0, x1, [sp, #480] // hv load L30
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb24 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb23 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb23:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb24 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb23 // branch -> then
+_Lfd34_bt_needs_backtrack_bb23:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -238,10 +238,10 @@ _Lb2dd_bt_needs_backtrack_bb23:
     add x15, sp, #544 // hv frame base
     ldp x0, x1, [x15] // hv load L34
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd_bt_needs_backtrack_bb24 // branch
-_Lb2dd_bt_needs_backtrack_bb24:
-    b _Lb2dd_bt_needs_backtrack_bb25 // branch
-_Lb2dd_bt_needs_backtrack_bb25:
+    b _Lfd34_bt_needs_backtrack_bb24 // branch
+_Lfd34_bt_needs_backtrack_bb24:
+    b _Lfd34_bt_needs_backtrack_bb25 // branch
+_Lfd34_bt_needs_backtrack_bb25:
     ldp x0, x1, [sp, #48] // hv load L3
     ldp x2, x3, [sp, #32] // hv load L2
     bl hexa_cmp_lt // binop <
@@ -249,9 +249,9 @@ _Lb2dd_bt_needs_backtrack_bb25:
     stp x0, x1, [x15] // hv store L35
     add x15, sp, #560 // hv frame base
     ldp x0, x1, [x15] // hv load L35
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb29 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb28 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb26:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb29 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb28 // branch -> then
+_Lfd34_bt_needs_backtrack_bb26:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #48] // hv load L3
     bl hexa_str_byte_at // call hexa_str_byte_at
@@ -266,9 +266,9 @@ _Lb2dd_bt_needs_backtrack_bb26:
     stp x0, x1, [x15] // hv store L40
     add x15, sp, #640 // hv frame base
     ldp x0, x1, [x15] // hv load L40
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb32 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb31 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb27:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb32 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb31 // branch -> then
+_Lfd34_bt_needs_backtrack_bb27:
     ldp x0, x1, [sp, #48] // hv load L3
     ldp x2, x3, [sp, #32] // hv load L2
     bl hexa_cmp_lt // binop <
@@ -276,9 +276,9 @@ _Lb2dd_bt_needs_backtrack_bb27:
     stp x0, x1, [x15] // hv store L44
     add x15, sp, #704 // hv frame base
     ldp x0, x1, [x15] // hv load L44
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb35 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb34 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb28:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb35 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb34 // branch -> then
+_Lfd34_bt_needs_backtrack_bb28:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #48] // hv load L3
     bl hexa_str_byte_at // call hexa_str_byte_at
@@ -298,19 +298,19 @@ _Lb2dd_bt_needs_backtrack_bb28:
     ldp x0, x1, [x15] // hv load L38
     add x15, sp, #576 // hv frame base
     stp x0, x1, [x15] // hv store L36
-    b _Lb2dd_bt_needs_backtrack_bb30 // branch
-_Lb2dd_bt_needs_backtrack_bb29:
+    b _Lfd34_bt_needs_backtrack_bb30 // branch
+_Lfd34_bt_needs_backtrack_bb29:
     add x15, sp, #560 // hv frame base
     ldp x0, x1, [x15] // hv load L35
     add x15, sp, #576 // hv frame base
     stp x0, x1, [x15] // hv store L36
-    b _Lb2dd_bt_needs_backtrack_bb30 // branch
-_Lb2dd_bt_needs_backtrack_bb30:
+    b _Lfd34_bt_needs_backtrack_bb30 // branch
+_Lfd34_bt_needs_backtrack_bb30:
     add x15, sp, #576 // hv frame base
     ldp x0, x1, [x15] // hv load L36
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb27 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb26 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb31:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb27 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb26 // branch -> then
+_Lfd34_bt_needs_backtrack_bb31:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -320,8 +320,8 @@ _Lb2dd_bt_needs_backtrack_bb31:
     add x15, sp, #672 // hv frame base
     ldp x0, x1, [x15] // hv load L42
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd_bt_needs_backtrack_bb33 // branch
-_Lb2dd_bt_needs_backtrack_bb32:
+    b _Lfd34_bt_needs_backtrack_bb33 // branch
+_Lfd34_bt_needs_backtrack_bb32:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -331,10 +331,10 @@ _Lb2dd_bt_needs_backtrack_bb32:
     add x15, sp, #688 // hv frame base
     ldp x0, x1, [x15] // hv load L43
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd_bt_needs_backtrack_bb33 // branch
-_Lb2dd_bt_needs_backtrack_bb33:
-    b _Lb2dd_bt_needs_backtrack_bb25 // branch
-_Lb2dd_bt_needs_backtrack_bb34:
+    b _Lfd34_bt_needs_backtrack_bb33 // branch
+_Lfd34_bt_needs_backtrack_bb33:
+    b _Lfd34_bt_needs_backtrack_bb25 // branch
+_Lfd34_bt_needs_backtrack_bb34:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -344,10 +344,10 @@ _Lb2dd_bt_needs_backtrack_bb34:
     add x15, sp, #736 // hv frame base
     ldp x0, x1, [x15] // hv load L46
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd_bt_needs_backtrack_bb35 // branch
-_Lb2dd_bt_needs_backtrack_bb35:
-    b _Lb2dd_bt_needs_backtrack_bb1 // branch
-_Lb2dd_bt_needs_backtrack_bb36:
+    b _Lfd34_bt_needs_backtrack_bb35 // branch
+_Lfd34_bt_needs_backtrack_bb35:
+    b _Lfd34_bt_needs_backtrack_bb1 // branch
+_Lfd34_bt_needs_backtrack_bb36:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -364,19 +364,19 @@ _Lb2dd_bt_needs_backtrack_bb36:
     ldp x0, x1, [x15] // hv load L50
     add x15, sp, #768 // hv frame base
     stp x0, x1, [x15] // hv store L48
-    b _Lb2dd_bt_needs_backtrack_bb38 // branch
-_Lb2dd_bt_needs_backtrack_bb37:
+    b _Lfd34_bt_needs_backtrack_bb38 // branch
+_Lfd34_bt_needs_backtrack_bb37:
     add x15, sp, #752 // hv frame base
     ldp x0, x1, [x15] // hv load L47
     add x15, sp, #768 // hv frame base
     stp x0, x1, [x15] // hv store L48
-    b _Lb2dd_bt_needs_backtrack_bb38 // branch
-_Lb2dd_bt_needs_backtrack_bb38:
+    b _Lfd34_bt_needs_backtrack_bb38 // branch
+_Lfd34_bt_needs_backtrack_bb38:
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv load L48
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb40 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb39 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb39:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb40 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb39 // branch -> then
+_Lfd34_bt_needs_backtrack_bb39:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -400,19 +400,19 @@ _Lb2dd_bt_needs_backtrack_bb39:
     ldp x0, x1, [x15] // hv load L54
     add x15, sp, #816 // hv frame base
     stp x0, x1, [x15] // hv store L51
-    b _Lb2dd_bt_needs_backtrack_bb41 // branch
-_Lb2dd_bt_needs_backtrack_bb40:
+    b _Lfd34_bt_needs_backtrack_bb41 // branch
+_Lfd34_bt_needs_backtrack_bb40:
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv load L48
     add x15, sp, #816 // hv frame base
     stp x0, x1, [x15] // hv store L51
-    b _Lb2dd_bt_needs_backtrack_bb41 // branch
-_Lb2dd_bt_needs_backtrack_bb41:
+    b _Lfd34_bt_needs_backtrack_bb41 // branch
+_Lfd34_bt_needs_backtrack_bb41:
     add x15, sp, #816 // hv frame base
     ldp x0, x1, [x15] // hv load L51
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb43 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb42 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb42:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb43 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb42 // branch -> then
+_Lfd34_bt_needs_backtrack_bb42:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -427,9 +427,9 @@ _Lb2dd_bt_needs_backtrack_bb42:
     stp x0, x1, [x15] // hv store L57
     add x15, sp, #912 // hv frame base
     ldp x0, x1, [x15] // hv load L57
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb45 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb44 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb43:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb45 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb44 // branch -> then
+_Lfd34_bt_needs_backtrack_bb43:
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #123 // hv const_int val
@@ -438,9 +438,9 @@ _Lb2dd_bt_needs_backtrack_bb43:
     stp x0, x1, [x15] // hv store L68
     add x15, sp, #1088 // hv frame base
     ldp x0, x1, [x15] // hv load L68
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb55 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb54 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb44:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb55 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb54 // branch -> then
+_Lfd34_bt_needs_backtrack_bb44:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -466,17 +466,17 @@ _Lb2dd_bt_needs_backtrack_bb44:
     stp x0, x1, [x15] // hv store L62
     add x15, sp, #992 // hv frame base
     ldp x0, x1, [x15] // hv load L62
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb47 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb46 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb45:
-    b _Lb2dd_bt_needs_backtrack_bb43 // branch
-_Lb2dd_bt_needs_backtrack_bb46:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb47 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb46 // branch -> then
+_Lfd34_bt_needs_backtrack_bb45:
+    b _Lfd34_bt_needs_backtrack_bb43 // branch
+_Lfd34_bt_needs_backtrack_bb46:
     add x15, sp, #992 // hv frame base
     ldp x0, x1, [x15] // hv load L62
     add x15, sp, #1008 // hv frame base
     stp x0, x1, [x15] // hv store L63
-    b _Lb2dd_bt_needs_backtrack_bb48 // branch
-_Lb2dd_bt_needs_backtrack_bb47:
+    b _Lfd34_bt_needs_backtrack_bb48 // branch
+_Lfd34_bt_needs_backtrack_bb47:
     add x15, sp, #976 // hv frame base
     ldp x0, x1, [x15] // hv load L61
     movz x2, #0 // hv const_int: TAG_INT
@@ -488,19 +488,19 @@ _Lb2dd_bt_needs_backtrack_bb47:
     ldp x0, x1, [x15] // hv load L64
     add x15, sp, #1008 // hv frame base
     stp x0, x1, [x15] // hv store L63
-    b _Lb2dd_bt_needs_backtrack_bb48 // branch
-_Lb2dd_bt_needs_backtrack_bb48:
+    b _Lfd34_bt_needs_backtrack_bb48 // branch
+_Lfd34_bt_needs_backtrack_bb48:
     add x15, sp, #1008 // hv frame base
     ldp x0, x1, [x15] // hv load L63
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb50 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb49 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb49:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb50 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb49 // branch -> then
+_Lfd34_bt_needs_backtrack_bb49:
     add x15, sp, #1008 // hv frame base
     ldp x0, x1, [x15] // hv load L63
     add x15, sp, #1040 // hv frame base
     stp x0, x1, [x15] // hv store L65
-    b _Lb2dd_bt_needs_backtrack_bb51 // branch
-_Lb2dd_bt_needs_backtrack_bb50:
+    b _Lfd34_bt_needs_backtrack_bb51 // branch
+_Lfd34_bt_needs_backtrack_bb50:
     add x15, sp, #976 // hv frame base
     ldp x0, x1, [x15] // hv load L61
     movz x2, #0 // hv const_int: TAG_INT
@@ -512,21 +512,21 @@ _Lb2dd_bt_needs_backtrack_bb50:
     ldp x0, x1, [x15] // hv load L66
     add x15, sp, #1040 // hv frame base
     stp x0, x1, [x15] // hv store L65
-    b _Lb2dd_bt_needs_backtrack_bb51 // branch
-_Lb2dd_bt_needs_backtrack_bb51:
+    b _Lfd34_bt_needs_backtrack_bb51 // branch
+_Lfd34_bt_needs_backtrack_bb51:
     add x15, sp, #1040 // hv frame base
     ldp x0, x1, [x15] // hv load L65
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb53 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb52 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb52:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb53 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb52 // branch -> then
+_Lfd34_bt_needs_backtrack_bb52:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
     add sp, sp, #1312 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_needs_backtrack_bb53:
-    b _Lb2dd_bt_needs_backtrack_bb45 // branch
-_Lb2dd_bt_needs_backtrack_bb54:
+_Lfd34_bt_needs_backtrack_bb53:
+    b _Lfd34_bt_needs_backtrack_bb45 // branch
+_Lfd34_bt_needs_backtrack_bb54:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -543,19 +543,19 @@ _Lb2dd_bt_needs_backtrack_bb54:
     ldp x0, x1, [x15] // hv load L71
     add x15, sp, #1104 // hv frame base
     stp x0, x1, [x15] // hv store L69
-    b _Lb2dd_bt_needs_backtrack_bb56 // branch
-_Lb2dd_bt_needs_backtrack_bb55:
+    b _Lfd34_bt_needs_backtrack_bb56 // branch
+_Lfd34_bt_needs_backtrack_bb55:
     add x15, sp, #1088 // hv frame base
     ldp x0, x1, [x15] // hv load L68
     add x15, sp, #1104 // hv frame base
     stp x0, x1, [x15] // hv store L69
-    b _Lb2dd_bt_needs_backtrack_bb56 // branch
-_Lb2dd_bt_needs_backtrack_bb56:
+    b _Lfd34_bt_needs_backtrack_bb56 // branch
+_Lfd34_bt_needs_backtrack_bb56:
     add x15, sp, #1104 // hv frame base
     ldp x0, x1, [x15] // hv load L69
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb58 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb57 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb57:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb58 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb57 // branch -> then
+_Lfd34_bt_needs_backtrack_bb57:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -579,19 +579,19 @@ _Lb2dd_bt_needs_backtrack_bb57:
     ldp x0, x1, [x15] // hv load L75
     add x15, sp, #1152 // hv frame base
     stp x0, x1, [x15] // hv store L72
-    b _Lb2dd_bt_needs_backtrack_bb59 // branch
-_Lb2dd_bt_needs_backtrack_bb58:
+    b _Lfd34_bt_needs_backtrack_bb59 // branch
+_Lfd34_bt_needs_backtrack_bb58:
     add x15, sp, #1104 // hv frame base
     ldp x0, x1, [x15] // hv load L69
     add x15, sp, #1152 // hv frame base
     stp x0, x1, [x15] // hv store L72
-    b _Lb2dd_bt_needs_backtrack_bb59 // branch
-_Lb2dd_bt_needs_backtrack_bb59:
+    b _Lfd34_bt_needs_backtrack_bb59 // branch
+_Lfd34_bt_needs_backtrack_bb59:
     add x15, sp, #1152 // hv frame base
     ldp x0, x1, [x15] // hv load L72
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb61 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb60 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb60:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb61 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb60 // branch -> then
+_Lfd34_bt_needs_backtrack_bb60:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -615,25 +615,25 @@ _Lb2dd_bt_needs_backtrack_bb60:
     ldp x0, x1, [x15] // hv load L79
     add x15, sp, #1216 // hv frame base
     stp x0, x1, [x15] // hv store L76
-    b _Lb2dd_bt_needs_backtrack_bb62 // branch
-_Lb2dd_bt_needs_backtrack_bb61:
+    b _Lfd34_bt_needs_backtrack_bb62 // branch
+_Lfd34_bt_needs_backtrack_bb61:
     add x15, sp, #1152 // hv frame base
     ldp x0, x1, [x15] // hv load L72
     add x15, sp, #1216 // hv frame base
     stp x0, x1, [x15] // hv store L76
-    b _Lb2dd_bt_needs_backtrack_bb62 // branch
-_Lb2dd_bt_needs_backtrack_bb62:
+    b _Lfd34_bt_needs_backtrack_bb62 // branch
+_Lfd34_bt_needs_backtrack_bb62:
     add x15, sp, #1216 // hv frame base
     ldp x0, x1, [x15] // hv load L76
-    cbz x1, _Lb2dd_bt_needs_backtrack_bb64 // br_cond: !payload -> else
-    b _Lb2dd_bt_needs_backtrack_bb63 // branch -> then
-_Lb2dd_bt_needs_backtrack_bb63:
+    cbz x1, _Lfd34_bt_needs_backtrack_bb64 // br_cond: !payload -> else
+    b _Lfd34_bt_needs_backtrack_bb63 // branch -> then
+_Lfd34_bt_needs_backtrack_bb63:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
     add sp, sp, #1312 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_needs_backtrack_bb64:
+_Lfd34_bt_needs_backtrack_bb64:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -643,7 +643,7 @@ _Lb2dd_bt_needs_backtrack_bb64:
     add x15, sp, #1296 // hv frame base
     ldp x0, x1, [x15] // hv load L81
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd_bt_needs_backtrack_bb1 // branch
+    b _Lfd34_bt_needs_backtrack_bb1 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #1312 // sp adj
@@ -657,10 +657,10 @@ _bt_peek:
     mov x29, sp // prologue: set fp
     sub sp, sp, #160 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__bt_peek_bb0:
+_Lfd34__bt_peek_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr0@PAGE // cstr key page
-    add x2, x2, .LCstr0@PAGEOFF // cstr key off
+    adrp x2, .LCstr0 // cstr key page
+    add x2, x2, :lo12:.LCstr0 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
@@ -669,8 +669,8 @@ _Lb2dd__bt_peek_bb0:
     bl hexa_index_get // index: hexa_index_get
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr1@PAGE // cstr key page
-    add x2, x2, .LCstr1@PAGEOFF // cstr key off
+    adrp x2, .LCstr1 // cstr key page
+    add x2, x2, :lo12:.LCstr1 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #32] // hv load L2
@@ -678,24 +678,24 @@ _Lb2dd__bt_peek_bb0:
     bl hexa_cmp_ge // binop >=
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
-    cbz x1, _Lb2dd__bt_peek_bb2 // br_cond: !payload -> else
-    b _Lb2dd__bt_peek_bb1 // branch -> then
-_Lb2dd__bt_peek_bb1:
+    cbz x1, _Lfd34__bt_peek_bb2 // br_cond: !payload -> else
+    b _Lfd34__bt_peek_bb1 // branch -> then
+_Lfd34__bt_peek_bb1:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
     add sp, sp, #160 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_peek_bb2:
+_Lfd34__bt_peek_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr2@PAGE // cstr key page
-    add x2, x2, .LCstr2@PAGEOFF // cstr key off
+    adrp x2, .LCstr2 // cstr key page
+    add x2, x2, :lo12:.LCstr2 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr0@PAGE // cstr key page
-    add x2, x2, .LCstr0@PAGEOFF // cstr key off
+    adrp x2, .LCstr0 // cstr key page
+    add x2, x2, :lo12:.LCstr0 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
@@ -719,15 +719,15 @@ _bt_adv:
     mov x29, sp // prologue: set fp
     sub sp, sp, #80 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__bt_adv_bb0:
+_Lfd34__bt_adv_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr0@PAGE // cstr key page
-    add x2, x2, .LCstr0@PAGEOFF // cstr key off
+    adrp x2, .LCstr0 // cstr key page
+    add x2, x2, :lo12:.LCstr0 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr0@PAGE // cstr key page
-    add x2, x2, .LCstr0@PAGEOFF // cstr key off
+    adrp x2, .LCstr0 // cstr key page
+    add x2, x2, :lo12:.LCstr0 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
@@ -760,10 +760,10 @@ _bt_emit:
     sub sp, sp, #112 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd__bt_emit_bb0:
+_Lfd34__bt_emit_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
@@ -771,8 +771,8 @@ _Lb2dd__bt_emit_bb0:
     bl hexa_array_push // call hexa_array_push
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
@@ -797,16 +797,16 @@ _bt_class_for_escape:
     mov x29, sp // prologue: set fp
     sub sp, sp, #320 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__bt_class_for_escape_bb0:
+_Lfd34__bt_class_for_escape_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #100 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
-    cbz x1, _Lb2dd__bt_class_for_escape_bb2 // br_cond: !payload -> else
-    b _Lb2dd__bt_class_for_escape_bb1 // branch -> then
-_Lb2dd__bt_class_for_escape_bb1:
+    cbz x1, _Lfd34__bt_class_for_escape_bb2 // br_cond: !payload -> else
+    b _Lfd34__bt_class_for_escape_bb1 // branch -> then
+_Lfd34__bt_class_for_escape_bb1:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv reload L3
@@ -828,16 +828,16 @@ _Lb2dd__bt_class_for_escape_bb1:
     add sp, sp, #320 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_class_for_escape_bb2:
+_Lfd34__bt_class_for_escape_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #68 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
-    cbz x1, _Lb2dd__bt_class_for_escape_bb4 // br_cond: !payload -> else
-    b _Lb2dd__bt_class_for_escape_bb3 // branch -> then
-_Lb2dd__bt_class_for_escape_bb3:
+    cbz x1, _Lfd34__bt_class_for_escape_bb4 // br_cond: !payload -> else
+    b _Lfd34__bt_class_for_escape_bb3 // branch -> then
+_Lfd34__bt_class_for_escape_bb3:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv reload L6
@@ -859,16 +859,16 @@ _Lb2dd__bt_class_for_escape_bb3:
     add sp, sp, #320 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_class_for_escape_bb4:
+_Lfd34__bt_class_for_escape_bb4:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #119 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
-    cbz x1, _Lb2dd__bt_class_for_escape_bb6 // br_cond: !payload -> else
-    b _Lb2dd__bt_class_for_escape_bb5 // branch -> then
-_Lb2dd__bt_class_for_escape_bb5:
+    cbz x1, _Lfd34__bt_class_for_escape_bb6 // br_cond: !payload -> else
+    b _Lfd34__bt_class_for_escape_bb5 // branch -> then
+_Lfd34__bt_class_for_escape_bb5:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv reload L9
@@ -920,16 +920,16 @@ _Lb2dd__bt_class_for_escape_bb5:
     add sp, sp, #320 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_class_for_escape_bb6:
+_Lfd34__bt_class_for_escape_bb6:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #87 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv load L10
-    cbz x1, _Lb2dd__bt_class_for_escape_bb8 // br_cond: !payload -> else
-    b _Lb2dd__bt_class_for_escape_bb7 // branch -> then
-_Lb2dd__bt_class_for_escape_bb7:
+    cbz x1, _Lfd34__bt_class_for_escape_bb8 // br_cond: !payload -> else
+    b _Lfd34__bt_class_for_escape_bb7 // branch -> then
+_Lfd34__bt_class_for_escape_bb7:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv reload L12
@@ -981,16 +981,16 @@ _Lb2dd__bt_class_for_escape_bb7:
     add sp, sp, #320 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_class_for_escape_bb8:
+_Lfd34__bt_class_for_escape_bb8:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #115 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #208] // hv store L13
     ldp x0, x1, [sp, #208] // hv load L13
-    cbz x1, _Lb2dd__bt_class_for_escape_bb10 // br_cond: !payload -> else
-    b _Lb2dd__bt_class_for_escape_bb9 // branch -> then
-_Lb2dd__bt_class_for_escape_bb9:
+    cbz x1, _Lfd34__bt_class_for_escape_bb10 // br_cond: !payload -> else
+    b _Lfd34__bt_class_for_escape_bb9 // branch -> then
+_Lfd34__bt_class_for_escape_bb9:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv reload L15
@@ -1022,16 +1022,16 @@ _Lb2dd__bt_class_for_escape_bb9:
     add sp, sp, #320 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_class_for_escape_bb10:
+_Lfd34__bt_class_for_escape_bb10:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #83 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #256] // hv store L16
     ldp x0, x1, [sp, #256] // hv load L16
-    cbz x1, _Lb2dd__bt_class_for_escape_bb12 // br_cond: !payload -> else
-    b _Lb2dd__bt_class_for_escape_bb11 // branch -> then
-_Lb2dd__bt_class_for_escape_bb11:
+    cbz x1, _Lfd34__bt_class_for_escape_bb12 // br_cond: !payload -> else
+    b _Lfd34__bt_class_for_escape_bb11 // branch -> then
+_Lfd34__bt_class_for_escape_bb11:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #288] // hv store L18
     ldp x0, x1, [sp, #288] // hv reload L18
@@ -1063,7 +1063,7 @@ _Lb2dd__bt_class_for_escape_bb11:
     add sp, sp, #320 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_class_for_escape_bb12:
+_Lfd34__bt_class_for_escape_bb12:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv load L19
@@ -1078,67 +1078,67 @@ _bt_lit_for_escape:
     mov x29, sp // prologue: set fp
     sub sp, sp, #144 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__bt_lit_for_escape_bb0:
+_Lfd34__bt_lit_for_escape_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #110 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
-    cbz x1, _Lb2dd__bt_lit_for_escape_bb2 // br_cond: !payload -> else
-    b _Lb2dd__bt_lit_for_escape_bb1 // branch -> then
-_Lb2dd__bt_lit_for_escape_bb1:
+    cbz x1, _Lfd34__bt_lit_for_escape_bb2 // br_cond: !payload -> else
+    b _Lfd34__bt_lit_for_escape_bb1 // branch -> then
+_Lfd34__bt_lit_for_escape_bb1:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #10 // hv const_int val
     add sp, sp, #144 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_lit_for_escape_bb2:
+_Lfd34__bt_lit_for_escape_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #116 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L3
-    cbz x1, _Lb2dd__bt_lit_for_escape_bb4 // br_cond: !payload -> else
-    b _Lb2dd__bt_lit_for_escape_bb3 // branch -> then
-_Lb2dd__bt_lit_for_escape_bb3:
+    cbz x1, _Lfd34__bt_lit_for_escape_bb4 // br_cond: !payload -> else
+    b _Lfd34__bt_lit_for_escape_bb3 // branch -> then
+_Lfd34__bt_lit_for_escape_bb3:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #9 // hv const_int val
     add sp, sp, #144 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_lit_for_escape_bb4:
+_Lfd34__bt_lit_for_escape_bb4:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #114 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
-    cbz x1, _Lb2dd__bt_lit_for_escape_bb6 // br_cond: !payload -> else
-    b _Lb2dd__bt_lit_for_escape_bb5 // branch -> then
-_Lb2dd__bt_lit_for_escape_bb5:
+    cbz x1, _Lfd34__bt_lit_for_escape_bb6 // br_cond: !payload -> else
+    b _Lfd34__bt_lit_for_escape_bb5 // branch -> then
+_Lfd34__bt_lit_for_escape_bb5:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #13 // hv const_int val
     add sp, sp, #144 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_lit_for_escape_bb6:
+_Lfd34__bt_lit_for_escape_bb6:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #48 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
-    cbz x1, _Lb2dd__bt_lit_for_escape_bb8 // br_cond: !payload -> else
-    b _Lb2dd__bt_lit_for_escape_bb7 // branch -> then
-_Lb2dd__bt_lit_for_escape_bb7:
+    cbz x1, _Lfd34__bt_lit_for_escape_bb8 // br_cond: !payload -> else
+    b _Lfd34__bt_lit_for_escape_bb7 // branch -> then
+_Lfd34__bt_lit_for_escape_bb7:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     add sp, sp, #144 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_lit_for_escape_bb8:
+_Lfd34__bt_lit_for_escape_bb8:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -1155,7 +1155,7 @@ _bt_push_class:
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
     stp x4, x5, [sp, #32] // ingress param 2
-_Lb2dd__bt_push_class_bb0:
+_Lfd34__bt_push_class_bb0:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv reload L3
@@ -1167,8 +1167,8 @@ _Lb2dd__bt_push_class_bb0:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #80] // hv store L5
-    b _Lb2dd__bt_push_class_bb1 // branch
-_Lb2dd__bt_push_class_bb1:
+    b _Lfd34__bt_push_class_bb1 // branch
+_Lfd34__bt_push_class_bb1:
     ldp x0, x1, [sp, #16] // hv load L1
     bl hexa_arr_poly_len // call hexa_arr_poly_len
     sxtw x0, w0 // ret int: sign-ext
@@ -1179,9 +1179,9 @@ _Lb2dd__bt_push_class_bb1:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
-    cbz x1, _Lb2dd__bt_push_class_bb3 // br_cond: !payload -> else
-    b _Lb2dd__bt_push_class_bb2 // branch -> then
-_Lb2dd__bt_push_class_bb2:
+    cbz x1, _Lfd34__bt_push_class_bb3 // br_cond: !payload -> else
+    b _Lfd34__bt_push_class_bb2 // branch -> then
+_Lfd34__bt_push_class_bb2:
     ldp x9, x10, [sp, #80] // hv load L5
     ldp x0, x1, [sp, #16] // hv load L1
     mov x2, x10 // index: raw idx payload → x2
@@ -1198,11 +1198,11 @@ _Lb2dd__bt_push_class_bb2:
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv load L10
     stp x0, x1, [sp, #80] // hv store L5
-    b _Lb2dd__bt_push_class_bb1 // branch
-_Lb2dd__bt_push_class_bb3:
+    b _Lfd34__bt_push_class_bb1 // branch
+_Lfd34__bt_push_class_bb3:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr4@PAGE // cstr key page
-    add x2, x2, .LCstr4@PAGEOFF // cstr key off
+    adrp x2, .LCstr4 // cstr key page
+    add x2, x2, :lo12:.LCstr4 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #176] // hv load L11
@@ -1210,8 +1210,8 @@ _Lb2dd__bt_push_class_bb3:
     bl hexa_array_push // call hexa_array_push
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr4@PAGE // cstr key page
-    add x2, x2, .LCstr4@PAGEOFF // cstr key off
+    adrp x2, .LCstr4 // cstr key page
+    add x2, x2, :lo12:.LCstr4 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #208] // hv store L13
     ldp x0, x1, [sp, #208] // hv load L13
@@ -1261,7 +1261,7 @@ _bt_parse_class:
     mov x29, sp // prologue: set fp
     sub sp, sp, #1360 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__bt_parse_class_bb0:
+_Lfd34__bt_parse_class_bb0:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
@@ -1278,25 +1278,25 @@ _Lb2dd__bt_parse_class_bb0:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
-    cbz x1, _Lb2dd__bt_parse_class_bb2 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_class_bb1 // branch -> then
-_Lb2dd__bt_parse_class_bb1:
+    cbz x1, _Lfd34__bt_parse_class_bb2 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_class_bb1 // branch -> then
+_Lfd34__bt_parse_class_bb1:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // hv const_int val
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     stp x0, x1, [sp, #112] // hv store L7
-    b _Lb2dd__bt_parse_class_bb2 // branch
-_Lb2dd__bt_parse_class_bb2:
+    b _Lfd34__bt_parse_class_bb2 // branch
+_Lfd34__bt_parse_class_bb2:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
     stp x0, x1, [sp, #128] // hv store L8
-    b _Lb2dd__bt_parse_class_bb3 // branch
-_Lb2dd__bt_parse_class_bb3:
+    b _Lfd34__bt_parse_class_bb3 // branch
+_Lfd34__bt_parse_class_bb3:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr0@PAGE // cstr key page
-    add x2, x2, .LCstr0@PAGEOFF // cstr key off
+    adrp x2, .LCstr0 // cstr key page
+    add x2, x2, :lo12:.LCstr0 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv load L9
@@ -1305,8 +1305,8 @@ _Lb2dd__bt_parse_class_bb3:
     bl hexa_index_get // index: hexa_index_get
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr1@PAGE // cstr key page
-    add x2, x2, .LCstr1@PAGEOFF // cstr key off
+    adrp x2, .LCstr1 // cstr key page
+    add x2, x2, :lo12:.LCstr1 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #160] // hv load L10
@@ -1314,9 +1314,9 @@ _Lb2dd__bt_parse_class_bb3:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _Lb2dd__bt_parse_class_bb5 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_class_bb4 // branch -> then
-_Lb2dd__bt_parse_class_bb4:
+    cbz x1, _Lfd34__bt_parse_class_bb5 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_class_bb4 // branch -> then
+_Lfd34__bt_parse_class_bb4:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_peek // call _bt_peek
     stp x0, x1, [sp, #208] // hv store L13
@@ -1328,12 +1328,12 @@ _Lb2dd__bt_parse_class_bb4:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv load L15
-    cbz x1, _Lb2dd__bt_parse_class_bb7 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_class_bb6 // branch -> then
-_Lb2dd__bt_parse_class_bb5:
+    cbz x1, _Lfd34__bt_parse_class_bb7 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_class_bb6 // branch -> then
+_Lfd34__bt_parse_class_bb5:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #1344 // hv frame base
     stp x0, x1, [x15] // hv store L84
@@ -1352,7 +1352,7 @@ _Lb2dd__bt_parse_class_bb5:
     add sp, sp, #1360 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_class_bb6:
+_Lfd34__bt_parse_class_bb6:
     ldp x0, x1, [sp, #128] // hv load L8
     bl hexa_truthy // unop !: truthy → w0
     eor x0, x0, #1 // unop !: !truthy
@@ -1360,16 +1360,16 @@ _Lb2dd__bt_parse_class_bb6:
     stp x0, x1, [sp, #272] // hv store L17
     ldp x0, x1, [sp, #272] // hv load L17
     stp x0, x1, [sp, #256] // hv store L16
-    b _Lb2dd__bt_parse_class_bb8 // branch
-_Lb2dd__bt_parse_class_bb7:
+    b _Lfd34__bt_parse_class_bb8 // branch
+_Lfd34__bt_parse_class_bb7:
     ldp x0, x1, [sp, #240] // hv load L15
     stp x0, x1, [sp, #256] // hv store L16
-    b _Lb2dd__bt_parse_class_bb8 // branch
-_Lb2dd__bt_parse_class_bb8:
+    b _Lfd34__bt_parse_class_bb8 // branch
+_Lfd34__bt_parse_class_bb8:
     ldp x0, x1, [sp, #256] // hv load L16
-    cbz x1, _Lb2dd__bt_parse_class_bb10 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_class_bb9 // branch -> then
-_Lb2dd__bt_parse_class_bb9:
+    cbz x1, _Lfd34__bt_parse_class_bb10 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_class_bb9 // branch -> then
+_Lfd34__bt_parse_class_bb9:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     stp x0, x1, [sp, #304] // hv store L19
@@ -1382,7 +1382,7 @@ _Lb2dd__bt_parse_class_bb9:
     add sp, sp, #1360 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_class_bb10:
+_Lfd34__bt_parse_class_bb10:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     stp x0, x1, [sp, #128] // hv store L8
@@ -1399,9 +1399,9 @@ _Lb2dd__bt_parse_class_bb10:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #368] // hv store L23
     ldp x0, x1, [sp, #368] // hv load L23
-    cbz x1, _Lb2dd__bt_parse_class_bb12 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_class_bb11 // branch -> then
-_Lb2dd__bt_parse_class_bb11:
+    cbz x1, _Lfd34__bt_parse_class_bb12 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_class_bb11 // branch -> then
+_Lfd34__bt_parse_class_bb11:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     stp x0, x1, [sp, #400] // hv store L25
@@ -1431,23 +1431,23 @@ _Lb2dd__bt_parse_class_bb11:
     stp x0, x1, [x15] // hv store L32
     add x15, sp, #512 // hv frame base
     ldp x0, x1, [x15] // hv load L32
-    cbz x1, _Lb2dd__bt_parse_class_bb14 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_class_bb13 // branch -> then
-_Lb2dd__bt_parse_class_bb12:
+    cbz x1, _Lfd34__bt_parse_class_bb14 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_class_bb13 // branch -> then
+_Lfd34__bt_parse_class_bb12:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     add x15, sp, #768 // hv frame base
     stp x0, x1, [x15] // hv store L48
     ldp x0, x1, [sp, #224] // hv load L14
     stp x0, x1, [sp, #336] // hv store L21
-    b _Lb2dd__bt_parse_class_bb22 // branch
-_Lb2dd__bt_parse_class_bb13:
+    b _Lfd34__bt_parse_class_bb22 // branch
+_Lfd34__bt_parse_class_bb13:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // hv const_int val
     add x15, sp, #544 // hv frame base
     stp x0, x1, [x15] // hv store L34
-    b _Lb2dd__bt_parse_class_bb15 // branch
-_Lb2dd__bt_parse_class_bb14:
+    b _Lfd34__bt_parse_class_bb15 // branch
+_Lfd34__bt_parse_class_bb14:
     ldp x0, x1, [sp, #432] // hv load L27
     bl _bt_lit_for_escape // call _bt_lit_for_escape
     add x15, sp, #704 // hv frame base
@@ -1465,9 +1465,9 @@ _Lb2dd__bt_parse_class_bb14:
     stp x0, x1, [x15] // hv store L46
     add x15, sp, #736 // hv frame base
     ldp x0, x1, [x15] // hv load L46
-    cbz x1, _Lb2dd__bt_parse_class_bb19 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_class_bb18 // branch -> then
-_Lb2dd__bt_parse_class_bb15:
+    cbz x1, _Lfd34__bt_parse_class_bb19 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_class_bb18 // branch -> then
+_Lfd34__bt_parse_class_bb15:
     add x15, sp, #544 // hv frame base
     ldp x0, x1, [x15] // hv load L34
     movz x2, #0 // hv const_int: TAG_INT
@@ -1490,9 +1490,9 @@ _Lb2dd__bt_parse_class_bb15:
     stp x0, x1, [x15] // hv store L37
     add x15, sp, #592 // hv frame base
     ldp x0, x1, [x15] // hv load L37
-    cbz x1, _Lb2dd__bt_parse_class_bb17 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_class_bb16 // branch -> then
-_Lb2dd__bt_parse_class_bb16:
+    cbz x1, _Lfd34__bt_parse_class_bb17 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_class_bb16 // branch -> then
+_Lfd34__bt_parse_class_bb16:
     add x15, sp, #544 // hv frame base
     ldp x9, x10, [x15] // hv load L34
     ldp x0, x1, [sp, #480] // hv load L30
@@ -1537,26 +1537,26 @@ _Lb2dd__bt_parse_class_bb16:
     ldp x0, x1, [x15] // hv load L43
     add x15, sp, #544 // hv frame base
     stp x0, x1, [x15] // hv store L34
-    b _Lb2dd__bt_parse_class_bb15 // branch
-_Lb2dd__bt_parse_class_bb17:
+    b _Lfd34__bt_parse_class_bb15 // branch
+_Lfd34__bt_parse_class_bb17:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
     stp x0, x1, [sp, #352] // hv store L22
-    b _Lb2dd__bt_parse_class_bb21 // branch
-_Lb2dd__bt_parse_class_bb18:
+    b _Lfd34__bt_parse_class_bb21 // branch
+_Lfd34__bt_parse_class_bb18:
     add x15, sp, #720 // hv frame base
     ldp x0, x1, [x15] // hv load L45
     stp x0, x1, [sp, #336] // hv store L21
-    b _Lb2dd__bt_parse_class_bb20 // branch
-_Lb2dd__bt_parse_class_bb19:
+    b _Lfd34__bt_parse_class_bb20 // branch
+_Lfd34__bt_parse_class_bb19:
     ldp x0, x1, [sp, #432] // hv load L27
     stp x0, x1, [sp, #336] // hv store L21
-    b _Lb2dd__bt_parse_class_bb20 // branch
-_Lb2dd__bt_parse_class_bb20:
-    b _Lb2dd__bt_parse_class_bb21 // branch
-_Lb2dd__bt_parse_class_bb21:
-    b _Lb2dd__bt_parse_class_bb22 // branch
-_Lb2dd__bt_parse_class_bb22:
+    b _Lfd34__bt_parse_class_bb20 // branch
+_Lfd34__bt_parse_class_bb20:
+    b _Lfd34__bt_parse_class_bb21 // branch
+_Lfd34__bt_parse_class_bb21:
+    b _Lfd34__bt_parse_class_bb22 // branch
+_Lfd34__bt_parse_class_bb22:
     ldp x0, x1, [sp, #352] // hv load L22
     bl hexa_truthy // unop !: truthy → w0
     eor x0, x0, #1 // unop !: !truthy
@@ -1565,9 +1565,9 @@ _Lb2dd__bt_parse_class_bb22:
     stp x0, x1, [x15] // hv store L49
     add x15, sp, #784 // hv frame base
     ldp x0, x1, [x15] // hv load L49
-    cbz x1, _Lb2dd__bt_parse_class_bb24 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_class_bb23 // branch -> then
-_Lb2dd__bt_parse_class_bb23:
+    cbz x1, _Lfd34__bt_parse_class_bb24 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_class_bb23 // branch -> then
+_Lfd34__bt_parse_class_bb23:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_peek // call _bt_peek
     add x15, sp, #816 // hv frame base
@@ -1581,14 +1581,14 @@ _Lb2dd__bt_parse_class_bb23:
     stp x0, x1, [x15] // hv store L52
     add x15, sp, #832 // hv frame base
     ldp x0, x1, [x15] // hv load L52
-    cbz x1, _Lb2dd__bt_parse_class_bb26 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_class_bb25 // branch -> then
-_Lb2dd__bt_parse_class_bb24:
-    b _Lb2dd__bt_parse_class_bb3 // branch
-_Lb2dd__bt_parse_class_bb25:
+    cbz x1, _Lfd34__bt_parse_class_bb26 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_class_bb25 // branch -> then
+_Lfd34__bt_parse_class_bb24:
+    b _Lfd34__bt_parse_class_bb3 // branch
+_Lfd34__bt_parse_class_bb25:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr0@PAGE // cstr key page
-    add x2, x2, .LCstr0@PAGEOFF // cstr key off
+    adrp x2, .LCstr0 // cstr key page
+    add x2, x2, :lo12:.LCstr0 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #864 // hv frame base
     stp x0, x1, [x15] // hv store L54
@@ -1607,8 +1607,8 @@ _Lb2dd__bt_parse_class_bb25:
     add x15, sp, #896 // hv frame base
     stp x0, x1, [x15] // hv store L56
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr1@PAGE // cstr key page
-    add x2, x2, .LCstr1@PAGEOFF // cstr key off
+    adrp x2, .LCstr1 // cstr key page
+    add x2, x2, :lo12:.LCstr1 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #912 // hv frame base
     stp x0, x1, [x15] // hv store L57
@@ -1623,28 +1623,28 @@ _Lb2dd__bt_parse_class_bb25:
     ldp x0, x1, [x15] // hv load L58
     add x15, sp, #848 // hv frame base
     stp x0, x1, [x15] // hv store L53
-    b _Lb2dd__bt_parse_class_bb27 // branch
-_Lb2dd__bt_parse_class_bb26:
+    b _Lfd34__bt_parse_class_bb27 // branch
+_Lfd34__bt_parse_class_bb26:
     add x15, sp, #832 // hv frame base
     ldp x0, x1, [x15] // hv load L52
     add x15, sp, #848 // hv frame base
     stp x0, x1, [x15] // hv store L53
-    b _Lb2dd__bt_parse_class_bb27 // branch
-_Lb2dd__bt_parse_class_bb27:
+    b _Lfd34__bt_parse_class_bb27 // branch
+_Lfd34__bt_parse_class_bb27:
     add x15, sp, #848 // hv frame base
     ldp x0, x1, [x15] // hv load L53
-    cbz x1, _Lb2dd__bt_parse_class_bb29 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_class_bb28 // branch -> then
-_Lb2dd__bt_parse_class_bb28:
+    cbz x1, _Lfd34__bt_parse_class_bb29 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_class_bb28 // branch -> then
+_Lfd34__bt_parse_class_bb28:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr2@PAGE // cstr key page
-    add x2, x2, .LCstr2@PAGEOFF // cstr key off
+    adrp x2, .LCstr2 // cstr key page
+    add x2, x2, :lo12:.LCstr2 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #960 // hv frame base
     stp x0, x1, [x15] // hv store L60
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr0@PAGE // cstr key page
-    add x2, x2, .LCstr0@PAGEOFF // cstr key off
+    adrp x2, .LCstr0 // cstr key page
+    add x2, x2, :lo12:.LCstr0 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #976 // hv frame base
     stp x0, x1, [x15] // hv store L61
@@ -1683,19 +1683,19 @@ _Lb2dd__bt_parse_class_bb28:
     ldp x0, x1, [x15] // hv load L65
     add x15, sp, #944 // hv frame base
     stp x0, x1, [x15] // hv store L59
-    b _Lb2dd__bt_parse_class_bb30 // branch
-_Lb2dd__bt_parse_class_bb29:
+    b _Lfd34__bt_parse_class_bb30 // branch
+_Lfd34__bt_parse_class_bb29:
     add x15, sp, #848 // hv frame base
     ldp x0, x1, [x15] // hv load L53
     add x15, sp, #944 // hv frame base
     stp x0, x1, [x15] // hv store L59
-    b _Lb2dd__bt_parse_class_bb30 // branch
-_Lb2dd__bt_parse_class_bb30:
+    b _Lfd34__bt_parse_class_bb30 // branch
+_Lfd34__bt_parse_class_bb30:
     add x15, sp, #944 // hv frame base
     ldp x0, x1, [x15] // hv load L59
-    cbz x1, _Lb2dd__bt_parse_class_bb32 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_class_bb31 // branch -> then
-_Lb2dd__bt_parse_class_bb31:
+    cbz x1, _Lfd34__bt_parse_class_bb32 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_class_bb31 // branch -> then
+_Lfd34__bt_parse_class_bb31:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     add x15, sp, #1072 // hv frame base
@@ -1721,9 +1721,9 @@ _Lb2dd__bt_parse_class_bb31:
     stp x0, x1, [x15] // hv store L71
     add x15, sp, #1136 // hv frame base
     ldp x0, x1, [x15] // hv load L71
-    cbz x1, _Lb2dd__bt_parse_class_bb34 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_class_bb33 // branch -> then
-_Lb2dd__bt_parse_class_bb32:
+    cbz x1, _Lfd34__bt_parse_class_bb34 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_class_bb33 // branch -> then
+_Lfd34__bt_parse_class_bb32:
     ldp x0, x1, [sp, #32] // hv load L2
     ldp x2, x3, [sp, #336] // hv load L21
     bl hexa_array_push // call hexa_array_push
@@ -1738,8 +1738,8 @@ _Lb2dd__bt_parse_class_bb32:
     ldp x0, x1, [x15] // hv load L83
     add x15, sp, #1056 // hv frame base
     stp x0, x1, [x15] // hv store L66
-    b _Lb2dd__bt_parse_class_bb38 // branch
-_Lb2dd__bt_parse_class_bb33:
+    b _Lfd34__bt_parse_class_bb38 // branch
+_Lfd34__bt_parse_class_bb33:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_peek // call _bt_peek
     add x15, sp, #1168 // hv frame base
@@ -1770,9 +1770,9 @@ _Lb2dd__bt_parse_class_bb33:
     stp x0, x1, [x15] // hv store L78
     add x15, sp, #1248 // hv frame base
     ldp x0, x1, [x15] // hv load L78
-    cbz x1, _Lb2dd__bt_parse_class_bb36 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_class_bb35 // branch -> then
-_Lb2dd__bt_parse_class_bb34:
+    cbz x1, _Lfd34__bt_parse_class_bb36 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_class_bb35 // branch -> then
+_Lfd34__bt_parse_class_bb34:
     ldp x0, x1, [sp, #32] // hv load L2
     ldp x2, x3, [sp, #336] // hv load L21
     bl hexa_array_push // call hexa_array_push
@@ -1788,23 +1788,23 @@ _Lb2dd__bt_parse_class_bb34:
     ldp x0, x1, [x15] // hv load L81
     add x15, sp, #1056 // hv frame base
     stp x0, x1, [x15] // hv store L66
-    b _Lb2dd__bt_parse_class_bb38 // branch
-_Lb2dd__bt_parse_class_bb35:
+    b _Lfd34__bt_parse_class_bb38 // branch
+_Lfd34__bt_parse_class_bb35:
     add x15, sp, #1232 // hv frame base
     ldp x0, x1, [x15] // hv load L77
     add x15, sp, #1104 // hv frame base
     stp x0, x1, [x15] // hv store L69
-    b _Lb2dd__bt_parse_class_bb37 // branch
-_Lb2dd__bt_parse_class_bb36:
+    b _Lfd34__bt_parse_class_bb37 // branch
+_Lfd34__bt_parse_class_bb36:
     add x15, sp, #1184 // hv frame base
     ldp x0, x1, [x15] // hv load L74
     add x15, sp, #1104 // hv frame base
     stp x0, x1, [x15] // hv store L69
-    b _Lb2dd__bt_parse_class_bb37 // branch
-_Lb2dd__bt_parse_class_bb37:
-    b _Lb2dd__bt_parse_class_bb34 // branch
-_Lb2dd__bt_parse_class_bb38:
-    b _Lb2dd__bt_parse_class_bb24 // branch
+    b _Lfd34__bt_parse_class_bb37 // branch
+_Lfd34__bt_parse_class_bb37:
+    b _Lfd34__bt_parse_class_bb34 // branch
+_Lfd34__bt_parse_class_bb38:
+    b _Lfd34__bt_parse_class_bb24 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #1360 // sp adj
@@ -1818,14 +1818,14 @@ _bt_parse_alt:
     mov x29, sp // prologue: set fp
     sub sp, sp, #160 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__bt_parse_alt_bb0:
+_Lfd34__bt_parse_alt_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_parse_concat // call _bt_parse_concat
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
     stp x0, x1, [sp, #32] // hv store L2
-    b _Lb2dd__bt_parse_alt_bb1 // branch
-_Lb2dd__bt_parse_alt_bb1:
+    b _Lfd34__bt_parse_alt_bb1 // branch
+_Lfd34__bt_parse_alt_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_peek // call _bt_peek
     stp x0, x1, [sp, #48] // hv store L3
@@ -1835,9 +1835,9 @@ _Lb2dd__bt_parse_alt_bb1:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
-    cbz x1, _Lb2dd__bt_parse_alt_bb3 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_alt_bb2 // branch -> then
-_Lb2dd__bt_parse_alt_bb2:
+    cbz x1, _Lfd34__bt_parse_alt_bb3 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_alt_bb2 // branch -> then
+_Lfd34__bt_parse_alt_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     stp x0, x1, [sp, #80] // hv store L5
@@ -1872,8 +1872,8 @@ _Lb2dd__bt_parse_alt_bb2:
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv load L9
     stp x0, x1, [sp, #32] // hv store L2
-    b _Lb2dd__bt_parse_alt_bb1 // branch
-_Lb2dd__bt_parse_alt_bb3:
+    b _Lfd34__bt_parse_alt_bb1 // branch
+_Lfd34__bt_parse_alt_bb3:
     ldp x0, x1, [sp, #32] // hv load L2
     add sp, sp, #160 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
@@ -1886,7 +1886,7 @@ _bt_parse_concat:
     mov x29, sp // prologue: set fp
     sub sp, sp, #400 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__bt_parse_concat_bb0:
+_Lfd34__bt_parse_concat_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_peek // call _bt_peek
     stp x0, x1, [sp, #16] // hv store L1
@@ -1899,13 +1899,13 @@ _Lb2dd__bt_parse_concat_bb0:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L3
-    cbz x1, _Lb2dd__bt_parse_concat_bb2 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_concat_bb1 // branch -> then
-_Lb2dd__bt_parse_concat_bb1:
+    cbz x1, _Lfd34__bt_parse_concat_bb2 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_concat_bb1 // branch -> then
+_Lfd34__bt_parse_concat_bb1:
     ldp x0, x1, [sp, #48] // hv load L3
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd__bt_parse_concat_bb3 // branch
-_Lb2dd__bt_parse_concat_bb2:
+    b _Lfd34__bt_parse_concat_bb3 // branch
+_Lfd34__bt_parse_concat_bb2:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #124 // hv const_int val
@@ -1913,16 +1913,16 @@ _Lb2dd__bt_parse_concat_bb2:
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd__bt_parse_concat_bb3 // branch
-_Lb2dd__bt_parse_concat_bb3:
+    b _Lfd34__bt_parse_concat_bb3 // branch
+_Lfd34__bt_parse_concat_bb3:
     ldp x0, x1, [sp, #64] // hv load L4
-    cbz x1, _Lb2dd__bt_parse_concat_bb5 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_concat_bb4 // branch -> then
-_Lb2dd__bt_parse_concat_bb4:
+    cbz x1, _Lfd34__bt_parse_concat_bb5 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_concat_bb4 // branch -> then
+_Lfd34__bt_parse_concat_bb4:
     ldp x0, x1, [sp, #64] // hv load L4
     stp x0, x1, [sp, #96] // hv store L6
-    b _Lb2dd__bt_parse_concat_bb6 // branch
-_Lb2dd__bt_parse_concat_bb5:
+    b _Lfd34__bt_parse_concat_bb6 // branch
+_Lfd34__bt_parse_concat_bb5:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #41 // hv const_int val
@@ -1930,12 +1930,12 @@ _Lb2dd__bt_parse_concat_bb5:
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
     stp x0, x1, [sp, #96] // hv store L6
-    b _Lb2dd__bt_parse_concat_bb6 // branch
-_Lb2dd__bt_parse_concat_bb6:
+    b _Lfd34__bt_parse_concat_bb6 // branch
+_Lfd34__bt_parse_concat_bb6:
     ldp x0, x1, [sp, #96] // hv load L6
-    cbz x1, _Lb2dd__bt_parse_concat_bb8 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_concat_bb7 // branch -> then
-_Lb2dd__bt_parse_concat_bb7:
+    cbz x1, _Lfd34__bt_parse_concat_bb8 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_concat_bb7 // branch -> then
+_Lfd34__bt_parse_concat_bb7:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv reload L9
@@ -1966,19 +1966,19 @@ _Lb2dd__bt_parse_concat_bb7:
     add sp, sp, #400 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_concat_bb8:
+_Lfd34__bt_parse_concat_bb8:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_parse_repeat // call _bt_parse_repeat
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #176] // hv load L11
     stp x0, x1, [sp, #192] // hv store L12
-    b _Lb2dd__bt_parse_concat_bb9 // branch
-_Lb2dd__bt_parse_concat_bb9:
+    b _Lfd34__bt_parse_concat_bb9 // branch
+_Lfd34__bt_parse_concat_bb9:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
-    cbz x1, _Lb2dd__bt_parse_concat_bb11 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_concat_bb10 // branch -> then
-_Lb2dd__bt_parse_concat_bb10:
+    cbz x1, _Lfd34__bt_parse_concat_bb11 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_concat_bb10 // branch -> then
+_Lfd34__bt_parse_concat_bb10:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_peek // call _bt_peek
     stp x0, x1, [sp, #208] // hv store L13
@@ -1991,18 +1991,18 @@ _Lb2dd__bt_parse_concat_bb10:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv load L15
-    cbz x1, _Lb2dd__bt_parse_concat_bb13 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_concat_bb12 // branch -> then
-_Lb2dd__bt_parse_concat_bb11:
+    cbz x1, _Lfd34__bt_parse_concat_bb13 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_concat_bb12 // branch -> then
+_Lfd34__bt_parse_concat_bb11:
     ldp x0, x1, [sp, #192] // hv load L12
     add sp, sp, #400 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_concat_bb12:
+_Lfd34__bt_parse_concat_bb12:
     ldp x0, x1, [sp, #240] // hv load L15
     stp x0, x1, [sp, #256] // hv store L16
-    b _Lb2dd__bt_parse_concat_bb14 // branch
-_Lb2dd__bt_parse_concat_bb13:
+    b _Lfd34__bt_parse_concat_bb14 // branch
+_Lfd34__bt_parse_concat_bb13:
     ldp x0, x1, [sp, #224] // hv load L14
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #124 // hv const_int val
@@ -2010,16 +2010,16 @@ _Lb2dd__bt_parse_concat_bb13:
     stp x0, x1, [sp, #272] // hv store L17
     ldp x0, x1, [sp, #272] // hv load L17
     stp x0, x1, [sp, #256] // hv store L16
-    b _Lb2dd__bt_parse_concat_bb14 // branch
-_Lb2dd__bt_parse_concat_bb14:
+    b _Lfd34__bt_parse_concat_bb14 // branch
+_Lfd34__bt_parse_concat_bb14:
     ldp x0, x1, [sp, #256] // hv load L16
-    cbz x1, _Lb2dd__bt_parse_concat_bb16 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_concat_bb15 // branch -> then
-_Lb2dd__bt_parse_concat_bb15:
+    cbz x1, _Lfd34__bt_parse_concat_bb16 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_concat_bb15 // branch -> then
+_Lfd34__bt_parse_concat_bb15:
     ldp x0, x1, [sp, #256] // hv load L16
     stp x0, x1, [sp, #288] // hv store L18
-    b _Lb2dd__bt_parse_concat_bb17 // branch
-_Lb2dd__bt_parse_concat_bb16:
+    b _Lfd34__bt_parse_concat_bb17 // branch
+_Lfd34__bt_parse_concat_bb16:
     ldp x0, x1, [sp, #224] // hv load L14
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #41 // hv const_int val
@@ -2027,14 +2027,14 @@ _Lb2dd__bt_parse_concat_bb16:
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv load L19
     stp x0, x1, [sp, #288] // hv store L18
-    b _Lb2dd__bt_parse_concat_bb17 // branch
-_Lb2dd__bt_parse_concat_bb17:
+    b _Lfd34__bt_parse_concat_bb17 // branch
+_Lfd34__bt_parse_concat_bb17:
     ldp x0, x1, [sp, #288] // hv load L18
-    cbz x1, _Lb2dd__bt_parse_concat_bb19 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_concat_bb18 // branch -> then
-_Lb2dd__bt_parse_concat_bb18:
-    b _Lb2dd__bt_parse_concat_bb11 // branch
-_Lb2dd__bt_parse_concat_bb19:
+    cbz x1, _Lfd34__bt_parse_concat_bb19 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_concat_bb18 // branch -> then
+_Lfd34__bt_parse_concat_bb18:
+    b _Lfd34__bt_parse_concat_bb11 // branch
+_Lfd34__bt_parse_concat_bb19:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_parse_repeat // call _bt_parse_repeat
     stp x0, x1, [sp, #336] // hv store L21
@@ -2066,7 +2066,7 @@ _Lb2dd__bt_parse_concat_bb19:
     stp x0, x1, [sp, #384] // hv store L24
     ldp x0, x1, [sp, #384] // hv load L24
     stp x0, x1, [sp, #192] // hv store L12
-    b _Lb2dd__bt_parse_concat_bb9 // branch
+    b _Lfd34__bt_parse_concat_bb9 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #400 // sp adj
@@ -2078,7 +2078,7 @@ _BT_MAX_REPEAT:
     .loc 1 275 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
-_Lb2dd__BT_MAX_REPEAT_bb0:
+_Lfd34__BT_MAX_REPEAT_bb0:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #34464 // imm 0-15
     movk x1, #1, lsl #16 // imm 16-31
@@ -2092,19 +2092,19 @@ _bt_parse_repeat:
     mov x29, sp // prologue: set fp
     sub sp, sp, #1104 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__bt_parse_repeat_bb0:
+_Lfd34__bt_parse_repeat_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_parse_atom // call _bt_parse_atom
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
     stp x0, x1, [sp, #32] // hv store L2
-    b _Lb2dd__bt_parse_repeat_bb1 // branch
-_Lb2dd__bt_parse_repeat_bb1:
+    b _Lfd34__bt_parse_repeat_bb1 // branch
+_Lfd34__bt_parse_repeat_bb1:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
-    cbz x1, _Lb2dd__bt_parse_repeat_bb3 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_repeat_bb2 // branch -> then
-_Lb2dd__bt_parse_repeat_bb2:
+    cbz x1, _Lfd34__bt_parse_repeat_bb3 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_repeat_bb2 // branch -> then
+_Lfd34__bt_parse_repeat_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_peek // call _bt_peek
     stp x0, x1, [sp, #48] // hv store L3
@@ -2116,14 +2116,14 @@ _Lb2dd__bt_parse_repeat_bb2:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
-    cbz x1, _Lb2dd__bt_parse_repeat_bb5 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_repeat_bb4 // branch -> then
-_Lb2dd__bt_parse_repeat_bb3:
+    cbz x1, _Lfd34__bt_parse_repeat_bb5 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_repeat_bb4 // branch -> then
+_Lfd34__bt_parse_repeat_bb3:
     ldp x0, x1, [sp, #32] // hv load L2
     add sp, sp, #1104 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_repeat_bb4:
+_Lfd34__bt_parse_repeat_bb4:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     stp x0, x1, [sp, #112] // hv store L7
@@ -2154,17 +2154,17 @@ _Lb2dd__bt_parse_repeat_bb4:
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv load L9
     stp x0, x1, [sp, #32] // hv store L2
-    b _Lb2dd__bt_parse_repeat_bb40 // branch
-_Lb2dd__bt_parse_repeat_bb5:
+    b _Lfd34__bt_parse_repeat_bb40 // branch
+_Lfd34__bt_parse_repeat_bb5:
     ldp x0, x1, [sp, #64] // hv load L4
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #43 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv load L10
-    cbz x1, _Lb2dd__bt_parse_repeat_bb7 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_repeat_bb6 // branch -> then
-_Lb2dd__bt_parse_repeat_bb6:
+    cbz x1, _Lfd34__bt_parse_repeat_bb7 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_repeat_bb6 // branch -> then
+_Lfd34__bt_parse_repeat_bb6:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     stp x0, x1, [sp, #192] // hv store L12
@@ -2195,17 +2195,17 @@ _Lb2dd__bt_parse_repeat_bb6:
     stp x0, x1, [sp, #224] // hv store L14
     ldp x0, x1, [sp, #224] // hv load L14
     stp x0, x1, [sp, #32] // hv store L2
-    b _Lb2dd__bt_parse_repeat_bb39 // branch
-_Lb2dd__bt_parse_repeat_bb7:
+    b _Lfd34__bt_parse_repeat_bb39 // branch
+_Lfd34__bt_parse_repeat_bb7:
     ldp x0, x1, [sp, #64] // hv load L4
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #63 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv load L15
-    cbz x1, _Lb2dd__bt_parse_repeat_bb9 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_repeat_bb8 // branch -> then
-_Lb2dd__bt_parse_repeat_bb8:
+    cbz x1, _Lfd34__bt_parse_repeat_bb9 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_repeat_bb8 // branch -> then
+_Lfd34__bt_parse_repeat_bb8:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     stp x0, x1, [sp, #272] // hv store L17
@@ -2236,17 +2236,17 @@ _Lb2dd__bt_parse_repeat_bb8:
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv load L19
     stp x0, x1, [sp, #32] // hv store L2
-    b _Lb2dd__bt_parse_repeat_bb38 // branch
-_Lb2dd__bt_parse_repeat_bb9:
+    b _Lfd34__bt_parse_repeat_bb38 // branch
+_Lfd34__bt_parse_repeat_bb9:
     ldp x0, x1, [sp, #64] // hv load L4
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #123 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #320] // hv store L20
     ldp x0, x1, [sp, #320] // hv load L20
-    cbz x1, _Lb2dd__bt_parse_repeat_bb11 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_repeat_bb10 // branch -> then
-_Lb2dd__bt_parse_repeat_bb10:
+    cbz x1, _Lfd34__bt_parse_repeat_bb11 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_repeat_bb10 // branch -> then
+_Lfd34__bt_parse_repeat_bb10:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     stp x0, x1, [sp, #352] // hv store L22
@@ -2256,10 +2256,10 @@ _Lb2dd__bt_parse_repeat_bb10:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     stp x0, x1, [sp, #384] // hv store L24
-    b _Lb2dd__bt_parse_repeat_bb12 // branch
-_Lb2dd__bt_parse_repeat_bb11:
-    b _Lb2dd__bt_parse_repeat_bb3 // branch
-_Lb2dd__bt_parse_repeat_bb12:
+    b _Lfd34__bt_parse_repeat_bb12 // branch
+_Lfd34__bt_parse_repeat_bb11:
+    b _Lfd34__bt_parse_repeat_bb3 // branch
+_Lfd34__bt_parse_repeat_bb12:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_peek // call _bt_peek
     stp x0, x1, [sp, #400] // hv store L25
@@ -2269,9 +2269,9 @@ _Lb2dd__bt_parse_repeat_bb12:
     bl hexa_cmp_ge // binop >=
     stp x0, x1, [sp, #416] // hv store L26
     ldp x0, x1, [sp, #416] // hv load L26
-    cbz x1, _Lb2dd__bt_parse_repeat_bb16 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_repeat_bb15 // branch -> then
-_Lb2dd__bt_parse_repeat_bb13:
+    cbz x1, _Lfd34__bt_parse_repeat_bb16 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_repeat_bb15 // branch -> then
+_Lfd34__bt_parse_repeat_bb13:
     ldp x0, x1, [sp, #368] // hv load L23
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #10 // hv const_int val
@@ -2313,9 +2313,9 @@ _Lb2dd__bt_parse_repeat_bb13:
     stp x0, x1, [x15] // hv store L36
     add x15, sp, #576 // hv frame base
     ldp x0, x1, [x15] // hv load L36
-    cbz x1, _Lb2dd__bt_parse_repeat_bb19 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_repeat_bb18 // branch -> then
-_Lb2dd__bt_parse_repeat_bb14:
+    cbz x1, _Lfd34__bt_parse_repeat_bb19 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_repeat_bb18 // branch -> then
+_Lfd34__bt_parse_repeat_bb14:
     ldp x0, x1, [sp, #368] // hv load L23
     add x15, sp, #624 // hv frame base
     stp x0, x1, [x15] // hv store L39
@@ -2332,9 +2332,9 @@ _Lb2dd__bt_parse_repeat_bb14:
     stp x0, x1, [x15] // hv store L41
     add x15, sp, #656 // hv frame base
     ldp x0, x1, [x15] // hv load L41
-    cbz x1, _Lb2dd__bt_parse_repeat_bb21 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_repeat_bb20 // branch -> then
-_Lb2dd__bt_parse_repeat_bb15:
+    cbz x1, _Lfd34__bt_parse_repeat_bb21 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_repeat_bb20 // branch -> then
+_Lfd34__bt_parse_repeat_bb15:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_peek // call _bt_peek
     stp x0, x1, [sp, #448] // hv store L28
@@ -2345,19 +2345,19 @@ _Lb2dd__bt_parse_repeat_bb15:
     stp x0, x1, [sp, #464] // hv store L29
     ldp x0, x1, [sp, #464] // hv load L29
     stp x0, x1, [sp, #432] // hv store L27
-    b _Lb2dd__bt_parse_repeat_bb17 // branch
-_Lb2dd__bt_parse_repeat_bb16:
+    b _Lfd34__bt_parse_repeat_bb17 // branch
+_Lfd34__bt_parse_repeat_bb16:
     ldp x0, x1, [sp, #416] // hv load L26
     stp x0, x1, [sp, #432] // hv store L27
-    b _Lb2dd__bt_parse_repeat_bb17 // branch
-_Lb2dd__bt_parse_repeat_bb17:
+    b _Lfd34__bt_parse_repeat_bb17 // branch
+_Lfd34__bt_parse_repeat_bb17:
     ldp x0, x1, [sp, #432] // hv load L27
-    cbz x1, _Lb2dd__bt_parse_repeat_bb14 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_repeat_bb13 // branch -> then
-_Lb2dd__bt_parse_repeat_bb18:
+    cbz x1, _Lfd34__bt_parse_repeat_bb14 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_repeat_bb13 // branch -> then
+_Lfd34__bt_parse_repeat_bb18:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #608 // hv frame base
     stp x0, x1, [x15] // hv store L38
@@ -2376,9 +2376,9 @@ _Lb2dd__bt_parse_repeat_bb18:
     add sp, sp, #1104 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_repeat_bb19:
-    b _Lb2dd__bt_parse_repeat_bb12 // branch
-_Lb2dd__bt_parse_repeat_bb20:
+_Lfd34__bt_parse_repeat_bb19:
+    b _Lfd34__bt_parse_repeat_bb12 // branch
+_Lfd34__bt_parse_repeat_bb20:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     add x15, sp, #688 // hv frame base
@@ -2396,9 +2396,9 @@ _Lb2dd__bt_parse_repeat_bb20:
     stp x0, x1, [x15] // hv store L45
     add x15, sp, #720 // hv frame base
     ldp x0, x1, [x15] // hv load L45
-    cbz x1, _Lb2dd__bt_parse_repeat_bb23 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_repeat_bb22 // branch -> then
-_Lb2dd__bt_parse_repeat_bb21:
+    cbz x1, _Lfd34__bt_parse_repeat_bb23 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_repeat_bb22 // branch -> then
+_Lfd34__bt_parse_repeat_bb21:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_peek // call _bt_peek
     add x15, sp, #976 // hv frame base
@@ -2412,22 +2412,22 @@ _Lb2dd__bt_parse_repeat_bb21:
     stp x0, x1, [x15] // hv store L62
     add x15, sp, #992 // hv frame base
     ldp x0, x1, [x15] // hv load L62
-    cbz x1, _Lb2dd__bt_parse_repeat_bb34 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_repeat_bb33 // branch -> then
-_Lb2dd__bt_parse_repeat_bb22:
+    cbz x1, _Lfd34__bt_parse_repeat_bb34 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_repeat_bb33 // branch -> then
+_Lfd34__bt_parse_repeat_bb22:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
     add x15, sp, #624 // hv frame base
     stp x0, x1, [x15] // hv store L39
-    b _Lb2dd__bt_parse_repeat_bb32 // branch
-_Lb2dd__bt_parse_repeat_bb23:
+    b _Lfd34__bt_parse_repeat_bb32 // branch
+_Lfd34__bt_parse_repeat_bb23:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     add x15, sp, #624 // hv frame base
     stp x0, x1, [x15] // hv store L39
-    b _Lb2dd__bt_parse_repeat_bb24 // branch
-_Lb2dd__bt_parse_repeat_bb24:
+    b _Lfd34__bt_parse_repeat_bb24 // branch
+_Lfd34__bt_parse_repeat_bb24:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_peek // call _bt_peek
     add x15, sp, #752 // hv frame base
@@ -2441,9 +2441,9 @@ _Lb2dd__bt_parse_repeat_bb24:
     stp x0, x1, [x15] // hv store L48
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv load L48
-    cbz x1, _Lb2dd__bt_parse_repeat_bb28 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_repeat_bb27 // branch -> then
-_Lb2dd__bt_parse_repeat_bb25:
+    cbz x1, _Lfd34__bt_parse_repeat_bb28 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_repeat_bb27 // branch -> then
+_Lfd34__bt_parse_repeat_bb25:
     add x15, sp, #624 // hv frame base
     ldp x0, x1, [x15] // hv load L39
     movz x2, #0 // hv const_int: TAG_INT
@@ -2489,11 +2489,11 @@ _Lb2dd__bt_parse_repeat_bb25:
     stp x0, x1, [x15] // hv store L58
     add x15, sp, #928 // hv frame base
     ldp x0, x1, [x15] // hv load L58
-    cbz x1, _Lb2dd__bt_parse_repeat_bb31 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_repeat_bb30 // branch -> then
-_Lb2dd__bt_parse_repeat_bb26:
-    b _Lb2dd__bt_parse_repeat_bb32 // branch
-_Lb2dd__bt_parse_repeat_bb27:
+    cbz x1, _Lfd34__bt_parse_repeat_bb31 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_repeat_bb30 // branch -> then
+_Lfd34__bt_parse_repeat_bb26:
+    b _Lfd34__bt_parse_repeat_bb32 // branch
+_Lfd34__bt_parse_repeat_bb27:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_peek // call _bt_peek
     add x15, sp, #800 // hv frame base
@@ -2509,22 +2509,22 @@ _Lb2dd__bt_parse_repeat_bb27:
     ldp x0, x1, [x15] // hv load L51
     add x15, sp, #784 // hv frame base
     stp x0, x1, [x15] // hv store L49
-    b _Lb2dd__bt_parse_repeat_bb29 // branch
-_Lb2dd__bt_parse_repeat_bb28:
+    b _Lfd34__bt_parse_repeat_bb29 // branch
+_Lfd34__bt_parse_repeat_bb28:
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv load L48
     add x15, sp, #784 // hv frame base
     stp x0, x1, [x15] // hv store L49
-    b _Lb2dd__bt_parse_repeat_bb29 // branch
-_Lb2dd__bt_parse_repeat_bb29:
+    b _Lfd34__bt_parse_repeat_bb29 // branch
+_Lfd34__bt_parse_repeat_bb29:
     add x15, sp, #784 // hv frame base
     ldp x0, x1, [x15] // hv load L49
-    cbz x1, _Lb2dd__bt_parse_repeat_bb26 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_repeat_bb25 // branch -> then
-_Lb2dd__bt_parse_repeat_bb30:
+    cbz x1, _Lfd34__bt_parse_repeat_bb26 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_repeat_bb25 // branch -> then
+_Lfd34__bt_parse_repeat_bb30:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #960 // hv frame base
     stp x0, x1, [x15] // hv store L60
@@ -2543,17 +2543,17 @@ _Lb2dd__bt_parse_repeat_bb30:
     add sp, sp, #1104 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_repeat_bb31:
-    b _Lb2dd__bt_parse_repeat_bb24 // branch
-_Lb2dd__bt_parse_repeat_bb32:
-    b _Lb2dd__bt_parse_repeat_bb21 // branch
-_Lb2dd__bt_parse_repeat_bb33:
+_Lfd34__bt_parse_repeat_bb31:
+    b _Lfd34__bt_parse_repeat_bb24 // branch
+_Lfd34__bt_parse_repeat_bb32:
+    b _Lfd34__bt_parse_repeat_bb21 // branch
+_Lfd34__bt_parse_repeat_bb33:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     add x15, sp, #1024 // hv frame base
     stp x0, x1, [x15] // hv store L64
-    b _Lb2dd__bt_parse_repeat_bb34 // branch
-_Lb2dd__bt_parse_repeat_bb34:
+    b _Lfd34__bt_parse_repeat_bb34 // branch
+_Lfd34__bt_parse_repeat_bb34:
     ldp x0, x1, [sp, #384] // hv load L24
     bl hexa_truthy // unop !: truthy → w0
     eor x0, x0, #1 // unop !: !truthy
@@ -2562,14 +2562,14 @@ _Lb2dd__bt_parse_repeat_bb34:
     stp x0, x1, [x15] // hv store L65
     add x15, sp, #1040 // hv frame base
     ldp x0, x1, [x15] // hv load L65
-    cbz x1, _Lb2dd__bt_parse_repeat_bb36 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_repeat_bb35 // branch -> then
-_Lb2dd__bt_parse_repeat_bb35:
+    cbz x1, _Lfd34__bt_parse_repeat_bb36 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_repeat_bb35 // branch -> then
+_Lfd34__bt_parse_repeat_bb35:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #368] // hv store L23
-    b _Lb2dd__bt_parse_repeat_bb36 // branch
-_Lb2dd__bt_parse_repeat_bb36:
+    b _Lfd34__bt_parse_repeat_bb36 // branch
+_Lfd34__bt_parse_repeat_bb36:
     bl hexa_array_new // array_lit: new array
     add x15, sp, #1072 // hv frame base
     stp x0, x1, [x15] // hv store L67
@@ -2608,15 +2608,15 @@ _Lb2dd__bt_parse_repeat_bb36:
     add x15, sp, #1088 // hv frame base
     ldp x0, x1, [x15] // hv load L68
     stp x0, x1, [sp, #32] // hv store L2
-    b _Lb2dd__bt_parse_repeat_bb37 // branch
-_Lb2dd__bt_parse_repeat_bb37:
-    b _Lb2dd__bt_parse_repeat_bb38 // branch
-_Lb2dd__bt_parse_repeat_bb38:
-    b _Lb2dd__bt_parse_repeat_bb39 // branch
-_Lb2dd__bt_parse_repeat_bb39:
-    b _Lb2dd__bt_parse_repeat_bb40 // branch
-_Lb2dd__bt_parse_repeat_bb40:
-    b _Lb2dd__bt_parse_repeat_bb1 // branch
+    b _Lfd34__bt_parse_repeat_bb37 // branch
+_Lfd34__bt_parse_repeat_bb37:
+    b _Lfd34__bt_parse_repeat_bb38 // branch
+_Lfd34__bt_parse_repeat_bb38:
+    b _Lfd34__bt_parse_repeat_bb39 // branch
+_Lfd34__bt_parse_repeat_bb39:
+    b _Lfd34__bt_parse_repeat_bb40 // branch
+_Lfd34__bt_parse_repeat_bb40:
+    b _Lfd34__bt_parse_repeat_bb1 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #1104 // sp adj
@@ -2630,7 +2630,7 @@ _bt_parse_atom:
     mov x29, sp // prologue: set fp
     sub sp, sp, #2336 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__bt_parse_atom_bb0:
+_Lfd34__bt_parse_atom_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_peek // call _bt_peek
     stp x0, x1, [sp, #16] // hv store L1
@@ -2642,9 +2642,9 @@ _Lb2dd__bt_parse_atom_bb0:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L3
-    cbz x1, _Lb2dd__bt_parse_atom_bb2 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb1 // branch -> then
-_Lb2dd__bt_parse_atom_bb1:
+    cbz x1, _Lfd34__bt_parse_atom_bb2 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb1 // branch -> then
+_Lfd34__bt_parse_atom_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     stp x0, x1, [sp, #80] // hv store L5
@@ -2657,9 +2657,9 @@ _Lb2dd__bt_parse_atom_bb1:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
-    cbz x1, _Lb2dd__bt_parse_atom_bb4 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb3 // branch -> then
-_Lb2dd__bt_parse_atom_bb2:
+    cbz x1, _Lfd34__bt_parse_atom_bb4 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb3 // branch -> then
+_Lfd34__bt_parse_atom_bb2:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #91 // hv const_int val
@@ -2668,9 +2668,9 @@ _Lb2dd__bt_parse_atom_bb2:
     stp x0, x1, [x15] // hv store L91
     add x15, sp, #1456 // hv frame base
     ldp x0, x1, [x15] // hv load L91
-    cbz x1, _Lb2dd__bt_parse_atom_bb39 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb38 // branch -> then
-_Lb2dd__bt_parse_atom_bb3:
+    cbz x1, _Lfd34__bt_parse_atom_bb39 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb38 // branch -> then
+_Lfd34__bt_parse_atom_bb3:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     stp x0, x1, [sp, #144] // hv store L9
@@ -2685,18 +2685,18 @@ _Lb2dd__bt_parse_atom_bb3:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _Lb2dd__bt_parse_atom_bb6 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb5 // branch -> then
-_Lb2dd__bt_parse_atom_bb4:
+    cbz x1, _Lfd34__bt_parse_atom_bb6 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb5 // branch -> then
+_Lfd34__bt_parse_atom_bb4:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr6@PAGE // cstr key page
-    add x2, x2, .LCstr6@PAGEOFF // cstr key off
+    adrp x2, .LCstr6 // cstr key page
+    add x2, x2, :lo12:.LCstr6 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #1200 // hv frame base
     stp x0, x1, [x15] // hv store L75
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr6@PAGE // cstr key page
-    add x2, x2, .LCstr6@PAGEOFF // cstr key off
+    adrp x2, .LCstr6 // cstr key page
+    add x2, x2, :lo12:.LCstr6 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #1216 // hv frame base
     stp x0, x1, [x15] // hv store L76
@@ -2724,8 +2724,8 @@ _Lb2dd__bt_parse_atom_bb4:
     add x15, sp, #1200 // hv frame base
     stp x0, x1, [x15] // hv store L75
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr6@PAGE // cstr key page
-    add x2, x2, .LCstr6@PAGEOFF // cstr key off
+    adrp x2, .LCstr6 // cstr key page
+    add x2, x2, :lo12:.LCstr6 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #1264 // hv frame base
     stp x0, x1, [x15] // hv store L79
@@ -2761,9 +2761,9 @@ _Lb2dd__bt_parse_atom_bb4:
     stp x0, x1, [x15] // hv store L85
     add x15, sp, #1360 // hv frame base
     ldp x0, x1, [x15] // hv load L85
-    cbz x1, _Lb2dd__bt_parse_atom_bb36 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb35 // branch -> then
-_Lb2dd__bt_parse_atom_bb5:
+    cbz x1, _Lfd34__bt_parse_atom_bb36 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb35 // branch -> then
+_Lfd34__bt_parse_atom_bb5:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     stp x0, x1, [sp, #224] // hv store L14
@@ -2781,26 +2781,26 @@ _Lb2dd__bt_parse_atom_bb5:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #288] // hv store L18
     ldp x0, x1, [sp, #288] // hv load L18
-    cbz x1, _Lb2dd__bt_parse_atom_bb8 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb7 // branch -> then
-_Lb2dd__bt_parse_atom_bb6:
+    cbz x1, _Lfd34__bt_parse_atom_bb8 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb7 // branch -> then
+_Lfd34__bt_parse_atom_bb6:
     ldp x0, x1, [sp, #176] // hv load L11
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #61 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #352] // hv store L22
     ldp x0, x1, [sp, #352] // hv load L22
-    cbz x1, _Lb2dd__bt_parse_atom_bb11 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb10 // branch -> then
-_Lb2dd__bt_parse_atom_bb7:
+    cbz x1, _Lfd34__bt_parse_atom_bb11 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb10 // branch -> then
+_Lfd34__bt_parse_atom_bb7:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     stp x0, x1, [sp, #320] // hv store L20
-    b _Lb2dd__bt_parse_atom_bb9 // branch
-_Lb2dd__bt_parse_atom_bb8:
+    b _Lfd34__bt_parse_atom_bb9 // branch
+_Lfd34__bt_parse_atom_bb8:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #336] // hv store L21
     ldp x0, x1, [sp, #336] // hv load L21
@@ -2810,13 +2810,13 @@ _Lb2dd__bt_parse_atom_bb8:
     movz x5, #0 // hv const_int val
     bl hexa_index_set // index_set: hexa_index_set
     stp x0, x1, [sp, #336] // hv store L21
-    b _Lb2dd__bt_parse_atom_bb9 // branch
-_Lb2dd__bt_parse_atom_bb9:
+    b _Lfd34__bt_parse_atom_bb9 // branch
+_Lfd34__bt_parse_atom_bb9:
     ldp x0, x1, [sp, #256] // hv load L16
     add sp, sp, #2336 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_atom_bb10:
+_Lfd34__bt_parse_atom_bb10:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     stp x0, x1, [sp, #384] // hv store L24
@@ -2834,9 +2834,9 @@ _Lb2dd__bt_parse_atom_bb10:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #448] // hv store L28
     ldp x0, x1, [sp, #448] // hv load L28
-    cbz x1, _Lb2dd__bt_parse_atom_bb13 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb12 // branch -> then
-_Lb2dd__bt_parse_atom_bb11:
+    cbz x1, _Lfd34__bt_parse_atom_bb13 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb12 // branch -> then
+_Lfd34__bt_parse_atom_bb11:
     ldp x0, x1, [sp, #176] // hv load L11
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #33 // hv const_int val
@@ -2845,17 +2845,17 @@ _Lb2dd__bt_parse_atom_bb11:
     stp x0, x1, [x15] // hv store L34
     add x15, sp, #544 // hv frame base
     ldp x0, x1, [x15] // hv load L34
-    cbz x1, _Lb2dd__bt_parse_atom_bb16 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb15 // branch -> then
-_Lb2dd__bt_parse_atom_bb12:
+    cbz x1, _Lfd34__bt_parse_atom_bb16 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb15 // branch -> then
+_Lfd34__bt_parse_atom_bb12:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     stp x0, x1, [sp, #480] // hv store L30
-    b _Lb2dd__bt_parse_atom_bb14 // branch
-_Lb2dd__bt_parse_atom_bb13:
+    b _Lfd34__bt_parse_atom_bb14 // branch
+_Lfd34__bt_parse_atom_bb13:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #496] // hv store L31
     ldp x0, x1, [sp, #496] // hv load L31
@@ -2865,8 +2865,8 @@ _Lb2dd__bt_parse_atom_bb13:
     movz x5, #0 // hv const_int val
     bl hexa_index_set // index_set: hexa_index_set
     stp x0, x1, [sp, #496] // hv store L31
-    b _Lb2dd__bt_parse_atom_bb14 // branch
-_Lb2dd__bt_parse_atom_bb14:
+    b _Lfd34__bt_parse_atom_bb14 // branch
+_Lfd34__bt_parse_atom_bb14:
     bl hexa_array_new // array_lit: new array
     add x15, sp, #512 // hv frame base
     stp x0, x1, [x15] // hv store L32
@@ -2908,7 +2908,7 @@ _Lb2dd__bt_parse_atom_bb14:
     add sp, sp, #2336 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_atom_bb15:
+_Lfd34__bt_parse_atom_bb15:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     add x15, sp, #576 // hv frame base
@@ -2934,9 +2934,9 @@ _Lb2dd__bt_parse_atom_bb15:
     stp x0, x1, [x15] // hv store L40
     add x15, sp, #640 // hv frame base
     ldp x0, x1, [x15] // hv load L40
-    cbz x1, _Lb2dd__bt_parse_atom_bb18 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb17 // branch -> then
-_Lb2dd__bt_parse_atom_bb16:
+    cbz x1, _Lfd34__bt_parse_atom_bb18 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb17 // branch -> then
+_Lfd34__bt_parse_atom_bb16:
     ldp x0, x1, [sp, #176] // hv load L11
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #60 // hv const_int val
@@ -2945,18 +2945,18 @@ _Lb2dd__bt_parse_atom_bb16:
     stp x0, x1, [x15] // hv store L46
     add x15, sp, #736 // hv frame base
     ldp x0, x1, [x15] // hv load L46
-    cbz x1, _Lb2dd__bt_parse_atom_bb21 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb20 // branch -> then
-_Lb2dd__bt_parse_atom_bb17:
+    cbz x1, _Lfd34__bt_parse_atom_bb21 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb20 // branch -> then
+_Lfd34__bt_parse_atom_bb17:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     add x15, sp, #672 // hv frame base
     stp x0, x1, [x15] // hv store L42
-    b _Lb2dd__bt_parse_atom_bb19 // branch
-_Lb2dd__bt_parse_atom_bb18:
+    b _Lfd34__bt_parse_atom_bb19 // branch
+_Lfd34__bt_parse_atom_bb18:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #688 // hv frame base
     stp x0, x1, [x15] // hv store L43
@@ -2969,8 +2969,8 @@ _Lb2dd__bt_parse_atom_bb18:
     bl hexa_index_set // index_set: hexa_index_set
     add x15, sp, #688 // hv frame base
     stp x0, x1, [x15] // hv store L43
-    b _Lb2dd__bt_parse_atom_bb19 // branch
-_Lb2dd__bt_parse_atom_bb19:
+    b _Lfd34__bt_parse_atom_bb19 // branch
+_Lfd34__bt_parse_atom_bb19:
     bl hexa_array_new // array_lit: new array
     add x15, sp, #704 // hv frame base
     stp x0, x1, [x15] // hv store L44
@@ -3013,7 +3013,7 @@ _Lb2dd__bt_parse_atom_bb19:
     add sp, sp, #2336 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_atom_bb20:
+_Lfd34__bt_parse_atom_bb20:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     add x15, sp, #768 // hv frame base
@@ -3035,12 +3035,12 @@ _Lb2dd__bt_parse_atom_bb20:
     stp x0, x1, [x15] // hv store L51
     add x15, sp, #816 // hv frame base
     ldp x0, x1, [x15] // hv load L51
-    cbz x1, _Lb2dd__bt_parse_atom_bb23 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb22 // branch -> then
-_Lb2dd__bt_parse_atom_bb21:
+    cbz x1, _Lfd34__bt_parse_atom_bb23 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb22 // branch -> then
+_Lfd34__bt_parse_atom_bb21:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #1184 // hv frame base
     stp x0, x1, [x15] // hv store L74
@@ -3059,13 +3059,13 @@ _Lb2dd__bt_parse_atom_bb21:
     add sp, sp, #2336 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_atom_bb22:
+_Lfd34__bt_parse_atom_bb22:
     add x15, sp, #816 // hv frame base
     ldp x0, x1, [x15] // hv load L51
     add x15, sp, #832 // hv frame base
     stp x0, x1, [x15] // hv store L52
-    b _Lb2dd__bt_parse_atom_bb24 // branch
-_Lb2dd__bt_parse_atom_bb23:
+    b _Lfd34__bt_parse_atom_bb24 // branch
+_Lfd34__bt_parse_atom_bb23:
     add x15, sp, #800 // hv frame base
     ldp x0, x1, [x15] // hv load L50
     movz x2, #0 // hv const_int: TAG_INT
@@ -3077,13 +3077,13 @@ _Lb2dd__bt_parse_atom_bb23:
     ldp x0, x1, [x15] // hv load L53
     add x15, sp, #832 // hv frame base
     stp x0, x1, [x15] // hv store L52
-    b _Lb2dd__bt_parse_atom_bb24 // branch
-_Lb2dd__bt_parse_atom_bb24:
+    b _Lfd34__bt_parse_atom_bb24 // branch
+_Lfd34__bt_parse_atom_bb24:
     add x15, sp, #832 // hv frame base
     ldp x0, x1, [x15] // hv load L52
-    cbz x1, _Lb2dd__bt_parse_atom_bb26 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb25 // branch -> then
-_Lb2dd__bt_parse_atom_bb25:
+    cbz x1, _Lfd34__bt_parse_atom_bb26 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb25 // branch -> then
+_Lfd34__bt_parse_atom_bb25:
     add x15, sp, #800 // hv frame base
     ldp x0, x1, [x15] // hv load L50
     movz x2, #0 // hv const_int: TAG_INT
@@ -3093,12 +3093,12 @@ _Lb2dd__bt_parse_atom_bb25:
     stp x0, x1, [x15] // hv store L55
     add x15, sp, #880 // hv frame base
     ldp x0, x1, [x15] // hv load L55
-    cbz x1, _Lb2dd__bt_parse_atom_bb28 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb27 // branch -> then
-_Lb2dd__bt_parse_atom_bb26:
+    cbz x1, _Lfd34__bt_parse_atom_bb28 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb27 // branch -> then
+_Lfd34__bt_parse_atom_bb26:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #1168 // hv frame base
     stp x0, x1, [x15] // hv store L73
@@ -3117,19 +3117,19 @@ _Lb2dd__bt_parse_atom_bb26:
     add sp, sp, #2336 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_atom_bb27:
+_Lfd34__bt_parse_atom_bb27:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // hv const_int val
     add x15, sp, #896 // hv frame base
     stp x0, x1, [x15] // hv store L56
-    b _Lb2dd__bt_parse_atom_bb29 // branch
-_Lb2dd__bt_parse_atom_bb28:
+    b _Lfd34__bt_parse_atom_bb29 // branch
+_Lfd34__bt_parse_atom_bb28:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     add x15, sp, #896 // hv frame base
     stp x0, x1, [x15] // hv store L56
-    b _Lb2dd__bt_parse_atom_bb29 // branch
-_Lb2dd__bt_parse_atom_bb29:
+    b _Lfd34__bt_parse_atom_bb29 // branch
+_Lfd34__bt_parse_atom_bb29:
     add x15, sp, #896 // hv frame base
     ldp x0, x1, [x15] // hv load L56
     add x15, sp, #912 // hv frame base
@@ -3159,18 +3159,18 @@ _Lb2dd__bt_parse_atom_bb29:
     stp x0, x1, [x15] // hv store L62
     add x15, sp, #992 // hv frame base
     ldp x0, x1, [x15] // hv load L62
-    cbz x1, _Lb2dd__bt_parse_atom_bb31 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb30 // branch -> then
-_Lb2dd__bt_parse_atom_bb30:
+    cbz x1, _Lfd34__bt_parse_atom_bb31 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb30 // branch -> then
+_Lfd34__bt_parse_atom_bb30:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     add x15, sp, #1024 // hv frame base
     stp x0, x1, [x15] // hv store L64
-    b _Lb2dd__bt_parse_atom_bb32 // branch
-_Lb2dd__bt_parse_atom_bb31:
+    b _Lfd34__bt_parse_atom_bb32 // branch
+_Lfd34__bt_parse_atom_bb31:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #1040 // hv frame base
     stp x0, x1, [x15] // hv store L65
@@ -3183,11 +3183,11 @@ _Lb2dd__bt_parse_atom_bb31:
     bl hexa_index_set // index_set: hexa_index_set
     add x15, sp, #1040 // hv frame base
     stp x0, x1, [x15] // hv store L65
-    b _Lb2dd__bt_parse_atom_bb32 // branch
-_Lb2dd__bt_parse_atom_bb32:
+    b _Lfd34__bt_parse_atom_bb32 // branch
+_Lfd34__bt_parse_atom_bb32:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #1056 // hv frame base
     stp x0, x1, [x15] // hv store L66
@@ -3207,12 +3207,12 @@ _Lb2dd__bt_parse_atom_bb32:
     stp x0, x1, [x15] // hv store L68
     add x15, sp, #1088 // hv frame base
     ldp x0, x1, [x15] // hv load L68
-    cbz x1, _Lb2dd__bt_parse_atom_bb34 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb33 // branch -> then
-_Lb2dd__bt_parse_atom_bb33:
+    cbz x1, _Lfd34__bt_parse_atom_bb34 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb33 // branch -> then
+_Lfd34__bt_parse_atom_bb33:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #1120 // hv frame base
     stp x0, x1, [x15] // hv store L70
@@ -3231,7 +3231,7 @@ _Lb2dd__bt_parse_atom_bb33:
     add sp, sp, #2336 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_atom_bb34:
+_Lfd34__bt_parse_atom_bb34:
     bl hexa_array_new // array_lit: new array
     add x15, sp, #1136 // hv frame base
     stp x0, x1, [x15] // hv store L71
@@ -3274,16 +3274,16 @@ _Lb2dd__bt_parse_atom_bb34:
     add sp, sp, #2336 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_atom_bb35:
+_Lfd34__bt_parse_atom_bb35:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     add x15, sp, #1392 // hv frame base
     stp x0, x1, [x15] // hv store L87
-    b _Lb2dd__bt_parse_atom_bb37 // branch
-_Lb2dd__bt_parse_atom_bb36:
+    b _Lfd34__bt_parse_atom_bb37 // branch
+_Lfd34__bt_parse_atom_bb36:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #1408 // hv frame base
     stp x0, x1, [x15] // hv store L88
@@ -3296,8 +3296,8 @@ _Lb2dd__bt_parse_atom_bb36:
     bl hexa_index_set // index_set: hexa_index_set
     add x15, sp, #1408 // hv frame base
     stp x0, x1, [x15] // hv store L88
-    b _Lb2dd__bt_parse_atom_bb37 // branch
-_Lb2dd__bt_parse_atom_bb37:
+    b _Lfd34__bt_parse_atom_bb37 // branch
+_Lfd34__bt_parse_atom_bb37:
     bl hexa_array_new // array_lit: new array
     add x15, sp, #1424 // hv frame base
     stp x0, x1, [x15] // hv store L89
@@ -3340,7 +3340,7 @@ _Lb2dd__bt_parse_atom_bb37:
     add sp, sp, #2336 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_atom_bb38:
+_Lfd34__bt_parse_atom_bb38:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     add x15, sp, #1488 // hv frame base
@@ -3354,7 +3354,7 @@ _Lb2dd__bt_parse_atom_bb38:
     add sp, sp, #2336 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_atom_bb39:
+_Lfd34__bt_parse_atom_bb39:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #46 // hv const_int val
@@ -3363,9 +3363,9 @@ _Lb2dd__bt_parse_atom_bb39:
     stp x0, x1, [x15] // hv store L95
     add x15, sp, #1520 // hv frame base
     ldp x0, x1, [x15] // hv load L95
-    cbz x1, _Lb2dd__bt_parse_atom_bb41 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb40 // branch -> then
-_Lb2dd__bt_parse_atom_bb40:
+    cbz x1, _Lfd34__bt_parse_atom_bb41 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb40 // branch -> then
+_Lfd34__bt_parse_atom_bb40:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     add x15, sp, #1552 // hv frame base
@@ -3412,7 +3412,7 @@ _Lb2dd__bt_parse_atom_bb40:
     add sp, sp, #2336 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_atom_bb41:
+_Lfd34__bt_parse_atom_bb41:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #94 // hv const_int val
@@ -3421,9 +3421,9 @@ _Lb2dd__bt_parse_atom_bb41:
     stp x0, x1, [x15] // hv store L100
     add x15, sp, #1600 // hv frame base
     ldp x0, x1, [x15] // hv load L100
-    cbz x1, _Lb2dd__bt_parse_atom_bb43 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb42 // branch -> then
-_Lb2dd__bt_parse_atom_bb42:
+    cbz x1, _Lfd34__bt_parse_atom_bb43 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb42 // branch -> then
+_Lfd34__bt_parse_atom_bb42:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     add x15, sp, #1632 // hv frame base
@@ -3470,7 +3470,7 @@ _Lb2dd__bt_parse_atom_bb42:
     add sp, sp, #2336 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_atom_bb43:
+_Lfd34__bt_parse_atom_bb43:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #36 // hv const_int val
@@ -3479,9 +3479,9 @@ _Lb2dd__bt_parse_atom_bb43:
     stp x0, x1, [x15] // hv store L105
     add x15, sp, #1680 // hv frame base
     ldp x0, x1, [x15] // hv load L105
-    cbz x1, _Lb2dd__bt_parse_atom_bb45 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb44 // branch -> then
-_Lb2dd__bt_parse_atom_bb44:
+    cbz x1, _Lfd34__bt_parse_atom_bb45 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb44 // branch -> then
+_Lfd34__bt_parse_atom_bb44:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     add x15, sp, #1712 // hv frame base
@@ -3528,7 +3528,7 @@ _Lb2dd__bt_parse_atom_bb44:
     add sp, sp, #2336 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_atom_bb45:
+_Lfd34__bt_parse_atom_bb45:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #92 // hv const_int val
@@ -3537,9 +3537,9 @@ _Lb2dd__bt_parse_atom_bb45:
     stp x0, x1, [x15] // hv store L110
     add x15, sp, #1760 // hv frame base
     ldp x0, x1, [x15] // hv load L110
-    cbz x1, _Lb2dd__bt_parse_atom_bb47 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb46 // branch -> then
-_Lb2dd__bt_parse_atom_bb46:
+    cbz x1, _Lfd34__bt_parse_atom_bb47 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb46 // branch -> then
+_Lfd34__bt_parse_atom_bb46:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     add x15, sp, #1792 // hv frame base
@@ -3565,9 +3565,9 @@ _Lb2dd__bt_parse_atom_bb46:
     stp x0, x1, [x15] // hv store L116
     add x15, sp, #1856 // hv frame base
     ldp x0, x1, [x15] // hv load L116
-    cbz x1, _Lb2dd__bt_parse_atom_bb49 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb48 // branch -> then
-_Lb2dd__bt_parse_atom_bb47:
+    cbz x1, _Lfd34__bt_parse_atom_bb49 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb48 // branch -> then
+_Lfd34__bt_parse_atom_bb47:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _bt_adv // call _bt_adv
     add x15, sp, #2288 // hv frame base
@@ -3613,7 +3613,7 @@ _Lb2dd__bt_parse_atom_bb47:
     add sp, sp, #2336 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_atom_bb48:
+_Lfd34__bt_parse_atom_bb48:
     add x15, sp, #1824 // hv frame base
     ldp x0, x1, [x15] // hv load L114
     movz x2, #0 // hv const_int: TAG_INT
@@ -3625,19 +3625,19 @@ _Lb2dd__bt_parse_atom_bb48:
     ldp x0, x1, [x15] // hv load L118
     add x15, sp, #1872 // hv frame base
     stp x0, x1, [x15] // hv store L117
-    b _Lb2dd__bt_parse_atom_bb50 // branch
-_Lb2dd__bt_parse_atom_bb49:
+    b _Lfd34__bt_parse_atom_bb50 // branch
+_Lfd34__bt_parse_atom_bb49:
     add x15, sp, #1856 // hv frame base
     ldp x0, x1, [x15] // hv load L116
     add x15, sp, #1872 // hv frame base
     stp x0, x1, [x15] // hv store L117
-    b _Lb2dd__bt_parse_atom_bb50 // branch
-_Lb2dd__bt_parse_atom_bb50:
+    b _Lfd34__bt_parse_atom_bb50 // branch
+_Lfd34__bt_parse_atom_bb50:
     add x15, sp, #1872 // hv frame base
     ldp x0, x1, [x15] // hv load L117
-    cbz x1, _Lb2dd__bt_parse_atom_bb52 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb51 // branch -> then
-_Lb2dd__bt_parse_atom_bb51:
+    cbz x1, _Lfd34__bt_parse_atom_bb52 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb51 // branch -> then
+_Lfd34__bt_parse_atom_bb51:
     add x15, sp, #1824 // hv frame base
     ldp x0, x1, [x15] // hv load L114
     movz x2, #0 // hv const_int: TAG_INT
@@ -3687,7 +3687,7 @@ _Lb2dd__bt_parse_atom_bb51:
     add sp, sp, #2336 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_atom_bb52:
+_Lfd34__bt_parse_atom_bb52:
     add x15, sp, #1824 // hv frame base
     ldp x0, x1, [x15] // hv load L114
     bl _bt_class_for_escape // call _bt_class_for_escape
@@ -3713,12 +3713,12 @@ _Lb2dd__bt_parse_atom_bb52:
     stp x0, x1, [x15] // hv store L126
     add x15, sp, #2016 // hv frame base
     ldp x0, x1, [x15] // hv load L126
-    cbz x1, _Lb2dd__bt_parse_atom_bb54 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb53 // branch -> then
-_Lb2dd__bt_parse_atom_bb53:
+    cbz x1, _Lfd34__bt_parse_atom_bb54 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb53 // branch -> then
+_Lfd34__bt_parse_atom_bb53:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr4@PAGE // cstr key page
-    add x2, x2, .LCstr4@PAGEOFF // cstr key off
+    adrp x2, .LCstr4 // cstr key page
+    add x2, x2, :lo12:.LCstr4 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #2048 // hv frame base
     stp x0, x1, [x15] // hv store L128
@@ -3730,8 +3730,8 @@ _Lb2dd__bt_parse_atom_bb53:
     add x15, sp, #2064 // hv frame base
     stp x0, x1, [x15] // hv store L129
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr4@PAGE // cstr key page
-    add x2, x2, .LCstr4@PAGEOFF // cstr key off
+    adrp x2, .LCstr4 // cstr key page
+    add x2, x2, :lo12:.LCstr4 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #2080 // hv frame base
     stp x0, x1, [x15] // hv store L130
@@ -3791,7 +3791,7 @@ _Lb2dd__bt_parse_atom_bb53:
     add sp, sp, #2336 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_atom_bb54:
+_Lfd34__bt_parse_atom_bb54:
     add x15, sp, #1824 // hv frame base
     ldp x0, x1, [x15] // hv load L114
     bl _bt_lit_for_escape // call _bt_lit_for_escape
@@ -3810,9 +3810,9 @@ _Lb2dd__bt_parse_atom_bb54:
     stp x0, x1, [x15] // hv store L137
     add x15, sp, #2192 // hv frame base
     ldp x0, x1, [x15] // hv load L137
-    cbz x1, _Lb2dd__bt_parse_atom_bb56 // br_cond: !payload -> else
-    b _Lb2dd__bt_parse_atom_bb55 // branch -> then
-_Lb2dd__bt_parse_atom_bb55:
+    cbz x1, _Lfd34__bt_parse_atom_bb56 // br_cond: !payload -> else
+    b _Lfd34__bt_parse_atom_bb55 // branch -> then
+_Lfd34__bt_parse_atom_bb55:
     bl hexa_array_new // array_lit: new array
     add x15, sp, #2224 // hv frame base
     stp x0, x1, [x15] // hv store L139
@@ -3855,7 +3855,7 @@ _Lb2dd__bt_parse_atom_bb55:
     add sp, sp, #2336 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_parse_atom_bb56:
+_Lfd34__bt_parse_atom_bb56:
     bl hexa_array_new // array_lit: new array
     add x15, sp, #2256 // hv frame base
     stp x0, x1, [x15] // hv store L141
@@ -3907,20 +3907,20 @@ _bt_width:
     sub sp, sp, #1184 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd__bt_width_bb0:
+_Lfd34__bt_width_bb0:
     ldp x0, x1, [sp, #16] // hv load L1
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
-    cbz x1, _Lb2dd__bt_width_bb2 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb1 // branch -> then
-_Lb2dd__bt_width_bb1:
+    cbz x1, _Lfd34__bt_width_bb2 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb1 // branch -> then
+_Lfd34__bt_width_bb1:
     ldp x0, x1, [sp, #32] // hv load L2
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__bt_width_bb3 // branch
-_Lb2dd__bt_width_bb2:
+    b _Lfd34__bt_width_bb3 // branch
+_Lfd34__bt_width_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_len // call hexa_len
     sxtw x0, w0 // ret int: sign-ext
@@ -3932,19 +3932,19 @@ _Lb2dd__bt_width_bb2:
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__bt_width_bb3 // branch
-_Lb2dd__bt_width_bb3:
+    b _Lfd34__bt_width_bb3 // branch
+_Lfd34__bt_width_bb3:
     ldp x0, x1, [sp, #48] // hv load L3
-    cbz x1, _Lb2dd__bt_width_bb5 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb4 // branch -> then
-_Lb2dd__bt_width_bb4:
+    cbz x1, _Lfd34__bt_width_bb5 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb4 // branch -> then
+_Lfd34__bt_width_bb4:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
     add sp, sp, #1184 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_width_bb5:
+_Lfd34__bt_width_bb5:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #16] // hv load L1
     bl hexa_index_get // index: hexa_index_get
@@ -3964,13 +3964,13 @@ _Lb2dd__bt_width_bb5:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #176] // hv load L11
-    cbz x1, _Lb2dd__bt_width_bb7 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb6 // branch -> then
-_Lb2dd__bt_width_bb6:
+    cbz x1, _Lfd34__bt_width_bb7 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb6 // branch -> then
+_Lfd34__bt_width_bb6:
     ldp x0, x1, [sp, #176] // hv load L11
     stp x0, x1, [sp, #192] // hv store L12
-    b _Lb2dd__bt_width_bb8 // branch
-_Lb2dd__bt_width_bb7:
+    b _Lfd34__bt_width_bb8 // branch
+_Lfd34__bt_width_bb7:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -3978,16 +3978,16 @@ _Lb2dd__bt_width_bb7:
     stp x0, x1, [sp, #208] // hv store L13
     ldp x0, x1, [sp, #208] // hv load L13
     stp x0, x1, [sp, #192] // hv store L12
-    b _Lb2dd__bt_width_bb8 // branch
-_Lb2dd__bt_width_bb8:
+    b _Lfd34__bt_width_bb8 // branch
+_Lfd34__bt_width_bb8:
     ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _Lb2dd__bt_width_bb10 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb9 // branch -> then
-_Lb2dd__bt_width_bb9:
+    cbz x1, _Lfd34__bt_width_bb10 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb9 // branch -> then
+_Lfd34__bt_width_bb9:
     ldp x0, x1, [sp, #192] // hv load L12
     stp x0, x1, [sp, #224] // hv store L14
-    b _Lb2dd__bt_width_bb11 // branch
-_Lb2dd__bt_width_bb10:
+    b _Lfd34__bt_width_bb11 // branch
+_Lfd34__bt_width_bb10:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -3995,31 +3995,31 @@ _Lb2dd__bt_width_bb10:
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv load L15
     stp x0, x1, [sp, #224] // hv store L14
-    b _Lb2dd__bt_width_bb11 // branch
-_Lb2dd__bt_width_bb11:
+    b _Lfd34__bt_width_bb11 // branch
+_Lfd34__bt_width_bb11:
     ldp x0, x1, [sp, #224] // hv load L14
-    cbz x1, _Lb2dd__bt_width_bb13 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb12 // branch -> then
-_Lb2dd__bt_width_bb12:
+    cbz x1, _Lfd34__bt_width_bb13 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb12 // branch -> then
+_Lfd34__bt_width_bb12:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // hv const_int val
     add sp, sp, #1184 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_width_bb13:
+_Lfd34__bt_width_bb13:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #8 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #272] // hv store L17
     ldp x0, x1, [sp, #272] // hv load L17
-    cbz x1, _Lb2dd__bt_width_bb15 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb14 // branch -> then
-_Lb2dd__bt_width_bb14:
+    cbz x1, _Lfd34__bt_width_bb15 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb14 // branch -> then
+_Lfd34__bt_width_bb14:
     ldp x0, x1, [sp, #272] // hv load L17
     stp x0, x1, [sp, #288] // hv store L18
-    b _Lb2dd__bt_width_bb16 // branch
-_Lb2dd__bt_width_bb15:
+    b _Lfd34__bt_width_bb16 // branch
+_Lfd34__bt_width_bb15:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #9 // hv const_int val
@@ -4027,16 +4027,16 @@ _Lb2dd__bt_width_bb15:
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv load L19
     stp x0, x1, [sp, #288] // hv store L18
-    b _Lb2dd__bt_width_bb16 // branch
-_Lb2dd__bt_width_bb16:
+    b _Lfd34__bt_width_bb16 // branch
+_Lfd34__bt_width_bb16:
     ldp x0, x1, [sp, #288] // hv load L18
-    cbz x1, _Lb2dd__bt_width_bb18 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb17 // branch -> then
-_Lb2dd__bt_width_bb17:
+    cbz x1, _Lfd34__bt_width_bb18 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb17 // branch -> then
+_Lfd34__bt_width_bb17:
     ldp x0, x1, [sp, #288] // hv load L18
     stp x0, x1, [sp, #320] // hv store L20
-    b _Lb2dd__bt_width_bb19 // branch
-_Lb2dd__bt_width_bb18:
+    b _Lfd34__bt_width_bb19 // branch
+_Lfd34__bt_width_bb18:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #10 // hv const_int val
@@ -4044,31 +4044,31 @@ _Lb2dd__bt_width_bb18:
     stp x0, x1, [sp, #336] // hv store L21
     ldp x0, x1, [sp, #336] // hv load L21
     stp x0, x1, [sp, #320] // hv store L20
-    b _Lb2dd__bt_width_bb19 // branch
-_Lb2dd__bt_width_bb19:
+    b _Lfd34__bt_width_bb19 // branch
+_Lfd34__bt_width_bb19:
     ldp x0, x1, [sp, #320] // hv load L20
-    cbz x1, _Lb2dd__bt_width_bb21 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb20 // branch -> then
-_Lb2dd__bt_width_bb20:
+    cbz x1, _Lfd34__bt_width_bb21 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb20 // branch -> then
+_Lfd34__bt_width_bb20:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     add sp, sp, #1184 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_width_bb21:
+_Lfd34__bt_width_bb21:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #14 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #368] // hv store L23
     ldp x0, x1, [sp, #368] // hv load L23
-    cbz x1, _Lb2dd__bt_width_bb23 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb22 // branch -> then
-_Lb2dd__bt_width_bb22:
+    cbz x1, _Lfd34__bt_width_bb23 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb22 // branch -> then
+_Lfd34__bt_width_bb22:
     ldp x0, x1, [sp, #368] // hv load L23
     stp x0, x1, [sp, #384] // hv store L24
-    b _Lb2dd__bt_width_bb24 // branch
-_Lb2dd__bt_width_bb23:
+    b _Lfd34__bt_width_bb24 // branch
+_Lfd34__bt_width_bb23:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #15 // hv const_int val
@@ -4076,27 +4076,27 @@ _Lb2dd__bt_width_bb23:
     stp x0, x1, [sp, #400] // hv store L25
     ldp x0, x1, [sp, #400] // hv load L25
     stp x0, x1, [sp, #384] // hv store L24
-    b _Lb2dd__bt_width_bb24 // branch
-_Lb2dd__bt_width_bb24:
+    b _Lfd34__bt_width_bb24 // branch
+_Lfd34__bt_width_bb24:
     ldp x0, x1, [sp, #384] // hv load L24
-    cbz x1, _Lb2dd__bt_width_bb26 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb25 // branch -> then
-_Lb2dd__bt_width_bb25:
+    cbz x1, _Lfd34__bt_width_bb26 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb25 // branch -> then
+_Lfd34__bt_width_bb25:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     add sp, sp, #1184 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_width_bb26:
+_Lfd34__bt_width_bb26:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #12 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #432] // hv store L27
     ldp x0, x1, [sp, #432] // hv load L27
-    cbz x1, _Lb2dd__bt_width_bb28 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb27 // branch -> then
-_Lb2dd__bt_width_bb27:
+    cbz x1, _Lfd34__bt_width_bb28 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb27 // branch -> then
+_Lfd34__bt_width_bb27:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -4110,16 +4110,16 @@ _Lb2dd__bt_width_bb27:
     add sp, sp, #1184 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_width_bb28:
+_Lfd34__bt_width_bb28:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #6 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #496] // hv store L31
     ldp x0, x1, [sp, #496] // hv load L31
-    cbz x1, _Lb2dd__bt_width_bb30 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb29 // branch -> then
-_Lb2dd__bt_width_bb29:
+    cbz x1, _Lfd34__bt_width_bb30 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb29 // branch -> then
+_Lfd34__bt_width_bb29:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -4161,9 +4161,9 @@ _Lb2dd__bt_width_bb29:
     stp x0, x1, [x15] // hv store L39
     add x15, sp, #624 // hv frame base
     ldp x0, x1, [x15] // hv load L39
-    cbz x1, _Lb2dd__bt_width_bb32 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb31 // branch -> then
-_Lb2dd__bt_width_bb30:
+    cbz x1, _Lfd34__bt_width_bb32 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb31 // branch -> then
+_Lfd34__bt_width_bb30:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #7 // hv const_int val
@@ -4172,15 +4172,15 @@ _Lb2dd__bt_width_bb30:
     stp x0, x1, [x15] // hv store L44
     add x15, sp, #704 // hv frame base
     ldp x0, x1, [x15] // hv load L44
-    cbz x1, _Lb2dd__bt_width_bb37 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb36 // branch -> then
-_Lb2dd__bt_width_bb31:
+    cbz x1, _Lfd34__bt_width_bb37 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb36 // branch -> then
+_Lfd34__bt_width_bb31:
     add x15, sp, #624 // hv frame base
     ldp x0, x1, [x15] // hv load L39
     add x15, sp, #640 // hv frame base
     stp x0, x1, [x15] // hv store L40
-    b _Lb2dd__bt_width_bb33 // branch
-_Lb2dd__bt_width_bb32:
+    b _Lfd34__bt_width_bb33 // branch
+_Lfd34__bt_width_bb32:
     add x15, sp, #608 // hv frame base
     ldp x0, x1, [x15] // hv load L38
     movz x2, #0 // hv const_int: TAG_INT
@@ -4192,20 +4192,20 @@ _Lb2dd__bt_width_bb32:
     ldp x0, x1, [x15] // hv load L41
     add x15, sp, #640 // hv frame base
     stp x0, x1, [x15] // hv store L40
-    b _Lb2dd__bt_width_bb33 // branch
-_Lb2dd__bt_width_bb33:
+    b _Lfd34__bt_width_bb33 // branch
+_Lfd34__bt_width_bb33:
     add x15, sp, #640 // hv frame base
     ldp x0, x1, [x15] // hv load L40
-    cbz x1, _Lb2dd__bt_width_bb35 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb34 // branch -> then
-_Lb2dd__bt_width_bb34:
+    cbz x1, _Lfd34__bt_width_bb35 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb34 // branch -> then
+_Lfd34__bt_width_bb34:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
     add sp, sp, #1184 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_width_bb35:
+_Lfd34__bt_width_bb35:
     add x15, sp, #560 // hv frame base
     ldp x0, x1, [x15] // hv load L35
     add x15, sp, #608 // hv frame base
@@ -4218,7 +4218,7 @@ _Lb2dd__bt_width_bb35:
     add sp, sp, #1184 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_width_bb36:
+_Lfd34__bt_width_bb36:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -4260,9 +4260,9 @@ _Lb2dd__bt_width_bb36:
     stp x0, x1, [x15] // hv store L52
     add x15, sp, #832 // hv frame base
     ldp x0, x1, [x15] // hv load L52
-    cbz x1, _Lb2dd__bt_width_bb39 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb38 // branch -> then
-_Lb2dd__bt_width_bb37:
+    cbz x1, _Lfd34__bt_width_bb39 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb38 // branch -> then
+_Lfd34__bt_width_bb37:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #11 // hv const_int val
@@ -4271,15 +4271,15 @@ _Lb2dd__bt_width_bb37:
     stp x0, x1, [x15] // hv store L58
     add x15, sp, #928 // hv frame base
     ldp x0, x1, [x15] // hv load L58
-    cbz x1, _Lb2dd__bt_width_bb47 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb46 // branch -> then
-_Lb2dd__bt_width_bb38:
+    cbz x1, _Lfd34__bt_width_bb47 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb46 // branch -> then
+_Lfd34__bt_width_bb38:
     add x15, sp, #832 // hv frame base
     ldp x0, x1, [x15] // hv load L52
     add x15, sp, #848 // hv frame base
     stp x0, x1, [x15] // hv store L53
-    b _Lb2dd__bt_width_bb40 // branch
-_Lb2dd__bt_width_bb39:
+    b _Lfd34__bt_width_bb40 // branch
+_Lfd34__bt_width_bb39:
     add x15, sp, #816 // hv frame base
     ldp x0, x1, [x15] // hv load L51
     movz x2, #0 // hv const_int: TAG_INT
@@ -4291,19 +4291,19 @@ _Lb2dd__bt_width_bb39:
     ldp x0, x1, [x15] // hv load L54
     add x15, sp, #848 // hv frame base
     stp x0, x1, [x15] // hv store L53
-    b _Lb2dd__bt_width_bb40 // branch
-_Lb2dd__bt_width_bb40:
+    b _Lfd34__bt_width_bb40 // branch
+_Lfd34__bt_width_bb40:
     add x15, sp, #848 // hv frame base
     ldp x0, x1, [x15] // hv load L53
-    cbz x1, _Lb2dd__bt_width_bb42 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb41 // branch -> then
-_Lb2dd__bt_width_bb41:
+    cbz x1, _Lfd34__bt_width_bb42 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb41 // branch -> then
+_Lfd34__bt_width_bb41:
     add x15, sp, #848 // hv frame base
     ldp x0, x1, [x15] // hv load L53
     add x15, sp, #880 // hv frame base
     stp x0, x1, [x15] // hv store L55
-    b _Lb2dd__bt_width_bb43 // branch
-_Lb2dd__bt_width_bb42:
+    b _Lfd34__bt_width_bb43 // branch
+_Lfd34__bt_width_bb42:
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv load L48
     add x15, sp, #816 // hv frame base
@@ -4318,26 +4318,26 @@ _Lb2dd__bt_width_bb42:
     ldp x0, x1, [x15] // hv load L56
     add x15, sp, #880 // hv frame base
     stp x0, x1, [x15] // hv store L55
-    b _Lb2dd__bt_width_bb43 // branch
-_Lb2dd__bt_width_bb43:
+    b _Lfd34__bt_width_bb43 // branch
+_Lfd34__bt_width_bb43:
     add x15, sp, #880 // hv frame base
     ldp x0, x1, [x15] // hv load L55
-    cbz x1, _Lb2dd__bt_width_bb45 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb44 // branch -> then
-_Lb2dd__bt_width_bb44:
+    cbz x1, _Lfd34__bt_width_bb45 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb44 // branch -> then
+_Lfd34__bt_width_bb44:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
     add sp, sp, #1184 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_width_bb45:
+_Lfd34__bt_width_bb45:
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv load L48
     add sp, sp, #1184 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_width_bb46:
+_Lfd34__bt_width_bb46:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #3 // hv const_int val
@@ -4353,16 +4353,16 @@ _Lb2dd__bt_width_bb46:
     stp x0, x1, [x15] // hv store L61
     add x15, sp, #976 // hv frame base
     ldp x0, x1, [x15] // hv load L61
-    cbz x1, _Lb2dd__bt_width_bb49 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb48 // branch -> then
-_Lb2dd__bt_width_bb47:
+    cbz x1, _Lfd34__bt_width_bb49 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb48 // branch -> then
+_Lfd34__bt_width_bb47:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
     add sp, sp, #1184 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_width_bb48:
+_Lfd34__bt_width_bb48:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -4386,19 +4386,19 @@ _Lb2dd__bt_width_bb48:
     ldp x0, x1, [x15] // hv load L65
     add x15, sp, #992 // hv frame base
     stp x0, x1, [x15] // hv store L62
-    b _Lb2dd__bt_width_bb50 // branch
-_Lb2dd__bt_width_bb49:
+    b _Lfd34__bt_width_bb50 // branch
+_Lfd34__bt_width_bb49:
     add x15, sp, #976 // hv frame base
     ldp x0, x1, [x15] // hv load L61
     add x15, sp, #992 // hv frame base
     stp x0, x1, [x15] // hv store L62
-    b _Lb2dd__bt_width_bb50 // branch
-_Lb2dd__bt_width_bb50:
+    b _Lfd34__bt_width_bb50 // branch
+_Lfd34__bt_width_bb50:
     add x15, sp, #992 // hv frame base
     ldp x0, x1, [x15] // hv load L62
-    cbz x1, _Lb2dd__bt_width_bb52 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb51 // branch -> then
-_Lb2dd__bt_width_bb51:
+    cbz x1, _Lfd34__bt_width_bb52 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb51 // branch -> then
+_Lfd34__bt_width_bb51:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -4424,23 +4424,23 @@ _Lb2dd__bt_width_bb51:
     stp x0, x1, [x15] // hv store L70
     add x15, sp, #1120 // hv frame base
     ldp x0, x1, [x15] // hv load L70
-    cbz x1, _Lb2dd__bt_width_bb54 // br_cond: !payload -> else
-    b _Lb2dd__bt_width_bb53 // branch -> then
-_Lb2dd__bt_width_bb52:
+    cbz x1, _Lfd34__bt_width_bb54 // br_cond: !payload -> else
+    b _Lfd34__bt_width_bb53 // branch -> then
+_Lfd34__bt_width_bb52:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
     add sp, sp, #1184 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_width_bb53:
+_Lfd34__bt_width_bb53:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
     add sp, sp, #1184 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_width_bb54:
+_Lfd34__bt_width_bb54:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -4468,20 +4468,20 @@ _bt_minwidth:
     sub sp, sp, #1024 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd__bt_minwidth_bb0:
+_Lfd34__bt_minwidth_bb0:
     ldp x0, x1, [sp, #16] // hv load L1
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
-    cbz x1, _Lb2dd__bt_minwidth_bb2 // br_cond: !payload -> else
-    b _Lb2dd__bt_minwidth_bb1 // branch -> then
-_Lb2dd__bt_minwidth_bb1:
+    cbz x1, _Lfd34__bt_minwidth_bb2 // br_cond: !payload -> else
+    b _Lfd34__bt_minwidth_bb1 // branch -> then
+_Lfd34__bt_minwidth_bb1:
     ldp x0, x1, [sp, #32] // hv load L2
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__bt_minwidth_bb3 // branch
-_Lb2dd__bt_minwidth_bb2:
+    b _Lfd34__bt_minwidth_bb3 // branch
+_Lfd34__bt_minwidth_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_len // call hexa_len
     sxtw x0, w0 // ret int: sign-ext
@@ -4493,18 +4493,18 @@ _Lb2dd__bt_minwidth_bb2:
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__bt_minwidth_bb3 // branch
-_Lb2dd__bt_minwidth_bb3:
+    b _Lfd34__bt_minwidth_bb3 // branch
+_Lfd34__bt_minwidth_bb3:
     ldp x0, x1, [sp, #48] // hv load L3
-    cbz x1, _Lb2dd__bt_minwidth_bb5 // br_cond: !payload -> else
-    b _Lb2dd__bt_minwidth_bb4 // branch -> then
-_Lb2dd__bt_minwidth_bb4:
+    cbz x1, _Lfd34__bt_minwidth_bb5 // br_cond: !payload -> else
+    b _Lfd34__bt_minwidth_bb4 // branch -> then
+_Lfd34__bt_minwidth_bb4:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     add sp, sp, #1024 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_minwidth_bb5:
+_Lfd34__bt_minwidth_bb5:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #16] // hv load L1
     bl hexa_index_get // index: hexa_index_get
@@ -4524,13 +4524,13 @@ _Lb2dd__bt_minwidth_bb5:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #176] // hv load L11
-    cbz x1, _Lb2dd__bt_minwidth_bb7 // br_cond: !payload -> else
-    b _Lb2dd__bt_minwidth_bb6 // branch -> then
-_Lb2dd__bt_minwidth_bb6:
+    cbz x1, _Lfd34__bt_minwidth_bb7 // br_cond: !payload -> else
+    b _Lfd34__bt_minwidth_bb6 // branch -> then
+_Lfd34__bt_minwidth_bb6:
     ldp x0, x1, [sp, #176] // hv load L11
     stp x0, x1, [sp, #192] // hv store L12
-    b _Lb2dd__bt_minwidth_bb8 // branch
-_Lb2dd__bt_minwidth_bb7:
+    b _Lfd34__bt_minwidth_bb8 // branch
+_Lfd34__bt_minwidth_bb7:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -4538,16 +4538,16 @@ _Lb2dd__bt_minwidth_bb7:
     stp x0, x1, [sp, #208] // hv store L13
     ldp x0, x1, [sp, #208] // hv load L13
     stp x0, x1, [sp, #192] // hv store L12
-    b _Lb2dd__bt_minwidth_bb8 // branch
-_Lb2dd__bt_minwidth_bb8:
+    b _Lfd34__bt_minwidth_bb8 // branch
+_Lfd34__bt_minwidth_bb8:
     ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _Lb2dd__bt_minwidth_bb10 // br_cond: !payload -> else
-    b _Lb2dd__bt_minwidth_bb9 // branch -> then
-_Lb2dd__bt_minwidth_bb9:
+    cbz x1, _Lfd34__bt_minwidth_bb10 // br_cond: !payload -> else
+    b _Lfd34__bt_minwidth_bb9 // branch -> then
+_Lfd34__bt_minwidth_bb9:
     ldp x0, x1, [sp, #192] // hv load L12
     stp x0, x1, [sp, #224] // hv store L14
-    b _Lb2dd__bt_minwidth_bb11 // branch
-_Lb2dd__bt_minwidth_bb10:
+    b _Lfd34__bt_minwidth_bb11 // branch
+_Lfd34__bt_minwidth_bb10:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -4555,31 +4555,31 @@ _Lb2dd__bt_minwidth_bb10:
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv load L15
     stp x0, x1, [sp, #224] // hv store L14
-    b _Lb2dd__bt_minwidth_bb11 // branch
-_Lb2dd__bt_minwidth_bb11:
+    b _Lfd34__bt_minwidth_bb11 // branch
+_Lfd34__bt_minwidth_bb11:
     ldp x0, x1, [sp, #224] // hv load L14
-    cbz x1, _Lb2dd__bt_minwidth_bb13 // br_cond: !payload -> else
-    b _Lb2dd__bt_minwidth_bb12 // branch -> then
-_Lb2dd__bt_minwidth_bb12:
+    cbz x1, _Lfd34__bt_minwidth_bb13 // br_cond: !payload -> else
+    b _Lfd34__bt_minwidth_bb12 // branch -> then
+_Lfd34__bt_minwidth_bb12:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // hv const_int val
     add sp, sp, #1024 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_minwidth_bb13:
+_Lfd34__bt_minwidth_bb13:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #8 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #272] // hv store L17
     ldp x0, x1, [sp, #272] // hv load L17
-    cbz x1, _Lb2dd__bt_minwidth_bb15 // br_cond: !payload -> else
-    b _Lb2dd__bt_minwidth_bb14 // branch -> then
-_Lb2dd__bt_minwidth_bb14:
+    cbz x1, _Lfd34__bt_minwidth_bb15 // br_cond: !payload -> else
+    b _Lfd34__bt_minwidth_bb14 // branch -> then
+_Lfd34__bt_minwidth_bb14:
     ldp x0, x1, [sp, #272] // hv load L17
     stp x0, x1, [sp, #288] // hv store L18
-    b _Lb2dd__bt_minwidth_bb16 // branch
-_Lb2dd__bt_minwidth_bb15:
+    b _Lfd34__bt_minwidth_bb16 // branch
+_Lfd34__bt_minwidth_bb15:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #9 // hv const_int val
@@ -4587,16 +4587,16 @@ _Lb2dd__bt_minwidth_bb15:
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv load L19
     stp x0, x1, [sp, #288] // hv store L18
-    b _Lb2dd__bt_minwidth_bb16 // branch
-_Lb2dd__bt_minwidth_bb16:
+    b _Lfd34__bt_minwidth_bb16 // branch
+_Lfd34__bt_minwidth_bb16:
     ldp x0, x1, [sp, #288] // hv load L18
-    cbz x1, _Lb2dd__bt_minwidth_bb18 // br_cond: !payload -> else
-    b _Lb2dd__bt_minwidth_bb17 // branch -> then
-_Lb2dd__bt_minwidth_bb17:
+    cbz x1, _Lfd34__bt_minwidth_bb18 // br_cond: !payload -> else
+    b _Lfd34__bt_minwidth_bb17 // branch -> then
+_Lfd34__bt_minwidth_bb17:
     ldp x0, x1, [sp, #288] // hv load L18
     stp x0, x1, [sp, #320] // hv store L20
-    b _Lb2dd__bt_minwidth_bb19 // branch
-_Lb2dd__bt_minwidth_bb18:
+    b _Lfd34__bt_minwidth_bb19 // branch
+_Lfd34__bt_minwidth_bb18:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #10 // hv const_int val
@@ -4604,31 +4604,31 @@ _Lb2dd__bt_minwidth_bb18:
     stp x0, x1, [sp, #336] // hv store L21
     ldp x0, x1, [sp, #336] // hv load L21
     stp x0, x1, [sp, #320] // hv store L20
-    b _Lb2dd__bt_minwidth_bb19 // branch
-_Lb2dd__bt_minwidth_bb19:
+    b _Lfd34__bt_minwidth_bb19 // branch
+_Lfd34__bt_minwidth_bb19:
     ldp x0, x1, [sp, #320] // hv load L20
-    cbz x1, _Lb2dd__bt_minwidth_bb21 // br_cond: !payload -> else
-    b _Lb2dd__bt_minwidth_bb20 // branch -> then
-_Lb2dd__bt_minwidth_bb20:
+    cbz x1, _Lfd34__bt_minwidth_bb21 // br_cond: !payload -> else
+    b _Lfd34__bt_minwidth_bb20 // branch -> then
+_Lfd34__bt_minwidth_bb20:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     add sp, sp, #1024 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_minwidth_bb21:
+_Lfd34__bt_minwidth_bb21:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #14 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #368] // hv store L23
     ldp x0, x1, [sp, #368] // hv load L23
-    cbz x1, _Lb2dd__bt_minwidth_bb23 // br_cond: !payload -> else
-    b _Lb2dd__bt_minwidth_bb22 // branch -> then
-_Lb2dd__bt_minwidth_bb22:
+    cbz x1, _Lfd34__bt_minwidth_bb23 // br_cond: !payload -> else
+    b _Lfd34__bt_minwidth_bb22 // branch -> then
+_Lfd34__bt_minwidth_bb22:
     ldp x0, x1, [sp, #368] // hv load L23
     stp x0, x1, [sp, #384] // hv store L24
-    b _Lb2dd__bt_minwidth_bb24 // branch
-_Lb2dd__bt_minwidth_bb23:
+    b _Lfd34__bt_minwidth_bb24 // branch
+_Lfd34__bt_minwidth_bb23:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #15 // hv const_int val
@@ -4636,42 +4636,42 @@ _Lb2dd__bt_minwidth_bb23:
     stp x0, x1, [sp, #400] // hv store L25
     ldp x0, x1, [sp, #400] // hv load L25
     stp x0, x1, [sp, #384] // hv store L24
-    b _Lb2dd__bt_minwidth_bb24 // branch
-_Lb2dd__bt_minwidth_bb24:
+    b _Lfd34__bt_minwidth_bb24 // branch
+_Lfd34__bt_minwidth_bb24:
     ldp x0, x1, [sp, #384] // hv load L24
-    cbz x1, _Lb2dd__bt_minwidth_bb26 // br_cond: !payload -> else
-    b _Lb2dd__bt_minwidth_bb25 // branch -> then
-_Lb2dd__bt_minwidth_bb25:
+    cbz x1, _Lfd34__bt_minwidth_bb26 // br_cond: !payload -> else
+    b _Lfd34__bt_minwidth_bb25 // branch -> then
+_Lfd34__bt_minwidth_bb25:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     add sp, sp, #1024 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_minwidth_bb26:
+_Lfd34__bt_minwidth_bb26:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #13 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #432] // hv store L27
     ldp x0, x1, [sp, #432] // hv load L27
-    cbz x1, _Lb2dd__bt_minwidth_bb28 // br_cond: !payload -> else
-    b _Lb2dd__bt_minwidth_bb27 // branch -> then
-_Lb2dd__bt_minwidth_bb27:
+    cbz x1, _Lfd34__bt_minwidth_bb28 // br_cond: !payload -> else
+    b _Lfd34__bt_minwidth_bb27 // branch -> then
+_Lfd34__bt_minwidth_bb27:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     add sp, sp, #1024 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_minwidth_bb28:
+_Lfd34__bt_minwidth_bb28:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #12 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #464] // hv store L29
     ldp x0, x1, [sp, #464] // hv load L29
-    cbz x1, _Lb2dd__bt_minwidth_bb30 // br_cond: !payload -> else
-    b _Lb2dd__bt_minwidth_bb29 // branch -> then
-_Lb2dd__bt_minwidth_bb29:
+    cbz x1, _Lfd34__bt_minwidth_bb30 // br_cond: !payload -> else
+    b _Lfd34__bt_minwidth_bb29 // branch -> then
+_Lfd34__bt_minwidth_bb29:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -4687,7 +4687,7 @@ _Lb2dd__bt_minwidth_bb29:
     add sp, sp, #1024 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_minwidth_bb30:
+_Lfd34__bt_minwidth_bb30:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #6 // hv const_int val
@@ -4696,9 +4696,9 @@ _Lb2dd__bt_minwidth_bb30:
     stp x0, x1, [x15] // hv store L33
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L33
-    cbz x1, _Lb2dd__bt_minwidth_bb32 // br_cond: !payload -> else
-    b _Lb2dd__bt_minwidth_bb31 // branch -> then
-_Lb2dd__bt_minwidth_bb31:
+    cbz x1, _Lfd34__bt_minwidth_bb32 // br_cond: !payload -> else
+    b _Lfd34__bt_minwidth_bb31 // branch -> then
+_Lfd34__bt_minwidth_bb31:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -4735,7 +4735,7 @@ _Lb2dd__bt_minwidth_bb31:
     add sp, sp, #1024 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_minwidth_bb32:
+_Lfd34__bt_minwidth_bb32:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #7 // hv const_int val
@@ -4744,9 +4744,9 @@ _Lb2dd__bt_minwidth_bb32:
     stp x0, x1, [x15] // hv store L40
     add x15, sp, #640 // hv frame base
     ldp x0, x1, [x15] // hv load L40
-    cbz x1, _Lb2dd__bt_minwidth_bb34 // br_cond: !payload -> else
-    b _Lb2dd__bt_minwidth_bb33 // branch -> then
-_Lb2dd__bt_minwidth_bb33:
+    cbz x1, _Lfd34__bt_minwidth_bb34 // br_cond: !payload -> else
+    b _Lfd34__bt_minwidth_bb33 // branch -> then
+_Lfd34__bt_minwidth_bb33:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -4788,9 +4788,9 @@ _Lb2dd__bt_minwidth_bb33:
     stp x0, x1, [x15] // hv store L48
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv load L48
-    cbz x1, _Lb2dd__bt_minwidth_bb36 // br_cond: !payload -> else
-    b _Lb2dd__bt_minwidth_bb35 // branch -> then
-_Lb2dd__bt_minwidth_bb34:
+    cbz x1, _Lfd34__bt_minwidth_bb36 // br_cond: !payload -> else
+    b _Lfd34__bt_minwidth_bb35 // branch -> then
+_Lfd34__bt_minwidth_bb34:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #4 // hv const_int val
@@ -4799,21 +4799,21 @@ _Lb2dd__bt_minwidth_bb34:
     stp x0, x1, [x15] // hv store L50
     add x15, sp, #800 // hv frame base
     ldp x0, x1, [x15] // hv load L50
-    cbz x1, _Lb2dd__bt_minwidth_bb38 // br_cond: !payload -> else
-    b _Lb2dd__bt_minwidth_bb37 // branch -> then
-_Lb2dd__bt_minwidth_bb35:
+    cbz x1, _Lfd34__bt_minwidth_bb38 // br_cond: !payload -> else
+    b _Lfd34__bt_minwidth_bb37 // branch -> then
+_Lfd34__bt_minwidth_bb35:
     add x15, sp, #704 // hv frame base
     ldp x0, x1, [x15] // hv load L44
     add sp, sp, #1024 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_minwidth_bb36:
+_Lfd34__bt_minwidth_bb36:
     add x15, sp, #752 // hv frame base
     ldp x0, x1, [x15] // hv load L47
     add sp, sp, #1024 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_minwidth_bb37:
+_Lfd34__bt_minwidth_bb37:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -4831,7 +4831,7 @@ _Lb2dd__bt_minwidth_bb37:
     add sp, sp, #1024 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_minwidth_bb38:
+_Lfd34__bt_minwidth_bb38:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #3 // hv const_int val
@@ -4840,15 +4840,15 @@ _Lb2dd__bt_minwidth_bb38:
     stp x0, x1, [x15] // hv store L54
     add x15, sp, #864 // hv frame base
     ldp x0, x1, [x15] // hv load L54
-    cbz x1, _Lb2dd__bt_minwidth_bb40 // br_cond: !payload -> else
-    b _Lb2dd__bt_minwidth_bb39 // branch -> then
-_Lb2dd__bt_minwidth_bb39:
+    cbz x1, _Lfd34__bt_minwidth_bb40 // br_cond: !payload -> else
+    b _Lfd34__bt_minwidth_bb39 // branch -> then
+_Lfd34__bt_minwidth_bb39:
     add x15, sp, #864 // hv frame base
     ldp x0, x1, [x15] // hv load L54
     add x15, sp, #880 // hv frame base
     stp x0, x1, [x15] // hv store L55
-    b _Lb2dd__bt_minwidth_bb41 // branch
-_Lb2dd__bt_minwidth_bb40:
+    b _Lfd34__bt_minwidth_bb41 // branch
+_Lfd34__bt_minwidth_bb40:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #5 // hv const_int val
@@ -4859,19 +4859,19 @@ _Lb2dd__bt_minwidth_bb40:
     ldp x0, x1, [x15] // hv load L56
     add x15, sp, #880 // hv frame base
     stp x0, x1, [x15] // hv store L55
-    b _Lb2dd__bt_minwidth_bb41 // branch
-_Lb2dd__bt_minwidth_bb41:
+    b _Lfd34__bt_minwidth_bb41 // branch
+_Lfd34__bt_minwidth_bb41:
     add x15, sp, #880 // hv frame base
     ldp x0, x1, [x15] // hv load L55
-    cbz x1, _Lb2dd__bt_minwidth_bb43 // br_cond: !payload -> else
-    b _Lb2dd__bt_minwidth_bb42 // branch -> then
-_Lb2dd__bt_minwidth_bb42:
+    cbz x1, _Lfd34__bt_minwidth_bb43 // br_cond: !payload -> else
+    b _Lfd34__bt_minwidth_bb42 // branch -> then
+_Lfd34__bt_minwidth_bb42:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     add sp, sp, #1024 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_minwidth_bb43:
+_Lfd34__bt_minwidth_bb43:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #11 // hv const_int val
@@ -4880,9 +4880,9 @@ _Lb2dd__bt_minwidth_bb43:
     stp x0, x1, [x15] // hv store L58
     add x15, sp, #928 // hv frame base
     ldp x0, x1, [x15] // hv load L58
-    cbz x1, _Lb2dd__bt_minwidth_bb45 // br_cond: !payload -> else
-    b _Lb2dd__bt_minwidth_bb44 // branch -> then
-_Lb2dd__bt_minwidth_bb44:
+    cbz x1, _Lfd34__bt_minwidth_bb45 // br_cond: !payload -> else
+    b _Lfd34__bt_minwidth_bb44 // branch -> then
+_Lfd34__bt_minwidth_bb44:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -4913,7 +4913,7 @@ _Lb2dd__bt_minwidth_bb44:
     add sp, sp, #1024 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_minwidth_bb45:
+_Lfd34__bt_minwidth_bb45:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     add sp, sp, #1024 // sp adj
@@ -4928,20 +4928,20 @@ _bt_maxwidth:
     sub sp, sp, #1216 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd__bt_maxwidth_bb0:
+_Lfd34__bt_maxwidth_bb0:
     ldp x0, x1, [sp, #16] // hv load L1
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
-    cbz x1, _Lb2dd__bt_maxwidth_bb2 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb1 // branch -> then
-_Lb2dd__bt_maxwidth_bb1:
+    cbz x1, _Lfd34__bt_maxwidth_bb2 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb1 // branch -> then
+_Lfd34__bt_maxwidth_bb1:
     ldp x0, x1, [sp, #32] // hv load L2
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__bt_maxwidth_bb3 // branch
-_Lb2dd__bt_maxwidth_bb2:
+    b _Lfd34__bt_maxwidth_bb3 // branch
+_Lfd34__bt_maxwidth_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_len // call hexa_len
     sxtw x0, w0 // ret int: sign-ext
@@ -4953,19 +4953,19 @@ _Lb2dd__bt_maxwidth_bb2:
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__bt_maxwidth_bb3 // branch
-_Lb2dd__bt_maxwidth_bb3:
+    b _Lfd34__bt_maxwidth_bb3 // branch
+_Lfd34__bt_maxwidth_bb3:
     ldp x0, x1, [sp, #48] // hv load L3
-    cbz x1, _Lb2dd__bt_maxwidth_bb5 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb4 // branch -> then
-_Lb2dd__bt_maxwidth_bb4:
+    cbz x1, _Lfd34__bt_maxwidth_bb5 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb4 // branch -> then
+_Lfd34__bt_maxwidth_bb4:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
     add sp, sp, #1216 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_maxwidth_bb5:
+_Lfd34__bt_maxwidth_bb5:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #16] // hv load L1
     bl hexa_index_get // index: hexa_index_get
@@ -4985,13 +4985,13 @@ _Lb2dd__bt_maxwidth_bb5:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #176] // hv load L11
-    cbz x1, _Lb2dd__bt_maxwidth_bb7 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb6 // branch -> then
-_Lb2dd__bt_maxwidth_bb6:
+    cbz x1, _Lfd34__bt_maxwidth_bb7 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb6 // branch -> then
+_Lfd34__bt_maxwidth_bb6:
     ldp x0, x1, [sp, #176] // hv load L11
     stp x0, x1, [sp, #192] // hv store L12
-    b _Lb2dd__bt_maxwidth_bb8 // branch
-_Lb2dd__bt_maxwidth_bb7:
+    b _Lfd34__bt_maxwidth_bb8 // branch
+_Lfd34__bt_maxwidth_bb7:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -4999,16 +4999,16 @@ _Lb2dd__bt_maxwidth_bb7:
     stp x0, x1, [sp, #208] // hv store L13
     ldp x0, x1, [sp, #208] // hv load L13
     stp x0, x1, [sp, #192] // hv store L12
-    b _Lb2dd__bt_maxwidth_bb8 // branch
-_Lb2dd__bt_maxwidth_bb8:
+    b _Lfd34__bt_maxwidth_bb8 // branch
+_Lfd34__bt_maxwidth_bb8:
     ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _Lb2dd__bt_maxwidth_bb10 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb9 // branch -> then
-_Lb2dd__bt_maxwidth_bb9:
+    cbz x1, _Lfd34__bt_maxwidth_bb10 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb9 // branch -> then
+_Lfd34__bt_maxwidth_bb9:
     ldp x0, x1, [sp, #192] // hv load L12
     stp x0, x1, [sp, #224] // hv store L14
-    b _Lb2dd__bt_maxwidth_bb11 // branch
-_Lb2dd__bt_maxwidth_bb10:
+    b _Lfd34__bt_maxwidth_bb11 // branch
+_Lfd34__bt_maxwidth_bb10:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -5016,31 +5016,31 @@ _Lb2dd__bt_maxwidth_bb10:
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv load L15
     stp x0, x1, [sp, #224] // hv store L14
-    b _Lb2dd__bt_maxwidth_bb11 // branch
-_Lb2dd__bt_maxwidth_bb11:
+    b _Lfd34__bt_maxwidth_bb11 // branch
+_Lfd34__bt_maxwidth_bb11:
     ldp x0, x1, [sp, #224] // hv load L14
-    cbz x1, _Lb2dd__bt_maxwidth_bb13 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb12 // branch -> then
-_Lb2dd__bt_maxwidth_bb12:
+    cbz x1, _Lfd34__bt_maxwidth_bb13 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb12 // branch -> then
+_Lfd34__bt_maxwidth_bb12:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // hv const_int val
     add sp, sp, #1216 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_maxwidth_bb13:
+_Lfd34__bt_maxwidth_bb13:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #8 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #272] // hv store L17
     ldp x0, x1, [sp, #272] // hv load L17
-    cbz x1, _Lb2dd__bt_maxwidth_bb15 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb14 // branch -> then
-_Lb2dd__bt_maxwidth_bb14:
+    cbz x1, _Lfd34__bt_maxwidth_bb15 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb14 // branch -> then
+_Lfd34__bt_maxwidth_bb14:
     ldp x0, x1, [sp, #272] // hv load L17
     stp x0, x1, [sp, #288] // hv store L18
-    b _Lb2dd__bt_maxwidth_bb16 // branch
-_Lb2dd__bt_maxwidth_bb15:
+    b _Lfd34__bt_maxwidth_bb16 // branch
+_Lfd34__bt_maxwidth_bb15:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #9 // hv const_int val
@@ -5048,16 +5048,16 @@ _Lb2dd__bt_maxwidth_bb15:
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv load L19
     stp x0, x1, [sp, #288] // hv store L18
-    b _Lb2dd__bt_maxwidth_bb16 // branch
-_Lb2dd__bt_maxwidth_bb16:
+    b _Lfd34__bt_maxwidth_bb16 // branch
+_Lfd34__bt_maxwidth_bb16:
     ldp x0, x1, [sp, #288] // hv load L18
-    cbz x1, _Lb2dd__bt_maxwidth_bb18 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb17 // branch -> then
-_Lb2dd__bt_maxwidth_bb17:
+    cbz x1, _Lfd34__bt_maxwidth_bb18 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb17 // branch -> then
+_Lfd34__bt_maxwidth_bb17:
     ldp x0, x1, [sp, #288] // hv load L18
     stp x0, x1, [sp, #320] // hv store L20
-    b _Lb2dd__bt_maxwidth_bb19 // branch
-_Lb2dd__bt_maxwidth_bb18:
+    b _Lfd34__bt_maxwidth_bb19 // branch
+_Lfd34__bt_maxwidth_bb18:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #10 // hv const_int val
@@ -5065,31 +5065,31 @@ _Lb2dd__bt_maxwidth_bb18:
     stp x0, x1, [sp, #336] // hv store L21
     ldp x0, x1, [sp, #336] // hv load L21
     stp x0, x1, [sp, #320] // hv store L20
-    b _Lb2dd__bt_maxwidth_bb19 // branch
-_Lb2dd__bt_maxwidth_bb19:
+    b _Lfd34__bt_maxwidth_bb19 // branch
+_Lfd34__bt_maxwidth_bb19:
     ldp x0, x1, [sp, #320] // hv load L20
-    cbz x1, _Lb2dd__bt_maxwidth_bb21 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb20 // branch -> then
-_Lb2dd__bt_maxwidth_bb20:
+    cbz x1, _Lfd34__bt_maxwidth_bb21 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb20 // branch -> then
+_Lfd34__bt_maxwidth_bb20:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     add sp, sp, #1216 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_maxwidth_bb21:
+_Lfd34__bt_maxwidth_bb21:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #14 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #368] // hv store L23
     ldp x0, x1, [sp, #368] // hv load L23
-    cbz x1, _Lb2dd__bt_maxwidth_bb23 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb22 // branch -> then
-_Lb2dd__bt_maxwidth_bb22:
+    cbz x1, _Lfd34__bt_maxwidth_bb23 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb22 // branch -> then
+_Lfd34__bt_maxwidth_bb22:
     ldp x0, x1, [sp, #368] // hv load L23
     stp x0, x1, [sp, #384] // hv store L24
-    b _Lb2dd__bt_maxwidth_bb24 // branch
-_Lb2dd__bt_maxwidth_bb23:
+    b _Lfd34__bt_maxwidth_bb24 // branch
+_Lfd34__bt_maxwidth_bb23:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #15 // hv const_int val
@@ -5097,43 +5097,43 @@ _Lb2dd__bt_maxwidth_bb23:
     stp x0, x1, [sp, #400] // hv store L25
     ldp x0, x1, [sp, #400] // hv load L25
     stp x0, x1, [sp, #384] // hv store L24
-    b _Lb2dd__bt_maxwidth_bb24 // branch
-_Lb2dd__bt_maxwidth_bb24:
+    b _Lfd34__bt_maxwidth_bb24 // branch
+_Lfd34__bt_maxwidth_bb24:
     ldp x0, x1, [sp, #384] // hv load L24
-    cbz x1, _Lb2dd__bt_maxwidth_bb26 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb25 // branch -> then
-_Lb2dd__bt_maxwidth_bb25:
+    cbz x1, _Lfd34__bt_maxwidth_bb26 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb25 // branch -> then
+_Lfd34__bt_maxwidth_bb25:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     add sp, sp, #1216 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_maxwidth_bb26:
+_Lfd34__bt_maxwidth_bb26:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #13 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #432] // hv store L27
     ldp x0, x1, [sp, #432] // hv load L27
-    cbz x1, _Lb2dd__bt_maxwidth_bb28 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb27 // branch -> then
-_Lb2dd__bt_maxwidth_bb27:
+    cbz x1, _Lfd34__bt_maxwidth_bb28 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb27 // branch -> then
+_Lfd34__bt_maxwidth_bb27:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
     add sp, sp, #1216 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_maxwidth_bb28:
+_Lfd34__bt_maxwidth_bb28:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #12 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #464] // hv store L29
     ldp x0, x1, [sp, #464] // hv load L29
-    cbz x1, _Lb2dd__bt_maxwidth_bb30 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb29 // branch -> then
-_Lb2dd__bt_maxwidth_bb29:
+    cbz x1, _Lfd34__bt_maxwidth_bb30 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb29 // branch -> then
+_Lfd34__bt_maxwidth_bb29:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -5149,7 +5149,7 @@ _Lb2dd__bt_maxwidth_bb29:
     add sp, sp, #1216 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_maxwidth_bb30:
+_Lfd34__bt_maxwidth_bb30:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #5 // hv const_int val
@@ -5158,9 +5158,9 @@ _Lb2dd__bt_maxwidth_bb30:
     stp x0, x1, [x15] // hv store L33
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L33
-    cbz x1, _Lb2dd__bt_maxwidth_bb32 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb31 // branch -> then
-_Lb2dd__bt_maxwidth_bb31:
+    cbz x1, _Lfd34__bt_maxwidth_bb32 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb31 // branch -> then
+_Lfd34__bt_maxwidth_bb31:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -5178,7 +5178,7 @@ _Lb2dd__bt_maxwidth_bb31:
     add sp, sp, #1216 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_maxwidth_bb32:
+_Lfd34__bt_maxwidth_bb32:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #6 // hv const_int val
@@ -5187,9 +5187,9 @@ _Lb2dd__bt_maxwidth_bb32:
     stp x0, x1, [x15] // hv store L37
     add x15, sp, #592 // hv frame base
     ldp x0, x1, [x15] // hv load L37
-    cbz x1, _Lb2dd__bt_maxwidth_bb34 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb33 // branch -> then
-_Lb2dd__bt_maxwidth_bb33:
+    cbz x1, _Lfd34__bt_maxwidth_bb34 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb33 // branch -> then
+_Lfd34__bt_maxwidth_bb33:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -5231,9 +5231,9 @@ _Lb2dd__bt_maxwidth_bb33:
     stp x0, x1, [x15] // hv store L45
     add x15, sp, #720 // hv frame base
     ldp x0, x1, [x15] // hv load L45
-    cbz x1, _Lb2dd__bt_maxwidth_bb36 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb35 // branch -> then
-_Lb2dd__bt_maxwidth_bb34:
+    cbz x1, _Lfd34__bt_maxwidth_bb36 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb35 // branch -> then
+_Lfd34__bt_maxwidth_bb34:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #7 // hv const_int val
@@ -5242,15 +5242,15 @@ _Lb2dd__bt_maxwidth_bb34:
     stp x0, x1, [x15] // hv store L50
     add x15, sp, #800 // hv frame base
     ldp x0, x1, [x15] // hv load L50
-    cbz x1, _Lb2dd__bt_maxwidth_bb41 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb40 // branch -> then
-_Lb2dd__bt_maxwidth_bb35:
+    cbz x1, _Lfd34__bt_maxwidth_bb41 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb40 // branch -> then
+_Lfd34__bt_maxwidth_bb35:
     add x15, sp, #720 // hv frame base
     ldp x0, x1, [x15] // hv load L45
     add x15, sp, #736 // hv frame base
     stp x0, x1, [x15] // hv store L46
-    b _Lb2dd__bt_maxwidth_bb37 // branch
-_Lb2dd__bt_maxwidth_bb36:
+    b _Lfd34__bt_maxwidth_bb37 // branch
+_Lfd34__bt_maxwidth_bb36:
     add x15, sp, #704 // hv frame base
     ldp x0, x1, [x15] // hv load L44
     movz x2, #0 // hv const_int: TAG_INT
@@ -5262,20 +5262,20 @@ _Lb2dd__bt_maxwidth_bb36:
     ldp x0, x1, [x15] // hv load L47
     add x15, sp, #736 // hv frame base
     stp x0, x1, [x15] // hv store L46
-    b _Lb2dd__bt_maxwidth_bb37 // branch
-_Lb2dd__bt_maxwidth_bb37:
+    b _Lfd34__bt_maxwidth_bb37 // branch
+_Lfd34__bt_maxwidth_bb37:
     add x15, sp, #736 // hv frame base
     ldp x0, x1, [x15] // hv load L46
-    cbz x1, _Lb2dd__bt_maxwidth_bb39 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb38 // branch -> then
-_Lb2dd__bt_maxwidth_bb38:
+    cbz x1, _Lfd34__bt_maxwidth_bb39 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb38 // branch -> then
+_Lfd34__bt_maxwidth_bb38:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
     add sp, sp, #1216 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_maxwidth_bb39:
+_Lfd34__bt_maxwidth_bb39:
     add x15, sp, #656 // hv frame base
     ldp x0, x1, [x15] // hv load L41
     add x15, sp, #704 // hv frame base
@@ -5288,7 +5288,7 @@ _Lb2dd__bt_maxwidth_bb39:
     add sp, sp, #1216 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_maxwidth_bb40:
+_Lfd34__bt_maxwidth_bb40:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -5330,9 +5330,9 @@ _Lb2dd__bt_maxwidth_bb40:
     stp x0, x1, [x15] // hv store L58
     add x15, sp, #928 // hv frame base
     ldp x0, x1, [x15] // hv load L58
-    cbz x1, _Lb2dd__bt_maxwidth_bb43 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb42 // branch -> then
-_Lb2dd__bt_maxwidth_bb41:
+    cbz x1, _Lfd34__bt_maxwidth_bb43 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb42 // branch -> then
+_Lfd34__bt_maxwidth_bb41:
     ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #11 // hv const_int val
@@ -5341,15 +5341,15 @@ _Lb2dd__bt_maxwidth_bb41:
     stp x0, x1, [x15] // hv store L64
     add x15, sp, #1024 // hv frame base
     ldp x0, x1, [x15] // hv load L64
-    cbz x1, _Lb2dd__bt_maxwidth_bb50 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb49 // branch -> then
-_Lb2dd__bt_maxwidth_bb42:
+    cbz x1, _Lfd34__bt_maxwidth_bb50 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb49 // branch -> then
+_Lfd34__bt_maxwidth_bb42:
     add x15, sp, #928 // hv frame base
     ldp x0, x1, [x15] // hv load L58
     add x15, sp, #944 // hv frame base
     stp x0, x1, [x15] // hv store L59
-    b _Lb2dd__bt_maxwidth_bb44 // branch
-_Lb2dd__bt_maxwidth_bb43:
+    b _Lfd34__bt_maxwidth_bb44 // branch
+_Lfd34__bt_maxwidth_bb43:
     add x15, sp, #912 // hv frame base
     ldp x0, x1, [x15] // hv load L57
     movz x2, #0 // hv const_int: TAG_INT
@@ -5361,20 +5361,20 @@ _Lb2dd__bt_maxwidth_bb43:
     ldp x0, x1, [x15] // hv load L60
     add x15, sp, #944 // hv frame base
     stp x0, x1, [x15] // hv store L59
-    b _Lb2dd__bt_maxwidth_bb44 // branch
-_Lb2dd__bt_maxwidth_bb44:
+    b _Lfd34__bt_maxwidth_bb44 // branch
+_Lfd34__bt_maxwidth_bb44:
     add x15, sp, #944 // hv frame base
     ldp x0, x1, [x15] // hv load L59
-    cbz x1, _Lb2dd__bt_maxwidth_bb46 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb45 // branch -> then
-_Lb2dd__bt_maxwidth_bb45:
+    cbz x1, _Lfd34__bt_maxwidth_bb46 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb45 // branch -> then
+_Lfd34__bt_maxwidth_bb45:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
     add sp, sp, #1216 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_maxwidth_bb46:
+_Lfd34__bt_maxwidth_bb46:
     add x15, sp, #864 // hv frame base
     ldp x0, x1, [x15] // hv load L54
     add x15, sp, #912 // hv frame base
@@ -5384,21 +5384,21 @@ _Lb2dd__bt_maxwidth_bb46:
     stp x0, x1, [x15] // hv store L62
     add x15, sp, #992 // hv frame base
     ldp x0, x1, [x15] // hv load L62
-    cbz x1, _Lb2dd__bt_maxwidth_bb48 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb47 // branch -> then
-_Lb2dd__bt_maxwidth_bb47:
+    cbz x1, _Lfd34__bt_maxwidth_bb48 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb47 // branch -> then
+_Lfd34__bt_maxwidth_bb47:
     add x15, sp, #864 // hv frame base
     ldp x0, x1, [x15] // hv load L54
     add sp, sp, #1216 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_maxwidth_bb48:
+_Lfd34__bt_maxwidth_bb48:
     add x15, sp, #912 // hv frame base
     ldp x0, x1, [x15] // hv load L57
     add sp, sp, #1216 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_maxwidth_bb49:
+_Lfd34__bt_maxwidth_bb49:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #3 // hv const_int val
@@ -5414,23 +5414,23 @@ _Lb2dd__bt_maxwidth_bb49:
     stp x0, x1, [x15] // hv store L67
     add x15, sp, #1072 // hv frame base
     ldp x0, x1, [x15] // hv load L67
-    cbz x1, _Lb2dd__bt_maxwidth_bb52 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb51 // branch -> then
-_Lb2dd__bt_maxwidth_bb50:
+    cbz x1, _Lfd34__bt_maxwidth_bb52 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb51 // branch -> then
+_Lfd34__bt_maxwidth_bb50:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
     add sp, sp, #1216 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_maxwidth_bb51:
+_Lfd34__bt_maxwidth_bb51:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
     add sp, sp, #1216 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_maxwidth_bb52:
+_Lfd34__bt_maxwidth_bb52:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -5456,16 +5456,16 @@ _Lb2dd__bt_maxwidth_bb52:
     stp x0, x1, [x15] // hv store L72
     add x15, sp, #1152 // hv frame base
     ldp x0, x1, [x15] // hv load L72
-    cbz x1, _Lb2dd__bt_maxwidth_bb54 // br_cond: !payload -> else
-    b _Lb2dd__bt_maxwidth_bb53 // branch -> then
-_Lb2dd__bt_maxwidth_bb53:
+    cbz x1, _Lfd34__bt_maxwidth_bb54 // br_cond: !payload -> else
+    b _Lfd34__bt_maxwidth_bb53 // branch -> then
+_Lfd34__bt_maxwidth_bb53:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
     add sp, sp, #1216 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_maxwidth_bb54:
+_Lfd34__bt_maxwidth_bb54:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #3 // hv const_int val
@@ -5491,7 +5491,7 @@ bt_empty:
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
     sub sp, sp, #64 // sp adj
-_Lb2dd_bt_empty_bb0:
+_Lfd34_bt_empty_bb0:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #0] // hv store L0
     bl hexa_array_new // array_lit: new array
@@ -5506,49 +5506,49 @@ _Lb2dd_bt_empty_bb0:
     bl hexa_map_new // struct_lit: new map
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv reload L3
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     movz x3, #2 // hv const_bool: TAG_BOOL
     movz x4, #0 // hv const_bool payload
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv reload L3
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     ldp x3, x4, [sp, #0] // hv load L0
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv reload L3
-    adrp x2, .LCstr4@PAGE // cstr key page
-    add x2, x2, .LCstr4@PAGEOFF // cstr key off
+    adrp x2, .LCstr4 // cstr key page
+    add x2, x2, :lo12:.LCstr4 // cstr key off
     ldp x3, x4, [sp, #16] // hv load L1
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv reload L3
-    adrp x2, .LCstr8@PAGE // cstr key page
-    add x2, x2, .LCstr8@PAGEOFF // cstr key off
+    adrp x2, .LCstr8 // cstr key page
+    add x2, x2, :lo12:.LCstr8 // cstr key off
     movz x3, #0 // hv const_int: TAG_INT
     movz x4, #0 // imm 0-15
     mvn x4, x4 // hv const_int: negate
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv reload L3
-    adrp x2, .LCstr9@PAGE // cstr key page
-    add x2, x2, .LCstr9@PAGEOFF // cstr key off
+    adrp x2, .LCstr9 // cstr key page
+    add x2, x2, :lo12:.LCstr9 // cstr key off
     movz x3, #0 // hv const_int: TAG_INT
     movz x4, #0 // hv const_int val
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv reload L3
-    adrp x2, .LCstr10@PAGE // cstr key page
-    add x2, x2, .LCstr10@PAGEOFF // cstr key off
+    adrp x2, .LCstr10 // cstr key page
+    add x2, x2, :lo12:.LCstr10 // cstr key off
     movz x3, #0 // hv const_int: TAG_INT
     movz x4, #0 // hv const_int val
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv reload L3
-    adrp x2, .LCstr11@PAGE // cstr key page
-    add x2, x2, .LCstr11@PAGEOFF // cstr key off
+    adrp x2, .LCstr11 // cstr key page
+    add x2, x2, :lo12:.LCstr11 // cstr key off
     ldp x3, x4, [sp, #32] // hv load L2
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #48] // hv store L3
@@ -5565,7 +5565,7 @@ bt_compile:
     sub sp, sp, #464 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd_bt_compile_bb0:
+_Lfd34_bt_compile_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_byte_len // call hexa_byte_len
     stp x0, x1, [sp, #32] // hv store L2
@@ -5597,44 +5597,44 @@ _Lb2dd_bt_compile_bb0:
     bl hexa_map_new // struct_lit: new map
     stp x0, x1, [sp, #128] // hv store L8
     ldp x0, x1, [sp, #128] // hv reload L8
-    adrp x2, .LCstr2@PAGE // cstr key page
-    add x2, x2, .LCstr2@PAGEOFF // cstr key off
+    adrp x2, .LCstr2 // cstr key page
+    add x2, x2, :lo12:.LCstr2 // cstr key off
     ldp x3, x4, [sp, #0] // hv load L0
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #128] // hv store L8
     ldp x0, x1, [sp, #128] // hv reload L8
-    adrp x2, .LCstr1@PAGE // cstr key page
-    add x2, x2, .LCstr1@PAGEOFF // cstr key off
+    adrp x2, .LCstr1 // cstr key page
+    add x2, x2, :lo12:.LCstr1 // cstr key off
     ldp x3, x4, [sp, #32] // hv load L2
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #128] // hv store L8
     ldp x0, x1, [sp, #128] // hv reload L8
-    adrp x2, .LCstr0@PAGE // cstr key page
-    add x2, x2, .LCstr0@PAGEOFF // cstr key off
+    adrp x2, .LCstr0 // cstr key page
+    add x2, x2, :lo12:.LCstr0 // cstr key off
     ldp x3, x4, [sp, #48] // hv load L3
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #128] // hv store L8
     ldp x0, x1, [sp, #128] // hv reload L8
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     ldp x3, x4, [sp, #64] // hv load L4
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #128] // hv store L8
     ldp x0, x1, [sp, #128] // hv reload L8
-    adrp x2, .LCstr6@PAGE // cstr key page
-    add x2, x2, .LCstr6@PAGEOFF // cstr key off
+    adrp x2, .LCstr6 // cstr key page
+    add x2, x2, :lo12:.LCstr6 // cstr key off
     ldp x3, x4, [sp, #80] // hv load L5
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #128] // hv store L8
     ldp x0, x1, [sp, #128] // hv reload L8
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     ldp x3, x4, [sp, #96] // hv load L6
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #128] // hv store L8
     ldp x0, x1, [sp, #128] // hv reload L8
-    adrp x2, .LCstr4@PAGE // cstr key page
-    add x2, x2, .LCstr4@PAGEOFF // cstr key off
+    adrp x2, .LCstr4 // cstr key page
+    add x2, x2, :lo12:.LCstr4 // cstr key off
     ldp x3, x4, [sp, #112] // hv load L7
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #128] // hv store L8
@@ -5646,8 +5646,8 @@ _Lb2dd_bt_compile_bb0:
     ldp x0, x1, [sp, #160] // hv load L10
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #144] // hv load L9
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
@@ -5661,19 +5661,19 @@ _Lb2dd_bt_compile_bb0:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #224] // hv store L14
     ldp x0, x1, [sp, #224] // hv load L14
-    cbz x1, _Lb2dd_bt_compile_bb2 // br_cond: !payload -> else
-    b _Lb2dd_bt_compile_bb1 // branch -> then
-_Lb2dd_bt_compile_bb1:
+    cbz x1, _Lfd34_bt_compile_bb2 // br_cond: !payload -> else
+    b _Lfd34_bt_compile_bb1 // branch -> then
+_Lfd34_bt_compile_bb1:
     bl bt_empty // call bt_empty
     stp x0, x1, [sp, #256] // hv store L16
     ldp x0, x1, [sp, #256] // hv load L16
     add sp, sp, #464 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_compile_bb2:
+_Lfd34_bt_compile_bb2:
     ldp x0, x1, [sp, #144] // hv load L9
-    adrp x2, .LCstr0@PAGE // cstr key page
-    add x2, x2, .LCstr0@PAGEOFF // cstr key off
+    adrp x2, .LCstr0 // cstr key page
+    add x2, x2, :lo12:.LCstr0 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #272] // hv store L17
     ldp x0, x1, [sp, #272] // hv load L17
@@ -5682,8 +5682,8 @@ _Lb2dd_bt_compile_bb2:
     bl hexa_index_get // index: hexa_index_get
     stp x0, x1, [sp, #288] // hv store L18
     ldp x0, x1, [sp, #144] // hv load L9
-    adrp x2, .LCstr1@PAGE // cstr key page
-    add x2, x2, .LCstr1@PAGEOFF // cstr key off
+    adrp x2, .LCstr1 // cstr key page
+    add x2, x2, :lo12:.LCstr1 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #288] // hv load L18
@@ -5691,29 +5691,29 @@ _Lb2dd_bt_compile_bb2:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #320] // hv store L20
     ldp x0, x1, [sp, #320] // hv load L20
-    cbz x1, _Lb2dd_bt_compile_bb4 // br_cond: !payload -> else
-    b _Lb2dd_bt_compile_bb3 // branch -> then
-_Lb2dd_bt_compile_bb3:
+    cbz x1, _Lfd34_bt_compile_bb4 // br_cond: !payload -> else
+    b _Lfd34_bt_compile_bb3 // branch -> then
+_Lfd34_bt_compile_bb3:
     bl bt_empty // call bt_empty
     stp x0, x1, [sp, #352] // hv store L22
     ldp x0, x1, [sp, #352] // hv load L22
     add sp, sp, #464 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_compile_bb4:
+_Lfd34_bt_compile_bb4:
     ldp x0, x1, [sp, #144] // hv load L9
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #368] // hv store L23
     ldp x0, x1, [sp, #144] // hv load L9
-    adrp x2, .LCstr4@PAGE // cstr key page
-    add x2, x2, .LCstr4@PAGEOFF // cstr key off
+    adrp x2, .LCstr4 // cstr key page
+    add x2, x2, :lo12:.LCstr4 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #384] // hv store L24
     ldp x0, x1, [sp, #144] // hv load L9
-    adrp x2, .LCstr6@PAGE // cstr key page
-    add x2, x2, .LCstr6@PAGEOFF // cstr key off
+    adrp x2, .LCstr6 // cstr key page
+    add x2, x2, :lo12:.LCstr6 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #400] // hv store L25
     ldp x0, x1, [sp, #400] // hv load L25
@@ -5731,45 +5731,45 @@ _Lb2dd_bt_compile_bb4:
     bl hexa_map_new // struct_lit: new map
     stp x0, x1, [sp, #448] // hv store L28
     ldp x0, x1, [sp, #448] // hv reload L28
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     movz x3, #2 // hv const_bool: TAG_BOOL
     movz x4, #1 // hv const_bool payload
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #448] // hv store L28
     ldp x0, x1, [sp, #448] // hv reload L28
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     ldp x3, x4, [sp, #368] // hv load L23
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #448] // hv store L28
     ldp x0, x1, [sp, #448] // hv reload L28
-    adrp x2, .LCstr4@PAGE // cstr key page
-    add x2, x2, .LCstr4@PAGEOFF // cstr key off
+    adrp x2, .LCstr4 // cstr key page
+    add x2, x2, :lo12:.LCstr4 // cstr key off
     ldp x3, x4, [sp, #384] // hv load L24
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #448] // hv store L28
     ldp x0, x1, [sp, #448] // hv reload L28
-    adrp x2, .LCstr8@PAGE // cstr key page
-    add x2, x2, .LCstr8@PAGEOFF // cstr key off
+    adrp x2, .LCstr8 // cstr key page
+    add x2, x2, :lo12:.LCstr8 // cstr key off
     ldp x3, x4, [sp, #176] // hv load L11
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #448] // hv store L28
     ldp x0, x1, [sp, #448] // hv reload L28
-    adrp x2, .LCstr9@PAGE // cstr key page
-    add x2, x2, .LCstr9@PAGEOFF // cstr key off
+    adrp x2, .LCstr9 // cstr key page
+    add x2, x2, :lo12:.LCstr9 // cstr key off
     ldp x3, x4, [sp, #416] // hv load L26
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #448] // hv store L28
     ldp x0, x1, [sp, #448] // hv reload L28
-    adrp x2, .LCstr10@PAGE // cstr key page
-    add x2, x2, .LCstr10@PAGEOFF // cstr key off
+    adrp x2, .LCstr10 // cstr key page
+    add x2, x2, :lo12:.LCstr10 // cstr key off
     ldp x3, x4, [sp, #16] // hv load L1
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #448] // hv store L28
     ldp x0, x1, [sp, #448] // hv reload L28
-    adrp x2, .LCstr11@PAGE // cstr key page
-    add x2, x2, .LCstr11@PAGEOFF // cstr key off
+    adrp x2, .LCstr11 // cstr key page
+    add x2, x2, :lo12:.LCstr11 // cstr key off
     ldp x3, x4, [sp, #432] // hv load L27
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #448] // hv store L28
@@ -5787,7 +5787,7 @@ _bt_class_match:
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
     stp x4, x5, [sp, #32] // ingress param 2
-_Lb2dd__bt_class_match_bb0:
+_Lfd34__bt_class_match_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #16] // hv load L1
     bl hexa_index_get // index: hexa_index_get
@@ -5807,8 +5807,8 @@ _Lb2dd__bt_class_match_bb0:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     stp x0, x1, [sp, #128] // hv store L8
-    b _Lb2dd__bt_class_match_bb1 // branch
-_Lb2dd__bt_class_match_bb1:
+    b _Lfd34__bt_class_match_bb1 // branch
+_Lfd34__bt_class_match_bb1:
     ldp x0, x1, [sp, #112] // hv load L7
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -5824,9 +5824,9 @@ _Lb2dd__bt_class_match_bb1:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #176] // hv load L11
-    cbz x1, _Lb2dd__bt_class_match_bb3 // br_cond: !payload -> else
-    b _Lb2dd__bt_class_match_bb2 // branch -> then
-_Lb2dd__bt_class_match_bb2:
+    cbz x1, _Lfd34__bt_class_match_bb3 // br_cond: !payload -> else
+    b _Lfd34__bt_class_match_bb2 // branch -> then
+_Lfd34__bt_class_match_bb2:
     ldp x0, x1, [sp, #64] // hv load L4
     ldp x2, x3, [sp, #112] // hv load L7
     bl hexa_index_get // index: hexa_index_get
@@ -5836,18 +5836,18 @@ _Lb2dd__bt_class_match_bb2:
     bl hexa_cmp_ge // binop >=
     stp x0, x1, [sp, #208] // hv store L13
     ldp x0, x1, [sp, #208] // hv load L13
-    cbz x1, _Lb2dd__bt_class_match_bb5 // br_cond: !payload -> else
-    b _Lb2dd__bt_class_match_bb4 // branch -> then
-_Lb2dd__bt_class_match_bb3:
+    cbz x1, _Lfd34__bt_class_match_bb5 // br_cond: !payload -> else
+    b _Lfd34__bt_class_match_bb4 // branch -> then
+_Lfd34__bt_class_match_bb3:
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #320] // hv store L20
     ldp x0, x1, [sp, #320] // hv load L20
-    cbz x1, _Lb2dd__bt_class_match_bb10 // br_cond: !payload -> else
-    b _Lb2dd__bt_class_match_bb9 // branch -> then
-_Lb2dd__bt_class_match_bb4:
+    cbz x1, _Lfd34__bt_class_match_bb10 // br_cond: !payload -> else
+    b _Lfd34__bt_class_match_bb9 // branch -> then
+_Lfd34__bt_class_match_bb4:
     ldp x0, x1, [sp, #112] // hv load L7
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -5863,21 +5863,21 @@ _Lb2dd__bt_class_match_bb4:
     stp x0, x1, [sp, #272] // hv store L17
     ldp x0, x1, [sp, #272] // hv load L17
     stp x0, x1, [sp, #224] // hv store L14
-    b _Lb2dd__bt_class_match_bb6 // branch
-_Lb2dd__bt_class_match_bb5:
+    b _Lfd34__bt_class_match_bb6 // branch
+_Lfd34__bt_class_match_bb5:
     ldp x0, x1, [sp, #208] // hv load L13
     stp x0, x1, [sp, #224] // hv store L14
-    b _Lb2dd__bt_class_match_bb6 // branch
-_Lb2dd__bt_class_match_bb6:
+    b _Lfd34__bt_class_match_bb6 // branch
+_Lfd34__bt_class_match_bb6:
     ldp x0, x1, [sp, #224] // hv load L14
-    cbz x1, _Lb2dd__bt_class_match_bb8 // br_cond: !payload -> else
-    b _Lb2dd__bt_class_match_bb7 // branch -> then
-_Lb2dd__bt_class_match_bb7:
+    cbz x1, _Lfd34__bt_class_match_bb8 // br_cond: !payload -> else
+    b _Lfd34__bt_class_match_bb7 // branch -> then
+_Lfd34__bt_class_match_bb7:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
     stp x0, x1, [sp, #128] // hv store L8
-    b _Lb2dd__bt_class_match_bb8 // branch
-_Lb2dd__bt_class_match_bb8:
+    b _Lfd34__bt_class_match_bb8 // branch
+_Lfd34__bt_class_match_bb8:
     ldp x0, x1, [sp, #112] // hv load L7
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -5885,8 +5885,8 @@ _Lb2dd__bt_class_match_bb8:
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv load L19
     stp x0, x1, [sp, #112] // hv store L7
-    b _Lb2dd__bt_class_match_bb1 // branch
-_Lb2dd__bt_class_match_bb9:
+    b _Lfd34__bt_class_match_bb1 // branch
+_Lfd34__bt_class_match_bb9:
     ldp x0, x1, [sp, #128] // hv load L8
     bl hexa_truthy // unop !: truthy → w0
     eor x0, x0, #1 // unop !: !truthy
@@ -5896,7 +5896,7 @@ _Lb2dd__bt_class_match_bb9:
     add sp, sp, #368 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_class_match_bb10:
+_Lfd34__bt_class_match_bb10:
     ldp x0, x1, [sp, #128] // hv load L8
     add sp, sp, #368 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
@@ -5910,7 +5910,7 @@ _bt_fill:
     sub sp, sp, #128 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd__bt_fill_bb0:
+_Lfd34__bt_fill_bb0:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
@@ -5918,16 +5918,16 @@ _Lb2dd__bt_fill_bb0:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd__bt_fill_bb1 // branch
-_Lb2dd__bt_fill_bb1:
+    b _Lfd34__bt_fill_bb1 // branch
+_Lfd34__bt_fill_bb1:
     ldp x0, x1, [sp, #64] // hv load L4
     ldp x2, x3, [sp, #0] // hv load L0
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
-    cbz x1, _Lb2dd__bt_fill_bb3 // br_cond: !payload -> else
-    b _Lb2dd__bt_fill_bb2 // branch -> then
-_Lb2dd__bt_fill_bb2:
+    cbz x1, _Lfd34__bt_fill_bb3 // br_cond: !payload -> else
+    b _Lfd34__bt_fill_bb2 // branch -> then
+_Lfd34__bt_fill_bb2:
     ldp x0, x1, [sp, #48] // hv load L3
     ldp x2, x3, [sp, #16] // hv load L1
     bl hexa_array_push // call hexa_array_push
@@ -5939,8 +5939,8 @@ _Lb2dd__bt_fill_bb2:
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd__bt_fill_bb1 // branch
-_Lb2dd__bt_fill_bb3:
+    b _Lfd34__bt_fill_bb1 // branch
+_Lfd34__bt_fill_bb3:
     ldp x0, x1, [sp, #48] // hv load L3
     add sp, sp, #128 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
@@ -5953,7 +5953,7 @@ _bt_copy:
     mov x29, sp // prologue: set fp
     sub sp, sp, #144 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__bt_copy_bb0:
+_Lfd34__bt_copy_bb0:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
@@ -5961,8 +5961,8 @@ _Lb2dd__bt_copy_bb0:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__bt_copy_bb1 // branch
-_Lb2dd__bt_copy_bb1:
+    b _Lfd34__bt_copy_bb1 // branch
+_Lfd34__bt_copy_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_arr_poly_len // call hexa_arr_poly_len
     sxtw x0, w0 // ret int: sign-ext
@@ -5973,9 +5973,9 @@ _Lb2dd__bt_copy_bb1:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
-    cbz x1, _Lb2dd__bt_copy_bb3 // br_cond: !payload -> else
-    b _Lb2dd__bt_copy_bb2 // branch -> then
-_Lb2dd__bt_copy_bb2:
+    cbz x1, _Lfd34__bt_copy_bb3 // br_cond: !payload -> else
+    b _Lfd34__bt_copy_bb2 // branch -> then
+_Lfd34__bt_copy_bb2:
     ldp x9, x10, [sp, #48] // hv load L3
     ldp x0, x1, [sp, #0] // hv load L0
     mov x2, x10 // index: raw idx payload → x2
@@ -5992,8 +5992,8 @@ _Lb2dd__bt_copy_bb2:
     stp x0, x1, [sp, #128] // hv store L8
     ldp x0, x1, [sp, #128] // hv load L8
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__bt_copy_bb1 // branch
-_Lb2dd__bt_copy_bb3:
+    b _Lfd34__bt_copy_bb1 // branch
+_Lfd34__bt_copy_bb3:
     ldp x0, x1, [sp, #32] // hv load L2
     add sp, sp, #144 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
@@ -6007,12 +6007,12 @@ _bt_restore:
     sub sp, sp, #112 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd__bt_restore_bb0:
+_Lfd34__bt_restore_bb0:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #32] // hv store L2
-    b _Lb2dd__bt_restore_bb1 // branch
-_Lb2dd__bt_restore_bb1:
+    b _Lfd34__bt_restore_bb1 // branch
+_Lfd34__bt_restore_bb1:
     ldp x0, x1, [sp, #16] // hv load L1
     bl hexa_arr_poly_len // call hexa_arr_poly_len
     sxtw x0, w0 // ret int: sign-ext
@@ -6023,9 +6023,9 @@ _Lb2dd__bt_restore_bb1:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
-    cbz x1, _Lb2dd__bt_restore_bb3 // br_cond: !payload -> else
-    b _Lb2dd__bt_restore_bb2 // branch -> then
-_Lb2dd__bt_restore_bb2:
+    cbz x1, _Lfd34__bt_restore_bb3 // br_cond: !payload -> else
+    b _Lfd34__bt_restore_bb2 // branch -> then
+_Lfd34__bt_restore_bb2:
     ldp x9, x10, [sp, #32] // hv load L2
     ldp x0, x1, [sp, #16] // hv load L1
     mov x2, x10 // index: raw idx payload → x2
@@ -6044,8 +6044,8 @@ _Lb2dd__bt_restore_bb2:
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv load L6
     stp x0, x1, [sp, #32] // hv store L2
-    b _Lb2dd__bt_restore_bb1 // branch
-_Lb2dd__bt_restore_bb3:
+    b _Lfd34__bt_restore_bb1 // branch
+_Lfd34__bt_restore_bb3:
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #112 // sp adj
@@ -6060,7 +6060,7 @@ _bt_cons:
     sub sp, sp, #160 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd__bt_cons_bb0:
+_Lfd34__bt_cons_bb0:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv reload L2
@@ -6072,8 +6072,8 @@ _Lb2dd__bt_cons_bb0:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd__bt_cons_bb1 // branch
-_Lb2dd__bt_cons_bb1:
+    b _Lfd34__bt_cons_bb1 // branch
+_Lfd34__bt_cons_bb1:
     ldp x0, x1, [sp, #16] // hv load L1
     bl hexa_arr_poly_len // call hexa_arr_poly_len
     sxtw x0, w0 // ret int: sign-ext
@@ -6084,9 +6084,9 @@ _Lb2dd__bt_cons_bb1:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv load L6
-    cbz x1, _Lb2dd__bt_cons_bb3 // br_cond: !payload -> else
-    b _Lb2dd__bt_cons_bb2 // branch -> then
-_Lb2dd__bt_cons_bb2:
+    cbz x1, _Lfd34__bt_cons_bb3 // br_cond: !payload -> else
+    b _Lfd34__bt_cons_bb2 // branch -> then
+_Lfd34__bt_cons_bb2:
     ldp x9, x10, [sp, #64] // hv load L4
     ldp x0, x1, [sp, #16] // hv load L1
     mov x2, x10 // index: raw idx payload → x2
@@ -6103,8 +6103,8 @@ _Lb2dd__bt_cons_bb2:
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv load L9
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd__bt_cons_bb1 // branch
-_Lb2dd__bt_cons_bb3:
+    b _Lfd34__bt_cons_bb1 // branch
+_Lfd34__bt_cons_bb3:
     ldp x0, x1, [sp, #48] // hv load L3
     add sp, sp, #160 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
@@ -6117,7 +6117,7 @@ _bt_tail:
     mov x29, sp // prologue: set fp
     sub sp, sp, #144 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__bt_tail_bb0:
+_Lfd34__bt_tail_bb0:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
@@ -6125,8 +6125,8 @@ _Lb2dd__bt_tail_bb0:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // hv const_int val
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__bt_tail_bb1 // branch
-_Lb2dd__bt_tail_bb1:
+    b _Lfd34__bt_tail_bb1 // branch
+_Lfd34__bt_tail_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_arr_poly_len // call hexa_arr_poly_len
     sxtw x0, w0 // ret int: sign-ext
@@ -6137,9 +6137,9 @@ _Lb2dd__bt_tail_bb1:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
-    cbz x1, _Lb2dd__bt_tail_bb3 // br_cond: !payload -> else
-    b _Lb2dd__bt_tail_bb2 // branch -> then
-_Lb2dd__bt_tail_bb2:
+    cbz x1, _Lfd34__bt_tail_bb3 // br_cond: !payload -> else
+    b _Lfd34__bt_tail_bb2 // branch -> then
+_Lfd34__bt_tail_bb2:
     ldp x9, x10, [sp, #48] // hv load L3
     ldp x0, x1, [sp, #0] // hv load L0
     mov x2, x10 // index: raw idx payload → x2
@@ -6156,8 +6156,8 @@ _Lb2dd__bt_tail_bb2:
     stp x0, x1, [sp, #128] // hv store L8
     ldp x0, x1, [sp, #128] // hv load L8
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__bt_tail_bb1 // branch
-_Lb2dd__bt_tail_bb3:
+    b _Lfd34__bt_tail_bb1 // branch
+_Lfd34__bt_tail_bb3:
     ldp x0, x1, [sp, #32] // hv load L2
     add sp, sp, #144 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
@@ -6171,10 +6171,10 @@ _bt_marker:
     sub sp, sp, #112 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd__bt_marker_bb0:
+_Lfd34__bt_marker_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
@@ -6182,8 +6182,8 @@ _Lb2dd__bt_marker_bb0:
     bl hexa_array_push // call hexa_array_push
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
@@ -6209,13 +6209,13 @@ _bt_star_view:
     sub sp, sp, #368 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd__bt_star_view_bb0:
+_Lfd34__bt_star_view_bb0:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L3
@@ -6225,19 +6225,19 @@ _Lb2dd__bt_star_view_bb0:
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
     stp x0, x1, [sp, #80] // hv store L5
-    b _Lb2dd__bt_star_view_bb1 // branch
-_Lb2dd__bt_star_view_bb1:
+    b _Lfd34__bt_star_view_bb1 // branch
+_Lfd34__bt_star_view_bb1:
     ldp x0, x1, [sp, #32] // hv load L2
     ldp x2, x3, [sp, #80] // hv load L5
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv load L6
-    cbz x1, _Lb2dd__bt_star_view_bb3 // br_cond: !payload -> else
-    b _Lb2dd__bt_star_view_bb2 // branch -> then
-_Lb2dd__bt_star_view_bb2:
+    cbz x1, _Lfd34__bt_star_view_bb3 // br_cond: !payload -> else
+    b _Lfd34__bt_star_view_bb2 // branch -> then
+_Lfd34__bt_star_view_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
@@ -6257,12 +6257,12 @@ _Lb2dd__bt_star_view_bb2:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #176] // hv load L11
-    cbz x1, _Lb2dd__bt_star_view_bb5 // br_cond: !payload -> else
-    b _Lb2dd__bt_star_view_bb4 // branch -> then
-_Lb2dd__bt_star_view_bb3:
+    cbz x1, _Lfd34__bt_star_view_bb5 // br_cond: !payload -> else
+    b _Lfd34__bt_star_view_bb4 // branch -> then
+_Lfd34__bt_star_view_bb3:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #272] // hv store L17
     bl hexa_array_new // array_lit: new array
@@ -6291,8 +6291,8 @@ _Lb2dd__bt_star_view_bb3:
     bl hexa_array_push // call hexa_array_push
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #320] // hv store L20
     ldp x0, x1, [sp, #320] // hv load L20
@@ -6309,7 +6309,7 @@ _Lb2dd__bt_star_view_bb3:
     add sp, sp, #368 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_star_view_bb4:
+_Lfd34__bt_star_view_bb4:
     ldp x0, x1, [sp, #144] // hv load L9
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -6321,21 +6321,21 @@ _Lb2dd__bt_star_view_bb4:
     stp x0, x1, [sp, #224] // hv store L14
     ldp x0, x1, [sp, #224] // hv load L14
     stp x0, x1, [sp, #192] // hv store L12
-    b _Lb2dd__bt_star_view_bb6 // branch
-_Lb2dd__bt_star_view_bb5:
+    b _Lfd34__bt_star_view_bb6 // branch
+_Lfd34__bt_star_view_bb5:
     ldp x0, x1, [sp, #176] // hv load L11
     stp x0, x1, [sp, #192] // hv store L12
-    b _Lb2dd__bt_star_view_bb6 // branch
-_Lb2dd__bt_star_view_bb6:
+    b _Lfd34__bt_star_view_bb6 // branch
+_Lfd34__bt_star_view_bb6:
     ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _Lb2dd__bt_star_view_bb8 // br_cond: !payload -> else
-    b _Lb2dd__bt_star_view_bb7 // branch -> then
-_Lb2dd__bt_star_view_bb7:
+    cbz x1, _Lfd34__bt_star_view_bb8 // br_cond: !payload -> else
+    b _Lfd34__bt_star_view_bb7 // branch -> then
+_Lfd34__bt_star_view_bb7:
     ldp x0, x1, [sp, #32] // hv load L2
     add sp, sp, #368 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_star_view_bb8:
+_Lfd34__bt_star_view_bb8:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -6343,7 +6343,7 @@ _Lb2dd__bt_star_view_bb8:
     stp x0, x1, [sp, #256] // hv store L16
     ldp x0, x1, [sp, #256] // hv load L16
     stp x0, x1, [sp, #32] // hv store L2
-    b _Lb2dd__bt_star_view_bb1 // branch
+    b _Lfd34__bt_star_view_bb1 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #368 // sp adj
@@ -6367,7 +6367,7 @@ _bt_run:
     stp x9, x10, [sp, #176] // store stack param 5
     ldp x9, x10, [x29, #48] // ingress stack param 6
     stp x9, x10, [sp, #192] // store stack param 6
-_Lb2dd__bt_run_bb0:
+_Lfd34__bt_run_bb0:
     movz x9, #0 // hv const_int: TAG_INT
     movz x10, #0 // hv const_int val
     ldp x0, x1, [sp, #128] // hv load L2
@@ -6398,9 +6398,9 @@ _Lb2dd__bt_run_bb0:
     bl hexa_cmp_gt // binop >
     stp x0, x1, [sp, #256] // hv store L10
     ldp x0, x1, [sp, #256] // hv load L10
-    cbz x1, _Lb2dd__bt_run_bb2 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb1 // branch -> then
-_Lb2dd__bt_run_bb1:
+    cbz x1, _Lfd34__bt_run_bb2 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb1 // branch -> then
+_Lfd34__bt_run_bb1:
     movz x9, #0 // hv const_int: TAG_INT
     movz x10, #0 // hv const_int val
     ldp x0, x1, [sp, #128] // hv load L2
@@ -6419,16 +6419,16 @@ _Lb2dd__bt_run_bb1:
     stp x0, x1, [sp, #320] // hv store L14
     ldp x0, x1, [sp, #320] // hv load L14
     stp x0, x1, [sp, #272] // hv store L11
-    b _Lb2dd__bt_run_bb3 // branch
-_Lb2dd__bt_run_bb2:
+    b _Lfd34__bt_run_bb3 // branch
+_Lfd34__bt_run_bb2:
     ldp x0, x1, [sp, #256] // hv load L10
     stp x0, x1, [sp, #272] // hv store L11
-    b _Lb2dd__bt_run_bb3 // branch
-_Lb2dd__bt_run_bb3:
+    b _Lfd34__bt_run_bb3 // branch
+_Lfd34__bt_run_bb3:
     ldp x0, x1, [sp, #272] // hv load L11
-    cbz x1, _Lb2dd__bt_run_bb5 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb4 // branch -> then
-_Lb2dd__bt_run_bb4:
+    cbz x1, _Lfd34__bt_run_bb5 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb4 // branch -> then
+_Lfd34__bt_run_bb4:
     movz x9, #0 // hv const_int: TAG_INT
     movz x10, #2 // hv const_int val
     movz x3, #0 // hv const_int: TAG_INT
@@ -6444,7 +6444,7 @@ _Lb2dd__bt_run_bb4:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb5:
+_Lfd34__bt_run_bb5:
     ldp x0, x1, [sp, #144] // hv load L3
     bl hexa_arr_poly_len // call hexa_arr_poly_len
     sxtw x0, w0 // ret int: sign-ext
@@ -6456,15 +6456,15 @@ _Lb2dd__bt_run_bb5:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #368] // hv store L17
     ldp x0, x1, [sp, #368] // hv load L17
-    cbz x1, _Lb2dd__bt_run_bb7 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb6 // branch -> then
-_Lb2dd__bt_run_bb6:
+    cbz x1, _Lfd34__bt_run_bb7 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb6 // branch -> then
+_Lfd34__bt_run_bb6:
     ldp x0, x1, [sp, #176] // hv load L5
     movz x15, #4976 // imm 0-15
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb7:
+_Lfd34__bt_run_bb7:
     movz x9, #0 // hv const_int: TAG_INT
     movz x10, #0 // hv const_int val
     ldp x0, x1, [sp, #144] // hv load L3
@@ -6479,8 +6479,8 @@ _Lb2dd__bt_run_bb7:
     ldp x0, x1, [sp, #432] // hv load L21
     stp x0, x1, [sp, #448] // hv store L22
     ldp x0, x1, [sp, #96] // hv load L0
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #464] // hv store L23
     ldp x0, x1, [sp, #464] // hv load L23
@@ -6508,9 +6508,9 @@ _Lb2dd__bt_run_bb7:
     stp x0, x1, [x15] // hv store L28
     add x15, sp, #544 // hv frame base
     ldp x0, x1, [x15] // hv load L28
-    cbz x1, _Lb2dd__bt_run_bb9 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb8 // branch -> then
-_Lb2dd__bt_run_bb8:
+    cbz x1, _Lfd34__bt_run_bb9 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb8 // branch -> then
+_Lfd34__bt_run_bb8:
     ldp x0, x1, [sp, #96] // hv load L0
     ldp x2, x3, [sp, #112] // hv load L1
     ldp x4, x5, [sp, #128] // hv load L2
@@ -6530,7 +6530,7 @@ _Lb2dd__bt_run_bb8:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb9:
+_Lfd34__bt_run_bb9:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L27
     movz x2, #0 // hv const_int: TAG_INT
@@ -6540,9 +6540,9 @@ _Lb2dd__bt_run_bb9:
     stp x0, x1, [x15] // hv store L31
     add x15, sp, #592 // hv frame base
     ldp x0, x1, [x15] // hv load L31
-    cbz x1, _Lb2dd__bt_run_bb11 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb10 // branch -> then
-_Lb2dd__bt_run_bb10:
+    cbz x1, _Lfd34__bt_run_bb11 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb10 // branch -> then
+_Lfd34__bt_run_bb10:
     ldp x0, x1, [sp, #176] // hv load L5
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
@@ -6551,9 +6551,9 @@ _Lb2dd__bt_run_bb10:
     stp x0, x1, [x15] // hv store L33
     add x15, sp, #624 // hv frame base
     ldp x0, x1, [x15] // hv load L33
-    cbz x1, _Lb2dd__bt_run_bb13 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb12 // branch -> then
-_Lb2dd__bt_run_bb11:
+    cbz x1, _Lfd34__bt_run_bb13 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb12 // branch -> then
+_Lfd34__bt_run_bb11:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L27
     movz x2, #0 // hv const_int: TAG_INT
@@ -6563,9 +6563,9 @@ _Lb2dd__bt_run_bb11:
     stp x0, x1, [x15] // hv store L36
     add x15, sp, #672 // hv frame base
     ldp x0, x1, [x15] // hv load L36
-    cbz x1, _Lb2dd__bt_run_bb15 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb14 // branch -> then
-_Lb2dd__bt_run_bb12:
+    cbz x1, _Lfd34__bt_run_bb15 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb14 // branch -> then
+_Lfd34__bt_run_bb12:
     ldp x0, x1, [sp, #96] // hv load L0
     ldp x2, x3, [sp, #112] // hv load L1
     ldp x4, x5, [sp, #128] // hv load L2
@@ -6585,7 +6585,7 @@ _Lb2dd__bt_run_bb12:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb13:
+_Lfd34__bt_run_bb13:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -6593,7 +6593,7 @@ _Lb2dd__bt_run_bb13:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb14:
+_Lfd34__bt_run_bb14:
     ldp x0, x1, [sp, #176] // hv load L5
     ldp x2, x3, [sp, #192] // hv load L6
     bl hexa_eq // binop ==
@@ -6601,9 +6601,9 @@ _Lb2dd__bt_run_bb14:
     stp x0, x1, [x15] // hv store L38
     add x15, sp, #704 // hv frame base
     ldp x0, x1, [x15] // hv load L38
-    cbz x1, _Lb2dd__bt_run_bb17 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb16 // branch -> then
-_Lb2dd__bt_run_bb15:
+    cbz x1, _Lfd34__bt_run_bb17 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb16 // branch -> then
+_Lfd34__bt_run_bb15:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L27
     movz x2, #0 // hv const_int: TAG_INT
@@ -6613,9 +6613,9 @@ _Lb2dd__bt_run_bb15:
     stp x0, x1, [x15] // hv store L41
     add x15, sp, #752 // hv frame base
     ldp x0, x1, [x15] // hv load L41
-    cbz x1, _Lb2dd__bt_run_bb19 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb18 // branch -> then
-_Lb2dd__bt_run_bb16:
+    cbz x1, _Lfd34__bt_run_bb19 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb18 // branch -> then
+_Lfd34__bt_run_bb16:
     ldp x0, x1, [sp, #96] // hv load L0
     ldp x2, x3, [sp, #112] // hv load L1
     ldp x4, x5, [sp, #128] // hv load L2
@@ -6635,7 +6635,7 @@ _Lb2dd__bt_run_bb16:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb17:
+_Lfd34__bt_run_bb17:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -6643,7 +6643,7 @@ _Lb2dd__bt_run_bb17:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb18:
+_Lfd34__bt_run_bb18:
     ldp x0, x1, [sp, #496] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -6658,9 +6658,9 @@ _Lb2dd__bt_run_bb18:
     stp x0, x1, [x15] // hv store L44
     add x15, sp, #800 // hv frame base
     ldp x0, x1, [x15] // hv load L44
-    cbz x1, _Lb2dd__bt_run_bb21 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb20 // branch -> then
-_Lb2dd__bt_run_bb19:
+    cbz x1, _Lfd34__bt_run_bb21 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb20 // branch -> then
+_Lfd34__bt_run_bb19:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L27
     movz x2, #0 // hv const_int: TAG_INT
@@ -6670,9 +6670,9 @@ _Lb2dd__bt_run_bb19:
     stp x0, x1, [x15] // hv store L47
     add x15, sp, #848 // hv frame base
     ldp x0, x1, [x15] // hv load L47
-    cbz x1, _Lb2dd__bt_run_bb23 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb22 // branch -> then
-_Lb2dd__bt_run_bb20:
+    cbz x1, _Lfd34__bt_run_bb23 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb22 // branch -> then
+_Lfd34__bt_run_bb20:
     ldp x0, x1, [sp, #96] // hv load L0
     ldp x2, x3, [sp, #112] // hv load L1
     ldp x4, x5, [sp, #128] // hv load L2
@@ -6692,7 +6692,7 @@ _Lb2dd__bt_run_bb20:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb21:
+_Lfd34__bt_run_bb21:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -6700,7 +6700,7 @@ _Lb2dd__bt_run_bb21:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb22:
+_Lfd34__bt_run_bb22:
     ldp x0, x1, [sp, #176] // hv load L5
     ldp x2, x3, [sp, #192] // hv load L6
     bl hexa_cmp_lt // binop <
@@ -6708,9 +6708,9 @@ _Lb2dd__bt_run_bb22:
     stp x0, x1, [x15] // hv store L49
     add x15, sp, #880 // hv frame base
     ldp x0, x1, [x15] // hv load L49
-    cbz x1, _Lb2dd__bt_run_bb25 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb24 // branch -> then
-_Lb2dd__bt_run_bb23:
+    cbz x1, _Lfd34__bt_run_bb25 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb24 // branch -> then
+_Lfd34__bt_run_bb23:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L27
     movz x2, #0 // hv const_int: TAG_INT
@@ -6720,9 +6720,9 @@ _Lb2dd__bt_run_bb23:
     stp x0, x1, [x15] // hv store L57
     add x15, sp, #1008 // hv frame base
     ldp x0, x1, [x15] // hv load L57
-    cbz x1, _Lb2dd__bt_run_bb30 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb29 // branch -> then
-_Lb2dd__bt_run_bb24:
+    cbz x1, _Lfd34__bt_run_bb30 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb29 // branch -> then
+_Lfd34__bt_run_bb24:
     ldp x0, x1, [sp, #160] // hv load L4
     ldp x2, x3, [sp, #176] // hv load L5
     bl hexa_str_byte_at // call hexa_str_byte_at
@@ -6745,19 +6745,19 @@ _Lb2dd__bt_run_bb24:
     ldp x0, x1, [x15] // hv load L53
     add x15, sp, #896 // hv frame base
     stp x0, x1, [x15] // hv store L50
-    b _Lb2dd__bt_run_bb26 // branch
-_Lb2dd__bt_run_bb25:
+    b _Lfd34__bt_run_bb26 // branch
+_Lfd34__bt_run_bb25:
     add x15, sp, #880 // hv frame base
     ldp x0, x1, [x15] // hv load L49
     add x15, sp, #896 // hv frame base
     stp x0, x1, [x15] // hv store L50
-    b _Lb2dd__bt_run_bb26 // branch
-_Lb2dd__bt_run_bb26:
+    b _Lfd34__bt_run_bb26 // branch
+_Lfd34__bt_run_bb26:
     add x15, sp, #896 // hv frame base
     ldp x0, x1, [x15] // hv load L50
-    cbz x1, _Lb2dd__bt_run_bb28 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb27 // branch -> then
-_Lb2dd__bt_run_bb27:
+    cbz x1, _Lfd34__bt_run_bb28 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb27 // branch -> then
+_Lfd34__bt_run_bb27:
     ldp x0, x1, [sp, #176] // hv load L5
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -6784,7 +6784,7 @@ _Lb2dd__bt_run_bb27:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb28:
+_Lfd34__bt_run_bb28:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -6792,7 +6792,7 @@ _Lb2dd__bt_run_bb28:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb29:
+_Lfd34__bt_run_bb29:
     ldp x0, x1, [sp, #176] // hv load L5
     ldp x2, x3, [sp, #192] // hv load L6
     bl hexa_cmp_lt // binop <
@@ -6800,9 +6800,9 @@ _Lb2dd__bt_run_bb29:
     stp x0, x1, [x15] // hv store L59
     add x15, sp, #1040 // hv frame base
     ldp x0, x1, [x15] // hv load L59
-    cbz x1, _Lb2dd__bt_run_bb32 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb31 // branch -> then
-_Lb2dd__bt_run_bb30:
+    cbz x1, _Lfd34__bt_run_bb32 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb31 // branch -> then
+_Lfd34__bt_run_bb30:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L27
     movz x2, #0 // hv const_int: TAG_INT
@@ -6812,9 +6812,9 @@ _Lb2dd__bt_run_bb30:
     stp x0, x1, [x15] // hv store L63
     add x15, sp, #1104 // hv frame base
     ldp x0, x1, [x15] // hv load L63
-    cbz x1, _Lb2dd__bt_run_bb34 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb33 // branch -> then
-_Lb2dd__bt_run_bb31:
+    cbz x1, _Lfd34__bt_run_bb34 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb33 // branch -> then
+_Lfd34__bt_run_bb31:
     ldp x0, x1, [sp, #176] // hv load L5
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -6841,7 +6841,7 @@ _Lb2dd__bt_run_bb31:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb32:
+_Lfd34__bt_run_bb32:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -6849,7 +6849,7 @@ _Lb2dd__bt_run_bb32:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb33:
+_Lfd34__bt_run_bb33:
     ldp x0, x1, [sp, #176] // hv load L5
     ldp x2, x3, [sp, #192] // hv load L6
     bl hexa_cmp_lt // binop <
@@ -6857,9 +6857,9 @@ _Lb2dd__bt_run_bb33:
     stp x0, x1, [x15] // hv store L65
     add x15, sp, #1136 // hv frame base
     ldp x0, x1, [x15] // hv load L65
-    cbz x1, _Lb2dd__bt_run_bb36 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb35 // branch -> then
-_Lb2dd__bt_run_bb34:
+    cbz x1, _Lfd34__bt_run_bb36 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb35 // branch -> then
+_Lfd34__bt_run_bb34:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L27
     movz x2, #0 // hv const_int: TAG_INT
@@ -6869,12 +6869,12 @@ _Lb2dd__bt_run_bb34:
     stp x0, x1, [x15] // hv store L74
     add x15, sp, #1280 // hv frame base
     ldp x0, x1, [x15] // hv load L74
-    cbz x1, _Lb2dd__bt_run_bb41 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb40 // branch -> then
-_Lb2dd__bt_run_bb35:
+    cbz x1, _Lfd34__bt_run_bb41 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb40 // branch -> then
+_Lfd34__bt_run_bb35:
     ldp x0, x1, [sp, #96] // hv load L0
-    adrp x2, .LCstr4@PAGE // cstr key page
-    add x2, x2, .LCstr4@PAGEOFF // cstr key off
+    adrp x2, .LCstr4 // cstr key page
+    add x2, x2, :lo12:.LCstr4 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #1168 // hv frame base
     stp x0, x1, [x15] // hv store L67
@@ -6902,19 +6902,19 @@ _Lb2dd__bt_run_bb35:
     ldp x0, x1, [x15] // hv load L70
     add x15, sp, #1152 // hv frame base
     stp x0, x1, [x15] // hv store L66
-    b _Lb2dd__bt_run_bb37 // branch
-_Lb2dd__bt_run_bb36:
+    b _Lfd34__bt_run_bb37 // branch
+_Lfd34__bt_run_bb36:
     add x15, sp, #1136 // hv frame base
     ldp x0, x1, [x15] // hv load L65
     add x15, sp, #1152 // hv frame base
     stp x0, x1, [x15] // hv store L66
-    b _Lb2dd__bt_run_bb37 // branch
-_Lb2dd__bt_run_bb37:
+    b _Lfd34__bt_run_bb37 // branch
+_Lfd34__bt_run_bb37:
     add x15, sp, #1152 // hv frame base
     ldp x0, x1, [x15] // hv load L66
-    cbz x1, _Lb2dd__bt_run_bb39 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb38 // branch -> then
-_Lb2dd__bt_run_bb38:
+    cbz x1, _Lfd34__bt_run_bb39 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb38 // branch -> then
+_Lfd34__bt_run_bb38:
     ldp x0, x1, [sp, #176] // hv load L5
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -6941,7 +6941,7 @@ _Lb2dd__bt_run_bb38:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb39:
+_Lfd34__bt_run_bb39:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -6949,7 +6949,7 @@ _Lb2dd__bt_run_bb39:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb40:
+_Lfd34__bt_run_bb40:
     ldp x0, x1, [sp, #496] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -6995,7 +6995,7 @@ _Lb2dd__bt_run_bb40:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb41:
+_Lfd34__bt_run_bb41:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L27
     movz x2, #0 // hv const_int: TAG_INT
@@ -7005,9 +7005,9 @@ _Lb2dd__bt_run_bb41:
     stp x0, x1, [x15] // hv store L81
     add x15, sp, #1392 // hv frame base
     ldp x0, x1, [x15] // hv load L81
-    cbz x1, _Lb2dd__bt_run_bb43 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb42 // branch -> then
-_Lb2dd__bt_run_bb42:
+    cbz x1, _Lfd34__bt_run_bb43 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb42 // branch -> then
+_Lfd34__bt_run_bb42:
     ldp x0, x1, [sp, #496] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -7048,9 +7048,9 @@ _Lb2dd__bt_run_bb42:
     stp x0, x1, [x15] // hv store L87
     add x15, sp, #1488 // hv frame base
     ldp x0, x1, [x15] // hv load L87
-    cbz x1, _Lb2dd__bt_run_bb45 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb44 // branch -> then
-_Lb2dd__bt_run_bb43:
+    cbz x1, _Lfd34__bt_run_bb45 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb44 // branch -> then
+_Lfd34__bt_run_bb43:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L27
     movz x2, #0 // hv const_int: TAG_INT
@@ -7060,9 +7060,9 @@ _Lb2dd__bt_run_bb43:
     stp x0, x1, [x15] // hv store L94
     add x15, sp, #1600 // hv frame base
     ldp x0, x1, [x15] // hv load L94
-    cbz x1, _Lb2dd__bt_run_bb49 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb48 // branch -> then
-_Lb2dd__bt_run_bb44:
+    cbz x1, _Lfd34__bt_run_bb49 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb48 // branch -> then
+_Lfd34__bt_run_bb44:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -7070,7 +7070,7 @@ _Lb2dd__bt_run_bb44:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb45:
+_Lfd34__bt_run_bb45:
     add x15, sp, #1472 // hv frame base
     ldp x0, x1, [x15] // hv load L86
     movz x2, #0 // hv const_int: TAG_INT
@@ -7080,16 +7080,16 @@ _Lb2dd__bt_run_bb45:
     stp x0, x1, [x15] // hv store L89
     add x15, sp, #1520 // hv frame base
     ldp x0, x1, [x15] // hv load L89
-    cbz x1, _Lb2dd__bt_run_bb47 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb46 // branch -> then
-_Lb2dd__bt_run_bb46:
+    cbz x1, _Lfd34__bt_run_bb47 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb46 // branch -> then
+_Lfd34__bt_run_bb46:
     add x15, sp, #1472 // hv frame base
     ldp x0, x1, [x15] // hv load L86
     movz x15, #4976 // imm 0-15
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb47:
+_Lfd34__bt_run_bb47:
     ldp x0, x1, [sp, #496] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -7122,7 +7122,7 @@ _Lb2dd__bt_run_bb47:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb48:
+_Lfd34__bt_run_bb48:
     ldp x0, x1, [sp, #496] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -7163,9 +7163,9 @@ _Lb2dd__bt_run_bb48:
     stp x0, x1, [x15] // hv store L100
     add x15, sp, #1696 // hv frame base
     ldp x0, x1, [x15] // hv load L100
-    cbz x1, _Lb2dd__bt_run_bb51 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb50 // branch -> then
-_Lb2dd__bt_run_bb49:
+    cbz x1, _Lfd34__bt_run_bb51 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb50 // branch -> then
+_Lfd34__bt_run_bb49:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L27
     movz x2, #0 // hv const_int: TAG_INT
@@ -7175,9 +7175,9 @@ _Lb2dd__bt_run_bb49:
     stp x0, x1, [x15] // hv store L105
     add x15, sp, #1776 // hv frame base
     ldp x0, x1, [x15] // hv load L105
-    cbz x1, _Lb2dd__bt_run_bb55 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb54 // branch -> then
-_Lb2dd__bt_run_bb50:
+    cbz x1, _Lfd34__bt_run_bb55 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb54 // branch -> then
+_Lfd34__bt_run_bb50:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -7185,7 +7185,7 @@ _Lb2dd__bt_run_bb50:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb51:
+_Lfd34__bt_run_bb51:
     add x15, sp, #1680 // hv frame base
     ldp x0, x1, [x15] // hv load L99
     movz x2, #0 // hv const_int: TAG_INT
@@ -7195,16 +7195,16 @@ _Lb2dd__bt_run_bb51:
     stp x0, x1, [x15] // hv store L102
     add x15, sp, #1728 // hv frame base
     ldp x0, x1, [x15] // hv load L102
-    cbz x1, _Lb2dd__bt_run_bb53 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb52 // branch -> then
-_Lb2dd__bt_run_bb52:
+    cbz x1, _Lfd34__bt_run_bb53 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb52 // branch -> then
+_Lfd34__bt_run_bb52:
     add x15, sp, #1680 // hv frame base
     ldp x0, x1, [x15] // hv load L99
     movz x15, #4976 // imm 0-15
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb53:
+_Lfd34__bt_run_bb53:
     ldp x0, x1, [sp, #96] // hv load L0
     ldp x2, x3, [sp, #112] // hv load L1
     ldp x4, x5, [sp, #128] // hv load L2
@@ -7224,7 +7224,7 @@ _Lb2dd__bt_run_bb53:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb54:
+_Lfd34__bt_run_bb54:
     ldp x0, x1, [sp, #496] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -7311,9 +7311,9 @@ _Lb2dd__bt_run_bb54:
     stp x0, x1, [x15] // hv store L116
     add x15, sp, #1952 // hv frame base
     ldp x0, x1, [x15] // hv load L116
-    cbz x1, _Lb2dd__bt_run_bb57 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb56 // branch -> then
-_Lb2dd__bt_run_bb55:
+    cbz x1, _Lfd34__bt_run_bb57 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb56 // branch -> then
+_Lfd34__bt_run_bb55:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L27
     movz x2, #0 // hv const_int: TAG_INT
@@ -7323,9 +7323,9 @@ _Lb2dd__bt_run_bb55:
     stp x0, x1, [x15] // hv store L121
     add x15, sp, #2032 // hv frame base
     ldp x0, x1, [x15] // hv load L121
-    cbz x1, _Lb2dd__bt_run_bb61 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb60 // branch -> then
-_Lb2dd__bt_run_bb56:
+    cbz x1, _Lfd34__bt_run_bb61 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb60 // branch -> then
+_Lfd34__bt_run_bb56:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -7333,7 +7333,7 @@ _Lb2dd__bt_run_bb56:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb57:
+_Lfd34__bt_run_bb57:
     add x15, sp, #1936 // hv frame base
     ldp x0, x1, [x15] // hv load L115
     movz x2, #0 // hv const_int: TAG_INT
@@ -7343,16 +7343,16 @@ _Lb2dd__bt_run_bb57:
     stp x0, x1, [x15] // hv store L118
     add x15, sp, #1984 // hv frame base
     ldp x0, x1, [x15] // hv load L118
-    cbz x1, _Lb2dd__bt_run_bb59 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb58 // branch -> then
-_Lb2dd__bt_run_bb58:
+    cbz x1, _Lfd34__bt_run_bb59 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb58 // branch -> then
+_Lfd34__bt_run_bb58:
     add x15, sp, #1936 // hv frame base
     ldp x0, x1, [x15] // hv load L115
     movz x15, #4976 // imm 0-15
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb59:
+_Lfd34__bt_run_bb59:
     ldp x0, x1, [sp, #96] // hv load L0
     ldp x2, x3, [sp, #112] // hv load L1
     ldp x4, x5, [sp, #128] // hv load L2
@@ -7372,7 +7372,7 @@ _Lb2dd__bt_run_bb59:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb60:
+_Lfd34__bt_run_bb60:
     ldp x0, x1, [sp, #496] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -7428,7 +7428,7 @@ _Lb2dd__bt_run_bb60:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb61:
+_Lfd34__bt_run_bb61:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L27
     movz x2, #0 // hv const_int: TAG_INT
@@ -7438,9 +7438,9 @@ _Lb2dd__bt_run_bb61:
     stp x0, x1, [x15] // hv store L130
     add x15, sp, #2176 // hv frame base
     ldp x0, x1, [x15] // hv load L130
-    cbz x1, _Lb2dd__bt_run_bb63 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb62 // branch -> then
-_Lb2dd__bt_run_bb62:
+    cbz x1, _Lfd34__bt_run_bb63 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb62 // branch -> then
+_Lfd34__bt_run_bb62:
     ldp x0, x1, [sp, #496] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -7487,7 +7487,7 @@ _Lb2dd__bt_run_bb62:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb63:
+_Lfd34__bt_run_bb63:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L27
     movz x2, #0 // hv const_int: TAG_INT
@@ -7497,9 +7497,9 @@ _Lb2dd__bt_run_bb63:
     stp x0, x1, [x15] // hv store L136
     add x15, sp, #2272 // hv frame base
     ldp x0, x1, [x15] // hv load L136
-    cbz x1, _Lb2dd__bt_run_bb65 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb64 // branch -> then
-_Lb2dd__bt_run_bb64:
+    cbz x1, _Lfd34__bt_run_bb65 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb64 // branch -> then
+_Lfd34__bt_run_bb64:
     ldp x0, x1, [sp, #496] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -7546,7 +7546,7 @@ _Lb2dd__bt_run_bb64:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb65:
+_Lfd34__bt_run_bb65:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L27
     movz x2, #0 // hv const_int: TAG_INT
@@ -7556,9 +7556,9 @@ _Lb2dd__bt_run_bb65:
     stp x0, x1, [x15] // hv store L142
     add x15, sp, #2368 // hv frame base
     ldp x0, x1, [x15] // hv load L142
-    cbz x1, _Lb2dd__bt_run_bb67 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb66 // branch -> then
-_Lb2dd__bt_run_bb66:
+    cbz x1, _Lfd34__bt_run_bb67 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb66 // branch -> then
+_Lfd34__bt_run_bb66:
     ldp x0, x1, [sp, #496] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -7573,9 +7573,9 @@ _Lb2dd__bt_run_bb66:
     stp x0, x1, [x15] // hv store L145
     add x15, sp, #2416 // hv frame base
     ldp x0, x1, [x15] // hv load L145
-    cbz x1, _Lb2dd__bt_run_bb69 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb68 // branch -> then
-_Lb2dd__bt_run_bb67:
+    cbz x1, _Lfd34__bt_run_bb69 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb68 // branch -> then
+_Lfd34__bt_run_bb67:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L27
     movz x2, #0 // hv const_int: TAG_INT
@@ -7585,9 +7585,9 @@ _Lb2dd__bt_run_bb67:
     stp x0, x1, [x15] // hv store L162
     add x15, sp, #2688 // hv frame base
     ldp x0, x1, [x15] // hv load L162
-    cbz x1, _Lb2dd__bt_run_bb75 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb74 // branch -> then
-_Lb2dd__bt_run_bb68:
+    cbz x1, _Lfd34__bt_run_bb75 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb74 // branch -> then
+_Lfd34__bt_run_bb68:
     ldp x0, x1, [sp, #96] // hv load L0
     ldp x2, x3, [sp, #112] // hv load L1
     ldp x4, x5, [sp, #128] // hv load L2
@@ -7607,7 +7607,7 @@ _Lb2dd__bt_run_bb68:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb69:
+_Lfd34__bt_run_bb69:
     ldp x0, x1, [sp, #496] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -7694,9 +7694,9 @@ _Lb2dd__bt_run_bb69:
     stp x0, x1, [x15] // hv store L157
     add x15, sp, #2608 // hv frame base
     ldp x0, x1, [x15] // hv load L157
-    cbz x1, _Lb2dd__bt_run_bb71 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb70 // branch -> then
-_Lb2dd__bt_run_bb70:
+    cbz x1, _Lfd34__bt_run_bb71 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb70 // branch -> then
+_Lfd34__bt_run_bb70:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -7704,7 +7704,7 @@ _Lb2dd__bt_run_bb70:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb71:
+_Lfd34__bt_run_bb71:
     add x15, sp, #2592 // hv frame base
     ldp x0, x1, [x15] // hv load L156
     movz x2, #0 // hv const_int: TAG_INT
@@ -7714,16 +7714,16 @@ _Lb2dd__bt_run_bb71:
     stp x0, x1, [x15] // hv store L159
     add x15, sp, #2640 // hv frame base
     ldp x0, x1, [x15] // hv load L159
-    cbz x1, _Lb2dd__bt_run_bb73 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb72 // branch -> then
-_Lb2dd__bt_run_bb72:
+    cbz x1, _Lfd34__bt_run_bb73 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb72 // branch -> then
+_Lfd34__bt_run_bb72:
     add x15, sp, #2592 // hv frame base
     ldp x0, x1, [x15] // hv load L156
     movz x15, #4976 // imm 0-15
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb73:
+_Lfd34__bt_run_bb73:
     ldp x0, x1, [sp, #96] // hv load L0
     ldp x2, x3, [sp, #112] // hv load L1
     ldp x4, x5, [sp, #128] // hv load L2
@@ -7743,7 +7743,7 @@ _Lb2dd__bt_run_bb73:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb74:
+_Lfd34__bt_run_bb74:
     ldp x0, x1, [sp, #496] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -7822,7 +7822,7 @@ _Lb2dd__bt_run_bb74:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb75:
+_Lfd34__bt_run_bb75:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L27
     movz x2, #0 // hv const_int: TAG_INT
@@ -7832,9 +7832,9 @@ _Lb2dd__bt_run_bb75:
     stp x0, x1, [x15] // hv store L172
     add x15, sp, #2848 // hv frame base
     ldp x0, x1, [x15] // hv load L172
-    cbz x1, _Lb2dd__bt_run_bb77 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb76 // branch -> then
-_Lb2dd__bt_run_bb76:
+    cbz x1, _Lfd34__bt_run_bb77 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb76 // branch -> then
+_Lfd34__bt_run_bb76:
     ldp x0, x1, [sp, #496] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -7957,9 +7957,9 @@ _Lb2dd__bt_run_bb76:
     stp x0, x1, [x15] // hv store L189
     add x15, sp, #3120 // hv frame base
     ldp x0, x1, [x15] // hv load L189
-    cbz x1, _Lb2dd__bt_run_bb79 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb78 // branch -> then
-_Lb2dd__bt_run_bb77:
+    cbz x1, _Lfd34__bt_run_bb79 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb78 // branch -> then
+_Lfd34__bt_run_bb77:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L27
     movz x2, #0 // hv const_int: TAG_INT
@@ -7969,9 +7969,9 @@ _Lb2dd__bt_run_bb77:
     stp x0, x1, [x15] // hv store L196
     add x15, sp, #3232 // hv frame base
     ldp x0, x1, [x15] // hv load L196
-    cbz x1, _Lb2dd__bt_run_bb83 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb82 // branch -> then
-_Lb2dd__bt_run_bb78:
+    cbz x1, _Lfd34__bt_run_bb83 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb82 // branch -> then
+_Lfd34__bt_run_bb78:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -7979,7 +7979,7 @@ _Lb2dd__bt_run_bb78:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb79:
+_Lfd34__bt_run_bb79:
     add x15, sp, #3104 // hv frame base
     ldp x0, x1, [x15] // hv load L188
     movz x2, #0 // hv const_int: TAG_INT
@@ -7989,16 +7989,16 @@ _Lb2dd__bt_run_bb79:
     stp x0, x1, [x15] // hv store L191
     add x15, sp, #3152 // hv frame base
     ldp x0, x1, [x15] // hv load L191
-    cbz x1, _Lb2dd__bt_run_bb81 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb80 // branch -> then
-_Lb2dd__bt_run_bb80:
+    cbz x1, _Lfd34__bt_run_bb81 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb80 // branch -> then
+_Lfd34__bt_run_bb80:
     add x15, sp, #3104 // hv frame base
     ldp x0, x1, [x15] // hv load L188
     movz x15, #4976 // imm 0-15
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb81:
+_Lfd34__bt_run_bb81:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #2 // hv const_int val
     add x15, sp, #2896 // hv frame base
@@ -8043,7 +8043,7 @@ _Lb2dd__bt_run_bb81:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb82:
+_Lfd34__bt_run_bb82:
     ldp x0, x1, [sp, #496] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -8083,9 +8083,9 @@ _Lb2dd__bt_run_bb82:
     stp x0, x1, [x15] // hv store L203
     add x15, sp, #3344 // hv frame base
     ldp x0, x1, [x15] // hv load L203
-    cbz x1, _Lb2dd__bt_run_bb85 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb84 // branch -> then
-_Lb2dd__bt_run_bb83:
+    cbz x1, _Lfd34__bt_run_bb85 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb84 // branch -> then
+_Lfd34__bt_run_bb83:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L27
     movz x2, #0 // hv const_int: TAG_INT
@@ -8095,9 +8095,9 @@ _Lb2dd__bt_run_bb83:
     stp x0, x1, [x15] // hv store L233
     add x15, sp, #3824 // hv frame base
     ldp x0, x1, [x15] // hv load L233
-    cbz x1, _Lb2dd__bt_run_bb99 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb98 // branch -> then
-_Lb2dd__bt_run_bb84:
+    cbz x1, _Lfd34__bt_run_bb99 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb98 // branch -> then
+_Lfd34__bt_run_bb84:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -8105,7 +8105,7 @@ _Lb2dd__bt_run_bb84:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb85:
+_Lfd34__bt_run_bb85:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #2 // hv const_int val
     add x15, sp, #3280 // hv frame base
@@ -8158,15 +8158,15 @@ _Lb2dd__bt_run_bb85:
     stp x0, x1, [x15] // hv store L212
     add x15, sp, #3488 // hv frame base
     ldp x0, x1, [x15] // hv load L212
-    cbz x1, _Lb2dd__bt_run_bb87 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb86 // branch -> then
-_Lb2dd__bt_run_bb86:
+    cbz x1, _Lfd34__bt_run_bb87 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb86 // branch -> then
+_Lfd34__bt_run_bb86:
     add x15, sp, #3488 // hv frame base
     ldp x0, x1, [x15] // hv load L212
     add x15, sp, #3504 // hv frame base
     stp x0, x1, [x15] // hv store L213
-    b _Lb2dd__bt_run_bb88 // branch
-_Lb2dd__bt_run_bb87:
+    b _Lfd34__bt_run_bb88 // branch
+_Lfd34__bt_run_bb87:
     add x15, sp, #3472 // hv frame base
     ldp x0, x1, [x15] // hv load L211
     movz x2, #0 // hv const_int: TAG_INT
@@ -8178,13 +8178,13 @@ _Lb2dd__bt_run_bb87:
     ldp x0, x1, [x15] // hv load L214
     add x15, sp, #3504 // hv frame base
     stp x0, x1, [x15] // hv store L213
-    b _Lb2dd__bt_run_bb88 // branch
-_Lb2dd__bt_run_bb88:
+    b _Lfd34__bt_run_bb88 // branch
+_Lfd34__bt_run_bb88:
     add x15, sp, #3504 // hv frame base
     ldp x0, x1, [x15] // hv load L213
-    cbz x1, _Lb2dd__bt_run_bb90 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb89 // branch -> then
-_Lb2dd__bt_run_bb89:
+    cbz x1, _Lfd34__bt_run_bb90 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb89 // branch -> then
+_Lfd34__bt_run_bb89:
     ldp x0, x1, [sp, #96] // hv load L0
     ldp x2, x3, [sp, #112] // hv load L1
     ldp x4, x5, [sp, #128] // hv load L2
@@ -8204,7 +8204,7 @@ _Lb2dd__bt_run_bb89:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb90:
+_Lfd34__bt_run_bb90:
     add x15, sp, #3472 // hv frame base
     ldp x0, x1, [x15] // hv load L211
     add x15, sp, #3408 // hv frame base
@@ -8230,9 +8230,9 @@ _Lb2dd__bt_run_bb90:
     stp x0, x1, [x15] // hv store L220
     add x15, sp, #3616 // hv frame base
     ldp x0, x1, [x15] // hv load L220
-    cbz x1, _Lb2dd__bt_run_bb92 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb91 // branch -> then
-_Lb2dd__bt_run_bb91:
+    cbz x1, _Lfd34__bt_run_bb92 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb91 // branch -> then
+_Lfd34__bt_run_bb91:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -8240,13 +8240,13 @@ _Lb2dd__bt_run_bb91:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb92:
+_Lfd34__bt_run_bb92:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     add x15, sp, #3648 // hv frame base
     stp x0, x1, [x15] // hv store L222
-    b _Lb2dd__bt_run_bb93 // branch
-_Lb2dd__bt_run_bb93:
+    b _Lfd34__bt_run_bb93 // branch
+_Lfd34__bt_run_bb93:
     add x15, sp, #3648 // hv frame base
     ldp x0, x1, [x15] // hv load L222
     add x15, sp, #3584 // hv frame base
@@ -8256,9 +8256,9 @@ _Lb2dd__bt_run_bb93:
     stp x0, x1, [x15] // hv store L223
     add x15, sp, #3664 // hv frame base
     ldp x0, x1, [x15] // hv load L223
-    cbz x1, _Lb2dd__bt_run_bb95 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb94 // branch -> then
-_Lb2dd__bt_run_bb94:
+    cbz x1, _Lfd34__bt_run_bb95 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb94 // branch -> then
+_Lfd34__bt_run_bb94:
     ldp x0, x1, [sp, #176] // hv load L5
     add x15, sp, #3648 // hv frame base
     ldp x2, x3, [x15] // hv load L222
@@ -8296,9 +8296,9 @@ _Lb2dd__bt_run_bb94:
     stp x0, x1, [x15] // hv store L228
     add x15, sp, #3744 // hv frame base
     ldp x0, x1, [x15] // hv load L228
-    cbz x1, _Lb2dd__bt_run_bb97 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb96 // branch -> then
-_Lb2dd__bt_run_bb95:
+    cbz x1, _Lfd34__bt_run_bb97 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb96 // branch -> then
+_Lfd34__bt_run_bb95:
     ldp x0, x1, [sp, #176] // hv load L5
     add x15, sp, #3584 // hv frame base
     ldp x2, x3, [x15] // hv load L218
@@ -8325,7 +8325,7 @@ _Lb2dd__bt_run_bb95:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb96:
+_Lfd34__bt_run_bb96:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -8333,7 +8333,7 @@ _Lb2dd__bt_run_bb96:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb97:
+_Lfd34__bt_run_bb97:
     add x15, sp, #3648 // hv frame base
     ldp x0, x1, [x15] // hv load L222
     movz x2, #0 // hv const_int: TAG_INT
@@ -8345,8 +8345,8 @@ _Lb2dd__bt_run_bb97:
     ldp x0, x1, [x15] // hv load L230
     add x15, sp, #3648 // hv frame base
     stp x0, x1, [x15] // hv store L222
-    b _Lb2dd__bt_run_bb93 // branch
-_Lb2dd__bt_run_bb98:
+    b _Lfd34__bt_run_bb93 // branch
+_Lfd34__bt_run_bb98:
     ldp x0, x1, [sp, #496] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -8362,9 +8362,9 @@ _Lb2dd__bt_run_bb98:
     stp x0, x1, [x15] // hv store L236
     add x15, sp, #3872 // hv frame base
     ldp x0, x1, [x15] // hv load L236
-    cbz x1, _Lb2dd__bt_run_bb101 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb100 // branch -> then
-_Lb2dd__bt_run_bb99:
+    cbz x1, _Lfd34__bt_run_bb101 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb100 // branch -> then
+_Lfd34__bt_run_bb99:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L27
     movz x2, #0 // hv const_int: TAG_INT
@@ -8376,9 +8376,9 @@ _Lb2dd__bt_run_bb99:
     movz x15, #4240 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     ldp x0, x1, [x15] // hv load L259
-    cbz x1, _Lb2dd__bt_run_bb111 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb110 // branch -> then
-_Lb2dd__bt_run_bb100:
+    cbz x1, _Lfd34__bt_run_bb111 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb110 // branch -> then
+_Lfd34__bt_run_bb100:
     ldp x0, x1, [sp, #112] // hv load L1
     bl _bt_copy // call _bt_copy
     add x15, sp, #3904 // hv frame base
@@ -8437,9 +8437,9 @@ _Lb2dd__bt_run_bb100:
     stp x0, x1, [x15] // hv store L245
     add x15, sp, #4016 // hv frame base
     ldp x0, x1, [x15] // hv load L245
-    cbz x1, _Lb2dd__bt_run_bb103 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb102 // branch -> then
-_Lb2dd__bt_run_bb101:
+    cbz x1, _Lfd34__bt_run_bb103 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb102 // branch -> then
+_Lfd34__bt_run_bb101:
     ldp x0, x1, [sp, #496] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -8496,9 +8496,9 @@ _Lb2dd__bt_run_bb101:
     movz x15, #4160 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     ldp x0, x1, [x15] // hv load L254
-    cbz x1, _Lb2dd__bt_run_bb107 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb106 // branch -> then
-_Lb2dd__bt_run_bb102:
+    cbz x1, _Lfd34__bt_run_bb107 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb106 // branch -> then
+_Lfd34__bt_run_bb102:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -8506,7 +8506,7 @@ _Lb2dd__bt_run_bb102:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb103:
+_Lfd34__bt_run_bb103:
     add x15, sp, #3984 // hv frame base
     ldp x0, x1, [x15] // hv load L243
     movz x2, #0 // hv const_int: TAG_INT
@@ -8516,9 +8516,9 @@ _Lb2dd__bt_run_bb103:
     stp x0, x1, [x15] // hv store L247
     add x15, sp, #4048 // hv frame base
     ldp x0, x1, [x15] // hv load L247
-    cbz x1, _Lb2dd__bt_run_bb105 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb104 // branch -> then
-_Lb2dd__bt_run_bb104:
+    cbz x1, _Lfd34__bt_run_bb105 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb104 // branch -> then
+_Lfd34__bt_run_bb104:
     ldp x0, x1, [sp, #96] // hv load L0
     ldp x2, x3, [sp, #112] // hv load L1
     ldp x4, x5, [sp, #128] // hv load L2
@@ -8538,7 +8538,7 @@ _Lb2dd__bt_run_bb104:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb105:
+_Lfd34__bt_run_bb105:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -8546,7 +8546,7 @@ _Lb2dd__bt_run_bb105:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb106:
+_Lfd34__bt_run_bb106:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -8554,7 +8554,7 @@ _Lb2dd__bt_run_bb106:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb107:
+_Lfd34__bt_run_bb107:
     movz x15, #4144 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     ldp x0, x1, [x15] // hv load L253
@@ -8567,9 +8567,9 @@ _Lb2dd__bt_run_bb107:
     movz x15, #4192 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     ldp x0, x1, [x15] // hv load L256
-    cbz x1, _Lb2dd__bt_run_bb109 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb108 // branch -> then
-_Lb2dd__bt_run_bb108:
+    cbz x1, _Lfd34__bt_run_bb109 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb108 // branch -> then
+_Lfd34__bt_run_bb108:
     ldp x0, x1, [sp, #96] // hv load L0
     ldp x2, x3, [sp, #112] // hv load L1
     ldp x4, x5, [sp, #128] // hv load L2
@@ -8591,7 +8591,7 @@ _Lb2dd__bt_run_bb108:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb109:
+_Lfd34__bt_run_bb109:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -8599,10 +8599,10 @@ _Lb2dd__bt_run_bb109:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb110:
+_Lfd34__bt_run_bb110:
     ldp x0, x1, [sp, #96] // hv load L0
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     movz x15, #4272 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
@@ -8631,8 +8631,8 @@ _Lb2dd__bt_run_bb110:
     add x15, sp, x15 // hv frame base (big)
     stp x0, x1, [x15] // hv store L264
     ldp x0, x1, [sp, #96] // hv load L0
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     movz x15, #4336 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
@@ -8688,9 +8688,9 @@ _Lb2dd__bt_run_bb110:
     movz x15, #4448 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     ldp x0, x1, [x15] // hv load L272
-    cbz x1, _Lb2dd__bt_run_bb113 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb112 // branch -> then
-_Lb2dd__bt_run_bb111:
+    cbz x1, _Lfd34__bt_run_bb113 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb112 // branch -> then
+_Lfd34__bt_run_bb111:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -8698,7 +8698,7 @@ _Lb2dd__bt_run_bb111:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb112:
+_Lfd34__bt_run_bb112:
     bl hexa_array_new // array_lit: new array
     movz x15, #4480 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
@@ -8769,9 +8769,9 @@ _Lb2dd__bt_run_bb112:
     movz x15, #4544 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     ldp x0, x1, [x15] // hv load L278
-    cbz x1, _Lb2dd__bt_run_bb115 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb114 // branch -> then
-_Lb2dd__bt_run_bb113:
+    cbz x1, _Lfd34__bt_run_bb115 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb114 // branch -> then
+_Lfd34__bt_run_bb113:
     ldp x0, x1, [sp, #496] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -8791,17 +8791,17 @@ _Lb2dd__bt_run_bb113:
     movz x15, #4832 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     ldp x0, x1, [x15] // hv load L296
-    cbz x1, _Lb2dd__bt_run_bb126 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb125 // branch -> then
-_Lb2dd__bt_run_bb114:
+    cbz x1, _Lfd34__bt_run_bb126 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb125 // branch -> then
+_Lfd34__bt_run_bb114:
     ldp x0, x1, [sp, #176] // hv load L5
     movz x15, #4528 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     stp x0, x1, [x15] // hv store L277
-    b _Lb2dd__bt_run_bb115 // branch
-_Lb2dd__bt_run_bb115:
-    b _Lb2dd__bt_run_bb116 // branch
-_Lb2dd__bt_run_bb116:
+    b _Lfd34__bt_run_bb115 // branch
+_Lfd34__bt_run_bb115:
+    b _Lfd34__bt_run_bb116 // branch
+_Lfd34__bt_run_bb116:
     movz x15, #4528 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     ldp x0, x1, [x15] // hv load L277
@@ -8815,9 +8815,9 @@ _Lb2dd__bt_run_bb116:
     movz x15, #4576 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     ldp x0, x1, [x15] // hv load L280
-    cbz x1, _Lb2dd__bt_run_bb118 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb117 // branch -> then
-_Lb2dd__bt_run_bb117:
+    cbz x1, _Lfd34__bt_run_bb118 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb117 // branch -> then
+_Lfd34__bt_run_bb117:
     ldp x0, x1, [sp, #176] // hv load L5
     movz x15, #4528 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
@@ -8844,11 +8844,11 @@ _Lb2dd__bt_run_bb117:
     movz x15, #4624 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     ldp x0, x1, [x15] // hv load L283
-    cbz x1, _Lb2dd__bt_run_bb120 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb119 // branch -> then
-_Lb2dd__bt_run_bb118:
-    b _Lb2dd__bt_run_bb113 // branch
-_Lb2dd__bt_run_bb119:
+    cbz x1, _Lfd34__bt_run_bb120 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb119 // branch -> then
+_Lfd34__bt_run_bb118:
+    b _Lfd34__bt_run_bb113 // branch
+_Lfd34__bt_run_bb119:
     ldp x0, x1, [sp, #496] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -8917,9 +8917,9 @@ _Lb2dd__bt_run_bb119:
     movz x15, #4720 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     ldp x0, x1, [x15] // hv load L289
-    cbz x1, _Lb2dd__bt_run_bb122 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb121 // branch -> then
-_Lb2dd__bt_run_bb120:
+    cbz x1, _Lfd34__bt_run_bb122 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb121 // branch -> then
+_Lfd34__bt_run_bb120:
     movz x15, #4528 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     ldp x0, x1, [x15] // hv load L277
@@ -8935,8 +8935,8 @@ _Lb2dd__bt_run_bb120:
     movz x15, #4528 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     stp x0, x1, [x15] // hv store L277
-    b _Lb2dd__bt_run_bb116 // branch
-_Lb2dd__bt_run_bb121:
+    b _Lfd34__bt_run_bb116 // branch
+_Lfd34__bt_run_bb121:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -8944,7 +8944,7 @@ _Lb2dd__bt_run_bb121:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb122:
+_Lfd34__bt_run_bb122:
     movz x15, #4704 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     ldp x0, x1, [x15] // hv load L288
@@ -8956,16 +8956,16 @@ _Lb2dd__bt_run_bb122:
     movz x15, #4752 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     ldp x0, x1, [x15] // hv load L291
-    cbz x1, _Lb2dd__bt_run_bb124 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb123 // branch -> then
-_Lb2dd__bt_run_bb123:
+    cbz x1, _Lfd34__bt_run_bb124 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb123 // branch -> then
+_Lfd34__bt_run_bb123:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
     movz x15, #4400 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     stp x0, x1, [x15] // hv store L269
-    b _Lb2dd__bt_run_bb118 // branch
-_Lb2dd__bt_run_bb124:
+    b _Lfd34__bt_run_bb118 // branch
+_Lfd34__bt_run_bb124:
     ldp x0, x1, [sp, #112] // hv load L1
     movz x15, #4432 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
@@ -8974,8 +8974,8 @@ _Lb2dd__bt_run_bb124:
     movz x15, #4784 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     stp x0, x1, [x15] // hv store L293
-    b _Lb2dd__bt_run_bb120 // branch
-_Lb2dd__bt_run_bb125:
+    b _Lfd34__bt_run_bb120 // branch
+_Lfd34__bt_run_bb125:
     ldp x0, x1, [sp, #112] // hv load L1
     movz x15, #4432 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
@@ -8996,15 +8996,15 @@ _Lb2dd__bt_run_bb125:
     movz x15, #4880 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     ldp x0, x1, [x15] // hv load L299
-    cbz x1, _Lb2dd__bt_run_bb128 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb127 // branch -> then
-_Lb2dd__bt_run_bb126:
+    cbz x1, _Lfd34__bt_run_bb128 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb127 // branch -> then
+_Lfd34__bt_run_bb126:
     movz x15, #4400 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
     ldp x0, x1, [x15] // hv load L269
-    cbz x1, _Lb2dd__bt_run_bb130 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_bb129 // branch -> then
-_Lb2dd__bt_run_bb127:
+    cbz x1, _Lfd34__bt_run_bb130 // br_cond: !payload -> else
+    b _Lfd34__bt_run_bb129 // branch -> then
+_Lfd34__bt_run_bb127:
     ldp x0, x1, [sp, #96] // hv load L0
     ldp x2, x3, [sp, #112] // hv load L1
     ldp x4, x5, [sp, #128] // hv load L2
@@ -9026,7 +9026,7 @@ _Lb2dd__bt_run_bb127:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb128:
+_Lfd34__bt_run_bb128:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -9034,7 +9034,7 @@ _Lb2dd__bt_run_bb128:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb129:
+_Lfd34__bt_run_bb129:
     ldp x0, x1, [sp, #96] // hv load L0
     ldp x2, x3, [sp, #112] // hv load L1
     ldp x4, x5, [sp, #128] // hv load L2
@@ -9056,7 +9056,7 @@ _Lb2dd__bt_run_bb129:
     add sp, sp, x15 // sp adj (big frame)
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_bb130:
+_Lfd34__bt_run_bb130:
     ldp x0, x1, [sp, #112] // hv load L1
     movz x15, #4432 // imm 0-15
     add x15, sp, x15 // hv frame base (big)
@@ -9095,16 +9095,16 @@ _bt_run_repeat:
     stp x9, x10, [sp, #176] // store stack param 8
     ldp x9, x10, [x29, #96] // ingress stack param 9
     stp x9, x10, [sp, #192] // store stack param 9
-_Lb2dd__bt_run_repeat_bb0:
+_Lfd34__bt_run_repeat_bb0:
     ldp x0, x1, [sp, #112] // hv load L4
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     bl hexa_cmp_gt // binop >
     stp x0, x1, [sp, #208] // hv store L10
     ldp x0, x1, [sp, #208] // hv load L10
-    cbz x1, _Lb2dd__bt_run_repeat_bb2 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_repeat_bb1 // branch -> then
-_Lb2dd__bt_run_repeat_bb1:
+    cbz x1, _Lfd34__bt_run_repeat_bb2 // br_cond: !payload -> else
+    b _Lfd34__bt_run_repeat_bb1 // branch -> then
+_Lfd34__bt_run_repeat_bb1:
     ldp x0, x1, [sp, #112] // hv load L4
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -9116,9 +9116,9 @@ _Lb2dd__bt_run_repeat_bb1:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #256] // hv store L13
     ldp x0, x1, [sp, #256] // hv load L13
-    cbz x1, _Lb2dd__bt_run_repeat_bb4 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_repeat_bb3 // branch -> then
-_Lb2dd__bt_run_repeat_bb2:
+    cbz x1, _Lfd34__bt_run_repeat_bb4 // br_cond: !payload -> else
+    b _Lfd34__bt_run_repeat_bb3 // branch -> then
+_Lfd34__bt_run_repeat_bb2:
     ldp x0, x1, [sp, #128] // hv load L5
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
@@ -9128,15 +9128,15 @@ _Lb2dd__bt_run_repeat_bb2:
     bl hexa_bool // ne: box bool
     stp x0, x1, [sp, #400] // hv store L22
     ldp x0, x1, [sp, #400] // hv load L22
-    cbz x1, _Lb2dd__bt_run_repeat_bb7 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_repeat_bb6 // branch -> then
-_Lb2dd__bt_run_repeat_bb3:
+    cbz x1, _Lfd34__bt_run_repeat_bb7 // br_cond: !payload -> else
+    b _Lfd34__bt_run_repeat_bb6 // branch -> then
+_Lfd34__bt_run_repeat_bb3:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
     stp x0, x1, [sp, #272] // hv store L14
-    b _Lb2dd__bt_run_repeat_bb5 // branch
-_Lb2dd__bt_run_repeat_bb4:
+    b _Lfd34__bt_run_repeat_bb5 // branch
+_Lfd34__bt_run_repeat_bb4:
     ldp x0, x1, [sp, #128] // hv load L5
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -9144,8 +9144,8 @@ _Lb2dd__bt_run_repeat_bb4:
     stp x0, x1, [sp, #288] // hv store L15
     ldp x0, x1, [sp, #288] // hv load L15
     stp x0, x1, [sp, #272] // hv store L14
-    b _Lb2dd__bt_run_repeat_bb5 // branch
-_Lb2dd__bt_run_repeat_bb5:
+    b _Lfd34__bt_run_repeat_bb5 // branch
+_Lfd34__bt_run_repeat_bb5:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #304] // hv store L16
     ldp x0, x1, [sp, #304] // hv reload L16
@@ -9195,16 +9195,16 @@ _Lb2dd__bt_run_repeat_bb5:
     add sp, sp, #720 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_repeat_bb6:
+_Lfd34__bt_run_repeat_bb6:
     ldp x0, x1, [sp, #128] // hv load L5
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #432] // hv store L24
     ldp x0, x1, [sp, #432] // hv load L24
-    cbz x1, _Lb2dd__bt_run_repeat_bb9 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_repeat_bb8 // branch -> then
-_Lb2dd__bt_run_repeat_bb7:
+    cbz x1, _Lfd34__bt_run_repeat_bb9 // br_cond: !payload -> else
+    b _Lfd34__bt_run_repeat_bb8 // branch -> then
+_Lfd34__bt_run_repeat_bb7:
     ldp x0, x1, [sp, #48] // hv load L0
     ldp x2, x3, [sp, #64] // hv load L1
     ldp x4, x5, [sp, #80] // hv load L2
@@ -9223,13 +9223,13 @@ _Lb2dd__bt_run_repeat_bb7:
     add sp, sp, #720 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_repeat_bb8:
+_Lfd34__bt_run_repeat_bb8:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
     stp x0, x1, [sp, #448] // hv store L25
-    b _Lb2dd__bt_run_repeat_bb10 // branch
-_Lb2dd__bt_run_repeat_bb9:
+    b _Lfd34__bt_run_repeat_bb10 // branch
+_Lfd34__bt_run_repeat_bb9:
     ldp x0, x1, [sp, #128] // hv load L5
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -9237,8 +9237,8 @@ _Lb2dd__bt_run_repeat_bb9:
     stp x0, x1, [sp, #464] // hv store L26
     ldp x0, x1, [sp, #464] // hv load L26
     stp x0, x1, [sp, #448] // hv store L25
-    b _Lb2dd__bt_run_repeat_bb10 // branch
-_Lb2dd__bt_run_repeat_bb10:
+    b _Lfd34__bt_run_repeat_bb10 // branch
+_Lfd34__bt_run_repeat_bb10:
     ldp x0, x1, [sp, #448] // hv load L25
     stp x0, x1, [sp, #480] // hv store L27
     bl hexa_array_new // array_lit: new array
@@ -9310,16 +9310,16 @@ _Lb2dd__bt_run_repeat_bb10:
     stp x0, x1, [x15] // hv store L35
     add x15, sp, #608 // hv frame base
     ldp x0, x1, [x15] // hv load L35
-    cbz x1, _Lb2dd__bt_run_repeat_bb12 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_repeat_bb11 // branch -> then
-_Lb2dd__bt_run_repeat_bb11:
+    cbz x1, _Lfd34__bt_run_repeat_bb12 // br_cond: !payload -> else
+    b _Lfd34__bt_run_repeat_bb11 // branch -> then
+_Lfd34__bt_run_repeat_bb11:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // imm 0-15
     mvn x1, x1 // hv const_int: negate
     add sp, sp, #720 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_repeat_bb12:
+_Lfd34__bt_run_repeat_bb12:
     add x15, sp, #592 // hv frame base
     ldp x0, x1, [x15] // hv load L34
     movz x2, #0 // hv const_int: TAG_INT
@@ -9329,9 +9329,9 @@ _Lb2dd__bt_run_repeat_bb12:
     stp x0, x1, [x15] // hv store L37
     add x15, sp, #640 // hv frame base
     ldp x0, x1, [x15] // hv load L37
-    cbz x1, _Lb2dd__bt_run_repeat_bb14 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_repeat_bb13 // branch -> then
-_Lb2dd__bt_run_repeat_bb13:
+    cbz x1, _Lfd34__bt_run_repeat_bb14 // br_cond: !payload -> else
+    b _Lfd34__bt_run_repeat_bb13 // branch -> then
+_Lfd34__bt_run_repeat_bb13:
     add x15, sp, #592 // hv frame base
     ldp x0, x1, [x15] // hv load L34
     ldp x2, x3, [sp, #176] // hv load L8
@@ -9342,26 +9342,26 @@ _Lb2dd__bt_run_repeat_bb13:
     ldp x0, x1, [x15] // hv load L39
     add x15, sp, #656 // hv frame base
     stp x0, x1, [x15] // hv store L38
-    b _Lb2dd__bt_run_repeat_bb15 // branch
-_Lb2dd__bt_run_repeat_bb14:
+    b _Lfd34__bt_run_repeat_bb15 // branch
+_Lfd34__bt_run_repeat_bb14:
     add x15, sp, #640 // hv frame base
     ldp x0, x1, [x15] // hv load L37
     add x15, sp, #656 // hv frame base
     stp x0, x1, [x15] // hv store L38
-    b _Lb2dd__bt_run_repeat_bb15 // branch
-_Lb2dd__bt_run_repeat_bb15:
+    b _Lfd34__bt_run_repeat_bb15 // branch
+_Lfd34__bt_run_repeat_bb15:
     add x15, sp, #656 // hv frame base
     ldp x0, x1, [x15] // hv load L38
-    cbz x1, _Lb2dd__bt_run_repeat_bb17 // br_cond: !payload -> else
-    b _Lb2dd__bt_run_repeat_bb16 // branch -> then
-_Lb2dd__bt_run_repeat_bb16:
+    cbz x1, _Lfd34__bt_run_repeat_bb17 // br_cond: !payload -> else
+    b _Lfd34__bt_run_repeat_bb16 // branch -> then
+_Lfd34__bt_run_repeat_bb16:
     add x15, sp, #592 // hv frame base
     ldp x0, x1, [x15] // hv load L34
     add sp, sp, #720 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__bt_run_repeat_bb17:
-    b _Lb2dd__bt_run_repeat_bb7 // branch
+_Lfd34__bt_run_repeat_bb17:
+    b _Lfd34__bt_run_repeat_bb7 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #720 // sp adj
@@ -9376,10 +9376,10 @@ bt_match_full:
     sub sp, sp, #496 // sp adj
     stp x0, x1, [sp, #48] // ingress param 0
     stp x2, x3, [sp, #64] // ingress param 1
-_Lb2dd_bt_match_full_bb0:
+_Lfd34_bt_match_full_bb0:
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr11@PAGE // cstr key page
-    add x2, x2, .LCstr11@PAGEOFF // cstr key off
+    adrp x2, .LCstr11 // cstr key page
+    add x2, x2, :lo12:.LCstr11 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #80] // hv store L2
     ldp x0, x1, [sp, #80] // hv load L2
@@ -9390,8 +9390,8 @@ _Lb2dd_bt_match_full_bb0:
     bl hexa_index_set // index_set: hexa_index_set
     stp x0, x1, [sp, #80] // hv store L2
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #96] // hv store L3
     ldp x0, x1, [sp, #96] // hv load L3
@@ -9400,15 +9400,15 @@ _Lb2dd_bt_match_full_bb0:
     bl hexa_bool // unop !: box bool
     stp x0, x1, [sp, #112] // hv store L4
     ldp x0, x1, [sp, #112] // hv load L4
-    cbz x1, _Lb2dd_bt_match_full_bb2 // br_cond: !payload -> else
-    b _Lb2dd_bt_match_full_bb1 // branch -> then
-_Lb2dd_bt_match_full_bb1:
+    cbz x1, _Lfd34_bt_match_full_bb2 // br_cond: !payload -> else
+    b _Lfd34_bt_match_full_bb1 // branch -> then
+_Lfd34_bt_match_full_bb1:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     add sp, sp, #496 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_match_full_bb2:
+_Lfd34_bt_match_full_bb2:
     ldp x0, x1, [sp, #64] // hv load L1
     bl hexa_byte_len // call hexa_byte_len
     stp x0, x1, [sp, #144] // hv store L6
@@ -9443,8 +9443,8 @@ _Lb2dd_bt_match_full_bb2:
     ldp x0, x1, [sp, #192] // hv load L9
     stp x0, x1, [sp, #208] // hv store L10
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr9@PAGE // cstr key page
-    add x2, x2, .LCstr9@PAGEOFF // cstr key off
+    adrp x2, .LCstr9 // cstr key page
+    add x2, x2, :lo12:.LCstr9 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #224] // hv store L11
     ldp x0, x1, [sp, #224] // hv load L11
@@ -9466,8 +9466,8 @@ _Lb2dd_bt_match_full_bb2:
     ldp x0, x1, [sp, #272] // hv load L14
     stp x0, x1, [sp, #288] // hv store L15
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr10@PAGE // cstr key page
-    add x2, x2, .LCstr10@PAGEOFF // cstr key off
+    adrp x2, .LCstr10 // cstr key page
+    add x2, x2, :lo12:.LCstr10 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #304] // hv store L16
     bl hexa_array_new // array_lit: new array
@@ -9489,8 +9489,8 @@ _Lb2dd_bt_match_full_bb2:
     ldp x0, x1, [sp, #320] // hv load L17
     stp x0, x1, [sp, #336] // hv store L18
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr8@PAGE // cstr key page
-    add x2, x2, .LCstr8@PAGEOFF // cstr key off
+    adrp x2, .LCstr8 // cstr key page
+    add x2, x2, :lo12:.LCstr8 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #352] // hv store L19
     bl hexa_array_new // array_lit: new array
@@ -9529,12 +9529,12 @@ _Lb2dd_bt_match_full_bb2:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #432] // hv store L24
     ldp x0, x1, [sp, #432] // hv load L24
-    cbz x1, _Lb2dd_bt_match_full_bb4 // br_cond: !payload -> else
-    b _Lb2dd_bt_match_full_bb3 // branch -> then
-_Lb2dd_bt_match_full_bb3:
+    cbz x1, _Lfd34_bt_match_full_bb4 // br_cond: !payload -> else
+    b _Lfd34_bt_match_full_bb3 // branch -> then
+_Lfd34_bt_match_full_bb3:
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr11@PAGE // cstr key page
-    add x2, x2, .LCstr11@PAGEOFF // cstr key off
+    adrp x2, .LCstr11 // cstr key page
+    add x2, x2, :lo12:.LCstr11 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #464] // hv store L26
     ldp x0, x1, [sp, #464] // hv load L26
@@ -9549,7 +9549,7 @@ _Lb2dd_bt_match_full_bb3:
     add sp, sp, #496 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_match_full_bb4:
+_Lfd34_bt_match_full_bb4:
     ldp x0, x1, [sp, #400] // hv load L22
     ldp x2, x3, [sp, #160] // hv load L7
     bl hexa_eq // binop ==
@@ -9567,10 +9567,10 @@ bt_search:
     sub sp, sp, #576 // sp adj
     stp x0, x1, [sp, #48] // ingress param 0
     stp x2, x3, [sp, #64] // ingress param 1
-_Lb2dd_bt_search_bb0:
+_Lfd34_bt_search_bb0:
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr11@PAGE // cstr key page
-    add x2, x2, .LCstr11@PAGEOFF // cstr key off
+    adrp x2, .LCstr11 // cstr key page
+    add x2, x2, :lo12:.LCstr11 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #80] // hv store L2
     ldp x0, x1, [sp, #80] // hv load L2
@@ -9581,8 +9581,8 @@ _Lb2dd_bt_search_bb0:
     bl hexa_index_set // index_set: hexa_index_set
     stp x0, x1, [sp, #80] // hv store L2
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #96] // hv store L3
     ldp x0, x1, [sp, #96] // hv load L3
@@ -9591,24 +9591,24 @@ _Lb2dd_bt_search_bb0:
     bl hexa_bool // unop !: box bool
     stp x0, x1, [sp, #112] // hv store L4
     ldp x0, x1, [sp, #112] // hv load L4
-    cbz x1, _Lb2dd_bt_search_bb2 // br_cond: !payload -> else
-    b _Lb2dd_bt_search_bb1 // branch -> then
-_Lb2dd_bt_search_bb1:
+    cbz x1, _Lfd34_bt_search_bb2 // br_cond: !payload -> else
+    b _Lfd34_bt_search_bb1 // branch -> then
+_Lfd34_bt_search_bb1:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #144] // hv store L6
     ldp x0, x1, [sp, #144] // hv load L6
     add sp, sp, #576 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_search_bb2:
+_Lfd34_bt_search_bb2:
     ldp x0, x1, [sp, #64] // hv load L1
     bl hexa_byte_len // call hexa_byte_len
     stp x0, x1, [sp, #160] // hv store L7
     ldp x0, x1, [sp, #160] // hv load L7
     stp x0, x1, [sp, #176] // hv store L8
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr10@PAGE // cstr key page
-    add x2, x2, .LCstr10@PAGEOFF // cstr key off
+    adrp x2, .LCstr10 // cstr key page
+    add x2, x2, :lo12:.LCstr10 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #192] // hv store L9
     bl hexa_array_new // array_lit: new array
@@ -9632,19 +9632,19 @@ _Lb2dd_bt_search_bb2:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #240] // hv store L12
-    b _Lb2dd_bt_search_bb3 // branch
-_Lb2dd_bt_search_bb3:
+    b _Lfd34_bt_search_bb3 // branch
+_Lfd34_bt_search_bb3:
     ldp x0, x1, [sp, #240] // hv load L12
     ldp x2, x3, [sp, #176] // hv load L8
     bl hexa_cmp_le // binop <=
     stp x0, x1, [sp, #256] // hv store L13
     ldp x0, x1, [sp, #256] // hv load L13
-    cbz x1, _Lb2dd_bt_search_bb5 // br_cond: !payload -> else
-    b _Lb2dd_bt_search_bb4 // branch -> then
-_Lb2dd_bt_search_bb4:
+    cbz x1, _Lfd34_bt_search_bb5 // br_cond: !payload -> else
+    b _Lfd34_bt_search_bb4 // branch -> then
+_Lfd34_bt_search_bb4:
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr9@PAGE // cstr key page
-    add x2, x2, .LCstr9@PAGEOFF // cstr key off
+    adrp x2, .LCstr9 // cstr key page
+    add x2, x2, :lo12:.LCstr9 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #272] // hv store L14
     ldp x0, x1, [sp, #272] // hv load L14
@@ -9666,8 +9666,8 @@ _Lb2dd_bt_search_bb4:
     ldp x0, x1, [sp, #320] // hv load L17
     stp x0, x1, [sp, #336] // hv store L18
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr8@PAGE // cstr key page
-    add x2, x2, .LCstr8@PAGEOFF // cstr key off
+    adrp x2, .LCstr8 // cstr key page
+    add x2, x2, :lo12:.LCstr8 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #352] // hv store L19
     bl hexa_array_new // array_lit: new array
@@ -9701,9 +9701,9 @@ _Lb2dd_bt_search_bb4:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #432] // hv store L24
     ldp x0, x1, [sp, #432] // hv load L24
-    cbz x1, _Lb2dd_bt_search_bb7 // br_cond: !payload -> else
-    b _Lb2dd_bt_search_bb6 // branch -> then
-_Lb2dd_bt_search_bb5:
+    cbz x1, _Lfd34_bt_search_bb7 // br_cond: !payload -> else
+    b _Lfd34_bt_search_bb6 // branch -> then
+_Lfd34_bt_search_bb5:
     bl hexa_array_new // array_lit: new array
     add x15, sp, #560 // hv frame base
     stp x0, x1, [x15] // hv store L32
@@ -9712,10 +9712,10 @@ _Lb2dd_bt_search_bb5:
     add sp, sp, #576 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_search_bb6:
+_Lfd34_bt_search_bb6:
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr11@PAGE // cstr key page
-    add x2, x2, .LCstr11@PAGEOFF // cstr key off
+    adrp x2, .LCstr11 // cstr key page
+    add x2, x2, :lo12:.LCstr11 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #464] // hv store L26
     ldp x0, x1, [sp, #464] // hv load L26
@@ -9731,16 +9731,16 @@ _Lb2dd_bt_search_bb6:
     add sp, sp, #576 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_search_bb7:
+_Lfd34_bt_search_bb7:
     ldp x0, x1, [sp, #400] // hv load L22
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     bl hexa_cmp_ge // binop >=
     stp x0, x1, [sp, #496] // hv store L28
     ldp x0, x1, [sp, #496] // hv load L28
-    cbz x1, _Lb2dd_bt_search_bb9 // br_cond: !payload -> else
-    b _Lb2dd_bt_search_bb8 // branch -> then
-_Lb2dd_bt_search_bb8:
+    cbz x1, _Lfd34_bt_search_bb9 // br_cond: !payload -> else
+    b _Lfd34_bt_search_bb8 // branch -> then
+_Lfd34_bt_search_bb8:
     bl hexa_array_new // array_lit: new array
     add x15, sp, #528 // hv frame base
     stp x0, x1, [x15] // hv store L30
@@ -9761,7 +9761,7 @@ _Lb2dd_bt_search_bb8:
     add sp, sp, #576 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_search_bb9:
+_Lfd34_bt_search_bb9:
     ldp x0, x1, [sp, #240] // hv load L12
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -9771,7 +9771,7 @@ _Lb2dd_bt_search_bb9:
     add x15, sp, #544 // hv frame base
     ldp x0, x1, [x15] // hv load L31
     stp x0, x1, [sp, #240] // hv store L12
-    b _Lb2dd_bt_search_bb3 // branch
+    b _Lfd34_bt_search_bb3 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #576 // sp adj
@@ -9786,10 +9786,10 @@ bt_search_captures:
     sub sp, sp, #560 // sp adj
     stp x0, x1, [sp, #48] // ingress param 0
     stp x2, x3, [sp, #64] // ingress param 1
-_Lb2dd_bt_search_captures_bb0:
+_Lfd34_bt_search_captures_bb0:
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr11@PAGE // cstr key page
-    add x2, x2, .LCstr11@PAGEOFF // cstr key off
+    adrp x2, .LCstr11 // cstr key page
+    add x2, x2, :lo12:.LCstr11 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #80] // hv store L2
     ldp x0, x1, [sp, #80] // hv load L2
@@ -9800,8 +9800,8 @@ _Lb2dd_bt_search_captures_bb0:
     bl hexa_index_set // index_set: hexa_index_set
     stp x0, x1, [sp, #80] // hv store L2
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #96] // hv store L3
     ldp x0, x1, [sp, #96] // hv load L3
@@ -9810,24 +9810,24 @@ _Lb2dd_bt_search_captures_bb0:
     bl hexa_bool // unop !: box bool
     stp x0, x1, [sp, #112] // hv store L4
     ldp x0, x1, [sp, #112] // hv load L4
-    cbz x1, _Lb2dd_bt_search_captures_bb2 // br_cond: !payload -> else
-    b _Lb2dd_bt_search_captures_bb1 // branch -> then
-_Lb2dd_bt_search_captures_bb1:
+    cbz x1, _Lfd34_bt_search_captures_bb2 // br_cond: !payload -> else
+    b _Lfd34_bt_search_captures_bb1 // branch -> then
+_Lfd34_bt_search_captures_bb1:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #144] // hv store L6
     ldp x0, x1, [sp, #144] // hv load L6
     add sp, sp, #560 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_search_captures_bb2:
+_Lfd34_bt_search_captures_bb2:
     ldp x0, x1, [sp, #64] // hv load L1
     bl hexa_byte_len // call hexa_byte_len
     stp x0, x1, [sp, #160] // hv store L7
     ldp x0, x1, [sp, #160] // hv load L7
     stp x0, x1, [sp, #176] // hv store L8
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr10@PAGE // cstr key page
-    add x2, x2, .LCstr10@PAGEOFF // cstr key off
+    adrp x2, .LCstr10 // cstr key page
+    add x2, x2, :lo12:.LCstr10 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #192] // hv store L9
     bl hexa_array_new // array_lit: new array
@@ -9851,19 +9851,19 @@ _Lb2dd_bt_search_captures_bb2:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #240] // hv store L12
-    b _Lb2dd_bt_search_captures_bb3 // branch
-_Lb2dd_bt_search_captures_bb3:
+    b _Lfd34_bt_search_captures_bb3 // branch
+_Lfd34_bt_search_captures_bb3:
     ldp x0, x1, [sp, #240] // hv load L12
     ldp x2, x3, [sp, #176] // hv load L8
     bl hexa_cmp_le // binop <=
     stp x0, x1, [sp, #256] // hv store L13
     ldp x0, x1, [sp, #256] // hv load L13
-    cbz x1, _Lb2dd_bt_search_captures_bb5 // br_cond: !payload -> else
-    b _Lb2dd_bt_search_captures_bb4 // branch -> then
-_Lb2dd_bt_search_captures_bb4:
+    cbz x1, _Lfd34_bt_search_captures_bb5 // br_cond: !payload -> else
+    b _Lfd34_bt_search_captures_bb4 // branch -> then
+_Lfd34_bt_search_captures_bb4:
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr9@PAGE // cstr key page
-    add x2, x2, .LCstr9@PAGEOFF // cstr key off
+    adrp x2, .LCstr9 // cstr key page
+    add x2, x2, :lo12:.LCstr9 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #272] // hv store L14
     ldp x0, x1, [sp, #272] // hv load L14
@@ -9885,8 +9885,8 @@ _Lb2dd_bt_search_captures_bb4:
     ldp x0, x1, [sp, #320] // hv load L17
     stp x0, x1, [sp, #336] // hv store L18
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr8@PAGE // cstr key page
-    add x2, x2, .LCstr8@PAGEOFF // cstr key off
+    adrp x2, .LCstr8 // cstr key page
+    add x2, x2, :lo12:.LCstr8 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #352] // hv store L19
     bl hexa_array_new // array_lit: new array
@@ -9920,9 +9920,9 @@ _Lb2dd_bt_search_captures_bb4:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #432] // hv store L24
     ldp x0, x1, [sp, #432] // hv load L24
-    cbz x1, _Lb2dd_bt_search_captures_bb7 // br_cond: !payload -> else
-    b _Lb2dd_bt_search_captures_bb6 // branch -> then
-_Lb2dd_bt_search_captures_bb5:
+    cbz x1, _Lfd34_bt_search_captures_bb7 // br_cond: !payload -> else
+    b _Lfd34_bt_search_captures_bb6 // branch -> then
+_Lfd34_bt_search_captures_bb5:
     bl hexa_array_new // array_lit: new array
     add x15, sp, #544 // hv frame base
     stp x0, x1, [x15] // hv store L31
@@ -9931,10 +9931,10 @@ _Lb2dd_bt_search_captures_bb5:
     add sp, sp, #560 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_search_captures_bb6:
+_Lfd34_bt_search_captures_bb6:
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr11@PAGE // cstr key page
-    add x2, x2, .LCstr11@PAGEOFF // cstr key off
+    adrp x2, .LCstr11 // cstr key page
+    add x2, x2, :lo12:.LCstr11 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #464] // hv store L26
     ldp x0, x1, [sp, #464] // hv load L26
@@ -9950,16 +9950,16 @@ _Lb2dd_bt_search_captures_bb6:
     add sp, sp, #560 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_search_captures_bb7:
+_Lfd34_bt_search_captures_bb7:
     ldp x0, x1, [sp, #400] // hv load L22
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     bl hexa_cmp_ge // binop >=
     stp x0, x1, [sp, #496] // hv store L28
     ldp x0, x1, [sp, #496] // hv load L28
-    cbz x1, _Lb2dd_bt_search_captures_bb9 // br_cond: !payload -> else
-    b _Lb2dd_bt_search_captures_bb8 // branch -> then
-_Lb2dd_bt_search_captures_bb8:
+    cbz x1, _Lfd34_bt_search_captures_bb9 // br_cond: !payload -> else
+    b _Lfd34_bt_search_captures_bb8 // branch -> then
+_Lfd34_bt_search_captures_bb8:
     movz x9, #0 // hv const_int: TAG_INT
     movz x10, #0 // hv const_int val
     ldp x3, x4, [sp, #240] // hv load L12
@@ -9978,7 +9978,7 @@ _Lb2dd_bt_search_captures_bb8:
     add sp, sp, #560 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_search_captures_bb9:
+_Lfd34_bt_search_captures_bb9:
     ldp x0, x1, [sp, #240] // hv load L12
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -9988,7 +9988,7 @@ _Lb2dd_bt_search_captures_bb9:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L30
     stp x0, x1, [sp, #240] // hv store L12
-    b _Lb2dd_bt_search_captures_bb3 // branch
+    b _Lfd34_bt_search_captures_bb3 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #560 // sp adj
@@ -10003,14 +10003,14 @@ bt_find_all:
     sub sp, sp, #624 // sp adj
     stp x0, x1, [sp, #48] // ingress param 0
     stp x2, x3, [sp, #64] // ingress param 1
-_Lb2dd_bt_find_all_bb0:
+_Lfd34_bt_find_all_bb0:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #80] // hv store L2
     ldp x0, x1, [sp, #80] // hv load L2
     stp x0, x1, [sp, #96] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr11@PAGE // cstr key page
-    add x2, x2, .LCstr11@PAGEOFF // cstr key off
+    adrp x2, .LCstr11 // cstr key page
+    add x2, x2, :lo12:.LCstr11 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #112] // hv store L4
     ldp x0, x1, [sp, #112] // hv load L4
@@ -10021,8 +10021,8 @@ _Lb2dd_bt_find_all_bb0:
     bl hexa_index_set // index_set: hexa_index_set
     stp x0, x1, [sp, #112] // hv store L4
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #128] // hv store L5
     ldp x0, x1, [sp, #128] // hv load L5
@@ -10031,22 +10031,22 @@ _Lb2dd_bt_find_all_bb0:
     bl hexa_bool // unop !: box bool
     stp x0, x1, [sp, #144] // hv store L6
     ldp x0, x1, [sp, #144] // hv load L6
-    cbz x1, _Lb2dd_bt_find_all_bb2 // br_cond: !payload -> else
-    b _Lb2dd_bt_find_all_bb1 // branch -> then
-_Lb2dd_bt_find_all_bb1:
+    cbz x1, _Lfd34_bt_find_all_bb2 // br_cond: !payload -> else
+    b _Lfd34_bt_find_all_bb1 // branch -> then
+_Lfd34_bt_find_all_bb1:
     ldp x0, x1, [sp, #96] // hv load L3
     add sp, sp, #624 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_find_all_bb2:
+_Lfd34_bt_find_all_bb2:
     ldp x0, x1, [sp, #64] // hv load L1
     bl hexa_byte_len // call hexa_byte_len
     stp x0, x1, [sp, #176] // hv store L8
     ldp x0, x1, [sp, #176] // hv load L8
     stp x0, x1, [sp, #192] // hv store L9
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr10@PAGE // cstr key page
-    add x2, x2, .LCstr10@PAGEOFF // cstr key off
+    adrp x2, .LCstr10 // cstr key page
+    add x2, x2, :lo12:.LCstr10 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #208] // hv store L10
     bl hexa_array_new // array_lit: new array
@@ -10070,19 +10070,19 @@ _Lb2dd_bt_find_all_bb2:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #256] // hv store L13
-    b _Lb2dd_bt_find_all_bb3 // branch
-_Lb2dd_bt_find_all_bb3:
+    b _Lfd34_bt_find_all_bb3 // branch
+_Lfd34_bt_find_all_bb3:
     ldp x0, x1, [sp, #256] // hv load L13
     ldp x2, x3, [sp, #192] // hv load L9
     bl hexa_cmp_le // binop <=
     stp x0, x1, [sp, #272] // hv store L14
     ldp x0, x1, [sp, #272] // hv load L14
-    cbz x1, _Lb2dd_bt_find_all_bb5 // br_cond: !payload -> else
-    b _Lb2dd_bt_find_all_bb4 // branch -> then
-_Lb2dd_bt_find_all_bb4:
+    cbz x1, _Lfd34_bt_find_all_bb5 // br_cond: !payload -> else
+    b _Lfd34_bt_find_all_bb4 // branch -> then
+_Lfd34_bt_find_all_bb4:
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr9@PAGE // cstr key page
-    add x2, x2, .LCstr9@PAGEOFF // cstr key off
+    adrp x2, .LCstr9 // cstr key page
+    add x2, x2, :lo12:.LCstr9 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #288] // hv store L15
     ldp x0, x1, [sp, #288] // hv load L15
@@ -10104,8 +10104,8 @@ _Lb2dd_bt_find_all_bb4:
     ldp x0, x1, [sp, #336] // hv load L18
     stp x0, x1, [sp, #352] // hv store L19
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr8@PAGE // cstr key page
-    add x2, x2, .LCstr8@PAGEOFF // cstr key off
+    adrp x2, .LCstr8 // cstr key page
+    add x2, x2, :lo12:.LCstr8 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #368] // hv store L20
     bl hexa_array_new // array_lit: new array
@@ -10139,17 +10139,17 @@ _Lb2dd_bt_find_all_bb4:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #448] // hv store L25
     ldp x0, x1, [sp, #448] // hv load L25
-    cbz x1, _Lb2dd_bt_find_all_bb7 // br_cond: !payload -> else
-    b _Lb2dd_bt_find_all_bb6 // branch -> then
-_Lb2dd_bt_find_all_bb5:
+    cbz x1, _Lfd34_bt_find_all_bb7 // br_cond: !payload -> else
+    b _Lfd34_bt_find_all_bb6 // branch -> then
+_Lfd34_bt_find_all_bb5:
     ldp x0, x1, [sp, #96] // hv load L3
     add sp, sp, #624 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_find_all_bb6:
+_Lfd34_bt_find_all_bb6:
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr11@PAGE // cstr key page
-    add x2, x2, .LCstr11@PAGEOFF // cstr key off
+    adrp x2, .LCstr11 // cstr key page
+    add x2, x2, :lo12:.LCstr11 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #480] // hv store L27
     ldp x0, x1, [sp, #480] // hv load L27
@@ -10163,16 +10163,16 @@ _Lb2dd_bt_find_all_bb6:
     add sp, sp, #624 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_find_all_bb7:
+_Lfd34_bt_find_all_bb7:
     ldp x0, x1, [sp, #416] // hv load L23
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     bl hexa_cmp_ge // binop >=
     stp x0, x1, [sp, #496] // hv store L28
     ldp x0, x1, [sp, #496] // hv load L28
-    cbz x1, _Lb2dd_bt_find_all_bb9 // br_cond: !payload -> else
-    b _Lb2dd_bt_find_all_bb8 // branch -> then
-_Lb2dd_bt_find_all_bb8:
+    cbz x1, _Lfd34_bt_find_all_bb9 // br_cond: !payload -> else
+    b _Lfd34_bt_find_all_bb8 // branch -> then
+_Lfd34_bt_find_all_bb8:
     bl hexa_array_new // array_lit: new array
     add x15, sp, #528 // hv frame base
     stp x0, x1, [x15] // hv store L30
@@ -10201,9 +10201,9 @@ _Lb2dd_bt_find_all_bb8:
     stp x0, x1, [x15] // hv store L32
     add x15, sp, #560 // hv frame base
     ldp x0, x1, [x15] // hv load L32
-    cbz x1, _Lb2dd_bt_find_all_bb11 // br_cond: !payload -> else
-    b _Lb2dd_bt_find_all_bb10 // branch -> then
-_Lb2dd_bt_find_all_bb9:
+    cbz x1, _Lfd34_bt_find_all_bb11 // br_cond: !payload -> else
+    b _Lfd34_bt_find_all_bb10 // branch -> then
+_Lfd34_bt_find_all_bb9:
     ldp x0, x1, [sp, #256] // hv load L13
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -10213,12 +10213,12 @@ _Lb2dd_bt_find_all_bb9:
     add x15, sp, #608 // hv frame base
     ldp x0, x1, [x15] // hv load L35
     stp x0, x1, [sp, #256] // hv store L13
-    b _Lb2dd_bt_find_all_bb13 // branch
-_Lb2dd_bt_find_all_bb10:
+    b _Lfd34_bt_find_all_bb13 // branch
+_Lfd34_bt_find_all_bb10:
     ldp x0, x1, [sp, #416] // hv load L23
     stp x0, x1, [sp, #256] // hv store L13
-    b _Lb2dd_bt_find_all_bb12 // branch
-_Lb2dd_bt_find_all_bb11:
+    b _Lfd34_bt_find_all_bb12 // branch
+_Lfd34_bt_find_all_bb11:
     ldp x0, x1, [sp, #256] // hv load L13
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -10228,11 +10228,11 @@ _Lb2dd_bt_find_all_bb11:
     add x15, sp, #592 // hv frame base
     ldp x0, x1, [x15] // hv load L34
     stp x0, x1, [sp, #256] // hv store L13
-    b _Lb2dd_bt_find_all_bb12 // branch
-_Lb2dd_bt_find_all_bb12:
-    b _Lb2dd_bt_find_all_bb13 // branch
-_Lb2dd_bt_find_all_bb13:
-    b _Lb2dd_bt_find_all_bb3 // branch
+    b _Lfd34_bt_find_all_bb12 // branch
+_Lfd34_bt_find_all_bb12:
+    b _Lfd34_bt_find_all_bb13 // branch
+_Lfd34_bt_find_all_bb13:
+    b _Lfd34_bt_find_all_bb3 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #624 // sp adj
@@ -10248,10 +10248,10 @@ bt_search_from:
     stp x0, x1, [sp, #48] // ingress param 0
     stp x2, x3, [sp, #64] // ingress param 1
     stp x4, x5, [sp, #80] // ingress param 2
-_Lb2dd_bt_search_from_bb0:
+_Lfd34_bt_search_from_bb0:
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr11@PAGE // cstr key page
-    add x2, x2, .LCstr11@PAGEOFF // cstr key off
+    adrp x2, .LCstr11 // cstr key page
+    add x2, x2, :lo12:.LCstr11 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #96] // hv store L3
     ldp x0, x1, [sp, #96] // hv load L3
@@ -10262,8 +10262,8 @@ _Lb2dd_bt_search_from_bb0:
     bl hexa_index_set // index_set: hexa_index_set
     stp x0, x1, [sp, #96] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #112] // hv store L4
     ldp x0, x1, [sp, #112] // hv load L4
@@ -10272,24 +10272,24 @@ _Lb2dd_bt_search_from_bb0:
     bl hexa_bool // unop !: box bool
     stp x0, x1, [sp, #128] // hv store L5
     ldp x0, x1, [sp, #128] // hv load L5
-    cbz x1, _Lb2dd_bt_search_from_bb2 // br_cond: !payload -> else
-    b _Lb2dd_bt_search_from_bb1 // branch -> then
-_Lb2dd_bt_search_from_bb1:
+    cbz x1, _Lfd34_bt_search_from_bb2 // br_cond: !payload -> else
+    b _Lfd34_bt_search_from_bb1 // branch -> then
+_Lfd34_bt_search_from_bb1:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #160] // hv store L7
     ldp x0, x1, [sp, #160] // hv load L7
     add sp, sp, #592 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_search_from_bb2:
+_Lfd34_bt_search_from_bb2:
     ldp x0, x1, [sp, #64] // hv load L1
     bl hexa_byte_len // call hexa_byte_len
     stp x0, x1, [sp, #176] // hv store L8
     ldp x0, x1, [sp, #176] // hv load L8
     stp x0, x1, [sp, #192] // hv store L9
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr10@PAGE // cstr key page
-    add x2, x2, .LCstr10@PAGEOFF // cstr key off
+    adrp x2, .LCstr10 // cstr key page
+    add x2, x2, :lo12:.LCstr10 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #208] // hv store L10
     bl hexa_array_new // array_lit: new array
@@ -10312,19 +10312,19 @@ _Lb2dd_bt_search_from_bb2:
     stp x0, x1, [sp, #240] // hv store L12
     ldp x0, x1, [sp, #80] // hv load L2
     stp x0, x1, [sp, #256] // hv store L13
-    b _Lb2dd_bt_search_from_bb3 // branch
-_Lb2dd_bt_search_from_bb3:
+    b _Lfd34_bt_search_from_bb3 // branch
+_Lfd34_bt_search_from_bb3:
     ldp x0, x1, [sp, #256] // hv load L13
     ldp x2, x3, [sp, #192] // hv load L9
     bl hexa_cmp_le // binop <=
     stp x0, x1, [sp, #272] // hv store L14
     ldp x0, x1, [sp, #272] // hv load L14
-    cbz x1, _Lb2dd_bt_search_from_bb5 // br_cond: !payload -> else
-    b _Lb2dd_bt_search_from_bb4 // branch -> then
-_Lb2dd_bt_search_from_bb4:
+    cbz x1, _Lfd34_bt_search_from_bb5 // br_cond: !payload -> else
+    b _Lfd34_bt_search_from_bb4 // branch -> then
+_Lfd34_bt_search_from_bb4:
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr9@PAGE // cstr key page
-    add x2, x2, .LCstr9@PAGEOFF // cstr key off
+    adrp x2, .LCstr9 // cstr key page
+    add x2, x2, :lo12:.LCstr9 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #288] // hv store L15
     ldp x0, x1, [sp, #288] // hv load L15
@@ -10346,8 +10346,8 @@ _Lb2dd_bt_search_from_bb4:
     ldp x0, x1, [sp, #336] // hv load L18
     stp x0, x1, [sp, #352] // hv store L19
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr8@PAGE // cstr key page
-    add x2, x2, .LCstr8@PAGEOFF // cstr key off
+    adrp x2, .LCstr8 // cstr key page
+    add x2, x2, :lo12:.LCstr8 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #368] // hv store L20
     bl hexa_array_new // array_lit: new array
@@ -10381,9 +10381,9 @@ _Lb2dd_bt_search_from_bb4:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #448] // hv store L25
     ldp x0, x1, [sp, #448] // hv load L25
-    cbz x1, _Lb2dd_bt_search_from_bb7 // br_cond: !payload -> else
-    b _Lb2dd_bt_search_from_bb6 // branch -> then
-_Lb2dd_bt_search_from_bb5:
+    cbz x1, _Lfd34_bt_search_from_bb7 // br_cond: !payload -> else
+    b _Lfd34_bt_search_from_bb6 // branch -> then
+_Lfd34_bt_search_from_bb5:
     bl hexa_array_new // array_lit: new array
     add x15, sp, #576 // hv frame base
     stp x0, x1, [x15] // hv store L33
@@ -10392,10 +10392,10 @@ _Lb2dd_bt_search_from_bb5:
     add sp, sp, #592 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_search_from_bb6:
+_Lfd34_bt_search_from_bb6:
     ldp x0, x1, [sp, #48] // hv load L0
-    adrp x2, .LCstr11@PAGE // cstr key page
-    add x2, x2, .LCstr11@PAGEOFF // cstr key off
+    adrp x2, .LCstr11 // cstr key page
+    add x2, x2, :lo12:.LCstr11 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #480] // hv store L27
     ldp x0, x1, [sp, #480] // hv load L27
@@ -10411,7 +10411,7 @@ _Lb2dd_bt_search_from_bb6:
     add sp, sp, #592 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_search_from_bb7:
+_Lfd34_bt_search_from_bb7:
     ldp x0, x1, [sp, #416] // hv load L23
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
@@ -10420,9 +10420,9 @@ _Lb2dd_bt_search_from_bb7:
     stp x0, x1, [x15] // hv store L29
     add x15, sp, #512 // hv frame base
     ldp x0, x1, [x15] // hv load L29
-    cbz x1, _Lb2dd_bt_search_from_bb9 // br_cond: !payload -> else
-    b _Lb2dd_bt_search_from_bb8 // branch -> then
-_Lb2dd_bt_search_from_bb8:
+    cbz x1, _Lfd34_bt_search_from_bb9 // br_cond: !payload -> else
+    b _Lfd34_bt_search_from_bb8 // branch -> then
+_Lfd34_bt_search_from_bb8:
     bl hexa_array_new // array_lit: new array
     add x15, sp, #544 // hv frame base
     stp x0, x1, [x15] // hv store L31
@@ -10443,7 +10443,7 @@ _Lb2dd_bt_search_from_bb8:
     add sp, sp, #592 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_bt_search_from_bb9:
+_Lfd34_bt_search_from_bb9:
     ldp x0, x1, [sp, #256] // hv load L13
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -10453,7 +10453,7 @@ _Lb2dd_bt_search_from_bb9:
     add x15, sp, #560 // hv frame base
     ldp x0, x1, [x15] // hv load L32
     stp x0, x1, [sp, #256] // hv store L13
-    b _Lb2dd_bt_search_from_bb3 // branch
+    b _Lfd34_bt_search_from_bb3 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #592 // sp adj
@@ -10465,7 +10465,7 @@ _REGEX_DEFAULT_STEP_CAP:
     .loc 1 97 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
-_Lb2dd__REGEX_DEFAULT_STEP_CAP_bb0:
+_Lfd34__REGEX_DEFAULT_STEP_CAP_bb0:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #16960 // imm 0-15
     movk x1, #15, lsl #16 // imm 16-31
@@ -10479,10 +10479,10 @@ _re_peek:
     mov x29, sp // prologue: set fp
     sub sp, sp, #160 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__re_peek_bb0:
+_Lfd34__re_peek_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr0@PAGE // cstr key page
-    add x2, x2, .LCstr0@PAGEOFF // cstr key off
+    adrp x2, .LCstr0 // cstr key page
+    add x2, x2, :lo12:.LCstr0 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
@@ -10491,8 +10491,8 @@ _Lb2dd__re_peek_bb0:
     bl hexa_index_get // index: hexa_index_get
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr1@PAGE // cstr key page
-    add x2, x2, .LCstr1@PAGEOFF // cstr key off
+    adrp x2, .LCstr1 // cstr key page
+    add x2, x2, :lo12:.LCstr1 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #32] // hv load L2
@@ -10500,24 +10500,24 @@ _Lb2dd__re_peek_bb0:
     bl hexa_cmp_ge // binop >=
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
-    cbz x1, _Lb2dd__re_peek_bb2 // br_cond: !payload -> else
-    b _Lb2dd__re_peek_bb1 // branch -> then
-_Lb2dd__re_peek_bb1:
+    cbz x1, _Lfd34__re_peek_bb2 // br_cond: !payload -> else
+    b _Lfd34__re_peek_bb1 // branch -> then
+_Lfd34__re_peek_bb1:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
     add sp, sp, #160 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_peek_bb2:
+_Lfd34__re_peek_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr2@PAGE // cstr key page
-    add x2, x2, .LCstr2@PAGEOFF // cstr key off
+    adrp x2, .LCstr2 // cstr key page
+    add x2, x2, :lo12:.LCstr2 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr0@PAGE // cstr key page
-    add x2, x2, .LCstr0@PAGEOFF // cstr key off
+    adrp x2, .LCstr0 // cstr key page
+    add x2, x2, :lo12:.LCstr0 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
@@ -10541,15 +10541,15 @@ _re_adv:
     mov x29, sp // prologue: set fp
     sub sp, sp, #80 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__re_adv_bb0:
+_Lfd34__re_adv_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr0@PAGE // cstr key page
-    add x2, x2, .LCstr0@PAGEOFF // cstr key off
+    adrp x2, .LCstr0 // cstr key page
+    add x2, x2, :lo12:.LCstr0 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr0@PAGE // cstr key page
-    add x2, x2, .LCstr0@PAGEOFF // cstr key off
+    adrp x2, .LCstr0 // cstr key page
+    add x2, x2, :lo12:.LCstr0 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
@@ -10582,10 +10582,10 @@ _re_emit:
     sub sp, sp, #112 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd__re_emit_bb0:
+_Lfd34__re_emit_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
@@ -10593,8 +10593,8 @@ _Lb2dd__re_emit_bb0:
     bl hexa_array_push // call hexa_array_push
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
@@ -10619,16 +10619,16 @@ _re_class_for_escape:
     mov x29, sp // prologue: set fp
     sub sp, sp, #320 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__re_class_for_escape_bb0:
+_Lfd34__re_class_for_escape_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #100 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
-    cbz x1, _Lb2dd__re_class_for_escape_bb2 // br_cond: !payload -> else
-    b _Lb2dd__re_class_for_escape_bb1 // branch -> then
-_Lb2dd__re_class_for_escape_bb1:
+    cbz x1, _Lfd34__re_class_for_escape_bb2 // br_cond: !payload -> else
+    b _Lfd34__re_class_for_escape_bb1 // branch -> then
+_Lfd34__re_class_for_escape_bb1:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv reload L3
@@ -10650,16 +10650,16 @@ _Lb2dd__re_class_for_escape_bb1:
     add sp, sp, #320 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_class_for_escape_bb2:
+_Lfd34__re_class_for_escape_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #68 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
-    cbz x1, _Lb2dd__re_class_for_escape_bb4 // br_cond: !payload -> else
-    b _Lb2dd__re_class_for_escape_bb3 // branch -> then
-_Lb2dd__re_class_for_escape_bb3:
+    cbz x1, _Lfd34__re_class_for_escape_bb4 // br_cond: !payload -> else
+    b _Lfd34__re_class_for_escape_bb3 // branch -> then
+_Lfd34__re_class_for_escape_bb3:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv reload L6
@@ -10681,16 +10681,16 @@ _Lb2dd__re_class_for_escape_bb3:
     add sp, sp, #320 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_class_for_escape_bb4:
+_Lfd34__re_class_for_escape_bb4:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #119 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
-    cbz x1, _Lb2dd__re_class_for_escape_bb6 // br_cond: !payload -> else
-    b _Lb2dd__re_class_for_escape_bb5 // branch -> then
-_Lb2dd__re_class_for_escape_bb5:
+    cbz x1, _Lfd34__re_class_for_escape_bb6 // br_cond: !payload -> else
+    b _Lfd34__re_class_for_escape_bb5 // branch -> then
+_Lfd34__re_class_for_escape_bb5:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv reload L9
@@ -10742,16 +10742,16 @@ _Lb2dd__re_class_for_escape_bb5:
     add sp, sp, #320 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_class_for_escape_bb6:
+_Lfd34__re_class_for_escape_bb6:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #87 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv load L10
-    cbz x1, _Lb2dd__re_class_for_escape_bb8 // br_cond: !payload -> else
-    b _Lb2dd__re_class_for_escape_bb7 // branch -> then
-_Lb2dd__re_class_for_escape_bb7:
+    cbz x1, _Lfd34__re_class_for_escape_bb8 // br_cond: !payload -> else
+    b _Lfd34__re_class_for_escape_bb7 // branch -> then
+_Lfd34__re_class_for_escape_bb7:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv reload L12
@@ -10803,16 +10803,16 @@ _Lb2dd__re_class_for_escape_bb7:
     add sp, sp, #320 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_class_for_escape_bb8:
+_Lfd34__re_class_for_escape_bb8:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #115 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #208] // hv store L13
     ldp x0, x1, [sp, #208] // hv load L13
-    cbz x1, _Lb2dd__re_class_for_escape_bb10 // br_cond: !payload -> else
-    b _Lb2dd__re_class_for_escape_bb9 // branch -> then
-_Lb2dd__re_class_for_escape_bb9:
+    cbz x1, _Lfd34__re_class_for_escape_bb10 // br_cond: !payload -> else
+    b _Lfd34__re_class_for_escape_bb9 // branch -> then
+_Lfd34__re_class_for_escape_bb9:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv reload L15
@@ -10844,16 +10844,16 @@ _Lb2dd__re_class_for_escape_bb9:
     add sp, sp, #320 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_class_for_escape_bb10:
+_Lfd34__re_class_for_escape_bb10:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #83 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #256] // hv store L16
     ldp x0, x1, [sp, #256] // hv load L16
-    cbz x1, _Lb2dd__re_class_for_escape_bb12 // br_cond: !payload -> else
-    b _Lb2dd__re_class_for_escape_bb11 // branch -> then
-_Lb2dd__re_class_for_escape_bb11:
+    cbz x1, _Lfd34__re_class_for_escape_bb12 // br_cond: !payload -> else
+    b _Lfd34__re_class_for_escape_bb11 // branch -> then
+_Lfd34__re_class_for_escape_bb11:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #288] // hv store L18
     ldp x0, x1, [sp, #288] // hv reload L18
@@ -10885,7 +10885,7 @@ _Lb2dd__re_class_for_escape_bb11:
     add sp, sp, #320 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_class_for_escape_bb12:
+_Lfd34__re_class_for_escape_bb12:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv load L19
@@ -10900,67 +10900,67 @@ _re_lit_for_escape:
     mov x29, sp // prologue: set fp
     sub sp, sp, #144 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__re_lit_for_escape_bb0:
+_Lfd34__re_lit_for_escape_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #110 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
-    cbz x1, _Lb2dd__re_lit_for_escape_bb2 // br_cond: !payload -> else
-    b _Lb2dd__re_lit_for_escape_bb1 // branch -> then
-_Lb2dd__re_lit_for_escape_bb1:
+    cbz x1, _Lfd34__re_lit_for_escape_bb2 // br_cond: !payload -> else
+    b _Lfd34__re_lit_for_escape_bb1 // branch -> then
+_Lfd34__re_lit_for_escape_bb1:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #10 // hv const_int val
     add sp, sp, #144 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_lit_for_escape_bb2:
+_Lfd34__re_lit_for_escape_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #116 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L3
-    cbz x1, _Lb2dd__re_lit_for_escape_bb4 // br_cond: !payload -> else
-    b _Lb2dd__re_lit_for_escape_bb3 // branch -> then
-_Lb2dd__re_lit_for_escape_bb3:
+    cbz x1, _Lfd34__re_lit_for_escape_bb4 // br_cond: !payload -> else
+    b _Lfd34__re_lit_for_escape_bb3 // branch -> then
+_Lfd34__re_lit_for_escape_bb3:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #9 // hv const_int val
     add sp, sp, #144 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_lit_for_escape_bb4:
+_Lfd34__re_lit_for_escape_bb4:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #114 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
-    cbz x1, _Lb2dd__re_lit_for_escape_bb6 // br_cond: !payload -> else
-    b _Lb2dd__re_lit_for_escape_bb5 // branch -> then
-_Lb2dd__re_lit_for_escape_bb5:
+    cbz x1, _Lfd34__re_lit_for_escape_bb6 // br_cond: !payload -> else
+    b _Lfd34__re_lit_for_escape_bb5 // branch -> then
+_Lfd34__re_lit_for_escape_bb5:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #13 // hv const_int val
     add sp, sp, #144 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_lit_for_escape_bb6:
+_Lfd34__re_lit_for_escape_bb6:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #48 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
-    cbz x1, _Lb2dd__re_lit_for_escape_bb8 // br_cond: !payload -> else
-    b _Lb2dd__re_lit_for_escape_bb7 // branch -> then
-_Lb2dd__re_lit_for_escape_bb7:
+    cbz x1, _Lfd34__re_lit_for_escape_bb8 // br_cond: !payload -> else
+    b _Lfd34__re_lit_for_escape_bb7 // branch -> then
+_Lfd34__re_lit_for_escape_bb7:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     add sp, sp, #144 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_lit_for_escape_bb8:
+_Lfd34__re_lit_for_escape_bb8:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // imm 0-15
     mvn x1, x1 // hv const_int: negate
@@ -10977,7 +10977,7 @@ _re_push_class:
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
     stp x4, x5, [sp, #32] // ingress param 2
-_Lb2dd__re_push_class_bb0:
+_Lfd34__re_push_class_bb0:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv reload L3
@@ -10989,8 +10989,8 @@ _Lb2dd__re_push_class_bb0:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #80] // hv store L5
-    b _Lb2dd__re_push_class_bb1 // branch
-_Lb2dd__re_push_class_bb1:
+    b _Lfd34__re_push_class_bb1 // branch
+_Lfd34__re_push_class_bb1:
     ldp x0, x1, [sp, #16] // hv load L1
     bl hexa_arr_poly_len // call hexa_arr_poly_len
     sxtw x0, w0 // ret int: sign-ext
@@ -11001,9 +11001,9 @@ _Lb2dd__re_push_class_bb1:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
-    cbz x1, _Lb2dd__re_push_class_bb3 // br_cond: !payload -> else
-    b _Lb2dd__re_push_class_bb2 // branch -> then
-_Lb2dd__re_push_class_bb2:
+    cbz x1, _Lfd34__re_push_class_bb3 // br_cond: !payload -> else
+    b _Lfd34__re_push_class_bb2 // branch -> then
+_Lfd34__re_push_class_bb2:
     ldp x9, x10, [sp, #80] // hv load L5
     ldp x0, x1, [sp, #16] // hv load L1
     mov x2, x10 // index: raw idx payload → x2
@@ -11020,11 +11020,11 @@ _Lb2dd__re_push_class_bb2:
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv load L10
     stp x0, x1, [sp, #80] // hv store L5
-    b _Lb2dd__re_push_class_bb1 // branch
-_Lb2dd__re_push_class_bb3:
+    b _Lfd34__re_push_class_bb1 // branch
+_Lfd34__re_push_class_bb3:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr4@PAGE // cstr key page
-    add x2, x2, .LCstr4@PAGEOFF // cstr key off
+    adrp x2, .LCstr4 // cstr key page
+    add x2, x2, :lo12:.LCstr4 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #176] // hv load L11
@@ -11032,8 +11032,8 @@ _Lb2dd__re_push_class_bb3:
     bl hexa_array_push // call hexa_array_push
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr4@PAGE // cstr key page
-    add x2, x2, .LCstr4@PAGEOFF // cstr key off
+    adrp x2, .LCstr4 // cstr key page
+    add x2, x2, :lo12:.LCstr4 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #208] // hv store L13
     ldp x0, x1, [sp, #208] // hv load L13
@@ -11083,7 +11083,7 @@ _re_parse_class:
     mov x29, sp // prologue: set fp
     sub sp, sp, #1360 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__re_parse_class_bb0:
+_Lfd34__re_parse_class_bb0:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
@@ -11100,25 +11100,25 @@ _Lb2dd__re_parse_class_bb0:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
-    cbz x1, _Lb2dd__re_parse_class_bb2 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_class_bb1 // branch -> then
-_Lb2dd__re_parse_class_bb1:
+    cbz x1, _Lfd34__re_parse_class_bb2 // br_cond: !payload -> else
+    b _Lfd34__re_parse_class_bb1 // branch -> then
+_Lfd34__re_parse_class_bb1:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // hv const_int val
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_adv // call _re_adv
     stp x0, x1, [sp, #112] // hv store L7
-    b _Lb2dd__re_parse_class_bb2 // branch
-_Lb2dd__re_parse_class_bb2:
+    b _Lfd34__re_parse_class_bb2 // branch
+_Lfd34__re_parse_class_bb2:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
     stp x0, x1, [sp, #128] // hv store L8
-    b _Lb2dd__re_parse_class_bb3 // branch
-_Lb2dd__re_parse_class_bb3:
+    b _Lfd34__re_parse_class_bb3 // branch
+_Lfd34__re_parse_class_bb3:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr0@PAGE // cstr key page
-    add x2, x2, .LCstr0@PAGEOFF // cstr key off
+    adrp x2, .LCstr0 // cstr key page
+    add x2, x2, :lo12:.LCstr0 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv load L9
@@ -11127,8 +11127,8 @@ _Lb2dd__re_parse_class_bb3:
     bl hexa_index_get // index: hexa_index_get
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr1@PAGE // cstr key page
-    add x2, x2, .LCstr1@PAGEOFF // cstr key off
+    adrp x2, .LCstr1 // cstr key page
+    add x2, x2, :lo12:.LCstr1 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #160] // hv load L10
@@ -11136,9 +11136,9 @@ _Lb2dd__re_parse_class_bb3:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _Lb2dd__re_parse_class_bb5 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_class_bb4 // branch -> then
-_Lb2dd__re_parse_class_bb4:
+    cbz x1, _Lfd34__re_parse_class_bb5 // br_cond: !payload -> else
+    b _Lfd34__re_parse_class_bb4 // branch -> then
+_Lfd34__re_parse_class_bb4:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_peek // call _re_peek
     stp x0, x1, [sp, #208] // hv store L13
@@ -11150,12 +11150,12 @@ _Lb2dd__re_parse_class_bb4:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv load L15
-    cbz x1, _Lb2dd__re_parse_class_bb7 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_class_bb6 // branch -> then
-_Lb2dd__re_parse_class_bb5:
+    cbz x1, _Lfd34__re_parse_class_bb7 // br_cond: !payload -> else
+    b _Lfd34__re_parse_class_bb6 // branch -> then
+_Lfd34__re_parse_class_bb5:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #1344 // hv frame base
     stp x0, x1, [x15] // hv store L84
@@ -11174,7 +11174,7 @@ _Lb2dd__re_parse_class_bb5:
     add sp, sp, #1360 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_parse_class_bb6:
+_Lfd34__re_parse_class_bb6:
     ldp x0, x1, [sp, #128] // hv load L8
     bl hexa_truthy // unop !: truthy → w0
     eor x0, x0, #1 // unop !: !truthy
@@ -11182,16 +11182,16 @@ _Lb2dd__re_parse_class_bb6:
     stp x0, x1, [sp, #272] // hv store L17
     ldp x0, x1, [sp, #272] // hv load L17
     stp x0, x1, [sp, #256] // hv store L16
-    b _Lb2dd__re_parse_class_bb8 // branch
-_Lb2dd__re_parse_class_bb7:
+    b _Lfd34__re_parse_class_bb8 // branch
+_Lfd34__re_parse_class_bb7:
     ldp x0, x1, [sp, #240] // hv load L15
     stp x0, x1, [sp, #256] // hv store L16
-    b _Lb2dd__re_parse_class_bb8 // branch
-_Lb2dd__re_parse_class_bb8:
+    b _Lfd34__re_parse_class_bb8 // branch
+_Lfd34__re_parse_class_bb8:
     ldp x0, x1, [sp, #256] // hv load L16
-    cbz x1, _Lb2dd__re_parse_class_bb10 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_class_bb9 // branch -> then
-_Lb2dd__re_parse_class_bb9:
+    cbz x1, _Lfd34__re_parse_class_bb10 // br_cond: !payload -> else
+    b _Lfd34__re_parse_class_bb9 // branch -> then
+_Lfd34__re_parse_class_bb9:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_adv // call _re_adv
     stp x0, x1, [sp, #304] // hv store L19
@@ -11204,7 +11204,7 @@ _Lb2dd__re_parse_class_bb9:
     add sp, sp, #1360 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_parse_class_bb10:
+_Lfd34__re_parse_class_bb10:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     stp x0, x1, [sp, #128] // hv store L8
@@ -11221,9 +11221,9 @@ _Lb2dd__re_parse_class_bb10:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #368] // hv store L23
     ldp x0, x1, [sp, #368] // hv load L23
-    cbz x1, _Lb2dd__re_parse_class_bb12 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_class_bb11 // branch -> then
-_Lb2dd__re_parse_class_bb11:
+    cbz x1, _Lfd34__re_parse_class_bb12 // br_cond: !payload -> else
+    b _Lfd34__re_parse_class_bb11 // branch -> then
+_Lfd34__re_parse_class_bb11:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_adv // call _re_adv
     stp x0, x1, [sp, #400] // hv store L25
@@ -11253,23 +11253,23 @@ _Lb2dd__re_parse_class_bb11:
     stp x0, x1, [x15] // hv store L32
     add x15, sp, #512 // hv frame base
     ldp x0, x1, [x15] // hv load L32
-    cbz x1, _Lb2dd__re_parse_class_bb14 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_class_bb13 // branch -> then
-_Lb2dd__re_parse_class_bb12:
+    cbz x1, _Lfd34__re_parse_class_bb14 // br_cond: !payload -> else
+    b _Lfd34__re_parse_class_bb13 // branch -> then
+_Lfd34__re_parse_class_bb12:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_adv // call _re_adv
     add x15, sp, #768 // hv frame base
     stp x0, x1, [x15] // hv store L48
     ldp x0, x1, [sp, #224] // hv load L14
     stp x0, x1, [sp, #336] // hv store L21
-    b _Lb2dd__re_parse_class_bb22 // branch
-_Lb2dd__re_parse_class_bb13:
+    b _Lfd34__re_parse_class_bb22 // branch
+_Lfd34__re_parse_class_bb13:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // hv const_int val
     add x15, sp, #544 // hv frame base
     stp x0, x1, [x15] // hv store L34
-    b _Lb2dd__re_parse_class_bb15 // branch
-_Lb2dd__re_parse_class_bb14:
+    b _Lfd34__re_parse_class_bb15 // branch
+_Lfd34__re_parse_class_bb14:
     ldp x0, x1, [sp, #432] // hv load L27
     bl _re_lit_for_escape // call _re_lit_for_escape
     add x15, sp, #704 // hv frame base
@@ -11287,9 +11287,9 @@ _Lb2dd__re_parse_class_bb14:
     stp x0, x1, [x15] // hv store L46
     add x15, sp, #736 // hv frame base
     ldp x0, x1, [x15] // hv load L46
-    cbz x1, _Lb2dd__re_parse_class_bb19 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_class_bb18 // branch -> then
-_Lb2dd__re_parse_class_bb15:
+    cbz x1, _Lfd34__re_parse_class_bb19 // br_cond: !payload -> else
+    b _Lfd34__re_parse_class_bb18 // branch -> then
+_Lfd34__re_parse_class_bb15:
     add x15, sp, #544 // hv frame base
     ldp x0, x1, [x15] // hv load L34
     movz x2, #0 // hv const_int: TAG_INT
@@ -11312,9 +11312,9 @@ _Lb2dd__re_parse_class_bb15:
     stp x0, x1, [x15] // hv store L37
     add x15, sp, #592 // hv frame base
     ldp x0, x1, [x15] // hv load L37
-    cbz x1, _Lb2dd__re_parse_class_bb17 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_class_bb16 // branch -> then
-_Lb2dd__re_parse_class_bb16:
+    cbz x1, _Lfd34__re_parse_class_bb17 // br_cond: !payload -> else
+    b _Lfd34__re_parse_class_bb16 // branch -> then
+_Lfd34__re_parse_class_bb16:
     add x15, sp, #544 // hv frame base
     ldp x9, x10, [x15] // hv load L34
     ldp x0, x1, [sp, #480] // hv load L30
@@ -11359,26 +11359,26 @@ _Lb2dd__re_parse_class_bb16:
     ldp x0, x1, [x15] // hv load L43
     add x15, sp, #544 // hv frame base
     stp x0, x1, [x15] // hv store L34
-    b _Lb2dd__re_parse_class_bb15 // branch
-_Lb2dd__re_parse_class_bb17:
+    b _Lfd34__re_parse_class_bb15 // branch
+_Lfd34__re_parse_class_bb17:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
     stp x0, x1, [sp, #352] // hv store L22
-    b _Lb2dd__re_parse_class_bb21 // branch
-_Lb2dd__re_parse_class_bb18:
+    b _Lfd34__re_parse_class_bb21 // branch
+_Lfd34__re_parse_class_bb18:
     add x15, sp, #720 // hv frame base
     ldp x0, x1, [x15] // hv load L45
     stp x0, x1, [sp, #336] // hv store L21
-    b _Lb2dd__re_parse_class_bb20 // branch
-_Lb2dd__re_parse_class_bb19:
+    b _Lfd34__re_parse_class_bb20 // branch
+_Lfd34__re_parse_class_bb19:
     ldp x0, x1, [sp, #432] // hv load L27
     stp x0, x1, [sp, #336] // hv store L21
-    b _Lb2dd__re_parse_class_bb20 // branch
-_Lb2dd__re_parse_class_bb20:
-    b _Lb2dd__re_parse_class_bb21 // branch
-_Lb2dd__re_parse_class_bb21:
-    b _Lb2dd__re_parse_class_bb22 // branch
-_Lb2dd__re_parse_class_bb22:
+    b _Lfd34__re_parse_class_bb20 // branch
+_Lfd34__re_parse_class_bb20:
+    b _Lfd34__re_parse_class_bb21 // branch
+_Lfd34__re_parse_class_bb21:
+    b _Lfd34__re_parse_class_bb22 // branch
+_Lfd34__re_parse_class_bb22:
     ldp x0, x1, [sp, #352] // hv load L22
     bl hexa_truthy // unop !: truthy → w0
     eor x0, x0, #1 // unop !: !truthy
@@ -11387,9 +11387,9 @@ _Lb2dd__re_parse_class_bb22:
     stp x0, x1, [x15] // hv store L49
     add x15, sp, #784 // hv frame base
     ldp x0, x1, [x15] // hv load L49
-    cbz x1, _Lb2dd__re_parse_class_bb24 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_class_bb23 // branch -> then
-_Lb2dd__re_parse_class_bb23:
+    cbz x1, _Lfd34__re_parse_class_bb24 // br_cond: !payload -> else
+    b _Lfd34__re_parse_class_bb23 // branch -> then
+_Lfd34__re_parse_class_bb23:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_peek // call _re_peek
     add x15, sp, #816 // hv frame base
@@ -11403,14 +11403,14 @@ _Lb2dd__re_parse_class_bb23:
     stp x0, x1, [x15] // hv store L52
     add x15, sp, #832 // hv frame base
     ldp x0, x1, [x15] // hv load L52
-    cbz x1, _Lb2dd__re_parse_class_bb26 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_class_bb25 // branch -> then
-_Lb2dd__re_parse_class_bb24:
-    b _Lb2dd__re_parse_class_bb3 // branch
-_Lb2dd__re_parse_class_bb25:
+    cbz x1, _Lfd34__re_parse_class_bb26 // br_cond: !payload -> else
+    b _Lfd34__re_parse_class_bb25 // branch -> then
+_Lfd34__re_parse_class_bb24:
+    b _Lfd34__re_parse_class_bb3 // branch
+_Lfd34__re_parse_class_bb25:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr0@PAGE // cstr key page
-    add x2, x2, .LCstr0@PAGEOFF // cstr key off
+    adrp x2, .LCstr0 // cstr key page
+    add x2, x2, :lo12:.LCstr0 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #864 // hv frame base
     stp x0, x1, [x15] // hv store L54
@@ -11429,8 +11429,8 @@ _Lb2dd__re_parse_class_bb25:
     add x15, sp, #896 // hv frame base
     stp x0, x1, [x15] // hv store L56
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr1@PAGE // cstr key page
-    add x2, x2, .LCstr1@PAGEOFF // cstr key off
+    adrp x2, .LCstr1 // cstr key page
+    add x2, x2, :lo12:.LCstr1 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #912 // hv frame base
     stp x0, x1, [x15] // hv store L57
@@ -11445,28 +11445,28 @@ _Lb2dd__re_parse_class_bb25:
     ldp x0, x1, [x15] // hv load L58
     add x15, sp, #848 // hv frame base
     stp x0, x1, [x15] // hv store L53
-    b _Lb2dd__re_parse_class_bb27 // branch
-_Lb2dd__re_parse_class_bb26:
+    b _Lfd34__re_parse_class_bb27 // branch
+_Lfd34__re_parse_class_bb26:
     add x15, sp, #832 // hv frame base
     ldp x0, x1, [x15] // hv load L52
     add x15, sp, #848 // hv frame base
     stp x0, x1, [x15] // hv store L53
-    b _Lb2dd__re_parse_class_bb27 // branch
-_Lb2dd__re_parse_class_bb27:
+    b _Lfd34__re_parse_class_bb27 // branch
+_Lfd34__re_parse_class_bb27:
     add x15, sp, #848 // hv frame base
     ldp x0, x1, [x15] // hv load L53
-    cbz x1, _Lb2dd__re_parse_class_bb29 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_class_bb28 // branch -> then
-_Lb2dd__re_parse_class_bb28:
+    cbz x1, _Lfd34__re_parse_class_bb29 // br_cond: !payload -> else
+    b _Lfd34__re_parse_class_bb28 // branch -> then
+_Lfd34__re_parse_class_bb28:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr2@PAGE // cstr key page
-    add x2, x2, .LCstr2@PAGEOFF // cstr key off
+    adrp x2, .LCstr2 // cstr key page
+    add x2, x2, :lo12:.LCstr2 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #960 // hv frame base
     stp x0, x1, [x15] // hv store L60
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr0@PAGE // cstr key page
-    add x2, x2, .LCstr0@PAGEOFF // cstr key off
+    adrp x2, .LCstr0 // cstr key page
+    add x2, x2, :lo12:.LCstr0 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #976 // hv frame base
     stp x0, x1, [x15] // hv store L61
@@ -11505,19 +11505,19 @@ _Lb2dd__re_parse_class_bb28:
     ldp x0, x1, [x15] // hv load L65
     add x15, sp, #944 // hv frame base
     stp x0, x1, [x15] // hv store L59
-    b _Lb2dd__re_parse_class_bb30 // branch
-_Lb2dd__re_parse_class_bb29:
+    b _Lfd34__re_parse_class_bb30 // branch
+_Lfd34__re_parse_class_bb29:
     add x15, sp, #848 // hv frame base
     ldp x0, x1, [x15] // hv load L53
     add x15, sp, #944 // hv frame base
     stp x0, x1, [x15] // hv store L59
-    b _Lb2dd__re_parse_class_bb30 // branch
-_Lb2dd__re_parse_class_bb30:
+    b _Lfd34__re_parse_class_bb30 // branch
+_Lfd34__re_parse_class_bb30:
     add x15, sp, #944 // hv frame base
     ldp x0, x1, [x15] // hv load L59
-    cbz x1, _Lb2dd__re_parse_class_bb32 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_class_bb31 // branch -> then
-_Lb2dd__re_parse_class_bb31:
+    cbz x1, _Lfd34__re_parse_class_bb32 // br_cond: !payload -> else
+    b _Lfd34__re_parse_class_bb31 // branch -> then
+_Lfd34__re_parse_class_bb31:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_adv // call _re_adv
     add x15, sp, #1072 // hv frame base
@@ -11543,9 +11543,9 @@ _Lb2dd__re_parse_class_bb31:
     stp x0, x1, [x15] // hv store L71
     add x15, sp, #1136 // hv frame base
     ldp x0, x1, [x15] // hv load L71
-    cbz x1, _Lb2dd__re_parse_class_bb34 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_class_bb33 // branch -> then
-_Lb2dd__re_parse_class_bb32:
+    cbz x1, _Lfd34__re_parse_class_bb34 // br_cond: !payload -> else
+    b _Lfd34__re_parse_class_bb33 // branch -> then
+_Lfd34__re_parse_class_bb32:
     ldp x0, x1, [sp, #32] // hv load L2
     ldp x2, x3, [sp, #336] // hv load L21
     bl hexa_array_push // call hexa_array_push
@@ -11560,8 +11560,8 @@ _Lb2dd__re_parse_class_bb32:
     ldp x0, x1, [x15] // hv load L83
     add x15, sp, #1056 // hv frame base
     stp x0, x1, [x15] // hv store L66
-    b _Lb2dd__re_parse_class_bb38 // branch
-_Lb2dd__re_parse_class_bb33:
+    b _Lfd34__re_parse_class_bb38 // branch
+_Lfd34__re_parse_class_bb33:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_peek // call _re_peek
     add x15, sp, #1168 // hv frame base
@@ -11592,9 +11592,9 @@ _Lb2dd__re_parse_class_bb33:
     stp x0, x1, [x15] // hv store L78
     add x15, sp, #1248 // hv frame base
     ldp x0, x1, [x15] // hv load L78
-    cbz x1, _Lb2dd__re_parse_class_bb36 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_class_bb35 // branch -> then
-_Lb2dd__re_parse_class_bb34:
+    cbz x1, _Lfd34__re_parse_class_bb36 // br_cond: !payload -> else
+    b _Lfd34__re_parse_class_bb35 // branch -> then
+_Lfd34__re_parse_class_bb34:
     ldp x0, x1, [sp, #32] // hv load L2
     ldp x2, x3, [sp, #336] // hv load L21
     bl hexa_array_push // call hexa_array_push
@@ -11610,23 +11610,23 @@ _Lb2dd__re_parse_class_bb34:
     ldp x0, x1, [x15] // hv load L81
     add x15, sp, #1056 // hv frame base
     stp x0, x1, [x15] // hv store L66
-    b _Lb2dd__re_parse_class_bb38 // branch
-_Lb2dd__re_parse_class_bb35:
+    b _Lfd34__re_parse_class_bb38 // branch
+_Lfd34__re_parse_class_bb35:
     add x15, sp, #1232 // hv frame base
     ldp x0, x1, [x15] // hv load L77
     add x15, sp, #1104 // hv frame base
     stp x0, x1, [x15] // hv store L69
-    b _Lb2dd__re_parse_class_bb37 // branch
-_Lb2dd__re_parse_class_bb36:
+    b _Lfd34__re_parse_class_bb37 // branch
+_Lfd34__re_parse_class_bb36:
     add x15, sp, #1184 // hv frame base
     ldp x0, x1, [x15] // hv load L74
     add x15, sp, #1104 // hv frame base
     stp x0, x1, [x15] // hv store L69
-    b _Lb2dd__re_parse_class_bb37 // branch
-_Lb2dd__re_parse_class_bb37:
-    b _Lb2dd__re_parse_class_bb34 // branch
-_Lb2dd__re_parse_class_bb38:
-    b _Lb2dd__re_parse_class_bb24 // branch
+    b _Lfd34__re_parse_class_bb37 // branch
+_Lfd34__re_parse_class_bb37:
+    b _Lfd34__re_parse_class_bb34 // branch
+_Lfd34__re_parse_class_bb38:
+    b _Lfd34__re_parse_class_bb24 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #1360 // sp adj
@@ -11640,14 +11640,14 @@ _re_parse_alt:
     mov x29, sp // prologue: set fp
     sub sp, sp, #160 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__re_parse_alt_bb0:
+_Lfd34__re_parse_alt_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_parse_concat // call _re_parse_concat
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
     stp x0, x1, [sp, #32] // hv store L2
-    b _Lb2dd__re_parse_alt_bb1 // branch
-_Lb2dd__re_parse_alt_bb1:
+    b _Lfd34__re_parse_alt_bb1 // branch
+_Lfd34__re_parse_alt_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_peek // call _re_peek
     stp x0, x1, [sp, #48] // hv store L3
@@ -11657,9 +11657,9 @@ _Lb2dd__re_parse_alt_bb1:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
-    cbz x1, _Lb2dd__re_parse_alt_bb3 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_alt_bb2 // branch -> then
-_Lb2dd__re_parse_alt_bb2:
+    cbz x1, _Lfd34__re_parse_alt_bb3 // br_cond: !payload -> else
+    b _Lfd34__re_parse_alt_bb2 // branch -> then
+_Lfd34__re_parse_alt_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_adv // call _re_adv
     stp x0, x1, [sp, #80] // hv store L5
@@ -11694,8 +11694,8 @@ _Lb2dd__re_parse_alt_bb2:
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv load L9
     stp x0, x1, [sp, #32] // hv store L2
-    b _Lb2dd__re_parse_alt_bb1 // branch
-_Lb2dd__re_parse_alt_bb3:
+    b _Lfd34__re_parse_alt_bb1 // branch
+_Lfd34__re_parse_alt_bb3:
     ldp x0, x1, [sp, #32] // hv load L2
     add sp, sp, #160 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
@@ -11708,7 +11708,7 @@ _re_parse_concat:
     mov x29, sp // prologue: set fp
     sub sp, sp, #400 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__re_parse_concat_bb0:
+_Lfd34__re_parse_concat_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_peek // call _re_peek
     stp x0, x1, [sp, #16] // hv store L1
@@ -11721,13 +11721,13 @@ _Lb2dd__re_parse_concat_bb0:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L3
-    cbz x1, _Lb2dd__re_parse_concat_bb2 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_concat_bb1 // branch -> then
-_Lb2dd__re_parse_concat_bb1:
+    cbz x1, _Lfd34__re_parse_concat_bb2 // br_cond: !payload -> else
+    b _Lfd34__re_parse_concat_bb1 // branch -> then
+_Lfd34__re_parse_concat_bb1:
     ldp x0, x1, [sp, #48] // hv load L3
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd__re_parse_concat_bb3 // branch
-_Lb2dd__re_parse_concat_bb2:
+    b _Lfd34__re_parse_concat_bb3 // branch
+_Lfd34__re_parse_concat_bb2:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #124 // hv const_int val
@@ -11735,16 +11735,16 @@ _Lb2dd__re_parse_concat_bb2:
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd__re_parse_concat_bb3 // branch
-_Lb2dd__re_parse_concat_bb3:
+    b _Lfd34__re_parse_concat_bb3 // branch
+_Lfd34__re_parse_concat_bb3:
     ldp x0, x1, [sp, #64] // hv load L4
-    cbz x1, _Lb2dd__re_parse_concat_bb5 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_concat_bb4 // branch -> then
-_Lb2dd__re_parse_concat_bb4:
+    cbz x1, _Lfd34__re_parse_concat_bb5 // br_cond: !payload -> else
+    b _Lfd34__re_parse_concat_bb4 // branch -> then
+_Lfd34__re_parse_concat_bb4:
     ldp x0, x1, [sp, #64] // hv load L4
     stp x0, x1, [sp, #96] // hv store L6
-    b _Lb2dd__re_parse_concat_bb6 // branch
-_Lb2dd__re_parse_concat_bb5:
+    b _Lfd34__re_parse_concat_bb6 // branch
+_Lfd34__re_parse_concat_bb5:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #41 // hv const_int val
@@ -11752,12 +11752,12 @@ _Lb2dd__re_parse_concat_bb5:
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
     stp x0, x1, [sp, #96] // hv store L6
-    b _Lb2dd__re_parse_concat_bb6 // branch
-_Lb2dd__re_parse_concat_bb6:
+    b _Lfd34__re_parse_concat_bb6 // branch
+_Lfd34__re_parse_concat_bb6:
     ldp x0, x1, [sp, #96] // hv load L6
-    cbz x1, _Lb2dd__re_parse_concat_bb8 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_concat_bb7 // branch -> then
-_Lb2dd__re_parse_concat_bb7:
+    cbz x1, _Lfd34__re_parse_concat_bb8 // br_cond: !payload -> else
+    b _Lfd34__re_parse_concat_bb7 // branch -> then
+_Lfd34__re_parse_concat_bb7:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv reload L9
@@ -11788,19 +11788,19 @@ _Lb2dd__re_parse_concat_bb7:
     add sp, sp, #400 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_parse_concat_bb8:
+_Lfd34__re_parse_concat_bb8:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_parse_repeat // call _re_parse_repeat
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #176] // hv load L11
     stp x0, x1, [sp, #192] // hv store L12
-    b _Lb2dd__re_parse_concat_bb9 // branch
-_Lb2dd__re_parse_concat_bb9:
+    b _Lfd34__re_parse_concat_bb9 // branch
+_Lfd34__re_parse_concat_bb9:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
-    cbz x1, _Lb2dd__re_parse_concat_bb11 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_concat_bb10 // branch -> then
-_Lb2dd__re_parse_concat_bb10:
+    cbz x1, _Lfd34__re_parse_concat_bb11 // br_cond: !payload -> else
+    b _Lfd34__re_parse_concat_bb10 // branch -> then
+_Lfd34__re_parse_concat_bb10:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_peek // call _re_peek
     stp x0, x1, [sp, #208] // hv store L13
@@ -11813,18 +11813,18 @@ _Lb2dd__re_parse_concat_bb10:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv load L15
-    cbz x1, _Lb2dd__re_parse_concat_bb13 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_concat_bb12 // branch -> then
-_Lb2dd__re_parse_concat_bb11:
+    cbz x1, _Lfd34__re_parse_concat_bb13 // br_cond: !payload -> else
+    b _Lfd34__re_parse_concat_bb12 // branch -> then
+_Lfd34__re_parse_concat_bb11:
     ldp x0, x1, [sp, #192] // hv load L12
     add sp, sp, #400 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_parse_concat_bb12:
+_Lfd34__re_parse_concat_bb12:
     ldp x0, x1, [sp, #240] // hv load L15
     stp x0, x1, [sp, #256] // hv store L16
-    b _Lb2dd__re_parse_concat_bb14 // branch
-_Lb2dd__re_parse_concat_bb13:
+    b _Lfd34__re_parse_concat_bb14 // branch
+_Lfd34__re_parse_concat_bb13:
     ldp x0, x1, [sp, #224] // hv load L14
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #124 // hv const_int val
@@ -11832,16 +11832,16 @@ _Lb2dd__re_parse_concat_bb13:
     stp x0, x1, [sp, #272] // hv store L17
     ldp x0, x1, [sp, #272] // hv load L17
     stp x0, x1, [sp, #256] // hv store L16
-    b _Lb2dd__re_parse_concat_bb14 // branch
-_Lb2dd__re_parse_concat_bb14:
+    b _Lfd34__re_parse_concat_bb14 // branch
+_Lfd34__re_parse_concat_bb14:
     ldp x0, x1, [sp, #256] // hv load L16
-    cbz x1, _Lb2dd__re_parse_concat_bb16 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_concat_bb15 // branch -> then
-_Lb2dd__re_parse_concat_bb15:
+    cbz x1, _Lfd34__re_parse_concat_bb16 // br_cond: !payload -> else
+    b _Lfd34__re_parse_concat_bb15 // branch -> then
+_Lfd34__re_parse_concat_bb15:
     ldp x0, x1, [sp, #256] // hv load L16
     stp x0, x1, [sp, #288] // hv store L18
-    b _Lb2dd__re_parse_concat_bb17 // branch
-_Lb2dd__re_parse_concat_bb16:
+    b _Lfd34__re_parse_concat_bb17 // branch
+_Lfd34__re_parse_concat_bb16:
     ldp x0, x1, [sp, #224] // hv load L14
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #41 // hv const_int val
@@ -11849,14 +11849,14 @@ _Lb2dd__re_parse_concat_bb16:
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv load L19
     stp x0, x1, [sp, #288] // hv store L18
-    b _Lb2dd__re_parse_concat_bb17 // branch
-_Lb2dd__re_parse_concat_bb17:
+    b _Lfd34__re_parse_concat_bb17 // branch
+_Lfd34__re_parse_concat_bb17:
     ldp x0, x1, [sp, #288] // hv load L18
-    cbz x1, _Lb2dd__re_parse_concat_bb19 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_concat_bb18 // branch -> then
-_Lb2dd__re_parse_concat_bb18:
-    b _Lb2dd__re_parse_concat_bb11 // branch
-_Lb2dd__re_parse_concat_bb19:
+    cbz x1, _Lfd34__re_parse_concat_bb19 // br_cond: !payload -> else
+    b _Lfd34__re_parse_concat_bb18 // branch -> then
+_Lfd34__re_parse_concat_bb18:
+    b _Lfd34__re_parse_concat_bb11 // branch
+_Lfd34__re_parse_concat_bb19:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_parse_repeat // call _re_parse_repeat
     stp x0, x1, [sp, #336] // hv store L21
@@ -11888,7 +11888,7 @@ _Lb2dd__re_parse_concat_bb19:
     stp x0, x1, [sp, #384] // hv store L24
     ldp x0, x1, [sp, #384] // hv load L24
     stp x0, x1, [sp, #192] // hv store L12
-    b _Lb2dd__re_parse_concat_bb9 // branch
+    b _Lfd34__re_parse_concat_bb9 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #400 // sp adj
@@ -11902,19 +11902,19 @@ _re_parse_repeat:
     mov x29, sp // prologue: set fp
     sub sp, sp, #320 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__re_parse_repeat_bb0:
+_Lfd34__re_parse_repeat_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_parse_atom // call _re_parse_atom
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
     stp x0, x1, [sp, #32] // hv store L2
-    b _Lb2dd__re_parse_repeat_bb1 // branch
-_Lb2dd__re_parse_repeat_bb1:
+    b _Lfd34__re_parse_repeat_bb1 // branch
+_Lfd34__re_parse_repeat_bb1:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
-    cbz x1, _Lb2dd__re_parse_repeat_bb3 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_repeat_bb2 // branch -> then
-_Lb2dd__re_parse_repeat_bb2:
+    cbz x1, _Lfd34__re_parse_repeat_bb3 // br_cond: !payload -> else
+    b _Lfd34__re_parse_repeat_bb2 // branch -> then
+_Lfd34__re_parse_repeat_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_peek // call _re_peek
     stp x0, x1, [sp, #48] // hv store L3
@@ -11926,14 +11926,14 @@ _Lb2dd__re_parse_repeat_bb2:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
-    cbz x1, _Lb2dd__re_parse_repeat_bb5 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_repeat_bb4 // branch -> then
-_Lb2dd__re_parse_repeat_bb3:
+    cbz x1, _Lfd34__re_parse_repeat_bb5 // br_cond: !payload -> else
+    b _Lfd34__re_parse_repeat_bb4 // branch -> then
+_Lfd34__re_parse_repeat_bb3:
     ldp x0, x1, [sp, #32] // hv load L2
     add sp, sp, #320 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_parse_repeat_bb4:
+_Lfd34__re_parse_repeat_bb4:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_adv // call _re_adv
     stp x0, x1, [sp, #112] // hv store L7
@@ -11964,17 +11964,17 @@ _Lb2dd__re_parse_repeat_bb4:
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv load L9
     stp x0, x1, [sp, #32] // hv store L2
-    b _Lb2dd__re_parse_repeat_bb12 // branch
-_Lb2dd__re_parse_repeat_bb5:
+    b _Lfd34__re_parse_repeat_bb12 // branch
+_Lfd34__re_parse_repeat_bb5:
     ldp x0, x1, [sp, #64] // hv load L4
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #43 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv load L10
-    cbz x1, _Lb2dd__re_parse_repeat_bb7 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_repeat_bb6 // branch -> then
-_Lb2dd__re_parse_repeat_bb6:
+    cbz x1, _Lfd34__re_parse_repeat_bb7 // br_cond: !payload -> else
+    b _Lfd34__re_parse_repeat_bb6 // branch -> then
+_Lfd34__re_parse_repeat_bb6:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_adv // call _re_adv
     stp x0, x1, [sp, #192] // hv store L12
@@ -12005,17 +12005,17 @@ _Lb2dd__re_parse_repeat_bb6:
     stp x0, x1, [sp, #224] // hv store L14
     ldp x0, x1, [sp, #224] // hv load L14
     stp x0, x1, [sp, #32] // hv store L2
-    b _Lb2dd__re_parse_repeat_bb11 // branch
-_Lb2dd__re_parse_repeat_bb7:
+    b _Lfd34__re_parse_repeat_bb11 // branch
+_Lfd34__re_parse_repeat_bb7:
     ldp x0, x1, [sp, #64] // hv load L4
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #63 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv load L15
-    cbz x1, _Lb2dd__re_parse_repeat_bb9 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_repeat_bb8 // branch -> then
-_Lb2dd__re_parse_repeat_bb8:
+    cbz x1, _Lfd34__re_parse_repeat_bb9 // br_cond: !payload -> else
+    b _Lfd34__re_parse_repeat_bb8 // branch -> then
+_Lfd34__re_parse_repeat_bb8:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_adv // call _re_adv
     stp x0, x1, [sp, #272] // hv store L17
@@ -12046,15 +12046,15 @@ _Lb2dd__re_parse_repeat_bb8:
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv load L19
     stp x0, x1, [sp, #32] // hv store L2
-    b _Lb2dd__re_parse_repeat_bb10 // branch
-_Lb2dd__re_parse_repeat_bb9:
-    b _Lb2dd__re_parse_repeat_bb3 // branch
-_Lb2dd__re_parse_repeat_bb10:
-    b _Lb2dd__re_parse_repeat_bb11 // branch
-_Lb2dd__re_parse_repeat_bb11:
-    b _Lb2dd__re_parse_repeat_bb12 // branch
-_Lb2dd__re_parse_repeat_bb12:
-    b _Lb2dd__re_parse_repeat_bb1 // branch
+    b _Lfd34__re_parse_repeat_bb10 // branch
+_Lfd34__re_parse_repeat_bb9:
+    b _Lfd34__re_parse_repeat_bb3 // branch
+_Lfd34__re_parse_repeat_bb10:
+    b _Lfd34__re_parse_repeat_bb11 // branch
+_Lfd34__re_parse_repeat_bb11:
+    b _Lfd34__re_parse_repeat_bb12 // branch
+_Lfd34__re_parse_repeat_bb12:
+    b _Lfd34__re_parse_repeat_bb1 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #320 // sp adj
@@ -12068,7 +12068,7 @@ _re_parse_atom:
     mov x29, sp // prologue: set fp
     sub sp, sp, #976 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__re_parse_atom_bb0:
+_Lfd34__re_parse_atom_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_peek // call _re_peek
     stp x0, x1, [sp, #16] // hv store L1
@@ -12080,9 +12080,9 @@ _Lb2dd__re_parse_atom_bb0:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L3
-    cbz x1, _Lb2dd__re_parse_atom_bb2 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_atom_bb1 // branch -> then
-_Lb2dd__re_parse_atom_bb1:
+    cbz x1, _Lfd34__re_parse_atom_bb2 // br_cond: !payload -> else
+    b _Lfd34__re_parse_atom_bb1 // branch -> then
+_Lfd34__re_parse_atom_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_adv // call _re_adv
     stp x0, x1, [sp, #80] // hv store L5
@@ -12100,26 +12100,26 @@ _Lb2dd__re_parse_atom_bb1:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv load L9
-    cbz x1, _Lb2dd__re_parse_atom_bb4 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_atom_bb3 // branch -> then
-_Lb2dd__re_parse_atom_bb2:
+    cbz x1, _Lfd34__re_parse_atom_bb4 // br_cond: !payload -> else
+    b _Lfd34__re_parse_atom_bb3 // branch -> then
+_Lfd34__re_parse_atom_bb2:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #91 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #208] // hv store L13
     ldp x0, x1, [sp, #208] // hv load L13
-    cbz x1, _Lb2dd__re_parse_atom_bb7 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_atom_bb6 // branch -> then
-_Lb2dd__re_parse_atom_bb3:
+    cbz x1, _Lfd34__re_parse_atom_bb7 // br_cond: !payload -> else
+    b _Lfd34__re_parse_atom_bb6 // branch -> then
+_Lfd34__re_parse_atom_bb3:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_adv // call _re_adv
     stp x0, x1, [sp, #176] // hv store L11
-    b _Lb2dd__re_parse_atom_bb5 // branch
-_Lb2dd__re_parse_atom_bb4:
+    b _Lfd34__re_parse_atom_bb5 // branch
+_Lfd34__re_parse_atom_bb4:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
@@ -12129,13 +12129,13 @@ _Lb2dd__re_parse_atom_bb4:
     movz x5, #0 // hv const_int val
     bl hexa_index_set // index_set: hexa_index_set
     stp x0, x1, [sp, #192] // hv store L12
-    b _Lb2dd__re_parse_atom_bb5 // branch
-_Lb2dd__re_parse_atom_bb5:
+    b _Lfd34__re_parse_atom_bb5 // branch
+_Lfd34__re_parse_atom_bb5:
     ldp x0, x1, [sp, #112] // hv load L7
     add sp, sp, #976 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_parse_atom_bb6:
+_Lfd34__re_parse_atom_bb6:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_adv // call _re_adv
     stp x0, x1, [sp, #240] // hv store L15
@@ -12146,16 +12146,16 @@ _Lb2dd__re_parse_atom_bb6:
     add sp, sp, #976 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_parse_atom_bb7:
+_Lfd34__re_parse_atom_bb7:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #46 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #272] // hv store L17
     ldp x0, x1, [sp, #272] // hv load L17
-    cbz x1, _Lb2dd__re_parse_atom_bb9 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_atom_bb8 // branch -> then
-_Lb2dd__re_parse_atom_bb8:
+    cbz x1, _Lfd34__re_parse_atom_bb9 // br_cond: !payload -> else
+    b _Lfd34__re_parse_atom_bb8 // branch -> then
+_Lfd34__re_parse_atom_bb8:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_adv // call _re_adv
     stp x0, x1, [sp, #304] // hv store L19
@@ -12189,16 +12189,16 @@ _Lb2dd__re_parse_atom_bb8:
     add sp, sp, #976 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_parse_atom_bb9:
+_Lfd34__re_parse_atom_bb9:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #94 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #352] // hv store L22
     ldp x0, x1, [sp, #352] // hv load L22
-    cbz x1, _Lb2dd__re_parse_atom_bb11 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_atom_bb10 // branch -> then
-_Lb2dd__re_parse_atom_bb10:
+    cbz x1, _Lfd34__re_parse_atom_bb11 // br_cond: !payload -> else
+    b _Lfd34__re_parse_atom_bb10 // branch -> then
+_Lfd34__re_parse_atom_bb10:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_adv // call _re_adv
     stp x0, x1, [sp, #384] // hv store L24
@@ -12232,16 +12232,16 @@ _Lb2dd__re_parse_atom_bb10:
     add sp, sp, #976 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_parse_atom_bb11:
+_Lfd34__re_parse_atom_bb11:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #36 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #432] // hv store L27
     ldp x0, x1, [sp, #432] // hv load L27
-    cbz x1, _Lb2dd__re_parse_atom_bb13 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_atom_bb12 // branch -> then
-_Lb2dd__re_parse_atom_bb12:
+    cbz x1, _Lfd34__re_parse_atom_bb13 // br_cond: !payload -> else
+    b _Lfd34__re_parse_atom_bb12 // branch -> then
+_Lfd34__re_parse_atom_bb12:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_adv // call _re_adv
     stp x0, x1, [sp, #464] // hv store L29
@@ -12275,7 +12275,7 @@ _Lb2dd__re_parse_atom_bb12:
     add sp, sp, #976 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_parse_atom_bb13:
+_Lfd34__re_parse_atom_bb13:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #92 // hv const_int val
@@ -12284,9 +12284,9 @@ _Lb2dd__re_parse_atom_bb13:
     stp x0, x1, [x15] // hv store L32
     add x15, sp, #512 // hv frame base
     ldp x0, x1, [x15] // hv load L32
-    cbz x1, _Lb2dd__re_parse_atom_bb15 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_atom_bb14 // branch -> then
-_Lb2dd__re_parse_atom_bb14:
+    cbz x1, _Lfd34__re_parse_atom_bb15 // br_cond: !payload -> else
+    b _Lfd34__re_parse_atom_bb14 // branch -> then
+_Lfd34__re_parse_atom_bb14:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_adv // call _re_adv
     add x15, sp, #544 // hv frame base
@@ -12328,9 +12328,9 @@ _Lb2dd__re_parse_atom_bb14:
     stp x0, x1, [x15] // hv store L41
     add x15, sp, #656 // hv frame base
     ldp x0, x1, [x15] // hv load L41
-    cbz x1, _Lb2dd__re_parse_atom_bb17 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_atom_bb16 // branch -> then
-_Lb2dd__re_parse_atom_bb15:
+    cbz x1, _Lfd34__re_parse_atom_bb17 // br_cond: !payload -> else
+    b _Lfd34__re_parse_atom_bb16 // branch -> then
+_Lfd34__re_parse_atom_bb15:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _re_adv // call _re_adv
     add x15, sp, #928 // hv frame base
@@ -12376,10 +12376,10 @@ _Lb2dd__re_parse_atom_bb15:
     add sp, sp, #976 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_parse_atom_bb16:
+_Lfd34__re_parse_atom_bb16:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr4@PAGE // cstr key page
-    add x2, x2, .LCstr4@PAGEOFF // cstr key off
+    adrp x2, .LCstr4 // cstr key page
+    add x2, x2, :lo12:.LCstr4 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #688 // hv frame base
     stp x0, x1, [x15] // hv store L43
@@ -12391,8 +12391,8 @@ _Lb2dd__re_parse_atom_bb16:
     add x15, sp, #704 // hv frame base
     stp x0, x1, [x15] // hv store L44
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr4@PAGE // cstr key page
-    add x2, x2, .LCstr4@PAGEOFF // cstr key off
+    adrp x2, .LCstr4 // cstr key page
+    add x2, x2, :lo12:.LCstr4 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #720 // hv frame base
     stp x0, x1, [x15] // hv store L45
@@ -12452,7 +12452,7 @@ _Lb2dd__re_parse_atom_bb16:
     add sp, sp, #976 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_parse_atom_bb17:
+_Lfd34__re_parse_atom_bb17:
     add x15, sp, #576 // hv frame base
     ldp x0, x1, [x15] // hv load L36
     bl _re_lit_for_escape // call _re_lit_for_escape
@@ -12471,9 +12471,9 @@ _Lb2dd__re_parse_atom_bb17:
     stp x0, x1, [x15] // hv store L52
     add x15, sp, #832 // hv frame base
     ldp x0, x1, [x15] // hv load L52
-    cbz x1, _Lb2dd__re_parse_atom_bb19 // br_cond: !payload -> else
-    b _Lb2dd__re_parse_atom_bb18 // branch -> then
-_Lb2dd__re_parse_atom_bb18:
+    cbz x1, _Lfd34__re_parse_atom_bb19 // br_cond: !payload -> else
+    b _Lfd34__re_parse_atom_bb18 // branch -> then
+_Lfd34__re_parse_atom_bb18:
     bl hexa_array_new // array_lit: new array
     add x15, sp, #864 // hv frame base
     stp x0, x1, [x15] // hv store L54
@@ -12516,7 +12516,7 @@ _Lb2dd__re_parse_atom_bb18:
     add sp, sp, #976 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_parse_atom_bb19:
+_Lfd34__re_parse_atom_bb19:
     bl hexa_array_new // array_lit: new array
     add x15, sp, #896 // hv frame base
     stp x0, x1, [x15] // hv store L56
@@ -12569,10 +12569,10 @@ _nfa_new:
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
     stp x4, x5, [sp, #32] // ingress param 2
-_Lb2dd__nfa_new_bb0:
+_Lfd34__nfa_new_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr13@PAGE // cstr key page
-    add x2, x2, .LCstr13@PAGEOFF // cstr key off
+    adrp x2, .LCstr13 // cstr key page
+    add x2, x2, :lo12:.LCstr13 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L3
@@ -12580,8 +12580,8 @@ _Lb2dd__nfa_new_bb0:
     bl hexa_array_push // call hexa_array_push
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr14@PAGE // cstr key page
-    add x2, x2, .LCstr14@PAGEOFF // cstr key off
+    adrp x2, .LCstr14 // cstr key page
+    add x2, x2, :lo12:.LCstr14 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
@@ -12589,8 +12589,8 @@ _Lb2dd__nfa_new_bb0:
     bl hexa_array_push // call hexa_array_push
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr15@PAGE // cstr key page
-    add x2, x2, .LCstr15@PAGEOFF // cstr key off
+    adrp x2, .LCstr15 // cstr key page
+    add x2, x2, :lo12:.LCstr15 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
@@ -12600,8 +12600,8 @@ _Lb2dd__nfa_new_bb0:
     bl hexa_array_push // call hexa_array_push
     stp x0, x1, [sp, #128] // hv store L8
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr16@PAGE // cstr key page
-    add x2, x2, .LCstr16@PAGEOFF // cstr key off
+    adrp x2, .LCstr16 // cstr key page
+    add x2, x2, :lo12:.LCstr16 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv load L9
@@ -12611,8 +12611,8 @@ _Lb2dd__nfa_new_bb0:
     bl hexa_array_push // call hexa_array_push
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr13@PAGE // cstr key page
-    add x2, x2, .LCstr13@PAGEOFF // cstr key off
+    adrp x2, .LCstr13 // cstr key page
+    add x2, x2, :lo12:.LCstr13 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #176] // hv load L11
@@ -12639,12 +12639,12 @@ _nfa_patch:
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
     stp x4, x5, [sp, #32] // ingress param 2
-_Lb2dd__nfa_patch_bb0:
+_Lfd34__nfa_patch_bb0:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__nfa_patch_bb1 // branch
-_Lb2dd__nfa_patch_bb1:
+    b _Lfd34__nfa_patch_bb1 // branch
+_Lfd34__nfa_patch_bb1:
     ldp x0, x1, [sp, #16] // hv load L1
     bl hexa_arr_poly_len // call hexa_arr_poly_len
     sxtw x0, w0 // ret int: sign-ext
@@ -12655,9 +12655,9 @@ _Lb2dd__nfa_patch_bb1:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
-    cbz x1, _Lb2dd__nfa_patch_bb3 // br_cond: !payload -> else
-    b _Lb2dd__nfa_patch_bb2 // branch -> then
-_Lb2dd__nfa_patch_bb2:
+    cbz x1, _Lfd34__nfa_patch_bb3 // br_cond: !payload -> else
+    b _Lfd34__nfa_patch_bb2 // branch -> then
+_Lfd34__nfa_patch_bb2:
     ldp x9, x10, [sp, #48] // hv load L3
     ldp x0, x1, [sp, #16] // hv load L1
     mov x2, x10 // index: raw idx payload → x2
@@ -12685,18 +12685,18 @@ _Lb2dd__nfa_patch_bb2:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _Lb2dd__nfa_patch_bb5 // br_cond: !payload -> else
-    b _Lb2dd__nfa_patch_bb4 // branch -> then
-_Lb2dd__nfa_patch_bb3:
+    cbz x1, _Lfd34__nfa_patch_bb5 // br_cond: !payload -> else
+    b _Lfd34__nfa_patch_bb4 // branch -> then
+_Lfd34__nfa_patch_bb3:
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #272 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__nfa_patch_bb4:
+_Lfd34__nfa_patch_bb4:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr15@PAGE // cstr key page
-    add x2, x2, .LCstr15@PAGEOFF // cstr key off
+    adrp x2, .LCstr15 // cstr key page
+    add x2, x2, :lo12:.LCstr15 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #224] // hv store L14
     ldp x0, x1, [sp, #224] // hv load L14
@@ -12704,11 +12704,11 @@ _Lb2dd__nfa_patch_bb4:
     ldp x4, x5, [sp, #32] // hv load L2
     bl hexa_index_set // index_set: hexa_index_set
     stp x0, x1, [sp, #224] // hv store L14
-    b _Lb2dd__nfa_patch_bb6 // branch
-_Lb2dd__nfa_patch_bb5:
+    b _Lfd34__nfa_patch_bb6 // branch
+_Lfd34__nfa_patch_bb5:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr16@PAGE // cstr key page
-    add x2, x2, .LCstr16@PAGEOFF // cstr key off
+    adrp x2, .LCstr16 // cstr key page
+    add x2, x2, :lo12:.LCstr16 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv load L15
@@ -12716,8 +12716,8 @@ _Lb2dd__nfa_patch_bb5:
     ldp x4, x5, [sp, #32] // hv load L2
     bl hexa_index_set // index_set: hexa_index_set
     stp x0, x1, [sp, #240] // hv store L15
-    b _Lb2dd__nfa_patch_bb6 // branch
-_Lb2dd__nfa_patch_bb6:
+    b _Lfd34__nfa_patch_bb6 // branch
+_Lfd34__nfa_patch_bb6:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -12725,7 +12725,7 @@ _Lb2dd__nfa_patch_bb6:
     stp x0, x1, [sp, #256] // hv store L16
     ldp x0, x1, [sp, #256] // hv load L16
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__nfa_patch_bb1 // branch
+    b _Lfd34__nfa_patch_bb1 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #272 // sp adj
@@ -12739,7 +12739,7 @@ _frag_dangle:
     mov x29, sp // prologue: set fp
     sub sp, sp, #144 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__frag_dangle_bb0:
+_Lfd34__frag_dangle_bb0:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
@@ -12747,8 +12747,8 @@ _Lb2dd__frag_dangle_bb0:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #1 // hv const_int val
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__frag_dangle_bb1 // branch
-_Lb2dd__frag_dangle_bb1:
+    b _Lfd34__frag_dangle_bb1 // branch
+_Lfd34__frag_dangle_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_arr_poly_len // call hexa_arr_poly_len
     sxtw x0, w0 // ret int: sign-ext
@@ -12759,9 +12759,9 @@ _Lb2dd__frag_dangle_bb1:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
-    cbz x1, _Lb2dd__frag_dangle_bb3 // br_cond: !payload -> else
-    b _Lb2dd__frag_dangle_bb2 // branch -> then
-_Lb2dd__frag_dangle_bb2:
+    cbz x1, _Lfd34__frag_dangle_bb3 // br_cond: !payload -> else
+    b _Lfd34__frag_dangle_bb2 // branch -> then
+_Lfd34__frag_dangle_bb2:
     ldp x9, x10, [sp, #48] // hv load L3
     ldp x0, x1, [sp, #0] // hv load L0
     mov x2, x10 // index: raw idx payload → x2
@@ -12778,8 +12778,8 @@ _Lb2dd__frag_dangle_bb2:
     stp x0, x1, [sp, #128] // hv store L8
     ldp x0, x1, [sp, #128] // hv load L8
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__frag_dangle_bb1 // branch
-_Lb2dd__frag_dangle_bb3:
+    b _Lfd34__frag_dangle_bb1 // branch
+_Lfd34__frag_dangle_bb3:
     ldp x0, x1, [sp, #32] // hv load L2
     add sp, sp, #144 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
@@ -12793,7 +12793,7 @@ _concat_int:
     sub sp, sp, #256 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd__concat_int_bb0:
+_Lfd34__concat_int_bb0:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
@@ -12801,8 +12801,8 @@ _Lb2dd__concat_int_bb0:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd__concat_int_bb1 // branch
-_Lb2dd__concat_int_bb1:
+    b _Lfd34__concat_int_bb1 // branch
+_Lfd34__concat_int_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_arr_poly_len // call hexa_arr_poly_len
     sxtw x0, w0 // ret int: sign-ext
@@ -12813,9 +12813,9 @@ _Lb2dd__concat_int_bb1:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv load L6
-    cbz x1, _Lb2dd__concat_int_bb3 // br_cond: !payload -> else
-    b _Lb2dd__concat_int_bb2 // branch -> then
-_Lb2dd__concat_int_bb2:
+    cbz x1, _Lfd34__concat_int_bb3 // br_cond: !payload -> else
+    b _Lfd34__concat_int_bb2 // branch -> then
+_Lfd34__concat_int_bb2:
     ldp x9, x10, [sp, #64] // hv load L4
     ldp x0, x1, [sp, #0] // hv load L0
     mov x2, x10 // index: raw idx payload → x2
@@ -12832,13 +12832,13 @@ _Lb2dd__concat_int_bb2:
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv load L9
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd__concat_int_bb1 // branch
-_Lb2dd__concat_int_bb3:
+    b _Lfd34__concat_int_bb1 // branch
+_Lfd34__concat_int_bb3:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #160] // hv store L10
-    b _Lb2dd__concat_int_bb4 // branch
-_Lb2dd__concat_int_bb4:
+    b _Lfd34__concat_int_bb4 // branch
+_Lfd34__concat_int_bb4:
     ldp x0, x1, [sp, #16] // hv load L1
     bl hexa_arr_poly_len // call hexa_arr_poly_len
     sxtw x0, w0 // ret int: sign-ext
@@ -12849,9 +12849,9 @@ _Lb2dd__concat_int_bb4:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _Lb2dd__concat_int_bb6 // br_cond: !payload -> else
-    b _Lb2dd__concat_int_bb5 // branch -> then
-_Lb2dd__concat_int_bb5:
+    cbz x1, _Lfd34__concat_int_bb6 // br_cond: !payload -> else
+    b _Lfd34__concat_int_bb5 // branch -> then
+_Lfd34__concat_int_bb5:
     ldp x9, x10, [sp, #160] // hv load L10
     ldp x0, x1, [sp, #16] // hv load L1
     mov x2, x10 // index: raw idx payload → x2
@@ -12868,8 +12868,8 @@ _Lb2dd__concat_int_bb5:
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv load L15
     stp x0, x1, [sp, #160] // hv store L10
-    b _Lb2dd__concat_int_bb4 // branch
-_Lb2dd__concat_int_bb6:
+    b _Lfd34__concat_int_bb4 // branch
+_Lfd34__concat_int_bb6:
     ldp x0, x1, [sp, #48] // hv load L3
     add sp, sp, #256 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
@@ -12884,7 +12884,7 @@ _re_compile_node:
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
     stp x4, x5, [sp, #32] // ingress param 2
-_Lb2dd__re_compile_node_bb0:
+_Lfd34__re_compile_node_bb0:
     ldp x0, x1, [sp, #16] // hv load L1
     ldp x2, x3, [sp, #32] // hv load L2
     bl hexa_index_get // index: hexa_index_get
@@ -12904,9 +12904,9 @@ _Lb2dd__re_compile_node_bb0:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
-    cbz x1, _Lb2dd__re_compile_node_bb2 // br_cond: !payload -> else
-    b _Lb2dd__re_compile_node_bb1 // branch -> then
-_Lb2dd__re_compile_node_bb1:
+    cbz x1, _Lfd34__re_compile_node_bb2 // br_cond: !payload -> else
+    b _Lfd34__re_compile_node_bb1 // branch -> then
+_Lfd34__re_compile_node_bb1:
     ldp x0, x1, [sp, #64] // hv load L4
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -12944,16 +12944,16 @@ _Lb2dd__re_compile_node_bb1:
     add sp, sp, #2224 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_compile_node_bb2:
+_Lfd34__re_compile_node_bb2:
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv load L15
-    cbz x1, _Lb2dd__re_compile_node_bb4 // br_cond: !payload -> else
-    b _Lb2dd__re_compile_node_bb3 // branch -> then
-_Lb2dd__re_compile_node_bb3:
+    cbz x1, _Lfd34__re_compile_node_bb4 // br_cond: !payload -> else
+    b _Lfd34__re_compile_node_bb3 // branch -> then
+_Lfd34__re_compile_node_bb3:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -12987,16 +12987,16 @@ _Lb2dd__re_compile_node_bb3:
     add sp, sp, #2224 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_compile_node_bb4:
+_Lfd34__re_compile_node_bb4:
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #352] // hv store L22
     ldp x0, x1, [sp, #352] // hv load L22
-    cbz x1, _Lb2dd__re_compile_node_bb6 // br_cond: !payload -> else
-    b _Lb2dd__re_compile_node_bb5 // branch -> then
-_Lb2dd__re_compile_node_bb5:
+    cbz x1, _Lfd34__re_compile_node_bb6 // br_cond: !payload -> else
+    b _Lfd34__re_compile_node_bb5 // branch -> then
+_Lfd34__re_compile_node_bb5:
     ldp x0, x1, [sp, #64] // hv load L4
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -13034,16 +13034,16 @@ _Lb2dd__re_compile_node_bb5:
     add sp, sp, #2224 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_compile_node_bb6:
+_Lfd34__re_compile_node_bb6:
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #9 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #480] // hv store L30
     ldp x0, x1, [sp, #480] // hv load L30
-    cbz x1, _Lb2dd__re_compile_node_bb8 // br_cond: !payload -> else
-    b _Lb2dd__re_compile_node_bb7 // branch -> then
-_Lb2dd__re_compile_node_bb7:
+    cbz x1, _Lfd34__re_compile_node_bb8 // br_cond: !payload -> else
+    b _Lfd34__re_compile_node_bb7 // branch -> then
+_Lfd34__re_compile_node_bb7:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #5 // hv const_int val
@@ -13092,7 +13092,7 @@ _Lb2dd__re_compile_node_bb7:
     add sp, sp, #2224 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_compile_node_bb8:
+_Lfd34__re_compile_node_bb8:
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #10 // hv const_int val
@@ -13101,9 +13101,9 @@ _Lb2dd__re_compile_node_bb8:
     stp x0, x1, [x15] // hv store L37
     add x15, sp, #592 // hv frame base
     ldp x0, x1, [x15] // hv load L37
-    cbz x1, _Lb2dd__re_compile_node_bb10 // br_cond: !payload -> else
-    b _Lb2dd__re_compile_node_bb9 // branch -> then
-_Lb2dd__re_compile_node_bb9:
+    cbz x1, _Lfd34__re_compile_node_bb10 // br_cond: !payload -> else
+    b _Lfd34__re_compile_node_bb9 // branch -> then
+_Lfd34__re_compile_node_bb9:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #6 // hv const_int val
@@ -13152,7 +13152,7 @@ _Lb2dd__re_compile_node_bb9:
     add sp, sp, #2224 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_compile_node_bb10:
+_Lfd34__re_compile_node_bb10:
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #8 // hv const_int val
@@ -13161,9 +13161,9 @@ _Lb2dd__re_compile_node_bb10:
     stp x0, x1, [x15] // hv store L44
     add x15, sp, #704 // hv frame base
     ldp x0, x1, [x15] // hv load L44
-    cbz x1, _Lb2dd__re_compile_node_bb12 // br_cond: !payload -> else
-    b _Lb2dd__re_compile_node_bb11 // branch -> then
-_Lb2dd__re_compile_node_bb11:
+    cbz x1, _Lfd34__re_compile_node_bb12 // br_cond: !payload -> else
+    b _Lfd34__re_compile_node_bb11 // branch -> then
+_Lfd34__re_compile_node_bb11:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #3 // hv const_int val
@@ -13233,7 +13233,7 @@ _Lb2dd__re_compile_node_bb11:
     add sp, sp, #2224 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_compile_node_bb12:
+_Lfd34__re_compile_node_bb12:
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #6 // hv const_int val
@@ -13242,9 +13242,9 @@ _Lb2dd__re_compile_node_bb12:
     stp x0, x1, [x15] // hv store L53
     add x15, sp, #848 // hv frame base
     ldp x0, x1, [x15] // hv load L53
-    cbz x1, _Lb2dd__re_compile_node_bb14 // br_cond: !payload -> else
-    b _Lb2dd__re_compile_node_bb13 // branch -> then
-_Lb2dd__re_compile_node_bb13:
+    cbz x1, _Lfd34__re_compile_node_bb14 // br_cond: !payload -> else
+    b _Lfd34__re_compile_node_bb13 // branch -> then
+_Lfd34__re_compile_node_bb13:
     ldp x0, x1, [sp, #64] // hv load L4
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -13335,7 +13335,7 @@ _Lb2dd__re_compile_node_bb13:
     add sp, sp, #2224 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_compile_node_bb14:
+_Lfd34__re_compile_node_bb14:
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #7 // hv const_int val
@@ -13344,9 +13344,9 @@ _Lb2dd__re_compile_node_bb14:
     stp x0, x1, [x15] // hv store L68
     add x15, sp, #1088 // hv frame base
     ldp x0, x1, [x15] // hv load L68
-    cbz x1, _Lb2dd__re_compile_node_bb16 // br_cond: !payload -> else
-    b _Lb2dd__re_compile_node_bb15 // branch -> then
-_Lb2dd__re_compile_node_bb15:
+    cbz x1, _Lfd34__re_compile_node_bb16 // br_cond: !payload -> else
+    b _Lfd34__re_compile_node_bb15 // branch -> then
+_Lfd34__re_compile_node_bb15:
     ldp x0, x1, [sp, #64] // hv load L4
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -13394,8 +13394,8 @@ _Lb2dd__re_compile_node_bb15:
     add x15, sp, #1232 // hv frame base
     stp x0, x1, [x15] // hv store L77
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr15@PAGE // cstr key page
-    add x2, x2, .LCstr15@PAGEOFF // cstr key off
+    adrp x2, .LCstr15 // cstr key page
+    add x2, x2, :lo12:.LCstr15 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #1248 // hv frame base
     stp x0, x1, [x15] // hv store L78
@@ -13417,8 +13417,8 @@ _Lb2dd__re_compile_node_bb15:
     add x15, sp, #1248 // hv frame base
     stp x0, x1, [x15] // hv store L78
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr16@PAGE // cstr key page
-    add x2, x2, .LCstr16@PAGEOFF // cstr key off
+    adrp x2, .LCstr16 // cstr key page
+    add x2, x2, :lo12:.LCstr16 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #1280 // hv frame base
     stp x0, x1, [x15] // hv store L80
@@ -13478,7 +13478,7 @@ _Lb2dd__re_compile_node_bb15:
     add sp, sp, #2224 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_compile_node_bb16:
+_Lfd34__re_compile_node_bb16:
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #3 // hv const_int val
@@ -13487,9 +13487,9 @@ _Lb2dd__re_compile_node_bb16:
     stp x0, x1, [x15] // hv store L87
     add x15, sp, #1392 // hv frame base
     ldp x0, x1, [x15] // hv load L87
-    cbz x1, _Lb2dd__re_compile_node_bb18 // br_cond: !payload -> else
-    b _Lb2dd__re_compile_node_bb17 // branch -> then
-_Lb2dd__re_compile_node_bb17:
+    cbz x1, _Lfd34__re_compile_node_bb18 // br_cond: !payload -> else
+    b _Lfd34__re_compile_node_bb17 // branch -> then
+_Lfd34__re_compile_node_bb17:
     ldp x0, x1, [sp, #64] // hv load L4
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -13520,8 +13520,8 @@ _Lb2dd__re_compile_node_bb17:
     add x15, sp, #1488 // hv frame base
     stp x0, x1, [x15] // hv store L93
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr15@PAGE // cstr key page
-    add x2, x2, .LCstr15@PAGEOFF // cstr key off
+    adrp x2, .LCstr15 // cstr key page
+    add x2, x2, :lo12:.LCstr15 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #1504 // hv frame base
     stp x0, x1, [x15] // hv store L94
@@ -13591,7 +13591,7 @@ _Lb2dd__re_compile_node_bb17:
     add sp, sp, #2224 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_compile_node_bb18:
+_Lfd34__re_compile_node_bb18:
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #4 // hv const_int val
@@ -13600,9 +13600,9 @@ _Lb2dd__re_compile_node_bb18:
     stp x0, x1, [x15] // hv store L101
     add x15, sp, #1616 // hv frame base
     ldp x0, x1, [x15] // hv load L101
-    cbz x1, _Lb2dd__re_compile_node_bb20 // br_cond: !payload -> else
-    b _Lb2dd__re_compile_node_bb19 // branch -> then
-_Lb2dd__re_compile_node_bb19:
+    cbz x1, _Lfd34__re_compile_node_bb20 // br_cond: !payload -> else
+    b _Lfd34__re_compile_node_bb19 // branch -> then
+_Lfd34__re_compile_node_bb19:
     ldp x0, x1, [sp, #64] // hv load L4
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -13633,8 +13633,8 @@ _Lb2dd__re_compile_node_bb19:
     add x15, sp, #1712 // hv frame base
     stp x0, x1, [x15] // hv store L107
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr15@PAGE // cstr key page
-    add x2, x2, .LCstr15@PAGEOFF // cstr key off
+    adrp x2, .LCstr15 // cstr key page
+    add x2, x2, :lo12:.LCstr15 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #1728 // hv frame base
     stp x0, x1, [x15] // hv store L108
@@ -13712,7 +13712,7 @@ _Lb2dd__re_compile_node_bb19:
     add sp, sp, #2224 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_compile_node_bb20:
+_Lfd34__re_compile_node_bb20:
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #5 // hv const_int val
@@ -13721,9 +13721,9 @@ _Lb2dd__re_compile_node_bb20:
     stp x0, x1, [x15] // hv store L116
     add x15, sp, #1856 // hv frame base
     ldp x0, x1, [x15] // hv load L116
-    cbz x1, _Lb2dd__re_compile_node_bb22 // br_cond: !payload -> else
-    b _Lb2dd__re_compile_node_bb21 // branch -> then
-_Lb2dd__re_compile_node_bb21:
+    cbz x1, _Lfd34__re_compile_node_bb22 // br_cond: !payload -> else
+    b _Lfd34__re_compile_node_bb21 // branch -> then
+_Lfd34__re_compile_node_bb21:
     ldp x0, x1, [sp, #64] // hv load L4
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -13754,8 +13754,8 @@ _Lb2dd__re_compile_node_bb21:
     add x15, sp, #1952 // hv frame base
     stp x0, x1, [x15] // hv store L122
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr15@PAGE // cstr key page
-    add x2, x2, .LCstr15@PAGEOFF // cstr key off
+    adrp x2, .LCstr15 // cstr key page
+    add x2, x2, :lo12:.LCstr15 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #1968 // hv frame base
     stp x0, x1, [x15] // hv store L123
@@ -13834,7 +13834,7 @@ _Lb2dd__re_compile_node_bb21:
     add sp, sp, #2224 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_compile_node_bb22:
+_Lfd34__re_compile_node_bb22:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #3 // hv const_int val
@@ -13911,7 +13911,7 @@ _re_bad:
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
     sub sp, sp, #112 // sp adj
-_Lb2dd__re_bad_bb0:
+_Lfd34__re_bad_bb0:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #0] // hv store L0
     bl hexa_array_new // array_lit: new array
@@ -13927,67 +13927,67 @@ _Lb2dd__re_bad_bb0:
     bl hexa_map_new // struct_lit: new map
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv reload L6
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     movz x3, #2 // hv const_bool: TAG_BOOL
     movz x4, #0 // hv const_bool payload
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv reload L6
-    adrp x2, .LCstr18@PAGE // cstr key page
-    add x2, x2, .LCstr18@PAGEOFF // cstr key off
+    adrp x2, .LCstr18 // cstr key page
+    add x2, x2, :lo12:.LCstr18 // cstr key off
     movz x3, #0 // hv const_int: TAG_INT
     movz x4, #0 // imm 0-15
     mvn x4, x4 // hv const_int: negate
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv reload L6
-    adrp x2, .LCstr19@PAGE // cstr key page
-    add x2, x2, .LCstr19@PAGEOFF // cstr key off
+    adrp x2, .LCstr19 // cstr key page
+    add x2, x2, :lo12:.LCstr19 // cstr key off
     movz x3, #0 // hv const_int: TAG_INT
     movz x4, #0 // hv const_int val
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv reload L6
-    adrp x2, .LCstr13@PAGE // cstr key page
-    add x2, x2, .LCstr13@PAGEOFF // cstr key off
+    adrp x2, .LCstr13 // cstr key page
+    add x2, x2, :lo12:.LCstr13 // cstr key off
     ldp x3, x4, [sp, #0] // hv load L0
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv reload L6
-    adrp x2, .LCstr14@PAGE // cstr key page
-    add x2, x2, .LCstr14@PAGEOFF // cstr key off
+    adrp x2, .LCstr14 // cstr key page
+    add x2, x2, :lo12:.LCstr14 // cstr key off
     ldp x3, x4, [sp, #16] // hv load L1
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv reload L6
-    adrp x2, .LCstr15@PAGE // cstr key page
-    add x2, x2, .LCstr15@PAGEOFF // cstr key off
+    adrp x2, .LCstr15 // cstr key page
+    add x2, x2, :lo12:.LCstr15 // cstr key off
     ldp x3, x4, [sp, #32] // hv load L2
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv reload L6
-    adrp x2, .LCstr16@PAGE // cstr key page
-    add x2, x2, .LCstr16@PAGEOFF // cstr key off
+    adrp x2, .LCstr16 // cstr key page
+    add x2, x2, :lo12:.LCstr16 // cstr key off
     ldp x3, x4, [sp, #48] // hv load L3
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv reload L6
-    adrp x2, .LCstr4@PAGE // cstr key page
-    add x2, x2, .LCstr4@PAGEOFF // cstr key off
+    adrp x2, .LCstr4 // cstr key page
+    add x2, x2, :lo12:.LCstr4 // cstr key off
     ldp x3, x4, [sp, #64] // hv load L4
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv reload L6
-    adrp x2, .LCstr20@PAGE // cstr key page
-    add x2, x2, .LCstr20@PAGEOFF // cstr key off
+    adrp x2, .LCstr20 // cstr key page
+    add x2, x2, :lo12:.LCstr20 // cstr key off
     movz x3, #0 // hv const_int: TAG_INT
     movz x4, #0 // hv const_int val
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv reload L6
-    adrp x2, .LCstr21@PAGE // cstr key page
-    add x2, x2, .LCstr21@PAGEOFF // cstr key off
+    adrp x2, .LCstr21 // cstr key page
+    add x2, x2, :lo12:.LCstr21 // cstr key off
     ldp x3, x4, [sp, #80] // hv load L5
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #96] // hv store L6
@@ -14003,10 +14003,10 @@ _re_from_bt:
     mov x29, sp // prologue: set fp
     sub sp, sp, #176 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__re_from_bt_bb0:
+_Lfd34__re_from_bt_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
@@ -14015,16 +14015,16 @@ _Lb2dd__re_from_bt_bb0:
     bl hexa_bool // unop !: box bool
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
-    cbz x1, _Lb2dd__re_from_bt_bb2 // br_cond: !payload -> else
-    b _Lb2dd__re_from_bt_bb1 // branch -> then
-_Lb2dd__re_from_bt_bb1:
+    cbz x1, _Lfd34__re_from_bt_bb2 // br_cond: !payload -> else
+    b _Lfd34__re_from_bt_bb1 // branch -> then
+_Lfd34__re_from_bt_bb1:
     bl _re_bad // call _re_bad
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
     add sp, sp, #176 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_from_bt_bb2:
+_Lfd34__re_from_bt_bb2:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #80] // hv store L5
     bl hexa_array_new // array_lit: new array
@@ -14038,67 +14038,67 @@ _Lb2dd__re_from_bt_bb2:
     bl hexa_map_new // struct_lit: new map
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv reload L10
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     movz x3, #2 // hv const_bool: TAG_BOOL
     movz x4, #1 // hv const_bool payload
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv reload L10
-    adrp x2, .LCstr18@PAGE // cstr key page
-    add x2, x2, .LCstr18@PAGEOFF // cstr key off
+    adrp x2, .LCstr18 // cstr key page
+    add x2, x2, :lo12:.LCstr18 // cstr key off
     movz x3, #0 // hv const_int: TAG_INT
     movz x4, #0 // imm 0-15
     mvn x4, x4 // hv const_int: negate
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv reload L10
-    adrp x2, .LCstr19@PAGE // cstr key page
-    add x2, x2, .LCstr19@PAGEOFF // cstr key off
+    adrp x2, .LCstr19 // cstr key page
+    add x2, x2, :lo12:.LCstr19 // cstr key off
     movz x3, #0 // hv const_int: TAG_INT
     movz x4, #0 // hv const_int val
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv reload L10
-    adrp x2, .LCstr13@PAGE // cstr key page
-    add x2, x2, .LCstr13@PAGEOFF // cstr key off
+    adrp x2, .LCstr13 // cstr key page
+    add x2, x2, :lo12:.LCstr13 // cstr key off
     ldp x3, x4, [sp, #80] // hv load L5
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv reload L10
-    adrp x2, .LCstr14@PAGE // cstr key page
-    add x2, x2, .LCstr14@PAGEOFF // cstr key off
+    adrp x2, .LCstr14 // cstr key page
+    add x2, x2, :lo12:.LCstr14 // cstr key off
     ldp x3, x4, [sp, #96] // hv load L6
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv reload L10
-    adrp x2, .LCstr15@PAGE // cstr key page
-    add x2, x2, .LCstr15@PAGEOFF // cstr key off
+    adrp x2, .LCstr15 // cstr key page
+    add x2, x2, :lo12:.LCstr15 // cstr key off
     ldp x3, x4, [sp, #112] // hv load L7
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv reload L10
-    adrp x2, .LCstr16@PAGE // cstr key page
-    add x2, x2, .LCstr16@PAGEOFF // cstr key off
+    adrp x2, .LCstr16 // cstr key page
+    add x2, x2, :lo12:.LCstr16 // cstr key off
     ldp x3, x4, [sp, #128] // hv load L8
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv reload L10
-    adrp x2, .LCstr4@PAGE // cstr key page
-    add x2, x2, .LCstr4@PAGEOFF // cstr key off
+    adrp x2, .LCstr4 // cstr key page
+    add x2, x2, :lo12:.LCstr4 // cstr key off
     ldp x3, x4, [sp, #144] // hv load L9
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv reload L10
-    adrp x2, .LCstr20@PAGE // cstr key page
-    add x2, x2, .LCstr20@PAGEOFF // cstr key off
+    adrp x2, .LCstr20 // cstr key page
+    add x2, x2, :lo12:.LCstr20 // cstr key off
     movz x3, #0 // hv const_int: TAG_INT
     movz x4, #1 // hv const_int val
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv reload L10
-    adrp x2, .LCstr21@PAGE // cstr key page
-    add x2, x2, .LCstr21@PAGEOFF // cstr key off
+    adrp x2, .LCstr21 // cstr key page
+    add x2, x2, :lo12:.LCstr21 // cstr key off
     ldp x3, x4, [sp, #0] // hv load L0
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #160] // hv store L10
@@ -14114,7 +14114,7 @@ regex_compile:
     mov x29, sp // prologue: set fp
     sub sp, sp, #48 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd_regex_compile_bb0:
+_Lfd34_regex_compile_bb0:
     bl _REGEX_DEFAULT_STEP_CAP // call _REGEX_DEFAULT_STEP_CAP
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #0] // hv load L0
@@ -14134,14 +14134,14 @@ regex_compile_capped:
     sub sp, sp, #784 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd_regex_compile_capped_bb0:
+_Lfd34_regex_compile_capped_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl bt_needs_backtrack // call bt_needs_backtrack
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
-    cbz x1, _Lb2dd_regex_compile_capped_bb2 // br_cond: !payload -> else
-    b _Lb2dd_regex_compile_capped_bb1 // branch -> then
-_Lb2dd_regex_compile_capped_bb1:
+    cbz x1, _Lfd34_regex_compile_capped_bb2 // br_cond: !payload -> else
+    b _Lfd34_regex_compile_capped_bb1 // branch -> then
+_Lfd34_regex_compile_capped_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #16] // hv load L1
     bl bt_compile // call bt_compile
@@ -14153,7 +14153,7 @@ _Lb2dd_regex_compile_capped_bb1:
     add sp, sp, #784 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_compile_capped_bb2:
+_Lfd34_regex_compile_capped_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_byte_len // call hexa_byte_len
     stp x0, x1, [sp, #96] // hv store L6
@@ -14178,38 +14178,38 @@ _Lb2dd_regex_compile_capped_bb2:
     bl hexa_map_new // struct_lit: new map
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #176] // hv reload L11
-    adrp x2, .LCstr2@PAGE // cstr key page
-    add x2, x2, .LCstr2@PAGEOFF // cstr key off
+    adrp x2, .LCstr2 // cstr key page
+    add x2, x2, :lo12:.LCstr2 // cstr key off
     ldp x3, x4, [sp, #0] // hv load L0
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #176] // hv reload L11
-    adrp x2, .LCstr1@PAGE // cstr key page
-    add x2, x2, .LCstr1@PAGEOFF // cstr key off
+    adrp x2, .LCstr1 // cstr key page
+    add x2, x2, :lo12:.LCstr1 // cstr key off
     ldp x3, x4, [sp, #96] // hv load L6
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #176] // hv reload L11
-    adrp x2, .LCstr0@PAGE // cstr key page
-    add x2, x2, .LCstr0@PAGEOFF // cstr key off
+    adrp x2, .LCstr0 // cstr key page
+    add x2, x2, :lo12:.LCstr0 // cstr key off
     ldp x3, x4, [sp, #112] // hv load L7
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #176] // hv reload L11
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     ldp x3, x4, [sp, #128] // hv load L8
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #176] // hv reload L11
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     ldp x3, x4, [sp, #144] // hv load L9
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #176] // hv reload L11
-    adrp x2, .LCstr4@PAGE // cstr key page
-    add x2, x2, .LCstr4@PAGEOFF // cstr key off
+    adrp x2, .LCstr4 // cstr key page
+    add x2, x2, :lo12:.LCstr4 // cstr key off
     ldp x3, x4, [sp, #160] // hv load L10
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #176] // hv store L11
@@ -14221,8 +14221,8 @@ _Lb2dd_regex_compile_capped_bb2:
     ldp x0, x1, [sp, #208] // hv load L13
     stp x0, x1, [sp, #224] // hv store L14
     ldp x0, x1, [sp, #192] // hv load L12
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv load L15
@@ -14236,19 +14236,19 @@ _Lb2dd_regex_compile_capped_bb2:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #272] // hv store L17
     ldp x0, x1, [sp, #272] // hv load L17
-    cbz x1, _Lb2dd_regex_compile_capped_bb4 // br_cond: !payload -> else
-    b _Lb2dd_regex_compile_capped_bb3 // branch -> then
-_Lb2dd_regex_compile_capped_bb3:
+    cbz x1, _Lfd34_regex_compile_capped_bb4 // br_cond: !payload -> else
+    b _Lfd34_regex_compile_capped_bb3 // branch -> then
+_Lfd34_regex_compile_capped_bb3:
     bl _re_bad // call _re_bad
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv load L19
     add sp, sp, #784 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_compile_capped_bb4:
+_Lfd34_regex_compile_capped_bb4:
     ldp x0, x1, [sp, #192] // hv load L12
-    adrp x2, .LCstr0@PAGE // cstr key page
-    add x2, x2, .LCstr0@PAGEOFF // cstr key off
+    adrp x2, .LCstr0 // cstr key page
+    add x2, x2, :lo12:.LCstr0 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #320] // hv store L20
     ldp x0, x1, [sp, #320] // hv load L20
@@ -14257,8 +14257,8 @@ _Lb2dd_regex_compile_capped_bb4:
     bl hexa_index_get // index: hexa_index_get
     stp x0, x1, [sp, #336] // hv store L21
     ldp x0, x1, [sp, #192] // hv load L12
-    adrp x2, .LCstr1@PAGE // cstr key page
-    add x2, x2, .LCstr1@PAGEOFF // cstr key off
+    adrp x2, .LCstr1 // cstr key page
+    add x2, x2, :lo12:.LCstr1 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #352] // hv store L22
     ldp x0, x1, [sp, #336] // hv load L21
@@ -14266,16 +14266,16 @@ _Lb2dd_regex_compile_capped_bb4:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #368] // hv store L23
     ldp x0, x1, [sp, #368] // hv load L23
-    cbz x1, _Lb2dd_regex_compile_capped_bb6 // br_cond: !payload -> else
-    b _Lb2dd_regex_compile_capped_bb5 // branch -> then
-_Lb2dd_regex_compile_capped_bb5:
+    cbz x1, _Lfd34_regex_compile_capped_bb6 // br_cond: !payload -> else
+    b _Lfd34_regex_compile_capped_bb5 // branch -> then
+_Lfd34_regex_compile_capped_bb5:
     bl _re_bad // call _re_bad
     stp x0, x1, [sp, #400] // hv store L25
     ldp x0, x1, [sp, #400] // hv load L25
     add sp, sp, #784 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_compile_capped_bb6:
+_Lfd34_regex_compile_capped_bb6:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #416] // hv store L26
     bl hexa_array_new // array_lit: new array
@@ -14287,34 +14287,34 @@ _Lb2dd_regex_compile_capped_bb6:
     bl hexa_map_new // struct_lit: new map
     stp x0, x1, [sp, #480] // hv store L30
     ldp x0, x1, [sp, #480] // hv reload L30
-    adrp x2, .LCstr13@PAGE // cstr key page
-    add x2, x2, .LCstr13@PAGEOFF // cstr key off
+    adrp x2, .LCstr13 // cstr key page
+    add x2, x2, :lo12:.LCstr13 // cstr key off
     ldp x3, x4, [sp, #416] // hv load L26
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #480] // hv store L30
     ldp x0, x1, [sp, #480] // hv reload L30
-    adrp x2, .LCstr14@PAGE // cstr key page
-    add x2, x2, .LCstr14@PAGEOFF // cstr key off
+    adrp x2, .LCstr14 // cstr key page
+    add x2, x2, :lo12:.LCstr14 // cstr key off
     ldp x3, x4, [sp, #432] // hv load L27
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #480] // hv store L30
     ldp x0, x1, [sp, #480] // hv reload L30
-    adrp x2, .LCstr15@PAGE // cstr key page
-    add x2, x2, .LCstr15@PAGEOFF // cstr key off
+    adrp x2, .LCstr15 // cstr key page
+    add x2, x2, :lo12:.LCstr15 // cstr key off
     ldp x3, x4, [sp, #448] // hv load L28
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #480] // hv store L30
     ldp x0, x1, [sp, #480] // hv reload L30
-    adrp x2, .LCstr16@PAGE // cstr key page
-    add x2, x2, .LCstr16@PAGEOFF // cstr key off
+    adrp x2, .LCstr16 // cstr key page
+    add x2, x2, :lo12:.LCstr16 // cstr key off
     ldp x3, x4, [sp, #464] // hv load L29
     bl hexa_map_set // struct_lit: set field
     stp x0, x1, [sp, #480] // hv store L30
     ldp x0, x1, [sp, #480] // hv load L30
     stp x0, x1, [sp, #496] // hv store L31
     ldp x0, x1, [sp, #192] // hv load L12
-    adrp x2, .LCstr3@PAGE // cstr key page
-    add x2, x2, .LCstr3@PAGEOFF // cstr key off
+    adrp x2, .LCstr3 // cstr key page
+    add x2, x2, :lo12:.LCstr3 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #512 // hv frame base
     stp x0, x1, [x15] // hv store L32
@@ -14363,8 +14363,8 @@ _Lb2dd_regex_compile_capped_bb6:
     add x15, sp, #624 // hv frame base
     stp x0, x1, [x15] // hv store L39
     ldp x0, x1, [sp, #496] // hv load L31
-    adrp x2, .LCstr13@PAGE // cstr key page
-    add x2, x2, .LCstr13@PAGEOFF // cstr key off
+    adrp x2, .LCstr13 // cstr key page
+    add x2, x2, :lo12:.LCstr13 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #640 // hv frame base
     stp x0, x1, [x15] // hv store L40
@@ -14376,32 +14376,32 @@ _Lb2dd_regex_compile_capped_bb6:
     add x15, sp, #656 // hv frame base
     stp x0, x1, [x15] // hv store L41
     ldp x0, x1, [sp, #496] // hv load L31
-    adrp x2, .LCstr13@PAGE // cstr key page
-    add x2, x2, .LCstr13@PAGEOFF // cstr key off
+    adrp x2, .LCstr13 // cstr key page
+    add x2, x2, :lo12:.LCstr13 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #672 // hv frame base
     stp x0, x1, [x15] // hv store L42
     ldp x0, x1, [sp, #496] // hv load L31
-    adrp x2, .LCstr14@PAGE // cstr key page
-    add x2, x2, .LCstr14@PAGEOFF // cstr key off
+    adrp x2, .LCstr14 // cstr key page
+    add x2, x2, :lo12:.LCstr14 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #688 // hv frame base
     stp x0, x1, [x15] // hv store L43
     ldp x0, x1, [sp, #496] // hv load L31
-    adrp x2, .LCstr15@PAGE // cstr key page
-    add x2, x2, .LCstr15@PAGEOFF // cstr key off
+    adrp x2, .LCstr15 // cstr key page
+    add x2, x2, :lo12:.LCstr15 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #704 // hv frame base
     stp x0, x1, [x15] // hv store L44
     ldp x0, x1, [sp, #496] // hv load L31
-    adrp x2, .LCstr16@PAGE // cstr key page
-    add x2, x2, .LCstr16@PAGEOFF // cstr key off
+    adrp x2, .LCstr16 // cstr key page
+    add x2, x2, :lo12:.LCstr16 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #720 // hv frame base
     stp x0, x1, [x15] // hv store L45
     ldp x0, x1, [sp, #192] // hv load L12
-    adrp x2, .LCstr4@PAGE // cstr key page
-    add x2, x2, .LCstr4@PAGEOFF // cstr key off
+    adrp x2, .LCstr4 // cstr key page
+    add x2, x2, :lo12:.LCstr4 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #736 // hv frame base
     stp x0, x1, [x15] // hv store L46
@@ -14413,8 +14413,8 @@ _Lb2dd_regex_compile_capped_bb6:
     stp x0, x1, [x15] // hv store L48
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv reload L48
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     movz x3, #2 // hv const_bool: TAG_BOOL
     movz x4, #1 // hv const_bool payload
     bl hexa_map_set // struct_lit: set field
@@ -14422,8 +14422,8 @@ _Lb2dd_regex_compile_capped_bb6:
     stp x0, x1, [x15] // hv store L48
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv reload L48
-    adrp x2, .LCstr18@PAGE // cstr key page
-    add x2, x2, .LCstr18@PAGEOFF // cstr key off
+    adrp x2, .LCstr18 // cstr key page
+    add x2, x2, :lo12:.LCstr18 // cstr key off
     add x15, sp, #624 // hv frame base
     ldp x3, x4, [x15] // hv load L39
     bl hexa_map_set // struct_lit: set field
@@ -14431,8 +14431,8 @@ _Lb2dd_regex_compile_capped_bb6:
     stp x0, x1, [x15] // hv store L48
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv reload L48
-    adrp x2, .LCstr19@PAGE // cstr key page
-    add x2, x2, .LCstr19@PAGEOFF // cstr key off
+    adrp x2, .LCstr19 // cstr key page
+    add x2, x2, :lo12:.LCstr19 // cstr key off
     add x15, sp, #656 // hv frame base
     ldp x3, x4, [x15] // hv load L41
     bl hexa_map_set // struct_lit: set field
@@ -14440,8 +14440,8 @@ _Lb2dd_regex_compile_capped_bb6:
     stp x0, x1, [x15] // hv store L48
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv reload L48
-    adrp x2, .LCstr13@PAGE // cstr key page
-    add x2, x2, .LCstr13@PAGEOFF // cstr key off
+    adrp x2, .LCstr13 // cstr key page
+    add x2, x2, :lo12:.LCstr13 // cstr key off
     add x15, sp, #672 // hv frame base
     ldp x3, x4, [x15] // hv load L42
     bl hexa_map_set // struct_lit: set field
@@ -14449,8 +14449,8 @@ _Lb2dd_regex_compile_capped_bb6:
     stp x0, x1, [x15] // hv store L48
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv reload L48
-    adrp x2, .LCstr14@PAGE // cstr key page
-    add x2, x2, .LCstr14@PAGEOFF // cstr key off
+    adrp x2, .LCstr14 // cstr key page
+    add x2, x2, :lo12:.LCstr14 // cstr key off
     add x15, sp, #688 // hv frame base
     ldp x3, x4, [x15] // hv load L43
     bl hexa_map_set // struct_lit: set field
@@ -14458,8 +14458,8 @@ _Lb2dd_regex_compile_capped_bb6:
     stp x0, x1, [x15] // hv store L48
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv reload L48
-    adrp x2, .LCstr15@PAGE // cstr key page
-    add x2, x2, .LCstr15@PAGEOFF // cstr key off
+    adrp x2, .LCstr15 // cstr key page
+    add x2, x2, :lo12:.LCstr15 // cstr key off
     add x15, sp, #704 // hv frame base
     ldp x3, x4, [x15] // hv load L44
     bl hexa_map_set // struct_lit: set field
@@ -14467,8 +14467,8 @@ _Lb2dd_regex_compile_capped_bb6:
     stp x0, x1, [x15] // hv store L48
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv reload L48
-    adrp x2, .LCstr16@PAGE // cstr key page
-    add x2, x2, .LCstr16@PAGEOFF // cstr key off
+    adrp x2, .LCstr16 // cstr key page
+    add x2, x2, :lo12:.LCstr16 // cstr key off
     add x15, sp, #720 // hv frame base
     ldp x3, x4, [x15] // hv load L45
     bl hexa_map_set // struct_lit: set field
@@ -14476,8 +14476,8 @@ _Lb2dd_regex_compile_capped_bb6:
     stp x0, x1, [x15] // hv store L48
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv reload L48
-    adrp x2, .LCstr4@PAGE // cstr key page
-    add x2, x2, .LCstr4@PAGEOFF // cstr key off
+    adrp x2, .LCstr4 // cstr key page
+    add x2, x2, :lo12:.LCstr4 // cstr key off
     add x15, sp, #736 // hv frame base
     ldp x3, x4, [x15] // hv load L46
     bl hexa_map_set // struct_lit: set field
@@ -14485,8 +14485,8 @@ _Lb2dd_regex_compile_capped_bb6:
     stp x0, x1, [x15] // hv store L48
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv reload L48
-    adrp x2, .LCstr20@PAGE // cstr key page
-    add x2, x2, .LCstr20@PAGEOFF // cstr key off
+    adrp x2, .LCstr20 // cstr key page
+    add x2, x2, :lo12:.LCstr20 // cstr key off
     movz x3, #0 // hv const_int: TAG_INT
     movz x4, #0 // hv const_int val
     bl hexa_map_set // struct_lit: set field
@@ -14494,8 +14494,8 @@ _Lb2dd_regex_compile_capped_bb6:
     stp x0, x1, [x15] // hv store L48
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv reload L48
-    adrp x2, .LCstr21@PAGE // cstr key page
-    add x2, x2, .LCstr21@PAGEOFF // cstr key off
+    adrp x2, .LCstr21 // cstr key page
+    add x2, x2, :lo12:.LCstr21 // cstr key off
     add x15, sp, #752 // hv frame base
     ldp x3, x4, [x15] // hv load L47
     bl hexa_map_set // struct_lit: set field
@@ -14514,7 +14514,7 @@ regex_compile_captures:
     mov x29, sp // prologue: set fp
     sub sp, sp, #48 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd_regex_compile_captures_bb0:
+_Lfd34_regex_compile_captures_bb0:
     bl _REGEX_DEFAULT_STEP_CAP // call _REGEX_DEFAULT_STEP_CAP
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #0] // hv load L0
@@ -14534,7 +14534,7 @@ regex_compile_captures_capped:
     sub sp, sp, #64 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd_regex_compile_captures_capped_bb0:
+_Lfd34_regex_compile_captures_capped_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #16] // hv load L1
     bl bt_compile // call bt_compile
@@ -14555,10 +14555,10 @@ regex_captures:
     sub sp, sp, #320 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd_regex_captures_bb0:
+_Lfd34_regex_captures_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
@@ -14567,19 +14567,19 @@ _Lb2dd_regex_captures_bb0:
     bl hexa_bool // unop !: box bool
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L3
-    cbz x1, _Lb2dd_regex_captures_bb2 // br_cond: !payload -> else
-    b _Lb2dd_regex_captures_bb1 // branch -> then
-_Lb2dd_regex_captures_bb1:
+    cbz x1, _Lfd34_regex_captures_bb2 // br_cond: !payload -> else
+    b _Lfd34_regex_captures_bb1 // branch -> then
+_Lfd34_regex_captures_bb1:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
     add sp, sp, #320 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_captures_bb2:
+_Lfd34_regex_captures_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr20@PAGE // cstr key page
-    add x2, x2, .LCstr20@PAGEOFF // cstr key off
+    adrp x2, .LCstr20 // cstr key page
+    add x2, x2, :lo12:.LCstr20 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv load L6
@@ -14588,12 +14588,12 @@ _Lb2dd_regex_captures_bb2:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
-    cbz x1, _Lb2dd_regex_captures_bb4 // br_cond: !payload -> else
-    b _Lb2dd_regex_captures_bb3 // branch -> then
-_Lb2dd_regex_captures_bb3:
+    cbz x1, _Lfd34_regex_captures_bb4 // br_cond: !payload -> else
+    b _Lfd34_regex_captures_bb3 // branch -> then
+_Lfd34_regex_captures_bb3:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr21@PAGE // cstr key page
-    add x2, x2, .LCstr21@PAGEOFF // cstr key off
+    adrp x2, .LCstr21 // cstr key page
+    add x2, x2, :lo12:.LCstr21 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv load L9
@@ -14604,10 +14604,10 @@ _Lb2dd_regex_captures_bb3:
     add sp, sp, #320 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_captures_bb4:
+_Lfd34_regex_captures_bb4:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #16] // hv load L1
-    bl regex_search // call regex_search
+    bl hexa_regex_search // call hexa_regex_search
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #176] // hv load L11
     stp x0, x1, [sp, #192] // hv store L12
@@ -14622,16 +14622,16 @@ _Lb2dd_regex_captures_bb4:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #224] // hv store L14
     ldp x0, x1, [sp, #224] // hv load L14
-    cbz x1, _Lb2dd_regex_captures_bb6 // br_cond: !payload -> else
-    b _Lb2dd_regex_captures_bb5 // branch -> then
-_Lb2dd_regex_captures_bb5:
+    cbz x1, _Lfd34_regex_captures_bb6 // br_cond: !payload -> else
+    b _Lfd34_regex_captures_bb5 // branch -> then
+_Lfd34_regex_captures_bb5:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #256] // hv store L16
     ldp x0, x1, [sp, #256] // hv load L16
     add sp, sp, #320 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_captures_bb6:
+_Lfd34_regex_captures_bb6:
     movz x9, #0 // hv const_int: TAG_INT
     movz x10, #0 // hv const_int val
     ldp x0, x1, [sp, #192] // hv load L12
@@ -14666,7 +14666,7 @@ regex_cap_count:
     mov x29, sp // prologue: set fp
     sub sp, sp, #48 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd_regex_cap_count_bb0:
+_Lfd34_regex_cap_count_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_arr_poly_len // call hexa_arr_poly_len
     sxtw x0, w0 // ret int: sign-ext
@@ -14690,7 +14690,7 @@ regex_cap_span:
     sub sp, sp, #368 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd_regex_cap_span_bb0:
+_Lfd34_regex_cap_span_bb0:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #2 // hv const_int val
     ldp x2, x3, [sp, #16] // hv load L1
@@ -14704,13 +14704,13 @@ _Lb2dd_regex_cap_span_bb0:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
-    cbz x1, _Lb2dd_regex_cap_span_bb2 // br_cond: !payload -> else
-    b _Lb2dd_regex_cap_span_bb1 // branch -> then
-_Lb2dd_regex_cap_span_bb1:
+    cbz x1, _Lfd34_regex_cap_span_bb2 // br_cond: !payload -> else
+    b _Lfd34_regex_cap_span_bb1 // branch -> then
+_Lfd34_regex_cap_span_bb1:
     ldp x0, x1, [sp, #64] // hv load L4
     stp x0, x1, [sp, #80] // hv store L5
-    b _Lb2dd_regex_cap_span_bb3 // branch
-_Lb2dd_regex_cap_span_bb2:
+    b _Lfd34_regex_cap_span_bb3 // branch
+_Lfd34_regex_cap_span_bb2:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -14727,19 +14727,19 @@ _Lb2dd_regex_cap_span_bb2:
     stp x0, x1, [sp, #128] // hv store L8
     ldp x0, x1, [sp, #128] // hv load L8
     stp x0, x1, [sp, #80] // hv store L5
-    b _Lb2dd_regex_cap_span_bb3 // branch
-_Lb2dd_regex_cap_span_bb3:
+    b _Lfd34_regex_cap_span_bb3 // branch
+_Lfd34_regex_cap_span_bb3:
     ldp x0, x1, [sp, #80] // hv load L5
-    cbz x1, _Lb2dd_regex_cap_span_bb5 // br_cond: !payload -> else
-    b _Lb2dd_regex_cap_span_bb4 // branch -> then
-_Lb2dd_regex_cap_span_bb4:
+    cbz x1, _Lfd34_regex_cap_span_bb5 // br_cond: !payload -> else
+    b _Lfd34_regex_cap_span_bb4 // branch -> then
+_Lfd34_regex_cap_span_bb4:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv load L10
     add sp, sp, #368 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_cap_span_bb5:
+_Lfd34_regex_cap_span_bb5:
     ldp x9, x10, [sp, #48] // hv load L3
     ldp x0, x1, [sp, #0] // hv load L0
     mov x2, x10 // index: raw idx payload → x2
@@ -14751,13 +14751,13 @@ _Lb2dd_regex_cap_span_bb5:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _Lb2dd_regex_cap_span_bb7 // br_cond: !payload -> else
-    b _Lb2dd_regex_cap_span_bb6 // branch -> then
-_Lb2dd_regex_cap_span_bb6:
+    cbz x1, _Lfd34_regex_cap_span_bb7 // br_cond: !payload -> else
+    b _Lfd34_regex_cap_span_bb6 // branch -> then
+_Lfd34_regex_cap_span_bb6:
     ldp x0, x1, [sp, #192] // hv load L12
     stp x0, x1, [sp, #208] // hv store L13
-    b _Lb2dd_regex_cap_span_bb8 // branch
-_Lb2dd_regex_cap_span_bb7:
+    b _Lfd34_regex_cap_span_bb8 // branch
+_Lfd34_regex_cap_span_bb7:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -14775,19 +14775,19 @@ _Lb2dd_regex_cap_span_bb7:
     stp x0, x1, [sp, #256] // hv store L16
     ldp x0, x1, [sp, #256] // hv load L16
     stp x0, x1, [sp, #208] // hv store L13
-    b _Lb2dd_regex_cap_span_bb8 // branch
-_Lb2dd_regex_cap_span_bb8:
+    b _Lfd34_regex_cap_span_bb8 // branch
+_Lfd34_regex_cap_span_bb8:
     ldp x0, x1, [sp, #208] // hv load L13
-    cbz x1, _Lb2dd_regex_cap_span_bb10 // br_cond: !payload -> else
-    b _Lb2dd_regex_cap_span_bb9 // branch -> then
-_Lb2dd_regex_cap_span_bb9:
+    cbz x1, _Lfd34_regex_cap_span_bb10 // br_cond: !payload -> else
+    b _Lfd34_regex_cap_span_bb9 // branch -> then
+_Lfd34_regex_cap_span_bb9:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #288] // hv store L18
     ldp x0, x1, [sp, #288] // hv load L18
     add sp, sp, #368 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_cap_span_bb10:
+_Lfd34_regex_cap_span_bb10:
     ldp x9, x10, [sp, #48] // hv load L3
     ldp x0, x1, [sp, #0] // hv load L0
     mov x2, x10 // index: raw idx payload → x2
@@ -14827,7 +14827,7 @@ regex_cap_text:
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
     stp x4, x5, [sp, #32] // ingress param 2
-_Lb2dd_regex_cap_text_bb0:
+_Lfd34_regex_cap_text_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #32] // hv load L2
     bl regex_cap_span // call regex_cap_span
@@ -14845,16 +14845,16 @@ _Lb2dd_regex_cap_text_bb0:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv load L6
-    cbz x1, _Lb2dd_regex_cap_text_bb2 // br_cond: !payload -> else
-    b _Lb2dd_regex_cap_text_bb1 // branch -> then
-_Lb2dd_regex_cap_text_bb1:
+    cbz x1, _Lfd34_regex_cap_text_bb2 // br_cond: !payload -> else
+    b _Lfd34_regex_cap_text_bb1 // branch -> then
+_Lfd34_regex_cap_text_bb1:
     movz x0, #3 // hv const_str: TAG_STR
-    adrp x1, .LCstr24@PAGE // hv str ptr page
-    add x1, x1, .LCstr24@PAGEOFF // hv str ptr off
+    adrp x1, .LCstr24 // hv str ptr page
+    add x1, x1, :lo12:.LCstr24 // hv str ptr off
     add sp, sp, #176 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_cap_text_bb2:
+_Lfd34_regex_cap_text_bb2:
     movz x9, #0 // hv const_int: TAG_INT
     movz x10, #0 // hv const_int val
     ldp x0, x1, [sp, #64] // hv load L4
@@ -14886,7 +14886,7 @@ _re_class_match:
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
     stp x4, x5, [sp, #32] // ingress param 2
-_Lb2dd__re_class_match_bb0:
+_Lfd34__re_class_match_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #16] // hv load L1
     bl hexa_index_get // index: hexa_index_get
@@ -14906,8 +14906,8 @@ _Lb2dd__re_class_match_bb0:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     stp x0, x1, [sp, #128] // hv store L8
-    b _Lb2dd__re_class_match_bb1 // branch
-_Lb2dd__re_class_match_bb1:
+    b _Lfd34__re_class_match_bb1 // branch
+_Lfd34__re_class_match_bb1:
     ldp x0, x1, [sp, #112] // hv load L7
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -14923,9 +14923,9 @@ _Lb2dd__re_class_match_bb1:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #176] // hv load L11
-    cbz x1, _Lb2dd__re_class_match_bb3 // br_cond: !payload -> else
-    b _Lb2dd__re_class_match_bb2 // branch -> then
-_Lb2dd__re_class_match_bb2:
+    cbz x1, _Lfd34__re_class_match_bb3 // br_cond: !payload -> else
+    b _Lfd34__re_class_match_bb2 // branch -> then
+_Lfd34__re_class_match_bb2:
     ldp x0, x1, [sp, #64] // hv load L4
     ldp x2, x3, [sp, #112] // hv load L7
     bl hexa_index_get // index: hexa_index_get
@@ -14935,18 +14935,18 @@ _Lb2dd__re_class_match_bb2:
     bl hexa_cmp_ge // binop >=
     stp x0, x1, [sp, #208] // hv store L13
     ldp x0, x1, [sp, #208] // hv load L13
-    cbz x1, _Lb2dd__re_class_match_bb5 // br_cond: !payload -> else
-    b _Lb2dd__re_class_match_bb4 // branch -> then
-_Lb2dd__re_class_match_bb3:
+    cbz x1, _Lfd34__re_class_match_bb5 // br_cond: !payload -> else
+    b _Lfd34__re_class_match_bb4 // branch -> then
+_Lfd34__re_class_match_bb3:
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #320] // hv store L20
     ldp x0, x1, [sp, #320] // hv load L20
-    cbz x1, _Lb2dd__re_class_match_bb10 // br_cond: !payload -> else
-    b _Lb2dd__re_class_match_bb9 // branch -> then
-_Lb2dd__re_class_match_bb4:
+    cbz x1, _Lfd34__re_class_match_bb10 // br_cond: !payload -> else
+    b _Lfd34__re_class_match_bb9 // branch -> then
+_Lfd34__re_class_match_bb4:
     ldp x0, x1, [sp, #112] // hv load L7
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -14962,21 +14962,21 @@ _Lb2dd__re_class_match_bb4:
     stp x0, x1, [sp, #272] // hv store L17
     ldp x0, x1, [sp, #272] // hv load L17
     stp x0, x1, [sp, #224] // hv store L14
-    b _Lb2dd__re_class_match_bb6 // branch
-_Lb2dd__re_class_match_bb5:
+    b _Lfd34__re_class_match_bb6 // branch
+_Lfd34__re_class_match_bb5:
     ldp x0, x1, [sp, #208] // hv load L13
     stp x0, x1, [sp, #224] // hv store L14
-    b _Lb2dd__re_class_match_bb6 // branch
-_Lb2dd__re_class_match_bb6:
+    b _Lfd34__re_class_match_bb6 // branch
+_Lfd34__re_class_match_bb6:
     ldp x0, x1, [sp, #224] // hv load L14
-    cbz x1, _Lb2dd__re_class_match_bb8 // br_cond: !payload -> else
-    b _Lb2dd__re_class_match_bb7 // branch -> then
-_Lb2dd__re_class_match_bb7:
+    cbz x1, _Lfd34__re_class_match_bb8 // br_cond: !payload -> else
+    b _Lfd34__re_class_match_bb7 // branch -> then
+_Lfd34__re_class_match_bb7:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
     stp x0, x1, [sp, #128] // hv store L8
-    b _Lb2dd__re_class_match_bb8 // branch
-_Lb2dd__re_class_match_bb8:
+    b _Lfd34__re_class_match_bb8 // branch
+_Lfd34__re_class_match_bb8:
     ldp x0, x1, [sp, #112] // hv load L7
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -14984,8 +14984,8 @@ _Lb2dd__re_class_match_bb8:
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv load L19
     stp x0, x1, [sp, #112] // hv store L7
-    b _Lb2dd__re_class_match_bb1 // branch
-_Lb2dd__re_class_match_bb9:
+    b _Lfd34__re_class_match_bb1 // branch
+_Lfd34__re_class_match_bb9:
     ldp x0, x1, [sp, #128] // hv load L8
     bl hexa_truthy // unop !: truthy → w0
     eor x0, x0, #1 // unop !: !truthy
@@ -14995,7 +14995,7 @@ _Lb2dd__re_class_match_bb9:
     add sp, sp, #368 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_class_match_bb10:
+_Lfd34__re_class_match_bb10:
     ldp x0, x1, [sp, #128] // hv load L8
     add sp, sp, #368 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
@@ -15008,7 +15008,7 @@ _re_zeros:
     mov x29, sp // prologue: set fp
     sub sp, sp, #112 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__re_zeros_bb0:
+_Lfd34__re_zeros_bb0:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
@@ -15016,16 +15016,16 @@ _Lb2dd__re_zeros_bb0:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__re_zeros_bb1 // branch
-_Lb2dd__re_zeros_bb1:
+    b _Lfd34__re_zeros_bb1 // branch
+_Lfd34__re_zeros_bb1:
     ldp x0, x1, [sp, #48] // hv load L3
     ldp x2, x3, [sp, #0] // hv load L0
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
-    cbz x1, _Lb2dd__re_zeros_bb3 // br_cond: !payload -> else
-    b _Lb2dd__re_zeros_bb2 // branch -> then
-_Lb2dd__re_zeros_bb2:
+    cbz x1, _Lfd34__re_zeros_bb3 // br_cond: !payload -> else
+    b _Lfd34__re_zeros_bb2 // branch -> then
+_Lfd34__re_zeros_bb2:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
@@ -15038,8 +15038,8 @@ _Lb2dd__re_zeros_bb2:
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv load L6
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__re_zeros_bb1 // branch
-_Lb2dd__re_zeros_bb3:
+    b _Lfd34__re_zeros_bb1 // branch
+_Lfd34__re_zeros_bb3:
     ldp x0, x1, [sp, #32] // hv load L2
     add sp, sp, #112 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
@@ -15063,22 +15063,22 @@ _re_add:
     stp x9, x10, [sp, #160] // store stack param 6
     ldp x9, x10, [x29, #64] // ingress stack param 7
     stp x9, x10, [sp, #176] // store stack param 7
-_Lb2dd__re_add_bb0:
+_Lfd34__re_add_bb0:
     ldp x0, x1, [sp, #144] // hv load L5
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #192] // hv store L8
     ldp x0, x1, [sp, #192] // hv load L8
-    cbz x1, _Lb2dd__re_add_bb2 // br_cond: !payload -> else
-    b _Lb2dd__re_add_bb1 // branch -> then
-_Lb2dd__re_add_bb1:
+    cbz x1, _Lfd34__re_add_bb2 // br_cond: !payload -> else
+    b _Lfd34__re_add_bb1 // branch -> then
+_Lfd34__re_add_bb1:
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #720 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_add_bb2:
+_Lfd34__re_add_bb2:
     ldp x9, x10, [sp, #144] // hv load L5
     ldp x0, x1, [sp, #96] // hv load L2
     mov x2, x10 // index: raw idx payload → x2
@@ -15089,15 +15089,15 @@ _Lb2dd__re_add_bb2:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #240] // hv store L11
     ldp x0, x1, [sp, #240] // hv load L11
-    cbz x1, _Lb2dd__re_add_bb4 // br_cond: !payload -> else
-    b _Lb2dd__re_add_bb3 // branch -> then
-_Lb2dd__re_add_bb3:
+    cbz x1, _Lfd34__re_add_bb4 // br_cond: !payload -> else
+    b _Lfd34__re_add_bb3 // branch -> then
+_Lfd34__re_add_bb3:
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #720 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_add_bb4:
+_Lfd34__re_add_bb4:
     ldp x9, x10, [sp, #144] // hv load L5
     ldp x3, x4, [sp, #112] // hv load L3
     ldp x0, x1, [sp, #96] // hv load L2
@@ -15105,8 +15105,8 @@ _Lb2dd__re_add_bb4:
     bl hexa_arr_poly_set // index_set: hexa_arr_poly_set (runtime discriminate)
     stp x0, x1, [sp, #96] // hv store L2
     ldp x0, x1, [sp, #64] // hv load L0
-    adrp x2, .LCstr13@PAGE // cstr key page
-    add x2, x2, .LCstr13@PAGEOFF // cstr key off
+    adrp x2, .LCstr13 // cstr key page
+    add x2, x2, :lo12:.LCstr13 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #272] // hv store L13
     ldp x0, x1, [sp, #272] // hv load L13
@@ -15121,12 +15121,12 @@ _Lb2dd__re_add_bb4:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #320] // hv store L16
     ldp x0, x1, [sp, #320] // hv load L16
-    cbz x1, _Lb2dd__re_add_bb6 // br_cond: !payload -> else
-    b _Lb2dd__re_add_bb5 // branch -> then
-_Lb2dd__re_add_bb5:
+    cbz x1, _Lfd34__re_add_bb6 // br_cond: !payload -> else
+    b _Lfd34__re_add_bb5 // branch -> then
+_Lfd34__re_add_bb5:
     ldp x0, x1, [sp, #64] // hv load L0
-    adrp x2, .LCstr15@PAGE // cstr key page
-    add x2, x2, .LCstr15@PAGEOFF // cstr key off
+    adrp x2, .LCstr15 // cstr key page
+    add x2, x2, :lo12:.LCstr15 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #352] // hv store L18
     ldp x0, x1, [sp, #352] // hv load L18
@@ -15148,8 +15148,8 @@ _Lb2dd__re_add_bb5:
     bl _re_add // call _re_add
     stp x0, x1, [sp, #384] // hv store L20
     ldp x0, x1, [sp, #64] // hv load L0
-    adrp x2, .LCstr16@PAGE // cstr key page
-    add x2, x2, .LCstr16@PAGEOFF // cstr key off
+    adrp x2, .LCstr16 // cstr key page
+    add x2, x2, :lo12:.LCstr16 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #400] // hv store L21
     ldp x0, x1, [sp, #400] // hv load L21
@@ -15175,25 +15175,25 @@ _Lb2dd__re_add_bb5:
     add sp, sp, #720 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_add_bb6:
+_Lfd34__re_add_bb6:
     ldp x0, x1, [sp, #304] // hv load L15
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #5 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #448] // hv store L24
     ldp x0, x1, [sp, #448] // hv load L24
-    cbz x1, _Lb2dd__re_add_bb8 // br_cond: !payload -> else
-    b _Lb2dd__re_add_bb7 // branch -> then
-_Lb2dd__re_add_bb7:
+    cbz x1, _Lfd34__re_add_bb8 // br_cond: !payload -> else
+    b _Lfd34__re_add_bb7 // branch -> then
+_Lfd34__re_add_bb7:
     ldp x0, x1, [sp, #160] // hv load L6
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #480] // hv store L26
     ldp x0, x1, [sp, #480] // hv load L26
-    cbz x1, _Lb2dd__re_add_bb10 // br_cond: !payload -> else
-    b _Lb2dd__re_add_bb9 // branch -> then
-_Lb2dd__re_add_bb8:
+    cbz x1, _Lfd34__re_add_bb10 // br_cond: !payload -> else
+    b _Lfd34__re_add_bb9 // branch -> then
+_Lfd34__re_add_bb8:
     ldp x0, x1, [sp, #304] // hv load L15
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #6 // hv const_int val
@@ -15202,12 +15202,12 @@ _Lb2dd__re_add_bb8:
     stp x0, x1, [x15] // hv store L31
     add x15, sp, #560 // hv frame base
     ldp x0, x1, [x15] // hv load L31
-    cbz x1, _Lb2dd__re_add_bb12 // br_cond: !payload -> else
-    b _Lb2dd__re_add_bb11 // branch -> then
-_Lb2dd__re_add_bb9:
+    cbz x1, _Lfd34__re_add_bb12 // br_cond: !payload -> else
+    b _Lfd34__re_add_bb11 // branch -> then
+_Lfd34__re_add_bb9:
     ldp x0, x1, [sp, #64] // hv load L0
-    adrp x2, .LCstr15@PAGE // cstr key page
-    add x2, x2, .LCstr15@PAGEOFF // cstr key off
+    adrp x2, .LCstr15 // cstr key page
+    add x2, x2, :lo12:.LCstr15 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #512 // hv frame base
     stp x0, x1, [x15] // hv store L28
@@ -15233,14 +15233,14 @@ _Lb2dd__re_add_bb9:
     bl _re_add // call _re_add
     add x15, sp, #544 // hv frame base
     stp x0, x1, [x15] // hv store L30
-    b _Lb2dd__re_add_bb10 // branch
-_Lb2dd__re_add_bb10:
+    b _Lfd34__re_add_bb10 // branch
+_Lfd34__re_add_bb10:
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #720 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_add_bb11:
+_Lfd34__re_add_bb11:
     ldp x0, x1, [sp, #160] // hv load L6
     ldp x2, x3, [sp, #176] // hv load L7
     bl hexa_eq // binop ==
@@ -15248,9 +15248,9 @@ _Lb2dd__re_add_bb11:
     stp x0, x1, [x15] // hv store L33
     add x15, sp, #592 // hv frame base
     ldp x0, x1, [x15] // hv load L33
-    cbz x1, _Lb2dd__re_add_bb14 // br_cond: !payload -> else
-    b _Lb2dd__re_add_bb13 // branch -> then
-_Lb2dd__re_add_bb12:
+    cbz x1, _Lfd34__re_add_bb14 // br_cond: !payload -> else
+    b _Lfd34__re_add_bb13 // branch -> then
+_Lfd34__re_add_bb12:
     ldp x0, x1, [sp, #304] // hv load L15
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #4 // hv const_int val
@@ -15259,12 +15259,12 @@ _Lb2dd__re_add_bb12:
     stp x0, x1, [x15] // hv store L38
     add x15, sp, #672 // hv frame base
     ldp x0, x1, [x15] // hv load L38
-    cbz x1, _Lb2dd__re_add_bb16 // br_cond: !payload -> else
-    b _Lb2dd__re_add_bb15 // branch -> then
-_Lb2dd__re_add_bb13:
+    cbz x1, _Lfd34__re_add_bb16 // br_cond: !payload -> else
+    b _Lfd34__re_add_bb15 // branch -> then
+_Lfd34__re_add_bb13:
     ldp x0, x1, [sp, #64] // hv load L0
-    adrp x2, .LCstr15@PAGE // cstr key page
-    add x2, x2, .LCstr15@PAGEOFF // cstr key off
+    adrp x2, .LCstr15 // cstr key page
+    add x2, x2, :lo12:.LCstr15 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #624 // hv frame base
     stp x0, x1, [x15] // hv store L35
@@ -15290,14 +15290,14 @@ _Lb2dd__re_add_bb13:
     bl _re_add // call _re_add
     add x15, sp, #656 // hv frame base
     stp x0, x1, [x15] // hv store L37
-    b _Lb2dd__re_add_bb14 // branch
-_Lb2dd__re_add_bb14:
+    b _Lfd34__re_add_bb14 // branch
+_Lfd34__re_add_bb14:
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #720 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_add_bb15:
+_Lfd34__re_add_bb15:
     movz x9, #0 // hv const_int: TAG_INT
     movz x10, #0 // hv const_int val
     movz x3, #0 // hv const_int: TAG_INT
@@ -15311,7 +15311,7 @@ _Lb2dd__re_add_bb15:
     add sp, sp, #720 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_add_bb16:
+_Lfd34__re_add_bb16:
     ldp x0, x1, [sp, #80] // hv load L1
     ldp x2, x3, [sp, #144] // hv load L5
     bl hexa_arr_poly_push // call hexa_arr_poly_push
@@ -15333,10 +15333,10 @@ _re_longest_from:
     stp x2, x3, [sp, #80] // ingress param 1
     stp x4, x5, [sp, #96] // ingress param 2
     stp x6, x7, [sp, #112] // ingress param 3
-_Lb2dd__re_longest_from_bb0:
+_Lfd34__re_longest_from_bb0:
     ldp x0, x1, [sp, #64] // hv load L0
-    adrp x2, .LCstr19@PAGE // cstr key page
-    add x2, x2, .LCstr19@PAGEOFF // cstr key off
+    adrp x2, .LCstr19 // cstr key page
+    add x2, x2, :lo12:.LCstr19 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #128] // hv store L4
     ldp x0, x1, [sp, #128] // hv load L4
@@ -15361,8 +15361,8 @@ _Lb2dd__re_longest_from_bb0:
     ldp x0, x1, [sp, #224] // hv load L10
     stp x0, x1, [sp, #240] // hv store L11
     ldp x0, x1, [sp, #64] // hv load L0
-    adrp x2, .LCstr18@PAGE // cstr key page
-    add x2, x2, .LCstr18@PAGEOFF // cstr key off
+    adrp x2, .LCstr18 // cstr key page
+    add x2, x2, :lo12:.LCstr18 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #256] // hv store L12
     ldp x0, x1, [sp, #64] // hv load L0
@@ -15394,25 +15394,25 @@ _Lb2dd__re_longest_from_bb0:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #320] // hv store L16
     ldp x0, x1, [sp, #320] // hv load L16
-    cbz x1, _Lb2dd__re_longest_from_bb2 // br_cond: !payload -> else
-    b _Lb2dd__re_longest_from_bb1 // branch -> then
-_Lb2dd__re_longest_from_bb1:
+    cbz x1, _Lfd34__re_longest_from_bb2 // br_cond: !payload -> else
+    b _Lfd34__re_longest_from_bb1 // branch -> then
+_Lfd34__re_longest_from_bb1:
     ldp x0, x1, [sp, #96] // hv load L2
     stp x0, x1, [sp, #288] // hv store L14
-    b _Lb2dd__re_longest_from_bb2 // branch
-_Lb2dd__re_longest_from_bb2:
+    b _Lfd34__re_longest_from_bb2 // branch
+_Lfd34__re_longest_from_bb2:
     ldp x0, x1, [sp, #96] // hv load L2
     stp x0, x1, [sp, #352] // hv store L18
-    b _Lb2dd__re_longest_from_bb3 // branch
-_Lb2dd__re_longest_from_bb3:
+    b _Lfd34__re_longest_from_bb3 // branch
+_Lfd34__re_longest_from_bb3:
     ldp x0, x1, [sp, #352] // hv load L18
     ldp x2, x3, [sp, #112] // hv load L3
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #368] // hv store L19
     ldp x0, x1, [sp, #368] // hv load L19
-    cbz x1, _Lb2dd__re_longest_from_bb7 // br_cond: !payload -> else
-    b _Lb2dd__re_longest_from_bb6 // branch -> then
-_Lb2dd__re_longest_from_bb4:
+    cbz x1, _Lfd34__re_longest_from_bb7 // br_cond: !payload -> else
+    b _Lfd34__re_longest_from_bb6 // branch -> then
+_Lfd34__re_longest_from_bb4:
     ldp x0, x1, [sp, #80] // hv load L1
     ldp x2, x3, [sp, #352] // hv load L18
     bl hexa_str_byte_at // call hexa_str_byte_at
@@ -15441,13 +15441,13 @@ _Lb2dd__re_longest_from_bb4:
     movz x1, #0 // hv const_int val
     add x15, sp, #512 // hv frame base
     stp x0, x1, [x15] // hv store L28
-    b _Lb2dd__re_longest_from_bb9 // branch
-_Lb2dd__re_longest_from_bb5:
+    b _Lfd34__re_longest_from_bb9 // branch
+_Lfd34__re_longest_from_bb5:
     ldp x0, x1, [sp, #288] // hv load L14
     add sp, sp, #1056 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__re_longest_from_bb6:
+_Lfd34__re_longest_from_bb6:
     ldp x0, x1, [sp, #240] // hv load L11
     bl hexa_len // call hexa_len
     sxtw x0, w0 // ret int: sign-ext
@@ -15460,16 +15460,16 @@ _Lb2dd__re_longest_from_bb6:
     stp x0, x1, [sp, #416] // hv store L22
     ldp x0, x1, [sp, #416] // hv load L22
     stp x0, x1, [sp, #384] // hv store L20
-    b _Lb2dd__re_longest_from_bb8 // branch
-_Lb2dd__re_longest_from_bb7:
+    b _Lfd34__re_longest_from_bb8 // branch
+_Lfd34__re_longest_from_bb7:
     ldp x0, x1, [sp, #368] // hv load L19
     stp x0, x1, [sp, #384] // hv store L20
-    b _Lb2dd__re_longest_from_bb8 // branch
-_Lb2dd__re_longest_from_bb8:
+    b _Lfd34__re_longest_from_bb8 // branch
+_Lfd34__re_longest_from_bb8:
     ldp x0, x1, [sp, #384] // hv load L20
-    cbz x1, _Lb2dd__re_longest_from_bb5 // br_cond: !payload -> else
-    b _Lb2dd__re_longest_from_bb4 // branch -> then
-_Lb2dd__re_longest_from_bb9:
+    cbz x1, _Lfd34__re_longest_from_bb5 // br_cond: !payload -> else
+    b _Lfd34__re_longest_from_bb4 // branch -> then
+_Lfd34__re_longest_from_bb9:
     ldp x0, x1, [sp, #240] // hv load L11
     bl hexa_len // call hexa_len
     sxtw x0, w0 // ret int: sign-ext
@@ -15485,9 +15485,9 @@ _Lb2dd__re_longest_from_bb9:
     stp x0, x1, [x15] // hv store L30
     add x15, sp, #544 // hv frame base
     ldp x0, x1, [x15] // hv load L30
-    cbz x1, _Lb2dd__re_longest_from_bb11 // br_cond: !payload -> else
-    b _Lb2dd__re_longest_from_bb10 // branch -> then
-_Lb2dd__re_longest_from_bb10:
+    cbz x1, _Lfd34__re_longest_from_bb11 // br_cond: !payload -> else
+    b _Lfd34__re_longest_from_bb10 // branch -> then
+_Lfd34__re_longest_from_bb10:
     ldp x0, x1, [sp, #240] // hv load L11
     add x15, sp, #512 // hv frame base
     ldp x2, x3, [x15] // hv load L28
@@ -15499,8 +15499,8 @@ _Lb2dd__re_longest_from_bb10:
     add x15, sp, #576 // hv frame base
     stp x0, x1, [x15] // hv store L32
     ldp x0, x1, [sp, #64] // hv load L0
-    adrp x2, .LCstr13@PAGE // cstr key page
-    add x2, x2, .LCstr13@PAGEOFF // cstr key off
+    adrp x2, .LCstr13 // cstr key page
+    add x2, x2, :lo12:.LCstr13 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #592 // hv frame base
     stp x0, x1, [x15] // hv store L33
@@ -15528,9 +15528,9 @@ _Lb2dd__re_longest_from_bb10:
     stp x0, x1, [x15] // hv store L37
     add x15, sp, #656 // hv frame base
     ldp x0, x1, [x15] // hv load L37
-    cbz x1, _Lb2dd__re_longest_from_bb13 // br_cond: !payload -> else
-    b _Lb2dd__re_longest_from_bb12 // branch -> then
-_Lb2dd__re_longest_from_bb11:
+    cbz x1, _Lfd34__re_longest_from_bb13 // br_cond: !payload -> else
+    b _Lfd34__re_longest_from_bb12 // branch -> then
+_Lfd34__re_longest_from_bb11:
     ldp x0, x1, [sp, #496] // hv load L27
     stp x0, x1, [sp, #240] // hv store L11
     ldp x0, x1, [sp, #352] // hv load L18
@@ -15557,12 +15557,12 @@ _Lb2dd__re_longest_from_bb11:
     stp x0, x1, [x15] // hv store L60
     add x15, sp, #1024 // hv frame base
     ldp x0, x1, [x15] // hv load L60
-    cbz x1, _Lb2dd__re_longest_from_bb27 // br_cond: !payload -> else
-    b _Lb2dd__re_longest_from_bb26 // branch -> then
-_Lb2dd__re_longest_from_bb12:
+    cbz x1, _Lfd34__re_longest_from_bb27 // br_cond: !payload -> else
+    b _Lfd34__re_longest_from_bb26 // branch -> then
+_Lfd34__re_longest_from_bb12:
     ldp x0, x1, [sp, #64] // hv load L0
-    adrp x2, .LCstr14@PAGE // cstr key page
-    add x2, x2, .LCstr14@PAGEOFF // cstr key off
+    adrp x2, .LCstr14 // cstr key page
+    add x2, x2, :lo12:.LCstr14 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #688 // hv frame base
     stp x0, x1, [x15] // hv store L39
@@ -15581,9 +15581,9 @@ _Lb2dd__re_longest_from_bb12:
     stp x0, x1, [x15] // hv store L41
     add x15, sp, #720 // hv frame base
     ldp x0, x1, [x15] // hv load L41
-    cbz x1, _Lb2dd__re_longest_from_bb15 // br_cond: !payload -> else
-    b _Lb2dd__re_longest_from_bb14 // branch -> then
-_Lb2dd__re_longest_from_bb13:
+    cbz x1, _Lfd34__re_longest_from_bb15 // br_cond: !payload -> else
+    b _Lfd34__re_longest_from_bb14 // branch -> then
+_Lfd34__re_longest_from_bb13:
     add x15, sp, #624 // hv frame base
     ldp x0, x1, [x15] // hv load L35
     movz x2, #0 // hv const_int: TAG_INT
@@ -15593,23 +15593,23 @@ _Lb2dd__re_longest_from_bb13:
     stp x0, x1, [x15] // hv store L43
     add x15, sp, #752 // hv frame base
     ldp x0, x1, [x15] // hv load L43
-    cbz x1, _Lb2dd__re_longest_from_bb17 // br_cond: !payload -> else
-    b _Lb2dd__re_longest_from_bb16 // branch -> then
-_Lb2dd__re_longest_from_bb14:
+    cbz x1, _Lfd34__re_longest_from_bb17 // br_cond: !payload -> else
+    b _Lfd34__re_longest_from_bb16 // branch -> then
+_Lfd34__re_longest_from_bb14:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
     add x15, sp, #640 // hv frame base
     stp x0, x1, [x15] // hv store L36
-    b _Lb2dd__re_longest_from_bb15 // branch
-_Lb2dd__re_longest_from_bb15:
-    b _Lb2dd__re_longest_from_bb23 // branch
-_Lb2dd__re_longest_from_bb16:
+    b _Lfd34__re_longest_from_bb15 // branch
+_Lfd34__re_longest_from_bb15:
+    b _Lfd34__re_longest_from_bb23 // branch
+_Lfd34__re_longest_from_bb16:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
     add x15, sp, #640 // hv frame base
     stp x0, x1, [x15] // hv store L36
-    b _Lb2dd__re_longest_from_bb22 // branch
-_Lb2dd__re_longest_from_bb17:
+    b _Lfd34__re_longest_from_bb22 // branch
+_Lfd34__re_longest_from_bb17:
     add x15, sp, #624 // hv frame base
     ldp x0, x1, [x15] // hv load L35
     movz x2, #0 // hv const_int: TAG_INT
@@ -15619,18 +15619,18 @@ _Lb2dd__re_longest_from_bb17:
     stp x0, x1, [x15] // hv store L45
     add x15, sp, #784 // hv frame base
     ldp x0, x1, [x15] // hv load L45
-    cbz x1, _Lb2dd__re_longest_from_bb19 // br_cond: !payload -> else
-    b _Lb2dd__re_longest_from_bb18 // branch -> then
-_Lb2dd__re_longest_from_bb18:
+    cbz x1, _Lfd34__re_longest_from_bb19 // br_cond: !payload -> else
+    b _Lfd34__re_longest_from_bb18 // branch -> then
+_Lfd34__re_longest_from_bb18:
     ldp x0, x1, [sp, #64] // hv load L0
-    adrp x2, .LCstr4@PAGE // cstr key page
-    add x2, x2, .LCstr4@PAGEOFF // cstr key off
+    adrp x2, .LCstr4 // cstr key page
+    add x2, x2, :lo12:.LCstr4 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #816 // hv frame base
     stp x0, x1, [x15] // hv store L47
     ldp x0, x1, [sp, #64] // hv load L0
-    adrp x2, .LCstr14@PAGE // cstr key page
-    add x2, x2, .LCstr14@PAGEOFF // cstr key off
+    adrp x2, .LCstr14 // cstr key page
+    add x2, x2, :lo12:.LCstr14 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #832 // hv frame base
     stp x0, x1, [x15] // hv store L48
@@ -15651,29 +15651,29 @@ _Lb2dd__re_longest_from_bb18:
     stp x0, x1, [x15] // hv store L50
     add x15, sp, #864 // hv frame base
     ldp x0, x1, [x15] // hv load L50
-    cbz x1, _Lb2dd__re_longest_from_bb21 // br_cond: !payload -> else
-    b _Lb2dd__re_longest_from_bb20 // branch -> then
-_Lb2dd__re_longest_from_bb19:
-    b _Lb2dd__re_longest_from_bb22 // branch
-_Lb2dd__re_longest_from_bb20:
+    cbz x1, _Lfd34__re_longest_from_bb21 // br_cond: !payload -> else
+    b _Lfd34__re_longest_from_bb20 // branch -> then
+_Lfd34__re_longest_from_bb19:
+    b _Lfd34__re_longest_from_bb22 // branch
+_Lfd34__re_longest_from_bb20:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
     add x15, sp, #640 // hv frame base
     stp x0, x1, [x15] // hv store L36
-    b _Lb2dd__re_longest_from_bb21 // branch
-_Lb2dd__re_longest_from_bb21:
-    b _Lb2dd__re_longest_from_bb19 // branch
-_Lb2dd__re_longest_from_bb22:
-    b _Lb2dd__re_longest_from_bb23 // branch
-_Lb2dd__re_longest_from_bb23:
+    b _Lfd34__re_longest_from_bb21 // branch
+_Lfd34__re_longest_from_bb21:
+    b _Lfd34__re_longest_from_bb19 // branch
+_Lfd34__re_longest_from_bb22:
+    b _Lfd34__re_longest_from_bb23 // branch
+_Lfd34__re_longest_from_bb23:
     add x15, sp, #640 // hv frame base
     ldp x0, x1, [x15] // hv load L36
-    cbz x1, _Lb2dd__re_longest_from_bb25 // br_cond: !payload -> else
-    b _Lb2dd__re_longest_from_bb24 // branch -> then
-_Lb2dd__re_longest_from_bb24:
+    cbz x1, _Lfd34__re_longest_from_bb25 // br_cond: !payload -> else
+    b _Lfd34__re_longest_from_bb24 // branch -> then
+_Lfd34__re_longest_from_bb24:
     ldp x0, x1, [sp, #64] // hv load L0
-    adrp x2, .LCstr15@PAGE // cstr key page
-    add x2, x2, .LCstr15@PAGEOFF // cstr key off
+    adrp x2, .LCstr15 // cstr key page
+    add x2, x2, :lo12:.LCstr15 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     add x15, sp, #912 // hv frame base
     stp x0, x1, [x15] // hv store L53
@@ -15707,8 +15707,8 @@ _Lb2dd__re_longest_from_bb24:
     bl _re_add // call _re_add
     add x15, sp, #960 // hv frame base
     stp x0, x1, [x15] // hv store L56
-    b _Lb2dd__re_longest_from_bb25 // branch
-_Lb2dd__re_longest_from_bb25:
+    b _Lfd34__re_longest_from_bb25 // branch
+_Lfd34__re_longest_from_bb25:
     add x15, sp, #512 // hv frame base
     ldp x0, x1, [x15] // hv load L28
     movz x2, #0 // hv const_int: TAG_INT
@@ -15720,13 +15720,13 @@ _Lb2dd__re_longest_from_bb25:
     ldp x0, x1, [x15] // hv load L57
     add x15, sp, #512 // hv frame base
     stp x0, x1, [x15] // hv store L28
-    b _Lb2dd__re_longest_from_bb9 // branch
-_Lb2dd__re_longest_from_bb26:
+    b _Lfd34__re_longest_from_bb9 // branch
+_Lfd34__re_longest_from_bb26:
     ldp x0, x1, [sp, #352] // hv load L18
     stp x0, x1, [sp, #288] // hv store L14
-    b _Lb2dd__re_longest_from_bb27 // branch
-_Lb2dd__re_longest_from_bb27:
-    b _Lb2dd__re_longest_from_bb3 // branch
+    b _Lfd34__re_longest_from_bb27 // branch
+_Lfd34__re_longest_from_bb27:
+    b _Lfd34__re_longest_from_bb3 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #1056 // sp adj
@@ -15740,10 +15740,10 @@ regex_valid:
     mov x29, sp // prologue: set fp
     sub sp, sp, #32 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd_regex_valid_bb0:
+_Lfd34_regex_valid_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
@@ -15758,10 +15758,10 @@ regex_last_error:
     mov x29, sp // prologue: set fp
     sub sp, sp, #112 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd_regex_last_error_bb0:
+_Lfd34_regex_last_error_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr20@PAGE // cstr key page
-    add x2, x2, .LCstr20@PAGEOFF // cstr key off
+    adrp x2, .LCstr20 // cstr key page
+    add x2, x2, :lo12:.LCstr20 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
@@ -15770,17 +15770,17 @@ _Lb2dd_regex_last_error_bb0:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
-    cbz x1, _Lb2dd_regex_last_error_bb2 // br_cond: !payload -> else
-    b _Lb2dd_regex_last_error_bb1 // branch -> then
-_Lb2dd_regex_last_error_bb1:
+    cbz x1, _Lfd34_regex_last_error_bb2 // br_cond: !payload -> else
+    b _Lfd34_regex_last_error_bb1 // branch -> then
+_Lfd34_regex_last_error_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr21@PAGE // cstr key page
-    add x2, x2, .LCstr21@PAGEOFF // cstr key off
+    adrp x2, .LCstr21 // cstr key page
+    add x2, x2, :lo12:.LCstr21 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
-    adrp x2, .LCstr11@PAGE // cstr key page
-    add x2, x2, .LCstr11@PAGEOFF // cstr key off
+    adrp x2, .LCstr11 // cstr key page
+    add x2, x2, :lo12:.LCstr11 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
@@ -15792,7 +15792,7 @@ _Lb2dd_regex_last_error_bb1:
     add sp, sp, #112 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_last_error_bb2:
+_Lfd34_regex_last_error_bb2:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     add sp, sp, #112 // sp adj
@@ -15807,10 +15807,10 @@ regex_match:
     sub sp, sp, #224 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd_regex_match_bb0:
+_Lfd34_regex_match_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
@@ -15819,18 +15819,18 @@ _Lb2dd_regex_match_bb0:
     bl hexa_bool // unop !: box bool
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L3
-    cbz x1, _Lb2dd_regex_match_bb2 // br_cond: !payload -> else
-    b _Lb2dd_regex_match_bb1 // branch -> then
-_Lb2dd_regex_match_bb1:
+    cbz x1, _Lfd34_regex_match_bb2 // br_cond: !payload -> else
+    b _Lfd34_regex_match_bb1 // branch -> then
+_Lfd34_regex_match_bb1:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     add sp, sp, #224 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_match_bb2:
+_Lfd34_regex_match_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr20@PAGE // cstr key page
-    add x2, x2, .LCstr20@PAGEOFF // cstr key off
+    adrp x2, .LCstr20 // cstr key page
+    add x2, x2, :lo12:.LCstr20 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
@@ -15839,12 +15839,12 @@ _Lb2dd_regex_match_bb2:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv load L6
-    cbz x1, _Lb2dd_regex_match_bb4 // br_cond: !payload -> else
-    b _Lb2dd_regex_match_bb3 // branch -> then
-_Lb2dd_regex_match_bb3:
+    cbz x1, _Lfd34_regex_match_bb4 // br_cond: !payload -> else
+    b _Lfd34_regex_match_bb3 // branch -> then
+_Lfd34_regex_match_bb3:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr21@PAGE // cstr key page
-    add x2, x2, .LCstr21@PAGEOFF // cstr key off
+    adrp x2, .LCstr21 // cstr key page
+    add x2, x2, :lo12:.LCstr21 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #128] // hv store L8
     ldp x0, x1, [sp, #128] // hv load L8
@@ -15855,7 +15855,7 @@ _Lb2dd_regex_match_bb3:
     add sp, sp, #224 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_match_bb4:
+_Lfd34_regex_match_bb4:
     ldp x0, x1, [sp, #16] // hv load L1
     bl hexa_byte_len // call hexa_byte_len
     stp x0, x1, [sp, #160] // hv store L10
@@ -15885,10 +15885,10 @@ regex_search:
     sub sp, sp, #352 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd_regex_search_bb0:
+_Lfd34_regex_search_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
@@ -15897,19 +15897,19 @@ _Lb2dd_regex_search_bb0:
     bl hexa_bool // unop !: box bool
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L3
-    cbz x1, _Lb2dd_regex_search_bb2 // br_cond: !payload -> else
-    b _Lb2dd_regex_search_bb1 // branch -> then
-_Lb2dd_regex_search_bb1:
+    cbz x1, _Lfd34_regex_search_bb2 // br_cond: !payload -> else
+    b _Lfd34_regex_search_bb1 // branch -> then
+_Lfd34_regex_search_bb1:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
     add sp, sp, #352 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_search_bb2:
+_Lfd34_regex_search_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr20@PAGE // cstr key page
-    add x2, x2, .LCstr20@PAGEOFF // cstr key off
+    adrp x2, .LCstr20 // cstr key page
+    add x2, x2, :lo12:.LCstr20 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv load L6
@@ -15918,12 +15918,12 @@ _Lb2dd_regex_search_bb2:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
-    cbz x1, _Lb2dd_regex_search_bb4 // br_cond: !payload -> else
-    b _Lb2dd_regex_search_bb3 // branch -> then
-_Lb2dd_regex_search_bb3:
+    cbz x1, _Lfd34_regex_search_bb4 // br_cond: !payload -> else
+    b _Lfd34_regex_search_bb3 // branch -> then
+_Lfd34_regex_search_bb3:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr21@PAGE // cstr key page
-    add x2, x2, .LCstr21@PAGEOFF // cstr key off
+    adrp x2, .LCstr21 // cstr key page
+    add x2, x2, :lo12:.LCstr21 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv load L9
@@ -15934,7 +15934,7 @@ _Lb2dd_regex_search_bb3:
     add sp, sp, #352 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_search_bb4:
+_Lfd34_regex_search_bb4:
     ldp x0, x1, [sp, #16] // hv load L1
     bl hexa_byte_len // call hexa_byte_len
     stp x0, x1, [sp, #176] // hv store L11
@@ -15943,16 +15943,16 @@ _Lb2dd_regex_search_bb4:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #208] // hv store L13
-    b _Lb2dd_regex_search_bb5 // branch
-_Lb2dd_regex_search_bb5:
+    b _Lfd34_regex_search_bb5 // branch
+_Lfd34_regex_search_bb5:
     ldp x0, x1, [sp, #208] // hv load L13
     ldp x2, x3, [sp, #192] // hv load L12
     bl hexa_cmp_le // binop <=
     stp x0, x1, [sp, #224] // hv store L14
     ldp x0, x1, [sp, #224] // hv load L14
-    cbz x1, _Lb2dd_regex_search_bb7 // br_cond: !payload -> else
-    b _Lb2dd_regex_search_bb6 // branch -> then
-_Lb2dd_regex_search_bb6:
+    cbz x1, _Lfd34_regex_search_bb7 // br_cond: !payload -> else
+    b _Lfd34_regex_search_bb6 // branch -> then
+_Lfd34_regex_search_bb6:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #16] // hv load L1
     ldp x4, x5, [sp, #208] // hv load L13
@@ -15967,16 +15967,16 @@ _Lb2dd_regex_search_bb6:
     bl hexa_cmp_ge // binop >=
     stp x0, x1, [sp, #272] // hv store L17
     ldp x0, x1, [sp, #272] // hv load L17
-    cbz x1, _Lb2dd_regex_search_bb9 // br_cond: !payload -> else
-    b _Lb2dd_regex_search_bb8 // branch -> then
-_Lb2dd_regex_search_bb7:
+    cbz x1, _Lfd34_regex_search_bb9 // br_cond: !payload -> else
+    b _Lfd34_regex_search_bb8 // branch -> then
+_Lfd34_regex_search_bb7:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #336] // hv store L21
     ldp x0, x1, [sp, #336] // hv load L21
     add sp, sp, #352 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_search_bb8:
+_Lfd34_regex_search_bb8:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv reload L19
@@ -15991,7 +15991,7 @@ _Lb2dd_regex_search_bb8:
     add sp, sp, #352 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_search_bb9:
+_Lfd34_regex_search_bb9:
     ldp x0, x1, [sp, #208] // hv load L13
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -15999,7 +15999,7 @@ _Lb2dd_regex_search_bb9:
     stp x0, x1, [sp, #320] // hv store L20
     ldp x0, x1, [sp, #320] // hv load L20
     stp x0, x1, [sp, #208] // hv store L13
-    b _Lb2dd_regex_search_bb5 // branch
+    b _Lfd34_regex_search_bb5 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #352 // sp adj
@@ -16014,14 +16014,14 @@ regex_find_all:
     sub sp, sp, #416 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd_regex_find_all_bb0:
+_Lfd34_regex_find_all_bb0:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
@@ -16030,17 +16030,17 @@ _Lb2dd_regex_find_all_bb0:
     bl hexa_bool // unop !: box bool
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
-    cbz x1, _Lb2dd_regex_find_all_bb2 // br_cond: !payload -> else
-    b _Lb2dd_regex_find_all_bb1 // branch -> then
-_Lb2dd_regex_find_all_bb1:
+    cbz x1, _Lfd34_regex_find_all_bb2 // br_cond: !payload -> else
+    b _Lfd34_regex_find_all_bb1 // branch -> then
+_Lfd34_regex_find_all_bb1:
     ldp x0, x1, [sp, #48] // hv load L3
     add sp, sp, #416 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_find_all_bb2:
+_Lfd34_regex_find_all_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr20@PAGE // cstr key page
-    add x2, x2, .LCstr20@PAGEOFF // cstr key off
+    adrp x2, .LCstr20 // cstr key page
+    add x2, x2, :lo12:.LCstr20 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
@@ -16049,12 +16049,12 @@ _Lb2dd_regex_find_all_bb2:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #128] // hv store L8
     ldp x0, x1, [sp, #128] // hv load L8
-    cbz x1, _Lb2dd_regex_find_all_bb4 // br_cond: !payload -> else
-    b _Lb2dd_regex_find_all_bb3 // branch -> then
-_Lb2dd_regex_find_all_bb3:
+    cbz x1, _Lfd34_regex_find_all_bb4 // br_cond: !payload -> else
+    b _Lfd34_regex_find_all_bb3 // branch -> then
+_Lfd34_regex_find_all_bb3:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr21@PAGE // cstr key page
-    add x2, x2, .LCstr21@PAGEOFF // cstr key off
+    adrp x2, .LCstr21 // cstr key page
+    add x2, x2, :lo12:.LCstr21 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv load L10
@@ -16065,7 +16065,7 @@ _Lb2dd_regex_find_all_bb3:
     add sp, sp, #416 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_find_all_bb4:
+_Lfd34_regex_find_all_bb4:
     ldp x0, x1, [sp, #16] // hv load L1
     bl hexa_byte_len // call hexa_byte_len
     stp x0, x1, [sp, #192] // hv store L12
@@ -16074,16 +16074,16 @@ _Lb2dd_regex_find_all_bb4:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #224] // hv store L14
-    b _Lb2dd_regex_find_all_bb5 // branch
-_Lb2dd_regex_find_all_bb5:
+    b _Lfd34_regex_find_all_bb5 // branch
+_Lfd34_regex_find_all_bb5:
     ldp x0, x1, [sp, #224] // hv load L14
     ldp x2, x3, [sp, #208] // hv load L13
     bl hexa_cmp_le // binop <=
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv load L15
-    cbz x1, _Lb2dd_regex_find_all_bb7 // br_cond: !payload -> else
-    b _Lb2dd_regex_find_all_bb6 // branch -> then
-_Lb2dd_regex_find_all_bb6:
+    cbz x1, _Lfd34_regex_find_all_bb7 // br_cond: !payload -> else
+    b _Lfd34_regex_find_all_bb6 // branch -> then
+_Lfd34_regex_find_all_bb6:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #16] // hv load L1
     ldp x4, x5, [sp, #224] // hv load L14
@@ -16098,14 +16098,14 @@ _Lb2dd_regex_find_all_bb6:
     bl hexa_cmp_ge // binop >=
     stp x0, x1, [sp, #288] // hv store L18
     ldp x0, x1, [sp, #288] // hv load L18
-    cbz x1, _Lb2dd_regex_find_all_bb9 // br_cond: !payload -> else
-    b _Lb2dd_regex_find_all_bb8 // branch -> then
-_Lb2dd_regex_find_all_bb7:
+    cbz x1, _Lfd34_regex_find_all_bb9 // br_cond: !payload -> else
+    b _Lfd34_regex_find_all_bb8 // branch -> then
+_Lfd34_regex_find_all_bb7:
     ldp x0, x1, [sp, #48] // hv load L3
     add sp, sp, #416 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_find_all_bb8:
+_Lfd34_regex_find_all_bb8:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #320] // hv store L20
     ldp x0, x1, [sp, #320] // hv reload L20
@@ -16125,9 +16125,9 @@ _Lb2dd_regex_find_all_bb8:
     bl hexa_cmp_gt // binop >
     stp x0, x1, [sp, #352] // hv store L22
     ldp x0, x1, [sp, #352] // hv load L22
-    cbz x1, _Lb2dd_regex_find_all_bb11 // br_cond: !payload -> else
-    b _Lb2dd_regex_find_all_bb10 // branch -> then
-_Lb2dd_regex_find_all_bb9:
+    cbz x1, _Lfd34_regex_find_all_bb11 // br_cond: !payload -> else
+    b _Lfd34_regex_find_all_bb10 // branch -> then
+_Lfd34_regex_find_all_bb9:
     ldp x0, x1, [sp, #224] // hv load L14
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -16135,12 +16135,12 @@ _Lb2dd_regex_find_all_bb9:
     stp x0, x1, [sp, #400] // hv store L25
     ldp x0, x1, [sp, #400] // hv load L25
     stp x0, x1, [sp, #224] // hv store L14
-    b _Lb2dd_regex_find_all_bb13 // branch
-_Lb2dd_regex_find_all_bb10:
+    b _Lfd34_regex_find_all_bb13 // branch
+_Lfd34_regex_find_all_bb10:
     ldp x0, x1, [sp, #272] // hv load L17
     stp x0, x1, [sp, #224] // hv store L14
-    b _Lb2dd_regex_find_all_bb12 // branch
-_Lb2dd_regex_find_all_bb11:
+    b _Lfd34_regex_find_all_bb12 // branch
+_Lfd34_regex_find_all_bb11:
     ldp x0, x1, [sp, #224] // hv load L14
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -16148,11 +16148,11 @@ _Lb2dd_regex_find_all_bb11:
     stp x0, x1, [sp, #384] // hv store L24
     ldp x0, x1, [sp, #384] // hv load L24
     stp x0, x1, [sp, #224] // hv store L14
-    b _Lb2dd_regex_find_all_bb12 // branch
-_Lb2dd_regex_find_all_bb12:
-    b _Lb2dd_regex_find_all_bb13 // branch
-_Lb2dd_regex_find_all_bb13:
-    b _Lb2dd_regex_find_all_bb5 // branch
+    b _Lfd34_regex_find_all_bb12 // branch
+_Lfd34_regex_find_all_bb12:
+    b _Lfd34_regex_find_all_bb13 // branch
+_Lfd34_regex_find_all_bb13:
+    b _Lfd34_regex_find_all_bb5 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #416 // sp adj
@@ -16169,10 +16169,10 @@ regex_search_from:
     stp x2, x3, [sp, #16] // ingress param 1
     stp x4, x5, [sp, #32] // ingress param 2
     stp x6, x7, [sp, #48] // ingress param 3
-_Lb2dd_regex_search_from_bb0:
+_Lfd34_regex_search_from_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr5@PAGE // cstr key page
-    add x2, x2, .LCstr5@PAGEOFF // cstr key off
+    adrp x2, .LCstr5 // cstr key page
+    add x2, x2, :lo12:.LCstr5 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
@@ -16181,16 +16181,16 @@ _Lb2dd_regex_search_from_bb0:
     bl hexa_bool // unop !: box bool
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
-    cbz x1, _Lb2dd_regex_search_from_bb2 // br_cond: !payload -> else
-    b _Lb2dd_regex_search_from_bb1 // branch -> then
-_Lb2dd_regex_search_from_bb1:
+    cbz x1, _Lfd34_regex_search_from_bb2 // br_cond: !payload -> else
+    b _Lfd34_regex_search_from_bb1 // branch -> then
+_Lfd34_regex_search_from_bb1:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
     add sp, sp, #528 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_search_from_bb2:
+_Lfd34_regex_search_from_bb2:
     ldp x0, x1, [sp, #16] // hv load L1
     bl hexa_byte_len // call hexa_byte_len
     stp x0, x1, [sp, #128] // hv store L8
@@ -16202,19 +16202,19 @@ _Lb2dd_regex_search_from_bb2:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv load L10
-    cbz x1, _Lb2dd_regex_search_from_bb4 // br_cond: !payload -> else
-    b _Lb2dd_regex_search_from_bb3 // branch -> then
-_Lb2dd_regex_search_from_bb3:
+    cbz x1, _Lfd34_regex_search_from_bb4 // br_cond: !payload -> else
+    b _Lfd34_regex_search_from_bb3 // branch -> then
+_Lfd34_regex_search_from_bb3:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
     add sp, sp, #528 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_search_from_bb4:
+_Lfd34_regex_search_from_bb4:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr20@PAGE // cstr key page
-    add x2, x2, .LCstr20@PAGEOFF // cstr key off
+    adrp x2, .LCstr20 // cstr key page
+    add x2, x2, :lo12:.LCstr20 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #208] // hv store L13
     ldp x0, x1, [sp, #208] // hv load L13
@@ -16223,12 +16223,12 @@ _Lb2dd_regex_search_from_bb4:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #224] // hv store L14
     ldp x0, x1, [sp, #224] // hv load L14
-    cbz x1, _Lb2dd_regex_search_from_bb6 // br_cond: !payload -> else
-    b _Lb2dd_regex_search_from_bb5 // branch -> then
-_Lb2dd_regex_search_from_bb5:
+    cbz x1, _Lfd34_regex_search_from_bb6 // br_cond: !payload -> else
+    b _Lfd34_regex_search_from_bb5 // branch -> then
+_Lfd34_regex_search_from_bb5:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, .LCstr21@PAGE // cstr key page
-    add x2, x2, .LCstr21@PAGEOFF // cstr key off
+    adrp x2, .LCstr21 // cstr key page
+    add x2, x2, :lo12:.LCstr21 // cstr key off
     bl hexa_map_get // field: hexa_map_get
     stp x0, x1, [sp, #256] // hv store L16
     ldp x0, x1, [sp, #256] // hv load L16
@@ -16240,19 +16240,19 @@ _Lb2dd_regex_search_from_bb5:
     add sp, sp, #528 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_search_from_bb6:
+_Lfd34_regex_search_from_bb6:
     ldp x0, x1, [sp, #32] // hv load L2
     stp x0, x1, [sp, #288] // hv store L18
-    b _Lb2dd_regex_search_from_bb7 // branch
-_Lb2dd_regex_search_from_bb7:
+    b _Lfd34_regex_search_from_bb7 // branch
+_Lfd34_regex_search_from_bb7:
     ldp x0, x1, [sp, #288] // hv load L18
     ldp x2, x3, [sp, #144] // hv load L9
     bl hexa_cmp_le // binop <=
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv load L19
-    cbz x1, _Lb2dd_regex_search_from_bb9 // br_cond: !payload -> else
-    b _Lb2dd_regex_search_from_bb8 // branch -> then
-_Lb2dd_regex_search_from_bb8:
+    cbz x1, _Lfd34_regex_search_from_bb9 // br_cond: !payload -> else
+    b _Lfd34_regex_search_from_bb8 // branch -> then
+_Lfd34_regex_search_from_bb8:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #16] // hv load L1
     ldp x4, x5, [sp, #288] // hv load L18
@@ -16267,9 +16267,9 @@ _Lb2dd_regex_search_from_bb8:
     bl hexa_cmp_ge // binop >=
     stp x0, x1, [sp, #352] // hv store L22
     ldp x0, x1, [sp, #352] // hv load L22
-    cbz x1, _Lb2dd_regex_search_from_bb11 // br_cond: !payload -> else
-    b _Lb2dd_regex_search_from_bb10 // branch -> then
-_Lb2dd_regex_search_from_bb9:
+    cbz x1, _Lfd34_regex_search_from_bb11 // br_cond: !payload -> else
+    b _Lfd34_regex_search_from_bb10 // branch -> then
+_Lfd34_regex_search_from_bb9:
     bl hexa_array_new // array_lit: new array
     add x15, sp, #512 // hv frame base
     stp x0, x1, [x15] // hv store L32
@@ -16278,11 +16278,11 @@ _Lb2dd_regex_search_from_bb9:
     add sp, sp, #528 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_regex_search_from_bb10:
+_Lfd34_regex_search_from_bb10:
     ldp x0, x1, [sp, #48] // hv load L3
-    cbz x1, _Lb2dd_regex_search_from_bb13 // br_cond: !payload -> else
-    b _Lb2dd_regex_search_from_bb12 // branch -> then
-_Lb2dd_regex_search_from_bb11:
+    cbz x1, _Lfd34_regex_search_from_bb13 // br_cond: !payload -> else
+    b _Lfd34_regex_search_from_bb12 // branch -> then
+_Lfd34_regex_search_from_bb11:
     ldp x0, x1, [sp, #288] // hv load L18
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -16290,8 +16290,8 @@ _Lb2dd_regex_search_from_bb11:
     stp x0, x1, [sp, #496] // hv store L31
     ldp x0, x1, [sp, #496] // hv load L31
     stp x0, x1, [sp, #288] // hv store L18
-    b _Lb2dd_regex_search_from_bb7 // branch
-_Lb2dd_regex_search_from_bb12:
+    b _Lfd34_regex_search_from_bb7 // branch
+_Lfd34_regex_search_from_bb12:
     ldp x0, x1, [sp, #288] // hv load L18
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
@@ -16299,16 +16299,16 @@ _Lb2dd_regex_search_from_bb12:
     stp x0, x1, [sp, #400] // hv store L25
     ldp x0, x1, [sp, #400] // hv load L25
     stp x0, x1, [sp, #384] // hv store L24
-    b _Lb2dd_regex_search_from_bb14 // branch
-_Lb2dd_regex_search_from_bb13:
+    b _Lfd34_regex_search_from_bb14 // branch
+_Lfd34_regex_search_from_bb13:
     ldp x0, x1, [sp, #48] // hv load L3
     stp x0, x1, [sp, #384] // hv store L24
-    b _Lb2dd_regex_search_from_bb14 // branch
-_Lb2dd_regex_search_from_bb14:
+    b _Lfd34_regex_search_from_bb14 // branch
+_Lfd34_regex_search_from_bb14:
     ldp x0, x1, [sp, #384] // hv load L24
-    cbz x1, _Lb2dd_regex_search_from_bb16 // br_cond: !payload -> else
-    b _Lb2dd_regex_search_from_bb15 // branch -> then
-_Lb2dd_regex_search_from_bb15:
+    cbz x1, _Lfd34_regex_search_from_bb16 // br_cond: !payload -> else
+    b _Lfd34_regex_search_from_bb15 // branch -> then
+_Lfd34_regex_search_from_bb15:
     ldp x0, x1, [sp, #336] // hv load L21
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
@@ -16316,16 +16316,16 @@ _Lb2dd_regex_search_from_bb15:
     stp x0, x1, [sp, #432] // hv store L27
     ldp x0, x1, [sp, #432] // hv load L27
     stp x0, x1, [sp, #416] // hv store L26
-    b _Lb2dd_regex_search_from_bb17 // branch
-_Lb2dd_regex_search_from_bb16:
+    b _Lfd34_regex_search_from_bb17 // branch
+_Lfd34_regex_search_from_bb16:
     ldp x0, x1, [sp, #384] // hv load L24
     stp x0, x1, [sp, #416] // hv store L26
-    b _Lb2dd_regex_search_from_bb17 // branch
-_Lb2dd_regex_search_from_bb17:
+    b _Lfd34_regex_search_from_bb17 // branch
+_Lfd34_regex_search_from_bb17:
     ldp x0, x1, [sp, #416] // hv load L26
-    cbz x1, _Lb2dd_regex_search_from_bb19 // br_cond: !payload -> else
-    b _Lb2dd_regex_search_from_bb18 // branch -> then
-_Lb2dd_regex_search_from_bb18:
+    cbz x1, _Lfd34_regex_search_from_bb19 // br_cond: !payload -> else
+    b _Lfd34_regex_search_from_bb18 // branch -> then
+_Lfd34_regex_search_from_bb18:
     ldp x0, x1, [sp, #288] // hv load L18
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -16333,8 +16333,8 @@ _Lb2dd_regex_search_from_bb18:
     stp x0, x1, [sp, #464] // hv store L29
     ldp x0, x1, [sp, #464] // hv load L29
     stp x0, x1, [sp, #288] // hv store L18
-    b _Lb2dd_regex_search_from_bb7 // branch
-_Lb2dd_regex_search_from_bb19:
+    b _Lfd34_regex_search_from_bb7 // branch
+_Lfd34_regex_search_from_bb19:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #480] // hv store L30
     ldp x0, x1, [sp, #480] // hv reload L30
@@ -16357,16 +16357,16 @@ _rt_re_fold_byte:
     mov x29, sp // prologue: set fp
     sub sp, sp, #96 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__rt_re_fold_byte_bb0:
+_Lfd34__rt_re_fold_byte_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #65 // hv const_int val
     bl hexa_cmp_ge // binop >=
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
-    cbz x1, _Lb2dd__rt_re_fold_byte_bb2 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_fold_byte_bb1 // branch -> then
-_Lb2dd__rt_re_fold_byte_bb1:
+    cbz x1, _Lfd34__rt_re_fold_byte_bb2 // br_cond: !payload -> else
+    b _Lfd34__rt_re_fold_byte_bb1 // branch -> then
+_Lfd34__rt_re_fold_byte_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #90 // hv const_int val
@@ -16374,16 +16374,16 @@ _Lb2dd__rt_re_fold_byte_bb1:
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L3
     stp x0, x1, [sp, #32] // hv store L2
-    b _Lb2dd__rt_re_fold_byte_bb3 // branch
-_Lb2dd__rt_re_fold_byte_bb2:
+    b _Lfd34__rt_re_fold_byte_bb3 // branch
+_Lfd34__rt_re_fold_byte_bb2:
     ldp x0, x1, [sp, #16] // hv load L1
     stp x0, x1, [sp, #32] // hv store L2
-    b _Lb2dd__rt_re_fold_byte_bb3 // branch
-_Lb2dd__rt_re_fold_byte_bb3:
+    b _Lfd34__rt_re_fold_byte_bb3 // branch
+_Lfd34__rt_re_fold_byte_bb3:
     ldp x0, x1, [sp, #32] // hv load L2
-    cbz x1, _Lb2dd__rt_re_fold_byte_bb5 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_fold_byte_bb4 // branch -> then
-_Lb2dd__rt_re_fold_byte_bb4:
+    cbz x1, _Lfd34__rt_re_fold_byte_bb5 // br_cond: !payload -> else
+    b _Lfd34__rt_re_fold_byte_bb4 // branch -> then
+_Lfd34__rt_re_fold_byte_bb4:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #32 // hv const_int val
@@ -16393,7 +16393,7 @@ _Lb2dd__rt_re_fold_byte_bb4:
     add sp, sp, #96 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__rt_re_fold_byte_bb5:
+_Lfd34__rt_re_fold_byte_bb5:
     ldp x0, x1, [sp, #0] // hv load L0
     add sp, sp, #96 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
@@ -16406,29 +16406,29 @@ _rt_re_ascii_fold:
     mov x29, sp // prologue: set fp
     sub sp, sp, #176 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__rt_re_ascii_fold_bb0:
+_Lfd34__rt_re_ascii_fold_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_byte_len // call hexa_byte_len
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
     stp x0, x1, [sp, #32] // hv store L2
     movz x0, #3 // hv const_str: TAG_STR
-    adrp x1, .LCstr24@PAGE // hv str ptr page
-    add x1, x1, .LCstr24@PAGEOFF // hv str ptr off
+    adrp x1, .LCstr24 // hv str ptr page
+    add x1, x1, :lo12:.LCstr24 // hv str ptr off
     stp x0, x1, [sp, #48] // hv store L3
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd__rt_re_ascii_fold_bb1 // branch
-_Lb2dd__rt_re_ascii_fold_bb1:
+    b _Lfd34__rt_re_ascii_fold_bb1 // branch
+_Lfd34__rt_re_ascii_fold_bb1:
     ldp x0, x1, [sp, #64] // hv load L4
     ldp x2, x3, [sp, #32] // hv load L2
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
-    cbz x1, _Lb2dd__rt_re_ascii_fold_bb3 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_ascii_fold_bb2 // branch -> then
-_Lb2dd__rt_re_ascii_fold_bb2:
+    cbz x1, _Lfd34__rt_re_ascii_fold_bb3 // br_cond: !payload -> else
+    b _Lfd34__rt_re_ascii_fold_bb2 // branch -> then
+_Lfd34__rt_re_ascii_fold_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #64] // hv load L4
     bl hexa_str_byte_at // call hexa_str_byte_at
@@ -16452,8 +16452,8 @@ _Lb2dd__rt_re_ascii_fold_bb2:
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv load L10
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd__rt_re_ascii_fold_bb1 // branch
-_Lb2dd__rt_re_ascii_fold_bb3:
+    b _Lfd34__rt_re_ascii_fold_bb1 // branch
+_Lfd34__rt_re_ascii_fold_bb3:
     ldp x0, x1, [sp, #48] // hv load L3
     add sp, sp, #176 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
@@ -16466,7 +16466,7 @@ _rt_re_strip_iflag:
     mov x29, sp // prologue: set fp
     sub sp, sp, #320 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__rt_re_strip_iflag_bb0:
+_Lfd34__rt_re_strip_iflag_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_byte_len // call hexa_byte_len
     stp x0, x1, [sp, #16] // hv store L1
@@ -16478,9 +16478,9 @@ _Lb2dd__rt_re_strip_iflag_bb0:
     bl hexa_cmp_ge // binop >=
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L3
-    cbz x1, _Lb2dd__rt_re_strip_iflag_bb2 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_strip_iflag_bb1 // branch -> then
-_Lb2dd__rt_re_strip_iflag_bb1:
+    cbz x1, _Lfd34__rt_re_strip_iflag_bb2 // br_cond: !payload -> else
+    b _Lfd34__rt_re_strip_iflag_bb1 // branch -> then
+_Lfd34__rt_re_strip_iflag_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
@@ -16493,16 +16493,16 @@ _Lb2dd__rt_re_strip_iflag_bb1:
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv load L6
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd__rt_re_strip_iflag_bb3 // branch
-_Lb2dd__rt_re_strip_iflag_bb2:
+    b _Lfd34__rt_re_strip_iflag_bb3 // branch
+_Lfd34__rt_re_strip_iflag_bb2:
     ldp x0, x1, [sp, #48] // hv load L3
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd__rt_re_strip_iflag_bb3 // branch
-_Lb2dd__rt_re_strip_iflag_bb3:
+    b _Lfd34__rt_re_strip_iflag_bb3 // branch
+_Lfd34__rt_re_strip_iflag_bb3:
     ldp x0, x1, [sp, #64] // hv load L4
-    cbz x1, _Lb2dd__rt_re_strip_iflag_bb5 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_strip_iflag_bb4 // branch -> then
-_Lb2dd__rt_re_strip_iflag_bb4:
+    cbz x1, _Lfd34__rt_re_strip_iflag_bb5 // br_cond: !payload -> else
+    b _Lfd34__rt_re_strip_iflag_bb4 // branch -> then
+_Lfd34__rt_re_strip_iflag_bb4:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -16515,16 +16515,16 @@ _Lb2dd__rt_re_strip_iflag_bb4:
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv load L9
     stp x0, x1, [sp, #112] // hv store L7
-    b _Lb2dd__rt_re_strip_iflag_bb6 // branch
-_Lb2dd__rt_re_strip_iflag_bb5:
+    b _Lfd34__rt_re_strip_iflag_bb6 // branch
+_Lfd34__rt_re_strip_iflag_bb5:
     ldp x0, x1, [sp, #64] // hv load L4
     stp x0, x1, [sp, #112] // hv store L7
-    b _Lb2dd__rt_re_strip_iflag_bb6 // branch
-_Lb2dd__rt_re_strip_iflag_bb6:
+    b _Lfd34__rt_re_strip_iflag_bb6 // branch
+_Lfd34__rt_re_strip_iflag_bb6:
     ldp x0, x1, [sp, #112] // hv load L7
-    cbz x1, _Lb2dd__rt_re_strip_iflag_bb8 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_strip_iflag_bb7 // branch -> then
-_Lb2dd__rt_re_strip_iflag_bb7:
+    cbz x1, _Lfd34__rt_re_strip_iflag_bb8 // br_cond: !payload -> else
+    b _Lfd34__rt_re_strip_iflag_bb7 // branch -> then
+_Lfd34__rt_re_strip_iflag_bb7:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -16537,16 +16537,16 @@ _Lb2dd__rt_re_strip_iflag_bb7:
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
     stp x0, x1, [sp, #160] // hv store L10
-    b _Lb2dd__rt_re_strip_iflag_bb9 // branch
-_Lb2dd__rt_re_strip_iflag_bb8:
+    b _Lfd34__rt_re_strip_iflag_bb9 // branch
+_Lfd34__rt_re_strip_iflag_bb8:
     ldp x0, x1, [sp, #112] // hv load L7
     stp x0, x1, [sp, #160] // hv store L10
-    b _Lb2dd__rt_re_strip_iflag_bb9 // branch
-_Lb2dd__rt_re_strip_iflag_bb9:
+    b _Lfd34__rt_re_strip_iflag_bb9 // branch
+_Lfd34__rt_re_strip_iflag_bb9:
     ldp x0, x1, [sp, #160] // hv load L10
-    cbz x1, _Lb2dd__rt_re_strip_iflag_bb11 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_strip_iflag_bb10 // branch -> then
-_Lb2dd__rt_re_strip_iflag_bb10:
+    cbz x1, _Lfd34__rt_re_strip_iflag_bb11 // br_cond: !payload -> else
+    b _Lfd34__rt_re_strip_iflag_bb10 // branch -> then
+_Lfd34__rt_re_strip_iflag_bb10:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #3 // hv const_int val
@@ -16559,16 +16559,16 @@ _Lb2dd__rt_re_strip_iflag_bb10:
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv load L15
     stp x0, x1, [sp, #208] // hv store L13
-    b _Lb2dd__rt_re_strip_iflag_bb12 // branch
-_Lb2dd__rt_re_strip_iflag_bb11:
+    b _Lfd34__rt_re_strip_iflag_bb12 // branch
+_Lfd34__rt_re_strip_iflag_bb11:
     ldp x0, x1, [sp, #160] // hv load L10
     stp x0, x1, [sp, #208] // hv store L13
-    b _Lb2dd__rt_re_strip_iflag_bb12 // branch
-_Lb2dd__rt_re_strip_iflag_bb12:
+    b _Lfd34__rt_re_strip_iflag_bb12 // branch
+_Lfd34__rt_re_strip_iflag_bb12:
     ldp x0, x1, [sp, #208] // hv load L13
-    cbz x1, _Lb2dd__rt_re_strip_iflag_bb14 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_strip_iflag_bb13 // branch -> then
-_Lb2dd__rt_re_strip_iflag_bb13:
+    cbz x1, _Lfd34__rt_re_strip_iflag_bb14 // br_cond: !payload -> else
+    b _Lfd34__rt_re_strip_iflag_bb13 // branch -> then
+_Lfd34__rt_re_strip_iflag_bb13:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #4 // hv const_int val
@@ -16583,15 +16583,15 @@ _Lb2dd__rt_re_strip_iflag_bb13:
     stp x0, x1, [sp, #288] // hv store L18
     ldp x0, x1, [sp, #288] // hv reload L18
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr25@PAGE // hv str ptr page
-    add x3, x3, .LCstr25@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr25 // hv str ptr page
+    add x3, x3, :lo12:.LCstr25 // hv str ptr off
     bl hexa_array_push // array_lit: push elem 1
     stp x0, x1, [sp, #288] // hv store L18
     ldp x0, x1, [sp, #288] // hv load L18
     add sp, sp, #320 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__rt_re_strip_iflag_bb14:
+_Lfd34__rt_re_strip_iflag_bb14:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv reload L19
@@ -16600,8 +16600,8 @@ _Lb2dd__rt_re_strip_iflag_bb14:
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv reload L19
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr26@PAGE // hv str ptr page
-    add x3, x3, .LCstr26@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr26 // hv str ptr page
+    add x3, x3, :lo12:.LCstr26 // hv str ptr off
     bl hexa_array_push // array_lit: push elem 1
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv load L19
@@ -16616,15 +16616,15 @@ _rt_re_pcre_literal:
     mov x29, sp // prologue: set fp
     sub sp, sp, #784 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__rt_re_pcre_literal_bb0:
+_Lfd34__rt_re_pcre_literal_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_byte_len // call hexa_byte_len
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
     stp x0, x1, [sp, #32] // hv store L2
     movz x0, #3 // hv const_str: TAG_STR
-    adrp x1, .LCstr24@PAGE // hv str ptr page
-    add x1, x1, .LCstr24@PAGEOFF // hv str ptr off
+    adrp x1, .LCstr24 // hv str ptr page
+    add x1, x1, :lo12:.LCstr24 // hv str ptr off
     stp x0, x1, [sp, #48] // hv store L3
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
@@ -16632,16 +16632,16 @@ _Lb2dd__rt_re_pcre_literal_bb0:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     stp x0, x1, [sp, #80] // hv store L5
-    b _Lb2dd__rt_re_pcre_literal_bb1 // branch
-_Lb2dd__rt_re_pcre_literal_bb1:
+    b _Lfd34__rt_re_pcre_literal_bb1 // branch
+_Lfd34__rt_re_pcre_literal_bb1:
     ldp x0, x1, [sp, #64] // hv load L4
     ldp x2, x3, [sp, #32] // hv load L2
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv load L6
-    cbz x1, _Lb2dd__rt_re_pcre_literal_bb3 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_pcre_literal_bb2 // branch -> then
-_Lb2dd__rt_re_pcre_literal_bb2:
+    cbz x1, _Lfd34__rt_re_pcre_literal_bb3 // br_cond: !payload -> else
+    b _Lfd34__rt_re_pcre_literal_bb2 // branch -> then
+_Lfd34__rt_re_pcre_literal_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #64] // hv load L4
     bl hexa_str_byte_at // call hexa_str_byte_at
@@ -16654,14 +16654,14 @@ _Lb2dd__rt_re_pcre_literal_bb2:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv load L9
-    cbz x1, _Lb2dd__rt_re_pcre_literal_bb5 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_pcre_literal_bb4 // branch -> then
-_Lb2dd__rt_re_pcre_literal_bb3:
+    cbz x1, _Lfd34__rt_re_pcre_literal_bb5 // br_cond: !payload -> else
+    b _Lfd34__rt_re_pcre_literal_bb4 // branch -> then
+_Lfd34__rt_re_pcre_literal_bb3:
     ldp x0, x1, [sp, #48] // hv load L3
     add sp, sp, #784 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__rt_re_pcre_literal_bb4:
+_Lfd34__rt_re_pcre_literal_bb4:
     ldp x0, x1, [sp, #64] // hv load L4
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -16673,16 +16673,16 @@ _Lb2dd__rt_re_pcre_literal_bb4:
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
     stp x0, x1, [sp, #160] // hv store L10
-    b _Lb2dd__rt_re_pcre_literal_bb6 // branch
-_Lb2dd__rt_re_pcre_literal_bb5:
+    b _Lfd34__rt_re_pcre_literal_bb6 // branch
+_Lfd34__rt_re_pcre_literal_bb5:
     ldp x0, x1, [sp, #144] // hv load L9
     stp x0, x1, [sp, #160] // hv store L10
-    b _Lb2dd__rt_re_pcre_literal_bb6 // branch
-_Lb2dd__rt_re_pcre_literal_bb6:
+    b _Lfd34__rt_re_pcre_literal_bb6 // branch
+_Lfd34__rt_re_pcre_literal_bb6:
     ldp x0, x1, [sp, #160] // hv load L10
-    cbz x1, _Lb2dd__rt_re_pcre_literal_bb8 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_pcre_literal_bb7 // branch -> then
-_Lb2dd__rt_re_pcre_literal_bb7:
+    cbz x1, _Lfd34__rt_re_pcre_literal_bb8 // br_cond: !payload -> else
+    b _Lfd34__rt_re_pcre_literal_bb7 // branch -> then
+_Lfd34__rt_re_pcre_literal_bb7:
     ldp x0, x1, [sp, #64] // hv load L4
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -16700,9 +16700,9 @@ _Lb2dd__rt_re_pcre_literal_bb7:
     bl hexa_bool // unop !: box bool
     stp x0, x1, [sp, #272] // hv store L17
     ldp x0, x1, [sp, #272] // hv load L17
-    cbz x1, _Lb2dd__rt_re_pcre_literal_bb10 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_pcre_literal_bb9 // branch -> then
-_Lb2dd__rt_re_pcre_literal_bb8:
+    cbz x1, _Lfd34__rt_re_pcre_literal_bb10 // br_cond: !payload -> else
+    b _Lfd34__rt_re_pcre_literal_bb9 // branch -> then
+_Lfd34__rt_re_pcre_literal_bb8:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #91 // hv const_int val
@@ -16711,26 +16711,26 @@ _Lb2dd__rt_re_pcre_literal_bb8:
     stp x0, x1, [x15] // hv store L39
     add x15, sp, #624 // hv frame base
     ldp x0, x1, [x15] // hv load L39
-    cbz x1, _Lb2dd__rt_re_pcre_literal_bb30 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_pcre_literal_bb29 // branch -> then
-_Lb2dd__rt_re_pcre_literal_bb9:
+    cbz x1, _Lfd34__rt_re_pcre_literal_bb30 // br_cond: !payload -> else
+    b _Lfd34__rt_re_pcre_literal_bb29 // branch -> then
+_Lfd34__rt_re_pcre_literal_bb9:
     ldp x0, x1, [sp, #256] // hv load L16
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #100 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv load L19
-    cbz x1, _Lb2dd__rt_re_pcre_literal_bb12 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_pcre_literal_bb11 // branch -> then
-_Lb2dd__rt_re_pcre_literal_bb10:
+    cbz x1, _Lfd34__rt_re_pcre_literal_bb12 // br_cond: !payload -> else
+    b _Lfd34__rt_re_pcre_literal_bb11 // branch -> then
+_Lfd34__rt_re_pcre_literal_bb10:
     ldp x0, x1, [sp, #272] // hv load L17
     stp x0, x1, [sp, #288] // hv store L18
-    b _Lb2dd__rt_re_pcre_literal_bb26 // branch
-_Lb2dd__rt_re_pcre_literal_bb11:
+    b _Lfd34__rt_re_pcre_literal_bb26 // branch
+_Lfd34__rt_re_pcre_literal_bb11:
     ldp x0, x1, [sp, #304] // hv load L19
     stp x0, x1, [sp, #320] // hv store L20
-    b _Lb2dd__rt_re_pcre_literal_bb13 // branch
-_Lb2dd__rt_re_pcre_literal_bb12:
+    b _Lfd34__rt_re_pcre_literal_bb13 // branch
+_Lfd34__rt_re_pcre_literal_bb12:
     ldp x0, x1, [sp, #256] // hv load L16
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #68 // hv const_int val
@@ -16738,16 +16738,16 @@ _Lb2dd__rt_re_pcre_literal_bb12:
     stp x0, x1, [sp, #336] // hv store L21
     ldp x0, x1, [sp, #336] // hv load L21
     stp x0, x1, [sp, #320] // hv store L20
-    b _Lb2dd__rt_re_pcre_literal_bb13 // branch
-_Lb2dd__rt_re_pcre_literal_bb13:
+    b _Lfd34__rt_re_pcre_literal_bb13 // branch
+_Lfd34__rt_re_pcre_literal_bb13:
     ldp x0, x1, [sp, #320] // hv load L20
-    cbz x1, _Lb2dd__rt_re_pcre_literal_bb15 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_pcre_literal_bb14 // branch -> then
-_Lb2dd__rt_re_pcre_literal_bb14:
+    cbz x1, _Lfd34__rt_re_pcre_literal_bb15 // br_cond: !payload -> else
+    b _Lfd34__rt_re_pcre_literal_bb14 // branch -> then
+_Lfd34__rt_re_pcre_literal_bb14:
     ldp x0, x1, [sp, #320] // hv load L20
     stp x0, x1, [sp, #352] // hv store L22
-    b _Lb2dd__rt_re_pcre_literal_bb16 // branch
-_Lb2dd__rt_re_pcre_literal_bb15:
+    b _Lfd34__rt_re_pcre_literal_bb16 // branch
+_Lfd34__rt_re_pcre_literal_bb15:
     ldp x0, x1, [sp, #256] // hv load L16
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #119 // hv const_int val
@@ -16755,16 +16755,16 @@ _Lb2dd__rt_re_pcre_literal_bb15:
     stp x0, x1, [sp, #368] // hv store L23
     ldp x0, x1, [sp, #368] // hv load L23
     stp x0, x1, [sp, #352] // hv store L22
-    b _Lb2dd__rt_re_pcre_literal_bb16 // branch
-_Lb2dd__rt_re_pcre_literal_bb16:
+    b _Lfd34__rt_re_pcre_literal_bb16 // branch
+_Lfd34__rt_re_pcre_literal_bb16:
     ldp x0, x1, [sp, #352] // hv load L22
-    cbz x1, _Lb2dd__rt_re_pcre_literal_bb18 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_pcre_literal_bb17 // branch -> then
-_Lb2dd__rt_re_pcre_literal_bb17:
+    cbz x1, _Lfd34__rt_re_pcre_literal_bb18 // br_cond: !payload -> else
+    b _Lfd34__rt_re_pcre_literal_bb17 // branch -> then
+_Lfd34__rt_re_pcre_literal_bb17:
     ldp x0, x1, [sp, #352] // hv load L22
     stp x0, x1, [sp, #384] // hv store L24
-    b _Lb2dd__rt_re_pcre_literal_bb19 // branch
-_Lb2dd__rt_re_pcre_literal_bb18:
+    b _Lfd34__rt_re_pcre_literal_bb19 // branch
+_Lfd34__rt_re_pcre_literal_bb18:
     ldp x0, x1, [sp, #256] // hv load L16
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #87 // hv const_int val
@@ -16772,16 +16772,16 @@ _Lb2dd__rt_re_pcre_literal_bb18:
     stp x0, x1, [sp, #400] // hv store L25
     ldp x0, x1, [sp, #400] // hv load L25
     stp x0, x1, [sp, #384] // hv store L24
-    b _Lb2dd__rt_re_pcre_literal_bb19 // branch
-_Lb2dd__rt_re_pcre_literal_bb19:
+    b _Lfd34__rt_re_pcre_literal_bb19 // branch
+_Lfd34__rt_re_pcre_literal_bb19:
     ldp x0, x1, [sp, #384] // hv load L24
-    cbz x1, _Lb2dd__rt_re_pcre_literal_bb21 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_pcre_literal_bb20 // branch -> then
-_Lb2dd__rt_re_pcre_literal_bb20:
+    cbz x1, _Lfd34__rt_re_pcre_literal_bb21 // br_cond: !payload -> else
+    b _Lfd34__rt_re_pcre_literal_bb20 // branch -> then
+_Lfd34__rt_re_pcre_literal_bb20:
     ldp x0, x1, [sp, #384] // hv load L24
     stp x0, x1, [sp, #416] // hv store L26
-    b _Lb2dd__rt_re_pcre_literal_bb22 // branch
-_Lb2dd__rt_re_pcre_literal_bb21:
+    b _Lfd34__rt_re_pcre_literal_bb22 // branch
+_Lfd34__rt_re_pcre_literal_bb21:
     ldp x0, x1, [sp, #256] // hv load L16
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #115 // hv const_int val
@@ -16789,16 +16789,16 @@ _Lb2dd__rt_re_pcre_literal_bb21:
     stp x0, x1, [sp, #432] // hv store L27
     ldp x0, x1, [sp, #432] // hv load L27
     stp x0, x1, [sp, #416] // hv store L26
-    b _Lb2dd__rt_re_pcre_literal_bb22 // branch
-_Lb2dd__rt_re_pcre_literal_bb22:
+    b _Lfd34__rt_re_pcre_literal_bb22 // branch
+_Lfd34__rt_re_pcre_literal_bb22:
     ldp x0, x1, [sp, #416] // hv load L26
-    cbz x1, _Lb2dd__rt_re_pcre_literal_bb24 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_pcre_literal_bb23 // branch -> then
-_Lb2dd__rt_re_pcre_literal_bb23:
+    cbz x1, _Lfd34__rt_re_pcre_literal_bb24 // br_cond: !payload -> else
+    b _Lfd34__rt_re_pcre_literal_bb23 // branch -> then
+_Lfd34__rt_re_pcre_literal_bb23:
     ldp x0, x1, [sp, #416] // hv load L26
     stp x0, x1, [sp, #448] // hv store L28
-    b _Lb2dd__rt_re_pcre_literal_bb25 // branch
-_Lb2dd__rt_re_pcre_literal_bb24:
+    b _Lfd34__rt_re_pcre_literal_bb25 // branch
+_Lfd34__rt_re_pcre_literal_bb24:
     ldp x0, x1, [sp, #256] // hv load L16
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #83 // hv const_int val
@@ -16806,16 +16806,16 @@ _Lb2dd__rt_re_pcre_literal_bb24:
     stp x0, x1, [sp, #464] // hv store L29
     ldp x0, x1, [sp, #464] // hv load L29
     stp x0, x1, [sp, #448] // hv store L28
-    b _Lb2dd__rt_re_pcre_literal_bb25 // branch
-_Lb2dd__rt_re_pcre_literal_bb25:
+    b _Lfd34__rt_re_pcre_literal_bb25 // branch
+_Lfd34__rt_re_pcre_literal_bb25:
     ldp x0, x1, [sp, #448] // hv load L28
     stp x0, x1, [sp, #288] // hv store L18
-    b _Lb2dd__rt_re_pcre_literal_bb26 // branch
-_Lb2dd__rt_re_pcre_literal_bb26:
+    b _Lfd34__rt_re_pcre_literal_bb26 // branch
+_Lfd34__rt_re_pcre_literal_bb26:
     ldp x0, x1, [sp, #288] // hv load L18
-    cbz x1, _Lb2dd__rt_re_pcre_literal_bb28 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_pcre_literal_bb27 // branch -> then
-_Lb2dd__rt_re_pcre_literal_bb27:
+    cbz x1, _Lfd34__rt_re_pcre_literal_bb28 // br_cond: !payload -> else
+    b _Lfd34__rt_re_pcre_literal_bb27 // branch -> then
+_Lfd34__rt_re_pcre_literal_bb27:
     ldp x0, x1, [sp, #256] // hv load L16
     bl hexa_chr_byte // call hexa_chr_byte
     stp x0, x1, [sp, #496] // hv store L31
@@ -16836,8 +16836,8 @@ _Lb2dd__rt_re_pcre_literal_bb27:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L33
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd__rt_re_pcre_literal_bb1 // branch
-_Lb2dd__rt_re_pcre_literal_bb28:
+    b _Lfd34__rt_re_pcre_literal_bb1 // branch
+_Lfd34__rt_re_pcre_literal_bb28:
     ldp x0, x1, [sp, #128] // hv load L8
     bl hexa_chr_byte // call hexa_chr_byte
     add x15, sp, #544 // hv frame base
@@ -16873,8 +16873,8 @@ _Lb2dd__rt_re_pcre_literal_bb28:
     add x15, sp, #608 // hv frame base
     ldp x0, x1, [x15] // hv load L38
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd__rt_re_pcre_literal_bb1 // branch
-_Lb2dd__rt_re_pcre_literal_bb29:
+    b _Lfd34__rt_re_pcre_literal_bb1 // branch
+_Lfd34__rt_re_pcre_literal_bb29:
     ldp x0, x1, [sp, #80] // hv load L5
     bl hexa_truthy // unop !: truthy → w0
     eor x0, x0, #1 // unop !: !truthy
@@ -16885,24 +16885,24 @@ _Lb2dd__rt_re_pcre_literal_bb29:
     ldp x0, x1, [x15] // hv load L41
     add x15, sp, #640 // hv frame base
     stp x0, x1, [x15] // hv store L40
-    b _Lb2dd__rt_re_pcre_literal_bb31 // branch
-_Lb2dd__rt_re_pcre_literal_bb30:
+    b _Lfd34__rt_re_pcre_literal_bb31 // branch
+_Lfd34__rt_re_pcre_literal_bb30:
     add x15, sp, #624 // hv frame base
     ldp x0, x1, [x15] // hv load L39
     add x15, sp, #640 // hv frame base
     stp x0, x1, [x15] // hv store L40
-    b _Lb2dd__rt_re_pcre_literal_bb31 // branch
-_Lb2dd__rt_re_pcre_literal_bb31:
+    b _Lfd34__rt_re_pcre_literal_bb31 // branch
+_Lfd34__rt_re_pcre_literal_bb31:
     add x15, sp, #640 // hv frame base
     ldp x0, x1, [x15] // hv load L40
-    cbz x1, _Lb2dd__rt_re_pcre_literal_bb33 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_pcre_literal_bb32 // branch -> then
-_Lb2dd__rt_re_pcre_literal_bb32:
+    cbz x1, _Lfd34__rt_re_pcre_literal_bb33 // br_cond: !payload -> else
+    b _Lfd34__rt_re_pcre_literal_bb32 // branch -> then
+_Lfd34__rt_re_pcre_literal_bb32:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
     stp x0, x1, [sp, #80] // hv store L5
-    b _Lb2dd__rt_re_pcre_literal_bb39 // branch
-_Lb2dd__rt_re_pcre_literal_bb33:
+    b _Lfd34__rt_re_pcre_literal_bb39 // branch
+_Lfd34__rt_re_pcre_literal_bb33:
     ldp x0, x1, [sp, #128] // hv load L8
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #93 // hv const_int val
@@ -16911,32 +16911,32 @@ _Lb2dd__rt_re_pcre_literal_bb33:
     stp x0, x1, [x15] // hv store L43
     add x15, sp, #688 // hv frame base
     ldp x0, x1, [x15] // hv load L43
-    cbz x1, _Lb2dd__rt_re_pcre_literal_bb35 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_pcre_literal_bb34 // branch -> then
-_Lb2dd__rt_re_pcre_literal_bb34:
+    cbz x1, _Lfd34__rt_re_pcre_literal_bb35 // br_cond: !payload -> else
+    b _Lfd34__rt_re_pcre_literal_bb34 // branch -> then
+_Lfd34__rt_re_pcre_literal_bb34:
     ldp x0, x1, [sp, #80] // hv load L5
     add x15, sp, #704 // hv frame base
     stp x0, x1, [x15] // hv store L44
-    b _Lb2dd__rt_re_pcre_literal_bb36 // branch
-_Lb2dd__rt_re_pcre_literal_bb35:
+    b _Lfd34__rt_re_pcre_literal_bb36 // branch
+_Lfd34__rt_re_pcre_literal_bb35:
     add x15, sp, #688 // hv frame base
     ldp x0, x1, [x15] // hv load L43
     add x15, sp, #704 // hv frame base
     stp x0, x1, [x15] // hv store L44
-    b _Lb2dd__rt_re_pcre_literal_bb36 // branch
-_Lb2dd__rt_re_pcre_literal_bb36:
+    b _Lfd34__rt_re_pcre_literal_bb36 // branch
+_Lfd34__rt_re_pcre_literal_bb36:
     add x15, sp, #704 // hv frame base
     ldp x0, x1, [x15] // hv load L44
-    cbz x1, _Lb2dd__rt_re_pcre_literal_bb38 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_pcre_literal_bb37 // branch -> then
-_Lb2dd__rt_re_pcre_literal_bb37:
+    cbz x1, _Lfd34__rt_re_pcre_literal_bb38 // br_cond: !payload -> else
+    b _Lfd34__rt_re_pcre_literal_bb37 // branch -> then
+_Lfd34__rt_re_pcre_literal_bb37:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     stp x0, x1, [sp, #80] // hv store L5
-    b _Lb2dd__rt_re_pcre_literal_bb38 // branch
-_Lb2dd__rt_re_pcre_literal_bb38:
-    b _Lb2dd__rt_re_pcre_literal_bb39 // branch
-_Lb2dd__rt_re_pcre_literal_bb39:
+    b _Lfd34__rt_re_pcre_literal_bb38 // branch
+_Lfd34__rt_re_pcre_literal_bb38:
+    b _Lfd34__rt_re_pcre_literal_bb39 // branch
+_Lfd34__rt_re_pcre_literal_bb39:
     ldp x0, x1, [sp, #128] // hv load L8
     bl hexa_chr_byte // call hexa_chr_byte
     add x15, sp, #736 // hv frame base
@@ -16959,7 +16959,7 @@ _Lb2dd__rt_re_pcre_literal_bb39:
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv load L48
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd__rt_re_pcre_literal_bb1 // branch
+    b _Lfd34__rt_re_pcre_literal_bb1 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #784 // sp adj
@@ -16973,7 +16973,7 @@ _rt_re_has_backref_lookaround:
     mov x29, sp // prologue: set fp
     sub sp, sp, #1104 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__rt_re_has_backref_lookaround_bb0:
+_Lfd34__rt_re_has_backref_lookaround_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_byte_len // call hexa_byte_len
     stp x0, x1, [sp, #16] // hv store L1
@@ -16982,16 +16982,16 @@ _Lb2dd__rt_re_has_backref_lookaround_bb0:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__rt_re_has_backref_lookaround_bb1 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb1:
+    b _Lfd34__rt_re_has_backref_lookaround_bb1 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb1:
     ldp x0, x1, [sp, #48] // hv load L3
     ldp x2, x3, [sp, #32] // hv load L2
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb3 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb2 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb2:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb3 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb2 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #48] // hv load L3
     bl hexa_str_byte_at // call hexa_str_byte_at
@@ -17004,15 +17004,15 @@ _Lb2dd__rt_re_has_backref_lookaround_bb2:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb5 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb4 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb3:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb5 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb4 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb3:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     add sp, sp, #1104 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__rt_re_has_backref_lookaround_bb4:
+_Lfd34__rt_re_has_backref_lookaround_bb4:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -17023,18 +17023,18 @@ _Lb2dd__rt_re_has_backref_lookaround_bb4:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv load L10
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb7 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb6 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb5:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb7 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb6 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb5:
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #91 // hv const_int val
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #320] // hv store L20
     ldp x0, x1, [sp, #320] // hv load L20
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb14 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb13 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb6:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb14 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb13 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb6:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -17052,9 +17052,9 @@ _Lb2dd__rt_re_has_backref_lookaround_bb6:
     bl hexa_cmp_ge // binop >=
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv load L15
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb9 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb8 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb7:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb9 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb8 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb7:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -17062,8 +17062,8 @@ _Lb2dd__rt_re_has_backref_lookaround_bb7:
     stp x0, x1, [sp, #304] // hv store L19
     ldp x0, x1, [sp, #304] // hv load L19
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__rt_re_has_backref_lookaround_bb1 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb8:
+    b _Lfd34__rt_re_has_backref_lookaround_bb1 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb8:
     ldp x0, x1, [sp, #224] // hv load L14
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #57 // hv const_int val
@@ -17071,24 +17071,24 @@ _Lb2dd__rt_re_has_backref_lookaround_bb8:
     stp x0, x1, [sp, #272] // hv store L17
     ldp x0, x1, [sp, #272] // hv load L17
     stp x0, x1, [sp, #256] // hv store L16
-    b _Lb2dd__rt_re_has_backref_lookaround_bb10 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb9:
+    b _Lfd34__rt_re_has_backref_lookaround_bb10 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb9:
     ldp x0, x1, [sp, #240] // hv load L15
     stp x0, x1, [sp, #256] // hv store L16
-    b _Lb2dd__rt_re_has_backref_lookaround_bb10 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb10:
+    b _Lfd34__rt_re_has_backref_lookaround_bb10 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb10:
     ldp x0, x1, [sp, #256] // hv load L16
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb12 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb11 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb11:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb12 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb11 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb11:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
     add sp, sp, #1104 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__rt_re_has_backref_lookaround_bb12:
-    b _Lb2dd__rt_re_has_backref_lookaround_bb7 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb13:
+_Lfd34__rt_re_has_backref_lookaround_bb12:
+    b _Lfd34__rt_re_has_backref_lookaround_bb7 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb13:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -17101,9 +17101,9 @@ _Lb2dd__rt_re_has_backref_lookaround_bb13:
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #368] // hv store L23
     ldp x0, x1, [sp, #368] // hv load L23
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb16 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb15 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb14:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb16 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb15 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb14:
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #40 // hv const_int val
@@ -17112,9 +17112,9 @@ _Lb2dd__rt_re_has_backref_lookaround_bb14:
     stp x0, x1, [x15] // hv store L47
     add x15, sp, #752 // hv frame base
     ldp x0, x1, [x15] // hv load L47
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb37 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb36 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb15:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb37 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb36 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb15:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #48] // hv load L3
     bl hexa_str_byte_at // call hexa_str_byte_at
@@ -17126,16 +17126,16 @@ _Lb2dd__rt_re_has_backref_lookaround_bb15:
     stp x0, x1, [sp, #416] // hv store L26
     ldp x0, x1, [sp, #416] // hv load L26
     stp x0, x1, [sp, #384] // hv store L24
-    b _Lb2dd__rt_re_has_backref_lookaround_bb17 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb16:
+    b _Lfd34__rt_re_has_backref_lookaround_bb17 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb16:
     ldp x0, x1, [sp, #368] // hv load L23
     stp x0, x1, [sp, #384] // hv store L24
-    b _Lb2dd__rt_re_has_backref_lookaround_bb17 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb17:
+    b _Lfd34__rt_re_has_backref_lookaround_bb17 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb17:
     ldp x0, x1, [sp, #384] // hv load L24
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb19 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb18 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb18:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb19 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb18 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb18:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -17143,16 +17143,16 @@ _Lb2dd__rt_re_has_backref_lookaround_bb18:
     stp x0, x1, [sp, #448] // hv store L28
     ldp x0, x1, [sp, #448] // hv load L28
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__rt_re_has_backref_lookaround_bb19 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb19:
+    b _Lfd34__rt_re_has_backref_lookaround_bb19 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb19:
     ldp x0, x1, [sp, #48] // hv load L3
     ldp x2, x3, [sp, #32] // hv load L2
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #464] // hv store L29
     ldp x0, x1, [sp, #464] // hv load L29
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb21 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb20 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb20:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb21 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb20 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb20:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #48] // hv load L3
     bl hexa_str_byte_at // call hexa_str_byte_at
@@ -17166,16 +17166,16 @@ _Lb2dd__rt_re_has_backref_lookaround_bb20:
     add x15, sp, #512 // hv frame base
     ldp x0, x1, [x15] // hv load L32
     stp x0, x1, [sp, #480] // hv store L30
-    b _Lb2dd__rt_re_has_backref_lookaround_bb22 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb21:
+    b _Lfd34__rt_re_has_backref_lookaround_bb22 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb21:
     ldp x0, x1, [sp, #464] // hv load L29
     stp x0, x1, [sp, #480] // hv store L30
-    b _Lb2dd__rt_re_has_backref_lookaround_bb22 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb22:
+    b _Lfd34__rt_re_has_backref_lookaround_bb22 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb22:
     ldp x0, x1, [sp, #480] // hv load L30
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb24 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb23 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb23:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb24 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb23 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb23:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -17185,10 +17185,10 @@ _Lb2dd__rt_re_has_backref_lookaround_bb23:
     add x15, sp, #544 // hv frame base
     ldp x0, x1, [x15] // hv load L34
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__rt_re_has_backref_lookaround_bb24 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb24:
-    b _Lb2dd__rt_re_has_backref_lookaround_bb25 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb25:
+    b _Lfd34__rt_re_has_backref_lookaround_bb24 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb24:
+    b _Lfd34__rt_re_has_backref_lookaround_bb25 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb25:
     ldp x0, x1, [sp, #48] // hv load L3
     ldp x2, x3, [sp, #32] // hv load L2
     bl hexa_cmp_lt // binop <
@@ -17196,9 +17196,9 @@ _Lb2dd__rt_re_has_backref_lookaround_bb25:
     stp x0, x1, [x15] // hv store L35
     add x15, sp, #560 // hv frame base
     ldp x0, x1, [x15] // hv load L35
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb29 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb28 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb26:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb29 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb28 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb26:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #48] // hv load L3
     bl hexa_str_byte_at // call hexa_str_byte_at
@@ -17213,9 +17213,9 @@ _Lb2dd__rt_re_has_backref_lookaround_bb26:
     stp x0, x1, [x15] // hv store L40
     add x15, sp, #640 // hv frame base
     ldp x0, x1, [x15] // hv load L40
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb32 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb31 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb27:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb32 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb31 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb27:
     ldp x0, x1, [sp, #48] // hv load L3
     ldp x2, x3, [sp, #32] // hv load L2
     bl hexa_cmp_lt // binop <
@@ -17223,9 +17223,9 @@ _Lb2dd__rt_re_has_backref_lookaround_bb27:
     stp x0, x1, [x15] // hv store L44
     add x15, sp, #704 // hv frame base
     ldp x0, x1, [x15] // hv load L44
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb35 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb34 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb28:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb35 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb34 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb28:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #48] // hv load L3
     bl hexa_str_byte_at // call hexa_str_byte_at
@@ -17245,19 +17245,19 @@ _Lb2dd__rt_re_has_backref_lookaround_bb28:
     ldp x0, x1, [x15] // hv load L38
     add x15, sp, #576 // hv frame base
     stp x0, x1, [x15] // hv store L36
-    b _Lb2dd__rt_re_has_backref_lookaround_bb30 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb29:
+    b _Lfd34__rt_re_has_backref_lookaround_bb30 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb29:
     add x15, sp, #560 // hv frame base
     ldp x0, x1, [x15] // hv load L35
     add x15, sp, #576 // hv frame base
     stp x0, x1, [x15] // hv store L36
-    b _Lb2dd__rt_re_has_backref_lookaround_bb30 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb30:
+    b _Lfd34__rt_re_has_backref_lookaround_bb30 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb30:
     add x15, sp, #576 // hv frame base
     ldp x0, x1, [x15] // hv load L36
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb27 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb26 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb31:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb27 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb26 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb31:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -17267,8 +17267,8 @@ _Lb2dd__rt_re_has_backref_lookaround_bb31:
     add x15, sp, #672 // hv frame base
     ldp x0, x1, [x15] // hv load L42
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__rt_re_has_backref_lookaround_bb33 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb32:
+    b _Lfd34__rt_re_has_backref_lookaround_bb33 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb32:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -17278,10 +17278,10 @@ _Lb2dd__rt_re_has_backref_lookaround_bb32:
     add x15, sp, #688 // hv frame base
     ldp x0, x1, [x15] // hv load L43
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__rt_re_has_backref_lookaround_bb33 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb33:
-    b _Lb2dd__rt_re_has_backref_lookaround_bb25 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb34:
+    b _Lfd34__rt_re_has_backref_lookaround_bb33 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb33:
+    b _Lfd34__rt_re_has_backref_lookaround_bb25 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb34:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -17291,10 +17291,10 @@ _Lb2dd__rt_re_has_backref_lookaround_bb34:
     add x15, sp, #736 // hv frame base
     ldp x0, x1, [x15] // hv load L46
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__rt_re_has_backref_lookaround_bb35 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb35:
-    b _Lb2dd__rt_re_has_backref_lookaround_bb1 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb36:
+    b _Lfd34__rt_re_has_backref_lookaround_bb35 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb35:
+    b _Lfd34__rt_re_has_backref_lookaround_bb1 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb36:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -17311,19 +17311,19 @@ _Lb2dd__rt_re_has_backref_lookaround_bb36:
     ldp x0, x1, [x15] // hv load L50
     add x15, sp, #768 // hv frame base
     stp x0, x1, [x15] // hv store L48
-    b _Lb2dd__rt_re_has_backref_lookaround_bb38 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb37:
+    b _Lfd34__rt_re_has_backref_lookaround_bb38 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb37:
     add x15, sp, #752 // hv frame base
     ldp x0, x1, [x15] // hv load L47
     add x15, sp, #768 // hv frame base
     stp x0, x1, [x15] // hv store L48
-    b _Lb2dd__rt_re_has_backref_lookaround_bb38 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb38:
+    b _Lfd34__rt_re_has_backref_lookaround_bb38 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb38:
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv load L48
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb40 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb39 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb39:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb40 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb39 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb39:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -17347,19 +17347,19 @@ _Lb2dd__rt_re_has_backref_lookaround_bb39:
     ldp x0, x1, [x15] // hv load L54
     add x15, sp, #816 // hv frame base
     stp x0, x1, [x15] // hv store L51
-    b _Lb2dd__rt_re_has_backref_lookaround_bb41 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb40:
+    b _Lfd34__rt_re_has_backref_lookaround_bb41 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb40:
     add x15, sp, #768 // hv frame base
     ldp x0, x1, [x15] // hv load L48
     add x15, sp, #816 // hv frame base
     stp x0, x1, [x15] // hv store L51
-    b _Lb2dd__rt_re_has_backref_lookaround_bb41 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb41:
+    b _Lfd34__rt_re_has_backref_lookaround_bb41 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb41:
     add x15, sp, #816 // hv frame base
     ldp x0, x1, [x15] // hv load L51
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb43 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb42 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb42:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb43 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb42 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb42:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -17374,9 +17374,9 @@ _Lb2dd__rt_re_has_backref_lookaround_bb42:
     stp x0, x1, [x15] // hv store L57
     add x15, sp, #912 // hv frame base
     ldp x0, x1, [x15] // hv load L57
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb45 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb44 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb43:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb45 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb44 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb43:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -17386,8 +17386,8 @@ _Lb2dd__rt_re_has_backref_lookaround_bb43:
     add x15, sp, #1088 // hv frame base
     ldp x0, x1, [x15] // hv load L68
     stp x0, x1, [sp, #48] // hv store L3
-    b _Lb2dd__rt_re_has_backref_lookaround_bb1 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb44:
+    b _Lfd34__rt_re_has_backref_lookaround_bb1 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb44:
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #2 // hv const_int val
@@ -17413,17 +17413,17 @@ _Lb2dd__rt_re_has_backref_lookaround_bb44:
     stp x0, x1, [x15] // hv store L62
     add x15, sp, #992 // hv frame base
     ldp x0, x1, [x15] // hv load L62
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb47 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb46 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb45:
-    b _Lb2dd__rt_re_has_backref_lookaround_bb43 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb46:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb47 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb46 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb45:
+    b _Lfd34__rt_re_has_backref_lookaround_bb43 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb46:
     add x15, sp, #992 // hv frame base
     ldp x0, x1, [x15] // hv load L62
     add x15, sp, #1008 // hv frame base
     stp x0, x1, [x15] // hv store L63
-    b _Lb2dd__rt_re_has_backref_lookaround_bb48 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb47:
+    b _Lfd34__rt_re_has_backref_lookaround_bb48 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb47:
     add x15, sp, #976 // hv frame base
     ldp x0, x1, [x15] // hv load L61
     movz x2, #0 // hv const_int: TAG_INT
@@ -17435,19 +17435,19 @@ _Lb2dd__rt_re_has_backref_lookaround_bb47:
     ldp x0, x1, [x15] // hv load L64
     add x15, sp, #1008 // hv frame base
     stp x0, x1, [x15] // hv store L63
-    b _Lb2dd__rt_re_has_backref_lookaround_bb48 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb48:
+    b _Lfd34__rt_re_has_backref_lookaround_bb48 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb48:
     add x15, sp, #1008 // hv frame base
     ldp x0, x1, [x15] // hv load L63
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb50 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb49 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb49:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb50 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb49 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb49:
     add x15, sp, #1008 // hv frame base
     ldp x0, x1, [x15] // hv load L63
     add x15, sp, #1040 // hv frame base
     stp x0, x1, [x15] // hv store L65
-    b _Lb2dd__rt_re_has_backref_lookaround_bb51 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb50:
+    b _Lfd34__rt_re_has_backref_lookaround_bb51 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb50:
     add x15, sp, #976 // hv frame base
     ldp x0, x1, [x15] // hv load L61
     movz x2, #0 // hv const_int: TAG_INT
@@ -17459,20 +17459,20 @@ _Lb2dd__rt_re_has_backref_lookaround_bb50:
     ldp x0, x1, [x15] // hv load L66
     add x15, sp, #1040 // hv frame base
     stp x0, x1, [x15] // hv store L65
-    b _Lb2dd__rt_re_has_backref_lookaround_bb51 // branch
-_Lb2dd__rt_re_has_backref_lookaround_bb51:
+    b _Lfd34__rt_re_has_backref_lookaround_bb51 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb51:
     add x15, sp, #1040 // hv frame base
     ldp x0, x1, [x15] // hv load L65
-    cbz x1, _Lb2dd__rt_re_has_backref_lookaround_bb53 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_has_backref_lookaround_bb52 // branch -> then
-_Lb2dd__rt_re_has_backref_lookaround_bb52:
+    cbz x1, _Lfd34__rt_re_has_backref_lookaround_bb53 // br_cond: !payload -> else
+    b _Lfd34__rt_re_has_backref_lookaround_bb52 // branch -> then
+_Lfd34__rt_re_has_backref_lookaround_bb52:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
     add sp, sp, #1104 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd__rt_re_has_backref_lookaround_bb53:
-    b _Lb2dd__rt_re_has_backref_lookaround_bb45 // branch
+_Lfd34__rt_re_has_backref_lookaround_bb53:
+    b _Lfd34__rt_re_has_backref_lookaround_bb45 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #1104 // sp adj
@@ -17486,7 +17486,7 @@ _rt_re_prep_pat:
     mov x29, sp // prologue: set fp
     sub sp, sp, #192 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_Lb2dd__rt_re_prep_pat_bb0:
+_Lfd34__rt_re_prep_pat_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl _rt_re_strip_iflag // call _rt_re_strip_iflag
     stp x0, x1, [sp, #16] // hv store L1
@@ -17511,21 +17511,21 @@ _Lb2dd__rt_re_prep_pat_bb0:
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr25@PAGE // hv str ptr page
-    add x3, x3, .LCstr25@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr25 // hv str ptr page
+    add x3, x3, :lo12:.LCstr25 // hv str ptr off
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
-    cbz x1, _Lb2dd__rt_re_prep_pat_bb2 // br_cond: !payload -> else
-    b _Lb2dd__rt_re_prep_pat_bb1 // branch -> then
-_Lb2dd__rt_re_prep_pat_bb1:
+    cbz x1, _Lfd34__rt_re_prep_pat_bb2 // br_cond: !payload -> else
+    b _Lfd34__rt_re_prep_pat_bb1 // branch -> then
+_Lfd34__rt_re_prep_pat_bb1:
     ldp x0, x1, [sp, #64] // hv load L4
     bl _rt_re_ascii_fold // call _rt_re_ascii_fold
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv load L9
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd__rt_re_prep_pat_bb2 // branch
-_Lb2dd__rt_re_prep_pat_bb2:
+    b _Lfd34__rt_re_prep_pat_bb2 // branch
+_Lfd34__rt_re_prep_pat_bb2:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -17555,34 +17555,34 @@ rt_regex_match:
     sub sp, sp, #512 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd_rt_regex_match_bb0:
+_Lfd34_rt_regex_match_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_type_of // call hexa_type_of
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr27@PAGE // hv str ptr page
-    add x3, x3, .LCstr27@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr27 // hv str ptr page
+    add x3, x3, :lo12:.LCstr27 // hv str ptr off
     bl hexa_eq // ne: eq
     bl hexa_truthy // ne: truthy(eq) → w0
     eor x0, x0, #1 // ne: !truthy
     bl hexa_bool // ne: box bool
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L3
-    cbz x1, _Lb2dd_rt_regex_match_bb2 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_match_bb1 // branch -> then
-_Lb2dd_rt_regex_match_bb1:
+    cbz x1, _Lfd34_rt_regex_match_bb2 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_match_bb1 // branch -> then
+_Lfd34_rt_regex_match_bb1:
     ldp x0, x1, [sp, #48] // hv load L3
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd_rt_regex_match_bb3 // branch
-_Lb2dd_rt_regex_match_bb2:
+    b _Lfd34_rt_regex_match_bb3 // branch
+_Lfd34_rt_regex_match_bb2:
     ldp x0, x1, [sp, #16] // hv load L1
     bl hexa_type_of // call hexa_type_of
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr27@PAGE // hv str ptr page
-    add x3, x3, .LCstr27@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr27 // hv str ptr page
+    add x3, x3, :lo12:.LCstr27 // hv str ptr off
     bl hexa_eq // ne: eq
     bl hexa_truthy // ne: truthy(eq) → w0
     eor x0, x0, #1 // ne: !truthy
@@ -17590,18 +17590,18 @@ _Lb2dd_rt_regex_match_bb2:
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv load L6
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd_rt_regex_match_bb3 // branch
-_Lb2dd_rt_regex_match_bb3:
+    b _Lfd34_rt_regex_match_bb3 // branch
+_Lfd34_rt_regex_match_bb3:
     ldp x0, x1, [sp, #64] // hv load L4
-    cbz x1, _Lb2dd_rt_regex_match_bb5 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_match_bb4 // branch -> then
-_Lb2dd_rt_regex_match_bb4:
+    cbz x1, _Lfd34_rt_regex_match_bb5 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_match_bb4 // branch -> then
+_Lfd34_rt_regex_match_bb4:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     add sp, sp, #512 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_match_bb5:
+_Lfd34_rt_regex_match_bb5:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_to_string // call hexa_to_string
     stp x0, x1, [sp, #128] // hv store L8
@@ -17616,15 +17616,15 @@ _Lb2dd_rt_regex_match_bb5:
     bl _rt_re_has_backref_lookaround // call _rt_re_has_backref_lookaround
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _Lb2dd_rt_regex_match_bb7 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_match_bb6 // branch -> then
-_Lb2dd_rt_regex_match_bb6:
+    cbz x1, _Lfd34_rt_regex_match_bb7 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_match_bb6 // branch -> then
+_Lfd34_rt_regex_match_bb6:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     add sp, sp, #512 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_match_bb7:
+_Lfd34_rt_regex_match_bb7:
     ldp x0, x1, [sp, #144] // hv load L9
     bl _rt_re_prep_pat // call _rt_re_prep_pat
     stp x0, x1, [sp, #224] // hv store L14
@@ -17649,15 +17649,15 @@ _Lb2dd_rt_regex_match_bb7:
     bl hexa_bool // unop !: box bool
     stp x0, x1, [sp, #320] // hv store L20
     ldp x0, x1, [sp, #320] // hv load L20
-    cbz x1, _Lb2dd_rt_regex_match_bb9 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_match_bb8 // branch -> then
-_Lb2dd_rt_regex_match_bb8:
+    cbz x1, _Lfd34_rt_regex_match_bb9 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_match_bb8 // branch -> then
+_Lfd34_rt_regex_match_bb8:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     add sp, sp, #512 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_match_bb9:
+_Lfd34_rt_regex_match_bb9:
     ldp x0, x1, [sp, #176] // hv load L11
     stp x0, x1, [sp, #352] // hv store L22
     ldp x0, x1, [sp, #240] // hv load L15
@@ -17667,24 +17667,24 @@ _Lb2dd_rt_regex_match_bb9:
     stp x0, x1, [sp, #368] // hv store L23
     ldp x0, x1, [sp, #368] // hv load L23
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr25@PAGE // hv str ptr page
-    add x3, x3, .LCstr25@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr25 // hv str ptr page
+    add x3, x3, :lo12:.LCstr25 // hv str ptr off
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #384] // hv store L24
     ldp x0, x1, [sp, #384] // hv load L24
-    cbz x1, _Lb2dd_rt_regex_match_bb11 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_match_bb10 // branch -> then
-_Lb2dd_rt_regex_match_bb10:
+    cbz x1, _Lfd34_rt_regex_match_bb11 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_match_bb10 // branch -> then
+_Lfd34_rt_regex_match_bb10:
     ldp x0, x1, [sp, #176] // hv load L11
     bl _rt_re_ascii_fold // call _rt_re_ascii_fold
     stp x0, x1, [sp, #416] // hv store L26
     ldp x0, x1, [sp, #416] // hv load L26
     stp x0, x1, [sp, #352] // hv store L22
-    b _Lb2dd_rt_regex_match_bb11 // branch
-_Lb2dd_rt_regex_match_bb11:
+    b _Lfd34_rt_regex_match_bb11 // branch
+_Lfd34_rt_regex_match_bb11:
     ldp x0, x1, [sp, #288] // hv load L18
     ldp x2, x3, [sp, #352] // hv load L22
-    bl regex_search // call regex_search
+    bl hexa_regex_search // call hexa_regex_search
     stp x0, x1, [sp, #432] // hv store L27
     ldp x0, x1, [sp, #432] // hv load L27
     stp x0, x1, [sp, #448] // hv store L28
@@ -17699,15 +17699,15 @@ _Lb2dd_rt_regex_match_bb11:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #480] // hv store L30
     ldp x0, x1, [sp, #480] // hv load L30
-    cbz x1, _Lb2dd_rt_regex_match_bb13 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_match_bb12 // branch -> then
-_Lb2dd_rt_regex_match_bb12:
+    cbz x1, _Lfd34_rt_regex_match_bb13 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_match_bb12 // branch -> then
+_Lfd34_rt_regex_match_bb12:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     add sp, sp, #512 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_match_bb13:
+_Lfd34_rt_regex_match_bb13:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
     add sp, sp, #512 // sp adj
@@ -17723,34 +17723,34 @@ rt_regex_match_full:
     sub sp, sp, #624 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd_rt_regex_match_full_bb0:
+_Lfd34_rt_regex_match_full_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_type_of // call hexa_type_of
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr27@PAGE // hv str ptr page
-    add x3, x3, .LCstr27@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr27 // hv str ptr page
+    add x3, x3, :lo12:.LCstr27 // hv str ptr off
     bl hexa_eq // ne: eq
     bl hexa_truthy // ne: truthy(eq) → w0
     eor x0, x0, #1 // ne: !truthy
     bl hexa_bool // ne: box bool
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L3
-    cbz x1, _Lb2dd_rt_regex_match_full_bb2 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_match_full_bb1 // branch -> then
-_Lb2dd_rt_regex_match_full_bb1:
+    cbz x1, _Lfd34_rt_regex_match_full_bb2 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_match_full_bb1 // branch -> then
+_Lfd34_rt_regex_match_full_bb1:
     ldp x0, x1, [sp, #48] // hv load L3
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd_rt_regex_match_full_bb3 // branch
-_Lb2dd_rt_regex_match_full_bb2:
+    b _Lfd34_rt_regex_match_full_bb3 // branch
+_Lfd34_rt_regex_match_full_bb2:
     ldp x0, x1, [sp, #16] // hv load L1
     bl hexa_type_of // call hexa_type_of
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr27@PAGE // hv str ptr page
-    add x3, x3, .LCstr27@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr27 // hv str ptr page
+    add x3, x3, :lo12:.LCstr27 // hv str ptr off
     bl hexa_eq // ne: eq
     bl hexa_truthy // ne: truthy(eq) → w0
     eor x0, x0, #1 // ne: !truthy
@@ -17758,18 +17758,18 @@ _Lb2dd_rt_regex_match_full_bb2:
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv load L6
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd_rt_regex_match_full_bb3 // branch
-_Lb2dd_rt_regex_match_full_bb3:
+    b _Lfd34_rt_regex_match_full_bb3 // branch
+_Lfd34_rt_regex_match_full_bb3:
     ldp x0, x1, [sp, #64] // hv load L4
-    cbz x1, _Lb2dd_rt_regex_match_full_bb5 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_match_full_bb4 // branch -> then
-_Lb2dd_rt_regex_match_full_bb4:
+    cbz x1, _Lfd34_rt_regex_match_full_bb5 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_match_full_bb4 // branch -> then
+_Lfd34_rt_regex_match_full_bb4:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     add sp, sp, #624 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_match_full_bb5:
+_Lfd34_rt_regex_match_full_bb5:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_to_string // call hexa_to_string
     stp x0, x1, [sp, #128] // hv store L8
@@ -17784,15 +17784,15 @@ _Lb2dd_rt_regex_match_full_bb5:
     bl _rt_re_has_backref_lookaround // call _rt_re_has_backref_lookaround
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _Lb2dd_rt_regex_match_full_bb7 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_match_full_bb6 // branch -> then
-_Lb2dd_rt_regex_match_full_bb6:
+    cbz x1, _Lfd34_rt_regex_match_full_bb7 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_match_full_bb6 // branch -> then
+_Lfd34_rt_regex_match_full_bb6:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     add sp, sp, #624 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_match_full_bb7:
+_Lfd34_rt_regex_match_full_bb7:
     ldp x0, x1, [sp, #144] // hv load L9
     bl _rt_re_prep_pat // call _rt_re_prep_pat
     stp x0, x1, [sp, #224] // hv store L14
@@ -17817,15 +17817,15 @@ _Lb2dd_rt_regex_match_full_bb7:
     bl hexa_bool // unop !: box bool
     stp x0, x1, [sp, #320] // hv store L20
     ldp x0, x1, [sp, #320] // hv load L20
-    cbz x1, _Lb2dd_rt_regex_match_full_bb9 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_match_full_bb8 // branch -> then
-_Lb2dd_rt_regex_match_full_bb8:
+    cbz x1, _Lfd34_rt_regex_match_full_bb9 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_match_full_bb8 // branch -> then
+_Lfd34_rt_regex_match_full_bb8:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     add sp, sp, #624 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_match_full_bb9:
+_Lfd34_rt_regex_match_full_bb9:
     ldp x0, x1, [sp, #176] // hv load L11
     stp x0, x1, [sp, #352] // hv store L22
     ldp x0, x1, [sp, #240] // hv load L15
@@ -17835,24 +17835,24 @@ _Lb2dd_rt_regex_match_full_bb9:
     stp x0, x1, [sp, #368] // hv store L23
     ldp x0, x1, [sp, #368] // hv load L23
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr25@PAGE // hv str ptr page
-    add x3, x3, .LCstr25@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr25 // hv str ptr page
+    add x3, x3, :lo12:.LCstr25 // hv str ptr off
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #384] // hv store L24
     ldp x0, x1, [sp, #384] // hv load L24
-    cbz x1, _Lb2dd_rt_regex_match_full_bb11 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_match_full_bb10 // branch -> then
-_Lb2dd_rt_regex_match_full_bb10:
+    cbz x1, _Lfd34_rt_regex_match_full_bb11 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_match_full_bb10 // branch -> then
+_Lfd34_rt_regex_match_full_bb10:
     ldp x0, x1, [sp, #176] // hv load L11
     bl _rt_re_ascii_fold // call _rt_re_ascii_fold
     stp x0, x1, [sp, #416] // hv store L26
     ldp x0, x1, [sp, #416] // hv load L26
     stp x0, x1, [sp, #352] // hv store L22
-    b _Lb2dd_rt_regex_match_full_bb11 // branch
-_Lb2dd_rt_regex_match_full_bb11:
+    b _Lfd34_rt_regex_match_full_bb11 // branch
+_Lfd34_rt_regex_match_full_bb11:
     ldp x0, x1, [sp, #288] // hv load L18
     ldp x2, x3, [sp, #352] // hv load L22
-    bl regex_search // call regex_search
+    bl hexa_regex_search // call hexa_regex_search
     stp x0, x1, [sp, #432] // hv store L27
     ldp x0, x1, [sp, #432] // hv load L27
     stp x0, x1, [sp, #448] // hv store L28
@@ -17867,15 +17867,15 @@ _Lb2dd_rt_regex_match_full_bb11:
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #480] // hv store L30
     ldp x0, x1, [sp, #480] // hv load L30
-    cbz x1, _Lb2dd_rt_regex_match_full_bb13 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_match_full_bb12 // branch -> then
-_Lb2dd_rt_regex_match_full_bb12:
+    cbz x1, _Lfd34_rt_regex_match_full_bb13 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_match_full_bb12 // branch -> then
+_Lfd34_rt_regex_match_full_bb12:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     add sp, sp, #624 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_match_full_bb13:
+_Lfd34_rt_regex_match_full_bb13:
     movz x9, #0 // hv const_int: TAG_INT
     movz x10, #0 // hv const_int val
     ldp x0, x1, [sp, #448] // hv load L28
@@ -17892,9 +17892,9 @@ _Lb2dd_rt_regex_match_full_bb13:
     stp x0, x1, [x15] // hv store L33
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L33
-    cbz x1, _Lb2dd_rt_regex_match_full_bb15 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_match_full_bb14 // branch -> then
-_Lb2dd_rt_regex_match_full_bb14:
+    cbz x1, _Lfd34_rt_regex_match_full_bb15 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_match_full_bb14 // branch -> then
+_Lfd34_rt_regex_match_full_bb14:
     movz x9, #0 // hv const_int: TAG_INT
     movz x10, #1 // hv const_int val
     ldp x0, x1, [sp, #448] // hv load L28
@@ -17917,25 +17917,25 @@ _Lb2dd_rt_regex_match_full_bb14:
     ldp x0, x1, [x15] // hv load L37
     add x15, sp, #544 // hv frame base
     stp x0, x1, [x15] // hv store L34
-    b _Lb2dd_rt_regex_match_full_bb16 // branch
-_Lb2dd_rt_regex_match_full_bb15:
+    b _Lfd34_rt_regex_match_full_bb16 // branch
+_Lfd34_rt_regex_match_full_bb15:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L33
     add x15, sp, #544 // hv frame base
     stp x0, x1, [x15] // hv store L34
-    b _Lb2dd_rt_regex_match_full_bb16 // branch
-_Lb2dd_rt_regex_match_full_bb16:
+    b _Lfd34_rt_regex_match_full_bb16 // branch
+_Lfd34_rt_regex_match_full_bb16:
     add x15, sp, #544 // hv frame base
     ldp x0, x1, [x15] // hv load L34
-    cbz x1, _Lb2dd_rt_regex_match_full_bb18 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_match_full_bb17 // branch -> then
-_Lb2dd_rt_regex_match_full_bb17:
+    cbz x1, _Lfd34_rt_regex_match_full_bb18 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_match_full_bb17 // branch -> then
+_Lfd34_rt_regex_match_full_bb17:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #1 // hv const_bool payload
     add sp, sp, #624 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_match_full_bb18:
+_Lfd34_rt_regex_match_full_bb18:
     movz x0, #2 // hv const_bool: TAG_BOOL
     movz x1, #0 // hv const_bool payload
     add sp, sp, #624 // sp adj
@@ -17951,34 +17951,34 @@ rt_regex_search:
     sub sp, sp, #624 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd_rt_regex_search_bb0:
+_Lfd34_rt_regex_search_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_type_of // call hexa_type_of
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr27@PAGE // hv str ptr page
-    add x3, x3, .LCstr27@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr27 // hv str ptr page
+    add x3, x3, :lo12:.LCstr27 // hv str ptr off
     bl hexa_eq // ne: eq
     bl hexa_truthy // ne: truthy(eq) → w0
     eor x0, x0, #1 // ne: !truthy
     bl hexa_bool // ne: box bool
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L3
-    cbz x1, _Lb2dd_rt_regex_search_bb2 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_search_bb1 // branch -> then
-_Lb2dd_rt_regex_search_bb1:
+    cbz x1, _Lfd34_rt_regex_search_bb2 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_search_bb1 // branch -> then
+_Lfd34_rt_regex_search_bb1:
     ldp x0, x1, [sp, #48] // hv load L3
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd_rt_regex_search_bb3 // branch
-_Lb2dd_rt_regex_search_bb2:
+    b _Lfd34_rt_regex_search_bb3 // branch
+_Lfd34_rt_regex_search_bb2:
     ldp x0, x1, [sp, #16] // hv load L1
     bl hexa_type_of // call hexa_type_of
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr27@PAGE // hv str ptr page
-    add x3, x3, .LCstr27@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr27 // hv str ptr page
+    add x3, x3, :lo12:.LCstr27 // hv str ptr off
     bl hexa_eq // ne: eq
     bl hexa_truthy // ne: truthy(eq) → w0
     eor x0, x0, #1 // ne: !truthy
@@ -17986,19 +17986,19 @@ _Lb2dd_rt_regex_search_bb2:
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv load L6
     stp x0, x1, [sp, #64] // hv store L4
-    b _Lb2dd_rt_regex_search_bb3 // branch
-_Lb2dd_rt_regex_search_bb3:
+    b _Lfd34_rt_regex_search_bb3 // branch
+_Lfd34_rt_regex_search_bb3:
     ldp x0, x1, [sp, #64] // hv load L4
-    cbz x1, _Lb2dd_rt_regex_search_bb5 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_search_bb4 // branch -> then
-_Lb2dd_rt_regex_search_bb4:
+    cbz x1, _Lfd34_rt_regex_search_bb5 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_search_bb4 // branch -> then
+_Lfd34_rt_regex_search_bb4:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #128] // hv store L8
     ldp x0, x1, [sp, #128] // hv load L8
     add sp, sp, #624 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_search_bb5:
+_Lfd34_rt_regex_search_bb5:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_to_string // call hexa_to_string
     stp x0, x1, [sp, #144] // hv store L9
@@ -18013,16 +18013,16 @@ _Lb2dd_rt_regex_search_bb5:
     bl _rt_re_has_backref_lookaround // call _rt_re_has_backref_lookaround
     stp x0, x1, [sp, #208] // hv store L13
     ldp x0, x1, [sp, #208] // hv load L13
-    cbz x1, _Lb2dd_rt_regex_search_bb7 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_search_bb6 // branch -> then
-_Lb2dd_rt_regex_search_bb6:
+    cbz x1, _Lfd34_rt_regex_search_bb7 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_search_bb6 // branch -> then
+_Lfd34_rt_regex_search_bb6:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #240] // hv store L15
     ldp x0, x1, [sp, #240] // hv load L15
     add sp, sp, #624 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_search_bb7:
+_Lfd34_rt_regex_search_bb7:
     ldp x0, x1, [sp, #160] // hv load L10
     bl _rt_re_prep_pat // call _rt_re_prep_pat
     stp x0, x1, [sp, #256] // hv store L16
@@ -18047,16 +18047,16 @@ _Lb2dd_rt_regex_search_bb7:
     bl hexa_bool // unop !: box bool
     stp x0, x1, [sp, #352] // hv store L22
     ldp x0, x1, [sp, #352] // hv load L22
-    cbz x1, _Lb2dd_rt_regex_search_bb9 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_search_bb8 // branch -> then
-_Lb2dd_rt_regex_search_bb8:
+    cbz x1, _Lfd34_rt_regex_search_bb9 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_search_bb8 // branch -> then
+_Lfd34_rt_regex_search_bb8:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #384] // hv store L24
     ldp x0, x1, [sp, #384] // hv load L24
     add sp, sp, #624 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_search_bb9:
+_Lfd34_rt_regex_search_bb9:
     ldp x0, x1, [sp, #192] // hv load L12
     stp x0, x1, [sp, #400] // hv store L25
     ldp x0, x1, [sp, #272] // hv load L17
@@ -18066,24 +18066,24 @@ _Lb2dd_rt_regex_search_bb9:
     stp x0, x1, [sp, #416] // hv store L26
     ldp x0, x1, [sp, #416] // hv load L26
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr25@PAGE // hv str ptr page
-    add x3, x3, .LCstr25@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr25 // hv str ptr page
+    add x3, x3, :lo12:.LCstr25 // hv str ptr off
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #432] // hv store L27
     ldp x0, x1, [sp, #432] // hv load L27
-    cbz x1, _Lb2dd_rt_regex_search_bb11 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_search_bb10 // branch -> then
-_Lb2dd_rt_regex_search_bb10:
+    cbz x1, _Lfd34_rt_regex_search_bb11 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_search_bb10 // branch -> then
+_Lfd34_rt_regex_search_bb10:
     ldp x0, x1, [sp, #192] // hv load L12
     bl _rt_re_ascii_fold // call _rt_re_ascii_fold
     stp x0, x1, [sp, #464] // hv store L29
     ldp x0, x1, [sp, #464] // hv load L29
     stp x0, x1, [sp, #400] // hv store L25
-    b _Lb2dd_rt_regex_search_bb11 // branch
-_Lb2dd_rt_regex_search_bb11:
+    b _Lfd34_rt_regex_search_bb11 // branch
+_Lfd34_rt_regex_search_bb11:
     ldp x0, x1, [sp, #320] // hv load L20
     ldp x2, x3, [sp, #400] // hv load L25
-    bl regex_search // call regex_search
+    bl hexa_regex_search // call hexa_regex_search
     stp x0, x1, [sp, #480] // hv store L30
     ldp x0, x1, [sp, #480] // hv load L30
     stp x0, x1, [sp, #496] // hv store L31
@@ -18102,9 +18102,9 @@ _Lb2dd_rt_regex_search_bb11:
     stp x0, x1, [x15] // hv store L33
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L33
-    cbz x1, _Lb2dd_rt_regex_search_bb13 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_search_bb12 // branch -> then
-_Lb2dd_rt_regex_search_bb12:
+    cbz x1, _Lfd34_rt_regex_search_bb13 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_search_bb12 // branch -> then
+_Lfd34_rt_regex_search_bb12:
     bl hexa_array_new // array_lit: new array
     add x15, sp, #560 // hv frame base
     stp x0, x1, [x15] // hv store L35
@@ -18113,7 +18113,7 @@ _Lb2dd_rt_regex_search_bb12:
     add sp, sp, #624 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_search_bb13:
+_Lfd34_rt_regex_search_bb13:
     movz x9, #0 // hv const_int: TAG_INT
     movz x10, #0 // hv const_int val
     ldp x0, x1, [sp, #496] // hv load L31
@@ -18160,7 +18160,7 @@ rt_regex_findall:
     sub sp, sp, #768 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd_rt_regex_findall_bb0:
+_Lfd34_rt_regex_findall_bb0:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
@@ -18170,28 +18170,28 @@ _Lb2dd_rt_regex_findall_bb0:
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr27@PAGE // hv str ptr page
-    add x3, x3, .LCstr27@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr27 // hv str ptr page
+    add x3, x3, :lo12:.LCstr27 // hv str ptr off
     bl hexa_eq // ne: eq
     bl hexa_truthy // ne: truthy(eq) → w0
     eor x0, x0, #1 // ne: !truthy
     bl hexa_bool // ne: box bool
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
-    cbz x1, _Lb2dd_rt_regex_findall_bb2 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_findall_bb1 // branch -> then
-_Lb2dd_rt_regex_findall_bb1:
+    cbz x1, _Lfd34_rt_regex_findall_bb2 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_findall_bb1 // branch -> then
+_Lfd34_rt_regex_findall_bb1:
     ldp x0, x1, [sp, #80] // hv load L5
     stp x0, x1, [sp, #96] // hv store L6
-    b _Lb2dd_rt_regex_findall_bb3 // branch
-_Lb2dd_rt_regex_findall_bb2:
+    b _Lfd34_rt_regex_findall_bb3 // branch
+_Lfd34_rt_regex_findall_bb2:
     ldp x0, x1, [sp, #16] // hv load L1
     bl hexa_type_of // call hexa_type_of
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr27@PAGE // hv str ptr page
-    add x3, x3, .LCstr27@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr27 // hv str ptr page
+    add x3, x3, :lo12:.LCstr27 // hv str ptr off
     bl hexa_eq // ne: eq
     bl hexa_truthy // ne: truthy(eq) → w0
     eor x0, x0, #1 // ne: !truthy
@@ -18199,17 +18199,17 @@ _Lb2dd_rt_regex_findall_bb2:
     stp x0, x1, [sp, #128] // hv store L8
     ldp x0, x1, [sp, #128] // hv load L8
     stp x0, x1, [sp, #96] // hv store L6
-    b _Lb2dd_rt_regex_findall_bb3 // branch
-_Lb2dd_rt_regex_findall_bb3:
+    b _Lfd34_rt_regex_findall_bb3 // branch
+_Lfd34_rt_regex_findall_bb3:
     ldp x0, x1, [sp, #96] // hv load L6
-    cbz x1, _Lb2dd_rt_regex_findall_bb5 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_findall_bb4 // branch -> then
-_Lb2dd_rt_regex_findall_bb4:
+    cbz x1, _Lfd34_rt_regex_findall_bb5 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_findall_bb4 // branch -> then
+_Lfd34_rt_regex_findall_bb4:
     ldp x0, x1, [sp, #48] // hv load L3
     add sp, sp, #768 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_findall_bb5:
+_Lfd34_rt_regex_findall_bb5:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_to_string // call hexa_to_string
     stp x0, x1, [sp, #160] // hv store L10
@@ -18224,14 +18224,14 @@ _Lb2dd_rt_regex_findall_bb5:
     bl _rt_re_has_backref_lookaround // call _rt_re_has_backref_lookaround
     stp x0, x1, [sp, #224] // hv store L14
     ldp x0, x1, [sp, #224] // hv load L14
-    cbz x1, _Lb2dd_rt_regex_findall_bb7 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_findall_bb6 // branch -> then
-_Lb2dd_rt_regex_findall_bb6:
+    cbz x1, _Lfd34_rt_regex_findall_bb7 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_findall_bb6 // branch -> then
+_Lfd34_rt_regex_findall_bb6:
     ldp x0, x1, [sp, #48] // hv load L3
     add sp, sp, #768 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_findall_bb7:
+_Lfd34_rt_regex_findall_bb7:
     ldp x0, x1, [sp, #176] // hv load L11
     bl _rt_re_prep_pat // call _rt_re_prep_pat
     stp x0, x1, [sp, #256] // hv store L16
@@ -18256,14 +18256,14 @@ _Lb2dd_rt_regex_findall_bb7:
     bl hexa_bool // unop !: box bool
     stp x0, x1, [sp, #352] // hv store L22
     ldp x0, x1, [sp, #352] // hv load L22
-    cbz x1, _Lb2dd_rt_regex_findall_bb9 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_findall_bb8 // branch -> then
-_Lb2dd_rt_regex_findall_bb8:
+    cbz x1, _Lfd34_rt_regex_findall_bb9 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_findall_bb8 // branch -> then
+_Lfd34_rt_regex_findall_bb8:
     ldp x0, x1, [sp, #48] // hv load L3
     add sp, sp, #768 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_findall_bb9:
+_Lfd34_rt_regex_findall_bb9:
     ldp x0, x1, [sp, #208] // hv load L13
     stp x0, x1, [sp, #384] // hv store L24
     ldp x0, x1, [sp, #272] // hv load L17
@@ -18273,21 +18273,21 @@ _Lb2dd_rt_regex_findall_bb9:
     stp x0, x1, [sp, #400] // hv store L25
     ldp x0, x1, [sp, #400] // hv load L25
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr25@PAGE // hv str ptr page
-    add x3, x3, .LCstr25@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr25 // hv str ptr page
+    add x3, x3, :lo12:.LCstr25 // hv str ptr off
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #416] // hv store L26
     ldp x0, x1, [sp, #416] // hv load L26
-    cbz x1, _Lb2dd_rt_regex_findall_bb11 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_findall_bb10 // branch -> then
-_Lb2dd_rt_regex_findall_bb10:
+    cbz x1, _Lfd34_rt_regex_findall_bb11 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_findall_bb10 // branch -> then
+_Lfd34_rt_regex_findall_bb10:
     ldp x0, x1, [sp, #208] // hv load L13
     bl _rt_re_ascii_fold // call _rt_re_ascii_fold
     stp x0, x1, [sp, #448] // hv store L28
     ldp x0, x1, [sp, #448] // hv load L28
     stp x0, x1, [sp, #384] // hv store L24
-    b _Lb2dd_rt_regex_findall_bb11 // branch
-_Lb2dd_rt_regex_findall_bb11:
+    b _Lfd34_rt_regex_findall_bb11 // branch
+_Lfd34_rt_regex_findall_bb11:
     ldp x0, x1, [sp, #384] // hv load L24
     bl hexa_byte_len // call hexa_byte_len
     stp x0, x1, [sp, #464] // hv store L29
@@ -18296,8 +18296,8 @@ _Lb2dd_rt_regex_findall_bb11:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #496] // hv store L31
-    b _Lb2dd_rt_regex_findall_bb12 // branch
-_Lb2dd_rt_regex_findall_bb12:
+    b _Lfd34_rt_regex_findall_bb12 // branch
+_Lfd34_rt_regex_findall_bb12:
     ldp x0, x1, [sp, #496] // hv load L31
     ldp x2, x3, [sp, #480] // hv load L30
     bl hexa_cmp_le // binop <=
@@ -18305,9 +18305,9 @@ _Lb2dd_rt_regex_findall_bb12:
     stp x0, x1, [x15] // hv store L32
     add x15, sp, #512 // hv frame base
     ldp x0, x1, [x15] // hv load L32
-    cbz x1, _Lb2dd_rt_regex_findall_bb14 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_findall_bb13 // branch -> then
-_Lb2dd_rt_regex_findall_bb13:
+    cbz x1, _Lfd34_rt_regex_findall_bb14 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_findall_bb13 // branch -> then
+_Lfd34_rt_regex_findall_bb13:
     ldp x0, x1, [sp, #496] // hv load L31
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
@@ -18342,16 +18342,16 @@ _Lb2dd_rt_regex_findall_bb13:
     stp x0, x1, [x15] // hv store L37
     add x15, sp, #592 // hv frame base
     ldp x0, x1, [x15] // hv load L37
-    cbz x1, _Lb2dd_rt_regex_findall_bb16 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_findall_bb15 // branch -> then
-_Lb2dd_rt_regex_findall_bb14:
+    cbz x1, _Lfd34_rt_regex_findall_bb16 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_findall_bb15 // branch -> then
+_Lfd34_rt_regex_findall_bb14:
     ldp x0, x1, [sp, #48] // hv load L3
     add sp, sp, #768 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_findall_bb15:
-    b _Lb2dd_rt_regex_findall_bb14 // branch
-_Lb2dd_rt_regex_findall_bb16:
+_Lfd34_rt_regex_findall_bb15:
+    b _Lfd34_rt_regex_findall_bb14 // branch
+_Lfd34_rt_regex_findall_bb16:
     movz x9, #0 // hv const_int: TAG_INT
     movz x10, #0 // hv const_int val
     add x15, sp, #560 // hv frame base
@@ -18385,9 +18385,9 @@ _Lb2dd_rt_regex_findall_bb16:
     stp x0, x1, [x15] // hv store L43
     add x15, sp, #688 // hv frame base
     ldp x0, x1, [x15] // hv load L43
-    cbz x1, _Lb2dd_rt_regex_findall_bb18 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_findall_bb17 // branch -> then
-_Lb2dd_rt_regex_findall_bb17:
+    cbz x1, _Lfd34_rt_regex_findall_bb18 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_findall_bb17 // branch -> then
+_Lfd34_rt_regex_findall_bb17:
     ldp x0, x1, [sp, #496] // hv load L31
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -18397,8 +18397,8 @@ _Lb2dd_rt_regex_findall_bb17:
     add x15, sp, #720 // hv frame base
     ldp x0, x1, [x15] // hv load L45
     stp x0, x1, [sp, #496] // hv store L31
-    b _Lb2dd_rt_regex_findall_bb12 // branch
-_Lb2dd_rt_regex_findall_bb18:
+    b _Lfd34_rt_regex_findall_bb12 // branch
+_Lfd34_rt_regex_findall_bb18:
     bl hexa_array_new // array_lit: new array
     add x15, sp, #736 // hv frame base
     stp x0, x1, [x15] // hv store L46
@@ -18425,7 +18425,7 @@ _Lb2dd_rt_regex_findall_bb18:
     add x15, sp, #672 // hv frame base
     ldp x0, x1, [x15] // hv load L42
     stp x0, x1, [sp, #496] // hv store L31
-    b _Lb2dd_rt_regex_findall_bb12 // branch
+    b _Lfd34_rt_regex_findall_bb12 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #768 // sp adj
@@ -18441,7 +18441,7 @@ rt_regex_split:
     sub sp, sp, #864 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_Lb2dd_rt_regex_split_bb0:
+_Lfd34_rt_regex_split_bb0:
     bl hexa_array_new // array_lit: new array
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
@@ -18451,28 +18451,28 @@ _Lb2dd_rt_regex_split_bb0:
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr27@PAGE // hv str ptr page
-    add x3, x3, .LCstr27@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr27 // hv str ptr page
+    add x3, x3, :lo12:.LCstr27 // hv str ptr off
     bl hexa_eq // ne: eq
     bl hexa_truthy // ne: truthy(eq) → w0
     eor x0, x0, #1 // ne: !truthy
     bl hexa_bool // ne: box bool
     stp x0, x1, [sp, #80] // hv store L5
     ldp x0, x1, [sp, #80] // hv load L5
-    cbz x1, _Lb2dd_rt_regex_split_bb2 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_split_bb1 // branch -> then
-_Lb2dd_rt_regex_split_bb1:
+    cbz x1, _Lfd34_rt_regex_split_bb2 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_split_bb1 // branch -> then
+_Lfd34_rt_regex_split_bb1:
     ldp x0, x1, [sp, #80] // hv load L5
     stp x0, x1, [sp, #96] // hv store L6
-    b _Lb2dd_rt_regex_split_bb3 // branch
-_Lb2dd_rt_regex_split_bb2:
+    b _Lfd34_rt_regex_split_bb3 // branch
+_Lfd34_rt_regex_split_bb2:
     ldp x0, x1, [sp, #16] // hv load L1
     bl hexa_type_of // call hexa_type_of
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr27@PAGE // hv str ptr page
-    add x3, x3, .LCstr27@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr27 // hv str ptr page
+    add x3, x3, :lo12:.LCstr27 // hv str ptr off
     bl hexa_eq // ne: eq
     bl hexa_truthy // ne: truthy(eq) → w0
     eor x0, x0, #1 // ne: !truthy
@@ -18480,17 +18480,17 @@ _Lb2dd_rt_regex_split_bb2:
     stp x0, x1, [sp, #128] // hv store L8
     ldp x0, x1, [sp, #128] // hv load L8
     stp x0, x1, [sp, #96] // hv store L6
-    b _Lb2dd_rt_regex_split_bb3 // branch
-_Lb2dd_rt_regex_split_bb3:
+    b _Lfd34_rt_regex_split_bb3 // branch
+_Lfd34_rt_regex_split_bb3:
     ldp x0, x1, [sp, #96] // hv load L6
-    cbz x1, _Lb2dd_rt_regex_split_bb5 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_split_bb4 // branch -> then
-_Lb2dd_rt_regex_split_bb4:
+    cbz x1, _Lfd34_rt_regex_split_bb5 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_split_bb4 // branch -> then
+_Lfd34_rt_regex_split_bb4:
     ldp x0, x1, [sp, #48] // hv load L3
     add sp, sp, #864 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_split_bb5:
+_Lfd34_rt_regex_split_bb5:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_to_string // call hexa_to_string
     stp x0, x1, [sp, #160] // hv store L10
@@ -18505,9 +18505,9 @@ _Lb2dd_rt_regex_split_bb5:
     bl _rt_re_has_backref_lookaround // call _rt_re_has_backref_lookaround
     stp x0, x1, [sp, #224] // hv store L14
     ldp x0, x1, [sp, #224] // hv load L14
-    cbz x1, _Lb2dd_rt_regex_split_bb7 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_split_bb6 // branch -> then
-_Lb2dd_rt_regex_split_bb6:
+    cbz x1, _Lfd34_rt_regex_split_bb7 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_split_bb6 // branch -> then
+_Lfd34_rt_regex_split_bb6:
     ldp x0, x1, [sp, #48] // hv load L3
     ldp x2, x3, [sp, #208] // hv load L13
     bl hexa_array_push // call hexa_array_push
@@ -18516,7 +18516,7 @@ _Lb2dd_rt_regex_split_bb6:
     add sp, sp, #864 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_split_bb7:
+_Lfd34_rt_regex_split_bb7:
     ldp x0, x1, [sp, #176] // hv load L11
     bl _rt_re_prep_pat // call _rt_re_prep_pat
     stp x0, x1, [sp, #272] // hv store L17
@@ -18541,9 +18541,9 @@ _Lb2dd_rt_regex_split_bb7:
     bl hexa_bool // unop !: box bool
     stp x0, x1, [sp, #368] // hv store L23
     ldp x0, x1, [sp, #368] // hv load L23
-    cbz x1, _Lb2dd_rt_regex_split_bb9 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_split_bb8 // branch -> then
-_Lb2dd_rt_regex_split_bb8:
+    cbz x1, _Lfd34_rt_regex_split_bb9 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_split_bb8 // branch -> then
+_Lfd34_rt_regex_split_bb8:
     ldp x0, x1, [sp, #48] // hv load L3
     ldp x2, x3, [sp, #208] // hv load L13
     bl hexa_array_push // call hexa_array_push
@@ -18552,7 +18552,7 @@ _Lb2dd_rt_regex_split_bb8:
     add sp, sp, #864 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_split_bb9:
+_Lfd34_rt_regex_split_bb9:
     ldp x0, x1, [sp, #208] // hv load L13
     stp x0, x1, [sp, #416] // hv store L26
     ldp x0, x1, [sp, #288] // hv load L18
@@ -18562,21 +18562,21 @@ _Lb2dd_rt_regex_split_bb9:
     stp x0, x1, [sp, #432] // hv store L27
     ldp x0, x1, [sp, #432] // hv load L27
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr25@PAGE // hv str ptr page
-    add x3, x3, .LCstr25@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr25 // hv str ptr page
+    add x3, x3, :lo12:.LCstr25 // hv str ptr off
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #448] // hv store L28
     ldp x0, x1, [sp, #448] // hv load L28
-    cbz x1, _Lb2dd_rt_regex_split_bb11 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_split_bb10 // branch -> then
-_Lb2dd_rt_regex_split_bb10:
+    cbz x1, _Lfd34_rt_regex_split_bb11 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_split_bb10 // branch -> then
+_Lfd34_rt_regex_split_bb10:
     ldp x0, x1, [sp, #208] // hv load L13
     bl _rt_re_ascii_fold // call _rt_re_ascii_fold
     stp x0, x1, [sp, #480] // hv store L30
     ldp x0, x1, [sp, #480] // hv load L30
     stp x0, x1, [sp, #416] // hv store L26
-    b _Lb2dd_rt_regex_split_bb11 // branch
-_Lb2dd_rt_regex_split_bb11:
+    b _Lfd34_rt_regex_split_bb11 // branch
+_Lfd34_rt_regex_split_bb11:
     ldp x0, x1, [sp, #416] // hv load L26
     bl hexa_byte_len // call hexa_byte_len
     stp x0, x1, [sp, #496] // hv store L31
@@ -18587,8 +18587,8 @@ _Lb2dd_rt_regex_split_bb11:
     movz x1, #0 // hv const_int val
     add x15, sp, #528 // hv frame base
     stp x0, x1, [x15] // hv store L33
-    b _Lb2dd_rt_regex_split_bb12 // branch
-_Lb2dd_rt_regex_split_bb12:
+    b _Lfd34_rt_regex_split_bb12 // branch
+_Lfd34_rt_regex_split_bb12:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L33
     add x15, sp, #512 // hv frame base
@@ -18598,9 +18598,9 @@ _Lb2dd_rt_regex_split_bb12:
     stp x0, x1, [x15] // hv store L34
     add x15, sp, #544 // hv frame base
     ldp x0, x1, [x15] // hv load L34
-    cbz x1, _Lb2dd_rt_regex_split_bb14 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_split_bb13 // branch -> then
-_Lb2dd_rt_regex_split_bb13:
+    cbz x1, _Lfd34_rt_regex_split_bb14 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_split_bb13 // branch -> then
+_Lfd34_rt_regex_split_bb13:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L33
     movz x2, #0 // hv const_int: TAG_INT
@@ -18637,9 +18637,9 @@ _Lb2dd_rt_regex_split_bb13:
     stp x0, x1, [x15] // hv store L39
     add x15, sp, #624 // hv frame base
     ldp x0, x1, [x15] // hv load L39
-    cbz x1, _Lb2dd_rt_regex_split_bb16 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_split_bb15 // branch -> then
-_Lb2dd_rt_regex_split_bb14:
+    cbz x1, _Lfd34_rt_regex_split_bb16 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_split_bb15 // branch -> then
+_Lfd34_rt_regex_split_bb14:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L33
     add x15, sp, #512 // hv frame base
@@ -18649,11 +18649,11 @@ _Lb2dd_rt_regex_split_bb14:
     stp x0, x1, [x15] // hv store L50
     add x15, sp, #800 // hv frame base
     ldp x0, x1, [x15] // hv load L50
-    cbz x1, _Lb2dd_rt_regex_split_bb20 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_split_bb19 // branch -> then
-_Lb2dd_rt_regex_split_bb15:
-    b _Lb2dd_rt_regex_split_bb14 // branch
-_Lb2dd_rt_regex_split_bb16:
+    cbz x1, _Lfd34_rt_regex_split_bb20 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_split_bb19 // branch -> then
+_Lfd34_rt_regex_split_bb15:
+    b _Lfd34_rt_regex_split_bb14 // branch
+_Lfd34_rt_regex_split_bb16:
     movz x9, #0 // hv const_int: TAG_INT
     movz x10, #0 // hv const_int val
     add x15, sp, #592 // hv frame base
@@ -18687,9 +18687,9 @@ _Lb2dd_rt_regex_split_bb16:
     stp x0, x1, [x15] // hv store L45
     add x15, sp, #720 // hv frame base
     ldp x0, x1, [x15] // hv load L45
-    cbz x1, _Lb2dd_rt_regex_split_bb18 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_split_bb17 // branch -> then
-_Lb2dd_rt_regex_split_bb17:
+    cbz x1, _Lfd34_rt_regex_split_bb18 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_split_bb17 // branch -> then
+_Lfd34_rt_regex_split_bb17:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L33
     movz x2, #0 // hv const_int: TAG_INT
@@ -18701,8 +18701,8 @@ _Lb2dd_rt_regex_split_bb17:
     ldp x0, x1, [x15] // hv load L47
     add x15, sp, #528 // hv frame base
     stp x0, x1, [x15] // hv store L33
-    b _Lb2dd_rt_regex_split_bb12 // branch
-_Lb2dd_rt_regex_split_bb18:
+    b _Lfd34_rt_regex_split_bb12 // branch
+_Lfd34_rt_regex_split_bb18:
     ldp x0, x1, [sp, #208] // hv load L13
     add x15, sp, #528 // hv frame base
     ldp x2, x3, [x15] // hv load L33
@@ -18721,8 +18721,8 @@ _Lb2dd_rt_regex_split_bb18:
     ldp x0, x1, [x15] // hv load L44
     add x15, sp, #528 // hv frame base
     stp x0, x1, [x15] // hv store L33
-    b _Lb2dd_rt_regex_split_bb12 // branch
-_Lb2dd_rt_regex_split_bb19:
+    b _Lfd34_rt_regex_split_bb12 // branch
+_Lfd34_rt_regex_split_bb19:
     ldp x0, x1, [sp, #208] // hv load L13
     add x15, sp, #528 // hv frame base
     ldp x2, x3, [x15] // hv load L33
@@ -18737,8 +18737,8 @@ _Lb2dd_rt_regex_split_bb19:
     bl hexa_array_push // call hexa_array_push
     add x15, sp, #848 // hv frame base
     stp x0, x1, [x15] // hv store L53
-    b _Lb2dd_rt_regex_split_bb20 // branch
-_Lb2dd_rt_regex_split_bb20:
+    b _Lfd34_rt_regex_split_bb20 // branch
+_Lfd34_rt_regex_split_bb20:
     ldp x0, x1, [sp, #48] // hv load L3
     add sp, sp, #864 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
@@ -18754,34 +18754,34 @@ rt_regex_replace:
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
     stp x4, x5, [sp, #32] // ingress param 2
-_Lb2dd_rt_regex_replace_bb0:
+_Lfd34_rt_regex_replace_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_type_of // call hexa_type_of
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L3
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr27@PAGE // hv str ptr page
-    add x3, x3, .LCstr27@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr27 // hv str ptr page
+    add x3, x3, :lo12:.LCstr27 // hv str ptr off
     bl hexa_eq // ne: eq
     bl hexa_truthy // ne: truthy(eq) → w0
     eor x0, x0, #1 // ne: !truthy
     bl hexa_bool // ne: box bool
     stp x0, x1, [sp, #64] // hv store L4
     ldp x0, x1, [sp, #64] // hv load L4
-    cbz x1, _Lb2dd_rt_regex_replace_bb2 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_replace_bb1 // branch -> then
-_Lb2dd_rt_regex_replace_bb1:
+    cbz x1, _Lfd34_rt_regex_replace_bb2 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_replace_bb1 // branch -> then
+_Lfd34_rt_regex_replace_bb1:
     ldp x0, x1, [sp, #64] // hv load L4
     stp x0, x1, [sp, #80] // hv store L5
-    b _Lb2dd_rt_regex_replace_bb3 // branch
-_Lb2dd_rt_regex_replace_bb2:
+    b _Lfd34_rt_regex_replace_bb3 // branch
+_Lfd34_rt_regex_replace_bb2:
     ldp x0, x1, [sp, #16] // hv load L1
     bl hexa_type_of // call hexa_type_of
     stp x0, x1, [sp, #96] // hv store L6
     ldp x0, x1, [sp, #96] // hv load L6
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr27@PAGE // hv str ptr page
-    add x3, x3, .LCstr27@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr27 // hv str ptr page
+    add x3, x3, :lo12:.LCstr27 // hv str ptr off
     bl hexa_eq // ne: eq
     bl hexa_truthy // ne: truthy(eq) → w0
     eor x0, x0, #1 // ne: !truthy
@@ -18789,23 +18789,23 @@ _Lb2dd_rt_regex_replace_bb2:
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
     stp x0, x1, [sp, #80] // hv store L5
-    b _Lb2dd_rt_regex_replace_bb3 // branch
-_Lb2dd_rt_regex_replace_bb3:
+    b _Lfd34_rt_regex_replace_bb3 // branch
+_Lfd34_rt_regex_replace_bb3:
     ldp x0, x1, [sp, #80] // hv load L5
-    cbz x1, _Lb2dd_rt_regex_replace_bb5 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_replace_bb4 // branch -> then
-_Lb2dd_rt_regex_replace_bb4:
+    cbz x1, _Lfd34_rt_regex_replace_bb5 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_replace_bb4 // branch -> then
+_Lfd34_rt_regex_replace_bb4:
     ldp x0, x1, [sp, #80] // hv load L5
     stp x0, x1, [sp, #128] // hv store L8
-    b _Lb2dd_rt_regex_replace_bb6 // branch
-_Lb2dd_rt_regex_replace_bb5:
+    b _Lfd34_rt_regex_replace_bb6 // branch
+_Lfd34_rt_regex_replace_bb5:
     ldp x0, x1, [sp, #32] // hv load L2
     bl hexa_type_of // call hexa_type_of
     stp x0, x1, [sp, #144] // hv store L9
     ldp x0, x1, [sp, #144] // hv load L9
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr27@PAGE // hv str ptr page
-    add x3, x3, .LCstr27@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr27 // hv str ptr page
+    add x3, x3, :lo12:.LCstr27 // hv str ptr off
     bl hexa_eq // ne: eq
     bl hexa_truthy // ne: truthy(eq) → w0
     eor x0, x0, #1 // ne: !truthy
@@ -18813,25 +18813,25 @@ _Lb2dd_rt_regex_replace_bb5:
     stp x0, x1, [sp, #160] // hv store L10
     ldp x0, x1, [sp, #160] // hv load L10
     stp x0, x1, [sp, #128] // hv store L8
-    b _Lb2dd_rt_regex_replace_bb6 // branch
-_Lb2dd_rt_regex_replace_bb6:
+    b _Lfd34_rt_regex_replace_bb6 // branch
+_Lfd34_rt_regex_replace_bb6:
     ldp x0, x1, [sp, #128] // hv load L8
-    cbz x1, _Lb2dd_rt_regex_replace_bb8 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_replace_bb7 // branch -> then
-_Lb2dd_rt_regex_replace_bb7:
+    cbz x1, _Lfd34_rt_regex_replace_bb8 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_replace_bb7 // branch -> then
+_Lfd34_rt_regex_replace_bb7:
     ldp x0, x1, [sp, #16] // hv load L1
     bl hexa_type_of // call hexa_type_of
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr27@PAGE // hv str ptr page
-    add x3, x3, .LCstr27@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr27 // hv str ptr page
+    add x3, x3, :lo12:.LCstr27 // hv str ptr off
     bl hexa_eq // binop ==
     stp x0, x1, [sp, #208] // hv store L13
     ldp x0, x1, [sp, #208] // hv load L13
-    cbz x1, _Lb2dd_rt_regex_replace_bb10 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_replace_bb9 // branch -> then
-_Lb2dd_rt_regex_replace_bb8:
+    cbz x1, _Lfd34_rt_regex_replace_bb10 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_replace_bb9 // branch -> then
+_Lfd34_rt_regex_replace_bb8:
     ldp x0, x1, [sp, #0] // hv load L0
     bl hexa_to_string // call hexa_to_string
     stp x0, x1, [sp, #256] // hv store L16
@@ -18851,9 +18851,9 @@ _Lb2dd_rt_regex_replace_bb8:
     bl _rt_re_has_backref_lookaround // call _rt_re_has_backref_lookaround
     stp x0, x1, [sp, #352] // hv store L22
     ldp x0, x1, [sp, #352] // hv load L22
-    cbz x1, _Lb2dd_rt_regex_replace_bb12 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_replace_bb11 // branch -> then
-_Lb2dd_rt_regex_replace_bb9:
+    cbz x1, _Lfd34_rt_regex_replace_bb12 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_replace_bb11 // branch -> then
+_Lfd34_rt_regex_replace_bb9:
     ldp x0, x1, [sp, #16] // hv load L1
     bl hexa_to_string // call hexa_to_string
     stp x0, x1, [sp, #240] // hv store L15
@@ -18861,19 +18861,19 @@ _Lb2dd_rt_regex_replace_bb9:
     add sp, sp, #1072 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_replace_bb10:
+_Lfd34_rt_regex_replace_bb10:
     movz x0, #3 // hv const_str: TAG_STR
-    adrp x1, .LCstr24@PAGE // hv str ptr page
-    add x1, x1, .LCstr24@PAGEOFF // hv str ptr off
+    adrp x1, .LCstr24 // hv str ptr page
+    add x1, x1, :lo12:.LCstr24 // hv str ptr off
     add sp, sp, #1072 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_replace_bb11:
+_Lfd34_rt_regex_replace_bb11:
     ldp x0, x1, [sp, #304] // hv load L19
     add sp, sp, #1072 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_replace_bb12:
+_Lfd34_rt_regex_replace_bb12:
     ldp x0, x1, [sp, #272] // hv load L17
     bl _rt_re_prep_pat // call _rt_re_prep_pat
     stp x0, x1, [sp, #384] // hv store L24
@@ -18898,14 +18898,14 @@ _Lb2dd_rt_regex_replace_bb12:
     bl hexa_bool // unop !: box bool
     stp x0, x1, [sp, #480] // hv store L30
     ldp x0, x1, [sp, #480] // hv load L30
-    cbz x1, _Lb2dd_rt_regex_replace_bb14 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_replace_bb13 // branch -> then
-_Lb2dd_rt_regex_replace_bb13:
+    cbz x1, _Lfd34_rt_regex_replace_bb14 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_replace_bb13 // branch -> then
+_Lfd34_rt_regex_replace_bb13:
     ldp x0, x1, [sp, #304] // hv load L19
     add sp, sp, #1072 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_Lb2dd_rt_regex_replace_bb14:
+_Lfd34_rt_regex_replace_bb14:
     ldp x0, x1, [sp, #304] // hv load L19
     add x15, sp, #512 // hv frame base
     stp x0, x1, [x15] // hv store L32
@@ -18918,16 +18918,16 @@ _Lb2dd_rt_regex_replace_bb14:
     add x15, sp, #528 // hv frame base
     ldp x0, x1, [x15] // hv load L33
     movz x2, #3 // hv const_str: TAG_STR
-    adrp x3, .LCstr25@PAGE // hv str ptr page
-    add x3, x3, .LCstr25@PAGEOFF // hv str ptr off
+    adrp x3, .LCstr25 // hv str ptr page
+    add x3, x3, :lo12:.LCstr25 // hv str ptr off
     bl hexa_eq // binop ==
     add x15, sp, #544 // hv frame base
     stp x0, x1, [x15] // hv store L34
     add x15, sp, #544 // hv frame base
     ldp x0, x1, [x15] // hv load L34
-    cbz x1, _Lb2dd_rt_regex_replace_bb16 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_replace_bb15 // branch -> then
-_Lb2dd_rt_regex_replace_bb15:
+    cbz x1, _Lfd34_rt_regex_replace_bb16 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_replace_bb15 // branch -> then
+_Lfd34_rt_regex_replace_bb15:
     ldp x0, x1, [sp, #304] // hv load L19
     bl _rt_re_ascii_fold // call _rt_re_ascii_fold
     add x15, sp, #576 // hv frame base
@@ -18936,8 +18936,8 @@ _Lb2dd_rt_regex_replace_bb15:
     ldp x0, x1, [x15] // hv load L36
     add x15, sp, #512 // hv frame base
     stp x0, x1, [x15] // hv store L32
-    b _Lb2dd_rt_regex_replace_bb16 // branch
-_Lb2dd_rt_regex_replace_bb16:
+    b _Lfd34_rt_regex_replace_bb16 // branch
+_Lfd34_rt_regex_replace_bb16:
     add x15, sp, #512 // hv frame base
     ldp x0, x1, [x15] // hv load L32
     bl hexa_byte_len // call hexa_byte_len
@@ -18952,12 +18952,12 @@ _Lb2dd_rt_regex_replace_bb16:
     add x15, sp, #624 // hv frame base
     stp x0, x1, [x15] // hv store L39
     movz x0, #3 // hv const_str: TAG_STR
-    adrp x1, .LCstr24@PAGE // hv str ptr page
-    add x1, x1, .LCstr24@PAGEOFF // hv str ptr off
+    adrp x1, .LCstr24 // hv str ptr page
+    add x1, x1, :lo12:.LCstr24 // hv str ptr off
     add x15, sp, #640 // hv frame base
     stp x0, x1, [x15] // hv store L40
-    b _Lb2dd_rt_regex_replace_bb17 // branch
-_Lb2dd_rt_regex_replace_bb17:
+    b _Lfd34_rt_regex_replace_bb17 // branch
+_Lfd34_rt_regex_replace_bb17:
     add x15, sp, #624 // hv frame base
     ldp x0, x1, [x15] // hv load L39
     add x15, sp, #608 // hv frame base
@@ -18967,9 +18967,9 @@ _Lb2dd_rt_regex_replace_bb17:
     stp x0, x1, [x15] // hv store L41
     add x15, sp, #656 // hv frame base
     ldp x0, x1, [x15] // hv load L41
-    cbz x1, _Lb2dd_rt_regex_replace_bb19 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_replace_bb18 // branch -> then
-_Lb2dd_rt_regex_replace_bb18:
+    cbz x1, _Lfd34_rt_regex_replace_bb19 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_replace_bb18 // branch -> then
+_Lfd34_rt_regex_replace_bb18:
     add x15, sp, #624 // hv frame base
     ldp x0, x1, [x15] // hv load L39
     movz x2, #0 // hv const_int: TAG_INT
@@ -19007,9 +19007,9 @@ _Lb2dd_rt_regex_replace_bb18:
     stp x0, x1, [x15] // hv store L46
     add x15, sp, #736 // hv frame base
     ldp x0, x1, [x15] // hv load L46
-    cbz x1, _Lb2dd_rt_regex_replace_bb21 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_replace_bb20 // branch -> then
-_Lb2dd_rt_regex_replace_bb19:
+    cbz x1, _Lfd34_rt_regex_replace_bb21 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_replace_bb20 // branch -> then
+_Lfd34_rt_regex_replace_bb19:
     add x15, sp, #624 // hv frame base
     ldp x0, x1, [x15] // hv load L39
     add x15, sp, #608 // hv frame base
@@ -19019,11 +19019,11 @@ _Lb2dd_rt_regex_replace_bb19:
     stp x0, x1, [x15] // hv store L63
     add x15, sp, #1008 // hv frame base
     ldp x0, x1, [x15] // hv load L63
-    cbz x1, _Lb2dd_rt_regex_replace_bb27 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_replace_bb26 // branch -> then
-_Lb2dd_rt_regex_replace_bb20:
-    b _Lb2dd_rt_regex_replace_bb19 // branch
-_Lb2dd_rt_regex_replace_bb21:
+    cbz x1, _Lfd34_rt_regex_replace_bb27 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_replace_bb26 // branch -> then
+_Lfd34_rt_regex_replace_bb20:
+    b _Lfd34_rt_regex_replace_bb19 // branch
+_Lfd34_rt_regex_replace_bb21:
     movz x9, #0 // hv const_int: TAG_INT
     movz x10, #0 // hv const_int val
     add x15, sp, #704 // hv frame base
@@ -19057,9 +19057,9 @@ _Lb2dd_rt_regex_replace_bb21:
     stp x0, x1, [x15] // hv store L52
     add x15, sp, #832 // hv frame base
     ldp x0, x1, [x15] // hv load L52
-    cbz x1, _Lb2dd_rt_regex_replace_bb23 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_replace_bb22 // branch -> then
-_Lb2dd_rt_regex_replace_bb22:
+    cbz x1, _Lfd34_rt_regex_replace_bb23 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_replace_bb22 // branch -> then
+_Lfd34_rt_regex_replace_bb22:
     add x15, sp, #624 // hv frame base
     ldp x0, x1, [x15] // hv load L39
     add x15, sp, #608 // hv frame base
@@ -19069,9 +19069,9 @@ _Lb2dd_rt_regex_replace_bb22:
     stp x0, x1, [x15] // hv store L54
     add x15, sp, #864 // hv frame base
     ldp x0, x1, [x15] // hv load L54
-    cbz x1, _Lb2dd_rt_regex_replace_bb25 // br_cond: !payload -> else
-    b _Lb2dd_rt_regex_replace_bb24 // branch -> then
-_Lb2dd_rt_regex_replace_bb23:
+    cbz x1, _Lfd34_rt_regex_replace_bb25 // br_cond: !payload -> else
+    b _Lfd34_rt_regex_replace_bb24 // branch -> then
+_Lfd34_rt_regex_replace_bb23:
     ldp x0, x1, [sp, #304] // hv load L19
     add x15, sp, #624 // hv frame base
     ldp x2, x3, [x15] // hv load L39
@@ -19105,8 +19105,8 @@ _Lb2dd_rt_regex_replace_bb23:
     ldp x0, x1, [x15] // hv load L51
     add x15, sp, #624 // hv frame base
     stp x0, x1, [x15] // hv store L39
-    b _Lb2dd_rt_regex_replace_bb17 // branch
-_Lb2dd_rt_regex_replace_bb24:
+    b _Lfd34_rt_regex_replace_bb17 // branch
+_Lfd34_rt_regex_replace_bb24:
     add x15, sp, #624 // hv frame base
     ldp x0, x1, [x15] // hv load L39
     movz x2, #0 // hv const_int: TAG_INT
@@ -19133,8 +19133,8 @@ _Lb2dd_rt_regex_replace_bb24:
     ldp x0, x1, [x15] // hv load L58
     add x15, sp, #640 // hv frame base
     stp x0, x1, [x15] // hv store L40
-    b _Lb2dd_rt_regex_replace_bb25 // branch
-_Lb2dd_rt_regex_replace_bb25:
+    b _Lfd34_rt_regex_replace_bb25 // branch
+_Lfd34_rt_regex_replace_bb25:
     add x15, sp, #624 // hv frame base
     ldp x0, x1, [x15] // hv load L39
     movz x2, #0 // hv const_int: TAG_INT
@@ -19146,8 +19146,8 @@ _Lb2dd_rt_regex_replace_bb25:
     ldp x0, x1, [x15] // hv load L59
     add x15, sp, #624 // hv frame base
     stp x0, x1, [x15] // hv store L39
-    b _Lb2dd_rt_regex_replace_bb17 // branch
-_Lb2dd_rt_regex_replace_bb26:
+    b _Lfd34_rt_regex_replace_bb17 // branch
+_Lfd34_rt_regex_replace_bb26:
     ldp x0, x1, [sp, #304] // hv load L19
     add x15, sp, #624 // hv frame base
     ldp x2, x3, [x15] // hv load L39
@@ -19167,8 +19167,8 @@ _Lb2dd_rt_regex_replace_bb26:
     ldp x0, x1, [x15] // hv load L66
     add x15, sp, #640 // hv frame base
     stp x0, x1, [x15] // hv store L40
-    b _Lb2dd_rt_regex_replace_bb27 // branch
-_Lb2dd_rt_regex_replace_bb27:
+    b _Lfd34_rt_regex_replace_bb27 // branch
+_Lfd34_rt_regex_replace_bb27:
     add x15, sp, #640 // hv frame base
     ldp x0, x1, [x15] // hv load L40
     add sp, sp, #1072 // sp adj
@@ -19263,5 +19263,4 @@ _hexa_cap_manifest:
 .section .hexa.abi,"",@progbits
 _hexa_abi_stamp:
     .byte 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-
 .section .note.GNU-stack,"",%progbits
