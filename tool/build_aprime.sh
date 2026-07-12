@@ -627,7 +627,7 @@ if [ "${HEXA_ZEROC_RT_CORE_MAP_QUERY_DISPATCH:-0}" != "0" ]; then
         echo "build_aprime: HEXA_ZEROC_RT_CORE_MAP_QUERY_DISPATCH=1 but build/rtcore_map-query-dispatch_native.o missing" >&2; exit 1
     fi
     RTCORE_MAP_QUERY_DISPATCH_OBJ="$REPO/build/rtcore_map-query-dispatch_native.o"
-    RTCORE_MAP_QUERY_DISPATCH_DEF="-DHEXA_RT_CORE_MAP_QUERY_DISPATCH_NATIVE=1"
+    RTCORE_MAP_QUERY_DISPATCH_DEF="-DHEXA_RT_CORE_MAP_QUERY_DISPATCH_NATIVE=1 -DHEXA_RT_CORE_MAP_QUERY_CONTAINS_NATIVE=1"
     echo "  [3/5] ZERO-C RT-CORE-MAP-QUERY-DISPATCH: HEXA_ZEROC_RT_CORE_MAP_QUERY_DISPATCH=1 — 9 map query/projection dispatchers (keys/values/contains_key/entries/map_values/filter_keys/count/any/all) linked from native seed .o"
 fi
 

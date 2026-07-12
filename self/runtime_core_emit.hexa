@@ -4431,7 +4431,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "// dispatch to rt_map_contains_key_b when hexa-source stdlib is present.\n"
     buf = buf + "// C wrapper handles the const char* -> HexaVal string boxing so the hexa\n"
     buf = buf + "// port can stay HexaVal-typed end-to-end.\n"
-    buf = buf + "#if defined(HEXA_RT_SELFEMIT) || defined(HEXA_RT_CORE_MAP_QUERY_DISPATCH_NATIVE)\n"
+    buf = buf + "#if defined(HEXA_RT_SELFEMIT) || defined(HEXA_RT_CORE_MAP_QUERY_CONTAINS_NATIVE)\n"
     buf = buf + "extern int hexa_map_contains_key(HexaVal m, const char* key);\n"
     buf = buf + "#else\n"
     buf = buf + "#ifdef HEXA_HAS_HEXA_RT_STDLIB\n"

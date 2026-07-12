@@ -59,7 +59,46 @@ own-emit must reproduce the pair-ABI — x86_64 Route C proven, arm64 fp-ABI a F
 `#else` per-cluster fallback (dropped all-or-nothing at HEXA_ZEROC_DROP_RTCORE) · syscall-emit atoms ·
 vendor tier E1-gated (`__hx_cabi_call`) · CUDA runtime_cuda.c (nvcc) · ffi_dyn if E1-frozen-unsafe.
 
-## Resume — next concrete step
-Author `stdlib/runtime/map_query.hexa` (9 dispatchers per the resolved shape above), once the cascade
-merges land (#4907 ships the isolation aprime). Full census/synthesis in the Workflow journal
-`subagents/workflows/wf_aa30b431-930/journal.jsonl`.
+## #1 unit — AUTHORED + emit-VERIFIED (2026-07-13, PR feat/axis2-runtimec-map-query)
+
+`stdlib/runtime/map_query.hexa` authored (Fable byte-parity design) + summer emit-verified:
+**8/8 `T hexa_map_*` globals** (keys/values/entries/map_values/filter_keys/count/any/all), U = only the
+10 externs (8 rt_map_* delegates + hexa_array_new/hexa_map_new ctors), **ZERO libc UND**. Each body =
+`HX_MAP_TBL` null-guard (`__hx_tag(m)!=6 || load64(payload,0)==0`) + delegate to the already-hexa-source
+`rt_map_*` (numeric.hexa). Pair-model ABI = SysV for the HexaVal-uniform sigs → the emitted-runtime C
+call sites link unchanged. `tool/regen_map_query_native_s.sh` authored (mirror valop + 8-globl assert +
+U-floor check). **`hexa_map_contains_key` stays C-carrier** — its mixed `(HexaVal, const char*) -> int`
+ABI fits neither pair-model nor Route C all-raw; the named next wall = a per-param C-ABI codegen annotation.
+
+**Ship-wiring — DONE + verified (2026-07-13, PR #4911 commit 2a0d901a5):**
+1. ✅ `self/runtime_core_emit.hexa:4434` contains_key `#if` split to `..._CONTAINS_NATIVE` (DISPATCH externs only the 8).
+2. ✅ `tool/build_aprime.sh:630` `RTCORE_MAP_QUERY_DISPATCH_DEF` also sets `..._CONTAINS_NATIVE=1`.
+3. ✅ `tool/stage_resolve_runtime_a` `resolve_native_map_query_seed()`: own-obj first + `.s`-seed fallback; consumption
+   `$rt_mapq_def` on the runtime_core.o compile + `extra_obj += map_query_native.o`. Default-OFF byte-neutral.
+4. ✅ 3-target `.s` seeds baked + committed (`self/native/map_query_{x86_64,arm64,arm64-linux}.s`, 8 globl each;
+   x86_64 cross-assemble-verified 8/8 T + U-floor clean).
+
+**Two REAL bugs caught + fixed via ship-shape verification (the convergence-warned false-green class):**
+- `.s`-seed assemble referenced `$_mo_archflag` (unbound outside the MULTIOBJ block → `set -u` abort). Dropped it
+  to match every sibling seed-assemble (`$CC -c`).
+- **single-TU multidef**: the single-TU amalgam (3995) + CUDA-host (4003) `#include` runtime_core.c WITHOUT
+  `$rt_mapq_def` → with the flag ON they re-define the 8 → duplicate-symbol with the ar'd seed. Added `$rt_mapq_def`
+  to both. MULTIOBJ S2/S3 were already correct (via `-DHEXA_ZEROC_DROP_RTCORE_INCLUDE`).
+- **Verified summer, BOTH shapes** (single-TU + MULTIOBJ ship): each of the 8 `hexa_map_*` defined **exactly once**
+  (seed only, dropped from runtime_core.c), contains_key stays inline (1 T), **NO dup / no multidef**.
+
+**Flip default-ON — GATED on ship CI (structural PROVEN; behavioral = ship oracle):**
+- STRUCTURAL (drop + no-multidef, both shapes) = PROVEN above. Seed emit 8/8 T + U-floor clean.
+- LINK-CONTRACT EQUIVALENCE: the C `hexa_map_*` bodies **also** delegate via `extern rt_map_*_pred/rt_map_keys…`
+  (runtime_core.c) — the 8 delegates are `U` (program-side stdlib `numeric.hexa`) in runtime.a, NOT `T`. So the
+  seed has the **identical** link contract as the C bodies (no new dependency class); in the real `hexa build`
+  (program + full stdlib) OFF and ON resolve the delegates identically.
+- BEHAVIORAL RUN-parity: a hand-built `clang corpus.o + runtime.a` link is an **unreliable oracle** — aprime's
+  stdlib-DCE emits different delegate subsets per corpus, so a 3-method corpus can't A/B the monolithic seed's
+  8-delegate drag (verdict-integrity: suspect the harness). The **authoritative** behavioral oracle = the PR's
+  `own-link corpus parity` + `cfallback-zero census` CI (real toolchain). Flip default-ON only after byteeq
+  3-target GREEN + `own-link corpus parity` GREEN + shipping smoke.
+Then Tier-1 #2 (valop eqtruthy) + #3 (array typed-leaf). `_Static_assert(offsetof(HexaMapTable,len)==40)` = still-TODO tripwire.
+
+Full census/synthesis: Workflow journal `subagents/workflows/wf_aa30b431-930/journal.jsonl`;
+Fable design `scratchpad/map_query_result.md`.
