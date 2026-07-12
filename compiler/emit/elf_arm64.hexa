@@ -1266,3 +1266,80 @@ pub fn archive_extract_fixpoint_arm64(program_objs: [ElfArm64Obj], buf, members:
 
     return extracted
 }
+
+// ─────────────────────────────────────────────────────────────────
+// axis-③ arm64 own-link rung-2 (S4) — reloc applicator (final vaddr)
+// ─────────────────────────────────────────────────────────────
+// Patch the 12 R_AARCH64 types the cross-gcc runtime.arm64.a emits, into a
+// segment buffer at final vaddr. Bit-masks are VERBATIM from the proven Mach-O
+// arm64 patcher (tool/hexa_ld.hexa:1601-1636/1730-1746) + the CALL26 stub
+// (elf_arm64.hexa CALL26 patch). Q4 GUARD: hexa `>>` sign-behavior is unproven,
+// so page/branch deltas use integer DIVIDE (/0x1000, /4) — both operands are
+// aligned so the quotient is exact + correctly signed for negative (below-PC)
+// deltas; the imm masks then extract the low bits in two's complement.
+fn _aa_page(x: Int) -> Int { return x & (0 - 0x1000) }        // clears low 12 bits (~0xfff)
+fn _aa_u32(buf: [Int], o: Int) -> Int {
+    return (buf[o] & 0xff) | ((buf[o+1] & 0xff) << 8) | ((buf[o+2] & 0xff) << 16) | ((buf[o+3] & 0xff) << 24)
+}
+fn _aa_put32(buf: [Int], o: Int, w: Int) {
+    buf[o+0] = w & 0xff; buf[o+1] = (w >> 8) & 0xff; buf[o+2] = (w >> 16) & 0xff; buf[o+3] = (w >> 24) & 0xff
+}
+fn _aa_put64(buf: [Int], o: Int, v: Int) {
+    let mut i = 0
+    while i < 8 { buf[o+i] = (v >> (8*i)) & 0xff; i = i + 1 }
+}
+fn _aa_ldst_scale(kind: Int) -> Int {
+    if kind == ELF_R_AARCH64_LDST8_ABS_LO12_NC  { return 0 }
+    if kind == ELF_R_AARCH64_LDST16_ABS_LO12_NC { return 1 }
+    if kind == ELF_R_AARCH64_LDST32_ABS_LO12_NC { return 2 }
+    if kind == ELF_R_AARCH64_LDST64_ABS_LO12_NC { return 3 }
+    return 4                                                   // LDST128
+}
+
+// Patch ONE reloc into segment buffer `buf` at byte `off`. P = site vaddr,
+// S = symbol vaddr, A = addend, G = symbol's GOT-slot vaddr (S5). Returns
+// 0 ok · 1 unhandled(refuse) · 2 range/align overflow(refuse) — never silently
+// truncates (a gap surfaces as rc, not a miscompile).
+fn _apply_arm64_reloc(buf: [Int], off: Int, kind: Int, S: Int, A: Int, P: Int, G: Int) -> Int {
+    if kind == ELF_R_AARCH64_ABS64  { _aa_put64(buf, off, S + A); return 0 }
+    if kind == ELF_R_AARCH64_PREL32 {
+        let v = S + A - P
+        if v < (0 - 0x80000000) || v >= 0x100000000 { return 2 }
+        _aa_put32(buf, off, v & 0xffffffff); return 0
+    }
+    let cur = _aa_u32(buf, off)
+    if kind == ELF_R_AARCH64_ADR_PREL_PG_HI21 || kind == ELF_R_AARCH64_ADR_GOT_PAGE {
+        let base = if kind == ELF_R_AARCH64_ADR_GOT_PAGE { G } else { S }
+        let d   = _aa_page(base + A) - _aa_page(P)
+        let imm = d / 0x1000                                  // DIVIDE (Q4-safe)
+        if imm < (0 - 0x100000) || imm > 0xfffff { return 2 }
+        let immlo = imm & 0x3
+        let immhi = (imm / 4) & 0x7ffff                       // (imm>>2) via DIVIDE
+        _aa_put32(buf, off, (cur & 0x9f00001f) | (immlo << 29) | (immhi << 5)); return 0
+    }
+    if kind == ELF_R_AARCH64_ADD_ABS_LO12_NC {
+        let imm12 = (S + A) & 0xfff
+        _aa_put32(buf, off, (cur & 0xffc003ff) | ((imm12 & 0xfff) << 10)); return 0
+    }
+    if kind == ELF_R_AARCH64_LD64_GOT_LO12_NC {
+        let imm12 = ((G + A) & 0xfff) / 8                     // 8-byte load, scale 3
+        _aa_put32(buf, off, (cur & 0xffc003ff) | ((imm12 & 0xfff) << 10)); return 0
+    }
+    if kind == ELF_R_AARCH64_LDST8_ABS_LO12_NC || kind == ELF_R_AARCH64_LDST16_ABS_LO12_NC
+       || kind == ELF_R_AARCH64_LDST32_ABS_LO12_NC || kind == ELF_R_AARCH64_LDST64_ABS_LO12_NC
+       || kind == ELF_R_AARCH64_LDST128_ABS_LO12_NC {
+        let scale = _aa_ldst_scale(kind)
+        let raw   = (S + A) & 0xfff
+        if (raw & ((1 << scale) - 1)) != 0 { return 2 }       // misaligned → refuse (no truncation)
+        let imm12 = raw / (1 << scale)                        // raw >> scale via DIVIDE
+        _aa_put32(buf, off, (cur & 0xffc003ff) | ((imm12 & 0xfff) << 10)); return 0
+    }
+    if kind == ELF_R_AARCH64_CALL26 || kind == ELF_R_AARCH64_JUMP26 {
+        let bd = S + A - P                                    // byte delta
+        if bd < (0 - 0x8000000) || bd >= 0x8000000 { return 2 }   // ±128MB
+        if (bd & 0x3) != 0 { return 2 }                       // 4-byte aligned
+        let imm26 = (bd / 4) & 0x3ffffff                      // (bd>>2) via DIVIDE
+        _aa_put32(buf, off, (cur & 0xfc000000) | imm26); return 0
+    }
+    return 1                                                  // unhandled type → refuse
+}
