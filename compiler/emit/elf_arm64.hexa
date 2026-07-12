@@ -1343,3 +1343,80 @@ fn _apply_arm64_reloc(buf: [Int], off: Int, kind: Int, S: Int, A: Int, P: Int, G
     }
     return 1                                                  // unhandled type → refuse
 }
+
+// ─────────────────────────────────────────────────────────────────
+// axis-③ arm64 own-link rung-2 (S6a) — serialize_elf_exec_arm64_2seg
+// ─────────────────────────────────────────────────────────────
+// AArch64 twin of serialize_elf_exec_x86_64_2seg (elf_x86_64.hexa:3579): a static
+// AArch64 ET_EXEC with TWO PT_LOADs — seg0 (R+X) ELF header+2 phdrs+.text @
+// 0x400000, seg1 (R+W) .rodata++.data(++GOT) (+ .bss in p_memsz) at a page-aligned
+// vaddr above text. Deltas vs the x86 twin: e_machine 0x3e→0xb7, and p_align +
+// the data file-offset alignment use 0x10000 (64KB-page-safe) so p_vaddr≡p_offset
+// mod p_align holds on 64KB-page aarch64 kernels.
+pub fn serialize_elf_exec_arm64_2seg(text: [Int], data: [Int], bss_size: Int) -> [Int] {
+    let out: [Int] = []
+    let text_size = len(text)
+    let data_size = len(data)
+
+    let elf_header_size = 64
+    let phdr_size = 56
+    let phnum = 2
+    let code_off = elf_header_size + phdr_size * phnum     // 176
+    let vaddr_base = 0x400000
+    let entry_vaddr = vaddr_base + code_off
+    let text_end_file = code_off + text_size
+    // Page-align (0x10000) the data segment file offset → vaddr congruence holds.
+    let data_file_off = text_end_file + ((0x10000 - (text_end_file & 0xffff)) & 0xffff)
+    let data_vaddr = vaddr_base + data_file_off
+    let text_filesz = code_off + text_size
+    let data_memsz  = data_size + bss_size
+
+    out.push(ELF_EI_MAG0); out.push(ELF_EI_MAG1)
+    out.push(ELF_EI_MAG2); out.push(ELF_EI_MAG3)
+    out.push(ELF_ELFCLASS64)
+    out.push(ELF_ELFDATA2LSB)
+    out.push(ELF_EV_CURRENT)
+    out.push(ELF_ELFOSABI_NONE)
+    _ew_zero(out, 8)
+    _ew_u16(out, ELF_ET_EXEC)
+    _ew_u16(out, ELF_EM_AARCH64)            // ← AArch64 delta
+    _ew_u32(out, ELF_EV_CURRENT)
+    _ew_u64(out, entry_vaddr)
+    _ew_u64(out, elf_header_size)           // e_phoff
+    _ew_u64(out, 0)                         // e_shoff
+    _ew_u32(out, 0)                         // e_flags
+    _ew_u16(out, elf_header_size)
+    _ew_u16(out, phdr_size)
+    _ew_u16(out, phnum)
+    _ew_u16(out, 0)                         // e_shentsize
+    _ew_u16(out, 0)                         // e_shnum
+    _ew_u16(out, 0)                         // e_shstrndx
+
+    // PT_LOAD[0] — R+X text
+    _ew_u32(out, 1)
+    _ew_u32(out, 5)                         // PF_R | PF_X
+    _ew_u64(out, 0)
+    _ew_u64(out, vaddr_base)
+    _ew_u64(out, vaddr_base)
+    _ew_u64(out, text_filesz)
+    _ew_u64(out, text_filesz)
+    _ew_u64(out, 0x10000)                   // p_align (64KB)
+
+    // PT_LOAD[1] — R+W rodata/data(/GOT) (+ .bss in memsz)
+    _ew_u32(out, 1)
+    _ew_u32(out, 6)                         // PF_R | PF_W
+    _ew_u64(out, data_file_off)
+    _ew_u64(out, data_vaddr)
+    _ew_u64(out, data_vaddr)
+    _ew_u64(out, data_size)
+    _ew_u64(out, data_memsz)
+    _ew_u64(out, 0x10000)
+
+    let mut i = 0
+    while i < text_size { out.push(text[i] & 0xff); i = i + 1 }
+    _ew_zero(out, data_file_off - text_end_file)
+    let mut d = 0
+    while d < data_size { out.push(data[d] & 0xff); d = d + 1 }
+
+    return out
+}
