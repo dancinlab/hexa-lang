@@ -2238,3 +2238,23 @@ pub fn link_elf_arm64_ownstart_ar(program_objs: [ElfArm64Obj], out_path: string,
     }
     return 0
 }
+
+// axis-② E4 — arm64 sibling of elf_x86_64.hexa::demote_nonkeep_to_local.
+// ElfSym/ElfRel/nlocal/sh_info are the shared x86 shapes (see header
+// comment), so the partition/remap core (_demote_partition) is reused
+// verbatim; only the ElfArm64Obj reconstruction differs (no
+// init_array/align fields). Empty keeplist = strict pass-through.
+pub fn demote_nonkeep_to_local_arm64(obj: ElfArm64Obj, keeplist: [string]) -> ElfArm64Obj {
+    if len(keeplist) == 0 { return obj }
+    let d = _demote_partition(obj.symbols, obj.relocs, obj.strtab, keeplist)
+    return ElfArm64Obj {
+        text:     obj.text,
+        relocs:   d.relocs,
+        symbols:  d.symbols,
+        strtab:   obj.strtab,
+        rodata:   obj.rodata,
+        data:     obj.data,
+        bss_size: obj.bss_size,
+        nlocal:   d.nlocal,
+    }
+}
