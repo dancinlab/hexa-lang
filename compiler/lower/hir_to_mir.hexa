@@ -589,6 +589,17 @@ pub let mut _bck_groups: [i64] = []
 pub let mut _bck_names: [string] = []
 pub let mut _bck_decl_lines: [i64] = []
 pub let mut _bck_decl_cols: [i64] = []
+// HEXA-OWN L5 round-2b — JOIN-SEQ column (parallel to the tracked-local rows
+// above). Every `_bck_track` stamps the shared `_bck_evseq` program-order
+// counter here, so a tracked row carries the point at which its NAME joined
+// its group. Rule 1 (aliased-write) uses it as the gen/kill discriminator: an
+// aliased-write hazard is real only if the WRITE POSTDATES the use-name's join
+// (a write that predates the alias's creation cannot be an aliased-write of
+// that alias — the rebuild-then-reassign swap-idiom FP, e.g.
+// `let mut tmp=[]; tmp.push(x); arg=tmp; use(arg)`, where the pushes precede
+// `arg=tmp`). Populated only under `_bck_active` → flag-OFF path never appends
+// (byteeq-neutral).
+pub let mut _bck_grp_seqs: [i64] = []
 // HX3045 (Rust E0384) — immutable-binding reassign registry. The aggregate
 // loan registry above (`_bck_*`, keyed by GROUP) never tracks scalar `let`s
 // (they are Copy, never grouped), so the canonical E0384 case `let x = 1;
@@ -607,6 +618,11 @@ pub let mut _bck_w_grps: [i64] = []
 pub let mut _bck_w_names: [string] = []
 pub let mut _bck_w_lines: [i64] = []
 pub let mut _bck_w_blocks: [i64] = []
+// HEXA-OWN L5 round-2b — per-WRITE JOIN-SEQ (parallel to the write rows). Each
+// `_bck_note_write` stamps the shared `_bck_evseq` counter here in program
+// order, so Rule 1 can compare a write's seq against a use-name's join seq
+// (`_bck_grp_seqs`): the write arms the use ONLY if `w_seq > use-name join seq`.
+pub let mut _bck_w_seqs: [i64] = []
 // per-group MOVE events (call into an @own param)
 pub let mut _bck_m_grps: [i64] = []
 pub let mut _bck_m_callees: [string] = []
@@ -622,6 +638,24 @@ pub let mut _bck_u_grps: [i64] = []
 pub let mut _bck_u_names: [string] = []
 pub let mut _bck_u_blocks: [i64] = []
 pub let mut _bck_u_spans: [Span] = []
+// HEXA-OWN L5 round-2b — per-USE snapshot of the use-name's JOIN-SEQ (the value
+// of `_bck_grp_seqs` for the use-name's newest tracked row at USE time). The M4
+// cross-block Rule 1 gate compares each reaching write's seq against this: a
+// write arms the use ONLY if `w_seq > u_seq` (kills the pre-join-write FP whose
+// aliasing assignment happens AFTER the write in program order).
+pub let mut _bck_u_seqs: [i64] = []
+// HEXA-OWN L5 round-2b — SEVER-KILL registry (parallel block/group columns). A
+// fresh (non-handle-copy) `let X = [..]/S{..}` or whole-local reassign
+// `X = [..]/S{..}` re-initializes X and thereby SEVERS any prior-iteration
+// aliasing of X's group. The block it executes in is recorded as a KILL BLOCK
+// for that group: `_bck_nll_check`'s reach recurrence does NOT propagate that
+// group's events THROUGH the kill block (paths that do not traverse it still
+// arm — this is a THROUGH-block cut, NEVER a global group purge). This kills the
+// loop-carried swap-idiom FP (`while { let mut next=[]; …next.push…; x=next }`),
+// where every back-edge path to a later use of the group crosses the severing
+// `let mut next=[]`. Populated only under `_bck_active` (byteeq-neutral).
+pub let mut _bck_kill_blocks: [i64] = []
+pub let mut _bck_kill_grps: [i64] = []
 // @own-param pre-pass map (module lifetime): paired rows fn-name/param-idx,
 // built in lower_hir from fn-item `Annotation{name:"own", args:[pname]}`
 // positioned via the sibling `param_names` annotation (ast_to_hir carries
@@ -798,6 +832,7 @@ fn _bck_reset_fn() {
     _bck_names = []
     _bck_decl_lines = []
     _bck_decl_cols = []
+    _bck_grp_seqs = []
     _bckm_ids = []
     _bckm_mut = []
     _bckm_wr = []
@@ -805,6 +840,7 @@ fn _bck_reset_fn() {
     _bck_w_names = []
     _bck_w_lines = []
     _bck_w_blocks = []
+    _bck_w_seqs = []
     _bck_m_grps = []
     _bck_m_callees = []
     _bck_m_lines = []
@@ -815,6 +851,9 @@ fn _bck_reset_fn() {
     _bck_u_names = []
     _bck_u_blocks = []
     _bck_u_spans = []
+    _bck_u_seqs = []
+    _bck_kill_blocks = []
+    _bck_kill_grps = []
     _bck_ref_names = []
     _bck_ref_origins = []
     _bck_ref_lines = []
@@ -925,6 +964,32 @@ fn _bck_track(local_id: i64, name: string, grp: i64, sp: Span) {
     _bck_names.push(name)
     _bck_decl_lines.push(sp.line)
     _bck_decl_cols.push(sp.col)
+    // L5 round-2b — stamp the program-order JOIN seq for Rule-1 gen/kill gating
+    // (`_bck_evseq` is the SAME shared counter the HX3036 asn-lane advances; new
+    // increments only interleave — they never reorder existing dangle/au seqs).
+    _bck_grp_seqs.push(_bck_evseq)
+    _bck_evseq = _bck_evseq + 1
+}
+
+// L5 round-2b — record a SEVER-KILL: a fresh (non-handle-copy) re-init of a
+// group member `X = [..]/S{..}` executes in block `blk`, killing prior-iteration
+// aliasing of `grp`. `_bck_nll_check` blocks reach propagation of `grp`'s events
+// THROUGH this block (never a global purge). Push-only; consulted by
+// `_bck_kill_has`.
+fn _bck_note_kill(blk: i64, grp: i64) {
+    _bck_kill_blocks.push(blk)
+    _bck_kill_grps.push(grp)
+}
+
+// L5 round-2b — is `blk` a sever-kill block for `grp`? Linear scan over the
+// (few) recorded kill pairs.
+fn _bck_kill_has(blk: i64, grp: i64) -> bool {
+    let mut i = 0
+    while i < len(_bck_kill_blocks) {
+        if _bck_kill_blocks[i] == blk && _bck_kill_grps[i] == grp { return true }
+        i = i + 1
+    }
+    return false
 }
 
 // Loan-eligible (aggregate/reference-value) HIR type kinds: arrays,
@@ -991,6 +1056,9 @@ fn _bck_note_write(local_id: i64, name: string, blk: i64, sp: Span) {
     _bck_w_names.push(name)
     _bck_w_lines.push(sp.line)
     _bck_w_blocks.push(blk)
+    // L5 round-2b — program-order write seq for Rule-1 gen/kill gating.
+    _bck_w_seqs.push(_bck_evseq)
+    _bck_evseq = _bck_evseq + 1
 }
 
 // Record a MOVE of a tracked local (bare-ident arg into an @own param).
@@ -1897,12 +1965,20 @@ fn _bck_check_use(name: string, local_id: i64, blk: i64, sp: Span) {
     let ti = _bck_find_local(local_id)
     if ti < 0 { return }
     let grp = _bck_groups[ti]
+    // L5 round-2b — the JOIN seq of THIS use-name's newest tracked row: the point
+    // at which `name` joined `grp`. Rule 1 arms only for a write that POSTDATES it.
+    let _bk_ujoin = _bck_grp_seqs[ti]
     // Rule 1 — shared-XOR-mut (the M0 discriminator): a use through this
     // name while the group holds a WRITE through a DIFFERENT name in the
     // same block. Benign read-only aliasing never fires (no write event).
+    // L5 round-2b gen/kill gate: the write must POSTDATE the use-name's join
+    // (`_bck_w_seqs[wi] > _bk_ujoin`) — a write recorded BEFORE `name` joined the
+    // group cannot be an aliased-write hazard to that alias (kills the straight-
+    // line rebuild-then-reassign swap FP: the temp's pushes precede `x = tmp`).
     let wi = _bck_find_write(grp)
     if wi >= 0 {
-        if _bck_w_blocks[wi] == blk && _bck_w_names[wi] != name {
+        if _bck_w_blocks[wi] == blk && _bck_w_names[wi] != name
+            && _bck_w_seqs[wi] > _bk_ujoin {
             _emit_hx3014("aliased write", name, _bck_w_names[wi], _bck_w_lines[wi], sp)
         }
     }
@@ -1919,6 +1995,9 @@ fn _bck_check_use(name: string, local_id: i64, blk: i64, sp: Span) {
     _bck_u_names.push(name)
     _bck_u_blocks.push(blk)
     _bck_u_spans.push(sp)
+    // L5 round-2b — snapshot the use-name's join seq for the M4 cross-block
+    // Rule-1 gate (a reaching write arms this use only if `w_seq > u_seq`).
+    _bck_u_seqs.push(_bk_ujoin)
     // HEXA-OWN round10 (HX3042) — record a partial-move USE. `_bck_pm_field` is
     // the field this ident is the base of (set by the field-read arm), or "" for
     // a whole-base use. Suppressed for a place-write base (`s.f = v`/`a[i] = v`),
@@ -1986,8 +2065,10 @@ fn _bck_nll_check() {
         if bid >= 0 { id2ix[bid] = bi }
         bi = bi + 1
     }
-    // per-event source block INDEX (write events first, then moves).
+    // per-event source block INDEX (write events first, then moves) + the
+    // per-event GROUP (L5 round-2b — needed for the sever-kill THROUGH-block cut).
     let mut ev_bix: [i64] = []
+    let mut ev_grp: [i64] = []
     let mut e = 0
     while e < nw {
         let mut wix = 0 - 1
@@ -1995,6 +2076,7 @@ fn _bck_nll_check() {
             wix = id2ix[_bck_w_blocks[e]]
         }
         ev_bix.push(wix)
+        ev_grp.push(_bck_w_grps[e])
         e = e + 1
     }
     e = 0
@@ -2004,7 +2086,34 @@ fn _bck_nll_check() {
             mix = id2ix[_bck_m_blocks[e]]
         }
         ev_bix.push(mix)
+        ev_grp.push(_bck_m_grps[e])
         e = e + 1
+    }
+    // L5 round-2b — SEVER-KILL matrix [block-index × event-index]: killbi[bi][e]==1
+    // iff block bi is a sever-kill block for event e's group (a fresh re-init of a
+    // group member re-executes there, killing prior-iteration aliasing). The reach
+    // recurrence below refuses to propagate an event INTO a block that kills its
+    // group — a THROUGH-block cut, so a use reached only via a back-edge path that
+    // crosses the severing `let mut next=[]` is no longer armed, while any path
+    // that does NOT traverse the kill block still arms (never a global purge). All
+    // zero when no kill pairs were recorded ⇒ recurrence is bit-identical to before.
+    let mut killbi: [i64] = []
+    let mut zk = 0
+    while zk < nb * ne {
+        killbi.push(0)
+        zk = zk + 1
+    }
+    if len(_bck_kill_blocks) > 0 {
+        bi = 0
+        while bi < nb {
+            let kbid = _lr_blocks[bi].id
+            e = 0
+            while e < ne {
+                if _bck_kill_has(kbid, ev_grp[e]) { killbi[bi * ne + e] = 1 }
+                e = e + 1
+            }
+            bi = bi + 1
+        }
     }
     // reach bitmatrix, flat [block-index × event-index], all zero.
     let mut reach: [i64] = []
@@ -2037,7 +2146,10 @@ fn _bck_nll_check() {
                 if pix >= 0 {
                     e = 0
                     while e < ne {
-                        if reach[bi * ne + e] == 0 {
+                        // L5 round-2b — do NOT let event e enter a block that
+                        // sever-kills its group (THROUGH-block cut; paths around
+                        // still arm via a non-kill pred).
+                        if reach[bi * ne + e] == 0 && killbi[bi * ne + e] == 0 {
                             if ev_bix[e] == pix || reach[pix * ne + e] == 1 {
                                 reach[bi * ne + e] = 1
                                 changed = true
@@ -2063,8 +2175,14 @@ fn _bck_nll_check() {
             while e < ne {
                 if reach[uix * ne + e] == 1 {
                     if e < nw {
+                        // L5 round-2b gen/kill gate: a reaching write arms this
+                        // use only if it POSTDATES the use-name's group join
+                        // (`_bck_w_seqs[e] > _bck_u_seqs[u]`) — a write that
+                        // predates the alias's creation is not an aliased-write
+                        // hazard to it (kills the pre-join-write swap FP).
                         if _bck_w_grps[e] == _bck_u_grps[u]
-                            && _bck_w_names[e] != _bck_u_names[u] {
+                            && _bck_w_names[e] != _bck_u_names[u]
+                            && _bck_w_seqs[e] > _bck_u_seqs[u] {
                             _emit_hx3014("aliased write", _bck_u_names[u],
                                          _bck_w_names[e], _bck_w_lines[e],
                                          _bck_u_spans[u])
@@ -5365,7 +5483,14 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         if _bck_active && len(nm) > 0 && len(e.children) > 0 {
             let _bk_rhs = e.children[0]
             if _bk_rhs.kind == "array_lit" || _bk_rhs.kind == "struct_lit" {
-                _bck_track(dst.id, nm, _bck_new_group(), e.span)
+                let _bk_ng = _bck_new_group()
+                _bck_track(dst.id, nm, _bk_ng, e.span)
+                // L5 round-2b — this fresh `let X = [..]/S{..}` re-inits X. Inside
+                // a loop body the back-edge would otherwise carry a prior-iteration
+                // write of this group to a later use; mark the block a sever-kill
+                // for the new group so `_bck_nll_check` cuts reach THROUGH it. A
+                // no-op outside loops (a creation block has no back-edge into it).
+                _bck_note_kill(ctx2.cur_block, _bk_ng)
             }
             if _bk_rhs.kind == "ident" && rhs_op.kind == "local" {
                 let _bk_si = _bck_find_local(rhs_op.local_id)
@@ -5821,7 +5946,12 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             }
             if !_bk_joined {
                 if _bk_rhs2.kind == "array_lit" || _bk_rhs2.kind == "struct_lit" {
-                    _bck_track(dst.id, lhs.text, _bck_new_group(), e.span)
+                    let _bk_ng2 = _bck_new_group()
+                    _bck_track(dst.id, lhs.text, _bk_ng2, e.span)
+                    // L5 round-2b — fresh whole-local reassign `X = [..]/S{..}`
+                    // re-inits X: record a sever-kill for the new group in this
+                    // block (kills the loop-carried swap FP; no-op outside loops).
+                    _bck_note_kill(ctx2.cur_block, _bk_ng2)
                     _bk_joined = true
                 }
             }
