@@ -214,6 +214,19 @@ BLOCKING open questions (Fable / measure-first):
 - Q5 GOT name-dedup collision (two STB_LOCAL g<id> same name → one slot) — key by (member,name) if unsafe.
 - Q6 alignment: ElfArm64Obj drops rodata/data_align — pad pools to 16 or extend struct; census .init_array.
 
+## ✅ S2/rung-4 MEASURED (aiden) — arm64 native seeds ALL EXIST + assemble
+Big positive vs the workflow's assumption that arm64 native seeds need porting: they are ALREADY
+in-tree and assemble cleanly for TARGET=linux-arm64. The cross-build assembled every seed:
+runtime_hi_arm64-linux.s (15 rt_str_*), array_core_arm64-linux.s (6 rt_array_*_native),
+map_core_arm64-linux.s (4 rt_map_*_native), intern (2), fs (2), num_float, float_parse_exact, num,
+valop_core_arm64-linux.s (10/10 incl cmp+div/mod), alloc_syscall_arm64-linux.s (122 syms incl own
+_start). Only 2 optional seeds fail-soft to C libc (float_parse_hexinfnan tail, regex). So the
+rt_array_*_native/rt_map_*_native UNDs seen earlier are NOT gaps — they resolve the instant those
+seed .o's are ar'd in (which the S2 recipe does). rung-4 is therefore highly feasible. Build-harness
+note: the seeds-present branch needs a regenerated self/runtime.c (gitignored); a fresh checkout hits
+the EDGE_ASSET/frozen-seed branch, so the cross-build must run after the emitter regen (release_build/
+build_aprime does this) or with self/runtime.c copied in.
+
 ## Subsequent rungs (not this session)
 - **Rung-2** runtime.a-aware own-link: port `link_elf_arm64_ownstart_ar` (:3208) + `parse_elf_arm64_obj`
   (:3826) + `parse_ar_archive` (:4143) + `archive_extract_fixpoint` (:4297) + `serialize_elf_exec_arm64_2seg`
