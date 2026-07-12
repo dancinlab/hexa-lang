@@ -91,7 +91,7 @@ export HEXA_SEED_CONVERGE="${HEXA_SEED_CONVERGE:-1}"
 # runtime.a with the own-obj --isolate map-query seed, after a --isolate-capable
 # aprime exists). DEFAULT-OFF byte-neutral — the flip PR flips :-0 to :-1. Do NOT
 # export HEXA_RT_OWNOBJ* here: pass-1 (Stage 0b) must stay compiler-free C.
-export HEXA_RT_MAP_QUERY_RERESOLVE="${HEXA_RT_MAP_QUERY_RERESOLVE:-0}"
+export HEXA_RT_MAP_QUERY_RERESOLVE="${HEXA_RT_MAP_QUERY_RERESOLVE:-1}"
 # GH_TOKEN flows to the sub-stages' `gh release download`. Required only in the
 # seeds-removed (edge-pull) branch; harmless no-op while seeds are present.
 export GH_TOKEN="${GH_TOKEN:-}"
