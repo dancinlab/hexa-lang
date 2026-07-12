@@ -125,9 +125,15 @@ ABI fits neither pair-model nor Route C all-raw; the named next wall = a per-par
     **Verified summer THROUGH the resolver own-obj path** (`HEXA_RT_OWNOBJ_MAPQUERY=1`): 8/8 global · rt_map_* absorbed
     local · U-floor carrier-only (0 rt_map_* undef) · no dup · runtime.a-only link OFF+ON rc=0 · RUN-parity byte-identical.
     Byte-neutral (map_query.hexa seed-only + own-obj opt-in) — #4911 stays default-OFF.
+  - **✅ 3-TARGET seed self-containment CONFIRMED (summer, aprime cross-target `--isolate`):** all three emit 8 global
+    dispatchers + **0 `rt_map_*` undef** — x86_64-linux (13 total-U) · arm64-linux (16 total-U) · arm64-apple-darwin
+    (8 global via `llvm-nm-18` — **GOTCHA: GNU `nm` reports "file format not recognized" on Mach-O → false 0/0; use
+    `llvm-nm` for darwin seed verification**). The cross-target risk for the flip's 3-target byteeq is retired at the
+    seed level.
   - **REMAINING for flip default-ON (only this left):** (a) make own-obj `--isolate` the DEFAULT map-query seed path
-    (currently gated on `HEXA_RT_OWNOBJ`/`_MAPQUERY`; the flip = un-gate to default-ON, opt-out `=0`); (b) 3-target
-    byteeq GREEN (arm64 via same `--isolate`, aprime cross-targets) + `own-link corpus parity` + shipping smoke → merge.
+    (currently gated on `HEXA_RT_OWNOBJ`/`_MAPQUERY`; the flip = un-gate to default-ON, opt-out `=0`); (b) full
+    `release_build` byteeq 3-target GREEN + `own-link corpus parity` + shipping smoke → merge (needs pool/CI; the
+    seed-level self-containment + x86_64 end-to-end link+parity are already proven).
 Then Tier-1 #2 (valop eqtruthy) + #3 (array typed-leaf). `_Static_assert(offsetof(HexaMapTable,len)==40)` = still-TODO tripwire.
 
 Full census/synthesis: Workflow journal `subagents/workflows/wf_aa30b431-930/journal.jsonl`;
