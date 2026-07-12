@@ -1823,9 +1823,18 @@ pub fn link_elf_arm64_ownstart_ar(program_objs: [ElfArm64Obj], out_path: string,
         let obj = objs[oi]
         let tbase = len(text)
         obj_text_base.push(tbase)
+        // 16-align each obj's rodata/data section base. data_vaddr is 0x10000-
+        // aligned, so a 16-aligned blob offset ⇒ 16-aligned section vaddr — the
+        // max AArch64 LDST alignment (LDST128 scale 4). Without this, prepending
+        // crt1 (rung-3 dyn path) shifts a later obj's section by crt1's byte size;
+        // if that's not 8-aligned an `ldr x,[sec,:lo12:]` (LDST64_ABS_LO12_NC)
+        // against `$sec_N_4` fails the scale-3 alignment check (_apply rc=2). The
+        // static path never prepended, so the latent gap only surfaced under dyn.
+        while (len(data_bytes) & 15) != 0 { data_bytes.push(0) }
         let ro_base = len(data_bytes)
         let mut r = 0
         while r < len(obj.rodata) { data_bytes.push(obj.rodata[r] & 0xff); r = r + 1 }
+        while (len(data_bytes) & 15) != 0 { data_bytes.push(0) }
         let da_base = len(data_bytes)
         let mut dd = 0
         while dd < len(obj.data) { data_bytes.push(obj.data[dd] & 0xff); dd = dd + 1 }
