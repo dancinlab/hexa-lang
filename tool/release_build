@@ -87,6 +87,11 @@ export HEXA_RT_MULTIOBJ="${HEXA_RT_MULTIOBJ:-1}"
 # (convergence is a deterministic fixpoint, so the two stay equivalent for every
 # faithful assertion). Override per build with HEXA_SEED_CONVERGE=0.
 export HEXA_SEED_CONVERGE="${HEXA_SEED_CONVERGE:-1}"
+# axis-② map-query flip (two-pass): =1 runs Stage 0b′ (re-resolve the SHIPPED
+# runtime.a with the own-obj --isolate map-query seed, after a --isolate-capable
+# aprime exists). DEFAULT-OFF byte-neutral — the flip PR flips :-0 to :-1. Do NOT
+# export HEXA_RT_OWNOBJ* here: pass-1 (Stage 0b) must stay compiler-free C.
+export HEXA_RT_MAP_QUERY_RERESOLVE="${HEXA_RT_MAP_QUERY_RERESOLVE:-0}"
 # GH_TOKEN flows to the sub-stages' `gh release download`. Required only in the
 # seeds-removed (edge-pull) branch; harmless no-op while seeds are present.
 export GH_TOKEN="${GH_TOKEN:-}"
@@ -126,6 +131,10 @@ echo "::endgroup::"
 
 echo "::group::Stage 0a — regen hexa_cc.c (no-op while seed present)"
 bash tool/stage_regen_hexa_cc
+echo "::endgroup::"
+
+echo "::group::Stage 0b′ — re-resolve shipped runtime.a (map-query own-obj two-pass · flip-gated)"
+bash tool/stage_reresolve_runtime_a
 echo "::endgroup::"
 
 echo "::group::Stage 0/1/2 — self-host build (./hexa)"
