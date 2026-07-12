@@ -310,13 +310,18 @@ landed as S1-S6 in link_elf_arm64_ownstart_ar + serialize_elf_exec_arm64_dyn:
   16-align data_bytes before bss_vaddr_base (0afd3c7b5). DIAG measured S=4713587(odd)+A=0, readelf
   confirmed member0=runtime.o sec4=.bss(align16).
 
-**Remaining gap — rc=0 not 42 (SHARED with x86, NOT an arm64 defect)**: the crt1-handoff dynamic path
-exits 0 instead of main's `return 42`. **Measured-identical on the x86 own-link reference (rc=0)** — so
-arm64 rung-3 has EXACT behavior parity with the shipped x86 mechanism. main RUNS (print works); only the
-return-value→exit-code propagation is dropped (a runtime-main-ABI / __libc_start_main-contract detail
-shared by both arches). Fable investigating the root cause (arm64-only wrapper vs shared codegen main-
-lowering). This is a follow-on rung, quarantined from the rung-3 linker verdict per infra-wall-noneval:
-the LINKER + dynamic-link mechanism is verified working at x86 parity.
+**Exit-code fidelity CLOSED — rc=42 GREEN (summer qemu, trampoline fix)**: the crt1-handoff dynamic path
+first exited 0 (Fable H1: hexa fns return a HexaVal pair x0=tag/x1=payload, TAG_INT=0; crt1's
+`__libc_start_main` reads x0=tag=0 as the C-ABI int return → exit(0); the static hand-stub read x1=payload
+via `mov x0,x1` so it gave 42, but the crt1 path had no such adapter). Fix (convergence elf-arm64-hexa-2):
+a 24B+8pad **C-ABI `main` trampoline** at text offset 0 on the crt_handoff branch (`stp/mov x29/bl real-
+main/mov x0,x1/ldp/ret`) + main-def redirect (def_off=0 trampoline, main_off=real body). Zero codegen
+change (main lowering / pair ABI / static stub byte-identical). **Verified: summer qemu-aarch64
+`fn main()->Int{return 42}` own-link `--linker=hexa` → RC=42.** (infra note: aiden was CPU-contended by
+another session's job so the verify was run on the free `summer` pool host per heavy-on-pool — the
+cross-toolchain gap on summer was bridged by relaying crt1.o + the cached arm64 runtime.a; the eval stands
+on the clean summer run.) x86 `link_elf_x86_64_ownstart` shares the identical trampoline gap → sibling
+follow-on. **Rung-3 = DONE + fully verified** (loads · resolves floor · main runs · rc=42).
 
 ## Note
 The x86_64-template reader in the research workflow returned a placeholder (empty); the x86_64 anchor
