@@ -134,3 +134,13 @@ The deep-fn campaign has a documented "**peel the next quadratic**" cadence — 
 - Recommended first cut: bisect the phase with `HEXA_CG_PROFILE`, and since it's loop-dense, suspect a per-loop-body super-linear site (CFG block/edge construction or a per-statement whole-structure heapify inside nested lowering) rather than the spine path.
 
 Relevant files (all `origin/main`): `stdlib/qforge/atoms/ccsd_rhf.hexa`, `state/hexa-own/l5_b4_precensus_run.sh`, `compiler/lower/ast_to_hir.hexa` (1829-1990), `compiler/lower/hir_to_mir.hexa` (368, 3382, 3432, 4194), `compiler/codegen/x86_64_linux.hexa` (241-243, 351-353, 1057-1076).
+---
+## ★ DURABLE FIX scoping (workflow wf_2619615e·axis-③ tie)
+
+**mitigation=clang wall-timeout(#4906·byteeq-verified). durable fix=native-emit(clang 제거)** — scoping 판정:
+- ccsd hang이 측정된 host=ghost/**darwin-arm64**. 거기선 native-emit 티어가 **default-OFF**(own-link tier `uname==Linuxx86_64` 요구 self/main.hexa:3623·build-native tier `HEXA_NATIVE_DARWIN==1` 요구 :3648) → `cmd_build`이 곧장 `_hexa_clang_capped`(:3013/:3924/:3975)로 fall-through → clang이 거대 emitted-C(ccrhf_iterate 단일 456줄→거대 C함수)서 옵티마이저 blowup. **= default/host-gate이지 codegen 완성도 갭 아님.**
+- **Linux x86_64선 native-emit이 이미 default**(own-link/build-native 티어 default-ON) + x86_64 backend가 ccrhf 전 construct 처리(6중첩 loop·86 local·f64 array는 boxed hexa_arr_poly_get으로 degrade·string/array builtin=runtime.a call). hard-abort→clang 경로 없음.
+- **유일 잔여 clang-forcing risk(Linux x86_64)**: own ELF linker가 미해결 reloc심볼에 `return 3`(refuse·elf_x86_64.hexa:3050-3062) → ld → C-transpile. = runtime.a 심볼커버리지/own-link 완성도 갭(fixable·codegen 갭 아님).
+- **axis-③ 판정**: native-emit **default-flip은 이미 착지**(LINK #4711-4718 demonstrated·COMPILE --backend=native --emit=obj 존재·ENCODE-MISS==0 census 진행중 compiler/main.hexa:544). ccsd durable fix = **axis-③ corpus/completeness 라운드**(ENCODE-MISS 닫기)지 신규 캠페인 아님. native-served ccsd build = **DONE①(no hexa_cc.c)+③(no clang) 동시 datapoint**.
+
+**측정 next-round(aiden·census2 후·강제불가 pool)**: Linux x86_64서 `hexa build --backend=native --emit=obj --target=x86_64-linux-gnu stdlib/qforge/atoms/ccsd_rhf.hexa` → (1) clang-free 검증(프로세스트리에 `_hexa_clang_capped` 無·HEXA_RUN_NATIVE_TRACE), (2) own-link 심볼 전해결, (3) byteeq vs clang -c oracle(strip-nondet). ENCODE-MISS 발생시 그 opcode를 elf_x86_64.hexa서 닫기(정상 axis-③ 완성도 항목). darwin native-emit(HEXA_NATIVE_DARWIN)은 별개 rung.
