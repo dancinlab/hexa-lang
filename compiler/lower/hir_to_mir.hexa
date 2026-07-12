@@ -541,24 +541,25 @@ pub let mut _bck_strict = false    // HEXA_BORROWCK_STRICT=1, read once per lowe
 // the emit is never reached → binary + diag stream byte-identical (roadmap
 // A2 byteeq-neutral, gen3≡gen4).
 pub let mut _bck_census = false    // HEXA_BORROWCK_CENSUS=1, read once per lower_hir
-// HEXA-OWN L4/L5 Lane-B B3 — opt-OUT WARNING-BAND default (HEXA_BORROWCK_WARN_DEFAULT=1).
-// The mechanism for the roadmap B3 rung (`_bck_on = env != "0"`, polarity-preserving
-// opt-OUT) landed INERT: default OFF ⇒ this stays false ⇒ the `_bck_on` opt-out
-// reassignment in lower_hir is never taken and `_bck_diag_push` is a straight
-// passthrough ⇒ the diag stream + emitted binary are byte-identical (byteeq-neutral,
-// gen3≡gen4). When set: (a) borrowck runs opt-OUT (on unless HEXA_BORROWCK=="0"),
+// HEXA-OWN L4/L5 Lane-B B3 — opt-OUT WARNING-BAND default (HEXA_BORROWCK_WARN_DEFAULT).
+// FLIPPED default-ON at L5 round-3 (gated on the B1 census: HX3014/HX3055 fires=0 on the
+// whole self-host corpus, so the warn band emits ZERO diagnostics ⇒ diag stream + emitted
+// binary byte-identical, gen3≡gen4). Polarity-preserving opt-OUT: on unless the user sets
+// HEXA_BORROWCK_WARN_DEFAULT="0" (escape hatch preserved — restores the pre-flip opt-in).
+// When on: (a) borrowck runs opt-OUT (on unless HEXA_BORROWCK=="0"),
 // (b) every admitted diagnostic is FORCED to the Warning band (never build-refusing —
 // STRICT stays a SEPARATE opt-in via HEXA_BORROWCK_STRICT), (c) ONLY codes on
-// `_bck_warn_allowlist` are emitted; all other borrowck diags are dropped. The flip to
-// default-ON is GATED on the B1 census triage (0 unfixed hazards) — do NOT flip the live
-// `_bck_on` default here.
-pub let mut _bck_warn_default = false   // HEXA_BORROWCK_WARN_DEFAULT=1, read once per lower_hir
-// B3 allowlist — the HX30xx borrowck codes the B1 census cleared to FP=0. EMPTY until the
-// census + triage runs (roadmap gate B1->B3): empty ⇒ warn-default admits NOTHING ⇒
-// behaviourally identical to OFF (no borrowck diagnostic survives the gate). It is a
-// deliberate placeholder; a code is added ONLY after the census measures its FP=0, e.g.
-// ["HX3014", ...]. @root-cause-ok B1 census is the gate — empty is correct until measured, not a punt
-pub let mut _bck_warn_allowlist: [string] = []
+// `_bck_warn_allowlist` are emitted; all other borrowck diags are dropped. The flip is safe
+// now (not before the #4879/#4889 fixes) precisely because the census proves 0 fires.
+pub let mut _bck_warn_default = true    // HEXA_BORROWCK_WARN_DEFAULT!="0" (opt-OUT), read once per lower_hir
+// B3 allowlist — the HX30xx borrowck codes the B1 census cleared to FP=0. Populated at the
+// B3 flip (roadmap gate B1->B3): HX3014 (was 48 FP → 0 via the #4889 gen/kill precision fix)
+// and HX3055 (was 42 TP → 0 via the #4879 let→let mut sweep) both measured FP=0 / fires=0 on
+// the whole self-host corpus (CENSUS_WOULD_MOVE=0). ONLY census-verified codes belong here;
+// a code is added ONLY after the census measures its fires=0 on the corpus. Since both codes
+// fire 0 on shipping code, the default-ON warn band admits ZERO diagnostics ⇒ stderr + emitted
+// artifacts byte-identical (byteeq-neutral). @root-cause-ok B1 census is the gate — measured, not a punt
+pub let mut _bck_warn_allowlist: [string] = ["HX3014", "HX3055"]
 pub let mut _bck_active = false    // per-fn gate; suspended in closure bodies
 // ── missing-return (E0308 / HX3047) — env-gated default-OFF ─────────────
 // HEXA_MISSING_RETURN=1: opt-in CFG-reachability missing-return check (rustc
@@ -1072,8 +1073,9 @@ fn _bck_note_move(local_id: i64, callee: string, blk: i64, sp: Span) {
 }
 
 // HEXA-OWN L4/L5 Lane-B B3 — allowlist membership test for the opt-OUT
-// warning-band. Linear scan (the allowlist is O(codes)); only consulted when
-// `_bck_warn_default` is set, so the default path never calls it.
+// warning-band. Linear scan (the allowlist is O(codes)); consulted whenever
+// `_bck_warn_default` is set — which is now the DEFAULT (opt-OUT via
+// HEXA_BORROWCK_WARN_DEFAULT="0"). Admits ["HX3014","HX3055"] only.
 fn _bck_warn_allowed(code: string) -> bool {
     let mut i = 0
     while i < len(_bck_warn_allowlist) {
@@ -1084,11 +1086,12 @@ fn _bck_warn_allowed(code: string) -> bool {
 }
 
 // HEXA-OWN L4/L5 Lane-B B3 — the SINGLE choke every borrowck emit helper pushes
-// through (replacing a bare `_lr_diag.push(d)`). Default path (`_bck_warn_default`
-// false) is a verbatim passthrough ⇒ byte-identical diag stream (byteeq-neutral).
-// Under HEXA_BORROWCK_WARN_DEFAULT: admit ONLY allowlisted codes (empty allowlist
-// ⇒ drop everything ⇒ behaves like OFF) and FORCE the Warning band, so a diagnostic
-// that STRICT may have escalated to Error upstream is re-banded to Warning here
+// through (replacing a bare `_lr_diag.push(d)`). Opt-out path (`_bck_warn_default`
+// false, HEXA_BORROWCK_WARN_DEFAULT="0") is a verbatim passthrough ⇒ pre-flip diag
+// stream. DEFAULT (`_bck_warn_default` true): admit ONLY allowlisted codes
+// (["HX3014","HX3055"] — census fires=0, so nothing survives on shipping code ⇒
+// byte-identical stderr/artifacts) and FORCE the Warning band, so a diagnostic that
+// STRICT may have escalated to Error upstream is re-banded to Warning here
 // (warn-default is never build-refusing; STRICT is the separate opt-in for that).
 fn _bck_diag_push(d: Diagnostic) {
     if _bck_warn_default {
@@ -8679,14 +8682,15 @@ pub fn lower_hir(module: HModule) -> MModule {
     _bck_census = env("HEXA_BORROWCK_CENSUS") == "1"
     _bck_on = _bck_on || _bck_census
     if _bck_census { _bck_census_lines = [] }
-    // HEXA-OWN L4/L5 Lane-B B3 — opt-OUT warning-band DEFAULT (INERT mechanism;
-    // flip gated on the B1 census triage). Read the SEPARATE flag; default OFF ⇒
-    // this branch is never taken ⇒ `_bck_on` keeps its opt-IN value above ⇒
-    // byte-identical. When set, borrowck runs opt-OUT (on unless HEXA_BORROWCK is
-    // explicitly "0"); the Warning-band + allowlist gate lives in `_bck_diag_push`,
-    // and STRICT stays its own opt-in flag (read above) — do NOT flip the live
-    // default here.
-    _bck_warn_default = env("HEXA_BORROWCK_WARN_DEFAULT") == "1"
+    // HEXA-OWN L4/L5 Lane-B B3 — opt-OUT warning-band DEFAULT (FLIPPED default-ON at
+    // L5 round-3, gated on the B1 census: HX3014/HX3055 fires=0 on the corpus). Read
+    // the SEPARATE flag as opt-OUT: on unless HEXA_BORROWCK_WARN_DEFAULT=="0" (escape
+    // hatch — restores the pre-flip opt-in). When on, borrowck runs opt-OUT (on unless
+    // HEXA_BORROWCK is explicitly "0"); the Warning-band + allowlist gate lives in
+    // `_bck_diag_push` (never build-refusing), and STRICT stays its own opt-in flag
+    // (read above). byteeq-neutral because the census proves the allowlisted codes fire
+    // 0 ⇒ zero diagnostics ⇒ identical stderr + emitted artifacts.
+    _bck_warn_default = env("HEXA_BORROWCK_WARN_DEFAULT") != "0"
     if _bck_warn_default {
         _bck_on = env("HEXA_BORROWCK") != "0"
     }

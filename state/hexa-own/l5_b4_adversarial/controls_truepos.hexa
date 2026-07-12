@@ -1,0 +1,38 @@
+// L5 B4-precensus adversarial corpus — TRUE-POSITIVE controls.
+// ─────────────────────────────────────────────────────────────────────────
+// These are REAL hazards: write and read touch the SAME place (field/element)
+// through two aliases → the read genuinely observes the mutation. They SHOULD
+// fire HX3014 "aliased write". Their purpose is a liveness assay for the whole
+// census: if these do NOT fire, the compiled binary is not actually running the
+// borrow checker over the corpus (stale hexat / borrowck-off) and every "0
+// fires" elsewhere is meaningless. Non-zero here = census is live.
+//
+// Note: to the checker, TP-1/TP-2 are INDISTINGUISHABLE from the field-disjoint
+// FPs in fd_*.hexa (same HX3014, same name/other args, no field info in the
+// diag) — which is exactly why the FP class exists and B4 fatal is unsafe until
+// place projection lands.
+
+struct Box {
+    v: i64
+}
+
+// TP-1 — write & read the SAME field `v` through two aliases. REAL hazard.
+fn tp_same_field() -> i64 {
+    let mut x = Box { v: 1 }
+    let y = x
+    x.v = 99
+    return y.v
+}
+
+// TP-2 — write & read the SAME array element [0] through two aliases. REAL hazard.
+fn tp_same_index() -> i64 {
+    let mut a = [1, 2, 3]
+    let b = a
+    a[0] = 99
+    return b[0]
+}
+
+fn main() {
+    let s = tp_same_field() + tp_same_index()
+    println(s)
+}

@@ -1,0 +1,19 @@
+// k11_tofloat — TARGET · F64-ARM coverage (string .to_float → f64, float arith).
+//
+// to_float returns f64 (type_id 3), a monomorphic TAG_FLOAT (unlike `mean`,
+// which the audit flagged void-on-fallback but inert). The stamp fires in HIR
+// but no native scalar-unbox path reads type_id==3 (float ALU is a source-level
+// intrinsic only), so the audit (wf_e01c0a15) predicts this arm INERT: asm
+// OFF==ON byte-identical, ratio ≈ 1.0, float output bit-identical. This kernel
+// converts the whole f64 arm from ZERO coverage to MEASURED — confirms no f64
+// miscompile / no regression under a float add. i%1 keeps the receiver stable
+// while the loop body still executes the call each step.
+fn main() {
+    let s = "3.14159"
+    let mut acc = 0.0
+    let N = 40000000
+    for i in 0..N {
+        acc = acc + s.to_float()
+    }
+    println(acc)
+}

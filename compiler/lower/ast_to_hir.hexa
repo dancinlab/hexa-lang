@@ -135,7 +135,13 @@ fn _hir_t_unit()   -> Type { return _prim_type("unit",   "") }
 //     `t = ct.ret[0]` when the callee has a known `fn` return type) to the
 //     builtin-method case via the same mechanism.
 fn _hir_calltype_stamp_enabled() -> bool {
-    return env_var("HEXA_UNBOX_HIR_CALLTYPE") == "1"
+    // default-ON flip (#4875 lever → default). Audit wf_e01c0a15: all 22 stamp
+    // entries SOUND (i64 arms TAG_INT on every reachable path; f64/bool arms
+    // inert — type_id 3/5 never raw-read by the scalar binop-unbox), aliasing
+    // byteeq-safe by construction (type_id is a read-time key, not a storage
+    // selector; mut-reassign widened at hir_to_mir.hexa:5843, source-agnostic).
+    // Opt-out with =0. byteeq-3-target+nvptx GREEN is the gate.
+    return env_var("HEXA_UNBOX_HIR_CALLTYPE") != "0"
 }
 
 // Mirror of the PRIMITIVE-scalar arms of check/types.hexa::_types_builtin_method_ret.

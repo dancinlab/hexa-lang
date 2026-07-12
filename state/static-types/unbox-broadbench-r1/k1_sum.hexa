@@ -1,0 +1,16 @@
+// k1_sum — CONTROL (call-less scalar reduce). The broadbench baseline.
+//
+// HEXA_UNBOX_HIR_CALLTYPE stamps ONLY builtin-METHOD-call results (Field
+// callee). This loop has NO call operand, so the flip is unreachable → the
+// OFF and ON native asm MUST be BYTE-IDENTICAL. If they diverge, the flip is
+// leaking into code it does not own = a broad-regression RED flag.
+// Mirrors state/unbox-infer-r1/k1_sum.hexa (the canonical control).
+fn main() {
+    let M = 1000000007
+    let mut s = 0
+    let N = 200000000
+    for i in 0..N {
+        s = (s + i * 1009) % M
+    }
+    println(s)
+}
