@@ -1437,6 +1437,104 @@ pub fn serialize_elf_exec_arm64_2seg(text: [Int], data: [Int], bss_size: Int) ->
 }
 
 // ─────────────────────────────────────────────────────────────────
+// axis-③ arm64 own-link rung-3 (S6) — serialize_elf_exec_arm64_dyn
+// ─────────────────────────────────────────────────────────────
+// AArch64 twin of serialize_elf_exec_x86_64_dyn (elf_x86_64.hexa:3662): a
+// dynamically-linked ET_EXEC with FOUR phdrs (PT_INTERP · PT_LOAD R-X · PT_LOAD
+// RW · PT_DYNAMIC). The RW segment carries .rodata/.data/GOT + the appended
+// dynstr/dynsym/DT_HASH/.rela.dyn/_DYNAMIC/interp blobs. ld.so maps /lib/ld-
+// linux-aarch64.so.1, eager-binds the GLOB_DAT GOT slots against libc.so.6, and
+// jumps to e_entry (crt1's _start). Deltas vs the x86 dyn twin: e_machine=AArch64
+// + the 0x10000 (64KB-page) data alignment kept from the 2seg twin. entry_off =
+// crt1 `_start`'s text offset; interp_off/dyn_off are blob offsets INTO `data`.
+pub fn serialize_elf_exec_arm64_dyn(text: [Int], data: [Int], bss_size: Int, interp_off: Int, interp_len: Int, dyn_off: Int, dyn_sz: Int, entry_off: Int) -> [Int] {
+    let out: [Int] = []
+    let text_size = len(text)
+    let data_size = len(data)
+
+    let elf_header_size = 64
+    let phdr_size = 56
+    let phnum = 4
+    let code_off = elf_header_size + phdr_size * phnum     // 288
+    let vaddr_base = 0x400000
+    let entry_vaddr = vaddr_base + code_off + entry_off
+    let text_end_file = code_off + text_size
+    let data_file_off = text_end_file + ((0x10000 - (text_end_file & 0xffff)) & 0xffff)
+    let data_vaddr = vaddr_base + data_file_off
+    let text_filesz = code_off + text_size
+    let data_memsz  = data_size + bss_size
+
+    out.push(ELF_EI_MAG0); out.push(ELF_EI_MAG1)
+    out.push(ELF_EI_MAG2); out.push(ELF_EI_MAG3)
+    out.push(ELF_ELFCLASS64)
+    out.push(ELF_ELFDATA2LSB)
+    out.push(ELF_EV_CURRENT)
+    out.push(ELF_ELFOSABI_NONE)
+    _ew_zero(out, 8)
+    _ew_u16(out, ELF_ET_EXEC)
+    _ew_u16(out, ELF_EM_AARCH64)            // ← AArch64 delta
+    _ew_u32(out, ELF_EV_CURRENT)
+    _ew_u64(out, entry_vaddr)
+    _ew_u64(out, elf_header_size)           // e_phoff
+    _ew_u64(out, 0)                         // e_shoff
+    _ew_u32(out, 0)                         // e_flags
+    _ew_u16(out, elf_header_size)
+    _ew_u16(out, phdr_size)
+    _ew_u16(out, phnum)
+    _ew_u16(out, 0)                         // e_shentsize
+    _ew_u16(out, 0)                         // e_shnum
+    _ew_u16(out, 0)                         // e_shstrndx
+
+    // PT_INTERP — kernel maps ld.so and jumps to it first
+    _ew_u32(out, 3)                         // PT_INTERP
+    _ew_u32(out, 4)                         // PF_R
+    _ew_u64(out, data_file_off + interp_off)
+    _ew_u64(out, data_vaddr + interp_off)
+    _ew_u64(out, data_vaddr + interp_off)
+    _ew_u64(out, interp_len)
+    _ew_u64(out, interp_len)
+    _ew_u64(out, 1)                         // p_align
+
+    // PT_LOAD[0] — R-X text
+    _ew_u32(out, 1)
+    _ew_u32(out, 5)                         // PF_R | PF_X
+    _ew_u64(out, 0)
+    _ew_u64(out, vaddr_base)
+    _ew_u64(out, vaddr_base)
+    _ew_u64(out, text_filesz)
+    _ew_u64(out, text_filesz)
+    _ew_u64(out, 0x10000)                   // p_align (64KB)
+
+    // PT_LOAD[1] — R+W rodata/data/GOT/dyn (+ .bss in memsz)
+    _ew_u32(out, 1)
+    _ew_u32(out, 6)                         // PF_R | PF_W
+    _ew_u64(out, data_file_off)
+    _ew_u64(out, data_vaddr)
+    _ew_u64(out, data_vaddr)
+    _ew_u64(out, data_size)
+    _ew_u64(out, data_memsz)
+    _ew_u64(out, 0x10000)
+
+    // PT_DYNAMIC — ld.so reads the DT_* array
+    _ew_u32(out, 2)                         // PT_DYNAMIC
+    _ew_u32(out, 6)                         // PF_R | PF_W
+    _ew_u64(out, data_file_off + dyn_off)
+    _ew_u64(out, data_vaddr + dyn_off)
+    _ew_u64(out, data_vaddr + dyn_off)
+    _ew_u64(out, dyn_sz)
+    _ew_u64(out, dyn_sz)
+    _ew_u64(out, 8)                         // p_align
+
+    let mut i = 0
+    while i < text_size { out.push(text[i] & 0xff); i = i + 1 }
+    _ew_zero(out, data_file_off - text_end_file)
+    let mut d = 0
+    while d < data_size { out.push(data[d] & 0xff); d = d + 1 }
+
+    return out
+}
+
+// ─────────────────────────────────────────────────────────────────
 // axis-③ arm64 own-link rung-2 (S5+S6b) — link_elf_arm64_ownstart_ar
 // ─────────────────────────────────────────────────────────────
 // The full AArch64 archive-aware own-link driver (twin of link_elf_x86_64_
@@ -1656,21 +1754,57 @@ pub fn link_elf_arm64_ownstart_ar(program_objs: [ElfArm64Obj], out_path: string,
     let members   = parse_ar_archive(buf)
     let extracted = archive_extract_fixpoint_arm64(program_objs, buf, members)
 
-    let objs: [ElfArm64Obj] = []
+    // program + extracted (pre-crt1)
+    let objs0: [ElfArm64Obj] = []
     let mut ci = 0
-    while ci < len(program_objs) { objs.push(program_objs[ci]); ci = ci + 1 }
+    while ci < len(program_objs) { objs0.push(program_objs[ci]); ci = ci + 1 }
     let mut cj = 0
-    while cj < len(extracted) { objs.push(extracted[cj]); cj = cj + 1 }
+    while cj < len(extracted) { objs0.push(extracted[cj]); cj = cj + 1 }
 
-    // 24-byte own _start stub (bl main patched below; bl at text offset 8).
+    // ── S2: crt_handoff gate (Road A dynamic-link). Residual libc UND census over
+    //    the pre-crt1 objs: >0 → the pure-static path can't resolve them (no libc),
+    //    so hand the process entry to crt1.o + dynamic-link the floor via
+    //    libc.so.6 (GLOB_DAT-only), mirroring link_elf_x86_64_ownstart. ==0 → the
+    //    rung-2 static path (hand stub, 2seg, no crt1) is byte-identical. ──
+    let resid_pre = _census_resid_und_arm64(objs0)
+    let crt_handoff = len(resid_pre) > 0
+
+    let objs: [ElfArm64Obj] = []
+    if crt_handoff {
+        let crt1 = _ld_read_crt1_arm64()
+        if len(crt1.symbols) == 0 {
+            eprintln("hexa_ld(arm64,ownstart_ar): residual libc UND ('" + resid_pre[0] + "' …) needs crt1.o — set HEXA_LD_SYSROOT=<dir with aarch64 crt1.o> or install /usr/lib/aarch64-linux-gnu/crt1.o")
+            return 3
+        }
+        objs.push(crt1)
+    }
+    let mut co = 0
+    while co < len(objs0) { objs.push(objs0[co]); co = co + 1 }
+
+    // runtime.a def universe (near-miss tripwire) + libc.so.6 .dynsym (type-route)
+    let runtime_defs = _aef_all_member_defs_arm64(buf, members)
+    let mut libc_dyn = LibcDynsym { names: [], types: [], sizes: [], ok: 0 }
+    if crt_handoff {
+        libc_dyn = _ld_read_libc_dynsym_arm64()
+        if libc_dyn.ok == 0 {
+            eprintln("hexa_ld(arm64,ownstart_ar): dynamic-link path needs aarch64 libc.so.6 .dynsym — set HEXA_LD_SYSROOT=<dir with libc.so.6>")
+            return 3
+        }
+    }
+
+    // ── text: 24-byte hand _start stub ONLY on the static path. On crt_handoff
+    //    crt1's `_start` (objs[0], text offset 0) is the entry — no hand stub. ──
     let text: [Int] = []
-    text.push(0xe0); text.push(0x03); text.push(0x40); text.push(0xf9)   // ldr x0,[sp]
-    text.push(0xe1); text.push(0x23); text.push(0x00); text.push(0x91)   // add x1,sp,#8
-    text.push(0x00); text.push(0x00); text.push(0x00); text.push(0x94)   // bl main
-    text.push(0xe0); text.push(0x03); text.push(0x01); text.push(0xaa)   // mov x0,x1
-    text.push(0xa8); text.push(0x0b); text.push(0x80); text.push(0xd2)   // movz x8,#93
-    text.push(0x01); text.push(0x00); text.push(0x00); text.push(0xd4)   // svc #0
-    let bl_off = 8
+    let mut bl_off = -1
+    if !crt_handoff {
+        text.push(0xe0); text.push(0x03); text.push(0x40); text.push(0xf9)   // ldr x0,[sp]
+        text.push(0xe1); text.push(0x23); text.push(0x00); text.push(0x91)   // add x1,sp,#8
+        text.push(0x00); text.push(0x00); text.push(0x00); text.push(0x94)   // bl main
+        text.push(0xe0); text.push(0x03); text.push(0x01); text.push(0xaa)   // mov x0,x1
+        text.push(0xa8); text.push(0x0b); text.push(0x80); text.push(0xd2)   // movz x8,#93
+        text.push(0x01); text.push(0x00); text.push(0x00); text.push(0xd4)   // svc #0
+        bl_off = 8
+    }
 
     let data_bytes: [Int] = []
     let mut total_bss = 0
@@ -1726,27 +1860,119 @@ pub fn link_elf_arm64_ownstart_ar(program_objs: [ElfArm64Obj], out_path: string,
         return 3
     }
 
-    // ── linker-synthetic __init_array_start/__init_array_end (GNU ld PROVIDE
-    //    parity, x86 twin at elf_x86_64.hexa:2149). runtime.arm64.a's
-    //    _hx_run_init_array walks [__init_array_start,__init_array_end) via GOT
-    //    relocs. arm64 drops the SHT_INIT_ARRAY region (no ctors for exit-42), so
-    //    register BOTH GLOBAL defs at the SAME data-blob offset (current data end,
-    //    before the GOT blob) → start==end → the ctor walk is zero-trip. MUST
-    //    precede the GOT collect+fill so the two boundary syms resolve. ──
+    // ── linker-synthetic __init_array_start/__init_array_end (zero-trip; the dyn
+    //    path emits NO DT_INIT_ARRAY — crt1/_dl_init owns ctors, x86 measured rc
+    //    0→2 if materialized on the dyn path). MUST precede GOT + census. ──
     let _iar_off = len(data_bytes)
     def_names.push("__init_array_start"); def_seg.push(1); def_off.push(_iar_off)
     def_names.push("__init_array_end");   def_seg.push(1); def_off.push(_iar_off)
 
-    // ── layout constants ──
-    let code_off = 176                                   // 64 + 56*2 (phnum=2)
+    // ── S3: DYN-UND census + (A0) hxlcl_ FLOOR-NAME alias + near-miss tripwire.
+    //    One pass over every reloc: an UND symref target (all kinds except the
+    //    data-absolute ABS64/ABS32) that (a) has an `hxlcl_<name>` own-body →
+    //    register a link-time alias at the same seg/off (bare name resolves to the
+    //    own body — e.g. longjmp→hxlcl_longjmp, keeping the native setjmp/longjmp
+    //    jmp_buf pair consistent); (b) else is a genuine residual libc UND →
+    //    dyn_names (veneer + GLOB_DAT). Tripwire refuses a codegen↔runtime
+    //    mismatch; STT_OBJECT refuses (COPY lane not ported on arm64). ──
+    let dyn_names: [string] = []
+    let mut cxi = 0
+    while cxi < len(objs) {
+        let cxo = objs[cxi]
+        let mut cxr = 0
+        while cxr < len(cxo.relocs) {
+            let dr = cxo.relocs[cxr]
+            let is_symref = dr.kind != ELF_R_AARCH64_ABS64 && dr.kind != ELF_R_AARCH64_ABS32 && dr.kind != ELF_R_AARCH64_NONE
+            if is_symref {
+                let dnm = _aef_symname_arm64(cxo, cxo.symbols[dr.sym_idx].name_offset)
+                if len(dnm) > 0 {
+                    let mut ddef = false
+                    let mut ddi = 0
+                    while ddi < len(def_names) { if def_names[ddi] == dnm { ddef = true; break } ddi = ddi + 1 }
+                    if !ddef {
+                        let own_nm = "hxlcl_" + dnm
+                        let mut oix = -1
+                        let mut oj = 0
+                        while oj < len(def_names) { if def_names[oj] == own_nm { oix = oj; break } oj = oj + 1 }
+                        if oix >= 0 {
+                            def_names.push(dnm); def_seg.push(def_seg[oix]); def_off.push(def_off[oix])
+                            ddef = true
+                        }
+                    }
+                    if !ddef {
+                        let synth = dnm == "__errno_location" || dnm == "__init_array_start" || dnm == "__init_array_end"
+                        let own_pre = _elf_has_prefix(dnm, "hexa_") || _elf_has_prefix(dnm, "rt_")
+                                      || _elf_has_prefix(dnm, "_hx_") || _elf_has_prefix(dnm, "__hexa")
+                                      || _elf_has_prefix(dnm, "hxlcl_") || _elf_has_prefix(dnm, "forge_")
+                                      || _elf_has_prefix(dnm, "farr_")
+                        if !synth && !own_pre {
+                            let mut already = false
+                            let mut dnj = 0
+                            while dnj < len(dyn_names) { if dyn_names[dnj] == dnm { already = true; break } dnj = dnj + 1 }
+                            if !already {
+                                if len(runtime_defs) > 0 {
+                                    let mut _hit = ""
+                                    let mut _rdi = 0
+                                    while _rdi < len(runtime_defs) {
+                                        let _rd = runtime_defs[_rdi]
+                                        if _rd == "hexa_array_" + dnm || _rd == "hexa_str_" + dnm || _rd == "hexa_map_" + dnm || _rd == "rt_str_" + dnm { _hit = _rd; break }
+                                        _rdi = _rdi + 1
+                                    }
+                                    if len(_hit) > 0 {
+                                        eprintln("hexa_ld(arm64,ownstart_ar): codegen-runtime sym mismatch: UND '" + dnm + "' — runtime.a defines '" + _hit + "' (missing _builtin_runtime_sym entry)")
+                                        return 3
+                                    }
+                                }
+                                if _libc_sym_type(libc_dyn, dnm) == ELF_STT_OBJECT {
+                                    eprintln("hexa_ld(arm64,ownstart_ar): dyn UND '" + dnm + "' is STT_OBJECT (data import) — COPY lane not ported on arm64 rung-3")
+                                    return 3
+                                }
+                                dyn_names.push(dnm)
+                            }
+                        }
+                    }
+                }
+            }
+            cxr = cxr + 1
+        }
+        cxi = cxi + 1
+    }
+    let n_dyn = len(dyn_names)
+    if len(env_var("HEXA_LD_DUMP_DYN")) > 0 {
+        eprintln("hexa_ld(arm64,ownstart_ar): n_dyn=" + to_string(n_dyn))
+        let mut _di = 0
+        while _di < n_dyn { eprintln("  DYN-UND: " + dyn_names[_di]); _di = _di + 1 }
+    }
+
+    // ── S4a: veneers — one 12-byte AArch64 stub per dyn sym at the text tail
+    //    (adrp x16,slot@page ; ldr x16,[x16,#:lo12:slot] ; br x16). x16=IP0 is the
+    //    AAPCS64 intra-call scratch, safe to clobber at any call boundary.
+    //    Registered as a GLOBAL text def so `bl <sym>` resolves onto it via
+    //    _aa_vaddr_of; the adrp/ldr GOT-slot fields are patched in S5. ──
+    while (len(text) & 3) != 0 { text.push(0) }
+    let veneer_off: [Int] = []
+    let mut vni = 0
+    while vni < n_dyn {
+        let voff = len(text)
+        veneer_off.push(voff)
+        text.push(0x10); text.push(0x00); text.push(0x00); text.push(0x90)   // adrp x16, 0
+        text.push(0x10); text.push(0x02); text.push(0x40); text.push(0xf9)   // ldr  x16, [x16, #0]
+        text.push(0x00); text.push(0x02); text.push(0x1f); text.push(0xd6)   // br   x16
+        def_names.push(dyn_names[vni]); def_seg.push(0); def_off.push(voff)
+        vni = vni + 1
+    }
+
+    // ── layout constants (code_off = 288 on the dyn path [4 phdrs], 176 static) ──
+    let code_off = if n_dyn > 0 { 288 } else { 176 }
     let vaddr_base = 0x400000
     let text_vaddr = vaddr_base + code_off
     let text_end = code_off + len(text)
     let data_file_off = text_end + ((0x10000 - (text_end & 0xffff)) & 0xffff)
     let data_vaddr = vaddr_base + data_file_off
 
-    // ── S5: GOT synth. Collect distinct GOT-referenced sym names, reserve one
-    //    8-byte slot each at the data-blob tail, fill = sym final vaddr. ──
+    // ── S5: GOT synth. distinct GOT-referenced obj sym names + (S4b) the dyn
+    //    names (one shared 8-byte slot each; defined → static-filled, dyn → 0 and
+    //    ld.so writes it via GLOB_DAT). ──
     let got_names: [string] = []
     let mut goi = 0
     while goi < len(objs) {
@@ -1762,25 +1988,147 @@ pub fn link_elf_arm64_ownstart_ar(program_objs: [ElfArm64Obj], out_path: string,
         }
         goi = goi + 1
     }
+    let mut dgi = 0
+    while dgi < n_dyn {
+        if !_aef_has(got_names, dyn_names[dgi]) { got_names.push(dyn_names[dgi]) }
+        dgi = dgi + 1
+    }
     while (len(data_bytes) & 7) != 0 { data_bytes.push(0) }
     let got_off = len(data_bytes)
     let mut gg = 0
     while gg < len(got_names) { let mut z = 0; while z < 8 { data_bytes.push(0); z = z + 1 }; gg = gg + 1 }
-    let bss_vaddr_base = data_vaddr + len(data_bytes)     // bss above data (incl GOT)
 
-    // fill GOT slots
+    // ── S4c: dyn data structures (dynstr/dynsym/DT_HASH/.rela.dyn/_DYNAMIC/interp)
+    //    appended to the data blob — GLOB_DAT-only (COPY lane not ported). Skipped
+    //    entirely when n_dyn==0 → 2seg static output is byte-identical. ──
+    let mut interp_off = 0
+    let mut interp_len = 0
+    let mut dyn_off = 0
+    let mut dyn_sz = 0
+    if n_dyn > 0 {
+        let dynstr_blob_off = len(data_bytes)
+        data_bytes.push(0)
+        let dynstr_name_off: [Int] = []
+        let mut ds = 0
+        while ds < n_dyn {
+            dynstr_name_off.push(len(data_bytes) - dynstr_blob_off)
+            let nm = dyn_names[ds]
+            let mut cc = 0
+            while cc < len(nm) { data_bytes.push(char_code(nm, cc) & 0xff); cc = cc + 1 }
+            data_bytes.push(0)
+            ds = ds + 1
+        }
+        let needed_off = len(data_bytes) - dynstr_blob_off
+        let libc = "libc.so.6"
+        let mut li = 0
+        while li < len(libc) { data_bytes.push(char_code(libc, li) & 0xff); li = li + 1 }
+        data_bytes.push(0)
+        let dynstr_size = len(data_bytes) - dynstr_blob_off
+        let dynstr_vaddr = data_vaddr + dynstr_blob_off
+
+        while (len(data_bytes) & 7) != 0 { data_bytes.push(0) }
+        let dynsym_blob_off = len(data_bytes)
+        let dynsym_vaddr = data_vaddr + dynsym_blob_off
+        let mut z0 = 0
+        while z0 < 24 { data_bytes.push(0); z0 = z0 + 1 }
+        let mut sy = 0
+        while sy < n_dyn {
+            _ew_u32(data_bytes, dynstr_name_off[sy])   // st_name
+            data_bytes.push(0x10); data_bytes.push(0)  // st_info=GLOBAL|NOTYPE, st_other
+            _ew_u16(data_bytes, 0)                      // st_shndx = SHN_UNDEF
+            _ew_u64(data_bytes, 0)                      // st_value
+            _ew_u64(data_bytes, 0)                      // st_size
+            sy = sy + 1
+        }
+        let n_dynsym = n_dyn + 1
+
+        while (len(data_bytes) & 7) != 0 { data_bytes.push(0) }
+        let hash_blob_off = len(data_bytes)
+        let hash_vaddr = data_vaddr + hash_blob_off
+        _ew_u32(data_bytes, 1)                          // nbucket
+        _ew_u32(data_bytes, n_dynsym)                   // nchain
+        if n_dynsym > 1 { _ew_u32(data_bytes, 1) } else { _ew_u32(data_bytes, 0) }
+        let mut ch = 0
+        while ch < n_dynsym {
+            if ch == n_dynsym - 1 { _ew_u32(data_bytes, 0) } else { _ew_u32(data_bytes, ch + 1) }
+            ch = ch + 1
+        }
+
+        while (len(data_bytes) & 7) != 0 { data_bytes.push(0) }
+        let rela_blob_off = len(data_bytes)
+        let rela_vaddr = data_vaddr + rela_blob_off
+        let mut rr = 0
+        while rr < n_dyn {
+            let mut rgs = -1
+            let mut rgx = 0
+            while rgx < len(got_names) { if got_names[rgx] == dyn_names[rr] { rgs = rgx; break } rgx = rgx + 1 }
+            let slot_vaddr = data_vaddr + got_off + rgs * 8
+            _ew_u64(data_bytes, slot_vaddr)                                    // r_offset
+            _ew_u64(data_bytes, (rr + 1) * 4294967296 + ELF_R_AARCH64_GLOB_DAT) // r_info=(idx<<32)|GLOB_DAT
+            _ew_u64(data_bytes, 0)                                             // r_addend
+            rr = rr + 1
+        }
+        let rela_size = n_dyn * 24
+
+        while (len(data_bytes) & 7) != 0 { data_bytes.push(0) }
+        dyn_off = len(data_bytes)
+        _ew_u64(data_bytes, 1);  _ew_u64(data_bytes, needed_off)     // DT_NEEDED = "libc.so.6"
+        _ew_u64(data_bytes, 4);  _ew_u64(data_bytes, hash_vaddr)     // DT_HASH
+        _ew_u64(data_bytes, 5);  _ew_u64(data_bytes, dynstr_vaddr)   // DT_STRTAB
+        _ew_u64(data_bytes, 6);  _ew_u64(data_bytes, dynsym_vaddr)   // DT_SYMTAB
+        _ew_u64(data_bytes, 10); _ew_u64(data_bytes, dynstr_size)    // DT_STRSZ
+        _ew_u64(data_bytes, 11); _ew_u64(data_bytes, 24)             // DT_SYMENT
+        _ew_u64(data_bytes, 7);  _ew_u64(data_bytes, rela_vaddr)     // DT_RELA
+        _ew_u64(data_bytes, 8);  _ew_u64(data_bytes, rela_size)      // DT_RELASZ
+        _ew_u64(data_bytes, 9);  _ew_u64(data_bytes, 24)             // DT_RELAENT
+        _ew_u64(data_bytes, 0);  _ew_u64(data_bytes, 0)              // DT_NULL
+        dyn_sz = len(data_bytes) - dyn_off
+
+        interp_off = len(data_bytes)
+        let interp = "/lib/ld-linux-aarch64.so.1"
+        let mut ip = 0
+        while ip < len(interp) { data_bytes.push(char_code(interp, ip) & 0xff); ip = ip + 1 }
+        data_bytes.push(0)
+        interp_len = len(interp) + 1
+    }
+
+    let bss_vaddr_base = data_vaddr + len(data_bytes)     // bss above data (incl GOT + dyn blobs)
+
+    // ── GOT fill: defined syms → final vaddr; dyn syms → leave 0 (ld.so GLOB_DAT) ──
     let mut fi = 0
     while fi < len(got_names) {
-        let sv = _aa_vaddr_of(got_names[fi], def_names, def_seg, def_off, text_vaddr, data_vaddr, bss_vaddr_base)
-        if sv == -1 { eprintln("hexa_ld(arm64,ownstart_ar): GOT sym '" + got_names[fi] + "' undefined"); return 3 }
-        let mut b = 0
-        while b < 8 { data_bytes[got_off + fi*8 + b] = (sv >> (8*b)) & 0xff; b = b + 1 }
+        let mut is_dyn = false
+        let mut dchk = 0
+        while dchk < n_dyn { if dyn_names[dchk] == got_names[fi] { is_dyn = true; break } dchk = dchk + 1 }
+        if !is_dyn {
+            let sv = _aa_vaddr_of(got_names[fi], def_names, def_seg, def_off, text_vaddr, data_vaddr, bss_vaddr_base)
+            if sv == -1 { eprintln("hexa_ld(arm64,ownstart_ar): GOT sym '" + got_names[fi] + "' undefined"); return 3 }
+            let mut b = 0
+            while b < 8 { data_bytes[got_off + fi*8 + b] = (sv >> (8*b)) & 0xff; b = b + 1 }
+        }
         fi = fi + 1
     }
 
-    // ── patch the stub's `bl main` (CALL26) to main's final vaddr ──
-    let _bp = _apply_arm64_reloc(text, bl_off, ELF_R_AARCH64_CALL26, text_vaddr + main_off, 0, text_vaddr + bl_off, 0)
-    if _bp != 0 { eprintln("hexa_ld(arm64,ownstart_ar): stub bl main patch rc=" + to_string(_bp)); return 3 }
+    // ── patch the stub's `bl main` (CALL26) — static path only ──
+    if bl_off >= 0 {
+        let _bp = _apply_arm64_reloc(text, bl_off, ELF_R_AARCH64_CALL26, text_vaddr + main_off, 0, text_vaddr + bl_off, 0)
+        if _bp != 0 { eprintln("hexa_ld(arm64,ownstart_ar): stub bl main patch rc=" + to_string(_bp)); return 3 }
+    }
+
+    // ── S5: veneer fill — point each veneer's adrp/ldr at its shared GOT slot ──
+    let mut vfi = 0
+    while vfi < n_dyn {
+        let voff = veneer_off[vfi]
+        let mut gslot = -1
+        let mut gx = 0
+        while gx < len(got_names) { if got_names[gx] == dyn_names[vfi] { gslot = got_off + gx*8; break } gx = gx + 1 }
+        let gvaddr = data_vaddr + gslot
+        let vp = text_vaddr + voff
+        let r1 = _apply_arm64_reloc(text, voff + 0, ELF_R_AARCH64_ADR_GOT_PAGE, 0, 0, vp, gvaddr)
+        let r2 = _apply_arm64_reloc(text, voff + 4, ELF_R_AARCH64_LD64_GOT_LO12_NC, 0, 0, vp + 4, gvaddr)
+        if r1 != 0 || r2 != 0 { eprintln("hexa_ld(arm64,ownstart_ar): veneer '" + dyn_names[vfi] + "' fill rc=" + to_string(r1) + "/" + to_string(r2)); return 3 }
+        vfi = vfi + 1
+    }
 
     // ── S4 apply: every obj reloc at final vaddr (site_seg picks buffer + P) ──
     let mut aoi = 0
@@ -1790,13 +2138,21 @@ pub fn link_elf_arm64_ownstart_ar(program_objs: [ElfArm64Obj], out_path: string,
         while ri < len(obj.relocs) {
             let rl = obj.relocs[ri]
             let sname = _aef_symname_arm64(obj, obj.symbols[rl.sym_idx].name_offset)
-            let S = _aa_vaddr_of(sname, def_names, def_seg, def_off, text_vaddr, data_vaddr, bss_vaddr_base)
+            let mut S = _aa_vaddr_of(sname, def_names, def_seg, def_off, text_vaddr, data_vaddr, bss_vaddr_base)
+            let is_got = _elf_arm64_kind_is_got(rl.kind) == 1
             if S == -1 {
-                eprintln("hexa_ld(arm64,ownstart_ar): undefined symbol '" + sname + "' (reloc kind " + to_string(rl.kind) + ")")
-                return 3
+                // a GOT-kind ref to a dyn sym is OK (slot filled by ld.so; only G consumed)
+                let mut is_dyn = false
+                let mut dq = 0
+                while dq < n_dyn { if dyn_names[dq] == sname { is_dyn = true; break } dq = dq + 1 }
+                if is_got && is_dyn { S = 0 }
+                else {
+                    eprintln("hexa_ld(arm64,ownstart_ar): undefined symbol '" + sname + "' (reloc kind " + to_string(rl.kind) + ")")
+                    return 3
+                }
             }
             let mut G = 0
-            if _elf_arm64_kind_is_got(rl.kind) == 1 {
+            if is_got {
                 let mut gi = 0
                 while gi < len(got_names) { if got_names[gi] == sname { G = data_vaddr + got_off + gi*8 }; gi = gi + 1 }
             }
@@ -1821,6 +2177,20 @@ pub fn link_elf_arm64_ownstart_ar(program_objs: [ElfArm64Obj], out_path: string,
         aoi = aoi + 1
     }
 
-    write_bytes(out_path, serialize_elf_exec_arm64_2seg(text, data_bytes, total_bss))
+    // ── entry: static = hand stub at text 0; dyn = crt1 `_start` text offset ──
+    let mut entry_off = 0
+    if crt_handoff {
+        let mut sfound = -1
+        let mut ei = 0
+        while ei < len(def_names) { if def_names[ei] == "_start" && def_seg[ei] == 0 { sfound = def_off[ei]; break } ei = ei + 1 }
+        if sfound < 0 { eprintln("hexa_ld(arm64,ownstart_ar): crt1 handoff but no _start text def"); return 3 }
+        entry_off = sfound
+    }
+
+    if n_dyn > 0 {
+        write_bytes(out_path, serialize_elf_exec_arm64_dyn(text, data_bytes, total_bss, interp_off, interp_len, dyn_off, dyn_sz, entry_off))
+    } else {
+        write_bytes(out_path, serialize_elf_exec_arm64_2seg(text, data_bytes, total_bss))
+    }
     return 0
 }
