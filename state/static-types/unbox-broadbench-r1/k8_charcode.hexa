@@ -1,0 +1,14 @@
+// k8_charcode — TARGET · NON-HOISTABLE (string .char_code_at → i64, dynamic).
+//
+// `name.char_code_at(i % 5)` varies per iteration (second non-invariant
+// method, distinct runtime kernel from byte_at). The `+ i` add must unbox on
+// the stamped i64 result under ON. name has 5 chars so `i % 5` is in-bounds.
+fn main() {
+    let name = "hexa!"
+    let mut s = 0
+    let N = 80000000
+    for i in 0..N {
+        s = s + name.char_code_at(i % 5) + i
+    }
+    println(s)
+}

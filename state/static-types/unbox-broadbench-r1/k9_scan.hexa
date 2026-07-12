@@ -1,0 +1,28 @@
+// k9_scan — REAL-WORKLOAD PROXY (compiler lexer/scanner inner loop).
+//
+// Mimics the shape of a hot scanner sweep: a hoisted `src.len()` bound plus a
+// per-step `src.byte_at(pos)` read, both feeding int arithmetic and a char
+// branch (count '(' = byte 40). This is the compiler hot-loop idiom the flip
+// must not regress and should ideally speed up — EVERY int operand originates
+// from a builtin-method-call result, so it is the maximal-coverage stress.
+//
+// NOTE — coverage-boundary probe: `let L = src.len()` and `let c = src.byte_at(..)`
+// bind the call result to a local BEFORE use. The r1 stamp lands on the call
+// HExpr's own type; whether it propagates through the `let` binding to L/c is
+// the open question this kernel measures. If ON shows NO call-count drop here
+// while k4-k8 (inline call operands) do, that localises the flip's coverage to
+// inline-use and names the next round (let-binding type propagation) — a
+// finding, not a failure. `i % L` and `i % 131` keep operands non-invariant.
+fn main() {
+    let src = "fn main(){let x=42+foo(bar,baz)*qux}"
+    let L = src.len()
+    let mut checksum = 0
+    let mut opens = 0
+    let N = 60000000
+    for i in 0..N {
+        let c = src.byte_at(i % L)
+        checksum = checksum + c * (i % 131)
+        if c == 40 { opens = opens + 1 }
+    }
+    println(checksum % 1000000007 + opens)
+}

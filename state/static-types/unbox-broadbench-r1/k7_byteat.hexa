@@ -1,0 +1,16 @@
+// k7_byteat — TARGET · NON-HOISTABLE (string .byte_at → i64, dynamic arg).
+//
+// `name.byte_at(i % 16)` depends on the loop variable → the call is NOT
+// loop-invariant, so no LICM can lift it: the i64 stamp must fire on a
+// genuinely per-iteration call-result operand. This is the case that proves
+// the flip helps beyond hoistable invariants (the k4/k5/k6 group). name has
+// 16 chars so `i % 16` is always in-bounds; parity identical OFF vs ON.
+fn main() {
+    let name = "abcdefghijklmnop"
+    let mut s = 0
+    let N = 80000000
+    for i in 0..N {
+        s = s + name.byte_at(i % 16) * i
+    }
+    println(s)
+}

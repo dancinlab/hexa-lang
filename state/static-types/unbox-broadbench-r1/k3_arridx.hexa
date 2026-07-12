@@ -1,0 +1,16 @@
+// k3_arridx — CONTROL (array-INDEX, not a builtin-method call).
+//
+// `xs[i % 8]` is an index expression, NOT a Field-callee builtin-method call,
+// so the call-result type stamp must never touch it → OFF==ON byte-identical.
+// This is the tightest neighbour of the TARGET kernels (same `xs`, same
+// `* i` arithmetic as k4) and guards against the stamp accidentally widening
+// from method calls to index/subscript results.
+fn main() {
+    let xs: [i64] = [3, 1, 4, 1, 5, 9, 2, 6]
+    let mut s = 0
+    let N = 100000000
+    for i in 0..N {
+        s = s + xs[i % 8] * i
+    }
+    println(s)
+}
