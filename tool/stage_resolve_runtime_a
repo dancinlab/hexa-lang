@@ -3087,20 +3087,34 @@ build_runtime_a_from_source() {
                 local _rnge_full="build/hxlcl_getenv_native_full.o"
                 local _rnge_o="build/hxlcl_getenv_native.o"
                 printf 'fn _rnge_unused() {}\n' > "$_rnge_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV: emitting native Route C hxlcl_getenv .o via $_rnge_bin (HEXA_CABI_HXLCL=1, replacing libc-shim getenv member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnge_bin" "$_rnge_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnge_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnge_getenv.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: getenv Route C asm emit failed — see build/_rnge_getenv.log" >&2; cat "build/_rnge_getenv.log" >&2; return 1; }
-                [ -s "$_rnge_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: empty $_rnge_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnge_s" -o "$_rnge_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: assemble $_rnge_s failed" >&2; return 1; }
-                if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_getenv "$_rnge_full" "$_rnge_o" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: objcopy isolate getenv failed" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — own-emit --keep-global replaces BOTH the
+                # $CC assemble AND the binutils objcopy --keep-global-symbol (no binutils).
+                # Same 5 carrier-resolved externals as the objcopy'd path (NOT the isolated
+                # frozen-seed class). Default (OWNOBJ unset) = existing path (byte-identical).
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rnge_drv" --backend=native --emit=obj --keep-global=hxlcl_getenv \
+                       --target=x86_64-linux-gnu -o "$_rnge_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rnge_getenv_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rnge_o" 2>/dev/null | grep -cE ' T _?hxlcl_getenv$')" -eq 1 ] \
+                   && [ "$(nm "$_rnge_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_getenv via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_getenv (1 global, no \$CC/objcopy — binutils-free) — getenv dropped from shim"
                 else
-                    cp "$_rnge_full" "$_rnge_o"
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV: emitting native Route C hxlcl_getenv .o via $_rnge_bin (HEXA_CABI_HXLCL=1, replacing libc-shim getenv member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rnge_bin" "$_rnge_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnge_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rnge_getenv.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: getenv Route C asm emit failed — see build/_rnge_getenv.log" >&2; cat "build/_rnge_getenv.log" >&2; return 1; }
+                    [ -s "$_rnge_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: empty $_rnge_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rnge_s" -o "$_rnge_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: assemble $_rnge_s failed" >&2; return 1; }
+                    if command -v objcopy >/dev/null 2>&1; then
+                        objcopy --keep-global-symbol=hxlcl_getenv "$_rnge_full" "$_rnge_o" \
+                            || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: objcopy isolate getenv failed" >&2; return 1; }
+                    else
+                        cp "$_rnge_full" "$_rnge_o"
+                    fi
+                    [ -f "$_rnge_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: $_rnge_o not produced" >&2; return 1; }
                 fi
-                [ -f "$_rnge_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV FATAL: $_rnge_o not produced" >&2; return 1; }
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_GETENV"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnge_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-GETENV: hxlcl_getenv → native Route C .o (isolated, environ@GOTPCREL→libc); shim.o built with -DHEXA_RT_NATIVE_GETENV (getenv dropped) — ld -r multidef gate validates"
