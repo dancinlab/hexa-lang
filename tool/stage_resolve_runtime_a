@@ -759,6 +759,27 @@ resolve_native_float_parse_exact_seed() {
         echo "[stage_resolve_runtime_a] RT-NATIVE FLOAT-EXACT: seed $seed exports only $nsyms/1 rt_str_parse_float_exact — exact path stays off (C strtod tail)" >&2
         return 0
     fi
+    # ── axis-②③ B3 A0 (own-object seed) — float_parse_exact (parity own=17 ⊇ seed=17 PROVEN). ──
+    if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_FLOATEXACT:-0}" != "0" ]; } then
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/float_parse_exact.hexa" _otri=""
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --target="$_otri" -o build/float_parse_exact_native.o "$_osrc" 2>build/float_parse_exact_ownobj.err; then
+                local _ots; _ots="$(nm build/float_parse_exact_native.o 2>/dev/null | grep -cE ' T _?rt_str_parse_float_exact')"
+                if [ "${_ots:-0}" -ge 1 ]; then
+                    export HEXA_RT_NUM_PARSE_FLOAT_EXACT=1
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: float_parse_exact via $_oc --emit=obj ($_ots rt_str_parse_float_exact, TARGET=$tgt) → native correctly-rounded tail, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: float_parse_exact own-emit exported $_ots — falling back to .s seed" >&2
+            else
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: float_parse_exact own-emit failed — falling back to .s seed ($(head -1 build/float_parse_exact_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
+    fi
     local s_tmp="build/float_parse_exact_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
     if $CC -c "$s_tmp" -o build/float_parse_exact_native.o 2>/dev/null; then
@@ -923,6 +944,27 @@ resolve_native_num_core_seed() {
     if [ "${nsyms:-0}" -lt 1 ]; then
         echo "[stage_resolve_runtime_a] RT-NATIVE NUM: seed $seed exports only $nsyms/1 rt_parse_int_native — falling back to C #else path" >&2
         return 0
+    fi
+    # ── axis-②③ B3 A0 (own-object seed) — num_core (parity own=1 ⊇ seed=1 PROVEN). ──
+    if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_NUM:-0}" != "0" ]; } then
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/num_core.hexa" _otri=""
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --target="$_otri" -o build/num_core_native.o "$_osrc" 2>build/num_core_ownobj.err; then
+                local _ots; _ots="$(nm build/num_core_native.o 2>/dev/null | grep -cE ' T _?rt_parse_int_native')"
+                if [ "${_ots:-0}" -ge 1 ]; then
+                    export HEXA_RT_NUM_PARSE_INT_NATIVE=1
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: num_core via $_oc --emit=obj ($_ots/1 rt_parse_int_native, TARGET=$tgt) → native int-parse path, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: num_core own-emit exported $_ots/1 — falling back to .s seed" >&2
+            else
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: num_core own-emit failed — falling back to .s seed ($(head -1 build/num_core_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
     fi
     local s_tmp="build/num_core_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
