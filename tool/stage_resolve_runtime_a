@@ -642,25 +642,14 @@ resolve_native_str_core_seed() {
         linux-arm64)  seed="self/native/str_core_arm64-linux.s" ;;
         *)            seed="" ;;   # unknown → C #else path
     esac
-    [ -n "$seed" ] && [ -f "$seed" ] || return 0
-    mkdir -p build
-    # SAFETY: only adopt the native path if the seed exports BOTH scan/compare fns
-    # the runtime_core.c delegation expects — a stale/partial seed would yield an
-    # `undefined reference` at the app link. Counted from `.globl` (toolchain-free).
-    local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_str_eq_native' "$seed" 2>/dev/null || echo 0)"
-    local nsw; nsw="$(grep -cE '^\.globl[[:space:]]+_?rt_str_starts_with_native' "$seed" 2>/dev/null || echo 0)"
-    local new; new="$(grep -cE '^\.globl[[:space:]]+_?rt_str_ends_with_native' "$seed" 2>/dev/null || echo 0)"
-    local nio; nio="$(grep -cE '^\.globl[[:space:]]+_?rt_str_index_of_native' "$seed" 2>/dev/null || echo 0)"
-    local nco; nco="$(grep -cE '^\.globl[[:space:]]+_?rt_str_contains_native' "$seed" 2>/dev/null || echo 0)"
-    if [ "${nsyms:-0}" -lt 1 ] || [ "${nsw:-0}" -lt 1 ] || [ "${new:-0}" -lt 1 ] || [ "${nio:-0}" -lt 1 ] || [ "${nco:-0}" -lt 1 ]; then
-        echo "[stage_resolve_runtime_a] RT-NATIVE STR: seed $seed exports eq:$nsyms/1 starts_with:$nsw/1 ends_with:$new/1 index_of:$nio/1 contains:$nco/1 — falling back to C #else path" >&2
-        return 0
-    fi
     # ── axis-②③ B3 A0 (own-object seed) — str_core (5-flag: eq/starts_with/
-    #    ends_with/index_of/contains; parity own=5 ⊇ seed=5 PROVEN). Own-emit the
-    #    member; require ALL 5 rt_str_*_native exported (mirrors the .s guard at
-    #    655), then set each flag (unless opted-out =0). ──
+    #    ends_with/index_of/contains; parity own=5 PROVEN). Placed BEFORE the .s
+    #    seed-existence guard below because str_core has NO in-tree .s seed (parity
+    #    gate SKIPs it) — the whole point of A0 is to not need the assembled seed.
+    #    Own-emit the member; require ALL 5 rt_str_*_native exported (mirrors the
+    #    .s 5-sym guard), then set each flag (unless opted-out =0). ──
     if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_STRCORE:-0}" != "0" ]; } then
+        mkdir -p build
         local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/str_core.hexa" _otri=""
         case "$tgt" in
             linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
@@ -689,6 +678,20 @@ resolve_native_str_core_seed() {
                 echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: str_core own-emit failed — falling back to .s seed ($(head -1 build/str_core_ownobj.err 2>/dev/null))" >&2
             fi
         fi
+    fi
+    [ -n "$seed" ] && [ -f "$seed" ] || return 0
+    mkdir -p build
+    # SAFETY: only adopt the native path if the seed exports BOTH scan/compare fns
+    # the runtime_core.c delegation expects — a stale/partial seed would yield an
+    # `undefined reference` at the app link. Counted from `.globl` (toolchain-free).
+    local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_str_eq_native' "$seed" 2>/dev/null || echo 0)"
+    local nsw; nsw="$(grep -cE '^\.globl[[:space:]]+_?rt_str_starts_with_native' "$seed" 2>/dev/null || echo 0)"
+    local new; new="$(grep -cE '^\.globl[[:space:]]+_?rt_str_ends_with_native' "$seed" 2>/dev/null || echo 0)"
+    local nio; nio="$(grep -cE '^\.globl[[:space:]]+_?rt_str_index_of_native' "$seed" 2>/dev/null || echo 0)"
+    local nco; nco="$(grep -cE '^\.globl[[:space:]]+_?rt_str_contains_native' "$seed" 2>/dev/null || echo 0)"
+    if [ "${nsyms:-0}" -lt 1 ] || [ "${nsw:-0}" -lt 1 ] || [ "${new:-0}" -lt 1 ] || [ "${nio:-0}" -lt 1 ] || [ "${nco:-0}" -lt 1 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE STR: seed $seed exports eq:$nsyms/1 starts_with:$nsw/1 ends_with:$new/1 index_of:$nio/1 contains:$nco/1 — falling back to C #else path" >&2
+        return 0
     fi
     local s_tmp="build/str_core_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
