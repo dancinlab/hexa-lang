@@ -1,0 +1,14 @@
+// k5_strlen — TARGET · HOISTABLE (STRING .len() → i64). Same firing shape as
+// k4 but the receiver is a string, exercising the string-len runtime path
+// (hexa_len over a str, distinct from the array-len path). ON stamps the i64
+// result → `name.len() * i` and `s + …` unbox → hexa_mul / hexa_add drop.
+// Confirms the stamp is receiver-agnostic across the len() overload set.
+fn main() {
+    let name = "hexa_broadbench"
+    let mut s = 0
+    let N = 100000000
+    for i in 0..N {
+        s = s + name.len() * i
+    }
+    println(s)
+}
