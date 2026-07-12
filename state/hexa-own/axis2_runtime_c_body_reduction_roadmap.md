@@ -59,7 +59,28 @@ own-emit must reproduce the pair-ABI — x86_64 Route C proven, arm64 fp-ABI a F
 `#else` per-cluster fallback (dropped all-or-nothing at HEXA_ZEROC_DROP_RTCORE) · syscall-emit atoms ·
 vendor tier E1-gated (`__hx_cabi_call`) · CUDA runtime_cuda.c (nvcc) · ffi_dyn if E1-frozen-unsafe.
 
-## Resume — next concrete step
-Author `stdlib/runtime/map_query.hexa` (9 dispatchers per the resolved shape above), once the cascade
-merges land (#4907 ships the isolation aprime). Full census/synthesis in the Workflow journal
-`subagents/workflows/wf_aa30b431-930/journal.jsonl`.
+## #1 unit — AUTHORED + emit-VERIFIED (2026-07-13, PR feat/axis2-runtimec-map-query)
+
+`stdlib/runtime/map_query.hexa` authored (Fable byte-parity design) + summer emit-verified:
+**8/8 `T hexa_map_*` globals** (keys/values/entries/map_values/filter_keys/count/any/all), U = only the
+10 externs (8 rt_map_* delegates + hexa_array_new/hexa_map_new ctors), **ZERO libc UND**. Each body =
+`HX_MAP_TBL` null-guard (`__hx_tag(m)!=6 || load64(payload,0)==0`) + delegate to the already-hexa-source
+`rt_map_*` (numeric.hexa). Pair-model ABI = SysV for the HexaVal-uniform sigs → the emitted-runtime C
+call sites link unchanged. `tool/regen_map_query_native_s.sh` authored (mirror valop + 8-globl assert +
+U-floor check). **`hexa_map_contains_key` stays C-carrier** — its mixed `(HexaVal, const char*) -> int`
+ABI fits neither pair-model nor Route C all-raw; the named next wall = a per-param C-ABI codegen annotation.
+
+**Remaining ship-wiring (byteeq-gated, pool — Fable Deliverable 3):**
+1. `self/runtime_core_emit.hexa:4434` (contains_key `#if`): `HEXA_RT_CORE_MAP_QUERY_DISPATCH_NATIVE` →
+   `HEXA_RT_CORE_MAP_QUERY_CONTAINS_NATIVE` (so DISPATCH externs only the 8; contains_key stays inline).
+2. `tool/build_aprime.sh:630`: `RTCORE_MAP_QUERY_DISPATCH_DEF` also sets `..._CONTAINS_NATIVE=1`.
+3. `tool/stage_resolve_runtime_a` new `resolve_native_map_query_seed()` (mirror `resolve_native_map_core_seed`
+   :418): B3-A0 own-obj first (`--emit=obj -o build/map_query_native.o`, nm-gate 8/8 `T hexa_map_*`, no
+   --keep-global/--isolate needed = zero sibling globals) + `.s`-seed fallback; consumption
+   `-DHEXA_RT_CORE_MAP_QUERY_DISPATCH_NATIVE=1` + `extra_obj += build/map_query_native.o`. Default-OFF byte-neutral.
+4. `_Static_assert(offsetof(HexaMapTable,len)==40)` layout tripwire near the struct.
+Byteeq: guard-OFF 3-target bit-identical (merge gate) + guard-ON RUN-parity corpus (populated/empty/non-map/
+void-pred/real-pred/closure) + 3-target GREEN before flip. Then Tier-1 #2 (valop eqtruthy) + #3 (array typed-leaf).
+
+Full census/synthesis: Workflow journal `subagents/workflows/wf_aa30b431-930/journal.jsonl`;
+Fable design `scratchpad/map_query_result.md`.
