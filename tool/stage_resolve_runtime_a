@@ -72,7 +72,11 @@ _zc_stdio_link=""
 _zc_exit_flush=""
 [ "${HEXA_ZEROC_EXIT_FLUSH:-0}" = "1" ] && _zc_exit_flush="-DHEXA_ZEROC_EXIT_FLUSH"
 ROOT="$PWD"
-RA="$ROOT/build/runtime.a"
+# axis-③ arm64 rung-2 (S2/rung-4): allow a cross-TARGET runtime archive out-path so a
+# Linux-x86 host can emit build/runtime.arm64-linux-gnu.a (CC/AR=aarch64-linux-gnu-*)
+# for the arm64 own-linker to pull members from. Default = the host build/runtime.a
+# (byte-identical when HEXA_RUNTIME_A_OUT is unset).
+RA="${HEXA_RUNTIME_A_OUT:-$ROOT/build/runtime.a}"
 mkdir -p build
 
 # ── B9.C-10/F3 (CI parity with the LOCAL build) — regen self/runtime_core.c from
@@ -3263,7 +3267,7 @@ build_runtime_a_from_source() {
         # (S6) ar the multi-object archive into the SAME canonical build/runtime.a
         #      (NO new name → install.sh + main.hexa resolve_prebuilt_runtime +
         #      release.yml untouched; consumer `nm -g` drop-list already multi-obj aware).
-        ar rcs "$RA" build/runtime.o build/runtime_core.o $_mo_hxlcl_members $extra_obj
+        "${AR:-ar}" rcs "$RA" build/runtime.o build/runtime_core.o $_mo_hxlcl_members $extra_obj
         ls -la "$RA"
         # CUDA dual-archive parity (mirror the single-TU ING-35 #2 discipline).
         if [ "${HEXA_CUDA:-0}" = "1" ] && [ -f build/runtime_cuda.o ] && [ -f build/runtime_cuda_dlink.o ]; then
@@ -3272,7 +3276,7 @@ build_runtime_a_from_source() {
             [ -d "$_mo_cinc" ] || _mo_cinc="$_mo_cuda_home/include"
             echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA: build SEPARATE build/runtime.cuda.a (include-drop multi-object + cuda objects)"
             $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
-            ar rcs build/runtime.cuda.a build/runtime_cuda_host.o build/runtime_core.o $_mo_hxlcl_members $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
+            "${AR:-ar}" rcs build/runtime.cuda.a build/runtime_cuda_host.o build/runtime_core.o $_mo_hxlcl_members $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
             ls -la build/runtime.cuda.a
             local _mo_cseed _mo_cm
             for _mo_cseed in build/runtime_core.o $_mo_hxlcl_members $extra_obj; do
@@ -3292,7 +3296,7 @@ build_runtime_a_from_source() {
         return 0
     fi
     $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_exit_flush -I self $_heap_def -c self/runtime.c -o build/runtime.o
-    ar rcs "$RA" build/runtime.o $extra_obj
+    "${AR:-ar}" rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     if [ "${HEXA_CUDA:-0}" = "1" ] && [ -f build/runtime_cuda.o ] && [ -f build/runtime_cuda_dlink.o ]; then
         local _cuda_home="${CUDA_HOME:-/usr/local/cuda}"
@@ -3300,7 +3304,7 @@ build_runtime_a_from_source() {
         [ -d "$_cinc" ] || _cinc="$_cuda_home/include"
         echo "[stage_resolve_runtime_a] CUDA-R1: building SEPARATE consumer archive build/runtime.cuda.a (runtime.c -DHEXA_CUDA -I$_cinc + runtime_cuda.o + runtime_cuda_dlink.o); toolchain keeps the CPU build/runtime.a (libcuda-free, GPU-less-host-runnable)"
         $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_exit_flush -DHEXA_CUDA -I "$_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o
-        ar rcs build/runtime.cuda.a build/runtime_cuda_host.o $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
+        "${AR:-ar}" rcs build/runtime.cuda.a build/runtime_cuda_host.o $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
         ls -la build/runtime.cuda.a
         # ING-35 #2 — fail loudly if the CUDA archive dropped a native-core seed the
         # CPU archive carries (e.g. array_core_native.o). The cuda + cpu archives MUST
@@ -3426,20 +3430,59 @@ emit_cross_arch_runtime_a() {
         darwin-arm64) _tri="arm64-apple-darwin" ;;
         *) return 0 ;;   # musl / unknown target: no cross-consumable asset
     esac
-    _mem="$(ar t "$RA" 2>/dev/null | head -1)"
-    _sig="$(ar p "$RA" "$_mem" 2>/dev/null | od -An -tx1 -N20 | tr -s ' ')"
+    # axis-③ arm64 rung-2b: verify EVERY member's arch, not just head -1. A cross
+    # own-link's definer can be any archive member (hexa_arena_cur lives in the big
+    # runtime.o, not the first seed); a single wrong-arch member silently poisons
+    # the fixpoint (parse_elf_<arch>_obj rejects it → undef). head -1 checking the
+    # first member left the contaminated tail invisible. Any mismatch → refuse the
+    # asset + NAME the offender. convergence axis3-arm64-cross-archive-arch-contamination.
+    local _want_em="" _bad=""
     case "$_tri" in
-        x86_64-linux-gnu)   echo "$_sig" | grep -q '7f 45 4c 46 02' && echo "$_sig" | grep -q ' 3e 00' && _ok=1 ;;
-        arm64-linux-gnu)    echo "$_sig" | grep -q '7f 45 4c 46 02' && echo "$_sig" | grep -q ' b7 00' && _ok=1 ;;
-        arm64-apple-darwin) echo "$_sig" | grep -q 'cf fa ed fe' && _ok=1 ;;
+        x86_64-linux-gnu)  _want_em=" 3e 00" ;;
+        arm64-linux-gnu)   _want_em=" b7 00" ;;
+        arm64-apple-darwin) _want_em="__MACHO__" ;;
     esac
+    _ok=1
+    for _mem in $(ar t "$RA" 2>/dev/null); do
+        _sig="$(ar p "$RA" "$_mem" 2>/dev/null | od -An -tx1 -N20 | tr -s ' ')"
+        if [ "$_want_em" = "__MACHO__" ]; then
+            echo "$_sig" | grep -q 'cf fa ed fe' || { _ok=0; _bad="$_mem"; break; }
+        else
+            echo "$_sig" | grep -q '7f 45 4c 46 02' && echo "$_sig" | grep -q "$_want_em" || { _ok=0; _bad="$_mem"; break; }
+        fi
+    done
     if [ "$_ok" != 1 ]; then
-        echo "[stage_resolve_runtime_a] rung-2b WARN: build/runtime.a first member is not $_tri arch (magic=[$_sig]) — cross-consumable asset NOT emitted (release integrity preserved; consumer will zig-cc fallback)" >&2
+        echo "[stage_resolve_runtime_a] rung-2b WARN: build/runtime.a member '$_bad' is not $_tri arch (magic=[$_sig]) — cross-consumable asset NOT emitted (release integrity preserved; consumer will zig-cc fallback). A wrong-arch member = build/*_native.o seed-cache arch contamination; see S2 arch-guard." >&2
         return 0
     fi
     cp -f "$RA" "$ROOT/build/runtime.${_tri}.a"
     echo "[stage_resolve_runtime_a] rung-2b: emitted arch-verified cross-consumable build/runtime.${_tri}.a for standalone asset upload"
 }
+
+# axis-③ arm64 rung-2 (S2 arch-guard): the 13 resolve_native_*_seed helpers below
+# cache on FILE EXISTENCE only ([ -f build/X_native.o ] && return). A prior HOST
+# build/aprime run (or a previous host stage) leaves build/*_native.o as the HOST
+# arch; a subsequent TARGET=linux-arm64 cross-stage then early-returns every guard
+# and ar's the WRONG-arch seeds into runtime.<triple>.a → the cross own-link's
+# definer (e.g. alloc_syscall_native.o carrying hexa_arena_cur) is EM_X86_64 →
+# parse_elf_arm64_obj correctly rejects it → undefined symbol. Purge any cached
+# seed .o whose e_machine (ELF byte 18-19) mismatches TARGET so the resolvers
+# re-assemble from the in-tree per-target self/native/*.s. Byte-neutral: TARGET
+# unset (user install) skips; a native runner's seeds already match; darwin
+# (Mach-O, no ELF magic) skips. convergence axis3-arm64-cross-archive-arch-contamination.
+_seed_em=""
+case "${TARGET:-}" in
+    linux-arm64) _seed_em="b7 00" ;;
+    linux-x86_64|linux-x86_64-musl) _seed_em="3e 00" ;;
+esac
+if [ -n "$_seed_em" ]; then
+    for _so in build/*_native.o; do
+        [ -f "$_so" ] || continue
+        od -An -tx1 -j18 -N2 "$_so" 2>/dev/null | grep -q "$_seed_em" || {
+            echo "[stage_resolve_runtime_a] arch-guard: purge stale $_so (e_machine != [$_seed_em] for TARGET=$TARGET)"
+            rm -f "$_so"; }
+    done
+fi
 
 # Assemble the arch-matched native rt_hi seed (sets HEXA_ZEROC_RT_HI=1 on the
 # platforms that have one) BEFORE either branch — restore_frozen_seeds reads
