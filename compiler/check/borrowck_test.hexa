@@ -298,6 +298,30 @@ fn _src_fp_benign_join() -> string {
     return s
 }
 
+fn _src_adv_genkill_still_fires() -> string {
+    // HEXA-OWN L5 round-2b ADVERSARIAL — the over-kill guard for the HX3014
+    // gen/kill refinement. It stresses BOTH new mechanisms and MUST still fire
+    // exactly one HX3014:
+    //   * seq-gate: the alias `b`→`a` is created, THEN a write through the OTHER
+    //     name (`b[0] = 7`) POSTDATES that join on a kill-free path, THEN `a` is
+    //     read — a genuine aliased-write hazard the join-seq gate must NOT swallow.
+    //   * sever-kill scoping: a fresh `let mut fresh = []` records a sever-kill,
+    //     but for a DIFFERENT group (G_fresh, not `a`/`b`'s group). If the kill
+    //     were a GLOBAL group purge it would wrongly silence the a/b hazard; the
+    //     THROUGH-block cut leaves G_a untouched, so the read of `a` still fires.
+    // Straight-line (the fresh-let block has no back-edge), so the kill is inert
+    // on reach and only its group-scoping is under test. Expect HX3014 ×1.
+    let mut s = "fn adv() {\n"
+    s = s + "    let a = [1, 2]\n"
+    s = s + "    let b = a\n"
+    s = s + "    let mut fresh = []\n"
+    s = s + "    fresh.push(0)\n"
+    s = s + "    b[0] = 7\n"
+    s = s + "    println(a[0])\n"
+    s = s + "}\n"
+    return s
+}
+
 // ── HEXA-OWN L5-E1 — return-borrow-escape (HX3019, Rust E0515) ────
 //
 // The loan pass (HEXA_BORROWCK=1) flags a `return` whose value is a
@@ -3060,6 +3084,10 @@ fn main() {
         if !_run_probe("xb_write_in_branch", _src_xb_write_in_branch(), 1) { ok = false }
         if !_run_probe("xb_loop_carried", _src_xb_loop_carried(), 1) { ok = false }
         if !_run_probe("fp_benign_join", _src_fp_benign_join(), 0) { ok = false }
+        // L5 round-2b — over-kill guard for the gen/kill refinement (join-seq gate
+        // + THROUGH-block sever-kill): a genuine post-join aliased write on a
+        // kill-free path, with an off-group sever-kill nearby, MUST still fire ×1.
+        if !_run_probe("adv_genkill_still_fires", _src_adv_genkill_still_fires(), 1) { ok = false }
         // HEXA-OWN L5-E1 — return-borrow-escape (HX3019). Hazards → ×1 ON,
         // controls → 0. OFF sweep asserts a fully empty stream for all.
         if !_run_ret_probe("hz_ret_ref_direct", _src_hz_ret_ref_direct(), 1) { ok = false }

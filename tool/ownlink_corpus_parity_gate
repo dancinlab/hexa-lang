@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# tool/ownlink_corpus_parity_gate — axis-③ own-link DEFAULT-flip RUN-PARITY gate.
+#
+# The default-flip (PR-2: HEXA_OWNLINK_DEFAULT default-ON) routes `hexa build`'s
+# linker from system `ld` to hexa_ld (--linker=hexa). A mislinked-but-executable
+# binary does NOT trip the build fall-through, so link "success" with wrong runtime
+# behavior is the silent failure mode — RUN-parity is the only sound gate.
+#
+# For each corpus program, emit ONE own-backend .o, then link it TWO ways and run:
+#   (A) own-link:  cc_native --emit=exec --linker=hexa           (hexa_ld)
+#   (B) ld-link:   cc_native --emit=obj  + system `ld` (gcc)     (the path PR-2 replaces)
+# Assert stdout + exit-rc identical. Isolates the LINKER (both share the .o).
+#
+# Advisory today (not in the required selfhost-gates-summary set). Env (mirrors
+# tool/ownlink_determinism_gate): REPO, CC_NATIVE (build/lx8664/cc_native),
+# HEXA_PREBUILT_RUNTIME (build/runtime.a), CC (gcc).
+set -uo pipefail
+
+REPO="${REPO:-$PWD}"
+CCN="${CC_NATIVE:-$REPO/build/lx8664/cc_native}"
+RTA="${HEXA_PREBUILT_RUNTIME:-$REPO/build/runtime.a}"
+CC="${CC:-gcc}"
+TGT="x86_64-linux-gnu"
+
+infra() { echo "INFRA(non-eval): $*"; exit 2; }   # toolchain/env wall — quarantined from the verdict
+[ -x "$CCN" ] || infra "no cc_native at $CCN"
+[ -s "$RTA" ] || infra "no runtime.a at $RTA"
+
+W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
+export HEXA_PREBUILT_RUNTIME="$RTA" HEXA_LANG="$REPO"
+
+# runtime.a carries its own `_start` (zero-c own-start flip) → gcc must drop crt1.
+_nostart=""
+nm "$RTA" 2>/dev/null | grep -qE ' T _start$' && _nostart="-nostartfiles"
+
+# ── self-contained corpus (feature coverage: arith · packed [i64] array ·
+# struct-of-arrays [the #4873 BUG-B construct] · string · while-loop). Each is a
+# closed program; expected behavior is whatever ld produces — the two must agree.
+mkdir -p "$W/c"
+cat > "$W/c/arith.hexa"      <<'H'
+fn main() { let a = 6; let b = 7; print(a * b + 1); print(a - b) }
+H
+cat > "$W/c/array.hexa"      <<'H'
+fn main() { let mut a: [i64] = []; a.push(11); a.push(22); a.push(33); print(a[0]); print(a[2]); print(len(a)) }
+H
+cat > "$W/c/struct_arr.hexa" <<'H'
+struct Iv { ids: [i64], starts: [i64] }
+fn build() -> Iv { let mut ids: [i64] = []; let mut i = 0; while i < 4 { ids.push(i * 10); i = i + 1 }; let mut s: [i64] = []; return Iv { ids: ids, starts: s } }
+fn main() { let v = build(); print(len(v.ids)); print(v.ids[0]); print(v.ids[3]) }
+H
+cat > "$W/c/str.hexa"        <<'H'
+fn main() { let s = "hexa"; print(s); print(len(s)) }
+H
+cat > "$W/c/loop.hexa"       <<'H'
+fn main() { let mut s = 0; let mut i = 1; while i <= 10 { s = s + i; i = i + 1 }; print(s) }
+H
+
+N=0; FAIL=0
+for P in "$W"/c/*.hexa; do
+    name="$(basename "$P" .hexa)"; N=$((N + 1))
+    # (A) own-emit + own-link
+    "$CCN" _drv.hexa --backend=native --emit=exec --linker=hexa --target="$TGT" -o "$W/$name.own" "$P" 2>"$W/$name.own.err"
+    [ -x "$W/$name.own" ] || infra "own-link failed for $name ($(tail -1 "$W/$name.own.err" 2>/dev/null))"
+    # (B) own-emit .o + system ld
+    "$CCN" _drv.hexa --backend=native --emit=obj --target="$TGT" -o "$W/$name.o" "$P" 2>"$W/$name.emit.err"
+    [ -s "$W/$name.o" ] || infra "emit=obj failed for $name ($(tail -1 "$W/$name.emit.err" 2>/dev/null))"
+    "$CC" $_nostart "$W/$name.o" "$RTA" -o "$W/$name.ld" -lm -ldl 2>"$W/$name.ld.err"
+    [ -x "$W/$name.ld" ] || infra "ld-link failed for $name ($(tail -1 "$W/$name.ld.err" 2>/dev/null))"
+    # run both, capture stdout + rc
+    oout="$(timeout 15 "$W/$name.own" 2>/dev/null)"; orc=$?
+    lout="$(timeout 15 "$W/$name.ld"  2>/dev/null)"; lrc=$?
+    if [ "$oout" = "$lout" ] && [ "$orc" -eq "$lrc" ]; then
+        echo "  $name: PARITY OK  (out='$oout' rc=$orc)"
+    else
+        echo "  $name: ✗ MISMATCH  own(out='$oout' rc=$orc)  vs  ld(out='$lout' rc=$lrc)"
+        FAIL=$((FAIL + 1))
+    fi
+done
+
+echo "── own-link corpus RUN-parity: $((N - FAIL))/$N PASS ──"
+[ "$FAIL" -eq 0 ] || { echo "PARITY GATE RED ($FAIL mismatch(es)) — own-link diverges from ld; blocks PR-2 default-flip"; exit 1; }
+echo "PARITY GATE GREEN — own-link == ld across the corpus"

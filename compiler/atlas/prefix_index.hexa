@@ -87,7 +87,7 @@ fn _overlay_fingerprint() -> i64 {
 // next prefix_lookup call hits the freshly built buckets.
 pub fn build_prefix_index() -> PrefixIndex {
     let merged = atlas_list_merged()
-    let buckets = {}
+    let mut buckets = {}
     let n = len(merged)
     let mut i = 0
     while i < n {

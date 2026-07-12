@@ -242,7 +242,7 @@ fn _is_digit(c: string) -> bool {
 pub fn parse_grade(marker: string) -> GradeInfo {
     let m = _trim_aparser(marker)
     let n = len(m)
-    let info = GradeInfo {
+    let mut info = GradeInfo {
         value: -1,
         verified: false,
         breakthrough: false,

@@ -1,0 +1,28 @@
+// L5 B4-precensus adversarial corpus — ELEMENT-DISJOINT (index) aliased-write FPs.
+// ─────────────────────────────────────────────────────────────────────────
+// The array sibling of fd_field_disjoint.hexa. Arrays are reference values, so
+// `let b = a` copies the handle. Index granularity is ALSO whole-local (no
+// place projection on the index Operand), so a write to `a[0]` arms Rule 1 for
+// a read of `b[1]` even though the elements are disjoint → SAFE program, but a
+// CONFIRMED place-projection FALSE POSITIVE (HX3014 aliased write).
+
+// IDX-1 — write a[0] through alias `a`, read b[1] through alias `b`. 0≠1 → SAFE.
+fn idx_write0_read1() -> i64 {
+    let mut a = [1, 2, 3]
+    let b = a
+    a[0] = 99
+    return b[1]
+}
+
+// IDX-2 — symmetric: write b[2] through alias `b` (mut), read a[0] through `a`.
+fn idx_write_hi_read_lo() -> i64 {
+    let mut a = [10, 20, 30]
+    let mut b = a
+    b[2] = 88
+    return a[0]
+}
+
+fn main() {
+    let s = idx_write0_read1() + idx_write_hi_read_lo()
+    println(s)
+}

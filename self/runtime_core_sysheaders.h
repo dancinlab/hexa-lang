@@ -180,4 +180,53 @@ void   hxlcl_perror(const char *s);
 #define snprintf(b,c,...)  hxlcl_snprintf((char *)(b), (size_t)(c), __VA_ARGS__)
 #endif /* HEXA_RT_STDIO_NATIVE */
 
+#ifdef HXLCL_STDIO_LINK
+/* L3 axis-② FILE* MULTIOBJ swap (default-OFF, byte-neutral OFF). runtime_core.c's
+   FILE* call sites route to the shim's fake-fd bodies (FILE* == (void*)(uintptr_t)(fd+1)),
+   matching the single-TU amalgam's own unconditional redirect (runtime_emit_full.hexa
+   ~:2940) so the MULTIOBJ runtime_core.o carries no libc fopen/fread/fwrite/fclose/ftell/
+   fseek UND. Redirected as ONE ATOMIC subset (incl. fflush) so a real-fopen'd log path
+   (fopen→fwrite→fflush(f)→fclose) stays entirely on the fake-fd encoding — no partial
+   redirect that would hand a fake (void*)(fd+1) to a glibc fwrite/fflush and SIGSEGV.
+   fileno decodes the fake FILE* via _hxlcl_fp_fd exactly like fread/fseek. Placed after
+   stdio.h so the prototypes are parsed, not macro-expanded. OFF path (flag unset) =
+   byte-identical (no redirect emitted). */
+/* prototypes for the FILE* subset not already declared above (fopen/fread/ftell/fseek
+   are at the top of this header); external linkage from the shim's fake-fd bodies. */
+int    hxlcl_fclose(void *fp);
+size_t hxlcl_fwrite(const void *b, size_t s, size_t n, void *fp);
+void  *hxlcl_fdopen(int fd, const char *m);
+int    hxlcl_fflush(void *fp);
+int    _hxlcl_fp_fd(void *fp);
+int    hxlcl_fputs(const char *s, void *fp);
+int    hxlcl_fputc(int c, void *fp);
+int    hxlcl_setvbuf(void *fp, char *buf, int mode, size_t sz);
+#undef fopen
+#undef fclose
+#undef fread
+#undef fwrite
+#undef ftell
+#undef fseek
+#undef fdopen
+#undef fileno
+#undef fflush
+#undef fputs
+#undef fputc
+#undef setvbuf
+#define fopen(p,m)         ((FILE *)hxlcl_fopen((const char *)(p), (const char *)(m)))
+#define fclose(fp)         hxlcl_fclose((void *)(fp))
+#define fread(b,s,n,fp)    hxlcl_fread((void *)(b), (size_t)(s), (size_t)(n), (void *)(fp))
+#define fwrite(b,s,n,fp)   hxlcl_fwrite((const void *)(b), (size_t)(s), (size_t)(n), (void *)(fp))
+#define ftell(fp)          hxlcl_ftell((void *)(fp))
+#define fseek(fp,o,w)      hxlcl_fseek((void *)(fp), (long)(o), (int)(w))
+#define fdopen(fd,m)       ((FILE *)hxlcl_fdopen((int)(fd), (const char *)(m)))
+#define fileno(fp)         _hxlcl_fp_fd((void *)(fp))
+#define fflush(fp)         hxlcl_fflush((void *)(fp))
+/* writer subset that mirrors the amalgam (stdout/stderr targets; setvbuf noop) —
+   redirected so no bare-glibc call receives a fake (void*)(fd+1) handle. */
+#define fputs(s,fp)        hxlcl_fputs((const char *)(s), (void *)(fp))
+#define fputc(c,fp)        hxlcl_fputc((int)(c), (void *)(fp))
+#define setvbuf(fp,b,m,sz) hxlcl_setvbuf((void *)(fp), (char *)(b), (int)(m), (size_t)(sz))
+#endif /* HXLCL_STDIO_LINK */
+
 #endif /* HEXA_RUNTIME_CORE_SYSHEADERS_H */

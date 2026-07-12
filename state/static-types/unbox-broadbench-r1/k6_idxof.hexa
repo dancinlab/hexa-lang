@@ -1,0 +1,15 @@
+// k6_idxof — TARGET · HOISTABLE (string .index_of → i64). A different builtin
+// method (str_index_of, not len) whose i64 result the flip stamps. index_of is
+// loop-invariant here (same hay/needle every iter), so a smart backend could
+// hoist it — the point is that even the hoistable call-result operand must
+// unbox its `+ i` add under ON. Widens method coverage beyond len()/count().
+fn main() {
+    let hay = "the quick brown fox jumps over"
+    let needle = "brown"
+    let mut s = 0
+    let N = 100000000
+    for i in 0..N {
+        s = s + hay.index_of(needle) + i
+    }
+    println(s)
+}
