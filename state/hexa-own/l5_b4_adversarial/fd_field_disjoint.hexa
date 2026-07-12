@@ -1,0 +1,52 @@
+// L5 B4-precensus adversarial corpus — FIELD-DISJOINT aliased-write FPs.
+// ─────────────────────────────────────────────────────────────────────────
+// Every fn here is SEMANTICALLY SAFE: the write and the later read touch
+// DISJOINT struct fields (a vs b), so there is no real observe-the-mutation
+// hazard. Under the whole-local granularity ceiling — no place projection in
+// MIR Operands (compiler/lower/hir_to_mir.hexa:5704-5713: a write to `x.a`
+// arms Rule 1 for reads of `x.b` too) — the borrow checker cannot tell the two
+// fields apart, so it arms the sibling field and fires HX3014 "aliased write".
+//
+// A HX3014 fire on ANY fn in this file is a CONFIRMED field-disjoint FALSE
+// POSITIVE. The count of such fires is the number the B4 warn→error flip must
+// gate on (roadmap default_own_roadmap.md wall #3): whole-local granularity →
+// B4 fatal turns each of these safe programs into a build refusal.
+//
+// The written alias is declared `mut` so ONLY HX3014 (aliased-write) fires
+// here — never HX3055 (assign-to-immutable) — keeping the FP class clean.
+
+struct Pair {
+    a: i64,
+    b: i64
+}
+
+// FD-1 — write x.a through alias `x`, read y.b through alias `y`. a≠b → SAFE.
+// Expected: HX3014 aliased-write FP (write x.a arms y for the disjoint field b).
+fn fd_write_a_read_b() -> i64 {
+    let mut x = Pair { a: 1, b: 2 }
+    let y = x
+    x.a = 10
+    return y.b
+}
+
+// FD-2 — symmetric: write y.b through alias `y` (mut), read x.a through `x`.
+fn fd_write_b_read_a() -> i64 {
+    let mut x = Pair { a: 1, b: 2 }
+    let mut y = x
+    y.b = 20
+    return x.a
+}
+
+// FD-3 — three-name group, disjoint fields: write x.a, read z.b (z aliases y aliases x).
+fn fd_three_names() -> i64 {
+    let mut x = Pair { a: 1, b: 2 }
+    let y = x
+    let z = y
+    x.a = 99
+    return z.b
+}
+
+fn main() {
+    let s = fd_write_a_read_b() + fd_write_b_read_a() + fd_three_names()
+    println(s)
+}
