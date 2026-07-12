@@ -898,3 +898,371 @@ pub fn link_elf_arm64_ownstart(objs: [ElfArm64Obj], out_path: string, main_name:
     write_bytes(out_path, serialize_elf_exec_arm64(text))
     return 0
 }
+
+// ─────────────────────────────────────────────────────────────────
+// axis-③ arm64 own-link rung-2 (S3) — parse_elf_arm64_obj
+// ─────────────────────────────────────────────────────────────
+// AArch64 twin of parse_elf_x86_obj (elf_x86_64.hexa:3826): an ELF64 ET_REL
+// AArch64 .o (or ar member at [base,base+limit)) → ElfArm64Obj (text/rodata/
+// data pools + rebased symbols + rebased relocs). Deltas vs the x86 twin:
+// (1) e_machine guard 0x3e→0xb7 (ELF_EM_AARCH64); (2) ElfArm64Obj has 8 fields
+// (no init_array / no *_align) so the SHT_INIT_ARRAY slot-6 arm + the
+// obj.*_align field updates are dropped — the pool-internal salign PADDING is
+// KEPT so a .rodata.cst16 SIMD constant stays 16-aligned (Q6). Reuses this
+// program's shared _er_*/_ew_str helpers + ELF_SHT_*/ELF_SHF_*/ELF_STB_LOCAL.
+pub fn parse_elf_arm64_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfArm64Obj {
+    let mut obj = ElfArm64Obj {
+        text: [], relocs: [], symbols: [], strtab: [],
+        rodata: [], data: [], bss_size: 0, nlocal: 0,
+    }
+    obj.strtab.push(0)                       // ELF strtab idx 0 = ""
+
+    // ── Guards: ELF magic + ET_REL + EM_AARCH64 ──
+    if _er_u8(buf, base + 0) != 0x7f { return obj }
+    if _er_u8(buf, base + 1) != 0x45 { return obj }   // 'E'
+    if _er_u8(buf, base + 2) != 0x4c { return obj }   // 'L'
+    if _er_u8(buf, base + 3) != 0x46 { return obj }   // 'F'
+    if _er_u8(buf, base + 4) != 2    { return obj }   // ELFCLASS64
+    if _er_u8(buf, base + 5) != 1    { return obj }   // ELFDATA2LSB
+    if _er_u16le(buf, base + 0x10) != ELF_ET_REL     { return obj }
+    if _er_u16le(buf, base + 0x12) != ELF_EM_AARCH64 { return obj }   // ← the AArch64 delta
+
+    let e_shoff     = _er_u64le(buf, base + 0x28)
+    let e_shentsize = _er_u16le(buf, base + 0x3A)
+    let e_shnum     = _er_u16le(buf, base + 0x3C)
+    let e_shstrndx  = _er_u16le(buf, base + 0x3E)
+    if e_shentsize < 64 { return obj }
+    if e_shnum < 1 { return obj }
+    if e_shstrndx > e_shnum - 1 { return obj }
+
+    // ── Pass A: section headers → per-index slot + concat-pool base. ──
+    let sec_slot: [Int] = []      // 0 none, 1 text, 3 rodata, 4 data, 5 bss
+    let sec_base: [Int] = []
+    let sec_off:  [Int] = []
+    let sec_size: [Int] = []
+    let sec_type: [Int] = []
+    let sec_link: [Int] = []
+    let sec_info: [Int] = []
+    let sec_ent:  [Int] = []
+
+    let mut i = 0
+    while i < e_shnum {
+        let sh    = base + e_shoff + i * e_shentsize
+        let stype = _er_u32le(buf, sh + 0x04)
+        let flags = _er_u64le(buf, sh + 0x08)
+        let soff  = _er_u64le(buf, sh + 0x18)
+        let ssize = _er_u64le(buf, sh + 0x20)
+        let slink = _er_u32le(buf, sh + 0x28)
+        let sinfo = _er_u32le(buf, sh + 0x2C)
+        let sent  = _er_u64le(buf, sh + 0x38)
+        let salign0 = _er_u64le(buf, sh + 0x30)
+        let salign  = if salign0 < 1 { 1 } else if salign0 > 4096 { 4096 } else { salign0 }
+
+        let mut slot  = 0
+        let mut pbase = 0
+        if stype == ELF_SHT_PROGBITS && (flags & ELF_SHF_ALLOC) != 0 {
+            if (flags & ELF_SHF_EXECINSTR) != 0 {
+                slot = 1
+                pbase = len(obj.text)
+                let mut k = 0
+                while k < ssize { obj.text.push(_er_u8(buf, base + soff + k)); k = k + 1 }
+            } else if (flags & ELF_SHF_WRITE) != 0 {
+                slot = 4
+                while (len(obj.data) % salign) != 0 { obj.data.push(0) }
+                pbase = len(obj.data)
+                let mut k = 0
+                while k < ssize { obj.data.push(_er_u8(buf, base + soff + k)); k = k + 1 }
+            } else {
+                slot = 3
+                while (len(obj.rodata) % salign) != 0 { obj.rodata.push(0) }
+                pbase = len(obj.rodata)
+                let mut k = 0
+                while k < ssize { obj.rodata.push(_er_u8(buf, base + soff + k)); k = k + 1 }
+            }
+        } else if stype == ELF_SHT_NOBITS && (flags & ELF_SHF_ALLOC) != 0 {
+            slot = 5
+            obj.bss_size = obj.bss_size + ((salign - (obj.bss_size % salign)) % salign)
+            pbase = obj.bss_size
+            obj.bss_size = obj.bss_size + ssize
+        }
+        // NOTE: no SHT_INIT_ARRAY slot-6 arm (ElfArm64Obj has no init_array) — an
+        // exit-42 program has no ctors; a pulled member's .init_array is dropped
+        // here (Q6 census: assert none needed before a ctor-bearing program).
+        sec_slot.push(slot)
+        sec_base.push(pbase)
+        sec_off.push(base + soff)
+        sec_size.push(ssize)
+        sec_type.push(stype)
+        sec_link.push(slink)
+        sec_info.push(sinfo)
+        sec_ent.push(sent)
+        i = i + 1
+    }
+
+    // ── Locate .symtab (+ its .strtab via sh_link). ──
+    let mut symtab_idx = -1
+    let mut j = 0
+    while j < e_shnum {
+        if sec_type[j] == ELF_SHT_SYMTAB { symtab_idx = j; break }
+        j = j + 1
+    }
+    if symtab_idx < 0 { return obj }
+    let sym_off  = sec_off[symtab_idx]
+    let sym_size = sec_size[symtab_idx]
+    let mut sym_es = sec_ent[symtab_idx]
+    if sym_es < 1 { sym_es = 24 }
+    let str_sec = sec_link[symtab_idx]
+    if str_sec < 0 { return obj }
+    if str_sec > e_shnum - 1 { return obj }
+    let str_off = sec_off[str_sec]
+
+    // ── Pass B: symbols (skip file idx 0). obj.symbols[S-1] ← r_info sym S. ──
+    let count = sym_size / sym_es
+    let mut si = 1
+    while si < count {
+        let s = sym_off + si * sym_es
+        let st_name  = _er_u32le(buf, s + 0x00)
+        let st_info  = _er_u8(buf, s + 0x04)
+        let st_shndx = _er_u16le(buf, s + 0x06)
+        let st_value = _er_u64le(buf, s + 0x08)
+        let st_size  = _er_u64le(buf, s + 0x10)
+        let bind  = (st_info >> 4) & 0xf
+        let type_ = st_info & 0xf
+
+        let mut nsec = 0
+        let mut nval = 0
+        if st_shndx == 0 {
+            nsec = 0; nval = 0                         // SHN_UNDEF
+        } else if st_shndx == 0xfff1 {
+            nsec = 0; nval = 0                         // SHN_ABS
+        } else if st_shndx == 0xfff2 {
+            let mut al = st_value                      // SHN_COMMON
+            if al < 1 { al = 1 }
+            let cur = obj.bss_size
+            let rem = cur - (cur / al) * al
+            let aligned = if rem == 0 { cur } else { cur + (al - rem) }
+            nsec = 5
+            nval = aligned
+            obj.bss_size = aligned + st_size
+        } else if st_shndx < e_shnum {
+            nsec = sec_slot[st_shndx]
+            nval = st_value + sec_base[st_shndx]       // rebase into pool
+        } else {
+            nsec = 0; nval = 0
+        }
+
+        let mut nm_off = 0
+        if type_ == 3 {                               // STT_SECTION → unique synth name
+            let sname = "$sec_" + to_string(member_idx) + "_" + to_string(st_shndx)
+            nm_off = _ew_str(obj.strtab, sname)
+        } else {
+            nm_off = _ew_str(obj.strtab, _er_cstr(buf, str_off + st_name))
+        }
+
+        obj.symbols.push(ElfSym {
+            name_offset: nm_off,
+            section:     nsec,
+            value:       nval,
+            size:        st_size,
+            bind:        bind,
+            type_:       type_,
+        })
+        if bind == ELF_STB_LOCAL { obj.nlocal = obj.nlocal + 1 }
+        si = si + 1
+    }
+
+    // ── Pass C: SHT_RELA sections. r_offset rebased into target pool; sym→ -1. ──
+    let mut ci = 0
+    while ci < e_shnum {
+        if sec_type[ci] == ELF_SHT_RELA {
+            let roff = sec_off[ci]
+            let rsz  = sec_size[ci]
+            let mut res = sec_ent[ci]
+            if res < 24 { res = 24 }
+            let tgt = sec_info[ci]
+            let mut tgt_base = 0
+            if tgt < e_shnum { tgt_base = sec_base[tgt] }
+            let mut site_ok = true
+            if tgt < e_shnum { if sec_slot[tgt] == 0 { site_ok = false } }
+            let rcount = rsz / res
+            let mut ri = 0
+            while ri < rcount {
+                let r     = roff + ri * res
+                let r_off = _er_u64le(buf, r + 0x00)
+                let rinfo = _er_u64le(buf, r + 0x08)
+                let radd  = _er_s64le(buf, r + 0x10)
+                let div   = 0x100000000
+                let sym_file = rinfo / div
+                let rtype    = rinfo - (rinfo / div) * div
+                if sym_file > 0 && site_ok {
+                    obj.relocs.push(ElfRel {
+                        offset:  r_off + tgt_base,
+                        sym_idx: sym_file - 1,
+                        kind:    rtype,
+                        addend:  radd,
+                        site_seg: (if tgt < e_shnum { sec_slot[tgt] } else { 1 }),
+                    })
+                }
+                ri = ri + 1
+            }
+        }
+        ci = ci + 1
+    }
+
+    return obj
+}
+
+// ── axis-③ arm64 own-link rung-2 (S3) — archive extraction ──────────
+// _aef_symname_arm64 = ElfArm64Obj twin of _aef_symname (elf_x86_64.hexa:4243);
+// _aef_has (string-list membership) is target-agnostic → REUSED verbatim.
+fn _aef_symname_arm64(obj: ElfArm64Obj, off: Int) -> string {
+    let mut s = ""
+    let n = len(obj.strtab)
+    let mut k = 0
+    while off + k < n {
+        let b = obj.strtab[off + k] & 0xff
+        if b == 0 { break }
+        s = s + from_char_code(b)
+        k = k + 1
+    }
+    return s
+}
+
+// archive_extract_fixpoint_arm64 — AArch64 twin of archive_extract_fixpoint
+// (elf_x86_64.hexa:4297). Iteratively pulls ONLY the runtime.arm64.a members
+// that satisfy still-undefined program symbols (+ the #4871 STB_LOCAL hxlcl_
+// floor-pull, which keys on symbol names only → carries verbatim). Deltas:
+// ElfX86Obj→ElfArm64Obj, parse_elf_x86_obj→parse_elf_arm64_obj, _aef_symname→
+// _aef_symname_arm64. Reached solely via the arm64 own-link (opt-in) → runtime.a
+// visibility on the shipping path is untouched (byteeq-neutral).
+pub fn archive_extract_fixpoint_arm64(program_objs: [ElfArm64Obj], buf, members: [ArMember]) -> [ElfArm64Obj] {
+    let extracted: [ElfArm64Obj] = []
+
+    let parsed: [ElfArm64Obj] = []
+    let mut pulled: [bool] = []
+    let mut m = 0
+    while m < len(members) {
+        let mem = members[m]
+        parsed.push(parse_elf_arm64_obj(buf, mem.data_off, mem.size, m))
+        pulled.push(false)
+        m = m + 1
+    }
+
+    let def_names: [string] = []
+    let und_names: [string] = []
+    let mut pi = 0
+    while pi < len(program_objs) {
+        let po = program_objs[pi]
+        let mut sj = 0
+        while sj < len(po.symbols) {
+            let s = po.symbols[sj]
+            if s.section != 0 && (s.bind == ELF_STB_GLOBAL || s.bind == ELF_STB_WEAK) {
+                let nm = _aef_symname_arm64(po, s.name_offset)
+                if len(nm) > 0 && !_aef_has(def_names, nm) { def_names.push(nm) }
+            }
+            sj = sj + 1
+        }
+        pi = pi + 1
+    }
+    pi = 0
+    while pi < len(program_objs) {
+        let po = program_objs[pi]
+        let mut sj = 0
+        while sj < len(po.symbols) {
+            let s = po.symbols[sj]
+            if s.section == 0 {
+                let nm = _aef_symname_arm64(po, s.name_offset)
+                if len(nm) > 0 && !_aef_has(und_names, nm) { und_names.push(nm) }
+            }
+            sj = sj + 1
+        }
+        pi = pi + 1
+    }
+
+    let mut changed = true
+    while changed {
+        changed = false
+        let mut mi = 0
+        while mi < len(members) {
+            if !pulled[mi] {
+                let obj = parsed[mi]
+                let mut wants = false
+                let mut k = 0
+                while k < len(obj.symbols) {
+                    let s = obj.symbols[k]
+                    if s.section != 0 && (s.bind == ELF_STB_GLOBAL || s.bind == ELF_STB_WEAK) {
+                        let nm = _aef_symname_arm64(obj, s.name_offset)
+                        if _aef_has(und_names, nm) && !_aef_has(def_names, nm) {
+                            wants = true
+                            break
+                        }
+                    }
+                    k = k + 1
+                }
+                // #4871 STB_LOCAL hxlcl_ floor-pull (carries verbatim).
+                if !wants {
+                    let mut ui = 0
+                    while ui < len(und_names) && !wants {
+                        let bx = und_names[ui]
+                        if !_aef_has(def_names, bx) {
+                            let owx = "hxlcl_" + bx
+                            let mut kk = 0
+                            while kk < len(obj.symbols) {
+                                let s2 = obj.symbols[kk]
+                                if s2.section != 0 && _aef_symname_arm64(obj, s2.name_offset) == owx {
+                                    wants = true
+                                    break
+                                }
+                                kk = kk + 1
+                            }
+                        }
+                        ui = ui + 1
+                    }
+                }
+                if wants {
+                    pulled[mi] = true
+                    changed = true
+                    let mut d = 0
+                    while d < len(obj.symbols) {
+                        let s = obj.symbols[d]
+                        if s.section != 0 && (s.bind == ELF_STB_GLOBAL || s.bind == ELF_STB_WEAK) {
+                            let nm = _aef_symname_arm64(obj, s.name_offset)
+                            if len(nm) > 0 && !_aef_has(def_names, nm) { def_names.push(nm) }
+                        }
+                        d = d + 1
+                    }
+                    let mut fd = 0
+                    while fd < len(und_names) {
+                        let bx = und_names[fd]
+                        if !_aef_has(def_names, bx) {
+                            let owx = "hxlcl_" + bx
+                            let mut fk = 0
+                            while fk < len(obj.symbols) {
+                                let sf = obj.symbols[fk]
+                                if sf.section != 0 && _aef_symname_arm64(obj, sf.name_offset) == owx {
+                                    def_names.push(bx)
+                                    break
+                                }
+                                fk = fk + 1
+                            }
+                        }
+                        fd = fd + 1
+                    }
+                    let mut u = 0
+                    while u < len(obj.symbols) {
+                        let s = obj.symbols[u]
+                        if s.section == 0 {
+                            let nm = _aef_symname_arm64(obj, s.name_offset)
+                            if len(nm) > 0 && !_aef_has(und_names, nm) { und_names.push(nm) }
+                        }
+                        u = u + 1
+                    }
+                    extracted.push(obj)
+                }
+            }
+            mi = mi + 1
+        }
+    }
+
+    return extracted
+}
