@@ -1122,13 +1122,34 @@ jobs:
           test -x dist/hexa-linux-x86_64/build/aprime_cc \
             || { echo "PACKAGING DEFECT: staged install lacks build/aprime_cc — the own-link default leg would clang-fallback on the consumer (stage_precompile_package r27 must hard-ship it on linux-x86_64)"; exit 1; }
           echo "aprime_cc present in staged install ✓"
-      - name: (3) cfallback-zero census against the STAGED consumer artifact (neutral cwd · no probe leakage)
+      - name: (3) Reconstruct the install.sh consumer layout (build/ + self/ hxroot marker)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # MEASURED (aiden): own-link resolves its native compiler + runtime.a from the
+          # INSTALL layout, NOT the raw staging tarball. install.sh (a) extracts the tarball
+          # to $HX_BIN, (b) symlinks $HX_BIN/self -> cloned source self/ so resolve_hxroot()
+          # (self/main.hexa:1630) finds its marker `self/native/hexa_cc.c` and returns $HX_BIN
+          # → resolve_prebuilt_runtime() resolves $HX_BIN/build/runtime.a, and resolve_native_cc()
+          # resolves $HX_BIN/build/aprime_cc. The raw dist/ tarball lacks self/ → resolve_hxroot
+          # falls to "." → runtime.a="" → own-link leg skips → clang delegate (a FALSE red). So
+          # replicate install.sh's layout (the real consumer env) and census THAT.
+          stage="$GITHUB_WORKSPACE/dist/hexa-linux-x86_64"
+          HX_BIN=/tmp/hxinstall/bin; rm -rf /tmp/hxinstall; mkdir -p "$HX_BIN"
+          cp "$stage/hexa" "$HX_BIN/hexa"
+          cp -r "$stage/build" "$HX_BIN/build"
+          ln -sfn "$GITHUB_WORKSPACE/self" "$HX_BIN/self"   # resolve_hxroot marker (install.sh:494)
+          test -f "$HX_BIN/self/native/hexa_cc.c" \
+            || { echo "install-layout DEFECT: $HX_BIN/self/native/hexa_cc.c missing — resolve_hxroot marker absent (release_build should have regenerated the emitted seed)"; exit 1; }
+          echo "install layout ready: $HX_BIN (hexa + build/{aprime_cc,runtime.a} + self→marker)"
+      - name: (4) cfallback-zero census against the INSTALL-LAYOUT hexa (neutral cwd · all env unset)
         shell: bash
         run: |
           set -uo pipefail
-          stage="$GITHUB_WORKSPACE/dist/hexa-linux-x86_64"
-          # Neutral cwd + HEXA_APRIME_CC/HEXA_LANG unset ⇒ the only surviving native-cc
-          # probe is <install>/build/aprime_cc (the staged one) = the consumer's real path.
+          # ALL of HEXA_APRIME_CC/HEXA_LANG/HEXA_PREBUILT_RUNTIME unset ⇒ own-link must
+          # resolve everything from the install layout itself (argv0 + self/ marker), exactly
+          # as a consumer whose shell carries none of these. Neutral cwd defeats the
+          # ./build/aprime_cc cwd probe. This is the strictest faithful consumer model.
           mkdir -p /tmp/census-cwd && cd /tmp/census-cwd
-          env -u HEXA_APRIME_CC -u HEXA_LANG \
-            bash "$GITHUB_WORKSPACE/tool/cfallback_zero_census" --hexa "$stage/hexa"
+          env -u HEXA_APRIME_CC -u HEXA_LANG -u HEXA_PREBUILT_RUNTIME \
+            bash "$GITHUB_WORKSPACE/tool/cfallback_zero_census" --hexa /tmp/hxinstall/bin/hexa

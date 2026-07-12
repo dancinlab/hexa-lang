@@ -14,17 +14,20 @@
 # through also fires on aprime_cc-resolution miss (resolve_native_cc()="") / runtime.a
 # miss / flatten failure / link error, not just ENCODE-MISS.
 #
-# ⚠️ FIDELITY: the own-link leg requires a co-located native compiler `build/aprime_cc`
-# (resolve_native_cc(), self/main.hexa:2680). A bare `release_build` env does NOT
-# build aprime_cc → the leg silently degrades to the C-transpile delegate. So this
-# census must run against the ACTUAL SHIPPED CONSUMER ARTIFACT (the stage_precompile_
-# package staging dir, which ships aprime_cc per r27) — NOT a bare release_build tree.
-# Point --hexa at the staged `hexa`, run from a neutral cwd with HEXA_APRIME_CC /
-# HEXA_LANG UNSET, so the ONLY surviving native-cc probe is <install>/build/aprime_cc
-# (the consumer's real resolution). Building aprime_cc in the census env by hand would
-# be tune-to-green (it fabricates a privileged env no consumer has); testing the
-# staged artifact is the faithful consumer model. A green soak here = the hexa_cc.c
-# delegate is dead code on the shipped default leg → removable (axis-① done).
+# ⚠️ FIDELITY (measured, aiden): the own-link leg auto-resolves BOTH a co-located native
+# compiler `build/aprime_cc` (resolve_native_cc(), self/main.hexa:2680) AND the prebuilt
+# `build/runtime.a` (resolve_prebuilt_runtime() → resolve_hxroot(), :1630). resolve_hxroot's
+# root marker is `self/native/hexa_cc.c` — so both resolvers succeed ONLY from the INSTALL.SH
+# LAYOUT ($HX_BIN/{hexa,build/,self→source}), NOT the raw stage_precompile_package tarball
+# dir (which has build/ but NO self/ → resolve_hxroot falls to "." → runtime.a="" → the leg
+# skips → clang delegate = a FALSE red). So the CI must replicate install.sh's layout (copy
+# the staged build/ + symlink self/) and point --hexa there; run from a neutral cwd with
+# HEXA_APRIME_CC/HEXA_LANG/HEXA_PREBUILT_RUNTIME ALL unset so own-link resolves purely from
+# the layout (argv0 + self/ marker) as a real consumer does. Hand-building aprime_cc or
+# hand-setting the runtime env in the census would be tune-to-green (a privileged env no
+# consumer has). A green soak here = the hexa_cc.c delegate is dead on the shipped default
+# leg → removable (axis-① done). NOTE the marker irony: resolve_hxroot keys on the very
+# `hexa_cc.c` axis-① aims to delete — decoupling that marker is an axis-① prerequisite.
 #
 # Advisory (not in the required selfhost-gates-summary set) — promote after a green
 # soak, per the CI rule "measure a job green before making it required".
