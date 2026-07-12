@@ -506,26 +506,34 @@ resolve_native_map_query_seed() {
         "Linux x86_64") tgt="linux-x86_64" ;;
         "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
     esac
-    # B3-A0 own-obj: own-emit map_query.hexa direct to .o (no --keep-global — zero
-    # sibling globals; nm-gate the exactly-8 dispatcher contract).
+    # B3-A0 own-obj: own-emit map_query.hexa direct to a SELF-CONTAINED .o. map_query.hexa
+    # imports the runtime prelude (rt_map_* delegate bodies); --keep-global=<the 8> + --isolate
+    # absorbs the rt_map_* + their reachable closure as STB_LOCAL and prunes at the carrier
+    # boundary, so the seed's only undefs are runtime.a-resident C primitives (ZERO program-side
+    # rt_map_*). REQUIRED: an extern-based/bare-emit seed leaves rt_map_* undefined → breaks every
+    # runtime.a-ONLY link (grace-consent checker, minimal consumers). The .s-seed path CANNOT
+    # self-contain (--isolate is --emit=obj-only), so the map-query flip is OWN-OBJ-ONLY.
     if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_MAPQUERY:-0}" != "0" ]; then
         local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/map_query.hexa" _otri=""
+        local _kg="hexa_map_keys,hexa_map_values,hexa_map_entries,hexa_map_map_values,hexa_map_filter_keys,hexa_map_count,hexa_map_any,hexa_map_all"
         case "$tgt" in
             linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
         esac
         if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
             printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
-            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --target="$_otri" -o build/map_query_native.o "$_osrc" 2>build/map_query_ownobj.err; then
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --keep-global="$_kg" --isolate --target="$_otri" -o build/map_query_native.o "$_osrc" 2>build/map_query_ownobj.err; then
                 local _oq; _oq="$(nm build/map_query_native.o 2>/dev/null | grep -cE ' T _?hexa_map_(keys|values|entries|map_values|filter_keys|count|any|all)$')"
-                if [ "${_oq:-0}" -eq 8 ]; then
+                # self-contained gate: the isolated seed must leave ZERO rt_map_* undefined (all absorbed local).
+                local _ortu; _ortu="$(nm build/map_query_native.o 2>/dev/null | awk '$1=="U"||$2=="U"{print $NF}' | grep -cE '^_?rt_map_')"
+                if [ "${_oq:-0}" -eq 8 ] && [ "${_ortu:-1}" -eq 0 ]; then
                     export HEXA_RT_MAP_QUERY_NATIVE=1
-                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: map_query via $_oc --emit=obj ($_oq/8 hexa_map_* dispatchers, TARGET=$tgt) → 8 map-query bodies dropped from runtime_core.c, no \$CC assemble"
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: map_query via $_oc --emit=obj --isolate ($_oq/8 dispatchers global, rt_map_* absorbed local, U-floor carrier-only, TARGET=$tgt) → 8 map-query bodies dropped from runtime_core.c, no \$CC assemble"
                     return 0
                 fi
-                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: map_query own-emit exported $_oq/8 dispatchers — falling back to .s seed" >&2
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: map_query own-emit exported $_oq/8 dispatchers, $_ortu rt_map_* undef (want 8/0) — NOT self-contained, retaining C bodies" >&2
                 rm -f build/map_query_native.o
             else
-                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: map_query own-emit failed — falling back to .s seed ($(head -1 build/map_query_ownobj.err 2>/dev/null))" >&2
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: map_query own-emit failed — retaining C bodies ($(head -1 build/map_query_ownobj.err 2>/dev/null))" >&2
             fi
         fi
     fi
