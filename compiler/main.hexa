@@ -1087,7 +1087,9 @@ if stream_mode && target == "arm64-apple-darwin" {
     // relocs. Default arm64-apple-darwin stays Mach-O (guarded above),
     // byte-identical.
     if (emit_kind == "obj" || emit_kind == "exec") && backend_kind == "native" && target == "arm64-linux-gnu" {
-        let elf_obj0 = pack_lir_arm64_elf(lmodule)
+        // axis-② A1 isolation — see the x86_64 twin; flag-gated pass-through.
+        let lmodule_iso = if isolate_flag { isolate_lmodule_arm64_elf(lmodule, keep_globals) } else { lmodule }
+        let elf_obj0 = pack_lir_arm64_elf(lmodule_iso)
         // axis-② E4 — see the x86_64 twin; pass-through when empty.
         let elf_obj = demote_nonkeep_to_local_arm64(elf_obj0, keep_globals)
         let elf_bytes = serialize_elf_arm64(elf_obj)
