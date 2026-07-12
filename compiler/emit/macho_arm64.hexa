@@ -549,6 +549,19 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         }
     }
 
+    // FCVTZS Xd, Dn  (double → signed int64, round-toward-zero; `int(f)` lowering).
+    // ARM ARM C7.2 FCVTZS scalar-integer double→X: sf=1 ftype=01 rmode=11 opcode=000
+    // → base 0x9e780000 | (Dn<<5) | Xd. The structural mirror of SCVTF above (the
+    // codegen emits `fcvtzs x1, d0` at arm64_darwin.hexa:4003 for __hx_payload_f2i);
+    // without this arm any arm64 own-emit `int(float)` hit the unknown-op ENCODE-MISS.
+    if op == "FCVTZS" && len(ops) == 2 {
+        let rd = xreg_idx(ops[0])
+        let rn = dreg_idx(ops[1])
+        if rd >= 0 && rn >= 0 {
+            return 0x9e780000 | (rn << 5) | rd
+        }
+    }
+
     // ── Compare (SUBS XZR, ...) ──
     // CMP Xn, Xm
     if op == "CMP" && len(ops) == 2 && ops[1].substring(0, 1) != "#" {
@@ -1746,6 +1759,7 @@ fn _lir_op_uppercase(op: string) -> string {
     if op == "fdiv"  { return "FDIV" }
     if op == "fcmp"  { return "FCMP" }
     if op == "scvtf" { return "SCVTF" }
+    if op == "fcvtzs" { return "FCVTZS" }
     if op == "ldrb"  { return "LDRB" }
     if op == "strb"  { return "STRB" }
     // RFC 063 P0 fill (self-host udf-hole closure): the native obj-emit
