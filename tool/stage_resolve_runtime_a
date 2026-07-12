@@ -2491,6 +2491,25 @@ build_runtime_a_from_source() {
                 "Linux x86_64") _rnfr_tgt="linux-x86_64" ;;
                 "Linux aarch64"|"Linux arm64") _rnfr_tgt="linux-arm64" ;;
             esac
+            # ── axis-②③ A1 (E4+isolate own-obj) — own-emit --keep-global=hxlcl_free
+            #    --isolate; MANDATORY _rn_seed_und_gate acceptance (carrier undefs like
+            #    hxlcl_malloc allowed); clean fall to the frozen seed without --isolate. ──
+            _rnfr_ownobj_ok=0
+            if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && [ "$_rnfr_tgt" = "linux-x86_64" ]; then
+                mkdir -p build; printf 'fn _rnfr_drv() {}\n' > build/_rnfr_drv.hexa
+                if env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" build/_rnfr_drv.hexa --backend=native --emit=obj --keep-global=hxlcl_free --isolate \
+                       --target=x86_64-linux-gnu -o build/hxlcl_free_native.o stdlib/runtime/hxlcl_core.hexa >build/_rnfr_ownobj.log 2>&1 \
+                   && [ "$(nm build/hxlcl_free_native.o 2>/dev/null | grep -cE ' T _?hxlcl_free$')" -eq 1 ] \
+                   && [ "$(nm build/hxlcl_free_native.o 2>/dev/null | grep -cE ' T ')" -eq 1 ] \
+                   && [ -z "$(_rn_seed_und_gate build/hxlcl_free_native.o)" ]; then
+                    _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_FREE"
+                    _mo_hxlcl_members="$_mo_hxlcl_members build/hxlcl_free_native.o"
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_free via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_free --isolate (isolated, no $CC/objcopy/.s seed — binutils-free)"
+                    _rnfr_ownobj_ok=1
+                fi
+            fi
+            if [ "$_rnfr_ownobj_ok" = "0" ]; then
             case "$_rnfr_tgt" in
                 darwin-arm64) _rnfr_seed="self/native/hxlcl_free_arm64.s" ;;
                 linux-x86_64) _rnfr_seed="self/native/hxlcl_free_x86_64.s" ;;
@@ -2526,6 +2545,7 @@ build_runtime_a_from_source() {
             if [ -n "$_rnfr_err" ]; then
                 [ "$_rnfr_mode" = "1" ] && { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FREE FATAL (strict): $_rnfr_err" >&2; return 1; }
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-FREE WARN: $_rnfr_err — FALLBACK-SHIM (retaining libc free member; free stays UND in the nm floor)" >&2
+            fi
             fi
         fi
         # ── RFC061 §M8 RT-NATIVE-ATOF (fp-ABI xmm Route C · MIXED-ABI leaf, default OFF) ──
@@ -2692,6 +2712,25 @@ build_runtime_a_from_source() {
                 "Linux x86_64") _rnca_tgt="linux-x86_64" ;;
                 "Linux aarch64"|"Linux arm64") _rnca_tgt="linux-arm64" ;;
             esac
+            # ── axis-②③ A1 (E4+isolate own-obj) — own-emit --keep-global=hxlcl_calloc
+            #    --isolate; MANDATORY _rn_seed_und_gate acceptance (carrier undefs like
+            #    hxlcl_malloc allowed); clean fall to the frozen seed without --isolate. ──
+            _rnca_ownobj_ok=0
+            if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && [ "$_rnca_tgt" = "linux-x86_64" ]; then
+                mkdir -p build; printf 'fn _rnca_drv() {}\n' > build/_rnca_drv.hexa
+                if env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" build/_rnca_drv.hexa --backend=native --emit=obj --keep-global=hxlcl_calloc --isolate \
+                       --target=x86_64-linux-gnu -o build/hxlcl_calloc_native.o stdlib/runtime/hxlcl_core.hexa >build/_rnca_ownobj.log 2>&1 \
+                   && [ "$(nm build/hxlcl_calloc_native.o 2>/dev/null | grep -cE ' T _?hxlcl_calloc$')" -eq 1 ] \
+                   && [ "$(nm build/hxlcl_calloc_native.o 2>/dev/null | grep -cE ' T ')" -eq 1 ] \
+                   && [ -z "$(_rn_seed_und_gate build/hxlcl_calloc_native.o)" ]; then
+                    _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_CALLOC"
+                    _mo_hxlcl_members="$_mo_hxlcl_members build/hxlcl_calloc_native.o"
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_calloc via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_calloc --isolate (isolated, no $CC/objcopy/.s seed — binutils-free)"
+                    _rnca_ownobj_ok=1
+                fi
+            fi
+            if [ "$_rnca_ownobj_ok" = "0" ]; then
             case "$_rnca_tgt" in
                 darwin-arm64) _rnca_seed="self/native/hxlcl_calloc_arm64.s" ;;
                 linux-x86_64) _rnca_seed="self/native/hxlcl_calloc_x86_64.s" ;;
@@ -2727,6 +2766,7 @@ build_runtime_a_from_source() {
             if [ -n "$_rnca_err" ]; then
                 [ "$_rnca_mode" = "1" ] && { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC FATAL (strict): $_rnca_err" >&2; return 1; }
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CALLOC WARN: $_rnca_err — FALLBACK-SHIM (retaining libc calloc member; calloc stays UND in the nm floor)" >&2
+            fi
             fi
         fi
         # ── RFC061 §M8 RT-NATIVE-STRNCMP (frozen seed-consume · pure-leaf, default OFF) ──
@@ -3086,6 +3126,25 @@ build_runtime_a_from_source() {
                 "Linux x86_64") _rnst_tgt="linux-x86_64" ;;
                 "Linux aarch64"|"Linux arm64") _rnst_tgt="linux-arm64" ;;
             esac
+            # ── axis-②③ A1 (E4+isolate own-obj) — own-emit --keep-global=hxlcl_strdup
+            #    --isolate; MANDATORY _rn_seed_und_gate acceptance (carrier undefs like
+            #    hxlcl_malloc allowed); clean fall to the frozen seed without --isolate. ──
+            _rnst_ownobj_ok=0
+            if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && [ "$_rnst_tgt" = "linux-x86_64" ]; then
+                mkdir -p build; printf 'fn _rnst_drv() {}\n' > build/_rnst_drv.hexa
+                if env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" build/_rnst_drv.hexa --backend=native --emit=obj --keep-global=hxlcl_strdup --isolate \
+                       --target=x86_64-linux-gnu -o build/hxlcl_strdup_native.o stdlib/runtime/hxlcl_core.hexa >build/_rnst_ownobj.log 2>&1 \
+                   && [ "$(nm build/hxlcl_strdup_native.o 2>/dev/null | grep -cE ' T _?hxlcl_strdup$')" -eq 1 ] \
+                   && [ "$(nm build/hxlcl_strdup_native.o 2>/dev/null | grep -cE ' T ')" -eq 1 ] \
+                   && [ -z "$(_rn_seed_und_gate build/hxlcl_strdup_native.o)" ]; then
+                    _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_STRDUP"
+                    _mo_hxlcl_members="$_mo_hxlcl_members build/hxlcl_strdup_native.o"
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_strdup via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_strdup --isolate (isolated, no $CC/objcopy/.s seed — binutils-free)"
+                    _rnst_ownobj_ok=1
+                fi
+            fi
+            if [ "$_rnst_ownobj_ok" = "0" ]; then
             case "$_rnst_tgt" in
                 darwin-arm64) _rnst_seed="self/native/hxlcl_strdup_arm64.s" ;;
                 linux-x86_64) _rnst_seed="self/native/hxlcl_strdup_x86_64.s" ;;
@@ -3126,6 +3185,7 @@ build_runtime_a_from_source() {
             if [ -n "$_rnst_err" ]; then
                 [ "$_rnst_mode" = "1" ] && { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRDUP FATAL (strict): $_rnst_err" >&2; return 1; }
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRDUP WARN: $_rnst_err — FALLBACK-SHIM (retaining libc strdup member; strdup stays UND in the nm floor)" >&2
+            fi
             fi
         fi
         # ── RFC061 §M8 RT-NATIVE-REALLOC (zeroc #29 F2 · pure -D flip, NO seed) ──
