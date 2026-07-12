@@ -979,7 +979,7 @@ resolve_native_float_parse_hexinfnan_seed() {
 # off (seed export absent → :1359 lockstep OFF) and the C libc-regex #else ships (#3583 lesson).
 resolve_native_regex_rt_seed() {
     [ "${HEXA_REGEX_NATIVE:-1}" != "0" ] || return 0                # zeroc #29 FLIP: native default-ON; HEXA_REGEX_NATIVE=0 reverts to libc regcomp
-    [ -f build/regex_rt_native.o ] && { export HEXA_REGEX_NATIVE=1; return 0; }
+    [ -f build/regex_rt_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_REGEX_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"
     tgt="${tgt%-cuda}"
@@ -1006,6 +1006,37 @@ resolve_native_regex_rt_seed() {
     if [ "${ncontract:-0}" -ne 6 ] || [ "${ntotal:-0}" -ne 6 ]; then
         echo "[stage_resolve_runtime_a] RT-NATIVE REGEX: seed $seed exports $ncontract/6 rt_regex_* (total globals $ntotal, want 6) — regex path stays off (C libc regex)" >&2
         return 0
+    fi
+    # ── axis-②③ B3 A0 (own-object seed) — regex_rt (family 10/10, the E4 family).
+    #    own-emit exports 82 globals; E4's `--keep-global=<6 contract>` demotes the
+    #    76 internal helpers to STB_LOCAL, reproducing the .s seed's exactly-6-global
+    #    contract (regen_regex_rt_native_s.sh's sed-demotion, now in-compiler). The
+    #    6/6-global assertion below DOUBLES as the E4-presence probe: an aprime
+    #    without --keep-global emits all 82 global → _otot!=6 → clean fallback to the
+    #    .s seed (so this is safe to ship before E4 merges). ──
+    if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_REGEX:-0}" != "0" ]; } then
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/regex_rt.hexa" _otri=""
+        local _okeep="rt_regex_findall,rt_regex_match,rt_regex_match_full,rt_regex_replace,rt_regex_search,rt_regex_split"
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --keep-global="$_okeep" --target="$_otri" -o build/regex_rt_native.o "$_osrc" 2>build/regex_rt_ownobj.err; then
+                local _orc _otot
+                _orc="$(nm build/regex_rt_native.o 2>/dev/null | grep -cE ' T _?rt_regex_(match|match_full|search|findall|split|replace)$')"
+                _otot="$(nm build/regex_rt_native.o 2>/dev/null | grep -cE ' T ')"
+                if [ "${_orc:-0}" -eq 6 ] && [ "${_otot:-0}" -eq 6 ]; then
+                    export HEXA_REGEX_NATIVE=1
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: regex_rt via $_oc --emit=obj --keep-global=<6> (E4-demoted: 6 rt_regex_ global + 76 STB_LOCAL, TARGET=$tgt) → native Thompson-NFA regex path, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: regex_rt own-emit gave contract:$_orc/6 total-global:$_otot/6 (aprime lacks E4 --keep-global? all 82 global) — falling back to .s seed" >&2
+                rm -f build/regex_rt_native.o
+            else
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: regex_rt own-emit failed — falling back to .s seed ($(head -1 build/regex_rt_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
     fi
     local s_tmp="build/regex_rt_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
