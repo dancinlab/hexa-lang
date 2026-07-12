@@ -3942,7 +3942,13 @@ build_runtime_a_from_source() {
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S5]: multidef safety gate (ld -r partial merge)…"
         local _mo_merge="build/_caseB_merge.o" _mo_multidef _mo_reg_t _mo_reg_u
         ld -r build/runtime.o build/runtime_core.o $_mo_hxlcl_members $extra_obj -o "$_mo_merge" 2>build/_caseB_ldr.err
-        _mo_multidef=$(grep -ciE 'multiple definition|duplicate symbol' build/_caseB_ldr.err 2>/dev/null || echo 0)
+        # NB: `grep -c` prints "0" AND exits 1 on zero matches, so `|| echo 0` would
+        # append a SECOND "0" → multiline "0\n0" → the -ne test at :3949 dies with
+        # "integer expression required" (exposed by the two-pass re-resolve, whose 2nd
+        # pass leaves a match-less _caseB_ldr.err present). `| tail -1` + :-0 keeps it a
+        # single clean integer for both the file-present-0-match and file-absent cases.
+        _mo_multidef=$(grep -ciE 'multiple definition|duplicate symbol' build/_caseB_ldr.err 2>/dev/null | tail -1)
+        _mo_multidef=${_mo_multidef:-0}
         _mo_reg_t=$(nm build/runtime.o 2>/dev/null | grep -cE ' T _?_hexa_init_fn_shims$')
         _mo_reg_u=$(nm build/runtime_core.o 2>/dev/null | grep -cE ' U _?_hexa_init_fn_shims$')
         echo "[stage_resolve_runtime_a] RFC061 Case-B: ld -r multiple_definition=$_mo_multidef ; _hexa_init_fn_shims runtime.o=${_mo_reg_t}T runtime_core.o=${_mo_reg_u}U (§4a archive-internal)"

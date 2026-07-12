@@ -56,10 +56,6 @@ fi
 # NOTE: do NOT rm build/runtime.a here — it is HEXA_PREBUILT_RUNTIME; removing it
 # diverts stage_resolve to the frozen-seed restore path. stage_resolve rebuilds
 # runtime.a in place (ar rcs replaces members).
-# KNOWN ISSUE (named next round): in the FULL release_build context this re-resolve
-# exits 1 at the Case-B S5 ld -r gate (0 actual multidef in _caseB_ldr.err, single
-# hexa_map_keys definer) — a stateful pass-1↔pass-2 interaction that passes when run
-# standalone with runtime.a present. Needs isolation debugging vs the full-build state.
 rm -f build/map_query_native.o build/runtime_core.o
 
 echo "[stage_reresolve_runtime_a] re-resolving shipped runtime.a with own-obj --isolate map-query…"
@@ -73,11 +69,14 @@ NM="${NM:-nm}"
 ar t "$RA" 2>/dev/null | grep -q '^map_query_native\.o$' \
     || { echo "[stage_reresolve_runtime_a] FATAL: seed not ar'd into $RA" >&2; exit 1; }
 
-_g="$("$NM" build/map_query_native.o 2>/dev/null | grep -cE ' T _?hexa_map_(keys|values|entries|map_values|filter_keys|count|any|all)$')"
+# NB `grep -c` exits 1 on zero matches → under `set -euo pipefail` a bare
+# `X=$(… | grep -c …)` with 0 hits would kill the script silently BEFORE the test
+# (same class as the stage_resolve :3945 fix). `|| true` keeps grep's printed count.
+_g="$("$NM" build/map_query_native.o 2>/dev/null | grep -cE ' T _?hexa_map_(keys|values|entries|map_values|filter_keys|count|any|all)$' || true)"
 [ "${_g:-0}" -eq 8 ] \
-    || { echo "[stage_reresolve_runtime_a] FATAL: seed exports $_g/8 hexa_map_* globals" >&2; exit 1; }
+    || { echo "[stage_reresolve_runtime_a] FATAL: seed exports ${_g:-0}/8 hexa_map_* globals" >&2; exit 1; }
 
-_rtu="$("$NM" build/map_query_native.o 2>/dev/null | awk '$1=="U"||$2=="U"{print $NF}' | grep -cE '^_?rt_map_')"
+_rtu="$("$NM" build/map_query_native.o 2>/dev/null | awk '$1=="U"||$2=="U"{print $NF}' | grep -cE '^_?rt_map_' || true)"
 [ "${_rtu:-1}" -eq 0 ] \
     || { echo "[stage_reresolve_runtime_a] FATAL: seed carries $_rtu program-side rt_map_* undef — NOT self-contained" >&2; exit 1; }
 
