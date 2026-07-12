@@ -2795,13 +2795,17 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
         _ew_u64(data_bytes, 7);  _ew_u64(data_bytes, rela_vaddr)     // DT_RELA
         _ew_u64(data_bytes, 8);  _ew_u64(data_bytes, rela_size)      // DT_RELASZ
         _ew_u64(data_bytes, 9);  _ew_u64(data_bytes, 24)             // DT_RELAENT
-        if init_total > 0 {
-            // ctors present → the dynamic loader (PT_INTERP present) runs the
-            // pooled .init_array; the static init-stub walk is suppressed on this
-            // path (crt_handoff), so exactly one mechanism executes them.
-            _ew_u64(data_bytes, 25); _ew_u64(data_bytes, data_vaddr_base + init_region_off)  // DT_INIT_ARRAY
-            _ew_u64(data_bytes, 27); _ew_u64(data_bytes, init_total)                          // DT_INIT_ARRAYSZ
-        }
+        // CRT1-HANDOFF: NO DT_INIT_ARRAY. This runtime.a is OWN_START-compiled
+        // (-DHEXA_ZEROC_OWN_START) — its static ctors assume the _hx_start_c
+        // contract (environ-first store, own atexit-LIFO via hxlcl_exit, raw
+        // exit_group, premain TAG_FN binding). Under glibc _dl_init an
+        // extraction-accident SUBSET of them runs out of context = partial init
+        // (MEASURED: mir3 own-link rc 0→2). One init authority per path: dyn =
+        // crt1/glibc (runs zero exe ctors — status-quo, byte-behavior identical to
+        // pre-branch), static = the _hx_start_c 16-byte stub walk (E5/E6, the
+        // RFC061 resid-UND→0 endgame where these ctors are needed AND contract-
+        // valid). The dyn env() gap (hxlcl_getenv walks only hxlcl_environ, no
+        // libc fallback) is a pre-existing runtime issue, not a linker DT tag.
         _ew_u64(data_bytes, 0);  _ew_u64(data_bytes, 0)              // DT_NULL
         dyn_sz = len(data_bytes) - dyn_off
 
