@@ -496,6 +496,33 @@ resolve_native_intern_core_seed() {
         echo "[stage_resolve_runtime_a] RT-NATIVE INTERN-R1: seed $seed exports only $nsyms/2 rt_intern_*_native — falling back to C #else path" >&2
         return 0
     fi
+    # ── axis-②③ B3 A0 (own-object seed) — intern_core. Same lane as array_core:
+    #    own-emit stdlib/runtime/intern_core.hexa via $HEXA_OWNOBJ_CC (frozen-dough)
+    #    under HEXA_RT_OWNOBJ, adopt only on the 2 rt_intern_*_native contract syms,
+    #    else fall through to the .s path → default (flag-unset) byte-identical.
+    #    member parity own=2 ⊇ seed=2 PROVEN (ownobj_member_parity_gate, summer). ──
+    if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_INTERN:-0}" != "0" ]; } then
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/intern_core.hexa" _otri=""
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;;
+            linux-arm64)  _otri="arm64-linux-gnu" ;;
+            darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --target="$_otri" -o build/intern_core_native.o "$_osrc" 2>build/intern_core_ownobj.err; then
+                local _ots; _ots="$(nm build/intern_core_native.o 2>/dev/null | grep -cE ' T _?rt_intern_(find|strcmp0)_native')"
+                if [ "${_ots:-0}" -ge 2 ]; then
+                    export HEXA_RT_INTERN_NATIVE=1
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: intern_core via $_oc --emit=obj ($_ots/2 rt_intern_*_native, TARGET=$tgt) → native intern probe path, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: intern_core own-emit exported $_ots/2 syms — falling back to .s seed" >&2
+            else
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: intern_core own-emit failed — falling back to .s seed ($(head -1 build/intern_core_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
+    fi
     local s_tmp="build/intern_core_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
     if $CC -c "$s_tmp" -o build/intern_core_native.o 2>/dev/null; then
