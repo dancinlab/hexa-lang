@@ -2129,14 +2129,22 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
     // a named follow-up rung). Entries are patched to FINAL ctor vaddrs by the
     // kind-1 site_seg==6 resolve arm below. Zero-ctor links: no pad, empty region,
     // start==end at the same offset as today — bit-identical.
-    if init_total > 0 { while (len(data_bytes) & 7) != 0 { data_bytes.push(0) } }
+    // Materialize the .init_array region ONLY on the STATIC own-start path
+    // (init_stub). On the dyn (crt_handoff) path keep the region EMPTY →
+    // __init_array_start == __init_array_end → the runtime's _hx_run_init_array
+    // walk stays a no-op → byte-identical to pre-branch. (MEASURED: materializing
+    // real bounds on the dyn path made a runtime walk run the OWN_START ctors
+    // out-of-context → rc 0→2; the dyn ctors are glibc/crt1's job, not ours.)
+    if init_stub && init_total > 0 { while (len(data_bytes) & 7) != 0 { data_bytes.push(0) } }
     let init_region_off = len(data_bytes)
-    let mut _iri = 0
-    while _iri < len(objs) {
-        let _iro = objs[_iri]
-        let mut _irb = 0
-        while _irb < len(_iro.init_array) { data_bytes.push(_iro.init_array[_irb] & 0xff); _irb = _irb + 1 }
-        _iri = _iri + 1
+    if init_stub {
+        let mut _iri = 0
+        while _iri < len(objs) {
+            let _iro = objs[_iri]
+            let mut _irb = 0
+            while _irb < len(_iro.init_array) { data_bytes.push(_iro.init_array[_irb] & 0xff); _irb = _irb + 1 }
+            _iri = _iri + 1
+        }
     }
     def_names.push("__init_array_start")
     def_seg.push(1)
@@ -2149,7 +2157,9 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
     def_bind.push(ELF_STB_GLOBAL)
     def_obj.push(-1)
     // deferred section-6 (E7) sym registration — absolute blob offsets now known.
-    if init_total > 0 {
+    // Only on the static path (region materialized); dyn keeps the syms unbound
+    // (region empty), matching pre-branch.
+    if init_stub && init_total > 0 {
         let mut _isi = 0
         while _isi < len(objs) {
             let _iso = objs[_isi]
@@ -2919,7 +2929,7 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
                     unresolved = unresolved + 1
                 } else {
                     let slot_vaddr = data_vaddr_base + got_blob_off + gslot * 8
-                    if r.site_seg == 3 || r.site_seg == 4 || r.site_seg == 6 {
+                    if r.site_seg == 3 || r.site_seg == 4 || (r.site_seg == 6 && init_stub) {
                         let blob_off = if r.site_seg == 4 { obj_data_base[ro] + r.offset } else if r.site_seg == 6 { init_region_off + obj_init_base[ro] + r.offset } else { obj_rodata_base[ro] + r.offset }
                         let p_vaddr  = data_vaddr_base + blob_off
                         let gdelta   = slot_vaddr + r.addend - p_vaddr
@@ -2958,7 +2968,7 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
                 }
                 // Site segment (round-3b): 3=rodata / 4=data land in the DATA blob
                 // at the data-seg vaddr; anything else (1=text, or 0) patches .text.
-                if r.site_seg == 3 || r.site_seg == 4 || r.site_seg == 6 {
+                if r.site_seg == 3 || r.site_seg == 4 || (r.site_seg == 6 && init_stub) {
                     let blob_off = if r.site_seg == 4 { obj_data_base[ro] + r.offset } else if r.site_seg == 6 { init_region_off + obj_init_base[ro] + r.offset } else { obj_rodata_base[ro] + r.offset }
                     let p_vaddr  = data_vaddr_base + blob_off
                     if r.kind == 1 {
