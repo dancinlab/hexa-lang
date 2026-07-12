@@ -3054,7 +3054,31 @@ fn _hexa_clang_capped(cmd) {
     // Best-effort: on any path failure fall back to the legacy pipe capture.
     let _cap_log = "/tmp/.hexa-runtime/clang." + to_string(mono_ns()) + ".log"
     exec("mkdir -p /tmp/.hexa-runtime 2>/dev/null")
-    let _cmd_file = cmd + " > '" + _cap_log + "' 2>&1"
+    // Wall-clock timeout (#4905): _hexa_clang_capped had ONLY a concurrency
+    // cap, no time bound — a clang whose optimizer blows up on a huge emitted
+    // C function (a 456-line hexa fn -> one enormous C fn, e.g.
+    // stdlib/qforge/atoms/ccsd_rhf.hexa) wedges in poll()/wait4 and hangs the
+    // whole compiler forever (>2h observed). Wrap the (already SIGPIPE-immune,
+    // file-redirected) clang in a POSIX-sh watchdog: background clang as a
+    // SIMPLE command so $! is its real pid (a ( )/{ } subshell would swallow
+    // the SIGKILL), and a poll-loop SIGKILLs it after HEXA_CLANG_TIMEOUT
+    // seconds (default 600 — a healthy 3-4s clang never trips). Portable
+    // across linux AND darwin: no GNU timeout/setsid/seq — only POSIX sh,
+    // sleep 1, kill -0/-9, $((...)) (dash + macOS /bin/sh). env value is
+    // shq()'d + digit-guarded (injection-safe; non-numeric -> 600). On kill,
+    // wait yields rc>=128 -> tag the log; the -o binary is never produced, so
+    // the caller's post-clang `test -x` reports a clean "binary not produced"
+    // failure instead of a phantom hang. byteeq-neutral: healthy builds never
+    // trip the timeout -> byte-identical (argv/env/cwd/fds untouched). Token
+    // slot still released by the unchanged `rmdir token_dir` below.
+    let mut _to = env_var("HEXA_CLANG_TIMEOUT")
+    if _to == "" { _to = "600" }
+    let _cmd_file = "T=" + shq(_to) + "; case \"$T\" in ''|*[!0-9]*) T=600;; esac; " +
+        cmd + " > '" + _cap_log + "' 2>&1 & __cpid=$!; " +
+        "( __c=0; while [ $__c -lt $T ]; do sleep 1; kill -0 $__cpid 2>/dev/null || exit 0; __c=$((__c+1)); done; kill -9 $__cpid 2>/dev/null ) & " +
+        "wait $__cpid; __rc=$?; " +
+        "if [ $__rc -ge 128 ]; then printf '\\n[hexa] clang wall-timeout: killed after %ss (HEXA_CLANG_TIMEOUT); rc=%s\\n' \"$T\" \"$__rc\" >> '" + _cap_log + "'; fi; " +
+        "exit $__rc"
     let _ = exec(_cmd_file)
     let mut out = ""
     if file_exists(_cap_log) {
