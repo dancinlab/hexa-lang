@@ -2178,7 +2178,9 @@ pub fn link_elf_arm64_ownstart_ar(program_objs: [ElfArm64Obj], out_path: string,
                 rc = _apply_arm64_reloc(data_bytes, obj_ro_base[aoi] + rl.offset, rl.kind, S, rl.addend, P, G)
             }
             if rc != 0 {
-                eprintln("hexa_ld(arm64,ownstart_ar): reloc '" + sname + "' kind " + to_string(rl.kind) + " rc=" + to_string(rc))
+                eprintln("hexa_ld(arm64,ownstart_ar): reloc '" + sname + "' kind " + to_string(rl.kind) + " rc=" + to_string(rc)
+                         + " [DIAG obj=" + to_string(aoi) + " site_seg=" + to_string(seg) + " off=" + to_string(rl.offset)
+                         + " S=" + to_string(S) + " A=" + to_string(rl.addend) + " SplusA_lo12=" + to_string((S + rl.addend) & 0xfff) + "]")
                 return 3
             }
             ri = ri + 1
