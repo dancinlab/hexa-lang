@@ -138,6 +138,27 @@ a tail-of-session rush (measure-not-LLM + release-integrity forbid merging an un
 Recommended: rung-4 (cross-build build/runtime.arm64-linux-gnu.a) first as a completable deliverable, then
 rung-2 with the runtime.arm64.a as the qemu-verifiable link target.
 
+## 🧱 rung-2 SCOPE MEASURED (aiden · captured numbers — a full aarch64 static linker)
+Attempted to scope the rung-2 reloc applicator by measuring the actual runtime object's relocs + UNDs
+(NOT a pre-emptive defer — measured with `readelf -r`/`nm`):
+- **8263 relocs across 12 R_AARCH64 types**: ADR_PREL_PG_HI21 (1998) · CALL26 (1834) · ADD_ABS_LO12 (1586)
+  · PREL32 (1035) · LDST64_ABS_LO12 (503) · **LD64_GOT_LO12 (463) + ADR_GOT_PAGE (463) = 926 GOT relocs**
+  · JUMP26 (197) · LDST32 (141) · LDST128 (22) · ABS64 (20) · LDST8 (1).
+- **23 UND symbols** incl. libc (`__libc_calloc/free`, `memcpy/memset/memmove`, `strlen`, `strtod`, `abort`,
+  `getc`, `regcomp/regexec/regfree`, `__stack_chk_fail/guard`, `__fdelt_chk`, `__longjmp_chk`) + the arm64
+  native-seed symbols (`rt_array_*_native`, `rt_map_*_native`) that are NOT ported/linked for arm64 yet.
+
+VERDICT (measured, not judged): a working arm64 own-link requires a FULL aarch64 static linker —
+**GOT synthesis** (926 GOT relocs demand a real GOT, unlike rung-1's assumption of static-non-PIE), a
+**12-type reloc applicator** (each type's bit-packing is a distinct silent-fail hazard), AND an arm64
+runtime.a whose members carry own-syscall shims for the 23 libc/native UNDs (many arm64 native seeds —
+mem/str/array/map — not yet ported). This is a large MULTI-PART campaign (linker + GOT + arm64 native
+runtime shims), decisively NOT session-completable, and rushing it would ship a silent-miscompiling
+linker (violates measure-not-LLM + release-integrity). The x86 own-link tames this via a PER-FUNCTION
+runtime.a + selective `archive_extract_fixpoint` (pulls only a symbol's closure, not the whole 8263-reloc
+blob) + the full x86 native-seed set — so the arm64 campaign must port BOTH the archive linker (rung-2)
+AND the arm64 native-seed runtime (rung-4-extended), across many focused rounds with per-round qemu verify.
+
 ## Subsequent rungs (not this session)
 - **Rung-2** runtime.a-aware own-link: port `link_elf_arm64_ownstart_ar` (:3208) + `parse_elf_arm64_obj`
   (:3826) + `parse_ar_archive` (:4143) + `archive_extract_fixpoint` (:4297) + `serialize_elf_exec_arm64_2seg`
