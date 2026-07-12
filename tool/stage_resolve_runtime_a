@@ -53,6 +53,18 @@ _zc_own_def=""
 # #4850/#4852; ON-path smoke GREEN #4853). Opt-out (=0) restores glibc-buffered stdio.
 _zc_stdio=""
 [ "${HEXA_RT_STDIO_NATIVE:-1}" != "0" ] && _zc_stdio="-DHEXA_RT_STDIO_NATIVE"   # PR-2 flip: default-ON (opt-out =0). arch-neutral (pure-C redirect, no asm gate unlike own-start), applied MULTIOBJ-only (S2/S3/CUDA) so single-TU byteeq lane unaffected.
+# L3 axis-② FILE* MULTIOBJ swap (default-OFF, byte-neutral OFF). When HEXA_RT_STDIO_LINK=1 the
+# standalone runtime_core.o's FILE* call sites redirect (via runtime_core_sysheaders.h) to the
+# shim's fake-fd bodies, and hxlcl_shim.o emits those bodies (fopen/fclose/fread/fwrite/ftell/
+# fseek/fdopen/fileno/fflush as ONE atomic subset) — dropping the libc fopen/fread/fwrite/fclose/
+# ftell/fseek UND cluster from the MULTIOBJ runtime.a. Requires HEXA_RT_STDIO_NATIVE ON (supplies
+# the exported hxlcl_write the fake-fd fwrite calls); gated on $_zc_stdio so a lone STDIO_LINK
+# never yields an unresolved hxlcl_write. Applied MULTIOBJ-only (S3 runtime_core.o + S4 shim.o;
+# the CUDA archive reuses both objects) so the single-TU Case-A byteeq lane is unaffected. OFF
+# (default) adds NO -D → sysheaders/shim preprocess to the frozen glibc-delegate branch → archive
+# byte-identical. Flip default-ON only after byteeq 3-target + FILE* nm-U drop + shipping smoke GREEN.
+_zc_stdio_link=""
+{ [ "${HEXA_RT_STDIO_LINK:-0}" = "1" ] && [ -n "$_zc_stdio" ]; } && _zc_stdio_link="-DHXLCL_STDIO_LINK"
 # axis-③ own-link defense-in-depth (default-OFF, byte-neutral OFF): exit-time stdio flush in hxlcl_exit.
 # NO-OP in the default single-TU runtime (print = raw hxlcl_write(2)); closes the real gap in
 # HEXA_RT_MULTIOBJ (separate-TU runtime_core.o keeps glibc-buffered stdio) where own _start + raw
@@ -3196,7 +3208,7 @@ build_runtime_a_from_source() {
         #      KEPT (supplies the HI-tier rt_* C bodies). SAME seed -D set. NO
         #      HEXA_HAS_HEXA_RT_STDLIB (keeps those bodies inline, not externed).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S3]: compile build/runtime_core.o (standalone TU, runtime_hi_gen.c kept)…"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE $_mo_rtcore_def $_rng_strcmp_def -I self -include self/runtime_core_sysheaders.h $_heap_def -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_stdio_link $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE $_mo_rtcore_def $_rng_strcmp_def -I self -include self/runtime_core_sysheaders.h $_heap_def -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
         # (S4) hxlcl_shim.o — libc-delegate hxlcl_* sibling TU.
         # own-start #29 coherence: $_zc_own_def MUST flow here too — without it the
         # shim's hxlcl_atexit stays the glibc-atexit delegate (U atexit), and under
@@ -3209,7 +3221,7 @@ build_runtime_a_from_source() {
         # hxlcl_memcpy/memset/memcmp bodies are C loops; without -fno-builtin-mem* clang's
         # loop-idiom pass rewrites them back into `call memcpy` (self-recursion). Mirrors the
         # S2/S3 runtime.o/runtime_core.o compiles (:3118/:3123) which already carry it.
-        $CC -c -O2 $_mo_archflag -std=gnu11 -D_GNU_SOURCE $_zeroc_nobuiltin $_mo_shim_def $_zc_own_def self/runtime_core_hxlcl_shim.c -o build/hxlcl_shim.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: hxlcl_shim.o compile failed" >&2; return 1; }
+        $CC -c -O2 $_mo_archflag -std=gnu11 -D_GNU_SOURCE $_zeroc_nobuiltin $_mo_shim_def $_zc_own_def $_zc_stdio_link self/runtime_core_hxlcl_shim.c -o build/hxlcl_shim.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: hxlcl_shim.o compile failed" >&2; return 1; }
         # (S5) MULTIDEF SAFETY GATE — `ld -r` partial relocatable merge of all
         #      members. `ld -r` leaves undefined externs unresolved (the program-
         #      supplied compiler-side symbols are EXPECTED to be absent here, same as
