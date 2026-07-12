@@ -925,7 +925,14 @@ pub fn parse_elf_arm64_obj(buf, base: Int, limit: Int, member_idx: Int) -> ElfAr
     if _er_u8(buf, base + 4) != 2    { return obj }   // ELFCLASS64
     if _er_u8(buf, base + 5) != 1    { return obj }   // ELFDATA2LSB
     if _er_u16le(buf, base + 0x10) != ELF_ET_REL     { return obj }
-    if _er_u16le(buf, base + 0x12) != ELF_EM_AARCH64 { return obj }   // ← the AArch64 delta
+    let _em = _er_u16le(buf, base + 0x12)
+    if _em != ELF_EM_AARCH64 {   // ← the AArch64 delta
+        // Name a wrong-arch member instead of a silent parse-empty (which strands
+        // its defs → downstream undef). A contaminated cross runtime.a with an
+        // EM_X86_64(0x3e) member is the class this catches. Opt-in own-link only.
+        eprintln("hexa_ld(arm64): archive member " + to_string(member_idx) + " e_machine=" + to_string(_em) + " != EM_AARCH64(0xb7) — skipped (wrong-arch runtime.a?)")
+        return obj
+    }
 
     let e_shoff     = _er_u64le(buf, base + 0x28)
     let e_shentsize = _er_u16le(buf, base + 0x3A)
