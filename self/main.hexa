@@ -4706,7 +4706,7 @@ fn cmd_run_user_direct(file, extra_args) {
     // axis-① rung-1b (L2): darwin arm64 native `hexa run` leg — opt-in HEXA_NATIVE_DARWIN=1 (default-OFF·byte-neutral).
     let _run_native_dar = _run_native_host == "Darwin arm64" && env_var("HEXA_NATIVE_DARWIN") == "1"
     let _run_native_on = (_run_native_host == "Linux x86_64" || _run_native_arm || _run_native_dar) && env("HEXA_RUN_CTRANSPILE") != "1"
-    // ── axis-③ own-link cold path (opt-in HEXA_LINK_HEXA=1) ────────────────
+    // ── axis-③ own-link cold path (DEFAULT-ON, opt-out HEXA_OWNLINK_DEFAULT=0) ──
     // FULLY CLANG-FREE + binutils-FREE: the native compiler does BOTH the
     // compile (own object emit) AND the link in ONE invocation —
     //   aprime_cc _drv.hexa --backend=native --emit=exec --linker=hexa
@@ -4718,15 +4718,17 @@ fn cmd_run_user_direct(file, extra_args) {
     // superset of the emit=obj+`ld` stage below — it also removes binutils `ld`
     // from the `hexa run` cold path, the axis-③ (no-clang) frontier's LINK half.
     // x86_64-linux ONLY (the own ELF writer + own-start recipe are proven there;
-    // arm64 = a separate round). DEFAULT-OFF byte-neutral: absent HEXA_LINK_HEXA
-    // the whole block no-ops, so the emit=obj+ld stage below is char-identical
-    // to today. Loud-fail-safe: on rc!=0 OR a missing/non-executable output the
+    // arm64 = a separate round). DEFAULT-ON (opt-out HEXA_OWNLINK_DEFAULT=0),
+    // mirroring the cmd_build flip at :3599 (#4881) under the SAME env knob so
+    // `hexa build` and `hexa run` share one own-link polarity — closing the
+    // LINK-half asymmetry (run was the last opt-in path). Loud-fail-safe: on the
+    // opt-out OR rc!=0 OR a missing/non-executable output the
     // block leaves tmpbin ABSENT → the EXISTING emit=obj+ld stage below runs
     // UNCHANGED (delegate-fallback intact), so nothing that worked can break.
     // HEXA_PREBUILT_RUNTIME is exported = resolve_prebuilt_runtime() so the
     // inner compiler's runtime.a discovery resolves the archive the own linker
     // links (same seam as the emit=obj stage's _nrt / the build path).
-    if !file_exists(tmpbin) && _run_native_on && _run_native_host == "Linux x86_64" && env("HEXA_LINK_HEXA") == "1" {
+    if !file_exists(tmpbin) && _run_native_on && _run_native_host == "Linux x86_64" && env_var("HEXA_OWNLINK_DEFAULT") != "0" {
         let _hlcc = resolve_native_cc()
         let _hlrt = resolve_prebuilt_runtime()
         if len(_hlcc) > 0 && len(_hlrt) > 0 {
