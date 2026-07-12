@@ -451,6 +451,13 @@
     "value": "arm64 asm-TEXT 이미터(_fmt_label)는 Mach-O @PAGE/@PAGEOFF/@GOTPAGE/@GOTPAGEOFF 페이지-릴록 접미를 GNU-as ELF 스펠링(bare-adrp/:lo12:/:got:/:got_lo12:)으로 번역해야 한다(target=arm64-linux-gnu). @PAGE 접미는 codegen(arm64_darwin.hexa 33사이트)이 만드는 내부 LIR 라벨 규약이고 두 object writer(elf_arm64.hexa=R_AARCH64_ADR_PREL_PG_HI21/ADD_ABS_LO12_NC · macho_arm64.hexa=ld64 kinds)가 reloc kind 파싱에 쓰므로 규약 자체는 유지 — asm-text 렌더링만 번역한다. 이름은 arm64_darwin이지만 arm64-linux도 이 codegen을 재사용하며, Mach-O 스펠링은 asm-text에서만 샌다. 같은 @PAGE→:lo12: 클래스가 alloc/fs_core/runtime_hi regen 스크립트에 perl post-pass로 3번 복붙돼 있는데(부채) 4·5번째 복사는 안티패턴 — 클래스 fix는 _fmt_label 한 곳.",
     "threshold": "재발=arm64-linux native seed(.s)가 GNU-as에서 'unexpected characters following instruction ... adrp xN,sym@PAGE'로 조립 실패 → seed 미생성 → runtime.arm64.a에 심볼 결여 → own-link fixpoint가 runtime.o 끌어 libc UND(strtod 등) undef. 판정=aprime --emit=asm --target=arm64-linux-gnu 출력에 @PAGE>0. 해결=compiler/emit/asm.hexa _fmt_label에서 _is_elf_arm64(target) 게이트로 _elf_arm64_page_reloc 번역(GOTPAGEOFF>GOTPAGE>PAGEOFF>PAGE 순·substring, 새 _ends_with 정의 금지=macho_arm64.hexa와 flat-globals 충돌 #3899). darwin/x86은 다른 브랜치→byteeq-neutral. regen perl post-pass·$CC-time sed 금지(부채복제·seed audit 파괴). 번역 삽입은 반드시 '.'/'['/'{'/'#' carve-out 前(.LCstr0@PAGE가 '.'로 시작해 verbatim 반환되면 @PAGE 잔존).",
     "source": "compiler/emit/asm.hexa"
+   },
+   {
+    "id": "elf-arm64-hexa-1",
+    "state": "pos-conv",
+    "value": "own-link concat pass는 각 obj의 rodata/data 섹션 base를 16-정렬해야 한다(link_elf_arm64_ownstart_ar). AArch64 LDST*_ABS_LO12_NC(ldr/str [base,:lo12:sym])는 scale(8=LDST64/16=LDST128)만큼 타겟 정렬을 요구하며 _apply_arm64_reloc가 (raw & (2^scale-1))!=0이면 rc=2로 거부한다. data_vaddr가 0x10000-정렬이므로 blob offset 16-정렬 ⇒ 섹션 vaddr 16-정렬(AArch64 최대 LDST 커버). gcc는 addend A를 섹션 sh_addralign 기준으로 계산하므로 base만 정렬하면 (base+A)도 정렬된다.",
+    "threshold": "재발=own-link이 여러 obj concat 후 LDST*_ABS_LO12_NC 릴록에서 rc=2(오정렬). 특히 crt1.o를 objs[0]로 prepend하는 dyn(Road A) 경로는 후속 obj의 섹션 vaddr를 crt1 바이트크기만큼 밀어 static 경로에선 안 보이던 오정렬을 노출( 타겟). 판정=HEXA_LD_DUMP_DYN + reloc kind 286/299 rc=2. 해결=concat에서 ro_base/da_base 기록 前 . --linker=hexa opt-in이라 static byteeq/shipping 무영향.",
+    "source": "compiler/emit/elf_arm64.hexa"
    }
   ]
  },
