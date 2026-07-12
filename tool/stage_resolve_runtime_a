@@ -340,7 +340,7 @@ resolve_native_rt_hi_seed() {
 # HEXA_RT_ARRAY_NATIVE=0 to force the C path even when a seed exists.
 resolve_native_array_core_seed() {
     [ "${HEXA_RT_ARRAY_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
-    [ -f build/array_core_native.o ] && { export HEXA_RT_ARRAY_NATIVE=1; return 0; }
+    [ -f build/array_core_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_RT_ARRAY_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     # The static-musl edge build sets TARGET=linux-x86_64-musl. The frozen native
     # .s seeds are ELF-object/x86_64-ABI artifacts shared by glibc and musl (same
@@ -413,7 +413,7 @@ resolve_native_array_core_seed() {
 
 resolve_native_map_core_seed() {
     [ "${HEXA_RT_MAP_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
-    [ -f build/map_core_native.o ] && { export HEXA_RT_MAP_NATIVE=1; return 0; }
+    [ -f build/map_core_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_RT_MAP_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     # The static-musl edge build sets TARGET=linux-x86_64-musl. The frozen native
     # .s seeds are ELF-object/x86_64-ABI artifacts shared by glibc and musl (same
@@ -497,7 +497,7 @@ resolve_native_map_core_seed() {
 # Set HEXA_RT_INTERN_NATIVE=0 to force the C path even when a seed exists.
 resolve_native_intern_core_seed() {
     [ "${HEXA_RT_INTERN_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
-    [ -f build/intern_core_native.o ] && { export HEXA_RT_INTERN_NATIVE=1; return 0; }
+    [ -f build/intern_core_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_RT_INTERN_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"; tgt="${tgt%-cuda}"   # -cuda variant shares the linux-x86_64 ELF/SysV rt-seeds
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -628,7 +628,7 @@ resolve_native_fs_core_seed() {
 # HEXA_RT_STR_STARTS_WITH_NATIVE=0 to force the C path even when a seed exists.
 resolve_native_str_core_seed() {
     [ "${HEXA_RT_STR_EQ_NATIVE:-x}" = "0" ] && [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-x}" = "0" ] && [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-x}" = "0" ] && [ "${HEXA_RT_STR_INDEX_OF_NATIVE:-x}" = "0" ] && [ "${HEXA_RT_STR_CONTAINS_NATIVE:-x}" = "0" ] && return 0   # all opted out
-    [ -f build/str_core_native.o ] && { [ "${HEXA_RT_STR_EQ_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_EQ_NATIVE=1; [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_STARTS_WITH_NATIVE=1; [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_ENDS_WITH_NATIVE=1; [ "${HEXA_RT_STR_INDEX_OF_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_INDEX_OF_NATIVE=1; [ "${HEXA_RT_STR_CONTAINS_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_CONTAINS_NATIVE=1; return 0; }
+    [ -f build/str_core_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { [ "${HEXA_RT_STR_EQ_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_EQ_NATIVE=1; [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_STARTS_WITH_NATIVE=1; [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_ENDS_WITH_NATIVE=1; [ "${HEXA_RT_STR_INDEX_OF_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_INDEX_OF_NATIVE=1; [ "${HEXA_RT_STR_CONTAINS_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_CONTAINS_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -755,7 +755,7 @@ resolve_native_num_float_core_seed() {
         # → the runtime ships the snprintf shortest path and NATIVE mode degrades to %.17g.
         [ "${HEXA_RT_FORMAT_FLOAT_NATIVE:-x}" != "0" ] && export HEXA_RT_FORMAT_FLOAT_NATIVE=1
     fi
-    [ -f build/num_float_core_native.o ] && { export HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1; return 0; }
+    [ -f build/num_float_core_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1; return 0; }
     [ -n "$seed" ] && [ -f "$seed" ] || return 0
     mkdir -p build
     # SAFETY: only adopt the native path if the seed exports the parse fn the
@@ -827,7 +827,7 @@ resolve_native_num_float_core_seed() {
 # byte-identical change. (R4 #4201 was the byteeq-neutral opt-IN wiring PR.)
 resolve_native_float_parse_exact_seed() {
     [ "${HEXA_RT_NUM_PARSE_FLOAT_EXACT:-x}" = "0" ] && return 0   # explicit opt-out
-    [ -f build/float_parse_exact_native.o ] && { export HEXA_RT_NUM_PARSE_FLOAT_EXACT=1; return 0; }
+    [ -f build/float_parse_exact_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_RT_NUM_PARSE_FLOAT_EXACT=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -903,7 +903,7 @@ resolve_native_float_parse_exact_seed() {
 # + the tail-corpus-vs-host-libc oracle (both glibc and Apple), never on mini.
 resolve_native_float_parse_hexinfnan_seed() {
     [ "${HEXA_RT_STRTOD_TAIL_NATIVE:-1}" = "1" ] || return 0        # DEFAULT-ON (opt-out with =0) — native hex/inf/nan tail matches glibc strtod bit-exact (T_mis=0, aiden n=140,678); flip after the 176→5→0 accuracy rounds (#4639/#4645/#4646)
-    [ -f build/float_parse_hexinfnan_native.o ] && { export HEXA_RT_STRTOD_TAIL_NATIVE=1; return 0; }
+    [ -f build/float_parse_hexinfnan_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_RT_STRTOD_TAIL_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -1034,7 +1034,7 @@ resolve_native_regex_rt_seed() {
 # seed exists.
 resolve_native_num_core_seed() {
     [ "${HEXA_RT_NUM_PARSE_INT_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
-    [ -f build/num_core_native.o ] && { export HEXA_RT_NUM_PARSE_INT_NATIVE=1; return 0; }
+    [ -f build/num_core_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_RT_NUM_PARSE_INT_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -1105,7 +1105,7 @@ resolve_native_num_core_seed() {
 # fallback). Override by pre-setting HEXA_RT_VALOP_NATIVE=0 to force the C path.
 resolve_native_valop_core_seed() {
     [ "${HEXA_RT_VALOP_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
-    [ -f build/valop_core_native.o ] && { export HEXA_RT_VALOP_NATIVE=1; return 0; }
+    [ -f build/valop_core_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_RT_VALOP_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"; tgt="${tgt%-cuda}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
