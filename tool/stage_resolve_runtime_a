@@ -2096,14 +2096,25 @@ build_runtime_a_from_source() {
                 local _rns_s="build/hxlcl_sin_native.s"
                 local _rns_o="build/hxlcl_sin_native.o"
                 printf 'fn _rns_unused() {}\n' > "$_rns_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN: emitting native fp-ABI (xmm) hxlcl_sin .o via $_rns_bin (HEXA_CABI_HXLCL=1, replacing libc-shim sin member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rns_bin" "$_rns_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rns_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rns_sin.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: sin Route C asm emit failed — see build/_rns_sin.log" >&2; cat "build/_rns_sin.log" >&2; return 1; }
-                [ -s "$_rns_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: empty $_rns_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rns_s" -o "$_rns_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: assemble $_rns_s failed" >&2; return 1; }
-                [ -f "$_rns_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: $_rns_o not produced" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — see hxlcl_fmod; default = --emit=asm (byte-identical).
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rns_drv" --backend=native --emit=obj --keep-global=hxlcl_sin \
+                       --target=x86_64-linux-gnu -o "$_rns_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rns_sin_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rns_o" 2>/dev/null | grep -cE ' T _?hxlcl_sin$')" -eq 1 ] \
+                   && [ "$(nm "$_rns_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_sin via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_sin (1 global, no \$CC assemble) — sin dropped from shim"
+                else
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN: emitting native fp-ABI (xmm) hxlcl_sin .o via $_rns_bin (HEXA_CABI_HXLCL=1, replacing libc-shim sin member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rns_bin" "$_rns_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rns_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rns_sin.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: sin Route C asm emit failed — see build/_rns_sin.log" >&2; cat "build/_rns_sin.log" >&2; return 1; }
+                    [ -s "$_rns_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: empty $_rns_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rns_s" -o "$_rns_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: assemble $_rns_s failed" >&2; return 1; }
+                    [ -f "$_rns_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN FATAL: $_rns_o not produced" >&2; return 1; }
+                fi
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_SIN"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rns_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-SIN: hxlcl_sin → native fp-ABI .o; shim.o built with -DHEXA_RT_NATIVE_SIN (sin dropped) — ld -r multidef gate validates"
@@ -2132,14 +2143,25 @@ build_runtime_a_from_source() {
                 local _rnc_s="build/hxlcl_cos_native.s"
                 local _rnc_o="build/hxlcl_cos_native.o"
                 printf 'fn _rnc_unused() {}\n' > "$_rnc_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS: emitting native fp-ABI (xmm) hxlcl_cos .o via $_rnc_bin (HEXA_CABI_HXLCL=1, replacing libc-shim cos member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnc_bin" "$_rnc_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnc_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnc_cos.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS FATAL: cos Route C asm emit failed — see build/_rnc_cos.log" >&2; cat "build/_rnc_cos.log" >&2; return 1; }
-                [ -s "$_rnc_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS FATAL: empty $_rnc_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnc_s" -o "$_rnc_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS FATAL: assemble $_rnc_s failed" >&2; return 1; }
-                [ -f "$_rnc_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS FATAL: $_rnc_o not produced" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — see hxlcl_fmod; default = --emit=asm (byte-identical).
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rnc_drv" --backend=native --emit=obj --keep-global=hxlcl_cos \
+                       --target=x86_64-linux-gnu -o "$_rnc_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rnc_cos_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rnc_o" 2>/dev/null | grep -cE ' T _?hxlcl_cos$')" -eq 1 ] \
+                   && [ "$(nm "$_rnc_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_cos via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_cos (1 global, no \$CC assemble) — cos dropped from shim"
+                else
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS: emitting native fp-ABI (xmm) hxlcl_cos .o via $_rnc_bin (HEXA_CABI_HXLCL=1, replacing libc-shim cos member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rnc_bin" "$_rnc_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnc_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rnc_cos.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS FATAL: cos Route C asm emit failed — see build/_rnc_cos.log" >&2; cat "build/_rnc_cos.log" >&2; return 1; }
+                    [ -s "$_rnc_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS FATAL: empty $_rnc_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rnc_s" -o "$_rnc_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS FATAL: assemble $_rnc_s failed" >&2; return 1; }
+                    [ -f "$_rnc_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS FATAL: $_rnc_o not produced" >&2; return 1; }
+                fi
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_COS"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnc_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-COS: hxlcl_cos → native fp-ABI .o; shim.o built with -DHEXA_RT_NATIVE_COS (cos dropped) — ld -r multidef gate validates"
@@ -2169,14 +2191,25 @@ build_runtime_a_from_source() {
                 local _rne_s="build/hxlcl_exp_native.s"
                 local _rne_o="build/hxlcl_exp_native.o"
                 printf 'fn _rne_unused() {}\n' > "$_rne_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP: emitting native fp-ABI (xmm) hxlcl_exp .o via $_rne_bin (HEXA_CABI_HXLCL=1, replacing libc-shim exp member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rne_bin" "$_rne_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rne_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rne_exp.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP FATAL: exp Route C asm emit failed — see build/_rne_exp.log" >&2; cat "build/_rne_exp.log" >&2; return 1; }
-                [ -s "$_rne_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP FATAL: empty $_rne_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rne_s" -o "$_rne_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP FATAL: assemble $_rne_s failed" >&2; return 1; }
-                [ -f "$_rne_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP FATAL: $_rne_o not produced" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — see hxlcl_fmod; default = --emit=asm (byte-identical).
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rne_drv" --backend=native --emit=obj --keep-global=hxlcl_exp \
+                       --target=x86_64-linux-gnu -o "$_rne_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rne_exp_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rne_o" 2>/dev/null | grep -cE ' T _?hxlcl_exp$')" -eq 1 ] \
+                   && [ "$(nm "$_rne_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_exp via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_exp (1 global, no \$CC assemble) — exp dropped from shim"
+                else
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP: emitting native fp-ABI (xmm) hxlcl_exp .o via $_rne_bin (HEXA_CABI_HXLCL=1, replacing libc-shim exp member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rne_bin" "$_rne_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rne_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rne_exp.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP FATAL: exp Route C asm emit failed — see build/_rne_exp.log" >&2; cat "build/_rne_exp.log" >&2; return 1; }
+                    [ -s "$_rne_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP FATAL: empty $_rne_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rne_s" -o "$_rne_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP FATAL: assemble $_rne_s failed" >&2; return 1; }
+                    [ -f "$_rne_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP FATAL: $_rne_o not produced" >&2; return 1; }
+                fi
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_EXP"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rne_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-EXP: hxlcl_exp → native fp-ABI .o (rotab_1 .rodata table); shim.o built with -DHEXA_RT_NATIVE_EXP (exp dropped) — ld -r multidef gate validates"
@@ -2206,14 +2239,25 @@ build_runtime_a_from_source() {
                 local _rnl_s="build/hxlcl_log_native.s"
                 local _rnl_o="build/hxlcl_log_native.o"
                 printf 'fn _rnl_unused() {}\n' > "$_rnl_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG: emitting native fp-ABI (xmm) hxlcl_log .o via $_rnl_bin (HEXA_CABI_HXLCL=1, replacing libc-shim log member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnl_bin" "$_rnl_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnl_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnl_log.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: log Route C asm emit failed — see build/_rnl_log.log" >&2; cat "build/_rnl_log.log" >&2; return 1; }
-                [ -s "$_rnl_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: empty $_rnl_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnl_s" -o "$_rnl_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: assemble $_rnl_s failed" >&2; return 1; }
-                [ -f "$_rnl_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: $_rnl_o not produced" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — see hxlcl_fmod; default = --emit=asm (byte-identical).
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rnl_drv" --backend=native --emit=obj --keep-global=hxlcl_log \
+                       --target=x86_64-linux-gnu -o "$_rnl_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rnl_log_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rnl_o" 2>/dev/null | grep -cE ' T _?hxlcl_log$')" -eq 1 ] \
+                   && [ "$(nm "$_rnl_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_log via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_log (1 global, no \$CC assemble) — log dropped from shim"
+                else
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG: emitting native fp-ABI (xmm) hxlcl_log .o via $_rnl_bin (HEXA_CABI_HXLCL=1, replacing libc-shim log member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rnl_bin" "$_rnl_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnl_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rnl_log.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: log Route C asm emit failed — see build/_rnl_log.log" >&2; cat "build/_rnl_log.log" >&2; return 1; }
+                    [ -s "$_rnl_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: empty $_rnl_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rnl_s" -o "$_rnl_o" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: assemble $_rnl_s failed" >&2; return 1; }
+                    [ -f "$_rnl_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG FATAL: $_rnl_o not produced" >&2; return 1; }
+                fi
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_LOG"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnl_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-LOG: hxlcl_log → native fp-ABI .o (rotab_2 .rodata table); shim.o built with -DHEXA_RT_NATIVE_LOG (log dropped) — ld -r multidef gate validates"
