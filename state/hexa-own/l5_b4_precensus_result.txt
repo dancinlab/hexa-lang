@@ -1,0 +1,82 @@
+=== HEXA-OWN L5 Lane-B B4-PRECENSUS field-disjoint FP census — 2026-07-12T13:40:44Z — aiden-B650M-K ===
+  ref=origin/main canon=/home/aiden/hexa-lang target=x86_64-linux-gnu cc=gcc reps=1
+  corpus_dirs=[state/hexa-own/l5_b4_adversarial tests stdlib] corpus_limit=0 corpus_override=[<auto>]
+--- waiting for load<6 (no-starve) ---
+  load=0.70 OK after 1 probe(s)
+  (fetch origin/main warn)
+  SRC=/home/aiden/l5_b4_precensus/src sha=0cebce05c
+  corpus resolved: 2349 files (5 adversarial, 2344 real)
+--- building ./hexa (release_build TARGET=linux-x86_64 CC=gcc) ---
+  ./hexa built rc=0 (3321368B)
+--- BAND OFF (borrowck unset) — corpus compile ×1 ---
+  OFF rep1 wall=4490.693s
+--- BAND ON (HEXA_BORROWCK=1 HEXA_BORROWCK_CENSUS=1) — corpus compile ×1 ---
+  ON  rep1 wall=4440.379s
+
+════════════════════════════════════════════════════════════════════
+B4_PRECENSUS_VERDICT — L5 Lane-B field-disjoint FP census (B4 warn→error gate)
+════════════════════════════════════════════════════════════════════
+B4_REF                     = origin/main (0cebce05c)
+B4_CORPUS_FILES            = 2349  (5 adversarial + 2344 real)
+B4_HX30XX_TOTAL_FIRES      = 10249
+B4_WOULD_MOVE_SITES        = 84   (worklist: /home/aiden/l5_b4_precensus/borrowck_census_worklist.txt)
+B4_PER_CODE_FIRES:
+       8599 HX3055
+        646 HX3001
+        475 HX3003
+        333 HX3025
+        128 HX3004
+         40 HX3017
+         21 HX3014
+          7 HX3002
+────────────────────────────────────────────────────────────────────
+ADVERSARIAL (state/hexa-own/l5_b4_adversarial/ — ground truth):
+  ADV_FD_CONFIRMED_FP      = 7   (fd_*.hexa — SAFE by construction; each fire = a field/element-disjoint FP)
+  ADV_TP_LIVENESS          = 2   (controls_truepos.hexa — MUST be >0, else census is DEAD/inert)
+  ADV_CLEAN_OVERFIRE       = 0   (controls_clean.hexa — MUST be 0, else a NON-FD precision defect)
+  --- confirmed-FP fire sites ---
+    state/hexa-own/l5_b4_adversarial/fd_field_disjoint.hexa:29:12 HX3014 warning: shared-handle hazard (aliased write): `y` is used after `x` at line 28; both names refer to the same underlying value
+    state/hexa-own/l5_b4_adversarial/fd_field_disjoint.hexa:37:12 HX3014 warning: shared-handle hazard (aliased write): `x` is used after `y` at line 36; both names refer to the same underlying value
+    state/hexa-own/l5_b4_adversarial/fd_field_disjoint.hexa:46:12 HX3014 warning: shared-handle hazard (aliased write): `z` is used after `x` at line 45; both names refer to the same underlying value
+    state/hexa-own/l5_b4_adversarial/fd_index_disjoint.hexa:14:12 HX3014 warning: shared-handle hazard (aliased write): `b` is used after `a` at line 13; both names refer to the same underlying value
+    state/hexa-own/l5_b4_adversarial/fd_index_disjoint.hexa:22:12 HX3014 warning: shared-handle hazard (aliased write): `a` is used after `b` at line 21; both names refer to the same underlying value
+    state/hexa-own/l5_b4_adversarial/fd_partial_write.hexa:25:12 HX3014 warning: shared-handle hazard (aliased write): `w` is used after `v` at line 24; both names refer to the same underlying value
+    state/hexa-own/l5_b4_adversarial/fd_partial_write.hexa:35:12 HX3014 warning: shared-handle hazard (aliased write): `w` is used after `v` at line 34; both names refer to the same underlying value
+────────────────────────────────────────────────────────────────────
+REAL corpus HX3014 fires    = 3  (source-anchored heuristic classification):
+  FD_HEURISTIC (likely FP)  = 3   (both sites projected, disjoint tokens)
+  PP_INVOLVED  (candidate)  = 0
+  WHOLE        (true/benign)= 0
+    FD_HEURISTIC  stdlib/kernels/logic_synth/passes.hexa:3331:36  [read:[str], | write@3336:.push,.connect_lhs,[ti],]
+    FD_HEURISTIC  stdlib/kernels/logic_synth/passes.hexa:3332:36  [read:[str], | write@3337:.push,.connect_rhs,[ti],]
+    FD_HEURISTIC  stdlib/kernels/logic_synth/passes.hexa:3333:37  [read:[str], | write@3340:.push,]
+────────────────────────────────────────────────────────────────────
+B4_GATE_FIELD_DISJOINT_CONFIRMED = 7   (adversarial, by construction)
+B4_GATE_FIELD_DISJOINT_TOTAL     = 10   (+ real-corpus heuristic FD)
+B4_COST_OFF_MED_S          = 4490.693
+B4_COST_ON_MED_S           = 4440.379
+B4_COST_DELTA_PCT          = -1.1%
+────────────────────────────────────────────────────────────────────
+HONESTY: PREREQ-X (free-tree allocator flip) is MEASURED-TERMINAL
+  (arena-reclaim #4703/#4706, do-not-retry). B4 is a CORRECTNESS-LINT
+  strengthening (real logic-bug class), NOT memory-safety/GC-free: a
+  borrow violation under the bump arena is never use-after-free.
+
+B4 TRIAGE (manual, after this run):
+  * ADV_TP_LIVENESS > 0 ?        → else DEAD census (stale hexat / borrowck off) — INVALIDATE run
+  * ADV_CLEAN_OVERFIRE == 0 ?    → else a non-FD precision regression to fix FIRST
+  * B4_GATE_FIELD_DISJOINT_* = the FP count B4-fatal would REFUSE-BUILD on.
+    NON-ZERO ⇒ B4 warn→error is UNSAFE until place-projection lands (roadmap
+    A4 'place projection (field-disjoint)=별도 schema-add') — keep B4 at WARN.
+  * If B4_GATE==0 across a broad+adversarial corpus AND the adversarial FDs
+    genuinely fire (census live), the ceiling is a non-issue in practice →
+    B4-fatal viable behind @grace waivers (separate PR, byteeq 3-target).
+
+CENSUS_SKIPPED_FILES = 8  (per-file timeout >90s — compiler-hang, QUARANTINED from FP count · infra-wall-noneval):
+    stdlib/qforge/atoms/ccsd_rhf.hexa
+    stdlib/qforge/atoms/ccsd_rhf_selftest.hexa
+    stdlib/qforge/atoms/ccsd_t_rhf.hexa
+    stdlib/qforge/atoms/ccsd_t_rhf_selftest.hexa
+  ⇒ each = a separate compiler perf/hang defect (own investigation), NOT a borrow-check FP.
+════════════════════════════════════════════════════════════════════
+=== DONE — verdict /home/aiden/l5_b4_precensus/B4_PRECENSUS_RESULT.txt (copies in $HOME) ===

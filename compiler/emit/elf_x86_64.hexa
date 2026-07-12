@@ -5491,3 +5491,274 @@ fn _find_elf_sym_by_name(symbols: [ElfSym], strtab: [Int], name: string) -> Int 
     }
     return -1
 }
+
+// ─────────────────────────────────────────────────────────────────
+// axis-② E4 — own symbol-demotion pass (replaces binutils
+// `objcopy --keep-global-symbol=X`). Under `--keep-global=<list>`
+// every DEFINED function symbol (type_==STT_FUNC, section!=0) whose
+// name is NOT in the keeplist is demoted STB_GLOBAL → STB_LOCAL, so
+// a runtime member .o exports only its contract symbols (regex_rt:
+// 82 globals → 6). ELF requires all LOCAL to precede GLOBAL in
+// .symtab, so the symbol array is re-partitioned STABLY (original
+// relative order preserved inside each class) and every
+// ElfRel.sym_idx is remapped through the old→new permutation
+// (relocs bind by symtab INDEX; a reloc against a now-LOCAL def
+// still resolves to the same st_value — identical semantics to
+// objcopy's demotion). Undef externs (section==0) and rodata/data
+// locals are untouched. Empty keeplist = strict pass-through
+// (byte-neutral: the exec/own-link path and every existing obj
+// path never carry a keeplist).
+struct ElfKeepDemoted {
+    symbols: [ElfSym],
+    relocs:  [ElfRel],
+    nlocal:  i64,
+}
+
+fn _kg_in_list(keeplist: [string], name: string) -> bool {
+    let n = len(keeplist)
+    let mut i = 0
+    while i < n {
+        if keeplist[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _demote_partition(symbols: [ElfSym], relocs: [ElfRel], strtab: [Int],
+                     keeplist: [string]) -> ElfKeepDemoted {
+    let ns = len(symbols)
+    // Pass A — classify: want_local[i]=1 iff symbol i lands in the LOCAL
+    // partition (already-LOCAL rodata/data defs, or a defined fn whose
+    // name is not kept). Undef externs (section==0) and kept fns stay
+    // in the GLOBAL partition. Own-emit never produces STB_WEAK; if one
+    // ever appears (bind==2) it falls through to the GLOBAL partition,
+    // which is ELF-legal (WEAK counts as non-local).
+    let mut want_local: [Int] = []
+    let mut nloc = 0
+    let mut ci = 0
+    while ci < ns {
+        let s = symbols[ci]
+        let mut loc = 0
+        if s.bind == 0 { loc = 1 }
+        if s.bind == 1 && s.type_ == 2 && s.section != 0 {
+            if !_kg_in_list(keeplist, _symh_name_at(strtab, s.name_offset)) {
+                loc = 1
+            }
+        }
+        want_local.push(loc)
+        nloc = nloc + loc
+        ci = ci + 1
+    }
+    // Pass B — old→new permutation, push-only (no indexed assignment):
+    // locals take new indices [0, nloc) in original order; globals take
+    // [nloc, ns) in original order.
+    let mut old2new: [Int] = []
+    let mut li = 0
+    let mut gi = 0
+    let mut pi = 0
+    while pi < ns {
+        if want_local[pi] == 1 {
+            old2new.push(li)
+            li = li + 1
+        } else {
+            old2new.push(nloc + gi)
+            gi = gi + 1
+        }
+        pi = pi + 1
+    }
+    // Pass C — rebuild symbols: LOCAL partition first (bind forced 0 —
+    // identity for already-LOCAL entries, the demotion for fns), then
+    // the GLOBAL partition verbatim. name_offset/section/value/size are
+    // untouched, so .text pre-patches and .strtab stay byte-identical.
+    let mut new_syms: [ElfSym] = []
+    let mut si = 0
+    while si < ns {
+        if want_local[si] == 1 {
+            let s = symbols[si]
+            new_syms.push(ElfSym {
+                name_offset: s.name_offset,
+                section:     s.section,
+                value:       s.value,
+                size:        s.size,
+                bind:        0,    // STB_LOCAL (demoted or already-LOCAL)
+                type_:       s.type_,
+            })
+        }
+        si = si + 1
+    }
+    let mut gsi = 0
+    while gsi < ns {
+        if want_local[gsi] == 0 {
+            let s = symbols[gsi]
+            new_syms.push(ElfSym {
+                name_offset: s.name_offset,
+                section:     s.section,
+                value:       s.value,
+                size:        s.size,
+                bind:        s.bind,
+                type_:       s.type_,
+            })
+        }
+        gsi = gsi + 1
+    }
+    // Pass D — remap EVERY reloc's sym_idx through the permutation
+    // (covers text/rodata/data sites alike — site_seg is copied, only
+    // the symbol index changes; the serializer adds +1 for STN_UNDEF
+    // exactly as before).
+    let mut new_relocs: [ElfRel] = []
+    let nrel = len(relocs)
+    let mut ri = 0
+    while ri < nrel {
+        let r = relocs[ri]
+        new_relocs.push(ElfRel {
+            offset:   r.offset,
+            sym_idx:  old2new[r.sym_idx],
+            kind:     r.kind,
+            addend:   r.addend,
+            site_seg: r.site_seg,
+        })
+        ri = ri + 1
+    }
+    return ElfKeepDemoted { symbols: new_syms, relocs: new_relocs, nlocal: nloc }
+}
+
+pub fn demote_nonkeep_to_local(obj: ElfX86Obj, keeplist: [string]) -> ElfX86Obj {
+    // Strict no-op without a keeplist — the exec/own-link path and all
+    // existing obj emits pass [] and get the identical struct back
+    // (byte-neutrality is by construction, not by re-serialization).
+    if len(keeplist) == 0 { return obj }
+    let d = _demote_partition(obj.symbols, obj.relocs, obj.strtab, keeplist)
+    return ElfX86Obj {
+        text:       obj.text,
+        relocs:     d.relocs,
+        symbols:    d.symbols,
+        strtab:     obj.strtab,
+        rodata:     obj.rodata,
+        data:       obj.data,
+        init_array: obj.init_array,
+        bss_size:   obj.bss_size,
+        nlocal:     d.nlocal,
+        rodata_align: obj.rodata_align,
+        data_align:   obj.data_align,
+        bss_align:    obj.bss_align,
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// axis-② A1 frozen-seed isolation — LModule-level reachability filter
+// (Fable design: state/hexa-own/axis2-a1-frozen-seed-isolation-design.md).
+// Prunes `lm.funcs` to the keeplist-reachable closure with a CARRIER-BOUNDARY
+// cut, so own-emit produces an isolated `.o` whose only undefined externals are
+// carrier symbols (hxlcl_/hexa_/__hx_, served by the shim/runtime.a) — matching
+// the frozen `tool/isolate_native_seed.py` seed (nm -u == 0 for pure leaves,
+// exactly `hxlcl_malloc` for strdup/calloc). This replaces the `.s` seed + $CC +
+// binutils objcopy for the frozen-seed A1 class (strcmp/strncmp/strchr/strdup/
+// strstr/calloc). Only under `--isolate` (opt-in); the packer plays the assembler
+// role, so the analogous slice point is the LModule before pack_lir_x86_64. The
+// EXISTING pipeline (pack_lir → E4 demote_nonkeep_to_local) then produces the
+// isolated .o naturally: a cut sibling's call → SHN_UNDEF extern + PLT32 reloc
+// synthesized by pack Pass 2, so the output's undef set == what kept bodies
+// reference (the isolation invariant, by construction).
+fn _iso_is_carrier(name: string) -> bool {
+    // the _rn_seed_und_gate whitelist (stage_resolve_runtime_a): carrier-served undefs.
+    if len(name) >= 6 && name.substring(0, 6) == "hxlcl_" { return true }
+    if len(name) >= 5 && name.substring(0, 5) == "hexa_" { return true }
+    if len(name) >= 5 && name.substring(0, 5) == "__hx_" { return true }
+    return false
+}
+
+pub fn isolate_lmodule_x86_64(lm: LModule, keeplist: [string]) -> LModule {
+    if len(keeplist) == 0 { return lm }        // pass-through — byte-neutral off-flag
+    let nf = len(lm.funcs)
+    // ── 1. Roots: every keeplist name must be a defined fn (missing = FATAL). ──
+    let mut queue: [string] = []
+    let mut kept: [string] = []
+    let mut ki = 0
+    while ki < len(keeplist) {
+        let root = keeplist[ki]
+        let mut found = false
+        let mut fi = 0
+        while fi < nf {
+            if lm.funcs[fi].name == root { found = true }
+            fi = fi + 1
+        }
+        if !found {
+            eprintln("hexa-compiler: --isolate FATAL: keeplist root '" + root + "' not defined in module")
+            exit(2)
+        }
+        if !_kg_in_list(kept, root) {
+            kept.push(root)
+            queue.push(root)
+        }
+        ki = ki + 1
+    }
+    // ── 2+3. BFS closure with carrier-boundary cut (push-only, bounded by nf). ──
+    let mut qi = 0
+    while qi < len(queue) {
+        let fname = queue[qi]
+        qi = qi + 1
+        let mut fj = 0
+        while fj < nf {
+            if lm.funcs[fj].name == fname {
+                let f = lm.funcs[fj]
+                // trial-pack: harvest this fn's symbolic references (pure — scratch arrays).
+                let s_text: [Int] = []
+                let p_off: [Int] = []
+                let p_names: [string] = []
+                let d_off: [Int] = []
+                let d_names: [string] = []
+                let d_add: [Int] = []
+                let g_off: [Int] = []
+                let g_names: [string] = []
+                _pack_fn_x86(s_text, p_off, p_names, d_off, d_names, d_add, g_off, g_names, f)
+                // combine the three collector channels = the complete ref set.
+                let mut chans: [string] = []
+                let mut a = 0
+                while a < len(p_names) { chans.push(p_names[a]); a = a + 1 }
+                a = 0
+                while a < len(d_names) { chans.push(d_names[a]); a = a + 1 }
+                a = 0
+                while a < len(g_names) { chans.push(g_names[a]); a = a + 1 }
+                let mut ci = 0
+                while ci < len(chans) {
+                    let refn = chans[ci]
+                    ci = ci + 1
+                    if !_kg_in_list(kept, refn) {
+                        // is refn a defined fn in this module?
+                        let mut is_def = false
+                        let mut dk = 0
+                        while dk < nf {
+                            if lm.funcs[dk].name == refn { is_def = true }
+                            dk = dk + 1
+                        }
+                        // CUT carrier-prefixed non-keeplist defs (→ carrier undef served by shim);
+                        // KEEP+traverse non-carrier defined helpers (else a non-carrier undef).
+                        if is_def && !(_iso_is_carrier(refn) && !_kg_in_list(keeplist, refn)) {
+                            kept.push(refn)
+                            queue.push(refn)
+                        }
+                    }
+                }
+            }
+            fj = fj + 1
+        }
+    }
+    // ── 4. Rebuild lm.funcs = kept in original order; data pools copied wholesale. ──
+    let mut new_funcs: [LFunc] = []
+    let mut ri = 0
+    while ri < nf {
+        if _kg_in_list(kept, lm.funcs[ri].name) {
+            new_funcs.push(lm.funcs[ri])
+        }
+        ri = ri + 1
+    }
+    return LModule {
+        file:   lm.file,
+        target: lm.target,
+        funcs:  new_funcs,
+        rodata: lm.rodata,
+        bss:    lm.bss,
+        globals: lm.globals,
+        floats: lm.floats,
+    }
+}
