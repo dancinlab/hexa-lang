@@ -1627,16 +1627,28 @@ fn ffi_dyn_objs(c_file, selfdir) {
 // (`fatal error: 'runtime.c' file not found`, or `hexa_cc.c` missing). Mirror
 // cmd_build's `__self_dir` resolver: $HEXA_LANG > install_dir_from_argv0() >
 // ./self. Behavior is identical when run from the repo root.
+// axis-① marker-decouple (PR-2): a hexa root is now identified by the neutral `.hxroot`
+// stamp (committed at repo root, written into the install by install.sh + stage_precompile_
+// package, PR-1 #4886) — NOT by `self/native/hexa_cc.c`, the C-transpile file axis-① deletes
+// (keying on it made resolve_hxroot break the moment the delegate is removed → silent clang-
+// fallback). The legacy hexa_cc.c marker is kept as a fallback so a binary-only pool sync
+// whose install predates the stamp still resolves; it is dropped in (or after) the delegate-
+// deletion PR. Design: state/hexa-own/axis1_hxroot_marker_decouple.md.
+fn is_hxroot(d) {
+    if file_exists(d + "/.hxroot") { return true }
+    if file_exists(d + "/self/native/hexa_cc.c") { return true }   // legacy marker (dropped with the delegate)
+    return false
+}
 fn resolve_hxroot() {
     let __hxroot = env("HEXA_LANG")
-    if len(__hxroot) > 0 && file_exists(__hxroot + "/self/native/hexa_cc.c") {
+    if len(__hxroot) > 0 && is_hxroot(__hxroot) {
         return __hxroot
     }
     let __i = install_dir_from_argv0()
-    if len(__i) > 0 && file_exists(__i + "/self/native/hexa_cc.c") {
+    if len(__i) > 0 && is_hxroot(__i) {
         return __i
     }
-    if file_exists("./self/native/hexa_cc.c") { return "." }
+    if is_hxroot(".") { return "." }
     // Last resort: keep cwd-relative behavior (will fail loudly downstream).
     return "."
 }
