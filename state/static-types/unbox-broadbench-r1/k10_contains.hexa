@@ -1,0 +1,20 @@
+// k10_contains — TARGET · BOOL-ARM coverage (string .contains → bool, branch-consumed).
+//
+// contains(...) is the 2nd-most-used stamped method in the corpus (899 sites),
+// bool-arm (type_id 5). The stamp fires in HIR but the native scalar-unbox path
+// acts ONLY on type_id==1, so the audit (wf_e01c0a15) predicts this arm INERT:
+// asm OFF==ON byte-identical, ratio ≈ 1.0. This kernel converts that prediction
+// from EXTRAPOLATED to MEASURED — confirms the bool arm neither regresses nor
+// miscompiles when the result is consumed by an if-branch (the unbox-to-flag
+// path the arithmetic kernels never exercise). needles vary via i%3 so the call
+// is not trivially loop-invariant.
+fn main() {
+    let hay = "the quick brown fox jumps over the lazy dog"
+    let needles = ["fox", "cat", "dog"]
+    let mut hits = 0
+    let N = 40000000
+    for i in 0..N {
+        if hay.contains(needles[i % 3]) { hits = hits + 1 }
+    }
+    println(hits)
+}
