@@ -70,3 +70,25 @@ over-export needs own symbol-demotion). So A0 round-1 is DONE modulo the E4-gate
 **Next**: the `:-0`→`:-auto` flip PR, gated on a full `tool/release_build HEXA_RT_OWNOBJ=1` witness
 (the ON-path is invisible to default-OFF byteeq) + byteeq 3-target + install smoke. Then A1
 (~35 one-sym members), which E4 (own symbol-demotion) also unblocks alongside regex_rt.
+
+## A0 SHIP WITNESS — PASS (summer, 2026-07-12, witness3)
+
+`tool/release_build TARGET=linux-x86_64 HEXA_RT_OWNOBJ=1 HEXA_OWNOBJ_CC=$PWD/build/aprime_cc
+HEXA_PREBUILT_RUNTIME=$PWD/build/runtime.a HEXA_CUDA=0` →
+**`[release_build] PASS — ./hexa built`**. All 9 own-obj members fire (`B3-A0 OWN-OBJ` ×9) at
+Stage-0b and land in the shipped `build/runtime.a` (`ar t` confirms `array_core_native.o ·
+map_core_native.o · str_core_native.o · valop_core_native.o …`), and the self-host `./hexa` binary
+builds Stage 0/1/2 against that own-obj runtime.a. So the own-object runtime members are
+**ship-compatible** — the (v) ship-witness gate is cleared for the A0 flip.
+
+TWO ship-recipe traps found + fixed this session (convergence `stage-resolve-runtime-a-2`):
+1. cached `[ -f build/<fam>_native.o ] && return 0` shortcut pre-empted A0 in a non-clean build (stale
+   `.s` `.o` masked own-emit → 0 `B3-A0` lines despite the flag). FIX: 9 shortcuts gated on
+   `HEXA_RT_OWNOBJ=0`.
+2. witness must pin `HEXA_PREBUILT_RUNTIME=$PWD/build/runtime.a` + `HEXA_CUDA=0` (summer's shell profile
+   inherits an installed CUDA-baked runtime.a → Stage-0 link dies on `__cudaRegister*` without `-lcudart`
+   — a measurement-path artifact, not a target defect).
+
+**Remaining for lane-2**: E4 own-symbol-demotion (`demote_nonkeep_to_local` + `--keep-global=` flag in
+elf_x86_64.hexa/elf_arm64.hexa) → unblocks regex_rt (10th A0 family) + A1 (~35 one-sym members). Then
+S1/S2 fragments, then the runtime.c body (Round-3+, ~29-32k LOC, multi-session).
