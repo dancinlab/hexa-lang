@@ -117,15 +117,17 @@ ABI fits neither pair-model nor Route C all-raw; the named next wall = a per-par
     hexa_truthy` — MISSING=0). **NO rt_map_* in the U-floor.**
   - **Proof:** built runtime.a with the isolated seed, linked the corpus **runtime.a-ONLY** (the exact grace-consent
     scenario that broke the naive seed) → **OFF + ON both linked + ran rc=0**; **RUN-parity OFF==ON byte-identical (31 lines)**.
-  - **Productionization (next round, clean — no wall):** (1) make `stdlib/runtime/map_query.hexa` self-contained =
-    replace the `extern fn rt_map_*` block with the prelude `import`s (it's seed-only, imported by nothing, so safe);
-    (2) resolver own-obj path `resolve_native_map_query_seed`: add `--keep-global=<8> --isolate` to the `--emit=obj`
-    line (currently bare `--emit=obj` → non-self-contained). **The `.s`-seed path is retired for map-query** — `--isolate`
-    is `--emit=obj`-only, so a frozen `.s` text seed can't self-contain; the flip is **OWN-OBJ-only** (gate on
-    `HEXA_RT_OWNOBJ`, NOT `.s`-file-presence auto-enable — which is what broke this turn); (3) verify byteeq 3-target
-    (arm64 targets: same `--isolate`, aprime cross-targets) + `own-link corpus parity` GREEN → flip default-ON.
-  - Scratch: the working iso variant is `stdlib/runtime/map_query_iso.hexa` on summer `/tmp/isowt2` (prelude-import
-    prototype); the real change folds the prelude imports into map_query.hexa itself.
+  - **✅ Productionization DONE + verified (PR #4911 commit 06304132c):** (1) `stdlib/runtime/map_query.hexa` now
+    imports the runtime prelude (dropped the `extern fn rt_map_*` block) — self-contained source; (2) resolver own-obj
+    `resolve_native_map_query_seed`: `--keep-global=<8> --isolate` + a `_ortu` self-contained gate (rejects an emit with
+    any `rt_map_*` undef, mirroring `_rnsc_bad`, convergence stage-resolve-runtime-a-3). **`.s`-seed path retired for
+    map-query** — `--isolate` is obj-only; flip is **OWN-OBJ-only** (opt-in-gated, no `.s`-presence auto-enable).
+    **Verified summer THROUGH the resolver own-obj path** (`HEXA_RT_OWNOBJ_MAPQUERY=1`): 8/8 global · rt_map_* absorbed
+    local · U-floor carrier-only (0 rt_map_* undef) · no dup · runtime.a-only link OFF+ON rc=0 · RUN-parity byte-identical.
+    Byte-neutral (map_query.hexa seed-only + own-obj opt-in) — #4911 stays default-OFF.
+  - **REMAINING for flip default-ON (only this left):** (a) make own-obj `--isolate` the DEFAULT map-query seed path
+    (currently gated on `HEXA_RT_OWNOBJ`/`_MAPQUERY`; the flip = un-gate to default-ON, opt-out `=0`); (b) 3-target
+    byteeq GREEN (arm64 via same `--isolate`, aprime cross-targets) + `own-link corpus parity` + shipping smoke → merge.
 Then Tier-1 #2 (valop eqtruthy) + #3 (array typed-leaf). `_Static_assert(offsetof(HexaMapTable,len)==40)` = still-TODO tripwire.
 
 Full census/synthesis: Workflow journal `subagents/workflows/wf_aa30b431-930/journal.jsonl`;
