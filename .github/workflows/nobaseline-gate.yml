@@ -1077,3 +1077,40 @@ jobs:
           HEXA_PREBUILT_RUNTIME: ${{ runner.temp }}/rt_converged.a
           CC: gcc
         run: bash tool/ownlink_corpus_parity_gate
+
+  # axis-1 hexa_cc.c C-transpile-delegate removal census — with own-link default-ON
+  # (#4882), every linux-x86_64 `hexa build` must take the own-link leg (never tier-B
+  # ld, never the C-transpile delegate resolve_or_bootstrap_hexat). A green soak here
+  # = the delegate is dead code on the default leg → removable (axis-① DONE). This is
+  # DISTINCT from ENCODE-MISS=0 (codegen coverage) + corpus-parity (link correctness):
+  # it proves the CLI cmd_build ladder actually takes own-link + never falls through.
+  # Advisory (promote to required after a green soak).
+  cfallback-zero-census-x86_64:
+    name: cfallback-zero census (hexa build → own-link, no C-transpile, linux-x86_64)
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.linux_label) }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+      - name: Build ./hexa — shared release_build (produces the CLI + restores seeds)
+        shell: bash
+        env:
+          TARGET: linux-x86_64
+          CC: gcc
+          LIBS: "-lm -ldl"
+          GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
+          HEXA_RT_STDIO_NATIVE: "1"
+        run: |
+          set -euo pipefail
+          bash tool/release_build
+          ./hexa --version
+          echo "./hexa built OK"
+      - name: cfallback-zero census (default hexa build must take own-link)
+        shell: bash
+        env:
+          REPO: ${{ github.workspace }}
+          HEXA_BIN: ${{ github.workspace }}/hexa
+        run: bash tool/cfallback_zero_census

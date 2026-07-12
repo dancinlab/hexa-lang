@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# tool/cfallback_zero_census — axis-① hexa_cc.c C-transpile-delegate removal census.
+#
+# With own-link default-ON (#4882), a linux-x86_64 `hexa build` should take the
+# own-link leg (self/main.hexa:3586, prints "... (native own-link, own-start ...)")
+# for EVERY program — never falling through to tier-B system-ld (prints "(native
+# backend)") nor to the C-transpile delegate (resolve_or_bootstrap_hexat, prints
+# "=== Building ... ==="). This gate builds a corpus with the DEFAULT `hexa build`
+# and asserts the own-link marker on every one.
+#
+# WHY (distinct from ENCODE-MISS=0 + corpus-parity): those prove codegen coverage
+# + own-link≡ld link correctness. THIS proves the CLI cmd_build ladder actually
+# TAKES the own-link leg and NEVER reaches the C-transpile fall-through — a fall-
+# through also fires on runtime.a-resolution miss / flatten failure / link error,
+# not just ENCODE-MISS. A green soak here = the hexa_cc.c delegate is dead code on
+# the default leg → removable (axis-① DONE: self/main.hexa:3677 fall-through delete).
+#
+# Advisory (not in the required selfhost-gates-summary set) — promote after a green
+# soak, per the CI rule "measure a job green before making it required".
+#
+# Env: REPO, HEXA_BIN (the ./hexa CLI from release_build). INFRA(non-eval) exits
+# (rc=2) quarantine toolchain walls (infra-wall-noneval) from the census verdict.
+set -uo pipefail
+
+REPO="${REPO:-$PWD}"
+HEXA="${HEXA_BIN:-$REPO/hexa}"
+infra() { echo "INFRA(non-eval): $*"; exit 2; }
+[ -x "$HEXA" ] || infra "no hexa CLI at $HEXA (run tool/release_build first)"
+
+# own-link default only fires on a linux-x86_64 host (the #4882 leg gate). On any
+# other host `hexa build` legitimately uses ld → the census is not meaningful there.
+_host="$(uname -sm 2>/dev/null | tr -d ' \n\t')"
+[ "$_host" = "Linuxx86_64" ] || infra "census only meaningful on Linuxx86_64 host (got '$_host')"
+
+W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
+mkdir -p "$W/c"
+# corpus — same feature spread as the ownlink-corpus-parity gate.
+cat > "$W/c/arith.hexa"      <<'H'
+fn main() { let a = 6; let b = 7; print(a * b + 1); print(a - b) }
+H
+cat > "$W/c/array.hexa"      <<'H'
+fn main() { let mut a: [i64] = []; a.push(11); a.push(22); a.push(33); print(a[0]); print(a[2]); print(len(a)) }
+H
+cat > "$W/c/struct_arr.hexa" <<'H'
+struct Iv { ids: [i64], starts: [i64] }
+fn build() -> Iv { let mut ids: [i64] = []; let mut i = 0; while i < 4 { ids.push(i * 10); i = i + 1 }; let mut s: [i64] = []; return Iv { ids: ids, starts: s } }
+fn main() { let v = build(); print(len(v.ids)); print(v.ids[0]); print(v.ids[3]) }
+H
+cat > "$W/c/str.hexa"        <<'H'
+fn main() { let s = "hexa"; print(s); print(len(s)) }
+H
+cat > "$W/c/loop.hexa"       <<'H'
+fn main() { let mut s = 0; let mut i = 1; while i <= 10 { s = s + i; i = i + 1 }; print(s) }
+H
+
+N=0; FAIL=0
+for P in "$W"/c/*.hexa; do
+    name="$(basename "$P" .hexa)"; N=$((N + 1))
+    out="$("$HEXA" build "$P" -o "$W/$name.bin" 2>&1)"
+    if echo "$out" | grep -q "native own-link"; then
+        echo "  $name: OWN-LINK ✓ (no C-transpile, no ld)"
+    elif echo "$out" | grep -q "=== Building"; then
+        echo "  $name: ✗ C-TRANSPILE DELEGATE reached (fall-through) —"; echo "$out" | tail -2; FAIL=$((FAIL + 1))
+    elif echo "$out" | grep -q "(native backend)"; then
+        echo "  $name: ✗ tier-B system-ld fallback (own-link leg NOT taken) —"; echo "$out" | tail -2; FAIL=$((FAIL + 1))
+    else
+        echo "  $name: ? unrecognized build path —"; echo "$out" | tail -2; FAIL=$((FAIL + 1))
+    fi
+done
+
+echo "── cfallback-zero census: $((N - FAIL))/$N own-link (0 C-transpile fall-through) ──"
+[ "$FAIL" -eq 0 ] || { echo "CENSUS RED ($FAIL programs did NOT take own-link) — the C-transpile delegate / ld path is still reachable on the default leg; blocks axis-① hexa_cc.c removal"; exit 1; }
+echo "CENSUS GREEN — every default hexa build took own-link (clang-0 + ld-0); the C-transpile delegate is dead code on the default leg → soak → remove (axis-①)"
