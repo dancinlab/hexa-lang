@@ -835,6 +835,27 @@ resolve_native_float_parse_hexinfnan_seed() {
         echo "[stage_resolve_runtime_a] RT-NATIVE STRTOD-TAIL: seed $seed exports only $nsyms/1 rt_str_parse_float_hexinfnan — tail path stays off (C strtod tail)" >&2
         return 0
     fi
+    # ── axis-②③ B3 A0 (own-object seed) — float_parse_hexinfnan (parity own=6 ⊇ seed=6 PROVEN). ──
+    if { [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_HEXINFNAN:-0}" != "0" ]; } then
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/float_parse_hexinfnan.hexa" _otri=""
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --target="$_otri" -o build/float_parse_hexinfnan_native.o "$_osrc" 2>build/float_parse_hexinfnan_ownobj.err; then
+                local _ots; _ots="$(nm build/float_parse_hexinfnan_native.o 2>/dev/null | grep -cE ' T _?rt_str_parse_float_hexinfnan')"
+                if [ "${_ots:-0}" -ge 1 ]; then
+                    export HEXA_RT_STRTOD_TAIL_NATIVE=1
+                    echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: float_parse_hexinfnan via $_oc --emit=obj ($_ots rt_str_parse_float_hexinfnan, TARGET=$tgt) → native hex/inf/nan tail, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: float_parse_hexinfnan own-emit exported $_ots — falling back to .s seed" >&2
+            else
+                echo "[stage_resolve_runtime_a] B3-A0 OWN-OBJ: float_parse_hexinfnan own-emit failed — falling back to .s seed ($(head -1 build/float_parse_hexinfnan_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
+    fi
     local s_tmp="build/float_parse_hexinfnan_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
     if $CC -c "$s_tmp" -o build/float_parse_hexinfnan_native.o 2>/dev/null; then
