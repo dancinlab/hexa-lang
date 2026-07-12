@@ -105,15 +105,27 @@ ABI fits neither pair-model nor Route C all-raw; the named next wall = a per-par
   GREEN → flip. Until then the seeds stay OUT of tree (they auto-enable a broken flip).
 - STRUCTURAL drop + no-multidef (both single-TU + MULTIOBJ shapes) remains PROVEN; that half is done. The wall is
   seed self-sufficiency, not the drop mechanism.
-- **ISOLATION FEASIBILITY — SCOUTED (summer, runtime.a nm):** most transitive deps of the rt_map_* delegates are
-  already `T` in runtime.a → an isolated seed (map_query.hexa + rt_map_* bodies compiled together) would resolve
-  in a runtime.a-only link. Confirmed resident: `hexa_array_new`, `hexa_map_new`, `__map_order_key_at`,
-  `__map_raw_len`, `__map_order_val_at`, `hexa_array_push`, `hexa_truthy`. **Tail to resolve** (T=0 in the scout,
-  need residency or inclusion): `__map_val_at`, `rt_arr_push`, and the closure-invocation path `pred(…)` →
-  `hexa_call_fn_*` (the count/any/all/filter/map_values predicate calls). So the isolation round = (1) combined-compile
-  map_query.hexa + the numeric.hexa rt_map_* cluster into ONE seed .o, (2) `nm seed.o | grep ' U '` must be
-  runtime.a-resident-only — iterate on any non-resident tail dep (likely fold the closure-invocation helper in too),
-  (3) re-bake 3-target + re-add the auto-enable seeds, (4) byteeq 3-target + own-link corpus parity GREEN → flip.
+- **✅ ISOLATION — SOLVED + VERIFIED end-to-end (summer, 2026-07-13).** The wall is broken; only productionization remains.
+  - **Recipe (proven):** a seed source that `import`s the runtime prelude (`ctype math thread net posix numeric
+    regex_rt io` — siblings in stdlib/runtime/) instead of `extern fn rt_map_*`, compiled
+    `aprime --emit=obj --keep-global=<the 8 hexa_map_*> --isolate` → aprime pulls the rt_map_* bodies from
+    numeric.hexa and `--isolate` (isolate_lmodule reachability DCE) prunes to the 8-reachable closure, **absorbing
+    rt_map_* as STB_LOCAL** and cutting at the carrier boundary.
+  - **Result:** 8 dispatchers global-T · rt_map_keys/values/entries/count_pred/any_pred_b/all_pred_b all LOCAL (`t`) ·
+    **U-floor = 13, ALL runtime.a-resident T** (`__map_order_key_at __map_order_val_at __map_raw_len hexa_array_new
+    hexa_array_push hexa_cmp_lt hexa_index_get hexa_len hexa_map_get_v hexa_map_new hexa_map_set_v hexa_to_int
+    hexa_truthy` — MISSING=0). **NO rt_map_* in the U-floor.**
+  - **Proof:** built runtime.a with the isolated seed, linked the corpus **runtime.a-ONLY** (the exact grace-consent
+    scenario that broke the naive seed) → **OFF + ON both linked + ran rc=0**; **RUN-parity OFF==ON byte-identical (31 lines)**.
+  - **Productionization (next round, clean — no wall):** (1) make `stdlib/runtime/map_query.hexa` self-contained =
+    replace the `extern fn rt_map_*` block with the prelude `import`s (it's seed-only, imported by nothing, so safe);
+    (2) resolver own-obj path `resolve_native_map_query_seed`: add `--keep-global=<8> --isolate` to the `--emit=obj`
+    line (currently bare `--emit=obj` → non-self-contained). **The `.s`-seed path is retired for map-query** — `--isolate`
+    is `--emit=obj`-only, so a frozen `.s` text seed can't self-contain; the flip is **OWN-OBJ-only** (gate on
+    `HEXA_RT_OWNOBJ`, NOT `.s`-file-presence auto-enable — which is what broke this turn); (3) verify byteeq 3-target
+    (arm64 targets: same `--isolate`, aprime cross-targets) + `own-link corpus parity` GREEN → flip default-ON.
+  - Scratch: the working iso variant is `stdlib/runtime/map_query_iso.hexa` on summer `/tmp/isowt2` (prelude-import
+    prototype); the real change folds the prelude imports into map_query.hexa itself.
 Then Tier-1 #2 (valop eqtruthy) + #3 (array typed-leaf). `_Static_assert(offsetof(HexaMapTable,len)==40)` = still-TODO tripwire.
 
 Full census/synthesis: Workflow journal `subagents/workflows/wf_aa30b431-930/journal.jsonl`;
