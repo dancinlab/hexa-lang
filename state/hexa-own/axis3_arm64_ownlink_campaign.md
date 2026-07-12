@@ -256,6 +256,40 @@ build_aprime does this) or with self/runtime.c copied in.
 - Pre-patch interaction: the .o pre-patches cross-object BL in place (:673-684) — confirm the
   applicator must ignore pre-patched bytes and recompute from the recorded CALL26 addend/section-base.
 
+## Rung-2 OUTCOME — MEASURED (aiden aarch64-linux-gnu cross + qemu · 2026-07-12)
+
+**Rung-2 static own-link linker = DEMONSTRATED CORRECT.** `link_elf_arm64_ownstart_ar` reads
+runtime.arm64.a → `archive_extract_fixpoint_arm64` → def-map → GOT synth → `_apply_arm64_reloc` →
+`serialize_elf_exec_arm64_2seg`, reaching reloc-apply and correctly identifying the genuine residual
+libc floor. Three build/emitter fixes landed to get here (all opt-in `--linker=hexa`, default-OFF,
+byteeq-neutral for the 3 shipped targets):
+- **4ce846945** — cross-archive arch-contamination: `stage_resolve_runtime_a` S2 arch-guard purges
+  build/*_native.o whose e_machine ≠ TARGET (13 seed helpers cached on file-existence only, so a
+  host-x86 build left x86 seeds that a `linux-arm64` cross-stage ar'd in); + `emit_cross_arch` tripwire
+  now checks EVERY member not head -1. convergence axis3-arm64-cross-archive-arch-contamination.
+- **6c525868f** — asm-text @PAGE gap: `compiler/emit/asm.hexa` `_fmt_label` translates Mach-O
+  `@PAGE`/`@PAGEOFF`/`@GOTPAGE`/`@GOTPAGEOFF` → GNU-as ELF `:lo12:`/`:got:`/bare-adrp for arm64-linux
+  (the aprime arm64 asm emitter emitted Mach-O page-addressing regardless of target OS → GNU-as
+  rejected the regenerated arm64-linux native seeds). convergence asm-hexa-1. The 2 seeds (regex_rt,
+  float_parse_hexinfnan) now assemble + ar in → arm64 seed T-defs = 217 = x86 parity.
+
+**The measured wall = a precise 6-symbol residual libc floor**, NOT the linker. runtime.o (the big C
+runtime member, pulled transitively by `hexa_set_args` which every own-`_start` references) imports
+from libc: **`__libc_calloc  __libc_free  abort  getc  longjmp  strtod`** (x86's floor = same 6 minus
+longjmp; `main` supplied by the program obj). x86 own-link resolves these via its **Road A
+dynamic-link** path (`_ld_read_libc_dynsym` elf_x86_64.hexa:1765 → PLT+GOT+`.dynsym`+`.rela`+
+`DT_NEEDED libc.so.6`+`PT_INTERP` → dynamic ET_EXEC). arm64 own-link is static-only → hard-errors
+`undefined symbol 'strtod' (reloc 283=CALL26)` rc=3. This is a LINKER-CAPABILITY divergence (x86 has
+Road A, arm64 does not), quarantined from the linker verdict per infra-wall-noneval — both arches pull
+runtime.o identically; the linker is innocent (its 3rd measured innocence this campaign).
+
+**Rung-3 = Road A dynamic-link for arm64** (Fable designing the AArch64 PLT/dynsym/DT_NEEDED port,
+reference-matching x86's mechanism 1:1) → produces a working dynamic AArch64 ET_EXEC resolving the
+6 floor syms from libc.so.6 → exit42 qemu rc=42. Alternative under Fable review: native-port the 6
+floor leaves (abort=SIGABRT svc, getc=read(2), __libc_calloc/free=arena alias, longjmp=native ABI,
+strtod=hard) for pure-static — hybrid vs full-Road-A to be recommended. NB: x86 itself uses Road A
+(not pure-static) for the floor, so "pure-static arm64" was always going to hit this wall.
+
 ## Note
 The x86_64-template reader in the research workflow returned a placeholder (empty); the x86_64 anchor
 lines above were recovered from the arm64-current reader's cross-references. Re-read elf_x86_64.hexa
