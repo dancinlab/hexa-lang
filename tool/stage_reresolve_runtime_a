@@ -53,7 +53,14 @@ fi
 
 # A stale / cross-arch build/map_query_native.o must NEVER be adopted (cf. the
 # arm64 archive-contamination incident) — force a fresh own-obj --isolate emit.
-rm -f build/map_query_native.o
+# NOTE: do NOT rm build/runtime.a here — it is HEXA_PREBUILT_RUNTIME; removing it
+# diverts stage_resolve to the frozen-seed restore path. stage_resolve rebuilds
+# runtime.a in place (ar rcs replaces members).
+# KNOWN ISSUE (named next round): in the FULL release_build context this re-resolve
+# exits 1 at the Case-B S5 ld -r gate (0 actual multidef in _caseB_ldr.err, single
+# hexa_map_keys definer) — a stateful pass-1↔pass-2 interaction that passes when run
+# standalone with runtime.a present. Needs isolation debugging vs the full-build state.
+rm -f build/map_query_native.o build/runtime_core.o
 
 echo "[stage_reresolve_runtime_a] re-resolving shipped runtime.a with own-obj --isolate map-query…"
 HEXA_RT_OWNOBJ_MAPQUERY=1 HEXA_OWNOBJ_CC="$PWD/build/aprime_cc" bash tool/stage_resolve_runtime_a
