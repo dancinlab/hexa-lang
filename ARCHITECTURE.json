@@ -455,8 +455,8 @@
    {
     "id": "elf-arm64-hexa-1",
     "state": "pos-conv",
-    "value": "own-link concat pass는 각 obj의 rodata/data 섹션 base를 16-정렬해야 한다(link_elf_arm64_ownstart_ar). AArch64 LDST*_ABS_LO12_NC(ldr/str [base,:lo12:sym])는 scale(8=LDST64/16=LDST128)만큼 타겟 정렬을 요구하며 _apply_arm64_reloc가 (raw & (2^scale-1))!=0이면 rc=2로 거부한다. data_vaddr가 0x10000-정렬이므로 blob offset 16-정렬 ⇒ 섹션 vaddr 16-정렬(AArch64 최대 LDST 커버). gcc는 addend A를 섹션 sh_addralign 기준으로 계산하므로 base만 정렬하면 (base+A)도 정렬된다.",
-    "threshold": "재발=own-link이 여러 obj concat 후 LDST*_ABS_LO12_NC 릴록에서 rc=2(오정렬). 특히 crt1.o를 objs[0]로 prepend하는 dyn(Road A) 경로는 후속 obj의 섹션 vaddr를 crt1 바이트크기만큼 밀어 static 경로에선 안 보이던 오정렬을 노출( 타겟). 판정=HEXA_LD_DUMP_DYN + reloc kind 286/299 rc=2. 해결=concat에서 ro_base/da_base 기록 前 . --linker=hexa opt-in이라 static byteeq/shipping 무영향.",
+    "value": "own-link(link_elf_arm64_ownstart_ar)에서 bss_vaddr_base = data_vaddr + len(data_bytes)는 16-정렬돼야 한다. 섹션심볼 sec_N_X(seg 2=bss)는 bss_vaddr_base + value로 해소되고, ldr x,[sec,:lo12:] (LDST64_ABS_LO12_NC)는 8-정렬 타겟을 요구해 _apply_arm64_reloc가 (raw & 7)!=0이면 rc=2 거부. Road A dyn 경로가 append하는 dynstr/dynsym/rela/_DYNAMIC/interp 블롭(interp /lib/ld-linux-aarch64.so.1 = 27B 홀수)이 len(data_bytes)를 비정렬로 남겨 bss_vaddr_base가 홀수가 됨. static 경로는 8-pad된 GOT에서 끝나 노출 안 됨. (참고: 섹션-base ro_base/da_base 16-정렬도 방어적으로 유효하나, 이 결함의 진짜 근인은 bss_vaddr_base.)",
+    "threshold": "재발=own-link이 .bss 섹션심볼 대상 LDST64/128(kind 286/299) 릴록에서 rc=2(오정렬), 특히 dyn(Road A) 경로에서 dyn-blob append 후. 판정=DIAG에서 S가 홀수/비8정렬 + A=0 + 타겟이 seg2(bss). 해결=bss_vaddr_base 계산 前 data_bytes를 16-정렬 pad. --linker=hexa opt-in이라 static byteeq/shipping 무영향.",
     "source": "compiler/emit/elf_arm64.hexa"
    }
   ]

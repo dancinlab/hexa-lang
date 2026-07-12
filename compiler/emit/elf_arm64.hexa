@@ -2101,6 +2101,14 @@ pub fn link_elf_arm64_ownstart_ar(program_objs: [ElfArm64Obj], out_path: string,
         interp_len = len(interp) + 1
     }
 
+    // 16-align the data blob tail so bss_vaddr_base is 16-aligned — a `.bss`
+    // section symbol ($sec_N_<bss-shndx>, seg 2) resolves to bss_vaddr_base +
+    // value, and an `ldr x,[sec,:lo12:]` (LDST64_ABS_LO12_NC) against it needs an
+    // 8-aligned target. On the dyn path the appended dynstr/dynsym/rela/_DYNAMIC/
+    // interp blobs (interp "/lib/ld-linux-aarch64.so.1" = 27B, odd) leave
+    // len(data_bytes) unaligned → an odd bss_vaddr_base → _apply rc=2. The static
+    // path ended at the 8-padded GOT so this never surfaced. 16 covers LDST128.
+    while (len(data_bytes) & 15) != 0 { data_bytes.push(0) }
     let bss_vaddr_base = data_vaddr + len(data_bytes)     // bss above data (incl GOT + dyn blobs)
 
     // ── GOT fill: defined syms → final vaddr; dyn syms → leave 0 (ld.so GLOB_DAT) ──
