@@ -55,6 +55,10 @@ emit_one() {
         n="$(grep -cE "^[[:space:]]*\.globl[[:space:]]+_?${sym}\$" "$raw" || echo 0)"
         [ "$n" -ge 1 ] || { echo "[regen_valop_core] ERROR: $triple emitted only $n/1 $sym" >&2; exit 1; }
     done
+    # Sealed contract: EXACTLY $NSYMS .globl — no stray (e.g. _drv_unused) or missing
+    # (convergence macho-arm64-hexa-1: assert TOTAL globals == keeplist, not just per-sym presence).
+    local tot; tot="$(grep -cE '^[[:space:]]*\.globl[[:space:]]' "$raw" || true)"
+    [ "${tot:-0}" -eq "$NSYMS" ] || { echo "[regen_valop_core] ERROR: $triple emitted $tot .globl (sealed contract: exactly $NSYMS — stray or missing)" >&2; exit 1; }
     {
         printf '// %s — FROZEN BOOTSTRAP SEED (RT-NATIVE leg B M4 VALOP — sh-val-core).\n' "$(basename "$out")"
         printf '// GENERATED: tool/regen_valop_core_native_s.sh — aprime_cc _drv.hexa --emit=asm\n'
@@ -86,6 +90,7 @@ emit_one() {
             t="$( (nm "$o" 2>/dev/null || echo) | grep -cE " T _?${sym}\$")"
             tcount=$((tcount + t))
         done
+        [ "$tcount" -eq "$NSYMS" ] || { echo "[regen_valop_core] ERROR: $triple nm T count $tcount != $NSYMS" >&2; exit 1; }
         echo "[regen_valop_core] $triple → $out ($tcount/$NSYMS T defined)"
     else
         echo "[regen_valop_core] WARN $triple: cross-assemble check skipped (no matching toolchain)" >&2
