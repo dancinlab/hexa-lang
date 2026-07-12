@@ -130,10 +130,28 @@ ABI fits neither pair-model nor Route C all-raw; the named next wall = a per-par
     (8 global via `llvm-nm-18` — **GOTCHA: GNU `nm` reports "file format not recognized" on Mach-O → false 0/0; use
     `llvm-nm` for darwin seed verification**). The cross-target risk for the flip's 3-target byteeq is retired at the
     seed level.
-  - **REMAINING for flip default-ON (only this left):** (a) make own-obj `--isolate` the DEFAULT map-query seed path
-    (currently gated on `HEXA_RT_OWNOBJ`/`_MAPQUERY`; the flip = un-gate to default-ON, opt-out `=0`); (b) full
-    `release_build` byteeq 3-target GREEN + `own-link corpus parity` + shipping smoke → merge (needs pool/CI; the
-    seed-level self-containment + x86_64 end-to-end link+parity are already proven).
+  - **✅ SHIP-BUILD ON-path verified (summer, compiler-present):** full `tool/release_build` (TARGET=linux-x86_64,
+    the 4-stage ship build) with `HEXA_RT_OWNOBJ_MAPQUERY=1` + `HEXA_OWNOBJ_CC=build/aprime_cc` → `./hexa` built rc=0,
+    seed self-contained (0 rt_map_* undef), the 8 dispatchers T in runtime.a, and **map-query runs correctly through
+    the shipped `./hexa`** (`keys(pop)→b,a,c count=3`, `values→2,1,3`, `entries→[b,2]`). The isolated-seed MECHANISM
+    is proven end-to-end in a real ship build.
+  - **🧱 NEW CONSTRAINT — Stage-0b is COMPILER-FREE (the flip's real remaining wall):** `release_build` order is
+    (1) `stage_resolve_runtime_a` [Stage 0b → runtime.a] **then** (2) `stage_prebuild_hexat` [build/hexat] then
+    stage_build_hexa. So at seed-production time there is **NO hexa compiler** — that is the entire reason for the
+    "frozen dough" `.s`/frozen-`.c` bootstrap seeds (compiler-free). The own-obj `--isolate` path NEEDS a hexa
+    compiler (aprime/hexat); the ship-build above only worked because isowt2 had a **pre-existing** `build/aprime_cc`.
+    So **own-obj `--isolate` cannot be the DEFAULT Stage-0b seed path** — a naive un-gate silently no-ops in a clean
+    build (own-obj fails → safe C-fallback → flip inert). This is the flip's genuine remaining design decision:
+    - **Option A — committed isolated `.o` seeds** (per-target binary frozen artifact, baked offline via `--isolate`,
+      committed to `self/native/map_query_<t>.o`; Stage-0b just links them — compiler-free). Departs from `.s` text
+      convention (binary in git) but analogous to the frozen bootstrap; needs regen-on-source-change.
+    - **Option B — isolate→`.s` pipeline** (emit the isolated `.o` then lower to a self-contained `.s` text seed that
+      carries the local rt_map_* + global dispatchers; keeps the `.s` convention, needs an obj→asm lowering step).
+    - **Option C — two-pass re-resolve** (Stage-0b resolves runtime.a with map-query in C [compiler-free], then AFTER
+      hexat is built re-resolve the SHIPPED runtime.a with the own-obj `--isolate` flip; bootstrap uses C, ship uses
+      native). Adds a re-resolve stage; avoids committed binaries.
+    Pick + implement one, then 3-target byteeq + own-link corpus parity → flip. The seed self-containment + ship-build
+    ON-path (compiler-present) are proven; only the compiler-free DELIVERY remains.
 Then Tier-1 #2 (valop eqtruthy) + #3 (array typed-leaf). `_Static_assert(offsetof(HexaMapTable,len)==40)` = still-TODO tripwire.
 
 Full census/synthesis: Workflow journal `subagents/workflows/wf_aa30b431-930/journal.jsonl`;
