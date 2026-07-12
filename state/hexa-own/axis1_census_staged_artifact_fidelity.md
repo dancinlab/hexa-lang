@@ -95,13 +95,14 @@ Two fidelity traps handled in `tool/cfallback_zero_census`:
   own-link runtime.a resolution → clang-fallback. Decoupling resolve_hxroot from that marker (use a
   neutral root sentinel) is a prerequisite for the axis-① delegate deletion. Tracked as follow-on.
 
-## Follow-on (separate PR, after census-B soaks green)
-`stage_precompile_package:92` ships aprime_cc BEST-EFFORT (`|| echo "... clang-fallback (no
-regression)"`). Under axis-① that fallback IS a regression. Harden: **hard-fail when
-TARGET=linux-x86_64** (the own-link-default target); keep best-effort on darwin/arm64 where own-link
-isn't default. This makes the guarantee hold at release time (release.yml), not just gate time.
-Building aprime_cc itself via clang stays sanctioned — that's the BUILD-time axis-③ endgame, out of
-scope for the USE-time claim.
+## Follow-on ✅ LANDED (r28)
+`stage_precompile_package` shipped aprime_cc BEST-EFFORT (`|| echo "... clang-fallback (no
+regression)"`) — under axis-① that fallback IS a regression. HARDENED (r28): on
+**TARGET=linux-x86_64** (the own-link-default target) a missing `build/aprime_cc` now HARD-FAILS
+the stage (`exit 1`) rather than shipping a silent clang-fallback install; darwin/arm64 stay
+best-effort (own-link not their default). The guarantee now holds at release time (release.yml runs
+stage_precompile_package), not just gate time. Building aprime_cc itself via clang stays sanctioned —
+that's the BUILD-time axis-③ endgame, out of scope for the USE-time claim.
 
 Second follow-on (axis-① delegate-deletion prerequisite): decouple `resolve_hxroot()` (:1630) from
 the `self/native/hexa_cc.c` marker — pick a neutral root sentinel (e.g. `build/runtime.a` presence,
