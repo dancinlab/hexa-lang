@@ -3576,20 +3576,36 @@ build_runtime_a_from_source() {
                 [ "${HEXA_RT_NATIVE_POPEN:-0}" = "1" ]  && _rnpop_keep="$_rnpop_keep --keep-global-symbol=hxlcl_popen"
                 [ "${HEXA_RT_NATIVE_PCLOSE:-0}" = "1" ] && _rnpop_keep="$_rnpop_keep --keep-global-symbol=hxlcl_pclose"
                 printf 'fn _rnpop_unused() {}\n' > "$_rnpop_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE: emitting native Route C popen/pclose .o via $_rnpop_bin (HEXA_CABI_HXLCL=1, replacing libc-shim member(s))…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnpop_bin" "$_rnpop_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnpop_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnpop.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: popen/pclose Route C asm emit failed — see build/_rnpop.log" >&2; cat "build/_rnpop.log" >&2; return 1; }
-                [ -s "$_rnpop_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: empty $_rnpop_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnpop_s" -o "$_rnpop_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: assemble $_rnpop_s failed" >&2; return 1; }
-                if command -v objcopy >/dev/null 2>&1; then
-                    objcopy $_rnpop_keep "$_rnpop_full" "$_rnpop_o" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: objcopy isolate popen/pclose failed" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — 2-symbol combined member: build the
+                # --keep-global comma-list from the SAME flags as $_rnpop_keep, own-emit
+                # (drops $CC + binutils objcopy), assert global count == kept-count.
+                # Default (OWNOBJ unset) = existing --emit=asm+objcopy = byte-identical.
+                _rnpop_kg=""; _rnpop_ng=0
+                [ "${HEXA_RT_NATIVE_POPEN:-0}" = "1" ]  && { _rnpop_kg="${_rnpop_kg:+$_rnpop_kg,}hxlcl_popen"; _rnpop_ng=$((_rnpop_ng+1)); }
+                [ "${HEXA_RT_NATIVE_PCLOSE:-0}" = "1" ] && { _rnpop_kg="${_rnpop_kg:+$_rnpop_kg,}hxlcl_pclose"; _rnpop_ng=$((_rnpop_ng+1)); }
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && [ -n "$_rnpop_kg" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rnpop_drv" --backend=native --emit=obj --keep-global="$_rnpop_kg" \
+                       --target=x86_64-linux-gnu -o "$_rnpop_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rnpop_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rnpop_o" 2>/dev/null | grep -cE ' T ')" -eq "$_rnpop_ng" ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_popen/pclose via $HEXA_OWNOBJ_CC --emit=obj --keep-global=$_rnpop_kg ($_rnpop_ng global, no \$CC/objcopy — binutils-free)"
                 else
-                    cp "$_rnpop_full" "$_rnpop_o"
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE: emitting native Route C popen/pclose .o via $_rnpop_bin (HEXA_CABI_HXLCL=1, replacing libc-shim member(s))…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rnpop_bin" "$_rnpop_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnpop_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rnpop.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: popen/pclose Route C asm emit failed — see build/_rnpop.log" >&2; cat "build/_rnpop.log" >&2; return 1; }
+                    [ -s "$_rnpop_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: empty $_rnpop_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rnpop_s" -o "$_rnpop_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: assemble $_rnpop_s failed" >&2; return 1; }
+                    if command -v objcopy >/dev/null 2>&1; then
+                        objcopy $_rnpop_keep "$_rnpop_full" "$_rnpop_o" \
+                            || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: objcopy isolate popen/pclose failed" >&2; return 1; }
+                    else
+                        cp "$_rnpop_full" "$_rnpop_o"
+                    fi
+                    [ -f "$_rnpop_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: $_rnpop_o not produced" >&2; return 1; }
                 fi
-                [ -f "$_rnpop_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-POPEN/PCLOSE FATAL: $_rnpop_o not produced" >&2; return 1; }
                 if [ "${HEXA_RT_NATIVE_POPEN:-0}" = "1" ];  then _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_POPEN"; fi
                 if [ "${HEXA_RT_NATIVE_PCLOSE:-0}" = "1" ]; then _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_PCLOSE"; fi
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnpop_o"
