@@ -54,6 +54,21 @@ H
 cat > "$W/c/loop.hexa"       <<'H'
 fn main() { let mut s = 0; let mut i = 1; while i <= 10 { s = s + i; i = i + 1 }; print(s) }
 H
+# float coverage (Fable B2): the corpus was integer-only, so the SSE scalar-double
+# family + FCVTZS/CVTTSD2SI (int(float)) went unexercised by the own-link parity
+# gate. int(...)-wrap keeps every print an int (avoids depending on print(float));
+# the wrapped ops still exercise mulsd/divsd/subsd + comisd(<) + the float→int
+# convert (FCVTZS on arm64 — the #4898 witness — / CVTTSD2SI on x86_64).
+cat > "$W/c/float.hexa"      <<'H'
+fn main() {
+    let a = 1.5
+    let b = 2.25
+    print(int(a * b * 100.0))     // mulsd chain → 337
+    print(int(a / b * 100.0))     // divsd → 66
+    print(int((a - b) * 100.0))   // subsd, negative → -75 (FCVTZS on a negative)
+    if a < b { print(1) } else { print(0) }   // comisd + unsigned setcc → 1
+}
+H
 
 N=0; FAIL=0
 for P in "$W"/c/*.hexa; do
