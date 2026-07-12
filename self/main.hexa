@@ -3575,15 +3575,16 @@ fn cmd_build(src, out, c_only, target, shared) {
         }
         return ""
     }
-    // ── axis-③ PR-1: own-link default-flip OPT-IN leg (HEXA_OWNLINK_DEFAULT=1, default-OFF·byte-neutral) ──
-    // Route the linux-x86_64 host default build through own-emit + own-LINK (hexa_ld) — clang-0
-    // AND binutils-0 (no system `ld`) — mirroring the proven tier-C cross leg below
+    // ── axis-③ PR-2: own-link default-flip DEFAULT-ON (HEXA_OWNLINK_DEFAULT!=0, opt-out with =0) ──
+    // The linux-x86_64 host `hexa build` now links via own-emit + own-LINK (hexa_ld) BY DEFAULT —
+    // clang-0 AND binutils-0 (no system `ld`) — mirroring the proven tier-C cross leg below
     // (--backend=native --emit=exec --linker=hexa) but HOST-native (uname==Linuxx86_64,
-    // len(target)==0). ANY emit/own-link failure falls through to tier-B (aprime --emit=obj +
-    // system ld) below, C-transpile delegate intact. The default-ON flip (== "1" → != "0") is
-    // PR-2, gated on byteeq 3-target + ownlink-corpus-parity + shipping/install smoke.
-    // Roadmap: state/hexa-own/axis3-ownlink-default-flip-roadmap.md.
-    if env_var("HEXA_OWNLINK_DEFAULT") == "1" && exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxx86_64" && shared != "1" && c_only != "1" && len(target) == 0 && len(__actual_src) > 0 {
+    // len(target)==0). ANY emit/own-link failure STILL falls through to tier-B (aprime --emit=obj
+    // + system ld) below, C-transpile delegate intact — the release-integrity safety net survives
+    // the flip. Evidence: byteeq 3-target + ownlink-determinism + ownlink-corpus-parity (own-link
+    // ≡ ld across the corpus, #4881) + shipping/install smoke — all GREEN. Opt-out: HEXA_OWNLINK_
+    // DEFAULT=0 reverts to tier-B ld. Roadmap: state/hexa-own/axis3-ownlink-default-flip-roadmap.md.
+    if env_var("HEXA_OWNLINK_DEFAULT") != "0" && exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxx86_64" && shared != "1" && c_only != "1" && len(target) == 0 && len(__actual_src) > 0 {
         let _olcc = resolve_native_cc()
         let _olrt = resolve_prebuilt_runtime()
         if len(_olcc) > 0 && len(_olrt) > 0 {
