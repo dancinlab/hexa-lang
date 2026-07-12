@@ -1034,3 +1034,46 @@ jobs:
           CC_NATIVE: ${{ github.workspace }}/build/lx8664/cc_native
           HEXA_PREBUILT_RUNTIME: ${{ runner.temp }}/rt_converged.a
         run: bash tool/ownlink_determinism_gate
+
+  # axis-3 L1: own-link RUN-parity gate (own-link vs system-ld from the SAME own-
+  # emitted .o) — the PR-2 default-flip evidence. A mislinked-but-executable binary
+  # does NOT trip the build fall-through, so run-parity (stdout+rc identical across
+  # the corpus) is the only sound gate for flipping the linker. Advisory (not in the
+  # required selfhost-gates-summary set yet — promote after a green soak, per the
+  # CI rule "measure a job green before making it required").
+  ownlink-corpus-parity-x86_64:
+    name: own-link corpus parity (own-link vs ld, linux-x86_64)
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.linux_label) }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+      - name: Build toolchain + converged runtime.a (shared release_build)
+        shell: bash
+        env:
+          TARGET: linux-x86_64
+          CC: gcc
+          LIBS: "-lm -ldl"
+          GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
+          HEXA_RT_STDIO_NATIVE: "1"
+        run: bash tool/release_build
+      - name: Build cc_native (preserve the converged runtime.a first)
+        shell: bash
+        env:
+          HEXA_RT_STDIO_NATIVE: "1"
+        run: |
+          set -euo pipefail
+          cp build/runtime.a "$RUNNER_TEMP/rt_converged.a"
+          bash tool/build_native_linux_x86_64 -r "$PWD" -w "$PWD/build/lx8664"
+          [ -x build/lx8664/cc_native ] && echo "cc_native = $(stat -c%s build/lx8664/cc_native) B"
+      - name: own-link corpus RUN-parity gate (own-link vs ld)
+        shell: bash
+        env:
+          REPO: ${{ github.workspace }}
+          CC_NATIVE: ${{ github.workspace }}/build/lx8664/cc_native
+          HEXA_PREBUILT_RUNTIME: ${{ runner.temp }}/rt_converged.a
+          CC: gcc
+        run: bash tool/ownlink_corpus_parity_gate
