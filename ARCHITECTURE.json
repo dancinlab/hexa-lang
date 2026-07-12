@@ -437,6 +437,13 @@
     "value": "Native-backend escaping-packed arrays (TAG_ARRAY_I64/F64/F32) flowing through a type-erasing boundary (struct field via hexa_map_get / fn-return / generic) reach a BOXED runtime reader (hexa_len/hexa_index_get/hexa_iter_get) that does NOT discriminate the runtime tag -> HX_IS_ARRAY false for a packed tag -> len collapses to 0 / index aborts (tag=12). Poly readers (hexa_arr_poly_len/get) already discriminate; gen2-C carries inseparable {tag,payload} so is immune. Two-backend path-mismatch at the RUNTIME reader layer. MEASURED fix GREEN (aiden 5020100). SECONDARY trap: build_native reuses HEXA_PREBUILT_RUNTIME=build/runtime.a (stale) so emitter edits need a forced stage_resolve_runtime_a rebuild to take.",
     "threshold": "Recurs whenever a new boxed HexaVal reader/consumer is added without a packed-tag branch. Fix = mirror hexa_arr_poly_* discriminate into EVERY boxed reader (uniform-representation soundness). Blast: _x86_compute_live_ranges empty X86Intervals -> degenerate regalloc -> cc_self miscompiles all array-returns (axis-3 L2). Verify on a FRESH runtime.a (rm build/runtime.a + HEXA_PREBUILT_RUNTIME= stage_resolve_runtime_a), else a stale archive masks the fix.",
     "source": "self/runtime_core_emit.hexa"
+   },
+   {
+    "id": "elf-x86-64-hexa-2",
+    "state": "pos-conv",
+    "value": "own-link must NOT emit DT_INIT_ARRAY on the dyn-hybrid (crt_handoff) path: runtime.a is OWN_START-compiled (-DHEXA_ZEROC_OWN_START), so its static ctors (hxlcl_capture_environ(101), _hexa_init_stdio/path/mem_cap/malloc, strlit-init thunks) assume the _hx_start_c contract (environ-first store, own atexit-LIFO via hxlcl_exit, raw exit_group, premain TAG_FN binding). Running an extraction-accident SUBSET under glibc _dl_init (dyn) = out-of-context partial init → MEASURED mir3 own-link rc 0->2. One init authority per path: dyn=crt1/glibc (zero exe ctors), static=_hx_start_c 16-byte stub walk. SHT_INIT_ARRAY pooling+region+static stub are for the RFC061 resid-UND->0 STATIC endgame (always-dyn today via the libc floor -> static stub dead-but-kept). Also hxlcl_getenv walks only hxlcl_environ (no libc fallback) -> env() empty on dyn own-link is a PRE-EXISTING runtime gap.",
+    "threshold": "Recurs if DT_INIT_ARRAY/DT_INIT_ARRAYSZ re-added to the dyn-section writer, or 'run ctors on dyn = parity gain' assumed without measuring (harmful — OWN_START ctors are contract-bound to _hx_start_c). Verify own-link ctor changes on the ACTUAL path (every runtime.a link is dyn today; static init_stub dead until RFC061 floor->0). Needs cross-obj priority-sort before static path goes live.",
+    "source": "compiler/emit/elf_x86_64.hexa"
    }
   ]
  },
