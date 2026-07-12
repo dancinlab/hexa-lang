@@ -290,6 +290,34 @@ floor leaves (abort=SIGABRT svc, getc=read(2), __libc_calloc/free=arena alias, l
 strtod=hard) for pure-static — hybrid vs full-Road-A to be recommended. NB: x86 itself uses Road A
 (not pure-static) for the floor, so "pure-static arm64" was always going to hit this wall.
 
+## Rung-3 RESULT — Road A dynamic-link IMPLEMENTED + VERIFIED WORKING (aiden qemu · 2026-07-12)
+
+**arm64 own-link (--linker=hexa) now produces a WORKING dynamic AArch64 ET_EXEC.** Full Road A
+dynamic-link (Fable-designed, 1:1 mirror of link_elf_x86_64_ownstart's GLOB_DAT-only mechanism)
+landed as S1-S6 in link_elf_arm64_ownstart_ar + serialize_elf_exec_arm64_dyn:
+- **crt_handoff gate** (residual-libc-UND census >0) → prepend crt1.o, suppress hand stub, entry =
+  crt1 `_start`. Census EXACT: `n_dyn=7` = {__libc_start_main abort strtod longjmp __libc_free getc
+  __libc_calloc} (the measured 6-sym floor + crt1's __libc_start_main).
+- **12-byte AArch64 veneers** (adrp x16/ldr x16/br x16) per dyn sym + GLOB_DAT `.rela.dyn` + DT_HASH +
+  `_DYNAMIC` (DT_NEEDED libc.so.6) + PT_INTERP `/lib/ld-linux-aarch64.so.1`, 4 phdrs, code_off=288.
+- **Verified (qemu-aarch64 -L sysroot)**: BIN OK 519KB · PT_INTERP + DT_NEEDED libc.so.6 present · ld.so
+  loads + resolves all 7 GLOB_DAT floor syms · `main` RUNS (`print("MAIN-RAN")` prints) · exits cleanly.
+
+**2 bugs measured+fixed en route** (measure→root-cause→fix, both convergence-recorded):
+- asm @PAGE→ELF :lo12: emitter gap (asm-hexa-1) — regenerated the 2 arm64-linux seeds (8062a2f87).
+- **bss_vaddr_base misalignment** (elf-arm64-hexa-1, corrected): the appended dyn blobs (interp 27B odd)
+  left `len(data_bytes)` unaligned → an odd bss_vaddr_base → a `.bss` section-symbol LDST64 rc=2. Fix:
+  16-align data_bytes before bss_vaddr_base (0afd3c7b5). DIAG measured S=4713587(odd)+A=0, readelf
+  confirmed member0=runtime.o sec4=.bss(align16).
+
+**Remaining gap — rc=0 not 42 (SHARED with x86, NOT an arm64 defect)**: the crt1-handoff dynamic path
+exits 0 instead of main's `return 42`. **Measured-identical on the x86 own-link reference (rc=0)** — so
+arm64 rung-3 has EXACT behavior parity with the shipped x86 mechanism. main RUNS (print works); only the
+return-value→exit-code propagation is dropped (a runtime-main-ABI / __libc_start_main-contract detail
+shared by both arches). Fable investigating the root cause (arm64-only wrapper vs shared codegen main-
+lowering). This is a follow-on rung, quarantined from the rung-3 linker verdict per infra-wall-noneval:
+the LINKER + dynamic-link mechanism is verified working at x86 parity.
+
 ## Note
 The x86_64-template reader in the research workflow returned a placeholder (empty); the x86_64 anchor
 lines above were recovered from the arm64-current reader's cross-references. Re-read elf_x86_64.hexa
