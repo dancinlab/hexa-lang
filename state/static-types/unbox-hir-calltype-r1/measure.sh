@@ -155,7 +155,7 @@ done
 
 # ── Gate 3+4 — runtime ratio + parity ──
 say "--- Gate3+4 runtime ratio + parity ---"
-link_run() { local kn="$1" tag="$2" o="$WORK/${kn}_${tag}.o" b="$WORK/${kn}_${tag}.bin"
+link_run() { local kn="$1" tag="$2"; local o="$WORK/${kn}_${tag}.o" b="$WORK/${kn}_${tag}.bin"
     [ -f "$o" ] || { say "  [$kn] $tag: no .o"; return; }
     [ -n "$RT" ] || { say "  [$kn] $tag: no runtime.a → skip link"; return; }
     gcc -O2 "$o" "$RT" -lm -o "$b" 2>"$b.ld.log" || { say "  [$kn] $tag: gcc link FAIL"; tail -6 "$b.ld.log" | sed 's/^/      /' | tee -a "$RESULT"; return; }
