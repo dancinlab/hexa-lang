@@ -89,6 +89,33 @@ If aiden lacks qemu-user, fall back to a github-hosted arm64 cloud runner per CI
 - **verify substrate**: NO arm64 self-hosted host — smoke runs under qemu-aarch64-static on an x86
   pool host or a cloud arm64 runner; qemu fidelity must be sanity-checked vs real hardware before flip.
 
+## ⚠️ MEASURED FINDING (aiden · rung-1 "reloc-free" assumption FALSIFIED)
+The rung-1 scope ("a trivial `fn main()->Int{return 42}` is reloc-free") is FALSIFIED by measurement.
+aiden readelf of the cross-emitted arm64 `.o`: `main` carries ONE reloc —
+`R_AARCH64_CALL26 → hexa_set_args + 0` (an UNDEFINED runtime extern). Disasm:
+`stp x29,x30,[sp,#-16]!; mov x29,sp; bl hexa_set_args; mov x0,#0; mov x1,#42; ldp; ret` — the
+codegen unconditionally emits `bl hexa_set_args` at every main's prologue (argc/argv capture), so
+NO real hexa program is reloc-free. (The return `mov x0,#0; mov x1,#42` confirms the HexaVal pair
+tag=0/payload=42 → exit code = x1 = 42, validating the stub's `mov x0,x1`.)
+
+Consequence: the x86 own-start rung-1 likewise routes an UND-bearing program through the runtime.a
+variant `link_elf_x86_64_ownstart_ar` (main.hexa dispatch: `_prog_has_und && rt_a → _ar`). So the
+REAL minimal arm64 rung is **runtime.a-aware** — it must (1) resolve `hexa_set_args` (+ its transitive
+runtime.a members) from an **arm64 runtime.a** (which does not exist yet → depends on rung-4 target-
+runtime plumbing), and (2) apply the full reloc set (CALL26 to pulled members + their ADRP/ADD/ABS64).
+
+Status of the rung-1 implementation (committed feat/axis3-arm64-ownlink-rung1 @ 4dc1cce8a, VERIFIED
+compiles + dispatches on aiden, fail-loud correct — NO silent miscompile): `serialize_elf_exec_arm64`
++ the verified 24-byte `_start` stub + the CALL26 patch + the dispatch wiring are all correct and
+REUSABLE for the runtime.a-aware rung. The leg currently refuses (rc=3) any real program because all
+carry the `hexa_set_args` UND — so it is HELD (not PR'd) until it can link something.
+
+REVISED rung ladder: the real next rung = **runtime.a-aware own-link** (rung-2 below) which itself
+needs **an arm64 runtime.a** (rung-4). i.e. rung-4 (arm64 runtime.a cross-build) is a PREREQUISITE of
+a working arm64 own-link, not a follow-on. Recommended order: rung-4 (cross-build build/runtime.arm64-
+linux-gnu.a) → rung-2 (parse_ar_arm64 + archive_extract + full CALL26/ADRP/ADD/ABS64 applicator) →
+verify qemu exit 42 → PR. This is a large multi-file port (mirror elf_x86_64.hexa:3208/3826/4143/4297).
+
 ## Subsequent rungs (not this session)
 - **Rung-2** runtime.a-aware own-link: port `link_elf_arm64_ownstart_ar` (:3208) + `parse_elf_arm64_obj`
   (:3826) + `parse_ar_archive` (:4143) + `archive_extract_fixpoint` (:4297) + `serialize_elf_exec_arm64_2seg`
