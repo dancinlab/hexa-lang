@@ -3252,20 +3252,31 @@ build_runtime_a_from_source() {
                 local _rnos_full="build/hxlcl_open_sys_native_full.o"
                 local _rnos_o="build/hxlcl_open_sys_native.o"
                 printf 'fn _rnos_unused() {}\n' > "$_rnos_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS: emitting native Route C hxlcl_open_sys .o via $_rnos_bin (HEXA_CABI_HXLCL=1, replacing libc-shim open_sys member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rnos_bin" "$_rnos_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnos_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rnos_open_sys.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: open_sys Route C asm emit failed — see build/_rnos_open_sys.log" >&2; cat "build/_rnos_open_sys.log" >&2; return 1; }
-                [ -s "$_rnos_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: empty $_rnos_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rnos_s" -o "$_rnos_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: assemble $_rnos_s failed" >&2; return 1; }
-                if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_open_sys "$_rnos_full" "$_rnos_o" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: objcopy isolate open_sys failed" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — own-emit --keep-global replaces $CC + binutils objcopy.
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rnos_drv" --backend=native --emit=obj --keep-global=hxlcl_open_sys \
+                       --target=x86_64-linux-gnu -o "$_rnos_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rnos_open_sys_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rnos_o" 2>/dev/null | grep -cE ' T _?hxlcl_open_sys$')" -eq 1 ] \
+                   && [ "$(nm "$_rnos_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_open_sys via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_open_sys (1 global, no $CC/objcopy — binutils-free) — OPEN_SYS dropped from shim"
                 else
-                    cp "$_rnos_full" "$_rnos_o"
+    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS: emitting native Route C hxlcl_open_sys .o via $_rnos_bin (HEXA_CABI_HXLCL=1, replacing libc-shim open_sys member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rnos_bin" "$_rnos_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rnos_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rnos_open_sys.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: open_sys Route C asm emit failed — see build/_rnos_open_sys.log" >&2; cat "build/_rnos_open_sys.log" >&2; return 1; }
+                    [ -s "$_rnos_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: empty $_rnos_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rnos_s" -o "$_rnos_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: assemble $_rnos_s failed" >&2; return 1; }
+                    if command -v objcopy >/dev/null 2>&1; then
+                        objcopy --keep-global-symbol=hxlcl_open_sys "$_rnos_full" "$_rnos_o" \
+                            || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: objcopy isolate open_sys failed" >&2; return 1; }
+                    else
+                        cp "$_rnos_full" "$_rnos_o"
+                    fi
+                    [ -f "$_rnos_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: $_rnos_o not produced" >&2; return 1; }
                 fi
-                [ -f "$_rnos_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS FATAL: $_rnos_o not produced" >&2; return 1; }
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_OPEN_SYS"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rnos_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-OPEN_SYS: hxlcl_open_sys → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_OPEN_SYS (open_sys dropped) — ld -r multidef gate validates"
@@ -3396,20 +3407,31 @@ build_runtime_a_from_source() {
                 local _rncg_full="build/hxlcl_clock_gettime_native_full.o"
                 local _rncg_o="build/hxlcl_clock_gettime_native.o"
                 printf 'fn _rncg_unused() {}\n' > "$_rncg_drv"
-                echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME: emitting native Route C hxlcl_clock_gettime .o via $_rncg_bin (HEXA_CABI_HXLCL=1, replacing libc-shim clock_gettime member)…"
-                env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
-                    "$_rncg_bin" "$_rncg_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rncg_s" stdlib/runtime/hxlcl_core.hexa \
-                    >"build/_rncg_clock_gettime.log" 2>&1 \
-                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: clock_gettime Route C asm emit failed — see build/_rncg_clock_gettime.log" >&2; cat "build/_rncg_clock_gettime.log" >&2; return 1; }
-                [ -s "$_rncg_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: empty $_rncg_s" >&2; return 1; }
-                $CC $_mo_archflag -c "$_rncg_s" -o "$_rncg_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: assemble $_rncg_s failed" >&2; return 1; }
-                if command -v objcopy >/dev/null 2>&1; then
-                    objcopy --keep-global-symbol=hxlcl_clock_gettime "$_rncg_full" "$_rncg_o" \
-                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: objcopy isolate clock_gettime failed" >&2; return 1; }
+                # axis-②③ A1 (E4 own-obj) — own-emit --keep-global replaces $CC + binutils objcopy.
+                if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] && [ -x "${HEXA_OWNOBJ_CC:-}" ] && \
+                   env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                       "$HEXA_OWNOBJ_CC" "$_rncg_drv" --backend=native --emit=obj --keep-global=hxlcl_clock_gettime \
+                       --target=x86_64-linux-gnu -o "$_rncg_o" stdlib/runtime/hxlcl_core.hexa \
+                       >"build/_rncg_clock_gettime_ownobj.log" 2>&1 \
+                   && [ "$(nm "$_rncg_o" 2>/dev/null | grep -cE ' T _?hxlcl_clock_gettime$')" -eq 1 ] \
+                   && [ "$(nm "$_rncg_o" 2>/dev/null | grep -cE ' T ')" -eq 1 ]; then
+                    echo "[stage_resolve_runtime_a] A1 OWN-OBJ: hxlcl_clock_gettime via $HEXA_OWNOBJ_CC --emit=obj --keep-global=hxlcl_clock_gettime (1 global, no $CC/objcopy — binutils-free) — CLOCK_GETTIME dropped from shim"
                 else
-                    cp "$_rncg_full" "$_rncg_o"
+    echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME: emitting native Route C hxlcl_clock_gettime .o via $_rncg_bin (HEXA_CABI_HXLCL=1, replacing libc-shim clock_gettime member)…"
+                    env HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
+                        "$_rncg_bin" "$_rncg_drv" --emit=asm --target=x86_64-linux-gnu -o "$_rncg_s" stdlib/runtime/hxlcl_core.hexa \
+                        >"build/_rncg_clock_gettime.log" 2>&1 \
+                        || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: clock_gettime Route C asm emit failed — see build/_rncg_clock_gettime.log" >&2; cat "build/_rncg_clock_gettime.log" >&2; return 1; }
+                    [ -s "$_rncg_s" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: empty $_rncg_s" >&2; return 1; }
+                    $CC $_mo_archflag -c "$_rncg_s" -o "$_rncg_full" || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: assemble $_rncg_s failed" >&2; return 1; }
+                    if command -v objcopy >/dev/null 2>&1; then
+                        objcopy --keep-global-symbol=hxlcl_clock_gettime "$_rncg_full" "$_rncg_o" \
+                            || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: objcopy isolate clock_gettime failed" >&2; return 1; }
+                    else
+                        cp "$_rncg_full" "$_rncg_o"
+                    fi
+                    [ -f "$_rncg_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: $_rncg_o not produced" >&2; return 1; }
                 fi
-                [ -f "$_rncg_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME FATAL: $_rncg_o not produced" >&2; return 1; }
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_CLOCK_GETTIME"
                 _mo_hxlcl_members="$_mo_hxlcl_members $_rncg_o"
                 echo "[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-CLOCK_GETTIME: hxlcl_clock_gettime → native Route C .o (isolated); shim.o built with -DHEXA_RT_NATIVE_CLOCK_GETTIME (clock_gettime dropped) — ld -r multidef gate validates"
