@@ -486,6 +486,13 @@
     "value": "self-hosted 3러너가 mini 디스크 1개를 공유하는데 ccache가 무제한 성장 + 각 잡이 actions/cache로 수GB tzst를 동시 압축해제(피크 = tzst + 추출본 동시 점유) → 87% 찬 디스크에서 ENOSPC. 터지는 지점이 캐시 복원 한복판이라 워커가 완료보고 없이 죽고, GitHub은 잡을 in_progress로 영구 고착(고아)시킴 → PR 체크가 diff와 무관한 RED로 도배됨. 2026-07-13 실측: #4930에 가짜 RED 15개 + 고아 런 6개(9시간 고착) + mini 재부팅. 재실행만으로 15 RED→2(advisory)로 복구 = 코드 무죄 확증. FIX: ccache-setup 액션(모든 무거운 잡의 단일 통과점)에 (a) CCACHE_MAXSIZE 상한 항상 적용(무제한 성장 차단·LRU 축출은 byteeq 중립 — 미스는 재컴파일일 뿐) (b) 복원 前 디스크 헤드룸 가드: floor(15GiB) 미만이면 prune, hard floor(5GiB) 미만이면 fail-fast로 원인을 로그에 남기고 거부(한복판 ENOSPC 고아화 방지).",
     "threshold": "재발조건: 러너 호스트 여유공간이 낮은 상태에서 self-hosted 잡 동시 실행. 진단: 3타깃 전부 RED인데 base가 최신(behind=0)이면 코드 결함이 아니라 인프라를 의심 — gh run view --log-failed | grep -i 'no space left'; 고아 잡(in_progress 수시간)이 함께 보이면 확진. 해결: 고아 런 취소 → 공간 회수 → rerun --failed로 참-판정. commons infra-wall-noneval = 인프라벽은 평가 판정에서 격리.",
     "source": ".github/actions/ccache-setup/action.yml"
+   },
+   {
+    "id": "bind-hexa-1",
+    "state": "pos-conv",
+    "value": "빌트인을 self/codegen.hexa(gen2 C-emit)에만 등록하면 native 경로가 그 이름을 모른다 — 빌트인 1개 = 등록 5곳(self/codegen.hexa ×3: gen2_expr·arg_strs·is_builtin + compiler/check/bind.hexa 바인더 목록 + compiler/codegen/arm64_darwin.hexa rt_ 심볼 맵). 누락 시 native codegen이 raw 이름을 그대로 C로 emit → clang 'use of undeclared identifier <name>' + 해당 rt_ 심볼이 HEXA_RT_NATIVE_DROP(미사용 판정)으로 사장. read_f32_at 이 정확히 이 함정에 3회 연속 빠졌다: #3357 도입(gen2만) → #3359 가 'binder + native codegen + runtime symbol still missing' 로 기록 → #3629 는 runtime 심볼만 복구 → 바인더·native 맵은 그대로 방치 → anima core/decode.hexa(1B+ unboxed 가중치 로드)의 hexa 채널 전체가 막힘. 형제 read_bytes_at 는 5곳 전부 등록되어 정상 = 내부 대조군.",
+    "threshold": "재발조건: 새 rt_* 런타임 빌트인 추가 시 self/codegen.hexa 만 수정하고 머지. 해결: 빌트인 추가 PR은 5곳 등록을 전부 포함하고, 최소재현(fn main(){ let v = <builtin>(...) })이 rc=0 인지 확인할 것. 진단: clang undeclared-identifier + 그 심볼이 HEXA_RT_NATIVE_DROP 목록에 있으면 = 등록 누락(런타임 결함 아님). 대조군 = 같은 파일군의 형제 빌트인이 되는지 본다.",
+    "source": "compiler/check/bind.hexa"
    }
   ]
  },
