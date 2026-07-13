@@ -3634,6 +3634,18 @@ fn cmd_build(src, out, c_only, target, shared) {
                 return ""
             } else {
                 let _ = exec("rm -f '" + _oltmp + "' 2>/dev/null")
+                // HEXA_OWNLINK_STRICT=1 — fail-closed census mode. The ladder below silently drops to
+                // tier-B ld and then to the C-transpile delegate, so a program the own linker cannot
+                // handle quietly goes back to clang and NOBODY MEASURES IT. That is fine for release
+                // integrity (the safety net is the point) but it means "own-link default-ON" does not
+                // by itself prove "clang is gone" — and axis-① (drop hexa_cc.c) needs exactly that
+                // proof. Under STRICT the fallback is an ERROR, so a corpus run yields the real
+                // fallback rate instead of a silent zero. Off by default: this never fires in a normal
+                // build, and the safety net stays exactly as it was.
+                if env_var("HEXA_OWNLINK_STRICT") == "1" {
+                    eprintln("[build] FATAL (HEXA_OWNLINK_STRICT=1): own-link failed and the fallback is disabled — " + _olr)
+                    return "own-link failed under HEXA_OWNLINK_STRICT=1 (no tier-B ld / no C-transpile fallback)"
+                }
                 if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[build] own-link failed → tier-B ld fallback: " + _olr) }
             }
         }
@@ -4757,6 +4769,14 @@ fn cmd_run_user_direct(file, extra_args) {
                 if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[run-native] clang+ld-free own-link: aprime --emit=exec --linker=hexa → " + tmpbin) }
             } else {
                 let _ = exec("rm -f '" + _hlbin + "' 2>/dev/null")
+                // HEXA_OWNLINK_STRICT=1 — fail-closed census mode. See the cmd_build twin: the ladder
+                // below silently drops to emit=obj+ld and then to the C-transpile delegate, so a
+                // program the own linker cannot handle quietly returns to clang and nobody counts it.
+                // Off by default; the safety net is untouched in a normal run.
+                if env_var("HEXA_OWNLINK_STRICT") == "1" {
+                    eprintln("[run-native] FATAL (HEXA_OWNLINK_STRICT=1): own-link failed and the fallback is disabled — " + _hlr)
+                    return 1
+                }
                 if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[run-native] own-link failed → emit=obj+ld fallback: " + _hlr) }
             }
         }
