@@ -2,7 +2,8 @@
 // GENERATED: tool/regen_arr_zeros_leaf_native_s.sh — aprime_cc _drv.hexa --emit=asm
 //   --target=arm64-linux-gnu -o arr_zeros_leaf_arm64-linux.s stdlib/runtime/arr_zeros_leaf.hexa.
 //   Provides the 2 boxed-zeros constructor natives (hexa_arr_zeros_leaf{,_int}).
-//   ABI: ELF aarch64, no underscore. External U-floor: malloc calloc write exit hexa_exit (calloc the only new floor entrant; pair-clean, no shim).
+//   ABI: ELF aarch64, no underscore. External U-floor: hexa_heap_alloc hexa_heap_zalloc hexa_throw hexa_bool — CARRIER-ONLY (HexaVal-ABI); a raw libc U here is a
+//   pair-vs-C-ABI miscompile, not a sanctioned floor entrant.
 //   Lets stage_resolve_runtime_a define HEXA_RT_CORE_ARRAY_ZEROS_LEAF_NATIVE + ar this
 //   .o into runtime.a so the 2 zeros constructors drop from the compiled runtime_core.c.
 // hexa-lang emit pass — target=arm64-linux-gnu
@@ -13,131 +14,134 @@
 .hidden hexa_arr_zeros_leaf
     .p2align 2
 hexa_arr_zeros_leaf:
-    .loc 1 32 0
+    .loc 1 42 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
     sub sp, sp, #608 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_L8cdb_hexa_arr_zeros_leaf_bb0:
+_Lef60_hexa_arr_zeros_leaf_bb0:
     movz x0, #0 // hv const_int: TAG_INT
-    movz x1, #1 // hv const_int val
-    movz x2, #0 // hv const_int: TAG_INT
-    movz x3, #32 // hv const_int val
-    bl calloc // call calloc
+    movz x1, #32 // hv const_int val
+    bl hexa_heap_zalloc // call hexa_heap_zalloc
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
     stp x0, x1, [sp, #32] // hv store L2
+    ldp x0, x1, [sp, #32] // hv load L2
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    cmp x1, x3 // __hx_payload_eq: cmp payloads
+    cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
+    bl hexa_bool // __hx_payload_eq: box bool
+    stp x0, x1, [sp, #48] // hv store L3
+    ldp x0, x1, [sp, #48] // hv load L3
+    cbz x1, _Lef60_hexa_arr_zeros_leaf_bb2 // br_cond: !payload -> else
+    b _Lef60_hexa_arr_zeros_leaf_bb1 // branch -> then
+_Lef60_hexa_arr_zeros_leaf_bb1:
+    movz x0, #3 // hv const_str: TAG_STR
+    adrp x1, .LCstr0 // hv str ptr page
+    add x1, x1, :lo12:.LCstr0 // hv str ptr off
+    bl hexa_throw // call hexa_throw
+    stp x0, x1, [sp, #80] // hv store L5
+    b _Lef60_hexa_arr_zeros_leaf_bb2 // branch
+_Lef60_hexa_arr_zeros_leaf_bb2:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #5 // hv const_int val
     ldp x2, x3, [sp, #32] // hv load L2
     mov x0, x1 // __hx_make_val: lo = tag word
     mov x1, x3 // __hx_make_val: hi = payload word
-    stp x0, x1, [sp, #48] // hv store L3
-    ldp x0, x1, [sp, #48] // hv load L3
-    stp x0, x1, [sp, #64] // hv store L4
+    stp x0, x1, [sp, #96] // hv store L6
+    ldp x0, x1, [sp, #96] // hv load L6
+    stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #0] // hv load L0
     mov x1, x0 // __hx_tag: payload = v.tag
     movz x0, #0 // __hx_tag: TAG_INT
-    stp x0, x1, [sp, #80] // hv store L5
-    ldp x0, x1, [sp, #80] // hv load L5
-    stp x0, x1, [sp, #96] // hv store L6
+    stp x0, x1, [sp, #128] // hv store L8
+    ldp x0, x1, [sp, #128] // hv load L8
+    stp x0, x1, [sp, #144] // hv store L9
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
-    stp x0, x1, [sp, #112] // hv store L7
-    ldp x0, x1, [sp, #96] // hv load L6
+    stp x0, x1, [sp, #160] // hv store L10
+    ldp x0, x1, [sp, #144] // hv load L9
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     cmp x1, x3 // __hx_payload_eq: cmp payloads
     cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
     bl hexa_bool // __hx_payload_eq: box bool
-    stp x0, x1, [sp, #128] // hv store L8
-    ldp x0, x1, [sp, #128] // hv load L8
-    cbz x1, _L8cdb_hexa_arr_zeros_leaf_bb2 // br_cond: !payload -> else
-    b _L8cdb_hexa_arr_zeros_leaf_bb1 // branch -> then
-_L8cdb_hexa_arr_zeros_leaf_bb1:
+    stp x0, x1, [sp, #176] // hv store L11
+    ldp x0, x1, [sp, #176] // hv load L11
+    cbz x1, _Lef60_hexa_arr_zeros_leaf_bb4 // br_cond: !payload -> else
+    b _Lef60_hexa_arr_zeros_leaf_bb3 // branch -> then
+_Lef60_hexa_arr_zeros_leaf_bb3:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
     movz x0, #0 // __hx_payload_add: TAG_INT
+    stp x0, x1, [sp, #208] // hv store L13
+    ldp x0, x1, [sp, #208] // hv load L13
     stp x0, x1, [sp, #160] // hv store L10
-    ldp x0, x1, [sp, #160] // hv load L10
-    stp x0, x1, [sp, #112] // hv store L7
-    b _L8cdb_hexa_arr_zeros_leaf_bb3 // branch
-_L8cdb_hexa_arr_zeros_leaf_bb2:
+    b _Lef60_hexa_arr_zeros_leaf_bb5 // branch
+_Lef60_hexa_arr_zeros_leaf_bb4:
     ldp x0, x1, [sp, #0] // hv load L0
     fmov d0, x1 // __hx_payload_f2i: d0 = v.f bits
     fcvtzs x1, d0 // __hx_payload_f2i: x1 = (i64)trunc(v.f)
     movz x0, #0 // __hx_payload_f2i: TAG_INT
-    stp x0, x1, [sp, #176] // hv store L11
-    ldp x0, x1, [sp, #176] // hv load L11
-    stp x0, x1, [sp, #112] // hv store L7
-    b _L8cdb_hexa_arr_zeros_leaf_bb3 // branch
-_L8cdb_hexa_arr_zeros_leaf_bb3:
-    ldp x0, x1, [sp, #112] // hv load L7
+    stp x0, x1, [sp, #224] // hv store L14
+    ldp x0, x1, [sp, #224] // hv load L14
+    stp x0, x1, [sp, #160] // hv store L10
+    b _Lef60_hexa_arr_zeros_leaf_bb5 // branch
+_Lef60_hexa_arr_zeros_leaf_bb5:
+    ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
     cmp x1, x3 // __hx_payload_ge: cmp payloads
     cset x0, ge // __hx_payload_ge: x0 = (a.pl ge b.pl)
     bl hexa_bool // __hx_payload_ge: box bool
-    stp x0, x1, [sp, #192] // hv store L12
-    ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _L8cdb_hexa_arr_zeros_leaf_bb5 // br_cond: !payload -> else
-    b _L8cdb_hexa_arr_zeros_leaf_bb4 // branch -> then
-_L8cdb_hexa_arr_zeros_leaf_bb4:
-    ldp x0, x1, [sp, #112] // hv load L7
+    stp x0, x1, [sp, #240] // hv store L15
+    ldp x0, x1, [sp, #240] // hv load L15
+    cbz x1, _Lef60_hexa_arr_zeros_leaf_bb7 // br_cond: !payload -> else
+    b _Lef60_hexa_arr_zeros_leaf_bb6 // branch -> then
+_Lef60_hexa_arr_zeros_leaf_bb6:
+    ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #16 // hv const_int val
     mul x1, x1, x3 // __hx_payload_mul: x1 = a.pl mul b.pl
     movz x0, #0 // __hx_payload_mul: TAG_INT
-    stp x0, x1, [sp, #224] // hv store L14
-    ldp x0, x1, [sp, #224] // hv load L14
-    stp x0, x1, [sp, #240] // hv store L15
-    ldp x0, x1, [sp, #240] // hv load L15
-    bl malloc // call malloc
-    stp x0, x1, [sp, #256] // hv store L16
-    ldp x0, x1, [sp, #256] // hv load L16
     stp x0, x1, [sp, #272] // hv store L17
     ldp x0, x1, [sp, #272] // hv load L17
+    stp x0, x1, [sp, #288] // hv store L18
+    ldp x0, x1, [sp, #288] // hv load L18
+    bl hexa_heap_alloc // call hexa_heap_alloc
+    stp x0, x1, [sp, #304] // hv store L19
+    ldp x0, x1, [sp, #304] // hv load L19
+    stp x0, x1, [sp, #320] // hv store L20
+    ldp x0, x1, [sp, #320] // hv load L20
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     cmp x1, x3 // __hx_payload_eq: cmp payloads
     cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
     bl hexa_bool // __hx_payload_eq: box bool
-    stp x0, x1, [sp, #288] // hv store L18
-    ldp x0, x1, [sp, #288] // hv load L18
-    cbz x1, _L8cdb_hexa_arr_zeros_leaf_bb7 // br_cond: !payload -> else
-    b _L8cdb_hexa_arr_zeros_leaf_bb6 // branch -> then
-_L8cdb_hexa_arr_zeros_leaf_bb5:
-    ldp x0, x1, [sp, #64] // hv load L4
+    stp x0, x1, [sp, #336] // hv store L21
+    ldp x0, x1, [sp, #336] // hv load L21
+    cbz x1, _Lef60_hexa_arr_zeros_leaf_bb9 // br_cond: !payload -> else
+    b _Lef60_hexa_arr_zeros_leaf_bb8 // branch -> then
+_Lef60_hexa_arr_zeros_leaf_bb7:
+    ldp x0, x1, [sp, #112] // hv load L7
     add sp, sp, #608 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_L8cdb_hexa_arr_zeros_leaf_bb6:
+_Lef60_hexa_arr_zeros_leaf_bb8:
     movz x0, #3 // hv const_str: TAG_STR
-    adrp x1, .LCstr0@PAGE // hv str ptr page
-    add x1, x1, .LCstr0@PAGEOFF // hv str ptr off
-    movz x0, #0 // __hx_str_ptr: TAG_INT
-    stp x0, x1, [sp, #320] // hv store L20
-    ldp x0, x1, [sp, #320] // hv load L20
-    stp x0, x1, [sp, #336] // hv store L21
-    movz x0, #0 // hv const_int: TAG_INT
-    movz x1, #2 // hv const_int val
-    ldp x2, x3, [sp, #336] // hv load L21
-    movz x4, #0 // hv const_int: TAG_INT
-    movz x5, #27 // hv const_int val
-    bl write // call write
-    stp x0, x1, [sp, #352] // hv store L22
-    movz x0, #0 // hv const_int: TAG_INT
-    movz x1, #1 // hv const_int val
-    bl hexa_exit // call hexa_exit
+    adrp x1, .LCstr0 // hv str ptr page
+    add x1, x1, :lo12:.LCstr0 // hv str ptr off
+    bl hexa_throw // call hexa_throw
     stp x0, x1, [sp, #368] // hv store L23
-    b _L8cdb_hexa_arr_zeros_leaf_bb7 // branch
-_L8cdb_hexa_arr_zeros_leaf_bb7:
+    b _Lef60_hexa_arr_zeros_leaf_bb9 // branch
+_Lef60_hexa_arr_zeros_leaf_bb9:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #384] // hv store L24
-    ldp x0, x1, [sp, #112] // hv load L7
+    ldp x0, x1, [sp, #160] // hv load L10
     stp x0, x1, [sp, #400] // hv store L25
     ldp x0, x1, [sp, #400] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
@@ -148,20 +152,20 @@ _L8cdb_hexa_arr_zeros_leaf_bb7:
     stp x0, x1, [sp, #416] // hv store L26
     ldp x0, x1, [sp, #416] // hv load L26
     stp x0, x1, [sp, #432] // hv store L27
-    b _L8cdb_hexa_arr_zeros_leaf_bb8 // branch
-_L8cdb_hexa_arr_zeros_leaf_bb8:
+    b _Lef60_hexa_arr_zeros_leaf_bb10 // branch
+_Lef60_hexa_arr_zeros_leaf_bb10:
     ldp x0, x1, [sp, #432] // hv load L27
-    cbz x1, _L8cdb_hexa_arr_zeros_leaf_bb10 // br_cond: !payload -> else
-    b _L8cdb_hexa_arr_zeros_leaf_bb9 // branch -> then
-_L8cdb_hexa_arr_zeros_leaf_bb9:
-    ldp x0, x1, [sp, #272] // hv load L17
+    cbz x1, _Lef60_hexa_arr_zeros_leaf_bb12 // br_cond: !payload -> else
+    b _Lef60_hexa_arr_zeros_leaf_bb11 // branch -> then
+_Lef60_hexa_arr_zeros_leaf_bb11:
+    ldp x0, x1, [sp, #320] // hv load L20
     ldp x2, x3, [sp, #384] // hv load L24
     movz x4, #0 // hv const_int: TAG_INT
     movz x5, #1 // hv const_int val
     add x1, x1, x3 // __hx_ptr_store64: addr = ptr + off
     str x5, [x1] // __hx_ptr_store64: *(addr) = val
     movz x0, #0 // __hx_ptr_store64: TAG_INT (ret ptr)
-    ldp x0, x1, [sp, #272] // hv load L17
+    ldp x0, x1, [sp, #320] // hv load L20
     movz x0, #0 // __hx_ptr_store64: TAG_INT
     stp x0, x1, [sp, #448] // hv store L28
     ldp x0, x1, [sp, #384] // hv load L24
@@ -172,14 +176,14 @@ _L8cdb_hexa_arr_zeros_leaf_bb9:
     stp x0, x1, [sp, #464] // hv store L29
     ldp x0, x1, [sp, #464] // hv load L29
     stp x0, x1, [sp, #480] // hv store L30
-    ldp x0, x1, [sp, #272] // hv load L17
+    ldp x0, x1, [sp, #320] // hv load L20
     ldp x2, x3, [sp, #480] // hv load L30
     movz x4, #0 // hv const_int: TAG_INT
     movz x5, #0 // hv const_int val
     add x1, x1, x3 // __hx_ptr_store64: addr = ptr + off
     str x5, [x1] // __hx_ptr_store64: *(addr) = val
     movz x0, #0 // __hx_ptr_store64: TAG_INT (ret ptr)
-    ldp x0, x1, [sp, #272] // hv load L17
+    ldp x0, x1, [sp, #320] // hv load L20
     movz x0, #0 // __hx_ptr_store64: TAG_INT
     stp x0, x1, [sp, #496] // hv store L31
     ldp x0, x1, [sp, #384] // hv load L24
@@ -213,12 +217,12 @@ _L8cdb_hexa_arr_zeros_leaf_bb9:
     add x15, sp, #544 // hv frame base
     ldp x0, x1, [x15] // hv load L34
     stp x0, x1, [sp, #432] // hv store L27
-    b _L8cdb_hexa_arr_zeros_leaf_bb8 // branch
-_L8cdb_hexa_arr_zeros_leaf_bb10:
+    b _Lef60_hexa_arr_zeros_leaf_bb10 // branch
+_Lef60_hexa_arr_zeros_leaf_bb12:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
-    ldp x4, x5, [sp, #272] // hv load L17
+    ldp x4, x5, [sp, #320] // hv load L20
     add x1, x1, x3 // __hx_ptr_store64: addr = ptr + off
     str x5, [x1] // __hx_ptr_store64: *(addr) = val
     movz x0, #0 // __hx_ptr_store64: TAG_INT (ret ptr)
@@ -229,7 +233,7 @@ _L8cdb_hexa_arr_zeros_leaf_bb10:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #8 // hv const_int val
-    ldp x4, x5, [sp, #112] // hv load L7
+    ldp x4, x5, [sp, #160] // hv load L10
     add x1, x1, x3 // __hx_ptr_store64: addr = ptr + off
     str x5, [x1] // __hx_ptr_store64: *(addr) = val
     movz x0, #0 // __hx_ptr_store64: TAG_INT (ret ptr)
@@ -240,7 +244,7 @@ _L8cdb_hexa_arr_zeros_leaf_bb10:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #16 // hv const_int val
-    ldp x4, x5, [sp, #112] // hv load L7
+    ldp x4, x5, [sp, #160] // hv load L10
     add x1, x1, x3 // __hx_ptr_store64: addr = ptr + off
     str x5, [x1] // __hx_ptr_store64: *(addr) = val
     movz x0, #0 // __hx_ptr_store64: TAG_INT (ret ptr)
@@ -248,7 +252,7 @@ _L8cdb_hexa_arr_zeros_leaf_bb10:
     movz x0, #0 // __hx_ptr_store64: TAG_INT
     add x15, sp, #592 // hv frame base
     stp x0, x1, [x15] // hv store L37
-    b _L8cdb_hexa_arr_zeros_leaf_bb5 // branch
+    b _Lef60_hexa_arr_zeros_leaf_bb7 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #608 // sp adj
@@ -258,131 +262,134 @@ _L8cdb_hexa_arr_zeros_leaf_bb10:
 .hidden hexa_arr_zeros_leaf_int
     .p2align 2
 hexa_arr_zeros_leaf_int:
-    .loc 1 70 0
+    .loc 1 77 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
     sub sp, sp, #608 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_L8cdb_hexa_arr_zeros_leaf_int_bb0:
+_Lef60_hexa_arr_zeros_leaf_int_bb0:
     movz x0, #0 // hv const_int: TAG_INT
-    movz x1, #1 // hv const_int val
-    movz x2, #0 // hv const_int: TAG_INT
-    movz x3, #32 // hv const_int val
-    bl calloc // call calloc
+    movz x1, #32 // hv const_int val
+    bl hexa_heap_zalloc // call hexa_heap_zalloc
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
     stp x0, x1, [sp, #32] // hv store L2
+    ldp x0, x1, [sp, #32] // hv load L2
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    cmp x1, x3 // __hx_payload_eq: cmp payloads
+    cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
+    bl hexa_bool // __hx_payload_eq: box bool
+    stp x0, x1, [sp, #48] // hv store L3
+    ldp x0, x1, [sp, #48] // hv load L3
+    cbz x1, _Lef60_hexa_arr_zeros_leaf_int_bb2 // br_cond: !payload -> else
+    b _Lef60_hexa_arr_zeros_leaf_int_bb1 // branch -> then
+_Lef60_hexa_arr_zeros_leaf_int_bb1:
+    movz x0, #3 // hv const_str: TAG_STR
+    adrp x1, .LCstr1 // hv str ptr page
+    add x1, x1, :lo12:.LCstr1 // hv str ptr off
+    bl hexa_throw // call hexa_throw
+    stp x0, x1, [sp, #80] // hv store L5
+    b _Lef60_hexa_arr_zeros_leaf_int_bb2 // branch
+_Lef60_hexa_arr_zeros_leaf_int_bb2:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #5 // hv const_int val
     ldp x2, x3, [sp, #32] // hv load L2
     mov x0, x1 // __hx_make_val: lo = tag word
     mov x1, x3 // __hx_make_val: hi = payload word
-    stp x0, x1, [sp, #48] // hv store L3
-    ldp x0, x1, [sp, #48] // hv load L3
-    stp x0, x1, [sp, #64] // hv store L4
+    stp x0, x1, [sp, #96] // hv store L6
+    ldp x0, x1, [sp, #96] // hv load L6
+    stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #0] // hv load L0
     mov x1, x0 // __hx_tag: payload = v.tag
     movz x0, #0 // __hx_tag: TAG_INT
-    stp x0, x1, [sp, #80] // hv store L5
-    ldp x0, x1, [sp, #80] // hv load L5
-    stp x0, x1, [sp, #96] // hv store L6
+    stp x0, x1, [sp, #128] // hv store L8
+    ldp x0, x1, [sp, #128] // hv load L8
+    stp x0, x1, [sp, #144] // hv store L9
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
-    stp x0, x1, [sp, #112] // hv store L7
-    ldp x0, x1, [sp, #96] // hv load L6
+    stp x0, x1, [sp, #160] // hv store L10
+    ldp x0, x1, [sp, #144] // hv load L9
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     cmp x1, x3 // __hx_payload_eq: cmp payloads
     cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
     bl hexa_bool // __hx_payload_eq: box bool
-    stp x0, x1, [sp, #128] // hv store L8
-    ldp x0, x1, [sp, #128] // hv load L8
-    cbz x1, _L8cdb_hexa_arr_zeros_leaf_int_bb2 // br_cond: !payload -> else
-    b _L8cdb_hexa_arr_zeros_leaf_int_bb1 // branch -> then
-_L8cdb_hexa_arr_zeros_leaf_int_bb1:
+    stp x0, x1, [sp, #176] // hv store L11
+    ldp x0, x1, [sp, #176] // hv load L11
+    cbz x1, _Lef60_hexa_arr_zeros_leaf_int_bb4 // br_cond: !payload -> else
+    b _Lef60_hexa_arr_zeros_leaf_int_bb3 // branch -> then
+_Lef60_hexa_arr_zeros_leaf_int_bb3:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
     movz x0, #0 // __hx_payload_add: TAG_INT
+    stp x0, x1, [sp, #208] // hv store L13
+    ldp x0, x1, [sp, #208] // hv load L13
     stp x0, x1, [sp, #160] // hv store L10
-    ldp x0, x1, [sp, #160] // hv load L10
-    stp x0, x1, [sp, #112] // hv store L7
-    b _L8cdb_hexa_arr_zeros_leaf_int_bb3 // branch
-_L8cdb_hexa_arr_zeros_leaf_int_bb2:
+    b _Lef60_hexa_arr_zeros_leaf_int_bb5 // branch
+_Lef60_hexa_arr_zeros_leaf_int_bb4:
     ldp x0, x1, [sp, #0] // hv load L0
     fmov d0, x1 // __hx_payload_f2i: d0 = v.f bits
     fcvtzs x1, d0 // __hx_payload_f2i: x1 = (i64)trunc(v.f)
     movz x0, #0 // __hx_payload_f2i: TAG_INT
-    stp x0, x1, [sp, #176] // hv store L11
-    ldp x0, x1, [sp, #176] // hv load L11
-    stp x0, x1, [sp, #112] // hv store L7
-    b _L8cdb_hexa_arr_zeros_leaf_int_bb3 // branch
-_L8cdb_hexa_arr_zeros_leaf_int_bb3:
-    ldp x0, x1, [sp, #112] // hv load L7
+    stp x0, x1, [sp, #224] // hv store L14
+    ldp x0, x1, [sp, #224] // hv load L14
+    stp x0, x1, [sp, #160] // hv store L10
+    b _Lef60_hexa_arr_zeros_leaf_int_bb5 // branch
+_Lef60_hexa_arr_zeros_leaf_int_bb5:
+    ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
     cmp x1, x3 // __hx_payload_ge: cmp payloads
     cset x0, ge // __hx_payload_ge: x0 = (a.pl ge b.pl)
     bl hexa_bool // __hx_payload_ge: box bool
-    stp x0, x1, [sp, #192] // hv store L12
-    ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _L8cdb_hexa_arr_zeros_leaf_int_bb5 // br_cond: !payload -> else
-    b _L8cdb_hexa_arr_zeros_leaf_int_bb4 // branch -> then
-_L8cdb_hexa_arr_zeros_leaf_int_bb4:
-    ldp x0, x1, [sp, #112] // hv load L7
+    stp x0, x1, [sp, #240] // hv store L15
+    ldp x0, x1, [sp, #240] // hv load L15
+    cbz x1, _Lef60_hexa_arr_zeros_leaf_int_bb7 // br_cond: !payload -> else
+    b _Lef60_hexa_arr_zeros_leaf_int_bb6 // branch -> then
+_Lef60_hexa_arr_zeros_leaf_int_bb6:
+    ldp x0, x1, [sp, #160] // hv load L10
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #16 // hv const_int val
     mul x1, x1, x3 // __hx_payload_mul: x1 = a.pl mul b.pl
     movz x0, #0 // __hx_payload_mul: TAG_INT
-    stp x0, x1, [sp, #224] // hv store L14
-    ldp x0, x1, [sp, #224] // hv load L14
-    stp x0, x1, [sp, #240] // hv store L15
-    ldp x0, x1, [sp, #240] // hv load L15
-    bl malloc // call malloc
-    stp x0, x1, [sp, #256] // hv store L16
-    ldp x0, x1, [sp, #256] // hv load L16
     stp x0, x1, [sp, #272] // hv store L17
     ldp x0, x1, [sp, #272] // hv load L17
+    stp x0, x1, [sp, #288] // hv store L18
+    ldp x0, x1, [sp, #288] // hv load L18
+    bl hexa_heap_alloc // call hexa_heap_alloc
+    stp x0, x1, [sp, #304] // hv store L19
+    ldp x0, x1, [sp, #304] // hv load L19
+    stp x0, x1, [sp, #320] // hv store L20
+    ldp x0, x1, [sp, #320] // hv load L20
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     cmp x1, x3 // __hx_payload_eq: cmp payloads
     cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
     bl hexa_bool // __hx_payload_eq: box bool
-    stp x0, x1, [sp, #288] // hv store L18
-    ldp x0, x1, [sp, #288] // hv load L18
-    cbz x1, _L8cdb_hexa_arr_zeros_leaf_int_bb7 // br_cond: !payload -> else
-    b _L8cdb_hexa_arr_zeros_leaf_int_bb6 // branch -> then
-_L8cdb_hexa_arr_zeros_leaf_int_bb5:
-    ldp x0, x1, [sp, #64] // hv load L4
+    stp x0, x1, [sp, #336] // hv store L21
+    ldp x0, x1, [sp, #336] // hv load L21
+    cbz x1, _Lef60_hexa_arr_zeros_leaf_int_bb9 // br_cond: !payload -> else
+    b _Lef60_hexa_arr_zeros_leaf_int_bb8 // branch -> then
+_Lef60_hexa_arr_zeros_leaf_int_bb7:
+    ldp x0, x1, [sp, #112] // hv load L7
     add sp, sp, #608 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_L8cdb_hexa_arr_zeros_leaf_int_bb6:
+_Lef60_hexa_arr_zeros_leaf_int_bb8:
     movz x0, #3 // hv const_str: TAG_STR
-    adrp x1, .LCstr1@PAGE // hv str ptr page
-    add x1, x1, .LCstr1@PAGEOFF // hv str ptr off
-    movz x0, #0 // __hx_str_ptr: TAG_INT
-    stp x0, x1, [sp, #320] // hv store L20
-    ldp x0, x1, [sp, #320] // hv load L20
-    stp x0, x1, [sp, #336] // hv store L21
-    movz x0, #0 // hv const_int: TAG_INT
-    movz x1, #2 // hv const_int val
-    ldp x2, x3, [sp, #336] // hv load L21
-    movz x4, #0 // hv const_int: TAG_INT
-    movz x5, #31 // hv const_int val
-    bl write // call write
-    stp x0, x1, [sp, #352] // hv store L22
-    movz x0, #0 // hv const_int: TAG_INT
-    movz x1, #1 // hv const_int val
-    bl hexa_exit // call hexa_exit
+    adrp x1, .LCstr1 // hv str ptr page
+    add x1, x1, :lo12:.LCstr1 // hv str ptr off
+    bl hexa_throw // call hexa_throw
     stp x0, x1, [sp, #368] // hv store L23
-    b _L8cdb_hexa_arr_zeros_leaf_int_bb7 // branch
-_L8cdb_hexa_arr_zeros_leaf_int_bb7:
+    b _Lef60_hexa_arr_zeros_leaf_int_bb9 // branch
+_Lef60_hexa_arr_zeros_leaf_int_bb9:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     stp x0, x1, [sp, #384] // hv store L24
-    ldp x0, x1, [sp, #112] // hv load L7
+    ldp x0, x1, [sp, #160] // hv load L10
     stp x0, x1, [sp, #400] // hv store L25
     ldp x0, x1, [sp, #400] // hv load L25
     movz x2, #0 // hv const_int: TAG_INT
@@ -393,20 +400,20 @@ _L8cdb_hexa_arr_zeros_leaf_int_bb7:
     stp x0, x1, [sp, #416] // hv store L26
     ldp x0, x1, [sp, #416] // hv load L26
     stp x0, x1, [sp, #432] // hv store L27
-    b _L8cdb_hexa_arr_zeros_leaf_int_bb8 // branch
-_L8cdb_hexa_arr_zeros_leaf_int_bb8:
+    b _Lef60_hexa_arr_zeros_leaf_int_bb10 // branch
+_Lef60_hexa_arr_zeros_leaf_int_bb10:
     ldp x0, x1, [sp, #432] // hv load L27
-    cbz x1, _L8cdb_hexa_arr_zeros_leaf_int_bb10 // br_cond: !payload -> else
-    b _L8cdb_hexa_arr_zeros_leaf_int_bb9 // branch -> then
-_L8cdb_hexa_arr_zeros_leaf_int_bb9:
-    ldp x0, x1, [sp, #272] // hv load L17
+    cbz x1, _Lef60_hexa_arr_zeros_leaf_int_bb12 // br_cond: !payload -> else
+    b _Lef60_hexa_arr_zeros_leaf_int_bb11 // branch -> then
+_Lef60_hexa_arr_zeros_leaf_int_bb11:
+    ldp x0, x1, [sp, #320] // hv load L20
     ldp x2, x3, [sp, #384] // hv load L24
     movz x4, #0 // hv const_int: TAG_INT
     movz x5, #0 // hv const_int val
     add x1, x1, x3 // __hx_ptr_store64: addr = ptr + off
     str x5, [x1] // __hx_ptr_store64: *(addr) = val
     movz x0, #0 // __hx_ptr_store64: TAG_INT (ret ptr)
-    ldp x0, x1, [sp, #272] // hv load L17
+    ldp x0, x1, [sp, #320] // hv load L20
     movz x0, #0 // __hx_ptr_store64: TAG_INT
     stp x0, x1, [sp, #448] // hv store L28
     ldp x0, x1, [sp, #384] // hv load L24
@@ -417,14 +424,14 @@ _L8cdb_hexa_arr_zeros_leaf_int_bb9:
     stp x0, x1, [sp, #464] // hv store L29
     ldp x0, x1, [sp, #464] // hv load L29
     stp x0, x1, [sp, #480] // hv store L30
-    ldp x0, x1, [sp, #272] // hv load L17
+    ldp x0, x1, [sp, #320] // hv load L20
     ldp x2, x3, [sp, #480] // hv load L30
     movz x4, #0 // hv const_int: TAG_INT
     movz x5, #0 // hv const_int val
     add x1, x1, x3 // __hx_ptr_store64: addr = ptr + off
     str x5, [x1] // __hx_ptr_store64: *(addr) = val
     movz x0, #0 // __hx_ptr_store64: TAG_INT (ret ptr)
-    ldp x0, x1, [sp, #272] // hv load L17
+    ldp x0, x1, [sp, #320] // hv load L20
     movz x0, #0 // __hx_ptr_store64: TAG_INT
     stp x0, x1, [sp, #496] // hv store L31
     ldp x0, x1, [sp, #384] // hv load L24
@@ -458,12 +465,12 @@ _L8cdb_hexa_arr_zeros_leaf_int_bb9:
     add x15, sp, #544 // hv frame base
     ldp x0, x1, [x15] // hv load L34
     stp x0, x1, [sp, #432] // hv store L27
-    b _L8cdb_hexa_arr_zeros_leaf_int_bb8 // branch
-_L8cdb_hexa_arr_zeros_leaf_int_bb10:
+    b _Lef60_hexa_arr_zeros_leaf_int_bb10 // branch
+_Lef60_hexa_arr_zeros_leaf_int_bb12:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
-    ldp x4, x5, [sp, #272] // hv load L17
+    ldp x4, x5, [sp, #320] // hv load L20
     add x1, x1, x3 // __hx_ptr_store64: addr = ptr + off
     str x5, [x1] // __hx_ptr_store64: *(addr) = val
     movz x0, #0 // __hx_ptr_store64: TAG_INT (ret ptr)
@@ -474,7 +481,7 @@ _L8cdb_hexa_arr_zeros_leaf_int_bb10:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #8 // hv const_int val
-    ldp x4, x5, [sp, #112] // hv load L7
+    ldp x4, x5, [sp, #160] // hv load L10
     add x1, x1, x3 // __hx_ptr_store64: addr = ptr + off
     str x5, [x1] // __hx_ptr_store64: *(addr) = val
     movz x0, #0 // __hx_ptr_store64: TAG_INT (ret ptr)
@@ -485,7 +492,7 @@ _L8cdb_hexa_arr_zeros_leaf_int_bb10:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #16 // hv const_int val
-    ldp x4, x5, [sp, #112] // hv load L7
+    ldp x4, x5, [sp, #160] // hv load L10
     add x1, x1, x3 // __hx_ptr_store64: addr = ptr + off
     str x5, [x1] // __hx_ptr_store64: *(addr) = val
     movz x0, #0 // __hx_ptr_store64: TAG_INT (ret ptr)
@@ -493,7 +500,7 @@ _L8cdb_hexa_arr_zeros_leaf_int_bb10:
     movz x0, #0 // __hx_ptr_store64: TAG_INT
     add x15, sp, #592 // hv frame base
     stp x0, x1, [x15] // hv store L37
-    b _L8cdb_hexa_arr_zeros_leaf_int_bb5 // branch
+    b _Lef60_hexa_arr_zeros_leaf_int_bb7 // branch
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
     add sp, sp, #608 // sp adj
@@ -502,11 +509,11 @@ _L8cdb_hexa_arr_zeros_leaf_int_bb10:
 .section .rodata
 .LCstr0:
     .byte 0x4f, 0x4f, 0x4d, 0x20, 0x69, 0x6e, 0x20, 0x68, 0x65, 0x78, 0x61, 0x5f, 0x61, 0x72, 0x72, 0x5f
-    .byte 0x7a, 0x65, 0x72, 0x6f, 0x73, 0x5f, 0x6c, 0x65, 0x61, 0x66, 0x0a, 0x00
+    .byte 0x7a, 0x65, 0x72, 0x6f, 0x73, 0x5f, 0x6c, 0x65, 0x61, 0x66, 0x00
 .section .rodata
 .LCstr1:
     .byte 0x4f, 0x4f, 0x4d, 0x20, 0x69, 0x6e, 0x20, 0x68, 0x65, 0x78, 0x61, 0x5f, 0x61, 0x72, 0x72, 0x5f
-    .byte 0x7a, 0x65, 0x72, 0x6f, 0x73, 0x5f, 0x6c, 0x65, 0x61, 0x66, 0x5f, 0x69, 0x6e, 0x74, 0x0a, 0x00
+    .byte 0x7a, 0x65, 0x72, 0x6f, 0x73, 0x5f, 0x6c, 0x65, 0x61, 0x66, 0x5f, 0x69, 0x6e, 0x74, 0x00
 .section .hexa.cap,"",@progbits
 _hexa_cap_manifest:
 .section .hexa.abi,"",@progbits
