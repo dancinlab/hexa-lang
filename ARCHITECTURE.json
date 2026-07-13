@@ -479,6 +479,13 @@
     "value": "own-link crt1-handoff(Road A dyn) 경로는 C-ABI main 트램폴린이 필요하다. hexa fn(main 포함)은 16B HexaVal pair를 x0=tag/x1=payload로 반환·TAG_INT=0. crt1의 __libc_start_main은 main을 C-ABI int main()으로 보고 x0(tag=0)를 반환값으로 읽어 exit(0). 정적 hand-stub은 x1(payload)를 mov x0,x1으로 읽어 42를 냈으나 crt1 경로엔 어댑터 부재. fix=text offset0에 24B+8pad 트램폴린(stp/mov x29/bl real-main/mov x0,x1/ldp/ret)+main def를 트램폴린(def_off=0)으로 리다이렉트·main_off=실제body(bl패치). codegen 무변경. summer RC=42 확인.",
     "threshold": "재발=own-link dyn(crt1-handoff) 프로그램이 main return 대신 0(TAG_INT)으로 exit(정적경로는 정상). 판정=qemu rc가 main 반환값 불일치(특히 0). 해결=crt_handoff에 C-ABI 트램폴린(payload x1→x0)+main def 리다이렉트. x86 link_elf_x86_64_ownstart 동일 gap(sibling). --linker=hexa opt-in→shipped byteeq 무영향.",
     "source": "compiler/emit/elf_arm64.hexa"
+   },
+   {
+    "id": "action-yml-1",
+    "state": "pos-conv",
+    "value": "self-hosted 3러너가 mini 디스크 1개를 공유하는데 ccache가 무제한 성장 + 각 잡이 actions/cache로 수GB tzst를 동시 압축해제(피크 = tzst + 추출본 동시 점유) → 87% 찬 디스크에서 ENOSPC. 터지는 지점이 캐시 복원 한복판이라 워커가 완료보고 없이 죽고, GitHub은 잡을 in_progress로 영구 고착(고아)시킴 → PR 체크가 diff와 무관한 RED로 도배됨. 2026-07-13 실측: #4930에 가짜 RED 15개 + 고아 런 6개(9시간 고착) + mini 재부팅. 재실행만으로 15 RED→2(advisory)로 복구 = 코드 무죄 확증. FIX: ccache-setup 액션(모든 무거운 잡의 단일 통과점)에 (a) CCACHE_MAXSIZE 상한 항상 적용(무제한 성장 차단·LRU 축출은 byteeq 중립 — 미스는 재컴파일일 뿐) (b) 복원 前 디스크 헤드룸 가드: floor(15GiB) 미만이면 prune, hard floor(5GiB) 미만이면 fail-fast로 원인을 로그에 남기고 거부(한복판 ENOSPC 고아화 방지).",
+    "threshold": "재발조건: 러너 호스트 여유공간이 낮은 상태에서 self-hosted 잡 동시 실행. 진단: 3타깃 전부 RED인데 base가 최신(behind=0)이면 코드 결함이 아니라 인프라를 의심 — gh run view --log-failed | grep -i 'no space left'; 고아 잡(in_progress 수시간)이 함께 보이면 확진. 해결: 고아 런 취소 → 공간 회수 → rerun --failed로 참-판정. commons infra-wall-noneval = 인프라벽은 평가 판정에서 격리.",
+    "source": ".github/actions/ccache-setup/action.yml"
    }
   ]
  },

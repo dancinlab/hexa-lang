@@ -30,11 +30,36 @@ description: >-
 #                            we do NOT want __DATE__/__TIME__ leniency; the build
 #                            uses neither, and strictness keeps determinism.
 
+# ── DISK SAFETY (why the cache is bounded + gated on free space) ──────────────
+# The self-hosted lane runs THREE runners on ONE box sharing ONE disk, and each
+# job restores its own ccache through actions/cache — which needs room for the
+# .tzst AND the extracted tree at the same time, so a concurrent round multiplies
+# the peak. An unbounded ccache grows forever, and once the box crosses its
+# headroom the restore dies mid-extraction on a bare ENOSPC: the worker is killed
+# without reporting completion, GitHub pins the job `in_progress` forever
+# (orphaned), and every check on the PR reads RED for reasons that have nothing
+# to do with the diff (2026-07-13: 15 false REDs + 6 orphaned runs).
+#   max-size    — caps the directory so the cache cannot eat a shared disk.
+#   min-free-gb — refuses to start a restore that cannot fit, naming the cause,
+#                 instead of dying cryptically halfway through the extraction.
+
 inputs:
   key-prefix:
     description: Cache key namespace (lets a job opt into its own cache lane).
     required: false
     default: ccache
+  max-size:
+    description: >-
+      Hard cap on the ccache directory. Bounds the restored AND saved tarball so
+      a long-lived shared self-hosted disk cannot be eaten by cache growth.
+    required: false
+    default: "5G"
+  min-free-gb:
+    description: >-
+      Free-space floor (GiB) demanded before the cache restore. Under it, the
+      regenerable state is pruned first; still under the hard floor -> fail fast.
+    required: false
+    default: "15"
 
 runs:
   using: composite
@@ -70,6 +95,38 @@ runs:
         fi
         command -v ccache >/dev/null 2>&1 && ccache --version | head -1 || true
 
+    - name: Disk headroom guard (shared self-hosted disk)
+      shell: bash
+      run: |
+        set -euo pipefail
+        free_gb() { df -Pk "$1" | awk 'NR==2 {printf "%d", $4/1048576}'; }
+        CCDIR='${{ steps.cc.outputs.ccdir }}'
+        floor='${{ inputs.min-free-gb }}'
+        have=$(free_gb "$CCDIR")
+        echo "disk: ${have}GiB free (floor ${floor}GiB) before ccache restore"
+
+        if [ "$have" -lt "$floor" ]; then
+          echo "::warning::low disk (${have}GiB < ${floor}GiB) — pruning regenerable state before the restore"
+          # Bound the cache and evict down to the cap. Both are pure cache ops:
+          # a miss just recompiles, it cannot change the emitted bytes.
+          if command -v ccache >/dev/null 2>&1; then
+            ccache --max-size='${{ inputs.max-size }}' >/dev/null 2>&1 || true
+            ccache --cleanup                           >/dev/null 2>&1 || true
+          fi
+          # Leftover per-run temp from a killed predecessor; regenerated per job.
+          [ -n "${RUNNER_TEMP:-}" ] && rm -rf "${RUNNER_TEMP:?}"/* 2>/dev/null || true
+          have=$(free_gb "$CCDIR")
+          echo "disk: ${have}GiB free after prune"
+        fi
+
+        # Hard floor. Below this the .tzst extraction cannot land, and a
+        # mid-extraction ENOSPC orphans the job — so refuse here, loudly, where
+        # the message still reaches the log.
+        if [ "$have" -lt 5 ]; then
+          echo "::error::runner out of disk (${have}GiB free) — refusing the ccache restore, which would die mid-extraction on ENOSPC and orphan this job as a phantom RED. Free space on this runner host."
+          exit 1
+        fi
+
     - name: Restore ccache
       uses: actions/cache@v4
       with:
@@ -90,6 +147,10 @@ runs:
           echo "CCACHE_NOHASHDIR=1"
           echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}"
           echo "CCACHE_COMPILERCHECK=content"
+          # Bound the cache on EVERY run, not just when the guard above fires:
+          # unbounded growth is what walks a shared self-hosted disk into ENOSPC.
+          # Eviction is LRU and byteeq-neutral (an evicted entry just recompiles).
+          echo "CCACHE_MAXSIZE=${{ inputs.max-size }}"
         } >> "$GITHUB_ENV"
         # Zero the per-run hit/miss counters so the post-build `ccache -s`
         # reports THIS run's hit-rate (cache size carries over; stats reset).
