@@ -22,15 +22,26 @@
 // stage_resolve_runtime_a resolve_native_array_zeros_leaf_seed. nm contract = hexa_arr_zeros_leaf,
 // hexa_arr_zeros_leaf_int. U-floor = { malloc, calloc, write, exit }.
 
-extern fn malloc(n: int) -> int
-extern fn calloc(cnt: int, size: int) -> int
-extern fn write(fd: int, buf: int, n: int) -> int
-extern fn exit(code: int)
+// ★ CARRIERS ONLY — never a raw libc extern. aprime lowers every seed call to a (tag,payload)
+// pair, but a raw libc U-symbol binds to the C-ABI body: it reads rdi (which carries the seed's
+// TAG) as its first scalar and returns the pointer in rax ALONE, while the seed reads the payload
+// out of the dead rdx. Measured on the pre-fix seed, 3/3: linux-x86_64 exits 1 (its own OOM guard
+// sees the garbage as NULL), darwin-arm64 returns a silently-wrong array. The sibling array_new
+// seed died the same way and took #4930 down on all 3 targets.
+// ⚠️ hexa_heap_*, NOT hexa_ptr_alloc: the latter is ARENA (alloc_syscall_native.o wins the link and
+// delegates to hexa_arena_alloc). A descriptor escapes its frame, so an arena descriptor gets reused
+// after the rewind and its len/cap are silently overwritten.
+// The OOM stderr message is dropped: a raw write(2,..) is the same miscompile and there is no
+// HexaVal-ABI raw-buffer stderr write. hexa_throw carries the same abort semantics (and a message).
+extern fn hexa_heap_alloc(n: int) -> int      // malloc — HEAP, never arena
+extern fn hexa_heap_zalloc(n: int) -> int     // calloc(1,n) — zeroed; descriptor class
+extern fn hexa_throw(v: HexaVal)              // HexaVal-ABI — OOM
 
 // hexa_arr_zeros_leaf(nv): boxed [f64]-style zeros array — n FLOAT(0.0) elements. calloc the descriptor,
 // malloc the 16B*n items run, fill each with {TAG_FLOAT, 0}, set len/cap. n<=0 → empty descriptor (matches C).
 pub fn hexa_arr_zeros_leaf(nv: HexaVal) -> HexaVal {
-    let a = calloc(1, 32)                        // zeroed HexaArr: items@0 len@8 cap@16 heap_water@24
+    let a = hexa_heap_zalloc(32)                 // zeroed HexaArr: items@0 len@8 cap@16 heap_water@24
+    if __hx_payload_eq(a, 0) { hexa_throw("OOM in hexa_arr_zeros_leaf") }
     let out = __hx_make_val(5, a)                // TAG_ARRAY=5, payload = descriptor ptr
     let t = __hx_tag(nv)
     let mut n = 0
@@ -41,12 +52,8 @@ pub fn hexa_arr_zeros_leaf(nv: HexaVal) -> HexaVal {
     }
     if __hx_payload_ge(n, 1) {
         let bytes = __hx_payload_mul(n, 16)      // sizeof(HexaVal) * n
-        let items = malloc(bytes)
-        if __hx_payload_eq(items, 0) {
-            let msg = __hx_str_ptr("OOM in hexa_arr_zeros_leaf\n")
-            write(2, msg, 27)
-            exit(1)
-        }
+        let items = hexa_heap_alloc(bytes)
+        if __hx_payload_eq(items, 0) { hexa_throw("OOM in hexa_arr_zeros_leaf") }
         let mut off = 0
         let mut rem = n
         let mut go = __hx_payload_ge(rem, 1)
@@ -68,7 +75,8 @@ pub fn hexa_arr_zeros_leaf(nv: HexaVal) -> HexaVal {
 // hexa_arr_zeros_leaf_int(nv): boxed [i64]-style zeros array — n INT(0) elements. Identical to the float
 // variant except the element tag word is TAG_INT=0 (and the OOM message).
 pub fn hexa_arr_zeros_leaf_int(nv: HexaVal) -> HexaVal {
-    let a = calloc(1, 32)
+    let a = hexa_heap_zalloc(32)
+    if __hx_payload_eq(a, 0) { hexa_throw("OOM in hexa_arr_zeros_leaf_int") }
     let out = __hx_make_val(5, a)
     let t = __hx_tag(nv)
     let mut n = 0
@@ -79,12 +87,8 @@ pub fn hexa_arr_zeros_leaf_int(nv: HexaVal) -> HexaVal {
     }
     if __hx_payload_ge(n, 1) {
         let bytes = __hx_payload_mul(n, 16)
-        let items = malloc(bytes)
-        if __hx_payload_eq(items, 0) {
-            let msg = __hx_str_ptr("OOM in hexa_arr_zeros_leaf_int\n")
-            write(2, msg, 31)
-            exit(1)
-        }
+        let items = hexa_heap_alloc(bytes)
+        if __hx_payload_eq(items, 0) { hexa_throw("OOM in hexa_arr_zeros_leaf_int") }
         let mut off = 0
         let mut rem = n
         let mut go = __hx_payload_ge(rem, 1)

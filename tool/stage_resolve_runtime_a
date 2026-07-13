@@ -626,6 +626,19 @@ resolve_native_array_typed_leaf_seed() {
     local s_tmp="build/array_typed_leaf_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
     if $CC -c "$s_tmp" -o build/array_typed_leaf_native.o 2>/dev/null; then
+        # ★ U-FLOOR GATE on the .s-seed path — the DEFAULT ship path. Until now only the own-obj
+        # branch checked this, so a raw libc U-symbol entered the shipped runtime.a unchecked.
+        # That is how the class-A pair-vs-C-ABI miscompile shipped: aprime lowers seed calls to
+        # (tag,payload) pairs, but a libc U binds to the C-ABI body, so args land in the wrong regs
+        # and the returned pointer (rax/x0 alone) is dropped for garbage in the dead second register.
+        # ALLOWED = HexaVal-ABI carriers + the backend\'s own hexa_bool leaf-truth helper. A raw libc
+        # name (or hexa_int, itself a C-ABI scalar) is a MISCOMPILE, not a sanctioned floor entrant.
+        local _sbad; _sbad="$(nm build/array_typed_leaf_native.o 2>/dev/null | awk \'$1=="U"||$2=="U"{print $NF}\' | while read -r u; do
+            b="${u#_}"; printf \'%s\n\' " hexa_heap_alloc hexa_heap_realloc hexa_throw hexa_bool " | grep -q " $b " || echo "$b"; done | tr \'\n\' \' \')"
+        if [ -n "${_sbad// /}" ]; then
+            echo "[stage_resolve_runtime_a] ARR-I64: FATAL U-floor breach in $seed — non-carrier undefined externals ($_sbad). A raw libc U here is a pair-vs-C-ABI miscompile, not a floor entrant. Regen the seed (its ALLOWED_U is carrier-only)." >&2
+            return 1
+        fi
         export HEXA_RT_ARRAY_I64_LEAF_NATIVE=1
         echo "[stage_resolve_runtime_a] ARR-I64: assembled build/array_typed_leaf_native.o from $seed (TARGET=$tgt, 4 dispatchers) → native i64 array path"
     else
@@ -698,6 +711,19 @@ resolve_native_array_new_seed() {
     local s_tmp="build/array_new_leaf_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
     if $CC -c "$s_tmp" -o build/array_new_leaf_native.o 2>/dev/null; then
+        # ★ U-FLOOR GATE on the .s-seed path — the DEFAULT ship path. Until now only the own-obj
+        # branch checked this, so a raw libc U-symbol entered the shipped runtime.a unchecked.
+        # That is how the class-A pair-vs-C-ABI miscompile shipped: aprime lowers seed calls to
+        # (tag,payload) pairs, but a libc U binds to the C-ABI body, so args land in the wrong regs
+        # and the returned pointer (rax/x0 alone) is dropped for garbage in the dead second register.
+        # ALLOWED = HexaVal-ABI carriers + the backend\'s own hexa_bool leaf-truth helper. A raw libc
+        # name (or hexa_int, itself a C-ABI scalar) is a MISCOMPILE, not a sanctioned floor entrant.
+        local _sbad; _sbad="$(nm build/array_new_leaf_native.o 2>/dev/null | awk \'$1=="U"||$2=="U"{print $NF}\' | while read -r u; do
+            b="${u#_}"; printf \'%s\n\' " hexa_heap_zalloc hexa_exit hexa_bool " | grep -q " $b " || echo "$b"; done | tr \'\n\' \' \')"
+        if [ -n "${_sbad// /}" ]; then
+            echo "[stage_resolve_runtime_a] ARR-NEW: FATAL U-floor breach in $seed — non-carrier undefined externals ($_sbad). A raw libc U here is a pair-vs-C-ABI miscompile, not a floor entrant. Regen the seed (its ALLOWED_U is carrier-only)." >&2
+            return 1
+        fi
         export HEXA_RT_ARRAY_NEW_NATIVE=1
         echo "[stage_resolve_runtime_a] ARR-NEW: assembled build/array_new_leaf_native.o from $seed (TARGET=$tgt, 1 constructor) → native hexa_array_new path"
     else
@@ -761,6 +787,19 @@ resolve_native_array_zeros_leaf_seed() {
     local s_tmp="build/arr_zeros_leaf_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
     if $CC -c "$s_tmp" -o build/arr_zeros_leaf_native.o 2>/dev/null; then
+        # ★ U-FLOOR GATE on the .s-seed path — the DEFAULT ship path. Until now only the own-obj
+        # branch checked this, so a raw libc U-symbol entered the shipped runtime.a unchecked.
+        # That is how the class-A pair-vs-C-ABI miscompile shipped: aprime lowers seed calls to
+        # (tag,payload) pairs, but a libc U binds to the C-ABI body, so args land in the wrong regs
+        # and the returned pointer (rax/x0 alone) is dropped for garbage in the dead second register.
+        # ALLOWED = HexaVal-ABI carriers + the backend\'s own hexa_bool leaf-truth helper. A raw libc
+        # name (or hexa_int, itself a C-ABI scalar) is a MISCOMPILE, not a sanctioned floor entrant.
+        local _sbad; _sbad="$(nm build/arr_zeros_leaf_native.o 2>/dev/null | awk \'$1=="U"||$2=="U"{print $NF}\' | while read -r u; do
+            b="${u#_}"; printf \'%s\n\' " hexa_heap_alloc hexa_heap_zalloc hexa_throw hexa_bool " | grep -q " $b " || echo "$b"; done | tr \'\n\' \' \')"
+        if [ -n "${_sbad// /}" ]; then
+            echo "[stage_resolve_runtime_a] ARR-ZEROS: FATAL U-floor breach in $seed — non-carrier undefined externals ($_sbad). A raw libc U here is a pair-vs-C-ABI miscompile, not a floor entrant. Regen the seed (its ALLOWED_U is carrier-only)." >&2
+            return 1
+        fi
         export HEXA_RT_ARRAY_ZEROS_LEAF_NATIVE=1
         echo "[stage_resolve_runtime_a] ARR-ZEROS: assembled build/arr_zeros_leaf_native.o from $seed (TARGET=$tgt, 2 constructors) → native boxed-zeros path"
     else
@@ -817,6 +856,19 @@ resolve_native_array_f64_leaf_seed() {
     local s_tmp="build/array_typed_leaf_f64_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
     if $CC -c "$s_tmp" -o build/array_typed_leaf_f64_native.o 2>/dev/null; then
+        # ★ U-FLOOR GATE on the .s-seed path — the DEFAULT ship path. Until now only the own-obj
+        # branch checked this, so a raw libc U-symbol entered the shipped runtime.a unchecked.
+        # That is how the class-A pair-vs-C-ABI miscompile shipped: aprime lowers seed calls to
+        # (tag,payload) pairs, but a libc U binds to the C-ABI body, so args land in the wrong regs
+        # and the returned pointer (rax/x0 alone) is dropped for garbage in the dead second register.
+        # ALLOWED = HexaVal-ABI carriers + the backend\'s own hexa_bool leaf-truth helper. A raw libc
+        # name (or hexa_int, itself a C-ABI scalar) is a MISCOMPILE, not a sanctioned floor entrant.
+        local _sbad; _sbad="$(nm build/array_typed_leaf_f64_native.o 2>/dev/null | awk \'$1=="U"||$2=="U"{print $NF}\' | while read -r u; do
+            b="${u#_}"; printf \'%s\n\' " hexa_heap_alloc hexa_heap_realloc hexa_throw hexa_bool " | grep -q " $b " || echo "$b"; done | tr \'\n\' \' \')"
+        if [ -n "${_sbad// /}" ]; then
+            echo "[stage_resolve_runtime_a] ARR-F64: FATAL U-floor breach in $seed — non-carrier undefined externals ($_sbad). A raw libc U here is a pair-vs-C-ABI miscompile, not a floor entrant. Regen the seed (its ALLOWED_U is carrier-only)." >&2
+            return 1
+        fi
         export HEXA_RT_ARRAY_F64_LEAF_NATIVE=1
         echo "[stage_resolve_runtime_a] ARR-F64: assembled build/array_typed_leaf_f64_native.o from $seed (TARGET=$tgt, 4 dispatchers) → native f64 array path"
     else
