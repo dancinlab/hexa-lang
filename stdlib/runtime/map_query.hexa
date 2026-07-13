@@ -1,0 +1,157 @@
+// Runtime-prelude imports — pull the rt_map_* delegate BODIES (+ their reachable
+// closure) into this seed's compile so `--keep-global=<8> --isolate` can absorb them
+// as STB_LOCAL (self-contained seed). Seed-only source (imported by nothing); these
+// imports affect ONLY the own-obj seed emit, never a default build.
+import "ctype.hexa"
+import "math.hexa"
+import "thread.hexa"
+import "net.hexa"
+import "posix.hexa"
+import "numeric.hexa"
+import "regex_rt.hexa"
+import "io.hexa"
+
+// stdlib/runtime/map_query.hexa — axis-② B3 map-query DISPATCHER natives.
+//
+// The hexa-source bodies for 8 of the 9 thin map query/projection DISPATCHERS
+// (hexa_map_keys / values / entries / map_values / filter_keys / count / any /
+// all) that runtime_core.c externs away under the narrow
+// HEXA_RT_CORE_MAP_QUERY_DISPATCH_NATIVE guard. Each body is the EXACT C
+// dispatcher (self/native/rtcore_map-query-dispatch_emit.hexa:105-146)
+// re-authored native: HX_MAP_TBL null-guard + delegate to the ALREADY-hexa-source
+// rt_map_* body in stdlib/runtime/numeric.hexa. hexa_map_contains_key is NOT here
+// — its (HexaVal, const char*) -> int MIXED C-ABI cannot ride the pair-model or
+// the Route C all-raw whitelist; it stays a C-carrier body behind the separate
+// HEXA_RT_CORE_MAP_QUERY_CONTAINS_NATIVE sub-guard (named follow-on wall:
+// per-param C-ABI codegen annotation).
+//
+// ABI (the array_core.hexa:32 native-edge rule): every fn below is pair-model —
+// each HexaVal param is a {tag,payload} register pair, return is a pair — which
+// IS the SysV/AAPCS64 C ABI for HexaVal(HexaVal...) signatures, so the C call
+// sites in the emitted runtime link against these bodies unchanged.
+//
+// !HX_MAP_TBL(m)  <=>  __hx_tag(m) != 6  ||  *(HexaMap*)payload @0 == 0.
+// TAG enum (runtime_core_emit.hexa:1242): INT=0 FLOAT=1 BOOL=2 STR=3 VOID=4
+// ARRAY=5 MAP=6. HexaMap.tbl @ +0 (map_core.hexa:74-76 precedent).
+//
+// LAYOUT DEPENDENCY (hexa_map_count no-pred arm): HexaMapTable.len @ +40 —
+// slots@0 vals@8 ht_cap@16(+4 pad) order_keys@24 order_vals@32 len@40
+// (runtime_core_emit.hexa:1308-1340). Read as load64(t,40) & 0xFFFFFFFF —
+// little-endian low half = len, same idiom as map_core.hexa's ht_cap read.
+//
+// RAW-MEM discipline (map_core.hexa header): tag/tbl tests use the raw-int leaf
+// intrinsics (__hx_payload_eq/ne), NEVER plain ==/!= (HexaVal helper misread);
+// every intrinsic call writes EXACTLY ONE let (no nesting — native scratch-clobber).
+//
+// SEED-ONLY SSOT: this module is imported by NOTHING (valop_core.hexa pattern).
+// It enters the shipped runtime.a only via tool/regen_map_query_native_s.sh /
+// stage_resolve_runtime_a resolve_native_map_query_seed. nm contract = exactly
+// these 8 global T symbols; the extern fns below emit as U.
+
+// C-runtime ctors — the ONLY pair-model-safe C externs (0 params, HexaVal ret).
+extern fn hexa_array_new() -> HexaVal
+extern fn hexa_map_new() -> HexaVal
+
+// hexa-source delegates (rt_map_*) are pulled in by the runtime-prelude imports at
+// the TOP of this file — NOT extern-declared. Compiling this seed as
+// `aprime --emit=obj --keep-global=<the 8 hexa_map_*> --isolate` (own-obj lane)
+// ABSORBS the rt_map_* bodies (+ their reachable closure) as STB_LOCAL and prunes
+// at the carrier boundary, so the emitted seed .o is SELF-CONTAINED: its only
+// undefined externals are the 13 runtime.a-resident C primitives
+// (__map_order_key_at/__map_raw_len/hexa_array_new/hexa_array_push/hexa_map_get_v/…),
+// zero program-side `rt_map_*`. This is REQUIRED for the flip — an extern-based seed
+// leaves `rt_map_*` undefined, breaking every runtime.a-ONLY link (grace-consent
+// checker, minimal consumers). Verified summer: runtime.a-only OFF+ON link rc=0,
+// RUN-parity byte-identical. See state/hexa-own/axis2_runtime_c_body_reduction_roadmap.md.
+
+// C: if (!HX_MAP_TBL(m)) return hexa_array_new(); return rt_map_keys(m);
+pub fn hexa_map_keys(m: HexaVal) -> HexaVal {
+    let tag = __hx_tag(m)
+    if __hx_payload_ne(tag, 6) { return hexa_array_new() }
+    let mp = __hx_payload_add(m, 0)
+    let tbl = __hx_ptr_load64(mp, 0)
+    if __hx_payload_eq(tbl, 0) { return hexa_array_new() }
+    return rt_map_keys(m)
+}
+
+pub fn hexa_map_values(m: HexaVal) -> HexaVal {
+    let tag = __hx_tag(m)
+    if __hx_payload_ne(tag, 6) { return hexa_array_new() }
+    let mp = __hx_payload_add(m, 0)
+    let tbl = __hx_ptr_load64(mp, 0)
+    if __hx_payload_eq(tbl, 0) { return hexa_array_new() }
+    return rt_map_values(m)
+}
+
+pub fn hexa_map_entries(m: HexaVal) -> HexaVal {
+    let tag = __hx_tag(m)
+    if __hx_payload_ne(tag, 6) { return hexa_array_new() }
+    let mp = __hx_payload_add(m, 0)
+    let tbl = __hx_ptr_load64(mp, 0)
+    if __hx_payload_eq(tbl, 0) { return hexa_array_new() }
+    return rt_map_entries(m)
+}
+
+// C allocates `empty` BEFORE the guard (it doubles as the delegate's start map)
+// — mirror that order exactly: same ctor, same call count on every path.
+pub fn hexa_map_map_values(m: HexaVal, fn_v: HexaVal) -> HexaVal {
+    let empty = hexa_map_new()
+    let tag = __hx_tag(m)
+    if __hx_payload_ne(tag, 6) { return empty }
+    let mp = __hx_payload_add(m, 0)
+    let tbl = __hx_ptr_load64(mp, 0)
+    if __hx_payload_eq(tbl, 0) { return empty }
+    return rt_map_map_values(m, fn_v, empty)
+}
+
+pub fn hexa_map_filter_keys(m: HexaVal, fn_v: HexaVal) -> HexaVal {
+    let empty = hexa_map_new()
+    let tag = __hx_tag(m)
+    if __hx_payload_ne(tag, 6) { return empty }
+    let mp = __hx_payload_add(m, 0)
+    let tbl = __hx_ptr_load64(mp, 0)
+    if __hx_payload_eq(tbl, 0) { return empty }
+    return rt_map_filter_keys(m, fn_v, empty)
+}
+
+// C: hexa_int(0) on null-tbl · hexa_int(tbl->len) on void-pred ·
+//    rt_map_count_pred(m,pred) (already {TAG_INT,c}) otherwise.
+pub fn hexa_map_count(m: HexaVal, pred: HexaVal) -> HexaVal {
+    let tag = __hx_tag(m)
+    if __hx_payload_ne(tag, 6) { return __hx_make_val(0, 0) }
+    let mp = __hx_payload_add(m, 0)
+    let tbl = __hx_ptr_load64(mp, 0)
+    if __hx_payload_eq(tbl, 0) { return __hx_make_val(0, 0) }
+    let ptag = __hx_tag(pred)
+    if __hx_payload_eq(ptag, 4) {                         // HX_IS_VOID(pred)
+        let lenraw = __hx_ptr_load64(tbl, 40)             // HexaMapTable.len @40
+        let n = __hx_payload_and(lenraw, 4294967295)      // low 32b (LE)
+        return __hx_make_val(0, n)                        // hexa_int(t->len)
+    }
+    return rt_map_count_pred(m, pred)
+}
+
+// C: hexa_bool(0) on null-tbl/void-pred · rt_map_any_pred_b (already {TAG_BOOL})
+//    otherwise.
+pub fn hexa_map_any(m: HexaVal, pred: HexaVal) -> HexaVal {
+    let tag = __hx_tag(m)
+    if __hx_payload_ne(tag, 6) { return __hx_make_val(2, 0) }
+    let mp = __hx_payload_add(m, 0)
+    let tbl = __hx_ptr_load64(mp, 0)
+    if __hx_payload_eq(tbl, 0) { return __hx_make_val(2, 0) }
+    let ptag = __hx_tag(pred)
+    if __hx_payload_eq(ptag, 4) { return __hx_make_val(2, 0) }
+    return rt_map_any_pred_b(m, pred)
+}
+
+// C: hexa_bool(1) on null-tbl/void-pred (vacuous all) · rt_map_all_pred_b else.
+pub fn hexa_map_all(m: HexaVal, pred: HexaVal) -> HexaVal {
+    let tag = __hx_tag(m)
+    if __hx_payload_ne(tag, 6) { return __hx_make_val(2, 1) }
+    let mp = __hx_payload_add(m, 0)
+    let tbl = __hx_ptr_load64(mp, 0)
+    if __hx_payload_eq(tbl, 0) { return __hx_make_val(2, 1) }
+    let ptag = __hx_tag(pred)
+    if __hx_payload_eq(ptag, 4) { return __hx_make_val(2, 1) }
+    return rt_map_all_pred_b(m, pred)
+}

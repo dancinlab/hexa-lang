@@ -549,6 +549,19 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         }
     }
 
+    // FCVTZS Xd, Dn  (double → signed int64, round-toward-zero; `int(f)` lowering).
+    // ARM ARM C7.2 FCVTZS scalar-integer double→X: sf=1 ftype=01 rmode=11 opcode=000
+    // → base 0x9e780000 | (Dn<<5) | Xd. The structural mirror of SCVTF above (the
+    // codegen emits `fcvtzs x1, d0` at arm64_darwin.hexa:4003 for __hx_payload_f2i);
+    // without this arm any arm64 own-emit `int(float)` hit the unknown-op ENCODE-MISS.
+    if op == "FCVTZS" && len(ops) == 2 {
+        let rd = xreg_idx(ops[0])
+        let rn = dreg_idx(ops[1])
+        if rd >= 0 && rn >= 0 {
+            return 0x9e780000 | (rn << 5) | rd
+        }
+    }
+
     // ── Compare (SUBS XZR, ...) ──
     // CMP Xn, Xm
     if op == "CMP" && len(ops) == 2 && ops[1].substring(0, 1) != "#" {
@@ -1746,6 +1759,7 @@ fn _lir_op_uppercase(op: string) -> string {
     if op == "fdiv"  { return "FDIV" }
     if op == "fcmp"  { return "FCMP" }
     if op == "scvtf" { return "SCVTF" }
+    if op == "fcvtzs" { return "FCVTZS" }
     if op == "ldrb"  { return "LDRB" }
     if op == "strb"  { return "STRB" }
     // RFC 063 P0 fill (self-host udf-hole closure): the native obj-emit
@@ -2580,6 +2594,219 @@ fn _build_gdata_pool(lm: LModule) -> CstrPool {
 //     layout decides which is which (cycle 4 ships defined-only; the
 //     N_UNDF undef record path lands when a real frontend supplies an
 //     undefined target).
+// ─────────────────────────────────────────────────────────────────
+// axis-② --isolate on Mach-O (darwin twin of elf_x86_64.hexa's
+// _demote_partition / demote_nonkeep_to_local + isolate_lmodule_x86_64).
+// The darwin branch previously ran NEITHER pass, so --keep-global --isolate
+// left every imported-prelude fn N_PEXT-global → Case-B S5 ld -r multidef.
+// N_PEXT does NOT prevent multidef (duplicate detection precedes ld64's
+// output localization); the fix CLEARS N_EXT → pure N_SECT file-local.
+// (Fable design: state/hexa-own/macho_isolate_demotion_fix_spec.md.)
+
+// [u8]-strtab name reader (macho strtab is [u8]; _symh_name_at is [Int]-typed).
+fn _macho_symh_name_at(strtab: [u8], off: Int) -> string {
+    let mut s = ""
+    let mut i = 0
+    while (strtab[off + i] & 0xff) != 0 {
+        s = s + from_char_code(strtab[off + i] & 0xff)
+        i = i + 1
+    }
+    return s
+}
+
+// Demote non-keeplist DEFINED symbols to file-local (N_EXT clear) on Mach-O.
+// Mirrors _demote_partition: locals-before-globals reorder is MANDATORY —
+// serialize()'s LC_DYSYMTAB run layout hardcodes [locals|extdefs|undefs].
+pub fn demote_nonkeep_to_local_macho(obj: MachoArm64Obj, keeplist: [string]) -> MachoArm64Obj {
+    if len(keeplist) == 0 { return obj }
+    // keeplist arrives unmangled (hexa_map_keys); macho symbols are `_`-prefixed.
+    let mut mkeep: [string] = []
+    let mut mi = 0
+    while mi < len(keeplist) { mkeep.push(_darwin_mangle(keeplist[mi])); mi = mi + 1 }
+    let syms = obj.symbols
+    let ns = len(syms)
+    // Pass A — classify: local iff already-local (is_external==0) OR a defined
+    // (section!=0) external whose name is not kept. Undefs (section==0) + kept stay global.
+    let mut want_local: [Int] = []
+    let mut nloc = 0
+    let mut ci = 0
+    while ci < ns {
+        let s = syms[ci]
+        let mut loc = 0
+        if s.is_external == 0 { loc = 1 }
+        if s.is_external == 1 && s.section != 0 {
+            if !_kg_in_list(mkeep, _macho_symh_name_at(obj.strtab, s.name_offset)) { loc = 1 }
+        }
+        want_local.push(loc)
+        nloc = nloc + loc
+        ci = ci + 1
+    }
+    // Pass B — old→new permutation: locals [0,nloc) then globals [nloc,ns), original order.
+    let mut old2new: [Int] = []
+    let mut li = 0
+    let mut gi = 0
+    let mut pi = 0
+    while pi < ns {
+        if want_local[pi] == 1 { old2new.push(li); li = li + 1 }
+        else { old2new.push(nloc + gi); gi = gi + 1 }
+        pi = pi + 1
+    }
+    // Pass C — rebuild: local partition first (is_external:0, is_pext:0 → pure
+    // N_SECT 0x0e), then global partition verbatim.
+    let mut new_syms: [MachoSymbol] = []
+    let mut si = 0
+    while si < ns {
+        if want_local[si] == 1 {
+            let s = syms[si]
+            new_syms.push(MachoSymbol {
+                name_offset: s.name_offset,
+                section:     s.section,
+                value:       s.value,
+                kind:        s.kind,
+                is_external: 0,
+                is_pext:     0,
+            })
+        }
+        si = si + 1
+    }
+    let mut gsi = 0
+    while gsi < ns {
+        if want_local[gsi] == 0 {
+            let s = syms[gsi]
+            // Global partition = the keeplist (defined) + undefs. Force is_pext:0:
+            // pack_lir marks every non-entry defined fn N_PEXT (.private_extern), but
+            // the kept dispatchers are the seed's PUBLIC export contract — under ld -r a
+            // private-extern is localized in the output, so runtime_core.c's call sites
+            // (in other objects) could not resolve hexa_map_*. ELF keeps the keeplist
+            // STB_GLOBAL (public); this is the darwin equivalent. Undefs are is_pext:0 anyway.
+            new_syms.push(MachoSymbol {
+                name_offset: s.name_offset,
+                section:     s.section,
+                value:       s.value,
+                kind:        s.kind,
+                is_external: s.is_external,
+                is_pext:     0,
+            })
+        }
+        gsi = gsi + 1
+    }
+    // Pass D — remap every reloc's sym_idx through the permutation.
+    let mut new_relocs: [Arm64Reloc] = []
+    let nrel = len(obj.relocs)
+    let mut ri = 0
+    while ri < nrel {
+        let r = obj.relocs[ri]
+        new_relocs.push(Arm64Reloc {
+            offset:  r.offset,
+            sym_idx: old2new[r.sym_idx],
+            kind:    r.kind,
+            pcrel:   r.pcrel,
+            length:  r.length,
+        })
+        ri = ri + 1
+    }
+    return MachoArm64Obj {
+        text:       obj.text,
+        relocs:     new_relocs,
+        symbols:    new_syms,
+        strtab:     obj.strtab,
+        dwarf_line: obj.dwarf_line,
+        cstring:    obj.cstring,
+        cflt:       obj.cflt,
+        gdata:      obj.gdata,
+    }
+}
+
+// LModule reachability prune (darwin twin of isolate_lmodule_arm64_elf) —
+// keeplist-reachable closure with a carrier-boundary cut. Uses the macho
+// _pack_fn (10-array harvest) to enumerate each kept fn's referenced names.
+pub fn isolate_lmodule_macho(lm: LModule, keeplist: [string]) -> LModule {
+    if len(keeplist) == 0 { return lm }
+    let nf = len(lm.funcs)
+    let mut queue: [string] = []
+    let mut kept: [string] = []
+    let mut ki = 0
+    while ki < len(keeplist) {
+        let root = keeplist[ki]
+        let mut found = false
+        let mut fi = 0
+        while fi < nf {
+            if lm.funcs[fi].name == root { found = true }
+            fi = fi + 1
+        }
+        if !found {
+            eprintln("hexa-compiler: --isolate FATAL: keeplist root '" + root + "' not defined in module")
+            exit(2)
+        }
+        if !_kg_in_list(kept, root) {
+            kept.push(root)
+            queue.push(root)
+        }
+        ki = ki + 1
+    }
+    let mut qi = 0
+    while qi < len(queue) {
+        let fname = queue[qi]
+        qi = qi + 1
+        let mut fj = 0
+        while fj < nf {
+            if lm.funcs[fj].name == fname {
+                let f = lm.funcs[fj]
+                let s_text: [Int] = []
+                let p_off: [Int] = []
+                let p_names: [string] = []
+                let pg_off: [Int] = []
+                let pg_names: [string] = []
+                let pg_kinds: [Int] = []
+                let bl_names: [string] = []
+                let bl_off: [Int] = []
+                let bl_reforder: [string] = []
+                _pack_fn(s_text, p_off, p_names, pg_off, pg_names, pg_kinds, bl_names, bl_off, bl_reforder, f)
+                let mut chans: [string] = []
+                let mut a = 0
+                while a < len(p_names) { chans.push(p_names[a]); a = a + 1 }
+                a = 0
+                while a < len(pg_names) { chans.push(pg_names[a]); a = a + 1 }
+                let mut ci = 0
+                while ci < len(chans) {
+                    let refn = chans[ci]
+                    ci = ci + 1
+                    if !_kg_in_list(kept, refn) {
+                        let mut is_def = false
+                        let mut dk = 0
+                        while dk < nf {
+                            if lm.funcs[dk].name == refn { is_def = true }
+                            dk = dk + 1
+                        }
+                        if is_def && !(_iso_is_carrier(refn) && !_kg_in_list(keeplist, refn)) {
+                            kept.push(refn)
+                            queue.push(refn)
+                        }
+                    }
+                }
+            }
+            fj = fj + 1
+        }
+    }
+    let mut new_funcs: [LFunc] = []
+    let mut ri = 0
+    while ri < nf {
+        if _kg_in_list(kept, lm.funcs[ri].name) {
+            new_funcs.push(lm.funcs[ri])
+        }
+        ri = ri + 1
+    }
+    return LModule {
+        file:    lm.file,
+        target:  lm.target,
+        funcs:   new_funcs,
+        rodata:  lm.rodata,
+        bss:     lm.bss,
+        globals: lm.globals,
+        floats:  lm.floats,
+    }
+}
+
 pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     let obj = MachoArm64Obj {
         text:       [],

@@ -1,0 +1,104 @@
+// stdlib/runtime/arr_zeros_leaf.hexa — axis-② unit #5: boxed zeros constructors (TAG_ARRAY of 16B HexaVal).
+//
+// The hexa-source bodies for hexa_arr_zeros_leaf{,_int} that runtime_core.c externs away under the
+// HEXA_RT_CORE_ARRAY_ZEROS_LEAF_NATIVE sub-guard. Unlike the packed arr-i64/f64 typed-leaf units (8B raw
+// stride), these mint a BOXED array: a HexaArr descriptor (calloc'd) whose items[] is a malloc'd run of
+// 16B HexaVal elements, each set to a zero {tag, 0}. The ONLY diff between the two fns is the element tag
+// word (TAG_FLOAT=1 vs TAG_INT=0) and the OOM message — the payload word is 0 in both (0.0 IEEE bits = 0).
+//
+// ★ ABI: both are (HexaVal)->HexaVal = pure {tag,payload} pair-in/pair-out — NO float/char* param, so NO
+// C-shim and NO ABI wall (unlike arr-f64's double param or contains_key's const char*). 100% GP-class.
+//
+// LAYOUT (the BOXED HexaArr — DIFFERENT offsets from the packed HexaArrI64/F64): items:HexaVal* @0(8B),
+// len:int64_t @8, cap:int64_t @16, heap_water:int64_t @24, sizeof=32. calloc(1,32) zeroes heap_water for
+// free. Each 16B HexaVal element = { HexaTag tag @0, union payload @8 } (union is 8-byte-aligned → payload
+// at offset 8). So one element store = TWO __hx_ptr_store64: tag word @off, payload word (0) @off+8.
+//
+// Integer arithmetic uses __hx_payload_* leaves (plain int → boxed hexa_mul/add_slow; convergence
+// array-core-hexa-1). n is read by branching on the tag: TAG_INT → raw payload, else __hx_payload_f2i
+// (cvttsd2si == C's (int64_t)__hx_to_double). OOM message via __hx_str_ptr (the deployed arr-f64 idiom).
+//
+// SEED-ONLY SSOT: imported by NOTHING — enters runtime.a only via tool/regen_array_zeros_leaf_native_s.sh /
+// stage_resolve_runtime_a resolve_native_array_zeros_leaf_seed. nm contract = hexa_arr_zeros_leaf,
+// hexa_arr_zeros_leaf_int. U-floor = { malloc, calloc, write, exit }.
+
+extern fn malloc(n: int) -> int
+extern fn calloc(cnt: int, size: int) -> int
+extern fn write(fd: int, buf: int, n: int) -> int
+extern fn exit(code: int)
+
+// hexa_arr_zeros_leaf(nv): boxed [f64]-style zeros array — n FLOAT(0.0) elements. calloc the descriptor,
+// malloc the 16B*n items run, fill each with {TAG_FLOAT, 0}, set len/cap. n<=0 → empty descriptor (matches C).
+pub fn hexa_arr_zeros_leaf(nv: HexaVal) -> HexaVal {
+    let a = calloc(1, 32)                        // zeroed HexaArr: items@0 len@8 cap@16 heap_water@24
+    let out = __hx_make_val(5, a)                // TAG_ARRAY=5, payload = descriptor ptr
+    let t = __hx_tag(nv)
+    let mut n = 0
+    if __hx_payload_eq(t, 0) {                   // TAG_INT=0 → payload IS the count
+        n = __hx_payload_add(nv, 0)
+    } else {                                     // else (FLOAT) → numeric cvttsd2si, == (int64_t)double
+        n = __hx_payload_f2i(nv)
+    }
+    if __hx_payload_ge(n, 1) {
+        let bytes = __hx_payload_mul(n, 16)      // sizeof(HexaVal) * n
+        let items = malloc(bytes)
+        if __hx_payload_eq(items, 0) {
+            let msg = __hx_str_ptr("OOM in hexa_arr_zeros_leaf\n")
+            write(2, msg, 27)
+            exit(1)
+        }
+        let mut off = 0
+        let mut rem = n
+        let mut go = __hx_payload_ge(rem, 1)
+        while go {
+            __hx_ptr_store64(items, off, 1)      // element tag word: TAG_FLOAT=1
+            let off8 = __hx_payload_add(off, 8)
+            __hx_ptr_store64(items, off8, 0)     // element payload word: 0.0 bits = 0
+            off = __hx_payload_add(off, 16)      // next 16B element
+            rem = __hx_payload_sub(rem, 1)
+            go = __hx_payload_ge(rem, 1)
+        }
+        __hx_ptr_store64(a, 0, items)            // desc.items @0
+        __hx_ptr_store64(a, 8, n)                // desc.len  int64 @8
+        __hx_ptr_store64(a, 16, n)               // desc.cap  int64 @16
+    }
+    return out
+}
+
+// hexa_arr_zeros_leaf_int(nv): boxed [i64]-style zeros array — n INT(0) elements. Identical to the float
+// variant except the element tag word is TAG_INT=0 (and the OOM message).
+pub fn hexa_arr_zeros_leaf_int(nv: HexaVal) -> HexaVal {
+    let a = calloc(1, 32)
+    let out = __hx_make_val(5, a)
+    let t = __hx_tag(nv)
+    let mut n = 0
+    if __hx_payload_eq(t, 0) {
+        n = __hx_payload_add(nv, 0)
+    } else {
+        n = __hx_payload_f2i(nv)
+    }
+    if __hx_payload_ge(n, 1) {
+        let bytes = __hx_payload_mul(n, 16)
+        let items = malloc(bytes)
+        if __hx_payload_eq(items, 0) {
+            let msg = __hx_str_ptr("OOM in hexa_arr_zeros_leaf_int\n")
+            write(2, msg, 31)
+            exit(1)
+        }
+        let mut off = 0
+        let mut rem = n
+        let mut go = __hx_payload_ge(rem, 1)
+        while go {
+            __hx_ptr_store64(items, off, 0)      // element tag word: TAG_INT=0 — the ONLY diff vs float
+            let off8 = __hx_payload_add(off, 8)
+            __hx_ptr_store64(items, off8, 0)
+            off = __hx_payload_add(off, 16)
+            rem = __hx_payload_sub(rem, 1)
+            go = __hx_payload_ge(rem, 1)
+        }
+        __hx_ptr_store64(a, 0, items)
+        __hx_ptr_store64(a, 8, n)
+        __hx_ptr_store64(a, 16, n)
+    }
+    return out
+}
