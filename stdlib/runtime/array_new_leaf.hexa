@@ -18,45 +18,12 @@
 //
 // SEED-ONLY SSOT: imported by NOTHING — enters runtime.a only via
 // tool/regen_array_new_leaf_native_s.sh / stage_resolve_runtime_a resolve_native_array_new_seed.
-// nm contract = hexa_array_new (single global). U-floor = { hexa_ptr_alloc, hexa_exit } — carrier-only,
-// no libc entrant.
-//
-// ★★ ABI RULE — allocate through the HexaVal CARRIER, never through a raw libc extern.
-// aprime's native emit lowers EVERY call in this seed with the hexa pair-ABI: arguments ride
-// (tag,payload) register pairs and a result's payload is read from the SECOND return register (rdx/x1).
-// A raw `extern fn calloc(...)` therefore emits a bare `call calloc` whose U-symbol binds at link time
-// to the C-ABI libc calloc — which reads (rdi,rsi) as (nmemb,size) and returns the pointer in rax ALONE.
-// The old body thus called calloc(0,1) and minted the descriptor out of whatever garbage sat in the dead
-// rdx. Measured on the pre-revert seed, 3/3 runs on each target:
-//     linux-x86_64 (glibc)   rdx = 0        -> the seed's own OOM guard fires -> hexa_exit(1)
-//     darwin-arm64           x1  = garbage  -> a readable address -> SILENTLY wrong descriptor
-// The x86_64 backend already documents this exact trap (compiler/codegen/x86_64_linux.hexa:2236 — a pair
-// call into a C-ABI symbol "reads the caller's single rdi as the TAG and walks garbage"), which is why
-// Route C keeps an _is_cabi allowlist; `calloc` was never on it and this seed never took Route C.
-// hexa_ptr_alloc IS a HexaVal-ABI function (`HexaVal hexa_ptr_alloc(HexaVal size)`, self/runtime.h:872),
-// so the pair lowering is CORRECT for it. It is malloc-backed and does NOT zero — which is the whole
-// reason the calloc shortcut was reached for — hence the explicit four-word zero below.
-// This is a CLASS defect: arr_zeros_leaf / array_typed_leaf / array_typed_leaf_f64 still declare raw libc
-// externs and carry the same latent break (ARCHITECTURE convergence array-new-leaf-x86-64-s-1).
+// nm contract = hexa_array_new (single global). U-floor = { calloc } (aprime lowers to hexa_exit if any).
 
-extern fn hexa_ptr_alloc(size: int) -> int    // HexaVal-ABI carrier (runtime.h:872) — malloc-backed, NOT zeroing
-extern fn hexa_exit(code: int)                // HexaVal-ABI carrier — OOM abort
+extern fn calloc(cnt: int, size: int) -> int
 
-// hexa_array_new(): an empty boxed [HexaVal] array. Allocate the HexaArr descriptor through the carrier,
-// zero its four words, and box it as TAG_ARRAY.
+// hexa_array_new(): an empty boxed [HexaVal] array. calloc the zeroed HexaArr descriptor + box TAG_ARRAY.
 pub fn hexa_array_new() -> HexaVal {
-    let a = hexa_ptr_alloc(32)            // 32B HexaArr descriptor (malloc-backed -> contents undefined)
-    // __hx_payload_eq, NOT a plain `a == 0`: a plain int comparison lowers to the BOXED hexa_eq slow
-    // call (convergence array-core-hexa-1), which drags `hexa_eq` into the seed's U-floor. And it does
-    // so TARGET-DEPENDENTLY — x86_64 folds it to an inline cmp, arm64 emits `bl hexa_eq` — so the
-    // x86-only cross-assemble check passed while both arm64 targets failed to link (measured on the
-    // first regen of this fix). Leaf ops keep the U-floor carrier-only on every target.
-    if __hx_payload_eq(a, 0) {
-        hexa_exit(1)                      // OOM — matches the C body's abort path
-    }
-    __hx_ptr_store64(a, 0, 0)             // items      @0  = NULL
-    __hx_ptr_store64(a, 8, 0)             // len        @8  = 0
-    __hx_ptr_store64(a, 16, 0)            // cap        @16 = 0
-    __hx_ptr_store64(a, 24, 0)            // heap_water @24 = 0
+    let a = calloc(1, 32)                 // zeroed HexaArr: items@0=NULL len@8=0 cap@16=0 heap_water@24=0
     return __hx_make_val(5, a)            // TAG_ARRAY=5, payload = descriptor ptr
 }
