@@ -3281,7 +3281,29 @@ fn _bck_pm_check() {
                             // ("partially moved") would be wrong here — dispatch
                             // BEFORE composing form/place.
                             if _bck_is_consume_fn(mvcallee) {
-                                _bck_emit_use_after_free(uname, mvcallee, mvline,
+                                // Blame the free that PRECEDES this use in program
+                                // order, not the fn's LAST free: at a double-free the
+                                // second `farr_free(t)` records its MOVE *after* the
+                                // arg-read USE it invalidates, so the global-last scan
+                                // above would blame the use's own line ("freed at 17"
+                                // for a use at 17). Re-scan bounded by `< u`.
+                                let mut fmv = 0 - 1
+                                let mut fi = 0
+                                while fi < u {
+                                    if _bck_pm_ev_kind[fi] == 2
+                                        && _bck_pm_ev_grps[fi] == pt_grp[t]
+                                        && _bck_pm_ev_fields[fi] == pt_field[t] {
+                                        fmv = fi
+                                    }
+                                    fi = fi + 1
+                                }
+                                let mut fcallee = mvcallee
+                                let mut fline = mvline
+                                if fmv >= 0 {
+                                    fcallee = _bck_pm_ev_callees[fmv]
+                                    fline = _bck_pm_ev_lines[fmv]
+                                }
+                                _bck_emit_use_after_free(uname, fcallee, fline,
                                                          _bck_pm_ev_spans[u])
                                 fired = true
                             } else {
