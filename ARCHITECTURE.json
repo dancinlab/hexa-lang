@@ -612,6 +612,13 @@
         "value": "own-link default-ON(#4882/#4902) + 게이트 초록 이 \"clang 이 사라졌다\"를 증명하지 않는다. 두 가지 이유: (1) 게이트 코퍼스가 장난감이다 — cfallback_zero_census/ownlink_corpus_parity 가 컴파일하는 것은 21줄 이하 · use 0개짜리 5~6개(실측: array.hexa 21줄 use=0 · loop.hexa 19줄 use=0 · main.hexa 9줄 use=0). 실제 프로그램은 import-closure(flatten)를 먼저 타는데 own-link 가 그 경로에서 측정된 적이 한 번도 없다. (2) 폴백 사다리가 조용하다 — own-link 실패 시 HEXA_RUN_NATIVE_TRACE=1 일 때만 로그를 남기고 tier-B(ld) → C-transpile delegate(clang) 로 낙하한다(self/main.hexa cmd_build/cmd_run). 못 다루는 프로그램은 소리 없이 clang 으로 되돌아가고 아무도 세지 않는다. release-integrity 관점에선 이 안전망이 옳지만, axis-①(hexa_cc.c 삭제)의 DONE 판정은 \"이 사다리가 절대 안 밟힌다\"는 증거를 요구하고 현재 그 증거는 5-프로그램짜리다. FIX = HEXA_OWNLINK_STRICT=1 fail-closed 모드(폴백을 ERROR 로) + 실제 프로그램 코퍼스 census. 이 수치가 axis-① 제거 가부의 유일한 정량 근거다.",
         "threshold": "재발조건: self-host/own-link 의 default-flip 을 장난감 코퍼스 게이트의 초록만으로 \"DONE\" 판정할 때. 판정: 게이트가 컴파일하는 프로그램의 use(import) 개수와 줄수를 세라 — use=0 이면 flatten 경로를 안 탄 것이다. 규칙: 폴백이 조용한 시스템에서는 \"초록\"이 \"폴백 0\" 을 뜻하지 않는다. fail-closed 모드로 실제 코퍼스를 돌려 폴백률을 실수치로 낼 것. ⚠️ tool/release_build 는 TARGET(darwin-arm64|linux-x86_64|linux-arm64) + CC + LIBS 를 요구한다 — 미설정 시 즉시 실패한다.",
         "source": "tool/ownlink_strict_census.sh"
+      },
+      {
+        "id": "ownlink-strict-census-sh-2",
+        "state": "pos-conv",
+        "value": "census 가 rc(proxy)만 보고 artifact 를 안 봐서 컴파일 실패를 \"own-link 성공\"으로 셌다. 실측(aiden 2026-07-14): tool/compile.hexa 와 tool/ai_native_profile.hexa 를 \"own-link ✅\"로 집계했는데 둘 다 HX2001 undefined name 으로 컴파일 실패했고 바이너리가 안 나왔다. 즉 폴백률 표의 5개 표본 중 2개가 무효였다 — 그것도 우리에게 유리한 방향으로 틀렸다. ★이 세션 내내 \"proxy 게이트가 거짓말한다\"(seed_abi_contract_smoke-sh-1)를 비판해놓고 내가 만든 게이트가 같은 함정을 밟았다. FIX = rc==0 AND [ -x \"$out\" ] 를 둘 다 요구 + rc=0-without-binary 를 NO-BINARY 로 별도 집계 + HX 진단 코드를 출력. 그리고 hx.hexa 의 \"300초 컴파일 타임아웃\"도 컴파일 벽이 아니라 죽은 소스였다: tool/hx.hexa:63 이 use \"tool/raw_audit\" 인데 tool/raw_audit.hexa 가 없다(커밋 87dda7427 \"consumer cascade\" 가 놓침) → module_loader FATAL → flatten 산출물 0 → self/main.hexa 의 \"falling back to raw src\" 경로로 import 미해결 raw 740줄이 컴파일러에 들어간 것이 300초의 정체. hx.hexa 는 삭제된 audit_append/ssot_fingerprint 를 14회 사용하며 대체 구현이 repo 어디에도 없다 = 패키지 매니저 엔트리가 컴파일 불가 상태(별건 버그).",
+        "threshold": "재발조건: 빌드/컴파일 census 나 게이트를 만들 때 종료코드만 보고 성공을 집계하면 재발. 규칙: 빌드 판정은 반드시 ARTIFACT 존재를 요구하라(rc==0 AND 산출물 실재). rc=0 인데 산출물이 없으면 그것 자체가 별도 결함 카테고리다. 그리고 컴파일 시간 이상치를 만나면 먼저 그 소스가 컴파일 가능한지(모듈 해소가 되는지) 확인하라 — 죽은 import 는 flatten 실패 → raw fallback → 병리적 컴파일로 위장한다.",
+        "source": "tool/ownlink_strict_census.sh"
       }
     ]
   },
