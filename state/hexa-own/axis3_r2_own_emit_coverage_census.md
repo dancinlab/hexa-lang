@@ -1,5 +1,19 @@
 # Axis-③ own-emit x86_64 COMPILE coverage census (③-R2)
 
+> ## ⚠️ STATUS: CLOSED / SUPERSEDED (2026-07-12) — do NOT trust the gap list below as open
+> The `gap_constructs` this census names (imul · and/or/xor · shl/shr/sar · neg/not/movsx · the
+> **entire SSE scalar-double family** incl the xmm table) are **all implemented + Intel-SDM-matched +
+> merged**: R2a int-ALU #4733 · R2b SSE+movabs #4740 · R2d unsigned-cc/cmovcc #4750 · R2e
+> CMP64/XOR-r32/indirect-CALL #4755 · R2f size-ptr labels. The silent `return []` drop is fixed — the
+> walker now emits a loud `ENCODE-MISS (x86_64): <op>` (elf_x86_64.hexa ~1415-1420, mirroring arm64).
+> The `ENCODE-MISS==0` self-emit census subsequently PASSED, and **own-link is DEFAULT-ON on
+> linux-x86_64** (#4882, measured clang-0 + ld-0). The ONE genuine encoder gap that survived was
+> **arm64 FCVTZS** (`int(float)` → silent ENCODE-MISS), fixed in **PR #4898** (`0x9e780000|(Dn<<5)|Xd`,
+> cross-as byte-exact). Line refs below have drifted ~700 lines. The remaining ②③-convergent frontier
+> is NOT the encoder — it is **B3 own-emit SUBSTRATE ELIMINATION** (kill `clang self/runtime.c`); the
+> live SSOT is `ARCHITECTURE.json` activeGoal + the RFC061 attack plan. This doc is kept only as the
+> historical R2 worklist that seeded those PRs.
+
 **HEAD:** origin/main `ed599aa6b` (#4721 HEXA_LINK_HEXA opt-in own-link) + #4724. Read-only census — the ENCODE-MISS worklist the axis-③ round-1 plan promised.
 
 ## Mechanism defining the gap

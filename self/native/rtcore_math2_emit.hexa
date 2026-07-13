@@ -119,6 +119,12 @@ fn emit_rtcore_math2_to(out_path: str) {
     buf = buf + "    return rt_u_floor(hexa_int(ai), hexa_int(bi));\n"
     buf = buf + "}\n"
     buf = buf + "HexaVal hexa_abs(HexaVal v) {\n"
+    buf = buf + "#ifdef HEXA_RT_VALOP_EQCOERCE_NATIVE\n"
+    buf = buf + "    if ((HX_IS_INT(v) && HX_INT(v) != INT64_MIN) || HX_IS_FLOAT(v)) {\n"
+    buf = buf + "        extern HexaVal rt_abs_native(HexaVal v);\n"
+    buf = buf + "        return rt_abs_native(v);\n"
+    buf = buf + "    }\n"
+    buf = buf + "#endif\n"
     buf = buf + "    if (HX_IS_INT(v)) return rt_abs_int(v);\n"
     buf = buf + "    return rt_abs_float(v);\n"
     buf = buf + "}\n"
@@ -129,6 +135,9 @@ fn emit_rtcore_math2_to(out_path: str) {
     buf = buf + "HexaVal hexa_log2(HexaVal v)  { return rt_log2(hexa_float(__hx_to_double(v))); }\n"
     if buf.len() > 65536 { _flush_rtcore_math2(out_path, buf); buf = "" }
     buf = buf + "HexaVal hexa_to_float(HexaVal v) {\n"
+    buf = buf + "#ifdef HEXA_RT_VALOP_EQCOERCE_NATIVE\n"
+    buf = buf + "    if (HX_TAG(v) <= TAG_BOOL) { extern HexaVal rt_to_float_native(HexaVal v); return rt_to_float_native(v); }\n"
+    buf = buf + "#endif\n"
     buf = buf + "    return rt_to_float(hexa_float(__hx_to_double(v)));\n"
     buf = buf + "}\n"
     if buf.len() > 0 { _flush_rtcore_math2(out_path, buf) }

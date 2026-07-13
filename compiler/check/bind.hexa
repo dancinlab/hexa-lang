@@ -1398,6 +1398,14 @@ fn _bind_builtin_names() -> [string] {
         // int-or-float coercion; i2f takes a RAW int payload. ADD-only, frozen
         // 151c52c8-safe identifier-calls (compiler never emits them).
         "__hx_payload_f2i", "__hx_payload_i2f",
+        // f64<->i64 BIT-REINTERPRET (axis-② f64 typed-leaf · NOT numeric convert like
+        // f2i/i2f): __hx_f64_bits reinterprets a double's 64 bits AS an int (x86_64
+        // `movq r64,xmm` 66 REX.W 0F 7E · arm64 `fmov Xd,Dn` 0x9E660000); the dual
+        // __hx_bits_f64 reinterprets an int's bits AS a double (`movq xmm,r64` 66 REX.W
+        // 0F 6E · `fmov Dd,Xn` 0x9E670000). Used by the f64 typed-array seed to store a
+        // raw double via the proven __hx_ptr_store64 path. ADD-only, frozen 151c52c8-safe
+        // (compiler never emits them → gen3==gen4 preserved).
+        "__hx_f64_bits", "__hx_bits_f64",
         "__hx_str_byte", "__hx_to_double", "__hx_arr_len", "__hx_syscall0", "__hx_syscall6", "__hx_ptr_store64", "__hx_ptr_load64", "__hx_ptr_store32", "__hx_ptr_load32", "__hx_ptr_store8", "__hx_ptr_load8",
         // RFC inline-asm rung 1 (2026-06-27): `__hx_asm_nop()` — the first
         // named-opcode inline-assembly intrinsic. 0-arg leaf that emits a literal

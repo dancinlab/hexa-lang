@@ -1058,7 +1058,14 @@ if stream_mode && target == "arm64-apple-darwin" {
     // `.s` text + `as`/clang fork entirely. Branches early — out_path
     // is final and we exit here.
     if (emit_kind == "obj" || emit_kind == "exec") && backend_kind == "native" && target == "arm64-apple-darwin" {
-        let obj_data = pack_lir(lmodule)
+        // axis-② --isolate on Mach-O (mirror of the x86 branch below): under
+        // --isolate prune to the keeplist-reachable closure, then demote non-keeplist
+        // defined syms to N_SECT file-local (N_EXT clear) — else imported-prelude
+        // globals stay N_PEXT and multidef in the Case-B ld -r gate. Flag-gated:
+        // keep_globals is [] except under --emit=obj --keep-global= → byte-neutral off-flag.
+        let lmodule_iso = if isolate_flag { isolate_lmodule_macho(lmodule, keep_globals) } else { lmodule }
+        let obj_data0 = pack_lir(lmodule_iso)
+        let obj_data = demote_nonkeep_to_local_macho(obj_data0, keep_globals)
         let obj_bytes = serialize(obj_data)
         if emit_kind == "obj" {
             write_bytes(out_path, obj_bytes)

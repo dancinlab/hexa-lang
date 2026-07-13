@@ -8059,6 +8059,18 @@ fn gen2_expr(node) {
             if name == "__hx_make_val" {
                 return "((HexaVal){.tag=(HexaTag)HX_INT(" + gen2_expr(node.args[0]) + "), .i=HX_INT(" + gen2_expr(node.args[1]) + ")})"
             }
+            // axis-② f64 typed-leaf — `__hx_f64_bits(x)`/`__hx_bits_f64(b)` bit-reinterpret
+            // f64↔i64. The HexaVal union overlaps .i (int64) and .f (double) at the same
+            // 8 bytes, so a bit-reinterpret is a TAG-SWAP over the SAME payload word: read
+            // HX_INT (the raw .i payload — for a FLOAT that IS the double's bits) and stamp
+            // the opposite tag. NOT (int64_t)x.f / (double)x.i (numeric convert — WRONG).
+            // Matches the native x86_64/arm64 payload-passthrough + tag-imm lowering.
+            if name == "__hx_f64_bits" {
+                return "((HexaVal){.tag=TAG_INT, .i=HX_INT(" + gen2_expr(node.args[0]) + ")})"
+            }
+            if name == "__hx_bits_f64" {
+                return "((HexaVal){.tag=TAG_FLOAT, .i=HX_INT(" + gen2_expr(node.args[0]) + ")})"
+            }
             // RT-NATIVE UNLOCK-2b: native leaf-compare (payload i64 cmp). C-transpile
             // = HX_INT macro (the payload union as int64); native arm64 lowers inline.
             if name == "__hx_payload_eq" {

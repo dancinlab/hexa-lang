@@ -1,0 +1,119 @@
+// stdlib/runtime/array_typed_leaf.hexa — axis-② Tier-1 #3 typed-array TYPED-LEAF natives (i64).
+//
+// The hexa-source bodies for the 4 packed-i64 array DISPATCHERS
+// (hexa_arr_i64_new / push / len / box) that runtime_core.c externs away under
+// the HEXA_RT_CORE_ARRAY_I64_LEAF_NATIVE sub-guard (a narrowing of the shared
+// HEXA_RT_CORE_ARRAY_TYPED_LEAF_NATIVE macro that also gates the f64 typed block
+// + the poly hexa_arr_zeros_leaf block — those stay C this unit). Each body is the
+// EXACT C dispatcher (self/runtime_core_emit.hexa i64 block ~L2760-2848, the
+// single-thread #else arm) re-authored native.
+//
+// WHY THE realloc GROW IS EXPRESSIBLE HERE (the frontier this unit proves):
+// array_core.hexa:25 documented "push()'s realloc grow-branch stay C (🧱 the seed
+// cannot express a persistent individually-freeable heap)". That verdict predates
+// the --isolate own-obj extern-carrier mechanism (map-query #4914). The seed does
+// NOT re-implement realloc natively — it CALLS libc realloc as an extern C-ABI
+// symbol, resolved at the final program link exactly like the C body's realloc.
+// (The original C body ALSO leaves malloc/realloc undefined, so the net libc-UND
+// floor is unchanged — no runtime.a-only link that worked before breaks.)
+//
+// ARITHMETIC DISCIPLINE (falsified-then-fixed · array_core.hexa proven idiom):
+// plain hexa `int` +/*/>= compile to BOXED helper CALLS (hexa_add_slow/hexa_mul/
+// hexa_cmp_ge — confirmed by a summer nm of the first draft). A boxed result
+// carries NaN-box tag bits, WRONG as a raw byte offset into __hx_ptr_load/store. So
+// every offset / field / compare uses the __hx_payload_* LEAF intrinsics (inline
+// native, no boxing) — mirroring rt_array_get/pop_native (off=__hx_payload_mul(idx,
+// stride); cond=__hx_payload_lt(...)). Only values flowing to an extern C int arg
+// (malloc/realloc/write) or stored raw (the pushed x) stay plain.
+//
+// ABI (array_core.hexa native-edge rule): HexaVal params/returns are the {tag,
+// payload} register pair = SysV/AAPCS64 C ABI for HexaVal(HexaVal...). The mixed
+// plain-int params/returns (new(int)->HexaVal, push(HexaVal,int64_t)->HexaVal,
+// len(HexaVal)->int, box(HexaVal,int64_t)->HexaVal) put the int in the next GP reg /
+// rax — the standard C-ABI for an int64_t scalar (distinct from map-query's
+// contains_key const-char* wall). C prototypes MUST declare the int params int64_t.
+//
+// LAYOUT (runtime.h HexaArrI64): { int64_t* data @0(8B); int len @8(i32); int cap
+// @12(i32) } sizeof 16, 8-byte stride. len/cap are C `int` (32-bit) -> load32/store32
+// (NOT load64, which would read cap into len's high half). ⚠️ W2: store32(a,8,..)
+// writes ONLY 4 bytes @+8, cap@12 untouched (PR-1 unit test tripwire).
+//
+// TAG: ARRAY=5 (INT=0 FLOAT=1 BOOL=2 STR=3 VOID=4 ARRAY=5 MAP=6). new() boxes the
+// HexaArrI64* as TAG_ARRAY via __hx_make_val(5, ptr) — the write-half of the
+// read-half's __hx_payload_add(arr,0) extraction; no HX_MAKE_TAG/HX_SET_ARR_PTR
+// C-macro carrier needed.
+//
+// SEED-ONLY SSOT: imported by NOTHING (map_query.hexa pattern) — enters the shipped
+// runtime.a ONLY via tool/regen_array_typed_leaf_native_s.sh /
+// stage_resolve_runtime_a resolve_native_array_typed_leaf_seed. nm contract = the 4
+// global T symbols hexa_arr_i64_{new,push,len,box}; the extern carriers emit U.
+
+// C-runtime carriers — the U-floor keeplist (all resolved by runtime.a / libc at the
+// final program link; the C body carries the same libc undefs).
+extern fn malloc(n: int) -> int
+extern fn realloc(p: int, n: int) -> int
+extern fn write(fd: int, buf: int, n: int) -> int
+extern fn exit(code: int)
+extern fn hexa_int(x: int) -> HexaVal
+extern fn hexa_throw(v: HexaVal)
+
+// hexa_arr_i64_new(cap): malloc a HexaArrI64 (16B) + a data buffer (cap*8, cap>=1),
+// zero len, set cap, box as TAG_ARRAY. Mirrors the C new() incl. its cap<1 clamp.
+pub fn hexa_arr_i64_new(cap: int) -> HexaVal {
+    let mut c = cap
+    if __hx_payload_lt(c, 1) { c = 1 }
+    let a = malloc(16)                      // sizeof(HexaArrI64)
+    let bytes = __hx_payload_mul(c, 8)      // sizeof(int64_t) * cap
+    let d = malloc(bytes)
+    __hx_ptr_store64(a, 0, d)               // data <- d
+    __hx_ptr_store32(a, 8, 0)               // len  <- 0   (i32)
+    __hx_ptr_store32(a, 12, c)              // cap  <- c   (i32)
+    return __hx_make_val(5, a)              // TAG_ARRAY=5, payload = HexaArrI64* a
+}
+
+// hexa_arr_i64_push(v, x): amortized-doubling append of the raw int64 x. Grow via
+// extern realloc when len>=cap (the frontier). Mirrors the single-thread #else C arm.
+pub fn hexa_arr_i64_push(v: HexaVal, x: int) -> HexaVal {
+    let a = __hx_payload_add(v, 0)          // HexaArrI64* out of the TAG_ARRAY payload
+    let len = __hx_ptr_load32(a, 8)
+    let cap = __hx_ptr_load32(a, 12)
+    if __hx_payload_ge(len, cap) {
+        let ncap = __hx_payload_mul(cap, 2)
+        let old = __hx_ptr_load64(a, 0)
+        let nbytes = __hx_payload_mul(ncap, 8)
+        let nd = realloc(old, nbytes)
+        if __hx_payload_eq(nd, 0) {
+            let msg = __hx_str_ptr("OOM in arr_i64_push\n")   // char* bridge (parity msg)
+            write(2, msg, 20)
+            exit(1)
+        }
+        __hx_ptr_store64(a, 0, nd)          // data <- realloc'd buffer
+        __hx_ptr_store32(a, 12, ncap)       // cap  <- ncap
+    }
+    let data = __hx_ptr_load64(a, 0)
+    let off = __hx_payload_mul(len, 8)      // byte offset of data[len]
+    __hx_ptr_store64(data, off, x)          // data[len] <- x (x stored raw)
+    let nlen = __hx_payload_add(len, 1)
+    __hx_ptr_store32(a, 8, nlen)            // len <- len + 1
+    return v
+}
+
+// hexa_arr_i64_len(v): HexaArrI64.len @ +8 (i32). Returns a plain C int (rax).
+pub fn hexa_arr_i64_len(v: HexaVal) -> int {
+    let a = __hx_payload_add(v, 0)
+    return __hx_ptr_load32(a, 8)
+}
+
+// hexa_arr_i64_box(v, i): bounds-checked read of data[i] re-boxed as TAG_INT. Direct
+// hexa_throw of the message literal (already a TAG_STR HexaVal) = behaviorally the C
+// hexa_throw(hexa_str("index out of bounds")) on the catch side (Fable review point-3).
+pub fn hexa_arr_i64_box(v: HexaVal, i: int) -> HexaVal {
+    let a = __hx_payload_add(v, 0)
+    let len = __hx_ptr_load32(a, 8)
+    if __hx_payload_lt(i, 0) { hexa_throw("index out of bounds") }
+    if __hx_payload_ge(i, len) { hexa_throw("index out of bounds") }
+    let data = __hx_ptr_load64(a, 0)
+    let off = __hx_payload_mul(i, 8)
+    let x = __hx_ptr_load64(data, off)
+    return hexa_int(x)
+}

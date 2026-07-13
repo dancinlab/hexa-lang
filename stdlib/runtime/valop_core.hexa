@@ -93,8 +93,38 @@ fn rt_truthy_native(v: HexaVal) -> HexaVal {
         return __hx_make_val(2, 0)
     }
 
-    // Any other tag reaching the native body: the C default (return 1). The C
-    // wrapper only delegates the scalar tags, so this is a safety net.
+    // TAG_STR (3): HX_STR(v) != NULL && HX_STR(v)[0] != 0 (runtime_core.c:8290).
+    if __hx_payload_eq(tag, 3) {
+        let p = __hx_str_ptr(v)                       // char* base as int payload
+        let pnz = __hx_payload_nz(p)
+        let pnzp = __hx_payload_add(pnz, 0)
+        if __hx_payload_eq(pnzp, 0) { return __hx_make_val(2, 0) }
+        let b0 = __hx_str_byte(v, 0)                  // movzx s[0]
+        let nz = __hx_payload_ne(b0, 0)
+        let nzp = __hx_payload_add(nz, 0)
+        return __hx_make_val(2, nzp)
+    }
+
+    // TAG_ARRAY (5): HX_ARR_LEN(v) > 0 (runtime_core.c:8295; len is i32 >= 0).
+    if __hx_payload_eq(tag, 5) {
+        let n = __hx_arr_len(v)
+        let z = __hx_make_val(0, 0)
+        let gt = __hx_payload_gt(n, z)
+        let gtp = __hx_payload_add(gt, 0)
+        return __hx_make_val(2, gtp)
+    }
+
+    // TAG_VALSTRUCT (10): HX_VS(v) != NULL (runtime_core.c:8306).
+    if __hx_payload_eq(tag, 10) {
+        let p = __hx_payload_add(v, 0)
+        let nz = __hx_payload_nz(p)
+        let nzp = __hx_payload_add(nz, 0)
+        return __hx_make_val(2, nzp)
+    }
+
+    // TAG_MAP (6) stays C (the __type__ probe needs hmap_find + a string literal —
+    // breaks the zero-.LC/zero-extern seed contract; named wall). Any other tag:
+    // the C default (return 1). The C wrapper only delegates the tags handled here.
     return __hx_make_val(2, 1)
 }
 
@@ -289,4 +319,114 @@ fn rt_mod_native(a: HexaVal, b: HexaVal) -> HexaVal {
     let r = __hx_payload_mod(a, b)                   // HX_INT(a) % HX_INT(b)
     let rp = __hx_payload_add(r, 0)
     return __hx_make_val(0, rp)
+}
+
+// ── axis-② Tier-1 #2: eqtruthy/coercion scalar arms (HEXA_RT_VALOP_EQCOERCE_NATIVE) ──
+// Byte-parity native bodies for the scalar arms of the eq/coercion C dispatchers
+// (self/runtime_core_emit.hexa). Each is called by the C wrapper ONLY on the eligible
+// scalar tags; non-scalar/STR/MAP arms stay C (named walls). le&&ge == `==` for i64 and
+// IEEE double (NaN → both false → 0). RAW-MEM un-nested (#3503): one __hx_* per let.
+
+// rt_eq_scalar_native: scalar arm of hexa_eq — HX_TAG(a)<=BOOL && HX_TAG(b)<=BOOL.
+// Cross int<->float (== as fle&&fge) → same-tag i64/bool payload eq → tag-mismatch false.
+fn rt_eq_scalar_native(a: HexaVal, b: HexaVal) -> HexaVal {
+    let ta = __hx_tag(a)
+    let tb = __hx_tag(b)
+    let a_int = __hx_payload_eq(ta, 0)
+    let a_flt = __hx_payload_eq(ta, 1)
+    let b_int = __hx_payload_eq(tb, 0)
+    let b_flt = __hx_payload_eq(tb, 1)
+    let c1 = __hx_payload_and(a_int, b_flt)          // int == float
+    let c2 = __hx_payload_and(a_flt, b_int)          // float == int
+    let cross = __hx_payload_or(c1, c2)
+    let both_f = __hx_payload_and(a_flt, b_flt)      // float == float
+    let feq = __hx_payload_or(cross, both_f)
+    if __hx_payload_ne(feq, 0) {
+        let af = __hx_to_double(a)
+        let bf = __hx_to_double(b)
+        let le = __hx_payload_fle(af, bf)            // false for NaN
+        let ge = __hx_payload_fge(af, bf)            // false for NaN
+        let lep = __hx_payload_add(le, 0)
+        let gep = __hx_payload_add(ge, 0)
+        let r = __hx_payload_and(lep, gep)           // IEEE == (NaN -> 0)
+        return __hx_make_val(2, r)
+    }
+    let both_i = __hx_payload_and(a_int, b_int)      // int == int
+    if __hx_payload_ne(both_i, 0) {
+        let le = __hx_payload_le(a, b)
+        let ge = __hx_payload_ge(a, b)
+        let lep = __hx_payload_add(le, 0)
+        let gep = __hx_payload_add(ge, 0)
+        let r = __hx_payload_and(lep, gep)
+        return __hx_make_val(2, r)
+    }
+    let a_b = __hx_payload_eq(ta, 2)
+    let b_b = __hx_payload_eq(tb, 2)
+    let both_b = __hx_payload_and(a_b, b_b)          // bool == bool (0/1 payload)
+    if __hx_payload_ne(both_b, 0) {
+        let le = __hx_payload_le(a, b)
+        let ge = __hx_payload_ge(a, b)
+        let lep = __hx_payload_add(le, 0)
+        let gep = __hx_payload_add(ge, 0)
+        let r = __hx_payload_and(lep, gep)
+        return __hx_make_val(2, r)
+    }
+    return __hx_make_val(2, 0)                        // bool x int / bool x float: mismatch -> false
+}
+
+// rt_to_int_native: hexa_to_int scalar arm — tags {INT,FLOAT}. STR-parse stays C.
+fn rt_to_int_native(v: HexaVal) -> HexaVal {
+    let tag = __hx_tag(v)
+    if __hx_payload_eq(tag, 0) { return v }           // int passthrough (== rt_to_int)
+    let r = __hx_payload_f2i(v)                       // (int64_t)HX_FLOAT(v) — cvttsd2si/fcvtzs
+    let rp = __hx_payload_add(r, 0)
+    return __hx_make_val(0, rp)
+}
+
+// rt_to_float_native: hexa_to_float scalar arm — tags {INT,FLOAT,BOOL}. STR/VS stay C.
+fn rt_to_float_native(v: HexaVal) -> HexaVal {
+    let tag = __hx_tag(v)
+    if __hx_payload_eq(tag, 1) { return v }           // float: rebox == identity
+    let rf = __hx_payload_i2f(v)                       // int(0)/bool(2) payload -> (double)
+    let rfp = __hx_payload_add(rf, 0)
+    return __hx_make_val(1, rfp)
+}
+
+// rt_abs_native: hexa_abs — INT (non-INT64_MIN, pre-guarded by the C wrapper) + FLOAT.
+// -0.0/NaN passthrough == rt_abs_float; 0-v for negatives.
+fn rt_abs_native(v: HexaVal) -> HexaVal {
+    let tag = __hx_tag(v)
+    if __hx_payload_eq(tag, 0) {
+        let z = __hx_make_val(0, 0)
+        let lt = __hx_payload_lt(v, z)
+        let ltp = __hx_payload_add(lt, 0)
+        if __hx_payload_eq(ltp, 0) { return v }
+        let r = __hx_payload_sub(z, v)                // 0 - v (== rt_abs_int)
+        let rp = __hx_payload_add(r, 0)
+        return __hx_make_val(0, rp)
+    }
+    let zf = __hx_to_double(0)
+    let lt = __hx_payload_flt(v, zf)                  // false for NaN and -0.0
+    let ltp = __hx_payload_add(lt, 0)
+    if __hx_payload_eq(ltp, 0) { return v }           // NaN/-0.0 passthrough == rt_abs_float
+    let rf = __hx_payload_fsub(zf, v)                 // 0.0 - v
+    let rfp = __hx_payload_add(rf, 0)
+    return __hx_make_val(1, rfp)
+}
+
+// rt_null_coal_native: hexa_null_coal — fully native (no wall). VOID -> b; STR NULL/lead-NUL -> b.
+fn rt_null_coal_native(a: HexaVal, b: HexaVal) -> HexaVal {
+    let tag = __hx_tag(a)
+    if __hx_payload_eq(tag, 4) { return b }           // TAG_VOID
+    if __hx_payload_eq(tag, 3) {                       // TAG_STR
+        let p = __hx_str_ptr(a)
+        let pnz = __hx_payload_nz(p)
+        let pnzp = __hx_payload_add(pnz, 0)
+        if __hx_payload_eq(pnzp, 0) { return b }
+        let b0 = __hx_str_byte(a, 0)
+        let b0p = __hx_payload_add(b0, 0)
+        if __hx_payload_eq(b0p, 0) { return b }
+        return a
+    }
+    return a
 }
