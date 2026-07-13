@@ -1,0 +1,29 @@
+// stdlib/runtime/array_new_leaf.hexa — axis-② unit #6: the empty-array constructor hexa_array_new().
+//
+// The own-native body for hexa_array_new() that runtime_core.c externs away under the
+// HEXA_RT_CORE_ARRAY_NEW_NATIVE sub-guard. Zero-arg → trivially pair-clean (HexaVal return rides the
+// {tag,payload} pair), NO ABI wall / NO C-shim. Sibling of the deployed arr-zeros-leaf constructor.
+//
+// Body = an EMPTY boxed array: calloc a zeroed HexaArr descriptor (items@0=NULL len@8=0 cap@16=0
+// heap_water@24=0, sizeof=32) + mint TAG_ARRAY=5 over it. calloc(1,32) == the C body's
+// `HX_SET_ARR_PTR(v, calloc(1, sizeof(HexaArr)))`; __hx_make_val(5, a) == HX_MAKE_TAG(TAG_ARRAY)
+// + HX_SET_ARR_PTR (the deployed zeros_leaf mint idiom).
+//
+// ★ PARITY DELTA (Fable design · stats-bump DROP): the C body bumps a debug-only static counter
+// `_hx_stats_array_new++` (HX_RTCORE_LOCAL, gated on `_hx_stats_on()` which is OFF by default, read
+// only by a stderr stats dump). A seed in a separate .o cannot see the file-scoped static, so the
+// bump is DROPPED — byteeq-safe by construction (the counter never feeds emitted bytes; gen3≡gen4
+// unaffected; the compiler's own hexa_array_new use during self-compile never observes it with stats
+// off). Same accepted debug-only parity delta as the i64/f64/zeros seeds' dropped fprintf-OOM richness.
+//
+// SEED-ONLY SSOT: imported by NOTHING — enters runtime.a only via
+// tool/regen_array_new_leaf_native_s.sh / stage_resolve_runtime_a resolve_native_array_new_seed.
+// nm contract = hexa_array_new (single global). U-floor = { calloc } (aprime lowers to hexa_exit if any).
+
+extern fn calloc(cnt: int, size: int) -> int
+
+// hexa_array_new(): an empty boxed [HexaVal] array. calloc the zeroed HexaArr descriptor + box TAG_ARRAY.
+pub fn hexa_array_new() -> HexaVal {
+    let a = calloc(1, 32)                 // zeroed HexaArr: items@0=NULL len@8=0 cap@16=0 heap_water@24=0
+    return __hx_make_val(5, a)            // TAG_ARRAY=5, payload = descriptor ptr
+}
