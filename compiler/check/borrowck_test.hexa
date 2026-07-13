@@ -870,6 +870,101 @@ fn _run_write_through_probe(label: string, src: string, want_on: i64) -> bool {
     return ok
 }
 
+// ── HEXA-OWN L5-E7 — assign-behind-shared-ref (HX3031, Rust E0594) ──
+//
+// The E2 loan registry feeds a rule at the field_set / index_set ASSIGN hooks:
+// `r.f = v` / `r[i] = v` where the base `r` is itself a LIVE SHARED (`&`) ref-
+// binding fires HX3031 — a `&` borrow grants read-only access through the
+// reference, so writing through it is illegal (only `&mut` permits it). The
+// `&mut` case is exempt (that IS the loan's purpose); a killed ref (origin "")
+// is silent (liveness). ON → 1 HX3031 per hazard; OFF → empty stream (byteeq-
+// neutral).
+
+fn _src_hz_assign_behind_ref() -> string {
+    // `let r = &s; r.x = 1` — writing a field through a shared ref → E0594.
+    let mut s = "struct S { x: i64 }\n"
+    s = s + "fn abr() {\n"
+    s = s + "    let mut st = S { x: 1 }\n"
+    s = s + "    let r = &st\n"
+    s = s + "    r.x = 1\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_hz_index_behind_ref() -> string {
+    // `let r = &arr; r[0] = 1` — writing an element through a shared ref → E0594.
+    let mut s = "fn abri() {\n"
+    s = s + "    let arr = [1, 2]\n"
+    s = s + "    let r = &arr\n"
+    s = s + "    r[0] = 1\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_assign_behind_mut_ref() -> string {
+    // `let r = &mut st; r.x = 1` — a `&mut` loan permits writing through the
+    // reference (its whole purpose), so the `_bck_ref_mut` bit gates it out → 0.
+    let mut s = "struct S { x: i64 }\n"
+    s = s + "fn abrm() {\n"
+    s = s + "    let mut st = S { x: 1 }\n"
+    s = s + "    let r = &mut st\n"
+    s = s + "    r.x = 1\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+fn _src_fp_assign_behind_killed_ref() -> string {
+    // `let mut r = &st; r = 0; r.x = 1` — the ref is killed by the non-borrow
+    // reassign before the write (newest-per-name row has origin "") → silent.
+    let mut s = "struct S { x: i64 }\n"
+    s = s + "fn abrk() {\n"
+    s = s + "    let mut st = S { x: 1 }\n"
+    s = s + "    let mut r = &st\n"
+    s = s + "    r = 0\n"
+    s = s + "    r.x = 1\n"
+    s = s + "    println(1)\n"
+    s = s + "}\n"
+    return s
+}
+
+// HX3031 probe runner — mirrors `_run_write_through_probe` but keys on HX3031
+// (the assign-behind-shared-ref code) and asserts every OTHER code is 0 (probe
+// hygiene). STRICT re-bands HX3031 to Error, so the error-band count must equal
+// the HX3031 count (escalation is severity-only). OFF → want 0 (empty stream).
+fn _run_assign_behind_ref_probe(label: string, src: string, want_on: i64) -> bool {
+    let strict = env("HEXA_BORROWCK_STRICT") == "1"
+    let flag_on = env("HEXA_BORROWCK") == "1" || strict
+    let mut want = 0
+    if flag_on { want = want_on }
+    let mut ok = true
+    println("")
+    println("── " + label + " (expect HX3031 ×" + to_string(want) + ") ──")
+    let d = _compile_probe(label, src)
+    let n = _count_code(d, "HX3031")
+    let other = len(d) - n
+    _print_diags(d)
+    if n != want {
+        println("  FAIL: HX3031 = " + to_string(n) + ", want " + to_string(want))
+        ok = false
+    }
+    if other != 0 {
+        println("  FAIL: stray non-HX3031 diagnostics = " + to_string(other))
+        ok = false
+    }
+    if strict {
+        let eb = _count_error_band(d)
+        if eb != want {
+            println("  FAIL: STRICT error-band = " + to_string(eb) + ", want " + to_string(want))
+            ok = false
+        }
+    }
+    if ok { println("  ok: ×" + to_string(want)) }
+    return ok
+}
+
 // ── tp_own_param_move: hand-built HIR (Rule 2 mechanism proof) ──
 
 fn _tsp(line: i64) -> Span {
@@ -1273,6 +1368,13 @@ fn main() {
         if !_run_mvb("hz_move_while_shared_borrow", true, false, 1, 0) { ok = false }
         if !_run_mvb("fp_move_while_mut_borrow_dedup", true, true, 0, 1) { ok = false }
         if !_run_mvb("fp_move_no_borrow", false, false, 0, 0) { ok = false }
+        // HEXA-OWN L5-E7 — assign-behind-shared-ref (HX3031, Rust E0594).
+        // Field/index write through a live `&` ref → ×1 ON. Controls (a `&mut`
+        // ref, a killed ref) → 0. OFF sweep asserts a fully empty stream.
+        if !_run_assign_behind_ref_probe("hz_assign_behind_ref", _src_hz_assign_behind_ref(), 1) { ok = false }
+        if !_run_assign_behind_ref_probe("hz_index_behind_ref", _src_hz_index_behind_ref(), 1) { ok = false }
+        if !_run_assign_behind_ref_probe("fp_assign_behind_mut_ref", _src_fp_assign_behind_mut_ref(), 0) { ok = false }
+        if !_run_assign_behind_ref_probe("fp_assign_behind_killed_ref", _src_fp_assign_behind_killed_ref(), 0) { ok = false }
         // census lane must be silent whenever HEXA_BORROWCK_CENSUS is unset
         // (byteeq-neutral proof at the census-count level).
         if !_run_census() { ok = false }

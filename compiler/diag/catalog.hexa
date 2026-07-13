@@ -569,6 +569,25 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3031",
+        title: "cannot assign to a place behind a `&` reference",
+        // Warning band (SSOT F4 warn-first), the assign-behind-shared-ref rung of
+        // the E2 loan-registry family: the opt-in borrow checker (`HEXA_BORROWCK=1`)
+        // surfaces a WRITE THROUGH a binding that is itself a live SHARED (`&`) ref.
+        // Under `HEXA_BORROWCK_STRICT=1` the SAME diagnostic instance is re-banded
+        // to a build-refusing Error via the sanctioned caller override in
+        // `_bck_emit_assign_behind_ref` (identical mechanism to
+        // HX3014/HX3019/HX3021/HX3023/HX3027/HX3029). With the flag unset the loan
+        // pass is inert (`_bck_active` false), so nothing is emitted and the
+        // diagnostic stream + emitted bytes are byte-identical — release integrity
+        // first.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "cannot assign through `{name}` because it is behind a `&` reference — `{name}` is a shared borrow of `{origin}` (line {borrow_line})",
+        explain: "The opt-in borrow checker (`HEXA_BORROWCK=1`, HEXA-OWN L5-E7) found an ASSIGNMENT THROUGH a shared reference: `r.f = v` (a field write) or `r[i] = v` (an index write) where the base binding `r` is itself a LIVE SHARED (`&`) ref-binding created earlier in the same function (`let r = &s`) and not yet killed (by reassigning `r` to a non-borrow RHS). This is Rust's E0594 ('cannot assign to `x.f`, which is behind a `&` reference'; rustc reports it when a place reachable only through a `&` — not `&mut` — reference is used as an assignment target): a shared borrow grants read-only access through the reference, so writing through it would violate the borrow's shared-aliasing guarantee — only a `&mut` loan permits a write through the reference, which is that loan's whole purpose (so a `&mut` ref-binding never fires this rule; the `_bck_ref_mut` bit gates it out). The check runs at the field_set / index_set lowering hooks (`_lower_hexpr` assign arm, HEXA-OWN L3 M3), immediately after the existing Rule-1 alias WRITE note, and reuses the E2 ref registry (`_bck_find_ref` newest-per-name END-scan) with zero new state. Liveness is the E3 idiom: the newest registry row for the base name must have a non-empty origin (a KILL row carries origin \"\", so `let mut r = &s; r = 0; r.x = 1` stays silent) AND its mutability bit must be `&` (false). The rule is conservative by construction: a bare ident-assign `r = v` is NOT covered (that is a rebinding, not a deref-write — hexa has no `*r` place syntax), and a nested base place (`r.a.b = v`) is already excluded by the existing hook gate (`lhs.children[0].kind == \"ident\"`). No double-report: no other rung fires at this span — E4 write-through (HX3023) keys on the ident-assign arm only, and the base ident's READ scan (`_bck_check_use`) matches only `&mut` loans whose origin equals the base name (here the base IS the ref binding, never an origin). `&` surface adoption in the corpus is currently 0 (the HX3029 adoption census), so even with the flag ON this rule fires on ZERO real source (corpus-clean). Warning band by default (SSOT F4 warn-first); `HEXA_BORROWCK_STRICT=1` re-bands it to a build-refusing Error. The default build (flag unset) emits nothing here and is byte-identical. Fix: borrow mutably instead (`let r = &mut s`), assign to the owner directly (`s.f = v`), or restructure so the write does not go through a shared reference.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
