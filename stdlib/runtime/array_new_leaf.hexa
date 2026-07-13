@@ -18,12 +18,45 @@
 //
 // SEED-ONLY SSOT: imported by NOTHING — enters runtime.a only via
 // tool/regen_array_new_leaf_native_s.sh / stage_resolve_runtime_a resolve_native_array_new_seed.
-// nm contract = hexa_array_new (single global). U-floor = { calloc } (aprime lowers to hexa_exit if any).
+// nm contract = hexa_array_new (single global). U-floor = { hexa_heap_zalloc, hexa_exit } — CARRIER-ONLY.
+//
+// ★★ TWO RULES THIS SEED EXISTS TO ENCODE (both learned the hard way, 2026-07-13)
+//
+// (1) NEVER a raw libc extern. aprime lowers EVERY call here with the hexa pair-ABI — args ride
+//     (tag,payload) register pairs, the result payload is read from the SECOND return register
+//     (rdx/x1). A bare `extern fn calloc` emits `call calloc`, whose U-symbol binds at link to the
+//     C-ABI libc body: it reads (rdi,rsi) as (nmemb,size) and returns the pointer in rax ALONE. The
+//     old body therefore called calloc(0,1) and minted the descriptor from garbage in the dead rdx.
+//     Measured 3/3 per target: linux-x86_64 SIGSEGV, darwin-arm64 SIGSEGV. That is what broke #4930.
+//
+// (2) NEVER hexa_ptr_alloc — despite the name, it is ARENA. alloc_syscall_native.o wins the link and
+//     its body is a bare `bl hexa_arena_alloc` (self/native/alloc_syscall_arm64.s:3148), beating the
+//     weak malloc stub in runtime.o. An array DESCRIPTOR must not live in the arena: the array escapes
+//     its frame, the arena rewinds, and the next bump-alloc reuses the descriptor — silently
+//     overwriting len/cap/items (runtime_core_emit.hexa documents this on the C body: measured
+//     `diags` desc len 0->15, cap 0->16). Routing the descriptor through hexa_ptr_alloc made hexat die
+//     transpiling ITSELF: "index 7 out of bounds (len 2)".
+//     An isolated .o smoke CANNOT catch this — it stubs the carrier with malloc and passes. Only a
+//     build against the real runtime.a (build_aprime seed-converge) exposes it.
+//
+// hexa_heap_zalloc is the carrier for exactly this: calloc(1,n) semantics, heap, STRONG (a native seed
+// that re-defines it trips the multiple-definition gate loudly instead of swapping the arena in).
+// It already zeroes all four words, so no explicit store-back is needed — same contract as the C body's
+// `HX_SET_ARR_PTR(v, calloc(1, sizeof(HexaArr)))`.
+//
+// Arithmetic/compares use __hx_payload_* LEAVES, never plain operators: a plain `a == 0` lowers to the
+// boxed hexa_eq slow-call, and it does so TARGET-DEPENDENTLY (x86_64 folds it to an inline cmp, arm64
+// emits a real `bl hexa_eq`) — so an x86-only check waves it through and both arm64 targets fail to
+// link (convergence array-core-hexa-1, arm64 face).
 
-extern fn calloc(cnt: int, size: int) -> int
+extern fn hexa_heap_zalloc(size: int) -> int   // heap, zeroed, STRONG (runtime.h) — NEVER the arena
+extern fn hexa_exit(code: int)                 // HexaVal-ABI carrier — OOM abort
 
-// hexa_array_new(): an empty boxed [HexaVal] array. calloc the zeroed HexaArr descriptor + box TAG_ARRAY.
+// hexa_array_new(): an empty boxed [HexaVal] array. Zeroed HexaArr descriptor on the HEAP + TAG_ARRAY.
 pub fn hexa_array_new() -> HexaVal {
-    let a = calloc(1, 32)                 // zeroed HexaArr: items@0=NULL len@8=0 cap@16=0 heap_water@24=0
+    let a = hexa_heap_zalloc(32)          // zeroed HexaArr: items@0=NULL len@8=0 cap@16=0 heap_water@24=0
+    if __hx_payload_eq(a, 0) {
+        hexa_exit(1)                      // OOM — matches the C body's abort path
+    }
     return __hx_make_val(5, a)            // TAG_ARRAY=5, payload = descriptor ptr
 }

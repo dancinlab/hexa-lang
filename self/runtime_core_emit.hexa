@@ -2754,6 +2754,43 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "}\n"
     buf = buf + "#endif\n"
     buf = buf + "\n"
+    // ── HEAP-ONLY pair-ABI carriers (descriptor-class allocation) ───────────
+    // Emitted OUTSIDE the ARRAY_NEW guard above: a seed that replaces hexa_array_new must still
+    // find these. They exist because a native .s seed can only call through the hexa pair-ABI, and
+    // the ONLY generic allocation carrier it had — hexa_ptr_alloc — is ARENA-backed in the shipped
+    // runtime: alloc_syscall_native.o wins the link and delegates straight to hexa_arena_alloc
+    // (self/native/alloc_syscall_arm64.s:3148), beating the weak malloc stub in runtime.o
+    // (runtime_emit_full.hexa). An array DESCRIPTOR must NEVER be arena-resident — see the long
+    // note on hexa_array_new above: the array escapes its frame, the arena rewinds, the next
+    // bump-alloc reuses the descriptor and silently overwrites len/cap/items. Measured 2026-07-13:
+    // routing the descriptor through hexa_ptr_alloc made hexat die transpiling ITSELF with
+    // "index 7 out of bounds (len 2)". The items BUFFER may live in the arena (escape-heapified on
+    // return); the DESCRIPTOR may not.
+    //
+    // STRONG on purpose (NOT __attribute__((weak))). Weakness is exactly what let the arena seed
+    // take over hexa_ptr_alloc without a sound. If any future native seed defines one of these, the
+    // ld -r multiple-definition gate must FAIL LOUDLY at build time rather than silently swap in an
+    // allocator with different lifetime semantics.
+    buf = buf + "/* heap-only pair-ABI carriers — descriptor-class allocations. NEVER arena.\n"
+    buf = buf + " * STRONG (not weak) so a native seed re-defining one trips the multidef gate\n"
+    buf = buf + " * instead of silently swapping the arena in (the hexa_ptr_alloc accident). */\n"
+    buf = buf + "HexaVal hexa_heap_alloc(HexaVal size_v) {\n"
+    buf = buf + "    int64_t sz = HX_IS_INT(size_v) ? HX_INT(size_v) : 0;\n"
+    buf = buf + "    if (sz <= 0) return hexa_int(0);\n"
+    buf = buf + "    return hexa_int((int64_t)(uintptr_t)malloc((size_t)sz));\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_heap_zalloc(HexaVal size_v) {\n"
+    buf = buf + "    int64_t sz = HX_IS_INT(size_v) ? HX_INT(size_v) : 0;\n"
+    buf = buf + "    if (sz <= 0) return hexa_int(0);\n"
+    buf = buf + "    return hexa_int((int64_t)(uintptr_t)calloc(1, (size_t)sz));\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_heap_realloc(HexaVal ptr_v, HexaVal size_v) {\n"
+    buf = buf + "    int64_t sz = HX_IS_INT(size_v) ? HX_INT(size_v) : 0;\n"
+    buf = buf + "    void* p = (void*)(uintptr_t)(HX_IS_INT(ptr_v) ? HX_INT(ptr_v) : 0);\n"
+    buf = buf + "    if (sz <= 0) return hexa_int(0);\n"
+    buf = buf + "    return hexa_int((int64_t)(uintptr_t)realloc(p, (size_t)sz));\n"
+    buf = buf + "}\n"
+    buf = buf + "\n"
     // ── UNSHADOW [HEADLINE] F1: native-i64 array storage helpers ────────────
     // Native contiguous int64_t[] (8-byte stride), the storage the codegen emits
     // for a statically-proven monomorphic-i64 array. Carried in a HexaVal as a

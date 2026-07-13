@@ -36,13 +36,18 @@ printf 'fn _drv_unused() {}\n' > "$TMP/_drv.hexa"
 # the 1 native empty-array constructor global this seed must export.
 SYMS="hexa_array_new"
 NSYMS=1
-# the carrier/libc externs this seed is ALLOWED to leave undefined. calloc is the only
 # CARRIER-ONLY U-floor. A raw libc name here is not a "sanctioned floor entrant" — it is a
 # MISCOMPILE: aprime lowers every call in the seed with the hexa pair-ABI, but a raw libc U-symbol
 # binds to the C-ABI body, so the args land in the wrong registers and the result pointer (rax/x0
 # alone) is dropped in favour of garbage in the dead second register. That is exactly how the old
 # `calloc` entry broke the #4930 flip on all 3 targets. Only HexaVal-ABI carriers may appear.
-ALLOWED_U="hexa_ptr_alloc hexa_exit hexa_bool"
+#
+# hexa_heap_zalloc, NOT hexa_ptr_alloc: despite its name hexa_ptr_alloc is ARENA — alloc_syscall_native.o
+# wins the link and delegates to hexa_arena_alloc (self/native/alloc_syscall_arm64.s:3148). An array
+# DESCRIPTOR escapes its frame, so an arena descriptor is reused after the rewind and its len/cap are
+# silently overwritten (runtime_core_emit.hexa documents this on the C body). hexa_heap_zalloc is the
+# heap carrier for exactly this class.
+#
 # hexa_bool is NOT a libc entrant — it is the BACKEND'S OWN helper (`HexaVal hexa_bool(int)`,
 # runtime_core.c) that aprime emits for a leaf truth test (`if __hx_payload_eq(..)`), with an ABI the
 # codegen itself controls. Every already-deployed seed carries it. What must NEVER appear here is a raw
@@ -50,6 +55,7 @@ ALLOWED_U="hexa_ptr_alloc hexa_exit hexa_bool"
 # entrant. Nor a BOXED slow-call (hexa_eq/hexa_mul/hexa_add_slow): those come from writing a plain `a == 0`
 # instead of the `__hx_payload_*` leaf (convergence array-core-hexa-1), and they are TARGET-DEPENDENT —
 # x86_64 folds them to an inline cmp while arm64 emits a real `bl`, so an x86-only check waves them through.
+ALLOWED_U="hexa_heap_zalloc hexa_exit hexa_bool"
 
 emit_one() {
     local triple="$1" out="$2" abi="$3"
