@@ -714,6 +714,12 @@
           "role": "",
           "id": "self-host-status-remaining-residuals-tracked-not-silent-on-path-native-seed-floo-3",
           "detail": ""
+         },
+         {
+          "name": "②-terminal runtime_core.c dispatch-reduction — 3 units default-ON (3-target byteeq+faithful+own-link corpus GREEN): map-query 8 dispatch (#4914) · valop eqtruthy/coercion 6 (#4916) · array i64 typed-leaf 4 (new/push/len/box · #4917 seed+#4918 flip). 🔓 W0: array_core.hexa:25 'realloc grow stays C' wall FALSIFIED — dissolved via the --isolate seed CALLING extern realloc (C body carried the same libc undef, net floor unchanged). Next=f64 typed-leaf (bit-reinterpret leaf __hx_f64_bits) + poly zeros_leaf.",
+          "role": "",
+          "id": "self-host-status-remaining-residuals-tracked-not-silent-on-path-native-seed-floo-4",
+          "detail": ""
          }
         ]
        },
