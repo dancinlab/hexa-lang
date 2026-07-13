@@ -1672,9 +1672,9 @@ build_runtime_a_from_source() {
     # bodies stay in runtime_core.c as the no-seed fallback.
     local rt_valop_def=""
     if [ "${HEXA_RT_VALOP_NATIVE:-0}" = "1" ] && [ -f build/valop_core_native.o ]; then
-        rt_valop_def="-DHEXA_RT_VALOP_NATIVE=1"
+        rt_valop_def="-DHEXA_RT_VALOP_NATIVE=1 -DHEXA_RT_VALOP_EQCOERCE_NATIVE=1"
         extra_obj="$extra_obj build/valop_core_native.o"
-        echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: HEXA_RT_VALOP_NATIVE=1; ar'ing native valop_core_native.o into runtime.a"
+        echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: HEXA_RT_VALOP_NATIVE=1 + EQCOERCE=1; ar'ing native valop_core_native.o into runtime.a (eq/truthy/to_int/to_float/abs/null_coal scalar arms dropped from runtime_core.c)"
     fi
     # RT-NATIVE NUM-FLOAT (sh-num-float lane, gated): when the num_float_core seed
     # is active, define HEXA_RT_NUM_PARSE_FLOAT_NATIVE for the runtime.c compile (so
