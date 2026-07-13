@@ -1,0 +1,95 @@
+// stdlib/runtime/array_typed_leaf_f64.hexa — axis-② Tier-1 #4 typed-array TYPED-LEAF natives (f64).
+//
+// The hexa-source bodies for the packed-f64 array dispatchers that runtime_core.c
+// externs away under the HEXA_RT_CORE_ARRAY_F64_LEAF_NATIVE sub-guard (the f64 twin
+// of array_typed_leaf.hexa's i64 unit). Each body mirrors the i64 seed — the packed
+// layout is IDENTICAL (a double is 8 bytes, same stride as int64) so new/len are
+// byte-for-byte the same and push/box differ only in how the payload is read/written.
+//
+// ★ FLOAT-PARAM ABI (convergence x86-64-linux-hexa-1): a hexa `float` param does NOT
+// land in xmm0 by default (SSE fp-ABI is a hxlcl_* whitelist only), so the seed CANNOT
+// take a `double x` and match the C dispatcher hexa_arr_f64_push(HexaVal, double) whose
+// C callers pass the double in xmm0. RESOLUTION (C-shim, spec v2): the seed's push takes
+// `xbits: int` (a GP-class i64 = the double's raw bits), and a 3-line C shim in the
+// emitter — hexa_arr_f64_push(HexaVal v, double x){union{double d;long long i;}u; u.d=x;
+// return hexa_arr_f64_push_bits(v, u.i);} — owns the xmm0→GP crossing (correct on all 3
+// targets via the system C compiler, no arm64 fp-ABI wall). So this file is 100% GP-class.
+//
+// box() returns the element re-boxed as TAG_FLOAT via __hx_bits_f64 (bit-reinterpret the
+// loaded i64 payload → a FLOAT HexaVal whose .f reads those bits) — no hexa_float carrier
+// needed (the earlier design's hexa_float(double) is dropped; __hx_bits_f64 is exact).
+//
+// LAYOUT: HexaArrF64 { double* data @0(8B); int len @8(i32); int cap @12(i32) } sizeof 16,
+// 8-byte stride. __hx_ptr_load/store{32,64} raw-mem + __hx_payload_* leaf arithmetic (plain
+// int → boxed hexa_mul/add_slow; convergence array-core-hexa-1).
+//
+// SEED-ONLY SSOT: imported by NOTHING — enters runtime.a only via
+// tool/regen_array_typed_leaf_f64_native_s.sh / stage_resolve_runtime_a
+// resolve_native_array_f64_leaf_seed. nm contract = hexa_arr_f64_{new,push_bits,len,box}.
+
+extern fn malloc(n: int) -> int
+extern fn realloc(p: int, n: int) -> int
+extern fn write(fd: int, buf: int, n: int) -> int
+extern fn exit(code: int)
+extern fn hexa_throw(v: HexaVal)
+
+// hexa_arr_f64_new(cap): malloc a HexaArrF64 (16B) + a data buffer (cap*8, cap>=1),
+// zero len, set cap, box as TAG_ARRAY. Byte-identical to the i64 new (8B stride).
+pub fn hexa_arr_f64_new(cap: int) -> HexaVal {
+    let mut c = cap
+    if __hx_payload_lt(c, 1) { c = 1 }
+    let a = malloc(16)                      // sizeof(HexaArrF64)
+    let bytes = __hx_payload_mul(c, 8)      // sizeof(double) * cap
+    let d = malloc(bytes)
+    __hx_ptr_store64(a, 0, d)               // data <- d
+    __hx_ptr_store32(a, 8, 0)               // len  <- 0   (i32)
+    __hx_ptr_store32(a, 12, c)              // cap  <- c   (i32)
+    return __hx_make_val(5, a)              // TAG_ARRAY=5, payload = HexaArrF64* a
+}
+
+// hexa_arr_f64_push_bits(v, xbits): amortized-doubling append of the raw double bits
+// xbits (the C shim's union.i). Grow via extern realloc when len>=cap. The stored word
+// is the double's 8-byte bit pattern (store64), so data[len]=x bit-exact.
+pub fn hexa_arr_f64_push_bits(v: HexaVal, xbits: int) -> HexaVal {
+    let a = __hx_payload_add(v, 0)          // HexaArrF64* out of the TAG_ARRAY payload
+    let len = __hx_ptr_load32(a, 8)
+    let cap = __hx_ptr_load32(a, 12)
+    if __hx_payload_ge(len, cap) {
+        let ncap = __hx_payload_mul(cap, 2)
+        let old = __hx_ptr_load64(a, 0)
+        let nbytes = __hx_payload_mul(ncap, 8)
+        let nd = realloc(old, nbytes)
+        if __hx_payload_eq(nd, 0) {
+            let msg = __hx_str_ptr("OOM in arr_f64_push\n")   // char* bridge (parity msg)
+            write(2, msg, 20)
+            exit(1)
+        }
+        __hx_ptr_store64(a, 0, nd)          // data <- realloc'd buffer
+        __hx_ptr_store32(a, 12, ncap)       // cap  <- ncap
+    }
+    let data = __hx_ptr_load64(a, 0)
+    let off = __hx_payload_mul(len, 8)      // byte offset of data[len]
+    __hx_ptr_store64(data, off, xbits)      // data[len] <- the double's raw bits
+    let nlen = __hx_payload_add(len, 1)
+    __hx_ptr_store32(a, 8, nlen)            // len <- len + 1
+    return v
+}
+
+// hexa_arr_f64_len(v): HexaArrF64.len @ +8 (i32). Byte-identical to i64 len.
+pub fn hexa_arr_f64_len(v: HexaVal) -> int {
+    let a = __hx_payload_add(v, 0)
+    return __hx_ptr_load32(a, 8)
+}
+
+// hexa_arr_f64_box(v, i): bounds-checked read of data[i] re-boxed as TAG_FLOAT via
+// __hx_bits_f64 (reinterpret the loaded i64 payload as a double's bits → FLOAT HexaVal).
+pub fn hexa_arr_f64_box(v: HexaVal, i: int) -> HexaVal {
+    let a = __hx_payload_add(v, 0)
+    let len = __hx_ptr_load32(a, 8)
+    if __hx_payload_lt(i, 0) { hexa_throw("index out of bounds") }
+    if __hx_payload_ge(i, len) { hexa_throw("index out of bounds") }
+    let data = __hx_ptr_load64(a, 0)
+    let off = __hx_payload_mul(i, 8)
+    let bits = __hx_ptr_load64(data, off)
+    return __hx_bits_f64(bits)              // raw bits → TAG_FLOAT HexaVal
+}
