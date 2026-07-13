@@ -588,14 +588,14 @@ resolve_native_array_typed_leaf_seed() {
     # body already leaves undefined, so no runtime.a-only link regresses.
     if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_ARRI64:-0}" != "0" ]; then
         local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/array_typed_leaf.hexa" _otri=""
-        local _kg="hexa_arr_i64_new,hexa_arr_i64_push,hexa_arr_i64_len,hexa_arr_i64_box"
+        local _kg="hexa_arr_i64_new_seed,hexa_arr_i64_push_seed,hexa_arr_i64_len_seed,hexa_arr_i64_box_seed"
         case "$tgt" in
             linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
         esac
         if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
             printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
             if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --keep-global="$_kg" --isolate --target="$_otri" -o build/array_typed_leaf_native.o "$_osrc" 2>build/array_typed_leaf_ownobj.err; then
-                local _oq; _oq="$(nm build/array_typed_leaf_native.o 2>/dev/null | grep -cE ' T _?hexa_arr_i64_(new|push|len|box)$' || true)"
+                local _oq; _oq="$(nm build/array_typed_leaf_native.o 2>/dev/null | grep -cE ' T _?hexa_arr_i64_(new|push|len|box)_seed$' || true)"
                 # U-floor gate: every undefined external must be in the allowed carrier/libc set.
                 local _bad; _bad="$(nm build/array_typed_leaf_native.o 2>/dev/null | awk '$1=="U"||$2=="U"{print $NF}' | while read -r u; do
                     b="${u#_}"; printf '%s\n' " malloc realloc write hexa_exit hexa_int hexa_throw " | grep -q " $b " || echo "$b"; done | tr '\n' ' ')"
@@ -618,7 +618,7 @@ resolve_native_array_typed_leaf_seed() {
         *)            seed="" ;;
     esac
     [ -n "$seed" ] && [ -f "$seed" ] || { echo "[stage_resolve_runtime_a] ARR-I64: no seed for TARGET=$tgt — i64 dispatchers stay in C runtime_core.c (regen tool/regen_array_typed_leaf_native_s.sh)" >&2; return 0; }
-    local nsyms; nsyms="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?hexa_arr_i64_(new|push|len|box)([[:space:]]|$)' "$seed" 2>/dev/null || true)"
+    local nsyms; nsyms="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?hexa_arr_i64_(new|push|len|box)_seed([[:space:]]|$)' "$seed" 2>/dev/null || true)"
     if [ "${nsyms:-0}" -ne 4 ]; then
         echo "[stage_resolve_runtime_a] ARR-I64: seed $seed exports ${nsyms:-0}/4 hexa_arr_i64_* — i64 dispatchers stay in C (seed needs regen)" >&2
         return 0
@@ -780,14 +780,14 @@ resolve_native_array_f64_leaf_seed() {
     esac
     if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_ARRF64:-0}" != "0" ]; then
         local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/array_typed_leaf_f64.hexa" _otri=""
-        local _kg="hexa_arr_f64_new,hexa_arr_f64_push_bits,hexa_arr_f64_len,hexa_arr_f64_box"
+        local _kg="hexa_arr_f64_new_seed,hexa_arr_f64_push_bits_seed,hexa_arr_f64_len_seed,hexa_arr_f64_box_seed"
         case "$tgt" in
             linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
         esac
         if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
             printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
             if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --keep-global="$_kg" --isolate --target="$_otri" -o build/array_typed_leaf_f64_native.o "$_osrc" 2>build/array_typed_leaf_f64_ownobj.err; then
-                local _oq; _oq="$(nm build/array_typed_leaf_f64_native.o 2>/dev/null | grep -cE ' T _?hexa_arr_f64_(new|push_bits|len|box)$' || true)"
+                local _oq; _oq="$(nm build/array_typed_leaf_f64_native.o 2>/dev/null | grep -cE ' T _?hexa_arr_f64_(new|push_bits|len|box)_seed$' || true)"
                 local _bad; _bad="$(nm build/array_typed_leaf_f64_native.o 2>/dev/null | awk '$1=="U"||$2=="U"{print $NF}' | while read -r u; do
                     b="${u#_}"; printf '%s\n' " malloc realloc write hexa_exit hexa_throw " | grep -q " $b " || echo "$b"; done | tr '\n' ' ')"
                 if [ "${_oq:-0}" -eq 4 ] && [ -z "${_bad// /}" ]; then
@@ -809,7 +809,7 @@ resolve_native_array_f64_leaf_seed() {
         *)            seed="" ;;
     esac
     [ -n "$seed" ] && [ -f "$seed" ] || { echo "[stage_resolve_runtime_a] ARR-F64: no seed for TARGET=$tgt — f64 dispatchers stay in C runtime_core.c (regen tool/regen_array_typed_leaf_f64_native_s.sh)" >&2; return 0; }
-    local nsyms; nsyms="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?hexa_arr_f64_(new|push_bits|len|box)([[:space:]]|$)' "$seed" 2>/dev/null || true)"
+    local nsyms; nsyms="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?hexa_arr_f64_(new|push_bits|len|box)_seed([[:space:]]|$)' "$seed" 2>/dev/null || true)"
     if [ "${nsyms:-0}" -ne 4 ]; then
         echo "[stage_resolve_runtime_a] ARR-F64: seed $seed exports ${nsyms:-0}/4 hexa_arr_f64_* — f64 dispatchers stay in C (seed needs regen)" >&2
         return 0
