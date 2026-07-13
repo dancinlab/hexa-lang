@@ -605,6 +605,13 @@
         "value": "시드 게이트가 전부 PROXY 를 검사했고 모든 proxy 가 거짓말했다. (1) .globl 개수 = \"4/4 export\" 인데 그 4개 바디가 miscompile 이었다. (2) nm U-floor = 이름 검사라서 클래스-A(raw libc egress)는 잡지만 클래스-B(스칼라-ABI 미스매치)와 클래스-C(구조체 레이아웃 표류)에는 구조적으로 눈이 멀었다 — 둘 다 수개월간 SHIPPED DEFAULT 였다. (3) byteeq/CI 초록 = 그 경로가 안 밟혔다는 뜻일 뿐. FIX = BEHAVIORAL 게이트: 시드를 들여다보지 말고 canonical C-ABI 엔트리로 실제 RUN 하되 반드시 REAL runtime.a 에 링크해 관측 가능한 계약을 단언한다 — descriptor 오프셋(24B/i64) · len 추적 · amortized-doubling grow 경로 · element round-trip. ★grow 경로가 가장 날카로운 칼날: 레이아웃(C)+carrier(A)+ABI(B) 가 동시에 맞아야만 살아남는다(cap 오프셋이 틀리면 realloc(old,0)=free 가 되고 직후 store 가 UAF). ⚠️격리 스모크 금지 — carrier 를 malloc stub 으로 대체하면 arena descriptor 결함을 통과시킨다(실측). ★판별력 실증(convergence nobaseline-gate-yml-1 의 false-green 함정 회피): summer GitHub 새 clone + env -u HEXA_PREBUILT_RUNTIME 에서 origin/main(깨진 시드)=rc 139 SIGSEGV · 수정 브랜치=rc 0, 22/22 PASS. 알려진 파손 트리에서 RED 를 못 띄우는 게이트는 게이트가 아니다. NOT advisory — 이 클래스를 advisory 로 둔 것이 애초에 출하를 허용한 원인이다.",
         "threshold": "재발조건: 새 native 시드 가족을 추가/수정할 때 behavioral 계약 게이트 없이 proxy(심볼 개수·U-floor·byteeq)만으로 판정하면 재발. 규칙: 시드는 반드시 (a) canonical C-ABI 엔트리로 실행하고 (b) REAL runtime.a 에 링크하며(stub 금지) (c) grow/realloc 경로를 포함한 관측 계약을 단언해야 한다. 그리고 새 게이트는 반드시 알려진 파손 트리에서 RED 가 뜨는 것을 실증하라 — 안 그러면 false-green 게이트를 하나 더 만드는 것이다.",
         "source": "tool/seed_abi_contract_smoke.sh"
+      },
+      {
+        "id": "ownlink-strict-census-sh-1",
+        "state": "pos-conv",
+        "value": "own-link default-ON(#4882/#4902) + 게이트 초록 이 \"clang 이 사라졌다\"를 증명하지 않는다. 두 가지 이유: (1) 게이트 코퍼스가 장난감이다 — cfallback_zero_census/ownlink_corpus_parity 가 컴파일하는 것은 21줄 이하 · use 0개짜리 5~6개(실측: array.hexa 21줄 use=0 · loop.hexa 19줄 use=0 · main.hexa 9줄 use=0). 실제 프로그램은 import-closure(flatten)를 먼저 타는데 own-link 가 그 경로에서 측정된 적이 한 번도 없다. (2) 폴백 사다리가 조용하다 — own-link 실패 시 HEXA_RUN_NATIVE_TRACE=1 일 때만 로그를 남기고 tier-B(ld) → C-transpile delegate(clang) 로 낙하한다(self/main.hexa cmd_build/cmd_run). 못 다루는 프로그램은 소리 없이 clang 으로 되돌아가고 아무도 세지 않는다. release-integrity 관점에선 이 안전망이 옳지만, axis-①(hexa_cc.c 삭제)의 DONE 판정은 \"이 사다리가 절대 안 밟힌다\"는 증거를 요구하고 현재 그 증거는 5-프로그램짜리다. FIX = HEXA_OWNLINK_STRICT=1 fail-closed 모드(폴백을 ERROR 로) + 실제 프로그램 코퍼스 census. 이 수치가 axis-① 제거 가부의 유일한 정량 근거다.",
+        "threshold": "재발조건: self-host/own-link 의 default-flip 을 장난감 코퍼스 게이트의 초록만으로 \"DONE\" 판정할 때. 판정: 게이트가 컴파일하는 프로그램의 use(import) 개수와 줄수를 세라 — use=0 이면 flatten 경로를 안 탄 것이다. 규칙: 폴백이 조용한 시스템에서는 \"초록\"이 \"폴백 0\" 을 뜻하지 않는다. fail-closed 모드로 실제 코퍼스를 돌려 폴백률을 실수치로 낼 것. ⚠️ tool/release_build 는 TARGET(darwin-arm64|linux-x86_64|linux-arm64) + CC + LIBS 를 요구한다 — 미설정 시 즉시 실패한다.",
+        "source": "tool/ownlink_strict_census.sh"
       }
     ]
   },
