@@ -1085,6 +1085,41 @@ jobs:
   # DISTINCT from ENCODE-MISS=0 (codegen coverage) + corpus-parity (link correctness):
   # it proves the CLI cmd_build ladder actually takes own-link + never falls through.
   # Advisory (promote to required after a green soak).
+  # seed-ABI contract — the BEHAVIOURAL gate for the self/native/*.s array seeds.
+  #
+  # Every other seed gate checks a proxy, and every proxy lied. `.globl` count said "4/4 exported"
+  # while the four bodies were miscompiled. The nm U-floor check catches raw-libc egress but is a
+  # NAME check, so it is structurally blind to an ABI mismatch or a wrong struct layout. byteeq
+  # stayed green because the broken path was simply never walked. Measured 2026-07-13/14: the
+  # i64/f64 seeds minted a 16-byte/i32 descriptor while C had long since widened HexaArrI64 to
+  # 24 bytes/i64 — a SHIPPED DEFAULT that no gate saw.
+  #
+  # This one does not inspect the seed. It RUNS it through the canonical C-ABI entry points,
+  # linked against the REAL runtime.a, and asserts the observable contract (descriptor offsets,
+  # len tracking, the amortized-doubling grow path, element round-trip). The grow path is the
+  # sharp edge: it survives only if layout + carriers + ABI are ALL correct at once.
+  #
+  # NOT advisory. An advisory gate for this class is what let it ship in the first place.
+  seed-abi-contract-x86_64:
+    name: seed-ABI contract (array seeds vs real runtime.a, linux-x86_64)
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.linux_label) }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+      - name: seed-ABI behavioural contract
+        shell: bash
+        env:
+          CC: gcc
+          HEXA_CCACHE: "1"
+        run: |
+          set -euo pipefail
+          # Never measure against an inherited archive — a stale runtime.a is the classic false
+          # verdict here (convergence runtime-core-emit-hexa-1).
+          env -u HEXA_PREBUILT_RUNTIME HEXA_CUDA=0 bash tool/seed_abi_contract_smoke.sh
+
   cfallback-zero-census-x86_64:
     name: cfallback-zero census (hexa build → own-link, no C-transpile, linux-x86_64)
     needs: dispatch
