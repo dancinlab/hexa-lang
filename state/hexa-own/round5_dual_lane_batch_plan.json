@@ -1,0 +1,177 @@
+{
+ "type": "result",
+ "subtype": "success",
+ "is_error": false,
+ "api_error_status": null,
+ "duration_ms": 1104805,
+ "duration_api_ms": 1104989,
+ "ttft_ms": 11431,
+ "ttft_stream_ms": 5198,
+ "time_to_request_ms": 32,
+ "num_turns": 75,
+ "result": "# 2-lane round5 배치 설계 (기준: origin/main `afd85ea98` — 로컬 체크아웃이 stale 브랜치라 `git show origin/main:…`으로 실측, 라인번호는 전부 이 커밋 기준)\n\n## 0. 실측 요약 — 후보별 verdict\n\n| 후보 | verdict | 근거 (실코드) |\n|---|---|---|\n| S1 let-RHS BinOp/UnOp | **채택 (R2)** — 안전한 REJECT 확장, 단 **corpus census GO/NO-GO 게이트 필수** | 아래 §1.1 |\n| S2 wrong-enum match pattern | **채택 (R1)** — 최저리스크·실 커버갭 | 아래 §1.2 |\n| S3 `&&`/`\\|\\|` non-bool REJECT | **DROP** — hexa 논리연산은 value-returning truthy 시맨틱스, REJECT 계약 위반 | 아래 §1.3 |\n| O1 차기 borrowck rung | **E0594 + E0596 채택 (R3·R4)** — loan-registry 순수 재사용, 신규 상태 0 | 아래 §1.4 |\n\n### 1.1 S1 실측 — \"REJECT 확장 vs 위험한 대공사\" 판정: **안전한 REJECT 확장 가능, 조건부**\n\n- 현 let-arm(`types.hexa:2832-2924`)은 RHS kind를 r1(리터럴, :2857)·r2(ident/call/index/field, :2867)로 제한. **assign-arm r3(:2943)·call-arg·return은 이미 RHS kind 무제한으로 binop 결과타입을 소비 중**이고 R2(#4630) 대칭화 이후 corpus GREEN — 즉 binop 결과타입 소비 자체는 실증된 안전축. let-arm만 마지막 kind 갭.\n- **진짜 리스크는 미지-피연산자 폴백**: `_types_check_binop`의 unknown-operand 조기귀환(:3493-3506)이 `a_unknown + 1`에서 **리터럴 쪽 타입(i64)을 반환** → `let x: i32 = a + 1`(a는 실제 i32일 수 있음)이 rhs_t=i64 KNOWN scalar로 게이트②를 통과 → HX3011 **오탐 REJECT**(always-on Error 밴드 직결). 이것이 \"밴드분리 없는 레거시 emitter 직결\" 리스크의 실체.\n- 판정: check_binop 자체를 고치는 faithfulness fix는 기존 진단 스트림을 건드리므로(loosening이지만 fixture 기대치 변동) 채택하지 않고, **let-arm 로컬에 재귀 `leaves-known` 게이트**를 세우면 오탐 클래스가 구조적으로 죽는다 → 대공사 아님, ~30줄 헬퍼 + else-if 한 팔. 잔여 리스크는 \"실코퍼스의 i32/i64 주석 슬로피\"류 **진성 양성** — 이는 flip-value이며 census로 측정 후 GO/NO-GO.\n\n### 1.2 S2 실측\n\n- `_check_match`(:3773)의 패턴 처리: EnumPath 패턴은 `_infer_expr` EnumPath arm(:3149)이 **`_types_empty_type()` 반환**(:3180 부근) → r9c 리터럴-패턴 체크(:3818-3824)의 scalar 게이트를 통과하지 못해 **현재 wrong-enum 패턴은 완전 침묵** = 실 커버갭 (never-match arm이 조용히 통과, 런타임 silent-mismatch 버그 클래스).\n- 배선 재료 전부 현존: 패턴 head/tail 파서 `_types_enum_path_head/tail`(:1629/:1648), enum 등록부 `_types_enum_names`(`_types_register_enum_item_payloads` :1124), alias 해소 `_types_resolve_alias_name`(:1085), 스크루티니 타입은 param/module-let이면 `named:Color`(`_types_lower_type_ref` :901), block-local `let c: Color`는 Block-arm r5의 `{}name` env slot(:2695 부근)으로 복구 가능. 신규 필요물 = enum-name 존재 프로브 헬퍼 1개 + emit 헬퍼 + catalog 블록.\n\n### 1.3 S3 실측 — DROP\n\n- `hir_to_mir.hexa:2077-2110`: `&&`/`||`(+키워드 `and`/`or`)는 **값 반환 단락 lowering** — truthy-arm에서 \"`&&` stores rhs (b); `||` stores lhs (a)\". 즉 `x || default`·`flag && val`은 **런타임 합법 idiom**이고 non-bool 피연산자는 에러가 아님.\n- 정적 REJECT rung의 확립된 계약은 \"guaranteed-runtime-error → REJECT\"(HX3024/3025/3026)이며, HX3024는 정확히 같은 이유로 bool을 **면제**했다(\"checker matches runtime policy exactly\"). non-bool `&&`를 REJECT하면 이 계약을 처음으로 깨고 런타임 정책과 충돌 → **REJECT rung 불가**. (원하면 warning-band opt-in lint로 별도 캠페인 가능 — 이번 배치 비추천.)\n- 부수 확인: `_types_check_binop`에서 논리연산은 \"Unknown operator\" 폴스루 `return lt`(:3610) — 이 값-시맨틱스 하에서 lt 반환은 same-kind 피연산자에선 sound, mixed-kind에선 unsound. 그래서 **R2의 leaves-known 게이트가 논리연산자를 명시 제외**한다(아래).\n\n### 1.4 O1 서베이 — E-ladder 잔여 후보\n\n현 커버: E0515=HX3019·E0502=HX3021·E0506=HX3023·E0503=HX3027·E0499=HX3028·E0505=HX3029. 잔여 후보 실측:\n\n- **E0594 (assign through `&` ref)** — `let r = &s; r.x = 1`. **현재 완전 미커버**: field_set/index_set 후크(:3330/:3357)는 base의 alias-group WRITE만 기록(Rule 1용), base 자신이 shared ref-binding인지는 아무도 안 봄. `_bck_find_ref`(:715)+`_bck_ref_mut` 그대로 재사용, 신규 상태 0, 후크 2곳. **최저비용 → R3.**\n- **E0596 (mutating method through `&` ref)** — `let r = &arr; r.push(1)`. call-arm receiver 후크(:2744-2748, `_bk_recv_name`은 :2556에서 `_bck_active` 게이트로 이미 캡처됨)에 같은 스캔 1개. **차저비용 → R4.**\n- 기각: E0504 closure-capture-move — `_bck_active`가 closure body에서 **suspended**(:566 주석)이고 캡처 모델 자체가 부재 → 대공사. two-phase borrow — 진단이 아니라 완화 기능. E0597/E0716 borrowed-value-lifetime — loan registry에 scope-depth 축 신설 필요 → 중공사. E0381 uninit-use — init-tracking 별도 레지스트리 → 별도 캠페인.\n\n---\n\n## 2. 배치 선정 — 4 rung (정적 2 + own 2, round4 대칭)\n\n| rung | lane | 코드 | Rust | 한줄 |\n|---|---|---|---|---|\n| **R1** | static (ap) | **HX3030** (신규) | E0308 (check_pat) | wrong-enum match pattern REJECT |\n| **R2** | static (aq) | HX3011 (재사용, r12) | E0308 | let-RHS BinOp/UnOp 확장 + leaves-known 게이트 |\n| **R3** | own (E7) | **HX3031** (신규) | E0594 | assign-behind-`&` (field_set/index_set) |\n| **R4** | own (E8) | **HX3032** (신규) | E0596 | mutating-method-behind-`&` |\n\nHX3030이 다음 free 확인(catalog 실측: HX3029까지 + 4001/5xxx/…; 3030-3032 미사용). 머지 순서는 §5 — R2가 유일한 probe-gated rung이라 **최후미·droppable**.\n\n---\n\n## 3. rung별 impl 스펙\n\n### R1 — HX3030 wrong-enum match pattern (static)\n\n**삽입점 4곳 + catalog + corpus.yml lockstep.**\n\n**(a) 헬퍼** — `compiler/check/types.hexa`, `_types_lookup_variant_payload_types` 종료 후(:1240 `_types_struct_registry_reset` 직전):\n\n```hexa\n// R5-r1 (ap) — enum-name existence probe over the RFC-074 registry.\nfn _types_enum_registry_has(name: string) -> bool {\n    let mut i = 0\n    while i < len(_types_enum_names) {\n        if _types_enum_names[i] == name { return true }\n        i = i + 1\n    }\n    return false\n}\n```\n\n**(b) emit 헬퍼** — `_emit_hx3026` 종료 후(:2082 직후), HX3011 밴드 정책 복제:\n\n```hexa\nfn _emit_hx3030(expected: string, actual: string, variant: string, sp: Span, out: array) {\n    let mut b = diag_new(\"HX3030\")\n    b = diag_span(b, sp)\n    b = diag_arg(b, \"expected\", expected)\n    b = diag_arg(b, \"actual\", actual)\n    b = diag_arg(b, \"variant\", variant)\n    if _types_strict_for(sp.file) {\n        out.push(diag_emit(b))\n    } else {\n        out.push(diag_emit_sev(b, Severity::Warning))\n    }\n}\n```\n\n**(c) 체크 본체** — `_check_match` else-branch, r9c 블록 닫힘 직후(**:3825**, `if _types_is_lit_int(pat_i.kind) || …` 블록의 닫는 `}` 다음, 같은 else 깊이):\n\n```hexa\n// static-types R5-r1 (ap) — wrong-enum match pattern REJECT (Rust E0308,\n// rustc_hir_typeck check_pat → demand::eqtype: pattern of enum `Dir` on a\n// scrutinee of enum `Color` can never match). Fires ONLY when BOTH sides\n// resolve to REGISTERED enums (unknown/cross-module head, struct-typed\n// scrutinee, HexaVal → silent; guarded arms stay on the discard path above\n// — documented conservative false-negative, the r9c shape).\nif _types_is_enum_path_kind(pat_i.kind) {\n    let phead = _types_resolve_alias_name(_types_enum_path_head(pat_i.text))\n    let mut sename = _types_struct_name_of(scrut_t.kind)\n    if len(sename) == 0 && _types_is_ident(e.children[0].kind) && len(e.children[0].text) > 0 {\n        // block-local `let c: Color` scrutinee — recover via the r5 `{}name` slot\n        sename = _types_struct_name_of(_types_env_lookup(env, \"{}\" + e.children[0].text).kind)\n    }\n    let sh = _types_resolve_alias_name(sename)\n    if len(phead) > 0 && len(sh) > 0\n        && _types_enum_registry_has(sh) && _types_enum_registry_has(phead)\n        && phead != sh {\n        _emit_hx3030(sh, phead, _types_enum_path_tail(pat_i.text), pat_i.span, out)\n    }\n}\n```\n\nconservative 경계: 양쪽 **모두** 등록 enum일 때만 fire — struct 스크루티니(HX 없음), cross-module 미등록 enum head(bind의 HX2001 영역), `named:HexaVal`(registry-has 실패), guard-carrier arm(침묵, r9c 선례) 전부 under-reject. EnumPath 패턴의 payload binder ident들은 기존 EnumPath arm이 diag 없이 walk함(실측: lookup miss는 empty 반환만) → 이중보고 없음.\n\n**(d) catalog DiagSpec** — `compiler/diag/catalog.hexa`, **HX3029 블록의 닫는 `},`(:570) 직후** ★완결블록(fix_it_kind + `},` 포함):\n\n```hexa\n    DiagSpec {\n        code: \"HX3030\",\n        title: \"mismatched enum in match pattern\",\n        severity: Severity::Error,\n        stage: \"S3\",\n        template: \"mismatched types in match pattern: expected `{expected}`, found `{actual}::{variant}`\",\n        explain: \"Static type check (always-on since FLIP-3 flagless — Rust-style, no disable switch), static-types R5-r1. A `match` arm's pattern names a variant of a DIFFERENT enum than the scrutinee's type — e.g. `match c { Dir::North -> … }` where `c: Color` — so the arm can NEVER match: enum tags are nominal, and the runtime tag of a `Color` value is never a `Dir` tag, making the arm silently dead (the same silent-mismatch bug class as the r9c literal-pattern rule, which this extends from scalar literals to enum-path patterns). This is the Rust E0308 'mismatched types' rule as fired from the pattern checker (rustc_hir_typeck/src/pat.rs check_pat_path → demand::eqtype → report_mismatched_types). Conservative by construction: it fires ONLY when BOTH the scrutinee's inferred type resolves (after alias substitution) to an enum REGISTERED in this module pass AND the pattern's `Enum::Variant` head is ALSO a registered enum, and the two names differ. A struct-typed scrutinee, an unknown/cross-module enum head (bind's HX2001 territory), a HexaVal/unknown scrutinee, and a guarded arm (`match_guard` carrier, which stays on the r9c discard path) are all SILENT — under-reject, never over-reject. The scrutinee's enum is recovered two ways: params / module-level lets carry `named:<Enum>` directly in the env; a block-local `let c: Color` is recovered from the r5 `{}name` side slot. Emitted unconditionally (FLIP-3 flagless) as a build-refusing ERROR for real source (REJECT), while byte-eq TEST FIXTURES (`compiler/test/` corpus + `*_test.hexa`) stay WARNING via the `_types_strict_for` path carve-out. No env opt-out or severity switch. Fix: use a variant of the scrutinee's enum in the pattern, or match on a value of the pattern's enum.\",\n        fix_it_kind: FixItKind::None\n    },\n```\n\n**(e) corpus.yml lockstep** — `.github/workflows/static-types-corpus.yml:175`:\n`HX30(1[167]|2[4-6])` → `HX30(1[167]|2[4-6]|30)`. (:83 job name·:6/:10/:205/:215/:218/:221 notice 문구도 `HX3030` 추가 — 기능적으론 :175만 필수.)\n\n### R2 — HX3011 r12: let-RHS BinOp/UnOp + leaves-known 게이트 (static)\n\n**(a) 헬퍼** — `types.hexa`, `_types_kind_is_scalar`(:2364-2372) 뒤:\n\n```hexa\n// R5-r2 (aq) — TRUE iff every leaf of a BinOp/UnOp RHS tree is provably a\n// KNOWN scalar, so the tree's inferred result type is SOUND to compare\n// against a let annotation. Kills the unknown-operand literal-fallback\n// false-positive class: `a_unknown + 1` infers i64 via the check_binop\n// unknown-arm (the literal side), which would false-REJECT\n// `let x: i32 = a + 1` — an unknown leaf disqualifies the whole tree.\n// Logical ops (&&/||/and/or) are value-returning truthy short-circuits\n// (hir_to_mir:2077) whose static type is unsound on mixed operands, and\n// non-`-` unops (`!`) pass the operand type through while the runtime\n// yields a truthy bool — both are excluded (conservative under-reject).\nfn _types_rhs_leaves_known(e: Expr, env: TypeEnv, ctx: CheckCtx) -> bool {\n    if _types_is_lit_int(e.kind) || _types_is_lit_float(e.kind)\n        || _types_is_lit_string(e.kind) || _is_lit_bool(e.kind) || _is_lit_char(e.kind) {\n        return true\n    }\n    if _types_is_binop(e.kind) {\n        if e.text == \"as\" { return true }\n        if !_is_arith_op(e.text) && !_types_is_compare_op(e.text) { return false }\n        if len(e.children) < 2 { return false }\n        return _types_rhs_leaves_known(e.children[0], env, ctx)\n            && _types_rhs_leaves_known(e.children[1], env, ctx)\n    }\n    if _types_is_unop(e.kind) {\n        if e.text != \"-\" { return false }\n        if len(e.children) == 0 { return false }\n        return _types_rhs_leaves_known(e.children[0], env, ctx)\n    }\n    if _types_is_ident(e.kind) || _types_is_call(e.kind)\n        || _types_is_index(e.kind) || _types_is_field(e.kind) {\n        let mut scratch: array = []\n        return _types_kind_is_scalar(_infer_expr(e, env, ctx, scratch).kind)\n    }\n    return false\n}\n```\n\n**(b) let-arm 세 번째 else-if** — r2 else-if 블록(:2867 시작)의 닫는 `}`(:2915 부근, `if len(tt) > 0 && len(e.children) > 0` 내부)에 연결:\n\n```hexa\n} else if _types_is_binop(rhs.kind) || _types_is_unop(rhs.kind) {\n    // static-types R5-r2 (aq) — BinOp/UnOp RHS, the LAST let-RHS kind gap\n    // (assign r3 / call-arg / return already consume binop result types\n    // unrestricted — R2 #4630 symmetry made them corpus-clean). Same\n    // scratch-re-infer + gates ①② as r2, PLUS the leaves-known tree gate.\n    let tr = TypeRef { kind: \"named\", name: tt, args: [], span: e.span }\n    let declared = _types_lower_type_ref(tr)\n    if _types_kind_is_scalar(declared.kind) && _types_rhs_leaves_known(rhs, env, ctx) {\n        let mut scratch: array = []\n        let rhs_t = _infer_expr(rhs, env, ctx, scratch)\n        if _types_kind_is_scalar(rhs_t.kind) {\n            if !_types_assignable(declared, rhs_t, rhs) {\n                _emit_hx3011(declared, rhs_t, e.span, out)\n            }\n        }\n    }\n}\n```\n\n동작 확인(실측 기반): `let x: i32 = a_i64 + b_i64` → REJECT ✓ · `let w: i32 = a_i64 + 1` → lt=i64, src=BinOp(리터럴 아님) → REJECT ✓ Rust 파리티 · `let v: i32 = c_i32 + 1` → clean(R1 coercion) · `let z: i32 = a + u_unknown` → leaves-known false → 침묵 · `let s: string = a_str + \"x\"` → concat string → clean · `let n: i64 = a_str + b_str` → string vs i64 REJECT(런타임 concat과 일치) · `let b: bool = a < 2` → clean · inner HX3001(피연산자 불일치)은 최초 children-walk에서 이미 나가고 재infer는 scratch → 이중보고 없음.\n\n**(c) catalog** — HX3011 explain(:362)에 커버리지 한 문장 append: `…r9c match literal-pattern vs scrutinee; r12 BinOp/UnOp RHS on a typed let (leaves-known tree gate — every ident/call/index/field leaf must infer a KNOWN scalar; logical ops and non-minus unops excluded).` (블록 필드 구조 무변경 — union-drop 위험 없음.)\n\n**(d) GO/NO-GO 게이트(머지 전 필수)**: static-types-corpus census(PR paths에 `compiler/check/**` 포함이라 자동 트리거) + pool(aiden/summer) 로컬 full-corpus front-end sweep으로 **신규 HX3011 = 0** 확인. >0이면: 진성 양성 → 해당 corpus 코드 수정 PR 선행(flip-value 증명), 오탐 → 게이트 결함이므로 NO-GO(rung 드랍).\n\n### R3 — HX3031 E0594 assign-behind-`&` (own, E7)\n\n**(a) emit 헬퍼** — `hir_to_mir.hexa`, `_bck_emit_ret_escape`(:999) 직전, HX3023 헬퍼(:899) 클론:\n\n```hexa\n// HX3031 emit (assign-behind-shared-ref, Rust E0594) — same-site dedup +\n// STRICT escalation, cloned from `_bck_emit_write_through`. `name` is the\n// ref binding written THROUGH, `origin` the value it borrows, `borrow_line`\n// where the shared loan was created. Fires only for `&` loans (writing\n// through `&mut` is the loan's whole point), so no borrow_kind arg.\nfn _bck_emit_assign_behind_ref(name: string, origin: string,\n                               borrow_line: i64, sp: Span) {\n    let mut di = 0\n    while di < len(_bck_e_lines) {\n        if _bck_e_lines[di] == sp.line && _bck_e_cols[di] == sp.col { return }\n        di = di + 1\n    }\n    _bck_e_lines.push(sp.line)\n    _bck_e_cols.push(sp.col)\n    let mut b = diag_new(\"HX3031\")\n    b = diag_span(b, sp)\n    b = diag_arg(b, \"name\", name)\n    b = diag_arg(b, \"origin\", origin)\n    b = diag_arg(b, \"borrow_line\", to_string(borrow_line))\n    let mut d = diag_emit(b)\n    if _bck_strict {\n        d = diag_with_severity(d, Severity::Error)\n    }\n    _lr_diag.push(d)\n}\n```\n\n**(b) field_set 후크** — 기존 `_bck_note_write` 블록(:3330-3334)과 `return _no_value(fctx)`(:3335) 사이:\n\n```hexa\n// HEXA-OWN L5-E7 — assign-behind-shared-ref (Rust E0594). `r.f = v`\n// where `r` is itself a LIVE SHARED (`&`) ref-binding: a `&` borrow\n// never grants write access through the reference (only `&mut` does).\n// Liveness = newest row for the name AND origin != \"\" (the E3 idiom).\nif _bck_active && lhs.children[0].kind == \"ident\" {\n    let _bk_ri = _bck_find_ref(lhs.children[0].text)\n    if _bk_ri >= 0 && len(_bck_ref_origins[_bk_ri]) > 0 && !_bck_ref_mut[_bk_ri] {\n        _bck_emit_assign_behind_ref(lhs.children[0].text,\n            _bck_ref_origins[_bk_ri], _bck_ref_lines[_bk_ri], e.span)\n    }\n}\n```\n\n**(c) index_set 후크** — 동일 블록을 `_bck_note_write`(:3357-3361)와 `return _no_value(ctx_s)`(:3362) 사이에 (base = `lhs.children[0].text` 동일).\n\n**(d) catalog** — R1의 HX3030 블록 뒤에 완결블록 append (HX3023/3029 문체 클론, Warning band + STRICT 재밴딩 + `_bck_active` inert 문구, E0594 인용: \"cannot assign to `x.f`, which is behind a `&` reference\"; template: `` \"cannot assign through `{name}` because it is behind a `&` reference — `{name}` is a shared borrow of `{origin}` (line {borrow_line})\" ``).\n\nconservative 경계: ident-lhs `r = v`는 **미포함**(재바인딩이지 deref-write 아님 — hexa에 `*r` 부재); base가 ident가 아닌 중첩 place(`r.a.b`)는 기존 후크 게이트가 이미 배제; KILL row(origin \"\")는 liveness 체크로 배제(`let r = &s; r = 0; r.x = 1` 침묵 ✓). 이중보고 없음 — 이 span에서 발화하는 기존 rung 없음(E4는 ident-assign arm 전용, base ident READ의 `_bck_check_use`는 origin==r인 mut loan만 스캔).\n\n### R4 — HX3032 E0596 mutating-method-behind-`&` (own, E8)\n\n**(a) emit 헬퍼** — R3 헬퍼 바로 뒤, 동일 클론 + `method` arg:\n\n```hexa\nfn _bck_emit_mut_method_behind_ref(name: string, origin: string, method: string,\n                                   borrow_line: i64, sp: Span) {\n    …동일 dedup/STRICT 골격, diag_new(\"HX3032\"),\n    args: name / origin / method / borrow_line…\n}\n```\n\n**(b) 후크** — call-arm receiver 블록(:2744-2749) 내부, `_bck_note_write` 호출 뒤:\n\n```hexa\nif _bck_active && _bk_is_method && _bk_recv_local >= 0 {\n    if _bck_is_mutating_method(callee_text) {\n        _bck_note_write(_bk_recv_local, _bk_recv_name,\n                        ctx2.cur_block, e.span)\n        // HEXA-OWN L5-E8 — mutating method through a SHARED ref (Rust\n        // E0596): `r.push(x)` where `r` is a live `&` borrow. `&mut`\n        // receivers are legal; non-mutating selectors never reach here.\n        let _bk_ri8 = _bck_find_ref(_bk_recv_name)\n        if _bk_ri8 >= 0 && len(_bck_ref_origins[_bk_ri8]) > 0 && !_bck_ref_mut[_bk_ri8] {\n            _bck_emit_mut_method_behind_ref(_bk_recv_name,\n                _bck_ref_origins[_bk_ri8], callee_text,\n                _bck_ref_lines[_bk_ri8], e.span)\n        }\n    }\n}\n```\n\n(`_bk_recv_name` 캡처(:2553-2557)는 이미 `_bck_active` 게이트 내 — 추가 배선 불요.)\n\n**(c) catalog** — HX3031 뒤 완결블록, E0596 인용(\"cannot borrow `*r` as mutable, as it is behind a `&` reference\"), template: `` \"cannot call mutating method `{method}` through `{name}` — `{name}` is a shared (`&`) borrow of `{origin}` (line {borrow_line})\" ``.\n\n---\n\n## 4. byteeq중립 논증 + companion tests\n\n**byteeq 논증**\n- R1·R2(정적): diag-only — 타입은 MIR에서 소거되고 severity는 codegen에 도달하지 않음(r9c/FLIP-3 확립 논증, \"byteeq 3-target on PR CI is the proof\"). real-band Error는 **corpus에 발화 0**일 때만 무해 → R1은 census로 자동 증명(HX3030 grep lockstep), R2는 GO/NO-GO 게이트. fixture는 `_types_strict_for` carve-out으로 Warning. gen3≡gen4 fixpoint는 catalog 데이터 추가와 무관(fixpoint는 동일 소스의 자기재현성).\n- R3·R4(own): 신규 emit은 전부 `_bck_active`(기본 false) 게이트 내부 — flag-OFF에서 구조적 unreachable → diag stream + 바이트 동일. 시블링(HX3021~3029)과 동일 계약.\n\n**companion tests**\n\n- `types_test.hexa` **(ap)**: `_enum_item`(:433)+`_variant_unit`(:423)+`_enum_path`(:464)+`_match_expr`(:479) 빌더로 —\n  `enum Color{Red,Green}` · `enum Dir{North,South}` · `fn f(c: Color) { match c { Dir::North -> 1, Color::Red -> 2, _ -> 0 } }` → **HX3030 ×1 Error** (Dir arm만; Color::Red·`_` clean). 컨트롤 동모듈: struct 스크루티니 match → 0. fixture 케이스(`case_hx3030_test.hexa` 경로) → **×1 Warning**. 러너는 (ak) idiom(:2580-2588, `_count_code`/`_count_code_sev`) 클론.\n- `types_test.hexa` **(aq)**: `fn f(a: i64, b: i64, u) { let x: i32 = a + b; let y: i64 = a + b; let z: i32 = a + u; let w: i32 = a + 1; let m: i32 = -a }` → 기대 **HX3011 ×3 Error**(x·w·m), y clean, z 침묵(unknown leaf). `u`는 무주석 param(타입 미기록) — `_param(name,\"\",…)`가 안 되면 `let u = g()`(미모델 call)로 대체.\n- `borrowck_test.hexa` (R3): 소스-프로브 3종 — hz `let mut s = S{x:1}; let r = &s; r.x = 1` → HX3031 ×1 · fp `&mut` 버전 → 0 · fp killed(`r = 0` 후 write) → 0 · index 변형 `let r = &arr; r[0] = 1` → ×1. OFF-mode 빈 스트림 + STRICT Error-band 확인 (기존 `_run_write_through_probe`(:732 근처) 러너 클론, HX3031 키).\n- `borrowck_test.hexa` (R4): hz `let r = &arr; r.push(1)` → HX3032 ×1 · fp `&mut` → 0 · fp 직접 `arr.push(1)` → 0 · fp 비변이 `r.len()` → 0.\n\n---\n\n## 5. 머지 전략\n\n- **순서: R1 → R3 → R4 → R2.** R2만 census GO/NO-GO가 걸려 있으므로 최후미·독립 드랍 가능(배치 3/4 성립). 각 rung = 독립 브랜치 + PR, **직전 머지에 rebase 후 직렬 머지**(round4 규율 — CHANGELOG.jsonl append 생존).\n- 파일 충돌 지도: `catalog.hexa`는 R1·R3·R4가 **같은 append 지점(HX3029 블록 :570 뒤)** → rebase마다 확정 충돌, 해소 = 두 블록 다 보존(순서 3030→3031→3032). ★catalog-hexa-1 교훈: 각 블록은 **`fix_it_kind`와 닫는 `},`까지 통째** 작성, 앞 블록과 suffix 공유 금지. **머지마다 검증**: `grep -c 'DiagSpec {' compiler/diag/catalog.hexa == grep -c 'fix_it_kind:'`. `hir_to_mir.hexa`는 R3(assign arm)·R4(call arm) 서로 다른 영역이지만 emit 헬퍼 삽입점이 같음(:999 앞) → R4 rebase에서 1회 해소. `types_test`/`borrowck_test`는 꼬리 append 충돌 — 동일 규율.\n- 각 PR: 해당 L0 파일 편집 → **CHANGELOG.jsonl 같은 변경 내 append**. guard-file diff-서브에이전트 선행(하네스 훅 규율). PR은 `gh api`로 열기(auto-merge hook 회피). ARCHITECTURE.json/state 문서 현행화는 round3/4 관행대로 라운드 종료 후 일괄 docs PR.\n- CI: 4 rung 모두 PR-CI byteeq 3-target GREEN 필수. R1·R2는 static-types-corpus advisory 결과 첨부(R2는 게이트).\n\n---\n\n## 6. 위험 / 미검증 지점 (명시)\n\n1. **R2 census 결과 미측정** — 이번 설계의 유일한 실측 공백. mini에서 빌드 불가(풀 규율)라 aiden/summer sweep + PR census로 측정해야 함. 진성 양성 발견 시 corpus-fix PR 선행.\n2. **R1 스크루티니 커버리지**: call-RHS 스크루티니(`match get() { … }`)는 `_types_check_call`이 callee fn 타입을 모델한 경우만 `named:Enum` 반환 — 미모델이면 unit → 침묵(under-reject, 허용). 미검증: hand-built test env에서 fn ret `named:` 전파 — (ap) 케이스는 param 스크루티니로 고정해 이 경로를 우회.\n3. **R2 `_param(name,\"\",…)` 무주석 param 빌더 동작** 미확인 — (aq)에서 unknown-leaf 컨트롤이 안 만들어지면 미모델 call로 대체(스펙에 명시).\n4. **R3/R4 self-host 소스 자체의 `&` 사용**: corpus에 `&`/`&mut` 표면 채택이 사실상 0(HX3029 explain의 \"adoption 0\" 실측)이라 flag-ON 스모크도 clean 예상 — 단 flag-ON full-corpus는 미측정(Warning band라 non-blocking).\n5. `_run_case`(:1913) 본문은 미열람 — type_check 단독 구동으로 추정(모든 기존 케이스가 bind-side 코드 없이 동작하는 것으로 방증). (ap)에서 stray HX2001이 나오면 그 원인은 bind-pass 개입이며, 그때는 기대치에 반영.\n6. R1의 guard-carrier arm 침묵은 **의도된 FN**(r9c 파리티) — round6 후보로 명시.",
+ "stop_reason": "end_turn",
+ "session_id": "5097b1bb-76ab-492b-bea6-785226072a0e",
+ "total_cost_usd": 11.116155000000003,
+ "usage": {
+  "input_tokens": 4909,
+  "cache_creation_input_tokens": 164349,
+  "cache_read_input_tokens": 4814908,
+  "output_tokens": 59258,
+  "server_tool_use": {
+   "web_search_requests": 0,
+   "web_fetch_requests": 0
+  },
+  "service_tier": "standard",
+  "cache_creation": {
+   "ephemeral_1h_input_tokens": 164349,
+   "ephemeral_5m_input_tokens": 0
+  },
+  "inference_geo": "not_available",
+  "iterations": [
+   {
+    "input_tokens": 2,
+    "output_tokens": 12113,
+    "cache_read_input_tokens": 179175,
+    "cache_creation_input_tokens": 465,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 465
+    },
+    "type": "message"
+   }
+  ],
+  "speed": "standard"
+ },
+ "modelUsage": {
+  "claude-haiku-4-5-20251001": {
+   "inputTokens": 2142,
+   "outputTokens": 27,
+   "cacheReadInputTokens": 0,
+   "cacheCreationInputTokens": 0,
+   "webSearchRequests": 0,
+   "costUSD": 0.002277,
+   "contextWindow": 200000,
+   "maxOutputTokens": 32000
+  },
+  "claude-fable-5": {
+   "inputTokens": 4909,
+   "outputTokens": 59258,
+   "cacheReadInputTokens": 4814908,
+   "cacheCreationInputTokens": 164349,
+   "webSearchRequests": 0,
+   "costUSD": 11.113878000000001,
+   "contextWindow": 1000000,
+   "maxOutputTokens": 64000
+  }
+ },
+ "permission_denials": [
+  {
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_015ZcuChvqBD494okxASJVq8",
+   "tool_input": {
+    "command": "git fetch origin main 2>&1 | tail -2 && git rev-parse origin/main",
+    "description": "Fetch latest origin/main"
+   }
+  },
+  {
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_016fkNBwdWN43caTNiDuRmCD",
+   "tool_input": {
+    "command": "git fetch origin main",
+    "description": "Fetch latest origin/main"
+   }
+  },
+  {
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_01PmYjsKW4JWr9rwfTRXvfr5",
+   "tool_input": {
+    "command": "git worktree add /Users/mini/dancinlab/hexa-lang/.worktrees/wt-round5-design origin/main 2>&1 | tail -2",
+    "description": "Create design-probe worktree at origin/main"
+   }
+  },
+  {
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_01Dwq77JVsUpzMgQE4AdkUmV",
+   "tool_input": {
+    "command": "git worktree add /Users/mini/dancinlab/hexa-lang/.worktrees/wt-round5-design origin/main",
+    "description": "Create design-probe worktree at origin/main"
+   }
+  },
+  {
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_01JWA4JuRDuds1GvmuNFhvJs",
+   "tool_input": {
+    "command": "mkdir -p /tmp/r5probe/compiler/check /tmp/r5probe/compiler/diag /tmp/r5probe/compiler/lower /tmp/r5probe/state\nfor f in compiler/check/types.hexa compiler/check/types_test.hexa compiler/diag/catalog.hexa compiler/lower/hir_to_mir.hexa compiler/check/borrowck_test.hexa state/hexa-own/r4_hx3029_move_while_borrowed_design.md; do\n  git show origin/main:\"$f\" > /tmp/r5probe/\"$f\"\ndone\nwc -l /tmp/r5probe/compiler/check/*.hexa /tmp/r5probe/compiler/diag/catalog.hexa /tmp/r5probe/compiler/lower/hir_to_mir.hexa /tmp/r5probe/state/*.md",
+    "description": "Extract origin/main lane files to /tmp for line-precise reading"
+   }
+  },
+  {
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_01FEmKk75b4fVKj9ufuMWvmz",
+   "tool_input": {
+    "command": "mkdir -p /tmp/r5probe/compiler/check /tmp/r5probe/compiler/diag /tmp/r5probe/compiler/lower /tmp/r5probe/state/hexa-own && git show origin/main:compiler/check/types.hexa > /tmp/r5probe/compiler/check/types.hexa && git show origin/main:compiler/check/types_test.hexa > /tmp/r5probe/compiler/check/types_test.hexa && git show origin/main:compiler/diag/catalog.hexa > /tmp/r5probe/compiler/diag/catalog.hexa && git show origin/main:compiler/lower/hir_to_mir.hexa > /tmp/r5probe/compiler/lower/hir_to_mir.hexa && git show origin/main:compiler/check/borrowck_test.hexa > /tmp/r5probe/compiler/check/borrowck_test.hexa && git show origin/main:state/hexa-own/r4_hx3029_move_while_borrowed_design.md > /tmp/r5probe/state/hexa-own/r4_design.md && wc -l /tmp/r5probe/compiler/check/types.hexa /tmp/r5probe/compiler/check/types_test.hexa /tmp/r5probe/compiler/diag/catalog.hexa /tmp/r5probe/compiler/lower/hir_to_mir.hexa /tmp/r5probe/compiler/check/borrowck_test.hexa /tmp/r5probe/state/hexa-own/r4_design.md",
+    "description": "Extract origin/main lane files to /tmp for line-precise reading"
+   }
+  },
+  {
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_013Ncgi46N1UtiKQTen2ySqf",
+   "tool_input": {
+    "command": "mkdir -p /tmp/r5probe",
+    "description": "Create probe scratch dir"
+   }
+  },
+  {
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_01DZ4iWjjTAzuXFPj53AJfso",
+   "tool_input": {
+    "command": "mkdir -p /Users/mini/dancinlab/hexa-lang/.harness/fleet/r5probe",
+    "description": "Create probe scratch dir inside repo"
+   }
+  },
+  {
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_011kXL2rQRq4DPoVitSSEf5z",
+   "tool_input": {
+    "command": "mkdir -p /Users/mini/dancinlab/hexa-lang/state/hexa-own/r5probe",
+    "description": "Create probe scratch dir under state/"
+   }
+  },
+  {
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_01S11qJ1kcbgLRKGBpGUDKky",
+   "tool_input": {
+    "command": "git show origin/main:compiler/check/types.hexa > /Users/mini/dancinlab/hexa-lang/.harness/fleet/wt_types.hexa",
+    "description": "Extract types.hexa from origin/main to existing fleet dir"
+   }
+  },
+  {
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_01FkQEGs6xBoVhwC2u2Kzn2N",
+   "tool_input": {
+    "command": "pwd -P",
+    "description": "Show physical working directory (resolve symlinks)"
+   }
+  },
+  {
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_018UiNGGd34yVapfrdz4knSP",
+   "tool_input": {
+    "command": "git show origin/main:compiler/check/types.hexa | sed -n '2526,2700p' | grep -n \"\" | head -0; git show origin/main:compiler/check/types.hexa | awk 'NR>=2526 && NR<=3450 && (/let /||/BinOp|binop|UnOp|unop|&&|\\|\\||logical|Assign|assign|Match|match/)' | head -5",
+    "description": "Probe infer_expr hotspots"
+   }
+  },
+  {
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_01FxP5TNLsYMkEcTh7iYNrBr",
+   "tool_input": {
+    "command": "git grep -n '\"&&\"' origin/main -- compiler/parser | head -5; git grep -rn '\"&&\"' origin/main -- compiler/ | head -10",
+    "description": "Check how parser encodes logical ops"
+   }
+  }
+ ],
+ "terminal_reason": "completed",
+ "fast_mode_state": "off",
+ "uuid": "1f1b61f3-50bd-4247-b17b-1b0741f287b2"
+}

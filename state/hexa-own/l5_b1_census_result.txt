@@ -1,0 +1,39 @@
+=== HEXA-OWN Lane-B B1 borrow-check census — 2026-07-12T01:51:15Z — aiden-B650M-K ===
+  ref=main canon=/home/aiden/hexa-lang target=x86_64-linux-gnu cc=gcc corpus=[compiler/main.hexa] reps=3
+--- waiting for load<6 (no-starve) ---
+  load=0.01 OK after 1 probe(s)
+  SRC=/home/aiden/l5_bck_census/src sha=66e85e219
+--- building ./hexa (release_build TARGET=linux-x86_64 CC=gcc) ---
+  ./hexa built rc=0 (3316552B)
+--- BAND OFF (borrowck unset) — corpus compile ×3 ---
+  OFF rep1 wall=102.608s
+  OFF rep2 wall=54.469s
+  OFF rep3 wall=55.969s
+--- BAND ON (HEXA_BORROWCK=1 HEXA_BORROWCK_CENSUS=1) — corpus compile ×3 ---
+  ON  rep1 wall=55.546s
+  ON  rep2 wall=54.503s
+  ON  rep3 wall=54.121s
+
+════════════════════════════════════════════════════════════════════
+CENSUS_VERDICT — Lane-B B1 first-ever borrow-check census
+════════════════════════════════════════════════════════════════════
+CENSUS_REF                = main (66e85e219)
+CENSUS_CORPUS             = [compiler/main.hexa]
+CENSUS_WORKLIST_FILE      = /home/aiden/l5_bck_census/borrowck_census_worklist.txt
+CENSUS_WOULD_MOVE_SITES   = 0   (move-by-default A3 worklist size)
+CENSUS_HX30XX_TOTAL_FIRES = 90   (B1 gate: O(dozens) expected; >100 ⇒ 분류실패)
+CENSUS_PER_CODE_FIRES:
+         48 HX3014
+         42 HX3055
+CENSUS_COST_OFF_MED_S     = 55.969
+CENSUS_COST_ON_MED_S      = 54.503
+CENSUS_COST_DELTA_PCT     = -2.6%   (B3 gate target: < ~5%)
+────────────────────────────────────────────────────────────────────
+B1 TRIAGE (manual, after this run):
+  * HX3014 count == 0 ?           → roadmap B1 gate '0 HX3014'
+  * total fires O(dozens), <100 ? → else 분류실패 (precision defect, not corpus)
+  * each fired code FP-audited=0 ? → those codes fill _bck_warn_allowlist (B3)
+  * cost delta < ~5% ?            → B3 default-ON viable
+GO ⇒ populate compiler/lower/hir_to_mir.hexa::_bck_warn_allowlist with the
+     FP=0 codes + flip HEXA_BORROWCK_WARN_DEFAULT default (SEPARATE PR, byteeq 3-target).
+════════════════════════════════════════════════════════════════════
