@@ -101,6 +101,14 @@ parity · shipping smoke · nm U/T 양 lane 캡처.
   (리터럴이 이미 TAG_STR→`hexa_throw("index out of bounds")` 직접·length-prefix 페이로드 over-read 위험 제거)
   ✅적용됨(hexa_str extern 제거) (c) i32 load/store offset·LE·non-neg zero/sign-ext 무관 ✅OK (d) 평문 >=/*/+ on
   un-boxed raw-int ✅OK(__hx_payload_*는 boxed용). 남은 게이트=**pool build(aprime --emit=obj --isolate)+nm+behavior**.
-- **NEXT 배선**(draft 검증 후): 에미터 i64 블록(2760) guard에 `|| defined(HEXA_RT_CORE_ARRAY_I64_LEAF_NATIVE)` 추가 ·
-  tool/regen_array_typed_leaf_native_s.sh 신규(map_query regen 미러·NSYMS=4) · stage_resolve_runtime_a
-  resolve_native_array_typed_leaf_seed(--isolate --keep-global=hexa_arr_i64_{new,push,len,box}) · guard flip은 PR-2.
+- **seed = summer POOL-VALIDATED** ✅ (aprime --emit=obj --isolate·x86_64-linux): COMPILE OK·4 T·U-floor clean=
+  malloc/realloc/write/hexa_exit/hexa_int/hexa_throw만. **★W0 realloc-wall = seed 레벨서 해소 확인**(realloc이
+  clean extern U — array_core.hexa:25 'realloc stays C'는 --isolate extern-call로 dissolve). measure-first가
+  boxed-arith miscompile 잡음(평문 */+/>= → hexa_mul/add_slow/cmp_ge boxed 헬퍼 CALL → __hx_payload_* 리프 교체·
+  convergence array-core-hexa-1). 에미터 i64 sub-guard(2760)도 커밋됨(byte-neutral).
+- **NEXT 배선**(seed 검증 완료): (1) hexa_exit(exit 맹글링) OOM경로 carrier 최종확인=full link (2)
+  tool/regen_array_typed_leaf_native_s.sh 신규(map_query regen 미러·NSYMS=4·ALLOWED_U에 libc malloc/realloc/write
+  포함=map-query와 달리 libc-bearing) (3) stage_resolve_runtime_a resolve_native_array_typed_leaf_seed
+  (own-obj --isolate --keep-global=4 primary + frozen-.s fallback·keeplist=malloc/realloc/write/hexa_exit/hexa_int/
+  hexa_throw) (4) full link+behavior(push 100+ grow·box OOB throw·len·W2 i32 non-clobber) — W0 최종 실증 (5) guard
+  flip은 PR-2.
