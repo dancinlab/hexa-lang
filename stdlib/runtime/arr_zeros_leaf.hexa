@@ -20,17 +20,43 @@
 //
 // SEED-ONLY SSOT: imported by NOTHING — enters runtime.a only via tool/regen_array_zeros_leaf_native_s.sh /
 // stage_resolve_runtime_a resolve_native_array_zeros_leaf_seed. nm contract = hexa_arr_zeros_leaf,
-// hexa_arr_zeros_leaf_int. U-floor = { malloc, calloc, write, exit }.
+// hexa_arr_zeros_leaf_int. U-floor = { hexa_ptr_alloc, hexa_exit } — CARRIER-ONLY.
+//
+// ★★ ABI RULE — allocate through the HexaVal CARRIER, never through a raw libc extern.
+// aprime lowers EVERY call in this seed with the hexa pair-ABI: args ride (tag,payload) register pairs
+// and a result's payload is read from the SECOND return register (rdx/x1). A raw `extern fn calloc/malloc/
+// write/exit` emits a bare `call <libc>` whose U-symbol binds to the C-ABI body — which reads (rdi,rsi)
+// as its own first two scalars and returns in rax ALONE. So the old body called calloc(0,1), threw away
+// the returned pointer, and minted the descriptor from garbage in the dead rdx/x1. Measured 3/3 runs on
+// the pre-fix seed:
+//     linux-x86_64 (glibc)   rdx = 0        -> this seed's own OOM guard fires -> exit(1)
+//     darwin-arm64           x1  = garbage  -> readable address -> SILENTLY wrong array (len stays 0)
+// It never showed up in CI only because the C-transpile hot path does not reach these two constructors
+// (the sibling hexa_array_new IS on that path — it died instantly and took #4930 down on all 3 targets).
+// The backend documents the trap at compiler/codegen/x86_64_linux.hexa:2236. hexa_ptr_alloc / hexa_exit
+// ARE HexaVal-ABI functions (self/runtime.h:872, :846), so the pair lowering is CORRECT for them.
+// hexa_ptr_alloc is malloc-backed and does NOT zero — hence the explicit descriptor zero below.
+//
+// ★ PARITY DELTA (OOM path): the C body writes an "OOM in ..." line to stderr before aborting. A raw
+// `write(2, ...)` is exactly the miscompile above, and there is no HexaVal-ABI raw-buffer stderr write to
+// carry it, so the message is DROPPED and the seed aborts via hexa_exit(1) — same abort semantics, no
+// message. This is the accepted debug-only parity delta already taken by the i64/f64 seeds' dropped
+// fprintf-OOM richness; it is unreachable in practice (allocation failure) and feeds no emitted byte.
 
-extern fn malloc(n: int) -> int
-extern fn calloc(cnt: int, size: int) -> int
-extern fn write(fd: int, buf: int, n: int) -> int
-extern fn exit(code: int)
+extern fn hexa_ptr_alloc(size: int) -> int    // HexaVal-ABI carrier (runtime.h:872) — malloc-backed, NOT zeroing
+extern fn hexa_exit(code: int)                // HexaVal-ABI carrier (runtime.h:846) — abort
 
 // hexa_arr_zeros_leaf(nv): boxed [f64]-style zeros array — n FLOAT(0.0) elements. calloc the descriptor,
 // malloc the 16B*n items run, fill each with {TAG_FLOAT, 0}, set len/cap. n<=0 → empty descriptor (matches C).
 pub fn hexa_arr_zeros_leaf(nv: HexaVal) -> HexaVal {
-    let a = calloc(1, 32)                        // zeroed HexaArr: items@0 len@8 cap@16 heap_water@24
+    let a = hexa_ptr_alloc(32)                   // HexaArr descriptor (malloc-backed → must zero by hand)
+    if __hx_payload_eq(a, 0) {
+        hexa_exit(1)                             // OOM (message dropped — see PARITY DELTA above)
+    }
+    __hx_ptr_store64(a, 0, 0)                    // items      @0  = NULL
+    __hx_ptr_store64(a, 8, 0)                    // len        @8  = 0
+    __hx_ptr_store64(a, 16, 0)                   // cap        @16 = 0
+    __hx_ptr_store64(a, 24, 0)                   // heap_water @24 = 0  (calloc used to zero this for free)
     let out = __hx_make_val(5, a)                // TAG_ARRAY=5, payload = descriptor ptr
     let t = __hx_tag(nv)
     let mut n = 0
@@ -41,11 +67,9 @@ pub fn hexa_arr_zeros_leaf(nv: HexaVal) -> HexaVal {
     }
     if __hx_payload_ge(n, 1) {
         let bytes = __hx_payload_mul(n, 16)      // sizeof(HexaVal) * n
-        let items = malloc(bytes)
+        let items = hexa_ptr_alloc(bytes)
         if __hx_payload_eq(items, 0) {
-            let msg = __hx_str_ptr("OOM in hexa_arr_zeros_leaf\n")
-            write(2, msg, 27)
-            exit(1)
+            hexa_exit(1)
         }
         let mut off = 0
         let mut rem = n
@@ -68,7 +92,14 @@ pub fn hexa_arr_zeros_leaf(nv: HexaVal) -> HexaVal {
 // hexa_arr_zeros_leaf_int(nv): boxed [i64]-style zeros array — n INT(0) elements. Identical to the float
 // variant except the element tag word is TAG_INT=0 (and the OOM message).
 pub fn hexa_arr_zeros_leaf_int(nv: HexaVal) -> HexaVal {
-    let a = calloc(1, 32)
+    let a = hexa_ptr_alloc(32)
+    if __hx_payload_eq(a, 0) {
+        hexa_exit(1)
+    }
+    __hx_ptr_store64(a, 0, 0)
+    __hx_ptr_store64(a, 8, 0)
+    __hx_ptr_store64(a, 16, 0)
+    __hx_ptr_store64(a, 24, 0)
     let out = __hx_make_val(5, a)
     let t = __hx_tag(nv)
     let mut n = 0
@@ -79,11 +110,9 @@ pub fn hexa_arr_zeros_leaf_int(nv: HexaVal) -> HexaVal {
     }
     if __hx_payload_ge(n, 1) {
         let bytes = __hx_payload_mul(n, 16)
-        let items = malloc(bytes)
+        let items = hexa_ptr_alloc(bytes)
         if __hx_payload_eq(items, 0) {
-            let msg = __hx_str_ptr("OOM in hexa_arr_zeros_leaf_int\n")
-            write(2, msg, 31)
-            exit(1)
+            hexa_exit(1)
         }
         let mut off = 0
         let mut rem = n
