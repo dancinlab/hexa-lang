@@ -44,7 +44,7 @@ NSYMS=2
 # pointer (rax/x0 alone) is dropped for garbage in the dead second register. Measured on the pre-fix
 # seed: linux-x86_64 exits 1 (its own OOM guard sees the garbage as NULL), darwin-arm64 returns a
 # silently-wrong array. The sibling array_new seed died the same way and took #4930 down on 3 targets.
-ALLOWED_U="hexa_ptr_alloc hexa_exit hexa_bool"
+ALLOWED_U="hexa_heap_alloc hexa_heap_zalloc hexa_throw hexa_bool"
 # hexa_bool is NOT a libc entrant — it is the BACKEND'S OWN helper (`HexaVal hexa_bool(int)`,
 # runtime_core.c) that aprime emits for a leaf truth test (`if __hx_payload_eq(..)`), with an ABI the
 # codegen itself controls. Every already-deployed seed carries it. What must NEVER appear here is a raw
