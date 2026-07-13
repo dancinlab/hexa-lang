@@ -82,3 +82,24 @@ parity · shipping smoke · nm U/T 양 lane 캡처.
 - W2: i32 정확폭 store 인접필드 non-clobber — PR-1 유닛테스트 tripwire.
 - W3: tag-construct 캐리어 함수형 존재(nm 선검증).
 - W4: f64 double-store leaf(follow-on).
+
+## §6 구현 착수 findings (turn-2 · 현행 상태 · repo 실측)
+- **guard 구조 확정**: `HEXA_RT_CORE_ARRAY_TYPED_LEAF_NATIVE`가 텍스트상 **3개 분리 #if 블록**을 같은 매크로로 게이트
+  — i64 typed(에미터 2760)·f64 typed(3049)·**poly `hexa_arr_zeros_leaf`/_int(9408·calloc·HX_MAKE_FLOAT)**.
+  flip시 10-fn 동시 extern → 과대. ⇒ **i64-scoped 서브가드 `HEXA_RT_CORE_ARRAY_I64_LEAF_NATIVE`** 도입해 i64 4-fn만
+  격리(valop EQCOERCE 서브가드 전례=표준). f64+zeros는 C 유지.
+- **f64 FALSIFIED(신규 leaf 확정)**: `__hx_payload_f2i`는 bitcast 아니라 **numeric truncate**(cvttsd2si·bind.hexa
+  L1393-1397 주석·3.14→3 비트손실). double 비트 저장할 재해석 leaf 부재 → f64_push는 `__hx_ptr_storef64`/loadf64
+  또는 f64↔i64 bitcast 신규 leaf 필요 = follow-on 확정.
+- **저작 위치 교정**: array_core.hexa는 정상 빌드 closure(compiler/main.hexa import)라 dispatcher 심볼 중복정의
+  → **seed-only 새 파일 `stdlib/runtime/array_typed_leaf.hexa`**(import 0·map_query.hexa 패턴)에 저작. ✅ draft 완료.
+- **tag-construct 캐리어 불요(W3 해소)**: `__hx_make_val(5, ptr)`(TAG_ARRAY=5·read-half write-half)로 박싱. C-macro
+  HX_MAKE_TAG/HX_SET_ARR_PTR 캐리어 불필요.
+- **draft 파일 = `stdlib/runtime/array_typed_leaf.hexa`** — hexa_arr_i64_{new,push,len,box} 4-fn. ⚠️POOL/리뷰 검증필요
+  지점: (a) mixed-int C-ABI(new(int)->HexaVal·len(HexaVal)->int·push(HexaVal,int64_t))가 pair-model 타는지
+  (contains_key const-char* 벽과 구분되는지) (b) OOM char* 브리지 __hx_str_ptr + box() str_ptr/hexa_str 중복 정리
+  (문자열 리터럴이 HexaVal(TAG_STR)면 hexa_throw 직접 가능) (c) __hx_ptr_load32/store32 offset semantics + i32
+  sign/zero-extend (d) 평문 >=/*/+ on raw-int len/cap가 scratch-clobber 안전한지.
+- **NEXT 배선**(draft 검증 후): 에미터 i64 블록(2760) guard에 `|| defined(HEXA_RT_CORE_ARRAY_I64_LEAF_NATIVE)` 추가 ·
+  tool/regen_array_typed_leaf_native_s.sh 신규(map_query regen 미러·NSYMS=4) · stage_resolve_runtime_a
+  resolve_native_array_typed_leaf_seed(--isolate --keep-global=hexa_arr_i64_{new,push,len,box}) · guard flip은 PR-2.
