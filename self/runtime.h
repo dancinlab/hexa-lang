@@ -869,8 +869,19 @@ HexaVal hexa_rope_pair(HexaVal x0, HexaVal x1, HexaVal theta);                  
 /* FFI (raw pointer / extern dispatch + dlopen/dlsym; latter two are
  * de-staticized to expose to runtime.h consumers — runtime.c:5658, 5782) */
 HexaVal hexa_extern_call(void* fn_ptr, HexaVal* hargs, int nargs, int ret_kind); /* runtime.c:5846 */
-HexaVal hexa_ptr_alloc(HexaVal size);                   /* runtime.c:6241 */
+/* ⚠️ hexa_ptr_alloc is ARENA-backed in the shipped runtime — the weak malloc stub in runtime.o is
+ * beaten at link time by alloc_syscall_native.o, whose body is a bare `bl hexa_arena_alloc`
+ * (self/native/alloc_syscall_arm64.s:3148). Fine for scratch that dies with the frame; FATAL for
+ * anything that outlives it. An array/map DESCRIPTOR must use the hexa_heap_* family below. */
+HexaVal hexa_ptr_alloc(HexaVal size);                   /* runtime.c — ARENA (see warning above) */
 HexaVal hexa_ptr_free(HexaVal ptr, HexaVal size);       /* runtime.c:6248 */
+/* heap-only pair-ABI carriers (runtime_core.c) — the allocation a native .s seed must reach for a
+ * DESCRIPTOR-class object: it escapes its frame, so the arena would rewind under it and the next
+ * bump-alloc would silently overwrite its len/cap/items. STRONG (not weak) by design — a native seed
+ * that re-defines one must trip the multiple-definition gate loudly, never swap the arena in quietly. */
+HexaVal hexa_heap_alloc(HexaVal size);                  /* malloc — NEVER arena */
+HexaVal hexa_heap_zalloc(HexaVal size);                 /* calloc(1,n) — zeroed; descriptor class */
+HexaVal hexa_heap_realloc(HexaVal ptr, HexaVal size);   /* realloc — heap ptr only (arena ptr = UB) */
 void*   hexa_ffi_dlopen(const char* lib_name);          /* runtime.c:5658 (was static) */
 void*   hexa_ffi_dlsym(void* handle, const char* symbol); /* runtime.c:5782 (was static) */
 

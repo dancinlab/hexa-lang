@@ -38,7 +38,10 @@ SYMS="hexa_array_new"
 NSYMS=1
 # the carrier/libc externs this seed is ALLOWED to leave undefined. calloc is the only
 # new floor entrant vs the arr-i64/f64 leaves (sanctioned); exit may lower to hexa_exit.
-ALLOWED_U="calloc hexa_exit malloc write exit"
+# CARRIER-ONLY. A raw libc name here is a pair-vs-C-ABI miscompile (the #4930 break), not a
+# sanctioned floor entrant. hexa_bool is the backend's own leaf-truth helper (codegen controls its
+# ABI); hexa_heap_zalloc is the HEAP carrier — hexa_ptr_alloc is ARENA and must never appear.
+ALLOWED_U="hexa_heap_zalloc hexa_exit hexa_bool"
 
 emit_one() {
     local triple="$1" out="$2" abi="$3"
