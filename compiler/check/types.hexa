@@ -4001,17 +4001,28 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         }
         // segment(b) HX3025 REJECT (Rust E0608): indexing a KNOWN non-container
         // scalar (`n[0]`, n: int/float/bool/char). The C-substrate hexa_array_get
-        // wrapper aborts at runtime on a non-array tag (runtime_core_emit ~3398),
-        // so this is a guaranteed runtime error surfaced to S3 (the HX3024
-        // contract). Conservative under-reject: a KNOWN `string` base is now
-        // included — an `s[i]` GET is a guaranteed runtime error via the same
-        // aborting mechanism: the C-substrate wrapper detects the string tag
-        // and throws `string[i]: use .chars()[i] or substring`
-        // (runtime_core_emit ~3395 `hexa_throw`), so this REJECT matches the
-        // "guaranteed-runtime-error → REJECT" contract. Still conservative: it
-        // fires ONLY for a KNOWN string base, while unknown/unit/HexaVal/
-        // array/map/named all stay SILENT.
-        if _is_integer_kind(base_t) || _is_float_kind(base_t) || base_t.kind == "bool" || base_t.kind == "char" || base_t.kind == "string" {
+        // wrapper aborts at runtime on a non-array tag, so this is a guaranteed
+        // runtime error surfaced to S3 (the HX3024 contract).
+        //
+        // `string` is deliberately NOT in this set. It was added on the premise
+        // that the C-substrate "detects the string tag and throws `string[i]:
+        // use .chars()[i] or substring`". That throw does not exist anywhere in
+        // the emitted runtime. hexa_index_get dispatches `HX_IS_STR(container)`
+        // to hexa_str_char_at (runtime_core_emit, "hxa-20260423-015: str[i]
+        // support"), which RETURNS the character and even honours Python-style
+        // negative indices; its only throw is a genuine out-of-bounds
+        // ("string[N] out of bounds (len M)") — the same bounds contract an
+        // array has, i.e. a bounds error, not a type error. `s[i]` is therefore
+        // a supported string read, and rejecting it refused working code
+        // (self/stdlib/law_io.hexa:39 indexes an annotated `real_path: string`
+        // to find the trailing path component and stopped compiling).
+        //
+        // The reject only ever fired on an ANNOTATED string, which is why
+        // self/module_loader.hexa — same `path[i]` idiom, un-annotated param, so
+        // the base type stays unknown and the arm is silent — kept building. A
+        // check that passes or fails on whether the author wrote a type
+        // annotation is not enforcing a language rule.
+        if _is_integer_kind(base_t) || _is_float_kind(base_t) || base_t.kind == "bool" || base_t.kind == "char" {
             _emit_hx3025(base_t, e.span, out)
         }
         // static-types R2 — segment(b) HX3053 array-index-BY-STRING REJECT (Rust
