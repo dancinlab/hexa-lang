@@ -3091,6 +3091,26 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // axis-② f64 typed-leaf — `__hx_f64_bits`/`__hx_bits_f64` bit-reinterpret = pure
+        // TAG-SWAP (a FLOAT's payload word IS the raw double bits, an INT's IS the i64;
+        // reinterpret keeps the payload, swaps only the tag INT=0 ↔ FLOAT=1). Mirrors
+        // `__hx_tag`: _hv_load already puts the arg's payload in x1 (kept), then overwrite
+        // x0 with the result tag imm. No fmov/fcvtzs (numeric/xmm — WRONG); the C-shim
+        // owns the d0↔GP crossing so x arrives here as a normal HexaVal pair.
+        if s.op == "__hx_f64_bits" && len(s.args) >= 1 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // x → x0=tag, x1=payload(bits)
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_f64_bits: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        if s.op == "__hx_bits_f64" && len(s.args) >= 1 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // b → x0=tag, x1=payload(bits)
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#1"), "__hx_bits_f64: TAG_FLOAT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // RT-NATIVE UNLOCK-2b: native leaf-compare intrinsics — `__hx_payload_eq(a,b)`
         // compares the HexaVal PAYLOADS (hi eightbyte = x1) as raw i64 → bool, INLINE
         // (cmp/cset, no `bl _hexa_eq`). `__hx_payload_nz(v)` = `payload != 0` → bool.

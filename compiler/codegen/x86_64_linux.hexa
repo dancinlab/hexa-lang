@@ -4237,6 +4237,31 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             }
             return
         }
+        // axis-② f64 typed-leaf — `__hx_f64_bits(x)` / `__hx_bits_f64(b)` bit-reinterpret
+        // between f64 and i64. In the NaN-boxed HexaVal a FLOAT's payload word IS the raw
+        // IEEE-754 double bits and an INT's payload IS the i64, so a bit-reinterpret is a
+        // pure TAG-SWAP: keep the payload word, change only the tag (INT=0 ↔ FLOAT=1).
+        // Mirrors `__hx_tag` (payload-variant): load the arg's PAYLOAD into the dst home
+        // reg, then store the result tag imm. No cvttsd2si/movq (that would be a numeric
+        // convert / need the xmm ABI — WRONG); the C-shim owns the xmm0↔GP crossing.
+        if s.op == "__hx_f64_bits" && len(s.args) >= 1 {
+            let dn0 = _x86_dst_reg(rm, s.dst.id)
+            _x86_hv_payload(s.args[0], st, rm, dn0, opts)  // x's payload (double bits) → dst
+            if s.dst.id >= 0 {
+                _x86_store_tag_imm(rm, s.dst.id, 0)        // result TAG_INT
+                _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+            }
+            return
+        }
+        if s.op == "__hx_bits_f64" && len(s.args) >= 1 {
+            let dn1 = _x86_dst_reg(rm, s.dst.id)
+            _x86_hv_payload(s.args[0], st, rm, dn1, opts)  // b's payload (raw bits) → dst
+            if s.dst.id >= 0 {
+                _x86_store_tag_imm(rm, s.dst.id, 1)        // result TAG_FLOAT
+                _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+            }
+            return
+        }
         // UNLOCK-2b: payload equality / non-zero → bool, INLINE (cmp + setcc +
         // movzx). r10 = a.payload, r11 = b.payload; al = predicate; movzx into
         // dst; tag = TAG_BOOL(2). NaN-irrelevant (raw i64 compare).
