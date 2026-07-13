@@ -1,0 +1,21 @@
+struct Iv {
+    ids: [i64],
+    starts: [i64]
+}
+fn build() -> Iv {
+    let mut ids: [i64] = []
+    let mut starts: [i64] = []
+    let mut i = 0
+    while i < 3 {
+        ids.push(i * 10)
+        starts.push(i)
+        i = i + 1
+    }
+    return Iv { ids: ids, starts: starts }
+}
+fn main() {
+    let iv = build()
+    print(len(iv.ids))
+    print(iv.ids[0])
+    print(iv.ids[1])
+}

@@ -486,6 +486,13 @@
     "value": "self-hosted 3러너가 mini 디스크 1개를 공유하는데 ccache가 무제한 성장 + 각 잡이 actions/cache로 수GB tzst를 동시 압축해제(피크 = tzst + 추출본 동시 점유) → 87% 찬 디스크에서 ENOSPC. 터지는 지점이 캐시 복원 한복판이라 워커가 완료보고 없이 죽고, GitHub은 잡을 in_progress로 영구 고착(고아)시킴 → PR 체크가 diff와 무관한 RED로 도배됨. 2026-07-13 실측: #4930에 가짜 RED 15개 + 고아 런 6개(9시간 고착) + mini 재부팅. 재실행만으로 15 RED→2(advisory)로 복구 = 코드 무죄 확증. FIX: ccache-setup 액션(모든 무거운 잡의 단일 통과점)에 (a) CCACHE_MAXSIZE 상한 항상 적용(무제한 성장 차단·LRU 축출은 byteeq 중립 — 미스는 재컴파일일 뿐) (b) 복원 前 디스크 헤드룸 가드: floor(15GiB) 미만이면 prune, hard floor(5GiB) 미만이면 fail-fast로 원인을 로그에 남기고 거부(한복판 ENOSPC 고아화 방지).",
     "threshold": "재발조건: 러너 호스트 여유공간이 낮은 상태에서 self-hosted 잡 동시 실행. 진단: 3타깃 전부 RED인데 base가 최신(behind=0)이면 코드 결함이 아니라 인프라를 의심 — gh run view --log-failed | grep -i 'no space left'; 고아 잡(in_progress 수시간)이 함께 보이면 확진. 해결: 고아 런 취소 → 공간 회수 → rerun --failed로 참-판정. commons infra-wall-noneval = 인프라벽은 평가 판정에서 격리.",
     "source": ".github/actions/ccache-setup/action.yml"
+   },
+   {
+    "id": "array-new-leaf-x86-64-s-1",
+    "state": "pos-conv",
+    "value": "axis-② #6 hexa_array_new empty-array ctor own-native default-ON(#4930)은 3타깃 전부 빌드를 깬다 — 되돌림 #4932. 시드 자체는 정상 어셈블된다([stage_resolve_runtime_a] ARR-NEW: assembled build/array_new_leaf_native.o … 1 constructor). 파손은 그 다음 단계: 새 runtime.a로 빌드된 hexat/aprime이 자기 자신을 트랜스파일하다 죽는다 — '[stage_prebuild_hexat] seed-converge: regen pass 0 FAILED — keeping current seed' → 'build_aprime: transpile failed (no ap.c)' → '[stage_reresolve_runtime_a] FATAL: aprime_cc build failed — refusing silent C fallback'. 즉 native 생성자가 만든 빈 배열 객체가 컴파일러 자신을 깨뜨린다(codegen/ABI 결함). 3타깃 동일 시그니처라 타깃별 asm 버그가 아니라 생성자 계약(레이아웃/태그/refcount) 불일치가 유력. 실패 게이트 15개: selfhost byte-eq(darwin)·faithful-nobaseline(3타깃)·miscompile-zero·stdlib selftest·own-link determinism/parity·cfallback-zero·try/catch setjmp m12·stdio-native·Route C smokes. 되돌림 PR에서 그 중 11개가 RED→GREEN 뒤집힘 확인(여전히RED=0) = 유죄 확정. PR-1(#4929, guard-OFF byte-neutral)은 무해했고 default-ON flip만 깬다.",
+    "threshold": "재머지 조건: 재-flip 전에 반드시 (1) 빈 배열 객체 레이아웃을 C 경로(hexa_array_new C 구현)와 1:1 대조(reference-match) — 헤더/len/cap/elem-tag/refcount 필드 오프셋과 초기값 (2) 로컬에서 stage_prebuild_hexat seed-converge 재현 후 통과 확인 (3) byteeq 3-target GREEN. ⚠️ required 체크(selfhost-gates-summary)는 이 파손에 초록이므로 브랜치 보호로는 절대 못 막는다 — 전체 롤업을 직접 봐야 한다(sidecar pr-cycle-ts-2).",
+    "source": "self/native/array_new_leaf_x86_64.s"
    }
   ]
  },
