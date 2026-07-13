@@ -2565,7 +2565,7 @@ fn install_dir_from_argv0() {
     //   - /proc/self/exe symlink 은 Linux kernel 이 항상 제공하므로 안정적.
     //   - macOS 는 /proc 자체가 없음 → 자동 skip (test -L 실패).
     let av0 = args()
-    let exe = ""
+    let mut exe = ""
     if len(av0) > 0 {
         exe = av0[0]
     }
@@ -4021,7 +4021,7 @@ fn cmd_build(src, out, c_only, target, shared) {
     if shared == "1" { _tmp_test = "-e" }
     let tmp_chk = exec("test " + _tmp_test + " '" + tmp + "' && printf yes || printf no")
     if tmp_chk != "yes" {
-        let _cc_label = host_cc()
+        let mut _cc_label = host_cc()
         if len(target) > 0 { _cc_label = "zig cc" }
         println("error: " + _cc_label + " compile failed — binary not produced: " + tmp)
         exit(1)
@@ -4598,7 +4598,7 @@ fn _run_cache_key(file) {
     let base = _run_cache_base_key(file)
     let closure = _import_closure_hash(file)
     let _bt = _self_build_tag()
-    let _sfx = ""
+    let mut _sfx = ""
     if len(_bt) > 0 { _sfx = "_" + _bt }
     if len(closure) == 0 { return base + _sfx }
     return base + "_" + closure.substring(0, 16) + _sfx
