@@ -1,0 +1,25 @@
+=== EXIT-FLUSH A/B RESULT ===
+HEAD=8765f524
+=== EXIT_FLUSH=1 ===
+release_build rc=1
+[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCHR: hxlcl_strchr ← frozen seed self/native/hxlcl_strchr_x86_64.s (TARGET=linux-x86_64, 1-symbol contract); shim.o built with -DHEXA_RT_NATIVE_STRCHR (strchr dropped) — ld -r multidef gate validates
+[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRDUP: hxlcl_strdup ← frozen seed self/native/hxlcl_strdup_x86_64.s (TARGET=linux-x86_64, 1-symbol contract); shim.o built with -DHEXA_RT_NATIVE_STRDUP (strdup dropped) — ld -r multidef gate validates
+[stage_resolve_runtime_a] RFC061 Case-B [S5]: multidef safety gate (ld -r partial merge)…
+stage_prebuild_hexat: HEXA_ZEROC_OWN_START=1 but /home/summer/.hx/bin/build/runtime.a has NO ' T _start' — NOT appending -nostartfiles (crt1 _start retained; averts the #4489 no-_start FATAL)
+last-3-lines:
+link.stub:(.text+0x112): undefined reference to `__cudaRegisterFatBinary'
+/usr/bin/ld: link.stub:(.text+0x183): undefined reference to `__cudaRegisterFatBinaryEnd'
+collect2: error: ld returned 1 exit status
+---
+=== EXIT_FLUSH=0 ===
+release_build rc=1
+[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRCHR: hxlcl_strchr ← frozen seed self/native/hxlcl_strchr_x86_64.s (TARGET=linux-x86_64, 1-symbol contract); shim.o built with -DHEXA_RT_NATIVE_STRCHR (strchr dropped) — ld -r multidef gate validates
+[stage_resolve_runtime_a] RFC061 §M8 RT-NATIVE-STRDUP: hxlcl_strdup ← frozen seed self/native/hxlcl_strdup_x86_64.s (TARGET=linux-x86_64, 1-symbol contract); shim.o built with -DHEXA_RT_NATIVE_STRDUP (strdup dropped) — ld -r multidef gate validates
+[stage_resolve_runtime_a] RFC061 Case-B [S5]: multidef safety gate (ld -r partial merge)…
+stage_prebuild_hexat: HEXA_ZEROC_OWN_START=1 but /home/summer/.hx/bin/build/runtime.a has NO ' T _start' — NOT appending -nostartfiles (crt1 _start retained; averts the #4489 no-_start FATAL)
+last-3-lines:
+link.stub:(.text+0x112): undefined reference to `__cudaRegisterFatBinary'
+/usr/bin/ld: link.stub:(.text+0x183): undefined reference to `__cudaRegisterFatBinaryEnd'
+collect2: error: ld returned 1 exit status
+---
+DONE
