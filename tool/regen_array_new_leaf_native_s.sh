@@ -37,8 +37,12 @@ printf 'fn _drv_unused() {}\n' > "$TMP/_drv.hexa"
 SYMS="hexa_array_new"
 NSYMS=1
 # the carrier/libc externs this seed is ALLOWED to leave undefined. calloc is the only
-# new floor entrant vs the arr-i64/f64 leaves (sanctioned); exit may lower to hexa_exit.
-ALLOWED_U="calloc hexa_exit malloc write exit"
+# CARRIER-ONLY U-floor. A raw libc name here is not a "sanctioned floor entrant" — it is a
+# MISCOMPILE: aprime lowers every call in the seed with the hexa pair-ABI, but a raw libc U-symbol
+# binds to the C-ABI body, so the args land in the wrong registers and the result pointer (rax/x0
+# alone) is dropped in favour of garbage in the dead second register. That is exactly how the old
+# `calloc` entry broke the #4930 flip on all 3 targets. Only HexaVal-ABI carriers may appear.
+ALLOWED_U="hexa_ptr_alloc hexa_exit"
 
 emit_one() {
     local triple="$1" out="$2" abi="$3"
@@ -56,8 +60,9 @@ emit_one() {
         printf '// %s — FROZEN BOOTSTRAP SEED (RT-NATIVE — array ARR-NEW constructors).\n' "$(basename "$out")"
         printf '// GENERATED: tool/regen_array_new_leaf_native_s.sh — aprime_cc _drv.hexa --emit=asm\n'
         printf '//   --target=%s -o %s stdlib/runtime/array_new_leaf.hexa.\n' "$triple" "$(basename "$out")"
-        printf '//   Provides the empty-array constructor native (hexa_array_new · calloc mint).\n'
-        printf '//   ABI: %s. External U-floor: %s (calloc the only new floor entrant; pair-clean, no shim).\n' "$abi" "$ALLOWED_U"
+        printf '//   Provides the empty-array constructor native (hexa_array_new · carrier mint + explicit zero).\n'
+        printf '//   ABI: %s. External U-floor: %s — CARRIER-ONLY (HexaVal-ABI); a raw libc U here is a\n' "$abi" "$ALLOWED_U"
+        printf '//   pair-vs-C-ABI miscompile, not a sanctioned floor entrant (the #4930 break).\n'
         printf '//   Lets stage_resolve_runtime_a define HEXA_RT_CORE_ARRAY_ZEROS_LEAF_NATIVE + ar this\n'
         printf '//   .o into runtime.a so hexa_array_new drops from the compiled runtime_core.c.\n'
         sed -E -e 's#"[^"]*array_new_leaf\.hexa"#"stdlib/runtime/array_new_leaf.hexa"#g' \
