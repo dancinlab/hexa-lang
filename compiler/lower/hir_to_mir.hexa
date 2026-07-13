@@ -542,9 +542,13 @@ pub let mut _bck_strict = false    // HEXA_BORROWCK_STRICT=1, read once per lowe
 // A2 byteeq-neutral, gen3≡gen4).
 pub let mut _bck_census = false    // HEXA_BORROWCK_CENSUS=1, read once per lower_hir
 // HEXA-OWN L4/L5 Lane-B B3 — opt-OUT WARNING-BAND default (HEXA_BORROWCK_WARN_DEFAULT).
-// FLIPPED default-ON at L5 round-3 (gated on the B1 census: HX3014/HX3055 fires=0 on the
-// whole self-host corpus, so the warn band emits ZERO diagnostics ⇒ diag stream + emitted
-// binary byte-identical, gen3≡gen4). Polarity-preserving opt-OUT: on unless the user sets
+// FLIPPED default-ON at L5 round-3 (B1 census: HX3055 fires=0 + HX3014 fires low). The later
+// #4909 REAL-corpus census surfaced 3 residual HX3014 FPs (logic_synth/passes.hexa — field-
+// disjoint + whole-value dead-alias); A1 place-projection + A2 dead-alias redef-cut (this
+// change) suppress them, restoring a clean diag stream. The ARTIFACT byteeq holds regardless:
+// borrowck is OBSERVE-ONLY (never emits MIR; diags live in the separate _lr_diag sink), so the
+// emitted binary + gen3≡gen4 stay byte-identical whether 3 or 0 warnings print. Polarity-
+// preserving opt-OUT: on unless the user sets
 // HEXA_BORROWCK_WARN_DEFAULT="0" (escape hatch preserved — restores the pre-flip opt-in).
 // When on: (a) borrowck runs opt-OUT (on unless HEXA_BORROWCK=="0"),
 // (b) every admitted diagnostic is FORCED to the Warning band (never build-refusing —
@@ -553,12 +557,13 @@ pub let mut _bck_census = false    // HEXA_BORROWCK_CENSUS=1, read once per lowe
 // now (not before the #4879/#4889 fixes) precisely because the census proves 0 fires.
 pub let mut _bck_warn_default = true    // HEXA_BORROWCK_WARN_DEFAULT!="0" (opt-OUT), read once per lower_hir
 // B3 allowlist — the HX30xx borrowck codes the B1 census cleared to FP=0. Populated at the
-// B3 flip (roadmap gate B1->B3): HX3014 (was 48 FP → 0 via the #4889 gen/kill precision fix)
-// and HX3055 (was 42 TP → 0 via the #4879 let→let mut sweep) both measured FP=0 / fires=0 on
-// the whole self-host corpus (CENSUS_WOULD_MOVE=0). ONLY census-verified codes belong here;
-// a code is added ONLY after the census measures its fires=0 on the corpus. Since both codes
-// fire 0 on shipping code, the default-ON warn band admits ZERO diagnostics ⇒ stderr + emitted
-// artifacts byte-identical (byteeq-neutral). @root-cause-ok B1 census is the gate — measured, not a punt
+// B3 flip (roadmap gate B1->B3): HX3014 (was 48 FP → low via the #4889 gen/kill precision fix)
+// and HX3055 (was 42 TP → 0 via the #4879 let→let mut sweep). The #4909 REAL-corpus census then
+// surfaced 3 residual HX3014 FPs (passes.hexa field-disjoint + whole-value dead-alias), now
+// suppressed by A1 place-projection + A2 dead-alias redef-cut → REAL-corpus FD targets 0 (the
+// B4 warn→error PREREQ gate). ONLY census-verified codes belong here. The ARTIFACT byteeq is
+// unconditional (borrowck OBSERVE-ONLY, diags in _lr_diag, never MIR) — stderr narrows as FPs
+// are suppressed, but emitted objects stay byte-identical. @root-cause-ok census is the gate — measured, not a punt
 pub let mut _bck_warn_allowlist: [string] = ["HX3014", "HX3055"]
 pub let mut _bck_active = false    // per-fn gate; suspended in closure bodies
 // ── missing-return (E0308 / HX3047) — env-gated default-OFF ─────────────
@@ -645,6 +650,14 @@ pub let mut _bck_u_spans: [Span] = []
 // write arms the use ONLY if `w_seq > u_seq` (kills the pre-join-write FP whose
 // aliasing assignment happens AFTER the write in program order).
 pub let mut _bck_u_seqs: [i64] = []
+// A1 — per-WRITE / per-USE place-projection token (field name / const idx / ""
+// whole-value). Push-only parallel columns; byteeq-neutral (fill under _bck_active).
+pub let mut _bck_w_projs: [string] = []
+pub let mut _bck_u_projs: [string] = []
+// A1 — read-site projection transient (dedicated; NOT _bck_pm_field, HX3042 owns that).
+pub let mut _bck_rd_proj: string = ""
+// A2 — per-USE local id: which local's whole-local redefs cut the dead-alias reach.
+pub let mut _bck_u_locals: [i64] = []
 // HEXA-OWN L5 round-2b — SEVER-KILL registry (parallel block/group columns). A
 // fresh (non-handle-copy) `let X = [..]/S{..}` or whole-local reassign
 // `X = [..]/S{..}` re-initializes X and thereby SEVERS any prior-iteration
@@ -657,6 +670,10 @@ pub let mut _bck_u_seqs: [i64] = []
 // `let mut next=[]`. Populated only under `_bck_active` (byteeq-neutral).
 pub let mut _bck_kill_blocks: [i64] = []
 pub let mut _bck_kill_grps: [i64] = []
+// A2 — whole-local REDEFINITION (kill) events (local id + Block.id). NEVER a
+// field/index/method mutation. Consulted by _bck_wr_deadalias's redef-cut BFS.
+pub let mut _bck_def_locals: [i64] = []
+pub let mut _bck_def_blocks: [i64] = []
 // @own-param pre-pass map (module lifetime): paired rows fn-name/param-idx,
 // built in lower_hir from fn-item `Annotation{name:"own", args:[pname]}`
 // positioned via the sibling `param_names` annotation (ast_to_hir carries
@@ -853,8 +870,14 @@ fn _bck_reset_fn() {
     _bck_u_blocks = []
     _bck_u_spans = []
     _bck_u_seqs = []
+    _bck_w_projs = []
+    _bck_u_projs = []
+    _bck_rd_proj = ""
+    _bck_u_locals = []
     _bck_kill_blocks = []
     _bck_kill_grps = []
+    _bck_def_locals = []
+    _bck_def_blocks = []
     _bck_ref_names = []
     _bck_ref_origins = []
     _bck_ref_lines = []
@@ -982,6 +1005,20 @@ fn _bck_note_kill(blk: i64, grp: i64) {
     _bck_kill_grps.push(grp)
 }
 
+// A2 — record a whole-local (re)definition of `local_id` in block `blk` (kills the
+// prior value; NEVER a field/index/method mutation). Consulted by _bck_wr_deadalias.
+fn _bck_note_def(local_id: i64, blk: i64) {
+    _bck_def_locals.push(local_id)
+    _bck_def_blocks.push(blk)
+}
+
+// A1 — const-index / map-key literal -> token, else "" (dynamic index stays
+// conservative: an empty token defeats the disjoint-suppress predicate -> arms).
+fn _bck_const_idx_tok(n: HExpr) -> string {
+    if n.kind == "literal_int" || n.kind == "literal_string" { return n.text }
+    return ""
+}
+
 // L5 round-2b — is `blk` a sever-kill block for `grp`? Linear scan over the
 // (few) recorded kill pairs.
 fn _bck_kill_has(blk: i64, grp: i64) -> bool {
@@ -1050,7 +1087,7 @@ fn _bck_is_ref_param(fn_name: string, name: string) -> bool {
 
 // Record a WRITE through a tracked local handle (field_set / index_set /
 // mutating method receiver). Untracked handles are ignored.
-fn _bck_note_write(local_id: i64, name: string, blk: i64, sp: Span) {
+fn _bck_note_write(local_id: i64, name: string, blk: i64, sp: Span, proj: string) {
     let ti = _bck_find_local(local_id)
     if ti < 0 { return }
     _bck_w_grps.push(_bck_groups[ti])
@@ -1059,6 +1096,8 @@ fn _bck_note_write(local_id: i64, name: string, blk: i64, sp: Span) {
     _bck_w_blocks.push(blk)
     // L5 round-2b — program-order write seq for Rule-1 gen/kill gating.
     _bck_w_seqs.push(_bck_evseq)
+    // A1 — place token for this write (one push per event; parallel-array invariant).
+    _bck_w_projs.push(proj)
     _bck_evseq = _bck_evseq + 1
 }
 
@@ -1981,7 +2020,9 @@ fn _bck_check_use(name: string, local_id: i64, blk: i64, sp: Span) {
     let wi = _bck_find_write(grp)
     if wi >= 0 {
         if _bck_w_blocks[wi] == blk && _bck_w_names[wi] != name
-            && _bck_w_seqs[wi] > _bk_ujoin {
+            && _bck_w_seqs[wi] > _bk_ujoin
+            && !(len(_bck_w_projs[wi]) > 0 && len(_bck_rd_proj) > 0
+                 && _bck_w_projs[wi] != _bck_rd_proj) {
             _emit_hx3014("aliased write", name, _bck_w_names[wi], _bck_w_lines[wi], sp)
         }
     }
@@ -2001,6 +2042,10 @@ fn _bck_check_use(name: string, local_id: i64, blk: i64, sp: Span) {
     // L5 round-2b — snapshot the use-name's join seq for the M4 cross-block
     // Rule-1 gate (a reaching write arms this use only if `w_seq > u_seq`).
     _bck_u_seqs.push(_bk_ujoin)
+    // A1 — read-site place token (mirrors _bck_u_seqs, one push per use event).
+    _bck_u_projs.push(_bck_rd_proj)
+    // A2 — the local this use reads (its whole-local redefs cut the dead-alias reach).
+    _bck_u_locals.push(local_id)
     // HEXA-OWN round10 (HX3042) — record a partial-move USE. `_bck_pm_field` is
     // the field this ident is the base of (set by the field-read arm), or "" for
     // a whole-base use. Suppressed for a place-write base (`s.f = v`/`a[i] = v`),
@@ -2185,7 +2230,10 @@ fn _bck_nll_check() {
                         // hazard to it (kills the pre-join-write swap FP).
                         if _bck_w_grps[e] == _bck_u_grps[u]
                             && _bck_w_names[e] != _bck_u_names[u]
-                            && _bck_w_seqs[e] > _bck_u_seqs[u] {
+                            && _bck_w_seqs[e] > _bck_u_seqs[u]
+                            && !(len(_bck_w_projs[e]) > 0 && len(_bck_u_projs[u]) > 0
+                                 && _bck_w_projs[e] != _bck_u_projs[u])
+                            && !_bck_wr_deadalias(e, u) {
                             _emit_hx3014("aliased write", _bck_u_names[u],
                                          _bck_w_names[e], _bck_w_lines[e],
                                          _bck_u_spans[u])
@@ -2204,6 +2252,86 @@ fn _bck_nll_check() {
         }
         u = u + 1
     }
+}
+
+// A2 — dead-alias redef-cut: SUPPRESS the aliased-write HX3014 (write event `e`
+// vs use `u`) iff the write CANNOT reach the use along any CFG path free of a
+// whole-local redefinition of the use's local. Forward BFS over Block.succs
+// (block-id space), cutting at redef-blocks of L — NEVER cutting the target dst
+// (an in-block use-before-redef must still count reachable). Reaching dst on a
+// redef-free path => real hazard => false (fire); queue drained => dead alias
+// (true, suppress). Mirrors _reach_from's id2ix idiom; pure read-only (byteeq).
+fn _bck_wr_deadalias(e: i64, u: i64) -> bool {
+    let L = _bck_u_locals[u]
+    if L < 0 { return false }
+    let src = _bck_w_blocks[e]
+    let dst = _bck_u_blocks[u]
+    let nb = len(_lr_blocks)
+    if nb == 0 { return false }
+    let mut max_id = 0
+    let mut bi = 0
+    while bi < nb {
+        if _lr_blocks[bi].id > max_id { max_id = _lr_blocks[bi].id }
+        bi = bi + 1
+    }
+    let mut id2ix: [i64] = []
+    let mut z = 0
+    while z <= max_id {
+        id2ix.push(0 - 1)
+        z = z + 1
+    }
+    bi = 0
+    while bi < nb {
+        let bid = _lr_blocks[bi].id
+        if bid >= 0 { id2ix[bid] = bi }
+        bi = bi + 1
+    }
+    let mut visited: [i64] = []
+    z = 0
+    while z <= max_id {
+        visited.push(0)
+        z = z + 1
+    }
+    // seed with succs(src) — never src itself, so a same-block src==dst candidate
+    // only "reaches" dst via a real back-edge, not trivially.
+    let mut queue: [i64] = []
+    if src >= 0 && src <= max_id {
+        let six = id2ix[src]
+        if six >= 0 {
+            let sc = _lr_blocks[six].succs
+            let mut si = 0
+            while si < len(sc) {
+                queue.push(sc[si])
+                si = si + 1
+            }
+        }
+    }
+    let mut qh = 0
+    while qh < len(queue) {
+        let b = queue[qh]
+        qh = qh + 1
+        if b < 0 || b > max_id { continue }
+        if visited[b] == 1 { continue }
+        visited[b] = 1
+        if b == dst { return false }
+        let mut isdef = false
+        let mut di = 0
+        while di < len(_bck_def_locals) {
+            if _bck_def_locals[di] == L && _bck_def_blocks[di] == b { isdef = true }
+            di = di + 1
+        }
+        if isdef { continue }
+        let six2 = id2ix[b]
+        if six2 >= 0 {
+            let sc2 = _lr_blocks[six2].succs
+            let mut si2 = 0
+            while si2 < len(sc2) {
+                queue.push(sc2[si2])
+                si2 = si2 + 1
+            }
+        }
+    }
+    return true
 }
 
 // ── missing-return (E0308 / HX3047) — env-gated default-OFF ─────────────
@@ -4898,7 +5026,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         if _bck_active && _bk_is_method && _bk_recv_local >= 0 {
             if _bck_is_mutating_method(callee_text) {
                 _bck_note_write(_bk_recv_local, _bk_recv_name,
-                                ctx2.cur_block, e.span)
+                                ctx2.cur_block, e.span, "")
                 // HEXA-OWN L5-E8 — mutating method through a SHARED ref (Rust
                 // E0596): `r.push(x)` where `r` is itself a live `&` borrow. A
                 // `&mut` receiver is exactly what mutating methods require, so
@@ -5488,6 +5616,10 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             if _bk_rhs.kind == "array_lit" || _bk_rhs.kind == "struct_lit" {
                 let _bk_ng = _bck_new_group()
                 _bck_track(dst.id, nm, _bk_ng, e.span)
+                // A2 — `let X = [..]/S{..}` whole-local (re)definition of X. Inside a
+                // loop this is the redef that cuts the dead-alias back-edge reach
+                // (the load-bearing passes.hexa keep_X re-init). See _bck_wr_deadalias.
+                _bck_note_def(dst.id, ctx2.cur_block)
                 // L5 round-2b — this fresh `let X = [..]/S{..}` re-inits X. Inside
                 // a loop body the back-edge would otherwise carry a prior-iteration
                 // write of this group to a later use; mark the block a sever-kill
@@ -5499,6 +5631,8 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 let _bk_si = _bck_find_local(rhs_op.local_id)
                 if _bk_si >= 0 {
                     _bck_track(dst.id, nm, _bck_groups[_bk_si], e.span)
+                    // A2 — `let b = a` whole-local definition of b in this block.
+                    _bck_note_def(dst.id, ctx2.cur_block)
                     // HEXA-OWN L4 A2 — WOULD-MOVE CENSUS: this `let b = a`
                     // over a tracked aggregate handle is exactly a site that
                     // BECOMES A MOVE under move-by-default (A3). Emit one
@@ -5548,6 +5682,9 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                         // under @own (a real move); a non-@own handle-copy keeps the
                         // group-join above so Rule-1 aliasing stays intact.
                         _bck_track(dst.id, nm, _bck_new_group(), e.span)
+                        // A2 — @own move detach re-defines b (same block; redundant
+                        // with the join def above but harmless — kept for completeness).
+                        _bck_note_def(dst.id, ctx2.cur_block)
                     }
                 }
             }
@@ -5709,7 +5846,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             if _bck_active && lhs.children[0].kind == "ident"
                 && fbr.operand.kind == "local" {
                 _bck_note_write(fbr.operand.local_id, lhs.children[0].text,
-                                fctx.cur_block, e.span)
+                                fctx.cur_block, e.span, lhs.text)
             }
             // HEXA-OWN L5-E7 — assign-behind-shared-ref (Rust E0594). `r.f = v`
             // where `r` is itself a LIVE SHARED (`&`) ref-binding: a `&` borrow
@@ -5785,7 +5922,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             if _bck_active && lhs.children[0].kind == "ident"
                 && br.operand.kind == "local" {
                 _bck_note_write(br.operand.local_id, lhs.children[0].text,
-                                ctx_s.cur_block, e.span)
+                                ctx_s.cur_block, e.span, _bck_const_idx_tok(lhs.children[1]))
             }
             // HEXA-OWN L5-E7 — assign-behind-shared-ref (Rust E0594). `r[i] = v`
             // where `r` is a LIVE SHARED (`&`) ref-binding: same rule as `r.f = v`.
@@ -5944,6 +6081,8 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 let _bk_si2 = _bck_find_local(rr.operand.local_id)
                 if _bk_si2 >= 0 {
                     _bck_track(dst.id, lhs.text, _bck_groups[_bk_si2], e.span)
+                    // A2 — `b = a` whole-local reassign of b in this block.
+                    _bck_note_def(dst.id, ctx2.cur_block)
                     _bk_joined = true
                 }
             }
@@ -5951,6 +6090,8 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 if _bk_rhs2.kind == "array_lit" || _bk_rhs2.kind == "struct_lit" {
                     let _bk_ng2 = _bck_new_group()
                     _bck_track(dst.id, lhs.text, _bk_ng2, e.span)
+                    // A2 — `X = [..]/S{..}` whole-local reassign re-defines X here.
+                    _bck_note_def(dst.id, ctx2.cur_block)
                     // L5 round-2b — fresh whole-local reassign `X = [..]/S{..}`
                     // re-inits X: record a sever-kill for the new group in this
                     // block (kills the loop-carried swap FP; no-op outside loops).
@@ -5961,6 +6102,8 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             if !_bk_joined {
                 if _bck_find_local(dst.id) >= 0 {
                     _bck_track(dst.id, lhs.text, _bck_new_group(), e.span)
+                    // A2 — `X = <other>` detach reassign re-defines X here.
+                    _bck_note_def(dst.id, ctx2.cur_block)
                 }
             }
         }
@@ -5991,6 +6134,9 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 if rr.operand.kind == "local" {
                     _bck_note_move(rr.operand.local_id, "<assign move>",
                                    ctx2.cur_block, e.span)
+                    // A2 — @own assign-move detach re-defines b here (redundant with
+                    // the re-point track above; harmless, kept for completeness).
+                    _bck_note_def(dst.id, ctx2.cur_block)
                     // Move semantics: the assign-target `b` is the NEW sole owner and
                     // `a` is dead — DETACH `b` from `a`'s (now-moved) group into a
                     // fresh group so the group-granular Rule 2 does not spuriously
@@ -7432,9 +7578,13 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // used inside `s.a.b` fires precisely (rustc parity). save/restore is
         // unconditional (self-healing); flag-OFF never sets ctx (byteeq-neutral).
         let _bk_pm_saved = _bck_pm_field
-        if _bck_active && e.children[0].kind == "ident" { _bck_pm_field = e.text }
+        // A1 — dedicated read-proj transient live while the base ident funnels
+        // through _bck_check_use (the field token gates the HX3014 alias predicate).
+        let _bk_rd_saved = _bck_rd_proj
+        if _bck_active && e.children[0].kind == "ident" { _bck_pm_field = e.text; _bck_rd_proj = e.text }
         let r = _lower_hexpr(ctx, e.children[0])
         _bck_pm_field = _bk_pm_saved
+        _bck_rd_proj = _bk_rd_saved
         let mut ctx2 = _fresh_local(r.ctx, e.typ, "field_" + e.text)
         let dst = _lr_locals[len(_lr_locals) - 1]
         let mut args: [Operand] = []
@@ -7470,7 +7620,14 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             let _sl = _hir_call3("hexa_array_slice", e.children[0], _slo, _shi, e)
             return _lower_hexpr(ctx, _sl)
         }
+        // A1 — read-proj for an index read: const/literal index -> token (mirrors
+        // the field-read arm), dynamic index -> "" (stays conservative). Live only
+        // while the base ident funnels through _bck_check_use; restore before the
+        // index sub-expr lowers (its own ident uses are not container-projected).
+        let _bk_rd_saved_ix = _bck_rd_proj
+        if _bck_active && e.children[0].kind == "ident" { _bck_rd_proj = _bck_const_idx_tok(e.children[1]) }
         let lr = _lower_hexpr(ctx, e.children[0])
+        _bck_rd_proj = _bk_rd_saved_ix
         let rr = _lower_hexpr(lr.ctx, e.children[1])
         let mut ctx2 = _fresh_local(rr.ctx, e.typ, "idx")
         let mut dst = _lr_locals[len(_lr_locals) - 1]
