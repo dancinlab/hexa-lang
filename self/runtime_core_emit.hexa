@@ -3046,7 +3046,17 @@ fn emit_runtime_core_to(out_path: str) {
     // raw native double load through the runtime.o wall (§c-class). The box helper
     // is used at the dynamic boundary (a typed-f64 array flowing to a polymorphic
     // site re-boxes each element correctly as a TAG_FLOAT HexaVal).
-    buf = buf + "#if defined(HEXA_RT_SELFEMIT) || defined(HEXA_RT_CORE_ARRAY_TYPED_LEAF_NATIVE)\n"
+    // axis-② f64 typed-leaf flip (HEXA_RT_CORE_ARRAY_F64_LEAF_NATIVE): the seed provides
+    // new/len/box + push_bits(HexaVal, int64_t) directly (all GP-class), and a C shim owns
+    // the double→bits crossing (float-param SSE-ABI wall · convergence x86-64-linux-hexa-1).
+    // OFF (default) → the #elif is the original SELFEMIT||TYPED arm → byte-identical.
+    buf = buf + "#if defined(HEXA_RT_CORE_ARRAY_F64_LEAF_NATIVE)\n"
+    buf = buf + "extern HexaVal hexa_arr_f64_new(int cap);\n"
+    buf = buf + "extern int hexa_arr_f64_len(HexaVal v);\n"
+    buf = buf + "extern HexaVal hexa_arr_f64_box(HexaVal v, int64_t i);\n"
+    buf = buf + "extern HexaVal hexa_arr_f64_push_bits(HexaVal v, int64_t xbits);\n"
+    buf = buf + "static inline HexaVal hexa_arr_f64_push(HexaVal v, double x) { union { double d; long long i; } u; u.d = x; return hexa_arr_f64_push_bits(v, u.i); }\n"
+    buf = buf + "#elif defined(HEXA_RT_SELFEMIT) || defined(HEXA_RT_CORE_ARRAY_TYPED_LEAF_NATIVE)\n"
     buf = buf + "extern HexaVal hexa_arr_f64_new(int cap);\n"
     buf = buf + "extern HexaVal hexa_arr_f64_push(HexaVal v, double x);\n"
     buf = buf + "extern int hexa_arr_f64_len(HexaVal v);\n"
