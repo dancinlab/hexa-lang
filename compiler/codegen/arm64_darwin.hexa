@@ -2158,6 +2158,8 @@ pub fn _builtin_runtime_sym(name: string, nargs: i64) -> string {
     // file I/O (rt_*)
     if name == "delete_file"               { return "rt_delete_file" }
     if name == "read_bytes_at"             { return "rt_read_bytes_at" }
+    if name == "read_f32_at"               { return "rt_read_f32_at" }
+    if name == "read_f32_array_at"         { return "rt_read_f32_array_at" }
     if name == "read_file_bytes"           { return "rt_read_file_bytes" }
     if name == "read_lines"                { return "rt_read_lines" }
     if name == "read_stdin"                { return "hexa_read_stdin" }
