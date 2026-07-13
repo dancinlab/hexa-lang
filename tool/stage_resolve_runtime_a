@@ -560,6 +560,80 @@ resolve_native_map_query_seed() {
     rm -f "$s_tmp"
 }
 
+# ── axis-② runtime.c→0: array TYPED-LEAF i64 native seed → build/array_typed_leaf_native.o ──
+# The 4 packed-i64 array dispatchers (hexa_arr_i64_new/push/len/box) from
+# stdlib/runtime/array_typed_leaf.hexa: raw-mem __hx_ptr_* field access + __hx_payload_*
+# leaf arithmetic + extern realloc grow (array_core.hexa:25 "realloc stays C" wall
+# dissolved via the seed CALLING libc realloc — the C body carries the same libc undefs,
+# net floor unchanged). SELF-CONTAINED (no rt_* delegates to absorb; U-floor = libc +
+# runtime.a carriers only). own-obj --isolate first, .s-seed fallback. Sets
+# HEXA_RT_ARRAY_I64_LEAF_NATIVE=1 → the consumption block externs the 4 from
+# runtime_core.c (HEXA_RT_CORE_ARRAY_I64_LEAF_NATIVE) + links this .o. f64 typed +
+# poly zeros_leaf stay C (their blocks keep the broader TYPED_LEAF guard). Default-OFF
+# byte-neutral (opt-in HEXA_RT_ARRAY_I64_LEAF / HEXA_RT_OWNOBJ).
+resolve_native_array_typed_leaf_seed() {
+    [ "${HEXA_RT_ARRAY_I64_LEAF_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
+    [ -f build/array_typed_leaf_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && [ "${HEXA_RT_OWNOBJ_ARRI64:-0}" = "0" ] && { export HEXA_RT_ARRAY_I64_LEAF_NATIVE=1; return 0; }
+    local seed="" tgt="${TARGET:-}"
+    tgt="${tgt%-musl}"; tgt="${tgt%-cuda}"
+    [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
+        "Darwin arm64") tgt="darwin-arm64" ;;
+        "Linux x86_64") tgt="linux-x86_64" ;;
+        "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
+    esac
+    # own-obj: own-emit array_typed_leaf.hexa direct to a SELF-CONTAINED .o. The seed
+    # has NO program-side delegates (calls libc + runtime.a carriers only), so --isolate
+    # simply demotes any non-kept globals; the seed's only undefs are the libc/carrier
+    # U-floor {malloc,realloc,write,hexa_exit,hexa_int,hexa_throw} — the same set the C
+    # body already leaves undefined, so no runtime.a-only link regresses.
+    if [ "${HEXA_RT_OWNOBJ:-0}" != "0" ] || [ "${HEXA_RT_OWNOBJ_ARRI64:-0}" != "0" ]; then
+        local _oc="${HEXA_OWNOBJ_CC:-build/hexat}" _osrc="stdlib/runtime/array_typed_leaf.hexa" _otri=""
+        local _kg="hexa_arr_i64_new,hexa_arr_i64_push,hexa_arr_i64_len,hexa_arr_i64_box"
+        case "$tgt" in
+            linux-x86_64) _otri="x86_64-linux-gnu" ;; linux-arm64) _otri="arm64-linux-gnu" ;; darwin-arm64) _otri="arm64-apple-darwin" ;;
+        esac
+        if [ -x "$_oc" ] && [ -f "$_osrc" ] && [ -n "$_otri" ]; then
+            printf 'fn _drv_unused() {}\n' > build/_ownobj_drv.hexa
+            if "$_oc" build/_ownobj_drv.hexa --backend=native --emit=obj --keep-global="$_kg" --isolate --target="$_otri" -o build/array_typed_leaf_native.o "$_osrc" 2>build/array_typed_leaf_ownobj.err; then
+                local _oq; _oq="$(nm build/array_typed_leaf_native.o 2>/dev/null | grep -cE ' T _?hexa_arr_i64_(new|push|len|box)$' || true)"
+                # U-floor gate: every undefined external must be in the allowed carrier/libc set.
+                local _bad; _bad="$(nm build/array_typed_leaf_native.o 2>/dev/null | awk '$1=="U"||$2=="U"{print $NF}' | while read -r u; do
+                    b="${u#_}"; printf '%s\n' " malloc realloc write hexa_exit hexa_int hexa_throw " | grep -q " $b " || echo "$b"; done | tr '\n' ' ')"
+                if [ "${_oq:-0}" -eq 4 ] && [ -z "${_bad// /}" ]; then
+                    export HEXA_RT_ARRAY_I64_LEAF_NATIVE=1
+                    echo "[stage_resolve_runtime_a] ARR-I64 OWN-OBJ: array_typed_leaf via $_oc --emit=obj --isolate ($_oq/4 dispatchers global, U-floor carrier/libc-only, TARGET=$tgt) → 4 i64 array bodies dropped from runtime_core.c, no \$CC assemble"
+                    return 0
+                fi
+                echo "[stage_resolve_runtime_a] ARR-I64 OWN-OBJ: array_typed_leaf own-emit exported $_oq/4 dispatchers, U-floor breach ($_bad) — retaining C bodies" >&2
+                rm -f build/array_typed_leaf_native.o
+            else
+                echo "[stage_resolve_runtime_a] ARR-I64 OWN-OBJ: array_typed_leaf own-emit failed — retaining C bodies ($(head -1 build/array_typed_leaf_ownobj.err 2>/dev/null))" >&2
+            fi
+        fi
+    fi
+    case "$tgt" in
+        darwin-arm64) seed="self/native/array_typed_leaf_arm64.s" ;;
+        linux-x86_64) seed="self/native/array_typed_leaf_x86_64.s" ;;
+        linux-arm64)  seed="self/native/array_typed_leaf_arm64-linux.s" ;;
+        *)            seed="" ;;
+    esac
+    [ -n "$seed" ] && [ -f "$seed" ] || { echo "[stage_resolve_runtime_a] ARR-I64: no seed for TARGET=$tgt — i64 dispatchers stay in C runtime_core.c (regen tool/regen_array_typed_leaf_native_s.sh)" >&2; return 0; }
+    local nsyms; nsyms="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?hexa_arr_i64_(new|push|len|box)([[:space:]]|$)' "$seed" 2>/dev/null || true)"
+    if [ "${nsyms:-0}" -ne 4 ]; then
+        echo "[stage_resolve_runtime_a] ARR-I64: seed $seed exports ${nsyms:-0}/4 hexa_arr_i64_* — i64 dispatchers stay in C (seed needs regen)" >&2
+        return 0
+    fi
+    local s_tmp="build/array_typed_leaf_seed.s"
+    grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
+    if $CC -c "$s_tmp" -o build/array_typed_leaf_native.o 2>/dev/null; then
+        export HEXA_RT_ARRAY_I64_LEAF_NATIVE=1
+        echo "[stage_resolve_runtime_a] ARR-I64: assembled build/array_typed_leaf_native.o from $seed (TARGET=$tgt, 4 dispatchers) → native i64 array path"
+    else
+        echo "[stage_resolve_runtime_a] ARR-I64: WARN assemble of $seed failed — i64 dispatchers stay in C" >&2
+    fi
+    rm -f "$s_tmp"
+}
+
 # ── RT-NATIVE leg B M4 INTERN-R1 — intern-core READ-half native seed → build/intern_core_native.o ──
 # The string-intern twin of resolve_native_map_core_seed: assemble
 # build/intern_core_native.o from the arch-matched frozen self/native/intern_core_*.s
@@ -1607,6 +1681,17 @@ build_runtime_a_from_source() {
         rt_mapq_def="-DHEXA_RT_CORE_MAP_QUERY_DISPATCH_NATIVE=1"
         extra_obj="$extra_obj build/map_query_native.o"
         echo "[stage_resolve_runtime_a] RT-NATIVE MAP-QUERY: HEXA_RT_MAP_QUERY_NATIVE=1; ar'ing native map_query_native.o into runtime.a (8 dispatchers own-native, dropped from runtime_core.c)"
+    fi
+    # ── axis-② runtime.c→0: array TYPED-LEAF i64 — the 4 own-native dispatchers
+    #    (array_typed_leaf.hexa, HEXA_RT_ARRAY_I64_LEAF_NATIVE set by
+    #    resolve_native_array_typed_leaf_seed) extern the 4 i64 array bodies away from
+    #    runtime_core.c (guard HEXA_RT_CORE_ARRAY_I64_LEAF_NATIVE) + link them from the
+    #    seed .o. f64 typed + poly zeros_leaf stay C. Default-OFF byte-neutral. ──
+    local rt_arr_i64_def=""
+    if [ "${HEXA_RT_ARRAY_I64_LEAF_NATIVE:-0}" = "1" ] && [ -f build/array_typed_leaf_native.o ]; then
+        rt_arr_i64_def="-DHEXA_RT_CORE_ARRAY_I64_LEAF_NATIVE=1"
+        extra_obj="$extra_obj build/array_typed_leaf_native.o"
+        echo "[stage_resolve_runtime_a] RT-NATIVE ARR-I64: HEXA_RT_ARRAY_I64_LEAF_NATIVE=1; ar'ing native array_typed_leaf_native.o into runtime.a (4 i64 array dispatchers own-native, dropped from runtime_core.c)"
     fi
     local rt_intern_def=""
     if [ "${HEXA_RT_INTERN_NATIVE:-0}" = "1" ] && [ -f build/intern_core_native.o ]; then
@@ -3913,12 +3998,12 @@ build_runtime_a_from_source() {
         #      archive-internal resolution). NO HEXA_HAS_HEXA_RT_STDLIB (matches the
         #      default single-TU object; setting it would extern rt_log/… → multidef).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S2]: compile build/runtime.o (include-drop, HI-tier inline)…"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self $_heap_def -c self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_arr_i64_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self $_heap_def -c self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
         # (S3) runtime_core.o — standalone TU (sysheaders prelude), runtime_hi_gen.c
         #      KEPT (supplies the HI-tier rt_* C bodies). SAME seed -D set. NO
         #      HEXA_HAS_HEXA_RT_STDLIB (keeps those bodies inline, not externed).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S3]: compile build/runtime_core.o (standalone TU, runtime_hi_gen.c kept)…"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_mapq_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_stdio_link $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE $_mo_rtcore_def $_rng_strcmp_def -I self -include self/runtime_core_sysheaders.h $_heap_def -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_mapq_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_arr_i64_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_stdio_link $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE $_mo_rtcore_def $_rng_strcmp_def -I self -include self/runtime_core_sysheaders.h $_heap_def -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
         # (S4) hxlcl_shim.o — libc-delegate hxlcl_* sibling TU.
         # own-start #29 coherence: $_zc_own_def MUST flow here too — without it the
         # shim's hxlcl_atexit stays the glibc-atexit delegate (U atexit), and under
@@ -3987,7 +4072,7 @@ build_runtime_a_from_source() {
             local _mo_cinc="$_mo_cuda_home/targets/x86_64-linux/include"
             [ -d "$_mo_cinc" ] || _mo_cinc="$_mo_cuda_home/include"
             echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA: build SEPARATE build/runtime.cuda.a (include-drop multi-object + cuda objects)"
-            $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
+            $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_arr_i64_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
             "${AR:-ar}" rcs build/runtime.cuda.a build/runtime_cuda_host.o build/runtime_core.o $_mo_hxlcl_members $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
             ls -la build/runtime.cuda.a
             local _mo_cseed _mo_cm
@@ -4007,7 +4092,7 @@ build_runtime_a_from_source() {
         echo "$RA"
         return 0
     fi
-    $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_mapq_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_exit_flush -I self $_heap_def -c self/runtime.c -o build/runtime.o
+    $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_mapq_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_arr_i64_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_exit_flush -I self $_heap_def -c self/runtime.c -o build/runtime.o
     "${AR:-ar}" rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     if [ "${HEXA_CUDA:-0}" = "1" ] && [ -f build/runtime_cuda.o ] && [ -f build/runtime_cuda_dlink.o ]; then
@@ -4015,7 +4100,7 @@ build_runtime_a_from_source() {
         local _cinc="$_cuda_home/targets/x86_64-linux/include"
         [ -d "$_cinc" ] || _cinc="$_cuda_home/include"
         echo "[stage_resolve_runtime_a] CUDA-R1: building SEPARATE consumer archive build/runtime.cuda.a (runtime.c -DHEXA_CUDA -I$_cinc + runtime_cuda.o + runtime_cuda_dlink.o); toolchain keeps the CPU build/runtime.a (libcuda-free, GPU-less-host-runnable)"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_mapq_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_exit_flush -DHEXA_CUDA -I "$_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_mapq_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_arr_i64_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_exit_flush -DHEXA_CUDA -I "$_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o
         "${AR:-ar}" rcs build/runtime.cuda.a build/runtime_cuda_host.o $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
         ls -la build/runtime.cuda.a
         # ING-35 #2 — fail loudly if the CUDA archive dropped a native-core seed the
@@ -4207,6 +4292,8 @@ resolve_native_array_core_seed
 resolve_native_map_core_seed
 # axis-② runtime.c→0: map-query DISPATCH — 8 own-native dispatchers (default-OFF).
 resolve_native_map_query_seed
+# axis-② runtime.c→0: array TYPED-LEAF i64 — 4 own-native dispatchers (default-OFF).
+resolve_native_array_typed_leaf_seed
 # RT-NATIVE INTERN-R1: assemble the arch-matched native intern_core seed (sets
 # HEXA_RT_INTERN_NATIVE=1 on all 3 production targets). Unknown targets / missing
 # seed keep the C intern lookup loop.
