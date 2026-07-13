@@ -26,20 +26,25 @@ HEXA_BIN="${HEXA_BIN:-./hexa}"
 if [ "$#" -gt 0 ]; then
     CORPUS=("$@")
 else
+    # Every entry must have `use` > 0 — that is the whole point. A program with no imports never
+    # takes the flatten/import-closure path, which is exactly the blind spot of the existing toy
+    # corpus (array.hexa 21 lines use=0, loop.hexa 19 lines use=0). Ordered small -> large so a
+    # partial run still says something.
     CORPUS=()
     for c in \
-        tool/hexa_diag.hexa \
+        tool/compile.hexa \
         tool/doctor.hexa \
-        tool/atlas_cli.hexa \
-        tool/roadmap_cli.hexa \
+        tool/absolute_rules_embed_gen.hexa \
+        tool/ai_native_profile.hexa \
+        tool/aot_cc_select.hexa \
         tool/hx.hexa \
         stdlib/qforge/atoms/ccsd_rhf.hexa \
-        tool/stdlib_guard_lint.hexa \
-        tool/bounded_loop_lint.hexa \
-        tool/no_hardcode_lint.hexa \
-        tool/total_fn_lint.hexa
+        tool/atlas_cli.hexa
     do
-        [ -f "$c" ] && CORPUS+=("$c")
+        [ -f "$c" ] || continue
+        # Skip anything that would not exercise the flatten path.
+        [ "$(grep -c '^use ' "$c" 2>/dev/null || echo 0)" -gt 0 ] || continue
+        CORPUS+=("$c")
     done
 fi
 
