@@ -38,7 +38,20 @@ SYMS="hexa_arr_zeros_leaf hexa_arr_zeros_leaf_int"
 NSYMS=2
 # the carrier/libc externs this seed is ALLOWED to leave undefined. calloc is the only
 # new floor entrant vs the arr-i64/f64 leaves (sanctioned); exit may lower to hexa_exit.
-ALLOWED_U="malloc calloc write exit hexa_exit"
+# CARRIER-ONLY U-floor. A raw libc name here is NOT a sanctioned floor entrant — it is a
+# pair-vs-C-ABI miscompile: aprime lowers every call in the seed with the hexa pair-ABI, but a raw
+# libc U-symbol binds to the C-ABI body, so the args land in the wrong registers and the returned
+# pointer (rax/x0 alone) is dropped for garbage in the dead second register. Measured on the pre-fix
+# seed: linux-x86_64 exits 1 (its own OOM guard sees the garbage as NULL), darwin-arm64 returns a
+# silently-wrong array. The sibling array_new seed died the same way and took #4930 down on 3 targets.
+ALLOWED_U="hexa_heap_alloc hexa_heap_zalloc hexa_throw hexa_bool"
+# hexa_bool is NOT a libc entrant — it is the BACKEND'S OWN helper (`HexaVal hexa_bool(int)`,
+# runtime_core.c) that aprime emits for a leaf truth test (`if __hx_payload_eq(..)`), with an ABI the
+# codegen itself controls. Every already-deployed seed carries it. What must NEVER appear here is a raw
+# libc name (calloc/malloc/realloc/free/write/exit) — that is the pair-vs-C-ABI miscompile, not a floor
+# entrant. Nor a BOXED slow-call (hexa_eq/hexa_mul/hexa_add_slow): those come from writing a plain `a == 0`
+# instead of the `__hx_payload_*` leaf (convergence array-core-hexa-1), and they are TARGET-DEPENDENT —
+# x86_64 folds them to an inline cmp while arm64 emits a real `bl`, so an x86-only check waves them through.
 
 emit_one() {
     local triple="$1" out="$2" abi="$3"
@@ -57,7 +70,8 @@ emit_one() {
         printf '// GENERATED: tool/regen_arr_zeros_leaf_native_s.sh — aprime_cc _drv.hexa --emit=asm\n'
         printf '//   --target=%s -o %s stdlib/runtime/arr_zeros_leaf.hexa.\n' "$triple" "$(basename "$out")"
         printf '//   Provides the 2 boxed-zeros constructor natives (hexa_arr_zeros_leaf{,_int}).\n'
-        printf '//   ABI: %s. External U-floor: %s (calloc the only new floor entrant; pair-clean, no shim).\n' "$abi" "$ALLOWED_U"
+        printf '//   ABI: %s. External U-floor: %s — CARRIER-ONLY (HexaVal-ABI); a raw libc U here is a\n' "$abi" "$ALLOWED_U"
+        printf '//   pair-vs-C-ABI miscompile, not a sanctioned floor entrant.\n'
         printf '//   Lets stage_resolve_runtime_a define HEXA_RT_CORE_ARRAY_ZEROS_LEAF_NATIVE + ar this\n'
         printf '//   .o into runtime.a so the 2 zeros constructors drop from the compiled runtime_core.c.\n'
         sed -E -e 's#"[^"]*arr_zeros_leaf\.hexa"#"stdlib/runtime/arr_zeros_leaf.hexa"#g' \
@@ -70,6 +84,22 @@ emit_one() {
         x86_64-linux-gnu) [ "$(uname -s)" = Darwin ] && cc_extra="-target x86_64-linux-gnu" ;;
         arm64-linux-gnu)  [ "$(uname -s)" = Darwin ] && cc_extra="-target aarch64-linux-gnu" ;;
     esac
+    # TOOLCHAIN-FREE U-floor scan — runs on EVERY target, no assembler required. The nm check below
+    # only runs where a cross-assembler exists and silently DEGRADES to a WARN otherwise; that hole is
+    # exactly how an arm64-only `bl hexa_eq` (a plain `==` lowering to the boxed slow-call, convergence
+    # array-core-hexa-1) shipped past an x86-clean regen and broke the darwin link. Read the emitted asm
+    # itself: every call/bl target not DEFINED in this file must be in ALLOWED_U.
+    local _def _callees _bads
+    _def="$( { grep -oE '^[[:space:]]*\.globl[[:space:]]+_?[A-Za-z_][A-Za-z0-9_]*' "$s" | awk '{print $2}';
+               grep -oE '^_?[A-Za-z_][A-Za-z0-9_]*:' "$s" | tr -d ':'; } | sed 's/^_//' | sort -u)"
+    _callees="$(grep -oE '^[[:space:]]*(call|bl)[[:space:]]+_?[A-Za-z_][A-Za-z0-9_]*' "$s" | awk '{print $2}' | sed 's/^_//' | sort -u)"
+    _bads="$(for _c in $_callees; do
+        printf '%s\n' " $ALLOWED_U " | grep -q " $_c " && continue
+        printf '%s\n' "$_def" | grep -qxF "$_c" && continue
+        echo "$_c"
+      done | tr '\n' ' ')"
+    [ -z "${_bads// /}" ] || { echo "[regen_arr_zeros] ERROR: $triple calls non-carrier externals ($_bads) — U-floor breach (asm scan)" >&2; exit 1; }
+
     if $CC $cc_extra -c "$s" -o "$o" 2>/dev/null; then
         local tcount=0 t
         for sym in $SYMS; do

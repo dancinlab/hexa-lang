@@ -846,7 +846,15 @@ CL_ERR="$(clang -Oz $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
     -ffunction-sections -fdata-sections $DEAD_STRIP \
     -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen -fno-builtin-strstr -fno-builtin-strncmp \
     -D_FORTIFY_SOURCE=0 -fno-stack-protector $PACK_OUT_DEF $ALLOC_DEF $STR_DEF $PRINT_DEF $RTCORE_LEAF_DEF $RTCORE_STRARR_READ_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MATH2_DEF $RTCORE_VALOP_DISPATCH_DEF $RTCORE_MAP_QUERY_DISPATCH_DEF $RTCORE_MAP_QUERY_FOLD_DEF $RTCORE_COLLECTION_MUTATE_DEF $RTCORE_ATL_DEF $RTCORE_FS_RW_DEF $RTCORE_ACF_DEF $RTCORE_RUNTIME_MISC_DEF \
-    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $STR_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_STRARR_READ_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ $RTCORE_VALOP_DISPATCH_OBJ $RTCORE_MAP_QUERY_DISPATCH_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ $RT_A -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
+    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $STR_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_STRARR_READ_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ $RTCORE_VALOP_DISPATCH_OBJ $RTCORE_MAP_QUERY_DISPATCH_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ $RT_A -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined|referenced from|symbol\(s\) not found|^[[:space:]]+"|[[:space:]]+in [^[:space:]]+\.o' | head -20)"
+# The filter MUST keep the symbol-name lines, not just the headline. Apple ld prints
+#     Undefined symbols for architecture arm64:
+#       "_hexa_eq", referenced from:            <-- the only line that names the culprit
+#     ld: symbol(s) not found for architecture arm64
+# and the old `grep -iE 'error:|undefined'` matched the first and last lines but NOT the
+# middle one, so a link failure reached CI as a bare "Undefined symbols for architecture
+# arm64:" with the symbol invisible — undiagnosable from the log alone (2026-07-13, the
+# arm64 `bl hexa_eq` break). Keep `referenced from` + the indented quoted-symbol lines.
 # ZERO-C Z2a: restore the warm runtime_core.c artifact ONLY when runtime_hi_gen.c
 # still exists (legacy gated test). When the file is permanently gone (default
 # Z2a path) keep the `#include` removed — restoring it would make the stage-5
@@ -873,9 +881,9 @@ if [ "$(uname -s)" = "Darwin" ]; then
     EXTRA_DEFS="-D_DARWIN_C_SOURCE"
 fi
 clang -c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE $EXTRA_DEFS $ALLOC_DEF $RTCORE_LEAF_DEF $RTCORE_STRARR_READ_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MATH2_DEF $RTCORE_VALOP_DISPATCH_DEF $RTCORE_MAP_QUERY_DISPATCH_DEF $RTCORE_MAP_QUERY_FOLD_DEF $RTCORE_COLLECTION_MUTATE_DEF $RTCORE_ATL_DEF $RTCORE_FS_RW_DEF $RTCORE_ACF_DEF $RTCORE_RUNTIME_MISC_DEF -Wno-trigraphs -I self -I . \
-    self/runtime.c -o "$RTO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
-clang $ARCH_FLAG "$SMS" -c -o "$SMO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
-clang $ARCH_FLAG "$SMO" "$RTO" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_STRARR_READ_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ $RTCORE_VALOP_DISPATCH_OBJ $RTCORE_MAP_QUERY_DISPATCH_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
+    self/runtime.c -o "$RTO" 2>&1 | grep -iE 'error:|undefined|referenced from|symbol\(s\) not found|ld:|fatal|cannot find|^[[:space:]]+"|[[:space:]]+in [^[:space:]]+\.o' | head -12
+clang $ARCH_FLAG "$SMS" -c -o "$SMO" 2>&1 | grep -iE 'error:|undefined|referenced from|symbol\(s\) not found|ld:|fatal|cannot find|^[[:space:]]+"|[[:space:]]+in [^[:space:]]+\.o' | head -12
+clang $ARCH_FLAG "$SMO" "$RTO" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_STRARR_READ_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ $RTCORE_VALOP_DISPATCH_OBJ $RTCORE_MAP_QUERY_DISPATCH_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:|referenced from|symbol\(s\) not found|^[[:space:]]+"|[[:space:]]+in [^[:space:]]+\.o' | head -12
 if [ ! -x "$SMB" ]; then
     echo "build_aprime: smoke link failed" >&2
     exit 2

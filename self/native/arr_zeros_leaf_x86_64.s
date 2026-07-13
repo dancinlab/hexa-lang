@@ -2,11 +2,12 @@
 // GENERATED: tool/regen_arr_zeros_leaf_native_s.sh — aprime_cc _drv.hexa --emit=asm
 //   --target=x86_64-linux-gnu -o arr_zeros_leaf_x86_64.s stdlib/runtime/arr_zeros_leaf.hexa.
 //   Provides the 2 boxed-zeros constructor natives (hexa_arr_zeros_leaf{,_int}).
-//   ABI: ELF, no underscore. External U-floor: malloc calloc write exit hexa_exit (calloc the only new floor entrant; pair-clean, no shim).
+//   ABI: ELF, no underscore. External U-floor: hexa_heap_alloc hexa_heap_zalloc hexa_throw hexa_bool — CARRIER-ONLY (HexaVal-ABI); a raw libc U here is a
+//   pair-vs-C-ABI miscompile, not a sanctioned floor entrant.
 //   Lets stage_resolve_runtime_a define HEXA_RT_CORE_ARRAY_ZEROS_LEAF_NATIVE + ar this
 //   .o into runtime.a so the 2 zeros constructors drop from the compiled runtime_core.c.
 # hexa-lang emit pass — target=x86_64-linux-gnu
-# source: /home/summer/hexa-lang/stdlib/runtime/arr_zeros_leaf.hexa
+# source: /tmp/f2/stdlib/runtime/arr_zeros_leaf.hexa
 .intel_syntax noprefix
 .file 1 "stdlib/runtime/arr_zeros_leaf.hexa"
 .text
@@ -14,7 +15,7 @@
 .hidden hexa_arr_zeros_leaf
     .p2align 4
 hexa_arr_zeros_leaf:
-    .loc 1 32 0
+    .loc 1 42 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -26,131 +27,151 @@ hexa_arr_zeros_leaf:
     sub rsp, 576 # prologue: alloc spill frame
     mov [rbp - 320], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.L8cdb_hexa_arr_zeros_leaf_bb0:
-    mov rsi, 1 # hv arg payload
+.Lef60_hexa_arr_zeros_leaf_bb0:
+    mov rsi, 32 # hv arg payload
     mov rdi, 0 # tag default = TAG_INT
-    mov rcx, 32 # hv arg payload
-    mov rdx, 0 # tag default = TAG_INT
-    call calloc # call calloc
+    call hexa_heap_zalloc # call hexa_heap_zalloc
     mov [rbp - 328], rax # store tag L1
     mov r12, rdx # hv: unbox user-call result payload
     mov r13, r12 # assign L2
     mov r11, 0 # tag L1 = TAG_INT (i64-local, fused)
     mov [rbp - 336], r11 # store tag L2
     mov r10, r13 # hv payload
-    mov r11, 5 # hv payload
-    mov r14, r10 # leaf: payload → dst L3
+    mov r11, 0 # hv payload
+    cmp r10, r11 # __hx_payload_eq: cmp payloads
+    sete al # __hx_payload_eq: al = (a==b)
+    movzx r14, al # __hx_payload_eq: zero-extend bool
+    mov r11, 2 # materialize tag imm 2
     mov [rbp - 344], r11 # store tag L3
-    mov r15, r14 # assign L4
-    mov r11, [rbp - 344] # tag L3 from tag-slot
-    mov [rbp - 352], r11 # store tag L4
-    mov r10, [rbp - 320] # tag L0 from tag-slot
-    mov r11, 0 # materialize tag imm 0
-    mov [rbp - 360], r11 # store tag L5
+    test r14, r14 # br_cond test
+    jz .Lef60_hexa_arr_zeros_leaf_bb2 # jump-if-zero -> else
+    jmp .Lef60_hexa_arr_zeros_leaf_bb1 # jump -> then
+.Lef60_hexa_arr_zeros_leaf_bb1:
+    lea rsi, [rip+.LCstr0] # hv arg payload: &str .LCstr0
+    mov rdi, 3 # hv arg tag = TAG_STR
+    call hexa_throw # call hexa_throw
+    mov [rbp - 360], rax # store tag L5
+    mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 56], r10 # spill L5 to slot
-    mov r11, [rbp - 56] # reload L5 from spill slot
-    mov r10, r11 # assign L6
-    mov r11, [rbp - 360] # tag L5 from tag-slot
+    jmp .Lef60_hexa_arr_zeros_leaf_bb2 # branch
+.Lef60_hexa_arr_zeros_leaf_bb2:
+    mov r10, r13 # hv payload
+    mov r11, 5 # hv payload
     mov [rbp - 368], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
-    mov r10, 0 # assign L7
-    mov r11, 0 # tag default = TAG_INT
+    mov r11, [rbp - 64] # reload L6 from spill slot
+    mov r10, r11 # assign L7
+    mov r11, [rbp - 368] # tag L6 from tag-slot
     mov [rbp - 376], r11 # store tag L7
     mov [rbp - 72], r10 # spill L7 to slot
-    mov r10, [rbp - 64] # reload L6 from spill slot
+    mov r10, [rbp - 320] # tag L0 from tag-slot
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 384], r11 # store tag L8
+    mov [rbp - 80], r10 # spill L8 to slot
+    mov r11, [rbp - 80] # reload L8 from spill slot
+    mov r10, r11 # assign L9
+    mov r11, [rbp - 384] # tag L8 from tag-slot
+    mov [rbp - 392], r11 # store tag L9
+    mov [rbp - 88], r10 # spill L9 to slot
+    mov r10, 0 # assign L10
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 400], r11 # store tag L10
+    mov [rbp - 96], r10 # spill L10 to slot
+    mov r10, [rbp - 88] # reload L9 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
     sete al # __hx_payload_eq: al = (a==b)
     movzx r10, al # __hx_payload_eq: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 384], r11 # store tag L8
-    mov [rbp - 80], r10 # spill L8 to slot
-    mov r10, [rbp - 80] # reload L8 from spill slot
+    mov [rbp - 408], r11 # store tag L11
+    mov [rbp - 104], r10 # spill L11 to slot
+    mov r10, [rbp - 104] # reload L11 from spill slot
     test r10, r10 # br_cond test
-    jz .L8cdb_hexa_arr_zeros_leaf_bb2 # jump-if-zero -> else
-    jmp .L8cdb_hexa_arr_zeros_leaf_bb1 # jump -> then
-.L8cdb_hexa_arr_zeros_leaf_bb1:
+    jz .Lef60_hexa_arr_zeros_leaf_bb4 # jump-if-zero -> else
+    jmp .Lef60_hexa_arr_zeros_leaf_bb3 # jump -> then
+.Lef60_hexa_arr_zeros_leaf_bb3:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
+    mov [rbp - 424], r11 # store tag L13
+    mov [rbp - 120], r10 # spill L13 to slot
+    mov r11, [rbp - 120] # reload L13 from spill slot
+    mov r10, r11 # assign L10
+    mov r11, [rbp - 424] # tag L13 from tag-slot
     mov [rbp - 400], r11 # store tag L10
     mov [rbp - 96], r10 # spill L10 to slot
-    mov r11, [rbp - 96] # reload L10 from spill slot
-    mov r10, r11 # assign L7
-    mov r11, [rbp - 400] # tag L10 from tag-slot
-    mov [rbp - 376], r11 # store tag L7
-    mov [rbp - 72], r10 # spill L7 to slot
-    jmp .L8cdb_hexa_arr_zeros_leaf_bb3 # branch
-.L8cdb_hexa_arr_zeros_leaf_bb2:
+    jmp .Lef60_hexa_arr_zeros_leaf_bb5 # branch
+.Lef60_hexa_arr_zeros_leaf_bb4:
     mov r10, rbx # hv payload
     movq xmm0, r10 # __hx_payload_f2i: xmm0 = v.f bits
     cvttsd2si r10, xmm0 # __hx_payload_f2i: r10 = (i64)trunc(v.f)
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 408], r11 # store tag L11
-    mov [rbp - 104], r10 # spill L11 to slot
-    mov r11, [rbp - 104] # reload L11 from spill slot
-    mov r10, r11 # assign L7
-    mov r11, [rbp - 408] # tag L11 from tag-slot
-    mov [rbp - 376], r11 # store tag L7
-    mov [rbp - 72], r10 # spill L7 to slot
-    jmp .L8cdb_hexa_arr_zeros_leaf_bb3 # branch
-.L8cdb_hexa_arr_zeros_leaf_bb3:
+    mov [rbp - 432], r11 # store tag L14
+    mov [rbp - 128], r10 # spill L14 to slot
+    mov r11, [rbp - 128] # reload L14 from spill slot
+    mov r10, r11 # assign L10
+    mov r11, [rbp - 432] # tag L14 from tag-slot
+    mov [rbp - 400], r11 # store tag L10
+    mov [rbp - 96], r10 # spill L10 to slot
+    jmp .Lef60_hexa_arr_zeros_leaf_bb5 # branch
+.Lef60_hexa_arr_zeros_leaf_bb5:
     mov r11, 1 # hv payload
-    mov r10, [rbp - 72] # reload L7 from spill slot
+    mov r10, [rbp - 96] # reload L10 from spill slot
     mov r10, r10 # hv payload
     cmp r10, r11 # __hx_payload_ge: cmp payloads
     setge al # __hx_payload_ge: al = predicate
     movzx r10, al # __hx_payload_ge: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 416], r11 # store tag L12
-    mov [rbp - 112], r10 # spill L12 to slot
-    mov r10, [rbp - 112] # reload L12 from spill slot
+    mov [rbp - 440], r11 # store tag L15
+    mov [rbp - 136], r10 # spill L15 to slot
+    mov r10, [rbp - 136] # reload L15 from spill slot
     test r10, r10 # br_cond test
-    jz .L8cdb_hexa_arr_zeros_leaf_bb5 # jump-if-zero -> else
-    jmp .L8cdb_hexa_arr_zeros_leaf_bb4 # jump -> then
-.L8cdb_hexa_arr_zeros_leaf_bb4:
+    jz .Lef60_hexa_arr_zeros_leaf_bb7 # jump-if-zero -> else
+    jmp .Lef60_hexa_arr_zeros_leaf_bb6 # jump -> then
+.Lef60_hexa_arr_zeros_leaf_bb6:
     mov r11, 16 # hv payload
-    mov r10, [rbp - 72] # reload L7 from spill slot
+    mov r10, [rbp - 96] # reload L10 from spill slot
     mov r10, r10 # hv payload
     imul r10, r11 # __hx_payload_mul: r10 = a.pl imul b.pl
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 432], r11 # store tag L14
-    mov [rbp - 128], r10 # spill L14 to slot
-    mov r11, [rbp - 128] # reload L14 from spill slot
-    mov r10, r11 # assign L15
-    mov r11, [rbp - 432] # tag L14 from tag-slot
-    mov [rbp - 440], r11 # store tag L15
-    mov [rbp - 136], r10 # spill L15 to slot
-    mov rsi, [rbp - 136] # reload L15 from spill slot
-    mov rsi, rsi # hv arg payload
-    mov rdi, [rbp - 440] # tag L15 from tag-slot
-    call malloc # call malloc
-    mov [rbp - 448], rax # store tag L16
-    mov r10, rdx # hv: unbox user-call result payload
-    mov [rbp - 144], r10 # spill L16 to slot
-    mov r11, [rbp - 144] # reload L16 from spill slot
-    mov r10, r11 # assign L17
-    mov r11, 0 # tag L16 = TAG_INT (i64-local, fused)
     mov [rbp - 456], r11 # store tag L17
     mov [rbp - 152], r10 # spill L17 to slot
-    mov r10, [rbp - 152] # reload L17 from spill slot
+    mov r11, [rbp - 152] # reload L17 from spill slot
+    mov r10, r11 # assign L18
+    mov r11, [rbp - 456] # tag L17 from tag-slot
+    mov [rbp - 464], r11 # store tag L18
+    mov [rbp - 160], r10 # spill L18 to slot
+    mov rsi, [rbp - 160] # reload L18 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 464] # tag L18 from tag-slot
+    call hexa_heap_alloc # call hexa_heap_alloc
+    mov [rbp - 472], rax # store tag L19
+    mov r10, rdx # hv: unbox user-call result payload
+    mov [rbp - 168], r10 # spill L19 to slot
+    mov r11, [rbp - 168] # reload L19 from spill slot
+    mov r10, r11 # assign L20
+    mov r11, 0 # tag L19 = TAG_INT (i64-local, fused)
+    mov [rbp - 480], r11 # store tag L20
+    mov [rbp - 176], r10 # spill L20 to slot
+    mov r10, [rbp - 176] # reload L20 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
     sete al # __hx_payload_eq: al = (a==b)
     movzx r10, al # __hx_payload_eq: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 464], r11 # store tag L18
-    mov [rbp - 160], r10 # spill L18 to slot
-    mov r10, [rbp - 160] # reload L18 from spill slot
+    mov [rbp - 488], r11 # store tag L21
+    mov [rbp - 184], r10 # spill L21 to slot
+    mov r10, [rbp - 184] # reload L21 from spill slot
     test r10, r10 # br_cond test
-    jz .L8cdb_hexa_arr_zeros_leaf_bb7 # jump-if-zero -> else
-    jmp .L8cdb_hexa_arr_zeros_leaf_bb6 # jump -> then
-.L8cdb_hexa_arr_zeros_leaf_bb5:
-    mov rdx, r15 # hv arg payload
-    mov rax, [rbp - 352] # tag L4 from tag-slot
+    jz .Lef60_hexa_arr_zeros_leaf_bb9 # jump-if-zero -> else
+    jmp .Lef60_hexa_arr_zeros_leaf_bb8 # jump -> then
+.Lef60_hexa_arr_zeros_leaf_bb7:
+    mov rdx, [rbp - 72] # reload L7 from spill slot
+    mov rdx, rdx # hv arg payload
+    mov rax, [rbp - 376] # tag L7 from tag-slot
     add rsp, 576 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
     pop r15 # epilogue: restore r15
@@ -160,42 +181,22 @@ hexa_arr_zeros_leaf:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L8cdb_hexa_arr_zeros_leaf_bb6:
-    lea r10, [rip+.LCstr0] # hv payload: &str .LCstr0
-    mov r11, 0 # materialize tag imm 0
-    mov [rbp - 480], r11 # store tag L20
-    mov [rbp - 176], r10 # spill L20 to slot
-    mov r11, [rbp - 176] # reload L20 from spill slot
-    mov r10, r11 # assign L21
-    mov r11, [rbp - 480] # tag L20 from tag-slot
-    mov [rbp - 488], r11 # store tag L21
-    mov [rbp - 184], r10 # spill L21 to slot
-    mov rsi, 2 # hv arg payload
-    mov rdi, 0 # tag default = TAG_INT
-    mov rcx, [rbp - 184] # reload L21 from spill slot
-    mov rcx, rcx # hv arg payload
-    mov rdx, [rbp - 488] # tag L21 from tag-slot
-    mov r9, 27 # hv arg payload
-    mov r8, 0 # tag default = TAG_INT
-    call write # call write
-    mov [rbp - 496], rax # store tag L22
-    mov r10, rdx # hv: unbox user-call result payload
-    mov [rbp - 192], r10 # spill L22 to slot
-    mov rsi, 1 # hv arg payload
-    mov rdi, 0 # tag default = TAG_INT
-    call hexa_exit # call hexa_exit
+.Lef60_hexa_arr_zeros_leaf_bb8:
+    lea rsi, [rip+.LCstr0] # hv arg payload: &str .LCstr0
+    mov rdi, 3 # hv arg tag = TAG_STR
+    call hexa_throw # call hexa_throw
     mov [rbp - 504], rax # store tag L23
-    mov r10, rdx # hv: unbox call result (rdx)
+    mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 200], r10 # spill L23 to slot
-    jmp .L8cdb_hexa_arr_zeros_leaf_bb7 # branch
-.L8cdb_hexa_arr_zeros_leaf_bb7:
+    jmp .Lef60_hexa_arr_zeros_leaf_bb9 # branch
+.Lef60_hexa_arr_zeros_leaf_bb9:
     mov r10, 0 # assign L24
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 512], r11 # store tag L24
     mov [rbp - 208], r10 # spill L24 to slot
-    mov r11, [rbp - 72] # reload L7 from spill slot
+    mov r11, [rbp - 96] # reload L10 from spill slot
     mov r10, r11 # assign L25
-    mov r11, [rbp - 376] # tag L7 from tag-slot
+    mov r11, [rbp - 400] # tag L10 from tag-slot
     mov [rbp - 520], r11 # store tag L25
     mov [rbp - 216], r10 # spill L25 to slot
     mov r11, 1 # hv payload
@@ -212,21 +213,21 @@ hexa_arr_zeros_leaf:
     mov r11, [rbp - 528] # tag L26 from tag-slot
     mov [rbp - 536], r11 # store tag L27
     mov [rbp - 232], r10 # spill L27 to slot
-    jmp .L8cdb_hexa_arr_zeros_leaf_bb8 # branch
-.L8cdb_hexa_arr_zeros_leaf_bb8:
+    jmp .Lef60_hexa_arr_zeros_leaf_bb10 # branch
+.Lef60_hexa_arr_zeros_leaf_bb10:
     mov r10, [rbp - 232] # reload L27 from spill slot
     test r10, r10 # br_cond test
-    jz .L8cdb_hexa_arr_zeros_leaf_bb10 # jump-if-zero -> else
-    jmp .L8cdb_hexa_arr_zeros_leaf_bb9 # jump -> then
-.L8cdb_hexa_arr_zeros_leaf_bb9:
-    mov r10, [rbp - 152] # reload L17 from spill slot
+    jz .Lef60_hexa_arr_zeros_leaf_bb12 # jump-if-zero -> else
+    jmp .Lef60_hexa_arr_zeros_leaf_bb11 # jump -> then
+.Lef60_hexa_arr_zeros_leaf_bb11:
+    mov r10, [rbp - 176] # reload L20 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 208] # reload L24 from spill slot
     mov r11, r11 # hv payload
     mov rsi, 1 # hv payload
     add r10, r11 # __hx_ptr_store64: addr = ptr + off
     mov qword ptr [r10], rsi # __hx_ptr_store64: *(addr) = val
-    mov r10, [rbp - 152] # reload L17 from spill slot
+    mov r10, [rbp - 176] # reload L20 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 544], r11 # store tag L28
@@ -243,14 +244,14 @@ hexa_arr_zeros_leaf:
     mov r11, [rbp - 552] # tag L29 from tag-slot
     mov [rbp - 560], r11 # store tag L30
     mov [rbp - 256], r10 # spill L30 to slot
-    mov r10, [rbp - 152] # reload L17 from spill slot
+    mov r10, [rbp - 176] # reload L20 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 256] # reload L30 from spill slot
     mov r11, r11 # hv payload
     mov rsi, 0 # hv payload
     add r10, r11 # __hx_ptr_store64: addr = ptr + off
     mov qword ptr [r10], rsi # __hx_ptr_store64: *(addr) = val
-    mov r10, [rbp - 152] # reload L17 from spill slot
+    mov r10, [rbp - 176] # reload L20 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 568], r11 # store tag L31
@@ -293,11 +294,11 @@ hexa_arr_zeros_leaf:
     mov r11, [rbp - 592] # tag L34 from tag-slot
     mov [rbp - 536], r11 # store tag L27
     mov [rbp - 232], r10 # spill L27 to slot
-    jmp .L8cdb_hexa_arr_zeros_leaf_bb8 # branch
-.L8cdb_hexa_arr_zeros_leaf_bb10:
+    jmp .Lef60_hexa_arr_zeros_leaf_bb10 # branch
+.Lef60_hexa_arr_zeros_leaf_bb12:
     mov r10, r13 # hv payload
     mov r11, 0 # hv payload
-    mov rsi, [rbp - 152] # reload L17 from spill slot
+    mov rsi, [rbp - 176] # reload L20 from spill slot
     mov rsi, rsi # hv payload
     add r10, r11 # __hx_ptr_store64: addr = ptr + off
     mov qword ptr [r10], rsi # __hx_ptr_store64: *(addr) = val
@@ -307,7 +308,7 @@ hexa_arr_zeros_leaf:
     mov [rbp - 296], r10 # spill L35 to slot
     mov r10, r13 # hv payload
     mov r11, 8 # hv payload
-    mov rsi, [rbp - 72] # reload L7 from spill slot
+    mov rsi, [rbp - 96] # reload L10 from spill slot
     mov rsi, rsi # hv payload
     add r10, r11 # __hx_ptr_store64: addr = ptr + off
     mov qword ptr [r10], rsi # __hx_ptr_store64: *(addr) = val
@@ -317,7 +318,7 @@ hexa_arr_zeros_leaf:
     mov [rbp - 304], r10 # spill L36 to slot
     mov r10, r13 # hv payload
     mov r11, 16 # hv payload
-    mov rsi, [rbp - 72] # reload L7 from spill slot
+    mov rsi, [rbp - 96] # reload L10 from spill slot
     mov rsi, rsi # hv payload
     add r10, r11 # __hx_ptr_store64: addr = ptr + off
     mov qword ptr [r10], rsi # __hx_ptr_store64: *(addr) = val
@@ -325,7 +326,7 @@ hexa_arr_zeros_leaf:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 616], r11 # store tag L37
     mov [rbp - 312], r10 # spill L37 to slot
-    jmp .L8cdb_hexa_arr_zeros_leaf_bb5 # branch
+    jmp .Lef60_hexa_arr_zeros_leaf_bb7 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 576 # epilogue: free spill frame
@@ -341,7 +342,7 @@ hexa_arr_zeros_leaf:
 .hidden hexa_arr_zeros_leaf_int
     .p2align 4
 hexa_arr_zeros_leaf_int:
-    .loc 1 70 0
+    .loc 1 77 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -353,131 +354,151 @@ hexa_arr_zeros_leaf_int:
     sub rsp, 576 # prologue: alloc spill frame
     mov [rbp - 320], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.L8cdb_hexa_arr_zeros_leaf_int_bb0:
-    mov rsi, 1 # hv arg payload
+.Lef60_hexa_arr_zeros_leaf_int_bb0:
+    mov rsi, 32 # hv arg payload
     mov rdi, 0 # tag default = TAG_INT
-    mov rcx, 32 # hv arg payload
-    mov rdx, 0 # tag default = TAG_INT
-    call calloc # call calloc
+    call hexa_heap_zalloc # call hexa_heap_zalloc
     mov [rbp - 328], rax # store tag L1
     mov r12, rdx # hv: unbox user-call result payload
     mov r13, r12 # assign L2
     mov r11, 0 # tag L1 = TAG_INT (i64-local, fused)
     mov [rbp - 336], r11 # store tag L2
     mov r10, r13 # hv payload
-    mov r11, 5 # hv payload
-    mov r14, r10 # leaf: payload → dst L3
+    mov r11, 0 # hv payload
+    cmp r10, r11 # __hx_payload_eq: cmp payloads
+    sete al # __hx_payload_eq: al = (a==b)
+    movzx r14, al # __hx_payload_eq: zero-extend bool
+    mov r11, 2 # materialize tag imm 2
     mov [rbp - 344], r11 # store tag L3
-    mov r15, r14 # assign L4
-    mov r11, [rbp - 344] # tag L3 from tag-slot
-    mov [rbp - 352], r11 # store tag L4
-    mov r10, [rbp - 320] # tag L0 from tag-slot
-    mov r11, 0 # materialize tag imm 0
-    mov [rbp - 360], r11 # store tag L5
+    test r14, r14 # br_cond test
+    jz .Lef60_hexa_arr_zeros_leaf_int_bb2 # jump-if-zero -> else
+    jmp .Lef60_hexa_arr_zeros_leaf_int_bb1 # jump -> then
+.Lef60_hexa_arr_zeros_leaf_int_bb1:
+    lea rsi, [rip+.LCstr1] # hv arg payload: &str .LCstr1
+    mov rdi, 3 # hv arg tag = TAG_STR
+    call hexa_throw # call hexa_throw
+    mov [rbp - 360], rax # store tag L5
+    mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 56], r10 # spill L5 to slot
-    mov r11, [rbp - 56] # reload L5 from spill slot
-    mov r10, r11 # assign L6
-    mov r11, [rbp - 360] # tag L5 from tag-slot
+    jmp .Lef60_hexa_arr_zeros_leaf_int_bb2 # branch
+.Lef60_hexa_arr_zeros_leaf_int_bb2:
+    mov r10, r13 # hv payload
+    mov r11, 5 # hv payload
     mov [rbp - 368], r11 # store tag L6
     mov [rbp - 64], r10 # spill L6 to slot
-    mov r10, 0 # assign L7
-    mov r11, 0 # tag default = TAG_INT
+    mov r11, [rbp - 64] # reload L6 from spill slot
+    mov r10, r11 # assign L7
+    mov r11, [rbp - 368] # tag L6 from tag-slot
     mov [rbp - 376], r11 # store tag L7
     mov [rbp - 72], r10 # spill L7 to slot
-    mov r10, [rbp - 64] # reload L6 from spill slot
+    mov r10, [rbp - 320] # tag L0 from tag-slot
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 384], r11 # store tag L8
+    mov [rbp - 80], r10 # spill L8 to slot
+    mov r11, [rbp - 80] # reload L8 from spill slot
+    mov r10, r11 # assign L9
+    mov r11, [rbp - 384] # tag L8 from tag-slot
+    mov [rbp - 392], r11 # store tag L9
+    mov [rbp - 88], r10 # spill L9 to slot
+    mov r10, 0 # assign L10
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 400], r11 # store tag L10
+    mov [rbp - 96], r10 # spill L10 to slot
+    mov r10, [rbp - 88] # reload L9 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
     sete al # __hx_payload_eq: al = (a==b)
     movzx r10, al # __hx_payload_eq: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 384], r11 # store tag L8
-    mov [rbp - 80], r10 # spill L8 to slot
-    mov r10, [rbp - 80] # reload L8 from spill slot
+    mov [rbp - 408], r11 # store tag L11
+    mov [rbp - 104], r10 # spill L11 to slot
+    mov r10, [rbp - 104] # reload L11 from spill slot
     test r10, r10 # br_cond test
-    jz .L8cdb_hexa_arr_zeros_leaf_int_bb2 # jump-if-zero -> else
-    jmp .L8cdb_hexa_arr_zeros_leaf_int_bb1 # jump -> then
-.L8cdb_hexa_arr_zeros_leaf_int_bb1:
+    jz .Lef60_hexa_arr_zeros_leaf_int_bb4 # jump-if-zero -> else
+    jmp .Lef60_hexa_arr_zeros_leaf_int_bb3 # jump -> then
+.Lef60_hexa_arr_zeros_leaf_int_bb3:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
+    mov [rbp - 424], r11 # store tag L13
+    mov [rbp - 120], r10 # spill L13 to slot
+    mov r11, [rbp - 120] # reload L13 from spill slot
+    mov r10, r11 # assign L10
+    mov r11, [rbp - 424] # tag L13 from tag-slot
     mov [rbp - 400], r11 # store tag L10
     mov [rbp - 96], r10 # spill L10 to slot
-    mov r11, [rbp - 96] # reload L10 from spill slot
-    mov r10, r11 # assign L7
-    mov r11, [rbp - 400] # tag L10 from tag-slot
-    mov [rbp - 376], r11 # store tag L7
-    mov [rbp - 72], r10 # spill L7 to slot
-    jmp .L8cdb_hexa_arr_zeros_leaf_int_bb3 # branch
-.L8cdb_hexa_arr_zeros_leaf_int_bb2:
+    jmp .Lef60_hexa_arr_zeros_leaf_int_bb5 # branch
+.Lef60_hexa_arr_zeros_leaf_int_bb4:
     mov r10, rbx # hv payload
     movq xmm0, r10 # __hx_payload_f2i: xmm0 = v.f bits
     cvttsd2si r10, xmm0 # __hx_payload_f2i: r10 = (i64)trunc(v.f)
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 408], r11 # store tag L11
-    mov [rbp - 104], r10 # spill L11 to slot
-    mov r11, [rbp - 104] # reload L11 from spill slot
-    mov r10, r11 # assign L7
-    mov r11, [rbp - 408] # tag L11 from tag-slot
-    mov [rbp - 376], r11 # store tag L7
-    mov [rbp - 72], r10 # spill L7 to slot
-    jmp .L8cdb_hexa_arr_zeros_leaf_int_bb3 # branch
-.L8cdb_hexa_arr_zeros_leaf_int_bb3:
+    mov [rbp - 432], r11 # store tag L14
+    mov [rbp - 128], r10 # spill L14 to slot
+    mov r11, [rbp - 128] # reload L14 from spill slot
+    mov r10, r11 # assign L10
+    mov r11, [rbp - 432] # tag L14 from tag-slot
+    mov [rbp - 400], r11 # store tag L10
+    mov [rbp - 96], r10 # spill L10 to slot
+    jmp .Lef60_hexa_arr_zeros_leaf_int_bb5 # branch
+.Lef60_hexa_arr_zeros_leaf_int_bb5:
     mov r11, 1 # hv payload
-    mov r10, [rbp - 72] # reload L7 from spill slot
+    mov r10, [rbp - 96] # reload L10 from spill slot
     mov r10, r10 # hv payload
     cmp r10, r11 # __hx_payload_ge: cmp payloads
     setge al # __hx_payload_ge: al = predicate
     movzx r10, al # __hx_payload_ge: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 416], r11 # store tag L12
-    mov [rbp - 112], r10 # spill L12 to slot
-    mov r10, [rbp - 112] # reload L12 from spill slot
+    mov [rbp - 440], r11 # store tag L15
+    mov [rbp - 136], r10 # spill L15 to slot
+    mov r10, [rbp - 136] # reload L15 from spill slot
     test r10, r10 # br_cond test
-    jz .L8cdb_hexa_arr_zeros_leaf_int_bb5 # jump-if-zero -> else
-    jmp .L8cdb_hexa_arr_zeros_leaf_int_bb4 # jump -> then
-.L8cdb_hexa_arr_zeros_leaf_int_bb4:
+    jz .Lef60_hexa_arr_zeros_leaf_int_bb7 # jump-if-zero -> else
+    jmp .Lef60_hexa_arr_zeros_leaf_int_bb6 # jump -> then
+.Lef60_hexa_arr_zeros_leaf_int_bb6:
     mov r11, 16 # hv payload
-    mov r10, [rbp - 72] # reload L7 from spill slot
+    mov r10, [rbp - 96] # reload L10 from spill slot
     mov r10, r10 # hv payload
     imul r10, r11 # __hx_payload_mul: r10 = a.pl imul b.pl
     mov r11, 0 # materialize tag imm 0
-    mov [rbp - 432], r11 # store tag L14
-    mov [rbp - 128], r10 # spill L14 to slot
-    mov r11, [rbp - 128] # reload L14 from spill slot
-    mov r10, r11 # assign L15
-    mov r11, [rbp - 432] # tag L14 from tag-slot
-    mov [rbp - 440], r11 # store tag L15
-    mov [rbp - 136], r10 # spill L15 to slot
-    mov rsi, [rbp - 136] # reload L15 from spill slot
-    mov rsi, rsi # hv arg payload
-    mov rdi, [rbp - 440] # tag L15 from tag-slot
-    call malloc # call malloc
-    mov [rbp - 448], rax # store tag L16
-    mov r10, rdx # hv: unbox user-call result payload
-    mov [rbp - 144], r10 # spill L16 to slot
-    mov r11, [rbp - 144] # reload L16 from spill slot
-    mov r10, r11 # assign L17
-    mov r11, 0 # tag L16 = TAG_INT (i64-local, fused)
     mov [rbp - 456], r11 # store tag L17
     mov [rbp - 152], r10 # spill L17 to slot
-    mov r10, [rbp - 152] # reload L17 from spill slot
+    mov r11, [rbp - 152] # reload L17 from spill slot
+    mov r10, r11 # assign L18
+    mov r11, [rbp - 456] # tag L17 from tag-slot
+    mov [rbp - 464], r11 # store tag L18
+    mov [rbp - 160], r10 # spill L18 to slot
+    mov rsi, [rbp - 160] # reload L18 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 464] # tag L18 from tag-slot
+    call hexa_heap_alloc # call hexa_heap_alloc
+    mov [rbp - 472], rax # store tag L19
+    mov r10, rdx # hv: unbox user-call result payload
+    mov [rbp - 168], r10 # spill L19 to slot
+    mov r11, [rbp - 168] # reload L19 from spill slot
+    mov r10, r11 # assign L20
+    mov r11, 0 # tag L19 = TAG_INT (i64-local, fused)
+    mov [rbp - 480], r11 # store tag L20
+    mov [rbp - 176], r10 # spill L20 to slot
+    mov r10, [rbp - 176] # reload L20 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
     sete al # __hx_payload_eq: al = (a==b)
     movzx r10, al # __hx_payload_eq: zero-extend bool
     mov r11, 2 # materialize tag imm 2
-    mov [rbp - 464], r11 # store tag L18
-    mov [rbp - 160], r10 # spill L18 to slot
-    mov r10, [rbp - 160] # reload L18 from spill slot
+    mov [rbp - 488], r11 # store tag L21
+    mov [rbp - 184], r10 # spill L21 to slot
+    mov r10, [rbp - 184] # reload L21 from spill slot
     test r10, r10 # br_cond test
-    jz .L8cdb_hexa_arr_zeros_leaf_int_bb7 # jump-if-zero -> else
-    jmp .L8cdb_hexa_arr_zeros_leaf_int_bb6 # jump -> then
-.L8cdb_hexa_arr_zeros_leaf_int_bb5:
-    mov rdx, r15 # hv arg payload
-    mov rax, [rbp - 352] # tag L4 from tag-slot
+    jz .Lef60_hexa_arr_zeros_leaf_int_bb9 # jump-if-zero -> else
+    jmp .Lef60_hexa_arr_zeros_leaf_int_bb8 # jump -> then
+.Lef60_hexa_arr_zeros_leaf_int_bb7:
+    mov rdx, [rbp - 72] # reload L7 from spill slot
+    mov rdx, rdx # hv arg payload
+    mov rax, [rbp - 376] # tag L7 from tag-slot
     add rsp, 576 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
     pop r15 # epilogue: restore r15
@@ -487,42 +508,22 @@ hexa_arr_zeros_leaf_int:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L8cdb_hexa_arr_zeros_leaf_int_bb6:
-    lea r10, [rip+.LCstr1] # hv payload: &str .LCstr1
-    mov r11, 0 # materialize tag imm 0
-    mov [rbp - 480], r11 # store tag L20
-    mov [rbp - 176], r10 # spill L20 to slot
-    mov r11, [rbp - 176] # reload L20 from spill slot
-    mov r10, r11 # assign L21
-    mov r11, [rbp - 480] # tag L20 from tag-slot
-    mov [rbp - 488], r11 # store tag L21
-    mov [rbp - 184], r10 # spill L21 to slot
-    mov rsi, 2 # hv arg payload
-    mov rdi, 0 # tag default = TAG_INT
-    mov rcx, [rbp - 184] # reload L21 from spill slot
-    mov rcx, rcx # hv arg payload
-    mov rdx, [rbp - 488] # tag L21 from tag-slot
-    mov r9, 31 # hv arg payload
-    mov r8, 0 # tag default = TAG_INT
-    call write # call write
-    mov [rbp - 496], rax # store tag L22
-    mov r10, rdx # hv: unbox user-call result payload
-    mov [rbp - 192], r10 # spill L22 to slot
-    mov rsi, 1 # hv arg payload
-    mov rdi, 0 # tag default = TAG_INT
-    call hexa_exit # call hexa_exit
+.Lef60_hexa_arr_zeros_leaf_int_bb8:
+    lea rsi, [rip+.LCstr1] # hv arg payload: &str .LCstr1
+    mov rdi, 3 # hv arg tag = TAG_STR
+    call hexa_throw # call hexa_throw
     mov [rbp - 504], rax # store tag L23
-    mov r10, rdx # hv: unbox call result (rdx)
+    mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 200], r10 # spill L23 to slot
-    jmp .L8cdb_hexa_arr_zeros_leaf_int_bb7 # branch
-.L8cdb_hexa_arr_zeros_leaf_int_bb7:
+    jmp .Lef60_hexa_arr_zeros_leaf_int_bb9 # branch
+.Lef60_hexa_arr_zeros_leaf_int_bb9:
     mov r10, 0 # assign L24
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 512], r11 # store tag L24
     mov [rbp - 208], r10 # spill L24 to slot
-    mov r11, [rbp - 72] # reload L7 from spill slot
+    mov r11, [rbp - 96] # reload L10 from spill slot
     mov r10, r11 # assign L25
-    mov r11, [rbp - 376] # tag L7 from tag-slot
+    mov r11, [rbp - 400] # tag L10 from tag-slot
     mov [rbp - 520], r11 # store tag L25
     mov [rbp - 216], r10 # spill L25 to slot
     mov r11, 1 # hv payload
@@ -539,21 +540,21 @@ hexa_arr_zeros_leaf_int:
     mov r11, [rbp - 528] # tag L26 from tag-slot
     mov [rbp - 536], r11 # store tag L27
     mov [rbp - 232], r10 # spill L27 to slot
-    jmp .L8cdb_hexa_arr_zeros_leaf_int_bb8 # branch
-.L8cdb_hexa_arr_zeros_leaf_int_bb8:
+    jmp .Lef60_hexa_arr_zeros_leaf_int_bb10 # branch
+.Lef60_hexa_arr_zeros_leaf_int_bb10:
     mov r10, [rbp - 232] # reload L27 from spill slot
     test r10, r10 # br_cond test
-    jz .L8cdb_hexa_arr_zeros_leaf_int_bb10 # jump-if-zero -> else
-    jmp .L8cdb_hexa_arr_zeros_leaf_int_bb9 # jump -> then
-.L8cdb_hexa_arr_zeros_leaf_int_bb9:
-    mov r10, [rbp - 152] # reload L17 from spill slot
+    jz .Lef60_hexa_arr_zeros_leaf_int_bb12 # jump-if-zero -> else
+    jmp .Lef60_hexa_arr_zeros_leaf_int_bb11 # jump -> then
+.Lef60_hexa_arr_zeros_leaf_int_bb11:
+    mov r10, [rbp - 176] # reload L20 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 208] # reload L24 from spill slot
     mov r11, r11 # hv payload
     mov rsi, 0 # hv payload
     add r10, r11 # __hx_ptr_store64: addr = ptr + off
     mov qword ptr [r10], rsi # __hx_ptr_store64: *(addr) = val
-    mov r10, [rbp - 152] # reload L17 from spill slot
+    mov r10, [rbp - 176] # reload L20 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 544], r11 # store tag L28
@@ -570,14 +571,14 @@ hexa_arr_zeros_leaf_int:
     mov r11, [rbp - 552] # tag L29 from tag-slot
     mov [rbp - 560], r11 # store tag L30
     mov [rbp - 256], r10 # spill L30 to slot
-    mov r10, [rbp - 152] # reload L17 from spill slot
+    mov r10, [rbp - 176] # reload L20 from spill slot
     mov r10, r10 # hv payload
     mov r11, [rbp - 256] # reload L30 from spill slot
     mov r11, r11 # hv payload
     mov rsi, 0 # hv payload
     add r10, r11 # __hx_ptr_store64: addr = ptr + off
     mov qword ptr [r10], rsi # __hx_ptr_store64: *(addr) = val
-    mov r10, [rbp - 152] # reload L17 from spill slot
+    mov r10, [rbp - 176] # reload L20 from spill slot
     mov r10, r10 # hv payload
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 568], r11 # store tag L31
@@ -620,11 +621,11 @@ hexa_arr_zeros_leaf_int:
     mov r11, [rbp - 592] # tag L34 from tag-slot
     mov [rbp - 536], r11 # store tag L27
     mov [rbp - 232], r10 # spill L27 to slot
-    jmp .L8cdb_hexa_arr_zeros_leaf_int_bb8 # branch
-.L8cdb_hexa_arr_zeros_leaf_int_bb10:
+    jmp .Lef60_hexa_arr_zeros_leaf_int_bb10 # branch
+.Lef60_hexa_arr_zeros_leaf_int_bb12:
     mov r10, r13 # hv payload
     mov r11, 0 # hv payload
-    mov rsi, [rbp - 152] # reload L17 from spill slot
+    mov rsi, [rbp - 176] # reload L20 from spill slot
     mov rsi, rsi # hv payload
     add r10, r11 # __hx_ptr_store64: addr = ptr + off
     mov qword ptr [r10], rsi # __hx_ptr_store64: *(addr) = val
@@ -634,7 +635,7 @@ hexa_arr_zeros_leaf_int:
     mov [rbp - 296], r10 # spill L35 to slot
     mov r10, r13 # hv payload
     mov r11, 8 # hv payload
-    mov rsi, [rbp - 72] # reload L7 from spill slot
+    mov rsi, [rbp - 96] # reload L10 from spill slot
     mov rsi, rsi # hv payload
     add r10, r11 # __hx_ptr_store64: addr = ptr + off
     mov qword ptr [r10], rsi # __hx_ptr_store64: *(addr) = val
@@ -644,7 +645,7 @@ hexa_arr_zeros_leaf_int:
     mov [rbp - 304], r10 # spill L36 to slot
     mov r10, r13 # hv payload
     mov r11, 16 # hv payload
-    mov rsi, [rbp - 72] # reload L7 from spill slot
+    mov rsi, [rbp - 96] # reload L10 from spill slot
     mov rsi, rsi # hv payload
     add r10, r11 # __hx_ptr_store64: addr = ptr + off
     mov qword ptr [r10], rsi # __hx_ptr_store64: *(addr) = val
@@ -652,7 +653,7 @@ hexa_arr_zeros_leaf_int:
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 616], r11 # store tag L37
     mov [rbp - 312], r10 # spill L37 to slot
-    jmp .L8cdb_hexa_arr_zeros_leaf_int_bb5 # branch
+    jmp .Lef60_hexa_arr_zeros_leaf_int_bb7 # branch
     mov eax, 4 # value-less return: tag = TAG_VOID
     xor edx, edx # value-less return: payload = 0
     add rsp, 576 # epilogue: free spill frame
@@ -667,11 +668,11 @@ hexa_arr_zeros_leaf_int:
 .section .rodata
 .LCstr0:
     .byte 0x4f, 0x4f, 0x4d, 0x20, 0x69, 0x6e, 0x20, 0x68, 0x65, 0x78, 0x61, 0x5f, 0x61, 0x72, 0x72, 0x5f
-    .byte 0x7a, 0x65, 0x72, 0x6f, 0x73, 0x5f, 0x6c, 0x65, 0x61, 0x66, 0x0a, 0x00
+    .byte 0x7a, 0x65, 0x72, 0x6f, 0x73, 0x5f, 0x6c, 0x65, 0x61, 0x66, 0x00
 .section .rodata
 .LCstr1:
     .byte 0x4f, 0x4f, 0x4d, 0x20, 0x69, 0x6e, 0x20, 0x68, 0x65, 0x78, 0x61, 0x5f, 0x61, 0x72, 0x72, 0x5f
-    .byte 0x7a, 0x65, 0x72, 0x6f, 0x73, 0x5f, 0x6c, 0x65, 0x61, 0x66, 0x5f, 0x69, 0x6e, 0x74, 0x0a, 0x00
+    .byte 0x7a, 0x65, 0x72, 0x6f, 0x73, 0x5f, 0x6c, 0x65, 0x61, 0x66, 0x5f, 0x69, 0x6e, 0x74, 0x00
 .section .hexa.cap,"",@progbits
 _hexa_cap_manifest:
 .section .hexa.abi,"",@progbits
