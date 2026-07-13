@@ -95,11 +95,12 @@ parity · shipping smoke · nm U/T 양 lane 캡처.
   → **seed-only 새 파일 `stdlib/runtime/array_typed_leaf.hexa`**(import 0·map_query.hexa 패턴)에 저작. ✅ draft 완료.
 - **tag-construct 캐리어 불요(W3 해소)**: `__hx_make_val(5, ptr)`(TAG_ARRAY=5·read-half write-half)로 박싱. C-macro
   HX_MAKE_TAG/HX_SET_ARR_PTR 캐리어 불필요.
-- **draft 파일 = `stdlib/runtime/array_typed_leaf.hexa`** — hexa_arr_i64_{new,push,len,box} 4-fn. ⚠️POOL/리뷰 검증필요
-  지점: (a) mixed-int C-ABI(new(int)->HexaVal·len(HexaVal)->int·push(HexaVal,int64_t))가 pair-model 타는지
-  (contains_key const-char* 벽과 구분되는지) (b) OOM char* 브리지 __hx_str_ptr + box() str_ptr/hexa_str 중복 정리
-  (문자열 리터럴이 HexaVal(TAG_STR)면 hexa_throw 직접 가능) (c) __hx_ptr_load32/store32 offset semantics + i32
-  sign/zero-extend (d) 평문 >=/*/+ on raw-int len/cap가 scratch-clobber 안전한지.
+- **seed 파일 = `stdlib/runtime/array_typed_leaf.hexa`** — hexa_arr_i64_{new,push,len,box} 4-fn. **Fable 리뷰=GO**
+  (4 risk 중 3 clean·1 fix): (a) mixed-int C-ABI ✅OK(int64 param은 pair-model 무관·contains_key 벽=const char*
+  전용·단 C 프로토타입 param은 int64_t여야 상위비트 garbage 방지) (b) box() str_ptr→hexa_str round-trip=**FIX**
+  (리터럴이 이미 TAG_STR→`hexa_throw("index out of bounds")` 직접·length-prefix 페이로드 over-read 위험 제거)
+  ✅적용됨(hexa_str extern 제거) (c) i32 load/store offset·LE·non-neg zero/sign-ext 무관 ✅OK (d) 평문 >=/*/+ on
+  un-boxed raw-int ✅OK(__hx_payload_*는 boxed용). 남은 게이트=**pool build(aprime --emit=obj --isolate)+nm+behavior**.
 - **NEXT 배선**(draft 검증 후): 에미터 i64 블록(2760) guard에 `|| defined(HEXA_RT_CORE_ARRAY_I64_LEAF_NATIVE)` 추가 ·
   tool/regen_array_typed_leaf_native_s.sh 신규(map_query regen 미러·NSYMS=4) · stage_resolve_runtime_a
   resolve_native_array_typed_leaf_seed(--isolate --keep-global=hexa_arr_i64_{new,push,len,box}) · guard flip은 PR-2.

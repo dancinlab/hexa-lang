@@ -57,7 +57,6 @@ extern fn realloc(p: int, n: int) -> int
 extern fn write(fd: int, buf: int, n: int) -> int
 extern fn exit(code: int)
 extern fn hexa_int(x: int) -> HexaVal
-extern fn hexa_str(s: int) -> HexaVal
 extern fn hexa_throw(v: HexaVal)
 
 // hexa_arr_i64_new(cap): malloc a HexaArrI64 (16B) + a data buffer (cap*8, cap>=1),
@@ -113,16 +112,12 @@ pub fn hexa_arr_i64_len(v: HexaVal) -> int {
 pub fn hexa_arr_i64_box(v: HexaVal, i: int) -> HexaVal {
     let a = __hx_payload_add(v, 0)
     let len = __hx_ptr_load32(a, 8)
-    if i < 0 {
-        let m = __hx_str_ptr("index out of bounds")
-        let s = hexa_str(m)
-        hexa_throw(s)
-    }
-    if i >= len {
-        let m2 = __hx_str_ptr("index out of bounds")
-        let s2 = hexa_str(m2)
-        hexa_throw(s2)
-    }
+    // Direct-throw: a hexa string literal is already a TAG_STR HexaVal, behaviorally
+    // identical to the C `hexa_throw(hexa_str("index out of bounds"))` on the catch
+    // side (Fable review point-3: the hexa_str(__hx_str_ptr(..)) round-trip over-reads
+    // if payloads are length-prefixed rather than NUL-terminated).
+    if i < 0 { hexa_throw("index out of bounds") }
+    if i >= len { hexa_throw("index out of bounds") }
     let data = __hx_ptr_load64(a, 0)
     let off = i * 8
     let x = __hx_ptr_load64(data, off)
