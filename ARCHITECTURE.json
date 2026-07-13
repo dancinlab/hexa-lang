@@ -556,6 +556,13 @@
         "value": "HEAP 전용 pair-ABI carrier 신설(hexa_heap_alloc/zalloc/realloc). 배경: 네이티브 .s 시드는 hexa pair-ABI 로만 호출 가능한데 descriptor 를 잡을 수단이 없었다 — hexa_ptr_alloc 은 이름과 달리 ARENA(alloc_syscall_native.o 가 링크에서 이기고 bl hexa_arena_alloc 로 위임)이고, 배열 descriptor 는 프레임을 탈출하므로 arena 에 두면 rewind 후 재사용되어 len/cap 이 조용히 덮어써진다. ★설계 핵심 = STRONG(non-weak): weak 였기 때문에 arena 시드가 hexa_ptr_alloc 을 소리 없이 가로챘다. strong 이면 어떤 시드가 같은 이름을 정의하는 순간 multiple-definition 게이트가 빌드 시점에 터진다 — 조용한 교체를 구조적으로 불가능하게 만든다. ARRAY_NEW 가드 바깥에 emit 할 것(시드가 켜져도 carrier 는 남아야 함). 검증: nm runtime.a → runtime.o 에 T(strong) 3종, weak 0, 타 멤버 정의 0.",
         "threshold": "재발조건: 새 runtime carrier 를 weak 로 추가하거나, 네이티브 시드가 carrier 와 같은 이름을 정의할 때. 판정: nm runtime.a 로 정의 멤버가 runtime.o/runtime_core.o 가 아니거나 심볼 타입이 W/S/v 면 위험. 규칙: descriptor 클래스 할당은 반드시 hexa_heap_* (heap), 프레임과 함께 죽는 scratch 만 hexa_ptr_alloc(arena). 그리고 시드 소스는 __hx_payload_* 리프만 쓸 것(plain 연산자는 arm64 에서만 boxed slow-call 방출).",
         "source": "self/runtime_core_emit.hexa"
+      },
+      {
+        "id": "build-aprime-sh-2",
+        "state": "pos-conv",
+        "value": "gitignore 된 생성 아티팩트(self/runtime.c · self/runtime_core.c · self/native/hexa_cc.c · build/)가 풀 호스트 트리에 남으면, git checkout 으로 브랜치를 바꿔도 복원되지 않아 STALE 상태로 계속 빌드에 섞인다. 증상: build_aprime 이 트랜스파일 단계에서 \"index 7 out of bounds (len 2)\" 류로 사망 — 코드 결함처럼 보이지만 순수 환경오염이다. 2026-07-14 실측: summer 에서 origin/main 이 재현 실패했고 나는 이를 (a) arena descriptor 오염 (b) HEXA_PREBUILT_RUNTIME stale (c) #4925 회귀 로 세 번 오진했다. GitHub 에서 새로 clone 한 트리에서 같은 main 이 정상 빌드되면서 진짜 원인이 드러났다 — 내가 이전 시드 실험으로 남긴 stale 생성물. 판정 절차: 코드 결함을 의심하기 전에 반드시 (1) 내 변경이 0 인 대조군을, (2) 로컬 clone 이 아니라 GitHub 새 clone 으로 돌려라(로컬 clone 은 origin 이 로컬 저장소라 엉뚱한 커밋을 빌드해 거짓 확증을 준다 — 실제로 겪음).",
+        "threshold": "재발조건: 풀 호스트에서 브랜치를 바꿔가며 반복 빌드할 때(특히 시드/에미터 실험). 판정: 같은 커밋이 새 clone 에서는 빌드되는데 기존 트리에서는 실패한다. 해결: 브랜치 전환 후 rm -rf build self/runtime.c self/runtime_core.c self/runtime_hi_gen.c self/bootstrap_compiler.c self/native/hexa_cc.c (git 이 복원하지 않는 생성물), 또는 아예 새 clone. 검증-전-정화 = 측정 위생.",
+        "source": "tool/build_aprime.sh"
       }
     ]
   },
