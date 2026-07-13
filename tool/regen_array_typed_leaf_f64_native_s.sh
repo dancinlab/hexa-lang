@@ -35,12 +35,20 @@ trap 'rm -rf "$TMP"' EXIT
 printf 'fn _drv_unused() {}\n' > "$TMP/_drv.hexa"
 
 # the 4 native i64 typed-leaf dispatcher globals this seed must export.
-SYMS="hexa_arr_f64_new hexa_arr_f64_push_bits hexa_arr_f64_len hexa_arr_f64_box"
+SYMS="hexa_arr_f64_new_seed hexa_arr_f64_push_bits_seed hexa_arr_f64_len_seed hexa_arr_f64_box_seed"
 NSYMS=4
 # the carrier/libc externs this seed is ALLOWED to leave undefined. UNLIKE map-query
 # (ZERO libc), this seed is libc-BEARING: malloc/realloc/write are the whole point
 # (the realloc-grow the wall said "stays C"). hexa_exit/int/throw are runtime.a carriers.
-ALLOWED_U="malloc realloc write hexa_exit hexa_throw"
+# CARRIER-ONLY U-floor. A raw libc name here is not a "sanctioned floor entrant" — it is a
+# pair-vs-C-ABI MISCOMPILE (aprime lowers seed calls to (tag,payload) pairs; a libc U binds to the
+# C-ABI body, so args land in the wrong regs and the returned pointer in rax alone is dropped for
+# garbage in the dead second register — the #4930 break). hexa_int is the same trap and used to hide
+# in this list: `HexaVal hexa_int(int64_t)` is a C-ABI SCALAR, so the seed's pair call passed it the
+# TAG and it always returned hexa_int(0). box() re-boxes with the __hx_make_val leaf instead.
+# hexa_bool IS allowed — it is the backend's own leaf-truth helper, whose ABI codegen controls.
+# hexa_heap_*, NOT hexa_ptr_alloc: the latter is ARENA and a descriptor escapes its frame.
+ALLOWED_U="hexa_heap_alloc hexa_heap_realloc hexa_throw hexa_bool"
 
 emit_one() {
     local triple="$1" out="$2" abi="$3"

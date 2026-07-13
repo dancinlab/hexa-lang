@@ -2754,6 +2754,43 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "}\n"
     buf = buf + "#endif\n"
     buf = buf + "\n"
+    // ── HEAP-ONLY pair-ABI carriers (descriptor-class allocation) ───────────
+    // Emitted OUTSIDE the ARRAY_NEW guard above: a seed that replaces hexa_array_new must still
+    // find these. They exist because a native .s seed can only call through the hexa pair-ABI, and
+    // the ONLY generic allocation carrier it had — hexa_ptr_alloc — is ARENA-backed in the shipped
+    // runtime: alloc_syscall_native.o wins the link and delegates straight to hexa_arena_alloc
+    // (self/native/alloc_syscall_arm64.s:3148), beating the weak malloc stub in runtime.o
+    // (runtime_emit_full.hexa). An array DESCRIPTOR must NEVER be arena-resident — see the long
+    // note on hexa_array_new above: the array escapes its frame, the arena rewinds, the next
+    // bump-alloc reuses the descriptor and silently overwrites len/cap/items. Measured 2026-07-13:
+    // routing the descriptor through hexa_ptr_alloc made hexat die transpiling ITSELF with
+    // "index 7 out of bounds (len 2)". The items BUFFER may live in the arena (escape-heapified on
+    // return); the DESCRIPTOR may not.
+    //
+    // STRONG on purpose (NOT __attribute__((weak))). Weakness is exactly what let the arena seed
+    // take over hexa_ptr_alloc without a sound. If any future native seed defines one of these, the
+    // ld -r multiple-definition gate must FAIL LOUDLY at build time rather than silently swap in an
+    // allocator with different lifetime semantics.
+    buf = buf + "/* heap-only pair-ABI carriers — descriptor-class allocations. NEVER arena.\n"
+    buf = buf + " * STRONG (not weak) so a native seed re-defining one trips the multidef gate\n"
+    buf = buf + " * instead of silently swapping the arena in (the hexa_ptr_alloc accident). */\n"
+    buf = buf + "HexaVal hexa_heap_alloc(HexaVal size_v) {\n"
+    buf = buf + "    int64_t sz = HX_IS_INT(size_v) ? HX_INT(size_v) : 0;\n"
+    buf = buf + "    if (sz <= 0) return hexa_int(0);\n"
+    buf = buf + "    return hexa_int((int64_t)(uintptr_t)malloc((size_t)sz));\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_heap_zalloc(HexaVal size_v) {\n"
+    buf = buf + "    int64_t sz = HX_IS_INT(size_v) ? HX_INT(size_v) : 0;\n"
+    buf = buf + "    if (sz <= 0) return hexa_int(0);\n"
+    buf = buf + "    return hexa_int((int64_t)(uintptr_t)calloc(1, (size_t)sz));\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_heap_realloc(HexaVal ptr_v, HexaVal size_v) {\n"
+    buf = buf + "    int64_t sz = HX_IS_INT(size_v) ? HX_INT(size_v) : 0;\n"
+    buf = buf + "    void* p = (void*)(uintptr_t)(HX_IS_INT(ptr_v) ? HX_INT(ptr_v) : 0);\n"
+    buf = buf + "    if (sz <= 0) return hexa_int(0);\n"
+    buf = buf + "    return hexa_int((int64_t)(uintptr_t)realloc(p, (size_t)sz));\n"
+    buf = buf + "}\n"
+    buf = buf + "\n"
     // ── UNSHADOW [HEADLINE] F1: native-i64 array storage helpers ────────────
     // Native contiguous int64_t[] (8-byte stride), the storage the codegen emits
     // for a statically-proven monomorphic-i64 array. Carried in a HexaVal as a
@@ -2762,10 +2799,30 @@ fn emit_runtime_core_to(out_path: str) {
     // public in runtime.h so a proven in-range read `((HexaArrI64*)a.arr_ptr)
     // ->data[i]` is a raw native load through the runtime.o wall (§c-class).
     buf = buf + "#if defined(HEXA_RT_SELFEMIT) || defined(HEXA_RT_CORE_ARRAY_TYPED_LEAF_NATIVE) || defined(HEXA_RT_CORE_ARRAY_I64_LEAF_NATIVE)\n"
-    buf = buf + "extern HexaVal hexa_arr_i64_new(int cap);\n"
-    buf = buf + "extern HexaVal hexa_arr_i64_push(HexaVal v, int64_t x);\n"
-    buf = buf + "extern int hexa_arr_i64_len(HexaVal v);\n"
-    buf = buf + "extern HexaVal hexa_arr_i64_box(HexaVal v, int64_t i);\n"
+    // SEED-ABI THUNK (class-B). aprime lowers EVERY seed param/return to a {tag,payload} GP
+    // pair (rdi:rsi / x0:x1 · result payload in rdx / x1). HexaVal is {tag@0,payload@8}, so a
+    // HexaVal(HexaVal…) signature IS that pair ABI — but `int cap` / `int64_t x` / an `int`
+    // return is NOT: cap lands in rdi, which the seed treats as its TAG slot, and len comes
+    // back in rdx while a C caller reads eax. Measured: SIGSEGV on all 3 targets.
+    //
+    // A cpp #define bridge (the __hxseed_/__hxw_ idiom at the arena block above) CANNOT fix it —
+    // that one works only because the arena symbols are called from THIS file alone. These four
+    // have three caller classes: (1) runtime_core.c, (2) the gen2-emitted user.c
+    // (self/codegen.hexa), (3) the native backend's raw asm `call` (compiler/codegen/*.hexa).
+    // cpp reaches neither (2) nor (3). So the SEED exports *_seed with an all-HexaVal signature
+    // (which the pair lowering gets right by construction) and C owns the canonical names as
+    // real thunks with external linkage — all three caller classes land here.
+    //
+    // The rename is ALSO the flag-day guard: an old runtime.a fails LOUDLY with an undefined
+    // symbol instead of silently mis-passing registers (the #4930 -> #4932 3-target revert mode).
+    buf = buf + "extern HexaVal hexa_arr_i64_new_seed (HexaVal cap);\n"
+    buf = buf + "extern HexaVal hexa_arr_i64_push_seed(HexaVal v, HexaVal x);\n"
+    buf = buf + "extern HexaVal hexa_arr_i64_len_seed (HexaVal v);\n"
+    buf = buf + "extern HexaVal hexa_arr_i64_box_seed (HexaVal v, HexaVal i);\n"
+    buf = buf + "HexaVal hexa_arr_i64_new (int cap)              { return hexa_arr_i64_new_seed(hexa_int((int64_t)cap)); }\n"
+    buf = buf + "HexaVal hexa_arr_i64_push(HexaVal v, int64_t x) { return hexa_arr_i64_push_seed(v, hexa_int(x)); }\n"
+    buf = buf + "int     hexa_arr_i64_len (HexaVal v)            { return (int)HX_INT(hexa_arr_i64_len_seed(v)); }\n"
+    buf = buf + "HexaVal hexa_arr_i64_box (HexaVal v, int64_t i) { return hexa_arr_i64_box_seed(v, hexa_int(i)); }\n"
     buf = buf + "#else\n"
     buf = buf + "HexaVal hexa_arr_i64_new(int cap) {\n"
     buf = buf + "    HexaArrI64* a = (HexaArrI64*)malloc(sizeof(HexaArrI64));\n"
@@ -3058,11 +3115,22 @@ fn emit_runtime_core_to(out_path: str) {
     // new/len/box + push_bits(HexaVal, int64_t) directly (all GP-class), and a C shim owns
     // the double→bits crossing (float-param SSE-ABI wall · convergence x86-64-linux-hexa-1).
     // OFF (default) → the #elif is the original SELFEMIT||TYPED arm → byte-identical.
+    // SEED-ABI THUNK (class-B) — see the i64 twin above for the full rationale. The seed exports
+    // *_seed with an all-HexaVal signature (the only shape aprime's pair lowering gets right) and
+    // C owns the canonical names as real C-ABI thunks, which every caller class lands on.
+    // The double→bits shim stays: `double x` is an SSE-ABI param the seed cannot take at all
+    // (convergence x86-64-linux-hexa-1), so C keeps owning that crossing — it now hands the bits
+    // to the thunk rather than straight to the seed. Plain non-static, matching the forward
+    // prototype at :1135 (convergence runtime-core-emit-hexa-2: `static inline` would error).
     buf = buf + "#if defined(HEXA_RT_CORE_ARRAY_F64_LEAF_NATIVE)\n"
-    buf = buf + "extern HexaVal hexa_arr_f64_new(int cap);\n"
-    buf = buf + "extern int hexa_arr_f64_len(HexaVal v);\n"
-    buf = buf + "extern HexaVal hexa_arr_f64_box(HexaVal v, int64_t i);\n"
-    buf = buf + "extern HexaVal hexa_arr_f64_push_bits(HexaVal v, int64_t xbits);\n"
+    buf = buf + "extern HexaVal hexa_arr_f64_new_seed      (HexaVal cap);\n"
+    buf = buf + "extern HexaVal hexa_arr_f64_len_seed      (HexaVal v);\n"
+    buf = buf + "extern HexaVal hexa_arr_f64_box_seed      (HexaVal v, HexaVal i);\n"
+    buf = buf + "extern HexaVal hexa_arr_f64_push_bits_seed(HexaVal v, HexaVal xbits);\n"
+    buf = buf + "HexaVal hexa_arr_f64_new (int cap)                      { return hexa_arr_f64_new_seed(hexa_int((int64_t)cap)); }\n"
+    buf = buf + "int     hexa_arr_f64_len (HexaVal v)                    { return (int)HX_INT(hexa_arr_f64_len_seed(v)); }\n"
+    buf = buf + "HexaVal hexa_arr_f64_box (HexaVal v, int64_t i)         { return hexa_arr_f64_box_seed(v, hexa_int(i)); }\n"
+    buf = buf + "HexaVal hexa_arr_f64_push_bits(HexaVal v, int64_t bits) { return hexa_arr_f64_push_bits_seed(v, hexa_int(bits)); }\n"
     buf = buf + "HexaVal hexa_arr_f64_push(HexaVal v, double x) { union { double d; long long i; } u; u.d = x; return hexa_arr_f64_push_bits(v, u.i); }\n"
     buf = buf + "#elif defined(HEXA_RT_SELFEMIT) || defined(HEXA_RT_CORE_ARRAY_TYPED_LEAF_NATIVE)\n"
     buf = buf + "extern HexaVal hexa_arr_f64_new(int cap);\n"

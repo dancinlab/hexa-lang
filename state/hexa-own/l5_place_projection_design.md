@@ -286,3 +286,23 @@ The parallel-array precedent that makes it bounded is `_bck_w_seqs` (L5 round-2b
 **Predicate change:** both sites get `&& w_proj == u_proj` appended to the existing `_bck_w_names[..] != name` clause.
 
 **Total surface:** ~2 decls, ~2 pushes, ~2 resets, 1 context-flag thread (existing idiom), 2 predicate edits. This is the same footprint as the round-2b `_bck_w_seqs` landing — a single bounded round for the wiring, plus a second round only for the census re-run + the warn→error flip. No new MIR field, no Operand growth, no codegen path touched → no balloon.
+---
+
+## A2 dead-alias redef-cut + 통합 A1+A2 구현 착지 (wf_611eb0f4)
+
+**반증(honesty)**: agent2가 A1 단독으로 3 real FP(passes.hexa:3331-3333)를 해소하지 **못함**을 확정 — 이들은 whole-value **dead-alias**(`keep_X`가 `let mut final_X = keep_X` 후 dead → `final_X = final_X.push(...)`가 죽은 원본의 무해한 clobber). write-proj·read-proj 둘 다 빈값이라 A1의 field/index-disjoint 술어가 걸리지 않음. census FD=3은 source-line text-scan 오분류(`read:[str]`=타입주석·`write:.push,.connect_lhs,[ti]`=RHS 인자의 selector, write **타깃**의 projection 아님).
+
+**A2 = dead-alias redef-cut liveness** (진짜 blocker 해소):
+- 순진한 "dead-after-use"는 **unsound** — controls_truepos TP-1(`let y=x; x.v=99; use(y.v)`, write-before-observing-read)을 false-negative로 억제. 설계가 자가교정.
+- 정답 criterion: `A2_deadalias(e,u) := NOT( block(e)가 use-local L의 whole-local redef를 거치지 않는 forward CFG 경로로 block(u)에 도달 )`. SUPPRESS iff true. = "write가 쓴 값이 use의 로컬로 관측될 수 있는가"의 부정.
+- passes.hexa: write(`final_X.push` @:3336)가 read(`let final_X=keep_X` @:3331)에 도달하는 유일 경로 = 외곽 `while mi` back-edge인데, 그 경로는 `let mut keep_X=[]` (:3266) whole-local 재초기화를 반드시 거침 → redef-cut → SUPPRESS ✓. (오늘 발화 근인: :3266 kill은 keep_X BIRTH 그룹 대상·arming write는 detach로 민 fresh 그룹(no note_kill)이라 group-keyed THROUGH-cut이 안 걸림; A2 redef-cut은 **LOCAL**-keyed라 그룹 무관하게 cut.)
+- forward BFS(`_bck_wr_deadalias`, `_reach_from` idiom): seed=succs(src)(never src 자신)·b==dst면 fire(도달=실hazard)·b가 L의 redef 블록이면 CUT(단 dst는 절대 cut 안함=in-block use-before-redef 보존)·drain되면 SUPPRESS.
+
+**구현 사이트(hir_to_mir.hexa · feat/l5-place-projection-deadalias · +173/-16)**:
+- A1: `_bck_w_projs`/`_bck_u_projs`/`_bck_rd_proj` 배열+transient·`_bck_const_idx_tok` 헬퍼·`_bck_note_write` proj param+push·3 write call-site(method="" · field_set=lhs.text · index_set=const_idx_tok)·field-read+index-read arm read-proj set·intra Rule1+M4 disjoint conjunct.
+- A2: `_bck_u_locals`(per-use local)+`_bck_def_locals`/`_bck_def_blocks`(whole-local redef 이벤트)·`_bck_note_def` 헬퍼·7 whole-local (re)bind arm서 def 기록(설계 명명 5 + @own-detach 2, 전부 genuine ident rebind=spurious 불가)·`_bck_wr_deadalias` BFS·M4에 `&& !_bck_wr_deadalias(e,u)` conjunct(intra는 A1만·A2는 CFG-materialized라 M4 전용).
+- 병렬배열 lockstep: u_*(7컬럼)·w_*(6컬럼) 단일 push 사이트 → desync 불가. no new Operand/MIR field(frozen-seed-safe). byteeq중립(borrowck OBSERVE-ONLY:471-476·pure read-only BFS·diag만 _lr_diag서 좁힘·.o 0변경).
+
+**판정 GO-WITH-GUARD**: clears 3 FP✓·over-suppression 경로 0(genuine rebind만·spurious def 구조적 불가·branch-conditional/loop-carried-live 전부 ARM)·controls_truepos(2)+loop-carried 계속 발화✓. **검증중(guard a)**: byteeq 3-target GREEN(PR-CI) + aiden census(REAL FD 3→0·ADV_TP_LIVENESS==2·ADV_CLEAN_OVERFIRE==0·검증하니스 l5_b4_precensus_run.sh 복사). **residual(guard b·소hole 아님)**: dynamic-index element-disjoint(`a[i]` vs `a[j]`)은 A1 literal-only+A2 미커버 → B4 warn→error 시 @grace-gated.
+
+**flip 경로**: 통합 착지(default-ON warn narrowing·byteeq중립) → byteeq 3-target+install smoke GREEN → census REAL FD==0 확인 → @grace로 residual dynamic-index만 waiver·별도 PR로 HX3014 warn→error(`_bck_strict` 경로·correctness-lint framing, NOT memory-safety: PREREQ-X measured-terminal이라 bump arena 하 borrow위반=UAF 불가).

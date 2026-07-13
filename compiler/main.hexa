@@ -723,7 +723,30 @@ phase_reset("post_parse")
 // native obj-emit OOM. Skip it for obj — empty_atlas() is byte-identical to
 // the embed-absent path (verified: N=10 1.88GB→17MB, N=400 2.57GB→0.58GB, .o
 // unchanged, 0 new diagnostics on cite-free sources).
-let atlas = if emit_kind == "obj" { empty_atlas_index() } else { _load_atlas() }
+// The atlas embed is loaded only when a consumer can actually see it. Its terminal consumer is
+// citation_check (below), which sits inside `if strict_citations` — and strict_citations defaults to
+// FALSE (--strict-citations / HEXA_STRICT_CITATIONS=1 opts in). resolve() and lower() take an
+// AtlasIndex parameter but thread it through without querying it; the obj path has been passing them
+// empty_atlas_index() for a while now, byteeq-green, which is the standing proof that an empty index
+// is sound for those two.
+//
+// The cost of loading it anyway is not small. MEASURED on aiden — tool/aot_cc_select.hexa
+// (flatten 7638 LOC), the same file, the only difference being whether the atlas is resident:
+//
+//     atlas skipped    wall  16.80s   RSS 1.83GB
+//     atlas resident   wall 124.01s   RSS 4.22GB
+//
+// The phase breakdown shows the mechanism. Every phase AFTER the load runs 4.4–5.5× slower
+// (bind 4.5× · type_check 5.2× · lower_ast_to_hir 5.2× · lower_hir 5.4× · codegen 5.5×), while
+// lex/parse — which run BEFORE it — are untouched (1.03×). perf attributes 38.7% of the resident run
+// to hexa_arena_rewind + __blk_set_used + __blk_next: a linear walk of the arena block list on every
+// function-scope teardown. The 17k-node embed (~120k allocations) permanently inflates that list, so
+// every later phase pays a tax proportional to it. Load 11.0s + downstream tax ~61.9s ≈ 59% of wall.
+//
+// So: gate on the consumer, not on the emit kind. HEXA_ATLAS_EAGER=1 forces the old always-load
+// behaviour for a bisect.
+let _atlas_eager = env_var("HEXA_ATLAS_EAGER") == "1"
+let atlas = if strict_citations || _atlas_eager { _load_atlas() } else { empty_atlas_index() }
 cg_profile_mark("atlas_load")
 
 // Stage1 punch list C14: type as `[Diagnostic]` instead of bare `array` so
