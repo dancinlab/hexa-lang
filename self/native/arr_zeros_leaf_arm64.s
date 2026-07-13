@@ -2,7 +2,7 @@
 // GENERATED: tool/regen_arr_zeros_leaf_native_s.sh — aprime_cc _drv.hexa --emit=asm
 //   --target=arm64-apple-darwin -o arr_zeros_leaf_arm64.s stdlib/runtime/arr_zeros_leaf.hexa.
 //   Provides the 2 boxed-zeros constructor natives (hexa_arr_zeros_leaf{,_int}).
-//   ABI: Mach-O, _-prefixed. External U-floor: hexa_ptr_alloc hexa_exit — CARRIER-ONLY (HexaVal-ABI); a raw libc U here is a
+//   ABI: Mach-O, _-prefixed. External U-floor: hexa_ptr_alloc hexa_exit hexa_bool — CARRIER-ONLY (HexaVal-ABI); a raw libc U here is a
 //   pair-vs-C-ABI miscompile, not a sanctioned floor entrant.
 //   Lets stage_resolve_runtime_a define HEXA_RT_CORE_ARRAY_ZEROS_LEAF_NATIVE + ar this
 //   .o into runtime.a so the 2 zeros constructors drop from the compiled runtime_core.c.

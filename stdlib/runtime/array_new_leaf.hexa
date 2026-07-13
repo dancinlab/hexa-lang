@@ -46,7 +46,12 @@ extern fn hexa_exit(code: int)                // HexaVal-ABI carrier — OOM abo
 // zero its four words, and box it as TAG_ARRAY.
 pub fn hexa_array_new() -> HexaVal {
     let a = hexa_ptr_alloc(32)            // 32B HexaArr descriptor (malloc-backed -> contents undefined)
-    if a == 0 {
+    // __hx_payload_eq, NOT a plain `a == 0`: a plain int comparison lowers to the BOXED hexa_eq slow
+    // call (convergence array-core-hexa-1), which drags `hexa_eq` into the seed's U-floor. And it does
+    // so TARGET-DEPENDENTLY — x86_64 folds it to an inline cmp, arm64 emits `bl hexa_eq` — so the
+    // x86-only cross-assemble check passed while both arm64 targets failed to link (measured on the
+    // first regen of this fix). Leaf ops keep the U-floor carrier-only on every target.
+    if __hx_payload_eq(a, 0) {
         hexa_exit(1)                      // OOM — matches the C body's abort path
     }
     __hx_ptr_store64(a, 0, 0)             // items      @0  = NULL

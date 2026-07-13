@@ -2,7 +2,7 @@
 // GENERATED: tool/regen_array_new_leaf_native_s.sh — aprime_cc _drv.hexa --emit=asm
 //   --target=arm64-linux-gnu -o array_new_leaf_arm64-linux.s stdlib/runtime/array_new_leaf.hexa.
 //   Provides the empty-array constructor native (hexa_array_new · carrier mint + explicit zero).
-//   ABI: ELF aarch64, no underscore. External U-floor: hexa_ptr_alloc hexa_exit — CARRIER-ONLY (HexaVal-ABI); a raw libc U here is a
+//   ABI: ELF aarch64, no underscore. External U-floor: hexa_ptr_alloc hexa_exit hexa_bool — CARRIER-ONLY (HexaVal-ABI); a raw libc U here is a
 //   pair-vs-C-ABI miscompile, not a sanctioned floor entrant (the #4930 break).
 //   Lets stage_resolve_runtime_a define HEXA_RT_CORE_ARRAY_ZEROS_LEAF_NATIVE + ar this
 //   .o into runtime.a so hexa_array_new drops from the compiled runtime_core.c.
@@ -28,7 +28,9 @@ _Le334_hexa_array_new_bb0:
     ldp x0, x1, [sp, #16] // hv load L1
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
-    bl hexa_eq // binop ==
+    cmp x1, x3 // __hx_payload_eq: cmp payloads
+    cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
+    bl hexa_bool // __hx_payload_eq: box bool
     stp x0, x1, [sp, #32] // hv store L2
     ldp x0, x1, [sp, #32] // hv load L2
     cbz x1, _Le334_hexa_array_new_bb2 // br_cond: !payload -> else
