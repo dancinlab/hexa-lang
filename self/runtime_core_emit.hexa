@@ -2757,7 +2757,7 @@ fn emit_runtime_core_to(out_path: str) {
     // codegen always knows when a binding is the proven-i64 form). data[] is
     // public in runtime.h so a proven in-range read `((HexaArrI64*)a.arr_ptr)
     // ->data[i]` is a raw native load through the runtime.o wall (§c-class).
-    buf = buf + "#if defined(HEXA_RT_SELFEMIT) || defined(HEXA_RT_CORE_ARRAY_TYPED_LEAF_NATIVE)\n"
+    buf = buf + "#if defined(HEXA_RT_SELFEMIT) || defined(HEXA_RT_CORE_ARRAY_TYPED_LEAF_NATIVE) || defined(HEXA_RT_CORE_ARRAY_I64_LEAF_NATIVE)\n"
     buf = buf + "extern HexaVal hexa_arr_i64_new(int cap);\n"
     buf = buf + "extern HexaVal hexa_arr_i64_push(HexaVal v, int64_t x);\n"
     buf = buf + "extern int hexa_arr_i64_len(HexaVal v);\n"
