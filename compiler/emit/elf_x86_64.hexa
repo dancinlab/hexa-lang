@@ -1643,9 +1643,26 @@ fn _ldx_hash(s: string) -> Int {
 // gate auto-reverts to the pure own-start static serializer (byte-identical).
 fn _census_resid_und(objs: [ElfX86Obj]) -> [string] {
     // Hashed set of every DEFINED symbol name (section != 0) across all objs.
+    // ── dfg = the GLOBAL-ONLY subset (axis-① bug3 · PREDICTOR/BINDER PARITY) ──
+    // The `is_alias` test below MUST apply the SAME rule as the real (A0) FLOOR-NAME
+    // ALIAS binder at the census site: alias ONLY to a STB_GLOBAL `hxlcl_<X>` body
+    // (a STB_LOCAL body's ABI is private — see the #4954 write-up there). Before
+    // this split, `is_alias` probed the BIND-AGNOSTIC dfx, so it predicted that the
+    // LOCAL-only floor names {mmap, exit, fclose, fdopen, fwrite, getpid, gmtime_r}
+    // would be aliased away → resid=[] → crt_handoff=FALSE → own raw-syscall `_start`.
+    // But the binder (correctly) REFUSES those LOCAL aliases → they enter dyn_names
+    // → n_dyn>0 → the PT_INTERP *dynamic* serializer is chosen. The result is an own
+    // `_start` on a PT_INTERP binary — EXACTLY the combination the crt_handoff gate
+    // exists to prevent (ld.so did glibc TLS init and expects __libc_start_main /
+    // _dl_fini teardown) → startup SIGSEGV rc139. #4954 guarded the BINDER but left
+    // this PREDICTOR bind-agnostic, so the two disagreed on precisely those 7 names
+    // and the doc-contract above ("EXACTLY the set that becomes n_dyn>0") was void.
+    // Probing dfg restores that contract: the 7 stay RESIDUAL → crt_handoff=TRUE →
+    // crt1.o supplies `_start` → ordinary glibc dynamic exe → clean startup + exit.
     let mut dfx: [[string]] = []
+    let mut dfg: [[string]] = []
     let mut db = 0
-    while db < 1024 { dfx.push([]); db = db + 1 }
+    while db < 1024 { dfx.push([]); dfg.push([]); db = db + 1 }
     let mut oi = 0
     while oi < len(objs) {
         let o = objs[oi]
@@ -1664,6 +1681,8 @@ fn _census_resid_und(objs: [ElfX86Obj]) -> [string] {
                 if len(nm) > 0 {
                     let hb = _ldx_hash(nm)
                     dfx[hb] = dfx[hb].push(nm)
+                    // GLOBAL-only mirror — the alias-eligible universe (see above).
+                    if s.bind == ELF_STB_GLOBAL { dfg[hb] = dfg[hb].push(nm) }
                 }
             }
             si = si + 1
@@ -1694,12 +1713,18 @@ fn _census_resid_und(objs: [ElfX86Obj]) -> [string] {
                     let bn = dfx[hb]
                     let mut bi = 0
                     while bi < len(bn) { if bn[bi] == nm { is_def = true; break } bi = bi + 1 }
-                    // aliasable?  (hxlcl_<name> own-body present)
+                    // aliasable?  (hxlcl_<name> own-body present AND STB_GLOBAL)
+                    // Probes dfg, NOT dfx — a STB_LOCAL body is NOT alias-eligible
+                    // (its ABI is private), and the real (A0) binder refuses it. See
+                    // the PREDICTOR/BINDER PARITY note at the top of this fn: probing
+                    // the bind-agnostic dfx here made the predictor claim the LOCAL-only
+                    // floor names were aliased away → crt_handoff=FALSE → own `_start`
+                    // on the PT_INTERP binary the binder actually emits → rc139.
                     let mut is_alias = false
                     if !is_def {
                         let own_nm = "hxlcl_" + nm
                         let ohb = _ldx_hash(own_nm)
-                        let obn = dfx[ohb]
+                        let obn = dfg[ohb]
                         let mut obi = 0
                         while obi < len(obn) { if obn[obi] == own_nm { is_alias = true; break } obi = obi + 1 }
                     }
@@ -2451,6 +2476,41 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
                     let mut oj = 0
                     while oj < len(obn) { if obn[oj] == own_nm { oix = obi[oj]; break } oj = oj + 1 }
                     if oix >= 0 && def_bind[oix] != ELF_STB_GLOBAL { oix = -1 }
+                    // ── (A0-b) NEVER alias onto a body that is itself a THUNK to the bare
+                    // libc <X>. #4954 established that the alias target must be STB_GLOBAL
+                    // (a LOCAL body's ABI is private). GLOBAL is necessary but NOT
+                    // sufficient: `hxlcl_shim.o` carries GLOBAL hxlcl_<X> wrappers that are
+                    // literally `endbr64 ; jmp <X>` — a tail-call to the REAL libc <X>, which
+                    // they keep as an UND. Aliasing <X> onto such a body makes the body's own
+                    // tail-call reloc resolve BACK TO ITSELF → `jmp $-9` → an infinite
+                    // self-loop, and the alias buys no staticness anyway (the body is not
+                    // libc-free; the UND is still there).
+                    //
+                    // MEASURED (#4952-residual, after the E9 text-clobber fix above): the
+                    // aggregate's popen() child called dup2(4,1) → `hxlcl_dup2` at 0x445d81 =
+                    // `endbr64 ; jmp 0x445d81` → the child spun at 33% CPU forever, never
+                    // reached execve, and the parent blocked in its ppoll/wait4 drain loop →
+                    // build "OK", binary hangs (rc=124), 0 bytes of output. `ld` binds dup2 to
+                    // libc and the same program runs.
+                    //
+                    // TEST: the defining object still lists <X> as an UNDEFINED symbol (it
+                    // calls out to libc for it), so the "own, libc-free body" premise the alias
+                    // rests on is FALSE for this name → refuse the alias and let the census
+                    // dyn-route <X> to libc.so.6, exactly as `ld` does. A real own body (raw
+                    // syscall / hand-written native leaf) carries no such UND and is unaffected.
+                    if oix >= 0 {
+                        let _aobj = def_obj[oix]
+                        if _aobj >= 0 {
+                            let mut _asi = 0
+                            while _asi < len(objs[_aobj].symbols) {
+                                if objs[_aobj].symbols[_asi].section == 0 && osn[_aobj][_asi] == dnm {
+                                    oix = -1
+                                    break
+                                }
+                                _asi = _asi + 1
+                            }
+                        }
+                    }
                     if oix >= 0 {
                         def_names.push(dnm)
                         def_seg.push(def_seg[oix])
@@ -2909,6 +2969,37 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
             let r = obj.relocs[ri]
             let sym = obj.symbols[r.sym_idx]
             let name = osn[ro][r.sym_idx]
+            // ── E9-GATE: a .init_array-resident reloc on the DYN path is INERT ──────
+            // convergence elf-x86-64-hexa-2 requires the dyn (crt_handoff) .init_array to
+            // stay inert: the region is NOT materialized (no DT_INIT_ARRAY, no real
+            // __init_array_start/end bounds) because runtime.a's ctors are
+            // _hx_start_c-contract-bound and running an extraction-accident SUBSET under
+            // glibc is out-of-context partial init. The E9 reloc write must be gated on
+            // init_stub TOO — and gated means **SKIPPED**, not "not-a-data-site".
+            //
+            // ⚠️ MEASURED (#4952-residual · startup SIGSEGV that SURVIVED #4954): the
+            // gate was expressed only as `(r.site_seg == 6 && init_stub)` in the
+            // data-arm predicate below. With init_stub=0 that predicate is FALSE, so the
+            // reloc did not stop — it fell into the *else* = the TEXT patch arm and wrote
+            // an 8-byte absolute ctor vaddr at `obj_text_base + r.offset`, where r.offset
+            // is the offset INSIDE .init_array (0, 8, 16 …). That OVERWRITES THE FIRST
+            // 8*N BYTES OF THAT OBJECT'S .text. On the shipping aggregate: 3 ctor pointers
+            // (0x444d89 _hexa_init_stdio / 0x444dd9 / 0x444e89) stomped the 24-byte
+            // prologue of `hexa_drain_env_ms` at 0x433c37, so `call hexa_drain_env_ms`
+            // from the exec-drain path landed inside a pointer table and executed it as
+            // code → `mov %ecx,0x44(%rbp)` with rbp=3 (the pipe fd) → SIGSEGV si_addr=0x47,
+            // 0 bytes of output, rc=139. `ld` links the SAME object fine (found=94).
+            //
+            // #4954 is what EXPOSED it: aliasing bare libc UNDs onto STB_LOCAL hxlcl_
+            // bodies used to make the census see everything DEFINED → n_dyn==0 → STATIC
+            // path → init_stub=1 → these relocs took the correct data arm. Once #4954
+            // (correctly) routed {mmap,exit,fclose,fdopen,fwrite,getpid,gmtime_r} to
+            // libc.so.6, n_dyn>0 → PT_INTERP → crt_handoff → init_stub=0 → the latent
+            // text-clobber fired. Static path: unreachable guard → byte-identical.
+            if r.site_seg == 6 && !init_stub {
+                ri = ri + 1
+                continue
+            }
             // ── H2 fix: symbol-scoped resolution ────────────────────────────
             // Flat first-match let one obj's STB_LOCAL def (a file-local static /
             // `g<id>` module-global / `.LCstrN`) satisfy ANOTHER obj's same-named
