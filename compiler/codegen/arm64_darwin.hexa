@@ -1810,6 +1810,56 @@ fn _hv_binop_sym(op: string) -> string {
 // residual is the precisely-scoped final builtin-lowering sub-unit.
 // Non-builtin (hexa user fn) names pass through → normal mangling.
 pub fn _builtin_runtime_sym(name: string, nargs: i64) -> string {
+    // HEXA-OWN L5 R1 — the `farr_*` flame/forge handle family (32 names). The
+    // bind gate (`_bind_builtin_names`) was missing these, so S1 raised HX2001
+    // and no farr program ever reached codegen; registering them there without
+    // ALSO mapping them here would be strictly WORSE than the bug it fixed —
+    // the mapping fallthrough emits the BARE name (`farr_zeros`), hexa_ld's
+    // dyn-census misreads that as a libc-floor UND and routes it dynamic, so the
+    // failure mode mutates from a loud compile-time HX2001 into a runtime
+    // SIGBUS. The C-1 symcensus lint exists precisely to catch that skew and it
+    // did (gate_union − mapped ⊇ these 32).
+    //
+    // Every symbol is mirrored 1:1 from the authoritative legacy registry
+    // (self/codegen.hexa:9358+, `name == "farr_zeros"` → `hexa_farr_zeros(..)`)
+    // — no name is invented. All 32 were then confirmed to EXIST as defined text
+    // symbols in the real shipping runtime.a (`nm -g runtime.a` on aiden → `T
+    // hexa_farr_*` for all 32, GPU-named ones included: they carry CPU host
+    // fallbacks and are NOT CUDA-gated). Hence ZERO of them belong in
+    // tool/symcensus_exempt.txt — an exemption would leave the SIGBUS in place
+    // while painting the lint green.
+    if name == "farr_zeros"        { return "hexa_farr_zeros" }
+    if name == "farr_set"          { return "hexa_farr_set" }
+    if name == "farr_get"          { return "hexa_farr_get" }
+    if name == "farr_len"          { return "hexa_farr_len" }
+    if name == "farr_free"         { return "hexa_farr_free" }
+    if name == "farr_copy"         { return "hexa_farr_copy" }
+    if name == "farr_matmul"       { return "hexa_farr_matmul" }
+    if name == "farr_to_bf16"      { return "hexa_farr_to_bf16" }
+    if name == "farr_from_bf16"    { return "hexa_farr_from_bf16" }
+    if name == "farr_int_zeros"    { return "hexa_farr_int_zeros" }
+    if name == "farr_int_set"      { return "hexa_farr_int_set" }
+    if name == "farr_int_get"      { return "hexa_farr_int_get" }
+    if name == "farr_int_len"      { return "hexa_farr_int_len" }
+    if name == "farr_int_free"     { return "hexa_farr_int_free" }
+    if name == "farr_int_copy"     { return "hexa_farr_int_copy" }
+    if name == "farr_int_sum"      { return "hexa_farr_int_sum" }
+    if name == "farr_int_fill_from_array" { return "hexa_farr_int_fill_from_array" }
+    if name == "farr32_zeros"      { return "hexa_farr32_zeros" }
+    if name == "farr32_set"        { return "hexa_farr32_set" }
+    if name == "farr32_get"        { return "hexa_farr32_get" }
+    if name == "farr32_free"       { return "hexa_farr32_free" }
+    if name == "farr32_matmul"     { return "hexa_farr32_matmul" }
+    if name == "farr_add_gaussian_noise" { return "hexa_farr_add_gaussian_noise" }
+    if name == "farr_apply_cnot"   { return "hexa_farr_apply_cnot" }
+    if name == "farr_apply_single" { return "hexa_farr_apply_single" }
+    if name == "farr_apply_single_farr" { return "hexa_farr_apply_single_farr" }
+    if name == "farr_ce_seed"      { return "hexa_farr_ce_seed" }
+    if name == "farr_ce_seed_gpu"  { return "hexa_farr_ce_seed_gpu" }
+    if name == "farr_packed_gemv_offset" { return "hexa_farr_packed_gemv_offset" }
+    if name == "farr_pauli_expectation_batch" { return "hexa_farr_pauli_expectation_batch" }
+    if name == "farr_rope_gpu"     { return "hexa_farr_rope_gpu" }
+    if name == "farr_rope_bwd_gpu" { return "hexa_farr_rope_bwd_gpu" }
     if name == "append_file"   { return "rt_append_file" }
     if name == "args"          { return "hexa_args" }
     // `argv` — native-backend alias for the same runtime accessor (mirrors the
