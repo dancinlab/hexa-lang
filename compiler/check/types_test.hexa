@@ -1716,9 +1716,10 @@ fn _build_case_hx3026_fixture() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
-// (ao) R1 — segment(b) HX3025 STRING-arm. `s[i]` on a KNOWN string base → HX3025
-// (E0608; the C-substrate wrapper throws "string[i]: use .chars()[i]"). Array via
-// `.chars()` stays clean (unknown base). Expect 1 HX3025 error.
+// (ao) R1 — segment(b) HX3025 STRING-arm is RETIRED. `s[i]` on a KNOWN string base
+// is a SUPPORTED read (hexa_index_get -> hexa_str_char_at returns the char; it
+// throws only on a genuine out-of-bounds, the same contract an array has), so it
+// must NOT be rejected. `.chars()` then index stays clean too. Expect 0 HX3025.
 fn _build_case_hx3025_string_index() -> Module {
     let f = "case_hx3025_string.hexa"
     let fx = _let_expr("x", _index_expr(_ident_expr("s", f, 2, 13), _int_expr("0", f, 2, 15), f, 2, 14), f, 2, 5)
@@ -3923,23 +3924,22 @@ fn main() {
     // → Error; `.chars()` result index → clean (unknown base). Fixture → WARNING.
     let diags_ao = _run_case("(ao) static-types R1 — string-index REJECT (s[0] string / cs[0] via chars() clean) (HX3025)", _build_case_hx3025_string_index())
     let cao = _count_code(diags_ao, "HX3025")
-    let cao_err = _count_code_sev(diags_ao, "HX3025", "error")
-    if cao != 1 || cao_err != 1 {
-        println("  FAIL: case (ao) expected 1 HX3025 as ERROR (s[0] string reject; cs[0] via chars() clean), got " + to_string(cao) + " HX3025 (" + to_string(cao_err) + " error) (total=" + to_string(len(diags_ao)) + ")")
+    if cao != 0 {
+        println("  FAIL: case (ao) expected 0 HX3025 (string `s[0]` is a SUPPORTED read — hexa_str_char_at returns the char), got " + to_string(cao) + " HX3025 (total=" + to_string(len(diags_ao)) + ")")
         ok = false
     } else {
-        println("  ok: 1 HX3025 as ERROR (string `s[0]` reject; `cs = s.chars()` then `cs[0]` clean) — E0608 index-on-string")
+        println("  ok: 0 HX3025 (string `s[0]` NOT rejected — supported read; the cited `use .chars()` throw does not exist in the runtime)")
     }
 
-    // (ao) HX3025 string-arm fixture carve-out — *_test.hexa path → WARNING.
-    let diags_aof = _run_case("(ao) static-types R1 — HX3025 string-arm fixture carve-out (*_test.hexa string index)", _build_case_hx3025_string_fixture())
+    // (ao) string-index in a *_test.hexa fixture — 0 too (the arm is retired, so
+    // there is no diagnostic left for the fixture carve-out to down-band).
+    let diags_aof = _run_case("(ao) static-types R1 — string index in a fixture path (*_test.hexa) stays clean", _build_case_hx3025_string_fixture())
     let caof = _count_code(diags_aof, "HX3025")
-    let caof_warn = _count_code_sev(diags_aof, "HX3025", "warning")
-    if caof != 1 || caof_warn != 1 {
-        println("  FAIL: case (ao) fixture expected 1 HX3025 as WARNING (fixture carve-out), got " + to_string(caof) + " HX3025 (" + to_string(caof_warn) + " warn) (total=" + to_string(len(diags_aof)) + ")")
+    if caof != 0 {
+        println("  FAIL: case (ao) fixture expected 0 HX3025 (string index is supported), got " + to_string(caof) + " HX3025 (total=" + to_string(len(diags_aof)) + ")")
         ok = false
     } else {
-        println("  ok: 1 HX3025 as WARNING (string-index fixture carve-out: *_test.hexa stays warn-band)")
+        println("  ok: 0 HX3025 in the fixture path too (string index is supported everywhere)")
     }
 
     // (ap) R5-r1 — wrong-enum match pattern REJECT (Rust E0308).
