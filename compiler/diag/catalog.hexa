@@ -977,25 +977,6 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
-        code: "HX3060",
-        title: "use of freed handle (use-after-free)",
-        // Warning band (SSOT F4 warn-first), the HANDLE rung of the borrow checker
-        // (HEXA_BORROWCK_HANDLE=1, HEXA-OWN L5 R1). Unlike every other HX30xx rung
-        // this one is NOT a lint for a hypothetical: it catches a MEASURED, live
-        // memory-corruption bug in the shipping runtime. `HEXA_BORROWCK_STRICT=1`
-        // re-bands the SAME instance to a build-refusing Error via the sanctioned
-        // caller override in `_bck_emit_use_after_free`. With HEXA_BORROWCK_HANDLE
-        // unset no handle is ever registered, so nothing is emitted and the
-        // diagnostic stream + emitted bytes are byte-identical — release integrity
-        // first (the rung ships opt-in and flips to default-ON only on a clean
-        // corpus census + byteeq 3-target GREEN).
-        severity: Severity::Warning,
-        stage: "S3",
-        template: "`{name}` is used here after it was freed by `{callee}` (line {free_line}) — the handle's slot may already have been reissued to another value",
-        explain: "The handle borrow-checker lane (`HEXA_BORROWCK_HANDLE=1`, HEXA-OWN L5 R1) found a USE-AFTER-FREE of a runtime array/tensor handle: `{name}` was consumed by `{callee}` on line {free_line}, and this line reads through it (or through an alias that joined its group before the free). A `farr_*` handle is an i64 SLOT INDEX into the runtime's handle table, not a pointer, so this is silent DATA CORRUPTION rather than a segfault: `{callee}` returns the slot to the runtime freelist, the next producer (`farr_zeros`/`farr_copy`/…) REISSUES that same slot, and the stale handle now aliases a DIFFERENT live tensor — the classic ABA. The measured witness: freeing `a`, allocating `b`, then reading `a[0]` yields b's element (`UAF read a[0] = 222.0`), so the program computes on another tensor's data and reports no error at all. That silence is what makes this class worth a compile-time rule — a crashing UAF is self-reporting, a slot-reusing one corrupts results indefinitely. DETECTION: the handle lane registers an owning handle at a producer CALL (`let t = farr_zeros(..)`), not at a type — a handle's static type is a bare i64, so nothing about the type distinguishes it from a loop counter, and a type-driven rule would either miss every handle or arm on every integer. A consuming call (`farr_free`/`farr_int_free`/`farr32_free`) is recorded as a WHOLE-VALUE move (field \"\"), which reuses the shipped HX3042 partial-move dataflow verbatim: a forward maybe-moved MAY analysis (union/OR-join over `Block.preds`, reference-matched to rustc_mir_dataflow `MaybeInitializedPlaces` with move=gen / reinit=kill), so detection is CFG-COMPLETE — a free on one branch and a use after the join fires, exactly like rustc. FP boundary — three structural guards: (1) REGISTRATION IS CALL-SHAPED: only a call to a name in the producer table mints a tracked handle, so an ordinary integer local is NEVER admitted to the lane; (2) REINIT IS LEGAL: `{callee}({name}); {name} = farr_zeros(..)` re-points `{name}` to a FRESH group at the assign arm's detach, so a use after re-initialization is SILENT (matching rustc, where assigning a moved-out place makes it usable again) — while an ALIAS taken BEFORE the free still names the freed group and correctly still fires, which is the actual ABA bug; (3) THE FREE SITE ITSELF IS SILENT: the consumed arg's own read is logged as a USE before its MOVE, so only a SECOND `{callee}({name})` (a double-free — itself undefined behavior, corrupting the freelist) fires on it. KNOWN FALSE-NEGATIVES (deliberate, coverage traded for a clean corpus): handles minted by DERIVED producers (`matmul`, `from_bf16`, …) are not in the producer table and are therefore untracked, and a handle escaping into a struct field, an array element, or a callee is not followed (the lane is whole-local, like every other borrowck rung). The rule is loud only where it is certain. Fix: do not read `{name}` after `{callee}({name})` — move the free after the last use, re-initialize the handle with a producer call before reading it again, or drop the free entirely if the value is still needed.",
-        fix_it_kind: FixItKind::None
-    },
-    DiagSpec {
         code: "HX3053",
         title: "array cannot be indexed by a string",
         severity: Severity::Error,

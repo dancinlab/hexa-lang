@@ -574,39 +574,6 @@ pub let mut _bck_warn_default = true    // HEXA_BORROWCK_WARN_DEFAULT!="0" (opt-
 // unconditional (borrowck OBSERVE-ONLY, diags in _lr_diag, never MIR) — stderr narrows as FPs
 // are suppressed, but emitted objects stay byte-identical. @root-cause-ok census is the gate — measured, not a punt
 pub let mut _bck_warn_allowlist: [string] = ["HX3014", "HX3055"]
-// ── HEXA-OWN L5 R1 — HANDLE lane (HX3060, use-after-free) ───────────────
-// HEXA_BORROWCK_HANDLE=1: opt-in, default-OFF. The first borrowck rung that is
-// NOT a lint — it catches a MEASURED live memory-safety bug. `farr_free(t)`
-// returns t's slot to the runtime.c freelist, which REISSUES it to the next
-// `farr_zeros` — so a read through the freed handle silently returns ANOTHER
-// live tensor's data (measured: `UAF read a[0] = 222.0`, an ABA slot-reuse
-// corruption, not a crash). The loan/move lanes cannot see this: they key on
-// `&`/`&mut`/`@own`, whose corpus adoption is 0 (L5 census-v2 verdict — new
-// detection power 0). The HANDLE lane keys on the CALL instead, which is why
-// it has fuel: a `farr_*` handle is an i64 slot index, so nothing about its
-// TYPE marks it as an owning handle — only the producer/consumer call does.
-//
-// Registration is CALL-SHAPED, never type-shaped: a local is admitted to the
-// lane ONLY if its initializer is a call to a `_bck_producer_fns` name, so an
-// ordinary i64 can never be registered ⇒ the FP surface is bounded by the
-// table below, not by the HIR type-fallback holes. Consumers are the frees.
-// Derived producers (matmul / from_bf16 / …) are deliberately OUT of the
-// table: they stay FALSE-NEGATIVES. Minimizing FPs outranks coverage on the
-// first rung — a checker that cries wolf on the shipping corpus gets flagged
-// off and never reaches default-ON.
-//
-// Implies `_bck_on` (the loan pass must run to see the edges) and appends
-// HX3060 to `_bck_warn_allowlist` (the default warn-band admits ONLY
-// allowlisted codes — without this the rule would compute and then be silently
-// DROPPED in `_bck_diag_push`, the exact blindness the census-v2 verdict
-// found). Default OFF ⇒ no registration ⇒ `_bck_pm_check` sees no free-move
-// pair ⇒ zero diagnostics ⇒ emitted .text byte-identical (byteeq-neutral).
-pub let mut _bck_handle_lane = false // HEXA_BORROWCK_HANDLE=1, read once per lower_hir
-// Consumers (frees) — arg 0 is the handle they invalidate.
-pub let mut _bck_consume_fns: [string] = ["farr_free", "farr_int_free", "farr32_free"]
-// Producers — a call to one of these BIRTHS an owning handle.
-pub let mut _bck_producer_fns: [string] = ["farr_zeros", "farr_copy", "farr_int_zeros",
-                                           "farr_int_copy", "farr32_zeros"]
 pub let mut _bck_active = false    // per-fn gate; suspended in closure bodies
 // ── missing-return (E0308 / HX3047) — env-gated default-OFF ─────────────
 // HEXA_MISSING_RETURN=1: opt-in CFG-reachability missing-return check (rustc
@@ -1083,26 +1050,6 @@ fn _bck_is_aggregate_kind(tk: string) -> bool {
     if tk == "struct" { return true }
     if len(tk) >= 7 && tk.substring(0, 7) == "struct:" { return true }
     if len(tk) >= 6 && tk.substring(0, 6) == "named:" { return true }
-    return false
-}
-
-// HEXA-OWN L5 R1 (HX3060) — handle-lane table membership. Linear scans over
-// tables of ~3-5 entries (the `_bck_warn_allowed` idiom).
-fn _bck_is_consume_fn(name: string) -> bool {
-    let mut i = 0
-    while i < len(_bck_consume_fns) {
-        if _bck_consume_fns[i] == name { return true }
-        i = i + 1
-    }
-    return false
-}
-
-fn _bck_is_producer_fn(name: string) -> bool {
-    let mut i = 0
-    while i < len(_bck_producer_fns) {
-        if _bck_producer_fns[i] == name { return true }
-        i = i + 1
-    }
     return false
 }
 
@@ -3059,33 +3006,6 @@ fn _bck_emit_use_after_move_pm(form: string, place: string, name: string,
     _bck_diag_push(d)
 }
 
-// HEXA-OWN L5 R1 — HX3060 emit (use-after-free of a runtime handle). Shares the
-// HX3042 same-site dedup arrays: both fire out of the SAME `_bck_pm_check` use
-// loop and the loop stops at the first hit per use site (`fired`), so one span
-// yields exactly one diagnostic across both codes. STRICT (HEXA_BORROWCK_STRICT)
-// re-bands the SAME instance to build-refusing via the sanctioned caller override,
-// identical to every other borrowck rung. Reached only under `_bck_handle_lane`
-// (no free-move pair is ever registered otherwise) ⇒ default OFF ⇒ byteeq-neutral.
-fn _bck_emit_use_after_free(name: string, callee: string, free_line: i64, sp: Span) {
-    let mut di = 0
-    while di < len(_bck_pm_e_lines) {
-        if _bck_pm_e_lines[di] == sp.line && _bck_pm_e_cols[di] == sp.col { return }
-        di = di + 1
-    }
-    _bck_pm_e_lines.push(sp.line)
-    _bck_pm_e_cols.push(sp.col)
-    let mut b = diag_new("HX3060")
-    b = diag_span(b, sp)
-    b = diag_arg(b, "name", name)
-    b = diag_arg(b, "callee", callee)
-    b = diag_arg(b, "free_line", to_string(free_line))
-    let mut d = diag_emit(b)
-    if _bck_strict {
-        d = diag_with_severity(d, Severity::Error)
-    }
-    _bck_diag_push(d)
-}
-
 // ── HEXA-OWN round10 — HX3042 forward MaybeInitialized (moved) fixed-point ──
 // Runs ONCE at the end of _lower_fn (guarded by `_bck_active`), beside the
 // HX3035 `_bcki_check`. Reference-matched to rustc_mir_dataflow
@@ -3273,40 +3193,6 @@ fn _bck_pm_check() {
                                 mvcallee = _bck_pm_ev_callees[mv]
                                 mvline = _bck_pm_ev_lines[mv]
                             }
-                            // HEXA-OWN L5 R1 — code dispatch on the MOVE's callee. A
-                            // move whose consumer is a FREE is a use-after-free
-                            // (HX3060, a live memory-safety bug); every other move is
-                            // an @own partial move (HX3042). The pair's field is ""
-                            // for a free (whole-value), so the HX3042 wording
-                            // ("partially moved") would be wrong here — dispatch
-                            // BEFORE composing form/place.
-                            if _bck_is_consume_fn(mvcallee) {
-                                // Blame the free that PRECEDES this use in program
-                                // order, not the fn's LAST free: at a double-free the
-                                // second `farr_free(t)` records its MOVE *after* the
-                                // arg-read USE it invalidates, so the global-last scan
-                                // above would blame the use's own line ("freed at 17"
-                                // for a use at 17). Re-scan bounded by `< u`.
-                                let mut fmv = 0 - 1
-                                let mut fi = 0
-                                while fi < u {
-                                    if _bck_pm_ev_kind[fi] == 2
-                                        && _bck_pm_ev_grps[fi] == pt_grp[t]
-                                        && _bck_pm_ev_fields[fi] == pt_field[t] {
-                                        fmv = fi
-                                    }
-                                    fi = fi + 1
-                                }
-                                let mut fcallee = mvcallee
-                                let mut fline = mvline
-                                if fmv >= 0 {
-                                    fcallee = _bck_pm_ev_callees[fmv]
-                                    fline = _bck_pm_ev_lines[fmv]
-                                }
-                                _bck_emit_use_after_free(uname, fcallee, fline,
-                                                         _bck_pm_ev_spans[u])
-                                fired = true
-                            } else {
                             let mut form = "moved"
                             let mut place = uname + "." + pt_field[t]
                             if len(uf) == 0 {
@@ -3316,7 +3202,6 @@ fn _bck_pm_check() {
                             _bck_emit_use_after_move_pm(form, place, uname,
                                 pt_field[t], mvcallee, mvline, _bck_pm_ev_spans[u])
                             fired = true
-                            }
                         }
                     }
                     t = t + 1
@@ -4863,41 +4748,6 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                             _bck_ref_lines[_bk_mvl], e.children[i].span)
                     }
                 }
-                // HEXA-OWN L5 R1 (HX3060) — a FREE is a whole-value MOVE. `farr_free(t)`
-                // consumes its arg-0 handle: the slot goes back on the runtime freelist
-                // and is REISSUED to the next producer, so every later read through t
-                // (or through any alias in t's group) is a use-after-free. Recorded as a
-                // pm MOVE with field=="" (the whole value), which makes the EXISTING
-                // CFG-complete partial-move dataflow (`_bck_pm_check`, a forward
-                // maybe-moved MAY analysis over Block.preds) do the detection: a
-                // whole-value MOVE is just the degenerate field of the same lattice.
-                //
-                // The USE half needs NO new code — `_bck_check_use` already logs a pm
-                // USE (field "") at every tracked-local read, and the arg was lowered
-                // ABOVE this line, so the free's own arg-read is logged BEFORE its MOVE
-                // ⇒ the free SITE stays silent while a SECOND free (double-free) fires
-                // on its own arg-read. Reinit (`t = farr_zeros(..)`) needs no KILL
-                // either: the assign arm's detach re-points t to a FRESH group, so the
-                // post-reinit use no longer matches the freed group. That is also the
-                // CORRECT semantics — a pm KILL on the old group would have wrongly
-                // silenced a surviving pre-free ALIAS of the freed slot, which is the
-                // real ABA bug.
-                //
-                // `_bck_note_move` is deliberately NOT called: it feeds HX3014's Rule 2,
-                // which is INTRA-BLOCK only (strictly weaker than the pm dataflow) and
-                // is on the default allowlist — it would emit a second, redundant
-                // diagnostic on the same span for the same bug. One bug, one code.
-                // `i == 1` = arg 0 (children[0] is the callee); `!_bk_is_method` is
-                // inherited from the enclosing guard (a receiver-first method call
-                // shifts the index). Untracked handle ⇒ no group ⇒ silent.
-                if _bck_handle_lane && _bck_is_consume_fn(callee_text) && i == 1 {
-                    let _bk_fr_ti = _bck_find_local(r.operand.local_id)
-                    if _bk_fr_ti >= 0 {
-                        _bck_pm_note_move(_bck_groups[_bk_fr_ti], e.children[i].text,
-                                          "", callee_text, ctx_r.cur_block,
-                                          e.children[i].span)
-                    }
-                }
             }
             // HEXA-OWN L5-E9 — move-out-of-borrowed-content (Rust E0507). A call
             // arg of shape `r.f` where `r` is a LIVE `&`/`&mut` ref binding and
@@ -5798,26 +5648,6 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 // for the new group so `_bck_nll_check` cuts reach THROUGH it. A
                 // no-op outside loops (a creation block has no back-edge into it).
                 _bck_note_kill(ctx2.cur_block, _bk_ng)
-            }
-            // HEXA-OWN L5 R1 (HX3060) — HANDLE BIRTH. `let t = farr_zeros(..)` over
-            // a producer-table callee registers t as an owning handle: a fresh
-            // group + the same def/kill bookkeeping the composite-literal birth
-            // above does (a handle is an aggregate ROOT in every respect except
-            // that its HIR type is a bare i64 slot index, which is exactly why the
-            // literal branch cannot see it). Gated on `_bck_handle_lane` (default
-            // OFF ⇒ never registers ⇒ `_bck_pm_check` finds no free-move pair ⇒
-            // byteeq-neutral) AND on the callee being a table entry, so the lane
-            // admits ONLY calls we know mint a handle — a plain `let n = f(x)`
-            // stays untracked. The alias edge `let u = t` is picked up by the
-            // handle-copy branch below for free (it keys on the group, not the
-            // type), so an ABA use through an ALIAS of a freed handle fires too.
-            if _bck_handle_lane && _bk_rhs.kind == "call" && len(_bk_rhs.children) > 0
-                && _bk_rhs.children[0].kind == "ident"
-                && _bck_is_producer_fn(_bk_rhs.children[0].text) {
-                let _bk_hg = _bck_new_group()
-                _bck_track(dst.id, nm, _bk_hg, e.span)
-                _bck_note_def(dst.id, ctx2.cur_block)
-                _bck_note_kill(ctx2.cur_block, _bk_hg)
             }
             if _bk_rhs.kind == "ident" && rhs_op.kind == "local" {
                 let _bk_si = _bck_find_local(rhs_op.local_id)
@@ -9033,18 +8863,6 @@ pub fn lower_hir(module: HModule) -> MModule {
     // HEXA-OWN L5 census-v2 — ALL-CODE census lane; implies the loan pass runs.
     _bck_census_all = env("HEXA_BORROWCK_CENSUS_ALL") == "1"
     _bck_on = _bck_on || _bck_census_all
-    // HEXA-OWN L5 R1 — HANDLE lane (HX3060 use-after-free); implies the loan pass
-    // runs (it must see the producer/free call edges to register anything). The
-    // default warn-band admits ONLY `_bck_warn_allowlist` codes, so HX3060 must
-    // join the list or `_bck_diag_push` drops it after computing it — admit it
-    // HERE (flag-gated) rather than at the declaration, so the DEFAULT allowlist
-    // is untouched and the default diag stream stays byte-identical. Idempotent
-    // (lower_hir may run more than once per process).
-    _bck_handle_lane = env("HEXA_BORROWCK_HANDLE") == "1"
-    if _bck_handle_lane {
-        _bck_on = true
-        if !_bck_warn_allowed("HX3060") { _bck_warn_allowlist.push("HX3060") }
-    }
     if _bck_census { _bck_census_lines = [] }
     // HEXA-OWN L4/L5 Lane-B B3 — opt-OUT warning-band DEFAULT (FLIPPED default-ON at
     // L5 round-3, gated on the B1 census: HX3014/HX3055 fires=0 on the corpus). Read

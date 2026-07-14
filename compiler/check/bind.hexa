@@ -1687,34 +1687,6 @@ fn _bind_builtin_names() -> [string] {
         // rocm_target.hexa `_rocm_mfunc_is_matmul_shape` /
         // metal_target.hexa `_metal_mfunc_is_matmul_shape`.
         "gpu_matmul", "gpu_matmul_NT_a", "gpu_matmul_NT_b",
-        // HEXA-OWN L5 R1 — the `farr_*` flame/forge handle family. MEASURED
-        // OMISSION from this registry's legacy mirror: these 32 names are
-        // resolved by the legacy C-transpile codegen (self/codegen.hexa:9358+,
-        // `name == "farr_zeros"` → `hexa_farr_zeros(..)`) and are declared in
-        // self/runtime.h, but were NEVER mirrored here — so bind's S1 name
-        // resolution saw every one of them as unknown and raised HX2001, exactly
-        // the failure mode the `thread_spawn` carriers below were added to fix.
-        // The gap is not theoretical: pristine main's own compiler REJECTS its
-        // own checked-in stdlib/consciousness/phi_spatial_test.hexa with 140
-        // HX2001 (`undefined name farr_zeros/set/get/free`) — the compiler/
-        // frontend cannot bind builtins the stdlib already calls. That HX2001
-        // abort happens at S1, BEFORE S3 lowering, which is what kept the whole
-        // farr surface invisible to every S3 pass (types, borrowck, the HX3060
-        // handle lane). Purely ADDITIVE: it only widens the resolvable-name set,
-        // so any program that compiled before had zero farr calls and binds
-        // identically ⇒ emit byte-identical. Mirrored 1:1 from the legacy
-        // registry (no invention — the authoritative set is the codegen switch).
-        "farr_zeros", "farr_set", "farr_get", "farr_len", "farr_free",
-        "farr_copy", "farr_matmul", "farr_from_bf16", "farr_to_bf16",
-        "farr_int_zeros", "farr_int_set", "farr_int_get", "farr_int_len",
-        "farr_int_free", "farr_int_copy", "farr_int_sum",
-        "farr_int_fill_from_array",
-        "farr32_zeros", "farr32_set", "farr32_get", "farr32_free",
-        "farr32_matmul",
-        "farr_add_gaussian_noise", "farr_apply_cnot", "farr_apply_single",
-        "farr_apply_single_farr", "farr_ce_seed", "farr_ce_seed_gpu",
-        "farr_packed_gemv_offset", "farr_pauli_expectation_batch",
-        "farr_rope_gpu", "farr_rope_bwd_gpu",
         // FLEET A3 (#4154 follow-on) — thread/channel runtime fn-global carriers.
         // These are NOT source-level `fn` decls: native/thread.c declares them as
         // bare `HexaVal thread_spawn;` … carrier globals and registers them at
