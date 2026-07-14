@@ -1867,14 +1867,62 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
         let _resid = _census_resid_und(objs_in)
         if len(_resid) > 0 { crt_handoff = true }
     }
+    // ── OWN-START ON THE DYN PATH (reference-match: this is exactly what ld does) ──
+    // crt_handoff was adopted because the linker's SYNTHETIC 23-byte _start stub has
+    // no atexit/teardown and its bare exit_group crashed rc139 at exit on a dynamic
+    // link. Pulling crt1 fixed the crash — but it also handed `_start` to glibc, and
+    // that is NOT what ld does with these same objects.
+    //
+    // Under FLIP-7 (-DHEXA_ZEROC_OWN_START, default-ON) runtime.a DEFINES a real
+    // `_start` (T _start -> _hx_start_c), and the shipped ld link uses it: MEASURED on
+    // the ld leg — entry = own _start, `__libc_start_main` UND = 0, `_hx_start_c`
+    // present. `_hx_start_c` is the init AUTHORITY: it stores hxlcl_environ from the
+    // process stack, walks __init_array_start/end, and exits through hxlcl_exit (which
+    // drains the own atexit LIFO) — i.e. it supplies precisely the teardown the
+    // synthetic stub lacked.
+    //
+    // own-link handing `_start` to crt1 is therefore a pure divergence from ld, and it
+    // is what broke env(): `_hx_start_c` never runs, so hxlcl_environ stays NULL and
+    // hxlcl_getenv (which walks only hxlcl_environ — no libc fallback, by design: the
+    // libc-`environ` read was compiled out under own-start to keep runtime.o nm-clean)
+    // returns NULL for every key. env() silently answered "" on the shipped own-link
+    // path. So: when the objects already provide `_start`, do NOT pull crt1 — let the
+    // entry resolve to runtime.a's `_start`, exactly as ld does. Only fall back to
+    // crt1 when nothing supplies one (a non-FLIP-7 runtime).
     let mut objs: [ElfX86Obj] = []
     if crt_handoff {
-        let _crt1 = _ld_read_crt1()
-        if len(_crt1.symbols) == 0 {
-            eprintln("hexa_ld(elf,ownstart): CRT1-HANDOFF needs crt1.o but none was found — set HEXA_LD_SYSROOT=<dir containing crt1.o> or install /usr/lib/x86_64-linux-gnu/crt1.o")
-            return 3
+        let mut _has_own_start = false
+        let mut _hsi = 0
+        while _hsi < len(objs_in) {
+            let _hso = objs_in[_hsi]
+            let mut _hsj = 0
+            while _hsj < len(_hso.symbols) {
+                let _hsy = _hso.symbols[_hsj]
+                if _hsy.section != 0 && _hsy.bind == ELF_STB_GLOBAL {
+                    let mut _hsn = ""
+                    let mut _hsk = 0
+                    while true {
+                        let _hsb = _hso.strtab[_hsy.name_offset + _hsk] & 0xff
+                        if _hsb == 0 { break }
+                        _hsn = _hsn + from_char_code(_hsb)
+                        _hsk = _hsk + 1
+                    }
+                    if _hsn == "_start" { _has_own_start = true }
+                }
+                if _has_own_start { break }
+                _hsj = _hsj + 1
+            }
+            if _has_own_start { break }
+            _hsi = _hsi + 1
         }
-        objs.push(_crt1)
+        if !_has_own_start {
+            let _crt1 = _ld_read_crt1()
+            if len(_crt1.symbols) == 0 {
+                eprintln("hexa_ld(elf,ownstart): CRT1-HANDOFF needs crt1.o but none was found — set HEXA_LD_SYSROOT=<dir containing crt1.o> or install /usr/lib/x86_64-linux-gnu/crt1.o")
+                return 3
+            }
+            objs.push(_crt1)
+        }
     }
     let mut _oii = 0
     while _oii < len(objs_in) { objs.push(objs_in[_oii]); _oii = _oii + 1 }
@@ -2167,9 +2215,15 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
     def_obj.push(-1)
     def_names.push("__init_array_end")
     def_seg.push(1)
-    // dyn: collapse to start → the runtime walk sees an empty table (glibc owns the
-    // run, via DT_INIT_ARRAY). static: the real extent → `_hx_start_c` walks it.
-    def_off.push(if crt_handoff { init_region_off } else { len(data_bytes) })
+    // REAL bounds on both paths — reference-match: ld emits DT_INIT_ARRAY *and* real
+    // __init_array_start/end over the SAME region (MEASURED on the ld leg: DT_INIT_ARRAY
+    // = 0x4a6d80/32 B, bounds = 0x4a6d80..0x4a6da0). Both consumers therefore run the
+    // table: ld.so's _dl_init before the entry, then `_hx_run_init_array` from
+    // `_hx_start_c`. That double-run is BY DESIGN and is why it works — every ctor is
+    // idempotent, and the ordering is load-bearing: ld.so's pass runs while
+    // hxlcl_environ is still NULL (the getenv-reading ctors no-op), and the second pass
+    // runs after `_hx_start_c` has stored environ, so it is the one that does the work.
+    def_off.push(len(data_bytes))
     def_bind.push(ELF_STB_GLOBAL)
     def_obj.push(-1)
     // deferred section-6 (E7) sym registration — absolute blob offsets now known.
