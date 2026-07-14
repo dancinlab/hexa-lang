@@ -124,6 +124,25 @@ else
     #     emitter SSOT (self/runtime_core_emit.hexa) + reconciles runtime.c
     #     SSOT dups, then compiles runtime.a from source (seeds-present path).
     bash tool/stage_resolve_runtime_a || { echo "build_aprime: STAGE-0 stage_resolve_runtime_a failed" >&2; exit 1; }
+    # 0b': re-resolve to the SHIPPED form. stage_resolve_runtime_a alone leaves an
+    #      INTERMEDIATE runtime.a; tool/release_build always follows it with
+    #      stage_reresolve_runtime_a (release_build:125 then :137), and that pair is
+    #      what produces the archive consumers actually get.
+    #
+    #      Skipping it is not cosmetic. The intermediate form has runtime.o
+    #      self-defining the core symbols, so runtime_core.o shares no symbols with
+    #      it and is never extracted — and runtime_core.o is where three
+    #      constructors live: _hexa_init_stdio (setvbuf + SIGPIPE ignore),
+    #      _hexa_init_mem_cap and _hexa_init_malloc_tuning. They vanish from
+    #      .init_array (32 B -> 8 B) with NO diagnostic, under BOTH linkers.
+    #      A binary linked against the intermediate archive therefore runs with
+    #      SIGPIPE at its default action — instant death for a pipe consumer.
+    #
+    #      This is a real footgun and it has already bitten: `build_aprime.sh` is a
+    #      documented standalone recipe, and running it left build/runtime.a in the
+    #      non-shipped form, which made a subsequent link drop 3 ctors and get
+    #      misread as a linker regression. Finish the canonical sequence here.
+    bash tool/stage_reresolve_runtime_a || { echo "build_aprime: STAGE-0 stage_reresolve_runtime_a failed" >&2; exit 1; }
     # 0c: build build/hexat (self-hosted transpiler) from hexa_cc.c + runtime.a.
     #     HEXA_SEED_CONVERGE=1 (caller-overridable): the frozen hexa_cc.c seed
     #     (151c52c82) PRE-DATES current self/lexer.hexa rules (e.g. the RParen-
