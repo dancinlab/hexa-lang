@@ -305,6 +305,289 @@ fn _arru_elem_scalar_tid(arr_tid: i64) -> i64 {
     return 0
 }
 
+// ── L4 RUNG-1 — array element-type INFERENCE (HEXA_ARRAY_ELEM_INFER, default-OFF) ──
+//
+// THE GAP. `_arru_array_type_id_from_text` above recovers a container's element
+// type from the DECLARATION ANNOTATION text only. The idiomatic spelling
+//
+//     let mut a = []          // no annotation, empty literal
+//     a.push(i)
+//     a[i] = a[i] * 2 + 1
+//
+// has NO annotation and an empty `[]` RHS whose inferred type carries no element,
+// so the container Local reaches codegen with type_id 0 and the native-unbox guard
+// (`_x86_operand_typed_prim_array`) never fires — every index-get/set/arith on it
+// stays boxed. The lever is default-ON but idiomatic code never lights it.
+//
+// THE RECOVERY. `_lower_fn` runs this per-fn prepass over the whole HIR body
+// BEFORE lowering and reconstructs the element type from the WRITE SITES, which
+// are the only other place the element survives. A name is promoted to 101..104
+// only when EVERY write agrees; anything unprovable leaves it at 0 (conservative,
+// so a mis-stamp can never widen the codegen guard onto a non-prim container).
+//
+// SOUNDNESS — the two rules that make the promotion a proof, not a guess:
+//
+//  (1) ESCAPE VETO (`_aei_scan_uses`). The stamp claims "every element of this
+//      container is a T". That claim only holds if the prepass SEES every write.
+//      So any occurrence of the name outside the four forms it can fully account
+//      for — the declaration, `a.push(e)`, `a[i]` read, `a[i] = e`, plus the
+//      read-only `len(a)` builtin — vetoes the name. A bare `f(a)` call arg, an
+//      alias `let b = a`, a `return a`, a whole-array reassign `a = …`, or any
+//      non-push method on it all hand the container to code this prepass cannot
+//      see, so the element type is no longer provable and the name stays at 0.
+//
+//  (2) HYPOTHESIS CHECK (phase 2). The k3-class body writes `a[i] = a[i]*2+1`,
+//      whose RHS type the typechecker leaves UNKNOWN (it reads back through the
+//      very index expression whose element type is what we are trying to prove —
+//      the circularity that made this gap self-sustaining). Phase 1 therefore
+//      seeds a HYPOTHESIS from the writes that ARE independently typed (the
+//      `a.push(i)` sites); phase 2 then re-evaluates EVERY write site under the
+//      assumption that the container is that type — resolving `a[i]` to the
+//      hypothesised element — and vetoes on any disagreement or any site still
+//      unknown. A store the prepass cannot type even with the hypothesis in hand
+//      is a store it cannot vouch for, so it kills the promotion. The accepted
+//      fixpoint is exactly the annotation the programmer would have written.
+//
+// Default-OFF: `env(...) == "1"` — unset leaves every type_id untouched, so the
+// shipped emit stays byte-identical (release-integrity: opt-in first, flip after
+// byteeq 3-target GREEN).
+pub let mut _aei_names: [string] = []
+pub let mut _aei_tid: [i64] = []      // hypothesised container type_id (101..104); 0 = no evidence
+pub let mut _aei_veto: [bool] = []    // proof failed → stays type_id 0
+pub let mut _aei_phase: i64 = 0       // 1 = seed hypothesis · 2 = verify under hypothesis
+
+fn _aei_enabled() -> bool {
+    return env("HEXA_ARRAY_ELEM_INFER") == "1"
+}
+
+fn _aei_debug() -> bool {
+    return env("HEXA_ARRAY_ELEM_INFER_DEBUG") == "1"
+}
+
+fn _aei_find(nm: string) -> i64 {
+    let mut i = 0
+    while i < len(_aei_names) {
+        if _aei_names[i] == nm { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+// scalar element type_id (1..4) → its CONTAINER type_id (101..104). Inverse of
+// `_arru_elem_scalar_tid`. Non-prim elements (bool/string/char/struct) return 0 —
+// they have no unboxed array representation, so they can never be promoted.
+fn _aei_ctid_from_scalar(stid: i64) -> i64 {
+    if stid == 1 { return 101 }
+    if stid == 2 { return 102 }
+    if stid == 3 { return 103 }
+    if stid == 4 { return 104 }
+    return 0
+}
+
+fn _aei_arith_op(op: string) -> bool {
+    if op == "+" { return true }
+    if op == "-" { return true }
+    if op == "*" { return true }
+    if op == "/" { return true }
+    if op == "%" { return true }
+    return false
+}
+
+// The element type a write-site value provably has, under the hypothesis that
+// candidate `ci`'s element type is `elem` (0 = no hypothesis yet, phase 1).
+// Returns a SCALAR type_id 1..4, or 0 = not provable.
+//
+// The typechecker's own verdict wins whenever it has one; the syntactic arms only
+// fill the holes it leaves (bare literals, and reads back through the container
+// under test — the circular case (2) above).
+fn _aei_expr_tid(e: HExpr, ci: i64, elem: i64) -> i64 {
+    let t = _type_id_of(e.typ)
+    if t >= 1 && t <= 4 { return t }
+    let k = e.kind
+    if k == "literal_int" { return 1 }
+    if k == "literal_float" { return 3 }
+    // read back through the container under test → the hypothesised element
+    if k == "index" && len(e.children) >= 1 && e.children[0].kind == "ident"
+        && _aei_find(e.children[0].text) == ci {
+        return elem
+    }
+    if k == "binop" && len(e.children) >= 2 && _aei_arith_op(e.text) {
+        let l = _aei_expr_tid(e.children[0], ci, elem)
+        let r = _aei_expr_tid(e.children[1], ci, elem)
+        if l != 0 && l == r { return l }
+        return 0
+    }
+    if k == "unop" && len(e.children) >= 1 && (e.text == "-" || e.text == "+") {
+        return _aei_expr_tid(e.children[0], ci, elem)
+    }
+    return 0
+}
+
+// A write of `val` into candidate `ci`. Phase 1 seeds the hypothesis from the
+// independently-typed writes; phase 2 holds every write to it.
+fn _aei_note_store(ci: i64, val: HExpr) -> void {
+    if _aei_veto[ci] { return }
+    if _aei_phase == 1 {
+        // no hypothesis yet → a self-referential read (`a[i]`) types as 0 and
+        // simply contributes nothing; only independently-typed writes seed.
+        let c = _aei_ctid_from_scalar(_aei_expr_tid(val, ci, 0))
+        if c == 0 { return }
+        if _aei_tid[ci] == 0 {
+            _aei_tid[ci] = c
+        } else if _aei_tid[ci] != c {
+            _aei_veto[ci] = true   // two writes disagree → not a homogeneous prim array
+        }
+        return
+    }
+    let hyp = _aei_tid[ci]
+    if hyp == 0 { _aei_veto[ci] = true; return }   // writes exist but none typed
+    let elem = _arru_elem_scalar_tid(hyp)
+    if _aei_expr_tid(val, ci, elem) != elem { _aei_veto[ci] = true }
+}
+
+// Is this `let` the idiomatic un-annotated empty-array declaration — the exact
+// shape whose element type is unrecoverable today? Requires ALL of: an empty `[]`
+// literal RHS · an RHS type the typechecker left unclassified · no typed-prim array
+// annotation (an annotated let is already handled by the text producer and must not
+// be second-guessed here).
+fn _aei_is_empty_array_let(e: HExpr) -> bool {
+    if len(e.children) != 1 { return false }
+    let rhs = e.children[0]
+    if rhs.kind != "array_lit" { return false }
+    if len(rhs.children) != 0 { return false }
+    if _type_id_of(rhs.typ) != 0 { return false }
+    if _arru_array_type_id_from_text(_hir_let_type_text(e.text)) != 0 { return false }
+    return true
+}
+
+// Phase 0 — register candidates. A name declared TWICE anywhere in the fn is
+// vetoed on sight: the registry is keyed by name (the consumer at the `let` site
+// only has the name), so a shadowed name could otherwise stamp the wrong local.
+fn _aei_scan_decls(e: HExpr) -> void {
+    if e.kind == "let" {
+        let nm = _strip_mut_prefix(e.text)
+        if len(nm) > 0 {
+            let ci = _aei_find(nm)
+            if ci >= 0 {
+                _aei_veto[ci] = true
+            } else if _aei_is_empty_array_let(e) {
+                _aei_names.push(nm)
+                _aei_tid.push(0)
+                _aei_veto.push(false)
+            }
+        }
+    }
+    let mut i = 0
+    while i < len(e.children) {
+        _aei_scan_decls(e.children[i])
+        i = i + 1
+    }
+}
+
+// Phases 1+2 — walk every use. The four accounted-for forms are handled here and
+// return WITHOUT descending into the container ident; everything else falls
+// through to the generic recursion, where a bare `ident` hit on a candidate name
+// is an unaccounted-for escape and vetoes it (rule (1) above).
+fn _aei_scan_uses(e: HExpr) -> void {
+    let k = e.kind
+    // `a[i] = v` — index-set. Contributes v's element type.
+    if k == "assign" && len(e.children) >= 2 {
+        let lhs = e.children[0]
+        if lhs.kind == "index" && len(lhs.children) >= 2 && lhs.children[0].kind == "ident" {
+            let ci = _aei_find(lhs.children[0].text)
+            if ci >= 0 {
+                _aei_note_store(ci, e.children[1])
+                _aei_scan_uses(lhs.children[1])
+                _aei_scan_uses(e.children[1])
+                return
+            }
+        }
+    }
+    if k == "call" && len(e.children) >= 1 {
+        let callee = e.children[0]
+        // `a.push(v)` — the other write form. Any OTHER method on the container
+        // (pop/truncate/…) is not accounted for → veto.
+        if callee.kind == "field" && len(callee.children) >= 1
+            && callee.children[0].kind == "ident" {
+            let ci = _aei_find(callee.children[0].text)
+            if ci >= 0 {
+                if callee.text == "push" && len(e.children) == 2 {
+                    _aei_note_store(ci, e.children[1])
+                    _aei_scan_uses(e.children[1])
+                    return
+                }
+                _aei_veto[ci] = true
+            }
+        }
+        // `len(a)` — read-only builtin, no write, no escape.
+        if callee.kind == "ident" && callee.text == "len" && len(e.children) == 2
+            && e.children[1].kind == "ident" && _aei_find(e.children[1].text) >= 0 {
+            return
+        }
+    }
+    // `a[i]` read — the base is a container access, not an escape. Descend into
+    // the KEY only.
+    if k == "index" && len(e.children) >= 2 && e.children[0].kind == "ident"
+        && _aei_find(e.children[0].text) >= 0 {
+        _aei_scan_uses(e.children[1])
+        return
+    }
+    // any other occurrence of the name → the container escapes this prepass's view
+    if k == "ident" {
+        let ci = _aei_find(e.text)
+        if ci >= 0 { _aei_veto[ci] = true }
+        return
+    }
+    let mut i = 0
+    while i < len(e.children) {
+        _aei_scan_uses(e.children[i])
+        i = i + 1
+    }
+}
+
+// Per-fn entry. `params` are the fn's real parameter names — a candidate that
+// collides with one is vetoed (the registry is name-keyed and a param local is
+// not this prepass's to stamp).
+fn _aei_prepass(fname: string, body: HExpr, pnames: [string]) -> void {
+    _aei_names = []
+    _aei_tid = []
+    _aei_veto = []
+    _aei_phase = 0
+    if !_aei_enabled() { return }
+    _aei_scan_decls(body)
+    if len(_aei_names) == 0 { return }
+    let mut pi = 0
+    while pi < len(pnames) {
+        let ci = _aei_find(pnames[pi])
+        if ci >= 0 { _aei_veto[ci] = true }
+        pi = pi + 1
+    }
+    _aei_phase = 1
+    _aei_scan_uses(body)
+    _aei_phase = 2
+    _aei_scan_uses(body)
+    _aei_phase = 0
+    if _aei_debug() {
+        let mut d = 0
+        while d < len(_aei_names) {
+            let mut verdict = "PROMOTE:" + to_string(_aei_tid[d])
+            if _aei_veto[d] { verdict = "VETO" }
+            else if _aei_tid[d] == 0 { verdict = "NO-EVIDENCE" }
+            eprintln("[aei] " + fname + " :: " + _aei_names[d] + " → " + verdict)
+            d = d + 1
+        }
+    }
+}
+
+// The consumer's lookup: the proven container type_id for `nm`, or 0.
+fn _aei_lookup(nm: string) -> i64 {
+    if !_aei_enabled() { return 0 }
+    let ci = _aei_find(nm)
+    if ci < 0 { return 0 }
+    if _aei_veto[ci] { return 0 }
+    return _aei_tid[ci]
+}
+
 // element-pack FUSE — look up a `local` operand's CURRENT MIR type_id by scanning
 // the module-scope `_lr_locals` for op.local_id. Lets a lowering site read the
 // type_id another site already stamped (e.g. the index-get dst's stamped element
@@ -5701,7 +5984,12 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // Only overrides when the RHS contributed nothing (0) — an already-typed
         // RHS (e.g. a typed array-returning call) is authoritative and kept.
         if _arru_native_enabled() && dst.type_id == 0 {
-            let _arr_tid = _arru_array_type_id_from_text(_hir_let_type_text(e.text))
+            let mut _arr_tid = _arru_array_type_id_from_text(_hir_let_type_text(e.text))
+            // L4 RUNG-1 — no annotation to recover from (`let mut a = []`): fall back
+            // to the per-fn write-site proof computed by `_aei_prepass`. Returns 0
+            // unless every write agreed, and 0 always when HEXA_ARRAY_ELEM_INFER is
+            // unset, so the default emit is byte-identical.
+            if _arr_tid == 0 { _arr_tid = _aei_lookup(nm) }
             if _arr_tid != 0 {
                 let _li = len(_lr_locals) - 1
                 _lr_locals[_li] = Local {
@@ -8638,6 +8926,7 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
     }
     // Recover real param names from optional "param_names" annotation.
     let mut ann_i = 0
+    let mut _aei_pnames: [string] = []
     while ann_i < len(it.annotations) {
         let a = it.annotations[ann_i]
         if a.name == "param_names" {
@@ -8646,12 +8935,19 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
                 let nm = a.args[q].text
                 if len(nm) > 0 {
                     ctx = _bind(ctx, nm, params[q].id)
+                    _aei_pnames.push(nm)
                 }
                 q = q + 1
             }
         }
         ann_i = ann_i + 1
     }
+
+    // L4 RUNG-1 — per-fn array element-type prepass. Runs over the WHOLE body
+    // before any statement is lowered, so the `let mut a = []` site below already
+    // knows what the later `a.push(…)` / `a[i] = …` writes prove. Resets its
+    // registry every fn; a no-op (and byte-neutral) unless HEXA_ARRAY_ELEM_INFER=1.
+    _aei_prepass(it.name, it.body, _aei_pnames)
 
     // HEXA-OWN L3 M3 — per-fn loan-registry reset (alongside the
     // _lr_ctx_clear discipline above) + register `@own` AGGREGATE params
