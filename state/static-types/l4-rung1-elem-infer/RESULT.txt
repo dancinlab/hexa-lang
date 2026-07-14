@@ -1,0 +1,20 @@
+=== L4 RUNG-1 RESULT — 2026-07-14T00:34:52Z — summer-B650M-K ===
+  aprime_main=3674112B  aprime_infer=3690032B  runtime.a=1370084B
+  gcc: gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+
+--- gcc -O2 reference ---
+  [gcc -O2] out=702789902 median_cpu_s=0.2
+
+--- k3_arrmap: idiomatic (let mut a = []) + ceiling control (annotated) ---
+  [INFER_OFF] out=702789902 cpu=4.89s vs_gcc=24.45x boxedcalls=5 parity=OK
+  [INFER_ON] out=702789902 cpu=1.35s vs_gcc=6.75x boxedcalls=0
+0 parity=OK
+  [ANNOTATED] out=702789902 cpu=1.34s vs_gcc=6.70x boxedcalls=0
+0 parity=OK
+
+--- inference census (HEXA_ARRAY_ELEM_INFER_DEBUG=1) ---
+  [aei] main :: a → PROMOTE:101
+  (OFF-path census — must be EMPTY:)
+  OFF-path [aei] lines = 0  (expect 0 — the prepass must not run when the flag is unset)
+
+--- byteeq: default path (HEXA_ARRAY_ELEM_INFER unset) — aprime_main vs aprime_infer ---
