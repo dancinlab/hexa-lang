@@ -1,0 +1,25 @@
+// HEXA-OWN L5 R1 — HX3060 fixture: ABA slot-reuse use-after-free.
+//
+// The BUG (measured, not hypothetical): `farr_free(a)` returns a's slot to the
+// runtime freelist; the next `farr_zeros` REISSUES that same slot to `b`. The
+// stale handle `a` now aliases b's storage, so reading `a[0]` silently returns
+// b's data. No crash, no error — just a wrong number. Run WITHOUT the checker:
+//     UAF read a[0] = 222.0     <- b's value, read through the freed handle a
+//     b[0] = 222.0
+//
+// Expect: HEXA_BORROWCK_HANDLE=1 → exactly 1 HX3060, at the `farr_get(a, 0)`.
+// The trailing `farr_free(b)` is a legal final free (no use after it) → silent.
+fn main() {
+    let a = farr_zeros(4)
+    farr_set(a, 0, 111.0)
+    farr_free(a)
+
+    let b = farr_zeros(4)
+    farr_set(b, 0, 222.0)
+
+    let v = farr_get(a, 0)          // HX3060: use-after-free of `a` (slot is now b's)
+    println("UAF read a[0] = " + to_string(v))
+    println("b[0] = " + to_string(farr_get(b, 0)))
+
+    farr_free(b)
+}
