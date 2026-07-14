@@ -541,6 +541,15 @@ pub let mut _bck_strict = false    // HEXA_BORROWCK_STRICT=1, read once per lowe
 // the emit is never reached → binary + diag stream byte-identical (roadmap
 // A2 byteeq-neutral, gen3≡gen4).
 pub let mut _bck_census = false    // HEXA_BORROWCK_CENSUS=1, read once per lower_hir
+// HEXA-OWN L5 census-v2 — ALL-CODE census lane (HEXA_BORROWCK_CENSUS_ALL=1).
+// The shipping band (`_bck_warn_default`, default-ON) admits ONLY the codes on
+// `_bck_warn_allowlist` (2 of the 22 borrowck emit sites) — every other rule is
+// computed and then DROPPED in `_bck_diag_push`. Any census run under the default
+// band therefore measures the FILTER, not the CHECKER. This flag makes the
+// instrument independent of the shipping policy: admit ALL borrowck codes, forced
+// to the Warning band (observe-only, never build-refusing). Implies `_bck_on`.
+// Default false ⇒ unreached ⇒ byteeq-neutral.
+pub let mut _bck_census_all = false // HEXA_BORROWCK_CENSUS_ALL=1, read once per lower_hir
 // HEXA-OWN L4/L5 Lane-B B3 — opt-OUT WARNING-BAND default (HEXA_BORROWCK_WARN_DEFAULT).
 // FLIPPED default-ON at L5 round-3 (B1 census: HX3055 fires=0 + HX3014 fires low). The later
 // #4909 REAL-corpus census surfaced 3 residual HX3014 FPs (logic_synth/passes.hexa — field-
@@ -1133,6 +1142,19 @@ fn _bck_warn_allowed(code: string) -> bool {
 // STRICT may have escalated to Error upstream is re-banded to Warning here
 // (warn-default is never build-refusing; STRICT is the separate opt-in for that).
 fn _bck_diag_push(d: Diagnostic) {
+    // HEXA-OWN L5 census-v2 (HEXA_BORROWCK_CENSUS_ALL=1) — INSTRUMENT lane. The
+    // shipping band below admits only the 2 allowlisted codes, so the other 20
+    // borrowck rules are COMPUTED then DISCARDED at the `!_bck_warn_allowed`
+    // return — i.e. the census measured the shipping FILTER, not the CHECKER
+    // (all L5 fire counts taken through it are blind to 20/22 rules). This lane
+    // bypasses the allowlist so every borrowck rule that fires is observable,
+    // while FORCING the Warning band so the census can never refuse a build
+    // (observe-only; STRICT stays the separate opt-in). Default OFF ⇒ the branch
+    // is unreached ⇒ diag stream + emitted binary byte-identical (byteeq-neutral).
+    if _bck_census_all {
+        _lr_diag.push(diag_with_severity(d, Severity::Warning))
+        return
+    }
     if _bck_warn_default {
         if !_bck_warn_allowed(d.code) { return }
         _lr_diag.push(diag_with_severity(d, Severity::Warning))
@@ -8838,6 +8860,9 @@ pub fn lower_hir(module: HModule) -> MModule {
     // arms ⇒ census emit unreachable ⇒ byte-neutral.
     _bck_census = env("HEXA_BORROWCK_CENSUS") == "1"
     _bck_on = _bck_on || _bck_census
+    // HEXA-OWN L5 census-v2 — ALL-CODE census lane; implies the loan pass runs.
+    _bck_census_all = env("HEXA_BORROWCK_CENSUS_ALL") == "1"
+    _bck_on = _bck_on || _bck_census_all
     if _bck_census { _bck_census_lines = [] }
     // HEXA-OWN L4/L5 Lane-B B3 — opt-OUT warning-band DEFAULT (FLIPPED default-ON at
     // L5 round-3, gated on the B1 census: HX3014/HX3055 fires=0 on the corpus). Read
