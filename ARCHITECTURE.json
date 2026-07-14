@@ -635,6 +635,13 @@
         "source": "compiler/check/bind.hexa"
       },
       {
+        "id": "main-hexa-2",
+        "state": "pos-conv",
+        "value": "★own-link default-ON(#4902)이 rc=0 으로 '성공'하면서 **startup 에 SIGSEGV 하는 바이너리**를 낳았고, byteeq·ownlink-determinism·ownlink-corpus-parity(#4881)·shipping smoke 가 **전부 GREEN 인 채 통과**시켰다. 2026-07-14 실측(#4952): GitHub 새 clone 으로 부모 커밋을 빌드하면 4개 빌드구성 × 2개 호스트(aiden·summer) 전부에서 동일 SEGV 재현. `./hexa build tool/stdlib_selftest_aggregate.hexa` 가 'OK: built (native own-link, own-start — no clang, no ld)' 로 rc=0 인데 실행 즉시 Segmentation fault rc=139, 출력 0바이트, execve 1개(자식 0개). strace 폴트: mmap(NULL, 0, 0x400000, MAP_SHARED_VALIDATE, 34, 0) = -1 EBADF — 의도한 mmap(NULL, 4194304, 3, 0x22, -1, 0) 대비 **2번 인자부터 레지스터가 한 칸씩 밀렸다**(선두에 tag 레지스터 1개 초과 = **pair-ABI ↔ C-ABI 스큐**). 반환된 -1/NULL 을 무검사로 베이스에 써서 mov %r8,(%rax,%rsi,8) 가 rax=NULL 로 저장 → SIGSEGV si_addr=NULL. ★왜 아무 게이트도 못 잡았나(구조적 · 이게 핵심): (1) own-link 는 **실패가 아니라 조용한 오염**이다 — rc=0 이라 self/main.hexa 의 안전망('ANY own-link failure STILL falls through to tier-B ld')이 **영영 호출되지 않는다**. (2) 플립 근거였던 byteeq/corpus-parity 는 **링커의 방출 바이트와 exit code** 를 비교할 뿐 **링크된 바이너리의 런타임 거동**을 재지 않는다. ⇒ rc==0 · test -x · 심볼 존재 · 바이트 동일성은 **behavior 를 대신하지 못한다**. behavioral 게이트(같은 트리·커밋·바이너리, env 하나만 차이): own-link default → rc=139 출력 0줄 / HEXA_OWNLINK_DEFAULT=0 → aggregate 정상 기동 found=94 pass=86 + jsonl 기록. 조치 = #4902 승격 철회, own-link 를 opt-in(HEXA_OWNLINK_DEFAULT=1)으로 강등(cmd_build self/main.hexa:3623 + cmd_run :4763 lockstep). polarity 영구반전이 아니라 **shipping smoke 를 통과 못 한 승격의 철회**이며, 경로는 플래그로 살아 있어 axis-③ 작업은 계속된다. ★부수: 이 SIGSEGV 를 나는 처음에 #4947(farr bind 등록) 탓으로 오진해 revert PR(#4951)까지 올렸다 — 그러나 tool/stdlib_selftest_aggregate.hexa 는 farr_* 를 **한 번도 호출하지 않는다**. advisory 게이트의 RED 를 main 파손으로 오독한 것이 오진의 출발점이었다.",
+        "threshold": "재발조건: 링커/코드젠/런타임의 default-ON 플립을 byteeq·심볼·exit-code 게이트만으로 승격할 때. 판정: 게이트가 전부 GREEN 인데 실제 산출 바이너리를 **실행**해 보면 죽는다. 해결(재-default-ON 의 게이트): ①**링크된 바이너리를 실제로 실행하는 behavioral smoke** 를 플립의 필수 게이트로 만들어라 — 'rc=0 으로 빌드됐다' 가 아니라 '그 바이너리가 돌고 올바른 출력을 낸다'. 최소 셋: hello-world 실행 + 실제 도구(tool/stdlib_selftest_aggregate.hexa) 기동 + 출력 라인수 검사. ②rc=0 인데 산출물이 오염되는 경로는 fallback 안전망이 **구조적으로 도달 불가**하다 — 안전망을 rc 가 아니라 **산출물 검증**에 걸어라. ③재현은 반드시 **GitHub 새 clone + 캐시 비움 + env 무설정**(러너와 동일)으로 — warm tree 나 env 설정이 있으면 거짓 초록이 난다. ④ABI 스큐 의심 시 strace 로 syscall 인자를 보라 — 인자가 한 칸씩 밀려 있으면 pair-ABI↔C-ABI 스큐다(이 리포의 고질 결함계열). ★잔여: 스큐의 정확한 방출 file:line 미확정 — 그것이 own-link 재-default-ON 의 선결이다.",
+        "source": "self/main.hexa"
+      },
+      {
         "id": "elf-x86-64-hexa-3",
         "state": "pos-conv",
         "source": "compiler/emit/elf_x86_64.hexa",
