@@ -81,7 +81,28 @@ head -c 4 "$HEXAD" | grep -q $'\x7fELF' \
 # The install layout must actually resolve, or `hexa build` falls through off the
 # own-link leg and this gate silently measures the wrong path.
 [ -f "$HX/bin/build/runtime.a" ] || infra "no build/runtime.a in the staged layout — resolve_prebuilt_runtime() would return \"\" and own-link would fall through"
-echo "staged install layout: hexad=$(stat -c%s "$HEXAD") B · runtime.a=$(stat -c%s "$HX/bin/build/runtime.a") B · .hxroot sentinel"
+
+# ── the linker does NOT live in hexad — it lives in aprime_cc ────────────────
+# `hexa build`'s own-link leg (self/main.hexa, resolve_native_cc) SHELLS OUT to
+# build/aprime_cc with `--linker=hexa`. hexad merely dispatches. Two consequences,
+# both of which have already produced false measurements:
+#
+#   · aprime_cc ABSENT  -> the own-link leg's `len(_olcc) > 0` guard fails, `hexa
+#     build` falls through to the clang C-transpile delegate, and this gate happily
+#     grades a binary own-link never touched (convergence nobaseline-gate-yml-1).
+#
+#   · aprime_cc STALE   -> hexad gets rebuilt while aprime_cc is served from a
+#     previous build, so the gate measures the PREVIOUS linker. A linker fix then
+#     looks like it "had no effect" — which is exactly how a confirmed-correct fix
+#     got misread as a failure once already.
+#
+# So: require it, and require it to be no older than the linker source it must carry.
+[ -f "$HX/bin/build/aprime_cc" ] || infra "no build/aprime_cc in the staged layout — the own-link leg would fall through to the clang C-transpile delegate and this gate would grade the WRONG path"
+_lnk_src="$REPO/compiler/emit/elf_x86_64.hexa"
+if [ -f "$_lnk_src" ] && [ "$_lnk_src" -nt "$REPO/build/aprime_cc" ]; then
+    infra "staged aprime_cc is OLDER than $_lnk_src — aprime_cc is what actually links (hexad only dispatches to it), so this run would measure the PREVIOUS linker. Rebuild it: bash tool/build_aprime.sh -o build/aprime_cc"
+fi
+echo "staged install layout: hexad=$(stat -c%s "$HEXAD") B · runtime.a=$(stat -c%s "$HX/bin/build/runtime.a") B · aprime_cc=$(stat -c%s "$HX/bin/build/aprime_cc") B (the linker) · .hxroot sentinel"
 
 # ── the subject: a REAL tool, not a toy ──────────────────────────────────────
 # tool/stdlib_selftest_aggregate.hexa is the exact program that died: it allocates
@@ -138,7 +159,16 @@ case "$own_rc" in
   139) fail "own-link binary SIGSEGV (rc=139) — mislinked-but-executable. This is the #4952 shape exactly: the build said rc=0 and the binary dies at startup." ;;
   138) fail "own-link binary SIGBUS (rc=138) — mislinked." ;;
   134) fail "own-link binary SIGABRT (rc=134)." ;;
-  124) infra "own-link binary timed out (300 s) — cannot grade" ;;
+  # A hang is a linker DEFECT, not an infra hiccup: the A0-b self-referential
+  # alias (own body aliased onto a libc forwarding thunk -> `jmp $-9`) presents
+  # as exactly this — rc=124, spinning. Only call it infra when the ld control
+  # timed out too, i.e. the runner itself was too slow to grade either leg.
+  124)
+    if [ "$ld_rc" = "124" ]; then
+      infra "BOTH legs timed out (300 s) — the runner could not grade either linker"
+    fi
+    fail "own-link binary HUNG (rc=124) while the ld control finished (rc=$ld_rc) — a hang is a linker defect (the A0-b alias self-loop shape), not a slow runner."
+    ;;
 esac
 [ -s "$W/own.out" ] || fail "own-link binary produced ZERO output (rc=$own_rc) — it did not actually run"
 # Non-empty output is not enough: if the subject cannot find stdlib/ it prints a
@@ -161,16 +191,76 @@ if command -v strace >/dev/null 2>&1; then
         fail "the subject no longer takes the large-alloc mmap path — THIS GATE HAS GONE BLIND. Pick a subject allocating > HXHEAP_SMALL_MAX (4096 B), or the #4952 defect class can reappear undetected."
     fi
 else
-    echo "  · strace unavailable — mmap-coverage check skipped (the RUN assertions still hold)"
+    infra "strace unavailable on this runner — the mmap-coverage assertion cannot run, and a gate that cannot see its own coverage must not report GREEN. Install strace on the runner."
 fi
 
-# ── 3. RUN-parity (own-link ≡ ld) ────────────────────────────────────────────
+# ── 3. process-level init parity: env() ──────────────────────────────────────
+# The aggregate subject is BLIND to this: it runs its selftests as child processes,
+# and execve hands each child a real envp from the kernel — so a parent whose own
+# hxlcl_environ was never captured still yields correct-looking children. The gap
+# only shows in-process. It is real and it shipped: the dyn own-link path emitted no
+# DT_INIT_ARRAY and collapsed __init_array_start/end, so ZERO exe constructors ran —
+# hxlcl_capture_environ never fired and env() returned "" for every key (plus no
+# setvbuf, no SIGPIPE-ignore). Silent wrong answers, rc=0.
+printf 'fn main() {\n    println(env("HOME"))\n}\n' > "$W/envprobe.hexa"
+for _leg in own:1 ld:0; do
+    _tag="${_leg%%:*}"; _flag="${_leg##*:}"
+    ( cd "$W" && env -u HEXA_PREBUILT_RUNTIME -u HEXA_APRIME_CC -u HEXA_LANG \
+        HEXA_OWNLINK_DEFAULT="$_flag" "$HEXAD" build "$W/envprobe.hexa" -o "$W/envprobe.$_tag" ) \
+        > "$W/envprobe.$_tag.build" 2>&1 \
+        || fail "env-probe failed to build under the $_tag linker"
+    ( cd "$REPO" && timeout 60 "$W/envprobe.$_tag" ) > "$W/envprobe.$_tag.out" 2>&1
+done
+_env_own="$(cat "$W/envprobe.own.out")"; _env_ld="$(cat "$W/envprobe.ld.out")"
+[ -n "$_env_ld" ] || infra "the ld control printed an empty env(\"HOME\") — HOME is unset in this environment, so the probe has no oracle"
+[ "$_env_own" = "$_env_ld" ] \
+    || fail "in-process init parity: env(\"HOME\") = '$_env_own' under own-link but '$_env_ld' under ld — the exe constructors did not run (DT_INIT_ARRAY / .init_array bounds). Every env()-reading program silently gets the wrong answer."
+echo "  ✓ in-process init parity: env(\"HOME\") = '$_env_own' under BOTH linkers (exe ctors ran)"
+
+# ── 4. RUN-parity (own-link ≡ ld) ────────────────────────────────────────────
+# An exact `diff` of stdout is NOT a sound parity test here, and this is MEASURED,
+# not assumed: the same ld-linked binary, run three times on the same host, produced
+# 3 different outputs (107 lines pass=91 timeout=3 · 99 lines pass=93 timeout=1 · and
+# a third), with individual tests flipping PASS<->TIMEOUT between runs. The subject
+# spawns 94 children under a wall-clock timeout, so which ones time out is a property
+# of machine load, not of the linker. ld does not even self-parity. An exact-diff
+# assertion would therefore be chronically RED no matter what the linker did — a gate
+# nobody can act on, which is a gate nobody reads.
+#
+# So compare the DETERMINISTIC content and quarantine the timing noise
+# (commons infra-wall-noneval: a compute-cost timeout is an infra wall, quarantined
+# from the verdict — it is not evidence about the target). Concretely:
+#   · drop the `# wrote state/stdlib_selftest_<TS>.jsonl` line (a timestamp)
+#   · quarantine any test that TIMED OUT under either linker — and SAY SO (a silent
+#     cap would read as "covered everything" when it did not)
+#   · every remaining test must carry the SAME PASS/FAIL verdict under both linkers.
+#     A test that PASSes under one and FAILs under the other is a real divergence and
+#     still FAILs the gate. That is the assertion with teeth, and timing cannot fake it.
 [ "$own_rc" = "$ld_rc" ] || fail "RUN-parity: exit code differs — own-link rc=$own_rc vs ld rc=$ld_rc"
-if ! diff -q "$W/own.out" "$W/ld.out" >/dev/null 2>&1; then
-    diff "$W/own.out" "$W/ld.out" | head -12 | sed 's/^/    /'
-    fail "RUN-parity: stdout differs between linkers"
+
+_verdicts() { grep -E '^(PASS|FAIL|TIMEOUT)[[:space:]]' "$1" | awk '{print $2"\t"$1}' | sort -u; }
+_verdicts "$W/own.out" > "$W/own.v"
+_verdicts "$W/ld.out"  > "$W/ld.v"
+[ -s "$W/own.v" ] || fail "RUN-parity: the own-link run emitted no per-test verdict lines at all — the subject did not report, so there is nothing to compare"
+
+# tests whose verdict is timing-dependent on EITHER side → quarantined, and named.
+awk -F'\t' '$2=="TIMEOUT"{print $1}' "$W/own.v" "$W/ld.v" | sort -u > "$W/quarantine"
+_nq="$(wc -l < "$W/quarantine" | tr -d ' ')"
+if [ "$_nq" -gt 0 ]; then
+    echo "  · RUN-parity: quarantined $_nq timing-dependent test(s) (TIMEOUT under one or both linkers — see the ld-vs-ld self-parity note above):"
+    sed 's/^/      /' "$W/quarantine"
 fi
+
+# the real assertion: identical PASS/FAIL verdicts on every non-quarantined test.
+grep -vFf "$W/quarantine" "$W/own.v" > "$W/own.cmp" 2>/dev/null || true
+grep -vFf "$W/quarantine" "$W/ld.v"  > "$W/ld.cmp"  2>/dev/null || true
+if ! diff -q "$W/own.cmp" "$W/ld.cmp" >/dev/null 2>&1; then
+    echo "    --- own-link vs ld, deterministic verdicts ---"
+    diff "$W/own.cmp" "$W/ld.cmp" | head -20 | sed 's/^/    /'
+    fail "RUN-parity: a test's PASS/FAIL verdict DIFFERS between linkers (timing is already quarantined, so this is a real behavioral divergence)"
+fi
+echo "  ✓ RUN-parity: $(wc -l < "$W/own.cmp" | tr -d ' ') test(s) carry identical PASS/FAIL verdicts under both linkers (rc=$own_rc both)"
 
 echo
 echo "════ PASS ════"
-echo "  own-link binary RAN (rc=$own_rc · $(wc -l < "$W/own.out") lines) · took the mmap path · output ≡ ld"
+echo "  own-link binary RAN (rc=$own_rc · $(wc -l < "$W/own.out") lines) · took the mmap path · env() ≡ ld · every deterministic test verdict ≡ ld"
