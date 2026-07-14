@@ -2,65 +2,48 @@
 // tool/hx.hexa — SSOT unified entry point (top-level wrapper)
 //
 // PURPOSE
-//   Single developer-facing CLI that replaces bare `git` for the SSOT
-//   SSOT workflow. Dispatches to raw_all, hx_unlock, hx_lock, git, and
-//   raw_audit in the right order so every state transition is audited
-//   and every commit/push carries a raw-all attestation trailer.
-//
-//   The philosophy: `git commit` and `git push` are dangerous because
-//   they have no idea whether .ext / .roadmap / .loop
-//   are still consistent. `./hx commit` and `./hx push` refuse unless
-//   raw_all exits 0, stamp the pre-push SSOT fingerprint into the
-//   commit message, and append an audit line.
+//   Single developer-facing CLI wrapping the lock/edit/commit/push loop and
+//   the `hx` package-manager surface. Dispatches to hx_unlock, hx_lock, git,
+//   the fixpoint tools, and the pkg lane.
 //
 // USAGE
-//   ./hx commit   -m "msg"          run raw_all → git commit → audit
-//   ./hx push     [branch]          run raw_all → git push → audit
+//   ./hx commit   -m "msg"          git commit -m "msg"
+//   ./hx push     [branch]          git push origin <branch>
 //   ./hx edit     <file>            hx_unlock → $EDITOR <file> → hx_lock
 //   ./hx unlock   --reason "..."    delegate to tool/hx_unlock.hexa
 //   ./hx lock                       delegate to tool/hx_lock.hexa
-//   ./hx status                     chflags status + last audit + raw_all summary
-//   ./hx verify                     raw_all --fast
+//   ./hx status                     chflags status + branch/user
 //   ./hx init                       first-time install (delegate hx_init)
 //   ./hx harden                     Level 1 → Level 2 promote (hx_harden)
 //   ./hx downgrade                  Level 2 → Level 1 demote (hx_downgrade)
-//   ./hx fixpoint <sub> [args...]   fixpoint verify/archive/bisect/check/promote
+//   ./hx fixpoint <sub> [args...]   fixpoint verify/archive/bisect/check
 //   ./hx chain    <sub> [args...]   forward-chain run/status/list/reset (OS-level)
 //   ./hx install  <target>          install external CLI as ~/.hx/bin shim (own#5)
 //   ./hx update   [<name>]          refresh shim(s); git pull cloned pkgs
 //   ./hx search / list / info / remove / where / orgs      pkg queries
 //   ./hx help                       print usage
 //
-// FLOW (commit)
-//   1. raw_all (full) → refuse on FAIL
-//   2. sha_before = ssot_fingerprint()
-//   3. augment -m message with HMAC-signed attestation trailer via
-//      tool/raw_attestation.hexa (format matches .github/workflows/
-//      raw-verify.yml verifier):
-//        "\n\nraw-all-attest: raw-all-attest:v1:<sha>:<ts>:<hmac>"
-//   4. git commit -m "<augmented>"
-//   5. sha_after = ssot_fingerprint()   (may equal sha_before)
-//   6. audit_append("commit", user, msg, "ok"|"fail", sha_before, sha_after)
-//
-// FLOW (push)
-//   1. raw_all (full) → refuse on FAIL
-//   2. collect to-be-pushed commits via `git log @{u}..HEAD --format=%H`
-//   3. each commit: verify body contains "raw-all-attest: " trailer; warn if absent
-//   4. git push origin <branch>
-//   5. audit_append("push", user, "<N commits to <branch>>", result, -, -)
-//
 // FLOW (edit)
 //   1. tool/hx_unlock.hexa --reason "edit <file>"
 //   2. exec $EDITOR <file>   (fallback: vi)
 //   3. tool/hx_lock.hexa
 //
+// RETIRED-FORMAT CASCADE (87dda7427 residual)
+//   `commit`/`push` used to run a raw_all gate, stamp an HMAC-signed
+//   `raw-all-attest:` trailer via tool/raw_attestation.hexa, and append to a
+//   raw_audit ledger. 87dda7427 deleted that whole cluster (raw_all ·
+//   raw_audit · raw_attestation · raw_all_promote) and cascaded the other
+//   consumers, but missed THIS file — so `use "tool/raw_audit"` kept pointing
+//   at a deleted module and the file has not compiled since. The gate, the
+//   attestation trailer and the audit ledger are gone; commit/push now do the
+//   plain git action, matching what hx_lock/hx_unlock kept after the same cut.
+//
 // EXIT CODES
 //   0   — success
-//   1   — subcommand failed (raw_all, git, editor non-zero)
+//   1   — subcommand failed (git, editor non-zero)
 //   2   — invocation error (bad args, missing flags)
 
 use "self/stdlib/law_io"
-use "tool/raw_audit"
 // ─── env helpers ─────────────────────────────────────────────────
 
 fn _current_user() -> string {
@@ -74,10 +57,6 @@ fn _is_darwin() -> bool {
     return uname == "Darwin"
 }
 
-fn _iso_utc_now() -> string {
-    return to_string(exec("date -u +\"%Y-%m-%dT%H:%M:%SZ\"")).trim()
-}
-
 fn _shell_quote(s: string) -> string {
     return "'" + s.replace("'", "'\\''") + "'"
 }
@@ -87,22 +66,6 @@ fn _interp() -> string { return "./build/hexa_interp" }
 fn _interp_ok() -> bool {
     let r = exec_with_status("test -x " + _interp())
     return r[1] == 0
-}
-
-// ─── raw_all gate ────────────────────────────────────────────────
-
-fn _run_raw_all(fast: bool) -> int {
-    // Echoes full raw_all output so developer sees what failed. Returns
-    // raw_all's exit code verbatim (0 = PASS, 1 = FAIL, 2 = bad args).
-    if !_interp_ok() {
-        eprintln("hx: " + _interp() + " not executable — cannot run raw_all gate")
-        return 1
-    }
-    let mut suffix = ""
-    if fast { suffix = " --fast" }
-    let r = exec_with_status(_interp() + " tool/raw_all.hexa" + suffix + " 2>&1")
-    print(to_string(r[0]))
-    return r[1]
 }
 
 // ─── git helpers ─────────────────────────────────────────────────
@@ -119,8 +82,8 @@ fn _git_has_upstream() -> bool {
 // ─── subcommand: commit ──────────────────────────────────────────
 
 fn _cmd_commit(args: array) -> int {
-    // expect -m "<msg>" (only form supported; other git commit flags
-    // are intentionally not forwarded to keep the audit surface small)
+    // expect -m "<msg>" (only form supported; other git commit flags are
+    // intentionally not forwarded to keep the wrapper surface small)
     let mut msg = ""
     let mut i = 0
     while i < len(args) {
@@ -135,62 +98,18 @@ fn _cmd_commit(args: array) -> int {
         return 2
     }
 
-    // 1. gate
-    println("── hx commit: gate raw_all ──")
-    let rc = _run_raw_all(false)
-    if rc != 0 {
-        eprintln("")
-        eprintln("hx commit: refused — raw_all exit=" + to_string(rc))
-        let actor = _current_user()
-        let sha = ssot_fingerprint()
-        audit_append("commit", actor, msg, "blocked (raw_all " + to_string(rc) + ")", sha, "-")
-        return 1
-    }
-
-    // 2. fingerprint + HMAC-signed attestation trailer
-    // Delegate trailer construction to tool/raw_attestation.hexa so the
-    // emitted format stays in lock-step with .github/workflows/raw-verify.yml
-    // verifier (raw-all-attest:v1:<sha>:<ts>:<hmac>). Emitting the old
-    // short-form here would pass the local gate but silently fail CI.
-    let sha_before = ssot_fingerprint()
-    let ts = _iso_utc_now()
-    let tr_cmd = _interp() + " tool/raw_attestation.hexa trailer "
-               + _shell_quote(msg) + " 2>&1"
-    let tr = exec_with_status(tr_cmd)
-    if tr[1] != 0 {
-        eprintln("hx commit: raw_attestation trailer failed exit="
-                 + to_string(tr[1]))
-        eprintln(to_string(tr[0]))
-        let actor2 = _current_user()
-        audit_append("commit", actor2, msg,
-                     "blocked (attestation " + to_string(tr[1]) + ")",
-                     sha_before, "-")
-        return 1
-    }
-    let full_msg = to_string(tr[0]).trim()
-
-    // 3. git commit
-    println("")
     println("── hx commit: git commit ──")
-    let r = exec_with_status("git commit -m " + _shell_quote(full_msg) + " 2>&1")
+    let r = exec_with_status("git commit -m " + _shell_quote(msg) + " 2>&1")
     print(to_string(r[0]))
     let grc = r[1]
-
-    // 4. audit
-    let sha_after = ssot_fingerprint()
-    let actor = _current_user()
     if grc != 0 {
-        audit_append("commit", actor, msg, "fail (git " + to_string(grc) + ")", sha_before, sha_after)
         eprintln("")
         eprintln("hx commit: git commit exit=" + to_string(grc))
         return 1
     }
-    audit_append("commit", actor, msg, "ok", sha_before, sha_after)
 
     println("")
     println("── OK ──")
-    println("raw-all-attest: signed trailer embedded (sha=" + sha_before
-            + " ts=" + ts + ")")
     return 0
 }
 
@@ -205,65 +124,33 @@ fn _cmd_push(args: array) -> int {
         return 2
     }
 
-    // 1. gate
-    println("── hx push: gate raw_all ──")
-    let rc = _run_raw_all(false)
-    if rc != 0 {
-        eprintln("")
-        eprintln("hx push: refused — raw_all exit=" + to_string(rc))
-        let actor = _current_user()
-        audit_append("push", actor, "branch=" + branch, "blocked (raw_all " + to_string(rc) + ")", "-", "-")
-        return 1
-    }
-
-    // 2. collect to-be-pushed commits
+    // 1. count the to-be-pushed commits (informational)
     let mut commit_count = 0
-    let mut missing_trailer = 0
     if _git_has_upstream() {
         let shas = to_string(exec("git log @{u}..HEAD --format=%H 2>/dev/null"))
         let lines = split(shas, "\n")
         for ln in lines {
-            let h = ln.trim()
-            if h == "" { continue }
+            if ln.trim() == "" { continue }
             commit_count = commit_count + 1
-            // 3. check each for raw-all-attest trailer (HMAC-signed,
-            //    matches CI verifier format)
-            let body = to_string(exec("git log -1 --format=%B " + h + " 2>/dev/null"))
-            if body.index_of("raw-all-attest: ") < 0 {
-                eprintln("hx push: WARN — commit " + h.substring(0, 12)
-                         + " missing raw-all-attest trailer")
-                missing_trailer = missing_trailer + 1
-            }
         }
     } else {
         eprintln("hx push: WARN — branch '" + branch + "' has no upstream; cannot diff against remote")
     }
 
-    // 4. git push
-    println("")
+    // 2. git push
     println("── hx push: git push origin " + branch + " ──")
     let r = exec_with_status("git push origin " + _shell_quote(branch) + " 2>&1")
     print(to_string(r[0]))
     let grc = r[1]
-
-    // 5. audit
-    let actor = _current_user()
-    let mut reason = "branch=" + branch + " commits=" + to_string(commit_count)
-    if missing_trailer > 0 { reason = reason + " missing_trailer=" + to_string(missing_trailer) }
     if grc != 0 {
-        audit_append("push", actor, reason, "fail (git " + to_string(grc) + ")", "-", "-")
         eprintln("")
         eprintln("hx push: git push exit=" + to_string(grc))
         return 1
     }
-    audit_append("push", actor, reason, "ok", "-", "-")
 
     println("")
     println("── OK ──")
     println("pushed " + to_string(commit_count) + " commit(s) to origin/" + branch)
-    if missing_trailer > 0 {
-        println("(warn: " + to_string(missing_trailer) + " commit(s) had no raw-all trailer)")
-    }
     return 0
 }
 
@@ -363,28 +250,7 @@ fn _cmd_status() -> int {
         println("(" + _interp() + " not executable — skipping chflags probe)")
     }
     println("")
-
-    // 2. last audit entry
-    println("── last audit entry ──")
-    let audit_check = exec_with_status("test -f audit")
-    if audit_check[1] == 0 {
-        let tail = to_string(exec("tail -n 3 audit"))
-        print(tail)
-    } else {
-        println("(no audit yet)")
-    }
-    println("")
-
-    // 3. raw_all summary (fast)
-    println("── raw_all --fast ──")
-    let rc = _run_raw_all(true)
-    return rc
-}
-
-// ─── subcommand: verify ──────────────────────────────────────────
-
-fn _cmd_verify() -> int {
-    return _run_raw_all(true)
+    return 0
 }
 
 // ─── subcommand: init / harden / downgrade (thin delegates) ──────
@@ -486,7 +352,6 @@ fn _fixpoint_usage() {
     eprintln("  archive                    tool/fixpoint_archive.hexa snapshot")
     eprintln("  bisect  <good> <bad>       tool/fixpoint_bisect.hexa binary search")
     eprintln("  check                      tool/fixpoint_check.hexa scaffold")
-    eprintln("  promote <rule> <status>    tool/raw_all_promote.hexa apply")
 }
 
 fn _fixpoint_run(tool_path: string, tail_args: array, missing_hint: string) -> int {
@@ -539,15 +404,6 @@ fn _cmd_fixpoint(args: array) -> int {
     if sub == "check" {
         // scaffold mode (default, no --live) — safe under seed-freeze.
         return _fixpoint_run("tool/fixpoint_check.hexa", rest, "fixpoint check not available")
-    }
-    if sub == "promote" {
-        if len(rest) < 2 {
-            eprintln("hx fixpoint promote: <rule> <status> required")
-            return 2
-        }
-        let mut tail = ["apply"]
-        for a in rest { tail.push(a) }
-        return _fixpoint_run("tool/raw_all_promote.hexa", tail, "fixpoint promote not yet implemented")
     }
     if sub == "help" || sub == "-h" || sub == "--help" {
         _fixpoint_usage()
@@ -635,18 +491,17 @@ fn _cmd_pkg_delegate(sub: string, args: array) -> int {
 fn _usage() {
     eprintln("usage: ./hx <subcommand> [args...]")
     eprintln("")
-    eprintln("  commit    -m \"<msg>\"           run raw_all → git commit → audit")
-    eprintln("  push      [branch]               run raw_all → git push → audit")
+    eprintln("  commit    -m \"<msg>\"           git commit -m \"<msg>\"")
+    eprintln("  push      [branch]               git push origin <branch>")
     eprintln("  edit      <file>                 hx_unlock → $EDITOR <file> → hx_lock")
     eprintln("  unlock    --reason \"...\"        delegate to tool/hx_unlock.hexa")
     eprintln("  lock                             delegate to tool/hx_lock.hexa")
-    eprintln("  status                           chflags + last audit + raw_all --fast")
-    eprintln("  verify                           raw_all --fast")
+    eprintln("  status                           chflags status + branch/user")
     eprintln("")
     eprintln("  init                             first-time install (tool/hx_init.hexa)")
     eprintln("  harden    [--force]              Level 1 → Level 2 promote")
     eprintln("  downgrade                        Level 2 → Level 1 demote")
-    eprintln("  fixpoint  <sub> [args...]        fixpoint verify/archive/bisect/check/promote")
+    eprintln("  fixpoint  <sub> [args...]        fixpoint verify/archive/bisect/check")
     eprintln("  chain     <sub> [args...]        forward-chain run/status/list/reset (OS-level)")
     eprintln("")
     eprintln("  resolve   [project-dir]          MVS resolve hexa.toml [dependencies] → hexa.lock")
@@ -660,17 +515,11 @@ fn _usage() {
     eprintln("  orgs                             probe orgs (HX_ORGS env)")
     eprintln("  help                             this text")
     eprintln("")
-    eprintln("  commit/push refuse unless raw_all exit 0. Every commit carries a")
-    eprintln("  `raw-all-attest: raw-all-attest:v1:<sha>:<ts>:<hmac>` trailer")
-    eprintln("  (HMAC-signed; verified server-side by raw-verify.yml). Every")
-    eprintln("  state transition is appended to audit.")
-    eprintln("")
     eprintln("EXAMPLE (fixpoint workflow)")
     eprintln("  ./hx fixpoint check                       # scaffold drift report")
     eprintln("  ./hx fixpoint verify                      # 3x compile fixpoint gate")
     eprintln("  ./hx fixpoint archive                     # snapshot current hexat")
     eprintln("  ./hx fixpoint bisect <good> <bad>         # locate first drift commit")
-    eprintln("  ./hx fixpoint promote <rule> <status>     # apply raw_all promotion")
 }
 
 // ─── main dispatcher ─────────────────────────────────────────────
@@ -687,7 +536,7 @@ fn _subargs() -> array {
 }
 
 fn _cmd_selftest() -> int {
-    // Pure-fn assertions — no git / no raw_all / no state mutation.
+    // Pure-fn assertions — no git / no state mutation.
     println("[hx selftest]")
     let q = _shell_quote("a'b")
     if q != "'a'\\''b'" { eprintln("hx: selftest FAIL (shell_quote)"); return 1 }
@@ -712,7 +561,6 @@ fn main() -> int {
     if sub == "unlock"      { return _cmd_unlock(args) }
     if sub == "lock"        { return _cmd_lock(args) }
     if sub == "status"      { return _cmd_status() }
-    if sub == "verify"      { return _cmd_verify() }
     if sub == "init"        { return _cmd_init(args) }
     if sub == "harden"      { return _cmd_harden(args) }
     if sub == "downgrade"   { return _cmd_downgrade(args) }
