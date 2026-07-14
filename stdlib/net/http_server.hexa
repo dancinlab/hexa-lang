@@ -162,7 +162,7 @@ pub fn server_handle_conn(s, conn_fd, dispatch_fn) {
                 socket_write(conn_fd, build_response(resp))
             } else {
                 let response = dispatch_fn(route["handler_name"], request)
-                if response["status"] == nil {
+                if type_of(response["status"]) == "void" {
                     let resp = json_error(500, "handler returned invalid response")
                     socket_write(conn_fd, build_response(resp))
                 } else {

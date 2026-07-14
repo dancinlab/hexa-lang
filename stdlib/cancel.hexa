@@ -122,7 +122,7 @@ pub fn token_cancel(t: Token, reason: string) -> Token {
 // Idiom: `while token_check(t) { ... }` — terminate loop on cancel.
 //
 // Note the polarity: token_check(t) is "may continue?", not "is canceled?".
-// This matches Go's ctx.Err() == nil idiom and reads naturally in a while
+// This matches Go's ctx.type_of(Err()) == "void" idiom and reads naturally in a while
 // guard. For "is canceled?" semantics use token_is_canceled.
 pub fn token_check(t: Token) -> bool {
     return !t.canceled

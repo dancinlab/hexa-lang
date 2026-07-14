@@ -668,6 +668,13 @@
         "value": "self-hosted 러너 호스트가 **디스크 포화로 마비**되면 sshd 까지 죽어 원격 수리가 불가능해지고, 그런데도 GitHub Actions 는 그 러너를 한동안 online 으로 캐시해 job 을 계속 배정한다 → 그 job 들이 전부 RED 를 양산한다. 2026-07-15 실측(summer-b650m-k): df / = **1GiB free** → ccache-setup 의 디스크 가드(#4931)가 'runner out of disk (1GiB free) — refusing the ccache restore' 로 fail-fast(가드는 정확히 제 일을 했다 — ENOSPC 중간사망으로 인한 phantom RED 를 막았다). 그러나 러너가 계속 job 을 잡아 main 의 nobaseline-gate 가 RED 였고, 나는 그것을 하마터면 **내 게이트(own-link behavioral smoke)의 결함으로 오진**할 뻔했다. 네트워크 진단으로 확정: ping 0% loss(호스트 살아있음) · tailscale active · **SSH 포트 22 무응답**(sshd 마비) · GitHub API 는 status=online 으로 캐시(실제로는 offline). aiden 은 같은 시각 254G free 로 건강 → 내 임시 트리(/tmp/bs 등 1.4G)는 원인이 아니었다. ★조치: 원격 셸이 죽었으므로 소프트웨어로 고칠 수 없다. 유일한 레버는 **GitHub 러너 등록을 제거**하는 것(gh api -X DELETE repos/<o>/<r>/actions/runners/<id>) — hexa-build 라벨을 aiden 과 공유하므로 제거하면 job 이 aiden 으로만 간다. 되돌릴 수 있다(호스트 복구 후 재등록). ⚠️호스트 자체의 복구는 물리적 접근이 필요하다(콘솔/전원).",
         "threshold": "재발조건: CI 가 self-hosted 러너에서 RED 인데 그 실패가 코드/게이트 결함처럼 보일 때. **판정 순서(코드를 의심하기 전에)**: ①실패 로그에서 'out of disk' / ENOSPC / 'refusing the ccache restore' 를 찾아라 — 있으면 인프라다(infra-wall-noneval: 평가 verdict 에서 격리). ② 로 호스트 도달성 확인 — '도달 불가' 면 인프라 확정. ③GitHub API 의 status=online 을 믿지 마라(캐시된다) — ping +  로 sshd 생존을 직접 확인하라. ping 은 되는데 22 가 죽었으면 디스크/OOM 마비다. 해결: ①즉시 그 러너의 GitHub 등록을 제거해 RED 양산을 멈춰라(job 이 건강한 러너로 간다). ②실패한 run 을 재실행해 **진짜 결과**를 얻어라. ③호스트 복구는 물리 접근(원격 셸이 죽었으므로) — 사용자에게 명시적으로 알려라. ★예방 후보: pick-runner 가 ONLINE 뿐 아니라 **디스크 여유**를 프로브해 floor 미만이면 github-hosted 로 fallback (현재는 ONLINE 만 본다 — 좀비 워커 사례 action-yml-2 와 같은 클래스: GitHub 이 건강하다고 보는데 실제론 못 쓰는 러너).",
         "source": ".github/actions/pick-runner/action.yml"
+      },
+      {
+        "id": "net-1",
+        "state": "pos-conv",
+        "value": "hexa-lang 의 stdlib 이 자기 컴파일러가 거부하는 문법을 쓰고 있었다 — stdlib/net·cancel 이 'nil' 을 값으로 사용(x == nil / return nil)했는데 컴파일러 v0.574.1 은 \"'nil' is not a value in hexa\" 로 파스 거부. stdlib 303개 파일이 이미 None/void 로 옮겨간 뒤 14개가 뒤처져 남은 것. 결과: stdlib/net 을 import 하는 모든 하류 프로그램이 빌드 불가(phanes 웹서비스가 여기서 막혀 사이트를 재생성할 수 없었다). CI 가 stdlib 모듈을 실제로 import·빌드하지 않아 아무도 못 잡았다.",
+        "threshold": "언어에서 문법/키워드를 제거·변경하면 stdlib 전수 grep 으로 잔존 사용처를 같은 변경에서 함께 마이그레이션할 것(부분 마이그레이션 금지). 그리고 stdlib 모듈은 '존재'가 아니라 '현행 컴파일러로 빌드됨' 이 합격선 — 각 stdlib 모듈을 import 해 빌드하는 스모크를 CI 에 두어, 컴파일러와 stdlib 이 어긋나는 순간 RED 가 뜨게 할 것.",
+        "source": "stdlib/net"
       }
     ]
   },

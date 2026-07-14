@@ -112,8 +112,8 @@ pub fn parse_query(qs) {
 
 pub fn content_length_of(request) {
     let headers = request["headers"]
-    if headers == nil { return 0 }
+    if type_of(headers) == "void" { return 0 }
     let v = headers["content-length"]
-    if v == nil { return 0 }
+    if type_of(v) == "void" { return 0 }
     return to_int(v)
 }
