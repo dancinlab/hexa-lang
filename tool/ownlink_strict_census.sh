@@ -64,10 +64,22 @@ for src in "${CORPUS[@]}"; do
     out="$TMP/$(basename "${src%.hexa}").bin"
     log="$TMP/$(basename "${src%.hexa}").log"
     # Every env var that could route around the default ladder is cleared: measure the SHIPPED path.
-    if env -u HEXA_PREBUILT_RUNTIME -u HEXA_APRIME_CC \
-           HEXA_OWNLINK_STRICT=1 HEXA_RUN_NATIVE_TRACE=1 \
-           "$HEXA_BIN" build "$src" -o "$out" >"$log" 2>&1; then
+    rm -f "$out"
+    env -u HEXA_PREBUILT_RUNTIME -u HEXA_APRIME_CC \
+        HEXA_OWNLINK_STRICT=1 HEXA_RUN_NATIVE_TRACE=1 \
+        "$HEXA_BIN" build "$src" -o "$out" >"$log" 2>&1
+    rc=$?
+    # rc alone is a PROXY, and the proxy lied. This census exists to stop trusting proxies, so it
+    # demands the ARTIFACT: a build only counts as own-linked if a binary actually came out.
+    # Measured 2026-07-14: the first run of this census scored tool/compile.hexa and
+    # tool/ai_native_profile.hexa as "own-link ✅" — both had in fact FAILED to compile (HX2001
+    # undefined name, no binary produced). The tally was wrong in the direction that flatters us.
+    if [ "$rc" -eq 0 ] && [ -x "$out" ]; then
         printf '  own-link  %s\n' "$src"; ok=$((ok + 1))
+    elif [ "$rc" -eq 0 ]; then
+        printf '  NO-BINARY %s (rc=0 but nothing was emitted — the build lied)\n' "$src"
+        grep -oE 'HX[0-9]{4}[^ ]*' "$log" | sort -u | head -3 | sed 's/^/              /'
+        other=$((other + 1))
     elif grep -q 'HEXA_OWNLINK_STRICT=1' "$log"; then
         printf '  FALLBACK  %s\n' "$src"
         sed -n 's/^.*FATAL (HEXA_OWNLINK_STRICT=1): own-link failed and the fallback is disabled — //p' "$log" \
@@ -75,7 +87,9 @@ for src in "${CORPUS[@]}"; do
         fell_back=$((fell_back + 1)); FB+=("$src")
     else
         # Not an own-link fallback — the program failed for its own reasons (missing dep, bad source).
-        printf '  skip      %s (build error unrelated to own-link)\n' "$src"; other=$((other + 1))
+        printf '  skip      %s (build error unrelated to own-link)\n' "$src"
+        grep -oE 'HX[0-9]{4}[^ ]*|FATAL[^:]*' "$log" | sort -u | head -3 | sed 's/^/              /'
+        other=$((other + 1))
     fi
 done
 
