@@ -3611,16 +3611,36 @@ fn cmd_build(src, out, c_only, target, shared) {
         }
         return ""
     }
-    // ── axis-③ PR-2: own-link default-flip DEFAULT-ON (HEXA_OWNLINK_DEFAULT!=0, opt-out with =0) ──
-    // The linux-x86_64 host `hexa build` now links via own-emit + own-LINK (hexa_ld) BY DEFAULT —
-    // clang-0 AND binutils-0 (no system `ld`) — mirroring the proven tier-C cross leg below
-    // (--backend=native --emit=exec --linker=hexa) but HOST-native (uname==Linuxx86_64,
-    // len(target)==0). ANY emit/own-link failure STILL falls through to tier-B (aprime --emit=obj
-    // + system ld) below, C-transpile delegate intact — the release-integrity safety net survives
-    // the flip. Evidence: byteeq 3-target + ownlink-determinism + ownlink-corpus-parity (own-link
-    // ≡ ld across the corpus, #4881) + shipping/install smoke — all GREEN. Opt-out: HEXA_OWNLINK_
-    // DEFAULT=0 reverts to tier-B ld. Roadmap: state/hexa-own/axis3-ownlink-default-flip-roadmap.md.
-    if env_var("HEXA_OWNLINK_DEFAULT") != "0" && exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxx86_64" && shared != "1" && c_only != "1" && len(target) == 0 && len(__actual_src) > 0 {
+    // ── axis-③ PR-2: own-link default-flip — DEMOTED BACK TO OPT-IN (HEXA_OWNLINK_DEFAULT=1) ──
+    // The linux-x86_64 host `hexa build` links via own-emit + own-LINK (hexa_ld) — clang-0 AND
+    // binutils-0 (no system `ld`) — mirroring the tier-C cross leg below (--backend=native
+    // --emit=exec --linker=hexa) but HOST-native (uname==Linuxx86_64, len(target)==0).
+    //
+    // ⚠️ DEFAULT-ON WAS RETRACTED (was: `!= "0"`, opt-out). MEASURED: the own-link path emits a
+    // binary that SIGSEGVs at STARTUP on linux-x86_64. `hexa build tool/stdlib_selftest_aggregate
+    // .hexa` prints "OK: built" with rc=0, then the binary dies before its first line of output —
+    // 1 execve, 0 children, 0 bytes on stdout. Fault (strace/gdb, aiden+summer):
+    //     mmap(NULL, 4194304, PROT_READ|WRITE, MAP_PRIVATE|ANON, -1, 0)   <- intended
+    //     mmap(NULL, 0, 0x400000, MAP_SHARED_VALIDATE, 34, 0) = -1 EBADF  <- actually issued
+    // i.e. every argument from #2 on is shifted one register late (a pair-ABI/C-ABI skew), the
+    // -1/NULL result is used unchecked, and the zero-fill store loop `mov %r8,(%rax,%rsi,8)` writes
+    // through rax=NULL → SIGSEGV si_addr=NULL.
+    //
+    // The tier-B safety net CANNOT catch this: own-link *succeeds* (rc=0), so the "any failure
+    // falls through to ld" fallback never fires — it is a SILENT-CORRUPTION path, not a loud one.
+    // That is why the corpus-parity/byteeq evidence behind the flip (#4881/#4902) still read GREEN:
+    // those gates compare emitted bytes and exit codes of the LINKER, not the RUNTIME behaviour of
+    // the linked binary. Behavioural gate, same tree/commit/binary, only this env var differs:
+    //     own-link default : rc=139, SIGSEGV, 0 lines of output
+    //     HEXA_OWNLINK_DEFAULT=0 : rc=1, aggregate RUNS — found=94, pass=86, writes its jsonl
+    // Reproduces at 6a1888023 AND at its parent 686fcd13b, on both aiden and summer, in cold
+    // clones — so it is NOT from #4947 (which was reverted on this suspicion; see #4951).
+    //
+    // Per the axis-③ guardrail (release integrity > self-host progress; every flip opt-in-first →
+    // byteeq GREEN + SHIPPING SMOKE → default-ON) the promotion is withdrawn until the ABI skew is
+    // fixed; the path stays available as HEXA_OWNLINK_DEFAULT=1 so the axis-③ work continues behind
+    // the flag. Root cause + reproducer: state/hexa-own/axis3-ownlink-default-startup-sigsegv.md.
+    if env_var("HEXA_OWNLINK_DEFAULT") == "1" && exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxx86_64" && shared != "1" && c_only != "1" && len(target) == 0 && len(__actual_src) > 0 {
         let _olcc = resolve_native_cc()
         let _olrt = resolve_prebuilt_runtime()
         if len(_olcc) > 0 && len(_olrt) > 0 {
@@ -4718,7 +4738,16 @@ fn cmd_run_user_direct(file, extra_args) {
     // axis-① rung-1b (L2): darwin arm64 native `hexa run` leg — opt-in HEXA_NATIVE_DARWIN=1 (default-OFF·byte-neutral).
     let _run_native_dar = _run_native_host == "Darwin arm64" && env_var("HEXA_NATIVE_DARWIN") == "1"
     let _run_native_on = (_run_native_host == "Linux x86_64" || _run_native_arm || _run_native_dar) && env("HEXA_RUN_CTRANSPILE") != "1"
-    // ── axis-③ own-link cold path (DEFAULT-ON, opt-out HEXA_OWNLINK_DEFAULT=0) ──
+    // ── axis-③ own-link cold path — DEMOTED BACK TO OPT-IN (HEXA_OWNLINK_DEFAULT=1) ──
+    // ⚠️ The DEFAULT-ON promotion (#4902) is WITHDRAWN in lockstep with the cmd_build site above:
+    // the own-link path emits a binary that SIGSEGVs at STARTUP (shifted-arg mmap → EBADF → store
+    // through NULL). It is the reason `./hexa run tool/stdlib_selftest_aggregate.hexa` — the
+    // stdlib-selftest gate — dies with rc=139 and ZERO output. See the full root-cause block at
+    // the cmd_build site and state/hexa-own/axis3-ownlink-default-startup-sigsegv.md.
+    // NOTE the "loud-fail-safe" reasoning below does NOT hold for this defect: own-link RETURNS
+    // rc=0 and leaves an executable tmpbin, so the emit=obj+ld fallback is never reached. The
+    // binary is only observed to be broken when it RUNS — which no linker-level gate checks.
+    //
     // FULLY CLANG-FREE + binutils-FREE: the native compiler does BOTH the
     // compile (own object emit) AND the link in ONE invocation —
     //   aprime_cc _drv.hexa --backend=native --emit=exec --linker=hexa
@@ -4740,7 +4769,7 @@ fn cmd_run_user_direct(file, extra_args) {
     // HEXA_PREBUILT_RUNTIME is exported = resolve_prebuilt_runtime() so the
     // inner compiler's runtime.a discovery resolves the archive the own linker
     // links (same seam as the emit=obj stage's _nrt / the build path).
-    if !file_exists(tmpbin) && _run_native_on && _run_native_host == "Linux x86_64" && env_var("HEXA_OWNLINK_DEFAULT") != "0" {
+    if !file_exists(tmpbin) && _run_native_on && _run_native_host == "Linux x86_64" && env_var("HEXA_OWNLINK_DEFAULT") == "1" {
         let _hlcc = resolve_native_cc()
         let _hlrt = resolve_prebuilt_runtime()
         if len(_hlcc) > 0 && len(_hlrt) > 0 {
