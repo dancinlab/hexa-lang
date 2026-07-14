@@ -2412,6 +2412,36 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
                 // (runtime_defs == []) skip it → byte-identical output. Mutates NOTHING
                 // in runtime.a visibility → shipping C-transpile (system ld) byteeq is
                 // byte-identical; own-link is the opt-in `--linker=hexa` leg.
+                // ⚠️ STB_LOCAL BODIES ARE NOT ALIASABLE — a local symbol's ABI is PRIVATE.
+                // A `static` fn is internal-linkage, so the C compiler may legally REWRITE its
+                // calling convention (IPA constant-arg elimination / arg promotion): it proves
+                // every in-object call site passes a constant and drops that parameter. The
+                // declared C prototype then describes NOTHING about the emitted body, and
+                // aliasing a foreign object's bare-name UND onto it silently corrupts the ABI.
+                //
+                // MEASURED (this is not theoretical — it shipped as a startup SIGSEGV, #4952):
+                // `hxlcl_mmap` is `static` in runtime.o and ALL of its in-object callers pass
+                // addr=NULL / off=0, so clang emitted a 4-ARG body — f(len,prot,flags,fd), with
+                // addr/off hardcoded:
+                //     hxlcl_mmap: mov %rdi,%r9 ; mov %edx,%r10d ; movslq %ecx,%r8
+                //                 mov %esi,%edx ; mov $0x9,%eax ; xor %edi,%edi   <- addr=NULL
+                //                 mov %r9,%rsi  ; xor %r9d,%r9d                   <- off=0
+                // Meanwhile hxlcl_shim.o carries `U mmap` — the real SIX-arg libc mmap, called
+                // by hxheap_alloc as mmap(addr,len,prot,flags,fd,off). Aliasing that UND onto the
+                // 4-arg body shifts every argument one register late:
+                //     intended: mmap(NULL, 0x400000, 3, 0x22, -1, 0)
+                //     issued:   mmap(NULL, 0, 0x400000, 3, 34, 0) = -1 EBADF
+                // and the unchecked -1/NULL then faults in the zero-fill store loop
+                // (`mov %r8,(%rax,%rsi,8)` with rax=NULL). `ld` never had the bug: it binds `mmap`
+                // to mmap@plt (glibc) because a STB_LOCAL def CANNOT satisfy another object's UND.
+                //
+                // So: alias ONLY to a STB_GLOBAL `hxlcl_<X>` body. An exported symbol must honour
+                // its declared C ABI (the compiler cannot know its callers), which is exactly the
+                // property this alias depends on. Census of the shipping runtime.a: 63 hxlcl_
+                // bodies are GLOBAL (aliases preserved → bug3 stays fixed); the LOCAL-only names
+                // actually referenced as bare UNDs are {mmap, exit, fclose, fdopen, fwrite,
+                // getpid, gmtime_r} — those now route to libc exactly as `ld` routes them (the
+                // binary already carries PT_INTERP, so this costs no staticness that existed).
                 if !ddef && len(dnm) > 0 && len(runtime_defs) > 0 {
                     let own_nm = "hxlcl_" + dnm
                     let ohb = _ldx_hash(own_nm)
@@ -2420,6 +2450,7 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
                     let mut oix = -1
                     let mut oj = 0
                     while oj < len(obn) { if obn[oj] == own_nm { oix = obi[oj]; break } oj = oj + 1 }
+                    if oix >= 0 && def_bind[oix] != ELF_STB_GLOBAL { oix = -1 }
                     if oix >= 0 {
                         def_names.push(dnm)
                         def_seg.push(def_seg[oix])
