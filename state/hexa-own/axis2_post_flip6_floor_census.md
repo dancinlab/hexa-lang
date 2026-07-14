@@ -1,3 +1,31 @@
+> ## ⛔ FALSIFIED — 이 문서의 HEADLINE VERDICT 는 거짓 종점이다 (2026-07-14)
+>
+> 이 문서는 **"②-libc-floor = SANCTIONED-FLOOR TERMINAL REACHED · 0 reducible libc symbols"** 를
+> 선언한다. **틀렸다.** 근인은 이 문서 자신의 method 줄에 적혀 있다:
+>
+> > `Method = source/emitter-gate + git-witness reconcile`
+>
+> 즉 **`nm` 을 한 번도 돌리지 않았다.** 소스 grep 대조로 "reducible 0" 을 선언한 것이고,
+> 이것은 정확히 proxy-게이트다 — 아카이브를 안 읽고 아카이브에 대한 종점을 선언했다.
+>
+> **실측 반증 (#4944 · aiden · linux-x86_64 · `HEXA_RT_MULTIOBJ=1` = release 기본 배치):**
+>
+> | lane | control | SYSLEAF=1 | delta |
+> |---|---|---|---|
+> | `stage_resolve_runtime_a` | 232 UND | **229** | **−3** |
+> | `release_build` (like-for-like) | 238 UND | **235** | **−3** |
+>
+> 드롭된 집합 = 정확히 `{mmap, munmap, waitpid}` · 부수피해 0.
+>
+> 근인: MULTIOBJ ship 배치에서 `hxlcl_shim.o` 가 **바로 옆 `runtime.o` 에 있는 네이티브 바디를 두고**
+> 자기 `hxheap_alloc`/`hxheap_free` 안에서 **raw libc `mmap`/`munmap` 을 부른다**. 단일-TU 배치에서는
+> 이 UND 가 안 보이므로, 단일-TU 만 본 census 는 구조적으로 이걸 놓친다.
+>
+> ⇒ **"0 reducible" 은 측정된 사실이 아니라 측정하지 않은 결과다.**
+> 이 문서의 나머지 내용(패밀리별 stale 판정)은 참고로 남기되, **HEADLINE VERDICT 와 "sanctioned-floor
+> terminal" 선언은 무효**다. 아카이브에 대한 종점 선언은 **반드시 `nm` 을 ship 배치(MULTIOBJ)로 돌린 뒤에만**
+> 하라.
+
 # axis-② post-FLIP-6 nm-UND libc floor — census + ranked verdict (2026-07-09, origin/main 7ba14a403)
 
 Lane ② (no runtime.c), round ②-floor. Trigger: FLIP-6 (#4747) dropped malloc/free/calloc/__libc_calloc/__libc_free
