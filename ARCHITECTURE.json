@@ -677,6 +677,13 @@
         "source": "tool/build_aprime.sh"
       },
       {
+        "id": "cloud-rent-attribution-label",
+        "state": "in_flight",
+        "value": "hexa cloud rent 는 pod 을 provider 라벨(vast --label / runpod --name)에 WHICH agent · WHICH project · WHICH purpose 를 force-stamp 하는 fail-closed 게이트를 통과해야만 생성한다(별도 jsonl 신설 없음 — provider 라벨이 attribution SSOT). _rent_require_attribution(cloud_cli.hexa) 이 offer-search 前에 --agent(env HEXA_CLOUD_AGENT 폴백) + --project(git repo 또는 flag) + --desc/--purpose 를 검사; 하나라도 결측이면 exit 2 로 아무것도 만들지 않는다(CLOUD-RENT-COST-TRAP 의 fail-loud-before-provider-call 정합). 라벨=_agent_project_purpose_label 슬러그(agent-project-purpose·≤60자·예 claude7-hexa-lang-r12-gold-harvest). 기존 silent 폴백(@unattributed·unspecified·hexa-cloud) 은 rent 경로에서 제거. escape hatch 없음(--force/--label 우회 불가·no-escape-hatch). dft_dispatch 자율 fan-out 은 강제 대신 best-effort 정적 스탬프(dft-dispatch-hexa-lang). --agent 는 _rent_flag_arity 에 arity-2 등록(안 하면 unknown-flag refusal 이 먼저 거부).",
+        "threshold": "byteeq 3-target GREEN (cloud_commands.hexa 는 self/ import → byteeq-relevant) + stdlib selftest @ci_gate(rent_attribution_gate_test·cloud_project_purpose_test) GREEN",
+        "source": "stdlib/cloud/cloud_cli.hexa · cloud_commands.hexa · dft_dispatch.hexa · rent_attribution_gate_test.hexa"
+      },
+      {
         "id": "x86-fold-regression-isq2pi-verdict-md-1",
         "state": "in-prog",
         "value": "x86_64 faithful-nobaseline fold RED 근인=컴파일타임 float-리터럴 상수-fold가 naive 파서(832) 사용, 런타임 파스체인은 correct(833). probe2 실증(같은 x86 바이너리): __hx_f64_bits(리터럴)=…832 vs to_float(런타임string)=…833. isq2pi=0.39894228040143267794(GELU-bwd 유일 hard-round 상수)만 발현. x86 codegen은 naive fold값 o.float_val 신뢰, arm codegen은 emit때 to_float(text) 재파스로 우연히 correct. 반증: FMA-contraction·long-double(x87)·EXACT-tier·런타임 네이티브파스 전부. self-host seed-skew. advisory 게이트(required=selfhost-gates-summary·byteeq-3-target과 별개).",
