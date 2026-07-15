@@ -1,0 +1,98 @@
+=== HEXA_UNBOX_HIR_CALLTYPE BROAD no-regression bench (APRIME native) — 2026-07-12T09:54:13Z — aiden-B650M-K ===
+  BR=origin/main  (flip lever measured OFF vs ON; HEXA_UNBOX_NATIVE held default-ON both arms)
+--- waiting for load<6 (no-starve) ---
+  load=0.84 OK after 1 probe(s)
+  SRC=/home/aiden/l4_broadbench/src sha=a787604fe
+--- building aprime_cc (origin/main) ---
+  build EXIT=0
+--- locating CPU runtime.a ---
+  runtime.a = /home/aiden/l4_broadbench/src/build/runtime.a
+
+--- G1 control-byteeq + G2 lever (hexa_add/hexa_mul call-count OFF vs ON) ---
+  [k1_sum/CONTROL] off: hexa_add=0 hexa_mul=0 hexa_mod=0
+  [k1_sum/CONTROL] on: hexa_add=0 hexa_mul=0 hexa_mod=0
+  [k1_sum] G1 CONTROL-BYTEEQ=PASS (flip inert here — CONFIRMED)
+  [k2_branch/CONTROL] off: hexa_add=0 hexa_mul=0 hexa_mod=0
+  [k2_branch/CONTROL] on: hexa_add=0 hexa_mul=0 hexa_mod=0
+  [k2_branch] G1 CONTROL-BYTEEQ=PASS (flip inert here — CONFIRMED)
+  [k3_arridx/CONTROL] off: hexa_add=0 hexa_mul=0 hexa_mod=0
+  [k3_arridx/CONTROL] on: hexa_add=0 hexa_mul=0 hexa_mod=0
+  [k3_arridx] G1 CONTROL-BYTEEQ=PASS (flip inert here — CONFIRMED)
+  [k4_arrlen/TARGET] off: hexa_add=0 hexa_mul=1 hexa_mod=0
+  [k4_arrlen/TARGET] on: hexa_add=0 hexa_mul=0 hexa_mod=0
+  [k4_arrlen] asm OFF!=ON (flip LIVE on target — expected)
+  [k5_strlen/TARGET] off: hexa_add=0 hexa_mul=1 hexa_mod=0
+  [k5_strlen/TARGET] on: hexa_add=0 hexa_mul=0 hexa_mod=0
+  [k5_strlen] asm OFF!=ON (flip LIVE on target — expected)
+  [k6_idxof/TARGET] off: hexa_add=1 hexa_mul=0 hexa_mod=0
+  [k6_idxof/TARGET] on: hexa_add=0 hexa_mul=0 hexa_mod=0
+  [k6_idxof] asm OFF!=ON (flip LIVE on target — expected)
+  [k7_byteat/TARGET] off: hexa_add=0 hexa_mul=1 hexa_mod=0
+  [k7_byteat/TARGET] on: hexa_add=0 hexa_mul=0 hexa_mod=0
+  [k7_byteat] asm OFF!=ON (flip LIVE on target — expected)
+  [k8_charcode/TARGET] off: hexa_add=1 hexa_mul=0 hexa_mod=0
+  [k8_charcode/TARGET] on: hexa_add=0 hexa_mul=0 hexa_mod=0
+  [k8_charcode] asm OFF!=ON (flip LIVE on target — expected)
+  [k9_scan/TARGET] off: hexa_add=0 hexa_mul=1 hexa_mod=1
+  [k9_scan/TARGET] on: hexa_add=0 hexa_mul=0 hexa_mod=1
+  [k9_scan] asm OFF!=ON (flip LIVE on target — expected)
+
+--- G3 ratio + G4 parity ---
+  [k1_sum] off: output=840001701 median_cpu_s=0.45
+  [k1_sum] on: output=840001701 median_cpu_s=0.45
+  [k1_sum] G4 PARITY=OK (840001701)
+  [k1_sum] G3 ratio ON/OFF (cpu) = 1.000
+  [k2_branch] off: output=-66666664 median_cpu_s=0.19
+  [k2_branch] on: output=-66666664 median_cpu_s=0.19
+  [k2_branch] G4 PARITY=OK (-66666664)
+  [k2_branch] G3 ratio ON/OFF (cpu) = 1.000
+  [k3_arridx] off: output=19375000087500000 median_cpu_s=0.19
+  [k3_arridx] on: output=19375000087500000 median_cpu_s=0.19
+  [k3_arridx] G4 PARITY=OK (19375000087500000)
+  [k3_arridx] G3 ratio ON/OFF (cpu) = 1.000
+  [k4_arrlen] off: output=39999999600000000 median_cpu_s=0.21
+  [k4_arrlen] on: output=39999999600000000 median_cpu_s=0.15
+  [k4_arrlen] G4 PARITY=OK (39999999600000000)
+  [k4_arrlen] G3 ratio ON/OFF (cpu) = 0.714
+  [k5_strlen] off: output=74999999250000000 median_cpu_s=0.45
+  [k5_strlen] on: output=74999999250000000 median_cpu_s=0.36
+  [k5_strlen] G4 PARITY=OK (74999999250000000)
+  [k5_strlen] G3 ratio ON/OFF (cpu) = 0.800
+  [k6_idxof] off: output=5000000950000000 median_cpu_s=0.69
+  [k6_idxof] on: output=5000000950000000 median_cpu_s=0.71
+  [k6_idxof] G4 PARITY=OK (5000000950000000)
+  [k6_idxof] G3 ratio ON/OFF (cpu) = 1.029
+  [k7_byteat] off: output=334399997520000000 median_cpu_s=0.45
+  [k7_byteat] on: output=334399997520000000 median_cpu_s=0.36
+  [k7_byteat] G4 PARITY=OK (334399997520000000)
+  [k7_byteat] G3 ratio ON/OFF (cpu) = 0.800
+  [k8_charcode] off: output=3200007240000000 median_cpu_s=0.32
+  [k8_charcode] on: output=3200007240000000 median_cpu_s=0.24
+  [k8_charcode] G4 PARITY=OK (3200007240000000)
+  [k8_charcode] G3 ratio ON/OFF (cpu) = 0.750
+  [k9_scan] off: output=603175703 median_cpu_s=0.73
+  [k9_scan] on: output=603175703 median_cpu_s=0.64
+  [k9_scan] G4 PARITY=OK (603175703)
+  [k9_scan] G3 ratio ON/OFF (cpu) = 0.877
+
+--- G5 ship smoke (HEXA_UNBOX_HIR_CALLTYPE=1) ---
+  version: hexa v0.692.0
+  hello rc=0 out=hello
+  exit42 rc=42
+
+=== SUMMARY (kind | add off→on | mul off→on | asm | ratio ON/OFF | parity | G1) ===
+KERNEL       KIND     add          mul          asm    ratio    parity   ctrl-byteeq
+k1_sum       CONTROL  0→0        0→0        EQ     1.000    OK       PASS
+k2_branch    CONTROL  0→0        0→0        EQ     1.000    OK       PASS
+k3_arridx    CONTROL  0→0        0→0        EQ     1.000    OK       PASS
+k4_arrlen    TARGET   0→0        1→0        DIFF   0.714    OK       n/a
+k5_strlen    TARGET   0→0        1→0        DIFF   0.800    OK       n/a
+k6_idxof     TARGET   1→0        0→0        DIFF   1.029    OK       n/a
+k7_byteat    TARGET   0→0        1→0        DIFF   0.800    OK       n/a
+k8_charcode  TARGET   1→0        0→0        DIFF   0.750    OK       n/a
+k9_scan      TARGET   0→0        1→0        DIFF   0.877    OK       n/a
+
+  TARGET geomean ratio ON/OFF = 0.822   worst TARGET ratio = 1.029
+  CONTROL byteeq failures = 0   parity failures = 0
+  ⇒ VERDICT: FLIP-NOT-READY
+=== DONE — artifacts under /home/aiden/l4_broadbench ===
