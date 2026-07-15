@@ -1,0 +1,58 @@
+=== HEXA_UNBOX_HIR_CALLTYPE measure (APRIME native backend) — 2026-07-12T09:10:43Z — aiden-B650M-K ===
+--- waiting for load<6 (no-starve) ---
+  load=0.54 OK after 1 probe(s)
+  (fetch BR warn)
+  SRC=/home/aiden/l4_calltype/src  sha=b35809bc6
+  BASE=/home/aiden/l4_calltype/base sha=58815ebe3
+--- building patched aprime_cc (feat/l4-unbox-hir-calltype) ---
+  patched build EXIT=0
+--- building baseline aprime_cc (origin/main) ---
+  baseline build EXIT=0
+--- locating CPU runtime.a ---
+  runtime.a = /home/aiden/l4_calltype/src/build/runtime.a
+  kernels: k6_callres(xs.len()*i target) + k1_sum(call-less control)
+--- Gate1 OFF byteeq (patched flag-OFF .o == baseline .o) ---
+  [k6] Gate1 OFF-BYTEEQ=PASS (OFF-path inert CONFIRMED)
+  [k1] Gate1 OFF-BYTEEQ=PASS (OFF-path inert CONFIRMED)
+--- Gate2 lever (native asm hexa_* call-count OFF vs ON; k6=target k1=control) ---
+  [k6] off: hexa_add=0
+NA hexa_mul=1 (/home/aiden/l4_calltype/k6_off.s)
+  [k6] on: hexa_add=0
+NA hexa_mul=0
+NA (/home/aiden/l4_calltype/k6_on.s)
+  [k6] asm OFF!=ON (flag LIVE):
+    106,113c106,109
+    <     mov rsi, [rbp - 64] # reload L6 from spill slot
+    <     mov rsi, rsi # hv arg payload
+    <     mov rdi, [rbp - 152] # tag L6 from tag-slot
+    <     mov rcx, r15 # hv arg payload
+    <     mov rdx, 0 # tag L4 = TAG_INT (i64-local, fused)
+    <     call hexa_mul # binop *: tag-dispatch hexa_mul
+    <     mov r10, rdx # binop *: capture result payload
+    <     mov [rbp - 160], rax # store tag L7
+    ---
+    >     mov r10, r10 # binop lhs into dst
+    >     imul r10, r15 # binop *
+    >     mov r11, 0 # materialize tag imm 0
+    >     mov [rbp - 160], r11 # store tag L7
+  [k1] off: hexa_add=0
+NA hexa_mul=0
+NA (/home/aiden/l4_calltype/k1_off.s)
+  [k1] on: hexa_add=0
+NA hexa_mul=0
+NA (/home/aiden/l4_calltype/k1_on.s)
+  [k1] asm OFF==ON byte-identical (control — EXPECTED)
+--- Gate3+4 runtime ratio + parity ---
+  [k6] off: output=39999999600000000 median_cpu_s=0.2
+  [k6] on: output=39999999600000000 median_cpu_s=0.15
+  [k6] Gate4 PARITY=OK (39999999600000000)
+  [k6] Gate3 ratio ON/OFF (cpu) = 0.750
+  [k1] off: output=840001701 median_cpu_s=0.45
+  [k1] on: output=840001701 median_cpu_s=0.45
+  [k1] Gate4 PARITY=OK (840001701)
+  [k1] Gate3 ratio ON/OFF (cpu) = 1.000
+--- Gate5 ship smoke (HEXA_UNBOX_HIR_CALLTYPE=1) ---
+  version: hexa v0.692.0
+  hello rc=0 out=hello
+  exit42 rc=42
+=== DONE — artifacts under /home/aiden/l4_calltype ===
