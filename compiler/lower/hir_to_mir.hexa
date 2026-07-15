@@ -305,7 +305,7 @@ fn _arru_elem_scalar_tid(arr_tid: i64) -> i64 {
     return 0
 }
 
-// ── L4 RUNG-1 — array element-type INFERENCE (HEXA_ARRAY_ELEM_INFER, default-OFF) ──
+// ── L4 RUNG-1 — array element-type INFERENCE (HEXA_ARRAY_ELEM_INFER, default-ON, opt-out =0) ──
 //
 // THE GAP. `_arru_array_type_id_from_text` above recovers a container's element
 // type from the DECLARATION ANNOTATION text only. The idiomatic spelling
@@ -348,16 +348,23 @@ fn _arru_elem_scalar_tid(arr_tid: i64) -> i64 {
 //      is a store it cannot vouch for, so it kills the promotion. The accepted
 //      fixpoint is exactly the annotation the programmer would have written.
 //
-// Default-OFF: `env(...) == "1"` — unset leaves every type_id untouched, so the
-// shipped emit stays byte-identical (release-integrity: opt-in first, flip after
-// byteeq 3-target GREEN).
+// Default-ON: `env(...) != "0"` — the inference runs on every build, promoting an
+// idiomatic empty-array local to its proven element type. It emits exactly what the
+// hand-annotated spelling emits (no new MIR shape · #4950), so the flip is byteeq-safe
+// across targets. Opt out with HEXA_ARRAY_ELEM_INFER=0 (release-integrity: opt-in
+// first — #4950 — then flip on byteeq 3-target + shipping smoke GREEN).
 pub let mut _aei_names: [string] = []
 pub let mut _aei_tid: [i64] = []      // hypothesised container type_id (101..104); 0 = no evidence
 pub let mut _aei_veto: [bool] = []    // proof failed → stays type_id 0
 pub let mut _aei_phase: i64 = 0       // 1 = seed hypothesis · 2 = verify under hypothesis
 
 fn _aei_enabled() -> bool {
-    return env("HEXA_ARRAY_ELEM_INFER") == "1"
+    // Default-ON opt-out (`!= "0"`) — flipped after #4950 measure-justified the lever:
+    // idiomatic array-map boxed calls 5→0, CPU 4.89s→1.35s (3.62×), and INFER_ON emit
+    // is byte-identical to the hand-annotated emit (the inference reaches exactly the
+    // annotation ceiling, no new MIR shape) so 3-target byteeq holds. Opt out with
+    // HEXA_ARRAY_ELEM_INFER=0.
+    return env("HEXA_ARRAY_ELEM_INFER") != "0"
 }
 
 fn _aei_debug() -> bool {
