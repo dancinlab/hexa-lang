@@ -5166,12 +5166,16 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 // USE (field "") at every tracked-local read, and the arg was lowered
                 // ABOVE this line, so the free's own arg-read is logged BEFORE its MOVE
                 // ⇒ the free SITE stays silent while a SECOND free (double-free) fires
-                // on its own arg-read. Reinit (`t = farr_zeros(..)`) needs no KILL
-                // either: the assign arm's detach re-points t to a FRESH group, so the
-                // post-reinit use no longer matches the freed group. That is also the
-                // CORRECT semantics — a pm KILL on the old group would have wrongly
-                // silenced a surviving pre-free ALIAS of the freed slot, which is the
-                // real ABA bug.
+                // on its own arg-read. Reinit (`t = farr_zeros(..)`) re-points t to a
+                // FRESH group, so the post-reinit use no longer matches the freed
+                // group. In STRAIGHT-LINE code that alone suffices; but a producer
+                // (re)birth INSIDE a loop needs an explicit pm KILL on the FRESH group
+                // (added at the birth/detach sites) — otherwise a free's MOVE flows
+                // around the loop back edge onto the same static use sites in "the
+                // next iteration" (the 475-FP faithful_phi class). The KILL goes on
+                // the FRESH group ONLY, never the freed one — a pm KILL on the OLD
+                // group would wrongly silence a surviving pre-free ALIAS of the freed
+                // slot, the real ABA bug.
                 //
                 // `_bck_note_move` is deliberately NOT called: it feeds HX3014's Rule 2,
                 // which is INTRA-BLOCK only (strictly weaker than the pm dataflow) and
@@ -6113,6 +6117,14 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 _bck_track(dst.id, nm, _bk_hg, e.span)
                 _bck_note_def(dst.id, ctx2.cur_block)
                 _bck_note_kill(ctx2.cur_block, _bk_hg)
+                // pm-lane KILL for the fresh handle group — mirrors the NLL-lane
+                // kill above so a producer (re)birth washes any moved-bit the back
+                // edge would otherwise carry into the loop body. Without this the
+                // static one-group-per-`let` model let a free's MOVE flow around
+                // the loop back edge onto every next-iteration read → the 475-FP
+                // faithful_phi cry-wolf class. field "" = the whole-value pair a
+                // free mints. (L5 census verdict fix.)
+                _bck_pm_note_kill(_bk_hg, "", ctx2.cur_block, e.span)
             }
             if _bk_rhs.kind == "ident" && rhs_op.kind == "local" {
                 let _bk_si = _bck_find_local(rhs_op.local_id)
@@ -6588,9 +6600,21 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             }
             if !_bk_joined {
                 if _bck_find_local(dst.id) >= 0 {
-                    _bck_track(dst.id, lhs.text, _bck_new_group(), e.span)
+                    let _bk_dg = _bck_new_group()
+                    _bck_track(dst.id, lhs.text, _bk_dg, e.span)
                     // A2 — `X = <other>` detach reassign re-defines X here.
                     _bck_note_def(dst.id, ctx2.cur_block)
+                    // assign-form producer reinit inside a loop has the identical
+                    // static-one-group FP shape as the let-form birth above
+                    // (`while { t = farr_zeros(..); use(t); farr_free(t) }`) — kill
+                    // the fresh group in both lanes so the back-edge moved-bit is
+                    // washed. (L5 census verdict fix, mirrors the birth site.)
+                    if _bck_handle_lane && _bk_rhs2.kind == "call" && len(_bk_rhs2.children) > 0
+                        && _bk_rhs2.children[0].kind == "ident"
+                        && _bck_is_producer_fn(_bk_rhs2.children[0].text) {
+                        _bck_note_kill(ctx2.cur_block, _bk_dg)
+                        _bck_pm_note_kill(_bk_dg, "", ctx2.cur_block, e.span)
+                    }
                 }
             }
         }

@@ -1,0 +1,24 @@
+// HEXA-OWN L5 R1 — HX3060 NEGATIVE control: per-iteration alloc-use-free is LEGAL.
+//
+// A loop body that allocates a fresh handle, uses it, and frees it at the end of
+// EVERY iteration is correct — no use-after-free. This is the shape of
+// stdlib/consciousness/iit4/faithful_phi.hexa:188-202, which a full anima census
+// measured firing HX3060 475 times (the dominant cry-wolf FP that blocked the
+// default-ON flip). The cause: the loop-body `let row = farr_zeros(..)` is a
+// single STATIC binding, so the free's pm MOVE flowed around the loop back edge
+// onto the same use sites in "the next iteration". The fix records a pm KILL on
+// the fresh handle group at the producer birth, washing that back-edge moved bit.
+//
+// A checker that fires here is unshippable — it flags correct compute code.
+// Expect: HEXA_BORROWCK_HANDLE=1 -> 0 HX3060.
+fn main() {
+    let mut i = 0
+    while i < 3 {
+        let row = farr_zeros(4)          // fresh slot each iteration
+        let _ = farr_set(row, 0, 1.0)
+        let _ = farr_set(row, 1, 2.0)    // more reads/writes — must all stay silent
+        println("row[0] = " + to_string(farr_get(row, 0)))
+        let _ = farr_free(row)           // freed at end of THIS iteration — legal
+        i = i + 1
+    }
+}
