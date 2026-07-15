@@ -675,6 +675,13 @@
         "value": "build_aprime.sh 산출 runtime.a 가 release_build 산출과 다른 형태 → ctor 3개(_hexa_init_stdio=setvbuf+SIGPIPE무시·_hexa_init_mem_cap·_hexa_init_malloc_tuning) 조용히 소실. 근인=HEXA_RT_MULTIOBJ(stage_resolve_runtime_a:2198 기본:-0 로 형태 분기 · release_build:77 export=1 로 runtime_core.o 별도멤버 유지=멤버25·.init_array32B·ctor4개 · build_aprime 은 export 누락→기본0=단일TU=runtime_core.o 미생성=멤버16·8B·ctor1개). 결과: 그 runtime.a 링크 바이너리가 SIGPIPE 기본동작(파이프소비자즉사)+setvbuf없음+mem_cap/malloc미적용. ld/own-link 공통이라 RUN-parity 게이트 무력. own-link env()버그(#4959) 추적중 이 ctor드롭을 '링커회귀'로 오진유발. fix=build_aprime STAGE-0 에 export HEXA_RT_MULTIOBJ=${HEXA_RT_MULTIOBJ:-1}(release_build 미러). 실증(aiden fresh clone): runtime.a 멤버24·runtime_core.o있음·stdio-ctor정의됨+aprime_cc smoke exit42 PASS. PR#4962. 오답처방=stage_reresolve_runtime_a 호출(#4961)=확정no-op(reresolve 는 HEXA_RT_MAP_QUERY_RERESOLVE!=1 self-skip·형태는 MULTIOBJ 결정).",
         "threshold": "재발조건: runtime.a 생성 경로가 release_build 의 env 계약(HEXA_RT_MULTIOBJ=1)을 미러 안할 때. 판정: 같은 커밋에서 두 경로 산출 runtime.a 를 ar t|grep runtime_core.o 비교(한쪽만 있으면 분기). ★격리트리 필수: 같은 트리 순차/동시빌드는 build/runtime.a 서로 덮어씀(ar rcs in-place·삭제코드 없음)→'runtime_core.o 있다/없다' 뒤집혀보임(2026-07-15 3회 오염). 규칙: 형태 before/after 는 fresh clone 2개(각 빌드전용)·ctor 존재는 nm 실물아카이브(소스 아님). ★구조취약점 잔존: ctor 생존이 'runtime.o 가 우연히 runtime_core.o 심볼 UND'에 매달림→향후 own-obj 플립이 마지막 UND 걷어가면 출하(MULTIOBJ=1)도 runtime_core.o dead member 화→ctor 소리없이 드롭(내구정답=ctor 를 항상링크 runtime.o TU 로 이동).",
         "source": "tool/build_aprime.sh"
+      },
+      {
+        "id": "cloud-rent-attribution-label",
+        "state": "in_flight",
+        "value": "hexa cloud rent 는 pod 을 provider 라벨(vast --label / runpod --name)에 WHICH agent · WHICH project · WHICH purpose 를 force-stamp 하는 fail-closed 게이트를 통과해야만 생성한다(별도 jsonl 신설 없음 — provider 라벨이 attribution SSOT). _rent_require_attribution(cloud_cli.hexa) 이 offer-search 前에 --agent(env HEXA_CLOUD_AGENT 폴백) + --project(git repo 또는 flag) + --desc/--purpose 를 검사; 하나라도 결측이면 exit 2 로 아무것도 만들지 않는다(CLOUD-RENT-COST-TRAP 의 fail-loud-before-provider-call 정합). 라벨=_agent_project_purpose_label 슬러그(agent-project-purpose·≤60자·예 claude7-hexa-lang-r12-gold-harvest). 기존 silent 폴백(@unattributed·unspecified·hexa-cloud) 은 rent 경로에서 제거. escape hatch 없음(--force/--label 우회 불가·no-escape-hatch). dft_dispatch 자율 fan-out 은 강제 대신 best-effort 정적 스탬프(dft-dispatch-hexa-lang). --agent 는 _rent_flag_arity 에 arity-2 등록(안 하면 unknown-flag refusal 이 먼저 거부).",
+        "threshold": "byteeq 3-target GREEN (cloud_commands.hexa 는 self/ import → byteeq-relevant) + stdlib selftest @ci_gate(rent_attribution_gate_test·cloud_project_purpose_test) GREEN",
+        "source": "stdlib/cloud/cloud_cli.hexa · cloud_commands.hexa · dft_dispatch.hexa · rent_attribution_gate_test.hexa"
       }
     ]
   },

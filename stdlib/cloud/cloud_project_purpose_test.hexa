@@ -108,6 +108,24 @@ fn _project_purpose_label(project: str, purpose: str) -> str {
     return "hexa-cloud"
 }
 
+// mirror of cloud_cli.hexa:_agent_project_purpose_label (keep byte-identical) —
+// the fail-closed rent gate's force-stamped agent-project-purpose slug (no
+// "hexa-cloud" fallback; the guard guarantees non-empty segments).
+fn _agent_project_purpose_label(agent: str, project: str, purpose: str) -> str {
+    let a = _slugify(agent)
+    let p = _slugify(project)
+    let q = _slugify(purpose)
+    let mut out = a + "-" + p + "-" + q
+    if len(out) > 60 {
+        out = out.substring(0, 60)
+        let m = len(out)
+        if m > 0 && out.substring(m - 1, m) == "-" {
+            out = out.substring(0, m - 1)
+        }
+    }
+    return out
+}
+
 // ── assertion helpers ───────────────────────────────────────────────────
 
 fn _eq(name: str, got: str, want: str) {
@@ -180,6 +198,28 @@ fn main() {
     _eq("label purpose-only", _project_purpose_label("", "ph grid"), "ph-grid")
     _eq("label project-only", _project_purpose_label("@demiurge", ""), "demiurge")
     _eq("label both blank", _project_purpose_label("", ""), "hexa-cloud")
+
+    // ── F-CPP-AGENT-LABEL — the fail-closed rent gate's 3-axis composite ─
+    _eq("agent-label composite",
+        _agent_project_purpose_label("claude7", "@hexa-lang", "r12 gold harvest"),
+        "claude7-hexa-lang-r12-gold-harvest")
+    _eq("agent-label slugs each segment",
+        _agent_project_purpose_label("@Claude7", "@Demiurge", "PH Grid"),
+        "claude7-demiurge-ph-grid")
+    // >60 chars → truncate purpose tail + trim a trailing '-'. The 55-char
+    // prefix "claude7-hexa-lang-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" plus
+    // "-bbbb" would exceed 60; assert the result is <=60 and no trailing '-'.
+    let long_lbl = _agent_project_purpose_label("claude7", "hexa-lang",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbb")
+    if len(long_lbl) > 60 {
+        println("  FAIL: agent-label >60 not capped got '" + long_lbl + "'")
+        exit(1)
+    }
+    if len(long_lbl) > 0 && long_lbl.substring(len(long_lbl) - 1, len(long_lbl)) == "-" {
+        println("  FAIL: agent-label capped with trailing '-' got '" + long_lbl + "'")
+        exit(1)
+    }
+    println("  ok: agent-label >60 capped no-trailing-dash (len=" + str(len(long_lbl)) + ")")
 
     // ── F-CPP-AGE ────────────────────────────────────────────────────
     _eq("age absent ts", _cloud_age_str(""), "-")
