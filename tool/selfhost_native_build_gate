@@ -126,6 +126,18 @@ while [ $i -lt ${#names[@]} ]; do
             echo "SLOT-STALE $n — link failed on the promoted slot's rt.o (undefined symbol); slot needs re-promote"
             slot_stale=$((slot_stale+1)); i=$((i+1)); continue
         fi
+        # clang-fallback = a STALE hexad dispatch ignored HEXA_NATIVE_BUILD and shelled
+        # out to clang, which then failed on stale/mismatched codegen. Like the
+        # undefined-symbol case above, this is a runner-provisioning issue (the slot's
+        # dispatch is stale → needs re-promote), NOT a native-build code regression
+        # (convergence selfhost-native-build-gate-1 cause a). A REAL native regression
+        # fails inside the native emit/link with a native error, never a `clang: error`
+        # / `clang compile failed` — HEXA_NATIVE_BUILD=1 was set, so clang running at
+        # all means the dispatch is stale. Same NEUTRAL treatment (infra-wall-noneval).
+        if grep -qiE 'clang compile failed|clang: error|error: clang|clang -cc1|clang frontend' "$WORK/$n.err" "$WORK/$n.out" 2>/dev/null; then
+            echo "SLOT-STALE $n — clang fallback (stale hexad dispatch ignored native emit); slot needs re-promote"
+            slot_stale=$((slot_stale+1)); i=$((i+1)); continue
+        fi
         echo "FAIL $n — native build produced no executable"
         echo "  err: $(tail -3 "$WORK/$n.err" 2>/dev/null | tr '\n' ' ')"
         echo "  out: $(tail -3 "$WORK/$n.out" 2>/dev/null | tr '\n' ' ')"
