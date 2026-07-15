@@ -3316,6 +3316,24 @@ fn _bck_pm_note_kill(grp: i64, field: string, blk: i64, sp: Span) {
     _bck_pm_ev_spans.push(sp)
 }
 
+// NAME-SCOPED KILL — identical to _bck_pm_note_kill but stamps the re-initialized
+// LHS name. In _bck_pm_check this KILL clears the moved-bit ONLY for USE events of
+// `name` (place-granular re-init, rustc MaybeInitializedPlaces "assign GENs the
+// assigned place"), never for a surviving alias of the same group. Used at the
+// rolling-handle re-point `cur = <untracked ident>` to wash the loop back edge for
+// cur's own reads while a stale alias of the freed slot still fires. (L5 census
+// residual FP fix — the run_k8 rolling-handle class.)
+fn _bck_pm_note_kill_named(grp: i64, field: string, name: string, blk: i64, sp: Span) {
+    _bck_pm_ev_kind.push(0)
+    _bck_pm_ev_grps.push(grp)
+    _bck_pm_ev_fields.push(field)
+    _bck_pm_ev_names.push(name)
+    _bck_pm_ev_callees.push("")
+    _bck_pm_ev_blocks.push(blk)
+    _bck_pm_ev_lines.push(sp.line)
+    _bck_pm_ev_spans.push(sp)
+}
+
 // HX3042 emit (use-of-partially-moved-value, Rust E0382) — HX3042-only
 // same-site dedup + STRICT escalation, cloned from `_bcki_emit_uninit_use`.
 // `form` = "moved" (a field re-read of the moved place) / "partially moved"
@@ -3444,6 +3462,31 @@ fn _bck_pm_check() {
         if bid >= 0 { id2ix[bid] = bi }
         bi = bi + 1
     }
+    // PER-VIEW dataflow (rustc MaybeInitializedPlaces place-granularity). A
+    // name-scoped KILL (rolling-handle re-init `X = <untracked ident>`) clears the
+    // moved bit ONLY for USEs of X, never for a surviving ALIAS of the same group.
+    // Encode that by running the existing fixpoint once per VIEW: view "" is
+    // name-blind (owns every unnamed USE + every name-blind kill); each distinct
+    // named-kill name gets its own view (owns that name's USEs; its named kill is a
+    // non-event in "" so an alias still fires the real ABA/UAF). In ~every fn
+    // views == [""] and the analysis is bit-identical to the single-pass version.
+    let mut views: [string] = [""]
+    let mut vi0 = 0
+    while vi0 < nev {
+        if _bck_pm_ev_kind[vi0] == 0 && len(_bck_pm_ev_names[vi0]) > 0 {
+            let vn = _bck_pm_ev_names[vi0]
+            let mut vfound = false
+            let mut vj = 0
+            while vj < len(views) {
+                if views[vj] == vn { vfound = true break }
+                vj = vj + 1
+            }
+            if !vfound { views.push(vn) }
+        }
+        vi0 = vi0 + 1
+    }
+    let mut vw = 0
+    while vw < len(views) {
     // lastev[b][t] ∈ {0=none, 1=MOVE, 2=KILL} — the LAST MOVE/KILL for pair t in
     // block b (program order; a later event in the same block wins).
     let mut lastev: [i64] = []
@@ -3466,7 +3509,11 @@ fn _bck_pm_check() {
                 while t < nt {
                     if pt_grp[t] == _bck_pm_ev_grps[i] && pt_field[t] == _bck_pm_ev_fields[i] {
                         if ek == 2 { lastev[ebx * nt + t] = 1 }
-                        if ek == 0 { lastev[ebx * nt + t] = 2 }
+                        // a name-blind KILL ("") clears in every view; a named KILL
+                        // clears only in its own view (non-event elsewhere).
+                        if ek == 0 && (len(_bck_pm_ev_names[i]) == 0 || _bck_pm_ev_names[i] == views[vw]) {
+                            lastev[ebx * nt + t] = 2
+                        }
                     }
                     t = t + 1
                 }
@@ -3525,9 +3572,17 @@ fn _bck_pm_check() {
             let ug = _bck_pm_ev_grps[u]
             let uf = _bck_pm_ev_fields[u]
             let uname = _bck_pm_ev_names[u]
+            // each USE is judged in exactly ONE view: its own name if that name has
+            // a named kill (appears in views[1..]), else the blind view "".
+            let mut uvw = ""
+            let mut uvk = 1
+            while uvk < len(views) {
+                if views[uvk] == uname { uvw = uname break }
+                uvk = uvk + 1
+            }
             let mut uix = 0 - 1
             if ub >= 0 && ub <= max_id { uix = id2ix[ub] }
-            if uix >= 0 {
+            if uix >= 0 && views[vw] == uvw {
                 let mut t = 0
                 let mut fired = false
                 while t < nt && !fired {
@@ -3541,7 +3596,10 @@ fn _bck_pm_check() {
                                 && _bck_pm_ev_grps[pe] == pt_grp[t]
                                 && _bck_pm_ev_fields[pe] == pt_field[t] {
                                 if _bck_pm_ev_kind[pe] == 2 { state = 1 }
-                                if _bck_pm_ev_kind[pe] == 0 { state = 0 }
+                                if _bck_pm_ev_kind[pe] == 0
+                                    && (len(_bck_pm_ev_names[pe]) == 0 || _bck_pm_ev_names[pe] == views[vw]) {
+                                    state = 0
+                                }
                             }
                             pe = pe + 1
                         }
@@ -3614,6 +3672,8 @@ fn _bck_pm_check() {
             }
         }
         u = u + 1
+    }
+    vw = vw + 1
     }
 }
 
@@ -6599,21 +6659,37 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 }
             }
             if !_bk_joined {
-                if _bck_find_local(dst.id) >= 0 {
+                let _bk_old_ti = _bck_find_local(dst.id)
+                if _bk_old_ti >= 0 {
+                    // capture the group X is LEAVING BEFORE _bck_track pushes the
+                    // re-point entry (newest-entry-wins) — the named kill below
+                    // lands on this old group, name-scoped to X.
+                    let _bk_old_g = _bck_groups[_bk_old_ti]
                     let _bk_dg = _bck_new_group()
                     _bck_track(dst.id, lhs.text, _bk_dg, e.span)
                     // A2 — `X = <other>` detach reassign re-defines X here.
                     _bck_note_def(dst.id, ctx2.cur_block)
-                    // assign-form producer reinit inside a loop has the identical
-                    // static-one-group FP shape as the let-form birth above
-                    // (`while { t = farr_zeros(..); use(t); farr_free(t) }`) — kill
-                    // the fresh group in both lanes so the back-edge moved-bit is
-                    // washed. (L5 census verdict fix, mirrors the birth site.)
+                    // assign-form PRODUCER reinit `X = farr_zeros(..)` inside a loop:
+                    // kill the fresh group (mirrors the let-form birth) AND name-kill
+                    // the old group X leaves — the loop-top uses are bound to the old
+                    // group, so the fresh-group kill alone can't wash that back edge.
                     if _bck_handle_lane && _bk_rhs2.kind == "call" && len(_bk_rhs2.children) > 0
                         && _bk_rhs2.children[0].kind == "ident"
                         && _bck_is_producer_fn(_bk_rhs2.children[0].text) {
                         _bck_note_kill(ctx2.cur_block, _bk_dg)
                         _bck_pm_note_kill(_bk_dg, "", ctx2.cur_block, e.span)
+                        _bck_pm_note_kill_named(_bk_old_g, "", lhs.text, ctx2.cur_block, e.span)
+                    }
+                    // ROLLING-HANDLE re-point `X = <untracked ident>` (the run_k8
+                    // census residual): a TRACKED rhs ident always takes the JOIN
+                    // branch above, so reaching here with an ident RHS proves the
+                    // rhs aliases no tracked group (fresh/unknown). Name-scoped KILL
+                    // on the group X leaves re-inits X's view — its own back-edge
+                    // reads go silent while a surviving ALIAS of the freed slot (a
+                    // different name in the group) still fires the real ABA/UAF.
+                    if _bck_handle_lane && _bk_rhs2.kind == "ident" {
+                        _bck_note_kill(ctx2.cur_block, _bk_dg)
+                        _bck_pm_note_kill_named(_bk_old_g, "", lhs.text, ctx2.cur_block, e.span)
                     }
                 }
             }
