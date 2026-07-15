@@ -117,6 +117,20 @@ else
     export CC="${CC:-clang}"
     export LIBS="${LIBS:--lm}"
     export CFLAGS_COMMON="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
+    # Package runtime.a the same way the shipping build does. tool/release_build:77
+    # exports HEXA_RT_MULTIOBJ=1, which makes stage_resolve_runtime_a keep
+    # runtime_core.o as a SEPARATE archive member (:2198). build_aprime.sh omitted
+    # this, so it fell to the stage default (0 = single-TU) and produced a DIFFERENT
+    # runtime.a — one that drops runtime_core.o and, with it, the priority ctors it
+    # carries: _hexa_init_stdio (setvbuf + SIGPIPE ignore), _hexa_init_mem_cap,
+    # _hexa_init_malloc_tuning. MEASURED on aiden with isolated fresh clones:
+    # build_aprime -> 16 members, no runtime_core.o, .init_array 8 B (1 ctor);
+    # release_build -> 25 members, runtime_core.o present, .init_array 32 B (4 ctors).
+    # A binary linked against the build_aprime archive therefore ran with SIGPIPE at
+    # its default action (pipe-consumer death), and the divergence already cost a
+    # misdiagnosis (the dropped ctors read as an own-link regression). Match the ship
+    # form. Still caller-overridable, exactly like release_build.
+    export HEXA_RT_MULTIOBJ="${HEXA_RT_MULTIOBJ:-1}"
     # 0a: restore frozen bootstrap seeds (self/runtime.c + #include fragments
     #     + self/native/hexa_cc.c) into the working tree (uncommitted).
     bash tool/restore_frozen_seeds || { echo "build_aprime: STAGE-0 restore_frozen_seeds failed" >&2; exit 1; }

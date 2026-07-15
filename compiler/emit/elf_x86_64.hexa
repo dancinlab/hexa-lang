@@ -1867,14 +1867,62 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
         let _resid = _census_resid_und(objs_in)
         if len(_resid) > 0 { crt_handoff = true }
     }
+    // ── OWN-START ON THE DYN PATH (reference-match: this is exactly what ld does) ──
+    // crt_handoff was adopted because the linker's SYNTHETIC 23-byte _start stub has
+    // no atexit/teardown and its bare exit_group crashed rc139 at exit on a dynamic
+    // link. Pulling crt1 fixed the crash — but it also handed `_start` to glibc, and
+    // that is NOT what ld does with these same objects.
+    //
+    // Under FLIP-7 (-DHEXA_ZEROC_OWN_START, default-ON) runtime.a DEFINES a real
+    // `_start` (T _start -> _hx_start_c), and the shipped ld link uses it: MEASURED on
+    // the ld leg — entry = own _start, `__libc_start_main` UND = 0, `_hx_start_c`
+    // present. `_hx_start_c` is the init AUTHORITY: it stores hxlcl_environ from the
+    // process stack, walks __init_array_start/end, and exits through hxlcl_exit (which
+    // drains the own atexit LIFO) — i.e. it supplies precisely the teardown the
+    // synthetic stub lacked.
+    //
+    // own-link handing `_start` to crt1 is therefore a pure divergence from ld, and it
+    // is what broke env(): `_hx_start_c` never runs, so hxlcl_environ stays NULL and
+    // hxlcl_getenv (which walks only hxlcl_environ — no libc fallback, by design: the
+    // libc-`environ` read was compiled out under own-start to keep runtime.o nm-clean)
+    // returns NULL for every key. env() silently answered "" on the shipped own-link
+    // path. So: when the objects already provide `_start`, do NOT pull crt1 — let the
+    // entry resolve to runtime.a's `_start`, exactly as ld does. Only fall back to
+    // crt1 when nothing supplies one (a non-FLIP-7 runtime).
     let mut objs: [ElfX86Obj] = []
     if crt_handoff {
-        let _crt1 = _ld_read_crt1()
-        if len(_crt1.symbols) == 0 {
-            eprintln("hexa_ld(elf,ownstart): CRT1-HANDOFF needs crt1.o but none was found — set HEXA_LD_SYSROOT=<dir containing crt1.o> or install /usr/lib/x86_64-linux-gnu/crt1.o")
-            return 3
+        let mut _has_own_start = false
+        let mut _hsi = 0
+        while _hsi < len(objs_in) {
+            let _hso = objs_in[_hsi]
+            let mut _hsj = 0
+            while _hsj < len(_hso.symbols) {
+                let _hsy = _hso.symbols[_hsj]
+                if _hsy.section != 0 && _hsy.bind == ELF_STB_GLOBAL {
+                    let mut _hsn = ""
+                    let mut _hsk = 0
+                    while true {
+                        let _hsb = _hso.strtab[_hsy.name_offset + _hsk] & 0xff
+                        if _hsb == 0 { break }
+                        _hsn = _hsn + from_char_code(_hsb)
+                        _hsk = _hsk + 1
+                    }
+                    if _hsn == "_start" { _has_own_start = true }
+                }
+                if _has_own_start { break }
+                _hsj = _hsj + 1
+            }
+            if _has_own_start { break }
+            _hsi = _hsi + 1
         }
-        objs.push(_crt1)
+        if !_has_own_start {
+            let _crt1 = _ld_read_crt1()
+            if len(_crt1.symbols) == 0 {
+                eprintln("hexa_ld(elf,ownstart): CRT1-HANDOFF needs crt1.o but none was found — set HEXA_LD_SYSROOT=<dir containing crt1.o> or install /usr/lib/x86_64-linux-gnu/crt1.o")
+                return 3
+            }
+            objs.push(_crt1)
+        }
     }
     let mut _oii = 0
     while _oii < len(objs_in) { objs.push(objs_in[_oii]); _oii = _oii + 1 }
@@ -2129,23 +2177,37 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
     // a named follow-up rung). Entries are patched to FINAL ctor vaddrs by the
     // kind-1 site_seg==6 resolve arm below. Zero-ctor links: no pad, empty region,
     // start==end at the same offset as today — bit-identical.
-    // Materialize the .init_array region ONLY on the STATIC own-start path
-    // (init_stub). On the dyn (crt_handoff) path keep the region EMPTY →
-    // __init_array_start == __init_array_end → the runtime's _hx_run_init_array
-    // walk stays a no-op → byte-identical to pre-branch. (MEASURED: materializing
-    // real bounds on the dyn path made a runtime walk run the OWN_START ctors
-    // out-of-context → rc 0→2; the dyn ctors are glibc/crt1's job, not ours.)
-    if init_stub && init_total > 0 { while (len(data_bytes) & 7) != 0 { data_bytes.push(0) } }
+    // Materialize the .init_array region on BOTH paths. There are TWO consumers of
+    // the ctor table and they find it by DIFFERENT means:
+    //   · glibc `_dl_init`      — finds it via the DT_INIT_ARRAY / DT_INIT_ARRAYSZ
+    //                             dynamic tags (emitted below, dyn path only).
+    //   · runtime `_hx_run_init_array` — finds it via the __init_array_start/end
+    //                             bounds syms, and is called ONLY from `_hx_start_c`.
+    // "One init authority per path" is preserved by feeding exactly one of them:
+    // dyn (crt_handoff) → glibc runs the table via the DT tags, and the bounds syms
+    // stay COLLAPSED (start == end) so the runtime walk is a no-op even though the
+    // region is real; static (init_stub) → no dynamic section exists at all, and the
+    // bounds syms carry the real extent for the `_hx_start_c` walk. Zero-ctor links:
+    // no pad, empty region, start==end at the same offset as today — bit-identical.
+    //
+    // The prior "MEASURED rc 0→2 on the dyn path" note is FALSIFIED as a ctor-context
+    // problem: `_hx_run_init_array(argc, argv, envp)` passes the same 3 args glibc
+    // does, so a ctor is never called out-of-context. That regression was the
+    // .init_array TEXT-CLOBBER (convergence elf-x86-64-hexa-2): materializing the
+    // region without also un-gating the site_seg==6 reloc arm left those relocs
+    // falling through to the TEXT arm, writing ctor vaddrs over the head of the
+    // owning object's .text. The region + the reloc arm must move together — they do
+    // here, so the ctor table is real AND correctly relocated on both paths.
+    if init_total > 0 { while (len(data_bytes) & 7) != 0 { data_bytes.push(0) } }
     let init_region_off = len(data_bytes)
-    if init_stub {
-        let mut _iri = 0
-        while _iri < len(objs) {
-            let _iro = objs[_iri]
-            let mut _irb = 0
-            while _irb < len(_iro.init_array) { data_bytes.push(_iro.init_array[_irb] & 0xff); _irb = _irb + 1 }
-            _iri = _iri + 1
-        }
+    let mut _iri = 0
+    while _iri < len(objs) {
+        let _iro = objs[_iri]
+        let mut _irb = 0
+        while _irb < len(_iro.init_array) { data_bytes.push(_iro.init_array[_irb] & 0xff); _irb = _irb + 1 }
+        _iri = _iri + 1
     }
+    let init_region_sz = len(data_bytes) - init_region_off
     def_names.push("__init_array_start")
     def_seg.push(1)
     def_off.push(init_region_off)
@@ -2153,13 +2215,20 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
     def_obj.push(-1)
     def_names.push("__init_array_end")
     def_seg.push(1)
-    def_off.push(len(data_bytes))            // init_region_off + init_total
+    // REAL bounds on both paths — reference-match: ld emits DT_INIT_ARRAY *and* real
+    // __init_array_start/end over the SAME region (MEASURED on the ld leg: DT_INIT_ARRAY
+    // = 0x4a6d80/32 B, bounds = 0x4a6d80..0x4a6da0). Both consumers therefore run the
+    // table: ld.so's _dl_init before the entry, then `_hx_run_init_array` from
+    // `_hx_start_c`. That double-run is BY DESIGN and is why it works — every ctor is
+    // idempotent, and the ordering is load-bearing: ld.so's pass runs while
+    // hxlcl_environ is still NULL (the getenv-reading ctors no-op), and the second pass
+    // runs after `_hx_start_c` has stored environ, so it is the one that does the work.
+    def_off.push(len(data_bytes))
     def_bind.push(ELF_STB_GLOBAL)
     def_obj.push(-1)
     // deferred section-6 (E7) sym registration — absolute blob offsets now known.
-    // Only on the static path (region materialized); dyn keeps the syms unbound
-    // (region empty), matching pre-branch.
-    if init_stub && init_total > 0 {
+    // Bound on BOTH paths now that the region is materialized on both.
+    if init_total > 0 {
         let mut _isi = 0
         while _isi < len(objs) {
             let _iso = objs[_isi]
@@ -2451,6 +2520,40 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
                     let mut oj = 0
                     while oj < len(obn) { if obn[oj] == own_nm { oix = obi[oj]; break } oj = oj + 1 }
                     if oix >= 0 && def_bind[oix] != ELF_STB_GLOBAL { oix = -1 }
+                    // ── (A0-b) NEVER alias onto a body that is itself a THUNK to the bare
+                    // libc <X>. #4954 established the alias target must be STB_GLOBAL (a LOCAL
+                    // body's ABI is private). GLOBAL is necessary but NOT SUFFICIENT:
+                    // `hxlcl_shim.o` carries GLOBAL hxlcl_<X> wrappers that are literally
+                    // `endbr64 ; jmp <X>` — a tail-call to the REAL libc <X>, which they keep as
+                    // an UND. Aliasing <X> onto such a body makes the body's own tail-call reloc
+                    // resolve BACK TO ITSELF → `jmp $-9` → an infinite self-loop; and it buys no
+                    // staticness anyway (the body is not libc-free — the UND is still there).
+                    //
+                    // MEASURED (#4952-residual, after the E9-GATE text-clobber fix): the
+                    // aggregate's popen() child called dup2(4,1) → `hxlcl_dup2` at 0x445d81 =
+                    // `endbr64 ; jmp 0x445d81` → the child spun at 33% CPU forever, never reached
+                    // execve, and the parent blocked in its ppoll/wait4 drain loop → build says
+                    // "OK", binary HANGS (rc=124), 0 bytes out. `ld` binds dup2 to libc and the
+                    // same program runs.
+                    //
+                    // TEST: the defining object still lists <X> as an UNDEFINED symbol (it calls
+                    // out to libc for it), so the "own, libc-free body" premise the alias rests on
+                    // is FALSE for this name → refuse the alias and let the census dyn-route <X>
+                    // to libc.so.6, exactly as `ld` does. A real own body (raw-syscall / native
+                    // leaf) carries no such UND and is unaffected.
+                    if oix >= 0 {
+                        let _aobj = def_obj[oix]
+                        if _aobj >= 0 {
+                            let mut _asi = 0
+                            while _asi < len(objs[_aobj].symbols) {
+                                if objs[_aobj].symbols[_asi].section == 0 && osn[_aobj][_asi] == dnm {
+                                    oix = -1
+                                    break
+                                }
+                                _asi = _asi + 1
+                            }
+                        }
+                    }
                     if oix >= 0 {
                         def_names.push(dnm)
                         def_seg.push(def_seg[oix])
@@ -2836,17 +2939,33 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
         _ew_u64(data_bytes, 7);  _ew_u64(data_bytes, rela_vaddr)     // DT_RELA
         _ew_u64(data_bytes, 8);  _ew_u64(data_bytes, rela_size)      // DT_RELASZ
         _ew_u64(data_bytes, 9);  _ew_u64(data_bytes, 24)             // DT_RELAENT
-        // CRT1-HANDOFF: NO DT_INIT_ARRAY. This runtime.a is OWN_START-compiled
-        // (-DHEXA_ZEROC_OWN_START) — its static ctors assume the _hx_start_c
-        // contract (environ-first store, own atexit-LIFO via hxlcl_exit, raw
-        // exit_group, premain TAG_FN binding). Under glibc _dl_init an
-        // extraction-accident SUBSET of them runs out of context = partial init
-        // (MEASURED: mir3 own-link rc 0→2). One init authority per path: dyn =
-        // crt1/glibc (runs zero exe ctors — status-quo, byte-behavior identical to
-        // pre-branch), static = the _hx_start_c 16-byte stub walk (E5/E6, the
-        // RFC061 resid-UND→0 endgame where these ctors are needed AND contract-
-        // valid). The dyn env() gap (hxlcl_getenv walks only hxlcl_environ, no
-        // libc fallback) is a pre-existing runtime issue, not a linker DT tag.
+        // CRT1-HANDOFF: DT_INIT_ARRAY — glibc `_dl_init` runs the exe ctor table,
+        // exactly as a GNU-ld-linked binary does. This is the dyn path's SINGLE init
+        // authority: the __init_array_start/end bounds syms are collapsed above
+        // (start == end) so runtime.a's own `_hx_run_init_array` walk stays a no-op
+        // and no ctor can run twice.
+        //
+        // Supersedes the "dyn = zero exe ctors" rule (convergence elf-x86-64-hexa-2).
+        // That rule was adopted to suppress a MEASURED `rc 0→2`, attributed to ctors
+        // running "out of context" under _dl_init. Both halves of that attribution are
+        // now falsified: (a) every ctor in runtime.a is glibc-compatible — the
+        // priority-101 `hxlcl_capture_environ(argc, argv, envp)` takes the very
+        // (argc, argv, envp) signature _dl_init passes to .init_array entries, and the
+        // rest (_hexa_init_stdio/path_augment/mem_cap/malloc_tuning, strlit thunks,
+        // fn-shims) are plain idempotent initializers bound to no _hx_start_c
+        // contract; and (b) `_hx_run_init_array` has exactly one caller — `_hx_start_c`
+        // — which does not run on this path, so real bounds could not have re-run
+        // anything. The rc 0→2 was the .init_array TEXT-CLOBBER: the region was
+        // materialized while the site_seg==6 reloc arm stayed gated on init_stub, so
+        // ctor vaddrs were written over the head of the owning object's .text.
+        //
+        // Suppressing the ctors did hide that crash, at the cost of skipping ALL exe
+        // init on the shipped path: no environ capture (hxlcl_getenv walks only
+        // hxlcl_environ → env() returned "" for every key — silent wrong answers), no
+        // setvbuf, no SIGPIPE-ignore. That is a RUN-parity violation vs ld, and it is
+        // what the ownlink behavioral gate caught.
+        _ew_u64(data_bytes, 25); _ew_u64(data_bytes, data_vaddr_base + init_region_off)  // DT_INIT_ARRAY
+        _ew_u64(data_bytes, 27); _ew_u64(data_bytes, init_region_sz)                     // DT_INIT_ARRAYSZ
         _ew_u64(data_bytes, 0);  _ew_u64(data_bytes, 0)              // DT_NULL
         dyn_sz = len(data_bytes) - dyn_off
 
@@ -2909,6 +3028,36 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
             let r = obj.relocs[ri]
             let sym = obj.symbols[r.sym_idx]
             let name = osn[ro][r.sym_idx]
+            // ── E9-GATE: a .init_array-resident reloc on the DYN path is INERT ──────
+            // convergence elf-x86-64-hexa-2 requires the dyn (crt_handoff) .init_array to stay
+            // inert: the region is NOT materialized (no DT_INIT_ARRAY, no real
+            // __init_array_start/end bounds) because runtime.a's ctors are _hx_start_c-
+            // contract-bound. The E9 reloc write must be gated on init_stub TOO — and gated
+            // means **SKIPPED**, not "not-a-data-site".
+            //
+            // ⚠️ MEASURED (#4952-residual · the startup SIGSEGV that SURVIVED #4954): the gate
+            // lived only inside the data-arm predicate `r.site_seg == 6`. With
+            // init_stub=0 that predicate is FALSE, so the reloc did not stop — it fell into the
+            // *else* = the TEXT patch arm and wrote an 8-byte absolute ctor vaddr at
+            // `obj_text_base + r.offset`, where r.offset is the offset INSIDE .init_array
+            // (0, 8, 16 …). That OVERWRITES THE FIRST 8*N BYTES OF THAT OBJECT'S .text.
+            // On the shipping aggregate: 3 ctor pointers (0x444d89 = _hexa_init_stdio,
+            // 0x444dd9, 0x444e89) stomped the 24-byte prologue of `hexa_drain_env_ms` at
+            // 0x433c37, so `call hexa_drain_env_ms` from the exec-drain path landed inside a
+            // pointer table and executed it as code → `mov %ecx,0x44(%rbp)` with rbp=3 (the
+            // pipe fd) → SIGSEGV si_addr=0x47, 0 bytes of output, rc=139. `ld` links the SAME
+            // object fine (found=94).
+            //
+            // #4954 is what EXPOSED it: aliasing bare libc UNDs onto STB_LOCAL hxlcl_ bodies
+            // used to make the census see everything DEFINED → n_dyn==0 → STATIC path →
+            // init_stub=1 → these relocs took the correct data arm. Once #4954 (correctly)
+            // routed {mmap,exit,fclose,fdopen,fwrite,getpid,gmtime_r} to libc.so.6, n_dyn>0 →
+            // PT_INTERP → crt_handoff → init_stub=0 → the latent text-clobber fired.
+            // Static path: guard is unreachable → byte-identical.
+            // (E9-GATE retired: the region is now materialized on BOTH paths, so a
+            // site_seg==6 reloc has a real target and MUST be applied — the data arm
+            // below patches it. Skipping it here was only ever a stand-in for the
+            // missing region; leaving it in would emit an UNRELOCATED ctor table.)
             // ── H2 fix: symbol-scoped resolution ────────────────────────────
             // Flat first-match let one obj's STB_LOCAL def (a file-local static /
             // `g<id>` module-global / `.LCstrN`) satisfy ANOTHER obj's same-named
@@ -2960,7 +3109,7 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
                     unresolved = unresolved + 1
                 } else {
                     let slot_vaddr = data_vaddr_base + got_blob_off + gslot * 8
-                    if r.site_seg == 3 || r.site_seg == 4 || (r.site_seg == 6 && init_stub) {
+                    if r.site_seg == 3 || r.site_seg == 4 || r.site_seg == 6 {
                         let blob_off = if r.site_seg == 4 { obj_data_base[ro] + r.offset } else if r.site_seg == 6 { init_region_off + obj_init_base[ro] + r.offset } else { obj_rodata_base[ro] + r.offset }
                         let p_vaddr  = data_vaddr_base + blob_off
                         let gdelta   = slot_vaddr + r.addend - p_vaddr
@@ -2999,7 +3148,7 @@ pub fn link_elf_x86_64_ownstart(objs_in: [ElfX86Obj], out_path: string, main_nam
                 }
                 // Site segment (round-3b): 3=rodata / 4=data land in the DATA blob
                 // at the data-seg vaddr; anything else (1=text, or 0) patches .text.
-                if r.site_seg == 3 || r.site_seg == 4 || (r.site_seg == 6 && init_stub) {
+                if r.site_seg == 3 || r.site_seg == 4 || r.site_seg == 6 {
                     let blob_off = if r.site_seg == 4 { obj_data_base[ro] + r.offset } else if r.site_seg == 6 { init_region_off + obj_init_base[ro] + r.offset } else { obj_rodata_base[ro] + r.offset }
                     let p_vaddr  = data_vaddr_base + blob_off
                     if r.kind == 1 {
