@@ -4277,7 +4277,7 @@ build_runtime_a_from_source() {
         # __dso_handle (crtbegin) is absent → hexat/hexa link FATAL (measured aiden
         # release_build @ main a372449a: "hidden symbol __dso_handle isn't defined").
         # GATE-1 missed it because it ran the single-TU (non-MULTIOBJ) archive shape.
-        # ── SYSLEAF r2 (HEXA_RT_NATIVE_SYSLEAF, default OFF · linux/x86_64-only) ──
+        # ── SYSLEAF r2 (HEXA_RT_NATIVE_SYSLEAF, default auto · linux/x86_64 ON · opt-out =0) ──
         # The LAST mmap/munmap/waitpid libc UNDs in the MULTIOBJ ship runtime.a all come from
         # ONE member — hxlcl_shim.o (measured aiden linux-x86_64 @ origin/main: 232 UND total,
         # `nm -A` attributes U mmap / U munmap / U waitpid to hxlcl_shim.o and nothing else).
@@ -4285,14 +4285,18 @@ build_runtime_a_from_source() {
         # flip routes the shim TU's OWN callsites to the same lowering (no new seed .o needed —
         # the bodies are inline in the shim, gated by the macro). Needs NO extra archive member,
         # so unlike the SELFEMIT/MEMLEAF families this is a pure -D on the shim compile.
-        # Default OFF => macro undefined => HXSHIM_MMAP/HXSHIM_MUNMAP expand to libc mmap/munmap
-        # and hxlcl_waitpid keeps its libc delegate => shim.o byte-identical (release-integrity).
-        if [ "${HEXA_RT_NATIVE_SYSLEAF:-0}" = "1" ]; then
+        # Opt-out (=0) or a non-linux/x86_64 host => macro undefined => HXSHIM_MMAP/HXSHIM_MUNMAP
+        # expand to libc mmap/munmap and hxlcl_waitpid keeps its libc delegate => shim.o
+        # byte-identical (release-integrity: the two host-IGNORED targets stay byte-eq).
+        # TRI-STATE HEXA_RT_NATIVE_SYSLEAF (mirrors STRCMP/STRTOLL :-auto at 2736/2834):
+        #   auto (default) / 1 => native raw-syscall on linux/x86_64 (else IGNORED) · 0 => opt-out.
+        _rnsl_mode="${HEXA_RT_NATIVE_SYSLEAF:-auto}"
+        if [ "$_rnsl_mode" != "0" ]; then
             if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_SYSLEAF"
                 echo "[stage_resolve_runtime_a] SYSLEAF r2: hxheap mmap/munmap + hxlcl_waitpid → raw syscall (SYS_mmap=9/munmap=11/wait4=61); shim.o built with -DHEXA_RT_NATIVE_SYSLEAF (mmap/munmap/waitpid libc UND dropped) — ld -r multidef gate validates"
             else
-                echo "[stage_resolve_runtime_a] SYSLEAF r2: HEXA_RT_NATIVE_SYSLEAF=1 IGNORED — the raw-syscall sysleaf path is linux/x86_64-only (host=$(uname -sm)); retaining libc mmap/munmap/waitpid" >&2
+                echo "[stage_resolve_runtime_a] SYSLEAF r2: HEXA_RT_NATIVE_SYSLEAF native (auto/1) IGNORED — the raw-syscall sysleaf path is linux/x86_64-only (host=$(uname -sm)); retaining libc mmap/munmap/waitpid" >&2
             fi
         fi
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S4]: compile build/hxlcl_shim.o…"
