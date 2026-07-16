@@ -892,6 +892,11 @@ pub let mut _bck_warn_allowlist: [string] = ["HX3014", "HX3055"]
 // found). Default OFF ⇒ no registration ⇒ `_bck_pm_check` sees no free-move
 // pair ⇒ zero diagnostics ⇒ emitted .text byte-identical (byteeq-neutral).
 pub let mut _bck_handle_lane = false // L5 R4: opt-OUT default-ON (set in lower_hir; off only if HEXA_BORROWCK_HANDLE=="0")
+// L5 R2 HX3061 handle-LEAK (DUAL of HX3060): produced-never-freed. NEW + uncensused
+// ⇒ opt-IN default-OFF (HEXA_BORROWCK_LEAK=="1"), mirroring how HX3060 shipped opt-in
+// (#4947) before its 1240→0 census flip. Birth/free record sites are shared with the
+// handle lane via `_bck_handle_lane || _bck_leak_lane`.
+pub let mut _bck_leak_lane = false
 // Consumers (frees) — arg 0 is the handle they invalidate.
 pub let mut _bck_consume_fns: [string] = ["farr_free", "farr_int_free", "farr32_free"]
 // Producers — a call to one of these BIRTHS an owning handle.
@@ -3334,6 +3339,33 @@ fn _bck_pm_note_kill_named(grp: i64, field: string, name: string, blk: i64, sp: 
     _bck_pm_ev_spans.push(sp)
 }
 
+// HEXA-OWN L5 R2 — HX3061 handle-LEAK events (DUAL of HX3060 UAF). BIRTH (kind 3) =
+// a producer minted a fresh runtime handle group; ESCAPE (kind 4) = ownership left
+// the fn (returned / overwritten) so the free obligation is discharged. Both ride
+// the SAME pm event log; _bck_pm_check only reads kinds 0/1/2 and derives its
+// tracked pairs from kind-2 MOVEs, so kinds 3/4 are provably inert for the UAF/
+// partial-move lane. Pushed ONLY under `_bck_leak_lane` ⇒ default-OFF byteeq-neutral.
+fn _bck_pm_note_birth(grp: i64, name: string, callee: string, blk: i64, sp: Span) {
+    _bck_pm_ev_kind.push(3)
+    _bck_pm_ev_grps.push(grp)
+    _bck_pm_ev_fields.push("")
+    _bck_pm_ev_names.push(name)
+    _bck_pm_ev_callees.push(callee)
+    _bck_pm_ev_blocks.push(blk)
+    _bck_pm_ev_lines.push(sp.line)
+    _bck_pm_ev_spans.push(sp)
+}
+fn _bck_pm_note_escape(grp: i64, name: string, blk: i64, sp: Span) {
+    _bck_pm_ev_kind.push(4)
+    _bck_pm_ev_grps.push(grp)
+    _bck_pm_ev_fields.push("")
+    _bck_pm_ev_names.push(name)
+    _bck_pm_ev_callees.push("")
+    _bck_pm_ev_blocks.push(blk)
+    _bck_pm_ev_lines.push(sp.line)
+    _bck_pm_ev_spans.push(sp)
+}
+
 // HX3042 emit (use-of-partially-moved-value, Rust E0382) — HX3042-only
 // same-site dedup + STRICT escalation, cloned from `_bcki_emit_uninit_use`.
 // `form` = "moved" (a field re-read of the moved place) / "partially moved"
@@ -3387,6 +3419,32 @@ fn _bck_emit_use_after_free(name: string, callee: string, free_line: i64, sp: Sp
     b = diag_arg(b, "name", name)
     b = diag_arg(b, "callee", callee)
     b = diag_arg(b, "free_line", to_string(free_line))
+    let mut d = diag_emit(b)
+    if _bck_strict {
+        d = diag_with_severity(d, Severity::Error)
+    }
+    _bck_diag_push(d)
+}
+
+// HEXA-OWN L5 R2 — HX3061 handle-LEAK emit (produced-never-freed, the DUAL of
+// HX3060). Shares the same same-site dedup arrays; the diagnostic anchors at the
+// producer BIRTH span. `callee` = the producer that minted the handle. STRICT
+// re-bands to build-refusing, identical to every other rung. Reached only under
+// `_bck_leak_lane` (no birth event is registered otherwise) ⇒ default-OFF ⇒
+// byteeq-neutral.
+fn _bck_emit_handle_leak(name: string, callee: string, born_line: i64, sp: Span) {
+    let mut di = 0
+    while di < len(_bck_pm_e_lines) {
+        if _bck_pm_e_lines[di] == sp.line && _bck_pm_e_cols[di] == sp.col { return }
+        di = di + 1
+    }
+    _bck_pm_e_lines.push(sp.line)
+    _bck_pm_e_cols.push(sp.col)
+    let mut b = diag_new("HX3061")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "callee", callee)
+    b = diag_arg(b, "born_line", to_string(born_line))
     let mut d = diag_emit(b)
     if _bck_strict {
         d = diag_with_severity(d, Severity::Error)
@@ -3674,6 +3732,185 @@ fn _bck_pm_check() {
         u = u + 1
     }
     vw = vw + 1
+    }
+}
+
+// ── HEXA-OWN L5 R2 — HX3061 handle-LEAK forward MAY fixed-point (DUAL of HX3060) ──
+// The maybe-LEAKED dual of _bck_pm_check's maybe-MOVED. A runtime handle group is
+// GEN'd at its producer BIRTH (kind 3) and KILL'd when the obligation discharges:
+// a consume/free MOVE (kind 2, callee ∈ _bck_is_consume_fn) or an ESCAPE (kind 4,
+// returned / reassign-overwritten). Forward OR-join (MAY) over Block.preds, seed
+// IN=0. At every EXIT block (no succs) the obligation bit = IN replayed over the
+// block's own gen/kill events; if still 1 the handle leaks on SOME path (rustc
+// requires Drop on ALL paths ⇒ MAY polarity is sound). Emits at the BIRTH span.
+// tg==0 (no handle birth recorded) ⇒ immediate return, so flag-ON is a no-op on a
+// handle-free corpus. Reached only under `_bck_leak_lane` ⇒ default-OFF ⇒
+// byteeq-neutral. Same convergence guard as _bck_pm_check (cap blocks*4+8, loud
+// bail drops THIS fn's leak results only). Round-2 models consume + return + reassign-
+// overwrite escapes; struct-field/global store + @own-param pass = round-3 + census.
+fn _bck_leak_check() {
+    let nev = len(_bck_pm_ev_kind)
+    if nev == 0 { return }
+    // tracked groups = distinct grps among BIRTH (kind 3) events.
+    let mut tg: [i64] = []
+    let mut i = 0
+    while i < nev {
+        if _bck_pm_ev_kind[i] == 3 {
+            let mut found = false
+            let mut j = 0
+            while j < len(tg) {
+                if tg[j] == _bck_pm_ev_grps[i] { found = true break }
+                j = j + 1
+            }
+            if !found { tg.push(_bck_pm_ev_grps[i]) }
+        }
+        i = i + 1
+    }
+    let nt = len(tg)
+    if nt == 0 { return }   // no handle births → flag-ON is a no-op (byteeq-neutral)
+    let nb = len(_lr_blocks)
+    if nb == 0 { return }
+    // block id → _lr_blocks index map (same construction as _bck_pm_check).
+    let mut max_id = 0
+    let mut bi = 0
+    while bi < nb {
+        if _lr_blocks[bi].id > max_id { max_id = _lr_blocks[bi].id }
+        bi = bi + 1
+    }
+    let mut id2ix: [i64] = []
+    let mut k = 0
+    while k <= max_id {
+        id2ix.push(0 - 1)
+        k = k + 1
+    }
+    bi = 0
+    while bi < nb {
+        let bid = _lr_blocks[bi].id
+        if bid >= 0 { id2ix[bid] = bi }
+        bi = bi + 1
+    }
+    // lastev[b][t] ∈ {0=none, 1=GEN(birth), 2=KILL(consume/escape)} — last in block wins.
+    let mut lastev: [i64] = []
+    let mut in_bits: [i64] = []
+    let mut z = 0
+    while z < nb * nt {
+        lastev.push(0)
+        in_bits.push(0)
+        z = z + 1
+    }
+    i = 0
+    while i < nev {
+        let ek = _bck_pm_ev_kind[i]
+        let mut is_gen = false
+        let mut is_kill = false
+        if ek == 3 { is_gen = true }
+        if ek == 4 { is_kill = true }
+        if ek == 2 && _bck_is_consume_fn(_bck_pm_ev_callees[i]) { is_kill = true }
+        if is_gen || is_kill {
+            let eb = _bck_pm_ev_blocks[i]
+            let mut ebx = 0 - 1
+            if eb >= 0 && eb <= max_id { ebx = id2ix[eb] }
+            if ebx >= 0 {
+                let mut t = 0
+                while t < nt {
+                    if tg[t] == _bck_pm_ev_grps[i] {
+                        if is_gen { lastev[ebx * nt + t] = 1 }
+                        if is_kill { lastev[ebx * nt + t] = 2 }
+                    }
+                    t = t + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    // forward OR-join MAY fixed-point over Block.preds (seed IN = 0).
+    let cap = nb * 4 + 8
+    let mut iter = 0
+    let mut changed = true
+    while changed {
+        if iter >= cap {
+            println("borrowck HX3061 BAIL: handle-leak fixed-point exceeded "
+                    + to_string(cap) + " sweeps (blocks=" + to_string(nb)
+                    + ", tracked=" + to_string(nt)
+                    + ") — leak results dropped for this fn")
+            return
+        }
+        changed = false
+        bi = 0
+        while bi < nb {
+            let preds = _lr_blocks[bi].preds
+            let mut pi = 0
+            while pi < len(preds) {
+                let pid = preds[pi]
+                let mut pix = 0 - 1
+                if pid >= 0 && pid <= max_id { pix = id2ix[pid] }
+                if pix >= 0 {
+                    let mut t = 0
+                    while t < nt {
+                        if in_bits[bi * nt + t] == 0 {
+                            let mut out_p = in_bits[pix * nt + t]
+                            let le = lastev[pix * nt + t]
+                            if le == 1 { out_p = 1 }
+                            if le == 2 { out_p = 0 }
+                            if out_p == 1 {
+                                in_bits[bi * nt + t] = 1
+                                changed = true
+                            }
+                        }
+                        t = t + 1
+                    }
+                }
+                pi = pi + 1
+            }
+            bi = bi + 1
+        }
+        iter = iter + 1
+    }
+    // emit at EXIT blocks (no successors): obligation = IN[exit][t] replayed over the
+    // block's own program-order gen/kill events; ==1 ⇒ leaked on some path.
+    let mut fired: [i64] = []
+    let mut fz = 0
+    while fz < nt {
+        fired.push(0)
+        fz = fz + 1
+    }
+    bi = 0
+    while bi < nb {
+        if len(_lr_blocks[bi].succs) == 0 {
+            let exid = _lr_blocks[bi].id
+            let mut t = 0
+            while t < nt {
+                if fired[t] == 0 {
+                    let mut state = in_bits[bi * nt + t]
+                    let mut pe = 0
+                    while pe < nev {
+                        if _bck_pm_ev_blocks[pe] == exid && _bck_pm_ev_grps[pe] == tg[t] {
+                            let pk = _bck_pm_ev_kind[pe]
+                            if pk == 3 { state = 1 }
+                            if pk == 4 { state = 0 }
+                            if pk == 2 && _bck_is_consume_fn(_bck_pm_ev_callees[pe]) { state = 0 }
+                        }
+                        pe = pe + 1
+                    }
+                    if state == 1 {
+                        // anchor the diagnostic at group t's BIRTH.
+                        let mut bv = 0 - 1
+                        let mut mi = 0
+                        while mi < nev {
+                            if _bck_pm_ev_kind[mi] == 3 && _bck_pm_ev_grps[mi] == tg[t] { bv = mi }
+                            mi = mi + 1
+                        }
+                        if bv >= 0 {
+                            _bck_emit_handle_leak(_bck_pm_ev_names[bv], _bck_pm_ev_callees[bv],
+                                                  _bck_pm_ev_lines[bv], _bck_pm_ev_spans[bv])
+                        }
+                        fired[t] = 1
+                    }
+                }
+                t = t + 1
+            }
+        }
+        bi = bi + 1
     }
 }
 
@@ -5244,7 +5481,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 // `i == 1` = arg 0 (children[0] is the callee); `!_bk_is_method` is
                 // inherited from the enclosing guard (a receiver-first method call
                 // shifts the index). Untracked handle ⇒ no group ⇒ silent.
-                if _bck_handle_lane && _bck_is_consume_fn(callee_text) && i == 1 {
+                if (_bck_handle_lane || _bck_leak_lane) && _bck_is_consume_fn(callee_text) && i == 1 {
                     let _bk_fr_ti = _bck_find_local(r.operand.local_id)
                     if _bk_fr_ti >= 0 {
                         _bck_pm_note_move(_bck_groups[_bk_fr_ti], e.children[i].text,
@@ -5579,6 +5816,15 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             let r = _lower_hexpr(ctx2, e.children[0])
             ctx2 = r.ctx
             args.push(r.operand)
+            // L5 R2 HX3061 — a returned handle transfers ownership to the caller ⇒
+            // the free obligation ESCAPEs this fn (no leak). Leak-lane-only ⇒
+            // default-OFF byteeq-neutral.
+            if _bck_leak_lane && r.operand.kind == "local" {
+                let _bk_le = _bck_find_local(r.operand.local_id)
+                if _bk_le >= 0 {
+                    _bck_pm_note_escape(_bck_groups[_bk_le], "", ctx2.cur_block, e.span)
+                }
+            }
         }
         // HEXA-OWN L5-E1 — return-borrow-escape (HX3019, Rust E0515). Inspect
         // the HIR return VALUE before the defer reroute below (both paths flow
@@ -6170,7 +6416,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             // stays untracked. The alias edge `let u = t` is picked up by the
             // handle-copy branch below for free (it keys on the group, not the
             // type), so an ABA use through an ALIAS of a freed handle fires too.
-            if _bck_handle_lane && _bk_rhs.kind == "call" && len(_bk_rhs.children) > 0
+            if (_bck_handle_lane || _bck_leak_lane) && _bk_rhs.kind == "call" && len(_bk_rhs.children) > 0
                 && _bk_rhs.children[0].kind == "ident"
                 && _bck_is_producer_fn(_bk_rhs.children[0].text) {
                 let _bk_hg = _bck_new_group()
@@ -6185,6 +6431,12 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 // faithful_phi cry-wolf class. field "" = the whole-value pair a
                 // free mints. (L5 census verdict fix.)
                 _bck_pm_note_kill(_bk_hg, "", ctx2.cur_block, e.span)
+                // L5 R2 HX3061 — record the handle BIRTH (producer callee = the fn
+                // that minted it) so _bck_leak_check can flag a group never freed on
+                // some fn-exit path. Leak-lane-only ⇒ default-OFF byteeq-neutral.
+                if _bck_leak_lane {
+                    _bck_pm_note_birth(_bk_hg, nm, _bk_rhs.children[0].text, ctx2.cur_block, e.span)
+                }
             }
             if _bk_rhs.kind == "ident" && rhs_op.kind == "local" {
                 let _bk_si = _bck_find_local(rhs_op.local_id)
@@ -6673,12 +6925,19 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                     // kill the fresh group (mirrors the let-form birth) AND name-kill
                     // the old group X leaves — the loop-top uses are bound to the old
                     // group, so the fresh-group kill alone can't wash that back edge.
-                    if _bck_handle_lane && _bk_rhs2.kind == "call" && len(_bk_rhs2.children) > 0
+                    if (_bck_handle_lane || _bck_leak_lane) && _bk_rhs2.kind == "call" && len(_bk_rhs2.children) > 0
                         && _bk_rhs2.children[0].kind == "ident"
                         && _bck_is_producer_fn(_bk_rhs2.children[0].text) {
                         _bck_note_kill(ctx2.cur_block, _bk_dg)
                         _bck_pm_note_kill(_bk_dg, "", ctx2.cur_block, e.span)
                         _bck_pm_note_kill_named(_bk_old_g, "", lhs.text, ctx2.cur_block, e.span)
+                        // L5 R2 HX3061 — the overwritten old handle ESCAPEs (round-2
+                        // FP-safe: overwrite-without-free leak is a round-3 rung); the
+                        // fresh producer group is a new BIRTH.
+                        if _bck_leak_lane {
+                            _bck_pm_note_escape(_bk_old_g, lhs.text, ctx2.cur_block, e.span)
+                            _bck_pm_note_birth(_bk_dg, lhs.text, _bk_rhs2.children[0].text, ctx2.cur_block, e.span)
+                        }
                     }
                     // ROLLING-HANDLE re-point `X = <untracked ident>` (the run_k8
                     // census residual): a TRACKED rhs ident always takes the JOIN
@@ -6687,9 +6946,14 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                     // on the group X leaves re-inits X's view — its own back-edge
                     // reads go silent while a surviving ALIAS of the freed slot (a
                     // different name in the group) still fires the real ABA/UAF.
-                    if _bck_handle_lane && _bk_rhs2.kind == "ident" {
+                    if (_bck_handle_lane || _bck_leak_lane) && _bk_rhs2.kind == "ident" {
                         _bck_note_kill(ctx2.cur_block, _bk_dg)
                         _bck_pm_note_kill_named(_bk_old_g, "", lhs.text, ctx2.cur_block, e.span)
+                        // L5 R2 HX3061 — X's old handle is overwritten by an untracked
+                        // rhs → ESCAPE (round-2 FP-safe; overwrite-leak = round-3).
+                        if _bck_leak_lane {
+                            _bck_pm_note_escape(_bk_old_g, lhs.text, ctx2.cur_block, e.span)
+                        }
                     }
                 }
             }
@@ -9388,6 +9652,10 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
         // dataflow, beside the uninit pass (same _bck_active gate, same CFG).
         // No-op when no @own field move was recorded (nt==0 → immediate return).
         _bck_pm_check()
+        // L5 R2 — HX3061 handle-LEAK forward MAY dataflow (DUAL of HX3060), same
+        // _bck_active gate + CFG. No-op when no handle BIRTH was recorded (tg==0 →
+        // immediate return), so it is inert unless the leak lane armed it.
+        _bck_leak_check()
         // round8-2 — HX3036 borrowed-value-does-not-live-long-enough forward
         // reachability, beside the two passes above (same _bck_active gate, same
         // CFG). No-op when no dangle event was recorded (nd==0 → immediate return).
@@ -9456,6 +9724,14 @@ pub fn lower_hir(module: HModule) -> MModule {
     if _bck_handle_lane {
         _bck_on = true
         if !_bck_warn_allowed("HX3060") { _bck_warn_allowlist.push("HX3060") }
+    }
+    // L5 R2 HX3061 handle-LEAK — NEW + uncensused ⇒ opt-IN default-OFF (=="1"), NOT
+    // opt-out like the flipped HX3060. Arms _bck_active + admits HX3061 into the warn
+    // allowlist only when set ⇒ default diag stream + emitted .text byte-identical.
+    _bck_leak_lane = env("HEXA_BORROWCK_LEAK") == "1"
+    if _bck_leak_lane {
+        _bck_on = true
+        if !_bck_warn_allowed("HX3061") { _bck_warn_allowlist.push("HX3061") }
     }
     if _bck_census { _bck_census_lines = [] }
     // HEXA-OWN L4/L5 Lane-B B3 — opt-OUT warning-band DEFAULT (FLIPPED default-ON at

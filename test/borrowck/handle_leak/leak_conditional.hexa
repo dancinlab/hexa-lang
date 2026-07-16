@@ -1,0 +1,16 @@
+// HEXA-OWN L5 R2 — HX3061 MAY-fixpoint witness: leak on ONE branch only.
+//
+// `t` is freed inside the `if` branch but NOT on the `else` path, so the handle
+// leaks on the else path. MAY polarity (fire if leaked on ANY path) is sound —
+// rustc requires Drop on ALL paths. This proves the exit-path forward OR-join,
+// not a straight-line-only check.
+//
+// Expect: HEXA_BORROWCK_LEAK=1 → >= 1 HX3061 at the farr_zeros line.
+fn main() {
+    let t = farr_zeros(4)
+    farr_set(t, 0, 1.0)
+    if farr_get(t, 0) > 0.0 {
+        farr_free(t)                // freed only on this branch
+    }
+    println("done")
+}
