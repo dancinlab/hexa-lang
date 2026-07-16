@@ -689,6 +689,13 @@
         "value": "x86_64 faithful-nobaseline fold RED 근인=컴파일타임 float-리터럴 상수-fold가 naive 파서(832) 사용, 런타임 파스체인은 correct(833). probe2 실증(같은 x86 바이너리): __hx_f64_bits(리터럴)=…832 vs to_float(런타임string)=…833. isq2pi=0.39894228040143267794(GELU-bwd 유일 hard-round 상수)만 발현. x86 codegen은 naive fold값 o.float_val 신뢰, arm codegen은 emit때 to_float(text) 재파스로 우연히 correct. 반증: FMA-contraction·long-double(x87)·EXACT-tier·런타임 네이티브파스 전부. self-host seed-skew. advisory 게이트(required=selfhost-gates-summary·byteeq-3-target과 별개).",
         "threshold": "fix=컴파일러 바이너리 컴파일타임 float-fold를 correct 파서로(seed-skew 해소) 또는 x86 codegen emit-재파스",
         "source": "state/hexa-own/x86_fold_regression_isq2pi_verdict.md"
+      },
+      {
+        "id": "frontier-5lane-round1-complete-1",
+        "state": "completed",
+        "value": "5-LANE 프론티어 round-1 완료(2026-07-16) — 5 레인 flip/완료 PR 전부 머지: L1 #4970(axis-③ own-link behavioral smoke gate·선행 default-flip #4882)·L2 #4971(axis-② SYSLEAF native default-ON)·L3 #4972(axis-② array_new 3-target .s carrier)·L4 #4964(static-typing HEXA_ARRAY_ELEM_INFER default-ON·boxed-HexaVal 언박싱 rung-1)·L5 #4975(HX3060 borrowck loop-reinit FP 475→0·프로듀서 birth/detach pm KILL·default-ON flip byteeq-neutral). 각 flip byteeq 3-target GREEN. ★verdict-integrity 교훈: self-hosted CI RED을 보면 infra/회귀 가설 前에 그 체크가 origin/main HEAD에서도 fail인지 먼저 확인. #4975서 cfallback-zero census(x86_64) RED을 aiden 09:30 리부트前 오염 infra로 오진→rerun --failed 했으나 attempt-2(clean aiden)도 재현 FAIL→main HEAD(f0c1a894)도 동일 failure=axis-③ own-link default-flip 트래커의 상속-RED(L5 borrowck와 무관·L5는 byteeq-neutral). 상속-RED는 무시 대상. 머지 판정=byteeq 3-target GREEN + 필수게이트(selfhost-gates-summary) GREEN + 잔여 RED 전부 main-상속.",
+        "threshold": "5/5 레인 flip PR 머지 + 각 byteeq 3-target GREEN. 프론티어는 perpetual — 다음 rung=각 레인 심화(axis-① hexa_cc delegate 삭제 soak·axis-② runtime.c RFC061 ~210fn·axis-③ arm64/darwin own-linker·L4 추가언박싱·L5 B4 GC-free).",
+        "source": "PR #4970/#4971/#4972/#4964/#4975 · frontier ref #2 · cfallback census main-대조 f0c1a894"
       }
     ]
   },
