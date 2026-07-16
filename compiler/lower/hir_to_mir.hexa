@@ -891,7 +891,7 @@ pub let mut _bck_warn_allowlist: [string] = ["HX3014", "HX3055"]
 // DROPPED in `_bck_diag_push`, the exact blindness the census-v2 verdict
 // found). Default OFF ⇒ no registration ⇒ `_bck_pm_check` sees no free-move
 // pair ⇒ zero diagnostics ⇒ emitted .text byte-identical (byteeq-neutral).
-pub let mut _bck_handle_lane = false // HEXA_BORROWCK_HANDLE=1, read once per lower_hir
+pub let mut _bck_handle_lane = false // L5 R4: opt-OUT default-ON (set in lower_hir; off only if HEXA_BORROWCK_HANDLE=="0")
 // Consumers (frees) — arg 0 is the handle they invalidate.
 pub let mut _bck_consume_fns: [string] = ["farr_free", "farr_int_free", "farr32_free"]
 // Producers — a call to one of these BIRTHS an owning handle.
@@ -3316,6 +3316,24 @@ fn _bck_pm_note_kill(grp: i64, field: string, blk: i64, sp: Span) {
     _bck_pm_ev_spans.push(sp)
 }
 
+// NAME-SCOPED KILL — identical to _bck_pm_note_kill but stamps the re-initialized
+// LHS name. In _bck_pm_check this KILL clears the moved-bit ONLY for USE events of
+// `name` (place-granular re-init, rustc MaybeInitializedPlaces "assign GENs the
+// assigned place"), never for a surviving alias of the same group. Used at the
+// rolling-handle re-point `cur = <untracked ident>` to wash the loop back edge for
+// cur's own reads while a stale alias of the freed slot still fires. (L5 census
+// residual FP fix — the run_k8 rolling-handle class.)
+fn _bck_pm_note_kill_named(grp: i64, field: string, name: string, blk: i64, sp: Span) {
+    _bck_pm_ev_kind.push(0)
+    _bck_pm_ev_grps.push(grp)
+    _bck_pm_ev_fields.push(field)
+    _bck_pm_ev_names.push(name)
+    _bck_pm_ev_callees.push("")
+    _bck_pm_ev_blocks.push(blk)
+    _bck_pm_ev_lines.push(sp.line)
+    _bck_pm_ev_spans.push(sp)
+}
+
 // HX3042 emit (use-of-partially-moved-value, Rust E0382) — HX3042-only
 // same-site dedup + STRICT escalation, cloned from `_bcki_emit_uninit_use`.
 // `form` = "moved" (a field re-read of the moved place) / "partially moved"
@@ -3444,6 +3462,31 @@ fn _bck_pm_check() {
         if bid >= 0 { id2ix[bid] = bi }
         bi = bi + 1
     }
+    // PER-VIEW dataflow (rustc MaybeInitializedPlaces place-granularity). A
+    // name-scoped KILL (rolling-handle re-init `X = <untracked ident>`) clears the
+    // moved bit ONLY for USEs of X, never for a surviving ALIAS of the same group.
+    // Encode that by running the existing fixpoint once per VIEW: view "" is
+    // name-blind (owns every unnamed USE + every name-blind kill); each distinct
+    // named-kill name gets its own view (owns that name's USEs; its named kill is a
+    // non-event in "" so an alias still fires the real ABA/UAF). In ~every fn
+    // views == [""] and the analysis is bit-identical to the single-pass version.
+    let mut views: [string] = [""]
+    let mut vi0 = 0
+    while vi0 < nev {
+        if _bck_pm_ev_kind[vi0] == 0 && len(_bck_pm_ev_names[vi0]) > 0 {
+            let vn = _bck_pm_ev_names[vi0]
+            let mut vfound = false
+            let mut vj = 0
+            while vj < len(views) {
+                if views[vj] == vn { vfound = true break }
+                vj = vj + 1
+            }
+            if !vfound { views.push(vn) }
+        }
+        vi0 = vi0 + 1
+    }
+    let mut vw = 0
+    while vw < len(views) {
     // lastev[b][t] ∈ {0=none, 1=MOVE, 2=KILL} — the LAST MOVE/KILL for pair t in
     // block b (program order; a later event in the same block wins).
     let mut lastev: [i64] = []
@@ -3466,7 +3509,11 @@ fn _bck_pm_check() {
                 while t < nt {
                     if pt_grp[t] == _bck_pm_ev_grps[i] && pt_field[t] == _bck_pm_ev_fields[i] {
                         if ek == 2 { lastev[ebx * nt + t] = 1 }
-                        if ek == 0 { lastev[ebx * nt + t] = 2 }
+                        // a name-blind KILL ("") clears in every view; a named KILL
+                        // clears only in its own view (non-event elsewhere).
+                        if ek == 0 && (len(_bck_pm_ev_names[i]) == 0 || _bck_pm_ev_names[i] == views[vw]) {
+                            lastev[ebx * nt + t] = 2
+                        }
                     }
                     t = t + 1
                 }
@@ -3525,9 +3572,17 @@ fn _bck_pm_check() {
             let ug = _bck_pm_ev_grps[u]
             let uf = _bck_pm_ev_fields[u]
             let uname = _bck_pm_ev_names[u]
+            // each USE is judged in exactly ONE view: its own name if that name has
+            // a named kill (appears in views[1..]), else the blind view "".
+            let mut uvw = ""
+            let mut uvk = 1
+            while uvk < len(views) {
+                if views[uvk] == uname { uvw = uname break }
+                uvk = uvk + 1
+            }
             let mut uix = 0 - 1
             if ub >= 0 && ub <= max_id { uix = id2ix[ub] }
-            if uix >= 0 {
+            if uix >= 0 && views[vw] == uvw {
                 let mut t = 0
                 let mut fired = false
                 while t < nt && !fired {
@@ -3541,7 +3596,10 @@ fn _bck_pm_check() {
                                 && _bck_pm_ev_grps[pe] == pt_grp[t]
                                 && _bck_pm_ev_fields[pe] == pt_field[t] {
                                 if _bck_pm_ev_kind[pe] == 2 { state = 1 }
-                                if _bck_pm_ev_kind[pe] == 0 { state = 0 }
+                                if _bck_pm_ev_kind[pe] == 0
+                                    && (len(_bck_pm_ev_names[pe]) == 0 || _bck_pm_ev_names[pe] == views[vw]) {
+                                    state = 0
+                                }
                             }
                             pe = pe + 1
                         }
@@ -3614,6 +3672,8 @@ fn _bck_pm_check() {
             }
         }
         u = u + 1
+    }
+    vw = vw + 1
     }
 }
 
@@ -5166,12 +5226,16 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 // USE (field "") at every tracked-local read, and the arg was lowered
                 // ABOVE this line, so the free's own arg-read is logged BEFORE its MOVE
                 // ⇒ the free SITE stays silent while a SECOND free (double-free) fires
-                // on its own arg-read. Reinit (`t = farr_zeros(..)`) needs no KILL
-                // either: the assign arm's detach re-points t to a FRESH group, so the
-                // post-reinit use no longer matches the freed group. That is also the
-                // CORRECT semantics — a pm KILL on the old group would have wrongly
-                // silenced a surviving pre-free ALIAS of the freed slot, which is the
-                // real ABA bug.
+                // on its own arg-read. Reinit (`t = farr_zeros(..)`) re-points t to a
+                // FRESH group, so the post-reinit use no longer matches the freed
+                // group. In STRAIGHT-LINE code that alone suffices; but a producer
+                // (re)birth INSIDE a loop needs an explicit pm KILL on the FRESH group
+                // (added at the birth/detach sites) — otherwise a free's MOVE flows
+                // around the loop back edge onto the same static use sites in "the
+                // next iteration" (the 475-FP faithful_phi class). The KILL goes on
+                // the FRESH group ONLY, never the freed one — a pm KILL on the OLD
+                // group would wrongly silence a surviving pre-free ALIAS of the freed
+                // slot, the real ABA bug.
                 //
                 // `_bck_note_move` is deliberately NOT called: it feeds HX3014's Rule 2,
                 // which is INTRA-BLOCK only (strictly weaker than the pm dataflow) and
@@ -6113,6 +6177,14 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 _bck_track(dst.id, nm, _bk_hg, e.span)
                 _bck_note_def(dst.id, ctx2.cur_block)
                 _bck_note_kill(ctx2.cur_block, _bk_hg)
+                // pm-lane KILL for the fresh handle group — mirrors the NLL-lane
+                // kill above so a producer (re)birth washes any moved-bit the back
+                // edge would otherwise carry into the loop body. Without this the
+                // static one-group-per-`let` model let a free's MOVE flow around
+                // the loop back edge onto every next-iteration read → the 475-FP
+                // faithful_phi cry-wolf class. field "" = the whole-value pair a
+                // free mints. (L5 census verdict fix.)
+                _bck_pm_note_kill(_bk_hg, "", ctx2.cur_block, e.span)
             }
             if _bk_rhs.kind == "ident" && rhs_op.kind == "local" {
                 let _bk_si = _bck_find_local(rhs_op.local_id)
@@ -6587,10 +6659,38 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 }
             }
             if !_bk_joined {
-                if _bck_find_local(dst.id) >= 0 {
-                    _bck_track(dst.id, lhs.text, _bck_new_group(), e.span)
+                let _bk_old_ti = _bck_find_local(dst.id)
+                if _bk_old_ti >= 0 {
+                    // capture the group X is LEAVING BEFORE _bck_track pushes the
+                    // re-point entry (newest-entry-wins) — the named kill below
+                    // lands on this old group, name-scoped to X.
+                    let _bk_old_g = _bck_groups[_bk_old_ti]
+                    let _bk_dg = _bck_new_group()
+                    _bck_track(dst.id, lhs.text, _bk_dg, e.span)
                     // A2 — `X = <other>` detach reassign re-defines X here.
                     _bck_note_def(dst.id, ctx2.cur_block)
+                    // assign-form PRODUCER reinit `X = farr_zeros(..)` inside a loop:
+                    // kill the fresh group (mirrors the let-form birth) AND name-kill
+                    // the old group X leaves — the loop-top uses are bound to the old
+                    // group, so the fresh-group kill alone can't wash that back edge.
+                    if _bck_handle_lane && _bk_rhs2.kind == "call" && len(_bk_rhs2.children) > 0
+                        && _bk_rhs2.children[0].kind == "ident"
+                        && _bck_is_producer_fn(_bk_rhs2.children[0].text) {
+                        _bck_note_kill(ctx2.cur_block, _bk_dg)
+                        _bck_pm_note_kill(_bk_dg, "", ctx2.cur_block, e.span)
+                        _bck_pm_note_kill_named(_bk_old_g, "", lhs.text, ctx2.cur_block, e.span)
+                    }
+                    // ROLLING-HANDLE re-point `X = <untracked ident>` (the run_k8
+                    // census residual): a TRACKED rhs ident always takes the JOIN
+                    // branch above, so reaching here with an ident RHS proves the
+                    // rhs aliases no tracked group (fresh/unknown). Name-scoped KILL
+                    // on the group X leaves re-inits X's view — its own back-edge
+                    // reads go silent while a surviving ALIAS of the freed slot (a
+                    // different name in the group) still fires the real ABA/UAF.
+                    if _bck_handle_lane && _bk_rhs2.kind == "ident" {
+                        _bck_note_kill(ctx2.cur_block, _bk_dg)
+                        _bck_pm_note_kill_named(_bk_old_g, "", lhs.text, ctx2.cur_block, e.span)
+                    }
                 }
             }
         }
@@ -9343,7 +9443,16 @@ pub fn lower_hir(module: HModule) -> MModule {
     // HERE (flag-gated) rather than at the declaration, so the DEFAULT allowlist
     // is untouched and the default diag stream stays byte-identical. Idempotent
     // (lower_hir may run more than once per process).
-    _bck_handle_lane = env("HEXA_BORROWCK_HANDLE") == "1"
+    // L5 round-4 FLIP — HX3060 handle-lane default-ON (opt-OUT), mirroring the B3
+    // HX3014/HX3055 flip at _bck_warn_default below. Gated on the anima census:
+    // after the loop-reinit + rolling-handle FP fixes the full corpus fires 0
+    // HX3060 (1240 → 0, measured on the from-source aprime_cc borrowck), so the
+    // default-ON lane is a cry-wolf-free memory-safety warning. Read as opt-OUT:
+    // on unless HEXA_BORROWCK_HANDLE=="0" (escape hatch restores the pre-flip
+    // silence). byteeq-neutral — the lane is observe-only (diag → _lr_diag, never
+    // MIR), and FP=0 means zero default diagnostics on clean code ⇒ byte-identical
+    // .text + stderr.
+    _bck_handle_lane = env("HEXA_BORROWCK_HANDLE") != "0"
     if _bck_handle_lane {
         _bck_on = true
         if !_bck_warn_allowed("HX3060") { _bck_warn_allowlist.push("HX3060") }
