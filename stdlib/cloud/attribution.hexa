@@ -1,0 +1,117 @@
+// stdlib/cloud/attribution.hexa — the WHO/WHY gate for the passthrough verbs.
+//
+// THE PROBLEM THIS CLOSES: `cloud rent` stamps every pod it creates with a
+// (project, purpose) pair — that attribution is what the down-guard, the
+// idempotent-rent dedup key and the `cloud list` surface all read. The two
+// PASSTHROUGH verbs had no such stamp: `cloud api` and `cloud provider-cli`
+// let ANY caller reach the provider ANONYMOUSLY. A provider-side change made
+// through them (or a search that moved a quota) traced back to nobody, so the
+// question "which agent did this, and why?" had no answer at all.
+//
+// THE GATE (@L4): both verbs now REFUSE (exit 2) unless the caller states
+//   agent   — WHO is calling  (`--agent TAG`, else the HEXA_AGENT_TAG env var,
+//             the SAME agent-identity channel pod_registry already stamps into
+//             a pod record's `rented_by` — no second identity surface invented)
+//   purpose — WHY they are calling (`--purpose TEXT` / `--desc TEXT`, the same
+//             two spellings `rent` accepts)
+// `project` is NOT gated: unlike agent/purpose it is reliably derivable from
+// the cwd, so it keeps `rent`'s exact resolution (--project → repo → folder).
+//
+// NO CARVE-OUT (commons no-escape-hatch): a read-only GET is gated too. A
+// search that never mutates still spends provider quota and still answers to
+// "who ran this", so there is no free tier here.
+//
+// PURITY: every function below is a pure string/int transform — no exec, no
+// env, no creds — so attribution_test.hexa can falsify the whole classifier
+// without a provider. The env/flag resolution itself lives at the cloud_cli
+// dispatch (which owns _flag_val / _resolve_project / _resolve_purpose) and
+// hands the RESOLVED strings in here.
+
+// _attr_norm — trim + lowercase, the comparison form for placeholder matching.
+// PURE.
+fn _attr_norm(s: str) -> str {
+    return s.trim().to_lower()
+}
+
+// _attr_is_placeholder — is this value a non-answer? PURE. Callers under a
+// mandatory flag reach for a filler token to shut the gate up; a filler is
+// exactly as untraceable as an empty value, so it is refused the same way.
+// CONSERVATIVE — only unambiguous non-answers are listed. A short-but-real tag
+// (`qa`, `r12`) passes.
+fn _attr_is_placeholder(s: str) -> int {
+    let v = _attr_norm(s)
+    if v == "unspecified" || v == "unknown" || v == "n/a" || v == "na"
+        || v == "none" || v == "null" || v == "nil" || v == "tbd"
+        || v == "-" || v == "--" || v == "?" || v == "." {
+        return 1
+    }
+    return 0
+}
+
+// attr_field_ok — is one attribution field stated? PURE. 1 iff non-empty after
+// trim AND not a placeholder.
+fn attr_field_ok(s: str) -> int {
+    if len(s.trim()) == 0 { return 0 }
+    if _attr_is_placeholder(s) == 1 { return 0 }
+    return 1
+}
+
+// attr_missing — the attribution fields the caller did NOT state, in the order
+// they are reported. PURE. Empty list = the gate passes.
+fn attr_missing(agent: str, purpose: str) -> [str] {
+    let mut out = []
+    if attr_field_ok(agent) == 0 { out.push("agent") }
+    if attr_field_ok(purpose) == 0 { out.push("purpose") }
+    return out
+}
+
+// attr_gate_ok — 1 iff BOTH agent and purpose are stated. PURE.
+fn attr_gate_ok(agent: str, purpose: str) -> int {
+    if len(attr_missing(agent, purpose)) == 0 { return 1 }
+    return 0
+}
+
+// _attr_join — comma-join a list of field names. PURE.
+fn _attr_join(items: [str]) -> str {
+    let mut out = ""
+    let mut i = 0
+    while i < len(items) {
+        if len(out) > 0 { out = out + ", " }
+        out = out + items[i]
+        i = i + 1
+    }
+    return out
+}
+
+// attr_refuse_lines — the refusal a gated verb prints, as lines. PURE, so the
+// test asserts the message names the missing fields AND the fix. `verb` is the
+// cloud subcommand ("api" / "provider-cli").
+fn attr_refuse_lines(verb: str, agent: str, purpose: str) -> [str] {
+    let missing = attr_missing(agent, purpose)
+    let mut out = []
+    out.push("[cloud] " + verb + ": REFUSED — unattributed call (missing: " + _attr_join(missing) + ")")
+    out.push("[cloud]   `cloud rent` stamps every pod with WHO/WHY; the passthrough verbs must too,")
+    out.push("[cloud]   or a provider-side change traces back to nobody.")
+    let mut i = 0
+    while i < len(missing) {
+        let f = missing[i]
+        if f == "agent" {
+            out.push("[cloud]   agent   — WHO is calling:  --agent <TAG>   (or export HEXA_AGENT_TAG=<TAG>)")
+        }
+        if f == "purpose" {
+            out.push("[cloud]   purpose — WHY you call it: --purpose <TEXT>  (--desc is the same flag)")
+        }
+        i = i + 1
+    }
+    out.push("[cloud]   example:  cloud " + verb + " vast --agent claude-3 --purpose 'r12 offer survey' …")
+    return out
+}
+
+// attr_stamp_line — the one-line attribution echo a PASSING gate emits to
+// stderr before the call runs, so WHO/WHY lands in the caller's transcript and
+// logs next to the provider response. PURE.
+fn attr_stamp_line(verb: str, agent: str, project: str, purpose: str) -> str {
+    let mut proj = project.trim()
+    if len(proj) == 0 { proj = "@unattributed" }
+    return "[cloud] " + verb + ": 🪪 agent=" + agent.trim() + " project=" + proj + " purpose=" + purpose.trim()
+}

@@ -85,11 +85,11 @@ fn cloud_commands() -> [CloudCmd] {
             args: "--params N [--gpu KEY] [opts...]  |  --kind dft-phonon --atoms N --nq M [opts...]",
             summary: "closed-form GPU mem-budget / DFPT walltime check (no pod/ssh)" })
     out.push(CloudCmd { name: "api", group: "manage",
-            args: "<vast|runpod> <GET|POST|PUT|DELETE> <endpoint> [--data JSON] [--json] [--allow-mutate]",
-            summary: "UNIVERSAL authenticated REST passthrough — makes hexa cloud a full substitute for the provider API; GET/search free, a registry-MUTATING call is REFUSED→use rent/rm (or --allow-mutate + auto-reconcile); non-2xx surfaced verbatim" })
+            args: "<vast|runpod> <GET|POST|PUT|DELETE> <endpoint> --agent TAG --purpose TEXT [--project NAME] [--data JSON] [--json] [--allow-mutate]",
+            summary: "UNIVERSAL authenticated REST passthrough — makes hexa cloud a full substitute for the provider API; REQUIRES attribution (--agent TAG, or HEXA_AGENT_TAG env · --purpose/--desc TEXT) on EVERY call incl. read-only GET, else REFUSED — same WHO/WHY rent stamps on a pod (--project optional, resolved like rent); GET/search free of the MUTATION check, a registry-MUTATING call is REFUSED→use rent/rm (or --allow-mutate + auto-reconcile); non-2xx surfaced verbatim" })
     out.push(CloudCmd { name: "provider-cli", group: "manage",
-            args: "<vast|runpod> [--allow-mutate] -- <args...>",
-            summary: "proxy the provider's OWN cli (vastai|runpodctl) with creds injected, behind the guard — keeps CLI-only conveniences reachable without raw vastai; MISSING-CLI honest; a registry-MUTATING subcommand is REFUSED→use rent/rm (or --allow-mutate + auto-reconcile)" })
+            args: "<vast|runpod> --agent TAG --purpose TEXT [--project NAME] [--allow-mutate] -- <args...>",
+            summary: "proxy the provider's OWN cli (vastai|runpodctl) with creds injected, behind the guard — keeps CLI-only conveniences reachable without raw vastai; REQUIRES attribution (--agent TAG, or HEXA_AGENT_TAG env · --purpose/--desc TEXT) on EVERY call incl. read subcommands, else REFUSED (attribution flags are read BEFORE `--`; the proxied argv stays verbatim); MISSING-CLI honest; a registry-MUTATING subcommand is REFUSED→use rent/rm (or --allow-mutate + auto-reconcile)" })
     out.push(CloudCmd { name: "run", group: "exec",
             args: "<host> [conn] [--max-wall S] [--env K=V] [--source P] -- <argv...>",
             summary: "run argv, wait, exit with its code (structured argv — POSIX-quoted)" })
