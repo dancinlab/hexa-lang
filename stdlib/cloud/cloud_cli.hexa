@@ -22,7 +22,6 @@ use "stdlib/cloud/alive"
 use "stdlib/http"
 use "stdlib/cloud/api"
 use "stdlib/cloud/provider_cli"
-use "stdlib/cloud/attribution"
 use "stdlib/sys"
 
 // _cloud_help_render_roster — render the verb usage block by ITERATING the
@@ -513,49 +512,7 @@ fn _resolve_purpose(av: [str], start: int) -> str {
     return "unspecified"
 }
 
-// _resolve_purpose_stated — the purpose the caller ACTUALLY stated, "" if they
-// stated none. The twin of _resolve_purpose for the attribution gate (@L4):
-// _resolve_purpose defaults to "unspecified", which is indistinguishable from a
-// real answer at the call site, so a gated verb cannot use it to tell "said
-// nothing" from "said something". Same flag surface as rent (--desc/--purpose,
-// legacy --owner), MINUS the default.
-fn _resolve_purpose_stated(av: [str], start: int) -> str {
-    let desc = _flag_val(av, start, "--desc", "")
-    if len(desc) > 0 {
-        return desc
-    }
-    let purp = _flag_val(av, start, "--purpose", "")
-    if len(purp) > 0 {
-        return purp
-    }
-    return _flag_val(av, start, "--owner", "")
-}
 
-// _resolve_agent — WHO is making this call, "" if unstated. An explicit
-// `--agent <tag>` wins; else the HEXA_AGENT_TAG env var — the SAME channel
-// pod_registry_record already reads to stamp a pod's `rented_by`, so a
-// long-running agent that exports it once satisfies the gate for every call
-// (no second identity surface invented · d19 reuse).
-fn _resolve_agent(av: [str], start: int) -> str {
-    let flag = _flag_val(av, start, "--agent", "")
-    if len(flag) > 0 {
-        return flag
-    }
-    return env_var("HEXA_AGENT_TAG")
-}
-
-// _attr_refuse — print the attribution refusal for a gated passthrough verb.
-// The message body is the PURE attr_refuse_lines (attribution.hexa); this is
-// the thin print shell. Returns the exit code (2 = usage/attribution error).
-fn _attr_refuse(verb: str, agent: str, purpose: str) -> int {
-    let lines = attr_refuse_lines(verb, agent, purpose)
-    let mut i = 0
-    while i < len(lines) {
-        println(lines[i])
-        i = i + 1
-    }
-    return 2
-}
 
 // _resolve_agent — the OWNING AGENT identity of a rented pod (the third
 // attribution axis alongside project + purpose: WHICH agent · WHICH project ·
@@ -610,6 +567,18 @@ fn _rent_attribution_hint() {
     eprintln("usage: cloud rent <vast|runpod> --agent NAME --desc TEXT [--project P] [--search-only|--dry-run] [--gpu FAMILY|N] [--image IMG] [--disk GiB] [--offer ID] [--max-dph USD] [--max-wait-sec N] [--no-register] [--force-new]")
 }
 
+// _passthrough_attribution_hint — the `api` / `provider-cli` twin of
+// _rent_attribution_hint. Same three axes, same voice; only the noun (a
+// provider CALL, not a pod) and the example differ.
+fn _passthrough_attribution_hint(verb: str) {
+    eprintln("[cloud] " + verb + ": 어느 에이전트가 · 어느 프로젝트에서 · 어느 용도로 부르는 호출인지 없이는 프로바이더에 보낼 수 없습니다.")
+    if verb == "api" {
+        eprintln("        예: hexa cloud api vast GET instances --agent claude7 --desc \"r12 offer survey\"")
+    } else {
+        eprintln("        예: hexa cloud provider-cli vast --agent claude7 --desc \"r12 offer survey\" -- show instances")
+    }
+}
+
 // _rent_require_attribution — the SINGLE fail-closed enforcement point for
 // mandatory pod attribution (no new jsonl — the provider label IS the SSOT).
 // Returns the force-stamped `agent-project-purpose` slug, or "" iff any of the
@@ -617,20 +586,33 @@ fn _rent_attribution_hint() {
 // escape hatch (governance `no-escape-hatch`): there is no --force / --label
 // override that lets a caller rent unattributed.
 fn _rent_require_attribution(av: [str], start: int) -> str {
+    return _require_attribution(av, start, "rent")
+}
+
+// _require_attribution — the VERB-NEUTRAL body of the fail-closed attribution
+// gate, shared verbatim by `rent` (which must not create an unattributed POD)
+// and by the passthrough verbs `api` / `provider-cli` (which must not make an
+// unattributed provider CALL). Same three axes, same resolution, same refusal
+// semantics — only the noun in the refusal text differs, so a caller can never
+// learn one gate's rules and be surprised by another's (`reference-match`).
+// Returns the force-stamped `agent-project-purpose` slug, or "" iff any axis is
+// missing (the caller then `return 2`, doing NOTHING). No escape hatch
+// (governance `no-escape-hatch`) on any verb.
+fn _require_attribution(av: [str], start: int, verb: str) -> str {
     // (1) Agent — --agent / HEXA_CLOUD_AGENT. The _slugify check also rejects a
     // garbage value that slugs to empty (e.g. --agent "@@@").
     let agent = _resolve_agent(av, start)
     if len(_slugify(agent)) == 0 {
-        eprintln("[cloud] rent: missing --agent <name> (or HEXA_CLOUD_AGENT) — attribution is MANDATORY, REFUSING to rent.")
-        _rent_attribution_hint()
+        eprintln("[cloud] " + verb + ": missing --agent <name> (or HEXA_CLOUD_AGENT) — attribution is MANDATORY, REFUSING.")
+        if verb == "rent" { _rent_attribution_hint() } else { _passthrough_attribution_hint(verb) }
         return ""
     }
     // (2) Project — an explicit --project OR a real git repo. The bare-pwd /
-    // "@unattributed" fallback arms of _resolve_project no longer satisfy rent.
+    // "@unattributed" fallback arms of _resolve_project no longer satisfy the gate.
     let proj_flag = _flag_val(av, start, "--project", "")
     if len(proj_flag) == 0 && len(_repo_root_basename()) == 0 {
-        eprintln("[cloud] rent: not inside a git repo and no --project given — REFUSING to rent unattributed.")
-        _rent_attribution_hint()
+        eprintln("[cloud] " + verb + ": not inside a git repo and no --project given — REFUSING unattributed.")
+        if verb == "rent" { _rent_attribution_hint() } else { _passthrough_attribution_hint(verb) }
         return ""
     }
     let project = _resolve_project(av, start)
@@ -639,8 +621,8 @@ fn _rent_require_attribution(av: [str], start: int) -> str {
     // edge case).
     let purpose = _resolve_purpose(av, start)
     if purpose == "unspecified" {
-        eprintln("[cloud] rent: missing --desc/--purpose <text> — REFUSING to rent without a purpose.")
-        _rent_attribution_hint()
+        eprintln("[cloud] " + verb + ": missing --desc/--purpose <text> — REFUSING without a purpose.")
+        if verb == "rent" { _rent_attribution_hint() } else { _passthrough_attribution_hint(verb) }
         return ""
     }
     return _agent_project_purpose_label(agent, project, purpose)
@@ -4236,15 +4218,14 @@ fn main() {
             println("[cloud] api: usage — cloud api <vast|runpod> <GET|POST|PUT|DELETE> <endpoint> --agent TAG --purpose TEXT [--project NAME] [--data JSON] [--json] [--allow-mutate]")
             exit(2)
         }
-        // @L4 ATTRIBUTION gate — WHO/WHY, or refuse. `rent` stamps both onto
-        // every pod it makes; an anonymous passthrough would be the hole in that.
-        let api_agent = _resolve_agent(av, si + 1)
-        let api_purpose = _resolve_purpose_stated(av, si + 1)
-        if attr_gate_ok(api_agent, api_purpose) == 0 {
-            exit(_attr_refuse("api", api_agent, api_purpose))
+        // @L4 ATTRIBUTION gate — the SAME fail-closed enforcement `rent` uses
+        // (_require_attribution): an unattributed provider CALL is refused just
+        // as an unattributed POD is. Runs BEFORE any provider call.
+        let api_label = _require_attribution(av, si + 1, "api")
+        if len(api_label) == 0 {
+            exit(2)
         }
-        // project is NOT gated (cwd-derivable) — resolved exactly as rent does.
-        eprintln(attr_stamp_line("api", api_agent, _resolve_project(av, si + 1), api_purpose))
+        eprintln("[cloud] api: 🪪 " + api_label)
         exit(api_run(pos[0], pos[1], pos[2], data, as_json, allow_mutate))
     }
     if sub == "provider-cli" {
@@ -4301,12 +4282,11 @@ fn main() {
             pc_head.push(av[hi])
             hi = hi + 1
         }
-        let pc_agent = _resolve_agent(pc_head, 0)
-        let pc_purpose = _resolve_purpose_stated(pc_head, 0)
-        if attr_gate_ok(pc_agent, pc_purpose) == 0 {
-            exit(_attr_refuse("provider-cli", pc_agent, pc_purpose))
+        let pc_label = _require_attribution(pc_head, 0, "provider-cli")
+        if len(pc_label) == 0 {
+            exit(2)
         }
-        eprintln(attr_stamp_line("provider-cli", pc_agent, _resolve_project(pc_head, 0), pc_purpose))
+        eprintln("[cloud] provider-cli: 🪪 " + pc_label)
         exit(provider_cli_run(provider, pargs, allow_mutate))
     }
     if sub == "orphans" {
