@@ -891,7 +891,7 @@ pub let mut _bck_warn_allowlist: [string] = ["HX3014", "HX3055"]
 // DROPPED in `_bck_diag_push`, the exact blindness the census-v2 verdict
 // found). Default OFF ⇒ no registration ⇒ `_bck_pm_check` sees no free-move
 // pair ⇒ zero diagnostics ⇒ emitted .text byte-identical (byteeq-neutral).
-pub let mut _bck_handle_lane = false // HEXA_BORROWCK_HANDLE=1, read once per lower_hir
+pub let mut _bck_handle_lane = false // L5 R4: opt-OUT default-ON (set in lower_hir; off only if HEXA_BORROWCK_HANDLE=="0")
 // Consumers (frees) — arg 0 is the handle they invalidate.
 pub let mut _bck_consume_fns: [string] = ["farr_free", "farr_int_free", "farr32_free"]
 // Producers — a call to one of these BIRTHS an owning handle.
@@ -9443,7 +9443,16 @@ pub fn lower_hir(module: HModule) -> MModule {
     // HERE (flag-gated) rather than at the declaration, so the DEFAULT allowlist
     // is untouched and the default diag stream stays byte-identical. Idempotent
     // (lower_hir may run more than once per process).
-    _bck_handle_lane = env("HEXA_BORROWCK_HANDLE") == "1"
+    // L5 round-4 FLIP — HX3060 handle-lane default-ON (opt-OUT), mirroring the B3
+    // HX3014/HX3055 flip at _bck_warn_default below. Gated on the anima census:
+    // after the loop-reinit + rolling-handle FP fixes the full corpus fires 0
+    // HX3060 (1240 → 0, measured on the from-source aprime_cc borrowck), so the
+    // default-ON lane is a cry-wolf-free memory-safety warning. Read as opt-OUT:
+    // on unless HEXA_BORROWCK_HANDLE=="0" (escape hatch restores the pre-flip
+    // silence). byteeq-neutral — the lane is observe-only (diag → _lr_diag, never
+    // MIR), and FP=0 means zero default diagnostics on clean code ⇒ byte-identical
+    // .text + stderr.
+    _bck_handle_lane = env("HEXA_BORROWCK_HANDLE") != "0"
     if _bck_handle_lane {
         _bck_on = true
         if !_bck_warn_allowed("HX3060") { _bck_warn_allowlist.push("HX3060") }
