@@ -174,5 +174,32 @@ fn main() {
     _eq_int("--desc arity 2", _rent_flag_arity("--desc"), 2)
     _eq_int("unknown flag arity 0", _rent_flag_arity("--bogus"), 0)
 
+    // ── F-RAG-VERB-NEUTRAL — the gate body is SHARED by rent + the passthrough
+    // verbs (cloud_cli.hexa:_require_attribution, of which _rent_require_attribution
+    // is now a thin wrapper). `api` / `provider-cli` must not create a provider
+    // CALL unattributed, exactly as rent must not create a POD unattributed.
+    // _gate_decision is verb-independent by construction — only the refusal TEXT
+    // differs per verb — so the same inputs must yield the same verdict for every
+    // verb. These re-assert the three refusals + the happy composite through the
+    // shared body, so a future edit that re-forks one verb's rules fails here.
+    _eq("api: agent missing → refuse (same as rent)",
+        _gate_decision("", "", "@hexa-lang", "", "r12 offer survey"), "")
+    _eq("api: project missing → refuse (same as rent)",
+        _gate_decision("claude7", "", "", "", "r12 offer survey"), "")
+    _eq("api: purpose unspecified → refuse (same as rent)",
+        _gate_decision("claude7", "", "@hexa-lang", "", "unspecified"), "")
+    _eq("api: happy path → same composite as rent",
+        _gate_decision("claude7", "", "@hexa-lang", "", "r12 offer survey"),
+        "claude7-hexa-lang-r12-offer-survey")
+    // env HEXA_CLOUD_AGENT satisfies the passthrough verbs too — a roster agent
+    // exporting its identity once is attributed on every call, not just on rent.
+    _eq("provider-cli: env agent satisfies (same as rent)",
+        _gate_decision("", "claude7", "@hexa-lang", "", "r12 offer survey"),
+        "claude7-hexa-lang-r12-offer-survey")
+    // A read-only call is NOT exempt: the gate has no read/write axis at all, so
+    // a GET / `show instances` decides identically to a mutating one.
+    _eq("provider-cli: read-only call still gated",
+        _gate_decision("", "", "@hexa-lang", "", "show instances"), "")
+
     println("rent_attribution_gate_test PASS")
 }
