@@ -1,0 +1,12 @@
+// HEXA-OWN L5 R2 — HX3061 fixture: produced-never-freed handle LEAK (DUAL of HX3060).
+//
+// `t` is minted by the producer `farr_zeros(4)`, used, and the function exits
+// WITHOUT ever freeing it — its runtime slot leaks (never returns to the freelist).
+// This is the straight-line witness: one exit block, obligation still outstanding.
+//
+// Expect: HEXA_BORROWCK_LEAK=1 → exactly 1 HX3061 at the farr_zeros line.
+fn main() {
+    let t = farr_zeros(4)
+    farr_set(t, 0, 1.0)
+    println("done")
+}
