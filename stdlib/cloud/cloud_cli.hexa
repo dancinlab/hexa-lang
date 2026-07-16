@@ -512,6 +512,8 @@ fn _resolve_purpose(av: [str], start: int) -> str {
     return "unspecified"
 }
 
+
+
 // _resolve_agent — the OWNING AGENT identity of a rented pod (the third
 // attribution axis alongside project + purpose: WHICH agent · WHICH project ·
 // WHICH purpose). Resolution: an explicit `--agent <name>` flag wins; else the
@@ -565,6 +567,18 @@ fn _rent_attribution_hint() {
     eprintln("usage: cloud rent <vast|runpod> --agent NAME --desc TEXT [--project P] [--search-only|--dry-run] [--gpu FAMILY|N] [--image IMG] [--disk GiB] [--offer ID] [--max-dph USD] [--max-wait-sec N] [--no-register] [--force-new]")
 }
 
+// _passthrough_attribution_hint — the `api` / `provider-cli` twin of
+// _rent_attribution_hint. Same three axes, same voice; only the noun (a
+// provider CALL, not a pod) and the example differ.
+fn _passthrough_attribution_hint(verb: str) {
+    eprintln("[cloud] " + verb + ": 어느 에이전트가 · 어느 프로젝트에서 · 어느 용도로 부르는 호출인지 없이는 프로바이더에 보낼 수 없습니다.")
+    if verb == "api" {
+        eprintln("        예: hexa cloud api vast GET instances --agent claude7 --desc \"r12 offer survey\"")
+    } else {
+        eprintln("        예: hexa cloud provider-cli vast --agent claude7 --desc \"r12 offer survey\" -- show instances")
+    }
+}
+
 // _rent_require_attribution — the SINGLE fail-closed enforcement point for
 // mandatory pod attribution (no new jsonl — the provider label IS the SSOT).
 // Returns the force-stamped `agent-project-purpose` slug, or "" iff any of the
@@ -572,20 +586,33 @@ fn _rent_attribution_hint() {
 // escape hatch (governance `no-escape-hatch`): there is no --force / --label
 // override that lets a caller rent unattributed.
 fn _rent_require_attribution(av: [str], start: int) -> str {
+    return _require_attribution(av, start, "rent")
+}
+
+// _require_attribution — the VERB-NEUTRAL body of the fail-closed attribution
+// gate, shared verbatim by `rent` (which must not create an unattributed POD)
+// and by the passthrough verbs `api` / `provider-cli` (which must not make an
+// unattributed provider CALL). Same three axes, same resolution, same refusal
+// semantics — only the noun in the refusal text differs, so a caller can never
+// learn one gate's rules and be surprised by another's (`reference-match`).
+// Returns the force-stamped `agent-project-purpose` slug, or "" iff any axis is
+// missing (the caller then `return 2`, doing NOTHING). No escape hatch
+// (governance `no-escape-hatch`) on any verb.
+fn _require_attribution(av: [str], start: int, verb: str) -> str {
     // (1) Agent — --agent / HEXA_CLOUD_AGENT. The _slugify check also rejects a
     // garbage value that slugs to empty (e.g. --agent "@@@").
     let agent = _resolve_agent(av, start)
     if len(_slugify(agent)) == 0 {
-        eprintln("[cloud] rent: missing --agent <name> (or HEXA_CLOUD_AGENT) — attribution is MANDATORY, REFUSING to rent.")
-        _rent_attribution_hint()
+        eprintln("[cloud] " + verb + ": missing --agent <name> (or HEXA_CLOUD_AGENT) — attribution is MANDATORY, REFUSING.")
+        if verb == "rent" { _rent_attribution_hint() } else { _passthrough_attribution_hint(verb) }
         return ""
     }
     // (2) Project — an explicit --project OR a real git repo. The bare-pwd /
-    // "@unattributed" fallback arms of _resolve_project no longer satisfy rent.
+    // "@unattributed" fallback arms of _resolve_project no longer satisfy the gate.
     let proj_flag = _flag_val(av, start, "--project", "")
     if len(proj_flag) == 0 && len(_repo_root_basename()) == 0 {
-        eprintln("[cloud] rent: not inside a git repo and no --project given — REFUSING to rent unattributed.")
-        _rent_attribution_hint()
+        eprintln("[cloud] " + verb + ": not inside a git repo and no --project given — REFUSING unattributed.")
+        if verb == "rent" { _rent_attribution_hint() } else { _passthrough_attribution_hint(verb) }
         return ""
     }
     let project = _resolve_project(av, start)
@@ -594,8 +621,8 @@ fn _rent_require_attribution(av: [str], start: int) -> str {
     // edge case).
     let purpose = _resolve_purpose(av, start)
     if purpose == "unspecified" {
-        eprintln("[cloud] rent: missing --desc/--purpose <text> — REFUSING to rent without a purpose.")
-        _rent_attribution_hint()
+        eprintln("[cloud] " + verb + ": missing --desc/--purpose <text> — REFUSING without a purpose.")
+        if verb == "rent" { _rent_attribution_hint() } else { _passthrough_attribution_hint(verb) }
         return ""
     }
     return _agent_project_purpose_label(agent, project, purpose)
@@ -4161,9 +4188,12 @@ fn main() {
         // UNIVERSAL authenticated REST passthrough (api.hexa) — makes hexa
         // cloud a full substitute for the provider REST API so cloud-guard
         // (commons g8) never strands an unwrapped operation. Positional shape:
-        //   cloud api <provider> <METHOD> <endpoint> [--data JSON] [--json] [--allow-mutate]
-        // GET / vast-search pass freely; a registry-MUTATING call is REFUSED
-        // and redirected to rent/rm unless --allow-mutate (then auto-reconcile).
+        //   cloud api <provider> <METHOD> <endpoint> --agent TAG --purpose TEXT
+        //             [--project NAME] [--data JSON] [--json] [--allow-mutate]
+        // GET / vast-search pass the MUTATION check freely; a registry-MUTATING
+        // call is REFUSED and redirected to rent/rm unless --allow-mutate (then
+        // auto-reconcile). The ATTRIBUTION gate (attribution.hexa) is separate
+        // and applies to EVERY call including a read-only GET.
         let as_json = _has_flag(av, si + 1, "--json")
         let allow_mutate = _has_flag(av, si + 1, "--allow-mutate")
         let data = _flag_val(av, si + 1, "--data", "")
@@ -4171,7 +4201,11 @@ fn main() {
         let mut ai = si + 1
         while ai < len(av) {
             let t = av[ai]
-            if t == "--data" {
+            // value-consuming flags — skip the flag AND its value so neither is
+            // mistaken for a positional (a `--purpose 'x'` landing in pos[] would
+            // shift the endpoint and call a garbage URL).
+            if t == "--data" || t == "--agent" || t == "--purpose"
+               || t == "--desc" || t == "--project" || t == "--owner" {
                 ai = ai + 2
             } else { if t == "--json" || t == "--allow-mutate" {
                 ai = ai + 1
@@ -4181,18 +4215,29 @@ fn main() {
             } }
         }
         if len(pos) < 3 {
-            println("[cloud] api: usage — cloud api <vast|runpod> <GET|POST|PUT|DELETE> <endpoint> [--data JSON] [--json] [--allow-mutate]")
+            println("[cloud] api: usage — cloud api <vast|runpod> <GET|POST|PUT|DELETE> <endpoint> --agent TAG --purpose TEXT [--project NAME] [--data JSON] [--json] [--allow-mutate]")
             exit(2)
         }
+        // @L4 ATTRIBUTION gate — the SAME fail-closed enforcement `rent` uses
+        // (_require_attribution): an unattributed provider CALL is refused just
+        // as an unattributed POD is. Runs BEFORE any provider call.
+        let api_label = _require_attribution(av, si + 1, "api")
+        if len(api_label) == 0 {
+            exit(2)
+        }
+        eprintln("[cloud] api: 🪪 " + api_label)
         exit(api_run(pos[0], pos[1], pos[2], data, as_json, allow_mutate))
     }
     if sub == "provider-cli" {
         // Proxy the provider's OWN cli (vastai|runpodctl) THROUGH the guarded
         // path with creds injected (provider_cli.hexa) — keeps CLI-only
         // conveniences reachable without an un-guarded raw `vastai`. Shape:
-        //   cloud provider-cli <vast|runpod> [--allow-mutate] -- <args...>
+        //   cloud provider-cli <vast|runpod> --agent TAG --purpose TEXT
+        //                      [--project NAME] [--allow-mutate] -- <args...>
         // Everything AFTER `--` is the verbatim provider argv; a registry-
         // mutating subcommand is refused unless --allow-mutate (then reconcile).
+        // The ATTRIBUTION gate (attribution.hexa) applies to EVERY call, read
+        // subcommands included.
         let allow_mutate = _has_flag(av, si + 1, "--allow-mutate")
         // first positional after the verb (skipping flags) = the provider.
         let mut provider = ""
@@ -4205,10 +4250,15 @@ fn main() {
                 ai = len(av)
             } else { if t == "--allow-mutate" {
                 ai = ai + 1
+            } else { if t == "--agent" || t == "--purpose" || t == "--desc"
+                        || t == "--project" || t == "--owner" {
+                // value-consuming — skip the flag AND its value, else the value
+                // ('r12 survey') would be read as the provider name.
+                ai = ai + 2
             } else {
                 if len(provider) == 0 { provider = t }
                 ai = ai + 1
-            } }
+            } } }
         }
         let mut pargs = []
         if sep >= 0 {
@@ -4219,9 +4269,24 @@ fn main() {
             }
         }
         if len(provider) == 0 {
-            println("[cloud] provider-cli: usage — cloud provider-cli <vast|runpod> [--allow-mutate] -- <args...>")
+            println("[cloud] provider-cli: usage — cloud provider-cli <vast|runpod> --agent TAG --purpose TEXT [--project NAME] [--allow-mutate] -- <args...>")
             exit(2)
         }
+        // @L4 ATTRIBUTION gate. Resolve ONLY over the tokens BEFORE `--`: the
+        // proxied provider argv is verbatim and may carry its own `--agent`-ish
+        // token, which must never be mistaken for OUR attribution (nor stripped).
+        let mut pc_head = []
+        let mut hi = si + 1
+        let pc_end = if sep >= 0 { sep } else { len(av) }
+        while hi < pc_end {
+            pc_head.push(av[hi])
+            hi = hi + 1
+        }
+        let pc_label = _require_attribution(pc_head, 0, "provider-cli")
+        if len(pc_label) == 0 {
+            exit(2)
+        }
+        eprintln("[cloud] provider-cli: 🪪 " + pc_label)
         exit(provider_cli_run(provider, pargs, allow_mutate))
     }
     if sub == "orphans" {
