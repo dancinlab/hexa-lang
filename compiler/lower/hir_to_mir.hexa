@@ -8800,6 +8800,26 @@ fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
         let cap_id = _mir_lookup(ctx2, free[fi])
         if cap_id >= 0 {
             env_args.push(_local_op(cap_id))
+            // L5 R5 HX3061 escape-widening — a handle CAPTURED into a closure
+            // environment aliases the enclosing binding and may be consumed
+            // inside the (deferred) closure body or outlive the function, so the
+            // enclosing frame's leak obligation ESCAPEs here (same by-value-push
+            // aliasing shape as R4's `[h]` array_lit — the env IS that array_lit,
+            // but built internally so the R4 arm misses it). Removes the FP class
+            // `let f = || { farr_free(h) }; f()` (body lowers with _bck_active=false
+            // so the in-body consume never registers for THIS frame). The extra
+            // `_bck_active` gate is load-bearing: _lower_closure re-enters from
+            // nested-lambda frames where local ids restart at 0, so a lambda-frame
+            // cap_id would false-match the outer fn registry — _bck_active is false
+            // there (suspended for the body), and _collect_free walks nested closure
+            // bodies so the outer env build already KILLs the group (no coverage
+            // loss). Leak-lane-only ⇒ default-OFF byteeq-neutral.
+            if _bck_leak_lane && _bck_active {
+                let _bk_cc_le = _bck_find_local(cap_id)
+                if _bk_cc_le >= 0 {
+                    _bck_pm_note_escape(_bck_groups[_bk_cc_le], free[fi], ctx2.cur_block, e.span)
+                }
+            }
         } else {
             // global capture fallback — should not normally arise (free
             // analysis skips globals) but stay safe rather than emit a
