@@ -4278,7 +4278,7 @@ build_runtime_a_from_source() {
         # release_build @ main a372449a: "hidden symbol __dso_handle isn't defined").
         # GATE-1 missed it because it ran the single-TU (non-MULTIOBJ) archive shape.
         # ── SYSLEAF r2 (HEXA_RT_NATIVE_SYSLEAF, default auto · linux/x86_64 ON · opt-out =0) ──
-        # The LAST mmap/munmap/waitpid + read/close/lseek/dup2 libc UNDs in the MULTIOBJ ship
+        # The LAST mmap/munmap/waitpid + read/close/lseek/dup2 + fork libc UNDs in the MULTIOBJ ship
         # runtime.a all come from ONE member — hxlcl_shim.o (measured aiden linux-x86_64 @
         # origin/main: 232 UND total, `nm -A` attributes U mmap / U munmap / U waitpid / U read /
         # U close / U lseek / U dup2 to hxlcl_shim.o and nothing else).
@@ -4296,9 +4296,9 @@ build_runtime_a_from_source() {
         if [ "$_rnsl_mode" != "0" ]; then
             if [ "$(uname -s)" = "Linux" ] && { [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; }; then
                 _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_SYSLEAF"
-                echo "[stage_resolve_runtime_a] SYSLEAF r2: hxheap mmap/munmap + hxlcl_{waitpid,read,close,lseek,dup2} → raw syscall (SYS_mmap=9/munmap=11/wait4=61/read=0/close=3/lseek=8/dup2=33); shim.o built with -DHEXA_RT_NATIVE_SYSLEAF (mmap/munmap/waitpid/read/close/lseek/dup2 libc UND dropped) — ld -r multidef gate validates"
+                echo "[stage_resolve_runtime_a] SYSLEAF r2: hxheap mmap/munmap + hxlcl_{waitpid,read,close,lseek,dup2,fork} → raw syscall (SYS_mmap=9/munmap=11/wait4=61/read=0/close=3/lseek=8/dup2=33/fork=57); shim.o built with -DHEXA_RT_NATIVE_SYSLEAF (mmap/munmap/waitpid/read/close/lseek/dup2/fork libc UND dropped) — ld -r multidef gate validates"
             else
-                echo "[stage_resolve_runtime_a] SYSLEAF r2: HEXA_RT_NATIVE_SYSLEAF native (auto/1) IGNORED — the raw-syscall sysleaf path is linux/x86_64-only (host=$(uname -sm)); retaining libc mmap/munmap/waitpid/read/close/lseek/dup2" >&2
+                echo "[stage_resolve_runtime_a] SYSLEAF r2: HEXA_RT_NATIVE_SYSLEAF native (auto/1) IGNORED — the raw-syscall sysleaf path is linux/x86_64-only (host=$(uname -sm)); retaining libc mmap/munmap/waitpid/read/close/lseek/dup2/fork" >&2
             fi
         fi
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S4]: compile build/hxlcl_shim.o…"
