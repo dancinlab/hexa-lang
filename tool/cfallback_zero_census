@@ -96,7 +96,17 @@ for P in "$W"/c/*.hexa; do
         fi
     elif echo "$out" | grep -qE "(^|[[:space:]/])clang([[:space:]]|$)"; then
         echo "  $name: ✗ C-TRANSPILE DELEGATE reached (clang on generated .c) —"; echo "$out" | grep -E "clang " | tail -1; FAIL=$((FAIL + 1))
-    elif echo "$out" | grep -q "(native backend)"; then
+    elif echo "$out" | grep -q "(native backend"; then
+        # PREFIX match, not the exact "(native backend)" literal: the leg-B legs
+        # qualify the marker inline — self/main.hexa emits
+        # "(native backend, leg-B — no hexat, no clang)" and its darwin twin
+        # "(native backend, leg-B darwin — no hexat, no clang)". The old literal
+        # matched neither, so every tier-B build fell through to the `?
+        # unrecognized build path` arm below — a REAL tier-B system-ld finding
+        # (leg-B links via ld64/ld, see self/main.hexa `_bnlnk`) reported as if the
+        # census could not read its own build. Same FAIL either way; this only
+        # restores the accurate label. Anchoring on the open paren keeps the arm
+        # from matching prose that merely mentions a native backend.
         echo "  $name: ✗ tier-B system-ld fallback (clang-free but uses ld — own-link leg NOT taken) —"; echo "$out" | tail -2; FAIL=$((FAIL + 1))
     else
         echo "  $name: ? unrecognized build path —"; echo "$out" | tail -3; FAIL=$((FAIL + 1))
