@@ -3355,6 +3355,12 @@ fn gen2_fn_decl(node) {
     // by DEFAULT (no env flag) — the boxed-HexaArr surface is never reachable, so
     // it is sound. Escaping bindings keep the boxed representation (no regression).
     _native_arr_noescape_scan(node.body)
+    // L5 GC-free round-2 — report-only census of const-size non-escaping call-allocs
+    // promotable to stack (the #4697 coverage gap: Call RHS not collected). STDERR-only,
+    // no chunk push, never runs flag-OFF ⇒ byteeq-neutral. measure-first before any EMIT.
+    if env("HEXA_STACKALLOC_CALL_CENSUS") == "1" {
+        _callalloc_noescape_census_scan(node.body, node.name)
+    }
     // ③ SELFEMIT-PACK-OUT: clear the per-fn packed-[Int]-buffer name set so a
     // packed handle in one fn never leaks routing into the next. No-op set when
     // HEXA_SELFEMIT_PACK_OUT is unset (nothing is ever added) → OFF-path byte-id.
@@ -14659,6 +14665,57 @@ fn _is_native_arr_noescape(name) {
 // auto-fire native contiguous storage. It only POPULATES the proof set; whether a
 // binding actually lowers is decided in _native_arr_autofire_ok (which also honors
 // the legacy env flag as an escape hatch).
+// L5 GC-free round-2 — report-only CENSUS (HEXA_STACKALLOC_CALL_CENSUS=1, default-OFF).
+// Measures the escape-to-stack coverage GAP: the #4697 stack-promotion lever only
+// collects LITERAL array RHS (_bounded_array_lit_count returns -1 on a Call), so a
+// `let st = farr_zeros(8)` (call-returned, const size) is NEVER promoted even when
+// the SOUND whole-fn escape analyzer proves it non-escaping. This scan reuses that
+// exact analyzer (_stmt_escapes_name) to count const-size non-escaping call-allocs
+// promotable to stack — the measure-first characterize step (#4700/#4703 pattern)
+// that gates any EMIT widening. STDERR-only, never pushes to chunks ⇒ emitted C is
+// byte-identical flag-ON, and flag-OFF the scan never runs ⇒ byteeq-neutral. No emit,
+// no chunk mutation (the stack-promotion EMIT is a separate opt-in-first campaign).
+fn _callalloc_noescape_census_scan(stmts, fn_name) {
+    if type_of(stmts) != "array" { return }
+    let n = len(stmts)
+    let mut count = 0
+    let mut i = 0
+    while i < n {
+        let s = stmts[i]
+        if type_of(s) != "string" && s.kind == "LetStmt"
+           && type_of(s.left) == "map" && s.left.kind == "Call"
+           && type_of(s.left.left) == "map" && s.left.left.kind == "Ident" {
+            let _callee = s.left.left.name
+            if _callee == "farr_zeros" || _callee == "array_zeros"
+               || _callee == "farr_int_zeros" || _callee == "farr32_zeros" {
+                // const-int size arg only (runtime-n falls to heap unchanged)
+                let mut _const_sz = false
+                if type_of(s.left.args) == "array" && len(s.left.args) >= 1 {
+                    let _a0 = s.left.args[0]
+                    if type_of(_a0) == "map" && _a0.kind == "IntLit" { _const_sz = true }
+                }
+                if _const_sz {
+                    // reuse the sound whole-fn escape analyzer (same as #4697)
+                    let mut _escapes = false
+                    let mut j = 0
+                    while j < n {
+                        if j != i {
+                            if _stmt_escapes_name(stmts[j], s.name) { _escapes = true }
+                        }
+                        j = j + 1
+                    }
+                    if !_escapes { count = count + 1 }
+                }
+            }
+        }
+        i = i + 1
+    }
+    if count > 0 {
+        eprintln("[STACKALLOC-CALL-CENSUS] " + fn_name + ": " + to_string(count)
+                 + " const-size non-escaping call-alloc(s) promotable to stack (heap today — Call RHS not collected by _bounded_array_lit_count)")
+    }
+}
+
 fn _native_arr_noescape_scan(stmts) {
     _native_arr_noescape_reset()
     if type_of(stmts) == "string" { return }
