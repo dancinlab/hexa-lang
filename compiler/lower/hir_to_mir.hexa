@@ -8295,11 +8295,30 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 let r = _lower_hexpr(ctx2, f.children[0])
                 ctx2 = r.ctx
                 field_ops.push(r.operand)
+                // L5 R4 HX3061 escape-widening — a handle flowing into a struct
+                // literal AT CONSTRUCTION `S{ f: h }` transfers ownership into the
+                // fresh aggregate ⇒ the free obligation ESCAPEs this fn (the
+                // container owns it; nested literals are covered by the recursive
+                // _lower_hexpr above). Leak-lane-only ⇒ default-OFF byteeq-neutral.
+                if _bck_leak_lane && r.operand.kind == "local" {
+                    let _bk_slf_le = _bck_find_local(r.operand.local_id)
+                    if _bk_slf_le >= 0 {
+                        _bck_pm_note_escape(_bck_groups[_bk_slf_le], f.text, ctx2.cur_block, f.children[0].span)
+                    }
+                }
             } else {
                 field_ops.push(_const_str_op(""))
                 let r = _lower_hexpr(ctx2, f)
                 ctx2 = r.ctx
                 field_ops.push(r.operand)
+                // L5 R4 — positional struct-lit element escape (mirror of the
+                // field_lit branch above). Leak-lane-only ⇒ byteeq-neutral.
+                if _bck_leak_lane && r.operand.kind == "local" {
+                    let _bk_slp_le = _bck_find_local(r.operand.local_id)
+                    if _bk_slp_le >= 0 {
+                        _bck_pm_note_escape(_bck_groups[_bk_slp_le], "", ctx2.cur_block, f.span)
+                    }
+                }
             }
             i = i + 1
         }
@@ -8333,6 +8352,16 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             let r = _lower_hexpr(ctx2, e.children[i])
             ctx2 = r.ctx
             elem_ops.push(r.operand)
+            // L5 R4 HX3061 escape-widening — a handle placed in an array literal
+            // `[h, ...]` AT CONSTRUCTION escapes into the fresh array (dual of the
+            // post-construction `a[i] = h` index_set site). Leak-lane-only ⇒
+            // default-OFF byteeq-neutral.
+            if _bck_leak_lane && r.operand.kind == "local" {
+                let _bk_al_le = _bck_find_local(r.operand.local_id)
+                if _bk_al_le >= 0 {
+                    _bck_pm_note_escape(_bck_groups[_bk_al_le], "", ctx2.cur_block, e.children[i].span)
+                }
+            }
             i = i + 1
         }
         ctx2 = _fresh_local(ctx2, e.typ, "array")
@@ -8393,6 +8422,16 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 let r = _lower_hexpr(ctx2, e.children[ic])
                 ctx2 = r.ctx
                 elem_ops.push(r.operand)
+                // L5 R4 HX3061 escape-widening — enum-constructor payload cell
+                // `Variant(h, ...)` (hexa's tuple-construction analogue: there is
+                // no tuple-literal expr) escapes the handle into the payload array.
+                // Leak-lane-only ⇒ default-OFF byteeq-neutral.
+                if _bck_leak_lane && r.operand.kind == "local" {
+                    let _bk_epm_le = _bck_find_local(r.operand.local_id)
+                    if _bk_epm_le >= 0 {
+                        _bck_pm_note_escape(_bck_groups[_bk_epm_le], "", ctx2.cur_block, e.children[ic].span)
+                    }
+                }
                 ic = ic + 1
             }
             // (2) emit a fresh array_lit STMT containing all payload cells.
@@ -8438,6 +8477,15 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             let r = _lower_hexpr(ctx2, e.children[i])
             ctx2 = r.ctx
             args.push(r.operand)
+            // L5 R4 HX3061 escape-widening — legacy arity-1 enum payload
+            // `Some(h)` escapes the handle into the constructed value.
+            // Leak-lane-only ⇒ default-OFF byteeq-neutral.
+            if _bck_leak_lane && r.operand.kind == "local" {
+                let _bk_ep1_le = _bck_find_local(r.operand.local_id)
+                if _bk_ep1_le >= 0 {
+                    _bck_pm_note_escape(_bck_groups[_bk_ep1_le], "", ctx2.cur_block, e.children[i].span)
+                }
+            }
             i = i + 1
         }
         ctx2 = _fresh_local(ctx2, e.typ, "enum_" + e.text)
