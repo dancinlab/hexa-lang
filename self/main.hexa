@@ -4626,10 +4626,38 @@ fn _self_build_tag() {
     // [size, mtime_ns, is_dir, mode]; empty/failed → degrade to no tag (safe:
     // worst case = current static-version behaviour, never a wrong-ABI hit
     // once the binary mtime differs).
+    //
+    // MUST resolve the REAL executable, NOT args()[0]: the `hexa` launcher is
+    // a shell wrapper that `exec -a hexa "$__hexa_bin"`s the driver, so
+    // args()[0] == "hexa" — a bare token, not a path — and fs_stat("hexa")
+    // fails ⇒ "" ⇒ the toolchain never entered the run-cache key. Since
+    // version_str() is static ("0.1.0-dispatch"), a fossil binary compiled by
+    // an OLDER (possibly broken) toolchain then serves FOREVER from a shared
+    // ~/.hexa-cache (aiden CI runner). MEASURED (2026-07-17): the CI-keyed
+    // fossil `hexa_run.<src>_0.1.0-dispatch` executes to the exact stdlib-
+    // selftest FAIL while a fresh compile of the same source PASSES.
+    // args()[0] is "hexa" (a bare token) under the launcher's `exec -a hexa`,
+    // so fs_stat(args()[0]) fails → "" → the toolchain never entered the key.
+    // Key on the prebuilt runtime archive instead: `<install>/build/runtime.a`
+    // is the ABI-bearing artifact every run links against, it is a REGULAR
+    // file (no /proc symlink dependence), and release_build regenerates it on
+    // every toolchain rebuild → its size+mtime is a faithful toolchain
+    // fingerprint. install_dir_from_argv0() is the same resolver the run path
+    // already trusts to locate hexat/runtime, so it is as reliable here as the
+    // build itself. This is the exact CLI-RUNCACHE-STALE-ABI resolution (fold
+    // the running toolchain's identity into the LOCAL key; the precompile
+    // base-key is untouched so shipped binaries still HIT). Degrades to
+    // fs_stat(args()[0]) where the archive is absent — no regression.
+    let inst = install_dir_from_argv0()
+    if len(inst) > 0 {
+        let rt = inst + "/build/runtime.a"
+        let st = fs_stat(rt)
+        if len(st) >= 2 { return to_string(st[0]) + "x" + to_string(st[1]) }
+    }
     let av = args()
     if len(av) == 0 { return "" }
-    let st = fs_stat(av[0])
-    if len(st) >= 2 { return to_string(st[0]) + "x" + to_string(st[1]) }
+    let st2 = fs_stat(av[0])
+    if len(st2) >= 2 { return to_string(st2[0]) + "x" + to_string(st2[1]) }
     return ""
 }
 
