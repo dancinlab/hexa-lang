@@ -5243,6 +5243,36 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
 
     // ── call → STMT_CALL ───────────────────────────────────
     if k == "call" {
+        // char_code(s) / ord(s) — 1-arg SOURCE builtins whose runtime target
+        // hexa_char_code(str, index) is 2-arg. The C-transpile leg synthesises
+        // the constant index-0 arg (self/codegen.hexa:9338 `hexa_char_code(a0,
+        // hexa_int(0))`); the NATIVE generic named-call path does NOT, so
+        // char_code(s) emits a 1-arg call and the runtime reads a garbage 2nd
+        // HexaVal (index) register → returns 0. MEASURED 2026-07-18 (x86_64):
+        // `char_code("1")` = 0 (want 49), while `char_code_at`/`substring`/`len`
+        // are correct; the arm64 backend hand-injects the index only for `ord`
+        // (arm64_darwin.hexa ord block), not char_code, and x86_64 for neither.
+        // Synthesise the index-0 arg HERE so BOTH backends emit the 2-arg call
+        // (the 2-arg char_code form is already handled by self/codegen.hexa:9532
+        // and the generic native path). Bit-CHANGING for char_code/ord programs
+        // (a miscompile fix) → gated by byteeq 3-target. The rewrite makes the
+        // call 3 children (callee + 2 args) so it can't re-trigger this arm.
+        if len(e.children) == 2 && e.children[0].kind == "ident" {
+            let _ccn = _strip_mut_prefix(e.children[0].text)
+            if _ccn == "char_code" || _ccn == "ord" {
+                let mut _cckids: [HExpr] = []
+                _cckids.push(e.children[0])
+                _cckids.push(e.children[1])
+                _cckids.push(_hir_lit_int("0", e))
+                let _cccall = HExpr {
+                    kind: "call", span: e.span, typ: e.typ, text: "",
+                    children: _cckids,
+                    atlas: AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" },
+                    def: DefId { module: "", index: -1 }, annotations: []
+                }
+                return _lower_hexpr(ctx, _cccall)
+            }
+        }
         // carrier call: `thread_spawn(worker, 1)` etc — the callee is a runtime
         // TAG_FN/TAG_CLOSURE carrier DATA global, not a C fn. Emit op="carrier_call"
         // with args = [carrier_name_str, arg1, …]; codegen loads the carrier
