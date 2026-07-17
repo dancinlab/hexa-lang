@@ -4920,6 +4920,18 @@ fn cmd_run_user_direct(file, extra_args) {
             let _ = exec("rm -f '" + _nobj + "' 2>/dev/null")
         }
     }
+    // axis-① run-path fallback-rate census (delete-precondition instrument, the
+    // run-seam twin of the build-seam HEXA_BUILD_NATIVE_STRICT census). If leg-B
+    // native-serve was engaged (_run_native_on) but produced no binary, control is
+    // about to drop to the clang `hexa build` subprocess below. Under
+    // HEXA_RUN_NATIVE_STRICT=1 that drop becomes a FATAL so a corpus `hexa run`
+    // yields the real axis-① run fallback rate instead of a silent zero — mirrors
+    // HEXA_OWNLINK_STRICT (:4824, own-link leg) + HEXA_BUILD_NATIVE_STRICT (cmd_build).
+    // Default-OFF ⇒ byte-neutral (the C-transpile+clang fallback below is untouched).
+    if _run_native_on && !file_exists(tmpbin) && env_var("HEXA_RUN_NATIVE_STRICT") == "1" {
+        eprintln("[run] FATAL (HEXA_RUN_NATIVE_STRICT=1): leg-B native-serve did not produce a binary and the clang fallback is disabled — this `hexa run` would drop to the C-transpile+clang path")
+        return 1
+    }
     if !file_exists(tmpbin) {
         // 2nd clang site, parent-pipe variant (#2415 closed the inner build's
         // own clang pipe; THIS is the `hexa run` -> `hexa build` SUBPROCESS
