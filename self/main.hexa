@@ -4626,10 +4626,59 @@ fn _self_build_tag() {
     // [size, mtime_ns, is_dir, mode]; empty/failed → degrade to no tag (safe:
     // worst case = current static-version behaviour, never a wrong-ABI hit
     // once the binary mtime differs).
+    //
+    // MUST resolve the REAL executable, NOT args()[0]: the `hexa` launcher is
+    // a shell wrapper that `exec -a hexa "$__hexa_bin"`s the driver, so
+    // args()[0] == "hexa" — a bare token, not a path — and fs_stat("hexa")
+    // fails ⇒ "" ⇒ the toolchain never entered the run-cache key. Since
+    // version_str() is static ("0.1.0-dispatch"), a fossil binary compiled by
+    // an OLDER (possibly broken) toolchain then serves FOREVER from a shared
+    // ~/.hexa-cache (aiden CI runner). MEASURED (2026-07-17): the CI-keyed
+    // fossil `hexa_run.<src>_0.1.0-dispatch` executes to the exact stdlib-
+    // selftest FAIL while a fresh compile of the same source PASSES.
+    // args()[0] is "hexa" (a bare token) under the launcher's `exec -a hexa`,
+    // so fs_stat(args()[0]) fails → "" → the toolchain never entered the key.
+    // Key on the prebuilt runtime archive instead: `<install>/build/runtime.a`
+    // is the ABI-bearing artifact every run links against, it is a REGULAR
+    // file (no /proc symlink dependence), and release_build regenerates it on
+    // every toolchain rebuild → its size+mtime is a faithful toolchain
+    // fingerprint. install_dir_from_argv0() is the same resolver the run path
+    // already trusts to locate hexat/runtime, so it is as reliable here as the
+    // build itself. This is the exact CLI-RUNCACHE-STALE-ABI resolution (fold
+    // the running toolchain's identity into the LOCAL key; the precompile
+    // base-key is untouched so shipped binaries still HIT). Degrades to
+    // fs_stat(args()[0]) where the archive is absent — no regression.
+    // NOTE: fs_stat() returns an EMPTY array for regular files in this
+    // toolchain (measured 2026-07-17: fs_stat("<inst>/build/runtime.a") → len 0
+    // on an existing 1.1 MB archive) — a latent rt_fs_stat bug that silently
+    // no-op'd the original _self_build_tag. Sidestep it by shelling `stat`
+    // (GNU `-c` on Linux, BSD `-f` on darwin) on the ABI-bearing runtime
+    // archive `<install>/build/runtime.a`, which release_build regenerates on
+    // every toolchain rebuild ⇒ size+mtime is a faithful toolchain fingerprint.
+    // install_dir_from_argv0() resolves correctly through the `exec -a hexa`
+    // launcher (measured: install_dir=<repo>, argv0=./hexa). This makes the
+    // CLI-RUNCACHE-STALE-ABI resolution actually fire (fold the running
+    // toolchain's identity into the LOCAL key; precompile base-key untouched).
+    let dbg = env("HEXA_RUNCACHE_DEBUG") == "1"
+    let inst = install_dir_from_argv0()
     let av = args()
-    if len(av) == 0 { return "" }
-    let st = fs_stat(av[0])
-    if len(st) >= 2 { return to_string(st[0]) + "x" + to_string(st[1]) }
+    let mut a0 = ""
+    if len(av) > 0 { a0 = av[0] }
+    let mut cands: [string] = []
+    if len(inst) > 0 {
+        cands.push(inst + "/build/runtime.a")
+        cands.push(inst + "/build/hexa_linux")
+    }
+    if len(a0) > 0 { cands.push(a0) }
+    let mut ci = 0
+    while ci < len(cands) {
+        let p = cands[ci]
+        let mut t = exec("stat -c '%sx%Y' " + shq(p) + " 2>/dev/null").trim()
+        if len(t) == 0 { t = exec("stat -f '%zx%m' " + shq(p) + " 2>/dev/null").trim() }
+        if dbg { eprintln("[runcache-tag] cand=[" + p + "] tag=[" + t + "]") }
+        if len(t) > 0 { return t }
+        ci = ci + 1
+    }
     return ""
 }
 
