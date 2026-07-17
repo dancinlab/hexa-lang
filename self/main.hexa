@@ -3677,7 +3677,17 @@ fn cmd_build(src, out, c_only, target, shared) {
     // falls through to the C-transpile path below (delegate intact; trace under
     // HEXA_RUN_NATIVE_TRACE=1). linux x86_64 only (the host the recipe is proven on); refuses
     // shared/--c-only/--target. Design: state/hexa-own/no_hexacc_round1_design_fable.md.
+    // axis-① fallback-rate census (delete-precondition instrument): _bn_gate_entered flags
+    // that the leg-B native-serve gate passed for THIS build. The block returns "" on success,
+    // so control only reaches past its closing brace when native-serve DID NOT serve (native
+    // emit/link failed, or the native toolchain resolvers came up empty) and the build is about
+    // to drop to the C-transpile delegate. Under HEXA_BUILD_NATIVE_STRICT=1 that drop becomes a
+    // FATAL — mirroring HEXA_OWNLINK_STRICT (:3665) but for the DEFAULT-ON axis-① path (the own-
+    // link STRICT only covers the opt-in HEXA_OWNLINK_DEFAULT block). A corpus run then yields
+    // the real axis-① C-transpile fallback rate instead of a silent zero. Default-OFF byte-neutral.
+    let mut _bn_gate_entered = false
     if env_var("HEXA_BUILD_NATIVE") != "0" && (exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxx86_64" || exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxaarch64" || exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxarm64" || (exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Darwinarm64" && env_var("HEXA_NATIVE_DARWIN") == "1")) && shared != "1" && c_only != "1" && len(target) == 0 && len(__actual_src) > 0 {
+        _bn_gate_entered = true
         // axis-① rung-1 (L2): darwin arm64 native build leg — opt-in HEXA_NATIVE_DARWIN=1
         // (default-OFF·byte-neutral). darwin은 crt1/own-start 규약이 없어(dyld+libSystem이
         // 초기화) linux crt-probe를 skip하고 ld64 `-lSystem -syslibroot` 레시피로 링크한다.
@@ -3740,6 +3750,15 @@ fn cmd_build(src, out, c_only, target, shared) {
             } else if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[build-native] native-emit failed → C fallback: " + _bne) }
             let _ = exec("rm -f '" + _bnobj + "' 2>/dev/null")
         }
+    }
+    // axis-① fallback-rate census — fail-closed drain. If the leg-B gate passed but native-serve
+    // did not return "" above, this build is about to reach the C-transpile delegate. Under
+    // HEXA_BUILD_NATIVE_STRICT=1 turn that into a FATAL so a corpus run counts it as a real
+    // fallback (delete-precondition = axis-① C-transpile fallback rate → 0). Byte-neutral:
+    // unset → skipped; the C-transpile safety net below is untouched in a normal build.
+    if _bn_gate_entered && env_var("HEXA_BUILD_NATIVE_STRICT") == "1" {
+        eprintln("[build] FATAL (HEXA_BUILD_NATIVE_STRICT=1): leg-B native-serve did not serve and the C-transpile fallback is disabled — this program would drop to hexa_cc.c")
+        return "leg-B native-serve failed under HEXA_BUILD_NATIVE_STRICT=1 (no C-transpile fallback)"
     }
     // axis-① rung-2: cross-target native leg (clang-0, own-start static ELF). Gate=
     // HEXA_BUILD_NATIVE_CROSS=1 (default-OFF·byte-neutral) + --target→x86_64-linux +
