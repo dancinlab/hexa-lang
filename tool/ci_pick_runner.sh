@@ -42,8 +42,17 @@ primary_only="${2:-0}"
 case "$kind" in
   linux)
     fallback='"ubuntu-latest"'
-    want_labels='self-hosted Linux X64 hexa-build'
-    sh_label='["self-hosted","Linux","X64","hexa-build"]'
+    # `hexa-ready` is a self-reported LOAD-GATING label maintained by
+    # tool/runner_load_toggle.sh (systemd/cron on each linux builder): a box
+    # saturated by non-GitHub work (e.g. anima on aiden, loadavg 17/12c) drops
+    # the label and takes itself out of routing, while GitHub's own `busy` flag —
+    # which only reflects GitHub jobs — still reads idle. Both the probe filter
+    # (want_labels) AND the emitted runs-on (sh_label) must carry it, else GitHub
+    # would still schedule the queued job onto a label-lacking overloaded box.
+    # Fail-open: if every builder drops hexa-ready, the probe matches nothing and
+    # the terminal ubuntu-latest fallback still runs the gate — never a wedge.
+    want_labels='self-hosted Linux X64 hexa-build hexa-ready'
+    sh_label='["self-hosted","Linux","X64","hexa-build","hexa-ready"]'
     ;;
   darwin)
     fallback='"macos-15"'

@@ -9,7 +9,7 @@
 //   3. exclude files marked `// @selftest_skip` in their first 10 lines
 //
 // Per-file evaluation:
-//   * spawn `timeout 30 hexa <file>` and capture combined output + rc
+//   * spawn `timeout 120 hexa <file>` and capture combined output + rc
 //   * output contains "FAIL"  -> FAIL
 //   * rc == 0 (and no FAIL)   -> PASS
 //   * rc == 124               -> TIMEOUT (GNU timeout convention)
@@ -94,7 +94,13 @@ fn classify(rc: int, combined: string) {
 }
 
 fn run_one(path: string) {
-    let cmd = "timeout 30 " + _hexa_bin() + " " + path
+    // Per-test wall clock. 30s was fine while the shared ~/.hexa-cache served
+    // fossil binaries, but #5004's toolchain-tagged run-cache key makes every
+    // gate run FRESH-COMPILE each test, and the codec tests build large
+    // conversion tables: MEASURED 2026-07-18 (aiden) cp949 35s / gbk 54s fresh
+    // (both PASS 30/30, 27/27) — they were TIMEOUTing under the 30s cap. 120s
+    // gives ~2.2x margin over the slowest while still catching genuine hangs.
+    let cmd = "timeout 120 " + _hexa_bin() + " " + path
     let combined = run_capture(cmd)
     let rc = parse_rc(combined)
     let status = classify(rc, combined)

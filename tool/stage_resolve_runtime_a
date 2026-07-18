@@ -2091,6 +2091,31 @@ build_runtime_a_from_source() {
         echo "[stage_resolve_runtime_a] RT-NATIVE STRTOD-TAIL: HEXA_RT_STRTOD_TAIL_NATIVE=1; ar'ing native float_parse_hexinfnan_native.o into runtime.a"
     fi
 
+    # axis-2 strtod UND-KILL (HEXA_RT_STRTOD_DROP, opt-IN default-OFF): swap the 4
+    # direct strtod( sites (runtime.c hexa_str_parse_float + _shortest_double,
+    # runtime_core.c __hexa_format_float_mode x2) to the native parse chain. Requires
+    # ALL THREE float seeds resolved (fast+EXACT+hexinfnan) so the extern rt_* resolve
+    # archive-internally. Unset -> def empty -> the emitter #ifdef arms are dead ->
+    # runtime.o/runtime_core.o byte-identical (byteeq-NEUTRAL).
+    local rt_strtod_drop_def=""
+    # TRI-STATE HEXA_RT_STRTOD_DROP (mirrors SYSLEAF :-auto at :4311 / STRCMP-STRTOLL):
+    #   auto (default) / 1 => native strtod chain WHEN the 3 float seeds are active
+    #   (else IGNORED, byteeq-neutral) · 0 => opt-out (retain libc strtod). The 3 seeds
+    #   auto-activate once their .o is built (STRTOD_TAIL is itself :-1 default-ON, :1298),
+    #   so on a normal build `auto` FIRES and drops the 4 strtod( sites -> the strtod libc
+    #   UND leaves runtime.a. ON-path witnessed GREEN #5001 (nm strtod UND 0, #4651 corpus
+    #   T_mis=0 vs glibc, prefix-junk bit-diff 0, RUN A/B byte-diff 0). Default-ON gated on
+    #   byteeq 3-target + shipping smoke (bit-changing).
+    local _rt_strtod_mode="${HEXA_RT_STRTOD_DROP:-auto}"
+    if [ "$_rt_strtod_mode" != "0" ]; then
+        if [ -n "$rt_numf_def" ] && [ -n "$rt_numf_exact_def" ] && [ -n "$rt_strtod_tail_def" ]; then
+            rt_strtod_drop_def="-DHEXA_RT_STRTOD_DROP=1"
+            echo "[stage_resolve_runtime_a] axis-2 STRTOD-DROP: HEXA_RT_STRTOD_DROP native (auto/1) - 4 strtod( sites -> native chain (strtod libc UND dropped)"
+        else
+            echo "[stage_resolve_runtime_a] axis-2 STRTOD-DROP: HEXA_RT_STRTOD_DROP native (auto/1) IGNORED - needs NUM_PARSE_FLOAT_NATIVE+EXACT+STRTOD_TAIL seeds active" >&2
+        fi
+    fi
+
     # zero-c #29 REGEX (regex-flip wiring follow-on): when opt-IN active (HEXA_REGEX_NATIVE=1
     # set by resolve_native_regex_rt_seed AND the seed .o built), define HEXA_REGEX_NATIVE for
     # EVERY runtime.c compile site (single-TU + MULTIOBJ runtime.o/runtime_core.o + CUDA
@@ -4264,12 +4289,12 @@ build_runtime_a_from_source() {
         #      archive-internal resolution). NO HEXA_HAS_HEXA_RT_STDLIB (matches the
         #      default single-TU object; setting it would extern rt_log/… → multidef).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S2]: compile build/runtime.o (include-drop, HI-tier inline)…"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_arr_i64_def $rt_arr_f64_def $rt_arr_zeros_def $rt_arr_new_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self $_heap_def -c self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_strtod_drop_def $rt_regex_def $rt_valop_def $rt_arr_i64_def $rt_arr_f64_def $rt_arr_zeros_def $rt_arr_new_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self $_heap_def -c self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
         # (S3) runtime_core.o — standalone TU (sysheaders prelude), runtime_hi_gen.c
         #      KEPT (supplies the HI-tier rt_* C bodies). SAME seed -D set. NO
         #      HEXA_HAS_HEXA_RT_STDLIB (keeps those bodies inline, not externed).
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S3]: compile build/runtime_core.o (standalone TU, runtime_hi_gen.c kept)…"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_mapq_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_arr_i64_def $rt_arr_f64_def $rt_arr_zeros_def $rt_arr_new_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_stdio_link $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE $_mo_rtcore_def $_rng_strcmp_def -I self -include self/runtime_core_sysheaders.h $_heap_def -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_mapq_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_strtod_drop_def $rt_regex_def $rt_valop_def $rt_arr_i64_def $rt_arr_f64_def $rt_arr_zeros_def $rt_arr_new_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_stdio_link $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE $_mo_rtcore_def $_rng_strcmp_def -I self -include self/runtime_core_sysheaders.h $_heap_def -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
         # (S4) hxlcl_shim.o — libc-delegate hxlcl_* sibling TU.
         # own-start #29 coherence: $_zc_own_def MUST flow here too — without it the
         # shim's hxlcl_atexit stays the glibc-atexit delegate (U atexit), and under
@@ -4362,7 +4387,7 @@ build_runtime_a_from_source() {
             local _mo_cinc="$_mo_cuda_home/targets/x86_64-linux/include"
             [ -d "$_mo_cinc" ] || _mo_cinc="$_mo_cuda_home/include"
             echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA: build SEPARATE build/runtime.cuda.a (include-drop multi-object + cuda objects)"
-            $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_arr_i64_def $rt_arr_f64_def $rt_arr_zeros_def $rt_arr_new_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
+            $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_strtod_drop_def $rt_regex_def $rt_valop_def $rt_arr_i64_def $rt_arr_f64_def $rt_arr_zeros_def $rt_arr_new_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_stdio $_zc_exit_flush -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
             "${AR:-ar}" rcs build/runtime.cuda.a build/runtime_cuda_host.o build/runtime_core.o $_mo_hxlcl_members $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
             ls -la build/runtime.cuda.a
             local _mo_cseed _mo_cm
@@ -4382,7 +4407,7 @@ build_runtime_a_from_source() {
         echo "$RA"
         return 0
     fi
-    $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_mapq_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_arr_i64_def $rt_arr_f64_def $rt_arr_zeros_def $rt_arr_new_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_exit_flush -I self $_heap_def -c self/runtime.c -o build/runtime.o
+    $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_mapq_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_strtod_drop_def $rt_regex_def $rt_valop_def $rt_arr_i64_def $rt_arr_f64_def $rt_arr_zeros_def $rt_arr_new_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_exit_flush -I self $_heap_def -c self/runtime.c -o build/runtime.o
     "${AR:-ar}" rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     if [ "${HEXA_CUDA:-0}" = "1" ] && [ -f build/runtime_cuda.o ] && [ -f build/runtime_cuda_dlink.o ]; then
@@ -4390,7 +4415,7 @@ build_runtime_a_from_source() {
         local _cinc="$_cuda_home/targets/x86_64-linux/include"
         [ -d "$_cinc" ] || _cinc="$_cuda_home/include"
         echo "[stage_resolve_runtime_a] CUDA-R1: building SEPARATE consumer archive build/runtime.cuda.a (runtime.c -DHEXA_CUDA -I$_cinc + runtime_cuda.o + runtime_cuda_dlink.o); toolchain keeps the CPU build/runtime.a (libcuda-free, GPU-less-host-runnable)"
-        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_mapq_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_regex_def $rt_valop_def $rt_arr_i64_def $rt_arr_f64_def $rt_arr_zeros_def $rt_arr_new_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_exit_flush -DHEXA_CUDA -I "$_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o
+        $CC $CFLAGS -D_FORTIFY_SOURCE=0 $_zeroc_nobuiltin $rt_array_def $rt_array_arena_def $rt_map_def $rt_mapq_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_fmtf_def $rt_numf_exact_def $rt_strtod_tail_def $rt_strtod_drop_def $rt_regex_def $rt_valop_def $rt_arr_i64_def $rt_arr_f64_def $rt_arr_zeros_def $rt_arr_new_def $rt_alloc_def $rt_print_def $_zc_own_def $_zc_exit_flush -DHEXA_CUDA -I "$_cinc" -I self $_heap_def -c self/runtime.c -o build/runtime_cuda_host.o
         "${AR:-ar}" rcs build/runtime.cuda.a build/runtime_cuda_host.o $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
         ls -la build/runtime.cuda.a
         # ING-35 #2 — fail loudly if the CUDA archive dropped a native-core seed the

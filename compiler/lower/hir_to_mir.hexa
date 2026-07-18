@@ -4817,13 +4817,22 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
 
     // ── ident ───────────────────────────────────────────────
     if k == "ident" {
-        // `nil` literal — emit TAG_VOID directly. Bind list at
-        // compiler/check/bind.hexa:780 accepts `nil` as a known name, but
-        // _mir_lookup/_mir_lookup_global don't define a value for it so
-        // it would fall through to _emit_hx1101 + _no_value (TAG_INT 0,
+        // `nil`/`void` literal — emit TAG_VOID directly. Bind list at
+        // compiler/check/bind.hexa accepts `nil`/`void` as known names, but
+        // _mir_lookup/_mir_lookup_global don't define a value for them so
+        // they would fall through to _emit_hx1101 + _no_value (TAG_INT 0,
         // producing `type_of(nil) == "int"` instead of "void"). Mirror
-        // the hexat codegen_c2 fast-path (self/codegen_c2.hexa:3262).
-        if e.text == "nil" {
+        // the hexat codegen_c2 fast-path (self/codegen_c2.hexa:3262). axis-①:
+        // `void` in VALUE position (e.g. `return void`, `let x = void`,
+        // `x != void` — self/std_collections.hexa) was the biggest native-emit
+        // delegate family (HX2001 undefined-name `void`, ~25 cloud programs):
+        // the native frontend knew `void` only as a TYPE (types.hexa:947) and
+        // rejected it as a value ident, forcing the C-transpile leg (which
+        // lowers void-value → hexa_void()). Mirroring the `nil` intercept here
+        // + `void` in the bind gate (bind.hexa) + the symcensus special-op set
+        // (tool/symcensus_lint.sh) closes it — a value literal, never a runtime
+        // symbol, so NO `_builtin_runtime_sym` mapping (convergence bind-hexa-2).
+        if e.text == "nil" || e.text == "void" {
             return _value(ctx, _const_void_op())
         }
         let id = _mir_lookup(ctx, e.text)
@@ -5243,6 +5252,36 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
 
     // ── call → STMT_CALL ───────────────────────────────────
     if k == "call" {
+        // char_code(s) / ord(s) — 1-arg SOURCE builtins whose runtime target
+        // hexa_char_code(str, index) is 2-arg. The C-transpile leg synthesises
+        // the constant index-0 arg (self/codegen.hexa:9338 `hexa_char_code(a0,
+        // hexa_int(0))`); the NATIVE generic named-call path does NOT, so
+        // char_code(s) emits a 1-arg call and the runtime reads a garbage 2nd
+        // HexaVal (index) register → returns 0. MEASURED 2026-07-18 (x86_64):
+        // `char_code("1")` = 0 (want 49), while `char_code_at`/`substring`/`len`
+        // are correct; the arm64 backend hand-injects the index only for `ord`
+        // (arm64_darwin.hexa ord block), not char_code, and x86_64 for neither.
+        // Synthesise the index-0 arg HERE so BOTH backends emit the 2-arg call
+        // (the 2-arg char_code form is already handled by self/codegen.hexa:9532
+        // and the generic native path). Bit-CHANGING for char_code/ord programs
+        // (a miscompile fix) → gated by byteeq 3-target. The rewrite makes the
+        // call 3 children (callee + 2 args) so it can't re-trigger this arm.
+        if len(e.children) == 2 && e.children[0].kind == "ident" {
+            let _ccn = _strip_mut_prefix(e.children[0].text)
+            if _ccn == "char_code" || _ccn == "ord" {
+                let mut _cckids: [HExpr] = []
+                _cckids.push(e.children[0])
+                _cckids.push(e.children[1])
+                _cckids.push(_hir_lit_int("0", e))
+                let _cccall = HExpr {
+                    kind: "call", span: e.span, typ: e.typ, text: "",
+                    children: _cckids,
+                    atlas: AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" },
+                    def: DefId { module: "", index: -1 }, annotations: []
+                }
+                return _lower_hexpr(ctx, _cccall)
+            }
+        }
         // carrier call: `thread_spawn(worker, 1)` etc — the callee is a runtime
         // TAG_FN/TAG_CLOSURE carrier DATA global, not a C fn. Emit op="carrier_call"
         // with args = [carrier_name_str, arg1, …]; codegen loads the carrier
@@ -5785,6 +5824,43 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             while _vs_want > 0 && len(arg_ops) < _vs_want {
                 arg_ops.push(_const_void_op())
             }
+        }
+        // ── axis-① ld-link lever (default-ON HEXA_NATIVE_PANIC_LOWER, opt-out=0): native `panic`
+        // lowering. `panic` is a keyword builtin (self/lexer.hexa) → never shadowed,
+        // so keying on callee_text is sound. Otherwise the native backend lowers it
+        // as an ordinary builtin call whose `_builtin_runtime_sym("panic")` falls
+        // through to the bare name → `call panic` with no runtime symbol → ld
+        // "undefined reference to panic", forcing the C-transpile delegate (measured:
+        // ALL 7 ld-link-fail delegates on verified HEAD 1e8f7870d). Desugar to the C
+        // leg's exact sequence (self/codegen.hexa:5867): eprint "panic: " · eprint
+        // <msg> · eprint "\n" · exit(1) — via the already-mapped eprint→hexa_eprint_val
+        // + exit→hexa_exit (both defined in runtime.a). Quirk mirrored: an arg-less
+        // panic prints the literal "panic" as its message. DEFAULT-ON — opt out with
+        // HEXA_NATIVE_PANIC_LOWER=0 (that path is byte-identical: falls through to the
+        // generic STMT_CALL below). The default-ON flip (#5013 landed this as opt-in,
+        // then #4856-shape flip) is justified: #5013 byteeq-3-target GREEN + behavioral
+        // 7/7 native · panic-path exit(1) · opt-out byte-neutral (summer-verified). This
+        // flip is itself re-gated by byteeq-3-target + shipping smoke before merge.
+        if callee_text == "panic" && env("HEXA_NATIVE_PANIC_LOWER") != "0" {
+            let mut _pmsg: Operand = _const_str_op("panic")
+            if len(arg_ops) > 0 { _pmsg = arg_ops[0] }
+            let mut _pctx = _fresh_local(ctx_r, e.typ, "panic_hdr")
+            let mut _ph: [Operand] = []
+            _ph.push(_const_str_op("panic: "))
+            _pctx = _push_stmt(_pctx, Stmt { kind: STMT_CALL, dst: _lr_locals[len(_lr_locals) - 1], op: "eprint", args: _ph, target_block: -1, target_block_else: -1 })
+            _pctx = _fresh_local(_pctx, e.typ, "panic_msg")
+            let mut _pm: [Operand] = []
+            _pm.push(_pmsg)
+            _pctx = _push_stmt(_pctx, Stmt { kind: STMT_CALL, dst: _lr_locals[len(_lr_locals) - 1], op: "eprint", args: _pm, target_block: -1, target_block_else: -1 })
+            _pctx = _fresh_local(_pctx, e.typ, "panic_nl")
+            let mut _pn: [Operand] = []
+            _pn.push(_const_str_op("\n"))
+            _pctx = _push_stmt(_pctx, Stmt { kind: STMT_CALL, dst: _lr_locals[len(_lr_locals) - 1], op: "eprint", args: _pn, target_block: -1, target_block_else: -1 })
+            _pctx = _fresh_local(_pctx, e.typ, "panic_exit")
+            let mut _pe: [Operand] = []
+            _pe.push(_const_int_op(1))
+            _pctx = _push_stmt(_pctx, Stmt { kind: STMT_CALL, dst: _lr_locals[len(_lr_locals) - 1], op: "exit", args: _pe, target_block: -1, target_block_else: -1 })
+            return _no_value(_pctx)
         }
         let mut ctx2 = _fresh_local(ctx_r, e.typ, "call_ret")
         let dst = _lr_locals[len(_lr_locals) - 1]

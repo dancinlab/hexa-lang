@@ -1612,6 +1612,16 @@ fn _boxop_census_enabled() -> bool {
     return env("HEXA_BOXOP_CENSUS") == "1"
 }
 
+// L4 boxed-ARG census (producer side · HEXA_BOXARG_CENSUS=1). Counts every hv
+// call-arg box site (`_x86_hv_box_arg`, 46 sites) and flags the ones whose operand
+// is provably a raw i64 (WASTED-int = a box the static-typing unboxing lever could
+// strip). Read-only stderr, no _x86_buf mutation ⇒ byte-neutral when unset. Mirrors
+// the consumer `_boxop_census_enabled` (STMT_BINOP) axis — together they size the
+// boxing tax across both producer(arg) and consumer(op) sides. measure-first (#4979).
+fn _boxarg_census_enabled() -> bool {
+    return env("HEXA_BOXARG_CENSUS") == "1"
+}
+
 // Is operand `o` provably a raw i64 payload (no boxing/tag-dispatch needed)?
 // SOUNDNESS: `local_type` is keyed by the LOCAL id space (_x86_max_local_id over
 // locals+params+stmt operands). GLOBALS live in a SEPARATE id space (module
@@ -2849,6 +2859,14 @@ fn _x86_emit_cstr_key(o: Operand, st: X86StrTab, rm: X86RegMap, reg: string, opt
 }
 fn _x86_hv_box_arg(o: Operand, st: X86StrTab, rm: X86RegMap,
                    lo: string, hi: string, opts: CodegenOptions) {
+    // L4 boxed-ARG census — count this box site + flag provably-int operands as
+    // WASTED-int (the unboxing lever's target). BEFORE the const_str early-return so
+    // string boxes are counted too. Gated ⇒ default-OFF byte-neutral (stderr only).
+    if _boxarg_census_enabled() {
+        let mut _c = "BOXED"
+        if _x86_operand_provably_int(o, rm) { _c = "WASTED-int" }
+        eprintln("[BOXARG] " + _c + " kind=" + o.kind)
+    }
     if o.kind == "const_str" {
         // A bare string literal: payload = &.LCstr (RIP-relative), tag = 3.
         let mut lbl = _x86_strtab_lookup(st, o.str_val)
