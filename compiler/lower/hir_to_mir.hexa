@@ -5816,7 +5816,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 arg_ops.push(_const_void_op())
             }
         }
-        // ── axis-① ld-link lever (opt-in HEXA_NATIVE_PANIC_LOWER): native `panic`
+        // ── axis-① ld-link lever (default-ON HEXA_NATIVE_PANIC_LOWER, opt-out=0): native `panic`
         // lowering. `panic` is a keyword builtin (self/lexer.hexa) → never shadowed,
         // so keying on callee_text is sound. Otherwise the native backend lowers it
         // as an ordinary builtin call whose `_builtin_runtime_sym("panic")` falls
@@ -5826,10 +5826,13 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // leg's exact sequence (self/codegen.hexa:5867): eprint "panic: " · eprint
         // <msg> · eprint "\n" · exit(1) — via the already-mapped eprint→hexa_eprint_val
         // + exit→hexa_exit (both defined in runtime.a). Quirk mirrored: an arg-less
-        // panic prints the literal "panic" as its message. OFF path (flag != "1") is
-        // byte-identical (falls through to the generic STMT_CALL below). bit-changing
-        // → byteeq-3-target + a behavioral run of the 7 programs gate the default-ON flip.
-        if callee_text == "panic" && env("HEXA_NATIVE_PANIC_LOWER") == "1" {
+        // panic prints the literal "panic" as its message. DEFAULT-ON — opt out with
+        // HEXA_NATIVE_PANIC_LOWER=0 (that path is byte-identical: falls through to the
+        // generic STMT_CALL below). The default-ON flip (#5013 landed this as opt-in,
+        // then #4856-shape flip) is justified: #5013 byteeq-3-target GREEN + behavioral
+        // 7/7 native · panic-path exit(1) · opt-out byte-neutral (summer-verified). This
+        // flip is itself re-gated by byteeq-3-target + shipping smoke before merge.
+        if callee_text == "panic" && env("HEXA_NATIVE_PANIC_LOWER") != "0" {
             let mut _pmsg: Operand = _const_str_op("panic")
             if len(arg_ops) > 0 { _pmsg = arg_ops[0] }
             let mut _pctx = _fresh_local(ctx_r, e.typ, "panic_hdr")
