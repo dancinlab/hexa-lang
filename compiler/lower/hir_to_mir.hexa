@@ -4817,13 +4817,22 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
 
     // ── ident ───────────────────────────────────────────────
     if k == "ident" {
-        // `nil` literal — emit TAG_VOID directly. Bind list at
-        // compiler/check/bind.hexa:780 accepts `nil` as a known name, but
-        // _mir_lookup/_mir_lookup_global don't define a value for it so
-        // it would fall through to _emit_hx1101 + _no_value (TAG_INT 0,
+        // `nil`/`void` literal — emit TAG_VOID directly. Bind list at
+        // compiler/check/bind.hexa accepts `nil`/`void` as known names, but
+        // _mir_lookup/_mir_lookup_global don't define a value for them so
+        // they would fall through to _emit_hx1101 + _no_value (TAG_INT 0,
         // producing `type_of(nil) == "int"` instead of "void"). Mirror
-        // the hexat codegen_c2 fast-path (self/codegen_c2.hexa:3262).
-        if e.text == "nil" {
+        // the hexat codegen_c2 fast-path (self/codegen_c2.hexa:3262). axis-①:
+        // `void` in VALUE position (e.g. `return void`, `let x = void`,
+        // `x != void` — self/std_collections.hexa) was the biggest native-emit
+        // delegate family (HX2001 undefined-name `void`, ~25 cloud programs):
+        // the native frontend knew `void` only as a TYPE (types.hexa:947) and
+        // rejected it as a value ident, forcing the C-transpile leg (which
+        // lowers void-value → hexa_void()). Mirroring the `nil` intercept here
+        // + `void` in the bind gate (bind.hexa) + the symcensus special-op set
+        // (tool/symcensus_lint.sh) closes it — a value literal, never a runtime
+        // symbol, so NO `_builtin_runtime_sym` mapping (convergence bind-hexa-2).
+        if e.text == "nil" || e.text == "void" {
             return _value(ctx, _const_void_op())
         }
         let id = _mir_lookup(ctx, e.text)
