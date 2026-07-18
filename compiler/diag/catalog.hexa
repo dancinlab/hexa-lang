@@ -996,6 +996,23 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3061",
+        title: "handle produced but never freed (leak)",
+        // Warning band, the handle-LEAK rung (`HEXA_BORROWCK_LEAK=1`, HEXA-OWN L5 R2)
+        // — the DUAL of HX3060 use-after-free. NEW + uncensused, so it ships opt-IN
+        // default-OFF (unlike the flipped opt-out HX3060), mirroring how HX3060 itself
+        // shipped opt-in (#4947) before its 1240→0 corpus census flip. With the flag
+        // unset no BIRTH event is recorded, `_bck_leak_check` returns immediately, and
+        // the diagnostic stream + emitted .text are byte-identical (release integrity).
+        // `HEXA_BORROWCK_STRICT=1` re-bands the SAME instance to a build-refusing Error
+        // via the sanctioned caller override in `_bck_emit_handle_leak`.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "`{name}` is allocated by `{callee}` (line {born_line}) but is never freed on some path out of this function — its runtime handle slot leaks",
+        explain: "The handle-leak borrow-checker lane (`HEXA_BORROWCK_LEAK=1`, HEXA-OWN L5 R2) is the DUAL of HX3060: where HX3060 flags a USE after a free, HX3061 flags a runtime handle that is produced and then never freed on some path out of the function. `{name}` is minted by the producer `{callee}` on line {born_line} (`let {name} = {callee}(..)`), and at least one function-exit path is reached without a consuming call (`farr_free`/`farr_int_free`/`farr32_free`) and without the handle escaping (returned to the caller, or overwritten by a later producer assignment). A `farr_*` handle is an i64 SLOT INDEX into the runtime handle table, so an unfreed slot is a genuine resource leak — the slot never returns to the freelist and the backing tensor storage stays pinned for the process lifetime. DETECTION reuses the HX3060 machinery inverted: a producer CALL is a BIRTH (gen), a consume MOVE or an ESCAPE (return / reassign-overwrite) is a KILL, and a forward OR-join MAY fixed-point over `Block.preds` (seed 0, reference-matched to rustc_mir_dataflow `MaybeInitializedPlaces` inverted to maybe-leaked) computes, at each EXIT block, whether the obligation to free may still be outstanding on some path — MAY polarity because rustc requires Drop on ALL paths, so a leak on any one path is a real bug (a free inside one `if` branch but not the `else` fires). FP boundary: registration is call-shaped (only producer-table names mint a tracked handle, never an ordinary integer), and the obligation is discharged by consume + return + reassign-overwrite AND (L5 R3+R4+R5 escape-widening) by storing the handle into a struct field / array element / global, passing it to an @own param, placing it in a struct/array literal or enum-constructor payload at construction, or capturing it in a closure (the closure environment aliases the handle and may consume it inside the deferred body or outlive the function) (ownership transfers to the container or callee); `tg==0` (no handle birth) is an immediate no-op. REMAINING FALSE-POSITIVE surface (census-driven precision tail): a handle passed to a DERIVED consumer NOT declared `@own` (aliasing through an ordinary param that internally frees), or ownership that flows across a cross-fn summary the lane does not track, is not yet modeled — exactly why this lane ships opt-in and MUST pass a corpus census (aprime_cc from-source borrowck, like HX3060's 1240→0) before any default-ON flip. Fix: free `{name}` with a consuming call before every path out of the function, return it to transfer ownership to the caller, or (if the flag is over-firing on a legitimate escape not yet modeled) leave the lane opt-in until the round-5 census lands.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX3053",
         title: "array cannot be indexed by a string",
         severity: Severity::Error,

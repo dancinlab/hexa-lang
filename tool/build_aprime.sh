@@ -117,6 +117,20 @@ else
     export CC="${CC:-clang}"
     export LIBS="${LIBS:--lm}"
     export CFLAGS_COMMON="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
+    # Package runtime.a the same way the shipping build does. tool/release_build:77
+    # exports HEXA_RT_MULTIOBJ=1, which makes stage_resolve_runtime_a keep
+    # runtime_core.o as a SEPARATE archive member (:2198). build_aprime.sh omitted
+    # this, so it fell to the stage default (0 = single-TU) and produced a DIFFERENT
+    # runtime.a — one that drops runtime_core.o and, with it, the priority ctors it
+    # carries: _hexa_init_stdio (setvbuf + SIGPIPE ignore), _hexa_init_mem_cap,
+    # _hexa_init_malloc_tuning. MEASURED on aiden with isolated fresh clones:
+    # build_aprime -> 16 members, no runtime_core.o, .init_array 8 B (1 ctor);
+    # release_build -> 25 members, runtime_core.o present, .init_array 32 B (4 ctors).
+    # A binary linked against the build_aprime archive therefore ran with SIGPIPE at
+    # its default action (pipe-consumer death), and the divergence already cost a
+    # misdiagnosis (the dropped ctors read as an own-link regression). Match the ship
+    # form. Still caller-overridable, exactly like release_build.
+    export HEXA_RT_MULTIOBJ="${HEXA_RT_MULTIOBJ:-1}"
     # 0a: restore frozen bootstrap seeds (self/runtime.c + #include fragments
     #     + self/native/hexa_cc.c) into the working tree (uncommitted).
     bash tool/restore_frozen_seeds || { echo "build_aprime: STAGE-0 restore_frozen_seeds failed" >&2; exit 1; }
@@ -842,11 +856,31 @@ RT_A=""; [ -f "$REPO/build/runtime.a" ] && RT_A="$REPO/build/runtime.a"
 # arm ONLY when the codegen flag is set (matches the stage-2 hexat env). Unset
 # (the default) → empty → the runtime.o is byte-IDENTICAL to current.
 PACK_OUT_DEF=""; [ -n "${HEXA_SELFEMIT_PACK_OUT:-}" ] && PACK_OUT_DEF="-DHEXA_SELFEMIT_PACK_OUT"
+# -- NUM-FLOAT parse native seed → aprime_cc's OWN compile-time float-literal fold --
+# aprime_cc const-folds a `float_literal` via its linked `to_float`/`__hx_to_double`.
+# The runtime.a already builds with the native string->f64 seeds (rt_parse_float_native
+# fast-path + rt_str_parse_float_exact correctly-rounded tail), but aprime_cc's single-TU
+# compile was missing the -D flags AND the seed .o link, so its `__hx_to_double` fell to
+# the naive `#else` atof and MIS-ROUNDED hard 17+-sig-digit literals (e.g. 1/sqrt(2*pi)
+# 0.39894228040143267794 → 832 not the correctly-rounded 833). That made the compile-time
+# fold differ x86 (aprime, 832) vs arm (833) → the machine-independence fold gate
+# (op19b GELUBWD-DET) drifted only on linux-x86_64. Link the seeds the same way the
+# other native seeds ($RTCORE_*_OBJ/$*_DEF) are, guarded on the .o existing.
+NUM_FLOAT_OBJ=""; NUM_FLOAT_DEF=""
+if [ -f "$REPO/build/num_float_core_native.o" ]; then
+    NUM_FLOAT_OBJ="$REPO/build/num_float_core_native.o"
+    NUM_FLOAT_DEF="-DHEXA_RT_NUM_PARSE_FLOAT_NATIVE=1"
+fi
+FLOAT_EXACT_OBJ=""; FLOAT_EXACT_DEF=""
+if [ -f "$REPO/build/float_parse_exact_native.o" ]; then
+    FLOAT_EXACT_OBJ="$REPO/build/float_parse_exact_native.o"
+    FLOAT_EXACT_DEF="-DHEXA_RT_NUM_PARSE_FLOAT_EXACT=1"
+fi
 CL_ERR="$(clang -Oz $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
     -ffunction-sections -fdata-sections $DEAD_STRIP \
     -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen -fno-builtin-strstr -fno-builtin-strncmp \
-    -D_FORTIFY_SOURCE=0 -fno-stack-protector $PACK_OUT_DEF $ALLOC_DEF $STR_DEF $PRINT_DEF $RTCORE_LEAF_DEF $RTCORE_STRARR_READ_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MATH2_DEF $RTCORE_VALOP_DISPATCH_DEF $RTCORE_MAP_QUERY_DISPATCH_DEF $RTCORE_MAP_QUERY_FOLD_DEF $RTCORE_COLLECTION_MUTATE_DEF $RTCORE_ATL_DEF $RTCORE_FS_RW_DEF $RTCORE_ACF_DEF $RTCORE_RUNTIME_MISC_DEF \
-    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $STR_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_STRARR_READ_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ $RTCORE_VALOP_DISPATCH_OBJ $RTCORE_MAP_QUERY_DISPATCH_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ $RT_A -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined|referenced from|symbol\(s\) not found|^[[:space:]]+"|[[:space:]]+in [^[:space:]]+\.o' | head -20)"
+    -D_FORTIFY_SOURCE=0 -fno-stack-protector $PACK_OUT_DEF $ALLOC_DEF $STR_DEF $PRINT_DEF $RTCORE_LEAF_DEF $RTCORE_STRARR_READ_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MATH2_DEF $RTCORE_VALOP_DISPATCH_DEF $RTCORE_MAP_QUERY_DISPATCH_DEF $RTCORE_MAP_QUERY_FOLD_DEF $RTCORE_COLLECTION_MUTATE_DEF $RTCORE_ATL_DEF $RTCORE_FS_RW_DEF $RTCORE_ACF_DEF $RTCORE_RUNTIME_MISC_DEF $NUM_FLOAT_DEF $FLOAT_EXACT_DEF \
+    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $STR_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_STRARR_READ_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ $RTCORE_VALOP_DISPATCH_OBJ $RTCORE_MAP_QUERY_DISPATCH_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ $NUM_FLOAT_OBJ $FLOAT_EXACT_OBJ $RT_A -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined|referenced from|symbol\(s\) not found|^[[:space:]]+"|[[:space:]]+in [^[:space:]]+\.o' | head -20)"
 # The filter MUST keep the symbol-name lines, not just the headline. Apple ld prints
 #     Undefined symbols for architecture arm64:
 #       "_hexa_eq", referenced from:            <-- the only line that names the culprit

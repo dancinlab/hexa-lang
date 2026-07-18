@@ -2063,7 +2063,10 @@ fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: s
         return 1
     }
     println("[dft-run] picked offer " + offer.offer_id)
-    let inst = vast_create(offer.offer_id, image, disk)
+    // Best-effort provider-label stamp (NOT the fail-closed rent gate — this
+    // autonomous DFT fan-out has no --agent surface; a static who/what slug so a
+    // raw `vastai show instances` still carries attribution).
+    let inst = vast_create_labeled(offer.offer_id, image, disk, "dft-dispatch-hexa-lang")
     if inst.ok == 0 {
         vast_offer_release(offer.offer_id)
         println("[dft-run] create: " + inst.message)
@@ -2913,7 +2916,10 @@ fn _dft_detach(deck: str, image: str, disk: int, owner: str, query: str, identit
         return 1
     }
     println("[dft-run] picked offer " + offer.offer_id)
-    let inst = vast_create(offer.offer_id, image, disk)
+    // Best-effort provider-label stamp (NOT the fail-closed rent gate — this
+    // autonomous DFT fan-out has no --agent surface; a static who/what slug so a
+    // raw `vastai show instances` still carries attribution).
+    let inst = vast_create_labeled(offer.offer_id, image, disk, "dft-dispatch-hexa-lang")
     if inst.ok == 0 {
         vast_offer_release(offer.offer_id)
         println("[dft-run] create: " + inst.message)

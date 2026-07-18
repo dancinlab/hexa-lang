@@ -1,0 +1,17 @@
+// HEXA-OWN L5 R2 — HX3061 NEGATIVE control: a RETURNED handle does NOT leak.
+//
+// Ownership escapes to the caller via `return t`, so the free obligation transfers
+// out of this function — no leak. Proves the return-ESCAPE kill discharges the bit.
+//
+// Expect: HEXA_BORROWCK_LEAK=1 → 0 HX3061.
+fn make() -> i64 {
+    let t = farr_zeros(4)
+    farr_set(t, 0, 1.0)
+    return t
+}
+
+fn main() {
+    let h = make()
+    farr_free(h)
+    println("done")
+}

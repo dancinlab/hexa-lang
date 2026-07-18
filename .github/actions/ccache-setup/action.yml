@@ -85,7 +85,22 @@ runs:
               brew install ccache ;;
             Linux)
               if command -v apt-get >/dev/null 2>&1; then
-                sudo apt-get update -qq && sudo apt-get install -y -qq ccache
+                # ccache is a COMPILE ACCELERATOR ONLY — a miss just recompiles
+                # and CANNOT move the emitted/linked bytes (see the BYTEEQ-SAFETY
+                # header above). So its install is BEST-EFFORT: a transient apt
+                # mirror outage (ports.ubuntu.com unreachable on the arm64 cloud
+                # runner has failed otherwise-GREEN byteeq jobs with exit 100)
+                # must NOT fail the job. Retry the fetch a few times, then fall
+                # through to an UNCACHED build — never `set -e`-die on it.
+                ccok=0
+                for _cc_try in 1 2 3; do
+                  if sudo apt-get update -qq && sudo apt-get install -y -qq ccache; then
+                    ccok=1; break
+                  fi
+                  echo "::warning::ccache apt install attempt ${_cc_try}/3 failed (transient apt mirror outage?) — retrying"
+                  sleep $(( _cc_try * 5 ))
+                done
+                [ "$ccok" = 1 ] || echo "::warning::ccache install failed after 3 attempts (apt mirror unreachable) — build runs UNCACHED (HEXA_CCACHE no-op, byte-identical)"
               else
                 echo "::warning::no apt-get and ccache absent — build runs uncached (HEXA_CCACHE no-op)"
               fi ;;

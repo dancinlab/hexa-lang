@@ -28,7 +28,7 @@ name: stdlib-selftest-gate
 # only after a measured green week, and only UNFILTERED (a path-filtered
 # required check deadlocks PRs that don't touch the paths).
 #
-# Linux is mandatory: the aggregator spawns GNU `timeout 30 <hexa> <file>`
+# Linux is mandatory: the aggregator spawns GNU `timeout 120 <hexa> <file>`
 # (tool/stdlib_selftest_aggregate.hexa run_one), absent on macOS by default.
 
 on:

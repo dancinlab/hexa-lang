@@ -1,0 +1,17 @@
+// HEXA-OWN L5 R1 — HX3060 POSITIVE control pinning the NAME-SCOPING: an alias
+// taken BEFORE a free, with the original re-pointed AFTER, then the alias used, is
+// a REAL use-after-free. The name-scoped KILL of the re-pointed name must NOT wash
+// the surviving alias's view.
+//
+// Expect: HEXA_BORROWCK_HANDLE=1 -> >=1 HX3060 (at the read through `b`).
+fn main() -> int {
+    let k = 4
+    let mut a = farr_zeros(k)
+    let b = a                           // surviving alias of the same slot
+    let _ = farr_free(a)                // slot freed — b now dangles
+    let n = 7
+    a = n                               // name-scoped KILL "a" — must NOT clear b's view
+    let x = farr_get(b, 0)              // REAL UAF via b — must fire HX3060
+    let _ = x
+    return 0
+}
