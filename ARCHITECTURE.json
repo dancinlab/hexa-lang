@@ -738,6 +738,13 @@
         "value": "L4 unbox round-2 — free-fn builtin `len(x)→i64` 스탬프 구현(branch feat/l4-freefn-builtin-len-stamp). 측정=summer census @b2f725216 최대 단일 UNSTAMPED int-producer(free-fn `len` ident-callee 1475·method 93 압도). ★재사용 학습=builtin-vs-user disambiguation 비대칭: (a)CHECKER(_types_check_call)는 TypeEnv 존재→user `fn len`은 fn-kind로 등록, builtin은 미등록(empty callee_t)→env 자체가 disambiguator라 census 불요, `_types_builtin_free_ret` SSOT를 method arm(s.len())과 동일 always-on static-types 레인(_types_static_on)에 대칭 배선(동일 i64·동일 sink→corpus-clean 중립 상속). (b)LOWERING(ast_to_hir)은 main.hexa가 RAW-AST를 TypeEnv 없이 lower→callee.typ 미해결이라 census 필수: per-module binder-name Set(64-bucket FNV)로 `len`이 어디든 바인딩되면 disable(coarse=safety-pin, mis-stamp 불가·miss만 가능). census는 bind.hexa `_bind_walk_expr`+`_bind_pattern` 전 binder 폼 미러(top-level·fn param·Let·For·Try catch-var·Closure param·Match 패턴 ident/enum-payload/struct-field nested)—하나라도 누락시 flip-time false-stamp=self-host 손상, default-OFF 머지선 byte-neutral. sub-flag HEXA_UNBOX_HIR_CALLTYPE_FREE default-OFF·census flag-ON에서만 prime/read(OFF byte·perf중립). Call arm else-if는 t.kind==\"?\" 가드 하→user-fn 스탬프 미덮음. DefId엔 builtin 마커 필드 없음(builtin callee.def==unresolved sentinel 동일)→def·name-only 판별 금지(rank-1 DEAD).",
         "threshold": "머지 게이트=byteeq-3target OFF-path byte-neutral(sub-flag OFF·census 미prime·PR CI 권위). checker always-on 배선 중립=method arm(s.len()→i64) corpus-clean 증거 상속(동일 값·동일 sink)—PR CI byteeq가 확인, RED시 checker 배선 철회. flip PR(default-ON) 게이트=byteeq-3target+nvptx+behavioral(full suite+ship smoke+running gen-chain 전 config)+A/B census 델타(≈−1475 ident:len·타 이동 0). ★byteeq는 det miscompile 미검출(gen3≡gen4 동일오염 통과)→flip은 behavioral 필수. 재발조건=census binder-폼 누락 or checker/lowering 테이블 drift(둘은 미러—types.hexa _types_builtin_free_ret가 SSOT). 설계 SSOT=state/static-types/l4_freefn_builtin_stamp_design.md.",
         "source": "compiler/lower/ast_to_hir.hexa · compiler/check/types.hexa"
+      },
+      {
+        "id": "l4-freefn-calltype-flip-1",
+        "state": "pos-conv",
+        "value": "L4 unbox round-2 R2 FLIP — HEXA_UNBOX_HIR_CALLTYPE_FREE default-ON(opt-out =0). #5024(len-stamp 구현)+#5025(bind-hook census-perf 근인수정 byte-neutral)에 이어 default-ON 전환(branch feat/l4-freefn-calltype-flip). 게이트: byteeq-3target+nvptx GREEN(flip-ON self-host 바이트동일 fixpoint) + #5025 XCHECK MIRROR-CLEAN(shadow==census mismatch=0 summer 실측·behavioral 증명 대행) + A/B census 델타 ≈−1475 ident:len. 단일소스 플립(_hir_free_calltype_enabled env!=0)·코멘트 3곳 lockstep.",
+        "threshold": "",
+        "source": "l4-freefn-calltype-flip"
       }
     ]
   },
