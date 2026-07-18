@@ -95,6 +95,22 @@ vs output-string 미확정) · println(693·unit·제외) · to_string/env_var(s
    + A/B census 델타(≈ −1475 ident:len·타 이동 0) GREEN → default-ON.
 
 ## 상태
-설계 완성·전제 RESOLVED·turnkey 맵 완비. 다음 = 구현(census가 `_bind_walk_expr`+`_bind_pattern` 충실
-미러 = correctness-critical) → summer byteeq OFF-neutral → default-OFF 머지 → 별도 flip PR.
+설계 완성·전제 RESOLVED·turnkey 맵 완비. **구현됨(2026-07-18, branch feat/l4-freefn-builtin-len-stamp):**
+- checker SSOT `_types_builtin_free_ret(name)` 신설(types.hexa, `len→i64`) + `_types_check_call`에
+  배선(ident callee·empty callee_t·`_types_static_on` always-on static-types 레인 — env가 user
+  `fn len`(fn-kind) vs builtin(미등록) disambiguator라 census 불요. method arm `s.len()`의 직접 대칭이라
+  동일 byteeq-neutral 클래스). **census 불요는 checker 한정** — 이유: main.hexa RAW-AST lower엔 TypeEnv가
+  없어서 lowering 미러는 census 필수.
+- lowering: `_hir_builtin_free_ret_prim`(HIR 미러) + `_hir_free_calltype_enabled()`(신규 sub-flag
+  `HEXA_UNBOX_HIR_CALLTYPE_FREE` **default-OFF**) + per-module binder census
+  (`_free_census_prime`/`_free_census_expr`/`_free_census_pattern`/`_free_disqualified`, 64-bucket
+  FNV set) → Call arm(:~2172) else-if(ident callee·flag·`!_free_disqualified`). census는 flag-ON일
+  때만 prime+read(OFF-path byte·perf-neutral). binder 폼 전열거: top-level item·fn param·Let·For·
+  Try(catch-var)·Closure param·Match 패턴(ident/enum-path payload/struct-lit field, nested).
+- lockstep: ast_to_hir:104 헤더주석 default-OFF→default-ON(부모 HEXA_UNBOX_HIR_CALLTYPE) 수정.
+
+**머지 게이트(PR CI 권위)**: byteeq-3target OFF-path byte-neutral(sub-flag OFF·census 미prime).
+checker always-on 배선은 method arm corpus-clean 증거로 중립(동일 i64·동일 sink) — PR CI byteeq가 확인.
+**다음 = 별도 flip PR**: `HEXA_UNBOX_HIR_CALLTYPE_FREE=1` default-ON — byteeq-3target+nvptx +
+behavioral(full suite+ship smoke+running gen-chain) + A/B census 델타(≈ −1475 ident:len·타 이동 0).
 lab 원본 = 세션 scratchpad `lab_l4_freefn_builtin_stamp.md`.

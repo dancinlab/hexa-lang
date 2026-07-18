@@ -101,7 +101,7 @@ fn _hir_t_string() -> Type { return _prim_type("string", "") }
 fn _hir_t_char()   -> Type { return _prim_type("char",   "") }
 fn _hir_t_unit()   -> Type { return _prim_type("unit",   "") }
 
-// ── L4 unboxing round-1 — HEXA_UNBOX_HIR_CALLTYPE (gated · default-OFF) ──
+// ── L4 unboxing round-1 — HEXA_UNBOX_HIR_CALLTYPE (gated · default-ON, opt-out=0) ──
 // Plumbing gap: main.hexa lowers the RAW AST with no TypeEnv, so ast_to_hir
 // re-does shallow inference and leaves builtin-method-call RESULTS as the
 // unknown sentinel `"?"` → MIR `type_id 0` → `_x86_operand_provably_int`
@@ -184,6 +184,216 @@ fn _hir_builtin_method_ret_prim(name: string) -> Type {
         "any" -> _hir_t_bool(),
         "all" -> _hir_t_bool(),
         _ -> _hir_empty_type(),
+    }
+}
+
+// ── L4 unboxing round-2 — HEXA_UNBOX_HIR_CALLTYPE_FREE (gated · default-OFF) ──
+// Extends the call-result stamp to FREE-FN builtins (`len(x)` — an ident-callee
+// call, NOT the field-callee method form the round-1 lever handles). Measured
+// (summer boxing census @b2f725216) as the single largest UNSTAMPED int-producer
+// KIND: 1475 sites, dwarfing the 93 builtin-method sites round-1 already reaches.
+//
+// WHY A SEPARATE SUB-FLAG (default-OFF): the parent HEXA_UNBOX_HIR_CALLTYPE is
+// default-ON, so extending the stamp inline would be a MERGE-DAY shipping-byte
+// change — release rule (bit-changing → opt-in-first). This sub-flag defaults
+// OFF so the merge is byte-neutral; the default-ON flip is a separate PR gated
+// on byteeq-3-target+nvptx GREEN + BEHAVIORAL (full suite + shipping smoke +
+// real running gen-chain, all configs) + an A/B census delta (≈ −1475 ident:len,
+// zero movement elsewhere). byteeq alone CANNOT catch a det miscompile (gen3≡gen4
+// share the same contamination — the own-link flip lesson); behavioral is
+// mandatory because a mis-stamp corrupts the compiler binary itself.
+//
+// SOUNDNESS — the builtin-vs-user disambiguation problem. main.hexa lowers the
+// RAW AST with no TypeEnv, so a bare `len(x)` callee's `typ` is NOT resolved to
+// an `fn` type — the fn-return stamp above leaves it "?" for BOTH a builtin `len`
+// AND a hypothetical user `fn len`. `DefId` carries no builtin marker (a builtin
+// callee's `def` == the same `_hir_miss_def_id()` sentinel an unresolved ident
+// gets), so "def == missing" cannot prove builtin, and a bare name-match would
+// mis-stamp a user `len`. The disambiguator is a per-module binder-name CENSUS:
+// a bare name is a builtin ONLY IF it is bound NOWHERE in the module (else it is
+// a user binding or an undefined-name build failure). Coarse (a single `let len`
+// anywhere disables the whole module) but that coarseness is the SAFETY PIN —
+// the census can only ever make us MORE conservative, never mis-stamp. `import`
+// injects no unqualified names into module scope (bind.hexa `_bind_walk` skips
+// import items), so a per-module census is sound against cross-module `fn len`.
+fn _hir_free_calltype_enabled() -> bool {
+    return env_var("HEXA_UNBOX_HIR_CALLTYPE_FREE") == "1"
+}
+
+// Mirror of the PRIMITIVE-scalar free-fn builtins whose result is a monomorphic
+// scalar (checker SSOT: check/types.hexa::_types_builtin_free_ret). Returns the
+// "?" sentinel for every name outside the closed subset — the caller stamps ONLY
+// on a non-"?" result AND only after the census clears the name as unshadowed.
+// Table growth order (measured, checker-signature-confirmed only): len→i64 (1475)
+// → file_exists→bool (130) → … . `exec` HELD (exit-code i64 vs output-string
+// undecided); println (unit) / to_string / env_var (string) excluded.
+fn _hir_builtin_free_ret_prim(name: string) -> Type {
+    return match name {
+        "len" -> _hir_t_i64(),
+        _ -> _hir_empty_type(),
+    }
+}
+
+// Per-module binder-name census (disqualified set). Heap-resident module globals,
+// reset + re-primed per lower() call — a nested arena helper would dangle on frame
+// rewind (mirrors the _lr_ast_gnames rationale). 64-bucket FNV set reusing
+// _lr_ast_gname_hash. Primed (and read) ONLY under the free-fn flag, so the OFF
+// path never walks it (byte- AND perf-neutral when unset).
+let mut _lr_free_disq: [[string]] = []
+
+fn _hir_is_try_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Try -> true,
+        _ -> false,
+    }
+}
+
+fn _free_disq_add(name: string) {
+    if len(name) == 0 || name == "_" { return }
+    if len(_lr_free_disq) == 0 { return }
+    let h = _lr_ast_gname_hash(name)
+    _lr_free_disq[h] = _lr_free_disq[h].push(name)
+}
+
+fn _free_disqualified(name: string) -> bool {
+    if len(_lr_free_disq) == 0 { return false }
+    let h = _lr_ast_gname_hash(name)
+    let bucket = _lr_free_disq[h]
+    let mut i = 0
+    while i < len(bucket) {
+        if bucket[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Collect pattern binders — mirror of check/bind.hexa::_bind_pattern define
+// sites: Ident (whole-scrutinee binder), EnumPath payload idents, StructLit
+// field binders. Nested payloads recurse. Wildcard / literal bind nothing.
+fn _free_census_pattern(p: Expr) {
+    let pk = p.kind
+    if _hir_is_wildcard_kind(pk) { return }
+    if _hir_is_ident_kind(pk) {
+        _free_disq_add(p.text)
+        return
+    }
+    if _hir_is_enum_path_kind(pk) {
+        let mut i = 0
+        while i < len(p.children) {
+            let c = p.children[i]
+            if _hir_is_ident_kind(c.kind) {
+                _free_disq_add(c.text)
+            } else {
+                _free_census_pattern(c)
+            }
+            i = i + 1
+        }
+        return
+    }
+    if _hir_is_struct_lit_kind(pk) {
+        let mut i = 0
+        while i < len(p.children) {
+            let f = p.children[i]
+            let mut bn = f.text
+            if len(f.children) > 0 && _hir_is_ident_kind(f.children[0].kind) {
+                bn = f.children[0].text
+            }
+            _free_disq_add(bn)
+            i = i + 1
+        }
+        return
+    }
+    // literal / arbitrary expr pattern — no binders, but recurse defensively.
+    _free_census_expr(p)
+}
+
+// Collect ALL binder-position names reachable from an expr — mirror of the
+// binder-introducing arms of check/bind.hexa::_bind_walk_expr (scope tracking
+// dropped: a flat module-wide set is the coarse-but-sound safety pin). Every
+// binder form is enumerated; a miss here would only ever leave a name UN-
+// disqualified (a mis-stamp risk), so completeness is correctness-critical for
+// the flip. Default-OFF merge keeps a residual miss byte-neutral.
+fn _free_census_expr(e: Expr) {
+    let k = e.kind
+    if _is_let_expr_kind(k) {
+        _free_disq_add(_hir_let_name(e.text))
+        let mut i = 0
+        while i < len(e.children) { _free_census_expr(e.children[i]); i = i + 1 }
+        return
+    }
+    if _hir_is_for_kind(k) {
+        _free_disq_add(e.text)
+        let mut i = 0
+        while i < len(e.children) { _free_census_expr(e.children[i]); i = i + 1 }
+        return
+    }
+    if _hir_is_try_kind(k) {
+        _free_disq_add(e.text)
+        let mut i = 0
+        while i < len(e.children) { _free_census_expr(e.children[i]); i = i + 1 }
+        return
+    }
+    if _hir_is_closure_kind(k) {
+        let nc = len(e.children)
+        let mut pi = 0
+        while pi < nc - 1 {
+            _free_disq_add(_hir_let_name(e.children[pi].text))
+            pi = pi + 1
+        }
+        if nc >= 1 { _free_census_expr(e.children[nc - 1]) }
+        return
+    }
+    if _hir_is_match_kind(k) {
+        // children: [scrutinee, pat0, body0, pat1, body1, ...]
+        if len(e.children) >= 1 { _free_census_expr(e.children[0]) }
+        let mut i = 1
+        while i + 1 < len(e.children) {
+            let pat = e.children[i]
+            let body = e.children[i + 1]
+            if ast_is_match_guard(pat) {
+                _free_census_pattern(pat.children[0])
+                _free_census_expr(pat.children[1])
+            } else {
+                _free_census_pattern(pat)
+            }
+            _free_census_expr(body)
+            i = i + 2
+        }
+        return
+    }
+    // generic recurse — every child.
+    let mut i = 0
+    while i < len(e.children) { _free_census_expr(e.children[i]); i = i + 1 }
+}
+
+// Prime the disqualified-name set from the whole module: top-level item names,
+// fn params, and every fn/let body (mirror of check/bind.hexa's item walk).
+fn _free_census_prime(module: Module) {
+    let mut b: [[string]] = []
+    let mut e = 0
+    while e < 64 {
+        let eb: [string] = []
+        b.push(eb)
+        e = e + 1
+    }
+    _lr_free_disq = b
+    let mut i = 0
+    while i < len(module.items) {
+        let it = module.items[i]
+        if !_is_import_item(it.kind) {
+            _free_disq_add(_hir_let_name(it.name))
+        }
+        if _hir_is_fn_item(it.kind) {
+            let mut p = 0
+            while p < len(it.params) {
+                _free_disq_add(_hir_let_name(it.params[p].name))
+                p = p + 1
+            }
+            _free_census_expr(it.body)
+        } else if _hir_is_let_item(it.kind) {
+            _free_census_expr(it.body)
+        }
+        i = i + 1
     }
 }
 
@@ -2173,6 +2383,16 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             if bm_callee.kind == "field" {
                 let bm_ret = _hir_builtin_method_ret_prim(bm_callee.text)
                 if bm_ret.kind != "?" { t = bm_ret }
+            } else if bm_callee.kind == "ident" && _hir_free_calltype_enabled()
+                      && !_free_disqualified(bm_callee.text) {
+                // L4 round-2 — free-fn builtin (`len(x)` ident-callee). Gated by
+                // the default-OFF HEXA_UNBOX_HIR_CALLTYPE_FREE sub-flag AND the
+                // per-module binder census (name bound nowhere ⇒ builtin). Still
+                // under the `t.kind == "?"` guard, so a resolved user-fn `len`
+                // (whose fn-ret stamp already set `t`) is never overwritten —
+                // construction-safe.
+                let br = _hir_builtin_free_ret_prim(bm_callee.text)
+                if br.kind != "?" { t = br }
             }
         }
         // L4 round-2 boxing census (producer) — read-only classification of the
@@ -2879,6 +3099,14 @@ pub fn lower(module: Module, atlas: AtlasIndex) -> HModule {
     // published every module def — the main pass's per-ident _lookup_in_scope
     // probes it instead of the O(M) backward scan.
     _lr_ast_prime_globals(module_sc)
+
+    // L4 round-2 — free-fn builtin call-result stamp census. Primed ONLY under
+    // the default-OFF sub-flag so the OFF path is byte- AND perf-neutral (the
+    // reset below clears any stale set from a prior lower() call in-process).
+    _lr_free_disq = []
+    if _hir_free_calltype_enabled() {
+        _free_census_prime(module)
+    }
 
     // Main pass: lower each item using the populated module scope.
     let mut hitems: [HItem] = []
