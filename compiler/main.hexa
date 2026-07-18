@@ -186,8 +186,8 @@ fn print_help() {
     println("  --stream               fused per-function codegen (lower RSS; arm64, no --opt)")
     println("  --keep-temp            do not remove the per-build intermediate dir (default: off)")
     println("  -v, --verbose          print build-temp dir and intermediate paths to stderr")
-    println("  --strict-citations     treat S8 citation diagnostics as fatal (default: off)")
-    println("  --no-strict-citations  demote S8 citation diagnostics to warnings (default)")
+    println("  --strict-citations     treat S8 citation diagnostics as fatal (default)")
+    println("  --no-strict-citations  demote S8 citation diagnostics to warnings (default: off)")
     println("  --ignore-errors        proceed to codegen despite typecheck errors (bootstrap escape; HEXA_IGNORE_ERRORS=1)")
     println("  --version              print version and exit")
     println("  --help                 print this help and exit")
@@ -401,14 +401,14 @@ if _stream_env == "1" { stream_mode = true }
 let mut cg_profile = false
 let _cgp_env = env("HEXA_CG_PROFILE")
 if _cgp_env == "1" { cg_profile = true }
-// Stage1 punch list Gap 13: `--strict-citations` defaults OFF. While compiler/
-// source is not yet fully cite-bound (every implementation function would
-// need an @implements/@discover annotation otherwise), we run citation_check
-// for signal but DOWNGRADE its Errors to Warnings so they don't gate
-// stage1 reach. Pass `--strict-citations` (or set `HEXA_STRICT_CITATIONS=1`)
-// to restore RFC-017 §3.1 S8 fatal-citation semantics.
-let mut strict_citations = false
+// `--strict-citations` defaults ON — RFC-017 §3.1 S8 fatal-citation semantics
+// are the canonical build gate: a formula-bearing fn with no atlas binding
+// (@implements/@discover) fails the build (HX8004). Pass `--no-strict-citations`
+// (or set `HEXA_STRICT_CITATIONS=0`) to demote S8 diagnostics to warnings for
+// bootstrap/escape flows.
+let mut strict_citations = true
 let _strict_env = env("HEXA_STRICT_CITATIONS")
+if _strict_env == "0" { strict_citations = false }
 if _strict_env == "1" { strict_citations = true }
 
 // Stage1 punch list — `--ignore-errors` lets codegen proceed despite
