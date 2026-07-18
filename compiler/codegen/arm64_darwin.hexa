@@ -2081,6 +2081,10 @@ pub fn _builtin_runtime_sym(name: string, nargs: i64) -> string {
     if name == "sha1_bytes"    { return "hexa_sha1_bytes" }
     if name == "base64_encode" { return "hexa_base64_encode" }
     if name == "base64_decode" { return "hexa_base64_decode" }
+    if name == "fs_stat"          { return "rt_fs_stat" }
+    if name == "fs_mkdir_p"       { return "rt_fs_mkdir_p" }
+    if name == "fs_append_atomic" { return "rt_fs_append_atomic" }
+    if name == "fs_rotate_if_over" { return "rt_fs_rotate_if_over" }
     // N5-sym class-B: native obj-emit left these intrinsics unmapped →
     // fell through to the bare name → undefined at self-host link (the
     // native compiler object references `_list_dir` while the runtime
