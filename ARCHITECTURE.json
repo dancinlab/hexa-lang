@@ -301,8 +301,8 @@
       {
         "id": "stage-resolve-runtime-a-1",
         "state": "pos-conv",
-        "value": "pool ssh 빌드가 선행 'git fetch origin main' 없이 'git checkout origin/main'만 하면 summer/aiden의 STALE origin/main ref를 빌드→방금 머지한 emitter 변경이 없어 보이고 nm 심볼이 안 빠져 verify-done false-negative. 실측: summer HEAD stale서 glob/fgets 게이트=0인데 origin/main엔 정상 존재(#4443+54줄/#4444+18줄).",
-        "threshold": "재발=pool 빌드서 방금 머지한 변경이 '없다'/nm 안바뀜. 판정=origin/main(git show)에 실재 확인+pool HEAD past 확인. stale=harness(fetch누락)·코드결함 아님→revert금지. 해결=pool 빌드는 'git fetch origin main && git checkout FETCH_HEAD' 필수·checkout만 금지.",
+        "value": "pool ssh 빌드가 선행 'git fetch origin main' 없이 'git checkout origin/main'만 하면 summer/aiden의 STALE origin/main ref를 빌드→방금 머지한 emitter 변경이 없어 보이고 nm 심볼이 안 빠져 verify-done false-negative. 실측: summer HEAD stale서 glob/fgets 게이트=0인데 origin/main엔 정상 존재(#4443+54줄/#4444+18줄). ★변종2(2026-07-18·L2 axis-① delegate census 무효): aiden CI러너 워킹카피(~/actions-runner-hexa)를 'git clone --local --no-hardlinks'로 /tmp 복제→'checkout -f origin/main'. --local 클론은 소스repo refs를 그대로 상속하는데 러너 origin/main이 230커밋·9일 뒤(c27f595e4·2026-07-09·#5005 char_code fix+own-link 전시리즈 이전)라 stale 커밋 착지→delegate census 72.9%/'g0+8 undef=55%'가 이미 고쳐진 결함 재측정=전부 무효. verified HEAD(1e8f7870d) 실증서 대표예제(argparse_eqvalue_test) native clean-link+PASS·g0/g1 .data DEFINED·reloc=base g0로 정면반박→그 위 arm-6 fix DROP.",
+        "threshold": "재발=pool 빌드/census서 방금 머지한 변경이 '없다'/nm 안바뀜 OR census 수치가 최신fix와 모순. 판정=origin/main(git show)에 실재 확인+pool HEAD past 확인. stale=harness(fetch누락/–local ref상속)·코드결함 아님→revert금지. 해결=(빌드)pool은 'git fetch origin main && git checkout FETCH_HEAD' 필수·checkout만 금지. (census)'--local' 클론은 러너 stale ref 상속하니 금지→GitHub https fresh clone OR clone후 'git fetch origin main' + **HEAD sha를 알려진 현재 origin/main tip과 문자열 assert**(불일치=STOP)·census/byteeq 보고에 빌드 HEAD sha 명기(verdict-integrity).",
         "source": "tool/stage_resolve_runtime_a"
       },
       {
