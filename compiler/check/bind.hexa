@@ -1391,6 +1391,8 @@ fn _bind_builtin_names() -> [string] {
         "ad_tape_begin", "ad_tape_end", "ad_backward", "ad_grad", "ad_matmul", "ad_softmax_cross_entropy",
         "safetensors_mmap_open", "safetensors_mmap_header", "safetensors_mmap_data_offset", "safetensors_mmap_size", "safetensors_mmap_close", "safetensors_mmap_read_f32_farr", "safetensors_mmap_read_bf16_to_f32_farr", "safetensors_mmap_read_bytes",
         "callback_free", "callback_slot_id",
+        // axis-① Set B-2 R6 — exec-stream/adamw/format pair-ABI free-fns (nm-verified).
+        "exec_stream_open", "exec_stream_write", "exec_stream_close_stdin", "exec_with_status3", "adamw_step", "adamw_step_mixed", "format_float", "format_float_sci", "format_n",
         // Step 5 codegen-inline builtins (4th re-land after e8c2dc1c wipe).
         "__arr_raw_len", "__arr_set_cap", "__fd_write_bytes", "__map_raw_len", "__str_raw_len",
         // RT-NATIVE UNLOCK-2 (2026-06-16): native tag-read intrinsic — `__hx_tag(v)`

@@ -2113,6 +2113,16 @@ pub fn _builtin_runtime_sym(name: string, nargs: i64) -> string {
     if name == "safetensors_mmap_read_bytes"            { return "hexa_safetensors_mmap_read_bytes" }
     if name == "callback_free"                          { return "hexa_callback_free" }
     if name == "callback_slot_id"                       { return "hexa_callback_slot_id" }
+    // axis-① Set B-2 R6 — exec-stream/adamw/format pair-ABI (nm-verified)
+    if name == "exec_stream_open"        { return "hexa_exec_stream_open" }
+    if name == "exec_stream_write"       { return "hexa_exec_stream_write" }
+    if name == "exec_stream_close_stdin" { return "hexa_exec_stream_close_stdin" }
+    if name == "exec_with_status3"       { return "hexa_exec_with_status3" }
+    if name == "adamw_step"              { return "hexa_adamw_step" }
+    if name == "adamw_step_mixed"        { return "hexa_adamw_step_mixed" }
+    if name == "format_float"            { return "hexa_format_float" }
+    if name == "format_float_sci"        { return "hexa_format_float_sci" }
+    if name == "format_n"                { return "hexa_format_n" }
     // N5-sym class-B: native obj-emit left these intrinsics unmapped →
     // fell through to the bare name → undefined at self-host link (the
     // native compiler object references `_list_dir` while the runtime
