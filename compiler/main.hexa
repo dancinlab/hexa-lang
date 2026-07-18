@@ -779,6 +779,9 @@ cg_profile_mark("resolve")
 let mut k = 0
 while k < len(r1) { diags.push(r1[k]); k = k + 1 }
 
+// L4 flip perf — arm bind(S2) to note free-fn builtin shadowing (same predicate
+// as the shadow injection below, so noting-OFF never injects a stale hit array).
+if lower_free_calltype_on() { bind_free_note_enable() }
 let r2 = bind(module)
 cg_profile_mark("bind")
 k = 0
@@ -837,6 +840,11 @@ phase_reset("post_check")
 
 // ── Lower → MIR → LIR ────────────────────────────────────────
 
+// L4 flip perf — hand bind(S2)'s per-slot shadow flags to lower so it skips the
+// redundant binder census walk. Read AFTER phase_reset above: the hit[] is a
+// heap-resident [bool] (never a string), so it survives the bind-phase scratch
+// reclaim. Same predicate as the bind-note arm — noting-OFF never injects.
+if lower_free_calltype_on() { lower_set_free_shadow(bind_free_builtin_shadowed()) }
 let hmodule = lower(module, atlas)
 cg_profile_mark("lower_ast_to_hir")
 
