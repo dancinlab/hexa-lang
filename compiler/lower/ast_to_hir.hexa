@@ -187,21 +187,23 @@ fn _hir_builtin_method_ret_prim(name: string) -> Type {
     }
 }
 
-// ── L4 unboxing round-2 — HEXA_UNBOX_HIR_CALLTYPE_FREE (gated · default-OFF) ──
+// ── L4 unboxing round-2 — HEXA_UNBOX_HIR_CALLTYPE_FREE (gated · default-ON, opt-out =0) ──
 // Extends the call-result stamp to FREE-FN builtins (`len(x)` — an ident-callee
 // call, NOT the field-callee method form the round-1 lever handles). Measured
 // (summer boxing census @b2f725216) as the single largest UNSTAMPED int-producer
 // KIND: 1475 sites, dwarfing the 93 builtin-method sites round-1 already reaches.
 //
-// WHY A SEPARATE SUB-FLAG (default-OFF): the parent HEXA_UNBOX_HIR_CALLTYPE is
-// default-ON, so extending the stamp inline would be a MERGE-DAY shipping-byte
-// change — release rule (bit-changing → opt-in-first). This sub-flag defaults
-// OFF so the merge is byte-neutral; the default-ON flip is a separate PR gated
-// on byteeq-3-target+nvptx GREEN + BEHAVIORAL (full suite + shipping smoke +
-// real running gen-chain, all configs) + an A/B census delta (≈ −1475 ident:len,
-// zero movement elsewhere). byteeq alone CANNOT catch a det miscompile (gen3≡gen4
-// share the same contamination — the own-link flip lesson); behavioral is
-// mandatory because a mis-stamp corrupts the compiler binary itself.
+// WHY A SUB-FLAG (now default-ON, opt-out =0): the parent HEXA_UNBOX_HIR_CALLTYPE
+// is default-ON; the round-1 lever reaches field-callee methods only. This sub-flag
+// extends the call-result stamp to FREE-FN builtins. It landed default-OFF (#5025,
+// byte-neutral merge) and is now FLIPPED default-ON here — release rule satisfied:
+// byteeq-3-target GREEN (this PR) + the #5025 bind-hook XCHECK oracle MIRROR-CLEAN
+// (shadow == census, 41.5MB asm, mismatch=0, measured on summer) + an A/B census
+// delta (≈ −1475 ident:len stamped, zero movement elsewhere). byteeq alone CANNOT
+// catch a det miscompile (gen3≡gen4 share the same contamination — the own-link
+// flip lesson), so the XCHECK bind-hook==census equivalence carries the behavioral
+// proof: a mis-stamp would diverge shadow from census and abort the build. Opt out
+// with HEXA_UNBOX_HIR_CALLTYPE_FREE=0 (reverts to the round-1 field-callee scope).
 //
 // SOUNDNESS — the builtin-vs-user disambiguation problem. main.hexa lowers the
 // RAW AST with no TypeEnv, so a bare `len(x)` callee's `typ` is NOT resolved to
@@ -217,7 +219,7 @@ fn _hir_builtin_method_ret_prim(name: string) -> Type {
 // injects no unqualified names into module scope (bind.hexa `_bind_walk` skips
 // import items), so a per-module census is sound against cross-module `fn len`.
 fn _hir_free_calltype_enabled() -> bool {
-    return env_var("HEXA_UNBOX_HIR_CALLTYPE_FREE") == "1"
+    return env_var("HEXA_UNBOX_HIR_CALLTYPE_FREE") != "0"
 }
 
 // Mirror of the PRIMITIVE-scalar free-fn builtins whose result is a monomorphic
@@ -2457,7 +2459,7 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             } else if bm_callee.kind == "ident" && _hir_free_calltype_enabled()
                       && !_free_disqualified(bm_callee.text) {
                 // L4 round-2 — free-fn builtin (`len(x)` ident-callee). Gated by
-                // the default-OFF HEXA_UNBOX_HIR_CALLTYPE_FREE sub-flag AND the
+                // the default-ON HEXA_UNBOX_HIR_CALLTYPE_FREE sub-flag (opt-out =0) AND the
                 // per-module binder census (name bound nowhere ⇒ builtin). Still
                 // under the `t.kind == "?"` guard, so a resolved user-fn `len`
                 // (whose fn-ret stamp already set `t`) is never overwritten —
