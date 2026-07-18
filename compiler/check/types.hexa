@@ -4553,6 +4553,25 @@ fn _types_builtin_method_ret(name: string) -> Type {
     }
 }
 
+// FREE-FN builtin monomorphic-scalar return table (checker SSOT for the L4
+// round-2 unbox lever). The lowering mirror is
+// ast_to_hir.hexa::_hir_builtin_free_ret_prim; this checker table is the
+// authority for "which free-fn builtin name maps to which monomorphic scalar".
+// Distinct from _types_builtin_method_ret above (that is the RECEIVER.method(...)
+// form): here the name is the ident CALLEE of a bare call `name(x)`.
+//   len(x)  → i64 : hexa_len(...) wrapped hexa_int on every arm (string / array
+//             / map), receiver-independent — the same kernel the .len() method
+//             arm resolves to. Monomorphic i64.
+// Every name outside the closed subset returns the "?" sentinel (no stamp).
+// Table grows in measured order (len 1475 → file_exists 130 → …), each new arm
+// gated on a confirmed monomorphic-scalar runtime signature.
+fn _types_builtin_free_ret(name: string) -> Type {
+    return match name {
+        "len" -> _types_t_i64(),
+        _ -> _types_empty_type(),
+    }
+}
+
 // ── Call checker ─────────────────────────────────────────────
 
 fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
@@ -4661,6 +4680,20 @@ fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                 let _bm_ret = _types_builtin_method_ret(callee.text)
                 if len(_bm_ret.kind) > 0 { return _bm_ret }
             }
+        }
+        // static-types: FREE-FN builtin call result (`len(x)`) — an IDENT callee
+        // that did NOT resolve to a user fn (empty callee_t: `len` is not env-
+        // registered). The env IS the disambiguator here — a user `fn len` would
+        // register a "fn"-kind callee_t and take the fn path above, so this arm
+        // fires ONLY for the true builtin (no census needed; the lowering mirror
+        // in ast_to_hir needs one because main.hexa lowers the raw AST with no
+        // TypeEnv). Same always-on static-types lane + MIR type-erase neutrality
+        // as the s.len() method arm — corpus-clean by that arm's own evidence
+        // (it already stamps the identical i64 for the method form). Checker SSOT
+        // = _types_builtin_free_ret; ast_to_hir mirrors it.
+        if _types_static_on && len(callee_t.kind) == 0 && _types_is_ident(callee.kind) {
+            let _bf_ret = _types_builtin_free_ret(callee.text)
+            if len(_bf_ret.kind) > 0 { return _bf_ret }
         }
         // Callee not resolved as fn — skip arity/argument checks; return value
         // type unknown.
