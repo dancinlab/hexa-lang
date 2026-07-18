@@ -2098,12 +2098,21 @@ build_runtime_a_from_source() {
     # archive-internally. Unset -> def empty -> the emitter #ifdef arms are dead ->
     # runtime.o/runtime_core.o byte-identical (byteeq-NEUTRAL).
     local rt_strtod_drop_def=""
-    if [ "${HEXA_RT_STRTOD_DROP:-0}" = "1" ]; then
+    # TRI-STATE HEXA_RT_STRTOD_DROP (mirrors SYSLEAF :-auto at :4311 / STRCMP-STRTOLL):
+    #   auto (default) / 1 => native strtod chain WHEN the 3 float seeds are active
+    #   (else IGNORED, byteeq-neutral) · 0 => opt-out (retain libc strtod). The 3 seeds
+    #   auto-activate once their .o is built (STRTOD_TAIL is itself :-1 default-ON, :1298),
+    #   so on a normal build `auto` FIRES and drops the 4 strtod( sites -> the strtod libc
+    #   UND leaves runtime.a. ON-path witnessed GREEN #5001 (nm strtod UND 0, #4651 corpus
+    #   T_mis=0 vs glibc, prefix-junk bit-diff 0, RUN A/B byte-diff 0). Default-ON gated on
+    #   byteeq 3-target + shipping smoke (bit-changing).
+    local _rt_strtod_mode="${HEXA_RT_STRTOD_DROP:-auto}"
+    if [ "$_rt_strtod_mode" != "0" ]; then
         if [ -n "$rt_numf_def" ] && [ -n "$rt_numf_exact_def" ] && [ -n "$rt_strtod_tail_def" ]; then
             rt_strtod_drop_def="-DHEXA_RT_STRTOD_DROP=1"
-            echo "[stage_resolve_runtime_a] axis-2 STRTOD-DROP: HEXA_RT_STRTOD_DROP=1 - 4 strtod( sites -> native chain"
+            echo "[stage_resolve_runtime_a] axis-2 STRTOD-DROP: HEXA_RT_STRTOD_DROP native (auto/1) - 4 strtod( sites -> native chain (strtod libc UND dropped)"
         else
-            echo "[stage_resolve_runtime_a] axis-2 STRTOD-DROP: HEXA_RT_STRTOD_DROP=1 IGNORED - needs NUM_PARSE_FLOAT_NATIVE+EXACT+STRTOD_TAIL seeds active" >&2
+            echo "[stage_resolve_runtime_a] axis-2 STRTOD-DROP: HEXA_RT_STRTOD_DROP native (auto/1) IGNORED - needs NUM_PARSE_FLOAT_NATIVE+EXACT+STRTOD_TAIL seeds active" >&2
         fi
     fi
 
