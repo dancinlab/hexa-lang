@@ -745,6 +745,13 @@
         "value": "L4 unbox round-2 R2 FLIP — HEXA_UNBOX_HIR_CALLTYPE_FREE default-ON(opt-out =0). #5024(len-stamp 구현)+#5025(bind-hook census-perf 근인수정 byte-neutral)에 이어 default-ON 전환(branch feat/l4-freefn-calltype-flip). 게이트: byteeq-3target+nvptx GREEN(flip-ON self-host 바이트동일 fixpoint) + #5025 XCHECK MIRROR-CLEAN(shadow==census mismatch=0 summer 실측·behavioral 증명 대행) + A/B census 델타 ≈−1475 ident:len. 단일소스 플립(_hir_free_calltype_enabled env!=0)·코멘트 3곳 lockstep.",
         "threshold": "",
         "source": "l4-freefn-calltype-flip"
+      },
+      {
+        "id": "ci-dispatch-snapshot-hexaready-wedge-1",
+        "state": "pos-conv",
+        "value": "nobaseline-gate linux heavy jobs pin runs-on to [self-hosted,Linux,X64,hexa-build,hexa-ready] at dispatch snapshot time; if the runner loses the load-gated hexa-ready label after dispatch (anima load rises), the queued job waits forever on a now-nonexistent hexa-ready runner. ci_pick_runner.sh fail-open only protects at dispatch time, not against mid-queue label loss. FIX (reusable): gh run cancel <run> + gh run rerun → dispatch re-snapshots with 0 hexa-ready → fail-open emits ubuntu-latest → jobs complete on free github-hosted runners. Detected on #5025 (queued ~1h) + verified clean on #5026 (dispatch fail-opened, no wedge). Durable-fix candidate: emit a busy_label/fallback for linux like the darwin-any path already does for busy-runner snapshot pinning.",
+        "threshold": "",
+        "source": "ci-dispatch-snapshot-hexaready-wedge"
       }
     ]
   },
