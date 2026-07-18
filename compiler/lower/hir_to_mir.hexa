@@ -5825,6 +5825,40 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 arg_ops.push(_const_void_op())
             }
         }
+        // ── axis-① ld-link lever (opt-in HEXA_NATIVE_PANIC_LOWER): native `panic`
+        // lowering. `panic` is a keyword builtin (self/lexer.hexa) → never shadowed,
+        // so keying on callee_text is sound. Otherwise the native backend lowers it
+        // as an ordinary builtin call whose `_builtin_runtime_sym("panic")` falls
+        // through to the bare name → `call panic` with no runtime symbol → ld
+        // "undefined reference to panic", forcing the C-transpile delegate (measured:
+        // ALL 7 ld-link-fail delegates on verified HEAD 1e8f7870d). Desugar to the C
+        // leg's exact sequence (self/codegen.hexa:5867): eprint "panic: " · eprint
+        // <msg> · eprint "\n" · exit(1) — via the already-mapped eprint→hexa_eprint_val
+        // + exit→hexa_exit (both defined in runtime.a). Quirk mirrored: an arg-less
+        // panic prints the literal "panic" as its message. OFF path (flag != "1") is
+        // byte-identical (falls through to the generic STMT_CALL below). bit-changing
+        // → byteeq-3-target + a behavioral run of the 7 programs gate the default-ON flip.
+        if callee_text == "panic" && env("HEXA_NATIVE_PANIC_LOWER") == "1" {
+            let mut _pmsg: Operand = _const_str_op("panic")
+            if len(arg_ops) > 0 { _pmsg = arg_ops[0] }
+            let mut _pctx = _fresh_local(ctx_r, e.typ, "panic_hdr")
+            let mut _ph: [Operand] = []
+            _ph.push(_const_str_op("panic: "))
+            _pctx = _push_stmt(_pctx, Stmt { kind: STMT_CALL, dst: _lr_locals[len(_lr_locals) - 1], op: "eprint", args: _ph, target_block: -1, target_block_else: -1 })
+            _pctx = _fresh_local(_pctx, e.typ, "panic_msg")
+            let mut _pm: [Operand] = []
+            _pm.push(_pmsg)
+            _pctx = _push_stmt(_pctx, Stmt { kind: STMT_CALL, dst: _lr_locals[len(_lr_locals) - 1], op: "eprint", args: _pm, target_block: -1, target_block_else: -1 })
+            _pctx = _fresh_local(_pctx, e.typ, "panic_nl")
+            let mut _pn: [Operand] = []
+            _pn.push(_const_str_op("\n"))
+            _pctx = _push_stmt(_pctx, Stmt { kind: STMT_CALL, dst: _lr_locals[len(_lr_locals) - 1], op: "eprint", args: _pn, target_block: -1, target_block_else: -1 })
+            _pctx = _fresh_local(_pctx, e.typ, "panic_exit")
+            let mut _pe: [Operand] = []
+            _pe.push(_const_int_op(1))
+            _pctx = _push_stmt(_pctx, Stmt { kind: STMT_CALL, dst: _lr_locals[len(_lr_locals) - 1], op: "exit", args: _pe, target_block: -1, target_block_else: -1 })
+            return _no_value(_pctx)
+        }
         let mut ctx2 = _fresh_local(ctx_r, e.typ, "call_ret")
         let dst = _lr_locals[len(_lr_locals) - 1]
         let s = Stmt {
