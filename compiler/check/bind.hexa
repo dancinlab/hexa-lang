@@ -1377,6 +1377,14 @@ fn _bind_builtin_names() -> [string] {
         // misclass hazard; byteeq-neutral (currently-native programs can't
         // reference an unbound name, so emit bytes are unchanged).
         "argmax", "sleep", "exec_stream", "exec_replace",
+        // axis-① Set B-2 round-1 — crypto/encode free-fns (bind+map together,
+        // never bind-alone → bind-hexa-2 SIGBUS). Neither bound nor mapped
+        // before, so byteeq-neutral (currently-native code can't reference an
+        // unbound name). Symbols nm-verified `T hexa_{sha1,sha1_bytes,base64_*}`
+        // in runtime.a; codegen map added in arm64_darwin.hexa (x86 shared).
+        "sha1", "sha1_bytes", "base64_encode", "base64_decode",
+        // Set B-2 round-1 (fs) — rt_fs_* pair-ABI free-fns, legacy 1:1, nm-verified.
+        "fs_stat", "fs_mkdir_p", "fs_append_atomic", "fs_rotate_if_over",
         // Step 5 codegen-inline builtins (4th re-land after e8c2dc1c wipe).
         "__arr_raw_len", "__arr_set_cap", "__fd_write_bytes", "__map_raw_len", "__str_raw_len",
         // RT-NATIVE UNLOCK-2 (2026-06-16): native tag-read intrinsic — `__hx_tag(v)`
