@@ -1527,9 +1527,37 @@ resolve_native_num_core_seed() {
 # eligible. On an unknown target or assemble failure, HEXA_RT_VALOP_NATIVE stays
 # unset and the C scalar bodies in runtime_core.c ship unchanged (the no-seed
 # fallback). Override by pre-setting HEXA_RT_VALOP_NATIVE=0 to force the C path.
+# _valop_seed_syms — how many of the 15 contract symbols does an already-built
+# valop object EXPORT? The SINGLE definition of the contract regex, shared by
+# every gate below (reuse · own-obj · assemble) so the lists can never drift
+# apart — a widening PR that adds a symbol here updates all gates at once.
+_valop_seed_syms() {
+    nm "$1" 2>/dev/null | grep -cE ' T _?rt_(truthy|sub|mul|add|cmp_lt|cmp_gt|cmp_le|cmp_ge|div|mod|eq_scalar|to_int|to_float|abs|null_coal)_native'
+}
+
 resolve_native_valop_core_seed() {
     [ "${HEXA_RT_VALOP_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
-    [ -f build/valop_core_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ] && { export HEXA_RT_VALOP_NATIVE=1; return 0; }
+    # REUSE an already-built object ONLY when it satisfies the CURRENT symbol
+    # contract. This gate used to be a blind `[ -f ... ] && return 0`, which
+    # trusted ANY pre-existing build/valop_core_native.o and bypassed both the
+    # assemble path's 15/15 validation and the own-obj `_ots >= 15` gate — the
+    # exact defect that shipped a self-inconsistent runtime.a: a contract
+    # WIDENING (#4915, 10 -> 15 syms: eq_scalar/to_int/to_float/abs/null_coal)
+    # left a pre-#4915 10-symbol .o sitting in build/, the reuse gate took it as
+    # good, while `-DHEXA_RT_VALOP_EQCOERCE_NATIVE=1` was still handed to the
+    # runtime_core.c compile below — so runtime.o REFERENCED the 5 new natives
+    # that its own archive member did not DEFINE, and every downstream app link
+    # died with `undefined symbol: _rt_to_float_native` (arm64 + x86_64 alike).
+    # A stale object is now EVICTED and re-staged from the .s seed instead.
+    if [ -f build/valop_core_native.o ] && [ "${HEXA_RT_OWNOBJ:-0}" = "0" ]; then
+        local _rts; _rts="$(_valop_seed_syms build/valop_core_native.o)"
+        if [ "${_rts:-0}" -ge 15 ]; then
+            export HEXA_RT_VALOP_NATIVE=1
+            return 0
+        fi
+        echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: evicting STALE build/valop_core_native.o (${_rts:-0}/15 rt_*_native — pre-widening contract) → re-staging from seed" >&2
+        rm -f build/valop_core_native.o
+    fi
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"; tgt="${tgt%-cuda}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -2023,9 +2051,26 @@ build_runtime_a_from_source() {
     # bodies stay in runtime_core.c as the no-seed fallback.
     local rt_valop_def=""
     if [ "${HEXA_RT_VALOP_NATIVE:-0}" = "1" ] && [ -f build/valop_core_native.o ]; then
-        rt_valop_def="-DHEXA_RT_VALOP_NATIVE=1 -DHEXA_RT_VALOP_EQCOERCE_NATIVE=1"
+        rt_valop_def="-DHEXA_RT_VALOP_NATIVE=1"
         extra_obj="$extra_obj build/valop_core_native.o"
-        echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: HEXA_RT_VALOP_NATIVE=1 + EQCOERCE=1; ar'ing native valop_core_native.o into runtime.a (eq/truthy/to_int/to_float/abs/null_coal scalar arms dropped from runtime_core.c)"
+        # DEFENSE-IN-DEPTH: -DHEXA_RT_VALOP_EQCOERCE_NATIVE=1 makes runtime_core.c
+        # DROP its C bodies for eq_scalar/to_int/to_float/abs/null_coal and delegate
+        # to the natives — so it is sound ONLY if the object actually DEFINES them.
+        # It used to ride along unconditionally with VALOP_NATIVE=1: with a pre-
+        # widening (10-symbol) object that produced a runtime.o REFERENCING 5
+        # natives nothing defined -> `undefined symbol: _rt_to_float_native` at
+        # every downstream app link. Gate the define on the symbols really being
+        # there, so a narrower object degrades to the C bodies (still correct, just
+        # not native) instead of emitting a self-inconsistent archive. Any future
+        # contract-widening PR that piggybacks a new define on VALOP_NATIVE=1 can
+        # no longer recreate this skew class.
+        local _eqs; _eqs="$(nm build/valop_core_native.o 2>/dev/null | grep -cE ' T _?rt_(eq_scalar|to_int|to_float|abs|null_coal)_native')"
+        if [ "${_eqs:-0}" -ge 5 ]; then
+            rt_valop_def="$rt_valop_def -DHEXA_RT_VALOP_EQCOERCE_NATIVE=1"
+            echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: HEXA_RT_VALOP_NATIVE=1 + EQCOERCE=1; ar'ing native valop_core_native.o into runtime.a (eq/truthy/to_int/to_float/abs/null_coal scalar arms dropped from runtime_core.c)"
+        else
+            echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: HEXA_RT_VALOP_NATIVE=1, EQCOERCE=0 — valop_core_native.o exports ${_eqs:-0}/5 eqcoerce natives; keeping the runtime_core.c C bodies (a narrower seed must NOT yield a runtime.o referencing natives its own archive member lacks)" >&2
+        fi
     fi
     # RT-NATIVE NUM-FLOAT (sh-num-float lane, gated): when the num_float_core seed
     # is active, define HEXA_RT_NUM_PARSE_FLOAT_NATIVE for the runtime.c compile (so
