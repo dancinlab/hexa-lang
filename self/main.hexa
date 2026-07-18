@@ -3677,7 +3677,17 @@ fn cmd_build(src, out, c_only, target, shared) {
     // falls through to the C-transpile path below (delegate intact; trace under
     // HEXA_RUN_NATIVE_TRACE=1). linux x86_64 only (the host the recipe is proven on); refuses
     // shared/--c-only/--target. Design: state/hexa-own/no_hexacc_round1_design_fable.md.
+    // axis-① fallback-rate census (delete-precondition instrument): _bn_gate_entered flags
+    // that the leg-B native-serve gate passed for THIS build. The block returns "" on success,
+    // so control only reaches past its closing brace when native-serve DID NOT serve (native
+    // emit/link failed, or the native toolchain resolvers came up empty) and the build is about
+    // to drop to the C-transpile delegate. Under HEXA_BUILD_NATIVE_STRICT=1 that drop becomes a
+    // FATAL — mirroring HEXA_OWNLINK_STRICT (:3665) but for the DEFAULT-ON axis-① path (the own-
+    // link STRICT only covers the opt-in HEXA_OWNLINK_DEFAULT block). A corpus run then yields
+    // the real axis-① C-transpile fallback rate instead of a silent zero. Default-OFF byte-neutral.
+    let mut _bn_gate_entered = false
     if env_var("HEXA_BUILD_NATIVE") != "0" && (exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxx86_64" || exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxaarch64" || exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Linuxarm64" || (exec("uname -sm 2>/dev/null | tr -d ' \\n\\t'") == "Darwinarm64" && env_var("HEXA_NATIVE_DARWIN") == "1")) && shared != "1" && c_only != "1" && len(target) == 0 && len(__actual_src) > 0 {
+        _bn_gate_entered = true
         // axis-① rung-1 (L2): darwin arm64 native build leg — opt-in HEXA_NATIVE_DARWIN=1
         // (default-OFF·byte-neutral). darwin은 crt1/own-start 규약이 없어(dyld+libSystem이
         // 초기화) linux crt-probe를 skip하고 ld64 `-lSystem -syslibroot` 레시피로 링크한다.
@@ -3740,6 +3750,15 @@ fn cmd_build(src, out, c_only, target, shared) {
             } else if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[build-native] native-emit failed → C fallback: " + _bne) }
             let _ = exec("rm -f '" + _bnobj + "' 2>/dev/null")
         }
+    }
+    // axis-① fallback-rate census — fail-closed drain. If the leg-B gate passed but native-serve
+    // did not return "" above, this build is about to reach the C-transpile delegate. Under
+    // HEXA_BUILD_NATIVE_STRICT=1 turn that into a FATAL so a corpus run counts it as a real
+    // fallback (delete-precondition = axis-① C-transpile fallback rate → 0). Byte-neutral:
+    // unset → skipped; the C-transpile safety net below is untouched in a normal build.
+    if _bn_gate_entered && env_var("HEXA_BUILD_NATIVE_STRICT") == "1" {
+        eprintln("[build] FATAL (HEXA_BUILD_NATIVE_STRICT=1): leg-B native-serve did not serve and the C-transpile fallback is disabled — this program would drop to hexa_cc.c")
+        return "leg-B native-serve failed under HEXA_BUILD_NATIVE_STRICT=1 (no C-transpile fallback)"
     }
     // axis-① rung-2: cross-target native leg (clang-0, own-start static ELF). Gate=
     // HEXA_BUILD_NATIVE_CROSS=1 (default-OFF·byte-neutral) + --target→x86_64-linux +
@@ -4607,10 +4626,59 @@ fn _self_build_tag() {
     // [size, mtime_ns, is_dir, mode]; empty/failed → degrade to no tag (safe:
     // worst case = current static-version behaviour, never a wrong-ABI hit
     // once the binary mtime differs).
+    //
+    // MUST resolve the REAL executable, NOT args()[0]: the `hexa` launcher is
+    // a shell wrapper that `exec -a hexa "$__hexa_bin"`s the driver, so
+    // args()[0] == "hexa" — a bare token, not a path — and fs_stat("hexa")
+    // fails ⇒ "" ⇒ the toolchain never entered the run-cache key. Since
+    // version_str() is static ("0.1.0-dispatch"), a fossil binary compiled by
+    // an OLDER (possibly broken) toolchain then serves FOREVER from a shared
+    // ~/.hexa-cache (aiden CI runner). MEASURED (2026-07-17): the CI-keyed
+    // fossil `hexa_run.<src>_0.1.0-dispatch` executes to the exact stdlib-
+    // selftest FAIL while a fresh compile of the same source PASSES.
+    // args()[0] is "hexa" (a bare token) under the launcher's `exec -a hexa`,
+    // so fs_stat(args()[0]) fails → "" → the toolchain never entered the key.
+    // Key on the prebuilt runtime archive instead: `<install>/build/runtime.a`
+    // is the ABI-bearing artifact every run links against, it is a REGULAR
+    // file (no /proc symlink dependence), and release_build regenerates it on
+    // every toolchain rebuild → its size+mtime is a faithful toolchain
+    // fingerprint. install_dir_from_argv0() is the same resolver the run path
+    // already trusts to locate hexat/runtime, so it is as reliable here as the
+    // build itself. This is the exact CLI-RUNCACHE-STALE-ABI resolution (fold
+    // the running toolchain's identity into the LOCAL key; the precompile
+    // base-key is untouched so shipped binaries still HIT). Degrades to
+    // fs_stat(args()[0]) where the archive is absent — no regression.
+    // NOTE: fs_stat() returns an EMPTY array for regular files in this
+    // toolchain (measured 2026-07-17: fs_stat("<inst>/build/runtime.a") → len 0
+    // on an existing 1.1 MB archive) — a latent rt_fs_stat bug that silently
+    // no-op'd the original _self_build_tag. Sidestep it by shelling `stat`
+    // (GNU `-c` on Linux, BSD `-f` on darwin) on the ABI-bearing runtime
+    // archive `<install>/build/runtime.a`, which release_build regenerates on
+    // every toolchain rebuild ⇒ size+mtime is a faithful toolchain fingerprint.
+    // install_dir_from_argv0() resolves correctly through the `exec -a hexa`
+    // launcher (measured: install_dir=<repo>, argv0=./hexa). This makes the
+    // CLI-RUNCACHE-STALE-ABI resolution actually fire (fold the running
+    // toolchain's identity into the LOCAL key; precompile base-key untouched).
+    let dbg = env("HEXA_RUNCACHE_DEBUG") == "1"
+    let inst = install_dir_from_argv0()
     let av = args()
-    if len(av) == 0 { return "" }
-    let st = fs_stat(av[0])
-    if len(st) >= 2 { return to_string(st[0]) + "x" + to_string(st[1]) }
+    let mut a0 = ""
+    if len(av) > 0 { a0 = av[0] }
+    let mut cands: [string] = []
+    if len(inst) > 0 {
+        cands.push(inst + "/build/runtime.a")
+        cands.push(inst + "/build/hexa_linux")
+    }
+    if len(a0) > 0 { cands.push(a0) }
+    let mut ci = 0
+    while ci < len(cands) {
+        let p = cands[ci]
+        let mut t = exec("stat -c '%sx%Y' " + shq(p) + " 2>/dev/null").trim()
+        if len(t) == 0 { t = exec("stat -f '%zx%m' " + shq(p) + " 2>/dev/null").trim() }
+        if dbg { eprintln("[runcache-tag] cand=[" + p + "] tag=[" + t + "]") }
+        if len(t) > 0 { return t }
+        ci = ci + 1
+    }
     return ""
 }
 
@@ -4900,6 +4968,18 @@ fn cmd_run_user_direct(file, extra_args) {
             // best-effort cleanup of the intermediate object
             let _ = exec("rm -f '" + _nobj + "' 2>/dev/null")
         }
+    }
+    // axis-① run-path fallback-rate census (delete-precondition instrument, the
+    // run-seam twin of the build-seam HEXA_BUILD_NATIVE_STRICT census). If leg-B
+    // native-serve was engaged (_run_native_on) but produced no binary, control is
+    // about to drop to the clang `hexa build` subprocess below. Under
+    // HEXA_RUN_NATIVE_STRICT=1 that drop becomes a FATAL so a corpus `hexa run`
+    // yields the real axis-① run fallback rate instead of a silent zero — mirrors
+    // HEXA_OWNLINK_STRICT (:4824, own-link leg) + HEXA_BUILD_NATIVE_STRICT (cmd_build).
+    // Default-OFF ⇒ byte-neutral (the C-transpile+clang fallback below is untouched).
+    if _run_native_on && !file_exists(tmpbin) && env_var("HEXA_RUN_NATIVE_STRICT") == "1" {
+        eprintln("[run] FATAL (HEXA_RUN_NATIVE_STRICT=1): leg-B native-serve did not produce a binary and the clang fallback is disabled — this `hexa run` would drop to the C-transpile+clang path")
+        return 1
     }
     if !file_exists(tmpbin) {
         // 2nd clang site, parent-pipe variant (#2415 closed the inner build's

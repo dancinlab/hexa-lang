@@ -1603,6 +1603,25 @@ fn _unbox_native_enabled() -> bool {
     return env("HEXA_UNBOX_NATIVE") != "0"
 }
 
+// L4 round-2 boxing census (consumer axis) — HEXA_BOXOP_CENSUS, opt-in default-OFF
+// (=="1"). Counts how each scalar binop operand is consumed (NATIVE raw-i64 vs
+// BOXED tag-dispatch) so the residual boxed-consume bucket is measured before the
+// next unboxing lever. Read-only stderr, no _x86_buf mutation ⇒ byte-neutral when
+// unset. Independent of the producer HEXA_CALLTYPE_CENSUS axis.
+fn _boxop_census_enabled() -> bool {
+    return env("HEXA_BOXOP_CENSUS") == "1"
+}
+
+// L4 boxed-ARG census (producer side · HEXA_BOXARG_CENSUS=1). Counts every hv
+// call-arg box site (`_x86_hv_box_arg`, 46 sites) and flags the ones whose operand
+// is provably a raw i64 (WASTED-int = a box the static-typing unboxing lever could
+// strip). Read-only stderr, no _x86_buf mutation ⇒ byte-neutral when unset. Mirrors
+// the consumer `_boxop_census_enabled` (STMT_BINOP) axis — together they size the
+// boxing tax across both producer(arg) and consumer(op) sides. measure-first (#4979).
+fn _boxarg_census_enabled() -> bool {
+    return env("HEXA_BOXARG_CENSUS") == "1"
+}
+
 // Is operand `o` provably a raw i64 payload (no boxing/tag-dispatch needed)?
 // SOUNDNESS: `local_type` is keyed by the LOCAL id space (_x86_max_local_id over
 // locals+params+stmt operands). GLOBALS live in a SEPARATE id space (module
@@ -2840,6 +2859,14 @@ fn _x86_emit_cstr_key(o: Operand, st: X86StrTab, rm: X86RegMap, reg: string, opt
 }
 fn _x86_hv_box_arg(o: Operand, st: X86StrTab, rm: X86RegMap,
                    lo: string, hi: string, opts: CodegenOptions) {
+    // L4 boxed-ARG census — count this box site + flag provably-int operands as
+    // WASTED-int (the unboxing lever's target). BEFORE the const_str early-return so
+    // string boxes are counted too. Gated ⇒ default-OFF byte-neutral (stderr only).
+    if _boxarg_census_enabled() {
+        let mut _c = "BOXED"
+        if _x86_operand_provably_int(o, rm) { _c = "WASTED-int" }
+        eprintln("[BOXARG] " + _c + " kind=" + o.kind)
+    }
     if o.kind == "const_str" {
         // A bare string literal: payload = &.LCstr (RIP-relative), tag = 3.
         let mut lbl = _x86_strtab_lookup(st, o.str_val)
@@ -3911,6 +3938,23 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             // proven i64 ⇒ the runtime helper would take its int path anyway, so
             // the native ALU result is numerically identical (Gate-4 parity).
             let _unbox = _x86_binop_unbox_ok(s, rm)
+
+            // L4 round-2 boxing census (consumer) — read-only classification of how
+            // this binop is consumed (NATIVE raw-ALU vs BOXED tag-dispatch), one
+            // stderr line when HEXA_BOXOP_CENSUS=1. _x86_buf/emit unchanged ⇒
+            // byte-neutral when the flag is unset. div_const/provably_int are pure.
+            if _boxop_census_enabled() {
+                let _dc = _x86_binop_div_const_ok(s, rm)
+                let _p0 = _x86_operand_provably_int(s.args[0], rm)
+                let _p1 = _x86_operand_provably_int(s.args[1], rm)
+                let mut _path = "BOXED"
+                if _unbox || _dc { _path = "NATIVE" }
+                let mut _p0s = "0"
+                if _p0 { _p0s = "1" }
+                let mut _p1s = "0"
+                if _p1 { _p1s = "1" }
+                eprintln("[BOXOP] " + _path + " op=" + s.op + " a=" + s.args[0].kind + " b=" + s.args[1].kind + " p0=" + _p0s + " p1=" + _p1s)
+            }
 
             if _x86_is_concat(s.op) {
                 // hexa_str_concat(HexaVal a, HexaVal b) → HexaVal in rax:rdx.

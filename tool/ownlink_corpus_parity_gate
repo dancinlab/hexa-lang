@@ -34,8 +34,9 @@ _nostart=""
 nm "$RTA" 2>/dev/null | grep -qE ' T _start$' && _nostart="-nostartfiles"
 
 # ── self-contained corpus (feature coverage: arith · packed [i64] array ·
-# struct-of-arrays [the #4873 BUG-B construct] · string · while-loop). Each is a
-# closed program; expected behavior is whatever ld produces — the two must agree.
+# struct-of-arrays [the #4873 BUG-B construct] · string · while-loop · large-alloc
+# [the mmap arena path]). Each is a closed program; expected behavior is whatever
+# ld produces — the two must agree.
 mkdir -p "$W/c"
 cat > "$W/c/arith.hexa"      <<'H'
 fn main() { let a = 6; let b = 7; print(a * b + 1); print(a - b) }
@@ -68,6 +69,19 @@ fn main() {
     print(int((a - b) * 100.0))   // subsd, negative → -75 (FCVTZS on a negative)
     if a < b { print(1) } else { print(0) }   // comisd + unsigned setcc → 1
 }
+H
+# large-alloc coverage (the #4952 crash class): EVERY prior fixture is a handful of
+# bytes, so none exceeds HXHEAP_SMALL_MAX (4096 B) and NONE takes the hxheap_alloc→
+# mmap arena path — which is the exact path own-link's STB_LOCAL floor-alias skew
+# (#4952, fixed #4954) SIGSEGV'd on. The parity gate is the flip's designated
+# promotion evidence, yet it was blind to that path (the ownlink_behavioral_smoke
+# header names this gap: "RIGHT METHOD, CORPUS TOO SHALLOW"). This fixture pushes a
+# ~1.6 MB [i64] (200000 × 8 B ≫ 4096 B), forcing the arena to mmap a fresh block —
+# a differential (own-link stdout/rc must == ld), so no hardcoded oracle. Output is
+# a small deterministic triple (len + first + last), not the array, to keep the
+# diff clean. Constructs mirror the proven array.hexa + loop.hexa fixtures.
+cat > "$W/c/bigalloc.hexa"   <<'H'
+fn main() { let mut a: [i64] = []; let mut i = 0; while i < 200000 { a.push(i * 3); i = i + 1 }; print(len(a)); print(a[0]); print(a[199999]) }
 H
 
 N=0; FAIL=0
