@@ -1,0 +1,266 @@
+#!/usr/bin/env bash
+# tool/ownlink_behavioral_smoke — axis-③ own-link BEHAVIORAL gate: RUN the binary.
+#
+# WHY THIS EXISTS (the #4952/#4954 lesson, and it was expensive)
+# ─────────────────────────────────────────────────────────────
+# own-link default-ON shipped a compiler that printed `OK: built` (rc=0) and then
+# produced a binary that SIGSEGV'd at startup. FOUR gates were GREEN through it:
+# byteeq, own-link determinism, own-link corpus parity (#4881), shipping smoke.
+#
+# Each measured the wrong thing:
+#
+#   byteeq / determinism  compare the LINKER'S EMITTED BYTES. A linker that emits
+#                         the same wrong bytes twice is "deterministic".
+#
+#   corpus parity         DOES run its binaries — its header is right that
+#                         "RUN-parity is the only sound gate" — but the corpus is
+#                         five toy programs (arith/array/str/loop/float), each a
+#                         handful of `print`s. `hxheap_class_of` only takes the
+#                         mmap path when an allocation exceeds HXHEAP_SMALL_MAX
+#                         (4096 B), so NO toy program ever calls mmap — and the
+#                         skewed mmap floor-alias is exactly what killed real
+#                         tools. RIGHT METHOD, CORPUS TOO SHALLOW.
+#
+# So `rc==0`, `test -x`, symbol presence and byte-identity are NOT behavior. Only
+# RUNNING a program big enough to exercise the runtime it was linked against can
+# catch a mislinked-but-executable binary.
+#
+# ── the OTHER trap this gate must not fall into (convergence nobaseline-gate-yml-1)
+# A gate that drives a bare `release_build` tree does NOT reproduce the consumer
+# layout install.sh creates ($HX_BIN/{hexa shim, hexad, .hxroot, build/runtime.a}).
+# Without it, resolve_hxroot()/resolve_prebuilt_runtime() return "" and `hexa build`
+# silently FALLS THROUGH off the own-link leg into the C-transpile delegate — the
+# gate then measures a path the consumer never takes (false-green, and false-RED
+# the other way). So this gate STAGES THE INSTALL LAYOUT and runs the installed
+# CLI with a neutral cwd and every steering env var UNSET, exactly like a user.
+#
+# WHAT IT ASSERTS
+#   1. the own-link binary RUNS — no SIGSEGV/SIGBUS/SIGABRT, non-empty output
+#   2. it took the mmap path (arena alloc > 4096 B) — so a future shallow-subject
+#      regression cannot silently re-open the blind spot
+#   3. RUN-parity: own-link stdout/rc == ld stdout/rc
+#
+# Discrimination is PROVEN, not asserted: reverting the one-line #4954 STB_LOCAL
+# guard in a control tree drives this gate RED (rc=139) while the fixed tree passes.
+# A gate that cannot fail on known-broken input is decoration, not a gate.
+#
+# Env: REPO (repo root, already release_build'd), CC (gcc).
+# Exit 0 = PASS · 1 = FAIL · 2 = INFRA (could not measure — never graded a pass).
+set -uo pipefail
+
+REPO="${REPO:-$PWD}"
+W="$(mktemp -d)"; HX="$W/hxroot"
+trap 'rm -rf "$W"' EXIT
+
+infra() { echo "::warning::ownlink-behavioral-smoke INFRA — $*  (NOT graded as pass)"; exit 2; }
+fail()  { echo "::error::ownlink-behavioral-smoke FAIL — $*"; exit 1; }
+
+# ── stage the INSTALL layout (convergence nobaseline-gate-yml-1) ─────────────
+# Mirror install.sh: hexad = the real ELF binary · .hxroot = the neutral hxroot
+# sentinel (NOT self/native/hexa_cc.c, which axis-① is deleting) · build/runtime.a
+# = the prebuilt runtime resolve_prebuilt_runtime() looks for.
+stage_install() {
+    mkdir -p "$HX/bin/build"
+    [ -f "$REPO/build/hexa" ]     && cp "$REPO/build/hexa" "$HX/bin/hexad"
+    [ -x "$HX/bin/hexad" ]        || { [ -f "$REPO/hexa" ] && cp "$REPO/hexa" "$HX/bin/hexad"; }
+    [ -f "$REPO/build/runtime.a" ] && cp "$REPO/build/runtime.a" "$HX/bin/build/runtime.a"
+    [ -f "$REPO/build/aprime_cc" ] && cp "$REPO/build/aprime_cc" "$HX/bin/build/aprime_cc"
+    printf 'hexa-root v1\n' > "$HX/bin/.hxroot"
+    ln -sf "$REPO/self" "$HX/bin/self" 2>/dev/null || true
+    chmod +x "$HX/bin/hexad" 2>/dev/null || true
+}
+stage_install
+
+HEXAD="$HX/bin/hexad"
+[ -x "$HEXAD" ] || infra "no hexad staged (looked for $REPO/build/hexa and $REPO/hexa)"
+# `-x` is NOT enough: the repo's checked-in ./hexa is a 3.4 KB bash WRAPPER, and a
+# `test -x` gate happily passes it. That exact proxy let a broken build through
+# before. Require a real ELF.
+head -c 4 "$HEXAD" | grep -q $'\x7fELF' \
+    || infra "staged hexad is not an ELF binary (a wrapper script? size=$(stat -c%s "$HEXAD" 2>/dev/null))"
+# The install layout must actually resolve, or `hexa build` falls through off the
+# own-link leg and this gate silently measures the wrong path.
+[ -f "$HX/bin/build/runtime.a" ] || infra "no build/runtime.a in the staged layout — resolve_prebuilt_runtime() would return \"\" and own-link would fall through"
+
+# ── the linker does NOT live in hexad — it lives in aprime_cc ────────────────
+# `hexa build`'s own-link leg (self/main.hexa, resolve_native_cc) SHELLS OUT to
+# build/aprime_cc with `--linker=hexa`. hexad merely dispatches. Two consequences,
+# both of which have already produced false measurements:
+#
+#   · aprime_cc ABSENT  -> the own-link leg's `len(_olcc) > 0` guard fails, `hexa
+#     build` falls through to the clang C-transpile delegate, and this gate happily
+#     grades a binary own-link never touched (convergence nobaseline-gate-yml-1).
+#
+#   · aprime_cc STALE   -> hexad gets rebuilt while aprime_cc is served from a
+#     previous build, so the gate measures the PREVIOUS linker. A linker fix then
+#     looks like it "had no effect" — which is exactly how a confirmed-correct fix
+#     got misread as a failure once already.
+#
+# So: require it, and require it to be no older than the linker source it must carry.
+[ -f "$HX/bin/build/aprime_cc" ] || infra "no build/aprime_cc in the staged layout — the own-link leg would fall through to the clang C-transpile delegate and this gate would grade the WRONG path"
+_lnk_src="$REPO/compiler/emit/elf_x86_64.hexa"
+if [ -f "$_lnk_src" ] && [ "$_lnk_src" -nt "$REPO/build/aprime_cc" ]; then
+    infra "staged aprime_cc is OLDER than $_lnk_src — aprime_cc is what actually links (hexad only dispatches to it), so this run would measure the PREVIOUS linker. Rebuild it: bash tool/build_aprime.sh -o build/aprime_cc"
+fi
+echo "staged install layout: hexad=$(stat -c%s "$HEXAD") B · runtime.a=$(stat -c%s "$HX/bin/build/runtime.a") B · aprime_cc=$(stat -c%s "$HX/bin/build/aprime_cc") B (the linker) · .hxroot sentinel"
+
+# ── the subject: a REAL tool, not a toy ──────────────────────────────────────
+# tool/stdlib_selftest_aggregate.hexa is the exact program that died: it allocates
+# a 4 MB arena at startup, i.e. it takes the hxheap_alloc → mmap path that the toy
+# corpus never reaches.
+SRC="$REPO/tool/stdlib_selftest_aggregate.hexa"
+[ -f "$SRC" ] || infra "missing subject $SRC"
+
+build_and_run() {   # $1=tag  $2=HEXA_OWNLINK_DEFAULT
+    local tag="$1"
+    local ownlink="$2"
+    local out="$W/$tag.bin"
+    local brc rrc
+    # Neutral cwd + every steering var UNSET (a user's shell) + only the flag under
+    # test. env -u guards against a runner profile exporting HEXA_PREBUILT_RUNTIME
+    # (the summer/aiden trap that has produced false results before).
+    ( cd "$W" && env -u HEXA_PREBUILT_RUNTIME -u HEXA_APRIME_CC -u HEXA_LANG \
+        HEXA_OWNLINK_DEFAULT="$ownlink" "$HEXAD" build "$SRC" -o "$out" ) \
+        > "$W/$tag.build" 2>&1
+    brc=$?
+    # rc==0 with no artifact is the silent-corruption shape this gate exists for.
+    if [ "$brc" -ne 0 ] || [ ! -x "$out" ]; then
+        echo "  [$tag] BUILD rc=$brc  artifact=$([ -x "$out" ] && echo yes || echo NO)"
+        sed 's/^/    /' "$W/$tag.build" | tail -6
+        return 1
+    fi
+    # RUN from the REPO ROOT, not the neutral cwd: the subject walks stdlib/ to find
+    # its selftests. A neutral cwd makes it exit early with found=0 — which would let
+    # a genuinely broken binary "pass" by never reaching the arena/mmap path. The
+    # BUILD is what must be cwd-neutral (that is where install-layout resolution
+    # happens); the RUN needs the tool's data.
+    ( cd "$REPO" && timeout 300 "$out" --ci-gate --strict ) > "$W/$tag.out" 2>"$W/$tag.err"
+    rrc=$?
+    echo "$rrc" > "$W/$tag.rc"
+    echo "  [$tag] build rc=0 · RUN rc=$rrc · stdout $(wc -l < "$W/$tag.out") lines"
+    return 0
+}
+
+echo
+echo "════ own-link behavioral smoke — RUN the linked binary ════"
+echo "subject: tool/stdlib_selftest_aggregate.hexa (4 MB arena → the mmap path)"
+echo
+echo "── leg A: own-link (HEXA_OWNLINK_DEFAULT=1) ──"
+build_and_run own 1 || fail "own-link leg produced no runnable artifact"
+echo "── leg B: ld      (HEXA_OWNLINK_DEFAULT=0) ──"
+build_and_run ld   0 || infra "ld leg failed to build — no control to compare against"
+echo
+
+own_rc="$(cat "$W/own.rc")"; ld_rc="$(cat "$W/ld.rc")"
+
+# ── 1. the own-link binary RUNS ──────────────────────────────────────────────
+# The assertion all four prior gates were structurally incapable of making.
+case "$own_rc" in
+  139) fail "own-link binary SIGSEGV (rc=139) — mislinked-but-executable. This is the #4952 shape exactly: the build said rc=0 and the binary dies at startup." ;;
+  138) fail "own-link binary SIGBUS (rc=138) — mislinked." ;;
+  134) fail "own-link binary SIGABRT (rc=134)." ;;
+  # A hang is a linker DEFECT, not an infra hiccup: the A0-b self-referential
+  # alias (own body aliased onto a libc forwarding thunk -> `jmp $-9`) presents
+  # as exactly this — rc=124, spinning. Only call it infra when the ld control
+  # timed out too, i.e. the runner itself was too slow to grade either leg.
+  124)
+    if [ "$ld_rc" = "124" ]; then
+      infra "BOTH legs timed out (300 s) — the runner could not grade either linker"
+    fi
+    fail "own-link binary HUNG (rc=124) while the ld control finished (rc=$ld_rc) — a hang is a linker defect (the A0-b alias self-loop shape), not a slow runner."
+    ;;
+esac
+[ -s "$W/own.out" ] || fail "own-link binary produced ZERO output (rc=$own_rc) — it did not actually run"
+# Non-empty output is not enough: if the subject cannot find stdlib/ it prints a
+# `found=0` header and exits before allocating anything, so a genuinely broken
+# binary could "pass" without ever reaching the arena. Require real work.
+_found="$(grep -oE 'found=[0-9]+' "$W/own.out" | head -1 | cut -d= -f2)"
+[ -n "${_found:-}" ] && [ "$_found" -gt 0 ] \
+    || fail "own-link binary ran but did NO work (found=${_found:-?}) — it never reached the arena/mmap path, so this run proves nothing. Check that the subject can see stdlib/ from \$REPO."
+echo "  ✓ the subject did real work: found=$_found selftests"
+
+# ── 2. it exercised the mmap path ────────────────────────────────────────────
+# Without this the gate can rot: swap in a smaller subject and it silently stops
+# covering large-alloc, re-opening the very blind spot the parity gate had.
+if command -v strace >/dev/null 2>&1; then
+    ( cd "$REPO" && timeout 300 strace -f -e trace=mmap -o "$W/own.strace" \
+        "$W/own.bin" --ci-gate --strict ) >/dev/null 2>&1
+    if grep -qE 'mmap\(NULL, (4194304|0x400000)' "$W/own.strace" 2>/dev/null; then
+        echo "  ✓ mmap coverage: 4 MB arena mapping observed (the path the toy corpus never reaches)"
+    else
+        fail "the subject no longer takes the large-alloc mmap path — THIS GATE HAS GONE BLIND. Pick a subject allocating > HXHEAP_SMALL_MAX (4096 B), or the #4952 defect class can reappear undetected."
+    fi
+else
+    infra "strace unavailable on this runner — the mmap-coverage assertion cannot run, and a gate that cannot see its own coverage must not report GREEN. Install strace on the runner."
+fi
+
+# ── 3. process-level init parity: env() ──────────────────────────────────────
+# The aggregate subject is BLIND to this: it runs its selftests as child processes,
+# and execve hands each child a real envp from the kernel — so a parent whose own
+# hxlcl_environ was never captured still yields correct-looking children. The gap
+# only shows in-process. It is real and it shipped: the dyn own-link path emitted no
+# DT_INIT_ARRAY and collapsed __init_array_start/end, so ZERO exe constructors ran —
+# hxlcl_capture_environ never fired and env() returned "" for every key (plus no
+# setvbuf, no SIGPIPE-ignore). Silent wrong answers, rc=0.
+printf 'fn main() {\n    println(env("HOME"))\n}\n' > "$W/envprobe.hexa"
+for _leg in own:1 ld:0; do
+    _tag="${_leg%%:*}"; _flag="${_leg##*:}"
+    ( cd "$W" && env -u HEXA_PREBUILT_RUNTIME -u HEXA_APRIME_CC -u HEXA_LANG \
+        HEXA_OWNLINK_DEFAULT="$_flag" "$HEXAD" build "$W/envprobe.hexa" -o "$W/envprobe.$_tag" ) \
+        > "$W/envprobe.$_tag.build" 2>&1 \
+        || fail "env-probe failed to build under the $_tag linker"
+    ( cd "$REPO" && timeout 60 "$W/envprobe.$_tag" ) > "$W/envprobe.$_tag.out" 2>&1
+done
+_env_own="$(cat "$W/envprobe.own.out")"; _env_ld="$(cat "$W/envprobe.ld.out")"
+[ -n "$_env_ld" ] || infra "the ld control printed an empty env(\"HOME\") — HOME is unset in this environment, so the probe has no oracle"
+[ "$_env_own" = "$_env_ld" ] \
+    || fail "in-process init parity: env(\"HOME\") = '$_env_own' under own-link but '$_env_ld' under ld — the exe constructors did not run (DT_INIT_ARRAY / .init_array bounds). Every env()-reading program silently gets the wrong answer."
+echo "  ✓ in-process init parity: env(\"HOME\") = '$_env_own' under BOTH linkers (exe ctors ran)"
+
+# ── 4. RUN-parity (own-link ≡ ld) ────────────────────────────────────────────
+# An exact `diff` of stdout is NOT a sound parity test here, and this is MEASURED,
+# not assumed: the same ld-linked binary, run three times on the same host, produced
+# 3 different outputs (107 lines pass=91 timeout=3 · 99 lines pass=93 timeout=1 · and
+# a third), with individual tests flipping PASS<->TIMEOUT between runs. The subject
+# spawns 94 children under a wall-clock timeout, so which ones time out is a property
+# of machine load, not of the linker. ld does not even self-parity. An exact-diff
+# assertion would therefore be chronically RED no matter what the linker did — a gate
+# nobody can act on, which is a gate nobody reads.
+#
+# So compare the DETERMINISTIC content and quarantine the timing noise
+# (commons infra-wall-noneval: a compute-cost timeout is an infra wall, quarantined
+# from the verdict — it is not evidence about the target). Concretely:
+#   · drop the `# wrote state/stdlib_selftest_<TS>.jsonl` line (a timestamp)
+#   · quarantine any test that TIMED OUT under either linker — and SAY SO (a silent
+#     cap would read as "covered everything" when it did not)
+#   · every remaining test must carry the SAME PASS/FAIL verdict under both linkers.
+#     A test that PASSes under one and FAILs under the other is a real divergence and
+#     still FAILs the gate. That is the assertion with teeth, and timing cannot fake it.
+[ "$own_rc" = "$ld_rc" ] || fail "RUN-parity: exit code differs — own-link rc=$own_rc vs ld rc=$ld_rc"
+
+_verdicts() { grep -E '^(PASS|FAIL|TIMEOUT)[[:space:]]' "$1" | awk '{print $2"\t"$1}' | sort -u; }
+_verdicts "$W/own.out" > "$W/own.v"
+_verdicts "$W/ld.out"  > "$W/ld.v"
+[ -s "$W/own.v" ] || fail "RUN-parity: the own-link run emitted no per-test verdict lines at all — the subject did not report, so there is nothing to compare"
+
+# tests whose verdict is timing-dependent on EITHER side → quarantined, and named.
+awk -F'\t' '$2=="TIMEOUT"{print $1}' "$W/own.v" "$W/ld.v" | sort -u > "$W/quarantine"
+_nq="$(wc -l < "$W/quarantine" | tr -d ' ')"
+if [ "$_nq" -gt 0 ]; then
+    echo "  · RUN-parity: quarantined $_nq timing-dependent test(s) (TIMEOUT under one or both linkers — see the ld-vs-ld self-parity note above):"
+    sed 's/^/      /' "$W/quarantine"
+fi
+
+# the real assertion: identical PASS/FAIL verdicts on every non-quarantined test.
+grep -vFf "$W/quarantine" "$W/own.v" > "$W/own.cmp" 2>/dev/null || true
+grep -vFf "$W/quarantine" "$W/ld.v"  > "$W/ld.cmp"  2>/dev/null || true
+if ! diff -q "$W/own.cmp" "$W/ld.cmp" >/dev/null 2>&1; then
+    echo "    --- own-link vs ld, deterministic verdicts ---"
+    diff "$W/own.cmp" "$W/ld.cmp" | head -20 | sed 's/^/    /'
+    fail "RUN-parity: a test's PASS/FAIL verdict DIFFERS between linkers (timing is already quarantined, so this is a real behavioral divergence)"
+fi
+echo "  ✓ RUN-parity: $(wc -l < "$W/own.cmp" | tr -d ' ') test(s) carry identical PASS/FAIL verdicts under both linkers (rc=$own_rc both)"
+
+echo
+echo "════ PASS ════"
+echo "  own-link binary RAN (rc=$own_rc · $(wc -l < "$W/own.out") lines) · took the mmap path · env() ≡ ld · every deterministic test verdict ≡ ld"

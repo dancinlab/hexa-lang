@@ -1,0 +1,205 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/rent_attribution_gate_test.hexa — falsifiers for the FAIL-CLOSED
+// pod-attribution gate on `hexa cloud rent` (cloud_cli.hexa:_rent_require_attribution).
+//
+// The rent gate REFUSES to create a pod (returns "" → caller `return 2`) unless
+// all three attribution axes resolve: WHICH agent (--agent / HEXA_CLOUD_AGENT),
+// WHICH project (--project or a real git repo), WHICH purpose (--desc/--purpose/
+// --owner). On success it force-stamps `agent-project-purpose` onto the provider
+// label. No new jsonl (the provider label is the SSOT); no --force / --label
+// escape hatch (governance no-escape-hatch).
+//
+// MIRROR layer: _slugify · _resolve_agent · _agent_project_purpose_label are
+// `_`-prefixed in cloud_cli.hexa, mirrored byte-identically here (established
+// mirror-test pattern). The gate's decision logic is mirrored as a PURE
+// _gate_decision(agent, env_agent, project_flag, repo, purpose) so the env-var
+// and git-repo inputs are parameterized (deterministic — no process env / cwd
+// dependence in the CI gate).
+//
+// Falsifiers:
+//   F-RAG-AGENT-MISSING   — no --agent and no env → "" (REFUSE)
+//   F-RAG-AGENT-GARBAGE   — --agent "@@@" slugs to empty → "" (REFUSE)
+//   F-RAG-AGENT-ENV       — env HEXA_CLOUD_AGENT satisfies when flag absent
+//   F-RAG-AGENT-FLAG-WINS — --agent flag wins over the env var
+//   F-RAG-PROJECT-MISSING — no --project and no git repo → "" (REFUSE)
+//   F-RAG-PURPOSE-MISSING — purpose "unspecified" → "" (REFUSE)
+//   F-RAG-HAPPY           — all three present → agent-project-purpose composite
+//
+// Run:   hexa run stdlib/cloud/rent_attribution_gate_test.hexa
+// PASS:  exits 0, prints "rent_attribution_gate_test PASS".
+
+// ── mirrors of cloud_cli.hexa (keep byte-identical) ─────────────────────
+
+fn _slugify(s: str) -> str {
+    let mut out = ""
+    let mut prev_dash = 1
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        let lc = c.to_lower()
+        let is_digit = c >= "0" && c <= "9"
+        let is_alpha = lc >= "a" && lc <= "z"
+        if is_digit || is_alpha {
+            out = out + lc
+            prev_dash = 0
+        } else {
+            if prev_dash == 0 {
+                out = out + "-"
+                prev_dash = 1
+            }
+        }
+        i = i + 1
+    }
+    let m = len(out)
+    if m > 0 && out.substring(m - 1, m) == "-" {
+        out = out.substring(0, m - 1)
+    }
+    return out
+}
+
+fn _agent_project_purpose_label(agent: str, project: str, purpose: str) -> str {
+    let a = _slugify(agent)
+    let p = _slugify(project)
+    let q = _slugify(purpose)
+    let mut out = a + "-" + p + "-" + q
+    if len(out) > 60 {
+        out = out.substring(0, 60)
+        let m = len(out)
+        if m > 0 && out.substring(m - 1, m) == "-" {
+            out = out.substring(0, m - 1)
+        }
+    }
+    return out
+}
+
+// _resolve_agent resolution, parameterized (flag wins > env > "").
+fn _resolve_agent_pure(flag: str, env_agent: str) -> str {
+    if len(flag) > 0 {
+        return flag
+    }
+    if len(env_agent) > 0 {
+        return env_agent
+    }
+    return ""
+}
+
+// _rent_require_attribution decision logic, parameterized on the resolved
+// env-var (env_agent) and git-repo basename (repo). Mirrors the three fail
+// arms + the happy composite of cloud_cli.hexa:_rent_require_attribution.
+fn _gate_decision(agent_flag: str, env_agent: str, project_flag: str,
+                  repo: str, purpose: str) -> str {
+    let agent = _resolve_agent_pure(agent_flag, env_agent)
+    if len(_slugify(agent)) == 0 {
+        return ""
+    }
+    if len(project_flag) == 0 && len(repo) == 0 {
+        return ""
+    }
+    let mut project = project_flag
+    if len(project) == 0 {
+        // real-git-repo path: _resolve_project @-prefixes the repo basename.
+        project = "@" + repo
+    }
+    if purpose == "unspecified" {
+        return ""
+    }
+    return _agent_project_purpose_label(agent, project, purpose)
+}
+
+// mirror of cloud_cli.hexa:_rent_flag_arity (relevant subset) — proves --agent
+// is a KNOWN value-consuming flag (arity 2). Without this the unknown-flag
+// refusal (@_rent_unknown_flag) would REJECT --agent before the gate ever runs.
+fn _rent_flag_arity(flag: str) -> int {
+    if flag == "--gpu" || flag == "--image" || flag == "--disk" || flag == "--owner"
+       || flag == "--agent"
+       || flag == "--project" || flag == "--desc" || flag == "--purpose" {
+        return 2
+    }
+    if flag == "--search-only" || flag == "--dry-run" || flag == "--help" {
+        return 1
+    }
+    return 0
+}
+
+fn _eq_int(name: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + name + " got " + str(got) + " want " + str(want))
+        exit(1)
+    }
+    println("  ok: " + name)
+}
+
+fn _eq(name: str, got: str, want: str) {
+    if got != want {
+        println("  FAIL: " + name + " got '" + got + "' want '" + want + "'")
+        exit(1)
+    }
+    println("  ok: " + name)
+}
+
+fn main() {
+    // F-RAG-AGENT-MISSING — no flag, no env → REFUSE.
+    _eq("agent missing → refuse",
+        _gate_decision("", "", "@hexa-lang", "", "r12 gold"), "")
+    // F-RAG-AGENT-GARBAGE — slug-empty agent → REFUSE.
+    _eq("agent garbage @@@ → refuse",
+        _gate_decision("@@@", "", "@hexa-lang", "", "r12 gold"), "")
+    // F-RAG-AGENT-ENV — env satisfies when flag absent.
+    _eq("agent env satisfies",
+        _gate_decision("", "claude7", "@hexa-lang", "", "r12 gold"),
+        "claude7-hexa-lang-r12-gold")
+    // F-RAG-AGENT-FLAG-WINS — flag beats env.
+    _eq("agent flag wins over env",
+        _gate_decision("claude9", "claude7", "@hexa-lang", "", "r12 gold"),
+        "claude9-hexa-lang-r12-gold")
+    // F-RAG-PROJECT-MISSING — no --project and no git repo → REFUSE.
+    _eq("project missing (no flag, no repo) → refuse",
+        _gate_decision("claude7", "", "", "", "r12 gold"), "")
+    // project resolves from a real git repo basename when no flag.
+    _eq("project from git repo",
+        _gate_decision("claude7", "", "", "hexa-lang", "r12 gold"),
+        "claude7-hexa-lang-r12-gold")
+    // F-RAG-PURPOSE-MISSING — "unspecified" sentinel → REFUSE.
+    _eq("purpose unspecified → refuse",
+        _gate_decision("claude7", "", "@hexa-lang", "", "unspecified"), "")
+    // F-RAG-HAPPY — all three present → composite.
+    _eq("happy path composite",
+        _gate_decision("claude7", "", "@hexa-lang", "", "r12 gold harvest"),
+        "claude7-hexa-lang-r12-gold-harvest")
+
+    // F-RAG-ARITY — --agent is a known value-flag (arity 2), else the
+    // unknown-flag refusal rejects it before the gate runs.
+    _eq_int("--agent arity 2", _rent_flag_arity("--agent"), 2)
+    _eq_int("--desc arity 2", _rent_flag_arity("--desc"), 2)
+    _eq_int("unknown flag arity 0", _rent_flag_arity("--bogus"), 0)
+
+    // ── F-RAG-VERB-NEUTRAL — the gate body is SHARED by rent + the passthrough
+    // verbs (cloud_cli.hexa:_require_attribution, of which _rent_require_attribution
+    // is now a thin wrapper). `api` / `provider-cli` must not create a provider
+    // CALL unattributed, exactly as rent must not create a POD unattributed.
+    // _gate_decision is verb-independent by construction — only the refusal TEXT
+    // differs per verb — so the same inputs must yield the same verdict for every
+    // verb. These re-assert the three refusals + the happy composite through the
+    // shared body, so a future edit that re-forks one verb's rules fails here.
+    _eq("api: agent missing → refuse (same as rent)",
+        _gate_decision("", "", "@hexa-lang", "", "r12 offer survey"), "")
+    _eq("api: project missing → refuse (same as rent)",
+        _gate_decision("claude7", "", "", "", "r12 offer survey"), "")
+    _eq("api: purpose unspecified → refuse (same as rent)",
+        _gate_decision("claude7", "", "@hexa-lang", "", "unspecified"), "")
+    _eq("api: happy path → same composite as rent",
+        _gate_decision("claude7", "", "@hexa-lang", "", "r12 offer survey"),
+        "claude7-hexa-lang-r12-offer-survey")
+    // env HEXA_CLOUD_AGENT satisfies the passthrough verbs too — a roster agent
+    // exporting its identity once is attributed on every call, not just on rent.
+    _eq("provider-cli: env agent satisfies (same as rent)",
+        _gate_decision("", "claude7", "@hexa-lang", "", "r12 offer survey"),
+        "claude7-hexa-lang-r12-offer-survey")
+    // A read-only call is NOT exempt: the gate has no read/write axis at all, so
+    // a GET / `show instances` decides identically to a mutating one.
+    _eq("provider-cli: read-only call still gated",
+        _gate_decision("", "", "@hexa-lang", "", "show instances"), "")
+
+    println("rent_attribution_gate_test PASS")
+}

@@ -1120,6 +1120,46 @@ jobs:
           # verdict here (convergence runtime-core-emit-hexa-1).
           env -u HEXA_PREBUILT_RUNTIME HEXA_CUDA=0 bash tool/seed_abi_contract_smoke.sh
 
+  # ── own-link BEHAVIORAL smoke — RUN the linked binary (#4952/#4954 lesson) ──
+  # The gate the other four could not be. byteeq/determinism compare the LINKER'S
+  # EMITTED BYTES; own-link corpus parity DOES run binaries but its corpus is five
+  # toy programs whose allocations never exceed HXHEAP_SMALL_MAX (4096 B), so none
+  # of them ever reaches hxheap_alloc's mmap path — which is exactly where the
+  # STB_LOCAL floor-alias ABI skew killed real tools. All four were GREEN while
+  # `hexa build` shipped a binary that SIGSEGV'd at startup with rc=0.
+  #
+  # This job builds a REAL tool through `hexa build` on BOTH linker legs, RUNS each,
+  # and asserts: the own-link binary actually runs (no SIGSEGV) · it takes the mmap
+  # path · own-link stdout/rc ≡ ld stdout/rc.
+  #
+  # Discrimination is PROVEN, not asserted: reverting the one-line #4954 guard in a
+  # control tree makes this gate go RED (rc=139) while the fixed tree passes.
+  ownlink-behavioral-smoke-x86_64:
+    name: own-link behavioral smoke (RUN the linked binary, linux-x86_64)
+    needs: dispatch
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.linux_label) }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+      - name: Build toolchain (shared release_build)
+        shell: bash
+        env:
+          TARGET: linux-x86_64
+          CC: gcc
+          LIBS: "-lm -ldl"
+          GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
+        run: bash tool/release_build
+      - name: own-link behavioral smoke — RUN it
+        shell: bash
+        env:
+          REPO: ${{ github.workspace }}
+          HEXA_BIN: ${{ github.workspace }}/hexa
+          CC: gcc
+        run: bash tool/ownlink_behavioral_smoke
+
   cfallback-zero-census-x86_64:
     name: cfallback-zero census (hexa build → own-link, no C-transpile, linux-x86_64)
     needs: dispatch

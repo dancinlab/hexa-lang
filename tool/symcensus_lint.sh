@@ -20,7 +20,7 @@
 #
 # special-op = codegen-inline intrinsics (never runtime-linked symbols):
 #   __hx_* __builtin_va_* __arr_* __map_* __str_* __fd_* __raw_* __vs_* target_is_*
-#   plus the literal scope names true/false/nil (bind.hexa emits KwTrue/KwFalse).
+#   plus the literal scope names true/false/nil/void (bind.hexa emits KwTrue/KwFalse).
 # exemption  = tool/symcensus_exempt.txt (the shrinking Rung-B outstanding set).
 #
 # Usage:
@@ -78,7 +78,7 @@ sort -u "$tmp/mapped" "$tmp/cabi" > "$tmp/covered"
 # residual = gate_union − covered − special-op − exemption
 grep -vxF -f "$tmp/covered" "$tmp/gate_union" \
   | grep -vE '^(__hx_|__builtin_va_|__arr_|__map_|__str_|__fd_|__raw_|__vs_|target_is_)' \
-  | grep -vE '^(true|false|nil)$' > "$tmp/after_special" || true
+  | grep -vE '^(true|false|nil|void)$' > "$tmp/after_special" || true
 
 if [ -f "$EXEMPT" ]; then
   grep -vE '^[[:space:]]*#|^[[:space:]]*$' "$EXEMPT" | tr -d ' \t' | sort -u > "$tmp/exempt"
