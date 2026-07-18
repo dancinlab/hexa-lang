@@ -56,15 +56,45 @@ else if bm_callee.kind == "ident" && _hir_free_calltype_enabled()
 `len→i64`(1475·round-1 단독) → `file_exists→bool`(130·round-2) → `exec`(322·**HOLD**: exit-code i64
 vs output-string 미확정) · println(693·unit·제외) · to_string/env_var(string·제외).
 
-## ★구현 전 확정 필요 (census soundness 전제 · grep 미해결)
-1. **cross-module ref 모델**: lowering은 per-module(`lower(module)`:2811). bare `len(x)`가 **imported
-   유저 fn**으로 해석 가능하면 per-module census 불건전(다른 모듈 `len`을 못 봄). hexa가 cross-module를
-   qualified `Mod.fn`(field-callee)로만 부르면 per-module census 충분. **resolve.hexa/bind.hexa
-   name-resolution 정독 또는 empirical(유저 `fn len`→string + 호출, flag-ON 컴파일→mis-stamp 여부)로
-   확정.** 이 전제 확정 전 구현 착수 금지(unsound 위험).
-2. binder 폼 완전 열거(위 ① 목록이 ast.hexa 전체를 커버하는지).
-3. import가 unqualified 이름을 scope에 주입할 수 있는지(1과 연동).
+## 전제 RESOLVED (2026-07-18 · bind.hexa 정독 · code-evidence)
+1. **cross-module ref 모델 = per-module census SOUND ✅.** bind.hexa pre-pass(:1780) `if !_is_import_kind`
+   → **import 항목은 module scope에 이름 미등록**(:1835 "Import — body는 empty placeholder, nothing to
+   walk"). ⇒ **import는 unqualified 이름을 현재 모듈 scope에 주입 안 함.** bare `len(x)`는 (a)로컬 바인딩
+   (b)같은 모듈 top-level item (c)builtin 으로만 해석 — **다른 모듈 유저 `fn len`으론 절대 해석 불가**.
+   per-module census로 충분. (전제3도 이로써 해소: import unqualified 주입 없음.)
+2. **binder 폼 완전 열거 ✅** (아래 turnkey 맵).
+3. 유저 `fn len` 트리 0개(grep) — 현 shadow 無·census=미래안전판.
+
+## turnkey 구현 맵 (mechanical · file:line)
+### A. checker SSOT — `compiler/check/types.hexa`
+`_types_builtin_method_ret`(:4445 `match name`) 옆에 **`_types_builtin_free_ret(name)`** 신설:
+`match name { "len" -> _types_t_i64(), _ -> <method-ret의 default arm과 동일 sentinel> }`.
+(default arm sentinel = `_types_builtin_method_ret`의 `_ ->` 반환값 미러 — 구현 시 확인.)
+
+### B. lowering — `compiler/lower/ast_to_hir.hexa`
+- `_hir_builtin_free_ret_prim(name)` = 미러: `"len" -> _hir_t_i64()`(:96), else `_hir_empty_type()`(:71).
+- `_hir_free_calltype_enabled()` = `env_var("HEXA_UNBOX_HIR_CALLTYPE_FREE") == "1"` (**default-OFF**).
+- **census(disqualified-name Set)**: heap-resident module-global(`_lr_ast_gnames`:1286 패턴 미러 —
+  per-`lower()` reset+re-prime). `lower(module)`(:2811) pre-pass 직후 module.items를 walk하며 **모든
+  binder text 수집**. sound하려면 bind.hexa `_bind_walk_expr`(:909) + `_bind_pattern`의 define 사이트를
+  **정확히 미러**:
+  - top-level item name(:1788 `_bind_let_name(it.name)`) · fn param(:1821 `param.name`)
+  - Let(:1005 `e.text`) · For iterator(:1043 `e.text`) · catch/Try var(:1064 `e.text`)
+  - Closure params(:1074 children[0..n-1]의 `.text`) · **Match arm 패턴 바인더(:1103 `_bind_pattern`)**
+    = 중첩 구조분해(enum payload `Some(n)`·struct 필드·tuple)까지 재귀 — ★census 완전성의 핵심 복잡도.
+  - ⚠️ 하나라도 누락 = `len`이 그 폼으로 바인딩됐을 때 false-stamp = m12 unsound-const = self-host 손상.
+    default-OFF 머지는 byte-neutral(안전)이나 flip-time에 반드시 완전해야 함.
+- **arm**(:2162 가드 안): `else if bm_callee.kind == "ident" && _hir_free_calltype_enabled() &&
+  !_free_disqualified(bm_callee.text) { let br = _hir_builtin_free_ret_prim(bm_callee.text); if br.kind
+  != "?" { t = br } }`. `t.kind=="?"` 가드 하 → :2152 fn-ret 스탬프 절대 미덮음(construction-safe).
+- **doc-drift**: :104 주석 "default-OFF"→"default-ON"(부모 lever) 수정(lockstep).
+
+### 검증 순서
+1. default-OFF 구현 → **summer/ghost byteeq-3target OFF-path byte-neutral 확인**(머지 게이트) → PR 머지.
+2. flip PR(별도·default-ON): byteeq-3target+nvptx + behavioral(full suite+ship smoke+running gen-chain)
+   + A/B census 델타(≈ −1475 ident:len·타 이동 0) GREEN → default-ON.
 
 ## 상태
-설계 완성·grep-검증. 구현 = 전제1 확정 후 착수(local 코드 + summer/ghost byteeq, default-OFF 머지 →
-behavioral+byteeq flip). 관련 lab 원본 = 세션 scratchpad `lab_l4_freefn_builtin_stamp.md`.
+설계 완성·전제 RESOLVED·turnkey 맵 완비. 다음 = 구현(census가 `_bind_walk_expr`+`_bind_pattern` 충실
+미러 = correctness-critical) → summer byteeq OFF-neutral → default-OFF 머지 → 별도 flip PR.
+lab 원본 = 세션 scratchpad `lab_l4_freefn_builtin_stamp.md`.
