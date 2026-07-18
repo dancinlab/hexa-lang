@@ -1385,6 +1385,12 @@ fn _bind_builtin_names() -> [string] {
         "sha1", "sha1_bytes", "base64_encode", "base64_decode",
         // Set B-2 round-1 (fs) — rt_fs_* pair-ABI free-fns, legacy 1:1, nm-verified.
         "fs_stat", "fs_mkdir_p", "fs_append_atomic", "fs_rotate_if_over",
+        // axis-① Set B-2 round-2..6 — libm/ad_/safetensors/callback (all pair-ABI,
+        // nm-verified T in runtime.a; hexa_math_* pair wrappers, not raw libm C-ABI).
+        "asin", "acos", "atan", "atan2", "erf", "erfc", "gamma", "tgamma", "bessel_j0", "bessel_j1", "fmod",
+        "ad_tape_begin", "ad_tape_end", "ad_backward", "ad_grad", "ad_matmul", "ad_softmax_cross_entropy",
+        "safetensors_mmap_open", "safetensors_mmap_header", "safetensors_mmap_data_offset", "safetensors_mmap_size", "safetensors_mmap_close", "safetensors_mmap_read_f32_farr", "safetensors_mmap_read_bf16_to_f32_farr", "safetensors_mmap_read_bytes",
+        "callback_free", "callback_slot_id",
         // Step 5 codegen-inline builtins (4th re-land after e8c2dc1c wipe).
         "__arr_raw_len", "__arr_set_cap", "__fd_write_bytes", "__map_raw_len", "__str_raw_len",
         // RT-NATIVE UNLOCK-2 (2026-06-16): native tag-read intrinsic — `__hx_tag(v)`

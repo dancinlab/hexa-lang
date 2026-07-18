@@ -2085,6 +2085,34 @@ pub fn _builtin_runtime_sym(name: string, nargs: i64) -> string {
     if name == "fs_mkdir_p"       { return "rt_fs_mkdir_p" }
     if name == "fs_append_atomic" { return "rt_fs_append_atomic" }
     if name == "fs_rotate_if_over" { return "rt_fs_rotate_if_over" }
+    // axis-① Set B-2 round-2..6 — libm/ad_/safetensors/callback pair-ABI (nm-verified)
+    if name == "asin"                                   { return "hexa_math_asin" }
+    if name == "acos"                                   { return "hexa_math_acos" }
+    if name == "atan"                                   { return "hexa_math_atan" }
+    if name == "atan2"                                  { return "hexa_math_atan2" }
+    if name == "erf"                                    { return "hexa_math_erf" }
+    if name == "erfc"                                   { return "hexa_math_erfc" }
+    if name == "gamma"                                  { return "hexa_math_tgamma" }
+    if name == "tgamma"                                 { return "hexa_math_tgamma" }
+    if name == "bessel_j0"                              { return "hexa_math_j0" }
+    if name == "bessel_j1"                              { return "hexa_math_j1" }
+    if name == "fmod"                                   { return "hexa_math_fmod" }
+    if name == "ad_tape_begin"                          { return "hexa_ad_tape_begin" }
+    if name == "ad_tape_end"                            { return "hexa_ad_tape_end" }
+    if name == "ad_backward"                            { return "hexa_ad_backward" }
+    if name == "ad_grad"                                { return "hexa_ad_grad" }
+    if name == "ad_matmul"                              { return "hexa_ad_matmul" }
+    if name == "ad_softmax_cross_entropy"               { return "hexa_ad_softmax_cross_entropy" }
+    if name == "safetensors_mmap_open"                  { return "hexa_safetensors_mmap_open" }
+    if name == "safetensors_mmap_header"                { return "hexa_safetensors_mmap_header" }
+    if name == "safetensors_mmap_data_offset"           { return "hexa_safetensors_mmap_data_offset" }
+    if name == "safetensors_mmap_size"                  { return "hexa_safetensors_mmap_size" }
+    if name == "safetensors_mmap_close"                 { return "hexa_safetensors_mmap_close" }
+    if name == "safetensors_mmap_read_f32_farr"         { return "hexa_safetensors_mmap_read_f32_farr" }
+    if name == "safetensors_mmap_read_bf16_to_f32_farr" { return "hexa_safetensors_mmap_read_bf16_to_f32_farr" }
+    if name == "safetensors_mmap_read_bytes"            { return "hexa_safetensors_mmap_read_bytes" }
+    if name == "callback_free"                          { return "hexa_callback_free" }
+    if name == "callback_slot_id"                       { return "hexa_callback_slot_id" }
     // N5-sym class-B: native obj-emit left these intrinsics unmapped →
     // fell through to the bare name → undefined at self-host link (the
     // native compiler object references `_list_dir` while the runtime
