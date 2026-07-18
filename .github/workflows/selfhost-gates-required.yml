@@ -13,9 +13,17 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # Re-evaluate AFTER the path-filtered own-link behavioral smoke concludes — the
+  # aggregator (ubuntu, ~seconds) otherwise finishes while the smoke (self-hosted,
+  # up to 45 min) is still in-progress, so section [4] would only ever see null.
+  # This second run resolves the smoke's real conclusion for the same head SHA.
+  workflow_run:
+    workflows: [nobaseline-gate]
+    types: [completed]
 
 permissions:
   contents: read
+  checks: read
 
 concurrency:
   group: selfhost-gates-summary-${{ github.ref }}
@@ -28,6 +36,10 @@ jobs:
     timeout-minutes: 10
     env:
       SELFHOST_SLOT_READY: ${{ vars.SELFHOST_SLOT_READY || '0' }}
+      # section [4] own-link behavioral smoke check-run query (fail-open):
+      GH_TOKEN: ${{ github.token }}
+      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       - uses: actions/checkout@v6
       - name: selfhost gates summary (always-on required aggregator)

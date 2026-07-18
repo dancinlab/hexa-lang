@@ -1,0 +1,36 @@
+// HEXA-OWN L5 R1 — HX3060 NEGATIVE control: rolling-handle advance is LEGAL.
+//
+// `let mut cur = X; while { use(cur); free(cur); cur = nxt }` frees the current
+// slot and advances to a freshly-produced one each iteration — a correct rolling
+// buffer, no use-after-free. This is the shape of anima run_k8.hexa:140-155, the
+// residual FP (6 fires) left after the loop-reinit fix. `cur = nxt` re-points cur
+// to an UNTRACKED ident (nxt comes from a non-producer call), so the producer-gated
+// pm KILL does not cover it; a NAME-SCOPED KILL on cur's old group re-inits cur's
+// view and washes the loop back edge for cur's own reads.
+//
+// Expect: HEXA_BORROWCK_HANDLE=1 -> 0 HX3060.
+fn _mk_next(prev: int, k: int) -> int {
+    let nxt = farr_zeros(k)
+    let mut i = 0
+    while i < k {
+        let _ = farr_set(nxt, i, farr_get(prev, i) + 1.0)
+        i = i + 1
+    }
+    return nxt
+}
+
+fn main() -> int {
+    let k = 4
+    let state = farr_zeros(k)
+    let mut cur = state
+    let mut step = 0
+    while step < 3 {
+        let s = farr_get(cur, 0)        // read BEFORE free — legit
+        let nxt = _mk_next(cur, k)      // non-producer call → nxt untracked
+        let _ = farr_free(cur)
+        cur = nxt                       // rolling re-point (ident RHS)
+        step = step + 1
+    }
+    let _ = farr_free(cur)
+    return 0
+}

@@ -1,0 +1,106 @@
+=== L4 G0 vs-gcc RE-BASELINE — 2026-07-13T22:32:53Z — summer-B650M-K ===
+  gcc: gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+  load=1.65 OK
+  REUSE=1 — keeping existing /home/summer/l4_g0/aprime_cc (stale-gate still enforced below)
+  SRC sha=70e3d995
+  seeded warm-tree hexat: 2941080B (self-hosted, not frozen)
+
+--- aprime_cc: REUSED from previous run (3673528B) ---
+  stale-gate: aprime_mtime=1783981871 newest_compiler_src=1783981822
+  stale-gate: PASS (aprime_cc is fresh)
+  runtime.a=/home/summer/l4_g0/src/build/runtime.a (1328352B)
+
+--- gcc -O2 reference build + run ---
+  [k1_sum] gcc -O2: out=840001701 median_cpu_s=0.45
+  [k2_collatz] gcc -O2: out=428343355 median_cpu_s=0.44
+  [k3_arrmap] gcc -O2: out=702789902 median_cpu_s=0.12
+  [k4_branch] gcc -O2: out=-66666664 median_cpu_s=0.07
+  [k5_fncall] gcc -O2: out=935000602 median_cpu_s=0.22
+
+--- hexa native-emit: 6 configs x 5 kernels ---
+  == config ALLON  [<shipped defaults>] ==
+    [k1_sum] out=840001701 cpu=0.46s vs_gcc=1.02x boxedcalls=0
+0 parity=OK
+    [k2_collatz] out=428343355 cpu=6.63s vs_gcc=15.07x boxedcalls=2 parity=OK
+    [k3_arrmap] out=702789902 cpu=2.53s vs_gcc=21.08x boxedcalls=5 parity=OK
+    [k4_branch] out=-66666664 cpu=0.19s vs_gcc=2.71x boxedcalls=0
+0 parity=OK
+    [k5_fncall] out=935000602 cpu=0.36s vs_gcc=1.64x boxedcalls=1 parity=OK
+  == config ALLOFF  [HEXA_UNBOX_NATIVE=0 HEXA_UNBOX_ARRAY_NATIVE=0 HEXA_PACK_ARRAY=0 HEXA_UNBOX_HIR_CALLTYPE=0] ==
+    [k1_sum] out=840001701 cpu=1.44s vs_gcc=3.20x boxedcalls=5 parity=OK
+    [k2_collatz] out=428343355 cpu=11.12s vs_gcc=25.27x boxedcalls=11 parity=OK
+    [k3_arrmap] out=702789902 cpu=3.46s vs_gcc=28.83x boxedcalls=16 parity=OK
+    [k4_branch] out=-66666664 cpu=1.59s vs_gcc=22.71x boxedcalls=8 parity=OK
+    [k5_fncall] out=935000602 cpu=1.05s vs_gcc=4.77x boxedcalls=7 parity=OK
+  == config noUNBOX  [HEXA_UNBOX_NATIVE=0] ==
+    [k1_sum] out=840001701 cpu=0.62s vs_gcc=1.38x boxedcalls=1 parity=OK
+    [k2_collatz] out=428343355 cpu=7.25s vs_gcc=16.48x boxedcalls=4 parity=OK
+    [k3_arrmap] out=702789902 cpu=2.69s vs_gcc=22.42x boxedcalls=7 parity=OK
+    [k4_branch] out=-66666664 cpu=0.4s vs_gcc=5.71x boxedcalls=3 parity=OK
+    [k5_fncall] out=935000602 cpu=0.58s vs_gcc=2.64x boxedcalls=3 parity=OK
+  == config noARRAY  [HEXA_UNBOX_ARRAY_NATIVE=0] ==
+    [k1_sum] out=840001701 cpu=0.46s vs_gcc=1.02x boxedcalls=0
+0 parity=OK
+    [k2_collatz] out=428343355 cpu=6.63s vs_gcc=15.07x boxedcalls=2 parity=OK
+    [k3_arrmap] out=702789902 cpu=2.52s vs_gcc=21.00x boxedcalls=5 parity=OK
+    [k4_branch] out=-66666664 cpu=0.2s vs_gcc=2.86x boxedcalls=0
+0 parity=OK
+    [k5_fncall] out=935000602 cpu=0.36s vs_gcc=1.64x boxedcalls=1 parity=OK
+  == config noPACK  [HEXA_PACK_ARRAY=0] ==
+    [k1_sum] out=840001701 cpu=0.45s vs_gcc=1.00x boxedcalls=0
+0 parity=OK
+    [k2_collatz] out=428343355 cpu=6.65s vs_gcc=15.11x boxedcalls=2 parity=OK
+    [k3_arrmap] out=702789902 cpu=2.62s vs_gcc=21.83x boxedcalls=5 parity=OK
+    [k4_branch] out=-66666664 cpu=0.19s vs_gcc=2.71x boxedcalls=0
+0 parity=OK
+    [k5_fncall] out=935000602 cpu=0.36s vs_gcc=1.64x boxedcalls=1 parity=OK
+  == config noCALLTYPE  [HEXA_UNBOX_HIR_CALLTYPE=0] ==
+    [k1_sum] out=840001701 cpu=0.46s vs_gcc=1.02x boxedcalls=0
+0 parity=OK
+    [k2_collatz] out=428343355 cpu=6.63s vs_gcc=15.07x boxedcalls=2 parity=OK
+    [k3_arrmap] out=702789902 cpu=2.53s vs_gcc=21.08x boxedcalls=5 parity=OK
+    [k4_branch] out=-66666664 cpu=0.2s vs_gcc=2.86x boxedcalls=0
+0 parity=OK
+    [k5_fncall] out=935000602 cpu=0.36s vs_gcc=1.64x boxedcalls=1 parity=OK
+
+=== SUMMARY — ratio vs gcc -O2 (lower = closer to gcc) ===
+KERNEL          gcc_s    ALLON   ALLOFF  noUNBOX  noARRAY   noPACK noCALLTYPE
+k1_sum           0.45    1.02x    3.20x    1.38x    1.02x    1.00x    1.02x
+k2_collatz       0.44   15.07x   25.27x   16.48x   15.07x   15.11x   15.07x
+k3_arrmap        0.12   21.08x   28.83x   22.42x   21.00x   21.83x   21.08x
+k4_branch        0.07    2.71x   22.71x    5.71x    2.86x    2.71x    2.86x
+k5_fncall        0.22    1.64x    4.77x    2.64x    1.64x    1.64x    1.64x
+
+  geomean vs gcc [ALLON] = 4.28x
+  geomean vs gcc [ALLOFF] = 12.04x
+  geomean vs gcc [noUNBOX] = 5.98x
+  geomean vs gcc [noARRAY] = 4.32x
+  geomean vs gcc [noPACK] = 4.30x
+  geomean vs gcc [noCALLTYPE] = 4.33x
+
+=== boxed-call census (whole-fn ) ===
+KERNEL          ALLON   ALLOFF  noUNBOX  noARRAY   noPACK noCALLTYPE
+k1_sum            0
+0        5        1      0
+0      0
+0      0
+0
+k2_collatz          2       11        4        2        2        2
+k3_arrmap           5       16        7        5        5        5
+k4_branch         0
+0        8        3      0
+0      0
+0      0
+0
+k5_fncall           1        7        3        1        1        1
+
+=== ★ INSTRUMENT DISCRIMINATION (known-slow control = ALLOFF = the pre-lever codegen) ===
+  RED-ON-KNOWN-SLOW = PROVEN: ALLOFF=12.04x is >=1.2x WORSE than ALLON=4.28x.
+  → the harness SEES the pre-lever codegen as slow. It is not blind. Numbers are trustworthy.
+  speedup delivered by the 4 levers (geomean) = 2.81x
+
+  historical baseline of record: 8.6x (2026-06-26) / 10.9x (2026-06-27 re-baseline)
+  ALLOFF (pre-lever control) here = 12.04x  → reproduces the historical band? (sanity)
+  ALLON  (shipped default)   here = 4.28x  → THE NEW MAP
+
+=== DONE 2026-07-13T22:45:43Z — artifacts under /home/summer/l4_g0 ===

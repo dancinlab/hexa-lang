@@ -50,31 +50,51 @@ fi
 
 [ "${#CORPUS[@]}" -gt 0 ] || { echo "[ownlink_census] ERROR: empty corpus" >&2; exit 1; }
 
+# Per-program wall-clock cap. Without it, ONE slow program (measured 2026-07-15:
+# stdlib/qforge/atoms/ccsd_rhf.hexa, a large quantum-chemistry TU, program #7 of 8)
+# runs long enough that an outer harness/ssh timeout kills the WHOLE census mid-loop —
+# the run truncated at 6/8 twice, silently dropping the tally for the last two programs.
+# A per-program timeout turns "the run got killed" into a bounded, counted TIMEOUT outcome
+# for that ONE program, so the census always completes and reports every program.
+CENSUS_TIMEOUT="${CENSUS_TIMEOUT:-300}"
+
 TMP="$(mktemp -d -t ownlink_census.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 
-ok=0; fell_back=0; other=0
+ok=0; fell_back=0; other=0; timed_out=0
 declare -a FB=()
 
 echo "[ownlink_census] HEXA_OWNLINK_STRICT=1 — the fallback to ld/clang is an ERROR, not a demotion"
 echo "[ownlink_census] corpus: ${#CORPUS[@]} real programs (each takes the flatten/import-closure path)"
+echo "[ownlink_census] per-program timeout: ${CENSUS_TIMEOUT}s (override with CENSUS_TIMEOUT=)"
 echo
 
+i=0
 for src in "${CORPUS[@]}"; do
+    i=$((i + 1))
     out="$TMP/$(basename "${src%.hexa}").bin"
     log="$TMP/$(basename "${src%.hexa}").log"
+    # Progress BEFORE the build, flushed — so a run killed by an outer cap still shows exactly
+    # which program it died on, instead of just stopping after the last completed line.
+    printf '  [%d/%d] building %s ... ' "$i" "${#CORPUS[@]}" "$src"
     # Every env var that could route around the default ladder is cleared: measure the SHIPPED path.
     rm -f "$out"
-    env -u HEXA_PREBUILT_RUNTIME -u HEXA_APRIME_CC \
+    timeout "$CENSUS_TIMEOUT" env -u HEXA_PREBUILT_RUNTIME -u HEXA_APRIME_CC \
         HEXA_OWNLINK_STRICT=1 HEXA_RUN_NATIVE_TRACE=1 \
         "$HEXA_BIN" build "$src" -o "$out" >"$log" 2>&1
     rc=$?
+    printf '\r'  # rewind the "building ..." line; the verdict prints its own full line below
     # rc alone is a PROXY, and the proxy lied. This census exists to stop trusting proxies, so it
     # demands the ARTIFACT: a build only counts as own-linked if a binary actually came out.
     # Measured 2026-07-14: the first run of this census scored tool/compile.hexa and
     # tool/ai_native_profile.hexa as "own-link ✅" — both had in fact FAILED to compile (HX2001
     # undefined name, no binary produced). The tally was wrong in the direction that flatters us.
-    if [ "$rc" -eq 0 ] && [ -x "$out" ]; then
+    if [ "$rc" -eq 124 ]; then
+        # A compile-time budget overrun is an infra/scale wall, NOT an own-link fallback — it is
+        # quarantined from the fallback verdict (commons infra-wall-noneval) and reported separately.
+        printf '  TIMEOUT   %s (exceeded %ss — a compile-scale wall, NOT an own-link fallback)\n' "$src" "$CENSUS_TIMEOUT"
+        timed_out=$((timed_out + 1))
+    elif [ "$rc" -eq 0 ] && [ -x "$out" ]; then
         printf '  own-link  %s\n' "$src"; ok=$((ok + 1))
     elif [ "$rc" -eq 0 ]; then
         printf '  NO-BINARY %s (rc=0 but nothing was emitted — the build lied)\n' "$src"
@@ -95,9 +115,17 @@ done
 
 n=$((ok + fell_back))
 echo
-echo "[ownlink_census] own-linked=$ok  fell-back-to-clang=$fell_back  unrelated-error=$other"
+echo "[ownlink_census] own-linked=$ok  fell-back-to-clang=$fell_back  unrelated-error=$other  timed-out=$timed_out"
 if [ "$n" -gt 0 ]; then
     echo "[ownlink_census] fallback rate = $((fell_back * 100 / n))% of the $n programs that built at all"
+fi
+if [ "$timed_out" -gt 0 ]; then
+    echo
+    echo "[ownlink_census] $timed_out program(s) hit the ${CENSUS_TIMEOUT}s cap — a compile-scale outcome, quarantined"
+    echo "                 from the fallback rate. A timeout is OFTEN a DEAD SOURCE, not a real scale wall:"
+    echo "                 an unresolved import -> module_loader FATAL -> raw-src fallback -> pathological"
+    echo "                 compile (convergence ownlink-strict-census-sh-2, e.g. tool/hx.hexa's dead"
+    echo "                 raw_audit import). Check the source's imports resolve before blaming own-link."
 fi
 if [ "$fell_back" -gt 0 ]; then
     echo
@@ -105,4 +133,4 @@ if [ "$fell_back" -gt 0 ]; then
     for f in "${FB[@]}"; do echo "    $f"; done
     exit 1
 fi
-echo "[ownlink_census] no fallback on this corpus."
+echo "[ownlink_census] no own-link fallback on this corpus (timeouts + unrelated errors are quarantined)."
