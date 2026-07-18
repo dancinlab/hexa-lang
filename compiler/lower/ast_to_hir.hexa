@@ -241,6 +241,68 @@ fn _hir_builtin_free_ret_prim(name: string) -> Type {
 // path never walks it (byte- AND perf-neutral when unset).
 let mut _lr_free_disq: [[string]] = []
 
+// L4 flip perf — bind(S2) choke-point hook. When the whole-module binder census
+// this file re-computes was measured as a redundant re-walk of what bind(S2)
+// already visits (bind runs before lower; every binder passes _define_mut), the
+// disqualified set is instead THREADED from bind as a per-table-slot [bool]
+// (`_lr_free_shadow`), so the default-ON flip pays ZERO census-walk cost. Only a
+// bool array crosses the S2→lower boundary — never a string — because
+// `phase_reset("post_check")` reclaims bind-phase string-arena scratch before
+// lower runs (a name string would dangle). bind is the AUTHORITATIVE binder
+// oracle, so this also structurally removes the census's manual-mirror drift
+// (a missed binder form = an HX3061-class miscompile). When NOT injected (bind-
+// less lower() callers — nvptx driver, meter probe, borrowck tests), the census
+// fallback below stays the sound path. Injected flag cleared at lower() exit so a
+// second in-process lower() (meter probe / tests) never reads a stale injection.
+let mut _lr_free_shadow: [bool] = []
+let mut _lr_free_shadow_injected = false
+
+// Map a free-fn builtin NAME to its slot index in the shared table order — the
+// MIRROR of check/bind.hexa::_bind_free_tbl_index (lockstep: grow both + the
+// ret-prim tables together; the HEXA_UNBOX_FREE_XCHECK oracle catches drift).
+fn _lr_free_tbl_index(name: string) -> i64 {
+    if name == "len" { return 0 }
+    return -1
+}
+
+fn _lr_free_tbl_size() -> i64 { return 1 }
+
+// Slot index → name (mirror of _lr_free_tbl_index inverse) — x-check oracle only.
+fn _lr_free_tbl_name_at(i: i64) -> string {
+    if i == 0 { return "len" }
+    return ""
+}
+
+// Pure census membership (the pre-hook bucket scan) — used ONLY by the x-check
+// oracle to validate the bind-hook shadow against the authoritative census.
+fn _free_census_member(name: string) -> bool {
+    if len(_lr_free_disq) == 0 { return false }
+    let h = _lr_ast_gname_hash(name)
+    let bucket = _lr_free_disq[h]
+    let mut i = 0
+    while i < len(bucket) {
+        if bucket[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// pub wrapper for the flip predicate — single default-value site (flip flips
+// _hir_free_calltype_enabled only). main.hexa gates BOTH the bind-note enable and
+// the shadow injection on this same predicate so noting-OFF never injects a
+// stale all-false hit array.
+pub fn lower_free_calltype_on() -> bool {
+    return _hir_free_calltype_enabled()
+}
+
+// main.hexa hands bind's per-slot shadowed-flag array to lower right before the
+// lower() call. Sets the injected mode so _free_disqualified reads the array
+// instead of walking the census.
+pub fn lower_set_free_shadow(hit: [bool]) {
+    _lr_free_shadow = hit
+    _lr_free_shadow_injected = true
+}
+
 fn _hir_is_try_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::Try -> true,
@@ -256,6 +318,15 @@ fn _free_disq_add(name: string) {
 }
 
 fn _free_disqualified(name: string) -> bool {
+    // Injected mode (bind-hook): read the S2-threaded per-slot flag. A non-table
+    // name maps to slot -1 → not-disqualified (the Call arm's `br.kind != "?"`
+    // guard makes that a no-op anyway — identical unit-of-decision to census).
+    if _lr_free_shadow_injected {
+        let fi = _lr_free_tbl_index(name)
+        if fi < 0 { return false }
+        if fi < len(_lr_free_shadow) { return _lr_free_shadow[fi] }
+        return false
+    }
     if len(_lr_free_disq) == 0 { return false }
     let h = _lr_ast_gname_hash(name)
     let bucket = _lr_free_disq[h]
@@ -3100,12 +3171,38 @@ pub fn lower(module: Module, atlas: AtlasIndex) -> HModule {
     // probes it instead of the O(M) backward scan.
     _lr_ast_prime_globals(module_sc)
 
-    // L4 round-2 — free-fn builtin call-result stamp census. Primed ONLY under
-    // the default-OFF sub-flag so the OFF path is byte- AND perf-neutral (the
-    // reset below clears any stale set from a prior lower() call in-process).
-    _lr_free_disq = []
-    if _hir_free_calltype_enabled() {
+    // L4 round-2 — free-fn builtin call-result stamp census. When main injected
+    // bind(S2)'s per-slot shadow flags (_lr_free_shadow_injected), the redundant
+    // whole-module census walk is SKIPPED (the flip's zero-cost path — bind
+    // already visited every binder). When NOT injected (bind-less lower() callers
+    // — nvptx driver, meter probe, borrowck tests), the census stays the sound
+    // path. Reset clears any stale set from a prior in-process lower() call. OFF
+    // flag ⇒ neither branch primes ⇒ byte- AND perf-neutral.
+    if !_lr_free_shadow_injected {
+        _lr_free_disq = []
+        if _hir_free_calltype_enabled() {
+            _free_census_prime(module)
+        }
+    }
+    // x-check oracle (HEXA_UNBOX_FREE_XCHECK=1, default-OFF ⇒ byteeq-neutral):
+    // validate the bind-hook shadow against the census (the authoritative mirror)
+    // — run the census too and compare each table slot; a mismatch means a
+    // binder-form the census mirrors was missed by bind's note (or vice-versa),
+    // so ABORT loudly. One self-compile with this flag proves mirror equivalence.
+    if _lr_free_shadow_injected && env_var("HEXA_UNBOX_FREE_XCHECK") == "1" {
+        _lr_free_disq = []
         _free_census_prime(module)
+        let mut xi = 0
+        while xi < _lr_free_tbl_size() {
+            let xnm = _lr_free_tbl_name_at(xi)
+            let cens = _free_census_member(xnm)
+            let inj = xi < len(_lr_free_shadow) && _lr_free_shadow[xi]
+            if cens != inj {
+                eprintln("[FREE-XCHECK] slot=" + to_string(xi) + " name=" + xnm + " census=" + to_string(cens) + " inject=" + to_string(inj) + " MISMATCH")
+                exit(1)
+            }
+            xi = xi + 1
+        }
     }
 
     // Main pass: lower each item using the populated module scope.
@@ -3123,6 +3220,11 @@ pub fn lower(module: Module, atlas: AtlasIndex) -> HModule {
         hitems.push(h)
         k = k + 1
     }
+
+    // Clear the injection so a second in-process lower() (meter probe / tests
+    // that call lower() without a preceding main injection) does not read this
+    // module's stale shadow — falls back to the census, the sound bind-less path.
+    _lr_free_shadow_injected = false
 
     return HModule {
         file: module.file,
