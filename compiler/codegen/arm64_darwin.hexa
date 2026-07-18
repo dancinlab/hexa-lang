@@ -2076,6 +2076,11 @@ pub fn _builtin_runtime_sym(name: string, nargs: i64) -> string {
     if name == "write_file"    { return "rt_write_file" }
     if name == "sha256"        { return "hexa_sha256" }
     if name == "sha256_file"   { return "hexa_sha256_file" }
+    // axis-① Set B-2 round-1 — legacy 1:1 (self/codegen.hexa), nm-verified in runtime.a
+    if name == "sha1"          { return "hexa_sha1" }
+    if name == "sha1_bytes"    { return "hexa_sha1_bytes" }
+    if name == "base64_encode" { return "hexa_base64_encode" }
+    if name == "base64_decode" { return "hexa_base64_decode" }
     // N5-sym class-B: native obj-emit left these intrinsics unmapped →
     // fell through to the bare name → undefined at self-host link (the
     // native compiler object references `_list_dir` while the runtime
