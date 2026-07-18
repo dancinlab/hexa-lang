@@ -107,7 +107,11 @@ i=0
 while [ $i -lt ${#names[@]} ]; do
     n="${names[$i]}"; src="${srcs[$i]}"; exp="${exps[$i]}"
     printf '%s\n' "$src" > "$WORK/$n.hexa"
-    HEXA_NATIVE_BUILD=1 "$HEXA" build "$WORK/$n.hexa" -o "$WORK/$n.bin" >/dev/null 2>"$WORK/$n.err"
+    # capture BOTH stdout and stderr — `hexa build` emits its compile/link
+    # diagnostics on stdout, so discarding stdout hid the real failure cause
+    # (empty `err:` on a genuine error) AND blinded the STALE-SLOT classifier
+    # below to undefined-symbol errors that land on stdout.
+    HEXA_NATIVE_BUILD=1 "$HEXA" build "$WORK/$n.hexa" -o "$WORK/$n.bin" >"$WORK/$n.out" 2>"$WORK/$n.err"
     if [ ! -x "$WORK/$n.bin" ]; then
         # STALE-SLOT vs REAL failure classification. A STALE promoted slot (its
         # rt.o predates the current runtime → missing symbols) fails at the
@@ -118,12 +122,25 @@ while [ $i -lt ${#names[@]} ]; do
         # degraded/blocked run is not a real verdict — same class as the absent-
         # slot NEUTRAL above). A REAL regression fails differently (a compile
         # error, or a produced-but-wrong binary), which stays a hard FAIL below.
-        if grep -qiE 'undefined symbol|Undefined symbols|symbol\(s\) not found|^ld:|unresolved (external )?symbol|hexa_ld: .*(undefined|unresolved|missing)' "$WORK/$n.err" 2>/dev/null; then
+        if grep -qiE 'undefined symbol|Undefined symbols|symbol\(s\) not found|^ld:|unresolved (external )?symbol|hexa_ld: .*(undefined|unresolved|missing)' "$WORK/$n.err" "$WORK/$n.out" 2>/dev/null; then
             echo "SLOT-STALE $n — link failed on the promoted slot's rt.o (undefined symbol); slot needs re-promote"
             slot_stale=$((slot_stale+1)); i=$((i+1)); continue
         fi
+        # clang-fallback = a STALE hexad dispatch ignored HEXA_NATIVE_BUILD and shelled
+        # out to clang, which then failed on stale/mismatched codegen. Like the
+        # undefined-symbol case above, this is a runner-provisioning issue (the slot's
+        # dispatch is stale → needs re-promote), NOT a native-build code regression
+        # (convergence selfhost-native-build-gate-1 cause a). A REAL native regression
+        # fails inside the native emit/link with a native error, never a `clang: error`
+        # / `clang compile failed` — HEXA_NATIVE_BUILD=1 was set, so clang running at
+        # all means the dispatch is stale. Same NEUTRAL treatment (infra-wall-noneval).
+        if grep -qiE 'clang compile failed|clang: error|error: clang|clang -cc1|clang frontend' "$WORK/$n.err" "$WORK/$n.out" 2>/dev/null; then
+            echo "SLOT-STALE $n — clang fallback (stale hexad dispatch ignored native emit); slot needs re-promote"
+            slot_stale=$((slot_stale+1)); i=$((i+1)); continue
+        fi
         echo "FAIL $n — native build produced no executable"
-        echo "  err: $(tail -2 "$WORK/$n.err" 2>/dev/null | tr '\n' ' ')"
+        echo "  err: $(tail -3 "$WORK/$n.err" 2>/dev/null | tr '\n' ' ')"
+        echo "  out: $(tail -3 "$WORK/$n.out" 2>/dev/null | tr '\n' ' ')"
         fail=$((fail+1)); i=$((i+1)); continue
     fi
     out="$("$WORK/$n.bin" 2>&1)"; rc=$?

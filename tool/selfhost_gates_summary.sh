@@ -66,6 +66,46 @@ else
   echo "     activate inline native-emit enforcement here — no workflow edit needed.)"
 fi
 
+# ── 4. own-link BEHAVIORAL smoke — enforce the path-filtered JOB's conclusion ──
+# The behavioral smoke is a path-filtered job in nobaseline-gate.yml (name:
+# "own-link behavioral smoke (RUN the linked binary, linux-x86_64)"), so it can
+# NOT itself be a required check — a PR that doesn't touch its paths never reports
+# it and would deadlock. This aggregator is the SOLE required check, so it must
+# NEVER wedge unrelated PRs. Rule: query the LATEST check-run of that exact name
+# on the PR head SHA; ONLY an explicit conclusion of failure/timed_out is a FAIL.
+# Missing run (path-filtered PR never ran it), queued/in-progress (null), skipped,
+# neutral, cancelled, action_required, stale, OR ANY api/token/tooling error ⇒
+# PASS (fail-safe / fail-open). set -uo pipefail (no -e) + `|| true` + the guards
+# below guarantee a broken query can never flip fail=1. (Mirrors the repo's
+# existing fail-open gh pattern; same no-deadlock invariant as sections [1]-[3].)
+echo "[4] own-link behavioral smoke — check-run conclusion (fail-safe query)"
+export SMOKE_CHECK='own-link behavioral smoke (RUN the linked binary, linux-x86_64)'
+# For pull_request, check-runs report against the PR head SHA (not the merge SHA
+# GITHUB_SHA); a workflow_run re-eval carries the head via WORKFLOW_RUN_HEAD_SHA;
+# push:main falls back to GITHUB_SHA.
+sha="${PR_HEAD_SHA:-${WORKFLOW_RUN_HEAD_SHA:-${GITHUB_SHA:-}}}"
+repo="${GITHUB_REPOSITORY:-dancinlab/hexa-lang}"
+if [ -z "${sha}" ] || ! command -v gh >/dev/null 2>&1 || [ -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ]; then
+  echo "    NEUTRAL — no head SHA / gh / token → PASS (fail-safe, cannot enforce)"
+else
+  # --method GET is REQUIRED — gh api flips to POST when -f fields are present;
+  # --method GET keeps them as query params. filter=latest → newest run per name
+  # (handles re-runs). jq env.SMOKE_CHECK needs the export above. // "" maps JSON
+  # null (in-progress) → "" → PASS.
+  concl="$(gh api --method GET \
+      -H 'Accept: application/vnd.github+json' \
+      "repos/${repo}/commits/${sha}/check-runs" \
+      -f check_name="$SMOKE_CHECK" -f filter=latest -f per_page=100 \
+      --jq 'first(.check_runs[] | select(.name==env.SMOKE_CHECK) | .conclusion) // ""' \
+      2>/dev/null || true)"
+  case "${concl}" in
+    failure|timed_out)
+      echo "    FAIL — own-link behavioral smoke conclusion='${concl}' on ${sha}"; fail=1 ;;
+    *)
+      echo "    PASS — conclusion='${concl:-<none/in-progress/skipped>}' (not an explicit failure → PASS)" ;;
+  esac
+fi
+
 echo "───────────────────────────────────────────────────────────────────────"
 if [ "$fail" -eq 0 ]; then
   echo "selfhost-gates-summary: PASS"

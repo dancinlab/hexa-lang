@@ -34,8 +34,8 @@ struct CloudCmd {
 fn cloud_commands() -> [CloudCmd] {
     let mut out: [CloudCmd] = []
     out.push(CloudCmd { name: "rent", group: "lifecycle",
-            args: "<provider> [--gpu FAMILY|N] [--image IMG] [--disk GiB] [--volume-gb N] [--ephemeral] [--tier secure|community] [--secure] [--desc TEXT] [--owner TAG] [--project NAME] [--query Q] [--max-wait-sec N] [--no-register] [--force-new]",
-            summary: "provision a GPU pod (vast|runpod) — auto-tags PROJECT (@<cwd repo/folder>, e.g. @demiurge) + PURPOSE (--desc/--purpose TEXT, else --owner, else unspecified), persists both + stamps a project-purpose slug on the provider --label; DEFAULTS to a persistent /workspace volume (>=40 GiB, --volume-gb N to size, --ephemeral to opt out + warn); IDEMPOTENT per (project,purpose): reuses a live M5 pod unless --force-new (MANUAL single-rent flag, never auto-invoked; auto re-rent on pod-loss DEPRECATED, pod-loss FAILS LOUD); waits ssh-ready, prints host:port + id (alias: up)" })
+            args: "<provider> --agent NAME --desc TEXT [--project NAME] [--gpu FAMILY|N] [--image IMG] [--disk GiB] [--volume-gb N] [--ephemeral] [--tier secure|community] [--secure] [--owner TAG] [--query Q] [--max-wait-sec N] [--no-register] [--force-new]",
+            summary: "provision a GPU pod (vast|runpod) — MANDATORY attribution: --agent NAME (env HEXA_CLOUD_AGENT) + --desc/--purpose TEXT + a git-repo cwd (or --project NAME); force-stamps an agent-project-purpose slug (WHICH agent · WHICH project · WHICH purpose, e.g. claude7-hexa-lang-r12-gold) on the provider --label/--name so a raw provider list carries WHO/WHAT/WHY. Missing any axis → REFUSES to rent (exit 2), creating NOTHING (fail-closed · no jsonl · no --force bypass). DEFAULTS to a persistent /workspace volume (>=40 GiB, --volume-gb N to size, --ephemeral to opt out + warn); IDEMPOTENT per (project,purpose): reuses a live M5 pod unless --force-new (MANUAL single-rent flag, never auto-invoked; auto re-rent on pod-loss DEPRECATED, pod-loss FAILS LOUD); waits ssh-ready, prints host:port + id (alias: up)" })
     out.push(CloudCmd { name: "rm", group: "lifecycle",
             args: "<id> [--provider P] [--force]",
             summary: "CANONICAL teardown — confirm + destroy + forget (unifies down/destroy/forget); idempotent" })
@@ -85,11 +85,11 @@ fn cloud_commands() -> [CloudCmd] {
             args: "--params N [--gpu KEY] [opts...]  |  --kind dft-phonon --atoms N --nq M [opts...]",
             summary: "closed-form GPU mem-budget / DFPT walltime check (no pod/ssh)" })
     out.push(CloudCmd { name: "api", group: "manage",
-            args: "<vast|runpod> <GET|POST|PUT|DELETE> <endpoint> [--data JSON] [--json] [--allow-mutate]",
-            summary: "UNIVERSAL authenticated REST passthrough — makes hexa cloud a full substitute for the provider API; GET/search free, a registry-MUTATING call is REFUSED→use rent/rm (or --allow-mutate + auto-reconcile); non-2xx surfaced verbatim" })
+            args: "<vast|runpod> <GET|POST|PUT|DELETE> <endpoint> --agent NAME --desc TEXT [--project P] [--data JSON] [--json] [--allow-mutate]",
+            summary: "UNIVERSAL authenticated REST passthrough — makes hexa cloud a full substitute for the provider API; attribution is MANDATORY, the SAME fail-closed gate rent uses — --agent NAME (env HEXA_CLOUD_AGENT) + --desc/--purpose TEXT + a git-repo cwd (or --project P); missing any → REFUSES (exit 2) BEFORE any provider call, incl. a read-only GET. No --force bypass; a registry-MUTATING call is REFUSED→use rent/rm (or --allow-mutate + auto-reconcile); non-2xx surfaced verbatim" })
     out.push(CloudCmd { name: "provider-cli", group: "manage",
-            args: "<vast|runpod> [--allow-mutate] -- <args...>",
-            summary: "proxy the provider's OWN cli (vastai|runpodctl) with creds injected, behind the guard — keeps CLI-only conveniences reachable without raw vastai; MISSING-CLI honest; a registry-MUTATING subcommand is REFUSED→use rent/rm (or --allow-mutate + auto-reconcile)" })
+            args: "<vast|runpod> --agent NAME --desc TEXT [--project P] [--allow-mutate] -- <args...>",
+            summary: "proxy the provider's OWN cli (vastai|runpodctl) with creds injected, behind the guard — keeps CLI-only conveniences reachable without raw vastai; attribution is MANDATORY, the SAME fail-closed gate rent uses — --agent NAME (env HEXA_CLOUD_AGENT) + --desc/--purpose TEXT + a git-repo cwd (or --project P); missing any → REFUSES (exit 2), incl. read subcommands (flags are read BEFORE `--`, the proxied argv stays verbatim). No --force bypass; MISSING-CLI honest; a registry-MUTATING subcommand is REFUSED→use rent/rm (or --allow-mutate + auto-reconcile)" })
     out.push(CloudCmd { name: "run", group: "exec",
             args: "<host> [conn] [--max-wall S] [--env K=V] [--source P] -- <argv...>",
             summary: "run argv, wait, exit with its code (structured argv — POSIX-quoted)" })

@@ -28,7 +28,7 @@ name: stdlib-selftest-gate
 # only after a measured green week, and only UNFILTERED (a path-filtered
 # required check deadlocks PRs that don't touch the paths).
 #
-# Linux is mandatory: the aggregator spawns GNU `timeout 30 <hexa> <file>`
+# Linux is mandatory: the aggregator spawns GNU `timeout 120 <hexa> <file>`
 # (tool/stdlib_selftest_aggregate.hexa run_one), absent on macOS by default.
 
 on:
@@ -132,10 +132,19 @@ jobs:
       # above (PATH `hexa` does not exist on cloud runners; pool ~/.hx
       # binaries can be stale). --ci-gate implies --strict; both flags kept
       # deliberately (self-documenting intent — do not "fix" the redundancy).
+      #
+      # CC=clang MUST mirror the Build step: a per-test `hexa run` whose
+      # native-emit path does not (yet) cover a construct falls back to the
+      # C-transpile delegate, which needs a host C compiler. Without CC set
+      # here that fallback dies with "no host C compiler found" even though
+      # clang is installed — the Gate step inherits no compiler hint on its
+      # own. (Observed 2026-07-18: thompson_test C-fell-back on a load-slowed
+      # runner → hard-failed the gate; flip-independent, no panic/void use.)
       - name: Gate — @ci_gate stdlib selftests must all PASS
         shell: bash
         env:
           HEXA_BIN: ./hexa
+          CC: clang
         run: |
           set -euo pipefail
           ./hexa run tool/stdlib_selftest_aggregate.hexa --ci-gate --strict

@@ -144,6 +144,15 @@ fn _hir_calltype_stamp_enabled() -> bool {
     return env_var("HEXA_UNBOX_HIR_CALLTYPE") != "0"
 }
 
+// L4 round-2 boxing census (producer axis) — HEXA_CALLTYPE_CENSUS, opt-in
+// default-OFF (=="1"). measure-first for the next unboxing lever: counts how the
+// Call-result stamp lands (fn-stamped / builtin-stamped / UNSTAMPED-import) so the
+// residual boxing bucket is measured before any lever is chosen. Read-only stderr,
+// no HIR mutation ⇒ byte-neutral when unset. Independent of the stamp toggle above.
+fn _calltype_census_enabled() -> bool {
+    return env_var("HEXA_CALLTYPE_CENSUS") == "1"
+}
+
 // Mirror of the PRIMITIVE-scalar arms of check/types.hexa::_types_builtin_method_ret.
 // Returns the `_hir_empty_type()` sentinel (kind "?") for every name outside the
 // closed i64/f64/bool subset — the caller stamps ONLY on a non-"?" result.
@@ -2165,6 +2174,19 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
                 let bm_ret = _hir_builtin_method_ret_prim(bm_callee.text)
                 if bm_ret.kind != "?" { t = bm_ret }
             }
+        }
+        // L4 round-2 boxing census (producer) — read-only classification of the
+        // Call-result stamp, one stderr line per Call when HEXA_CALLTYPE_CENSUS=1.
+        // t/kids unmodified ⇒ byte-neutral when the flag is unset. Field callee =
+        // builtin method (builtin-stamped), ident callee = fn (fn-stamped), still-"?"
+        // = UNSTAMPED (user/import ret unresolved — the residual boxing bucket).
+        if _calltype_census_enabled() && len(kids) > 0 {
+            let cal = kids[0]
+            let mut cls = "UNSTAMPED-import"
+            if t.kind != "?" {
+                if cal.kind == "field" { cls = "builtin-stamped" } else { cls = "fn-stamped" }
+            }
+            eprintln("[CALLTYPE] " + cls + " tkind=" + t.kind + " callee=" + cal.kind + ":" + cal.text)
         }
         let h = _mk_hexpr(kind_tag, e.span, t, e.text,
                           kids, _empty_atlas_binding(), callee_def)
