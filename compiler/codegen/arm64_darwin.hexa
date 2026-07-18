@@ -2336,6 +2336,23 @@ pub fn _builtin_runtime_sym(name: string, nargs: i64) -> string {
     if name == "term_raw_enter"            { return "hexa_term_raw_enter" }
     if name == "term_raw_restore"          { return "hexa_term_raw_restore" }
     if name == "term_read_byte"            { return "hexa_term_read_byte" }
+    if name == "term_install_sigint"       { return "hexa_term_install_sigint" }
+    if name == "term_install_sigwinch"     { return "hexa_term_install_sigwinch" }
+    if name == "term_isatty_stdin"         { return "hexa_term_isatty_stdin" }
+    if name == "term_isatty_stdout"        { return "hexa_term_isatty_stdout" }
+    if name == "term_poll_stdin"           { return "hexa_term_poll_stdin" }
+    if name == "term_pty_reap"             { return "hexa_term_pty_reap" }
+    if name == "term_pty_spawn_sh"         { return "hexa_term_pty_spawn_sh" }
+    if name == "term_sigint_pending"       { return "hexa_term_sigint_pending" }
+    if name == "term_sigwinch_pending"     { return "hexa_term_sigwinch_pending" }
+    // axis-① Set B-1 (non-term map-only) — nm-verified in runtime.a; note the
+    // language name differs from the symbol for these: file_size_native→rt_file_size,
+    // time_now→hexa_timestamp, pty_tc*→hexa_tc* (no pty_ prefix).
+    if name == "exec_stream_kill"          { return "hexa_exec_stream_kill" }
+    if name == "file_size_native"          { return "rt_file_size" }
+    if name == "time_now"                  { return "hexa_timestamp" }
+    if name == "pty_tcgetattr"             { return "hexa_tcgetattr" }
+    if name == "pty_tcsetattr"             { return "hexa_tcsetattr" }
     // float<->bytes
     if name == "bytes_to_f32_le"           { return "hexa_bytes_to_f32_le" }
     if name == "bytes_to_f64_le"           { return "hexa_bytes_to_f64_le" }
