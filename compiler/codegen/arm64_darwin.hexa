@@ -2324,6 +2324,18 @@ pub fn _builtin_runtime_sym(name: string, nargs: i64) -> string {
     if name == "term_winsize_cols"         { return "hexa_term_winsize_cols" }
     if name == "term_winsize_rows"         { return "hexa_term_winsize_rows" }
     if name == "term_write_str"            { return "hexa_term_write_str" }
+    // axis-① Set B-1 (map-only): these were bound (exempt-listed) but had no
+    // native codegen map, so a native call bare-fell-through to the C-transpile
+    // delegate. Symbols nm-verified `T hexa_term_*` in runtime.a (summer pool);
+    // adding the map + dropping the exempt line lets leg-B native-emit them.
+    if name == "term_fd_close"             { return "hexa_term_fd_close" }
+    if name == "term_fd_poll"              { return "hexa_term_fd_poll" }
+    if name == "term_fd_read"              { return "hexa_term_fd_read" }
+    if name == "term_fd_write"             { return "hexa_term_fd_write" }
+    if name == "term_getppid"              { return "hexa_term_getppid" }
+    if name == "term_raw_enter"            { return "hexa_term_raw_enter" }
+    if name == "term_raw_restore"          { return "hexa_term_raw_restore" }
+    if name == "term_read_byte"            { return "hexa_term_read_byte" }
     // float<->bytes
     if name == "bytes_to_f32_le"           { return "hexa_bytes_to_f32_le" }
     if name == "bytes_to_f64_le"           { return "hexa_bytes_to_f64_le" }

@@ -56,11 +56,6 @@ pty_tcsetattr
 read_line
 remove_file
 rename_file
-term_fd_close
-term_fd_poll
-term_fd_read
-term_fd_write
-term_getppid
 term_install_sigint
 term_install_sigwinch
 term_isatty_stdin
@@ -68,9 +63,6 @@ term_isatty_stdout
 term_poll_stdin
 term_pty_reap
 term_pty_spawn_sh
-term_raw_enter
-term_raw_restore
-term_read_byte
 term_sigint_pending
 term_sigwinch_pending
 thread_channel_close
