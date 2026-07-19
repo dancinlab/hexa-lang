@@ -5404,6 +5404,21 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 callee_op = cr.operand
             }
         }
+        // L4 round-3 XCHECK dispatch-oracle (HEXA_UNBOX_FREE_XCHECK=1, default-OFF ⇒
+        // byteeq-neutral). An INDIRECT-dispatched call to a free-fn-table ident whose
+        // result was stamped i64 can only mean the ast_to_hir free-stamp fired on a
+        // shadowed name (the scoped disqualify missed a binder) — a mis-stamp. Abort
+        // loudly. This is the behavioral gate for the flip: one full self-compile with
+        // the flag catches every would-be mis-stamp (byteeq alone cannot — gen3≡gen4
+        // share contamination). The scoped lever's soundness = this oracle stays clean.
+        if is_indirect && len(e.children) > 0 && e.children[0].kind == "ident"
+           && e.typ.kind == "i64" && env_var("HEXA_UNBOX_FREE_XCHECK") == "1" {
+            let mcn = _strip_mut_prefix(e.children[0].text)
+            if mcn == "len" || mcn == "byte_len" || mcn == "char_code" {
+                eprintln("[FREE-SCOPE-XCHECK] MIS-STAMP: indirect-dispatched `" + mcn + "` carries i64 result — scoped disqualify missed a binder at " + to_string(e.span.line) + ":" + to_string(e.span.col))
+                exit(1)
+            }
+        }
         if is_indirect {
             // args[0] = callee value; args[1..] = call arguments.
             let mut ia_ops: [Operand] = []
