@@ -2433,14 +2433,42 @@ fn _down_attribution_surface(id: str) -> int {
     return running
 }
 
+// _stdin_is_tty — 1 iff this CLI process's stdin (fd 0) is a terminal.
+// `test -t 0` runs via exec(): popen("r") does NOT redirect the child's stdin
+// (only its stdout is piped), and the `&&`/`||` shell operators force the popen
+// path, so the child's fd 0 == this process's fd 0. This lets a destroy
+// confirm gate REFUSE on a non-interactive stdin (automation / pipe / `hexa
+// cloud run` / `timeout … hexa cloud rm …`) instead of reading EOF and silently
+// "cancelling" a teardown the caller believes went through — the anima pod
+// billing-leak incident.
+fn _stdin_is_tty() -> int {
+    let out = exec("test -t 0 && printf 1 || printf 0").trim()
+    if out == "1" {
+        return 1
+    }
+    return 0
+}
+
 // _down_confirm_gate — the @L9 confirm gate for `down`/`destroy`. Prints the
 // project·purpose + running-job surface, then prompts (default N) unless
-// `force` (--force/--yes). When a running job is pinned, the prompt names it so
-// a careless `y` is harder. Returns 1 = proceed, 0 = cancel.
+// `force` (--yes/-y/--force). When a running job is pinned, the prompt names it
+// so a careless `y` is harder. Returns 1 = proceed, 0 = cancel.
 fn _down_confirm_gate(id: str, provider: str, force: int) -> int {
     let running = _down_attribution_surface(id)
     if force == 1 {
         return 1
+    }
+    // RECURRENCE GUARD (트러블슈팅 재발금지): on a NON-INTERACTIVE stdin (agent /
+    // pipe / `hexa cloud run` / `timeout … hexa cloud down …`) there is nobody to
+    // answer [y/N]. Prompting would read EOF, default to N, and silently
+    // "cancel" — leaving the pod ALIVE + billing while the caller assumes the
+    // teardown went through (this bit a demiurge/anima session: a flaky pod
+    // survived teardown without the skip-confirm flag and kept billing). REFUSE
+    // LOUD + non-zero so an automated caller sees a hard failure, not a false
+    // success. An interactive TTY keeps the [y/N] prompt below.
+    if _stdin_is_tty() == 0 {
+        eprintln("[cloud] down: refusing to prompt on a non-interactive stdin — pass --yes to confirm destruction of " + id + " (pod is STILL ALIVE + billing).")
+        return 0
     }
     let mut q = "[cloud] down " + id + " (provider=" + provider + "): destroy this pod? [y/N]"
     if running == 1 {
@@ -2449,18 +2477,7 @@ fn _down_confirm_gate(id: str, provider: str, force: int) -> int {
     println(q)
     let ans = sys_stdin_read_line()
     if _rm_confirm_yes(ans) == 0 {
-        // RECURRENCE GUARD (트러블슈팅 재발금지): an empty/EOF read means a
-        // NON-INTERACTIVE stdin (agent / pipe / `hexa cloud run`). Silently
-        // "cancelling" there leaves the pod ALIVE + billing while the caller
-        // assumes the teardown went through (this bit a demiurge session: a flaky
-        // pod survived `rm` without --force and kept billing until a --force rerun).
-        // Make the non-interactive case LOUD + actionable so a pod-leak can't hide.
-        if len(ans.trim()) == 0 {
-            println("[cloud] down: NOT DESTROYED — non-interactive stdin gave no [y/N] answer.")
-            println("[cloud]   pod " + id + " is STILL ALIVE + billing → re-run with --force (or --yes).")
-        } else {
-            println("[cloud] down: cancelled (no destroy issued)")
-        }
+        println("[cloud] down: cancelled (no destroy issued)")
         return 0
     }
     return 1
@@ -2612,8 +2629,16 @@ fn _cloud_rm(id: str, provider_in: str, force: int, override_xproj: int) -> int 
         return 2
     }
     let _ = _down_attribution_surface(id)
-    // (3) confirm gate (skipped on --force)
+    // (3) confirm gate (skipped on --yes/-y/--force)
     if force == 0 {
+        // NON-INTERACTIVE stdin (automation / pipe / `timeout … hexa cloud rm …`)
+        // → REFUSE LOUD + non-zero. Never read EOF and silently "cancel" a
+        // teardown the caller believes went through, leaving the pod ALIVE +
+        // billing (the anima incident). An interactive TTY keeps the [y/N] prompt.
+        if _stdin_is_tty() == 0 {
+            eprintln("[cloud] rm: refusing to prompt on a non-interactive stdin — pass --yes to confirm destruction of " + id + " (pod is STILL ALIVE + billing).")
+            return 2
+        }
         println("[cloud] rm " + id + " (provider=" + provider + "): destroy this pod? [y/N]")
         let ans = sys_stdin_read_line()
         if _rm_confirm_yes(ans) == 0 {
@@ -3342,11 +3367,23 @@ fn main() {
     if sub == "rm" {
         // M4 canonical teardown — unifies down/destroy/forget behind a
         // confirm-gated entry. --provider inferred from the M5 registry
-        // when absent; --force skips the confirm prompt. Idempotent: rm
-        // of an absent pod exits 0. Exit 0 destroyed · 1 provider-rejected
-        // · 2 cancel / usage.
+        // when absent; --yes/-y (or --force) skips the confirm prompt.
+        // Idempotent: rm of an absent pod exits 0. Exit 0 destroyed · 1
+        // provider-rejected · 2 cancel / usage.
+        if _has_flag(av, si + 1, "--help") == 1 || _has_flag(av, si + 1, "-h") == 1 {
+            println("usage: cloud rm <id> [--provider vast|runpod] [--yes|-y] [--force] [--yes-cross-project]")
+            println("  --yes, -y     skip the [y/N] confirm and destroy immediately. REQUIRED from")
+            println("                automation / a non-interactive stdin (pipe, background job,")
+            println("                `timeout … hexa cloud rm …`): WITHOUT it a non-TTY invocation now")
+            println("                FAILS LOUD + non-zero instead of silently cancelling a teardown")
+            println("                while the pod keeps billing (the pod-leak trap).")
+            println("  --force       skip the [y/N] confirm (does NOT bypass the cross-project guard).")
+            println("  --yes-cross-project   force teardown of a pod owned by ANOTHER project (a")
+            println("                billing pod unreachable from its owner repo); never implied by --force/--yes.")
+            return
+        }
         if si + 1 >= len(av) {
-            println("[cloud] rm: missing <id> — usage: cloud rm <id> [--provider vast|runpod] [--force] [--yes-cross-project]")
+            println("[cloud] rm: missing <id> — usage: cloud rm <id> [--provider vast|runpod] [--yes|-y] [--force] [--yes-cross-project]")
             exit(2)
         }
         // Fix B (ING #34): `cloud rm vast <id>` mis-orders the PROVIDER into the
@@ -3360,9 +3397,14 @@ fn main() {
         }
         let id = av[si + 1]
         let provider = _flag_val(av, si + 2, "--provider", "")
-        let force = _has_flag(av, si + 2, "--force")
+        // --yes/-y is the CANONICAL skip-confirm (also REQUIRED to run from a
+        // non-interactive stdin). --force is kept as an equivalent skip-confirm.
+        let mut force = _has_flag(av, si + 2, "--force")
+        if _has_flag(av, si + 2, "--yes") == 1 || _has_flag(av, si + 2, "-y") == 1 {
+            force = 1
+        }
         // ING #34-(C): --yes-cross-project is the EXPLICIT escape to tear down a
-        // billing pod owned by another project (never implied by --force).
+        // billing pod owned by another project (never implied by --force/--yes).
         let override_xproj = _has_flag(av, si + 2, "--yes-cross-project")
         exit(_cloud_rm(id, provider, force, override_xproj))
     }
@@ -3372,8 +3414,19 @@ fn main() {
         // by id + forget it from the registry. --provider selects the
         // teardown path (default vast). Wires vast_destroy /
         // runpod_terminate + pod_registry_forget.
+        if _has_flag(av, si + 1, "--help") == 1 || _has_flag(av, si + 1, "-h") == 1 {
+            println("usage: cloud down <id> [--provider vast|runpod] [--yes|-y] [--force] [--yes-cross-project]  (alias: destroy)")
+            println("  --yes, -y     skip the [y/N] confirm and destroy immediately. REQUIRED from")
+            println("                automation / a non-interactive stdin (pipe, background job,")
+            println("                `timeout … hexa cloud down …`): WITHOUT it a non-TTY invocation now")
+            println("                FAILS LOUD + non-zero instead of silently cancelling a teardown")
+            println("                while the pod keeps billing (the pod-leak trap).")
+            println("  --force       skip the [y/N] confirm (does NOT bypass the cross-project guard).")
+            println("  --yes-cross-project   force teardown of a pod owned by ANOTHER project; never implied by --force/--yes.")
+            return
+        }
         if si + 1 >= len(av) {
-            println("[cloud] down: missing <id> — usage: cloud down <id> [--provider vast|runpod] [--yes|--force] [--yes-cross-project]")
+            println("[cloud] down: missing <id> — usage: cloud down <id> [--provider vast|runpod] [--yes|-y] [--force] [--yes-cross-project]")
             exit(2)
         }
         // Fix B (ING #34): reject a mis-ordered `cloud down vast <id>` (provider
@@ -3395,7 +3448,7 @@ fn main() {
         // escape for a billing pod you cannot reach). (The anima RTSC near-miss
         // fix + ING #34-(C) un-killable-pod escape.)
         let mut force = _has_flag(av, si + 2, "--force")
-        if _has_flag(av, si + 2, "--yes") == 1 {
+        if _has_flag(av, si + 2, "--yes") == 1 || _has_flag(av, si + 2, "-y") == 1 {
             force = 1
         }
         let override_xproj = _has_flag(av, si + 2, "--yes-cross-project")

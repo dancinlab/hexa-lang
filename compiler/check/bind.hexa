@@ -200,6 +200,51 @@ fn _pop_scope(sc: BindScope) -> BindScope {
 }
 
 // Define `name` in the topmost frame and return the freshly allocated DefId.
+// ── L4 flip perf — free-fn builtin shadow NOTE (bind→lower choke-point hook) ──
+// The lowering pass (ast_to_hir) re-walks every module binder to build the
+// disqualified-name set for the free-fn unbox stamp — a redundant re-computation
+// of what THIS pass (S2, runs before lower) already visits. Instead, note here
+// whether any free-fn table name (`len`, …) is bound anywhere in the module, and
+// hand the per-slot [bool] to lower (main.hexa threads it), so the default-ON
+// flip pays ZERO census-walk cost. Only bools cross the S2→lower boundary — never
+// a name string — because phase_reset("post_check") reclaims bind-phase string
+// scratch before lower runs. Two traps this guards:
+//   (1) the builtin pre-pass `_define`s `len` itself (it is in _bind_builtin_names)
+//       — noting during that pre-pass would disqualify `len` in EVERY module and
+//       silently kill the lever. So noting is armed ONLY after the builtin
+//       pre-pass, right before the top-level-item pre-pass (bind() below).
+//   (2) `_define_mut` is the SINGLE binder choke-point — `_define` delegates to
+//       it and every local/param/pattern binder passes through — so one hook here
+//       covers exactly the census's mirrored binder forms (bind is authoritative,
+//       which structurally removes the census's manual-mirror drift risk).
+// Gated on main's arm (`bind_free_note_enable`), itself gated on the flip
+// predicate, so the default-OFF path never notes ⇒ byte-neutral (noting emits no
+// diagnostics, only sets bools).
+let mut _bind_free_note_requested = false
+let mut _bind_free_note_on = false
+let mut _bind_free_tbl_hit: [bool] = []
+
+// Name → shared free-fn table slot — MIRROR of
+// lower/ast_to_hir.hexa::_lr_free_tbl_index (lockstep: grow both together; the
+// HEXA_UNBOX_FREE_XCHECK oracle aborts on any drift).
+fn _bind_free_tbl_index(name: string) -> i64 {
+    if name == "len" { return 0 }
+    return -1
+}
+
+fn _bind_free_tbl_size() -> i64 { return 1 }
+
+// main.hexa arms this (under the flip predicate) before calling bind().
+pub fn bind_free_note_enable() {
+    _bind_free_note_requested = true
+}
+
+// main.hexa reads the per-slot shadowed flags after bind() and hands them to
+// lower via lower_set_free_shadow.
+pub fn bind_free_builtin_shadowed() -> [bool] {
+    return _bind_free_tbl_hit
+}
+
 // The caller is responsible for module attribution — DefId.module is filled
 // by the bind() entry point; here we only mint the dense index.
 //
@@ -209,6 +254,14 @@ fn _pop_scope(sc: BindScope) -> BindScope {
 // legacy `_define` is preserved as the immutable default so existing call
 // sites stay byte-identical.
 fn _define_mut(sc: BindScope, name: string, mod_file: string, is_mut: bool) -> BindScope {
+    // L4 flip perf — note a free-fn table binder (armed only after the builtin
+    // pre-pass, so builtin `len` never self-disqualifies). `name` is already
+    // `mut:`-stripped by the callers (_bind_let_name), so `let mut len` notes as
+    // "len". One strcmp per binder, zero allocation; OFF path never runs.
+    if _bind_free_note_on {
+        let _ffi = _bind_free_tbl_index(name)
+        if _ffi >= 0 && _ffi < len(_bind_free_tbl_hit) { _bind_free_tbl_hit[_ffi] = true }
+    }
     let n = len(sc.frames)
     if n == 0 { return sc }
     let mut frames = sc.frames
@@ -1367,6 +1420,16 @@ fn _bind_builtin_names() -> [string] {
         // _is_builtin_name free-call forms; runtime hexa_str_char_code_at
         // / hexa_map_contains_key / rt_append_file). Last HX2001 residual.
         "append_file", "char_code_at", "has_key", "join",
+        // axis-① Set A — mapped-but-unbound free-fns: `_builtin_runtime_sym`
+        // already maps these (hexa_argmax / hexa_sleep / hexa_exec_stream_v /
+        // hexa_exec_replace) but the bind gate lacked them, so a native
+        // `argmax(a)` / `sleep(s)` / `exec_stream(..)` / `exec_replace(..)`
+        // call hit HX2001 and the whole flow fell to the C-transpile delegate.
+        // Binding them (map pre-exists) lets leg-B native-emit them — one fewer
+        // hexa_cc.c fall-through. Not in the method whitelist → no free↔method
+        // misclass hazard; byteeq-neutral (currently-native programs can't
+        // reference an unbound name, so emit bytes are unchanged).
+        "argmax", "sleep", "exec_stream", "exec_replace",
         // Step 5 codegen-inline builtins (4th re-land after e8c2dc1c wipe).
         "__arr_raw_len", "__arr_set_cap", "__fd_write_bytes", "__map_raw_len", "__str_raw_len",
         // RT-NATIVE UNLOCK-2 (2026-06-16): native tag-read intrinsic — `__hx_tag(v)`
@@ -1759,6 +1822,19 @@ pub fn bind(module: Module) -> array {
     // HEXA_UNUSED_LET flag once per module (default OFF ⇒ byteeq-neutral).
     _unused_let_reset()
 
+    // L4 flip perf — reset the free-fn shadow NOTE for this module. Noting stays
+    // OFF through the builtin pre-pass below (so builtin `len` never self-
+    // disqualifies) and is armed right after it. hit[] is heap-resident (survives
+    // the phase_reset that reclaims bind-phase string scratch).
+    _bind_free_note_on = false
+    let mut _ffh: [bool] = []
+    let mut _ffz = 0
+    while _ffz < _bind_free_tbl_size() {
+        _ffh.push(false)
+        _ffz = _ffz + 1
+    }
+    _bind_free_tbl_hit = _ffh
+
     // ── Pre-pass: register host-runtime builtins so identifier lookups
     // don't surface as HX2001. Anchored to mod_file so the same scope
     // shape is exercised regardless of import topology.
@@ -1769,6 +1845,10 @@ pub fn bind(module: Module) -> array {
         sc = _define(sc, bnames[bi], mod_file)
         bi = bi + 1
     }
+    // L4 flip perf — builtin pre-pass done: ARM the shadow note now (only if
+    // main requested it under the flip predicate) so top-level items + all local
+    // binders below are noted, but the builtin `len` just defined above is not.
+    if _bind_free_note_requested { _bind_free_note_on = true }
     // ── Pre-pass: top-level item names into the module-level scope.
     let mut i = 0
     while i < len(module.items) {
