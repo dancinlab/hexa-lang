@@ -232,6 +232,7 @@ fn _hir_free_calltype_enabled() -> bool {
 fn _hir_builtin_free_ret_prim(name: string) -> Type {
     return match name {
         "len" -> _hir_t_i64(),
+        "byte_len" -> _hir_t_i64(),
         _ -> _hir_empty_type(),
     }
 }
@@ -280,14 +281,16 @@ let mut _lr_free_fn_seen: [bool] = []
 // ret-prim tables together; the HEXA_UNBOX_FREE_XCHECK oracle catches drift).
 fn _lr_free_tbl_index(name: string) -> i64 {
     if name == "len" { return 0 }
+    if name == "byte_len" { return 1 }
     return -1
 }
 
-fn _lr_free_tbl_size() -> i64 { return 1 }
+fn _lr_free_tbl_size() -> i64 { return 2 }
 
 // Slot index → name (mirror of _lr_free_tbl_index inverse) — x-check oracle only.
 fn _lr_free_tbl_name_at(i: i64) -> string {
     if i == 0 { return "len" }
+    if i == 1 { return "byte_len" }
     return ""
 }
 
