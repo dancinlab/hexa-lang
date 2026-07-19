@@ -356,9 +356,12 @@ fn _free_disqualified(name: string) -> bool {
     return false
 }
 
-// ── L4 round-3 per-scope disqualify (HEXA_UNBOX_FREE_SCOPED, default-OFF) ──
+// ── L4 round-3 per-scope disqualify (HEXA_UNBOX_FREE_SCOPED, default-ON) ──
+// FLIP (#5029 → this PR): opt-out `=0`. Recovers the free-fn `len(x)` unbox stamp
+// (2755 sites, per-scope-sound: aiden full self-compile XCHECK-clean, verdict
+// l4-r3-preflip-scoped-xcheck). Byte-changing → gated by byteeq 3-target GREEN.
 fn _free_scoped_enabled() -> bool {
-    return env_var("HEXA_UNBOX_FREE_SCOPED") == "1"
+    return env_var("HEXA_UNBOX_FREE_SCOPED") != "0"
 }
 
 // The ONLY stamp-site consumer change. When the scoped lever is OFF, this is the
