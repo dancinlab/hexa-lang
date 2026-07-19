@@ -37,11 +37,11 @@ fn cloud_commands() -> [CloudCmd] {
             args: "<provider> --agent NAME --desc TEXT [--project NAME] [--gpu FAMILY|N] [--image IMG] [--disk GiB] [--volume-gb N] [--ephemeral] [--tier secure|community] [--secure] [--owner TAG] [--query Q] [--max-wait-sec N] [--no-register] [--force-new]",
             summary: "provision a GPU pod (vast|runpod) — MANDATORY attribution: --agent NAME (env HEXA_CLOUD_AGENT) + --desc/--purpose TEXT + a git-repo cwd (or --project NAME); force-stamps an agent-project-purpose slug (WHICH agent · WHICH project · WHICH purpose, e.g. claude7-hexa-lang-r12-gold) on the provider --label/--name so a raw provider list carries WHO/WHAT/WHY. Missing any axis → REFUSES to rent (exit 2), creating NOTHING (fail-closed · no jsonl · no --force bypass). DEFAULTS to a persistent /workspace volume (>=40 GiB, --volume-gb N to size, --ephemeral to opt out + warn); IDEMPOTENT per (project,purpose): reuses a live M5 pod unless --force-new (MANUAL single-rent flag, never auto-invoked; auto re-rent on pod-loss DEPRECATED, pod-loss FAILS LOUD); waits ssh-ready, prints host:port + id (alias: up)" })
     out.push(CloudCmd { name: "rm", group: "lifecycle",
-            args: "<id> [--provider P] [--force]",
-            summary: "CANONICAL teardown — confirm + destroy + forget (unifies down/destroy/forget); idempotent" })
+            args: "<id> [--provider P] [--yes|-y] [--force]",
+            summary: "CANONICAL teardown — confirm + destroy + forget (unifies down/destroy/forget); idempotent. --yes/-y skips [y/N] and is REQUIRED from a non-interactive stdin (without it a non-TTY invocation FAILS LOUD + non-zero, never a silent cancel that leaks a billing pod)" })
     out.push(CloudCmd { name: "down", group: "lifecycle",
-            args: "<id> [--provider P] [--yes|--force]",
-            summary: "destroy a pod + forget it; SHOWS project·purpose + running-job check then confirms [y/N] (--yes/--force skips); refuses a cross-project kill unless --force (alias: destroy)" })
+            args: "<id> [--provider P] [--yes|-y] [--force]",
+            summary: "destroy a pod + forget it; SHOWS project·purpose + running-job check then confirms [y/N] (--yes/-y/--force skips; --yes/-y REQUIRED from a non-interactive stdin, else FAILS LOUD + non-zero); refuses a cross-project kill unless --yes-cross-project (alias: destroy)" })
     out.push(CloudCmd { name: "reboot", group: "lifecycle",
             args: "<id> [--provider P]",
             summary: "restart a pod container (preserve disk) to recover a DARK pod; vast only" })
