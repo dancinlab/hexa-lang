@@ -259,6 +259,22 @@ let mut _lr_free_disq: [[string]] = []
 let mut _lr_free_shadow: [bool] = []
 let mut _lr_free_shadow_injected = false
 
+// L4 round-3 — per-scope (fn-accumulating) free-fn disqualify (HEXA_UNBOX_FREE_SCOPED,
+// default-OFF at landing; flip PR later reads `!= "0"`). The per-module pin over-
+// disqualifies `len` in EVERY module that binds the name anywhere (measured: len
+// fn-stamped=0, UNSTAMPED=2745 — a common var name self-disqualifies universally).
+// This lever tightens "shadowed" to _mir_lookup's exact granularity: a name is
+// disqualified at a stamp site iff it was bound EARLIER in the CURRENT fn
+// (`_lr_free_fn_seen`, zeroed per fn item — mirrors hir_to_mir `_lr_bindings` fresh-
+// per-fn append-only at :4038) OR it is a module ITEM (`_lr_free_mod_item`, mirrors
+// `_mir_lookup_global`). Both bool arrays are per-table-slot, primed under the flag in
+// lower() and cleared at exit. OFF path = byte-identical (the query fn falls straight
+// through to the legacy per-module pin). Behavioral gate = the hir_to_mir dispatch
+// oracle (indirect-dispatch + i64 result on a table-name = a mis-stamp → abort).
+let mut _lr_free_scoped_on = false
+let mut _lr_free_mod_item: [bool] = []
+let mut _lr_free_fn_seen: [bool] = []
+
 // Map a free-fn builtin NAME to its slot index in the shared table order — the
 // MIRROR of check/bind.hexa::_bind_free_tbl_index (lockstep: grow both + the
 // ret-prim tables together; the HEXA_UNBOX_FREE_XCHECK oracle catches drift).
@@ -338,6 +354,73 @@ fn _free_disqualified(name: string) -> bool {
         i = i + 1
     }
     return false
+}
+
+// ── L4 round-3 per-scope disqualify (HEXA_UNBOX_FREE_SCOPED, default-OFF) ──
+fn _free_scoped_enabled() -> bool {
+    return env_var("HEXA_UNBOX_FREE_SCOPED") == "1"
+}
+
+// The ONLY stamp-site consumer change. When the scoped lever is OFF, this is the
+// legacy per-module pin verbatim (byte-identical). When ON, a table name is
+// disqualified iff it is a module ITEM (_mir_lookup_global would hit) or was bound
+// earlier in the current fn (_mir_lookup would hit) — mirroring hir_to_mir dispatch.
+fn _free_site_disqualified(name: string) -> bool {
+    if !_lr_free_scoped_on { return _free_disqualified(name) }
+    let fi = _lr_free_tbl_index(name)
+    if fi < 0 { return false }
+    let mut disq = false
+    if fi < len(_lr_free_mod_item) && _lr_free_mod_item[fi] { disq = true }
+    if fi < len(_lr_free_fn_seen) && _lr_free_fn_seen[fi] { disq = true }
+    return disq
+}
+
+// Note a single binder name into the per-fn seen set (flag-gated at call sites).
+fn _free_scope_note_name(name: string) {
+    let fi = _lr_free_tbl_index(_hir_let_name(name))
+    if fi >= 0 && fi < len(_lr_free_fn_seen) { _lr_free_fn_seen[fi] = true }
+}
+
+// Note a module-item name (pre-pass) into the module-item set.
+fn _free_scope_note_mod_item(name: string) {
+    let fi = _lr_free_tbl_index(_hir_let_name(name))
+    if fi >= 0 && fi < len(_lr_free_mod_item) { _lr_free_mod_item[fi] = true }
+}
+
+// Zero the per-fn seen set at each fn-item boundary (mirrors _lr_ctx_clear's
+// fresh-per-fn _lr_bindings). mod_item persists module-wide (never reset here).
+fn _free_scope_reset_fn() {
+    let mut i = 0
+    while i < len(_lr_free_fn_seen) { _lr_free_fn_seen[i] = false; i = i + 1 }
+}
+
+// Note table-name binders in a match pattern into the per-fn seen set — mirror of
+// _free_census_pattern's traversal, but ONLY setting _lr_free_fn_seen (flag path).
+fn _free_scope_note_pattern(p: Expr) {
+    let pk = p.kind
+    if _hir_is_wildcard_kind(pk) { return }
+    if _hir_is_ident_kind(pk) { _free_scope_note_name(p.text); return }
+    if _hir_is_enum_path_kind(pk) {
+        let mut i = 0
+        while i < len(p.children) {
+            let c = p.children[i]
+            if _hir_is_ident_kind(c.kind) { _free_scope_note_name(c.text) }
+            else { _free_scope_note_pattern(c) }
+            i = i + 1
+        }
+        return
+    }
+    if _hir_is_struct_lit_kind(pk) {
+        let mut i = 0
+        while i < len(p.children) {
+            let f = p.children[i]
+            let mut bn = f.text
+            if len(f.children) > 0 && _hir_is_ident_kind(f.children[0].kind) { bn = f.children[0].text }
+            _free_scope_note_name(bn)
+            i = i + 1
+        }
+        return
+    }
 }
 
 // Collect pattern binders — mirror of check/bind.hexa::_bind_pattern define
@@ -1538,6 +1621,12 @@ fn _pop_frame(sc: LowerScope) -> LowerScope {
 }
 
 fn _define_in_scope(sc: LowerScope, name: string, typ: Type) -> LowerScope {
+    // L4 round-3 scoped disqualify — choke-point note: every binder that reaches sc
+    // (let, fn/closure params, match ident-pattern, struct-pattern, for-loop var)
+    // marks its table-name into the per-fn seen set. Order-sensitive: a `let len = …`
+    // notes AFTER its RHS is lowered (mirrors hir_to_mir bind order), so the RHS
+    // `len(arr)` correctly stamps. Flag-gated ⇒ OFF path never touches the array.
+    if _lr_free_scoped_on { _free_scope_note_name(name) }
     let def = DefId { module: sc.mod_file, index: sc.next_index }
     let mut bindings = sc.bindings
     bindings.push(LowerBinding { name: name, def: def, typ: typ })
@@ -2457,7 +2546,7 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
                 let bm_ret = _hir_builtin_method_ret_prim(bm_callee.text)
                 if bm_ret.kind != "?" { t = bm_ret }
             } else if bm_callee.kind == "ident" && _hir_free_calltype_enabled()
-                      && !_free_disqualified(bm_callee.text) {
+                      && !_free_site_disqualified(bm_callee.text) {
                 // L4 round-2 — free-fn builtin (`len(x)` ident-callee). Gated by
                 // the default-ON HEXA_UNBOX_HIR_CALLTYPE_FREE sub-flag (opt-out =0) AND the
                 // per-module binder census (name bound nowhere ⇒ builtin). Still
@@ -2982,6 +3071,11 @@ fn _lower_item(it: Item, def: DefId, atlas: AtlasIndex,
     let kind_tag = _item_kind_tag(it.kind)
 
     if _hir_is_fn_item(it.kind) {
+        // L4 round-3 scoped disqualify — zero the per-fn seen set at each fn boundary
+        // (mirrors hir_to_mir's fresh-per-fn _lr_bindings). mod_item persists module-
+        // wide. Deliberately NOT reset at the closure arm: a lambda body keeps the host
+        // fn's seen set (over-conservative both ways ⇒ sound).
+        if _lr_free_scoped_on { _free_scope_reset_fn() }
         // Build a function-local scope: module env + params.
         let mut fn_sc = _push_frame(module_scope)
         let mut sig_params: [Type] = []
@@ -3142,6 +3236,19 @@ pub fn lower(module: Module, atlas: AtlasIndex) -> HModule {
 
     let mut item_defs: [DefId] = []
     let mut idx: i64 = 0
+    // L4 round-3 scoped disqualify — prime the flag + per-slot bool arrays under the
+    // gate (OFF ⇒ arrays stay empty, _free_site_disqualified falls through to legacy).
+    _lr_free_scoped_on = _free_scoped_enabled() && _hir_free_calltype_enabled()
+    if _lr_free_scoped_on {
+        _lr_free_mod_item = []
+        _lr_free_fn_seen = []
+        let mut si = 0
+        while si < _lr_free_tbl_size() {
+            _lr_free_mod_item = _lr_free_mod_item.push(false)
+            _lr_free_fn_seen = _lr_free_fn_seen.push(false)
+            si = si + 1
+        }
+    }
     let mut i = 0
     while i < len(module.items) {
         let it = module.items[i]
@@ -3157,12 +3264,14 @@ pub fn lower(module: Module, atlas: AtlasIndex) -> HModule {
             // Imports are not bound as defs in scope.
         } else if _hir_is_fn_item(it.kind) {
             module_sc = _define_with_def(module_sc, it.name, def, _hir_signature_type(it))
+            if _lr_free_scoped_on { _free_scope_note_mod_item(it.name) }
         } else if _hir_is_struct_item(it.kind) {
             module_sc = _define_with_def(module_sc, it.name, def, _hir_struct_type(it, def))
         } else if _hir_is_enum_item(it.kind) {
             module_sc = _define_with_def(module_sc, it.name, def, _hir_enum_type(def))
         } else if _hir_is_let_item(it.kind) {
             module_sc = _define_with_def(module_sc, it.name, def, _hir_lower_type_ref(it.return_type))
+            if _lr_free_scoped_on { _free_scope_note_mod_item(it.name) }
         }
         idx = idx + 1
         i = i + 1
@@ -3227,6 +3336,9 @@ pub fn lower(module: Module, atlas: AtlasIndex) -> HModule {
     // that call lower() without a preceding main injection) does not read this
     // module's stale shadow — falls back to the census, the sound bind-less path.
     _lr_free_shadow_injected = false
+    // L4 round-3: clear the scoped flag so a bind-less second lower() reverts to the
+    // legacy pin (arrays go unread; the flag re-primes on the next lower() setup).
+    _lr_free_scoped_on = false
 
     return HModule {
         file: module.file,
