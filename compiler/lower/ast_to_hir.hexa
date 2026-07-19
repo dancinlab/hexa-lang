@@ -2719,6 +2719,10 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             if ast_is_match_guard(pat) {
                 let inner = pat.children[0]
                 let guard = pat.children[1]
+                // L4 round-3: note enum-payload/struct pattern binders that hir_to_mir
+                // binds but that never reach _define_in_scope (the choke-point catches
+                // only the ident-inner case just below). Idempotent with that define.
+                if _lr_free_scoped_on { _free_scope_note_pattern(inner) }
                 if _hir_is_ident_kind(inner.kind) && len(inner.text) > 0 && inner.text != "_" {
                     arm_sc = _define_in_scope(arm_sc, inner.text, _hir_empty_type())
                 }
@@ -2774,6 +2778,10 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
                 idx = idx + 2
                 continue
             }
+            // L4 round-3: note enum-payload pattern binders (lowered via _lower_expr
+            // below, not _define_in_scope) into the per-fn seen set. Idempotent with
+            // the ident-define just below; flag-gated ⇒ OFF path untouched.
+            if _lr_free_scoped_on { _free_scope_note_pattern(pat) }
             // bind ident-pattern names so body lookups can see them
             if _hir_is_ident_kind(pat.kind) && len(pat.text) > 0 && pat.text != "_" {
                 arm_sc = _define_in_scope(arm_sc, pat.text, _hir_empty_type())
@@ -2984,6 +2992,10 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
     }
 
     // ── Default — generic recurse for any kind not handled above. ──
+    // L4 round-3: Try carries its catch var in e.text and has no dedicated arm, so
+    // note it here before recursing. Notes slightly early (the try-body too, not just
+    // the catch body) — over-conservative, sound. Flag-gated ⇒ OFF path untouched.
+    if _lr_free_scoped_on && _hir_is_try_kind(k) && len(e.text) > 0 { _free_scope_note_name(e.text) }
     // Generic recurse — every child lowered in order.
     let mut new_sc = sc
     let mut kids: [HExpr] = []
