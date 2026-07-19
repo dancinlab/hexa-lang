@@ -229,10 +229,11 @@ let mut _bind_free_tbl_hit: [bool] = []
 // HEXA_UNBOX_FREE_XCHECK oracle aborts on any drift).
 fn _bind_free_tbl_index(name: string) -> i64 {
     if name == "len" { return 0 }
+    if name == "byte_len" { return 1 }
     return -1
 }
 
-fn _bind_free_tbl_size() -> i64 { return 1 }
+fn _bind_free_tbl_size() -> i64 { return 2 }
 
 // main.hexa arms this (under the flip predicate) before calling bind().
 pub fn bind_free_note_enable() {

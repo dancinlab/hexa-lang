@@ -4568,6 +4568,7 @@ fn _types_builtin_method_ret(name: string) -> Type {
 fn _types_builtin_free_ret(name: string) -> Type {
     return match name {
         "len" -> _types_t_i64(),
+        "byte_len" -> _types_t_i64(),
         _ -> _types_empty_type(),
     }
 }
