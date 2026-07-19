@@ -19,7 +19,7 @@ pub fn build_response(resp) {
     let mut body = ""
     let mut extra_headers = #{}
 
-    if resp["status"] != nil {
+    if type_of(resp["status"]) != "void" {
         status_code = resp["status"]
     }
     if status_code == 200 { status_text = "OK" }
@@ -30,13 +30,13 @@ pub fn build_response(resp) {
     if status_code == 405 { status_text = "Method Not Allowed" }
     if status_code == 500 { status_text = "Internal Server Error" }
 
-    if resp["content_type"] != nil {
+    if type_of(resp["content_type"]) != "void" {
         content_type = resp["content_type"]
     }
-    if resp["body"] != nil {
+    if type_of(resp["body"]) != "void" {
         body = resp["body"]
     }
-    if resp["headers"] != nil {
+    if type_of(resp["headers"]) != "void" {
         extra_headers = resp["headers"]
     }
 
@@ -51,7 +51,7 @@ pub fn build_response(resp) {
     // Extra headers: map iteration via keys() builtin when available.
     // 사용자 등록 헤더는 위의 표준 헤더보다 뒤에 붙는다.
     // 현재 Stage0 에서 맵 iter 는 keys() 로만 안정적이므로 nil 체크 후 처리.
-    if extra_headers != nil {
+    if type_of(extra_headers) != "void" {
         let hk = keys(extra_headers)
         let mut i = 0
         while i < len(hk) {

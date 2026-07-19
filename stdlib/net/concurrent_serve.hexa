@@ -330,7 +330,7 @@ pub fn dispatch_one(s: ConcurrentServer, ticket: WorkTicket, dispatch_fn) -> Con
     let mut ok = true
     recover |err| {
         let resp = dispatch_fn(e.handler_name, ticket.payload)
-        if resp == nil {
+        if type_of(resp) == "void" {
             verdict = "NIL_RESPONSE"
             ok = false
         }
