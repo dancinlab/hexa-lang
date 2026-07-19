@@ -39,10 +39,15 @@ set -uo pipefail
 
 REPO="${REPO:-$PWD}"
 HEXA="${HEXA_BIN:-$REPO/hexa}"
+# --axis1-only: key the exit on the C-transpile-DELEGATE count (axis-① = hexa_cc.c)
+# ALONE, decoupled from the tier-B system-ld FAIL (axis-③ = own-link not yet default).
+# The combined verdict (default) is byte-identical and unchanged.
+AXIS1_ONLY=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --hexa) HEXA="$2"; shift 2 ;;
         --hexa=*) HEXA="${1#--hexa=}"; shift ;;
+        --axis1-only) AXIS1_ONLY=1; shift ;;
         *) echo "unknown arg: $1" >&2; exit 3 ;;
     esac
 done
@@ -80,7 +85,7 @@ fn main() { let mut s = 0; let mut i = 1; while i <= 10 { s = s + i; i = i + 1 }
 H
 
 echo "census target: $HEXA (cwd=$W · HEXA_APRIME_CC/HEXA_LANG must be unset by caller)"
-N=0; FAIL=0
+N=0; FAIL=0; DELEG=0
 for P in "$W"/c/*.hexa; do
     name="$(basename "$P" .hexa)"; N=$((N + 1))
     out="$("$HEXA" build "$P" -o "$W/$name.bin" 2>&1)"
@@ -95,7 +100,7 @@ for P in "$W"/c/*.hexa; do
             echo "  $name: OWN-LINK ✓ (clang-0 + ld-0 — aprime_cc + hexa_ld)"
         fi
     elif echo "$out" | grep -qE "(^|[[:space:]/])clang([[:space:]]|$)"; then
-        echo "  $name: ✗ C-TRANSPILE DELEGATE reached (clang on generated .c) —"; echo "$out" | grep -E "clang " | tail -1; FAIL=$((FAIL + 1))
+        echo "  $name: ✗ C-TRANSPILE DELEGATE reached (clang on generated .c) —"; echo "$out" | grep -E "clang " | tail -1; FAIL=$((FAIL + 1)); DELEG=$((DELEG + 1))
     elif echo "$out" | grep -q "(native backend"; then
         # PREFIX match, not the exact "(native backend)" literal: the leg-B legs
         # qualify the marker inline — self/main.hexa emits
@@ -113,6 +118,17 @@ for P in "$W"/c/*.hexa; do
     fi
 done
 
+# axis-① sub-verdict (ONLY under --axis1-only → the default combined path below stays
+# byte-identical). DELEG counts ONLY the :98 C-transpile-delegate arm (the true hexa_cc.c
+# failure), EXCLUDING the tier-B system-ld fall-through (:110 = axis-③ own-link-not-default).
+# This isolates axis-①'s delete-precondition from the axis-③ own-link re-flip: the delegate
+# can be measured DEAD (DELEG=0) even while the combined census is RED on tier-B system-ld.
+if [ "$AXIS1_ONLY" = "1" ]; then
+    echo "── axis-① C-transpile delegate: $DELEG/$N reached clang-on-generated-.c ──"
+    [ "$DELEG" -eq 0 ] || { echo "AXIS-① RED ($DELEG programs reached the hexa_cc.c C-transpile delegate on the shipped default leg) — blocks hexa_cc.c removal."; exit 1; }
+    echo "AXIS-① GREEN — the hexa_cc.c C-transpile delegate is DEAD on the shipped default leg (0/$N reached clang-on-generated-.c); axis-①'s delete-precondition holds, decoupled from the axis-③ own-link default (the tier-B system-ld fall-through is a separate lane)."
+    exit 0
+fi
 echo "── cfallback-zero census: $((N - FAIL))/$N own-link (clang-0 + ld-0) ──"
 [ "$FAIL" -eq 0 ] || { echo "CENSUS RED ($FAIL programs did NOT take own-link) — the C-transpile delegate / system-ld path is still reachable on the SHIPPED default leg; blocks axis-① hexa_cc.c removal. If aprime_cc is absent from the staged install, the PACKAGING gate (test -x <stage>/build/aprime_cc) should have caught it first."; exit 1; }
 echo "CENSUS GREEN — every default hexa build on the shipped consumer artifact took own-link (clang-0 + ld-0); the C-transpile delegate is dead code on the shipped default leg → soak → remove (axis-①)"
