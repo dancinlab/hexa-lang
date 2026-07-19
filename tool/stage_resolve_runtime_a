@@ -4326,6 +4326,20 @@ build_runtime_a_from_source() {
                 echo "[stage_resolve_runtime_a] SYSLEAF r2: HEXA_RT_NATIVE_SYSLEAF native (auto/1) IGNORED — the raw-syscall sysleaf path is linux/x86_64-only (host=$(uname -sm)); retaining libc mmap/munmap/waitpid/read/close/lseek/dup2/fork" >&2
             fi
         fi
+        # TRI-STATE HEXA_RT_NATIVE_STRFTIME (mirrors SYSLEAF :-auto above):
+        #   auto (default) / 1 => native specifier-interpreter hxlcl_strftime (the #4996
+        #     #else body: %Y %m %d %H %M %S + %% + literals — the CLOSED specifier set used
+        #     tree-wide · pure C, no libc, portable to ALL targets) => drops the libc
+        #     `strftime` UND from build/hxlcl_shim.o. · 0 => opt-out (libc strftime
+        #     delegate retained, shim.o byte-identical = neutral rollback).
+        #   The runtime.c (runtime_emit_full) static hxlcl_strftime is an empty stub with NO
+        #   libc UND — untouched here; its ON-path timestamp bug-fix (utc_iso/compact_now)
+        #   is a separate follow-up that carries its own runtime.c byteeq.
+        _rnsf_mode="${HEXA_RT_NATIVE_STRFTIME:-auto}"
+        if [ "$_rnsf_mode" != "0" ]; then
+            _mo_shim_def="$_mo_shim_def -DHEXA_RT_NATIVE_STRFTIME"
+            echo "[stage_resolve_runtime_a] RT-NATIVE-STRFTIME: hxlcl_strftime → native specifier-interpreter (#4996 body); shim.o built with -DHEXA_RT_NATIVE_STRFTIME (libc strftime UND dropped) — ld -r multidef gate validates"
+        fi
         echo "[stage_resolve_runtime_a] RFC061 Case-B [S4]: compile build/hxlcl_shim.o…"
         # zeroc #29 mem-leaf: $_zeroc_nobuiltin is MANDATORY here — the shim's default-native
         # hxlcl_memcpy/memset/memcmp bodies are C loops; without -fno-builtin-mem* clang's
